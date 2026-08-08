@@ -122,46 +122,19 @@ def detect_credentials_in_text(text: str) -> list[str]:
     return hits
 
 
-def scrub_credentials_in_text(text: str) -> str:
-    """脱敏: 把检测到的凭据匹配 substring 替成 `[REDACTED:credential]`.
-
-    BL-HERMES013-1 (5/11 借鉴 Hermes 0.13 "default-on secret redaction"):
-    catfish audit 从 day 1 就**永不写 prompt 内容** (见 metrics.py 文档),
-    但 error trace 字段 `error[:200]` 可能含 upstream LLM provider 回显的
-    部分 prompt. 在写入 error 前调这个 scrub 一次, 把 password=xxx /
-    密码: xxx 等模式替掉.
-
-    ## 8/8: 改成 fail **closed**
-
-    原来这段的 docstring 就写着"永远不抛", 但函数体里**一个 try 都没有** ——
-    任何一条 `p.sub()` 抛异常, 都会顺着 log_request_metadata 冒回请求主路径。
-    更要紧的是语义: 脱敏器跑不动的时候, 老写法什么都不返回 (异常), 而调用方
-    如果哪天把它包进 try 里"降级处理", 降级的结果十有八九是**写原文**。
-
-    hermes v0.20 的 monitoring/redaction.py 把这条写成了硬契约:
-
-        fails CLOSED: if the redactor cannot run, the raw string is never emitted.
-
-    这里照同一个方向: 出任何意外都返回一个**完全不含原文**的占位串。
-    审计里少一条错误详情, 比多一条带凭据的错误详情安全得多 —— 前者只是
-    排查费劲, 后者是凭据落盘。
-
-    (为什么不 import hermes 的: 网关是独立进程 / 独立 venv, 中央服务器上
-    没装 hermes, 够不着。抄契约不抄代码, 跟 5/11 BL-HERMES013-1 同一套路。)
-    """
-    if not text or not isinstance(text, str):
-        return text or ""
-    try:
-        out = text
-        for p in _CREDENTIAL_PATTERNS:
-            out = p.sub("[REDACTED:credential]", out)
-        return out
-    except Exception as e:  # noqa: BLE001 — 脱敏失败绝不能把原文放出去
-        logger.warning(
-            "scrub_credentials_in_text 失败, 按 fail-closed 丢掉原文 (%s: %s)",
-            type(e).__name__, e,
-        )
-        return "[REDACTED:scrub-failed]"
+# 8/8: scrub_credentials_in_text 删了 —— 唯一的调用方 metrics.py 改成存**分类码**
+# 之后它就成了死代码 (军规: 死代码要删掉)。
+#
+# 值得记一下这个顺序: 我先加固了它 (fail-closed + token 形状, commit b1baf9c),
+# 紧接着按"中央端严禁看到员工数据"把 metrics 改成不存原文 —— 后一个改动把前一个
+# 的对象整个拿掉了。加固之前没先问"这个字段到底该不该存原文", 是顺序搞反了。
+#
+# 但那次加的**两条 token 形状模式留着了**: 它们在 _CREDENTIAL_PATTERNS 里,
+# detect_credentials_in_text / detect_credentials_in_messages 共用同一张表
+# (app.py:3114 给员工发"你 prompt 里有凭据"的警告), 员工粘贴裸 JWT / sk- key
+# 现在认得出来。那半边不是死代码。
+#
+# 真要脱敏一段自由文本时: 别复活这个函数, 先想想那段文本该不该出现在中央端。
 
 
 def detect_credentials_in_messages(messages: list[dict]) -> list[str]:

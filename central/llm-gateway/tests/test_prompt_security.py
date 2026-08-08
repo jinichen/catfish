@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import pytest
 
-from catfish_gateway.prompt_security import scrub_credentials_in_text  # noqa: F401
 from catfish_gateway.prompt_security import (
     detect_credentials_in_messages,
     detect_credentials_in_text,
@@ -265,110 +264,38 @@ def test_still_catches_real_credentials() -> None:
         assert len(hits) >= 1, f"BL-FIX13 真凭据没逮到: '{text}'"
 
 
-# ── 8/8: 对齐 hermes v0.20 monitoring/redaction 的两条契约 ──────────────
+# ── 8/8: token 形状模式 (借鉴 hermes v0.20 monitoring/redaction) ──────
 #
-# 背景: hermes v0.20 新增 agent/monitoring/redaction.py, 它的 docstring 立了两条:
-#   1. "fails CLOSED: if the redactor cannot run, the raw string is never emitted"
-#   2. secrets 那一层除了 redact_sensitive_text 还**另加** bearer/token-shape patterns
+# hermes 那边 secrets 那一层除了 redact_sensitive_text 还**另加**
+# bearer/token-shape patterns。这里抄的是思路 —— 网关够不着 hermes
+# (独立进程 / 独立 venv, 中央服务器上没装)。
 #
-# catfish 网关够不着 hermes (独立进程 / 独立 venv, 中央服务器上没装), 所以是
-# 抄契约不抄代码 —— 跟 5/11 BL-HERMES013-1 同一套路。这几条钉住抄到位没有。
+# ⚠ 这组原来还测 scrub_credentials_in_text 的 fail-closed。那个函数已经删了:
+# 唯一调用方 metrics.py 改成存**分类码**不存原文之后它成了死代码。
+# 形状模式留着是因为 detect_* 共用同一张 _CREDENTIAL_PATTERNS —— 员工粘贴
+# 裸 JWT / sk- key 时的警告靠它。
 
 
 class TestTokenShapePatterns:
-    """契约 2: 按**形状**认, 不能只靠 password= / token: 这类关键词引子。"""
+    """按形状认, 不能只靠 password= / token: 这类关键词引子。"""
 
-    def test_裸_jwt_要脱掉(self):
-        """~/.hermes/config.yaml 的 model.api_key 就是 eyJ 开头的 JWT,
-        上游 401 回显时会原样落进 audit —— 8/8 实测老代码漏。"""
+    def test_裸_jwt_认得出(self):
         raw = (
-            "unexpected token "
+            "这个 token 怎么解 "
             "eyJhbGciOiJSUzI1NiIsImtpZCI6Ijk1ZDgzYmI4Y2Q1MjNiYTYifQ"
             ".eyJzdWIiOiJjaGVuaG9uZ2JvQGZmY3MuY24ifQ"
             ".sig-abcdefghijklmnop"
         )
-        out = scrub_credentials_in_text(raw)
-        assert "[REDACTED:credential]" in out
-        assert "eyJhbGciOi" not in out, f"JWT 还在: {out}"
+        assert detect_credentials_in_text(raw), "裸 JWT 该被认出来"
 
-    def test_裸_sk_key_要脱掉(self):
-        out = scrub_credentials_in_text("invalid key sk-proj-AbCdEf0123456789AbCdEf0123456789")
-        assert "[REDACTED:credential]" in out
-        assert "sk-proj" not in out
-
-    def test_只脱凭据不吃掉周围的话(self):
-        """错误信息的可读部分要留着, 否则排查全靠猜。"""
-        out = scrub_credentials_in_text("invalid key sk-proj-AbCdEf0123456789AbCdEf0123456789")
-        assert out.startswith("invalid key "), out
+    def test_裸_sk_key_认得出(self):
+        assert detect_credentials_in_text("我的 key 是 sk-proj-AbCdEf0123456789AbCdEf0123456789")
 
     @pytest.mark.parametrize("normal", [
         "model not found: gpt-5.6-luna",
         "rate limit exceeded, retry after 30s",
-        "Insufficient Balance",
-        "connection refused to 10.10.40.102:32730",
-        # 短 base64 片段在报错里很常见, 凑不齐"三段点分且每段够长"就不该被吃
-        "decode failed near eyJhbG",
+        "帮我看看这个报错 decode failed near eyJhbG",
         "chunk sk-1 too short",
     ])
-    def test_不误伤正常报文(self, normal):
-        assert scrub_credentials_in_text(normal) == normal, normal
-
-
-class TestFailClosed:
-    """契约 1: 脱敏器跑不动时, **原文绝不出去**。
-
-    改之前这个函数的 docstring 就写着"永远不抛", 但函数体里一个 try 都没有 ——
-    异常会顺着 log_request_metadata 冒回请求主路径; 而调用方哪天把它包进 try
-    做"降级", 降级结果十有八九就是写原文。
-    """
-
-    def test_模式炸了也不会漏出原文(self, monkeypatch):
-        import catfish_gateway.prompt_security as ps
-
-        class _Boom:
-            def sub(self, *_a, **_k):
-                raise RuntimeError("正则炸了")
-
-        monkeypatch.setattr(ps, "_CREDENTIAL_PATTERNS", [_Boom()])
-        secret = "password: hunter2xyz 还有一句会暴露的话"
-        out = ps.scrub_credentials_in_text(secret)
-        assert "hunter2xyz" not in out, f"原文漏了: {out}"
-        assert "会暴露的话" not in out, f"原文漏了: {out}"
-        assert out == "[REDACTED:scrub-failed]"
-
-    def test_不抛_调用方不需要自己兜(self, monkeypatch):
-        import catfish_gateway.prompt_security as ps
-
-        class _Boom:
-            def sub(self, *_a, **_k):
-                raise RuntimeError("正则炸了")
-
-        monkeypatch.setattr(ps, "_CREDENTIAL_PATTERNS", [_Boom()])
-        ps.scrub_credentials_in_text("x")   # 不该抛
-
-
-def test_audit_里的_error_字段走的就是这条路():
-    """确认接线没断: metrics.log_request_metadata 写 error 前会调 scrub。
-
-    直接跑真函数而不是 mock —— 这条要保的是"接线在", mock 掉就白测了。
-    """
-    from catfish_gateway import metrics
-
-    rec = {}
-
-    def _capture(record):
-        rec.update(record)
-
-    original = metrics._persist_record
-    metrics._persist_record = _capture
-    try:
-        metrics.log_request_metadata(
-            user="a@b.cn", model="m", prompt_tokens=1, completion_tokens=1,
-            latency_ms=1.0, status="error",
-            error="upstream said sk-proj-AbCdEf0123456789AbCdEf0123456789",
-        )
-    finally:
-        metrics._persist_record = original
-
-    assert "sk-proj" not in rec.get("error", ""), rec.get("error")
-    assert "[REDACTED:credential]" in rec.get("error", "")
+    def test_不误伤正常文本(self, normal):
+        assert detect_credentials_in_text(normal) == [], normal

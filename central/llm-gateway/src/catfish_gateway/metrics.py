@@ -224,11 +224,29 @@ def log_request_metadata(
         # 区分上游慢 (TTFT 长) vs 输出长 (latency 长 但 TTFT 正常). 关键运维信号.
         record["ttft_ms"] = round(ttft_ms, 1)
     if error:
-        # Truncate to avoid accidentally leaking upstream prompt echoes in errors.
-        # BL-HERMES013-1 (5/11): scrub credential patterns 在 truncate 前一道,
-        # 修上游 LLM 回显 prompt 片段含 'password=xxx' 等模式时漏到 audit log.
-        from .prompt_security import scrub_credentials_in_text  # noqa: PLC0415
-        record["error"] = scrub_credentials_in_text(error)[:200]
+        # 8/8 (鸿波"中央端是严禁看到员工端的数据"): 存**分类码**, 不存上游原文。
+        #
+        # CENTRAL-EDGE-DATA-BOUNDARY 把这张表允许的字段列死了:
+        #     (ts, user_email, dept, model, latency_ms, status, cache_*_tokens)
+        # `error` 不在里面。而它原来存的是上游异常原文 —— 上一版的注释自己就
+        # 写着"Truncate to avoid accidentally leaking upstream **prompt echoes**",
+        # 也就是靠截断 200 字 + 脱凭据来兜住"可能带员工内容"。而这个字段还会
+        # 显示在中央管理面板 (web QuotaEventsPage 既展示又导 CSV)。
+        #
+        # 8/8 实测 3058 条带 error 的记录里 0 条含员工内容 —— 但那是运气不是
+        # 保证: 字段结构上不受控, 上游返什么就存什么。
+        #
+        # 换成封闭词表之后, 返回值是我们自己写死的常量, 上游再怎么回显也不可能
+        # 变成其中之一。截断和脱敏做不到这一点 —— 它们处理的还是上游那串东西。
+        #
+        # 原文没丢: 它照常进网关自己的运行日志 (ops 排查用, 8/8 那条 DeepSeek
+        # 402 的完整 traceback 就是在那儿看到的)。这跟 hermes v0.20 monitoring
+        # 的分法一致: "rendered log messages are not exported"。
+        #
+        # 键名仍叫 error, 不改成 error_class —— 中央 web 的 QuotaEventsPage 读的
+        # 就是这个键, 改名等于连带改前端, 而字段语义收窄本来就不需要动调用方。
+        from .error_class import classify_upstream_error  # noqa: PLC0415
+        record["error"] = classify_upstream_error(error)
     if security_concern:
         # 标记字段, 例 'prompt_credential_detected'. 不含真密码值, 只标记类型.
         record["security_concern"] = security_concern[:100]

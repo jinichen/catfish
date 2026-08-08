@@ -205,7 +205,10 @@ def test_read_events_filter_by_status() -> None:
 
     err_events = metrics.read_events(status_filter="error")
     assert len(err_events) == 1
-    assert err_events[0]["error"] == "boom"
+    # 8/8: error 字段存的是**分类码**不是原文 (CENTRAL-EDGE-DATA-BOUNDARY:
+    # gateway_audit 不许含 prompt/response 内容, 而上游异常原文会回显 prompt)。
+    # "boom" 归不进任何一类 → unknown。见 src/catfish_gateway/error_class.py。
+    assert err_events[0]["error"] == "unknown"
 
 
 def test_read_events_filter_by_time() -> None:
