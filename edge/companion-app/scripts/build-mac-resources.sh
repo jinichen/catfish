@@ -121,158 +121,9 @@ HERMES_SRC="/tmp/hermes-agent-src-$ARCH"
 
 echo ""
 echo "=== [1/6] Clone hermes-agent tag $HERMES_TAG · copy catfish plugins ==="
-if [ -d "$HERMES_SRC" ]; then
-    echo "  clean $HERMES_SRC"
-    rm -rf "$HERMES_SRC"
-fi
-# $HERMES_TAG 若是 annotated tag, git 会打一行:
-#     warning: refs/tags/<tag> <sha> is not a commit!
-# 那个 <sha> 是 **tag 对象**自己的 sha, 不是它指向的 commit —— 浅克隆时 git
-# 就这么提示。checkout 落点是对的 (紧接着的核对会验), 这行可以忽略。
-#
-# 先说一句, 是因为它每次都出现: 一条长期存在、其实无害的 warning 会让人对
-# 真正的 warning 脱敏 —— 底下那些"版本对不上"的检查才是要看的。
-echo "  (annotated tag 会打一行 'is not a commit!' warning · 正常, 落点由下面的核对负责)"
-# 代理挂了就直连重试一次 (8/8 加)。
-#
-# 8/8 实录: git 全局配了 http.proxy → 127.0.0.1:7890 (Clash 之类), 那天代理
-# 没开, clone 一秒就死在
-#     Failed to connect to 127.0.0.1 port 7890 after 0 ms
-# 而整条打包链最贵的一步在这之后 —— 下 500 MB 的 chromium/python/node。
-# 卡在第 1 步反而是运气好, 但报错只有 git 那一行, 看不出"是代理不是网"。
-#
-# 这个文件里下 GitHub Release 早就有同款兜底 (GH_PROXY 试几次转直连),
-# clone 这一步一直没有。补齐, 顺便把"这是代理的问题"说清楚。
-# ── 源码缓存 (8/8 加) ────────────────────────────────────────────────
-#
-# 这一步是整个脚本里**最容易反复重来**的一步: 60 MB, 走的是 GitHub 直连,
-# 8/8 实测 850 KB/s 左右, 一次一分多钟, 中途断一次就得从头再来
-# (fetch-pack: unexpected disconnect)。而后面任何一步失败 —— 那天连着撞了
-# 代理、Node 版本、npm engines 三次 —— 都要求整脚本重跑, 于是这 60 MB 被
-# 重下了四遍。
-#
-# 缓存文件名带 commit sha, 所以**不存在过期问题**: pin 一改, 文件名就变,
-# 老缓存自然用不上 (也就不需要什么失效逻辑)。
-CACHE_TAR="/tmp/catfish-hermes-src-${HERMES_COMMIT}.tar.gz"
-
-_clone() { git clone --depth 1 --branch "$HERMES_TAG" "$@" \
-    https://github.com/NousResearch/hermes-agent.git "$HERMES_SRC"; }
-
-FROM_CACHE=0
-if [ -f "$CACHE_TAR" ] && gzip -t "$CACHE_TAR" 2>/dev/null; then
-    echo "  ↻ 命中源码缓存 $(basename "$CACHE_TAR") ($(ls -lh "$CACHE_TAR" | awk '{print $5}'))"
-    echo "    (跳过 clone。想强制重下: rm $CACHE_TAR)"
-    mkdir -p "$HERMES_SRC"
-    tar xzf "$CACHE_TAR" -C "$HERMES_SRC" && FROM_CACHE=1 || {
-        echo "  ⚠ 缓存解不开, 删掉走网络"
-        rm -f "$CACHE_TAR"; rm -rf "$HERMES_SRC"
-    }
-fi
-
-if [ "$FROM_CACHE" = "0" ] && ! _clone; then
-    # 代理挂了就直连重试一次。
-    #
-    # 8/8 实录: 代理没开时 clone 一秒就死在
-    #     Failed to connect to 127.0.0.1 port 7890 after 0 ms
-    # 而整条打包链最贵的部分在这之后 —— 卡在第 1 步反而是运气好, 但报错只有
-    # git 那一行, 看不出"是代理不是网"。
-    #
-    # 这个文件里下 GitHub Release 早就有同款兜底 (GH_PROXY 试几次转直连),
-    # clone 这一步一直没有。
-    #
-    # 代理有两个来源, **两个都要看**: git config 的 http.proxy, 和环境变量
-    # http_proxy / https_proxy / ALL_PROXY (环境变量优先级更高)。8/8 第一版
-    # 只查了 git config, 结果那台机器是环境变量配的 —— 脚本读不到, 判成
-    # "网络本身的问题", 把人往错方向指。是鸿波自己 unset 掉环境变量才通的。
-    GIT_PROXY="$(git config --get http.proxy || true)"
-    ENV_PROXY="${https_proxy:-${HTTPS_PROXY:-${http_proxy:-${HTTP_PROXY:-${ALL_PROXY:-${all_proxy:-}}}}}}"
-    ANY_PROXY="${GIT_PROXY:-$ENV_PROXY}"
-    if [ -n "$ANY_PROXY" ]; then
-        echo ""
-        echo "  ⚠ clone 失败, 而这台机器配了代理:"
-        [ -n "$GIT_PROXY" ] && echo "      git config http.proxy = $GIT_PROXY"
-        [ -n "$ENV_PROXY" ] && echo "      环境变量              = $ENV_PROXY"
-        echo "    代理没开的话就是它。直连重试一次 (git config 和环境变量都绕开)..."
-        rm -rf "$HERMES_SRC"
-        env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
-            -u ALL_PROXY -u all_proxy \
-            git clone --depth 1 --branch "$HERMES_TAG" \
-                -c http.proxy= -c https.proxy= \
-                https://github.com/NousResearch/hermes-agent.git "$HERMES_SRC" || {
-            echo ""
-            echo "❌ 带代理和直连都 clone 不下来。"
-            echo "   · 代理软件开着吗"
-            [ -n "$GIT_PROXY" ] && echo "   · 临时去掉 git 的: git config --global --unset http.proxy"
-            [ -n "$ENV_PROXY" ] && echo "   · 临时去掉环境的: unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy"
-            exit 1
-        }
-        echo "  ✓ 直连成功 (这次绕过了 $ANY_PROXY)"
-    else
-        echo ""
-        echo "❌ clone 失败, 且没查到任何代理配置 —— 是网络本身的问题。"
-        echo "   断在中途 (unexpected disconnect) 的话直接重跑, 下面会有缓存兜着。"
-        exit 1
-    fi
-fi
-
-# ── 校验真的落在了要的那个版本上 (P3.5.86 · 7/29) ────────────────────
-#
-# 7/29 实录: pin 写的是 v2026.7.1, git clone 打了一行
-#     warning: refs/tags/v2026.7.1 462c8b02... is not a commit!
-#     Note: switching to '7c1a0295...'
-# 然后**自己切到了别的 commit**, 脚本毫不知情继续打包 —— 包里究竟是哪个
-# 版本没有任何记录。
-#
-# 这件事的后果不在打包时, 在运行时: catfish 的 19 个 monkey-patch 是 patch
-# hermes 内部函数的 (gateway.run._resolve_gateway_model 这类), 版本对不上
-# 就加载失败, 而失败方式是 logger.warning + silent skip —— 多租户 header、
-# picker 联动、RBAC、审批全部悄悄不工作, 界面上一切正常。
-#
-# 所以这里 fail-loud: 落点跟 pin 对不上就停, 不许打出一个"不知道装的是什么"
-# 的包。同时把实际 commit 记进 bundle, 出问题时能回溯。
-ACTUAL_DESC="$(cd "$HERMES_SRC" && git describe --tags --always 2>/dev/null || echo '<未知>')"
-ACTUAL_SHA="$(cd "$HERMES_SRC" && git rev-parse HEAD 2>/dev/null || echo '<未知>')"
-if [ "$ACTUAL_DESC" != "$HERMES_TAG" ]; then
-    echo ""
-    echo "❌ clone 落点跟 pin 对不上:"
-    echo "     .hermes-git-tag 要的 : $HERMES_TAG"
-    echo "     实际 checkout 的     : $ACTUAL_DESC  ($ACTUAL_SHA)"
-    echo ""
-    echo "   多半是这个 tag 指向的不是 commit (annotated tag 指到了 tree/blob),"
-    echo "   或者 tag 名写错了。上游可用的 tag:"
-    (cd "$HERMES_SRC" && git ls-remote --tags origin 2>/dev/null \
-        | awk -F/ '{print "     " $NF}' | grep -v '\^{}' | tail -10) || true
-    echo ""
-    echo "   catfish 的 19 个 monkey-patch 是按特定 hermes 版本写的,"
-    echo "   装错版本会静默失效 —— 所以这里不允许继续。"
-    exit 1
-fi
-if [ "$ACTUAL_SHA" != "$HERMES_COMMIT" ]; then
-    echo ""
-    echo "❌ Hermes commit 跟 pin 不一致:"
-    echo "     .hermes-git-commit: $HERMES_COMMIT"
-    echo "     实际 checkout:      $ACTUAL_SHA"
-    echo "   tag 名相同也不能继续；annotated tag 或远端移动都必须重新审计。"
-    exit 1
-fi
-echo "  ✓ hermes 版本核对: $ACTUAL_DESC ($ACTUAL_SHA)"
-# 把版本写进 bundle, 装机后可查 (~/.hermes/hermes-agent/.catfish-hermes-version)
-printf '%s\n%s\n' "$ACTUAL_DESC" "$ACTUAL_SHA" > "$HERMES_SRC/.catfish-hermes-version"
-
-# 存缓存 —— **必须在这里**, 不能更晚。
-#
-# 下面紧接着就往树里 cp catfish 插件、装 node_modules、解 chromium。缓存要的是
-# 一棵**干净的上游树**, 混进那些东西之后再存, 下次复用就等于把上一次的构建
-# 残留带进新包 —— 那种污染很难查。
-#
-# 也不能更早: 版本核对 (上面那两段 fail-loud) 没过的树不配进缓存。
-if [ "$FROM_CACHE" = "0" ]; then
-    echo "  → 存源码缓存 (下次重跑跳过这 60 MB)..."
-    tar czf "$CACHE_TAR.tmp" -C "$HERMES_SRC" . \
-        && mv "$CACHE_TAR.tmp" "$CACHE_TAR" \
-        && echo "    ✓ $CACHE_TAR ($(ls -lh "$CACHE_TAR" | awk '{print $5}'))" \
-        || { echo "    ⚠ 存缓存失败, 不影响本次构建"; rm -f "$CACHE_TAR.tmp"; }
-fi
+# 取源码这一整块 (缓存 / clone / 代理兜底 / 落点核对 / 存缓存) 抽到隔壁了。
+# source 而不是子进程 —— 它要写 HERMES_SRC 这些变量。
+. "$COMPANION/scripts/fetch-hermes-src.sh"
 
 # copy catfish plugins
 mkdir -p "$HERMES_SRC/plugins/memory"
@@ -415,21 +266,14 @@ fi
 cp "$NODE_TMP" "$RESOURCES/node-embed.tar.gz"
 echo "  OK $RESOURCES/node-embed.tar.gz ($(ls -lh "$RESOURCES/node-embed.tar.gz" | awk '{print $5}'))"
 
-# 解一份出来给 [6a] 的 npm ci 用 —— **不能用本机的 node** (8/8 加)。
+# 解一份出来给 [6a] 的 npm ci 用 —— **不能用本机的 node** (8/8)。
 #
-# 8/8 实录: [6a] 一直是直接调 PATH 上的 npm, 也就是本机那个。那天本机是
-# node v25.5.0, 撞上
-#     npm error notsup nanoid@6.0.0
-#     Required: {"node":"^22 || ^24 || >=26"}   Actual: v25.5.0
-# —— v25 是奇数线, 不在支持范围里。
+# 打进包的 node_modules 本来就该用打进包的那个 node 装: 员工机跑 22.23.2,
+# 用别的版本装出来的带原生插件的包 (node-pty 这类) ABI 可能对不上, 而那种错
+# 要到员工那头才炸。[5.5] 取 Python wheel 早就是这个做法, Node 这边没跟上。
 #
-# 但这不只是"本机 node 版本不巧"。**我们打进包里的 node_modules, 本来就该用
-# 打进包里的那个 node 装**: 员工机上跑的是 22.23.2, 用 v25 (或任何别的版本)
-# 装出来的 node_modules 里, 带原生插件的包 (node-pty 这类) 的 ABI 都可能对不上,
-# 而那种错要到员工那头才炸。
-#
-# 本文件在 [5.5] 取 Python wheel 时已经是这个做法了 —— 用嵌入解释器而不是本机
-# python。Node 这边一直没跟上, 补齐。
+# 8/8 当场撞到的表象: 本机 node v25.5.0 (奇数线), npm ci 报
+#     notsup nanoid@6.0.0  Required: ^22 || ^24 || >=26
 NODE_UNPACK="/tmp/catfish-node-unpack-$ARCH"
 rm -rf "$NODE_UNPACK" && mkdir -p "$NODE_UNPACK"
 tar xzf "$NODE_TMP" -C "$NODE_UNPACK" --strip-components=1
@@ -462,30 +306,16 @@ echo "  OK $RESOURCES/uv ($(ls -lh "$RESOURCES/uv" | awk '{print $5}'))"
 
 PYTHON_VERSION="3.11.15"
 # 8/8: 20260623 → 20260807, 为的是 **SQLite**, 不是 Python 本身。
+# 同一个 CPython 3.11.15, 不同的 pbs 发布链的 SQLite 不一样: 前者 3.50.4
+# (在 WAL-reset 损坏漏洞范围内), 后者 3.53.1。
 #
-# 同一个 CPython 3.11.15, 不同的 python-build-standalone 发布, 链的 SQLite
-# 不一样。20260623 那版链的是 SQLite 3.50.4 —— 它在 WAL-reset 损坏漏洞的
-# 影响范围内 (<3.51.3, 且不在 3.50.7 / 3.44.6 两个 backport 区间)。
+# 先试过事后修 (scripts/repair-hermes-sqlite.sh), 能修好但**被 Companion
+# bootstrap 冲掉了** —— 它会无条件重建 venv 并删 .hermes-runtime。"装完再修"
+# 在这套架构里不成立, 只能从源头带好的。
 #
-# 后果不是理论上的: hermes v0.20 每次开 state.db / kanban.db 都会打
-#     linked SQLite 3.50.4 is vulnerable to the WAL-reset corruption bug
-#     — is already in WAL mode — leaving WAL in place
-# 注意最后半句 —— hermes 自带的缓解**只拒绝给新库开 WAL**
-# (hermes_state.py:647), 对已经是 WAL 的库一律不降级 ("Never downgrades to
-# DELETE if the on-disk DB header reports WAL")。鸿波那个 1.1 GB 的 state.db
-# 早就是 WAL, 所以缓解对它是空的, 一直裸跑。
-#
-# 8/8 先试过事后修 (scripts/repair-hermes-sqlite.sh 调 hermes 自己的
-# repair_vulnerable_runtime)。能修好, 但**修完被 Companion bootstrap 冲掉了**
-# —— bootstrap 会无条件重建 venv 并删掉 .hermes-runtime。也就是说"装完再修"
-# 这个路子在这套架构里根本不成立, 每次 bootstrap 都退回 3.50.4。
-#
-# 所以改成从源头解决: 包里带的就是好的。20260807 这个数字不是查文档来的,
-# 是从实际修好的那个 runtime 的 BUILD 文件里读出来的 ——
+# 20260807 是从实际修好的 runtime 的 BUILD 文件读出来的, 不是查文档猜的:
 #   ~/.hermes/hermes-agent/.hermes-runtime/python/generation-*/cpython-3.11.15-*/BUILD
-#   → 20260807, 而它跑出来的 sqlite_version 就是 3.53.1。
-#
-# 下面 [5.5] 有一道 fail-loud 闸复核, 换 tag 换出个有洞的版本会当场红。
+# 换 tag 换出有洞的版本, 下面 [5.5] 的闸会当场红。
 PYTHON_BUILD_TAG="20260807"
 PY_FNAME="cpython-${PYTHON_VERSION}+${PYTHON_BUILD_TAG}-${PY_ARCH}-install_only.tar.gz"
 PY_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_BUILD_TAG}/${PY_FNAME}"
@@ -534,40 +364,9 @@ EMBED_PY="$PY_UNPACK/python/bin/python3"
 [ -x "$EMBED_PY" ] || { echo "❌ 找不到嵌入解释器: $EMBED_PY"; exit 1; }
 echo "  用嵌入解释器取 wheel: $("$EMBED_PY" -V)"
 
-# ── 包里这个解释器的 SQLite 不许有 WAL-reset 漏洞 (8/8 加) ─────────────
-#
-# 判据抄 hermes 自己的 hermes_cli/sqlite_runtime.py:is_sqlite_wal_reset_vulnerable
-# —— 不自己发明区间, 上游怎么判我们怎么判:
-#     >=3.7.0 且 <3.51.3, 且不在 [3.50.7,3.51.0) 和 [3.44.6,3.45.0) 两个
-#     backport 区间内 → 有洞
-#
-# 这道闸的意义: PYTHON_BUILD_TAG 是个手写的日期字符串, 谁哪天为了别的原因
-# 调它 (比如追新 Python 补丁), 很可能顺手就换回一个 SQLite 有洞的发布 ——
-# 而那个后果要等员工机上 state.db 损坏才知道。这里一秒钟当场拦住。
+# 包里这个解释器的 SQLite 不许有 WAL-reset 漏洞 (8/8)。理由和判据见那个脚本。
 echo "  → 复核内嵌 Python 的 SQLite..."
-"$EMBED_PY" - <<'PYEOF' || exit 1
-import sqlite3, sys
-
-def vulnerable(info):
-    """跟 hermes_cli/sqlite_runtime.py 同判据。"""
-    v = tuple(list(info)[:3] + [0] * (3 - len(list(info)[:3])))
-    if v < (3, 7, 0):    return False
-    if v >= (3, 51, 3):  return False
-    if (3, 50, 7) <= v < (3, 51, 0): return False
-    if (3, 44, 6) <= v < (3, 45, 0): return False
-    return True
-
-ver = sqlite3.sqlite_version
-if vulnerable(sqlite3.sqlite_version_info):
-    print(f"    ❌ 内嵌 Python 链的 SQLite {ver} 有 WAL-reset 损坏漏洞")
-    print( "       (需要 3.51.3+, 或 backport 3.50.7 / 3.44.6)")
-    print( "       换一个更新的 PYTHON_BUILD_TAG —— 版本号相同的 CPython,")
-    print( "       不同 python-build-standalone 发布链的 SQLite 不一样。")
-    print( "       别绕过这条: hermes 对**已经是 WAL** 的库不做任何缓解,")
-    print( "       员工机上 state.db 一旦损坏是不可逆的。")
-    sys.exit(1)
-print(f"    ✓ SQLite {ver} 不在漏洞范围内")
-PYEOF
+"$EMBED_PY" "$COMPANION/scripts/check-embedded-sqlite.py" || exit 1
 
 # jieba 和 playwright 必须分开取 —— 8/5 实测:
 #
