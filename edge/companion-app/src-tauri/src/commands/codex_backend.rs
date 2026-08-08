@@ -717,6 +717,14 @@ pub async fn codex_backend_status() -> Result<CodexBackendStatus, String> {
 
 #[tauri::command]
 pub async fn codex_backend_set_enabled(enabled: bool) -> Result<CodexBackendStatus, String> {
+    // 8/8: 只挡"开", 不挡"关"。
+    //
+    // 挡关会把人锁死在 Codex 状态里 —— 8/8 那台机器就正好卡在
+    // provider=openai-codex / default=gpt-5.6-luna, 要靠这条路读备份文件切回来。
+    // 一道防呆闸不该顺手堵住唯一的退路。
+    if enabled && !crate::services::codex_gate::codex_enabled() {
+        return Err(crate::services::codex_gate::disabled_reason());
+    }
     tauri::async_runtime::spawn_blocking(move || {
         let probe = probe_codex().ok_or_else(|| "未找到 Codex CLI".to_string())?;
         if probe.version < MIN_CODEX_VERSION {
@@ -784,6 +792,17 @@ pub async fn codex_backend_select_model(model: String) -> Result<CodexBackendSta
         return Err("模型名不能为空".to_string());
     }
     tauri::async_runtime::spawn_blocking(move || {
+        // 8/8: 开关关着时不许**选中** Codex 模型, 但仍要放行选回普通模型 ——
+        // 后者正是从 Codex 状态退出来的那条路 (helper 会判成 action=disable,
+        // 读备份把 provider/default 还原)。
+        //
+        // 判据用 catalog_status() 而不是 catalog_models(): 后者已经被闸门清空了,
+        // 拿它判会永远判不出"这是个 Codex 模型", 等于闸门失效。
+        if !crate::services::codex_gate::codex_enabled()
+            && catalog_status().models.iter().any(|m| m == &requested)
+        {
+            return Err(crate::services::codex_gate::disabled_reason());
+        }
         let probe = probe_codex();
         let state = run_hermes_helper(
             "select",
@@ -919,6 +938,18 @@ fn catalog_status() -> CodexBackendStatus {
 /// 供 Companion `/v1/catalog` 合并本机 Codex 模型。追加的
 /// `source/selectable` 字段只用于前端分组和禁用不可用项。
 pub fn catalog_models() -> Vec<serde_json::Value> {
+    // 8/8: 开关关着就一个都不吐 —— Codex 模型压根不进对话的模型选择器。
+    //
+    // 这是这道闸最要紧的一处。8/8 之前只要本机装了 ChatGPT.app 并登录, Codex
+    // 模型就自动出现在 picker 里, 点一下就把 hermes 全局切过去了, 而后台调用
+    // (advisor / 记忆 / 邮件评级) 是写死打网关的, 网关没有这个模型 → 全线 404。
+    // 员工看到的只是早安页坏了, 完全联想不到是刚才换了个模型。
+    //
+    // 从源头不给这个选项, 比事后提示可靠。理由见 services/codex_gate.rs。
+    if !crate::services::codex_gate::codex_enabled() {
+        log::debug!("[codex] 开关未启用, catalog 不含 Codex 模型");
+        return Vec::new();
+    }
     let status = catalog_status();
     let selectable =
         status.installed && status.supported && status.logged_in && status.hermes_ready;

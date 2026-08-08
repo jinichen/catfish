@@ -6,6 +6,7 @@
 pub mod agent_prefs;
 pub mod autostart;
 pub mod catfish_paths;
+pub mod codex_gate;       // 8/8: Codex 后端总开关 (旁路能力, 默认关 — 见该文件头)
 pub mod curator_config;
 pub mod memory_provider_config;
 pub mod curator_state;
