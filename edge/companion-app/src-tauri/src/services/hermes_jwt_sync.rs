@@ -231,10 +231,70 @@ fn sync_config_yaml(hermes: &PathBuf, jwt: &str) -> Result<()> {
     let text = fs::read_to_string(&config_path)
         .with_context(|| format!("读 {}", config_path.display()))?;
     let new = replace_model_api_key(&text, jwt);
+    let new = ensure_model_api_mode(&new);
     fs::write(&config_path, new)
         .with_context(|| format!("写 {}", config_path.display()))?;
-    log::info!("[hermes-jwt-sync] ✓ config.yaml model.api_key 更新");
+    log::info!("[hermes-jwt-sync] ✓ config.yaml model.api_key / api_mode 更新");
     Ok(())
+}
+
+/// 钉死 `model.api_mode: chat_completions` (8/8).
+///
+/// ── 病 ────────────────────────────────────────────────────────────────
+///
+/// hermes v0.20 升上去之后, 早安页的 advisor 全挂, 网关日志里是
+///
+///     HTTP 404: {"detail":"Not Found"}
+///     base_url=http://127.0.0.1:8999/v1
+///
+/// hermes 自己的请求转储写得很清楚: `request.url = .../v1/responses`。
+/// 它改用 **OpenAI Responses API** 了, 而我们的网关只有
+/// `/v1/chat/completions` 和 `/v1/embeddings` —— 没这条路由, FastAPI 就返
+/// 默认 404。
+///
+/// ── 为什么 v0.19 好好的 ───────────────────────────────────────────────
+///
+/// `hermes_cli/runtime_provider.py` 同一个分支, 两版差在这里:
+///
+///     // v0.19
+///     detected = _detect_api_mode_for_url(base_url)
+///     if detected: api_mode = detected
+///     // 认不出来 → 保持 chat_completions
+///
+///     // v0.20
+///     api_mode = _fallback_api_mode(provider, base_url, effective_model)
+///
+/// 而新增的 `_fallback_api_mode` 在 URL 认不出来时, **改成让 provider 自己
+/// 声明的 transport 说了算**。我们 config 里写的是 `provider: openai-api`,
+/// 它在 `providers.py` 的 overlay 里声明 `transport="codex_responses"` ——
+/// 于是指向 127.0.0.1 的网关也被判定成"要走 Responses API"。
+///
+/// 上游这么改有它的道理 (它 docstring 里说, 是为了修 `openai-api` 指向
+/// `us.api.openai.com` 这类数据驻留域名时每轮工具调用都 400 的问题)。它假设
+/// `provider: openai-api` 就是真在打 OpenAI; 而我们拿这个名字当"OpenAI 兼容"
+/// 的通用标签用, 指向自己的网关。
+///
+/// ── 为什么放在这里, 而不是让人手改 config.yaml ────────────────────────
+///
+/// 因为 **Companion bootstrap 会重写 config.yaml** (8/8 实测 14:57 那次,
+/// 文件从 2022 涨到 3931 字节)。手加的行留不住。而这个函数每次同步 JWT 都跑,
+/// 也就是说不管谁把 config 冲了, 下一次同步就自愈。
+///
+/// ── 为什么这条压得住 ─────────────────────────────────────────────────
+///
+/// `runtime_provider.py` 里优先级是
+///
+///     elif configured_mode && _provider_supports_explicit_api_mode(provider, configured_provider):
+///         api_mode = configured_mode          // ← 我们走这条
+///     else:
+///         api_mode = _fallback_api_mode(...)
+///
+/// 而 `_provider_supports_explicit_api_mode("openai-api", "openai-api")` 是
+/// 「两者相等 → true」。所以不是碰巧生效, 是走的上游支持的显式配置路径。
+///
+/// 幂等: `replace_model_field` 有就替、没有就插。
+fn ensure_model_api_mode(text: &str) -> String {
+    replace_model_field(text, "api_mode", "chat_completions")
 }
 
 fn sync_auth_json(hermes: &PathBuf) -> Result<()> {
@@ -716,5 +776,62 @@ mod tests {
         assert!(out.contains("browser:"));
         assert!(out.contains("plugins:"));
         assert!(out.contains("cdp_url: ws://x"));
+    }
+
+    // ── api_mode 钉死 (8/8) ────────────────────────────────────────────
+    //
+    // 见 ensure_model_api_mode 的注释: hermes v0.20 会让 provider 声明的
+    // transport (openai-api → codex_responses) 决定协议, 于是打到我们网关的
+    // 请求变成 /v1/responses —— 网关没这条路由, 404。
+
+    /// bootstrap 刚写完的 config 里没有 api_mode —— 这是实际发生的形态。
+    #[test]
+    fn 缺_api_mode_时插进去() {
+        let input = "model:\n  api_key: jwt\n  base_url: http://127.0.0.1:8999/v1\n  provider: openai-api\n  default: catfish-auto\nweb:\n  backend: tavily\n";
+        let out = ensure_model_api_mode(input);
+        assert!(out.contains("api_mode: chat_completions"), "没插进去: {out}");
+        // 插的位置必须还在 model 段里 (缩进两格), 不能掉到 web 段下面
+        let model_block: String = out
+            .lines()
+            .skip_while(|l| !l.starts_with("model:"))
+            .skip(1)
+            .take_while(|l| l.starts_with(' '))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(model_block.contains("api_mode: chat_completions"), "插错段了: {out}");
+        // 其余字段一个都不能丢
+        for keep in ["api_key: jwt", "base_url: http://127.0.0.1:8999/v1",
+                     "provider: openai-api", "default: catfish-auto", "backend: tavily"] {
+            assert!(out.contains(keep), "丢了 {keep}: {out}");
+        }
+    }
+
+    /// 已经有了就只是覆写, 不能插出第二行。
+    #[test]
+    fn 已有_api_mode_时幂等() {
+        let input = "model:\n  api_key: jwt\n  api_mode: chat_completions\n  provider: openai-api\n";
+        let out = ensure_model_api_mode(input);
+        assert_eq!(out.matches("api_mode:").count(), 1, "重复插了: {out}");
+        // 再跑一次仍然一样 —— 这个函数每次 JWT 同步都会跑
+        assert_eq!(ensure_model_api_mode(&out), out);
+    }
+
+    /// 被人改成 codex_responses 了也要掰回来 —— 那正是坏掉的那个值。
+    #[test]
+    fn 覆写掉_codex_responses() {
+        let input = "model:\n  api_key: jwt\n  api_mode: codex_responses\n";
+        let out = ensure_model_api_mode(input);
+        assert!(out.contains("api_mode: chat_completions"));
+        assert!(!out.contains("codex_responses"), "没掰回来: {out}");
+    }
+
+    /// 跟 api_key 替换串起来跑一遍 —— sync_config_yaml 里就是这个顺序。
+    #[test]
+    fn 跟_api_key_替换串起来不打架() {
+        let input = "model:\n  api_key: old\n  provider: openai-api\n";
+        let out = ensure_model_api_mode(&replace_model_api_key(input, "newjwt"));
+        assert!(out.contains("api_key: newjwt"));
+        assert!(out.contains("api_mode: chat_completions"));
+        assert!(out.contains("provider: openai-api"));
     }
 }

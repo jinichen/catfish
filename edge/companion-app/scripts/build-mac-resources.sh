@@ -461,7 +461,32 @@ echo "  OK $RESOURCES/uv ($(ls -lh "$RESOURCES/uv" | awk '{print $5}'))"
 # ─── 5. cpython 3.11.15 ─────────────────────────────────
 
 PYTHON_VERSION="3.11.15"
-PYTHON_BUILD_TAG="20260623"
+# 8/8: 20260623 → 20260807, 为的是 **SQLite**, 不是 Python 本身。
+#
+# 同一个 CPython 3.11.15, 不同的 python-build-standalone 发布, 链的 SQLite
+# 不一样。20260623 那版链的是 SQLite 3.50.4 —— 它在 WAL-reset 损坏漏洞的
+# 影响范围内 (<3.51.3, 且不在 3.50.7 / 3.44.6 两个 backport 区间)。
+#
+# 后果不是理论上的: hermes v0.20 每次开 state.db / kanban.db 都会打
+#     linked SQLite 3.50.4 is vulnerable to the WAL-reset corruption bug
+#     — is already in WAL mode — leaving WAL in place
+# 注意最后半句 —— hermes 自带的缓解**只拒绝给新库开 WAL**
+# (hermes_state.py:647), 对已经是 WAL 的库一律不降级 ("Never downgrades to
+# DELETE if the on-disk DB header reports WAL")。鸿波那个 1.1 GB 的 state.db
+# 早就是 WAL, 所以缓解对它是空的, 一直裸跑。
+#
+# 8/8 先试过事后修 (scripts/repair-hermes-sqlite.sh 调 hermes 自己的
+# repair_vulnerable_runtime)。能修好, 但**修完被 Companion bootstrap 冲掉了**
+# —— bootstrap 会无条件重建 venv 并删掉 .hermes-runtime。也就是说"装完再修"
+# 这个路子在这套架构里根本不成立, 每次 bootstrap 都退回 3.50.4。
+#
+# 所以改成从源头解决: 包里带的就是好的。20260807 这个数字不是查文档来的,
+# 是从实际修好的那个 runtime 的 BUILD 文件里读出来的 ——
+#   ~/.hermes/hermes-agent/.hermes-runtime/python/generation-*/cpython-3.11.15-*/BUILD
+#   → 20260807, 而它跑出来的 sqlite_version 就是 3.53.1。
+#
+# 下面 [5.5] 有一道 fail-loud 闸复核, 换 tag 换出个有洞的版本会当场红。
+PYTHON_BUILD_TAG="20260807"
 PY_FNAME="cpython-${PYTHON_VERSION}+${PYTHON_BUILD_TAG}-${PY_ARCH}-install_only.tar.gz"
 PY_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_BUILD_TAG}/${PY_FNAME}"
 
@@ -508,6 +533,41 @@ tar xzf "$PY_TMP" -C "$PY_UNPACK" || { echo "❌ 解压 cpython 失败"; exit 1;
 EMBED_PY="$PY_UNPACK/python/bin/python3"
 [ -x "$EMBED_PY" ] || { echo "❌ 找不到嵌入解释器: $EMBED_PY"; exit 1; }
 echo "  用嵌入解释器取 wheel: $("$EMBED_PY" -V)"
+
+# ── 包里这个解释器的 SQLite 不许有 WAL-reset 漏洞 (8/8 加) ─────────────
+#
+# 判据抄 hermes 自己的 hermes_cli/sqlite_runtime.py:is_sqlite_wal_reset_vulnerable
+# —— 不自己发明区间, 上游怎么判我们怎么判:
+#     >=3.7.0 且 <3.51.3, 且不在 [3.50.7,3.51.0) 和 [3.44.6,3.45.0) 两个
+#     backport 区间内 → 有洞
+#
+# 这道闸的意义: PYTHON_BUILD_TAG 是个手写的日期字符串, 谁哪天为了别的原因
+# 调它 (比如追新 Python 补丁), 很可能顺手就换回一个 SQLite 有洞的发布 ——
+# 而那个后果要等员工机上 state.db 损坏才知道。这里一秒钟当场拦住。
+echo "  → 复核内嵌 Python 的 SQLite..."
+"$EMBED_PY" - <<'PYEOF' || exit 1
+import sqlite3, sys
+
+def vulnerable(info):
+    """跟 hermes_cli/sqlite_runtime.py 同判据。"""
+    v = tuple(list(info)[:3] + [0] * (3 - len(list(info)[:3])))
+    if v < (3, 7, 0):    return False
+    if v >= (3, 51, 3):  return False
+    if (3, 50, 7) <= v < (3, 51, 0): return False
+    if (3, 44, 6) <= v < (3, 45, 0): return False
+    return True
+
+ver = sqlite3.sqlite_version
+if vulnerable(sqlite3.sqlite_version_info):
+    print(f"    ❌ 内嵌 Python 链的 SQLite {ver} 有 WAL-reset 损坏漏洞")
+    print( "       (需要 3.51.3+, 或 backport 3.50.7 / 3.44.6)")
+    print( "       换一个更新的 PYTHON_BUILD_TAG —— 版本号相同的 CPython,")
+    print( "       不同 python-build-standalone 发布链的 SQLite 不一样。")
+    print( "       别绕过这条: hermes 对**已经是 WAL** 的库不做任何缓解,")
+    print( "       员工机上 state.db 一旦损坏是不可逆的。")
+    sys.exit(1)
+print(f"    ✓ SQLite {ver} 不在漏洞范围内")
+PYEOF
 
 # jieba 和 playwright 必须分开取 —— 8/5 实测:
 #
