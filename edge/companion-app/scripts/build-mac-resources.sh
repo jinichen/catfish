@@ -265,9 +265,49 @@ chmod +x "$RESOURCES/install.sh"
 
 # ─── 3. Node.js darwin binary ────────────────────────────
 
-NODE_VERSION="22.14.0"
+# 8/8: 22.14.0 → 22.23.2, 因为 hermes v0.20 把底线抬了。
+#
+# v0.19 的 package.json engines 是 `node >=20.0.0`, 22.14.0 富余得很。
+# v0.20 抬到 **`node >=22.22.0`**, 而上游 .npmrc 里写着 `engine-strict=true`
+# —— 不满足是 **EBADENGINE 硬失败**, 不是 warn。22.14.0 会让 npm ci 当场挂,
+# 而这一步在打包流程靠后, 要下完几百 MB 才炸。
+#
+# 选 22.23.2 (2026-07-29 发布) 而不是跳到 24/26: 留在 v22 LTS 线内是最小改动,
+# 它 bundle 的 npm 是 10.x, 满足 engines 的 `<11.10.0` 那一支。
+NODE_VERSION="22.23.2"
 NODE_FNAME="node-v${NODE_VERSION}-darwin-${NODE_ARCH}.tar.gz"
 NODE_URL="https://nodejs.org/dist/v${NODE_VERSION}/${NODE_FNAME}"
+
+# 上面那个版本号是手写的, 而 hermes 每次升级都可能再抬 engines。与其指望下次
+# 有人记得改, 不如**当场跟打包用的这份 hermes 源码对一遍** —— 源码就在
+# $HERMES_SRC, 零成本, 一秒。
+#
+# 不实现完整 semver range 解析 (那要拉依赖), 只解 `>=X.Y.Z` 这一种最常见的形式;
+# 解不出来就跳过并说一声, 不拦构建。
+if [ -f "$HERMES_SRC/package.json" ]; then
+    NODE_FLOOR="$(python3 -c '
+import json, re, sys
+try:
+    eng = json.load(open(sys.argv[1])).get("engines", {}).get("node", "")
+except Exception:
+    sys.exit(0)
+m = re.search(r">=\s*(\d+)\.(\d+)\.(\d+)", eng or "")
+if m: print(".".join(m.groups()))
+' "$HERMES_SRC/package.json")"
+    if [ -n "$NODE_FLOOR" ]; then
+        # sort -V: 版本号排序。最小的那个若不是 floor, 说明 NODE_VERSION < floor
+        if [ "$(printf '%s\n%s\n' "$NODE_FLOOR" "$NODE_VERSION" | sort -V | head -1)" != "$NODE_FLOOR" ]; then
+            echo "❌ 内嵌的 Node $NODE_VERSION 低于 hermes 要求的 >=$NODE_FLOOR"
+            echo "   ($HERMES_SRC/package.json 的 engines.node)"
+            echo "   上游 .npmrc 有 engine-strict=true —— 这是硬失败, npm ci 会报 EBADENGINE。"
+            echo "   修: 把本脚本的 NODE_VERSION 抬到 >=$NODE_FLOOR 的一个真实发布版本。"
+            exit 1
+        fi
+        echo "  ✓ Node $NODE_VERSION 满足 hermes 要求的 >=$NODE_FLOOR"
+    else
+        echo "  ⚠ 解不出 engines.node (非 '>=X.Y.Z' 形式?), 跳过 Node 版本下限校验"
+    fi
+fi
 
 echo ""
 echo "=== [3/6] Download Node.js $NODE_VERSION darwin-$NODE_ARCH ==="

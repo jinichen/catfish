@@ -28,7 +28,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TARGET_DIR="$APP_ROOT/src-tauri/target/release/bundle/macos"
 APP_PATH="$TARGET_DIR/Catfish Companion.app"
-DMG_PATH="$HOME/Downloads/Catfish-Companion-0.19.0-aarch64.dmg"
+# 8/8: 版本号从 package.json 读, 不再硬编码。
+#
+# 原来这里写死 "0.19.0"。而 Companion 版本号是跟 hermes 钉死的 (见
+# check_version_sync.sh), 每次 hermes 升级都要 bump —— 硬编码就意味着每次都得
+# 记得改这一行, 而它跟 3 处版本号不在一起, 必漏。漏了的表现是打出来的 dmg 文件名
+# 还叫旧版本, 分发时没人分得清手里是哪一版。
+APP_VERSION="$(grep -E '^[[:space:]]*"version"[[:space:]]*:' "$APP_ROOT/package.json" \
+               | head -1 | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
+[ -n "$APP_VERSION" ] || { echo "✗ 从 package.json 读不出版本号" >&2; exit 1; }
+DMG_PATH="$HOME/Downloads/Catfish-Companion-${APP_VERSION}-aarch64.dmg"
 WORK_DIR="$(mktemp -d /tmp/catfish-sign.XXXXXX)"
 
 cleanup() {

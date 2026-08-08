@@ -99,33 +99,48 @@ if [ "$PKG_VER" = "$CARGO_VER" ] && [ "$CARGO_VER" = "$TAURI_VER" ]; then
     # 这里不去算上游文件的 SHA (CI runner 上没有上游源码, 算不了), 而是校验
     # "那个 SHA 是从哪个 commit 算的" 跟 .hermes-git-commit 一致 —— 纯本地、
     # 离线、一秒。pin 挪了而补丁脚本没跟着改, 立刻报。
+    # 8/8: 从只查 .ps1 扩到**两个都查**。
+    #
+    # 8/1 加这段时只盖了 Windows 的 patch_install_ps1_offline.py。而
+    # patch_install_sh_offline.py (mac / Linux) 当时根本没有 UPSTREAM_COMMIT ——
+    # 也就是说我们自己天天在走的 mac 这条路, "升级 hermes 忘了同步 patch 脚本"
+    # 一直没有任何护栏, 只能等 build-mac-resources.sh 跑到第 2 步 SHA drift 才炸。
+    # 8/8 给 sh 脚本补了 UPSTREAM_COMMIT, 这里跟着一起查。
     GIT_COMMIT_FILE="$COMPANION_DIR/.hermes-git-commit"
-    PATCH_SCRIPT="$COMPANION_DIR/../hermes-fork/patch_install_ps1_offline.py"
-    if [ -f "$GIT_COMMIT_FILE" ] && [ -f "$PATCH_SCRIPT" ]; then
+    if [ -f "$GIT_COMMIT_FILE" ]; then
         PINNED_COMMIT="$(head -1 "$GIT_COMMIT_FILE" | tr -d '[:space:]')"
-        PATCH_COMMIT="$(grep -E '^UPSTREAM_COMMIT[[:space:]]*=' "$PATCH_SCRIPT" \
-                        | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
-        if [ -z "$PATCH_COMMIT" ]; then
-            echo "⚠ $PATCH_SCRIPT 里没有 UPSTREAM_COMMIT, 跳过上游 pin 校验"
-        elif [ "$PATCH_COMMIT" = "$PINNED_COMMIT" ]; then
-            echo "✓ Windows offline 补丁的上游 pin 一致: ${PINNED_COMMIT:0:12}"
-        else
-            echo "❌ Windows offline 补丁没跟上 hermes 的 pin:"
-            echo "   .hermes-git-commit          : $PINNED_COMMIT"
-            echo "   patch_install_ps1_offline.py: $PATCH_COMMIT"
-            echo ""
-            echo "   上游 install.ps1 换了一版, 我们那 7 处 offline 注入的锚点"
-            echo "   未必还贴得上。**不能只改 SHA 了事**, 按顺序做:"
-            echo "     1. clone 上游到 pin 的 commit, 逐处确认 7 个 anchor 各命中 1 次"
-            echo "        (0 次 = 上游改了那段; >1 次 = anchor 不再 unique, 都要重 audit)"
-            echo "     2. 更新 UPSTREAM_SHA256 = 新 install.ps1 的 sha256"
-            echo "     3. 更新 UPSTREAM_COMMIT = $PINNED_COMMIT"
-            echo "     4. 本地跑一遍 patch 脚本, 确认 7 处注入都在"
-            echo ""
-            echo "   不修的话表现是: Windows MSI 构建每次都红, 而且要等一分钟"
-            echo "   clone 完才报错。"
-            exit 1
-        fi
+        for _spec in "Windows MSI:install.ps1:7:patch_install_ps1_offline.py" \
+                     "mac/Linux:install.sh:8:patch_install_sh_offline.py"; do
+            PLAT="${_spec%%:*}";      _rest="${_spec#*:}"
+            UPSTREAM_FILE="${_rest%%:*}"; _rest="${_rest#*:}"
+            N_ANCHOR="${_rest%%:*}"
+            PATCH_NAME="${_rest#*:}"
+            PATCH_SCRIPT="$COMPANION_DIR/../hermes-fork/$PATCH_NAME"
+            [ -f "$PATCH_SCRIPT" ] || continue
+            PATCH_COMMIT="$(grep -E '^UPSTREAM_COMMIT[[:space:]]*=' "$PATCH_SCRIPT" \
+                            | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+            if [ -z "$PATCH_COMMIT" ]; then
+                echo "⚠ $PATCH_NAME 里没有 UPSTREAM_COMMIT, 跳过 $PLAT 的 pin 校验"
+            elif [ "$PATCH_COMMIT" = "$PINNED_COMMIT" ]; then
+                echo "✓ $PLAT offline 补丁的上游 pin 一致: ${PINNED_COMMIT:0:12}"
+            else
+                echo "❌ $PLAT offline 补丁没跟上 hermes 的 pin:"
+                echo "   .hermes-git-commit : $PINNED_COMMIT"
+                echo "   $PATCH_NAME : $PATCH_COMMIT"
+                echo ""
+                echo "   上游 $UPSTREAM_FILE 换了一版, 我们那 $N_ANCHOR 处 offline 注入的锚点"
+                echo "   未必还贴得上。**不能只改 SHA 了事**, 按顺序做:"
+                echo "     1. clone 上游到 pin 的 commit, 逐处确认 $N_ANCHOR 个 anchor 各命中 1 次"
+                echo "        (0 次 = 上游改了那段; >1 次 = anchor 不再 unique, 都要重 audit)"
+                echo "     2. 更新 UPSTREAM_SHA256 = 新 $UPSTREAM_FILE 的 sha256"
+                echo "     3. 更新 UPSTREAM_COMMIT = $PINNED_COMMIT"
+                echo "     4. 本地跑一遍 patch 脚本 --check, 确认 $N_ANCHOR 处注入都在"
+                echo ""
+                echo "   不修的话表现是: 该平台的构建每次都红, 而且要等一分钟"
+                echo "   clone 完才报错。"
+                exit 1
+            fi
+        done
     fi
 
     # BL-CATFISH-HERMES-VERSION-SYNC-B (6/1 鸿波): 本机有 hermes 时额外 sanity

@@ -76,7 +76,7 @@ if sys.platform == "win32":
 
 #: 当前测试通过的 install.ps1 SHA256. Bump 时必须重新 audit 7 处锚点是否稳定.
 #: 计算: `shasum -a 256 <hermes-agent>/scripts/install.ps1`
-UPSTREAM_SHA256 = "b5bdf0e959677de0168f8cfb5f9175c7b57adf5c4319a1c2fc9bec1f46fbdb6e"
+UPSTREAM_SHA256 = "4dcbf2b665750cb578f69a6efa40770659e21821a463746f86da68af0d2bb31c"
 
 #: 上面那个 SHA 是从**哪个上游 commit** 算出来的.
 #:
@@ -91,10 +91,42 @@ UPSTREAM_SHA256 = "b5bdf0e959677de0168f8cfb5f9175c7b57adf5c4319a1c2fc9bec1f46fbd
 #: 版本号那条链有 check_version_sync.sh 当场拦, 这条没有。补上之后两条一样快。
 #:
 #: 更新方式: 跟 edge/companion-app/.hermes-git-commit 保持一致。
-UPSTREAM_COMMIT = "3ef6bbd201263d354fd83ec55b3c306ded2eb72a"
+UPSTREAM_COMMIT = "3c27eb6234bf91b8ceee9e9071591b31e9b148cb"
 
 #: 上游预期行数 (rough sanity check, 不 fatal, 只 warn)
-UPSTREAM_LINES_EXPECTED = 3445
+UPSTREAM_LINES_EXPECTED = 4027
+
+# ─── 8/8 v2026.7.20 → v2026.8.3 的 anchor 复审记录 ────────────
+#
+# 按脚本注释要求逐条做完, 结论: **7/7 anchor 各命中 1 次, 无需改 anchor**。
+# 同一套 anchor 拿旧文件跑也是 7/7 且 SHA 复算等于旧 pin (b5bdf0e9…), 说明
+# 审法本身没问题, 不是"新文件碰巧都过"。
+#
+# 上游这一版真正改的地方 (diff 258 行), 逐条对我们的影响:
+#
+# 1. **param 新增 `-ForceCommit`** (插在 IncludeDesktop 之前)。
+#    我们的 param anchor 要求 `[switch]$IncludeDesktop\n)` —— 即 IncludeDesktop
+#    仍是最后一个参数。仍命中 1 次, 且我们只在它后面追加 5 个 -Offline*,
+#    ForceCommit 在前面不受影响。
+#
+# 2. **Install-Repository 加了 commit 回滚保护** (merge-base --is-ancestor,
+#    防止老 installer 把新 checkout 拽回旧 commit)。
+#    对我们**无影响** —— PATCH_4 的 offline 分支命中后直接 `return`, 上游那整段
+#    git update / clone 三级 fallback 根本走不到。
+#
+# 3. **新增 Get-NpmRange / Update-ManagedNpm** —— 上游开始强制 npm 版本。
+#    对 install.ps1 的 patch 无影响 (不在我们 7 处里), 但**对打包有影响**,
+#    见下面那条 ⚠。
+#
+# 4. Install-DesktopVoiceDeps / Stage-Desktop / Set-ManagedNodeFirstOnUserPath
+#    有改动, 都不在我们 patch 的区域。
+#
+# ⚠ 打包侧的真坑 (不是这个脚本的事, 但同一次升级必须一起处理):
+#   v0.20 的 package.json engines 抬到 `node >=22.22.0` (v0.19 是 >=20.0.0),
+#   npm 要 `<11.10.0 || >=11.17.0`, 而 .npmrc 里 `engine-strict=true` ——
+#   **不满足就是硬失败 EBADENGINE, 不是 warn**。
+#   而 build-mac-resources.sh:268 还钉着 NODE_VERSION="22.14.0"。
+#   重打 runtime bundle 之前必须先把它抬到 >=22.22.0, 否则 npm ci 直接挂。
 
 #: Patch marker — script 重跑幂等靠这个
 MARKER = "# CATFISH-OFFLINE-PATCH-v1"

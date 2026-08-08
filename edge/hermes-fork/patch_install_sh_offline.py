@@ -55,12 +55,32 @@ from pathlib import Path
 
 # ─── 上游 pin ──────────────────────────────────────────────
 
-#: 当前测试通过的 install.sh SHA256. Bump 时必须重新 audit 4 处 anchor 是否稳定.
+#: 当前测试通过的 install.sh SHA256. Bump 时必须重新 audit 8 处 anchor 是否稳定.
 #: 计算: `shasum -a 256 ~/.hermes/hermes-agent/scripts/install.sh`
-UPSTREAM_SHA256 = "c5ba7e89627577fab914514736ecfb3359b66956ca00199bfef616ca35953cb9"
+UPSTREAM_SHA256 = "45f589461248c7a6ec3aecd7522a69dd49c5c8dbf4798ba1296af5c0c5e7ccd3"
+
+#: 上面那个 SHA 是从**哪个上游 commit** 算出来的.
+#:
+#: 8/8 加, 补的是一个比 .ps1 那边更要命的洞: install_ps1 那个脚本 8/1 就有了
+#: UPSTREAM_COMMIT, check_version_sync.sh 拿它当场拦; 而**这个 mac 脚本一直没有**,
+#: 于是 mac 侧"升级 hermes 忘了同步 patch 脚本"没有任何护栏 —— 只能等
+#: build-mac-resources.sh 跑到第 2 步 SHA drift 才炸。
+#:
+#: mac 恰恰是我们自己天天在用的那条路。
+#:
+#: 更新方式: 跟 edge/companion-app/.hermes-git-commit 保持一致。
+UPSTREAM_COMMIT = "3c27eb6234bf91b8ceee9e9071591b31e9b148cb"
 
 #: 上游预期行数 (rough sanity check, 不 fatal, 只 warn)
-UPSTREAM_LINES_EXPECTED = 3133
+UPSTREAM_LINES_EXPECTED = 3371
+
+# ─── 8/8 v2026.7.20 → v2026.8.3 的 anchor 复审记录 ────────────
+#
+# 8/8 anchor 全部各命中 1 次, 无需改 anchor。同一套 anchor 拿旧文件跑也是 8/8
+# 且 SHA 复算等于旧 pin (c5ba7e89…), 说明审法本身可信, 不是新文件碰巧都过。
+#
+# 行数 3158 → 3371。上游这版主要动的是 npm 版本管理 (见 .ps1 那边的同名记录),
+# 不在我们 patch 的 8 段里。
 
 #: Patch marker — script 重跑幂等靠这个
 MARKER = "# CATFISH-OFFLINE-PATCH-v1"

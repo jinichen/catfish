@@ -153,9 +153,27 @@ def test_apply_patches_missing_anchor_exits_2():
     assert exc_info.value.code == 2
 
 
-def test_all_four_anchors_registered():
-    """确保 ANCHORS 表覆盖 4 处 patch (param + Install-Uv + Test-Python + Install-Repository)."""
-    assert set(ANCHORS.keys()) == {"param", "install_uv", "test_python", "install_repository"}
+def test_全部_anchor_都登记了():
+    """ANCHORS 表必须正好是这 7 处 —— 多一处少一处都要有人来改这行。
+
+    8/8 修: 原名 `test_all_four_anchors_registered`, 断言只有 4 个 anchor。
+    7/17 加 npm_global / npm_local_helper / playwright_chromium 时没人动它,
+    于是这条从 7/17 起**一直红着**没人发现 (跟这个脚本里 UPSTREAM_COMMIT
+    要解决的是同一类病: 改了 A 忘了同步 B, 而 B 的失败没人看)。
+
+    这里不写 `len(ANCHORS) == 7` —— 那样改名字不会红, 起不到"逼人复核"的作用。
+    写成集合相等: 加/删/改名任何一个 anchor 都会红, 红了就得回来确认
+    verify_patched 的 marker_count 和 CLI 输出里的处数也一起改了。
+    """
+    assert set(ANCHORS.keys()) == {
+        "param",
+        "install_uv",
+        "test_python",
+        "install_repository",
+        "npm_global",             # BL-WIN-INSTALL-NPM-OFFLINE (7/17)
+        "npm_local_helper",       # BL-WIN-INSTALL-NPM-OFFLINE (7/17)
+        "playwright_chromium",    # BL-WIN-INSTALL-CHROMIUM-BUNDLE (7/17)
+    }
 
 
 # ─── CLI end-to-end (subprocess) ────────────────────────────
