@@ -254,6 +254,8 @@ plugin_weixin_zh = _import_sibling("plugin_weixin_zh")
 _P28_REPLACEMENTS = plugin_weixin_zh._P28_REPLACEMENTS  # noqa: F401  (re-export · 见 plugin_weixin_zh.py)
 _translate_hermes_zh = plugin_weixin_zh._translate_hermes_zh  # noqa: F401  (re-export · 见 plugin_weixin_zh.py)
 _patch_p28_weixin_zh = plugin_weixin_zh._patch_p28_weixin_zh  # noqa: F401  (re-export · 见 plugin_weixin_zh.py)
+plugin_memory_gate = _import_sibling("plugin_memory_gate")
+_patch_p42_memory_skip_background = plugin_memory_gate._patch_p42_memory_skip_background  # noqa: F401  (re-export · 见 plugin_memory_gate.py)
 plugin_wechat_qr = _import_sibling("plugin_wechat_qr")
 _WECHAT_QR_SESSION_TTL = plugin_wechat_qr._WECHAT_QR_SESSION_TTL  # noqa: F401  (re-export · 见 plugin_wechat_qr.py)
 _wechat_qr_sweep_expired = plugin_wechat_qr._wechat_qr_sweep_expired  # noqa: F401  (re-export · 见 plugin_wechat_qr.py)
@@ -272,6 +274,8 @@ _PATCH_TARGETS = [
     ("agent.auxiliary_client", "_resolve_auto", "func"),
     ("agent.auxiliary_client", "_normalize_main_runtime", "func"),
     ("agent.title_generator", "auto_title_session", "func"),
+    # P42 (8/8): 后台调用不进记忆 — 见 plugin_memory_gate.py
+    ("agent.memory_manager", "MemoryManager", "attr"),
     ("gateway.platforms.api_server", "APIServerAdapter", "attr"),
     # P15.1 (6/22): hermes v0.17 _is_gateway_approval_context() 检查
     # HERMES_SESSION_PLATFORM contextvar. P15 patch 必须调 set_session_vars()
@@ -740,6 +744,15 @@ def _apply_patches() -> None:
             "P40: Companion user message dedup patch 失败: %s",
             e, exc_info=True,
         )
+
+    # P42 (8/8 鸿波"员工邮件正文进个人知识库不合理"): 后台调用不写记忆。
+    # email_scheduler 的评级调用走 agent loop, 于是邮件标题/发件人被写进
+    # employee_journal.md, 再被蒸成 wiki 条目。判据和失效方式见
+    # plugin_memory_gate.py 的模块 docstring。
+    try:
+        _patch_p42_memory_skip_background(CV_CF_SOURCE)
+    except Exception as e:  # noqa: BLE001
+        logger.error("P42: memory 来源闸 patch 失败: %s", e, exc_info=True)
 
 
 # ── P16 (P3.4.C 6/15 鸿波: session_search 76s → 340ms) ──────────────────
