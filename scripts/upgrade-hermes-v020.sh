@@ -241,6 +241,58 @@ if grep -q "allow_session" gateway/run.py 2>/dev/null; then
     echo "     阶段 4 第 5 步验中文化时若看到英文, 按 'P28 miss' 日志补这一条。"
 fi
 
+# 3.5 Companion pin —— 8/8 栽在这里, 补的护栏
+#
+# 这个脚本原来到 3.4 就结束了, 于是"升级成功"是个假象: 一开 Companion,
+# 整棵新树被改名 .catfish-hermes-broken-*, 换成 Companion 自带的旧版。
+#
+# 机制 (edge/companion-app/src-tauri/src/commands/hermes_install.rs):
+#   core_health_problems() 拿 installed_hermes_commit_at(dir) —— 先读
+#   .catfish-hermes-version, 读不到再 git rev-parse HEAD —— 跟
+#   hermes_pinned_commit() 比。后者是
+#   include_str!("../../../.hermes-git-commit"), **编译期烤进二进制**。
+#   不等就判 broken → activate_stage() 把整棵树改名挪走 → 用自带 bundle 重铺。
+#
+# 所以"单升 hermes"根本不是一个有效操作: 必须同时改 Companion 的 pin
+# **并重新构建**, 否则跑着的那个二进制里还是旧 commit。
+echo "→ [3.5] Companion pin 是否跟得上 (不跟就白升)..."
+COMPANION_DIR=~/person_task/catfish/edge/companion-app
+NEW_SHA="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+PIN_FILE="$COMPANION_DIR/.hermes-git-commit"
+if [ -f "$PIN_FILE" ]; then
+    COMPANION_PIN="$(head -1 "$PIN_FILE" | tr -d '[:space:]')"
+    if [ "$COMPANION_PIN" = "$NEW_SHA" ]; then
+        ok "Companion pin 已是 $NEW_SHA"
+        echo "  ⚠ 但仓库里改对 ≠ 跑着的二进制改对 —— pin 是 include_str! 烤进去的,"
+        echo "     **必须重新构建 Companion**, 否则旧二进制照样把新树判 broken。"
+    else
+        echo ""
+        echo "  ╔══════════════════════════════════════════════════════════╗"
+        echo "  ║  ⛔ 先别开 Companion —— 一开就把这次升级冲掉             ║"
+        echo "  ╚══════════════════════════════════════════════════════════╝"
+        echo "     Companion pin : $COMPANION_PIN"
+        echo "     刚装的 hermes : $NEW_SHA"
+        echo ""
+        echo "     按顺序做完再开 Companion:"
+        echo "       1. 复审 offline 补丁的 anchor (两个平台都要):"
+        echo "          python3 edge/hermes-fork/patch_install_sh_offline.py  --input $HERMES_DIR/scripts/install.sh  --check --no-sha-strict"
+        echo "          python3 edge/hermes-fork/patch_install_ps1_offline.py --input $HERMES_DIR/scripts/install.ps1 --check --no-sha-strict"
+        echo "          全绿后更新两个脚本的 UPSTREAM_SHA256 / UPSTREAM_COMMIT / LINES"
+        echo "       2. .hermes-git-commit → $NEW_SHA"
+        echo "          .hermes-git-tag    → $NEW_TAG"
+        echo "          .hermes-target-version + package.json + Cargo.toml"
+        echo "          + Cargo.lock + tauri.conf.json → 新版本号"
+        echo "       3. bash edge/companion-app/scripts/check_version_sync.sh  (要全绿)"
+        echo "       4. 重打 runtime bundle + **重新构建 Companion**"
+        echo ""
+        echo "     在这之前开 Companion 的后果: 新树被改名 .catfish-hermes-broken-*,"
+        echo "     位置让给自带的旧版; 想找回来就去 ~/.hermes/ 下认那个目录。"
+        echo ""
+    fi
+else
+    echo "  ⚠ 找不到 $PIN_FILE, 跳过 —— 但仍要人工确认 Companion 的 pin"
+fi
+
 echo ""
 echo "════════════════════════════════════════════"
 echo " ✅ 阶段 0-3 完成 · hermes = $NEW_TAG"
@@ -253,6 +305,9 @@ echo "  state.db:     $DB_BAK"
 echo "  audit log:    $AUDIT_OLD / $AUDIT_NEW"
 echo ""
 echo "🧪 阶段 4 · smoke test (手工 · 任一 fail 就回滚):"
+echo "  0. ⛔ 先确认 [3.5] 是绿的, 且 Companion **已用新 pin 重新构建过**。"
+echo "     下面第 3 步要开 Companion —— 二进制里的 pin 还是旧的话,"
+echo "     这一开就把刚装好的树改名挪走了, 后面几步测的全是旧版本。"
 echo "  1. nohup hermes serve > ~/.hermes/serve-$TS.log 2>&1 &"
 echo "     tail -f ~/.hermes/serve-$TS.log · 看无 Traceback"
 echo "     ⚠ state.db 1GB · 这版有 FTS v23 布局迁移, 首启可能要等"
