@@ -1936,6 +1936,26 @@ def _build_litellm_params(body: dict, model) -> dict:
         if changed:
             logger.info("applied param_overrides for %s: %s", model.name, changed)
 
+    # 8/8: 出口前最后一道 messages 规范化 —— 删掉"给了但是空的" tool_calls。
+    # 放这儿而不是入口: 压缩 / model handoff / lean inject 都在入口之后动
+    # messages, 贴着出口做才盖得全。详见 message_normalize.py。
+    from .message_normalize import normalize_messages  # noqa: PLC0415
+
+    normalize_messages(params)
+
+    # 8/8: 强制 tool_choice 与深度思考互斥 —— 只关这一次请求的思考。
+    # **必须在 param_overrides 之后**, 否则判不出管理员有没有显式配过。
+    # 详见 thinking_guard.py (为什么不按模型一刀切关掉)。
+    from .thinking_guard import apply as _apply_thinking_guard  # noqa: PLC0415
+
+    _tg = _apply_thinking_guard(params, model)
+    if _tg:
+        logger.info(
+            "thinking_guard: %s 本次强制了 tool_choice, 关掉深度思考 (%s) —— "
+            "两者在上游互斥, 不关会 400。tool_choice=auto 的普通对话不受影响。",
+            model.name, _tg,
+        )
+
     return params
 
 
