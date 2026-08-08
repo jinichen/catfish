@@ -32,8 +32,22 @@
 
 1. `quota_events`: `(ts, user_email, dept, model, tokens_in, tokens_out, request_id)` — **不含 prompt/response 内容**
 2. `gateway_audit (metrics)`: `(ts, user_email, dept, model, latency_ms, status, cache_*_tokens)` — **不含 prompt/response 内容**
-3. `a2a_audit` 跨员工通信元数据: `(ts, direction, from_sub, to_sub, allow_match, question[前 200 字])` — `question` 是元数据例外允许截断, 不允许存 answer
-4. `request_id` 索引: 用来从 Companion 端追同一请求, **不存内容**
+3. `request_id` 索引: 用来从 Companion 端追同一请求, **不存内容**
+
+> **8/8 删掉了原第 3 条 (`a2a_audit` 的 `question[前 200 字]`)。**
+>
+> 那条写着「`question` 是元数据例外允许截断」—— 也就是**授权中央端存员工原话**,
+> 只是限长 200 字。它是这份文档里唯一一条允许自由文本落中央的口子。
+>
+> 而 A2A 整套 **5/26 就砍了** (Plan D Federation 停, 0 真客户): 网关的 7 个
+> `a2a_*.py` 全改成 38 行 STUB, `app.py` 里三处 caller 删干净, 只剩注释墓碑。
+> 也就是说这条例外从 5/26 起就是**纸面上的** —— 代码不存在, 文档还留着授权。
+>
+> 危险不在它现在生效, 在于**下一个人照着它写代码**: 文档是"强制纪律, 新代码违反
+> 不收 PR", 有人要加跨员工功能时会把它当先例, 理直气壮地存 200 字员工原话。
+>
+> 真要重启 A2A: 元数据就是元数据 (ts / direction / from_sub / to_sub /
+> allow_match), question 一个字都不留。要排查内容去边缘端看。
 
 **违规示例 (不允许)**:
 - gateway 把 chat messages 写文件
@@ -84,7 +98,7 @@
 | `recent_outputs.py` | 读 `~/.catfish/output/` | 同上 |
 | `skills_loader.py` | 读 `~/.hermes/skills` | 同上 |
 
-### D 类 — A2A federation (跨员工通信) · 5 个
+### D 类 — A2A federation (跨员工通信) · 5 个 · ~~已废~~ (5/26 整套砍, 7 个模块全 STUB)
 
 | 文件 | 违规 | 该怎么改 |
 |---|---|---|
@@ -202,7 +216,13 @@ A: 不需要. Companion 主动调 gateway HTTP 是正常单向数据流, 它本�
 
 **Q: 如果 Companion 跨员工 federation (A2A) 需要中央做 relay, 那 gateway 必然要碰跨员工数据?**
 
-A: A2A relay 只传**密文** (JWT 包裹 question), gateway 当代理转发, 不解密内容. 即使转发的 question 是明文, gateway**不存** — 元数据进 PG (`a2a_audit`), question 内容流过即丢. 跟 HTTP proxy 同性质.
+A: **这个问题目前不适用 —— A2A 整套 5/26 已砍** (Plan D Federation 停, 0 真客户;
+网关 7 个 `a2a_*.py` 全是 STUB)。保留问答是因为将来若重启会再遇到。
+
+答案本身仍然成立, 但 8/8 收紧了一处: relay 只传密文 (JWT 包裹 question), gateway
+当代理转发不解密; 即使转发的是明文, gateway **不存** —— 元数据进 PG, question
+内容流过即丢, 跟 HTTP proxy 同性质。**元数据不含 question 的任何片段** (原文这里
+写着可存前 200 字, 8/8 删除, 理由见上面"严格定义"那段)。
 
 ## Sources
 

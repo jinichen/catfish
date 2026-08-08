@@ -177,7 +177,20 @@ async def _llm_json(
     try:
         return json.loads(text)
     except json.JSONDecodeError as e:
-        logger.warning("LLM 返非 JSON: %s\n原文: %s", e, text[:500])
+        # 8/8: 原来这里打 `text[:500]` —— 500 字 LLM 原始输出直接进中央日志。
+        #
+        # facts 的输入是员工上传的变更文件 (facts_router.upload 带 user.sub),
+        # LLM 的回答里会大段复述那份文档, 所以这 500 字可能就是员工内容。
+        # 中央端严禁持有员工数据, 日志也算持有。
+        #
+        # 排查需要的信息其实一点没少: JSONDecodeError 自带 msg / lineno / colno /
+        # pos, 加上总长度, 足够判断是"截断了"还是"根本没返 JSON"还是"多了前后缀"。
+        # 真要看原文去边缘端复现 —— 那份文档本来就在员工机器上。
+        logger.warning(
+            "LLM 返非 JSON: %s (pos=%s line=%s col=%s, 全长 %d 字符; "
+            "原文不记 — 中央端不持有内容, 要看去边缘端复现)",
+            e.msg, e.pos, e.lineno, e.colno, len(text),
+        )
         return {"error": f"LLM 返非 JSON: {e}", "raw": text}
 
 
@@ -339,7 +352,13 @@ async def run_find_impact(meta: dict, facts: dict, user: User) -> list[dict]:
         )
         result = await _llm_json(FIND_IMPACT_PROMPT_SYSTEM, user_prompt, max_tokens=2000, triggered_by=user.sub)
         if "error" in result:
-            logger.warning("find_impact LLM 失败: %s (fact=%s)", result.get("error"), fact.get("id"))
+            # result.get("error") 取的是**我们自己**在 _llm_json 里塞进去的那句
+            # f"LLM 返非 JSON: {e}" (JSONDecodeError 的描述), 不是 LLM 内容。
+            # 取具体键而不是整个 dict, 边界是清楚的。
+            logger.warning(  # noqa: LOGCONTENT — 见上
+                "find_impact LLM 失败: %s (fact=%s)",
+                result.get("error"), fact.get("id"),
+            )
             continue
         for imp in result.get("impacts", []):
             imp["fact_id"] = fact.get("id")
