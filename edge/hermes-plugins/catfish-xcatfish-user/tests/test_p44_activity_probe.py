@@ -162,6 +162,161 @@ def test_原因码是封闭词表():
         assert r.replace("_", "").isalnum(), f"{r} 不像个码"
 
 
+# ── 第二版: api_server 在途 turn 的登记 ──────────────────────────
+#
+# 第一版只读 runner._running_agents, 早安页实测永远探不到 —— 那是**平台会话**
+# 的注册表 (Telegram / 微信), 而 Companion 走 /v1/chat/completions, 它的 agent
+# 只活在局部变量里。这一组钉住第二版的锚点: 包 _run_agent 的 agent_ref 钩子。
+
+@pytest.fixture(autouse=True)
+def _clean_registry():
+    """每条用例前后清空登记表 —— 它是模块级状态, 不清会互相串。"""
+    activity_probe._ACTIVE_API_AGENTS.clear()
+    yield
+    activity_probe._ACTIVE_API_AGENTS.clear()
+
+
+class _FakeAgent:
+    def __init__(self, tool="read_file"):
+        self.tool = tool
+
+    def get_activity_summary(self):
+        return {"current_tool": self.tool, "api_call_count": 1}
+
+
+def test_通知式_agent_ref_会登记():
+    ref = activity_probe._NotifyingAgentRef(None, "k1")
+    agent = _FakeAgent()
+    ref[0] = agent
+    assert activity_probe._snapshot_active() == [("k1", agent)]
+    assert ref[0] is agent
+
+
+def test_通知式_agent_ref_写穿调用方的_list():
+    """流式路径靠 agent_ref[0] 调 agent.interrupt() —— 不能因为我们包一层就断。"""
+    inner: list = [None]
+    ref = activity_probe._NotifyingAgentRef(inner, "k2")
+    agent = _FakeAgent()
+    ref[0] = agent
+    assert inner[0] is agent, "调用方的 list 没被写穿, interrupt 会拿到 None"
+
+
+def test_写穿失败不影响登记():
+    class _Hostile(list):
+        def __setitem__(self, i, v):
+            raise RuntimeError("坏 list")
+
+    ref = activity_probe._NotifyingAgentRef(_Hostile([None]), "k3")
+    ref[0] = _FakeAgent()
+    assert len(activity_probe._snapshot_active()) == 1
+
+
+def test_collect_能看到_api_server_在途_turn(monkeypatch):
+    """这就是第一版漏掉的那条链路。"""
+    monkeypatch.setattr(activity_probe, "_gateway_runner", lambda: None)
+    activity_probe._register_active("run-1", _FakeAgent("grep"))
+    out = activity_probe.collect_activity()
+    assert out["available"] is True
+    assert out["turns"][0]["current_tool"] == "grep"
+    assert out["turns"][0]["session_key"] == "run-1"
+
+
+def test_两个来源都空才算没有正在跑的(monkeypatch):
+    monkeypatch.setattr(activity_probe, "_gateway_runner", lambda: None)
+    assert activity_probe.collect_activity()["reason"] == activity_probe.REASON_NO_RUNNER
+
+
+def test_同一个_agent_两边都在只报一次(monkeypatch):
+    agent = _FakeAgent()
+
+    class _Runner:
+        def _running_agent_items(self):
+            return [("platform-key", agent)]
+
+    monkeypatch.setattr(activity_probe, "_gateway_runner", lambda: _Runner())
+    activity_probe._register_active("api-key", agent)
+    out = activity_probe.collect_activity()
+    assert len(out["turns"]) == 1
+
+
+def _install_fake_api_server(monkeypatch, record):
+    """伪造 gateway.platforms.api_server, 让 patch 在没有 hermes 时也能测。"""
+    import sys
+    import types
+
+    class _FakeAdapter:
+        async def _run_agent(self, *args, **kwargs):
+            record["agent_ref"] = kwargs.get("agent_ref")
+            ref = kwargs.get("agent_ref")
+            if ref is not None:
+                ref[0] = _FakeAgent()
+            record["active_during"] = len(activity_probe._snapshot_active())
+            if record.get("raise"):
+                raise RuntimeError("turn 挂了")
+            return ("ok", {})
+
+    mod = types.ModuleType("gateway.platforms.api_server")
+    mod.APIServerAdapter = _FakeAdapter
+    pkg_gateway = types.ModuleType("gateway")
+    pkg_platforms = types.ModuleType("gateway.platforms")
+    monkeypatch.setitem(sys.modules, "gateway", pkg_gateway)
+    monkeypatch.setitem(sys.modules, "gateway.platforms", pkg_platforms)
+    monkeypatch.setitem(sys.modules, "gateway.platforms.api_server", mod)
+    return _FakeAdapter
+
+
+def test_patch_跑起来登记_结束注销(monkeypatch):
+    import asyncio
+
+    record: dict = {}
+    adapter_cls = _install_fake_api_server(monkeypatch, record)
+    assert activity_probe.patch_run_agent_registry() is True
+
+    asyncio.run(adapter_cls()._run_agent("hi", []))
+    assert record["active_during"] == 1, "跑的时候应该登记着"
+    assert activity_probe._snapshot_active() == [], "跑完必须注销"
+
+
+def test_patch_抛异常也注销(monkeypatch):
+    import asyncio
+
+    record: dict = {"raise": True}
+    adapter_cls = _install_fake_api_server(monkeypatch, record)
+    activity_probe.patch_run_agent_registry()
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(adapter_cls()._run_agent("hi", []))
+    assert activity_probe._snapshot_active() == [], (
+        "失败的 turn 没注销 → 会永远显示成'一直在跑'"
+    )
+
+
+def test_patch_幂等_不会包两层(monkeypatch):
+    record: dict = {}
+    _install_fake_api_server(monkeypatch, record)
+    assert activity_probe.patch_run_agent_registry() is True
+    from gateway.platforms.api_server import APIServerAdapter  # noqa: PLC0415
+    once = APIServerAdapter._run_agent
+    assert activity_probe.patch_run_agent_registry() is True
+    assert APIServerAdapter._run_agent is once
+
+
+def test_agent_ref_位置传时不动它(monkeypatch):
+    """位置参数够多说明调用方自己传了 agent_ref —— 宁可这次探不到也别改错参数。"""
+    import asyncio
+
+    record: dict = {}
+    adapter_cls = _install_fake_api_server(monkeypatch, record)
+    activity_probe.patch_run_agent_registry()
+
+    caller_ref: list = [None]
+    # self 之后 9 个位置参数, 第 9 个就是 agent_ref
+    asyncio.run(adapter_cls()._run_agent(
+        "msg", [], None, None, None, None, None, None, caller_ref,
+    ))
+    assert record["agent_ref"] is None, "位置传的时候不该往 kwargs 里塞"
+
+
 # ── 形状契约: 静态读 hermes 源码, **不 import** ─────────────────
 #
 # 第一版写成 `from run_agent import AIAgent` + `inspect.getsource(...)`。

@@ -1,5 +1,33 @@
 """hermes agent 进度快照的只读出口 (P44, 8/9).
 
+# ⚠ 8/9 第二版: 第一版取数锚点选错了, 早安页始终探不到
+
+第一版照 `gateway/run.py:_session_activity_for_stall` 读 `runner._running_agents`。
+在鸿波本机实测: advisor 正在跑, 端点仍然返 `no_running_turn`。
+
+查下去发现 **`_running_agents` 是"平台会话"的注册表** (Telegram / 微信 / 飞书
+那类长驻会话), 而 Companion 走的是 OpenAI 兼容的 `/v1/chat/completions`:
+
+    api_server._create_agent(...)  →  只是 `return agent`, 不往任何注册表登记
+    api_server._handle_runs        →  填 self._active_run_agents (那是 /v1/runs)
+    api_server._handle_chat_completions → agent 只活在局部变量里
+
+也就是说 **chat_completions 路径的 agent 压根没有可查的落点**。照抄 hermes
+自己的取法在这里不成立 —— 它那段代码服务的是另一条链路。
+
+# 第二版的锚点: `APIServerAdapter._run_agent`
+
+三条 HTTP 路径 (chat_completions / responses / runs) 全汇到这一个方法, 而且
+它自带一个现成的钩子 (docstring 原话):
+
+    If *agent_ref* is a one-element list, the AIAgent instance is stored at
+    ``agent_ref[0]`` before ``run_conversation`` begins.
+
+流式路径已经在用它 (为了能从另一个线程调 agent.interrupt())。我们包一层,
+传一个**会通知的 list**: agent 被放进去时登记, `_run_agent` 返回时注销。
+调用方自己传了 agent_ref 的话原样写穿, 不破坏中断功能。
+
+
 # 本模块只管一件事
 
 把 hermes **已经算好的** activity 快照原样透出来, 给 Companion 看:
@@ -64,9 +92,62 @@ session_key 是 `f"api-{sha256(system_prompt + chr(10) + first_user_message)[:16
 from __future__ import annotations
 
 import logging
+import threading
+import uuid
 from typing import Any
 
 logger = logging.getLogger("catfish.xcatfish_user.activity_probe")
+
+# ── api_server 在途 turn 的登记表 (第二版加) ──────────────────
+#
+# key 是我们自己发的一次性 id, 不是 session_key —— 我们只需要"现在有哪些 agent
+# 在跑", 不需要跟 hermes 的 session 命名对齐 (对齐反而是耦合, 见下面 collect
+# 那段关于 session_key 的说明)。
+_ACTIVE_LOCK = threading.Lock()
+_ACTIVE_API_AGENTS: dict[str, Any] = {}
+
+
+def _register_active(key: str, agent: Any) -> None:
+    with _ACTIVE_LOCK:
+        _ACTIVE_API_AGENTS[key] = agent
+
+
+def _unregister_active(key: str) -> None:
+    with _ACTIVE_LOCK:
+        _ACTIVE_API_AGENTS.pop(key, None)
+
+
+def _snapshot_active() -> list[tuple[str, Any]]:
+    with _ACTIVE_LOCK:
+        return list(_ACTIVE_API_AGENTS.items())
+
+
+class _NotifyingAgentRef(list):
+    """`_run_agent(agent_ref=...)` 用的 one-element list, 被赋值时通知我们。
+
+    hermes 的契约是"把 AIAgent 放进 agent_ref[0]"。我们传这个子类进去:
+      · 照常记住 agent (调用方可能要拿它 interrupt)
+      · **写穿**回调用方原本传的那个 list —— 流式路径靠它中断, 不能破
+      · 顺手登记到 _ACTIVE_API_AGENTS
+    """
+
+    def __init__(self, inner: list | None, key: str) -> None:
+        super().__init__([None])
+        self._inner = inner
+        self._key = key
+
+    def __setitem__(self, index, value):  # noqa: D105
+        super().__setitem__(index, value)
+        try:
+            if self._inner is not None:
+                self._inner[index] = value
+        except Exception as e:  # noqa: BLE001 — 写穿失败不该连累主流程
+            logger.debug("agent_ref 写穿失败: %s", e)
+        try:
+            if index == 0 and value is not None:
+                _register_active(self._key, value)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("登记在途 agent 失败: %s", e)
 
 #: 端点路径。改这里要同时改 Companion 的 `src/lib/agentActivity.ts`。
 ROUTE_PATH = "/api/catfish/agent-activity"
@@ -147,6 +228,59 @@ def _is_real_agent(agent: Any) -> bool:
     return hasattr(agent, "get_activity_summary")
 
 
+#: `agent_ref` 在 `_run_agent` 里是 self 之后的**第 9 个**位置参数:
+#:   user_message, conversation_history, ephemeral_system_prompt, session_id,
+#:   stream_delta_callback, tool_progress_callback, tool_start_callback,
+#:   tool_complete_callback, agent_ref
+#: 所以 `len(args) >= 9` 就说明调用方已经位置传了它, 我们不能再塞 kwargs
+#: (会撞 "got multiple values for argument")。
+#: 观察到的 6 个调用点全用关键字传, 这条只是防万一。
+#: (8/9: 第一版写成 `<= 9` 差一位, 被 test_agent_ref_位置传时不动它 抓出来。)
+_AGENT_REF_POSITION = 9
+
+
+def patch_run_agent_registry() -> bool:
+    """包 `APIServerAdapter._run_agent`, 把在途 agent 登记起来。幂等。
+
+    为什么必须打这个 patch: chat_completions 路径的 agent 只活在局部变量里,
+    没有任何注册表可查 (见模块顶部第二版说明)。
+
+    **只加登记, 不改行为** —— 原函数原样调, 参数原样透, 返回原样返, finally
+    里注销。异常路径也注销 (不然一次失败的 turn 会永远挂在表里, 显示成"一直
+    在跑")。
+    """
+    try:
+        from gateway.platforms.api_server import APIServerAdapter  # noqa: PLC0415
+    except Exception as e:  # noqa: BLE001
+        logger.warning("P44: 拿不到 APIServerAdapter, 进度登记未安装: %s", e)
+        return False
+
+    orig = getattr(APIServerAdapter, "_run_agent", None)
+    if orig is None:
+        logger.warning("P44: APIServerAdapter._run_agent 不存在 (hermes 改了?), 跳过")
+        return False
+    if getattr(orig, "_catfish_p44", False):
+        return True  # 已经包过 (plugin 重载 / 多个 Application)
+
+    async def patched(self, *args, **kwargs):
+        key = uuid.uuid4().hex
+        wrapped = False
+        # agent_ref 位置传的话不动它 —— 宁可这一次探不到, 也不要改错参数
+        if len(args) < _AGENT_REF_POSITION:
+            kwargs["agent_ref"] = _NotifyingAgentRef(kwargs.get("agent_ref"), key)
+            wrapped = True
+        try:
+            return await orig(self, *args, **kwargs)
+        finally:
+            if wrapped:
+                _unregister_active(key)
+
+    patched._catfish_p44 = True
+    APIServerAdapter._run_agent = patched
+    logger.info("P44 _run_agent 进度登记已安装 ✓")
+    return True
+
+
 def collect_activity() -> dict[str, Any]:
     """当前所有正在跑的 turn 的 activity 快照。**永不抛。**
 
@@ -162,15 +296,29 @@ def collect_activity() -> dict[str, Any]:
         max_iterations / budget_used / budget_max
         (外加 last_activity_ts / last_activity_desc / description / provenance 别名)
     """
-    runner = _gateway_runner()
-    if runner is None:
-        return {"available": False, "reason": REASON_NO_RUNNER, "turns": []}
-
     try:
+        # 两个来源, 缺一不可:
+        #   api_server 在途 turn  ← Companion 走的就是这条 (chat_completions)
+        #   平台会话 _running_agents ← Telegram / 微信那类, 顺带也报
+        sources: list[tuple[str, Any]] = list(_snapshot_active())
+
+        runner = _gateway_runner()
+        if runner is not None:
+            sources += _running_turns(runner)
+        elif not sources:
+            # 两个都没有才算"runner 没起来"; 只要 api_server 有在途 turn,
+            # runner 拿不到也不影响回答问题
+            return {"available": False, "reason": REASON_NO_RUNNER, "turns": []}
+
         turns: list[dict[str, Any]] = []
-        for session_key, agent in _running_turns(runner):
+        seen: set[int] = set()
+        for session_key, agent in sources:
             if not _is_real_agent(agent):
                 continue
+            # 同一个 agent 可能两边都在 (理论上不会, 但去重成本极低)
+            if id(agent) in seen:
+                continue
+            seen.add(id(agent))
             try:
                 summary = agent.get_activity_summary()
             except Exception as e:  # noqa: BLE001
@@ -221,6 +369,11 @@ def register_routes(router: Any) -> bool:
         if denied is not None:
             return denied
         return _w.json_response(collect_activity())
+
+    # 顺手把 _run_agent 的登记 patch 打上 —— 此刻 api_server 模块已加载
+    # (Application 都在建了), import 得到 APIServerAdapter; 而且还没开始服务,
+    # 包方法是安全的。幂等, 多个 Application 只包一次。
+    patch_run_agent_registry()
 
     try:
         router.add_get(ROUTE_PATH, _handler)
