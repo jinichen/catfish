@@ -542,3 +542,60 @@ def test_delete_message_not_supported(make_foxmail_profile):
     # 错误消息引导用户
     assert "Foxmail 客户端" in str(exc.value)
     assert "IMAP" in str(exc.value)
+
+
+# ── 8/6: thread 三件套 (_thread_headers) ────────────────────────────
+# 修的 bug: 原来两处建 Message 只写 in_reply_to=row.reference, message_id 和
+# references 一个都没设 → lib/emailThread.ts 的 isReplied() 第一步
+# `if (!myMid) return {replied:false}` 直接短路 → **Foxmail 账号的「已回复」
+# 角标从来没亮过**。mailinfo.messageid 一直查出来了, 只是建 Message 时丢了。
+
+import dataclasses
+
+from catfish_email.adapters.foxmail_mac import _thread_headers
+
+_Row = dataclasses.make_dataclass("_Row", [("messageid", str), ("reference", str)])
+
+
+def test_thread_headers_message_id_不再丢():
+    got = _thread_headers(_Row("<a@x>", ""))
+    assert got["message_id"] == "<a@x>"      # ← 这条以前是 None
+    assert got["in_reply_to"] is None
+    assert got["references"] is None
+
+
+def test_thread_headers_references_链取最后一个当父级():
+    # RFC 5322 §3.6.4: References 是完整祖先链, 最后一个是直接父级
+    got = _thread_headers(_Row("<c@x>", "<a@x> <b@x>"))
+    assert got["message_id"] == "<c@x>"
+    assert got["in_reply_to"] == "<b@x>"
+    assert got["references"] == "<a@x> <b@x>"
+
+
+def test_thread_headers_单个_id_时两边都填():
+    # reference 列一列两用 (schema 注释: "In-Reply-To / References"), 实测没能
+    # 区分 → 两个都填。isReplied 的两个条件是 OR, 不会打架。
+    got = _thread_headers(_Row("<b@x>", "<a@x>"))
+    assert got["in_reply_to"] == "<a@x>"
+    assert got["references"] == "<a@x>"
+
+
+def test_thread_headers_逗号分隔容错():
+    got = _thread_headers(_Row("<d@x>", "<a@x>,<b@x>"))
+    assert got["in_reply_to"] == "<b@x>"
+
+
+def test_thread_headers_老邮件无_message_id_不炸():
+    got = _thread_headers(_Row("", "<a@x>"))
+    assert got["message_id"] is None
+    assert got["in_reply_to"] == "<a@x>"
+
+
+def test_thread_headers_全空():
+    got = _thread_headers(_Row("", ""))
+    assert got == {
+        "message_id": None,
+        "in_reply_to": None,
+        "references": None,
+        "thread_id": None,
+    }

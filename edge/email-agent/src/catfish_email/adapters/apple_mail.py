@@ -185,21 +185,62 @@ def _parse_thread_headers(raw_headers: str) -> tuple[str | None, str | None, str
         References: <root789@domain.com> <middle@x.com> <parent456@domain.com>
 
     缺/坏 返 None. 不抛 — 老邮件可能没 References / 内部转发可能没 Message-ID.
+
+    # ★ 8/6: 从 email.parser 改成逐行扫
+
+    原来用 `Parser(policy=compat32).parsestr(raw, headersonly=True)`。看着最标准,
+    实际在真实邮件上大面积失败 —— 鸿波本机 5 封实测, **3 封连 Message-ID 都读不出来**,
+    而 rawHdrs 明明有 5000+ 字符。
+
+    真因: `email.parser` 见到**一行既没有冒号、又不是以空白开头的续行**, 就认为
+    header 段结束了, 剩下的全当 body。而营销/通知类邮件的 X- 头里塞满了 JSON、
+    base64、tracking 串, 被中转 MTA 硬折一次就会出现这种裸行。折断点之后的
+    Message-ID / In-Reply-To / References 就再也读不到:
+
+        >>> Parser(...).parsestr("A: 1\\n裸行没冒号\\nMessage-ID: <x>\\n", headersonly=True).keys()
+        ['A']                      # ← Message-ID 掉进 body 了
+
+    而且这个坑一直没被发现, 因为上层有兜底:
+
+        final_msg_id = parsed_mid or (rfc_msg_id.strip() if rfc_msg_id else None)
+
+    message_id 靠 AppleScript 的独立字段 `message id of m` 救回来了, 只有
+    in_reply_to / references 没兜底 → 前端看到的就是「Message-ID 有值、另外两个
+    永远是空」, 而 isReplied() 失败时只是角标不亮, 看起来跟「这封确实没人回」
+    一模一样, 不报错也不刺眼。
+
+    现在改成只认这三行, 中间有什么脏东西都不管:
+      - header 名大小写不敏感 (RFC 5322 §2.2)
+      - 支持折行续行 (下一行以 space/tab 开头就接上去)
+      - 同名头取第一个 (RFC 说这三个应当唯一; 真出现多个, 第一个最接近原始)
     """
     if not raw_headers:
         return (None, None, None)
+    want = {"message-id": None, "in-reply-to": None, "references": None}
+    cur: str | None = None
     try:
-        # stdlib, 不引外部依赖. compat32 policy 行为最稳跟 5322 一致.
-        from email.parser import Parser  # noqa: PLC0415
-        from email.policy import compat32  # noqa: PLC0415
-        parsed = Parser(policy=compat32).parsestr(raw_headers, headersonly=True)
-        msg_id = (parsed.get("Message-ID") or parsed.get("Message-Id") or "").strip() or None
-        in_reply = (parsed.get("In-Reply-To") or "").strip() or None
-        refs = (parsed.get("References") or "").strip() or None
-        return (msg_id, in_reply, refs)
+        for line in raw_headers.splitlines():
+            if line[:1] in (" ", "\t"):
+                # 折行续行: 接到当前正在收集的头上
+                if cur is not None and want[cur] is not None:
+                    want[cur] += " " + line.strip()
+                continue
+            cur = None
+            idx = line.find(":")
+            if idx <= 0:
+                continue          # 裸行 / 空行 —— 跳过, **不当作 header 段结束**
+            name = line[:idx].strip().lower()
+            if name in want and want[name] is None:
+                want[name] = line[idx + 1 :].strip()
+                cur = name
     except Exception as e:  # noqa: BLE001
         logger.debug("_parse_thread_headers fail: %s", e)
         return (None, None, None)
+    return (
+        want["message-id"] or None,
+        want["in-reply-to"] or None,
+        want["references"] or None,
+    )
 
 
 def _read_thread_headers_from_source_file(source_path: str) -> tuple[str | None, str | None, str | None]:

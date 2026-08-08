@@ -163,8 +163,7 @@ class FoxmailMacAdapter(EmailAdapter):
             ),
             body_text=body_text,
             body_html=body_html,
-            in_reply_to=row.reference or None,
-            thread_id=None,
+            **_thread_headers(row),
         )
 
     def search(
@@ -287,8 +286,7 @@ class FoxmailMacAdapter(EmailAdapter):
             attachments=(),
             body_text=row.abstract or "",
             body_html="",
-            in_reply_to=row.reference or None,
-            thread_id=None,
+            **_thread_headers(row),
         )
 
     @staticmethod
@@ -351,6 +349,45 @@ def _iso_to_unix(iso: str | None) -> int | None:
     except (ValueError, TypeError):
         logger.warning("无法解析 ISO 时间: %r", iso)
         return None
+
+
+def _thread_headers(row) -> dict:
+    """FoxmailMailRow → Message 的 thread 三件套 (message_id / in_reply_to / references)。
+
+    # 8/6 修的 bug
+
+    原来两处建 Message 只写了 `in_reply_to=row.reference`, **message_id 和
+    references 一个都没设**。而 `lib/emailThread.ts` 的 isReplied() 第一步就是::
+
+        const myMid = _normalize(msg.message_id);
+        if (!myMid) return { replied: false, replies: [] };
+
+    → **Foxmail 账号的「已回复」角标从来没亮过**, 而且没人发现: 症状跟
+    P3.5.204 修的那个 (Sent 不在 list 里 → 匹配不到) 一模一样, 7/9 修好了后者,
+    前者被盖住了。
+
+    `mailinfo.messageid` 一直查出来了 (query_messages / query_message_by_id 的
+    SELECT 里都有), FoxmailMailRow.messageid 也存了, 只是建 Message 时给丢了。
+
+    # reference 这一列到底是 In-Reply-To 还是 References
+
+    schema 注释写的是「reference — In-Reply-To / References」, 一列两用, 实测没能
+    区分。按 RFC 5322: References 是空格分隔的完整祖先链, **最后一个就是直接父级**
+    (= In-Reply-To)。所以这里两个都填:
+
+      - references  ← 整列原值 (是单个 ID 时, split 后长度 1, 算法照样工作)
+      - in_reply_to ← 拆开取最后一个
+
+    两边都填不会互相打架 —— isReplied 的两个条件是 OR 关系。
+    """
+    raw_ref = (getattr(row, "reference", "") or "").strip()
+    parts = [p for p in raw_ref.replace(",", " ").split() if p]
+    return {
+        "message_id": (getattr(row, "messageid", "") or "").strip() or None,
+        "in_reply_to": parts[-1] if parts else None,
+        "references": raw_ref or None,
+        "thread_id": None,
+    }
 
 
 def _unix_to_iso(unix_secs: int) -> str:

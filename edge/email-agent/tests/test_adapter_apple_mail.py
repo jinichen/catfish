@@ -939,3 +939,60 @@ def test_no_raw_control_chars_in_as_templates():
                 f"{name} 内嵌 raw control char U+{ch_code:04X}, "
                 f"会让 osascript 挂 (-2741). 用 (ASCII character N) 替代."
             )
+
+
+# ── 8/6: _parse_thread_headers 从 email.parser 改成逐行扫 ──────────
+#
+# 起因: 鸿波本机 5 封实测, 3 封连 Message-ID 都读不出来, 而 rawHdrs 有 5000+ 字符。
+# 真因: email.parser 见到「没有冒号又不以空白开头」的裸行就认为 header 段结束,
+# 剩下全当 body。营销/通知邮件的 X- 头塞满 JSON / base64, 被中转 MTA 折一次
+# 就会出现裸行, 折断点之后的三件套全读不到。
+#
+# 这坑没被发现是因为 message_id 上层有 `or rfc_msg_id` 兜底, 只有 in_reply_to /
+# references 裸奔 → 现象是「Message-ID 有值、另两个永远空」, 而 isReplied 失败
+# 时只是角标不亮, 跟「这封确实没人回」看起来一模一样。
+
+from catfish_email.adapters.apple_mail import _parse_thread_headers as _pth
+
+
+def test_thread_headers_干净的块():
+    assert _pth(
+        "Delivered-To: a@x\nMessage-ID: <m@x>\nIn-Reply-To: <p@x>\nReferences: <r@x> <p@x>\n"
+    ) == ("<m@x>", "<p@x>", "<r@x> <p@x>")
+
+
+def test_thread_headers_中间有裸行时仍读得到():
+    """★ 回归: 旧的 email.parser 实现在这里返 (None, None, None)。"""
+    raw = "A: 1\nwLwYWlsZ3VuLVRhZzogZXZlbnQ=\nMessage-ID: <m@x>\nIn-Reply-To: <p@x>\n"
+    assert _pth(raw) == ("<m@x>", "<p@x>", None)
+
+
+def test_thread_headers_裸行含_json():
+    raw = 'X-T: {"click_tracking":false}\n{"nested":true}\nMessage-ID: <m@x>\n'
+    assert _pth(raw)[0] == "<m@x>"
+
+
+def test_thread_headers_头在最末尾也读得到():
+    raw = "A: 1\n裸行\n" * 20 + "In-Reply-To: <p@x>\n"
+    assert _pth(raw)[1] == "<p@x>"
+
+
+def test_thread_headers_大小写不敏感():
+    assert _pth("message-id: <m@x>\nIN-REPLY-TO: <p@x>\nreFerenCes: <r@x>\n") == (
+        "<m@x>", "<p@x>", "<r@x>",
+    )
+
+
+def test_thread_headers_折行续行():
+    # 长 References 被折成多行, 续行以 space/tab 开头
+    assert _pth("References: <a@x>\n <b@x>\n\t<c@x>\n")[2] == "<a@x> <b@x> <c@x>"
+
+
+def test_thread_headers_同名头取第一个():
+    assert _pth("Message-ID: <first@x>\nMessage-ID: <second@x>\n")[0] == "<first@x>"
+
+
+def test_thread_headers_空值与空输入():
+    assert _pth("Message-ID: \nIn-Reply-To: <p@x>\n") == (None, "<p@x>", None)
+    assert _pth("") == (None, None, None)
+    assert _pth("aaa\nbbb\n") == (None, None, None)
