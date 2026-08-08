@@ -1124,6 +1124,26 @@ _PICKER_PLACEHOLDERS = {"", "hermes-agent", None}
 CV_CF_USER: "_cv.ContextVar[str]" = _cv.ContextVar("catfish_outgoing_user", default="")
 CV_PICKER_MODEL: "_cv.ContextVar[str]" = _cv.ContextVar("picker_model_override", default="")
 
+# P41 (8/8 鸿波"advisor 到底调没调"): 把 Companion 标的 catfish_source 透过 hermes
+# 带到网关。
+#
+# 病: Companion 的每条内部调用都在 URL 上标了来源
+# (?catfish_source=companion-advisor / companion-profile / companion-email-draft),
+# 但**只有直连 8999 的那几条标得住**。走 hermes agent loop 的 (advisor Call 1)
+# 会被 hermes 重新 framing 成一次 agent run, 再由 hermes 自己的 OpenAI client
+# 打给网关 —— query 没了, 网关侧只看到 source=unknown。
+#
+# 代价 (8/8 实盘): advisor Call 1 和员工聊天在网关日志里**完全无法区分** ——
+# 都是 sub=client:hermes-cli / total=2 / tools_count=107 / prompt 70K 量级。
+# 排查早安页卡死时我按 source grep 判成"advisor 从没被调用", 又把一次聊天
+# 认成 advisor, 连错两次方向。真相是从 hermes 自己的 agent.log 的
+# `conversation turn: ... msg='hi'` 才看出来的。
+#
+# 修法跟 X-Catfish-User 完全同构 (同一条 CV 通道 + 同一处 default_headers),
+# 不新增 patch 点。网关侧一行不用改 —— app.py:2903 本来就先读
+# `x-catfish-source` header, query 只是它的 fallback。
+CV_CF_SOURCE: "_cv.ContextVar[str]" = _cv.ContextVar("catfish_source", default="")
+
 
 def _patch_asyncio_executor_for_contextvars():
     """让 asyncio loop.run_in_executor 自动 copy_context() 包 func.
@@ -1191,6 +1211,7 @@ def _patch_asyncio_executor_for_contextvars():
 async def _request_stash_middleware(request, handler):
     """拦 POST /v1/chat/completions /v1/responses:
        - X-Catfish-User header → CV_CF_USER
+       - X-Catfish-Source header 或 ?catfish_source= query → CV_CF_SOURCE (P41 8/8)
        - body.model (非占位) → CV_PICKER_MODEL
        - 顺手塞 request[] (兼容 hermes 仓 patch 还在的场景)
 
@@ -1205,6 +1226,17 @@ async def _request_stash_middleware(request, handler):
             if cf_user:
                 CV_CF_USER.set(cf_user)
                 request["catfish_outgoing_user"] = cf_user  # 兼容 hermes 仓 patch
+
+            # P41 (8/8): 来源标记。header 优先, query 兜底 —— 跟网关
+            # app.py:2903 的取值顺序保持一致。Companion 走 hermes 这条路时
+            # 标在 query 上 (SERVICE_LLM_QUERY), 所以 query 分支才是常走的那条。
+            cf_source = (
+                (request.headers.get("X-Catfish-Source", "") or "").strip()
+                or (request.query.get("catfish_source", "") or "").strip()
+            )
+            if cf_source:
+                CV_CF_SOURCE.set(cf_source)
+                request["catfish_source"] = cf_source
 
             # body.model — 需读 body. 读完塞回让 handler 再读 (aiohttp body 是 stream).
             body_bytes = await request.read()
@@ -1757,10 +1789,26 @@ def _patch_p10_apply_client_headers_localhost() -> None:
         # P29 (6/5): env-aware gateway 检测, 不再硬编码 localhost:8999.
         if _is_catfish_gateway_base_url(base_url or ""):
             cf_user = resolver.resolve_for_agent(self)
+            headers: dict[str, str] = {}
             if cf_user:
-                self._client_kwargs["default_headers"] = {"X-Catfish-User": cf_user}
+                headers["X-Catfish-User"] = cf_user
+            # P41 (8/8): 来源标记跟着走。中间件在 inbound 请求上 set 的 CV,
+            # 经 _patch_asyncio_executor_for_contextvars 的 copy_context 一路
+            # 带到 executor 线程, 这里读得到。
+            #
+            # **跟 X-Catfish-User 解耦**: 有 source 没 user 的场景 (CLI / cron
+            # 调 hermes 时不带 user) 也要标得住, 所以不写在 if cf_user 里面。
+            try:
+                cf_source = (CV_CF_SOURCE.get() or "").strip()
+            except Exception:  # noqa: BLE001  CV 不该抛, 抛了也不能拖垮发请求
+                cf_source = ""
+            if cf_source:
+                headers["X-Catfish-Source"] = cf_source
+
+            if headers:
+                self._client_kwargs["default_headers"] = headers
             else:
-                # 没 user 时 explicit clear (防别地方继承上一轮)
+                # 两个都没有时 explicit clear (防别地方继承上一轮)
                 self._client_kwargs.pop("default_headers", None)
             return
         return _orig(self, base_url)
