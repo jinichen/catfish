@@ -17,7 +17,17 @@ import logging
 import os
 import time
 
+from .facts_schema import (
+    project_audit_meta,
+    project_facts_json,
+    project_patch_changes,
+)
+
 logger = logging.getLogger("catfish.gateway.facts_db")
+
+# 8/9: 本文件里每一个 `json.dumps(...)` 的第一个参数**必须**是 project_* 调用。
+# 这条由 tests/test_facts_pg_write_closed.py 的 AST 闸守着 —— 新加 jsonb 写入
+# 点忘了投影会直接红。理由见 facts_schema.py 顶部 (8/8 那个 raw 就是这么进去的)。
 
 
 def _use_pg() -> bool:
@@ -76,7 +86,8 @@ def pg_upsert_fact(meta: dict) -> bool:
                     meta.get("approved_at_ms"),
                     meta.get("dismissed_at_ms"), meta.get("dismissed_by"),
                     meta.get("status", "uploaded"),
-                    json.dumps(meta.get("facts_json")) if meta.get("facts_json") else None,
+                    json.dumps(project_facts_json(meta["facts_json"]))
+                    if meta.get("facts_json") else None,
                     meta.get("llm_summary"),
                 ),
             )
@@ -88,10 +99,14 @@ def pg_upsert_fact(meta: dict) -> bool:
 
 
 def pg_write_facts_json(fact_id: str, facts_data: dict) -> bool:
-    """写 extract 出的事实点 JSON 进 fact_changes.facts_json + llm_summary."""
+    """写 extract 出的事实点 JSON 进 fact_changes.facts_json + llm_summary.
+
+    8/9: 落盘前过 `project_facts_json` —— 约定外的键丢掉 (见 facts_schema.py)。
+    """
     if not _use_pg():
         return False
     try:
+        projected = project_facts_json(facts_data)
         with _pg_conn() as conn, conn.cursor() as cur:
             cur.execute(
                 """UPDATE fact_changes
@@ -100,8 +115,8 @@ def pg_write_facts_json(fact_id: str, facts_data: dict) -> bool:
                        extracted_at_ms = COALESCE(extracted_at_ms, %s)
                    WHERE id = %s""",
                 (
-                    json.dumps(facts_data, ensure_ascii=False),
-                    facts_data.get("summary"),
+                    json.dumps(projected, ensure_ascii=False),
+                    projected.get("summary"),
                     int(time.time() * 1000),
                     fact_id,
                 ),
@@ -171,7 +186,7 @@ def pg_replace_patches(fact_id: str, patches: list[dict]) -> bool:
                         p.get("skill_version_base", "1.0"),
                         float(p.get("confidence", 0.0)),
                         p.get("rationale"),
-                        json.dumps(p.get("changes", []), ensure_ascii=False),
+                        json.dumps(project_patch_changes(p.get("changes")), ensure_ascii=False),
                         p.get("full_new_content", ""),
                         p.get("status", "pending"),
                         int(p.get("generated_at_ms", time.time() * 1000)),
@@ -243,7 +258,7 @@ def pg_audit(fact_id: str, action: str, by_user: str, meta: dict | None = None) 
                     action,
                     fact_id,
                     by_user,
-                    json.dumps(meta or {}, ensure_ascii=False),
+                    json.dumps(project_audit_meta(meta), ensure_ascii=False),
                 ),
             )
             conn.commit()

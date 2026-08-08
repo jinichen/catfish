@@ -168,7 +168,13 @@ async def _llm_json(
         text = response.choices[0].message.content or ""
     except Exception as e:  # noqa: BLE001
         logger.exception("facts_pipeline LLM 调用失败")
-        return {"error": f"LLM 调用失败: {e}"}
+        # 8/9: 原来这里是 f"LLM 调用失败: {e}" —— 上游异常原文内插进 error,
+        # 而 error 会跟着 run_extract 的 {**result} 落进中央 PG 的 facts_json。
+        # 跟 8/8 audit `error` 字段是同一个形状 (上游返什么就存什么), 同样改成
+        # 封闭词表的分类码。排查需要的信息在网关自己的运行日志里 (上面那行
+        # logger.exception 带完整 traceback), 那是 ops 面, 不是中央存储面。
+        from .error_class import classify_upstream_error  # noqa: PLC0415
+        return {"error": f"LLM 调用失败 ({classify_upstream_error(str(e))})"}
 
     # 解 JSON. LLM 可能塞 markdown ```json ... ``` 包裹, 兜底剥
     text = text.strip()
@@ -204,12 +210,19 @@ async def _llm_json(
         # 进中央 PG。也就是 LLM 的整段原始输出 (最多 6000 token) 落中央存储,
         # 而它的内容是对上传文档的复述。
         #
-        # facts_router 写中央存储这件事本身是 CENTRAL-EDGE-DATA-BOUNDARY 已登记
-        # 的违规 (文档第 135 行, 整改方向"upload 端点搬 Companion / gateway 只做
-        # proxy 不存"), 这个 raw 是在那之上**额外多存的一层**, 而且没人要。
-        #
         # error 里已经带了 JSONDecodeError 的完整描述 (msg + 位置), 排查够用;
         # 真要看原文拿 raw.ext 重跑。
+        #
+        # ⚠ 8/9 更正上面这段最初写的一句: 当时说"facts_router 写中央存储是
+        # CENTRAL-EDGE-DATA-BOUNDARY 登记的违规, 整改方向是 upload 端点搬
+        # Companion / gateway 只做 proxy"。查过之后那个处方作废了 —— facts 的
+        # 输入是**管理员**上传的公司/政府规章 (upload_fact 有 _require_admin),
+        # 处理结果是给全公司 skill 生成 patch, 本来就该在中央。边界文档 F 类
+        # 那一节 8/9 已照实改。
+        #
+        # 真正该守的是**字段级**: 8/9 加了 facts_schema.py 白名单 + AST 闸
+        # (tests/test_facts_pg_write_closed.py), 约定外的键进不了 jsonb ——
+        # 这个 raw 今天就算漏删也落不进 PG 了。
         return {"error": f"LLM 返非 JSON: {e}"}
 
 
