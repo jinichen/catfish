@@ -63,7 +63,15 @@ export default function EmailTab() {
   const setUrgencyMap = useEmailStore((s) => s.setUrgencyMap);
   const reconcileUrgency = useEmailStore((s) => s.reconcileFromRust);
   const markEmailRead = useEmailStore((s) => s.markRead);
-  const [unreadOnly, setUnreadOnly] = useState(true);
+  // 8/8 鸿波: 默认列全部, 不再默认「仅未读」。
+  //
+  // 默认只给未读的问题是: 邮件页打开就是一个**残缺的收件箱** —— 员工要找
+  // 昨天那封已经读过的, 得先意识到有个勾选框、再去取消它。而"未读"是个
+  // 会自己变的状态: 点开看一眼就没了, 于是刚看过的邮件从列表里消失,
+  // 想回头找反而找不到。
+  //
+  // toggle 保留 —— 想只看未读仍然一勾就有, 只是不再是进门时的默认。
+  const [unreadOnly, setUnreadOnly] = useState(false);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   // P3.3.58 段 2B (6/12 鸿波): 钓鱼扫描结果 in-memory map (重启丢, 跟 scheduler PHISHING_STORE 同步)
