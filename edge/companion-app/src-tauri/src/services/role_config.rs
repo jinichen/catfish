@@ -54,33 +54,56 @@ fn fetch_roles_from_gateway() -> Option<HashMap<String, String>> {
     let gateway = endpoints::endpoints().gateway_base();
     let url = format!("{gateway}/v1/roles");
 
-    // P3.5.80 (7/28): 中央端可能是自签 HTTPS, 挂上 ~/.catfish/server-ca.pem 的信任.
-    let client = crate::util::http_client::trust_central_blocking(
-        reqwest::blocking::Client::builder().timeout(HTTP_TIMEOUT),
-    )
-    .build()
-    .ok()?;
+    // ── 8/8: 跟 services/embedding.rs::probe_remote_alive 同一个坑 ──────────
+    //
+    // 这个函数是同步的, 但 caller 不是: email_scheduler::call_rate_llm 是
+    // `async fn`, 里面 `role_config::resolve("rate_fast")`。`reqwest::blocking::Client`
+    // 内部自带 tokio runtime, **在异步上下文里 drop runtime 直接 panic**
+    // ("Cannot drop a runtime in a context where blocking is not allowed"),
+    // 而 Tauri command / async 任务里 panic 会让上层的 promise 永远不落定。
+    //
+    // 现在没炸只是因为 call_rate_llm 那行是
+    //     picker_config::current_model().or_else(|| role_config::resolve("rate_fast"))
+    // picker 有值就短路了, 走不到这里。**picker 一空就会炸**, 而且是每 30s
+    // 一次的邮件评级链 —— 那种时候最不该出这种问题。
+    //
+    // 修法同 embedding: 整个 blocking client 的生命周期关进一条普通 OS 线程,
+    // 那里没有 runtime 在跑, drop 合法。
+    let fetched: Option<HashMap<String, String>> = std::thread::spawn(move || {
+        // P3.5.80 (7/28): 中央端可能是自签 HTTPS, 挂上 ~/.catfish/server-ca.pem 的信任.
+        let client = crate::util::http_client::trust_central_blocking(
+            reqwest::blocking::Client::builder().timeout(HTTP_TIMEOUT),
+        )
+        .build()
+        .ok()?;
 
-    let resp = client.get(&url).send().ok()?;
-    if !resp.status().is_success() {
-        log::debug!(
-            "role_config: GET {url} returned {} — fallback to None",
-            resp.status()
-        );
-        return None;
-    }
+        let resp = client.get(&url).send().ok()?;
+        if !resp.status().is_success() {
+            log::debug!(
+                "role_config: GET {url} returned {} — fallback to None",
+                resp.status()
+            );
+            return None;
+        }
 
-    #[derive(serde::Deserialize)]
-    struct RolesPayload {
-        roles: HashMap<String, String>,
-    }
+        #[derive(serde::Deserialize)]
+        struct RolesPayload {
+            roles: HashMap<String, String>,
+        }
 
-    let payload: RolesPayload = resp.json().ok()?;
+        let payload: RolesPayload = resp.json().ok()?;
+        Some(payload.roles)
+    })
+    .join()
+    // 线程自己 panic 也只当"拿不到", 不把 panic 传回异步上下文。
+    .unwrap_or(None);
+
+    let roles = fetched?;
     log::info!(
         "role_config: fetched {} 个 role roles.yaml from gateway",
-        payload.roles.len()
+        roles.len()
     );
-    Some(payload.roles)
+    Some(roles)
 }
 
 /// cache-aware: TTL 没过用 cache, 过了重 fetch (失败仍用旧 cache).

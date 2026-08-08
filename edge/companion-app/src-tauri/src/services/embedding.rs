@@ -174,15 +174,48 @@ fn probe_remote_alive(remote: &RemoteProvider) -> bool {
         remote.config.gateway_url.trim_end_matches('/')
     );
     let probe_timeout = Duration::from_secs(remote.config.timeout_seconds.min(3));
-    let client = match reqwest::blocking::Client::builder()
-        .timeout(probe_timeout)
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-    // /v1/catalog 不需 auth, 不再带 bearer_auth.
-    matches!(client.get(&url).send(), Ok(r) if r.status().is_success())
+
+    // ── 8/8: 整个 blocking client 的生死都挪进一条独立 OS 线程 ──────────────
+    //
+    // 上面那句「启动期用 (在 init_active_provider 内, sync context)」的前提**不成立**。
+    // active_provider() 是 `ACTIVE_PROVIDER.get_or_init(init_active_provider)` —— 懒初始化,
+    // 真正跑的时机是第一次有人用 embedding, 而 embed_text 是 `async fn`, 调用方
+    // (advisor_relevance / wiki_embed) 都是异步 Tauri command。所以它实际跑在
+    // tokio 的 worker 线程上。
+    //
+    // `reqwest::blocking::Client` 自己内部揣着一个 tokio runtime, 而**在异步上下文里
+    // drop 一个 runtime 是 panic**:
+    //
+    //   thread 'tokio-rt-worker' panicked at tokio/runtime/blocking/shutdown.rs:51
+    //   Cannot drop a runtime in a context where blocking is not allowed.
+    //   This happens when a runtime is dropped from within an asynchronous context.
+    //
+    // 后果比 panic 本身严重得多: Tauri command 里 panic → invoke 的 promise
+    // **永远不 resolve**。8/8 鸿波实盘: 早安页 advisor 在发 fetch 之前先跑
+    // applyRelevanceFilter → embed → 卡死在这里, 十分钟后客户端超时, 而
+    // hermes 的 agent.log 里连一条 advisor 请求都没有 —— 因为请求压根没发出去。
+    // 排查时看起来像"模型慢 / hermes 挂了", 实际两者都是好的。
+    //
+    // 而且 OnceLock 的 init 闭包 panic 之后 cell 仍是未初始化的, 下次调用**重跑重panic**,
+    // 所以这不是"偶发一次", 是每次都挂。
+    //
+    // 修法: 让 client 在一条普通 OS 线程上创建、使用、析构 —— 那里没有 tokio
+    // runtime 在跑, drop 合法。join 会阻塞调用方最多 probe_timeout (≤3s),
+    // 跟原来 blocking send 的阻塞时长一致, 没有新增等待。
+    std::thread::spawn(move || {
+        let client = match reqwest::blocking::Client::builder()
+            .timeout(probe_timeout)
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+        // /v1/catalog 不需 auth, 不再带 bearer_auth.
+        matches!(client.get(&url).send(), Ok(r) if r.status().is_success())
+    })
+    .join()
+    // 线程自己 panic 了也只当"探测失败"往下走 fallback, 不把 panic 传回异步上下文。
+    .unwrap_or(false)
 }
 
 /// 暴露 active provider (lazy init). 全 process 唯一.
