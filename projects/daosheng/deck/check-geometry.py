@@ -49,6 +49,12 @@ def is_full_bleed(x: float, w: float, slide_w: float) -> bool:
 
 
 def label(shape) -> str:
+    if getattr(shape, "has_table", False):
+        try:
+            head = " | ".join(c.text.strip() for c in shape.table.rows[0].cells)[:30]
+            return f"表格[{len(shape.table.rows)}行]「{head}」"
+        except Exception:
+            return "表格"
     if shape.has_text_frame and shape.text_frame.text.strip():
         return shape.text_frame.text.strip().replace("\n", " / ")[:34]
     return f"<{shape.shape_type}>"
@@ -79,16 +85,49 @@ def overlap_area(a, b) -> float:
     return w * h if w > 0 and h > 0 else 0.0
 
 
+def table_box(sh) -> tuple[float, float, float, float] | None:
+    """表格的真实占位。
+
+    ★ 8/6 补。此前这个脚本**只比对 addShape 的实心块，完全不看 addTable**，
+    于是「表格最后一行被底部提示框压住」这类问题一次都抓不到 ——
+    上面那句注释写着「典型命中：表格最后一行被底部结论框压住」，
+    其实压根检不出来，v2 的 P9 / P15 都是这么漏过去的，最后靠渲染 JPEG 用眼睛看出来。
+
+    高度**以各行 trHeight 之和为准，不用 graphicFrame 的 height**：
+    pptxgenjs 给 graphicFrame 写的是个占位值（实测恒为 1.00″，与真实行数无关），
+    2 行的表和 5 行的表都写 1.00，拿它比对会一边漏报一边误报。
+
+    注意这仍是**下界**：rowH 装不下文字时 PowerPoint / LibreOffice 会自动撑高，
+    而撑高不写回 XML。所以表底和下方提示框之间要留余量，卡得刚好等于没检查。
+    """
+    if not getattr(sh, "has_table", False):
+        return None
+    x, y = sh.left / EMU, (sh.top or 0) / EMU
+    w = sh.width / EMU
+    try:
+        summed = sum((r.height or 0) for r in sh.table.rows) / EMU
+    except Exception:
+        summed = 0.0
+    h = summed if summed > 0 else (sh.height or 0) / EMU
+    return x, y, x + w, y + h
+
+
 def find_occlusions(slide, slide_w: float) -> list[tuple[float, str, str]]:
-    """找互相遮挡的实心块。
+    """找互相遮挡的实心块 —— 现在把表格也算进来。
 
     只看**两个都有填充**的形状：透明文本框盖不住东西。
     互相包含的跳过（那是正常的层叠：底板 → 卡片 → 色条）。
-    典型命中：表格最后一行被底部结论框压住。
     """
     blocks = []
     for sh in slide.shapes:
-        if sh.left is None or sh.width is None or not is_filled(sh):
+        if sh.left is None or sh.width is None:
+            continue
+        tb = table_box(sh)
+        if tb is not None:                      # 表格：一律参与比对
+            if not is_full_bleed(tb[0], tb[2] - tb[0], slide_w):
+                blocks.append((tb, sh))
+            continue
+        if not is_filled(sh):
             continue
         b = box(sh)
         if is_full_bleed(b[0], b[2] - b[0], slide_w):
@@ -100,7 +139,13 @@ def find_occlusions(slide, slide_w: float) -> list[tuple[float, str, str]]:
         for j in range(i + 1, len(blocks)):
             a, sa = blocks[i]
             b, sb = blocks[j]
-            if contains(a, b) or contains(b, a):
+            # ★ 8/6 第二个坑：contains 豁免只对「底板 → 卡片 → 色条」这类层叠成立。
+            # 表格不可能合法地「包住」别的东西 —— 而一个提示框若整个落在表格的
+            # 包围盒里，正是我们要抓的那种「表格最后一行被压住」。
+            # P19 就是这么漏掉的：表底 5.65，提示框 5.05–5.55，完全落在表内 → 被豁免。
+            involves_table = (getattr(sa, "has_table", False)
+                              or getattr(sb, "has_table", False))
+            if not involves_table and (contains(a, b) or contains(b, a)):
                 continue
             area = overlap_area(a, b)
             if area > 0.015:                       # 约 0.12″ × 0.12″ 以上才算
