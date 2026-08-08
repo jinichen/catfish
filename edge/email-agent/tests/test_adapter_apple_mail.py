@@ -1060,3 +1060,49 @@ def test_thread_headers_空值与空输入():
     assert _pth("Message-ID: \nIn-Reply-To: <p@x>\n") == (None, "<p@x>", None)
     assert _pth("") == (None, None, None)
     assert _pth("aaa\nbbb\n") == (None, None, None)
+
+
+# ── 8/8: 探测不许把邮件整个搞挂 ───────────────────────────────
+#
+# 这两条钉的是一次真实的回归: 加可用性探测之后, Companion 里邮件页从"有噪音"
+# 变成"拉取失败 + 一屏 traceback"。真因是 ~/Library/Mail 受 macOS TCC 保护,
+# 没有完全磁盘访问权限的进程 is_dir() 过得去、iterdir() 抛 PermissionError,
+# 而新调用点 (adapter 构造) 外面的 except 不含 OSError。
+
+
+def test_没有磁盘权限时_探测返回不可用而不是抛(monkeypatch):
+    """iterdir 抛 PermissionError → _detect_mail_data_dir 返 None, 不冒泡。"""
+    from pathlib import Path
+    from catfish_email.adapters import apple_mail_emlx
+
+    class _Denied:
+        def is_dir(self):
+            return True          # 目录 stat 得到 —— 正是 TCC 下的表现
+
+        def iterdir(self):
+            raise PermissionError(13, "Operation not permitted")
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: Path("/fake")))
+    monkeypatch.setattr(
+        apple_mail_emlx, "Path",
+        type("P", (), {"home": staticmethod(lambda: type("H", (), {
+            "__truediv__": lambda self, _o: _Denied() if _o == "Mail" else self,
+        })())}),
+    )
+    assert apple_mail_emlx._detect_mail_data_dir() is None
+
+
+def test_探测炸了也不许让邮件不可用(monkeypatch):
+    """探测抛任意异常 → 退回"可用", 保住老行为 (有噪音但能收信)。
+
+    宁可回到有噪音, 也不能什么都收不到 —— 这正是 8/8 那次回归的教训。
+    """
+    import catfish_email.adapters.apple_mail_probe as probe
+
+    def _boom():
+        raise RuntimeError("探测自己炸了")
+
+    monkeypatch.setattr(probe, "apple_mail_available", _boom)
+    from catfish_email.inbox import _get_adapter_explicit
+    adapter = _get_adapter_explicit("apple-mail")   # 不该抛
+    assert adapter.name == "apple_mail"

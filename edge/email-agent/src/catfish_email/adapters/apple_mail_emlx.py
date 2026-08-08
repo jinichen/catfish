@@ -395,14 +395,34 @@ def _detect_mail_data_dir() -> Path | None:
     更早:               V2-V8 (旧版本 emlx 仍能读)
 
     返优先级最高现存的, 都没有则 None.
+
+    **读不到一律返 None, 不抛。** 8/8 修:
+
+    `~/Library/Mail` 在 macOS 上受 TCC 保护, 没有完全磁盘访问权限的进程
+    `is_dir()` 会过 (目录 stat 得到), 但 `iterdir()` 抛 PermissionError。
+    Companion 拉起的子进程正是这种情况 —— 从终端手跑没事 (Terminal 一般有 FDA),
+    在 Companion 里就炸。
+
+    以前这个函数只在 `list_messages` 里被调, 那层 `except (..., OSError, ...)`
+    能接住 (PermissionError 是 OSError 子类), 表现成一行错误。8/8 把它挪进了
+    adapter 构造 (可用性探测), 而 `get_all_adapters()` 的 except 不含 OSError,
+    于是异常冒穿整个 CLI, 邮件页从"有噪音"变成"拉取失败 + 一屏 traceback"。
+
+    对调用方来说"没权限读"和"没有这个目录"结论完全一样: EMLX 这条路走不通。
+    与其让每个调用点各自记得 catch, 不如在这里给出确定的语义。
     """
     base = Path.home() / "Library" / "Mail"
-    if not base.is_dir():
+    try:
+        if not base.is_dir():
+            return None
+        candidates = sorted(
+            (p for p in base.iterdir() if p.name.startswith("V") and p.is_dir()),
+            key=lambda p: -int(p.name[1:]) if p.name[1:].isdigit() else 0,
+        )
+    except OSError as e:
+        # PermissionError (无 FDA) 最常见; 也可能是 Mail 目录在网络卷上不可达。
+        logger.debug("读不到 %s (%s: %s), 当作没有 EMLX 数据", base, type(e).__name__, e)
         return None
-    candidates = sorted(
-        (p for p in base.iterdir() if p.name.startswith("V") and p.is_dir()),
-        key=lambda p: -int(p.name[1:]) if p.name[1:].isdigit() else 0,
-    )
     return candidates[0] if candidates else None
 
 

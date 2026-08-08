@@ -108,8 +108,21 @@ def _get_adapter_explicit(client: str) -> EmailAdapter:
         # 已经 catch 它并 continue, 所以自动候选那条路无需改动就会跳过;
         # 而显式 `--client apple-mail` 会拿到这条异常, 带着说清楚原因的文案 ——
         # 想排查的人仍然问得出"为什么跳过它"。
+        # 探测本身**绝不许**把邮件整个搞挂。8/8 第一版就是这么翻的车:
+        # apple_mail_available() 里的 iterdir() 抛 PermissionError (Companion
+        # 拉起的进程没有完全磁盘访问权限), 而下面两个 caller 的 except 不含
+        # OSError, 异常冒穿整个 CLI —— 邮件页从"有噪音"变成"拉取失败 + traceback"。
+        #
+        # 根因已在 _detect_mail_data_dir 里堵掉 (读不到返 None 不抛), 这里再兜一层:
+        # 一个**用来减少噪音**的优化, 不该有任何机会变成致命错误。出意外时按
+        # "可用"走 —— 退回 8/8 之前的行为 (有噪音但能收信), 而不是什么都收不到。
         from .adapters.apple_mail_probe import apple_mail_available, unavailable_reason
-        if not apple_mail_available():
+        try:
+            available = apple_mail_available()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("apple-mail 可用性探测出错, 按可用处理 (退回老行为): %s", e)
+            available = True
+        if not available:
             raise DataNotFoundError(f"apple-mail 不可用: {unavailable_reason()}")
         from .adapters.apple_mail import AppleMailAdapter
         return AppleMailAdapter()
