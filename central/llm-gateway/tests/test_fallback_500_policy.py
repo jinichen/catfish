@@ -32,8 +32,15 @@ PUBLIC_MODELS_REQUIRING_500: set[str] = {
     "catfish-public-gemini-flash",
 }
 
+# 8/8: 拿掉了 catfish-private-main —— 它已从本部署的 models.yaml 删除
+# (内网 122B 下线)。留着的话 test_all_named_models_exist 会红在"模型不存在",
+# 而那条断言的本意是"防改名导致保护空跑", 不是"禁止删模型"。
+#
+# 但直接删掉名字就少了一层保护, 所以下面补了一条**结构性**检查
+# (test_所有内网模型的链都不含500): 不认名字, 只看 tier=private。
+# 这比硬编码强 —— 新加的内网模型自动受保护, 删模型也不会让它空跑。
+# 这里保留具名清单是因为它还兼着"这个名字必须存在"的守护作用。
 PRIVATE_MODELS_REJECTING_500: set[str] = {
-    "catfish-private-main",
     "catfish-private-vision",
 }
 
@@ -118,6 +125,44 @@ def test_all_named_models_exist(models_yaml):
     assert not missing_priv, (
         f"PRIVATE_MODELS_REJECTING_500 里以下模型在 models.yaml 不存在 — "
         f"模型可能改名了, 这个测保护就失效了, 请改本文件: {missing_priv}"
+    )
+
+
+def test_所有内网模型的链都不含500(models_yaml):
+    """结构性版本: 不认具体名字, 只看 tier == private (8/8 加).
+
+    ## 为什么要在具名清单之外再来一条
+
+    上面 PRIVATE_MODELS_REJECTING_500 是硬编码的名字。它有两个失效方式:
+
+      · 新加一个内网模型, 没人记得往清单里加 → 这个模型不受保护
+      · 删掉清单里的模型 (8/8 就删了 catfish-private-main) → 要么测试红在
+        "模型不存在" (跟保密毫无关系的假警报), 要么有人图省事把名字删了,
+        保护跟着一起没了
+
+    保密约束的真实主语是「tier=private 的模型」, 不是某几个名字。按 tier 判,
+    上面两种情况自动覆盖。
+
+    ## 约束本身
+
+    内网模型撞 500 时若走 public chain, 内网 prompt 就出端了 —— 违 SOUL_FFCS
+    国央企保密原则。所以内网模型的 on_errors 一律不能含 500。
+    (429/502/503/504/timeout 这些是"上游没接住", 不代表 prompt 已被处理,
+     切公网重发的语义不同 —— 那部分是既有设计, 本测不动。)
+    """
+    offenders = []
+    for m in models_yaml.get("models") or []:
+        if m.get("tier") != "private":
+            continue
+        fb = m.get("fallback")
+        if not fb:
+            continue  # 没链当然不会外流
+        if 500 in (fb.get("on_errors") or []):
+            offenders.append(m.get("name"))
+    assert not offenders, (
+        f"内网模型的 on_errors 含 500: {offenders}。"
+        "内网 500 → 公网链 = 内网 prompt 泄到公网, 违 SOUL_FFCS 保密原则。"
+        "真要加必须先评估 prompt 内容能不能走公网。"
     )
 
 

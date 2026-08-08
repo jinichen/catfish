@@ -20,73 +20,35 @@
 
 version: 1
 
+# ── 失败切换总开关 (8/8 鸿波拍板: false → true) ──────────────────────────
+#
+# 语义澄清: **打开它不等于"允许乱切"**。fallback.py:441-454 是四道门, 依次:
+#
+#   1. auto_fallback        ← 就是这一行
+#   2. primary.fallback     没显式配 chain 的模型, 直接抛, 不切
+#   3. on_errors            错误码不在这个模型自己勾的触发条件里, 直接抛
+#   4. max_hops             最多切几次
+#
+# 第 2、3 道本来就实现了"显式配了才切"。第 1 道是 5/16 BL-FALLBACK-TOGGLE
+# 加的**全局一刀切**, 它挡在前面, 把 2、3 两道全废了 —— 于是所有 chain 都
+# 成了摆设, 配了也永不执行。
+#
+# 8/8 实盘代价: qwen-flash 连续两次 60s 超时直抛给客户端, 而它 chain 里
+# 配着 deepseek + gemini 两个备用, 一个都没试。管理员在 /admin/models
+# 上认真配的链, 平时看不出对不对, 只在出错那一刻才发现从来没生效过。
+#
+# 关掉它之后仍然成立的保证:
+#   · 没配 chain 的模型 = 出错直接报错 (库里现在大部分模型就是这样)
+#   · 内网模型的 on_errors 不含 500 → 内网 500 不会流到公网链
+#     (SOUL_FFCS 保密原则, 由 tests/test_fallback_500_policy.py 结构性守护)
+#   · 大 prompt 时 resolve_chain 会过滤掉公网候选 (BL-FALLBACK-PROMPT-CAP)
+#
+# 这是**顶层字段, 只从 yaml 读, 不进库** (见 model_store.py 文件头) ——
+# 跟模型列表不同, 改这里是真生效的, 但要重启网关。
+# 临时开关: env CATFISH_AUTO_FALLBACK=1 (优先级高于本行)。
+auto_fallback: true
+
 models:
-
-  # ---------- 内部 · 主力通用 ----------
-  - name: catfish-private-main
-    tier: private
-    display_name: "qwen_v3_5_122b_a10b· 主力"
-    mode: chat
-    default: true
-
-    upstream:
-      model: openai/qwen_v3_5_122b_a10b
-      # api_base 完整 URL 走 env 注入,避免 hostname/UUID 进版本库
-      api_base: ${INTERNAL_LLM_BASE_QWEN_MAIN}
-      api_key_env: INTERNAL_LLM_KEY
-      # BL-FIX24-config (5/9): 180 → 300. 鸿波 5/9 demo 流水显示 14:28→14:31
-      # 撞 180s timeout 触发 fallback 切公网 deepseek (公网保密性破坏 +
-      # ttft 187s 比 private 慢). 真根因 — Qwen3.5 122B MoE active 10B
-      # 在 79 messages + 5 万字 journal 长 context 推理 ≥ 180s 是真的需要,
-      # 不是上游挂. 调 300s 给 5 分钟裕量, 让 private-main 在保密链路完成
-      # 推理, 不动不动就 fallback 到公网.
-      # 踩过坑历史:
-      #   2026-04-28 demo: 反复 ReadTimeout (60s→180s 修)
-      #   2026-05-09 demo: 长 context docx 撞 180s 切 DS (180s→300s 修)
-      timeout: 300
-
-    # 上游管理员确认实际支持 250K tokens。
-    # 我们对员工承诺 128K（官方主流 Qwen 3.5 心智 + 一倍以上安全余量）。
-    # 长上下文（>128K）场景推荐员工切 catfish-public-gemini-pro（2M）。
-    context_window: 256000
-    # ⚠ 7/22 鸿波 catch (P3.5.79+): 上游 vLLM --max-model-len=250000 硬 cap.
-    # gateway _compute_max_allowed_output_tokens 若 max_output_tokens 未配 → 走 cw
-    # 计算 dyn=253945 (256000 - prompt*1.3 - 2048) → 超 cap → 上游返空 error 400.
-    # 实证 (curl 二分): 245760 ✓ / 253945 ✗. 显式配 245760 (留 ~4K prompt 余量).
-    # aux LLM 短请求 (title/summary/proactive) 无 max_tokens → clip 到 245760 · 秒通.
-    max_output_tokens: 245760
-    supports_tool_use: true
-    supports_streaming: true
-    # Qwen3.5 122B MoE 实测**支持视觉** (5/8 鸿波真上传 EIS 截图验证, 识别准确).
-    # 不要再误改成 false — 我之前 5/8 凌晨踩过坑.
-    supports_vision: true
-    # 5/4 BL-F14 内部用例 tag (pick_internal_model 按 tag + private 优先选).
-    # 内网首选 = 数据不出公司. 内网挂了才用 public 兜底:
-    #   summarizer        — 跨 session 总结 journal
-    #   proactive_starter — BL-E13 主动闲聊起话题
-    #   a2a_aux           — A2A federation 辅助任务
-    recommended_for: [general, chat, tool_use, code,
-                      summarizer, proactive_starter, a2a_aux]
-    cost_tier: free
-    # 展示与计价 (7/30 从前端 modelDisplay.ts 迁过来)。
-    # 模型可在 /admin/models 界面上增删改之后, 这些必须跟着模型走 ——
-    # 硬编码在前端的话, 客户新加的模型会显示"未知模型"、按兜底价计费。
-    price_per_1k_tokens: 0.0001   # 元 / 1000 token
-    color: "#6b7280"
-    dot_emoji: "⚫"
-
-    # 内网 LLM 平台偶发 502 / endpoint 维护 / UUID 重启失效时,
-    # 主力模型不能直接挂死员工 — 落到公共模型保业务。
-    # 顺序: 内网公共备份 (qwen-flash) → 外网 (gemini-flash) → 不再降级。
-    # 注: 公共模型在 .env 里没配 key 时会自动跳过, 不会傻等。
-    fallback:
-      on_errors: [429, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error"]
-      # BL-NVIDIA-NIM-DROP-FALLBACK (5/15 22:50 鸿波 'NVIDIA 还是不行'):
-      # 实盘 NVIDIA NIM 公网 Qwen 122B 连 2 次 latency 39s/19s 但 tokens=0 — free tier
-      # 排队等推理资源, 把整个 fallback 链拖死 20-40s. 从 chain 摘掉, 不当兜底.
-      # catalog 里 model 定义仍保留 (客户基建调研故事 / 手选还能用), 只是不自动落到它.
-      chain: [catfish-public-qwen-flash, catfish-public-deepseek-flash, catfish-public-gemini-flash]
-      max_hops: 2
 
   # ---------- 内部 · 多模态 ----------
   - name: catfish-private-vision
@@ -125,41 +87,13 @@ models:
     # 视觉模型必须有 chain — 没有的话员工传图就直接挂, 没有体面降级。
     fallback:
       on_errors: [429, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error"]
-      chain: [catfish-private-main, catfish-public-qwen-flash, catfish-public-gemini-flash]
+      # 8/8: 摘掉链首的 catfish-private-main —— 那个模型已从本部署删除, 留着
+      # 会被 resolve_chain 静默跳过 (只 warning, 员工无感), 白占一个 max_hops。
+      # 摘掉后本链全是公网, 但这是这条链**原本就有的**形态 (上面注释: qwen-flash
+      # 也支持视觉, gemini-flash 兜底), 且本模型 on_errors 不含 500,
+      # 内网 500 仍然不会外流。
+      chain: [catfish-public-qwen-flash, catfish-public-gemini-flash]
       max_hops: 2
-
-# # ---------- 内部 · GLM5.2 ----------
-#   - name: catfish-private-glm
-#     tier: private
-#     display_name: "GLM 5.2"
-#     mode: chat
-
-#     upstream:
-#       model: openai/glm-52
-#       api_base: http://10.10.40.102:32730/openapi/550e8400-e29b-41d4-a716-446655440000/v1
-#       api_key_env: INTERNAL_LLM_KEY
-#       timeout: 180
-
-#     # P3.5.124 (6/29 鸿波 audit): 平台方反馈 GLM 上下文 200K (老配 512K 是猜的, 撞 GLM
-#     # vLLM 后端真容量). 不修这条 dyn 算 prompt 时高估剩余 output 空间.
-#     context_window: 200000
-#     # P3.5.124 (6/29 鸿波 audit): GLM vLLM 后端 max_tokens 真实上限远小于 65536. 实测
-#     # T4: max_tokens=65536 撞 400, 4096 通. 配 8192 兜稳妥, hermes-cli 客户端默认
-#     # max_tokens=65536 会被 _apply_max_tokens clip 到 min(cw=200K, max_out=8192)=8192.
-#     # 跟 dashscope-qwen / gemini-pro / deepseek-v4 同款字段, 不影响其它 model.
-#     # 后续真测 GLM 单次 output 上限可调高 (16384 / 32768 任意值, 这里 8192 是 T4 验证
-#     # 4096 通的稳妥外推).
-#     max_output_tokens: 8192
-#     supports_tool_use: true
-#     supports_streaming: true
-#     supports_vision: false
-#     recommended_for: [general, chat, tool_use, summarizer]
-#     cost_tier: free
-
-#     fallback:
-#       on_errors: [429, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error"]
-#       chain: [catfish-private-main, catfish-public-qwen-flash]
-#       max_hops: 2
 
   # ---------- 内部 · Embedding ----------
   # ⚠️ TODO: 替换为 bge-m3 在平台上的实际部署 UUID
@@ -235,8 +169,8 @@ models:
       #   curl https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions \
       #     -H "Authorization: Bearer $DASHSCOPE_API_KEY" \
       #     -d '{"model":"qwen3.6-max-preview","messages":[{"role":"user","content":"hi"}]}'
-      model: openai/qwen3.7-flash-2026-07-15
-      api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+      model: openai/qwen3.7-max-2026-05-20
+      api_base: https://llm-88ut4os6z3cmlgru.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
       api_key_env: DASHSCOPE_API_KEY
       timeout: 90  # 多模态请求图像/视频处理偏慢, 给宽裕
 
@@ -406,7 +340,9 @@ models:
     # BL-NVIDIA-NIM-DROP-FALLBACK (5/15 22:50): 摘 nvidia-llama — 见 private-main 注释
     fallback:
       on_errors: [429, 500, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error"]
-      chain: [catfish-public-qwen-flash, catfish-private-main]
+      # 8/8: 链尾的 catfish-private-main 已从本部署删除, 摘掉。
+      # 不擅自补新的一跳 —— 补哪个是产品决策, 不是修 bug。
+      chain: [catfish-public-qwen-flash]
       max_hops: 2
 
   # ---------- 公共 · 智谱 GLM 5.1 (NVIDIA NIM 托管, 国产模型) ----------
@@ -566,7 +502,9 @@ models:
     # BL-NVIDIA-NIM-DROP-FALLBACK (5/15 22:50): 摘 nvidia-llama — 见 private-main 注释
     fallback:
       on_errors: [429, 500, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error"]
-      chain: [catfish-public-qwen-flash, catfish-private-main]
+      # 8/8: 链尾的 catfish-private-main 已从本部署删除, 摘掉。
+      # 不擅自补新的一跳 —— 补哪个是产品决策, 不是修 bug。
+      chain: [catfish-public-qwen-flash]
       max_hops: 2
     recommended_for: [fast, cheap, general, bulk]
     cost_tier: paid

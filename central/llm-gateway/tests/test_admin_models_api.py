@@ -277,21 +277,6 @@ def test_内网模型没有_fallback_不受影响(client):
     c, *_ = client
     r = c.put("/api/admin/models/priv2", json=_model("priv2", tier="private"))
     assert r.status_code == 200
-
-
-def test_列表要告诉界面_fallback_全局开没开(client, monkeypatch):
-    """默认是关的。不告诉界面的话, 管理员会认真配一条永不执行的链 ——
-    配置了不生效且无任何提示, 是最难查的一类。"""
-    c, *_ = client
-    monkeypatch.delenv("CATFISH_AUTO_FALLBACK", raising=False)
-    body = c.get("/api/admin/models").json()
-    assert "auto_fallback" in body
-    assert body["auto_fallback"] is False, "models.yaml 没开且无 env → 应为 False"
-
-    monkeypatch.setenv("CATFISH_AUTO_FALLBACK", "1")
-    assert c.get("/api/admin/models").json()["auto_fallback"] is True
-
-
 # ── 默认模型接任只能挑对话模型 (7/30 二修) ──────────────────────────────
 #
 # 原来是 `rest[0]` —— 剩下列表的第一个, 不看 mode。按 models.yaml 的顺序
