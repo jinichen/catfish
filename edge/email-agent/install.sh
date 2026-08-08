@@ -37,10 +37,50 @@ fi
 echo "✓ pip 可用: $("$HERMES_VENV_PY" -m pip --version)"
 echo
 
+# ── 已经是 editable 装好的就跳过 (8/6) ───────────────────────────────
+# `pip install -e` 装的是软链, **源码即运行时代码**。改了 src/ 下的 .py 不用重装。
+# 8/6 鸿波改完 _parse_thread_headers 后跑 install.sh, 撞上代理挂了装不动 ——
+# 其实那次根本不需要装。先探一下, 已经指向本目录就直接过。
+ALREADY="$("$HERMES_VENV_PY" - <<'PY' 2>/dev/null
+import pathlib
+try:
+    import catfish_email
+    print(pathlib.Path(catfish_email.__file__).resolve().parent.parent.parent)
+except Exception:
+    print("")
+PY
+)"
+if [ -n "$ALREADY" ] && [ "$ALREADY" = "$(cd "$SCRIPT_DIR" && pwd -P)" ]; then
+    echo "✓ 已是 editable 安装, 指向本目录 —— 源码改动直接生效, 跳过 pip install"
+    echo "  ($ALREADY)"
+    SKIP_PIP=1
+fi
+
+if [ -z "${SKIP_PIP:-}" ]; then
 echo "→ pip install -e 到 Hermes venv"
-"$HERMES_VENV_PY" -m pip install -e "$SCRIPT_DIR" --quiet
+if ! "$HERMES_VENV_PY" -m pip install -e "$SCRIPT_DIR" --quiet; then
+    # ── 8/6: 代理配了但没跑起来时的兜底 ────────────────────────────
+    # 现象: pip 卡在 127.0.0.1:7890 Connection refused, 报
+    #   "installing build dependencies did not run successfully"
+    #   "No matching distribution found for setuptools>=68"
+    # 那个 setuptools 不是缺, 是 pip 要**新建隔离构建环境**才去下的。
+    # 这个包是纯 Python 无编译, --no-build-isolation 直接用 venv 现有的
+    # setuptools, 整个过程不联网。
+    echo "⚠ 常规安装失败 —— 试无网络路径 (--no-build-isolation, 清代理)"
+    env -u http_proxy -u https_proxy -u all_proxy \
+        -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+        "$HERMES_VENV_PY" -m pip install -e "$SCRIPT_DIR" \
+            --no-build-isolation --no-index --quiet \
+        || {
+            echo "✗ 还是装不上。两条路:"
+            echo "   1. 代理起了再跑:  检查 127.0.0.1:7890 通不通"
+            echo "   2. 手工装:  $HERMES_VENV_PY -m pip install -e '$SCRIPT_DIR' --no-build-isolation"
+            exit 1
+        }
+fi
 echo "✓ 装好 catfish-email 包"
 echo
+fi
 
 # 验证 CLI 能跑 (优先看 console_scripts entry, 退化到 -m)
 CATFISH_EMAIL_BIN="$(dirname "$HERMES_VENV_PY")/catfish-email"
