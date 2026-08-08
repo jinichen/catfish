@@ -29,6 +29,9 @@
 
 import { useEffect, useState } from "react";
 
+import { useAgentActivity } from "../../../hooks/useAgentActivity";
+import { describeTurn } from "../../../lib/agentActivity";
+
 interface Counts {
   emails: number;
   events: number;
@@ -84,6 +87,11 @@ export default function LoadingProgress({
 
   const elapsedMs = now - startedAt;
   const elapsed = formatElapsed(elapsedMs);
+
+  // 8/9 P44: 只在 llm_running 期间探 —— 另两个阶段还没有 agent turn 在跑,
+  // 探了必然是 no_running_turn, 白打网络。
+  const { turn } = useAgentActivity(phase === "llm_running");
+  const activityLine = describeTurn(turn);
 
   // phase meta
   const meta = {
@@ -170,12 +178,30 @@ export default function LoadingProgress({
         style={{
           fontSize: 12,
           color: "var(--catfish-text-muted)",
-          marginBottom: 12,
+          marginBottom: activityLine ? 4 : 12,
           fontFamily: "var(--font-mono, monospace)",
         }}
       >
         已等 {elapsed} · {estimateTime(model, phase)}
       </div>
+
+      {/* 8/9 P44: hermes 真实进度。
+          上面那行是**我们猜的** (按 model 名硬编码的区间) + 一个墙上时钟;
+          这行是 hermes 自己报的 —— 第几轮、在用哪个工具、多久没动。
+          探不到就整行不显示, 退回原来的盲等展示, 不编"正在思考…"糊弄。 */}
+      {activityLine && (
+        <div
+          style={{
+            fontSize: 12,
+            color: "var(--catfish-text-muted)",
+            marginBottom: 12,
+            fontFamily: "var(--font-mono, monospace)",
+            opacity: 0.85,
+          }}
+        >
+          ⚙ {activityLine}
+        </div>
+      )}
 
       {/* cancel button — 点了用上次结果 */}
       {onCancel && (

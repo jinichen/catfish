@@ -31,7 +31,17 @@ def _hermes_agent_available() -> bool:
         import agent  # noqa: F401
         import run_agent  # noqa: F401
         return True
-    except ImportError:
+    except Exception:  # noqa: BLE001
+        # 8/9: 原来只 catch ImportError。但这个探测的意图是"hermes 能不能用",
+        # 而"装了但**跑不起来**"照样是不能用 —— 而且它抛的不是 ImportError。
+        #
+        # 实撞: PYTHONPATH 指向 hermes、解释器却是 3.10 (hermes 要 3.11+),
+        # `import run_agent` 抛 `re.error: multiple repeat` (3.10 的 sre 解析不了
+        # 新版正则)。ImportError 接不住 → conftest 自己炸 → **整个测试目录
+        # 收集失败**, 连不需要 hermes 的用例一起挂。
+        #
+        # 探测函数的失败方向只该有一个: 拿不准就返 False (跳过), 绝不把调用方
+        # 带崩。
         return False
 
 

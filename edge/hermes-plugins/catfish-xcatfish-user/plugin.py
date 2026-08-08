@@ -1739,6 +1739,21 @@ def _patch_p8_p9_cors() -> None:
                         "P26 cron add_post/delete 失败 (via Application.__init__): %s",
                         e,
                     )
+                # ── P44 (8/9 鸿波): agent 进度快照只读出口 ──
+                #
+                # 逻辑全在 activity_probe.py, 这里只负责"在 router freeze 之前挂上
+                # 去"这一件事 —— 挂载时机是 plugin.py 独有的知识 (P18 6/17 踩过
+                # frozen router), 探测逻辑不是, 所以分开放。
+                #
+                # 跟上面几个 P 不同: 它**不走 P7 stashed adapter**, 因为它不需要
+                # adapter —— 数据在 GatewayRunner 上, 不在 APIServerAdapter 上。
+                try:
+                    from . import activity_probe  # noqa: PLC0415
+                    activity_probe.register_routes(self.router)
+                except Exception as e:  # noqa: BLE001
+                    # 进度显示挂了是体验降级, 不是隐私漏洞 —— 不 fail loud。
+                    # (P1-P11 那些错位会跨员工串数据, 那才必须让 hermes 起不来。)
+                    logger.warning("P44 activity_probe 路由注册失败: %s", e)
                 # ── P30 (P3.5.198 7/8 鸿波): wechat qr_login start/poll ──
                 #
                 # 跟 P26 同时机注册 (router 未 freeze), handler 走 P7 stashed
