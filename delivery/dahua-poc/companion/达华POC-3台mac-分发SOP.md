@@ -1,14 +1,29 @@
 # 达华 POC · 3 台 mac 分发 SOP
 
 **规模**: 2 台 Apple Silicon + 1 台 Intel
-**版本**: v0.19.0 (2026-08-01 · Codex 模型运行时 + 工作台界面重做; 服务端 HTTPS / CA 信任 / 绕系统代理那几条仍按 7-28 那版)
+**版本**: v0.20.0 (2026-08-08 · 跟 hermes v2026.8.3 对齐; 服务端 HTTPS / CA 信任 / 绕系统代理那几条仍按 7-28 那版)
+
+> **0.20.0 这一版带的东西** (0.19.0 → 0.20.0)
+>
+> - hermes 升到 **v0.20.0 (v2026.8.3)** —— Companion 版本号是跟 hermes 钉死的
+>   (`scripts/check_version_sync.sh` 在 CI 强制), 所以这个号跳不是我们自己攒够了功能。
+> - **内嵌 Python 换了 SQLite 没洞的构建**。原来打进包的 CPython 3.11.15 链的是
+>   SQLite 3.50.4, 在 WAL-reset 损坏漏洞范围内; hermes 自带的缓解只拒绝给**新库**
+>   开 WAL, 对现场那些跑了几个月、早就是 WAL 的 `state.db` 一律不管。现在包里是
+>   3.53.1。**这条是数据安全, 不是优化** —— 老包装的机器建议都升。
+> - 修 advisor(早安页)在 hermes v0.20 上整个不可用: 上游改了协议选择逻辑,
+>   会把打到我们网关的请求发成 `/v1/responses`, 而网关只有 `/v1/chat/completions`,
+>   表现是早安页一直「综合判断暂不可用」。
+> - 微信审批提示补齐中文: v0.20 的审批文案有三种成品, 之前只翻了一种,
+>   另两种整段英文会直接发到员工微信。
+
 **目的**: 让 3 台 mac 员工装 Companion + verify chat 通
 
 > ⚠ **7/28 现状 · 分发前必读**
 > 1. **x64 (Intel) dmg 当前没有** —— `target/x86_64-apple-darwin/` 目录不存在。
 >    Intel 那台要么今晚补 build (`npm run tauri build -- --target x86_64-apple-darwin`,
 >    需先 `rustup target add x86_64-apple-darwin`),要么首日只上 2 台 Apple Silicon。
-> 2. 0.19.0 aarch64 dmg ≈ 579 MB (内嵌 hermes 离线包,比 0.18 的 128 MB 大是正常的)。
+> 2. 0.20.0 aarch64 dmg ≈ 613 MB (内嵌 hermes 离线包,比 0.18 的 128 MB 大是正常的)。
 > 3. 服务端已启 HTTPS:员工机**多一步装 ca.pem**,见下文装机步骤 3.5。
 > 4. 聊天要通,**服务器 `.env` 必须已填 `DASHSCOPE_API_KEY`** —— 门户能登录
 >    不代表 key 已配;没配的话 chat 第一条消息报「上游 LLM Provider 鉴权挂了」。
@@ -61,20 +76,36 @@
 
 ### 1. 确认 dmg 已 build 好
 
+> **⚠ 8/8 修正 · dmg 的位置和文件名都跟这份文档以前写的不一样。**
+>
+> 7/24 起 dmg 不再由 tauri 自己的 bundler 出 (`BL-TAURI-DMG-WORKAROUND`:
+> 官方 `bundle_dmg.sh` 在 macOS Sequoia + Tauri 2 上反复挂), 改成
+> `scripts/make-dmg.sh` 手工 `hdiutil create`。输出位置和命名跟着变了:
+>
+> | | 以前 (本文档一直写的) | 现在 (make-dmg.sh 实际产出) |
+> |---|---|---|
+> | 目录 | `src-tauri/target/release/bundle/dmg/` | `~/Downloads/` |
+> | 文件名 | `Catfish Companion_0.19.0_aarch64.dmg` | `Catfish-Companion-0.20.0-aarch64.dmg` |
+> | 分隔符 | 空格 + 下划线 | 全连字符 |
+>
+> 也就是说照旧文档走, 第 1 步 `ls` 是空的、第 2 步 `cp` 报 No such file。
+> 这跟 8/1 修过的那次「SOP 写 0.18.0 而实际是 0.19.0」是同一类病, 只是这次
+> 变的是**路径**不是版本号, 所以上次没被发现。
+
 ```bash
-ls -la ~/person_task/catfish/edge/companion-app/src-tauri/target/release/bundle/dmg/*.dmg
-ls -la ~/person_task/catfish/edge/companion-app/src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+ls -la ~/Downloads/Catfish-Companion-*-aarch64.dmg
+ls -la ~/Downloads/Catfish-Companion-*-x64.dmg
 ```
 
-期望 (7/28 实测):
-- `Catfish Companion_0.19.0_aarch64.dmg` ≈ 579 MB (内嵌 hermes 离线包)
+期望 (8/8 实测):
+- `Catfish-Companion-0.20.0-aarch64.dmg` ≈ 613 MB (内嵌 hermes 离线包)
 - x64 dmg **当前没有** · Intel 机需先补 build (见文件头 ⚠)
 
-### 2. Copy 到 Downloads · 上传 Nextcloud
+### 2. Copy 到分发目录 · 上传 Nextcloud
 
 ```bash
 mkdir -p ~/Downloads/catfish-达华POC-0715/
-cp ~/person_task/catfish/edge/companion-app/src-tauri/target/release/bundle/dmg/Catfish\ Companion_0.19.0_aarch64.dmg ~/Downloads/catfish-达华POC-0715/
+cp ~/Downloads/Catfish-Companion-0.20.0-aarch64.dmg ~/Downloads/catfish-达华POC-0715/
 ```
 
 上传 Nextcloud `paixiao2.duckdns.org:9997/catfish-达华POC/`.
@@ -83,7 +114,7 @@ cp ~/person_task/catfish/edge/companion-app/src-tauri/target/release/bundle/dmg/
 
 ```bash
 # 装
-open ~/Downloads/catfish-达华POC-0715/Catfish\ Companion_0.19.0_aarch64.dmg
+open ~/Downloads/catfish-达华POC-0715/Catfish-Companion-0.20.0-aarch64.dmg
 # 拖到 Applications
 
 # 打开
@@ -111,7 +142,7 @@ open -a "Catfish Companion"
 
 ---
 
-## 从旧版升级到 0.19.0 (8/1 实测)
+## 从旧版升级到 0.20.0 (8/8 实测)
 
 装过 Companion 的机器用这一节。整个过程 10 分钟, 其中 3-5 分钟是等
 `install.sh` 解 hermes 归档。
@@ -147,7 +178,7 @@ ls ~/.hermes/hermes-agent && hermes version
 curl -s localhost:8642/health
 ```
 
-两处都要报 **0.19.0**。`hermes version` 还会打出
+两处都要报 **0.20.0**。`hermes version` 还会打出
 `Install directory: /Users/<你>/.hermes/hermes-agent`, 确认它指的是这个目录。
 
 7. 聊一条 "hi" 通了, 再删备份:
@@ -182,8 +213,8 @@ pkill -f hermes-agent          # launchd 会自动拉起, 别手动 start
 
 ### 员工 1/2/3 装机步骤
 
-**给 2 台 Apple Silicon 员工**: `Catfish Companion_0.19.0_aarch64.dmg`
-**给 1 台 Intel 员工**: `Catfish Companion_0.19.0_x64.dmg`（文件头 ⚠ 说了这个还没 build）
+**给 2 台 Apple Silicon 员工**: `Catfish-Companion-0.20.0-aarch64.dmg`
+**给 1 台 Intel 员工**: `Catfish-Companion-0.20.0-x64.dmg`（文件头 ⚠ 说了这个还没 build）
 
 **装机步骤** (每台员工机):
 
