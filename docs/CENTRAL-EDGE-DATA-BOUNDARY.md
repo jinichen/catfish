@@ -128,12 +128,30 @@
 - 404 vs 400 区分: tool-bridge 抛"session_dir...不存在"映回 404 (跟老语义一致)
 - SaaS 化时这层 proxy 会 fail-loud (员工 Mac 上的 socket gateway 连不到), 强制下次 Companion 直连
 
-### F 类 — Facts 上传 / 存储 · 2 个
+### F 类 — Facts 上传 / 存储 · 2 个 · **8/9 复核, 原处方推翻**
 
-| 文件 | 违规 | 该怎么改 |
+> ⚠️ **别跟员工附件上传搞混 —— 是两条完全无关的路。**
+>
+> | | 这里说的 "Facts 上传" | 员工附件上传 |
+> |---|---|---|
+> | 谁传 | **管理员** (`upload_fact` 有 `_require_admin`) | 员工 (聊天里拖文件) |
+> | 传什么 | 公司/政府发的变更通知/标准/规章 | 员工自己的文件 |
+> | 谁落盘 | gateway (`facts_router.py`) | **Companion Rust, 网关零参与** |
+> | 落哪儿 | `$CATFISH_FACTS_DIR` (生产=中央容器卷) | `~/.catfish/uploads/<ts>-<name>` |
+> | 状态 | 见下表 | ✅ **5/5 起就在边缘端** (`file_parse.rs:263` / `attachments.rs:477`) |
+
+| 文件 | 现状 (8/9 复核) | 该怎么改 |
 |---|---|---|
-| `facts_router.py` | 写 `~/.catfish/facts/<id>/raw.ext` (员工上传文件) | facts upload 端点搬 Companion / gateway 只做 proxy 不存 |
+| `facts_router.py` | 落盘位置 5/26 已 env 化 (`CATFISH_FACTS_DIR`), `central/` 与 `delivery/dahua-poc/` 两个 docker-compose 都配到容器卷; `Path.home()` 分支只是 dev fallback + startup warning。**剩余缺口不是落盘位置, 是 PG 写入面无闸** —— `pg_write_facts_json(fact_id, facts)` 写整个 dict, 内含 `raw_quote` (schema 明确要求逐字摘录 50-200 字), 既无结构性约束也无 CI gate, 全靠 `_require_admin` 一道运行时检查 | 给 facts PG 写入面加 CI 闸 (对标 `tests/test_central_log_no_content.py`)。**不搬 Companion** —— 见下 |
 | `facts_db.py` | jsonl 兜底落 `~/.catfish/` | 砍 jsonl 兜底 (PG-only, 见 BL-QUOTA-SQLITE-DEPRECATE) |
+
+**为什么 facts 不搬 Companion** (8/9 改; 原处方「facts upload 端点搬 Companion / gateway 只做 proxy 不存」作废):
+
+1. **输入不是员工数据。** `upload_fact` 有 `_require_admin(user)`, 传的是公司/政府发的变更通知 (`EXTRACT_PROMPT_SYSTEM`)。原表格标的「(员工上传文件)」是 5/17 的误标 —— 跟代码从来就对不上。
+2. **处理结果本来就该在中央。** extract → find_impact → generate_patch 是给**全公司的 skill** 生成 patch, 搬到某一个员工的 Companion 上讲不通。
+3. **「gateway 只做 proxy」这个处方, 本仓库 3 次实践一次都没用。** 员工附件 (5/5) Rust 直接落盘、网关零参与; `/api/tasks/me` (5/17) 直接砍端点; `/api/learn/*` 先做了 thin proxy, 6/20 P3.5.45 连 proxy 一起砍成 Companion → unix sock 直调 (理由:「4 跳 + 2 HTTP 中转 + token 验签 cascade fail」)。三次全选"边缘直做", 零次停在 proxy。**上面 E 类那节写的 thin proxy 是 5/26 的中间态, 已被 6/20 推翻。**
+
+真正该守的是**字段级**, 不是端点级: 判据是「**这个字段的值来自哪里**」, 不是「这次的内容是谁的」—— 同 8/8 `facts_pipeline` 去掉 `raw` 那次 (那个字段接的是 LLM 原始输出, 只写不读, 已删)。
 
 ### G 类 — Resolver / metadata · 2 个 (临界, 借边缘库读"映射")
 
@@ -175,9 +193,13 @@ A 类 9 个文件. 设计 Companion → gateway 请求体协议 (memory pre-inje
 
 B 类 5 个. summarizer / distill / proactive / session_meta / tool_archive 整体搬 Companion. gateway 不再有 background task fire.
 
-### Phase 4 — UI / RecMode / A2A 搬 (季度级, 2-3 周)
+### Phase 4 — UI 直调端点搬 (季度级, 2-3 周) · ~~原名 "UI / RecMode / A2A 搬"~~
 
-C/D/E/F 类 14 个. catfish-web 改成混合调用 (gateway 走 metadata 端点 + Companion localhost 走数据端点).
+原写"C/D/E/F 类 14 个" —— 8/9 复核后**只剩 C 类 4 个**:
+D 类 5/26 整套砍 (7 模块全 STUB), E 类 5/26 全清且 6/20 连 proxy 一起砍,
+F 类 `facts_router` 经复核**不搬**(输入是管理员上传的公司规章, 不是员工数据; 见 F 类那节)。
+
+C 类 4 个: catfish-web 改成混合调用 (gateway 走 metadata 端点 + Companion localhost 走数据端点)。
 
 ### 全部完成后
 
