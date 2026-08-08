@@ -69,6 +69,37 @@ _ERROR_KEYWORDS = {
     # 5/7 同样 dashscope upstream 502 时 catfish-public-qwen-flash 报 "upstream error"
     # 也应该跳到下一个 candidate (deepseek-flash / gemini-flash)
     "upstream error": ("upstream error", "upstream timeout"),
+    # 8/8 鸿波实撞: DeepSeek 余额烧光, 早安页和邮件评级全挂, **而且没有 fallback**:
+    #
+    #   Client error '402 Payment Required' for url 'https://api.deepseek.com/...'
+    #   litellm.BadRequestError: DeepseekException -
+    #       {"error":{"message":"Insufficient Balance","code":"invalid_request_error"}}
+    #   catfish.gateway.fallback: err=BadRequestError 不在 on_errors 里, 不 fallback
+    #
+    # 两道都没接住:
+    #   · status: LiteLLM 把 402 重映射成 BadRequestError, _extract_status_code
+    #     拿到的是 **400**, 402 根本不出现在异常上
+    #   · 关键词: "rate limit" 组里有 "quota", 但报文写的是 "Insufficient Balance",
+    #     一个字都不沾
+    #
+    # 而余额不足**恰恰是最该切模型的情况** —— 换一家立刻能用, 不切就是全线停摆。
+    # 它被判成"客户端请求错误"纯粹是上游的分类问题, 跟请求本身没关系。
+    #
+    # 各家的说法不一样, 一起收进来 (都是实际见过或文档里的原话):
+    #   DeepSeek  Insufficient Balance / 402 Payment Required
+    #   OpenAI    insufficient_quota
+    #   阿里云百炼  Arrearage (欠费) / AllocationQuota
+    # 不收 "billing" 这种太宽的词 —— 正常文案里也可能出现, 误切比不切更难查。
+    "insufficient balance": (
+        "insufficient balance",
+        "insufficient_balance",
+        "insufficient quota",
+        "insufficient_quota",
+        "payment required",
+        "arrearage",
+        "余额不足",
+        "欠费",
+    ),
 }
 
 

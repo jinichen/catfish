@@ -219,3 +219,93 @@ def test_不该有模型的_chain_引用自己(models_yaml):
         if m.get("name") in (((m.get("fallback") or {}).get("chain")) or [])
     ]
     assert not bad, f"这些模型的 fallback chain 引用了自己: {bad}"
+
+
+# ── 8/8: 余额不足必须触发 fallback ────────────────────────────────────
+#
+# 实撞: DeepSeek 余额烧光, 早安页 + 邮件评级全线停摆, 而 fallback **没触发**:
+#
+#   Client error '402 Payment Required' for url 'https://api.deepseek.com/...'
+#   litellm.BadRequestError: DeepseekException -
+#       {"error":{"message":"Insufficient Balance","code":"invalid_request_error"}}
+#   catfish.gateway.fallback: err=BadRequestError 不在 on_errors 里, 不 fallback
+#
+# 两道判据都没接住: LiteLLM 把 402 重映射成 BadRequestError (status=400, 402 根本
+# 不出现), 而关键词表里 "rate limit" 组只有 "quota", 沾不上 "Insufficient Balance"。
+
+
+def test_余额不足能触发_fallback():
+    """拿 8/8 那条真实报文当用例 —— 一字不改。"""
+    from catfish_gateway.fallback import should_fallback
+
+    real = (
+        'litellm.BadRequestError: DeepseekException - '
+        '{"error":{"message":"Insufficient Balance","type":"unknown_error",'
+        '"param":null,"code":"invalid_request_error"}}'
+    )
+
+    class _BadRequest(Exception):
+        status_code = 400          # LiteLLM 实际给的就是 400, 不是 402
+
+    exc = _BadRequest(real)
+    on_errors = [429, 500, 502, 503, 504, "timeout", "rate limit", "insufficient balance"]
+    assert should_fallback(exc, on_errors), "余额不足必须切模型 —— 换一家立刻能用"
+
+
+def test_没配这个关键词的话不切_证明是这一条在起作用():
+    """反证: 去掉关键词就切不了, 说明命中的确实是它, 不是别的条目蒙对的。"""
+    from catfish_gateway.fallback import should_fallback
+
+    class _BadRequest(Exception):
+        status_code = 400
+
+    exc = _BadRequest("DeepseekException - Insufficient Balance")
+    assert not should_fallback(exc, [429, 500, 502, 503, 504, "timeout", "rate limit"])
+
+
+@pytest.mark.parametrize("msg", [
+    "Insufficient Balance",                    # DeepSeek
+    "insufficient_quota",                      # OpenAI
+    "402 Payment Required",                    # 原始 HTTP 语义
+    "Arrearage: account in debt",              # 阿里云百炼
+    "账户余额不足, 请充值",                      # 中文上游
+    "当前账号已欠费",
+])
+def test_各家的说法都认得(msg):
+    from catfish_gateway.fallback import should_fallback
+
+    class _E(Exception):
+        status_code = 400
+
+    assert should_fallback(_E(msg), ["insufficient balance"]), msg
+
+
+def test_不误伤正常报文():
+    """'billing' 这种宽词故意没收 —— 误切比不切更难查。"""
+    from catfish_gateway.fallback import should_fallback
+
+    class _E(Exception):
+        status_code = 400
+
+    for msg in [
+        "invalid request: messages must not be empty",
+        "model not found: gpt-5.6-luna",
+        "see your billing dashboard for details",   # 有 billing 但不是欠费
+    ]:
+        assert not should_fallback(_E(msg), ["insufficient balance"]), msg
+
+
+def test_公网模型全都配了这个关键词_内网一个都不配(models_yaml):
+    """结构性: 新增公网模型忘了配 → 红。内网模型配了也红 (它没有余额概念,
+    配上去只会让人以为内网也会因为欠费切到公网)。"""
+    for m in models_yaml["models"]:
+        fb = m.get("fallback")
+        if not fb:
+            continue
+        has = "insufficient balance" in [
+            str(x).lower() for x in fb.get("on_errors", [])
+        ]
+        if m.get("tier") == "private":
+            assert not has, f"内网模型 {m['name']} 不该配余额关键词"
+        else:
+            assert has, f"公网模型 {m['name']} 的 on_errors 缺 'insufficient balance'"
