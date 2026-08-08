@@ -66,9 +66,43 @@ git diff --name-only HEAD | xargs -I{} wc -l {} 2>/dev/null | sort -rn | head
 - **生成代码前**: 看一下目标文件多大. > 500 行就考虑拆而不是继续堆.
 - **改完代码后**: 跑 `bash scripts/check_file_sizes.sh --strict` 自检.
 - **commit 前**: 自检过 + 测试过. 测试退化 0 容忍.
+- **跑测试验证前**: 加 `PYTHONDONTWRITEBYTECODE=1`, 或先
+  `find . -name __pycache__ -type d -exec rm -rf {} +`. 见下 § 4.1.
 - **触发拆分时**: 用上面的 re-export 协议, 不破 import 兼容, 跟着改测试 monkeypatch.
 - **写新 skill / 新 tool / 新 plugin 前**: 先看 `docs/CATFISH-HERMES-BOUNDARY.md`, 扫 `~/.hermes/hermes-agent/skills/` 和 `~/.hermes/hermes-agent/tools/` 防重叠. hermes 有 → 写 cookbook 不写 skill. 重写 hermes 已有的轮子 = 越界.
 - **写对外文案 / 销售物料 / 广告词 / demo deck 前**: 先看 `docs/CATFISH-POSITIONING-2026-05-19.md` "产品初衷 — 5 条护栏" 段 (员工拥有 / 跨雇主可携带 / 数据零出端 / 中央边缘分离 / 跨厂商 LLM 不绑死). 广告词可换皮, 初衷 5 条永不动. 5/21 新广告词 "员工成长加速器 + 组织能力沉淀器" 是包装升级, 不是替换初衷.
+
+### 4.1 陈旧 .pyc 会让"测试通过"变成假话 (8/9 踩过)
+
+**症状**: 测试结果跟磁盘上的代码对不上。源码怎么看都没问题, 测试就是红的
+(或者更糟 —— 该红的绿了)。
+
+**判据**: CPython 判 `.pyc` 失效**只看两个字段** ——
+`(源文件 mtime 取整到秒, 源文件字节数)`。两个都对得上就直接用旧字节码,
+根本不读源文件。pyc 头就 16 字节, 后 8 个字节存的就是这俩:
+
+```
+python3 -c "import struct,importlib.util;p=importlib.util.cache_from_source('m.py');\
+print(struct.unpack('<II', open(p,'rb').read(16)[8:16]))"
+```
+
+**最容易踩的场景是变异测试** (故意改坏代码, 看闸红不红, 再改回来):
+
+- `sed` 做**等宽替换** → 字节数一个不差
+- 改坏 + 跑测试 + 改回来, 全在**同一秒**内 → mtime 取整后相同
+- 两个字段都没变 → `.pyc` 100% 复用, 恢复后的源码**根本没被读**
+
+8/9 就是这样: `"error",            #` 换成 `"error", "raw",     #`, 两边都是
+32 字符; 恢复后测试仍报 `FACTS_JSON_KEYS` 里有 `raw`。
+
+**⚠ 别归因成挂载 / 文件系统。** 我第一次就是这么猜的, 还写进了汇报。实测
+`/Users/chenhongbo/person_task` 的 mtime 是**纳秒精度**, 文件系统一点问题没有 ——
+是 CPython 的判据本身只取到秒。猜的原因写进汇报, 下次就有人照着这个错原因去
+排查文件系统。
+
+**做法**: 验证跑一律带 `PYTHONDONTWRITEBYTECODE=1`; 变异测试前后各清一次
+`__pycache__`。CI 在干净容器里跑, 命不中这条 —— **它只坑本地验证, 也就是
+"我说测过了"这句话的全部依据**。
 
 ## 5. 已有拆分参考 (5/20-5/21 round 1+2)
 
