@@ -179,4 +179,50 @@ if [ -f "$PIN_FILE" ] && [ -d "$LOCAL_HERMES" ]; then
     else
         echo "  ✓ hermes pin 与本机一致 · ${pinned:0:12} ($local_tag)"
     fi
+
+    # ── 包里那份 hermes 跟 pin 对不对 (8/8 加) ──────────────────────
+    #
+    # 上面那段比的是 **本机装的** hermes 跟 pin, 而员工机上装的是
+    # resources/mac-*/hermes-agent-bundle.tar.gz 里那份 —— 两者没有任何关系。
+    # 之前**没有任何检查**把它们对起来。
+    #
+    # 8/8 差点踩实: 改完 .hermes-git-commit → 3c27eb6 之后没重跑
+    # build-mac-resources.sh, 包里还是 3ef6bbd2。这种包装到干净机器上是
+    # **死循环**:
+    #
+    #   bootstrap 铺包里的 v0.19  →  core_health_problems 拿 3ef6bbd2 比
+    #   二进制里烤的 3c27eb6 →「版本不匹配」→ 判 broken 挪走 → 重铺 v0.19
+    #   → 再不匹配 → …… 每次启动重装几百 MB, 永远好不了。
+    #
+    # 而这是要发给现场员工的包。所以这条**阻塞 build**, 不是提醒 ——
+    # 上面那条 pin 不一致只是"可能静默失效", 这条是"包一定是坏的"。
+    for _res in "$APP_ROOT/src-tauri/resources/mac-aarch64" \
+                "$APP_ROOT/src-tauri/resources/mac-x64"; do
+        _tar="$_res/hermes-agent-bundle.tar.gz"
+        [ -f "$_tar" ] || continue
+        _bundled=""
+        while IFS= read -r line; do
+            line="$(printf '%s' "$line" | tr -d '[:space:]')"
+            is_sha40 "$line" && _bundled="$line"
+        done <<EOF
+$(tar xzf "$_tar" -O hermes-agent-src/.catfish-hermes-version 2>/dev/null || true)
+EOF
+        if [ -z "$_bundled" ]; then
+            echo "  ⚠ $(basename "$_res") 的 bundle 里读不出 commit · 跳过比对"
+        elif [ "$_bundled" = "$pinned" ]; then
+            echo "  ✓ $(basename "$_res") bundle 与 pin 一致 · ${pinned:0:12}"
+        else
+            echo ""
+            echo "❌ $(basename "$_res") 里的 hermes 跟 pin 对不上 —— 这个包是坏的:"
+            echo "     二进制会烤进去 (.hermes-git-commit) : ${pinned:0:12}"
+            echo "     包里实际装的 (bundle)               : ${_bundled:0:12}"
+            echo ""
+            echo "   装到干净机器上是死循环: 铺包里那版 → 判版本不匹配 → 挪走重铺"
+            echo "   → 再不匹配 …… 每次启动重装几百 MB, 员工那头永远好不了。"
+            echo ""
+            echo "   修: bash scripts/build-mac-resources.sh $(basename "$_res" | sed 's/^mac-//')"
+            echo ""
+            exit 1
+        fi
+    done
 fi
