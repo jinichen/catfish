@@ -352,6 +352,32 @@ fi
 cp "$NODE_TMP" "$RESOURCES/node-embed.tar.gz"
 echo "  OK $RESOURCES/node-embed.tar.gz ($(ls -lh "$RESOURCES/node-embed.tar.gz" | awk '{print $5}'))"
 
+# 解一份出来给 [6a] 的 npm ci 用 —— **不能用本机的 node** (8/8 加)。
+#
+# 8/8 实录: [6a] 一直是直接调 PATH 上的 npm, 也就是本机那个。那天本机是
+# node v25.5.0, 撞上
+#     npm error notsup nanoid@6.0.0
+#     Required: {"node":"^22 || ^24 || >=26"}   Actual: v25.5.0
+# —— v25 是奇数线, 不在支持范围里。
+#
+# 但这不只是"本机 node 版本不巧"。**我们打进包里的 node_modules, 本来就该用
+# 打进包里的那个 node 装**: 员工机上跑的是 22.23.2, 用 v25 (或任何别的版本)
+# 装出来的 node_modules 里, 带原生插件的包 (node-pty 这类) 的 ABI 都可能对不上,
+# 而那种错要到员工那头才炸。
+#
+# 本文件在 [5.5] 取 Python wheel 时已经是这个做法了 —— 用嵌入解释器而不是本机
+# python。Node 这边一直没跟上, 补齐。
+NODE_UNPACK="/tmp/catfish-node-unpack-$ARCH"
+rm -rf "$NODE_UNPACK" && mkdir -p "$NODE_UNPACK"
+tar xzf "$NODE_TMP" -C "$NODE_UNPACK" --strip-components=1
+EMBED_NODE_BIN="$NODE_UNPACK/bin"
+[ -x "$EMBED_NODE_BIN/node" ] && [ -x "$EMBED_NODE_BIN/npm" ] || {
+    echo "❌ 解出来的 node 里没有 bin/node 或 bin/npm: $EMBED_NODE_BIN"
+    exit 1
+}
+echo "  ✓ 嵌入 node 解到 $EMBED_NODE_BIN"
+echo "    node $("$EMBED_NODE_BIN/node" --version) · npm $(PATH="$EMBED_NODE_BIN:$PATH" npm --version)"
+
 # ─── 4. uv binary ───────────────────────────────────────
 
 UV_VERSION="0.4.30"
@@ -462,6 +488,13 @@ rm -rf "$PY_UNPACK"
 echo ""
 echo "=== [6a/6] npm ci in hermes-agent (装 node_modules) ==="
 export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1  # 分开跑 chromium
+
+# 用**嵌入的** node/npm, 不是本机的。理由见 [3] 里解包那段。
+# 放最前面, 后面 [6a.5] 瘦身和 [6b] playwright 也跟着用同一个 —— 整条链
+# 只认一个 node 版本, 跟员工机上跑的那个一致。
+export PATH="$EMBED_NODE_BIN:$PATH"
+echo "  用 node $(node --version) / npm $(npm --version)  (嵌入的, 非本机)"
+
 # 顶级 npm ci
 cd "$HERMES_SRC"
 if [ -f "package-lock.json" ]; then
