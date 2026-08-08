@@ -65,6 +65,19 @@
 #
 # 切过去之后它就没了。Phase 3 负责补回来。如果以后往 hermes venv 里塞了
 # 别的 editable 包, **要加进 Phase 1 的清单和 Phase 3 的补装**。
+#
+# ## 8/8 实跑记录 (两个坑, 都已在脚本里堵上)
+#
+# 1. 第一次 provision 报 `error: unexpected argument '--no-bin' found` ——
+#    机器上的 managed uv 是 0.4.30 (2024-11-04), 太老不认这个参数。
+#    hermes 自己的 `_refresh_managed_uv_catalog()` 兜住了: 刷新 uv 后重试
+#    一次就成了。**不用手动升 uv。**
+# 2. Phase 3 挂在 `venv/bin/pip: No such file or directory` —— 新 venv 是
+#    `uv venv` 造的, **默认不带 pip**; 旧 venv 带, 是因为它当年是
+#    `python -m venv` 建的。改走 `uv pip install`。
+#
+# 结果: SQLite 3.50.4 → **3.53.1**, 旧 venv 停在
+# `venv.stale.runtime-1786166593-79869-d1690e8e` (确认没问题后可删, 约 1G)。
 
 set -euo pipefail
 
@@ -97,9 +110,14 @@ sys.path.insert(0, "'"$HERMES_DIR"'")
 from hermes_cli.sqlite_runtime import is_sqlite_wal_reset_vulnerable
 print("yes" if is_sqlite_wal_reset_vulnerable(sqlite3.sqlite_version_info) else "no")')
 echo "  当前 SQLite: $SQLITE_BEFORE  漏洞: $VULN"
-if [ "$VULN" != "yes" ]; then
-  echo "  ✓ 已经是安全版本, 无事可做。退出。"
-  exit 0
+# 注意: 这里**不能** early exit。脚本要可重跑 —— Phase 2 成功但 Phase 3 挂了
+# (8/8 就是这样: 新 venv 没有 pip) 的话, 重跑时 SQLite 已经是好的, 直接退出
+# 就永远补不上 catfish_email。所以只跳过 Phase 2, 继续走补装和校验。
+if [ "$VULN" = "yes" ]; then
+  NEED_REPAIR=1
+else
+  NEED_REPAIR=0
+  echo "  ✓ SQLite 已安全 —— 跳过 Phase 2, 仍走 Phase 3 补装 + Phase 4 校验。"
 fi
 
 echo "→ [0.3] uv 在不在..."
@@ -127,6 +145,10 @@ echo "  ⚠ 下面 Phase 3 只会补装 catfish_email。清单里若有别的, �
 
 echo
 echo "════════ Phase 2: 换 runtime (不碰 git) ════════"
+if [ "$NEED_REPAIR" = "0" ]; then
+  echo "  (跳过 —— SQLite 已经是安全版本)"
+  SQLITE_AFTER=$SQLITE_BEFORE
+else
 echo "→ [2.1] 调 repair_vulnerable_runtime..."
 RC=0
 "$PY" - <<PYEOF || RC=$?
@@ -154,11 +176,16 @@ PYEOF
 echo "→ [2.2] 复核换完之后的 SQLite..."
 SQLITE_AFTER=$("$PY" -c 'import sqlite3; print(sqlite3.sqlite_version)')
 echo "  $SQLITE_BEFORE → $SQLITE_AFTER"
+fi
 
 echo
 echo "════════ Phase 3: 补装丢掉的 editable 包 ════════"
 echo "→ [3.1] catfish_email (uv sync --locked 装不到它)..."
-"$VENV/bin/pip" install -e "$EMAIL_AGENT" --quiet
+# 不能用 $VENV/bin/pip —— 新 venv 是 `uv venv` 造的, **默认不带 pip**
+# (旧 venv 有, 是因为它当年是 python -m venv 建的)。走 uv 自己的 pip 前端。
+# --no-config: 别让 hermes 的 [tool.uv] exclude-newer 卡住 setuptools 构建依赖;
+# email-agent 本身零运行时依赖 (pyproject 里 dependencies 是空的), 不需要锁。
+"$UV_BIN" pip install --no-config --python "$PY" -e "$EMAIL_AGENT"
 "$PY" -c 'import catfish_email; print("  ✓ catfish_email", catfish_email.__file__)'
 
 echo
