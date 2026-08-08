@@ -211,6 +211,18 @@ export async function httpProxyStream(url: string, init?: RequestInit): Promise<
 
 /** Auto-detect: URL 或 body 是否 stream 请求 (chat completions / SSE). */
 export function isStreamRequest(url: string, init?: RequestInit): boolean {
+  // 8/7: body 里明写 stream:false 的, **胜过下面的 URL 猜测**。
+  //
+  // 原来只按 URL 判 —— 只要打到 /v1/chat/completions 就一律当流式, 于是
+  // 所有非流式调用 (拟稿 / briefing / profile / wikiLinkSuggest 共 10 处明确
+  // 发 stream:false) 都被塞进 SSE 通道: 注册 event listener、等 done 事件、
+  // 再把整段拼回来当普通 Response 返 —— 绕一大圈拿同一个结果。
+  //
+  // URL 猜测本身没错 (chat 绝大多数确实是流式), 错在它盖过了请求自己的声明。
+  // 显式优先于推断。
+  if (typeof init?.body === "string" && /"stream"\s*:\s*false/.test(init.body)) {
+    return false;
+  }
   // /v1/chat/completions + /v1/responses stream 都常见
   if (url.includes("/v1/chat/completions") || url.includes("/v1/responses")) {
     return true;
