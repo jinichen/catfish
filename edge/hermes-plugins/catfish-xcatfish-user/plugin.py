@@ -4142,6 +4142,36 @@ _P28_REPLACEMENTS = [
         "回复 `/批准` 执行 (单次), 或 `/批准 本次会话` 本会话内同款命令免审批, 或 `/拒绝` 取消.\n"
         "（安全提示：永久免批已禁用，危险命令必须每次或每会话审批）",
     ),
+    # v0.20 新增的两个变体 (8/8 升级 v2026.8.3 时补).
+    #
+    # 上面那条只盖住"四选项"这一种。看 v0.20 `gateway/run.py:508`
+    # `_format_exec_approval_fallback` —— choices 是**按开关拼出来的**:
+    #
+    #     choices = ["Reply `/approve` to execute this one operation"]
+    #     if not smart_denied and allow_session:
+    #         choices.append("`/approve session` ...")
+    #         if allow_permanent:
+    #             choices.append("`/approve always` ...")
+    #     choices.append("`/deny` to cancel")
+    #
+    # 所以一共 3 种成品, 我们原来只翻了 allow_session ∧ allow_permanent 那一种。
+    # 另外两种会整条英文泄到微信 —— 正是 P28 要防的事。
+    #
+    # 三条互不为子串 (中间 "always" / "session" 段不同), 顺序不影响 str.replace,
+    # 但仍按长→短排, 保持本表的既有约定。
+    #
+    # allow_permanent=False (铁律场景: 本来就该砍掉永久免批)
+    (
+        "Reply `/approve` to execute this one operation, `/approve session` to approve this pattern "
+        "for the session, or `/deny` to cancel.",
+        "回复 `/批准` 执行 (单次), 或 `/批准 本次会话` 本会话内同款命令免审批, 或 `/拒绝` 取消.",
+    ),
+    # allow_session=False 或 smart_denied=True — **只剩单次**, 不能提"本次会话",
+    # 提了就是骗员工: hermes 那边根本不接受 `/approve session`。
+    (
+        "Reply `/approve` to execute this one operation, or `/deny` to cancel.",
+        "回复 `/批准` 执行 (仅此一次), 或 `/拒绝` 取消.",
+    ),
     # v0.18 及之前 pattern (兜底 · 客户老 hermes 装)
     (
         "Reply `/approve` to execute, `/approve session` to approve this pattern "
@@ -4151,6 +4181,11 @@ _P28_REPLACEMENTS = [
     ),
     # 真短单句
     ("⚠️ **Dangerous command requires approval:**", "⚠️ **危险命令需要审批:**"),
+    # v0.20 新 heading (smart_denied 分支, gateway/run.py:505)
+    (
+        "⚠️ **Smart DENY — owner override for one operation:**",
+        "⚠️ **智能拦截已拒绝 — 仅本次由管理员放行:**",
+    ),
     ("⚡ Interrupting current task", "⚡ 中断当前任务"),
     (". I'll respond to your message shortly.", ", 马上回复你."),
     (". I'll respond once the current task finishes.", ", 当前任务完成后回复你."),
