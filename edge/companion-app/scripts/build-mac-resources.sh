@@ -133,8 +133,39 @@ fi
 # 先说一句, 是因为它每次都出现: 一条长期存在、其实无害的 warning 会让人对
 # 真正的 warning 脱敏 —— 底下那些"版本对不上"的检查才是要看的。
 echo "  (annotated tag 会打一行 'is not a commit!' warning · 正常, 落点由下面的核对负责)"
-git clone --depth 1 --branch "$HERMES_TAG" \
-    https://github.com/NousResearch/hermes-agent.git "$HERMES_SRC"
+# 代理挂了就直连重试一次 (8/8 加)。
+#
+# 8/8 实录: git 全局配了 http.proxy → 127.0.0.1:7890 (Clash 之类), 那天代理
+# 没开, clone 一秒就死在
+#     Failed to connect to 127.0.0.1 port 7890 after 0 ms
+# 而整条打包链最贵的一步在这之后 —— 下 500 MB 的 chromium/python/node。
+# 卡在第 1 步反而是运气好, 但报错只有 git 那一行, 看不出"是代理不是网"。
+#
+# 这个文件里下 GitHub Release 早就有同款兜底 (GH_PROXY 试几次转直连),
+# clone 这一步一直没有。补齐, 顺便把"这是代理的问题"说清楚。
+_clone() { git clone --depth 1 --branch "$HERMES_TAG" "$@" \
+    https://github.com/NousResearch/hermes-agent.git "$HERMES_SRC"; }
+if ! _clone; then
+    GIT_PROXY="$(git config --get http.proxy || true)"
+    if [ -n "$GIT_PROXY" ]; then
+        echo ""
+        echo "  ⚠ clone 失败, 而 git 配了代理: $GIT_PROXY"
+        echo "    代理没开的话就是它。直连重试一次..."
+        rm -rf "$HERMES_SRC"
+        _clone -c http.proxy= -c https.proxy= || {
+            echo ""
+            echo "❌ 带代理和直连都 clone 不下来。"
+            echo "   · 代理软件开着吗 (git 配的是 $GIT_PROXY)"
+            echo "   · 或临时去掉: git config --global --unset http.proxy"
+            exit 1
+        }
+        echo "  ✓ 直连成功 (这次绕过了 $GIT_PROXY)"
+    else
+        echo ""
+        echo "❌ clone 失败, 且 git 没配代理 —— 是网络本身的问题。"
+        exit 1
+    fi
+fi
 
 # ── 校验真的落在了要的那个版本上 (P3.5.86 · 7/29) ────────────────────
 #
