@@ -179,19 +179,38 @@ async def _llm_json(
     except json.JSONDecodeError as e:
         # 8/8: 原来这里打 `text[:500]` —— 500 字 LLM 原始输出直接进中央日志。
         #
-        # facts 的输入是员工上传的变更文件 (facts_router.upload 带 user.sub),
-        # LLM 的回答里会大段复述那份文档, 所以这 500 字可能就是员工内容。
-        # 中央端严禁持有员工数据, 日志也算持有。
+        # ⚠ 更正: 第一版这段注释写的是"员工上传的变更文件"。查了 upload 端点,
+        # 它有 `_require_admin(user)` —— 传的是**管理员上传的公司/政府变更通知、
+        # 标准、规章**, 不是员工个人文件。定性写错了。
+        #
+        # 但改动本身仍然成立, 换个理由: 中央端的运行日志不该出现**任何**大段
+        # 自由文本。这段是 LLM 对上传文档的复述, 谁上传的不改变"它是不受控的
+        # 外部文本"这个事实 —— 今天不是员工数据, 换个 caller 就是了。
+        # 判据该是"这个字段的值来自哪里", 不是"这次的内容是谁的"。
         #
         # 排查需要的信息其实一点没少: JSONDecodeError 自带 msg / lineno / colno /
         # pos, 加上总长度, 足够判断是"截断了"还是"根本没返 JSON"还是"多了前后缀"。
-        # 真要看原文去边缘端复现 —— 那份文档本来就在员工机器上。
+        # 真要看原文: 上传的那份文件还在 facts 目录里 (raw.ext), 拿它重跑一次。
         logger.warning(
             "LLM 返非 JSON: %s (pos=%s line=%s col=%s, 全长 %d 字符; "
-            "原文不记 — 中央端不持有内容, 要看去边缘端复现)",
+            "原文不记 — 中央端不留大段自由文本; 要看原文拿 facts 目录里的 raw.ext 重跑)",
             e.msg, e.pos, e.lineno, e.colno, len(text),
         )
-        return {"error": f"LLM 返非 JSON: {e}", "raw": text}
+        # 8/8: 去掉了 "raw": text。
+        #
+        # 它是**只写不读**的调试残留 —— 全网关只有这一处产生, 没有任何代码或
+        # 前端消费它。但它会一路落盘: run_extract 返 {**result, "facts": []},
+        # facts_router 把整个 dict 写 fact.json **并且** pg_write_facts_json
+        # 进中央 PG。也就是 LLM 的整段原始输出 (最多 6000 token) 落中央存储,
+        # 而它的内容是对上传文档的复述。
+        #
+        # facts_router 写中央存储这件事本身是 CENTRAL-EDGE-DATA-BOUNDARY 已登记
+        # 的违规 (文档第 135 行, 整改方向"upload 端点搬 Companion / gateway 只做
+        # proxy 不存"), 这个 raw 是在那之上**额外多存的一层**, 而且没人要。
+        #
+        # error 里已经带了 JSONDecodeError 的完整描述 (msg + 位置), 排查够用;
+        # 真要看原文拿 raw.ext 重跑。
+        return {"error": f"LLM 返非 JSON: {e}"}
 
 
 # ── 读变更文件 → 文本 ───────────────────────────
