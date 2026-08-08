@@ -89,7 +89,7 @@ _CREDENTIAL_PATTERNS = [
     # 引子。而上游回显往往是裸的:
     #     "unexpected token eyJhbGciOi... "     ← JWT 直接跟在普通英文后面
     #     "invalid key sk-proj-AbCd..."
-    # 8/8 实测这两条都漏。而 ~/.hermes/config.yaml 的 model.api_key 就是
+    # 8/8 实测这两条都漏。而员工机 hermes 配置里的 model.api_key 就是  # noqa: BOUNDARY (举例说明 JWT 来源, 中央端不读这个文件)
     # eyJ 开头的 JWT, 上游 401 回显时会原样落进 audit。
     #
     # 长度门槛写得比较高 (JWT 三段各 >=10, sk- 后 >=20), 因为这两条**没有
