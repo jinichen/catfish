@@ -81,24 +81,31 @@ function FactsList() {
             onRowClick={(f) => navigate(`/admin/facts/${f.id}`)}
             empty='还没有政策文件。选择文件后点击“上传并分析”。'
             columns={[
+              // 8/8 列宽: 表格换成 table-layout:fixed 之后, 不写 width 的列
+              // 会被**均分** —— 七列全不写的话"标题"跟"大小"一样宽 (实测各
+              // 134px, 标题从 274 缩到 134)。这里给死宽度, 只留"标题"当弹性列。
               {
                 header: "标题",
                 // 真 <Link> 而不是只靠整行 onRowClick —— 后者会让用户失去
                 // 中键 / ⌘+点击开新标签、右键"在新标签页打开"、以及悬停看
                 // 目标 URL。整行可点只是"点空白处也能进去"的便利。
+                truncate: true,
                 cell: (f) => (
                   <Link
                     to={`/admin/facts/${f.id}`}
                     style={{ fontWeight: 600, color: "var(--text)" }}
+                    title={f.title}
                     onClick={(e) => e.stopPropagation()}
                   >
                     {f.title}
                   </Link>
                 ),
               },
-              { header: "状态", cell: (f) => <StatusBadge status={f.status} /> },
+              { header: "状态", width: 90, cell: (f) => <StatusBadge status={f.status} /> },
               {
                 header: "文件",
+                width: 200,
+                truncate: true,
                 cell: (f) => (
                   <span style={{ color: "var(--text-muted)" }} title={f.original_filename}>
                     {f.original_filename}
@@ -108,6 +115,7 @@ function FactsList() {
               {
                 header: "大小",
                 align: "right",
+                width: 84,
                 nowrap: true,
                 cell: (f) => (
                   <span style={{ color: "var(--text-muted)" }}>{fmtSize(f.size_bytes)}</span>
@@ -116,15 +124,18 @@ function FactsList() {
               {
                 header: "受影响",
                 align: "right",
+                width: 78,
                 cell: (f) => f.impacts_count ?? "-",
               },
               {
                 header: "待处理建议",
                 align: "right",
+                width: 96,
                 cell: (f) => f.patches_count ?? "-",
               },
               {
                 header: "上传",
+                width: 140,
                 nowrap: true,
                 cell: (f) => (
                   <span style={{ color: "var(--text-muted)" }} title={f.uploaded_by || undefined}>

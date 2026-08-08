@@ -121,7 +121,10 @@ function DeptList() {
                   </Link>
                 ),
                 truncate: true,
-                width: 160,
+                // 8/8 百分比而不是 px: 表格是 table-layout:fixed, 纯 px 的列在窄窗口下
+                // 不会缩, 六列加起来 894px 塞不进 760px 的面板, 最右边的「编辑」
+                // 就被顶出可视区 —— 正是 /admin/providers 那次的病。百分比跟着表宽缩。
+                width: "18%",
               },
               {
                 header: "说明",
@@ -131,39 +134,42 @@ function DeptList() {
                   </span>
                 ),
                 truncate: true,
-                width: 280,
+                width: "31%",
               },
               {
                 header: "模型",
                 cell: (d) => <Scope list={d.allowed_models} validOptions={modelOptions} />,
-                width: 130,
+                width: "14%",
                 // 只有一项时 Scope 把原值渲染进徽章, 而
-                // catfish-public-deepseek-flash 这种名字会把 130px 的列
-                // 撑到 200px, 顶出整表的横向滚动条。
+                // catfish-public-deepseek-flash 这种名字长得能把这一列撑开。
+                // 8/8 起 table-layout:fixed 已经从结构上不允许内容撑列了,
+                // truncate 保留 —— 它现在负责的是省略号本身。
                 truncate: true,
               },
               {
                 header: "工具",
                 cell: (d) => <Scope list={d.allowed_tools} validOptions={toolOptions} />,
-                width: 130,
+                width: "14%",
                 // 只有一项时 Scope 把原值渲染进徽章, 而
-                // catfish-public-deepseek-flash 这种名字会把 130px 的列
-                // 撑到 200px, 顶出整表的横向滚动条。
+                // catfish-public-deepseek-flash 这种名字长得能把这一列撑开。
+                // 8/8 起 table-layout:fixed 已经从结构上不允许内容撑列了,
+                // truncate 保留 —— 它现在负责的是省略号本身。
                 truncate: true,
               },
               {
                 header: "技能",
                 cell: (d) => <Scope list={d.allowed_skills} validOptions={skillOptions} />,
-                width: 130,
+                width: "14%",
                 // 只有一项时 Scope 把原值渲染进徽章, 而
-                // catfish-public-deepseek-flash 这种名字会把 130px 的列
-                // 撑到 200px, 顶出整表的横向滚动条。
+                // catfish-public-deepseek-flash 这种名字长得能把这一列撑开。
+                // 8/8 起 table-layout:fixed 已经从结构上不允许内容撑列了,
+                // truncate 保留 —— 它现在负责的是省略号本身。
                 truncate: true,
               },
               {
                 header: "",
                 align: "right",
-                width: 64,
+                width: "9%",
                 cell: (d) => (
                   <Link
                     to={`/admin/access/${encodeURIComponent(d.name)}`}

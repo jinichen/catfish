@@ -39,10 +39,33 @@ const TABLE: CSSProperties = {
   width: "100%",
   borderCollapse: "collapse",
   fontSize: CELL_FONT,
+  // 8/8: auto → fixed。
+  //
+  // 症状: /admin/providers 的「编辑 / 删除」两个按钮点不到 —— 它们没消失,
+  // 是被挤到了滚动区右边看不见的地方 (实测表格 1169px 塞在 940px 的框里)。
+  //
+  // 病根在下面 truncate 那段: 它靠 `max-width` 截断, 而**百分比 max-width
+  // 在 auto-layout 的 <td> 上浏览器直接忽略**。端点列写着 width:"30%" +
+  // truncate, 于是那条 71 字符的 URL 一个字都没省略、把列撑到 493px,
+  // 后面的操作列就被顶出了可视区。
+  //
+  // 这条 auto-layout 的坑 AuditBreakdowns.tsx:55 已经踩过一次, 当时的处理
+  // 是"这一列改用 px" —— 治了一列, 没治病。fixed 布局下列宽只认表头声明,
+  // 内容再长也撑不开列, truncate 才真正成立。
+  //
+  // ⚠ 换成 fixed 之后有两条硬约束 (下面 width 的注释里也写了):
+  //   1. **每列都要给 width** —— 没给的列拿的是"剩余空间", 而已声明的 px
+  //      加起来超过容器时剩余是负的, 那列会被算成 0 宽直接看不见。
+  //   2. px 之和要能塞进目标面板 —— fixed 不会替你压缩纯 px 的列。
+  tableLayout: "fixed",
 };
 const TH: CSSProperties = {
   textAlign: "left",
   padding: "4px 8px",
+  // fixed 布局下 width 是**内容宽**, 左右各 8px padding 会额外加上去 ——
+  // 声明 160 实得 176, 六列就白白多出 96px, 正好够把操作列顶出去。
+  // border-box 让声明的数字就是最终列宽, 页面那边才算得准。
+  boxSizing: "border-box",
   borderBottom: "1px solid var(--border)",
   fontSize: 11,
   fontWeight: 600,
@@ -54,6 +77,7 @@ const TH: CSSProperties = {
 };
 const TD: CSSProperties = {
   padding: "4px 8px",
+  boxSizing: "border-box", // 同 TH: 声明的 width 就是最终列宽, 不再被 padding 撑大
   borderBottom: "1px solid var(--border-soft)",
   // 7/30 三改: top → middle。
   // 列基本都截断了 (truncate), 单元格不再换行, 这时 top 会让徽章和按钮
@@ -76,15 +100,32 @@ export interface Column<T> {
   cell: (row: T, index: number) => ReactNode;
   /** 右对齐 —— 数字列该用, 不然一列数字对不齐没法扫读 */
   align?: "left" | "right";
-  /** 固定列宽, 传数字按 px。不传则按内容分配 */
+  /** 列宽。数字按 px, 也可以给 "26%"。
+   *
+   * ⚠ 表格是 `table-layout: fixed`, 所以这个值是**唯一**的列宽依据 ——
+   * 内容多长都撑不开它。两条要守的:
+   *
+   *   1. **每列都写 width**, 最多留一列不写当弹性列。不写的列分的是
+   *      "剩余空间", 已声明的加起来超过容器时剩余为负, 那列会被算成 **0 宽**
+   *      整列消失 —— 比截断严重得多。
+   *   2. **px 之和要塞得进面板** (后台内容区窄的时候约 940px)。fixed 不压缩
+   *      纯 px 的列, 超了就整表横向滚动, 最右边那列 (通常是操作列) 看不见。
+   *      塞不下就用百分比 —— 百分比是按表宽算的, 会跟着一起缩。
+   */
   width?: number | string;
   /** 不换行. 时间戳 / ID 这类断行反而更难读的内容用 */
   nowrap?: boolean;
-  /** 超长省略号截断 (默认 220px, 可用 width 调).
+  /** 超长省略号截断.
    *
    * 密集表格里最伤的是"一格换 3 行, 整行跟着变 3 倍高" —— 行高节奏一乱,
    * 表格就退化成了列表。模型显示名这类不定长内容必须截, 完整值放 title。
-   * 用的时候记得给单元格加 title, 不然截掉的部分就真没了。 */
+   * 用的时候记得给单元格加 title, 不然截掉的部分就真没了。
+   *
+   * 8/8: 截断的边界现在是**列宽本身**, 不再是单元格上的 max-width。
+   * 老写法 `max-width: c.width ?? 220` 有两个毛病: 百分比 max-width 在
+   * auto-layout 的 <td> 上被浏览器忽略 (于是长 URL 照样撑开列, 正是
+   * /admin/providers 那次的病根); 而没给 width 时那个 220 的默认值又会
+   * 比实际列宽窄, 截出一段空白。fixed 布局下列宽是硬的, 直接靠它即可。 */
   truncate?: boolean;
 }
 
@@ -141,6 +182,22 @@ export function DataTable<T>({
    * 到底是 in 还是 out 就只能靠数了 —— 而这张表有 4 个连着的数字列。 */
   fill?: boolean;
 }) {
+  // 开发期护栏 (8/8)。fixed 布局把"没写 width"从"按内容分配"变成了
+  // "分剩余空间", 剩余不够时那列直接 0 宽消失。两列以上不写 width 还会
+  // 被均分 —— 标题列跟"大小"列一样宽。两种都是肉眼一看就不对但很容易
+  // 一直没人报的样子, 所以在控制台先喊一声。
+  if (import.meta.env.DEV) {
+    const missing = columns.filter((c) => c.width == null).length;
+    if (missing > 1) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[DataTable] ${missing} 列没写 width。表格是 table-layout:fixed, ` +
+          `这些列会被**均分**剩余空间 (宽的窄的一样宽), 剩余不够时还会是 0 宽。` +
+          `最多留一列不写。表头: ${columns.map((c) => (typeof c.header === "string" ? c.header || "(空)" : "…")).join(" / ")}`,
+      );
+    }
+  }
+
   if (rows.length === 0) {
     // fill 时也要保持同一个外壳: 直接返裸 div 的话, 外面的 Section fill
     // 占满整屏而里面是个高度 auto 的小块 —— 一大片空框顶上一行灰字。
@@ -268,7 +325,9 @@ export function DataTable<T>({
                       ...(c.nowrap || c.truncate ? { whiteSpace: "nowrap" as const } : null),
                       ...(c.truncate
                         ? {
-                            maxWidth: c.width ?? 220,
+                            // maxWidth 去掉了 —— 见 Column.truncate 的说明:
+                            // fixed 布局下列宽就是硬边界, 再叠一层 max-width
+                            // 只会在"没给 width"时截得比列还窄, 留出空白。
                             overflow: "hidden",
                             textOverflow: "ellipsis",
                           }

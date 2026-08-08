@@ -118,10 +118,15 @@ export function AdminQuotaEvents() {
   // 全值始终可读; 换成截断之后, 没有 title 的话被省略号吃掉的部分就真没了
   // (DataTable 的 truncate 文档也写着这条)。
   const columns: Column<AuditEvent>[] = [
+    // 8/8: 「时间」原来没写 width。表格换成 table-layout:fixed 之后, 没写
+    // width 的列拿的是"剩余空间", 而这张表 px 之和 (1200) 本来就超过后台
+    // 内容区 (约 940) —— 剩余是负的, 实测这一列被算成 **0 宽整列消失**。
+    // 十列的审计日志本来就要横向滚, 那就让每列都有确定宽度、滚得到。
     {
       header: "时间",
       cell: (e) => new Date(e.ts * 1000).toLocaleString("zh-CN"),
       nowrap: true,
+      width: 136,
     },
     {
       header: "员工",

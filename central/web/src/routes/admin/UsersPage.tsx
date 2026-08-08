@@ -240,16 +240,19 @@ function UsersList() {
         </Link>
       ),
       truncate: true,
-      width: 240,
+      // 8/8 前五列改百分比: 表格是 table-layout:fixed, 纯 px 的列在窄窗口下
+      // 不缩, 六列 930px 塞不进 760px 的面板, 最右边那组按钮就被顶出可视区
+      // (/admin/providers 那次就是这么丢的)。百分比跟着表宽一起缩。
+      width: "26%",
     },
-    { header: "名字", cell: (u) => u.name || "-", truncate: true, width: 120 },
+    { header: "名字", cell: (u) => u.name || "-", truncate: true, width: "13%" },
     {
       header: "部门",
       cell: (u) => <span style={{ color: "var(--text-muted)" }}>{u.department || "-"}</span>,
       truncate: true,
-      width: 120,
+      width: "13%",
     },
-    { header: "Role", cell: (u) => <RoleBadge role={u.role} />, width: 90 },
+    { header: "Role", cell: (u) => <RoleBadge role={u.role} />, width: "10%" },
     {
       header: "状态",
       cell: (u) => (
@@ -260,11 +263,13 @@ function UsersList() {
           {u.must_change_password && <Badge tone="warn">待改密</Badge>}
         </span>
       ),
-      width: 150,
+      width: "16%",
     },
     {
       header: "",
       align: "right",
+      // 这一列**留 px**: 里面是「锁 / 重置密码 / 编辑 / 删」四个控件, 实测
+      // 就得 210px, 按比例缩下去按钮会互相挤掉。前五列 78% 会替它让位。
       width: 210,
       cell: (u) =>
         u.deleted_at ? null : (
