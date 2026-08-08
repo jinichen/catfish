@@ -44,21 +44,31 @@ use std::path::{Path, PathBuf};
 // P3.5.56: baked-in plugin source files
 // ─────────────────────────────────────────────
 //
-// include_str!() 编译时把 plugin 9 个 .py + 1 个 .yaml 嵌进 binary. 路径相对本 .rs 文件:
+// include_str!() 编译时把 plugin 的全部 .py + 1 个 .yaml 嵌进 binary. 路径相对本 .rs:
 //   edge/companion-app/src-tauri/src/commands/hermes_plugin.rs
 //   → ../../../../hermes-plugins/catfish-xcatfish-user/<file>
 //
-// 文件实际大小:
-//   __init__.py            15915 bytes
-//   plugin.py             102652 bytes  ← 主代码 (11+ monkey-patch)
-//   plugin.yaml              887 bytes
-//   resolver.py             2380 bytes
-//   session_registry.py     2431 bytes
-//   session_search_router.py 14287 bytes
-//   memory_router.py       22246 bytes
-//   memory_enforce.py      16556 bytes
-//   hermes_token_renewal.py 11850 bytes
-//   总计                  ~189KB 进 binary, 可接受
+// ⚠⚠ 8/9 P0: **拆出新的 sibling 模块, 必须同时加到下面这张表。**
+//
+// 事故: plugin.py 按军规拆分协议抽出了 plugin_weixin_zh / plugin_wechat_qr /
+// plugin_memory_gate 三个 sibling, 并在 plugin.py **模块级**做
+// `_import_sibling("plugin_weixin_zh")` re-export。但这张烘焙表没跟着加。
+//
+// 后果不是"新功能不生效", 是**整个 plugin 死掉**:
+//   1. Companion 启动同步 baked → ~/.hermes/plugins/ (只写表里这几个文件)
+//   2. hermes 加载 plugin → plugin.py 模块级 _import_sibling("plugin_weixin_zh")
+//   3. 三段 fallback 全落空 → `raise ImportError("plugin_weixin_zh.py 不存在")`
+//   4. plugin 加载失败 → **P1-P11 一个都没打上**
+//      (X-Catfish-User 多租户注入 / P7 proxy / CORS / picker model override)
+//
+// 8/9 在鸿波本机实测: ~/.hermes/plugins/catfish-xcatfish-user/ 只有 8 个 .py,
+// 直接 exec_module 那份已装的 plugin.py → ImportError。也就是说 8/8 19:11
+// 那次同步之后, 这个 plugin 一直是死的。
+//
+// **这条比"漏个文件"严重的地方在于失败方向**: 拆分协议本身是对的 (re-export
+// 保 import 兼容), 但这个 plugin 多一条隐藏要求 —— sibling 还得进二进制。
+// 拆的人不会想到要来改 Rust。所以下面加了 tests::baked_files_覆盖仓库里所有_py
+// 把这条钉死: 仓库里多一个 .py 而表里没有 → cargo test 红。
 //
 // 编译时若 source 缺 (catfish 仓库不全) → cargo build 报错早发现.
 const BAKED_INIT: &str =
@@ -79,8 +89,20 @@ const BAKED_MEMORY_ENFORCE: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/memory_enforce.py");
 const BAKED_HERMES_TOKEN_RENEWAL: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/hermes_token_renewal.py");
+// ── 8/9 补: plugin.py 拆出来的 sibling, 之前漏了 (见上面 P0 说明) ──
+const BAKED_PLUGIN_WEIXIN_ZH: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_weixin_zh.py");
+const BAKED_PLUGIN_WECHAT_QR: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_wechat_qr.py");
+const BAKED_PLUGIN_MEMORY_GATE: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_memory_gate.py");
+const BAKED_ACTIVITY_PROBE: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/activity_probe.py");
 
-/// Plugin 9 个文件 (filename, baked content).
+/// Plugin 的全部文件 (filename, baked content).
+///
+/// 加新文件到 `edge/hermes-plugins/catfish-xcatfish-user/*.py` 就必须加这里,
+/// 由 `tests::baked_files_覆盖仓库里所有_py` 守着。
 const BAKED_FILES: &[(&str, &str)] = &[
     ("__init__.py", BAKED_INIT),
     ("plugin.py", BAKED_PLUGIN),
@@ -91,6 +113,10 @@ const BAKED_FILES: &[(&str, &str)] = &[
     ("memory_router.py", BAKED_MEMORY_ROUTER),
     ("memory_enforce.py", BAKED_MEMORY_ENFORCE),
     ("hermes_token_renewal.py", BAKED_HERMES_TOKEN_RENEWAL),
+    ("plugin_weixin_zh.py", BAKED_PLUGIN_WEIXIN_ZH),
+    ("plugin_wechat_qr.py", BAKED_PLUGIN_WECHAT_QR),
+    ("plugin_memory_gate.py", BAKED_PLUGIN_MEMORY_GATE),
+    ("activity_probe.py", BAKED_ACTIVITY_PROBE),
 ];
 
 const PLUGIN_NAME: &str = "catfish-xcatfish-user";
@@ -561,6 +587,45 @@ mod tests {
         for (name, content) in BAKED_FILES {
             assert!(!content.is_empty(), "{} baked 内容空, include_str! 路径错?", name);
         }
+    }
+
+    /// 仓库里每个 .py 都得在 BAKED_FILES 里 —— 8/9 那次 P0 的闸。
+    ///
+    /// 漏一个的后果不是"新功能不生效": plugin.py 模块级会
+    /// `_import_sibling("<漏掉的>")`, 三段 fallback 全落空 → ImportError →
+    /// **整个 plugin 加载失败, P1-P11 一个都不打**。8/8 19:11 到 8/9 之间
+    /// 鸿波本机就是这个状态。
+    ///
+    /// 拆分协议 (抽 sibling + re-export) 本身没错, 是这个 plugin 多一条隐藏
+    /// 要求: sibling 还得进二进制。拆的人不会想到要改 Rust, 所以用测试钉住。
+    #[test]
+    fn baked_files_覆盖仓库里所有_py() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../hermes-plugins/catfish-xcatfish-user");
+        let entries = match fs::read_dir(&dir) {
+            Ok(e) => e,
+            // 只在完整 catfish 仓库里跑得动; 单独发的 crate 目录没有这层就跳过
+            Err(_) => return,
+        };
+        let baked: Vec<&str> = BAKED_FILES.iter().map(|(n, _)| *n).collect();
+        let mut missing: Vec<String> = Vec::new();
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.ends_with(".py") {
+                continue;
+            }
+            if !baked.contains(&name.as_str()) {
+                missing.push(name);
+            }
+        }
+        missing.sort();
+        assert!(
+            missing.is_empty(),
+            "这些 .py 在仓库里但没进 BAKED_FILES: {missing:?}\n\
+             → Companion 同步时不会写它们, plugin.py 的 _import_sibling 会抛 \
+             ImportError, 整个 plugin 加载失败 (P1-P11 全不打)。\n\
+             修法: 在上面加一条 include_str! 常量 + 往 BAKED_FILES 补一行。"
+        );
     }
 
     #[test]
