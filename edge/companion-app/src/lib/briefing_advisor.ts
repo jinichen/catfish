@@ -29,6 +29,7 @@ import type {
 // P3.5.202 (C 方案): TaskChatStatus 从 advisor_cache colocated with TaskChatSummary.
 import type { TaskChatStatus, TaskStatus } from "./advisor_cache";
 import { mergeTaskStatus } from "./advisor_cache";
+import { warnIfUpstreamError } from "./upstreamErrorGuard";
 
 // 跟 briefing_workplan / briefing 同款 — 不带 X-Catfish-* header, 走 query param (5/21 CORS 修)
 const SERVICE_LLM_HEADERS = { "Content-Type": "application/json" };
@@ -1289,14 +1290,10 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
     // (双层防御之一). 客户端兜底再判一次, 真 LiteLLM 私有 LLM (catfish-private-main)
     // streaming fail 时返 200 + content="API call failed after 3 retries..." 标准
     // pattern. 即使 gateway 端 detect 漏掉某变体, 这里仍能识别避免"JSON 解析失败"灰区.
-    const upstreamErrorPattern = /API call failed|after \d+ retries|during streaming|retries exhausted/i;
-    if (content.length < 500 && upstreamErrorPattern.test(content)) {
-      console.warn(
-        "[advisor] 上游 LLM 错误作 content 返 (HTTP 200 + 错误文本), 真因: 上游 LLM 服务挂. " +
-        "原文:", content.slice(0, 200),
-      );
-      return null;
-    }
+    // 8/8: 正则和阈值挪去 upstreamErrorGuard.ts 共用 —— 6/1 加这道防御时只加在
+    // 这一处, emailDraft 和 briefing 的三个调用点一直裸着, 8/8 拟稿框里就
+    // 出现了 "API call failed after 3 retries" 当草稿。别再靠人记得复制那行正则。
+    if (warnIfUpstreamError("advisor", content)) return null;
 
     // 5/22 cold start 修: 鲁棒 JSON 解析 — LLM 输出常含前后解释文字
     // (e.g. "现在我已经分析完..."), 不只 strip markdown 反引号.

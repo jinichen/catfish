@@ -43,7 +43,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::time;
 
-use crate::services::{email_config, hermes_api_config, picker_config, role_config};
+use crate::services::{email_config, hermes_api_config, picker_config, role_config, upstream_error_guard};
 // P3.3.58 (6/12 鸿波): 段 2A 集成 phishing_scan
 use crate::services::phishing_scan::{
     self, LlmReviewInput, PhishingScanResult, Severity,
@@ -723,6 +723,16 @@ async fn rate_emails(items: &[EmailItem]) -> Vec<Urgency> {
         return Vec::new();
     }
 
+    // 8/8: 冷却期内直接跳 —— 上游刚把错误当正文返过, 再敲也是白敲
+    // (而且每次经 hermes ×3)。到点自动再试, 见 upstream_error_guard.rs。
+    if let Some(left) = upstream_error_guard::cooling_down() {
+        log::info!(
+            "email_scheduler: 上游冷却中 (还剩 {}s), 本轮跳过评级, 全标 Medium",
+            left.as_secs()
+        );
+        return vec![Urgency::Medium; items.len()];
+    }
+
     match call_rate_llm(items).await {
         Ok(urgencies) if urgencies.len() == items.len() => urgencies,
         Ok(urgencies) => {
@@ -868,6 +878,15 @@ async fn call_rate_llm(items: &[EmailItem]) -> Result<Vec<Urgency>, String> {
         .first()
         .and_then(|c| c.message.content.clone())
         .unwrap_or_default();
+
+    // 8/8: 上游把错误当正文返 (HTTP 200 + "API call failed after 3 retries: ...")。
+    // 不认它的话会一路走到 parse_urgencies 报"没 JSON array", 而那条是
+    // log::debug! —— 生产 INFO 级别下永远看不见, 于是每 30 秒静默重烧一次,
+    // 每次经 hermes 还要 ×3。详见 upstream_error_guard.rs。
+    if upstream_error_guard::is_upstream_error_as_content(&content) {
+        let cd = upstream_error_guard::mark_upstream_error("email-rate", &content);
+        return Err(format!("上游返回的是一条错误, 已冷却 {}s", cd.as_secs()));
+    }
 
     parse_urgencies(&content)
 }

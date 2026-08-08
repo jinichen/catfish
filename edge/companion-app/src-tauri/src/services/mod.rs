@@ -27,5 +27,6 @@ pub mod picker_config;    // P3.5.28 (6/17 鸿波): chat picker 选的 model 桥
 pub mod role_config;      // P3.5.29 Phase 4 (6/17 鸿波): GET /v1/roles fetch + 5min cache 给 background task
 pub mod pet_status;
 pub mod process;
+pub mod upstream_error_guard; // 8/8: 上游把错误当正文返 (HTTP 200 + 错误文本) 的识别 + 冷却
 pub mod tool_bridge_rpc;  // P3.5.45 (6/20 鸿波): tool-bridge sock NDJSON RPC 公共 helper, recmode + 后续 callers 复用
 pub mod watchdog;

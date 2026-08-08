@@ -18,6 +18,7 @@
 
 import { type Personality } from "./agent";
 import { config } from "./env";
+import { warnIfUpstreamError } from "./upstreamErrorGuard";
 import { fetchWithAuth } from "./me";
 import { journalReadRecent, type CalendarEvent, type JournalTodo } from "./tauri";
 
@@ -187,6 +188,9 @@ export async function fetchBriefingSuggestion(
     const data = await resp.json();
     const content = data?.choices?.[0]?.message?.content;
     if (typeof content !== "string") return null;
+    // 8/8: 上游把错误当正文返 —— 不拦的话早安卡片上会显示一句英文报错
+    // ("API call failed after 3 retries: ...")。详见 upstreamErrorGuard.ts。
+    if (warnIfUpstreamError("briefing", content)) return null;
 
     // 清理 LLM 偶尔返的前缀 (即使 system prompt 要求不要)
     const cleaned = content
@@ -301,6 +305,9 @@ export async function fetchMergedBriefing(
     const data = await resp.json();
     const content = data?.choices?.[0]?.message?.content;
     if (typeof content !== "string") return null;
+    // 8/8: 上游把错误当正文返 —— 不拦的话早安卡片上会显示一句英文报错
+    // ("API call failed after 3 retries: ...")。详见 upstreamErrorGuard.ts。
+    if (warnIfUpstreamError("briefing", content)) return null;
 
     // 剥 markdown ``` 反引号
     const cleaned = content
@@ -471,6 +478,9 @@ export async function fetchUrgentEmailStarter(
     const data = await resp.json();
     const content = data?.choices?.[0]?.message?.content;
     if (typeof content !== "string") return null;
+    // 8/8: 上游把错误当正文返 —— 不拦的话早安卡片上会显示一句英文报错
+    // ("API call failed after 3 retries: ...")。详见 upstreamErrorGuard.ts。
+    if (warnIfUpstreamError("briefing", content)) return null;
 
     const cleaned = content
       .trim()
