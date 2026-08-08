@@ -95,6 +95,22 @@ def _get_adapter_explicit(client: str) -> EmailAdapter:
     """按客户端名字 dispatch. 每个分支 lazy import, 减少不需要的依赖。"""
     if client == "apple-mail":
         # 5/18 BL-EMAIL-APPLEMAIL: macOS Mail.app AppleScript adapter
+        #
+        # 8/8: 先探一下这台机器到底用不用 Apple Mail。
+        #
+        # 原来这里直接 `return AppleMailAdapter()` —— 构造不查任何东西, 于是
+        # `get_all_adapters()` 永远把它算进候选。在一台从来没配过 Mail.app 的机器上
+        # (`~/Library/Mail/` 下连 V* 目录都没有), 结果是每次列邮件 / 每个账号 /
+        # 每次刷新都多一条注定失败的记录, 而 Foxmail 那条路其实一直好好的。
+        # 员工看到的就是"邮件页一堆错误", 且被引导去开一个他根本没在用的客户端。
+        #
+        # 抛 DataNotFoundError 是刻意选的: get_adapter() 和 get_all_adapters() 都
+        # 已经 catch 它并 continue, 所以自动候选那条路无需改动就会跳过;
+        # 而显式 `--client apple-mail` 会拿到这条异常, 带着说清楚原因的文案 ——
+        # 想排查的人仍然问得出"为什么跳过它"。
+        from .adapters.apple_mail_probe import apple_mail_available, unavailable_reason
+        if not apple_mail_available():
+            raise DataNotFoundError(f"apple-mail 不可用: {unavailable_reason()}")
         from .adapters.apple_mail import AppleMailAdapter
         return AppleMailAdapter()
     if client == "foxmail-mac":

@@ -537,12 +537,76 @@ def test_resolve_account_name_not_found_raises():
 # ── inbox.py factory: apple-mail 注册 ───────────────────
 
 
-def test_factory_apple_mail_registered():
-    """工厂能识别 'apple-mail' 串."""
+def test_factory_apple_mail_registered(monkeypatch):
+    """工厂能识别 'apple-mail' 串.
+
+    8/8: 加了 monkeypatch。这条测的是**工厂能不能 dispatch 到这个 adapter**,
+    跟"跑测试的这台机器装没装 Mail.app"无关。而 8/8 起 `_get_adapter_explicit`
+    会先探可用性 (见 adapters/apple_mail_probe.py), 于是在 CI / 没配 Mail.app 的
+    开发机上它会抛 DataNotFoundError —— 测试跟着红, 但红的不是它要保的东西。
+
+    把探测钉成 True, 让这条回到它原本的意图上。可用性本身由
+    test_apple_mail_probe.py 单独覆盖。
+    """
+    monkeypatch.setattr(
+        "catfish_email.adapters.apple_mail_probe.apple_mail_available",
+        lambda: True,
+    )
     from catfish_email.inbox import _get_adapter_explicit
     adapter = _get_adapter_explicit("apple-mail")
     assert adapter.name == "apple_mail"
     assert adapter.supports_drafts is True
+
+
+def test_factory_apple_mail_跳过_当这台机器没在用它(monkeypatch):
+    """探测说不可用 → 抛 DataNotFoundError, 且文案要说清楚原因.
+
+    抛这个类型是刻意的: get_adapter() / get_all_adapters() 都已经 catch
+    DataNotFoundError 并 continue, 所以自动候选那条路会**静默跳过**它 ——
+    这正是要的效果 (Foxmail 单干的机器上不再有 apple_mail 的噪音)。
+    """
+    import pytest
+    from catfish_email.adapters.base import DataNotFoundError
+    monkeypatch.setattr(
+        "catfish_email.adapters.apple_mail_probe.apple_mail_available",
+        lambda: False,
+    )
+    from catfish_email.inbox import _get_adapter_explicit
+    with pytest.raises(DataNotFoundError) as ei:
+        _get_adapter_explicit("apple-mail")
+    # 显式指定时要问得出"为什么跳过", 不能只说"不可用"
+    assert "apple-mail 不可用" in str(ei.value)
+
+
+def test_自动候选里_apple_mail_不可用时不阻塞_foxmail(monkeypatch):
+    """8/8 鸿波实撞: Foxmail 好好的, 邮件页却一堆 apple_mail 的错误.
+
+    这条钉的是那个行为: apple-mail 探测不过时, get_all_adapters() 要**安静地**
+    只返回 Foxmail, 而不是把一个注定失败的 adapter 塞进候选让它每次调用都报错。
+    """
+    monkeypatch.setattr(
+        "catfish_email.adapters.apple_mail_probe.apple_mail_available",
+        lambda: False,
+    )
+    import platform
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
+
+    # Foxmail 装了的情形: 让它的构造成功, 返一个占位对象
+    class _FakeFoxmail:
+        name = "foxmail_mac"
+
+    import catfish_email.inbox as inbox
+    real = inbox._get_adapter_explicit
+
+    def fake(client):
+        if client == "foxmail-mac":
+            return _FakeFoxmail()
+        return real(client)
+
+    monkeypatch.setattr(inbox, "_get_adapter_explicit", fake)
+    adapters = inbox.get_all_adapters()
+    names = [a.name for a in adapters]
+    assert names == ["foxmail_mac"], f"apple_mail 不该在里面: {names}"
 
 
 def test_factory_outlook_mac_alias_to_apple_mail():
