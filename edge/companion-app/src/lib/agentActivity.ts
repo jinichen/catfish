@@ -91,7 +91,19 @@ export async function fetchAgentActivity(): Promise<AgentActivityResult> {
     // 这里挂 AbortSignal 是安全的 —— 跟 advisor 主请求不同, 探针中断了没有
     // 任何副作用, 下一轮 3 秒后再来。advisor 那边不挂是因为 Tauri 失焦会
     // abort in-flight fetch, 中断会丢掉真结果 (5/21)。
-    const resp = await fetchWithAuth(url, { method: "GET", signal: ctl.signal });
+    // skipReauth: **后台探针绝不能把员工拽去登录页。**
+    //
+    // 8/9 实撞: 这个端点被 me.ts 的 "含 /api/ 就是 gateway" 规则判错, 拿 OAuth
+    // JWT 去撞 hermes _check_auth → 401 → invoke("auth_login") → 弹浏览器登录页,
+    // 而这里 3 秒一轮 → 登录页一遍遍弹, 而且看起来跟"进度显示"毫无关系。
+    //
+    // 路由那条已经在 me.ts 的 HERMES_OWNED_API_PREFIXES 修了。这里再加一道:
+    // 无论以后因为什么原因 401, 一个静默轮询都不该有资格打断员工。
+    const resp = await fetchWithAuth(
+      url,
+      { method: "GET", signal: ctl.signal },
+      { skipReauth: true },
+    );
     if (!resp.ok) {
       return { available: false, reason: `http_${resp.status}`, turns: [] };
     }

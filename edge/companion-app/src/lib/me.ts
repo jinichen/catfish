@@ -131,6 +131,23 @@ export async function getToken(): Promise<string> {
  *   - 429 quota (各 caller 有 friendly msg)
  *   - 网络断 (caller catch)
  */
+/** hermes **自己**的 /api/* 端点前缀 —— 这些走 API_SERVER_KEY, 不是 OAuth JWT。
+ *
+ * 默认规则是"含 /api/ 就当 catfish-gateway 8999 的, 用 OAuth JWT"。凡是注册在
+ * hermes 8642 上、由 `APIServerAdapter._check_auth` 鉴权的端点, 都必须列在这里,
+ * 否则会拿错凭据 → 401 → 触发 auth_login → **反复弹登录页**。
+ *
+ * 已经踩过两次:
+ *   7/8  P3.5.198.b  /api/platforms/*  (微信扫码绑定, 每次点都被踢去 IdP)
+ *   8/9  P44         /api/catfish/*    (进度探针 3 秒一轮, 登录页一遍遍弹)
+ *
+ * 加 hermes 端点时**先来这里加一行**。判据: 这个 URL 打到 8642 还是 8999?
+ */
+export const HERMES_OWNED_API_PREFIXES = [
+  "/api/platforms/",
+  "/api/catfish/",
+] as const;
+
 export async function fetchWithAuth(
   input: RequestInfo | URL,
   init?: RequestInit,
@@ -190,8 +207,19 @@ export async function fetchWithAuth(
   //
   // 同时修 UX: 老逻辑 → OAuth 401 → 触发 invoke("auth_login") 弹浏览器登录页,
   // 员工每次点 "微信扫码绑定" 都被踢去 IdP, 那个"要求网页再登录"就是这里.
+  // 8/9 P44 又踩一次同样的坑, 这次代价是**反复弹登录页**:
+  //   新端点 /api/catfish/agent-activity 注册在 hermes 8642 上, 走
+  //   adapter._check_auth (要 API_SERVER_KEY)。但它含 "/api/" 且不是
+  //   "/api/platforms/" → 判成 gateway direct → 拿 OAuth JWT 去撞 hermes
+  //   _check_auth → 401 → invoke("auth_login") → 浏览器登录页。
+  //   而那个探针**每 3 秒轮询一次**, 于是登录页一遍遍弹。
+  //
+  // 教训: "/api/ 一律算 gateway" 这条默认规则, 每加一个 hermes 自己的
+  // /api/* 端点就要来这里补一次, 而漏补的表现是"莫名其妙要求重新登录",
+  // 离真因非常远。所以把 hermes 独占的前缀提成命名常量, 加端点时看得见。
   const isGatewayDirectPath =
-    (url.includes("/api/") && !url.includes("/api/platforms/")) ||
+    (url.includes("/api/") &&
+      !HERMES_OWNED_API_PREFIXES.some((p) => url.includes(p))) ||
     url.includes("/v1/catalog") ||
     url.includes("/v1/hub/") ||
     url.includes("/v1/wiki/") ||

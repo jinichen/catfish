@@ -62,6 +62,15 @@ describe("fetchAgentActivity", () => {
     expect((await fetchAgentActivity()).reason).toBe("bad_shape");
   });
 
+  it("必须传 skipReauth —— 后台探针不许把员工拽去登录页", async () => {
+    // 8/9 实撞的形状: 401 → invoke("auth_login") → 弹浏览器登录页, 而这里
+    // 3 秒一轮。路由已在 me.ts 修, 这条钉住第二道防线别被顺手删掉。
+    fetchWithAuth.mockResolvedValue(okResponse({ available: true, turns: [] }));
+    await fetchAgentActivity();
+    const opts = fetchWithAuth.mock.calls[0][2] as { skipReauth?: boolean };
+    expect(opts?.skipReauth).toBe(true);
+  });
+
   it("hermes 说没有正在跑的 turn ≠ 我们够不着 hermes", async () => {
     fetchWithAuth.mockResolvedValue(
       okResponse({ available: false, reason: "no_running_turn", turns: [] }),

@@ -157,6 +157,50 @@ describe("fetchWithAuth — hermes 路径 (useHermes=true)", () => {
     expect(cmdsCalled).not.toContain("auth_get_access_token");
   });
 
+  // 8/9 P44 回归: /api/catfish/* 是 hermes 自己的端点 (注册在 8642, 走
+  // adapter._check_auth 要 API_SERVER_KEY)。默认规则"含 /api/ 就是 gateway"
+  // 会让它拿 OAuth JWT → 401 → auth_login → **反复弹登录页**。
+  // 这条钉住它走 hermes path。
+  it("/api/catfish/* 走 hermes 静态 key，不拿 OAuth JWT（否则会反复弹登录页）", async () => {
+    config.useHermes = true;
+    config.hermesAuthHeader = "Bearer hermes-static-key-abc";
+    config.backendUrl = "http://localhost:8642";
+
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "auth_whoami") {
+        return { authenticated: true, email: "alice@catfish.dev" };
+      }
+      throw new Error(`unexpected invoke: ${cmd}`);
+    });
+    const { calls } = setProxyMock(() => jsonResp(200, { available: false, turns: [] }));
+
+    const resp = await fetchWithAuth(`${config.backendUrl}/api/catfish/agent-activity`);
+    expect(resp.status).toBe(200);
+    expect(calls[0].headers["authorization"]).toBe("Bearer hermes-static-key-abc");
+
+    const cmdsCalled = invokeMock.mock.calls.map((c) => c[0]);
+    expect(cmdsCalled).not.toContain("auth_login");
+    expect(cmdsCalled).not.toContain("auth_get_access_token");
+  });
+
+  it("普通 /api/* 仍走 gateway OAuth —— 别把上面那条修过头", async () => {
+    config.useHermes = true;
+    config.hermesAuthHeader = "Bearer hermes-static-key-abc";
+    config.backendUrl = "http://localhost:8642";
+
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "auth_get_access_token") return "oauth-jwt-token";
+      if (cmd === "auth_whoami") {
+        return { authenticated: true, email: "alice@catfish.dev" };
+      }
+      throw new Error(`unexpected invoke: ${cmd}`);
+    });
+    const { calls } = setProxyMock(() => jsonResp(200, { ok: true }));
+
+    await fetchWithAuth(`${config.backendUrl}/api/quota/me`);
+    expect(calls[0].headers["authorization"]).toBe("Bearer oauth-jwt-token");
+  });
+
   it("auth_whoami 失败 (没登录) → 不带 X-Catfish-User, Authorization 仍带", async () => {
     config.useHermes = true;
     config.hermesAuthHeader = "Bearer hermes-key-xyz";
