@@ -411,20 +411,6 @@ export default function EmailTab() {
             <strong style={{ fontSize: 14 }}>邮件</strong>
             <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginLeft: 4 }}>
               {headerSummary}
-              {/* 见上面 mailDirBlocked 那段: 少账号是权限问题, 不说员工查不出来 */}
-              {mailDirBlocked && (
-                <span
-                  style={{ color: "var(--catfish-hint-amber-text)", marginLeft: 6, cursor: "help" }}
-                  title={
-                    "Apple Mail 里的邮箱读不到 —— 缺「完全磁盘访问权限」。\n" +
-                    "系统设置 → 隐私与安全性 → 完全磁盘访问权限 → 打开「鲶鱼 Companion」,\n" +
-                    "然后重启 Companion。\n\n" +
-                    "不授权也能用, 只是 Apple Mail 的账号不会出现在这里 (Foxmail 不受影响)。"
-                  }
-                >
-                  ⚠ 少账号?
-                </span>
-              )}
             </span>
             <button
               type="button"
@@ -490,6 +476,37 @@ export default function EmailTab() {
               <span style={{ color: "var(--catfish-text-muted)" }}>仅未读</span>
             </label>
           </div>
+
+          {/* 缺完全磁盘访问权限的提示 —— **独占一行, 不能塞进上面 header**。
+            *
+            * 8/8 我第一版把它做成 header 概要后面的一个 "⚠ 少账号?" chip, 当场把
+            * 标题挤成竖排的"邮"↵"件"。而这个坑文件里就记着 (P3.5.204.f):
+            * 左栏 340px 硬编码, header 那一行塞 邮件 + 概要 + 新建 + 收信中…
+            * 已经是临界的, 上次为了腾 28px 才把 📧 图标删掉 —— 我转手加了 5 个字回去。
+            *
+            * 独占一行还有个好处: 说得下人话。chip 只能塞四五个字, 员工看不懂要做什么。 */}
+          {mailDirBlocked && (
+            <div
+              style={{
+                fontSize: 11,
+                lineHeight: 1.5,
+                color: "var(--catfish-hint-amber-text)",
+                background: "var(--catfish-hint-amber-bg)",
+                border: "1px solid var(--catfish-hint-amber-border)",
+                borderRadius: "var(--radius-sm)",
+                padding: "6px 8px",
+                marginBottom: 6,
+              }}
+            >
+              ⚠ 有邮箱账号读不到 —— 缺「完全磁盘访问权限」。
+              <br />
+              系统设置 → 隐私与安全性 → 完全磁盘访问权限 → 打开「鲶鱼 Companion」→ 重启。
+              <br />
+              <span style={{ opacity: 0.8 }}>
+                注: 每次重装 Companion 都要重授一次 (app 还没做代码签名, 系统当成新程序)。
+              </span>
+            </div>
+          )}
           {/* 搜索框 — 前端 filter 主题/发件人/账号 */}
           <input
             type="search"
