@@ -24,6 +24,23 @@ export default function BriefingTab() {
         padding: "var(--space-2) var(--space-3)",
         width: "100%",
         boxSizing: "border-box",
+        // 8/8 (鸿波 catch '右边内容区底部空间太大'): 把父容器算好的高度传下去。
+        //
+        // 这一层以前没有高度, 于是最里面的 .briefing-2col 只能自己去猜
+        // `calc(100vh - 130px)` —— 那个数字在 6/18 已经从 200 调到过 130,
+        // 每次上面加一行、改一次 padding 都会重新对不上, 而且只会**偏保守**
+        // (少了会溢出被 overflow:hidden 剪掉, 没人敢往大调), 所以底部一直空一截。
+        //
+        // 现在的做法: main.app-workspace__main--locked 已经是 flex:1 + min-height:0,
+        // 高度本来就是准的; 这一层和下面两层只负责把它原样传下去, 到
+        // .briefing-2col 用 flex:1 吃满。链路上任何一环加内容都自动重算, 不用再调数字。
+        //
+        // min-height: 0 不能省 —— flex item 默认 min-height:auto, 不写的话子元素
+        // 撑高时它不肯缩, 内部的 overflow 滚动条就失效, 变成整页被撑长。
+        height: "100%",
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
       }}
     >
       <BriefingCard />

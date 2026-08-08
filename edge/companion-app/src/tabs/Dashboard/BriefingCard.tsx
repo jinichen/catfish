@@ -47,7 +47,15 @@ export default function BriefingCard() {
         //   跟 BriefingTab outer container 双层 framing, 双侧大量浪费.
         //   改: 砍 bg + border, 让内容直接在 tab bg 上显. 留小 padding 防边贴边.
         padding: "var(--space-2)",
-        alignSelf: "start",
+        // 8/8: 高度传递链的第二环, 见 BriefingTab 那段注释。
+        //
+        // 同时删掉了 `alignSelf: "start"` —— 它以前是 no-op (父容器那时不是 flex),
+        // 现在父容器改成 flex column 之后它会**主动阻止拉伸**, 正好把这次的修复
+        // 抵消掉。这种"以前无害、别处一改就变成 bug"的属性, 留着比删掉危险。
+        flex: 1,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
       }}
     >
       <header

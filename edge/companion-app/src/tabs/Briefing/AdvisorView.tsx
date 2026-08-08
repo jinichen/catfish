@@ -480,7 +480,17 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
   }
 
   return (
-    <div style={{ marginTop: "var(--space-4)" }}>
+    <div
+      style={{
+        marginTop: "var(--space-4)",
+        // 8/8: 高度传递链的最后一环, 见 BriefingTab 那段注释。
+        // 下面 BriefingTwoColumnView 的 .briefing-2col 用 flex:1 吃满这里。
+        flex: 1,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
       {/* P3.5.32.3 (6/18 鸿波 catch): ConfidenceHint banner 砍.
        *  真因 1: '已识别: mid / 合规优先 / 8 关键人 / 5 项目' — 数据自夸, 0 actionable.
        *  真因 2: '置信度 55%, 继续用会更准' — hedge disclaimer 摆烂感.

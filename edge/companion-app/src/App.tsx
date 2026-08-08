@@ -260,7 +260,10 @@ function AppShell({ activeTab }: { activeTab: string }) {
         <DevUserSwitcher />
         <main className="app-main">
           {/* BL-CONSOLE-TAB-KILL (5/16): {activeTab === "console" && <ConsoleTab />} */}
-          {activeTab === "briefing" && <BriefingTab />}
+          {/* 8/8: 这里原来还有一行 `{activeTab === "briefing" && <BriefingTab />}` —— 死代码。
+              上面第 237 行 `if (activeTab === "chat" || activeTab === "briefing")` 已经提前
+              return 了, briefing 永远走不到这条分支。留着的害处是会让人以为早安页有两条
+              渲染路径, 改布局时两边都得顾 —— 这次查"底部空间"就先在这上面绕了一圈。 */}
           {activeTab === "dashboard" && <DashboardTab />}
           {activeTab === "email" && <EmailTab />}
           {activeTab === "wiki" && <WikiTab />}

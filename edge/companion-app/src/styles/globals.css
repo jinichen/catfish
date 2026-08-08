@@ -2405,25 +2405,38 @@ button {
   grid-template-columns: 220px 1fr;
   gap: 16px;
   margin-top: 12px;
-  /* P3.5.32.9 (6/18 鸿波 catch '内容区高度可不可以高一些, 提高利用率'):
-   *   老 calc(100vh - 200px) 真过悲观, audit 实际开销:
-   *   - TabBar ~52px
-   *   - AuthBanner 平时 0 (只在没 token 显)
-   *   - BriefingTab padding (top+bottom) ~16px
-   *   - BriefingCard padding (top+bottom) ~16px
-   *   - BriefingCard header 一行 ~24px + marginBottom 12px = ~36px
-   *   - briefing-2col margin-top: 12px
-   *   合计 ~132px, 调成 130px. P3.5.32.8 砍卡片外框 + P3.5.32.9 砍 RefreshInfo
-   *   独立一行 (挪到 header 跟刷新按钮并行) 一共省下 ~70px 给内容. */
-  height: calc(100vh - 130px);
-  min-height: 400px;
+  /* 8/8 (鸿波 catch '右边内容区底部空间太大, 利用率太低'): 不再自己算高度。
+   *
+   * 历史: 6/18 因为同一个抱怨, 把 calc(100vh - 200px) 调成了 calc(100vh - 130px),
+   * 附了一份手工 audit (TabBar 52 + padding 16 + 16 + header 36 + margin 12 ≈ 132)。
+   * 那份账当时是对的, 但**它是一份会过期的账** —— 上面任何一层加一行、改一次
+   * padding、多一个 banner, 这个数字就重新对不上, 而且只会往保守的方向错:
+   * 减多了底部空一截 (现在这样), 减少了内容被 overflow:hidden 剪掉。没人敢往大调,
+   * 所以它天然会一直偏小。
+   *
+   * 改成让高度自己流下来: main.app-workspace__main--locked 是 flex:1 + min-height:0,
+   * 它的高度本来就准。BriefingTab / BriefingCard / AdvisorView 三层 wrapper 现在
+   * 都是 flex column + min-height:0, 只负责原样传递, 这里 flex:1 吃满。
+   * 上面再加东西也不用回来改数字。
+   *
+   * min-height 从 400px 改成 0: flex item 默认 min-height:auto, 不显式归零的话
+   * 子元素撑高时它不肯缩, sidebar / chat-thread 各自的 overflow-y 就失效,
+   * 变成整块被撑长再被祖先剪掉 —— 正是这个布局最早要避免的问题。 */
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 @media (max-width: 720px) {
   .briefing-2col {
     grid-template-columns: 1fr;
-    height: auto;       /* 窄屏 stack, 走外层 scroll */
-    overflow: visible;
+    /* 窄屏 stack: 不再吃满父高, 让内容自然堆叠, 这一层自己滚。
+     * 8/8: 老写法是 height:auto + overflow:visible, 指望"走外层 scroll" ——
+     * 但外层是 .app-workspace__main--locked (overflow:hidden), 根本没有外层
+     * scroll 可走, 窄屏下超出的部分是被直接剪掉的。既然这一层已经有确定的
+     * 高度可用, 就在这里滚。 */
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
   }
 }
 .briefing-2col__empty {
