@@ -48,6 +48,7 @@ import {
   fetchRole,
 } from "../../../lib/tauri";
 import { draftEmailReply } from "../../../lib/emailDraft";
+import { buildDraftContext } from "../../../lib/emailDraftContext";
 import { type Personality } from "../../../lib/agent";
 
 export interface ComposeOriginalMessage {
@@ -80,6 +81,7 @@ export interface ComposeCoreProps {
 
   /** 拟稿真原邮件 context. null = 新建场景 → 拟稿按钮禁用 */
   originalMessage?: ComposeOriginalMessage | null;
+
 
   /** agent 名字 / 人格 (拟稿真 prompt 用) */
   agentName: string;
@@ -125,6 +127,10 @@ export default function ComposeCore({
   const [draftingLlm, setDraftingLlm] = useState(false);
   const [draftLlmError, setDraftLlmError] = useState<string | null>(null);
   const [draftLlmDone, setDraftLlmDone] = useState(false); // 拟过一次 → 按钮变"🔄 重拟"
+  // 8/6: 这次拟稿参考了哪几篇本地资料, 显给员工看 (空 = 没检索到, 只喂了这一封)
+  const [draftCtxNote, setDraftCtxNote] = useState("");
+  // 8/7: 429 退避重试时的进度提示, 免得员工干等以为卡死
+  const [draftRetry, setDraftRetry] = useState("");
 
   // 3s 自动取消 send confirm (抽自 DetailPane 相同逻辑)
   useEffect(() => {
@@ -190,15 +196,43 @@ export default function ComposeCore({
         }
         model = roleModel;
       }
-      const result = await draftEmailReply({
-        sender: originalMessage.sender,
-        subject: originalMessage.subject,
-        date: originalMessage.date,
-        bodyText: originalMessage.bodyText,
-        agentName,
-        personality: agentPersonality,
-        model,
-      });
+      // 8/6: 先从本地 wiki 捞背景 (见 emailDraftContext.ts —— 为什么是 wiki
+      // 而不是历史邮件, 那里有完整说明). 捞不到不阻塞拟稿.
+      let context;
+      let ctxNote = "";
+      try {
+        const ctx = await buildDraftContext(originalMessage.sender);
+        if (ctx.items.length) {
+          context = ctx.items;
+          ctxNote = `已参考 ${ctx.items.length} 篇本地资料: ${ctx.items
+            .map((c) => c.title)
+            .join(" · ")}`;
+        }
+      } catch {
+        /* 捞背景失败 → 退回只喂这一封, 不打断 */
+      }
+      setDraftCtxNote(ctxNote);
+
+      setDraftRetry("");
+      const result = await draftEmailReply(
+        {
+          sender: originalMessage.sender,
+          subject: originalMessage.subject,
+          date: originalMessage.date,
+          bodyText: originalMessage.bodyText,
+          context,
+          agentName,
+          personality: agentPersonality,
+          model,
+        },
+        (attempt, total, status) =>
+          setDraftRetry(
+            status === 429
+              ? `模型正忙, 重试中 (${attempt}/${total})…`
+              : `连接不稳, 重试中 (${attempt}/${total})…`,
+          ),
+      );
+      setDraftRetry("");
       if (!result.ok || !result.body) {
         setDraftLlmError(result.error || "未知错误");
         return;
@@ -415,6 +449,20 @@ export default function ComposeCore({
         {draftLlmError && (
           <span style={{ fontSize: 11, color: "rgb(220, 80, 60)" }}>
             ✗ 拟稿失败: {draftLlmError}
+          </span>
+        )}
+        {draftRetry && (
+          <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
+            ⏳ {draftRetry}
+          </span>
+        )}
+        {/* 8/6: 让员工看得见这次拟稿到底参考了什么 —— 不显的话"读了资料"
+            跟"没读"在界面上完全一样, 出问题也无从判断.
+            8/7: 去掉 !draftLlmError 条件 —— 原来 LLM 失败就把这行藏了,
+            于是 429 那次根本看不出检索成没成, 白丢一条诊断信息. */}
+        {draftCtxNote && (
+          <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
+            📎 {draftCtxNote}
           </span>
         )}
       </div>

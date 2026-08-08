@@ -77,6 +77,7 @@ function CollapsibleAddresses({ addrs, previewN = 3 }: { addrs: string[]; previe
 function DetailPane({
   msg,
   list,
+  repliedPool,
   onAskCatfish,
   onDeleted,
 }: {
@@ -84,11 +85,21 @@ function DetailPane({
   // P3.5.58 (6/22 鸿波): 全 list 传进来给 isReplied 算法用. 算"当前邮件
   // 是否已被回复"必须扫整 list 找 in_reply_to/references 命中.
   list: EmailDigestItem[];
+  /** 8/6: 含 Sent 的候选池, 只给 isReplied 用.
+   *  跟 list 分开是因为 list 只有 Inbox —— 见下面 replyStatus 的注释. */
+  repliedPool?: EmailDigestItem[];
   onAskCatfish: (m: FullMessage) => void;
   onDeleted: () => void;  // 5/18 BL-EMAIL-DELETE: 删除成功 → 父组件移除 item
 }) {
   // P3.5.58: 算已回复状态. msg / list 任一变即重算 (useMemo 兜 O(N) 性能).
-  const replyStatus = useMemo(() => isReplied(msg, list), [msg, list]);
+  //
+  // ★ 8/6 修 bug: 原来用的是 list (只有 Inbox). 员工的回信在 Sent, 不在 Inbox
+  // → isReplied 永远匹配不到 → **详情页的「已回复」提示从来没亮过**。
+  // 这跟 P3.5.204.b 修的 ListItem 角标是同一个病: 7/9 那次在 EmailTab 里用
+  // items.concat(sentItems) 修好了列表, 但传给 DetailPane 的还是 items, 漏了这处。
+  // 现在优先用 repliedPool (含 Sent), 没传才退回 list.
+  const replySource = repliedPool && repliedPool.length ? repliedPool : list;
+  const replyStatus = useMemo(() => isReplied(msg, replySource), [msg, replySource]);
   // P3.5.158 (7/2): 保留 draftResult/draftError 显 header 附近保存草稿成功/失败提示,
   // ComposeCore 走 onSaveDraftSuccess callback 通知这个 state.
   const [draftResult, setDraftResult] = useState<string | null>(null);

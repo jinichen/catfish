@@ -174,8 +174,6 @@ pub async fn email_list_fetch(
 /// 客户端一致). Companion 点开邮件 → catfish-email read → Mail.app/Foxmail
 /// 那侧的 read status 也跟着翻 → 用户下次回到客户端看到已读. 返回的 JSON
 /// is_read 字段也会反映新状态, 前端可乐观更新列表.
-/// 如果用户想"窥视但不标记", 走单独的 hermes prompt 让 LLM 解释为啥, 这里不
-/// 提供 --no-mark-read 开关 (Companion 是面向用户的客户端, 点了就是看了).
 #[tauri::command]
 pub async fn email_read_message(id: String) -> Result<String, String> {
     let bin = find_catfish_email().ok_or_else(|| {

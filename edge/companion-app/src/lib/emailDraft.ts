@@ -15,6 +15,7 @@
 import { type Personality } from "./agent";
 import { config } from "./env";
 import { fetchWithAuth } from "./me";
+import { warnIfUpstreamError } from "./upstreamErrorGuard";
 
 const SERVICE_LLM_HEADERS = {
   "Content-Type": "application/json",
@@ -26,7 +27,53 @@ const SERVICE_LLM_HEADERS = {
 // 节 token, 跟 briefing 同款).
 const SERVICE_LLM_QUERY = "?catfish_source=companion-email-draft&catfish_skip_identity=1";
 
+/** 单次尝试的超时。总耗时最坏 = 3 × 30s + 退避 14s。 */
 const DRAFT_TIMEOUT_MS = 30_000;
+
+/** 429 退避重试 (8/7 鸿波实盘).
+ *
+ *  现象: 点拟稿报
+ *    `LLM 调用失败 (429): {"error":{"message":"Too many concurrent runs (max 10)",…}}`
+ *
+ *  查 outbound_log.db: **没有泄漏的挂起请求 (0 条 ts_response 为空)**, 而且
+ *    13:54:04 status=429  ← 这次
+ *    13:54:25 status=200  ← 21 秒后同一条路就通了
+ *  说明是上游 provider 的**瞬时**并发闸 (gateway 原样透传), 不是故障。
+ *
+ *  原来一次 429 就把 provider 的原始 JSON 甩给员工, 既没重试也看不懂。
+ */
+const RETRY_BACKOFF_MS = [4_000, 10_000];
+
+/** 这些状态码值得重试: 429 限流 + 5xx 网关抖动。4xx 其余是请求本身有问题, 重试没用。 */
+function _retryable(status: number): boolean {
+  return status === 429 || status === 502 || status === 503 || status === 504;
+}
+
+/** 把 provider 返的错误体翻成人话。
+ *
+ *  上游给的是 `{"error":{"message":"…","type":"rate_limit_error","code":"…"}}`,
+ *  直接贴给员工既长又看不懂。 */
+function _humanError(status: number, raw: string): string {
+  let msg = "";
+  try {
+    const j = JSON.parse(raw);
+    msg = j?.error?.message || j?.message || "";
+  } catch {
+    msg = raw.slice(0, 160);
+  }
+  if (status === 429) {
+    return `模型正忙 (并发已满), 重试几次仍不通。稍等一会儿再点一次${msg ? ` —— ${msg}` : ""}`;
+  }
+  if (status >= 500) {
+    return `网关或模型端出错 (${status})${msg ? `: ${msg}` : ""}`;
+  }
+  if (status === 401 || status === 403) {
+    return `没有调用权限 (${status}) —— 检查 gateway 的 token 配置`;
+  }
+  return `LLM 调用失败 (${status})${msg ? `: ${msg}` : ""}`;
+}
+
+const _sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function _personalityHint(p: Personality | undefined): string {
   switch (p) {
@@ -51,7 +98,36 @@ ${_personalityHint(personality)}
 - 用员工第一人称 ("我", 不要"我们"代员工说话).
 - 不知道细节就用 [TODO: 这里待员工补充 X] 占位, 不要瞎编事实/数字/日期.
 - 中文邮件用中文回, 英文邮件用英文回.
-- 长度看原邮件复杂度: 简单确认 1-3 行, 实质回复 5-10 行, 不要超过 15 行.`;
+- 长度看原邮件复杂度: 简单确认 1-3 行, 实质回复 5-10 行, 不要超过 15 行.
+- 给了「你已知的背景」就先读完再动笔: 已经答应过的别再答应一遍, 对方已经给过的
+  信息不要当作未知去问, 还欠对方或欠自己的事该提就提.
+- 背景来自员工本地知识库, 可能过时。跟原邮件冲突时以原邮件为准, 不确定就用 [TODO] 占位.`;
+}
+
+/** 拟稿参考的一条本地知识 —— 来自 catfish wiki (entities / concepts)。 */
+export interface DraftContextItem {
+  title: string;
+  /** wiki 相对路径, 显给员工看「参考了哪几篇」 */
+  relPath: string;
+  /** 正文 (frontmatter 已剥) */
+  body: string;
+}
+
+/** 单条参考的截断上限。wiki 页本来就短 (实测 300–1100 字), 主要防异常长页。 */
+const CONTEXT_BODY_LIMIT = 1200;
+
+function _renderContext(items: DraftContextItem[]): string {
+  if (!items.length) return "";
+  const blocks = items.map((c, i) => {
+    const body = c.body.slice(0, CONTEXT_BODY_LIMIT);
+    const cut = c.body.length > CONTEXT_BODY_LIMIT ? "…(略)" : "";
+    return `【${i + 1}】${c.title}\n${body}${cut}`;
+  });
+  return (
+    `你已知的背景 (来自员工本地知识库, 共 ${items.length} 条):\n\n` +
+    blocks.join("\n\n---\n\n") +
+    `\n\n════════\n\n`
+  );
 }
 
 function _buildUserPrompt(opts: {
@@ -59,13 +135,15 @@ function _buildUserPrompt(opts: {
   subject: string;
   date: string;
   bodyText: string;
+  context?: DraftContextItem[];
 }): string {
   // 复用 EmailTab.handleAskCatfish 模板, 但末句改"直接给草稿"
   const { sender, subject, date, bodyText } = opts;
   const snippet = bodyText.slice(0, 1500);
   const truncated = bodyText.length > 1500 ? "…(原邮件过长, 已截 1500 字)" : "";
   return (
-    `这封邮件:\n` +
+    _renderContext(opts.context || []) +
+    `要回的是这封:\n` +
     `- 发件人: ${sender}\n` +
     `- 主题: ${subject}\n` +
     `- 时间: ${date}\n\n` +
@@ -79,6 +157,8 @@ export interface DraftEmailReplyInput {
   subject: string;
   date: string;
   bodyText: string;
+  /** 本地知识库里跟这封邮件相关的背景。空/省略 = 只喂这一封。 */
+  context?: DraftContextItem[];
   agentName: string;
   personality?: Personality;
   model: string;
@@ -92,11 +172,15 @@ export interface DraftEmailReplyResult {
   error?: string;
 }
 
-/** 调 catfish-gateway 一次性 LLM call 起邮件回复草稿. 30s timeout.
+/** 调 catfish-gateway 一次性 LLM call 起邮件回复草稿。
  *
- *  返 {ok: true, body: "..."} 或 {ok: false, error: "..."}. 调用方 toast 显错.
+ *  429 / 5xx 会退避重试 (见 RETRY_BACKOFF_MS)。返 {ok, body} 或 {ok:false, error}。
+ *  `onRetry` 可选, 让 UI 显「限流, 重试中 (2/3)」而不是干等。
  */
-export async function draftEmailReply(input: DraftEmailReplyInput): Promise<DraftEmailReplyResult> {
+export async function draftEmailReply(
+  input: DraftEmailReplyInput,
+  onRetry?: (attempt: number, total: number, status: number) => void,
+): Promise<DraftEmailReplyResult> {
   if (!input.bodyText.trim()) {
     return { ok: false, error: "原邮件正文为空, 没法拟稿" };
   }
@@ -107,63 +191,93 @@ export async function draftEmailReply(input: DraftEmailReplyInput): Promise<Draf
     subject: input.subject,
     date: input.date,
     bodyText: input.bodyText,
+    context: input.context,
   });
 
   const url = `${config.backendUrl}/v1/chat/completions${SERVICE_LLM_QUERY}`;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), DRAFT_TIMEOUT_MS);
+  const body = JSON.stringify({
+    model: input.model,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+    max_tokens: 600,
+    temperature: 0.6,
+    stream: false,
+  });
 
-  try {
-    const resp = await fetchWithAuth(url, {
-      method: "POST",
-      headers: SERVICE_LLM_HEADERS,
-      body: JSON.stringify({
-        model: input.model,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        max_tokens: 600,
-        temperature: 0.6,
-        stream: false,
-      }),
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
+  const total = RETRY_BACKOFF_MS.length + 1;
+  let lastErr = "未知错误";
 
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      return {
-        ok: false,
-        error: `LLM 调用失败 (${resp.status}): ${text.slice(0, 200) || resp.statusText}`,
-      };
-    }
-    const data = await resp.json();
-    const content = data?.choices?.[0]?.message?.content;
-    if (typeof content !== "string" || !content.trim()) {
-      return { ok: false, error: "LLM 返回为空" };
-    }
+  for (let attempt = 0; attempt < total; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), DRAFT_TIMEOUT_MS);
+    try {
+      const resp = await fetchWithAuth(url, {
+        method: "POST",
+        headers: SERVICE_LLM_HEADERS,
+        body,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
 
-    // 清理 LLM 偶尔返的 markdown code fence / 前缀引号
-    const cleaned = content
-      .trim()
-      .replace(/^```[a-z]*\n?/i, "")
-      .replace(/\n?```$/i, "")
-      .replace(/^(Subject|主题)[:：][^\n]*\n+/i, "")
-      .replace(/^["「『]/, "")
-      .replace(/["」』]$/, "")
-      .trim();
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => "");
+        lastErr = _humanError(resp.status, text || resp.statusText);
+        // 可重试且还有次数 → 退避后再来
+        if (_retryable(resp.status) && attempt < total - 1) {
+          onRetry?.(attempt + 2, total, resp.status);
+          await _sleep(RETRY_BACKOFF_MS[attempt]);
+          continue;
+        }
+        return { ok: false, error: lastErr };
+      }
 
-    if (!cleaned) {
-      return { ok: false, error: "LLM 返回内容清理后为空" };
+      const data = await resp.json();
+      const content = data?.choices?.[0]?.message?.content;
+      if (typeof content !== "string" || !content.trim()) {
+        return { ok: false, error: "LLM 返回为空" };
+      }
+
+      // 8/8: 上游把错误当正文返 (HTTP 200 + 错误文本)。不拦的话员工正文框里
+      // 会出现 "API call failed after 3 retries: ..." 当草稿 —— 看起来像成功了,
+      // 是最坏的一种失败。详见 upstreamErrorGuard.ts。
+      if (warnIfUpstreamError("email-draft", content)) {
+        return {
+          ok: false,
+          error: "模型没能给出内容 (上游返回的是一条错误). 常见原因: 配额耗尽 / 上游服务挂. 稍后再试.",
+        };
+      }
+
+      // 清理 LLM 偶尔返的 markdown code fence / 前缀引号
+      const cleaned = content
+        .trim()
+        .replace(/^```[a-z]*\n?/i, "")
+        .replace(/\n?```$/i, "")
+        .replace(/^(Subject|主题)[:：][^\n]*\n+/i, "")
+        .replace(/^["「『]/, "")
+        .replace(/["」』]$/, "")
+        .trim();
+
+      if (!cleaned) {
+        return { ok: false, error: "LLM 返回内容清理后为空" };
+      }
+      return { ok: true, body: cleaned };
+    } catch (e) {
+      clearTimeout(timeoutId);
+      const msg = e instanceof Error ? e.message : String(e);
+      // 超时不重试 —— 已经等了 30s, 再等两轮员工早走了
+      if (msg.includes("abort")) {
+        return { ok: false, error: `LLM 调用超时 (>${DRAFT_TIMEOUT_MS / 1000}s)` };
+      }
+      lastErr = `LLM 调用异常: ${msg}`;
+      if (attempt < total - 1) {
+        onRetry?.(attempt + 2, total, 0);
+        await _sleep(RETRY_BACKOFF_MS[attempt]);
+        continue;
+      }
+      return { ok: false, error: lastErr };
     }
-    return { ok: true, body: cleaned };
-  } catch (e) {
-    clearTimeout(timeoutId);
-    const msg = e instanceof Error ? e.message : String(e);
-    if (msg.includes("abort")) {
-      return { ok: false, error: `LLM 调用超时 (>${DRAFT_TIMEOUT_MS / 1000}s)` };
-    }
-    return { ok: false, error: `LLM 调用异常: ${msg}` };
   }
+  return { ok: false, error: lastErr };
 }

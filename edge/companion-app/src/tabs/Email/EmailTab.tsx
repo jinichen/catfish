@@ -245,15 +245,17 @@ export default function EmailTab() {
   //
   // 一次 O((N+S)²) 算全表 repliedMap 传给每 ListItem O(1) 读. Sent 只用于算
   // 法, 不显在列表.
+  // 8/6: combined 提到外面 —— repliedMap 和 DetailPane 的 repliedPool 共用同一份.
+  const combined = useMemo(() => items.concat(sentItems), [items, sentItems]);
+
   const repliedMap = useMemo(() => {
-    const combined = items.concat(sentItems);
     const m = new Map<string, boolean>();
     for (const it of items) {
       const r = isReplied(it, combined);
       if (r.replied) m.set(it.id, true);
     }
     return m;
-  }, [items, sentItems]);
+  }, [items, combined]);
 
   // 选邮件 → 拉全文
   useEffect(() => {
@@ -631,6 +633,8 @@ export default function EmailTab() {
             // P3.5.58 (6/22 鸿波): 全 list 传给 DetailPane 让 isReplied 算法可见
             // 所有邮件的 in_reply_to / references, 算"这封是不是已回复过".
             list={items}
+            // 8/6: 算「已回复」要 Sent, 传含 Sent 的 combined
+            repliedPool={combined}
             onAskCatfish={handleAskCatfish}
             onDeleted={() => {
               // 5/18 BL-EMAIL-DELETE: 删除成功后从列表移除 + 清详情. 不重新拉
