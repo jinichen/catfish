@@ -230,10 +230,12 @@ sys.exit(1 if v else 0)
 PYEOF
 
 echo "→ [4.2] 源码树还钉在 v2026.8.3 (这条是整件事的意义所在)..."
-HEAD_AFTER=$(git -C "$HERMES_DIR" -c safe.directory='*' rev-parse --short HEAD)
-[ "$HEAD_AFTER" = "$PINNED_SHA" ] \
-  && echo "  ✓ HEAD=$HEAD_AFTER 未动" \
-  || { echo "  ✗ HEAD 变成 $HEAD_AFTER —— 源码树被动了, 严重"; exit 1; }
+# 用跟 [0.1] 同一个 current_hermes_sha —— 8/8 第一次修只改了 0.1, 漏了这里,
+# 于是 SQLite 已经修好了却死在最后一步校验上, 看着像整个失败了。
+HEAD_AFTER="$(current_hermes_sha)"
+[ "${HEAD_AFTER:0:7}" = "$PINNED_SHA" ] \
+  && echo "  ✓ ${HEAD_AFTER:0:12} 未动" \
+  || { echo "  ✗ 变成 ${HEAD_AFTER:-<读不出>} —— 源码树被动了, 严重"; exit 1; }
 
 echo "→ [4.3] hermes 能 import..."
 "$PY" -c 'import hermes_cli, hermes_state; print("  ✓ hermes_cli / hermes_state OK")'
