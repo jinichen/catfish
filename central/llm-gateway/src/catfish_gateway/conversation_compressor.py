@@ -15,15 +15,21 @@ Companion 长 session (78+ 条消息) 全量上送 → 95K input/chat, 70K 是�
 # 设计
 
 ```
-触发条件: estimate_tokens(messages) > model.context_window * threshold (默认 50%)
+触发条件: estimate_tokens(messages) > min(context_window * threshold, 绝对上限)
+          比例默认 50%, 绝对上限默认 12 万 (8/8 加, 见 DEFAULT_ABS_TOKEN_CAP)
 
 保护策略:
   - 保留头 N 条 (system + 首条 user, 防丢任务背景)
   - 保留尾 M 条 (最近上下文必须保, LLM 要看)
   - 只压中间段, 替成 1 条 'system: [此前 K 条对话摘要] ...'
+  - 头尾两段都清悬挂 tool_calls (8/8 补了头段, 之前只清尾段)
 
 防雪崩:
-  - service token / internal call 跳过 (它们本来就短)
+  - internal call 跳过 (gateway 自己的 loopback, 本来就短)
+  - service token 跳过, **但代表某个员工的除外** —— 8/8 修:
+    5/19 BL-AUTH-DECOUPLE-A1 之后 hermes-cli 是「service token + X-Catfish-User」,
+    员工的主力对话正是从这条路进来的, 老的一刀切豁免让压缩三个月没跑过一次。
+    判据在 app.py: effective_user_email != user.sub。
   - 失败 silent (LLM 调挂就用原 messages)
   - 压缩本身 5 分钟 cooldown 同 sub (防短时间多次 chat 反复压)
 
@@ -49,6 +55,42 @@ logger = logging.getLogger("catfish.gateway.conversation_compressor")
 #: 50% 是 hermes 0.13 compression.threshold 默认, 跟它对齐.
 DEFAULT_THRESHOLD_RATIO = 0.5
 
+#: 触发阈值的**绝对上限** (估算 token). 跟比例阈值取小的那个 (8/8).
+#:
+#: 只有比例的话, 阈值会跟着 context_window 一起膨胀 —— qwen-flash 标的是
+#: 1,000,000, 50% 就是 **50 万**。而痛感根本不在 context 满不满:
+#:
+#:   鸿波 8/8 实盘 (catfish-public-qwen-flash, 405 条 messages):
+#:     prompt_tokens 361,405   离 50 万还差得远, 不触发
+#:     ttft_ms       31,394    第一次首字 31 秒
+#:     latency_ms    34,099
+#:
+#: prefill 的代价是按**实际 token 数**付的, 不按"占 context 的百分比"。
+#: 上下文越大的模型越不该把阈值放得越松 —— 那正好放跑了最贵的那些请求。
+#:
+#: 12 万这个数: 估算口径下 (chars/2.5) 约等于 30 万字符, 对应真实 prompt
+#: 十几万到二十几万 token 量级 —— 已经是 ttft 明显变差的区间, 而离 1M
+#: context 的天花板还很远, 压缩失败也不至于撑爆。
+#: 想调不用改代码: env CATFISH_COMPRESSION_MAX_TOKENS。
+DEFAULT_ABS_TOKEN_CAP = 120_000
+ENV_ABS_TOKEN_CAP = "CATFISH_COMPRESSION_MAX_TOKENS"
+
+
+def _abs_token_cap() -> int:
+    """绝对阈值上限, env 可覆盖。配得不像数字就用默认值, 不因为配错把压缩关掉。"""
+    raw = os.environ.get(ENV_ABS_TOKEN_CAP, "").strip()
+    if not raw:
+        return DEFAULT_ABS_TOKEN_CAP
+    try:
+        v = int(raw)
+    except ValueError:
+        logger.warning("%s=%r 不是整数, 用默认 %d", ENV_ABS_TOKEN_CAP, raw, DEFAULT_ABS_TOKEN_CAP)
+        return DEFAULT_ABS_TOKEN_CAP
+    if v <= 0:
+        logger.warning("%s=%d 非正数, 用默认 %d", ENV_ABS_TOKEN_CAP, v, DEFAULT_ABS_TOKEN_CAP)
+        return DEFAULT_ABS_TOKEN_CAP
+    return v
+
 #: 头部保留多少条 (system + 首条 user 这种背景信息不能丢)
 DEFAULT_KEEP_FIRST = 2
 
@@ -62,8 +104,17 @@ MIN_MIDDLE_TO_COMPRESS = 6
 #: 5 分钟 = 用户连续 chat 时只压一次, 之后扩展只 append 不重压.
 SUB_COOL_DOWN_SECONDS = 300
 
-#: 压缩 LLM 调用 timeout (秒)
-COMPRESSION_TIMEOUT_SECS = 30.0
+#: 压缩 LLM 调用 timeout (秒).
+#:
+#: 8/8: 30 → 90。30 秒是照"一次小调用"定的, 但压缩自己发的就不是小调用 ——
+#: 400 条中间段 × 单条 600 字 cap ≈ 9 万 token 的 prompt, 而它走的是员工同款
+#: 模型 (BL-INTERNAL-MODEL-FOLLOW-USER)。同一天的实盘: 那个模型在一个
+#: 471 token 的请求上都卡了 60 秒, ttft 一度 31 秒。
+#:
+#: 30 秒的后果不是"压缩慢", 是**压缩永远失败**: 超时 → _summarize_middle 返
+#: None → 打 5 分钟 cooldown → 而且那条日志是 logger.info 级的"跳过", 看起来
+#: 跟"不需要压"没区别。修了触发条件却不动这个, 只是从"不压"变成"压不成"。
+COMPRESSION_TIMEOUT_SECS = 90.0
 
 #: env override 总开关 (admin 怀疑出问题时可一键关)
 ENV_DISABLE = "CATFISH_DISABLE_GATEWAY_COMPRESSION"
@@ -195,24 +246,45 @@ def _strip_orphan_tool_boundary(
         return segment
 
     # ── (2) 段尾悬挂 assistant.tool_calls 清掉 ──
-    # 反扫找最后一条 assistant message, 看它声明的 tool_calls 有没有对应 tool reply.
-    # 简化: 看它后面有没有 tool message; 没有的话 tool_calls 去掉.
-    last_idx = len(segment) - 1
-    if last_idx >= 0:
-        last = segment[last_idx]
-        if (
-            isinstance(last, dict)
-            and last.get("role") == "assistant"
-            and last.get("tool_calls")
-        ):
-            # 这条 assistant 是最尾, 后面没 tool reply, 必悬挂
-            new_msg = dict(last)
-            new_msg.pop("tool_calls", None)
-            # content 空也保留 — 改成空串防 Qwen 嫌空
-            if not new_msg.get("content"):
-                new_msg["content"] = ""
-            segment[last_idx] = new_msg
+    return strip_dangling_tail_tool_calls(segment)
 
+
+def strip_dangling_tail_tool_calls(
+    segment: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """段末尾那条 assistant 若还挂着 tool_calls, 把 tool_calls 去掉。
+
+    它是段的最后一条, 后面不可能有对应的 tool reply —— 对 Qwen / DashScope
+    这类严校验的上游就是 400。
+
+    8/8 从 _strip_orphan_tool_boundary 里抽出来: **头段也要过这一遭**。
+    原来只有尾段用, 而 maybe_compress_messages 拼的是
+
+        messages[:keep_first] + [摘要] + 尾段
+                 ↑ 这一段原样照抄, 没人管它末尾挂没挂 tool_calls
+
+    keep_first 默认 2, 真出现 messages[1] 是带 tool_calls 的 assistant 时,
+    它的 tool 回复全被压进摘要里了, 于是**头段末尾留下一个悬挂的 tool_calls**。
+    hermes 的 messages[0]/[1] 通常是 system + user 所以现实里没炸过, 但这是
+    个真洞 —— 而 8/8 那次 400 (message_normalize.py) 刚证明这类上游有多严。
+    """
+    if not segment:
+        return segment
+    last_idx = len(segment) - 1
+    last = segment[last_idx]
+    if (
+        isinstance(last, dict)
+        and last.get("role") == "assistant"
+        and last.get("tool_calls")
+    ):
+        out = list(segment)
+        new_msg = dict(last)
+        new_msg.pop("tool_calls", None)
+        # content 空也保留 — 改成空串防 Qwen 嫌空
+        if not new_msg.get("content"):
+            new_msg["content"] = ""
+        out[last_idx] = new_msg
+        return out
     return segment
 
 
@@ -257,14 +329,21 @@ async def maybe_compress_messages(
         return messages, None
 
     estimated = estimate_tokens(messages)
-    cap = int(model_context_window * threshold_ratio)
+    # 8/8: 比例阈值和绝对上限取小的那个。只有比例的话, context_window 越大
+    # 阈值越松 (qwen-flash 标 1M → 阈值 50 万), 正好放跑最贵的那批请求。
+    cap = min(int(model_context_window * threshold_ratio), _abs_token_cap())
     if estimated <= cap:
         return messages, None
 
     if _is_sub_cooling(user_sub):
-        logger.debug(
-            "compression: sub=%s 在 cooldown 内, 跳过 (estimated=%d cap=%d)",
-            user_sub, estimated, cap,
+        # 8/8: debug → info。
+        # 这条原来是 debug, 生产日志级别是 INFO, 于是"到底为什么没压"在线上
+        # 完全不可见 —— 跟"没达阈值"、"压了但没省"长得一模一样。既然走到这里
+        # 说明**已经超阈值了**, 那就是一条值得看见的事实。
+        logger.info(
+            "compression: sub=%s 超阈值但在 cooldown 内, 跳过 (estimated=%d cap=%d, "
+            "cooldown %ds)",
+            user_sub, estimated, cap, SUB_COOL_DOWN_SECONDS,
         )
         return messages, None
 
@@ -292,7 +371,10 @@ async def maybe_compress_messages(
     # assistant.tool_calls (对应 tool 已被压缩) 也清掉.
     cut = len(messages) - keep_last
     last_segment = _strip_orphan_tool_boundary(messages, cut)
-    new_messages = messages[:keep_first] + [summary_msg] + last_segment
+    # 8/8: 头段也要清悬挂 tool_calls —— 它末尾那条 assistant 的 tool 回复
+    # 已经被压进摘要里了。见 strip_dangling_tail_tool_calls 的说明。
+    head_segment = strip_dangling_tail_tool_calls(list(messages[:keep_first]))
+    new_messages = head_segment + [summary_msg] + last_segment
     post_token = estimate_tokens(new_messages)
 
     # 压缩本身可能没省 (摘要太长). 真省了再返新版.
@@ -447,7 +529,10 @@ __all__ = [
     "estimate_tokens",
     "is_compression_internal_request",
     "_strip_orphan_tool_boundary",
+    "strip_dangling_tail_tool_calls",
     "DEFAULT_THRESHOLD_RATIO",
     "DEFAULT_KEEP_FIRST",
     "DEFAULT_KEEP_LAST",
+    "DEFAULT_ABS_TOKEN_CAP",
+    "ENV_ABS_TOKEN_CAP",
 ]

@@ -3236,17 +3236,46 @@ async def chat_completions(
     # 保留: 头 2 条 (system/首条 user) + 尾 8 条 (最近上下文), 中间压成 1 句.
     # 跳过:
     #   - is_internal_call (gateway-loopback summarizer/proactive 等, 它们本来就短)
-    #   - service token (sub=client:xxx, 也是 1-shot 没历史)
     #   - X-Catfish-Compression-Internal (本模块自调 LLM 时设, 防自递归)
+    #   - service token **且不是代表某个员工** (见下面 8/8 那段)
     # 5/15 早鸿波看 audit 撞 chenhongbo@ffcs.cn 单 chat 95K input — 70K 历史 +
     # 25K inject. lean 已省 inject (#77), 历史这块就是 BL-COMPRESSION-GATEWAY 解.
+    #
+    # ── 8/8: service token 的豁免开一个口子 ────────────────────────────
+    #
+    # 原条件是一句光秃秃的 `user.role != "service"`, 理由写在 5/15 的注释里:
+    # 「service token (sub=client:xxx, 也是 1-shot 没历史)」。**当时是对的。**
+    #
+    # 5/19 BL-AUTH-DECOUPLE-A1 把 hermes-cli 改成了「service token + X-Catfish-User
+    # 代表员工」—— 从那天起, 员工的主力对话带着几百条历史从 service token 进来,
+    # 而这条豁免把它整个挡在门外。**压缩钩子对主路径一次都没跑过。**
+    #
+    # 铁证就在下面 8 行: 「压缩按 effective_user_email 归账 (service on-behalf-of
+    # 时 = X-Catfish-User 指定的员工)」—— 那行注释只有在 service token 能走到
+    # 这里时才有意义, 它是 5/19 那次改动留下的、从写下就没被执行过的意图。
+    # 8/8 鸿波实盘: 单请求 prompt 361,405 token, 405 条 messages, 压缩零触发。
+    #
+    # 现在的判据是 **effective_user_email != user.sub** —— 也就是
+    # resolve_effective_user_email 认定的「这次是替某个真员工跑」。为什么用它:
+    #   · hermes chat 路径一定带 X-Catfish-User (Companion 走 sub_email 必传)
+    #     → effective 是员工邮箱 → 该压
+    #   · hermes 自己的 auxiliary_client (后台压缩 / summary) **不带**这个 header,
+    #     auth/__init__.py:145 那段会 fallback 到 sub → effective == user.sub
+    #     → 仍然豁免, 跟 5/15 的原意一致 (它们确实是 1-shot)
+    #   · cron / a2a 这类不在 SERVICE_CLIENTS_ALLOWING_USER_OVERRIDE 白名单的
+    #     service, resolve 直接返 sub → 也仍然豁免
+    # 两个死循环护栏 (is_internal_call / _compression_internal) 一个都没动。
     _compression_internal = (
         request.headers.get("X-Catfish-Compression-Internal", "").lower() == "true"
     )
+    # role 和 sub 前缀都认 —— role 来自 IdP 的 yaml 约定, sub 前缀是验签后的
+    # JWT 原文, 两个取并集才不会因为一边配错就漏判 (同 is_service_principal 的理由)。
+    _service_like = (user.role == "service") or _is_service_call
+    _service_on_behalf = _is_service_call and effective_user_email != user.sub
     if (
         not is_internal_call
         and not _compression_internal
-        and user.role != "service"
+        and (not _service_like or _service_on_behalf)
     ):
         try:
             from .conversation_compressor import maybe_compress_messages  # noqa: PLC0415

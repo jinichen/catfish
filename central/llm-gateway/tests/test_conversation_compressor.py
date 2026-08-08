@@ -17,13 +17,17 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from catfish_gateway.conversation_compressor import (
+    DEFAULT_ABS_TOKEN_CAP,
     DEFAULT_KEEP_FIRST,
     DEFAULT_KEEP_LAST,
+    ENV_ABS_TOKEN_CAP,
     ENV_DISABLE,
+    _abs_token_cap,
     _strip_orphan_tool_boundary,
     estimate_tokens,
     is_compression_internal_request,
     maybe_compress_messages,
+    strip_dangling_tail_tool_calls,
 )
 
 
@@ -348,3 +352,135 @@ def test_strip_orphan_tool_preserves_valid_tool_pair():
     assert seg[0]["role"] == "assistant"
     assert seg[0].get("tool_calls"), "完整配对的 tool_calls 不该清"
     assert seg[1]["role"] == "tool"
+
+
+# ─── 8/8: 绝对 token 上限 ────────────────────────────────
+#
+# 起因: qwen-flash 的 context_window 标 1,000,000, 比例阈值 0.5 → cap 50 万。
+# 鸿波实盘单请求 prompt 361,405 token 都不触发。prefill 是按真实 token 数
+# 付钱付延迟的, 不按"占 context 的百分比"。
+
+
+@pytest.mark.asyncio
+async def test_abs_cap_triggers_on_huge_context_model(monkeypatch):
+    """1M context 的模型: 比例阈值 50 万够不着, 绝对上限 12 万接得住。"""
+    monkeypatch.setattr(
+        "catfish_gateway.conversation_compressor._summarize_middle",
+        AsyncMock(return_value="(摘要)"),
+    )
+    # 每条 5000 字 × 40 条 = 20 万字符 → estimate 8 万 < 12 万, 不该触发
+    small = [{"role": "user", "content": "x" * 5000} for _ in range(40)]
+    _, stats = await maybe_compress_messages(
+        small, user_sub="u-abs-1", model_context_window=1_000_000, origin_model="m",
+    )
+    assert stats is None, "8 万 < 绝对上限 12 万, 不该压"
+
+    # 每条 5000 字 × 100 条 = 50 万字符 → estimate 20 万 > 12 万, 该触发
+    big = [{"role": "user", "content": "x" * 5000} for _ in range(100)]
+    assert estimate_tokens(big) > DEFAULT_ABS_TOKEN_CAP
+    assert estimate_tokens(big) < 1_000_000 * 0.5, "构造前提: 比例阈值必须够不着"
+    _, stats = await maybe_compress_messages(
+        big, user_sub="u-abs-2", model_context_window=1_000_000, origin_model="m",
+    )
+    assert stats is not None, "超绝对上限就该压 —— 这正是 8/8 之前漏掉的那批请求"
+
+
+@pytest.mark.asyncio
+async def test_abs_cap_does_not_loosen_small_context_model(monkeypatch):
+    """小 context 模型仍按比例走 —— 取 min, 绝对上限只会更严不会更松。"""
+    monkeypatch.setattr(
+        "catfish_gateway.conversation_compressor._summarize_middle",
+        AsyncMock(return_value="(摘要)"),
+    )
+    # 128K 模型: 比例 cap = 6.4 万, 比绝对上限 12 万小, 该以 6.4 万为准
+    msgs = [{"role": "user", "content": "x" * 5000} for _ in range(50)]  # estimate 10 万
+    est = estimate_tokens(msgs)
+    assert 64_000 < est < DEFAULT_ABS_TOKEN_CAP, "构造前提: 夹在两个阈值中间"
+    _, stats = await maybe_compress_messages(
+        msgs, user_sub="u-abs-3", model_context_window=128_000, origin_model="m",
+    )
+    assert stats is not None, "比例 cap 更小时应该以比例为准"
+
+
+@pytest.mark.asyncio
+async def test_abs_cap_env_override(monkeypatch):
+    monkeypatch.setenv(ENV_ABS_TOKEN_CAP, "1000000")
+    monkeypatch.setattr(
+        "catfish_gateway.conversation_compressor._summarize_middle",
+        AsyncMock(return_value="(摘要)"),
+    )
+    msgs = [{"role": "user", "content": "x" * 5000} for _ in range(100)]
+    _, stats = await maybe_compress_messages(
+        msgs, user_sub="u-abs-4", model_context_window=1_000_000, origin_model="m",
+    )
+    assert stats is None, "env 把上限抬到 100 万后不该再触发"
+
+
+def test_abs_cap_bad_env_falls_back_to_default(monkeypatch):
+    """配错不能把压缩关掉 —— 静默变成"永不触发"是最难查的那种故障。"""
+    for bad in ("abc", "", "  ", "-1", "0"):
+        monkeypatch.setenv(ENV_ABS_TOKEN_CAP, bad)
+        assert _abs_token_cap() == DEFAULT_ABS_TOKEN_CAP
+
+
+# ─── 8/8: 头段悬挂 tool_calls ─────────────────────────────
+
+
+def test_strip_dangling_tail_removes_trailing_tool_calls():
+    seg = [
+        {"role": "system", "content": "s"},
+        {"role": "assistant", "content": "调工具", "tool_calls": [{"id": "c1"}]},
+    ]
+    out = strip_dangling_tail_tool_calls(seg)
+    assert "tool_calls" not in out[1]
+    assert out[1]["content"] == "调工具"
+    assert seg[1]["tool_calls"] == [{"id": "c1"}], "不该改原对象"
+
+
+def test_strip_dangling_tail_noop_when_paired():
+    seg = [
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "结果"},
+    ]
+    out = strip_dangling_tail_tool_calls(seg)
+    assert out is seg, "没东西要改就原样返回"
+
+
+def test_strip_dangling_tail_empty():
+    assert strip_dangling_tail_tool_calls([]) == []
+
+
+@pytest.mark.asyncio
+async def test_head_segment_dangling_tool_calls_cleaned(monkeypatch):
+    """keep_first 段末尾挂着 tool_calls 时, 拼出来的 messages 不能带着它。
+
+    原来只清尾段, 头段 `messages[:keep_first]` 是原样照抄的。真出现
+    messages[1] = assistant.tool_calls 时, 它的 tool 回复被压进摘要,
+    留下悬挂 —— DashScope 这类严校验上游直接 400 (8/8 那次的同族问题)。
+    """
+    monkeypatch.setattr(
+        "catfish_gateway.conversation_compressor._summarize_middle",
+        AsyncMock(return_value="(摘要)"),
+    )
+    head = [
+        {"role": "system", "content": "s" * 100},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "head-call"}]},
+    ]
+    middle = [{"role": "user", "content": "x" * 20000} for _ in range(20)]
+    tail = [{"role": "user", "content": "尾"} for _ in range(DEFAULT_KEEP_LAST)]
+    msgs = head + middle + tail
+
+    new, stats = await maybe_compress_messages(
+        msgs, user_sub="u-head", model_context_window=128_000, origin_model="m",
+    )
+    assert stats is not None, "构造的量级应该触发压缩"
+    dangling = [
+        m for m in new
+        if m.get("role") == "assistant" and m.get("tool_calls")
+        and not any(
+            n.get("role") == "tool"
+            for n in new[new.index(m) + 1: new.index(m) + 2]
+        )
+    ]
+    assert not dangling, f"压完不该留悬挂 tool_calls: {dangling}"
+    assert msgs[1]["tool_calls"] == [{"id": "head-call"}], "原 messages 不该被写穿"

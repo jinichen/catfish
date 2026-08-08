@@ -4,7 +4,8 @@
   - hook 必须在 sanitize_tools / harden_for_gemini 之后, quota check 之前 (顺序敏感)
   - 必须跳 is_internal_call (防 summarizer/proactive loopback 死循环)
   - 必须跳 _compression_internal (防 compressor 调 gateway 自己再触发)
-  - 必须跳 service token (它们是 1-shot 没历史)
+  - 必须跳**纯** service token (cron / a2a / hermes auxiliary — 真 1-shot 没历史)
+  - 但 service token **代表员工** 时必须压 (8/8 修的根因, 见对应用例)
   - exception 必须 silent (不阻塞主流程)
 """
 from __future__ import annotations
@@ -44,19 +45,43 @@ def test_compression_skips_internal_call(app_src):
     assert found_skip, "compression hook 必须跳 is_internal_call"
 
 
-def test_compression_skips_service_token(app_src):
-    """service token 也跳, 它们 1-shot 没历史"""
-    # 找 'service' 跟 user.role 同窗口
+def _guard_block(app_src: str) -> str:
+    """compression hook 那个 if 守卫的源码块 (调用点往前 30 行)。"""
     lines = app_src.splitlines()
-    found = False
     for i, line in enumerate(lines):
-        if "maybe_compress_messages" in line:
-            for prev in lines[max(0, i - 15): i]:
-                if 'user.role' in prev and '"service"' in prev:
-                    found = True
-                    break
-            break
-    assert found, "compression hook 必须跳 user.role == 'service'"
+        if "maybe_compress_messages" in line and "import" not in line:
+            return "\n".join(lines[max(0, i - 30): i])
+    raise AssertionError("找不到 maybe_compress_messages 调用点")
+
+
+def test_compression_skips_plain_service_token(app_src):
+    """纯 service token (不代表谁) 仍然跳 —— cron / a2a / hermes 自己的
+    auxiliary_client 确实是 1-shot 没历史, 5/15 的原意在这部分成立。"""
+    block = _guard_block(app_src)
+    assert "_service_like" in block, "守卫里要有 service 判定"
+    assert '"service"' in block or "is_service_principal" in block or "_is_service_call" in block
+
+
+def test_compression_does_not_skip_service_on_behalf_of_user(app_src):
+    """8/8: service token **代表员工** 时必须压。
+
+    这是三个月里压缩零触发的根因 —— 5/19 BL-AUTH-DECOUPLE-A1 把 hermes-cli
+    改成 service token 代表员工之后, 员工主力对话全落进了 `user.role != "service"`
+    这条豁免里。别再改回一刀切。
+
+    判据: effective_user_email != user.sub (resolve_effective_user_email 认定
+    的 on-behalf-of)。
+    """
+    block = _guard_block(app_src)
+    assert "_service_on_behalf" in block, (
+        "守卫必须区分「纯 service」和「service 代表员工」—— "
+        "一刀切 `user.role != 'service'` 会让压缩对主路径永远不生效"
+    )
+    assert "effective_user_email != user.sub" in block, (
+        "on-behalf-of 的判据应该是 effective_user_email != user.sub"
+    )
+    # 而且要真的放行, 不是算了个变量不用
+    assert "not _service_like or _service_on_behalf" in block
 
 
 def test_compression_recursive_guard(app_src):
