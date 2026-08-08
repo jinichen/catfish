@@ -143,26 +143,74 @@ echo "  (annotated tag 会打一行 'is not a commit!' warning · 正常, 落点
 #
 # 这个文件里下 GitHub Release 早就有同款兜底 (GH_PROXY 试几次转直连),
 # clone 这一步一直没有。补齐, 顺便把"这是代理的问题"说清楚。
+# ── 源码缓存 (8/8 加) ────────────────────────────────────────────────
+#
+# 这一步是整个脚本里**最容易反复重来**的一步: 60 MB, 走的是 GitHub 直连,
+# 8/8 实测 850 KB/s 左右, 一次一分多钟, 中途断一次就得从头再来
+# (fetch-pack: unexpected disconnect)。而后面任何一步失败 —— 那天连着撞了
+# 代理、Node 版本、npm engines 三次 —— 都要求整脚本重跑, 于是这 60 MB 被
+# 重下了四遍。
+#
+# 缓存文件名带 commit sha, 所以**不存在过期问题**: pin 一改, 文件名就变,
+# 老缓存自然用不上 (也就不需要什么失效逻辑)。
+CACHE_TAR="/tmp/catfish-hermes-src-${HERMES_COMMIT}.tar.gz"
+
 _clone() { git clone --depth 1 --branch "$HERMES_TAG" "$@" \
     https://github.com/NousResearch/hermes-agent.git "$HERMES_SRC"; }
-if ! _clone; then
+
+FROM_CACHE=0
+if [ -f "$CACHE_TAR" ] && gzip -t "$CACHE_TAR" 2>/dev/null; then
+    echo "  ↻ 命中源码缓存 $(basename "$CACHE_TAR") ($(ls -lh "$CACHE_TAR" | awk '{print $5}'))"
+    echo "    (跳过 clone。想强制重下: rm $CACHE_TAR)"
+    mkdir -p "$HERMES_SRC"
+    tar xzf "$CACHE_TAR" -C "$HERMES_SRC" && FROM_CACHE=1 || {
+        echo "  ⚠ 缓存解不开, 删掉走网络"
+        rm -f "$CACHE_TAR"; rm -rf "$HERMES_SRC"
+    }
+fi
+
+if [ "$FROM_CACHE" = "0" ] && ! _clone; then
+    # 代理挂了就直连重试一次。
+    #
+    # 8/8 实录: 代理没开时 clone 一秒就死在
+    #     Failed to connect to 127.0.0.1 port 7890 after 0 ms
+    # 而整条打包链最贵的部分在这之后 —— 卡在第 1 步反而是运气好, 但报错只有
+    # git 那一行, 看不出"是代理不是网"。
+    #
+    # 这个文件里下 GitHub Release 早就有同款兜底 (GH_PROXY 试几次转直连),
+    # clone 这一步一直没有。
+    #
+    # 代理有两个来源, **两个都要看**: git config 的 http.proxy, 和环境变量
+    # http_proxy / https_proxy / ALL_PROXY (环境变量优先级更高)。8/8 第一版
+    # 只查了 git config, 结果那台机器是环境变量配的 —— 脚本读不到, 判成
+    # "网络本身的问题", 把人往错方向指。是鸿波自己 unset 掉环境变量才通的。
     GIT_PROXY="$(git config --get http.proxy || true)"
-    if [ -n "$GIT_PROXY" ]; then
+    ENV_PROXY="${https_proxy:-${HTTPS_PROXY:-${http_proxy:-${HTTP_PROXY:-${ALL_PROXY:-${all_proxy:-}}}}}}"
+    ANY_PROXY="${GIT_PROXY:-$ENV_PROXY}"
+    if [ -n "$ANY_PROXY" ]; then
         echo ""
-        echo "  ⚠ clone 失败, 而 git 配了代理: $GIT_PROXY"
-        echo "    代理没开的话就是它。直连重试一次..."
+        echo "  ⚠ clone 失败, 而这台机器配了代理:"
+        [ -n "$GIT_PROXY" ] && echo "      git config http.proxy = $GIT_PROXY"
+        [ -n "$ENV_PROXY" ] && echo "      环境变量              = $ENV_PROXY"
+        echo "    代理没开的话就是它。直连重试一次 (git config 和环境变量都绕开)..."
         rm -rf "$HERMES_SRC"
-        _clone -c http.proxy= -c https.proxy= || {
+        env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
+            -u ALL_PROXY -u all_proxy \
+            git clone --depth 1 --branch "$HERMES_TAG" \
+                -c http.proxy= -c https.proxy= \
+                https://github.com/NousResearch/hermes-agent.git "$HERMES_SRC" || {
             echo ""
             echo "❌ 带代理和直连都 clone 不下来。"
-            echo "   · 代理软件开着吗 (git 配的是 $GIT_PROXY)"
-            echo "   · 或临时去掉: git config --global --unset http.proxy"
+            echo "   · 代理软件开着吗"
+            [ -n "$GIT_PROXY" ] && echo "   · 临时去掉 git 的: git config --global --unset http.proxy"
+            [ -n "$ENV_PROXY" ] && echo "   · 临时去掉环境的: unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy"
             exit 1
         }
-        echo "  ✓ 直连成功 (这次绕过了 $GIT_PROXY)"
+        echo "  ✓ 直连成功 (这次绕过了 $ANY_PROXY)"
     else
         echo ""
-        echo "❌ clone 失败, 且 git 没配代理 —— 是网络本身的问题。"
+        echo "❌ clone 失败, 且没查到任何代理配置 —— 是网络本身的问题。"
+        echo "   断在中途 (unexpected disconnect) 的话直接重跑, 下面会有缓存兜着。"
         exit 1
     fi
 fi
@@ -210,6 +258,21 @@ fi
 echo "  ✓ hermes 版本核对: $ACTUAL_DESC ($ACTUAL_SHA)"
 # 把版本写进 bundle, 装机后可查 (~/.hermes/hermes-agent/.catfish-hermes-version)
 printf '%s\n%s\n' "$ACTUAL_DESC" "$ACTUAL_SHA" > "$HERMES_SRC/.catfish-hermes-version"
+
+# 存缓存 —— **必须在这里**, 不能更晚。
+#
+# 下面紧接着就往树里 cp catfish 插件、装 node_modules、解 chromium。缓存要的是
+# 一棵**干净的上游树**, 混进那些东西之后再存, 下次复用就等于把上一次的构建
+# 残留带进新包 —— 那种污染很难查。
+#
+# 也不能更早: 版本核对 (上面那两段 fail-loud) 没过的树不配进缓存。
+if [ "$FROM_CACHE" = "0" ]; then
+    echo "  → 存源码缓存 (下次重跑跳过这 60 MB)..."
+    tar czf "$CACHE_TAR.tmp" -C "$HERMES_SRC" . \
+        && mv "$CACHE_TAR.tmp" "$CACHE_TAR" \
+        && echo "    ✓ $CACHE_TAR ($(ls -lh "$CACHE_TAR" | awk '{print $5}'))" \
+        || { echo "    ⚠ 存缓存失败, 不影响本次构建"; rm -f "$CACHE_TAR.tmp"; }
+fi
 
 # copy catfish plugins
 mkdir -p "$HERMES_SRC/plugins/memory"
