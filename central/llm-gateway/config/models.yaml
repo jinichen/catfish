@@ -204,7 +204,7 @@ models:
     # BL-FALLBACK-500 (5/14 凌晨): 公网链加 500 — 鸿波撞 deepseek 500 没自动切, 排查
     # 发现 trigger 历史漏 500. 公网到公网切没保密问题, 内网链不加 500 (防泄密).
     fallback:
-      on_errors: [429, 500, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error", "insufficient balance"]
+      on_errors: [429, 500, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error"]
       # BL-NVIDIA-NIM-DROP-FALLBACK (5/15 22:50): 摘 nvidia-llama — 见 private-main 注释
       chain: [catfish-public-deepseek-flash, catfish-public-gemini-flash]
       max_hops: 2
@@ -295,7 +295,7 @@ models:
     fallback:
       # BL-FALLBACK-500 (5/14 凌晨): 公网链加 500 — 见 qwen-flash 同段注释.
       # BL-NVIDIA-NIM-DROP-FALLBACK (5/15 22:50): 摘 nvidia-llama — 见 private-main 注释
-      on_errors: [429, 500, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error", "insufficient balance"]
+      on_errors: [429, 500, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error"]
       chain: [catfish-public-qwen-flash, catfish-public-gemini-flash]
       max_hops: 2
 
@@ -339,7 +339,7 @@ models:
     # BL-FALLBACK-500 (5/14 凌晨): 公网链加 500 — 见 qwen-flash 同段注释.
     # BL-NVIDIA-NIM-DROP-FALLBACK (5/15 22:50): 摘 nvidia-llama — 见 private-main 注释
     fallback:
-      on_errors: [429, 500, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error", "insufficient balance"]
+      on_errors: [429, 500, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error"]
       # 8/8: 链尾的 catfish-private-main 已从本部署删除, 摘掉。
       # 不擅自补新的一跳 —— 补哪个是产品决策, 不是修 bug。
       chain: [catfish-public-qwen-flash]
@@ -501,7 +501,7 @@ models:
     # BL-FALLBACK-500 (5/14 凌晨): 公网链加 500 — 见 qwen-flash 同段注释.
     # BL-NVIDIA-NIM-DROP-FALLBACK (5/15 22:50): 摘 nvidia-llama — 见 private-main 注释
     fallback:
-      on_errors: [429, 500, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error", "insufficient balance"]
+      on_errors: [429, 500, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error"]
       # 8/8: 链尾的 catfish-private-main 已从本部署删除, 摘掉。
       # 不擅自补新的一跳 —— 补哪个是产品决策, 不是修 bug。
       chain: [catfish-public-qwen-flash]

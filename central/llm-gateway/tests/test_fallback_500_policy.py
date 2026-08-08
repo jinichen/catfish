@@ -221,9 +221,9 @@ def test_不该有模型的_chain_引用自己(models_yaml):
     assert not bad, f"这些模型的 fallback chain 引用了自己: {bad}"
 
 
-# ── 8/8: 余额不足必须触发 fallback ────────────────────────────────────
+# ── 8/8: 余额不足**能**触发 fallback (要配才切) ────────────────────────
 #
-# 实撞: DeepSeek 余额烧光, 早安页 + 邮件评级全线停摆, 而 fallback **没触发**:
+# 实撞: DeepSeek 余额烧光, 早安页 + 邮件评级全线停摆, 而 fallback 没触发:
 #
 #   Client error '402 Payment Required' for url 'https://api.deepseek.com/...'
 #   litellm.BadRequestError: DeepseekException -
@@ -232,6 +232,22 @@ def test_不该有模型的_chain_引用自己(models_yaml):
 #
 # 两道判据都没接住: LiteLLM 把 402 重映射成 BadRequestError (status=400, 402 根本
 # 不出现), 而关键词表里 "rate limit" 组只有 "quota", 沾不上 "Insufficient Balance"。
+#
+# ⚠ 8/9 鸿波拍板: **关键词组留着, 但一个模型都不配。**
+#
+# 8/8 我顺手给 4 个公网模型的 on_errors 加上了, 并写了一条"公网模型全都得配"
+# 的结构性测试。这是**替产品决策**, 越界了:
+#
+#   · on_errors 是严格 opt-in 白名单 —— should_fallback 匹配不上就 return False。
+#     这条不是实现细节, 是保密性的支点: 内网模型故意不配 500, 就是靠"不列就
+#     永不切"来防内网 prompt 甩到公网厂商。往里加条目要按同一个标准慎重。
+#   · 余额不足不是瞬时故障, 是**账务状态**。自动切换会把问题藏起来 (没人知道
+#     这家没钱了)、把开销悄悄挪到别家、可能违反部门"就用这家"的约定。
+#   · yaml 改动对现有部署惰性 (PG 存 payload), 但**对全新安装是生效的** ——
+#     等于新客户静默拿到一条没人决定过的策略。
+#
+# 所以下面测的是**机制**不是策略: 配了就一定切、没配就一定不切、各家说法都
+# 认得、宽词不误伤。哪天要开, 在管理控制台给具体模型加就行, 代码不用动。
 
 
 def test_余额不足能触发_fallback():
@@ -249,7 +265,9 @@ def test_余额不足能触发_fallback():
 
     exc = _BadRequest(real)
     on_errors = [429, 500, 502, 503, 504, "timeout", "rate limit", "insufficient balance"]
-    assert should_fallback(exc, on_errors), "余额不足必须切模型 —— 换一家立刻能用"
+    assert should_fallback(exc, on_errors), (
+        "配了 'insufficient balance' 就该切 —— 这测的是机制能用, 不是主张该配"
+    )
 
 
 def test_没配这个关键词的话不切_证明是这一条在起作用():
@@ -295,17 +313,46 @@ def test_不误伤正常报文():
         assert not should_fallback(_E(msg), ["insufficient balance"]), msg
 
 
-def test_公网模型全都配了这个关键词_内网一个都不配(models_yaml):
-    """结构性: 新增公网模型忘了配 → 红。内网模型配了也红 (它没有余额概念,
-    配上去只会让人以为内网也会因为欠费切到公网)。"""
+def test_内网模型不许配余额关键词(models_yaml):
+    """只留内网这一半 —— 它是**保密约束**, 不是产品策略。
+
+    内网模型没有"余额"这个概念 (自建平台), 配上去唯一的效果是让内网请求多一条
+    切到公网的路径。跟 test_所有内网模型的链都不含500 同一个道理。
+
+    8/9 撤掉了原来配套的另一半 (断言公网模型必须配) —— 那条把"要不要因为欠费
+    自动换厂商"这个产品决策钉成了测试, 见本节顶部的说明。公网配不配, 由管理
+    控制台决定, 测试不该有意见。
+    """
     for m in models_yaml["models"]:
-        fb = m.get("fallback")
-        if not fb:
+        if m.get("tier") != "private":
             continue
+        fb = m.get("fallback") or {}
         has = "insufficient balance" in [
             str(x).lower() for x in fb.get("on_errors", [])
         ]
-        if m.get("tier") == "private":
-            assert not has, f"内网模型 {m['name']} 不该配余额关键词"
-        else:
-            assert has, f"公网模型 {m['name']} 的 on_errors 缺 'insufficient balance'"
+        assert not has, (
+            f"内网模型 {m['name']} 配了余额关键词 —— 内网没有余额概念, "
+            f"配上去只是多开一条切公网的路"
+        )
+
+
+def test_当前_yaml_里公网模型确实没配_是有意的(models_yaml):
+    """钉住 8/9 的决定本身。
+
+    没有这条, 后来的人看到关键词组在 fallback.py 里躺着、models.yaml 里却一个
+    都没用, 会当成"漏配了"顺手补上 —— 那正是 8/9 撤掉的东西。
+
+    要开: 改这条测试 + 在管理控制台给具体模型加 (yaml 对已部署的库是惰性的,
+    PG 存的是 payload)。**改测试就是那道 review 闸**, 这是故意的。
+    """
+    configured = [
+        m["name"] for m in models_yaml["models"]
+        if "insufficient balance" in [
+            str(x).lower() for x in (m.get("fallback") or {}).get("on_errors", [])
+        ]
+    ]
+    assert configured == [], (
+        f"这些模型配了余额自动切换: {configured}。\n"
+        f"8/9 的决定是**不自动切** —— 余额不足是账务状态不是瞬时故障, 自动切会\n"
+        f"把问题藏起来并把开销悄悄挪到别家。真要开, 连这条测试一起改, 让它留痕。"
+    )
