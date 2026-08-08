@@ -30,6 +30,7 @@ import {
 } from "../../lib/advisor_cache";  // P3.5.32.9 (6/18): nextRefreshAfter 不再 import — 老 RefreshInfo 函数砍, 用方挪去 components/RefreshInfo.tsx 自管
 import {
   ADVISOR_TIMEOUT,
+  CLIENT_TIMEOUT_MS,
   ensureTaskChatSummariesFresh,
   fetchBriefingAdvisor,
   type AdvisorResult,
@@ -308,14 +309,24 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
           if (cancelled) return;
           if (stale) {
             setResult(stale.result);
+            // 8/8 鸿波 catch「这是公网模型, 怎么回事」: 原文案硬编码
+            //   "公司内网模型响应慢 (>5min)" —— 两处都是错的:
+            //   · 模型归属写死成"内网"。员工实际跑的是公网 dashscope
+            //     (picker 选的), 这条提示把排查方向直接指反了。
+            //   · ">5min" 是 P3.4.8 时的值, 后来 CLIENT_TIMEOUT_MS 调到 600s
+            //     没人同步这句, 于是界面说等 5 分钟、实际等 10 分钟。
+            //   现在: 模型名从 props 取 (它本来就是员工 picker 选的那个),
+            //   超时数从 CLIENT_TIMEOUT_MS 算。都不再手写。
             setStaleNotice(
-              `⚠️ 公司内网模型响应慢 (>5min), 显示上次结果. 后台仍在算, 完成会自动更新.`,
+              `⚠️ 模型 ${model} 响应慢 (>${Math.round(CLIENT_TIMEOUT_MS / 60000)} 分钟), ` +
+                `显示上次结果. 后台仍在算, 完成会自动更新.`,
             );
             setPhase("stale_fallback");
           } else {
             setStaleNotice("");
             setErrorMsg(
-              "公司内网模型响应慢 (>5min), 也没有历史缓存可显示. 等几分钟点刷新重试.",
+              `模型 ${model} 响应慢 (>${Math.round(CLIENT_TIMEOUT_MS / 60000)} 分钟), ` +
+                `也没有历史缓存可显示. 等几分钟点刷新重试.`,
             );
             setPhase("error");
           }
@@ -449,9 +460,21 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
   // 显红色 error 挡数据统计. 改 · 用中性提示 · 不 error 样式 · 员工可看下方
   // 数据统计 (邮件/日历/TODO) · advisor 内容缺失也不影响用早安页.
   if (!result) {
+    // 8/8: 去掉「通常网络慢」这句归因。
+    //
+    // 走到这里意味着 LLM **确实被调用过**且结果没成型 —— 上面
+    // no_profile (confidence<0.5) 和 no_data (三件套全空) 两个分支已经把
+    // _fetchBriefingAdvisorImpl 里那两个"不调 LLM"的短路完全挡住了, 所以
+    // 剩下的四种 null 全是"调了但没拿到结构": 非 2xx / content 非字符串 /
+    // 上游错误当 content 返 / 四层 parse 全挂。
+    //
+    // 「网络慢」是这四种里最不像的一种 —— 真慢会走 ADVISOR_TIMEOUT 那条路
+    // (stale fallback), 不会到这里。写着它只会把排查往错的方向带
+    // (8/8 那半天就是这么被带偏的)。改成指向真正有答案的地方: console 里
+    // [advisor] raw content / HTTP status 两行直接说明是哪一种。
     return (
       <Placeholder
-        text="advisor 综合判断暂不可用 (LLM 返结构非预期 · 通常网络慢). 点右上刷新重试 · 或看下方邮件/日历/TODO 统计."
+        text="advisor 综合判断暂不可用 (模型返回没成结构). 点右上刷新重试 · 或看下方邮件/日历/TODO 统计."
       />
     );
   }

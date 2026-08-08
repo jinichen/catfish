@@ -34,6 +34,37 @@ import { mergeTaskStatus } from "./advisor_cache";
 const SERVICE_LLM_HEADERS = { "Content-Type": "application/json" };
 const SERVICE_LLM_QUERY = "?catfish_source=companion-advisor&catfish_skip_identity=1&catfish_internal=1";
 
+/** 限并发跑一批异步任务 —— 起 `limit` 个 worker 轮流领任务, 不做批次栅栏。
+ *
+ *  8/7 加。原来这里用 `Promise.all(items.map(...))`, 每项一次 LLM call,
+ *  **并发数 = 任务数, 无上限**。上游有 `max 10 concurrent runs` 的闸,
+ *  advisor 一扇出就把额度吃光, 前台的邮件拟稿 / 早安卡片被 429 挡在外面。
+ *
+ *  用 worker 池而不是 chunk 分批: 分批要等最慢的那个才进下一批 (栅栏),
+ *  worker 池谁先空谁先领, 同样限并发但总耗时更短。
+ *
+ *  单项失败不影响其他 —— 调用方自己在 fn 里 try/catch (这里不吞异常,
+ *  抛出来会中断整池, 所以 fn 必须自己兜住)。
+ */
+async function _mapWithLimit<T>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.max(1, Math.min(limit, items.length)) },
+    async () => {
+      for (;;) {
+        const i = next++;
+        if (i >= items.length) return;
+        await fn(items[i]);
+      }
+    },
+  );
+  await Promise.all(workers);
+}
+
 // P3.4.E (6/15 鸿波): Call 2 transformToStructured 直走 catfish-gateway 8999 (LiteLLM passthrough),
 //   bypass hermes 8642 agent loop. 真因: hermes _handle_chat_completions 不读 client tools / tool_choice
 //   (api_server.py:1820 把 request 重 framing 成 agent run), 必须直 LiteLLM 才能用 strict function calling.
@@ -801,7 +832,10 @@ export type AdvisorFetchResult = AdvisorResult | null | typeof ADVISOR_TIMEOUT;
 // 5-10 min real. profile + advisor 累计 7-12 min, 300s timeout 全部走 stale cache.
 // 600s 给内网模型留时间. 长期 fix (留 Phase 11): profile/advisor 脱钩 chat picker,
 // 用专用 fast role (e.g. role rate_fast = qwen-flash, 5s 跑完).
-const CLIENT_TIMEOUT_MS = 600_000;
+// 8/8: 加 export —— AdvisorView 的超时文案原来硬编码 ">5min", 而这里早就是
+// 600s 了 (P3.4.8 之后又调过一次)。两处各写各的, 结果界面上告诉员工"等 5 分钟",
+// 实际要等 10 分钟。数字只该有一个来源。
+export const CLIENT_TIMEOUT_MS = 600_000;
 
 /** 主入口. 不挂 AbortSignal (Tauri webview suspend 经验, 5/21 学到). */
 export async function fetchBriefingAdvisor(input: AdvisorInput): Promise<AdvisorFetchResult> {
@@ -1845,8 +1879,21 @@ async function _ensureTaskChatSummariesFreshImpl(model: string): Promise<void> {
     let fromStateDb = 0;
     let fromJsonl = 0;
 
-    await Promise.all(
-      mainTasks.map(async (t: { taskUid: string; title: string }) => {
+    // ★ 8/7: 从 Promise.all 改成限并发 —— 这里每个任务一次 summarizeTaskChat
+    // (LLM call), 原来是**无上限扇出**。
+    //
+    // 鸿波实盘: 点邮件拟稿报 429 `Too many concurrent runs (max 10)`。查 outbound_log
+    // 最近 60 条 chat 请求, `companion-advisor` 占 28 条 (47%), 而 advisor_cache 里
+    // taskChatSummaries 有 7 条 —— 首次跑 / 缓存失效时就是 7 个并发 LLM 一起打,
+    // 再叠上同时在跑的 briefing-card / profile / wiki-suggest, 顶满 10 很容易。
+    // 顶满之后**先倒霉的是别人**: 拟稿、早安卡片这些前台操作被 429 挡住,
+    // 而 advisor 自己是后台任务, 慢一点没人知道。
+    //
+    // 限 3 并发: 7 个任务分 3 批, 后台多等两轮无感, 但给前台留出 7 个并发额度。
+    await _mapWithLimit(
+      mainTasks,
+      3,
+      async (t: { taskUid: string; title: string }) => {
         try {
           // P3.3.19 C Phase 5 (6/11): 优先拉 state.db. fallback 老 jsonl.
           //   1. sessionGetByTaskUid(taskUid) → 有 sessionId 就用 state.db
@@ -1932,7 +1979,7 @@ async function _ensureTaskChatSummariesFreshImpl(model: string): Promise<void> {
         } catch (e) {
           console.warn(`[advisor summary] ensure ${t.taskUid} 失败:`, e);
         }
-      }),
+      },
     );
 
     console.log(
