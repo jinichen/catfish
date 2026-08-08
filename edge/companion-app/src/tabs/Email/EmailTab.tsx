@@ -23,6 +23,7 @@ import {
   emailReadMessage,
   emailAccountsFetch,
   emailCheckNew,                  // P3.5.204.c (7/9 鸿波): 触发客户端 IMAP/POP fetch
+  emailMailDirStatus,             // 8/8: 缺完全磁盘访问权限时提示"少账号"
   emailClassifyNow,
   emailPhishingScanNow,           // P3.3.58 段 2B (6/12 鸿波)
   emailPoliticalGet,              // P3.3.53.2 (6/13 鸿波): list 仅查已扫
@@ -349,6 +350,25 @@ export default function EmailTab() {
       : `${items.length}${cap} 封 · ${unreadCnt} 未读 · ${accounts.length} 个账号`;
   }, [items, accounts, loading, error, unreadOnly]);
 
+  // 8/8 (鸿波实撞): 授予完全磁盘访问权限前邮件页只有 1 个账号, 授予后 5 个。
+  //
+  // ~/Library/Mail 受 macOS TCC 保护, 没权限时 catfish-email 会**安静跳过**
+  // Apple Mail 只用 Foxmail —— 不崩了 (5db6e8f), 但界面上一个字都不说, 员工只
+  // 觉得"怎么少了几个邮箱", 完全联想不到是系统权限。跟今天早上 advisor 静默
+  // 404 是同一类病: 降级了但没人知道。
+  //
+  // 只在 "no_access" 时挂提示: 目录压根没有 (真没用 Apple Mail) 返 "ok",
+  // 不打扰只用 Foxmail 的人。
+  const [mailDirBlocked, setMailDirBlocked] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    emailMailDirStatus()
+      .then((s) => { if (!cancelled) setMailDirBlocked(s === "no_access"); })
+      // 探测失败不该影响邮件本身 —— 顶多少一条提示
+      .catch(() => { /* 忽略 */ });
+    return () => { cancelled = true; };
+  }, []);
+
   return (
     <div
       style={{
@@ -391,6 +411,20 @@ export default function EmailTab() {
             <strong style={{ fontSize: 14 }}>邮件</strong>
             <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginLeft: 4 }}>
               {headerSummary}
+              {/* 见上面 mailDirBlocked 那段: 少账号是权限问题, 不说员工查不出来 */}
+              {mailDirBlocked && (
+                <span
+                  style={{ color: "var(--catfish-hint-amber-text)", marginLeft: 6, cursor: "help" }}
+                  title={
+                    "Apple Mail 里的邮箱读不到 —— 缺「完全磁盘访问权限」。\n" +
+                    "系统设置 → 隐私与安全性 → 完全磁盘访问权限 → 打开「鲶鱼 Companion」,\n" +
+                    "然后重启 Companion。\n\n" +
+                    "不授权也能用, 只是 Apple Mail 的账号不会出现在这里 (Foxmail 不受影响)。"
+                  }
+                >
+                  ⚠ 少账号?
+                </span>
+              )}
             </span>
             <button
               type="button"

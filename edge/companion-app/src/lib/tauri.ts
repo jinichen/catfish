@@ -1127,6 +1127,13 @@ export const emailReadMessage = (id: string) =>
 // 先 check 再 refetch. account 空 = 全账号.
 export const emailCheckNew = (account?: string) =>
   rawInvoke<string>("email_check_new", { account: account ?? null });
+/** ~/Library/Mail 读不读得到 —— "ok" | "no_access" | "n/a"。
+ *
+ *  8/8: `no_access` 意味着 Apple Mail 里有账号但**进程没权限读**, 表现是邮件页
+ *  少了几个邮箱而界面上什么都不说 (鸿波实撞: 授权前 1 个账号, 授权后 5 个)。
+ *  这条只用来挂提示, 不影响取数 —— 取数那边已经会安静降级到 Foxmail。 */
+export const emailMailDirStatus = () =>
+  rawInvoke<string>("email_mail_dir_status");
 // BL-EMAIL-MARK-READ (5/18): 单独标已读 / 反向标未读. CLI read 默认已自动标,
 // 这个 wrapper 是给右键 "标已读" / 批量场景用 (不读正文).
 export const emailMarkRead = (id: string, read: boolean = true) =>

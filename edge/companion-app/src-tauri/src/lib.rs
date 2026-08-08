@@ -874,6 +874,7 @@ pub fn run() {
             commands::email::email_create_draft,
             // P3.5.204.c (7/9 鸿波): 客户端还没同步的邮件, 员工可点刷新触发 IMAP/POP 同步
             commands::email::email_check_new,
+            commands::email::email_mail_dir_status,  // 8/8: 缺完全磁盘访问权限时提示 (见该 fn 注释)
             // BL-EMAIL-MARK-READ (5/18): 单独标已读/未读 (右键 / 批量场景)
             commands::email::email_mark_read,
             // BL-EMAIL-DELETE (5/18): 删邮件 (移到 Trash, 软删)

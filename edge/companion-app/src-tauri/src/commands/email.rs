@@ -41,6 +41,54 @@ fn find_catfish_email() -> Option<PathBuf> {
     None
 }
 
+/// Apple Mail 数据目录读不读得到 —— 用来提示"有账号但少了几个"。
+///
+/// # 为什么要有这条
+///
+/// 8/8 鸿波实撞: 邮件页只出 Foxmail 一个账号, 授予完全磁盘访问权限后变成 5 个。
+/// 也就是说 `~/Library/Mail` 里一直有数据, 只是**进程读不到**。
+///
+/// macOS 的 TCC 对这个目录的表现很坑: `stat` 过得去 (所以 `exists()` 返 true),
+/// 但 `read_dir()` 抛 PermissionError。于是 catfish-email 那边判成"这台机器没在用
+/// Apple Mail", 安静跳过 —— 从不崩了 (5db6e8f 修的), 但**界面上一个字都不说**,
+/// 员工只会觉得"怎么少了几个邮箱", 完全没法把它跟系统权限联系起来。
+/// 跟今天早上那个 advisor 静默 404 是同一类病: 降级了但没人知道。
+///
+/// # 为什么放在 Rust 而不是 Python 那边
+///
+/// FDA 是授给 Companion.app 的, 它自己就能判 —— 不需要穿过 catfish-email
+/// 再把结果传回来。而且 `catfish_email/__main__.py` 已经 906 行超军规红线,
+/// 不该再往里加子命令。
+///
+/// # 返回
+///
+/// - `"ok"`        目录能读 (或者本来就没有这个目录 —— 那就是真没用 Apple Mail)
+/// - `"no_access"` 目录在但读不到 → **就是权限问题**, 前端据此挂提示
+/// - `"n/a"`       非 macOS
+#[tauri::command]
+pub async fn email_mail_dir_status() -> Result<String, String> {
+    if !cfg!(target_os = "macos") {
+        return Ok("n/a".to_string());
+    }
+    let home = crate::util::paths::home_env().map_err(|_| "拿不到 HOME".to_string())?;
+    let dir = PathBuf::from(home).join("Library").join("Mail");
+    // 注意判断顺序: 先 read_dir 再看 exists。
+    // 反过来写在 TCC 下会误判 —— exists() 那一步就已经"成功"了, 看不出问题。
+    match std::fs::read_dir(&dir) {
+        Ok(_) => Ok("ok".to_string()),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            log::info!("[email] {} 读不到 (缺完全磁盘访问权限)", dir.display());
+            Ok("no_access".to_string())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok("ok".to_string()),
+        Err(e) => {
+            // 其它错 (网络卷不可达之类) 不当权限问题报 —— 提示指错方向比不提示更糟。
+            log::debug!("[email] 探 {} 出错 (不当权限问题): {e}", dir.display());
+            Ok("ok".to_string())
+        }
+    }
+}
+
 /// 拉未读邮件简报. 返 raw JSON 字符串, 前端自己解析 (避开 Rust/TS 类型重复维护).
 ///
 /// limit 默认 10 — 简报卡只显前 5, 多取 5 是 buffer (前端再 slice).
