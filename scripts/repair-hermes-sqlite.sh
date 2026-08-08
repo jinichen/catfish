@@ -95,12 +95,40 @@ EMAIL_AGENT=~/person_task/catfish/edge/email-agent
 echo "════════ Phase 0: 前置检查 ════════"
 
 echo "→ [0.1] 源码树必须还钉在 v2026.8.3..."
-HEAD_SHA=$(git -C "$HERMES_DIR" -c safe.directory='*' rev-parse --short HEAD)
-if [ "$HEAD_SHA" != "$PINNED_SHA" ]; then
-  echo "  ✗ HEAD=$HEAD_SHA, 期望 $PINNED_SHA。树已经被动过, 先查清楚再修 SQLite。"
+# 判据要**先读 .catfish-hermes-version, git 兜底** —— 跟 Rust 侧
+# installed_hermes_commit_at() 和 pre-tauri-build.sh 保持一致。
+#
+# 8/8 踩到: 第一版只用 `git rev-parse HEAD`, 挂在
+#     fatal: Needed a single revision
+# 因为 Companion bootstrap 铺出来的树, `.git` 是个**空壳** —— HEAD 指向
+# refs/heads/main, 而 refs/ 下一个 commit 都没有。那种树的版本只记在
+# .catfish-hermes-version 里。
+#
+# 也就是说 hermes-agent 有两种来路, 判版本的方式不一样:
+#   · 手动 git clone --branch <tag>  → detached HEAD, git 认得
+#   · Companion bootstrap 解包铺的   → .git 空壳, 只有版本文件
+# 只认后者会漏, 只认前者就是现在这个 bug。
+current_hermes_sha() {
+  local f="$HERMES_DIR/.catfish-hermes-version" line
+  if [ -f "$f" ]; then
+    # 不认行号, 挑出那行 40 位 hex (跟 Rust 的 parse_version_file 同判据)
+    while IFS= read -r line; do
+      line="$(printf '%s' "$line" | tr -d '[:space:]')"
+      if [ ${#line} -eq 40 ] && [ -z "$(printf '%s' "$line" | tr -d '[:xdigit:]')" ]; then
+        printf '%s' "$line"; return 0
+      fi
+    done < "$f"
+  fi
+  git -C "$HERMES_DIR" -c safe.directory='*' rev-parse HEAD 2>/dev/null || true
+}
+HEAD_SHA="$(current_hermes_sha)"
+if [ "${HEAD_SHA:0:7}" != "$PINNED_SHA" ]; then
+  echo "  ✗ 已装 ${HEAD_SHA:-<读不出>}, 期望 $PINNED_SHA*"
+  echo "    ($HERMES_DIR/.catfish-hermes-version, git 兜底)"
+  echo "    树已经被动过, 先查清楚再修 SQLite。"
   exit 1
 fi
-echo "  ✓ HEAD=$HEAD_SHA (detached, v2026.8.3)"
+echo "  ✓ ${HEAD_SHA:0:12} (v2026.8.3)"
 
 echo "→ [0.2] 确认 SQLite 真的有洞 (没洞就不折腾)..."
 SQLITE_BEFORE=$("$PY" -c 'import sqlite3; print(sqlite3.sqlite_version)')
