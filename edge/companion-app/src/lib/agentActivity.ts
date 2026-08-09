@@ -26,6 +26,7 @@
  * 跟那条请求完全独立。轮询失败不该影响主请求 —— 所以所有错误都吞掉返 null,
  * 让 UI 退回"没有进度信息"这个已知状态, 而不是把主流程带崩。
  */
+import { translateActivityDescription, translateTool } from "./agentActivityI18n";
 import { config } from "./env";
 import { fetchWithAuth } from "./me";
 
@@ -148,8 +149,10 @@ export function pickPrimaryTurn(
 export function describeTurn(turn: AgentTurnActivity | null): string {
   if (!turn) return "";
   const parts: string[] = [];
-  if (turn.current_tool) parts.push(`正在用 ${turn.current_tool}`);
-  const desc = (turn.last_activity_description || "").trim();
+  // 8/9: 工具名和活动描述都来自 hermes, 是英文。认得的翻成中文, 认不得的原样
+  // 显示 + warn 一次 —— 见 agentActivityI18n.ts (跟插件侧 P28 同策略)。
+  if (turn.current_tool) parts.push(`正在用 ${translateTool(turn.current_tool)}`);
+  const desc = translateActivityDescription(turn.last_activity_description);
   if (desc && !turn.current_tool) parts.push(desc);
   if (typeof turn.api_call_count === "number" && turn.api_call_count > 0) {
     const max = turn.max_iterations;
