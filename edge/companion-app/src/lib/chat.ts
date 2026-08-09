@@ -794,13 +794,26 @@ export async function streamChat(params: SendChatParams): Promise<void> {
             continue;
           }
 
+          // 8/9: 两种形状都认。
+          //   老: {"error": "人话文案"}                       (裸字符串)
+          //   新: {"error": {"message": "人话文案", "type": …}} (OpenAI 标准)
+          // 网关 8/9 改成了新形状 —— 因为 OpenAI 官方客户端 (hermes 用的那个)
+          // 遇到裸字符串会把文案整个丢掉, 只抛一句 "An error occurred during
+          // streaming"。两种都认是为了新旧网关 / 新旧 Companion 交叉组合都不瞎。
+          const errField =
+            typeof parsed === "object" && parsed !== null && "error" in parsed
+              ? (parsed as { error: unknown }).error
+              : undefined;
+          if (typeof errField === "string") {
+            onError(errField);
+            return;
+          }
           if (
-            typeof parsed === "object" &&
-            parsed !== null &&
-            "error" in parsed &&
-            typeof (parsed as { error: unknown }).error === "string"
+            typeof errField === "object" &&
+            errField !== null &&
+            typeof (errField as { message?: unknown }).message === "string"
           ) {
-            onError((parsed as { error: string }).error);
+            onError((errField as { message: string }).message);
             return;
           }
 

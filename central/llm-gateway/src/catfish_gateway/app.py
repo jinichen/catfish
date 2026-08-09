@@ -2590,7 +2590,36 @@ async def _stream_chat_completion(
                 "  - **新建会话** (Cmd+N): 减小 prompt 让上游推理更快\n"
                 "  - 上游 catfish-private-main 是内网 122B Qwen, 长 prompt + 高负载下推理 5+ 分钟"
             )
-        yield f"data: {json.dumps({'error': friendly})}\n\n"
+        # 8/9: error 必须是**对象**, 不能是裸字符串。
+        #
+        # 老写法 `{'error': friendly}` 里 friendly 是 str。OpenAI 官方客户端
+        # (hermes 走的就是它) 的判据是 openai/_streaming.py:88-99:
+        #
+        #     if is_mapping(data) and data.get("error"):
+        #         error = data.get("error")
+        #         if is_mapping(error):            ← 字符串不是 mapping
+        #             message = error.get("message")
+        #         if not message or not isinstance(message, str):
+        #             message = "An error occurred during streaming"   ← 落这里
+        #         raise APIError(message=message, ...)
+        #
+        # 也就是说: **我们精心写的 friendly 文案被整个丢掉**, 客户端只拿到一句
+        # 无信息量的 "An error occurred during streaming"。
+        #
+        # 8/9 实测代价 (P44 进度探针刚上线就照出来的第一个问题): hermes 拿着这句
+        # 空话重试 3 次 (每次退避 2s / 6s), 白烧 ~22K token 的 prompt 三遍, 最后
+        # 返 200 但正文是 "API call failed after 3 retries..."。员工看到的是
+        # "等了很久然后没结果", 而真实原因 (friendly 里写着的) 一路都没传出去。
+        #
+        # 新形状跟 OpenAI 一致: {"error": {"message": ..., "type": ...}}。
+        # Companion 那边 chat.ts 老代码只认字符串, 已同步改成两种都认 ——
+        # 新旧网关 / 新旧 Companion 交叉组合都不会瞎。
+        yield "data: {}\n\n".format(
+            json.dumps(
+                {"error": {"message": friendly, "type": "upstream_error"}},
+                ensure_ascii=False,
+            )
+        )
     finally:
         # BL-ABORT-PROPAGATE (7/23 达华 POC): 显式关 upstream iterator · 停 token.
         # 正常完成 · iterator 已 exhausted · aclose 是 no-op. Abort 时 (client_disconnect
