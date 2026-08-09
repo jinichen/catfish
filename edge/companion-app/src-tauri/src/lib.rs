@@ -328,8 +328,9 @@ pub fn run() {
             // 顺带 ensure ~/.hermes/config.yaml plugins.enabled 含 catfish-xcatfish-user
             // (hermes plugin loader 白名单, 没在里面即使文件就位也不加载).
             //
-            // **不重启 hermes daemon** — Companion 不管 hermes 进程 (launchctl 管),
-            // 等 hermes 下次自然重启 / 员工手动 kickstart 自动生效.
+            // 8/9: plugin 文件**内容真变了**才 launchctl kickstart 重启 hermes。
+            // hermes 只在启动时加载 plugin, 老行为 (从不重启) 导致装了新包之后
+            // 新端点 404 且完全静默。内容没变不动 —— 不打断在跑的 turn。
             //
             // Escape hatch: CATFISH_HERMES_PLUGIN_NO_BOOTSTRAP=1 跳全部 (调试用).
             commands::hermes_plugin::bootstrap_hermes_plugin();

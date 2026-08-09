@@ -28,10 +28,12 @@
 //!    hermes_cli/plugins.py:198) 不加载. Companion 自动 ensure 含, 不在就加 (跟
 //!    curator_config::ensure_default 同款 serde_yaml::Value pattern).
 //!
-//! 4. **不自动重启 hermes daemon**: hermes 不由 Companion 起 (是 launchctl 管的, 见
-//!    lib.rs autostart 注释). Companion 写完 plugin 文件, 等 hermes 下次自然重启
-//!    (员工机器重启 / hermes daemon 自维护 / 手动 kickstart) 自动生效. 不抢 hermes
-//!    控制权. (TODO P3.5.56.1 可选: 检测新装/升级时主动 launchctl kickstart.)
+//! 4. **plugin 文件真变了才重启 hermes** (8/9, 就是原来那条 TODO P3.5.56.1):
+//!    hermes 只在进程启动时加载 plugin, 所以"同步过去"不等于"生效"。老行为是
+//!    从不重启、等 hermes 下次自然重启 —— 结果是装了新包之后新端点 404, 而且
+//!    **完全静默** (没报错, 只是功能不存在)。8/9 一天内漏了两次。
+//!    现在 sync 返回"内容有没有真的变", 变了才 `launchctl kickstart -k`。
+//!    没变不动 —— 不白白打断 hermes 正在跑的 turn。
 //!
 //! 5. **Escape hatch**: `CATFISH_HERMES_PLUGIN_NO_BOOTSTRAP=1` env 跳过全部 (开发者调试用).
 
@@ -127,6 +129,13 @@ const BAKED_FILES: &[(&str, &str)] = &[
 
 const PLUGIN_NAME: &str = "catfish-xcatfish-user";
 
+/// hermes gateway 的 launchd label。
+///
+/// 实测来源: 员工跑 `hermes gateway stop` 时 launchd 报
+/// `Could not find service "ai.hermes.gateway" in domain for user gui: 501`。
+/// CHANGELOG:1875 也记着 `launchctl kickstart -k gui/$(id -u)/ai.hermes.gateway`。
+const HERMES_LAUNCHD_LABEL: &str = "ai.hermes.gateway";
+
 // ─────────────────────────────────────────────
 // 路径 helpers
 // ─────────────────────────────────────────────
@@ -205,8 +214,9 @@ fn classify_existing(path: &Path) -> ExistingKind {
 /// 配套调 `ensure_plugin_enabled_in_config()` 让 ~/.hermes/config.yaml plugins.enabled
 /// 含 catfish-xcatfish-user (否则 hermes plugin loader 即使软链了也不加载).
 ///
-/// 不重启 hermes daemon — hermes 不由 Companion 起 (launchctl 管的). Companion 写完
-/// 等 hermes 下次自然重启 / 员工手动 kickstart 生效.
+/// 8/9: plugin 文件内容真变了会自动 `launchctl kickstart -k` 重启 hermes ——
+/// 不重启新 plugin 代码不生效, 而那个失败是静默的 (见 restart_hermes_gateway)。
+/// 内容没变就不动。
 ///
 /// Escape hatch: `CATFISH_HERMES_PLUGIN_NO_BOOTSTRAP=1` env 跳过全部.
 ///
@@ -226,10 +236,13 @@ pub fn bootstrap_hermes_plugin() {
     };
 
     // 1) 同步 plugin 文件
-    if let Err(e) = sync_plugin_files(&plugin_path) {
-        log::warn!("[P3.5.56] sync plugin 文件失败 ({}), 跳", e);
-        return;
-    }
+    let plugin_changed = match sync_plugin_files(&plugin_path) {
+        Ok(changed) => changed,
+        Err(e) => {
+            log::warn!("[P3.5.56] sync plugin 文件失败 ({}), 跳", e);
+            return;
+        }
+    };
 
     // 2) ensure config.yaml plugins.enabled 含 catfish-xcatfish-user
     match ensure_plugin_enabled_in_config() {
@@ -245,122 +258,30 @@ pub fn bootstrap_hermes_plugin() {
     }
 
     // 3) ensure ~/.hermes/.env 有 API_SERVER_KEY —— 决定聊天走不走 hermes
-    if let Err(e) = ensure_api_server_key() {
+    if let Err(e) = super::hermes_plugin_env::ensure_api_server_key() {
         log::warn!("[P3.5.82] API_SERVER_KEY 配置失败 ({e:#}), 聊天会退化成直连 gateway");
     }
-}
 
-/// P3.5.82 (7/29): 保证 `~/.hermes/.env` 里有 `API_SERVER_KEY` + `API_SERVER_ENABLED`.
-///
-/// ── 为什么这一步决定"鲶鱼记不记得你" ────────────────────────────────
-///
-/// 聊天有两条路, 分界线就是这个 key:
-///   有 key → `hermes_api_config` 的 `enabled = enabled_raw && key.is_some()` 成立
-///            → 前端 `useHermes = true` → Companion → hermes → gateway
-///   没 key → `enabled` 被强制 false → Companion 直连 gateway, **不经 hermes**
-///
-/// 而**记忆是 hermes 侧写的**: catfish-memory 的 `sync_turn` 是 hermes agent loop
-/// 每轮结束后的钩子, 不经 hermes 就不触发; gateway 侧的写入能力 5/23 已主动删除
-/// (memory_distill.py 747 行 + session_summarizer.py 527 行, 见 gateway app.py 注释),
-/// 理由是"中央边缘分离, gateway 不再读写员工本机数据".
-///
-/// 于是没有 key 的机器上, 鲶鱼**能读旧记忆但永远不产生新记忆** —— 而新员工的
-/// USER.md / memories/ 本来就是空的 (identity_bundle.rs: "员工个人数据, 没就是没").
-/// 表现是"用起来一切正常, 但用多久都不会更懂你", 现场根本看不出哪里坏了。
-///
-/// 这个 key 原来只有 `scripts/setup-catfish-edge.sh` 会生成, 而那个脚本从自己所在
-/// 的**仓库路径**推导依赖 (`CATFISH_REPO/edge/hermes-plugins/...`), 员工只有一个
-/// dmg、没有源码, 结构上跑不了。所以边缘能力实际上从没进过员工安装包。
-///
-/// ── 幂等 ────────────────────────────────────────────────────────────
-///
-/// 已有 key **一律保留**, 不 rotate。setup-catfish-edge.sh 是每次生成新 key 的
-/// (它的场景是"手动轮换"), 但装机路径不能这样: 换了 key 而正在跑的 hermes 内存里
-/// 还是旧的, Companion 调 8642 直接 401, 而且要等 hermes 重启才自愈。
-fn ensure_api_server_key() -> Result<()> {
-    let home = crate::util::paths::home_env().context("拿 HOME")?;
-    let hermes = PathBuf::from(&home).join(".hermes");
-    if !hermes.exists() {
-        log::debug!("[P3.5.82] {} 不存在 (hermes 未装) · skip", hermes.display());
-        return Ok(());
+    // 4) plugin 文件真的变了才重启 hermes (8/9)
+    //
+    // 只在"变了"时重启, 不是每次启动都重启 —— 后者会白白打断 hermes 正在跑的
+    // turn (微信那边可能有人在对话)。变了的那一刻新旧代码已经不一致, 不重启
+    // 才是坏状态。
+    //
+    // 放在最后: config.yaml 的 plugins.enabled 和 .env 的 API_SERVER_KEY 都
+    // 处理完再重启, 免得 hermes 起来时读到写了一半的配置。
+    if plugin_changed {
+        restart_hermes_gateway();
     }
-    let env_path = hermes.join(".env");
-    let text = fs::read_to_string(&env_path).unwrap_or_default();
-
-    let existing = text
-        .lines()
-        .find_map(|l| l.strip_prefix("API_SERVER_KEY="))
-        .map(str::trim)
-        .filter(|v| !v.is_empty());
-
-    let key = match existing {
-        Some(k) => {
-            log::debug!("[P3.5.82] API_SERVER_KEY 已存在 (len={}) · 保留不换", k.len());
-            k.to_string()
-        }
-        None => {
-            let k = gen_api_server_key();
-            log::info!("[P3.5.82] API_SERVER_KEY 不存在 · 已生成 (len={})", k.len());
-            k
-        }
-    };
-
-    let mut out = replace_or_append_env_line(&text, "API_SERVER_KEY", &key);
-    out = replace_or_append_env_line(&out, "API_SERVER_ENABLED", "true");
-
-    if out == text {
-        return Ok(()); // 没变化就不写盘, 免得每次启动都动 mtime
-    }
-    fs::write(&env_path, out).with_context(|| format!("写 {}", env_path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&env_path, fs::Permissions::from_mode(0o600));
-    }
-    log::info!(
-        "[P3.5.82] ✓ {} 已配 API_SERVER_KEY + API_SERVER_ENABLED=true \
-         (hermes 下次启动生效, 之后聊天经 hermes, 记忆开始积累)",
-        env_path.display()
-    );
-    Ok(())
-}
-
-/// 64 位十六进制随机 key, 跟 setup-catfish-edge.sh 的 `gen_key` 同规格.
-fn gen_api_server_key() -> String {
-    use rand::RngCore;
-    let mut buf = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut buf);
-    buf.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// dotenv 行级替换 / 追加. 保留注释和其它变量.
-///
-/// 跟 `server_config.rs` / `hermes_jwt_sync.rs` 里的同名函数是同一套语义 ——
-/// 三处各有一份是既有的重复, 这次不顺手合并: 合并要动那两个已经验证过的调用点,
-/// 交付前不做无关改动。合并这件事记在技术债里。
-fn replace_or_append_env_line(text: &str, key: &str, value: &str) -> String {
-    let prefix = format!("{key}=");
-    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
-    let mut replaced = false;
-    for line in lines.iter_mut() {
-        if line.starts_with(&prefix) {
-            *line = format!("{key}={value}");
-            replaced = true;
-            break;
-        }
-    }
-    if !replaced {
-        lines.push(format!("{key}={value}"));
-    }
-    let mut out = lines.join("\n");
-    if !out.ends_with('\n') {
-        out.push('\n');
-    }
-    out
 }
 
 /// 按状态分发, 真正写 plugin 9 个文件到 plugin_dir.
-fn sync_plugin_files(plugin_path: &Path) -> Result<()> {
+/// 同步 baked plugin 文件到 `~/.hermes/plugins/catfish-xcatfish-user/`。
+///
+/// 返回 **是否有文件内容真的变了** —— 上层拿它决定要不要重启 hermes
+/// (见 `restart_hermes_gateway`)。健康软链那条路直接返 `false`: 开发者
+/// deploy.sh 软链的目录我们不动, 也就谈不上"变了"。
+fn sync_plugin_files(plugin_path: &Path) -> Result<bool> {
     let kind = classify_existing(plugin_path);
     match kind {
         ExistingKind::HealthySymlink => {
@@ -368,7 +289,8 @@ fn sync_plugin_files(plugin_path: &Path) -> Result<()> {
                 "[P3.5.56] {} 是健康软链 (开发者 deploy.sh 路径), 不动",
                 plugin_path.display()
             );
-            return Ok(());
+            // 不动 = 没变 → 不触发重启 (开发者本机改源码是即时生效的)
+            return Ok(false);
         }
         ExistingKind::DanglingSymlink => {
             fs::remove_file(plugin_path).with_context(|| {
@@ -392,25 +314,135 @@ fn sync_plugin_files(plugin_path: &Path) -> Result<()> {
     fs::create_dir_all(plugin_path)
         .with_context(|| format!("创建目录 {} 失败", plugin_path.display()))?;
 
-    let mut wrote = 0usize;
+    // 8/9: 返回"内容有没有真的变", 给上层决定要不要重启 hermes。
+    //
+    // 原来无条件全量重写、返 Result<()>, 上层不知道变没变, 于是**永远不重启**
+    // (见 bootstrap_hermes_plugin 的老注释)。而 hermes 只在启动时加载 plugin,
+    // 结果是: 装了新包 → 文件同步过去了 → 但 hermes 还跑着旧的 → 新端点 404,
+    // **没有任何报错**。8/9 一天内因为这个漏了两次。
+    //
+    // 逐个比对内容再写, 顺带少写没变的文件 (每次启动全量重写 15 个文件也没必要)。
+    let mut changed: Vec<&str> = Vec::new();
     let mut total_bytes = 0usize;
     for (name, content) in BAKED_FILES {
         let dst = plugin_path.join(name);
+        total_bytes += content.len();
+        // 已存在且内容一致 → 不动。读失败 (不存在/权限) 一律当"要写"。
+        if let Ok(existing) = fs::read_to_string(&dst) {
+            if existing == *content {
+                continue;
+            }
+        }
         // tmp + rename atomic 写, 防 hermes daemon 半读半写
         let tmp = dst.with_extension("tmp");
         fs::write(&tmp, content).with_context(|| format!("写临时文件 {} 失败", tmp.display()))?;
         fs::rename(&tmp, &dst)
             .with_context(|| format!("rename {} → {} 失败", tmp.display(), dst.display()))?;
-        wrote += 1;
-        total_bytes += content.len();
+        changed.push(name);
     }
+
+    if changed.is_empty() {
+        log::debug!(
+            "[P3.5.56] plugin 文件跟 baked 一致, 没动 ({} 个文件, {} bytes)",
+            BAKED_FILES.len(),
+            total_bytes
+        );
+    } else {
+        log::info!(
+            "[P3.5.56] sync baked → {} · 改了 {}/{} 个: {:?}",
+            plugin_path.display(),
+            changed.len(),
+            BAKED_FILES.len(),
+            changed
+        );
+    }
+    Ok(!changed.is_empty())
+}
+
+/// plugin 文件变了之后重启 hermes gateway —— 不重启新代码不生效 (8/9).
+///
+/// ── 为什么必须重启 ──────────────────────────────────────────────────
+///
+/// hermes 只在**进程启动时**加载 plugin。Companion 把文件同步过去不等于生效:
+/// 装了新包 → 文件是新的 → hermes 还跑着旧的 → 新端点 404。而这个失败**完全
+/// 静默** —— 没有报错, 只是新功能不存在。8/9 一天内漏了两次, 两次都是花了
+/// 十几分钟才想起来"哦要重启 hermes"。
+///
+/// 老注释写的是"不抢 hermes 控制权, 等它下次自然重启" (本文件 line 31-34 的
+/// TODO P3.5.56.1 就是这条)。那个顾虑成立 —— hermes 是 launchctl 管的独立服务,
+/// Companion 不该乱动。但**只在文件真的变了时重启一次**跟"乱动"是两回事:
+/// 那一刻新旧代码已经不一致了, 不重启才是坏状态。
+///
+/// ── 为什么用 launchctl 而不是 `hermes gateway restart` ──────────────
+///
+/// GUI app 继承的 PATH 极简 (通常只有 /usr/bin:/bin:/usr/sbin:/sbin), `hermes`
+/// 大概率不在里面 —— shell 里跑得通不代表 Companion 里跑得通。launchctl 是
+/// /bin/launchctl, 一定在。
+///
+/// label 来自实测: 员工跑 `hermes gateway stop` 时 launchd 报的是
+/// `Could not find service "ai.hermes.gateway" in domain for user gui: 501`。
+/// CHANGELOG:1875 也记着同一条命令。
+///
+/// ── 失败不阻塞 ──────────────────────────────────────────────────────
+///
+/// 没装 LaunchAgent (员工手动前台跑 hermes) / kickstart 返非 0 → 只 warn,
+/// 并把手动命令打出来。Companion 启动不该因为这个挂掉。
+#[cfg(target_os = "macos")]
+fn restart_hermes_gateway() {
+    use std::process::Command;
+
+    // 拿 uid 走 `id -u` 而不是加一个 libc 依赖 —— 为一个整数引 crate 不值,
+    // 而且 unsafe { libc::getuid() } 在这条路径上没有任何收益。
+    // /usr/bin/id 走绝对路径: GUI app 的 PATH 极简, 不能指望 `id` 在里面。
+    let uid = match Command::new("/usr/bin/id").arg("-u").output() {
+        Ok(out) if out.status.success() => {
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        }
+        _ => {
+            log::warn!(
+                "[P3.5.56] plugin 变了但拿不到 uid, 没法重启 hermes\n\
+                 → 新 plugin 代码**还没生效**。手动跑: \
+                 hermes gateway stop && hermes gateway start"
+            );
+            return;
+        }
+    };
+    let target = format!("gui/{uid}/{HERMES_LAUNCHD_LABEL}");
+
+    // -k = 已在跑就先杀再起; 没在跑就直接起
+    match Command::new("/bin/launchctl")
+        .args(["kickstart", "-k", &target])
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            log::info!("[P3.5.56] plugin 变了 → 已重启 hermes gateway ({target})");
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            log::warn!(
+                "[P3.5.56] plugin 变了但重启 hermes 失败 ({}): {}\n\
+                 → 新 plugin 代码**还没生效**。手动跑: \
+                 hermes gateway stop && hermes gateway start",
+                out.status,
+                stderr.trim()
+            );
+        }
+        Err(e) => {
+            log::warn!(
+                "[P3.5.56] plugin 变了但调不起 launchctl ({e})\n\
+                 → 新 plugin 代码**还没生效**。手动跑: \
+                 hermes gateway stop && hermes gateway start"
+            );
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn restart_hermes_gateway() {
     log::info!(
-        "[P3.5.56] sync baked → {} ({} 文件, {} bytes, catfish source-of-truth)",
-        plugin_path.display(),
-        wrote,
-        total_bytes
+        "[P3.5.56] plugin 变了。非 macOS 平台没有 launchctl —— \
+         请手动重启 hermes 让新 plugin 生效"
     );
-    Ok(())
 }
 
 // ─────────────────────────────────────────────
@@ -523,66 +555,6 @@ fn ensure_plugin_enabled_in_config() -> Result<bool> {
 // 测试
 // ─────────────────────────────────────────────
 
-/// P3.5.82 (7/29): API_SERVER_KEY 装机配置的回归测试。
-///
-/// 这个 key 决定聊天走不走 hermes, 而记忆只在 hermes 那条路上写 —— 配错了的
-/// 表现是"一切正常但永远不积累记忆", 现场看不出来, 所以必须有测试兜住。
-#[cfg(test)]
-mod tests_api_server_key {
-    use super::replace_or_append_env_line;
-
-    #[test]
-    fn appends_when_absent() {
-        // 员工机首装: install.sh 从模板 cp 的 .env 里没有这两项
-        let input = "TAVILY_API_KEY=tvly-x\nAPI_SERVER_PORT=8642\n";
-        let out = replace_or_append_env_line(input, "API_SERVER_KEY", "abc123");
-        assert!(out.contains("API_SERVER_KEY=abc123"));
-        assert!(out.contains("TAVILY_API_KEY=tvly-x"), "别的 key 被动了");
-        assert!(out.contains("API_SERVER_PORT=8642"));
-    }
-
-    #[test]
-    fn replaces_in_place_not_duplicate() {
-        // 追加出两行的话 dotenv 取哪行看实现 —— 又是"看着配对了其实没生效"
-        let input = "API_SERVER_KEY=old\nOTHER=1\n";
-        let out = replace_or_append_env_line(input, "API_SERVER_KEY", "new");
-        assert_eq!(out.matches("API_SERVER_KEY=").count(), 1);
-        assert!(out.contains("API_SERVER_KEY=new"));
-        assert!(!out.contains("old"));
-    }
-
-    #[test]
-    fn keeps_comments_and_blank_structure() {
-        // .env 里有注释说明各字段用途, 装机改写不该把它们吃掉
-        let input = "# hermes API server\nAPI_SERVER_ENABLED=false\n# 上游 key\nTAVILY_API_KEY=x\n";
-        let out = replace_or_append_env_line(input, "API_SERVER_ENABLED", "true");
-        assert!(out.contains("# hermes API server"));
-        assert!(out.contains("# 上游 key"));
-        assert!(out.contains("API_SERVER_ENABLED=true"));
-        assert!(!out.contains("API_SERVER_ENABLED=false"));
-    }
-
-    #[test]
-    fn generated_key_is_64_hex() {
-        // 跟 setup-catfish-edge.sh 的 gen_key 同规格 (32 字节 → 64 hex)
-        let k = super::gen_api_server_key();
-        assert_eq!(k.len(), 64, "长度跟脚本生成的不一致");
-        assert!(k.chars().all(|c| c.is_ascii_hexdigit()));
-        // 两次不能一样 —— 用死值等于所有员工共用一个密钥
-        assert_ne!(k, super::gen_api_server_key());
-    }
-
-    #[test]
-    fn empty_env_file_gets_both_keys() {
-        // hermes 装了但 .env 是空文件 (install.sh 的 `touch` 分支)
-        let out = replace_or_append_env_line("", "API_SERVER_KEY", "k");
-        let out = replace_or_append_env_line(&out, "API_SERVER_ENABLED", "true");
-        assert!(out.contains("API_SERVER_KEY=k"));
-        assert!(out.contains("API_SERVER_ENABLED=true"));
-        assert!(out.ends_with('\n'), "dotenv 末尾必须有换行");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -683,8 +655,9 @@ mod tests {
     fn sync_plugin_files_creates_dir_when_missing() {
         let tmp = TempDir::new().unwrap();
         let plugin_path = tmp.path().join("plugins").join("catfish-xcatfish-user");
-        sync_plugin_files(&plugin_path).unwrap();
-        // 9 个文件全在
+        let changed = sync_plugin_files(&plugin_path).unwrap();
+        assert!(changed, "从无到有必须算'变了'(要重启 hermes)");
+        // 文件全在
         for (name, _) in BAKED_FILES {
             assert!(
                 plugin_path.join(name).is_file(),
@@ -692,6 +665,54 @@ mod tests {
                 name
             );
         }
+    }
+
+    /// 8/9 这次改动的核心判据: **内容没变就不能返 true**。
+    ///
+    /// 返错了的代价是每次 Companion 启动都白重启一次 hermes —— 会打断正在跑的
+    /// turn (微信那边可能有人在对话)。所以"第二次跑返 false"必须钉死。
+    #[test]
+    fn sync_plugin_files_第二次跑不算变() {
+        let tmp = TempDir::new().unwrap();
+        let plugin_path = tmp.path().join("plugins").join("catfish-xcatfish-user");
+
+        assert!(sync_plugin_files(&plugin_path).unwrap(), "第一次: 从无到有");
+        assert!(
+            !sync_plugin_files(&plugin_path).unwrap(),
+            "第二次内容一致却报'变了' → 每次启动都会白重启 hermes"
+        );
+    }
+
+    /// 反过来: 真被改脏了就必须报"变了", 否则新代码永远不生效 (静默 404)。
+    #[test]
+    fn sync_plugin_files_内容被改过就算变() {
+        let tmp = TempDir::new().unwrap();
+        let plugin_path = tmp.path().join("plugins").join("catfish-xcatfish-user");
+        sync_plugin_files(&plugin_path).unwrap();
+        assert!(!sync_plugin_files(&plugin_path).unwrap(), "先确认稳定态");
+
+        // 模拟"装了旧包 / 被人手改过"
+        fs::write(plugin_path.join("plugin.py"), "STALE").unwrap();
+        assert!(
+            sync_plugin_files(&plugin_path).unwrap(),
+            "内容跟 baked 不一致却报'没变' → hermes 不重启, 新代码静默不生效"
+        );
+        // 而且要真的写回去
+        let after = fs::read_to_string(plugin_path.join("plugin.py")).unwrap();
+        assert_ne!(after, "STALE");
+    }
+
+    /// 缺文件 (今天那个 P0 的形状) 也必须算变。
+    #[test]
+    fn sync_plugin_files_缺文件算变() {
+        let tmp = TempDir::new().unwrap();
+        let plugin_path = tmp.path().join("plugins").join("catfish-xcatfish-user");
+        sync_plugin_files(&plugin_path).unwrap();
+        fs::remove_file(plugin_path.join("model_authority.py")).unwrap();
+        assert!(
+            sync_plugin_files(&plugin_path).unwrap(),
+            "少一个 sibling 却报'没变' —— 8/9 那个 P0 就是这个形状"
+        );
     }
 
     #[test]
@@ -719,7 +740,8 @@ mod tests {
         let plugin_path = tmp.path().join("plugins").join("catfish-xcatfish-user");
         fs::create_dir_all(plugin_path.parent().unwrap()).unwrap();
         symlink(&real_dir, &plugin_path).unwrap();
-        sync_plugin_files(&plugin_path).unwrap();
+        let changed = sync_plugin_files(&plugin_path).unwrap();
+        assert!(!changed, "健康软链不动 → 不该触发重启 (开发者本机改源码即时生效)");
         // 健康软链 → 不动, __init__.py 仍是 REAL SOURCE
         let after = fs::read_to_string(plugin_path.join("__init__.py")).unwrap();
         assert_eq!(after, "REAL SOURCE", "健康软链不应被 overwrite");
