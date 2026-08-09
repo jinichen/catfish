@@ -121,12 +121,35 @@ fi
 
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
-# 这一条才是我们真正要的东西 —— DR 稳定, TCC 授权才能跨重建保留
-if codesign --display --requirements - "$APP_PATH" 2>&1 | grep -q "Developer ID"; then
-  echo "✅ 已签 Developer ID · Designated Requirement 稳定"
+# 这一条才是我们真正要的东西 —— 签发方是 Developer ID, TCC 授权才能跨重建保留。
+#
+# ⚠ 8/9 第一版这里写的是:
+#     codesign --display --requirements - | grep -q "Developer ID"
+#   **恒假**。Developer ID 的 Designated Requirement 是用**证书 OID** 表达的,
+#   里面根本没有 "Developer ID" 这个字面串:
+#
+#     designated => identifier "..." and anchor apple generic
+#       and certificate 1[field.1.2.840.113635.100.6.2.6]      ← Developer ID CA
+#       and certificate leaf[field.1.2.840.113635.100.6.1.13]  ← Developer ID Application
+#       and certificate leaf[subject.OU] = "LNCT7279Z6"
+#
+#   于是签名明明成功 (valid on disk + satisfies its Designated Requirement),
+#   脚本却报"没签上"并 exit 1, 把后面的 make-dmg 也带停了。
+#   —— 又一次"检查写了但恒假", 跟今天修的 install.sh 归档漏签是同一个病。
+#
+# 改成看 `codesign -dv` 的 Authority 行, 那是人能读的签发链:
+#     Authority=Developer ID Application: dan takaragi (LNCT7279Z6)
+#     Authority=Developer ID Certification Authority
+#     Authority=Apple Root CA
+DISPLAY_OUT="$(codesign --display --verbose=2 "$APP_PATH" 2>&1 || true)"
+if printf '%s' "$DISPLAY_OUT" | grep -q "^Authority=Developer ID Application"; then
+  AUTH_LINE="$(printf '%s' "$DISPLAY_OUT" | grep -m1 '^Authority=Developer ID Application')"
+  echo "✅ 已签 Developer ID · ${AUTH_LINE#Authority=}"
   echo "   → 完全磁盘访问等授权**跨重建保留**, 不用每次重授"
-  echo "   (本次从 ad-hoc 切过来时仍需重授一次, 之后不用)"
+  echo "   (从 ad-hoc 切过来的那一次仍需重授, 之后不用)"
 else
-  echo "❌ 签完了但 DR 里没有 Developer ID —— 权限还是会掉, 不能当成功" >&2
+  echo "❌ 签完了但签发方不是 Developer ID —— 权限还是会掉, 不能当成功" >&2
+  echo "   codesign -dv 实际输出:" >&2
+  printf '%s\n' "$DISPLAY_OUT" | sed 's/^/     /' >&2
   exit 1
 fi
