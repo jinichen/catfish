@@ -203,9 +203,21 @@ fn probe_remote_alive(remote: &RemoteProvider) -> bool {
     // runtime 在跑, drop 合法。join 会阻塞调用方最多 probe_timeout (≤3s),
     // 跟原来 blocking send 的阻塞时长一致, 没有新增等待。
     std::thread::spawn(move || {
-        let client = match reqwest::blocking::Client::builder()
-            .timeout(probe_timeout)
-            .build()
+        // 8/9: 原来这里是裸 `Client::builder()`, **没走 trust_central_blocking**。
+        //
+        // 后果是这条探测不吃中央服务的证书/代理策略:
+        //   · 自签证书环境 (CATFISH_ALLOW_SELF_SIGNED=1) → 握手失败
+        //   · 没有 no_proxy → 系统代理开着时它走代理, 而其余所有中央调用都是绕过的
+        // 而失败只表现为下面那个 matches! 返 false → **静默退回 fallback provider**。
+        // 没日志没报错, 员工只会觉得"语义搜索不准"。
+        //
+        // trust_central_blocking 本来就是给这里写的 (它的注释原话: "blocking 版
+        // (embedding / role_config 用的是 blocking client)"), 只是一直没接上 ——
+        // 8/9 删 role_config 之后它变成 0 caller, cargo 报 dead_code 才暴露出来。
+        let client = match crate::util::http_client::trust_central_blocking(
+            reqwest::blocking::Client::builder().timeout(probe_timeout),
+        )
+        .build()
         {
             Ok(c) => c,
             Err(_) => return false,

@@ -170,7 +170,16 @@ pub fn trust_central(mut b: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
     b
 }
 
-/// 同上, blocking 版 (embedding / role_config 用的是 blocking client).
+/// 同上, blocking 版。
+///
+/// 8/9: 当前唯一调用方是 `services::embedding` 的 provider 探测 (它必须在普通 OS
+/// 线程上建 blocking client, 见那里关于 tokio runtime drop 的说明)。
+///
+/// 值得记一笔: 这个函数写出来是给 embedding 用的, 但 embedding 一直是裸
+/// `Client::builder()`, **从没接上**。删掉 role_config 之后它变成 0 caller,
+/// cargo 的 dead_code warning 才把这件事暴露出来 —— 探测因此不吃自签证书 /
+/// no_proxy 策略, 失败还只静默退回 fallback provider。
+/// 清死代码顺带查出真 bug 的一次。
 pub fn trust_central_blocking(
     mut b: reqwest::blocking::ClientBuilder,
 ) -> reqwest::blocking::ClientBuilder {
