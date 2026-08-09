@@ -48,11 +48,15 @@ fn now_iso8601() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
-/// P3.5.2.1 (6/16 鸿波): chat.ts 发请求前 fire-and-forget 调.
+/// 只写 picker_state.json 这一份 —— **不要直接调它**。
 ///
-/// 失败 silent (Err 返前端但前端不该 await 阻塞 chat send).
-#[tauri::command(rename_all = "camelCase")]
-pub async fn picker_state_save(model: String) -> Result<(), String> {
+/// 8/9: 唯一该调的是 `services::picker_config::persist_picker_model`, 它会把
+/// picker_model 和 picker_state.json 两个副本一起写。单独写一份正是 8/9 之前
+/// 那个静默漂移的来源 (两条独立写入路径 → 两个文件各自为政)。
+///
+/// 这个函数保持 pub 只是为了给 persist_picker_model 调用; 它自己不做"要不要写
+/// 另一份"的判断 —— 那是上层的职责, 分两处判断就又回到漂移。
+pub(crate) fn write_picker_state_file(model: &str) -> Result<(), String> {
     let model = model.trim().to_string();
     if model.is_empty() {
         return Err("Picker state: model 为空, 不写".into());
@@ -81,6 +85,15 @@ pub async fn picker_state_save(model: String) -> Result<(), String> {
             .map_err(|e2| format!("fallback 直写 picker_state.json 失败: {e2}"));
     }
     Ok(())
+}
+
+/// P3.5.2.1 (6/16 鸿波): chat.ts / ChatModelPicker fire-and-forget 调.
+///
+/// 8/9 改成走 `persist_picker_model` —— 它把 picker_model 和 picker_state.json
+/// 两份一起写。之前这里只写 json 那一份, 是两条独立写入路径之一。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn picker_state_save(model: String) -> Result<(), String> {
+    crate::services::picker_config::persist_picker_model(&model)
 }
 
 /// 调试用: 前端 cross-check 当前持久化的 picker model.

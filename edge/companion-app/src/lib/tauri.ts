@@ -318,37 +318,15 @@ export const fetchCatalog = () => rawInvoke<CatalogResponse>("catalog");
 // 没 file / 空字符串 → null, caller 不动 store, 走 catalog.default 兜底.
 export const getPickerModel = () => rawInvoke<string | null>("get_picker_model");
 
-// ── roles (P3.5.139 6/29 鸿波"都要去除硬编码") ─────────────
-// 透传 Rust services::role_config::roles_get_all — Rust 端 5min cache + 3s timeout.
-// 前端 caller (visionSwitch / DetailPane / Chat fallback) lookup 单个 role
-// 用 fetchRole() helper; 想拿全 mapping 用 fetchRoles().
+// ── roles: 8/9 整块删 ─────────────────────────────────────
 //
-// 返空 dict 时 (gateway 没起 / 网络挂) caller 自己决定 fallback (toast / Err / null).
-// 没有"代码默认值兜底" — 那是 P3.5.139 删的硬编码.
-const ROLES_CACHE_TTL_MS = 5 * 60_000;
-let rolesCache: { fetchedAt: number; roles: Record<string, string> } | null = null;
-
-export async function fetchRoles(): Promise<Record<string, string>> {
-  const now = Date.now();
-  if (rolesCache && now - rolesCache.fetchedAt < ROLES_CACHE_TTL_MS) {
-    return rolesCache.roles;
-  }
-  try {
-    const roles = await rawInvoke<Record<string, string>>("roles_get_all");
-    rolesCache = { fetchedAt: now, roles };
-    return roles;
-  } catch (e) {
-    console.warn("[fetchRoles] 拉 roles 失败:", e);
-    // 拉失败用旧 cache (如果有), 否则空 dict
-    return rolesCache?.roles ?? {};
-  }
-}
-
-/** 单 role lookup helper. 拉不到返 null, caller 自己决定 fallback. */
-export async function fetchRole(role: string): Promise<string | null> {
-  const roles = await fetchRoles();
-  return roles[role] ?? null;
-}
+// 原来这里透传 Rust role_config::roles_get_all, 给 fetchRole("chat_default")
+// 之类做"picker 没选时的兜底模型"。8/9 鸿波「模型只能 picker 模型」——
+// 兜底改成读 picker 落盘的那份, 这条链就没有 caller 了, 连同 Rust 侧
+// services/role_config.rs 一起删。
+//
+// 想加回来之前先想清楚: 它是 picker 之外的第二个模型来源, 而员工在界面上
+// 看不出自己用的是哪一个。
 
 // ── logs ─────────────────────────────────────────────────
 // 默认 fromEnd=false: 先 dump 老日志, 然后 tail 新增 ——

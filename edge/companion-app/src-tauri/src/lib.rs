@@ -907,7 +907,6 @@ pub fn run() {
             services::picker_config::get_picker_model,
             // P3.5.139 (6/29 鸿波"都要去除硬编码"): 前端 caller (visionSwitch /
             // DetailPane / Chat fallback) 拉 /v1/roles 拿全 mapping, 5min cache.
-            services::role_config::roles_get_all,
             // P3.3.65 (6/13): 钓鱼规则可配置 — 仪表盘显当前 effective 配置
             services::phishing_config::phishing_config_get,
             // P3.3.53 (6/13): 政治敏感规则可配置 — 仪表盘显当前 effective 配置

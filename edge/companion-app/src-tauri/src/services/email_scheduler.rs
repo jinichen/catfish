@@ -22,8 +22,9 @@
 //!
 //! - env `CATFISH_EMAIL_POLL_SECS`: 轮询间隔秒数, 默认 600 (10 min). 设 0 关.
 //! - env `CATFISH_EMAIL_RATE_MODEL`: 评级用 model 显式 override (可选).
-//!   不设走 chain: picker_config > role_config("rate_fast") > yaml 段 > Err.
-//!   P3.5.27 数据零出端红线: roles.yaml `rate_fast` 默认是内网 model, 公网
+//!   8/9 鸿波: 评级 model **只来自 picker**. 原来还有 roles.yaml rate_fast /
+//!   yaml rate_model 两级兜底, 已砍 —— 后台悄悄换模型来源, 界面上毫无痕迹,
+//!   而 rate_fast 默认还可能是内网 model (P3.5.27 数据零出端红线), 公网
 //!   override 走 .env / yaml 显式启用 (要承担飞公网 LLM 的合规风险).
 //!   P3.5.139 (6/29 鸿波"都要去除硬编码"): 删 DEFAULT_RATE_MODEL 常量.
 //! - env `CATFISH_EMAIL_RATE`: 1=开 (默认) / 0=关 (回 step2 任何新邮件都通知).
@@ -43,7 +44,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::time;
 
-use crate::services::{email_config, hermes_api_config, picker_config, role_config, upstream_error_guard};
+use crate::services::{email_config, hermes_api_config, picker_config, upstream_error_guard};
 // P3.3.58 (6/12 鸿波): 段 2A 集成 phishing_scan
 use crate::services::phishing_scan::{
     self, LlmReviewInput, PhishingScanResult, Severity,
@@ -373,7 +374,7 @@ pub fn schedule_email_scheduler(app: AppHandle) {
     let rate_model_display = cfg
         .rate_model
         .as_deref()
-        .unwrap_or("跟随 picker / roles.yaml rate_fast");
+        .unwrap_or("跟随 picker (8/9 起唯一来源)");
     log::info!(
         "email_scheduler: 启动, 每 {}s 扫一次未读邮件 (评级 {}, model {})",
         poll_secs,
@@ -637,14 +638,24 @@ async fn scan_phishing_for_new(new_items: &[EmailItem]) {
     //
     // P3.5.140 (6/29 鸿波"TS和Rust 后端 都用硬chain"): 硬 chain 保留, 跟 TS 端
     // DetailPane / Chat 同款. 没 model 不 silent 兜底, 不走 LLM.
-    let model = match picker_config::current_model()
-        .or_else(|| role_config::resolve("rate_fast"))
-        .or_else(|| email_config::email_config().rate_model.clone())
-    {
+    // 8/9 鸿波: **模型只能来自 picker**, 不许有第二个来源。
+    //
+    // 原来这里是 picker → roles.yaml(rate_fast) → email.rate_model 三级链。
+    // 后两级的问题不是"可能指向死模型", 是**员工不知道自己在用哪个模型** ——
+    // 后台悄悄换一个来源, 界面上毫无痕迹。而 rate_fast 默认还可能是内网模型
+    // (见本文件顶部 P3.5.27 数据零出端红线那段), 公网/内网切换更不该静默发生。
+    //
+    // 同一条判断已经在 P46 (plugin 侧 model_authority.py) 对 hermes 的会话级
+    // override 做过一次: picker 是唯一真源。
+    //
+    // 拿不到 picker 就**不跑** —— 不猜、不兜底。日志用 warn 不用 debug: 悄悄
+    // 不跑跟跑错模型一样难查。
+    let model = match picker_config::current_model() {
         Some(m) => m,
         None => {
-            log::debug!(
-                "[phishing] 无法 resolve model (picker/roles/yaml 都空), 跳 LLM 复审"
+            log::warn!(
+                "[phishing] picker 未选模型 (~/.catfish/picker_model 空/不在), \
+                 跳过 LLM 复审。开一次 Companion 的对话 tab 让 picker 落盘即可。"
             );
             store_and_audit(new_items, scans).await;
             return;
@@ -798,22 +809,14 @@ async fn call_rate_llm(items: &[EmailItem]) -> Result<Vec<Urgency>, String> {
     // P3.5.29 Phase 4 (6/17 鸿波"啥意思不干活") + P3.5.139 (6/29 鸿波"都要去除硬编码"):
     // chain picker > role > yaml > Err (硬 chain).
     //   1. picker_config::current_model() — 员工 chat picker (P3.5.28)
-    //   2. role_config::resolve("rate_fast") — gateway /v1/roles roles.yaml
-    //      (P3.5.29 Phase 4 HTTP fetch + 5min cache)
-    //   3. email_config().rate_model — yaml/env override (Option<String>)
-    //   4. None → Err — 全空说明 picker 没选 + roles 没起 + yaml 没显式 override,
-    //      评级本来就该挂, 别静默兜底硬编码 (P3.5.139 删 DEFAULT_RATE_MODEL).
-    //
-    // P3.5.140 (6/29 鸿波"TS和Rust 后端 都用硬chain"): 保留硬 chain Err, 跟 TS DetailPane
-    // 同款 — 严格 picker, 没 model 不 silent 走 hermes 默认.
-    //
-    // 客户改 roles.yaml `rate_fast` 5 分钟后邮件评级跟着走, 不需要改 Companion yaml.
-    let model = picker_config::current_model()
-        .or_else(|| role_config::resolve("rate_fast"))
-        .or_else(|| email_config::email_config().rate_model.clone())
-        .ok_or_else(|| {
-            "无法 resolve 评级 model (picker/roles.yaml/email.rate_model 全空)".to_string()
-        })?;
+    // 8/9: 原来 2/3 顺位是 role_config("rate_fast") 和 email_config().rate_model,
+    //      已砍。理由见下面那行注释 + 本文件顶部。
+    // 8/9 鸿波: 同上 —— picker 是唯一真源, 砍掉 rate_fast / rate_model 两级兜底。
+    let model = picker_config::current_model().ok_or_else(|| {
+        "picker 未选模型 (~/.catfish/picker_model 空/不在) —— 邮件评级不猜模型, \
+         开一次 Companion 对话 tab 让 picker 落盘即可"
+            .to_string()
+    })?;
 
     let list = items
         .iter()

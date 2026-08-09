@@ -16,7 +16,9 @@
 //! rate_model (P3.5.139 鸿波"都要去除硬编码"军规):
 //!   rate_model 不再有代码默认值. Option<String> 表示"yaml/env 显式 override".
 //!   None → caller (email_scheduler::call_rate_llm / phishing_scan)
-//!   走 chain: picker_config > role_config("rate_fast") > yaml override (这里) > Err.
+//!   8/9 起**只认 picker** (picker_config::current_model). 原来的
+//!   role_config("rate_fast") / 这里的 rate_model 两级兜底已砍 —— picker 之外
+//!   不许有第二个模型来源。rate_model 字段保留只为兼容老 yaml, 不再被读。
 //!   也就是 yaml 没配 rate_model + roles.yaml 没 load + picker 没选 → 评级 fallback Medium.
 //!
 //! # yaml 例子

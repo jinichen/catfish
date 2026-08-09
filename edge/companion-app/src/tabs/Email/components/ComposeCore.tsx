@@ -45,7 +45,7 @@ import { useChatStore } from "../../../store/chat";
 import {
   emailCreateDraft,
   emailSendMessage,
-  fetchRole,
+  getPickerModel,
 } from "../../../lib/tauri";
 import { draftEmailReply } from "../../../lib/emailDraft";
 import { buildDraftContext } from "../../../lib/emailDraftContext";
@@ -172,29 +172,32 @@ export default function ComposeCore({
     setDraftLlmError(null);
     try {
       // P3.5.139 (6/29 鸿波"都要去除硬编码"): 删 "catfish-private-main" 字面值.
-      // chain: picker > role chat_default > Err.
-      //   picker 优先 — 跟员工当前对话 model 一致, 不发散 (鸿波 ack)
-      //   role chat_default 兜底 — roles.yaml truth source, 客户改 yaml 跟着走
-      //   都没拿到抛错 — 比静默兜底硬编码清晰, 数据红线由 roles.yaml 配置
+      // 7/30: picker 这一环从 getPickerState() 改成直接读 useChatStore().model
+      //       (picker_state.json 是发消息前才写的滞后副本, 切了还没发就读到旧值)。
       //
-      // 7/30: "picker" 这一环从 getPickerState() 改成直接读 useChatStore().model。
-      // 链路和优先级不变, 变的是 picker 值的来源:
-      //   picker_state.json 由 chat.ts 在**发送消息前** fire-and-forget 写入
-      //   (它存在的目的是给 hermes memory plugin 读 —— sync_turn 的签名拿不到
-      //    请求头; 见 lib/picker_state.ts, getPickerState 自己注明"调试用")。
-      //   也就是说它是**滞后的派生副本**: 员工切了 model 但还没发过聊天,
-      //   读到的是上一个 model —— 写邮件就用了他没选的那个。
-      // useChatStore().model 是 ChatModelPicker 的 onChange 直接写的值, 无滞后。
+      // 8/9 鸿波「模型只能 picker 模型」: 兜底从 roles.yaml chat_default 改成
+      // **picker 落盘的那份**。
+      //
+      // 原来第二顺位是 fetchRole("chat_default") —— 那是 roles.yaml 里的另一个
+      // 模型来源。员工在 picker 选了 A、写邮件却用了 roles.yaml 的 B, 而界面上
+      // 毫无痕迹。跟今天砍掉的 hermes 会话级 override (P46) 和邮件评级的
+      // rate_fast 是同一类问题: picker 之外还有别人能定模型。
+      //
+      // 现在两级都是 picker, 只是新鲜度不同:
+      //   chatModel      — ChatModelPicker onChange 直接写的 store 值, 无滞后
+      //   getPickerModel — ~/.catfish/picker_model, 覆盖"store 还没初始化"那个窗口
+      //                    (刚启动、catalog 还没回来)
+      // 都没有 → 报错, 不猜。
       let model = chatModel || "";
       if (!model) {
-        const roleModel = await fetchRole("chat_default");
-        if (!roleModel) {
+        const persisted = await getPickerModel();
+        if (!persisted) {
           setDraftLlmError(
-            "无法 resolve model (picker 没选 + roles.yaml chat_default 拉不到, gateway 可能没起)",
+            "还没选模型 —— 打开对话 tab 选一个模型后再拟稿 (拟稿只用你选的那个, 不替你挑)",
           );
           return;
         }
-        model = roleModel;
+        model = persisted;
       }
       // 8/6: 先从本地 wiki 捞背景 (见 emailDraftContext.ts —— 为什么是 wiki
       // 而不是历史邮件, 那里有完整说明). 捞不到不阻塞拟稿.
