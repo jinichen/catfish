@@ -8,8 +8,6 @@
 //! 这一层 Rust 提供:
 //!   - draft_save: LLM tool 调完 (e.g. draft_email_reply) 把草稿内容写到 outputs/<date>/
 //!   - draft_read: UI 展开 DraftPreview 时读全文
-//!   - draft_list_today: 列今天所有草稿元数据 (filename + size + mtime)
-//!   - draft_open_in_editor: 调系统默认编辑器打开 (员工自己改 + 复制后发)
 //!   - recent_outputs_list (5/26): 跨日期扫 outputs/<*>/<*>, 过去 N 小时改的文件,
 //!     给 chat timeout toast 用 (BL-X: 替代砍掉的 gateway recent_outputs.list_recent)
 
@@ -103,110 +101,6 @@ pub async fn draft_read(date: String, filename: String) -> Result<String, String
         .map_err(|e| format!("读 draft 失败: {e}"))
 }
 
-/// 列今天所有草稿 (mtime 倒序). 没目录 / 空目录 → 空 Vec.
-#[tauri::command]
-pub async fn draft_list_today() -> Result<Vec<DraftRef>, String> {
-    let dir = today_dir()?;
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-    let entries = std::fs::read_dir(&dir)
-        .map_err(|e| format!("read_dir 失败: {e}"))?;
-    let mut out: Vec<DraftRef> = Vec::new();
-    for e in entries.flatten() {
-        let p = e.path();
-        if !p.is_file() {
-            continue;
-        }
-        let filename = match p.file_name().and_then(|n| n.to_str()) {
-            Some(n) => n.to_string(),
-            None => continue,
-        };
-        // 跳 tmp 半成品
-        if filename.ends_with(".tmp") {
-            continue;
-        }
-        let meta = match e.metadata() {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        let modified_at = match meta.modified() {
-            Ok(t) => {
-                let dt: chrono::DateTime<chrono::Utc> = t.into();
-                dt.to_rfc3339()
-            }
-            Err(_) => continue,
-        };
-        out.push(DraftRef {
-            filename,
-            abs_path: p.to_string_lossy().to_string(),
-            modified_at,
-            bytes: meta.len(),
-        });
-    }
-    out.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
-    Ok(out)
-}
-
-/// 调系统默认编辑器打开草稿. macOS = `open <path>`, 跟 Finder 双击同效.
-///
-/// 5/22 鸿波二修: 之前 `open` 命令对不存在的文件返 exit 1, 但前端 `console.warn` 吞了,
-/// 员工看到 UI 显"草稿已打开" 而实际没弹编辑器. 加 pre-check 文件存在, 给具体错让
-/// 前端能告诉员工是 LLM 编了 path 还是真打不开.
-#[tauri::command]
-pub async fn draft_open_in_editor(abs_path: String) -> Result<(), String> {
-    // 防滥用: 只允许 outputs/ 下的路径
-    let outputs = outputs_root()?;
-    let outputs_str = outputs.to_string_lossy().to_string();
-    if !abs_path.starts_with(&outputs_str) {
-        return Err(format!("路径不在 outputs/ 下, 拒打开: {abs_path}"));
-    }
-    // 防 path traversal
-    if abs_path.contains("..") {
-        return Err(format!("路径含 ..: {abs_path}"));
-    }
-
-    // 5/22 二修: pre-check 文件存在 — open 命令对不存在文件虽然返非 0,
-    // 但 stderr 可能空, 错信息不直观. 这里给清晰的中文错让前端能 hint
-    // "LLM 编了路径没真落盘"
-    let path = std::path::Path::new(&abs_path);
-    if !path.exists() {
-        return Err(format!(
-            "文件不存在: {abs_path}. \
-            可能 LLM 输出 draftPath 但没真调 catfish_draft_email_reply 落盘. \
-            可在 chat 让 catfish 重新起草."
-        ));
-    }
-    if !path.is_file() {
-        return Err(format!("不是文件 (是目录?): {abs_path}"));
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let out = std::process::Command::new("open")
-            .arg(&abs_path)
-            .output()
-            .map_err(|e| format!("调 open 失败: {e}"))?;
-        if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            return Err(format!(
-                "macOS open 返非 0 (.md 默认应用关联可能挂): {}. \
-                试在 Finder 双击 {abs_path} 看默认应用是啥.",
-                if stderr.trim().is_empty() {
-                    "(stderr 为空)".to_string()
-                } else {
-                    stderr.to_string()
-                }
-            ));
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        return Err("draft_open_in_editor 当前只支持 macOS".to_string());
-    }
-    Ok(())
-}
-
 // ── BL-X (5/26): chat timeout 自显本地 outputs ──────────────────────
 //
 // 5/26 audit 砍掉 gateway recent_outputs.list_recent (gateway 不再扫员工
@@ -214,8 +108,7 @@ pub async fn draft_open_in_editor(abs_path: String) -> Result<(), String> {
 // timeout 时 toast 列过去 N 小时改过的文件, 让员工看到鲶鱼写过哪些东西
 // (而不是误以为白干).
 //
-// 跟 draft_list_today 区别: 这个跨日期目录 (outputs/<date>/), 按 mtime ≤ N
-// 小时过滤, 不限当天.
+// 跨日期目录 (outputs/<date>/), 按 mtime <= N 小时过滤, 不限当天.
 
 /// `recent_outputs_list(24)` → 过去 24 小时改过的 outputs 文件, mtime 倒序.
 ///
@@ -285,7 +178,8 @@ pub async fn recent_outputs_list(hours: u64) -> Result<Vec<DraftRef>, String> {
 //
 // 三·沟通能力闭环: advisor LLM 调 catfish_draft_email_reply tool → 落
 // ~/.catfish/outputs/<today>/reply-*.md (advisor_drafts.py:65)
-// → 员工看见 TodayDraftsCard → 一键放 Mail.app 草稿箱 (调 email_create_draft)
+// → 员工在 chat 里看到 FilePill → 打开 / 一键放 Mail.app 草稿箱
+// (8/9: 仪表盘那张"今日 AI 草稿"卡已砍, 草稿文件照常落盘)
 // → 员工自己审 / 改 / 发. AI 永不代发 (manifesto 公理 4 红线).
 //
 // 这一层提供:
@@ -483,7 +377,11 @@ pub async fn draft_parse_md(abs_path: String) -> Result<ParsedDraft, String> {
     })
 }
 
-/// 删本机草稿 (员工在 TodayDraftsCard 点 8s confirming 红钮后调).
+/// 删本机草稿.
+///
+/// 8/9: 唯一的 UI 入口 (仪表盘"今日 AI 草稿"卡) 已砍, 前端暂无调用方。
+/// 保留原因: 它的 path-traversal 红线测试覆盖着 `guard_outputs_path`,
+/// 而那个函数仍被 `draft_parse_md` 使用。删它等于连带删掉一组安全测试。
 ///
 /// 红线:
 ///   - 仅 outputs/ 下文件能删 (guard_outputs_path)

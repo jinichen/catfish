@@ -940,11 +940,11 @@ pub fn run() {
             // BL-ADVISOR-DRAFTS (5/21 Phase 7 第 2 步): ~/.catfish/outputs/<date>/ 草稿存储
             commands::drafts::draft_save,
             commands::drafts::draft_read,
-            commands::drafts::draft_list_today,
-            commands::drafts::draft_open_in_editor,
             // BL-X (5/26): chat timeout toast 自显本地 outputs (替代砍掉的 gateway recent_outputs.list_recent)
             commands::drafts::recent_outputs_list,
-            // P3.3.62 (6/13): TodayDraftsCard 接 Mail.app Drafts 链路
+            // P3.3.62 (6/13): draft_parse_md 给 FilePill 解析草稿头
+            // (8/9: TodayDraftsCard 已砍, draft_delete_md 留着 —— 它的
+            //  path-traversal 红线测试覆盖着仍在用的 guard_outputs_path)
             commands::drafts::draft_parse_md,
             commands::drafts::draft_delete_md,
             // BL-ADVISOR-DECISIONS (5/21 Phase 7 第 2 步): ~/.catfish/decisions.jsonl 决策留痕

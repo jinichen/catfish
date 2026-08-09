@@ -120,8 +120,6 @@ import PrivacyCard from "./PrivacyCard";
 // BL-SELF-CHANGE-PASSWORD (7/20 鸿波 catch 达华 POC 员工无自主改密入口):
 // 员工首次登录用 admin 临时密码 · 需自主改. 加卡到隐私 section.
 import AccountSecurityCard from "./AccountSecurityCard";
-// P47 (8/9): hermes approvals suggest 接 UI —— 免审批清单建议
-import ApprovalSuggestionsCard from "./ApprovalSuggestionsCard";
 // 6/2 BL-DASHBOARD-DROP-RECORDINGS-CARD (鸿波 6/2 凌晨): RecordingsCard 整卡删.
 // 前提是 #17 BL-RECMODE-AUTO-CLEAN-RAW 默认 skill 生成完自动清原料 → 录屏目录
 // 99% 时间空 / 只剩 KB 级 meta + skill_draft, 卡 99% 空着 = UI noise. PrivacyCard
@@ -137,7 +135,6 @@ import WeChatBindingCard from "./WeChatBindingCard";
 import OutboundLogCard from "./OutboundLogCard";
 import AuditExportCard from "./AuditExportCard";  // P3.3.54 (6/12 鸿波): 审计员看的 xlsx 导出
 import AuditViewCard from "./AuditViewCard";  // P3.3.55 (6/12 鸿波): 审计员现场看的 tab
-import TodayDraftsCard from "./TodayDraftsCard";  // P3.3.62 (6/13 鸿波): advisor 起草 → Mail.app Drafts 链路
 import { useUIStore } from "../../store/ui";  // P3.3.55 (6/12): auditViewEnabled 开关
 // 6/8 BL-PRIVACY-SECTION-TABS: 隐私 section 内 3 卡 → 3 tabs (空间 +25%).
 import SectionTabs from "./SectionTabs";
@@ -236,15 +233,6 @@ export default function DashboardTab() {
             { key: "wechat", label: "💬 微信接入", render: () => <WeChatBindingCard /> },
             // BL-SELF-CHANGE-PASSWORD (7/20): 员工自主改密码
             { key: "account", label: "🔐 账号安全", render: () => <AccountSecurityCard /> },
-            // P47 (8/9 鸿波): hermes approvals suggest 接 UI。
-            // 放"隐私 / 本机数据"是因为它**放宽**安全策略 —— 加进免审批清单的
-            // 命令以后静默执行, 跟账号安全同属"我的安全设置", 不该藏在技能或
-            // 服务那种功能性分组里。
-            {
-              key: "approvals",
-              label: "🛡 命令审批",
-              render: () => <ApprovalSuggestionsCard />,
-            },
           ]}
         />
       </CollapsibleSection>
@@ -270,7 +258,6 @@ export default function DashboardTab() {
             { key: "memory", label: "🧠 我的记忆", render: () => <HermesMemoryCard /> },
             { key: "profile", label: "👤 小鲶对你的画像", render: () => <UserProfileCard /> },
             { key: "style", label: "✍️ 你的文书风格", render: () => <StyleFingerprintCard /> },
-            { key: "drafts", label: "🤖 今日 AI 草稿", render: () => <TodayDraftsCard /> },
             { key: "dream", label: "🌙 Dream Engine", render: () => <DreamCard /> },
           ]}
         />

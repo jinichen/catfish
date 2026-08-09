@@ -1772,15 +1772,6 @@ def _patch_p8_p9_cors() -> None:
                     # 进度显示挂了是体验降级, 不是隐私漏洞 —— 不 fail loud。
                     # (P1-P11 那些错位会跨员工串数据, 那才必须让 hermes 起不来。)
                     logger.warning("P44 activity_probe 路由注册失败: %s", e)
-                # ── P47 (8/9 鸿波): hermes approvals suggest 接 UI ──
-                #
-                # 同上: 逻辑全在 approvals_bridge.py, 这里只管挂载时机。
-                # 挂不上 = 仪表盘少一张卡, 不 fail loud。
-                try:
-                    from . import approvals_bridge  # noqa: PLC0415
-                    approvals_bridge.register_routes(self.router)
-                except Exception as e:  # noqa: BLE001
-                    logger.warning("P47 approvals_bridge 路由注册失败: %s", e)
                 # ── P30 (P3.5.198 7/8 鸿波): wechat qr_login start/poll ──
                 #
                 # 跟 P26 同时机注册 (router 未 freeze), handler 走 P7 stashed

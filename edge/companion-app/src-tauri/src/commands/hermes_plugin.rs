@@ -102,8 +102,6 @@ const BAKED_MODEL_AUTHORITY: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/model_authority.py");
 const BAKED_ROUTE_AUTH: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_route_auth.py");
-const BAKED_APPROVALS_BRIDGE: &str =
-    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/approvals_bridge.py");
 
 /// Plugin 的全部文件 (filename, baked content).
 ///
@@ -125,7 +123,6 @@ const BAKED_FILES: &[(&str, &str)] = &[
     ("activity_probe.py", BAKED_ACTIVITY_PROBE),
     ("model_authority.py", BAKED_MODEL_AUTHORITY),
     ("plugin_route_auth.py", BAKED_ROUTE_AUTH),
-    ("approvals_bridge.py", BAKED_APPROVALS_BRIDGE),
 ];
 
 const PLUGIN_NAME: &str = "catfish-xcatfish-user";
