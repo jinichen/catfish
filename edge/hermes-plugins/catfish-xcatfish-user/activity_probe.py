@@ -358,14 +358,17 @@ def register_routes(router: Any) -> bool:
     from aiohttp import web as _w  # noqa: PLC0415
 
     async def _handler(request):
-        adapter = request.app.get("_catfish_apiserver_adapter")
-        if adapter is None or not hasattr(adapter, "_check_auth"):
-            # P7 stash 没就位 / hermes 改了方法名 → 拒, 不放行
-            return _w.json_response(
-                {"available": False, "reason": REASON_AUTH_UNAVAILABLE, "turns": []},
-                status=503,
-            )
-        denied = adapter._check_auth(request)
+        # 8/9: 鉴权抽到 plugin_route_auth —— P44 / P47 共用一份 fail-closed 实现,
+        # 免得两处各写各的, 哪天一处写成"取不到就放行"没人发现。
+        #
+        # 双模式 import: hermes 里是包内加载, 单测里是绝对加载 (同 plugin.py
+        # 的 _import_sibling 那个坑)。
+        try:  # noqa: SIM105
+            from . import plugin_route_auth  # noqa: PLC0415
+        except ImportError:  # pragma: no cover
+            import plugin_route_auth  # type: ignore[no-redef]  # noqa: PLC0415
+
+        denied = plugin_route_auth.check_auth(request)
         if denied is not None:
             return denied
         return _w.json_response(collect_activity())
