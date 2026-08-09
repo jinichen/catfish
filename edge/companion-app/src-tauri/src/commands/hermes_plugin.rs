@@ -98,6 +98,8 @@ const BAKED_PLUGIN_MEMORY_GATE: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_memory_gate.py");
 const BAKED_ACTIVITY_PROBE: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/activity_probe.py");
+const BAKED_MODEL_AUTHORITY: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/model_authority.py");
 
 /// Plugin 的全部文件 (filename, baked content).
 ///
@@ -117,6 +119,7 @@ const BAKED_FILES: &[(&str, &str)] = &[
     ("plugin_wechat_qr.py", BAKED_PLUGIN_WECHAT_QR),
     ("plugin_memory_gate.py", BAKED_PLUGIN_MEMORY_GATE),
     ("activity_probe.py", BAKED_ACTIVITY_PROBE),
+    ("model_authority.py", BAKED_MODEL_AUTHORITY),
 ];
 
 const PLUGIN_NAME: &str = "catfish-xcatfish-user";

@@ -1361,17 +1361,35 @@ def _patch_p5_p6_p11_api_server_create_agent_and_picker() -> None:
                 if hasattr(agent, "_replace_primary_openai_client"):
                     agent._replace_primary_openai_client(reason="catfish_user_from_cv")
 
-            # P11: picker model override. 同样三段:
-            # (1) kwargs.model_override (hermes 仓 5/28 picker patch 在)
-            # (2) CV_PICKER_MODEL (middleware 从 body.model 提取)
-            # (3) 不动
-            model_override = kwargs.get("model_override") or CV_PICKER_MODEL.get() or ""
-            # P3.5.51 probe verified P11/P6 真生效 — 真因不在 plugin 这条路径, 在
-            # Companion store reset() 清 modelPickedByUser 让 catalog effect 覆盖
-            # user picker (P3.5.52 修). probe 回 debug 不留 WARNING 噪音.
+            # P11 + P46: picker 是**唯一真源**.
+            #
+            # 老 P11 只有两段: kwargs.model_override / CV_PICKER_MODEL (都来自
+            # 请求体的 model)。请求体没带 model 时就"不动", 于是 hermes 自己那套
+            # 优先级说了算 —— 而它里面有一条**会话级持久化 override**
+            # (state.db sessions.model), 一旦写进去就永久生效, 员工换 picker 也
+            # 不解除。
+            #
+            # 8/9 实撞: 工作台选的是 deepseek, 但会话 api-b6bcbf8a419068fa 的
+            # sessions.model 钉着 catfish-public-qwen-flash (周配额已耗尽),
+            # 于是同一次早安页刷新里一部分请求 deepseek 成功、一部分 qwen 429。
+            # session_key 是 sha256(system_prompt + 首条 user message)[:16],
+            # 员工看不到也清不掉。
+            #
+            # 鸿波 8/9 拍板: **在要求确定性的环境里这不可接受, 直接砍掉。**
+            # 加第三段 —— 请求体没带 model 时读 picker_state.json 兜底, 让那个
+            # 持久化的会话模型变成惰性的 (我们不拦它的写入, 只是不再听它的)。
+            #
+            # 判据本身在 model_authority.decide_model, 那是纯函数有单测;
+            # 这里只负责"什么时候调"。
+            from . import model_authority  # noqa: PLC0415
+
+            model_override = model_authority.decide_model(
+                request_model=kwargs.get("model_override") or CV_PICKER_MODEL.get(),
+            )
             if model_override and agent.model != model_override:
-                logger.debug(
-                    "P11 picker: overriding agent.model %s → %s",
+                logger.info(
+                    "P46 picker 定夺: agent.model %s → %s "
+                    "(会话持久化的模型不参与, 见 model_authority.py)",
                     agent.model, model_override,
                 )
                 agent.model = model_override
