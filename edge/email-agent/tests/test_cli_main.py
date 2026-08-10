@@ -17,6 +17,7 @@ import pytest
 
 from catfish_email.__main__ import (
     _cmd_delete,
+    _cmd_draft,
     _cmd_list,
     _cmd_mark_read,
     _cmd_read,
@@ -622,3 +623,97 @@ def test_cmd_send_value_error_returns_2(capsys):
     assert rc == 2
     captured = capsys.readouterr()
     assert "id 格式不对" in captured.err
+
+
+# ============================================================
+# _cmd_draft —— 之前一条测试都没有
+#
+# outlook_win 那个 supports_drafts=True 却没实现 create_draft 的 bug, 正是从
+# 这里显形的 (_cmd_draft 靠 flag 挑 adapter)。而这个命令当时零覆盖, 连"没有
+# 任何 adapter 能起草"这条分支都没人跑过 —— 那条分支的文案里写死着两个 macOS
+# 客户端, 在 Windows 上会原样显示给员工。
+# ============================================================
+
+
+class _DraftingAdapter(_FakeAdapter):
+    """会起草的 fake —— 用来占住"有能力"那一侧。"""
+
+    supports_drafts = True
+
+    def __init__(self, **kw) -> None:
+        super().__init__(**kw)
+        self.draft_calls: list[dict] = []
+
+    def create_draft(self, **kw):  # type: ignore[override]
+        self.draft_calls.append(kw)
+        return f"{self._name}|drafts|new-1"
+
+
+def _make_draft_args(**kw):
+    return argparse.Namespace(
+        to=kw.get("to", "bob@x.com"),
+        cc=kw.get("cc"),
+        bcc=kw.get("bcc"),
+        subject=kw.get("subject", "主题"),
+        body=kw.get("body", "正文"),
+        body_file=kw.get("body_file"),
+        in_reply_to=kw.get("in_reply_to"),
+        account=kw.get("account"),
+        json=kw.get("json_out", True),
+    )
+
+
+def test_cmd_draft_no_capable_adapter_message_is_platform_neutral(capsys):
+    """Windows 场景: 在场的 adapter 都不能起草。
+
+    这条盯的是**文案**, 不只是返回码。原文案写死 "Apple Mail.app 支持;
+    Foxmail Mac 不支持" —— 在只有 outlook_win 的 Windows 机器上, 员工看到的
+    是一句跟自己机器毫无关系的话。
+    """
+    rc = _cmd_draft([_FakeAdapter(name="outlook_win")], _make_draft_args())
+    assert rc == 1
+    err = capsys.readouterr().err
+    # 必须说清楚"现在有谁"
+    assert "outlook_win" in err
+    # 不许再枚举别的平台的客户端能力 —— 那种话会跟 flag 一样过期
+    for stale in ("Apple Mail", "Foxmail"):
+        assert stale not in err, f"文案里不该写死 {stale!r}: {err}"
+
+
+def test_cmd_draft_no_adapter_at_all_does_not_crash(capsys):
+    """一个 adapter 都没有时也要给话, 不能因为 join 空序列出个空括号就完事。"""
+    rc = _cmd_draft([], _make_draft_args())
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "一个都没有" in err
+
+
+def test_cmd_draft_picks_the_capable_adapter(capsys):
+    """混合场景: 跳过不能起草的, 选能起草的 —— 不是选列表里第一个。"""
+    dumb = _FakeAdapter(name="foxmail_mac")
+    smart = _DraftingAdapter(name="apple_mail")
+    rc = _cmd_draft([dumb, smart], _make_draft_args(subject="季度报", to="a@x.com,b@x.com"))
+    assert rc == 0
+    assert len(smart.draft_calls) == 1
+    assert smart.draft_calls[0]["to"] == ["a@x.com", "b@x.com"]
+    assert smart.draft_calls[0]["subject"] == "季度报"
+    out = json.loads(capsys.readouterr().out)
+    assert out["adapter"] == "apple_mail"
+    assert out["draft_id"] == "apple_mail|drafts|new-1"
+
+
+def test_cmd_draft_surfaces_not_supported_from_a_lying_flag(capsys):
+    """flag 说支持但调用时抛 NotSupportedError —— 也就是修之前 Windows 的实况。
+
+    契约测试保证仓库里的 adapter 不会这样, 但 CLI 仍该稳稳报错而不是 traceback。
+    """
+
+    class _Liar(_FakeAdapter):
+        supports_drafts = True
+
+        def create_draft(self, **kw):  # type: ignore[override]
+            raise NotSupportedError("outlook_win 不支持 create_draft")
+
+    rc = _cmd_draft([_Liar(name="outlook_win")], _make_draft_args())
+    assert rc == 1
+    assert "不支持起草" in capsys.readouterr().err
