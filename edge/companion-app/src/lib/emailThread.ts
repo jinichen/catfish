@@ -81,6 +81,13 @@ export function formatReplyTime(iso: string): string {
   if (!iso) return "";
   try {
     const d = new Date(iso);
+    // 8/10: 下面那个 catch 是**恒不触发**的 —— `new Date("乱码")` 不抛异常, 它返回
+    // 一个 Invalid Date, 之后 getMonth()/getDate() 全是 NaN, 最后 return 出去的是
+    // 字符串 "NaN-NaN"。也就是说"坏字符串退回前 16 字"这个兜底从来没生效过,
+    // 员工在邮件列表里看到的是 NaN-NaN。catch 只挡得住 iso 不是字符串那类,
+    // 挡不住"是字符串但不是日期" —— 而后者才是真会发生的 (Foxmail 的 Date 头
+    // 什么格式都有)。invalid 要显式判, 不能指望异常。
+    if (Number.isNaN(d.getTime())) return iso.slice(0, 16);
     const now = new Date();
     const sameDay =
       d.getFullYear() === now.getFullYear() &&

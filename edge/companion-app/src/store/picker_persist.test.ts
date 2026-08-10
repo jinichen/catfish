@@ -37,6 +37,13 @@ beforeEach(() => {
   _ls.clear();
   invokeMock.mockReset();
   invokeMock.mockReturnValue(Promise.resolve());
+  // setModel 成功后会 window.dispatchEvent("catfish:catalog-refresh") 通知 catalog 刷新。
+  // 不 stub 的话 vitest node 环境每条用例都往 stderr 喷一条
+  // "[codex model runtime] 自动对齐失败: window is not defined" —— 断言不受影响,
+  // 但测试输出天天有红字, 人就会开始不看输出。而这套闸的价值全在"红了要有人看见"。
+  (globalThis as unknown as { window: unknown }).window = {
+    dispatchEvent: () => true,
+  };
   (globalThis as unknown as { localStorage: Storage }).localStorage = {
     length: 0,
     getItem: (k: string) => _ls.get(k) ?? null,
