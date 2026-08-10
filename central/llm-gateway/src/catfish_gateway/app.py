@@ -2342,7 +2342,18 @@ async def _stream_chat_completion(
         # 用 fallback 链找一个能拿到首 chunk 的模型
         async def _start_stream(candidate_model):
             params = _build_litellm_params(body, candidate_model)
-            response = await litellm.acompletion(**params)
+            try:
+                response = await litellm.acompletion(**params)
+            except Exception as _e:
+                # 8/10: 上游返"什么都没说的 400"时把请求**形状**存一份 (不含正文)。
+                # 内网 Qwen3-VL 的错误是
+                #   error: code = 400 reason =  message =  metadata = map[] cause = <nil>
+                # 两轮八个探针全没复现, 继续猜变量的成本已经高过抓真身。
+                # 有话说的错误 (余额不足 / 超上下文) 不会触发, 见 request_shape_dump。
+                from .request_shape_dump import dump_on_opaque_error  # noqa: PLC0415
+
+                dump_on_opaque_error(params, candidate_model.name, _e)
+                raise
             iterator = response.__aiter__()
             # 拉首 chunk —— 这是 429 / 503 最容易抛错的地方
             try:

@@ -39,6 +39,40 @@ fi
 URL="${BASE%/}/chat/completions"
 MODEL="qwen_v3_6_35b_a3b"
 
+# ── 自检: 内嵌的 python 段能不能编译 ────────────────────────────────
+#
+# 8/10 第一次跑这个脚本, 八行全是 SyntaxError —— f-string 里写了 \"（整段
+# python 包在 shell 单引号里, shell 把 \" 原样传给 python）。当时"验过"了
+# SSE 解析和工具生成器, 唯独没验这段 python 本身能不能编译: **验了周边,
+# 没验主体**。
+#
+# 探针脚本尤其不能这样 —— 它挂了的样子跟"上游有问题"很像, 会把排查方向
+# 带偏一整轮。所以每次跑之前先自己编译一遍, 30 毫秒的事。
+#
+# 提取规则两条:
+#   1. 内嵌代码里不能含单引号 (含了就提前闭合 shell 字符串), 所以起始引号
+#      之后第一个单引号就是终止符 —— [^']* 既是提取也是这条约束的断言
+#   2. 起始引号后**必须紧跟换行** —— 本文件的注释里也会提到这个调用形式,
+#      不加这一条, 注释会被当成代码段抓进来自己把自己判红 (第一版就是)
+if ! python3 - "$0" <<'SELFCHECK'
+import re, sys
+src = open(sys.argv[1], encoding="utf-8").read()
+segs = re.findall(r"python3 -c '\n([^']*)'", src)
+bad = 0
+for i, s in enumerate(segs, 1):
+    try:
+        compile(s, f"<seg{i}>", "exec")
+    except SyntaxError as e:
+        line = (s.splitlines()[e.lineno - 1] if e.lineno else "").strip()
+        print(f"❌ 内嵌 python 第{i}段 第{e.lineno}行 {e.msg}\n   {line[:90]}", file=sys.stderr)
+        bad += 1
+sys.exit(1 if bad else 0)
+SELFCHECK
+then
+  echo "   ↑ 探针脚本自己坏了, 先修它 —— 别把这个当成上游的问题" >&2
+  exit 2
+fi
+
 TOOLS='[{"type":"function","function":{"name":"get_weather","description":"查天气",
   "parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}]'
 
@@ -82,11 +116,18 @@ except Exception:
 if "choices" in d:
     ch = d["choices"][0]
     m = ch.get("message", {}) or {}
-    c = (m.get("content") or "").replace("\n", " ")[:22]
     u = d.get("usage") or {}
-    print(f"✅ ok   content={c!r} tool_calls={len(m.get(\"tool_calls\") or [])} "
-          f"finish={ch.get(\"finish_reason\")} "
-          f"prompt={u.get(\"prompt_tokens\")} out={u.get(\"completion_tokens\")}")
+    # ⚠ 整段 python 是包在 shell **单引号**里的, 所以:
+    #   · 代码里不能出现单引号 (会提前闭合 shell 字符串)
+    #   · f-string 里也不能嵌双引号 —— 上一版写成 m.get(\"tool_calls\"),
+    #     shell 把 \" 原样传给 python, python 直接 SyntaxError, 八行全废。
+    # 所以先把值取到变量, f-string 里只放裸变量名。
+    c = (m.get("content") or "").replace("\n", " ")[:22]
+    tc = len(m.get("tool_calls") or [])
+    fr = ch.get("finish_reason")
+    pt = u.get("prompt_tokens")
+    ot = u.get("completion_tokens")
+    print(f"✅ ok   content={c!r} tool_calls={tc} finish={fr} prompt={pt} out={ot}")
 else:
     print("❌", json.dumps(d, ensure_ascii=False)[:150])
 '
