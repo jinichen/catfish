@@ -114,18 +114,33 @@ def test_dynamic_max_tokens_long_prompt_leaves_safety_margin():
     assert params["max_tokens"] > 30000
 
 
-def test_dynamic_max_tokens_clipped_to_4k_minimum_when_prompt_near_full():
-    """prompt 几乎占满 context → max_tokens 至少 4K 下限 (不让出 0 或负数).
+def test_dynamic_max_tokens_下限是最小可用输出_不是4K():
+    """prompt 几乎占满 context → max_tokens 兜到 MIN_USEFUL_OUTPUT, 不是 4K。
 
-    用真 1MB ascii 让 LiteLLM 估算稳超 128K context."""
+    ⚠ 8/10 改了下限, 这条测试跟着改。原来断言 `>= 4096`, 注释写"不让出 0
+    或负数"。防住了参数非法, 却带来更糟的后果:
+
+        est=126666 + 兜底 4096 = 130762 > context 128000
+        → 上游返 reason/message 全空的 400 → 员工看到「未知错误」
+
+    兜底的意义是"挤也要挤出一句话", 不是"凑够 4K" —— 凑出来的那 4K 本身
+    就把请求撑爆了。512 ≈ 700 汉字, 够回一句结论。
+
+    真到连 512 都挤不出来, context_preflight 会在更前面拦掉并明确告诉员工
+    "这个对话太长了", 走不到这行。
+
+    用真 1MB ascii 让 LiteLLM 估算稳超 128K context。"""
+    from catfish_gateway.context_preflight import MIN_USEFUL_OUTPUT
+
     huge_content = "x " * 600000  # 1.2M chars ≈ 300K token, 超 128K
     body = {
         "messages": [{"role": "user", "content": huge_content}],
         "stream": True,
     }
     params = _build_litellm_params(body, _fake_model(context_window=128000))
-    # 即使 dyn 算出负数, 也要至少 4K
-    assert params["max_tokens"] >= 4096
+    assert params["max_tokens"] == MIN_USEFUL_OUTPUT
+    # 关键: 兜底之后不能反而把请求撑爆 —— 这才是 4096 的真问题
+    assert params["max_tokens"] < 4096
 
 
 def test_dynamic_max_tokens_safety_margin_env_override(monkeypatch):

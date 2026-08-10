@@ -39,11 +39,26 @@ conversation_compressor 能把 380K 压到 41K (实测省 89%)。压缩之前拦
 本来救得回来的对话也拒掉。所以这道闸只对"压过了还是装不下"的情况开火 ——
 调用点在 app.py 压缩之后、发请求之前。
 
-## 阈值取 dyn ≤ 0 而不是 prompt > context
+## 判据只看"还剩不剩得下一句回复", **不带 buffer**
 
-estimate 有 10-25% 误差, 所以 dyn 里已经乘了 1.3 的 buffer。用 dyn ≤ 0 判,
-意味着"连 buffer 都吃完了", 比直接比 prompt > context 更保守一点 —— 宁可放过
-一个边界情况让上游去判, 也不要把一个其实能跑的请求拦下来。
+⚠ 8/10 第一版拿 `dyn = cw - est*1.3 - safety ≤ 0` 当判据, 并且在这里写着
+"比直接比 prompt > context 更保守"。**写反了 —— 乘 1.3 是更激进。** 倒推:
+
+    dyn ≤ 0  ⟺  est ≥ (128000 - 2048) / 1.3 = 96886
+
+也就是 prompt 一过 9.7 万就拦, 而模型装得下 12.8 万 —— **24% 的可用空间被
+白白判死**。现场立刻撞上: 一个只有 38 条的会话被拦, 文案自己都荒谬 ——
+「已经积累到大约 19 万字, 而模型一次最多能读 19 万字左右」, 两个数一样。
+
+那个 1.3 是给"算 max_tokens 时保守留余量"用的 (宁可少给输出空间也别撑爆),
+拿它判"装不装得下"是把两件事混了。边界测试当时也跑出了 `est=97000 → 拦`,
+我只验了"边界在 dyn 变号那一刻"就收工, **没问 97000 到底该不该拦**。
+
+现在的判据: `cw - est < MIN_USEFUL_OUTPUT` 才拦 —— 连一句最短的回复都塞不下
+才算真装不下。est 用**原始估算**, 不乘 buffer。
+
+宁可放过边界情况让上游去判: 上游真返 400 还有 request_shape_dump 兜着, 而
+误拦是员工**直接用不了**。两种代价不对等。
 """
 
 from __future__ import annotations
@@ -52,35 +67,43 @@ import logging
 
 logger = logging.getLogger("catfish.gateway.context_preflight")
 
-#: 超了多少倍就明确说"这个对话太长了"。1.0 以下的措辞会含糊一点。
-_HOPELESS_RATIO = 1.5
+#: 连这么多 token 的回复都塞不下, 才算真的"装不下"。
+#:
+#: 512 大约是 700 汉字 —— 够回一句"这个我看了, 结论是…"。低于这个数, 就算
+#: 强行发出去, 员工拿到的也是半句话被截断, 体验比明确说"对话太长了"更差。
+#:
+#: 这个数**故意取小**: preflight 的职责是拦住"铁定不行"的, 不是替员工决定
+#: "回复够不够长"。边界情况放过去让上游判 —— 上游真返 400 还有 shape dump
+#: 兜着, 而误拦是员工直接用不了。
+MIN_USEFUL_OUTPUT = 512
 
 
 def format_too_long_message(prompt_est: int, context_window: int, model_name: str) -> str:
     """给员工看的话。**不出现 token / context_window 这些词** —— 员工不需要懂。
 
-    换算成"万字": 中文大致 1 token ≈ 1.5 字, 这里按 1.5 估, 宁可说少不说多。
+    换算成"万字": 中文大致 1 token ≈ 1.5 字。
+
+    ⚠ 两个数字接近时不要都四舍五入到整数万 —— 8/10 现场出过
+    「已经积累到大约 19 万字, 而模型一次最多能读 19 万字左右」, 读起来就是
+    句废话, 员工看了只会觉得系统坏了。差得远就说整数, 差得近就说一位小数。
     """
     approx_wan = prompt_est * 1.5 / 10000
     limit_wan = context_window * 1.5 / 10000
+    fmt = "{:.0f}" if abs(approx_wan - limit_wan) >= 1 else "{:.1f}"
     return (
-        f"这个对话太长了 —— 已经积累到大约 {approx_wan:.0f} 万字, "
-        f"而模型一次最多能读 {limit_wan:.0f} 万字左右。\n\n"
+        f"这个对话太长了 —— 已经积累到大约 {fmt.format(approx_wan)} 万字, "
+        f"而模型一次最多能读 {fmt.format(limit_wan)} 万字左右。\n\n"
         f"**开一个新对话就能继续。** 需要的话, 可以先让我把这轮的要点整理出来, "
         f"再带到新对话里。"
     )
 
 
-def check_context_fits(
-    prompt_est: int,
-    model,
-    *,
-    safety: int = 2048,
-    buffer_factor: float = 1.3,
-) -> str | None:
+def check_context_fits(prompt_est: int, model) -> str | None:
     """装得下返 None; 装不下返一句给员工看的话 (caller 负责怎么抛)。
 
-    纯函数, 不抛不记日志的那部分好测。真正的日志和 HTTP 由 caller 处理。
+    判据只有一条: **减掉 prompt 之后, 还剩不剩得下一句最短的回复。**
+    不乘 buffer —— 见模块头, 第一版就是拿 max_tokens 那套 1.3 buffer 当判据,
+    把 24% 的可用 context 判死了。
     """
     try:
         cw = int(getattr(model, "context_window", 0) or 0)
@@ -90,17 +113,16 @@ def check_context_fits(
         # 不知道容量就不拦 —— 让上游去判, 总比拦错强
         return None
 
-    dyn = cw - int(prompt_est * buffer_factor) - safety
-    if dyn > 0:
+    remaining = cw - prompt_est
+    if remaining >= MIN_USEFUL_OUTPUT:
         return None
 
     name = getattr(model, "name", "?")
     logger.warning(
         "context preflight 拦下: model=%s prompt估算=%d context_window=%d "
-        "(dyn=%d ≤ 0, 连 %.0f%% buffer 都吃完了). "
+        "→ 只剩 %d token, 连一句最短回复 (%d) 都塞不下。"
         "**没发给上游** —— 发了也是一个 reason/message 全空的 400, "
-        "员工只会看到「未知错误」。压缩已经跑过了 (或在 cooldown 内), "
-        "压完仍装不下就该明确告诉员工。",
-        name, prompt_est, cw, dyn, (buffer_factor - 1) * 100,
+        "员工只会看到「未知错误」。压缩已经跑过了 (或在 cooldown 内)。",
+        name, prompt_est, cw, remaining, MIN_USEFUL_OUTPUT,
     )
     return format_too_long_message(prompt_est, cw, name)

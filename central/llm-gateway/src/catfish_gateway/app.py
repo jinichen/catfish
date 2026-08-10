@@ -1758,7 +1758,18 @@ def _compute_max_allowed_output_tokens(
     except (TypeError, ValueError):
         max_out = 0
     upper = min(cw, max_out) if max_out > 0 else cw
-    return max(4096, min(dyn, upper))  # 下限 4K (防压成 0/负数), 上限取真实输出 cap
+    # ⚠ 8/10: 下限从 4096 改成 MIN_USEFUL_OUTPUT (512)。
+    #
+    # 原来写 max(4096, ...) 注释是"防压成 0/负数"。防住了参数非法, 却带来一个
+    # 更糟的后果: prompt 逼近 context 时 dyn 是负数, 兜底 4096 **照样发出去**,
+    # 而 prompt + 4096 已经超了 —— 上游返一个 reason/message 全空的 400,
+    # 员工看到「未知错误」。8/10 实测: est=126666 + 4096 = 130762 > 128000。
+    #
+    # 512 是"还能回一句话"的下限。真到了连 512 都挤不出来的地步, 上游
+    # context_preflight 已经在前面拦掉并告诉员工"对话太长了"了, 走不到这里。
+    from .context_preflight import MIN_USEFUL_OUTPUT  # noqa: PLC0415
+
+    return max(MIN_USEFUL_OUTPUT, min(dyn, upper))
 
 
 def _apply_max_tokens(params: dict, model) -> None:
