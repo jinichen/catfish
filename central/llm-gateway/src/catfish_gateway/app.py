@@ -2376,6 +2376,17 @@ async def _stream_chat_completion(
         # 友好中文 + 替代 model. 拦下来不让员工看 stack trace.
         from .rate_limit_preflight import preflight_check_rate_limits  # noqa: PLC0415
         preflight_check_rate_limits(model, prompt_estimate, config=config)
+
+        # 8/10: 压完还是装不下, 就别发了 —— 发出去只会换回一个 reason/message
+        # 全空的 400, 员工看到「未知错误」, 谁都查不出原因 (今天为这个 400 做了
+        # 两轮八个探针才靠 shape dump 找到)。dyn ≤ 0 已经说明装不下, 见
+        # context_preflight。**位置必须在压缩之后** —— 压缩能省 89%, 压之前拦
+        # 会把本来救得回来的对话也拒掉。
+        from .context_preflight import check_context_fits  # noqa: PLC0415
+
+        _too_long = check_context_fits(prompt_estimate, model)
+        if _too_long:
+            raise HTTPException(status_code=413, detail=_too_long)
         (iterator, first_chunk), used_model, attempts_log = await with_fallback(
             config, model, _start_stream, prompt_estimate=prompt_estimate,
         )

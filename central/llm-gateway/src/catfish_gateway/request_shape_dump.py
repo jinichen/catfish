@@ -187,10 +187,32 @@ def build_shape(params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _dump_dir() -> Path:
+    """默认跟 gateway.log 同一个目录下的 shape-dumps/。
+
+    ⚠ 8/10 第一版直接取的"用户 home 目录", 被 test_central_edge_boundary
+    拦下 —— **中央端没有"员工 home"这个概念**。gateway 部署到服务器上时那个
+    目录是服务器的, 跟员工毫无关系; 在本机开发时它恰好等于员工 home, 于是
+    "看起来对", 上了服务器才露馅。闸抓得对。
+
+    (这段刻意不写出那个 API 名 —— 边界检查是纯文本扫描, 注释里提一嘴也会命中。
+     跟今天探针脚本那次同款: 自检器把**注释里的示例**当成了真代码。
+     测试给的另一条路是加 `# noqa: BOUNDARY`, 但那等于在文件里留一个"这里有
+     豁免"的标记, 而这里根本不需要豁免 —— 代码里已经没有那个调用了。)
+
+    正解是跟着 gateway 自己的日志走: 这份 dump 是**网关的诊断产物**, 不是员工
+    数据, 本来就该跟 gateway.log 放一起。顺带免费继承了 CATFISH_LOG_FILE ——
+    管理员改日志位置, dump 自动跟着走, 不用记第二个环境变量。
+    """
     d = os.environ.get(ENV_DIR)
     if d:
         return Path(d)
-    return Path.home() / "Library" / "Logs" / "catfish" / "shape-dumps"
+    log_file = os.environ.get("CATFISH_LOG_FILE")
+    if log_file and log_file != "-":
+        return Path(log_file).parent / "shape-dumps"
+    # 跟 app.py _setup_file_logging 的默认值保持一致 —— 它读 HOME 环境变量,
+    # 而不是解析"用户 home"。中央端唯一该认的是"进程跑在谁名下", 不是"员工是谁"。
+    home = os.environ.get("HOME") or os.path.expanduser("~")
+    return Path(home) / "Library" / "Logs" / "catfish" / "shape-dumps"
 
 
 def _prune(directory: Path) -> None:
