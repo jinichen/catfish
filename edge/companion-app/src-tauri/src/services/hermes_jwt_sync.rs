@@ -244,8 +244,10 @@ fn sync_config_yaml(hermes: &PathBuf, jwt: &str) -> Result<()> {
 ///
 /// hermes v0.20 升上去之后, 早安页的 advisor 全挂, 网关日志里是
 ///
+/// ```text
 ///     HTTP 404: {"detail":"Not Found"}
 ///     base_url=http://127.0.0.1:8999/v1
+/// ```
 ///
 /// hermes 自己的请求转储写得很清楚: `request.url = .../v1/responses`。
 /// 它改用 **OpenAI Responses API** 了, 而我们的网关只有
@@ -256,6 +258,7 @@ fn sync_config_yaml(hermes: &PathBuf, jwt: &str) -> Result<()> {
 ///
 /// `hermes_cli/runtime_provider.py` 同一个分支, 两版差在这里:
 ///
+/// ```text
 ///     // v0.19
 ///     detected = _detect_api_mode_for_url(base_url)
 ///     if detected: api_mode = detected
@@ -263,6 +266,7 @@ fn sync_config_yaml(hermes: &PathBuf, jwt: &str) -> Result<()> {
 ///
 ///     // v0.20
 ///     api_mode = _fallback_api_mode(provider, base_url, effective_model)
+/// ```
 ///
 /// 而新增的 `_fallback_api_mode` 在 URL 认不出来时, **改成让 provider 自己
 /// 声明的 transport 说了算**。我们 config 里写的是 `provider: openai-api`,
@@ -284,10 +288,12 @@ fn sync_config_yaml(hermes: &PathBuf, jwt: &str) -> Result<()> {
 ///
 /// `runtime_provider.py` 里优先级是
 ///
+/// ```text
 ///     elif configured_mode && _provider_supports_explicit_api_mode(provider, configured_provider):
 ///         api_mode = configured_mode          // ← 我们走这条
 ///     else:
 ///         api_mode = _fallback_api_mode(...)
+/// ```
 ///
 /// 而 `_provider_supports_explicit_api_mode("openai-api", "openai-api")` 是
 /// 「两者相等 → true」。所以不是碰巧生效, 是走的上游支持的显式配置路径。

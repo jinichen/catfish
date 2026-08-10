@@ -5,9 +5,11 @@
 //! 8/8 百炼 token-plan 一周配额耗尽 (429 insufficient_quota, 6 天后才恢复)。
 //! hermes 的 agent loop 重试三次之后, 把自己的错误信息当成"助手的回答"返回:
 //!
+//! ```text
 //!     HTTP 200
 //!     choices[0].message.content = "API call failed after 3 retries:
 //!                                   An error occurred during streaming"
+//! ```
 //!
 //! email_scheduler::call_rate_llm 拿到的就是这个。它 status 是 200, 于是
 //! 一路走到 parse_urgencies, 报「没 JSON array」, 而那条错误是
