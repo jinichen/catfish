@@ -135,6 +135,39 @@ ENV_DISABLE = "CATFISH_DISABLE_GATEWAY_COMPRESSION"
 
 _SUB_COOL_DOWN: dict[str, float] = {}
 
+#: sub → (摘要正文, 压到第几条, 指纹)。cooldown 期间复用, 不再调 LLM。
+#:
+#: ── 为什么要这个 (8/10 实测) ──────────────────────────────────────
+#: cooldown 原本的语义是"5 分钟内不重复压", 实现成"cooldown 内直接返回原
+#: messages"。对普通长对话没事 (原 messages 本来就发得出去), 但对**已经超
+#: context 的会话**是致命的:
+#:
+#:   10:32:55  压缩成功 (38 万 → 3.6 万), 请求跑通 ✅
+#:   10:36:29  cooldown 还剩 1.5 分钟 → 跳过压缩 → 47 万原样 → 被 preflight
+#:             拦下 → 员工看到「这个对话太长了」 ❌
+#:
+#: 员工体验成了「5 分钟能用一次」。cooldown 该防的是**重复花 LLM 钱**,
+#: 不是让请求失败 —— 上一次的摘要还在, 拿来接着用就行, 一分钱不花。
+_SUB_SUMMARY_CACHE: dict[str, tuple[str, int, tuple]] = {}
+
+
+def _cache_fingerprint(messages: list[Any], cut: int) -> tuple | None:
+    """给"这份 messages 的前 cut 条"取个指纹, 防跨会话误用缓存。
+
+    缓存按 sub 存, 但一个员工同时开着很多会话 (现场 175 个)。切到另一个会话
+    时 messages 完全不同, 拿上一个会话的摘要接上去就是**串话** —— 而且串得
+    很隐蔽: 摘要是自然语言, 模型不会报错, 只会答得莫名其妙。
+
+    指纹取切点前一条的 (位置, role, content 长度)。跨会话撞上这三样的概率
+    极低, 而同一会话继续追加消息时前 cut 条不变, 指纹稳定。
+    """
+    if cut <= 0 or cut > len(messages):
+        return None
+    m = messages[cut - 1]
+    if not isinstance(m, dict):
+        return None
+    return (cut, m.get("role"), len(str(m.get("content") or "")))
+
 
 def _is_sub_cooling(sub: str) -> bool:
     until = _SUB_COOL_DOWN.get(sub, 0.0)
@@ -346,6 +379,32 @@ async def maybe_compress_messages(
         return messages, None
 
     if _is_sub_cooling(user_sub):
+        # 8/10: cooldown 内先试着**复用上次的摘要** —— 不调 LLM, 不花钱,
+        # 但请求能发出去。见 _SUB_SUMMARY_CACHE 的说明: 原来这里直接返回原
+        # messages, 对已经超 context 的会话等于"5 分钟只能用一次"。
+        cached = _SUB_SUMMARY_CACHE.get(user_sub)
+        if cached:
+            c_summary, c_cut, c_fp = cached
+            if c_cut < len(messages) and _cache_fingerprint(messages, c_cut) == c_fp:
+                rebuilt, stats = _assemble_compressed(
+                    messages, c_summary, c_cut, keep_first, estimated,
+                )
+                if stats:
+                    stats["reused_cache"] = True
+                    logger.info(
+                        "compression: sub=%s 在 cooldown 内, **复用上次摘要** "
+                        "(压到第 %d 条, token %d→%d) —— 不重新调 LLM, 但请求照样发得出去。"
+                        "原来这里直接返原 messages, 超长会话就变成「5 分钟只能用一次」。",
+                        user_sub, c_cut, stats["pre_token"], stats["post_token"],
+                    )
+                    return rebuilt, stats
+            else:
+                # 指纹对不上 = 多半切到别的会话了。宁可不复用 —— 串会话的摘要
+                # 不会报错, 只会让模型答得莫名其妙, 比直接失败更难查。
+                logger.info(
+                    "compression: sub=%s cooldown 内有缓存摘要但指纹对不上 "
+                    "(多半切了会话), 不复用", user_sub,
+                )
         # 8/8: debug → info。
         # 这条原来是 debug, 生产日志级别是 INFO, 于是"到底为什么没压"在线上
         # 完全不可见 —— 跟"没达阈值"、"压了但没省"长得一模一样。既然走到这里
@@ -369,9 +428,46 @@ async def maybe_compress_messages(
         _mark_sub_cool(user_sub)
         return messages, None
 
+    cut = len(messages) - keep_last
+    new_messages, stats = _assemble_compressed(
+        messages, summary, cut, keep_first, estimated,
+    )
+    _mark_sub_cool(user_sub)
+    if not stats:
+        return messages, None
+
+    # 存下来给 cooldown 期间复用 —— 同一段历史不必重复花钱压第二次。
+    fp = _cache_fingerprint(messages, cut)
+    if fp:
+        _SUB_SUMMARY_CACHE[user_sub] = (summary, cut, fp)
+    return new_messages, stats
+
+
+def _assemble_compressed(
+    messages: list[dict[str, Any]],
+    summary: str,
+    cut: int,
+    keep_first: int,
+    estimated: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """把 messages 拼成 head + 摘要 + 尾段。省得不够就返 (原样, None)。
+
+    8/10 从 maybe_compress_messages 里抽出来 —— cooldown 复用缓存摘要那条路
+    要拼一模一样的东西。两处各写一份, 就是"改一处漏一处"的标准形状
+    (今天已经在 picker 落盘和 max_tokens 上各踩过一次)。
+
+    ── 摘要为什么是 user 不是 system ──────────────────────────────────
+    8/10 打内网端点实测: 整个 messages 里出现第二条 system, Qwen 网关直接返
+    `error: code = 400 reason =  message =  metadata = map[]` —— 什么都不说。
+    出口的 message_normalize.collapse_extra_system 会兜底降级, 但源头就写对
+    更好: 少一次转换, 日志也不用每条请求都报"降级了 1 条"。
+    """
     summary_msg = {
-        "role": "system",
-        "content": f"[此前 {len(middle)} 条对话的压缩摘要 — by catfish-gateway BL-COMPRESSION]\n\n{summary}",
+        "role": "user",
+        "content": (
+            f"[此前 {cut - keep_first} 条对话的压缩摘要 — by catfish-gateway "
+            f"BL-COMPRESSION]\n\n{summary}"
+        ),
     }
 
     # ─── BL-COMPRESS-BOUNDARY (5/15 14:11 鸿波撞 Qwen 122B 400) ────
@@ -379,7 +475,6 @@ async def maybe_compress_messages(
     # Qwen Go gRPC 校验 "tool 必须紧跟匹配的 assistant.tool_calls", orphan tool 直 400.
     # 修: 把切点往后挪, 直到不是 orphan tool 开头; 同时把尾部悬挂的
     # assistant.tool_calls (对应 tool 已被压缩) 也清掉.
-    cut = len(messages) - keep_last
     last_segment = _strip_orphan_tool_boundary(messages, cut)
     # 8/8: 头段也要清悬挂 tool_calls —— 它末尾那条 assistant 的 tool 回复
     # 已经被压进摘要里了。见 strip_dangling_tail_tool_calls 的说明。
@@ -393,16 +488,14 @@ async def maybe_compress_messages(
             "compression: 摘要没省太多 (%d → %d, < 15%%), 跳过用原 messages",
             estimated, post_token,
         )
-        _mark_sub_cool(user_sub)
         return messages, None
 
-    _mark_sub_cool(user_sub)
     return new_messages, {
         "pre_token": estimated,
         "post_token": post_token,
-        "compressed_count": len(middle),
+        "compressed_count": max(0, cut - keep_first),
         "kept_first": keep_first,
-        "kept_last": keep_last,
+        "kept_last": len(last_segment),
         "saved_pct": int(100 * (1 - post_token / max(estimated, 1))),
     }
 

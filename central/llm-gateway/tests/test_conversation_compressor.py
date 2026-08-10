@@ -155,33 +155,82 @@ async def test_compress_triggers_when_over_threshold(monkeypatch):
     assert stats["saved_pct"] > 0
     # 新 messages: 头 2 + 1 摘要 + 尾 8 = 11
     assert len(new) == DEFAULT_KEEP_FIRST + 1 + DEFAULT_KEEP_LAST
-    # 中间那条是 system 摘要
-    assert new[DEFAULT_KEEP_FIRST]["role"] == "system"
+    # 中间那条是摘要。**role 必须是 user, 不能是 system** ——
+    # 8/10 打内网 Qwen 端点实测: messages 里出现第二条 system 就返
+    #   error: code = 400 reason =  message =  metadata = map[] cause = <nil>
+    # (什么都不说的 400)。逐字复现过, 只改这一个 role 就从 400 变 200。
+    # 这条断言就是那次事故的锚 —— 谁把它改回 system, 超长会话立刻全挂。
+    assert new[DEFAULT_KEEP_FIRST]["role"] == "user"
     assert "压缩摘要" in new[DEFAULT_KEEP_FIRST]["content"]
+    assert sum(1 for m in new if m["role"] == "system") <= 1, "全局只能一条 system"
 
 
 @pytest.mark.asyncio
-async def test_cooldown_blocks_repeat_compression(monkeypatch):
-    """同 sub 5 分钟内重复压 — 第 2 次 cooldown 跳过"""
+async def test_cooldown_不再调LLM_但摘要要复用(monkeypatch):
+    """cooldown 的语义: 不重复**花钱**, 不是让请求失败。
+
+    ⚠ 8/10 改了行为, 这条测试也跟着改了。原来断言 `stats2 is None`
+    (cooldown 内返回原 messages)。那对普通长对话没事, 但对**已经超 context
+    的会话**是致命的 —— 现场实测:
+
+        10:32:55  压缩成功 (38 万 → 3.6 万), 请求跑通 ✅
+        10:36:29  cooldown 还剩 1.5 分钟 → 跳过 → 47 万原样 → preflight
+                  拦下 → 员工看到「这个对话太长了」 ❌
+
+    员工体验成了「5 分钟能用一次」。上一次的摘要还在, 拿来接着用就行,
+    一分钱不花。所以 cooldown 现在只挡 LLM 调用, 不挡压缩本身。
+    """
+    fake = AsyncMock(return_value="摘要")
     monkeypatch.setattr(
-        "catfish_gateway.conversation_compressor._summarize_middle",
-        AsyncMock(return_value="摘要"),
+        "catfish_gateway.conversation_compressor._summarize_middle", fake,
     )
     msgs = [
         {"role": "user", "content": "x" * 2000} for _ in range(30)
     ]
 
-    # 第 1 次: 压
     new1, stats1 = await maybe_compress_messages(
         msgs, user_sub="alice_cool", model_context_window=30000,
     )
     assert stats1 is not None
+    assert fake.await_count == 1
 
-    # 第 2 次同 sub: cooldown 跳过
+    # 第 2 次同 sub: cooldown 内 —— 仍然压得动, 但**不再调 LLM**
     new2, stats2 = await maybe_compress_messages(
         msgs, user_sub="alice_cool", model_context_window=30000,
     )
-    assert stats2 is None
+    assert stats2 is not None, "cooldown 内也该压 —— 否则超长会话直接失败"
+    assert stats2.get("reused_cache") is True
+    assert fake.await_count == 1, "cooldown 内又调了一次 LLM —— cooldown 白设了"
+    assert len(new2) == len(new1)
+
+
+@pytest.mark.asyncio
+async def test_cooldown缓存不跨会话串(monkeypatch):
+    """缓存按 sub 存, 但员工同时开着一百多个会话。
+
+    切到另一个会话时 messages 完全不同, 拿上一个会话的摘要接上去就是**串话**
+    —— 而且串得很隐蔽: 摘要是自然语言, 模型不报错, 只会答得莫名其妙。
+    指纹对不上就不复用, 宁可退回"不压"。
+    """
+    fake = AsyncMock(return_value="A 会话的摘要")
+    monkeypatch.setattr(
+        "catfish_gateway.conversation_compressor._summarize_middle", fake,
+    )
+    a = [{"role": "user", "content": "a" * 2000} for _ in range(30)]
+    _, stats_a = await maybe_compress_messages(
+        a, user_sub="bob", model_context_window=30000,
+    )
+    assert stats_a is not None
+
+    # 同一个员工切到另一个会话 (内容不同, 长度也不同)
+    b = [{"role": "user", "content": "b" * 3000} for _ in range(30)]
+    new_b, stats_b = await maybe_compress_messages(
+        b, user_sub="bob", model_context_window=30000,
+    )
+    # 指纹对不上 → 不复用 → cooldown 内退回不压 (而不是把 A 的摘要塞给 B)
+    assert stats_b is None, "把上一个会话的摘要串给了另一个会话"
+    assert new_b is b
+    assert fake.await_count == 1
 
 
 @pytest.mark.asyncio
