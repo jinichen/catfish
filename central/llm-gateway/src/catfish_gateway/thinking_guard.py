@@ -66,17 +66,35 @@ profile.ts:715 写着 `model: 必传, 跟员工 chat model 同款
 约束, 要么参数名不一样 —— 凭印象编一个参数名塞过去, 换来的是一个更难查的
 400。宁可不管。
 
-## 两个问题别混为一谈
+## 三家关的理由不同, 但判据是同一条
 
-  「我们知道怎么给这家关思考」  ← _DISABLE_FORM 管这个
-  「这家有 thinking ⊥ 强制 tool_choice 约束」 ← _TOOL_CHOICE_CONFLICT 管这个
+  dashscope / deepseek   不关直接 400 (thinking ⊥ 强制 tool_choice)
+  qwen 自建              不会 400, 但结构化输出不需要思考, 关了明显快
 
-dashscope / deepseek 两条都成立 (上面有实测)。qwen 自建只验了**第一条** ——
-我们知道怎么关它, 但没验过它强制 tool_choice 时会不会 400。所以它不进
-`apply()` 的自动关闭名单, 只给显式调 `disable_thinking()` 的地方用
-(目前是 conversation_compressor)。
+判据都是「**这次请求强制了 tool_choice**」= 我要一个结构化结果。
 
-把这俩混在一个判断里, 就会因为"知道怎么关"顺手推出"应该关", 那是没根据的。
+## ⚠ 8/10 走过一次弯路, 别再走
+
+当天下午一度把判据放宽成「**只要是内部调用 (有 X-Catfish-Source) 就关**」,
+想顺手治好 advisor 慢 (41 秒 / 偶发 60 秒超时) 的问题。**当晚被现场推翻**:
+
+    关之前 (思考开)  finish_reason=stop       ← 会收尾, 给出 final content
+    关之后 (思考关)  finish_reason=tool_calls ← 10 轮全是, total 涨到 38
+                                                还在调工具, 永远不收尾
+
+advisor Call 1 是 hermes agent loop (tool_choice **故意是 auto**, 见
+briefing_advisor.ts:1518)。**这个模型关掉思考之后不会自己收尾** —— 拿不到
+final content, JSON 解析必然失败, 早安页反而更坏。
+
+同一批日志里 profile (tools_count=1, 强制 tool_choice) 关掉后 743 token
+正常返回。所以分界线不是「内不内部」, 是 **single-shot 还是 agent loop**,
+而强制 tool_choice 正好就是 single-shot 的标志。
+
+当时支持放宽的理由是"agent loop 有多轮纠错机会, 单轮少想一点损失有限" ——
+**纯推理, 没有数据**, 而数据正好相反。
+
+教训: 改一个会影响**模型行为**的开关, 要拿 finish_reason 分布这种硬指标验,
+不能拿"应该没事"验。内部调用慢是另一个问题, 归 timeout 管 (已调 180 秒)。
 
 ## 管理员显式配了就不覆盖
 
@@ -115,15 +133,13 @@ def is_forced_tool_choice(tool_choice: Any) -> bool:
 #: 哪几家我们**验证过**关思考的写法。见模块头的实测记录。
 _KNOWN_DISABLE_FORMS = ("dashscope", "deepseek", "qwen_selfhost")
 
-#: 哪几家**验证过** thinking ⊥ 强制 tool_choice。比上面那个窄 ——
-#: qwen 自建只验了"怎么关", 没验"不关会不会 400", 不能顺手推。
-_TOOL_CHOICE_CONFLICT = ("dashscope", "deepseek")
-
-#: 不算"内部调用"的 source 值 —— 员工在跟小鲶聊天, 思考要留着。
+#: 强制 tool_choice 时该关思考的 provider。理由**两家不同**, 但结论一样:
 #:
-#: 主对话不设 X-Catfish-Source, 网关取不到时填 "unknown" (app.py:2967)。
-#: 空串是防御性的: header 给了但值为空跟没给是一回事。
-_NOT_INTERNAL = ("", "unknown")
+#:   dashscope / deepseek  不关直接 400 (thinking ⊥ 强制 tool_choice, 8/8 实测)
+#:   qwen 自建             不会 400, 但结构化输出不需要思考, 关了明显快
+#:                         (8/10: profile 关掉后 743 token 正常返回)
+_DISABLE_ON_FORCED_TOOL_CHOICE = ("dashscope", "deepseek", "qwen_selfhost")
+
 
 
 def _provider_of(model: Any) -> str:
@@ -228,62 +244,44 @@ def disable_thinking(params: dict[str, Any], model: Any) -> str | None:
     return "chat_template_kwargs.enable_thinking=false (qwen 自建)"
 
 
-def is_internal_call(source: str | None) -> bool:
-    """这次请求是不是**后台/内部调用**, 而不是员工在跟小鲶聊天。
 
-    判据: `X-Catfish-Source` 有值就是内部调用。
-
-    ── 为什么不用白名单 ──────────────────────────────────────────────
-    查过全仓库谁会设这个头 —— advisor / advisor-transform / briefing-card /
-    email-draft / email-scheduler / phishing-scan / profile / wiki-suggest,
-    **全是后台或内部调用**。员工在工作台聊天、微信发消息都不设它, 网关取不到
-    时填 "unknown"。
-
-    这跟 hermes 侧 plugin_memory_gate.py 用的是**同一条判据** (那边判"要不要
-    记进记忆"), 那份注释里已经论证过一遍, 这里复用结论, 不再各写一张会过期
-    的名单 —— 硬编名单的失效方式是"新增了一个 source 但忘了加进来", 而那
-    正好是最难发现的那种。
-
-    ── 失效方向 ──────────────────────────────────────────────────────
-    将来新增后台调用而忘了设 source → 它的思考不会被关 (慢一点, 看得见)。
-    反过来"员工聊天被误判成后台"不会发生 —— 那需要有人主动给聊天路径加
-    source。失败方向是"漏关"不是"误关", 这个方向是安全的:
-    误关会**永久削弱主对话的推理能力**, 而且没人会发现。
-    """
-    return (source or "").strip().lower() not in _NOT_INTERNAL
-
-
-def apply(params: dict[str, Any], model: Any, source: str | None = None) -> str | None:
+def apply(params: dict[str, Any], model: Any) -> str | None:
     """就地处理 params。返回做了什么的描述 (给日志), 没动返 None。
 
     调用点在 _build_litellm_params 末尾 —— 必须在 param_overrides 之后,
     这样才判得出管理员有没有显式配过。
 
-    两个独立的理由, 满足其一就关:
+    判据只有一条: **这次请求强制了 tool_choice**, 也就是"我要一个结构化结果"。
+    那种场景思考没有价值 —— 要么上游直接 400 (dashscope/deepseek), 要么白白
+    慢一截 (qwen 自建)。
 
-      1. **强制 tool_choice + 已知有冲突的 provider** (8/8 原始场景)
-         dashscope / deepseek 上 thinking ⊥ 强制 tool_choice, 不关直接 400。
+    ── ⚠ 8/10 走过一次弯路, 写下来免得再犯 ─────────────────────────────
+    当天下午一度把判据放宽成"**只要是内部调用 (有 X-Catfish-Source) 就关**",
+    想顺手治好 advisor 慢的问题。**当晚就被现场推翻**:
 
-      2. **内部调用** (8/10 加)
-         advisor / profile / wiki-suggest 这些要的是结构化结果, 思考对它们
-         没有价值, 却实打实地拖慢。8/10 实测同一个 advisor 任务:
-             内网 Qwen3-VL (思考开)  content=1  reasoning=349  14.5 秒
-                                     content=866 reasoning=653  41.4 秒
-                                     其中一轮 **60 秒 timeout** → 整个早安页挂掉
-             公网 deepseek (思考关)  content=850 reasoning=0    8.8 秒 (ttft 400ms)
-         第 2 条不要求 provider 在 _TOOL_CHOICE_CONFLICT 里 —— 那个名单管的是
-         "不关会不会 400", 而这里是"关了会不会更好"。两件事。
+        关之前 (思考开)  finish_reason=stop      ← 会收尾, 给出 final content
+        关之后 (思考关)  finish_reason=tool_calls ← 10 轮全是, total 涨到 38
+                                                    还在调工具, 永远不收尾
+
+    advisor Call 1 是 hermes agent loop (tool_choice **故意是 auto**, 见
+    briefing_advisor.ts:1518)。**这个模型关掉思考之后不会自己收尾** —— 一直
+    调工具, 拿不到 final content, JSON 解析必然失败, 早安页反而更坏。
+
+    而同一批日志里, profile (tools_count=1, 强制 tool_choice) 关掉思考后
+    743 token 正常返回。所以分界线不是"内不内部", 是 **single-shot 还是
+    agent loop** —— 而强制 tool_choice 正好就是 single-shot 的标志。
+
+    当时我的理由是"agent loop 有多轮纠错机会, 单轮少想一点损失有限"。
+    **这是纯推理, 没有数据**, 而数据正好相反。教训: 改一个会影响模型行为的
+    开关, 拿 finish_reason 分布这种硬指标验, 别拿"应该没事"验。
+
+    (内部调用慢的问题另想办法 —— 提高 timeout 已经做了 180 秒, 那条路是对的。)
     """
-    provider = _provider_of(model)
-    if provider not in _KNOWN_DISABLE_FORMS:
-        return None  # 不认识这家的关法, 编一个参数名塞过去只会换来更难查的 400
+    if not is_forced_tool_choice(params.get("tool_choice")):
+        return None
 
-    forced_tc = (
-        is_forced_tool_choice(params.get("tool_choice"))
-        and provider in _TOOL_CHOICE_CONFLICT
-    )
-    internal = is_internal_call(source)
-    if not forced_tc and not internal:
+    provider = _provider_of(model)
+    if provider not in _DISABLE_ON_FORCED_TOOL_CHOICE:
         return None
 
     if _already_configured(params, provider):

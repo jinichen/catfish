@@ -101,11 +101,12 @@ def test_deepseek_不踩掉extra_body里已有的别的键():
     "m",
     [
         _model(provider="gemini", upstream_model="gemini/gemini-3.5-flash"),
-        _model(provider="internal-llm-qwen-vision", upstream_model="openai/qwen_v3_6",
-               api_base="http://10.10.40.102:32730/openapi/x/v1"),
         _model(provider=None, upstream_model="openai/gpt-4o", api_base=None),
     ],
-    ids=["gemini", "私有vLLM", "真openai"],
+    # 8/10: "私有vLLM" 从这里移走了 —— 名字带 qwen 的自建端点现在**认得出**
+    # (_provider_of → qwen_selfhost), 强制 tool_choice 时该关。见文件末尾
+    # test_qwen自建_强制tool_choice_要关。这里只留真正认不出的。
+    ids=["gemini", "真openai"],
 )
 def test_不认识的provider不动(m):
     """凭印象编个参数名塞过去, 换来的是一个更难查的 400。宁可不管。"""
@@ -212,16 +213,25 @@ def test_百炼qwen和自建qwen不能混():
     assert "enable_thinking" not in selfhost
 
 
-def test_qwen自建不进_tool_choice_自动关闭名单():
-    """「知道怎么关」推不出「应该关」。
+def test_qwen自建_强制tool_choice_也关_八月十日翻案():
+    """⚠ 这条测试**翻过案**, 两次都有据, 记下来免得来回改。
 
-    _KNOWN_DISABLE_FORMS 有它 (上面那条测过), 但 thinking ⊥ 强制 tool_choice
-    这条约束在自建 qwen 上**没验过**。把两者混成一个判断, 就会因为"知道怎么关"
-    顺手把 advisor / profile 那几条路径的思考也关掉 —— 那是没根据的改行为。
+    8/10 上午写的版本断言"qwen 自建**不进** apply 名单", 理由是"只验了怎么关,
+    没验不关会不会 400 —— 知道怎么关推不出应该关"。那个理由在当时是对的:
+    没有数据支持关它。
+
+    8/10 晚有数据了。现场同一批日志:
+        profile (tools_count=1, 强制 tool_choice) 关掉思考 → 743 token 正常返回
+        advisor Call 1 (tool_choice=auto, agent loop) 关掉思考 → 永不收尾 ✗
+
+    所以判据不是"哪家 provider", 是"**这次请求要不要结构化结果**"。
+    强制 tool_choice = 要结构化 = 思考没价值, 三家都一样。
+    qwen 自建那条的理由从"不关会 400"换成"关了明显快", 结论相同。
     """
-    assert apply({"tool_choice": "required"}, _model(**_QWEN_SELFHOST)) is None
-    assert apply({"tool_choice": {"type": "function", "function": {"name": "f"}}},
-                 _model(**_QWEN_SELFHOST)) is None
+    for tc in ("required", {"type": "function", "function": {"name": "f"}}):
+        p = {"tool_choice": tc}
+        assert apply(p, _model(**_QWEN_SELFHOST)), f"{tc!r} 该关没关"
+        assert p["extra_body"]["chat_template_kwargs"] == {"enable_thinking": False}
 
 
 def test_不认识的provider一律不动():
@@ -234,84 +244,68 @@ def test_不认识的provider一律不动():
 
 
 # ─────────────────────────────────────────────────────────────────────
-# 8/10: 内部调用一律关思考 (advisor 60 秒超时那次)
+# 8/10: qwen 自建进「强制 tool_choice 就关」名单 + 那次被推翻的弯路
 #
-# 现场 —— 同一个 advisor 任务:
-#   内网 Qwen3-VL (思考开)  content=1   reasoning=349  14.5 秒
-#                          content=866 reasoning=653  41.4 秒
-#                          其中一轮 **60 秒 timeout** → 早安页整块打不开
-#   公网 deepseek (思考关)  content=850 reasoning=0     8.8 秒 (ttft 400ms)
+# 白天的现场: advisor 慢 (41 秒) 偶发 60 秒超时, 早安页打不开。
+# 一度把判据放宽成"只要是内部调用就关思考", **当晚被推翻**:
 #
-# advisor Call 1 是 hermes agent loop, tool_choice **故意是 auto**
-# (briefing_advisor.ts:1518: 强制会跳过业务工具, 失去 agent 能力),
-# 所以老的 is_forced_tool_choice 判据覆盖不到它 —— 必须靠 source。
+#     关之前 (思考开)  finish_reason=stop       ← 会收尾
+#     关之后 (思考关)  finish_reason=tool_calls ← 10 轮全是, 永远不收尾
+#
+# advisor Call 1 是 agent loop (tool_choice 故意 auto)。这个模型关掉思考
+# 之后不会自己收尾 —— 拿不到 final content, JSON 解析必然失败。
+# 而 profile (强制 tool_choice, single-shot) 关掉后正常返回。
+#
+# 所以分界线是 **single-shot vs agent loop**, 判据就是强制 tool_choice。
 # ─────────────────────────────────────────────────────────────────────
-
-from catfish_gateway.thinking_guard import is_internal_call  # noqa: E402
 
 _QW_SELF = dict(
     upstream_model="openai/qwen_v3_6_35b_a3b",
     api_base="http://10.10.40.102:32730/x/v1",
 )
 
-#: 全仓库实际会设 X-Catfish-Source 的值 (8/10 grep 全库确认)。
-#: companion-app 是目录名、companion-migrated 是 SQL 里的会话标记, 都不是请求头。
-_INTERNAL_SOURCES = [
-    "companion-advisor", "companion-advisor-transform", "companion-briefing-card",
-    "companion-email-draft", "companion-email-scheduler", "companion-phishing-scan",
-    "companion-profile", "companion-wiki-suggest",
-]
 
-
-def test_主对话绝不能被关掉思考():
-    """★ 这条比下面所有条都重要。
-
-    误关的代价是**永久削弱主对话的推理能力, 而且没人会发现** —— 员工只会
-    觉得"小鲶最近变笨了", 没有任何报错。所以主对话的各种形态都要钉死。
-
-    主对话不设 X-Catfish-Source, 网关取不到时填 "unknown" (app.py:2967)。
-    """
-    for source in (None, "", "  ", "unknown", "UNKNOWN"):
-        for tc in ("auto", None, "none"):
-            assert apply({"tool_choice": tc}, _model(**_QW_SELF), source) is None, (
-                f"主对话被误关了! source={source!r} tool_choice={tc!r}"
-            )
-        assert not is_internal_call(source), f"{source!r} 被当成内部调用了"
-
-
-def test_内部调用一律关_包括tool_choice是auto的():
-    """advisor Call 1 的 tool_choice 是 auto —— 老判据覆盖不到, 靠 source。"""
-    for source in _INTERNAL_SOURCES:
-        p = {"tool_choice": "auto"}
-        assert apply(p, _model(**_QW_SELF), source), f"{source} 没关掉思考"
+def test_qwen自建_强制tool_choice_要关():
+    """profile / wiki-suggest / advisor Call 2 这类 single-shot 结构化输出。"""
+    for tc in ("required", {"type": "function", "function": {"name": "submit_profile"}}):
+        p = {"tool_choice": tc}
+        assert apply(p, _model(**_QW_SELF)), f"tool_choice={tc!r} 没关"
         assert p["extra_body"]["chat_template_kwargs"] == {"enable_thinking": False}
-        assert is_internal_call(source)
 
 
-def test_判据是有没有source_不是硬编名单():
-    """将来新增的后台调用**自动**覆盖, 不用改这里。
+def test_agent_loop_绝不能关_哪怕是内部调用():
+    """这条钉的是 8/10 那次事故。
 
-    硬编名单的失效方式是"新加了个 source 但忘了加进名单", 而那正好是最难
-    发现的那种 —— 表现只是"这个后台任务慢", 没人会联想到思考没关。
+    advisor Call 1 是内部调用 (有 X-Catfish-Source), 但 tool_choice=auto ——
+    **关掉思考它就不收尾了**, finish_reason 永远是 tool_calls, total 涨到 38
+    还在调工具, JSON 拿不到, 早安页比不改之前更坏。
+
+    "是内部调用" 推不出 "该关思考"。能推出的只有 "要结构化结果 (强制
+    tool_choice)" → "思考没用"。
     """
-    assert is_internal_call("companion-something-brand-new")
-    assert is_internal_call("hermes-whatever")
+    for tc in ("auto", None, "none"):
+        p = {"tool_choice": tc}
+        assert apply(p, _model(**_QW_SELF)) is None, (
+            f"tool_choice={tc!r} 被关了 —— agent loop 会停不下来"
+        )
+        assert p == {"tool_choice": tc}, "params 被动了"
 
 
-def test_不认识的provider_有source也不动():
-    """认不出关法就别编参数名 —— 这条优先级高于"是不是内部调用"。"""
+def test_主对话不受影响():
+    """员工聊天 tool_choice=auto, 推理能力必须留着。
+    误关没有任何报错, 员工只会觉得"小鲶变笨了"。"""
+    for cfg in (_QW_SELF, _QWEN, _DS):
+        assert apply({"tool_choice": "auto"}, _model(**cfg)) is None
+
+
+def test_不认识的provider一律不动_强制也不动():
     for m in ({"upstream_model": "gemini/gemini-2.5-pro"}, {"upstream_model": "x/y"}):
-        p = {"tool_choice": "auto"}
-        assert apply(p, _model(**m), "companion-advisor") is None
-        assert p == {"tool_choice": "auto"}, "认不出还动了 params"
+        p = {"tool_choice": "required"}
+        assert apply(p, _model(**m)) is None
+        assert p == {"tool_choice": "required"}, "认不出还动了 params"
 
 
 def test_八八原始场景没回归():
-    """强制 tool_choice + dashscope/deepseek → 仍要关 (不关直接 400)。
-    这条是 8/8 那次事故的锚, 加 source 判据不能把它挤掉。"""
+    """dashscope / deepseek 强制 tool_choice → 仍要关 (不关直接 400)。"""
     for cfg in (_QWEN, _DS):
-        assert apply({"tool_choice": "required"}, _model(**cfg), "unknown")
-        assert apply(
-            {"tool_choice": {"type": "function", "function": {"name": "f"}}},
-            _model(**cfg), None,
-        )
+        assert apply({"tool_choice": "required"}, _model(**cfg))
