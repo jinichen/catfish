@@ -54,9 +54,29 @@ profile.ts:715 写着 `model: 必传, 跟员工 chat model 同款
   deepseek    thinking={"type": "disabled"}, 放 extra_body
               6/30 鸿波 curl 实测 (见 models.yaml)。
 
-别的 provider (gemini / anthropic / 私有 vLLM) **一律不动**。它们要么没这条
+  qwen 自建   chat_template_kwargs={"enable_thinking": false}, 放 extra_body
+              8/10 鸿波打内网端点实测, 三种写法同一道 "1+1=?" max_tokens=100:
+                enable_thinking=false (顶层)      content ''        ← 无效
+                chat_template_kwargs.enable_thinking  content '1 + 1 = 2'  ← 就它
+                thinking.type=disabled            content ''        ← 那是 deepseek 的
+              这是 Qwen3 在 vLLM / SGLang 上的官方开关, 跟百炼那套**不一样** ——
+              同样叫 qwen, 托管方式不同参数就不同, 所以要跟 dashscope 分开认。
+
+别的 provider (gemini / anthropic / 其它自建) **一律不动**。它们要么没这条
 约束, 要么参数名不一样 —— 凭印象编一个参数名塞过去, 换来的是一个更难查的
 400。宁可不管。
+
+## 两个问题别混为一谈
+
+  「我们知道怎么给这家关思考」  ← _DISABLE_FORM 管这个
+  「这家有 thinking ⊥ 强制 tool_choice 约束」 ← _TOOL_CHOICE_CONFLICT 管这个
+
+dashscope / deepseek 两条都成立 (上面有实测)。qwen 自建只验了**第一条** ——
+我们知道怎么关它, 但没验过它强制 tool_choice 时会不会 400。所以它不进
+`apply()` 的自动关闭名单, 只给显式调 `disable_thinking()` 的地方用
+(目前是 conversation_compressor)。
+
+把这俩混在一个判断里, 就会因为"知道怎么关"顺手推出"应该关", 那是没根据的。
 
 ## 管理员显式配了就不覆盖
 
@@ -92,8 +112,16 @@ def is_forced_tool_choice(tool_choice: Any) -> bool:
     return isinstance(tool_choice, dict) and bool(tool_choice)
 
 
+#: 哪几家我们**验证过**关思考的写法。见模块头的实测记录。
+_KNOWN_DISABLE_FORMS = ("dashscope", "deepseek", "qwen_selfhost")
+
+#: 哪几家**验证过** thinking ⊥ 强制 tool_choice。比上面那个窄 ——
+#: qwen 自建只验了"怎么关", 没验"不关会不会 400", 不能顺手推。
+_TOOL_CHOICE_CONFLICT = ("dashscope", "deepseek")
+
+
 def _provider_of(model: Any) -> str:
-    """判这个模型属于哪家。返 "dashscope" / "deepseek" / ""(不认识)。
+    """判这个模型属于哪家。返 "dashscope" / "deepseek" / "qwen_selfhost" / ""(不认识)。
 
     三个依据, 从可靠到兜底:
       1. upstream.provider —— 8/1 供应商拆分引入的正式字段, merge_provider
@@ -124,6 +152,18 @@ def _provider_of(model: Any) -> str:
         return "dashscope"
     if "api.deepseek.com" in base:
         return "deepseek"
+
+    # 自建 Qwen (vLLM / SGLang)。**必须放在 aliyuncs 判断之后** —— 百炼上的
+    # qwen 也叫 qwen, 但那边认 enable_thinking 顶层, 这边认 chat_template_kwargs,
+    # 顺序反了就会给内网发百炼的参数 (8/10 实测那条是无效的, 静默不生效)。
+    #
+    # 判据是"名字里有 qwen 且不在百炼域名下"。这是从内网那一个端点
+    # (openai/qwen_v3_6_35b_a3b @ 10.10.40.102) 推广出来的 —— 推广的依据是
+    # chat_template_kwargs.enable_thinking 是 Qwen3 在 vLLM/SGLang 上的官方开关,
+    # 自建 qwen 走的基本都是这两个引擎。真遇到第三种托管方式而它不认这个参数,
+    # 表现是**静默不生效** (多花点 token), 不是 400 —— 代价可控才敢推广。
+    if "qwen" in um:
+        return "qwen_selfhost"
     return ""
 
 
@@ -142,6 +182,46 @@ def _already_configured(params: dict[str, Any], provider: str) -> bool:
     return False
 
 
+def _put_extra_body(params: dict[str, Any], key: str, value: Any) -> None:
+    """往 extra_body 里塞一项, 保留already有的其它项。"""
+    eb = params.get("extra_body")
+    if not isinstance(eb, dict):
+        eb = {}
+    eb[key] = value
+    params["extra_body"] = eb
+
+
+def disable_thinking(params: dict[str, Any], model: Any) -> str | None:
+    """就地给 params 加上"关掉深度思考"的参数。返描述 (给日志), 不认识返 None。
+
+    **无条件关**, 不看 tool_choice —— 给那些"本来就不需要模型思考"的内部调用用。
+    目前唯一调用点是 conversation_compressor: 它要的是一段摘要文本, 思考过程
+    对它毫无价值, 却会把 max_tokens 吃光。
+
+    8/10 现场: 压缩器用员工同款模型 (内网 Qwen3-VL, 思考默认开着) 发
+    max_tokens=800 的摘要请求 → 800 全被 reasoning 吃掉 → content 空 →
+    压缩静默失败 → 449 条原样发给 128K 模型 → 400。
+    实测那个模型的输出构成就是 content 10 / reasoning 210 这个量级。
+
+    认不出 provider 就什么都不做 —— 编一个参数名塞过去只会换来更难查的 400。
+    """
+    provider = _provider_of(model)
+    if provider not in _KNOWN_DISABLE_FORMS:
+        return None
+    if _already_configured(params, provider):
+        return None
+
+    if provider == "dashscope":
+        params["enable_thinking"] = False
+        return "enable_thinking=false (dashscope)"
+    if provider == "deepseek":
+        _put_extra_body(params, "thinking", {"type": "disabled"})
+        return "thinking.type=disabled (deepseek)"
+    # qwen_selfhost —— 8/10 实测唯一有效的写法, 见模块头
+    _put_extra_body(params, "chat_template_kwargs", {"enable_thinking": False})
+    return "chat_template_kwargs.enable_thinking=false (qwen 自建)"
+
+
 def apply(params: dict[str, Any], model: Any) -> str | None:
     """就地处理 params。返回做了什么的描述 (给日志), 没动返 None。
 
@@ -152,7 +232,10 @@ def apply(params: dict[str, Any], model: Any) -> str | None:
         return None
 
     provider = _provider_of(model)
-    if not provider:
+    # 只对**验证过有这条约束**的两家动手。qwen 自建我们知道怎么关它
+    # (_KNOWN_DISABLE_FORMS 里有), 但没验过它强制 tool_choice 时会不会 400 ——
+    # 「知道怎么关」推不出「应该关」, 见模块头。
+    if provider not in _TOOL_CHOICE_CONFLICT:
         return None
 
     if _already_configured(params, provider):
@@ -164,15 +247,5 @@ def apply(params: dict[str, Any], model: Any) -> str | None:
         )
         return None
 
-    if provider == "dashscope":
-        # 顶层传 —— 8/8 打网关实测生效 (见模块头)。
-        params["enable_thinking"] = False
-        return "enable_thinking=false (dashscope)"
-
-    # deepseek: 放 extra_body, 跟 models.yaml 里既有的 param_overrides 同款写法
-    eb = params.get("extra_body")
-    if not isinstance(eb, dict):
-        eb = {}
-    eb["thinking"] = {"type": "disabled"}
-    params["extra_body"] = eb
-    return "thinking.type=disabled (deepseek)"
+    # 走跟 disable_thinking 同一套 provider 语法, 免得两处各写一份再各改一半
+    return disable_thinking(params, model)

@@ -116,6 +116,16 @@ SUB_COOL_DOWN_SECONDS = 300
 #: 跟"不需要压"没区别。修了触发条件却不动这个, 只是从"不压"变成"压不成"。
 COMPRESSION_TIMEOUT_SECS = 90.0
 
+#: 摘要最多生成多少 token.
+#:
+#: 8/10 提成常量 —— 它原来是 body 里的一个字面量 800, 而失败日志要报"用了多少/
+#: 上限多少"才看得出是不是被打满。两处各写一个 800, 迟早改一处漏一处。
+#:
+#: 800 是按"关掉思考之后"定的: 纯摘要文本 800 token ≈ 1200 汉字, 够概括几百条
+#: 中间段。思考没关时这个值毫无意义 —— 8/10 现场就是 800 全喂了 reasoning,
+#: content 一个字没有。所以要调大之前先确认 thinking_guard 认不认那个 provider。
+MAX_SUMMARY_TOKENS = 800
+
 #: env override 总开关 (admin 怀疑出问题时可一键关)
 ENV_DISABLE = "CATFISH_DISABLE_GATEWAY_COMPRESSION"
 
@@ -466,6 +476,29 @@ async def _summarize_middle(
     )
     dev_token = ensure_internal_dev_token()
 
+    # 8/10: 关掉深度思考 —— 摘要不需要模型"想", 而思考会把 max_tokens 吃光。
+    #
+    # 现场: 员工 picker 选内网 Qwen3-VL (思考默认开着), 压缩器发 max_tokens=800,
+    # 回来 completion_tokens 正好 800 打满, content **空**。那个模型的实测输出
+    # 构成就是 content 10 / reasoning 210 这个量级 —— 800 全喂了思考。
+    # 于是下面 `content.strip()` 判空 → return None → 压缩静默失败 →
+    # 449 条原样发给 128K 模型 → 400 "未知错误"。
+    #
+    # 参数按 provider 分, 不能一刀切: 压缩用的是**员工同款模型**
+    # (BL-INTERNAL-MODEL-FOLLOW-USER), 员工选 deepseek 时塞 qwen 的参数就是
+    # 给 DeepSeek 发未知参数。thinking_guard 里按家分好了, 认不出的返 None 不动。
+    body: dict[str, Any] = {
+        "model": origin_obj.name,
+        "messages": [{"role": "user", "content": user_prompt}],
+        "temperature": 0.2,
+        "max_tokens": MAX_SUMMARY_TOKENS,
+    }
+    from .thinking_guard import disable_thinking  # noqa: PLC0415
+
+    _tg = disable_thinking(body, origin_obj)
+    if _tg:
+        logger.info("compression: 关掉深度思考 (%s) —— 摘要不需要思考, 免得吃光 max_tokens", _tg)
+
     try:
         async with httpx.AsyncClient(timeout=COMPRESSION_TIMEOUT_SECS) as client:
             resp = await client.post(
@@ -478,12 +511,7 @@ async def _summarize_middle(
                     "X-Catfish-Compression-Internal": "true",
                     "Content-Type": "application/json",
                 },
-                json={
-                    "model": origin_obj.name,
-                    "messages": [{"role": "user", "content": user_prompt}],
-                    "temperature": 0.2,
-                    "max_tokens": 800,
-                },
+                json=body,
             )
             if resp.status_code != 200:
                 logger.info(
@@ -494,18 +522,41 @@ async def _summarize_middle(
             data = resp.json()
             choices = data.get("choices") or []
             if not choices:
+                logger.warning(
+                    "compression: %s 返 200 但 choices 空, 压缩失败 sub=%s", origin_obj.name, user_sub,
+                )
                 return None
-            content = choices[0].get("message", {}).get("content")
+            msg = choices[0].get("message", {}) or {}
+            content = msg.get("content")
             if isinstance(content, str) and content.strip():
                 logger.info(
                     "compression: 压缩成功 sub=%s model=%s (员工同款), summary=%d chars",
                     user_sub, origin_obj.name, len(content),
                 )
                 return content.strip()
+
+            # ⚠ 8/10: 这条以前是**静默** return None ——
+            # HTTP 200、花了 24 秒、烧了 token, 结果被丢掉, 一行日志都没有。
+            # 外面看起来跟"不需要压"一模一样, 而后果是整个会话超上下文 400。
+            # 今天查这个问题的时间几乎全花在"压缩到底跑没跑"上。
+            #
+            # 最常见的成因就是思考吃光预算, 所以把判据直接写进日志:
+            # finish_reason=length + reasoning 有货 + content 空 = 就是它。
+            usage = data.get("usage") or {}
+            logger.warning(
+                "compression: %s 返 200 但 content 空, 压缩失败 sub=%s "
+                "(finish_reason=%s, completion_tokens=%s/上限 %d, reasoning_content=%d 字). "
+                "若 finish_reason=length 且 reasoning 有货 → 深度思考吃光了 max_tokens, "
+                "查 thinking_guard 认不认这个 provider (认不出就不会关思考)",
+                origin_obj.name, user_sub,
+                choices[0].get("finish_reason"),
+                usage.get("completion_tokens"), MAX_SUMMARY_TOKENS,
+                len(msg.get("reasoning_content") or ""),
+            )
     except Exception as e:
-        logger.info(
-            "compression: %s 异常 (%s), 跳过 sub=%s",
-            origin_obj.name, type(e).__name__, user_sub,
+        logger.warning(
+            "compression: %s 异常 (%s: %s), 压缩失败 sub=%s",
+            origin_obj.name, type(e).__name__, e, user_sub,
         )
     return None
 
