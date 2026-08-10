@@ -16,8 +16,8 @@
 |---|---|---|---|---|---|
 | **macOS Apple Mail** (Mail.app) | ✅ | ✅ | ✅ | ✅ (草稿落 Drafts) | **MVP 可用** (5/18 BL-EMAIL-APPLEMAIL-IMPL) |
 | **macOS Foxmail 1.5+** | ✅ | ✅ | ✅ | ❌(红线 + 写入不可靠) | **可用** |
-| Windows Outlook | ⏳ | ⏳ | ⏳ | ⏳ | TODO (pywin32 COM) |
-| Windows Foxmail | ⏳ | ⏳ | ⏳ | ⏳ | TODO (.box parser 已有) |
+| Windows Outlook | ✅ | ✅ | ✅ | ❌ | **只读可用** (W2 pywin32 COM). 起草 / 发送 / 删除 / 标已读 6 个可选 method 待 W3 在真 Windows 机器上补 |
+| Windows Foxmail | ⏳ | ⏳ | ⏳ | ⏳ | TODO (.box parser 已有, adapter 没接) |
 
 > **5/17-18 BL-EMAIL-APPLEMAIL**: macOS 端从 Outlook for Mac 改 Apple Mail.app.
 > 5/18 真 ship MVP — 5 方法走 AppleScript via osascript subprocess, 32 单测覆盖.
@@ -37,15 +37,31 @@ Mail.app 没开时 → `ClientNotRunningError`, 先开 Mail 再用.
 
 ## 装
 
+macOS / Linux:
+
 ```bash
 cd edge/email-agent
 bash install.sh
 ```
 
-会做:
-1. `pip install -e` 到 Hermes 的 venv (`~/.hermes/hermes-agent/venv`), 暴露
-   `catfish-email` 命令
-2. 软链 SKILL.md 到 `~/.hermes/skills/productivity/`, 重启 hermes 后能用
+Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File edge\email-agent\install.ps1
+```
+
+两边都做同样两件事:
+1. `pip install -e` 到 Hermes 的 venv, 暴露 `catfish-email` 命令
+2. 把 SKILL 目录挂到 hermes 的 `skills/productivity/`, 重启 hermes 后能用
+
+路径按平台不同 —— Windows 的 hermes 在 `%LOCALAPPDATA%\hermes` 而不是
+`~/.hermes`, 可执行文件在 `venv\Scripts\catfish-email.exe` 而不是 `venv/bin/`。
+`install.ps1` 头部注释逐条列了这四处差异。
+
+> **install.ps1 还没在真 Windows 机器上跑过。** 其中 hermes 读 skills 的目录
+> 是按 `_phase1_win_install_hermes.ps1` 的 `$HermesHome` 约定推导的, 仓库里
+> 没有 Windows 先例可对照。装完 banner 里没出现 catfish-email 的话, 用
+> `.\install.ps1 -SkillsDir <正确路径>` 指过去。
 
 ---
 
