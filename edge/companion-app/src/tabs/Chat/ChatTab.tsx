@@ -170,9 +170,17 @@ export default function ChatTab() {
    *   - 首次启动: modelPickedByUser=false, catalog.default fetch 后触发 effect
    *     → setModelInStore(default, **false**) → modelPickedByUser 仍 false.
    *   - 用户 picker 改: setModel(m, true) → modelPickedByUser=true → effect 跳过.
-   *   - reset() (+新对话): modelPickedByUser=false → effect 重新接管.
    *   - catalog 15s polling 改 default: effect deps catalog?.default 触发 →
    *     **如果 !modelPickedByUser** propagate, 否则**跳过**.
+   *
+   * (原来这里还写着"reset() 新对话 → modelPickedByUser=false → effect 重新接管",
+   *  那条设计 store/chat.ts:385 已经撤回了 —— reset 不再动 modelPickedByUser。
+   *  留着会让人以为开新对话会重新吃 catalog.default。)
+   *
+   * ⚠ 8/10: 这里传的 `false` **只影响 store, 不再落盘**。之前 setModel 里写文件
+   * 那句在 pickedByUser 判断外面, 于是这个"自动 propagate"把 roles.yaml 的
+   * chat_default (deepseek) 写进了员工的 ~/.catfish/picker_state.json,
+   * hermes 侧读文件的 memory plugin 全被带到公网去了。见 store/chat.ts setModel。
    */
   useEffect(() => {
     if (modelPickedByUser) return;

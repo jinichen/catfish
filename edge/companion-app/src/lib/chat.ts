@@ -256,18 +256,13 @@ export async function streamChat(params: SendChatParams): Promise<void> {
   // (deepseek-flash) — 40K context 不稳, 一调 skill 就 streaming error.
   const effectiveModel = model;
 
-  // P3.5.2 (6/16 鸿波): 持久化 picker model 到 ~/.catfish/picker_state.json.
-  //   catfish-memory plugin (in-hermes) sync_turn 读这个文件作为 summary model 来源,
-  //   让 plugin 自动跟随 picker (绕过 hermes MemoryProvider API 没透传 picker 的限制).
-  //   fire-and-forget, 失败静默, 不阻塞 chat send.
-  void (async () => {
-    try {
-      const { savePickerState } = await import("./picker_state");
-      savePickerState(effectiveModel);
-    } catch (e) {
-      console.warn("[chat] savePickerState import 失败 (静默):", e);
-    }
-  })();
+  // P3.5.2 (6/16) 原本在这里"每次 send 前写 picker_state.json", 8/10 删 —— 这里
+  // 不该写盘。它写的是 store.model, 而员工没选过时 store.model 就是 ChatTab
+  // catalog effect 灌的 catalog.default (= roles.yaml chat_default: deepseek)。
+  // 污染有两条路 (setModel 一条 + 这条), 只堵前面那条, 下次 send 就被这条写回来。
+  // 删掉不丢覆盖: 员工点 picker 时 ChatModelPicker + setModel(_, true) 照样落盘;
+  // 从没选过的新机器本就该是空文件 (memory_enforce 读不到会退到 chat_default)。
+  // 军规: picker 文件只记录**员工的选择**, 不记录系统替他填的默认值。
 
   const body: Record<string, unknown> = {
     model: effectiveModel,

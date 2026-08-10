@@ -267,13 +267,36 @@ export const useChatStore = create<ChatState>((set) => ({
         });
     }
     // P3.5.28 (6/17 鸿波"picker 联动现在就应该做"): 桥给 Rust background task
-    // (email_scheduler / phishing_scan). 写文件 ~/.catfish/picker_model 让 background
-    // task 真 tick 时读. 员工 chat picker 切换下次 tick 生效.
+    // (email_scheduler / phishing_scan) 和 hermes 侧的 memory plugin. 写文件
+    // ~/.catfish/picker_model + picker_state.json 让它们 tick / sync_turn 时读.
+    //
+    // ⚠ 8/10 加 `pickedByUser` 闸 —— 之前这一句在判断**外面**, 是 picker 被污染的根因.
+    //
+    // 这个函数的第二个参数本来就叫 pickedByUser, 上面 set() 也在用它决定要不要锁 store,
+    // 唯独写盘那句不看它。于是 ChatTab 的 catalog effect
+    //     setModelInStore(catalog.default, false)   // ← 显式说了"这不是员工选的"
+    // 照样把 catalog.default 写进了员工的 picker 文件。而 catalog.default 来自
+    // roles.yaml 的 `chat_default: catfish-public-deepseek-flash`
+    // (gateway catalog.py: role_resolver("chat_default") → default)。
+    //
+    // 现场表现: 员工 picker 选了内网 Qwen3-VL, 主聊天确实走内网 (model 在请求体里),
+    // 但 ~/.catfish/picker_state.json 被写成 deepseek → hermes 侧读文件的那些
+    // (memory_enforce.get_verifier_model / catfish_memory._get_summarize_model)
+    // 全部跑到公网 deepseek 上。**员工的选择在界面上是对的, 在文件里是错的。**
+    //
+    // 这比"读旁路"更隐蔽: 读旁路各走各的, 写旁路是把真源改掉, 之后所有读它的人
+    // 一起被带偏, 而且看不出是谁改的。军规「模型只能 picker 模型」管的不只是读,
+    // **写进 picker 文件的也只能是员工的选择**。
+    //
+    // catalog.default 仍然会进 store.model —— 那是 UI 兜底显示 (新机器还没选过时
+    // 总得显示点什么), 但它不是"选择", 所以不落盘。
     //
     // Fire-and-forget — 不 throw, 不阻塞 picker UI. 失败仅 console.warn.
-    invoke("set_picker_model", { name: model }).catch((e: unknown) => {
-      console.warn("[P3.5.28 picker_model bridge] 写文件失败:", e);
-    });
+    if (pickedByUser) {
+      invoke("set_picker_model", { name: model }).catch((e: unknown) => {
+        console.warn("[P3.5.28 picker_model bridge] 写文件失败:", e);
+      });
+    }
   },
   setPersistedSessionId: (persistedSessionId) =>
     set({ persistedSessionId }),
