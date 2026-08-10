@@ -148,7 +148,27 @@ class OutlookWinAdapter(EmailAdapter):
     """
 
     name = "outlook_win"
-    supports_drafts = True  # CreateItem(0).Save() 存 Drafts (W3 集成阶段实现)
+
+    # 这里曾经写 True, 理由是"CreateItem(0).Save() 存 Drafts (W3 集成阶段实现)"
+    # —— 把**打算实现**当成**已经实现**写进了 flag。
+    #
+    # 后果不是抽象的: __main__.py 的 _cmd_draft 正是靠这个 flag 挑 adapter。
+    # Windows 上候选只有 outlook_win (foxmail-win 工厂里就 NotImplementedError),
+    # 于是它必被选中, 然后 create_draft 落到基类抛 NotSupportedError。员工在
+    # Companion 里点"起草回复", 拿到的是"该 adapter 不支持起草" —— 而 flag
+    # 一直在说支持。
+    #
+    # flag 的语义是"我实现了 create_draft", 不是"我将来会实现"。本文件第 63-68
+    # 行自己也写着这 6 个可选方法**不 override、走 base default**, 只有这一行
+    # 跟它对不上。
+    #
+    # 翻回 True 的条件: 本类真的 override 了 create_draft, 并且在装了 Outlook
+    # 的 Windows 机器上手测过 (测试策略见 tests/test_adapter_outlook_win.py 开头
+    # —— 沙箱和 macOS CI 都没有 pywin32, mock 只能证明"我按我以为的方式调了 COM",
+    # 证明不了 Outlook 真那么行为)。
+    # tests/test_adapter_contract.py 会盯着这一条: 只要 flag 是 True 而
+    # create_draft 没 override, 测试就红。
+    supports_drafts = False
 
     def __init__(self) -> None:
         # 只做 sys.platform + pywin32 存在检查, 不 Dispatch — 让 list_accounts
