@@ -94,9 +94,57 @@ function toResponseHeaders(headers: Record<string, string>): Headers {
   return h;
 }
 
+/** 普通 API / 探活 / metadata —— 30 秒够了, 超了多半是真挂了。 */
+const DEFAULT_TIMEOUT_MS = 30_000;
+
+/** LLM 调用的超时。
+ *
+ * ── 8/10 现场: 早安页「advisor 综合判断暂不可用」查了一整天 ──────────
+ *
+ * Companion console 最后给出的原话:
+ *
+ *     [advisor] LLM 调用挂: "请求失败: error sending request for url
+ *      (http://localhost:8642/v1/chat/completions?...) ← operation timed out"
+ *
+ * **是 Companion → hermes 这一跳超时**, 不是 gateway → 上游。当天在 gateway
+ * 那一层查了很久 (压缩 / thinking / system 归一 / preflight), 全都不是 ——
+ * 瓶颈根本不在那一层。
+ *
+ * 一条链上四个超时值, 只有最小的那个说了算:
+ *
+ *     Rust http_proxy 非流式    30 秒   ← 写死在这里, **实际生效的就是它**
+ *     前端 CLIENT_TIMEOUT_MS   600 秒   只是 race sentinel, 不 abort
+ *     gateway → 上游           180 秒   当天调大了, 但管不到这一跳
+ *     Rust http_proxy 流式     600 秒   同文件, 但 advisor 是 stream:false
+ *
+ * advisor Call 1 是 hermes agent loop: 每轮 10-13 秒 × 4~6 轮 = 40~70 秒,
+ * 30 秒必挂。而公网 deepseek 8.8 秒跑完, 30 秒够 —— 这就是"为什么换公网就
+ * 好了"的真正原因, 跟模型能力无关, 跟这个写死的 30 秒有关。
+ *
+ * 600 秒跟前端 CLIENT_TIMEOUT_MS 和流式路径对齐 —— **同一件事只该有一个数**。
+ * 真要等 10 分钟也有 race sentinel 兜着, UI 不会干等。
+ */
+const LLM_TIMEOUT_MS = 600_000;
+
+/** 这次请求是不是 LLM 调用 (agent loop 可能跑几分钟)。
+ *
+ * 判 URL 而不是让每个 caller 自己传 —— main.tsx 把 window.fetch 全局 patch 到
+ * 这里, 全项目几十处 fetch 都经过, 靠 caller 记得传参数是不现实的 (今天这个
+ * bug 就是这么来的: 30 秒写死在这一行, 没有任何 caller 知道自己被限了 30 秒)。
+ */
+function isLlmCall(url: string): boolean {
+  return /\/(v1\/chat\/completions|v1\/responses|api\/chat)\b/.test(url);
+}
+
+/** 只给单测用 —— 判据是个正则, 写错一个字符就静默失效 (回到 30 秒必挂),
+ *  而那种失效在界面上跟"上游慢"长得一模一样。必须能被测到。 */
+export const __isLlmCallForTest = isLlmCall;
+
 /** 非 stream · 一次性 fetch. 用于 JSON API / metadata 类调用. */
 export async function httpProxy(url: string, init?: RequestInit): Promise<Response> {
-  const req = buildRequest(url, init, 30_000);
+  const req = buildRequest(
+    url, init, isLlmCall(url) ? LLM_TIMEOUT_MS : DEFAULT_TIMEOUT_MS,
+  );
   const resp = await invoke<HttpProxyResponse>("http_proxy", { req });
 
   // 分路让 TS 能 narrow bodyBytes 类型 (union 里混了 URLSearchParams 会报 TS2345).
