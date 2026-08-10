@@ -104,6 +104,36 @@ print(struct.unpack('<II', open(p,'rb').read(16)[8:16]))"
 `__pycache__`。CI 在干净容器里跑, 命不中这条 —— **它只坑本地验证, 也就是
 "我说测过了"这句话的全部依据**。
 
+### 4.2 「改了没效果」先看**跑的是不是你改的那份** (8/9 + 8/10 各踩一次)
+
+一天之内两次, 形式不同但都是同一件事:
+
+- **8/9**: 改了 Companion 怎么都不生效, 排查十几轮。真因是运行中的 app 在
+  `/Applications/Adobe Acrobat DC/Catfish Companion.app`, 新包躺在
+  `/Applications/` 没人用。
+- **8/10**: 加了 400 dump 复现却没落盘。真因是 catfish gateway 是前台
+  `python -m catfish_gateway.app` 跑的, **从改代码到复现之间没重启过**。
+
+**8/10 那次有个现成的判据, 值得单独记**: traceback 的**行号跟显示的源码内容
+对不上** —— 报 `line 2368` 却显示一行 `#` 注释, 报 `line 2345` 显示 `try:`
+而不是真正出错的调用。
+
+Python 的 traceback 行号来自**进程里编译好的 code object**, 而下面那行源码
+是**现读磁盘**的。两者不一致 = 磁盘已经改了、进程还是旧的。
+**traceback 指向注释行 = 进程没重启**, 这个信号极其可靠, 不用猜。
+
+**别把 hermes 和 catfish gateway 搞混** (8/10 我就给错了命令):
+
+    hermes gateway stop/start   → 只管 hermes (8642), launchd 托管
+    catfish gateway (8999)      → 多数时候是自己前台 `python -m catfish_gateway.app`,
+                                  只能 Ctrl-C 再起; 上面那条命令碰都碰不到它
+
+改完 gateway 代码要生效, 先 `lsof -ti:8999` 确认是谁在跑。
+
+**顺序**: 「改了没效果」第一条命令永远是确认**跑的是哪一份** ——
+`ps` 看进程路径 / `lsof -ti:<port>` 看端口占用 / traceback 行号对不对得上。
+先做这个, 再去读代码。反过来就是 8/9 那十几轮。
+
 ## 5. 已有拆分参考 (5/20-5/21 round 1+2)
 
 可以模仿的真实拆分 commit:
