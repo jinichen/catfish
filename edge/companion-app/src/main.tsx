@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { bootstrapEndpoints } from "./lib/env";
 import { fetchViaProxy } from "./lib/http_proxy";
+import { checkTimeoutChain } from "./lib/timeouts";
 import {
   StartupErrorBoundary,
   installStartupDiagnostics,
@@ -34,6 +35,15 @@ import "./styles/refresh.css";
 // 风险:
 //   - vite HMR / 内部库若 direct fetch localhost:1420 · 走原生 (CSP 允许 localhost). OK.
 //   - 若 build 后 · 内部库 fetch 远端 URL · 也自动走代理. OK.
+// 8/10: 超时链自检。这条链跨 Companion / hermes / gateway 三个进程, 而当天
+// 的事故正是"界面上改了 gateway 的 180 秒, 实际卡住的是 Companion 里写死的
+// 30 秒"。同进程内这几层的顺序至少要能自己查出来 —— 配反了不该是静默的。
+(function assertTimeoutChain() {
+  for (const p of checkTimeoutChain()) {
+    console.error("[timeouts] 超时链配置有问题:", p);
+  }
+})();
+
 (function installFetchProxy() {
   const originalFetch = window.fetch.bind(window);
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {

@@ -18,6 +18,7 @@
  */
 
 import { config } from "./env";
+import { LLM_RACE_TIMEOUT_MS } from "./timeouts";
 import { fetchWithAuth } from "./me";
 import type { Profile } from "./profile";
 import type {
@@ -836,7 +837,9 @@ export type AdvisorFetchResult = AdvisorResult | null | typeof ADVISOR_TIMEOUT;
 // 8/8: 加 export —— AdvisorView 的超时文案原来硬编码 ">5min", 而这里早就是
 // 600s 了 (P3.4.8 之后又调过一次)。两处各写各的, 结果界面上告诉员工"等 5 分钟",
 // 实际要等 10 分钟。数字只该有一个来源。
-export const CLIENT_TIMEOUT_MS = 600_000;
+// 8/10: 数值搬 timeouts.ts (单一来源)。上面那段演变史留着 —— 60→180→300→600
+// 每一步都有实测依据, 是这个数为什么这么大的全部理由。
+export const CLIENT_TIMEOUT_MS = LLM_RACE_TIMEOUT_MS;
 
 /** 主入口. 不挂 AbortSignal (Tauri webview suspend 经验, 5/21 学到). */
 export async function fetchBriefingAdvisor(input: AdvisorInput): Promise<AdvisorFetchResult> {

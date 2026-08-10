@@ -11,6 +11,7 @@
  */
 
 import { invoke as rawInvoke } from "@tauri-apps/api/core";
+import { LLM_RACE_TIMEOUT_MS } from "./timeouts";
 
 import { config } from "./env";
 import { fetchWithAuth } from "./me";
@@ -744,7 +745,7 @@ export async function recomputeProfile(model: string): Promise<Profile | null> {
     // P3.5.32.6 (6/18 鸿波 catch '完全卡死'): 300_000 → 600_000.
     // 真因 + 同步 fix 详见 briefing_advisor.ts:731 注释. 鸿波本机 catfish-private-main
     // profile 单 LLM call 116s, 300s 不够大 buffer.
-    const LLM_TIMEOUT_MS = 600_000;
+    const LLM_TIMEOUT_MS = LLM_RACE_TIMEOUT_MS;  // 8/10: 搬 timeouts.ts
     const llmPromise = inferProfileFromContext(m);
 
     // 后台 LLM 跑完总是写 saved (race 输了也写 — 下次 mount 命中)

@@ -44,3 +44,27 @@ describe("超时分档: LLM 调用要长, 其它保持短", () => {
     expect(isLlmCall("http://x/v1/responsesX")).toBe(false);
   });
 });
+
+describe("超时链自检", () => {
+  it("当前配置没有问题", async () => {
+    const { checkTimeoutChain } = await import("./timeouts");
+    expect(checkTimeoutChain()).toEqual([]);
+  });
+
+  it("LLM 超时必须大于普通请求超时", async () => {
+    const t = await import("./timeouts");
+    // 8/10 事故: LLM 调用被当普通请求限了 30 秒。分档失效必须能查出来。
+    expect(t.LLM_TRANSPORT_TIMEOUT_MS).toBeGreaterThan(t.DEFAULT_TRANSPORT_TIMEOUT_MS);
+  });
+
+  it("race sentinel 不能小于传输层 —— 否则传输层那个数没机会生效", async () => {
+    const t = await import("./timeouts");
+    expect(t.LLM_RACE_TIMEOUT_MS).toBeGreaterThanOrEqual(t.LLM_TRANSPORT_TIMEOUT_MS);
+  });
+
+  it("界面文案的分钟数跟实际值同源", async () => {
+    // 8/8 踩过: 文案硬编码 ">5min" 而实际 600s, 界面骗了员工一倍时间
+    const t = await import("./timeouts");
+    expect(t.LLM_TIMEOUT_MINUTES).toBe(Math.round(t.LLM_RACE_TIMEOUT_MS / 60_000));
+  });
+});
