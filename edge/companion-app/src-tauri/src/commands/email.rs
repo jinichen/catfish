@@ -17,29 +17,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::services::catfish_paths;
 use crate::services::email_scheduler;
 use crate::services::phishing_scan::PhishingScanResult;
-
-/// 找 catfish-email 二进制. 优先用 ~/.local/bin (catfish-email install.sh 软链到此),
-/// 兜底 PATH 查找.
-fn find_catfish_email() -> Option<PathBuf> {
-    if let Ok(home) = crate::util::paths::home_env() {
-        let candidate = PathBuf::from(home).join(".local/bin/catfish-email");
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-    // PATH 兜底
-    if let Ok(out) = Command::new("which").arg("catfish-email").output() {
-        if out.status.success() {
-            let path_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !path_str.is_empty() {
-                return Some(PathBuf::from(path_str));
-            }
-        }
-    }
-    None
-}
 
 /// Apple Mail 数据目录读不读得到 —— 用来提示"有账号但少了几个"。
 ///
@@ -95,7 +75,7 @@ pub async fn email_mail_dir_status() -> Result<String, String> {
 /// timeout 用 osascript subprocess 内置 30s, 不在 Tauri 层加.
 #[tauri::command]
 pub async fn email_digest_fetch(limit: Option<u32>) -> Result<String, String> {
-    let bin = find_catfish_email().ok_or_else(|| {
+    let bin = catfish_paths::catfish_email_bin().ok_or_else(|| {
         "邮件组件未安装。请重启鲶鱼 Companion —— 启动时会自动补装; \
          若重启后仍提示, 请把 ~/Library/Logs/com.catfish.companion/ 里的日志发给 IT。"
             .to_string()
@@ -132,7 +112,7 @@ pub async fn email_digest_fetch(limit: Option<u32>) -> Result<String, String> {
 /// account 空 = 全账号同步; 指定 = 只同步该账号.
 #[tauri::command]
 pub async fn email_check_new(account: Option<String>) -> Result<String, String> {
-    let bin = find_catfish_email().ok_or_else(|| {
+    let bin = catfish_paths::catfish_email_bin().ok_or_else(|| {
         "catfish-email CLI 没装".to_string()
     })?;
 
@@ -175,7 +155,7 @@ pub async fn email_list_fetch(
     limit: Option<u32>,
     folder: Option<String>,
 ) -> Result<String, String> {
-    let bin = find_catfish_email().ok_or_else(|| {
+    let bin = catfish_paths::catfish_email_bin().ok_or_else(|| {
         "邮件组件未安装。请重启鲶鱼 Companion —— 启动时会自动补装; \
          若重启后仍提示, 请把 ~/Library/Logs/com.catfish.companion/ 里的日志发给 IT。"
             .to_string()
@@ -224,7 +204,7 @@ pub async fn email_list_fetch(
 /// is_read 字段也会反映新状态, 前端可乐观更新列表.
 #[tauri::command]
 pub async fn email_read_message(id: String) -> Result<String, String> {
-    let bin = find_catfish_email().ok_or_else(|| {
+    let bin = catfish_paths::catfish_email_bin().ok_or_else(|| {
         "catfish-email CLI 没装".to_string()
     })?;
     let out = Command::new(&bin)
@@ -249,7 +229,7 @@ pub async fn email_read_message(id: String) -> Result<String, String> {
 /// (email_create_draft), 真 send 必须人工点按钮.
 #[tauri::command]
 pub async fn email_send_message(id: String) -> Result<String, String> {
-    let bin = find_catfish_email().ok_or_else(|| {
+    let bin = catfish_paths::catfish_email_bin().ok_or_else(|| {
         "catfish-email CLI 没装".to_string()
     })?;
     let out = Command::new(&bin)
@@ -276,7 +256,7 @@ pub async fn email_send_message(id: String) -> Result<String, String> {
 /// 红线: 永远不彻底物理删 — Trash 30 天内可恢复, 跟主流邮件客户端对齐.
 #[tauri::command]
 pub async fn email_delete_message(id: String) -> Result<String, String> {
-    let bin = find_catfish_email().ok_or_else(|| {
+    let bin = catfish_paths::catfish_email_bin().ok_or_else(|| {
         "catfish-email CLI 没装".to_string()
     })?;
     let out = Command::new(&bin)
@@ -301,7 +281,7 @@ pub async fn email_delete_message(id: String) -> Result<String, String> {
 /// 正文. 也用于已读后又想标回未读的反向操作.
 #[tauri::command]
 pub async fn email_mark_read(id: String, read: Option<bool>) -> Result<String, String> {
-    let bin = find_catfish_email().ok_or_else(|| {
+    let bin = catfish_paths::catfish_email_bin().ok_or_else(|| {
         "catfish-email CLI 没装".to_string()
     })?;
     let mut args: Vec<&str> = vec!["mark-read", "--id", &id, "--json"];
@@ -337,7 +317,7 @@ pub async fn email_create_draft(
     in_reply_to: Option<String>,
     account: Option<String>,
 ) -> Result<String, String> {
-    let bin = find_catfish_email().ok_or_else(|| {
+    let bin = catfish_paths::catfish_email_bin().ok_or_else(|| {
         "catfish-email CLI 没装".to_string()
     })?;
 
@@ -395,7 +375,7 @@ pub async fn email_create_draft(
 /// 拉账号列表. 用于"配了几个邮箱". 卡片 header 显 "5 账号 · 12 未读".
 #[tauri::command]
 pub async fn email_accounts_fetch() -> Result<String, String> {
-    let bin = find_catfish_email().ok_or_else(|| {
+    let bin = catfish_paths::catfish_email_bin().ok_or_else(|| {
         "catfish-email CLI 没装".to_string()
     })?;
     let out = Command::new(&bin)
@@ -473,7 +453,7 @@ pub async fn email_political_get(
 /// 错误兜底跟其他 email_* command 同款: stderr 不空时透出, 否则用退出码.
 #[tauri::command]
 pub async fn email_export_attachment(id: String, filename: String) -> Result<String, String> {
-    let bin = find_catfish_email().ok_or_else(|| {
+    let bin = catfish_paths::catfish_email_bin().ok_or_else(|| {
         "catfish-email CLI 没装".to_string()
     })?;
     let out = Command::new(&bin)

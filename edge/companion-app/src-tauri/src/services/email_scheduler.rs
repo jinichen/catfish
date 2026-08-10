@@ -44,7 +44,9 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::time;
 
-use crate::services::{email_config, hermes_api_config, picker_config, upstream_error_guard};
+use crate::services::{
+    catfish_paths, email_config, hermes_api_config, picker_config, upstream_error_guard,
+};
 // P3.3.58 (6/12 鸿波): 段 2A 集成 phishing_scan
 use crate::services::phishing_scan::{
     self, LlmReviewInput, PhishingScanResult, Severity,
@@ -483,7 +485,7 @@ pub fn schedule_email_scheduler(app: AppHandle) {
 
 /// shell out catfish-email list --unread --json. 失败返 Err.
 async fn fetch_unread() -> Result<Vec<EmailItem>, String> {
-    let bin = find_catfish_email()
+    let bin = catfish_paths::catfish_email_bin()
         .ok_or_else(|| "catfish-email CLI 没装".to_string())?;
 
     // tokio spawn_blocking 让阻塞 subprocess 不卡 runtime
@@ -907,25 +909,6 @@ fn parse_urgencies(s: &str) -> Result<Vec<Urgency>, String> {
     let labels: Vec<String> = serde_json::from_str(array_str)
         .map_err(|e| format!("JSON 解析失败 ({e}): {array_str:?}"))?;
     Ok(labels.iter().map(|l| Urgency::from_label(l)).collect())
-}
-
-/// 跟 commands/email.rs find_catfish_email 同模式, 这里 inline 避循环 import.
-fn find_catfish_email() -> Option<PathBuf> {
-    if let Ok(home) = crate::util::paths::home_env() {
-        let candidate = PathBuf::from(home).join(".local/bin/catfish-email");
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-    if let Ok(out) = Command::new("which").arg("catfish-email").output() {
-        if out.status.success() {
-            let path_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !path_str.is_empty() {
-                return Some(PathBuf::from(path_str));
-            }
-        }
-    }
-    None
 }
 
 /// emit `catfish:email-urgent` 给前端 — 前端 App.tsx 接, 调桌宠主动闲聊.
