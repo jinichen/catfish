@@ -105,3 +105,118 @@ def test_messages_不是list也不炸():
     out, n = drop_empty_tool_calls("不是列表")
     assert n == 0
     assert out == "不是列表"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 8/10: system 归一 —— 「未知错误」查了一上午的真身
+#
+# 内网 Qwen (Go 网关) 只认一条 system, 多了返
+#     error: code = 400 reason =  message =  metadata = map[] cause = <nil>
+# 打端点逐字复现过 (下面每条用例的期望都对应一次真实 curl):
+#     [system, user]                ✅
+#     [system, user, system, user]  ❌ 逐字复现线上 400
+#     [system, user,  user , user]  ✅   ← 只差中间那条 role
+#     [system, system, user]        ❌   ← 开头连着两条也不行
+# ─────────────────────────────────────────────────────────────────────
+
+from catfish_gateway.message_normalize import collapse_extra_system  # noqa: E402
+
+
+def _roles(msgs):
+    return [m["role"] for m in msgs]
+
+
+def test_压缩摘要插中间_降级成user_不挪位置():
+    """conversation_compressor 的形状。**位置不能变** —— 摘要代表"这里曾经有
+    467 条对话", 挪到开头就跑到它概括的内容前面去了, 时序全错。"""
+    msgs = [
+        {"role": "system", "content": "你是小鲶"},
+        {"role": "user", "content": "问题一"},
+        {"role": "system", "content": "[此前 467 条对话的压缩摘要]"},
+        {"role": "user", "content": "问题二"},
+    ]
+    out, merged, demoted = collapse_extra_system(msgs)
+    assert _roles(out) == ["system", "user", "user", "user"]
+    assert (merged, demoted) == (0, 1)
+    assert out[2]["content"] == "[此前 467 条对话的压缩摘要]", "内容不能动"
+    assert out[0] is msgs[0] or out[0]["content"] == "你是小鲶", "首条 system 不该被改"
+
+
+def test_开头连续system_合并成一条():
+    """identity_inject / model_handoff 都是 insert(0, ...) 造出来的形状。
+    这两条本来就都是系统指令, 合并语义不变。"""
+    msgs = [
+        {"role": "system", "content": "身份"},
+        {"role": "system", "content": "人设"},
+        {"role": "user", "content": "你好"},
+    ]
+    out, merged, demoted = collapse_extra_system(msgs)
+    assert _roles(out) == ["system", "user"]
+    assert out[0]["content"] == "身份\n\n人设"
+    assert (merged, demoted) == (1, 0)
+
+
+def test_只有一条system_原样返回不做无谓拷贝():
+    """绝大多数请求走这条 —— 不能因为加了这道闸就每次都重建列表。"""
+    msgs = [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}]
+    out, merged, demoted = collapse_extra_system(msgs)
+    assert out is msgs
+    assert (merged, demoted) == (0, 0)
+
+
+def test_一条system都没有():
+    msgs = [{"role": "user", "content": "u"}, {"role": "assistant", "content": "a"}]
+    out, merged, demoted = collapse_extra_system(msgs)
+    assert out is msgs and (merged, demoted) == (0, 0)
+
+
+def test_开头合并加中间降级_同时发生():
+    msgs = [
+        {"role": "system", "content": "身份"},
+        {"role": "system", "content": "人设"},
+        {"role": "user", "content": "问题一"},
+        {"role": "system", "content": "[摘要]"},
+        {"role": "assistant", "content": "答"},
+    ]
+    out, merged, demoted = collapse_extra_system(msgs)
+    assert _roles(out) == ["system", "user", "user", "assistant"]
+    assert out[0]["content"] == "身份\n\n人设"
+    assert (merged, demoted) == (1, 1)
+
+
+def test_不改原列表():
+    """就地改会污染 caller 手里的 messages (compressor 还拿它算 token)。"""
+    msgs = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": "u"},
+        {"role": "system", "content": "摘要"},
+    ]
+    snapshot = [dict(m) for m in msgs]
+    collapse_extra_system(msgs)
+    assert msgs == snapshot, "原列表被改了"
+
+
+def test_tool_calls_配对不受影响():
+    """归一不能把 tool 序列打乱 —— 那是 5/15 撞过的另一个 400。"""
+    msgs = [
+        {"role": "system", "content": "s"},
+        {"role": "system", "content": "摘要"},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "r"},
+    ]
+    out, _, _ = collapse_extra_system(msgs)
+    assert _roles(out) == ["system", "assistant", "tool"]
+    assert out[1]["tool_calls"] == [{"id": "c1"}]
+    assert out[2]["tool_call_id"] == "c1"
+
+
+def test_归一之后全局只剩一条system():
+    """这条是总闸 —— 上面几条各测一个规则, 这条测**结论**。
+    随便怎么组合, 出来必须只有一条 system。"""
+    import itertools
+    for combo in itertools.product(["system", "user", "assistant"], repeat=4):
+        msgs = [{"role": r, "content": r} for r in combo]
+        out, _, _ = collapse_extra_system(msgs)
+        n = sum(1 for m in out if m["role"] == "system")
+        assert n <= 1, f"{combo} 归一后仍有 {n} 条 system"
+        assert len(out) <= len(msgs), f"{combo} 消息变多了"

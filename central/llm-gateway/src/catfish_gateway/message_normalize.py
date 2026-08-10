@@ -85,6 +85,73 @@ def drop_empty_tool_calls(messages: Any) -> tuple[Any, int]:
     return out, len(hits)
 
 
+def collapse_extra_system(messages: Any) -> tuple[Any, int, int]:
+    """保证整个 messages 里**只有一条 system**。返 (新列表, 合并数, 降级数)。
+
+    ── 为什么 (8/10 实测) ─────────────────────────────────────────────
+    内网 Qwen (10.10.40.102 那个 Go 网关) 只认一条 system, 多了就返
+
+        error: code = 400 reason =  message =  metadata = map[] cause = <nil>
+
+    reason / message 全空, 什么都不告诉你。同一天为这个 400 做了两轮八个探针
+    都没复现, 最后靠 request_shape_dump 抓到真身才定位。打端点逐字复现过:
+
+        [system, user]                  ✅
+        [system, user, system, user]    ❌ 逐字复现线上那个 400
+        [system, user,  user , user]    ✅   ← 只差中间那条的 role
+        [system, system, user]          ❌   ← 连开头连着两条也不行
+
+    所以约束是「**全局只能一条 system**」, 不是「system 必须在开头」。
+
+    ── 两条规则, 各自保语义 ───────────────────────────────────────────
+      开头连续的 system  → 合并成一条 (identity_inject / model_handoff 都是
+                          insert(0), 合并后位置和语义都不变)
+      后面出现的 system  → **降级成 user** (conversation_compressor 的摘要
+                          插在中间, 它的位置有时序意义 —— 代表"这里曾经有
+                          467 条对话"。合并到开头会让摘要跑到它概括的内容
+                          前面去, 时序就错了, 所以只能原地降级)
+
+    ── 为什么不按 provider 分 ─────────────────────────────────────────
+    "只有一条 system" 对任何 OpenAI 兼容上游都是**合法**的, 一刀切不会给
+    deepseek / dashscope 引入新问题, 只是做了点它们不需要的规范化。
+    反过来按 provider 分, 就得维护一张"谁认几条 system"的表 —— 而这张表
+    只有踩了才知道, 正是今天耗掉一上午的那种东西。
+    """
+    if not isinstance(messages, list) or not messages:
+        return messages, 0, 0
+
+    def _is_sys(m: Any) -> bool:
+        return isinstance(m, dict) and m.get("role") == "system"
+
+    if sum(1 for m in messages if _is_sys(m)) <= 1:
+        return messages, 0, 0
+
+    # 开头连续段
+    head_n = 0
+    while head_n < len(messages) and _is_sys(messages[head_n]):
+        head_n += 1
+
+    out: list[Any] = []
+    merged = 0
+    if head_n > 0:
+        parts = [str(m.get("content") or "") for m in messages[:head_n]]
+        first = dict(messages[0])
+        first["content"] = "\n\n".join(p for p in parts if p)
+        out.append(first)
+        merged = head_n - 1
+
+    demoted = 0
+    for m in messages[head_n:]:
+        if _is_sys(m):
+            dm = dict(m)
+            dm["role"] = "user"
+            out.append(dm)
+            demoted += 1
+        else:
+            out.append(m)
+    return out, merged, demoted
+
+
 def normalize_messages(params: dict[str, Any]) -> None:
     """就地规范化 params["messages"]。给 _build_litellm_params 收尾用。
 
@@ -100,4 +167,16 @@ def normalize_messages(params: dict[str, Any]) -> None:
             "message_normalize: 清掉 %d 条 message 上的空 tool_calls/function_call "
             "(dashscope 等上游会因此报 'Empty tool_calls is not supported in message')",
             n,
+        )
+        msgs = fixed
+
+    fixed2, merged, demoted = collapse_extra_system(msgs)
+    if merged or demoted:
+        params["messages"] = fixed2
+        logger.info(
+            "message_normalize: system 归一 —— 开头合并 %d 条, 中间降级成 user %d 条. "
+            "内网 Qwen 只认一条 system, 多了返一个 reason/message 全空的 400 "
+            "(8/10 打端点逐字复现过)。降级而不是合并到开头, 是因为压缩摘要的位置"
+            "有时序意义, 挪到前面就跑到它概括的内容之前了。",
+            merged, demoted,
         )
