@@ -533,3 +533,60 @@ async def test_head_segment_dangling_tool_calls_cleaned(monkeypatch):
     ]
     assert not dangling, f"压完不该留悬挂 tool_calls: {dangling}"
     assert msgs[1]["tool_calls"] == [{"id": "head-call"}], "原 messages 不该被写穿"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 8/10: 压缩阈值的**上界不变量**
+#
+# 阈值调高 = 压得少 = 省时间省钱, 但调过头就撑爆 context。这条测试把"能调
+# 多高"的依据钉死, 免得下次有人凭感觉再往上推。
+# ─────────────────────────────────────────────────────────────────────
+
+#: 8/10 实盘量的固定开销: 压缩看 estimate_tokens(messages) **不含 tools**,
+#: 上游算的 prompt 含。同一次请求 estimate=35818 / 上游 prompt=53238。
+#: 这 17420 是 32 个工具的 schema, 每次请求都在, 跟会话长短无关。
+from catfish_gateway.conversation_compressor import (  # noqa: E402
+    DEFAULT_THRESHOLD_RATIO,
+)
+
+_TOOLS_OVERHEAD = 17_420
+
+
+def test_压缩阈值不能高到撑爆context():
+    """cap + tools 开销 + 一句回复 必须 < context。
+
+    压缩是"超过 cap 才触发", 所以 cap 就是**不压缩的最大 prompt**。它加上
+    tools 开销就是实际发出去的量 —— 这个数必须还留得下一句回复, 否则
+    "阈值没到所以不压" 会直接变成 "请求发出去就 400"。
+    """
+    from catfish_gateway.context_preflight import MIN_USEFUL_OUTPUT
+
+    for name, cw in [
+        ("内网 Qwen3-VL", 128_000),
+        ("deepseek/qwen-flash", 1_000_000),
+        ("gemini-pro", 2_000_000),
+    ]:
+        cap = min(int(cw * DEFAULT_THRESHOLD_RATIO), 120_000)
+        worst_case = cap + _TOOLS_OVERHEAD + MIN_USEFUL_OUTPUT
+        assert worst_case < cw, (
+            f"{name}: 阈值 {cap:,} + tools {_TOOLS_OVERHEAD:,} + 回复 "
+            f"{MIN_USEFUL_OUTPUT} = {worst_case:,} 已经超过 context {cw:,} —— "
+            f"阈值调太高了, 会变成'没到阈值不压, 发出去就 400'"
+        )
+
+
+def test_调阈值只影响小context的模型():
+    """比例阈值被绝对上限 12 万压着, context ≥ 24 万的都碰不到。
+
+    这条是给未来改 ratio 的人看的: 别以为改了会影响所有模型 —— 实际只动
+    内网那一个。反过来说, 想调大模型的阈值得改 _abs_token_cap, 不是这里。
+    """
+    big = min(int(1_000_000 * DEFAULT_THRESHOLD_RATIO), 120_000)
+    assert big == 120_000, "大 context 模型该被绝对上限压着, 不受 ratio 影响"
+
+    small = min(int(128_000 * DEFAULT_THRESHOLD_RATIO), 120_000)
+    assert small < 120_000, "内网模型该由 ratio 决定"
+    assert 80_000 <= small <= 90_000, (
+        f"内网阈值 {small:,} 跑出 8~9 万这个区间了 —— "
+        f"低了压得太勤 (每次 ~20 秒), 高了撑爆 context"
+    )
