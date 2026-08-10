@@ -1887,7 +1887,7 @@ def _apply_prompt_cache_markers(params: dict, model) -> None:
             last["cache_control"] = {"type": "ephemeral"}
 
 
-def _build_litellm_params(body: dict, model) -> dict:
+def _build_litellm_params(body: dict, model, source_hint: str = "unknown") -> dict:
     """Map gateway request -> litellm call params.
 
     `model.upstream.model` must already contain the LiteLLM provider prefix,
@@ -1959,12 +1959,15 @@ def _build_litellm_params(body: dict, model) -> dict:
     # 详见 thinking_guard.py (为什么不按模型一刀切关掉)。
     from .thinking_guard import apply as _apply_thinking_guard  # noqa: PLC0415
 
-    _tg = _apply_thinking_guard(params, model)
+    _tg = _apply_thinking_guard(params, model, source_hint)
     if _tg:
         logger.info(
-            "thinking_guard: %s 本次强制了 tool_choice, 关掉深度思考 (%s) —— "
-            "两者在上游互斥, 不关会 400。tool_choice=auto 的普通对话不受影响。",
+            "thinking_guard: %s 关掉深度思考 (%s) —— 触发原因: %s。"
+            "员工主对话 (source=unknown, tool_choice=auto) 不受影响。",
             model.name, _tg,
+            "内部调用 source=%s" % source_hint
+            if source_hint and source_hint != "unknown"
+            else "本次强制了 tool_choice, 与思考在上游互斥",
         )
 
     return params
@@ -2352,7 +2355,7 @@ async def _stream_chat_completion(
     try:
         # 用 fallback 链找一个能拿到首 chunk 的模型
         async def _start_stream(candidate_model):
-            params = _build_litellm_params(body, candidate_model)
+            params = _build_litellm_params(body, candidate_model, source_hint)
             try:
                 response = await litellm.acompletion(**params)
             except Exception as _e:
@@ -2729,7 +2732,7 @@ async def _invoke_chat_completion(
 
     async def _invoker_with_fallback(call_body: dict):
         async def _call(candidate_model):
-            params = _build_litellm_params(call_body, candidate_model)
+            params = _build_litellm_params(call_body, candidate_model, source_hint)
             return await litellm.acompletion(**params)
         # BL-FALLBACK-PROMPT-CAP (5/14): 大 prompt 失败时跳过公网
         # BL-TOKEN-COUNTER-LITELLM (5/15): 真 tokenizer 估算

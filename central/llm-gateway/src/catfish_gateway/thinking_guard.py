@@ -119,6 +119,12 @@ _KNOWN_DISABLE_FORMS = ("dashscope", "deepseek", "qwen_selfhost")
 #: qwen 自建只验了"怎么关", 没验"不关会不会 400", 不能顺手推。
 _TOOL_CHOICE_CONFLICT = ("dashscope", "deepseek")
 
+#: 不算"内部调用"的 source 值 —— 员工在跟小鲶聊天, 思考要留着。
+#:
+#: 主对话不设 X-Catfish-Source, 网关取不到时填 "unknown" (app.py:2967)。
+#: 空串是防御性的: header 给了但值为空跟没给是一回事。
+_NOT_INTERNAL = ("", "unknown")
+
 
 def _provider_of(model: Any) -> str:
     """判这个模型属于哪家。返 "dashscope" / "deepseek" / "qwen_selfhost" / ""(不认识)。
@@ -222,20 +228,62 @@ def disable_thinking(params: dict[str, Any], model: Any) -> str | None:
     return "chat_template_kwargs.enable_thinking=false (qwen 自建)"
 
 
-def apply(params: dict[str, Any], model: Any) -> str | None:
+def is_internal_call(source: str | None) -> bool:
+    """这次请求是不是**后台/内部调用**, 而不是员工在跟小鲶聊天。
+
+    判据: `X-Catfish-Source` 有值就是内部调用。
+
+    ── 为什么不用白名单 ──────────────────────────────────────────────
+    查过全仓库谁会设这个头 —— advisor / advisor-transform / briefing-card /
+    email-draft / email-scheduler / phishing-scan / profile / wiki-suggest,
+    **全是后台或内部调用**。员工在工作台聊天、微信发消息都不设它, 网关取不到
+    时填 "unknown"。
+
+    这跟 hermes 侧 plugin_memory_gate.py 用的是**同一条判据** (那边判"要不要
+    记进记忆"), 那份注释里已经论证过一遍, 这里复用结论, 不再各写一张会过期
+    的名单 —— 硬编名单的失效方式是"新增了一个 source 但忘了加进来", 而那
+    正好是最难发现的那种。
+
+    ── 失效方向 ──────────────────────────────────────────────────────
+    将来新增后台调用而忘了设 source → 它的思考不会被关 (慢一点, 看得见)。
+    反过来"员工聊天被误判成后台"不会发生 —— 那需要有人主动给聊天路径加
+    source。失败方向是"漏关"不是"误关", 这个方向是安全的:
+    误关会**永久削弱主对话的推理能力**, 而且没人会发现。
+    """
+    return (source or "").strip().lower() not in _NOT_INTERNAL
+
+
+def apply(params: dict[str, Any], model: Any, source: str | None = None) -> str | None:
     """就地处理 params。返回做了什么的描述 (给日志), 没动返 None。
 
     调用点在 _build_litellm_params 末尾 —— 必须在 param_overrides 之后,
     这样才判得出管理员有没有显式配过。
-    """
-    if not is_forced_tool_choice(params.get("tool_choice")):
-        return None
 
+    两个独立的理由, 满足其一就关:
+
+      1. **强制 tool_choice + 已知有冲突的 provider** (8/8 原始场景)
+         dashscope / deepseek 上 thinking ⊥ 强制 tool_choice, 不关直接 400。
+
+      2. **内部调用** (8/10 加)
+         advisor / profile / wiki-suggest 这些要的是结构化结果, 思考对它们
+         没有价值, 却实打实地拖慢。8/10 实测同一个 advisor 任务:
+             内网 Qwen3-VL (思考开)  content=1  reasoning=349  14.5 秒
+                                     content=866 reasoning=653  41.4 秒
+                                     其中一轮 **60 秒 timeout** → 整个早安页挂掉
+             公网 deepseek (思考关)  content=850 reasoning=0    8.8 秒 (ttft 400ms)
+         第 2 条不要求 provider 在 _TOOL_CHOICE_CONFLICT 里 —— 那个名单管的是
+         "不关会不会 400", 而这里是"关了会不会更好"。两件事。
+    """
     provider = _provider_of(model)
-    # 只对**验证过有这条约束**的两家动手。qwen 自建我们知道怎么关它
-    # (_KNOWN_DISABLE_FORMS 里有), 但没验过它强制 tool_choice 时会不会 400 ——
-    # 「知道怎么关」推不出「应该关」, 见模块头。
-    if provider not in _TOOL_CHOICE_CONFLICT:
+    if provider not in _KNOWN_DISABLE_FORMS:
+        return None  # 不认识这家的关法, 编一个参数名塞过去只会换来更难查的 400
+
+    forced_tc = (
+        is_forced_tool_choice(params.get("tool_choice"))
+        and provider in _TOOL_CHOICE_CONFLICT
+    )
+    internal = is_internal_call(source)
+    if not forced_tc and not internal:
         return None
 
     if _already_configured(params, provider):

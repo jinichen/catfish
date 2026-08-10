@@ -231,3 +231,87 @@ def test_不认识的provider一律不动():
         p = {}
         assert disable_thinking(p, _model(**m)) is None
         assert p == {}, "认不出还动了 params"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 8/10: 内部调用一律关思考 (advisor 60 秒超时那次)
+#
+# 现场 —— 同一个 advisor 任务:
+#   内网 Qwen3-VL (思考开)  content=1   reasoning=349  14.5 秒
+#                          content=866 reasoning=653  41.4 秒
+#                          其中一轮 **60 秒 timeout** → 早安页整块打不开
+#   公网 deepseek (思考关)  content=850 reasoning=0     8.8 秒 (ttft 400ms)
+#
+# advisor Call 1 是 hermes agent loop, tool_choice **故意是 auto**
+# (briefing_advisor.ts:1518: 强制会跳过业务工具, 失去 agent 能力),
+# 所以老的 is_forced_tool_choice 判据覆盖不到它 —— 必须靠 source。
+# ─────────────────────────────────────────────────────────────────────
+
+from catfish_gateway.thinking_guard import is_internal_call  # noqa: E402
+
+_QW_SELF = dict(
+    upstream_model="openai/qwen_v3_6_35b_a3b",
+    api_base="http://10.10.40.102:32730/x/v1",
+)
+
+#: 全仓库实际会设 X-Catfish-Source 的值 (8/10 grep 全库确认)。
+#: companion-app 是目录名、companion-migrated 是 SQL 里的会话标记, 都不是请求头。
+_INTERNAL_SOURCES = [
+    "companion-advisor", "companion-advisor-transform", "companion-briefing-card",
+    "companion-email-draft", "companion-email-scheduler", "companion-phishing-scan",
+    "companion-profile", "companion-wiki-suggest",
+]
+
+
+def test_主对话绝不能被关掉思考():
+    """★ 这条比下面所有条都重要。
+
+    误关的代价是**永久削弱主对话的推理能力, 而且没人会发现** —— 员工只会
+    觉得"小鲶最近变笨了", 没有任何报错。所以主对话的各种形态都要钉死。
+
+    主对话不设 X-Catfish-Source, 网关取不到时填 "unknown" (app.py:2967)。
+    """
+    for source in (None, "", "  ", "unknown", "UNKNOWN"):
+        for tc in ("auto", None, "none"):
+            assert apply({"tool_choice": tc}, _model(**_QW_SELF), source) is None, (
+                f"主对话被误关了! source={source!r} tool_choice={tc!r}"
+            )
+        assert not is_internal_call(source), f"{source!r} 被当成内部调用了"
+
+
+def test_内部调用一律关_包括tool_choice是auto的():
+    """advisor Call 1 的 tool_choice 是 auto —— 老判据覆盖不到, 靠 source。"""
+    for source in _INTERNAL_SOURCES:
+        p = {"tool_choice": "auto"}
+        assert apply(p, _model(**_QW_SELF), source), f"{source} 没关掉思考"
+        assert p["extra_body"]["chat_template_kwargs"] == {"enable_thinking": False}
+        assert is_internal_call(source)
+
+
+def test_判据是有没有source_不是硬编名单():
+    """将来新增的后台调用**自动**覆盖, 不用改这里。
+
+    硬编名单的失效方式是"新加了个 source 但忘了加进名单", 而那正好是最难
+    发现的那种 —— 表现只是"这个后台任务慢", 没人会联想到思考没关。
+    """
+    assert is_internal_call("companion-something-brand-new")
+    assert is_internal_call("hermes-whatever")
+
+
+def test_不认识的provider_有source也不动():
+    """认不出关法就别编参数名 —— 这条优先级高于"是不是内部调用"。"""
+    for m in ({"upstream_model": "gemini/gemini-2.5-pro"}, {"upstream_model": "x/y"}):
+        p = {"tool_choice": "auto"}
+        assert apply(p, _model(**m), "companion-advisor") is None
+        assert p == {"tool_choice": "auto"}, "认不出还动了 params"
+
+
+def test_八八原始场景没回归():
+    """强制 tool_choice + dashscope/deepseek → 仍要关 (不关直接 400)。
+    这条是 8/8 那次事故的锚, 加 source 判据不能把它挤掉。"""
+    for cfg in (_QWEN, _DS):
+        assert apply({"tool_choice": "required"}, _model(**cfg), "unknown")
+        assert apply(
+            {"tool_choice": {"type": "function", "function": {"name": "f"}}},
+            _model(**cfg), None,
+        )
