@@ -92,12 +92,11 @@ from .multimodal_guard import route_to_vision_if_needed  # noqa: E402
 from .multimodal_tool_unwrap import unwrap_tool_images  # noqa: E402
 # 5/23 BL-GATEWAY-DROP-LEGACY-SUMMARIZE: session_summarizer 整文件已删, plugin 接管
 # (catfish-memory on_session_end 写 employee_journal). 老 import 移除.
-from .skill_guard import inject_skill_guard  # noqa: E402
 # 5/26 P0 砍 skills_inject (中央扫员工本机 SKILL.md → 上游 LLM, 隐私违规).
 # 详见 skills_loader.py 顶部 DEPRECATED 说明.
-from .stats_guard import inject_stats_guard  # noqa: E402
+# 8/13 砍 skill_guard / stats_guard / feedback_inject / tool_capability_guard
+# 四套 —— 见下方 chat_completions 里 reroute 段的说明。
 from .model_handoff import apply_soft_handoff  # noqa: E402
-from .tool_capability_guard import route_to_tool_capable_if_needed  # noqa: E402
 from .tools_sanitizer import sanitize_tools  # noqa: E402
 
 # Global setup
@@ -2686,10 +2685,38 @@ async def _stream_chat_completion(
         # 看到 unknown object 会忽略 (extra-field 容忍). Companion 嗅 object
         # 字段拿 metadata.
         try:
-            # 5/26 P0 砍: skills_loader.discover_skills + has_skill_intent 全砍
-            # (中央扫员工本机 SKILL.md → 上游 LLM, 隐私违规). sg_fired 永远 False
-            # 是预期行为 — LLM 走 hermes tool calling 自己知道有哪些 skill 可调.
-            sg_fired = False
+            # ⚠ 8/13: 这个字段写死 False 让**整个嘴炮检测死了 79 天**。
+            #
+            # 历史: 5/26 砍 skills_loader (中央扫员工本机 SKILL.md → 上游 LLM,
+            # P0 隐私违规) 时, has_skill_intent 被改成恒返 False, 这里就跟着写死。
+            # 当时判断"sg_fired 永远 False 是预期行为"—— 但漏了它是**下游的判据**:
+            #
+            #   app.py sg_fired=False
+            #     → task_assessment.skill_guard_fired=false  (每一条)
+            #     → promiseCheck.ts:79  if (!skill_guard_fired) return 不报警
+            #     → runOneRound.ts:189  check.is_promise_only 永不为真
+            #     → ChatMessage.tsx:413 ⚠ 嘴炮 badge 一次都没显示过
+            #
+            # 而这正是 4/29 demo 反复翻车专门做的功能 (qwen 122b 说"已生成 x.docx"
+            # 但磁盘上没文件)。前端测试全绿, 因为 promiseCheck.test.ts 的夹具写着
+            # skill_guard_fired: true —— 一个后端永远产不出的值。
+            #
+            # 现在改成算真值: **本轮 gateway 到底有没有把工具递给模型**。
+            # 语义正好是嘴炮的定义 —— "给了工具, 一个没调, 还说自己做完了"。
+            # 不依赖已被砍掉的 skills_loader, 判据就在请求本身。
+            #
+            # body 是 sanitize_tools 之后那份 (chat_completions 里先 sanitize 再调
+            # 本函数), 所以反映的是**真正发给上游的** tool 列表, 不是客户端原始请求。
+            #
+            # tool_choice="none" 要排掉: 那是调用方明确说"这轮别调工具",
+            # 模型不调是遵命, 不是嘴炮。
+            #
+            # 字段名保持 skill_guard_fired 不变 —— 前后端都已有这个名字,
+            # 已装的 Companion **不用更新就恢复**。改名留到以后一起做。
+            _tools_offered = bool(body.get("tools"))
+            if body.get("tool_choice") == "none":
+                _tools_offered = False
+            sg_fired = _tools_offered
 
             # 历史里 assistant 调过 catfish_run_skill 没?
             ever_called_skill = False
@@ -3417,20 +3444,29 @@ async def chat_completions(
             user.sub, model_name,
         )
 
-    # tool calling 能力自动 reroute: 已知 tool 调用不稳的模型 (qwen 122b a10b)
-    # 检测到 user 触发 skill 意图时, 强制切到 flash 系列. 防止 122b 文字幻觉
-    # "已生成 X.docx" 但磁盘上没文件 (鸿波 4-29 demo 反复翻车的真因).
-    rerouted_tool, tool_hint = route_to_tool_capable_if_needed(
-        body, config, model
-    )
-    if rerouted_tool is not None:
-        model = rerouted_tool
-        model_name = rerouted_tool.name
-        request.state.tool_capability_hint = tool_hint
-        logger.info(
-            "auto-route to tool-capable: orig_user=%s new_model=%s",
-            user.sub, model_name,
-        )
+    # 8/13 删掉 tool_capability_guard 的 reroute 段 (整套模块一并删)。
+    #
+    # 它原本管的是: 已知 tool 调用不稳的模型 (qwen 122b a10b) 碰到 skill 意图时
+    # 自动切到 flash 系列, 防止"文字幻觉'已生成 X.docx'但磁盘上没文件"
+    # (4/29 demo 反复翻车的真因)。
+    #
+    # 为什么删而不是修:
+    #
+    #   1. **它自 5/26 起就从没触发过**。判据 `_has_tool_intent` → `has_skill_intent`,
+    #      而后者在砍 skills_loader (中央扫员工本机 SKILL.md, P0 隐私违规) 时被改成
+    #      `return False` 恒定。整个 guard 空转 79 天。
+    #   2. `request.state.tool_capability_hint` **只写不读** —— 就算触发了, 那句
+    #      给员工的提示也没有任何消费方。
+    #   3. 上游已经接管: hermes 0.14 把每个 skill 当独立 tool 暴露, LLM 看 tool list
+    #      自然会调, 不再依赖 gateway 侧的意图检测 + 强制切换。
+    #   4. ⚠ 而且它带一个**潜伏的越界口**: pick_tool_capable_alternative 同 tier
+    #      找不到备选就跨 tier 兜底 (且有测试钉住 private→public 这条)。
+    #      `ModelConfig.supports_tool_use` 默认 False, 所以往 models.yaml 加一个
+    #      内网 chat 模型、漏写这一行, 就足以让内网 prompt 被自动改路到公网上游。
+    #      现网目录暂时踩不到 (5 个 chat 模型全标了 true), 但挡住这扇门的恰恰是
+    #      第 1 条那个 bug —— 靠 bug 守边界不能算守住。
+    #
+    # 恢复看本提交之前的 tool_capability_guard.py / skill_guard.py。
 
     # 防御性清洗 tools 数组 —— 畸形 tool (例如缺 function.name) 直接丢, 不让
     # LiteLLM 转 Gemini functionDeclarations 时 KeyError 把整个请求挂掉。

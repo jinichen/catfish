@@ -50,9 +50,27 @@ import logging
 from typing import Any
 
 from .config import Config, ModelConfig
-from .tool_capability_guard import model_supports_tools
 
 logger = logging.getLogger("catfish.gateway.model_handoff")
+
+
+def model_supports_tools(model: ModelConfig | None) -> bool:
+    """安全获取 model.supports_tool_use。
+
+    8/13 从 tool_capability_guard.py 搬过来 —— 那个模块整套删了 (它的 reroute
+    自 5/26 起从没触发过, 详见 app.py 里那段说明), 但**这个函数还活着**:
+    apply_soft_handoff 换模型时要判断新模型能不能吃历史里的 tool_calls。
+    只剩一个消费方, 所以就地内联, 不为它单留一个模块。
+
+    ⚠ 行为逐字保留, 别"顺手修": `getattr(..., True)` 的 fallback 只在对象**没有
+       这个属性**时生效 (例如测试里的 stub)。真的 ModelConfig 一定有这个字段,
+       且默认值是 **False** —— 所以对 catalog 里的模型, 漏写 supports_tool_use
+       等于声明"不支持"。原 docstring 写的"默认信任"只对 stub 成立, 对真模型是
+       反的, 这里改掉那句措辞, 但判断逻辑一个字没动。
+    """
+    if model is None:
+        return True
+    return getattr(model, "supports_tool_use", True)
 
 
 # inline 转译标记 — assistant 当文本读, 不当 tool_call 解析
