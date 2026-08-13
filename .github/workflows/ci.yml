@@ -16,6 +16,50 @@ concurrency:
 
 jobs:
   # ════════════════════════════════════════════════════════════
+  # 0. 全仓自检 — 跨包的、只需要跑一次的检查
+  # ════════════════════════════════════════════════════════════
+  # 8/13: 这个 job 是新加的, 因为发现两条"写在军规里但 CI 从来没跑过"的检查:
+  #
+  #   · check_file_sizes.sh —— CLAUDE.md §2 原话「改完代码必跑」「返回非 0
+  #     不许 commit」, 而 CI 里**一处都没挂**, 全靠人记得。
+  #   · undefined name (F821) —— 8/8 那个拆分提交一次造了两个洞 (P28 微信中文串
+  #     4 天 / P30 微信扫码 500 五天), 都是"函数搬走了、它用的 import 没搬"。
+  #     pyflakes 一秒能看出来, 但没人跑。
+  #
+  # 挂在独立 job 而不是塞进某个模块的 job: 这两条都是**全仓**的, 塞进
+  # hermes-plugins (matrix) 会按模块重复跑, 塞进 tool-bridge 又语义不对。
+  repo-checks:
+    name: 全仓自检 (文件行数 / undefined name)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install pyflakes
+        run: pip install pyflakes
+
+      # A 类 = 可执行语句里的未定义名字 (跑到就 NameError) → 必过
+      # B 类 = 只在类型注解里 (运行时不查找) → 照常打印, 不拦
+      # 分类判据见脚本头部。8/13 全仓扫的结果: A 类 0, B 类 15 处。
+      - name: undefined name (F821) — A 类必过
+        run: bash scripts/check_undefined_names.sh --strict
+
+      # ⚠ 待办: 现在是 continue-on-error, 因为仓里还有 45 个 ≥800 行的存量文件
+      #    (8/13 实测)。存量清完之前一刀切会让每个 PR 都红, 那这条又会变成
+      #    被无视的噪音 —— 跟它当初没挂 CI 是同一种失效。
+      #
+      #    清完存量后删掉 continue-on-error, 并把 repo-checks 加进 ci-pass。
+      #    在那之前它至少是**可见的红**, 不是完全不存在。
+      - name: 文件行数红线 (CLAUDE.md §1)
+        continue-on-error: true
+        run: bash scripts/check_file_sizes.sh --strict
+
+  # ════════════════════════════════════════════════════════════
   # 1. tool-bridge Python tests
   # ════════════════════════════════════════════════════════════
   # tool-bridge pyproject requires-python>=3.10 (装在客户机, 一律 3.10+).

@@ -68,6 +68,49 @@ find "$REPO_ROOT" \
      -o -name "*.go" -o -name "*.sh" \) \
   -print > "$TMPFILE"
 
+# ⚠ 8/13: 实现 CLAUDE.md §1 例外清单里的 **schema / 数据文件** 那条。
+#
+# 原文: 「schema / 数据文件 (`*_schemas.py` 单个 OpenAI tools list 这种)」——
+# 规矩早就写在军规里, 但脚本从来没实现, 于是 `catfish_tool_schemas.py`
+# (3319 行) 一直被算进"必拆"。
+#
+# 后果不只是数字难看: 一个明文豁免的文件天天出现在必拆名单里, 会让人要么
+# 去拆一个不该拆的数据文件, 要么学会无视整张名单 —— 后者更可能, 而那正是
+# 7/30 那次 `.venv*` 漏 prune 造成的局面 (341 个"必拆"里绝大多数是第三方包)。
+#
+# 判据是**文件名 + 内容双条件**, 不是光看文件名:
+#   · 文件名匹配 *_schema.py / *_schemas.py
+#   · 且 AST 顶层**没有任何函数 / 类定义** (纯数据字面量)
+#
+# 只看文件名不行 —— 哪天有人往 schemas 文件里塞逻辑, 豁免就成了藏污纳垢的地方。
+# 实测 catfish_tool_schemas.py: 3301/3319 行是一个 list 字面量, 0 个函数 0 个类。
+SCHEMA_EXEMPT=0
+if command -v python3 >/dev/null 2>&1; then
+  KEPT_S=$(mktemp)
+  while IFS= read -r f; do
+    case "$(basename "$f")" in
+      *_schema.py|*_schemas.py)
+        if python3 - "$f" <<'PYCHK'
+import ast, sys
+try:
+    tree = ast.parse(open(sys.argv[1], encoding="utf-8", errors="replace").read())
+except SyntaxError:
+    sys.exit(1)          # 解析不了就不豁免, 照常检查
+sys.exit(0 if not any(
+    isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    for n in tree.body
+) else 1)
+PYCHK
+        then
+          SCHEMA_EXEMPT=$((SCHEMA_EXEMPT + 1)); continue
+        fi
+        ;;
+    esac
+    printf '%s\n' "$f" >> "$KEPT_S"
+  done < "$TMPFILE"
+  mv "$KEPT_S" "$TMPFILE"
+fi
+
 # ⚠ 8/13: 再扣掉 **git 明确忽略** 的文件。
 #
 # 起因跟上面 7/30 那段是同一个病的第二次发作。归档 25 个 daosheng 历史 PPT
@@ -156,6 +199,8 @@ echo " 汇总：$FAIL_COUNT 个必拆  +  $WARN_COUNT 个警戒  /  共 $TOTAL_F
 # 而不是无声消失。
 [ "$IGNORED_COUNT" -gt 0 ] && \
   echo " （另有 $IGNORED_COUNT 个文件被 .gitignore 排除，不计入）"
+[ "${SCHEMA_EXEMPT:-0}" -gt 0 ] && \
+  echo " （另有 $SCHEMA_EXEMPT 个纯数据 schema 文件按 CLAUDE.md §1 例外，不计入）"
 echo "───────────────────────────────────────────────────────────"
 
 if [ "$STRICT" -eq 1 ] && [ "$FAIL_COUNT" -gt 0 ]; then
