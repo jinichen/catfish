@@ -19,6 +19,16 @@
 `from plugin import _P28_REPLACEMENTS` 照旧能拿到。
 """
 
+# functools 是 L166 的 @functools.wraps 要的。
+#
+# 8/13 查出来: 这个 import 从 8/9 拆分出去时就漏了, P28 因此**每次启动都失败**,
+# 日志里 19 次 `name 'functools' is not defined`。而收尾那行 "installed ✓
+# (15 patches applied)" 是写死的常量, 把它整整盖了四天 —— 表现是微信那边一直
+# 看到未翻译的 hermes 英文串, 没人知道为什么。
+#
+# 拆模块时最容易漏的就是这个: 原来在 plugin.py 模块作用域里的 import, 搬走的
+# 那段代码用得到, 但搬的时候只盯着函数体。
+import functools
 import logging
 
 logger = logging.getLogger("catfish.xcatfish_user.plugin")

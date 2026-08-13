@@ -475,8 +475,11 @@ def _verify_patch_targets() -> None:
 _PATCH_FAILURES: list[str] = []
 
 
-def _try_patch(fn, err_msg: str) -> bool:
+def _try_patch(fn, err_msg: str, *args) -> bool:
     """跑一个**可失败**的 patch: 挂了记一条 error + 记名字, 不打断后面的。
+
+    `*args` 转发给 fn —— P42 要收 `CV_CF_SOURCE`。**这个参数是补出来的**,
+    第一版没有, 直接把 P42 的实参吞了 (见下面"翻过的车")。
 
     # 为什么有这个函数
 
@@ -497,12 +500,31 @@ def _try_patch(fn, err_msg: str) -> bool:
 
     裸调的 14 个失败会往上抛 (fail-loud, install 整个失败, 收尾日志根本到不了);
     走这里的 19 个失败只降级。这个区分是原来就有的, 这里只是把后一类的结果记下来。
+
+    # 翻过的车 (8/13, 同一天先后两次)
+
+    第一版的 AST 转换只取了 `call.func.id`, 于是:
+
+      1. **吞掉了 P42 的实参** `_patch_p42_memory_skip_background(CV_CF_SOURCE)`
+         → memory 来源闸整个没装上。那道闸挡的是"员工邮件正文进个人知识库",
+         是 8/8 专门修过的隐私红线。
+      2. **吞掉了 19 个 handler 的 `exc_info=True`** → patch 失败不再有堆栈。
+
+    而当时"文案逐字一致"的验证之所以全绿 —— 我只比了 `args[0]`, 也就是我**自己
+    选择要保留**的那个东西。验证范围等于设计范围, 所以它抓不到没想到的部分。
+    形状检查同理: 验了 `len(handler.args)==2`, 没看 `handler.keywords`;
+    验了 try 体是单个 `_patch_*` 调用, 没看那个调用有没有实参。
+
+    钉住这两条的测试在 tests/test_apply_patches_call_equivalence.py —— 它拿
+    重构**之前**的 git 版本逐个调用点对拍, 而不是拿我的设计意图对拍。
     """
     try:
-        fn()
+        fn(*args)
         return True
     except Exception as e:  # noqa: BLE001
-        logger.error(err_msg, e)
+        # exc_info=True 是原来 19 个 handler 都有的, 第一版转换给丢了。
+        # 没有堆栈时, "name 'functools' is not defined" 这种错根本不知道在哪一行。
+        logger.error(err_msg, e, exc_info=True)
         _PATCH_FAILURES.append(getattr(fn, "__name__", str(fn)))
         return False
 
@@ -673,7 +695,9 @@ def _apply_patches() -> None:
     # email_scheduler 的评级调用走 agent loop, 于是邮件标题/发件人被写进
     # employee_journal.md, 再被蒸成 wiki 条目。判据和失效方式见
     # plugin_memory_gate.py 的模块 docstring。
-    _try_patch(_patch_p42_memory_skip_background, "P42: memory 来源闸 patch 失败: %s")
+    # CV_CF_SOURCE 必须传进去 —— 8/13 第一版重构把这个实参吞了, memory 来源闸
+    # 整个没装上 (那道闸挡的是"员工邮件正文进个人知识库")。
+    _try_patch(_patch_p42_memory_skip_background, "P42: memory 来源闸 patch 失败: %s", CV_CF_SOURCE)
 
 
 # ── P16 (P3.4.C 6/15 鸿波: session_search 76s → 340ms) ──────────────────
