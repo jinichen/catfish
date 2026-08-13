@@ -246,6 +246,38 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 
 ---
 
+## C.9 · 半截功能 — 后端建好了但没有调用方
+
+> 8/13 拆 plugin.py 时查出来的。共同点: **代码在跑、日志在打、但没有任何东西
+> 会触发它**。这类比纯粹的死代码更麻烦 —— 它看起来是活的。
+
+| ID | 项 | 已有 | 缺 | 状态 |
+|---|---|---|---|---|
+| BL-P18-PHASE2 | 主动压缩 + 弹窗进度 (P3.5.18) | plugin 端 237 行, endpoint `POST /api/sessions/{id}/compress/stream` 每次启动都注册 ✓ | **Companion 端 ~300 行 TS/React** | ⬜ 待定 |
+
+**BL-P18-PHASE2 的实情** (查证, 非推测):
+
+- 全仓搜 `compress/stream`, **TS / Rust 里零引用**
+- hermes 日志: **25 次 "route registered ✓", 0 次真调用** (aiohttp.access)
+- `docs/P3.5.18-design.md` 写着 `Phase 1: plugin 端 ~250 行` / `Phase 2: Companion
+  端 ~300 行`, Phase 1 做完了, Phase 2 一行没写
+- 那份 design 文档顶上仍挂着「✅ audit 完成, 待 fresh session 实施」, 最后一次
+  改是 **6/17** —— 停在"待实施"两个月, 而 BACKLOG / FEATURE-TRACKS / STRATEGY
+  **一处都没记**
+
+鸿波 6/17 原话: 「为什么还是提示, 直接压缩, 压缩过程可以弹窗显示压缩进度」。
+现在的状态是 P3.5.17.c 的 banner (信息流, 下次发消息时自动压), 不是主动触发。
+
+三个选项:
+1. **做 Phase 2** —— 0.5 天, 后端现成
+2. **就这么记着** —— 注册一个没人调的路由零成本, 但至少现在有地方能查到它
+3. 删 —— 会扔掉已写好的 237 行, 且 `ADVISOR-AGENT-LOOP-DESIGN.md:65` 还引用着
+   这个 endpoint
+
+登记本身不代表要做。**登记是为了让"存在但没人知道它存在"这个状态结束。**
+
+---
+
 ## D · 工程 P2 中期 (1-3 个月内)
 
 ### D.1 中央闭源服务 (商业差异化, STRATEGY 列的)
