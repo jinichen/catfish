@@ -294,10 +294,17 @@ PHASE 3  按数据分级与总体拥有成本定最终形态
 
 | 版本 | 文件 | 状态 |
 |---|---|---|
-| **v29** | `deck/daosheng-v29-smart-mfg.pptx` · `build-v29.js` | ✅ 当前 |
+| **nlzx-v2** | `deck/daosheng-nlzx-v2.pptx`（单节点 · 控制价 11,942 万） | ✅ 当前 |
+| **nlzx-v2 · 三节点** | `docs/daosheng-nlzx-v2-3nodes.pptx`（控制价 25,946 万 = 2.59 亿） | ✅ 当前 |
+| — | 两份都各有一个 `.budget-appendix*.pptx` 预算明细，必须同步改 | |
+| v29 | `deck/archive/daosheng-v29-smart-mfg.pptx` | 📦 归档（智能制造线） |
 | v15 / v16 | 产业园商业方案（链主赋能 / 商业模式 / 招商） | 📦 另一用途，需要时可取 |
 | v13 / v14 / v17-v28 | 中间版本 | 📦 归档 |
 | v12 | 国家基金申报口径 | 📦 已作废 |
+
+⚠️ **pptx 现在是手工维护的，没有能重生成它的脚本。** 25 个历史 builder 已移到
+`deck/archive/builders/`；`deck/README.md` 里那条"不要直接改 pptx，下次 build
+会覆盖"已经反过来了，照做会毁掉当前交付物。详见 `deck/README.md` 开头。
 
 其他文档：
 
