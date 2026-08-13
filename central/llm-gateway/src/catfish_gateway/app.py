@@ -176,7 +176,11 @@ def _setup_file_logging() -> None:
     if log_file == "-":
         return  # 显式禁用
     if not log_file:
-        home = os.environ.get("HOME") or os.path.expanduser("~")
+        # 合规说明: 这里的 home 是**网关进程自己**的 home, 写的是网关自己的
+        # 日志 (~/Library/Logs/catfish/gateway.log)。中央端不许读的是"员工的"
+        # ~/.catfish / ~/.hermes 数据; 自己的进程往自己的 home 写日志不在此列。
+        # 异机部署时这会落到服务器的 home, 正是想要的行为。
+        home = os.environ.get("HOME") or os.path.expanduser("~")  # noqa: BOUNDARY
         log_file = os.path.join(home, "Library", "Logs", "catfish", "gateway.log")
     try:
         from logging.handlers import RotatingFileHandler  # noqa: PLC0415

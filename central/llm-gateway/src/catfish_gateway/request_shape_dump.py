@@ -211,7 +211,9 @@ def _dump_dir() -> Path:
         return Path(log_file).parent / "shape-dumps"
     # 跟 app.py _setup_file_logging 的默认值保持一致 —— 它读 HOME 环境变量,
     # 而不是解析"用户 home"。中央端唯一该认的是"进程跑在谁名下", 不是"员工是谁"。
-    home = os.environ.get("HOME") or os.path.expanduser("~")
+    # 合规说明: 网关进程自己的 home, 写的是自己的诊断 dump (跟 gateway.log
+    # 同目录)。不是员工数据。异机时落到服务器 home, 正确。
+    home = os.environ.get("HOME") or os.path.expanduser("~")  # noqa: BOUNDARY
     return Path(home) / "Library" / "Logs" / "catfish" / "shape-dumps"
 
 

@@ -64,8 +64,21 @@ def audit_path() -> Path:
         if env:
             _audit_path = Path(env).expanduser()
         else:
-            home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or "."
+            # 合规说明: 网关进程自己的 home, 写的是**网关自己产生**的审计流水,
+            # 不是读员工数据。异机部署时落到服务器 home, 语义正确。
+            #
+            # ⚠ 但目录名是 `.catfish` —— 同机开发时它就写进员工那个 .catfish 里,
+            #   中央审计和员工数据混在一个目录。生产务必设 CATFISH_AUDIT_PATH。
+            home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or "."  # noqa: BOUNDARY
             _audit_path = Path(home) / ".catfish" / "gateway_audit.jsonl"
+            # 8/13: 出声。原来这里是**静默**兜底 —— facts_router 同样的情形会
+            # 打 warning, 这里不打。异机部署时"审计写去哪了"是运维要知道的事,
+            # 不该只能靠读代码。只在首次 resolve 时打一次 (_audit_path 有缓存)。
+            logger.warning(
+                "metrics: CATFISH_AUDIT_PATH env 未配, 审计落到 %s (进程自己的 home). "
+                "生产部署应显式设 env —— 否则同机开发时会跟员工 ~/.catfish 混在一起。",
+                _audit_path,
+            )
     return _audit_path
 
 

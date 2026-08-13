@@ -38,6 +38,27 @@ FORBIDDEN_PATTERNS = [
     (r"~/\.hermes/", "~/.hermes/ — hermes 边缘端数据, 该 Companion 拼好放 request body"),
     # 任何对 ~/.catfish 的字面引用
     (r"~/\.catfish/", "~/.catfish/ — catfish 边缘端数据, 该 Companion 拼好放 request body"),
+
+    # ⚠ 8/13 补: 上面三条只认 `Path.home()` 和字面量 `~/...`, **拿 home 的其它
+    #   写法一个都不认**。这个洞不是理论上的 —— 它已经放过去一个真违规:
+    #
+    #     feedback_inject.py   home = os.environ.get("HOME") or ...
+    #                          Path(home) / ".catfish" / "feedback.jsonl"
+    #
+    #   5/26 清 ALLOWLIST 时它被判为合规并移除, 依据写在本文件注释里:
+    #   「真 grep 清 3 个 (session_facts/feedback_inject/metrics 真代码 0 Path.home)」
+    #   —— 判据是"有没有 Path.home()", 而它在用另一个 API 干同一件事。
+    #
+    #   于是中央端读员工文件这件事又活了 79 天, 直到 8/13 顺着"谁在读 feedback"
+    #   才翻出来。**护栏存在, 判据不完整, 结果比没有护栏更糟 —— 它发了合规证明。**
+    #
+    #   合法用法 (网关读**自己进程**的 home 写自己的日志/诊断) 用 noqa: BOUNDARY
+    #   标注并说明为什么, 跟其它例外一个待遇。
+    (r'os\.environ\.get\(\s*["\']HOME["\']', 'os.environ.get("HOME") — 跟 Path.home() 等价'),
+    (r'os\.environ\[\s*["\']HOME["\']\s*\]', 'os.environ["HOME"] — 跟 Path.home() 等价'),
+    (r'os\.getenv\(\s*["\']HOME["\']', 'os.getenv("HOME") — 跟 Path.home() 等价'),
+    (r'["\']USERPROFILE["\']', 'USERPROFILE — Windows 版的 HOME, 同样是员工 home'),
+    (r'expanduser\(\s*["\']~["\']\s*\)', 'expanduser("~") — 解析的是进程 home'),
 ]
 
 
