@@ -68,6 +68,38 @@ find "$REPO_ROOT" \
      -o -name "*.go" -o -name "*.sh" \) \
   -print > "$TMPFILE"
 
+# ⚠ 8/13: 再扣掉 **git 明确忽略** 的文件。
+#
+# 起因跟上面 7/30 那段是同一个病的第二次发作。归档 25 个 daosheng 历史 PPT
+# builder 到 `deck/archive/builders/`(该目录在 .gitignore 里) 之后, 报告数字
+# **一个没少** —— 因为这个脚本走的是文件系统, 不是 git。24 个 git 根本不跟踪
+# 的历史产物, 在报告里跟真正要拆的源文件混在一起, 占了"必拆"总数的三分之一。
+#
+# prune 清单治不了这个: 它得逐个把目录名硬编码进来, 而 .gitignore 里已经把
+# "什么不算源码"说清楚了。让两处各说各的, 早晚再漂移一次。
+#
+# 边界:
+#   · 只扣 **ignored**, 不扣 untracked —— 新写还没 git add 的文件是真源码,
+#     必须照查。这两者的区别就是这条规则的全部风险控制。
+#   · 不在 git 仓里 / 没有 git 命令 → 静默跳过这一步, 行为退回原样。
+#   · 扣掉多少条会打印出来, 不做静默过滤 —— 万一有人 gitignore 了真源码目录,
+#     数字会不对劲, 而不是无声消失。
+IGNORED_COUNT=0
+if command -v git >/dev/null 2>&1 && \
+   git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+  KEPT=$(mktemp)
+  # check-ignore 对"有忽略项"返 0、"全都不忽略"返 1，两种都是正常结果
+  git -C "$REPO_ROOT" check-ignore --stdin < "$TMPFILE" > "$TMPFILE.ign" 2>/dev/null || true
+  if [ -s "$TMPFILE.ign" ]; then
+    grep -Fxv -f "$TMPFILE.ign" "$TMPFILE" > "$KEPT" || true
+    IGNORED_COUNT=$(wc -l < "$TMPFILE.ign" | tr -d ' ')
+    mv "$KEPT" "$TMPFILE"
+  else
+    rm -f "$KEPT"
+  fi
+  rm -f "$TMPFILE.ign"
+fi
+
 TOTAL_FILES=0
 WARN_COUNT=0
 FAIL_COUNT=0
@@ -120,6 +152,10 @@ fi
 echo ""
 echo "───────────────────────────────────────────────────────────"
 echo " 汇总：$FAIL_COUNT 个必拆  +  $WARN_COUNT 个警戒  /  共 $TOTAL_FILES 文件"
+# 扣掉的数量要看得见 —— 万一有人 gitignore 了真源码目录, 这里数字会不对劲,
+# 而不是无声消失。
+[ "$IGNORED_COUNT" -gt 0 ] && \
+  echo " （另有 $IGNORED_COUNT 个文件被 .gitignore 排除，不计入）"
 echo "───────────────────────────────────────────────────────────"
 
 if [ "$STRICT" -eq 1 ] && [ "$FAIL_COUNT" -gt 0 ]; then
