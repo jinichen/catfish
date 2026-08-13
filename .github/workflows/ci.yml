@@ -210,6 +210,20 @@ jobs:
         working-directory: edge/companion-app
         run: bash scripts/check_version_sync.sh
 
+      # 8/10: codex_backend.rs 里有一段以 Rust 字符串常量形式嵌进去的 Python
+      # (HERMES_HELPER) —— 换模型这条路全靠它。对 cargo 来说那就是个字符串,
+      # 编译器不看; 这个 job 又是纯 Node ("不要 Rust 工具链"), 于是它至今
+      # **一次自动化检查都没有过**, 只在员工点模型下拉框时才第一次真正运行。
+      #
+      # 代价已经付过: 8/3-8/10 之间 disable 分支少了个 no-op 短路, 导致每换
+      # 一次普通网关模型都会弹一句假的「这个模型要新开一个对话才会生效」,
+      # 员工照做丢掉整段上下文。详见脚本头部。
+      #
+      # 用 runner 自带的 python3, hermes 全部走桩件, 不装任何东西。
+      - name: HERMES_HELPER 嵌入脚本行为测试
+        working-directory: edge/companion-app/src-tauri
+        run: python3 scripts/test_hermes_helper.py
+
   # ════════════════════════════════════════════════════════════
   # 3b. 中央门户前端 (central/web) — tsc + build + 路由自查
   # ════════════════════════════════════════════════════════════
@@ -431,12 +445,37 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 
-      - name: cargo test
+      # 8/13: 原来这一步是
+      #     cargo test --lib --no-fail-fast || echo "::warning::..."
+      # `|| echo` 把退出码吞了 —— job 永远绿, 失败只剩 log 里一条 annotation。
+      # 429 个 Rust 测试等于在 CI 里没有断言能力。
+      #
+      # 但直接改成硬失败也不对: 当初留这个口子的理由 (Linux runner 上平台相关
+      # 代码可能跑不通) 没被证伪过, 一刀切可能让整条 CI 因为无关的平台差异变红。
+      #
+      # 所以拆成两步, 按"这个失败是不是一定是真错"来分:
+      #
+      #   编译 —— 编译不过跟平台无关, 一定是真错 → **必过**
+      #   运行 —— 可能有平台门控的用例 → 暂时 continue-on-error, 但失败在 UI 上
+      #           是可见的红 (不再是绿勾里藏一条 warning)
+      - name: cargo test 编译 (必过)
         working-directory: edge/companion-app/src-tauri
-        # B4: --lib 跑 src/ 内 inline tests (25 个 #[cfg(test)] mod tests), 不跑 integration
-        # tests/ 目录 (parse_file_test.py 是 Python, 不是 Rust). 失败不阻塞 CI overall
-        # (Tauri 跨平台 code 可能 Linux 跑不通), 但 log 留痕. P1 之后加 macOS runner.
-        run: cargo test --lib --no-fail-fast || echo "::warning::cargo test 有失败 (可能 Linux 平台限制), 详情看 log"
+        # --no-run 只编译测试二进制不执行。编译失败 = 代码真断了, 没有"平台限制"
+        # 这种借口, 所以这一步不给任何逃生口。
+        run: cargo test --lib --no-run
+
+      - name: cargo test 运行
+        working-directory: edge/companion-app/src-tauri
+        # ⚠ 待办: 第一次在 Linux 上全绿之后, 删掉下面这行 continue-on-error,
+        #    并把 companion-cargo 加进 ci-pass 的 needs + results 列表。
+        #    在那之前它是"可见的已知欠债", 不是"看不见的假绿"。
+        #
+        # 本机 macOS 实测 429 passed / 0 failed (8/12)。Linux 侧未验 —— 没验过的
+        # 事不写成"应该能过"。第一次跑出来的失败清单就是要修的东西: 正确修法是
+        # 给真正平台相关的用例加 #[cfg(target_os = "macos")] (仓库里已有 39 处
+        # 这样的门控), 而不是把退出码再吞回去。
+        continue-on-error: true
+        run: cargo test --lib --no-fail-fast
 
   # ════════════════════════════════════════════════════════════
   # 9. 全套总结 — 核心 job 都过才算 CI 绿
@@ -444,7 +483,9 @@ jobs:
   # 核心 (必过): tool-bridge / gateway / companion (tsc+build) / central-web /
   # central-services /
   # edge-agents / hermes-plugins / companion-vitest
-  # 非核心 (warn 不阻塞): companion-cargo (Linux 平台限制可能 partial fail)
+  # 半核心: companion-cargo —— **编译那一步是必过的**, 只有"运行结果"还挂着
+  #         continue-on-error (Linux 侧没验过)。第一次全绿后就该挪进下面的
+  #         needs 列表, 见那个 job 里的待办注释。
   ci-pass:
     name: CI pass
     runs-on: ubuntu-latest
