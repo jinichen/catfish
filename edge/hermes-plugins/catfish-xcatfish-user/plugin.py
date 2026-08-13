@@ -471,8 +471,75 @@ def _verify_patch_targets() -> None:
 # Step 2: 应用 11 处 monkey-patch
 # ─────────────────────────────────────────────────────────────────────────
 
+#: 本轮 install 中失败的可选 patch 名字。install() 的收尾日志读它。
+_PATCH_FAILURES: list[str] = []
+
+
+def _try_patch(fn, err_msg: str) -> bool:
+    """跑一个**可失败**的 patch: 挂了记一条 error + 记名字, 不打断后面的。
+
+    # 为什么有这个函数
+
+    8/13 发现收尾那行日志在撒谎:
+
+        logger.info("catfish-xcatfish-user plugin installed ✓ (15 patches applied)")
+
+    `15` 是写死的字符串, 而 `_apply_patches` 实际调 33 个 patch 入口。它从 15 涨到
+    33 的整个过程一动不动 —— 更要命的是, 19 个包在 try 里的 patch **全部失败**时
+    这行照样打 `✓ (15 patches applied)`。一个不会变的状态指示灯, 而它正是判断
+    "插件装好了没"用的那个信号。
+
+    收掉 19 个一模一样的 try 块 (形状逐个比对过: try 体单调用 + 单 handler +
+    `except Exception as e` + `logger.error(<文案>, e)`), 文案**原样传参**不改一个字
+    —— 那些文案是历次事故留下的, 不该在"修计数器"这件事里被顺手改掉。
+
+    # 两类 patch 的区别
+
+    裸调的 14 个失败会往上抛 (fail-loud, install 整个失败, 收尾日志根本到不了);
+    走这里的 19 个失败只降级。这个区分是原来就有的, 这里只是把后一类的结果记下来。
+    """
+    try:
+        fn()
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.error(err_msg, e)
+        _PATCH_FAILURES.append(getattr(fn, "__name__", str(fn)))
+        return False
+
+
+def _count_patch_entry_points() -> Optional[int]:
+    """数 `_apply_patches` 里到底挂了多少个 patch 入口 —— **从源码数, 不写死**。
+
+    写死一个 33 就是把 8/13 修掉的那个 bug 换个数字再犯一遍: 下次加 patch 时
+    没人会想起来同步它, 而它错了不报错。
+
+    数两类:
+      · 裸调 `_patch_pNN_xxx()`   —— 失败会往上抛 (fail-loud)
+      · `_try_patch(_patch_..., ...)` —— 失败只降级
+
+    数不出来返 None (源码读不到 —— 比如被打包成 pyc 分发), 调用方照实说"未知",
+    不编一个数字出来。
+    """
+    import ast as _ast  # noqa: PLC0415
+    import inspect as _inspect  # noqa: PLC0415
+
+    try:
+        tree = _ast.parse(_inspect.getsource(_apply_patches))
+    except (OSError, TypeError, SyntaxError, IndentationError):
+        return None
+    n = 0
+    for node in _ast.walk(tree):
+        if not isinstance(node, _ast.Call) or not isinstance(node.func, _ast.Name):
+            continue
+        # `_try_patch(_patch_x, ...)` 里的 _patch_x 是 Name 不是 Call, 不会重复计数
+        if node.func.id == "_try_patch" or node.func.id.startswith("_patch_"):
+            n += 1
+    return n
+
+
 def _apply_patches() -> None:
     """应用所有 monkey-patch. 顺序无关 (各自独立)."""
+    _PATCH_FAILURES.clear()
     _patch_asyncio_executor_for_contextvars()  # P0: CV 跨 thread, 必须第一个跑
     _patch_p1_agent_init()
     _patch_p2_current_main_runtime()
@@ -490,44 +557,20 @@ def _apply_patches() -> None:
     # P3.4.C 6/15 鸿波: hard replace session_search. 用 try/except 包住 — P16 挂也不
     #   阻塞 hermes 启动 (鸿波 6/15 21:35 撞 hermes 起不来 "Could not connect", 真因
     #   推测是 P16 抛异常导致 _apply_patches 整体挂). P3.4.C fail-safe 设计.
-    try:
-        _patch_p16_session_search()
-    except Exception as e:  # noqa: BLE001
-        logger.error(
-            "P16: _patch_p16_session_search 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
-            e, exc_info=True,
-        )
+    _try_patch(_patch_p16_session_search, "P16: _patch_p16_session_search 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P3.4.D 6/15 鸿波: bg-review HTTP 400 X-Catfish-User missing — patch AIAgent.__init__
     #   post-init, bg-review review_agent 从 session_registry 拿 parent cf_user 注入.
-    try:
-        _patch_p17_bg_review_inject()
-    except Exception as e:  # noqa: BLE001
-        logger.error(
-            "P17: _patch_p17_bg_review_inject 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
-            e, exc_info=True,
-        )
+    _try_patch(_patch_p17_bg_review_inject, "P17: _patch_p17_bg_review_inject 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P3.5.18 (6/17 鸿波"直接压缩, 弹窗显示压缩进度"): 加 POST /api/sessions/{id}/compress/stream
     # SSE endpoint, Companion 主动 trigger hermes compress + 进度推 UI.
     # 抄 hermes Slack /compress + _handle_session_chat_stream SSE 模板.
-    try:
-        _patch_p18_compress_endpoint()
-    except Exception as e:  # noqa: BLE001
-        logger.error(
-            "P18: _patch_p18_compress_endpoint 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
-            e, exc_info=True,
-        )
+    _try_patch(_patch_p18_compress_endpoint, "P18: _patch_p18_compress_endpoint 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P3.5.18 Phase 2 (6/17 鸿波"自动进行压缩, 提示这个不是觉得奇怪"): hermes preflight
     # 自动压缩时**Companion 0 反馈** — chat 卡 30 秒不知道发生啥. 修法:
     # _create_agent post-init 注入 status_callback 桥 tool_progress_callback,
     # preflight `_emit_status('📦 Preflight compression...')` 经 catfish-lifecycle
     # tool name 走 SSE hermes.tool.progress channel → Companion 接 + 显 inline.
-    try:
-        _patch_p19_status_callback_bridge()
-    except Exception as e:  # noqa: BLE001
-        logger.error(
-            "P19: _patch_p19_status_callback_bridge 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
-            e, exc_info=True,
-        )
+    _try_patch(_patch_p19_status_callback_bridge, "P19: _patch_p19_status_callback_bridge 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P3.5.65 P20 (6/22 鸿波 catch "审批按钮一直不弹"): wrap approve_permanent /
     # load_permanent, 拦截 execute_code 进 _permanent_approved.
     # 真因 (read-only diagnostic 实证): 用户某次 audit UI 点 "always", 把
@@ -536,13 +579,7 @@ def _apply_patches() -> None:
     # is_approved("execute_code") → True → silent auto-approve 永远不弹按钮.
     # execute_code 是给 LLM **任意 Python 沙箱权限**的危险 pattern, 一旦 always-
     # approved = 给 LLM 完全 shell 权限. 红线: 永远不允许永久 approve.
-    try:
-        _patch_p20_block_execute_code_permanent()
-    except Exception as e:  # noqa: BLE001
-        logger.error(
-            "P20: _patch_p20_block_execute_code_permanent 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
-            e, exc_info=True,
-        )
+    _try_patch(_patch_p20_block_execute_code_permanent, "P20: _patch_p20_block_execute_code_permanent 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P3.5.74 P21 (6/22 鸿波 catch "cron 不是用 picker 吗"): hermes cron/scheduler.py
     # run_job 读 config.yaml model.default 跟 picker_state.json 解耦, 员工切 picker
     # 后 cron job 仍走老 model. P3.5.28/42/42.1 把 picker 联动到 chat / advisor /
@@ -552,13 +589,7 @@ def _apply_patches() -> None:
     # 复用 catfish-memory plugin 已有的 _read_picker_state_model helper (同款架构),
     # 优先级 picker_state.json > job.model > config.yaml.model.default > env (跟
     # _get_summarize_model 优先级一致).
-    try:
-        _patch_p21_cron_picker_integration()
-    except Exception as e:  # noqa: BLE001
-        logger.error(
-            "P21: _patch_p21_cron_picker_integration 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
-            e, exc_info=True,
-        )
+    _try_patch(_patch_p21_cron_picker_integration, "P21: _patch_p21_cron_picker_integration 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P22 reverted in P3.5.78 (6/22 鸿波): bookkeep 重构进 catfish-memory.expense,
     # 不再需要 pin _HERMES_CORE_TOOLS — memory tool 本来就 core, kind=expense 自然命中.
 
@@ -566,83 +597,41 @@ def _apply_patches() -> None:
     # 被 tool_search 的 progressive disclosure 整族 defer 掉 —— shape dump 实测
     # 下发给模型的 32 个工具里 catfish 一个都没有。把几个高频的提升为核心。
     # 详见 plugin_core_tools.py 模块 docstring。
-    try:
-        _patch_p43_promote_catfish_core_tools()
-    except Exception as e:  # noqa: BLE001
-        logger.error(
-            "P43: _patch_p43_promote_catfish_core_tools 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
-            e, exc_info=True,
-        )
+    _try_patch(_patch_p43_promote_catfish_core_tools, "P43: _patch_p43_promote_catfish_core_tools 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
 
     # P23 (P3.5.79 6/23 鸿波): inbound message 路径 (微信/Discord/Slack/Telegram)
     # picker 联动 — 修 catfish picker 联动 sprint 漏 cover 的最后一个 platform.
-    try:
-        _patch_p23_inbound_picker_integration()
-    except Exception as e:  # noqa: BLE001
-        logger.error(
-            "P23: _patch_p23_inbound_picker_integration 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
-            e, exc_info=True,
-        )
+    _try_patch(_patch_p23_inbound_picker_integration, "P23: _patch_p23_inbound_picker_integration 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
 
     # P24 (P3.5.89 6/23 鸿波): CORS allowlist 扩 X-Catfish-* — 修教学按钮 / 任何
     # 自定义 header 浏览器 preflight block 触发 TypeError: Load failed 真因.
-    try:
-        _patch_p24_cors_allowlist()
-    except Exception as e:  # noqa: BLE001
-        logger.error(
-            "P24: _patch_p24_cors_allowlist 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
-            e, exc_info=True,
-        )
+    _try_patch(_patch_p24_cors_allowlist, "P24: _patch_p24_cors_allowlist 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
 
     # P25 (P3.5.104 6/24 鸿波 catch "execute_code 不弹审批一直被拦"): cron env
     # 隔离, 治 hermes cron/scheduler.py:1558 设 HERMES_CRON_SESSION 后不清污染
     # 全 daemon 进程的 bug. P25 用 threadlocal 精准判定 cron 线程, 不依赖被污染
     # 的全进程 env. 必须在 P21 (wrap run_job) 之后调用 — P25 内部也 wrap run_job
     # set threadlocal, 顺序保证 P25 包 P21 包 orig, finally pop env 在最外层.
-    try:
-        _patch_p25_cron_env_isolation()
-    except Exception as e:  # noqa: BLE001
-        logger.error(
-            "P25: _patch_p25_cron_env_isolation 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
-            e, exc_info=True,
-        )
+    _try_patch(_patch_p25_cron_env_isolation, "P25: _patch_p25_cron_env_isolation 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
 
     # P26 (P3.5.105 6/25 鸿波 catch "定时任务跑没跑结果如何都看不到"): cron 监控
     # 操作 RESTful endpoint. attach handler 给 APIServerAdapter class; 真 route
     # 注册在 _patched_app_init 块 (Application 创建时, router 未 freeze), 跟 P18
     # add_post 同时机.
-    try:
-        _patch_p26_cron_rest_endpoints()
-    except Exception as e:  # noqa: BLE001
-        logger.error(
-            "P26: _patch_p26_cron_rest_endpoints 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
-            e, exc_info=True,
-        )
+    _try_patch(_patch_p26_cron_rest_endpoints, "P26: _patch_p26_cron_rest_endpoints 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
 
     # P27 (P3.5.106 6/25 鸿波 catch "失败不重试"): cron 任务失败 5/10/15 分钟 三档
     # 自动重试. wrap cron.jobs.mark_job_run, success=False 时改 next_run_at = now +
     # backoff, 累计 3 次后让 hermes 真按 schedule 跑下次 (退出 retry). delivery_error
     # 不触发 retry (agent 跑出来了, 发不出去是渠道问题). 跟 P21/P25 真独立 — 它们
     # wrap run_job, P27 wrap mark_job_run, 0 嵌套冲突.
-    try:
-        _patch_p27_cron_auto_retry()
-    except Exception as e:  # noqa: BLE001
-        logger.error(
-            "P27: _patch_p27_cron_auto_retry 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
-            e, exc_info=True,
-        )
+    _try_patch(_patch_p27_cron_auto_retry, "P27: _patch_p27_cron_auto_retry 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
 
     # P28 (P3.5.123 6/25 鸿波 catch "微信里 ClawBot 英文不合适"): :
     # wrap WeixinAdapter.send 真str.replace 英文 → 中文** (approval / 中断提示 /
     # /approve 命令说明). : 只 wrap weixin, slack / matrix 保英文.
     # 鸿波铁律: 中文 reply 段砍 /approve always (永久免批) :.
-    try:
-        _patch_p28_weixin_zh()
-    except Exception as e:  # noqa: BLE001
-        logger.error(
-            "P28: _patch_p28_weixin_zh 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
-            e, exc_info=True,
-        )
+    _try_patch(_patch_p28_weixin_zh, "P28: _patch_p28_weixin_zh 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
 
     # P29 (P3.5.168 7/3 鸿波 catch v0.18 upgrade backlog):
     # Companion 走 hermes 8642 /v1/chat/completions 时 /learn slash command 前置翻译.
@@ -651,13 +640,7 @@ def _apply_patches() -> None:
     # 不过 slash command dispatcher. Companion 员工输 "/learn xxx" → LLM 只当 prompt
     # 释义. P29 wrap _run_agent 前置检测 → 调 hermes agent.learn_prompt.build_learn_prompt
     # 翻译 → 替换 message → P15 approval 闭包 → hermes original _run_agent.
-    try:
-        _patch_p29_learn_slash_translate()
-    except Exception as e:  # noqa: BLE001
-        logger.error(
-            "P29: _patch_p29_learn_slash_translate 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
-            e, exc_info=True,
-        )
+    _try_patch(_patch_p29_learn_slash_translate, "P29: _patch_p29_learn_slash_translate 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
 
     # P30 (P3.5.198 7/8 鸿波 catch "微信扫码绑定 Error: start 失败 404"):
     # 前端 wechat_qr.ts v3 (5/26) 契约缺 backend impl — hermes v0.17→v0.18
@@ -667,13 +650,7 @@ def _apply_patches() -> None:
     # EP_GET_BOT_QR / EP_GET_QR_STATUS / _api_get / _make_ssl_connector /
     # save_weixin_account, 前端 wechat_qr.ts 零改动. 跟 P26 同模式: attach
     # handler 到 APIServerAdapter, route 在 _patched_app_init 注册.
-    try:
-        _patch_p30_wechat_qr_endpoints()
-    except Exception as e:  # noqa: BLE001
-        logger.error(
-            "P30: _patch_p30_wechat_qr_endpoints 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
-            e, exc_info=True,
-        )
+    _try_patch(_patch_p30_wechat_qr_endpoints, "P30: _patch_p30_wechat_qr_endpoints 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
 
     # P36 (P3.5.199 7/8 鸿波 catch "chat sandbox 相对路径找不到 uploads"):
     # hermes launchd 起 gateway → process cwd="/". LLM execute_code 里
@@ -681,43 +658,22 @@ def _apply_patches() -> None:
     # 员工从来没期望 subprocess 从 `/` 起 (mac 员工机日常在 $HOME 干活).
     # hermes upstream 公开 TERMINAL_CWD env API: execute_code / terminal /
     # file_tools 都读它. setdefault 一次覆盖三条路径, 零 monkey-patch.
-    try:
-        _patch_p36_terminal_cwd_home()
-    except Exception as e:  # noqa: BLE001
-        logger.error(
-            "P36: _patch_p36_terminal_cwd_home 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
-            e, exc_info=True,
-        )
+    _try_patch(_patch_p36_terminal_cwd_home, "P36: _patch_p36_terminal_cwd_home 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
 
     # P39 (7/31): Codex App Server 模式在 provider credential resolver 之前
     # short-circuit。登录继续只由 Codex CLI 管，不复制 OAuth token 到 Hermes。
-    try:
-        _patch_p39_codex_app_server_auth_bypass()
-    except Exception as e:  # noqa: BLE001
-        logger.error(
-            "P39: Codex App Server auth bypass patch 失败: %s",
-            e, exc_info=True,
-        )
+    _try_patch(_patch_p39_codex_app_server_auth_bypass, "P39: Codex App Server auth bypass patch 失败: %s")
 
     # P40 (7/31): Companion 与 Hermes/Codex 共用 state.db 时，某些 runtime 会在
     # 请求开始和 turn 完成各写一次相同 user message。把防重放在 SessionDB 公共
     # 写入层，覆盖 App、API server、Codex adapter 的所有组合。
-    try:
-        _patch_p40_companion_user_message_dedup()
-    except Exception as e:  # noqa: BLE001
-        logger.error(
-            "P40: Companion user message dedup patch 失败: %s",
-            e, exc_info=True,
-        )
+    _try_patch(_patch_p40_companion_user_message_dedup, "P40: Companion user message dedup patch 失败: %s")
 
     # P42 (8/8 鸿波"员工邮件正文进个人知识库不合理"): 后台调用不写记忆。
     # email_scheduler 的评级调用走 agent loop, 于是邮件标题/发件人被写进
     # employee_journal.md, 再被蒸成 wiki 条目。判据和失效方式见
     # plugin_memory_gate.py 的模块 docstring。
-    try:
-        _patch_p42_memory_skip_background(CV_CF_SOURCE)
-    except Exception as e:  # noqa: BLE001
-        logger.error("P42: memory 来源闸 patch 失败: %s", e, exc_info=True)
+    _try_patch(_patch_p42_memory_skip_background, "P42: memory 来源闸 patch 失败: %s")
 
 
 # ── P16 (P3.4.C 6/15 鸿波: session_search 76s → 340ms) ──────────────────
@@ -1976,7 +1932,21 @@ def install() -> None:
     _PATCHED = True
     _INSTALLED = True  # 6/1 BL-PLUGIN-HERMES-015-LAZY-INSTALL: pre_tool_call hook 看这个
 
-    logger.info("catfish-xcatfish-user plugin installed ✓ (15 patches applied)")
+    # 8/13: 原来是写死的 "(15 patches applied)" —— 实际 33 个入口, 而且 19 个可选
+    # patch 全挂了它也照样打 ✓。见 _try_patch 的注释。
+    _n = _count_patch_entry_points()
+    _attempted = str(_n) if _n is not None else "未知数量的"
+    if _PATCH_FAILURES:
+        logger.warning(
+            "catfish-xcatfish-user plugin installed ⚠ (%s 个 patch 入口, "
+            "%d 个可选 patch 失败: %s —— 原因见上面各自的 error)",
+            _attempted, len(_PATCH_FAILURES), ", ".join(_PATCH_FAILURES),
+        )
+    else:
+        logger.info(
+            "catfish-xcatfish-user plugin installed ✓ (%s 个 patch 入口全部生效)",
+            _attempted,
+        )
 
 
 # 6/1 BL-PLUGIN-HERMES-015-LAZY-INSTALL — pre_tool_call hook 兜底 fail-loud.
