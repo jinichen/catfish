@@ -63,6 +63,24 @@ export const codexBackendOpenLogin = () =>
 export const saveTeachingCredential = (label: string, password: string) =>
   rawInvoke<string>("teaching_credential_save", { label, password });
 
+/** 本机记过的凭据标签。**只有标签，没有密码** —— 密码始终只在系统凭据库里。
+ *
+ *  这个列表来自 `~/.catfish/teaching_credentials.json`，不是从系统凭据库枚举
+ *  出来的（keyring 没有枚举 API，macOS 也没法按前缀搜）。所以它可能有残项：
+ *  员工在「钥匙串访问」里手工删过的，这里还会列出来。删一次就清掉了。 */
+export interface TeachingCredential {
+  label: string;
+  reference: string;
+  createdAt: string;
+}
+
+export const listTeachingCredentials = () =>
+  rawInvoke<TeachingCredential[]>("teaching_credential_list");
+
+/** 删一条。系统凭据库里已经没有也算成功（否则残项永远清不掉）。 */
+export const deleteTeachingCredential = (label: string) =>
+  rawInvoke<void>("teaching_credential_delete", { label });
+
 // ── chrome ───────────────────────────────────────────────
 export const chromeLaunch = () => rawInvoke<void>("chrome_launch");
 export const chromeKill = () => rawInvoke<void>("chrome_kill");

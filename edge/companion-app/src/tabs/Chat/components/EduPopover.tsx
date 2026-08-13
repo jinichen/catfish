@@ -33,13 +33,18 @@
  * div + click-outside close, 复用 CSS var 系统 (--catfish-cyan 等).
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type { Icon } from "@phosphor-icons/react";
 import { BookOpenText, GraduationCap, Lightbulb, VideoCamera } from "@phosphor-icons/react";
 import { useTeachingStore } from "../../../store/teaching";
 import { useRecModeStore } from "../../../store/recmode";
-import { saveTeachingCredential } from "../../../lib/tauri";
+import {
+  deleteTeachingCredential,
+  listTeachingCredentials,
+  saveTeachingCredential,
+  type TeachingCredential,
+} from "../../../lib/tauri";
 import LearnModal from "./LearnModal";
 
 interface Props {
@@ -250,6 +255,26 @@ function CredentialModal({ onClose }: { onClose: () => void }) {
   const [reference, setReference] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  // 已存的标签。没有这个列表时, 员工存完就再也看不见自己存过什么 ——
+  // 三周后面对 EIS / OA / 报销三套系统, 只会记得"我存过一个"。
+  const [saved, setSaved] = useState<TeachingCredential[]>([]);
+  const [pendingDelete, setPendingDelete] = useState("");
+
+  const refresh = useCallback(async () => {
+    try {
+      setSaved(await listTeachingCredentials());
+    } catch (e) {
+      // 列不出来不影响保存 —— 密码在系统凭据库里, 索引只是方便看。
+      console.warn("[teaching-credential] 列表读取失败:", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const trimmed = label.trim();
+  const duplicate = saved.some((s) => s.label === trimmed);
 
   const save = async () => {
     setError("");
@@ -257,10 +282,24 @@ function CredentialModal({ onClose }: { onClose: () => void }) {
     try {
       setReference(await saveTeachingCredential(label, password));
       setPassword("");
+      await refresh();
     } catch (e) {
       setError(String(e));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const remove = async (name: string) => {
+    setError("");
+    try {
+      await deleteTeachingCredential(name);
+      if (name === trimmed) setReference("");
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setPendingDelete("");
     }
   };
 
@@ -272,9 +311,64 @@ function CredentialModal({ onClose }: { onClose: () => void }) {
           <button type="button" onClick={onClose} style={modalCloseStyle}>关闭</button>
         </div>
         <p style={modalHintStyle}>密码只保存在本机系统凭据库，不会写入聊天、配置文件或终端。</p>
+
+        {saved.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={modalHintStyle}>本机已存（点名称填回上面，可直接复制引用）：</div>
+            <div style={savedListStyle}>
+              {saved.map((item) => (
+                <div key={item.label} style={savedRowStyle}>
+                  <button
+                    type="button"
+                    onClick={() => setLabel(item.label)}
+                    title="填回名称，用于覆盖密码"
+                    style={savedNameStyle}
+                  >
+                    {item.label}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => navigator.clipboard?.writeText(item.reference)}
+                    title={item.reference}
+                    style={savedActionStyle}
+                  >
+                    复制引用
+                  </button>
+                  {pendingDelete === item.label ? (
+                    <button
+                      type="button"
+                      onClick={() => void remove(item.label)}
+                      style={{ ...savedActionStyle, color: "var(--catfish-danger, #c0392b)" }}
+                    >
+                      确认删除
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setPendingDelete(item.label)}
+                      style={savedActionStyle}
+                    >
+                      删除
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <p style={{ ...modalHintStyle, fontSize: 11 }}>
+              这是本机记过的名称。若你在「钥匙串访问」里手工删过，这里可能还留着 ——
+              点一次删除就清掉。
+            </p>
+          </div>
+        )}
+
         <label style={fieldLabelStyle}>名称（例如：教学网站）
           <input value={label} onChange={(e) => setLabel(e.target.value)} autoFocus style={fieldStyle} />
         </label>
+        {duplicate && (
+          <div style={{ ...modalHintStyle, color: "var(--catfish-warn, #b7791f)" }}>
+            已有同名的「{trimmed}」，保存会覆盖它的密码（引用串不变，教学流程不用改）。
+          </div>
+        )}
         <label style={fieldLabelStyle}>密码
           <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} style={fieldStyle} />
         </label>
@@ -288,7 +382,7 @@ function CredentialModal({ onClose }: { onClose: () => void }) {
         )}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           <button type="button" onClick={onClose} style={modalCloseStyle}>取消</button>
-          <button type="button" disabled={saving || !label.trim() || !password} onClick={save} style={saveButtonStyle}>{saving ? "保存中…" : "保存到系统凭据库"}</button>
+          <button type="button" disabled={saving || !trimmed || !password} onClick={save} style={saveButtonStyle}>{saving ? "保存中…" : duplicate ? "覆盖密码" : "保存到系统凭据库"}</button>
         </div>
       </div>
     </div>
@@ -302,6 +396,10 @@ const fieldLabelStyle: CSSProperties = { display: "flex", flexDirection: "column
 const fieldStyle: CSSProperties = { padding: "8px 10px", border: "1px solid var(--catfish-border)", borderRadius: 6, background: "transparent", color: "var(--catfish-text)" };
 const modalCloseStyle: CSSProperties = { padding: "6px 10px", border: "1px solid var(--catfish-border)", borderRadius: 6, background: "transparent", color: "var(--catfish-text)", cursor: "pointer" };
 const saveButtonStyle: CSSProperties = { ...modalCloseStyle, borderColor: "var(--catfish-cyan)", background: "var(--catfish-cyan)", color: "white" };
+const savedListStyle: CSSProperties = { display: "flex", flexDirection: "column", gap: 4, maxHeight: 132, overflowY: "auto", padding: 6, borderRadius: 6, border: "1px solid var(--catfish-border)" };
+const savedRowStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 6, fontSize: 12 };
+const savedNameStyle: CSSProperties = { flex: 1, textAlign: "left", padding: "3px 6px", border: "none", borderRadius: 4, background: "transparent", color: "var(--catfish-text)", cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+const savedActionStyle: CSSProperties = { padding: "3px 7px", border: "1px solid var(--catfish-border)", borderRadius: 4, background: "transparent", color: "var(--catfish-text-muted)", cursor: "pointer", fontSize: 11, flexShrink: 0 };
 
 // ─── 内部 sub-component EduOption ────────────────────────────────
 

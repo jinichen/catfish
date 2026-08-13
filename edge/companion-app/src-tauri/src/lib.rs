@@ -1043,6 +1043,8 @@ pub fn run() {
             commands::hermes_install::reinstall_hermes_agent,
             commands::hermes_install::hermes_bootstrap_status,
             commands::teaching_credentials::teaching_credential_save,
+            commands::teaching_credentials::teaching_credential_list,
+            commands::teaching_credentials::teaching_credential_delete,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
