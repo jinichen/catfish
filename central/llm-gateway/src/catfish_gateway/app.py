@@ -11,7 +11,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -66,19 +65,15 @@ from .catalog import build_catalog  # noqa: E402
 from . import model_store, provider_store  # noqa: E402
 from .config import (  # noqa: E402
     Config,
-    ModelConfig,
     get_config,
     invalidate_config,
-    load_config,
     load_raw_models,
-    model_config_errors,
 )
 # 5/23 BL-GATEWAY-DROP-LEGACY-SUMMARIZE: inject_employee_journal 5/20 BL-GATEWAY-
 # MEMORY-REGISTRY-DELETE 时已 disable (registry.providers 永远空), 实际无 caller.
 # 函数体也从 employee_journal.py 删, 该模块剩下 read_journal / append_to_journal
 # 给 a2a_journal_hook (写 bob 本机 journal) 用. 老 import 移除.
 from .fallback import with_fallback  # noqa: E402
-from .feedback_inject import inject_feedback  # noqa: E402  BL-MM6
 from .gemini_guard import harden_for_gemini  # noqa: E402
 from .identity_inject import (  # noqa: E402
     header_agent_prefs,
