@@ -241,6 +241,13 @@ def _import_sibling(module_name: str):
 resolver = _import_sibling("resolver")
 session_registry = _import_sibling("session_registry")
 
+# P46 的"picker 是唯一真源"判据 + picker 文件读取。8/13 提到模块层:
+# `_read_catfish_picker_model` 现在转调它, 而模块层不能用函数体里那种
+# `from . import model_authority` —— 包名带 dash, 得走 _import_sibling 的三段
+# fallback。(函数体里那处 8/9 起一直是通的, 日志里 P46 真定夺过两次、
+# "P6/P11 post-init failed" 一次没有; 顺手改成同一条路, 少一种写法。)
+model_authority = _import_sibling("model_authority")
+
 # ── 拆出去的两块, 按军规的 re-export 协议原样吐回来 ──────────────────
 #
 # 用 _import_sibling 而不是 `from .x import y`: 这个包名带 dash, hermes 的
@@ -1398,8 +1405,12 @@ def _patch_p5_p6_p11_api_server_create_agent_and_picker() -> None:
             #
             # 判据本身在 model_authority.decide_model, 那是纯函数有单测;
             # 这里只负责"什么时候调"。
-            from . import model_authority  # noqa: PLC0415
-
+            #
+            # 8/13: 原来这里是 `from . import model_authority` (函数体内相对导入)。
+            # 它一直是通的 —— 日志里 P46 真定夺过、"P6/P11 post-init failed" 一次
+            # 没有。但它落在一个 except 只打 warning 的 try 里, 万一哪天 hermes 换
+            # 加载方式导致相对导入失效, 表现就是「模型只能 picker 模型」这条硬规矩
+            # 静默失效, 只留一行 warning。改用模块层已经装好的那份, 少一个失败面。
             model_override = model_authority.decide_model(
                 request_model=kwargs.get("model_override") or CV_PICKER_MODEL.get(),
             )
@@ -3096,28 +3107,26 @@ def _patch_p20_block_execute_code_permanent() -> None:
 # fail-silent fallback (跟 P16 / catfish-memory 风格一致).
 
 def _read_catfish_picker_model() -> str:
-    """读 ~/.catfish/picker_state.json 拿 chat_model. 复用 catfish-memory 同款 ABI.
+    """读 ~/.catfish/picker_state.json 拿 chat_model。
 
-    catfish-memory plugin 也有 _read_picker_state_model helper (catfish_memory_helpers.py).
-    本 plugin 没依赖 catfish-memory (两个 plugin 独立装载), 不能 cross import. 抄个
-    最简版本 — 文件不存在 / parse 错 / chat_model 缺 → 空字符串.
+    # 8/13: 从"本地抄一份"改成转调 model_authority.read_picker_model
+
+    这个函数原来是 catfish-memory 那份 `_read_picker_state_model` 的手抄副本
+    (注释写着"两个 plugin 独立装载, 不能 cross import, 抄个最简版本")。那个理由
+    对 **catfish-memory** 成立, 但对同一个包里的 `model_authority` 不成立 ——
+    P46 早就把同一段逻辑放在那里了, 而且它才是"picker 是唯一真源"这条规矩的归属
+    模块。
+
+    两份并存的风险很具体: 「模型只能 picker 模型」是硬规矩, 而 P21 / P23 / P39
+    走这份、model_authority.decide_model 走那份。两边哪天飘了, 表现是"有的路径听
+    picker、有的不听", 跟 8/9 那次会话级 model override 一模一样 —— 同一个员工、
+    同一个界面, 不同请求用不同模型, 而且没有任何地方显示这件事。
+
+    改之前把两份实现在 11 种输入上对拍过 (文件不存在 / 空文件 / 坏 json /
+    不是 dict / 缺键 / 空串 / 全空格 / 非字符串 / null / 前后带空格 / 正常),
+    输出逐个相同。测试在 tests/test_picker_reader_single_source.py。
     """
-    import json  # noqa: PLC0415
-    from pathlib import Path  # noqa: PLC0415
-
-    catfish_home = Path.home() / ".catfish"
-    path = catfish_home / "picker_state.json"
-    if not path.exists():
-        return ""
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            model = data.get("chat_model", "")
-            if isinstance(model, str) and model.strip():
-                return model.strip()
-    except (json.JSONDecodeError, OSError, ValueError):
-        pass
-    return ""
+    return model_authority.read_picker_model()
 
 
 def _patch_p21_cron_picker_integration() -> None:
