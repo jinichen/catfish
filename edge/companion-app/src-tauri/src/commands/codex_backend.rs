@@ -122,7 +122,36 @@ if action == "enable":
         config["model"]["default"] = selected_model
         save_config(config)
 elif action == "disable":
-    result = crs.apply(config, "auto", persist_callback=None)
+    # 对称于上面 enable 分支的 already_selected 短路 —— 8/10 补。
+    #
+    # 少这一条, 出事的不是 Codex 那边, 是**普通模型**: select 动作里
+    #     action = "enable" if requested_model in available else "disable"
+    # 于是员工每换一次网关模型 (deepseek / qwen ...) 都落到这个分支, 无条件
+    # 调一次 crs.apply(config, "auto")。那是 hermes 的**运行时执行器**切换器,
+    # 它返回的 requires_new_session 说的是"换执行器要新会话", 跟员工选的模型
+    # 没有关系。Companion 原样回传这一位, 前端就弹出
+    #     「这个模型要新开一个对话才会生效 —— 在当前对话继续发, 跑的还是原来那个」
+    #
+    # 而这句话在 8/9 P46 之后已经不成立: 会话级模型 override (state.db
+    # sessions.model) 被砍掉了, picker 成为唯一真源, agent.model 在每条消息
+    # 新建 agent 时都被覆盖一次 (见 catfish-xcatfish-user/model_authority.py)。
+    # 员工照着提示新建对话, 丢掉整段上下文, 换来一件本来就已经成立的事。
+    #
+    # 一台从没启用过 Codex 的机器 (openai_runtime: auto, 连备份文件都没有)
+    # 根本不存在"运行时切换"这回事, 这里就该如实说 False。
+    #
+    # 真从 Codex 切回来时照旧走 crs.apply, 信号如实回传 —— 那种时候执行器
+    # 确实换了, 不能瞒着前端 (理由见 codex_backend_select_model 里那段注释)。
+    if crs.get_current_runtime(config) != "codex_app_server":
+        result = crs.CodexRuntimeStatus(
+            success=True,
+            new_value="auto",
+            old_value="auto",
+            message="already on default runtime",
+            requires_new_session=False,
+        )
+    else:
+        result = crs.apply(config, "auto", persist_callback=None)
     if not result.success:
         print(json.dumps({"result": asdict(result), **model_view(config)}, ensure_ascii=False))
         raise SystemExit(2)
