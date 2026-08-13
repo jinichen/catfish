@@ -38,8 +38,44 @@ if [[ -L "$TARGET" ]]; then
         echo "✓ 重建软链: $TARGET → $SRC_DIR"
     fi
 elif [[ -d "$TARGET" ]]; then
-    echo "✗ $TARGET 是真目录不是软链, 手动处理: rm -rf $TARGET 后重跑"
-    exit 1
+    # 8/13: 原来这里直接 "手动处理" 就退出了, 于是它在本机以真目录的形态活了
+    # 好几个月 —— 谁都没去手动处理。真实代价:
+    #
+    #   · approvals_bridge.py (P47, 269 行) 只存在于运行目录, 仓库里从来没有,
+    #     换台机器就没了, 而且没有任何地方会报错
+    #   · 仓库里改了 plugin.py, 运行的还是旧副本, 表现是"改了没效果"(军规 § 4.2)
+    #   · deploy.sh 第 4 步跑 $TARGET/tests/, 副本里根本没有 tests/ 目录
+    #
+    # 改成: **先逐字节比对**, 一致就自动转软链 (转之前留备份); 不一致就把差异
+    # 打出来让人看, 绝不盲目覆盖 —— 运行目录里可能有仓库没有的东西, 那正是
+    # 上面第一条踩过的坑。
+    echo "→ $TARGET 是真目录不是软链, 比对内容..."
+
+    DIFFS=""
+    while IFS= read -r f; do
+        rel="${f#"$TARGET"/}"
+        case "$rel" in *__pycache__*|*.pyc|*.bak-*) continue;; esac
+        if [[ ! -e "$SRC_DIR/$rel" ]]; then
+            DIFFS+="  仅运行目录有: $rel"$'\n'
+        elif ! cmp -s "$f" "$SRC_DIR/$rel"; then
+            DIFFS+="  内容不同:     $rel"$'\n'
+        fi
+    done < <(find "$TARGET" -type f)
+
+    if [[ -n "$DIFFS" ]]; then
+        echo "✗ 运行目录跟仓库不一致, 不敢覆盖:"
+        echo "$DIFFS"
+        echo "  处理顺序: 先把'仅运行目录有'的文件收回仓库 (git add), 再重跑本脚本。"
+        echo "  ⚠ 直接 rm -rf 会永久丢掉那些文件 —— 它们没有第二份。"
+        exit 1
+    fi
+
+    BACKUP="$HOME/.hermes/catfish-xcatfish-user.pre-symlink-$(date +%Y%m%d-%H%M%S)"
+    # 备份放 plugins/ **外面**: 放里面 hermes 会把它当成另一个插件去发现加载
+    cp -R "$TARGET" "$BACKUP"
+    rm -rf "$TARGET"
+    ln -s "$SRC_DIR" "$TARGET"
+    echo "✓ 内容一致, 已转成软链 (备份: $BACKUP)"
 else
     ln -s "$SRC_DIR" "$TARGET"
     echo "✓ 软链已建: $TARGET → $SRC_DIR"
