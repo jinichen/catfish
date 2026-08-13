@@ -1,9 +1,13 @@
-"""Apple Mail adapter 单测 (BL-EMAIL-APPLEMAIL-IMPL 5/18).
+"""AppleMailAdapter 单测 —— AppleScript 主路径 (BL-EMAIL-APPLEMAIL-IMPL 5/18).
 
 测试策略:
   - subprocess.run mock (沙箱没 osascript / Mail.app), 模拟 stdout / stderr / returncode
   - 验证: 数据解析 / 字段映射 / 错误分类 / FS/RS 分隔协议
   - 不测真 Mail.app — 那是 e2e, 手动 macOS 机器跑 (cli `catfish-email list`)
+
+8/13 拆分 (源码同步拆): 本文件只留 adapter 类本身的行为。另两块在
+  - test_apple_mail_osascript.py  osascript 执行层 + 输出解析的纯函数
+  - test_apple_mail_emlx.py       EMLX 只读兜底路径
 """
 from __future__ import annotations
 
@@ -14,20 +18,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from catfish_email.adapters import apple_mail as am
-from catfish_email.adapters.apple_mail import (
-    FS,
-    RS,
-    AppleMailAdapter,
-    _escape_as_string,
-    _parse_applescript_date,
-    _parse_records,
-    _run_osascript,
-)
+from catfish_email.adapters.apple_mail import FS, RS, AppleMailAdapter
 from catfish_email.adapters.base import (
     Account,
     ClientNotRunningError,
     DataNotFoundError,
-    EmailAdapterError,
     ListFilter,
 )
 
@@ -42,166 +37,6 @@ def _mock_completed_process(stdout: str = "", stderr: str = "", returncode: int 
     cp.stderr = stderr
     cp.returncode = returncode
     return cp
-
-
-# ── _run_osascript: 错误映射 ────────────────────────────
-
-
-def test_run_osascript_success_returns_stdout():
-    with patch("subprocess.run", return_value=_mock_completed_process(stdout="hello\n")):
-        assert _run_osascript("anything") == "hello"
-
-
-def test_run_osascript_timeout_raises_adapter_error():
-    err = subprocess.TimeoutExpired(cmd=["osascript"], timeout=5)
-    with patch("subprocess.run", side_effect=err):
-        with pytest.raises(EmailAdapterError, match="超时"):
-            _run_osascript("anything", timeout=5)
-
-
-def test_run_osascript_message_not_found_raises_data_not_found():
-    with patch(
-        "subprocess.run",
-        return_value=_mock_completed_process(
-            stderr="execution error: MESSAGE_NOT_FOUND (8001)", returncode=1,
-        ),
-    ):
-        with pytest.raises(DataNotFoundError, match="找不到这条消息"):
-            _run_osascript("anything")
-
-
-def test_run_osascript_permission_denied_raises_client_not_running():
-    """Automation 权限缺 → ClientNotRunningError 含人话提示."""
-    with patch(
-        "subprocess.run",
-        return_value=_mock_completed_process(
-            stderr="execution error: Not authorized to send Apple events to Mail. (-1743)",
-            returncode=1,
-        ),
-    ):
-        with pytest.raises(ClientNotRunningError, match="Privacy & Security"):
-            _run_osascript("anything")
-
-
-def test_run_osascript_mail_not_running_raises_client_not_running():
-    """-600 → Mail.app 没开."""
-    with patch(
-        "subprocess.run",
-        return_value=_mock_completed_process(
-            stderr="execution error: Application isn't running. (-600)", returncode=1,
-        ),
-    ):
-        with pytest.raises(ClientNotRunningError, match="Mail.app 没在跑"):
-            _run_osascript("anything")
-
-
-def test_run_osascript_missing_osascript_binary_raises():
-    """非 macOS 平台 (osascript 不存在) → EmailAdapterError + 友好提示."""
-    with patch("subprocess.run", side_effect=FileNotFoundError):
-        with pytest.raises(EmailAdapterError, match="仅支持 macOS"):
-            _run_osascript("anything")
-
-
-def test_run_osascript_invalid_index_1719_translates_to_friendly_error():
-    """5/18 BL-EMAIL-APPLEMAIL-INVALID-INDEX: -1719 (account 名找不到) 应该
-    翻译成 DataNotFoundError + 引导用 list_accounts 拿真实名, 不是原始 AS 报错."""
-    raw_err = (
-        "322:363: execution error: \"Mail\" 遇到一个错误: "
-        "不能获得\"account 1 whose name = \\\"jini.chen@icloud.com\\\"\". "
-        "无效的索引。 (-1719)"
-    )
-    with patch(
-        "subprocess.run",
-        return_value=_mock_completed_process(stderr=raw_err, returncode=1),
-    ):
-        with pytest.raises(DataNotFoundError, match="账号"):
-            _run_osascript("anything")
-
-
-def test_run_osascript_invalid_index_english_also_translated():
-    """英语 macOS 也认 'Invalid index' 文案"""
-    raw_err = (
-        "execution error: Mail got an error: "
-        "Can't get account 1 whose name = \"foo\". "
-        "Invalid index. (-1719)"
-    )
-    with patch(
-        "subprocess.run",
-        return_value=_mock_completed_process(stderr=raw_err, returncode=1),
-    ):
-        with pytest.raises(DataNotFoundError, match="账号"):
-            _run_osascript("anything")
-
-
-# ── _parse_records ──────────────────────────────────────
-
-
-def test_parse_records_basic():
-    text = f"a{FS}b{FS}c{RS}d{FS}e{FS}f{RS}"
-    records = _parse_records(text, n_fields=3)
-    assert records == [["a", "b", "c"], ["d", "e", "f"]]
-
-
-def test_parse_records_empty_input():
-    assert _parse_records("", n_fields=3) == []
-    assert _parse_records(f"{RS}", n_fields=3) == []
-
-
-def test_parse_records_skips_short_records():
-    """字段数不够的记录跳过, 不抛."""
-    text = f"a{FS}b{FS}c{RS}only2{FS}fields{RS}"
-    records = _parse_records(text, n_fields=3)
-    assert records == [["a", "b", "c"]]
-
-
-def test_parse_records_trims_record_whitespace():
-    """末尾换行 / 空白 不影响切分."""
-    text = f"a{FS}b{FS}c\n{RS}\nd{FS}e{FS}f{RS}\n"
-    records = _parse_records(text, n_fields=3)
-    assert records == [["a", "b", "c"], ["d", "e", "f"]]
-
-
-# ── _parse_applescript_date ─────────────────────────────
-
-
-def test_parse_applescript_date_english_locale():
-    """英文 locale: 'Friday, May 17, 2026 at 1:30:00 PM'."""
-    iso = _parse_applescript_date("Friday, May 17, 2026 at 1:30:00 PM")
-    assert iso.startswith("2026-05-17")
-
-
-def test_parse_applescript_date_rfc2822_passthrough():
-    """RFC 2822 也能解 (Mail header 有时是这格式)."""
-    iso = _parse_applescript_date("Sat, 17 May 2026 13:30:00 +0000")
-    assert iso.startswith("2026-05-17")
-
-
-def test_parse_applescript_date_unparseable_returns_original():
-    """解析不了原样返, 不抛."""
-    weird = "完全乱来的日期文字"
-    assert _parse_applescript_date(weird) == weird
-
-
-def test_parse_applescript_date_empty_returns_empty():
-    assert _parse_applescript_date("") == ""
-
-
-# ── _escape_as_string ───────────────────────────────────
-
-
-def test_escape_as_string_quotes():
-    """双引号要 escape (AS 字符串字面量)."""
-    assert _escape_as_string('hello "world"') == 'hello \\"world\\"'
-
-
-def test_escape_as_string_newlines_replaced_with_space():
-    """换行替成空格 (AS 不允许字面量里 raw newline)."""
-    assert _escape_as_string("line1\nline2\r\nline3") == "line1 line2  line3"
-
-
-def test_escape_as_string_backslash():
-    """backslash 要 escape."""
-    assert _escape_as_string(r"C:\path") == r"C:\\path"
 
 
 # ── AppleMailAdapter.list_accounts ──────────────────────
@@ -755,224 +590,6 @@ def test_parse_email_from_dir_name():
     assert _parse_email_from_dir_name("MailData") is None
 
 
-def test_emlx_is_read_flag():
-    """plist trailer flags bit 0 = read."""
-    from catfish_email.adapters.apple_mail import _emlx_is_read
-
-    assert _emlx_is_read({"flags": 1}) is True   # bit 0 set
-    assert _emlx_is_read({"flags": 0}) is False  # 没标读
-    assert _emlx_is_read({"flags": 17}) is True  # 0b10001 read + flagged
-    assert _emlx_is_read({"flags": 2}) is False  # bit 1 (deleted) 不是 read
-    assert _emlx_is_read(None) is False
-    assert _emlx_is_read({}) is False
-
-
-def test_read_emlx_raw_parses_header_and_trailer(tmp_path):
-    """造一个 .emlx, 验证 byte_count + plist trailer 解析."""
-    from catfish_email.adapters.apple_mail import _read_emlx_raw
-
-    rfc822 = b"From: a@x.com\r\nSubject: Test\r\n\r\nHello"
-    plist_xml = (
-        b'<?xml version="1.0" encoding="UTF-8"?>'
-        b'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
-        b'"http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
-        b'<plist version="1.0"><dict>'
-        b"<key>flags</key><integer>1</integer>"
-        b"</dict></plist>"
-    )
-    emlx_content = f"{len(rfc822)}\n".encode() + rfc822 + plist_xml
-    p = tmp_path / "1.emlx"
-    p.write_bytes(emlx_content)
-
-    raw, plist = _read_emlx_raw(p)
-    assert raw == rfc822
-    assert plist is not None
-    assert plist.get("flags") == 1
-
-
-def test_parse_emlx_summary(tmp_path):
-    """轻量解析 emlx → Message snippet."""
-    from catfish_email.adapters.apple_mail import _parse_emlx_summary
-
-    rfc822 = (
-        b"From: alice@x.com\r\n"
-        b"To: me@x.com\r\n"
-        b"Subject: " + "周报草稿".encode("utf-8") + b"\r\n"
-        b"Date: Sat, 17 May 2026 13:30:00 +0000\r\n"
-        b"\r\n"
-        b"body content here"
-    )
-    p = tmp_path / "1.emlx"
-    p.write_bytes(f"{len(rfc822)}\n".encode() + rfc822)
-
-    msg = _parse_emlx_summary(p, account_name="工作", folder="Inbox")
-    assert msg.subject == "周报草稿"
-    assert "alice@x.com" in msg.sender
-    assert msg.account == "工作"
-    assert msg.folder == "Inbox"
-    assert msg.id.startswith("工作|emlx:")
-    assert msg.date.startswith("2026-05-17")
-
-
-def test_parse_emlx_full_multipart_extracts_both_text_and_html(tmp_path):
-    """multipart 邮件: body_text + body_html 都填."""
-    from catfish_email.adapters.apple_mail import _parse_emlx_full
-
-    rfc822 = (
-        b"From: alice@x.com\r\n"
-        b"To: me@x.com\r\n"
-        b"Cc: c@x.com\r\n"
-        b"Subject: hi\r\n"
-        b"Date: Sat, 17 May 2026 13:30:00 +0000\r\n"
-        b'Content-Type: multipart/alternative; boundary="B"\r\n'
-        b"\r\n"
-        b"--B\r\n"
-        b"Content-Type: text/plain; charset=utf-8\r\n"
-        b"\r\n"
-        b"plain version\r\n"
-        b"--B\r\n"
-        b"Content-Type: text/html; charset=utf-8\r\n"
-        b"\r\n"
-        b"<p>html version</p>\r\n"
-        b"--B--\r\n"
-    )
-    p = tmp_path / "1.emlx"
-    p.write_bytes(f"{len(rfc822)}\n".encode() + rfc822)
-
-    msg = _parse_emlx_full(p, account_name="工作")
-    assert "plain version" in msg.body_text
-    assert "<p>html version</p>" in msg.body_html
-    assert "me@x.com" in msg.recipients
-    assert "c@x.com" in msg.cc
-
-
-def test_enable_emlx_fallback_when_mail_dir_exists(tmp_path, monkeypatch):
-    """探测到 ~/Library/Mail/V10 存在 → fallback 激活 + supports_drafts 切 False."""
-    # 造一个假 V10
-    fake_mail = tmp_path / "Library" / "Mail" / "V10"
-    fake_mail.mkdir(parents=True)
-    monkeypatch.setattr(
-        am, "_detect_mail_data_dir", lambda: fake_mail,
-    )
-    adapter = AppleMailAdapter()
-    assert adapter._enable_emlx_fallback_if_available() is True
-    assert adapter._use_emlx_fallback is True
-    assert adapter.supports_drafts is False
-
-
-def test_no_emlx_fallback_when_no_mail_dir(monkeypatch):
-    """探测不到 → fallback 不激活, supports_drafts 不变."""
-    monkeypatch.setattr(am, "_detect_mail_data_dir", lambda: None)
-    adapter = AppleMailAdapter()
-    assert adapter._enable_emlx_fallback_if_available() is False
-    assert adapter._use_emlx_fallback is False
-    assert adapter.supports_drafts is True
-
-
-def test_list_accounts_falls_back_to_emlx_on_permission_denied(tmp_path, monkeypatch):
-    """AS 抛 ClientNotRunningError 且本机有 V10 → 自动切 EMLX."""
-    # 造假 V10 + 1 个账号目录
-    fake_mail = tmp_path / "Mail" / "V10"
-    fake_mail.mkdir(parents=True)
-    account_dir = fake_mail / "IMAP-test@x.com@imap.x.com"
-    account_dir.mkdir()
-
-    monkeypatch.setattr(am, "_detect_mail_data_dir", lambda: fake_mail)
-
-    def fake_run_os(script, **_):
-        raise ClientNotRunningError("没权限")
-
-    with (
-        patch.object(am, "_is_mail_running", return_value=True),
-        patch.object(am, "_run_osascript", side_effect=fake_run_os),
-    ):
-        accounts = AppleMailAdapter().list_accounts()
-    assert len(accounts) == 1
-    assert accounts[0].address == "test@x.com"
-
-
-def test_create_draft_in_emlx_fallback_raises_not_supported(tmp_path, monkeypatch):
-    """EMLX fallback 模式只读 → create_draft 抛 NotSupportedError."""
-    from catfish_email.adapters.base import NotSupportedError
-
-    fake_mail = tmp_path / "Mail" / "V10"
-    fake_mail.mkdir(parents=True)
-    monkeypatch.setattr(am, "_detect_mail_data_dir", lambda: fake_mail)
-
-    adapter = AppleMailAdapter()
-    adapter._enable_emlx_fallback_if_available()
-    assert adapter.supports_drafts is False
-    with pytest.raises(NotSupportedError, match="EMLX fallback"):
-        adapter.create_draft(to=["x@x.com"], subject="hi", body="body")
-
-
-def test_read_message_emlx_path_directly(tmp_path):
-    """ID 带 emlx: 前缀直接走 EMLX 文件读, 不调 AS."""
-    rfc822 = (
-        b"From: x@x.com\r\n"
-        b"Subject: hello\r\n"
-        b"Date: Sat, 17 May 2026 13:30:00 +0000\r\n"
-        b"\r\n"
-        b"the body"
-    )
-    p = tmp_path / "42.emlx"
-    p.write_bytes(f"{len(rfc822)}\n".encode() + rfc822)
-
-    adapter = AppleMailAdapter()
-    # 用 emlx 前缀 id 直接走 fallback 路径 (不需要 enable_fallback)
-    msg = adapter._read_message_emlx(f"工作|emlx:{p}")
-    assert msg.subject == "hello"
-    assert "the body" in msg.body_text
-
-
-def test_list_messages_emlx_filters_by_subject(tmp_path, monkeypatch):
-    """EMLX list_messages 用 Python 端 subject_contains 后过滤."""
-    fake_mail = tmp_path / "Mail" / "V10"
-    fake_mail.mkdir(parents=True)
-    account_dir = fake_mail / "IMAP-test@x.com@imap.x.com"
-    inbox = account_dir / "INBOX.mbox" / "msgdata" / "Messages"
-    inbox.mkdir(parents=True)
-    # 写 3 封不同 subject
-    for i, subj in enumerate(["周报草稿", "EIS 方案", "周报二稿"]):
-        rfc822 = (
-            f"From: a{i}@x.com\r\nSubject: {subj}\r\n"
-            "Date: Sat, 17 May 2026 13:30:00 +0000\r\n\r\nbody"
-        ).encode()
-        path = inbox / f"{i+1}.emlx"
-        path.write_bytes(f"{len(rfc822)}\n".encode() + rfc822)
-
-    monkeypatch.setattr(am, "_detect_mail_data_dir", lambda: fake_mail)
-
-    adapter = AppleMailAdapter()
-    adapter._enable_emlx_fallback_if_available()
-    msgs = adapter._list_messages_emlx(
-        am.ListFilter(folder="Inbox", subject_contains="周报", limit=10),
-    )
-    assert len(msgs) == 2
-    assert all("周报" in m.subject for m in msgs)
-
-
-def test_detect_mail_data_dir_returns_latest_version(tmp_path, monkeypatch):
-    """V10 / V9 / V8 都存在 → 取 V10 (最高数字)."""
-    home = tmp_path / "home"
-    mail = home / "Library" / "Mail"
-    for v in ("V8", "V9", "V10"):
-        (mail / v).mkdir(parents=True)
-    monkeypatch.setattr("pathlib.Path.home", classmethod(lambda cls: home))
-
-    result = am._detect_mail_data_dir()
-    assert result is not None
-    assert result.name == "V10"
-
-
-def test_detect_mail_data_dir_returns_none_when_no_mail_app(tmp_path, monkeypatch):
-    """没装 Mail / 没同步过 → None, fallback 不激活."""
-    home = tmp_path / "empty_home"
-    home.mkdir()
-    monkeypatch.setattr("pathlib.Path.home", classmethod(lambda cls: home))
-    assert am._detect_mail_data_dir() is None
-
-
 # ════════════════════════════════════════════════════════════════════
 #         BL-EMAIL-APPLEMAIL-AS-CTRLCHAR (5/18) 防回归
 # ════════════════════════════════════════════════════════════════════
@@ -1016,50 +633,6 @@ def test_no_raw_control_chars_in_as_templates():
 # references 裸奔 → 现象是「Message-ID 有值、另两个永远空」, 而 isReplied 失败
 # 时只是角标不亮, 跟「这封确实没人回」看起来一模一样。
 
-from catfish_email.adapters.apple_mail import _parse_thread_headers as _pth
-
-
-def test_thread_headers_干净的块():
-    assert _pth(
-        "Delivered-To: a@x\nMessage-ID: <m@x>\nIn-Reply-To: <p@x>\nReferences: <r@x> <p@x>\n"
-    ) == ("<m@x>", "<p@x>", "<r@x> <p@x>")
-
-
-def test_thread_headers_中间有裸行时仍读得到():
-    """★ 回归: 旧的 email.parser 实现在这里返 (None, None, None)。"""
-    raw = "A: 1\nwLwYWlsZ3VuLVRhZzogZXZlbnQ=\nMessage-ID: <m@x>\nIn-Reply-To: <p@x>\n"
-    assert _pth(raw) == ("<m@x>", "<p@x>", None)
-
-
-def test_thread_headers_裸行含_json():
-    raw = 'X-T: {"click_tracking":false}\n{"nested":true}\nMessage-ID: <m@x>\n'
-    assert _pth(raw)[0] == "<m@x>"
-
-
-def test_thread_headers_头在最末尾也读得到():
-    raw = "A: 1\n裸行\n" * 20 + "In-Reply-To: <p@x>\n"
-    assert _pth(raw)[1] == "<p@x>"
-
-
-def test_thread_headers_大小写不敏感():
-    assert _pth("message-id: <m@x>\nIN-REPLY-TO: <p@x>\nreFerenCes: <r@x>\n") == (
-        "<m@x>", "<p@x>", "<r@x>",
-    )
-
-
-def test_thread_headers_折行续行():
-    # 长 References 被折成多行, 续行以 space/tab 开头
-    assert _pth("References: <a@x>\n <b@x>\n\t<c@x>\n")[2] == "<a@x> <b@x> <c@x>"
-
-
-def test_thread_headers_同名头取第一个():
-    assert _pth("Message-ID: <first@x>\nMessage-ID: <second@x>\n")[0] == "<first@x>"
-
-
-def test_thread_headers_空值与空输入():
-    assert _pth("Message-ID: \nIn-Reply-To: <p@x>\n") == (None, "<p@x>", None)
-    assert _pth("") == (None, None, None)
-    assert _pth("aaa\nbbb\n") == (None, None, None)
 
 
 # ── 8/8: 探测不许把邮件整个搞挂 ───────────────────────────────
@@ -1106,3 +679,18 @@ def test_探测炸了也不许让邮件不可用(monkeypatch):
     from catfish_email.inbox import _get_adapter_explicit
     adapter = _get_adapter_explicit("apple-mail")   # 不该抛
     assert adapter.name == "apple_mail"
+
+
+def test_split_files_stay_under_the_line():
+    """三个文件都得在 800 行红线下 (CLAUDE.md §1)。
+
+    apple_mail.py 上一次拆是 5/20 (1538 → 1045), 之后一路长回 1160 才被发现。
+    钉在测试里, 下次越线是当场红而不是半年后。
+    """
+    from pathlib import Path
+    base = Path(am.__file__).parent
+    for fname in ("apple_mail.py", "apple_mail_osascript.py",
+                  "apple_mail_emlx_path.py", "apple_mail_scripts.py",
+                  "apple_mail_emlx.py"):
+        n = len((base / fname).read_text(encoding="utf-8").splitlines())
+        assert n < 800, f"{fname} {n} 行, 越过 800 红线"
