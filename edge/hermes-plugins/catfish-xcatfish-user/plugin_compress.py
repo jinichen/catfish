@@ -42,12 +42,34 @@ async def _handle_compress_session_stream(self, request):
     """POST /api/sessions/{session_id}/compress/stream
 
     Body (JSON, optional): {"focus_topic": "...", "force": true|false}
-    Response: SSE 事件流
-      - event: compress.started      data: {messages_count, approx_tokens, model}
-      - event: compress.progress     data: {kind: "lifecycle", text}
-      - event: compress.warn         data: {text}
-      - event: compress.completed    data: {before_count, after_count, headline, token_line, note, noop}
-      - event: compress.failed       data: {error}
+
+    Response: SSE 事件流。**下面这份是逐个 send_event 调用点核对过的真值**
+    (8/13) —— 原来这里写的是 6/17 设计文档那版, 跟实际发送对不上, 而且
+    design doc 自己也漏了两个字段。写客户端**以这里为准**。
+
+      - compress.started    {messages_count, approx_tokens, model}
+      - compress.progress   {kind, text}          kind 来自 AIAgent status_callback
+      - compress.warn       {text}
+      - compress.failed     {error}               5 个触发点, 见下
+      - compress.completed  10 个字段:
+            before_count, after_count, before_tokens, after_tokens   ← 本函数算的
+            headline, token_line, note, noop, aborted, fallback_used ← summarize_
+                                              manual_compression 返的 (**summary)
+
+    ⚠ completed 不等于成功。三个必须看的标志位:
+        aborted=true        摘要 LLM 挂了, **一条消息都没删** (上下文没压)
+        fallback_used=true  摘要挂了但走了降级路径, **硬删了 N 条**
+        noop=true           压缩跑完但前后一模一样
+      三个都 false 才是真压缩成功。UI 不能只显示 headline 就算完 ——
+      headline 在 aborted / fallback 时措辞不同, 但 UI 应该按标志位给出不同的
+      视觉状态, 而不是指望员工读英文句子。
+
+    compress.failed 的 5 个触发点 (都是**发完就 write_eof 返回**, 不会再有事件):
+        SessionDB unavailable / session not found / too few messages (<4) /
+        老 session 无 model 字段 / 兜底 except
+
+    fail-silent on disconnect — 用户切走 / 弹窗关 抛 ConnectionResetError,
+    try/except 兜底 不阻塞 compress_future. compress_future 继续跑完写 db.
 
     fail-silent on disconnect — 用户切走 / 弹窗关 抛 ConnectionResetError,
     try/except 兜底 不阻塞 compress_future. compress_future 继续跑完写 db.
@@ -234,6 +256,28 @@ async def _handle_compress_session_stream(self, request):
             after_tokens=after_tokens,
             # 注意: hermes summarize_manual_compression 不接 focus_topic 参数
             # (design doc bug 6/17 audit catch).
+            #
+            # ── 8/13 修: compression_state 之前根本没传 ──
+            #
+            # 不传的后果不是"少个字段", 是**压缩失败会被报成成功**:
+            # summarize_manual_compression 里
+            #     aborted       = compression_state is not None and getattr(...)
+            #     fallback_used = compression_state is not None and getattr(...)
+            # 不传 → 两个恒 False → headline 永远走
+            #     "Compressed: N → M messages"
+            # 这条分支, 而真实情况可能是「摘要 LLM 挂了, 一条消息都没删」(aborted)
+            # 或「摘要挂了, 走降级路径硬删了 N 条」(fallback_used)。员工看到的是
+            # "压缩完成", 实际上下文可能被砍了或者压根没压。
+            #
+            # hermes 自己 5 个调用点全传, 其中 4 处逐字就是下面这个写法
+            # (tui_gateway/server.py:12582, methods_session.py:2464,
+            #  methods_tools.py:1034, gateway/slash_commands.py:4121)。
+            #
+            # 用 getattr 兜底而不是直接 tmp_agent.context_compressor:
+            # 这个属性是**条件存在**的 —— hermes 全仓访问它都走
+            # getattr(..., None) / hasattr, AIAgent 上没有无条件赋值。
+            # 拿不到时退回今天的行为 (两个 False), 不会比现在更差。
+            compression_state=getattr(tmp_agent, "context_compressor", None),
         )
         await send_event("compress.completed", {
             "before_count": before_count,
