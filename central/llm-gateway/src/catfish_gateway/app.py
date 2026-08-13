@@ -2413,50 +2413,16 @@ async def _stream_with_keepalive(iterator, interval_secs: float = _KEEPALIVE_INT
 # 不再驱动 break).
 
 
-async def _fake_sse_response(
-    text: str,
-    *,
-    model_name: str = "catfish-client-cmd",
-) -> AsyncIterator[str]:
-    """模拟一条 SSE 流式 response, 不调 LLM. 给 /goal 等 client-side 命令用.
-
-    BL-HERMES013-3 (5/11): 借鉴 Hermes 0.13 client-side slash commands —
-    /goal 这种命令不该走 LLM (耗 quota / 引入 LLM 解析歧义), gateway 直接
-    拦截 + 返 fake SSE response 模拟 LLM 输出. Companion 端协议无感.
-
-    OpenAI streaming chat completion SSE 格式:
-      data: {"choices": [{"delta": {"role": "assistant"}}], ...}
-      data: {"choices": [{"delta": {"content": "..."}}], ...}
-      ...
-      data: {"choices": [{"finish_reason": "stop", "delta": {}}], ...}
-      data: [DONE]
-    """
-    import uuid  # noqa: PLC0415
-
-    chat_id = f"chatcmpl-cmd-{uuid.uuid4().hex[:12]}"
-    created = int(time.time())
-
-    def _chunk(delta: dict, finish: str | None = None) -> str:
-        payload = {
-            "id": chat_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": model_name,
-            "choices": [{
-                "index": 0,
-                "delta": delta,
-                "finish_reason": finish,
-            }],
-        }
-        return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-
-    # role chunk
-    yield _chunk({"role": "assistant"})
-    # 整段 content (一次发, 不切片 — slash 命令响应都短)
-    yield _chunk({"content": text})
-    # finish
-    yield _chunk({}, finish="stop")
-    yield "data: [DONE]\n\n"
+# 8/13 删掉 `_fake_sse_response` (44 行)。
+#
+# 它是 5/11 BL-HERMES013-3 给 client-side slash 命令 (/goal 这种) 用的 ——
+# 不走 LLM, gateway 直接拦截并伪造一条 SSE 流。5/26 `ea5fb35` 砍掉 session_goals
+# 整套 (hermes 0.14 原生 /goal + /subgoal 替代) 之后**唯一的调用点跟着没了**,
+# 函数本体留了下来, 死了 79 天。
+#
+# 删之前查证过: 全仓只有它自己的定义一处, 无 getattr / globals() 动态取名,
+# docs/HERMES-013-ALIGN.md 里那行本来就已经划掉 (~~...~~)。
+# 要恢复看 ea5fb35 之前的版本。
 
 
 async def _stream_chat_completion(
