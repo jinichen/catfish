@@ -43,6 +43,31 @@ _APP = Path(__file__).resolve().parent.parent / "src/catfish_gateway/app.py"
 _SRC = _APP.read_text(encoding="utf-8")
 
 
+def _attach_fn_source(*, code_only: bool = False) -> str:
+    """取 `_attach_file_handler_to_uvicorn` 的源码。
+
+    `code_only=True` 会去掉 docstring —— 写"源码里不许出现 X"这类检查时必须用它。
+
+    ⚠ 这是同一个坑今天第 4 次: docstring 里**正当地**写着 X (它在解释为什么不许
+       出现 X), 于是注释写得越清楚测试越容易红在一个跟本意完全相反的地方。
+       前三次分别在 box_parser、P18 拆分 (两条)。这次是
+       `test_does_not_flip_propagate` —— 函数注释里写着「改 `propagate = True`
+       会导致 stdout 双写」, 结果被判成"动了 propagate"。
+    """
+    node = next(
+        n for n in ast.parse(_SRC).body
+        if isinstance(n, ast.FunctionDef) and n.name == "_attach_file_handler_to_uvicorn"
+    )
+    if not code_only:
+        return ast.get_source_segment(_SRC, node) or ""
+    stmts = [
+        s for s in node.body
+        if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant)
+                and isinstance(s.value.value, str))
+    ]
+    return "\n".join(ast.get_source_segment(_SRC, s) or "" for s in stmts)
+
+
 def _setup_fn_source() -> str:
     node = next(
         n for n in ast.parse(_SRC).body
@@ -65,25 +90,61 @@ def test_uvicorn_loggers_do_not_propagate():
     assert cfg["uvicorn.access"].get("propagate") is False
 
 
-def test_setup_attaches_handler_to_uvicorn_loggers():
-    """★ 光挂 root 不够, 必须显式给 uvicorn 的 logger 也挂。
-
-    这是那个 bug 本身。源码层判据 —— 真跑 `_setup_file_logging()` 会往真实
-    文件系统写, 不适合在单测里做。
-    """
-    seg = _setup_fn_source()
-    assert "uvicorn.access" in seg, (
-        "_setup_file_logging 没给 uvicorn.access 挂 handler —— "
-        "访问日志不会落盘 (gateway.log 里 HTTP/1.1 会是 0 条)"
+def test_attach_helper_covers_uvicorn_loggers():
+    """★ 光挂 root 不够, 必须显式给 uvicorn 的三个 logger 也挂。"""
+    node = next(
+        n for n in ast.parse(_SRC).body
+        if isinstance(n, ast.FunctionDef) and n.name == "_attach_file_handler_to_uvicorn"
     )
-    # 必须是 addHandler, 不是只提一嘴
-    tree = ast.parse(seg)
-    adds = [
-        c for c in ast.walk(tree)
-        if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
-        and c.func.attr == "addHandler"
-    ]
-    assert len(adds) >= 2, f"addHandler 只有 {len(adds)} 处 (root + uvicorn 至少 2)"
+    seg = ast.get_source_segment(_SRC, node) or ""
+    for name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
+        assert f'"{name}"' in seg, f"没给 {name} 挂 handler"
+    assert "addHandler" in seg
+
+
+def test_attach_is_called_again_in_lifespan():
+    """★★ 这条是那个 bug 的真正要害 —— **挂早了会被抹掉**。
+
+    第一版只在 `_setup_file_logging`(模块导入期) 挂, 重启后 gateway.log 里
+    HTTP/1.1 **仍是 0 条**。真因:
+
+        uvicorn.config.Config.configure_logging()
+          → logging.config.dictConfig(LOGGING_CONFIG)
+        而 LOGGING_CONFIG 给 uvicorn.access 指定了 handlers: ["access"]
+          → dictConfig **替换整个 handler 列表**, 先挂上的被抹掉
+
+    模块导入发生在 uvicorn 配置**之前**, 所以那次注定无效。只有 lifespan
+    (dictConfig 已跑完) 那次留得住。
+
+    在真 uvicorn 上隔离验证过: 只模块层挂 → 文件 0 条; 加 lifespan → 3 条。
+    """
+    lifespan = next(
+        n for n in ast.parse(_SRC).body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "lifespan"
+    )
+    called = any(
+        isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
+        and c.func.id == "_attach_file_handler_to_uvicorn"
+        for c in ast.walk(lifespan)
+    )
+    assert called, (
+        "lifespan 里没再调 _attach_file_handler_to_uvicorn() —— "
+        "模块导入期挂的那次会被 uvicorn 的 dictConfig 抹掉, 访问日志仍然不落盘"
+    )
+
+
+def test_dictconfig_really_replaces_handlers():
+    """钉住前提: uvicorn 的 LOGGING_CONFIG 确实给 access 指定了独占 handler。
+
+    它哪天不再指定 handlers (或改成 propagate), 上面那套"lifespan 再挂一次"
+    的理由就不成立了, 该重审。
+    """
+    uv = pytest.importorskip("uvicorn.config", reason="本机没装 uvicorn")
+    acc = uv.LOGGING_CONFIG["loggers"]["uvicorn.access"]
+    assert acc.get("handlers"), (
+        "uvicorn.access 不再指定 handlers —— dictConfig 不会再抹掉我们挂的那个, "
+        "lifespan 里那次补挂可以重新评估"
+    )
 
 
 def test_does_not_flip_propagate():
@@ -93,8 +154,8 @@ def test_does_not_flip_propagate():
     stdout 里打两遍 —— 6/30 P3.5.149 就是修"log 每条写两遍", 别重蹈。
     正确做法是**只加 handler**。
     """
-    seg = _setup_fn_source()
-    assert "propagate" not in seg or "propagate =" not in seg, (
+    seg = _attach_fn_source(code_only=True)   # 去 docstring, 见 helper 注释
+    assert "propagate" not in seg, (
         "动了 propagate —— 会造成 stdout 双写, 改用只 addHandler"
     )
 
@@ -106,10 +167,9 @@ def test_handler_attach_is_idempotent():
     uvicorn 再 import 一次 —— 见函数里 6/30 那段注释)。root 那边已经有防重
     guard, 新加的 uvicorn 那段也必须有, 否则又是"每条写两遍"。
     """
-    seg = _setup_fn_source()
-    # 新加那段里要有 RotatingFileHandler + baseFilename 的比对
-    uv_part = seg[seg.index("uvicorn"):] if "uvicorn" in seg else ""
-    assert "RotatingFileHandler" in uv_part and "baseFilename" in uv_part, (
+    seg = _attach_fn_source()
+    # 里面要有 RotatingFileHandler + baseFilename 的比对
+    assert "RotatingFileHandler" in seg and "baseFilename" in seg, (
         "给 uvicorn 挂 handler 时没做防重检查 —— 启动会挂两次, 日志双写"
     )
 

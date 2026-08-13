@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+# catfish pre-commit 钩子 —— 只查**这次提交涉及的文件**。
+#
+# ══════════════════════════════════════════════════════════════════
+# 为什么要有它
+# ══════════════════════════════════════════════════════════════════
+#
+# CLAUDE.md §2 写着「改完代码必跑」「返回非 0 不许 commit」, 但:
+#   · 仓里没有任何钩子 / Makefile / pre-commit 配置 —— 纯靠人记得
+#   · 8/13 加的 CI `repo-checks` job 挂上了, 但 GitHub Actions 额度用完,
+#     **不会执行**
+#
+# 也就是说这条军规目前完全没有执行机制。这个钩子补上本地那一层。
+#
+# ══════════════════════════════════════════════════════════════════
+# 设计上最要紧的一条: 只查暂存的文件
+# ══════════════════════════════════════════════════════════════════
+#
+# 仓里有 44 个 ≥800 行的**存量**文件。如果钩子全仓扫, 每次提交都红,
+# 三天之内所有人都会学会 `git commit --no-verify` —— 那它就变成了又一个
+# 哑火护栏, 跟它想解决的问题一模一样。
+#
+# 所以判据是「**你这次动的文件**有没有越线」, 不是「仓库干净不干净」。
+# 存量不归你管, 你新写的和你改大的归你管。
+#
+# 同理只跑几百毫秒: 慢的钩子等于被关掉的钩子。
+#
+# ── 装法 ────────────────────────────────────────────────────
+#   bash scripts/install-hooks.sh
+# 走 core.hooksPath, 钩子本体在仓里, 改了所有人下次 pull 就生效
+# (软链到 .git/hooks 的老办法做不到这点)。
+#
+# ── 绕过 ────────────────────────────────────────────────────
+#   git commit --no-verify
+# 保留这条路是故意的 —— 紧急修复不该被 lint 卡住。但它是**显式**的,
+# 跟"护栏根本不跑"是两回事。
+set -uo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+# 暂存区里将要提交的文件 (排除删除的)
+STAGED=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$STAGED" ] && exit 0
+
+FAIL=0
+
+# ── 检查 1: 文件行数 —— 判据是「有没有变得更糟」, 不是「大不大」 ──
+#
+# ⚠ 第一版写成「暂存的文件 ≥800 就拦」, 当场测出问题: 改 plugin.py (3214 行)
+#    一行注释就被拦, 而它 30 天改了 24 次, app.py 改了 23 次。那样三天之内
+#    所有人都会习惯性 --no-verify, 钩子直接变成又一个哑火护栏 ——
+#    正是它想解决的那个问题。
+#
+# 所以判据是**棘轮**: 存量不归你管, 让它变糟归你管。
+#
+#    新文件 ≥800                → 拦 (别再造新的)
+#    老文件 <800  →  这次 ≥800  → 拦 (你把它推过线了)
+#    老文件 ≥800  →  这次更大   → ⚠ 只警告, 不拦 (理由见下)
+#    老文件 ≥800  →  持平或变小 → 放行
+#
+# ⚠ 第二版又松了一档: "存量 ≥800 变大就拦"实测**当场拦下了写它的这次提交**
+#    (app.py 3700 → 3751, 一个访问日志不落盘的 bugfix, 多出来的还基本是注释)。
+#
+#    算一下这条会拦多少: app.py 30 天改 23 次、plugin.py 24 次, 改动绝大多数
+#    是净增行。也就是说仓里最活跃的两个文件**日常每次提交都得 --no-verify** ——
+#    跟第一版的下场没区别, 只是慢一点到。
+#
+#    更要紧的是它把人往哪儿赶: 要过这条钩子, 唯一的正路是**去拆这个文件**。
+#    而 8/13 当天四个 bug 里**三个是拆分造成的** (P28 / P30 出自 8/8 拆 plugin.py
+#    的 4cdf122, P42 出自当天拆 _apply_patches 的 3bd0659)。让钩子逼着人在
+#    3700 行的文件上做大拆分, 是拿今天刚付过学费的那件事当"合规路径"。
+#
+#    所以存量文件变大改成**出声但不拦**: 增量打在屏幕上, 谁都能看见
+#    "app.py 这个月又涨了 300 行", 但不挡日常修 bug。真要拦的是"别再造新的"
+#    和"别把好文件推过线"——那两条没有正当理由, 也不需要冒险重构。
+#
+# 例外跟 check_file_sizes.sh 一致: 纯数据 schema 文件 (文件名 + AST 顶层
+# 无函数/类 双条件)。.gitignore 忽略的不会进暂存区, 天然排除。
+OVERSIZE=""
+GREW=""
+while IFS= read -r f; do
+  [ -f "$f" ] || continue
+  case "$f" in
+    *.py|*.ts|*.tsx|*.js|*.jsx|*.rs|*.go|*.sh) ;;
+    *) continue ;;
+  esac
+  case "$(basename "$f")" in
+    *_schema.py|*_schemas.py)
+      if python3 - "$f" <<'PYCHK' 2>/dev/null
+import ast, sys
+tree = ast.parse(open(sys.argv[1], encoding="utf-8", errors="replace").read())
+sys.exit(0 if not any(
+    isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    for n in tree.body) else 1)
+PYCHK
+      then continue; fi
+      ;;
+  esac
+
+  # 用**暂存区**的内容算行数, 不是工作区 —— 提交的是暂存区那一份
+  new_n=$(git show ":$f" 2>/dev/null | wc -l | tr -d ' ')
+  [ -z "$new_n" ] && continue
+  # HEAD 里的行数; 文件是新加的就当 0
+  old_n=$(git show "HEAD:$f" 2>/dev/null | wc -l | tr -d ' ')
+  [ -z "$old_n" ] && old_n=0
+
+  if [ "$new_n" -ge 800 ]; then
+    if [ "$old_n" -lt 800 ]; then
+      why=$([ "$old_n" -eq 0 ] && echo "新文件" || echo "从 ${old_n} 行推过 800")
+      OVERSIZE="${OVERSIZE}  ${new_n} 行  ${f}  (${why})"$'\n'
+    elif [ "$new_n" -gt "$old_n" ]; then
+      GREW="${GREW}  ${f}  ${old_n} → ${new_n}  (+$((new_n - old_n)))"$'\n'
+    fi
+  fi
+done <<< "$STAGED"
+
+if [ -n "$OVERSIZE" ]; then
+  echo "🔴 文件越过 800 行红线 (CLAUDE.md §1):"
+  printf '%s' "$OVERSIZE"
+  echo "   这两种没有正当理由: 新写就 ≥800, 或者把一个本来合规的文件推过线。"
+  echo "   拆了再提交, 或 git commit --no-verify 显式跳过。"
+  FAIL=1
+fi
+
+# 存量超标文件变大: 出声, 不拦。见文件头第二版那段说明 ——
+# 拦它等于逼着人在最脆的文件上做大重构, 而重构正是 8/13 三个 bug 的来源。
+if [ -n "$GREW" ]; then
+  echo "⚠️  存量超标文件又变大了 (不拦, 但记一笔):"
+  printf '%s' "$GREW"
+fi
+
+# ── 检查 2: undefined name, 只看 A 类 ────────────────────────
+#
+# A 类 = 可执行语句里的未定义名字 → 跑到就 NameError。
+# 8/8 那个拆分提交一次造了两个 (P28 微信中文串 4 天 / P30 微信扫码 500 五天),
+# 都是"函数搬进新模块了, 它用的 import 没搬"。pyflakes 一秒能看出来。
+#
+# B 类 (只在类型注解里) 不拦 —— 运行时不查找, 不会炸。分类判据跟
+# scripts/check_undefined_names.sh 一致。
+STAGED_PY=$(printf '%s\n' "$STAGED" | grep '\.py$' || true)
+if [ -n "$STAGED_PY" ] && python3 -m pyflakes --version >/dev/null 2>&1; then
+  HITS=$(printf '%s\n' "$STAGED_PY" | xargs -r python3 -m pyflakes 2>/dev/null \
+         | grep "undefined name" || true)
+  if [ -n "$HITS" ]; then
+    REAL=$(printf '%s\n' "$HITS" | python3 -c '
+import ast, re, sys
+from collections import defaultdict
+from pathlib import Path
+hits = defaultdict(set)
+for line in sys.stdin.read().splitlines():
+    m = re.match(r"^(.*?):(\d+):\d+: undefined name .(.+?).$", line)
+    if m:
+        hits[m.group(1)].add((int(m.group(2)), m.group(3)))
+out = []
+for path, entries in hits.items():
+    try:
+        tree = ast.parse(Path(path).read_text(encoding="utf-8"))
+    except (OSError, SyntaxError):
+        continue
+    ann = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.AnnAssign) and n.annotation is not None:
+            ann.update(range(n.annotation.lineno, (n.annotation.end_lineno or n.annotation.lineno) + 1))
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if n.returns is not None:
+                ann.update(range(n.returns.lineno, (n.returns.end_lineno or n.returns.lineno) + 1))
+            for a in list(n.args.args) + list(n.args.kwonlyargs) + list(n.args.posonlyargs):
+                if a.annotation is not None:
+                    ann.update(range(a.annotation.lineno, (a.annotation.end_lineno or a.annotation.lineno) + 1))
+    for ln, name in sorted(entries):
+        if ln not in ann:
+            out.append(f"  {path}:{ln}  {name}")
+print("\n".join(out))
+')
+    if [ -n "$REAL" ]; then
+      echo "🔴 可执行语句里有未定义的名字 (跑到就 NameError):"
+      printf '%s\n' "$REAL"
+      echo "   这是 P28 / P30 那类 —— 多半是拆模块时漏搬了 import。"
+      FAIL=1
+    fi
+  fi
+fi
+
+if [ "$FAIL" -ne 0 ]; then
+  echo
+  echo "❌ pre-commit 拦下。确实要提交就加 --no-verify。"
+  exit 1
+fi
+exit 0

@@ -110,6 +110,70 @@ logger = logging.getLogger("catfish.gateway")
 
 # 5/5 鸿波报"日志文件不存在": 之前 gateway log 只到 stdout, 关掉 terminal 就丢了.
 # 加 file handler 写 ~/Library/Logs/catfish/gateway.log (跟 macOS 习惯一致).
+#: 文件日志的 handler, _setup_file_logging 建好后存这里。
+#: _attach_file_handler_to_uvicorn() 要用它 —— uvicorn 的 logger 得等它自己
+#: 配置完之后才能挂, 见那个函数。
+_FILE_HANDLER = None
+
+
+def _attach_file_handler_to_uvicorn() -> None:
+    """把文件 handler 挂到 uvicorn 的三个 logger 上。**必须在 uvicorn 配置日志之后调。**
+
+    # 病 (8/13 实测)
+
+    `_setup_file_logging` 的注释一直写着「加到 root logger, 所有 catfish.* /
+    uvicorn / litellm 日志都进文件」, 而 gateway.log 里 `HTTP/1.1` **0 条** ——
+    访问日志从来没落过盘。
+
+    两层原因, 第一层我先查到、修了, 结果没生效, 第二层才是真的:
+
+      1. uvicorn 的 logger **不冒泡** (`uvicorn` / `uvicorn.access` 的
+         `propagate: false`), 挂 root 收不到 → 得单独挂。
+      2. **挂早了也没用**: `uvicorn.config.Config.configure_logging()` 调
+         `logging.config.dictConfig(LOGGING_CONFIG)`, 而那份配置给
+         `uvicorn.access` 指定了 `handlers: ["access"]` ——
+         **dictConfig 会替换整个 handler 列表, 把先挂上的抹掉**。
+
+    模块导入期挂 (`_setup_file_logging` 里那次) 发生在 uvicorn 配置之前,
+    所以会被抹。真正生效的是 lifespan 启动时那次 —— 那时 dictConfig 已经跑完。
+
+    两处都调是有意的:
+      · 模块导入期那次 → 覆盖不经 uvicorn 的用法 (测试 / 直接 import app)
+      · lifespan 那次   → 覆盖 uvicorn 跑起来的真实路径
+
+    # 为什么不改 propagate / 不传 log_config=None
+
+    改 `propagate = True` 会让每条访问日志同时走 uvicorn 自己的 stdout handler
+    和 root handler, stdout 里打两遍 —— 6/30 P3.5.149 刚修过一次"log 每条写
+    两遍"。传 `log_config=None` 则会连 uvicorn 的彩色 stdout 格式一起丢掉。
+    只加 handler 是副作用最小的做法。
+
+    # 代价 (为什么值得修)
+
+    8/13 当天撞了两次:
+      · gpt-5.6-luna 打到 8999 拿 404, 想事后查是哪个组件在调 —— 没有落盘的
+        访问日志, 只能靠人贴终端输出
+      · 想统计"哪些端点从没被调过"(P18 / P30 那类死路由), 数出来 39/39 全零,
+        差点报成 39 个死端点 —— 实际是访问日志压根不在文件里
+
+    网关一重启终端输出就没了, HTTP 层的所有证据都是易失的。
+    """
+    if _FILE_HANDLER is None:
+        return
+    from logging.handlers import RotatingFileHandler  # noqa: PLC0415
+    target = os.path.abspath(_FILE_HANDLER.baseFilename)
+    for name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
+        lg = logging.getLogger(name)
+        # 防重 —— 这个函数会被调两次 (模块导入 + lifespan), 累加就是双写
+        if any(
+            isinstance(x, RotatingFileHandler)
+            and os.path.abspath(x.baseFilename) == target
+            for x in lg.handlers
+        ):
+            continue
+        lg.addHandler(_FILE_HANDLER)
+
+
 # 用 RotatingFileHandler 防无限增长 — 单文件 10MB, 保留 5 个轮替.
 # CATFISH_LOG_FILE env 可换路径; CATFISH_LOG_FILE=- 表示禁用文件日志 (CI 用).
 def _setup_file_logging() -> None:
@@ -143,36 +207,11 @@ def _setup_file_logging() -> None:
         # 加到 root logger — catfish.* / litellm 这些都会冒泡上来。
         root_logger.addHandler(h)
 
-        # ⚠ 8/13: uvicorn 的两个 logger **不冒泡**, 得单独挂。
-        #
-        # 原来这行注释写的是「所有 catfish.* / uvicorn / litellm 日志都进文件」,
-        # 而实测 gateway.log 里 `HTTP/1.1` **0 条** —— uvicorn 的 access log
-        # 从来没落过盘。
-        #
-        # 真因 (uvicorn.config.LOGGING_CONFIG, 实测 uvicorn 0.52.2):
-        #     uvicorn         propagate: false
-        #     uvicorn.access  propagate: false
-        # 挂在 root 上的 handler 收不到它们。
-        #
-        # 代价是具体的, 8/13 当天撞了两次:
-        #   · gpt-5.6-luna 打到 8999 拿 404, 想事后查是哪个组件在调 —— 没有
-        #     落盘的访问日志可查, 只能靠人贴终端输出
-        #   · 想统计"哪些端点从没被调过", 数出来 39/39 全零, 差点报成 39 个
-        #     死端点 —— 实际是访问日志压根不在文件里
-        #
-        # 网关一重启终端输出就没了, 等于 HTTP 层的所有证据都是易失的。
-        #
-        # 只加 handler, **不动 propagate** —— 改 propagate 会让这些行同时走
-        # uvicorn 自己的 stdout handler 和 root handler, stdout 里每条打两遍
-        # (6/30 P3.5.149 刚修过一次"log 每条写两遍", 不重蹈)。
-        for _uv_name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
-            _uv = logging.getLogger(_uv_name)
-            if not any(
-                isinstance(x, RotatingFileHandler)
-                and os.path.abspath(x.baseFilename) == os.path.abspath(log_file)
-                for x in _uv.handlers
-            ):
-                _uv.addHandler(h)
+        # 记下来给 _attach_file_handler_to_uvicorn() 用 —— 见那个函数的注释,
+        # uvicorn 的 logger 必须**等它配置完之后**再挂。
+        global _FILE_HANDLER
+        _FILE_HANDLER = h
+        _attach_file_handler_to_uvicorn()
 
         logger.info("file logging → %s (10MB × 5 rotation, 含 uvicorn access)", log_file)
     except Exception as e:
@@ -256,6 +295,18 @@ def _seed_and_migrate_models() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # ⚠ 8/13: 必须在这里**再挂一次**文件 handler 到 uvicorn 的 logger。
+    #
+    # 模块导入期已经挂过一次, 但 uvicorn 随后调
+    # `logging.config.dictConfig(LOGGING_CONFIG)`, 而那份配置给 uvicorn.access
+    # 指定了 `handlers: ["access"]` —— dictConfig **替换整个 handler 列表**,
+    # 先挂上的会被抹掉。lifespan 跑的时候 dictConfig 已经完成, 这次才留得住。
+    #
+    # 8/13 第一版只在模块导入期挂, 重启后 gateway.log 里 HTTP/1.1 仍是 0 条 ——
+    # 改了没效果, 真因就是被 dictConfig 抹了 (军规 §4.2: "改了没效果"先确认
+    # 跑的是哪份代码, 这次跑的确实是新代码, 是时序问题)。
+    _attach_file_handler_to_uvicorn()
+
     # 7/30: 启动时预热 + fail fast —— 配置坏了要在这里挂, 不要等第一个请求
     # 进来才 500。
     #
