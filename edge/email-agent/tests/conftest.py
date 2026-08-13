@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import sqlite3
+import struct
 from email.message import EmailMessage
 from email.utils import formatdate
 from pathlib import Path
@@ -123,6 +124,74 @@ def _build_eml_bytes(
     else:
         m.set_content(body)
     return m.as_bytes()
+
+
+# ── Foxmail 老式 .box 格式 (Windows 7.x / 旧版 Mac) ─────────────
+#
+# 这几个字面量是**故意**写死的, 不从 box_parser import MAGIC_FOXM / HEADER_SIZE。
+#
+# 理由: 用被测模块自己的常量去造被测数据, 测的就只是"模块跟自己一致"。有人把
+# MAGIC_FOXM 改成别的值, 夹具跟着改, 28 条测试照样全绿 —— 这正是 8/13 在
+# MCP_CATFISH_PREFIX 上踩过的坑 (单/双下划线写错, 而测试里 24 处硬编码了同一个
+# 错前缀, 于是测试把 bug 编码进去了)。
+#
+# 写死之后, 改常量会让 test_parser_constants_match_documented_format 变红, 逼一次
+# 人工确认: 是格式认知更新了(那就一起改), 还是手滑。
+#
+# ⚠ 这些测试证明的是「parser 逻辑符合我们记录的格式」, **不**证明「能读真的
+#   Foxmail 文件」—— 仓库里没有任何一个真 .box 样本。BL-C5 接 foxmail_win
+#   adapter 时第一件事应该是弄一个真样本来对, 而不是相信这里的绿。
+_BOX_MAGIC_FOXM = b"FOXM"           # 4 bytes
+_BOX_HEADER_RESERVED = b"\x00\x00"  # 末尾 2 bytes 保留位
+#                                     header = 4 magic + 4 length + 4 flags + 2 保留 = 14
+
+
+@pytest.fixture
+def make_box_file(tmp_path: Path):
+    """factory: 给一组邮件 spec, 造一个老式 .box 文件, 返回它的路径。
+
+    用法:
+        path = make_box_file([
+            {"subject": "Hello", "sender": "a@x.com", "body": "Hi"},
+            {"subject": "已读的", "flags": 0x01},
+        ])
+
+    spec 认的键 (都可省, 走 _build_eml_bytes 的默认值):
+        subject / sender / to / body / flags
+
+    同时在旁边写一个空的 `.ind` —— 真 Foxmail 里 .box 和 .ind 总是成对出现,
+    夹具照着真实布局造。(detect_storage_mode 当前只看 .box, 但夹具不该依赖
+    实现比文档宽松这件事。)
+    """
+    def _make(specs: list[dict], *, filename: str = "Inbox.box",
+              subdir: str = "box_folder") -> Path:
+        folder = tmp_path / subdir
+        folder.mkdir(exist_ok=True)
+
+        chunks: list[bytes] = []
+        for spec in specs:
+            body = _build_eml_bytes(
+                subject=spec.get("subject", "测试主题"),
+                sender=spec.get("sender", '"张三" <zhang@example.com>'),
+                to=spec.get("to", '"陈鸿波" <hongbo@example.com>'),
+                body=spec.get("body", "你好, 这是测试邮件正文。"),
+            )
+            # length 必须是紧随其后那段字节的真实长度 —— parser 靠它跳到下一封,
+            # 写错的话后面每一封都会错位, 而且症状是"少了几封"不是"报错"。
+            header = (
+                _BOX_MAGIC_FOXM
+                + struct.pack("<I", len(body))
+                + struct.pack("<I", int(spec.get("flags", 0)))
+                + _BOX_HEADER_RESERVED
+            )
+            chunks.append(header + body)
+
+        path = folder / filename
+        path.write_bytes(b"".join(chunks))
+        (folder / (path.stem + ".ind")).write_bytes(b"")
+        return path
+
+    return _make
 
 
 @pytest.fixture

@@ -1,4 +1,25 @@
-"""box_parser 单测 —— 核心 Foxmail .box 格式解析。"""
+"""box_parser 单测 —— 核心 Foxmail .box 格式解析。
+
+# 这些测试证明什么, 不证明什么
+
+证明: parser 的**逻辑**符合我们记录的格式 —— 多封连续能切开、坏 magic 能跳过、
+      长度撒谎能截止、length=0 不死循环、中文不乱码、正文截断有省略号。
+
+**不证明**: 能读真的 Foxmail 文件。仓库里没有任何一个真 .box 样本, 夹具是按
+我们自己写下来的格式说明合成的。格式说明本身来自公开逆向项目, 没在真文件上
+验过 —— 模块 docstring 里也明说了"magic 在某些 7.0 版本是 \\xfa\\xfa\\xff\\x60"
+这种不确定性。
+
+所以 BL-C5 接 foxmail_win adapter 时, 第一件事是弄一个真 .box 样本来对, 而不是
+相信这里的绿。全绿 ≠ 能用。
+
+# 8/13 补的夹具
+
+`make_box_file` 之前**根本不存在** —— 24 条测试里有 10 条 fixture not found 直接
+error。而 README / FEATURE-TRACKS 里写的是「.box parser 已有」「Win Foxmail
+adapter · 1 周」, 那个 1 周的估算建立在"已经有测过的 parser"这个前提上, 而前提
+不成立。现在补上了, 24 条全绿。
+"""
 from __future__ import annotations
 
 import struct
@@ -23,6 +44,29 @@ from catfish_email.box_parser import (
     extract_attachment_metadata,
     has_attachments,
 )
+
+
+# ============================================================
+# 格式常量 —— 夹具跟被测模块之间唯一的显式耦合点
+# ============================================================
+
+
+def test_parser_constants_match_documented_format():
+    """parser 的常量必须等于我们记录的格式字面量。
+
+    conftest 的 make_box_file 是用写死的字面量造字节的 (故意不 import 这几个
+    常量, 理由见那里的注释)。这条测试就是那份"故意不耦合"的另一半: 常量一旦
+    改动, 这里立刻红, 逼一次人工确认 —— 是对格式的认知更新了 (那就两边一起改),
+    还是有人手滑。
+
+    没有这条的话, 改常量的后果是: 夹具还按老格式造, parser 按新格式读, 24 条
+    测试**全部变红但错在一个跟本意无关的地方**, 排查要绕一圈。
+    """
+    assert box_parser.MAGIC_FOXM == b"FOXM"
+    assert box_parser.MAGIC_LEGACY == b"\xfa\xfa\xff\x60"
+    assert box_parser.HEADER_SIZE == 14
+    # 14 = 4 magic + 4 length + 4 flags + 2 保留
+    assert box_parser.HEADER_SIZE == len(box_parser.MAGIC_FOXM) + 4 + 4 + 2
 
 
 # ============================================================
