@@ -140,9 +140,41 @@ def _setup_file_logging() -> None:
         h.setFormatter(logging.Formatter(
             "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
         ))
-        # 加到 root logger, 所有 catfish.* / uvicorn / litellm 日志都进文件
+        # 加到 root logger — catfish.* / litellm 这些都会冒泡上来。
         root_logger.addHandler(h)
-        logger.info("file logging → %s (10MB × 5 rotation)", log_file)
+
+        # ⚠ 8/13: uvicorn 的两个 logger **不冒泡**, 得单独挂。
+        #
+        # 原来这行注释写的是「所有 catfish.* / uvicorn / litellm 日志都进文件」,
+        # 而实测 gateway.log 里 `HTTP/1.1` **0 条** —— uvicorn 的 access log
+        # 从来没落过盘。
+        #
+        # 真因 (uvicorn.config.LOGGING_CONFIG, 实测 uvicorn 0.52.2):
+        #     uvicorn         propagate: false
+        #     uvicorn.access  propagate: false
+        # 挂在 root 上的 handler 收不到它们。
+        #
+        # 代价是具体的, 8/13 当天撞了两次:
+        #   · gpt-5.6-luna 打到 8999 拿 404, 想事后查是哪个组件在调 —— 没有
+        #     落盘的访问日志可查, 只能靠人贴终端输出
+        #   · 想统计"哪些端点从没被调过", 数出来 39/39 全零, 差点报成 39 个
+        #     死端点 —— 实际是访问日志压根不在文件里
+        #
+        # 网关一重启终端输出就没了, 等于 HTTP 层的所有证据都是易失的。
+        #
+        # 只加 handler, **不动 propagate** —— 改 propagate 会让这些行同时走
+        # uvicorn 自己的 stdout handler 和 root handler, stdout 里每条打两遍
+        # (6/30 P3.5.149 刚修过一次"log 每条写两遍", 不重蹈)。
+        for _uv_name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
+            _uv = logging.getLogger(_uv_name)
+            if not any(
+                isinstance(x, RotatingFileHandler)
+                and os.path.abspath(x.baseFilename) == os.path.abspath(log_file)
+                for x in _uv.handlers
+            ):
+                _uv.addHandler(h)
+
+        logger.info("file logging → %s (10MB × 5 rotation, 含 uvicorn access)", log_file)
     except Exception as e:
         logger.warning("file logging 启用失败 (继续仅 stdout): %s", e)
 
@@ -2648,7 +2680,25 @@ async def _stream_chat_completion(
             }
             yield f"data: {json.dumps(task_assessment, ensure_ascii=False)}\n\n"
         except Exception as e:  # noqa: BLE001
-            logger.debug("task_assessment 事件构造失败 (%s), 不阻塞主流程", e)
+            # 8/13: debug → warning。
+            #
+            # task_assessment 是 BL-TASK-ASSESS (5/15) 的载体 —— Companion 用它
+            # 做 promise-vs-reality 检测: assistant 说"已生成"但 cum_has_tool_call
+            # =False 且没真生成文件 → 前端标 ⚠ 嘴炮 (见 companion-app
+            # src/lib/chat.ts 的 ChatStreamDoneInfo.task_assessment)。
+            #
+            # 这个 except 吞掉之后, 前端**收不到这条事件**, 嘴炮检测静默失效 ——
+            # 员工看到的是"小鲶说做了", 没有任何警告。而 gateway 的 LOG_LEVEL
+            # 默认 INFO (app.py:106), 日志文件里 DEBUG 是 0 条, 所以这条 debug
+            # 三个月来从未可见。
+            #
+            # 不阻塞主流程这一点保持不变 (它确实不该让整条 SSE 挂掉), 但失败
+            # 必须看得见 —— 否则"检测器坏了"和"这次没嘴炮"在现场长得一模一样。
+            logger.warning(
+                "task_assessment 事件构造失败 (%s) —— 本次不阻塞 SSE, 但 Companion "
+                "这一轮收不到嘴炮检测数据 (assistant 说'已生成'却没调工具时不会告警)",
+                e,
+            )
 
         yield "data: [DONE]\n\n"
     except asyncio.CancelledError:
