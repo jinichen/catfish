@@ -341,9 +341,36 @@ def _patch_p25_cron_env_isolation() -> None:
         finally:
             # 不恢复 — caller 是 chat / api, 帮 hermes 清污染 (上游 bug 兜底)
             if _prev_env is not None:
-                logger.debug(
-                    "P25 check_execute_code_guard 检测到污染 env 真清掉 "
-                    "(caller 非 cron 线程, env 是 hermes cron scheduler 残留)"
+                # 8/13: debug → warning。
+                #
+                # 这一行是**整个 P25 唯一能证明自己还有用的时刻** —— 它意味着真
+                # 发生了一次污染, 而 threadlocal 判据把它接住了。原来是 debug,
+                # 而 agent.log 里 DEBUG 一条都没有 (9347 INFO / 304 WARNING),
+                # 所以这个事件三个月来从未可见。
+                #
+                # 顺便当实验用: hermes 上游已经把 cron session 从 os.environ 改成
+                # ContextVar + token 还原 (cron/scheduler.py:3124, 注释原话
+                # "one cron job cannot taint unrelated gateway/API/TUI turns"),
+                # 也就是 P25 当初 (6/24) 治的那个病在新版 hermes 上不存在了。
+                #
+                #   · 这条**打出来** → 这台机器上还有走真 env 的路径, P25 仍必要
+                #   · 长期**不打** → 是 P25 可以退役的证据 (但退役前要确认所有
+                #     部署的 hermes 版本都带那个 ContextVar 修复, 见下方 TODO)
+                #
+                # ⚠ TODO(退役前必读): 非 cron 分支这个 pop 是**不恢复**的。
+                #   hermes 现在把 os.environ 那条留作"standalone cron 入口和测试"
+                #   的合法兜底 (scheduler.py 注释明说), 而 get_session_env 的
+                #   解析顺序是 ContextVar 优先、从未设过才回落 env。在 gateway
+                #   进程里 ContextVar 一定设过, 所以 pop 无影响; 但在独立 cron
+                #   入口 / 测试进程里, 一次非 cron 的 execute_code 就会把那个兜底
+                #   删掉, 之后 cron 的 deny 策略失效 —— 方向跟本 patch 的意图相反。
+                #   真要退役或收紧, 从这里下手。
+                logger.warning(
+                    "P25 接住一次 cron env 污染: 非 cron 线程调 execute_code 时发现 "
+                    "HERMES_CRON_SESSION=%r 残留, 已清掉再放行 (不清的话这次调用会被 "
+                    "cron_mode=deny 误拦)。这条出现说明本机 hermes 仍走真 os.environ "
+                    "那条路, P25 还不能退役。",
+                    _prev_env,
                 )
 
     _patched_check_execute_code_guard._p25_patched = True  # type: ignore[attr-defined]
