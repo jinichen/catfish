@@ -188,6 +188,7 @@ plugin_core_tools = _import_sibling("plugin_core_tools")
 _patch_p43_promote_catfish_core_tools = plugin_core_tools._patch_p43_promote_catfish_core_tools  # noqa: F401  (re-export · 见 plugin_core_tools.py)
 plugin_wechat_qr = _import_sibling("plugin_wechat_qr")
 _WECHAT_QR_SESSION_TTL = plugin_wechat_qr._WECHAT_QR_SESSION_TTL  # noqa: F401  (re-export · 见 plugin_wechat_qr.py)
+_wechat_qr_sessions = plugin_wechat_qr._wechat_qr_sessions  # noqa: F401  (re-export · 8/13 从这边搬过去, 注意是同一个 dict 对象)
 _wechat_qr_sweep_expired = plugin_wechat_qr._wechat_qr_sweep_expired  # noqa: F401  (re-export · 见 plugin_wechat_qr.py)
 _sync_hermes_env_weixin = plugin_wechat_qr._sync_hermes_env_weixin  # noqa: F401  (re-export · 见 plugin_wechat_qr.py)
 _patch_p30_wechat_qr_endpoints = plugin_wechat_qr._patch_p30_wechat_qr_endpoints  # noqa: F401  (re-export · 见 plugin_wechat_qr.py)
@@ -3918,7 +3919,12 @@ def _patch_p29_learn_slash_translate() -> None:
 # - Auth 走 self._check_auth (跟 P26 一样, per-handler 显式 check).
 # - _make_ssl_connector() 复用 hermes 已有 SSL 配置 (企业代理 / 内证书).
 
-_wechat_qr_sessions: dict = {}  # qrcode(str) → {"base_url": str, "created_at": float}
+# 8/13: `_wechat_qr_sessions` 搬去 plugin_wechat_qr.py 了 —— 用它的三个 handler
+# 8/8 就搬过去了, 定义却留在这边, 那三个函数一跑就 NameError (五天没人发现,
+# 因为 P30 只注册路由, 处理器要等员工点扫码才第一次执行)。定义跟使用者放一起。
+# re-export 在文件头那段。
+
+
 def _patch_p36_terminal_cwd_home() -> None:
     """P36 setenv TERMINAL_CWD=$HOME 兜底.
 

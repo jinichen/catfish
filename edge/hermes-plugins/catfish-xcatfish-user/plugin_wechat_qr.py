@@ -19,9 +19,32 @@
 `from plugin import _WECHAT_QR_SESSION_TTL` 照旧能拿到。
 """
 
+# 8/13 补: 下面三个 handler 用 `web.json_response(...)` 和 `_wechat_qr_sessions`,
+# 但 8/8 那次拆分 (4cdf122「拆 plugin.py 第一轮」) 只搬走了函数, 没搬 import,
+# `_wechat_qr_sessions` 的定义更是**留在了 plugin.py 里**(L3921)。
+#
+# 于是 `_handle_wechat_qr_start` / `_handle_wechat_qr_poll` /
+# `_wechat_qr_sweep_expired` 三个函数一跑就 NameError。
+#
+# 为什么五天没人发现: P30 的 patch 只**注册路由**, 注册是成功的, 日志里
+# "P30 wechat qr routes registered ✓" 打了 19 次。真正的处理器要等员工点
+# 「微信扫码」才第一次执行 —— 而这段时间没人点过 (日志里 20 条全是注册, 0 条调用)。
+#
+# 同一次拆分还漏了 plugin_weixin_zh.py 的 `import functools` (P28, 已修)。
+# 拆模块时最容易漏的就是这个: 原来在 plugin.py 模块作用域里的 import 和状态,
+# 搬走的代码用得到, 但搬的时候只盯着函数体。现在有
+# tests/test_sibling_modules_have_no_undefined_names.py 挡这一类。
 import logging
+import os
+
+from aiohttp import web
 
 logger = logging.getLogger("catfish.xcatfish_user.plugin")
+
+#: qrcode(str) → {"base_url": str, "created_at": float}
+#: 8/13 从 plugin.py 搬过来 —— 定义跟使用者本来就该在一起。
+#: plugin.py 那边按 re-export 协议吐回去, 老 caller 不破。
+_wechat_qr_sessions: dict = {}
 
 _WECHAT_QR_SESSION_TTL = 600.0  # 10 min. 二维码本身 35s 过期, 给 UI 留缓冲.
 
