@@ -130,6 +130,12 @@ ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
     #               只改 P43 → 到了 gateway 但不在 always-on, 名额紧时被砍。
     "catfish_wiki_search",     # 知识库检索
     "catfish_search_docs",     # 本地文档检索
+    # 8/13 补: 上面这些工具的输出超 4KB 会被 tool-bridge 换成
+    # `[已归档: archive_ref=xxx]`, 提示语让 LLM 调本工具拿全文。它不在名单里的
+    # 后果不是"少个工具", 是**把搜索结果变成一条断头路** —— 实测小鲶两次说
+    # "搜索返回被归档截断了", 然后放弃归档路径改用 execute_code 手工读文件。
+    # 跟 P43 的 _PROMOTE 必须同步 (test_p43_core_tools.py 有跨仓一致性测试)。
+    "catfish_read_tool_archive",
     # BL-LLM-PLAN-WITHOUT-ACT (5/19): 内网 qwen 见到周报 / PPT 等关键词必须能立即
     # 找到对应 skill 并触发, 不能因 BL-TOOL-CAP 被砍. skill discovery + invocation
     # 这一族永不 drop. (catfish_run_skill 已在表里, 这里补 hermes 0.14 的 skill_*.)

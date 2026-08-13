@@ -1629,7 +1629,7 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_read_tool_archive",
         "description": (
-            "★ 读 gateway 已归档的 tool output 内容 (lossless 全文 in PG, 14 天保留).\n\n"
+            "★ 读已归档的 tool output 原文 (lossless 全文存**本机**, 默认 14 天保留).\n\n"
             "**触发**: prompt 里出现 `[已归档: archive_ref=...]` 且任务相关需要原文.\n\n"
             "✅ 必须调用:\n"
             "  - 员工问'刚才那个 X 在哪行 / 长什么样' → 用 grep 召回原文\n"
@@ -1640,32 +1640,46 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
             "  - 头尾 + 摘要已经够判断 (e.g. '上次 pytest 全过了' 类问题)\n"
             "  - 任务跟 archive 无关\n"
             "  - **不要无脑拉全文** — 大文件直接撑 context, 务必用 grep 或 line_range\n\n"
-            "三种调用模式:\n"
-            "  1. catfish_read_tool_archive(ref='abc12345') — 全文 (max_bytes 上限 8K)\n"
-            "  2. catfish_read_tool_archive(ref='abc12345', line_range='40-80') — 按行号\n"
-            "  3. catfish_read_tool_archive(ref='abc12345', grep='KeyError') — 关键字 ± 5 行\n\n"
-            "底层: 走 gateway POST /api/tool-archives/read, 鉴权同 chat (OIDC).\n"
-            "返 {ref, content, total_lines, total_bytes, tool_name, summary}.\n"
-            "404 = ref 不存在或 14 天过期; 403 = 不是你的 archive."
+            "三种调用模式 (ref 是 **16 位十六进制**, 从 archive_ref= 原样抄):\n"
+            "  1. catfish_read_tool_archive(ref='0123456789abcdef') — 全文, 默认截到 8000 字节\n"
+            "  2. ..., line_range='40-80' — 按行号 ('47' 单行 / '40-' 到末尾 / '-80' 从开头)\n"
+            "  3. ..., grep='KeyError' — **正则**匹配行 ± 2 行上下文\n"
+            "  grep 和 line_range 同时给时, **grep 优先**, line_range 被忽略.\n\n"
+            "底层: tool-bridge 直读本机 `~/.catfish/tool_archives/`, "
+            "**不走 gateway / 不走 PG** —— 5/22 BL-CENTRAL-EDGE-TOOL-ARCHIVE 把它整个搬到 "
+            "edge 了, 老的 PG 存法违反「中央端严禁看到员工端数据」.\n"
+            "返 {ok, ref, content, total_lines, total_bytes, tool_name, summary, "
+            "filters_applied, hint}; 失败返 {ok: false, error}.\n"
+            "读不到的两种情况: ref 不存在 / 已过期; 或这条 archive 属于别的员工 "
+            "(按 OIDC sub 比对, 防别人 Mac 上拷来的 archive 被读)."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "ref": {
                     "type": "string",
-                    "description": "archive 引用, 16 字 sha256 (从 prompt 里的 archive_ref= 取)",
+                    "description": (
+                        "archive 引用, **16 位十六进制** (从 prompt 里的 archive_ref= "
+                        "原样抄, 格式不对直接报错)"
+                    ),
                 },
                 "line_range": {
                     "type": "string",
-                    "description": "可选, 行号范围 'N-M' 或单行 'N' (1-indexed, e.g. '40-80')",
+                    "description": (
+                        "可选, 1-indexed 行号: 'N-M' / 单行 'N' / 'N-' 到末尾 / "
+                        "'-M' 从开头。给了 grep 时本参数被忽略"
+                    ),
                 },
                 "grep": {
                     "type": "string",
-                    "description": "可选, 子串关键字, 召回匹配行 ± 5 行上下文 (推荐用)",
+                    "description": (
+                        "可选, **正则表达式** (不是子串), 召回匹配行 ± 2 行上下文。"
+                        "推荐优先用它, 比拉全文省 context"
+                    ),
                 },
                 "max_bytes": {
                     "type": "integer",
-                    "description": "可选, 返回字节上限, 默认 8000, 硬上限 32K",
+                    "description": "可选, 返回字节上限, 默认 8000 (没有硬上限, 但别拉太大撑爆 context)",
                 },
             },
             "required": ["ref"],

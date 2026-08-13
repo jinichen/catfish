@@ -93,14 +93,35 @@ _MCP_PREFIX = f"mcp__{_MCP_SERVER}__"  # hermes 用双下划线分隔, 见模块
 # 所以只放员工高频、且「模型不会想到先去 tool_search 搜」的那几个。
 #
 # 名额账 (按 shape dump 实测):
-#   现在 29 visible + 3 bridge = 32, gateway cap 40 → 还剩 8 个
-#   加这 4 个 → 36, 余 4
+#   29 visible + 3 bridge = 32, gateway cap 40
+#   加这 5 个 → 37, 余 3
 # 再往上加要先确认 cap 抬得动: 注释里写着 Qwen 122B 实测 50+ tools 撞空 400。
+#
+# ⚠ 加名单的判据是两条, 8/13 当天补的第二条:
+#   1. 员工高频, 且模型不会想到"先去 tool_search 搜一下"
+#   2. **被提升工具的输出会指向它** —— 见下面 catfish_read_tool_archive
+#
+# 只满足"同类路由提示"的不算 (比如 wiki_search 的描述里写着"想找附件用
+# catfish_attachments_search")。那种模型可以自己调 tool_search 找, 不是断链。
 _PROMOTE = (
     "catfish_wiki_search",     # 知识库检索 —— 8/13 员工撞的就是它
     "catfish_search_docs",     # 本地文档检索, 跟上面是一对
     "catfish_today_summary",   # 今日 TODO / 邮件 / 日程汇总
     "catfish_email_search",    # 邮件查询
+    # ── 8/13 补: 上面 4 个的输出可能变成 [已归档], 那时必须能读回来 ──
+    #
+    # tool-bridge 的 adapter 对**任何**超 4KB 的 tool result 做归档 (
+    # `_maybe_archive_oversized_result`), 把 result 换成
+    # `[已归档: archive_ref=xxx] 摘要 + 头尾预览`, 并指望 LLM 调本工具拿全文。
+    #
+    # 但本工具当时不在提升名单里 → 仍被 tool_search defer → 模型看不见 →
+    # 提示语指向一个不存在的工具。8/13 实测: 员工问"去知识库核对福富资质",
+    # 小鲶两次说"搜索返回被归档截断了", 然后放弃归档路径, 改用 execute_code
+    # 一份份手工读 wiki 文件和 xlsx —— 结果对, 但多烧了十几轮 tool call。
+    #
+    # 教训: 提升一个入口工具时, 要连它**输出可能指向的工具**一起提升,
+    # 否则就是把人放进一条断头路。
+    "catfish_read_tool_archive",
 )
 
 #: 提升后的完整注册名, 给单测和 gateway 侧对齐用。
