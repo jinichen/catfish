@@ -137,6 +137,31 @@ progress {
   backdrop-filter: blur(14px) saturate(1.15);
   -webkit-backdrop-filter: blur(14px) saturate(1.15);
   border-bottom: 1px solid var(--catfish-border);
+
+  /* 8/10: 下面这两行是 backdrop-filter 的连带条件, 不是装饰。
+   *
+   * backdrop-filter 只要不是 none 就会**建立层叠上下文**。header 里挂着模型
+   * 选择器的两个浮层 —— .chat-model-picker__hint (「要新建会话才生效」+ 那个
+   * 「新建对话」按钮) 和 .chat-model-picker__error —— 它们 position: absolute
+   * 往下溢出到消息区, 各自写着 z-index: 20。
+   *
+   * 建了层叠上下文之后, 那个 20 就**只在 header 内部有效**, 升不出去。而
+   * header 自己是 z-index: auto 的普通流元素, .chat-workspace__panel 在 DOM
+   * 里排在它后面 —— 于是消息面板整个画在浮层上面。
+   *
+   * 症状极具迷惑性: 浮层**看得见**(面板那一块是透明的, 透过来了), 但点不着
+   * —— 点击全被面板接走。8/1 写这条提示时 header 还没有 backdrop-filter,
+   * 是好的; 8/8 bd4747b「同步新版 UI」加上之后静默失效, 没有任何报错,
+   * 员工看到的就是"这个按钮点了没反应"。
+   *
+   * z-index 取 5: 高过消息面板 (auto), 低过 .app-rail (20) / 安装弹窗 (1000)
+   * / undo toast (2000) —— 那几个本来就该盖在上面。
+   *
+   * ⚠ 以后往这个 header 上加 transform / filter / opacity / will-change /
+   *   contain 任意一个, 都是同样的层叠上下文, 这两行必须留着。
+   *   src/styles/stacking.test.ts 会盯住这条。 */
+  position: relative;
+  z-index: 5;
 }
 
 /* 会话分组标签 (今天 / 本周): 小型大写 + 宽字距 — 科技感的克制版 */
