@@ -26,7 +26,6 @@
 
 import { useChatStore } from "../../store/chat";
 import { streamChat, type ChatTransport, type OpenAITool } from "../../lib/chat";
-import { checkPromiseOnly } from "../../lib/promiseCheck";
 import { detectToolBusinessError } from "../../lib/toolResult";
 import * as streamRegistry from "../../lib/streamRegistry";
 import { toolBridgeCallTool } from "../../lib/tauri";
@@ -177,28 +176,20 @@ export async function runOneRound(
           // P3.5.17.c.2 (6/17): 5/13 BL-CONTEXT-COUNTER setLastPromptTokens 砍 —
           // info.usage.prompt_tokens 是 hermes turn 内多 LLM API call 累加 cost,
           // 不是 ctx 占用. ContextCounter / ContextOverflowBanner 都砍, store 字段拆.
-// BL-TASK-ASSESS-3-UI (5/15 鸿波"客户端要评估完成情况"): 拿 gateway 给的
-          // task_assessment 做 promise-vs-reality 检测, 命中嘴炮 → 写
-          // assistant message._promise_check, UI 渲染 ⚠ badge + 催继续按钮.
-          // 5/24: 用 assistantId (闭包内) 替代老 currentStreamIdRef, 不串.
-          if (info?.task_assessment) {
-            // P3.5.97 (6/24): 用闭包 assistantContent, 不读 store (切走污染防御).
-            // 老逻辑读 store 在切走后会拿到新 session 的 messages → find by id 返空 →
-            // checkPromiseOnly 拿空字符串误判嘴炮. 闭包累的内容永远是本 round 真实输出.
-            const check = checkPromiseOnly(assistantContent, info.task_assessment);
-            if (check.is_promise_only) {
-              updateMessage(assistantId, {
-                _promise_check: {
-                  is_promise_only: true,
-                  promised_paths: check.promised_paths,
-                  nudge_count: 0,
-                  skill_guard_fired: info.task_assessment.skill_guard_fired,
-                  ever_called_skill:
-                    info.task_assessment.ever_called_catfish_run_skill_in_session,
-                },
-              });
-            }
-          }
+          // 8/13 删: BL-TASK-ASSESS-3-UI (5/15) 的嘴炮检测整套。
+          //
+          // 它靠 gateway 在 [DONE] 前多发的 task_assessment 事件做判据。但 5/19
+          // 切 hermes 之后 Companion 走的是 hermes:8642, gateway 那条 SSE 产生在
+          // hermes → gateway 这一段, **hermes 不转发** —— info.task_assessment
+          // 在真实路径上永远是 undefined, ⚠ badge 一次都没显示过。
+          //
+          // 而且就算转发也是错的: 一次用户回合 = agent loop 里多次 gateway 请求,
+          // 成功任务的**最后一轮**本来就没有 tool_call (它是总结轮), 文字还常写
+          // "已生成 xxx.md" —— 因为前面几轮真的生成了。照搬会在几乎每个成功的
+          // 文件生成任务上误报。
+          //
+          // 判据的正确归属是 hermes: 只有它知道"这一整回合总共调了几次工具"。
+          // 要重做就在那边做, 不要再从 gateway 这层取信号。
         },
         onError: (err) => {
           if (rafId !== null) {

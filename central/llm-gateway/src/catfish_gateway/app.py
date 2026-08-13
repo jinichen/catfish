@@ -2675,93 +2675,32 @@ async def _stream_chat_completion(
                     used_model.name,
                 )
 
-        # ── BL-TASK-ASSESS-1-GATEWAY (5/15 鸿波"客户端要评估完成情况") ──
-        # 在 [DONE] 之前多发一条 task_assessment 事件, Companion 接到后做
-        # promise-vs-reality 检测 (assistant 文字说了"已生成"但 cum_tc=false +
-        # 文件路径不存在 → ⚠ 嘴炮). 不重复算 — gateway 一次性把状态给客户端.
+        # ── 8/13 删: BL-TASK-ASSESS-1-GATEWAY (5/15) 的 task_assessment 事件 ──
         #
-        # 格式: 一条普通 data: 行, object="task_assessment". OpenAI 兼容客户端
-        # 看到 unknown object 会忽略 (extra-field 容忍). Companion 嗅 object
-        # 字段拿 metadata.
-        try:
-            # ⚠ 8/13: 这个字段写死 False 让**整个嘴炮检测死了 79 天**。
-            #
-            # 历史: 5/26 砍 skills_loader (中央扫员工本机 SKILL.md → 上游 LLM,
-            # P0 隐私违规) 时, has_skill_intent 被改成恒返 False, 这里就跟着写死。
-            # 当时判断"sg_fired 永远 False 是预期行为"—— 但漏了它是**下游的判据**:
-            #
-            #   app.py sg_fired=False
-            #     → task_assessment.skill_guard_fired=false  (每一条)
-            #     → promiseCheck.ts:79  if (!skill_guard_fired) return 不报警
-            #     → runOneRound.ts:189  check.is_promise_only 永不为真
-            #     → ChatMessage.tsx:413 ⚠ 嘴炮 badge 一次都没显示过
-            #
-            # 而这正是 4/29 demo 反复翻车专门做的功能 (qwen 122b 说"已生成 x.docx"
-            # 但磁盘上没文件)。前端测试全绿, 因为 promiseCheck.test.ts 的夹具写着
-            # skill_guard_fired: true —— 一个后端永远产不出的值。
-            #
-            # 现在改成算真值: **本轮 gateway 到底有没有把工具递给模型**。
-            # 语义正好是嘴炮的定义 —— "给了工具, 一个没调, 还说自己做完了"。
-            # 不依赖已被砍掉的 skills_loader, 判据就在请求本身。
-            #
-            # body 是 sanitize_tools 之后那份 (chat_completions 里先 sanitize 再调
-            # 本函数), 所以反映的是**真正发给上游的** tool 列表, 不是客户端原始请求。
-            #
-            # tool_choice="none" 要排掉: 那是调用方明确说"这轮别调工具",
-            # 模型不调是遵命, 不是嘴炮。
-            #
-            # 字段名保持 skill_guard_fired 不变 —— 前后端都已有这个名字,
-            # 已装的 Companion **不用更新就恢复**。改名留到以后一起做。
-            _tools_offered = bool(body.get("tools"))
-            if body.get("tool_choice") == "none":
-                _tools_offered = False
-            sg_fired = _tools_offered
-
-            # 历史里 assistant 调过 catfish_run_skill 没?
-            ever_called_skill = False
-            for _m in (body.get("messages") or []):
-                if _m.get("role") != "assistant":
-                    continue
-                for _tc in (_m.get("tool_calls") or []):
-                    _fn = (_tc.get("function") or {}) if isinstance(_tc, dict) else {}
-                    if _fn.get("name") == "catfish_run_skill":
-                        ever_called_skill = True
-                        break
-                if ever_called_skill:
-                    break
-
-            task_assessment = {
-                "object": "task_assessment",
-                "model": used_model.name,
-                "finish_reason": last_finish_reason,
-                "tool_call_count": chunk_stats["tool_calls"],
-                "content_chars": len(cumulative_content),
-                "cum_has_tool_call": cumulative_has_tool_call,
-                "skill_guard_fired": sg_fired,
-                "ever_called_catfish_run_skill_in_session": ever_called_skill,
-            }
-            yield f"data: {json.dumps(task_assessment, ensure_ascii=False)}\n\n"
-        except Exception as e:  # noqa: BLE001
-            # 8/13: debug → warning。
-            #
-            # task_assessment 是 BL-TASK-ASSESS (5/15) 的载体 —— Companion 用它
-            # 做 promise-vs-reality 检测: assistant 说"已生成"但 cum_has_tool_call
-            # =False 且没真生成文件 → 前端标 ⚠ 嘴炮 (见 companion-app
-            # src/lib/chat.ts 的 ChatStreamDoneInfo.task_assessment)。
-            #
-            # 这个 except 吞掉之后, 前端**收不到这条事件**, 嘴炮检测静默失效 ——
-            # 员工看到的是"小鲶说做了", 没有任何警告。而 gateway 的 LOG_LEVEL
-            # 默认 INFO (app.py:106), 日志文件里 DEBUG 是 0 条, 所以这条 debug
-            # 三个月来从未可见。
-            #
-            # 不阻塞主流程这一点保持不变 (它确实不该让整条 SSE 挂掉), 但失败
-            # 必须看得见 —— 否则"检测器坏了"和"这次没嘴炮"在现场长得一模一样。
-            logger.warning(
-                "task_assessment 事件构造失败 (%s) —— 本次不阻塞 SSE, 但 Companion "
-                "这一轮收不到嘴炮检测数据 (assistant 说'已生成'却没调工具时不会告警)",
-                e,
-            )
-
+        # 它原本在 [DONE] 前多发一条 `object="task_assessment"` 的 SSE, 给
+        # Companion 做 promise-vs-reality 检测 (模型说"已生成 x.docx"但没真调
+        # 工具 → UI 打 ⚠)。删掉的理由有两层, 第二层才是决定性的:
+        #
+        # 1. **它从来没到过客户端。** 5/19 切 hermes 后 Companion 连的是
+        #    hermes:8642, 这条事件产生在 hermes → gateway 这一段, hermes 不转发
+        #    (hermes 侧全仓 0 处提及 task_assessment)。所以 ⚠ badge 一次都没显示过。
+        #
+        #    ⚠ 同一天我还先修过一个更里层的 bug: 判据字段 `skill_guard_fired`
+        #      被写死成 False (5/26 砍 skills_loader 时留下的), 于是就算走老的
+        #      直连路径也永不触发。修完才发现主路径压根收不到这条事件 ——
+        #      **先修后查, 顺序反了。**
+        #
+        # 2. **判据在错的层, 转发也救不回来。** hermes 一次用户回合 = agent loop
+        #    里多次 gateway 请求, 而 gateway 只看得见其中一轮。成功任务的最后
+        #    一轮恰恰没有 tool_call (它是总结轮), 文字还常写"已生成 xxx.md" ——
+        #    因为前面几轮真的生成了。照搬转发会在**几乎每个成功的文件生成任务**
+        #    上误报。
+        #
+        # 结论: 这个判断只有 hermes 做得对 —— 只有它知道"这一整回合总共调了
+        # 几次工具"。要重做就在 hermes 侧做, 不要再从 gateway 这层发信号。
+        #
+        # 前端同批删干净: promiseCheck.ts / PromiseCheckBadge.tsx / _promise_check
+        # / TaskAssessment / onNudge 链路。恢复看本提交之前。
         yield "data: [DONE]\n\n"
     except asyncio.CancelledError:
         # BL-ABORT-PROPAGATE (7/23 达华 POC): fastapi/starlette 感知客户端 TCP 断连时 ·

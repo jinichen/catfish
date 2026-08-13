@@ -64,6 +64,16 @@ interface ChatState {
    */
   lifecycleStatus: string | null;
 
+  /** 本次会话实际走的通道。null = 还没发过消息, 不知道。
+   *
+   * "hermes"  = 正常路径 (agent loop / 工具 / 记忆齐全)
+   * "gateway" = **降级**。hermes 不可达或没配 key 时 chat.ts 自动回落直连网关,
+   *             此时没有 agent loop、没有工具、没有记忆注入 —— 员工感受是
+   *             "小鲶今天变笨了", 但界面上从来没说过。8/13 加这个字段就是为了
+   *             让降级**看得见**: 静默降级比降级本身更糟, 员工会以为是模型退步。
+   */
+  transport: "hermes" | "gateway" | null;
+
   /** Hermes runtime 没能跟上 picker 时的说明。null = 一致。
    *
    * setModel 会把选中的模型同步给 Hermes runtime（Codex 和普通模型跑在不同
@@ -124,13 +134,13 @@ interface ChatState {
    * useChat.resendFromUserMsg 里调 · 截完后拿 msg.content + attachments 走 send().
    * 军规 · fail-loud · id 不存在直接 throw (调用端拿了 stale id 应该崩 · 不 silent). */
   truncateFromMessage: (id: string) => void;
-  /** BL-TASK-ASSESS-3-UI (5/15): 点"催它继续"按钮时计数器++. 3 次用完后按钮变灰. */
-  incrementPromiseNudge: (id: string) => void;
   setIsStreaming: (v: boolean) => void;
   setIsCancelling: (v: boolean) => void;
   setStreamingId: (id: string | null) => void;
   /** P3.5.18 Phase 2 (6/17 鸿波): inline lifecycle status (压缩进度). */
   setLifecycleStatus: (s: string | null) => void;
+  /** 8/13: chat.ts 解析出实际通道后回报, 用来显示降级提示。 */
+  setTransport: (t: "hermes" | "gateway" | null) => void;
   setRuntimeSyncError: (s: string | null) => void;
   /** P3.5.29 Phase 6.3 (6/17 鸿波): pickedByUser **默认 true** — 老 caller 全
    * 用户 picker path 0 改. internal call (ChatTab catalog effect) 显式
@@ -187,6 +197,7 @@ export const useChatStore = create<ChatState>((set) => ({
   model: "",
   // P3.5.18 Phase 2 (6/17 鸿波): hermes preflight 自动压缩 inline 状态文本.
   lifecycleStatus: null,
+  transport: null,
   runtimeSyncError: null,
   // P3.5.29 Phase 6.3 (6/17 鸿波): modelPickedByUser flag 修联动 bug.
   // 初始 false — ChatTab mount useEffect catalog.default 真catfish propagate.
@@ -222,23 +233,11 @@ export const useChatStore = create<ChatState>((set) => ({
       // sessionAttachments 索引 / vision check 全走一遍 · 不 shortcut).
       return { messages: s.messages.slice(0, idx) };
     }),
-  incrementPromiseNudge: (id) =>
-    set((s) => ({
-      messages: s.messages.map((m) => {
-        if (m.id !== id || !m._promise_check) return m;
-        return {
-          ...m,
-          _promise_check: {
-            ...m._promise_check,
-            nudge_count: m._promise_check.nudge_count + 1,
-          },
-        };
-      }),
-    })),
   setIsStreaming: (v) => set({ isStreaming: v }),
   setIsCancelling: (v) => set({ isCancelling: v }),
   setStreamingId: (id) => set({ streamingId: id }),
   setLifecycleStatus: (s) => set({ lifecycleStatus: s }),
+  setTransport: (t) => set({ transport: t }),
   setRuntimeSyncError: (s) => set({ runtimeSyncError: s }),
   setModel: (model, pickedByUser = true, runtimeAlreadySynced = false) => {
     // P3.5.29 Phase 6.3 (6/17 鸿波): pickedByUser **默认 true** — 老 caller (chat

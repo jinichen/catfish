@@ -92,21 +92,11 @@ export interface ChatMessage {
   _autoContinue?: { round: number; max: number };
   // P3.5.20.1 (6/17 鸿波): _steered 字段砍 — BL-HERMES013-RED-1B (5/13) 设计
   // 意图 (LLM 看 partial 接力) 未实现, 跟 cancelAndSend 实测同效. 砍整链.
-/** BL-TASK-ASSESS (5/15 鸿波"客户端要评估完成情况"): assistant message stream
-   *  结束后的"嘴炮断言"结果. is_promise_only=true 表示模型说了"已生成/完成/写入"
-   *  但 cum_has_tool_call=false + 文件路径不存在 → UI 渲染 ⚠ 嘴炮 badge +
-   *  "自动催继续 (剩 N 次)" 按钮. 只在 assistant role 上设. */
-  _promise_check?: {
-    is_promise_only: boolean;
-    /** 模型文字里宣称生成的路径 (从 content 里扫出来), 用来给 UI 显示"找不到 X" */
-    promised_paths: string[];
-    /** 用户已经手动/自动点过几次"继续". ≥3 后按钮变灰 + 提示换模型. */
-    nudge_count: number;
-    /** 触发命中的 skill_guard 判断 (gateway 给的元数据), 调试 UI 用 */
-    skill_guard_fired: boolean;
-    /** session 历史里 agent 调过 catfish_run_skill 没 */
-    ever_called_skill: boolean;
-  };
+  // 8/13 砍 _promise_check —— BL-TASK-ASSESS (5/15) 嘴炮 badge 整套。
+  // 判据来自 gateway 的 task_assessment SSE, 而 5/19 切 hermes 后那条事件到不了
+  // Companion (hermes 不转发), badge 从未显示过。判据的正确归属是 hermes ——
+  // 只有它知道一整回合调了几次工具, gateway 只看得见其中一轮。
+  // 详见 runOneRound.ts 里那段说明。
 }
 
 /** 一次会话的运行时状态(目前 store 直接展开到顶层,这个 type 留给 Week 3 持久化) */

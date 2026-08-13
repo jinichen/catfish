@@ -204,6 +204,11 @@ export async function sendMessage(
       // onTransportResolved 回报；Hermes 路径不写，gateway 直连才补写。
       // createFirstTransportHandler 让自动 retry 也只能触发一次判断。
       const onTransportResolved = createFirstTransportHandler((transport) => {
+        // 8/13: 记下实际通道, 给 UI 显示降级提示。
+        // hermes 不可达 / 没配 key 时 chat.ts 会**静默**回落直连网关, 此时没有
+        // agent loop、没有工具、没有记忆注入。员工只会觉得"小鲶今天变笨了",
+        // 界面从来没告诉过他。静默降级比降级本身更糟。
+        useChatStore.getState().setTransport(transport);
         if (
           shouldPersistUserLocally(transport) &&
           sessionIdForStream

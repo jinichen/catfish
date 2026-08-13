@@ -53,6 +53,7 @@ export default function ChatPanel({
   // P3.5.18 Phase 2 (6/17 鸿波): hermes preflight 自动压缩 inline status. plugin P19 桥
   // status_callback → SSE. lib/chat.ts onLifecycle → useChat setLifecycleStatus.
   const lifecycleStatus = useChatStore((s) => s.lifecycleStatus);
+  const transport = useChatStore((s) => s.transport);
   // P3.5.79+ (7/22 鸿波 catch "切会话滚位置错"): 追踪 session 首次渲染, 只 force-scroll 1
   // 次到底. 跟下面 messages 智能滚 effect 分工:
   //   - session 首次渲染 (切进) → 强制到底 (无论用户上一 session 在哪个位置)
@@ -179,7 +180,6 @@ export default function ChatPanel({
               key={m.id}
               msg={m}
               showCaret={isStreaming && m.id === streamingId}
-              onNudge={() => onSend("继续", [])}
               onResend={onResendFromUserMsg}
               onEditAndResend={onEditAndResendUserMsg}
               isStreaming={isStreaming}
@@ -191,6 +191,19 @@ export default function ChatPanel({
           {isStreaming && lifecycleStatus && (
             <div className="chat-panel__lifecycle" aria-live="polite">
               <span>{lifecycleStatus}</span>
+            </div>
+          )}
+          {/* 8/13: 降级提示。hermes 不可达时 chat.ts 会自动回落直连网关 ——
+              能聊天, 但没有 agent loop / 工具 / 记忆。以前这一切是**静默**的,
+              员工只会觉得"小鲶今天变笨了"。降级本身没问题, 不告诉人才有问题。
+              transport 由 sendMessage 的 onTransportResolved 回报, 发过一条
+              消息之后才有值 (null = 还不知道, 不显)。 */}
+          {transport === "gateway" && (
+            <div className="chat-panel__degraded" role="status">
+              <span>
+                简化模式 — 暂时用不了工具和记忆, 只能纯对话。
+                检查小鲶助手服务是否在运行。
+              </span>
             </div>
           )}
         </div>

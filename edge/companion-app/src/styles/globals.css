@@ -4106,6 +4106,21 @@ button {
   font-style: italic;
 }
 
+/* 降级提示 (8/13). 跟 lifecycle 同结构, 但用警示色 —— 它不是进度, 是"你现在
+   拿到的是残缺功能"。刻意不做成可关闭的: 降级持续多久就该显示多久。 */
+.chat-panel__degraded {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 8px 11px;
+  color: #8a5a00;
+  background: #fff8e6;
+  border: 1px solid #f0d9a0;
+  border-radius: 9px;
+  font-size: 11px;
+}
+
 .chat-empty-state {
   display: flex;
   height: 100%;
@@ -4257,5 +4272,15 @@ button {
 
   .chat-workspace__header {
     background: rgba(28, 42, 46, 0.94);
+  }
+
+  /* 8/13: 降级提示的深色配色。浅色那份是 #fff8e6 底 —— 深色主题下会变成一块
+     刺眼的亮斑。
+     (旁边的 .chat-panel__lifecycle 有同样的问题, 它硬编码 #f6f8f8 且这里没有
+      覆盖。那是既有的, 没顺手动 —— 改别人的观感应该单独看一眼效果再决定。) */
+  .chat-panel__degraded {
+    color: #f0c674;
+    background: #33291a;
+    border-color: #5c4a26;
   }
 }
