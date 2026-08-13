@@ -9,7 +9,77 @@ patch 点, 需要立刻修 plugin (不修就 silent break — 跨员工串数据
 """
 from __future__ import annotations
 
+import ast
+import os
+from pathlib import Path
+
 import pytest
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 读 hermes **源码**里的函数签名 (不 import, 不 inspect)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# 为什么不能用 inspect.signature
+# ------------------------------
+# 8/13 实撞: `test_p4_auto_title_session_signature` 在本机必挂。
+#
+# conftest 的 `import run_agent` 会触发 hermes 的 plugin discovery, 后台线程把
+# 本 plugin 装上, P4 于是把 `title_generator.auto_title_session` 换成了
+#
+#     def patched_auto_title_session(session_db, session_id, *args, **kwargs)
+#
+# 这个 wrapper **没有** `functools.wraps`, 所以 `inspect.signature` 看到的是
+# `(session_db, session_id, *args, **kwargs)` —— `main_runtime` 当然不在里面。
+#
+# 关键在于: **这个文件测的是 hermes 的 API 有没有变**, 不是 plugin 装没装。
+# 拿一个已经被自己 patch 过的对象去问"hermes 长什么样", 问的就是错的东西。
+# 所以改成直接读 hermes 的 .py 源码, 用 AST 取形参名 —— 装没装 plugin 都一样。
+#
+# 顺带说明 P3b 为什么一直是绿的: 它的 wrapper 恰好把参数名写全了
+# (`patched_resolve_auto(main_runtime=None, task=None)`), 所以 inspect 碰巧
+# 看到对的答案。那是巧合不是正确性 —— wrapper 哪天改成 `*args, **kwargs`
+# 它就跟 P4 一样挂。两条一起换成静态检查。
+
+
+def _hermes_root() -> Path:
+    return Path(os.environ.get("HERMES_ROOT") or os.path.expanduser("~/.hermes/hermes-agent"))
+
+
+def _source_param_names(module_path: str, func_name: str) -> list[str]:
+    """从 hermes 源码里取某个顶层函数的形参名, 保序。
+
+    Args:
+        module_path: 点号模块路径, 例 "agent.title_generator"
+        func_name: 顶层 def / async def 的名字
+
+    Returns:
+        形参名列表 (含 posonly / 普通 / kwonly, 不含 *args / **kwargs 本身)。
+        函数找不到 → 空列表, 由调用方判定 (下面有专门的测试钉住"找得到")。
+    """
+    path = _hermes_root() / (module_path.replace(".", "/") + ".py")
+    if not path.exists():
+        return []
+    tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+    for node in tree.body:  # 只看顶层 —— 嵌套同名函数不是 patch 目标
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
+            a = node.args
+            return [p.arg for p in (*a.posonlyargs, *a.args, *a.kwonlyargs)]
+    return []
+
+
+def test_source_param_reader_actually_finds_something():
+    """助手函数自身的活性检查。
+
+    没有这条的话, `_source_param_names` 哪天因为路径拼错 / AST 失败恒返 []
+    时, 下面每一条签名测试都会变成"断言 x in []"从而红 —— 那还好。真正危险
+    的是反过来: 如果断言写成"不该出现的参数不在里面", 空列表会让它恒绿。
+    先钉住"这个 reader 是活的", 后面的结论才有意义。
+    """
+    if not _hermes_root().exists():
+        pytest.skip("本机没有 hermes-agent 源码")
+    params = _source_param_names("agent.title_generator", "auto_title_session")
+    assert params, "读不到 auto_title_session 的形参 —— reader 坏了, 下面的结论都不作数"
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -46,22 +116,32 @@ def test_p3a_normalize_main_runtime():
 
 
 def test_p3b_resolve_auto_signature():
-    """P3b: _resolve_auto 接受 main_runtime kwarg, 返回 (client, model) tuple."""
-    import inspect
-    from agent.auxiliary_client import _resolve_auto
-    sig = inspect.signature(_resolve_auto)
-    assert "main_runtime" in sig.parameters
+    """P3b: _resolve_auto 接受 main_runtime kwarg.
+
+    读源码不读运行时对象 —— P3b 自己就 wrap 了这个函数, 见文件头。
+    """
+    params = _source_param_names("agent.auxiliary_client", "_resolve_auto")
+    assert "main_runtime" in params, (
+        f"hermes 的 _resolve_auto 不再收 main_runtime (现有: {params}) —— "
+        "P3b 传的 kwarg 会 TypeError"
+    )
 
 
 def test_p4_auto_title_session_signature():
-    """P4: auto_title_session 第二个位置参数是 session_id, 接 main_runtime kwarg."""
-    import inspect
-    from agent.title_generator import auto_title_session
-    sig = inspect.signature(auto_title_session)
-    params = list(sig.parameters.values())
-    # 至少 2 个位置参数 (session_db, session_id)
-    assert len(params) >= 2
-    assert "main_runtime" in sig.parameters
+    """P4: auto_title_session 前两个位置参数是 (session_db, session_id), 接 main_runtime。
+
+    P4 的 wrapper 按位置解包前两个参数 (`patched(session_db, session_id, *args)`),
+    所以**顺序**也是硬依赖 —— hermes 把这两个换个位置, 传给
+    `session_registry.lookup()` 的就会是 session_db 对象, 查不到员工,
+    header 注入静默失效。所以这里逐位断言, 不只是"在不在里面"。
+    """
+    params = _source_param_names("agent.title_generator", "auto_title_session")
+    assert params[:2] == ["session_db", "session_id"], (
+        f"前两个位置参数变了 (现有: {params[:2]}) —— P4 按位置解包会拿错 session_id"
+    )
+    assert "main_runtime" in params, (
+        f"hermes 的 auto_title_session 不再收 main_runtime (现有: {params})"
+    )
 
 
 def test_p5_apiserver_class():
