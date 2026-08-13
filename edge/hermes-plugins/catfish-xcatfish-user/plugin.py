@@ -221,15 +221,6 @@ _patch_p25_cron_env_isolation = plugin_cron._patch_p25_cron_env_isolation  # noq
 _patch_p26_cron_rest_endpoints = plugin_cron._patch_p26_cron_rest_endpoints  # noqa: F401  (re-export)
 _patch_p27_cron_auto_retry = plugin_cron._patch_p27_cron_auto_retry  # noqa: F401  (re-export)
 
-# P18 压缩 + SSE (8/13 拆出, 237 行)。**没有注入位** —— 这块不依赖任何兄弟模块。
-#
-# 注意路由注册**没有**跟着搬: 它在 _patched_app_init 里 (router 未 freeze 那个
-# 时机, 6/17 踩过 frozen router), 通过 P7 stash 的 adapter 实例调方法, 跟这个
-# 函数住哪个模块无关。
-plugin_compress = _import_sibling("plugin_compress")
-_handle_compress_session_stream = plugin_compress._handle_compress_session_stream  # noqa: F401  (re-export)
-_patch_p18_compress_endpoint = plugin_compress._patch_p18_compress_endpoint  # noqa: F401  (re-export)
-
 # ─────────────────────────────────────────────────────────────────────────
 # Step 1: import-time verify — patch 目标 attribute 必须存在, 否则 fail loud
 # ─────────────────────────────────────────────────────────────────────────
@@ -601,10 +592,6 @@ def _apply_patches() -> None:
     # P3.4.D 6/15 鸿波: bg-review HTTP 400 X-Catfish-User missing — patch AIAgent.__init__
     #   post-init, bg-review review_agent 从 session_registry 拿 parent cf_user 注入.
     _try_patch(_patch_p17_bg_review_inject, "P17: _patch_p17_bg_review_inject 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
-    # P3.5.18 (6/17 鸿波"直接压缩, 弹窗显示压缩进度"): 加 POST /api/sessions/{id}/compress/stream
-    # SSE endpoint, Companion 主动 trigger hermes compress + 进度推 UI.
-    # 抄 hermes Slack /compress + _handle_session_chat_stream SSE 模板.
-    _try_patch(_patch_p18_compress_endpoint, "P18: _patch_p18_compress_endpoint 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P3.5.18 Phase 2 (6/17 鸿波"自动进行压缩, 提示这个不是觉得奇怪"): hermes preflight
     # 自动压缩时**Companion 0 反馈** — chat 卡 30 秒不知道发生啥. 修法:
     # _create_agent post-init 注入 status_callback 桥 tool_progress_callback,
@@ -1644,36 +1631,7 @@ def _patch_p8_p9_cors() -> None:
             except Exception as _e:
                 logger.debug("middleware inject fence check failed: %s", _e)
             _orig_app_init(self, *args, middlewares=tuple(mws_list), **kwargs)
-            # P18 (P3.5.18 6/17 鸿波) — post-init add_post router 未 freeze 前.
-            #
-            # 问题 (6/17 22:16 鸿波本机 catch): 之前 P18 wrap connect post
-            # _orig_connect runner.setup() → app.freeze() 已跑, add_post too late
-            # 撞 'Cannot register a resource into frozen router'. 真fix**: Application
-            # 真创建时 add_post (此刻 router 未 freeze, hermes 自己 connect add_post
-            # 真同时机**). handler runtime call `adapter._handle_compress_session_stream`
-            # via P7 stashed `request.app["_catfish_apiserver_adapter"]` (line 1241).
             if is_hermes_app_local:
-                try:
-                    async def _p18_compress_handler(request):
-                        adapter = request.app.get("_catfish_apiserver_adapter")
-                        if adapter is None:
-                            return _aw.json_response(
-                                {"error": "P18 adapter not ready (P7 stash missing)"},
-                                status=503,
-                            )
-                        return await adapter._handle_compress_session_stream(request)
-                    self.router.add_post(
-                        "/api/sessions/{session_id}/compress/stream",
-                        _p18_compress_handler,
-                    )
-                    logger.info(
-                        "P18 route POST /api/sessions/{id}/compress/stream registered "
-                        "(via Application.__init__) ✓"
-                    )
-                except Exception as e:  # noqa: BLE001
-                    logger.warning(
-                        "P18 add_post 失败 (via Application.__init__): %s", e,
-                    )
                 # ── P26 (P3.5.105 6/25 鸿波): cron RESTful endpoints ──
                 #
                 # 跟 P18 同时机注册 (router 未 freeze), handler 走 P7 stashed adapter.
@@ -2428,39 +2386,6 @@ def _patch_p15_2_chat_approval_route() -> None:
 
 # module-level reference for _patched_app_init in P7 path
 _chat_approval_middleware = None  # noqa: PLW0603
-
-
-# ── P18 (P3.5.18 6/17 鸿波: 主动压缩 + SSE 进度弹窗) ────────────────────
-#
-# # 真因背景 (鸿波 6/17 verbatim)
-#
-# > "为什么还是提示, 直接压缩, 压缩过程可以弹窗显示压缩进度"
-#
-# P3.5.17.c banner 信息流 (下次发消息时 hermes 自动压缩), 鸿波要的是
-# Companion 检测 80%+ ctx 时**主动 trigger hermes 压缩** + **弹窗显进度**
-# (类似 mac 系统更新).
-#
-# # 抄什么
-#
-# hermes 全 工具 现成:
-#   - compress_context(agent, messages, system_message, *, approx_tokens, focus_topic, force)
-#     → ~/.hermes/hermes-agent/agent/conversation_compression.py:271
-#   - SessionDB.{get_session, get_messages, replace_messages}
-#     → ~/.hermes/hermes-agent/hermes_state.py:1358/2112/2026
-#   - summarize_manual_compression(before_messages, after_messages, before_tokens, after_tokens)
-#     → ~/.hermes/hermes-agent/agent/manual_compression_feedback.py:8
-#   - estimate_request_tokens_rough(messages, *, system_prompt, tools)
-#     → ~/.hermes/hermes-agent/agent/model_metadata.py:1887
-#   - AIAgent(model=, ephemeral_system_prompt=, session_id=, status_callback=, session_db=)
-#     → ~/.hermes/hermes-agent/run_agent.py:336 (init)
-#     注意: model= (不是 model_name=), ephemeral_system_prompt= (不是
-#     system_prompt=) — design doc bug, 6/17 audit catch.
-#   - status_callback(kind: str, message: str)
-#     → ~/.hermes/hermes-agent/run_agent.py:761 (_emit_status / _emit_warning)
-#     kind "lifecycle" / "warn".
-#   - SSE 模板 _handle_session_chat_stream
-#     → ~/.hermes/hermes-agent/gateway/platforms/api_server.py:1679
-
 
 
 # ── P26 (P3.5.105, 6/25 鸿波 catch "定时任务跑没跑结果如何都看不到") ─

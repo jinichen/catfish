@@ -62,7 +62,7 @@ POST {gatewayUrl}/v1/chat/completions {
 audit `~/.hermes/hermes-agent/` 得:
 
 - hermes 主 agent loop 在 `agent/conversation_loop.py` 跑, 由 CLI (`hermes chat`) / gateway platforms (telegram/slack/...) 触发.
-- hermes API server (`APIServerAdapter` 在 hermes 内, catfish-xcatfish-user/plugin.py 有 monkey-patch precedent) 暴露 `/v1/chat/completions` + `/api/sessions/*` + (P18 加的) `/api/sessions/{id}/compress/stream`. **未暴露** "运行 agent loop 直到 final answer" 这种 endpoint.
+- hermes API server (`APIServerAdapter` 在 hermes 内, catfish-xcatfish-user/plugin.py 有 monkey-patch precedent) 暴露 `/v1/chat/completions` + `/api/sessions/*` (注: 曾有 P18 加的 `/api/sessions/{id}/compress/stream`, **8/13 已删** —— 网关自动压缩覆盖了它, 见 docs/P3.5.18-design.md). **未暴露** "运行 agent loop 直到 final answer" 这种 endpoint.
 - `autonomous-ai-agents/codex/SKILL.md` 写明用法: `terminal(command="codex exec '...'", pty=true, workdir=...)`. 路径是 agent 自主决策 + tool calling.
 - `autonomous-ai-agents/kanban-codex-lane/SKILL.md` 是 **kanban 工作流专用 convention** (ownership / safety / worktree 隔离), 不是技术 bridge. 主 loop 调 codex 不强制走 kanban-lane convention.
 

@@ -251,30 +251,22 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 > 8/13 拆 plugin.py 时查出来的。共同点: **代码在跑、日志在打、但没有任何东西
 > 会触发它**。这类比纯粹的死代码更麻烦 —— 它看起来是活的。
 
-| ID | 项 | 已有 | 缺 | 状态 |
-|---|---|---|---|---|
-| BL-P18-PHASE2 | 主动压缩 + 弹窗进度 (P3.5.18) | plugin 端 237 行, endpoint `POST /api/sessions/{id}/compress/stream` 每次启动都注册 ✓ | **Companion 端 ~300 行 TS/React** | ⬜ 待定 |
+| ID | 项 | 结局 |
+|---|---|---|
+| ~~BL-P18-PHASE2~~ | 主动压缩 + 弹窗进度 (P3.5.18) | ✅ **8/13 已删代码并作废** |
 
-**BL-P18-PHASE2 的实情** (查证, 非推测):
+**BL-P18-PHASE2 为什么删** (查证, 非推测):
 
-- 全仓搜 `compress/stream`, **TS / Rust 里零引用**
-- hermes 日志: **25 次 "route registered ✓", 0 次真调用** (aiohttp.access)
-- `docs/P3.5.18-design.md` 写着 `Phase 1: plugin 端 ~250 行` / `Phase 2: Companion
-  端 ~300 行`, Phase 1 做完了, Phase 2 一行没写
-- 那份 design 文档顶上仍挂着「✅ audit 完成, 待 fresh session 实施」, 最后一次
-  改是 **6/17** —— 停在"待实施"两个月, 而 BACKLOG / FEATURE-TRACKS / STRATEGY
-  **一处都没记**
+- 网关 `conversation_compressor` 自动压, 阈值 `min(context×0.7, 12万)` ——
+  **比 P18 想要的 80% 触发还低**, 员工走不到 80% 网关就压完了
+- 实测 8/13 12:31 连续三轮压缩, 省 41~43%; 微信那条路走同一个
+  `POST /v1/chat/completions`, 同样覆盖
+- hermes 自己的 ContextCompressor 在 agent.log 里**一次都没压过**
+- endpoint 注册 25 次, **真调用 0 次**, TS / Rust 里零引用
+- 它的前提在写下设计文档的**同一天**被抽掉了: P3.5.17.c.2 砍掉 ContextCounter,
+  理由是「cumulative cost ≠ ctx 占用, 数学错」+「不需 Companion 算」
 
-鸿波 6/17 原话: 「为什么还是提示, 直接压缩, 压缩过程可以弹窗显示压缩进度」。
-现在的状态是 P3.5.17.c 的 banner (信息流, 下次发消息时自动压), 不是主动触发。
-
-三个选项:
-1. **做 Phase 2** —— 0.5 天, 后端现成
-2. **就这么记着** —— 注册一个没人调的路由零成本, 但至少现在有地方能查到它
-3. 删 —— 会扔掉已写好的 237 行, 且 `ADVISOR-AGENT-LOOP-DESIGN.md:65` 还引用着
-   这个 endpoint
-
-登记本身不代表要做。**登记是为了让"存在但没人知道它存在"这个状态结束。**
+详见 `docs/P3.5.18-design.md` 顶部的作废说明。
 
 ---
 
