@@ -256,6 +256,8 @@ _translate_hermes_zh = plugin_weixin_zh._translate_hermes_zh  # noqa: F401  (re-
 _patch_p28_weixin_zh = plugin_weixin_zh._patch_p28_weixin_zh  # noqa: F401  (re-export · 见 plugin_weixin_zh.py)
 plugin_memory_gate = _import_sibling("plugin_memory_gate")
 _patch_p42_memory_skip_background = plugin_memory_gate._patch_p42_memory_skip_background  # noqa: F401  (re-export · 见 plugin_memory_gate.py)
+plugin_core_tools = _import_sibling("plugin_core_tools")
+_patch_p43_promote_catfish_core_tools = plugin_core_tools._patch_p43_promote_catfish_core_tools  # noqa: F401  (re-export · 见 plugin_core_tools.py)
 plugin_wechat_qr = _import_sibling("plugin_wechat_qr")
 _WECHAT_QR_SESSION_TTL = plugin_wechat_qr._WECHAT_QR_SESSION_TTL  # noqa: F401  (re-export · 见 plugin_wechat_qr.py)
 _wechat_qr_sweep_expired = plugin_wechat_qr._wechat_qr_sweep_expired  # noqa: F401  (re-export · 见 plugin_wechat_qr.py)
@@ -276,6 +278,9 @@ _PATCH_TARGETS = [
     ("agent.title_generator", "auto_title_session", "func"),
     # P42 (8/8): 后台调用不进记忆 — 见 plugin_memory_gate.py
     ("agent.memory_manager", "MemoryManager", "attr"),
+    # P43 (8/13): 提升 catfish 工具为核心 — 见 plugin_core_tools.py.
+    # hermes 哪天把 _HERMES_CORE_TOOLS 改名/换结构, 这里 fail-loud, 不静默失效。
+    ("toolsets", "_HERMES_CORE_TOOLS", "attr"),
     ("gateway.platforms.api_server", "APIServerAdapter", "attr"),
     # P15.1 (6/22): hermes v0.17 _is_gateway_approval_context() 检查
     # HERMES_SESSION_PLATFORM contextvar. P15 patch 必须调 set_session_vars()
@@ -608,6 +613,18 @@ def _apply_patches() -> None:
         )
     # P22 reverted in P3.5.78 (6/22 鸿波): bookkeep 重构进 catfish-memory.expense,
     # 不再需要 pin _HERMES_CORE_TOOLS — memory tool 本来就 core, kind=expense 自然命中.
+
+    # P43 (8/13 鸿波"为什么一直不会去查知识库"): catfish 工具全走 MCP 进 hermes,
+    # 被 tool_search 的 progressive disclosure 整族 defer 掉 —— shape dump 实测
+    # 下发给模型的 32 个工具里 catfish 一个都没有。把几个高频的提升为核心。
+    # 详见 plugin_core_tools.py 模块 docstring。
+    try:
+        _patch_p43_promote_catfish_core_tools()
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "P43: _patch_p43_promote_catfish_core_tools 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
+            e, exc_info=True,
+        )
 
     # P23 (P3.5.79 6/23 鸿波): inbound message 路径 (微信/Discord/Slack/Telegram)
     # picker 联动 — 修 catfish picker 联动 sprint 漏 cover 的最后一个 platform.

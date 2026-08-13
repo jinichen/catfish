@@ -18,6 +18,21 @@ from unittest.mock import patch
 
 import pytest
 
+# 8/13: 原来这个文件把 MCP 包装前缀写死成 "mcp_catfish_tools_" (单下划线),
+# 而 hermes 真正的注册名是 mcp__<server>__<tool> (双下划线,
+# tools/mcp_tool.py: MCP_TOOL_NAME_PREFIX = "mcp__")。
+#
+# 后果是这几条测试从 5/25 起一直绿着, 而它们要守的那个功能
+# (always-on / hidden 认 MCP 包装名) 在生产里一次都没生效过 —— 测试固化了 bug。
+#
+# 改成从常量派生: 上游哪天再动命名, 测试跟着走, 不会再漂。
+from catfish_gateway.tools_sanitizer_constants import MCP_CATFISH_PREFIX as _P
+
+def _mcp(bare: str) -> str:
+    """裸名 → MCP 包装名。别在这个文件里再手写前缀。"""
+    return f"{_P}{bare}"
+
+
 from catfish_gateway.tools_sanitizer import (
     _ALWAYS_ON_TOOLS,
     _DEFAULT_MAX_TOOLS,
@@ -245,19 +260,19 @@ def test_always_on_preserved_relative_order_among_themselves(monkeypatch):
 
 
 def test_mcp_wrapped_always_on_promoted_too(monkeypatch):
-    """5/25 BL-MCP-PREFIX-FIX: mcp_catfish_tools_web_search 也算 always-on."""
+    """5/25 BL-MCP-PREFIX-FIX: MCP 包装名 (mcp__catfish_tools__web_search) 也算 always-on."""
     monkeypatch.delenv("CATFISH_MAX_TOOLS", raising=False)
     tools = [
         _tool("zz_random_1"),
-        _tool("mcp_catfish_tools_web_search"),   # MCP 包装版
+        _tool(_mcp("web_search")),   # MCP 包装版
         _tool("zz_random_2"),
-        _tool("mcp_catfish_tools_catfish_today_summary"),  # 同样
+        _tool(_mcp("catfish_today_summary")),  # 同样
     ]
     kept, _ = _cap_tools_by_priority(tools)
     names = [t["function"]["name"] for t in kept]
     # 两个 MCP 包装的 always-on 都被 promote 到前面
-    assert names[0] == "mcp_catfish_tools_web_search"
-    assert names[1] == "mcp_catfish_tools_catfish_today_summary"
+    assert names[0] == _mcp("web_search")
+    assert names[1] == _mcp("catfish_today_summary")
     assert names[2:] == ["zz_random_1", "zz_random_2"]
 
 
@@ -265,18 +280,18 @@ def test_mcp_wrapped_always_on_survives_cap(monkeypatch):
     """5/25 BL-MCP-PREFIX-FIX: 超 cap 时, MCP 包装的 always-on 也不被砍."""
     monkeypatch.setenv("CATFISH_MAX_TOOLS", "11")
     tools = [
-        _tool("mcp_catfish_tools_catfish_today_summary"),  # MCP 包装 always-on
-        _tool("mcp_catfish_tools_web_search"),             # 同上
+        _tool(_mcp("catfish_today_summary")),  # MCP 包装 always-on
+        _tool(_mcp("web_search")),             # 同上
     ] + [_tool(f"low_{i}") for i in range(20)]   # 20 low priority
 
     kept, dropped = _cap_tools_by_priority(tools)
     kept_names = {t["function"]["name"] for t in kept}
 
     # 2 个 MCP 包装 always-on 保留 (BL-MCP-PREFIX-FIX 前会被当普通工具砍)
-    assert "mcp_catfish_tools_catfish_today_summary" in kept_names
-    assert "mcp_catfish_tools_web_search" in kept_names
-    assert "mcp_catfish_tools_catfish_today_summary" not in dropped
-    assert "mcp_catfish_tools_web_search" not in dropped
+    assert _mcp("catfish_today_summary") in kept_names
+    assert _mcp("web_search") in kept_names
+    assert _mcp("catfish_today_summary") not in dropped
+    assert _mcp("web_search") not in dropped
 
 
 def test_is_always_on_helper_directly():
@@ -287,16 +302,16 @@ def test_is_always_on_helper_directly():
     assert is_always_on("web_search") is True
     assert is_always_on("execute_code") is True
     # MCP 包装名 strip 后匹配
-    assert is_always_on("mcp_catfish_tools_web_search") is True
-    assert is_always_on("mcp_catfish_tools_catfish_today_summary") is True
+    assert is_always_on(_mcp("web_search")) is True
+    assert is_always_on(_mcp("catfish_today_summary")) is True
     # 不在 always-on
     assert is_always_on("random_tool") is False
-    assert is_always_on("mcp_catfish_tools_random_tool") is False
+    assert is_always_on(_mcp("random_tool")) is False
     # 边界
     assert is_always_on("") is False
     assert is_always_on(None) is False  # type: ignore[arg-type]
-    # 别的 MCP 前缀不识别 (只认 mcp_catfish_tools_)
-    assert is_always_on("mcp_someother_server_web_search") is False
+    # 别的 MCP 前缀不识别 (只认 MCP_CATFISH_PREFIX)
+    assert is_always_on("mcp__someother_server__web_search") is False
 
 
 # ── P3.5.70 (6/22 鸿波 catch "工作台拒调 execute_code") ──
@@ -327,13 +342,13 @@ def test_is_hidden_from_llm_helper():
     assert is_hidden_from_llm("terminal") is True
     assert is_hidden_from_llm("read_terminal") is True
     assert is_hidden_from_llm("catfish_remember") is True
-    # MCP 包装名 strip 后匹配 (老 bug: 没这层就 mcp_catfish_tools_terminal 漏砍)
-    assert is_hidden_from_llm("mcp_catfish_tools_terminal") is True
-    assert is_hidden_from_llm("mcp_catfish_tools_read_terminal") is True
-    assert is_hidden_from_llm("mcp_catfish_tools_catfish_remember") is True
+    # MCP 包装名 strip 后匹配 (老 bug: 没这层就 MCP 包装版 terminal 漏砍)
+    assert is_hidden_from_llm(_mcp("terminal")) is True
+    assert is_hidden_from_llm(_mcp("read_terminal")) is True
+    assert is_hidden_from_llm(_mcp("catfish_remember")) is True
     # 不在 hidden
     assert is_hidden_from_llm("execute_code") is False
-    assert is_hidden_from_llm("mcp_catfish_tools_execute_code") is False
+    assert is_hidden_from_llm(_mcp("execute_code")) is False
     # 边界
     assert is_hidden_from_llm("") is False
     assert is_hidden_from_llm(None) is False  # type: ignore[arg-type]
@@ -346,9 +361,9 @@ def test_sanitize_drops_terminal(monkeypatch):
     body = {
         "tools": [
             _tool("terminal"),
-            _tool("mcp_catfish_tools_terminal"),
+            _tool(_mcp("terminal")),
             _tool("read_terminal"),
-            _tool("mcp_catfish_tools_read_terminal"),
+            _tool(_mcp("read_terminal")),
             _tool("execute_code"),  # 控制组: 不该砍
             _tool("web_search"),    # 控制组: 不该砍
         ],
@@ -358,8 +373,8 @@ def test_sanitize_drops_terminal(monkeypatch):
     # terminal / read_terminal 4 个变种全砍
     assert "terminal" not in names
     assert "read_terminal" not in names
-    assert "mcp_catfish_tools_terminal" not in names
-    assert "mcp_catfish_tools_read_terminal" not in names
+    assert _mcp("terminal") not in names
+    assert _mcp("read_terminal") not in names
     # 控制组保留
     assert "execute_code" in names
     assert "web_search" in names
@@ -371,14 +386,14 @@ def test_sanitize_keeps_terminal_when_env_override(monkeypatch):
     body = {
         "tools": [
             _tool("terminal"),
-            _tool("mcp_catfish_tools_terminal"),
+            _tool(_mcp("terminal")),
         ],
     }
     result = sanitize_tools(body)
     names = [t["function"]["name"] for t in result["tools"]]
     # env override 后两个 variants 都保留
     assert "terminal" in names
-    assert "mcp_catfish_tools_terminal" in names
+    assert _mcp("terminal") in names
 
 
 # ── P3.5.72 (6/22 鸿波 catch "工作台 LLM 看到 execute_code 还是拒绝") ──
@@ -410,13 +425,13 @@ def test_sanitize_rewrites_execute_code_description():
 
 
 def test_sanitize_rewrites_execute_code_mcp_prefix():
-    """P3.5.72: mcp_catfish_tools_execute_code 同名前缀版本也被改写."""
+    """P3.5.72: MCP 包装版 execute_code 同名前缀版本也被改写."""
     body = {
         "tools": [
             {
                 "type": "function",
                 "function": {
-                    "name": "mcp_catfish_tools_execute_code",
+                    "name": _mcp("execute_code"),
                     "description": "hermes 原",
                     "parameters": {"type": "object", "properties": {}},
                 },

@@ -25,7 +25,11 @@ CATFISH_BROWSER_PREFIX = "catfish_browser_"
 # 5/22 鸿波: H20 4 卡上 advisor prompt 40K, KV cache 打满单实例并发只 3. 砍 tool 数
 # = 砍 prompt schema = 减 KV. always-on (~20) + profile (~10) + buffer (5) = 35.
 # env CATFISH_MAX_TOOLS 调.
-DEFAULT_MAX_TOOLS = 35
+# 8/13: 35 → 40。tool_search 上线后模型实收只有 32 个 (shape dump 实测),
+# 这个 cap 其实一直没触发过 —— 它是为 tool_search 之前那个「165 个全涌进来」
+# 的世界定的。P43 把 4 个 catfish 工具提升为核心后是 36, 留 4 个余量。
+# 上沿仍远离实测红线 (Qwen 122B 50+ 撞空 400), KV 代价约 +2K token。
+DEFAULT_MAX_TOOLS = 40
 ENV_MAX_TOOLS = "CATFISH_MAX_TOOLS"
 
 
@@ -119,6 +123,13 @@ ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
     # 防 cap 误砍.
     "catfish_today_summary",   # 今日活动 (TODO / 邮件 / 日程 / chat 汇总)
     "catfish_email_search",    # 邮件查询 (chat 常用)
+    # 8/13 鸿波撞「你去知识库里面核对福富资质」→ 小鲶答"无法连接到知识库检索工具"。
+    # 跟上面 5/23 那两条同一个病: 高频工具没进 always-on, 被 cap 误砍。
+    # 配套 P43 (plugin_core_tools.py) 把它们提升为 hermes 核心, 两处都要改 ——
+    # 只改一处的话: 只改这里 → 仍被 tool_search defer, 根本到不了 gateway;
+    #               只改 P43 → 到了 gateway 但不在 always-on, 名额紧时被砍。
+    "catfish_wiki_search",     # 知识库检索
+    "catfish_search_docs",     # 本地文档检索
     # BL-LLM-PLAN-WITHOUT-ACT (5/19): 内网 qwen 见到周报 / PPT 等关键词必须能立即
     # 找到对应 skill 并触发, 不能因 BL-TOOL-CAP 被砍. skill discovery + invocation
     # 这一族永不 drop. (catfish_run_skill 已在表里, 这里补 hermes 0.14 的 skill_*.)
@@ -160,7 +171,22 @@ ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
 # `mcp_catfish_tools_` 前缀 暴露给 hermes. always-on 白名单只列裸名 — 进 sanitizer
 # 后 `mcp_catfish_tools_catfish_today_summary` 这种 MCP 包装版本就匹配不上, 被
 # 当成普通 tool 处理 → 容易被 cap 砍 / 不前置. 用这个前缀 strip 一下再比.
-MCP_CATFISH_PREFIX = "mcp_catfish_tools_"
+# 8/13: 原值 "mcp_catfish_tools_" (单下划线) —— **从写下来就没匹配过**。
+#
+# hermes 给 MCP 工具的注册名是 `mcp__<server>__<tool>` (tools/mcp_tool.py
+# `MCP_TOOL_NAME_PREFIX = "mcp__"`, 双下划线), server 名 `catfish-tools` 经
+# sanitize_mcp_name_component 变 `catfish_tools`。真名长这样:
+#
+#     mcp__catfish_tools__catfish_wiki_search
+#
+# 单下划线版本连第一段 `mcp_` vs `mcp__` 都对不上, is_always_on() 对所有 MCP
+# 包装名恒返 False。而这个常量 5/25 加进来**就是为了修**「always-on 白名单只列
+# 裸名 → MCP 包装名匹配不上 → 容易被 cap 砍」—— 修 bug 的代码自己没生效。
+#
+# hermes 侧那段注释说明了原因: 它某版把单下划线改成双, 为对齐 Claude Code /
+# Codex 的约定, "removing the single->double rewrite that path previously had
+# to perform"。上游改了, 这边没跟。
+MCP_CATFISH_PREFIX = "mcp__catfish_tools__"
 
 
 def is_always_on(name: str) -> bool:
