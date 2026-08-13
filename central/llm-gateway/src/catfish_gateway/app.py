@@ -1616,6 +1616,67 @@ def _model_info_payload(m) -> dict[str, Any]:
     }
 
 
+#: hermes config.yaml `model.default` 的静态占位符 —— **不是**真 model 名。
+#:
+#: 微信那条路员工没有 picker, hermes 恒发这个名字, gateway 收到后从 roles.yaml
+#: 的 chat_default 动态解析成真 model。edge 侧的对应常量在
+#: `edge/hermes-plugins/catfish-xcatfish-user/model_authority.py:AUTO_SENTINEL`
+#: —— 两边字面量必须一致, test_auto_sentinel.py 里有跨仓一致性测试钉住。
+AUTO_MODEL_SENTINEL = "catfish-auto"
+
+
+def _resolve_auto_sentinel(model_name: str) -> str:
+    """`catfish-auto` → roles.yaml chat_default 的真 model 名; 其它名原样返回。
+
+    # 为什么要抽成函数
+
+    8/13 实撞: 这段逻辑原来只写在 `chat_completions` 里 (BL-CATFISH-AUTO-ROUTE),
+    于是同一个名字在两个端点上行为不一致 ——
+
+        POST /v1/chat/completions  model=catfish-auto  → 200 (解析成真 model)
+        GET  /v1/models/catfish-auto                   → 404
+
+    后果不是"少个端点"这么轻。hermes 的 `agent/model_metadata.py`
+    `_query_local_context_length_uncached` 就是靠 `GET /v1/models/{model}` 拿
+    context_length 的 (先探 Ollama `/api/show`, 404 后落到这里)。拿不到就走
+    `DEFAULT_FALLBACK_CONTEXT = 256_000`, **而且 fallback 结果被有意不写缓存**
+    (model_metadata.py:366 的注释), 所以每次 `_create_agent` 都重探一遍。
+
+    实测佐证: `~/.hermes/context_length_cache.yaml` 里每个真 model 名都有条目,  # noqa: BOUNDARY
+    唯独 `catfish-auto` 没有。(这里只是引用边缘端文件名作为证据, 中央端不读它 ——
+    BL-CENTRAL-EDGE-BOUNDARY 的 noqa 就是给这种文档引用留的。)
+
+    今天 chat_default = catfish-public-deepseek-flash (1M 窗口), 256K 是**低估**,
+    只浪费不出错。但这是运气 —— IT 哪天把 chat_default 换成 catfish-private-vision
+    (128K), hermes 就会按 256K 往里塞, 超一倍。而 private 是内网模型, 它报错后
+    走 fallback chain 就是内网 prompt 出公网。所以这里不能靠"当前配置刚好安全"。
+
+    # 边界
+
+    不做大小写以外的归一化 —— sentinel 是配置文件里写死的字面量, 容忍 typo
+    只会让"为什么我的 model 名被换掉了"更难查。
+
+    Raises:
+        HTTPException: 500, sentinel 收到了但 roles.yaml 没配 chat_default。
+            这是部署错误不是请求错误, 所以是 5xx 不是 4xx。
+    """
+    if model_name.lower() != AUTO_MODEL_SENTINEL:
+        return model_name
+
+    from . import roles as roles_module  # noqa: PLC0415  (延迟 import, 防启动期循环)
+
+    resolved = roles_module.resolve_or_none("chat_default")
+    if not resolved:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"{AUTO_MODEL_SENTINEL}: roles.yaml chat_default 未配 · "
+                "IT 请填 roles.yaml 里 chat_default: <真 model 名>"
+            ),
+        )
+    return resolved
+
+
 @app.get("/v1/roles")
 async def list_roles() -> dict[str, Any]:
     """P3.5.29 (6/17 鸿波) — model role 抽象 机器可读 mapping.
@@ -1660,9 +1721,17 @@ async def get_model(
     model_id: str,
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """OpenAI-compatible single-model metadata endpoint."""
+    """OpenAI-compatible single-model metadata endpoint.
+
+    `catfish-auto` 在这里跟在 POST /v1/chat/completions 一样被解析成真 model ——
+    见 `_resolve_auto_sentinel` 的长注释 (hermes 靠这个端点拿 context_length)。
+
+    返回体里的 `id` 用**解析后**的真名, 不是请求里的 sentinel: 报 sentinel 等于
+    对客户端撒谎, 而 hermes 的 context 缓存本来就按请求名 (`model@base_url`)
+    做 key, 不看返回体的 id, 所以说实话没有代价。
+    """
     config: Config = get_config()
-    m = config.get_model(model_id)
+    m = config.get_model(_resolve_auto_sentinel(model_id))
     if not m or not user.can_access(m) or not m.upstream.is_available:
         raise HTTPException(status_code=404, detail=f"model not found: {model_id}")
     return _model_info_payload(m)
@@ -2895,20 +2964,15 @@ async def chat_completions(
     #
     # 注: Companion picker 只影响 Companion chat.ts (传真 model 名). WeChat 通过
     # hermes 用 auto · gateway 用员工 role chat_default. 两路 clean 分.
-    if model_name.lower() == "catfish-auto":
-        from . import roles as roles_module
-        resolved = roles_module.resolve_or_none("chat_default")
-        if not resolved:
-            raise HTTPException(
-                status_code=500,
-                detail=(
-                    "catfish-auto: roles.yaml chat_default 未配 · "
-                    "IT 请填 roles.yaml 里 chat_default: <真 model 名>"
-                ),
-            )
+    #
+    # 8/13: 解析本身挪进 `_resolve_auto_sentinel`, 因为 GET /v1/models/{id} 也要
+    # 认这个名字 (hermes 从那里拿 context_length)。原来只有这一处认, 两个端点
+    # 对同一个名字给出不同答案 —— 见那个函数的注释。
+    resolved = _resolve_auto_sentinel(model_name)
+    if resolved != model_name:
         logger.info(
-            "BL-CATFISH-AUTO-ROUTE: model=catfish-auto user=%s role=%s → resolved=%s",
-            user.sub, getattr(user, "role", "?"), resolved,
+            "BL-CATFISH-AUTO-ROUTE: model=%s user=%s role=%s → resolved=%s",
+            model_name, user.sub, getattr(user, "role", "?"), resolved,
         )
         model_name = resolved
         # 让下游 metrics/audit/logs 拿到真 model 名 · 不是 auto
