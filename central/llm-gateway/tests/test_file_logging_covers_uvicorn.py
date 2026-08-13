@@ -174,6 +174,104 @@ def test_handler_attach_is_idempotent():
     )
 
 
+def test_dedup_branch_does_not_return_empty_handed():
+    """★★★ 第三个坑, 也是这条 bug 拖到第三版才修好的原因。
+
+    `_setup_file_logging` 里防双写的 guard (6/30 P3.5.149 加的) 原来是:
+
+        for existing in root.handlers:
+            if 同款 RotatingFileHandler:
+                return          ← 空手
+
+    而它上面那段注释自己写着: 模块会被 import 两次, 是**两个不同的 module
+    对象**, 各有一套模块级变量。uvicorn 真正跑的 app / lifespan 属于第二个:
+
+        __main__             走完整路径, _FILE_HANDLER = h      ✓
+        catfish_gateway.app  走到 guard 就 return, 还是 None     ✗  ← uvicorn 用这个
+
+    于是 lifespan 里的 `_attach_file_handler_to_uvicorn()` 一进门就撞上
+    `if _FILE_HANDLER is None: return`, 什么都没干。第二版之所以"改了还是 0 条"
+    就是这个 —— 修的是对的地方, 但那句代码根本没机会执行。
+
+    这条钉的是: guard 命中时必须**把已存在的 handler 认下来并挂 uvicorn**,
+    不能空手走人。
+    """
+    fn = next(
+        n for n in ast.parse(_SRC).body
+        if isinstance(n, ast.FunctionDef) and n.name == "_setup_file_logging"
+    )
+    # 找那个 `if isinstance(existing, RotatingFileHandler) ...` 分支
+    branches = [
+        n for n in ast.walk(fn)
+        if isinstance(n, ast.If) and "RotatingFileHandler" in (ast.get_source_segment(_SRC, n.test) or "")
+    ]
+    assert branches, "找不到防双写 guard 分支 —— 这个测试的定位方式该更新了"
+    body = "\n".join(ast.get_source_segment(_SRC, s) or "" for s in branches[0].body)
+    assert "_FILE_HANDLER" in body, (
+        "防双写分支没有记下已存在的 handler —— 第二个 module 对象的 _FILE_HANDLER "
+        "会一直是 None, lifespan 里那次补挂就成了空转 (访问日志仍不落盘)"
+    )
+    assert "_attach_file_handler_to_uvicorn" in body, (
+        "防双写分支没有挂 uvicorn —— 同上"
+    )
+
+
+def test_second_module_object_still_attaches(tmp_path, monkeypatch):
+    """★★★ 上一条的行为版: 模拟"第二个 module 对象"的真实状态。
+
+    第二个 module 对象进 `_setup_file_logging` 时的状态是:
+      · root logger **已经**有那个 file handler (第一个对象装的, 全进程共享)
+      · 自己的 `_FILE_HANDLER` **还是 None** (模块级变量不共享)
+      · uvicorn 的 logger 刚被 dictConfig 抹干净
+
+    跑完之后必须: _FILE_HANDLER 有值, 且 uvicorn.access 上有指向该文件的 handler。
+    """
+    import importlib
+    app_module = importlib.import_module("catfish_gateway.app")
+
+    log_file = tmp_path / "logs" / "gw.log"
+    monkeypatch.setenv("CATFISH_LOG_FILE", str(log_file))
+
+    targets = [logging.getLogger(n) for n in ("uvicorn", "uvicorn.access", "uvicorn.error")]
+    before = {id(h) for lg in targets for h in lg.handlers}
+    root = logging.getLogger()
+    root_before = {id(h) for h in root.handlers}
+    try:
+        app_module._setup_file_logging()          # 第一个 module 对象
+        n_root = len(root.handlers)
+
+        # ── 模拟切到第二个 module 对象 ──
+        monkeypatch.setattr(app_module, "_FILE_HANDLER", None)
+        for lg in targets:                        # dictConfig 抹掉 uvicorn 那边
+            for h in list(lg.handlers):
+                if id(h) not in before:
+                    lg.removeHandler(h)
+
+        app_module._setup_file_logging()
+
+        assert app_module._FILE_HANDLER is not None, (
+            "第二个 module 对象没认下已存在的 handler —— lifespan 那次补挂会空转"
+        )
+        assert len(root.handlers) == n_root, (
+            f"root handler 从 {n_root} 变成 {len(root.handlers)} —— 防双写失效了, 会每条写两遍"
+        )
+        hit = [
+            h for lg in targets for h in lg.handlers
+            if isinstance(h, RotatingFileHandler)
+            and os.path.abspath(h.baseFilename) == os.path.abspath(str(log_file))
+        ]
+        assert hit, "第二次调用后 uvicorn 的 logger 上仍然没有 file handler"
+    finally:
+        for lg in targets:
+            for h in list(lg.handlers):
+                if id(h) not in before:
+                    lg.removeHandler(h)
+        for h in list(root.handlers):
+            if id(h) not in root_before:
+                root.removeHandler(h)
+                h.close()
+
+
 def test_smoke_attach_and_detach(tmp_path, monkeypatch):
     """行为层: 真挂一次, 确认 uvicorn.access 上出现了指向该文件的 handler。
 

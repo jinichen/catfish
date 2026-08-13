@@ -177,6 +177,7 @@ def _attach_file_handler_to_uvicorn() -> None:
 # 用 RotatingFileHandler 防无限增长 — 单文件 10MB, 保留 5 个轮替.
 # CATFISH_LOG_FILE env 可换路径; CATFISH_LOG_FILE=- 表示禁用文件日志 (CI 用).
 def _setup_file_logging() -> None:
+    global _FILE_HANDLER
     log_file = os.environ.get("CATFISH_LOG_FILE")
     if log_file == "-":
         return  # 显式禁用
@@ -197,7 +198,26 @@ def _setup_file_logging() -> None:
         for existing in root_logger.handlers:
             if isinstance(existing, RotatingFileHandler) and \
                     os.path.abspath(existing.baseFilename) == os.path.abspath(log_file):
-                # 已经装过, 跳过 — 防双 import 累加
+                # 已经装过 → **不重复 addHandler**, 但绝不能空手 return。
+                #
+                # ⚠ 8/13: 空手 return 正是访问日志第二次没修好的原因。
+                #
+                # 上面那段注释已经把机制写清楚了 —— 模块被 import 两次, 是**两个
+                # 不同的 module 对象**, 各有一套模块级变量。而 uvicorn 真正拿去
+                # 跑的 `app` / `lifespan` 属于**第二个**对象:
+                #
+                #     __main__          _setup() 走完整路径, _FILE_HANDLER = h  ✓
+                #     catfish_gateway.app   走到这里 return, _FILE_HANDLER 还是 None ✗
+                #                           ↑ uvicorn 用的是这个
+                #
+                # 于是 lifespan 里那句 _attach_file_handler_to_uvicorn() 一进门就
+                # 撞上 `if _FILE_HANDLER is None: return`, **什么都没干**,
+                # gateway.log 里 HTTP/1.1 依旧 0 条。
+                #
+                # 修法: 把已存在的那个 handler 认下来, 再挂 uvicorn。
+                # 复现脚本验过: 空手 return → 0 条; 认下来 → 1 条且不双写。
+                _FILE_HANDLER = existing
+                _attach_file_handler_to_uvicorn()
                 return
         os.makedirs(os.path.dirname(log_file), exist_ok=True)
         h = RotatingFileHandler(log_file, maxBytes=10 * 1024 * 1024, backupCount=5)
@@ -209,7 +229,6 @@ def _setup_file_logging() -> None:
 
         # 记下来给 _attach_file_handler_to_uvicorn() 用 —— 见那个函数的注释,
         # uvicorn 的 logger 必须**等它配置完之后**再挂。
-        global _FILE_HANDLER
         _FILE_HANDLER = h
         _attach_file_handler_to_uvicorn()
 
