@@ -34,7 +34,7 @@
 hardcode 当前上游 install.sh SHA256. drift → exit 1 报错, 强制 audit patch.
 Bump 步骤:
 1. `shasum -a 256 ~/.hermes/hermes-agent/scripts/install.sh` 拿新 SHA
-2. 手动验证 4 处 anchor 是否仍稳定 (bash 上下文没变)
+2. 手动验证 ANCHORS 里每条 anchor 是否仍稳定 (bash 上下文没变)
 3. 更新脚本顶部 UPSTREAM_SHA256
 
 # 用法
@@ -439,10 +439,20 @@ def verify_patched(patched_text: str) -> None:
             )
             raise SystemExit(3)
     marker_count = patched_text.count(MARKER)
-    # PATCH_1 里 5 个 marker + PATCH_2/3/4/6/7/8 各 1 = 11.
-    if marker_count < 11:
+    # 条数**算出来**, 不写死 (8/14)。
+    #
+    # 原来这里是硬编码的 `< 11`, 注释写着「PATCH_1 里 5 个 + PATCH_2/3/4/6/7/8
+    # 各 1」。加一条 patch 就要记得回来改这个数字, 而漏改的方向恰好是**不会
+    # 报错**的那一边 (`<` 只管下限)。
+    #
+    # 注意公式是"各条 marker 数求和", 不是"每条 1 个" —— install_repo_close
+    # 那条合法地一个都不带 (它只是把 PATCH_1 开的口子闭上)。ps1 那份每条恰好
+    # 1 个, 但那是它自己的形态, 不能拿来套这里。
+    expected_markers = sum(after.count(MARKER) for _before, after in ANCHORS.values())
+    if marker_count != expected_markers:
         print(
-            f"[ERROR] MARKER 期望 ≥11 处 (PATCH_1 5 个 · PATCH_2/3/4/6/7/8 各 1), 实际 {marker_count}.",
+            f"[ERROR] MARKER 期望 {expected_markers} 处 (ANCHORS 各条求和), "
+            f"实际 {marker_count}.",
             file=sys.stderr,
         )
         raise SystemExit(3)
@@ -532,7 +542,11 @@ def main() -> int:
     verify_patched(patched)
 
     if args.check:
-        print("[OK] --check dry-run 全绿. patched 会加 ≥11 处 marker + 5 处 --offline-* 参数 (含 --offline-node-tar + --offline-chromium-tar).")
+        _n = sum(a.count(MARKER) for _b, a in ANCHORS.values())
+        print(
+            f"[OK] --check dry-run 全绿. patched 会加 {_n} 处 marker + 5 处 "
+            "--offline-* 参数 (含 --offline-node-tar + --offline-chromium-tar)."
+        )
         return 0
 
     out_path = args.output or args.input.with_suffix(".sh.patched")

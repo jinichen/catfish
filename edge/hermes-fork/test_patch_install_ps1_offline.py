@@ -1,7 +1,7 @@
 """patch_install_ps1_offline.py 单测 (W1 BL-CATFISH-OFFLINE-INSTALL).
 
 覆盖 4 类断言:
-    1. patched 输出含 4 处 marker + 3 处 -Offline* 参数
+    1. patched 输出每个 patch 各留 1 处 marker + 3 处 -Offline* 参数
     2. 幂等 — patched 文件再跑 no-op
     3. SHA256 drift → exit 1 with 说明消息
     4. anchor missing → exit 2 (上游改了段落 catch drift)
@@ -56,14 +56,45 @@ def upstream_install_ps1() -> str:
 
 
 def test_apply_patches_produces_expected_symbols(upstream_install_ps1: str):
-    """patched install.ps1 含 4 处 marker + 3 个 -Offline* 参数."""
+    """patched install.ps1 含 marker + 3 个 -Offline* 参数 (条数走 ANCHORS)."""
     patched = apply_patches(upstream_install_ps1)
-    verify_patched(patched)  # 内部 assert 4 处 marker + 3 参数
+    verify_patched(patched)  # 内部 assert marker 条数 (len(ANCHORS)) + 参数
 
 
-def test_apply_patches_adds_exactly_four_markers(upstream_install_ps1: str):
+def test_每个_patch_各留一处_marker(upstream_install_ps1: str):
+    """条数跟着 ANCHORS 走, **不写死**。
+
+    8/14 之前这条写的是 `== 4`, 而补丁早就长到 7 条 (加了 tar / npm 离线 /
+    chromium 三条)。同一个事实当时有三份副本: 这里的 4、verify_patched 里的 7、
+    还有两个 docstring 里的"4 处"。加一条 patch 要记得改三处, 漏了就是一条红
+    测试挂在那儿 —— 而红测试放久了, 下次真出事也会被当成"又是那个老的"。
+
+    现在三处都走 len(ANCHORS)。
+    """
     patched = apply_patches(upstream_install_ps1)
-    assert patched.count(MARKER) == 4, "每 patch 1 处 marker"
+    assert patched.count(MARKER) == len(ANCHORS)
+
+
+def test_anchors_每条替换文本里恰好一处_marker():
+    """★ 上面那条只数总数, 数对了不代表"每 patch 一处"。
+
+    两条 patch 一条塞两个 marker、另一条一个都不塞, 总数照样对得上 ——
+    而那时 detect_already_patched 会漏判没带 marker 的那条。
+    这条直接在 ANCHORS 上查, 不用跑补丁。
+    """
+    for name, (before, after) in ANCHORS.items():
+        assert before.count(MARKER) == 0, f"anchor {name} 的**原文**里就带 marker 了"
+        assert after.count(MARKER) == 1, (
+            f"anchor {name} 的替换文本里有 {after.count(MARKER)} 处 marker, 应当恰好 1 处"
+        )
+
+
+def test_marker_落在七个不同的行上(upstream_install_ps1: str):
+    """★ 防"两条 patch 挤进同一行" —— 那样总数对、每条也对, 但补丁其实叠了。"""
+    patched = apply_patches(upstream_install_ps1)
+    lines = [i for i, l in enumerate(patched.splitlines()) if MARKER in l]
+    assert len(lines) == len(ANCHORS)
+    assert len(set(lines)) == len(lines)
 
 
 def test_apply_patches_adds_three_offline_params(upstream_install_ps1: str):
@@ -75,13 +106,26 @@ def test_apply_patches_adds_three_offline_params(upstream_install_ps1: str):
         assert count >= 2, f"参数 {param} 应至少 2 处 (def + use), 实际 {count}"
 
 
-def test_apply_patches_keeps_upstream_line_count_reasonable(upstream_install_ps1: str):
-    """patched 加了 ~90 行 (4 处 patch payload), 总行数不该爆."""
-    original_lines = upstream_install_ps1.count("\n") + 1
+def test_行数增量跟_anchors_算出来的完全一致(upstream_install_ps1: str):
+    """原来写的是"预期加 60-120 行" —— 两个魔数, 每加一条 patch 就过期一次
+    (实际早就是 211 行了)。
+
+    而这两个数字本来就是**算得出来的**: 每条 anchor 用 after 换掉 before,
+    增量就是两者行数之差。所以这里不猜区间, 直接算, 要求**严格相等**。
+
+    严格相等比区间强的地方: 它同时钉住了"替换恰好发生了这些、没多没少"。
+    某个 anchor 命中两次被换了两遍, 或者哪条 patch 悄悄没生效, 区间断言
+    多半照样绿, 这条会当场红。
+    """
+    expected_delta = sum(
+        (after.count("\n") + 1) - (before.count("\n") + 1)
+        for before, after in ANCHORS.values()
+    )
     patched = apply_patches(upstream_install_ps1)
-    patched_lines = patched.count("\n") + 1
-    delta = patched_lines - original_lines
-    assert 60 <= delta <= 120, f"预期加 60-120 行, 实际加 {delta}"
+    actual_delta = (patched.count("\n") + 1) - (upstream_install_ps1.count("\n") + 1)
+    assert actual_delta == expected_delta, (
+        f"ANCHORS 算出来该加 {expected_delta} 行, 实际加了 {actual_delta} 行"
+    )
 
 
 # ─── Case 2: 幂等 — patched 再跑 no-op ────────────────────
@@ -116,7 +160,7 @@ def test_check_upstream_sha256_matches_pin(upstream_install_ps1: str):
     actual = sha256_of(upstream_install_ps1)
     assert actual == UPSTREAM_SHA256, (
         f"上游 install.ps1 更新了 (期望 {UPSTREAM_SHA256}, 实际 {actual}). "
-        f"重新 audit 4 处 anchor, 更新脚本顶部 UPSTREAM_SHA256."
+        f"重新 audit ANCHORS 里每条 anchor, 更新脚本顶部 UPSTREAM_SHA256."
     )
 
 

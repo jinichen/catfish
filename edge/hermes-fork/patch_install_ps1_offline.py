@@ -473,7 +473,7 @@ def check_upstream_sha256(text: str, *, strict: bool = True) -> str:
         f"  expected: {UPSTREAM_SHA256}\n"
         f"  actual:   {actual}\n"
         f"上游 install.ps1 变了 (可能新参数 / anchor 挪位置). 必须:\n"
-        f"  1. 重新 audit 4 处 anchor 是否稳定\n"
+        f"  1. 重新 audit ANCHORS 里每条 anchor 是否稳定\n"
         f"  2. 更新脚本顶部 UPSTREAM_SHA256\n"
         f"  3. verify 3 处 offline PowerShell 分支跟上游 flow 兼容\n"
     )
@@ -485,7 +485,7 @@ def check_upstream_sha256(text: str, *, strict: bool = True) -> str:
 
 
 def apply_patches(text: str) -> str:
-    """4 处 anchor 逐一替换, 每处 must 命中 1 次 (不多不少)."""
+    """ANCHORS 里每条逐一替换, 每处 must 命中 1 次 (不多不少)."""
     result = text
     for name, (before, after) in ANCHORS.items():
         count = result.count(before)
@@ -507,7 +507,13 @@ def apply_patches(text: str) -> str:
 
 
 def verify_patched(patched_text: str) -> None:
-    """patched 输出 sanity check — 3 个 -Offline* 参数 + 4 处 marker 都在."""
+    """patched 输出 sanity check — -Offline* 参数齐 + 每个 patch 各留 1 处 marker.
+
+    marker 的**条数不写死** —— 走 len(ANCHORS)。
+    8/14 之前这里硬编码 7, 而 test 文件里硬编码 4 (加 patch 时没跟着改),
+    于是同一个事实有三份副本, 加一条 patch 要记得改三处, 漏一处就是红测试
+    挂在那儿没人管 —— 红测试放久了, 下次真出事也会被当成"又是那个老的"。
+    """
     required_symbols = [
         "$OfflineSourceDir",
         "$OfflineSourceTar",       # BL-WIN-INSTALL-TAR (7/17): Windows msi 新增 tar 输入
@@ -524,9 +530,10 @@ def verify_patched(patched_text: str) -> None:
             )
             raise SystemExit(3)
     marker_count = patched_text.count(MARKER)
-    if marker_count != 7:
+    if marker_count != len(ANCHORS):
         print(
-            f"[ERROR] MARKER 期望 7 处 (每 patch 1 处 · BL-WIN-INSTALL-TAR/NPM-OFFLINE/CHROMIUM-SKIP), 实际 {marker_count}.",
+            f"[ERROR] MARKER 期望 {len(ANCHORS)} 处 (ANCHORS 每条 1 处), "
+            f"实际 {marker_count}.",
             file=sys.stderr,
         )
         raise SystemExit(3)
