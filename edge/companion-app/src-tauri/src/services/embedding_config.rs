@@ -22,8 +22,13 @@
 //!     max_tokens: 512          # 截断上限. BGE-M3 原生 8192 但 512 是性能折中
 //!     intra_threads: 4         # ort Session 推理线程
 //!   remote:
-//!     gateway_url: http://127.0.0.1:8999
-//!     model: catfish-private-embed   # catfish-gateway models.yaml 里 mode=embedding 的 model
+//!     # gateway_url / model 两个**都不用配** (8/14):
+//!     #   地址 → 走 ~/.catfish/companion.yaml 的 endpoints 段 (单一真源)
+//!     #   模型 → 不传, 由网关按 roles.yaml 的 embedding 角色解析
+//!     #          (= 控制台 /admin/models 里那条"向量"类型的模型)
+//!     # 只有"这台机器要跟全网用不一样的"才填, 填了就等于自己脱队。
+//!     # gateway_url: http://10.10.40.50:8999
+//!     # model: customer-x-embed
 //!     timeout_seconds: 10      # HTTP timeout
 //!     embed_dim: 1024          # 必须跟 remote 模型对得上 (启动校验)
 //!     # auth token 从 env CATFISH_INTERNAL_DEV_TOKEN 拿, 不放 yaml (secret 防泄露)
@@ -85,15 +90,41 @@ impl Default for LocalConfig {
 }
 
 /// 远程 catfish-gateway 配置.
+///
+/// # 这里**没有**网关地址和模型名的代码默认值 (8/14)
+///
+/// 原来这两个字段各有一个 `default_xxx()` 硬编码:
+///
+///     fn default_gateway_url()  -> String { "http://127.0.0.1:8999".to_string() }
+///     fn default_remote_model() -> String { "catfish-private-embed".to_string() }
+///
+/// `default_gateway_url` 上面还写着注释「跟 Companion endpoints.gateway_url 默认
+/// 同源」—— 但它是**复制**不是同源, 没人保证两边一起改。
+///
+/// 后果都不报错, 只是悄悄换条路:
+///
+///   · 网关改成远端 IP、只改了 companion.yaml 的 endpoints 段
+///     → 这里还 ping 127.0.0.1:8999 → 不通 → auto 退本机 ONNX
+///   · sysadmin 在控制台换掉向量模型
+///     → 这里还按 "catfish-private-embed" 请求 → 网关 404 → 同样退本机 ONNX
+///
+/// 而 Windows 的 msi 根本没编进 ort (Cargo.toml 只在 aarch64 拉 ort),
+/// "退本机 ONNX" 在那边等于**没有向量**。
+///
+/// 现在两个字段都是 `Option`, 语义是"员工显式 override", 缺省时:
+///
+///   · 地址 → `endpoints::endpoints().gateway_base()` (companion.yaml 唯一真源)
+///   · 模型 → **不传**, 由网关按 roles.yaml 的 `embedding` 角色解析
+///     (= 控制台 /admin/models 里那条"向量"类型的模型, 见 app.py 的 /v1/embeddings)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteConfig {
-    /// gateway base URL (不带 path). 默认 http://127.0.0.1:8999.
-    #[serde(default = "default_gateway_url")]
-    pub gateway_url: String,
-    /// model 名 — catfish-gateway models.yaml 里 mode=embedding 的 model.
-    /// 默认 catfish-private-embed.
-    #[serde(default = "default_remote_model")]
-    pub model: String,
+    /// gateway base URL (不带 path). **缺省走 endpoints 单一真源**, 别在这里填默认值.
+    #[serde(default)]
+    pub gateway_url: Option<String>,
+    /// 向量 model 名. **缺省不传, 由网关按 roles.yaml 的 embedding 角色解析**.
+    /// 只有"这台机器要用跟全网不一样的向量模型"才配它 —— 配了就等于自己脱队。
+    #[serde(default)]
+    pub model: Option<String>,
     /// HTTP timeout. 默认 10s.
     #[serde(default = "default_timeout_seconds")]
     pub timeout_seconds: u64,
@@ -102,14 +133,55 @@ pub struct RemoteConfig {
     pub embed_dim: usize,
 }
 
+/// ⚠ 必须手写, **不能 `#[derive(Default)]`**。
+///
+/// `#[serde(default = "...")]` 只在**反序列化缺字段**时生效, 对
+/// `Default::default()` 一点作用都没有。derive 出来的 Default 会给
+/// `timeout_seconds = 0` / `embed_dim = 0`:
+///
+///   · timeout 0 → `Duration::from_secs(0)` → reqwest 每次请求当场超时
+///   · embed_dim 0 → 维度校验和 sqlite `_meta` 全乱
+///
+/// 而 `EmbeddingConfig::default()` 正是"员工机上没有 embedding.yaml"的路径 ——
+/// 也就是**绝大多数员工**。这条路上向量会静默全挂。
+///
+/// 8/14 我第一版顺手 derive 了 Default, 就是这个坑; 写下来免得下次又顺手。
 impl Default for RemoteConfig {
     fn default() -> Self {
         Self {
-            gateway_url: default_gateway_url(),
-            model: default_remote_model(),
+            // 这两个没有代码默认值 —— 见结构体上的长注释
+            gateway_url: None,
+            model: None,
             timeout_seconds: default_timeout_seconds(),
             embed_dim: default_embed_dim(),
         }
+    }
+}
+
+impl RemoteConfig {
+    /// 实际要用的网关地址: yaml 显式 override > endpoints 单一真源.
+    ///
+    /// 空串按"没配"处理 —— 员工把 yaml 里的值删成 `gateway_url: ""` 时,
+    /// 拼出来会是 `/v1/embeddings` 这种打不出去的地址, 而报错长得像网络问题。
+    pub fn resolved_gateway_url(&self) -> String {
+        match self
+            .gateway_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(u) => u.trim_end_matches('/').to_string(),
+            None => crate::services::endpoints::endpoints().gateway_base(),
+        }
+    }
+
+    /// 要不要在请求体里带 model. None = 让网关按 roles.yaml 解析.
+    pub fn resolved_model(&self) -> Option<String> {
+        self.model
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
     }
 }
 
@@ -164,10 +236,17 @@ pub fn load_config() -> EmbeddingConfig {
     match serde_yaml::from_str::<ConfigFile>(&text) {
         Ok(cf) => {
             log::info!(
-                "[embedding_config] yaml 加载 OK: backend={:?} local.model={:?} remote.model={}",
+                "[embedding_config] yaml 加载 OK: backend={:?} local.model={:?} \
+                 remote.gateway={} remote.model={}",
                 cf.embedding.backend,
                 cf.embedding.local.model_path,
-                cf.embedding.remote.model
+                // 打**解析后**的值 —— 打原始 Option 的话, 日志里只会看到 None,
+                // 而现场最想知道的恰恰是"它到底连了哪"。
+                cf.embedding.remote.resolved_gateway_url(),
+                cf.embedding
+                    .remote
+                    .resolved_model()
+                    .unwrap_or_else(|| "<由网关按 roles.yaml 解析>".to_string())
             );
             cf.embedding
         }
@@ -201,16 +280,6 @@ fn default_intra_threads() -> usize {
     4 // P3.5.4 老 with_intra_threads(4)
 }
 
-fn default_gateway_url() -> String {
-    // 跟 Companion endpoints.gateway_url 默认 + catfish-memory plugin yaml 同源
-    "http://127.0.0.1:8999".to_string()
-}
-
-fn default_remote_model() -> String {
-    // catfish-gateway models.yaml line 112-122 装的 mode=embedding 那条
-    "catfish-private-embed".to_string()
-}
-
 fn default_timeout_seconds() -> u64 {
     10
 }
@@ -223,4 +292,150 @@ pub fn expand_home(path: &str) -> String {
         }
     }
     path.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    //! 向量这条路上**不许再有第二份真源** (8/14)。
+    //!
+    //! 病历: `default_gateway_url()` 和 `default_remote_model()` 各自复制了
+    //! 一份 "http://127.0.0.1:8999" / "catfish-private-embed"。前者的注释还
+    //! 写着「跟 Companion endpoints.gateway_url 默认同源」—— 是复制不是同源。
+    //!
+    //! 两种漂移都不报错, 只是悄悄换条路:
+    //!   · 网关改远端 IP → 这里还 ping 127.0.0.1 → auto 退本机 ONNX
+    //!   · 控制台换向量模型 → 这里还按老名字请求 → 404 → 同样退本机 ONNX
+    //! 而 Windows msi 没编 ort, "退本机 ONNX" = 没有向量。
+    //!
+    //! 这里不打桩 endpoints —— 直接摆一个真的 companion.yaml, 走真的
+    //! `endpoints::endpoints()`。打桩的话就只能证明"我调了那个函数",
+    //! 证不了"员工改 yaml 真的会被这条路看到"。
+
+    use super::*;
+
+    /// 摆一个 HOME, 里面放真的 companion.yaml, 并让 endpoints 重读。
+    ///
+    /// guard 必须返给调用方持有 —— HOME 是进程全局的, 见 util/test_env 的长注释。
+    fn with_gateway(url: &str) -> (tempfile::TempDir, std::sync::MutexGuard<'static, ()>) {
+        let guard = crate::util::test_env::env_lock();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join(".catfish");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("companion.yaml"),
+            format!("endpoints:\n  gateway_url: {url}\n"),
+        )
+        .unwrap();
+        std::env::set_var("HOME", tmp.path());
+        std::env::set_var("USERPROFILE", tmp.path());
+        crate::services::endpoints::reload();
+        (tmp, guard)
+    }
+
+    fn load(yaml: &str) -> RemoteConfig {
+        serde_yaml::from_str::<ConfigFile>(yaml)
+            .unwrap()
+            .embedding
+            .remote
+    }
+
+    #[test]
+    fn 默认值里不能有零() {
+        // ★★★ `#[serde(default = "...")]` 只管反序列化缺字段, **不管
+        // Default::default()**。8/14 第一版顺手 `#[derive(Default)]`,
+        // 于是 timeout_seconds=0 (reqwest 当场超时) + embed_dim=0 (维度全乱)。
+        //
+        // 而 EmbeddingConfig::default() 正是"员工机上没有 embedding.yaml"
+        // 那条路 —— 也就是绝大多数员工。
+        let c = RemoteConfig::default();
+        assert_ne!(c.timeout_seconds, 0, "timeout=0 → 每次请求当场超时");
+        assert_ne!(c.embed_dim, 0, "embed_dim=0 → 维度校验和 sqlite _meta 全乱");
+    }
+
+    #[test]
+    fn 没配地址时_跟着_companion_yaml_走() {
+        // ★★★ 这条就是事故本体: 员工改了 companion.yaml 的网关,
+        // 向量这条路必须跟着改, 不能还盯着 127.0.0.1。
+        let (_tmp, _g) = with_gateway("http://10.10.40.50:8999");
+        let c = load("embedding:\n  remote:\n    timeout_seconds: 5\n");
+        assert_eq!(c.resolved_gateway_url(), "http://10.10.40.50:8999");
+    }
+
+    #[test]
+    fn 整个_embedding_yaml_都没有时_也跟着走() {
+        // 绝大多数员工机上没有 embedding.yaml, 走的是 Default::default()
+        let (_tmp, _g) = with_gateway("http://10.10.40.51:8999");
+        let c = EmbeddingConfig::default().remote;
+        assert_eq!(c.resolved_gateway_url(), "http://10.10.40.51:8999");
+        assert_ne!(c.timeout_seconds, 0);
+    }
+
+    #[test]
+    fn 没配模型时_不传_让网关按_roles_yaml_解析() {
+        // ★★★ 员工端存模型名 = 控制台换了向量模型这边不知道。
+        let c = load("embedding:\n  remote:\n    timeout_seconds: 5\n");
+        assert_eq!(c.resolved_model(), None);
+        assert_eq!(RemoteConfig::default().resolved_model(), None);
+    }
+
+    #[test]
+    fn 显式配了就用配的() {
+        // 向后兼容 + 留一个"这台机器要脱队"的出口
+        let (_tmp, _g) = with_gateway("http://10.10.40.50:8999");
+        let c = load(
+            "embedding:\n  remote:\n    gateway_url: http://192.168.1.7:9000/\n\
+             \x20   model: customer-x-embed\n",
+        );
+        assert_eq!(c.resolved_gateway_url(), "http://192.168.1.7:9000", "尾斜杠要削");
+        assert_eq!(c.resolved_model().as_deref(), Some("customer-x-embed"));
+    }
+
+    #[test]
+    fn 空串和纯空白按没配处理() {
+        // ★★ 员工把值删成空串是很常见的"我不想配了"。
+        // 不当成没配的话, 会拼出 "/v1/embeddings" 这种打不出去的地址,
+        // 而报错长得像网络问题, 查半天。
+        let (_tmp, _g) = with_gateway("http://10.10.40.50:8999");
+        let c = load("embedding:\n  remote:\n    gateway_url: \"\"\n    model: \"   \"\n");
+        assert_eq!(c.resolved_gateway_url(), "http://10.10.40.50:8999");
+        assert_eq!(c.resolved_model(), None);
+    }
+
+    #[test]
+    fn 老员工_yaml_里那两行仍然读得进来() {
+        // 6/16 起 embedding.yaml 的示例就写着这两行, 员工机上是有的。
+        // 字段从 String 改成 Option<String>, 老 yaml 不能读不进来。
+        let c = load(
+            "embedding:\n  remote:\n    gateway_url: http://127.0.0.1:8999\n\
+             \x20   model: catfish-private-embed\n    timeout_seconds: 10\n    embed_dim: 1024\n",
+        );
+        assert_eq!(c.resolved_gateway_url(), "http://127.0.0.1:8999");
+        assert_eq!(c.resolved_model().as_deref(), Some("catfish-private-embed"));
+        assert_eq!(c.embed_dim, 1024);
+    }
+
+    #[test]
+    fn 这个文件里不许再出现硬编码的网关地址或向量模型名() {
+        // ★★ 防回流。上面几条都能通过"再加一个 default_xxx() 然后不调
+        // resolved_*" 绕过去 —— 那正是 8/14 之前的形态。
+        let src = include_str!("embedding_config.rs");
+        let code: String = src
+            .lines()
+            .filter(|l| {
+                let t = l.trim_start();
+                !t.starts_with("//") && !t.starts_with("///") && !t.starts_with("//!")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        // 测试自己写的那些地址要排除掉 —— 只看 mod tests 之前的部分
+        let prod = code.split("#[cfg(test)]").next().unwrap_or("");
+        assert!(
+            !prod.contains("127.0.0.1"),
+            "又出现硬编码网关地址 —— 地址的真源是 companion.yaml 的 endpoints 段"
+        );
+        assert!(
+            !prod.contains("catfish-private-embed"),
+            "又出现硬编码向量模型名 —— 模型的真源是中央 roles.yaml 的 embedding 角色"
+        );
+    }
 }

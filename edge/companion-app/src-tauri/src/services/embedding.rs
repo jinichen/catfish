@@ -119,7 +119,7 @@ fn init_active_provider() -> Provider {
             {
                 log::warn!(
                     "[embedding] backend=local 配置但当前架构无 ONNX ort → fallback remote {}",
-                    cfg.remote.gateway_url
+                    cfg.remote.resolved_gateway_url()
                 );
                 Provider::Remote(RemoteProvider::new(cfg.remote))
             }
@@ -127,7 +127,7 @@ fn init_active_provider() -> Provider {
         Backend::Remote => {
             log::info!(
                 "[embedding] backend=remote (yaml 显式) → {}",
-                cfg.remote.gateway_url
+                cfg.remote.resolved_gateway_url()
             );
             Provider::Remote(RemoteProvider::new(cfg.remote))
         }
@@ -169,10 +169,7 @@ fn init_active_provider() -> Provider {
 ///   `GET /v1/catalog 200 OK` 频繁验证 anon 通. 用它当 "gateway 是否在线" 代理
 ///   判断, 语义跟 /v1/models 等价, 不再 401.
 fn probe_remote_alive(remote: &RemoteProvider) -> bool {
-    let url = format!(
-        "{}/v1/catalog",
-        remote.config.gateway_url.trim_end_matches('/')
-    );
+    let url = format!("{}/v1/catalog", remote.config.resolved_gateway_url());
     let probe_timeout = Duration::from_secs(remote.config.timeout_seconds.min(3));
 
     // ── 8/8: 整个 blocking client 的生死都挪进一条独立 OS 线程 ──────────────
@@ -444,14 +441,15 @@ impl RemoteProvider {
         if text.is_empty() {
             return None;
         }
-        let url = format!(
-            "{}/v1/embeddings",
-            self.config.gateway_url.trim_end_matches('/')
-        );
-        let body = serde_json::json!({
-            "model": self.config.model,
-            "input": text,
-        });
+        let url = format!("{}/v1/embeddings", self.config.resolved_gateway_url());
+        // model 缺省**就不放进请求体** —— 网关会按 roles.yaml 的 embedding 角色
+        // 解析 (app.py 的 /v1/embeddings)。放个 null 进去不行: 那边是
+        // `body.get("model")`, null 和缺省等价没错, 但显式写 null 会让人以为
+        // "客户端是有主张的", 而这里的主张恰恰是"我不该有主张"。
+        let mut body = serde_json::json!({ "input": text });
+        if let Some(m) = self.config.resolved_model() {
+            body["model"] = serde_json::Value::String(m);
+        }
 
         let token = auth_token();
         if token.is_empty() {
