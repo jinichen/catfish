@@ -275,6 +275,34 @@ function ModelConfigEditor() {
         </div>
       ) : null}
 
+      {/* roles.yaml 指向不存在的模型 (8/14)。
+          这条必须显示在**列表之外** —— 出问题的模型已经不在列表里了,
+          按模型行渲染的 config_errors 永远碰不到它。
+          不显示的话, 症状是"语义搜索悄悄变差", 界面上一点线索都没有。 */}
+      {Object.keys(data?.role_errors ?? {}).length > 0 ? (
+        <div
+          style={{
+            ...BOX,
+            fontSize: 12,
+            color: "var(--status-err)",
+            borderColor: "var(--status-err)",
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          <strong>roles.yaml 里有角色指向不存在的模型</strong>
+          {Object.entries(data?.role_errors ?? {}).map(([role, model]) => (
+            <div key={role} style={{ marginTop: 4 }}>
+              · <code>{role}</code> → <code>{model}</code>（模型列表里没有它）
+            </div>
+          ))}
+          <div style={{ marginTop: 8, opacity: 0.85 }}>
+            用到这些角色的请求会拿到 404，而调用方普遍是拿不到就静默降级
+            （比如向量会退回员工本机模型，Windows 客户端则完全没有向量）——
+            不会有任何报错。请改服务器上的 config/roles.yaml 后重启网关。
+          </div>
+        </div>
+      ) : null}
+
       {/* 7/30 四改: 编辑时**整页换成详情**, 不再把表单夹在列表上方。
           原来点列表第 6 行的「编辑」, 表单渲染在列表顶部 —— 出现在视野外,
           看起来像点了没反应; 而表单本身 200 多行字段, 夹在中间还会把列表

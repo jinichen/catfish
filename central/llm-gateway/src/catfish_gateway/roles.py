@@ -338,6 +338,55 @@ def list_models_for_rbac(role: str) -> list[str]:
     return result
 
 
+# ─── 跟模型列表的一致性 (8/14) ──────────────────────────────────
+#
+# roles.yaml 里的值是**纯字符串**, 这个模块从来不知道那个模型存不存在 ——
+# `_validate_schema` 自己的注释就写着「不能 detect 物理 name 错 (catalog 没
+# load), 只 catch role typo」。而 roles.py 有意不 import config (免得跟配置
+# 组装绕成环), 所以这里只提供**纯函数**, 由调用方把"当前有哪些模型"传进来。
+#
+# 为什么需要: 控制台 /admin/models 能删模型、能改名 (改名 = 删 + 新建, 因为
+# PUT 拒绝 body.name 跟路径名不一致), 但 admin 路由**完全不认识 roles** ——
+# grep 不到一个 roles 字样。于是:
+#
+#   控制台把向量模型改名 → roles.yaml 的 `embedding` 还指着老名字
+#   → /v1/embeddings 里 _resolve_model 抛 404 model not found
+#   → Companion 拿到非 200 → 静默退回本机 ONNX
+#   → Windows 的 msi 没编 ort, 那边等于**完全没有向量**
+#
+# 症状是"语义搜索悄悄变差", 没有任何一处会报错。
+
+
+def roles_referencing(model_name: str) -> list[str]:
+    """哪些 role 指向这个物理模型名. 给"删模型前先拦一下"用.
+
+    ⚠ roles 没 load 时返空 list 而不是抛 —— 但**这不是"guard 可以静默失效"**:
+    生产上 load_roles() 在 lifespan 里 hard fail (app.py:360), roles 一定是
+    load 过的。返空只为了让不 load roles 的单测不炸。
+    """
+    if _roles is None:
+        return []
+    return sorted(role for role, target in _roles.items() if target == model_name)
+
+
+def stale_model_refs(known_models: set[str]) -> dict[str, str]:
+    """roles 里指向"不存在的模型"的那些条目. 返 {role: 指向的模型名}.
+
+    Args:
+        known_models: 当前生效配置里的模型名集合 (cfg.models 的 name)
+
+    只查**存在性**, 不查可用性 (upstream key 配没配) —— 后者随 .env 变,
+    每个部署都不一样, 混进来会天天误报, 误报多了这个信号就没人看了。
+    """
+    if _roles is None:
+        return {}
+    return {
+        role: target
+        for role, target in _roles.items()
+        if target not in known_models
+    }
+
+
 # ─── API endpoint payload helper ─────────────────────────────────
 
 def to_public_dict() -> dict[str, Any]:

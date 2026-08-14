@@ -105,6 +105,15 @@ export interface ModelListResponse {
    * 答案既不在这份配置里也不在数据库里, 而在服务器的 .env 里。
    * 只有 true/false, 不含 key 的任何内容。 */
   api_key_configured?: Record<string, boolean>;
+  /** roles.yaml 里指向"不存在的模型"的角色 (角色名 → 它指着的那个模型名).
+   *
+   * 跟 config_errors 不是一回事: 那个按**模型名**索引, 而这里出问题的模型
+   * 压根不在列表里 —— 塞进那个 dict 等于永远不显示。
+   *
+   * 后果不显眼但很实: 用到该角色的请求拿 404, 而调用方普遍静默降级
+   * (Companion 的向量退回本机 ONNX; Windows 客户端没编 ort, 等于没有向量)。
+   * 所以要在页面上明说, 不能只留在服务器日志里。 */
+  role_errors?: Record<string, string>;
   models: ModelConfig[];
 }
 

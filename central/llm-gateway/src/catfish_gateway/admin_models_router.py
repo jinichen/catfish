@@ -39,6 +39,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException
 
 from . import model_store, provider_store
+from . import roles as roles_module
 from .auth import User, get_current_user
 from .config import (
     Config,
@@ -314,6 +315,17 @@ def register_model_admin_routes(app: FastAPI) -> None:
             # 哪些模型的 env 占位符没解析成功。不显示的话, "这个模型为什么不工作"
             # 在界面上没有任何线索 —— 只有服务器日志里有一行。
             "config_errors": model_config_errors(),
+            # roles.yaml 里指向"不存在的模型"的角色 (8/14)。
+            #
+            # 跟上面 config_errors 不是一回事, 所以**不能塞进那个 dict**:
+            # config_errors 按模型名索引 (前端 ModelConfigPage.tsx:321 写死了
+            # `config_errors[m.name]`), 而这里出问题的模型压根不在列表里 ——
+            # 塞进去等于永远不显示。
+            #
+            # 形态: {角色名: 它指着的那个不存在的模型名}。
+            "role_errors": roles_module.stale_model_refs(
+                {m.name for m in cfg.models}
+            ),
             # 每个模型引用的那个 key 变量, 在服务器上到底设没设。
             #
             # 这是管理员问得最多的那个问题 ——「我把变量名填进去了, 生效了吗」。
@@ -406,10 +418,11 @@ def register_model_admin_routes(app: FastAPI) -> None:
     ) -> dict[str, Any]:
         """删一个模型. sysadmin only.
 
-        有两道拦截, 都是为了不让一次误操作把服务打瘫:
+        有三道拦截, 都是为了不让一次误操作把服务打瘫:
           · 不许删到一个不剩 —— 没有模型的 gateway 无法服务任何聊天请求
           · 不许删掉还被别的模型 fallback.chain 引用的 —— 那条链会在运行时
             指向一个不存在的模型, 而 fallback 只在上游出错时才走, 平时看不出来
+          · 不许删掉还被 roles.yaml 引用的 (8/14) —— 见下面那段
         """
         _require_model_admin(user)
         _require_model_store()
@@ -439,6 +452,42 @@ def register_model_admin_routes(app: FastAPI) -> None:
                     "为什么要拦: 链里指向不存在的模型时, gateway 只会记一行日志然后"
                     "跳过那一跳 —— 而失败切换只在上游出错时才走, 平时完全看不出来, "
                     "等真出故障那天才发现兜底少了一环。"
+                ),
+            )
+
+        # roles.yaml 引用检查 (8/14)
+        #
+        # 在这之前, admin 路由**完全不认识 roles** —— 整个文件 grep 不到一个
+        # roles 字样。于是删模型 (以及改名, 改名 = 删 + 新建, 因为 PUT 拒绝
+        # body.name 跟路径名不一致) 之后, roles.yaml 里那条就成了 stale:
+        #
+        #   控制台删掉 catfish-private-embed
+        #   → roles.yaml 的 `embedding` 还指着它
+        #   → /v1/embeddings 里 _resolve_model 抛 404 model not found
+        #   → Companion 拿到非 200 → **静默退回本机 ONNX**
+        #   → 而 Windows 的 msi 根本没编 ort, 那边等于完全没有向量
+        #
+        # 全程没有一处报错, 表现是"语义搜索悄悄变差了"。跟上面 fallback.chain
+        # 那条是同一类病, 只是发作面更大 —— chain 只在上游出错时才走, 而 role
+        # 是每次请求都要解析的。
+        #
+        # 拦在这里而不是等运行时: roles.yaml 在容器里是文件, 改它要重新部署,
+        # 而模型在界面上点一下就没了。两边的修改成本差太多, 所以让成本低的那边
+        # 先停下来问一句。
+        roles_using = roles_module.roles_referencing(name)
+        if roles_using:
+            raise HTTPException(
+                400,
+                detail=(
+                    f"模型 {name} 还被 roles.yaml 的这些角色引用:\n"
+                    + "\n".join(f"    · {r}" for r in roles_using)
+                    + "\n\n"
+                    "请先改 config/roles.yaml 把这些角色指到别的模型上, "
+                    "重启网关生效后再删。\n\n"
+                    "为什么要拦: 角色指向不存在的模型时, 用到它的请求会拿到 "
+                    "404 model not found, 而调用方 (Companion 的向量、"
+                    "tool-bridge、hermes 插件) 普遍是拿不到就静默降级 —— "
+                    "没有任何一处会报错, 只是效果悄悄变差。"
                 ),
             )
 
