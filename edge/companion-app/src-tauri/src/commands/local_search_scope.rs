@@ -108,6 +108,48 @@ pub struct ScopeResult {
     pub yaml_path: String,
 }
 
+/// 改完 include 之后重启 watcher。
+///
+/// # 为什么必须重启 (8/14)
+///
+/// `watcher.py:run_watch` 开头是 `cfg = cfg or load_config()` —— **配置只在启动时
+/// 读一次**, 之后 observer.schedule 出来的监听列表就固定了。没有 SIGHUP, 没有
+/// reload。所以改了 search-scope.yaml 对**正在跑的** watcher 毫无作用。
+///
+/// 这个坑 6/15 (P3.4.2) 已经踩过一次并修过 —— 但只修了「Companion 冷启动」那条路
+/// (ensure_local_search_running 改成每次 pkill+respawn)。**面板加/删目录这条路
+/// 一直没修**, 于是同一个病换了个触发方式继续活着:
+///
+///   员工在面板加 ~/Documents → onAdd 跑 `index --only` 把**当时**的存量文件
+///   补进索引 → 看起来完全正常, 当场就搜得到
+///   → 但运行中的 watcher 不监听这个新根
+///   → 之后往 ~/Documents 新增的文件**再也进不了索引**, 直到下次重启 Companion
+///
+/// 症状极其隐蔽: 加完当场是好的, 过两天才发现"新文件搜不到", 而那时候没人会
+/// 把它跟"几天前加过一个目录"联系起来 —— 看着像索引坏了。
+///
+/// ensure_local_search_running 本身就是 pkill + spawn (没有"在跑就跳过"的分支),
+/// 直接调即可。
+///
+/// # 会阻塞约 500ms, 这是有意接受的
+///
+/// pkill_local_search_watchers 成功杀掉进程后有一句
+/// `std::thread::sleep(500ms)` (等 fsnotify subscribe 释放)。而
+/// ensure_local_search_running 虽然签名是 async, **体内一个 .await 都没有** ——
+/// 它是个披着 async 外衣的同步函数。所以这里 .await 它会占住一个 tokio worker
+/// 线程半秒。
+///
+/// 按仓里的约定 (local_search.rs:150「不占 tokio runtime 线程」) 本该丢进
+/// spawn_blocking, 但那需要先把 autostart 那段拆出一个同步函数 —— 改动落在
+/// **启动路径**上。为了省掉一次手动点击的 500ms 去动启动路径, 不划算。
+///
+/// 实际影响可以忽略: 只在员工手点加/删目录时触发, 前端本来就在 busy 态,
+/// 而紧接着的 `index --only` 要跑几秒。真要优化, 单独开一个 ticket 做那次拆分。
+async fn restart_watcher_after_scope_change(what: &str) {
+    log::info!("local_search_scope: {what} —— 重启 watcher 让新配置生效");
+    crate::services::autostart::ensure_local_search_running().await;
+}
+
 #[tauri::command]
 pub async fn local_search_scope_get() -> Result<ScopeResult, String> {
     let root = read_root()?;
@@ -151,6 +193,7 @@ pub async fn local_search_scope_add(path: String) -> Result<ScopeResult, String>
     dirs.push(raw);
     set_string_list(&mut root, "include", dirs);
     write_root(&root)?;
+    restart_watcher_after_scope_change("加了目录").await;
     local_search_scope_get().await
 }
 
@@ -165,6 +208,9 @@ pub async fn local_search_scope_remove(path: String) -> Result<ScopeResult, Stri
     let new_dirs: Vec<String> = dirs.into_iter().filter(|d| d != &target).collect();
     set_string_list(&mut root, "include", new_dirs);
     write_root(&root)?;
+    // 删也要重启 —— 否则老 watcher 继续监听这个目录, 员工点了"删"但鲶鱼还在看。
+    // 索引里已有的数据由前端接着调的 local_search_clean 清 (onRemove)。
+    restart_watcher_after_scope_change("删了目录").await;
     local_search_scope_get().await
 }
 
