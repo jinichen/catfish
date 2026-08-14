@@ -86,6 +86,33 @@ function buildRequest(url: string, init?: RequestInit, timeoutMs?: number): Http
   return { url, method, headers, body, bodyBase64, timeoutMs };
 }
 
+/** 这些状态码**不许带 body** —— 带了 `new Response()` 当场抛。
+ *
+ * 8/14 现场那条:
+ *
+ *     [advisory] fetch feed exception:
+ *     TypeError: Response cannot have a body with the given status.
+ *
+ * advisory.ts 用 If-None-Match 做条件请求, 服务端正常返 304, 而这里
+ * `new Response(resp.body, {status: 304})` —— body 是字符串 (哪怕是空串
+ * `""` 也算 non-null), 于是构造器抛。
+ *
+ * 后果不是"少了一次刷新": ETag fast path **整条废掉** ——
+ * 304 本来的含义是"你手上的缓存还新鲜, 用它", 现在变成了"拉取失败, 返 null",
+ * 于是每次都当没有 feed。而日志里只有一行看着像网络问题的 TypeError。
+ *
+ * ⚠ 规范里的 null body status 是 101/103/204/205/304 五个, 这里**只列三个**。
+ *
+ * 1xx (101 Switching Protocols / 103 Early Hints) 根本构造不出 Response ——
+ * `init.status` 必须在 200..599, 传 null 也一样抛 RangeError。也就是说对
+ * 1xx 没有"正确的返回值"可给。
+ *
+ * 而它们也到不了这里: reqwest/hyper 把 1xx 当中间响应自己吃掉, 只把最终
+ * 响应交出来; 101 只在我们主动发 upgrade 请求时才可能是终态, 而这条代理
+ * 不做 upgrade。真要哪天出现, 抛出来比编一个假状态码好。
+ */
+const NULL_BODY_STATUS = new Set([204, 205, 304]);
+
 function toResponseHeaders(headers: Record<string, string>): Headers {
   const h = new Headers();
   for (const [k, v] of Object.entries(headers)) {
@@ -124,20 +151,24 @@ export async function httpProxy(url: string, init?: RequestInit): Promise<Respon
   );
   const resp = await invoke<HttpProxyResponse>("http_proxy", { req });
 
+  // 名字不能叫 init —— 会盖住函数参数 init: RequestInit
+  const respInit = { status: resp.status, headers: toResponseHeaders(resp.headers) };
+
+  // 304 / 204 这类必须 body=null, 见 NULL_BODY_STATUS 上面那段。
+  // 注意 **不能**只判空串: 服务端完全可以在 304 上回一段无意义的字节,
+  // 判据是状态码, 不是 body 内容。
+  if (NULL_BODY_STATUS.has(resp.status)) {
+    return new Response(null, respInit);
+  }
+
   // 分路让 TS 能 narrow bodyBytes 类型 (union 里混了 URLSearchParams 会报 TS2345).
   if (resp.bodyBase64) {
     const bin = atob(resp.body);
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return new Response(bytes, {
-      status: resp.status,
-      headers: toResponseHeaders(resp.headers),
-    });
+    return new Response(bytes, respInit);
   }
-  return new Response(resp.body, {
-    status: resp.status,
-    headers: toResponseHeaders(resp.headers),
-  });
+  return new Response(resp.body, respInit);
 }
 
 /** SSE 流式 fetch. 用于 /v1/chat/completions. 返 Response, body 是 ReadableStream. */
@@ -229,10 +260,14 @@ export async function httpProxyStream(url: string, init?: RequestInit): Promise<
     throw e;
   }
 
-  return new Response(stream, {
-    status: start.status,
-    headers: toResponseHeaders(start.headers),
-  });
+  // 流式这边同样要判 —— SSE 正常不会是 304, 但"正常不会"不是不判的理由:
+  // 真出现时抛的是同一个 TypeError, 而那时错误信息指向的是 chat 主链路。
+  const streamInit = { status: start.status, headers: toResponseHeaders(start.headers) };
+  if (NULL_BODY_STATUS.has(start.status)) {
+    void stream.cancel().catch(() => {});   // 没人读, 顺手关掉 Rust 那边的流
+    return new Response(null, streamInit);
+  }
+  return new Response(stream, streamInit);
 }
 
 /** Auto-detect: URL 或 body 是否 stream 请求 (chat completions / SSE). */

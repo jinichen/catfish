@@ -84,18 +84,39 @@ function renderApp() {
   );
 }
 
+// 8/14: 这条警告以前**每次启动都会打**, 而且打的是假话。
+//
+// Promise.race 先被 bootstrapEndpoints 赢下之后, 那个 setTimeout 没人清,
+// 5 秒一到照样执行, 于是日志里稳定出现:
+//
+//     [startup] bootstrapEndpoints 5000ms 未返回, 先渲染界面;
+//               endpoints 回退到 build-time 默认
+//
+// 而它上面几行就明明白白写着 endpoints 已经从 yaml 读到并覆盖了
+// (`[BL-ARCH2] webUrl: ... (来自 ~/.catfish/companion.yaml)`)。
+//
+// 一条恒定出现、内容还是错的警告, 比没有更糟: 真的超时那天, 它跟平时长得
+// 一模一样, 没人会多看一眼。所以既清定时器, 也在回调里再确认一次。
+let bootstrapSettled = false;
+let bootstrapTimer: ReturnType<typeof setTimeout> | undefined;
+
 Promise.race([
-  bootstrapEndpoints(),
-  new Promise<void>((resolve) =>
-    setTimeout(() => {
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[startup] bootstrapEndpoints ${BOOTSTRAP_TIMEOUT_MS}ms 未返回, 先渲染界面; ` +
-          `endpoints 回退到 build-time 默认, 可在设置里改。`,
-      );
+  bootstrapEndpoints().then(() => {
+    bootstrapSettled = true;
+    if (bootstrapTimer !== undefined) clearTimeout(bootstrapTimer);
+  }),
+  new Promise<void>((resolve) => {
+    bootstrapTimer = setTimeout(() => {
+      if (!bootstrapSettled) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[startup] bootstrapEndpoints ${BOOTSTRAP_TIMEOUT_MS}ms 未返回, 先渲染界面; ` +
+            `endpoints 回退到 build-time 默认, 可在设置里改。`,
+        );
+      }
       resolve();
-    }, BOOTSTRAP_TIMEOUT_MS),
-  ),
+    }, BOOTSTRAP_TIMEOUT_MS);
+  }),
 ])
   .catch(() => {
     /* bootstrapEndpoints 内部已全 try/catch, 这里只是保证 render 一定发生 */
