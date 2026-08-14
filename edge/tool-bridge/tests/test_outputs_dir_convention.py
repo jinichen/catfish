@@ -62,8 +62,27 @@ def test_仓里没有新的单数_output_产出路径():
                  ".git", "__pycache__", "archive", "tests", "test"}
     pat = re.compile(r"\.catfish[/\"'\s]*[/,]?\s*[\"']?output(?!s)[/\"']")
 
+    # git submodule 里的是**第三方代码**, 改不了 —— 就地打补丁推不上去,
+    # 下次 submodule 更新还会被冲掉。
+    #
+    # 现在只有一个: skills/creative/guizang-ppt-magazine (归藏的 PPT skill,
+    # github.com/op7418/guizang-ppt-skill)。它默认写 ~/.catfish/output/ 平铺。
+    # 不阻塞: 我们的 reader 两个目录都扫, 所以它的产出照样列得出来、搜得到。
+    # 真要它跟着走, 只能调用时显式传 output_dir (它支持这个参数), 或者 fork。
+    submodules = set()
+    gm = _REPO / ".gitmodules"
+    if gm.exists():
+        submodules = {
+            m.strip() for m in
+            re.findall(r"^\s*path\s*=\s*(.+)$", gm.read_text(encoding="utf-8"), re.M)
+        }
+
     hits: list[str] = []
     for root, dirs, files in os.walk(_REPO):
+        rel_root = str(Path(root).relative_to(_REPO))
+        if any(rel_root == s or rel_root.startswith(s + "/") for s in submodules):
+            dirs[:] = []
+            continue
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
         for fn in files:
             if not fn.endswith((".py", ".rs", ".ts", ".tsx")):
