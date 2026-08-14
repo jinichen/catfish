@@ -508,8 +508,29 @@ jobs:
               #    这一步是 6411320 新加的, **从来没成功跑通过一次**。如果这次还挂,
               #    下一步该考虑的是绕开 npx: 直接 Invoke-WebRequest 拉 CfT zip
               #    (URL 就在日志里) 自己解压摆位, 或者干脆先不打包 chromium。
+              # ★ 真因 (8/14 第三次, 这次是读 playwright 源码找出来的, 不是猜):
+              #
+              #   playwright 下载解压完之后, CLI 会做**宿主依赖校验**:
+              #
+              #     cli/program.js:174    validateHostRequirementsForExecutablesIfNeeded
+              #     registry/index.js:993 → validateDependenciesWindows
+              #     dependencies.js:143   → Promise.all(每个 exe/dll → missingFileDependenciesWindows)
+              #     dependencies.js:300   → spawnAsync(winldd, [该文件])
+              #
+              #   Chrome for Testing 的 chrome-win\ 里有几十个 exe/dll, **每一个都
+              #   spawn 一次 winldd (PrintDeps.exe), 而且是 Promise.all 全并发**。
+              #   4 核 Windows VM + Defender 实时扫描, 整段**零输出** —— 正好对上
+              #   "进度条 100% 之后静默 30 分钟"。
+              #
+              #   这个校验对我们毫无意义: 我们只是把浏览器打成 tar 给员工机用,
+              #   在 CI 机器上校验宿主依赖跟目标机没有任何关系。
+              #
+              #   playwright 自己提供了开关, 而且**跳过时会往 stderr 打一行**
+              #   ("Skipping host requirements validation logic because ...") ——
+              #   下次看日志能直接确认它有没有生效, 不用再猜。
+              $env:PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = '1'
+              # 关掉靠 \r 重画的动画进度条, 改逐行输出 (上一版加的, 留着)
               $env:CI = '1'
-              $env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = '0'
               Write-Host "----- dry-run: 它准备装什么 / 装到哪 -----"
               npx --yes playwright install chromium --dry-run
               Write-Host "----- 实际安装 -----"
