@@ -57,6 +57,58 @@ jobs:
             python --version
             git --version
 
+      # ─── 钉 Node 22.23.2 (8/14) ──────────────────────────────────
+      #
+      # 镜像自带的 node/npm 会随 CircleCI 更新漂, 而 hermes 的 engines 卡得很死:
+      #
+      #     node: ">=22.22.0"
+      #     npm:  "<11.10.0 || >=11.17.0"
+      #
+      # 上游 .npmrc 里 engine-strict=true —— 不满足是 **EBADENGINE 硬失败**, 不是 warn。
+      #
+      # 8/14 就是这么挂的: 镜像升到 node v26.1.0 / npm 11.13.0, node 满足,
+      # 但 npm 11.13.0 正落在被排除的 [11.10, 11.17) 区间里, `npm install` 当场 exit 1。
+      # 那个区间是上游有意排除的 —— npm 11.10.0–11.16.x 认 `min-release-age` 却忽略
+      # `min-release-age-exclude`, 于是 .npmrc 里被显式豁免的包照样吃 14 天冷却,
+      # 任何新发布的依赖都 ETARGET。
+      #
+      # 选 22.23.2 而不是 24/26: 跟 mac 那边同一个版本 (build-mac-resources.sh:222,
+      # 8/8 定的), 留在 v22 LTS 线内, **它 bundle 的 npm 是 10.x**, 天然落在
+      # `<11.10.0` 那一支。一个版本号解决两个约束。
+      #
+      # GitHub 那个同源 workflow 之所以没挂, 是因为它用 setup-node 钉了 node 20 ——
+      # 但 node 20 已经不满足 hermes v0.20 的 >=22.22.0 了, 它只是还没跑到那一步。
+      # 这里钉 22.23.2 两边都满足。
+      - run:
+          name: Pin Node 22.23.2 (hermes engines + npm bad-band)
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $ver = '22.23.2'
+            $dst = 'C:\node-pinned'
+            $zip = "$env:TEMP\node-$ver.zip"
+            if (-not (Test-Path "$dst\node.exe")) {
+              $url = "https://nodejs.org/dist/v$ver/node-v$ver-win-x64.zip"
+              Write-Host "Downloading $url"
+              Invoke-WebRequest -Uri $url -OutFile $zip
+              # 上一次跑到一半留下的残骸会让 Move-Item 挂, 且症状是"目录已存在"
+              # 这种跟真因无关的错。先清干净。
+              if (Test-Path $dst) { Remove-Item -Recurse -Force $dst }
+              if (Test-Path "$env:TEMP\node-extract") { Remove-Item -Recurse -Force "$env:TEMP\node-extract" }
+              Expand-Archive -Path $zip -DestinationPath "$env:TEMP\node-extract" -Force
+              Move-Item "$env:TEMP\node-extract\node-v$ver-win-x64" $dst
+              if (-not (Test-Path "$dst\node.exe")) { throw "解压后 $dst\node.exe 不存在 —— zip 结构变了?" }
+            }
+            # 后续 step 是新 shell, $env:PATH 不跨 step 保留 —— 写进 User 级环境变量。
+            # (Machine 级要管理员; User 级同样能被后续 step 继承, 风险更小。)
+            $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+            if ($userPath -notlike "*$dst*") {
+              [Environment]::SetEnvironmentVariable('Path', "$dst;$userPath", 'User')
+            }
+            $env:PATH = "$dst;$env:PATH"
+            Write-Host "===== pinned ====="
+            node --version
+            npm --version
+
       - restore_cache:
           keys:
             - rust-cargo-v1-{{ checksum "edge/companion-app/src-tauri/Cargo.lock" }}
@@ -173,6 +225,40 @@ jobs:
           command: |
             $ErrorActionPreference = 'Stop'
             $hermesDir = "$env:TEMP\hermes-agent-src"
+
+            # 保险: 就算 User 级 PATH 没被这个 step 继承, 也用钉住的那个 node。
+            if (Test-Path 'C:\node-pinned\node.exe') { $env:PATH = "C:\node-pinned;$env:PATH" }
+
+            # 跟打包用的这份 hermes 源码**当场对一遍** engines —— 跟
+            # build-mac-resources.sh 同一个思路: 版本号是手写的, hermes 每次升级
+            # 都可能再抬, 与其指望下次有人记得改, 不如让 CI 当场说清楚要改成什么。
+            #
+            # 不做完整 semver range 解析 (那要拉依赖), 只覆盖实际会出问题的两种:
+            #   node: `>=X.Y.Z` 下限
+            #   npm:  已知的 11.10.0–11.16.x 坏区间
+            # 解不出来就跳过并说一声, 不拦构建。
+            $pkgJson = "$hermesDir\package.json"
+            if (Test-Path $pkgJson) {
+              $eng = (Get-Content $pkgJson -Raw | ConvertFrom-Json).engines
+              $nodeNow = (node --version).TrimStart('v')
+              $npmNow  = (npm --version).Trim()
+              Write-Host "engines: node='$($eng.node)' npm='$($eng.npm)' | 实际: node=$nodeNow npm=$npmNow"
+
+              if ($eng.node -match '>=\s*(\d+)\.(\d+)\.(\d+)') {
+                $floor = [version]"$($Matches[1]).$($Matches[2]).$($Matches[3])"
+                if ([version]$nodeNow -lt $floor) {
+                  throw ("Node $nodeNow 低于 hermes 要求的 >=$floor。" +
+                         "修: 把上面 'Pin Node' step 里的 `$ver 抬到 >=$floor 的真实发布版, " +
+                         "同时同步 edge/companion-app/scripts/build-mac-resources.sh 的 NODE_VERSION。")
+                }
+              }
+              $npmV = [version]$npmNow
+              if ($npmV.Major -eq 11 -and $npmV.Minor -ge 10 -and $npmV.Minor -le 16) {
+                throw ("npm $npmNow 落在上游排除的坏区间 11.10.0-11.16.x " +
+                       "(它认 min-release-age 却忽略 min-release-age-exclude, 新依赖必 ETARGET)。" +
+                       "说明 'Pin Node' step 没生效 —— 检查 C:\node-pinned 是否存在、PATH 是否排在前面。")
+              }
+            }
             # 跳过 Playwright browser download (装完 npm 就 350MB 再 chromium 就爆 msi).
             # 员工用 Playwright 时若真需要 chromium, 那次会挂 → 后续阶段单独打包.
             $env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = '1'
