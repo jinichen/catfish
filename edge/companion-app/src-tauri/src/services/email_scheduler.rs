@@ -48,9 +48,10 @@ use crate::services::{
     catfish_paths, email_config, hermes_api_config, picker_config, upstream_error_guard,
 };
 // P3.3.58 (6/12 鸿波): 段 2A 集成 phishing_scan
-use crate::services::phishing_scan::{
-    self, LlmReviewInput, PhishingScanResult, Severity,
-};
+// 8/15: LLM 复审那层切到了 phishing_llm.rs (它在 phishing_scan.rs 里没有调用者,
+// 唯一的调用者就是本文件), 所以这里分成两个 import。
+use crate::services::phishing_llm::{self, LlmReviewInput};
+use crate::services::phishing_scan::{self, PhishingScanResult, Severity};
 
 // BL-COMPANION-BRIEFING-V2 sub-task 2 (5/20): 通知去重 + 评级持久化.
 //
@@ -664,7 +665,7 @@ async fn scan_phishing_for_new(new_items: &[EmailItem]) {
         }
     };
 
-    match phishing_scan::batch_llm_review(&llm_inputs, &base_url, &token, &model).await {
+    match phishing_llm::batch_llm_review(&llm_inputs, &base_url, &token, &model).await {
         Ok(verdicts) if verdicts.len() == scans.len() => {
             for (s, v) in scans.iter_mut().zip(verdicts.iter()) {
                 s.llm_verdict = Some(v.verdict.clone());

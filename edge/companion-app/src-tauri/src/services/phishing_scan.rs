@@ -113,7 +113,7 @@ use super::phishing_config::phishing_config;
 
 // ─── 核心 scan ──────────────────────────────────────────────
 
-/// 跑全规则集. 不走 LLM (由 caller 异步调 batch_llm_review).
+/// 跑全规则集. 不走 LLM (由 caller 异步调 phishing_llm::batch_llm_review).
 ///
 /// P3.3.65 (6/13 鸿波): 内部读 phishing_config(), yaml 没设 → 用默认值,
 /// 行为跟 P3.3.58 一致. 集团下发 yaml 后, 启停 / 关键词 / 阈值 / 白名单可配.
