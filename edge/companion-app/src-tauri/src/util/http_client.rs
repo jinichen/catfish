@@ -319,3 +319,111 @@ mod tests {
         assert!(c.is_ok(), "缺证书文件时 client 建不出来: {:?}", c.err());
     }
 }
+
+#[cfg(test)]
+mod no_proxy_convention {
+    //! 打中央 / 本机的 reqwest client 必须绕开系统代理 (8/14)。
+    //!
+    //! # 为什么要有这条守卫
+    //!
+    //! 这个坑爆过三次, 每次都是**新加的一处**裸 `Client::builder()`:
+    //!
+    //!   · P3.5.80 (7/28 达华现场) — http_proxy.rs 漏了, 查了一整轮
+    //!   · 8/9 — embedding 的**探测**漏了, 靠清死代码才顺带发现
+    //!   · 8/14 — embedding **真正发请求**的那个 client 漏了 (探测修了, 这个没修)
+    //!
+    //! 最后这次尤其能说明问题: 检查和真事用了两个不同的 client, 于是探测说
+    //! "gateway 通", 真请求 `error sending request` —— 检查永远比真事宽松。
+    //!
+    //! 症状每次都长得像网络问题, 而真因是 reqwest 默认读系统代理, 员工开着
+    //! Clash / 公司 VPN 时, 本机 127.0.0.1 的请求被塞进一条不存在的隧道。
+    //!
+    //! 靠"记得加"是不行的 —— 三次了。所以扫源码。
+
+    use std::path::{Path, PathBuf};
+
+    /// 允许裸 client 的地方, 每条都要写清楚**为什么**。
+    const ALLOW: &[(&str, &str)] = &[
+        (
+            "commands/weather.rs",
+            "公网天气 API —— 员工在公司网里正是靠代理才出得去, 绕过反而连不上",
+        ),
+        (
+            "util/http_client.rs",
+            "策略本体: trust_central / trust_central_blocking 自己就是那个 builder",
+        ),
+    ];
+
+    fn src_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")
+    }
+
+    fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        let rd = match std::fs::read_dir(dir) {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                rs_files(&p, out);
+            } else if p.extension().map(|x| x == "rs").unwrap_or(false) {
+                out.push(p);
+            }
+        }
+    }
+
+    #[test]
+    fn 打中央的_client_不许裸着建() {
+        let root = src_dir();
+        let mut files = Vec::new();
+        rs_files(&root, &mut files);
+        assert!(files.len() > 20, "只扫到 {} 个 .rs, 路径多半错了", files.len());
+
+        let mut bad: Vec<String> = Vec::new();
+        for f in &files {
+            let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+            if ALLOW.iter().any(|(a, _)| *a == rel) {
+                continue;
+            }
+            let text = match std::fs::read_to_string(f) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            let lines: Vec<&str> = text.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                if !line.contains("Client::builder()") {
+                    continue;
+                }
+                // 前后各看几行 —— 链式调用可能写在下面, trust_central 包裹写在上面
+                let lo = i.saturating_sub(4);
+                let hi = (i + 9).min(lines.len());
+                let window = lines[lo..hi].join("\n");
+                if !window.contains("trust_central") && !window.contains("no_proxy") {
+                    bad.push(format!("{rel}:{}", i + 1));
+                }
+            }
+        }
+        assert!(
+            bad.is_empty(),
+            "这些地方建 reqwest client 既没走 trust_central 也没 .no_proxy():\n  {}\n\n\
+             打中央服务 / 本机端口的一律要绕过系统代理 —— 员工开着 Clash 或公司 VPN 时,\n\
+             这些请求会被塞进代理隧道, 报出来只是一句 \"error sending request\"。\n\
+             确实要走代理的 (公网 API), 加进本文件 ALLOW 并写明理由。",
+            bad.join("\n  ")
+        );
+    }
+
+    #[test]
+    fn allow_名单里的文件必须真的存在() {
+        // ★ 否则文件改名之后, 白名单静默失效 —— 那一处就再也不被检查, 而测试照绿。
+        let root = src_dir();
+        for (rel, why) in ALLOW {
+            assert!(
+                root.join(rel).exists(),
+                "ALLOW 里的 {rel} 不存在了 (理由: {why}) —— 改名了就跟着改, 别留死条目"
+            );
+            assert!(!why.trim().is_empty(), "{rel} 的理由不能空");
+        }
+    }
+}

@@ -498,10 +498,33 @@ struct RemoteProvider {
 
 impl RemoteProvider {
     fn new(config: RemoteConfig) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.timeout_seconds))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+        // ★ 8/14 现场: 探测说"gateway 通", 真发请求却
+        //   `error sending request for url (http://127.0.0.1:8999/v1/embeddings)`。
+        //
+        // 因为**探测和真请求用的是两个不同的 client**:
+        //   · probe_remote_alive 走 trust_central_blocking (8/9 修过) → 绕代理 → 通
+        //   · 这里是裸 Client::builder() → reqwest 默认读系统代理和 HTTP(S)_PROXY
+        //
+        // 鸿波机器上系统代理指向 127.0.0.1:7890 (Clash), 而 Clash 没开 —— 网关就在
+        // 本机 8999, 直连一步就到, 却被塞进一条不存在的隧道。
+        //
+        // 这个坑 P3.5.80 (7/28 达华现场) 查了一整轮, trust_central 的注释里连报错
+        // 长什么样都写下来了。8/9 又因为清死代码发现"探测一直没接上"修了探测那一半
+        // —— 唯独真正发请求的这一半留到了今天。
+        //
+        // 检查和真事用不同的 client, 本身就是个 bug 生成器: 检查永远比真事宽松。
+        let builder = crate::util::http_client::trust_central(
+            reqwest::Client::builder().timeout(Duration::from_secs(config.timeout_seconds)),
+        );
+        let client = builder.build().unwrap_or_else(|e| {
+            // 兜底的 Client::new() **不绕代理** —— 真走到这里等于回到上面那个 bug,
+            // 所以必须留声, 不能静默。
+            log::warn!(
+                "[embedding/remote] 带证书/绕代理的 client 构建失败 ({e}), \
+                 退回默认 client —— 系统代理开着的话请求可能连不出去"
+            );
+            reqwest::Client::new()
+        });
         Self { config, client }
     }
 

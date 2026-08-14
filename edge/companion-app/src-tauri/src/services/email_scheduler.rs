@@ -855,10 +855,16 @@ async fn call_rate_llm(items: &[EmailItem]) -> Result<Vec<Urgency>, String> {
         stream: false,
     };
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .map_err(|e| format!("reqwest build 失败: {e}"))?;
+    // 8/14: 走 trust_central —— 这条打的是本机 hermes 8642, 而 reqwest 默认会读
+    // 系统代理。员工开着 Clash / 公司 VPN 时请求被塞进代理隧道, 报出来是
+    // "error sending request"(详见 util/http_client.rs 上那段长注释)。
+    // 今晚 embedding 就是这么挂的 —— 这处是同一个病, 只是还没爆。
+    let client = crate::util::http_client::trust_central(
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(15)),
+    )
+    .build()
+    .map_err(|e| format!("reqwest build 失败: {e}"))?;
 
     let resp = client
         .post(format!("{base_url}/v1/chat/completions"))
