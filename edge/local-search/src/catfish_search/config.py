@@ -240,28 +240,61 @@ def _ensure_in_include(lines: list[str], path: str, comment: str) -> bool:
     except StopIteration:
         return False
 
-    # include 段的结束 = 下一个顶格且非注释非空的行（即下一个顶层 key）
+    # include 段的结束 = 下一个顶层 **key**（非注释、非空、不是列表项）
+    #
+    # ⚠ 8/14 修: 老判据是"顶格且非注释非空"，把**顶格的列表项**也当成了段尾。
+    #
+    #   YAML 允许 block sequence 跟它的 key 同列：
+    #
+    #       include:
+    #       - ~/.catfish/uploads      ← 合法，而且这正是 yaml.safe_dump 的输出
+    #
+    #   员工在面板上加/删过目录之后，Tauri 那边是 load→改→dump 重写整个文件，
+    #   于是文件就从 DEFAULT_CONFIG 的缩进风格变成了顶格风格。此后再跑迁移：
+    #   第一个 `- ~/...` 被当成"下一个顶层 key" → 认为 include 段里一条目都没有
+    #   → 新条目插在 `include:` 正下方、还带 2 空格缩进 → 跟下面顶格的条目混在
+    #   同一层 → **整个 yaml 解析失败**，索引直接跑不起来。
+    #
+    #   这是 7/27 就埋下的，只是当时文件还是缩进风格没触发；8/14 加
+    #   catfish-outputs-2026-08 时在鸿波机器上炸了。
     end = len(lines)
     for i in range(start + 1, len(lines)):
         s = lines[i]
-        if s.strip() and not s.startswith((" ", "\t", "#")):
-            end = i
-            break
+        if not s.strip():
+            continue
+        if s.startswith((" ", "\t", "#")):
+            continue
+        if s.lstrip().startswith(("- ", "-\t")) or s.rstrip() == "-":
+            continue          # 顶格的列表项，仍在 include 段里
+        end = i
+        break
 
-    # 员工可能自己手写过，别插重复的。同时记住最后一个**真实条目**的位置。
+    # 员工可能自己手写过，别插重复的。同时记住最后一个**真实条目**的位置，
+    # 以及它的缩进 —— 新条目必须跟现有条目**同列**。
     last_item = start
+    indent: str | None = None
     for i in range(start + 1, end):
-        item = lines[i].strip()
+        raw = lines[i]
+        item = raw.strip()
         if not item.startswith("- "):
             continue  # 注释掉的 `# - ~/work` 不算条目
+        if indent is None:
+            indent = raw[: len(raw) - len(raw.lstrip())]
         if _same_path(item[2:].strip(), path):
             return True
         last_item = i
 
+    # ⚠ 8/14: 缩进**跟着文件走**，不要硬编码两个空格。
+    #    老代码写死 `  - {path}`，而员工在面板上加删过目录之后文件被
+    #    yaml.safe_dump 重写成顶格风格 (`- ~/x`)，两种缩进混在同一层 →
+    #    yaml 解析直接失败，索引跑不起来。见上面 end 那段的说明。
+    #    段里一条目都没有时退回 DEFAULT_CONFIG 的两格风格。
+    pad = indent if indent is not None else "  "
+
     # 插在最后一个真实条目之后，而不是整段末尾 —— DEFAULT_CONFIG 段尾是
     # "# 按需打开下面这些（取消前面的 #）" 那堆注释掉的候选项，插它们后面
     # 读起来像是那组的一员，很怪。
-    lines[last_item + 1 : last_item + 1] = ["", f"  # {comment}", f"  - {path}"]
+    lines[last_item + 1 : last_item + 1] = ["", f"{pad}# {comment}", f"{pad}- {path}"]
     return True
 
 
