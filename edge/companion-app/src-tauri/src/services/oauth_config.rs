@@ -8,7 +8,7 @@
 //! ⚠ 这里只放**配置来源**。client_secret 之类的东西不在这条路径上:
 //! 走的是 PKCE public client, 没有 secret 要存。
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 
 pub(crate) const DEFAULT_SCOPE: &str = "openid email profile";

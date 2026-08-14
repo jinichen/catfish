@@ -10,7 +10,7 @@
 漏的原因不是没查 —— 依赖扫描里明确列过 helper 用这两个函数, 是写文件头时
 没把扫描结果带进去。编译器当然会报, 但那要等人跑一次 cargo, 一个来回。
 
-# 七条反向验证 (改这个脚本之前先跑一遍, 确认它还抓得到)
+# 八条反向验证 (改这个脚本之前先跑一遍, 确认它还抓得到)
 #
 # ⚠ 每条的变异必须**精确**。2026-08-15 验证第 7 条时我把那行整个删掉了 ——
 #    那变成了"名字未定义", 由第 5 条 (模块前缀/没导入) 接住, 于是第 7 条看着
@@ -22,6 +22,7 @@
 #   4 super 差一层     hermes_install.rs         mod tests 里 crate::commands:: → super::
 #   5 模块前缀没导入   email_llm.rs              删掉 use crate::services::{hermes_api_config, …}
 #   6 死 import        任意新文件                加一条 use std::collections::HashMap;
+#   8 宏没导入       oauth_config.rs           use anyhow::{anyhow,…} → 去掉 anyhow
 #   7 只在测试里用     autostart_mcp.rs          把 mod tests 里那条 use **挪到文件顶层**
 #                                               (不是删掉 —— 删掉是第 5 条的场景)
 
@@ -355,10 +356,48 @@ def scan_test_only_imports(files):
                     out.append(f"{f}: {nm} 只在 #[cfg(test)] 里用, 但 use 写在文件顶层")
     return out
 
+def scan_macros(files):
+    """用了需要显式 use 的宏, 却没导入。
+
+    2026-08-15 oauth_config.rs 漏了 `anyhow` (只写了 Context, Result), 3 个
+    编译错。而上面那套调用点扫描**故意**跳过了 `name!` 形式 —— 当初是为了
+    躲开 format!/println! 之类的噪音, 顺手把 anyhow!/bail! 也躲掉了。
+    "为了少报噪音而放宽判据"和"判据漏掉真东西"往往是同一个动作的两面。
+
+    只查 anyhow crate 那三个: std 的宏 (println!/format!/vec!) 不需要 use,
+    列进来只会制造噪音。
+    """
+    NEED={"anyhow","bail","ensure"}
+    out=[]
+    for f in files:
+        L=Path(f).read_text(encoding="utf-8").splitlines()
+        body="\n".join(re.sub(r'//.*$','',l) for l in L if not l.strip().startswith("use "))
+        # ⚠ 只能看 {} 里的名字, 不能扫整行。
+        # `use anyhow::{Context, Result};` 这行里 "anyhow" 是 **crate 路径**,
+        # 按整行扫会把它当成"anyhow 已导入", 于是这条检查恒不报。
+        # 2026-08-15 第一版就是这么写的, 反向验证当场露馅。
+        imported=set(); acc=None
+        def take(u):
+            g=re.findall(r'\{(.*)\}',u)
+            return set(re.findall(r'\b(\w+)\b',g[0])) if g else {u.rstrip(";").split("::")[-1].strip()}
+        for l in L:
+            s=l.strip()
+            if acc is not None:
+                acc+=" "+s
+                if s.endswith(";"): imported|=take(acc); acc=None
+                continue
+            if s.startswith("use "):
+                if s.endswith(";"): imported|=take(s)
+                else: acc=s
+        for m in NEED:
+            if re.search(rf'(?<![\w:]){m}!\s*\(',body) and m not in imported:
+                out.append(f"{f}: 用了 {m}! 但没 use anyhow::{m}")
+    return out
+
 bad=0
 for f in sys.argv[1:]:
     m=scan(f)
     if m: bad+=1; print(f"  ❌ {f}: 可能没导入 → {m}")
-for w in scan_members(sys.argv[1:])+scan_signatures(sys.argv[1:])+scan_super_depth(sys.argv[1:])+scan_module_prefixes(sys.argv[1:])+scan_dead_imports(sys.argv[1:])+scan_test_only_imports(sys.argv[1:]):
+for w in scan_members(sys.argv[1:])+scan_signatures(sys.argv[1:])+scan_super_depth(sys.argv[1:])+scan_module_prefixes(sys.argv[1:])+scan_dead_imports(sys.argv[1:])+scan_test_only_imports(sys.argv[1:])+scan_macros(sys.argv[1:]):
     bad+=1; print("  ❌ "+w.strip())
 print(f"\n可疑 {bad} 个" if bad else f"\n✓ {len(sys.argv)-1} 个文件, 未发现缺失的跨文件引用")
