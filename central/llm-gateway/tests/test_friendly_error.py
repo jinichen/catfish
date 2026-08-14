@@ -186,3 +186,76 @@ class TestPriorityOrdering:
         raw = "BadRequestError: 400 - image_url field not supported"
         msg = _friendly_upstream_error(raw)
         assert "图" in msg or "vision" in msg or "视觉" in msg
+
+
+# ════════════════════════════════════════════════════════════════
+# 8/15: 配额烧光 ≠ 限流, 以及 UTC 恢复时间换算
+# ════════════════════════════════════════════════════════════════
+
+import datetime as _dt
+
+from catfish_gateway.errors import _QUOTA_EXHAUSTED, localize_reset_hint
+
+# 2026-08-15 现场原文 (阿里云 token-plan 周配额)
+现场原文 = (
+    "litellm.RateLimitError: RateLimitError: OpenAIException - Error code: 429 - "
+    "{'error': {'message': 'Your token-plan 1-week quota has been exhausted. "
+    "The quota will reset at 08-14 23:54:00 UTC.', "
+    "'type': 'insufficient_quota', 'code': 'insufficient_quota'}}"
+)
+
+
+def test_配额烧光不再被当成限流():
+    """现场那条报文里带 429, 原来被判成"等几秒再试" —— 而实际要等 1.4 小时。"""
+    out = _friendly_upstream_error(现场原文)
+    assert "配额" in out
+    assert "等几秒" not in out or "等几秒没用" in out
+
+
+def test_限流还是限流_没被配额那条抢走():
+    out = _friendly_upstream_error("litellm.RateLimitError: Error code: 429 - too many requests")
+    assert "调用频率超限" in out
+
+
+def test_恢复时间换算成本地_期望值手算():
+    """UTC 22:54 → 东八区 06:54 次日。期望值是手算的, 不是抄函数输出。"""
+    now = _dt.datetime(2026, 8, 14, 22, 32, tzinfo=_dt.timezone.utc)
+    hint = localize_reset_hint(现场原文, now=now)
+    assert hint is not None
+    # 只断言 UTC 侧的事实 (跑测试的机器时区未知): 差 1.4 小时, 且给的是未来时间
+    assert "1.4 小时" in hint, hint
+    assert "恢复" in hint
+
+
+def test_已经过了恢复时间就别再说还要等():
+    now = _dt.datetime(2026, 8, 15, 3, 0, tzinfo=_dt.timezone.utc)  # 已过 23:54
+    hint = localize_reset_hint(现场原文, now=now)
+    assert "应已恢复" in hint, hint
+
+
+def test_没写_utc_的时间不认():
+    """没标时区的时间戳换算过去只会更误导, 宁可不给。"""
+    assert localize_reset_hint("quota will reset at 08-14 23:54:00") is None
+
+
+def test_没有恢复时间就返_none():
+    assert localize_reset_hint("Insufficient Balance") is None
+
+
+def test_跨年不会算成半年前():
+    """12-31 UTC 的恢复时间, 在 1 月 1 日看应该是"昨天", 不是"今年 12 月"。"""
+    now = _dt.datetime(2027, 1, 1, 2, 0, tzinfo=_dt.timezone.utc)
+    hint = localize_reset_hint("reset at 12-31 23:00 UTC", now=now)
+    assert hint is not None and "应已恢复" in hint, hint
+
+
+def test_配额词表是_fallback_那组的子集():
+    """防漂移: errors.py 这份是给员工看文案用的, fallback.py 那份决定切不切模型。
+
+    两处故意分开 (问的问题不同), 但这边不该出现那边没有的词 —— 否则会出现
+    "文案说配额尽了, 而 fallback 认为不是配额问题"这种自相矛盾的状态。
+    """
+    from catfish_gateway.fallback import _ERROR_KEYWORDS
+
+    多的 = set(_QUOTA_EXHAUSTED) - set(_ERROR_KEYWORDS["insufficient balance"])
+    assert not 多的, f"errors.py 多出这些词, fallback.py 没有: {多的}"

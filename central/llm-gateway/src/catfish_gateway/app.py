@@ -2752,9 +2752,13 @@ async def _stream_chat_completion(
     except Exception as e:  # noqa: BLE001
         status_str = "error"
         err = str(e)
+        # 8/15: 上游报的恢复时间是 UTC, 而这行日志打的是本地时间。两个时区并排
+        # 放着 (日期还可能差一天), 排查的人会以为早就该恢复了。换算一份出来。
+        _reset = _localize_reset_hint(err)
         logger.exception(
-            "streaming chat completion failed (attempts=%s)",
+            "streaming chat completion failed (attempts=%s)%s",
             " -> ".join(attempts_log) if attempts_log else "single",
+            f" · {_reset}" if _reset else "",
         )
         # 给客户端一个 friendly 错误 —— 把内部 trace 简化成人话
         friendly = _friendly_upstream_error(err)
@@ -2855,6 +2859,7 @@ async def _stream_chat_completion(
 # _friendly_upstream_error 抽到 errors.py (无 litellm 依赖, 测试可独立 import).
 # 在 app.py 里给一个 alias 别名, 兼容历史 import 路径.
 from .errors import friendly_upstream_error as _friendly_upstream_error
+from .errors import localize_reset_hint as _localize_reset_hint
 
 
 async def _invoke_chat_completion(

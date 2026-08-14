@@ -4,6 +4,69 @@
 """
 from __future__ import annotations
 
+import datetime as _dt
+import re
+
+# 配额/余额烧光的关键词。
+#
+# ⚠ fallback.py 的 _ERROR_KEYWORDS["insufficient balance"] 里有一份更全的。
+# 两处**故意**分开, 因为问的不是同一个问题:
+#   fallback.py:  要不要自动切到别的模型 (是产品/合规决策, 8/9 鸿波定的 opt-in)
+#   这里:         给员工什么建议 (纯文案, 跟切不切无关)
+# 防漂移靠 tests/test_friendly_error.py::test_配额词表是_fallback_那组的子集 ——
+# 这边加词而那边没有, 测试就红。
+_QUOTA_EXHAUSTED = (
+    "insufficient balance",
+    "insufficient_balance",
+    "insufficient quota",
+    "insufficient_quota",
+    "payment required",
+    "arrearage",
+    "余额不足",
+    "欠费",
+)
+
+# 上游报的恢复时间: "The quota will reset at 08-14 23:54:00 UTC."
+# 只认明写 UTC 的 —— 没写时区的时间戳换算过去只会更误导。
+_RESET_UTC_RE = re.compile(
+    r"reset(?:s)?\s+at\s+(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*UTC",
+    re.IGNORECASE,
+)
+
+
+def localize_reset_hint(raw: str, now: _dt.datetime | None = None) -> str | None:
+    """把上游 UTC 的配额恢复时间换算成本机时区, 换不出来返 None。
+
+    # 为什么要这个
+
+    2026-08-15 现场: 网关日志打的是本地时间 `2026-08-15 06:32`, 上游报的是
+    `reset at 08-14 23:54 UTC`。两个并排放着, 日期还差一天, 人的第一反应是
+    "早该恢复了, 是不是我们哪儿坏了" —— 实际还差 1 小时 22 分。
+    两个时区并排显示而不标注, 等于让人自己做时区换算, 而人在排查故障时不会做。
+
+    上游只给月-日, 不给年。用当前年份补, 跨年时按"离现在最近"取舍。
+    """
+    m = _RESET_UTC_RE.search(raw)
+    if not m:
+        return None
+    now = now or _dt.datetime.now(_dt.timezone.utc)
+    month, day, hour, minute = (int(m.group(i)) for i in (1, 2, 3, 4))
+    second = int(m.group(5) or 0)
+    for year in (now.year, now.year - 1, now.year + 1):
+        try:
+            when = _dt.datetime(year, month, day, hour, minute, second, tzinfo=_dt.timezone.utc)
+        except ValueError:
+            continue  # 2-29 之类, 换个年份再试
+        if abs((when - now).days) <= 180:
+            break
+    else:
+        return None
+    local = when.astimezone()
+    delta_h = (when - now).total_seconds() / 3600
+    if delta_h > 0:
+        return f"配额 {local:%m-%d %H:%M} 恢复 (本地时间, 还有 {delta_h:.1f} 小时)"
+    return f"配额 {local:%m-%d %H:%M} 应已恢复 (本地时间) —— 若仍报错就是别的原因"
+
 
 def friendly_upstream_error(raw: str) -> str:
     """把 LiteLLM / OpenAI / Google 的 trace 转人话, 截断在 200 字符以内.
@@ -38,6 +101,17 @@ def friendly_upstream_error(raw: str) -> str:
         return "Gemini 拒绝了带工具的请求 — gemini_guard 问题, 反馈给鸿波"
 
     # ===== 4xx 客户端错误 =====
+    # ⚠ 配额烧光必须排在 429 之前。
+    #
+    # 上游把"周配额用尽"也报成 429, 于是它会被下面那条接住, 员工看到的建议是
+    # "等几秒再试" —— 而真实情况是等 1.4 小时或者换模型。2026-08-15 现场就是
+    # 这么误导过一次。两件事的处理方式完全相反, 不能共用一句文案:
+    #   限流   = 瞬时, 等几秒就好, 同一个模型能继续用
+    #   配额尽 = 账务状态, 等几秒没用, 必须换模型或等恢复
+    if any(k in low for k in _QUOTA_EXHAUSTED):
+        hint = localize_reset_hint(raw)
+        base = "上游配额/余额已用尽 (不是限流, 等几秒没用) — 换个模型, 或等配额恢复"
+        return f"{base}\n{hint}" if hint else base
     if " 429" in f" {low} " or "rate limit" in low or "ratelimit" in low or "too many requests" in low:
         return "调用频率超限 (429) — 等几秒再试 / 换个模型"
     if " 401" in f" {low} " or "unauthorized" in low or "invalid api key" in low or "incorrect api key" in low:
