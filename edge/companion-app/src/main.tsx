@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { bootstrapEndpoints } from "./lib/env";
 import { fetchViaProxy } from "./lib/http_proxy";
+import { installFetchProxy } from "./lib/fetchProxyPolicy";
 import { checkTimeoutChain } from "./lib/timeouts";
 import {
   StartupErrorBoundary,
@@ -44,30 +45,14 @@ import "./styles/refresh.css";
   }
 })();
 
-(function installFetchProxy() {
-  const originalFetch = window.fetch.bind(window);
-  window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    // 提取 URL string
-    let url: string;
-    if (typeof input === "string") {
-      url = input;
-    } else if (input instanceof URL) {
-      url = input.href;
-    } else if (input && typeof (input as Request).url === "string") {
-      url = (input as Request).url;
-    } else {
-      // 不认识的 input 类型 · 用原生 · 保守
-      return originalFetch(input, init);
-    }
-
-    // 只 patch http:// https:// (external). 其他 scheme (tauri: ipc: blob: data: file: 相对路径)
-    // 都走原生 · CSP self 允许.
-    if (url.startsWith("http://") || url.startsWith("https://")) {
-      return fetchViaProxy(url, init);
-    }
-    return originalFetch(input, init);
-  };
-})();
+// 判据和安装逻辑都在 fetchProxyPolicy.ts —— **别在这里内联**。
+//
+// 8/14 Windows 白屏就是这段曾经内联在这里的判据干的: 原来写的是
+// `url.startsWith("http://")`, 而 Windows 上 Tauri **自己的 IPC**
+// 就是 http://ipc.localhost/<cmd> (macOS 上是 ipc://localhost/<cmd>),
+// 于是每次 invoke 都被劫进代理, 代理内部又 invoke, 无限递归到爆 V8
+// 字符串上限。它当时没被任何测试覆盖, 正是因为锁在这个 IIFE 里不可 import。
+installFetchProxy(fetchViaProxy);
 
 // 装错误钩子 —— 必须在 render 之前, 否则 render 期间出事照样是白屏。
 installStartupDiagnostics();
