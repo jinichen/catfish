@@ -71,7 +71,10 @@ pub mod sessions;
 pub mod skill_audit;
 pub mod skill_feedback;
 pub mod skill_revision;
-pub mod skills;
+pub mod skills; // 8/14 拆分: 只剩 tauri command 层, 实现在下面三个
+pub mod skills_install; // 安装 / 卸载 / zip 导入 / 还原
+pub mod skills_list; // 扫描 / 解析 / 列举
+pub mod skills_mcp; // MCP servers 的读和写 (同一段 config.yaml)
 pub mod speech;
 pub mod system;
 pub mod task_chat; // P3.3.7 Phase 2 (6/10): ~/.catfish/task_chat/<key>.jsonl task-scoped chat 持久化
