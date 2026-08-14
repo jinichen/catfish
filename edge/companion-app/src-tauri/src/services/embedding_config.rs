@@ -14,7 +14,8 @@
 //! ```yaml
 //! embedding:
 //!   backend: auto              # auto | local | remote
-//!                              # auto: 启动 ping remote (timeout_seconds), 通则 remote, 否则 local
+//!                              # auto: 启动看 token + ping remote, 都过才 remote;
+//!                              #       运行时远程连续失败也会整体退回本机 (8/14)
 //!   local:
 //!     model_path: ~/.catfish/models/bge-m3.onnx
 //!     tokenizer_path: ~/.catfish/models/tokenizer.json
@@ -45,7 +46,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Backend {
-    /// 启动时 ping remote, 通用 remote, 否则 local. 一旦选定不动态切换 (重启 Companion 再检测).
+    /// 启动时看 token + ping remote, 都过才 remote, 否则 local.
+    /// 运行时远程连续失败到阈值也会整体退回本机 (8/14, 见 embedding.rs)。
     #[default]
     Auto,
     /// 本机 ONNX BGE-M3.
