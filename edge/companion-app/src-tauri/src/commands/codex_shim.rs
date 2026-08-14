@@ -6,7 +6,6 @@
 //! 否则 Windows 上编译不过。
 
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::codex_probe::{home_dir, hermes_python};

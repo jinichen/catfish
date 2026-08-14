@@ -10,6 +10,8 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use super::codex_probe::{hermes_agent_root, hermes_python};
+
 /// 这段 helper 运行在 Hermes 自己的 venv 中，所用 API 与 `/codex-runtime`
 /// 命令完全相同。JSON 始终放在 stdout 最后一行，以兼容 Hermes
 /// 迁移过程中可能打印的提示。
@@ -196,17 +198,17 @@ pub(crate) struct HermesState {
     #[serde(default)]
     pub(crate) models: Vec<String>,
     #[serde(default)]
-    result: Option<HermesActionResult>,
+    pub(crate) result: Option<HermesActionResult>,
 }
 
 #[derive(Debug, Deserialize, Default)]
-struct HermesActionResult {
+pub(crate) struct HermesActionResult {
     #[serde(default)]
-    success: bool,
+    pub(crate) success: bool,
     #[serde(default)]
-    message: String,
+    pub(crate) message: String,
     #[serde(default)]
-    requires_new_session: bool,
+    pub(crate) requires_new_session: bool,
 }
 
 pub(crate) fn prepend_path(command: &mut Command, dirs: &[PathBuf]) {
