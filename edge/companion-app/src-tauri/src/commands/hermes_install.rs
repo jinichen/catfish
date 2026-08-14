@@ -417,13 +417,18 @@ pub async fn reinstall_hermes_agent(app: tauri::AppHandle) -> Result<(), String>
 mod tests {
     use super::*;
     use std::fs;
-    // 只有测试用到的 —— 放在 mod 内部, 放到文件顶上会让非测试编译报 unused import
-    use super::hermes_install_artifacts::{resolve_runtime_dir_for_home, RUNTIME_ARCHIVES};
-    use super::hermes_install_base::{
+    // 只有测试用到的 —— 放在 mod 内部, 放到文件顶上会让非测试编译报 unused import。
+    //
+    // ⚠ 这里必须写 crate::commands::, 不能写 super::。文件顶上的 `super` 指的是
+    // commands, 但在 mod tests 里面 `super` 指的是 hermes_install 本身, 差一层。
+    use crate::commands::hermes_install_artifacts::{
+        resolve_runtime_dir_for_home, RUNTIME_ARCHIVES,
+    };
+    use crate::commands::hermes_install_base::{
         hermes_pinned_commit, COMPLETION_MARKER, INSTALL_METHOD_MARKER, STAGE_READY_MARKER,
     };
-    use super::hermes_install_health::parse_version_file;
-    use super::hermes_install_state::{
+    use crate::commands::hermes_install_health::parse_version_file;
+    use crate::commands::hermes_install_state::{
         write_json_atomic, write_transaction, CompletionRecord, TransactionRecord,
     };
 

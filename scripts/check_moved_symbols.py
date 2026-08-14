@@ -23,7 +23,7 @@ hermes_python 两个名字。也就是说对"漏导入"这一类, 它不漏报�
 判据比被判的事宽, 判据就会替 bug 背书 —— 所以这条反向验证比脚本本身重要,
 以后改这个脚本, 先确认它还能抓到这个例子。
 """
-import re,sys
+import re,sys,os,glob
 from pathlib import Path
 ATTR={"derive","cfg","not","pub","target_os","test","serde","ignore","allow","warn","deny",
       "doc","crate","unix","windows","macos","feature","tauri","command","rename_all","default"}
@@ -151,10 +151,46 @@ def scan_signatures(files):
                 acc=None
     return out
 
+def scan_super_depth(files):
+    """嵌套 mod 里的 `use super::<兄弟模块>` —— super 差了一层。
+
+    2026-08-15 第五次: 拆 hermes_install.rs 时把测试专属的 import 放进了
+    mod tests 内部 (放文件顶上非测试编译会报 unused), 但照抄了顶层的写法:
+
+        文件顶层:      super = commands          → super::hermes_install_state  ✓
+        mod tests 里:  super = hermes_install    → super::hermes_install_state  ✗
+
+    cargo check 完全看不出来 —— mod tests 有 #[cfg(test)], 只有 cargo test
+    才编译它。所以这一类必须自己查, 不能指望"check 绿了就行"。
+
+    判据: 用花括号配对定出每个 mod 块的范围 (不靠缩进猜), 块内的
+    `use super::X` 若 X 是同目录的另一个 .rs, 就是差了一层。
+    """
+    out=[]
+    for f in files:
+        d=os.path.dirname(f) or "."
+        sibs={Path(x).stem for x in glob.glob(f"{d}/*.rs")}-{Path(f).stem,"mod"}
+        if not sibs: continue
+        L=Path(f).read_text(encoding="utf-8").splitlines()
+        spans=[]
+        for i,l in enumerate(L):
+            if re.match(r'\s*(pub(\(crate\))? )?mod \w+\s*\{',l):
+                depth=0
+                for j in range(i,len(L)):
+                    depth+=L[j].count("{")-L[j].count("}")
+                    if depth==0: spans.append((i+1,j+1)); break
+        for a,b in spans:
+            for k in range(a,b):
+                m=re.match(r'\s*use super::(\w+)',L[k])
+                if m and m.group(1) in sibs:
+                    out.append(f"{f}:{k+1}: mod 块里的 super::{m.group(1)} 差一层 "
+                               f"(该写 crate::…::{m.group(1)})")
+    return out
+
 bad=0
 for f in sys.argv[1:]:
     m=scan(f)
     if m: bad+=1; print(f"  ❌ {f}: 可能没导入 → {m}")
-for w in scan_members(sys.argv[1:])+scan_signatures(sys.argv[1:]):
+for w in scan_members(sys.argv[1:])+scan_signatures(sys.argv[1:])+scan_super_depth(sys.argv[1:]):
     bad+=1; print("  ❌ "+w.strip())
 print(f"\n可疑 {bad} 个" if bad else f"\n✓ {len(sys.argv)-1} 个文件, 未发现缺失的跨文件引用")
