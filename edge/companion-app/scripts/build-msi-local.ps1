@@ -219,7 +219,12 @@ if ($SkipChromium -and (Test-Path $chromiumOut) -and (Get-Item $chromiumOut).Len
     Push-Location $hermesDir
     try {
         Write-Host "  ===== npx playwright install chromium (~170MB compressed / 350MB extracted) =====" -ForegroundColor DarkGray
-        npx --yes playwright install chromium --loglevel=error
+        # ⚠ 这里**不能**带 --loglevel=error —— 那是 npm 的参数, 不是 playwright 的。
+        #   `npx playwright install chromium --loglevel=error` 会把它原样传给
+        #   playwright 的 CLI, commander 直接 `error: unknown option` 退 1。
+        #   8/14 撞的: 前面几步一修好, 流水线走到这里当场挂。
+        #   playwright install 没有 loglevel 这类开关, 想安静就靠外面的重定向。
+        npx --yes playwright install chromium
         if ($LASTEXITCODE -ne 0) { throw "npx playwright install chromium failed" }
     } finally { Pop-Location }
 
