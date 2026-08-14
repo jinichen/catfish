@@ -259,3 +259,13 @@ def test_配额词表是_fallback_那组的子集():
 
     多的 = set(_QUOTA_EXHAUSTED) - set(_ERROR_KEYWORDS["insufficient balance"])
     assert not 多的, f"errors.py 多出这些词, fallback.py 没有: {多的}"
+
+
+def test_配额和限流要被认出来_好决定不打_traceback():
+    from catfish_gateway.errors import is_quota_or_rate_limit as q
+    assert q(现场原文)
+    assert q("Error code: 429 - too many requests")
+    assert q("RESOURCE_EXHAUSTED")
+    # 不是这一类的别误伤 —— 它们的调用栈是有价值的
+    assert not q("BadRequestError: 400 - image_url field not supported")
+    assert not q("APIConnectionError: connection refused")

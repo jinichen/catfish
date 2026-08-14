@@ -34,6 +34,25 @@ _RESET_UTC_RE = re.compile(
 )
 
 
+def is_quota_or_rate_limit(raw: str) -> bool:
+    """这条错是"上游配额/限流"吗 —— 用来决定**要不要打 traceback**。
+
+    这类错的 Python 调用栈全是 litellm/openai 内部, 对排查零价值; 而它一来
+    就是每个请求刷四十行, 把真正要看的东西 (哪个模型 / 上游原话 / 什么时候
+    恢复) 挤出屏幕。更糟的是: 上游给的恢复时间是 UTC, 原样躺在栈的**最后
+    一行**, 而我们换算成本地时间的那份在四十行之上 —— 人一眼看到的永远是
+    没换算的那个。2026-08-15 就这么误判过一次 (以为早该恢复了)。
+    """
+    low = raw.lower()
+    if any(k in low for k in _QUOTA_EXHAUSTED):
+        return True
+    if " 429" in f" {low} ":
+        return True
+    return any(
+        k in low for k in ("rate limit", "ratelimit", "too many requests", "resource_exhausted")
+    )
+
+
 def localize_reset_hint(raw: str, now: _dt.datetime | None = None) -> str | None:
     """把上游 UTC 的配额恢复时间换算成本机时区, 换不出来返 None。
 

@@ -2758,15 +2758,34 @@ async def _stream_chat_completion(
         # 8/15: 上游报的恢复时间是 UTC, 而这行日志打的是本地时间。两个时区并排
         # 放着 (日期还可能差一天), 排查的人会以为早就该恢复了。换算一份出来。
         _reset = _localize_reset_hint(err)
-        logger.exception(
-            "streaming chat completion failed (attempts=%s)%s",
-            # 8/15: 原来这里是 `if attempts_log else "single"`, 而 attempts_log
-            # 在失败路径上恒为空 (见上面 attempts_out) —— 于是**每一次失败**都打
-            # "single", 不管实际试过几个。现在有真数据了; 还空就说明连主模型
-            # 都没跑起来 (invoke 之前就抛了), 那也照实说。
-            " -> ".join(attempts_log) if attempts_log else "无记录(主模型都没跑起来)",
-            f" · {_reset}" if _reset else "",
-        )
+        # 8/15: 原来这里是 `if attempts_log else "single"`, 而 attempts_log 在失败
+        # 路径上恒为空 (见上面 attempts_out) —— 于是**每一次失败**都打 "single",
+        # 不管实际试过几个。现在有真数据了; 还空就说明连主模型都没跑起来。
+        _attempts = " -> ".join(attempts_log) if attempts_log else "无记录(主模型都没跑起来)"
+        if _is_quota_or_rate_limit(err):
+            # 配额 / 限流**不打 traceback**。
+            #
+            # 那四十行栈全是 litellm / openai 内部调用链, 对这类错零价值 —— 它不是
+            # 我们的 bug, 是上游的账务状态。代价却很实在: 每个请求刷一屏, 把真正
+            # 要看的三样 (哪个模型 / 上游原话 / 什么时候恢复) 挤出屏幕。
+            #
+            # 最要命的一条: 上游那句 UTC 恢复时间原样躺在栈的**最后一行**, 而我们
+            # 换算成本地的那份在四十行之上 —— 人的眼睛落在栈底, 看到的永远是没
+            # 换算的那个。8/15 就这么把 "08-14 23:54 UTC" 读成了 "早该恢复了"
+            # (实际是本地 08-15 07:54)。信息在不在日志里, 和人能不能看见, 是两回事。
+            logger.error(
+                "streaming chat completion failed (attempts=%s) · model=%s · 上游原话: %s%s",
+                _attempts,
+                model.name,
+                err.replace("\n", " ")[:300],
+                f" · {_reset}" if _reset else "",
+            )
+        else:
+            logger.exception(
+                "streaming chat completion failed (attempts=%s)%s",
+                _attempts,
+                f" · {_reset}" if _reset else "",
+            )
         # 给客户端一个 friendly 错误 —— 把内部 trace 简化成人话
         friendly = _friendly_upstream_error(err)
         # BL-FIX-TIMEOUT-OUTPUTS (5/13 鸿波"做不出文档"): 上游 LLM 卡 / timeout
@@ -2866,6 +2885,7 @@ async def _stream_chat_completion(
 # _friendly_upstream_error 抽到 errors.py (无 litellm 依赖, 测试可独立 import).
 # 在 app.py 里给一个 alias 别名, 兼容历史 import 路径.
 from .errors import friendly_upstream_error as _friendly_upstream_error
+from .errors import is_quota_or_rate_limit as _is_quota_or_rate_limit
 from .errors import localize_reset_hint as _localize_reset_hint
 
 
