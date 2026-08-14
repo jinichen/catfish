@@ -44,7 +44,7 @@ pub(crate) struct RuntimeArtifacts {
 }
 
 impl RuntimeArtifacts {
-    fn from_dir(dir: PathBuf) -> Self {
+    pub(crate) fn from_dir(dir: PathBuf) -> Self {
         Self {
             install_sh: dir.join("install.sh"),
             uv: dir.join("uv"),
@@ -58,7 +58,7 @@ impl RuntimeArtifacts {
         }
     }
 
-    fn archive_count(&self) -> usize {
+    pub(crate) fn archive_count(&self) -> usize {
         [
             &self.python_tar,
             &self.hermes_tar,
@@ -70,11 +70,11 @@ impl RuntimeArtifacts {
         .count()
     }
 
-    fn is_complete_bundle(&self) -> bool {
+    pub(crate) fn is_complete_bundle(&self) -> bool {
         self.archive_count() == RUNTIME_ARCHIVES.len()
     }
 
-    fn validate_bootstrap_tools(&self) -> Result<()> {
+    pub(crate) fn validate_bootstrap_tools(&self) -> Result<()> {
         for path in [&self.install_sh, &self.uv] {
             let meta = std::fs::metadata(path)
                 .with_context(|| format!("运行时缺文件: {}", path.display()))?;

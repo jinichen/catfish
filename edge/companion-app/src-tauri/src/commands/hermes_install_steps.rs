@@ -242,10 +242,10 @@ pub(crate) fn prepare_source_stage(
 }
 
 #[derive(Debug)]
-struct PreviousInstall {
-    path: PathBuf,
+pub(crate) struct PreviousInstall {
+    pub(crate) path: PathBuf,
     /// 残缺安装可能包含现场诊断线索，成功后也保留为 `.broken-*`。
-    preserve: bool,
+    pub(crate) preserve: bool,
 }
 
 pub(crate) fn activate_stage(

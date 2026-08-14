@@ -61,8 +61,69 @@ def scan(f):
     calls={m.group(1) for m in re.finditer(r'(?<![.\w:])([a-z_][a-z0-9_]*)\s*\(',txt)}
     return sorted(c for c in calls if c not in local|imported|ATTR|STD|KW
                   and not re.search(rf'\b{c}!',txt) and not re.search(rf'\.\s*{c}\s*\(',txt))
+def scan_members(files):
+    """impl 块里的方法、结构体的字段 —— 跨文件被用到却还是私有的。
+
+    2026-08-15 拆 hermes_install.rs 时一次报出 16 个编译错, 全是这两类。
+    漏的原因是上面那套扫描只看**缩进 0 的顶层条目**: impl 里的方法是缩进的,
+    从来没进过扫描范围; 而结构体字段更隐蔽 —— `backup.preserve` 这行里
+    根本不出现 `PreviousInstall` 这个名字, 类型是顺着函数返回值流过去的。
+
+    也就是说, 判据是"名字有没有出现", 真问题是"这个条目跨模块可不可达"。
+    两者不等价, 而不等价的地方正好就是 bug 藏身的地方。
+    """
+    src={f:Path(f).read_text(encoding="utf-8") for f in files}
+    # 字段名 (.path / .model 这种) 满仓都是。只按字段名匹配, 会把毫不相干的文件
+    # 算成使用方 —— 这个检查就变成了噪音源。
+    # 收紧: 只有真的 import 了对方模块的文件, 才可能拿到那个类型的值。
+    mod=lambda f: Path(f).stem
+    def linked(g,f):
+        return re.search(rf'\b{mod(f)}::', src[g]) is not None
+    # 再收一道: 只报**字段名在全集里唯一**的那些。
+    # `.path` / `.model` 这种名字十几个结构体都有, 光看名字判不出类型, 报出来
+    # 全是噪音 (回扫 16 个已编译通过的文件, 一口气报了 33 条假的)。
+    # 名字唯一时才有把握。代价是同一个结构体上有多个字段出问题时只报得出
+    # 名字独特的那个 —— 但那已经足够把人引到正确的结构体上了。
+    owner={}
+    for g in files:
+        cur=None
+        for l in src[g].splitlines():
+            m=re.match(r'(?:pub(?:\(crate\))? )?struct (\w+)',l)
+            if m: cur=m.group(1); continue
+            if cur and l.startswith("}"): cur=None; continue
+            m=re.match(r'    (?:pub(?:\(crate\))? )?(\w+):',l)
+            if m and cur: owner.setdefault(m.group(1),set()).add(cur)
+    def clean(t):
+        return "\n".join(re.sub(r'//.*$','',re.sub(r'"(\\.|[^"\\\n])*"','""',l)) for l in t.splitlines())
+    out=[]
+    for f in files:
+        cur=None
+        for l in src[f].splitlines():
+            m=re.match(r'impl (\w+)',l)
+            if m: cur=m.group(1); continue
+            m=re.match(r'    (?:pub(?:\(crate\))? )?(?:const )?fn (\w+)',l)
+            if m and cur and not l.strip().startswith("pub"):
+                me=m.group(1)
+                u=[g for g in files if g!=f and linked(g,f) and (re.search(rf'\.\s*{me}\s*\(',clean(src[g]))
+                                                 or re.search(rf'{cur}::{me}\b',clean(src[g])))]
+                if u: out.append(f"  {f}: {cur}::{me}() 私有, 但 {', '.join(u)} 在调它")
+        cur=None
+        for l in src[f].splitlines():
+            m=re.match(r'(?:pub(?:\(crate\))? )?struct (\w+)',l)
+            if m: cur=m.group(1); continue
+            if cur and l.startswith("}"): cur=None; continue
+            m=re.match(r'    (?:pub(?:\(crate\))? )?(\w+):',l)
+            if m and cur and not l.strip().startswith("pub"):
+                fl=m.group(1)
+                if len(owner.get(fl,()))!=1: continue
+                u=[g for g in files if g!=f and linked(g,f) and re.search(rf'\.\s*{fl}\b',clean(src[g]))]
+                if u: out.append(f"  {f}: {cur}.{fl} 私有, 但 {', '.join(u)} 在读它")
+    return out
+
 bad=0
 for f in sys.argv[1:]:
     m=scan(f)
     if m: bad+=1; print(f"  ❌ {f}: 可能没导入 → {m}")
+for w in scan_members(sys.argv[1:]):
+    bad+=1; print("  ❌ "+w.strip())
 print(f"\n可疑 {bad} 个" if bad else f"\n✓ {len(sys.argv)-1} 个文件, 未发现缺失的跨文件引用")

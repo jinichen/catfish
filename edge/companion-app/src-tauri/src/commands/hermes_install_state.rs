@@ -30,7 +30,7 @@ pub(crate) struct BootstrapPaths {
 }
 
 impl BootstrapPaths {
-    fn new(home: PathBuf) -> Self {
+    pub(crate) fn new(home: PathBuf) -> Self {
         let hermes_home = home.join(".hermes");
         Self {
             install_dir: hermes_home.join("hermes-agent"),
@@ -42,7 +42,7 @@ impl BootstrapPaths {
         }
     }
 
-    fn unique_sibling(&self, label: &str) -> PathBuf {
+    pub(crate) fn unique_sibling(&self, label: &str) -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
