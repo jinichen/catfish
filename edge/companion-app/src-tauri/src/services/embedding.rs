@@ -14,10 +14,12 @@
 //!    离线可用. ort + tokenizers crate. 570MB 模型驻留 mac 内存.
 //! 2. **Remote API** (`Provider::Remote`) — catfish-gateway `/v1/embeddings`.
 //!    走中央 GPU 算力, mac 不烧 CPU. 需要内网联通 + auth token.
-//! 3. **Auto** — 启动时 ping remote + 看 token, 都过才 remote, 否则 local.
-//!    8/14 起**运行时也会切**: 远程连续失败到阈值 → 整体退回本机 ONNX
-//!    (到重启为止)。启动探测只看得到"网关活没活", 看不到网关背后的上游 ——
-//!    今晚现场就是网关活着而内网 10.10.40.102 不可达。
+//! 3. **Auto** — 启动时看 token + **真发一次向量请求**, 都过才 remote, 否则 local.
+//!    8/14 两次改在同一件事上:
+//!      · 探测从 "ping /v1/catalog" 改成真发一次向量请求 —— 前者问的是
+//!        "网关活着吗", 而网关活着但它背后的内网上游不可达时, 前者看不出来
+//!      · 加了**运行时降级**: 远程连续失败到阈值 → 整体退回本机 (到重启为止),
+//!        兜住"启动时好好的, 跑着跑着上游挂了"
 //!
 //! # 配置
 //!
@@ -54,7 +56,7 @@ use crate::services::embedding_config::{Backend, EmbeddingConfig, load_config};
 // 两个 provider 各自一个文件 (8/14 拆的, 见各自文件头)
 #[cfg(target_arch = "aarch64")]
 use crate::services::embedding_local::LocalProvider;
-use crate::services::embedding_remote::{RemoteProvider, probe_remote_alive};
+use crate::services::embedding_remote::{RemoteProvider, probe_remote_usable};
 
 // ─── ACTIVE_PROVIDER — 全 process 唯一, 启动 lazy init ────────────
 
@@ -117,7 +119,7 @@ impl Provider {
 /// 决策路径:
 ///   - backend=Local → 直接 Local
 ///   - backend=Remote → 直接 Remote
-///   - backend=Auto → ping remote /v1/models (timeout), 通则 Remote, 否则 Local
+///   - backend=Auto → 看 token + **真发一次向量请求**, 都过才 Remote, 否则 Local
 fn init_active_provider() -> Provider {
     let cfg: EmbeddingConfig = load_config();
     match cfg.backend {
@@ -145,14 +147,15 @@ fn init_active_provider() -> Provider {
             Provider::Remote(RemoteProvider::new(cfg.remote))
         }
         Backend::Auto => {
-            log::info!("[embedding] backend=auto, 先看 remote 可不可用, 再看通不通");
+            log::info!("[embedding] backend=auto: 先看 token, 再真发一次向量请求试试");
             let remote = RemoteProvider::new(cfg.remote.clone());
 
             // ★ 8/14 现场那次的真因就在这两行的**顺序和条件**上。
             //
-            // 老逻辑只问一句 `probe_remote_alive`(网关连不连得上), 连得上就定
-            // Remote —— 但"连得上"不等于"用得了": RemoteProvider::is_ready() 还
-            // 要求 CATFISH_INTERNAL_DEV_TOKEN 非空。
+            // 老逻辑只问一句"网关连不连得上", 连得上就定 Remote。而"连得上"
+            // 不等于"用得了", 这里前后栽了两次:
+            //   · token 没配 → is_ready() 永远 false, 却已经选了 Remote (下面第一条)
+            //   · 网关活着但它背后的内网上游不可达 → 探测看不到 (probe 那边 8/14 二改)
             //
             // 于是鸿波机器上出现了最别扭的组合: 网关就在本机跑着(ping 通),
             // token 没 export → 选了 Remote → is_ready() 永远 false →
@@ -163,15 +166,15 @@ fn init_active_provider() -> Provider {
             // 按定下来的设计, "远程失效就用本地"里的**失效包括"根本用不了"**,
             // 不只是"ping 不通"。所以这里两个条件都要过。
             //
-            // 顺序也有意: is_ready() 只读一个 env var, probe 要发 HTTP 等最多
-            // 3 秒。没 token 的时候连 ping 都不必发。
+            // 顺序也有意: is_ready() 只读一个 env var, 而 probe 现在要真发一次
+            // 向量请求 (最多等满 timeout_seconds)。没 token 的时候一个包都不必发。
             if !remote.is_ready() {
                 log::warn!(
                     "[embedding] auto → remote 不可用 (CATFISH_INTERNAL_DEV_TOKEN 未配), 转本地"
                 );
             }
-            if remote.is_ready() && probe_remote_alive(&remote) {
-                log::info!("[embedding] auto → remote OK (gateway 通 + token 有)");
+            if remote.is_ready() && probe_remote_usable(&remote) {
+                log::info!("[embedding] auto → remote OK (token 有 + 真的取回了向量)");
                 Provider::Remote(remote)
             } else {
                 #[cfg(target_arch = "aarch64")]

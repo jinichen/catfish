@@ -22,10 +22,12 @@ fn err_chain(e: &(dyn std::error::Error + 'static)) -> String {
     parts.join(" ← ")
 }
 
-/// 同步 ping remote /v1/catalog. 启动期用 (在 init_active_provider 内, sync context).
-/// 不发真 embed 请求 — 只 GET /v1/catalog 检查可达, 几十 ms. 失败返 false → fallback local.
+/// 远程**能不能真的用**. 启动期 (init_active_provider 内, sync context) 调一次.
 ///
-/// P3.5.22 (6/17 鸿波) 改 /v1/models → /v1/catalog 真因:
+/// 8/14 从"ping /v1/catalog"改成"真发一次向量请求" —— 见函数体里那段。
+/// 成功时顺带把向量身份 (维度 + 模型) 记下来。
+///
+/// 历史 · P3.5.22 (6/17 鸿波) 曾把 /v1/models 改成 /v1/catalog, 真因:
 ///   /v1/models 强 auth (app.py:1695 Depends(get_current_user)), 需 Bearer token.
 ///   auth_token() 从 env CATFISH_INTERNAL_DEV_TOKEN 读, 但 macOS GUI Tauri app
 ///   不继承 ~/.hermes/.env 的 env var → token 真空 → 不带 header → gateway 401.
@@ -34,9 +36,25 @@ fn err_chain(e: &(dyn std::error::Error + 'static)) -> String {
 ///   /v1/catalog 是 anon endpoint (no auth required) — 鸿波本机 log 一直
 ///   `GET /v1/catalog 200 OK` 频繁验证 anon 通. 用它当 "gateway 是否在线" 代理
 ///   判断, 语义跟 /v1/models 等价, 不再 401.
-pub(crate) fn probe_remote_alive(remote: &RemoteProvider) -> bool {
-    let url = format!("{}/v1/catalog", remote.config.resolved_gateway_url());
-    let probe_timeout = Duration::from_secs(remote.config.timeout_seconds.min(3));
+pub(crate) fn probe_remote_usable(remote: &RemoteProvider) -> bool {
+    // ★ 8/14 第二次改这里。原来探的是 `GET /v1/catalog` —— 那问的是
+    // **"网关活着吗"**, 而我们要知道的是 **"我能不能真的拿到向量"**。
+    //
+    // 鸿波今晚这台机器恰好把两者的差别撑开了: 网关就在本机跑着 (catalog 200),
+    // 但网关背后的内网 10.10.40.102 不可达 —— 探测**系统性地看不到这一层**,
+    // 于是每次都选 remote, 然后每个请求等满 10 秒超时。
+    //
+    // 这跟今天早些时候那个"探测和真请求用了两个不同的 client"是同一个病:
+    // **检查比真事宽松, 检查就会替 bug 背书**。
+    //
+    // 现在探测就发一次真的向量请求 (跟真事一模一样: 同一个端点、同样不带 model、
+    // 同一个 auth)。通了才叫通。
+    //
+    // 超时给**满额**而不是 min(3): 探测比真请求还严的话, 会把"慢但能用"的远程
+    // 误判成不可用 —— 那是我们自己制造的降级。
+    let url = format!("{}/v1/embeddings", remote.config.resolved_gateway_url());
+    let probe_timeout = Duration::from_secs(remote.config.timeout_seconds);
+    let token = auth_token();
 
     // ── 8/8: 整个 blocking client 的生死都挪进一条独立 OS 线程 ──────────────
     //
@@ -63,8 +81,7 @@ pub(crate) fn probe_remote_alive(remote: &RemoteProvider) -> bool {
     // 所以这不是"偶发一次", 是每次都挂。
     //
     // 修法: 让 client 在一条普通 OS 线程上创建、使用、析构 —— 那里没有 tokio
-    // runtime 在跑, drop 合法。join 会阻塞调用方最多 probe_timeout (≤3s),
-    // 跟原来 blocking send 的阻塞时长一致, 没有新增等待。
+    // runtime 在跑, drop 合法。join 会阻塞调用方最多 probe_timeout。
     std::thread::spawn(move || {
         // 8/9: 原来这里是裸 `Client::builder()`, **没走 trust_central_blocking**。
         //
@@ -85,8 +102,47 @@ pub(crate) fn probe_remote_alive(remote: &RemoteProvider) -> bool {
             Ok(c) => c,
             Err(_) => return false,
         };
-        // /v1/catalog 不需 auth, 不再带 bearer_auth.
-        matches!(client.get(&url).send(), Ok(r) if r.status().is_success())
+        // 跟真请求同构: 同一个端点、**同样不带 model** (由网关按 roles.yaml 的
+        // embedding 角色解析)、同一个 bearer。
+        let resp = match client
+            .post(&url)
+            .bearer_auth(&token)
+            .json(&serde_json::json!({ "input": "catfish embedding probe" }))
+            .send()
+        {
+            Ok(r) => r,
+            Err(e) => {
+                log::info!("[embedding/probe] 远程不可用: {}", err_chain(&e));
+                return false;
+            }
+        };
+        if !resp.status().is_success() {
+            log::info!("[embedding/probe] 远程返 {} — 当作不可用", resp.status());
+            return false;
+        }
+        let parsed: EmbeddingApiResponse = match resp.json() {
+            Ok(p) => p,
+            Err(e) => {
+                log::info!("[embedding/probe] 响应解析失败: {}", err_chain(&e));
+                return false;
+            }
+        };
+        let model_id = parsed.model.clone();
+        match parsed.data.into_iter().next() {
+            Some(d) if !d.embedding.is_empty() => {
+                // 探测成功顺带把身份记下来 —— 第一次真请求之前就知道维度和模型,
+                // 缓存对账因此在第一次搜索时就能生效, 不用等到"某次成功之后"。
+                record_identity(EmbedIdentity {
+                    dim: d.embedding.len(),
+                    model: model_id,
+                });
+                true
+            }
+            _ => {
+                log::info!("[embedding/probe] 远程返了空向量 — 当作不可用");
+                false
+            }
+        }
     })
     .join()
     // 线程自己 panic 了也只当"探测失败"往下走 fallback, 不把 panic 传回异步上下文。
@@ -108,7 +164,7 @@ impl RemoteProvider {
         //   `error sending request for url (http://127.0.0.1:8999/v1/embeddings)`。
         //
         // 因为**探测和真请求用的是两个不同的 client**:
-        //   · probe_remote_alive 走 trust_central_blocking (8/9 修过) → 绕代理 → 通
+        //   · probe_remote_usable 走 trust_central_blocking (8/9 修过) → 绕代理 → 通
         //   · 这里是裸 Client::builder() → reqwest 默认读系统代理和 HTTP(S)_PROXY
         //
         // 鸿波机器上系统代理指向 127.0.0.1:7890 (Clash), 而 Clash 没开 —— 网关就在
