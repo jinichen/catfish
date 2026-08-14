@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::services::embedding::{
-    cosine, embed_dim, embed_text, is_provider_ready, vector_from_blob, vector_to_blob,
+    cosine, embed_dim, embed_text, provider_not_ready_reason, vector_from_blob, vector_to_blob,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -188,11 +188,13 @@ pub async fn advisor_rank_relevance(
 
     // P3.5.15: 检查 active provider 就绪 (local 加载 model+tokenizer 成功, 或 remote 有 token).
     // 没就绪 → caller fallback 不筛全量注入 (跟 P3.5.4 行为一致).
-    if !is_provider_ready() {
+    // 8/14: 同 wiki_embed —— 报真原因, 不报"model 缺 / remote token 缺"这种把两条
+    // 分支并列的说法。这条 message 会进日志, 而"到底缺哪个"正是排查的起点。
+    if let Some(reason) = provider_not_ready_reason() {
         return Ok(RelevanceResult {
             model_loaded: false,
             ranked: vec![],
-            message: "embedding provider 未就绪 (model 缺 / remote token 缺). caller 走 fallback (不筛, 全量注入)".into(),
+            message: format!("{reason}\n\n(相关性筛选跳过, 全量注入)"),
         });
     }
 

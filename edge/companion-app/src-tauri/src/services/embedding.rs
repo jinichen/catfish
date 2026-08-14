@@ -32,7 +32,9 @@
 //! - `embed_text(text) -> Option<Vec<f32>>` 现 async (Remote 走 HTTP, Local sync 跑)
 //! - `cosine(a, b) -> f32` 同 (sync)
 //! - `vector_to_blob(v) / vector_from_blob(blob) -> Option<Vec<f32>>` 同 (sync, 跟 cache 互通)
-//! - `is_provider_ready() -> bool` 替代 P3.5.4 `init_session().is_some() && init_tokenizer().is_some()`
+//! - `provider_not_ready_reason() -> Option<String>` 没就绪时给出**具体原因**
+//!   (8/14: 原来是 `is_provider_ready() -> bool`, 只说 yes/no 的话界面只能
+//!    把两条分支的排查步骤都列出来, 反而把人往错方向带)
 //! - `embed_dim() -> usize` 替代 const EMBED_DIM, 运行时取真值 (跟 active provider 绑死)
 
 // 7/16 BL-INTEL-DMG: ort + tokenizers 只 aarch64 依赖 (Intel Mac / Windows msi
@@ -90,6 +92,24 @@ impl Provider {
         }
     }
 
+    /// 没就绪的话, **具体是哪个 provider、卡在什么地方**.
+    ///
+    /// 8/14: 原来 wiki 搜索那条提示是个静态字符串, 把 local 和 remote 两条路的
+    /// 排查步骤一起列出来 —— 鸿波看到之后的第一反应是"本地模型失效?", 而实际
+    /// 选中的是 remote、缺的是 token, 本机模型压根没被碰过。
+    ///
+    /// 一条不指向真因的提示, 比没有提示更费时间。
+    fn not_ready_reason(&self) -> Option<String> {
+        if self.is_ready() {
+            return None;
+        }
+        match self {
+            #[cfg(target_arch = "aarch64")]
+            Provider::Local(p) => Some(p.not_ready_reason()),
+            Provider::Remote(p) => Some(p.not_ready_reason()),
+        }
+    }
+
     async fn embed_text(&self, text: &str) -> Option<Vec<f32>> {
         match self {
             #[cfg(target_arch = "aarch64")]
@@ -132,23 +152,49 @@ fn init_active_provider() -> Provider {
             Provider::Remote(RemoteProvider::new(cfg.remote))
         }
         Backend::Auto => {
-            log::info!("[embedding] backend=auto, ping remote 决定");
+            log::info!("[embedding] backend=auto, 先看 remote 可不可用, 再看通不通");
             let remote = RemoteProvider::new(cfg.remote.clone());
-            // 启动期短超时 ping. 跑独立 blocking client (init_active_provider 在 sync context).
-            if probe_remote_alive(&remote) {
-                log::info!("[embedding] auto → remote OK (gateway 通)");
+
+            // ★ 8/14 现场那次的真因就在这两行的**顺序和条件**上。
+            //
+            // 老逻辑只问一句 `probe_remote_alive`(网关连不连得上), 连得上就定
+            // Remote —— 但"连得上"不等于"用得了": RemoteProvider::is_ready() 还
+            // 要求 CATFISH_INTERNAL_DEV_TOKEN 非空。
+            //
+            // 于是鸿波机器上出现了最别扭的组合: 网关就在本机跑着(ping 通),
+            // token 没 export → 选了 Remote → is_ready() 永远 false →
+            // **而它不会再退回 local**。那台机器上 569MB 的 bge-m3.onnx 好端端
+            // 躺在 ~/.catfish/models/ 里, 一次都用不上, 界面只说"provider 未就绪",
+            // 看着像本地模型坏了。
+            //
+            // 按定下来的设计, "远程失效就用本地"里的**失效包括"根本用不了"**,
+            // 不只是"ping 不通"。所以这里两个条件都要过。
+            //
+            // 顺序也有意: is_ready() 只读一个 env var, probe 要发 HTTP 等最多
+            // 3 秒。没 token 的时候连 ping 都不必发。
+            if !remote.is_ready() {
+                log::warn!(
+                    "[embedding] auto → remote 不可用 (CATFISH_INTERNAL_DEV_TOKEN 未配), 转本地"
+                );
+            }
+            if remote.is_ready() && probe_remote_alive(&remote) {
+                log::info!("[embedding] auto → remote OK (gateway 通 + token 有)");
                 Provider::Remote(remote)
             } else {
                 #[cfg(target_arch = "aarch64")]
                 {
-                    log::info!("[embedding] auto → local (remote 不通, fallback ONNX)");
+                    log::info!("[embedding] auto → local ONNX (remote 不通或不可用)");
                     Provider::Local(Box::new(LocalProvider::new(cfg.local)))
                 }
-                // 7/16 BL-INTEL-DMG: x86_64 无 ort · remote 也不通 → 只能 Remote 兜底,
-                // is_ready() 会返 false, caller 走 no-op fallback (不筛全量注入).
+                // 7/16 BL-INTEL-DMG: x86_64 (Intel Mac dmg / Windows msi) 无 ort,
+                // 连 LocalProvider 都没编进来 → 只能 Remote 兜底, is_ready() 返 false,
+                // caller 走 no-op fallback (不筛全量注入)。
+                // Windows 上这意味着**没有向量**, 不是"降级到本地"。
                 #[cfg(not(target_arch = "aarch64"))]
                 {
-                    log::warn!("[embedding] auto → remote 不通且当前架构无本地 ONNX, embed 会返 None");
+                    log::warn!(
+                        "[embedding] auto → remote 不通或不可用, 且当前架构无本地 ONNX, embed 会返 None"
+                    );
                     Provider::Remote(remote)
                 }
             }
@@ -240,9 +286,10 @@ pub async fn embed_text(text: &str) -> Option<Vec<f32>> {
     active_provider().embed_text(text).await
 }
 
-/// 当前 active provider 是否就绪 (model 加载好 / remote 可达 + token).
-pub fn is_provider_ready() -> bool {
-    active_provider().is_ready()
+
+/// 没就绪时的**具体原因**; 就绪返 None. 给界面直接显示用.
+pub fn provider_not_ready_reason() -> Option<String> {
+    active_provider().not_ready_reason()
 }
 
 /// 当前 active provider 的输出维度. cache BLOB 长度 = embed_dim * 4 bytes.
@@ -361,6 +408,33 @@ impl LocalProvider {
         self.init_session().is_some() && self.init_tokenizer().is_some()
     }
 
+    /// 卡在哪一步. **先报文件不在**, 因为那是绝大多数情况且一句话能修好.
+    fn not_ready_reason(&self) -> String {
+        let onnx = PathBuf::from(expand_home(&self.config.model_path));
+        let tok = PathBuf::from(expand_home(&self.config.tokenizer_path));
+        let missing: Vec<String> = [(&onnx, "ONNX 模型"), (&tok, "tokenizer.json")]
+            .iter()
+            .filter(|(p, _)| !p.exists())
+            .map(|(p, what)| format!("{what} 不在: {}", p.display()))
+            .collect();
+        if !missing.is_empty() {
+            return format!(
+                "本机向量模型没装齐 —— {}\n\n下载:\n  \
+                 mkdir -p ~/.catfish/models\n  \
+                 curl -L -o ~/.catfish/models/bge-m3.onnx \
+                 https://huggingface.co/Xenova/bge-m3/resolve/main/onnx/model_quantized.onnx\n  \
+                 curl -L -o ~/.catfish/models/tokenizer.json \
+                 https://huggingface.co/Xenova/bge-m3/resolve/main/tokenizer.json",
+                missing.join("; ")
+            );
+        }
+        format!(
+            "本机向量模型文件都在 ({}), 但加载失败 —— 多半是文件损坏或架构不符, \
+             详情看 Companion 日志里 [embedding/local] 那几行。",
+            onnx.display()
+        )
+    }
+
     async fn embed_text(&self, text: &str) -> Option<Vec<f32>> {
         // 注: ONNX 推理 sync 长跑 (10-50ms). 主线程跑可接受 (P3.5.4 实测 OK).
         //     真 spawn_blocking 跨线程要 Arc<Session>, 复杂度 / 收益不平衡, 保持当前.
@@ -435,6 +509,17 @@ impl RemoteProvider {
     /// 真连通靠每次 embed_text 时的 HTTP, 失败 caller 拿 None 走 fallback.
     fn is_ready(&self) -> bool {
         !auth_token().is_empty()
+    }
+
+    fn not_ready_reason(&self) -> String {
+        format!(
+            "远程向量模型不可用 —— 环境变量 CATFISH_INTERNAL_DEV_TOKEN 没配, \
+             Companion 拿不到调网关的凭据。\n\n\
+             网关地址: {}\n\
+             (注: 这跟本机 ONNX 模型无关, 那条路没被走到。想强制走本机, \
+             把 ~/.catfish/embedding.yaml 的 backend 改成 local 再重启。)",
+            self.config.resolved_gateway_url()
+        )
     }
 
     async fn embed_text(&self, text: &str) -> Option<Vec<f32>> {
@@ -521,5 +606,5 @@ struct EmbeddingApiDatum {
 }
 
 // P3.5.15 (6/16 鸿波 cargo check 通过后清理): 老 P3.5.4 init_session / init_tokenizer
-// 两个 pub fn 已删. caller 全部迁到 is_provider_ready() / embed_text() — 看 provider
+// 两个 pub fn 已删. caller 全部迁到 provider_not_ready_reason() / embed_text() — 看 provider
 // (Local + Remote) 是否就绪不再绑死本机 ONNX 文件存在. 删后 cargo check 0 warning.

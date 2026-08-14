@@ -25,7 +25,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::services::embedding::{
-    cosine, embed_text, is_provider_ready, vector_from_blob, vector_to_blob,
+    cosine, embed_text, provider_not_ready_reason, vector_from_blob, vector_to_blob,
 };
 
 fn home_dir() -> Result<PathBuf, String> {
@@ -74,20 +74,19 @@ pub async fn wiki_search_semantic(
         });
     }
 
-    // P3.5.15: 检查 active provider 就绪. 改 is_provider_ready() 后兼容 local / remote /
-    //   auto 三种 backend, 不再绑死 local ONNX 文件存在.
-    if !is_provider_ready() {
+    // P3.5.15: 检查 active provider 就绪, 兼容 local / remote / auto 三种 backend,
+    //   不再绑死 local ONNX 文件存在.
+    // 8/14: 原来这里是一段**静态**提示, 把 local 和 remote 两条路的排查步骤
+    // 一起列出来。鸿波看到之后第一反应是"本地模型失效?" —— 而当时实际选中的是
+    // remote、缺的是 token, 本机那 569MB 模型压根没被碰过。
+    //
+    // 一条不指向真因的提示比没有提示更费时间。现在问 provider 自己。
+    if let Some(reason) = provider_not_ready_reason() {
         return Ok(WikiSemanticResult {
             hits: vec![],
             model_loaded: false,
             indexed_count: 0,
-            message: "embedding provider 未就绪.\n\
-                 走本机 ONNX 时手动下载:\n\
-                  mkdir -p ~/.catfish/models && \n\
-                  curl -L -o ~/.catfish/models/bge-m3.onnx https://huggingface.co/Xenova/bge-m3/resolve/main/onnx/model_quantized.onnx && \n\
-                  curl -L -o ~/.catfish/models/tokenizer.json https://huggingface.co/Xenova/bge-m3/resolve/main/tokenizer.json\n\
-                 走 catfish-gateway 远程时: 检查 ~/.hermes/.env 里 CATFISH_INTERNAL_DEV_TOKEN 是否配置."
-                .to_string(),
+            message: reason,
         });
     }
 
