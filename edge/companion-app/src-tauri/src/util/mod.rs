@@ -1,5 +1,6 @@
 //! Companion 后端通用小工具. 挑那些跨 command/service 都要用的.
 
+pub mod date; // 日期换算 (8/15 从 commands/wiki_write.rs 挪来, 跟 wiki 无关)
 pub mod http_client;
 pub mod paths;
 

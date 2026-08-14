@@ -1,116 +1,33 @@
 //! BL-CATFISH-WIKI-MODE P3.3.7 (6/4) — wiki write API.
 //!
-//! 2 个 tauri command:
+//! 6 个 tauri command (文件头原来写"2 个", 8/15 切文件时才发现已经长到 6 个):
 //!   - wiki_create_entity_or_concept: 创建新 entity/concept file 含 frontmatter + body
-//!   - wiki_update_file: 更新已有 file body (frontmatter 简单替, 复杂场景 future)
+//!   - wiki_update_file:              更新已有 file body
+//!   - wiki_delete_file:              软删到 .trash + 算 dangling 影响面
+//!   - wiki_uninstall_shared:         卸载本机部门 wiki 副本
+//!   - wiki_sensitive_terms_ensure:   确保敏感词表存在
+//!   - wiki_ingest_source:            对话上传的文件 → wiki/raw/sources/
+//!
+//! 8/15 切出去的三块 (纯搬迁, 逻辑一行未改):
+//!   - slug 校验/归一化/碰撞检测 → `wiki_slug.rs`
+//!   - frontmatter 词表归一 + authored_by → `wiki_frontmatter.rs`
+//!   - 日期换算 (跟 wiki 无关)   → `crate::util::date`
+//!
+//! 删除影响面 (`compute_affected_files` / `read_title_from_md`) **没有切出去** ——
+//! 它俩唯一的调用者就是本文件的 `wiki_delete_file`。把函数和它唯一的调用者分到
+//! 两个文件, 换来的只是行数好看。
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::{Path, PathBuf};
+use crate::util::date::chrono_today;
+use super::wiki_frontmatter::{mark_authored_by_employee, normalize_type_line};
+use super::wiki_slug::{catfish_home, find_normalized_collision, slugify, validate_slug};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WikiWriteResult {
     pub rel_path: String,
     pub bytes: u64,
     pub created: bool, // true 新建, false update
-}
-
-fn home_dir() -> Result<PathBuf, String> {
-    crate::util::paths::home_env()
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map(PathBuf::from)
-        .map_err(|_| "找不到 HOME".to_string())
-}
-
-fn catfish_home() -> Result<PathBuf, String> {
-    Ok(home_dir()?.join(".catfish"))
-}
-
-/// slug 校验 — unicode word char + `-` + `_`, 不允许 path-unsafe.
-/// Rust 真 char::is_alphanumeric 接受 unicode (CJK / accented).
-fn validate_slug(slug: &str) -> Result<(), String> {
-    if slug.is_empty() {
-        return Err("slug 不能空".to_string());
-    }
-    if slug.len() > 100 {
-        return Err(format!("slug 太长 (>100 chars): {slug}"));
-    }
-    for c in slug.chars() {
-        if !c.is_alphanumeric() && c != '-' && c != '_' {
-            return Err(format!("slug 含非法字符 '{c}': {slug}"));
-        }
-    }
-    if slug.starts_with('-') || slug.starts_with('.') {
-        return Err(format!("slug 不能 - / . 开头: {slug}"));
-    }
-    Ok(())
-}
-
-/// P3.3.3 (6/9 鸿波) — slug normalize, 防 `FFCS数字鲶鱼` / `FFCS 数字鲶鱼` /
-/// `FFCS-数字鲶鱼` / `ffcs_数字鲶鱼` 被当成 4 个不同 entity.
-///
-/// 规则: 去所有 whitespace / `-` / `_` / `.`, 再 lowercase.
-/// 比对用, 不参与文件名生成 (文件名仍走 slugify).
-fn normalize_slug(s: &str) -> String {
-    s.chars()
-        .filter(|c| {
-            !c.is_whitespace()
-                && *c != '-'
-                && *c != '_'
-                && *c != '.'
-                && *c != '\u{3000}' // 全角空格
-        })
-        .collect::<String>()
-        .to_lowercase()
-}
-
-/// 扫现有 entities/ / concepts/ 找 normalize-等价的 slug, 命中返已有 rel_path.
-fn find_normalized_collision(
-    home: &Path,
-    sub_dir: &str,
-    new_slug: &str,
-) -> Option<String> {
-    let norm_new = normalize_slug(new_slug);
-    if norm_new.is_empty() {
-        return None;
-    }
-    let dir = home.join(sub_dir);
-    if !dir.is_dir() {
-        return None;
-    }
-    let entries = fs::read_dir(&dir).ok()?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("md") {
-            continue;
-        }
-        let stem = match path.file_stem().and_then(|s| s.to_str()) {
-            Some(s) => s,
-            None => continue,
-        };
-        if normalize_slug(stem) == norm_new {
-            return Some(format!("{sub_dir}/{stem}.md"));
-        }
-    }
-    None
-}
-
-/// title slugify — 简单 replace 非 word char 为 `-` (跟 P1.2.2 wiki_save slugify 一致).
-fn slugify(title: &str, max_chars: usize) -> String {
-    let bad: &[char] = &[
-        '/', '\\', ':', '*', '?', '"', '<', '>', '|', '\n', '\r', '\t', ' ', '\u{3000}', '.',
-    ];
-    let cleaned: String = title
-        .chars()
-        .take(max_chars)
-        .map(|c| if bad.contains(&c) { '-' } else { c })
-        .collect();
-    let trimmed = cleaned.trim_matches('-').trim_matches('.');
-    if trimmed.is_empty() {
-        "untitled".to_string()
-    } else {
-        trimmed.to_string()
-    }
 }
 
 /// P3.5.132 #5 (6/29 鸿波): typed relations 真 input shape.
@@ -223,130 +140,6 @@ pub async fn wiki_create_entity_or_concept(
     let rel_path = format!("{sub_dir}/{slug}.md");
 
     Ok(WikiWriteResult { rel_path, bytes, created: true })
-}
-
-/// 8/4 (鸿波 "有的数据还是需要人修正的"): 给员工亲手写/改的条目打上
-/// `authored_by: employee`。
-///
-/// # 为什么需要
-///
-/// 实测鸿波机器 220 条 wiki, **219 条是 LLM 生成的**, frontmatter 里没有任何
-/// 字段记录"这条是谁写的" —— 没有 author / reviewed / verified。
-///
-/// 后果不是"信息缺失": catfish-memory 的 P19 LLM merge 读文件时根本不看来源,
-/// 员工在知识体系 TAB 里手工改的内容, 下一次蒸馏会被原样喂给 LLM 重写。
-/// 你改掉一条错的断言, 几天后它可能又变回去, 而且不会收到任何提示。
-///
-/// 有了这个标记, 插件侧 (_is_employee_authored) 就会:
-///   · P19 LLM merge 直接跳过, 连送都不送
-///   · 写盘时正文原样保留, 新蒸馏内容只进「蒸馏补充」附录等员工确认
-///
-/// 机器可以提出, 但改不了人已经定下的东西。
-/// 受控词表 —— 编译期嵌入 edge/contracts/wiki_type_vocab.json。
-///
-/// 打包后的 .app 里没有 edge/contracts/ 目录, 运行时读不到, 所以用
-/// include_str! 编译期嵌进来。同一个文件, Python 侧
-/// (catfish_memory_helpers._load_type_vocab) 运行时读它, 两边不会漂。
-const TYPE_VOCAB_JSON: &str = include_str!("../../../../contracts/wiki_type_vocab.json");
-
-/// 把 entity_type / concept_type 归一化到受控词表。
-///
-/// # 为什么 UI 侧也要做 (8/4 鸿波「新增的知识库能不能自动满足 ontology 规则」)
-///
-/// 之前**只有蒸馏侧归一化**, 员工在界面上手工建的条目不归一 —— 界面上敲
-/// 「规则」就存「规则」, 蒸馏出来的同类条目存「rule」。同一个受控词表, 两条
-/// 产线两个结果, 于是知识库里 rule/规则、standard/标准 长期并存, 指的是同一
-/// 个东西。这跟今天修的"名字解析五套口径"是同一个病, 所以词表直接抽成共享
-/// 文件, 不给它分叉的机会。
-///
-/// 表外的值**不拒绝, 只归一化大小写** —— 词表要能长。P3.5.176 删 enum 的
-/// 理由仍然成立: 硬编码 enum 不是更严格, 是让员工场景里的真实类型无处可去。
-fn canon_subtype(is_entity: bool, raw: &str) -> String {
-    let v = raw.trim();
-    if v.is_empty() {
-        return String::new();
-    }
-    let low = v.to_lowercase();
-    let Ok(vocab) = serde_json::from_str::<serde_json::Value>(TYPE_VOCAB_JSON) else {
-        // 词表坏了不能挡住员工存条目 —— 原样返回
-        log::warn!("受控词表解析失败, 类型不归一化");
-        return v.to_string();
-    };
-    let aliases = &vocab["aliases"];
-    let canon = aliases
-        .get(v)
-        .or_else(|| aliases.get(&low))
-        .and_then(|x| x.as_str())
-        .unwrap_or(&low)
-        .to_string();
-    if canon != low {
-        log::info!("类型归一化: {v} → {canon}");
-    }
-    let key = if is_entity { "entity_types" } else { "concept_types" };
-    let known = vocab[key]
-        .as_array()
-        .map(|a| a.iter().any(|x| x.as_str() == Some(canon.as_str())))
-        .unwrap_or(false);
-    if !known {
-        // 不拒绝, 但要有人知道 —— 词表长不长得靠这条日志
-        log::info!("类型「{canon}」在受控词表外 (不拒绝, 但请确认是不是新类型)");
-    }
-    canon
-}
-
-/// 把 frontmatter 里的 entity_type / concept_type 行换成归一化后的值。
-fn normalize_type_line(content: &str, is_entity: bool) -> String {
-    let key = if is_entity { "entity_type:" } else { "concept_type:" };
-    content
-        .lines()
-        .map(|line| {
-            let t = line.trim_start();
-            if let Some(rest) = t.strip_prefix(key) {
-                let canon = canon_subtype(is_entity, rest.trim().trim_matches('"').trim_matches('\''));
-                if !canon.is_empty() {
-                    let indent = &line[..line.len() - t.len()];
-                    return format!("{indent}{key} {canon}");
-                }
-            }
-            line.to_string()
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-        + if content.ends_with('\n') { "\n" } else { "" }
-}
-
-fn mark_authored_by_employee(content: &str) -> String {
-    let trimmed = content.trim_start();
-    if !trimmed.starts_with("---") {
-        // 没 frontmatter 就不硬加 —— 读侧 (wiki_read.rs:81) 要求 --- 开头, 我们
-        // 在这里补一个 frontmatter 反而会改变文件语义。原样返回。
-        return content.to_string();
-    }
-    let after = &trimmed[3..];
-    let Some(end) = after.find("\n---") else {
-        return content.to_string();
-    };
-    let fm = &after[..end];
-    if fm.lines().any(|l| l.trim().starts_with("authored_by:")) {
-        // 已经有了 —— 覆盖成 employee (员工又改了一次也还是员工的)
-        let new_fm: String = fm
-            .lines()
-            .map(|l| {
-                if l.trim().starts_with("authored_by:") {
-                    "authored_by: employee".to_string()
-                } else {
-                    l.to_string()
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        return format!("---{}\n---{}", new_fm, &after[end + 4..]);
-    }
-    format!(
-        "---{}\nauthored_by: employee\n---{}",
-        fm.trim_end(),
-        &after[end + 4..]
-    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -680,33 +473,6 @@ pub async fn wiki_sensitive_terms_ensure() -> Result<SensitiveTermsCheck, String
     })
 }
 
-/// 简单 today YYYY-MM-DD format — 不引 chrono dep (太重), 用 std time + hand calc.
-fn chrono_today() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    // Unix epoch (1970-01-01) → year/month/day
-    let days_since_epoch = (secs / 86400) as i64;
-    let (y, m, d) = days_to_ymd(days_since_epoch);
-    format!("{y:04}-{m:02}-{d:02}")
-}
-
-/// days since epoch → (year, month, day), civil_from_days (Howard Hinnant algorithm).
-fn days_to_ymd(z: i64) -> (i64, u32, u32) {
-    let z = z + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = (z - era * 146097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    let y = if m <= 2 { y + 1 } else { y };
-    (y, m, d)
-}
-
 // ============================================================
 // P16 (6/5 鸿波): 对话上传文件 auto ingest → wiki/raw/sources/
 //
@@ -800,107 +566,4 @@ pub async fn wiki_ingest_source(
         bytes: content.len() as u64,
         full_text_chars: full_text.chars().count(),
     })
-}
-
-#[cfg(test)]
-mod authored_by_tests {
-    use super::mark_authored_by_employee;
-
-    /// 8/4: 员工在 UI 改的东西必须能被插件侧认出来, 否则下一次蒸馏 LLM 会把它
-    /// 重写掉 —— 实测 220 条 wiki 里 219 条是机器写的, 而数据上完全区分不出来。
-    #[test]
-    fn adds_marker_to_frontmatter() {
-        let out = mark_authored_by_employee("---\ntype: entity\ntitle: X\n---\n\n正文\n");
-        assert!(out.contains("authored_by: employee"), "{out}");
-        assert!(out.contains("title: X") && out.contains("正文"), "{out}");
-        // frontmatter 结构没被破坏 (读侧 split_frontmatter 要求 --- 开头 + \n--- 收尾)
-        assert!(out.starts_with("---\n"), "{out}");
-        assert!(out.contains("\n---"), "{out}");
-    }
-
-    #[test]
-    fn overwrites_existing_marker() {
-        let out = mark_authored_by_employee(
-            "---\ntype: entity\nauthored_by: llm\ntitle: X\n---\n\n正文\n",
-        );
-        assert!(out.contains("authored_by: employee"));
-        assert!(!out.contains("authored_by: llm"));
-    }
-
-    #[test]
-    fn leaves_content_without_frontmatter_alone() {
-        // 没 frontmatter 就不硬加 —— 补一个会改变文件语义 (读侧对 --- 开头很敏感,
-        // 8/4 查了半天的"显示成拼音"就是这个 fence 缺失造成的)
-        let src = "# 标题\n\n纯正文\n";
-        assert_eq!(mark_authored_by_employee(src), src);
-    }
-
-    #[test]
-    fn leaves_half_frontmatter_alone() {
-        let src = "---\ntype: entity\n没有收尾\n";
-        assert_eq!(mark_authored_by_employee(src), src);
-    }
-}
-
-#[cfg(test)]
-mod type_vocab_tests {
-    use super::*;
-
-    // 8/4: 之前只有蒸馏侧归一化, UI 手工建的不归一 —— 界面上敲「规则」存
-    // 「规则」, 蒸馏出来的存「rule」。同一个受控词表两条产线两个结果。
-
-    #[test]
-    fn chinese_synonym_is_canonicalized() {
-        assert_eq!(canon_subtype(false, "规则"), "rule");
-        assert_eq!(canon_subtype(false, "流程"), "process");
-        assert_eq!(canon_subtype(true, "资质"), "cert");
-        assert_eq!(canon_subtype(true, "公司"), "org");
-    }
-
-    #[test]
-    fn known_english_is_kept() {
-        assert_eq!(canon_subtype(true, "cert"), "cert");
-    }
-
-    #[test]
-    fn unknown_type_is_allowed_not_rejected() {
-        // 词表要能长 —— 表外不拒绝, 只小写归一 + 打日志
-        assert_eq!(canon_subtype(true, "Spaceship"), "spaceship");
-    }
-
-    #[test]
-    fn empty_stays_empty() {
-        assert_eq!(canon_subtype(true, "   "), "");
-    }
-
-    #[test]
-    fn rewrites_only_the_type_line() {
-        let src = "---\ntype: concept\ntitle: X\nconcept_type: 规则\n---\n\n正文。\n";
-        let out = normalize_type_line(src, false);
-        assert!(out.contains("concept_type: rule"), "{out}");
-        assert!(out.contains("title: X") && out.contains("正文。"), "{out}");
-        assert!(out.ends_with('\n'), "尾部换行被吃了");
-    }
-
-    #[test]
-    fn already_canonical_is_unchanged() {
-        let src = "---\ntype: entity\ntitle: X\nentity_type: cert\n---\n\n正文。\n";
-        assert_eq!(normalize_type_line(src, true), src);
-    }
-
-    #[test]
-    fn entity_and_concept_use_different_vocab() {
-        // concept_type 行在 is_entity=true 时不该被动
-        let src = "---\nconcept_type: 规则\n---\n\n正文。\n";
-        assert_eq!(normalize_type_line(src, true), src);
-    }
-
-    #[test]
-    fn vocab_json_is_embedded_and_parses() {
-        // include_str! 路径写错的话这条会红 —— 打包后 .app 里没有
-        // edge/contracts/ 目录, 只能靠编译期嵌入
-        let v: serde_json::Value = serde_json::from_str(TYPE_VOCAB_JSON).unwrap();
-        assert_eq!(v["aliases"]["规则"], "rule");
-        assert!(v["entity_types"].as_array().unwrap().len() >= 5);
-    }
 }
