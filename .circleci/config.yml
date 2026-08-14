@@ -73,12 +73,15 @@ jobs:
       # 任何新发布的依赖都 ETARGET。
       #
       # 选 22.23.2 而不是 24/26: 跟 mac 那边同一个版本 (build-mac-resources.sh:222,
-      # 8/8 定的), 留在 v22 LTS 线内, **它 bundle 的 npm 是 10.x**, 天然落在
-      # `<11.10.0` 那一支。一个版本号解决两个约束。
+      # 8/8 定的), 留在 v22 LTS 线内, 最小改动。
+      #
+      # ⚠ 但**只钉 node 不够** —— v22 自带的 npm 是 10.x, 只满足根 package.json
+      #   的 `<11.10.0` 那一支; 子包 `website/` 要求 `npm>=11.17.0`, 全仓的交集
+      #   其实是 >=11.17.0。所以下面还要把 npm 升上去。细节见 step 里那段注释。
       #
       # GitHub 那个同源 workflow 之所以没挂, 是因为它用 setup-node 钉了 node 20 ——
-      # 但 node 20 已经不满足 hermes v0.20 的 >=22.22.0 了, 它只是还没跑到那一步。
-      # 这里钉 22.23.2 两边都满足。
+      # 但 node 20 已经不满足 hermes v0.20 的 >=22.22.0 了, 它只是还没跑到那一步
+      # (那个 npm 预装步骤是 7/17 CircleCI 独有的)。
       - run:
           name: Pin Node 22.23.2 (hermes engines + npm bad-band)
           command: |
@@ -105,6 +108,37 @@ jobs:
               [Environment]::SetEnvironmentVariable('Path', "$dst;$userPath", 'User')
             }
             $env:PATH = "$dst;$env:PATH"
+
+            # ── npm 必须 >= 11.17.0 ──────────────────────────────
+            #
+            # ⚠ 8/14 第一版只钉了 node, 靠 v22 自带的 npm 10.x 走根 package.json
+            #   `<11.10.0` 那一支。11 个目录装过去了, 第 12 个 `website/` 挂:
+            #
+            #       website@0.0.0  Required: {"node":">=20.0","npm":">=11.17.0"}
+            #
+            #   根的 `<11.10.0 || >=11.17.0` 本意是"要么用 bug 之前的旧 npm,
+            #   要么用修好之后的新 npm", 而子包把选择权收死了 —— 两者**唯一的
+            #   交集是 >=11.17.0**。10.x 只满足根, 不满足全仓。
+            #
+            #   我上一版的判断错在**只看了根 package.json** (照抄 mac 脚本的思路,
+            #   而 mac 那条路根本不装 website/)。更糟的是下面那个自检也只读根,
+            #   跟错误判断共享同一个前提 —— 于是它验证了那个 bug。
+            #   现在自检改成扫全部 package.json, 见下一个 step。
+            #
+            # 在 zip 版 node 上原地升 npm, Windows 上历史上有"npm 覆盖不了自己"
+            # 的坑, 所以升完**当场断言**版本真的变了, 不让它悄悄留在旧版。
+            $npmFloor = [version]'11.17.0'
+            if ([version](npm --version).Trim() -lt $npmFloor) {
+              Write-Host "===== upgrading npm to >=$npmFloor (website/ 要求) ====="
+              npm install -g "npm@>=11.17.0" --no-audit --no-fund --loglevel=error
+              if ($LASTEXITCODE -ne 0) { throw "npm self-upgrade 失败 (exit=$LASTEXITCODE)" }
+              $after = (npm --version).Trim()
+              if ([version]$after -lt $npmFloor) {
+                throw ("npm 升级后仍是 $after (<$npmFloor) —— Windows 上 npm 没能覆盖自己。" +
+                       "改用 bundle 了 npm>=11.17 的 Node 版本, 或在这里改走 corepack。")
+              }
+            }
+
             Write-Host "===== pinned ====="
             node --version
             npm --version
@@ -229,35 +263,68 @@ jobs:
             # 保险: 就算 User 级 PATH 没被这个 step 继承, 也用钉住的那个 node。
             if (Test-Path 'C:\node-pinned\node.exe') { $env:PATH = "C:\node-pinned;$env:PATH" }
 
-            # 跟打包用的这份 hermes 源码**当场对一遍** engines —— 跟
-            # build-mac-resources.sh 同一个思路: 版本号是手写的, hermes 每次升级
-            # 都可能再抬, 与其指望下次有人记得改, 不如让 CI 当场说清楚要改成什么。
+            # ── 先对 engines, 再动手装 ────────────────────────────
             #
-            # 不做完整 semver range 解析 (那要拉依赖), 只覆盖实际会出问题的两种:
-            #   node: `>=X.Y.Z` 下限
-            #   npm:  已知的 11.10.0–11.16.x 坏区间
-            # 解不出来就跳过并说一声, 不拦构建。
-            $pkgJson = "$hermesDir\package.json"
-            if (Test-Path $pkgJson) {
-              $eng = (Get-Content $pkgJson -Raw | ConvertFrom-Json).engines
-              $nodeNow = (node --version).TrimStart('v')
-              $npmNow  = (npm --version).Trim()
-              Write-Host "engines: node='$($eng.node)' npm='$($eng.npm)' | 实际: node=$nodeNow npm=$npmNow"
+            # 跟 build-mac-resources.sh 同一个思路: 版本号是手写的, hermes 每次
+            # 升级都可能再抬, 与其指望下次有人记得改, 不如让 CI 当场说清楚。
+            #
+            # ⚠ 8/14 教训: 这个自检第一版**只读根 package.json**, 跟当时选 npm 10.x
+            #   的错误判断共享同一个前提 —— 所以它验证了那个 bug, 一路放行到第 12 个
+            #   目录 (`website/`, 要求 npm>=11.17.0) 才在 4 分钟的安装之后炸。
+            #
+            #   护栏跟它要守的东西用同一个假设, 就等于没有护栏。现在扫**下面循环
+            #   会走的同一批** package.json, 取所有 `>=X.Y.Z` 里最高的那个下限。
+            #
+            # 不做完整 semver range 解析 (要拉依赖), 只解 `>=X.Y.Z`。解不出来的
+            # 约束跳过并列出来, 不拦构建 —— 宁可漏报也不误杀。
+            $allPkgs = Get-ChildItem -Path $hermesDir -Recurse -Filter "package.json" -Depth 4 -ErrorAction SilentlyContinue |
+                       Where-Object { $_.FullName -notmatch '\\node_modules\\' }
+            $nodeNow = (node --version).TrimStart('v')
+            $npmNow  = (npm --version).Trim()
+            Write-Host "当前: node=$nodeNow npm=$npmNow  (待查 $($allPkgs.Count) 个 package.json)"
 
-              if ($eng.node -match '>=\s*(\d+)\.(\d+)\.(\d+)') {
-                $floor = [version]"$($Matches[1]).$($Matches[2]).$($Matches[3])"
-                if ([version]$nodeNow -lt $floor) {
-                  throw ("Node $nodeNow 低于 hermes 要求的 >=$floor。" +
-                         "修: 把上面 'Pin Node' step 里的 `$ver 抬到 >=$floor 的真实发布版, " +
-                         "同时同步 edge/companion-app/scripts/build-mac-resources.sh 的 NODE_VERSION。")
+            $nodeFloor = [version]'0.0.0'; $nodeFrom = ''
+            $npmFloor2 = [version]'0.0.0'; $npmFrom = ''
+            $unparsed = @()
+            foreach ($p in $allPkgs) {
+              try { $eng = (Get-Content $p.FullName -Raw | ConvertFrom-Json).engines } catch { continue }
+              if (-not $eng) { continue }
+              $rel = $p.DirectoryName.Replace($hermesDir, '.')
+              foreach ($pair in @(@('node', $eng.node), @('npm', $eng.npm))) {
+                $what = $pair[0]; $range = $pair[1]
+                if (-not $range) { continue }
+                # 也认 `>=18` 这种单段写法 (真实存在)。
+                #
+                # ⚠ 从 `<11.10.0 || >=11.17.0` 这种 OR 里取 `>=` 那一支, 语义上偏严 ——
+                #   根其实也接受 <11.10.0。这里故意偏严: 全仓的交集本来就被子包
+                #   (website >=11.17.0) 收死在 >=11.17.0, 而且偏严的方向只会让 CI
+                #   更早喊, 不会放过真问题。哪天 website 没了, 这条会多要求一点,
+                #   但 11.17+ 仍然满足根 —— 无害。
+                if ($range -match '>=\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?') {
+                  $v = [version]"$($Matches[1]).$(if ($Matches[2]) { $Matches[2] } else { '0' }).$(if ($Matches[3]) { $Matches[3] } else { '0' })"
+                  if ($what -eq 'node' -and $v -gt $nodeFloor) { $nodeFloor = $v; $nodeFrom = "$rel ($range)" }
+                  if ($what -eq 'npm'  -and $v -gt $npmFloor2) { $npmFloor2 = $v; $npmFrom = "$rel ($range)" }
+                } else {
+                  $unparsed += "$rel $what='$range'"
                 }
               }
-              $npmV = [version]$npmNow
-              if ($npmV.Major -eq 11 -and $npmV.Minor -ge 10 -and $npmV.Minor -le 16) {
-                throw ("npm $npmNow 落在上游排除的坏区间 11.10.0-11.16.x " +
-                       "(它认 min-release-age 却忽略 min-release-age-exclude, 新依赖必 ETARGET)。" +
-                       "说明 'Pin Node' step 没生效 —— 检查 C:\node-pinned 是否存在、PATH 是否排在前面。")
-              }
+            }
+            if ($unparsed.Count -gt 0) { Write-Host "  (解不出的约束, 未检查: $($unparsed -join '; '))" }
+            Write-Host "  最高下限: node>=$nodeFloor [$nodeFrom]  npm>=$npmFloor2 [$npmFrom]"
+
+            if ([version]$nodeNow -lt $nodeFloor) {
+              throw ("Node $nodeNow 低于 $nodeFrom 要求的 >=$nodeFloor。" +
+                     "修: 把 'Pin Node' step 的 `$ver 抬到 >=$nodeFloor 的真实发布版, " +
+                     "同时同步 edge/companion-app/scripts/build-mac-resources.sh 的 NODE_VERSION。")
+            }
+            if ([version]$npmNow -lt $npmFloor2) {
+              throw ("npm $npmNow 低于 $npmFrom 要求的 >=$npmFloor2。" +
+                     "修: 改 'Pin Node' step 里 `$npmFloor 那个下限。")
+            }
+            $npmV = [version]$npmNow
+            if ($npmV.Major -eq 11 -and $npmV.Minor -ge 10 -and $npmV.Minor -le 16) {
+              throw ("npm $npmNow 落在上游排除的坏区间 11.10.0-11.16.x " +
+                     "(它认 min-release-age 却忽略 min-release-age-exclude, 新依赖必 ETARGET)。")
             }
             # 跳过 Playwright browser download (装完 npm 就 350MB 再 chromium 就爆 msi).
             # 员工用 Playwright 时若真需要 chromium, 那次会挂 → 后续阶段单独打包.
