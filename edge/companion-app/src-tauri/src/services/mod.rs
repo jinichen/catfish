@@ -20,6 +20,8 @@ pub mod embedding_config; // P3.5.15 (6/16 鸿波): embedding provider yaml 配�
 pub mod embedding_local;
 pub mod embedding_remote;
 pub mod endpoints;
+pub mod phishing_llm; // LLM batch 复审 (8/15 从 phishing_scan 切出)
+pub mod phishing_rules; // 5 个工具 + 5 个 scan_* 纯函数 (8/15 从 phishing_scan 切出)
 pub mod phishing_scan;    // P3.3.58 (6/12 鸿波): 钓鱼邮件 deterministic 规则集 + audit chain 留档
 pub mod phishing_config;  // P3.3.65 (6/13 鸿波): 钓鱼规则可配置 yaml + 政企域名白名单
 pub mod political_scan;   // P3.3.53 (6/13 鸿波): 政治敏感规则引擎 + audit chain 留档 (默认关)
