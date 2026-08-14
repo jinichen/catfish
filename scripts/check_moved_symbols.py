@@ -120,10 +120,41 @@ def scan_members(files):
                 if u: out.append(f"  {f}: {cur}.{fl} 私有, 但 {', '.join(u)} 在读它")
     return out
 
+def scan_signatures(files):
+    """pub / pub(crate) 函数的签名里出现了本文件的私有类型。
+
+    2026-08-15 第三次栽在这上面: acquire_bootstrap_lock 放开成 pub(crate) 了,
+    它的返回类型 BootstrapLock 没有 —— 于是别的模块拿不到那个值。
+    编译器的 private_interfaces lint 说的就是这件事, 但它先报 warning 再报
+    error, 混在一堆输出里容易滑过去。
+
+    前两类 (impl 方法、结构体字段) 问的是"这个条目本身可不可达";
+    这一类问的是"可达的条目, 它签名里提到的东西可不可达"。
+    放开一个函数而不看它的签名, 等于开了门没给钥匙。
+    """
+    out=[]
+    for f in files:
+        L=Path(f).read_text(encoding="utf-8").splitlines()
+        priv={m.group(2) for l in L if (m:=re.match(r'^(struct|enum|type) (\w+)',l))}
+        if not priv: continue
+        acc=None
+        for l in L:
+            if acc is None:
+                if re.match(r'^pub(\(crate\))? (async )?fn ',l): acc=l
+                else: continue
+            else: acc+=" "+l.strip()
+            if "{" in acc or acc.rstrip().endswith(";"):
+                sig=acc.split("{")[0]
+                for ty in priv:
+                    if re.search(rf'\b{ty}\b',sig):
+                        out.append(f"{f}: {sig.strip()[:66]}… 签名里的 {ty} 还是私有的")
+                acc=None
+    return out
+
 bad=0
 for f in sys.argv[1:]:
     m=scan(f)
     if m: bad+=1; print(f"  ❌ {f}: 可能没导入 → {m}")
-for w in scan_members(sys.argv[1:]):
+for w in scan_members(sys.argv[1:])+scan_signatures(sys.argv[1:]):
     bad+=1; print("  ❌ "+w.strip())
 print(f"\n可疑 {bad} 个" if bad else f"\n✓ {len(sys.argv)-1} 个文件, 未发现缺失的跨文件引用")

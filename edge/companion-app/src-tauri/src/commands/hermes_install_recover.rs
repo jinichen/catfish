@@ -107,7 +107,7 @@ pub(crate) fn recover_interrupted_transaction(paths: &BootstrapPaths) -> Result<
     Ok(None)
 }
 
-struct BootstrapLock {
+pub(crate) struct BootstrapLock {
     _process_guard: std::sync::MutexGuard<'static, ()>,
     _file: File,
 }
