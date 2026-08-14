@@ -202,6 +202,33 @@ fn init_active_provider() -> Provider {
     }
 }
 
+/// 把 reqwest 错误的**整条 source 链**摊平成一行.
+///
+/// # 为什么必须有这个 (8/14)
+///
+/// `log::warn!("...失败: {e}")` 打的是 Display, 而 reqwest 的 Display 只有最外层:
+///
+///     error sending request for url (http://127.0.0.1:8999/v1/embeddings)
+///
+/// 这一句**分不出来**是连不上、被代理劫了、还是超时 —— 而这三种的处置完全不同。
+/// 今晚就卡在这里: 我先按"被代理劫了"改了一版 (那个 asymmetry 确实是 bug),
+/// 但看时间戳才发现两次失败都正好是 10 秒 = 客户端超时, 也就是请求其实到了网关,
+/// 是网关那头在等一台不可达的内网机。
+///
+/// util/http_client.rs 里那段注释早就写着"关键词是 tunnel error" —— 而那个词
+/// 就在 source 链的第三层, 默认永远不会被打出来。
+///
+/// 判断依据不该靠猜, 也不该靠数时间戳。
+fn err_chain(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut parts = vec![e.to_string()];
+    let mut cur = e.source();
+    while let Some(s) = cur {
+        parts.push(s.to_string());
+        cur = s.source();
+    }
+    parts.join(" ← ")
+}
+
 /// 同步 ping remote /v1/catalog. 启动期用 (在 init_active_provider 内, sync context).
 /// 不发真 embed 请求 — 只 GET /v1/catalog 检查可达, 几十 ms. 失败返 false → fallback local.
 ///
@@ -571,7 +598,23 @@ impl RemoteProvider {
             .json(&body)
             .send()
             .await
-            .map_err(|e| log::warn!("[embedding/remote] POST {url} 失败: {e}"))
+            .map_err(|e| {
+                log::warn!(
+                    "[embedding/remote] POST {url} 失败: {}{}",
+                    err_chain(&e),
+                    if e.is_timeout() {
+                        format!(
+                            " · 这是**客户端超时** ({}s) —— 请求多半已经到了网关, \
+                             是上游在等。去看网关日志, 别在这边找网络问题。",
+                            self.config.timeout_seconds
+                        )
+                    } else if e.is_connect() {
+                        " · 连不上 —— 网关没起? 或者被系统代理劫了 (见 util/http_client.rs)".to_string()
+                    } else {
+                        String::new()
+                    }
+                )
+            })
             .ok()?;
 
         if !resp.status().is_success() {
@@ -586,7 +629,7 @@ impl RemoteProvider {
         let parsed: EmbeddingApiResponse = resp
             .json()
             .await
-            .map_err(|e| log::warn!("[embedding/remote] 解析 response JSON 失败: {e}"))
+            .map_err(|e| log::warn!("[embedding/remote] 解析 response JSON 失败: {}", err_chain(&e)))
             .ok()?;
 
         let first = parsed.data.into_iter().next()?;
