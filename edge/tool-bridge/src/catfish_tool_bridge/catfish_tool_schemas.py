@@ -2571,6 +2571,65 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── 8/14 鸿波 catch「让小鲶找一份文件, 它说'本地文件搜索环境无法启动'」──
+    #
+    # 真因不是环境挂了, 是**它根本没有这个工具**: catfish-local-search 没注册成
+    # MCP server, catfish-search 二进制也没装, 而 skills.rs:946 又禁止员工自加
+    # catfish-* 的 MCP。索引本身好好的 (10,518 个文件, 当天还在写), 要找的文件
+    # 也在里面 —— 只是没有任何路径能查到它。
+    #
+    # 所以补一个直读 ~/.catfish/search.db 的 native tool。tool-bridge 是被
+    # autostart 自动注册的, 不依赖任何一次性安装脚本。详见 search_files.py。
+    {
+        "name": "catfish_search_files",
+        "description": (
+            "★★★ 搜员工本机**已索引的文件** (文件名 + 正文全文). 找不到文件时先用这个,\n"
+            "不要直接说'文件不存在'.\n\n"
+            "数据源: local_search 索引 (~/.catfish/search.db) — 范围就是员工在 Companion\n"
+            "'📂 搜索范围' 卡里配的目录, 不能在这里另指目录.\n\n"
+            "✅ 调用场景:\n"
+            "  - 员工问 '我那份 XX 文件在哪' / '找一下关于 YY 的材料'\n"
+            "  - 要引用员工历史产出 (周报 / 方案 / 台账) 但不知道路径\n"
+            "  - 写文档前找参考: query 给主题词\n\n"
+            "❌ 不要用它找: 邮件 (catfish_email_search) / 历史对话\n"
+            "   (catfish_search_sessions) / 上传附件 (catfish_search_attachments) /\n"
+            "   catfish 自己的设计文档 (catfish_search_docs) / 员工 wiki (catfish_wiki_search).\n\n"
+            "⚠ 关键词长度: 索引用 trigram 分词, **少于 3 个字符的词搜不了正文**\n"
+            "   (只能在文件名里匹配). 返回里的 short_terms 会列出被降级的词 ——\n"
+            "   看到它就说明'没搜到'可能是词太短, **不是文件不存在**, 换个长点的词再试.\n\n"
+            "返参: matches[{path, file_type, mtime, snippet, matched_by}], count,\n"
+            "      summary, short_terms?, latency_ms.\n"
+            "      matched_by = filename / content / content+filename.\n"
+            "      error='index_unavailable' 表示员工还没建过索引 —— 这时候要让他去\n"
+            "      Companion 仪表盘 → 服务/配额 → 搜索范围 加目录, 而不是说没找到.\n\n"
+            "🔒 隐私: 直读员工 mac 本机 sqlite, 不出端, 不上传中央."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "关键词, 空格分隔多个词 (它们之间是 AND). "
+                        "例: '业务场景 梳理' / '周报 陈鸿波' / '资质 对标矩阵'"
+                    ),
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "返多少个 (默认 10, 上限 50)",
+                },
+                "file_types": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "只要这些扩展名, 例 ['xlsx','docx']. 不给 = 不限",
+                },
+            },
+            "required": ["query"],
+        },
+        "emoji": "🔍",
+        "toolset": "catfish_native",
+        "available": True,
+    },
     # ── P3.5.35 (6/18 鸿波 catch 'chat 是不是已经接了 wiki_search? + 装到本机后部门 wiki 不就是自家了吗') ──
     {
         "name": "catfish_wiki_search",

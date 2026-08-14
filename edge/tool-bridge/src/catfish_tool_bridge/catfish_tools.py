@@ -844,6 +844,12 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_search_docs":
         from . import search_docs  # noqa: PLC0415
         return search_docs.tool_search_docs(args)
+    # 8/14: 通用本机文件搜索 (直读 local_search 的 search.db)。
+    # 补它的起因见 search_files.py —— LLM 之前没有任何能查那个索引的工具,
+    # 于是"找不到文件"就变成了它自己编的"搜索环境无法启动"。
+    if name == "catfish_search_files":
+        from . import search_files  # noqa: PLC0415
+        return search_files.tool_search_files(args)
     # P3.5.35 (6/18 鸿波 catch 'chat 没接 wiki_search') — 员工 wiki + 装机部门 wiki BM25
     if name == "catfish_wiki_search":
         from . import wiki_search  # noqa: PLC0415
