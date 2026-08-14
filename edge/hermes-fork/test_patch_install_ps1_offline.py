@@ -222,3 +222,69 @@ def test_cli_idempotent_on_already_patched(upstream_install_ps1: str, tmp_path: 
     assert result.returncode == 0
     assert "幂等 no-op" in result.stdout
     assert tmp_output.is_file()
+
+
+# ─── 产物编码: Windows PowerShell 5.1 读得懂吗 (8/14) ──────────
+#
+# 8/14 CircleCI 现场: 打完补丁的 install.ps1 被 CI 那步语法检查判了
+# **24 处 parse error** (行 781/795/1611/…/3075), 一行都执行不了。
+#
+# 真因不在补丁内容, 在**编码**:
+#
+#   · 补丁往 install.ps1 里插了 900+ 个非 ASCII 字符 —— 71 行中文注释,
+#     外加 14 处中文在 Write-Info / Write-Warn 的字符串里
+#   · 产物写的是**无 BOM 的 UTF-8**
+#   · 而 Windows PowerShell 5.1 (装机现场 + CircleCI job 的 shell 都是它)
+#     读无 BOM 文件按 ANSI / cp1252 解释 → 中文字节解成乱码, 里面混进引号和
+#     括号 → 整个文件 parse 就挂
+#
+# 为什么本地怎么试都是好的: pwsh 7 (mac/Linux) 对无 BOM 文件默认 UTF-8。
+# 这个坑**只在 Windows PowerShell 5.1 上现形**。
+#
+# 下面两条钉的就是这个 —— 不用等 CircleCI 跑 40 分钟才知道。
+
+
+def _patch_to(tmp_path, content: str) -> bytes:
+    """跑一遍真脚本, 返回产物的**原始字节** (不是 str —— 这两条测的就是编码)。"""
+    src = tmp_path / "in.ps1"
+    src.write_text(content, encoding="utf-8")
+    out = tmp_path / "out.ps1"
+    r = subprocess.run(
+        [sys.executable, str(_HERE / "patch_install_ps1_offline.py"),
+         "--input", str(src), "--output", str(out)],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 0, f"补丁脚本挂了: {r.stderr}"
+    return out.read_bytes()
+
+
+def test_产物必须带_utf8_bom(upstream_install_ps1: str, tmp_path):
+    """★★★ 无 BOM = Windows PowerShell 5.1 按 cp1252 读 = 装机必挂。"""
+    raw = _patch_to(tmp_path, upstream_install_ps1)
+    assert raw[:3] == b"\xef\xbb\xbf", (
+        f"产物没有 UTF-8 BOM (前 3 字节 {raw[:3].hex()})。"
+        "Windows PowerShell 5.1 会按 cp1252 读, 中文注释解成乱码后 parse 直接挂 —— "
+        "8/14 CircleCI 就是这么报的 24 处语法错。"
+    )
+
+
+def test_按cp1252重解会毁掉中文_证明bom不是可选项(upstream_install_ps1: str, tmp_path):
+    """★★ 反证: 说明上面那条不是形式主义。
+
+    直接复现 5.1 的行为 —— 同样的字节按 cp1252 解, 中文全成乱码。
+    判据取"中文还在不在"而不是跑 PowerShell: 测试机不一定有 pwsh, 而两者是
+    同一个因 (字节被按错的编码解了), 中文没了就等于 parse 会挂。
+    """
+    raw = _patch_to(tmp_path, upstream_install_ps1)
+    body = raw[3:] if raw[:3] == b"\xef\xbb\xbf" else raw
+
+    def has_cjk(t: str) -> bool:
+        return any(0x4E00 <= ord(c) <= 0x9FFF for c in t)
+
+    assert has_cjk(body.decode("utf-8")), (
+        "产物里没有中文了 —— 那这两条测试的前提要重审 (补丁不再插中文的话, "
+        "BOM 就不是硬需求了)"
+    )
+    assert not has_cjk(body.decode("cp1252", errors="replace")), (
+        "cp1252 重解之后中文居然还在 —— 反证的前提不对, 重新想"
+    )

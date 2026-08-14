@@ -535,6 +535,26 @@ def verify_patched(patched_text: str) -> None:
 # ─── CLI ─────────────────────────────────────────────────
 
 
+#: 产物必须带 UTF-8 BOM (8/14)。
+#:
+#: Windows PowerShell 5.1 (装机现场和 CircleCI job 的 shell 都是它) 读**没有 BOM**
+#: 的文件时按 ANSI / cp1252 解释。而这个补丁往 install.ps1 里插了 900 多个非 ASCII
+#: 字符 —— 71 行中文注释, 外加 14 处中文出现在 Write-Info / Write-Warn 的**字符串**里。
+#:
+#: 无 BOM 的后果有两层, 第一层是致命的:
+#:   1. 中文 UTF-8 字节被当 cp1252 解, 解出来的乱码里混进了引号和括号
+#:      → **整个文件 parse 就挂**。8/14 CircleCI 实测 24 处语法错
+#:        (行 781/795/1611/…/3075), 一行都执行不了。
+#:   2. 就算能解析, 那 14 条给员工看的提示也会打成乱码。
+#:
+#: 验证过: 把产物的字节按 cp1252 重解一遍再喂给 PowerShell 的 Parser,
+#: 逐字复现 CI 那 24 个错误行号。加 BOM 后 5.1 会正确识别成 UTF-8。
+#:
+#: pwsh 7 对无 BOM 文件默认 UTF-8, 所以在 mac / Linux 上怎么试都是好的 ——
+#: 这个坑只在 Windows PowerShell 5.1 上现形。
+_OUT_ENCODING = "utf-8-sig"
+
+
 def main() -> int:
     p = argparse.ArgumentParser(
         description="Patch hermes install.ps1 with catfish offline mode support.",
@@ -580,7 +600,7 @@ def main() -> int:
             return 0
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_text(original, encoding="utf-8")
+            args.output.write_text(original, encoding=_OUT_ENCODING)
             print(f"[OK] 复制 patched 文件到 {args.output}")
         return 0
 
@@ -595,7 +615,7 @@ def main() -> int:
 
     out_path = args.output or args.input.with_suffix(".ps1.patched")
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(patched, encoding="utf-8")
+    out_path.write_text(patched, encoding=_OUT_ENCODING)
     print(f"[OK] patched install.ps1 → {out_path}")
     print(
         f"     Marker: {MARKER}\n"
