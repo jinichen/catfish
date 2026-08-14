@@ -10,6 +10,21 @@
 漏的原因不是没查 —— 依赖扫描里明确列过 helper 用这两个函数, 是写文件头时
 没把扫描结果带进去。编译器当然会报, 但那要等人跑一次 cargo, 一个来回。
 
+# 七条反向验证 (改这个脚本之前先跑一遍, 确认它还抓得到)
+#
+# ⚠ 每条的变异必须**精确**。2026-08-15 验证第 7 条时我把那行整个删掉了 ——
+#    那变成了"名字未定义", 由第 5 条 (模块前缀/没导入) 接住, 于是第 7 条看着
+#    像失效了。变异写错, 得到的"漏报"结论也是错的。
+#
+#   1 impl 方法        hermes_install_state.rs   pub(crate) fn unique_sibling → fn
+#   2 结构体字段       hermes_install_steps.rs   pub(crate) preserve: bool → preserve: bool
+#   3 签名私有类型     hermes_install_recover.rs pub(crate) struct BootstrapLock → struct
+#   4 super 差一层     hermes_install.rs         mod tests 里 crate::commands:: → super::
+#   5 模块前缀没导入   email_llm.rs              删掉 use crate::services::{hermes_api_config, …}
+#   6 死 import        任意新文件                加一条 use std::collections::HashMap;
+#   7 只在测试里用     autostart_mcp.rs          把 mod tests 里那条 use **挪到文件顶层**
+#                                               (不是删掉 —— 删掉是第 5 条的场景)
+
 # 它不是门禁
 
 有误报 (闭包名、原始字符串里的词、宏), 所以**不要**拿它当 CI 门禁 —— 那样
