@@ -19,11 +19,18 @@ from typing import Any
 logger = logging.getLogger("catfish.tool_bridge.recent_outputs")
 
 
-def _output_dir() -> Path:
+#: 产出目录。`outputs` 是 8/14 起的统一约定; `output` 是历史目录, 保留只读。
+#
+# 为什么两个都扫: 员工机器上 output/ 里有 309 个历史文件 (周报 / 汇报 / 对标报告),
+# 改名之后如果只读 outputs/, 这些在 LLM 眼里就等于凭空消失了。写入方已全部
+# 切到 outputs/, 所以 output/ 只会越来越旧, 不会再长。
+_OUTPUT_DIRS = ("outputs", "output")
+
+
+def _output_dirs() -> list[Path]:
     catfish_home = os.environ.get("CATFISH_HOME", "").strip()
-    if catfish_home:
-        return Path(catfish_home).expanduser() / "output"
-    return Path.home() / ".catfish" / "output"
+    base = Path(catfish_home).expanduser() if catfish_home else Path.home() / ".catfish"
+    return [base / name for name in _OUTPUT_DIRS]
 
 
 def _human_size(size: int) -> str:
@@ -35,32 +42,45 @@ def _human_size(size: int) -> str:
 
 
 def list_recent(*, hours_back: int = 24, limit: int = 20) -> list[dict[str, Any]]:
-    d = _output_dir()
-    if not d.exists() or not d.is_dir():
-        return []
     cutoff = (datetime.now() - timedelta(hours=max(0, hours_back))).timestamp()
     out: list[dict[str, Any]] = []
+    seen: set[str] = set()
     try:
-        for entry in d.iterdir():
-            if not entry.is_file():
+        # ⚠ 8/14: 原来是 `d.iterdir()` + `if not entry.is_file(): continue` ——
+        #    **非递归**, 子目录直接跳过。而 weekly-report / leadership-briefing
+        #    写的是 `<日期>/<时间>_slug/xxx.docx`, 也就是说这个工具从来列不出
+        #    那两个 skill 的产出。员工问"我那份汇报呢", LLM 拿到的是一份看起来
+        #    完整、实际漏掉整类文件的清单 —— 比报错更难发现。
+        #    改成 rglob 递归。
+        for d in _output_dirs():
+            if not d.exists() or not d.is_dir():
                 continue
-            try:
-                st = entry.stat()
-            except OSError:
-                continue
-            if st.st_mtime < cutoff:
-                continue
-            out.append({
-                "path": str(entry),
-                "name": entry.name,
-                "size": st.st_size,
-                "size_human": _human_size(st.st_size),
-                "mtime": st.st_mtime,
-                "mtime_iso": datetime.fromtimestamp(st.st_mtime).isoformat(),
-                "ext": entry.suffix.lower(),
-            })
+            for entry in d.rglob("*"):
+                if not entry.is_file():
+                    continue
+                if entry.name.startswith("."):   # .DS_Store 之类
+                    continue
+                try:
+                    st = entry.stat()
+                except OSError:
+                    continue
+                if st.st_mtime < cutoff:
+                    continue
+                key = str(entry.resolve())
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append({
+                    "path": str(entry),
+                    "name": entry.name,
+                    "size": st.st_size,
+                    "size_human": _human_size(st.st_size),
+                    "mtime": st.st_mtime,
+                    "mtime_iso": datetime.fromtimestamp(st.st_mtime).isoformat(),
+                    "ext": entry.suffix.lower(),
+                })
     except OSError as e:
-        logger.warning("BL-FIX-TIMEOUT-OUTPUTS: 列 %s 失败: %s", d, e)
+        logger.warning("BL-FIX-TIMEOUT-OUTPUTS: 列产出目录失败: %s", e)
         return []
     out.sort(key=lambda x: x["mtime"], reverse=True)
     return out[: max(1, int(limit))]

@@ -1115,7 +1115,9 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
                         "skill 大致做啥的 3-5 步 markdown bullets. "
                         "例: '1. 读员工提供的项目背景\\n2. 拉历史立项材料样本\\n"
                         "3. 按公司模板拼 6 段 (背景/目标/团队/预算/里程碑/风险)\\n"
-                        "4. 输出到 ~/.catfish/output/<ts>-立项-<项目>.docx'. "
+                        # 8/14: 跟全局约定对齐 (~/.catfish/outputs/<YYYY-MM-DD>/)。
+                        # 老例子写的是 output/ 平铺 + <ts> 前缀, 是第三种写法。
+                        "4. 输出到 ~/.catfish/outputs/<YYYY-MM-DD>/立项-<项目>.docx'. "
                         "员工 accept 后 LLM 用这个 outline 调 catfish_skill_install."
                     ),
                 },
@@ -1997,7 +1999,7 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_list_my_outputs",
         "description": (
-            "★ 列你 (鲶鱼) 跨 session 写过的所有文件 (~/.catfish/output/), "
+            "★ 列你 (鲶鱼) 跨 session 写过的所有文件 (~/.catfish/outputs/, 含历史 output/), "
             "按时间倒序. 上游 LLM 卡 / 反复幻觉 / 鸿波等不及刷时, **先调这个**"
             "看有没已经写过, 别再 execute_code 重做.\n\n"
             "✅ 调用场景:\n"

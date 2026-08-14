@@ -63,11 +63,24 @@ file_types:
 _HOME_DIRS = (
     ".catfish/uploads",
     ".catfish/output",
+    # 8/14: 产出目录统一到 outputs —— 迁移 catfish-outputs-2026-08 会把它加进
+    # yaml, 夹具里不建的话 load_config 会把它算进 cfg.missing。
+    ".catfish/outputs",
     "Documents",
     "Desktop",
     "Downloads",
     "person_task",
 )
+
+
+
+def _count_include_line(txt: str, path: str) -> int:
+    """数 include 里**整行**等于这个路径的条目。
+
+    ⚠ 不能用 txt.count(path) —— `~/.catfish/outputs` 里含着 `~/.catfish/output`,
+      子串计数会把它俩算成同一个 (8/14 加 outputs 时这三条测试就是这么红的)。
+    """
+    return sum(1 for ln in txt.splitlines() if ln.strip() in (f"- {path}", f"-{path}"))
 
 
 @pytest.fixture
@@ -144,7 +157,7 @@ def test_migration_is_idempotent(scope):
     again = cfgmod.CONFIG_FILE.read_text(encoding="utf-8")
 
     assert first == again
-    assert again.count("~/.catfish/output") == 1
+    assert _count_include_line(again, "~/.catfish/output") == 1
 
 
 def test_migration_respects_employee_deletion(scope):
@@ -179,7 +192,7 @@ def test_migration_skips_when_already_present(scope):
     cfgmod.load_config()
 
     txt = cfgmod.CONFIG_FILE.read_text(encoding="utf-8")
-    assert txt.count("~/.catfish/output") == 1
+    assert _count_include_line(txt, "~/.catfish/output") == 1
     assert "catfish-output-2026-07" in txt
 
 
@@ -198,7 +211,7 @@ def test_fresh_install_gets_output_from_default_config(scope):
     cfg = cfgmod.load_config()
 
     assert any(str(p) == str(home / ".catfish" / "output") for p in cfg.include)
-    assert cfgmod.CONFIG_FILE.read_text(encoding="utf-8").count("~/.catfish/output") == 1
+    assert _count_include_line(cfgmod.CONFIG_FILE.read_text(encoding="utf-8"), "~/.catfish/output") == 1
 
 
 def test_load_config_dedupes_include(scope):

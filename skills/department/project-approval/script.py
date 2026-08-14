@@ -63,7 +63,7 @@ def render_project_approval(
         sections: 4 段 (背景/方案/风险/进度), 每段 { "heading": str, "blocks": list[dict] }
         attachments: CSV 附件, 每个 { "name": "附件1-XXX", "header": [...], "rows": [...] }
         important_phrases: 红字高亮的关键词 (金额/日期/重大风险)
-        output_path: 输出路径. 没指定走 ~/.catfish/output/YYYY-MM-DD/HHMMSS_<title>/
+        output_path: 输出路径. 没指定走 ~/.catfish/outputs/YYYY-MM-DD/HHMMSS_<title>/
 
     Returns:
         { "docx": "/path/主.docx",

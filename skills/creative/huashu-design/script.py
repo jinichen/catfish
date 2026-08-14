@@ -80,10 +80,12 @@ def render_huashu_design(
     topic_safe = _safe_topic(topic_seed, fallback="design")
 
     # ── 输出路径 ──
+    # 8/14: 统一到 ~/.catfish/outputs/<YYYY-MM-DD>/ —— 老写法是 output/ 平铺,
+    #       日期塞在文件名里且不带横杠。约定见 catfish-memory 提示词那处说明。
+    date_str = datetime.now().strftime("%Y-%m-%d")
     out_root = Path(output_dir).expanduser() if output_dir else (
-        Path("~/.catfish/output").expanduser()
+        Path("~/.catfish/outputs").expanduser() / date_str
     )
-    date_str = datetime.now().strftime("%Y%m%d")
     output_target = out_root / f"{topic_safe}_花叔风_{date_str}.{output_format}"
 
     # ── 指令文本 ──

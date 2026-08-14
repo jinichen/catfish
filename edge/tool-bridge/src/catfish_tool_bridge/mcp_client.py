@@ -564,7 +564,9 @@ def _default_command_for(cid: str) -> tuple[list[str] | None, dict]:
         return (None, {})
     if cid == "filesystem":
         if uvx:
-            home = os.path.expanduser("~/.catfish/output")
+            # 8/14: output → outputs (全局统一)。这是 filesystem MCP 的根,
+            # 圈定它能读写的范围, 跟着产出目录走。
+            home = os.path.expanduser("~/.catfish/outputs")
             os.makedirs(home, exist_ok=True)
             return ([uvx, "mcp-server-filesystem", home], {})
         return (None, {})

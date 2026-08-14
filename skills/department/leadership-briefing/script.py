@@ -5,7 +5,7 @@
   - 5 段固定 (一二三四五), 每段是 blocks 数组
   - 4 种 block: paragraph / kv_table / table / ordered_list
   - 附件 (CSV) 跟主 .docx 同目录
-  - 输出路径: 员工指定 honor, 没指定 → ~/.catfish/output/YYYY-MM-DD/HHMMSS_<title>/
+  - 输出路径: 员工指定 honor, 没指定 → ~/.catfish/outputs/YYYY-MM-DD/HHMMSS_<title>/
 
 # 字体
 
@@ -390,7 +390,7 @@ def _resolve_output_dir(
     规则:
       - output_path 是绝对路径且以 .docx 结尾 → 用它
       - output_path 是目录 → 在它下面用自动文件名
-      - None → ~/.catfish/output/YYYY-MM-DD/HHMMSS_<slug>/
+      - None → ~/.catfish/outputs/YYYY-MM-DD/HHMMSS_<slug>/
     """
     slug = _slugify_title(title_lines)
 
@@ -405,7 +405,8 @@ def _resolve_output_dir(
     date_dir = now.strftime("%Y-%m-%d")
     time_dir = now.strftime("%H%M%S") + f"_{slug}"
     home = Path.home()
-    return home / ".catfish" / "output" / date_dir / time_dir, f"{slug}.docx"
+    # 8/14: output → outputs (全局统一)
+    return home / ".catfish" / "outputs" / date_dir / time_dir, f"{slug}.docx"
 
 
 # ── CSV 附件渲染 ────────────────────────────────────────────────

@@ -32,6 +32,20 @@ MIGRATIONS: list[tuple[str, str, str]] = [
         "~/.catfish/output",
         "鲶鱼替你生成的文档（周报 / 汇报 / 报告）—— 文书风格就是从这里学的",
     ),
+    # 8/14: 产出目录统一到 outputs (复数)。
+    #
+    # 之前两个名字并存: output/ (weekly-report / leadership-briefing / 创意 skill /
+    # 系统提示词) 和 outputs/ (advisor 草稿 / drafts.rs / briefing_context.rs)。
+    # 后果不只是乱 —— catfish_list_my_outputs 只读 output/, 而 8 月的产出
+    # 65 个在 outputs/、13 个在 output/, 那个工具漏掉了近期 83% 的东西。
+    #
+    # 按上面的规矩: **不动** catfish-output-2026-07 那条 (老员工 yaml 里的
+    # output/ 保留, 历史文件照样搜得到), 只在尾部追加 outputs。
+    (
+        "catfish-outputs-2026-08",
+        "~/.catfish/outputs",
+        "鲶鱼替你生成的文档（统一产出目录）—— 文书风格就是从这里学的",
+    ),
 ]
 _MIGRATION_KEY = "_applied_migrations"
 
@@ -54,7 +68,9 @@ include:
   - ~/.catfish/uploads
 
   # 鲶鱼替你生成的文档（周报 / 汇报 / 报告）—— 文书风格就是从这里学的
-  - ~/.catfish/output
+  # 8/14: 统一用 outputs (复数)。老员工的 yaml 里可能还有 output/ (单数),
+  # 那是 catfish-output-2026-07 迁移加的, 留着让历史文件仍可搜。
+  - ~/.catfish/outputs
 
   # 按需打开下面这些（取消前面的 #）：
   # - ~/work

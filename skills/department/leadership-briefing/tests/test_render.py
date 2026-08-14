@@ -5,7 +5,7 @@
   - 4 种 block 类型分别能渲染 (paragraph / kv_table / table / ordered_list)
   - 同一段可混排多个 block
   - CSV 附件生成 + UTF-8 BOM 编码 + 跟主 docx 同目录
-  - output_path 指定 vs 默认 (~/.catfish/output/...) 路径解析
+  - output_path 指定 vs 默认 (~/.catfish/outputs/...) 路径解析
   - 红字高亮在正文 / 表格 / 列表全部生效
   - 字体名硬编码进 XML
   - 页码 PAGE / NUMPAGES 域字段
@@ -439,7 +439,7 @@ def test_output_path_explicit_docx(tmp_path):
 
 
 def test_output_path_default_uses_catfish_output(tmp_path, monkeypatch):
-    """没传 output_path → 应在 ~/.catfish/output/YYYY-MM-DD/HHMMSS_<slug>/ 下."""
+    """没传 output_path → 应在 ~/.catfish/outputs/YYYY-MM-DD/HHMMSS_<slug>/ 下."""
     fake_home = tmp_path / "fake_home"
     fake_home.mkdir()
     monkeypatch.setenv("HOME", str(fake_home))
@@ -452,7 +452,7 @@ def test_output_path_default_uses_catfish_output(tmp_path, monkeypatch):
         ]}],
     )
     out = Path(result["docx"])
-    assert ".catfish/output/" in str(out)
+    assert ".catfish/outputs/" in str(out)
     # 含日期目录
     assert any(part.startswith("20") for part in out.parts)
 
