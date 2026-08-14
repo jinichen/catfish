@@ -527,14 +527,13 @@ impl RemoteProvider {
             return None;
         }
         let url = format!("{}/v1/embeddings", self.config.resolved_gateway_url());
-        // model 缺省**就不放进请求体** —— 网关会按 roles.yaml 的 embedding 角色
-        // 解析 (app.py 的 /v1/embeddings)。放个 null 进去不行: 那边是
-        // `body.get("model")`, null 和缺省等价没错, 但显式写 null 会让人以为
-        // "客户端是有主张的", 而这里的主张恰恰是"我不该有主张"。
-        let mut body = serde_json::json!({ "input": text });
-        if let Some(m) = self.config.resolved_model() {
-            body["model"] = serde_json::Value::String(m);
-        }
+        // **不带 model** —— 网关按 roles.yaml 的 embedding 角色解析
+        // (app.py 的 /v1/embeddings)。
+        //
+        // 不放 null 而是整个不放: 那边判的是 `body.get("model")`, null 和缺省
+        // 等价没错, 但显式写 null 会让人以为"客户端是有主张的" ——
+        // 而这里的主张恰恰是"我不该有主张"。
+        let body = serde_json::json!({ "input": text });
 
         let token = auth_token();
         if token.is_empty() {

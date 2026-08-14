@@ -22,13 +22,11 @@
 //!     max_tokens: 512          # 截断上限. BGE-M3 原生 8192 但 512 是性能折中
 //!     intra_threads: 4         # ort Session 推理线程
 //!   remote:
-//!     # gateway_url / model 两个**都不用配** (8/14):
-//!     #   地址 → 走 ~/.catfish/companion.yaml 的 endpoints 段 (单一真源)
-//!     #   模型 → 不传, 由网关按 roles.yaml 的 embedding 角色解析
-//!     #          (= 控制台 /admin/models 里那条"向量"类型的模型)
-//!     # 只有"这台机器要跟全网用不一样的"才填, 填了就等于自己脱队。
-//!     # gateway_url: http://10.10.40.50:8999
-//!     # model: customer-x-embed
+//!     # ⚠ 这里**没有** gateway_url, 也没有 model (8/14)。
+//!     #   地址 → ~/.catfish/companion.yaml 的 endpoints 段
+//!     #   模型 → 中央控制台 /admin/models 里那条"向量"类型的模型,
+//!     #          经 roles.yaml 的 embedding 角色, 员工端根本不传
+//!     # 老 yaml 里这两行还在的话会被忽略, 但启动时会 warn 一声。
 //!     timeout_seconds: 10      # HTTP timeout
 //!     embed_dim: 1024          # 必须跟 remote 模型对得上 (启动校验)
 //!     # auth token 从 env CATFISH_INTERNAL_DEV_TOKEN 拿, 不放 yaml (secret 防泄露)
@@ -91,44 +89,52 @@ impl Default for LocalConfig {
 
 /// 远程 catfish-gateway 配置.
 ///
-/// # 这里**没有**网关地址和模型名的代码默认值 (8/14)
+/// # 这里**没有**网关地址, 也没有模型名 (8/14)
 ///
-/// 原来这两个字段各有一个 `default_xxx()` 硬编码:
+/// 原来两个字段各有一个硬编码默认值:
 ///
 ///     fn default_gateway_url()  -> String { "http://127.0.0.1:8999".to_string() }
 ///     fn default_remote_model() -> String { "catfish-private-embed".to_string() }
 ///
-/// `default_gateway_url` 上面还写着注释「跟 Companion endpoints.gateway_url 默认
-/// 同源」—— 但它是**复制**不是同源, 没人保证两边一起改。
+/// 第一版改成了 `Option`, 语义是"员工显式 override"。鸿波追问「远程的 embedding
+/// 模型名应该从模型设置里面取回来, 这里写 yaml 不是有问题吗」—— 是有问题, 而且
+/// 比"多一份副本"严重得多:
 ///
-/// 后果都不报错, 只是悄悄换条路:
+/// ## 为什么连 override 口子都不能留
 ///
-///   · 网关改成远端 IP、只改了 companion.yaml 的 endpoints 段
-///     → 这里还 ping 127.0.0.1:8999 → 不通 → auto 退本机 ONNX
-///   · sysadmin 在控制台换掉向量模型
-///     → 这里还按 "catfish-private-embed" 请求 → 网关 404 → 同样退本机 ONNX
+/// 向量维度的一致性有 `_meta` 表兜着 (advisor_relevance.rs:97), 但它**只存一个
+/// embed_dim 数字**。两个同样 1024 维的不同向量模型, 这道检查一点问题都看不出来:
+/// 缓存里新旧向量长度相同、却来自不同的向量空间, cosine 算出来全是垃圾, 而且
+/// 没有任何一处会报错。
 ///
-/// 而 Windows 的 msi 根本没编进 ort (Cargo.toml 只在 aarch64 拉 ort),
-/// "退本机 ONNX" 在那边等于**没有向量**。
+/// 也就是说"这台机器用不一样的向量模型"这个场景本身就不成立 —— 向量是拿来跟
+/// 索引里已有的向量比的, 换模型只会让结果静默地错。而向量模型是**管道类**,
+/// catalog.py:48 明写"不给员工选"; 员工机的 yaml 能覆盖它, 跟那条规矩也是冲突的。
 ///
-/// 现在两个字段都是 `Option`, 语义是"员工显式 override", 缺省时:
+/// 真源:
+///   · 地址 → `~/.catfish/companion.yaml` 的 endpoints 段 (services/endpoints.rs)
+///   · 模型 → 中央 roles.yaml 的 `embedding` 角色, 员工端**根本不传**,
+///     由网关自己解析 (app.py 的 /v1/embeddings)
 ///
-///   · 地址 → `endpoints::endpoints().gateway_base()` (companion.yaml 唯一真源)
-///   · 模型 → **不传**, 由网关按 roles.yaml 的 `embedding` 角色解析
-///     (= 控制台 /admin/models 里那条"向量"类型的模型, 见 app.py 的 /v1/embeddings)
+/// 下面两个 `legacy_*` 只为了**能报警**: 老员工机上这两行是存在的, serde 默认
+/// 忽略未知字段, 直接删字段的话它们会被静默无视 —— 员工不知道自己配的东西
+/// 不生效了。留着解析, 读到就 warn。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteConfig {
-    /// gateway base URL (不带 path). **缺省走 endpoints 单一真源**, 别在这里填默认值.
-    #[serde(default)]
-    pub gateway_url: Option<String>,
-    /// 向量 model 名. **缺省不传, 由网关按 roles.yaml 的 embedding 角色解析**.
-    /// 只有"这台机器要用跟全网不一样的向量模型"才配它 —— 配了就等于自己脱队。
-    #[serde(default)]
-    pub model: Option<String>,
+    /// ⚠ 已废弃, 只用于报警. 地址真源是 companion.yaml 的 endpoints 段.
+    #[serde(default, rename = "gateway_url")]
+    pub legacy_gateway_url: Option<String>,
+    /// ⚠ 已废弃, 只用于报警. 模型真源是中央 roles.yaml 的 embedding 角色.
+    #[serde(default, rename = "model")]
+    pub legacy_model: Option<String>,
     /// HTTP timeout. 默认 10s.
     #[serde(default = "default_timeout_seconds")]
     pub timeout_seconds: u64,
     /// remote 模型输出维度. 跟 model 绑死.
+    ///
+    /// ⚠ 这**也是**中央模型的属性, 留在这里同样是一份副本 —— 换成不同维度的
+    /// 向量模型时它会对不上。没一起改是因为要从第一次成功响应里取真实长度,
+    /// 会牵动 _meta 的缓存失效逻辑。单独一件事。
     #[serde(default = "default_embed_dim")]
     pub embed_dim: usize,
 }
@@ -149,9 +155,8 @@ pub struct RemoteConfig {
 impl Default for RemoteConfig {
     fn default() -> Self {
         Self {
-            // 这两个没有代码默认值 —— 见结构体上的长注释
-            gateway_url: None,
-            model: None,
+            legacy_gateway_url: None,
+            legacy_model: None,
             timeout_seconds: default_timeout_seconds(),
             embed_dim: default_embed_dim(),
         }
@@ -159,29 +164,31 @@ impl Default for RemoteConfig {
 }
 
 impl RemoteConfig {
-    /// 实际要用的网关地址: yaml 显式 override > endpoints 单一真源.
-    ///
-    /// 空串按"没配"处理 —— 员工把 yaml 里的值删成 `gateway_url: ""` 时,
-    /// 拼出来会是 `/v1/embeddings` 这种打不出去的地址, 而报错长得像网络问题。
+    /// 网关地址. **只有一个来源** —— companion.yaml 的 endpoints 段.
     pub fn resolved_gateway_url(&self) -> String {
-        match self
-            .gateway_url
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
-            Some(u) => u.trim_end_matches('/').to_string(),
-            None => crate::services::endpoints::endpoints().gateway_base(),
-        }
+        crate::services::endpoints::endpoints().gateway_base()
     }
 
-    /// 要不要在请求体里带 model. None = 让网关按 roles.yaml 解析.
-    pub fn resolved_model(&self) -> Option<String> {
-        self.model
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
+    /// 老 yaml 里那两行还在的话, 说清楚它们已经不生效了.
+    ///
+    /// 静默忽略是最坏的处理: 员工改了个值、重启、行为没变, 也没有任何提示。
+    pub fn warn_legacy_keys(&self) {
+        if let Some(u) = &self.legacy_gateway_url {
+            log::warn!(
+                "[embedding_config] ~/.catfish/embedding.yaml 里的 remote.gateway_url={u} \
+                 **已不再生效** —— 网关地址的唯一来源是 ~/.catfish/companion.yaml 的 \
+                 endpoints 段 (当前解析为 {})。这一行可以删了。",
+                self.resolved_gateway_url()
+            );
+        }
+        if let Some(m) = &self.legacy_model {
+            log::warn!(
+                "[embedding_config] ~/.catfish/embedding.yaml 里的 remote.model={m} \
+                 **已不再生效** —— 向量模型由中央决定 (控制台 /admin/models 里那条\"向量\"\
+                 类型的模型, 经 roles.yaml 的 embedding 角色), 员工端不再传模型名。\
+                 这一行可以删了。"
+            );
+        }
     }
 }
 
@@ -235,18 +242,15 @@ pub fn load_config() -> EmbeddingConfig {
     };
     match serde_yaml::from_str::<ConfigFile>(&text) {
         Ok(cf) => {
+            cf.embedding.remote.warn_legacy_keys();
             log::info!(
                 "[embedding_config] yaml 加载 OK: backend={:?} local.model={:?} \
-                 remote.gateway={} remote.model={}",
+                 remote.gateway={} (向量模型由中央 roles.yaml 决定)",
                 cf.embedding.backend,
                 cf.embedding.local.model_path,
                 // 打**解析后**的值 —— 打原始 Option 的话, 日志里只会看到 None,
                 // 而现场最想知道的恰恰是"它到底连了哪"。
-                cf.embedding.remote.resolved_gateway_url(),
-                cf.embedding
-                    .remote
-                    .resolved_model()
-                    .unwrap_or_else(|| "<由网关按 roles.yaml 解析>".to_string())
+                cf.embedding.remote.resolved_gateway_url()
             );
             cf.embedding
         }
@@ -353,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn 没配地址时_跟着_companion_yaml_走() {
+    fn 地址永远跟着_companion_yaml_走() {
         // ★★★ 这条就是事故本体: 员工改了 companion.yaml 的网关,
         // 向量这条路必须跟着改, 不能还盯着 127.0.0.1。
         let (_tmp, _g) = with_gateway("http://10.10.40.50:8999");
@@ -371,23 +375,48 @@ mod tests {
     }
 
     #[test]
-    fn 没配模型时_不传_让网关按_roles_yaml_解析() {
-        // ★★★ 员工端存模型名 = 控制台换了向量模型这边不知道。
+    fn 配置里根本没有可用的模型名字段() {
+        // ★★★ 员工端一旦存了模型名, 控制台换向量模型这边就不知道。
+        // 现在连"能取出来用"的方法都不提供 —— RemoteConfig 上没有任何
+        // 返回"要发给网关的模型名"的 API, 请求体里也就不可能带上它。
         let c = load("embedding:\n  remote:\n    timeout_seconds: 5\n");
-        assert_eq!(c.resolved_model(), None);
-        assert_eq!(RemoteConfig::default().resolved_model(), None);
+        assert_eq!(c.legacy_model, None);
+        assert_eq!(RemoteConfig::default().legacy_model, None);
     }
 
     #[test]
-    fn 显式配了就用配的() {
-        // 向后兼容 + 留一个"这台机器要脱队"的出口
+    fn 老_yaml_里显式配的那两行_一律不生效() {
+        // ★★★ 第一版把它们做成了"员工显式 override"。鸿波追问之后改掉了:
+        //
+        // 向量模型是管道类 (catalog.py:48「不给员工选」), 而且维度一致性只靠
+        // _meta 里一个 embed_dim 数字兜着 —— 两个同样 1024 维的不同向量模型,
+        // 那道检查一点都看不出来: 缓存里新旧向量长度相同、来自不同的向量空间,
+        // cosine 全是垃圾, 没有一处报错。
+        //
+        // 所以"这台机器用不一样的向量模型"这个场景本身就不成立, 口子不能留。
         let (_tmp, _g) = with_gateway("http://10.10.40.50:8999");
         let c = load(
             "embedding:\n  remote:\n    gateway_url: http://192.168.1.7:9000/\n\
              \x20   model: customer-x-embed\n",
         );
-        assert_eq!(c.resolved_gateway_url(), "http://192.168.1.7:9000", "尾斜杠要削");
-        assert_eq!(c.resolved_model().as_deref(), Some("customer-x-embed"));
+        assert_eq!(
+            c.resolved_gateway_url(),
+            "http://10.10.40.50:8999",
+            "yaml 里写了别的地址也不算数, 真源是 companion.yaml 的 endpoints"
+        );
+        // 但要能被读出来 —— 读不出来就没法报警
+        assert_eq!(c.legacy_gateway_url.as_deref(), Some("http://192.168.1.7:9000/"));
+        assert_eq!(c.legacy_model.as_deref(), Some("customer-x-embed"));
+    }
+
+    #[test]
+    fn 老字段必须解析得出来_否则报警无从谈起() {
+        // ★★ 直接删字段的话 serde 会**静默忽略**, 员工改了值、重启、行为没变,
+        // 也没有任何提示 —— 那正是今天一直在修的那种病。
+        // 留着解析 + warn_legacy_keys() 才有得报。
+        let c = load("embedding:\n  remote:\n    model: 随便什么\n");
+        assert_eq!(c.legacy_model.as_deref(), Some("随便什么"));
+        c.warn_legacy_keys(); // 不 panic 即可 (内容进日志)
     }
 
     #[test]
@@ -398,20 +427,24 @@ mod tests {
         let (_tmp, _g) = with_gateway("http://10.10.40.50:8999");
         let c = load("embedding:\n  remote:\n    gateway_url: \"\"\n    model: \"   \"\n");
         assert_eq!(c.resolved_gateway_url(), "http://10.10.40.50:8999");
-        assert_eq!(c.resolved_model(), None);
     }
 
     #[test]
     fn 老员工_yaml_里那两行仍然读得进来() {
         // 6/16 起 embedding.yaml 的示例就写着这两行, 员工机上是有的。
-        // 字段从 String 改成 Option<String>, 老 yaml 不能读不进来。
+        // 字段改成 legacy_* 之后, 老 yaml 仍然要能**解析**(否则没法报警),
+        // 只是不再影响行为。
+        //
+        // 这条自己摆 HOME —— 地址现在一律走 endpoints, 不摆的话会读到上一个
+        // 测试留下的 HOME (env 是进程全局的, 见 util/test_env 的长注释)。
+        let (_tmp, _g) = with_gateway("http://127.0.0.1:8999");
         let c = load(
             "embedding:\n  remote:\n    gateway_url: http://127.0.0.1:8999\n\
              \x20   model: catfish-private-embed\n    timeout_seconds: 10\n    embed_dim: 1024\n",
         );
         assert_eq!(c.resolved_gateway_url(), "http://127.0.0.1:8999");
-        assert_eq!(c.resolved_model().as_deref(), Some("catfish-private-embed"));
-        assert_eq!(c.embed_dim, 1024);
+        assert_eq!(c.embed_dim, 1024, "timeout/embed_dim 这两个还是要照读");
+        assert_eq!(c.timeout_seconds, 10);
     }
 
     #[test]

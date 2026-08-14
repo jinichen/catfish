@@ -32,12 +32,21 @@ embedding:
 
   # ─── 远程 catfish-gateway 配置 (backend=remote / auto OK 时用) ────────────
   remote:
-    # gateway base URL. 本机 dev 用 127.0.0.1:8999, 中央部署改 IP.
-    gateway_url: http://127.0.0.1:8999
-    # model 名 — catfish-gateway models.yaml 里 mode=embedding 的 model.
-    # 默认 catfish-private-embed (内网 BGE-M3 endpoint).
-    # 想用别的: 在 catfish-gateway models.yaml 新增 entry 然后改这里.
-    model: catfish-private-embed
+    # ⚠ 这里**没有** gateway_url, 也没有 model (8/14 改)。
+    #
+    #   网关地址 → ~/.catfish/companion.yaml 的 endpoints 段, 只此一处
+    #   向量模型 → 中央控制台「模型」页里那条"向量"类型的模型,
+    #              经 config/roles.yaml 的 embedding 角色。
+    #              员工端**根本不传模型名**, 由网关自己解析。
+    #
+    # 为什么连"想用别的就改这里"都不留:
+    #   向量维度的一致性只靠 sqlite _meta 里一个 embed_dim 数字兜着。两个同样
+    #   1024 维的不同向量模型, 那道检查一点都看不出来 —— 缓存里新旧向量长度
+    #   相同、来自不同的向量空间, cosine 算出来全是垃圾, 而且没有一处会报错。
+    #   所以"这台机器用不一样的向量模型"这个场景本身不成立。
+    #
+    # 老 yaml 里这两行还在的话会被忽略, 但启动时会 warn 一声, 不静默。
+    #
     # HTTP timeout. 默认 10s. 长文本可调大.
     timeout_seconds: 10
     # 必须跟 remote 模型输出维度对得上. 跟 model 绑死.
@@ -70,8 +79,10 @@ embedding:
 #      max_tokens: 512
 #
 # 4. 想用 e5-multilingual (768 维) 而不是 BGE-M3:
-#    在 catfish-gateway models.yaml 加 entry e5-multilingual, 然后:
-#    backend: remote
-#    remote:
-#      model: catfish-private-e5-multi
-#      embed_dim: 768               # ★ 必须改这, 不然 cache miss + 写错
+#    **在中央改**, 不在这个文件改 (8/14):
+#      a. 控制台「模型」页加一条 mode=embedding 的模型
+#      b. config/roles.yaml 把 embedding 角色指过去, 重启网关
+#    全网员工下一次请求就跟着走, 不需要动任何一台员工机。
+#
+#    这台机器上只剩 embed_dim 要跟着改 (768) —— 它还是一份副本, 已知,
+#    见 embedding_config.rs 里 embed_dim 字段上的注释。
