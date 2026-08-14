@@ -20,11 +20,10 @@ embedding:
   # ─── 本机 ONNX 配置 (backend=local / auto fallback 时用) ────────────
   local:
     # ONNX 模型路径. 默认 BGE-M3 INT8 quantized.
-    # 想换模型? 改这里 + tokenizer_path + embed_dim. 别忘了 onnx 输出维度跟 embed_dim 必须对得上.
+    # 想换模型? 改这里 + tokenizer_path 就行 —— 维度从 ONNX 输出的 shape 里读, 不用配.
     model_path: ~/.catfish/models/bge-m3.onnx
     tokenizer_path: ~/.catfish/models/tokenizer.json
     # 必须跟模型输出维度一致, 启动校验. BGE-M3=1024 / bge-small-zh=512 / e5-base=768.
-    embed_dim: 1024
     # 输入 token 截断上限. BGE-M3 原生 8192, 但 512 性能折中. 长文本召回想要更好可调大 (慢).
     max_tokens: 512
     # ort Session intra-op 线程数. M3 Max 可 8, 老 mac 2-4. 默认 4.
@@ -49,14 +48,15 @@ embedding:
     #
     # HTTP timeout. 默认 10s. 长文本可调大.
     timeout_seconds: 10
-    # 必须跟 remote 模型输出维度对得上. 跟 model 绑死.
-    embed_dim: 1024
+    # ⚠ 这里也**没有** embed_dim (8/14) —— 维度从网关实际返回的向量里数出来。
+    #   中央换成别的维度的向量模型时, 员工端自己跟上并重建缓存, 不用改这个文件。
     # auth: 从 env CATFISH_INTERNAL_DEV_TOKEN 读, 不放 yaml 文件 (secret 防泄露).
     # 在 ~/.hermes/.env 设, hermes / Companion 都能读.
 
 # ─── 切换 backend 后的缓存行为 ────────────
 #
-# advisor_relevance.rs / wiki_embed.rs 都有 sqlite cache (BLOB 长度 = embed_dim*4).
+# advisor_relevance.rs / wiki_embed.rs 都有 sqlite cache (BLOB = f32 向量).
+# 8/14 起两边共用 services/embed_cache_meta 记账: 维度或模型变了自动重建。
 # 切 backend / 换模型 / 改 embed_dim 后:
 #   - advisor_embed_cache.db 启动看 _meta.embed_dim 跟当前不匹配 → 自动 DROP + 重建
 #   - wiki_embeddings.db 同理 (后续工程加)

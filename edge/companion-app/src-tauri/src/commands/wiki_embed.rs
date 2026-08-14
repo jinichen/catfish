@@ -90,11 +90,35 @@ pub async fn wiki_search_semantic(
         });
     }
 
+    // 8/14: 顺序换了 —— 原来是「先补索引, 再 embed query」。
+    //
+    // 补索引会往库里写向量, 而"这批向量是谁产的"要等第一次成功 embed 才知道。
+    // 老顺序下, 中央换了模型的那一次会先拿新模型补一批进去、跟旧的混在一起,
+    // 之后才轮到对账。先 embed 一条 (查询本身, 反正也要算) 就没这个问题:
+    // 拿到观测 → 对账 → 该清就清 → 再补索引, 补进去的全是新模型的。
+    let query_vec = embed_text(q).await.ok_or_else(|| "query embedding 失败".to_string())?;
+
+    {
+        // 对账: 跟 advisor 那套共用 services/embed_cache_meta。
+        // wiki 这边**原来一张 _meta 都没有** —— 换模型时只能靠 vector_from_blob
+        // 的长度校验逐条淘汰, 而同维度换模型完全无感 (新旧向量长度一样、读得出来、
+        // 算得出分, 只是结果全是垃圾)。
+        let db_path = embed_db_path()?;
+        let conn = rusqlite::Connection::open(&db_path)
+            .map_err(|e| format!("SQLite open 失败: {e}"))?;
+        crate::services::embed_cache_meta::ensure_table(&conn)?;
+        let cleared = crate::services::embed_cache_meta::reconcile(&conn, |c| {
+            c.execute("DELETE FROM wiki_embed", [])
+                .map(|n| log::warn!("[wiki_embed] 清掉 {n} 条旧向量"))
+                .map_err(|e| format!("清 wiki_embed 失败: {e}"))
+        })?;
+        if cleared {
+            log::warn!("[wiki_embed] 缓存刚重建, 这一轮会把全部条目重新 embed");
+        }
+    }
+
     // ensure index up-to-date (简化: 每次重 index, 56 entries < 5s)
     let indexed = ensure_index().await.map_err(|e| format!("index 失败: {e}"))?;
-
-    // embed query
-    let query_vec = embed_text(q).await.ok_or_else(|| "query embedding 失败".to_string())?;
 
     // load all from db, cosine
     let db_path = embed_db_path()?;
@@ -106,6 +130,8 @@ pub async fn wiki_search_semantic(
     let mut rows = stmt
         .query([])
         .map_err(|e| format!("SQL query 失败: {e}"))?;
+    // 解 BLOB 的维度: 观测到的优先, 其次 _meta。都没有 → 全当 miss (见 embed_cache_meta)
+    let expected_dim = crate::services::embed_cache_meta::expected_dim(&conn);
     let mut hits: Vec<WikiSemanticHit> = Vec::new();
     while let Some(row) = rows.next().map_err(|e| format!("SQL next 失败: {e}"))? {
         let rel_path: String = row.get(0).map_err(|e| format!("col 0: {e}"))?;
@@ -113,9 +139,11 @@ pub async fn wiki_search_semantic(
         let kind: String = row.get(2).map_err(|e| format!("col 2: {e}"))?;
         let snippet: String = row.get(3).map_err(|e| format!("col 3: {e}"))?;
         let vec_blob: Vec<u8> = row.get(4).map_err(|e| format!("col 4: {e}"))?;
-        let v = match vector_from_blob(&vec_blob) {
+        let v = match expected_dim.and_then(|d| vector_from_blob(&vec_blob, d)) {
             Some(v) => v,
-            None => continue,  // blob 长度不对 (schema 不匹配?), 跳过这一行
+            // 长度对不上 = 这条是别的维度产的, 跳过。ensure_index 会按 mtime 补,
+            // 真要全部换新得靠上面 reconcile 那次清表。
+            None => continue,
         };
         let score = cosine(&query_vec, &v) as f64;
         hits.push(WikiSemanticHit {

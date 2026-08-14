@@ -12,6 +12,7 @@ pub mod memory_provider_config;
 pub mod curator_state;
 pub mod email_config;     // BL-COMPANION-EMAIL-YAML-CONFIG (5/18)
 pub mod email_scheduler;  // BL-COMPANION-EMAIL-DIGEST-STEP2 (5/18)
+pub mod embed_cache_meta; // 8/14: 向量缓存的身份记账 (中央换模型 → 自动重建)
 pub mod embedding;        // P3.5.4.1 (6/16 鸿波): 公共 BGE-M3 ONNX, 给 advisor + wiki 共享同一 model session
 pub mod embedding_config; // P3.5.15 (6/16 鸿波): embedding provider yaml 配置 (本机/远程切换 + 参数可调)
 pub mod endpoints;

@@ -31,11 +31,13 @@
 //!
 //! - `embed_text(text) -> Option<Vec<f32>>` 现 async (Remote 走 HTTP, Local sync 跑)
 //! - `cosine(a, b) -> f32` 同 (sync)
-//! - `vector_to_blob(v) / vector_from_blob(blob) -> Option<Vec<f32>>` 同 (sync, 跟 cache 互通)
+//! - `vector_to_blob(v)` / `vector_from_blob(blob, expected_dim)` (sync, 跟 cache 互通)
 //! - `provider_not_ready_reason() -> Option<String>` 没就绪时给出**具体原因**
 //!   (8/14: 原来是 `is_provider_ready() -> bool`, 只说 yes/no 的话界面只能
 //!    把两条分支的排查步骤都列出来, 反而把人往错方向带)
-//! - `embed_dim() -> usize` 替代 const EMBED_DIM, 运行时取真值 (跟 active provider 绑死)
+//! - `observed_identity() -> Option<EmbedIdentity>` 实际产出的维度 + 模型标识
+//!   (8/14: 原来是 `embed_dim() -> usize`, 值来自员工机 yaml —— 而维度是**中央
+//!    那个模型的属性**。现在量出来, 见下面 EmbedIdentity 那段)
 
 // 7/16 BL-INTEL-DMG: ort + tokenizers 只 aarch64 依赖 (Intel Mac / Windows msi
 // 走 Remote provider). LocalProvider 相关 code 也全部 cfg-guard.
@@ -60,6 +62,11 @@ use crate::services::embedding_config::{
 #[cfg(target_arch = "aarch64")]
 use crate::services::embedding_config::{LocalConfig, expand_home};
 
+// 观测到的向量身份 (dim + 模型) 挪到了 services/embed_cache_meta.rs ——
+// 它跟"缓存该不该重建"是同一件事, 放一起才好写测试 (那边只依赖 std + rusqlite,
+// 不像这个文件拖着 ort / reqwest / tokenizers, 在没有 GTK 的机器上编不了)。
+use crate::services::embed_cache_meta::{EmbedIdentity, record_identity};
+
 // ─── ACTIVE_PROVIDER — 全 process 唯一, 启动 lazy init ────────────
 
 static ACTIVE_PROVIDER: OnceLock<Provider> = OnceLock::new();
@@ -76,14 +83,6 @@ enum Provider {
 }
 
 impl Provider {
-    fn embed_dim(&self) -> usize {
-        match self {
-            #[cfg(target_arch = "aarch64")]
-            Provider::Local(p) => p.config.embed_dim,
-            Provider::Remote(p) => p.config.embed_dim,
-        }
-    }
-
     fn is_ready(&self) -> bool {
         match self {
             #[cfg(target_arch = "aarch64")]
@@ -319,11 +318,6 @@ pub fn provider_not_ready_reason() -> Option<String> {
     active_provider().not_ready_reason()
 }
 
-/// 当前 active provider 的输出维度. cache BLOB 长度 = embed_dim * 4 bytes.
-pub fn embed_dim() -> usize {
-    active_provider().embed_dim()
-}
-
 /// L2-normalized vectors 点积 = cosine similarity. 长度不匹配返 0.
 pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() {
@@ -345,11 +339,16 @@ pub fn vector_to_blob(v: &[f32]) -> Vec<u8> {
     out
 }
 
-/// 反序列化 little-endian f32 BLOB. 长度跟当前 embed_dim 不符返 None.
+/// 反序列化 little-endian f32 BLOB. 长度跟 `expected_dim` 不符返 None,
 /// caller 拿到 None 视为 cache miss → 重 embed.
-pub fn vector_from_blob(blob: &[u8]) -> Option<Vec<f32>> {
-    let dim = embed_dim();
-    if blob.len() != dim * 4 {
+///
+/// 8/14: 维度改成**参数**。原来它自己去读 `embed_dim()`, 而那个值来自员工机
+/// yaml 里写死的 1024 —— 一个中央模型的属性写在员工机上。现在由调用方从
+/// 各自缓存库的 `_meta` 里取 (见 services/embed_cache_meta.rs), 那里存的是
+/// **实际观测到**的维度。
+pub fn vector_from_blob(blob: &[u8], expected_dim: usize) -> Option<Vec<f32>> {
+    let dim = expected_dim;
+    if dim == 0 || blob.len() != dim * 4 {
         return None;
     }
     let mut v = vec![0.0f32; dim];
@@ -467,7 +466,7 @@ impl LocalProvider {
         //     真 spawn_blocking 跨线程要 Arc<Session>, 复杂度 / 收益不平衡, 保持当前.
         let session_mutex = self.init_session()?;
         let tokenizer = self.init_tokenizer()?;
-        let dim = self.config.embed_dim;
+        // dim 不再从 config 拿 —— 见下面 ONNX 输出 shape 那段
         let max_tokens = self.config.max_tokens;
 
         let encoding = tokenizer
@@ -489,15 +488,31 @@ impl LocalProvider {
 
         let mut session = session_mutex.lock().ok()?;
         let outputs = session.run(inputs).ok()?;
-        let (_, output_data) = outputs[0].try_extract_tensor::<f32>().ok()?;
-        if output_data.len() < dim {
+        // 8/14: shape 原来被 `let (_, ...)` 丢掉了, 维度改从 yaml 读 —— 而
+        // hidden size 就明明白白在 shape 的最后一维上。
+        // ONNX last_hidden_state 是 [batch, seq, hidden], 数出来比配置准, 也不用配。
+        let (shape, output_data) = outputs[0].try_extract_tensor::<f32>().ok()?;
+        let dim = match shape.last().copied().filter(|d| *d > 0) {
+            Some(d) => d as usize,
+            None => {
+                log::warn!(
+                    "[embedding/local] ONNX 输出 shape={shape:?} 取不出 hidden 维, 放弃这条"
+                );
+                return None;
+            }
+        };
+        if output_data.len() < dim || output_data.len() % dim != 0 {
             log::warn!(
-                "[embedding/local] ONNX 输出长度 {} < embed_dim {} — 模型跟 yaml.local.embed_dim 不匹配",
-                output_data.len(),
-                dim
+                "[embedding/local] ONNX 输出长度 {} 跟 shape {shape:?} 对不上 (hidden={dim})",
+                output_data.len()
             );
             return None;
         }
+        record_identity(EmbedIdentity {
+            dim,
+            // 本机这条路的"模型身份"就是那个文件 —— 换了文件就该重建缓存
+            model: Some(format!("local:{}", self.config.model_path)),
+        });
         let seq_len = output_data.len() / dim;
         let mut pooled = vec![0.0f32; dim];
         for s in 0..seq_len {
@@ -632,15 +647,23 @@ impl RemoteProvider {
             .map_err(|e| log::warn!("[embedding/remote] 解析 response JSON 失败: {}", err_chain(&e)))
             .ok()?;
 
+        let model_id = parsed.model.clone();
         let first = parsed.data.into_iter().next()?;
-        if first.embedding.len() != self.config.embed_dim {
-            log::warn!(
-                "[embedding/remote] 返回 dim {} ≠ yaml.remote.embed_dim {} — model 跟 yaml 不匹配",
-                first.embedding.len(),
-                self.config.embed_dim
-            );
+
+        // 8/14: 原来这里是 `if len != yaml.remote.embed_dim { return None }` ——
+        // 中央换成 768 维的模型, 员工端就把每一次拿回来的向量都丢掉, 只留一行
+        // warn。表现是"向量整个不能用", 而根因只是员工机 yaml 里那个 1024 没跟着改
+        // (他也无从知道中央换了)。
+        //
+        // 维度是**中央模型的属性**, 不是员工能配的东西。现在数出来就是了。
+        if first.embedding.is_empty() {
+            log::warn!("[embedding/remote] 网关返回了空向量");
             return None;
         }
+        record_identity(EmbedIdentity {
+            dim: first.embedding.len(),
+            model: model_id,
+        });
 
         // 强制 L2 normalize — 跟 local 行为一致, 让 cosine 等价 dot product.
         // 上游已 normalize 时 idempotent (norm ≈ 1, 再除 1 不影响).
@@ -663,6 +686,12 @@ fn auth_token() -> String {
 #[derive(Debug, Deserialize)]
 struct EmbeddingApiResponse {
     data: Vec<EmbeddingApiDatum>,
+    /// OpenAI 兼容响应里的模型名 (网关透传 litellm 的). 拿它当"这批向量是谁产的"
+    /// 的身份 —— 中央换模型时缓存要靠它失效。
+    ///
+    /// Option: 上游不返也不能让整个响应解析失败。拿不到就不参与失效判断。
+    #[serde(default)]
+    model: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

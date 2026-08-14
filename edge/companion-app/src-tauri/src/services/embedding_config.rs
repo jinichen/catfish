@@ -18,7 +18,6 @@
 //!   local:
 //!     model_path: ~/.catfish/models/bge-m3.onnx
 //!     tokenizer_path: ~/.catfish/models/tokenizer.json
-//!     embed_dim: 1024          # 必须跟 onnx 输出维度对得上 (启动校验)
 //!     max_tokens: 512          # 截断上限. BGE-M3 原生 8192 但 512 是性能折中
 //!     intra_threads: 4         # ort Session 推理线程
 //!   remote:
@@ -28,15 +27,15 @@
 //!     #          经 roles.yaml 的 embedding 角色, 员工端根本不传
 //!     # 老 yaml 里这两行还在的话会被忽略, 但启动时会 warn 一声。
 //!     timeout_seconds: 10      # HTTP timeout
-//!     embed_dim: 1024          # 必须跟 remote 模型对得上 (启动校验)
 //!     # auth token 从 env CATFISH_INTERNAL_DEV_TOKEN 拿, 不放 yaml (secret 防泄露)
 //! ```
 //!
 //! # cache 安全
 //!
-//! 切换 backend / 换模型 / 改 embed_dim → sqlite BLOB 长度变 → vector_from_blob 拒读.
-//! 新代码 ensure_schema 加 `_meta` 表存 dim, 启动跟当前 embed_dim 不符 → DROP + 重建.
-//! 防 schema 升级时老 cache 撞错.
+//! 8/14 起**维度不再是配置** —— 从实际产出的向量里数出来 (remote 数响应,
+//! local 读 ONNX 输出的 shape)。缓存的失效判断也跟着挪进
+//! services/embed_cache_meta.rs, 判据是"这批向量是谁产的"(维度 + 模型标识),
+//! 而不是"yaml 里写的维度"。中央换向量模型 → 员工端下次搜索时自己重建缓存。
 
 use std::path::PathBuf;
 
@@ -64,9 +63,11 @@ pub struct LocalConfig {
     /// tokenizer.json 路径. 默认 ~/.catfish/models/tokenizer.json.
     #[serde(default = "default_tokenizer_path")]
     pub tokenizer_path: String,
-    /// embed 输出维度. BGE-M3 默认 1024. 跟模型绑死, 启动校验.
-    #[serde(default = "default_embed_dim")]
-    pub embed_dim: usize,
+    /// ⚠ 已废弃, 只用于报警 (8/14)。本机这条路的维度直接从 ONNX 输出的
+    /// tensor shape 里取 —— shape 的最后一维就是 hidden size, 比配置准,
+    /// 而且换模型文件不用改配置。
+    #[serde(default, rename = "embed_dim")]
+    pub legacy_embed_dim: Option<usize>,
     /// 输入 token 截断上限. 默认 512.
     #[serde(default = "default_max_tokens")]
     pub max_tokens: usize,
@@ -80,7 +81,7 @@ impl Default for LocalConfig {
         Self {
             model_path: default_model_path(),
             tokenizer_path: default_tokenizer_path(),
-            embed_dim: default_embed_dim(),
+            legacy_embed_dim: None,
             max_tokens: default_max_tokens(),
             intra_threads: default_intra_threads(),
         }
@@ -130,13 +131,16 @@ pub struct RemoteConfig {
     /// HTTP timeout. 默认 10s.
     #[serde(default = "default_timeout_seconds")]
     pub timeout_seconds: u64,
-    /// remote 模型输出维度. 跟 model 绑死.
+    /// ⚠ 已废弃, 只用于报警 (8/14)。
     ///
-    /// ⚠ 这**也是**中央模型的属性, 留在这里同样是一份副本 —— 换成不同维度的
-    /// 向量模型时它会对不上。没一起改是因为要从第一次成功响应里取真实长度,
-    /// 会牵动 _meta 的缓存失效逻辑。单独一件事。
-    #[serde(default = "default_embed_dim")]
-    pub embed_dim: usize,
+    /// 维度是**中央那个模型的属性**, 现在从实际响应里数出来
+    /// (services/embedding.rs 的 EmbedIdentity)。
+    ///
+    /// 留着它当配置的代价不是"多一份副本"那么轻: 老代码拿这个值去**否决响应** ——
+    /// 中央换成 768 维的模型, 员工端就把每次拿回来的向量全丢掉, 只留一行 warn,
+    /// 表现是"向量整个不能用", 而员工根本不知道中央换过。
+    #[serde(default, rename = "embed_dim")]
+    pub legacy_embed_dim: Option<usize>,
 }
 
 /// ⚠ 必须手写, **不能 `#[derive(Default)]`**。
@@ -158,7 +162,7 @@ impl Default for RemoteConfig {
             legacy_gateway_url: None,
             legacy_model: None,
             timeout_seconds: default_timeout_seconds(),
-            embed_dim: default_embed_dim(),
+            legacy_embed_dim: None,
         }
     }
 }
@@ -179,6 +183,13 @@ impl RemoteConfig {
                  **已不再生效** —— 网关地址的唯一来源是 ~/.catfish/companion.yaml 的 \
                  endpoints 段 (当前解析为 {})。这一行可以删了。",
                 self.resolved_gateway_url()
+            );
+        }
+        if let Some(d) = self.legacy_embed_dim {
+            log::warn!(
+                "[embedding_config] ~/.catfish/embedding.yaml 里的 remote.embed_dim={d} \
+                 **已不再生效** —— 维度现在从网关实际返回的向量里数出来。\
+                 中央换成别的维度时员工端会自己跟上并重建缓存, 不用再手动改这里。"
             );
         }
         if let Some(m) = &self.legacy_model {
@@ -272,9 +283,6 @@ fn default_tokenizer_path() -> String {
     expand_home("~/.catfish/models/tokenizer.json")
 }
 
-fn default_embed_dim() -> usize {
-    1024 // BGE-M3 输出维度
-}
 
 fn default_max_tokens() -> usize {
     512 // P3.5.4 老 MAX_TOKENS
@@ -344,7 +352,7 @@ mod tests {
     }
 
     #[test]
-    fn 默认值里不能有零() {
+    fn timeout_默认值不能是零() {
         // ★★★ `#[serde(default = "...")]` 只管反序列化缺字段, **不管
         // Default::default()**。8/14 第一版顺手 `#[derive(Default)]`,
         // 于是 timeout_seconds=0 (reqwest 当场超时) + embed_dim=0 (维度全乱)。
@@ -353,7 +361,6 @@ mod tests {
         // 那条路 —— 也就是绝大多数员工。
         let c = RemoteConfig::default();
         assert_ne!(c.timeout_seconds, 0, "timeout=0 → 每次请求当场超时");
-        assert_ne!(c.embed_dim, 0, "embed_dim=0 → 维度校验和 sqlite _meta 全乱");
     }
 
     #[test]
@@ -414,8 +421,9 @@ mod tests {
         // ★★ 直接删字段的话 serde 会**静默忽略**, 员工改了值、重启、行为没变,
         // 也没有任何提示 —— 那正是今天一直在修的那种病。
         // 留着解析 + warn_legacy_keys() 才有得报。
-        let c = load("embedding:\n  remote:\n    model: 随便什么\n");
+        let c = load("embedding:\n  remote:\n    model: 随便什么\n    embed_dim: 768\n");
         assert_eq!(c.legacy_model.as_deref(), Some("随便什么"));
+        assert_eq!(c.legacy_embed_dim, Some(768));
         c.warn_legacy_keys(); // 不 panic 即可 (内容进日志)
     }
 
@@ -443,8 +451,9 @@ mod tests {
              \x20   model: catfish-private-embed\n    timeout_seconds: 10\n    embed_dim: 1024\n",
         );
         assert_eq!(c.resolved_gateway_url(), "http://127.0.0.1:8999");
-        assert_eq!(c.embed_dim, 1024, "timeout/embed_dim 这两个还是要照读");
-        assert_eq!(c.timeout_seconds, 10);
+        assert_eq!(c.timeout_seconds, 10, "timeout 还是真配置");
+        // embed_dim 也退成 legacy 了 —— 读得出来 (要报警), 但不作数
+        assert_eq!(c.legacy_embed_dim, Some(1024));
     }
 
     #[test]

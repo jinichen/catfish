@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::services::embedding::{
-    cosine, embed_dim, embed_text, provider_not_ready_reason, vector_from_blob, vector_to_blob,
+    cosine, embed_text, provider_not_ready_reason, vector_from_blob, vector_to_blob,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -87,76 +87,17 @@ fn ensure_schema(conn: &rusqlite::Connection) -> Result<(), String> {
     )
     .map_err(|e| format!("CREATE INDEX 失败: {e}"))?;
 
-    // P3.5.15 (6/16 鸿波): dim 校验 + 自动清空过期 cache.
+    // 8/14: dim 校验挪进 services/embed_cache_meta.rs, 两套缓存共用一份逻辑。
     //
-    // 切换 backend / 换模型 / 改 yaml.embed_dim → BLOB 长度变 → vector_from_blob 拒读
-    // → 每条都 cache miss → 每条都重 embed → 但 upsert 时 BLOB 长度不对 → 整 db 永远
-    // 半新半旧. 这里加 _meta 表存当前 dim, 启动跟 active provider embed_dim() 不符
-    // 就 DROP TABLE + 重建. 真切 backend 后第一次跑会 cold (重 embed 全部), 但之后
-    // 一致, 不再"半旧半新"灾难态.
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS _meta (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        )",
-        [],
-    )
-    .map_err(|e| format!("CREATE _meta 表失败: {e}"))?;
-
-    let current_dim = embed_dim();
-    let stored_dim: Option<usize> = conn
-        .query_row(
-            "SELECT value FROM _meta WHERE key = 'embed_dim'",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok());
-
-    match stored_dim {
-        Some(d) if d == current_dim => {
-            // 维度匹配, cache 可复用
-        }
-        Some(d) => {
-            log::warn!(
-                "[advisor_relevance] cache embed_dim 不匹配 (stored={}, current={}) — DROP + 重建",
-                d,
-                current_dim
-            );
-            conn.execute("DROP TABLE IF EXISTS advisor_embed_cache", [])
-                .map_err(|e| format!("DROP cache 失败: {e}"))?;
-            conn.execute(
-                "CREATE TABLE advisor_embed_cache (
-                    content_hash TEXT PRIMARY KEY,
-                    content_preview TEXT NOT NULL,
-                    vector BLOB NOT NULL,
-                    source TEXT NOT NULL,
-                    created_at INTEGER NOT NULL
-                )",
-                [],
-            )
-            .map_err(|e| format!("rebuild cache 失败: {e}"))?;
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_advisor_embed_created ON advisor_embed_cache(created_at DESC)",
-                [],
-            )
-            .map_err(|e| format!("rebuild index 失败: {e}"))?;
-        }
-        None => {
-            // 老 db 没 _meta — 第一次跑这版代码. 不 DROP (BLOB 长度可能跟 P3.5.4 老
-            // hardcoded EMBED_DIM=1024 一致, vector_from_blob 仍能用). 直接写当前 dim
-            // 进 meta, 下次启动起守门. 真有不一致 vector_from_blob 拒读 → cache miss 重 embed.
-            log::info!(
-                "[advisor_relevance] _meta 不存在, 第一次跑 P3.5.15, 写入 embed_dim={}",
-                current_dim
-            );
-        }
-    }
-    conn.execute(
-        "INSERT OR REPLACE INTO _meta (key, value) VALUES ('embed_dim', ?1)",
-        rusqlite::params![current_dim.to_string()],
-    )
-    .map_err(|e| format!("写 _meta 失败: {e}"))?;
+    // 原来这里是 P3.5.15 写的一段: 拿 `embed_dim()` (值来自员工机 yaml 的 1024)
+    // 跟 _meta 比, 不符就 DROP。两个毛病:
+    //   · 判据是**配置**不是实际产出 —— 中央换成 768 维的模型, 员工 yaml 不改的话
+    //     这里永远"匹配", 而真正的向量早就对不上了
+    //   · 只比维度。同维度换模型察觉不到, 而那正是最坏的一种
+    //
+    // 现在只建表; 真正的对账在拿到向量之后做 (embed_cache_meta::reconcile),
+    // 因为"实际产出的维度/模型"要等第一次成功 embed 才知道。
+    crate::services::embed_cache_meta::ensure_table(&conn)?;
     Ok(())
 }
 
@@ -216,6 +157,23 @@ pub async fn advisor_rank_relevance(
         .map_err(|e| format!("打开 advisor_embed_cache.db 失败: {e}"))?;
     ensure_schema(&conn)?;
 
+    // 8/14: 对账. 走到这里 query 已经 embed 成功了, 所以"实际的维度/模型"是已知的。
+    // 跟库里记的账不符 → 说明中央换了向量模型 → 清缓存重建。
+    // 清表闭包由这里给, 因为建表 SQL 是本模块的事。
+    let cleared = crate::services::embed_cache_meta::reconcile(&conn, |c| {
+        c.execute("DELETE FROM advisor_embed_cache", [])
+            .map(|n| log::warn!("[advisor_relevance] 清掉 {n} 条旧向量"))
+            .map_err(|e| format!("清 advisor_embed_cache 失败: {e}"))
+    })?;
+    if cleared {
+        log::warn!("[advisor_relevance] 本轮全部重 embed (缓存刚被重建)");
+    }
+
+    // 解 BLOB 用的维度: 观测到的优先, 其次 _meta 里上次记的。
+    // 两个都没有 → 全部当 cache miss —— 拿一个猜的维度去解, 解出来的是能算出
+    // 分数的垃圾, 比 miss 坏得多。
+    let expected_dim = crate::services::embed_cache_meta::expected_dim(&conn);
+
     // 顺次 embed 每个 candidate, 算 score
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -241,7 +199,7 @@ pub async fn advisor_rank_relevance(
             .ok();
 
         let (vec, from_cache) = match cached {
-            Some(blob) => match vector_from_blob(&blob) {
+            Some(blob) => match expected_dim.and_then(|d| vector_from_blob(&blob, d)) {
                 Some(v) => (v, true),
                 None => {
                     // blob 长度不对 (schema 老版?), 重 embed + 覆盖
