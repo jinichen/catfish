@@ -12,8 +12,11 @@
 //!
 //! # 设计 (catfish 是 plugin 唯一 source of truth, 跟 SOUL P3.5.55 思路一致)
 //!
-//! 1. **include_str!() 编译时内嵌** plugin 9 个 Python 文件 + 1 个 yaml (~200KB 进 Companion
-//!    binary, 跟 SOUL ~25KB 加起来 <250KB, 可接受)
+//! 1. **include_str!() 编译时内嵌** plugin 的全部 Python 文件 + 1 个 yaml (进 Companion
+//!    binary, 跟 SOUL ~25KB 加起来在几百 KB 量级, 可接受)
+//!
+//!    这里原来写死"9 个" —— 8/9 补到 14 个、8/15 补到 18 个的时候都没人改它。
+//!    真实数量看 `BAKED_FILES.len()`, 别在正文里再写死一个会过期的数。
 //!
 //! 2. **`bootstrap_hermes_plugin()` Companion setup hook 调用**: 检查
 //!    ~/.hermes/plugins/catfish-xcatfish-user/ 状态, 主动同步 baked → fs (overwrite,
@@ -105,6 +108,26 @@ const BAKED_MODEL_AUTHORITY: &str =
 const BAKED_ROUTE_AUTH: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_route_auth.py");
 
+// ── 8/15 补: 8/13 加进仓库的 4 个 .py, BAKED_FILES 没跟上 ──
+//
+// 前三个是 plugin.py 顶层 `_import_sibling(...)` 的对象 (180 / 197 / 212 行)。
+// 不在这张表里 = Companion 同步时不写它们 = 那三行当场 ImportError = 整个
+// plugin 加载失败。**只靠 Companion 同步拿 plugin 的机器 (也就是新装机) 全中**;
+// 开发机因为 deploy.sh 软链到仓库目录, 文件一直都在, 所以看不出来。
+//
+// approvals_bridge.py (P47) 眼下没有任何人 import —— 它的 register_routes()
+// 没有调用方。留着烤进去而不是删掉, 是因为它 8/13 那次才刚从"只存在于运行
+// 目录、换台机器就没了"的状态被抢救回仓库; 现在删等于把抢救回来的再丢一次。
+// 它没被接上这件事另记, 不在这个 commit 里动。
+const BAKED_PLUGIN_CORE_TOOLS: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_core_tools.py");
+const BAKED_PLUGIN_CODEX_SESSION: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_codex_session.py");
+const BAKED_PLUGIN_CRON: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_cron.py");
+const BAKED_APPROVALS_BRIDGE: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/approvals_bridge.py");
+
 /// Plugin 的全部文件 (filename, baked content).
 ///
 /// 加新文件到 `edge/hermes-plugins/catfish-xcatfish-user/*.py` 就必须加这里,
@@ -125,6 +148,10 @@ const BAKED_FILES: &[(&str, &str)] = &[
     ("activity_probe.py", BAKED_ACTIVITY_PROBE),
     ("model_authority.py", BAKED_MODEL_AUTHORITY),
     ("plugin_route_auth.py", BAKED_ROUTE_AUTH),
+    ("plugin_core_tools.py", BAKED_PLUGIN_CORE_TOOLS),
+    ("plugin_codex_session.py", BAKED_PLUGIN_CODEX_SESSION),
+    ("plugin_cron.py", BAKED_PLUGIN_CRON),
+    ("approvals_bridge.py", BAKED_APPROVALS_BRIDGE),
 ];
 
 const PLUGIN_NAME: &str = "catfish-xcatfish-user";
