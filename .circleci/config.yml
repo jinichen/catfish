@@ -256,6 +256,9 @@ jobs:
       # 员工用浏览器工具时若真需要 chromium, 那次会挂, 之后再补 (阶段 2 增强).
       - run:
           name: Pre-install Node.js deps + pack global .tgz (BL-WIN-INSTALL-NPM-OFFLINE)
+          # 12 个目录 npm install, --loglevel=error 下每个只在结束时吐一行; 上次实测根目录那个就跑了 4 分钟。
+          # CircleCI 默认 no_output_timeout 是 10 分钟, 静默久了会被判死。
+          no_output_timeout: 30m
           command: |
             $ErrorActionPreference = 'Stop'
             $hermesDir = "$env:TEMP\hermes-agent-src"
@@ -470,6 +473,9 @@ jobs:
       # 让 npm 决定实际 chromium 版本 (跟 hermes-agent 装的 playwright 版本匹配).
       - run:
           name: Install Playwright Chromium for offline bundle (BL-WIN-INSTALL-CHROMIUM-BUNDLE)
+          # 下载有进度条, 但**解压那 350MB 是静默的** —— 8/14 超时正好报在
+          # 进度条走到 100% 之后, 这一步是嫌疑之一 (另一个是打包那步)。
+          no_output_timeout: 30m
           command: |
             $ErrorActionPreference = 'Stop'
             $hermesDir = "$env:TEMP\hermes-agent-src"
@@ -521,6 +527,9 @@ jobs:
 
       - run:
           name: Pack hermes-agent bundle (dereference symlink)
+          # tar czhf 压十万个文件 + 解压校验, 全程零输出 —— 8/14 就是被默认 10 分钟杀在这。
+          # CircleCI 默认 no_output_timeout 是 10 分钟, 静默久了会被判死。
+          no_output_timeout: 30m
           command: |
             $ErrorActionPreference = 'Stop'
             $outTar = "$PWD\edge\companion-app\src-tauri\resources\windows\hermes-agent-bundle.tar.gz"
@@ -555,15 +564,22 @@ jobs:
             #   (BL-WIN-INSTALL-NPM-OFFLINE, 上面那步预装的), 达华员工无公网,
             #   包里没有 node_modules 反而装不上。照抄那边的断言会当场把自己拦掉。
             $bundle = "$PWD\edge\companion-app\src-tauri\resources\windows\hermes-agent-bundle.tar.gz"
-            $leaked = tar tzf $bundle | Select-String -Pattern '^hermes-agent-src/(\.git|venv|\.venv|target)/'
+            # ⚠ 8/14: 这三处检查原本各跑一次 `tar tzf` —— 一个几百 MB 的 gz **解压三遍**,
+            #    每遍都静默。加上前面 tar czhf 压十万个文件 (12 个 npm install 的
+            #    node_modules 全在里面), 整步一压三解全程零输出, 被 CircleCI 的
+            #    no_output_timeout (默认 10 分钟) 当场杀掉:
+            #        Too long with no output (exceeded 10m0s)
+            #    改成**列一次、共用**, 顺带把耗时砍掉大半。
+            $listing = tar tzf $bundle
+            $leaked = $listing | Select-String -Pattern '^hermes-agent-src/(\.git|venv|\.venv|target)/'
             if ($leaked) {
                 Write-Host "exclude 没生效, 包里仍有本该排掉的目录:"
                 $leaked | Select-Object -First 5 | ForEach-Object { Write-Host "  $_" }
                 Write-Host "pattern 的前缀必须跟 tar 收的目录名一致 (hermes-agent-src, 不是 hermes-agent)"
                 throw "hermes-agent-bundle.tar.gz 里混进了 .git/venv/target"
             }
-            $entries = (tar tzf $bundle | Measure-Object -Line).Lines
-            $hasNodeModules = tar tzf $bundle | Select-String -Pattern '^hermes-agent-src/node_modules/' -Quiet
+            $entries = ($listing | Measure-Object -Line).Lines
+            $hasNodeModules = $listing | Select-String -Pattern '^hermes-agent-src/node_modules/' -Quiet
             if (-not $hasNodeModules) {
                 # 正向断言: 上面那步预装的 node_modules 必须真进包。
                 # 少了它员工装完就是个跑不起来的壳 —— 而这恰恰是"补丁写了两周,
