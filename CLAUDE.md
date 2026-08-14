@@ -23,6 +23,15 @@
 - 配置 (`*.yaml`, `*.toml`, `*.json`)
 - schema / 数据文件 (`*_schemas.py` 单个 OpenAI tools list 这种)
 - 测试数据 fixtures
+- **测试代码** (8/14 加): `test_*.py` / `*_test.py` / `*.test.ts(x)` / `*.spec.ts(x)`,
+  以及 Rust 源文件里 `#[cfg(test)]` 那几个 mod 的行数。
+
+  理由: 测试天然是追加式的 —— 一个 bug 一条, 拆开只是把同一组断言散到两个
+  文件, 收益接近零而改动有风险。而**红线的作用是逼人重新想清楚职责边界**,
+  测试文件没有这个问题。
+
+  ⚠ 仍然会**单独列出来**, 不是消失。一个 3000 行的测试文件可能在说明别的事
+  (比如那个模块的接口太大), 看得见才判断得了。
 - 依赖目录 (`.venv/`, `node_modules/`, `target/`)
 - 第三方上游 patch / build artifacts (`.companion-state/` 等)
 

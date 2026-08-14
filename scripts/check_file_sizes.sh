@@ -111,6 +111,33 @@ PYCHK
   mv "$KEPT_S" "$TMPFILE"
 fi
 
+# ⚠ 8/14: 测试代码单独归一档, 不计进"必拆" (CLAUDE.md §1 例外清单新加的一条)。
+#
+# 鸿波: 「测试文件没必要去拆了吧, 浪费时间」。同意, 而且理由不只是省时间:
+# 红线的作用是**逼人重新想清楚职责边界**, 而测试天然是追加式的 —— 一个 bug
+# 一条, 拆开只是把同一组断言散到两个文件。
+#
+# 但不能让它们**消失**: 一个 3000 行的测试文件可能在说明别的事 (那个模块的
+# 接口太大)。所以是单独一栏, 不是不看。这跟上面 schema / gitignore 两处的
+# 处理一致 —— 扣掉多少条都要打印出来。
+#
+# 判据只看**文件名**, 不看目录:
+#   test_*.py / *_test.py / *.test.ts(x) / *.spec.ts(x)
+#
+# 有意不豁免整个 `tests/` 目录 —— 那里可能躺着 helpers.py 之类的真代码,
+# 按目录豁免就成了藏污纳垢的地方 (跟上面 schema 那条不用光看文件名同理)。
+TEST_FILES=$(mktemp)
+: > "$TEST_FILES"
+KEPT_T=$(mktemp)
+while IFS= read -r f; do
+  case "$(basename "$f")" in
+    test_*.py|*_test.py|*.test.ts|*.test.tsx|*.spec.ts|*.spec.tsx)
+      printf '%s\n' "$f" >> "$TEST_FILES"; continue ;;
+  esac
+  printf '%s\n' "$f" >> "$KEPT_T"
+done < "$TMPFILE"
+mv "$KEPT_T" "$TMPFILE"
+
 # ⚠ 8/13: 再扣掉 **git 明确忽略** 的文件。
 #
 # 起因跟上面 7/30 那段是同一个病的第二次发作。归档 25 个 daosheng 历史 PPT
@@ -155,6 +182,50 @@ while IFS= read -r file; do
   TOTAL_FILES=$((TOTAL_FILES + 1))
   lines=$(wc -l < "$file" | tr -d ' ')
   relative="${file#$REPO_ROOT/}"
+
+  # Rust 的测试**长在源文件里面** (`#[cfg(test)] mod tests { ... }`), 不像 Python /
+  # TS 那样单独成文件。CLAUDE.md §1 把测试代码列为例外之后, 只按文件名豁免就成了
+  # 两套判据: .py/.ts 的测试不算, .rs 的测试算 —— 同一条规矩在不同语言下不一样,
+  # 那是最容易积怨的一种不一致。
+  #
+  # 所以对 .rs 扣掉 #[cfg(test)] 那些 mod 的行数。
+  #
+  # 只对 ≥ 警戒线的文件跑 (省掉一百多次 python 启动): 扣行数只会让数字**变小**,
+  # 本来就 < 500 的怎么扣都还是 OK, 不影响分档。
+  if [ "${file##*.}" = "rs" ] && [ "$lines" -ge "$WARN_THRESHOLD" ] && \
+     command -v python3 >/dev/null 2>&1; then
+    eff=$(python3 - "$file" <<'PYRS'
+import sys
+# 数 #[cfg(test)] 模块占了多少行 —— 大括号配对, 不靠"文件末尾都是测试"这种假设
+# (那个假设一旦不成立就会把真代码也扣掉, 而扣掉之后没人看得出来)。
+src = open(sys.argv[1], encoding="utf-8", errors="replace").read().splitlines()
+test_lines, i, n = 0, 0, len(src)
+while i < n:
+    if src[i].strip().startswith("#[cfg(test)]"):
+        start = i
+        # 往下找到第一个 `{`, 然后配对到它的 `}`
+        depth, seen = 0, False
+        j = i
+        while j < n:
+            depth += src[j].count("{") - src[j].count("}")
+            if "{" in src[j]:
+                seen = True
+            if seen and depth <= 0:
+                break
+            j += 1
+        if seen:
+            test_lines += (j - start + 1)
+            i = j + 1
+            continue
+    i += 1
+print(max(0, len(src) - test_lines))
+PYRS
+)
+    if [ -n "$eff" ] && [ "$eff" -lt "$lines" ] 2>/dev/null; then
+      relative="$relative (${lines} 行, 扣掉 $((lines - eff)) 行 #[cfg(test)])"
+      lines="$eff"
+    fi
+  fi
 
   if [ "$lines" -ge "$FAIL_THRESHOLD" ]; then
     FAIL_FILES+=("$lines|$relative")
@@ -201,6 +272,29 @@ echo " 汇总：$FAIL_COUNT 个必拆  +  $WARN_COUNT 个警戒  /  共 $TOTAL_F
   echo " （另有 $IGNORED_COUNT 个文件被 .gitignore 排除，不计入）"
 [ "${SCHEMA_EXEMPT:-0}" -gt 0 ] && \
   echo " （另有 $SCHEMA_EXEMPT 个纯数据 schema 文件按 CLAUDE.md §1 例外，不计入）"
+
+# 测试文件不计进"必拆", 但**要看得见**。
+#
+# 一个 3000 行的测试文件本身不用拆, 却可能在说明别的事 —— 那个模块的接口太大,
+# 或者一个函数背了太多分支。看不见就判断不了, 而"看不见"正是我们今天一直在
+# 修的那种毛病。
+if [ -s "${TEST_FILES:-/dev/null}" ]; then
+  T_TOTAL=$(wc -l < "$TEST_FILES" | tr -d ' ')
+  T_BIG=0; T_TOP=""
+  while IFS= read -r tf; do
+    tl=$(wc -l < "$tf" | tr -d ' ')
+    if [ "$tl" -ge "$FAIL_THRESHOLD" ]; then
+      T_BIG=$((T_BIG + 1))
+      T_TOP="$T_TOP
+      $(printf '%6d  %s' "$tl" "${tf#$REPO_ROOT/}")"
+    fi
+  done < "$TEST_FILES"
+  echo " （另有 $T_TOTAL 个测试文件按 CLAUDE.md §1 例外，不计入必拆）"
+  if [ "$T_BIG" -gt 0 ]; then
+    echo "   其中 $T_BIG 个超过 $FAIL_THRESHOLD 行 —— 不用拆, 但值得看一眼是不是"
+    echo "   被测的那个模块接口太大了:$T_TOP"
+  fi
+fi
 echo "───────────────────────────────────────────────────────────"
 
 if [ "$STRICT" -eq 1 ] && [ "$FAIL_COUNT" -gt 0 ]; then
