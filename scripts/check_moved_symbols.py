@@ -233,10 +233,60 @@ def scan_module_prefixes(files):
             out.append(f"{f}: 用了 {m}:: 但没 use 它")
     return out
 
+def scan_dead_imports(files):
+    """顶层 use 里引进来却没人用的名字。
+
+    每次拆文件都能抓到 (codex 5 个 / hermes 11 个 / email 5 个) —— 块搬走了,
+    它当初需要的 import 就留在了原地。
+
+    判据只有一条: **前面不是 `::` 的裸名**。
+      · 函数   foo()            → 命中
+      · 模块   foo::bar()       → 命中
+      · std::fs::File 里的 fs   → 前面是 `::`, 正确排掉
+    2026-08-15 这里错过两版: 第一版搜 `fs::` 连 `std::fs::` 一起匹配 (判据太宽);
+    第二版把小写名一律当模块搜 `foo::`, 于是函数 import 全被误报成死的 (判据
+    太窄)。一条统一的判据反而两头都对。
+
+    trait 是例外: 它们靠方法调用生效, 名字不出现在正文里, 只能按方法名判。
+    """
+    TRAIT={"Context":r'\.(with_)?context\(',"FileExt":r'(try_)?lock_exclusive\(|\bunlock\(',
+           "Emitter":r'\.emit\(',"Write":r'\.write_all\(|\.flush\(|write!\(',
+           "Manager":r'\.state\(|\.state::<',"PermissionsExt":r'\.mode\(|\.set_mode\(',
+           # derive(serde::Serialize) 是全名写法, **不需要** use serde::Serialize。
+           # (?<!::) 把它跟裸的 derive(Serialize) 区分开。
+           "Serialize":r'derive\([^)]*(?<!::)\bSerialize|:\s*(?<!::)Serialize\b',
+           "Deserialize":r'derive\([^)]*(?<!::)\bDeserialize|:\s*(?<!::)Deserialize\b'}
+    out=[]
+    for f in files:
+        L=Path(f).read_text(encoding="utf-8").splitlines()
+        body="\n".join(re.sub(r'//.*$','',re.sub(r'"(\\.|[^"\\\n])*"','""',l))
+                       for l in L if not l.strip().startswith("use ")
+                       and not re.match(r'^\s+\w+[,;]?\s*$',l))
+        tops=[];acc=None
+        for l in L:
+            if acc is not None:
+                acc+=" "+l.strip()
+                if l.strip().endswith(";"): tops.append(acc); acc=None
+                continue
+            if l.startswith("use "):
+                if l.rstrip().endswith(";"): tops.append(l.strip())
+                else: acc=l.strip()
+        dead=[]
+        for u in tops:
+            g=re.findall(r'\{(.*)\}',u)
+            names=re.findall(r'\b(\w+)\b',g[0]) if g else [u.rstrip(";").split("::")[-1].strip()]
+            for nm in names:
+                if nm=="self": continue
+                if nm in TRAIT:
+                    if not re.search(TRAIT[nm],body): dead.append(nm)
+                elif not re.search(rf'(?<!::)\b{nm}\b',body): dead.append(nm)
+        if dead: out.append(f"{f}: 死 import {sorted(set(dead))}")
+    return out
+
 bad=0
 for f in sys.argv[1:]:
     m=scan(f)
     if m: bad+=1; print(f"  ❌ {f}: 可能没导入 → {m}")
-for w in scan_members(sys.argv[1:])+scan_signatures(sys.argv[1:])+scan_super_depth(sys.argv[1:])+scan_module_prefixes(sys.argv[1:]):
+for w in scan_members(sys.argv[1:])+scan_signatures(sys.argv[1:])+scan_super_depth(sys.argv[1:])+scan_module_prefixes(sys.argv[1:])+scan_dead_imports(sys.argv[1:]):
     bad+=1; print("  ❌ "+w.strip())
 print(f"\n可疑 {bad} 个" if bad else f"\n✓ {len(sys.argv)-1} 个文件, 未发现缺失的跨文件引用")

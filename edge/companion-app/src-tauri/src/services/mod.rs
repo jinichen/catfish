@@ -4,6 +4,8 @@
 //! commands/ 调它，前端不能直接 invoke。
 
 pub mod agent_prefs;
+pub mod autostart_deps; // 运行时依赖自检 (8/15 从 autostart 切出)
+pub mod autostart_mcp;  // hermes config 自愈 + 其测试 (8/15 切出)
 pub mod autostart;
 pub mod catfish_paths;
 pub mod codex_gate;       // 8/8: Codex 后端总开关 (旁路能力, 默认关 — 见该文件头)
