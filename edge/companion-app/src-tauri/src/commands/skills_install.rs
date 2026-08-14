@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use super::skills_list::{home_dir, parse_skill_md, scan_skills_root_filtered_full};
+use super::skills_list::{home_dir, parse_skill_md};
 
 // ── E7 phase 2 (6/6 鸿波 setup): skill 安装/卸载, MCP 接入/移除 ─────────
 //

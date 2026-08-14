@@ -8,8 +8,12 @@
 //!   skills_mcp.rs      MCP servers 的读和写
 //!   skills.rs          只剩 9 个 #[tauri::command] 薄封装
 //!
-//! 依赖是**单向**的: 安装和 MCP 用本文件的 home_dir / parse_skill_md /
-//! scan_skills_root_filtered_full, 反过来没有。所以这个文件可以单独看懂。
+//! 依赖是**单向**的: 安装用本文件的 home_dir / parse_skill_md, MCP 只用
+//! home_dir, 反过来没有。所以这个文件可以单独看懂。
+//!
+//! (拆的时候我 grep 出安装段还用 scan_skills_root_filtered_full, 于是把它也
+//!  提成了 pub(crate) —— cargo check 一跑才发现那处引用**在注释里**。
+//!  已经收回私有。grep 数引用要排掉注释, 编译器才是准的那个。)
 //!
 //! Skills 目录结构 (两套通用):
 //!   <root>/
@@ -197,7 +201,7 @@ fn scan_skills_root_filtered(
     scan_skills_root_filtered_full(root, ns_prefix, filter, false)
 }
 
-pub(crate) fn scan_skills_root_filtered_full(
+fn scan_skills_root_filtered_full(
     root: &Path,
     ns_prefix: &str,
     filter: Option<&dyn Fn(&Path) -> bool>,
