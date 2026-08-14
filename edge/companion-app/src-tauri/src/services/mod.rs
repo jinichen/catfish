@@ -11,6 +11,10 @@ pub mod curator_config;
 pub mod memory_provider_config;
 pub mod curator_state;
 pub mod email_config;     // BL-COMPANION-EMAIL-YAML-CONFIG (5/18)
+pub mod email_llm;    // 评级 LLM 调用 (8/15 从 email_scheduler 切出)
+pub mod email_notify; // 前端事件 + 系统通知 (8/15 切出)
+pub mod email_state;  // 评级缓存 / push 历史 / 落盘 (8/15 切出)
+pub mod email_types;  // EmailItem + Urgency (8/15 切出, 是其余几层的地基)
 pub mod email_scheduler;  // BL-COMPANION-EMAIL-DIGEST-STEP2 (5/18)
 pub mod embed_cache_meta; // 8/14: 向量缓存的身份记账 (中央换模型 → 自动重建)
 pub mod embedding;        // P3.5.4.1 (6/16 鸿波): 公共 BGE-M3 ONNX, 给 advisor + wiki 共享同一 model session

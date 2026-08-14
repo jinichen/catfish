@@ -35,13 +35,12 @@
 //! - 失败静默 — Mail.app 没开 / 没权限 / CLI 没装 / 评级 LLM 挂, log debug 不 spam 通知.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
+use serde::Deserialize;
+use tauri::AppHandle;
 use tokio::time;
 
 use crate::services::{
@@ -53,107 +52,20 @@ use crate::services::{
 use crate::services::phishing_llm::{self, LlmReviewInput};
 use crate::services::phishing_scan::{self, PhishingScanResult, Severity};
 
+use super::email_llm::call_rate_llm;
+use super::email_notify::{emit_urgent_event, send_notification};
+use super::email_state::{
+    load_persisted_state, now_epoch_secs, persist_push_history, persist_urgency_cache,
+    push_history, urgency_cache, APP_HANDLE, DEDUP_WINDOW_SECS,
+};
+use super::email_types::{EmailItem, Urgency};
+
 // BL-COMPANION-BRIEFING-V2 sub-task 2 (5/20): 通知去重 + 评级持久化.
 //
 // 1. urgency_cache 现在不只 in-memory, 启动时从 ~/.catfish/email_urgency.json
 //    加载, 评完一封后异步写回 disk. Companion 重启不重评 (省 LLM token).
 // 2. 急邮件 push history 持久化到 ~/.catfish/email_push_history.json,
 //    24h 内同 id 不重复 push macOS 通知. 防"同一急邮件每次 scheduler tick 都叫醒".
-
-const DEDUP_WINDOW_SECS: u64 = 24 * 3600; // 24h
-const URGENCY_CACHE_FILE: &str = "email_urgency.json";
-const PUSH_HISTORY_FILE: &str = "email_push_history.json";
-
-/// 解 ~/.catfish/<file>. None = HOME 找不到 (不发声明跳过持久化).
-fn catfish_state_file(name: &str) -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    let mut p = PathBuf::from(home);
-    p.push(".catfish");
-    p.push(name);
-    Some(p)
-}
-
-fn now_epoch_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
-/// 急邮件 push history: id → 上次 push 的 epoch 秒. 24h 内不重 push.
-static PUSH_HISTORY: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
-fn push_history() -> &'static Mutex<HashMap<String, u64>> {
-    PUSH_HISTORY.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// 启动时调一次 — load urgency_cache + push_history 从 disk.
-/// 找不到文件 / 解析失败 → 静默, 当 empty (跟 5/18 老行为兼容).
-fn load_persisted_state() {
-    if let Some(path) = catfish_state_file(URGENCY_CACHE_FILE) {
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Ok(parsed) = serde_json::from_str::<HashMap<String, String>>(&content) {
-                if let Ok(mut cache) = urgency_cache().lock() {
-                    *cache = parsed;
-                    log::info!(
-                        "email_scheduler: loaded {} urgency entries from {}",
-                        cache.len(),
-                        path.display()
-                    );
-                }
-            }
-        }
-    }
-    if let Some(path) = catfish_state_file(PUSH_HISTORY_FILE) {
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Ok(parsed) = serde_json::from_str::<HashMap<String, u64>>(&content) {
-                if let Ok(mut hist) = push_history().lock() {
-                    // 启动时顺手 GC 24h 之前的, 防 file 越涨越大
-                    let cutoff = now_epoch_secs().saturating_sub(DEDUP_WINDOW_SECS);
-                    *hist = parsed.into_iter().filter(|(_, ts)| *ts >= cutoff).collect();
-                    log::info!(
-                        "email_scheduler: loaded {} push history entries (GC 后)",
-                        hist.len()
-                    );
-                }
-            }
-        }
-    }
-}
-
-/// atomic write JSON map to ~/.catfish/<file>. 失败 log.debug, 不抛.
-/// .tmp + rename 防中途崩坏 — 半写文件比丢全部新增 cache 更糟.
-fn persist_json_atomic<T: Serialize>(file: &str, data: &T) {
-    let Some(path) = catfish_state_file(file) else { return };
-    let Some(parent) = path.parent() else { return };
-    let _ = std::fs::create_dir_all(parent);
-    let json = match serde_json::to_string_pretty(data) {
-        Ok(s) => s,
-        Err(e) => {
-            log::debug!("persist_json {file}: serialize 失败 {e}");
-            return;
-        }
-    };
-    let tmp = path.with_extension("json.tmp");
-    if let Err(e) = std::fs::write(&tmp, json) {
-        log::debug!("persist_json {file}: 写 tmp 失败 {e}");
-        return;
-    }
-    if let Err(e) = std::fs::rename(&tmp, &path) {
-        log::debug!("persist_json {file}: rename 失败 {e}");
-    }
-}
-
-fn persist_urgency_cache() {
-    if let Ok(cache) = urgency_cache().lock() {
-        persist_json_atomic(URGENCY_CACHE_FILE, &*cache);
-    }
-}
-
-fn persist_push_history() {
-    if let Ok(hist) = push_history().lock() {
-        persist_json_atomic(PUSH_HISTORY_FILE, &*hist);
-    }
-}
 
 /// 过滤掉 24h 内已 push 过的 id, 返还能 push 的 items (顺手把现 push 的 id 记进 history).
 /// 同时 persist push_history 到 disk.
@@ -179,59 +91,6 @@ fn dedup_for_push<'a>(urgent: &[&'a EmailItem]) -> Vec<&'a EmailItem> {
     drop(hist);  // 释放锁再写 disk
     persist_push_history();
     allowed
-}
-
-/// app handle 句柄, 给 background task 用来 emit Tauri 事件给前端.
-/// schedule_email_scheduler() 启动时存进来.
-static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
-
-/// urgency 评级缓存 — scheduler 评完一封, 写这里给 Tauri command email_urgency_map() 读.
-/// id -> "急" | "中" | "低" 字符串 (跟 SerializableUrgency 同套). 已读 → tick 时自然
-/// 从 baseline 移除 → 下次评级也不会再被加进来. 缓存上限 200 防内存涨, 老的先丢.
-static URGENCY_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
-
-fn urgency_cache() -> &'static Mutex<HashMap<String, String>> {
-    URGENCY_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-#[derive(Deserialize, Clone, Debug)]
-struct EmailItem {
-    id: String,
-    subject: String,
-    sender: String,
-}
-
-/// LLM 评级结果. fallback 'medium' 时不通知, 不阻塞.
-#[derive(Debug, Clone, PartialEq)]
-enum Urgency {
-    Urgent,   // 急: 系统通知 + (step4 桌宠主动闲聊)
-    Medium,   // 中: 静默, 卡片显但不打扰
-    Low,      // 低: 静默 (newsletter / 自动通知类)
-}
-
-impl Urgency {
-    fn from_label(s: &str) -> Self {
-        let s = s.trim().to_lowercase();
-        if s.contains("急") || s.contains("urgent") || s.contains("high") {
-            Self::Urgent
-        } else if s.contains("低") || s.contains("low") || s.contains("noise") {
-            Self::Low
-        } else {
-            Self::Medium
-        }
-    }
-
-    fn is_urgent(&self) -> bool {
-        matches!(self, Self::Urgent)
-    }
-
-    fn as_label(&self) -> &'static str {
-        match self {
-            Self::Urgent => "急",
-            Self::Medium => "中",
-            Self::Low => "低",
-        }
-    }
 }
 
 /// Tauri command 用 — 前端 EmailTab 读评级 badge.
@@ -763,290 +622,6 @@ async fn rate_emails(items: &[EmailItem]) -> Vec<Urgency> {
     }
 }
 
-#[derive(Serialize)]
-struct ChatMessage {
-    role: &'static str,
-    content: String,
-}
-
-#[derive(Serialize)]
-struct ChatRequest {
-    model: String,
-    messages: Vec<ChatMessage>,
-    temperature: f32,
-    max_tokens: u32,
-    stream: bool,
-}
-
-#[derive(Deserialize)]
-struct ChatChoice {
-    message: ChatChoiceMsg,
-}
-
-#[derive(Deserialize)]
-struct ChatChoiceMsg {
-    content: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct ChatResponse {
-    choices: Vec<ChatChoice>,
-}
-
-async fn call_rate_llm(items: &[EmailItem]) -> Result<Vec<Urgency>, String> {
-    // P3.5.140 (6/29 鸿波"数据流应该是 companion → hermes → gateway(8999), 不是双路径,
-    // 更不是 gateway(8999) 作为 hermes 的 fallback"):
-    // 单路径: Companion → hermes 8642 → gateway 8999 → LLM. 没有 fallback.
-    //   - body.model 真 chain 真值真 → hermes plugin P11 截 → P6 wrap _create_agent
-    //     → agent.model = chain 真值 → auxiliary_client 自动 sync (跟 TS 前端**统一**)
-    //   - 数据零出端 X-Catfish-User header 跨员工保护**统一**走 plugin
-    //   - 客户**单点配置**真 hermes (P11/P21 picker) 自动覆盖 background task
-    //   - hermes_api 没配 / 没起 → Err (不再静默 fallback gateway 老路径)
-    let hermes_cfg = hermes_api_config::hermes_api_config();
-    let hermes_key = hermes_cfg.key.as_deref().ok_or_else(|| {
-        "hermes_api.key 没配 (~/.catfish/companion.yaml hermes_api.key 或 \
-         env CATFISH_HERMES_API_KEY 必填)".to_string()
-    })?;
-    let base_url = hermes_cfg.url.clone();
-    let auth_header = format!("Bearer {hermes_key}");
-    // P3.5.29 Phase 4 (6/17 鸿波"啥意思不干活") + P3.5.139 (6/29 鸿波"都要去除硬编码"):
-    // chain picker > role > yaml > Err (硬 chain).
-    //   1. picker_config::current_model() — 员工 chat picker (P3.5.28)
-    // 8/9: 原来 2/3 顺位是 role_config("rate_fast") 和 email_config().rate_model,
-    //      已砍。理由见下面那行注释 + 本文件顶部。
-    // 8/9 鸿波: 同上 —— picker 是唯一真源, 砍掉 rate_fast / rate_model 两级兜底。
-    let model = picker_config::current_model().ok_or_else(|| {
-        "picker 未选模型 (~/.catfish/picker_model 空/不在) —— 邮件评级不猜模型, \
-         开一次 Companion 对话 tab 让 picker 落盘即可"
-            .to_string()
-    })?;
-
-    let list = items
-        .iter()
-        .enumerate()
-        .map(|(i, it)| {
-            format!(
-                "{}. 主题: {} | 发件人: {}",
-                i + 1,
-                truncate(&it.subject, 60),
-                truncate(&it.sender, 40),
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let system = "你是邮件分类助手. 按重要程度评级邮件: 急 / 中 / 低. \
-                  急 = 老板 / 客户 / 直接老板 / 含 deadline 关键词 / 紧急任务; \
-                  低 = newsletter / 促销 / 自动通知 / GitHub PR review 之类的常规事项; \
-                  其它一律 中. \
-                  返回 JSON 数组, 每个元素只一个字: '急' / '中' / '低'. 不要其它任何解释.";
-    let user = format!(
-        "{list}\n\n按上面顺序, 返回 {} 个评级的 JSON 数组, 例如 [\"急\",\"中\",\"低\"]. 只返 JSON, 不要任何解释.",
-        items.len()
-    );
-
-    let req = ChatRequest {
-        model: model.clone(),
-        messages: vec![
-            ChatMessage { role: "system", content: system.to_string() },
-            ChatMessage { role: "user", content: user },
-        ],
-        temperature: 0.0,
-        max_tokens: 64,
-        stream: false,
-    };
-
-    // 8/14: 走 trust_central —— 这条打的是本机 hermes 8642, 而 reqwest 默认会读
-    // 系统代理。员工开着 Clash / 公司 VPN 时请求被塞进代理隧道, 报出来是
-    // "error sending request"(详见 util/http_client.rs 上那段长注释)。
-    // 今晚 embedding 就是这么挂的 —— 这处是同一个病, 只是还没爆。
-    let client = crate::util::http_client::trust_central(
-        reqwest::Client::builder()
-            .timeout(Duration::from_secs(15)),
-    )
-    .build()
-    .map_err(|e| format!("reqwest build 失败: {e}"))?;
-
-    let resp = client
-        .post(format!("{base_url}/v1/chat/completions"))
-        .header("Authorization", &auth_header)
-        .header("X-Catfish-Source", "companion-email-scheduler")
-        .header("X-Catfish-Skip-Identity", "true")  // 不需要 SOUL inject, 服务式调用
-        .json(&req)
-        .send()
-        .await
-        .map_err(|e| format!("LLM 调用失败 ({base_url}): {e}"))?;
-
-    if !resp.status().is_success() {
-        return Err(format!("LLM 返 {} (via {})", resp.status(), base_url));
-    }
-
-    let body: ChatResponse = resp
-        .json()
-        .await
-        .map_err(|e| format!("response 解析失败: {e}"))?;
-    let content = body
-        .choices
-        .first()
-        .and_then(|c| c.message.content.clone())
-        .unwrap_or_default();
-
-    // 8/8: 上游把错误当正文返 (HTTP 200 + "API call failed after 3 retries: ...")。
-    // 不认它的话会一路走到 parse_urgencies 报"没 JSON array", 而那条是
-    // log::debug! —— 生产 INFO 级别下永远看不见, 于是每 30 秒静默重烧一次,
-    // 每次经 hermes 还要 ×3。详见 upstream_error_guard.rs。
-    if upstream_error_guard::is_upstream_error_as_content(&content) {
-        let cd = upstream_error_guard::mark_upstream_error("email-rate", &content);
-        return Err(format!("上游返回的是一条错误, 已冷却 {}s", cd.as_secs()));
-    }
-
-    parse_urgencies(&content)
-}
-
-/// 从 LLM 输出文本解析 JSON 数组. 容错 — markdown code fence / 前后多余文字都试着扒出来.
-fn parse_urgencies(s: &str) -> Result<Vec<Urgency>, String> {
-    let trimmed = s.trim();
-    // 找第一个 [ 到最后一个 ]
-    let start = trimmed.find('[').ok_or_else(|| format!("没 JSON array: {trimmed:?}"))?;
-    let end = trimmed.rfind(']').ok_or_else(|| format!("没 ] 闭合: {trimmed:?}"))?;
-    if end <= start {
-        return Err(format!("] 在 [ 前: {trimmed:?}"));
-    }
-    let array_str = &trimmed[start..=end];
-    let labels: Vec<String> = serde_json::from_str(array_str)
-        .map_err(|e| format!("JSON 解析失败 ({e}): {array_str:?}"))?;
-    Ok(labels.iter().map(|l| Urgency::from_label(l)).collect())
-}
-
-/// emit `catfish:email-urgent` 给前端 — 前端 App.tsx 接, 调桌宠主动闲聊.
-/// 同时填一份简洁 starter 字符串, 前端不用再造句.
-fn emit_urgent_event(urgent: &[&EmailItem]) {
-    let Some(app) = APP_HANDLE.get() else {
-        log::debug!("email_scheduler: APP_HANDLE 未初始化, 不 emit");
-        return;
-    };
-
-    let starter = if urgent.len() == 1 {
-        let item = urgent[0];
-        format!(
-            "{} 那封紧的来了 — {} 帮你看?",
-            extract_sender_name(&item.sender),
-            truncate(&item.subject, 30),
-        )
-    } else {
-        let first = urgent[0];
-        format!(
-            "你有 {} 封紧的邮件 (最新: {} - {}), 帮你过一遍?",
-            urgent.len(),
-            extract_sender_name(&first.sender),
-            truncate(&first.subject, 25),
-        )
-    };
-
-    let payload = UrgentEventPayload {
-        count: urgent.len(),
-        starter,
-        ids: urgent.iter().map(|i| i.id.clone()).collect(),
-        // BL-EMAIL-URGENT-LLM-PUSH (5/20): 多带 metadata 让前端调 LLM 写 starter
-        // 不用回查 (没这个字段前端要再调 email_urgency_map + email list).
-        items: urgent
-            .iter()
-            .map(|i| UrgentItemMeta {
-                subject: i.subject.clone(),
-                sender: i.sender.clone(),
-            })
-            .collect(),
-    };
-
-    if let Err(e) = app.emit("catfish:email-urgent", &payload) {
-        log::warn!("email_scheduler: emit catfish:email-urgent 失败: {e}");
-    } else {
-        log::info!("email_scheduler: emit catfish:email-urgent (count={})", payload.count);
-    }
-}
-
-#[derive(Serialize, Clone)]
-struct UrgentEventPayload {
-    count: usize,
-    starter: String,
-    ids: Vec<String>,
-    items: Vec<UrgentItemMeta>,
-}
-
-#[derive(Serialize, Clone)]
-struct UrgentItemMeta {
-    subject: String,
-    sender: String,
-}
-
-/// 通过 osascript display notification 发 macOS 系统通知.
-/// 1 封 → 显主题; 多封 → 显数量 + 第一封.
-fn send_notification(new_items: &[&EmailItem]) {
-    let (title, body) = if new_items.len() == 1 {
-        let item = &new_items[0];
-        (
-            format!("📧 {}", truncate(&extract_sender_name(&item.sender), 30)),
-            truncate(&item.subject, 80),
-        )
-    } else {
-        let first = &new_items[0];
-        (
-            format!("📧 {} 封新邮件", new_items.len()),
-            format!(
-                "最新: {} — {}",
-                truncate(&extract_sender_name(&first.sender), 20),
-                truncate(&first.subject, 50)
-            ),
-        )
-    };
-
-    #[cfg(target_os = "macos")]
-    {
-        let safe_title = title.replace('"', "\\\"");
-        let safe_body = body.replace('"', "\\\"");
-        let script = format!(
-            "display notification \"{}\" with title \"{}\" sound name \"Glass\"",
-            safe_body, safe_title,
-        );
-        let _ = Command::new("osascript").args(["-e", &script]).status();
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (title, body);
-        log::info!("email_scheduler: 非 macOS 不通知 (TODO Linux/Win)");
-    }
-}
-
-/// "张三 <zhang@x.com>" → "张三". 没显示名 → 邮箱 @ 前部分.
-fn extract_sender_name(sender: &str) -> String {
-    if sender.is_empty() {
-        return "(未知)".to_string();
-    }
-    // 找 '<' 前的内容
-    if let Some(idx) = sender.find('<') {
-        let name = sender[..idx].trim().trim_matches('"');
-        if !name.is_empty() {
-            return name.to_string();
-        }
-    }
-    // 没显示名 → 邮箱 @ 前
-    if let Some(idx) = sender.find('@') {
-        return sender[..idx].to_string();
-    }
-    sender.to_string()
-}
-
-fn truncate(s: &str, max_chars: usize) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= max_chars {
-        s.to_string()
-    } else {
-        let head: String = chars[..max_chars].iter().collect();
-        format!("{head}…")
-    }
-}
-
 
 #[cfg(test)]
 mod tests {
@@ -1054,77 +629,10 @@ mod tests {
     // P3.5.143 (6/30 鸿波): dedup_* 4 个测试共享 static push_history OnceLock,
     // cargo test 默认并行触发 race. #[serial(push_history)] 强制串行.
     use serial_test::serial;
-
-    #[test]
-    fn urgency_from_label_chinese() {
-        assert_eq!(Urgency::from_label("急"), Urgency::Urgent);
-        assert_eq!(Urgency::from_label("中"), Urgency::Medium);
-        assert_eq!(Urgency::from_label("低"), Urgency::Low);
-    }
-
-    #[test]
-    fn urgency_from_label_english() {
-        assert_eq!(Urgency::from_label("urgent"), Urgency::Urgent);
-        assert_eq!(Urgency::from_label("low"), Urgency::Low);
-        assert_eq!(Urgency::from_label("medium"), Urgency::Medium);
-    }
-
-    #[test]
-    fn urgency_from_label_fallback_to_medium() {
-        // 模型乱返不挂, 当 Medium
-        assert_eq!(Urgency::from_label("garbage"), Urgency::Medium);
-        assert_eq!(Urgency::from_label(""), Urgency::Medium);
-    }
-
-    #[test]
-    fn parse_urgencies_clean_json() {
-        let r = parse_urgencies(r#"["急","中","低"]"#).unwrap();
-        assert_eq!(r, vec![Urgency::Urgent, Urgency::Medium, Urgency::Low]);
-    }
-
-    #[test]
-    fn parse_urgencies_with_markdown_fence() {
-        let r = parse_urgencies("```json\n[\"急\",\"低\"]\n```").unwrap();
-        assert_eq!(r, vec![Urgency::Urgent, Urgency::Low]);
-    }
-
-    #[test]
-    fn parse_urgencies_with_leading_text() {
-        let r = parse_urgencies("根据评级:\n[\"急\",\"中\"]\n谢谢").unwrap();
-        assert_eq!(r, vec![Urgency::Urgent, Urgency::Medium]);
-    }
-
-    #[test]
-    fn parse_urgencies_no_array_errors() {
-        assert!(parse_urgencies("急 中 低").is_err());
-        assert!(parse_urgencies("").is_err());
-    }
-
-    #[test]
-    fn extract_sender_name_with_display() {
-        assert_eq!(extract_sender_name("张三 <zhang@x.com>"), "张三");
-        assert_eq!(extract_sender_name("\"Acme Corp\" <noreply@acme.com>"), "Acme Corp");
-    }
-
-    #[test]
-    fn extract_sender_name_plain_email() {
-        assert_eq!(extract_sender_name("bob@example.com"), "bob");
-    }
-
-    #[test]
-    fn truncate_short_unchanged() {
-        assert_eq!(truncate("abc", 10), "abc");
-    }
-
-    #[test]
-    fn truncate_long_with_ellipsis() {
-        assert_eq!(truncate("abcdefghij", 5), "abcde…");
-    }
-
-    #[test]
-    fn truncate_chinese_counts_chars() {
-        assert_eq!(truncate("一二三四五六", 3), "一二三…");
-    }
+    // ⚠ mod 内部的 super 指 email_scheduler 本身, 不是 services ——
+    // 引兄弟模块必须走 crate::services::。
+    use crate::services::email_state::{now_epoch_secs, push_history};
+    use crate::services::email_types::EmailItem;
 
     // ── BL-COMPANION-BRIEFING-V2 sub-task 2 (5/20): 通知去重 ──
 

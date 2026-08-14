@@ -115,8 +115,17 @@ def scan_members(files):
             m=re.match(r'    (?:pub(?:\(crate\))? )?(\w+):',l)
             if m and cur and not l.strip().startswith("pub"):
                 fl=m.group(1)
-                if len(owner.get(fl,()))!=1: continue
-                u=[g for g in files if g!=f and linked(g,f) and re.search(rf'\.\s*{fl}\b',clean(src[g]))]
+                # 改进 1 (8/15): 字段访问后面不跟 '('。`.count()` 是迭代器方法,
+                # 按 `\.count\b` 匹配会把它当成读 UrgentEventPayload.count。
+                pat=rf'\.\s*{fl}\b(?!\s*\()'
+                # 改进 2 (8/15): 名字不唯一时, 若别的文件里出现 `结构体名 {` 的
+                # 字面量构造, 那它必然要碰到全部字段 —— 这条比名字唯一更硬。
+                # EmailItem 的 id/subject/sender 就是这么漏掉的: 名字太常见,
+                # 唯一性规则直接跳过, 而 email_scheduler.rs 里在 `EmailItem {` 构造它。
+                ctor=[g for g in files if g!=f and re.search(rf'\b{cur}\s*\{{',clean(src[g]))]
+                if len(owner.get(fl,()))!=1 and not ctor: continue
+                u=[g for g in files if g!=f and linked(g,f)
+                   and (re.search(pat,clean(src[g])) or g in ctor)]
                 if u: out.append(f"  {f}: {cur}.{fl} 私有, 但 {', '.join(u)} 在读它")
     return out
 
