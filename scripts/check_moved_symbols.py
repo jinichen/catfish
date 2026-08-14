@@ -267,6 +267,7 @@ def scan_dead_imports(files):
     TRAIT={"Context":r'\.(with_)?context\(',"FileExt":r'(try_)?lock_exclusive\(|\bunlock\(',
            "Emitter":r'\.emit\(',"Write":r'\.write_all\(|\.flush\(|write!\(',
            "Manager":r'\.state\(|\.state::<',"PermissionsExt":r'\.mode\(|\.set_mode\(',
+           "Engine":r'\.(encode|decode)\(',"RngCore":r'fill_bytes\(',"FileExt2":r'x^',
            # derive(serde::Serialize) 是全名写法, **不需要** use serde::Serialize。
            # (?<!::) 把它跟裸的 derive(Serialize) 区分开。
            "Serialize":r'derive\([^)]*(?<!::)\bSerialize|:\s*(?<!::)Serialize\b',
@@ -290,6 +291,10 @@ def scan_dead_imports(files):
         for u in tops:
             g=re.findall(r'\{(.*)\}',u)
             names=re.findall(r'\b(\w+)\b',g[0]) if g else [u.rstrip(";").split("::")[-1].strip()]
+            # `use x::Trait as _;` —— 名字被刻意匿名化了, 就是为了只引 trait 方法。
+            # 按名字根本查不到, 一律跳过。2026-08-15 oauth 的 `Engine as _` 被
+            # 报成死 import 就是这个。
+            if re.search(r'\bas\s+_\s*;', u): continue
             for nm in names:
                 if nm=="self": continue
                 if nm in TRAIT:
