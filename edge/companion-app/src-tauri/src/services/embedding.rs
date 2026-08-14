@@ -234,14 +234,21 @@ fn init_active_provider() -> Provider {
 // 逐请求回退的话, 每条候选都要先等满 10 秒超时再走本地 —— 一次早安几十条
 // 就是几分钟。整体切只赔前 N 次。
 //
-// ## 阈值为什么是 3
+// ## 阈值为什么是 2
 //
-// 1 次太敏感: 网络抖一下就切, 而切一次要清缓存重算几百条。
-// 太大又要让员工干等好几轮 10 秒 (早安一轮只产生 2 次失败:
-// 相关性筛选 1 次 + wiki 注入 1 次)。3 = 第二轮早安就切过去。
+// 第一版写的 3, 鸿波实机一跑就看出不对: 早安**一轮正好产生 2 次**失败
+// (相关性筛选 1 次 + wiki 注入 1 次), 卡在 2/3 —— 第一轮 20 秒白等完了还没切,
+// 要到第二轮才好。
+//
+// 改 2 之后, 第一轮的第二次失败 (wiki 那次) 就触发降级, 而触发的那一次会立刻
+// 用本机重算 —— 也就是 wiki 注入这一轮就能拿到结果, 只赔前面 relevance 那 10 秒。
+//
+// 2 会不会太敏感? 不会: 每一次"失败"都是**等满 10 秒超时**, 不是瞬时抖动。
+// 连着两次意味着 20 秒里远程一次都没成 —— 这已经是很强的信号了。
+// 真正该防的是"1 次就切", 那种网关重启几秒就会误触发。
 //
 // 成功一次就清零 —— 判据是"连续", 不是"累计"。累计的话跑够久总会切。
-const REMOTE_FAILURES_BEFORE_DEMOTE: usize = 3;
+const REMOTE_FAILURES_BEFORE_DEMOTE: usize = 2;
 
 static CONSECUTIVE_REMOTE_FAILURES: AtomicUsize = AtomicUsize::new(0);
 static DEMOTED_TO_LOCAL: AtomicBool = AtomicBool::new(false);
@@ -325,7 +332,7 @@ pub async fn embed_text(text: &str) -> Option<Vec<f32>> {
                         .is_ok()
                     {
                         log::warn!(
-                            "[embedding] 远程连续失败 {REMOTE_FAILURES_BEFORE_DEMOTE} 次 → \
+                            "[embedding] 远程连续失败 {REMOTE_FAILURES_BEFORE_DEMOTE} 次 (每次都是满超时) → \
                              整体退回本机 ONNX (到重启为止)。\
                              向量来源变了, 缓存会在下一次写入前自动重建 \
                              (见 services/embed_cache_meta.rs)。"
