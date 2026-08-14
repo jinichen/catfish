@@ -294,6 +294,21 @@ def resolve_chain(
         - **BL-FALLBACK-PROMPT-CAP (5/14)**: tier=public 且 prompt_estimate > config.max_fallback_prompt_tokens
     """
     if not primary.fallback or not primary.fallback.chain:
+        # 8/15: 这里原来是**唯一一条静默 return** —— 下面每个跳过原因都打日志,
+        # 就它不打。后果是主模型挂掉后, 日志里只剩一句 "fallback chain 全失败",
+        # 而那句话是假的: 一个候选都没试过, 因为压根没有候选。
+        #
+        # 现场代价: qwen-flash 周配额烧光, 库里那行的 chain 是空的, 排查的人
+        # (包括我) 从 "全失败" 一路往 "候选也挂了" 方向找, 绕了很久才发现
+        # 根本没进过循环。
+        logger.warning(
+            "model=%s 没有可用的 fallback chain (fallback=%s, chain=%s) —— "
+            "它一旦失败就没有兜底。模型配置在库里 (控制台 /admin/models), "
+            "models.yaml 那份只在冷启动降级时才生效。",
+            primary.name,
+            "无" if not primary.fallback else "有",
+            None if not primary.fallback else list(primary.fallback.chain or []),
+        )
         return []
     # getattr 兼容老 test (用 SimpleNamespace 没这字段) — 默认 0 = 关功能
     cap = getattr(config, "max_fallback_prompt_tokens", 0)
@@ -555,9 +570,20 @@ async def with_fallback(
             last_exc = e
             continue
 
-    # chain 跑完都挂
-    logger.error(
-        "fallback chain 全失败. attempts=%s",
-        " -> ".join(attempts),
-    )
+    # 8/15: 这里原来不分两种情况, 一律说 "chain 全失败"。
+    #   · 真的全失败: 候选都试过了, 都挂了
+    #   · 一个都没试: candidates 是空的 (链没配 / 被过滤光)
+    # 后者说成 "全失败" 是在撒谎, 而且把排查方向带偏 —— 人会去查候选模型
+    # 为什么挂, 实际该去查链为什么是空的。attempts 里只有主模型就是判据。
+    if not candidates:
+        logger.error(
+            "primary %s 失败, 且**没有任何候选可试** (chain 空或被过滤光) —— "
+            "不是候选也挂了, 是压根没进过重试。attempts=%s",
+            primary.name, " -> ".join(attempts),
+        )
+    else:
+        logger.error(
+            "fallback chain 全失败: %d 个候选都试过了. attempts=%s",
+            len(candidates), " -> ".join(attempts),
+        )
     raise last_exc

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -515,3 +516,47 @@ def test_with_fallback_transient_then_real_failure_goes_to_chain() -> None:
     result, used, _hops = asyncio.run(with_fallback(cfg, a, invoke))
     assert used.name == "b"
     assert attempts == ["a", "a", "b"]  # primary transient retry 2 次, 然后 chain b
+
+
+# ════════════════════════════════════════════════════════════════
+# 8/15: "没有候选" 和 "候选都挂了" 必须说不同的话
+#
+# 现场: qwen-flash 周配额烧光, 库里那行的 fallback.chain 是空的, 日志打的是
+#   fallback chain 全失败. attempts=catfish-public-qwen-flash=err:RateLimitError
+# 字面意思是"链里的都试过都失败了", 实际一个都没试过。排查的人 (我) 因此往
+# "候选也挂了"方向找了很久。attempts 里只有主模型就是判据, 但那行字盖住了它。
+# ════════════════════════════════════════════════════════════════
+
+
+def _boom(_model):
+    raise _RateLimit()
+
+
+class _RateLimit(Exception):
+    def __init__(self):
+        super().__init__("Error code: 429 - quota exhausted")
+
+
+@pytest.mark.asyncio
+async def test_链是空的时候要明说没进过重试(caplog):
+    """chain=[] —— 不许说成"全失败"。"""
+    a = _model("a", fallback=_fb(chain=[]))
+    cfg = _config(a)
+    with caplog.at_level(logging.WARNING), pytest.raises(_RateLimit):
+        await with_fallback(cfg, a, _boom)
+    text = caplog.text
+    assert "没有任何候选可试" in text, text
+    assert "全失败" not in text.split("没有任何候选可试")[0][-200:], "还在说全失败"
+    # resolve_chain 那条也要出来, 指向"链为什么空"
+    assert "没有可用的 fallback chain" in text, text
+
+
+@pytest.mark.asyncio
+async def test_候选真的都试过了才叫全失败(caplog):
+    b = _model("b", fallback=_fb(chain=[]))
+    a = _model("a", fallback=_fb(chain=["b"]))
+    cfg = _config(a, b)
+    with caplog.at_level(logging.ERROR), pytest.raises(_RateLimit):
+        await with_fallback(cfg, a, _boom)
+    assert "1 个候选都试过了" in caplog.text, caplog.text
+    assert "没有任何候选可试" not in caplog.text
