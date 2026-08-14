@@ -303,8 +303,13 @@ def resolve_chain(
         # 根本没进过循环。
         logger.warning(
             "model=%s 没有可用的 fallback chain (fallback=%s, chain=%s) —— "
-            "它一旦失败就没有兜底。模型配置在库里 (控制台 /admin/models), "
-            "models.yaml 那份只在冷启动降级时才生效。",
+            "它一旦失败就直接报错给员工, 没有兜底。"
+            "改这个要去控制台 /admin/models 的「失败切换 · 切换顺序」: "
+            "库里一有模型行, models.yaml 的**模型条目整份不生效** "
+            "(config.py _assemble_config: cfg.models = 库里的行), "
+            "所以 yaml 里配得好好的 chain 不算数。"
+            "注意顶层 auto_fallback 是另一回事, 它仍来自 yaml/env, 库不管 —— "
+            "能走到这一步就是因为它是开的。",
             primary.name,
             "无" if not primary.fallback else "有",
             None if not primary.fallback else list(primary.fallback.chain or []),
