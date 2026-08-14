@@ -39,7 +39,6 @@ use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use serde::Deserialize;
 use tauri::AppHandle;
 use tokio::time;
 

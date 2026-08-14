@@ -196,10 +196,47 @@ def scan_super_depth(files):
                                f"(该写 crate::…::{m.group(1)})")
     return out
 
+def scan_module_prefixes(files):
+    """`foo::bar()` 里的模块前缀 foo 没导入。
+
+    2026-08-15: email_llm.rs 漏了
+    `use crate::services::{hermes_api_config, picker_config, upstream_error_guard};`
+    —— 4 个编译错。
+
+    上面 scan 的调用点正则是 `(?<![.\w:])(\w+)\s*\(`, 它匹配的是紧挨着
+    左括号的那个名字。碰到 `hermes_api_config::hermes_api_config()`, 被匹配的是
+    `::` 后面的函数名, 而那个 lookbehind 又把它排掉了 —— 于是**前缀模块整个
+    是隐形的**。检查器看得见"函数没导入", 看不见"模块没导入"。
+
+    判据: 同目录下存在同名 .rs, 且它以 `foo::` 的形式出现在正文里, 却不在
+    任何 use 语句中。
+    """
+    out=[]
+    for f in files:
+        d=os.path.dirname(f) or "."
+        sibs={Path(x).stem for x in glob.glob(f"{d}/*.rs")}-{"mod"}
+        L=Path(f).read_text(encoding="utf-8").splitlines()
+        body="\n".join(re.sub(r'//.*$','',re.sub(r'"(\\.|[^"\\\n])*"','""',l))
+                       for l in L if not l.strip().startswith("use "))
+        imported=set(); acc=None
+        for l in L:
+            s=l.strip()
+            if acc is not None:
+                acc+=" "+s
+                if s.endswith(";"): imported|=set(re.findall(r'\w+',acc)); acc=None
+                continue
+            if s.startswith("use "):
+                if s.endswith(";"): imported|=set(re.findall(r'\w+',s))
+                else: acc=s
+        used={m.group(1) for m in re.finditer(r'(?<![:\w])([a-z_][a-z0-9_]*)::',body)}
+        for m in sorted((used & sibs) - imported - {Path(f).stem}):
+            out.append(f"{f}: 用了 {m}:: 但没 use 它")
+    return out
+
 bad=0
 for f in sys.argv[1:]:
     m=scan(f)
     if m: bad+=1; print(f"  ❌ {f}: 可能没导入 → {m}")
-for w in scan_members(sys.argv[1:])+scan_signatures(sys.argv[1:])+scan_super_depth(sys.argv[1:]):
+for w in scan_members(sys.argv[1:])+scan_signatures(sys.argv[1:])+scan_super_depth(sys.argv[1:])+scan_module_prefixes(sys.argv[1:]):
     bad+=1; print("  ❌ "+w.strip())
 print(f"\n可疑 {bad} 个" if bad else f"\n✓ {len(sys.argv)-1} 个文件, 未发现缺失的跨文件引用")
