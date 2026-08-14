@@ -479,69 +479,160 @@ jobs:
           command: |
             $ErrorActionPreference = 'Stop'
             $hermesDir = "$env:TEMP\hermes-agent-src"
-            # npx 在 hermes-agent-src 里 (node_modules pre-install 后已经就位)
+
+            # ═══ 8/14 第四次。前三次全是猜, 这次把 playwright 的安装流程读完了 ═══
+            #
+            # 症状始终一样: 进度条走到 100%, 然后**零输出**直到被超时杀掉。
+            # 30m 也一样。所以不是慢, 是那段窗口里根本没有任何东西会打印。
+            #
+            # ── 100% 之后到底在干什么 (playwright-core 1.58.2 源码) ──
+            #
+            #   browserFetcher.js:85   fork(oopDownloadBrowserMain.js)   ← 下载在**子进程**里
+            #   oopDownloadBrowserMain.js:99  await downloadFile()       ← 进度条只覆盖到这
+            #                          :100  log('SUCCESS downloading')
+            #                          :102  await removeFolders([dir])
+            #                          :103  log('extracting archive')
+            #                          :104  await extract(zip, {dir})   ← 纯 JS yauzl 解压
+            #                          :107  chmod
+            #                          :109  写 INSTALLATION_COMPLETE
+            #
+            # 关键在于那几个 log(): 它们 process.send 给父进程, 父进程收到后走
+            # browserFetcher.js:90 `debugLogger.log("install", ...)` —— **只有设了
+            # DEBUG=pw:install 才会打印**。默认情况下, 从"下载完"到"解压完"这整段
+            # 是**设计上静默的**。父进程那边 ManualPromise 也没有任何超时
+            # (browserFetcher.js:86), 子进程卡住 = 永远等下去。
+            #
+            # 也就是说: 我们看到的"100% 之后静默"就是解压阶段, 而且卡在这里
+            # **不会有任何诊断信息**, 再跑一百次也还是这一行日志。
+            #
+            # ── 而且不止一个包 ──
+            #
+            #   registry/index.js:1311-1338 resolveBrowsers('chromium') 在 win32 上返回
+            #   **四个**: chromium + ffmpeg + chromium-headless-shell + winldd。
+            #   四轮 fork/下载/解压, 每轮之间都是静默的。
+            #
+            # ── 所以: 不用 playwright install 了 ──
+            #
+            # 读完源码之后, 这条命令的产出契约完全清楚了 —— 每个包就是
+            # 「把 zip 解压到 Install location, 再在里面放一个空的 INSTALLATION_COMPLETE」。
+            # 没有别的魔法 (INSTALLATION_COMPLETE 的作用: index.js:1275 GC 时判断这个
+            # 目录是不是装完整了; 运行期 executablePathOrDie 只 canAccessFile 可执行文件,
+            # 不看 marker —— 但还是要写, 否则下次 install 会把它当残骸删掉)。
+            #
+            # 而 `--dry-run` (program.js:159-171) 只打印、不联网, 正好把
+            # Install location 和 Download url 全告诉我们。
+            #
+            # 于是改成: dry-run 拿地址 → curl.exe 下载 → tar.exe 解压 → 写 marker。
+            # 全是 Windows 自带的原生程序 (System32\curl.exe / tar.exe, 后者是 bsdtar,
+            # 认 zip), C 实现比纯 JS yauzl 快一个量级, 而且**每一步都是我们自己打的日志**——
+            # 下次再卡, 日志会明确停在某一行, 不用再猜。
+            #
+            # 只处理 chromium* —— 跟下面打包那步的 glob 完全同一个判据, 所以员工端
+            # 拿到的 tar 内容跟原来一模一样, 顺带省掉 ffmpeg / winldd 两轮下载。
+
             Push-Location $hermesDir
             try {
-              # 让 playwright 装到默认位置 %LOCALAPPDATA%\ms-playwright\, install.ps1 patched 会 tar 打包.
-              # --with-deps 不加 · 员工机装 msi 时 impersonate 用户, 装依赖需 admin.
-              Write-Host "===== npx playwright install chromium (下载 ~170MB compressed / 解压 ~350MB) ====="
-              # ⚠ 这里**不能**带 --loglevel=error —— 那是 npm 的参数, 不是 playwright 的。
-              #   `npx playwright install chromium --loglevel=error` 会把它原样传给
-              #   playwright 的 CLI, commander 直接 `error: unknown option` 退 1。
-              #   8/14 撞的: 前面几步一修好, 流水线走到这里当场挂。
-              #   playwright install 没有 loglevel 这类开关, 想安静就靠外面的重定向。
-              # ⚠ 8/14 第二次挂: 进度条走到 100% 之后**静默 30 分钟**被超时杀掉。
-              #    172MB 解压成 350MB 再慢也就一两分钟 —— 这是卡死, 不是慢。
-              #
-              #    我没有 Windows 能复现, 所以下面不是"已定位的修复", 是**去掉已知
-              #    危险面 + 让下次看得见**:
-              #
-              #    · CI=1 —— playwright 认这个变量, 关掉动画进度条改成逐行输出。
-              #      那个进度条是靠 \r 反复重画的, 跟 PowerShell 的 `2>&1`
-              #      (把 native stderr 转成 ErrorRecord 对象) 叠在一起, 是这类
-              #      "卡在 100%" 最常见的组合。
-              #    · 去掉 `2>&1` —— 没有它 stderr 直接进 CI 日志, 少一层转换。
-              #      (原来加它是想收集输出, 但 CircleCI 本来就抓 stderr。)
-              #    · 先跑 --dry-run —— 秒回, 会打印它准备下什么、装到哪。
-              #      下次再卡, 日志里至少有"它以为自己要干什么"。
-              #
-              #    这一步是 6411320 新加的, **从来没成功跑通过一次**。如果这次还挂,
-              #    下一步该考虑的是绕开 npx: 直接 Invoke-WebRequest 拉 CfT zip
-              #    (URL 就在日志里) 自己解压摆位, 或者干脆先不打包 chromium。
-              # ★ 真因 (8/14 第三次, 这次是读 playwright 源码找出来的, 不是猜):
-              #
-              #   playwright 下载解压完之后, CLI 会做**宿主依赖校验**:
-              #
-              #     cli/program.js:174    validateHostRequirementsForExecutablesIfNeeded
-              #     registry/index.js:993 → validateDependenciesWindows
-              #     dependencies.js:143   → Promise.all(每个 exe/dll → missingFileDependenciesWindows)
-              #     dependencies.js:300   → spawnAsync(winldd, [该文件])
-              #
-              #   Chrome for Testing 的 chrome-win\ 里有几十个 exe/dll, **每一个都
-              #   spawn 一次 winldd (PrintDeps.exe), 而且是 Promise.all 全并发**。
-              #   4 核 Windows VM + Defender 实时扫描, 整段**零输出** —— 正好对上
-              #   "进度条 100% 之后静默 30 分钟"。
-              #
-              #   这个校验对我们毫无意义: 我们只是把浏览器打成 tar 给员工机用,
-              #   在 CI 机器上校验宿主依赖跟目标机没有任何关系。
-              #
-              #   playwright 自己提供了开关, 而且**跳过时会往 stderr 打一行**
-              #   ("Skipping host requirements validation logic because ...") ——
-              #   下次看日志能直接确认它有没有生效, 不用再猜。
-              $env:PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = '1'
-              # 关掉靠 \r 重画的动画进度条, 改逐行输出 (上一版加的, 留着)
-              $env:CI = '1'
-              Write-Host "----- dry-run: 它准备装什么 / 装到哪 -----"
-              npx --yes playwright install chromium --dry-run
-              Write-Host "----- 实际安装 -----"
-              npx --yes playwright install chromium
-              if ($LASTEXITCODE -ne 0) {
-                throw "npx playwright install chromium failed (exit=$LASTEXITCODE)"
+              Write-Host "===== 1/3 dry-run: 问 playwright 要下载地址和安装位置 ====="
+              # 不能加 2>&1 —— PowerShell 会把 native stderr 转成 ErrorRecord, 配
+              # $ErrorActionPreference='Stop' 会当场抛。npx 那条 WARNING 走 stderr,
+              # 让它直接进 CI 日志就好。
+              $dry = @(npx --yes playwright install chromium --dry-run)
+              if ($LASTEXITCODE -ne 0) { throw "playwright install --dry-run 失败 (exit=$LASTEXITCODE)" }
+              $dry | ForEach-Object { Write-Host $_ }
+
+              # program.js:161-167 的输出格式:
+              #     <title>
+              #       Install location:    <dir>
+              #       Download url:        <url>
+              #       Download fallback 1: <url>
+              $targets = @()
+              $loc = $null
+              foreach ($line in $dry) {
+                if ($line -match '^\s*Install location:\s*(.+?)\s*$') { $loc = $Matches[1]; continue }
+                if ($line -match '^\s*Download url:\s*(\S+)\s*$') {
+                  if ($loc) {
+                    $targets += [pscustomobject]@{ Dir = $loc; Url = $Matches[1] }
+                    $loc = $null
+                  }
+                }
               }
-              Write-Host "----- install 返回了 (说明没卡在这) -----"
+              if ($targets.Count -eq 0) {
+                throw "没能从 dry-run 输出里解析出任何下载目标 —— playwright 的输出格式变了? 见上面的原始输出。"
+              }
+
+              # 只要 chromium* (跟下面 tar 那步的 glob 同一个判据)
+              $targets = @($targets | Where-Object { (Split-Path $_.Dir -Leaf) -like 'chromium*' })
+              if ($targets.Count -eq 0) {
+                throw "解析到目标但没有 chromium* —— 目录命名变了?"
+              }
             } finally {
               Pop-Location
             }
+
+            $pwRoot = "$env:LOCALAPPDATA\ms-playwright"
+            foreach ($t in $targets) {
+              # 装到别处的话下面打包那步会扑空, 早点炸掉比打出一个空 tar 强
+              if (-not $t.Dir.StartsWith($pwRoot, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "安装位置不在 $pwRoot 下: $($t.Dir) —— PLAYWRIGHT_BROWSERS_PATH 被设了?"
+              }
+            }
+
+            Write-Host "===== 2/3 下载 + 解压 ($($targets.Count) 个) ====="
+            foreach ($t in $targets) {
+              $name   = Split-Path $t.Dir -Leaf
+              $marker = Join-Path $t.Dir 'INSTALLATION_COMPLETE'
+              if (Test-Path $marker) { Write-Host "  [$name] 已存在, 跳过"; continue }
+
+              $zip = Join-Path $env:TEMP "$name.zip"
+              if (Test-Path $zip) { Remove-Item -Force $zip }
+
+              Write-Host "  [$name] 下载 $($t.Url)"
+              $sw = [Diagnostics.Stopwatch]::StartNew()
+              # curl.exe 而不是 curl —— PowerShell 里 curl 是 Invoke-WebRequest 的别名。
+              # --fail: HTTP 4xx/5xx 直接非 0 退出, 不会把一段 HTML 错误页存成 zip。
+              # --max-time 1200: 卡住的话 20 分钟自己死, 不再让 CircleCI 的超时来收尸。
+              curl.exe -L --fail --retry 3 --retry-delay 5 --connect-timeout 30 --max-time 1200 -o $zip $t.Url
+              if ($LASTEXITCODE -ne 0) { throw "[$name] 下载失败 (curl exit=$LASTEXITCODE)" }
+              $zipMB = [math]::Round((Get-Item $zip).Length / 1MB, 1)
+              Write-Host "  [$name] 下载完成 $zipMB MB / $([int]$sw.Elapsed.TotalSeconds)s"
+
+              # 解压前先清干净 —— 对齐 oopDownloadBrowserMain.js:102 的 removeFolders
+              if (Test-Path $t.Dir) { Remove-Item -Recurse -Force $t.Dir }
+              New-Item -ItemType Directory -Force -Path $t.Dir | Out-Null
+
+              Write-Host "  [$name] 解压 -> $($t.Dir)"
+              $sw.Restart()
+              # tar.exe = bsdtar (libarchive), Windows 10 1803+ / Server 2019+ 自带, 认 zip。
+              # 我没有 Windows 能实测 bsdtar 对这个 zip 的兼容性, 所以**不赌** —— 失败就
+              # 退回 Expand-Archive (.NET, 慢但一定有)。两条都留着比只押一条稳。
+              $unpacked = $false
+              try {
+                tar.exe -xf $zip -C $t.Dir
+                if ($LASTEXITCODE -eq 0) { $unpacked = $true }
+                else { Write-Host "  [$name] tar.exe exit=$LASTEXITCODE, 退回 Expand-Archive" }
+              } catch {
+                Write-Host "  [$name] tar.exe 不可用 ($($_.Exception.Message)), 退回 Expand-Archive"
+              }
+              if (-not $unpacked) {
+                Expand-Archive -Path $zip -DestinationPath $t.Dir -Force
+              }
+              $files = @(Get-ChildItem -Recurse -File $t.Dir)
+              $outMB = [math]::Round((($files | Measure-Object Length -Sum).Sum) / 1MB, 1)
+              Write-Host "  [$name] 解压完成 $($files.Count) 个文件 / $outMB MB / $([int]$sw.Elapsed.TotalSeconds)s"
+              # 光数文件数不够: 解压层级摆错 (多一层 / 少一层) 时文件数照样对, 但员工机上
+              # playwright 的 executablePathOrDie 会 canAccessFile 失败 —— 那时候才发现就晚了。
+              # 这里直接确认真有 .exe 落地。
+              $exes = @($files | Where-Object { $_.Extension -eq '.exe' })
+              if ($exes.Count -eq 0) {
+                throw "[$name] 解压后一个 .exe 都没有 (共 $($files.Count) 个文件) —— zip 坏了或解压层级不对"
+              }
+
+              # index.js:1275 —— 没有这个 marker, 下次谁跑 playwright install 都会把
+              # 这个目录当"没装完的残骸"删掉。内容是空的, 存在与否才是信号。
+              New-Item -ItemType File -Force -Path $marker | Out-Null
+              Remove-Item -Force $zip
+            }
+            Write-Host "===== 3/3 装完了 (走到这说明没卡在下载/解压) ====="
             # 找装到哪 (通常 %LOCALAPPDATA%\ms-playwright\chromium-<num>\)
             $pwCacheDir = "$env:LOCALAPPDATA\ms-playwright"
             if (-not (Test-Path $pwCacheDir)) {
