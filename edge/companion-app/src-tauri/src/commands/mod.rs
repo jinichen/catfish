@@ -38,6 +38,12 @@ pub mod file_parse;
 pub mod gateway;
 pub mod health;
 pub mod hermes; // P3.5.125 (6/26 鸿波 catch): hermes hang 监控 + 自动重启
+pub mod hermes_install_artifacts; // 离线安装包定位 (8/15 从 hermes_install 切出)
+pub mod hermes_install_base;      // 常量 + 进度上报 + pinned 版本 (8/15 切出, 是其余几层的地基)
+pub mod hermes_install_health;    // 版本解析 + 健康检查 (8/15 切出)
+pub mod hermes_install_recover;   // 中断事务恢复 + 装机锁 (8/15 切出)
+pub mod hermes_install_state;     // 落盘状态 + 原子写 (8/15 切出)
+pub mod hermes_install_steps;     // 装机各步骤 (8/15 切出)
 pub mod hermes_install; // 7/15 BL-CATFISH-MAC-OFFLINE-INSTALL: mac dmg 首启装 hermes-agent 本体 (offline install.sh + 4 artifacts)
 pub mod hermes_memory; // BL-DASHBOARD-HERMES-MEMORY-CARD (5/16)
 pub mod hermes_plugin_env; // 8/9: 从 hermes_plugin 抽出 —— ~/.hermes/.env 的 API_SERVER_KEY 维护

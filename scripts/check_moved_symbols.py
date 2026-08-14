@@ -28,6 +28,11 @@ from pathlib import Path
 ATTR={"derive","cfg","not","pub","target_os","test","serde","ignore","allow","warn","deny",
       "doc","crate","unix","windows","macos","feature","tauri","command","rename_all","default"}
 STD={"format","println","vec","write","matches","assert","assert_eq","panic","min","max"}
+# Rust 关键字 —— `for (a, b) in`、`if let ... (`、`match (x)` 都会被"标识符 + ("
+# 的正则当成函数调用。2026-08-15 重写脚本时把这张表弄丢了, 于是每个文件都报
+# for/let/return, 噪音盖过真问题 (hermes_pinned_tag 那条真漏报差点被淹掉)。
+KW={"if","for","while","match","fn","let","return","self","move","loop","else","impl",
+    "as","in","where","dyn","ref","mut","true","false","unsafe","break","continue","yield"}
 def scan(f):
     L=Path(f).read_text(encoding="utf-8").splitlines()
     body=[]; inraw=False
@@ -41,11 +46,20 @@ def scan(f):
         body.append(re.sub(r'//.*$','',re.sub(r'"(\\.|[^"\\\n])*"','""',l)))
     txt="\n".join(body)
     local=set(re.findall(r'(?:^|\s)fn (\w+)',txt))|set(re.findall(r'(?:struct|enum|const|static) (\w+)',txt))
-    imported=set()
+    # use 语句可能跨多行 (rustfmt 会把长的 {..} 拆开), 必须先拼起来再取名字。
+    # 只看 "use " 开头的那一行会漏掉续行里的名字, 于是报一堆假的"没导入"。
+    imported=set(); acc=None
     for l in L:
-        if l.strip().startswith("use "): imported|=set(re.findall(r'\b(\w+)\b',l))
+        s=l.strip()
+        if acc is not None:
+            acc+=" "+s
+            if s.endswith(";"): imported|=set(re.findall(r'\b(\w+)\b',acc)); acc=None
+            continue
+        if s.startswith("use "):
+            if s.endswith(";"): imported|=set(re.findall(r'\b(\w+)\b',s))
+            else: acc=s
     calls={m.group(1) for m in re.finditer(r'(?<![.\w:])([a-z_][a-z0-9_]*)\s*\(',txt)}
-    return sorted(c for c in calls if c not in local|imported|ATTR|STD
+    return sorted(c for c in calls if c not in local|imported|ATTR|STD|KW
                   and not re.search(rf'\b{c}!',txt) and not re.search(rf'\.\s*{c}\s*\(',txt))
 bad=0
 for f in sys.argv[1:]:
