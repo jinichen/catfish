@@ -2568,8 +2568,11 @@ async def _stream_chat_completion(
         _too_long = check_context_fits(prompt_estimate, model)
         if _too_long:
             raise HTTPException(status_code=413, detail=_too_long)
+        # attempts_out=attempts_log: 让 with_fallback 原地填, 这样**抛异常时**
+        # 下面 except 里也拿得到试过谁 (返回值那条路在 raise 时走不到)。
         (iterator, first_chunk), used_model, attempts_log = await with_fallback(
             config, model, _start_stream, prompt_estimate=prompt_estimate,
+            attempts_out=attempts_log,
         )
         # 首 chunk 拿到 = 上游开始往外吐数据. 这就是 TTFT (time-to-first-token).
         # 注: 如果走了 fallback, 这里记的是"最终成功那个模型的 TTFT", 不算前面失败模型的等待.
@@ -2757,7 +2760,11 @@ async def _stream_chat_completion(
         _reset = _localize_reset_hint(err)
         logger.exception(
             "streaming chat completion failed (attempts=%s)%s",
-            " -> ".join(attempts_log) if attempts_log else "single",
+            # 8/15: 原来这里是 `if attempts_log else "single"`, 而 attempts_log
+            # 在失败路径上恒为空 (见上面 attempts_out) —— 于是**每一次失败**都打
+            # "single", 不管实际试过几个。现在有真数据了; 还空就说明连主模型
+            # 都没跑起来 (invoke 之前就抛了), 那也照实说。
+            " -> ".join(attempts_log) if attempts_log else "无记录(主模型都没跑起来)",
             f" · {_reset}" if _reset else "",
         )
         # 给客户端一个 friendly 错误 —— 把内部 trace 简化成人话

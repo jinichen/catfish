@@ -560,3 +560,29 @@ async def test_候选真的都试过了才叫全失败(caplog):
         await with_fallback(cfg, a, _boom)
     assert "1 个候选都试过了" in caplog.text, caplog.text
     assert "没有任何候选可试" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_失败时调用方也拿得到试过谁():
+    """attempts 靠返回值传出去, 而失败是 raise 的 —— 那条路走不到。
+
+    8/15 现场: app.py 的日志因此恒打 "attempts=single", 哪怕真试了 3 个模型
+    全挂。恰恰是失败的时候最需要知道试过谁。
+    """
+    b = _model("b", fallback=_fb(chain=[]))
+    a = _model("a", fallback=_fb(chain=["b"]))
+    cfg = _config(a, b)
+    got: list[str] = []
+    with pytest.raises(_RateLimit):
+        await with_fallback(cfg, a, _boom, attempts_out=got)
+    assert got == ["a=err:_RateLimit", "b=err:_RateLimit"], got
+
+
+@pytest.mark.asyncio
+async def test_成功时返回值和_attempts_out_是同一份():
+    async def ok(_m):
+        return "done"
+    a = _model("a", fallback=_fb(chain=[]))
+    got: list[str] = []
+    _r, _m, returned = await with_fallback(_config(a), a, ok, attempts_out=got)
+    assert returned is got and got == ["a=ok"], (returned, got)

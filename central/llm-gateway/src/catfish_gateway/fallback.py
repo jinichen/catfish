@@ -460,6 +460,7 @@ async def with_fallback(
     primary: ModelConfig,
     invoke_one,  # async (model: ModelConfig) -> Any
     prompt_estimate: int = 0,  # BL-FALLBACK-PROMPT-CAP (5/14): caller 传的 prompt 估算
+    attempts_out: list[str] | None = None,
 ) -> tuple[Any, ModelConfig, list[str]]:
     """跑 primary, 失败按 chain 重试。
 
@@ -481,7 +482,14 @@ async def with_fallback(
     全失败:
         抛最后一次异常 (最新错最有诊断价值)
     """
-    attempts: list[str] = []  # 记录尝试过的 model name + 错误概述
+    # 记录尝试过的 model name + 错误概述。
+    #
+    # 8/15: 加 attempts_out 是因为这份记录**只在成功时到得了调用方** ——
+    # 它靠返回值传出去, 而失败时我们是 raise 的, 那次赋值根本不执行。
+    # 于是 app.py 那边 attempts_log 永远是初始的空列表, 日志里恒打
+    # "attempts=single" —— 哪怕真试了 3 个模型全挂, 打的还是 single。
+    # 恰恰是失败的时候最需要知道试过谁。传个列表进来原地填, 异常路径上也在。
+    attempts: list[str] = attempts_out if attempts_out is not None else []
 
     # BL-FALLBACK-TOGGLE: env override 高于 yaml. 默认 False (不 fallback).
     import os  # noqa: PLC0415
