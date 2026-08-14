@@ -490,10 +490,34 @@ jobs:
               #   playwright 的 CLI, commander 直接 `error: unknown option` 退 1。
               #   8/14 撞的: 前面几步一修好, 流水线走到这里当场挂。
               #   playwright install 没有 loglevel 这类开关, 想安静就靠外面的重定向。
-              npx --yes playwright install chromium 2>&1
+              # ⚠ 8/14 第二次挂: 进度条走到 100% 之后**静默 30 分钟**被超时杀掉。
+              #    172MB 解压成 350MB 再慢也就一两分钟 —— 这是卡死, 不是慢。
+              #
+              #    我没有 Windows 能复现, 所以下面不是"已定位的修复", 是**去掉已知
+              #    危险面 + 让下次看得见**:
+              #
+              #    · CI=1 —— playwright 认这个变量, 关掉动画进度条改成逐行输出。
+              #      那个进度条是靠 \r 反复重画的, 跟 PowerShell 的 `2>&1`
+              #      (把 native stderr 转成 ErrorRecord 对象) 叠在一起, 是这类
+              #      "卡在 100%" 最常见的组合。
+              #    · 去掉 `2>&1` —— 没有它 stderr 直接进 CI 日志, 少一层转换。
+              #      (原来加它是想收集输出, 但 CircleCI 本来就抓 stderr。)
+              #    · 先跑 --dry-run —— 秒回, 会打印它准备下什么、装到哪。
+              #      下次再卡, 日志里至少有"它以为自己要干什么"。
+              #
+              #    这一步是 6411320 新加的, **从来没成功跑通过一次**。如果这次还挂,
+              #    下一步该考虑的是绕开 npx: 直接 Invoke-WebRequest 拉 CfT zip
+              #    (URL 就在日志里) 自己解压摆位, 或者干脆先不打包 chromium。
+              $env:CI = '1'
+              $env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = '0'
+              Write-Host "----- dry-run: 它准备装什么 / 装到哪 -----"
+              npx --yes playwright install chromium --dry-run
+              Write-Host "----- 实际安装 -----"
+              npx --yes playwright install chromium
               if ($LASTEXITCODE -ne 0) {
                 throw "npx playwright install chromium failed (exit=$LASTEXITCODE)"
               }
+              Write-Host "----- install 返回了 (说明没卡在这) -----"
             } finally {
               Pop-Location
             }
