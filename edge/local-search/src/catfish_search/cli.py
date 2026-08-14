@@ -33,6 +33,12 @@ def cmd_index(args) -> int:
         print("没有可索引的目录。请检查 ~/.catfish/search-scope.yaml")
         return 1
 
+    # ⚠ 留住**没被 --only 改窄**的那份配置, 给收尾的 cleanup 用。
+    #    下面 --only 分支会把 cfg.include 换成单个根; 拿那份去 cleanup_missing,
+    #    它会把"不在这一个根下面"的条目全判成越界删掉 —— 也就是清空其它所有
+    #    目录的索引。这个坑很安静: 员工加个新目录, 别的目录数据就没了。
+    full_cfg = cfg
+
     # BL-SEARCH-NO-BOOTSTRAP (7/27): --only 只索引某一个已配置的根。
     # Companion 在员工刚加完目录时调它 —— 只补这一个，不用整库重扫。
     only = getattr(args, "only", None)
@@ -80,6 +86,30 @@ def cmd_index(args) -> int:
     if stats["failed"]:
         line += f" / 抽不出文本 {stats['failed']}"
     print(f"{line}  耗时 {stats['duration_sec']}s")
+
+    # ── 收尾: 把不该留的清掉 (8/14) ──────────────────────────────
+    #
+    # 为什么加在这儿: Companion 那张"搜索范围"卡的文案写着
+    #
+    #     「改了 exclude / file_types 或**想清掉旧数据**, 点右边"重建索引"」
+    #
+    # 而"重建索引"按钮走的是 `index`, 从来不调 cleanup —— cleanup_missing 只有
+    # `clean` 子命令能触发, 而前端只在**删目录**时才调它 (LocalSearchScopeCard
+    # 的 onRemove)。**文案承诺的事按钮没做。**
+    #
+    # 后果实测: 鸿波库里 10,517 条有 6,792 条在声明范围之外 —— 整个
+    # ~/person_task/catfish 源码仓 + ~/Downloads 里的合同发票。全是 7/27
+    # BL-SEARCH-STALE-SCOPE 修好**之前**留下的, 之后没有任何路径会清掉它们:
+    # 员工早就在面板上删过那些目录了, 而删的时候那次修复还没上线。
+    #
+    # 于是 UI 说"只索引这 3 个目录", 实际搜索和 style_fingerprint 语料里
+    # 一直混着那 6,792 条。索引范围是员工的知情同意边界, 不该靠他记得再点一次
+    # 某个别的按钮。
+    #
+    # 用 full_cfg 不用 cfg —— 见函数开头那段。
+    removed = cleanup_missing(full_cfg)
+    if removed:
+        print(f"顺带清掉 {removed} 条不该留的 (文件已删 / 命中 exclude / 不在索引范围内)")
 
     _report_per_root(stats)
     return 0
