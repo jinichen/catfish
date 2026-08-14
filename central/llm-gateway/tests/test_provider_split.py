@@ -194,110 +194,41 @@ def test_param_overrides_跟着模型走(monkeypatch):
     assert ModelConfig.model_validate(out).upstream.param_overrides == {"temperature": 1.0}
 
 
-# ── 端到端: 7 个老模型 → 5 个供应商 (沙箱无 PG, 用内存假库) ──────────────
+# ── 端到端迁移的四条, 2026-08-15 删了 ────────────────────────────────
 #
-# 真正的 SQL 要在有库的环境验 (同 model_store 的做法)。这里验的是**去重和
-# 回写的决策逻辑** —— 那才是容易写错、且错了会静默的部分:
-#   · 去重键选错 → 三个内网端点合成一个, 视觉模型被打到主力模型的地址上
-#   · timeout 漏搬 → 视觉模型从 180s 掉回 60s, 长图必超时
-#   · 重复跑不幂等 → 每次重启多出一批 dashscope-2 / dashscope-3
-
-
-@pytest.fixture()
-def fake_db(monkeypatch):
-    import sys
-
-    sys.path.insert(0, "/tmp")
-    import fakepg
-
-    from catfish_gateway import provider_store as PS
-
-    models = {
-        n: _model(n, dict(up)) for n, up in REAL_UPSTREAMS.items()
-    }
-    Conn, providers = fakepg.make(models)
-    monkeypatch.setattr(PS, "is_enabled", lambda: True)
-    monkeypatch.setattr(PS, "_conn", lambda: Conn())
-    monkeypatch.setattr(PS, "_bump_revision", lambda cur: None)
-    return PS, models, providers
-
-
-def test_七个模型拆成六个供应商(fake_db):
-    PS, models, providers = fake_db
-    created = PS.migrate_models_to_providers()
-
-    assert len(providers) == 6, f"应该去重成 6 家, 实际 {sorted(providers)}"
-    assert sorted(created) == sorted(providers)
-    # 两个 gemini 指向同一家
-    assert (
-        models["catfish-public-gemini-pro"]["upstream"]["provider"]
-        == models["catfish-public-gemini-flash"]["upstream"]["provider"]
-    )
-    # 三个内网各自一家 (端点不同)
-    internal = {
-        models[n]["upstream"]["provider"]
-        for n in ("catfish-private-main", "catfish-private-vision", "catfish-private-embed")
-    }
-    assert len(internal) == 3
-
-
-def test_迁移后每个模型的_upstream_仍逐字段相同(fake_db, monkeypatch):
-    """整件事的要害。拆完之后 gateway 拿到的东西必须跟拆之前一模一样。"""
-    monkeypatch.setenv("INTERNAL_LLM_KEY", "k-internal")
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "k-dash")
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "k-deep")
-    monkeypatch.setenv("GEMINI_API_KEY", "k-gem")
-
-    PS, models, providers = fake_db
-    before = {
-        n: ModelConfig.model_validate(_model(n, up)).upstream
-        for n, up in REAL_UPSTREAMS.items()
-    }
-    PS.migrate_models_to_providers()
-
-    for n, row in models.items():
-        merged, err = merge_provider(row, providers)
-        assert err is None, f"{n}: {err}"
-        after = ModelConfig.model_validate(merged).upstream
-        for f in FIELDS:
-            assert getattr(after, f) == getattr(before[n], f), f"{n}.{f} 变了"
-
-
-def test_重复跑不会建出重复供应商(fake_db):
-    """4 个 worker 每次启动都会跑。不幂等的话每次重启多出一批 dashscope-2。"""
-    PS, models, providers = fake_db
-    PS.migrate_models_to_providers()
-    n1 = len(providers)
-    snapshot = {k: dict(v) for k, v in models.items()}
-
-    assert PS.migrate_models_to_providers() == [], "第二次不该再建"
-    assert len(providers) == n1
-    assert models == snapshot, "第二次不该再改模型"
-
-
-def test_共用一家但_timeout_不同的两个模型_都不能被改掉(fake_db):
-    """迁移里最容易写错、而且**完全静默**的一处。
-
-    gemini-pro timeout 90 / gemini-flash timeout 60, 两个共用 gemini 这一家。
-
-    第一版代码判断"模型的 timeout 要不要单独保留"时, 拿的是**当前模型重新
-    算出来的** prow.timeout —— 那永远等于它自己, 结论永远是"相同, 可以省掉",
-    于是 flash 的 60 被省掉、落到供应商的 90 上。
-
-    表现: 一个本该 60 秒超时的快模型变成 90 秒。配置上看不出少了什么,
-    日志里也没有任何东西 —— 只有员工感觉"这个快模型怎么卡这么久"。
-    """
-    PS, models, providers = fake_db
-    PS.migrate_models_to_providers()
-
-    pro = models["catfish-public-gemini-pro"]["upstream"]
-    flash = models["catfish-public-gemini-flash"]["upstream"]
-    assert pro["provider"] == flash["provider"], "前提: 两个共用一家"
-
-    pid = pro["provider"]
-    # 至少有一个模型必须显式带着自己的 timeout, 否则必然有一个被改掉
-    assert pro.get("timeout", providers[pid]["timeout"]) == 90
-    assert flash.get("timeout", providers[pid]["timeout"]) == 60
+# 原来这里有 4 条走内存假库的端到端测试 (七个模型拆成六家 / 迁移前后 upstream
+# 逐字段相同 / 重复跑不建重复 / 共用一家但 timeout 不同各自保留)。
+#
+# 删的理由不是"只是测试", 是**它们从来没跑过, 而且已被更好的一份覆盖**:
+#
+#   1. fixture 写的是 `sys.path.insert(0, "/tmp"); import fakepg`, 而 fakepg
+#      从来不在仓库里 (git ls-files 查无此物)。只有当年那台机器上手工建过
+#      /tmp/fakepg.py 才跑得起来, 而 macOS 的 /tmp 还会被清理。
+#      实际表现: 从 7/31 引入那天起, 每次跑测试都是 4 个 ERROR。
+#
+#   2. 隔一天 (8/1) 就有了 test_provider_split_real_pg.py, 用**真 PG 跑真 SQL**
+#      逐条覆盖同样这四个场景, 名字几乎一样:
+#          七个模型拆成六个供应商         → 同名
+#          重复跑不会建出重复供应商       → 重复跑迁移不会建出重复供应商
+#          共用一家但 timeout 不同…       → 共用一家供应商但timeout不同…
+#          迁移后每个模型的 upstream 仍…  → 拆分前后每个模型的有效配置逐一相同
+#      而且多验了内存假库根本验不到的两件事: 整段 SQL 的 JSONB 读写, 以及
+#      界面保存一次再读回来 provider 还在不在 (pydantic 会静默丢未声明字段)。
+#
+# 也就是说这 4 条既没在跑, 也没有独有的断言 —— 留着只是每次测试多 4 个 ERROR。
+#
+# 真 PG 那份在 CI 里是**真跑的**: .github/workflows/ci.yml 的 gateway-real-pg
+# job 起 postgres:16-alpine + alembic upgrade head 专跑这个文件, 挂在 ci-pass
+# 的 needs 里, 后面还有一道防假绿的闸 (跑完 grep "N passed", 服务没起来导致
+# 整体 skip 时 ::error:: 退出)。所以删这四条不留洞。
+#
+# (8/15 记一笔: 我第一版在这里写的是"CI 是纯 Windows 打包流水线, 一条 pytest
+#  都不跑, 迁移逻辑零覆盖" —— 假的。我只看了 .circleci/config.yml, 没看
+#  .github/workflows/。搜索范围比真事窄, 结论却说得很肯定。)
+#
+# 本机跑真 PG 那份:
+#   export CATFISH_TEST_PG_URL=...; alembic upgrade head
+#   pytest tests/test_provider_split_real_pg.py -v
 
 
 # ── 第三步: 存库的 key 在组装时解密 (DESIGN §5.2) ────────────────────
