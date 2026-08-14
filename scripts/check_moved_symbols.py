@@ -283,10 +283,62 @@ def scan_dead_imports(files):
         if dead: out.append(f"{f}: 死 import {sorted(set(dead))}")
     return out
 
+def scan_test_only_imports(files):
+    """顶层 use 引进来的名字, 只在 #[cfg(test)] 块里被用到。
+
+    非测试编译时那些块被 cfg 掉, 这条 import 就成了 unused 警告。
+    而 `cargo test` 是绿的 —— 又一次"绿了不等于没问题"。
+
+    2026-08-15 拆 autostart.rs 时中招: autostart_mcp.rs 顶上写了
+    `use super::autostart_deps::find_agent_browser;`, 而 find_agent_browser
+    唯一的调用点在 mcp_autofix_tests 里。
+    拆 hermes_install.rs 时明明已经处理过同一件事 (把测试专属 import 放进
+    mod tests), 这次没应用, 因为规划脚本把测试块整个算进了目标模块, 没区分
+    "只有测试在用"。
+
+    修法: 把这条 use 挪进 mod tests 内部。注意 mod 里的 super 差一层,
+    要写 crate::…, 见 scan_super_depth。
+    """
+    out=[]
+    for f in files:
+        L=Path(f).read_text(encoding="utf-8").splitlines()
+        # cfg(test) 块的行号范围 (花括号配对)
+        tl=set()
+        for i,l in enumerate(L):
+            if re.match(r'\s*#\[cfg\((all\()?test',l):
+                depth=0; started=False
+                for j in range(i,len(L)):
+                    depth+=L[j].count("{")-L[j].count("}")
+                    if "{" in L[j]: started=True
+                    if started and depth==0: tl|=set(range(i,j+1)); break
+        if not tl: continue
+        tops=[];acc=None
+        for i,l in enumerate(L):
+            if acc is not None:
+                acc+=" "+l.strip()
+                if l.strip().endswith(";"): tops.append(acc); acc=None
+                continue
+            if l.startswith("use "):
+                if l.rstrip().endswith(";"): tops.append(l.strip())
+                else: acc=l.strip()
+        clean=lambda s: re.sub(r'//.*$','',re.sub(r'"(\\.|[^"\\\n])*"','""',s))
+        prod="\n".join(clean(l) for i,l in enumerate(L)
+                       if i not in tl and not l.startswith("use "))
+        test="\n".join(clean(L[i]) for i in sorted(tl))
+        for u in tops:
+            g=re.findall(r'\{(.*)\}',u)
+            names=re.findall(r'\b(\w+)\b',g[0]) if g else [u.rstrip(";").split("::")[-1].strip()]
+            for nm in names:
+                if nm in ("self","crate","super","use","std","serde","tauri"): continue
+                pat=rf'(?<!::)\b{nm}\b'
+                if not re.search(pat,prod) and re.search(pat,test):
+                    out.append(f"{f}: {nm} 只在 #[cfg(test)] 里用, 但 use 写在文件顶层")
+    return out
+
 bad=0
 for f in sys.argv[1:]:
     m=scan(f)
     if m: bad+=1; print(f"  ❌ {f}: 可能没导入 → {m}")
-for w in scan_members(sys.argv[1:])+scan_signatures(sys.argv[1:])+scan_super_depth(sys.argv[1:])+scan_module_prefixes(sys.argv[1:])+scan_dead_imports(sys.argv[1:]):
+for w in scan_members(sys.argv[1:])+scan_signatures(sys.argv[1:])+scan_super_depth(sys.argv[1:])+scan_module_prefixes(sys.argv[1:])+scan_dead_imports(sys.argv[1:])+scan_test_only_imports(sys.argv[1:]):
     bad+=1; print("  ❌ "+w.strip())
 print(f"\n可疑 {bad} 个" if bad else f"\n✓ {len(sys.argv)-1} 个文件, 未发现缺失的跨文件引用")

@@ -9,8 +9,6 @@
 
 use crate::services::catfish_paths;
 
-use super::autostart_deps::find_agent_browser;
-
 // ============================================================
 // hermes config 自愈 (7/27 鸿波实盘挖出来的两个坑)
 //   BL-MCP-CATFISH-TOOLS-MISSING —— catfish 工具对 LLM 全程不可见
@@ -277,6 +275,11 @@ fn patch_hermes_config(
 #[cfg(test)]
 mod mcp_autofix_tests {
     use super::*;
+    // find_agent_browser 只有测试在用 —— 放文件顶上的话, 非测试编译时
+    // mcp_autofix_tests 被 cfg 掉, 它就成了一条 unused import 警告。
+    // ⚠ 这里得写 crate::services::, 不能写 super:: —— mod 内部的 super
+    // 指的是 autostart_mcp 本身, 差一层。
+    use crate::services::autostart_deps::find_agent_browser;
 
     /// 鸿波 7/27 的真实 config.yaml 形态 (零注释, 无 mcp_servers 段)
     const REAL_CONFIG: &str = r#"model:
