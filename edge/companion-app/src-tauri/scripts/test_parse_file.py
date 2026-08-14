@@ -272,11 +272,28 @@ def test_audio_video_in_full_text_extractors() -> None:
     assert pf._FULL_TEXT_EXTRACTORS["video"] is pf.extract_full_text_audio
 
 
+# ⚠ 下面三条必须打桩 **parse_file_audio**, 不是 parse_file。
+#
+# 5/21 把 audio 解析抽到 parse_file_audio.py 之后, parse_file.py 只是
+# `from parse_file_audio import _find_executable, _transcribe_audio_to_text`。
+# `from X import name` 建的是**新绑定不是别名** —— _transcribe_audio_to_text
+# 跑在 parse_file_audio 里, 它查的是自己模块的全局, 打桩 parse_file 那份
+# 完全打不到。
+#
+# 后果不是"测试失败", 是**测试变成在测这台机器装了什么**:
+#     missing_ffmpeg  只在真没装 ffmpeg 的机器上过
+#     missing_whisper 只在装了 ffmpeg、没装 whisper 的机器上过
+#     missing_model   只在两个都装了、模型没下的机器上过
+# 三条互相排斥, 任何一台机器上至少两条是红的。而这个文件不在 CI 里,
+# 所以从 5/21 拆分那天起就没人看见过。(2026-08-15 修)
+
+
 def test_transcribe_missing_ffmpeg_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """ffmpeg 没装时报清楚错, 让员工知道装啥"""
     sys.path.insert(0, str(THIS.parent))
     import parse_file as pf
-    monkeypatch.setattr(pf, "_find_executable", lambda name: None)
+    import parse_file_audio as pfa
+    monkeypatch.setattr(pfa, "_find_executable", lambda name: None)
     with pytest.raises(RuntimeError, match=r"ffmpeg"):
         pf._transcribe_audio_to_text(Path("/tmp/fake.mp3"))
 
@@ -285,11 +302,12 @@ def test_transcribe_missing_whisper_raises_clear_error(monkeypatch: pytest.Monke
     """ffmpeg 装了但 whisper-cli 没装"""
     sys.path.insert(0, str(THIS.parent))
     import parse_file as pf
+    import parse_file_audio as pfa
 
     def fake_which(name: str) -> str | None:
         return "/usr/bin/ffmpeg" if name == "ffmpeg" else None
 
-    monkeypatch.setattr(pf, "_find_executable", fake_which)
+    monkeypatch.setattr(pfa, "_find_executable", fake_which)
     with pytest.raises(RuntimeError, match=r"whisper-cli"):
         pf._transcribe_audio_to_text(Path("/tmp/fake.mp3"))
 
@@ -300,11 +318,12 @@ def test_transcribe_missing_model_raises_clear_error(
     """ffmpeg + whisper-cli 都装了, 但模型没下载"""
     sys.path.insert(0, str(THIS.parent))
     import parse_file as pf
+    import parse_file_audio as pfa
 
     def fake_which(name: str) -> str | None:
         return f"/usr/bin/{name}"
 
-    monkeypatch.setattr(pf, "_find_executable", fake_which)
+    monkeypatch.setattr(pfa, "_find_executable", fake_which)
     # 把 whisper 模型路径指到一个空 tmpdir
     monkeypatch.setattr(pf.Path, "home", lambda: tmp_path)
     with pytest.raises(RuntimeError, match=r"whisper.*模型"):
