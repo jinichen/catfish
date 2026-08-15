@@ -119,14 +119,26 @@ def test_sentinel_literal_appears_only_in_the_constant():
     第二次出现 = 又一个"只改了一处"的机会。注释里出现不算, 所以这里只扫
     非注释行。
     """
-    src = Path(app_module.__file__).read_text(encoding="utf-8")
-    code_lines = [
-        ln for ln in src.splitlines()
-        if not ln.lstrip().startswith(("#", "#:"))
-    ]
-    hits = [ln.strip() for ln in code_lines if '"catfish-auto"' in ln]
-    assert len(hits) == 1, f"sentinel 字面量散落在多处, 该用 AUTO_MODEL_SENTINEL: {hits}"
-    assert hits[0].startswith("AUTO_MODEL_SENTINEL ="), hits[0]
+    # 8/15: 判据从"只扫 app.py"改成"扫常量所在的整个包"。
+    #
+    # 那天 AUTO_MODEL_SENTINEL 跟 _resolve_auto_sentinel 一起搬去了
+    # llm_params.py, app.py 里就一次都不出现了 —— 老断言 len(hits)==1 反而红,
+    # 而它要守的规矩 (字面量只能有一处, 别再散落) 一个字没变。
+    #
+    # 扫整个 src/catfish_gateway/ 比原来只扫一个文件**更严**: 常量搬到哪都行,
+    # 但全包范围内仍然只准出现一次。
+    pkg = Path(app_module.__file__).parent
+    hits = []
+    for f in sorted(pkg.glob("*.py")):
+        for ln in f.read_text(encoding="utf-8").splitlines():
+            if not ln.lstrip().startswith(("#", "#:")) and '"catfish-auto"' in ln:
+                hits.append((f.name, ln.strip()))
+    assert len(hits) == 1, (
+        f"sentinel 字面量散落在多处, 该用 AUTO_MODEL_SENTINEL: {hits}"
+    )
+    # 唯一那处必须**就是常量定义**, 不是碰巧写在别处的字面量。
+    _where, _line = hits[0]
+    assert _line.startswith("AUTO_MODEL_SENTINEL ="), f"{_where}: {_line}"
 
 
 # ── 跨仓一致性 ──────────────────────────────────────────────────
