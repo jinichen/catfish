@@ -34,8 +34,11 @@ SELECT user_email AS 用户, count(*) AS 次数, sum(tokens_total) AS 合计toke
 FROM gateway_audit WHERE ts_ms >= $MS
 GROUP BY 1 ORDER BY 3 DESC LIMIT 10;
 
+-- 分钟级分布 (找突发)。8/15: 原来这里硬编码 model LIKE '%qwen%',
+-- 而 qwen 配额一空就全 fallback 到 deepseek, 于是这张表永远是空的 ——
+-- 恰恰在最需要它的时候没数据。不筛模型, 改成把模型列出来。
 SELECT to_char(to_timestamp(ts_ms/1000),'MM-DD HH24:MI') AS 分钟,
-       count(*) AS 次数, sum(tokens_total) AS token
-FROM gateway_audit WHERE ts_ms >= $MS AND model LIKE '%qwen%'
-GROUP BY 1 ORDER BY 3 DESC LIMIT 15;
+       model AS 模型, count(*) AS 次数, sum(tokens_total) AS token
+FROM gateway_audit WHERE ts_ms >= $MS
+GROUP BY 1,2 ORDER BY 4 DESC LIMIT 15;
 SQL
