@@ -71,27 +71,43 @@ def test_prefetch_empty_when_not_initialized(fake_catfish_home, provider):
     assert provider.prefetch("hello") == ""
 
 
-@pytest.mark.xfail(
-    reason=(
-        "C3 (6/6 鸿波 CI matrix audit): product code drift — prefetch 现在含 "
-        "identity bundle 字面字 (SOUL.md / USER.md 注入), 5 个数据源 marker "
-        "断言不再成立. 留 BL 单 audit prefetch 真实行为, 同步 test 期望."
-    )
-)
+# 8/15: 这条从 6/6 起挂着 xfail, 理由是「product code drift ... 留 BL 单 audit
+# prefetch 真实行为, 同步 test 期望」—— 挂了 10 周没人回来处理。现在补上。
+#
+# 原断言错在两处:
+#
+#   1. **判据用裸子串**。断言 `"长期记忆" not in out` 会被静态段里出现的
+#      "长期记忆" 这四个字命中 —— 那是纪律说明里的一句话, 不是数据段。
+#      实测: 空数据时 "长期记忆" ✓ 但它**不在任何段标题里**。
+#      改成按 `## ` 段标题判, 精确到段。
+#
+#   2. **"无数据"的语义变了**。时间感现在是无条件渲染的 (当前日期, 不依赖
+#      session_meta.json), 所以它出现在空数据输出里是对的, 不是 drift。
+#
+# 实测空数据时 prefetch = 5114 字, 六个静态段 + 时间感; 三个真数据段不出现。
+# 下面按这个真实契约重写。
+
+
 def test_prefetch_empty_when_no_data(fake_catfish_home, provider):
-    """init 了但 ~/.catfish/ 全空 → prefetch 只含 memory 写入纪律 (BL-MEMORY-DISCIPLINE 5/24)."""
+    """init 了但 ~/.catfish/ 全空 → 只出静态段 + 时间感, 不出任何数据段。"""
     provider.initialize(session_id="s1")
     out = provider.prefetch("hi")
-    # 不空 (含纪律)
-    assert out, "应该至少返回纪律 section"
-    # 含纪律标志
-    assert "memory 写入纪律" in out
-    # 不含 5 个数据源 marker (这才是"无数据"的真正语义)
-    assert "时间感" not in out
-    assert "长期记忆" not in out
-    assert "长期日记" not in out
-    assert "可用技能" not in out
-    assert "员工反馈" not in out
+    assert out, "应该至少返回静态 section"
+
+    headers = [ln for ln in out.splitlines() if ln.startswith("## ")]
+
+    # 静态段: 不依赖 ~/.catfish 里有没有东西, 永远该在
+    for must in ["员工身份与目的", "catfish memory schema", "memory 写入纪律",
+                 "安全红线", "事实为准", "时间感"]:
+        assert any(must in h for h in headers), f"静态段 {must!r} 不见了; 现有: {headers}"
+
+    # 数据段: 没数据就不该出现。**按段标题判**, 不按裸子串 ——
+    # 这几个词在静态段的正文里也出现, 用 `in out` 会假阳。
+    for must_not in ["员工长期日记", "可用技能", "员工最近反馈",
+                     "战略 / 设计 doc", "员工 wiki 已有", "近期流水"]:
+        assert not any(must_not in h for h in headers), (
+            f"没数据却渲染了 {must_not!r} 段; 现有: {headers}"
+        )
 
 
 def test_prefetch_session_meta(fake_catfish_home, provider):
