@@ -25,6 +25,16 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent))
 
 import catfish  # noqa: E402
+# 8/15: catfish.py 从 1875 行拆成 6 个模块。下面这两个不是"新功能", 是原来
+# 就在 catfish.py 里的两组函数搬了家。
+#
+# 为什么测试必须直接 import 它们、而不是继续走 catfish 的 re-export:
+# monkeypatch 改的是**某一个模块对象上的绑定**, 而函数体查自由变量查的是
+# **定义它的那个模块**的 globals。调用者搬走了, patch 还打在 catfish 上,
+# 就成了打空 —— 不报错, 只是测试从此测的是真货 (真连代理端口、真写
+# ~/.hermes/config.yaml、真发网络请求)。
+import catfish_hermes  # noqa: E402
+import catfish_proxy  # noqa: E402
 
 
 # ─── fixtures ──────────────────────────────────────────────
@@ -192,7 +202,7 @@ def test_patch_hermes_config_updates_api_key(tmp_path, monkeypatch):
     }, allow_unicode=True))
     monkeypatch.setenv("HERMES_CONFIG", str(cfg_path))
 
-    result = catfish._patch_hermes_config("NEW_TOKEN_xyz")
+    result = catfish_hermes._patch_hermes_config("NEW_TOKEN_xyz")
     assert result == "Local (localhost:8999)"
 
     # 验改了
@@ -221,14 +231,14 @@ def test_patch_hermes_config_finds_by_base_url(tmp_path, monkeypatch):
     }))
     monkeypatch.setenv("HERMES_CONFIG", str(cfg_path))
 
-    result = catfish._patch_hermes_config("NEW")
+    result = catfish_hermes._patch_hermes_config("NEW")
     assert result == "MyCatfish"
 
 
 def test_patch_hermes_config_no_file(tmp_path, monkeypatch):
     """hermes config 不存在返 None 不挂"""
     monkeypatch.setenv("HERMES_CONFIG", str(tmp_path / "nope.yaml"))
-    assert catfish._patch_hermes_config("any") is None
+    assert catfish_hermes._patch_hermes_config("any") is None
 
 
 def test_patch_hermes_config_no_custom_providers(tmp_path, monkeypatch):
@@ -237,7 +247,7 @@ def test_patch_hermes_config_no_custom_providers(tmp_path, monkeypatch):
     cfg_path = tmp_path / "hermes.yaml"
     cfg_path.write_text(yaml.safe_dump({"display": {"skin": "mono"}}))
     monkeypatch.setenv("HERMES_CONFIG", str(cfg_path))
-    assert catfish._patch_hermes_config("any") is None
+    assert catfish_hermes._patch_hermes_config("any") is None
 
 
 def test_patch_hermes_config_no_catfish_provider(tmp_path, monkeypatch):
@@ -250,7 +260,7 @@ def test_patch_hermes_config_no_catfish_provider(tmp_path, monkeypatch):
         }
     }))
     monkeypatch.setenv("HERMES_CONFIG", str(cfg_path))
-    assert catfish._patch_hermes_config("new") is None
+    assert catfish_hermes._patch_hermes_config("new") is None
     # 验老的也没动
     cfg = yaml.safe_load(cfg_path.read_text())
     assert cfg["custom_providers"]["Other"]["api_key"] == "x"
@@ -273,7 +283,7 @@ def test_patch_hermes_config_list_format(tmp_path, monkeypatch):
     }))
     monkeypatch.setenv("HERMES_CONFIG", str(cfg_path))
 
-    result = catfish._patch_hermes_config("NEW_TOKEN")
+    result = catfish_hermes._patch_hermes_config("NEW_TOKEN")
     assert result == "Local (localhost:8999)"
 
     new_cfg = yaml.safe_load(cfg_path.read_text())
@@ -307,7 +317,7 @@ def test_patch_hermes_config_also_patches_model_api_key(tmp_path, monkeypatch):
     }))
     monkeypatch.setenv("HERMES_CONFIG", str(cfg_path))
 
-    result = catfish._patch_hermes_config("NEW_TOKEN")
+    result = catfish_hermes._patch_hermes_config("NEW_TOKEN")
     assert result is not None  # 找到 catfish provider
     new_cfg = yaml.safe_load(cfg_path.read_text())
     # 两层都更新
@@ -334,7 +344,7 @@ def test_patch_hermes_config_skips_model_section_for_other_provider(tmp_path, mo
         ],
     }))
     monkeypatch.setenv("HERMES_CONFIG", str(cfg_path))
-    result = catfish._patch_hermes_config("NEW")
+    result = catfish_hermes._patch_hermes_config("NEW")
     assert result is not None
     cfg = yaml.safe_load(cfg_path.read_text())
     assert cfg["model"]["api_key"] == "SHOULD_NOT_TOUCH"  # 没动
@@ -352,7 +362,7 @@ def test_patch_hermes_config_list_finds_by_base_url(tmp_path, monkeypatch):
         ],
     }))
     monkeypatch.setenv("HERMES_CONFIG", str(cfg_path))
-    result = catfish._patch_hermes_config("NEW")
+    result = catfish_hermes._patch_hermes_config("NEW")
     assert result == "MyCatfish"
     cfg = yaml.safe_load(cfg_path.read_text())
     assert cfg["custom_providers"][0]["api_key"] == "NEW"
@@ -461,7 +471,7 @@ def test_cmd_token_auto_refresh_when_expired(tmp_auth_dir, monkeypatch, capsys):
         user_sub="alice@x.com",
     )
     monkeypatch.setattr(catfish, "_do_refresh", lambda store: refreshed)
-    monkeypatch.setattr(catfish, "_patch_hermes_config", lambda token: None)
+    monkeypatch.setattr(catfish_hermes, "_patch_hermes_config", lambda token: None)
 
     rc = catfish.cmd_token(args=None)
     captured = capsys.readouterr()
@@ -502,7 +512,7 @@ def test_patch_hermes_env_file_creates_new_file(tmp_path, monkeypatch):
     env_path = tmp_path / ".env"
     monkeypatch.setenv("HERMES_DOTENV", str(env_path))
 
-    n = catfish._patch_hermes_env_file({"TAVILY_API_KEY": "tvly-secret-abc"})
+    n = catfish_hermes._patch_hermes_env_file({"TAVILY_API_KEY": "tvly-secret-abc"})
     assert n == 1
     assert env_path.exists()
     body = env_path.read_text(encoding="utf-8")
@@ -524,7 +534,7 @@ def test_patch_hermes_env_file_preserves_unrelated_lines(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("HERMES_DOTENV", str(env_path))
 
-    n = catfish._patch_hermes_env_file({"TAVILY_API_KEY": "tvly-new"})
+    n = catfish_hermes._patch_hermes_env_file({"TAVILY_API_KEY": "tvly-new"})
     assert n == 1
     body = env_path.read_text(encoding="utf-8")
     # 旧内容全保留
@@ -546,7 +556,7 @@ def test_patch_hermes_env_file_updates_existing_key_in_place(tmp_path, monkeypat
     )
     monkeypatch.setenv("HERMES_DOTENV", str(env_path))
 
-    n = catfish._patch_hermes_env_file({"TAVILY_API_KEY": "tvly-NEW"})
+    n = catfish_hermes._patch_hermes_env_file({"TAVILY_API_KEY": "tvly-NEW"})
     assert n == 1
     body = env_path.read_text(encoding="utf-8")
     assert "TAVILY_API_KEY=tvly-NEW" in body
@@ -560,7 +570,7 @@ def test_patch_hermes_env_file_empty_input_no_op(tmp_path, monkeypatch):
     """env_vars={} → 不创建文件, 返 0."""
     env_path = tmp_path / ".env"
     monkeypatch.setenv("HERMES_DOTENV", str(env_path))
-    n = catfish._patch_hermes_env_file({})
+    n = catfish_hermes._patch_hermes_env_file({})
     assert n == 0
     assert not env_path.exists()
 
@@ -571,7 +581,7 @@ def test_patch_hermes_env_file_makes_backup_before_overwrite(tmp_path, monkeypat
     env_path.write_text("OLD=value\n", encoding="utf-8")
     monkeypatch.setenv("HERMES_DOTENV", str(env_path))
 
-    catfish._patch_hermes_env_file({"TAVILY_API_KEY": "tvly-x"})
+    catfish_hermes._patch_hermes_env_file({"TAVILY_API_KEY": "tvly-x"})
     backup = env_path.with_suffix(".env.bak")
     assert backup.exists()
     assert "OLD=value" in backup.read_text(encoding="utf-8")
@@ -589,7 +599,7 @@ def test_patch_yaml_blocks_creates_new_top_key(tmp_path, monkeypatch):
     }))
     monkeypatch.setenv("HERMES_CONFIG", str(cfg_path))
 
-    n = catfish._patch_hermes_config_yaml_blocks([{"web": {"backend": "tavily"}}])
+    n = catfish_hermes._patch_hermes_config_yaml_blocks([{"web": {"backend": "tavily"}}])
     assert n == 1
     new_cfg = yaml.safe_load(cfg_path.read_text())
     assert new_cfg["web"] == {"backend": "tavily"}
@@ -605,7 +615,7 @@ def test_patch_yaml_blocks_merges_existing_sub_keys(tmp_path, monkeypatch):
     }))
     monkeypatch.setenv("HERMES_CONFIG", str(cfg_path))
 
-    n = catfish._patch_hermes_config_yaml_blocks([{"web": {"backend": "tavily"}}])
+    n = catfish_hermes._patch_hermes_config_yaml_blocks([{"web": {"backend": "tavily"}}])
     assert n == 1
     new_cfg = yaml.safe_load(cfg_path.read_text())
     # 两个 sub-key 都在
@@ -619,7 +629,7 @@ def test_patch_yaml_blocks_skips_when_no_config_file(tmp_path, monkeypatch):
     assert not cfg_path.exists()
     monkeypatch.setenv("HERMES_CONFIG", str(cfg_path))
 
-    n = catfish._patch_hermes_config_yaml_blocks([{"web": {"backend": "tavily"}}])
+    n = catfish_hermes._patch_hermes_config_yaml_blocks([{"web": {"backend": "tavily"}}])
     assert n == 0
 
 
@@ -628,7 +638,7 @@ def test_patch_yaml_blocks_empty_input_no_op(tmp_path, monkeypatch):
     cfg_path.write_text("model: {default: x}\n")
     monkeypatch.setenv("HERMES_CONFIG", str(cfg_path))
 
-    n = catfish._patch_hermes_config_yaml_blocks([])
+    n = catfish_hermes._patch_hermes_config_yaml_blocks([])
     assert n == 0
 
 
@@ -650,7 +660,7 @@ def test_sync_edge_tool_dedupes_writes_by_group(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_CONFIG", str(cfg_path))
 
     monkeypatch.setattr(
-        catfish, "_fetch_edge_tool_list",
+        catfish_hermes, "_fetch_edge_tool_list",
         lambda url, tok: ["web_search", "web_extract", "web_crawl"],
     )
     call_count = {"n": 0}
@@ -665,9 +675,9 @@ def test_sync_edge_tool_dedupes_writes_by_group(tmp_path, monkeypatch):
             "yaml_block": {"web": {"backend": "tavily"}},
         }
 
-    monkeypatch.setattr(catfish, "_fetch_edge_tool_config", fake_fetch)
+    monkeypatch.setattr(catfish_hermes, "_fetch_edge_tool_config", fake_fetch)
 
-    env_n, yaml_n = catfish._sync_hermes_edge_tool_configs("http://gw", "TOKEN")
+    env_n, yaml_n = catfish_hermes._sync_hermes_edge_tool_configs("http://gw", "TOKEN")
 
     # 网络层: 每个 tool 都打过 endpoint (RBAC 必须 per-tool 判)
     assert call_count["n"] == 3
@@ -683,8 +693,8 @@ def test_sync_edge_tool_dedupes_writes_by_group(tmp_path, monkeypatch):
 
 def test_sync_edge_tool_handles_empty_tool_list(tmp_path, monkeypatch):
     """gateway 返空 list (老版本 404 fallback) → return (0, 0), 不写文件."""
-    monkeypatch.setattr(catfish, "_fetch_edge_tool_list", lambda u, t: [])
-    env_n, yaml_n = catfish._sync_hermes_edge_tool_configs("http://gw", "TOKEN")
+    monkeypatch.setattr(catfish_hermes, "_fetch_edge_tool_list", lambda u, t: [])
+    env_n, yaml_n = catfish_hermes._sync_hermes_edge_tool_configs("http://gw", "TOKEN")
     assert (env_n, yaml_n) == (0, 0)
 
 
@@ -696,7 +706,7 @@ def test_sync_edge_tool_skips_failed_fetch(tmp_path, monkeypatch):
     # 不设 HERMES_CONFIG → yaml_blocks 那步 skip (返 0)
 
     monkeypatch.setattr(
-        catfish, "_fetch_edge_tool_list",
+        catfish_hermes, "_fetch_edge_tool_list",
         lambda u, t: ["web_search", "image_generate"],
     )
 
@@ -711,24 +721,36 @@ def test_sync_edge_tool_skips_failed_fetch(tmp_path, monkeypatch):
             "yaml_block": {"web": {"backend": "tavily"}},
         }
 
-    monkeypatch.setattr(catfish, "_fetch_edge_tool_config", fake_fetch)
-    env_n, _ = catfish._sync_hermes_edge_tool_configs("http://gw", "TOKEN")
+    monkeypatch.setattr(catfish_hermes, "_fetch_edge_tool_config", fake_fetch)
+    env_n, _ = catfish_hermes._sync_hermes_edge_tool_configs("http://gw", "TOKEN")
     assert env_n == 1
     assert "TAVILY_API_KEY=tvly-x" in env_path.read_text()
 
 
 # ─── BL-EDGE-TOOL-PROXY (5/25): 死代理检测 + auto restart ──────────
+#
+# 8/15: 这一段的 `catfish.` 全部改成 `catfish_proxy.`。
+#
+# 那天 catfish.py 从 1875 行拆开, 这一组 6 个函数整组搬去了 catfish_proxy.py。
+# catfish.py 那边有 re-export, 所以 `catfish._handle_proxy_cleanup(...)` **照样
+# 调得通** —— 但 `monkeypatch.setattr(catfish, "_check_proxy_alive", ...)` 就
+# **打空了**: 函数体里的自由变量在定义它的模块 (catfish_proxy) 的 globals 里查,
+# 改 catfish 那个绑定影响不到。
+#
+# 后果不是红, 是**真去连 127.0.0.1:7890 / 真跑 `hermes gateway restart`**。
+# 所以 patch 和调用都得指到 catfish_proxy 上。tests/test_split_layering.py
+# 里有一条守卫钉住"这个文件不许再用 catfish.<代理组名字>"。
 
 
 def test_check_proxy_alive_returns_false_for_empty():
-    assert catfish._check_proxy_alive("") is False
-    assert catfish._check_proxy_alive("   ") is False
+    assert catfish_proxy._check_proxy_alive("") is False
+    assert catfish_proxy._check_proxy_alive("   ") is False
 
 
 def test_check_proxy_alive_returns_false_for_unreachable_port():
     """65000+ 高位端口大概率没人监听 → 死."""
     # 用 127.0.0.1:1 (reserved port, 几乎确定没人监听)
-    assert catfish._check_proxy_alive("http://127.0.0.1:1", timeout=0.5) is False
+    assert catfish_proxy._check_proxy_alive("http://127.0.0.1:1", timeout=0.5) is False
 
 
 def test_check_proxy_alive_returns_true_for_listening_port(tmp_path):
@@ -756,7 +778,7 @@ def test_check_proxy_alive_returns_true_for_listening_port(tmp_path):
     t.start()
 
     try:
-        assert catfish._check_proxy_alive(f"http://127.0.0.1:{port}") is True
+        assert catfish_proxy._check_proxy_alive(f"http://127.0.0.1:{port}") is True
     finally:
         stop.set()
         sock.close()
@@ -765,32 +787,32 @@ def test_check_proxy_alive_returns_true_for_listening_port(tmp_path):
 def test_check_proxy_alive_handles_bare_url():
     """没 scheme 也行 — 我们自动加 http://."""
     # 127.0.0.1:1 仍然死, 但应该走 parse 不挂
-    assert catfish._check_proxy_alive("127.0.0.1:1", timeout=0.5) is False
+    assert catfish_proxy._check_proxy_alive("127.0.0.1:1", timeout=0.5) is False
 
 
 def test_detect_dead_proxy_vars_empty_when_no_env(monkeypatch):
-    for v in catfish._PROXY_ENV_VARS:
+    for v in catfish_proxy._PROXY_ENV_VARS:
         monkeypatch.delenv(v, raising=False)
-    assert catfish._detect_dead_proxy_vars() == []
+    assert catfish_proxy._detect_dead_proxy_vars() == []
 
 
 def test_detect_dead_proxy_vars_finds_dead(monkeypatch):
     """HTTPS_PROXY 指向死端口 → 出现在返回列表里."""
-    for v in catfish._PROXY_ENV_VARS:
+    for v in catfish_proxy._PROXY_ENV_VARS:
         monkeypatch.delenv(v, raising=False)
     monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:1")  # 1 号端口必死
 
     # 强制 _check_proxy_alive 返 False (单测里不真 TCP probe, 防止真有进程占 1 端口)
-    monkeypatch.setattr(catfish, "_check_proxy_alive", lambda url, **k: False)
+    monkeypatch.setattr(catfish_proxy, "_check_proxy_alive", lambda url, **k: False)
 
-    dead = catfish._detect_dead_proxy_vars()
+    dead = catfish_proxy._detect_dead_proxy_vars()
     assert len(dead) == 1
     assert dead[0] == ("HTTPS_PROXY", "http://127.0.0.1:1")
 
 
 def test_detect_dead_proxy_vars_dedupes_url_probe(monkeypatch):
     """HTTPS_PROXY 和 https_proxy 指同一 URL → 只 probe 1 次, 但都报死."""
-    for v in catfish._PROXY_ENV_VARS:
+    for v in catfish_proxy._PROXY_ENV_VARS:
         monkeypatch.delenv(v, raising=False)
     monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:1")
     monkeypatch.setenv("https_proxy", "http://127.0.0.1:1")  # 同 URL
@@ -801,28 +823,28 @@ def test_detect_dead_proxy_vars_dedupes_url_probe(monkeypatch):
         probe_calls.append(url)
         return False
 
-    monkeypatch.setattr(catfish, "_check_proxy_alive", fake_probe)
+    monkeypatch.setattr(catfish_proxy, "_check_proxy_alive", fake_probe)
 
-    dead = catfish._detect_dead_proxy_vars()
+    dead = catfish_proxy._detect_dead_proxy_vars()
     assert len(dead) == 2  # 两个 env var 都出现
     assert len(probe_calls) == 1, "同 URL 只 probe 一次"
 
 
 def test_detect_dead_proxy_vars_skips_alive(monkeypatch):
     """活代理 → 不进死列表."""
-    for v in catfish._PROXY_ENV_VARS:
+    for v in catfish_proxy._PROXY_ENV_VARS:
         monkeypatch.delenv(v, raising=False)
     monkeypatch.setenv("HTTPS_PROXY", "http://alive-proxy:8888")
-    monkeypatch.setattr(catfish, "_check_proxy_alive", lambda url, **k: True)
+    monkeypatch.setattr(catfish_proxy, "_check_proxy_alive", lambda url, **k: True)
 
-    assert catfish._detect_dead_proxy_vars() == []
+    assert catfish_proxy._detect_dead_proxy_vars() == []
 
 
 def test_build_clean_env_removes_specified_vars(monkeypatch):
     monkeypatch.setenv("HTTPS_PROXY", "http://x:9")
     monkeypatch.setenv("PATH", "/usr/bin")  # 应保留
 
-    env = catfish._build_clean_env(["HTTPS_PROXY"])
+    env = catfish_proxy._build_clean_env(["HTTPS_PROXY"])
     assert "HTTPS_PROXY" not in env
     assert env.get("PATH") == "/usr/bin"
     # 不动当前进程
@@ -831,8 +853,8 @@ def test_build_clean_env_removes_specified_vars(monkeypatch):
 
 def test_handle_proxy_cleanup_no_dead_proxy_silent(monkeypatch, capsys):
     """无死代理 → 不打字 (避免噪音)."""
-    monkeypatch.setattr(catfish, "_detect_dead_proxy_vars", lambda: [])
-    catfish._handle_proxy_cleanup(auto_restart=False)
+    monkeypatch.setattr(catfish_proxy, "_detect_dead_proxy_vars", lambda: [])
+    catfish_proxy._handle_proxy_cleanup(auto_restart=False)
     out = capsys.readouterr().out
     assert out == ""
 
@@ -840,16 +862,16 @@ def test_handle_proxy_cleanup_no_dead_proxy_silent(monkeypatch, capsys):
 def test_handle_proxy_cleanup_warn_only_when_no_flag(monkeypatch, capsys):
     """死代理 + 无 flag → 警告 + 给手动命令, 不调用 restart."""
     monkeypatch.setattr(
-        catfish, "_detect_dead_proxy_vars",
+        catfish_proxy, "_detect_dead_proxy_vars",
         lambda: [("HTTPS_PROXY", "http://127.0.0.1:1")],
     )
     called = []
     monkeypatch.setattr(
-        catfish, "_restart_hermes_with_clean_env",
+        catfish_proxy, "_restart_hermes_with_clean_env",
         lambda vars_: called.append(vars_) or 0,
     )
 
-    catfish._handle_proxy_cleanup(auto_restart=False)
+    catfish_proxy._handle_proxy_cleanup(auto_restart=False)
 
     assert called == [], "没传 flag 不该真调 restart"
     out = capsys.readouterr().out
@@ -862,7 +884,7 @@ def test_handle_proxy_cleanup_warn_only_when_no_flag(monkeypatch, capsys):
 def test_handle_proxy_cleanup_auto_restarts_with_flag(monkeypatch, capsys):
     """死代理 + flag → 自动 restart, 不让员工自己跑."""
     monkeypatch.setattr(
-        catfish, "_detect_dead_proxy_vars",
+        catfish_proxy, "_detect_dead_proxy_vars",
         lambda: [("HTTPS_PROXY", "http://127.0.0.1:1"),
                  ("HTTP_PROXY", "http://127.0.0.1:1")],
     )
@@ -872,9 +894,9 @@ def test_handle_proxy_cleanup_auto_restarts_with_flag(monkeypatch, capsys):
         called.append(unset_vars)
         return 0
 
-    monkeypatch.setattr(catfish, "_restart_hermes_with_clean_env", fake_restart)
+    monkeypatch.setattr(catfish_proxy, "_restart_hermes_with_clean_env", fake_restart)
 
-    catfish._handle_proxy_cleanup(auto_restart=True)
+    catfish_proxy._handle_proxy_cleanup(auto_restart=True)
 
     assert len(called) == 1
     # 两个 var 都被 unset (sorted dedupe)
@@ -887,12 +909,12 @@ def test_handle_proxy_cleanup_auto_restarts_with_flag(monkeypatch, capsys):
 def test_handle_proxy_cleanup_falls_back_to_manual_on_restart_fail(monkeypatch, capsys):
     """restart 失败 → 退化到打手动命令, 不挂."""
     monkeypatch.setattr(
-        catfish, "_detect_dead_proxy_vars",
+        catfish_proxy, "_detect_dead_proxy_vars",
         lambda: [("HTTPS_PROXY", "http://127.0.0.1:1")],
     )
-    monkeypatch.setattr(catfish, "_restart_hermes_with_clean_env", lambda v: 127)
+    monkeypatch.setattr(catfish_proxy, "_restart_hermes_with_clean_env", lambda v: 127)
 
-    catfish._handle_proxy_cleanup(auto_restart=True)
+    catfish_proxy._handle_proxy_cleanup(auto_restart=True)
     out = capsys.readouterr().out
     assert "hermes restart 失败" in out
     assert "unset HTTPS_PROXY" in out  # 给手动命令

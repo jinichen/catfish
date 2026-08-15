@@ -70,7 +70,7 @@ catfish privacy-audit
 catfish privacy-audit --json > my-privacy.json
 ```
 
-JSON schema 见命令源码 `edge/catfish-cli/catfish.py::cmd_privacy_audit`.
+JSON schema 见命令源码 `edge/catfish-cli/catfish_privacy.py::cmd_privacy_audit`.
 
 ### 入口 2 · Companion UI
 
@@ -282,7 +282,7 @@ chmod 600 ~/.catfish/auth/token.json
 
 ## 关联
 
-- `edge/catfish-cli/catfish.py::cmd_privacy_audit` — CLI 实现
+- `edge/catfish-cli/catfish_privacy.py::cmd_privacy_audit` — CLI 实现
 - `edge/companion-app/src/tabs/Dashboard/PrivacyCard.tsx` — UI 实现
 - `central/llm-gateway/src/catfish_gateway/app.py::api_audit_me` — gateway 端点
 - `central/llm-gateway/src/catfish_gateway/quota.py::audit_summary_user_since` — 数据层
