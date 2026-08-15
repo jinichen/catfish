@@ -170,6 +170,51 @@ if command -v git >/dev/null 2>&1 && \
   rm -f "$TMPFILE.ign"
 fi
 
+# ⚠ 8/15: 再扣掉 **vendored 进来的第三方代码**。
+#
+# 起因: `skills/creative/huashu-design/scripts/html2pptx.js` (978 行) 一直挂在
+# 必拆名单上。那是花叔 (alchaincyf) 的 MIT skill, 整个目录是**抄进来**的,
+# 不是我们写的。就地拆它有两个问题:
+#   · 下次同步上游, 改动全被冲掉
+#   · 改了之后跟上游 diff 不上, 想跟进对方的 bugfix 就得手动挑
+#
+# 这跟 test_outputs_dir_convention.py 里对 guizang submodule 的处理是同一条
+# 理由 —— 那边原话是「git submodule 里的是第三方代码, 改不了, 就地打补丁推
+# 不上去, 下次 submodule 更新还会被冲掉」。区别只是 huashu 是 vendored 不是
+# submodule, 所以那条按 .gitmodules 判的规则漏了它。
+#
+# 判据: **某个祖先目录里有 LICENSE 文件, 且那个目录不是仓根**。
+#
+# 为什么这个判据够窄:
+#   · 得真的有一个 LICENSE 文件躺在那 —— 光把目录名改成 "vendor/" 骗不到豁免
+#     (跟上面 schema 那条"不能光看文件名"是同一个考虑)
+#   · 仓根那份是我们自己的 Apache 2.0, 显式排掉
+#   · 实测全仓只有两处嵌套 LICENSE: huashu-design (MIT, alchaincyf) 和
+#     guizang-ppt-magazine (submodule)。都是第三方, 没有误伤
+#
+# 一样要打印出来, 不做静默过滤。
+VENDOR_EXEMPT=0
+VENDOR_FILES=$(mktemp)
+: > "$VENDOR_FILES"
+KEPT_V=$(mktemp)
+while IFS= read -r f; do
+  d="$(dirname "$f")"
+  is_vendor=0
+  while [ "$d" != "$REPO_ROOT" ] && [ "$d" != "/" ] && [ -n "$d" ]; do
+    if [ -f "$d/LICENSE" ] || [ -f "$d/LICENSE.md" ] || [ -f "$d/LICENSE.txt" ]; then
+      is_vendor=1; break
+    fi
+    d="$(dirname "$d")"
+  done
+  if [ "$is_vendor" -eq 1 ]; then
+    VENDOR_EXEMPT=$((VENDOR_EXEMPT + 1))
+    printf '%s\n' "$f" >> "$VENDOR_FILES"
+    continue
+  fi
+  printf '%s\n' "$f" >> "$KEPT_V"
+done < "$TMPFILE"
+mv "$KEPT_V" "$TMPFILE"
+
 TOTAL_FILES=0
 WARN_COUNT=0
 FAIL_COUNT=0
@@ -272,6 +317,25 @@ echo " 汇总：$FAIL_COUNT 个必拆  +  $WARN_COUNT 个警戒  /  共 $TOTAL_F
   echo " （另有 $IGNORED_COUNT 个文件被 .gitignore 排除，不计入）"
 [ "${SCHEMA_EXEMPT:-0}" -gt 0 ] && \
   echo " （另有 $SCHEMA_EXEMPT 个纯数据 schema 文件按 CLAUDE.md §1 例外，不计入）"
+
+# vendored 第三方也要看得见 —— 万一哪天有人往自己的目录里放了个 LICENSE,
+# 半个仓会悄悄从报告里消失。超线的直接点名, 免得"第三方"变成藏污纳垢的口袋。
+if [ -s "${VENDOR_FILES:-/dev/null}" ]; then
+  echo " （另有 $VENDOR_EXEMPT 个 vendored 第三方文件按 CLAUDE.md §1 例外，不计入）"
+  V_BIG=0; V_TOP=""
+  while IFS= read -r vf; do
+    vl=$(wc -l < "$vf" | tr -d ' ')
+    if [ "$vl" -ge "$FAIL_THRESHOLD" ]; then
+      V_BIG=$((V_BIG + 1))
+      V_TOP="$V_TOP
+      $(printf '%6d  %s' "$vl" "${vf#$REPO_ROOT/}")"
+    fi
+  done < "$VENDOR_FILES"
+  if [ "$V_BIG" -gt 0 ]; then
+    echo "   其中 $V_BIG 个超过 $FAIL_THRESHOLD 行 —— 不拆 (改了会被上游冲掉),"
+    echo "   要动只能 fork 或提 PR 给上游:$V_TOP"
+  fi
+fi
 
 # 测试文件不计进"必拆", 但**要看得见**。
 #
