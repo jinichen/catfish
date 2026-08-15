@@ -389,7 +389,11 @@ async def call_llm(
     )
     async with httpx.AsyncClient(timeout=timeout_s) as client:
         try:
-            resp = await client.post(f"{gw}/v1/chat/completions", json=payload, headers=headers)
+            # 8/15 晚: 打归属标记 (见 catfish_memory_gateway.with_source 的说明)。
+            resp = await client.post(
+                f"{gw}/v1/chat/completions?catfish_source=plugin:toolbridge-recmode",
+                json=payload, headers=headers,
+            )
         except httpx.HTTPError as e:
             raise RuntimeError(
                 f"RecMode aggregator: gateway {gw} 不可达 ({e}). "

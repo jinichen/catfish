@@ -292,7 +292,11 @@ def _classify_memory_route_diag(content: str, model: str) -> tuple[Optional[dict
     }
     try:
         with httpx.Client(timeout=_LLM_HTTP_TIMEOUT_SECS) as client:
-            resp = client.post(f"{gateway_url}/v1/chat/completions",
+            # 8/15 晚: 打归属标记。这条 classify 每轮对话都可能跑, 之前落在账本的
+            # 「(无标记)」栏里 (占 40%)。名字用 plugin: 前缀 —— 网关
+            # metrics.py:274 的注释 5/17 就定了这个约定, 只是没人实现。
+            resp = client.post(
+                f"{gateway_url}/v1/chat/completions?catfish_source=plugin:memory-classify",
                                json=payload, headers=headers)
             if resp.status_code != 200:
                 body_preview = resp.text[:300] if resp.text else "<empty>"

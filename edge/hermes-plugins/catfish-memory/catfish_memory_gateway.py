@@ -100,6 +100,49 @@ def _gateway_url() -> str:
     return _DEFAULT_GATEWAY_URL
 
 
+def with_source(url: str, source: str) -> str:
+    """给网关 URL 挂上 `catfish_source` 归属标记。
+
+    # 为什么要有这个 (8/15 晚)
+
+    8/15 白天修完聊天链路的归属之后, 晚上再查账本, 「(无标记)」**又是最大一栏**
+    —— 96 次 / 49.9 万 token, 占全窗口 40%, 全部挂在 client:hermes-cli 名下。
+
+    顺着"每次输入才 4,787 token"这个特征查下去 (agent loop 续轮会带着越滚越大的
+    历史, 不可能这么小), 找到的是**插件自己的 LLM 调用**: 记忆总结 / 蒸馏 /
+    wiki 三步 / 分类 / RecMode 聚合, 七处一个都不打标。
+
+    白天那刀只覆盖了聊天链路, 从来没碰到这些。
+
+    # 名字为什么是 `plugin:xxx`
+
+    不是我编的 —— 网关 metrics.py:274 的注释里 5/17 就写了:
+
+        默认 'unknown' 不写字段减少噪音, 显式标的 (companion / plugin:xxx) 才记
+
+    约定早就在, 只是三个月没人实现。前缀区分开"员工端应用发的" (companion-*)
+    和"插件后台发的" (plugin:*), 看一眼账本就知道钱花在哪一侧。
+
+    # ⚠ 为什么不能直接 f"{url}?catfish_source=..."
+
+    `_gateway_url()` 的第一优先级是 `CATFISH_GATEWAY_INTERNAL_URL` —— 那是
+    **客户 IT 填的完整 URL**, 原则上可以自带 query。直接拼 `?` 会拼出
+    `...?a=b?catfish_source=x`, 后半段被当成前一个参数的值, 标记静默丢失。
+
+    所以按有没有 `?` 选分隔符。
+
+    # 打标是纯 audit 动作, 不改行为 (查过了)
+
+      · 网关工具裁剪: SOURCE_TOOL_PROFILES 注释写着「不在表里的 source → 不过滤」,
+        `plugin:*` 都不在表里
+      · thinking_guard: AST 查过, source 只出现在 docstring, 代码零分支
+      · 插件 P42 记忆闸 / P44 服务瘦身: 它们读的是 hermes **入站**请求的
+        ContextVar, 这七处是**出站**打网关, 方向相反碰不到
+    """
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}catfish_source={source}"
+
+
 # ── plugin 配置 yaml (BL-PLUGIN-CONFIG-YAML 5/20 Day 2.5) ─────────
 #
 # 鸿波拍板: 配置不硬编码 / env, 走 yaml 参数文件, 跟 ~/.catfish/companion.yaml

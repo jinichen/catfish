@@ -26,6 +26,19 @@ try:
     from .catfish_memory_helpers import _LLM_HTTP_TIMEOUT, _gateway_dev_token, _gateway_url, _log_token_missing, logger  # noqa: F401
 except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_helpers import _LLM_HTTP_TIMEOUT, _gateway_dev_token, _gateway_url, _log_token_missing, logger  # noqa: F401
+
+# 8/15 晚: with_source 直接从 catfish_memory_gateway 拿, **不走 helpers**。
+#
+# 走 helpers 会撞循环: helpers 在文件末尾回指本模块, 所以本模块被加载时
+# helpers 还只初始化了一半 —— 它顶部 re-export 过的名字 (_gateway_url 等) 拿得到,
+# 后加的拿不到, 报 "cannot import name from partially initialized module"。
+# 第一版就是这么写的, 当场炸了。
+#
+# gateway 模块是 base 侧, 不 import 本文件, 直接拿没有环。
+try:
+    from .catfish_memory_gateway import with_source
+except ImportError:  # 独立脚本模式 (无父包)
+    from catfish_memory_gateway import with_source
 try:
     from .catfish_memory_fm import _parse_frontmatter_lists, _split_frontmatter_body  # noqa: F401
 except ImportError:  # 独立脚本模式 (无父包)
@@ -126,7 +139,7 @@ async def _call_merge_llm(
     try:
         async with httpx.AsyncClient(timeout=_LLM_HTTP_TIMEOUT) as client:
             resp = await client.post(
-                _gateway_url(),
+                with_source(_gateway_url(), "plugin:memory-wiki-merge"),
                 headers={
                     "Authorization": f"Bearer {token}",
                     "X-Catfish-Skip-Identity": "true",

@@ -21,6 +21,19 @@ try:
     from .catfish_memory_helpers import _DISTILL_CHUNK_CHARS, _GENERATION_HTTP_TIMEOUT, _LLM_HTTP_TIMEOUT, _gateway_dev_token, _gateway_url, _log_token_missing, logger  # noqa: F401
 except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_helpers import _DISTILL_CHUNK_CHARS, _GENERATION_HTTP_TIMEOUT, _LLM_HTTP_TIMEOUT, _gateway_dev_token, _gateway_url, _log_token_missing, logger  # noqa: F401
+
+# 8/15 晚: with_source 直接从 catfish_memory_gateway 拿, **不走 helpers**。
+#
+# 走 helpers 会撞循环: helpers 在文件末尾回指本模块, 所以本模块被加载时
+# helpers 还只初始化了一半 —— 它顶部 re-export 过的名字 (_gateway_url 等) 拿得到,
+# 后加的拿不到, 报 "cannot import name from partially initialized module"。
+# 第一版就是这么写的, 当场炸了。
+#
+# gateway 模块是 base 侧, 不 import 本文件, 直接拿没有环。
+try:
+    from .catfish_memory_gateway import with_source
+except ImportError:  # 独立脚本模式 (无父包)
+    from catfish_memory_gateway import with_source
 try:
     from .catfish_memory_prompts import _ANALYSIS_PROMPT, _DISTILL_PROMPT, _SUMMARIZE_PROMPT, _build_generation_prompt  # noqa: F401
 except ImportError:  # 独立脚本模式 (无父包)
@@ -58,7 +71,7 @@ async def _call_summarize_llm(
     try:
         async with httpx.AsyncClient(timeout=_LLM_HTTP_TIMEOUT) as client:
             resp = await client.post(
-                _gateway_url(),
+                with_source(_gateway_url(), "plugin:memory-summarize"),
                 headers={
                     "Authorization": f"Bearer {token}",
                     "X-Catfish-Skip-Identity": "true",
@@ -140,7 +153,7 @@ async def _call_distill_llm(
             _notify(idx)
             try:
                 resp = await client.post(
-                    _gateway_url(),
+                    with_source(_gateway_url(), "plugin:memory-distill"),
                     headers={
                         "Authorization": f"Bearer {token}",
                         "X-Catfish-Skip-Identity": "true",
@@ -206,7 +219,7 @@ async def _call_analysis_llm(
     try:
         async with httpx.AsyncClient(timeout=_LLM_HTTP_TIMEOUT) as client:
             resp = await client.post(
-                _gateway_url(),
+                with_source(_gateway_url(), "plugin:memory-wiki-analysis"),
                 headers={
                     "Authorization": f"Bearer {token}",
                     "X-Catfish-Skip-Identity": "true",
@@ -312,7 +325,7 @@ async def _call_generation_llm(
         # 60s 不够 (12:55 ReadTimeout 实测).
         async with httpx.AsyncClient(timeout=_GENERATION_HTTP_TIMEOUT) as client:
             resp = await client.post(
-                _gateway_url(),
+                with_source(_gateway_url(), "plugin:memory-wiki-generation"),
                 headers={
                     "Authorization": f"Bearer {token}",
                     "X-Catfish-Skip-Identity": "true",
