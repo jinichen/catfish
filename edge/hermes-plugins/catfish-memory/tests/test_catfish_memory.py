@@ -106,19 +106,55 @@ def test_prefetch_session_meta(fake_catfish_home, provider):
     assert "2026-05-18T10:00:00" in out
 
 
+# 548cd95 (8/6) 把 _render_employee_journal 从**二选一**改成**两段都注入**, 修的是
+# 一个真事故:「早安里说的项目进度, 到工作台就不知道了」—— distilled_facts.md 24h
+# 才蒸馏一次, 老实现读到它就 return, 于是最近一个蒸馏周期内写进 journal 的东西
+# 主聊天一个字都看不到。
+#
+# 那个 commit **只改了 catfish_memory.py 一个文件** (git show --stat: 1 file changed),
+# 没动这个测试文件 (最后一次改是 6/6 的 28b59cc)。所以下面这条从 8/6 起就是红的,
+# 红了 9 天 —— 它断言的 "raw 日志 not in out" 正是被有意废掉的那个行为。
+#
+# 更要紧的是: 花了一次真事故换来的修复, 一条回归测试都没有。
+# test_prefetch_both_layers_present 就是补它 —— 谁把逻辑改回二选一, 它立刻红。
+# (2026-08-15 修)
+
+
 def test_prefetch_employee_journal_distilled(fake_catfish_home, provider):
-    """distilled_facts.md 优先于 employee_journal.md"""
+    """distilled_facts.md 与 journal 尾部**两段都注入**, 不是二选一。"""
     (fake_catfish_home / "distilled_facts.md").write_text(
         "员工偏好简洁回答 + 不喜欢长链思考", encoding="utf-8",
     )
     (fake_catfish_home / "employee_journal.md").write_text(
-        "raw 日志 (不应该被选中)", encoding="utf-8",
+        "## 2026-08-06 15:11 近期流水\n\nISO 招投标进度", encoding="utf-8",
     )
     provider.initialize(session_id="s1")
     out = provider.prefetch("hi")
     assert "distilled" in out
     assert "员工偏好简洁回答" in out
-    assert "raw 日志" not in out  # distilled 优先, raw 不应该出现
+    assert "ISO 招投标进度" in out, "近期流水被吞了 —— 又变回二选一了"
+
+
+def test_prefetch_both_layers_present(fake_catfish_home, provider):
+    """**8/6 事故的最小复现**: distilled 停在昨晚, 今天记的东西必须还能看到。
+
+    两段各自带自己的小标题, 让 LLM 知道哪段更新。谁改回"读到 distilled 就
+    return", 这条立刻红。
+    """
+    (fake_catfish_home / "distilled_facts.md").write_text(
+        "员工长期画像: 做资质咨询", encoding="utf-8",
+    )
+    (fake_catfish_home / "employee_journal.md").write_text(
+        "## 2026-08-06 15:11\n\nISO9001+45001 复审已排期\n", encoding="utf-8",
+    )
+    provider.initialize(session_id="s1")
+    out = provider.prefetch("hi")
+
+    assert "员工长期记忆" in out, "缺长期段标题"
+    assert "近期流水" in out, "缺近期段标题 —— 说明走了二选一那条路"
+    assert "员工长期画像" in out and "ISO9001+45001" in out
+    # 顺序: 长期在前, 近期在后 (近期标注"比上面的长期记忆更新")
+    assert out.index("员工长期画像") < out.index("ISO9001+45001")
 
 
 def test_prefetch_employee_journal_raw_fallback(fake_catfish_home, provider):
