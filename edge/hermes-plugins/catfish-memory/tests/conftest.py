@@ -62,6 +62,20 @@ if "catfish_memory" not in sys.modules:
         if _hlp_spec and _hlp_spec.loader:
             _hlp_mod = importlib.util.module_from_spec(_hlp_spec)
             sys.modules[f"{_PKG_NAME}.catfish_memory_helpers"] = _hlp_mod
+            # 上面第 56 行给 catfish_memory 加了 top-level alias, 这里**漏了** helpers。
+            # 后果: 测试 `from catfish_memory_helpers import ...` 走 sys.path 又
+            # exec 了一遍同一个文件, 于是同一份源码有两个 module 对象:
+            #   catfish_memory_helpers                     (测试看到的)
+            #   _catfish_memory_pkg.catfish_memory_helpers (catfish_memory.py 看到的)
+            # 实测 `top is pkg` → False。monkeypatch 打在哪一份上就决定它是否生效,
+            # 而阴性断言 (assert not called) 察觉不到打空 —— 见
+            # test_employee_authored.test_p19_merges_non_employee_files。
+            #
+            # 补 alias 让两个名字指同一个对象。必须在 exec_module **之前**注册:
+            # helpers 拆出子模块后, 子模块会用绝对 import 回指
+            # `from catfish_memory_helpers import ...`, 那一刻这个名字必须已经在
+            # sys.modules 里, 否则会触发第二次 exec → 真循环 import。
+            sys.modules["catfish_memory_helpers"] = _hlp_mod
             _hlp_spec.loader.exec_module(_hlp_mod)
         # 现在再 exec catfish_memory.py — relative import 能找到 parent.helpers
         _mem_spec.loader.exec_module(_mem_mod)
