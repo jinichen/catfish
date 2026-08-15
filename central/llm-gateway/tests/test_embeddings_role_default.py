@@ -79,12 +79,22 @@ def harness(monkeypatch):
     from catfish_gateway import app as A
     from catfish_gateway import roles as R
     from catfish_gateway.app import app
+    # 8/15: /v1/embeddings 搬到了 misc_routes.py。
+    #
+    # 下面四处 patch 里要分清两种:
+    #   · `A.litellm.aembedding` / `A._quota_module.record_usage`
+    #     —— 打在**模块对象的属性**上, litellm / quota 两边引的是同一个模块,
+    #        所以打 A 上照样生效, 不用改。
+    #   · `get_config` / `log_request_metadata`
+    #     —— 是**名字绑定**。misc_routes 有自己那一份, 打 A 上它看不见
+    #        (`from X import name` 建新绑定不是别名)。必须打到 M 上。
+    from catfish_gateway import misc_routes as M
     from catfish_gateway.auth import User, get_current_user
 
     models = [_model(EMBED_MODEL), _model(OTHER_EMBED_MODEL), _model("chat-model", mode="chat")]
     by_name = {m.name: m for m in models}
     cfg = SimpleNamespace(models=models, get_model=by_name.get)
-    monkeypatch.setattr(A, "get_config", lambda: cfg)
+    monkeypatch.setattr(M, "get_config", lambda: cfg)
 
     # roles.yaml 的内容 —— 就地改它 = 在控制台换向量模型
     roles_map = {"embedding": EMBED_MODEL}
@@ -103,7 +113,7 @@ def harness(monkeypatch):
 
     monkeypatch.setattr(A.litellm, "aembedding", _fake_aembedding)
     monkeypatch.setattr(
-        A, "log_request_metadata", lambda **kw: calls.__setitem__("logged", kw)
+        M, "log_request_metadata", lambda **kw: calls.__setitem__("logged", kw)
     )
     monkeypatch.setattr(
         A._quota_module, "record_usage", lambda **kw: calls.__setitem__("quota", kw)

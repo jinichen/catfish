@@ -93,6 +93,66 @@ def test_error_detail_names_the_file_to_edit(chat_default):
     assert "roles.yaml" in str(exc.value.detail)
 
 
+
+def _handler_source(name: str) -> str:
+    """按函数名在 gateway 包里找 handler 的源码。
+
+    拆分之后路由分散在 app.py / misc_routes.py / *_router.py, 而且不少是挂在
+    register_*(app) 里的局部函数, `getattr(module, name)` 取不到。用 AST 在包内
+    逐文件找同名 FunctionDef, 找到唯一一个就返它的源码。
+
+    "唯一一个"顺带钉住了别的事: 同名 handler 出现两份 = 有人复制了一个端点。
+    """
+    import ast as _ast
+
+    def _is_route(n) -> bool:
+        """带 @app.get/@app.post 之类装饰器的才算 handler。
+
+        第一版只按函数名找, 结果 `get_model` 撞上了 config.py 里
+        `Config.get_model` 这个同名方法 —— 判据比真事宽。加这一条收窄。
+        """
+        for d in getattr(n, "decorator_list", []):
+            if (isinstance(d, _ast.Call) and isinstance(d.func, _ast.Attribute)
+                    and isinstance(d.func.value, _ast.Name) and d.func.value.id == "app"):
+                return True
+        return False
+
+    pkg = Path(app_module.__file__).parent
+    hits = []
+    for f in sorted(pkg.glob("*.py")):
+        fsrc = f.read_text(encoding="utf-8")
+        for n in _ast.walk(_ast.parse(fsrc)):
+            if (isinstance(n, (_ast.FunctionDef, _ast.AsyncFunctionDef))
+                    and n.name == name and _is_route(n)):
+                hits.append((f.name, _ast.get_source_segment(fsrc, n) or ""))
+    assert hits, f"包里找不到 handler {name}() —— 改名了还是删了?"
+    assert len(hits) == 1, f"{name}() 有 {len(hits)} 份定义: {[h[0] for h in hits]}"
+    return hits[0][1]
+
+
+def _handler_code(name: str) -> str:
+    """handler 的**可执行语句**源码 —— 剥掉 docstring。
+
+    8/15 发现原判据是假的: 断言 `"_resolve_auto_sentinel" in src` 在整个函数
+    源码里找子串, 而 get_model 的 docstring 里正好写着这个名字
+    ("见 `_resolve_auto_sentinel` 的长注释")。实测把
+    `config.get_model(_resolve_auto_sentinel(model_id))` 改成
+    `config.get_model(model_id)`, 这条**照样绿** —— 注释写得越清楚, 它越抓不到。
+
+    今天同一形状踩过好几次 (test_picker_reader_single_source 那条也是靠跳
+    docstring 才修对的)。这里索性把 docstring 剥掉再判。
+    """
+    import ast as _ast
+    src = _handler_source(name)
+    node = _ast.parse(src).body[0]
+    stmts = [
+        s for s in node.body
+        if not (isinstance(s, _ast.Expr) and isinstance(s.value, _ast.Constant)
+                and isinstance(s.value.value, str))
+    ]
+    return "\n".join(_ast.get_source_segment(src, s) or "" for s in stmts)
+
+
 # ── 两个端点必须共用同一条路径 ──────────────────────────────────
 
 def test_get_model_endpoint_resolves_the_sentinel():
@@ -101,7 +161,11 @@ def test_get_model_endpoint_resolves_the_sentinel():
     这是回归本身。用源码检查而不是发请求, 是因为发请求要拉起整个 app +
     auth 依赖, 而这里要钉的东西很窄: **这个 handler 有没有走那条共用路径**。
     """
-    src = inspect.getsource(app_module.get_model)
+    # 8/15: GET /v1/models/{id} 搬到了 misc_routes.py, 而且是挂在
+    # register_misc_routes() 内部的局部函数 —— 模块上取不到属性。
+    # 判据从"取 app.get_model 的源码"改成"在宿主模块的源码里定位这个 handler"。
+    # 要守的东西没变: **这个 handler 有没有走 _resolve_auto_sentinel 那条共用路径**。
+    src = _handler_code("get_model")
     assert "_resolve_auto_sentinel" in src, (
         "GET /v1/models/{id} 没解析 sentinel —— hermes 会拿不到 context_length, "
         "退回 DEFAULT_FALLBACK_CONTEXT 且永不缓存 (每次 _create_agent 重探)"
