@@ -21,17 +21,77 @@ logger = logging.getLogger("catfish.xcatfish_user.plugin")
 def _sib(name):
     """延迟取兄弟模块。
 
-    走 plugin._import_sibling 那三段 fallback (relative → absolute →
-    spec_from_file_location) —— 这个 plugin 的包名带 dash, hermes 用
-    spec_from_file_location 加载时相对 import 不稳, 那三段是 5/28 那次
-    "装好 9 天没工作" 之后加的。
+    # ⚠ 8/15 晚修的 bug —— 这个函数原来是坏的, 而且坏得很安静
 
-    **函数体内 import**: plugin.py 会 import 本模块, 本模块顶层再 import
-    plugin.py 就成环。延迟到调用时取, 那时 plugin 已经加载完。
+    早上把 plugin.py 从 3226 行拆开时, 我写了这个 helper, body 是一行:
+
+        from plugin import _import_sibling      # ← 裸 absolute import
+
+    **那正是这个插件不能用的写法。** 目录名带 dash (`catfish-xcatfish-user`),
+    hermes 用 `spec_from_file_location` + `submodule_search_locations` 加载,
+    模块在 sys.modules 里叫 `catfish-xcatfish-user.plugin`, 没有叫 `plugin` 的。
+
+    讽刺的是 plugin.py 里的 `_import_sibling` 有三段 fallback, 存在的理由就是
+    这个 (5/28 那次"装好 9 天没工作"之后加的) —— 而我写的这个 helper, 名义上是
+    "复用那三段", 实际用了三段要绕开的那一段。
+
+    ## 为什么拖到晚上才发现
+
+    hermes 进程从拆分之前就一直跑着, Python 把老模块缓存在内存里。8/15 18:03
+    重启 gateway 之后才第一次加载新拆的模块, 日志里立刻冒出 4 条:
+
+        P23 inbound: picker ... failed: No module named 'plugin'
+        P1 post-init apply_headers failed: No module named 'plugin'
+        P6/P11 _create_agent post-init failed: No module named 'plugin'
+
+    三处都被 `except Exception` 包着, 只 warning 不抛 —— 员工看不出任何异常,
+    只是 header 注入、picker 模型覆盖这些悄悄不干活了。
+
+    单测也没抓住: 测试里 `sys.path.insert(0, PLUGIN_DIR)` 之后裸 import 是通的,
+    生产的加载方式不通。**判据比真事窄**, 今天栽的第 N 次。
+
+    # 现在的写法
+
+    段 1 走相对 import —— 跟 plugin.py 的 `_import_sibling` 段 1 是**同一条路**,
+    所以命中的是 sys.modules 里同一个 module 对象, 不会造出第二份
+    (双 module 对象那个病今天在 catfish-memory 上专门防过)。
+
+    段 2/3 保留原来的路径, 兜住 `__package__` 没设好的加载方式。
     """
-    from plugin import _import_sibling
-    return _import_sibling(name)
+    from importlib import import_module
 
+    # 段 1: 相对 —— 生产上走的就是这条 (hermes 给了 submodule_search_locations)
+    if __package__:
+        try:
+            return import_module(f".{name}", package=__package__)
+        except (ImportError, SystemError, ValueError, TypeError):
+            pass
+
+    # 段 2: plugin 的三段 fallback (它自己能被裸 import 到时才通)
+    try:
+        from plugin import _import_sibling
+        return _import_sibling(name)
+    except ImportError:
+        pass
+
+    # 段 3: 按文件路径兜底 (跟 plugin._import_sibling 段 3 同款)
+    import importlib.util
+    import sys as _sys
+    from pathlib import Path
+
+    _py = Path(__file__).parent / f"{name}.py"
+    if not _py.exists():
+        raise ImportError(f"{name}.py 不存在: {_py}")
+    _modname = f"_catfish_xcatfish_user_{name}"
+    if _modname in _sys.modules:          # 防重复 exec 出第二个 module 对象
+        return _sys.modules[_modname]
+    _spec = importlib.util.spec_from_file_location(_modname, _py)
+    if not _spec or not _spec.loader:
+        raise ImportError(f"spec_from_file_location 失败: {_py}")
+    _mod = importlib.util.module_from_spec(_spec)
+    _sys.modules[_modname] = _mod
+    _spec.loader.exec_module(_mod)
+    return _mod
 
 
 def _resolver():
