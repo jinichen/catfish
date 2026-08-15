@@ -60,6 +60,19 @@ def test_normal_entry_unaffected(tmp_path):
     assert "蒸馏补充" not in out, "普通条目不该走附录路径"
 
 
+# 这条测试原来只有 `assert not called` 一个断言, 那是**只有阴性、没有阳性对照**:
+# monkeypatch 万一没打中真正被调用的那个模块对象 (conftest 把 helpers 按
+# `catfish_memory_helpers` 和 `_catfish_memory_pkg.catfish_memory_helpers`
+# 两个名字各 exec 了一遍, 是两个不同的 module 对象), called 一样是空的, 测试
+# 一样绿 —— 它绿得跟代码对不对无关。
+#
+# 实测过: 把 setattr 目标换成一个临时造的空模块, 6 passed, 一条都不红。
+#
+# 补 test_p19_merges_non_employee_files 作阳性对照: 同一个 fake、同一次
+# monkeypatch, 非员工条目必须**真的**调到。它绿, 才证明上面那条的"没调到"
+# 是代码的选择, 不是 patch 落空。(2026-08-15 补)
+
+
 @pytest.mark.asyncio
 async def test_p19_skips_employee_files(tmp_path, monkeypatch):
     """员工改过的连送都不送给 LLM —— 边界划在这里, 不是划在验收上。"""
@@ -72,3 +85,22 @@ async def test_p19_skips_employee_files(tmp_path, monkeypatch):
     (ents / "x.md").write_text(HUMAN, encoding="utf-8")
     await H.merge_files_with_llm(tmp_path, {"wiki/entities/x.md": LLM}, "m")
     assert not called, "员工改过的条目被送去 LLM 了"
+
+
+@pytest.mark.asyncio
+async def test_p19_merges_non_employee_files(tmp_path, monkeypatch):
+    """**阳性对照**: 没有 authored_by 标记的条目, 同一个 fake 必须真被调到。
+
+    这条红 = monkeypatch 没打中被调用的那个模块对象, 于是上面那条的"没调到"
+    不能说明任何事。拆分 helpers 时如果把 _call_merge_llm 和
+    merge_files_with_llm 分到两个文件, 这条会立刻红。
+    """
+    import catfish_memory_helpers as H
+    called = []
+    async def fake_merge(old, new, model):
+        called.append((old, new, model)); return None
+    monkeypatch.setattr(H, "_call_merge_llm", fake_merge)
+    ents = tmp_path / "wiki" / "entities"; ents.mkdir(parents=True)
+    (ents / "y.md").write_text(LLM, encoding="utf-8")   # 无 authored_by
+    await H.merge_files_with_llm(tmp_path, {"wiki/entities/y.md": LLM}, "m")
+    assert called, "fake 一次都没被调到 —— monkeypatch 落空了, 不是代码跳过了"
