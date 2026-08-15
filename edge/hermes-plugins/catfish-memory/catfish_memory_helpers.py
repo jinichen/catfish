@@ -2287,7 +2287,28 @@ def _check_dangling_related(catfish_home: Path, rel_path: str, content: str) -> 
     # 原来这里是"stem/title 精确相等", 比前端严格得多 (前端还有别名、标点归一、
     # 唯一子串三档)。于是同一条边蒸馏侧报断链、图上其实连着 —— 报出来的 16%
     # 里大部分是假警报, 真问题反而被淹掉。
-    from wiki_resolve import load_nodes, resolve_wiki_ref
+    # 这里必须相对优先、绝对兜底 —— 本模块有两种加载方式, 语义相反:
+    #
+    #   · hermes 进程内 (memory.provider: catfish-memory)
+    #     ~/.hermes/hermes-agent/plugins/memory/__init__.py 用
+    #     spec_from_file_location(..., submodule_search_locations=[provider_dir])
+    #     加载, 并把同目录每个 *.py 预注册成 `plugins.memory.catfish-memory.<stem>`。
+    #     它**全程没动过 sys.path**, 所以裸 `import wiki_resolve` 找不到;
+    #     `.wiki_resolve` 才找得到 (就是预注册的那个)。
+    #
+    #   · dream_cli.py 子进程 (员工点"蒸馏"按钮)
+    #     python3 跑脚本时脚本目录自动进 sys.path[0], 此时 helpers 没有父包,
+    #     相对 import 反过来会炸, 只能走绝对。
+    #
+    # 原来只有绝对那一行。它没出事只是因为 ~/.catfish/memory_plugin.yaml 里
+    # `wiki.auto_ingest: false` —— 进程内这条路根本没被走到。把那一位翻成 true,
+    # _write_wiki_files 会在 2460 行抛 ModuleNotFoundError, 而它外面那层只
+    # `except OSError`, 接不住; 再外面是 _spawn_summarize_thread 起的
+    # fire-and-forget daemon 线程 —— 于是 wiki 一个字都写不进去, 且没人看得见。
+    try:
+        from .wiki_resolve import load_nodes, resolve_wiki_ref  # noqa: PLC0415
+    except ImportError:
+        from wiki_resolve import load_nodes, resolve_wiki_ref  # noqa: PLC0415
 
     nodes = load_nodes(catfish_home)
     missing = [n for n in names if resolve_wiki_ref(n, nodes).kind != "hit"]
