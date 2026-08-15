@@ -118,15 +118,44 @@ def test_attach_is_called_again_in_lifespan():
 
     在真 uvicorn 上隔离验证过: 只模块层挂 → 文件 0 条; 加 lifespan → 3 条。
     """
+    # 8/15: 判据从"在 lifespan 函数体里找"改成"顺着调用链找"。
+    #
+    # 那天把 lifespan 的启动那半 (216 行) 搬进了 gateway_startup.run_startup,
+    # attach 那句跟着走了。时序**一点没变** (lifespan 仍然 await run_startup,
+    # 仍在 uvicorn dictConfig 之后), 但老判据只看 lifespan 这一个 AST 节点。
+    #
+    # 要守的是"attach 发生在 lifespan 启动期间", 那就顺着链子查两段:
+    #     lifespan    → 调 run_startup
+    #     run_startup → 调 _attach_file_handler_to_uvicorn
+    # 跟同一天 test_compression_hook_policy / test_outputs_dir_convention
+    # 栽的是同一条: 判据钉在语法位置上, 守的却是时序。
     lifespan = next(
         n for n in ast.parse(_SRC).body
         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "lifespan"
     )
-    called = any(
-        isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
-        and c.func.id == "_attach_file_handler_to_uvicorn"
-        for c in ast.walk(lifespan)
-    )
+
+    def _calls(node, name):
+        return any(
+            isinstance(c, ast.Call)
+            and ((isinstance(c.func, ast.Name) and c.func.id == name)
+                 or (isinstance(c.func, ast.Attribute) and c.func.attr == name))
+            for c in ast.walk(node)
+        )
+
+    called = _calls(lifespan, "_attach_file_handler_to_uvicorn")
+    if not called and _calls(lifespan, "run_startup"):
+        _startup_py = (Path(__file__).parent.parent / "src" / "catfish_gateway"
+                       / "gateway_startup.py")
+        assert _startup_py.exists(), (
+            "lifespan 调了 run_startup 但找不到 gateway_startup.py —— "
+            "启动接线搬到哪去了? 把这条测试指过去。"
+        )
+        _run_startup = next(
+            n for n in ast.parse(_startup_py.read_text(encoding="utf-8")).body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.name == "run_startup"
+        )
+        called = _calls(_run_startup, "_attach_file_handler_to_uvicorn")
     assert called, (
         "lifespan 里没再调 _attach_file_handler_to_uvicorn() —— "
         "模块导入期挂的那次会被 uvicorn 的 dictConfig 抹掉, 访问日志仍然不落盘"
