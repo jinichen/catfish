@@ -114,13 +114,29 @@ def test_提示词里给了明确的日期格式():
 
     `<日期>` 这种占位符等于让模型自己发挥。钉住必须写成 YYYY-MM-DD。
     """
-    f = _REPO / "edge/hermes-plugins/catfish-memory/catfish_memory.py"
-    if not f.exists():
-        pytest.skip(f"没有 catfish-memory ({f})")
-    text = f.read_text(encoding="utf-8")
-    line = next((l for l in text.splitlines()
-                 if "文件输出到" in l and not l.strip().startswith("#")), None)
-    assert line, "提示词里那句「文件输出到 …」不见了 —— 契约变了, 这条要更新"
+    # 8/15: 从"钉死单个文件"改成"扫整个 plugin 目录"。
+    #
+    # 原来写死 `catfish-memory/catfish_memory.py`。那天把那个文件从 2494 行拆成
+    # 8 个模块, 这句提示词跟着 _render_purpose 搬到了 catfish_memory_sections.py,
+    # 这条测试就红了 —— 而它想守的契约 (提示词必须给死日期格式) 一个字没变。
+    #
+    # 判据钉在**文件位置**上, 而要守的东西是**内容**, 两者本来就不该绑死。
+    # 改成在目录里找, 以后再怎么拆都不影响。
+    plugin_dir = _REPO / "edge/hermes-plugins/catfish-memory"
+    if not plugin_dir.exists():
+        pytest.skip(f"没有 catfish-memory ({plugin_dir})")
+    line = None
+    for f in sorted(plugin_dir.glob("*.py")):
+        for candidate in f.read_text(encoding="utf-8").splitlines():
+            if "文件输出到" in candidate and not candidate.strip().startswith("#"):
+                line = candidate
+                break
+        if line:
+            break
+    assert line, (
+        "整个 catfish-memory 目录里都找不到「文件输出到 …」那句提示词 —— "
+        "契约变了, 这条要更新"
+    )
     assert "outputs/" in line, f"提示词还在教 LLM 写单数 output/: {line.strip()}"
     assert "YYYY-MM-DD" in line, (
         f"提示词没给日期格式, LLM 会自己发挥 (20260813 就是这么来的): {line.strip()}"
