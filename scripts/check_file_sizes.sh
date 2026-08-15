@@ -215,6 +215,50 @@ while IFS= read -r f; do
 done < "$TMPFILE"
 mv "$KEPT_V" "$TMPFILE"
 
+# ⚠ 8/15: **点名**豁免 —— 只有这张清单里的文件, 一个一个写理由。
+#
+# 跟上面几条例外的区别: 那些是**类别**规则 (schema / 测试 / vendored),
+# 判据能自动判。这张是"人看过之后拍板留着"的, 所以只能点名。
+#
+# 为什么不做成类别规则: "交付脚本"、"文案生成器" 这种类别一旦开口, 下一个人
+# 就会往里塞东西 —— 而路径类豁免正是这个脚本前面反复在防的藏污纳垢方式。
+# 点名的好处是加一项就得改这个文件, 改了要在 review 里说清楚为什么。
+#
+# 规矩:
+#   · 每一项必须有理由, 写在旁边
+#   · 一样打印出来, 不静默消失
+#   · 只对**具体文件**生效, 不接受目录或通配
+NAMED_EXEMPT_LIST="
+delivery/dahua-poc/setup.sh
+projects/daosheng/docs/build-规划-v2.js
+"
+# 理由 (鸿波 8/15 拍板「就不要拆了」):
+#
+#   delivery/dahua-poc/setup.sh (842)
+#     交付给客户 IT 的**单文件**一键装机脚本 —— 探 IP / 生成 .env / 装 image /
+#     签证书 / docker compose up 一条命令走完。拆成几个 source 进来的子脚本
+#     就破坏了"拿到 tar 敲一条命令"这件事本身, 而那正是它存在的理由。
+#     客户现场没有我们的仓库目录结构可依赖。
+#
+#   projects/daosheng/docs/build-规划-v2.js (910)
+#     稻生那份投资人 deck 的生成脚本, 九成行数是文案字符串 (docx 的
+#     Paragraph/TextRun 字面量)。拆它等于把一篇文档腰斩成两个文件,
+#     收益接近零。本质是"内容即代码", 不是逻辑。
+NAMED_EXEMPT=0
+NAMED_FILES=$(mktemp)
+: > "$NAMED_FILES"
+KEPT_N=$(mktemp)
+while IFS= read -r f; do
+  rel="${f#$REPO_ROOT/}"
+  if printf '%s\n' "$NAMED_EXEMPT_LIST" | grep -Fxq "$rel"; then
+    NAMED_EXEMPT=$((NAMED_EXEMPT + 1))
+    printf '%s\n' "$f" >> "$NAMED_FILES"
+    continue
+  fi
+  printf '%s\n' "$f" >> "$KEPT_N"
+done < "$TMPFILE"
+mv "$KEPT_N" "$TMPFILE"
+
 TOTAL_FILES=0
 WARN_COUNT=0
 FAIL_COUNT=0
@@ -317,6 +361,16 @@ echo " 汇总：$FAIL_COUNT 个必拆  +  $WARN_COUNT 个警戒  /  共 $TOTAL_F
   echo " （另有 $IGNORED_COUNT 个文件被 .gitignore 排除，不计入）"
 [ "${SCHEMA_EXEMPT:-0}" -gt 0 ] && \
   echo " （另有 $SCHEMA_EXEMPT 个纯数据 schema 文件按 CLAUDE.md §1 例外，不计入）"
+
+# 点名豁免必须逐个列出来 —— 这张清单是人拍板的, 不是规则推出来的,
+# 所以更需要每次都在眼前晃一下。哪天有人往里加了一项, 报告里会立刻多一行。
+if [ -s "${NAMED_FILES:-/dev/null}" ]; then
+  echo " （另有 $NAMED_EXEMPT 个文件在 CLAUDE.md §1 的**点名清单**里，不计入）"
+  while IFS= read -r nf; do
+    echo "$(printf '      %6d  %s' "$(wc -l < "$nf" | tr -d ' ')" "${nf#$REPO_ROOT/}")"
+  done < "$NAMED_FILES"
+  echo "   理由见 scripts/check_file_sizes.sh 里 NAMED_EXEMPT_LIST 上方的注释"
+fi
 
 # vendored 第三方也要看得见 —— 万一哪天有人往自己的目录里放了个 LICENSE,
 # 半个仓会悄悄从报告里消失。超线的直接点名, 免得"第三方"变成藏污纳垢的口袋。
