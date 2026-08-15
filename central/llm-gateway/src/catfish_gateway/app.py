@@ -733,6 +733,45 @@ async def health() -> dict[str, str]:
     return {"status": "ok", "service": "catfish-gateway"}
 
 
+@app.get("/api/inflight")
+async def api_inflight(user: User = Depends(get_current_user)) -> dict[str, Any]:
+    """当前在途的 SSE 流 —— 卡住时用来看"到底哪条卡着、卡了多久"。
+
+    # 为什么补这个 (8/15)
+
+    inflight_streams 从 5/12 起就在记每条流 (request_id / user / model /
+    message_count / started_at), 它的 docstring 写的是 "cancel UI / ops 调试用",
+    但**从来没有接出来**。于是 8/15 现场一条 deepseek 流卡在首 chunk 之前时,
+    这份数据就在进程内存里躺着, 排查的人拿不到 —— 只能从日志里数"哪条请求没有
+    收尾行"。信息在, 但看不见。
+
+    elapsed_secs 是这里唯一新算的字段, 也正是卡住时最想知道的那个。
+    按它倒序排, 最久的排最前。
+
+    # 权限
+
+    sysadmin only: 记录里带 user (员工邮箱) 和 model, 属于跨员工的运行状态。
+    普通员工看自己的对话不需要这个接口。
+
+    # 边界
+
+    纯内存, 单实例 (见 inflight_streams 模块头)。gateway 重启后清零, 多 pod
+    时只反映当前这个 pod —— 这两条都是那个模块本来就有的性质, 不是这里引入的。
+    """
+    _require_sysadmin(user)
+    from . import inflight_streams  # noqa: PLC0415
+
+    now = time.time()
+    rows = []
+    for r in inflight_streams.list_inflight():
+        row = dict(r)
+        started = row.get("started_at")
+        row["elapsed_secs"] = round(now - started, 1) if isinstance(started, (int, float)) else None
+        rows.append(row)
+    rows.sort(key=lambda x: x.get("elapsed_secs") or 0, reverse=True)
+    return {"count": len(rows), "now_iso": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "inflight": rows}
+
+
 # Quota — 五一 sprint 5/3, BL-D9
 #
 # 给 Companion Dashboard 的 QuotaCard 用. 返当前用户三维 quota:
@@ -2568,12 +2607,43 @@ async def _stream_chat_completion(
         _too_long = check_context_fits(prompt_estimate, model)
         if _too_long:
             raise HTTPException(status_code=413, detail=_too_long)
-        # attempts_out=attempts_log: 让 with_fallback 原地填, 这样**抛异常时**
-        # 下面 except 里也拿得到试过谁 (返回值那条路在 raise 时走不到)。
-        (iterator, first_chunk), used_model, attempts_log = await with_fallback(
-            config, model, _start_stream, prompt_estimate=prompt_estimate,
-            attempts_out=attempts_log,
-        )
+        # ── 8/15: 等首 chunk 期间每 30s 出一次声 ──────────────────────
+        #
+        # 下面那句 await 会一直阻塞到上游吐出第一个 chunk。这段时间里**什么日志
+        # 都没有**, 而它可能很长: 8/15 现场一条 deepseek 流卡在这里, 日志上表现
+        # 为"这条请求没有收尾行", 要靠人比对前后才能看出来。
+        #
+        # 下面 2580 行那条 TTFT 告警帮不上忙 —— 它在首 chunk **到了之后**才执行,
+        # 永远不来就永远不打。
+        #
+        # 心跳 (_stream_with_keepalive) 也帮不上 —— 它包的是 iterator, 而 iterator
+        # 正是这句 await 的产物。中途卡住有保护, 开头卡住没有。
+        #
+        # 这里只加日志, 不动超时: 真正的超时是 model.upstream.timeout 传给
+        # litellm 的那个, 改它是另一件事 (会影响所有慢模型)。
+        async def _warn_while_waiting() -> None:
+            waited = 0.0
+            while True:
+                await asyncio.sleep(_KEEPALIVE_INTERVAL_SECS)
+                waited += _KEEPALIVE_INTERVAL_SECS
+                logger.warning(
+                    "等上游首 chunk 已 %.0fs: model=%s request_id=%s user=%s "
+                    "(上游 timeout=%ss). 这段时间客户端收不到任何字节 —— "
+                    "SSE 心跳要等首 chunk 之后才开始。",
+                    waited, model.name, request_id, user_sub,
+                    getattr(model.upstream, "timeout", "?"),
+                )
+
+        _first_chunk_watch = asyncio.create_task(_warn_while_waiting())
+        try:
+            # attempts_out=attempts_log: 让 with_fallback 原地填, 这样**抛异常时**
+            # 下面 except 里也拿得到试过谁 (返回值那条路在 raise 时走不到)。
+            (iterator, first_chunk), used_model, attempts_log = await with_fallback(
+                config, model, _start_stream, prompt_estimate=prompt_estimate,
+                attempts_out=attempts_log,
+            )
+        finally:
+            _first_chunk_watch.cancel()
         # 首 chunk 拿到 = 上游开始往外吐数据. 这就是 TTFT (time-to-first-token).
         # 注: 如果走了 fallback, 这里记的是"最终成功那个模型的 TTFT", 不算前面失败模型的等待.
         ttft_ms = (time.time() - start) * 1000
