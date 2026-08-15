@@ -92,13 +92,23 @@ declare -a NAMES=(
   "对话轮次|conversation turn"
   "网关请求|POST /v1/chat/completions"
   "记忆总结|catfish-memory sync_turn trigger"
-  "wiki 生成|wiki Step 2"
+  # ⚠ wiki 这条的前置**必须同时认成功和失败两种日志**。
+  #   失败走 "wiki Step 2 generation 返空 (skip)" (distill.py:306)
+  #   成功走 "✓ wiki ship N entities + N concepts"  (distill.py:344)
+  #   第一版只写了 "wiki Step 2" —— 结果 8/15 晚 18:28 wiki 第一次真的生成成功
+  #   (6 entities + 6 concepts) 时, 这里报的是"0 次, 没跑过"。
+  #   **把一个成功藏起来了** —— 正是这个脚本要防的那种事, 它自己犯了一次。
+  "wiki 蒸馏|__WIKI_ANY__"
   "早安 advisor|companion-advisor"
 )
 ANY=0
 for item in "${NAMES[@]}"; do
   label="${item%%|*}"; pat="${item##*|}"
-  n=$(grep -cF "$pat" "$TMP")
+  if [ "$pat" = "__WIKI_ANY__" ]; then
+    n=$(grep -cE "wiki Step 2|wiki ship" "$TMP")
+  else
+    n=$(grep -cF "$pat" "$TMP")
+  fi
   [ "$n" -gt 0 ] && ANY=1
   # printf 的 %-Ns 数字节, 中文一个字 3 字节 —— 直接用会参差。自己补空格。
   pad=$(_pad "$label" 16)
@@ -155,7 +165,12 @@ echo
 echo "${B}══ 已知的静默失败 (踩过的坑, 定点查)${N}"
 check() {
   local label="$1" pat="$2" pre="$3" hint="$4"
-  local pre_n; pre_n=$(grep -cF "$pre" "$TMP")
+  local pre_n
+  if [ "$pre" = "__WIKI_ANY__" ]; then
+    pre_n=$(grep -cE "wiki Step 2|wiki ship" "$TMP"); pre="wiki 蒸馏"
+  else
+    pre_n=$(grep -cF "$pre" "$TMP")
+  fi
   local n; n=$(grep -cF "$pat" "$TMP")
   local pad; pad=$(_pad "$label" 22)
   if [ "$pre_n" -eq 0 ]; then
@@ -167,9 +182,16 @@ check() {
   fi
 }
 check "插件兄弟模块 import"  "No module named 'plugin'"      "conversation turn"  "→ _sib 又退回裸 import 了"
-check "wiki 生成"            "wiki Step 2 generation 返空"   "wiki Step 2"        "→ prompt 拼不出来? 查 KeyError"
-check "prompt KeyError"      "KeyError"                       "wiki Step 2"        "→ 模板里有花括号撞 .format"
+check "wiki 生成返空"        "wiki Step 2 generation 返空"   "__WIKI_ANY__"       "→ prompt 拼不出来? 查 KeyError"
+check "prompt KeyError"      "KeyError"                       "__WIKI_ANY__"       "→ 模板里有花括号撞 .format"
 check "hermes relay 收尾"    "turn finalization failed"       "conversation turn"  ""
+
+# 正面证据也要给 —— 只报"没有坏消息"不够, 得看见它真的产出过东西。
+_ship=$(grep -cF "wiki ship" "$TMP")
+if [ "$_ship" -gt 0 ]; then
+  printf "   ${G}%s%s${N}\n" "$(_pad "wiki 真产出" 22)" \
+    "$(grep -oE "wiki ship [0-9]+ entities \+ [0-9]+ concepts" "$TMP" | tail -1)"
+fi
 echo
 
 # ── 5. token 大户 ───────────────────────────────────────────
