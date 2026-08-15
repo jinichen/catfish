@@ -131,9 +131,21 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   },
 
   setUrgencyMap: (map) => {
-    // emailClassifyNow 返完整 map, 直接覆盖
-    set({ urgencyMap: map, lastSyncedAt: Date.now() });
-    savePersistedUrgency(map);
+    // 8/15: 从"直接覆盖"改成 merge。
+    //
+    // 原注释说「emailClassifyNow 返完整 map」—— 这个前提**不成立**:
+    // Rust 侧 urgency_cache 有上限, 超了会丢一半 (email_scheduler.rs
+    // URGENCY_CACHE_MAX)。当时上限 200 而列表能拉 500, 于是返回的 map
+    // 常常比本地已有的还少, 覆盖下去等于**把已评过的记录抹掉**,
+    // 连 localStorage 一起抹 —— 前端下次再把它们当"没评过"重评一遍。
+    // 这是 8/15 那个评级永动机的第三处燃料。
+    //
+    // merge 的取舍: 新值覆盖同 id 的旧值 (后端是权威), 但后端没返的 id
+    // 保留本地的。代价是已归档邮件的评级会一直留在 localStorage,
+    // 那点体积换"不会重烧 token"是划算的。
+    const merged = { ...get().urgencyMap, ...map };
+    set({ urgencyMap: merged, lastSyncedAt: Date.now() });
+    savePersistedUrgency(merged);
   },
 
   markRead: (id) => {

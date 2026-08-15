@@ -21,6 +21,15 @@ use crate::services::catfish_paths;
 use crate::services::email_scheduler;
 use crate::services::phishing_scan::PhishingScanResult;
 
+
+/// 一次 list 最多返多少封。EmailTab 的 MAX_EMAIL_LIST_LIMIT 跟这个值对齐。
+///
+/// 8/15: 抽成命名常量, 因为它跟 email_scheduler::URGENCY_CACHE_MAX 之间有一条
+/// **必须成立的大小关系** —— 评级缓存装不下整个列表时, email_classify_now
+/// 返回的 map 会缺条目, 前端把缺的当"没评过"再评一遍, 形成永动机 (8/15 实测
+/// 83 分钟 2470 万 token)。见 email_scheduler.rs 上那条测试。
+pub(crate) const EMAIL_LIST_MAX: u32 = 500;
+
 /// Apple Mail 数据目录读不读得到 —— 用来提示"有账号但少了几个"。
 ///
 /// # 为什么要有这条
@@ -161,7 +170,7 @@ pub async fn email_list_fetch(
             .to_string()
     })?;
 
-    let n = limit.unwrap_or(50).clamp(1, 500);
+    let n = limit.unwrap_or(50).clamp(1, EMAIL_LIST_MAX);
     let mut args = vec!["list".to_string(), "--json".to_string()];
     if unread_only {
         args.push("--unread".to_string());

@@ -41,6 +41,7 @@ use std::time::Duration;
 
 use tauri::AppHandle;
 use tokio::time;
+use tokio::time::MissedTickBehavior;
 
 use crate::services::{
     catfish_paths, email_config, hermes_api_config, picker_config, upstream_error_guard,
@@ -151,8 +152,14 @@ pub async fn email_classify_now(
         for (it, u) in to_rate.iter().zip(rated.iter()) {
             cache.insert(it.id.clone(), u.as_label().to_string());
         }
-        if cache.len() > 200 {
-            let keys: Vec<_> = cache.keys().take(100).cloned().collect();
+        // 8/15: 200 → URGENCY_CACHE_MAX (600)。见常量上那段注释 ——
+        // 上限低于列表上限 500 是那个"永动机"的燃料之一。
+        if cache.len() > URGENCY_CACHE_MAX {
+            let keys: Vec<_> = cache
+                .keys()
+                .take(URGENCY_CACHE_MAX / 2)
+                .cloned()
+                .collect();
             for k in keys {
                 cache.remove(&k);
             }
@@ -245,6 +252,17 @@ pub fn schedule_email_scheduler(app: AppHandle) {
 
     tauri::async_runtime::spawn(async move {
         let mut interval = time::interval(Duration::from_secs(poll_secs));
+        // 8/15: tokio 的 interval 默认是 MissedTickBehavior::Burst —— 循环体
+        // 耗时超过周期时, 漏掉的 tick 会**一次性连着补打**。
+        //
+        // 这个循环体里有三个长 await: fetch_unread (子进程)、rate_emails
+        // (LLM, 实测 5–10s)、scan_phishing_for_new (LLM)。上游一慢 (8/15 是
+        // 配额耗尽 → fallback → 更慢), 单轮就轻松超过 30s, 于是补打的 tick
+        // 让循环以"体耗"而不是"周期"的节奏空转 —— **越慢烧得越凶**, 自我放大。
+        //
+        // Skip: 漏掉的 tick 直接丢, 下一次对齐到未来的周期点。对"定期扫未读"
+        // 这种幂等轮询, 漏掉一轮没有任何损失 —— 下一轮拿到的是同一份未读列表。
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
         // 第一 tick 立即返, 用来建 baseline
         interval.tick().await;
         let mut seen: HashSet<String> = HashSet::new();
@@ -291,8 +309,9 @@ pub fn schedule_email_scheduler(app: AppHandle) {
                                     cache.insert(it.id.clone(), u.as_label().to_string());
                                 }
                                 // 简单 LRU: 超 200 时随便丢一半 (BTreeMap 不行用 HashMap)
-                                if cache.len() > 200 {
-                                    let keys: Vec<_> = cache.keys().take(100).cloned().collect();
+                                if cache.len() > URGENCY_CACHE_MAX {
+                                    let keys: Vec<_> = cache
+                                        .keys().take(URGENCY_CACHE_MAX / 2).cloned().collect();
                                     for k in keys { cache.remove(&k); }
                                 }
                             }
@@ -585,6 +604,19 @@ async fn store_and_audit(items: &[EmailItem], scans: Vec<PhishingScanResult>) {
 /// 评级新邮件. 调 gateway 快速 model. 失败 fallback 全标 Medium (不通知 + 不阻塞).
 ///
 /// CATFISH_EMAIL_RATE=0 → 一律 Urgent (回 step2 行为, 任何新邮件都通知).
+/// urgency_cache 上限。**必须 > EmailTab 的 MAX_EMAIL_LIST_LIMIT (500)**。
+///
+/// 8/15 之前是 200, 而列表一次能拉 500 (email.rs:164 `clamp(1, 500)`)。
+/// 于是缓存永远装不下整个列表, 每次超限丢一半, `email_classify_now` 返回的
+/// map 就比员工可见的邮件少 —— 前端把"不在 map 里"当成"没评过", 再评一遍,
+/// 再撑爆, 再丢一半。**这是 8/15 那个评级永动机的燃料之一**
+/// (另外两处: EmailTab 那两个 effect 依赖自己写的 state; store 的
+/// setUrgencyMap 是整份覆盖不是 merge。三处一起修才堵得住)。
+///
+/// 改这个值之前先确认 MAX_EMAIL_LIST_LIMIT 没变大 —— 两者的大小关系是
+/// 这里唯一要守的不变量, 见 tests 里的 `urgency_cache_上限必须大于列表上限`。
+pub(crate) const URGENCY_CACHE_MAX: usize = 600;
+
 async fn rate_emails(items: &[EmailItem]) -> Vec<Urgency> {
     let cfg = email_config::email_config();
     if !cfg.rate_enabled {
@@ -634,6 +666,55 @@ mod tests {
     use crate::services::email_types::EmailItem;
 
     // ── BL-COMPANION-BRIEFING-V2 sub-task 2 (5/20): 通知去重 ──
+
+    // ── 8/15: 评级永动机的两条不变量 ──────────────────────────────
+
+    /// 评级缓存必须装得下整个列表。
+    ///
+    /// 8/15 之前 URGENCY_CACHE_MAX=200 而列表上限 500: 缓存永远装不下,
+    /// 每次超限丢一半, email_classify_now 返回的 map 就比员工可见的邮件少,
+    /// 前端把缺的当"没评过"再评一遍 —— 永动机。实测 83 分钟 2470 万 token,
+    /// 把百炼周配额从 07:54 重置烧到 09:17 见底。
+    ///
+    /// 这条红 = 又有人把缓存调小、或者把列表上限调大。
+    #[test]
+    fn urgency_cache_上限必须大于列表上限() {
+        use crate::commands::email::EMAIL_LIST_MAX;
+        assert!(
+            URGENCY_CACHE_MAX > EMAIL_LIST_MAX as usize,
+            "urgency 缓存 {} 装不下列表上限 {} —— 前端会把装不下的当作没评过反复重评",
+            URGENCY_CACHE_MAX,
+            EMAIL_LIST_MAX,
+        );
+    }
+
+    /// 本文件里每个 `time::interval(` 都必须显式设 MissedTickBehavior。
+    ///
+    /// tokio 默认是 Burst: 循环体耗时超过周期时, 漏掉的 tick 会一次性连着补打。
+    /// 而这个 scheduler 的循环体里有三个长 await (fetch_unread 子进程 +
+    /// rate_emails LLM + scan_phishing_for_new LLM), 上游一慢单轮就超 30s,
+    /// 于是循环以"体耗"而不是"周期"的节奏空转 —— 越慢烧得越凶。
+    ///
+    /// 用读源码的方式测, 是因为 Burst 与否没有可断言的运行时接口
+    /// (Interval 不暴露当前 behavior), 而真跑一个 >30s 的 tokio 计时测试
+    /// 又太慢。这条守的是"别再忘了写这一行"。
+    #[test]
+    fn 每个_interval_都设了_missed_tick_behavior() {
+        let src = include_str!("email_scheduler.rs");
+        let n_interval = src.matches("time::interval(").count();
+        let n_behavior = src.matches("set_missed_tick_behavior").count();
+        assert!(
+            n_interval > 0,
+            "没找到 time::interval( —— 测试的判据过期了, 去看看 scheduler 改成什么了"
+        );
+        assert!(
+            n_behavior >= n_interval,
+            "有 {} 个 time::interval( 但只有 {} 处 set_missed_tick_behavior —— \
+             漏掉的那个会用 tokio 默认的 Burst, 慢的时候连着补打",
+            n_interval,
+            n_behavior,
+        );
+    }
 
     fn mk(id: &str) -> EmailItem {
         EmailItem {
