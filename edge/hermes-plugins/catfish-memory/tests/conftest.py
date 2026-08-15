@@ -126,6 +126,52 @@ import pytest  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
+def _isolate_home(tmp_path_factory, monkeypatch):
+    """**每条测试都用一个空的假 HOME** —— 别读开发机的真实家目录。
+
+    # 病 (8/15 鸿波本机跑出 3 条红, 沙箱/CI 全绿)
+
+    两处代码绕过了 `CATFISH_HOME` 这个隔离口子, 直接摸真实家目录:
+
+      1. `catfish_memory_render._render_skills_catalog` 读
+         `Path.home() / ".hermes" / "skills"`。鸿波机器上那里有 **17 个真技能**,
+         把 5KB 预算 (_BUDGETS["skills_catalog"]) 占满, 测试塞进 fake home 的
+         `ppt-magazine` 根本进不了输出 → test_prefetch_skills_catalog 红。
+
+      2. `catfish_memory_helpers._read_hermes_env_key` 读 `~/.hermes/.env`。
+         而 `_gateway_dev_token` 的优先级是
+         **OPENAI_API_KEY > CATFISH_INTERNAL_DEV_TOKEN > yaml**
+         (7/27 BL-PLUGIN-AUTH-FIX 定的, 修 "Dream Engine 9.7 天没跑")。
+         `.env` 里有真 OPENAI_API_KEY, 于是测试 setenv 的
+         CATFISH_INTERNAL_DEV_TOKEN=x 永远轮不到 →
+         test_call_summarize_llm_success (test_helpers / test_on_session_end
+         各一条) 断言 `Bearer x` 必红。
+
+    这两条**从 7/27 起就在鸿波机器上红着**, 跟今早查出的
+    test_prefetch_employee_journal_distilled (红了 9 天) 是同一个形状:
+    改了源码的行为契约, 没改描述那个契约的测试。
+
+    # 为什么之前没人发现
+
+    CI 和沙箱里没有 `~/.hermes/` —— 那两处读到空, 测试就绿。也就是说
+    **绿灯来自环境的巧合, 不是代码对**。这类"只在真机红"的测试比普通红灯更坏:
+    唯一会跑到它的人 (开发者本人) 会习惯性忽略, 而 CI 永远不报。
+
+    # 修法
+
+    `Path.home()` 和 `os.path.expanduser("~")` 在 POSIX 上都认 HOME 环境变量,
+    所以改 HOME 一条就同时堵住两处。用 tmp_path_factory 而不是 tmp_path ——
+    后者跟测试自己的 tmp_path 同名会打架 (有些测试往 tmp_path 里塞 .catfish)。
+
+    Windows 上 expanduser 看 USERPROFILE, 一并设上。
+    """
+    fake_home = tmp_path_factory.mktemp("home")
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("USERPROFILE", str(fake_home))
+    yield fake_home
+
+
+@pytest.fixture(autouse=True)
 def _mock_role_resolver(monkeypatch):
     """默认 mock 真`role_resolver.resolve` 真 None → fallback yaml/env path.
 

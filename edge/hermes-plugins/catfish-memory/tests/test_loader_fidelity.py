@@ -217,3 +217,32 @@ def test_没有模块被加载两遍() -> None:
         f"这些模块有两个 module 对象: {dupes} —— monkeypatch 会静默打空, "
         "去 tests/conftest.py 看 alias 那段"
     )
+
+
+def test_测试跑在隔离的_HOME_里() -> None:
+    """conftest 的 _isolate_home 必须真的生效。
+
+    # 为什么单列一条
+
+    8/15 鸿波本机跑出 3 条红而沙箱/CI 全绿, 根因是两处代码绕过 CATFISH_HOME
+    直接摸真实家目录 (`Path.home()/".hermes"/"skills"` 和 `~/.hermes/.env`)。
+    见 conftest._isolate_home 的 docstring。
+
+    那两条测试**从 7/27 起就在真机上红着**, 而 CI 因为没有 ~/.hermes 一直绿 ——
+    绿灯来自环境的巧合。这条守卫直接问"HOME 隔离了没", 而不是绕着问某个行为,
+    所以它在有 ~/.hermes 的机器和没有的机器上判据一致。
+    """
+    import os
+    from pathlib import Path
+
+    home = Path.home()
+    # 1. HOME 必须指向一个 pytest 造的临时目录
+    assert "pytest" in str(home) or str(home).startswith(("/tmp", "/private/var", "/var")), (
+        f"HOME={home} 看起来是真实家目录 —— _isolate_home 没生效"
+    )
+    # 2. expanduser 跟 Path.home 必须一致 (helpers 用的是 expanduser)
+    assert os.path.expanduser("~") == str(home)
+    # 3. 隔离后不该看得到真实的 hermes 数据
+    assert not (home / ".hermes" / ".env").exists(), (
+        "假 HOME 下居然有 .hermes/.env —— 隔离漏了"
+    )
