@@ -32,20 +32,46 @@ sys.path.insert(0, str(_PLUGIN_DIR))
 import model_authority as ma  # noqa: E402
 
 
-def _plugin_impl():
-    """把 plugin.py 里那一个函数单独抠出来执行。
+#: 8/15: 从"写死 plugin.py"改成"在 plugin*.py 里找"。
+#:
+#: 那天把 plugin.py 从 3226 行拆成 8 个模块, _read_catfish_picker_model 跟着
+#: P23 搬到了 plugin_runtime.py, 这两条测试就红了 —— 而它们要守的规矩
+#: (picker 只能有一份读法) 一个字没变。
+#:
+#: 判据钉在**文件位置**上、守的却是**内容**, 跟同一天 test_outputs_dir_convention
+#: 栽的是同一条。改成扫目录。
+def _find_impl_source():
+    """在 plugin*.py 里找 _read_catfish_picker_model 的定义, 返 (文件名, 源码)。
 
-    不 import 整个 plugin.py —— 它一加载就会去 patch hermes, 而这条测试跟
+    顺带钉住"只有一份": 两个模块各定义一份的话直接报出来 —— 那正是本文件
+    开头说的"飘"的起点。
+    """
+    hits = []
+    for f in sorted(_PLUGIN_DIR.glob("plugin*.py")):
+        src = f.read_text(encoding="utf-8")
+        for n in ast.parse(src).body:
+            if getattr(n, "name", None) == "_read_catfish_picker_model":
+                hits.append((f.name, src, n))
+    assert hits, "plugin*.py 里找不到 _read_catfish_picker_model"
+    assert len(hits) == 1, (
+        f"_read_catfish_picker_model 有 {len(hits)} 份定义: "
+        f"{[h[0] for h in hits]} —— 又回到两份各自飘的老路了"
+    )
+    return hits[0]
+
+
+def _plugin_impl():
+    """把那一个函数单独抠出来执行。
+
+    不 import 整个模块 —— plugin.py 一加载就会去 patch hermes, 而这条测试跟
     hermes 装没装无关。
     """
-    src = (_PLUGIN_DIR / "plugin.py").read_text(encoding="utf-8")
-    seg = next(
-        (ast.get_source_segment(src, n) for n in ast.parse(src).body
-         if getattr(n, "name", None) == "_read_catfish_picker_model"),
-        None,
-    )
-    assert seg is not None, "plugin.py 里找不到 _read_catfish_picker_model"
-    ns: dict = {"model_authority": ma}
+    fname, src, node = _find_impl_source()
+    seg = ast.get_source_segment(src, node)
+    # 拆分后函数体里是 `_model_authority().read_picker_model(...)`,
+    # 那个访问器是延迟取兄弟模块用的 (见 plugin_runtime._sib)。
+    # 这里不想真去加载兄弟模块, 直接喂一个返回 ma 的桩。
+    ns: dict = {"model_authority": ma, "_model_authority": lambda: ma}
     exec(seg, ns)  # noqa: S102
     return ns["_read_catfish_picker_model"]
 
@@ -55,9 +81,7 @@ def test_plugin_delegates_instead_of_reimplementing():
 
     有人把它改回独立实现时这条会红 —— 那正是需要人看一眼的时刻。
     """
-    src = (_PLUGIN_DIR / "plugin.py").read_text(encoding="utf-8")
-    node = next(n for n in ast.parse(src).body
-                if getattr(n, "name", None) == "_read_catfish_picker_model")
+    _fname, src, node = _find_impl_source()
     # 只看**语句**, 跳过 docstring —— docstring 里正当地写着 picker_state.json
     # 这些词 (它在解释为什么不再自己读文件)。第一版没跳, 于是这条测试红在了
     # 一个跟本意完全相反的地方: 注释写得越清楚越容易挂。
@@ -66,7 +90,10 @@ def test_plugin_delegates_instead_of_reimplementing():
                      and isinstance(s.value.value, str))]
     body_src = "\n".join(ast.get_source_segment(src, s) or "" for s in stmts)
 
-    assert "model_authority.read_picker_model" in body_src, "应该转调, 别再抄一份"
+    # 8/15: 只认 `read_picker_model` 这个**转调目标**, 不再要求前缀逐字是
+    # `model_authority.` —— 拆分后它成了 `_model_authority().read_picker_model`
+    # (延迟取兄弟模块的访问器)。要守的是"转调给唯一权威", 不是前缀长什么样。
+    assert "read_picker_model" in body_src, "应该转调, 别再抄一份"
     for smell in ("picker_state.json", "json.loads", "read_text"):
         assert smell not in body_src, (
             f"函数体里出现了 {smell!r} —— 看起来又自己读文件了, "
