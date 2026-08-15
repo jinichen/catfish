@@ -46,192 +46,51 @@ from __future__ import annotations
 
 import csv
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any
 
 # Preview 上限 (字符数). 全格式默认 5000, 给 LLM 看个梗概就够, 不要塞数据.
-PREVIEW_MAX_CHARS = int(os.environ.get("CATFISH_PREVIEW_MAX_CHARS") or 5000)
-# Excel/CSV 每 sheet/file 显示前 N 行
-PREVIEW_ROWS = int(os.environ.get("CATFISH_PREVIEW_ROWS") or 20)
-# PDF 显示前 N 页
-PREVIEW_PAGES = int(os.environ.get("CATFISH_PREVIEW_PAGES") or 5)
-# Word 显示前 N 段
-PREVIEW_PARAS = int(os.environ.get("CATFISH_PREVIEW_PARAS") or 30)
+# ── 共用常量 + _truncate (8/15 搬去 parse_file_common.py) ──────
+#
+# 抽出去的直接原因: 5/21 拆 parse_file_audio.py 时是**照抄**了一份过去,
+# 三个月后两份 _truncate 的截断提示已经一中一英各飘一边。这次要再抽 PDF /
+# Office 出去, 不立个共用层就是第四份第五份。详见 parse_file_common.py。
+#
+# 这里 re-export 是为了 `pf._truncate` / `pf.PREVIEW_ROWS` 这些老写法不破。
+# 全是不可变常量和纯函数, 快照语义安全。
+from parse_file_common import (  # noqa: F401
+    PREVIEW_MAX_CHARS,
+    PREVIEW_PAGES,
+    PREVIEW_PARAS,
+    PREVIEW_ROWS,
+    _truncate,
+)
+
+# ── 各格式 parser (8/15 按依赖的第三方库分了两个模块) ──────────
+#
+#   parse_file_office.py  Excel / xls / pptx / docx —— 都靠一个经常没装的
+#                         第三方库, 形状一样 (函数体内 import + ImportError
+#                         转成人话)
+#   parse_file_pdf.py     PDF preview + anchor 表格识别 (那段启发式 129 行,
+#                         只有 parse_pdf_preview 一个调用者)
+#
+# json / csv / text / video 留在本文件 —— 只用标准库, 加起来不到 120 行。
+from parse_file_office import (  # noqa: F401
+    _parse_xls_preview,
+    parse_docx_preview,
+    parse_excel_preview,
+    parse_pptx_preview,
+)
+from parse_file_pdf import (  # noqa: F401
+    ANCHOR_PATTERNS,
+    MIN_ANCHORS,
+    SUB_PATTERNS,
+    _detect_anchor_table,
+    parse_pdf_preview,
+)
 
 
-def _truncate(s: str, limit: int = PREVIEW_MAX_CHARS) -> str:
-    """preview 防意外超出, 多裁掉. 上限是软上限, 5K 一般够."""
-    if len(s) <= limit:
-        return s
-    return s[:limit] + f"\n[... preview 截到 {limit} 字, 完整数据用 execute_code 读]"
-
-
-# ============================================================
-# Excel
-# ============================================================
-
-def parse_excel_preview(path: Path) -> tuple[str, dict[str, Any]]:
-    """Excel 各 sheet 列头 + 前 20 行 + 总行数.
-
-    P3.3.21 (6/11): 老 .xls (97-2003 binary) openpyxl 不吃, 走 xlrd 分支.
-    .xlsx / .xlsm (xlsx + macro) 走 openpyxl. .xlsb 用户极少, 暂不支持.
-    """
-    ext = path.suffix.lower()
-    if ext == ".xls":
-        return _parse_xls_preview(path)
-
-    try:
-        from openpyxl import load_workbook  # noqa: PLC0415
-    except ImportError:
-        raise RuntimeError("openpyxl 未装. 跑: pip install openpyxl")
-
-    wb = load_workbook(path, read_only=True, data_only=True)
-    parts: list[str] = []
-    sheets: list[str] = []
-    row_counts: dict[str, int] = {}
-
-    for sheet in wb.worksheets:
-        sheets.append(sheet.title)
-        # 用 max_row 拿总行数 (read_only=True 时是估值, 但够 LLM 决策用)
-        total_rows = sheet.max_row or 0
-        row_counts[sheet.title] = total_rows
-        parts.append(f"## Sheet: {sheet.title}  (共 {total_rows} 行)")
-
-        # 拿前 PREVIEW_ROWS+1 行 (含 header)
-        rows_iter = sheet.iter_rows(values_only=True)
-        sample: list[tuple] = []
-        for i, row in enumerate(rows_iter):
-            if i >= PREVIEW_ROWS + 1:
-                break
-            sample.append(row)
-
-        if not sample:
-            parts.append("  (空 sheet)")
-            parts.append("")
-            continue
-
-        # 第一行当 header (大多数 Excel 是这样, 不绝对)
-        for row in sample:
-            cells = [str(c) if c is not None else "" for c in row]
-            if any(cells):
-                parts.append("\t".join(cells))
-        if total_rows > len(sample):
-            parts.append(f"  (... 还有 {total_rows - len(sample)} 行未显示, 用 execute_code 读完整)")
-        parts.append("")  # sheet 间空行
-
-    text = _truncate("\n".join(parts))
-    meta: dict[str, Any] = {
-        "sheets": sheets,
-        "row_counts": row_counts,
-        "total_sheets": len(sheets),
-    }
-    return text, meta
-
-
-# P3.3.21 (6/11): 老 .xls (97-2003 binary) 走 xlrd<2.0.
-# xlrd 2.0+ 砍掉 .xls 支持 (只剩 .xlsx 没意义, openpyxl 更全), 必须 1.x.
-def _parse_xls_preview(path: Path) -> tuple[str, dict[str, Any]]:
-    """老 .xls (Excel 97-2003 binary) 用 xlrd 1.2.0 解."""
-    try:
-        import xlrd  # noqa: PLC0415
-    except ImportError:
-        raise RuntimeError(
-            "老 .xls (Excel 97-2003 格式) 需 xlrd 1.2.0. "
-            "解法: (1) pip install 'xlrd<2.0' 或 "
-            "(2) Excel 打开 → 另存为 .xlsx (openpyxl 兼容更好)"
-        )
-
-    wb = xlrd.open_workbook(str(path), on_demand=True)
-    parts: list[str] = []
-    sheets: list[str] = []
-    row_counts: dict[str, int] = {}
-
-    for sheet_name in wb.sheet_names():
-        sheet = wb.sheet_by_name(sheet_name)
-        sheets.append(sheet_name)
-        total_rows = sheet.nrows
-        row_counts[sheet_name] = total_rows
-        parts.append(f"## Sheet: {sheet_name}  (共 {total_rows} 行)")
-
-        if total_rows == 0:
-            parts.append("  (空 sheet)")
-            parts.append("")
-            continue
-
-        max_rows = min(PREVIEW_ROWS + 1, total_rows)
-        for r in range(max_rows):
-            cells = [str(sheet.cell_value(r, c)) for c in range(sheet.ncols)]
-            if any(cells):
-                parts.append("\t".join(cells))
-        if total_rows > max_rows:
-            parts.append(f"  (... 还有 {total_rows - max_rows} 行未显示, 用 execute_code 读完整)")
-        parts.append("")
-
-    text = _truncate("\n".join(parts))
-    meta: dict[str, Any] = {
-        "sheets": sheets,
-        "row_counts": row_counts,
-        "total_sheets": len(sheets),
-        "format": "xls",  # 给 LLM 看 — 老格式 execute_code 时要 pandas + engine='xlrd'
-    }
-    return text, meta
-
-
-# ============================================================
-# PowerPoint (.pptx) — P3.3.21 (6/11)
-# ============================================================
-
-def parse_pptx_preview(path: Path) -> tuple[str, dict[str, Any]]:
-    """.pptx 每页 title + 正文 text. .ppt 老格式不支持 — 装 python-pptx 即可."""
-    try:
-        from pptx import Presentation  # noqa: PLC0415
-    except ImportError:
-        raise RuntimeError(
-            "python-pptx 未装. 跑: pip install python-pptx  "
-            "(注: 老 .ppt 97-2003 格式不支持, 请另存为 .pptx)"
-        )
-
-    prs = Presentation(str(path))
-    parts: list[str] = []
-    slide_titles: list[str] = []
-    total_slides = len(prs.slides)
-    parts.append(f"## PPTX  (共 {total_slides} 页)")
-
-    # PREVIEW_ROWS 复用 — pptx 前 N 页 preview, 跟 PDF 一致
-    max_slides = min(PREVIEW_ROWS, total_slides)
-    for i, slide in enumerate(prs.slides):
-        if i >= max_slides:
-            break
-        title = ""
-        body_lines: list[str] = []
-        for shape in slide.shapes:
-            if not shape.has_text_frame:
-                continue
-            tf = shape.text_frame
-            txt = (tf.text or "").strip()
-            if not txt:
-                continue
-            # 第一个有文字的 placeholder 当 title (粗略, 大多 ppt 是这样)
-            if not title:
-                title = txt.split("\n", 1)[0][:80]
-            body_lines.append(txt)
-        slide_titles.append(title or f"(第 {i + 1} 页, 无标题)")
-        parts.append(f"### 第 {i + 1} 页: {title or '(无标题)'}")
-        for line in body_lines:
-            parts.append(line)
-        parts.append("")
-
-    if total_slides > max_slides:
-        parts.append(f"  (... 还有 {total_slides - max_slides} 页未显示, 用 execute_code 读完整)")
-
-    text = _truncate("\n".join(parts))
-    meta: dict[str, Any] = {
-        "total_slides": total_slides,
-        "slide_titles": slide_titles,
-    }
-    return text, meta
 
 
 # ============================================================
@@ -279,290 +138,8 @@ def parse_json_preview(path: Path) -> tuple[str, dict[str, Any]]:
     return text, meta
 
 
-# ============================================================
-# PDF
-# ============================================================
-
-def parse_pdf_preview(path: Path) -> tuple[str, dict[str, Any]]:
-    """PDF 前 N 页 preview + 总页数 + (新) 结构化表格自动识别.
-
-    5/6 BL-D17: 大 PDF 转 Excel 失败的主因是 "preview 5 页, LLM 看完就以为
-    懂结构, 直接写 Excel 漏掉后 N-5 页". 加 anchor 模式探测:
-      - 找重复主键 (18 位身份证 / 长 ID)
-      - 如果 ≥ 5 个 → 进 anchor 模式, 全量结构化输出到 /tmp/xxx_structured.json
-      - preview 写明 "已提取 N 条 + schema + 完整路径", LLM 直接 pandas.read_json
-        转 Excel, 不用啃 raw text 不爆 context.
-    """
-    try:
-        import pypdfium2 as pdfium  # noqa: PLC0415
-    except ImportError:
-        raise RuntimeError("pypdfium2 未装. 跑: pip install pypdfium2")
-
-    pdf = pdfium.PdfDocument(str(path))
-    total_pages = len(pdf)
-    parts: list[str] = [f"## PDF · 共 {total_pages} 页"]
-
-    # 拼全文 (跨页) 做表格识别
-    full_text_pieces: list[str] = []
-    for i in range(total_pages):
-        page = pdf[i]
-        textpage = page.get_textpage()
-        full_text_pieces.append(textpage.get_text_range() or "")
-    full_text = "\n".join(full_text_pieces)
-
-    # 尝试结构化表格识别
-    structured = _detect_anchor_table(full_text, path)
-    meta: dict[str, Any] = {"page_count": total_pages}
-
-    if structured is not None:
-        # 命中: preview 输出 schema + 前 5 条 + 路径; meta 加 structured_path
-        records, csv_path, columns = structured
-        parts.append("")
-        parts.append(f"## 自动识别到结构化表格 ({len(records)} 条记录)")
-        parts.append(f"列: {', '.join(columns)}")
-        parts.append(f"完整数据 (JSON): {csv_path}")
-        parts.append("")
-        parts.append("⚠️ LLM 注意: 这是大型结构化表格 ({0} 条), preview 只显前 5 条,".format(len(records)))
-        parts.append("   要转 Excel/CSV/分析, 直接 execute_code 跑:")
-        parts.append("     import pandas as pd")
-        parts.append(f"     df = pd.read_json({csv_path!r})  # 拿完整 {len(records)} 条")
-        parts.append("     df.to_excel('output.xlsx', index=False)")
-        parts.append("   不要试着读全 PDF 文字 (5万+ 字会爆 context).")
-        parts.append("")
-        parts.append("### 前 5 条样本")
-        for rec in records[:5]:
-            line = " | ".join(f"{k}={v}" for k, v in rec.items() if k != "_sub")
-            parts.append(line)
-            sub = rec.get("_sub") or []
-            for s in sub[:3]:
-                parts.append("    └─ " + " | ".join(f"{k}={v}" for k, v in s.items()))
-            if len(sub) > 3:
-                parts.append(f"    └─ (... 还有 {len(sub) - 3} 子项)")
-
-        meta["structured_path"] = csv_path
-        meta["structured_count"] = len(records)
-        meta["structured_columns"] = columns
-    else:
-        # 没命中: 走原 preview 5 页流程
-        pages_to_show = min(total_pages, PREVIEW_PAGES)
-        for i in range(pages_to_show):
-            chunk = full_text_pieces[i]
-            if chunk.strip():
-                parts.append(f"\n--- Page {i + 1} ---\n{chunk.strip()}")
-            else:
-                parts.append(f"\n--- Page {i + 1} ---\n(空 / 扫描版无文字)")
-
-        if total_pages > pages_to_show:
-            parts.append(
-                f"\n[... 还有 {total_pages - pages_to_show} 页未显示, "
-                "用 execute_code + pypdfium2 读完整]"
-            )
-
-    text = _truncate("\n".join(parts))
-    return text, meta
 
 
-# ============================================================
-# PDF 结构化表格识别 (anchor + sub-records 模式)
-# ============================================================
-
-# 强主键候选 — 重复 ≥ MIN_ANCHORS 次就当 anchor
-# (顺序: 优先级高 → 低)
-ANCHOR_PATTERNS: list[tuple[str, "re.Pattern[str]"]] = [
-    ("身份证号", __import__("re").compile(r"\b(\d{17}[\dXx])\b")),
-    ("长数字ID", __import__("re").compile(r"\b(\d{15,20})\b")),  # 社保号/学号 等
-]
-
-# 子记录里常见的"小模式" (险种/科目/月份 等). 命中就当结构化子项
-SUB_PATTERNS: list[tuple[str, "re.Pattern[str]"]] = [
-    # 社保 5 险种
-    ("社保险种", __import__("re").compile(
-        r"(养老保险|失业保险|工伤保险|医疗保险|生育保险)[ \t]+"
-        r"(\d{4}年\d{1,2}月)[ \t]+(\d{4}年\d{1,2}月)"
-        r"(?:[ \t]+(\d{1,2}))?"
-    )),
-    # 工资条目: 项目名 + 金额
-    ("金额条目", __import__("re").compile(
-        r"^([一-鿿]{2,8})[ \t]+(-?\d+\.\d{2})\s*$"
-    )),
-]
-
-MIN_ANCHORS = 5  # 至少 5 条才算"表格"
-
-
-def _detect_anchor_table(
-    full_text: str, source_path: Path
-) -> tuple[list[dict[str, Any]], str, list[str]] | None:
-    """探测 anchor + sub-records 模式. 命中返回 (records, json_path, columns).
-
-    策略:
-      1. 找最有效的 anchor 模式 (重复次数最多)
-      2. 用 anchor 切片, 每片提取 anchor 前的"姓名/序号", anchor 后的"子记录"
-      3. 子记录用 SUB_PATTERNS 启发式抽
-      4. 同 anchor 跨页重复 (PDF 翻页) → 合并 sub records
-    """
-    import hashlib  # noqa: PLC0415
-    import json  # noqa: PLC0415
-    import re as _re  # noqa: PLC0415
-
-    # 先把头尾常见噪音去掉, 防干扰 anchor 检测
-    cleaned = full_text
-    for pat in [
-        r"第\s*\d+\s*页\s*\(\s*共\s*\d+\s*页\s*\)",
-        r"统一社会信用代码\(组织机构代码\):",
-        r"社会保险登记号:",
-        r"单位名称:", r"校验码:", r"查询流水号:", r"查询日期:",
-        r"仅限申请高新资质使用",
-        # 干掉典型"长 ID 噪音": 单位社会信用代码 (91 开头 18 位) /
-        # 查询流水号 (20 位以上). 它们会跟身份证号正则混淆.
-        r"\b91\d{16}\b",          # 信用代码
-        r"\b\d{20,}\b",           # 查询流水号 (≥20 位)
-    ]:
-        cleaned = _re.sub(pat, " ", cleaned)
-
-    # 选 anchor: 第一个 ≥ MIN_ANCHORS 命中的
-    anchor_name = None
-    anchor_re = None
-    matches: list[Any] = []
-    for name, pat in ANCHOR_PATTERNS:
-        ms = list(pat.finditer(cleaned))
-        # 去重 (同一个 ID 出现多次 = 跨页, 仍然算 1 次)
-        unique = len({m.group(1) for m in ms})
-        if unique >= MIN_ANCHORS:
-            anchor_name = name
-            anchor_re = pat
-            matches = ms
-            break
-
-    if anchor_re is None:
-        return None
-
-    # 按 anchor 切片
-    raw: list[dict[str, Any]] = []
-    for i, m in enumerate(matches):
-        anchor_val = m.group(1)
-        before = cleaned[max(0, m.start() - 150):m.start()]
-        # 锚点前找"[序号 ]中文名"
-        # 支持中文 (2-8 字) / 英文 (1-4 个 Cap word) 两种姓名
-        name_m = _re.search(
-            r"(?:(\d+)[ \t]+)?"
-            r"((?:[一-鿿·・]{2,8})|(?:[A-Z][a-z]+(?:[ \t]+[A-Z][a-z]+){0,3}))"
-            r"\s*$",
-            before,
-        )
-        seq = int(name_m.group(1)) if name_m and name_m.group(1) else None
-        name = name_m.group(2) if name_m else ""
-
-        nxt = matches[i + 1].start() if i + 1 < len(matches) else len(cleaned)
-        chunk = cleaned[m.end():nxt]
-
-        # 提取子记录 (尝试每个 SUB_PATTERN)
-        sub_items: list[dict[str, Any]] = []
-        for sub_name, sub_re in SUB_PATTERNS:
-            for sm in sub_re.finditer(chunk):
-                groups = sm.groups()
-                if sub_name == "社保险种":
-                    ins, s_ym, e_ym, mn = groups
-                    months = int(mn) if mn and 1 <= int(mn) <= 12 else None
-                    sub_items.append({
-                        "类型": ins, "起始": s_ym, "截止": e_ym, "月数": months,
-                    })
-                elif sub_name == "金额条目":
-                    item, amount = groups
-                    sub_items.append({"项目": item, "金额": float(amount)})
-            if sub_items:
-                break  # 命中一个 sub_pattern 就停
-
-        raw.append({
-            "序号": seq,
-            "姓名": name,
-            anchor_name: anchor_val,
-            "_sub": sub_items,
-        })
-
-    # 同 anchor 跨页合并 + 滤掉姓名为空 (噪音 ID 没有人名锚) 的条目
-    by_anchor: dict[str, dict[str, Any]] = {}
-    order: list[str] = []
-    for r in raw:
-        a = r[anchor_name]
-        if not r.get("姓名"):
-            continue  # 没姓名 → 大概率是噪音 ID (信用代码/流水号), 跳过
-        if a not in by_anchor:
-            by_anchor[a] = {**r, "_sub": []}
-            order.append(a)
-        # 子记录去重合并
-        seen = {tuple(s.items()) for s in by_anchor[a]["_sub"]}
-        for s in r["_sub"]:
-            t = tuple(s.items())
-            if t not in seen:
-                by_anchor[a]["_sub"].append(s)
-                seen.add(t)
-    records = [by_anchor[a] for a in order]
-
-    # 重新顺序编号
-    for i, r in enumerate(records, 1):
-        r["序号"] = i
-
-    # 列名
-    columns = ["序号", "姓名", anchor_name]
-    if records and records[0].get("_sub"):
-        sub_keys = list(records[0]["_sub"][0].keys())
-        columns += [f"子记录({k})" for k in sub_keys]
-
-    # dump JSON 到 /tmp (LLM 用 pandas.read_json 读)
-    sha = hashlib.sha1(str(source_path).encode()).hexdigest()[:8]
-    out_path = f"/tmp/catfish_pdf_{sha}_structured.json"
-    try:
-        with open(out_path, "w", encoding="utf-8") as f:
-            json.dump(records, f, ensure_ascii=False, indent=None)
-    except Exception:
-        return None
-
-    return records, out_path, columns
-
-
-# ============================================================
-# Word
-# ============================================================
-
-def parse_docx_preview(path: Path) -> tuple[str, dict[str, Any]]:
-    """Word 前 N 段."""
-    try:
-        from docx import Document  # noqa: PLC0415
-    except ImportError:
-        raise RuntimeError("python-docx 未装. 跑: pip install python-docx")
-
-    doc = Document(str(path))
-    paras = [p.text for p in doc.paragraphs if p.text.strip()]
-    total_paras = len(paras)
-    parts: list[str] = [f"## Word · 共 {total_paras} 段"]
-
-    paras_to_show = min(total_paras, PREVIEW_PARAS)
-    for p in paras[:paras_to_show]:
-        parts.append(p)
-
-    if total_paras > paras_to_show:
-        parts.append(
-            f"\n[... 还有 {total_paras - paras_to_show} 段未显示, "
-            "用 execute_code + python-docx 读完整]"
-        )
-
-    # 表格也 preview 一下
-    if doc.tables:
-        parts.append(f"\n## 含 {len(doc.tables)} 个表格 (preview 第一个前 5 行)")
-        first_t = doc.tables[0]
-        for row in first_t.rows[:5]:
-            cells = [c.text for c in row.cells]
-            parts.append(" | ".join(cells))
-        if len(first_t.rows) > 5:
-            parts.append(f"  (...还有 {len(first_t.rows) - 5} 行)")
-
-    text = _truncate("\n".join(parts))
-    meta: dict[str, Any] = {
-        "paragraph_count": total_paras,
-        "table_count": len(doc.tables),
-    }
-    return text, meta
 
 
 # ============================================================
