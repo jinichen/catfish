@@ -73,6 +73,10 @@ def test_员工聊天_工具一个不少(tools_gate):
     "companion-wiki-suggest",       # 知识库
     "companion-email-draft",
     "companion-profile",
+    # 8/15: 聊天从这天起也带 source 了 (?catfish_source=companion-chat,
+    # 为了让网关账本能把员工聊天跟后台任务分开)。它当然更不能被砍工具 ——
+    # 员工问"去知识库核对福富资质"就是靠这些工具。
+    "companion-chat",
 ])
 def test_早安和知识库_工具一个不少(tools_gate, source):
     """**鸿波 8/15 的硬约束**: 不能影响聊天、早安、知识库。

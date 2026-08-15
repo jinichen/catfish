@@ -63,6 +63,28 @@ import logging
 logger = logging.getLogger("catfish.xcatfish_user.plugin")
 
 
+#: **员工交互**来源 —— 有 source 但确实是员工在跟小鲶说话, 必须照常进记忆。
+#:
+#: 8/15 加。原判据是"有 source 就跳", 前提是「员工聊天不设 source」(见上面
+#: 文件头「判据」那节)。那个前提当天被打破了:
+#:
+#: 8/15 查配额时发现网关账本里 94% 的流量是「(无标记)」—— 一轮员工对话在
+#: agent loop 里展开成 20 次网关调用、97 万 token, 而只有第 1 次带得上归属,
+#: 后面十几次既无 source 也丢了 user。也就是说**账本根本分不出"员工聊天"和
+#: "后台任务"**, 跟 plugin.py 里 P41 那段描述的病一模一样 (当时排查早安卡死
+#: 连错两次方向)。所以给聊天补了 `?catfish_source=companion-chat`。
+#:
+#: 但那一补就会踩到这道闸: 判据是"非空即后台", 聊天一带 source 记忆立刻停写。
+#: 而本文件 docstring 早写过这种失效有多难发现 ——「记忆悄悄不工作, 表现是
+#: '用多久都不会更懂你', 现场根本看不出来」。所以这里必须同步开个口子。
+#:
+#: **失效方向没变**: 后台调用忘了设 source → 仍会进记忆 (原来的"漏挡");
+#: 反向误挡需要有人把某个后台来源**取名叫 companion-chat**, 是个显式动作。
+INTERACTIVE_SOURCES = frozenset({
+    "companion-chat",   # 工作台聊天 (lib/chat.ts)
+})
+
+
 def _patch_p42_memory_skip_background(cv_cf_source) -> None:
     """wrap MemoryManager.sync_all —— 有 catfish_source 就不记忆。
 
@@ -86,7 +108,7 @@ def _patch_p42_memory_skip_background(cv_cf_source) -> None:
             source = (cv_cf_source.get() or "").strip()
         except Exception:  # noqa: BLE001  CV 不该抛; 抛了也不能把记忆搞挂
             source = ""
-        if source:
+        if source and source not in INTERACTIVE_SOURCES:
             # debug 而不是 info: 员工机上邮件评级每 30 秒一次, info 会把日志刷爆
             logger.debug("P42: source=%s 是后台调用, 跳过记忆写入", source)
             return None

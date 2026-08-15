@@ -226,9 +226,36 @@ export async function streamChat(params: SendChatParams): Promise<void> {
   const useHermes = hermesCfg !== null && hermesCfg.enabled && hermesAuth !== null;
   onTransportResolved?.(useHermes ? "hermes" : "gateway");
 
+  // 8/15: 给员工聊天也打来源标记。
+  //
+  // 病: 网关账本 (gateway_audit) 里聊天一直是「(无标记)」。8/15 查配额时,
+  // 10:30 之后 94% 的 token 落在这一栏 —— 一轮对话在 agent loop 里展开成
+  // 20 次网关调用、97 万输入 token, 而只有第 1 次带得上归属, 后面十几次
+  // 既没有 source 也丢了 user, 全记在 client:hermes-cli 名下。
+  // 于是"钱花在哪"这个问题, 最大的一块答不上来。
+  //
+  // 这跟 plugin.py 里 P41 描述的是同一个病: 「advisor Call 1 和员工聊天在
+  // 网关日志里完全无法区分」—— 当时排查早安卡死, 按 source grep 连错两次方向。
+  //
+  // 用 query 不用 header: 5/21 BL-CORS-DEBT-FIX 已经踩过 —— hermes proxy 8642
+  // 的 CORS allow-list 没配 X-Catfish-* , preflight 直接拒。网关和 plugin 的
+  // middleware 都是 header 优先、query 兜底, 所以 query 一样认。
+  //
+  // ⚠ 加这个标记**必须**同时给 P42 记忆闸开口子 (plugin_memory_gate.py 的
+  // INTERACTIVE_SOURCES)。那道闸的判据是"有 source 就跳记忆", 前提正是
+  // 「员工聊天不设 source」。不同步改的话, 聊天从此不进记忆, 而且
+  // 按它自己 docstring 的说法这种失效"现场根本看不出来"。
+  //
+  // 其余按 source 分叉的地方都查过, 不受影响:
+  //   · SOUL identity inject —— 看的是 catfish_skip_identity, 不是 source
+  //     (briefing.ts:59 那句注释把两者混了, 别照着推断)
+  //   · 工具裁剪 sanitize_tools —— source 不在 _SOURCE_TOOL_PROFILES 表里
+  //     就整份不过滤 (tools_sanitizer.py:135)
+  //   · P44 服务式瘦身 —— 白名单只有 email-scheduler / phishing-scan 两项
+  const CHAT_SOURCE_QUERY = "?catfish_source=companion-chat";
   const url = useHermes
-    ? `${hermesCfg!.url}/v1/chat/completions`
-    : `${config.gatewayUrl}/v1/chat/completions`;
+    ? `${hermesCfg!.url}/v1/chat/completions${CHAT_SOURCE_QUERY}`
+    : `${config.gatewayUrl}/v1/chat/completions${CHAT_SOURCE_QUERY}`;
 
   // BL-COMPANION-MODEL-SELECTOR-HERMES-SYNC (5/19): 两边都传真 model 名.
   //   - 老 gateway 一直按 body.model 路由.

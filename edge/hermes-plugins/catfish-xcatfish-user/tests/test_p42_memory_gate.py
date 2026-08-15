@@ -124,3 +124,51 @@ def test_contextvar_抛异常时按员工聊天处理(gated):
     mm = cls()
     mm.sync_all("x", "y")
     assert len(mm.calls) == 1
+
+
+# ── 8/15: 员工交互来源豁免 ────────────────────────────────────────────
+#
+# 给聊天补 ?catfish_source=companion-chat 是为了让网关账本能把
+# "员工聊天" 和 "后台任务" 分开 (8/15 查配额时 94% 的 token 落在「(无标记)」栏,
+# 最大的一块答不上来)。但这道闸的判据是"有 source 就跳记忆", 前提正是
+# 「员工聊天不设 source」—— 一补标记, 聊天就不进记忆了。
+#
+# 这两条钉的就是那个交叉点。它们红 = 员工的记忆悄悄停了, 而按本文件
+# docstring 的说法, 这种失效"现场根本看不出来"。
+
+
+def test_聊天带了source照样进记忆(gated):
+    """companion-chat 在 INTERACTIVE_SOURCES 里 —— 有 source 但不是后台。"""
+    cls, cv = gated
+    cv.set("companion-chat")
+    mm = cls()
+    mm.sync_all("鸿波: 把这些错误的记忆都处理掉", "小鲶: 好的")
+    assert len(mm.calls) == 1, "员工聊天被当成后台调用挡掉了 —— 记忆会悄悄停写"
+
+
+@pytest.mark.parametrize("source", [
+    "companion-email-scheduler",
+    "companion-phishing-scan",
+    "companion-advisor",
+    "companion-briefing-card",
+    "companion-wiki-suggest",
+    "companion-profile",
+    "companion-email-draft",
+])
+def test_后台来源仍然一律挡住(gated, source):
+    """开了口子之后, 原来挡住的必须还挡着 —— 别把闸开成筛子。
+
+    尤其 email-scheduler: 8/8 就是它把员工邮件正文写进了 employee_journal.md
+    (1.3MB / 2856 条), 再被蒸成 wiki 条目。
+    """
+    cls, cv = gated
+    cv.set(source)
+    mm = cls()
+    mm.sync_all("1. 主题: 某封邮件 | 发件人: x@y.com", '["中"]')
+    assert mm.calls == [], f"{source} 是后台调用, 不该进记忆"
+
+
+def test_豁免名单是显式的():
+    """加一项就得改这条 —— 别让"员工交互"这个口子悄悄变大。"""
+    from plugin_memory_gate import INTERACTIVE_SOURCES
+    assert INTERACTIVE_SOURCES == frozenset({"companion-chat"})
