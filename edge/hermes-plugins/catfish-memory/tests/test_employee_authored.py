@@ -68,6 +68,18 @@ def test_normal_entry_unaffected(tmp_path):
 #
 # 实测过: 把 setattr 目标换成一个临时造的空模块, 6 passed, 一条都不红。
 #
+# ── 8/15 拆分后更新 ──
+#
+# _call_merge_llm 和 merge_files_with_llm 一起搬进了 catfish_memory_merge.py。
+# 于是 `monkeypatch.setattr(H, "_call_merge_llm", ...)` 打的是 helpers 里那个
+# **re-export 出来的绑定**, 而 merge_files_with_llm 从自己模块的 globals 取,
+# 两者不是同一个 —— `from X import name` 建的是新绑定, 不是别名。
+#
+# 拆分当天这条阳性对照立刻红了, 阴性那条照绿。这就是它存在的意义:
+# 没有它, 这次拆分会把 P19 那道"员工改过的条目连送都不送给 LLM"的边界
+# 悄悄拆坏, 而测试全绿。
+#
+# 改成 patch 真正的宿主模块。
 # 补 test_p19_merges_non_employee_files 作阳性对照: 同一个 fake、同一次
 # monkeypatch, 非员工条目必须**真的**调到。它绿, 才证明上面那条的"没调到"
 # 是代码的选择, 不是 patch 落空。(2026-08-15 补)
@@ -76,14 +88,15 @@ def test_normal_entry_unaffected(tmp_path):
 @pytest.mark.asyncio
 async def test_p19_skips_employee_files(tmp_path, monkeypatch):
     """员工改过的连送都不送给 LLM —— 边界划在这里, 不是划在验收上。"""
+    import catfish_memory_merge as M
     import catfish_memory_helpers as H
     called = []
     async def fake_merge(old, new, model):
         called.append(1); return None
-    monkeypatch.setattr(H, "_call_merge_llm", fake_merge)
+    monkeypatch.setattr(M, "_call_merge_llm", fake_merge)
     ents = tmp_path / "wiki" / "entities"; ents.mkdir(parents=True)
     (ents / "x.md").write_text(HUMAN, encoding="utf-8")
-    await H.merge_files_with_llm(tmp_path, {"wiki/entities/x.md": LLM}, "m")
+    await M.merge_files_with_llm(tmp_path, {"wiki/entities/x.md": LLM}, "m")
     assert not called, "员工改过的条目被送去 LLM 了"
 
 
@@ -95,12 +108,13 @@ async def test_p19_merges_non_employee_files(tmp_path, monkeypatch):
     不能说明任何事。拆分 helpers 时如果把 _call_merge_llm 和
     merge_files_with_llm 分到两个文件, 这条会立刻红。
     """
+    import catfish_memory_merge as M
     import catfish_memory_helpers as H
     called = []
     async def fake_merge(old, new, model):
         called.append((old, new, model)); return None
-    monkeypatch.setattr(H, "_call_merge_llm", fake_merge)
+    monkeypatch.setattr(M, "_call_merge_llm", fake_merge)
     ents = tmp_path / "wiki" / "entities"; ents.mkdir(parents=True)
     (ents / "y.md").write_text(LLM, encoding="utf-8")   # 无 authored_by
-    await H.merge_files_with_llm(tmp_path, {"wiki/entities/y.md": LLM}, "m")
+    await M.merge_files_with_llm(tmp_path, {"wiki/entities/y.md": LLM}, "m")
     assert called, "fake 一次都没被调到 —— monkeypatch 落空了, 不是代码跳过了"

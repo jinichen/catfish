@@ -175,3 +175,43 @@ def test_wiki_health_actually_runs() -> None:
     bad = ("ImportError", "ModuleNotFoundError", "AttributeError", "NameError")
     hit = [b for b in bad if b in r.stderr]
     assert not hit, f"wiki_health.py 起不来: {hit}\\nstderr={r.stderr[-1500:]}"
+
+
+def test_没有模块被加载两遍() -> None:
+    """同一份源码不许有两个 module 对象。
+
+    # 为什么单列一条
+
+    8/15 早上修过一次: conftest 给 catfish_memory 加了 top-level alias 却漏了
+    helpers, 于是 `H._call_merge_llm is 包里那份` → False, monkeypatch 打在
+    哪一份上决定它是否生效, 而阴性断言 (assert not called) 完全察觉不到。
+
+    当天下午拆 helpers 时**又把这个坑复制了 5 遍** —— 新的 prompts / fm / wiki /
+    llm / merge 都是包子模块, 而测试写 `import catfish_memory_merge` 走 sys.path
+    另加载一份。
+
+    它之所以两次都躲过测试, 是因为**双份是自洽的**: 测试 patch 第二份、又调
+    第二份, 一路对得上, 全绿。要抓它只能直接问"有没有两份", 而不是问
+    "某个行为对不对"。实测: 摘掉 conftest 的 alias, 其余 7 条照绿。
+    """
+    import importlib
+    import sys
+
+    # **必须自己主动 import**, 不能只扫 sys.modules 现状。
+    # 第一版就是只扫现状 —— 而本文件自己不 import 这些子模块, 于是摘掉
+    # conftest 的 alias 做变异时它照样绿 (双份压根没在这一轮里产生)。
+    # 判据依赖了别的测试文件的执行顺序, 又窄了一次。
+    expected = [
+        "catfish_memory_helpers", "catfish_memory_prompts", "catfish_memory_fm",
+        "catfish_memory_wiki", "catfish_memory_llm", "catfish_memory_merge",
+    ]
+    dupes = []
+    for name in expected:
+        bare = importlib.import_module(name)        # 走 sys.path / alias
+        twin = sys.modules.get(f"_catfish_memory_pkg.{name}")
+        if twin is not None and twin is not bare:
+            dupes.append(name)
+    assert not dupes, (
+        f"这些模块有两个 module 对象: {dupes} —— monkeypatch 会静默打空, "
+        "去 tests/conftest.py 看 alias 那段"
+    )

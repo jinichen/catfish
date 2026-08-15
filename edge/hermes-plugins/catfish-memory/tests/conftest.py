@@ -77,6 +77,26 @@ if "catfish_memory" not in sys.modules:
             # sys.modules 里, 否则会触发第二次 exec → 真循环 import。
             sys.modules["catfish_memory_helpers"] = _hlp_mod
             _hlp_spec.loader.exec_module(_hlp_mod)
+
+            # 8/15 拆分后补: helpers 末尾的 re-export 会把 5 个子模块
+            # (prompts / fm / wiki / llm / merge) 作为**包子模块**加载, 名字是
+            # `_catfish_memory_pkg.catfish_memory_xxx`。而测试里写
+            # `import catfish_memory_merge` 走的是 sys.path, 那个名字不在
+            # sys.modules 里 → 又 exec 一份, 于是同一份源码两个 module 对象。
+            #
+            # 这正是今早给 helpers 修过的那个坑 (见上面那段注释), 拆分把它复制了
+            # 5 遍。实测症状: `H._call_merge_llm is M._call_merge_llm` → False,
+            # 也就是 monkeypatch 打在哪一份上决定它是否生效, 而阴性断言察觉不到。
+            #
+            # 统一 alias: 凡是已经以包子模块身份加载的 catfish_memory_*,
+            # 都把裸名指到同一个对象。放在 exec 之后 —— 那时 re-export 已经把
+            # 它们全加载好了; 而 pytest 收集测试在 conftest 之后, 所以测试里
+            # 的 `import catfish_memory_merge` 拿到的就是这一份。
+            for _full in list(sys.modules):
+                _prefix = f"{_PKG_NAME}.catfish_memory_"
+                if _full.startswith(_prefix):
+                    _bare = _full[len(_PKG_NAME) + 1:]
+                    sys.modules.setdefault(_bare, sys.modules[_full])
         # 现在再 exec catfish_memory.py — relative import 能找到 parent.helpers
         _mem_spec.loader.exec_module(_mem_mod)
 
