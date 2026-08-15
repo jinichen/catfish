@@ -26,6 +26,13 @@ _QUOTA_EXHAUSTED = (
     "欠费",
 )
 
+# 上游拒 max_tokens 时会把允许区间写在报文里, 例如 (阿里云百炼):
+#     Range of max_tokens should be [1, 65536]
+# 只取上界 —— 它就是该填进控制台「单次输出上限」的值。
+_MAX_TOKENS_RANGE_RE = re.compile(
+    r"max_tokens\s+should\s+be\s+\[\s*\d+\s*,\s*(\d+)\s*\]", re.IGNORECASE
+)
+
 # 上游报的恢复时间: "The quota will reset at 08-14 23:54:00 UTC."
 # 只认明写 UTC 的 —— 没写时区的时间戳换算过去只会更误导。
 _RESET_UTC_RE = re.compile(
@@ -112,6 +119,27 @@ def friendly_upstream_error(raw: str) -> str:
         Hermes/Gemini code_execution → 代码执行模式被拒 (我们的 gemini_guard 拦的)
     """
     low = raw.lower()
+
+    # max_tokens 超上游允许范围 —— 上游把**正确答案写在报文里了**, 用它。
+    #
+    # 2026-08-15 现场: qwen3.6-flash 报
+    #     Range of max_tokens should be [1, 65536]
+    # 而员工看到的是 "请求格式错 (400) — 模型名 / 参数 / 工具 schema 有一个不对"
+    # —— 三个方向全是错的。真因是模型配置里「单次输出上限」填了 128000。
+    # (models.yaml 那份写的是 65536 是对的; 库里被改成 128000, 而库优先。)
+    #
+    # 放在 4xx 段**之前**而不是里面: 判据 (max_tokens should be [a, b]) 本身
+    # 足够独特, 不需要先命中 400 才生效 —— 不同上游未必都带 400 标记, 而这条
+    # 信息是它们共同给出的。
+    #
+    # 这类错不是员工能修的, 但把话说准至少让人一次找对地方, 而不是去查
+    # 工具 schema。
+    _rng = _MAX_TOKENS_RANGE_RE.search(raw)
+    if _rng:
+        return (
+            f"模型的「单次输出上限」超过上游允许的 {_rng.group(1)} —— "
+            f"控制台 /admin/models 里把这个模型的「单次输出上限」改成 ≤ {_rng.group(1)}"
+        )
 
     # ===== Provider 特有错误 (优先匹配, 信号最强) =====
     if "resource_exhausted" in low or ("quota" in low and "exceed" in low):

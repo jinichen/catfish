@@ -269,3 +269,46 @@ def test_配额和限流要被认出来_好决定不打_traceback():
     # 不是这一类的别误伤 —— 它们的调用栈是有价值的
     assert not q("BadRequestError: 400 - image_url field not supported")
     assert not q("APIConnectionError: connection refused")
+
+
+# ════════════════════════════════════════════════════════════════
+# 8/15: max_tokens 超上游范围 —— 上游把正确答案写在报文里了
+# ════════════════════════════════════════════════════════════════
+
+max_tokens_原文 = (
+    'litellm.BadRequestError: OpenAIException - data: {"error":'
+    '{"code":"invalid_parameter_error","param":null,'
+    '"message":"Range of max_tokens should be [1, 65536]",'
+    '"type":"invalid_request_error"}}'
+)
+
+
+def test_max_tokens_超范围_要说清改哪个字段改成多少():
+    """现场: qwen3.6-flash 上限 65536, 库里「单次输出上限」填了 128000。
+
+    修前员工看到 "请求格式错 (400) — 模型名 / 参数 / 工具 schema 有一个不对",
+    三个方向全是错的。
+    """
+    out = _friendly_upstream_error(max_tokens_原文)
+    assert "65536" in out, out
+    assert "单次输出上限" in out, out
+    assert "工具 schema" not in out
+
+
+def test_max_tokens_那条要排在通用_400_之前():
+    """报文里同时含 max_tokens 和 'parameter' —— 不能被通用 400 先接走。"""
+    out = _friendly_upstream_error(max_tokens_原文)
+    assert out != "请求格式错 (400) — 模型名 / 参数 / 工具 schema 有一个不对"
+
+
+def test_不误伤其它_400():
+    """别的 400 照旧走原来的分支"""
+    assert "图" in _friendly_upstream_error("BadRequestError: 400 - image_url not supported")
+    assert "工具" in _friendly_upstream_error("BadRequestError: 400 - tool schema invalid")
+    generic = _friendly_upstream_error("BadRequestError: 400 - something else entirely")
+    assert generic == "请求格式错 (400) — 模型名 / 参数 / 工具 schema 有一个不对"
+
+
+def test_只取上界_不被下界带偏():
+    out = _friendly_upstream_error("Range of max_tokens should be [1, 4096]")
+    assert "4096" in out and "≤ 4096" in out
