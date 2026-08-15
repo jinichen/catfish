@@ -30,6 +30,15 @@ import WikiLinkSuggestModal from "./WikiLinkSuggestModal";
 // P3.3.18 Phase 4 P2 (6/10): 检 hub 是否 stale
 import { config } from "../../lib/env";
 import { fetchWithAuth } from "../../lib/me";
+import WikiShareDialog from "./WikiShareDialog";
+// 8/15: 下面三段是从本文件搬出去的 JSX section, 不是新组件。挑它们是因为
+// props 少 (1 / 4 / 5 个)。action bar 那 119 行要 18 个 props, 所以留在原地 ——
+// 理由写在 WikiPreviewSections.tsx 的模块 docstring 里。
+import {
+  WikiHistorySection,
+  WikiHubStaleBanner,
+  WikiMetaHeader,
+} from "./WikiPreviewSections";
 
 const KIND_LABEL: Record<string, string> = {
   entity: "实体",
@@ -460,113 +469,18 @@ export default function WikiPreview() {
 
   return (
     <div className="wiki-preview">
-      {/* metadata header — elevation shadow 替 1px border, kind badge 替 emoji */}
-      <div className="wiki-preview__meta">
-        <div className="wiki-preview__meta-title">
-          <span className={`wiki-kind-badge wiki-kind-badge--${kind}`}>{kindLabel}</span>
-          {info.title}
-        </div>
-        <div className="wiki-preview__meta-row">
-          <span>类型 {info.subtype || info.kind}</span>
-          <span>
-            路径 <code>{info.rel_path}</code>
-          </span>
-          <span>{(info.size_bytes / 1024).toFixed(1)}KB</span>
-        </div>
-        {info.tags.length > 0 && (
-          <div className="wiki-preview__meta-section">
-            <span className="wiki-preview__meta-section-label">标签</span>
-            {info.tags.map((t) => (
-              <span key={t} className="wiki-preview__tag">
-                #{t}
-              </span>
-            ))}
-          </div>
-        )}
-        {info.related.length > 0 && (
-          <div className="wiki-preview__meta-section">
-            <span className="wiki-preview__meta-section-label">
-              相关 ({info.related.length})
-            </span>
-            {info.related.map((r, i) => {
-              // P3.5.132 #5: r 真 RelatedRef, 显 name + rel label
-              const dangling = isDangling(r.name);
-              const title = r.rel
-                ? `${dangling ? "找不到 file (dangling link)" : "跳转到 " + r.name} · 关系: ${r.rel}`
-                : (dangling ? "找不到 file (dangling link)" : "跳转到 " + r.name);
-              return (
-                <button
-                  key={i}
-                  className={
-                    "wiki-preview__wikilink" +
-                    (dangling ? " wiki-preview__wikilink--dangling" : "")
-                  }
-                  onClick={() => handleWikilinkClick(r.name)}
-                  title={title}
-                >
-                  [[{r.name}]]
-                  {r.rel && (
-                    <span
-                      style={{
-                        marginLeft: 4,
-                        fontSize: 10,
-                        opacity: 0.7,
-                        color: "var(--catfish-text-muted)",
-                      }}
-                    >
-                      ({r.rel})
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        )}
-        {info.sources.length > 0 && (
-          <div className="wiki-preview__meta-section">
-            <span className="wiki-preview__meta-section-label">来源</span>
-            <span style={{ color: "var(--catfish-text-muted)", fontSize: 12 }}>
-              {info.sources.join(", ")}
-            </span>
-          </div>
-        )}
-      </div>
+      <WikiMetaHeader
+        info={info}
+        kind={kind}
+        kindLabel={kindLabel}
+        isDangling={isDangling}
+        handleWikilinkClick={handleWikilinkClick}
+      />
 
       {/* P3.2 4 信号 相关推荐 — 渲染 in body 前, 先 build top-K */}
       <RelatedRecommend info={info} />
 
-      {/* P3.3.18 Phase 4 P2 (6/10): 部门 wiki 已被原作者撤回的警告 banner — 选了
-        wiki-shared/ 时后台 fetch hub 检查 stale_after_unpublish=true 时显. */}
-      {hubStaleInfo?.stale && (
-        <div
-          style={{
-            background: "#fef3c7",
-            border: "1px solid #f59e0b",
-            color: "#78350f",
-            padding: "10px 12px",
-            borderRadius: 6,
-            fontSize: 13,
-            lineHeight: 1.5,
-            marginBottom: 10,
-          }}
-        >
-          <strong>⚠ 原作者已撤回这条 wiki</strong>
-          {hubStaleInfo.unpublished_at && (
-            <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.8 }}>
-              ({hubStaleInfo.unpublished_at.slice(0, 10)})
-            </span>
-          )}
-          <div style={{ marginTop: 4 }}>
-            中央 hub body 已清零, 但你本机这份副本不动 (manifesto 公理 4 — 中央不强制清你本机).
-            自己决定是否点 "🗑 卸载本机副本".
-          </div>
-          {hubStaleInfo.unpublished_reason && (
-            <div style={{ marginTop: 4, fontStyle: "italic" }}>
-              原作者撤回原因: {hubStaleInfo.unpublished_reason}
-            </div>
-          )}
-        </div>
-      )}
+      <WikiHubStaleBanner hubStaleInfo={hubStaleInfo} />
 
       {/* P35 (6/5): 编辑 toggle + action bar — 复用 banner btn 系列 */}
       {/* P3.3.4 (6/9): action bar 加删除按钮 (mv 到 wiki/.trash/<ts>-原名.md) */}
@@ -703,243 +617,21 @@ export default function WikiPreview() {
 
       {/* P3.3.18 (6/10): 分享 dialog */}
       {shareDialogOpen && selectedFile && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.5)",
-            zIndex: 1000,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 20,
-          }}
-          onClick={() => setShareDialogOpen(false)}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              background: "var(--catfish-bg-elevated)",
-              border: "1px solid var(--catfish-border)",
-              borderRadius: "var(--radius-md)",
-              padding: 24,
-              maxWidth: 560,
-              width: "100%",
-              maxHeight: "90vh",
-              overflowY: "auto",
-            }}
-          >
-            <h3 style={{ margin: "0 0 12px", display: "flex", alignItems: "center", gap: 8 }}>
-              📤 分享 wiki 到部门
-            </h3>
-            <div style={{ fontSize: 13, color: "var(--catfish-text-muted)", marginBottom: 16 }}>
-              要分享: <code>{selectedFile.info.rel_path}</code>
-            </div>
-
-            {/* 强警告 banner — 用户拍要的, manifesto 公理 4 提醒 */}
-            <div
-              style={{
-                background: "#fef3c7",
-                border: "1px solid #f59e0b",
-                color: "#78350f",
-                padding: 12,
-                borderRadius: 6,
-                fontSize: 13,
-                lineHeight: 1.6,
-                marginBottom: 16,
-              }}
-            >
-              <strong>⚠️ 重要提醒</strong> (manifesto 公理 4)
-              <ul style={{ margin: "6px 0 0", paddingLeft: 20 }}>
-                <li>分享后, 部门所有同事能看到 / 装这条 wiki 到本机</li>
-                <li>
-                  你后面 <strong>哪怕撤回</strong>, 中央那一份会清零 + 标 stale, 但 <strong>已 pull 装本机的副本撤不回</strong>
-                </li>
-                <li>已扩散的信息在部门里"永久存在", 跟 OneNote / Confluence 一回事</li>
-                <li>客户名 / 项目细节 / 关键人名 这种敏感内容, 决定前想清楚</li>
-              </ul>
-            </div>
-
-            {/* P3.3.18 Phase 4 P2: 敏感词文件 onboarding hint */}
-            <div
-              style={{
-                background: "rgba(74,158,255,0.08)",
-                border: "1px solid rgba(74,158,255,0.2)",
-                padding: "8px 12px",
-                borderRadius: 4,
-                fontSize: 12,
-                marginBottom: 12,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 8,
-              }}
-            >
-              <span style={{ flex: 1 }}>
-                💡 想扫客户名/项目代号? 配 <code>~/.catfish/wiki/sensitive_terms.txt</code>
-              </span>
-              <button
-                onClick={() => void handleEnsureSensitiveTerms()}
-                disabled={sharing}
-                style={{
-                  fontSize: 11,
-                  padding: "3px 10px",
-                  background: "transparent",
-                  color: "var(--catfish-text)",
-                  border: "1px solid var(--catfish-border)",
-                  borderRadius: 3,
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                创建模板
-              </button>
-            </div>
-            {sensitiveTermsHint && (
-              <div
-                style={{
-                  fontSize: 11,
-                  marginBottom: 12,
-                  color: sensitiveTermsHint.startsWith("✗") ? "#dc2626" : "#16a34a",
-                  padding: "4px 8px",
-                  background: sensitiveTermsHint.startsWith("✗") ? "#fee2e2" : "#d1fae5",
-                  borderRadius: 3,
-                }}
-              >
-                {sensitiveTermsHint}
-              </div>
-            )}
-
-            <div style={{ marginBottom: 16 }}>
-              <label
-                style={{
-                  display: "block",
-                  fontSize: 12,
-                  color: "var(--catfish-text-muted)",
-                  marginBottom: 6,
-                }}
-              >
-                目标部门 namespace (格式 dept/&lt;部门&gt;)
-              </label>
-              <input
-                type="text"
-                value={shareNamespace}
-                onChange={(e) => setShareNamespace(e.target.value)}
-                placeholder="dept/finance"
-                style={{
-                  width: "100%",
-                  padding: "8px 12px",
-                  fontSize: 13,
-                  border: "1px solid var(--catfish-border)",
-                  borderRadius: 4,
-                  background: "var(--catfish-bg)",
-                  color: "var(--catfish-text)",
-                  fontFamily: "var(--font-mono)",
-                }}
-                disabled={sharing}
-              />
-              <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 4 }}>
-                例: dept/finance, dept/sales, dept/it. 当前只接受 dept/ 开头.
-              </div>
-            </div>
-
-            <div style={{ marginBottom: 16 }}>
-              <label style={{ fontSize: 13, display: "flex", gap: 8, cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={shareAck}
-                  onChange={(e) => setShareAck(e.target.checked)}
-                  disabled={sharing}
-                />
-                <span>
-                  <strong>我知道</strong> 已 pull 副本撤不回, 信息会在部门里扩散
-                </span>
-              </label>
-            </div>
-
-            {/* warnings 显 (PII / 内网 / 敏感词命中) */}
-            {shareWarnings.length > 0 && (
-              <div
-                style={{
-                  background: "#fee2e2",
-                  border: "1px solid #dc2626",
-                  color: "#7f1d1d",
-                  padding: 12,
-                  borderRadius: 6,
-                  fontSize: 12,
-                  marginBottom: 16,
-                }}
-              >
-                <strong>扫到 {shareWarnings.length} 类内容警告</strong>:
-                <ul style={{ margin: "6px 0 0", paddingLeft: 20 }}>
-                  {shareWarnings.map((w, i) => (
-                    <li key={i}>
-                      <strong>{w.category}</strong>: {w.advice} ({w.hits.length} 处)
-                    </li>
-                  ))}
-                </ul>
-                <div style={{ marginTop: 8, color: "#7f1d1d" }}>
-                  确认要继续 share 这些内容到部门? 点"我看过了, 强发"再发一次.
-                </div>
-              </div>
-            )}
-
-            {shareError && (
-              <div
-                style={{
-                  background: "#fee2e2",
-                  border: "1px solid #dc2626",
-                  color: "#7f1d1d",
-                  padding: 10,
-                  borderRadius: 4,
-                  fontSize: 12,
-                  marginBottom: 16,
-                }}
-              >
-                {shareError}
-              </div>
-            )}
-
-            {shareSuccess && (
-              <div
-                style={{
-                  background: "#d1fae5",
-                  border: "1px solid #16a34a",
-                  color: "#14532d",
-                  padding: 10,
-                  borderRadius: 4,
-                  fontSize: 12,
-                  marginBottom: 16,
-                }}
-              >
-                ✓ {shareSuccess}
-              </div>
-            )}
-
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-              <button
-                className="approval-banner__btn-link"
-                onClick={() => setShareDialogOpen(false)}
-                disabled={sharing}
-              >
-                {shareSuccess ? "关闭" : "取消"}
-              </button>
-              {!shareSuccess && (
-                <button
-                  className="approval-banner__btn-primary"
-                  onClick={() => void handleShare(shareWarnings.length > 0)}
-                  disabled={sharing || !shareAck}
-                >
-                  {sharing
-                    ? "分享中…"
-                    : shareWarnings.length > 0
-                      ? "我看过了, 强发"
-                      : "确认分享"}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
+        <WikiShareDialog
+          selectedFile={selectedFile}
+          shareNamespace={shareNamespace}
+          setShareNamespace={setShareNamespace}
+          shareAck={shareAck}
+          setShareAck={setShareAck}
+          sharing={sharing}
+          shareWarnings={shareWarnings}
+          shareError={shareError}
+          shareSuccess={shareSuccess}
+          sensitiveTermsHint={sensitiveTermsHint}
+          handleShare={handleShare}
+          handleEnsureSensitiveTerms={handleEnsureSensitiveTerms}
+          setShareDialogOpen={setShareDialogOpen}
+        />
       )}
 
       {/* P35 (6/5): editing → textarea; 否则 → markdown */}
@@ -986,35 +678,12 @@ export default function WikiPreview() {
         </ReactMarkdown>
       )}
 
-      {/* P39 (6/5 鸿波): 变更历史 collapsible — P19 LLM merge 自动生 ## 变更历史 段.
-       *  E5 改造: 走 caret rotate (跟 .wiki-group 一致), 不再 emoji ▶/▼ swap. */}
-      {!editing && historyBody && (
-        <div
-          className={
-            "wiki-preview__history" +
-            (showHistory ? " wiki-preview__history--open" : "")
-          }
-        >
-          <button
-            className="wiki-preview__history-toggle"
-            onClick={() => setShowHistory(!showHistory)}
-            aria-expanded={showHistory}
-          >
-            <span className="wiki-preview__history-caret">▶</span>
-            变更历史
-            <span className="wiki-preview__history-hint">
-              (LLM merge 自动记录)
-            </span>
-          </button>
-          {showHistory && (
-            <div className="wiki-preview__history-body">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {historyBody}
-              </ReactMarkdown>
-            </div>
-          )}
-        </div>
-      )}
+      <WikiHistorySection
+        editing={editing}
+        historyBody={historyBody}
+        showHistory={showHistory}
+        setShowHistory={setShowHistory}
+      />
 
       {/* P3.5.172 Phase C (7/3 鸿波): 🔗 扫描关联 modal. Portal-style render, 独
           立于 preview 内容, ModalShell 已包 fixed overlay. 员工确认后 onApplied
