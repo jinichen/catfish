@@ -631,8 +631,16 @@ from .admin_providers_router import (  # noqa: E402
     register_provider_admin_routes,
 )
 
+from .audit_router import register_audit_routes  # noqa: E402
+from .quota_router import register_quota_routes  # noqa: E402
+
 register_model_admin_routes(app)
 register_provider_admin_routes(app)
+# 8/15: 审计 (6 个查询路由 + _require_admin) 和配额 (13 个管理路由 +
+# /api/inflight + _require_sysadmin + 5 个 body 模型) 搬到各自的 router,
+# 兑现 8/1 那段注释里说的"需要一轮专门的拆分"。
+register_audit_routes(app)
+register_quota_routes(app)
 
 # CORS：Tauri webview / Companion App 跨域调 gateway 必须放过 OPTIONS preflight。
 # Dev 阶段开放所有源；P1 上线后改成白名单：tauri://localhost / companion 域名 / 公司 SaaS 域名。
@@ -733,43 +741,6 @@ async def health() -> dict[str, str]:
     return {"status": "ok", "service": "catfish-gateway"}
 
 
-@app.get("/api/inflight")
-async def api_inflight(user: User = Depends(get_current_user)) -> dict[str, Any]:
-    """当前在途的 SSE 流 —— 卡住时用来看"到底哪条卡着、卡了多久"。
-
-    # 为什么补这个 (8/15)
-
-    inflight_streams 从 5/12 起就在记每条流 (request_id / user / model /
-    message_count / started_at), 它的 docstring 写的是 "cancel UI / ops 调试用",
-    但**从来没有接出来**。于是 8/15 现场一条 deepseek 流卡在首 chunk 之前时,
-    这份数据就在进程内存里躺着, 排查的人拿不到 —— 只能从日志里数"哪条请求没有
-    收尾行"。信息在, 但看不见。
-
-    elapsed_secs 是这里唯一新算的字段, 也正是卡住时最想知道的那个。
-    按它倒序排, 最久的排最前。
-
-    # 权限
-
-    sysadmin only: 记录里带 user (员工邮箱) 和 model, 属于跨员工的运行状态。
-    普通员工看自己的对话不需要这个接口。
-
-    # 边界
-
-    纯内存, 单实例 (见 inflight_streams 模块头)。gateway 重启后清零, 多 pod
-    时只反映当前这个 pod —— 这两条都是那个模块本来就有的性质, 不是这里引入的。
-    """
-    _require_sysadmin(user)
-    from . import inflight_streams  # noqa: PLC0415
-
-    now = time.time()
-    rows = []
-    for r in inflight_streams.list_inflight():
-        row = dict(r)
-        started = row.get("started_at")
-        row["elapsed_secs"] = round(now - started, 1) if isinstance(started, (int, float)) else None
-        rows.append(row)
-    rows.sort(key=lambda x: x.get("elapsed_secs") or 0, reverse=True)
-    return {"count": len(rows), "now_iso": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "inflight": rows}
 
 
 # Quota — 五一 sprint 5/3, BL-D9
@@ -782,53 +753,6 @@ async def api_inflight(user: User = Depends(get_current_user)) -> dict[str, Any]
 # limit=0 在 Companion 侧渲染成 "不限".
 
 
-@app.get("/api/quota/me")
-async def quota_me(
-    user: User = Depends(get_current_user),
-    x_catfish_user: str | None = Header(default=None, alias="X-Catfish-User"),
-) -> dict[str, Any]:
-    from . import quota  # 懒 import 避免顶层循环
-
-    # 5/23 BL-QUOTA-EFFECTIVE-USER (鸿波): chat 写 quota_events 时按 effective_user_email
-    # (resolve 后真员工 chenhongbo@ffcs.cn). quota_me 之前用 user.sub 查, hermes service
-    # token 时 sub=client:hermes-cli, 查到 0 → dashboard 永远显示 0/不限. 改用同款 resolve
-    # 让"读"按"写"一致.
-    effective_user = resolve_effective_user_email(user, x_catfish_user)
-
-    config = quota.load_quota_config()
-    user_q = config.per_user_for(effective_user)
-
-    now_ms = int(time.time() * 1000)
-    minute_cutoff = now_ms - 60_000
-    day_cutoff = now_ms - 86_400_000
-
-    used_minute = quota.sum_tokens_user_since(effective_user, minute_cutoff)
-    used_day = quota.sum_tokens_user_since(effective_user, day_cutoff)
-
-    dept_used_day = 0
-    dept_limit_day = 0
-    if user.department:
-        dept_used_day = quota.sum_tokens_dept_since(user.department, day_cutoff)
-        dept_q = config.department_quotas.get(user.department)
-        if dept_q is not None:
-            dept_limit_day = dept_q.tokens_per_day
-
-    return {
-        "user_email": effective_user,
-        "department": user.department,
-        "minute": {
-            "used": used_minute,
-            "limit": user_q.tokens_per_minute,  # 0 = 不限
-        },
-        "day": {
-            "used": used_day,
-            "limit": user_q.tokens_per_day,
-        },
-        "department_day": {
-            "used": dept_used_day,
-            "limit": dept_limit_day,
-        },
-    }
 
 
 # /api/me — 当前用户信息 (Companion 用来按角色 conditional render Dashboard)
@@ -937,43 +861,6 @@ async def api_me(
 # RBAC: admin 全权, manager 限 managed_departments.
 
 
-@app.get("/api/quota/department/{department}")
-async def api_quota_department(
-    department: str,
-    user: User = Depends(get_current_user),
-) -> dict[str, Any]:
-    """部门级 quota 聚合 — manager 改 / 看本部门."""
-    from . import quota  # 懒 import
-
-    if not user.can_manage_department(department):
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f"role={user.role} 无权访问部门 {department} 的 quota. "
-                f"managed_departments={user.managed_departments}"
-            ),
-        )
-
-    config = quota.load_quota_config()
-    now_ms = int(time.time() * 1000)
-    day_cutoff = now_ms - 86_400_000
-
-    dept_used_day = quota.sum_tokens_dept_since(department, day_cutoff)
-    dept_q = config.department_quotas.get(department)
-    dept_limit_day = dept_q.tokens_per_day if dept_q else 0
-
-    # Top 员工 (按今日用量)
-    top_users = quota.top_users_in_department(department, day_cutoff, limit=10)
-
-    return {
-        "department": department,
-        "day": {
-            "used": dept_used_day,
-            "limit": dept_limit_day,  # 0 = 不限
-        },
-        "top_users": top_users,  # [{user_email, tokens_used}]
-        "viewer_role": user.role,
-    }
 
 
 # ── BL-EDGE-TOOL-KEY (5/24 鸿波): hermes 边缘工具中央派发 backend key ──
@@ -1080,88 +967,8 @@ def _group_metadata() -> dict[str, dict[str, Any]]:
 #   3. first_seen_ts / last_seen_ts 不局限 cutoff_ms, 让员工知道"中央存了我多久"
 
 
-@app.get("/api/audit/me")
-async def api_audit_me(
-    user: User = Depends(get_current_user),
-    x_catfish_user: str | None = Header(default=None, alias="X-Catfish-User"),
-) -> dict[str, Any]:
-    """员工自查: 中央对我存了啥 metadata. 不需 RBAC, 谁登录返谁的.
-
-    BL-AUTH-DECOUPLE-A1-API-ME-FIX (6/1): 跟 /api/me + /api/quota/me 同款 resolve.
-    chat 写 quota_events 用 effective_user_email (真员工 chenhongbo@ffcs.cn),
-    audit_summary_user_since 查也要按 effective 查, 才能找回真员工 audit 记录.
-    """
-    from . import quota
-
-    from .db import fetch_user_metadata
-
-    effective_email = resolve_effective_user_email(user, x_catfish_user)
-
-    # 查真员工 department (同 /api/me 处理) — service token 时 user.department 是
-    # service 维度 (infra), 真员工 department 在 identity users 表.
-    real_meta = await fetch_user_metadata(effective_email)
-    real_department = real_meta["department"] if real_meta else user.department
-
-    now_ms = int(time.time() * 1000)
-    day_cutoff = now_ms - 86_400_000
-
-    summary = quota.audit_summary_user_since(effective_email, day_cutoff)
-
-    # 6/2 BL-PRIVACY-CARD-QUOTA-PROGRESS (鸿波 6/2 凌晨): PrivacyCard 把"今天用了
-    # 7.99M"改成 quota 进度条. 这里加 quota_day_limit 字段, 客户端就能渲染
-    # 已用/上限 = 百分比. /api/quota/me 早已返这字段, 但 PrivacyCard 调的是
-    # /api/audit/me — 不给员工拼两个 API, 直接在这条加上.
-    # tokens_per_day=0 表示该 user 不限 (yaml overrides 没配 → 走 default_user 1M).
-    quota_cfg = quota.load_quota_config()
-    user_q = quota_cfg.per_user_for(effective_email)
-    quota_day_limit = user_q.tokens_per_day  # 0 = 不限
-
-    return {
-        "user_email": effective_email,
-        "department": real_department,
-        "since_ms": day_cutoff,
-        # 让客户端知道"中央存的字段长这样", 防员工担心还有别的没暴露
-        "schema_note": "本端点只返 metadata: count / tokens / model / 时间戳. 中央不存 prompt / response 文本.",
-        "quota_day_limit": quota_day_limit,
-        **summary,  # request_count / total_tokens / by_model / first_seen_ts / last_seen_ts
-    }
 
 
-# P3.5.59 Phase 2 (6/22 鸿波 catch "是不是应该把中央端完成"):
-# 单员工 LLM perf 聚合 — 走 gateway_audit 表 (含 latency_ms / ttft_ms).
-# 跟 /api/audit/me 区别: /api/audit/me 走 quota_events 表 (没 latency),
-# 本 endpoint 走 gateway_audit 表 (有 latency / ttft / status).
-# Companion PerfCard LLM section 调这个拿真 latency 分位.
-@app.get("/api/audit/me/perf")
-async def api_audit_me_perf(
-    hours: int = 24,
-    user: User = Depends(get_current_user),
-    x_catfish_user: str | None = Header(default=None, alias="X-Catfish-User"),
-) -> dict[str, Any]:
-    """单员工 LLM perf 聚合 — Companion PerfCard 用.
-
-    返字段: request_count / ok_count / error_count / total_tokens /
-    latency_p50/p95/p99_ms / ttft_p50/p95_ms / by_model / source.
-
-    Privacy: 全 metadata, 跟 /api/audit/me 同合同, 中央不返 prompt/response.
-    """
-    from . import metrics as _metrics
-
-    effective_email = resolve_effective_user_email(user, x_catfish_user)
-    hours = max(1, min(720, hours))  # 1h - 30d
-    now_ms = int(time.time() * 1000)
-    cutoff_ms = now_ms - hours * 3_600_000
-    summary = _metrics.query_perf_summary_user(effective_email, cutoff_ms)
-    return {
-        "user_email": effective_email,
-        "since_ms": cutoff_ms,
-        "window_hours": hours,
-        "schema_note": (
-            "本端点只返 latency / token / model metadata. "
-            "中央不存 prompt / response 文本. source=pg|jsonl|none 标数据源."
-        ),
-        **summary,
-    }
 
 
 # /api/audit/department/{dept} — manager / admin 看本部门 audit 聚合
@@ -1170,33 +977,6 @@ async def api_audit_me_perf(
 # RBAC: admin 全权, manager 限 managed_departments.
 
 
-@app.get("/api/audit/department/{department}")
-async def api_audit_department(
-    department: str,
-    user: User = Depends(get_current_user),
-) -> dict[str, Any]:
-    """部门级 audit 聚合 — manager 看本部门员工总用量分布."""
-    from . import quota  # 懒 import (audit 数据从 quota_events sqlite 也能算)
-
-    if not user.can_manage_department(department):
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f"role={user.role} 无权访问部门 {department} 的 audit. "
-                f"managed_departments={user.managed_departments}"
-            ),
-        )
-
-    now_ms = int(time.time() * 1000)
-    day_cutoff = now_ms - 86_400_000
-
-    summary = quota.audit_summary_dept_since(department, day_cutoff)
-    return {
-        "department": department,
-        "since_ms": day_cutoff,
-        **summary,  # request_count / total_tokens / by_model / by_user
-        "viewer_role": user.role,
-    }
 
 
 # /api/quota/department/{dept} PUT — manager / admin 改本部门 quota
@@ -1209,41 +989,8 @@ async def api_audit_department(
 from pydantic import BaseModel as _BaseModel  # 局部 import 防顶层污染
 
 
-class _DeptQuotaUpdate(_BaseModel):
-    tokens_per_day: int
 
 
-@app.put("/api/quota/department/{department}")
-async def api_quota_department_update(
-    department: str,
-    body: _DeptQuotaUpdate,
-    user: User = Depends(get_current_user),
-) -> dict[str, Any]:
-    """改部门日 quota. RBAC: admin 全权 / manager 限 managed_departments."""
-    from . import quota
-
-    if not user.can_manage_department(department):
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f"role={user.role} 无权改部门 {department} quota. "
-                f"managed_departments={user.managed_departments}"
-            ),
-        )
-
-    if body.tokens_per_day < 0:
-        raise HTTPException(status_code=400, detail="tokens_per_day 不能负")
-
-    ok = quota.update_department_quota(department, body.tokens_per_day)
-    if not ok:
-        raise HTTPException(status_code=500, detail="写 quotas.yaml 失败, 看 gateway log")
-
-    return {
-        "department": department,
-        "tokens_per_day": body.tokens_per_day,
-        "updated_by": user.sub,
-        "ok": True,
-    }
 
 
 # /api/quota/global + /api/audit/global — admin 全员 / 全部门 / 全模型聚合
@@ -1251,12 +998,6 @@ async def api_quota_department_update(
 # RBAC: 严格 admin only. manager 看不到全局, 只看 managed_departments.
 
 
-def _require_admin(user: User) -> None:
-    if not user.is_admin():
-        raise HTTPException(
-            status_code=403,
-            detail=f"role={user.role} 不能访问全局聚合 (admin only)",
-        )
 
 
 # ── P3.5.93 (6/23 鸿波): /admin/quota web 编辑 UI 后端 ────
@@ -1272,375 +1013,42 @@ def _require_admin(user: User) -> None:
 #     不读), P3.5.93 一并砍掉 — 部门 quota 收口到 /admin/quota 走 yaml.
 
 
-def _require_sysadmin(user: User) -> None:
-    """quota 全局编辑只 sysadmin 能用 (改 default 影响全员)."""
-    if user.role != "sysadmin":
-        raise HTTPException(
-            status_code=403,
-            detail=f"role={user.role} 不能编辑 quota 配置 (sysadmin only)",
-        )
 
 
-class _PerUserDefaults(_BaseModel):
-    tokens_per_minute: int
-    tokens_per_day: int
 
 
-class _ModelQuotaBody(_BaseModel):
-    tokens_per_day: int
 
 
-class _DeptQuotaBody(_BaseModel):
-    tokens_per_day: int
 
 
-class _UserOverrideBody(_BaseModel):
-    tokens_per_minute: int
-    tokens_per_day: int
 
 
-@app.get("/api/admin/quota/config")
-async def api_admin_quota_config(
-    user: User = Depends(get_current_user),
-) -> dict[str, Any]:
-    """返完整 quotas.yaml dict (defaults + overrides). sysadmin only."""
-    from . import quota
-    _require_sysadmin(user)
-    return {
-        "config": quota.get_full_config_dict(),
-        "viewer_role": user.role,
-    }
 
 
-@app.put("/api/admin/quota/defaults/per_user")
-async def api_admin_quota_default_per_user(
-    body: _PerUserDefaults,
-    user: User = Depends(get_current_user),
-) -> dict[str, Any]:
-    """改全员默认 per_user (defaults.per_user). sysadmin only."""
-    from . import quota
-    _require_sysadmin(user)
-    ok, msg = quota.update_default_per_user(body.tokens_per_minute, body.tokens_per_day)
-    if not ok:
-        raise HTTPException(500, detail=msg or "写 quotas.yaml 失败")
-    return {"ok": True, "updated_by": user.sub, **body.model_dump()}
 
 
-@app.put("/api/admin/quota/per_model/{name}")
-async def api_admin_quota_put_per_model(
-    name: str,
-    body: _ModelQuotaBody,
-    user: User = Depends(get_current_user),
-) -> dict[str, Any]:
-    """加/改单 model quota (defaults.per_model.<name>). sysadmin only."""
-    from . import quota
-    _require_sysadmin(user)
-    ok, msg = quota.put_per_model(name, body.tokens_per_day)
-    if not ok:
-        raise HTTPException(500, detail=msg or "写 quotas.yaml 失败")
-    return {"ok": True, "name": name, "tokens_per_day": body.tokens_per_day}
 
 
-@app.delete("/api/admin/quota/per_model/{name}")
-async def api_admin_quota_delete_per_model(
-    name: str,
-    user: User = Depends(get_current_user),
-) -> dict[str, Any]:
-    """删 model quota. Idempotent. sysadmin only."""
-    from . import quota
-    _require_sysadmin(user)
-    ok, msg = quota.delete_per_model(name)
-    if not ok:
-        raise HTTPException(500, detail=msg or "写失败")
-    return {"ok": True, "name": name}
 
 
-@app.put("/api/admin/quota/per_department/{name}")
-async def api_admin_quota_put_per_department(
-    name: str,
-    body: _DeptQuotaBody,
-    user: User = Depends(get_current_user),
-) -> dict[str, Any]:
-    """加/改部门默认 quota (defaults.per_department.<name>). sysadmin only."""
-    from . import quota
-    _require_sysadmin(user)
-    ok, msg = quota.put_per_department(name, body.tokens_per_day)
-    if not ok:
-        raise HTTPException(500, detail=msg or "写 quotas.yaml 失败")
-    return {"ok": True, "name": name, "tokens_per_day": body.tokens_per_day}
 
 
-@app.delete("/api/admin/quota/per_department/{name}")
-async def api_admin_quota_delete_per_department(
-    name: str,
-    user: User = Depends(get_current_user),
-) -> dict[str, Any]:
-    """删部门默认 quota. Idempotent. sysadmin only."""
-    from . import quota
-    _require_sysadmin(user)
-    ok, msg = quota.delete_per_department(name)
-    if not ok:
-        raise HTTPException(500, detail=msg or "写失败")
-    return {"ok": True, "name": name}
 
 
-@app.put("/api/admin/quota/overrides/users/{email}")
-async def api_admin_quota_put_user_override(
-    email: str,
-    body: _UserOverrideBody,
-    user: User = Depends(get_current_user),
-) -> dict[str, Any]:
-    """加/改用户 override (overrides.users.<email>). sysadmin only."""
-    from . import quota
-    _require_sysadmin(user)
-    ok, msg = quota.put_user_override(
-        email, body.tokens_per_minute, body.tokens_per_day,
-    )
-    if not ok:
-        raise HTTPException(400 if "email" in msg or "格式" in msg else 500, detail=msg)
-    return {"ok": True, "email": email, **body.model_dump()}
 
 
-@app.delete("/api/admin/quota/overrides/users/{email}")
-async def api_admin_quota_delete_user_override(
-    email: str,
-    user: User = Depends(get_current_user),
-) -> dict[str, Any]:
-    """删用户 override. Idempotent. sysadmin only."""
-    from . import quota
-    _require_sysadmin(user)
-    ok, msg = quota.delete_user_override(email)
-    if not ok:
-        raise HTTPException(500, detail=msg or "写失败")
-    return {"ok": True, "email": email}
 
 
-@app.put("/api/admin/quota/overrides/departments/{name}")
-async def api_admin_quota_put_dept_override(
-    name: str,
-    body: _DeptQuotaBody,
-    user: User = Depends(get_current_user),
-) -> dict[str, Any]:
-    """加/改部门 override (overrides.departments.<name>). 优先级高于 defaults."""
-    from . import quota
-    _require_sysadmin(user)
-    ok, msg = quota.put_dept_override(name, body.tokens_per_day)
-    if not ok:
-        raise HTTPException(500, detail=msg or "写 quotas.yaml 失败")
-    return {"ok": True, "name": name, "tokens_per_day": body.tokens_per_day}
 
 
-@app.delete("/api/admin/quota/overrides/departments/{name}")
-async def api_admin_quota_delete_dept_override(
-    name: str,
-    user: User = Depends(get_current_user),
-) -> dict[str, Any]:
-    """删部门 override. Idempotent. sysadmin only."""
-    from . import quota
-    _require_sysadmin(user)
-    ok, msg = quota.delete_dept_override(name)
-    if not ok:
-        raise HTTPException(500, detail=msg or "写失败")
-    return {"ok": True, "name": name}
 
 
-@app.get("/api/quota/global")
-async def api_quota_global(
-    user: User = Depends(get_current_user),
-) -> dict[str, Any]:
-    """全员 quota 聚合 — admin 看 top 部门 / top 用户 / 总用量."""
-    from . import quota
-    _require_admin(user)
-
-    now_ms = int(time.time() * 1000)
-    day_cutoff = now_ms - 86_400_000
-
-    return {
-        "since_ms": day_cutoff,
-        "top_departments": quota.top_departments(day_cutoff, limit=10),
-        "viewer_role": user.role,
-    }
 
 
-@app.get("/api/audit/global")
-async def api_audit_global(
-    user: User = Depends(get_current_user),
-    since_hours: int = 24,
-    model: str | None = None,
-    dept: str | None = None,
-    user_email: str | None = None,
-) -> dict[str, Any]:
-    """全员 audit 聚合 — admin 看请求总数 / 模型分布 / 部门分布 / top 员工.
-
-    BL-AUDIT-UX-P1 (5/17): 加 since_hours 时间窗 + 上期对照.
-    BL-AUDIT-UX-P2 (5/17): 加 drill-down filter (model/dept/user_email).
-      点 audit 页某行 → 前端把该值塞进 URL query, /api/audit/global 收到后
-      把 SQL 加 WHERE. 上期 trend 跟当前期同 filter 才有意义.
-
-      since_hours: 1-720 (1 小时-30 天), 默认 24h.
-      model: catalog ID (例 'catfish-public-nvidia-nemotron'), None=全部
-      dept: 部门名 (含 '(未分组)' 合成桶), None=全部
-      user_email: 员工 email (含 '(未分组员工)' 合成桶), None=全部
-    """
-    from . import quota
-    _require_admin(user)
-
-    # 钳到合理范围: 1 小时 - 30 天
-    hours = max(1, min(720, int(since_hours)))
-    window_ms = hours * 3_600_000
-
-    now_ms = int(time.time() * 1000)
-    period_start_ms = now_ms - window_ms
-    prev_period_start_ms = period_start_ms - window_ms
-
-    # 空字符串当 None 处理 — 前端 /api/audit/global?model=&dept=eng 这种半填的也兼容
-    filter_kwargs = {
-        "filter_model": model or None,
-        "filter_dept": dept or None,
-        "filter_user": user_email or None,
-    }
-
-    summary = quota.audit_summary_global_since(period_start_ms, **filter_kwargs)
-    prev = quota.audit_period_totals(
-        prev_period_start_ms, period_start_ms, **filter_kwargs,
-    )
-
-    return {
-        "since_ms": period_start_ms,
-        "since_hours": hours,
-        **summary,
-        # BL-AUDIT-UX-P1: 上期对照, 给前端做 trend ↑12% / ↓8% 用
-        "previous_request_count": prev["request_count"],
-        "previous_total_tokens": prev["total_tokens"],
-        "previous_active_users": prev["active_users"],
-        "previous_active_departments": prev["active_departments"],
-        # BL-AUDIT-UX-P2: 把当前 filter echo 回前端, 显示 pill 用
-        "filter": {
-            "model": filter_kwargs["filter_model"],
-            "dept": filter_kwargs["filter_dept"],
-            "user_email": filter_kwargs["filter_user"],
-        },
-        "viewer_role": user.role,
-    }
 
 
-# P3.5.60 (6/22 鸿波 catch "继续完成"): 全公司 LLM perf 聚合 endpoint —
-# admin 看全公司 latency p50/p95/p99 + by_model + by_department.
-# 跟 /api/audit/global 区别: 那个走 quota_events (无 latency), 这个走 gateway_audit
-# (有 latency_ms / ttft_ms). web /admin/perf 页用这条.
-@app.get("/api/audit/global/perf")
-async def api_audit_global_perf(
-    user: User = Depends(get_current_user),
-    since_hours: int = 24,
-    model: str | None = None,
-    dept: str | None = None,
-) -> dict[str, Any]:
-    """全公司 LLM perf 聚合 — admin only.
-
-    返字段: request_count / ok_count / error_count / total_tokens /
-    active_users / active_departments / latency_p50/p95/p99_ms /
-    ttft_p50/p95_ms / by_model (含 p50/p99 per model) / by_department
-    (含 p50/p99 per dept) / source.
-
-    Privacy: metadata only, 合同跟 /api/audit/global 一致.
-    """
-    from . import metrics as _metrics
-    _require_admin(user)
-
-    hours = max(1, min(720, int(since_hours)))
-    now_ms = int(time.time() * 1000)
-    cutoff_ms = now_ms - hours * 3_600_000
-
-    summary = _metrics.query_perf_summary_global(
-        cutoff_ms,
-        model_filter=(model or None),
-        dept_filter=(dept or None),
-    )
-
-    return {
-        "since_ms": cutoff_ms,
-        "since_hours": hours,
-        "filter": {"model": model or None, "dept": dept or None},
-        "viewer_role": user.role,
-        "schema_note": (
-            "本端点只返 metadata: latency / token / model / department / count. "
-            "中央不存 prompt / response 文本. source=pg|jsonl|none 标数据源."
-        ),
-        **summary,
-    }
 
 
-@app.get("/api/audit/events")
-async def api_audit_events(
-    user: User = Depends(get_current_user),
-    since_ms: int | None = None,
-    dept: str | None = None,
-    user_filter: str | None = None,
-    model: str | None = None,
-    status: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
-) -> dict[str, Any]:
-    """BL-ADMIN-AUDIT (5/12 鸿波): 全员 audit 逐条历史 + 4 维度筛选 + 分页.
-
-    给 catfish-web /admin/quota/events 页用. RBAC 严格 admin only (sysadmin 走
-    User.is_admin() 通过).
-
-    Args:
-        since_ms: 只看 ts_ms >= 这个的 (默认 24h 前)
-        dept: department 过滤
-        user_filter: user_email 过滤 (param 名 user_filter 避开跟 user dependency 撞)
-        model: model 过滤
-        status: 'ok' / 'error' / 'interrupted_resumed' (BL-HERMES013-4)
-        limit: 1-200, 默认 50
-        offset: ≥0, 默认 0
-
-    Returns:
-        {events: [...], total: int, limit, offset, since_ms, viewer_role}
-    """
-    from . import metrics as _metrics
-    _require_admin(user)
-
-    # since_ms 默认 24h 前
-    if since_ms is None:
-        since_ms = int(time.time() * 1000) - 86_400_000
-    since_unix = since_ms // 1000
-
-    # 防御 limit / offset 边界
-    limit = max(1, min(200, int(limit)))
-    offset = max(0, int(offset))
-
-    events = _metrics.read_events(
-        since_unix=since_unix,
-        user_filter=user_filter or None,
-        model_filter=model or None,
-        status_filter=status or None,
-        dept_filter=dept or None,
-        limit=limit,
-        offset=offset,
-    )
-    total = _metrics.count_events(
-        since_unix=since_unix,
-        user_filter=user_filter or None,
-        model_filter=model or None,
-        status_filter=status or None,
-        dept_filter=dept or None,
-    )
-
-    return {
-        "events": events,
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-        "since_ms": since_ms,
-        "filters": {
-            "dept": dept or "",
-            "user": user_filter or "",
-            "model": model or "",
-            "status": status or "",
-        },
-        "viewer_role": user.role,
-    }
 
 
 # /api/dev/users — 列出 dev 测试账号 (Companion 切换器用)
