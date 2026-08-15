@@ -30,6 +30,14 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import catfish_memory  # noqa: E402
+# 8/15 拆分: _summarize_and_distill_async 及其一众 helper 搬到
+# catfish_memory_distill.py, 于是**它调的那几个 LLM 函数的绑定也跟着走了**。
+# 下面的 monkeypatch 必须打在 catfish_memory_distill 上 —— 打在 catfish_memory
+# 上只会改到 re-export 出来的那个名字, 真正被调用的是 distill 模块自己的 globals
+# (`from X import name` 建的是新绑定, 不是别名)。
+# 拆分当天这三个文件一共 19 条红, 全是这个原因。
+import catfish_memory_distill  # noqa: E402
+
 from catfish_memory import (  # noqa: E402
     CatfishMemoryProvider,
     _append_journal,
@@ -280,7 +288,7 @@ def test_on_session_end_skip_when_journal_recently_written(
     async def fake_llm(*args, **kwargs):
         called["n"] += 1
         return "should not be called"
-    monkeypatch.setattr(catfish_memory, "_call_summarize_llm", fake_llm)
+    monkeypatch.setattr(catfish_memory_distill, "_call_summarize_llm", fake_llm)
 
     provider.on_session_end([
         {"role": "user", "content": "test"},
@@ -311,8 +319,8 @@ def test_on_session_end_proceeds_when_journal_older_than_dedup(
     async def fake_distill(text, model):
         return None
 
-    monkeypatch.setattr(catfish_memory, "_call_summarize_llm", fake_summarize)
-    monkeypatch.setattr(catfish_memory, "_call_distill_llm", fake_distill)
+    monkeypatch.setattr(catfish_memory_distill, "_call_summarize_llm", fake_summarize)
+    monkeypatch.setattr(catfish_memory_distill, "_call_distill_llm", fake_distill)
 
     # BL-MEMORY-SYNC-TURN-REFACTOR (5/20): on_session_end 读 buffer 不读 messages 参数
     msgs = [
@@ -336,7 +344,7 @@ def test_on_session_end_skips_when_llm_returns_empty(
     """LLM 返空 → 不写 journal (跟老 gateway 行为一致)"""
     async def fake_summarize(pairs, model):
         return None  # LLM 总结失败
-    monkeypatch.setattr(catfish_memory, "_call_summarize_llm", fake_summarize)
+    monkeypatch.setattr(catfish_memory_distill, "_call_summarize_llm", fake_summarize)
 
     provider.on_session_end([
         {"role": "user", "content": "msg"},
@@ -357,8 +365,8 @@ def test_on_session_end_distill_runs_when_24h_passed(
         distill_called["model"] = model
         return "## 长期事实\n\n- 鸿波偏好简短\n- 资质项目"
 
-    monkeypatch.setattr(catfish_memory, "_call_summarize_llm", fake_summarize)
-    monkeypatch.setattr(catfish_memory, "_call_distill_llm", fake_distill)
+    monkeypatch.setattr(catfish_memory_distill, "_call_summarize_llm", fake_summarize)
+    monkeypatch.setattr(catfish_memory_distill, "_call_distill_llm", fake_distill)
 
     # BL-MEMORY-SYNC-TURN-REFACTOR (5/20): on_session_end 读 buffer 不读 messages 参数
     msgs = [
@@ -392,8 +400,8 @@ def test_on_session_end_distill_skipped_when_within_24h(
         distill_called["n"] += 1
         return "should not be called"
 
-    monkeypatch.setattr(catfish_memory, "_call_summarize_llm", fake_summarize)
-    monkeypatch.setattr(catfish_memory, "_call_distill_llm", fake_distill)
+    monkeypatch.setattr(catfish_memory_distill, "_call_summarize_llm", fake_summarize)
+    monkeypatch.setattr(catfish_memory_distill, "_call_distill_llm", fake_distill)
 
     # BL-MEMORY-SYNC-TURN-REFACTOR (5/20): on_session_end 读 buffer 不读 messages 参数
     msgs = [
@@ -413,7 +421,7 @@ def test_on_session_end_does_not_raise_on_exception(
     """LLM call 抛异常 → on_session_end 静默, 不挂"""
     async def fake_summarize(pairs, model):
         raise RuntimeError("LLM exploded")
-    monkeypatch.setattr(catfish_memory, "_call_summarize_llm", fake_summarize)
+    monkeypatch.setattr(catfish_memory_distill, "_call_summarize_llm", fake_summarize)
 
     # 不应该抛
     provider.on_session_end([

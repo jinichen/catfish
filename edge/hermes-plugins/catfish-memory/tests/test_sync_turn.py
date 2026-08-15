@@ -28,6 +28,14 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import catfish_memory  # noqa: E402
+# 8/15 拆分: _summarize_and_distill_async 及其一众 helper 搬到
+# catfish_memory_distill.py, 于是**它调的那几个 LLM 函数的绑定也跟着走了**。
+# 下面的 monkeypatch 必须打在 catfish_memory_distill 上 —— 打在 catfish_memory
+# 上只会改到 re-export 出来的那个名字, 真正被调用的是 distill 模块自己的 globals
+# (`from X import name` 建的是新绑定, 不是别名)。
+# 拆分当天这三个文件一共 19 条红, 全是这个原因。
+import catfish_memory_distill  # noqa: E402
+
 from catfish_memory import (  # noqa: E402
     CatfishMemoryProvider,
     _append_journal,
@@ -104,8 +112,8 @@ def mock_llm(monkeypatch: pytest.MonkeyPatch):
         calls["distill"].append({"text": text, "model": model})
         return None  # 默认不返蒸馏 (24h 内已跑过 / 没足够内容)
 
-    monkeypatch.setattr(catfish_memory, "_call_summarize_llm", fake_summarize)
-    monkeypatch.setattr(catfish_memory, "_call_distill_llm", fake_distill)
+    monkeypatch.setattr(catfish_memory_distill, "_call_summarize_llm", fake_summarize)
+    monkeypatch.setattr(catfish_memory_distill, "_call_distill_llm", fake_distill)
     return calls
 
 
@@ -414,7 +422,7 @@ def test_on_session_end_does_not_raise_on_exception(
     """force flush LLM 抛异常 → on_session_end 静默, 不挂 hermes"""
     async def fake_summarize_raises(pairs, model):
         raise RuntimeError("LLM exploded")
-    monkeypatch.setattr(catfish_memory, "_call_summarize_llm", fake_summarize_raises)
+    monkeypatch.setattr(catfish_memory_distill, "_call_summarize_llm", fake_summarize_raises)
 
     provider._turn_buffer = [("user", "x"), ("assistant", "y")]
     # 不应该抛
@@ -477,7 +485,7 @@ def test_sync_turn_distill_triggered_when_24h_passed(
     async def fake_distill_success(text, model):
         mock_llm["distill"].append({"text": text, "model": model})
         return "## 长期事实\n\n- 鸿波偏好简短"
-    monkeypatch.setattr(catfish_memory, "_call_distill_llm", fake_distill_success)
+    monkeypatch.setattr(catfish_memory_distill, "_call_distill_llm", fake_distill_success)
 
     for i in range(5):
         provider.sync_turn(f"u{i}", f"a{i}", session_id="s1")

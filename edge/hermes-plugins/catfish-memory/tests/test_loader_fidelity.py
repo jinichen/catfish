@@ -201,10 +201,12 @@ def test_没有模块被加载两遍() -> None:
     # 第一版就是只扫现状 —— 而本文件自己不 import 这些子模块, 于是摘掉
     # conftest 的 alias 做变异时它照样绿 (双份压根没在这一轮里产生)。
     # 判据依赖了别的测试文件的执行顺序, 又窄了一次。
-    expected = [
-        "catfish_memory_helpers", "catfish_memory_prompts", "catfish_memory_fm",
-        "catfish_memory_wiki", "catfish_memory_llm", "catfish_memory_merge",
-    ]
+    # **清单从文件系统推导**, 不写死。
+    # 第二版还是写死的 6 个 (helpers 那批), 于是第二趟拆出来的 distill /
+    # tools / expense 双份时它照样绿 —— 判据比真事窄, 同一个文件里栽第三次。
+    expected = sorted(p.stem for p in PLUGIN_DIR.glob("catfish_memory*.py"))
+    assert len(expected) >= 6, f"只发现 {expected} —— glob 判据是不是失效了"
+
     dupes = []
     for name in expected:
         bare = importlib.import_module(name)        # 走 sys.path / alias

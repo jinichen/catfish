@@ -23,6 +23,20 @@ _PLUGIN_DIR = Path(__file__).parent.parent
 # 但 tests/test_*.py 直接 `import catfish_memory` 也要 work — 加 sys.path alias
 # 让 `catfish_memory` 名也指向同一 module.
 _PKG_NAME = "_catfish_memory_pkg"
+
+
+def _alias_submodules() -> None:
+    """把已加载的包子模块 `_catfish_memory_pkg.catfish_memory_X` 也挂到裸名 X。
+
+    见下面 helpers 那段注释。**必须在每次可能加载新子模块之后都调一遍** ——
+    8/15 第二趟拆分踩过: 当时只在 exec helpers 之后调, 而 distill / tools /
+    expense 是 catfish_memory.py 执行时才加载的, 于是那几个又成了两份,
+    19 条测试红 (monkeypatch 打在第二份上, 真正被调的是第一份)。
+    """
+    for _full in list(sys.modules):
+        if _full.startswith(f"{_PKG_NAME}.catfish_memory_"):
+            _bare = _full[len(_PKG_NAME) + 1:]
+            sys.modules.setdefault(_bare, sys.modules[_full])
 if _PKG_NAME not in sys.modules:
     # 创 fake package (用 plugin dir 作 __path__)
     _spec = importlib.util.spec_from_file_location(
@@ -92,13 +106,10 @@ if "catfish_memory" not in sys.modules:
             # 都把裸名指到同一个对象。放在 exec 之后 —— 那时 re-export 已经把
             # 它们全加载好了; 而 pytest 收集测试在 conftest 之后, 所以测试里
             # 的 `import catfish_memory_merge` 拿到的就是这一份。
-            for _full in list(sys.modules):
-                _prefix = f"{_PKG_NAME}.catfish_memory_"
-                if _full.startswith(_prefix):
-                    _bare = _full[len(_PKG_NAME) + 1:]
-                    sys.modules.setdefault(_bare, sys.modules[_full])
+            _alias_submodules()
         # 现在再 exec catfish_memory.py — relative import 能找到 parent.helpers
         _mem_spec.loader.exec_module(_mem_mod)
+        _alias_submodules()   # catfish_memory 又带进来一批子模块
 
 
 # P3.5.29 Phase 7.1 (6/17 鸿波): hermes-memory _get_summarize_model 加 role_resolver

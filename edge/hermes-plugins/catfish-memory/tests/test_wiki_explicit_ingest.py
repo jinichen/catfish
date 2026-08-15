@@ -27,6 +27,14 @@ from pathlib import Path
 import pytest
 
 import catfish_memory
+# 8/15 拆分: _summarize_and_distill_async 及其一众 helper 搬到
+# catfish_memory_distill.py, 于是**它调的那几个 LLM 函数的绑定也跟着走了**。
+# 下面的 monkeypatch 必须打在 catfish_memory_distill 上 —— 打在 catfish_memory
+# 上只会改到 re-export 出来的那个名字, 真正被调用的是 distill 模块自己的 globals
+# (`from X import name` 建的是新绑定, 不是别名)。
+# 拆分当天这三个文件一共 19 条红, 全是这个原因。
+import catfish_memory_distill  # noqa: E402
+
 from catfish_memory import CatfishMemoryProvider
 
 
@@ -93,11 +101,11 @@ def spy_llm(monkeypatch: pytest.MonkeyPatch):
         calls["generation"].append(analysis)
         return "GENERATION-OUT"
 
-    monkeypatch.setattr(catfish_memory, "_call_summarize_llm", fake_summarize)
-    monkeypatch.setattr(catfish_memory, "_call_distill_llm", fake_distill)
-    monkeypatch.setattr(catfish_memory, "_call_analysis_llm", fake_analysis)
-    monkeypatch.setattr(catfish_memory, "_call_generation_llm", fake_generation)
-    monkeypatch.setattr(catfish_memory, "_parse_generation_output", lambda g: [])
+    monkeypatch.setattr(catfish_memory_distill, "_call_summarize_llm", fake_summarize)
+    monkeypatch.setattr(catfish_memory_distill, "_call_distill_llm", fake_distill)
+    monkeypatch.setattr(catfish_memory_distill, "_call_analysis_llm", fake_analysis)
+    monkeypatch.setattr(catfish_memory_distill, "_call_generation_llm", fake_generation)
+    monkeypatch.setattr(catfish_memory_distill, "_parse_generation_output", lambda g: [])
     return calls
 
 
