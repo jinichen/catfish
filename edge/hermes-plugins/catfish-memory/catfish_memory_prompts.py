@@ -146,8 +146,8 @@ _GENERATION_PROMPT_TEMPLATE = (
     # 触发条件 (P3.5.108 6/25). 其他 concept_type 严格 LLM 自主 (e.g.
     # 'org-structure' / '资质分类' / 'process' 等 — 员工场景 diverse).
     "concept_type: <一个贴切语义的短词, 员工可读. 顶级分类体系约定填 'system'>\n"
-    "created: {today}\n"
-    "updated: {today}\n"
+    "created: __TODAY__\n"
+    "updated: __TODAY__\n"
     "tags: [<tag1>, <tag2>]\n"
     # 8/4: 加上 typed 形式。读侧 6/29 (P3.5.132 #5) 就支持 {name, rel} 了, 但
     # **prompt 从头到尾没提过 rel** —— 实测 408 条边 0 条带类型, 不是 LLM 不配合,
@@ -184,8 +184,8 @@ _GENERATION_PROMPT_TEMPLATE = (
     # P3.5.176: entity_type 严格删 enum. LLM 自主填**贴切语义短词**. 员工场景
     # diverse (e.g. 'org' / 'person' / 'project' / '部门' / '证书' 等), 不 enum.
     "entity_type: <一个贴切语义的短词, 员工可读>\n"
-    "created: {today}\n"
-    "updated: {today}\n"
+    "created: __TODAY__\n"
+    "updated: __TODAY__\n"
     # 8/4: aliases。跟 typed relation 一模一样的形状 —— 这个字段在 merge 侧
     # (_FM_LIST_FIELDS_UNION) 早就会合并了, 但**从没有人要求 LLM 产出过**,
     # 读侧也不按它解析。
@@ -258,6 +258,44 @@ _GENERATION_PROMPT_TEMPLATE = (
 )
 
 
+#: 生成 prompt 里唯一要替换的东西。**不用 `{}` 形式的占位符** —— 理由见下。
+_TODAY_PLACEHOLDER = "__TODAY__"
+
+
 def _build_generation_prompt() -> str:
-    """注 {today} 真生成 prompt."""
-    return _GENERATION_PROMPT_TEMPLATE.format(today=time.strftime("%Y-%m-%d"))
+    """把 __TODAY__ 换成今天的日期, 生成 Step 2 的 prompt。
+
+    # ⚠ 为什么不用 str.format —— 它让 wiki 生成整天零产出 (8/15 晚查出来)
+
+    原来这里是:
+
+        return _GENERATION_PROMPT_TEMPLATE.format(today=time.strftime("%Y-%m-%d"))
+
+    而模板里有三处**写给 LLM 看的字面量花括号** (frontmatter 示例):
+
+        {name: "<名字>", rel: "<关系, 2-4 字>"}     ×2
+        {name: "中电福富", rel: "隶属"}              ×1
+
+    `.format()` 见到 `{name: ...}` 就去找名叫 `name` 的参数, 抛 KeyError('name')。
+
+    ## 后果链条 —— 全程没有一个红色信号
+
+        KeyError → _call_generation_llm 的 except Exception 吞成 warning
+                 → 返 None
+                 → 日志打 "wiki Step 2 generation 返空 (skip)"
+
+    最后那句 INFO 读起来像"这次没什么可生成的", 实际是"每次都失败"。
+    8/15 当天 agent.log 里 17 次, 从 09:30 到 18:16 —— 也就是 wiki 条目生成
+    这个功能**一整天零产出**, 而没有任何人会注意到。
+
+    ## 为什么改成 replace 而不是把花括号转义成 {{}}
+
+    转义能修好这一次, 但留了个雷: 提示词是要经常改的, 下一个往里加 JSON /
+    frontmatter 示例的人不会知道这里跑过 `.format`, 加完照样炸, 而且照样
+    静默。用一个内容里不可能出现的哨兵串, 整类问题就没了。
+
+    tests/test_generation_prompt.py 钉住这件事。
+    """
+    return _GENERATION_PROMPT_TEMPLATE.replace(
+        _TODAY_PLACEHOLDER, time.strftime("%Y-%m-%d")
+    )
