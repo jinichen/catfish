@@ -108,7 +108,12 @@ from .llm_params import (  # noqa: E402,F401
     _safe_float_env,
     _safe_int_env,
 )
-from .gateway_startup import run_startup  # noqa: E402
+# _seed_and_migrate_models 8/15 搬去 gateway_startup (它唯一的调用方在那)。
+# re-export 保住 tests/test_admin_models_api.py 的 A._seed_and_migrate_models()。
+from .gateway_startup import (  # noqa: E402,F401
+    _seed_and_migrate_models,
+    run_startup,
+)
 from .chat_prepare import (  # noqa: E402
     enforce_quota,
     maybe_compress,
@@ -271,72 +276,6 @@ litellm.set_verbose = False
 litellm.drop_params = True
 
 
-def _seed_and_migrate_models() -> None:
-    """启动时把 models.yaml 播种进库, 并回迁被烤死的 env 占位符.
-
-    抽成函数是为了能测 —— 原来这段直接写在 lifespan 里, 而测试用的是
-    `TestClient(app)` (不带 with), **lifespan 从来没被执行过**。于是
-    "播种必须用 load_raw_models 而不是 config.models" 这条最要紧的性质
-    一行防护都没有: 改回去 40 条测试照样全绿。
-    """
-    if not model_store.is_enabled():
-        return
-    try:
-        # ⚠ 用 load_raw_models() 而不是 config.models —— 后者是 env 插值
-        # **之后**的对象, 播进去等于把 .env 里的内网地址烤成库里的字面量。
-        # 详见 config.load_raw_models 的说明 (那是 7/30 引入、当天发现的 bug)。
-        raw_models = load_raw_models()
-        n = model_store.seed_from_yaml(raw_models)
-        if n:
-            logger.info("模型配置首次播种: %d 个 (来源 models.yaml)", n)
-            invalidate_config()  # 让本 worker 立刻读到库里那份
-
-        # 一次性回迁: 把已经烤死的值换回 ${VAR}。
-        # 只对 yaml 里也有的模型、且库里的值正好等于插值结果时才动 ——
-        # 客户后来手填过别的地址就报出来让人确认 (见 restore_placeholders)。
-        fixed, suspicious = model_store.restore_env_placeholders(raw_models)
-        if fixed:
-            logger.warning(
-                "已把 %d 个模型里被烤死的 env 值换回 ${VAR} 占位符: %s。"
-                "在此之前改 .env 对这些字段是不生效的。",
-                len(fixed), ", ".join(fixed),
-            )
-            invalidate_config()
-        # 库里撞出多个 default 时清到只剩一个。default 必须全局唯一 ——
-        # default_model() 返回列表里第一个 default=True 的, 两个的话就取决于
-        # 排序, 员工下次开聊用哪个模型不可预测。
-        cleared = model_store.enforce_single_default()
-        if cleared:
-            logger.warning(
-                "库里有多个默认模型, 已清掉多余的 %d 个: %s。"
-                "在此之前员工用到哪个默认模型取决于排序。",
-                len(cleared), ", ".join(cleared),
-            )
-            invalidate_config()
-
-        # 8/1: 把老形态的模型拆成「供应商 + 引用」。幂等 —— 已经是新形态的
-        # 跳过, 供应商按 (api_base, api_key_env) 去重。
-        #
-        # 放在这里而不是 alembic 里: 拆分要读 JSONB、去重、生成可读 id、回写,
-        # 用 Python 写能逐条钉测试并注入故障验证 (见 provider_store 文件头)。
-        # 跟上面两个"启动时幂等迁移"同一个套路。
-        new_providers = provider_store.migrate_models_to_providers()
-        if new_providers:
-            logger.info(
-                "已把模型拆成供应商 + 引用, 新建 %d 个供应商: %s。"
-                "以后加同一家的模型不用再重敲端点和 key 变量名。",
-                len(new_providers), ", ".join(new_providers),
-            )
-            invalidate_config()
-
-        for mname, note in suspicious.items():
-            # 换不回来的必须说出来, 不能静默跳过 —— 这个 bug 的发现路径
-            # ("改了 .env 不生效") 恰恰会让"对不上"成为常态。
-            logger.warning("模型 %s 的 env 占位符需要人工确认: %s", mname, note)
-    except Exception:
-        # 播种失败不阻塞启动 —— 此时仍能用 yaml 里的模型正常服务。
-        # 但必须留日志: 否则会表现成"界面上改了模型但列表是空的"。
-        logger.exception("模型配置播种失败, 本次将继续使用 models.yaml 里的模型")
 
 
 @asynccontextmanager
