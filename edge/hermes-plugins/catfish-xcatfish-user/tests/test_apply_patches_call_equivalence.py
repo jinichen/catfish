@@ -44,6 +44,32 @@ REFACTOR_BASE = "cc4d71a"
 #:
 #: 为什么不干脆把基准提交往前挪: 挪了就等于把所有历史差异一笔勾销，包括那些
 #: **不该发生**的丢失。8/13 那次就是靠跟历史对拍才发现 P42 的实参被吞掉的。
+#: **基准之后新增**的 patch —— 同样必须逐个写理由。
+#:
+#: 8/15 补。原来只有 INTENTIONALLY_REMOVED，但下面那条断言是 `set(old) == set(new)`
+#: 双向相等，于是**加**一个 patch 也会红，而红了之后没有正规的记录去处 ——
+#: 只能要么改断言(把闸放松)，要么不加。两个都不对。
+#:
+#: 按这个文件自己的哲学补齐: 「删除得是个决定，不是个意外」，新增也一样。
+#: 一个 patch 悄悄多出来跟悄悄少一个同等危险 —— monkey-patch 是全进程生效的，
+#: 谁加的、为什么加、影响面多大，得有地方写。
+INTENTIONALLY_ADDED: dict[str, str] = {
+    "_patch_p44_service_call_lean": (
+        "8/15 加。后台分类调用不背 agent 上下文。\n"
+        "  病: 邮件评级一次 42,114 输入 token 换 185 输出 token (230:1)。8/15 百炼\n"
+        "      周配额 07:54 重置、09:17 就空了，83 分钟约 3000 万 token，\n"
+        "      companion-email-scheduler 一家占 2470 万 (83%)。\n"
+        "  改: 白名单来源在 api_server 平台上不注入工具 schema、不读记忆。\n"
+        "  影响面: **只有** companion-email-scheduler / companion-phishing-scan\n"
+        "      两个来源。聊天(无 source)、早安(briefing-card/advisor)、\n"
+        "      知识库(wiki-suggest) 一律不动 —— 见 test_p44_service_lean.py 里\n"
+        "      专门针对这三样的用例。\n"
+        "  跟 P42 的区别: P42 挡记忆**写**且判据是「有 source 就跳」；P44 挡工具\n"
+        "      和记忆**读**，判据是**只含两项的白名单**。沿用 P42 那条宽判据会\n"
+        "      误伤早安和知识库。"
+    ),
+}
+
 INTENTIONALLY_REMOVED: dict[str, str] = {
     "_patch_p18_compress_endpoint": (
         "8/13 删。P18 (6/17) 做的是「Companion 在 80% 上下文时主动触发 hermes 压缩」，"
@@ -145,16 +171,36 @@ def pair():
 
 
 def test_same_set_of_patches(pair):
-    """调用点集合只准按 INTENTIONALLY_REMOVED 收缩，不准无声消失。
+    """调用点集合只准按两张名单增减，不准无声变化。
 
     删一个 patch 是个决定，得有名字有理由。这条测试逼那个决定显式化 ——
     否则"某个 patch 悄悄没了"跟"某个 patch 被吞了实参"一样看不出来。
+    加一个同理: monkey-patch 全进程生效，多出来一个而没人记一笔同样危险。
     """
     old, new = pair
-    assert set(old) == set(new), (
-        f"调用点集合变了 —— 少了 {set(old) - set(new)}, 多了 {set(new) - set(old)}。\n"
-        "有意删的请写进 INTENTIONALLY_REMOVED 并附理由。"
+    lost = set(old) - set(new)
+    added = set(new) - set(old) - set(INTENTIONALLY_ADDED)
+    assert not lost, (
+        f"调用点少了 {lost} —— 有意删的请写进 INTENTIONALLY_REMOVED 并附理由。"
     )
+    assert not added, (
+        f"调用点多了 {added} —— 新增的请写进 INTENTIONALLY_ADDED 并附理由 "
+        "(说清改了什么、影响面多大、跟已有的闸有没有判据冲突)。"
+    )
+
+
+def test_added_patches_are_actually_wired(pair):
+    """INTENTIONALLY_ADDED 的名单不能过期 —— 声明加了却没真加上就是空账。
+
+    跟 test_removed_patches_leave_no_trace 对称: 那条查"声明删了却还留着引用",
+    这条查"声明加了却没真接进 _apply_patches"。
+    """
+    _old, new = pair
+    for name in INTENTIONALLY_ADDED:
+        assert name in new, (
+            f"INTENTIONALLY_ADDED 里的 {name} 并没有出现在 _apply_patches 里 —— "
+            "要么忘了接线，要么名单过期了"
+        )
 
 
 def test_removed_patches_leave_no_trace():

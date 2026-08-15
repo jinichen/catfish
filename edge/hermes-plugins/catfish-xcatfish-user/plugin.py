@@ -177,6 +177,8 @@ _translate_hermes_zh = plugin_weixin_zh._translate_hermes_zh  # noqa: F401  (re-
 _patch_p28_weixin_zh = plugin_weixin_zh._patch_p28_weixin_zh  # noqa: F401  (re-export · 见 plugin_weixin_zh.py)
 plugin_memory_gate = _import_sibling("plugin_memory_gate")
 _patch_p42_memory_skip_background = plugin_memory_gate._patch_p42_memory_skip_background  # noqa: F401  (re-export · 见 plugin_memory_gate.py)
+plugin_service_lean = _import_sibling("plugin_service_lean")
+_patch_p44_service_call_lean = plugin_service_lean._patch_p44_service_call_lean  # noqa: F401  (re-export · 见 plugin_service_lean.py)
 plugin_core_tools = _import_sibling("plugin_core_tools")
 _patch_p43_promote_catfish_core_tools = plugin_core_tools._patch_p43_promote_catfish_core_tools  # noqa: F401  (re-export · 见 plugin_core_tools.py)
 plugin_wechat_qr = _import_sibling("plugin_wechat_qr")
@@ -703,6 +705,16 @@ def _apply_patches() -> None:
     # CV_CF_SOURCE 必须传进去 —— 8/13 第一版重构把这个实参吞了, memory 来源闸
     # 整个没装上 (那道闸挡的是"员工邮件正文进个人知识库")。
     _try_patch(_patch_p42_memory_skip_background, "P42: memory 来源闸 patch 失败: %s", CV_CF_SOURCE)
+
+    # P44 (8/15): 后台分类调用不背 agent 上下文。跟 P42 共用 CV_CF_SOURCE ——
+    # P42 挡记忆**写**(邮件正文进知识库), P44 挡工具 schema + 记忆**读**(一次
+    # 评级 42K token 换 185 token)。
+    #
+    # 判据不一样, 这点要紧: P42 是"有 source 就跳", P44 是**只含两项的白名单**。
+    # 早安 (companion-briefing-card / companion-advisor) 和知识库
+    # (companion-wiki-suggest) 都是有 source 的, 沿用 P42 那条宽判据会误伤。
+    # 见 plugin_service_lean.py 的模块 docstring。
+    _try_patch(_patch_p44_service_call_lean, "P44: 服务式调用瘦身 patch 失败: %s", CV_CF_SOURCE)
 
 
 # ── P16 (P3.4.C 6/15 鸿波: session_search 76s → 340ms) ──────────────────
