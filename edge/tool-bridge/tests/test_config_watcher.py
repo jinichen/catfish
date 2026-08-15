@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import hashlib
+import os
 import time
 from pathlib import Path
 
@@ -23,43 +25,87 @@ def test_signature_nonexistent_file(tmp_path: Path) -> None:
     assert config_watcher._signature(tmp_path / "no_such.yaml") == ()
 
 
+# 8/4 fe840c9 把 _signature 从 (mtime, size) 改成 (sha256, 字节数), 修的是一个
+# 真事故: Companion 的 hermes_jwt_sync 定期重写 config.yaml 刷 JWT, JWT 等长
+# 所以 **size 一字节没变、只有 mtime 变**, 老签名判定"配置变了" → tool-bridge
+# 主动退出 → watchdog 拉起 → 循环。实测 ~100 次/天, 累计 7381 次。
+#
+# 那个 commit **只改了源码, 没动这个文件**, 于是下面几条一直在描述旧契约:
+#   · test_signature_existing_file 断言 mtime > 0 —— 现在第一位是 hex 字符串,
+#     直接 TypeError。它从 8/4 起就是红的。
+#   · test_signature_changes_on_file_edit 还留着 sleep(1.1) 等 mtime 变, 现在
+#     没有意义 (判据是内容)。
+#   · test_signature_changes_on_size_only 现在是**因为别的原因**才过的。
+#
+# 更要紧的是: 花了 7381 次重启才查出来的那个 bug, 一条回归测试都没有。
+# test_signature_ignores_touch 就是补它 —— 谁把判据改回 mtime, 它立刻红。
+# (2026-08-15 修)
+
+
 def test_signature_existing_file(tmp_path: Path) -> None:
-    """存在文件 → (mtime, size) 元组"""
+    """存在文件 → (内容 sha256, 字节数)"""
     f = tmp_path / "config.yaml"
     f.write_text("foo: bar\n")
 
     sig = config_watcher._signature(f)
     assert len(sig) == 2
-    mtime, size = sig
-    assert mtime > 0
+    digest, size = sig
+    assert digest == hashlib.sha256(b"foo: bar\n").hexdigest()
     assert size == len(b"foo: bar\n")
 
 
+def test_signature_ignores_touch(tmp_path: Path) -> None:
+    """**只动 mtime、内容不变 → 签名必须不变。**
+
+    8/4 那个事故的最小复现: JWT 轮换写回等长内容, 老实现 (mtime, size) 判定
+    变化, tool-bridge 于是每天自杀 ~100 次。判据改回 mtime 的话这条会红。
+    """
+    f = tmp_path / "config.yaml"
+    f.write_text("api_key: AAAA\n")
+    sig_before = config_watcher._signature(f)
+
+    st = f.stat()
+    os.utime(f, (st.st_atime, st.st_mtime + 600))   # 内容一个字节不动
+    assert f.stat().st_mtime != st.st_mtime, "前提: mtime 真的变了"
+
+    assert config_watcher._signature(f) == sig_before
+
+
+def test_signature_changes_on_same_length_content(tmp_path: Path) -> None:
+    """**长度相同但内容不同 → 签名必须变。**
+
+    JWT 轮换正是这种形状 (等长、值不同), 那种情况该重启。8/4 的修法只是不再被
+    "纯 touch"骗到, 不是对等长改动也放行。
+    """
+    f = tmp_path / "config.yaml"
+    f.write_text("api_key: AAAA\n")
+    sig1 = config_watcher._signature(f)
+    f.write_text("api_key: BBBB\n")
+    sig2 = config_watcher._signature(f)
+    assert sig1[1] == sig2[1], "前提: 两次长度相同"
+    assert sig1 != sig2
+
+
 def test_signature_changes_on_file_edit(tmp_path: Path) -> None:
-    """改文件内容 → mtime + size 变 → 签名变"""
+    """改文件内容 → 签名变 (判据是内容, 不再需要等 mtime 精度)"""
     f = tmp_path / "config.yaml"
     f.write_text("v1")
     sig_before = config_watcher._signature(f)
 
-    # 等 1.1s 让 mtime 真变 (POSIX 文件系统 mtime 精度 1s)
-    time.sleep(1.1)
     f.write_text("v2 longer content")
 
     sig_after = config_watcher._signature(f)
     assert sig_before != sig_after
-    # size 变了 (新内容更长)
     assert sig_after[1] > sig_before[1]
 
 
-def test_signature_changes_on_size_only(tmp_path: Path) -> None:
-    """文件 size 改但 mtime 同 (理论上罕见, 但也覆盖)"""
+def test_signature_second_field_is_byte_length(tmp_path: Path) -> None:
+    """第二位是**字节数**不是字符数 —— 中文配置里两者不同"""
     f = tmp_path / "config.yaml"
-    f.write_text("xxx")
-    sig1 = config_watcher._signature(f)
-
-    # 大部分系统会更新 mtime, 但我们的签名 (mtime, size) 任何一个变都触发, 这里
-    # 只是确认 size 字段在签名里
-    assert sig1[1] == 3
+    f.write_text("名字: 鲶鱼\n", encoding="utf-8")
+    raw = f.read_bytes()
+    assert config_watcher._signature(f)[1] == len(raw)
+    assert len(raw) > len("名字: 鲶鱼\n")
 
 
 def test_signature_directory_returns_empty(tmp_path: Path) -> None:
