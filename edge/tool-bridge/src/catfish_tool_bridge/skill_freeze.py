@@ -143,6 +143,8 @@ from .skill_freeze_template import (  # noqa: F401
     _infer_params,
     _is_captcha_fill,
     _looks_like_password,
+    _mark_duplicate_run_skills,
+    _pair_text_anchors,
     _quote_str,
     _slugify,
 )
@@ -246,6 +248,18 @@ def freeze_skill(args: dict[str, Any]) -> dict[str, Any]:
     trace.sort(key=lambda x: x.get("seq", 0))
 
     # 2) 解析 + 模板化
+    #
+    # v2.3 (8/15): 发代码之前先做两遍 pre-pass 给 trace 打标。放在这里而不是
+    # _emit_step 里, 是因为这两件事都要**跨步骤**看 (前后配对 / 跟上一步比),
+    # 而 _emit_step 一次只看一步。
+    _n_anchor = _pair_text_anchors(trace)
+    _n_dup = _mark_duplicate_run_skills(trace)
+    if _n_anchor or _n_dup:
+        logger.info(
+            "freeze pre-pass: %d 处 find_by_text→click 改成运行时定位, %d 处重复 run_skill 去重",
+            _n_anchor, _n_dup,
+        )
+
     params = _infer_params(trace)
     fn_name = _slugify(name)
     body_lines: list[str] = []
