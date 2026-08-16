@@ -79,6 +79,52 @@ def _query_token_set(text: str) -> set:
     return chars | bigrams
 
 
+#: wiki 清单每类最多列几个。
+#:
+#: query 空时沿用老值 50 (不给 advisor / 定时任务这类无 query 调用方引回归)。
+#: 有 query 时 20 就够 —— 按相关性排的 20 个比按字母序排的 50 个有用得多,
+#: 而且省 ~1,300 token。剩下的 LLM 用 catfish_wiki_search 自己查。
+_WIKI_CAP_PLAIN = 50
+_WIKI_CAP_QUERY = 20
+
+#: strategic_docs 的相关性下限: 分数低于榜首这个比例的不进 prompt。
+#: 取值依据见 _render_strategic_docs 里的实测表。
+#:
+#: ⚠ 第一版写的 0.3, 依据是我在旁边重写一遍打分逻辑量出来的数 —— 而那份
+#:   重写用 `read_text()[:1500]` 取正文, 真代码走的是 `_read_text_safe(f, 1500)`,
+#:   **1500 是字节不是字符**。中文 3 字节一个字, 真正参与打分的正文只有
+#:   355-385 字, 不是我以为的 1200。分数全错, 阈值也就无从谈起。
+#:   —— 判据比真事宽的又一次: 拿"我重写的实现"当"真实现"来量。
+_STRATEGIC_FLOOR_RATIO = 0.25
+
+#: 榜首至少要到这个绝对分, 否则视为"一篇都没沾边"。
+#: 实测: 真命中 0.0155~0.0379 ("沙箱部署"/"护城河"/"专利布局"), 假命中 0.00338
+#: ("福富的资质情况" 撞上专利审查报告)。两档中间隔着 4.5 倍。
+_STRATEGIC_MIN_SCORE = 0.008
+
+# ⚠ 试过、又拿掉的一条: "榜首要比中位数高 N 倍, 否则算没区分度"。
+#
+# 动机是真的: "高新技术企业认定" 前四名比值 1.00/0.99/0.98/0.93, 八篇全不沾边
+# 却全被塞进 prompt (~1,400 token)。加了倍数检验之后那个 case 确实干净了,
+# 8 个手标用例全过, 参数可行区间还很宽 (252 组组合全对), 看着很稳。
+#
+# 然后拿"本来就该匹配多篇"的 query 一试就塌了:
+#
+#     "catfish 的整体设计"   top=0.0590 med=0.0514 倍数 1.15 → 全折叠 ✗
+#     "catfish"            top=0.0539 med=0.0500 倍数 1.08 → 全折叠 ✗
+#     "高新技术企业认定"       top=0.0113 med=0.0089 倍数 1.27 → 全折叠 ✓
+#
+# 八篇战略 doc 全是讲 catfish 的, 员工问 catfish 怎么设计的时候把它们全藏起来,
+# 比多花 1,400 token 糟得多。
+#
+# 根子上: "大家都强相关" 和 "大家都不相关" 在字符级 Jaccard 里长得一模一样 ——
+# 都是"分布平坦"。区分它俩要语义, 不是再加一个阈值。硬凑第四个参数只会让
+# 判据更贴合我手头这 8 个例子, 而不是更贴合真事。
+#
+# 所以只留绝对下限 + 相对下限。代价是 "高新技术企业认定" 那类 query 仍然会
+# 多带 ~1,400 token —— 但那是**多给了上下文**, 不是漏了上下文, 失败方向是安全的。
+
+
 def _jaccard_similarity(a: set, b: set) -> float:
     """Jaccard |a ∩ b| / |a ∪ b|. 真空返 0."""
     if not a or not b:
@@ -277,6 +323,42 @@ class _RenderMixin:
                 total = name_score + head_score
                 scored.append((total, name, head))
             scored.sort(key=lambda t: -t[0])
+            # 8/15: 相关性下限 + 全不沾边时折叠。
+            #
+            # 排序本身是好的 (实测 "沙箱部署"→SANDBOX-DEPLOY 第一, "护城河"→
+            # MOAT-ASSESSMENT 第一)。问题出在排完之后**预算没花完就继续塞**。
+            #
+            # 员工机器上 8 篇的实测分 (name*3+head; 文档名是英文, 中文 query 的
+            # name_score 恒 0, 所以实际就是 head 分):
+            #
+            #     "护城河"          1.00 / 0.00 / …        本来就干净
+            #     "沙箱部署"        1.00 / 0.00 / …        本来就干净
+            #     "专利布局怎么样了" 1.00 / 0.27 / 0.10     ← 只有这个卡在边上
+            #     "测试"           全 0                    ← 最费的一种
+            #
+            # 阈值取 0.25 不取 0.3: 唯一卡边的是 "专利布局" 的第二名
+            # (PATENT-EXAMINER-AUDIT, 0.27) —— 问专利布局时把专利审查报告一起给
+            # 是对的, 为省 250 token 砍掉它不划算。
+            top = scored[0][0] if scored else 0.0
+            # 绝对下限: 榜首本身就没沾边时, "第一名"没有意义。
+            # 实测真命中 0.0155~0.0379, 而 "福富的资质情况" 榜首只有 0.00338
+            # (撞上专利审查报告) —— 中间隔着 4.5 倍。
+            if top < _STRATEGIC_MIN_SCORE:
+                top = 0.0
+            if top <= 0:
+                # 一篇都没沾边。老行为是退回字母序, 结果把**全部 7 篇**倒进去
+                # (~1,680 token) —— 恰好在最没用的时候花最多的钱。
+                #
+                # 改成只留一行计数提示。这不是我新发明的约定:
+                # catfish_search_docs 的 description 里已经写着「当 system prompt
+                # 折叠区显示 'catfish strategic docs 还有 N 份' …必用」, 而它是
+                # P43 提升的核心工具, 每轮都在模型手里。折叠掉不等于够不着。
+                return (
+                    "## 📘 战略 / 设计 doc (catfish strategic docs)\n\n"
+                    f"_跟当前话题都不沾边, 已折叠 — catfish strategic docs 还有 "
+                    f"{len(candidates_list)} 份, 需要时用 `catfish_search_docs` 查._"
+                )
+            scored = [t for t in scored if t[0] >= top * _STRATEGIC_FLOOR_RATIO]
             ordered = [(name, head) for _score, name, head in scored]
         else:
             ordered = candidates_list
@@ -284,7 +366,9 @@ class _RenderMixin:
         # budget 截
         entries: List[str] = []
         budget = _BUDGETS.get("strategic_docs", 8000)
-        # query 有 → cap 5KB (top-K 够用, 减 system prompt 噪音)
+        # query 有 → 再收一档。注意 _BUDGETS["strategic_docs"] 6/16 已从 8K 砍到
+        # 3K (P3.5.5), 所以这个 min 现在不起作用 —— 留着是防以后有人把 _BUDGETS
+        # 调回去时这条路径失去上限。
         if query_clean:
             budget = min(budget, 5000)
         for name, head in ordered:
@@ -445,52 +529,106 @@ class _RenderMixin:
 
         return "\n".join(lines)
 
-    def _render_wiki_summary(self, catfish_home: Path) -> str:
+    def _render_wiki_summary(self, catfish_home: Path, query: str = "") -> str:
         """BL-CATFISH-WIKI-MODE P3.3.11 (6/4): wiki summary 注入 prefetch.
 
-        列 wiki/entities + wiki/concepts 所有 file title, 让 LLM 知道:
-          - 员工 wiki 真已有什么 entity / concept** (避免 chat 重复抽)
-          - reference 时真精确 用 wiki 真 title** (e.g. `[[ISO 27001]]`)
-          - 真真人工新建真 file 真自动真进**真 prefetch (file system → read 实时)
+        列 wiki/entities + wiki/concepts, 让 LLM 知道:
+          - 员工 wiki 已有什么 entity / concept (避免 chat 重复抽)
+          - reference 时用精确标题 (e.g. `[[ISO 27001]]`)
+          - 人工新建的 file 自动进 prefetch (每轮实时读 file system)
 
-        cap 50 entries 避免 prompt 撑爆. P3.3.11 真re-ingest hook 简化 :
-        plugin 不需"真watch + trigger ingest"** — read on prefetch 就够了,
-        因 chat LLM 每轮 都看新 wiki.
+        # 8/15 改了三件事 (查"一句话 4 万 token"时发现)
+
+        这一段是 prefetch 里最大的 (2,222 token), 而且原来有三个毛病:
+
+        1. **列的是文件名, 不是标题。** 员工机器上 261 个条目里 203 个是拼音
+           slug (`AAA-xin-yong-deng-ji-zheng-shu`), 而它们的 frontmatter 里
+           写着中文 `title: AAA信用等级证书`。
+           而 `resolve_wiki_ref` 是 **title 第一优先、slug 第四**
+           (wiki_resolve.py:90 vs :107) —— 也就是说旧写法一直在让 LLM 走
+           最弱的那条解析路径。
+
+        2. **不接 query, 按字母序砍到 50。** 168 个实体只露前 50, 于是
+           118 个**永远**看不见, 而且永远是同一批 —— C 开头的
+           `CCRC-tong-xin-...` 系列长期占位, `gaoxinjishu-qiye-rending`
+           (高新技术企业认定) 这种永远进不来。员工问高新认定, wiki 里明明
+           有, LLM 却看不到。这不只是费 token, 是功能缺陷。
+
+        3. **废弃条目照列。** 30 个 `deprecated: true` 跟正主一起注进去
+           (`gaoxinjishu-qiye-rending` 自己就是一个, 内容已并入
+           `gaoxinjishuqiyerending`), 既费 token 又让 LLM 在两份之间犹豫。
+
+        现在: 走 wiki_resolve.load_nodes 拿标题 (不自己再写一份 frontmatter
+        解析 —— 那正是 wiki_resolve 契约测试当初要防的分叉), 跳过废弃,
+        有 query 就按相关性排 top-K。
+
+        query 空时保持老行为 (字母序 cap 50), 不给 advisor / 定时任务这些
+        没有 query 的调用方引入回归。
         """
         wiki_dir = catfish_home / "wiki"
         if not wiki_dir.is_dir():
             return ""
-        entities_dir = wiki_dir / "entities"
-        concepts_dir = wiki_dir / "concepts"
 
-        entities: list[str] = []
-        if entities_dir.is_dir():
-            try:
-                for f in sorted(entities_dir.glob("*.md")):
-                    entities.append(f.stem)
-            except OSError:
-                pass
-        concepts: list[str] = []
-        if concepts_dir.is_dir():
-            try:
-                for f in sorted(concepts_dir.glob("*.md")):
-                    concepts.append(f.stem)
-            except OSError:
-                pass
+        try:
+            from wiki_resolve import load_nodes  # noqa: PLC0415  延迟 import, 避免环
+            # 只读头部: 要的 title / aliases / deprecated 全在 frontmatter,
+            # 正文用不上。读全文是 1.1 MB / 62 ms, 而 prefetch 每轮都跑。
+            nodes = load_nodes(catfish_home, head_bytes=4096)
+        except Exception:
+            return ""
 
+        live = [n for n in nodes if not n.deprecated]
+        entities = [n for n in live if n.rel_path.startswith("wiki/entities/")]
+        concepts = [n for n in live if n.rel_path.startswith("wiki/concepts/")]
         if not entities and not concepts:
             return ""
 
-        lines = ["## 🧠 员工 wiki 已有 (P3.3 知识体系 tab)"]
-        if entities:
-            lines.append(f"\n**实体 ({len(entities)})**: " + " · ".join(f"[[{n}]]" for n in entities[:50]))
-            if len(entities) > 50:
-                lines.append(f"_(还有 {len(entities) - 50} 个未列, 全列在 Companion 真知识体系 tab)_")
-        if concepts:
-            lines.append(f"\n**概念 ({len(concepts)})**: " + " · ".join(f"[[{n}]]" for n in concepts[:50]))
-            if len(concepts) > 50:
-                lines.append(f"_(还有 {len(concepts) - 50} 个未列)_")
-        lines.append("\n_chat 时引用员工 wiki 真用真 `[[标题]]` 精确链接真._")
+        query_clean = (query or "").strip()
+        if query_clean:
+            q = _query_token_set(query_clean)
+
+            def _rank(pool):
+                # 标题 + slug + 别名一起打分: 标题多为中文, slug 多为拼音,
+                # 中文 query 只打得中前者, 英文/拼音 query 只打得中后者。
+                # 两个都算再取大, 才不会因为命名风格把一半条目埋掉。
+                scored = []
+                for n in pool:
+                    s = max(
+                        [_jaccard_similarity(q, _query_token_set(n.title)),
+                         _jaccard_similarity(q, _query_token_set(n.slug))]
+                        + [_jaccard_similarity(q, _query_token_set(a)) for a in n.aliases]
+                    )
+                    scored.append((s, n))
+                scored.sort(key=lambda t: (-t[0], t[1].title))
+                return [n for s, n in scored if s > 0][:_WIKI_CAP_QUERY], True
+
+            ents, ranked = _rank(entities)
+            cons, _ = _rank(concepts)
+            # 一个都没命中 (例: 打招呼 / 纯英文短句) → 退回字母序, 别给个空清单
+            if not ents and not cons:
+                ents = sorted(entities, key=lambda n: n.title)[:_WIKI_CAP_PLAIN]
+                cons = sorted(concepts, key=lambda n: n.title)[:_WIKI_CAP_PLAIN]
+                ranked = False
+        else:
+            ents = sorted(entities, key=lambda n: n.title)[:_WIKI_CAP_PLAIN]
+            cons = sorted(concepts, key=lambda n: n.title)[:_WIKI_CAP_PLAIN]
+            ranked = False
+
+        suffix = " — 按当前话题排序" if ranked else ""
+        lines = [f"## 🧠 员工 wiki 已有 (P3.3 知识体系 tab){suffix}"]
+        for label, shown, pool in (("实体", ents, entities), ("概念", cons, concepts)):
+            if not pool:
+                continue
+            lines.append(
+                f"\n**{label} ({len(pool)})**: "
+                + " · ".join(f"[[{n.title}]]" for n in shown)
+            )
+            if len(shown) < len(pool):
+                lines.append(
+                    f"_(只列了 {len(shown)}/{len(pool)} 个, 其余用 "
+                    f"`catfish_wiki_search` 查, 或看 Companion 知识体系 tab)_"
+                )
+        lines.append("\n_chat 时引用员工 wiki 用 `[[标题]]` 精确链接._")
         return "\n".join(lines)
 
     def _render_employee_journal(self, catfish_home: Path) -> str:

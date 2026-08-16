@@ -67,6 +67,13 @@ class WikiNode:
     slug: str
     title: str
     aliases: list[str] = field(default_factory=list)
+    #: frontmatter 的 `deprecated: true`。8/15 加。
+    #:
+    #: **解析时不看这个字段** —— 废弃条目仍然要能被 `[[老名字]]` 解析到,
+    #: 否则历史链接会大面积断。它只用来决定"要不要主动推荐给 LLM":
+    #: prefetch 的 wiki 清单会跳过废弃条目 (员工机器上 261 个里有 30 个是
+    #: 废弃的, 之前连同正主一起注进去, 既费 token 又让 LLM 在两份之间犹豫)。
+    deprecated: bool = False
 
 
 @dataclass
@@ -146,8 +153,19 @@ def _list_field(fm: str, key: str) -> list[str]:
     return [p.strip().strip('"').strip("'") for p in inner.split(",") if p.strip()]
 
 
-def load_nodes(catfish_home: Path) -> list[WikiNode]:
-    """扫 wiki/entities + wiki/concepts, 建可解析的节点表。"""
+def load_nodes(catfish_home: Path, *, head_bytes: int | None = None) -> list[WikiNode]:
+    """扫 wiki/entities + wiki/concepts, 建可解析的节点表。
+
+    head_bytes (8/15 加): 只读每个文件前 N 字节。这里要的东西全在 frontmatter
+    里 (title / aliases / deprecated), 正文一个字都用不上 —— 而 prefetch 每轮
+    都调这个函数, 员工机器上 261 个文件读全文是 1.1 MB / 62 ms, 每轮都付。
+
+    ⚠ 截断有个静默失效的风险: frontmatter 要是比 head_bytes 长, `_fm_of` 找不到
+      收尾的 `---` 就返空串, title 悄悄退化成 slug —— 没有任何报错, 只是
+      wiki 清单里突然冒出一堆拼音名。所以**没找到收尾就整份重读**。
+      (实测员工机器上 frontmatter 最长 395 字节, 默认 4096 有十倍余量;
+       但"现在够用"不是不做兜底的理由。)
+    """
     out: list[WikiNode] = []
     for sub in ("wiki/entities", "wiki/concepts"):
         d = catfish_home / sub
@@ -161,7 +179,14 @@ def load_nodes(catfish_home: Path) -> list[WikiNode]:
             if p.suffix != ".md":
                 continue
             try:
-                text = p.read_text(encoding="utf-8", errors="replace")
+                if head_bytes is None:
+                    text = p.read_text(encoding="utf-8", errors="replace")
+                else:
+                    with p.open("r", encoding="utf-8", errors="replace") as fh:
+                        text = fh.read(head_bytes)
+                    # 截断处正好切断了 frontmatter → 退回读全文, 不接受静默降级
+                    if text.startswith("---") and text.find("\n---", 3) == -1:
+                        text = p.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
             fm = _fm_of(text)
@@ -171,6 +196,7 @@ def load_nodes(catfish_home: Path) -> list[WikiNode]:
                     slug=p.stem,
                     title=_field(fm, "title").strip("\"'") or p.stem,
                     aliases=_list_field(fm, "aliases"),
+                    deprecated=_field(fm, "deprecated").strip().lower() == "true",
                 )
             )
     return out

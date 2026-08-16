@@ -479,7 +479,9 @@ class CatfishMemoryProvider(
             # 2b. BL-CATFISH-WIKI-MODE P3.3.11 (6/4): wiki summary —
             # 列 wiki/entities + concepts top hub 让 LLM chat 时知道
             # 员工 wiki 已有 entity / concept 避免重复抽 + reference 精确
-            wiki = self._render_wiki_summary(catfish_home)
+            # 8/15: 传 query — 168 个实体按字母序砍到 50, 有 118 个永远露不出来
+            # (而且永远是同一批). 按相关性排之后 top-20 比字母序 top-50 有用。
+            wiki = self._render_wiki_summary(catfish_home, query=query)
             if wiki:
                 sections.append(wiki)
 
