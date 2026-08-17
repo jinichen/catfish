@@ -33,15 +33,88 @@ use std::path::PathBuf;
 const ACCOUNT: &str = "catfish-teaching";
 const SERVICE_PREFIX: &str = "catfish-teaching:";
 
-fn service_name(label: &str) -> Result<String, String> {
-    let label = label.trim();
-    if label.is_empty() {
+/// secret_resolver 认得的 scheme (secret_resolver.py:95-102)。
+/// 名称框里出现它们 = 员工粘的是引用串不是名字。
+const SECRET_SCHEMES: [&str; 3] = ["keychain://", "wincred://", "env://"];
+
+/// 把员工填进"名称"框的东西收敛成一个**纯名字**。
+///
+/// # 为什么需要这一步 (8/17 实盘撞的)
+///
+/// 员工机器上出现过这么一条:
+///
+///   label     = keychain://catfish-teaching:http://eis.ffcs.cn
+///   reference = keychain://catfish-teaching:keychain://catfish-teaching:http://eis.ffcs.cn
+///
+/// 前缀套了两层。成因是这个循环:
+///   ① 保存后界面显示"安全引用", 旁边有「复制引用」
+///   ② 员工把引用粘回"名称"框 (或者点一下 `本机已存` 那一行 ——
+///      EduPopover.tsx 的 `setLabel(item.label)` 会把标签填回输入框)
+///   ③ 再存一次 → reference_for(service_name(label)) 又包一层
+///   ④ 新的 label 本身又是个引用 → 回到 ②, **每点一次多一层**
+///
+/// 自洽但没用: 套两层的引用确实能解析 (resolver 的 partition("://") 只切第一个),
+/// 但它跟教学流程里写的那个引用对不上, 表现就是"存了也白存"。
+fn normalize_label(raw: &str) -> Result<String, String> {
+    let mut s = raw.trim();
+
+    // 把本 UI 自己产出的引用剥回纯名字。粘回来的意图是"覆盖这一条", 该让它成立。
+    // 循环剥 —— 已经套了两层的历史数据也要能救回来。上限防手工构造的病态输入。
+    for _ in 0..8 {
+        let before = s;
+        for scheme in ["keychain://", "wincred://"] {
+            if let Some(rest) = s.strip_prefix(scheme) {
+                // 只认**我们自己的命名空间**。别的 scheme+名字剥了会改变含义,
+                // 见下面那个 Err。
+                if let Some(inner) = rest.strip_prefix(SERVICE_PREFIX) {
+                    s = inner;
+                }
+            }
+        }
+        if s == before {
+            break;
+        }
+    }
+
+    // 剥完还以 secret scheme 开头 = 员工粘的是**别处**的引用
+    // (例 keychain://eis_password, 那是 TEACHING-SOP.md:107 手工
+    // `security add-generic-password -s eis_password` 那一套)。
+    // 本 UI 产不出那种名字 —— 它总会加 catfish-teaching: 前缀。悄悄剥成
+    // eis_password 再加前缀会变成 catfish-teaching:eis_password, 名字对不上,
+    // 又是一次"存了也白存"。所以明说, 不猜。
+    //
+    // ⚠ 判据是"以 secret scheme 开头", 不是"含 ://"。
+    //   含 :// 太宽 —— `http://eis.ffcs.cn` 本身就是个合理的名字 (员工机器上
+    //   那条坏记录剥完正好是它), 用宽判据会连"把坏数据删掉"这条路一起堵死。
+    if SECRET_SCHEMES.iter().any(|p| s.starts_with(*p)) {
+        return Err(format!(
+            "「{s}」看起来是一个引用串, 不是名称。\n\
+             这里只填名字 (例: EIS / OA), 引用串由程序拼出来。\n\
+             如果教学流程要的是别的命名空间 (例 keychain://eis_password), \
+             本界面产不出那种名字 —— 见 docs/TEACHING-SOP.md 的手工命令。"
+        ));
+    }
+
+    if s.is_empty() {
         return Err("请填写凭据名称".to_string());
     }
-    if label.len() > 80 || label.chars().any(|c| c.is_control()) {
+    if s.len() > 80 || s.chars().any(|c| c.is_control()) {
         return Err("凭据名称过长或包含不可用字符".to_string());
     }
-    Ok(format!("{SERVICE_PREFIX}{label}"))
+    Ok(s.to_string())
+}
+
+/// 归一化 + 加命名空间前缀。**返两个值, 两个都有人用**:
+///   .0 纯名字   → 写进标签索引 (存原样的话"名字是引用串"那条会一直留着)
+///   .1 service  → 系统凭据库的 service 名
+///
+/// 8/17 第一版把这个函数拆散写进两个命令里, 结果它只剩测试在调 ——
+/// `cargo test` 直接报 `function service_name is never used`。
+/// 生产不用、只有测试用的函数就是死代码, 而且测试会因此测了一条没人走的路。
+fn service_name(label: &str) -> Result<(String, String), String> {
+    let name = normalize_label(label)?;
+    let target = format!("{SERVICE_PREFIX}{name}");
+    Ok((name, target))
 }
 
 /// 引用串 —— 教学流程里 `secret_ref` 用的就是这个。
@@ -147,7 +220,10 @@ fn upsert(mut items: Vec<TeachingCredential>, item: TeachingCredential) -> Vec<T
 
 #[tauri::command]
 pub fn teaching_credential_save(label: String, password: String) -> Result<String, String> {
-    let target = service_name(&label)?;
+    // 归一化一次, 后面 service / 索引都用它 —— 8/17 之前索引存的是**原样**,
+    // 于是"名字本身是引用串"那条会一直留在列表里, 点一下又填回输入框, 再存
+    // 就多套一层。存归一化后的名字, 这个循环就断了。
+    let (name, target) = service_name(&label)?;
     if password.is_empty() {
         return Err("请填写密码".to_string());
     }
@@ -161,7 +237,7 @@ pub fn teaching_credential_save(label: String, password: String) -> Result<Strin
     if let Err(e) = write_index(&upsert(
         read_index(),
         TeachingCredential {
-            label: label.trim().to_string(),
+            label: name.clone(),
             reference: reference.clone(),
             created_at: chrono::Utc::now().to_rfc3339(),
         },
@@ -182,7 +258,7 @@ pub fn teaching_credential_list() -> Result<Vec<TeachingCredential>, String> {
 /// 删一条。凭据库里已经没有也算成功 —— 否则手工删过的残项永远清不掉。
 #[tauri::command]
 pub fn teaching_credential_delete(label: String) -> Result<(), String> {
-    let target = service_name(&label)?;
+    let (name, target) = service_name(&label)?;
     match entry_for(&target)?.delete_credential() {
         Ok(()) => {}
         Err(keyring::Error::NoEntry) => {
@@ -190,9 +266,16 @@ pub fn teaching_credential_delete(label: String) -> Result<(), String> {
         }
         Err(e) => return Err(format!("从本机凭据库删除失败: {e}")),
     }
-    let want = label.trim();
-    let kept: Vec<TeachingCredential> =
-        read_index().into_iter().filter(|i| i.label != want).collect();
+    // 索引清理**同时认两种写法**:
+    //   name = 归一化后的 (8/17 之后存进去的都长这样)
+    //   raw  = 员工点「删除」时传进来的原样 —— 历史上存过"名字本身是引用串"
+    //          的条目 (8/17 那条 keychain://catfish-teaching:http://eis.ffcs.cn),
+    //          只按 name 过滤的话那种残项永远清不掉。
+    let raw = label.trim();
+    let kept: Vec<TeachingCredential> = read_index()
+        .into_iter()
+        .filter(|i| i.label != name && i.label != raw)
+        .collect();
     write_index(&kept)
 }
 
@@ -202,12 +285,74 @@ mod tests {
 
     #[test]
     fn builds_namespaced_service_name() {
-        assert_eq!(service_name("教学登录").unwrap(), "catfish-teaching:教学登录");
+        assert_eq!(service_name("教学登录").unwrap().1, "catfish-teaching:教学登录");
     }
 
     #[test]
     fn rejects_empty_name() {
         assert!(service_name("  ").is_err());
+    }
+
+    // ── 8/17: 引用串套娃 ─────────────────────────────────────────
+    //
+    // 员工机器上真出现过 (截图 + ~/.catfish/teaching_credentials.json):
+    //   label     = keychain://catfish-teaching:http://eis.ffcs.cn
+    //   reference = keychain://catfish-teaching:keychain://catfish-teaching:http://eis.ffcs.cn
+    // 而且会自我放大 —— 点一次 `本机已存` 就把引用填回名称框, 再存又一层。
+
+    #[test]
+    fn strips_our_own_reference_pasted_back() {
+        // 粘回来的意图是"覆盖这一条", 该跟直接填名字得到同一个 service
+        assert_eq!(
+            service_name("keychain://catfish-teaching:EIS").unwrap().1,
+            service_name("EIS").unwrap().1,
+        );
+    }
+
+    #[test]
+    fn unwraps_already_doubled_history() {
+        // 已经套了两层的历史数据要能救回来, 否则那条记录永远删不掉
+        let doubled = "keychain://catfish-teaching:keychain://catfish-teaching:EIS";
+        assert_eq!(service_name(doubled).unwrap().1, "catfish-teaching:EIS");
+    }
+
+    #[test]
+    fn name_containing_a_url_is_a_valid_name() {
+        // ★ 判据必须是"以 secret scheme 开头", 不是"含 ://"。
+        //   员工机器上那条坏记录剥完正好是 http://eis.ffcs.cn —— 用宽判据会把
+        //   "清理坏数据"这条路一起堵死。
+        assert_eq!(
+            service_name("keychain://catfish-teaching:http://eis.ffcs.cn").unwrap().1,
+            "catfish-teaching:http://eis.ffcs.cn",
+        );
+        assert!(service_name("http://eis.ffcs.cn").is_ok());
+    }
+
+    #[test]
+    fn rejects_foreign_namespace_reference() {
+        // keychain://eis_password 是 TEACHING-SOP.md:107 手工那一套。
+        // 本 UI 产不出那种名字 (总会加 catfish-teaching:), 悄悄剥成
+        // catfish-teaching:eis_password 名字对不上 —— 明说, 不猜。
+        let e = service_name("keychain://eis_password").unwrap_err();
+        assert!(e.contains("引用串"), "错误信息要说清是引用串不是名称: {e}");
+        assert!(service_name("env://EIS_PASSWORD").is_err());
+    }
+
+    #[test]
+    fn reference_never_doubles_the_prefix() {
+        // 兜底: 不管输入怎么套, 产出的引用里前缀只能出现一次
+        for input in [
+            "EIS",
+            "keychain://catfish-teaching:EIS",
+            "keychain://catfish-teaching:keychain://catfish-teaching:EIS",
+        ] {
+            let r = reference_for(&service_name(input).unwrap().1);
+            assert_eq!(
+                r.matches(SERVICE_PREFIX).count(),
+                1,
+                "输入 {input:?} 产出 {r:?} —— 前缀出现了不止一次",
+            );
+        }
     }
 
     #[test]

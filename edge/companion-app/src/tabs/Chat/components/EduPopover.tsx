@@ -380,9 +380,21 @@ function CredentialModal({ onClose }: { onClose: () => void }) {
             <button type="button" onClick={() => navigator.clipboard?.writeText(reference)} style={{ ...modalCloseStyle, marginTop: 6 }}>复制引用</button>
           </div>
         )}
+        {/* 存完之后主按钮变「完成」。
+            8/17 鸿波问"为什么保存密码一直留在这个页面上" —— 弹窗不自动关是故意的
+            (要把安全引用显示出来给人复制), 但存完之后:
+              · 密码框被清空 → 保存按钮 disabled
+              · 唯一还能点的是「取消」, 而主按钮文案还停在「覆盖密码」
+            看起来就像没存上。给一个明确的出口。 */}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          <button type="button" onClick={onClose} style={modalCloseStyle}>取消</button>
-          <button type="button" disabled={saving || !trimmed || !password} onClick={save} style={saveButtonStyle}>{saving ? "保存中…" : duplicate ? "覆盖密码" : "保存到系统凭据库"}</button>
+          {reference ? (
+            <button type="button" onClick={onClose} style={saveButtonStyle}>完成</button>
+          ) : (
+            <>
+              <button type="button" onClick={onClose} style={modalCloseStyle}>取消</button>
+              <button type="button" disabled={saving || !trimmed || !password} onClick={save} style={saveButtonStyle}>{saving ? "保存中…" : duplicate ? "覆盖密码" : "保存到系统凭据库"}</button>
+            </>
+          )}
         </div>
       </div>
     </div>
