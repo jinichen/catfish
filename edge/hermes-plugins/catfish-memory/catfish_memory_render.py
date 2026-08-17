@@ -97,10 +97,20 @@ _WIKI_CAP_QUERY = 20
 #:   —— 判据比真事宽的又一次: 拿"我重写的实现"当"真实现"来量。
 _STRATEGIC_FLOOR_RATIO = 0.25
 
-#: 榜首至少要到这个绝对分, 否则视为"一篇都没沾边"。
-#: 实测: 真命中 0.0155~0.0379 ("沙箱部署"/"护城河"/"专利布局"), 假命中 0.00338
-#: ("福富的资质情况" 撞上专利审查报告)。两档中间隔着 4.5 倍。
-_STRATEGIC_MIN_SCORE = 0.008
+#: 榜首至少要覆盖 query 的这个比例, 否则视为"一篇都没沾边", 整段折叠。
+#:
+#: 读法: 0.4 = 提问里至少 40% 的词在某份材料里出现过。
+#:
+#: ⚠ 这里**故意不用 Jaccard 的绝对值**。第一版写的是 `Jaccard >= 0.008`,
+#:   在员工机器上那 8 篇 (每篇约 370 字) 量得好好的 —— 但那个数绑死在文档
+#:   的词汇量上: 同一个完美命中, 文档从 317 字长到 717 字, Jaccard 就从
+#:   0.00805 掉到 0.00353, 直接跌破 0.008 被静默折叠。摆动 275 倍。
+#:   换一台机器、换一批文档, 那个常量就不成立了。
+#:   —— 8/17 鸿波问"这种方式换个环境会不会不匹配", 量完确认会, 改成 overlap。
+#:
+#: 0.3 / 0.4 / 0.5 在真数据 8 个用例上都全对 (该留的 0.57~1.00, 该折的
+#: 0.00~0.20, 中间空着), 取中间值。
+_STRATEGIC_MIN_OVERLAP = 0.4
 
 # ⚠ 试过、又拿掉的一条: "榜首要比中位数高 N 倍, 否则算没区分度"。
 #
@@ -132,6 +142,37 @@ def _jaccard_similarity(a: set, b: set) -> float:
     inter = len(a & b)
     union = len(a | b)
     return inter / union if union > 0 else 0.0
+
+
+def _overlap_coefficient(q: set, d: set) -> float:
+    """|q ∩ d| / |q| —— "提问里的词, 有多少在这份材料里出现过".
+
+    跟 Jaccard 只差一个分母, 但差别是决定性的 (8/17 鸿波问"换个环境会不会
+    不匹配"时量出来的):
+
+        Jaccard 分母是**并集** → 随材料的词汇量变化
+        overlap 分母是 **query 自己** → 跟材料多长、多少份、什么语言都无关
+
+    实测: 同一个 query、命中内容一字不变, 只往文档里加互不相同的词:
+
+        正文  17 字 (22 token)    Jaccard 0.22727   overlap 1.00
+        正文 317 字 (621 token)   Jaccard 0.00805   overlap 1.00
+        正文 717 字 (1416 token)  Jaccard 0.00353   overlap 1.00
+        正文 3017 字 (5989 token) Jaccard 0.00083   overlap 1.00
+
+    **同一个完美命中, Jaccard 摆动 275 倍。** 所以任何"Jaccard ≥ 某个绝对值"
+    的阈值都只在调它那台机器上成立 —— 换个员工, 文档写长一点、词汇丰富一点,
+    相关材料就会被静默折叠掉。这正是 _STRATEGIC_MIN_SCORE=0.008 的病 (我
+    8/17 上午写进去的, 下午拆掉)。
+
+    overlap 还能读懂: 0.4 = 提问里至少 40% 的词在这份材料里出现过。
+
+    ⚠ 它自己的偏好: 特别长、词汇特别杂的材料覆盖率天然偏高, 容易蒙混过关。
+      但那个方向是**多给上下文**, 不是静默漏掉 —— 比 Jaccard 那个方向安全。
+    """
+    if not q:
+        return 0.0
+    return len(q & d) / len(q)
 
 
 class _RenderMixin:
@@ -312,40 +353,50 @@ class _RenderMixin:
             return ""
 
         # query 打分排序 (跟 _render_skills_catalog 同套 helper)
+        #
+        # 两个分数各管一件事, 别混:
+        #   score   (Jaccard, name 权重 ×3) → **排序**。它带着"标题比正文语义浓"
+        #                                     这个启发, overlap 表达不了。
+        #   overlap (|q∩d|/|q|)             → **要不要留**。它不受文档长度影响,
+        #                                     换个员工的机器仍然成立。
         query_clean = (query or "").strip()
         if query_clean:
             q_chars = _query_token_set(query_clean)
             scored: List[tuple] = []
             for name, head in candidates_list:
+                n_tok, h_tok = _query_token_set(name), _query_token_set(head)
                 # name 权重更高 (doc 标题最语义浓)
-                name_score = _jaccard_similarity(q_chars, _query_token_set(name)) * 3.0
-                head_score = _jaccard_similarity(q_chars, _query_token_set(head))
-                total = name_score + head_score
-                scored.append((total, name, head))
+                total = (_jaccard_similarity(q_chars, n_tok) * 3.0
+                         + _jaccard_similarity(q_chars, h_tok))
+                ov = _overlap_coefficient(q_chars, n_tok | h_tok)
+                scored.append((total, name, head, ov))
             scored.sort(key=lambda t: -t[0])
-            # 8/15: 相关性下限 + 全不沾边时折叠。
+            # 相关性闸门 + 全不沾边时折叠 (8/15 加, 8/17 换成 overlap)。
             #
             # 排序本身是好的 (实测 "沙箱部署"→SANDBOX-DEPLOY 第一, "护城河"→
             # MOAT-ASSESSMENT 第一)。问题出在排完之后**预算没花完就继续塞**。
             #
-            # 员工机器上 8 篇的实测分 (name*3+head; 文档名是英文, 中文 query 的
-            # name_score 恒 0, 所以实际就是 head 分):
+            # 闸门用 overlap 不用 Jaccard —— 见 _overlap_coefficient 的说明:
+            # Jaccard 的绝对值随文档词汇量摆动 275 倍, 任何绝对阈值都只在调它
+            # 那台机器上成立。员工机器上 8 篇的实测 overlap:
             #
-            #     "护城河"          1.00 / 0.00 / …        本来就干净
-            #     "沙箱部署"        1.00 / 0.00 / …        本来就干净
-            #     "专利布局怎么样了" 1.00 / 0.27 / 0.10     ← 只有这个卡在边上
-            #     "测试"           全 0                    ← 最费的一种
+            #     "护城河"           1.00 / 0.00 …          留 1
+            #     "沙箱部署"         0.57 / 0.00 …          留 1
+            #     "专利布局怎么样了"  0.77 / 0.23 / 0.08 …   留 2
+            #     "catfish 的整体设计" 0.80 / 0.75 / 0.70 …  留多篇 (八篇都讲 catfish)
+            #     ────────────────────────────────────────
+            #     "高新技术企业认定"  0.20                   全折叠
+            #     "福富的资质情况"    0.10                   全折叠
+            #     "测试" / "在吗"     0.00                   全折叠
             #
-            # 阈值取 0.25 不取 0.3: 唯一卡边的是 "专利布局" 的第二名
-            # (PATENT-EXAMINER-AUDIT, 0.27) —— 问专利布局时把专利审查报告一起给
-            # 是对的, 为省 250 token 砍掉它不划算。
-            top = scored[0][0] if scored else 0.0
-            # 绝对下限: 榜首本身就没沾边时, "第一名"没有意义。
-            # 实测真命中 0.0155~0.0379, 而 "福富的资质情况" 榜首只有 0.00338
-            # (撞上专利审查报告) —— 中间隔着 4.5 倍。
-            if top < _STRATEGIC_MIN_SCORE:
-                top = 0.0
-            if top <= 0:
+            # 该留的落在 0.57~1.00, 该折的落在 0.00~0.20, 中间空一大段 ——
+            # 阈值取 0.3 / 0.4 / 0.5 实测都全对, 取中间的 0.4。
+            #
+            # 顺带: "高新技术企业认定" 这个 case 之前用 Jaccard + 中位数倍数
+            # 做区分度检验时跟 "catfish" 分不开 (两者都是分布平坦), 我因此撤掉
+            # 过那条。overlap 把它俩一刀切开了 (0.20 vs 0.80)。
+            top_overlap = max((t[3] for t in scored), default=0.0)
+            if top_overlap < _STRATEGIC_MIN_OVERLAP:
                 # 一篇都没沾边。老行为是退回字母序, 结果把**全部 7 篇**倒进去
                 # (~1,680 token) —— 恰好在最没用的时候花最多的钱。
                 #
@@ -358,8 +409,10 @@ class _RenderMixin:
                     f"_跟当前话题都不沾边, 已折叠 — catfish strategic docs 还有 "
                     f"{len(candidates_list)} 份, 需要时用 `catfish_search_docs` 查._"
                 )
-            scored = [t for t in scored if t[0] >= top * _STRATEGIC_FLOOR_RATIO]
-            ordered = [(name, head) for _score, name, head in scored]
+            # 相对下限也走 overlap: 比值本身是无量纲的, 但拿 Jaccard 算比值时
+            # 各篇除以各自不同的并集, 文档长短不一就不保序了。overlap 没这问题。
+            scored = [t for t in scored if t[3] >= top_overlap * _STRATEGIC_FLOOR_RATIO]
+            ordered = [(name, head) for _score, name, head, _ov in scored]
         else:
             ordered = candidates_list
 

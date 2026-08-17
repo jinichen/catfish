@@ -125,17 +125,22 @@ def test_query_cap_smaller_budget(tmp_path, provider):
 def test_query_cap_triggers_topk_label(tmp_path, provider):
     """budget 截断 → title 加 'top N/M' 提示.
 
-    数学 (修正): _read_text_safe(1500 byte) 走 truncate path 返
-    `text[:max_bytes//3] + "\\n...[truncated]"` ≈ 516 char (不是 1500).
-    entry = `### name\\n\\n{head}\\n` ≈ 525 char. query 触发 budget 5000 →
-    9-10 份 fit. 写 12 份让最后 2-3 份 break (触发 top-K hint).
+    数学: _read_text_safe(1500 byte) 走 truncate path, 中文 3 字节/字 →
+    head ≈ 500 字. entry = `### name\\n\\n{head}\\n` ≈ 528 字, 预算 3000
+    (_BUDGETS["strategic_docs"]) → 只塞得下 5 条. 写 12 份必然触发 top-K hint.
+
+    ⚠ fixture 8/17 换过一次。老版是 12 份 `"X"*2000` + query "something",
+      靠英文文件名 doc_NN 跟 "something" 的字母重叠混过老的 Jaccard 闸门。
+      闸门换成 overlap 之后那个 overlap 只有 0.235, 被正确折叠, 这条就再也
+      走不到预算截断那一步了 —— **测试意图没问题, 是 fixture 退化了**。
+      改成正文真的包含 query 词, 让它老老实实撞预算。
     """
     docs = tmp_path / "strategic_docs"
-    # 写 12 份: budget 5000 / ~525 = ~9.5 fit → 9 entries + top 9/12 label
+    body = "季度营收报告：本季度营收同比增长，各部门营收拆分如下。" * 30
     for i in range(12):
-        _write(docs / f"doc_{i:02d}.md", "X" * 2000)
+        _write(docs / f"doc_{i:02d}.md", body)
 
-    result = provider._render_strategic_docs(tmp_path, query="something")
+    result = provider._render_strategic_docs(tmp_path, query="季度营收")
     # entries < candidates → title 加 "top N/M"
     assert "top" in result, f"title 应有 top-K 提示: {result[:300]}"
     assert "/12" in result, f"应有 '/12' 总数提示: {result[:300]}"

@@ -58,9 +58,11 @@ sys.path.insert(0, str(_PLUGIN_DIR))
 
 from catfish_memory import CatfishMemoryProvider  # noqa: E402
 from catfish_memory_render import (  # noqa: E402
-    _STRATEGIC_MIN_SCORE,
+    _STRATEGIC_MIN_OVERLAP,
     _WIKI_CAP_PLAIN,
     _WIKI_CAP_QUERY,
+    _overlap_coefficient,
+    _query_token_set,
 )
 from wiki_resolve import load_nodes  # noqa: E402
 
@@ -270,32 +272,62 @@ _LONG_BODY = (
 
 
 def test_沾一点点边也要折叠(tmp_path, provider):
-    """★★★ 这条才真正考到**绝对下限**。
+    """★★★ 这条才真正考到**闸门**。
 
-    ⚠ 上面那条 (query 完全不沾边) 走的是 `top <= 0` 那条分支, 绝对下限
-      根本没被碰到 —— 做变异 (`if top < _STRATEGIC_MIN_SCORE` → `if False`)
-      时它绿着过去了。得让 top 严格大于 0 但小于下限。
+    ⚠ 上面那条 (query 完全不沾边) overlap 恰好是 0, 阈值设成多少都会折叠 ——
+      做变异时它挡不住。得让 overlap 严格大于 0 但小于阈值。
 
     真实对应的是 "福富的资质情况" 撞上 PATENT-EXAMINER-AUDIT 那种:
-    榜首 0.00338, 确实非零, 但一点用都没有。
+    overlap 0.10, 确实非零, 但一点用都没有。
     """
     for i in range(7):
         _doc(tmp_path, f"DOC-{i}", _LONG_BODY)
 
-    # 先自证前置: 这个 query 的分数确实落在 (0, 下限) 之间, 否则这条测的是别的东西
+    # 先自证前置: overlap 确实落在 (0, 阈值) 之间, 否则这条测的是别的东西
     from catfish_memory_base import _read_text_safe
-    from catfish_memory_render import _jaccard_similarity, _query_token_set
     head = _read_text_safe(tmp_path / "strategic_docs" / "DOC-0.md", 1500).strip()[:1200]
-    score = (_jaccard_similarity(_query_token_set("营"), _query_token_set("DOC-0")) * 3.0
-             + _jaccard_similarity(_query_token_set("营"), _query_token_set(head)))
-    assert 0 < score < _STRATEGIC_MIN_SCORE, (
-        f"前置不成立: 分数 {score:.5f} 不在 (0, {_STRATEGIC_MIN_SCORE}) 里, "
-        "这条就没在考绝对下限"
+    q = _query_token_set("甲乙丙营")            # "营"命中正文, 甲乙丙不命中
+    ov = _overlap_coefficient(q, _query_token_set("DOC-0") | _query_token_set(head))
+    assert 0 < ov < _STRATEGIC_MIN_OVERLAP, (
+        f"前置不成立: overlap {ov:.3f} 不在 (0, {_STRATEGIC_MIN_OVERLAP}) 里, "
+        "这条就没在考闸门"
     )
 
-    out = provider._render_strategic_docs(tmp_path, query="营")
+    out = provider._render_strategic_docs(tmp_path, query="甲乙丙营")
     assert "###" not in out, f"沾一点点边就把 7 篇全塞进去了:\n{out[:300]}"
     assert "还有 7 份" in out
+
+
+def test_闸门不受文档长度影响(tmp_path, provider):
+    """★★★ 这条是 8/17 那个"换个环境会不会不匹配"的回归测试。
+
+    第一版闸门是 `Jaccard >= 0.008`, 在员工机器上那 8 篇 (约 370 字) 量得
+    好好的。但 Jaccard 的分母是**并集**, 随文档词汇量涨:
+
+        命中内容一字不变, 只往文档里加互不相同的词
+            正文  317 字   Jaccard 0.00805   ← 刚好过 0.008
+            正文  717 字   Jaccard 0.00353   ← 完美命中被静默折叠
+            正文 3017 字   Jaccard 0.00083
+
+    **同一个完美命中摆动 275 倍。** 换台机器、文档写长点, 相关材料就没了,
+    而且没有任何信号。
+
+    这条钉住: 同样的命中内容, 文档从短到长, 判定必须不变。
+    """
+    import random
+    CJK = [chr(c) for c in range(0x4E00, 0x4E00 + 3000)]
+    random.seed(7)
+    core = "护城河评估：数据不出端是核心壁垒。"
+
+    for extra in (0, 300, 1500, 3000):
+        d = tmp_path / f"len{extra}"
+        _doc(d, "MOAT", core + "".join(random.sample(CJK, extra)))
+        _doc(d, "OTHER", "".join(random.sample(CJK, 400)))
+        out = provider._render_strategic_docs(d, query="护城河")
+        assert "### MOAT" in out, (
+            f"正文加到 {extra} 个杂词之后, 完美命中被折叠了 —— "
+            f"闸门又依赖文档长度了:\n{out[:200]}"
+        )
 
 
 def test_命中时注入榜首_同时砍掉陪跑的(tmp_path, provider):
@@ -330,9 +362,38 @@ def test_没有query时不折叠(tmp_path, provider):
     assert out.count("###") == 3
 
 
-def test_绝对下限的取值有实测依据():
-    """实测真命中 0.0155~0.0379, 假命中 0.00338 —— 下限要落在中间。"""
-    assert 0.00338 < _STRATEGIC_MIN_SCORE < 0.0155
+def test_闸门取值落在实测的空档里():
+    """员工机器 8 篇的实测 overlap: 该留 0.57~1.00, 该折 0.00~0.20。
+
+    阈值必须落在那段空档里。0.3/0.4/0.5 都全对, 取中间。
+    """
+    assert 0.20 < _STRATEGIC_MIN_OVERLAP < 0.57
+
+
+def test_overlap_不随文档词汇量变化():
+    """★★ 直接钉 helper 本身的性质, 不经过渲染。
+
+    这是"可移植"的定义: 同一个 query、同一段命中内容, 材料词汇量变化 200 倍,
+    overlap 必须一个字都不动。Jaccard 在同样条件下摆动 275 倍。
+    """
+    import random
+    from catfish_memory_render import _jaccard_similarity
+    CJK = [chr(c) for c in range(0x4E00, 0x4E00 + 3000)]
+    random.seed(7)
+    q = _query_token_set("护城河")
+    core = "护城河评估：数据不出端是核心壁垒。"
+
+    ovs, jacs = [], []
+    for extra in (0, 300, 1500, 3000):
+        d = _query_token_set(core + "".join(random.sample(CJK, extra)))
+        ovs.append(_overlap_coefficient(q, d))
+        jacs.append(_jaccard_similarity(q, d))
+
+    assert len(set(ovs)) == 1 and ovs[0] == 1.0, f"overlap 变了: {ovs}"
+    assert max(jacs) / min(jacs) > 50, (
+        f"Jaccard 没有像预期那样大幅摆动 ({jacs}) —— 那这条测试的前提就变了, "
+        "去看看 _query_token_set 是不是改了"
+    )
 
 
 # ── 拿真数据兜底 ────────────────────────────────────────────
