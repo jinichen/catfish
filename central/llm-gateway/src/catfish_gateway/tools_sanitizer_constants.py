@@ -136,6 +136,19 @@ ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
     # "搜索返回被归档截断了", 然后放弃归档路径改用 execute_code 手工读文件。
     # 跟 P43 的 _PROMOTE 必须同步 (test_p43_core_tools.py 有跨仓一致性测试)。
     "catfish_read_tool_archive",
+    # 8/17: 浏览器一族跟着 P43 一起进来 —— 两处必须同时改, 否则
+    #   只改 P43     → 到得了 gateway, 但名额紧时被 cap 砍
+    #   只改这里     → 仍被 tool_search defer, 压根到不了 gateway
+    # 两种都表现为"改了没效果" (test_p43_core_tools 那条测试就是钉这个的)。
+    #
+    # 它们进来会让 BL-FIX4 (:309 判据) 重新为真, 从而丢掉 hermes 自带的 12 个
+    # browser_* —— 那条去重 8/13 tool_search 上线后静默失效了四天。
+    "catfish_browser_goto",
+    "catfish_browser_snapshot",
+    "catfish_browser_click",
+    "catfish_browser_fill",
+    "catfish_browser_find_by_text",
+    "catfish_recognize_captcha",
     # BL-LLM-PLAN-WITHOUT-ACT (5/19): 内网 qwen 见到周报 / PPT 等关键词必须能立即
     # 找到对应 skill 并触发, 不能因 BL-TOOL-CAP 被砍. skill discovery + invocation
     # 这一族永不 drop. (catfish_run_skill 已在表里, 这里补 hermes 0.14 的 skill_*.)

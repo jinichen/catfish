@@ -137,6 +137,52 @@ def _gateway_constants_src() -> str | None:
     return None
 
 
+def _gateway_sanitizer_src() -> str | None:
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        p = parent / "central/llm-gateway/src/catfish_gateway/tools_sanitizer.py"
+        if p.exists():
+            return p.read_text(encoding="utf-8")
+    return None
+
+
+def test_提升名单必须含catfish_browser否则BLFIX4是死的():
+    """★★★ 8/13 → 8/17 静默失效四天的那件事。
+
+    gateway BL-FIX4 (5/8) 的规矩是"tools 里出现 catfish_browser_* 就丢掉
+    hermes 自带的 12 个 browser_*", 两族不并存。它的判据是
+    `_has_catfish_browser_tools(tools)` —— **扫入参数组**。
+
+    8/13 tool_search 上线, 所有 catfish_* 默认被 defer, 数组里一个
+    catfish_browser_* 都没有 → 判据恒为 False → 去重再没触发过。
+
+    没有任何报错。去重不触发只表现为"少丢了点东西": 每轮多 6,872 token,
+    而且跑内网系统用的是没打过 FIX3/FIX9 补丁的 hermes 那一族。
+
+    这条钉住那个耦合: **只要 gateway 还拿"数组里有没有"当判据, 提升名单里
+    就必须至少留一个 catfish_browser_*。** 两个条件一起查 —— 哪天 gateway
+    改成看可达性了, 这条会因为前半截失效而提醒你回来删掉它。
+    """
+    src = _gateway_sanitizer_src()
+    if src is None:
+        pytest.skip("同 checkout 下找不到 gateway sanitizer")
+
+    uses_array_probe = "_has_catfish_browser_tools(tools)" in src
+    if not uses_array_probe:
+        pytest.skip(
+            "gateway 已经不用「扫数组」当 BL-FIX4 判据了 —— 这条测试的前提没了, "
+            "回来确认新判据是什么, 然后删掉或改写本条"
+        )
+
+    promoted_browser = [n for n in pct.PROMOTED_TOOL_NAMES if "catfish_browser_" in n]
+    assert promoted_browser, (
+        "提升名单里一个 catfish_browser_* 都没有, 而 gateway 的 BL-FIX4 判据是"
+        "「入参数组里有没有 catfish_browser_*」—— tool_search 会把没提升的全 defer, "
+        "于是那条去重恒不触发, hermes 自带的 12 个 browser_* 白占 6,872 token/轮。"
+        "这正是 8/13 到 8/17 静默失效的四天。"
+    )
+
+
 def test_gateway_always_on_covers_promoted_tools():
     """P43 提升的工具必须同时进 gateway 的 ALWAYS_ON_TOOLS。
 
@@ -185,8 +231,22 @@ def test_gateway_cap_leaves_room_for_promoted_tools():
     m = re.search(r"^DEFAULT_MAX_TOOLS = (\d+)", src, re.M)
     assert m, "DEFAULT_MAX_TOOLS 不见了"
     cap = int(m.group(1))
+
+    # 8/17: 提升 catfish_browser_* 之后这个式子要多算一步。
+    #
+    # BL-FIX4 (tools_sanitizer.py:309 判据) 一看到数组里有 catfish_browser_*
+    # 就丢掉 hermes 自带的 12 个 browser_*, 而**那一步在 cap 之前**
+    # (丢弃在 :365, cap 在 :474)。所以真正到 cap 那一步的比到达 gateway 的少 12。
+    #
+    # 不把这一步算进来的话, 这条会在"其实放得下"的时候误报 —— 8/17 加 6 个
+    # 浏览器工具时就是这么红的 (29+3+11=43 > 40, 而真实是 31)。
+    _HERMES_BROWSER = 12   # api-server profile 里的 browser_* 个数, 见
+                           # ~/.hermes/hermes-agent/toolsets.py 的 hermes-api-server
+    promoted_browser = [n for n in pct.PROMOTED_TOOL_NAMES if "catfish_browser_" in n]
+
     need = 29 + 3 + len(pct.PROMOTED_TOOL_NAMES)
-    assert cap >= need, (
-        f"cap={cap} 放不下 {need} 个 (29 hermes 核心 + 3 bridge + "
-        f"{len(pct.PROMOTED_TOOL_NAMES)} 个提升的)"
-    )
+    detail = f"29 hermes 核心 + 3 bridge + {len(pct.PROMOTED_TOOL_NAMES)} 个提升的"
+    if promoted_browser:
+        need -= _HERMES_BROWSER
+        detail += f" − {_HERMES_BROWSER} 个被 BL-FIX4 丢掉的 hermes browser_*"
+    assert cap >= need, f"cap={cap} 放不下 {need} 个 ({detail})"

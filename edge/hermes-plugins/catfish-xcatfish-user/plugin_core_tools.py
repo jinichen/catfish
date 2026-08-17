@@ -122,6 +122,40 @@ _PROMOTE = (
     # 教训: 提升一个入口工具时, 要连它**输出可能指向的工具**一起提升,
     # 否则就是把人放进一条断头路。
     "catfish_read_tool_archive",
+    # ── 8/17 补: 浏览器一族 ──────────────────────────────────────────
+    #
+    # 这 6 个进来不是为了加东西, 是为了**让 gateway 那条去重能重新生效**。
+    #
+    # BL-FIX4 (5/8) 定的规矩: tools 数组里出现 catfish_browser_* 就丢掉 hermes
+    # 自带的 12 个 browser_* (tools_sanitizer.py:309 判据, :365 执行)。8/13
+    # tool_search 上线后, 9 个 catfish_browser_* 全被 defer, 数组里一个都没有,
+    # 于是那条判据恒为 False —— 去重**静默失效了四天**, 两族并存。
+    #
+    # 后果不只是费 token: tool-bridge 上那些内网适配补丁 (FIX3 的 a11y →
+    # JS evaluate 双路径、FIX9 的 max_elements 500) 打的都是 catfish 这一族,
+    # hermes 原生那 12 个没吃到。也就是说跑内网系统用的是没打补丁的那族。
+    #
+    # 提升之后数组里就有了 → 判据自然为 True → 12 个 hermes browser 被丢。
+    # 不用改 gateway 的判据 (我一开始以为要改, 看了执行顺序才发现不用):
+    # 丢弃在 :365, cap 在 :474, 丢在前。
+    #
+    # 选这 6 个的依据:
+    #   前 5 个 = CHANGELOG 3535-3540 那条内网实盘链 (10.10.111.53:8776 登录
+    #             → 抓用户列表) 真正用到的动作
+    #   recognize_captcha = SOUL.md 写着"验证码**必走**"; 它出现在登录流程中段,
+    #             那里最不该多一次 tool_search 往返
+    #
+    # 没提升的留在 defer: catfish_browser_locate (1,022 tok, find_by_text 失败
+    # 后的视觉兜底, 本身是异常路径) / screenshot / evaluate / console。
+    #
+    # token 账 (tiktoken 实测): -6,872 (hermes 12 个) + 3,961 (这 6 个)
+    #                         = 净省 ~2,900 /轮
+    "catfish_browser_goto",
+    "catfish_browser_snapshot",
+    "catfish_browser_click",
+    "catfish_browser_fill",
+    "catfish_browser_find_by_text",
+    "catfish_recognize_captcha",
 )
 
 #: 提升后的完整注册名, 给单测和 gateway 侧对齐用。
