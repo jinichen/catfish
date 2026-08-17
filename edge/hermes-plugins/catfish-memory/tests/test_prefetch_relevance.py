@@ -58,7 +58,8 @@ sys.path.insert(0, str(_PLUGIN_DIR))
 
 from catfish_memory import CatfishMemoryProvider  # noqa: E402
 from catfish_memory_render import (  # noqa: E402
-    _STRATEGIC_MIN_OVERLAP,
+    _RELEVANCE_MIN_HITS,
+    _RELEVANCE_MIN_OVERLAP,
     _WIKI_CAP_PLAIN,
     _WIKI_CAP_QUERY,
     _overlap_coefficient,
@@ -288,8 +289,8 @@ def test_沾一点点边也要折叠(tmp_path, provider):
     head = _read_text_safe(tmp_path / "strategic_docs" / "DOC-0.md", 1500).strip()[:1200]
     q = _query_token_set("甲乙丙营")            # "营"命中正文, 甲乙丙不命中
     ov = _overlap_coefficient(q, _query_token_set("DOC-0") | _query_token_set(head))
-    assert 0 < ov < _STRATEGIC_MIN_OVERLAP, (
-        f"前置不成立: overlap {ov:.3f} 不在 (0, {_STRATEGIC_MIN_OVERLAP}) 里, "
+    assert 0 < ov < _RELEVANCE_MIN_OVERLAP, (
+        f"前置不成立: overlap {ov:.3f} 不在 (0, {_RELEVANCE_MIN_OVERLAP}) 里, "
         "这条就没在考闸门"
     )
 
@@ -367,7 +368,7 @@ def test_闸门取值落在实测的空档里():
 
     阈值必须落在那段空档里。0.3/0.4/0.5 都全对, 取中间。
     """
-    assert 0.20 < _STRATEGIC_MIN_OVERLAP < 0.57
+    assert 0.20 < _RELEVANCE_MIN_OVERLAP < 0.57
 
 
 def test_overlap_不随文档词汇量变化():
@@ -394,6 +395,85 @@ def test_overlap_不随文档词汇量变化():
         f"Jaccard 没有像预期那样大幅摆动 ({jacs}) —— 那这条测试的前提就变了, "
         "去看看 _query_token_set 是不是改了"
     )
+
+
+# ── skills_catalog ──────────────────────────────────────────
+#
+# 跟 strategic_docs 同一套闸门, 但多一条 |∩| ≥ 4。
+#
+# 为什么 skills 才暴露出需要这条: overlap 的分母是 query 自己, query 越短越
+# 容易冲高。8 篇 strategic doc 撞不上, 91 个 skill 就撞上了 —— "hi" (3 个
+# token) 随便命中一个 skill 的英文描述就是 1.00。
+
+
+def _skill(home: Path, name: str, body: str) -> None:
+    d = home / "skills" / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "SKILL.md").write_text(body, encoding="utf-8")
+
+
+def test_skills_短噪音query要折叠(tmp_path, provider):
+    """★★★ "hi" 对某些 skill 的 overlap 是 1.00 —— 光看比例挡不住。"""
+    _skill(tmp_path, "hi-there-helper", "hi there, this helper does things")
+    _skill(tmp_path, "zizhi-duibiao", "资质对标分析：读对标矩阵Excel→按分类统计")
+
+    q = _query_token_set("hi")
+    d = _query_token_set("hi-there-helper") | _query_token_set(
+        "hi there, this helper does things")
+    assert _overlap_coefficient(q, d) >= _RELEVANCE_MIN_OVERLAP, (
+        "前置不成立: 'hi' 对这个 skill 的 overlap 应该够高, 这条才在考 |∩|"
+    )
+    assert len(q & d) < 4, "前置不成立: |∩| 应该 <4"
+
+    out = provider._render_skills_catalog(tmp_path, query="hi")
+    assert "###" not in out, f"短噪音 query 把技能细节倒出来了:\n{out[:200]}"
+    assert "available_skills" in out and "skill_view" in out, (
+        "折叠了就得告诉模型技能名单在哪、怎么看细节 —— 否则等于把技能藏了"
+    )
+
+
+def test_skills_真命中只留少数几个(tmp_path, provider):
+    """相对下限 0.5: 榜首之外只留真的接近的。"""
+    _skill(tmp_path, "zizhi-duibiao-fenxi", "资质对标分析：读对标矩阵Excel→按分类统计→找缺失风险")
+    _skill(tmp_path, "zizhi-tongbao", "资质通报生成：按模版更新月度通报")
+    _skill(tmp_path, "apple-notes", "Manage Apple Notes via memo CLI: create, search, edit.")
+    _skill(tmp_path, "findmy", "Track Apple devices/AirTags via FindMy.app on macOS.")
+
+    out = provider._render_skills_catalog(tmp_path, query="资质对标分析")
+    assert "### zizhi-duibiao-fenxi" in out, f"榜首没进去:\n{out[:200]}"
+    assert "### apple-notes" not in out, "英文无关 skill 不该占位"
+    assert "### findmy" not in out
+
+
+def test_skills_没有query时行为不变(tmp_path, provider):
+    """★ advisor / cron 这些没有 query 的调用方, 老行为一个字都不能动。"""
+    for i in range(4):
+        _skill(tmp_path, f"skill-{i}", f"技能 {i} 的说明文字")
+    out = provider._render_skills_catalog(tmp_path, query="")
+    assert out.count("### skill-") == 4, "没 query 时该全列, 不走闸门"
+
+
+def test_skills_闸门跟strategic用同一组常量():
+    """★ 两段共用判据, 不是各拍一套。
+
+    改成两个不同的常量之前先想清楚为什么 —— 8/17 实测过, 同一组值
+    (overlap 0.4 / hits 4) 在 8 篇文档和 91 个 skill 上都对。
+    """
+    from catfish_memory_render import _SKILLS_FLOOR_RATIO, _STRATEGIC_FLOOR_RATIO
+    assert _RELEVANCE_MIN_OVERLAP == 0.4 and _RELEVANCE_MIN_HITS == 4
+    # 相对下限**故意**不同: skill 描述共用大量业务词, 分布压得紧
+    assert _SKILLS_FLOOR_RATIO > _STRATEGIC_FLOOR_RATIO
+
+
+def test_best_relevance_取最相关那份():
+    from catfish_memory_render import _best_relevance
+    q = _query_token_set("资质对标")
+    docs = [_query_token_set("完全无关的采购流程"),
+            _query_token_set("资质对标分析报告"),
+            _query_token_set("资质")]
+    ov, hits = _best_relevance(q, docs)
+    assert ov == 1.0 and hits == len(q), f"该取满分那份, 得到 ({ov}, {hits})"
+    assert _best_relevance(q, []) == (0.0, 0), "空输入要返 (0,0) 不能抛"
 
 
 # ── 拿真数据兜底 ────────────────────────────────────────────

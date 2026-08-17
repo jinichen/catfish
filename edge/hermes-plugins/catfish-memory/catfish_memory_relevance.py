@@ -54,6 +54,11 @@ def _query_token_set(text: str) -> set:
     }
     return chars | bigrams
 
+#: skills_catalog 的相对下限。比 strategic_docs 的 0.25 严, 因为 91 个 skill
+#: 的描述共用大量业务词汇, 分布压得很紧 —— 实测 "帮我改一下 cron 定时任务"
+#: 在 0.25 下留 **全部 91 个** (27,533 字符), 比不筛还糟。0.5 留 2~8 个。
+_SKILLS_FLOOR_RATIO = 0.5
+
 #: strategic_docs 的相关性下限: 分数低于榜首这个比例的不进 prompt。
 #: 取值依据见 _render_strategic_docs 里的实测表。
 #:
@@ -77,7 +82,41 @@ _STRATEGIC_FLOOR_RATIO = 0.25
 #:
 #: 0.3 / 0.4 / 0.5 在真数据 8 个用例上都全对 (该留的 0.57~1.00, 该折的
 #: 0.00~0.20, 中间空着), 取中间值。
-_STRATEGIC_MIN_OVERLAP = 0.4
+_RELEVANCE_MIN_OVERLAP = 0.4
+
+#: 榜首还得**真的命中足够多 token**, 不只是比例够。
+#:
+#: overlap 的分母是 query 自己, 所以 query 越短越容易冲高: "hi" 只有 3 个
+#: token (h / i / hi), 随便撞上一个 skill 的英文描述就是 1.00。strategic_docs
+#: 只有 8 篇没暴露出来, 换到 91 个 skill 上立刻就撞了:
+#:
+#:     "hi"       |q|=3   overlap 1.00  |∩|=3  → 纯噪音, 却是满分
+#:     "今天天气"  |q|=6   overlap 0.50  |∩|=3  → 撞上 cron-report-delivery
+#:     "看邮件"    |q|=5   overlap 1.00  |∩|=5  → 真命中 catfish-email
+#:     "沙箱部署"  |q|=7   overlap 0.57  |∩|=4  → 真命中 SANDBOX-DEPLOY
+#:
+#: 4 这个数把噪音 (≤3) 和真命中 (≥4) 分开, 而且两段共用同一个值 —— 加上它
+#: 之后 strategic_docs 原有的 8 个判定一个都没变。
+#:
+#: 它同样不依赖语料: 交集大小的上界是 query 自己, 跟有多少份材料、每份多长
+#: 都无关。中文里 |∩|≥4 大致等于"至少两个字连着命中"。
+_RELEVANCE_MIN_HITS = 4
+
+
+def _best_relevance(q: set, doc_tokens) -> tuple:
+    """在一堆材料里找最相关的那份, 返 (overlap, 交集大小)。
+
+    doc_tokens: 可迭代的 token 集合, 每个代表一份材料 (通常是 名字∪正文)。
+
+    取 max 时用 (overlap, hits) 这个二元组: overlap 先比, 打平了再看谁命中的
+    token 多。闸门要的就是"最相关那份到底有多相关"。
+    """
+    best = (0.0, 0)
+    for d in doc_tokens:
+        cur = (_overlap_coefficient(q, d), len(q & d))
+        if cur > best:
+            best = cur
+    return best
 
 # ⚠ 试过、又拿掉的一条: "榜首要比中位数高 N 倍, 否则算没区分度"。
 #

@@ -185,6 +185,15 @@ def test_prefetch_employee_journal_raw_fallback(fake_catfish_home, provider):
     assert "资质审核" in out
 
 
+# ⚠ 下面两条 8/17 改过 query, 断言一个字没动。
+#
+# 它们钉的是**目录扫描** (找得到 SKILL.md / 跳过没有的), 原来用
+# `prefetch("hi")` 只是图省事。8/17 给 skills_catalog 加了相关性闸门之后
+# "hi" 会被正确折叠 (|q|=3, |∩|=1) —— 测试意图没问题, 是 query 选得不对:
+# 拿一句跟被测 skill 毫无关系的话, 去验"这个 skill 渲染出来了"。
+# 换成真能命中的 query, 扫描逻辑照测, 还顺带不跟闸门打架。
+
+
 def test_prefetch_skills_catalog(fake_catfish_home, provider):
     """skills/<name>/SKILL.md 被发现 + 渲染"""
     skill_dir = fake_catfish_home / "skills" / "ppt-magazine"
@@ -193,7 +202,7 @@ def test_prefetch_skills_catalog(fake_catfish_home, provider):
         "# ppt-magazine\n\n生成杂志式 PowerPoint", encoding="utf-8",
     )
     provider.initialize(session_id="s1")
-    out = provider.prefetch("hi")
+    out = provider.prefetch("生成杂志式 PowerPoint")
     assert "可用技能" in out
     assert "ppt-magazine" in out
 
@@ -205,7 +214,7 @@ def test_prefetch_skills_catalog_skips_dirs_without_skill_md(fake_catfish_home, 
     valid.mkdir()
     (valid / "SKILL.md").write_text("valid skill", encoding="utf-8")
     provider.initialize(session_id="s1")
-    out = provider.prefetch("hi")
+    out = provider.prefetch("valid skill")
     assert "valid" in out
     assert "no-manifest" not in out
 

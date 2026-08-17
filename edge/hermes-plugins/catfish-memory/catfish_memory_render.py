@@ -62,16 +62,22 @@ except ImportError:  # 独立脚本模式 (无父包)
 #   引用的外部名字为空。
 try:
     from .catfish_memory_relevance import (  # noqa: F401
+        _RELEVANCE_MIN_HITS,
+        _RELEVANCE_MIN_OVERLAP,
+        _SKILLS_FLOOR_RATIO,
         _STRATEGIC_FLOOR_RATIO,
-        _STRATEGIC_MIN_OVERLAP,
+        _best_relevance,
         _jaccard_similarity,
         _overlap_coefficient,
         _query_token_set,
     )
 except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_relevance import (  # noqa: F401
+        _RELEVANCE_MIN_HITS,
+        _RELEVANCE_MIN_OVERLAP,
+        _SKILLS_FLOOR_RATIO,
         _STRATEGIC_FLOOR_RATIO,
-        _STRATEGIC_MIN_OVERLAP,
+        _best_relevance,
         _jaccard_similarity,
         _overlap_coefficient,
         _query_token_set,
@@ -164,19 +170,48 @@ class _RenderMixin:
             return ""
 
         # 真 P2-2: query 真打分排序
+        #
+        # 8/17: 加闸门 + 相对下限, 跟 _render_strategic_docs 同一套判据。
+        #
+        # 改之前实测: 不管问什么, 这一段恒定 4,85x~4,91x 字符 (16 个 skill) ——
+        # 排序是有效的 (问 cron 就把 cron-job-editing 排第一), 但排完之后
+        # **预算没花完就继续塞**, 于是第 5~16 名照样进 prompt。
+        #
+        # 折叠掉是安全的, 因为**技能名单并没有消失**: hermes 自己的
+        # <available_skills> 已经把全部 83 个 skill 连同一行描述放进 system
+        # prompt 的 stable 层 (被缓存), 而 skills_list / skill_view /
+        # search_skills 三个工具在聊天路径上都在手里。这一段的职责只是
+        # "给当下最相关的那两三个补上细节", 不是"告诉模型有哪些技能"。
+        #
+        # 相对下限用 0.5 不用 strategic 那边的 0.25: 91 个 skill 的描述共用
+        # 大量业务词汇, 分布压得很紧 —— 实测 "帮我改一下 cron 定时任务" 在
+        # 0.25 下留全部 91 个 (27,533 字符), 比不筛还糟。
         query_clean = (query or "").strip()
         if query_clean:
             # 真用 char-level set 真简单 Jaccard (无 jieba 依赖, plugin 真 light)
             q_chars = _query_token_set(query_clean)
             scored: List[tuple] = []
             for name, head in candidates_list:
+                n_tok, h_tok = _query_token_set(name), _query_token_set(head)
                 # 真 name 真权重更高 (skill 真定位作用)
-                name_score = _jaccard_similarity(q_chars, _query_token_set(name)) * 3.0
-                head_score = _jaccard_similarity(q_chars, _query_token_set(head))
-                total = name_score + head_score
-                scored.append((total, name, head))
+                total = (_jaccard_similarity(q_chars, n_tok) * 3.0
+                         + _jaccard_similarity(q_chars, h_tok))
+                d_tok = n_tok | h_tok
+                scored.append((total, name, head,
+                               _overlap_coefficient(q_chars, d_tok),
+                               len(q_chars & d_tok)))
             scored.sort(key=lambda t: -t[0])
-            ordered = [(name, head) for _score, name, head in scored]
+
+            top_overlap, top_hits = max(((t[3], t[4]) for t in scored), default=(0.0, 0))
+            if top_overlap < _RELEVANCE_MIN_OVERLAP or top_hits < _RELEVANCE_MIN_HITS:
+                return (
+                    "## 🛠 可用技能 (catfish skills)\n\n"
+                    f"_跟当前话题都不沾边, 细节已折叠 — 全部 {len(candidates_list)} 个技能的"
+                    "名字和简介在 `<available_skills>` 里都列着, 要看某个的完整说明用 "
+                    "`skill_view`._"
+                )
+            scored = [t for t in scored if t[3] >= top_overlap * _SKILLS_FLOOR_RATIO]
+            ordered = [(name, head) for _s, name, head, _ov, _h in scored]
         else:
             # 真 query 空 → 按字母序 (老行为)
             ordered = candidates_list
@@ -275,8 +310,9 @@ class _RenderMixin:
                 # name 权重更高 (doc 标题最语义浓)
                 total = (_jaccard_similarity(q_chars, n_tok) * 3.0
                          + _jaccard_similarity(q_chars, h_tok))
-                ov = _overlap_coefficient(q_chars, n_tok | h_tok)
-                scored.append((total, name, head, ov))
+                d_tok = n_tok | h_tok
+                ov = _overlap_coefficient(q_chars, d_tok)
+                scored.append((total, name, head, ov, len(q_chars & d_tok)))
             scored.sort(key=lambda t: -t[0])
             # 相关性闸门 + 全不沾边时折叠 (8/15 加, 8/17 换成 overlap)。
             #
@@ -302,8 +338,8 @@ class _RenderMixin:
             # 顺带: "高新技术企业认定" 这个 case 之前用 Jaccard + 中位数倍数
             # 做区分度检验时跟 "catfish" 分不开 (两者都是分布平坦), 我因此撤掉
             # 过那条。overlap 把它俩一刀切开了 (0.20 vs 0.80)。
-            top_overlap = max((t[3] for t in scored), default=0.0)
-            if top_overlap < _STRATEGIC_MIN_OVERLAP:
+            top_overlap, top_hits = max(((t[3], t[4]) for t in scored), default=(0.0, 0))
+            if top_overlap < _RELEVANCE_MIN_OVERLAP or top_hits < _RELEVANCE_MIN_HITS:
                 # 一篇都没沾边。老行为是退回字母序, 结果把**全部 7 篇**倒进去
                 # (~1,680 token) —— 恰好在最没用的时候花最多的钱。
                 #
@@ -319,7 +355,7 @@ class _RenderMixin:
             # 相对下限也走 overlap: 比值本身是无量纲的, 但拿 Jaccard 算比值时
             # 各篇除以各自不同的并集, 文档长短不一就不保序了。overlap 没这问题。
             scored = [t for t in scored if t[3] >= top_overlap * _STRATEGIC_FLOOR_RATIO]
-            ordered = [(name, head) for _score, name, head, _ov in scored]
+            ordered = [(name, head) for _s, name, head, _ov, _h in scored]
         else:
             ordered = candidates_list
 
