@@ -165,6 +165,48 @@ fn index_path() -> Result<PathBuf, String> {
     Ok(dir.join("teaching_credentials.json"))
 }
 
+/// 把历史上写进去的"名字是引用串"的条目就地归一化, 并合并重名 (8/17)。
+///
+/// # 为什么读的时候做, 而不是等下次保存
+///
+/// 8/17 只加了 normalize_label 之后, 新存的是干净名字, **老那条还躺在索引里**,
+/// 于是列表变成两行:
+///
+///     http://eis.ffcs.cn
+///     keychain://catfish-teaching:http://eis.ffcs.cn
+///
+/// 两行指的是同一件事, 看着比修之前还乱。而且点老那行的「删除」会归一化成
+/// 同一个 service, 把**新**那条的凭据删掉 —— 点"删垃圾"删掉了好的。
+///
+/// 归一化后重名的只留一条, created_at 取最早的 (跟 upsert 一个语义:
+/// 覆盖密码不算新建)。reference 按归一化后的名字**重算**, 不能沿用旧值 ——
+/// 旧值正是那个套了两层的串。
+///
+/// ⚠ 归一化不了的 (例如手工塞进去的怪数据) **原样留着**, 不丢。
+///   列表里能看见, 也就还能点删除清掉。
+fn migrate_index(items: Vec<TeachingCredential>) -> Vec<TeachingCredential> {
+    let mut out: Vec<TeachingCredential> = Vec::with_capacity(items.len());
+    for it in items {
+        let fixed = match service_name(&it.label) {
+            Ok((name, target)) => TeachingCredential {
+                label: name,
+                reference: reference_for(&target),
+                created_at: it.created_at,
+            },
+            Err(_) => it,
+        };
+        match out.iter().position(|x| x.label == fixed.label) {
+            Some(i) => {
+                if fixed.created_at < out[i].created_at {
+                    out[i].created_at = fixed.created_at;
+                }
+            }
+            None => out.push(fixed),
+        }
+    }
+    out
+}
+
 /// 读索引。读不出来一律当空 —— 索引坏掉不该让员工连保存都做不了,
 /// 凭据本体在系统凭据库里, 没受影响。
 fn read_index() -> Vec<TeachingCredential> {
@@ -177,10 +219,11 @@ fn read_index() -> Vec<TeachingCredential> {
     if text.trim().is_empty() {
         return Vec::new();
     }
-    serde_json::from_str(&text).unwrap_or_else(|e| {
+    let parsed: Vec<TeachingCredential> = serde_json::from_str(&text).unwrap_or_else(|e| {
         log::warn!("teaching_credentials.json 解析失败, 当空处理: {e}");
         Vec::new()
-    })
+    });
+    migrate_index(parsed)
 }
 
 fn write_index(items: &[TeachingCredential]) -> Result<(), String> {
@@ -266,15 +309,15 @@ pub fn teaching_credential_delete(label: String) -> Result<(), String> {
         }
         Err(e) => return Err(format!("从本机凭据库删除失败: {e}")),
     }
-    // 索引清理**同时认两种写法**:
-    //   name = 归一化后的 (8/17 之后存进去的都长这样)
-    //   raw  = 员工点「删除」时传进来的原样 —— 历史上存过"名字本身是引用串"
-    //          的条目 (8/17 那条 keychain://catfish-teaching:http://eis.ffcs.cn),
-    //          只按 name 过滤的话那种残项永远清不掉。
-    let raw = label.trim();
+    // read_index 已经过 migrate_index, 里面的 label 都是归一化后的,
+    // 所以按 name 比就够 —— 不用再加"也认原样"那条特判。
+    //
+    // ⚠ 那条特判 8/17 加过又拿掉: 它会让"点老那行删除"同时删掉新旧两行
+    //   (两者归一化后同名), 等于点"删垃圾"把好的一起删了。
+    //   根子上是列表里不该同时出现两行, migrate_index 解决的就是这个。
     let kept: Vec<TeachingCredential> = read_index()
         .into_iter()
-        .filter(|i| i.label != name && i.label != raw)
+        .filter(|i| i.label != name)
         .collect();
     write_index(&kept)
 }
@@ -336,6 +379,76 @@ mod tests {
         let e = service_name("keychain://eis_password").unwrap_err();
         assert!(e.contains("引用串"), "错误信息要说清是引用串不是名称: {e}");
         assert!(service_name("env://EIS_PASSWORD").is_err());
+    }
+
+    /// 三个字段全自己给的构造器。
+    ///
+    /// 跟下面那个 `cred(label, created)` 并存, 因为职责不同:
+    ///   cred     —— reference 按 label 自动拼**正确**的, 测 upsert / 序列化用
+    ///   raw_cred —— reference 由调用方给, 才能塞一个**错的** (套两层的) 进去,
+    ///               验 migrate_index 会不会重算它
+    /// 用 cred 就测不出"重算"这件事 —— 它给的本来就是对的。
+    fn raw_cred(label: &str, reference: &str, created: &str) -> TeachingCredential {
+        TeachingCredential {
+            label: label.into(),
+            reference: reference.into(),
+            created_at: created.into(),
+        }
+    }
+
+    #[test]
+    fn migrate_merges_the_doubled_row_into_the_clean_one() {
+        // ★★★ 8/17 现场: 加了 normalize_label 之后列表变成两行, 指的是同一件事。
+        //     鸿波原话"混乱了"。
+        let out = migrate_index(vec![
+            raw_cred(
+                "keychain://catfish-teaching:http://eis.ffcs.cn",
+                "keychain://catfish-teaching:keychain://catfish-teaching:http://eis.ffcs.cn",
+                "2026-08-01T00:00:00Z",
+            ),
+            raw_cred(
+                "http://eis.ffcs.cn",
+                "keychain://catfish-teaching:http://eis.ffcs.cn",
+                "2026-08-17T00:00:00Z",
+            ),
+        ]);
+        assert_eq!(out.len(), 1, "同一件事该合成一行, 得到 {out:?}");
+        assert_eq!(out[0].label, "http://eis.ffcs.cn");
+        assert_eq!(
+            out[0].created_at, "2026-08-01T00:00:00Z",
+            "created_at 取最早的 —— 跟 upsert 一个语义"
+        );
+    }
+
+    #[test]
+    fn migrate_recomputes_reference_instead_of_trusting_the_stored_one() {
+        // ★★ 存着的那个 reference 正是套两层的串, 沿用就等于没修
+        let out = migrate_index(vec![raw_cred(
+            "keychain://catfish-teaching:EIS",
+            "keychain://catfish-teaching:keychain://catfish-teaching:EIS",
+            "2026-08-01T00:00:00Z",
+        )]);
+        assert_eq!(out[0].reference.matches(SERVICE_PREFIX).count(), 1);
+        assert_eq!(out[0].reference, "keychain://catfish-teaching:EIS");
+    }
+
+    #[test]
+    fn migrate_keeps_rows_it_cannot_normalize() {
+        // 归一化不了的原样留着 —— 丢了就再也删不掉了
+        let out = migrate_index(vec![raw_cred("keychain://eis_password", "x", "2026-01-01T00:00:00Z")]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].label, "keychain://eis_password");
+    }
+
+    #[test]
+    fn migrate_is_idempotent() {
+        let once = migrate_index(vec![raw_cred(
+            "keychain://catfish-teaching:EIS",
+            "keychain://catfish-teaching:keychain://catfish-teaching:EIS",
+            "2026-08-01T00:00:00Z",
+        )]);
+        let twice = migrate_index(once.clone());
+        assert_eq!(format!("{once:?}"), format!("{twice:?}"));
     }
 
     #[test]

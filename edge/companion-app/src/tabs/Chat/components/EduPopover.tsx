@@ -252,7 +252,6 @@ export default function EduPopover({ isStreaming, onStartLearn }: Props) {
 function CredentialModal({ onClose }: { onClose: () => void }) {
   const [label, setLabel] = useState("");
   const [password, setPassword] = useState("");
-  const [reference, setReference] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   // 已存的标签。没有这个列表时, 员工存完就再也看不见自己存过什么 ——
@@ -276,13 +275,26 @@ function CredentialModal({ onClose }: { onClose: () => void }) {
   const trimmed = label.trim();
   const duplicate = saved.some((s) => s.label === trimmed);
 
+  /** 存成功就关。
+   *
+   * 8/17 之前存完不关, 留在原地显示"已保存 + 安全引用 + 复制引用"。那块是
+   * 多余的 —— **同一个引用串在上面 `本机已存` 每一行都有自己的「复制引用」**
+   * (item.reference)。为了给一个已经有的东西再显示一遍, 让员工每次存完都要
+   * 多点一下才能离开。
+   *
+   * 中间我还改过一版: 存完把主按钮从「覆盖密码」换成「完成」。那只是把多余
+   * 的一步换了个文案, 没去掉它 —— 鸿波原话"保存/覆盖完就直接保存关闭,
+   * 为什么还要弹窗"。
+   *
+   * 失败**不关** —— 错误信息 (例如"这看起来是引用串不是名称") 得留在原地让人看见。
+   */
   const save = async () => {
     setError("");
     setSaving(true);
     try {
-      setReference(await saveTeachingCredential(label, password));
+      await saveTeachingCredential(label, password);
       setPassword("");
-      await refresh();
+      onClose();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -294,7 +306,6 @@ function CredentialModal({ onClose }: { onClose: () => void }) {
     setError("");
     try {
       await deleteTeachingCredential(name);
-      if (name === trimmed) setReference("");
       await refresh();
     } catch (e) {
       setError(String(e));
@@ -373,28 +384,9 @@ function CredentialModal({ onClose }: { onClose: () => void }) {
           <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} style={fieldStyle} />
         </label>
         {error && <div style={{ color: "var(--catfish-danger, #c0392b)", fontSize: 12 }}>{error}</div>}
-        {reference && (
-          <div style={{ padding: 8, borderRadius: 6, background: "var(--catfish-bg-hover)" }}>
-            <div style={modalHintStyle}>已保存。教学流程使用这个安全引用：</div>
-            <code style={{ wordBreak: "break-all", fontSize: 12 }}>{reference}</code>
-            <button type="button" onClick={() => navigator.clipboard?.writeText(reference)} style={{ ...modalCloseStyle, marginTop: 6 }}>复制引用</button>
-          </div>
-        )}
-        {/* 存完之后主按钮变「完成」。
-            8/17 鸿波问"为什么保存密码一直留在这个页面上" —— 弹窗不自动关是故意的
-            (要把安全引用显示出来给人复制), 但存完之后:
-              · 密码框被清空 → 保存按钮 disabled
-              · 唯一还能点的是「取消」, 而主按钮文案还停在「覆盖密码」
-            看起来就像没存上。给一个明确的出口。 */}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          {reference ? (
-            <button type="button" onClick={onClose} style={saveButtonStyle}>完成</button>
-          ) : (
-            <>
-              <button type="button" onClick={onClose} style={modalCloseStyle}>取消</button>
-              <button type="button" disabled={saving || !trimmed || !password} onClick={save} style={saveButtonStyle}>{saving ? "保存中…" : duplicate ? "覆盖密码" : "保存到系统凭据库"}</button>
-            </>
-          )}
+          <button type="button" onClick={onClose} style={modalCloseStyle}>取消</button>
+          <button type="button" disabled={saving || !trimmed || !password} onClick={save} style={saveButtonStyle}>{saving ? "保存中…" : duplicate ? "覆盖密码" : "保存到系统凭据库"}</button>
         </div>
       </div>
     </div>
