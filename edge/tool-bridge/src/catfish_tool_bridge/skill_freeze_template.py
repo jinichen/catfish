@@ -162,11 +162,34 @@ def _emit_step(
         # 它内部用 secret_resolver.resolve_secret(ref) 把 keychain://xxx 解析成明文
         # 喂给 page.fill, 明文不进 LLM 上下文也不进 script 字面量
         if args.get("secret_ref"):
-            sref = args["secret_ref"]
+            # 值不用取 —— 它由 _infer_params 变成 password_ref 的默认值,
+            # 这里发出去的是那个参数名。(8/18: 原来这儿有个 `sref = args[...]`
+            # 赋了从来不读, ruff F841 一直在报。)
             return [
                 f'        last_step = "fill_secret:{selector}"',
                 f'        _r = _call("catfish_browser_fill", {{"selector": {_quote_str(selector)}, "secret_ref": password_ref}})',
                 f'        if not _r.get("ok"): raise _SkillStepFailure("fill_secret", _r.get("error", "fill 失败"))',
+            ], prev_captcha_result
+        # 8/18: 按站点取密码 —— **什么都不焊**。
+        #
+        # 上面那条 secret_ref 路的问题不是它不安全 (它不把明文写进 script), 而是
+        # 它焊死的那个引用串会**过期**: _infer_params 把当天那个 ref 变成
+        # password_ref 的默认值, 员工哪天改了密码、换个地方存, script 还在读老的。
+        # 8/17 实撞: UI 存进 catfish-teaching:http://eis.ffcs.cn, 冻结的 eis-login
+        # 读 4/28 那条 eis_password —— 登录报"账号或密码错误", 两边谁也不知道谁。
+        #
+        # secret_for_site 没有任何"当天的值"可以焊: 站点是**运行时**从 page.url
+        # 取的。所以这条分支不产生参数, 也不需要产生 —— 焊进去的是"按站点查"
+        # 这个动作本身, 换了密码它仍然对。
+        #
+        # 顺序跟运行时一致: secret_ref 优先 (_browser_fill_impl 也是这么判的),
+        # 免得凝固出来的行为跟教学时不一样。
+        if args.get("secret_for_site"):
+            return [
+                f'        last_step = "fill_secret_for_site:{selector}"',
+                f'        _r = _call("catfish_browser_fill", {{"selector": {_quote_str(selector)}, "secret_for_site": True}})',
+                '        if not _r.get("ok"):',
+                '            raise _SkillStepFailure("fill_secret_for_site", _r.get("error", "fill 失败"))',
             ], prev_captcha_result
         # 明文密码 — 拒绝
         if _looks_like_password(args):
@@ -342,6 +365,19 @@ def _infer_params(trace: list[dict]) -> list[tuple[str, str, str]]:
                 params.append(
                     ("password_ref", "str", _quote_str(sref))
                 )
+        elif args.get("secret_for_site"):
+            # ★ 这条**故意不产生参数**。
+            #
+            # 它就是这次改动的整个要点: 老路把当天那个 ref 焊成 password_ref 的
+            # 默认值, 而 ref 会过期 (8/17 改完 EIS 密码, 冻结的 skill 还在读
+            # 4/28 那条)。按站点查没有"当天的值"—— 站点是运行时从 page.url 取的。
+            #
+            # 也不能顺手加个 `site` 参数: 那等于又把当天那个站点焊进去, 换个
+            # 入口 (eis → neis) 就错。站点必须是**运行时**的当前页。
+            #
+            # 这个分支只是把它从下面的 username 启发里摘出去 —— 密码框的 fill
+            # 不该被当成"第一个非密码 fill"去当 username 用。
+            pass
         elif not has_username:
             sel = (args.get("selector") or "").lower()
             text = args.get("text", "")
@@ -418,7 +454,10 @@ catfish_run_skill(
 - 凝固只看顺序, 不解 trace 里的"如果 X 则 Y"分支. 业务有分支 → 拆成多个 skill.
 - 等待逻辑: 每个 click / goto 后默认 networkidle wait, 5s 超时.
 - captcha retry 是自动插入 (识别 confidence < 0.6 时刷图重识), 不靠 trace.
-- secret_ref 必须在教学时就用 keychain://, 不接受明文密码凝固.
+- 密码走 secret_for_site (按当前页站点现查本机凭据), 不接受明文密码凝固.
+  改密码**不用重新教一遍** — 凝固进去的是"按站点查"这个动作, 不是某个引用串.
+  老 skill 里的 secret_ref / password_ref 参数仍然能跑, 但那条会随着改密码失效
+  (8/17 实撞), 重教一次就换成新路了.
 '''
 
 

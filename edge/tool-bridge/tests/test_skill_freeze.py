@@ -231,6 +231,125 @@ def test_freeze_accepts_secret_ref():
     assert "password_ref" in src or "keychain://my_pw" in src
 
 
+# ─── 8/18: secret_for_site —— 凝固时什么都不焊 ──────────────────────
+#
+# 老路 (secret_ref) 不是不安全, 它不把明文写进 script。问题是它焊死的那个
+# **引用串会过期**: _infer_params 把当天那个 ref 变成 password_ref 的默认值,
+# 员工改了密码 / 换个地方存, script 还在读老的。
+#
+# 8/17 实撞: UI 存进 catfish-teaching:http://eis.ffcs.cn, 冻结的 eis-login 读
+# 4/28 那条 eis_password —— 登录报"账号或密码错误", 两边谁也不知道谁, UI 上
+# 看一切正常。
+#
+# secret_for_site 没有任何"当天的值"可以焊 —— 站点是运行时从 page.url 取的。
+
+
+def _freeze_one_fill(name: str, fill_args: dict):
+    """录 goto + 一次 fill, 凝固, 返回 (result, script 源码)."""
+    from catfish_tool_bridge import skill_freeze, trace_recorder
+    skill_freeze.teach_start({"name": name})
+    trace_recorder.record("catfish_browser_goto", {"url": "http://eis.ffcs.cn"},
+                          {"ok": True}, True, 100)
+    trace_recorder.record("catfish_browser_fill", fill_args, {"ok": True}, True, 100)
+    skill_freeze.teach_end({})
+    r = skill_freeze.freeze_skill({"name": name, "run_install": False})
+    assert r["ok"] is True, r
+    return r, Path(r["files"][0]).read_text(encoding="utf-8")
+
+
+def test_secret_for_site_不产生任何参数():
+    """★★★ 这条就是整个改动的要点。
+
+    只要 params 里冒出 password_ref (或任何带默认值的 ref / 站点),
+    就说明又把"当天那个值"焊进去了 —— 员工改密码就会失联。
+    """
+    r, src = _freeze_one_fill("site-pw", {"selector": "#pwd", "secret_for_site": True})
+    names = [p["name"] for p in r["params"]]
+    assert "password_ref" not in names, f"又焊了个 ref 参数: {r['params']}"
+    assert not any("secret" in n or "site" in n for n in names), (
+        f"不该为这条 fill 造任何参数 (站点必须是运行时的当前页): {names}"
+    )
+    # 站点也不许焊进这一步 —— 焊进去换个入口 (eis→neis) 就错。
+    #
+    # ⚠ 不能写 `"eis.ffcs.cn" not in src`: goto 那一步本来就该带 URL, 那条会
+    #   永远红。第一版我写成了 `... or "goto" in src` 来绕开 —— 而 goto 必然
+    #   在 src 里, 整条断言永远为真, 是个假测试。改成只看 fill 那一行。
+    #
+    # ⚠⚠ 第二版我筛的是"含 secret_for_site 的行", 也不对 —— 那个词还出现在
+    #    last_step / raise 里, 以及 SKILL.md 头部的 trace 路径 (路径里含**测试
+    #    函数名**, 而这个测试就叫 test_secret_for_site_…)。判据得钉到那一行本身。
+    fill_lines = [ln for ln in src.splitlines() if '_call("catfish_browser_fill"' in ln]
+    assert len(fill_lines) == 1, f"应该只有一次 fill: {fill_lines}"
+    assert '"secret_for_site": True' in fill_lines[0], fill_lines[0]
+    assert "ffcs" not in fill_lines[0], f"站点被焊进 fill 了: {fill_lines[0]}"
+
+
+def test_secret_for_site_原样透传给_browser_fill():
+    r, src = _freeze_one_fill("site-pw2", {"selector": "#pwd", "secret_for_site": True})
+    assert '"secret_for_site": True' in src, src[-1500:]
+    assert "keychain://" not in src, "不该出现任何引用串"
+
+
+def test_secret_for_site_的_fill_不会被当成_username():
+    """★★ 密码框那次 fill 不能被 username 启发吃掉。
+
+    _infer_params 的 username 启发是"第一个非密码 fill 的 text"。
+    secret_for_site 这条没有 text, 要是不显式摘出去, 它会掉进 elif 分支,
+    拿一个空 text 造出 `username: str = ''` —— 参数表里多一个假参数,
+    而真正的用户名那一步反而不再当参数了。
+
+    ⚠ selector 用 `#passwd` 不是随手挑的。第一版写的 `#pwd`, 变异 (把
+      `elif args.get("secret_for_site")` 改成 `elif False`) **抓不到** ——
+      因为 _infer_params 里原有的启发已经按 selector 含 "pwd"/"password"
+      把它挡掉了, 我加的这条分支根本没被走到。测试通过是因为别的原因。
+
+      `#passwd` 的字面里既没有 "pwd" 也没有 "password" (p-a-s-s-w-d),
+      老启发漏得掉, 才真正走到新分支。实盘也确实有这种 id ——
+      `#pass` / `#j_pass` / `#loginPass` 全漏。
+    """
+    from catfish_tool_bridge import skill_freeze, trace_recorder
+    skill_freeze.teach_start({"name": "site-order"})
+    trace_recorder.record("catfish_browser_goto", {"url": "http://eis.ffcs.cn"},
+                          {"ok": True}, True, 100)
+    # 密码框在前, 用户名在后 —— 顺序反过来才测得到"会不会被吃掉"
+    trace_recorder.record("catfish_browser_fill",
+                          {"selector": "#passwd", "secret_for_site": True},
+                          {"ok": True}, True, 100)
+    trace_recorder.record("catfish_browser_fill",
+                          {"selector": "#name", "text": "chenhb"},
+                          {"ok": True}, True, 100)
+    skill_freeze.teach_end({})
+    r = skill_freeze.freeze_skill({"name": "site-order", "run_install": False})
+    assert r["ok"] is True, r
+    names = [p["name"] for p in r["params"]]
+    assert names.count("username") == 1, f"username 参数不对: {r['params']}"
+    username_p = next(p for p in r["params"] if p["name"] == "username")
+    assert "chenhb" in username_p["default"], (
+        f"username 默认值被密码框那次 fill 吃掉了: {username_p}"
+    )
+
+
+def test_secret_ref_优先于_secret_for_site():
+    """★★ 顺序必须跟运行时一致。
+
+    _browser_fill_impl 是 secret_ref 优先。凝固时反过来的话, 冻结出来的行为
+    跟教学时不一样 —— 那是最难查的一类 bug。
+    """
+    r, src = _freeze_one_fill(
+        "both", {"selector": "#pwd", "secret_ref": "keychain://x", "secret_for_site": True}
+    )
+    assert "password_ref" in [p["name"] for p in r["params"]]
+    assert '"secret_ref": password_ref' in src
+    assert "secret_for_site" not in src
+
+
+def test_老的_secret_ref_路还能凝固():
+    """三个已冻结的 EIS skill 全走这条, 不能顺手拆掉。"""
+    r, src = _freeze_one_fill("legacy", {"selector": "#pwd", "secret_ref": "keychain://old"})
+    assert "password_ref" in [p["name"] for p in r["params"]]
+    assert '"secret_ref": password_ref' in src
+
+
 # ─── 参数推断 ────────────────────────────────────────────────────────
 
 

@@ -133,19 +133,15 @@ def _resolve_catfish_skills_root() -> Path | None:
 # Template / sensitive detection helpers (5/20 拆: 333 行抽到 skill_freeze_template.py)
 # ============================================================
 
-from .skill_freeze_template import (  # noqa: F401
-    _CAPTCHA_RETRY_BLOCK,
+from .skill_freeze_template import (
     _SCRIPT_FOOTER,
     _SCRIPT_HEADER,
     _build_skill_md,
     _emit_step,
     _format_params_block,
     _infer_params,
-    _is_captcha_fill,
-    _looks_like_password,
     _mark_duplicate_run_skills,
     _pair_text_anchors,
-    _quote_str,
     _slugify,
 )
 
