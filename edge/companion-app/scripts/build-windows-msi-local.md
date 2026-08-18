@@ -2,7 +2,7 @@
 
 **目的**: 免 CircleCI 依赖 · 在你自己 Windows 机器上打 catfish Companion msi. 后续每次 15-20 min.
 
-**版本**: v0.18.0 (7/17)
+**版本**: v0.20.0 (8/18)
 **测试环境**: Windows 11 (Win10 21H2+ 应该也 OK) · x86_64
 
 ---
@@ -199,8 +199,8 @@ $hermesDir = "$env:TEMP\hermes-agent-src"
 Push-Location $hermesDir
 try {
     Write-Host "===== npx playwright install chromium (下载 ~170MB compressed / 解压 ~350MB) ====="
-    npx --yes playwright install chromium --loglevel=error
-    if ($LASTEXITCODE -ne 0) { throw "npx playwright install failed" }
+    # 由 build-msi-local.ps1 自动执行 dry-run → curl 下载 → tar/Expand-Archive 解压，
+    # 不要手动执行 npx playwright install；该命令在 Windows CI 曾出现下载 100% 后静默卡住。
 } finally { Pop-Location }
 
 $pwCacheDir = "$env:LOCALAPPDATA\ms-playwright"

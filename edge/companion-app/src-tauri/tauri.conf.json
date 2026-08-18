@@ -91,7 +91,6 @@
       "resources/windows/uv.exe": "./resources/windows/uv.exe",
       "resources/windows/cpython-3.11.15-embed.zip": "./resources/windows/cpython-3.11.15-embed.zip",
       "resources/windows/hermes-agent-bundle.tar.gz": "./resources/windows/hermes-agent-bundle.tar.gz",
-      "resources/windows/chromium-embed.tar.gz": "./resources/windows/chromium-embed.tar.gz",
       "resources/windows/chromium-embed.tar.gz": "./resources/windows/chromium-embed.tar.gz"
     },
     "macOS": {

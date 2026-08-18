@@ -13,7 +13,7 @@
     首次 15-20 min · 后续增量 3-5 min.
 
 .NOTES
-    v0.18.0 (7/17)
+    v0.20.0 (8/18)
     BL-WIN-LOCAL-BUILD (7/17 免 CircleCI 依赖).
 #>
 
@@ -29,7 +29,7 @@ $startTime = Get-Date
 
 Write-Host "===============================================" -ForegroundColor Cyan
 Write-Host "  catfish Companion · 本地 Windows msi build  " -ForegroundColor Cyan
-Write-Host "  v0.18.0 · $(Get-Date -Format 'yyyy-MM-dd HH:mm')" -ForegroundColor Cyan
+Write-Host "  v0.20.0 · $(Get-Date -Format 'yyyy-MM-dd HH:mm')" -ForegroundColor Cyan
 Write-Host "===============================================" -ForegroundColor Cyan
 
 # ─── 前置检查 ───────────────────────────────────────────────
@@ -218,15 +218,60 @@ if ($SkipChromium -and (Test-Path $chromiumOut) -and (Get-Item $chromiumOut).Len
     Write-Host "`n[Step 7/11] Install Playwright Chromium + pack..." -ForegroundColor Yellow
     Push-Location $hermesDir
     try {
-        Write-Host "  ===== npx playwright install chromium (~170MB compressed / 350MB extracted) =====" -ForegroundColor DarkGray
-        # ⚠ 这里**不能**带 --loglevel=error —— 那是 npm 的参数, 不是 playwright 的。
-        #   `npx playwright install chromium --loglevel=error` 会把它原样传给
-        #   playwright 的 CLI, commander 直接 `error: unknown option` 退 1。
-        #   8/14 撞的: 前面几步一修好, 流水线走到这里当场挂。
-        #   playwright install 没有 loglevel 这类开关, 想安静就靠外面的重定向。
-        npx --yes playwright install chromium
-        if ($LASTEXITCODE -ne 0) { throw "npx playwright install chromium failed" }
+        Write-Host "  ===== 1/3 playwright dry-run: 解析下载地址和安装位置 =====" -ForegroundColor DarkGray
+        $dry = @(npx --yes playwright install chromium --dry-run)
+        if ($LASTEXITCODE -ne 0) { throw "playwright dry-run failed (exit=$LASTEXITCODE)" }
+        $dry | ForEach-Object { Write-Host "    $_" }
+
+        $targets = @()
+        $loc = $null
+        foreach ($line in $dry) {
+            if ($line -match '^\s*Install location:\s*(.+?)\s*$') { $loc = $Matches[1]; continue }
+            if ($line -match '^\s*Download url:\s*(\S+)\s*$' -and $loc) {
+                $targets += [pscustomobject]@{ Dir = $loc; Url = $Matches[1] }
+                $loc = $null
+            }
+        }
+        $targets = @($targets | Where-Object { (Split-Path $_.Dir -Leaf) -like 'chromium*' })
+        if ($targets.Count -eq 0) { throw "dry-run 没有解析出 chromium* 下载目标" }
     } finally { Pop-Location }
+
+    $pwRoot = "$env:LOCALAPPDATA\ms-playwright"
+    foreach ($t in $targets) {
+        if (-not $t.Dir.StartsWith($pwRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Playwright 安装位置不在 $pwRoot 下: $($t.Dir)"
+        }
+    }
+
+    Write-Host "  ===== 2/3 下载 + 解压 $($targets.Count) 个 Chromium 包 =====" -ForegroundColor DarkGray
+    foreach ($t in $targets) {
+        $name = Split-Path $t.Dir -Leaf
+        $marker = Join-Path $t.Dir 'INSTALLATION_COMPLETE'
+        if (Test-Path $marker) { Write-Host "    [$name] 已存在, 跳过"; continue }
+
+        $zip = Join-Path $env:TEMP "$name.zip"
+        if (Test-Path $zip) { Remove-Item -Force $zip }
+        Write-Host "    [$name] 下载中..."
+        curl.exe -L --fail --retry 3 --retry-delay 5 --connect-timeout 30 --max-time 1200 -o $zip $t.Url
+        if ($LASTEXITCODE -ne 0) { throw "[$name] download failed (curl exit=$LASTEXITCODE)" }
+
+        if (Test-Path $t.Dir) { Remove-Item -Recurse -Force $t.Dir }
+        New-Item -ItemType Directory -Force -Path $t.Dir | Out-Null
+        $unpacked = $false
+        try {
+            tar.exe -xf $zip -C $t.Dir
+            $unpacked = ($LASTEXITCODE -eq 0)
+        } catch { $unpacked = $false }
+        if (-not $unpacked) { Expand-Archive -Path $zip -DestinationPath $t.Dir -Force }
+
+        $files = @(Get-ChildItem -Recurse -File $t.Dir)
+        $exes = @($files | Where-Object { $_.Extension -eq '.exe' })
+        if ($exes.Count -eq 0) { throw "[$name] 解压后没有 exe, zip 或目录层级异常" }
+        New-Item -ItemType File -Force -Path $marker | Out-Null
+        Remove-Item -Force $zip
+        Write-Host "    [$name] 完成 · $($exes.Count) 个 exe" -ForegroundColor Green
+    }
+    Write-Host "  ===== 3/3 打包 Chromium 资源 =====" -ForegroundColor DarkGray
 
     if (-not (Test-Path $pwCacheDir)) { throw "Playwright cache 目录不存在: $pwCacheDir" }
     $chromiumDirs = Get-ChildItem $pwCacheDir -Directory -Filter "chromium*"
