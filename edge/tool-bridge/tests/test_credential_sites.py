@@ -37,6 +37,11 @@ sys.path.insert(0, str(_SRC))
 
 from catfish_tool_bridge import credential_sites as cs
 
+# tests/ → tool-bridge/ → edge/  (parents[2]) —— 跟 test_wiki_files.py 同一套
+CONTRACT = (
+    Path(__file__).resolve().parents[2] / "contracts" / "credential_site_cases.json"
+)
+
 
 @pytest.fixture
 def index(tmp_path, monkeypatch):
@@ -52,26 +57,35 @@ def index(tmp_path, monkeypatch):
 
 # ───────────────────────── host 提取 ─────────────────────────
 
-@pytest.mark.parametrize("raw,want", [
-    ("http://eis.ffcs.cn/cas/login?service=x", "eis.ffcs.cn"),
-    ("https://EIS.FFCS.CN/",                   "eis.ffcs.cn"),   # 大小写归一
-    ("http://eis.ffcs.cn:8080/x",              "eis.ffcs.cn"),   # 端口不算站点的一部分
-    ("eis.ffcs.cn",                            "eis.ffcs.cn"),   # 裸 host
-    ("EIS",                                    ""),              # ★ 人起的名字, 不是站点
-    ("教学登录",                                "" ),             # ★ 同上
-    ("公司 OA 系统",                            ""),              # ★ 带空格更不能当 host
-    ("",                                       ""),
-    ("some/path",                              ""),
-])
-def test_host_of(raw, want):
-    """★★ "EIS" 那几条是重点。
+def _contract_cases():
+    return json.loads(CONTRACT.read_text(encoding="utf-8"))["cases"]
 
-    老索引里 label 是员工自己起的名字, 大部分**不是** URL。要是把它们
-    也当 hostname, `known_sites()` 里就会混进 'eis' 'teaching' 这种鬼东西,
-    而更糟的是 sites_of 会给这条凭据配上一个不存在的站点 —— 将来某天真有个
-    叫 eis 的内网单标签域名, 就直接串号了。
+
+@pytest.mark.parametrize(
+    "case", _contract_cases(), ids=lambda c: c["name"][:40]
+)
+def test_host_of_契约(case):
+    """★★★ 判据只有一份, Rust 侧读的是同一个文件。
+
+    存密码在 Rust (`normalize_site`), 查密码在这儿 (`host_of`)。两边漂开的表现是
+    **员工存了、教学说没存过** —— 存进去的 key 和查的 key 对不上, 而两边各自
+    看都完全正常, 日志里什么都没有。8/17 那个 bug 就是这个形状。
+
+    表在 edge/contracts/credential_site_cases.json, 跟 wiki_visibility_cases /
+    wiki_resolve_cases 同一套安排。想放宽就改那个文件 —— 两边一起红。
     """
-    assert cs.host_of(raw) == want
+    assert cs.host_of(case["input"]) == case["expect"]
+
+
+def test_契约表没被删空():
+    """★ 上面那条是参数化的 —— 表被清空的话它会 0 条通过, 绿得毫无察觉。"""
+    cases = _contract_cases()
+    assert len(cases) >= 20, f"契约表被删剩 {len(cases)} 条了"
+    # 三条不能放宽的必须还在
+    inputs = {c["input"] for c in cases}
+    assert "www.ffcs.cn" in inputs and "ffcs.cn" in inputs, "不剥 www. 那组没了"
+    assert "EIS" in inputs, "「人起的名字不是站点」那条没了"
+    assert any(i.startswith("keychain://") for i in inputs), "引用串那条没了"
 
 
 def test_不剥_www_():
@@ -79,9 +93,10 @@ def test_不剥_www_():
 
     看着像"顺手做掉更方便", 但方向是错的: 剥了以后 UI 上员工看到的是一条,
     实际覆盖两个站点, 而他并没有同意过。要一起用就在 UI 里显式加第二个。
+
+    (契约表里也有这两条 —— 这里再断言一次是因为**关系**才是重点: 两者必须不等。
+     表里只能表达"各自等于什么", 表达不了"这两条不许相等"。)
     """
-    assert cs.host_of("http://www.ffcs.cn") == "www.ffcs.cn"
-    assert cs.host_of("http://ffcs.cn") == "ffcs.cn"
     assert cs.host_of("http://www.ffcs.cn") != cs.host_of("http://ffcs.cn")
 
 

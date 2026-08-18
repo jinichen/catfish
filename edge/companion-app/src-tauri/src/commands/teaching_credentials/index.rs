@@ -448,22 +448,29 @@ mod tests {
     /// 什么都没有。跟 8/17 那个 secret_ref 对不上是同一个形状。
     ///
     /// 所以判据只留一份 JSON, 两边测试都读它。谁想放宽, 改那个文件, 两边一起红。
+    /// 跟 wiki_visibility_cases / wiki_resolve_cases 同一套安排, 见 edge/contracts/。
+    ///
+    /// ⚠ 这里用 `include_str!` 而不是 wiki_read.rs 那种 `CARGO_MANIFEST_DIR` +
+    ///   运行时读。不是随手写的: 本模块**被两个 crate 编译** —— src-tauri 自己,
+    ///   以及 companion-app/pure-tests (它用 #[path] 包这个真文件, 好在没有 GTK
+    ///   的机器上也能跑)。`CARGO_MANIFEST_DIR` 在两边不同, 那条路必断一边;
+    ///   `include_str!` 认的是**源文件**位置, 两边都对。
     #[test]
     fn hostname_rules_match_the_python_side() {
-        let raw = include_str!("../../../../../shared-fixtures/hostname_cases.json");
-        let v: serde_json::Value = serde_json::from_str(raw).expect("fixture 不是合法 JSON");
-        let cases = v["cases"].as_array().expect("fixture 里没有 cases");
-        assert!(cases.len() >= 20, "fixture 被删剩 {} 条了", cases.len());
+        let raw = include_str!("../../../../../contracts/credential_site_cases.json");
+        let v: serde_json::Value = serde_json::from_str(raw).expect("契约表不是合法 JSON");
+        let cases = v["cases"].as_array().expect("契约表缺 cases 数组");
+        assert!(cases.len() >= 20, "契约表被删剩 {} 条了", cases.len());
 
         let mut bad = Vec::new();
         for c in cases {
-            let input = c["in"].as_str().unwrap();
-            let want = c["expect"].as_str().unwrap();
+            let name = c["name"].as_str().unwrap_or("");
+            let input = c["input"].as_str().expect("case 缺 input");
+            let want = c["expect"].as_str().expect("case 缺 expect");
             // Python 侧用空串表示"不是站点", Rust 侧用 Err —— 这里对齐。
             let got = normalize_site(input).unwrap_or_default();
             if got != want {
-                let note = c["note"].as_str().unwrap_or("");
-                bad.push(format!("  {input:?} 期望 {want:?} 实得 {got:?}  {note}"));
+                bad.push(format!("  [{name}] {input:?} 期望 {want:?} 实得 {got:?}"));
             }
         }
         assert!(

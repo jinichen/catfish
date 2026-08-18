@@ -5,6 +5,8 @@ import type { ToolCall } from "../../types/chat";
 import { extractFilePaths } from "../../lib/path_detect";
 import { FilePillList } from "../../components/FilePill";
 import { toolBridgeChatApproval } from "../../lib/tauri";
+import { parseNeedsCredential } from "../../lib/needsCredential";
+import InlineCredentialPrompt from "./components/InlineCredentialPrompt";
 
 // P44 (6/5 鸿波 marathon): chat completions approval — session_key 从 SSE event
 // `hermes.tool.progress` (status=approval_pending) 拿. plugin P15 注的
@@ -85,6 +87,19 @@ export default function ChatToolCall({ call }: Props) {
       resultStr,
     );
 
+  // 8/18: 「这个站点还没存过登录密码」→ 就地嵌一个密码框。
+  //
+  // 跟上面 approval 那条是同一个位置、同一套交互 (折叠也显), 但**判据不同**:
+  // approval 用正则是因为 hermes 返回的形状有好几种还会被 LLM 翻成中文;
+  // 这条的形状是我们自己定的, 所以严格 parse。见 lib/needsCredential.ts ——
+  // 误弹一个"请输入密码"的框, 代价比误弹一个审批按钮高得多。
+  //
+  // 为什么要嵌在这儿而不是让员工去 📚 里存: 那条路要人把一个引用串从存密码的
+  // 流程搬到教学的流程里, 搬完还会被 _infer_params 焊进冻结的 script.py。
+  // 8/17 改个 EIS 密码就是这么失联的。在**要密码的那一刻**就地捕获, 站点是
+  // 当前页给的, 中间没有人工搬运, 也就没有东西可以焊死。
+  const credentialReq = parseNeedsCredential(resultStr);
+
   // E2 (6/6 taste-skill 改造): className-based, 详 globals.css `.toolcall*`.
   // 5 大类 anti-pattern 修法见 globals.css 注释.
   const cardClass = [
@@ -159,6 +174,9 @@ export default function ChatToolCall({ call }: Props) {
           <ApprovalButtons />
         </div>
       )}
+      {/* 折叠状态也要显 —— 跟 approval / file pill 一致。员工不展开 toolcall
+          就看不到密码框的话, 这一步就卡死了 (P27.2 踩过同一个坑)。 */}
+      {credentialReq && <InlineCredentialPrompt req={credentialReq} />}
     </div>
   );
 }
