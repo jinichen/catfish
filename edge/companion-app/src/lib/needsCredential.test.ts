@@ -33,6 +33,7 @@ describe("认出来", () => {
     const got = P(REAL);
     expect(got).toEqual({
       site: "neis.ffcs.cn",
+      reason: "unreadable",   // REAL 里没 reason 字段 → 兜底
       pageUrl: "http://neis.ffcs.cn/cas/login?service=x",
       pageTitle: "福建电信 - 统一身份认证",
       selector: "#password",
@@ -50,6 +51,7 @@ describe("认出来", () => {
     const got = P({ needs_credential: true, site: "a.b.cn" });
     expect(got).toEqual({
       site: "a.b.cn",
+      reason: "unreadable",
       pageUrl: "",
       pageTitle: "",
       selector: "",
@@ -233,5 +235,39 @@ describe("剥层不许失控", () => {
       }),
     };
     expect(P("前言乱七八糟\n" + JSON.stringify(payload))?.pageTitle).toBe("有个 } 在标题里");
+  });
+});
+
+describe("reason: 分清「没存过」和「存了取不出来」", () => {
+  // 8/18 实撞的死角: keyring 少开一个 feature, 密码全进了 mock store。
+  // 索引里记着 neis.ffcs.cn, 钥匙串里没有 —— 工具返 needs_credential,
+  // 而 UI 按索引判断"已经存过了", 把输入框藏了。员工看到的是一句
+  // "这一步应该已经处理完", 然后永远填不上密码。
+  it("missing 原样传过来", () => {
+    expect(P({ needs_credential: true, site: "a.b.cn", reason: "missing" })!.reason)
+      .toBe("missing");
+  });
+
+  it("unreadable 原样传过来", () => {
+    expect(P({ needs_credential: true, site: "a.b.cn", reason: "unreadable" })!.reason)
+      .toBe("unreadable");
+  });
+
+  it("★★ 没有 reason 字段时兜底成 unreadable, 不是 missing", () => {
+    // 老版本 tool-bridge 的 payload 没这个字段 (下面那份 fixture 就是)。
+    // 兜底方向必须选**多问一次**那一侧 —— 猜成 missing 会让 UI 走捷径把
+    // 输入框藏掉, 那正是要修的死角。
+    expect(P({ needs_credential: true, site: "a.b.cn" })!.reason).toBe("unreadable");
+    expect(P(HERMES_REAL)!.reason).toBe("unreadable");
+  });
+
+  it("乱七八糟的值也兜底成 unreadable", () => {
+    // ⚠ 别把 "missing " (带尾空格) 放进来: str() 统一 trim, 它**合法地**
+    //   等于 "missing"。第一版我照抄了一串"看起来像脏值"的东西, 结果测的是
+    //   自己的想当然 —— 跑一遍才发现。
+    for (const v of [1, true, "MISSING", "miss", null, {}]) {
+      expect(P({ needs_credential: true, site: "a.b.cn", reason: v })!.reason)
+        .toBe("unreadable");
+    }
   });
 });

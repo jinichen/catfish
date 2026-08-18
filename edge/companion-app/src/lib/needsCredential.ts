@@ -42,6 +42,16 @@ export interface CredentialRequest {
   selector: string;
   /** 本机已经存过哪些站点 —— 员工看到"eis 存过、neis 没存"才知道是多入口。 */
   knownSites: string[];
+  /** 为什么要密码:
+   *
+   *   `missing`    索引里根本没这个站点
+   *   `unreadable` 索引里有, 但钥匙串取不出来 (索引和钥匙串不同步)
+   *
+   *  两者对 UI 的意义不一样 —— `unreadable` 时**不能**因为"索引说存过了"就
+   *  把输入框藏起来, 否则员工卡死在一句"应该已经处理完了"上 (8/18 实撞)。
+   *  老版本的 payload 没这个字段, 取不到时按 `unreadable` 兜底 —— 宁可多问
+   *  一次, 也不要藏。 */
+  reason: "missing" | "unreadable";
 }
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
@@ -149,6 +159,7 @@ export function parseNeedsCredential(
 
   return {
     site,
+    reason: str(o.reason) === "missing" ? "missing" : "unreadable",
     pageUrl: str(o.page_url),
     pageTitle: str(o.page_title),
     selector: str(o.selector),

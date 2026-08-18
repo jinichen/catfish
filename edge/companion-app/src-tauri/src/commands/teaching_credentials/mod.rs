@@ -26,6 +26,19 @@
 //!     "这是本机记过的标签"。
 //!   - **delete 对「凭据库里已经没有」容错**, 照样把索引清掉。不然残项永远删不掉。
 
+// ⚠ keyring v3 的平台后端靠 Cargo.toml 的 [target.*] feature 开。没开时它
+//   `pub use mock as default` —— set_password 返 Ok(()) 而密码只进一个进程内
+//   的假存储, 退出就没。8/18 实撞: 界面一直显示"已保存", 教学时
+//   `security find-generic-password` 永远找不到, 查了三轮才落到这儿。
+//
+//   这条 compile_error! 让"新平台忘了开 feature"变成**编译失败**, 而不是又一次
+//   静默的假保存。加平台时: Cargo.toml 加一段 [target.'cfg(target_os = "...")']
+//   带对应 feature, 再把这里放行。
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+compile_error!(
+    "keyring 只在 macOS / Windows 配了平台后端 (见 Cargo.toml)。\n     当前目标没配 —— 直接编过去的话 keyring 会用 mock store, \n     密码存了等于没存, 而且界面还显示成功。先去 Cargo.toml 加 [target.*] feature。"
+);
+
 mod index;
 
 pub use index::TeachingCredential;

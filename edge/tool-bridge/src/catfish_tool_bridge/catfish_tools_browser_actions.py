@@ -387,6 +387,8 @@ def _browser_fill_impl(args: Dict[str, Any]) -> Dict[str, Any]:
                         "type": "error",
                         "error": f"{site} 还没保存过登录密码",
                         "needs_credential": True,
+                        # 索引里也没有 —— 前端可以按"已存过就别再问"来省一步
+                        "reason": "missing",
                         "site": site,
                         "page_url": page_url,
                         "page_title": (page.title() or "")[:120],
@@ -408,6 +410,10 @@ def _browser_fill_impl(args: Dict[str, Any]) -> Dict[str, Any]:
                             "多半是钥匙串里那条被删了 —— 重新存一次"
                         ),
                         "needs_credential": True,
+                        # ★ 跟 missing 必须分开。索引说"存过了", 钥匙串里却没有ta
+                        # —— 前端要是按索引判断"已存过, 不用再问", 就会把输入框
+                        # 藏起来, 员工卡死在一句"应该已经处理完了"上 (8/18 实撞)。
+                        "reason": "unreadable",
                         "site": site,
                         "page_url": page_url,
                         "page_title": (page.title() or "")[:120],

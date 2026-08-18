@@ -343,3 +343,35 @@ def test_页面没有url时明确报错(index, fake_browser):
     assert got["type"] == "error"
     assert "站点" in got["error"]
     assert not got.get("needs_credential"), "这不是'去存密码'能解决的"
+
+
+def test_reason_区分没存过和取不出来(index, fake_browser, monkeypatch):
+    """★★★ 这两种情况前端的处理**必须**不一样。
+
+    8/18 实撞的死角: keyring 的平台 feature 没开, 密码全进了 mock store。
+    索引里记着 neis.ffcs.cn, 钥匙串里没有。工具返 needs_credential, 而前端
+    按索引判断"这个站点已经存过了" → 把输入框藏了, 只显示一句"应该已经处理
+    完了"。员工卡在那儿, 下一步永远填不上。
+
+    索引和钥匙串是两份数据, 天然会不同步 (员工手删钥匙串条目也一样)。返回值
+    里必须说清是哪一种, 前端才有得判。
+    """
+    from catfish_tool_bridge import secret_resolver
+
+    # ① 索引里根本没有 → missing
+    index([])
+    fake_browser("http://neis.ffcs.cn/")
+    assert _fill({"selector": "#pwd", "secret_for_site": True})["reason"] == "missing"
+
+    # ② 索引里有, 钥匙串取不出来 → unreadable
+    index([{"label": "neis.ffcs.cn", "reference": "keychain://没了",
+            "sites": ["neis.ffcs.cn"]}])
+    fake_browser("http://neis.ffcs.cn/")
+
+    def boom(ref):
+        raise secret_resolver.SecretResolveError("keychain 里没有 service '没了'")
+    monkeypatch.setattr(secret_resolver, "resolve_secret", boom)
+
+    got = _fill({"selector": "#pwd", "secret_for_site": True})
+    assert got["reason"] == "unreadable", got
+    assert got["needs_credential"] is True

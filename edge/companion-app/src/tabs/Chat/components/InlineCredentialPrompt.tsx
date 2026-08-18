@@ -124,9 +124,15 @@ export default function InlineCredentialPrompt({ req }: { req: CredentialRequest
   // 列表没读完之前先不渲染: 不然会先闪一个密码输入框再消失, 看着像 bug。
   if (!loaded) return null;
 
-  const alreadySaved = others.some(
-    (c) => c.label === req.site || c.sites?.includes(req.site),
-  );
+  //
+  // ⚠ 只在 reason==="missing" 时才走这条捷径。
+  //   `unreadable` 是"索引里有、钥匙串里没有" —— 索引照样说"存过了", 按它藏掉
+  //   输入框的话员工只会看到一句"应该已经处理完了", 而下一步永远填不上。
+  //   8/18 实撞: keyring 少开一个 feature, 密码全进了 mock store, 索引却记着,
+  //   于是每次都走进这个死角。
+  const alreadySaved =
+    req.reason === "missing" &&
+    others.some((c) => c.label === req.site || c.sites?.includes(req.site));
   if (alreadySaved) {
     return (
       <div style={wrapStyle}>

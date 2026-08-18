@@ -41,6 +41,26 @@ log = "0.4"
 fs2 = "0.4"
 # env_logger 5/x 起被 tauri-plugin-log 替代 (7/15 BL-COMPANION-LOG-FILE)
 # Phase 1C SSO: keyring (macOS Keychain / Win Credential Manager / Linux Secret Service)
+#
+# ⚠ 平台后端**必须显式开 feature**, 见下面的 [target.*] 段。
+#
+# 8/18 实撞: 这里原来是光秃秃的 `keyring = "3"`。keyring **v3 起**取消了默认
+# 平台后端 (v2 是自带的), 什么 feature 都不开时它 `pub use mock as default`
+# —— crate 文档原话 "this crate will use the (platform-independent) _mock_
+# credential store"。
+#
+# 后果: set_password 返 Ok(()), 界面显示"已保存", 而密码只进了一个**进程内
+# 的假存储**, 退出就没。教学时 `security find-generic-password` 当然找不到:
+#
+#     keychain 里没有 service 'catfish-teaching:neis.ffcs.cn'
+#
+# 8/17 那次"存了也白存"也是它。当时查到的方向是引用串套娃 / 名字对不上 ——
+# 那些是真问题也修了, 但底下还压着这一条: **UI 存的密码从来没进过钥匙串**。
+# 手工 `security add-generic-password` 建的 (例 eis_password) 一直能读, 正是
+# 因为它绕开了这个 crate。
+#
+# 只声明当前平台需要的那个 —— feature 是 additive 的, 三个都开会把 Linux 的
+# dbus / secret-service 依赖拉进 macOS 构建。
 keyring = "3"
 # OAuth flow: 生成 state / code_challenge (Phase 2 PKCE 用)
 rand = "0.8"
@@ -86,6 +106,20 @@ serial_test = "3"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+
+# 8/18: keyring v3 的平台后端。不开 feature = mock store (存了等于没存),
+# 见上面 keyring 那段。分平台声明, 免得把别的平台的依赖拉进来。
+#
+# 只有 macOS / Windows —— resources/ 里就这三个包 (mac-aarch64 / mac-x64 /
+# windows), 不发 Linux。加上 linux 那段会为一个不构建的平台往 Cargo.lock 里
+# 塞 51 个包 (secret-service / dbus / aes / async-io 一整串)。
+# 真要支持 Linux 时加 `sync-secret-service` —— 别让它静默掉回 mock,
+# commands/teaching_credentials/mod.rs 顶上有 compile_error! 守着。
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
 
 # 7/16 BL-INTEL-DMG: ort 官方不发 x86_64-apple-darwin prebuilt binary → Intel
 # Mac dmg build 时挂. Fix: ort + tokenizers 只在 aarch64 (Apple Silicon + Linux
