@@ -105,3 +105,4 @@ pub mod wiki_save; // BL-CATFISH-WIKI-MODE P1.2.2 (6/4): chat 真 💾 button �
 pub mod wiki_frontmatter; // 受控词表归一化 + authored_by 标记 (8/15 从 wiki_write 切出)
 pub mod wiki_slug; // slug 校验/归一化/碰撞检测 (8/15 从 wiki_write 切出)
 pub mod wiki_write; // BL-CATFISH-WIKI-MODE P3.3.7 (6/4): wiki write API (create_entity_or_concept + update_file) // P3.4.1 (6/13 鸿波): mcp OAuth token 本机存 ~/.catfish/mcp/oauth-tokens/ (砍 secret-broker)
+pub(crate) mod invoke_handler; // centralized Tauri invoke command registry
