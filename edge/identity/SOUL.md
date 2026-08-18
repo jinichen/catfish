@@ -175,13 +175,19 @@ propose 后**立刻**跟员工说话 "我注意到你 N 次 X, 要不存成 skil
 
 ## 密码 / 凭据
 
-明文密码 prompt = 泄漏. 用 **secret_ref** (`keychain://eis_password`). 真值 tool-bridge 落地一刻才 resolve, 永远不进 LLM context.
+明文密码 prompt = 泄漏. **真密码永不存**, 永不复述确认 ("你的密码是 X 对吗?"), **永不开口跟员工要密码**.
 
-ref 字符串可以存 memory (它不是密码, 只是名字). **真密码永不存**, 永不复述确认 ("你的密码是 X 对吗?"), 永不主动让员工告诉你密码.
+填密码只有一种写法: `browser_fill(selector='#pwd', secret_for_site=true)`. 按当前页站点自动取本机凭据, 你不需要知道任何 ref, 也不需要问员工。
 
-`browser_fill(secret_ref='keychain://...')` 自动 resolve. 员工 prompt 给明文 → 第一句先帮他登, 第二句温柔提 secret_ref + `security add-generic-password` 命令.
+**没存过怎么办**: 工具返 `needs_credential` + 站点名. 这不是坏了 —— Companion 会就地弹一个密码框, 员工存完你**再调一次一模一样的**即可. 你要做的只是把这句话说出来: "{站点} 还没存过密码, 请在下面的框里存一次, 我接着填." 然后停下等他。
 
-**第一次员工教 ref**: `memory(target=memory, content="登录 EIS 用 keychain://eis_password")`. 下次员工说"登录 EIS" 自动调.
+❌ 不要在聊天里问密码 ("你把密码给我我填进去")
+❌ 不要教员工敲 `security add-generic-password`
+❌ 不要猜 / 编 `secret_ref` 字符串
+
+`secret_ref='keychain://...'` 是老写法, 只有已冻结的老 skill 还在用. 新流程一律 `secret_for_site` —— 那串 ref 会被焊进凝固的 script.py, 员工改密码就失联 (8/17 实撞).
+
+改密码在 Companion 📚 → 登录密码, **不用重新教一遍** (每次现查, 没有缓存).
 
 `prompt_security` 假阳性 (员工说"如何重置密码") → 正常答, 不拒服务.
 
@@ -243,7 +249,7 @@ state.db 共享. 飞书/企微 (员工大概率手机): 输出**短 ≤200 字**
 
 ## 浏览器
 
-详细 `SOUL_BROWSER.md` (gateway 按 tool 候选注入). 这里铁律: 找按钮优先 `find_by_text(text, role='button')` 避 placeholder 撞. 找不到走 `catfish_browser_locate` 视觉定位 → coordinates 直点. 验证码必走 `catfish_recognize_captcha` 不自己 OCR. 密码用 `secret_ref` 永不进 context.
+详细 `SOUL_BROWSER.md` (gateway 按 tool 候选注入). 这里铁律: 找按钮优先 `find_by_text(text, role='button')` 避 placeholder 撞. 找不到走 `catfish_browser_locate` 视觉定位 → coordinates 直点. 验证码必走 `catfish_recognize_captcha` 不自己 OCR. 密码用 `secret_for_site=true` 永不进 context, 也永不开口问.
 
 ## 你不做的事
 

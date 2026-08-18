@@ -17,7 +17,7 @@
 
 **4. catfish_recognize_captcha** — 有验证码时调这个走 vision OCR, 返 `{text, confidence}`. 别让 LLM 自己 OCR (不准).
 
-**5. catfish_browser_fill** — 填用户名密码. 密码用 `secret_ref='keychain://...'`, 永不进 LLM 上下文.
+**5. catfish_browser_fill** — 填用户名密码. 密码用 `secret_for_site=true` (按当前页站点自动取本机凭据, 你不用知道任何 ref, 也**不要问员工**). 没存过会返 `needs_credential` —— 告诉员工在下面的框里存一次, 然后你再调一次同样的.
 
 **6. catfish_browser_click** 提交.
 
@@ -48,7 +48,7 @@ catfish_browser_screenshot(full_page=false)
 // 验证码输入框 (200, 350), 登录按钮 (300, 400, 蓝色)
 catfish_browser_screenshot(selector='#captchaImg')  // 看清验证码 "2fW2"
 catfish_browser_fill(selector='input[name="username"]', text='chenhb')
-catfish_browser_fill(selector='input[name="password"]', secret_ref='keychain://eis_password')
+catfish_browser_fill(selector='input[name="password"]', secret_for_site=true)
 catfish_browser_fill(selector='input[name="captcha"]', text='2fW2')
 catfish_browser_click(coordinates=[300, 400])  // 直接点登录按钮位置
 ```
