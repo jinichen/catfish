@@ -405,9 +405,10 @@ def _sse_error_payload(friendly: str) -> dict[str, dict[str, str]]:
     """Build the OpenAI-compatible object shape used by streaming errors."""
     return {"error": {"message": friendly, "type": "upstream_error"}}
 
-_KEEPALIVE_INTERVAL_SECS = 30
-
+# _KEEPALIVE_INTERVAL_SECS 的定义挪到了 chat_runtime (那儿才是唯一用它的地方),
+# 这里 re-export 回来保住 `app._KEEPALIVE_INTERVAL_SECS` 这个对外名字。
 from .chat_runtime import (  # noqa: E402,F401
+    _KEEPALIVE_INTERVAL_SECS,
     _invoke_chat_completion,
     _stream_chat_completion,
     _stream_with_keepalive,

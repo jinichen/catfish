@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -15,7 +16,6 @@ from typing import Any
 import litellm
 from fastapi import HTTPException, Request
 
-from . import app as _app
 from . import quota as _quota_module
 from .config import Config
 from .errors import (
@@ -26,32 +26,67 @@ from .errors import (
 from .fallback import with_fallback
 from .llm_params import _extract_nested_usage, _raise_upstream_error
 
-logger = _app.logger
-_KEEPALIVE_INTERVAL_SECS = _app._KEEPALIVE_INTERVAL_SECS
-_pick_cache_read_from_streaming_usage = _app._pick_cache_read_from_streaming_usage
+logger = logging.getLogger("catfish.gateway")
+
+#: keepalive 心跳间隔。定义在这里而不是 app.py —— app.py 里那份**没有任何人用**,
+#: 只有本模块用。它从 app.py 反向 import 回去, 保持 `app._KEEPALIVE_INTERVAL_SECS`
+#: 这个名字对外还在 (万一有人 monkeypatch 它)。
+#:
+#: ⚠ 必须是模块级常量, 不能改成惰性取值 —— `_stream_with_keepalive` 拿它当
+#:   **默认参数**, 默认参数在 import 时就求值了。
+_KEEPALIVE_INTERVAL_SECS = 30
+
+
+def _app_mod() -> Any:
+    """惰性拿 app 模块。**不要**改回模块级 `from . import app`。
+
+    # 8/18 实撞
+
+    app.py 第 410 行 `from .chat_runtime import ...`, 本模块又 `from . import app`
+    —— 一个环。平时不炸是因为 uvicorn 走 `catfish_gateway.app:app`, 那时
+    `catfish_gateway.app` 已经在 sys.modules 里 (虽然只初始化了一半, 但要读的
+    几个属性正好都在第 410 行之前定义好了) —— 靠**行的先后顺序**成立, 很脆。
+
+    `python -m catfish_gateway.app` 就不成立了: runpy 把 app.py 当 `__main__` 跑,
+    `catfish_gateway.app` **不在** sys.modules, 于是这行触发 app.py 的第二次完整
+    执行 (现象是路由被挂载两遍), 第二遍走到第 410 行时本模块才执行到第 18 行,
+    要的名字一个都还不存在:
+
+        ImportError: cannot import name '_invoke_chat_completion' from
+        partially initialized module 'catfish_gateway.chat_runtime'
+        (most likely due to a circular import)
+
+    改成惰性: 函数体里才 import, 那时两个模块都已经初始化完, 环就不存在了。
+    """
+    from . import app as _app  # noqa: PLC0415  故意放在函数里, 见 docstring
+    return _app
+
+
+def _pick_cache_read_from_streaming_usage(usage: dict, current: int) -> int:
+    return _app_mod()._pick_cache_read_from_streaming_usage(usage, current)
 
 
 def get_config() -> Config:
     """Resolve config through app.py so existing monkeypatches keep working."""
-    return _app.get_config()
+    return _app_mod().get_config()
 
 
 def _build_litellm_params(*args: Any, **kwargs: Any) -> dict[str, Any]:
     """Resolve request parameter construction through the compatibility module."""
-    return _app._build_litellm_params(*args, **kwargs)
+    return _app_mod()._build_litellm_params(*args, **kwargs)
 
 
 def _check_context_usage(*args: Any, **kwargs: Any) -> Any:
     """Resolve the context metric through app.py for legacy monkeypatch paths."""
-    return _app._check_context_usage(*args, **kwargs)
+    return _app_mod()._check_context_usage(*args, **kwargs)
 
 
 def _extract_content_text(response_dict: dict) -> str:
-    return _app._extract_content_text(response_dict)
+    return _app_mod()._extract_content_text(response_dict)
 
 
 def _looks_like_upstream_error_as_content(response_dict: dict) -> bool:
-    return _app._looks_like_upstream_error_as_content(response_dict)
+    return _app_mod()._looks_like_upstream_error_as_content(response_dict)
 
 
 def _write_metadata(**kwargs: Any) -> Any:
@@ -487,7 +522,7 @@ async def _stream_chat_completion(
         # Companion 那边 chat.ts 老代码只认字符串, 已同步改成两种都认 ——
         # 新旧网关 / 新旧 Companion 交叉组合都不会瞎。
         yield "data: {}\n\n".format(
-            json.dumps(_app._sse_error_payload(friendly), ensure_ascii=False)
+            json.dumps(_app_mod()._sse_error_payload(friendly), ensure_ascii=False)
         )
     finally:
         # BL-ABORT-PROPAGATE (7/23 达华 POC): 显式关 upstream iterator · 停 token.
