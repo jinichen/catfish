@@ -288,15 +288,26 @@ def _browser_fill_impl(args: Dict[str, Any]) -> Dict[str, Any]:
     selector = (args.get("selector") or "").strip()
     text = args.get("text")
     secret_ref = (args.get("secret_ref") or "").strip()
+    # 8/18: 按**当前页站点**取密码, 调用方不用知道任何 ref。
+    #
+    # 老路 (secret_ref) 要人把一个字符串从"存密码"那个流程搬到"教学"这个流程,
+    # 然后被 _infer_params 焊进冻结的 script.py —— 改密码就对不上了 (8/17 实撞)。
+    # 这条不搬也不焊: 每次按 page.url 现查, 员工改完密码下一次跑就是新的。
+    #
+    # 两个都给时以 secret_ref 优先 —— 显式写死的意图更强, 而且冻结的老 skill
+    # 全走那条, 不能被这条抢掉。
+    secret_for_site = bool(args.get("secret_for_site"))
 
     if not selector:
         return {"type": "error", "error": "selector 必填"}
 
-    # secret_ref 跟 text 二选一. 都没给 → error. 都给 → 优先 secret_ref + warning.
-    if not secret_ref and (text is None or text == ""):
+    # 三选一. 都没给 → error。
+    # secret_for_site 要等拿到 page 才知道站点, 所以它在这儿是"合法的空手" ——
+    # 真正的取值在下面 _connect_playwright_browser 之后。
+    if not secret_for_site and not secret_ref and (text is None or text == ""):
         return {
             "type": "error",
-            "error": "必须给 'text' 或 'secret_ref' 之一. 密码场景用 secret_ref",
+            "error": "必须给 'text' / 'secret_ref' / 'secret_for_site' 之一. 密码场景用 secret_for_site",
         }
 
     timeout_ms = int(float(args.get("timeout_seconds") or 10.0) * 1000)
@@ -313,7 +324,11 @@ def _browser_fill_impl(args: Dict[str, Any]) -> Dict[str, Any]:
     # 解析 secret_ref (如果有), 拿到真实密码值
     actual_text: str
     used_secret_ref = False
-    if secret_ref:
+    if secret_for_site and not secret_ref:
+        # 站点要等 page 才知道 —— 真正的解析挪到下面拿到 page 之后。
+        # 这里只占位, 别让后面的 text 校验把它当成"没给值"。
+        actual_text = ""
+    elif secret_ref:
         try:
             from . import secret_resolver  # noqa: PLC0415
             actual_text = secret_resolver.resolve_secret(secret_ref)
@@ -351,6 +366,56 @@ def _browser_fill_impl(args: Dict[str, Any]) -> Dict[str, Any]:
             except RuntimeError as e:
                 return {"type": "error", "error": str(e)}
 
+            used_site_ref = ""
+            if secret_for_site and not secret_ref:
+                # ★ 只有到这儿才知道站点 —— 所以这段必须在 page 之后, 不能跟上面
+                #   那段 secret_ref 解析并在一起。
+                from . import credential_sites  # noqa: PLC0415
+                page_url = page.url or ""
+                site = credential_sites.host_of(page_url)
+                if not site:
+                    return {
+                        "type": "error",
+                        "error": f"当前页取不到站点 (url={page_url!r}), 没法按站点找密码",
+                    }
+                found = credential_sites.ref_for_url(page_url)
+                if not found:
+                    # 不是"出错了", 是"还没存过" —— 前端认这个标记, 就地弹密码框。
+                    # 用 type=error 是为了模型别以为填成功了往下走。
+                    known = credential_sites.known_sites()
+                    return {
+                        "type": "error",
+                        "error": f"{site} 还没保存过登录密码",
+                        "needs_credential": True,
+                        "site": site,
+                        "page_url": page_url,
+                        "page_title": (page.title() or "")[:120],
+                        "selector": selector,
+                        "known_sites": known,
+                        "summary": (
+                            f"⚠ {site} 还没存过密码. 请在下面存一次, 我再接着填. "
+                            + (f"(本机已存: {', '.join(known)})" if known else "")
+                        ),
+                    }
+                try:
+                    from . import secret_resolver  # noqa: PLC0415
+                    actual_text = secret_resolver.resolve_secret(found)
+                except Exception as e:
+                    return {
+                        "type": "error",
+                        "error": (
+                            f"{site} 的密码在索引里有 ({found}), 但取不出来: {e}. "
+                            "多半是钥匙串里那条被删了 —— 重新存一次"
+                        ),
+                        "needs_credential": True,
+                        "site": site,
+                        "page_url": page_url,
+                        "page_title": (page.title() or "")[:120],
+                        "selector": selector,
+                    }
+                used_secret_ref = True
+                used_site_ref = found
+
             try:
                 page.fill(selector, actual_text, timeout=timeout_ms)
                 result: Dict[str, Any] = {
@@ -362,7 +427,17 @@ def _browser_fill_impl(args: Dict[str, Any]) -> Dict[str, Any]:
                 # 标 audit:
                 #   - 用了 secret_ref → "credential_via_secret_ref" (好的实践)
                 #   - 直接 text + 是密码字段 → "credential_field_filled" (不好的实践, 提醒)
-                if used_secret_ref:
+                if used_site_ref:
+                    # ⚠ 这里**故意不回 ref**。回了模型就学会下次直接传
+                    #   secret_ref='keychain://…', 那就退回老路 —— 一个人工搬运的
+                    #   字符串, 会被 _infer_params 焊进冻结的 script.py, 改密码就失联。
+                    #   只说"按站点拿到了", 站点是天然标识, 焊死了也仍然对。
+                    result["security_audit"] = "credential_via_site"
+                    result["site_used"] = credential_sites.host_of(page.url or "")
+                    result["summary"] += (
+                        f" (按站点 {result['site_used']} 取的密码, 不进 LLM 上下文)"
+                    )
+                elif used_secret_ref:
                     result["security_audit"] = "credential_via_secret_ref"
                     result["secret_ref_used"] = secret_ref  # 记 ref 不记值
                     result["summary"] += f" (从 {secret_ref} 拉值, 密码不进 LLM 上下文)"

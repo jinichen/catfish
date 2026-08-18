@@ -1,0 +1,163 @@
+//! 教学流程的本地凭据保存。
+//!
+//! 密码只通过 Tauri IPC 到 Rust，写入操作系统凭据库。这里绝不记录密码，
+//! 也不把密码放进 shell 参数、配置文件或聊天消息。
+//!
+//! # 为什么要单独维护一份标签索引
+//!
+//! keyring 3.6.3 的 `Entry` 只有 new / set_password / get_password / get_secret /
+//! get_attributes / update_attributes / delete_credential / get_credential ——
+//! **没有任何枚举 API**。底层也不好绕: macOS 的 `security` 命令不支持按 service
+//! 前缀搜索, `dump-keychain` 会把整个钥匙串倒出来还要用户授权, 拿来做个列表
+//! 完全不成比例。
+//!
+//! 所以标签列表另存一份 `~/.catfish/teaching_credentials.json`。里面**只有标签、
+//! 引用串和创建时间, 没有密码** —— 密码始终只在系统凭据库里。
+//!
+//! ## 索引不是真源
+//!
+//! 系统凭据库才是。索引可能跟它对不上:
+//!   - 员工在「钥匙串访问」里手工删了某一条 → 索引留下残项
+//!   - 换了台机器同步过来配置 → 索引在但凭据不在
+//!
+//! 处理原则:
+//!   - **list 绝不去验证凭据还在不在**。验证要调 get_password, 而 macOS 每次
+//!     都可能弹授权框 —— 打开个列表弹一串授权框是不能接受的。列表如实说明
+//!     "这是本机记过的标签"。
+//!   - **delete 对「凭据库里已经没有」容错**, 照样把索引清掉。不然残项永远删不掉。
+
+mod index;
+
+pub use index::TeachingCredential;
+use index::{
+    normalize_label, normalize_site, normalize_sites, read_index, reference_for, service_name,
+    site_owner, upsert, write_index, ACCOUNT,
+};
+use keyring::Entry;
+/// service="catfish" + user=target)。
+fn entry_for(target: &str) -> Result<Entry, String> {
+    #[cfg(target_os = "windows")]
+    let entry = Entry::new("catfish", target);
+    #[cfg(not(target_os = "windows"))]
+    let entry = Entry::new(target, ACCOUNT);
+    entry.map_err(|e| format!("无法打开本机凭据库: {e}"))
+}
+
+///   `None`      —— 这次没提站点 (改密码走这条), 原有站点原样留着
+///   `Some([..])`—— 用这一串**替换**
+///   `Some([])`  —— 明确清空 (员工在 UI 里把站点全删了)
+#[tauri::command]
+pub fn teaching_credential_save(
+    label: String,
+    password: String,
+    sites: Option<Vec<String>>,
+) -> Result<String, String> {
+    // 归一化一次, 后面 service / 索引都用它 —— 8/17 之前索引存的是**原样**,
+    // 于是"名字本身是引用串"那条会一直留在列表里, 点一下又填回输入框, 再存
+    // 就多套一层。存归一化后的名字, 这个循环就断了。
+    let (name, target) = service_name(&label)?;
+    if password.is_empty() {
+        return Err("请填写密码".to_string());
+    }
+
+    // ⚠ 站点校验必须在**写凭据库之前**。写完再报错的话密码已经进去了,
+    //   员工看到的是"保存失败", 实际却存了一半。
+    let existing = read_index();
+    let sites = match &sites {
+        Some(raw) => {
+            let hosts = normalize_sites(raw)?;
+            for h in &hosts {
+                if let Some(owner) = site_owner(&existing, h, &name) {
+                    return Err(format!(
+                        "{h} 已经归「{owner}」管了。\n\
+                         一个网站只该有一条凭据 —— 要换成这条, 先把「{owner}」\
+                         里的这个网站去掉 (或者直接改「{owner}」的密码)。"
+                    ));
+                }
+            }
+            hosts
+        }
+        // 没提就是没提。`Vec::new()` 到了 upsert 会被认成"沿用原有站点"。
+        None => Vec::new(),
+    };
+
+    entry_for(&target)?
+        .set_password(&password)
+        .map_err(|e| format!("保存到本机凭据库失败: {e}"))?;
+
+    let reference = reference_for(&target);
+    // 索引写失败不能让"密码已经存进去了"这件事变成报错 —— 密码是主线,
+    // 索引只是为了后面能列出来。写不进去就记一条日志, 员工仍然拿得到引用串。
+    if let Err(e) = write_index(&upsert(
+        existing,
+        TeachingCredential {
+            label: name.clone(),
+            reference: reference.clone(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            sites,
+        },
+    )) {
+        log::warn!("凭据已存入系统凭据库, 但标签索引没写成: {e}");
+    }
+    Ok(reference)
+}
+
+/// 给一条已有的凭据**再挂一个网站** —— 多入口共用一个密码走这条。
+///
+/// 典型场景: `eis.ffcs.cn` 存过了, 登录时跳到 `neis.ffcs.cn`, 教学那边报
+/// needs_credential。员工不用再输一遍密码, 把新入口挂到老那条上就行。
+///
+/// **不碰密码**, 所以不需要 password 参数, 也不会有任何密码经过这里。
+#[tauri::command]
+pub fn teaching_credential_add_site(label: String, site: String) -> Result<Vec<String>, String> {
+    let name = normalize_label(&label)?;
+    let host = normalize_site(&site)?;
+    let mut items = read_index();
+
+    if let Some(owner) = site_owner(&items, &host, &name) {
+        return Err(format!("{host} 已经归「{owner}」管了 —— 一个网站只该有一条凭据。"));
+    }
+    let idx = items
+        .iter()
+        .position(|i| i.label == name)
+        .ok_or_else(|| format!("没有名为「{name}」的凭据 —— 先存一条再挂网站"))?;
+
+    if !items[idx].sites.contains(&host) {
+        items[idx].sites.push(host);
+    }
+    let out = items[idx].sites.clone();
+    write_index(&items)?;
+    Ok(out)
+}
+
+/// 列出本机记过的标签。**不校验凭据库里是否还在** —— 见文件头。
+#[tauri::command]
+pub fn teaching_credential_list() -> Result<Vec<TeachingCredential>, String> {
+    let mut items = read_index();
+    items.sort_by(|a, b| b.created_at.cmp(&a.created_at)); // 新的在前
+    Ok(items)
+}
+
+/// 删一条。凭据库里已经没有也算成功 —— 否则手工删过的残项永远清不掉。
+#[tauri::command]
+pub fn teaching_credential_delete(label: String) -> Result<(), String> {
+    let (name, target) = service_name(&label)?;
+    match entry_for(&target)?.delete_credential() {
+        Ok(()) => {}
+        Err(keyring::Error::NoEntry) => {
+            log::info!("凭据库里已无此条 ({target}), 只清索引");
+        }
+        Err(e) => return Err(format!("从本机凭据库删除失败: {e}")),
+    }
+    // read_index 已经过 migrate_index, 里面的 label 都是归一化后的,
+    // 所以按 name 比就够 —— 不用再加"也认原样"那条特判。
+    //
+    // ⚠ 那条特判 8/17 加过又拿掉: 它会让"点老那行删除"同时删掉新旧两行
+    //   (两者归一化后同名), 等于点"删垃圾"把好的一起删了。
+    //   根子上是列表里不该同时出现两行, migrate_index 解决的就是这个。
+    let kept: Vec<TeachingCredential> = read_index()
+        .into_iter()
+        .filter(|i| i.label != name)
+        .collect();
+    write_index(&kept)
+}

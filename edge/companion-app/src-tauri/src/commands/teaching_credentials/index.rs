@@ -1,37 +1,23 @@
-//! 教学流程的本地凭据保存。
+//! 标签索引的**纯逻辑** —— 名字归一化 / 站点归一化 / 合并 / 读写。
 //!
-//! 密码只通过 Tauri IPC 到 Rust，写入操作系统凭据库。这里绝不记录密码，
-//! 也不把密码放进 shell 参数、配置文件或聊天消息。
+//! # 为什么单独一个文件
 //!
-//! # 为什么要单独维护一份标签索引
+//! 这里一行 tauri、一行 keyring 都没有。因为 tauri 在 Linux 上要链 GTK,
+//! 而 CI / 沙箱里装不了 —— 逻辑跟它绑在一起, `cargo test` 就一次都跑不了。
 //!
-//! keyring 3.6.3 的 `Entry` 只有 new / set_password / get_password / get_secret /
-//! get_attributes / update_attributes / delete_credential / get_credential ——
-//! **没有任何枚举 API**。底层也不好绕: macOS 的 `security` 命令不支持按 service
-//! 前缀搜索, `dump-keychain` 会把整个钥匙串倒出来还要用户授权, 拿来做个列表
-//! 完全不成比例。
+//! 8/18 撞到的就是这个: 站点判据是这次改动里最容易出错的一块 (见 normalize_site),
+//! 却因为整个 crate 编不动而完全没法验。拆开之后这些函数可以脱离 GUI 依赖跑,
+//! 见 `companion-app/pure-tests/`。
 //!
-//! 所以标签列表另存一份 `~/.catfish/teaching_credentials.json`。里面**只有标签、
-//! 引用串和创建时间, 没有密码** —— 密码始终只在系统凭据库里。
-//!
-//! ## 索引不是真源
-//!
-//! 系统凭据库才是。索引可能跟它对不上:
-//!   - 员工在「钥匙串访问」里手工删了某一条 → 索引留下残项
-//!   - 换了台机器同步过来配置 → 索引在但凭据不在
-//!
-//! 处理原则:
-//!   - **list 绝不去验证凭据还在不在**。验证要调 get_password, 而 macOS 每次
-//!     都可能弹授权框 —— 打开个列表弹一串授权框是不能接受的。列表如实说明
-//!     "这是本机记过的标签"。
-//!   - **delete 对「凭据库里已经没有」容错**, 照样把索引清掉。不然残项永远删不掉。
+//! 上面那层 (`mod.rs`) 只剩四个 #[tauri::command] 和一个 keyring 的 entry_for。
 
-use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-
-const ACCOUNT: &str = "catfish-teaching";
+pub(crate) const ACCOUNT: &str = "catfish-teaching";
 const SERVICE_PREFIX: &str = "catfish-teaching:";
+
+/// 浏览器地址栏只可能是这两个。见 `normalize_site` 里为什么必须限定。
+const WEB_SCHEMES: [&str; 2] = ["http", "https"];
 
 /// secret_resolver 认得的 scheme (secret_resolver.py:95-102)。
 /// 名称框里出现它们 = 员工粘的是引用串不是名字。
@@ -55,7 +41,7 @@ const SECRET_SCHEMES: [&str; 3] = ["keychain://", "wincred://", "env://"];
 ///
 /// 自洽但没用: 套两层的引用确实能解析 (resolver 的 partition("://") 只切第一个),
 /// 但它跟教学流程里写的那个引用对不上, 表现就是"存了也白存"。
-fn normalize_label(raw: &str) -> Result<String, String> {
+pub(crate) fn normalize_label(raw: &str) -> Result<String, String> {
     let mut s = raw.trim();
 
     // 把本 UI 自己产出的引用剥回纯名字。粘回来的意图是"覆盖这一条", 该让它成立。
@@ -111,17 +97,79 @@ fn normalize_label(raw: &str) -> Result<String, String> {
 /// 8/17 第一版把这个函数拆散写进两个命令里, 结果它只剩测试在调 ——
 /// `cargo test` 直接报 `function service_name is never used`。
 /// 生产不用、只有测试用的函数就是死代码, 而且测试会因此测了一条没人走的路。
-fn service_name(label: &str) -> Result<(String, String), String> {
+pub(crate) fn service_name(label: &str) -> Result<(String, String), String> {
     let name = normalize_label(label)?;
     let target = format!("{SERVICE_PREFIX}{name}");
     Ok((name, target))
+}
+
+/// 把员工填的东西收敛成一个 **hostname**。取不出来返 Err。
+///
+/// # 判据只有一份
+///
+/// tool-bridge 的 `credential_sites.host_of()` 是同一套规则, 两边的测试都读
+/// `edge/shared-fixtures/hostname_cases.json`。
+///
+/// 必须是同一套 —— 存进去的 key 和查的 key 对不上, 表现就是「员工明明存了,
+/// 教学还说没存过」, 而两边各自看都正常。这正是 8/17 那个 bug 的形状。
+///
+/// # 三条不能放宽的
+///
+///   · **限定 http/https**。`"keychain://catfish-teaching:EIS"` 拿去当 URL 解析,
+///     `catfish-teaching` 会被当成 host 且全程不报错 —— 凭空造出一个假站点,
+///     任何 host 是它的页面都会拿到别人的密码。8/17 那条坏 label 正是这形状。
+///   · **不剥 `www.`**。两个 host 就是两个, 要一起用就在 UI 里显式加。
+///   · **裸串要求含 `.`**。否则 "EIS" / "教学登录" 这种员工起的名字会被当成
+///     单标签域名, 索引里就多出一堆匹配不到任何真站点的鬼条目。
+pub(crate) fn normalize_site(raw: &str) -> Result<String, String> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return Err("站点不能为空".to_string());
+    }
+    if s.contains("://") {
+        let parsed = url::Url::parse(s).map_err(|e| format!("「{s}」不是合法网址: {e}"))?;
+        if !WEB_SCHEMES.contains(&parsed.scheme()) {
+            return Err(format!(
+                "「{s}」不是网页地址 (只认 http / https)。\n\
+                 这里填的是网站, 例: eis.ffcs.cn 或 http://eis.ffcs.cn/"
+            ));
+        }
+        // Url 对 IPv6 返 "[::1]", 而 Python 的 urlparse().hostname 返 "::1"。
+        // 两边要一致, 以 Python 为准 —— 查找那侧是它说了算。
+        let host = parsed
+            .host_str()
+            .ok_or_else(|| format!("「{s}」里没有网站地址"))?
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_lowercase();
+        return Ok(host);
+    }
+    if s.contains('.') && !s.contains(' ') && !s.contains('/') {
+        return Ok(s.to_lowercase());
+    }
+    Err(format!(
+        "「{s}」看不出是哪个网站。\n\
+         填网站地址, 例: eis.ffcs.cn / http://eis.ffcs.cn/ —— 不是给它起的名字。"
+    ))
+}
+
+/// 归一化一串站点, 去重保序。空列表原样返回 (= 这条凭据不参与按站点查找)。
+pub(crate) fn normalize_sites(raw: &[String]) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::with_capacity(raw.len());
+    for s in raw {
+        let h = normalize_site(s)?;
+        if !out.contains(&h) {
+            out.push(h);
+        }
+    }
+    Ok(out)
 }
 
 /// 引用串 —— 教学流程里 `secret_ref` 用的就是这个。
 /// scheme 必须跟 tool-bridge 的 secret_resolver 对得上:
 ///   macOS   keychain:// → `security find-generic-password -s <target> -w`
 ///   Windows wincred://  → `keyring.get_password("catfish", <target>)`
-fn reference_for(target: &str) -> String {
+pub(crate) fn reference_for(target: &str) -> String {
     #[cfg(target_os = "windows")]
     {
         format!("wincred://{target}")
@@ -134,15 +182,6 @@ fn reference_for(target: &str) -> String {
 
 /// 打开凭据库条目。service / user 两个位置的用法必须跟 secret_resolver 一致,
 /// 写进去读不出来就白存了 (两边都对过: macOS 查 service 不带 -a, Windows 查
-/// service="catfish" + user=target)。
-fn entry_for(target: &str) -> Result<Entry, String> {
-    #[cfg(target_os = "windows")]
-    let entry = Entry::new("catfish", target);
-    #[cfg(not(target_os = "windows"))]
-    let entry = Entry::new(target, ACCOUNT);
-    entry.map_err(|e| format!("无法打开本机凭据库: {e}"))
-}
-
 // ─── 标签索引 (只有标签, 没有密码) ────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,6 +193,16 @@ pub struct TeachingCredential {
     pub reference: String,
     /// ISO-8601, 只用于列表排序和"这是什么时候存的"
     pub created_at: String,
+    /// 这条凭据管哪些网站 (hostname)。tool-bridge 按 `page.url` 查的就是它。
+    ///
+    /// 空 = 不参与按站点查找。老数据都是空的, 但 `credential_sites.sites_of()`
+    /// 会退回把 `label` 当 URL 解析一次 —— 8/17 存的那条 label 正好是
+    /// `http://eis.ffcs.cn`, 所以不迁移也能立刻匹配上。
+    ///
+    /// `skip_serializing_if` 是为了让没配站点的老行**保持原样三个字段**,
+    /// 不平白多出一个 `"sites": []`。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sites: Vec<String>,
 }
 
 fn index_path() -> Result<PathBuf, String> {
@@ -172,8 +221,15 @@ fn index_path() -> Result<PathBuf, String> {
 /// 8/17 只加了 normalize_label 之后, 新存的是干净名字, **老那条还躺在索引里**,
 /// 于是列表变成两行:
 ///
-///     http://eis.ffcs.cn
-///     keychain://catfish-teaching:http://eis.ffcs.cn
+/// ```text
+/// http://eis.ffcs.cn
+/// keychain://catfish-teaching:http://eis.ffcs.cn
+/// ```
+///
+/// ⚠ 上面这个 fence 必须带 `text`。不带的话 rustdoc 会把缩进块当 Rust 代码去编,
+///   doctest 直接报 `expected one of ! or ::` —— 8/18 拆文件后第一次真跑
+///   `cargo test` 就撞到了 (在这之前 tauri 依赖让整个 crate 在 Linux 上编不动,
+///   这条 doctest 从写下那天起就没运行过)。
 ///
 /// 两行指的是同一件事, 看着比修之前还乱。而且点老那行的「删除」会归一化成
 /// 同一个 service, 把**新**那条的凭据删掉 —— 点"删垃圾"删掉了好的。
@@ -187,18 +243,38 @@ fn index_path() -> Result<PathBuf, String> {
 fn migrate_index(items: Vec<TeachingCredential>) -> Vec<TeachingCredential> {
     let mut out: Vec<TeachingCredential> = Vec::with_capacity(items.len());
     for it in items {
+        // 站点归一化不了的**丢掉那一个**, 不是丢整行 —— 整行没了凭据就删不掉了。
+        // 留着一个匹配不到任何页面的假站点更糟: 它会静默地什么都不匹配。
+        let sites = it
+            .sites
+            .iter()
+            .filter_map(|s| normalize_site(s).ok())
+            .fold(Vec::new(), |mut acc: Vec<String>, h| {
+                if !acc.contains(&h) {
+                    acc.push(h);
+                }
+                acc
+            });
         let fixed = match service_name(&it.label) {
             Ok((name, target)) => TeachingCredential {
                 label: name,
                 reference: reference_for(&target),
                 created_at: it.created_at,
+                sites,
             },
-            Err(_) => it,
+            Err(_) => TeachingCredential { sites, ..it },
         };
         match out.iter().position(|x| x.label == fixed.label) {
             Some(i) => {
                 if fixed.created_at < out[i].created_at {
                     out[i].created_at = fixed.created_at;
+                }
+                // ★ 被合掉那行的站点要并进来, 不能跟着它一起消失。
+                //   两行本来就指同一条凭据 (归一化后同名), 站点是并集。
+                for s in fixed.sites {
+                    if !out[i].sites.contains(&s) {
+                        out[i].sites.push(s);
+                    }
                 }
             }
             None => out.push(fixed),
@@ -209,7 +285,7 @@ fn migrate_index(items: Vec<TeachingCredential>) -> Vec<TeachingCredential> {
 
 /// 读索引。读不出来一律当空 —— 索引坏掉不该让员工连保存都做不了,
 /// 凭据本体在系统凭据库里, 没受影响。
-fn read_index() -> Vec<TeachingCredential> {
+pub(crate) fn read_index() -> Vec<TeachingCredential> {
     let Ok(path) = index_path() else {
         return Vec::new();
     };
@@ -226,7 +302,7 @@ fn read_index() -> Vec<TeachingCredential> {
     migrate_index(parsed)
 }
 
-fn write_index(items: &[TeachingCredential]) -> Result<(), String> {
+pub(crate) fn write_index(items: &[TeachingCredential]) -> Result<(), String> {
     let path = index_path()?;
     let text =
         serde_json::to_string_pretty(items).map_err(|e| format!("serialize 失败: {e}"))?;
@@ -244,7 +320,10 @@ fn write_index(items: &[TeachingCredential]) -> Result<(), String> {
 }
 
 /// 同名的换掉, 没有的追加。返回更新后的列表。
-fn upsert(mut items: Vec<TeachingCredential>, item: TeachingCredential) -> Vec<TeachingCredential> {
+///
+/// `item.sites` 为空表示**这次调用没提站点**, 不表示"要清空站点"。
+/// 改密码时前端只传 label + password, 站点得原样留着。
+pub(crate) fn upsert(mut items: Vec<TeachingCredential>, item: TeachingCredential) -> Vec<TeachingCredential> {
     // 用 position() 先拿下标, 不用 iter_mut().find() ——
     // `if let Some(x) = v.iter_mut().find(..) { } else { v.push(..) }` 是借用
     // 检查过不去的经典写法: 可变借用被认为在 else 分支里仍然存活。
@@ -252,75 +331,38 @@ fn upsert(mut items: Vec<TeachingCredential>, item: TeachingCredential) -> Vec<T
         Some(idx) => {
             // created_at 保留最早那次 —— 覆盖密码不算"新建"
             let created = items[idx].created_at.clone();
-            items[idx] = TeachingCredential { created_at: created, ..item };
+            // ★ 站点同理, 而且这条更要紧: `..item` 会把它**静默清空**。
+            //   编译得过、测试不看就过 —— 表现是员工改完密码, 多入口那几个
+            //   站点全部失联, 而他只是改了个密码。
+            let sites = if item.sites.is_empty() {
+                items[idx].sites.clone()
+            } else {
+                item.sites.clone()
+            };
+            items[idx] = TeachingCredential { created_at: created, sites, ..item };
         }
         None => items.push(item),
     }
     items
 }
 
+/// 这个站点已经被别的凭据管着了吗。返回那条的 label。
+///
+/// 同一个站点挂两条凭据时, `credential_sites.ref_for_url()` 取 createdAt 最新的 ——
+/// 能跑, 但员工看不出来为什么用的是那条。所以宁可在写入时拦下来让他自己决定,
+/// 不替他猜。
+pub(crate) fn site_owner(items: &[TeachingCredential], site: &str, except: &str) -> Option<String> {
+    items
+        .iter()
+        .find(|i| i.label != except && i.sites.iter().any(|s| s == site))
+        .map(|i| i.label.clone())
+}
+
 // ─── Tauri 命令 ──────────────────────────────────────────────────
 
-#[tauri::command]
-pub fn teaching_credential_save(label: String, password: String) -> Result<String, String> {
-    // 归一化一次, 后面 service / 索引都用它 —— 8/17 之前索引存的是**原样**,
-    // 于是"名字本身是引用串"那条会一直留在列表里, 点一下又填回输入框, 再存
-    // 就多套一层。存归一化后的名字, 这个循环就断了。
-    let (name, target) = service_name(&label)?;
-    if password.is_empty() {
-        return Err("请填写密码".to_string());
-    }
-    entry_for(&target)?
-        .set_password(&password)
-        .map_err(|e| format!("保存到本机凭据库失败: {e}"))?;
-
-    let reference = reference_for(&target);
-    // 索引写失败不能让"密码已经存进去了"这件事变成报错 —— 密码是主线,
-    // 索引只是为了后面能列出来。写不进去就记一条日志, 员工仍然拿得到引用串。
-    if let Err(e) = write_index(&upsert(
-        read_index(),
-        TeachingCredential {
-            label: name.clone(),
-            reference: reference.clone(),
-            created_at: chrono::Utc::now().to_rfc3339(),
-        },
-    )) {
-        log::warn!("凭据已存入系统凭据库, 但标签索引没写成: {e}");
-    }
-    Ok(reference)
-}
-
-/// 列出本机记过的标签。**不校验凭据库里是否还在** —— 见文件头。
-#[tauri::command]
-pub fn teaching_credential_list() -> Result<Vec<TeachingCredential>, String> {
-    let mut items = read_index();
-    items.sort_by(|a, b| b.created_at.cmp(&a.created_at)); // 新的在前
-    Ok(items)
-}
-
-/// 删一条。凭据库里已经没有也算成功 —— 否则手工删过的残项永远清不掉。
-#[tauri::command]
-pub fn teaching_credential_delete(label: String) -> Result<(), String> {
-    let (name, target) = service_name(&label)?;
-    match entry_for(&target)?.delete_credential() {
-        Ok(()) => {}
-        Err(keyring::Error::NoEntry) => {
-            log::info!("凭据库里已无此条 ({target}), 只清索引");
-        }
-        Err(e) => return Err(format!("从本机凭据库删除失败: {e}")),
-    }
-    // read_index 已经过 migrate_index, 里面的 label 都是归一化后的,
-    // 所以按 name 比就够 —— 不用再加"也认原样"那条特判。
-    //
-    // ⚠ 那条特判 8/17 加过又拿掉: 它会让"点老那行删除"同时删掉新旧两行
-    //   (两者归一化后同名), 等于点"删垃圾"把好的一起删了。
-    //   根子上是列表里不该同时出现两行, migrate_index 解决的就是这个。
-    let kept: Vec<TeachingCredential> = read_index()
-        .into_iter()
-        .filter(|i| i.label != name)
-        .collect();
-    write_index(&kept)
-}
+/// 存一条凭据。
+///
+/// `sites` 三态, 别混:
 
 #[cfg(test)]
 mod tests {
@@ -393,7 +435,61 @@ mod tests {
             label: label.into(),
             reference: reference.into(),
             created_at: created.into(),
+            sites: Vec::new(),
         }
+    }
+
+    // ── 8/18: 站点判据必须跟 tool-bridge 一模一样 ───────────────────
+
+    /// ★★★ 这条是整个"按站点找密码"能不能成立的地基。
+    ///
+    /// 存密码在 Rust, 查密码在 Python。两边各写一份 hostname 归一化, 迟早会漂 ——
+    /// 而漂开的表现是**员工存了、教学说没存过**, 两边各自看都完全正常, 日志里
+    /// 什么都没有。跟 8/17 那个 secret_ref 对不上是同一个形状。
+    ///
+    /// 所以判据只留一份 JSON, 两边测试都读它。谁想放宽, 改那个文件, 两边一起红。
+    #[test]
+    fn hostname_rules_match_the_python_side() {
+        let raw = include_str!("../../../../../shared-fixtures/hostname_cases.json");
+        let v: serde_json::Value = serde_json::from_str(raw).expect("fixture 不是合法 JSON");
+        let cases = v["cases"].as_array().expect("fixture 里没有 cases");
+        assert!(cases.len() >= 20, "fixture 被删剩 {} 条了", cases.len());
+
+        let mut bad = Vec::new();
+        for c in cases {
+            let input = c["in"].as_str().unwrap();
+            let want = c["expect"].as_str().unwrap();
+            // Python 侧用空串表示"不是站点", Rust 侧用 Err —— 这里对齐。
+            let got = normalize_site(input).unwrap_or_default();
+            if got != want {
+                let note = c["note"].as_str().unwrap_or("");
+                bad.push(format!("  {input:?} 期望 {want:?} 实得 {got:?}  {note}"));
+            }
+        }
+        assert!(
+            bad.is_empty(),
+            "跟 tool-bridge 的 host_of() 判据不一致 —— \
+             存进去的 key 和查的 key 会对不上:\n{}",
+            bad.join("\n")
+        );
+    }
+
+    #[test]
+    fn normalize_sites_dedupes_and_keeps_order() {
+        let got = normalize_sites(&[
+            "http://eis.ffcs.cn/login".into(),
+            "NEIS.ffcs.cn".into(),
+            "eis.ffcs.cn".into(), // 跟第一条同一个 host
+        ])
+        .unwrap();
+        assert_eq!(got, vec!["eis.ffcs.cn", "neis.ffcs.cn"]);
+    }
+
+    #[test]
+    fn normalize_sites_rejects_the_whole_list_on_one_bad_entry() {
+        // 悄悄丢掉填错的那个, 员工会以为它生效了 —— 直到某天登录失败才发现。
+        let e = normalize_sites(&["eis.ffcs.cn".into(), "教学登录".into()]).unwrap_err();
+        assert!(e.contains("教学登录"), "报错要指出是哪一个: {e}");
     }
 
     #[test]
@@ -486,7 +582,140 @@ mod tests {
             label: label.to_string(),
             reference: format!("keychain://catfish-teaching:{label}"),
             created_at: created.to_string(),
+            sites: Vec::new(),
         }
+    }
+
+    fn cred_with_sites(label: &str, created: &str, sites: &[&str]) -> TeachingCredential {
+        TeachingCredential {
+            sites: sites.iter().map(|s| s.to_string()).collect(),
+            ..cred(label, created)
+        }
+    }
+
+    // ── 8/18: sites 在合并路径上不能被吃掉 ─────────────────────────
+
+    #[test]
+    fn upsert_keeps_sites_when_the_caller_does_not_mention_them() {
+        // ★★★ 改密码就是这条路: 前端只传 label + password, sites 是 None。
+        //
+        //   `TeachingCredential { created_at, ..item }` 会把 sites 换成 item 的
+        //   (空的) —— **编译得过, 不看就发现不了**。表现是员工改了个密码,
+        //   多入口那几个站点全失联, 而他什么都没动过。
+        let items = vec![cred_with_sites("EIS", "2026-08-01T00:00:00Z", &["eis.ffcs.cn", "neis.ffcs.cn"])];
+        let out = upsert(items, cred("EIS", "2026-08-18T00:00:00Z"));
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            out[0].sites,
+            vec!["eis.ffcs.cn", "neis.ffcs.cn"],
+            "改密码不该动站点配置"
+        );
+    }
+
+    #[test]
+    fn upsert_replaces_sites_when_the_caller_gives_them() {
+        // 员工在 UI 里改站点列表 → 以他给的为准
+        let items = vec![cred_with_sites("EIS", "2026-08-01T00:00:00Z", &["old.ffcs.cn"])];
+        let out = upsert(items, cred_with_sites("EIS", "2026-08-18T00:00:00Z", &["new.ffcs.cn"]));
+        assert_eq!(out[0].sites, vec!["new.ffcs.cn"]);
+    }
+
+    #[test]
+    fn migrate_unions_sites_of_rows_it_merges() {
+        // ★★ 两行归一化后同名会合成一行。被合掉那行的站点要并进来 ——
+        //    直接丢掉的话, 员工配的入口莫名其妙少一个。
+        let out = migrate_index(vec![
+            cred_with_sites("keychain://catfish-teaching:EIS", "2026-08-01T00:00:00Z", &["eis.ffcs.cn"]),
+            cred_with_sites("EIS", "2026-08-17T00:00:00Z", &["neis.ffcs.cn"]),
+        ]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].sites, vec!["eis.ffcs.cn", "neis.ffcs.cn"]);
+    }
+
+    #[test]
+    fn migrate_drops_only_the_bad_site_not_the_whole_row() {
+        // 整行丢掉的话这条凭据就再也删不掉了 (列表里看不见)。
+        // 留着假站点更糟 —— 它会静默地什么都匹配不到。
+        let out = migrate_index(vec![cred_with_sites(
+            "EIS",
+            "2026-08-01T00:00:00Z",
+            &["eis.ffcs.cn", "这不是站点"],
+        )]);
+        assert_eq!(out.len(), 1, "行要留着");
+        assert_eq!(out[0].sites, vec!["eis.ffcs.cn"]);
+    }
+
+    #[test]
+    fn migrate_normalizes_sites() {
+        let out = migrate_index(vec![cred_with_sites(
+            "EIS",
+            "2026-08-01T00:00:00Z",
+            &["http://EIS.ffcs.cn/cas/login", "eis.ffcs.cn"],
+        )]);
+        assert_eq!(out[0].sites, vec!["eis.ffcs.cn"], "归一化后重复的要去掉");
+    }
+
+    #[test]
+    fn migrate_normalizes_sites_even_when_the_label_cannot_be_normalized() {
+        // ★★ 8/18 做变异时发现的缺口: 把 `Err(_) => TeachingCredential { sites, ..it }`
+        //    改回 `Err(_) => it`, 27 条测试**全绿** —— 没有一条走"label 归一化不了
+        //    但配了站点"这个组合。
+        //
+        //    漏掉的后果不是没影响: site_owner / add_site 是按 `s == site` 精确比的,
+        //    索引里留着 `http://EIS.ffcs.cn/x` 这种原样串, 冲突检查就照不到它,
+        //    于是同一个站点被两条凭据同时认领, 而 UI 上看不出任何异常。
+        let out = migrate_index(vec![cred_with_sites(
+            "keychain://eis_password", // 外部命名空间, normalize_label 会拒
+            "2026-01-01T00:00:00Z",
+            &["http://EIS.ffcs.cn/cas"],
+        )]);
+        assert_eq!(out.len(), 1, "行要留着 —— 丢了就再也删不掉");
+        assert_eq!(out[0].label, "keychain://eis_password", "label 原样保留");
+        assert_eq!(
+            out[0].sites,
+            vec!["eis.ffcs.cn"],
+            "站点仍然要归一化 —— 否则冲突检查按字符串比会漏掉它"
+        );
+    }
+
+    #[test]
+    fn migrate_sites_is_idempotent() {
+        let once = migrate_index(vec![cred_with_sites(
+            "EIS", "2026-08-01T00:00:00Z", &["http://EIS.ffcs.cn/x", "坏的"],
+        )]);
+        let twice = migrate_index(once.clone());
+        assert_eq!(format!("{once:?}"), format!("{twice:?}"));
+    }
+
+    #[test]
+    fn site_owner_finds_the_conflict_and_ignores_self() {
+        let items = vec![
+            cred_with_sites("EIS", "2026-08-01T00:00:00Z", &["eis.ffcs.cn"]),
+            cred_with_sites("OA", "2026-08-02T00:00:00Z", &["oa.ffcs.cn"]),
+        ];
+        assert_eq!(site_owner(&items, "oa.ffcs.cn", "EIS").as_deref(), Some("OA"));
+        // 自己的站点不算冲突 —— 否则改自己的密码都会被拦下来
+        assert_eq!(site_owner(&items, "eis.ffcs.cn", "EIS"), None);
+        assert_eq!(site_owner(&items, "别的.ffcs.cn", "EIS"), None);
+    }
+
+    #[test]
+    fn old_rows_without_sites_still_parse() {
+        // ★ 员工机器上现在那条就是三个字段。加了新字段之后要还读得进来,
+        //   否则升级一装, 索引整个当空 —— 存过的密码在钥匙串里但列表空了。
+        let old = r#"[{"label":"http://eis.ffcs.cn",
+                       "reference":"keychain://catfish-teaching:http://eis.ffcs.cn",
+                       "createdAt":"2026-08-17T09:37:44.889575+00:00"}]"#;
+        let parsed: Vec<TeachingCredential> = serde_json::from_str(old).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert!(parsed[0].sites.is_empty());
+    }
+
+    #[test]
+    fn rows_without_sites_serialize_to_the_same_three_fields() {
+        // 没配站点的行不该平白多出一个 "sites": []
+        let json = serde_json::to_string(&cred("EIS", "2026-08-01T00:00:00Z")).unwrap();
+        assert!(!json.contains("sites"), "空站点不该写进文件: {json}");
     }
 
     #[test]
@@ -512,7 +741,10 @@ mod tests {
         // 这条是红线的结构化表达: 索引文件是明文 JSON, 里面**只能**有
         // label / reference / createdAt 三个字段。哪天有人往
         // TeachingCredential 上加个 password, 这里会红。
-        let json = serde_json::to_string(&cred("EIS", "2026-08-01T00:00:00Z")).unwrap();
+        // 配了站点的行 —— 字段最多就这四个
+        let json =
+            serde_json::to_string(&cred_with_sites("EIS", "2026-08-01T00:00:00Z", &["eis.ffcs.cn"]))
+                .unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         // 排序后再比 —— serde_json 默认用 BTreeMap, 键序是字典序不是声明序,
         // 按声明序断言会挂在一个跟本意无关的地方。
@@ -520,7 +752,7 @@ mod tests {
         keys.sort_unstable();
         assert_eq!(
             keys,
-            vec!["createdAt", "label", "reference"],
+            vec!["createdAt", "label", "reference", "sites"],
             "索引结构变了 —— 密码只能待在系统凭据库里, 绝不能进这个文件"
         );
     }

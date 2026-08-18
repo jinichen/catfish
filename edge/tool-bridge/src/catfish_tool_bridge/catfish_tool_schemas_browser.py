@@ -232,14 +232,12 @@ BROWSER_TOOLS: List[Dict[str, Any]] = [
         "description": (
             "往输入框填文字. 走 Playwright `page.fill()`, auto-waiting 等输入框可写. "
             "适合 input / textarea / [contenteditable]. 自动清空原值再填, 不需要先 click.\n\n"
-            "**填密码的两种方式**:\n"
-            "  1. **推荐 secret_ref**: secret_ref='keychain://eis_password' (macOS) 或 "
-            "'env://EIS_PASSWORD' (跨平台). tool-bridge 从安全源拉值, **密码永不进 LLM 上下文**, "
-            "audit log 只记 secret_ref 引用不记密码值. 员工事先用 `security add-generic-password "
-            "-a $USER -s eis_password -w '<密码>'` 存到 keychain.\n"
-            "  2. **text 直传 (不推荐密码场景)**: text='jiniaA1+' 直接填, 会在 audit 标记 "
-            "'credential_field_filled' 但密码已经在 LLM 上下文了.\n\n"
-            "**两个字段二选一**: 给了 secret_ref 就忽略 text, 反之亦然. 都没给 → error."
+            "**填密码一律 secret_for_site=true** — 按当前页站点自动取本机存的密码, 你不用知道任何 "
+            "ref, 密码永不进 LLM 上下文. 这个站点还没存过 → 返 needs_credential, 员工就地存一次, "
+            "你再调一次同样的就行.\n"
+            "secret_ref='keychain://…' 是老写法, 只有已冻结的 skill 还在用; 新教学别用 —— "
+            "那串会被焊进 script.py, 员工改密码就失联.\n"
+            "text 是明文, 只给用户名 / 邮箱 / 普通内容用."
         ),
         "input_schema": {
             "type": "object",
@@ -252,11 +250,18 @@ BROWSER_TOOLS: List[Dict[str, Any]] = [
                     "type": "string",
                     "description": "要填的文字 (明文). 用户名 / 邮箱 / 内容首选这个. 密码场景优先用 secret_ref.",
                 },
+                "secret_for_site": {
+                    "type": "boolean",
+                    "description": (
+                        "填密码用这个. 按当前页 hostname 找本机存的密码, 不用给 ref. "
+                        "没存过返 needs_credential (不是坏了, 是要员工存一次)."
+                    ),
+                },
                 "secret_ref": {
                     "type": "string",
                     "description": (
-                        "安全源引用, 例 'keychain://eis_password' / 'env://EIS_PASSWORD'. "
-                        "tool-bridge 自动拉值, LLM 不会看到真值. 推荐密码场景用这个."
+                        "老写法, 显式引用, 例 'keychain://eis_password' / 'env://EIS_PASSWORD'. "
+                        "只给已冻结的 skill 用, 新教学用 secret_for_site."
                     ),
                 },
                 "timeout_seconds": {

@@ -56,8 +56,31 @@ export const codexBackendOpenLogin = () =>
   rawInvoke<void>("codex_backend_open_login");
 
 // 教学流程凭据：密码只经 Tauri IPC 写入操作系统凭据库，不进入 shell 或聊天。
-export const saveTeachingCredential = (label: string, password: string) =>
-  rawInvoke<string>("teaching_credential_save", { label, password });
+//
+/** 存一条凭据。
+ *
+ *  `sites` 三态，别混：
+ *    省略        —— 这次不提站点，原有站点**原样留着**（改密码走这条）
+ *    `[...]`     —— 用这一串替换
+ *    `[]`        —— 明确清空
+ *
+ *  省略时 `{ sites: undefined }` 经 JSON 序列化会丢掉这个键，Rust 侧收到 `None`
+ *  （跟 `profileNextRecomputeAt(days?)` 同一套）。这不是巧合上的依赖 —— Rust
+ *  那边 `None` 和 `Some([])` 是分开处理的，不然改个密码会把多入口配置抹掉。 */
+export const saveTeachingCredential = (
+  label: string,
+  password: string,
+  sites?: string[],
+) => rawInvoke<string>("teaching_credential_save", { label, password, sites });
+
+/** 给已有凭据再挂一个网站 —— 多入口共用一个密码走这条，不用重输密码。
+ *
+ *  典型：`eis.ffcs.cn` 存过了，登录时跳到 `neis.ffcs.cn`，教学那边报
+ *  needs_credential。返回这条凭据更新后的完整站点列表。
+ *
+ *  **不碰密码**，所以没有 password 参数。 */
+export const addTeachingCredentialSite = (label: string, site: string) =>
+  rawInvoke<string[]>("teaching_credential_add_site", { label, site });
 
 /** 本机记过的凭据标签。**只有标签，没有密码** —— 密码始终只在系统凭据库里。
  *
@@ -68,6 +91,11 @@ export interface TeachingCredential {
   label: string;
   reference: string;
   createdAt: string;
+  /** 这条凭据管哪些网站（hostname）。tool-bridge 按 `page.url` 查的就是它。
+   *
+   *  老数据里没这个字段（Rust 侧 `skip_serializing_if`，空的就不写进文件），
+   *  所以这里是可选的。空 = 不参与按站点查找。 */
+  sites?: string[];
 }
 
 export const listTeachingCredentials = () =>

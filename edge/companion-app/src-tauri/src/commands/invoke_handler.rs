@@ -423,5 +423,6 @@ pub(crate) fn handler(
             crate::commands::teaching_credentials::teaching_credential_save,
             crate::commands::teaching_credentials::teaching_credential_list,
             crate::commands::teaching_credentials::teaching_credential_delete,
+            crate::commands::teaching_credentials::teaching_credential_add_site,
     ]
 }

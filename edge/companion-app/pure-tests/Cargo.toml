@@ -1,0 +1,22 @@
+# 只为了能在没有 GTK 的机器上跑 src-tauri 里的纯逻辑测试。
+#
+# tauri 在 Linux 要链 gdk-3.0 / webkit2gtk, CI 和沙箱里都装不上 —— 于是
+# `cargo test` 一次都跑不了, 判断逻辑全靠肉眼。8/18 加"按站点找密码"时
+# 这块正好是最容易出错的地方 (两边判据要一模一样), 不能不验。
+#
+# ⚠ 这里**不复制代码**, 用 #[path] 直接包真文件。复制一份出来测, 测的就是
+#   那个副本 —— 生产代码改了它一点感觉都没有。
+[package]
+name = "companion-pure-tests"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# 独立于任何 workspace —— 它挨着 src-tauri, 但不参与 app 构建。
+[workspace]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+url = "2"
+log = "0.4"
