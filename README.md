@@ -1,106 +1,117 @@
 # 鲶鱼（Catfish）· 企业 AI Agent 平台
 
-> **让每个员工拥有一个会上网、会收邮件、越用越懂他的数字副手**
->
-> 基于 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 深化构建。
+鲶鱼由员工侧 Companion、Hermes Agent 集成层和企业中央服务组成，支持在客户内网部署，并通过统一网关接入不同厂商的 LLM。
 
----
+当前仓库同时包含产品代码、客户交付材料和实验项目。第一次进入项目时，先按下面的入口阅读，不要从历史 CHANGELOG 开始。
 
-## 📖 入口文档
+## 当前入口
 
-**所有设计决策的权威来源**：
-👉 [`../catfish-design.md`](../catfish-design.md)
+| 目的 | 入口 |
+|---|---|
+| 当前版本、已验证能力和已知限制 | [`docs/STATUS.md`](docs/STATUS.md) |
+| 历史资料索引 | [`docs/HISTORICAL-MATERIALS.md`](docs/HISTORICAL-MATERIALS.md) |
+| 开发规范和文件拆分纪律 | [`AGENTS.md`](AGENTS.md)、[`docs/contributors/CONVENTIONS.md`](docs/contributors/CONVENTIONS.md) |
+| 中央服务开发 | [`central/README.md`](central/README.md) |
+| Companion 开发 | [`edge/companion-app/README.md`](edge/companion-app/README.md) |
+| Windows MSI / Burn 构建 | [`edge/companion-app/scripts/README-windows.md`](edge/companion-app/scripts/README-windows.md) |
+| 员工本地搜索安装 | [`onboarding/README.md`](onboarding/README.md) |
+| 客户部署 | [`README-FOR-CUSTOMERS.md`](README-FOR-CUSTOMERS.md)、[`DEPLOYMENT-RUNBOOK.md`](DEPLOYMENT-RUNBOOK.md) |
+| 历史变更记录 | [`CHANGELOG.md`](CHANGELOG.md) |
 
-读完它就懂：做什么 / 不做什么 / 为什么 / 4 周路线图 / 完整目录结构。
+## 目录边界
 
-**其他常看的**：
-- [`CHANGELOG.md`](CHANGELOG.md) — 每日进展日志
-- [`docs/IDEAS.md`](docs/IDEAS.md) — 核心完成后的"好玩功能"清单（18 个创意）
-- [`docs/operations/troubleshooting.md`](docs/operations/troubleshooting.md) — 运维故障排查
-- [`docs/contributors/CONVENTIONS.md`](docs/contributors/CONVENTIONS.md) — 代码规范
-- [`docs/contributors/AI-USAGE.md`](docs/contributors/AI-USAGE.md) — AI 协作与软著合规
+| 目录 | 实际职责 |
+|---|---|
+| `central/` | 企业中央服务：LLM Gateway、Identity、MCP Registry、Skills Hub、Web、Wiki Hub、Telemetry |
+| `edge/` | 员工侧组件：Companion、Hermes fork/customization、tool-bridge、local-search、浏览器和邮件能力 |
+| `plugins/` | Catfish 的策略、认证和遥测插件 |
+| `connectors/` | 外部系统连接器定义和适配说明 |
+| `skills/` | 可发布的 Hermes/Catfish skill 包 |
+| `onboarding/` | 员工本地搜索和 Hermes 集成的跨平台安装脚本 |
+| `delivery/` | 客户交付包和特定客户部署材料，不是通用产品安装器 |
+| `infra/` | Docker、Kubernetes、Terraform 等基础设施材料 |
+| `docs/` | 当前状态、架构、运维、决策和历史资料 |
+| `projects/` | 与主产品并行的独立项目，例如 Daosheng 方案材料 |
+| `scripts/` | 仓库维护、审计和验证脚本，不是业务运行时 |
 
----
+### 中央服务
 
-## 🏗️ 目录速查
+- `central/llm-gateway/`：模型路由、配额、审计和策略入口。
+- `central/identity-server/`：用户、OIDC/SSO 和组织身份。
+- `central/mcp-registry/`：MCP 连接器注册和订阅。
+- `central/skills-hub/`：技能发布、审核和版本管理。
+- `central/web/`：面向组织管理员和运营人员的中央 Web 门户。
+- `central/wiki-hub/`：组织知识内容服务。
+- `central/telemetry/`：可选的匿名遥测服务。
 
-| 目录 | 职责 | 状态 |
-|---|---|:---:|
-| `central/llm-gateway/` | ✅ LLM 治理网关 | 已完成 |
-| `central/skills-hub/` | 组织级技能市场 | P1 |
-| `central/mcp-registry/` | 内部系统连接器 | P1 |
-| `central/secret-broker/` | 短期令牌发放 | P1 |
-| `central/distribution/` | 分发安装脚本 | P0.5 |
-| `central/telemetry/` | 匿名遥测 | P1 |
-| `edge/companion-app/` | ★ 员工桌面 App（Email Agent 主载体） | Week 3 |
-| `edge/hermes-customizations/` | Hermes 深化（Browser Agent） | Week 2 |
-| `edge/web-ui/` | 极简浏览器 UI | P2 |
-| `plugins/catfish-policy/` | ✅ 红线策略 | 代码完成 |
-| `plugins/catfish-gateway-auth/` | SSO 自动配置 | P0 剩余 |
-| `plugins/catfish-telemetry/` | 客户端侧遥测 | P1 |
-| `connectors/` | MCP 连接器（Jira/Confluence/GitLab） | P1 |
-| `skills/` | Hermes skill 包 | Week 3 起 |
-| `installer/` | 一键安装器 | P0.5 |
-| `docs/` | 文档（模块架构、运维、贡献指南） | 持续 |
-| `infra/` | IaC (Docker/K8s/Terraform) | 按需 |
-| `scripts/` | 平台团队运营脚本 | 按需 |
-| `tests/` | 跨服务测试 | 持续 |
+### 员工侧
 
----
+- `edge/companion-app/`：Tauri 2 桌面应用，包含 React 前端和 Rust 后端。
+- `edge/hermes-fork/`：Hermes 上游版本、离线安装补丁和升级辅助脚本。
+- `edge/hermes-plugins/`：Catfish 对 Hermes 的插件扩展。
+- `edge/tool-bridge/`：本地工具桥接和沙箱能力。
+- `edge/local-search/`：员工本地文件搜索。
+- `edge/browser-agent/`、`edge/email-agent/`：浏览器和邮件相关边缘能力。
 
-## 📏 代码规范（必读）
+## 当前工作基线
 
-- [`docs/contributors/CONVENTIONS.md`](docs/contributors/CONVENTIONS.md) — 规模约束、拆分时机、AI 协作规则
-- [`docs/contributors/AI-USAGE.md`](docs/contributors/AI-USAGE.md) — AI 辅助协作与软著合规规范
+- Companion 版本：`0.20.0`。
+- macOS：使用 Companion 专用的 arm64/x64 构建、签名和 DMG/notarization 脚本。
+- Windows：在 Windows 机器上使用 `build-msi-local.ps1` 生成 x64 MSI；WiX Burn 一键安装器正在独立实施中。
+- 中央服务：各服务拥有自己的 `pyproject.toml` 或 `package.json`，不要在仓库根目录创建统一虚拟环境来替代服务环境。
+- Windows/macOS 的大型运行时资源在构建时生成，通常不直接提交到 Git。
 
-**提交前三件套自检**：
-```bash
-bash scripts/check_file_sizes.sh       # 扫文件尺寸
-bash scripts/check_ai_tells.sh         # 扫 AI 痕迹（软著合规）
-ruff check src/                        # 静态检查
-```
+## 常用开发命令
 
----
-
-## 🚀 今天能跑起来的
+### 启动 LLM Gateway
 
 ```bash
 cd central/llm-gateway
 python3.12 -m venv venv
 source venv/bin/activate
 pip install -e ".[dev]"
-cp .env.example .env  # 填入 INTERNAL_LLM_KEY 和 CATFISH_DEV_TOKEN
+cp .env.example .env
 python -m catfish_gateway.app
 ```
 
-然后另开终端：
+网关测试脚本位于 `central/llm-gateway/scripts/`，例如：
+
 ```bash
-./scripts/test_chat.sh
+bash central/llm-gateway/scripts/test_chat.sh
 ```
 
-端到端验证见设计文档 §11。
+### 开发 Companion
 
----
+```bash
+cd edge/companion-app
+npm install
+npm run tauri:dev
+```
 
-## 🧭 三大能力支柱
+当前不应使用 `npm run tauri:build` 作为发布命令；该命令在 `package.json` 中被有意禁用，因为它不会准备内嵌运行时。macOS 发布请使用：
 
-### 1. Browser Agent（Week 2）
-让 agent 自己操作 Chrome 完成网页任务。基础是 Hermes 已有的 browser tools，要做多模态、登录态、多tab 深化。
+```bash
+npm run tauri:build:arm64
+# 或
+npm run tauri:build:x64
+```
 
-**不是**"员工用浏览器跟 agent 聊天"。
+### 构建 Windows MSI
 
-### 2. Email Agent → Companion App（Week 3–4）
-员工通过**全局快捷键 Ctrl+Shift+A** 召唤浮窗。浮窗+Chrome 各司其职：浮窗是指挥中心，Chrome 是工作台。100% 客户端路径，不依赖邮件服务器（因为 IMAP 企业已关）。
+必须在 Windows 主机执行：
 
-### 3. Self-Evolution（Week 1）
-Hermes 自带的 memory/skill/cross-session search + 我们新搭的 Skills Hub。先验证 Hermes 现有机制真跑通，再叠组织层。
+```powershell
+cd E:\catfish\edge\companion-app
+powershell -ExecutionPolicy Bypass -File scripts\build-msi-local.ps1
+```
 
----
+跨编译脚本 `scripts/build-windows.sh` 只能生成用于验证的 raw `.exe`，不能替代 MSI 或 Burn 发布包。
 
-## 🎯 下一步
+## 变更前检查
 
-- **今晚/明天**：休息，明天连内网后测 `catfish-private-main`（内部 Qwen3.5）
-- **Week 1**：Self-Evolution 体检
-- **Week 2+**：按设计文档 §9 推进
+```bash
+bash scripts/check_file_sizes.sh --strict
+git diff --check
+```
 
-Built with ☤ by Catfish Platform Team.
+修改 Python、TypeScript、Rust 或 JavaScript 后，必须按 [`AGENTS.md`](AGENTS.md) 执行文件长度检查和对应测试。不要提交密码、证书、真实 `.env`、运行时目录或编译产物。

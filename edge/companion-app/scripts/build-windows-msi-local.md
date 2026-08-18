@@ -1,337 +1,131 @@
-# 本地 Windows msi build SOP
+# Windows x64 MSI 本地构建
 
-**目的**: 免 CircleCI 依赖 · 在你自己 Windows 机器上打 catfish Companion msi. 后续每次 15-20 min.
+本文只描述当前可用的 MSI 构建流程。它不是 Burn Bootstrapper 文档；Burn 完成后会另有独立构建入口。
 
-**版本**: v0.20.0 (8/18)
-**测试环境**: Windows 11 (Win10 21H2+ 应该也 OK) · x86_64
+## 产物边界
 
----
+| 产物 | 作用 |
+|---|---|
+| raw `.exe` | 只验证 Windows target 编译，不是安装包 |
+| Companion `.msi` | Tauri/WiX 主程序包，当前 Windows 测试安装包 |
+| Burn `Setup.exe` | 计划中的员工一键安装器，尚未由本脚本生成 |
 
-## 一次性 · 装 prerequisites (~30 min)
+当前脚本：`edge/companion-app/scripts/build-msi-local.ps1`。
 
-以下 5 个工具 · **管理员** 打开 PowerShell 跑, 或用**普通 PowerShell + winget** 装:
+## 前置条件
 
-### 1. Rust (MSVC toolchain · x86_64-pc-windows-msvc)
+在 Windows x64 主机安装：
 
-```powershell
-# 装 rustup + Rust 1.90 (跟 CircleCI config.yml 里 pin 的一致)
-# 若已装 rustup · 跳
-Invoke-WebRequest -Uri "https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe" -OutFile "$env:TEMP\rustup-init.exe"
-& "$env:TEMP\rustup-init.exe" -y --default-toolchain 1.90.0 --profile minimal --default-host x86_64-pc-windows-msvc
-# 加 PATH · 已装 rustup 会自动加
-$env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+| 工具 | 要求 |
+|---|---|
+| Rust | MSVC toolchain，包含 `x86_64-pc-windows-msvc` target |
+| Node.js | 22.x，包含 npm/npx |
+| WiX | 3.14，`candle.exe` 和 `light.exe` 在 PATH，或位于 `%USERPROFILE%\.wix314` |
+| Git | 能访问 Catfish 和 Hermes 仓库 |
+| Python | Python 3，可运行 Hermes patch 脚本 |
+| tar | Windows 自带版本或 Git/其他发行版提供的可用版本 |
 
-# 验证
-rustc --version    # 期望 rustc 1.90.0
-cargo --version
-```
+脚本启动时会再次检查 `rustc`、`cargo`、`node`、`npm`、`npx`、`git`、`python`、`tar` 和 WiX `candle.exe`。
 
-### 2. Node.js 22 (含 npm + npx)
+建议至少准备 5GB 可用磁盘空间：Rust 编译缓存、Hermes Node 依赖、Chromium 解压目录和 MSI 中间文件会同时存在。
 
-```powershell
-# winget 装最简 (下载 8-10 min · winget 自动加 PATH)
-winget install OpenJS.NodeJS.LTS --version 22.14.0
-
-# 验证 (可能需要新开 PowerShell 让 PATH 生效)
-node --version    # 期望 v22.14
-npm --version
-```
-
-### 3. WiX 3.14 (msi 打包)
+## 构建命令
 
 ```powershell
-# 下载 WiX 3.14 binary zip (Tauri v2 要求 3.11+, 我们用 3.14)
-$wixZip = "$env:TEMP\wix314.zip"
-$wixDir = "$env:USERPROFILE\.wix314"
-Invoke-WebRequest -Uri "https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip" -OutFile $wixZip
-Expand-Archive -Path $wixZip -DestinationPath $wixDir -Force
-# 加 PATH · 让 candle.exe / light.exe 全局可调
-[Environment]::SetEnvironmentVariable("PATH", "$wixDir;$env:PATH", "User")
-$env:PATH = "$wixDir;$env:PATH"
-
-# 验证
-candle.exe -?     # 期望看到 WiX help 输出
-light.exe -?
+cd E:\catfish\edge\companion-app
+powershell -ExecutionPolicy Bypass -File scripts\build-msi-local.ps1
 ```
 
-### 4. Git (你已装 · 若无:)
+脚本会自动定位仓库根目录，并依次完成：
+
+1. `git pull origin main`；
+2. 按 `.hermes-git-tag` 拉取 Hermes，并校验 `.hermes-target-version`；
+3. 注入 `edge/hermes-plugins/` 中的 Catfish plugins；
+4. 安装 Hermes 目录下需要的 npm 依赖，并打包全局 npm 包；
+5. 生成带离线参数的 `install.ps1`；
+6. 下载 uv 和 CPython embed zip；
+7. 用 Playwright dry-run 解析 Chromium 地址，再用 `curl.exe` 下载、解压和校验 `.exe`，最后打包 `chromium-embed.tar.gz`；
+8. 打包 `hermes-agent-bundle.tar.gz`；
+9. 准备 Tauri 校验所需的 macOS placeholder；
+10. 安装 Companion 前端依赖并运行 Tauri/WiX MSI 构建。
+
+Chromium 步骤不应手动再运行 `npx playwright install chromium`。当前脚本已经把下载、解压和校验拆开并打印阶段日志，避免下载进度到 100% 后长时间静默。
+
+## 可选跳过参数
+
+只有在对应缓存已经通过上一次构建验证后，才使用这些参数：
 
 ```powershell
-winget install Git.Git
+powershell -ExecutionPolicy Bypass -File scripts\build-msi-local.ps1 `
+  -SkipHermesClone `
+  -SkipNpmInstall `
+  -SkipChromium `
+  -SkipFrontendInstall
 ```
 
-### 5. Python 3 (patch 脚本用)
+不要只因为文件存在就跳过资源校验。特别是 Chromium 目录和 Hermes `node_modules` 被杀毒软件或中断构建破坏时，应删除缓存后重新准备。
 
-```powershell
-# Python 3.11+ · Tauri 项目里的 patch_install_ps1_offline.py 需要
-winget install Python.Python.3.12
-# 验证
-python --version
+## Windows 资源
+
+资源目录：
+
+```text
+edge/companion-app/src-tauri/resources/windows/
 ```
 
----
+最终构建至少需要以下非空文件：
 
-## 每次 build msi (15-20 min)
-
-### Step 1 · 拉 catfish 最新代码
-
-```powershell
-cd E:\catfish  # 或你 clone 的地方
-git pull origin main
+```text
+install.ps1
+uv.exe
+cpython-3.11.15-embed.zip
+hermes-agent-bundle.tar.gz
+chromium-embed.tar.gz
 ```
 
-### Step 2 · 拉 hermes-agent pinned tag (复现 CircleCI clone step)
+这些大型资源由构建脚本生成，默认不提交到 Git。仓库里的空 placeholder 只用于让 Tauri 跨平台校验通过，不能直接拿来生成可用 MSI。
 
-```powershell
-$ErrorActionPreference = 'Stop'
-$HERMES_TAG = (Get-Content .\edge\companion-app\.hermes-git-tag -Raw).Trim()
-$HERMES_VER = (Get-Content .\edge\companion-app\.hermes-target-version -Raw).Trim()
-Write-Host "Cloning hermes-agent tag=$HERMES_TAG (pyproject version=$HERMES_VER)"
+## 输出位置
 
-$hermesDir = "$env:TEMP\hermes-agent-src"
-if (Test-Path $hermesDir) { Remove-Item -Recurse -Force $hermesDir }
-git clone --depth 1 --branch $HERMES_TAG https://github.com/NousResearch/hermes-agent.git $hermesDir
-
-# verify 版本
-$verLine = Select-String -Path "$hermesDir\pyproject.toml" -Pattern '^version'
-$actualVer = ($verLine.Line -replace '^version\s*=\s*"([^"]+)".*', '$1').Trim()
-if ($actualVer -ne $HERMES_VER) {
-    throw ".hermes-git-tag ($HERMES_TAG) => pyproject $actualVer, expected $HERMES_VER"
-}
-Write-Host "OK version match: $HERMES_VER"
+```text
+edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/
 ```
 
-### Step 3 · Copy catfish plugins 进 hermes-agent-src
-
-```powershell
-$hermesDir = "$env:TEMP\hermes-agent-src"
-New-Item -ItemType Directory -Force -Path "$hermesDir\plugins\memory" | Out-Null
-foreach ($plugin in @('catfish-memory', 'catfish-todo-sync')) {
-    $src = "edge\hermes-plugins\$plugin"
-    if (Test-Path $src) {
-        Copy-Item -Recurse -Force $src "$hermesDir\plugins\memory\$plugin"
-        Write-Host "OK copied $plugin"
-    } else {
-        Write-Host "WARN: $src missing"
-    }
-}
-```
-
-### Step 4 · Pre-install npm deps + npm pack 全局包
-
-```powershell
-$hermesDir = "$env:TEMP\hermes-agent-src"
-
-# A. 本地 npm install · 装到 node_modules/
-$env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = '1'
-$pkgFiles = Get-ChildItem -Path $hermesDir -Recurse -Filter "package.json" -Depth 4 -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -notmatch '\\node_modules\\' }
-foreach ($pkg in $pkgFiles) {
-    $pkgDir = $pkg.DirectoryName
-    Write-Host "===== npm install in $pkgDir ====="
-    Push-Location $pkgDir
-    try {
-        if (Test-Path "$pkgDir\package-lock.json") {
-            npm ci --no-audit --no-fund --loglevel=error
-        } else {
-            npm install --no-audit --no-fund --loglevel=error
-        }
-        if ($LASTEXITCODE -ne 0) { throw "npm install failed in $pkgDir" }
-    } finally { Pop-Location }
-}
-
-# B. npm pack agent-browser + camofox 到 node-globals/
-$globalsDir = "$hermesDir\node-globals"
-New-Item -ItemType Directory -Force -Path $globalsDir | Out-Null
-Push-Location $globalsDir
-try {
-    npm pack "agent-browser@^0.26.0" "@askjo/camofox-browser@^1.5.2" --loglevel=error
-    if ($LASTEXITCODE -ne 0) { throw "npm pack failed" }
-    $tgzList = Get-ChildItem -Filter "*.tgz"
-    Write-Host "OK $($tgzList.Count) global .tgz packed"
-} finally { Pop-Location }
-```
-
-### Step 5 · Patch install.ps1 · offline 模式
-
-```powershell
-python edge\hermes-fork\patch_install_ps1_offline.py `
-    --input "$env:TEMP\hermes-agent-src\scripts\install.ps1" `
-    --output edge\companion-app\src-tauri\resources\windows\install.ps1
-if ($LASTEXITCODE -ne 0) { throw "patch failed" }
-```
-
-### Step 6 · 下载 uv + repack cpython
-
-```powershell
-# uv.exe
-$UV_VERSION = '0.4.30'
-$uvUrl = "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-x86_64-pc-windows-msvc.zip"
-$uvZip = "$env:TEMP\uv.zip"
-Invoke-WebRequest -Uri $uvUrl -OutFile $uvZip
-$uvExtract = "$env:TEMP\uv-extract"
-if (Test-Path $uvExtract) { Remove-Item -Recurse -Force $uvExtract }
-Expand-Archive -Path $uvZip -DestinationPath $uvExtract -Force
-Copy-Item "$uvExtract\uv.exe" edge\companion-app\src-tauri\resources\windows\uv.exe -Force
-
-# cpython 3.11.15
-$PYTHON_VER = '3.11.15'
-$BUILD_TAG = '20260623'
-$FNAME = "cpython-${PYTHON_VER}+${BUILD_TAG}-x86_64-pc-windows-msvc-install_only.tar.gz"
-$URL = "https://github.com/astral-sh/python-build-standalone/releases/download/${BUILD_TAG}/${FNAME}"
-$tarPath = "$env:TEMP\cpython.tar.gz"
-$extractDir = "$env:TEMP\cpython-extract"
-Invoke-WebRequest -Uri $URL -OutFile $tarPath
-if (Test-Path $extractDir) { Remove-Item -Recurse -Force $extractDir }
-New-Item -ItemType Directory -Path $extractDir | Out-Null
-tar -xzf $tarPath -C $extractDir
-$expectedName = "cpython-${PYTHON_VER}-windows-x86_64-none"
-Rename-Item -Path "$extractDir\python" -NewName $expectedName
-$outZip = "$PWD\edge\companion-app\src-tauri\resources\windows\cpython-${PYTHON_VER}-embed.zip"
-if (Test-Path $outZip) { Remove-Item -Force $outZip }
-Compress-Archive -Path "$extractDir\$expectedName" -DestinationPath $outZip -Force
-```
-
-### Step 7 · Install Playwright Chromium + 打包
-
-```powershell
-$hermesDir = "$env:TEMP\hermes-agent-src"
-Push-Location $hermesDir
-try {
-    Write-Host "===== npx playwright install chromium (下载 ~170MB compressed / 解压 ~350MB) ====="
-    # 由 build-msi-local.ps1 自动执行 dry-run → curl 下载 → tar/Expand-Archive 解压，
-    # 不要手动执行 npx playwright install；该命令在 Windows CI 曾出现下载 100% 后静默卡住。
-} finally { Pop-Location }
-
-$pwCacheDir = "$env:LOCALAPPDATA\ms-playwright"
-if (-not (Test-Path $pwCacheDir)) { throw "Playwright cache 目录不存在" }
-$chromiumDirs = Get-ChildItem $pwCacheDir -Directory -Filter "chromium*"
-Write-Host "OK Playwright chromium: $($chromiumDirs.FullName -join ', ')"
-
-$outTar = "$PWD\edge\companion-app\src-tauri\resources\windows\chromium-embed.tar.gz"
-Push-Location $pwCacheDir
-try {
-    $chromiumNames = @(Get-ChildItem -Directory -Filter "chromium*" | ForEach-Object { $_.Name })
-    if ($chromiumNames.Count -eq 0) { throw "无 chromium* 目录" }
-    tar czf $outTar @chromiumNames
-    if ($LASTEXITCODE -ne 0) { throw "tar chromium failed" }
-} finally { Pop-Location }
-Write-Host "OK chromium-embed.tar.gz: $([math]::Round((Get-Item $outTar).Length/1MB,1)) MB"
-```
-
-### Step 8 · Pack hermes-agent bundle
-
-```powershell
-$outTar = "$PWD\edge\companion-app\src-tauri\resources\windows\hermes-agent-bundle.tar.gz"
-Push-Location $env:TEMP
-try {
-    tar czhf $outTar `
-        --exclude=hermes-agent-src/.git `
-        --exclude=hermes-agent-src/venv `
-        --exclude=hermes-agent-src/venv.bak `
-        --exclude=hermes-agent-src/.venv `
-        --exclude=hermes-agent-src/target `
-        hermes-agent-src
-    if ($LASTEXITCODE -ne 0) { throw "tar hermes failed" }
-} finally { Pop-Location }
-Write-Host "OK hermes-agent-bundle.tar.gz: $([math]::Round((Get-Item $outTar).Length/1MB,1)) MB"
-```
-
-### Step 9 · 建 mac resources 空 placeholder (tauri validate 需要)
-
-```powershell
-$macDir = "edge\companion-app\src-tauri\resources\mac"
-New-Item -ItemType Directory -Force -Path $macDir | Out-Null
-foreach ($f in @('install.sh', 'uv', 'cpython-3.11.15-embed.tar.gz', 'hermes-agent-bundle.tar.gz')) {
-    $p = "$macDir\$f"
-    if (-not (Test-Path $p)) { Set-Content -Path $p -Value '' }
-}
-```
-
-### Step 10 · npm install 前端 · tauri build msi
-
-```powershell
-cd edge\companion-app
-
-# 前端 deps (只第一次)
-npm install --loglevel=error
-
-# tauri build msi
-$env:PATH = "$env:USERPROFILE\.wix314;$env:USERPROFILE\.cargo\bin;$env:PATH"
-npx tauri build --target x86_64-pc-windows-msvc --bundles msi --verbose
-```
-
-### Step 11 · 拿到 msi
+检查产物：
 
 ```powershell
 $msiDir = "src-tauri\target\x86_64-pc-windows-msvc\release\bundle\msi"
-Get-ChildItem $msiDir -Filter "*.msi" | Select-Object Name, @{N='MB';E={[math]::Round($_.Length/1MB,1)}}
-# 期望: Catfish Companion_0.18.0_x64_zh-CN.msi · ~1100 MB
+Get-ChildItem $msiDir -Filter "*.msi" |
+  Select-Object Name, @{N='MB';E={[math]::Round($_.Length / 1MB, 1)}}
 ```
 
-装完直接:
-```powershell
-Start-Process msiexec.exe -ArgumentList "/i","`"$PWD\$msiDir\Catfish Companion_0.18.0_x64_zh-CN.msi`"","/l*v","`"$env:USERPROFILE\Downloads\catfish-msi-local-verbose.log`"" -Wait
-```
-
----
-
-## 常见坑
-
-### A. Rust `stack overflow` (link.exe 挂)
-
-Rust 装完后 · target 得加:
-```powershell
-rustup target add x86_64-pc-windows-msvc
-```
-
-### B. Node.js 版本不对 · npm ci 挂
-
-用 nvm-windows 装多版本:
-```powershell
-winget install CoreyButler.NVMforWindows
-nvm install 22.14.0
-nvm use 22.14.0
-```
-
-### C. WiX candle.exe 找不到
-
-**必须**加 WiX 到 PATH · 且用 3.14 (Tauri v2 支持 3.11+, 我们 pin 3.14):
-```powershell
-$env:PATH = "$env:USERPROFILE\.wix314;$env:PATH"
-```
-
-### D. tauri build 挂 `resource not found`
-
-检查 `resources/windows/` 里 4 个真文件是否都在 (uv.exe / cpython.zip / hermes-bundle.tar.gz / chromium-embed.tar.gz).
-
-### E. 磁盘空间 · 需要至少 5 GB free
-
-chromium 350MB + hermes-agent 200MB + cpython 47MB + tar 中间产物 + Rust build cache 2-3GB.
-
----
-
-## 一键脚本 (全自动跑 Step 2-11)
-
-若你嫌手动跑麻烦, 可以另存下面为 `build-msi-local.ps1` 一键跑:
+## 安装测试和日志
 
 ```powershell
-# 见文件 edge/companion-app/scripts/build-msi-local.ps1 (待写)
+$msi = Get-ChildItem "src-tauri\target\x86_64-pc-windows-msvc\release\bundle\msi\*.msi" |
+  Select-Object -First 1
+$log = "$env:USERPROFILE\Downloads\catfish-msi-local-verbose.log"
+Start-Process msiexec.exe -ArgumentList @(
+  "/i", $msi.FullName,
+  "/l*v", $log
+) -Wait
 ```
 
----
+当前 MSI 仍包含较大的离线 Runtime，并可能在安装期间执行较长的 post-install。遇到安装界面长时间无反馈时，先查看 `$log`；Burn Bootstrapper 的目标就是移除这种体验问题。
 
-## 加速 tips
+## 构建前检查
 
-- **加 `--no-audit --no-fund`** 到 npm install · 省 30 秒
-- **Rust build cache** 首次 15 min · 后续 2-3 min (增量)
-- **hermes-agent clone** cache 到 `%TEMP%\hermes-agent-src` · 若 Step 2 已跑 · 后续 Step 3-8 可复用 (不用重 clone)
-- **Playwright chromium** 只需装 1 次 · 后续 `$env:LOCALAPPDATA\ms-playwright\` 会缓存
+```powershell
+Get-ChildItem "edge\companion-app\src-tauri\resources\windows" |
+  Where-Object { $_.Name -in @(
+    'install.ps1', 'uv.exe', 'cpython-3.11.15-embed.zip',
+    'hermes-agent-bundle.tar.gz', 'chromium-embed.tar.gz'
+  ) } |
+  Select-Object Name, Length
+```
 
----
+任何资源为 0 字节都不能继续生成正式 MSI。
 
-## 支持
+## 与 macOS 的关系
 
-- 装完 msi 若 chat 401 · 那是 gateway URL / OIDC 配置问题, 不是 msi 问题
-- 装 msi 若 CustomAction 挂 · 看 verbose log:
-  `Get-Content $env:USERPROFILE\Downloads\catfish-msi-local-verbose.log | Select-String "CatfishRunInstall|Return value"`
+本脚本只在 Windows 上生成 Windows MSI。macOS 发布使用 Companion `package.json` 中的 `tauri:build:arm64` 或 `tauri:build:x64`，不要用本脚本替代 macOS 构建。

@@ -1,10 +1,10 @@
-# 鲶鱼 · 项目仪表盘 (PROJECT STATUS) ⚠️ DEPRECATED
+# 鲶鱼 · 项目仪表盘 (PROJECT STATUS) ⚠️ 历史文档
 
-> **本 doc 已停止更新, 主入口迁到 [`docs/FEATURE-TRACKS.md`](FEATURE-TRACKS.md) (2026-05-03).**
+> **本 doc 已停止更新。当前状态请看 [`docs/STATUS.md`](STATUS.md)。**
 
 ---
 
-## 看现状 / 下一步 / Phase % → [`docs/FEATURE-TRACKS.md`](FEATURE-TRACKS.md)
+## 历史参考 → [`docs/FEATURE-TRACKS.md`](FEATURE-TRACKS.md)
 
 ## 看每日 ship 日记 → [`CHANGELOG.md`](../CHANGELOG.md)
 

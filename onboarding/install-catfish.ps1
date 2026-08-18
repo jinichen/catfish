@@ -73,15 +73,12 @@ if (-not $PythonBin) {
 }
 
 # 定位 catfish 项目根
+# 不依赖仓库外的 catfish-design.md：该文件不是 GitHub 仓库内容，不能作为安装前置。
 $ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$CatfishRoot = $null
-if (Test-Path "$ScriptDir\..\catfish-design.md") {
-    $CatfishRoot = (Get-Item "$ScriptDir\..").FullName
-} elseif (Test-Path ".\catfish-design.md") {
-    $CatfishRoot = (Get-Location).Path
-}
-if (-not $CatfishRoot) {
-    Err "找不到 catfish 项目根（需要 catfish-design.md 同级目录）"
+$CatfishRoot = (Resolve-Path (Join-Path $ScriptDir "..")).Path
+if (-not (Test-Path (Join-Path $CatfishRoot "README.md")) -or
+    -not (Test-Path (Join-Path $CatfishRoot "edge\local-search\pyproject.toml"))) {
+    Err "找不到 catfish 项目根或 edge\local-search（请从完整仓库运行脚本）"
     exit 1
 }
 Ok "catfish 项目根：$CatfishRoot"

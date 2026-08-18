@@ -1,48 +1,29 @@
-# Windows msi Resources (W1 BL-CATFISH-OFFLINE-INSTALL 7/11)
+# Windows 构建资源
 
-msi 打包时内嵌到 `INSTALLDIR/hermes/` 的 4 个 artifact.
-员工机装完点 Companion.msi → wix CustomAction 跑 `install.ps1` 全离线装 hermes.
+本目录是 Windows 构建时的资源输入目录。大型运行时资源通常由 Windows 本地构建脚本生成，不直接提交到 Git。
 
-## 4 个 artifact (打包时产出, 不进 git)
+## 正式资源
 
-| 文件 | 大小 (est) | 来源 | 打包命令 |
-|---|---|---|---|
-| `install.ps1` | ~130 KB | 上游 `~/.hermes/hermes-agent/scripts/install.ps1` + catfish offline patch | `python3 ../../../hermes-fork/patch_install_ps1_offline.py --input ~/.hermes/hermes-agent/scripts/install.ps1 --output install.ps1` |
-| `uv.exe` | ~15 MB | astral python-build-standalone (Windows x64 build) | `bash ../../scripts/build-windows-resources.sh` step 2 |
-| `cpython-3.11.15-embed.zst` | ~30 MB | astral python-build-standalone (Windows x64 build) | `bash ../../scripts/build-windows-resources.sh` step 3 |
-| `hermes-agent-bundle.tar.gz` | ~150-200 MB | git clone hermes-agent 上游 tag → tar 打包 | `bash ../../scripts/build-windows-resources.sh` step 4 |
+| 文件 | 用途 | 生成入口 |
+|---|---|---|
+| `install.ps1` | Hermes 离线安装脚本 | `edge/hermes-fork/patch_install_ps1_offline.py` |
+| `uv.exe` | Python/运行时管理 | `scripts/build-msi-local.ps1` |
+| `cpython-3.11.15-embed.zip` | Windows Python embed | `scripts/build-msi-local.ps1` |
+| `hermes-agent-bundle.tar.gz` | Hermes 源码和离线 Node 依赖 | `scripts/build-msi-local.ps1` |
+| `chromium-embed.tar.gz` | Playwright Chromium 离线资源 | `scripts/build-msi-local.ps1` |
 
-**总 msi 体积估算**: ~330-400 MB (含 Tauri Companion ~20 MB + WebView2 bootstrapper).
+## 构建规则
 
-## 打包 (macOS/Linux dev 机跑一次, CI 每 release 跑)
+在 Windows 主机从 Companion 目录执行：
 
-```bash
-cd edge/companion-app
-bash src-tauri/scripts/build-windows-resources.sh
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build-msi-local.ps1
 ```
 
-脚本干 4 步: (1) 跑 patch tool → 出 offline install.ps1 (2) 下 uv-windows-x86_64 (3) 下 cpython-3.11.15 windows-x86_64 zst (4) tar hermes-agent 源码.
+构建脚本会按 `.hermes-git-tag` 和 `.hermes-target-version` 校验 Hermes 版本，并在打包前检查资源是否非空。不要用空 placeholder 生成正式 MSI。
 
-## 上游 pin (drift 保护)
+仓库中的 placeholder 只用于满足 Tauri 的跨平台资源路径校验；它们不是员工安装时可用的运行时资源。
 
-- `install.ps1` SHA256 由 `patch_install_ps1_offline.py` 硬 pin. 上游变了 → exit 1 报错要求 audit.
-- hermes-agent 版本由 `edge/companion-app/.hermes-target-version` pin. build script 读这个决定 tar 哪个 tag.
-- uv / Python 版本由 build script 顶部常量 pin.
+## MSI 与 Burn 的边界
 
-## Placeholder + git (W2.6 fix 7/11)
-
-**4 个 artifact 名称的 empty placeholder 必须进 git**, 否则 tauri build 跨平台
-validate 挂 (`resource path ... doesn't exist`). Tauri v2 `WindowsConfig` 无
-platform-specific `resources` 字段 (config.rs:1042-1085), `bundle.resources`
-top-level 声明**所有 build target 都 validate**.
-
-流程:
-- **macOS build (今天)**: 用 empty placeholder, 打进 dmg 的是 4 个 <1KB 空文件,
-  实际 macOS app 不用这些 Windows-only 资源, 无功能影响
-- **Windows build (Week 3 集成阶段)**:
-  1. `bash src-tauri/scripts/build-windows-resources.sh` 覆盖 placeholder 成真文件
-  2. `npx tauri build --target x86_64-pc-windows-msvc --bundles msi` 出 msi
-  3. `git checkout resources/windows/*.{exe,ps1,zip,gz}` 恢复空 placeholder,
-     working tree clean
-
-见 `.gitignore` (log/temp 排除, 4 个 placeholder 空文件 track).
+当前 MSI 仍通过 WiX/Tauri 处理运行时资源。Burn Bootstrapper 完成后，Windows 员工安装应改用 Burn 生成的 `Catfish-Companion-Setup.exe`，而不是直接分发这个 MSI。

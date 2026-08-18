@@ -2,6 +2,8 @@
 
 把这个仓库给到新员工（或者 IT 批量推），员工跑一条命令就能装好本地搜索 + Hermes 集成，开始用。
 
+> 本文只覆盖本地搜索和 Hermes MCP 集成，不覆盖 Companion 桌面应用、中央服务或 Windows MSI。桌面应用安装请看 `edge/companion-app/README.md`。
+
 ## 装了什么
 
 - **`catfish-search`** CLI —— 员工电脑上的文件全文搜索（Office/PDF/代码/笔记 40+ 格式）
@@ -114,11 +116,11 @@ catfish-search daemon uninstall
 # 连索引库和配置都清掉
 rm -rf ~/.catfish/
 
-# 连员工 venv 也删
-rm -rf ~/.catfish/venv/    # 已包含在上一条的 rm -rf ~/.catfish/ 里
+# 连员工 venv 也删（已包含在上一条命令中）
+rm -rf ~/.catfish/venv/
 ```
 
-Windows 版卸载类似：运行 `.\onboarding\uninstall-catfish.ps1`（如果准备了）或手工按上面步骤做。
+Windows 版目前没有仓库内的统一卸载脚本；可从“应用和功能”卸载相关组件，或按实际安装路径手工删除 `%USERPROFILE%\.catfish` 和计划任务。不要把不存在的 `uninstall-catfish.ps1` 当成当前入口。
 
 ## 排错
 
@@ -148,4 +150,4 @@ trusted-host = pypi.intra.company.com
 
 ## 架构说明（给好奇的员工）
 
-鲶鱼 Catfish 的边缘能力都装在员工自己的 Mac / PC 上，不往公司服务器发数据。具体看 `catfish-design.md` 第 4 章"边缘主权"。
+鲶鱼 Catfish 的边缘能力都装在员工自己的 Mac / PC 上；具体数据边界以仓库内的 [`docs/CENTRAL-EDGE-DATA-BOUNDARY.md`](../docs/CENTRAL-EDGE-DATA-BOUNDARY.md) 为准。

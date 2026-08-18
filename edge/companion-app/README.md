@@ -1,120 +1,99 @@
-# Catfish Companion App
+# Catfish Companion
 
-鲶鱼平台的桌面伴侣应用 —— 让员工在浏览器和终端之外，
-有一个常驻桌面入口管理本地 Catfish 组件、看会话状态、查个人配额。
+Catfish Companion 是员工侧桌面应用，不是 Hermes Agent 本体，也不是中央管理后台。
 
-## 定位
+它负责把员工需要的本地能力放到一个桌面入口中，包括会话、身份、配额、技能、浏览器自动化和本地运行时状态。组织级的用户、部门、模型、配额和技能管理位于 `central/web/`，通过网关和身份服务与 Companion 连接。
 
-这不是 Hermes Agent 本身（Hermes 仍在终端里跑），
-也不是 Catfish 中央 Web 控制台（那是浏览器里给管理员看的）。
+## 当前状态
 
-Companion App 是给**员工本人**用的桌面工具，单窗口三 tab：
+- Tauri 2（Rust + WebView）桌面应用。
+- React 18 + TypeScript + Vite 前端。
+- macOS arm64/x64 构建链已存在，发布还需要本机签名和 notarization 凭据。
+- Windows x64 raw cross-build 和 Windows MSVC/WiX MSI 本地构建链已存在。
+- WiX Burn Bootstrapper 正在作为 MSI 之外的一键安装入口实施，见 [`docs/plans/2026-08-18-wix-burn-bootstrapper.md`](../../docs/plans/2026-08-18-wix-burn-bootstrapper.md)。
 
-1. **Console（控制台）** —— 一键启停本地 Catfish 组件
-   （llm-gateway / Catfish Chrome / local-search），实时日志，
-   状态点亮红或绿
-2. **Sessions（会话）** —— 看当前所有 Hermes 会话，最近的输出、
-   token 占用，从这里拉起新会话
-3. **Dashboard（仪表盘）** —— 当前身份（SOUL / skin / SSO）、
-   本月配额、可用模型清单、装了哪些 skills/MCP
+当前版本号由以下三个文件保持一致：
 
-## 设计哲学
-
-> 员工不应该 care HTTPS_PROXY 这种系统级状态。
->
-> Companion App 的责任是把 Catfish 各组件的复杂度（端口、进程、
-> 代理状态、上游可达性）藏进单个桌面应用里，员工打开看到的应该是
-> "✓ 一切正常，可以干活了" 或者 "✗ Clash 没起，点这里修"。
-
-## 技术栈
-
-- **Tauri 2.0**（Rust 后端 + WebView 前端，包体 ~10MB，内存 ~50MB）
-- **React 18 + TypeScript + Vite**
-- **Zustand**（轻量状态管理，避开 Redux 样板）
-- **macOS + Windows** 双平台
-
-## 项目结构
-
+```text
+edge/companion-app/package.json
+edge/companion-app/src-tauri/Cargo.toml
+edge/companion-app/src-tauri/tauri.conf.json
 ```
+
+## 目录
+
+```text
 companion-app/
-├── src-tauri/        # Rust 后端
-│   └── src/
-│       ├── commands/        # 暴露给前端的 invoke 命令
-│       │   ├── gateway.rs       # llm-gateway 启停/状态
-│       │   ├── chrome.rs        # Catfish Chrome (9222)
-│       │   ├── local_search.rs  # local-search MCP
-│       │   ├── health.rs        # 调 gateway HTTP
-│       │   ├── logs.rs          # tail 日志 → 事件流
-│       │   ├── sessions.rs      # 读 Hermes 会话目录
-│       │   └── system.rs        # 通知/内存/自启动
-│       ├── services/        # 内部进程管理（前端不可见）
-│       └── tray/            # menubar 托盘
-├── src/              # React 前端
-│   ├── tabs/
-│   │   ├── Console/
-│   │   ├── Sessions/
-│   │   └── Dashboard/
-│   ├── components/
-│   ├── lib/
-│   ├── hooks/
-│   ├── store/
-│   └── types/
-└── docs/
-    ├── ARCHITECTURE.md  # 进程模型 / IPC 约定
-    └── BRANDING.md      # 品牌色 / 字体 / 间距
+├── src/                         # React 页面、组件、hooks、store、API client
+├── public/                      # 前端静态资源
+├── src-tauri/
+│   ├── src/                     # Rust commands、services、tray、运行时管理
+│   ├── resources/               # 构建时注入的 macOS/Windows 运行时资源
+│   ├── scripts/                 # 资源准备和文件解析脚本
+│   └── wix/                     # Windows MSI WiX 模板和旧版 post-install fragment
+├── scripts/                     # 开发、发布、签名、Windows 本地构建脚本
+├── package.json                 # 前端和 Tauri 命令入口
+└── README.md
 ```
 
 ## 开发
 
 ```bash
+cd edge/companion-app
 npm install
-npm run tauri:dev       # 开发模式（前端热更新 + Rust 热编译）
-npm run tauri:build     # 打包（macOS .dmg / Windows .msi）
+npm run tauri:dev
 ```
 
-详见 `docs/ARCHITECTURE.md`。
-
-## 状态
-
-🚧 **骨架阶段** —— 目录已建，配置文件占位，业务代码尚未填充。
-
-下一步：填 `src-tauri/src/commands/gateway.rs`（最简单的 health 探测）作为第一个能跑的 invoke 路径，验证 Rust ↔ React 通路。
-
-
-## 发版 / 版本号同步 (5/5 鸿波"是不是硬编码"修)
-
-版本号有 **3 处 build 元数据需手动同步**（任何前端 / Rust / Tauri 项目通用做法）：
-
-```
-src-tauri/tauri.conf.json    "version": "0.x.y"   ← Tauri app bundle 真源头
-src-tauri/Cargo.toml         version = "0.x.y"    ← Rust crate
-package.json                 "version": "0.x.y"   ← npm
-```
-
-**运行时显示**全部从这 3 个里读，不再单独维护：
-
-- `IdentityCard` 的"鲶鱼版本" 走 `@tauri-apps/api/app::getVersion()` 读 `tauri.conf.json`
-- `edge/branding/catfish` shell 入口 `_resolve_catfish_version` 从仓库找 `package.json`
-
-发版步骤 (例 0.1.0 → 0.2.0)：
+只验证前端：
 
 ```bash
-# 1. 改 3 处 build 元数据
-sed -i '' 's/"version": "0\.1\.0"/"version": "0.2.0"/' \
-    src-tauri/tauri.conf.json package.json
-sed -i '' 's/^version = "0\.1\.0"$/version = "0.2.0"/' \
-    src-tauri/Cargo.toml
-
-# 2. 验证 3 处一致
-grep -E '"version"|^version' \
-    src-tauri/tauri.conf.json package.json src-tauri/Cargo.toml
-
-# 3. tauri build → 桌面 app 用新版, IdentityCard / catfish CLI 自动跟随
-npm run tauri:build
-
-# 4. tag + commit
-git commit -am "release v0.2.0"
-git tag -a v0.2.0 -m "..."
+npm run build
+npm test
 ```
 
-未来可加 `scripts/bump-version.sh` 一行脚本同步 3 处, 但 demo 前不做.
+## macOS 发布
+
+发布命令会准备对应架构的运行时资源、构建应用、检查架构、签名并生成 DMG：
+
+```bash
+npm run tauri:build:arm64
+# 或
+npm run tauri:build:x64
+```
+
+签名和 notarization 需要在 macOS 上配置 Developer ID 证书、私钥和 `notarytool` Keychain profile。不要把证书、`.p12`、密码或真实 profile 信息提交到仓库。
+
+## Windows 发布
+
+### raw `.exe` 跨编译
+
+在 macOS 上执行：
+
+```bash
+bash scripts/build-windows.sh
+```
+
+该命令只用于验证 Windows target 能否编译，不能生成正式 MSI，也不负责 Authenticode 签名。
+
+### x64 MSI 本地构建
+
+在 Windows 主机执行：
+
+```powershell
+cd E:\catfish\edge\companion-app
+powershell -ExecutionPolicy Bypass -File scripts\build-msi-local.ps1
+```
+
+脚本会根据 `.hermes-git-tag` 和 `.hermes-target-version` 准备 Hermes，下载并打包 Python、uv、Chromium，最后运行 Tauri/WiX 生成 MSI。完整前置条件和产物位置见 [`scripts/build-windows-msi-local.md`](scripts/build-windows-msi-local.md)。
+
+当前 MSI 仍然是底层程序包；面向员工的一键安装入口将使用 Burn Bootstrapper，不能把 MSI 内部的长时间 Runtime post-install 当成最终用户体验。
+
+## 相关代码边界
+
+- 中央网关：`central/llm-gateway/`
+- 本地工具桥：`edge/tool-bridge/`
+- Hermes fork 和离线补丁：`edge/hermes-fork/`
+- Hermes 插件：`edge/hermes-plugins/`
+- 中央 Web 管理台：`central/web/`
+
+Companion 内部只负责员工侧体验和本地进程/运行时协调；组织级权限、模型目录、部门配额等应通过中央服务获取，不在 Companion 内复制一套管理逻辑。

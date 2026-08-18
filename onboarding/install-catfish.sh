@@ -111,16 +111,12 @@ PY_VER=$("$PYTHON_BIN" --version | awk '{print $2}')
 ok "Python $PY_VER ($PYTHON_BIN)"
 
 # 定位 catfish 项目根
-CATFISH_ROOT=""
+# 不依赖仓库外的 catfish-design.md：该文件不是 GitHub 仓库内容，不能作为安装前置。
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "$SCRIPT_DIR/../catfish-design.md" ]; then
-    CATFISH_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-elif [ -f "$PWD/catfish-design.md" ]; then
-    CATFISH_ROOT="$PWD"
-fi
-if [ -z "$CATFISH_ROOT" ]; then
-    err "找不到 catfish 项目根（需要包含 catfish-design.md 的目录）"
-    echo "    解决：把项目 clone 到员工机器，然后在项目根下跑这个脚本。"
+CATFISH_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+if [ ! -f "$CATFISH_ROOT/README.md" ] || [ ! -f "$CATFISH_ROOT/edge/local-search/pyproject.toml" ]; then
+    err "找不到 catfish 项目根或 edge/local-search（请从完整仓库运行脚本）"
+    echo "    解决：先 clone 完整 catfish 仓库，再运行 onboarding/install-catfish.sh。"
     exit 1
 fi
 ok "catfish 项目根：$CATFISH_ROOT"

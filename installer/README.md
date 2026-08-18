@@ -1,46 +1,33 @@
-# catfish-installer（一键安装器）
+# 安装器目录说明
 
-> **状态**：🟡 P0.5（推广种子员工前做）
->
-> **定位**：员工的入口。一条命令装好 Hermes + 配置 + Companion App + SSO 首次登录。
+这里目前只保留安装器产品边界说明，尚未放置一个可发布的统一安装器实现。
 
----
+## 当前可用的两个入口
 
-## 职责
+### 员工本地搜索 / Hermes 集成
 
-1. 检查/安装前置依赖（Python / pip / git）
-2. 用官方源装 Hermes（`pip install hermes-agent`）
-3. 从公司分发源装 catfish 插件
-4. 下载并安装 Companion App
-5. 写入默认配置到 `~/.hermes/config.yaml`
-6. 触发首次 SSO 登录
-7. 订阅员工部门的 starter skill pack
+使用仓库根目录的：
 
----
-
-## 员工使用
-
-```bash
-curl -fsSL https://catfish.internal.company.com/install | bash
+```text
+onboarding/install-catfish.sh
+onboarding/install-catfish.ps1
 ```
 
----
+它们负责创建员工侧 `~/.catfish` / `%USERPROFILE%\.catfish` 环境，安装 `catfish-search`，并在 Hermes 已安装时注册本地 MCP。它们不负责安装 Companion、中央服务或 Windows MSI。
 
-## 目录结构
+### Companion 桌面应用
 
-```
-installer/
-├── install.sh              # 对外入口脚本
-├── bootstrap.py            # 交互式配置生成
-├── config-template/
-│   └── hermes-config.yaml
-└── verify.py               # 安装后冒烟测试
-```
+- macOS：见 `edge/companion-app/README.md` 和 `scripts/README-deploy.md`。
+- Windows MSI：见 `edge/companion-app/scripts/README-windows.md`。
+- Windows 一键安装器：WiX Burn Bootstrapper 正在实施，计划见 `docs/plans/2026-08-18-wix-burn-bootstrapper.md`。
 
----
+## 不要使用的旧设计
 
-## 设计注意
+以下内容只是早期设想，目前没有对应的实现文件，因此不能按此 README 执行：
 
-- 不要在脚本里嵌入任何秘密
-- 代理环境友好（自动处理 HTTP_PROXY/NO_PROXY）
-- 升级也走同一套（`bash <(curl ...) --upgrade`）
+- `installer/install.sh`
+- `installer/bootstrap.py`
+- `installer/verify.py`
+- `curl https://catfish.internal.company.com/install | bash`
+
+真正的客户交付包位于 `delivery/`，中央服务分发设计位于 `central/distribution/`；两者都不是通用员工安装器。

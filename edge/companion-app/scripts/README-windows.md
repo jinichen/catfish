@@ -1,50 +1,69 @@
-# Windows 客户端构建 (BL-WIN1, 5/8)
+# Windows 构建入口
 
-## 目标范围 (今晚做的)
+Windows 构建有两种用途，不能混用：
 
-只做 cross-build (mac 出 Windows .exe), **不做** 验证 / 真机跑通 / MSI 打包 / 代码签名.
-出包之后拷 Windows 机器手动装 WebView2 Runtime, 双击 .exe 看能不能起来.
+| 入口 | 运行环境 | 产物 | 用途 |
+|---|---|---|---|
+| `build-windows.sh` | macOS/Linux | raw `x86_64-pc-windows-gnu` `.exe` | 验证 Rust/前端能否编译到 Windows |
+| `build-msi-local.ps1` | Windows x64 | WiX/Tauri `.msi` | 正式 MSI 本地构建和离线资源打包 |
+| Burn 构建脚本 | Windows x64 | `Catfish-Companion-Setup.exe` | 面向员工的一键安装入口，正在实施 |
 
-## 跑
+## 1. raw `.exe` 跨编译
+
+在 macOS 或 Linux 上执行：
 
 ```bash
-cd ~/person_task/catfish/edge/companion-app
-./scripts/build-windows.sh
+cd edge/companion-app
+bash scripts/build-windows.sh
 ```
 
-输出: `src-tauri/target/x86_64-pc-windows-gnu/release/catfish-companion-app.exe`
+该流程只能验证代码和 Rust target，不能完成以下工作：
 
-第一次会装 mingw-w64 (`brew install mingw-w64`) + Rust target x86_64-pc-windows-gnu.
+- 生成 MSI 或 Burn Bootstrapper；
+- Authenticode 签名；
+- 准备离线 Hermes、Python、uv、Chromium 运行时；
+- 验证 Windows 真机安装和升级。
 
-## 已经做的 (代码层)
+## 2. 正式 MSI 本地构建
 
-- Cargo `[target.x86_64-pc-windows-gnu]` linker 配置 (`src-tauri/.cargo/config.toml`)
-- `src-tauri/src/commands/speech.rs` 已经有 Windows stub (whisper 录音返"暂不支持"), 不阻塞编译
-- `src-tauri/src/lib.rs:400` macOS-only 的 RunEvent::Reopen 已 cfg-gated
-- `src-tauri/src/services/process.rs` Unix / Windows 双路径已写
-- Tauri `keyring = "3"` crate 自动支持 Windows Credential Manager (替代 mac Keychain)
+必须在 Windows x64 主机执行。完整步骤见 [`build-windows-msi-local.md`](build-windows-msi-local.md)：
 
-## 还没做的 (BL-WIN2 / WIN3 / WIN4 — 真要 Windows 客户上线时分批做)
+```powershell
+cd E:\catfish\edge\companion-app
+powershell -ExecutionPolicy Bypass -File scripts\build-msi-local.ps1
+```
 
-| BL | 说明 | 工作量 |
-|---|---|---|
-| BL-WIN2 | tool-bridge `secret_resolver` 加 `credman://` 替代 `keychain://` (mac 专用) | 半天 |
-| BL-WIN3 | catfish-browser-launcher Windows Chrome 路径自动检测 (`%ProgramFiles%\Google\Chrome\Application\chrome.exe`) | 1-2 小时 |
-| BL-WIN4 | email-agent `outlook_win.py` (pywin32 COM 调 Outlook) | 1-2 天 |
-| BL-WIN5 | local-search `daemon_windows.py` (Windows Service 或 startup folder) | 半天 |
-| BL-WIN6 | MSI / NSIS installer + Authenticode 签名 (需 Windows 机器 + 证书) | 半天 + 证书申请 |
-| BL-WIN7 | sandbox.py Windows AppContainer (代替 sandbox-exec) — 安全侧, 不阻塞 demo | 2-3 天 |
+脚本会自动：
 
-## 已知限制 (cross-build)
+- 拉取 `.hermes-git-tag` 指定的 Hermes 版本并校验 `.hermes-target-version`；
+- 注入 Catfish plugins；
+- 准备 Python、uv 和 Chromium 离线资源；
+- 打包 Hermes 及其已安装的 Node 依赖；
+- 运行 Tauri/WiX 生成 x64 MSI。
 
-- ✗ **不能签名**: signtool 只 Windows
-- ✗ **不能出 MSI**: WiX 只 Windows
-- ✗ **不能出 NSIS**: makensis 在 mac 上能装 (`brew install makensis`) 但 Tauri-bundler 这条路径有 bug
-- ✓ **能出 raw .exe**: 拷过去手动跑
+前置工具：Rust MSVC、Node.js 22、Git、Python 3、WiX 3.14，以及可用的 `tar`。脚本会自行检查工具是否存在。
 
-## demo 5/14 的策略建议
+MSI 输出目录：
 
-- **方案 A** (推荐): demo **mac 上跑**. Windows 客户端等到 demo 之后正式分批做 (BL-WIN2+).
-- **方案 B**: 如果客户必须 Windows demo, 找一台 Windows 真机, 把 BL-WIN2 / WIN3 优先级提前, 5/12 之前 ship.
+```text
+edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/
+```
 
-不建议路径: cross-build 出 .exe 直接拿到客户现场跑 — 因为没真机验证过, 现场撞 bug 没救.
+## 3. Burn Bootstrapper
+
+MSI 是底层程序包，不是最终员工安装体验。Burn 方案会把 Companion MSI 和离线 Runtime 安装器串成一个有进度、有检测、有恢复能力的 `Catfish-Companion-Setup.exe`。
+
+实施计划：[`docs/plans/2026-08-18-wix-burn-bootstrapper.md`](../../../docs/plans/2026-08-18-wix-burn-bootstrapper.md)
+
+在 Burn 完成前，不要把当前超大 MSI 宣传为最终“一键安装器”。
+
+## 4. 签名
+
+Windows 正式发布还需要在 Windows 机器上使用 Authenticode 证书和 `signtool.exe` 签名。签名证书、私钥和密码不能进入仓库或构建日志。
+
+## 5. 常见判断
+
+- 需要验证编译：使用 `build-windows.sh`。
+- 需要给测试人员 MSI：使用 `build-msi-local.ps1`。
+- 需要给员工的一键安装包：等待 Burn Bootstrapper 构建完成。
+- 不能在 macOS 上把 raw `.exe` 直接当成 Windows 安装包。

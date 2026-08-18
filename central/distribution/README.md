@@ -1,8 +1,16 @@
 # 分发服务
 
-> **状态**：🟡 P0.5（推广种子员工时做）
+> **状态**：设计占位，尚未形成可发布的分发服务实现。
 >
-> **定位**：托管安装脚本 / 私有 PyPI / 策略包签名 / Companion App 安装包。
+> **定位**：未来托管安装脚本、私有 PyPI、策略包签名和 Companion 安装包的分发服务。
+
+当前不要把本目录当成安装入口：
+
+- 员工本地搜索/Hermes 集成：`onboarding/`；
+- macOS Companion 发布：`edge/companion-app/`；
+- Windows MSI：`edge/companion-app/scripts/build-msi-local.ps1`；
+- Windows 一键安装器：WiX Burn 仍在实施；
+- 客户特定交付包：`delivery/`。
 
 ---
 
