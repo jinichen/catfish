@@ -17,7 +17,7 @@
 
 **4. catfish_recognize_captcha** — 有验证码时调这个走 vision OCR, 返 `{text, confidence}`. 别让 LLM 自己 OCR (不准).
 
-**5. catfish_browser_fill** — 填用户名密码. 密码用 `secret_for_site=true` (按当前页站点自动取本机凭据, 你不用知道任何 ref, 也**不要问员工**). 没存过会返 `needs_credential` —— 告诉员工在下面的框里存一次, 然后你再调一次同样的.
+**5. catfish_browser_fill** — 填用户名密码. 密码**直接调** `secret_for_site=true`, 不预告不确认. 没存过会返 `needs_credential`, Companion 自动在那条 tool call 底下弹密码框 —— **框是 tool 结果渲染的, 不调 tool 就没有框**, 所以绝不许在没调过的情况下说"请在下面的密码框输入".
 
 **6. catfish_browser_click** 提交.
 
@@ -55,6 +55,8 @@ catfish_browser_click(coordinates=[300, 400])  // 直接点登录按钮位置
 
 ```
 [bad]
+// 没调 fill 就让员工去输密码 —— 那个框根本不会出现 (8/18 实撞)
+"请你在下面的密码框里输入你的 EIS 密码"   // ✗ 前面一次 fill 都没调
 catfish_browser_click(selector='text=登录')  // 撞 placeholder 密码框翻车
 catfish_browser_find_by_text(text='登录')    // 不传 role 还是 placeholder 撞
 ```
