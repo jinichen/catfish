@@ -80,35 +80,77 @@ def _read_id_token() -> str | None:
         return None
 
 
-def _capture_via_playwright(selector: str, timeout_ms: int = 8000) -> bytes | None:
-    """Playwright locator.screenshot(selector) — 拿 PNG bytes."""
+def _capture_via_playwright(selector: str, timeout_ms: int = 8000) -> tuple[bytes | None, str]:
+    """Playwright locator.screenshot(selector) — 返 (PNG bytes, 失败原因)。
+
+    # 为什么返两个值 (8/18)
+
+    原来只返 `bytes | None`, 上层看到 None 就报固定的一句:
+
+        "无法截 selector=... 的图. selector 写错? 页面没开 browser? Playwright 死了?"
+
+    三个猜测**全是错的方向**, 而真因根本不在里面 —— 见下面那条 import。
+    真异常只进了 logger.warning, 员工和 LLM 都看不到。所以现在把原因带上去。
+
+    # 那条 import bug (这个函数曾经 100% 失败)
+
+    老代码写的是:
+
+        from . import catfish_tools
+        catfish_tools._import_playwright()            ← 不存在
+        catfish_tools._connect_playwright_browser(p)  ← 不存在
+
+    `catfish_tools.py` 只从 catfish_tools_browser re-export 了 7 个 `browser_*`
+    公开函数, 这两个下划线私有的**一个都没导**。于是必然 AttributeError。
+
+    而 AttributeError 不是 RuntimeError, 穿过 `except RuntimeError` 那层, 被
+    最外面的 `except Exception` 吞成 warning → 返 None → 上层报"selector 写错?"。
+
+    实测对照: 同一个页面同一个 selector, `catfish_browser_screenshot` 每次都成功
+    (它直接用本模块的函数), 这里每次都失败。也就是说 catfish_recognize_captcha
+    从写下这行起就没成功过一次。
+
+    ⚠ browser_locate.py 有一模一样的两行, 8/18 一起修了。
+    """
     try:
-        from . import catfish_tools  # noqa: PLC0415
-        sync_playwright = catfish_tools._import_playwright()
+        # 这两个函数在 catfish_tools_browser 里, 不在 catfish_tools。
+        # 直接从定义它们的模块导 —— 别再绕 re-export, 那正是老 bug 的成因。
+        try:
+            from .catfish_tools_browser import (  # noqa: PLC0415
+                _connect_playwright_browser,
+                _import_playwright,
+            )
+        except ImportError:  # 独立脚本模式 (无父包)
+            from catfish_tools_browser import (  # type: ignore  # noqa: PLC0415
+                _connect_playwright_browser,
+                _import_playwright,
+            )
+        sync_playwright = _import_playwright()
     except Exception as e:  # noqa: BLE001
         logger.warning("playwright 不可用: %s", e)
-        return None
+        return None, f"playwright 不可用: {type(e).__name__}: {e}"
 
     try:
         with sync_playwright() as p:
             try:
-                browser, context, page = catfish_tools._connect_playwright_browser(p)
-            except RuntimeError as e:
-                logger.warning("connect browser 失败: %s", e)
-                return None
+                # ⚠ 这里**不能**只 catch RuntimeError。老代码只 catch 它, 于是
+                #   AttributeError / ImportError 这类"代码写错了"的异常会伪装成
+                #   "浏览器连不上", 把排查方向带偏。
+                browser, context, page = _connect_playwright_browser(p)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("connect browser 失败: %s: %s", type(e).__name__, e)
+                return None, f"连不上浏览器: {type(e).__name__}: {e}"
             try:
                 # locator.screenshot 直接拿 element 截图, 不需要 full page
                 loc = page.locator(selector).first
                 png = loc.screenshot(timeout=timeout_ms)
-                return png
+                return png, ""
             except Exception as e:  # noqa: BLE001
-                logger.warning(
-                    "截 captcha selector=%s 失败: %s", selector, e
-                )
-                return None
+                logger.warning("截 captcha selector=%s 失败: %s", selector, e)
+                return None, f"截 {selector!r} 失败: {type(e).__name__}: {e}"
     except Exception as e:  # noqa: BLE001
         logger.warning("playwright 上下文异常: %s", e)
-        return None
+        return None, f"playwright 上下文异常: {type(e).__name__}: {e}"
 
 
 def _estimate_confidence(text: str, hint: str | None) -> float:
@@ -184,13 +226,17 @@ def recognize_captcha(args: dict[str, Any]) -> dict[str, Any]:
                 "error": f"image_b64 解码失败: {type(e).__name__}: {e}",
             }
     else:
-        png_bytes = _capture_via_playwright(selector)
+        png_bytes, why = _capture_via_playwright(selector)
         if png_bytes is None:
+            # 把**真原因**带出去。老版只给三个猜测 (selector 写错 / 没开浏览器 /
+            # Playwright 死了), 而 8/18 那次真因是代码里 import 拿错模块 ——
+            # 三个猜测一个都没沾边, 反而把排查带偏了一整轮。
             return {
                 "ok": False,
-                "error": (
-                    f"无法截 selector={selector!r} 的图. selector 写错? "
-                    "页面没开 browser? Playwright 死了? 先 catfish_browser_snapshot 查."
+                "error": f"无法截 selector={selector!r} 的图 — {why}",
+                "hint": (
+                    "先用 catfish_browser_screenshot 拿同一个 selector 试一下: "
+                    "它成功而这里失败, 就不是 selector 的问题。"
                 ),
             }
 

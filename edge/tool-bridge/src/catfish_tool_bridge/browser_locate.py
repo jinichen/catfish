@@ -122,9 +122,31 @@ def _capture_screenshot(
     timeout_ms: int = 8000,
 ) -> bytes | None:
     """Playwright 截图 — selector 截元素, 否则截 viewport / full_page."""
+    # 8/18: 这两个函数在 catfish_tools_browser 里, **不在 catfish_tools**。
+    #
+    # 老代码写的是 catfish_tools._import_playwright() /
+    # catfish_tools._connect_playwright_browser(p) —— 而 catfish_tools 只从
+    # catfish_tools_browser re-export 了 7 个公开的 browser_* 函数, 这两个
+    # 下划线私有的一个都没导, 必然 AttributeError。
+    #
+    # AttributeError 不是 RuntimeError, 穿过下面那层 except, 被外层
+    # `except Exception` 吞成 warning → 返 None → 上层报"截图失败"。
+    # 也就是说 catfish_browser_locate 从写下这行起就没成功过一次,
+    # 而 SOUL.md 的浏览器铁律里它是 find_by_text 找不到时的视觉兜底。
+    #
+    # 同款 bug 在 recognize_captcha.py, 8/18 一起修。
     try:
-        from . import catfish_tools  # noqa: PLC0415
-        sync_playwright = catfish_tools._import_playwright()
+        try:
+            from .catfish_tools_browser import (  # noqa: PLC0415
+                _connect_playwright_browser,
+                _import_playwright,
+            )
+        except ImportError:  # 独立脚本模式 (无父包)
+            from catfish_tools_browser import (  # type: ignore  # noqa: PLC0415
+                _connect_playwright_browser,
+                _import_playwright,
+            )
+        sync_playwright = _import_playwright()
     except Exception as e:  # noqa: BLE001
         logger.warning("playwright 不可用: %s", e)
         return None
@@ -132,9 +154,11 @@ def _capture_screenshot(
     try:
         with sync_playwright() as p:
             try:
-                browser, context, page = catfish_tools._connect_playwright_browser(p)
-            except RuntimeError as e:
-                logger.warning("connect browser 失败: %s", e)
+                # 不能只 catch RuntimeError —— 那会让 AttributeError / ImportError
+                # 这类"代码写错了"伪装成"浏览器连不上"。
+                browser, context, page = _connect_playwright_browser(p)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("connect browser 失败: %s: %s", type(e).__name__, e)
                 return None
             try:
                 if selector:
