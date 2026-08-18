@@ -117,6 +117,14 @@ custom-protocol = ["tauri/custom-protocol"]
 # commands/teaching_credentials/mod.rs 顶上有 compile_error! 守着。
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
+# 8/18: keyring 建出来的钥匙串条目只信任 Companion 自己, 而教学时读密码的是
+# tool-bridge (exec /usr/bin/security) —— 会卡在系统确认弹窗上 5 秒超时。
+# commands/teaching_credentials/mac_acl.rs 存完把 ACL 放开到「本程序 +
+# /usr/bin/security」, 要这三个直接依赖 (原来都只是传递依赖, use 不到)。
+# 版本跟 lock 里 keyring/apple-native 已经拉进来的对齐, 不多引一份。
+core-foundation = "0.9"     # 跟 lock 里 keyring/security-framework 已解析的对齐, 不多引一份
+security-framework-sys = "2.17"
+libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }

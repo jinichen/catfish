@@ -39,6 +39,9 @@ compile_error!(
     "keyring 只在 macOS / Windows 配了平台后端 (见 Cargo.toml)。\n     当前目标没配 —— 直接编过去的话 keyring 会用 mock store, \n     密码存了等于没存, 而且界面还显示成功。先去 Cargo.toml 加 [target.*] feature。"
 );
 
+#[cfg(target_os = "macos")]
+mod mac_acl;
+
 mod index;
 
 pub use index::TeachingCredential;
@@ -97,6 +100,19 @@ pub fn teaching_credential_save(
     entry_for(&target)?
         .set_password(&password)
         .map_err(|e| format!("保存到本机凭据库失败: {e}"))?;
+
+    // macOS: 把这条的 ACL 放开到「本程序 + /usr/bin/security」。
+    //
+    // 不做的话 keyring 建出来的条目只信任 Companion 自己, 而教学时读密码的是
+    // tool-bridge (exec /usr/bin/security) —— macOS 会弹窗要确认, 那个子进程
+    // 没人应答, 卡满 5 秒超时。8/18 鸿波截图实证过, 见 mac_acl.rs。
+    //
+    // ⚠ 失败**不**算保存失败 —— 密码这时候已经在钥匙串里了。最坏退化成
+    //   "读的时候要确认", 而不是"没存上"。所以只记 warning。
+    #[cfg(target_os = "macos")]
+    if let Err(e) = mac_acl::allow_tool_bridge_to_read(&target, ACCOUNT) {
+        log::warn!("密码已存入钥匙串, 但放开 ACL 失败 ({e}) —— 教学时读它可能会卡在系统弹窗上");
+    }
 
     let reference = reference_for(&target);
     // 索引写失败不能让"密码已经存进去了"这件事变成报错 —— 密码是主线,
