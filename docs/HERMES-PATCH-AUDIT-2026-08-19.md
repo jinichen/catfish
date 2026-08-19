@@ -10,6 +10,54 @@
 > 方法: AST 机械提取 37 个 patch 函数 → 逐个找它动的 hermes 目标 →
 > 对着本机 hermes 0.20.0 查上游现状。**每一行都有文件+行号，没有"应该"。**
 
+## ⚠ 修订 (同日, 鸿波问「你有仔细看过代码了吗」)
+
+**没有。这一版的方法有缺陷，先写在最前面。**
+
+第一版的 29/8 分类，是照着每个 patch 函数 **docstring 的第一行**分的，
+**没读实现**。37 个里真正读过代码的只有 6 个 (P19 / P36 / P40 / P25 / P12 / P13)。
+
+而这个仓库的 docstring 有一部分是坏的，例如:
+
+```
+_patch_p28_weixin_zh   wrap WeixinAdapter.send — : 真:** : 真:** : : : : : : : : : : :
+```
+
+拿这种东西当判据，正是这份文档想找的那类问题本身。
+
+补读之后**改了两条结论**:
+
+| patch | 第一版 | 修订后 | 依据 |
+|---|---|---|---|
+| **P26** cron REST | 部分冗余 | **仍需要** | 它挂的是 `_handle_cron_pause` / `_resume` / `_delete` (plugin_cron.py)，上游只有 `POST /api/cron/fire` —— **零重叠**，不是重复 |
+| **contextvars** | 上游只在一处用 copy_context | **部分重叠** | `gateway/platforms/api_server.py:5963` 注释明写「run_in_executor threads, so the profile scope must be re-entered」—— 上游知道这个问题，只处理了 profile scope；catfish 那个是全局 wrap `run_in_executor` |
+
+另外 **P16 的理由是错的**。它不是"签名比对"，而是性能补丁 ——
+plugin_session.py 的注释: 「hermes 原生 session_search 的 _discover mode
+**76-101s**，改走 catfish 340ms 快版」。而上游 `tools/session_search_tool.py`
+现在已经大改过 (dedup-by-lineage、FTS 扫描行数上限、compaction-archived 判别)，
+**到底还慢不慢读代码判不出来，必须实测**。
+
+### 修订后的账
+
+| 判定 | 个数 | |
+|---|---|---|
+| 证据确凿可退役 | **1** | P36 |
+| 疑似可退役，需实测 | **1** | P25 |
+| 仍需要 | **4** | P27 / P12 / P13 / **P26** |
+| 待实测才能定 | **2** | P16 (性能) / contextvars (覆盖范围) |
+
+### 这份 audit 还欠什么
+
+**29 个 A 类里只抽查了 4 个**实现 (P20 / `_patch_toolsets` / `_patch_memory_prefetch` /
+P4)，都站得住。但 4/29 不足以支撑"29 个全是产品功能"这个结论。
+
+要把它做实，剩下 25 个得逐个读实现。判据是同一条: **它动的是 catfish 自己的
+概念 (X-Catfish-User / picker / Companion / 审批 / 中文化)，还是在补 hermes 的缺。**
+
+在补完之前，这份文档的"29"只能当**上界**看 —— 真实的产品功能数 ≤ 29，
+冗余候选 ≥ 8。
+
 ## 结论先行
 
 **「很多 patch 已经冗余」这个假设，量化之后不成立。**
