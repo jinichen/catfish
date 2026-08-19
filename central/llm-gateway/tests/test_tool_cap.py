@@ -469,3 +469,94 @@ def test_sanitize_other_tool_descriptions_untouched():
     by_name = {t["function"]["name"]: t["function"]["description"] for t in result["tools"]}
     assert "Execute a Python script" in by_name["execute_code"]
     assert by_name["web_search"] == "Search the web for query"  # 不动
+
+
+# ─── 教学→凝固闭环不许被 cap 劈开 (8/19) ──────────────────────────
+#
+# 那天鸿波说"固化 eis-login SKILL", 模型连发 6 次 catfish_search_docs /
+# catfish_browser_fill, 参数却是 freeze_skill 的 (name / namespace / description)。
+# 看着像模型犯傻, 其实是**它够不着起点**:
+#
+#   catfish 有 78 个工具, cap 是 40, 砍 other 的尾巴, other 按字母序:
+#       catfish_freeze_skill  'f' 在砍点前 → 留着
+#       catfish_teach_start   't' 在砍点后 → 砍掉
+#
+#   而 freeze_skill 的前置条件就是先跑完一个 teach session。模型 tool_describe
+#   查得到 teach_start (那读完整 registry, 不受 cap 影响), 一调用发现清单里没有,
+#   就去抓最像的。
+#
+# 这几条钉的是**整组要么全在要么全不在**, 不是"某个名字在不在" —— 后者下次
+# 加个工具、字母序一动就又漂了。
+
+_TEACH_PIPELINE = ("catfish_teach_start", "catfish_teach_end", "catfish_freeze_skill")
+
+
+def test_教学凝固三件套不许被_cap_劈开():
+    """三个一起活, 或者一起死。只活两个 = 换一种劈法, 问题原样在。"""
+    survived = [t for t in _TEACH_PIPELINE if _ALWAYS_ON_TOOLS_contains(t)]
+    assert len(survived) in (0, 3), (
+        f"教学→凝固闭环被劈开了: 只有 {survived} 在 always-on。\n"
+        "freeze_skill 的前置条件是先跑完 teach session —— 少一个整条路就不可达, "
+        "而模型 tool_describe 查得到它们, 只是调不动, 表现成反复乱调别的工具。"
+    )
+    assert survived, "三个都不在 always-on —— 那就要确认 cap 之后它们仍然同进同出"
+
+
+def _ALWAYS_ON_TOOLS_contains(bare: str) -> bool:
+    """裸名和 MCP 包装名都要认 (BL-MCP-PREFIX-FIX)。"""
+    from catfish_gateway.tools_sanitizer_constants import is_always_on
+    return is_always_on(bare) and is_always_on(_mcp(bare))
+
+
+def test_教学三件套在真实工具规模下都活着(monkeypatch):
+    """端到端: 拿**真的** 78 个 catfish 工具名过一遍 cap。
+
+    造 78 个假名字测不出这个 bug —— 它是真实名字的字母序位置决定的。
+    """
+    from catfish_tool_bridge import catfish_tools  # noqa: PLC0415
+
+    bare = [
+        (s.get("function", {}) or {}).get("name") or s.get("name")
+        for s in catfish_tools.CATFISH_NATIVE_TOOLS
+    ]
+    bare = sorted(n for n in bare if n)
+    assert len(bare) > _DEFAULT_MAX_TOOLS, (
+        f"catfish 工具只有 {len(bare)} 个, 没超 cap({_DEFAULT_MAX_TOOLS}) —— "
+        "这条测试就测不到东西了, 说明 cap 或工具数变了, 去看是不是该调"
+    )
+
+    tools = [_tool(_mcp(n)) for n in bare]
+    kept, dropped = _cap_tools_by_priority(tools)
+    kept_names = {t["function"]["name"] for t in kept}
+
+    missing = [t for t in _TEACH_PIPELINE if _mcp(t) not in kept_names]
+    assert not missing, (
+        f"cap 之后教学链缺了 {missing} (共砍 {len(dropped)} 个)。\n"
+        "复用侧 (run_skill / skill_view / skills_list) 全在 always-on, "
+        "创建侧不能只靠字母序运气。"
+    )
+
+
+def test_一起丢也能被抓到():
+    """反向: 三个全从 always-on 拿掉时, 上面那条端到端测试必须变红。
+
+    没有这条的话, "全丢"会被 `len(survived) in (0, 3)` 放过去 —— 判据看着严,
+    实际留了个后门。
+    """
+    from catfish_gateway import tools_sanitizer_constants as K
+    from catfish_tool_bridge import catfish_tools
+
+    reduced = frozenset(K.ALWAYS_ON_TOOLS) - set(_TEACH_PIPELINE)
+    bare = sorted(
+        n for n in (
+            (s.get("function", {}) or {}).get("name") or s.get("name")
+            for s in catfish_tools.CATFISH_NATIVE_TOOLS
+        ) if n
+    )
+    with patch.object(K, "ALWAYS_ON_TOOLS", reduced):
+        ao = [n for n in bare if n in reduced]
+        other = [n for n in bare if n not in reduced]
+        kept = set(ao + other[: max(0, _DEFAULT_MAX_TOOLS - len(ao))])
+    # 拿掉之后, teach_start 一定掉出去 —— 这正是 8/19 线上的状态
+    assert "catfish_teach_start" not in kept
+    assert "catfish_freeze_skill" in kept, "freeze 靠字母序活着, 正是不对称的来源"
