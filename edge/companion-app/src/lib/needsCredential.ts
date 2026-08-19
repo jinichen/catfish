@@ -40,8 +40,14 @@ export interface CredentialRequest {
   pageTitle: string;
   /** 出问题的输入框，存完重试时给员工确认用。 */
   selector: string;
-  /** 本机已经存过哪些站点 —— 员工看到"eis 存过、neis 没存"才知道是多入口。 */
-  knownSites: string[];
+  // 8/19 删了 knownSites。
+  //
+  // 它被解析、被类型化、被测试, 然后**一处都没渲染** —— 界面上那排"跟本机已存的
+  // 某条用同一个密码"的按钮是 listTeachingCredentials() 来的, 不是它。
+  //
+  // 也不该由它来渲染: 点那个按钮要调 addTeachingCredentialSite(label, site), 要的
+  // 是**标签**, 而 known_sites 里只有 hostname。工具照旧回这个字段 (模型的 summary
+  // 用它说"本机已存: eis.ffcs.cn"), 前端不再假装用得上。
   /** 为什么要密码:
    *
    *   `missing`    索引里根本没这个站点
@@ -153,18 +159,42 @@ export function parseNeedsCredential(
   const site = str(o.site);
   if (!site) return null;
 
-  const known = Array.isArray(o.known_sites)
-    ? o.known_sites.map(str).filter(Boolean)
-    : [];
-
   return {
     site,
     reason: str(o.reason) === "missing" ? "missing" : "unreadable",
     pageUrl: str(o.page_url),
     pageTitle: str(o.page_title),
     selector: str(o.selector),
-    knownSites: known,
   };
+}
+
+/** 哪几条凭据可以"共用同一个密码"挂上来。
+ *
+ * # 为什么要过滤, 不能直接把列表铺出来
+ *
+ * 8/19 鸿波的截图: 只存了 `neis.ffcs.cn` 一条, 而当前页正是 neis.ffcs.cn。界面
+ * 一边说「neis.ffcs.cn 还没存过登录密码」, 一边在下面把 `neis.ffcs.cn` 列成
+ * 「本机已存的某条」让他点 —— 让一个站点挂到它自己身上。
+ *
+ * 点下去比看着更糟, 是**静默空转**:
+ *
+ *   addTeachingCredentialSite("neis.ffcs.cn", "neis.ffcs.cn")
+ *     → Rust 侧 site_owner 排除自己 → 不冲突
+ *     → sites 里已经有这个 host → `if !contains` 不成立 → 什么都不做
+ *     → 返回 Ok
+ *   → 前端当成功, finish() 发重试 → 模型重跑 → 同一个错再来一遍
+ *
+ * 员工看到的是"点了没反应, 再点还是没反应"。跟今天上午那个"存了三次都没用"
+ * 是同一种形状: 一个不会失败、也不会生效的动作。
+ *
+ * 判据: 已经覆盖当前站点的排除掉 —— 挂上去是空操作。label 恰好等于站点名的也
+ * 排除 (本 UI 新存一条时 label 就是 hostname)。
+ */
+export function linkableCredentials<T extends { label: string; sites?: string[] }>(
+  all: T[],
+  site: string,
+): T[] {
+  return all.filter((c) => c.label !== site && !(c.sites ?? []).includes(site));
 }
 
 /** 存完之后发给模型的那句话 —— 让它重试刚才那一步。

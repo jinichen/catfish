@@ -35,7 +35,11 @@ import {
   saveTeachingCredential,
   type TeachingCredential,
 } from "../../../lib/tauri";
-import { retryPrompt, type CredentialRequest } from "../../../lib/needsCredential";
+import {
+  linkableCredentials,
+  retryPrompt,
+  type CredentialRequest,
+} from "../../../lib/needsCredential";
 
 /** 发一条普通用户消息 —— 跟审批按钮同一条路 (ChatPanel 监听这个 event)。 */
 function sendToChat(text: string) {
@@ -144,11 +148,32 @@ export default function InlineCredentialPrompt({ req }: { req: CredentialRequest
     );
   }
 
+  // 能"共用同一个密码"的只有**没**覆盖当前站点的那几条。见 linkableCredentials。
+  const linkable = linkableCredentials(others, req.site);
+
   return (
     <div style={wrapStyle} onClick={(e) => e.stopPropagation()}>
+      {/* ⚠ 标题必须跟 reason 走。
+          8/19 鸿波截图: 📚 里明明列着 neis.ffcs.cn, 这里却写"还没存过登录密码"
+          —— 两个界面当着他的面互相打脸。这一轮走的是 unreadable (索引里有、
+          取不出来), 硬写"还没存过"就是在撒谎, 而且把人往"是不是我没存对"上带。 */}
       <div style={titleStyle}>
-        <strong>{req.site}</strong> 还没存过登录密码
+        {req.reason === "missing" ? (
+          <>
+            <strong>{req.site}</strong> 还没存过登录密码
+          </>
+        ) : (
+          <>
+            <strong>{req.site}</strong> 的密码存过了，但这次<strong>没取出来</strong>
+          </>
+        )}
       </div>
+      {req.reason !== "missing" && (
+        <div style={hintStyle}>
+          重新输一次会覆盖掉旧的那条。要是输完还是这样，就不是密码的问题 ——
+          说明取密码的通道断了，重启一下鲶鱼 Companion。
+        </div>
+      )}
       {req.pageTitle && <div style={hintStyle}>当前页：{req.pageTitle}</div>}
 
       <div style={rowStyle}>
@@ -175,12 +200,15 @@ export default function InlineCredentialPrompt({ req }: { req: CredentialRequest
 
       {/* 多入口: eis.ffcs.cn 存过了, 登录时跳到 neis.ffcs.cn。
           这时候不该让员工把同一个密码再输一遍 —— 输两遍就是两条凭据,
-          下次改密码只改一条，另一条继续用旧的，又回到 8/17 那个局面。 */}
-      {others.length > 0 && (
+          下次改密码只改一条，另一条继续用旧的，又回到 8/17 那个局面。
+
+          ⚠ 用 linkable 不是 others: 已经覆盖当前站点的那条挂上去是**静默空转**
+          (点了没反应, 再点还是没反应)。判据在 linkableCredentials, 那儿写了为什么。 */}
+      {linkable.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <div style={hintStyle}>或者：跟本机已存的某条用同一个密码</div>
           <div style={chipRowStyle}>
-            {others.map((c) => (
+            {linkable.map((c) => (
               <button
                 key={c.label}
                 type="button"

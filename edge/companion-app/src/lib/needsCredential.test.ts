@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { parseNeedsCredential, retryPrompt } from "./needsCredential";
+import { linkableCredentials, parseNeedsCredential, retryPrompt } from "./needsCredential";
 
 /** 两条路的工具名不一样, 默认用 hermes 那条 (线上实际走的)。 */
 const HERMES_TOOL = "mcp__catfish_tools__catfish_browser_fill";
@@ -37,7 +37,6 @@ describe("认出来", () => {
       pageUrl: "http://neis.ffcs.cn/cas/login?service=x",
       pageTitle: "福建电信 - 统一身份认证",
       selector: "#password",
-      knownSites: ["eis.ffcs.cn"],
     });
   });
 
@@ -55,17 +54,17 @@ describe("认出来", () => {
       pageUrl: "",
       pageTitle: "",
       selector: "",
-      knownSites: [],
     });
   });
 
-  it("known_sites 里的脏值滤掉", () => {
-    const got = P({
-      needs_credential: true,
-      site: "a.b.cn",
-      known_sites: ["x.cn", "", null, 42, "  y.cn  "],
-    });
-    expect(got?.knownSites).toEqual(["x.cn", "y.cn"]);
+  it("★ known_sites 不再解析 —— 它一处都没渲染过", () => {
+    // 8/19 删掉的。界面上那排"跟已存的某条共用"按钮是 listTeachingCredentials()
+    // 来的, 从来不是它。工具照旧回这个字段 (模型的 summary 用), 前端不碰。
+    const got = P({ needs_credential: true, site: "a.b.cn", known_sites: ["x.cn"] });
+    expect(got).not.toBeNull();
+    expect(Object.keys(got!).sort()).toEqual(
+      ["pageTitle", "pageUrl", "reason", "selector", "site"].sort(),
+    );
   });
 });
 
@@ -109,6 +108,58 @@ describe("不许认错", () => {
       expect(() => P(v)).not.toThrow();
       expect(P(v)).toBeNull();
     }
+  });
+});
+
+// ─────────── 「跟已存的某条共用密码」列谁 (8/19 鸿波截图) ───────────
+//
+// 只存了 neis.ffcs.cn 一条, 当前页正是 neis.ffcs.cn。界面一边说「还没存过登录
+// 密码」, 一边把 neis.ffcs.cn 列成「本机已存的某条」让他点 —— 挂到自己身上。
+//
+// 点下去比看着更糟, 是**静默空转**: Rust 侧 sites 里已经有这个 host, if !contains
+// 不成立, 什么都不做就返 Ok。前端当成功, 发重试, 模型重跑, 同一个错再来一遍。
+// 员工看到的是"点了没反应"。跟上午"存了三次都没用"是同一种形状。
+
+describe("能挂上来的才列", () => {
+  const C = (label: string, sites: string[]) => ({ label, sites });
+
+  it("★★★ 已经覆盖当前站点的那条不列 (挂上去是空操作)", () => {
+    const all = [C("neis.ffcs.cn", ["neis.ffcs.cn"])];
+    expect(linkableCredentials(all, "neis.ffcs.cn")).toEqual([]);
+  });
+
+  it("★ label 等于站点名也不列 —— 本 UI 新存一条时 label 就是 hostname", () => {
+    expect(linkableCredentials([C("neis.ffcs.cn", [])], "neis.ffcs.cn")).toEqual([]);
+  });
+
+  it("别的站点照常列 —— 多入口共用密码走的就是这条", () => {
+    const eis = C("EIS", ["eis.ffcs.cn"]);
+    expect(linkableCredentials([eis], "neis.ffcs.cn")).toEqual([eis]);
+  });
+
+  it("一条覆盖多个入口时, 只要含当前站点就不列", () => {
+    const both = C("EIS", ["eis.ffcs.cn", "neis.ffcs.cn"]);
+    expect(linkableCredentials([both], "neis.ffcs.cn")).toEqual([]);
+    expect(linkableCredentials([both], "oa.ffcs.cn")).toEqual([both]);
+  });
+
+  it("sites 缺字段 (老数据) 不炸, 照常列", () => {
+    const old = { label: "EIS" };
+    expect(linkableCredentials([old], "neis.ffcs.cn")).toEqual([old]);
+  });
+
+  it("混着来: 只滤掉该滤的那条, 顺序不变", () => {
+    const a = C("A", ["a.cn"]);
+    const self = C("neis.ffcs.cn", ["neis.ffcs.cn"]);
+    const b = C("B", ["b.cn"]);
+    expect(linkableCredentials([a, self, b], "neis.ffcs.cn")).toEqual([a, b]);
+  });
+
+  it("不同 host 就是不同 host —— 不做任何模糊匹配", () => {
+    // 后端 (credential_sites.host_of) 也不剥 www.、不退注册域。这里放宽的话
+    // 就成了第三份 hostname 规则, 正是这次要消灭的东西。
+    const www = C("W", ["www.neis.ffcs.cn"]);
+    expect(linkableCredentials([www], "neis.ffcs.cn")).toEqual([www]);
   });
 });
 
@@ -158,7 +209,6 @@ describe("hermes 信封", () => {
     expect(got).not.toBeNull();
     expect(got!.site).toBe("neis.ffcs.cn");
     expect(got!.selector).toBe("#pwd");
-    expect(got!.knownSites).toEqual(["eis.ffcs.cn"]);
     expect(got!.pageTitle).toBe("登录页");
   });
 
