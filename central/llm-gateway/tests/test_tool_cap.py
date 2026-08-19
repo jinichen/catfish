@@ -509,9 +509,18 @@ def _ALWAYS_ON_TOOLS_contains(bare: str) -> bool:
 
 
 def test_教学三件套在真实工具规模下都活着(monkeypatch):
-    """端到端: 拿**真的** 78 个 catfish 工具名过一遍 cap。
+    """端到端: 拿**真的** catfish 工具名 + hermes 那边的量一起过 cap。
 
-    造 78 个假名字测不出这个 bug —— 它是真实名字的字母序位置决定的。
+    ⚠ 第一版这里只放了 catfish 的 78 个 —— **算漏了 hermes 自己的 81 个**。
+      两边挤的是同一个 40。只算一半的后果: 我据此写下"freeze_skill 靠字母序活着,
+      只有 teach_* 被砍", 而真实情况是**三个全被砍**。判据比真事窄, 犯在诊断上,
+      得出的结论就是错的。
+
+      真实规模: 154 个工具 → always_on 吃掉 34 → 非 always_on 只剩 6 个位子。
+      也就是说 `catfish_*` 里凡是不在 always-on 的, 一个都进不去。
+
+    所以这里补上 hermes 那一侧的量。用假名字没关系 —— 它们的作用是**占位子**,
+    真正要验的是"三件套不受位子数影响"。
     """
     from catfish_tool_bridge import catfish_tools  # noqa: PLC0415
 
@@ -525,7 +534,12 @@ def test_教学三件套在真实工具规模下都活着(monkeypatch):
         "这条测试就测不到东西了, 说明 cap 或工具数变了, 去看是不是该调"
     )
 
-    tools = [_tool(_mcp(n)) for n in bare]
+    # hermes 那边 8/19 实测 81 个 (grep registry.register)。名字用 'a' 开头 ——
+    # 字母序排在所有 mcp__ 之前, 也就是**把非 always_on 的位子抢光**, 这正是
+    # 线上的样子。三件套要能在这种最坏情况下活着才算数。
+    hermes_side = [_tool(f"a_hermes_tool_{i:03d}") for i in range(81)]
+    tools = hermes_side + [_tool(_mcp(n)) for n in bare]
+
     kept, dropped = _cap_tools_by_priority(tools)
     kept_names = {t["function"]["name"] for t in kept}
 
@@ -533,7 +547,47 @@ def test_教学三件套在真实工具规模下都活着(monkeypatch):
     assert not missing, (
         f"cap 之后教学链缺了 {missing} (共砍 {len(dropped)} 个)。\n"
         "复用侧 (run_skill / skill_view / skills_list) 全在 always-on, "
-        "创建侧不能只靠字母序运气。"
+        "创建侧不能只靠字母序运气 —— 位子早就被抢光了。"
+    )
+
+
+def test_always_on_快把_cap_吃满了():
+    """always_on 逼近 cap 时报警。
+
+    8/19 实测: always_on 34, cap 40 → 非 always_on 只剩 **6** 个位子, 154 个工具
+    里 114 个模型根本看不见。cap=40 是 5/15 定的 (那时撞的是 83 个工具), 之后工具
+    一直在加, 这个数没跟着看过。
+
+    再往 always_on 里加东西就会挤到 0 —— 那时"没在 always_on 里的工具全部不可见",
+    而现象仍然是"模型乱调工具", 跟今天一模一样, 又要从头查一遍。
+
+    这条不是要拦住加工具, 是要让加的人**当场看见代价**。
+    """
+    slack = _DEFAULT_MAX_TOOLS - len(_ALWAYS_ON_TOOLS)
+
+    # 硬要求: 一个位子都不剩的话, 凡是不在 always_on 里的工具**全部**发不出去。
+    assert slack > 0, (
+        f"always_on 已经有 {len(_ALWAYS_ON_TOOLS)} 个, cap 是 {_DEFAULT_MAX_TOOLS} —— "
+        "非 always_on 的工具一个都发不出去了。要么提 cap, 要么精简 always_on。"
+    )
+
+    # 绊线: 钉住**当前实测值**, 不编阈值。
+    #
+    # 我一度在这里写 `assert slack >= 5`, 那个 5 是我拍的 —— 没有任何依据说 5 行、
+    # 4 不行。自己编一个数, 然后为了让测试变绿再去调它, 就是在给判据注水。
+    #
+    # 改成快照: 谁动了 always_on 或 cap, 这条就红, 逼他当场把账重算一遍并更新数字。
+    # 这不拦人加工具, 只是不让代价悄悄发生。
+    assert (len(_ALWAYS_ON_TOOLS), _DEFAULT_MAX_TOOLS, slack) == (36, 40, 4), (
+        f"always_on / cap 变了: 现在 always_on={len(_ALWAYS_ON_TOOLS)}, "
+        f"cap={_DEFAULT_MAX_TOOLS}, 非 always_on 只剩 {slack} 个位子。\n"
+        "线上 8/19 实测共 154 个工具 (hermes 81 + catfish 78, 去掉 hidden), 也就是说\n"
+        f"  {154 - _DEFAULT_MAX_TOOLS} 个工具模型根本看不见。\n"
+        "cap=40 是 5/15 定的 (当时撞的是 83 个工具 → 空 400), 之后工具一路加, 这个数\n"
+        "没人回头看过。剩余位子越小, '模型看不见就乱抓一个看得见的' 这种故障越多 ——\n"
+        "8/19 '固化 SKILL' 卡死就是: teach_start / freeze_skill 都不在清单里, 模型\n"
+        "只好反复调 catfish_browser_fill (它在 always_on 里, 而且刚用过)。\n\n"
+        "改完请把上面这个元组更新成新值, 顺便确认一下 154 这个总数还准不准。"
     )
 
 
