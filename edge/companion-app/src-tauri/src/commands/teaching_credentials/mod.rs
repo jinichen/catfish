@@ -97,22 +97,27 @@ pub fn teaching_credential_save(
         None => Vec::new(),
     };
 
+    // macOS 走自己那条 —— **不用 keyring**。
+    //
+    // keyring 建出来的条目只信任 Companion 自己, 而教学时读密码的是 tool-bridge
+    // (exec /usr/bin/security), 会卡在系统确认弹窗上 5 秒超时。
+    //
+    // 8/18 试过「keyring 照常写 + 事后 SecKeychainItemSetAccess 改 ACL」——
+    // **改已存在条目的 ACL 每次都要用户输登录密码** (macOS 把它当所有者权限),
+    // 鸿波连输三次。等于把问题从"读的时候超时"搬成了"写的时候拦人"。
+    //
+    // 现在改成创建时就带 ACL, 不触发任何授权。见 mac_acl.rs。
+    //
+    // ⚠ 两条路**互斥**, 不能都走 —— 都走的话 keyring 先建一个 ACL 不对的条目,
+    //   我们再删掉重建, 白折腾一轮。
+    #[cfg(target_os = "macos")]
+    mac_acl::save_password(&target, ACCOUNT, &password)
+        .map_err(|e| format!("保存到本机凭据库失败: {e}"))?;
+
+    #[cfg(not(target_os = "macos"))]
     entry_for(&target)?
         .set_password(&password)
         .map_err(|e| format!("保存到本机凭据库失败: {e}"))?;
-
-    // macOS: 把这条的 ACL 放开到「本程序 + /usr/bin/security」。
-    //
-    // 不做的话 keyring 建出来的条目只信任 Companion 自己, 而教学时读密码的是
-    // tool-bridge (exec /usr/bin/security) —— macOS 会弹窗要确认, 那个子进程
-    // 没人应答, 卡满 5 秒超时。8/18 鸿波截图实证过, 见 mac_acl.rs。
-    //
-    // ⚠ 失败**不**算保存失败 —— 密码这时候已经在钥匙串里了。最坏退化成
-    //   "读的时候要确认", 而不是"没存上"。所以只记 warning。
-    #[cfg(target_os = "macos")]
-    if let Err(e) = mac_acl::allow_tool_bridge_to_read(&target, ACCOUNT) {
-        log::warn!("密码已存入钥匙串, 但放开 ACL 失败 ({e}) —— 教学时读它可能会卡在系统弹窗上");
-    }
 
     let reference = reference_for(&target);
     // 索引写失败不能让"密码已经存进去了"这件事变成报错 —— 密码是主线,

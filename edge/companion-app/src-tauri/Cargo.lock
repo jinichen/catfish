@@ -327,6 +327,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "core-foundation 0.9.4",
+ "core-foundation-sys",
  "fs2",
  "hex",
  "keyring",
