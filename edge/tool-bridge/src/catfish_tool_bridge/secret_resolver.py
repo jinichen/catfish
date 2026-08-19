@@ -117,10 +117,31 @@ def _resolve_env(name: str) -> str:
 def _resolve_keychain(name: str) -> str:
     """从 macOS Keychain 拉密码.
 
-    使用 `security find-generic-password -s <name> -w` (-w 只输出 password).
-    要求员工先存进:
-        security add-generic-password -a "$USER" -s "<name>" -w "<password>"
+    分两条路, 按 service 名的命名空间分:
+
+    **catfish-teaching:\\***  (Companion 界面存的, 8/19 起)
+        问 Companion 要, 自己不碰钥匙串。因为钥匙串的授权是按二进制记的, 那条
+        目只授权给 Companion —— 本进程 exec `security` 去读会弹一个员工看不见
+        的确认框, 然后超时。详见 companion_secrets.py 文件头。
+
+    **其它** (例 `eis_password`, TEACHING-SOP.md:107 手工建的, 冻结的老 skill 在用)
+        照旧 `security find-generic-password -s <name> -w`。这些本来就是
+        `security` 建的, ACL 里就是它, 一直读得到, 没有要改的。
     """
+    # ⚠ 顺序: 先分流再判平台。handles() 内部已经卡了 Darwin, 非 macOS 直接 False,
+    #   落到下面那句原来的平台报错上 —— 行为不变。
+    from . import companion_secrets  # noqa: PLC0415
+
+    if companion_secrets.handles(name):
+        try:
+            return companion_secrets.fetch(name)
+        except companion_secrets.CompanionSecretError as e:
+            # 不回退到 `security`。回退看着"更稳", 实际是把这次改动悄悄撤销:
+            # 老条目的 ACL 里还留着 `security` (8/18 那版加的), 回退会碰巧成功,
+            # 于是没人发现通道断了; 新条目则会撞上看不见的授权框卡满 5 秒。
+            # 两种都比"直说 Companion 没连上"糟。
+            raise SecretResolveError(str(e)) from e
+
     if platform.system() != "Darwin":
         raise SecretResolveError(
             f"keychain:// 只在 macOS 支持. 当前系统: {platform.system()}. "

@@ -292,6 +292,20 @@ pub fn run() {
                 Err(e) => log::warn!("[memory-provider] 激活失败 (不阻塞启动): {e}"),
             }
 
+            // 8/19: 教学凭据的取值通道。tool-bridge 教学时要填密码 → 走
+            // ~/.catfish/companion-secrets.sock 问我们, 我们读钥匙串给它。
+            //
+            // 为什么不让 tool-bridge 自己读: macOS 钥匙串按二进制授权, 条目只信任
+            // Companion; tool-bridge exec /usr/bin/security 会弹一个后台进程看不见
+            // 的确认框然后超时。把 security 加进信任名单 ≈ 对所有程序开放, 所以改成
+            // 谁有权限谁去读。详见 commands/teaching_credentials/socket.rs 文件头。
+            //
+            // 只有 macOS 需要 —— Windows 凭据管理器同用户下本来就都读得到。
+            // 起不来不阻塞启动 (spawn 内部自己 log), 后果只是教学时取不到密码,
+            // 而 tool-bridge 那边会明说"连不上 Companion"。
+            #[cfg(target_os = "macos")]
+            commands::teaching_credentials::socket::spawn();
+
             // 7/17 BL-SESSIONS-INDEX: 后台 build state.db 索引, 员工点侧栏"对话"不卡.
             // 鸿波 2761 sessions 时 catch: 无 index 时 sessions_list 子查询 O(N×M)
             // 首启就要 1-3 秒卡. 挪到 startup 后台线程建, 员工首次点侧栏时索引就绪.

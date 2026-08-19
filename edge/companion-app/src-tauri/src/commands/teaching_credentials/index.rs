@@ -14,7 +14,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 pub(crate) const ACCOUNT: &str = "catfish-teaching";
-const SERVICE_PREFIX: &str = "catfish-teaching:";
+/// 教学凭据在系统凭据库里的命名空间。**这是唯一一份定义** —— socket_proto.rs 的
+/// 白名单直接 use 它, 不另抄。抄一份的后果是"存进去了但取不出来", 而且两边各自
+/// 看都正常 (8/17 那个 bug 的形状)。
+pub(crate) const SERVICE_PREFIX: &str = "catfish-teaching:";
 
 /// 浏览器地址栏只可能是这两个。见 `normalize_site` 里为什么必须限定。
 const WEB_SCHEMES: [&str; 2] = ["http", "https"];

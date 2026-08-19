@@ -117,22 +117,16 @@ custom-protocol = ["tauri/custom-protocol"]
 # commands/teaching_credentials/mod.rs 顶上有 compile_error! 守着。
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
-# keyring 建出来的钥匙串条目只信任 Companion 自己, 而教学时读密码的是
-# tool-bridge (exec /usr/bin/security) —— 会卡在系统确认弹窗上 5 秒超时。
+# 8/19: 这里一度还有 core-foundation / -sys / security-framework-sys / libc 四个,
+# 给 mac_acl.rs 手写 FFI 用 —— 目的是把 `/usr/bin/security` 写进钥匙串条目的
+# 信任名单, 好让 tool-bridge 读得到。
 #
-# 所以 macOS 上**不用 keyring 写**, 走 mac_acl.rs 的
-# SecKeychainItemCreateFromContent, 创建时就带对的 ACL (8/19)。
-# keyring 在 macOS 上只剩删除那条路还用。
+# 那条路作废了: `security` 是谁都能 exec 的通用工具, 把它放进信任名单跟
+# `add-generic-password -A`(对所有程序开放) 没有实质区别 —— 等于自己把墙拆了。
+# 现在改成"谁有权限谁去读": 名单保持只有 Companion, tool-bridge 走
+# ~/.catfish/companion-secrets.sock 问我们要 (teaching_credentials/socket.rs)。
 #
-# 下面这四个原来都只是传递依赖, use 不到, 提成直接依赖。
-# 版本跟 lock 里已解析的对齐, 不多引一份 (lock 包数 627 → 627)。
-core-foundation = "0.9"     # 跟 lock 里 keyring/security-framework 已解析的对齐, 不多引一份
-# CFArrayCreate + kCFTypeArrayCallBacks —— 建 SecAccessCreate 要的信任列表。
-# core-foundation 的 CFArray::from_copyable 传的 callbacks 是 NULL, 建出来的是
-# "裸值数组"而不是 CF 对象数组, SecAccessCreate 吃不到 (8/18 实撞)。
-core-foundation-sys = "0.8"
-security-framework-sys = "2.17"
-libc = "0.2"
+# 于是 5 个手写 extern 和这 4 个依赖一起删掉, keyring 一个就够。
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }

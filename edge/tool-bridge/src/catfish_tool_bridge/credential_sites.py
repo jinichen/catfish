@@ -53,7 +53,14 @@ logger = logging.getLogger("catfish.tool_bridge.credential_sites")
 
 
 def _index_path() -> Path:
-    """跟 advisor_io.py:25 / a2a_notifications.py:53 同一套: CATFISH_HOME 优先。"""
+    """跟 advisor_io.py:25 / a2a_notifications.py:53 同一套: CATFISH_HOME 优先。
+
+    ⚠ 写这个文件的是 Companion (teaching_credentials/index.rs:208), 而**那边只认
+      $HOME, 不认 CATFISH_HOME**。所以设了 CATFISH_HOME 的机器上两边会错开:
+      Companion 写 ~/.catfish/, 这里读 $CATFISH_HOME/ —— 表现成"存了但教学说没
+      存过"。目前没人设它, 先记在这儿; 真要统一得改 Rust 那侧, 顺带影响别的模块,
+      不在这次改动范围内。
+    """
     env = os.environ.get("CATFISH_HOME", "").strip()
     base = Path(env).expanduser() if env else Path.home() / ".catfish"
     return base / "teaching_credentials.json"

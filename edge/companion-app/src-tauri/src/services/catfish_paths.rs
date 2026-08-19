@@ -144,6 +144,18 @@ pub fn tool_bridge_socket() -> Option<PathBuf> {
     home_dir().map(|h| h.join(".catfish").join("tool-bridge.sock"))
 }
 
+/// 教学凭据取值通道 (8/19). 跟上面那条**方向相反** — 这条是 tool-bridge 问、
+/// Companion 答, server 在 Companion 这边 (commands/teaching_credentials/socket.rs).
+///
+/// macOS only: 存在的理由是钥匙串按二进制授权, Windows 凭据管理器没这回事.
+/// Python 端同一个路径写死在 companion_secrets.py::socket_path().
+///
+/// ⚠ 用 $HOME 不用 CATFISH_HOME — 跟 tool_bridge_socket / __main__.py:18 一致.
+///   两端必须指同一个文件, 多认一个 env 只会让设了它的机器上两端错开.
+pub fn companion_secrets_socket() -> Option<PathBuf> {
+    home_dir().map(|h| h.join(".catfish").join("companion-secrets.sock"))
+}
+
 /// tool-bridge 必须复用 hermes-agent 的 venv（tool 依赖都在那）
 pub fn tool_bridge_python() -> Option<PathBuf> {
     // hermes-agent 在 ~/.hermes/hermes-agent 有自己的 venv

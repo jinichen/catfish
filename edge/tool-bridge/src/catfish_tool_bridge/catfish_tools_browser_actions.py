@@ -405,10 +405,17 @@ def _browser_fill_impl(args: Dict[str, Any]) -> Dict[str, Any]:
                 except Exception as e:
                     return {
                         "type": "error",
-                        "error": (
-                            f"{site} 的密码在索引里有 ({found}), 但取不出来: {e}. "
-                            "多半是钥匙串里那条被删了 —— 重新存一次"
-                        ),
+                        # ⚠ 这里**只转述真正的原因, 不猜**。
+                        #
+                        # 原来这句写死"多半是钥匙串里那条被删了 —— 重新存一次"。
+                        # 8/19 起取密码要经过 Companion (companion_secrets.py),
+                        # 于是最常见的失败其实是"Companion 没在跑" —— 而这句话会
+                        # 进模型上下文, 模型照着说"钥匙串里那条被删了", 员工就去删
+                        # 了重存, 白折腾。
+                        #
+                        # 下层的报错自己说得清是哪种 (连不上 / 没这条 / 读失败),
+                        # 原样带上去就够了。
+                        "error": f"{site} 的密码在索引里有 ({found}), 但取不出来: {e}",
                         "needs_credential": True,
                         # ★ 跟 missing 必须分开。索引说"存过了", 钥匙串里却没有ta
                         # —— 前端要是按索引判断"已存过, 不用再问", 就会把输入框
