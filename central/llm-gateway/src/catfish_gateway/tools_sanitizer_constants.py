@@ -183,39 +183,6 @@ ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
                          # adapter.py 仍 `from tools.todo_tool import TodoStore`
                          # module 路径未变, 只是 tool name 改了)
     "memory",            # hermes 0.13/0.14 unified memory (action=add/replace/remove/search)
-
-    # ── 教学→凝固 这一组 (8/19 鸿波撞"固化 eis-login SKILL"卡死) ─────────
-    #
-    # 严格说这三个不符合上面"任何任务都该有"的标准 —— 教学一周也未必一次。
-    # 放进来是因为**它们被字母序劈开了**, 而劈开的后果不是"少个工具", 是整条
-    # 闭环不可达:
-    #
-    #   catfish 自己就有 78 个工具, cap 是 40。cap 砍的是 other 的尾巴, 而
-    #   other 按字母序排:
-    #       catfish_freeze_skill   'f' 在砍点前  → 留着
-    #       catfish_teach_start    't' 在砍点后  → 砍掉
-    #       catfish_teach_end      't' 在砍点后  → 砍掉
-    #
-    #   freeze_skill 的前置条件恰恰是"必须先 teach_start / teach_end 走完一个
-    #   session"。于是模型**看得见终点, 够不着起点**: 8/19 那次它 tool_describe
-    #   查到了 catfish_teach_start (那读的是完整 registry, 不受 cap 影响), 一去
-    #   调用发现清单里没有, 就退而抓最像的 —— 连着发了 6 次
-    #   catfish_search_docs / catfish_browser_fill, 参数还是 freeze_skill 的
-    #   (name / namespace / description)。员工看到的是"怎么还是不对"。
-    #
-    # 另一个不对称: 技能的**复用**侧整个在 always-on 里 (run_skill / skill_view /
-    # skills_list / search_skills), 而**创建**侧一个都没有。平台自己的说法是
-    # "教学→凝固→复用"是核心闭环 (skill_freeze.py 文件头, BL-MM9-FREEZE 鸿波
-    # 拍板) —— 复用永远在、教学看运气, 跟这个说法对不上。
-    #
-    # 代价实测 (加之前/之后跑同一份 78 工具清单): 挤掉
-    # catfish_list_a2a_help 和 catfish_list_calendars 两个。换回整条教学链, 划算。
-    #
-    # ⚠ 三个必须一起进出。只放两个 = 换一种劈法, 问题原样还在。
-    #   test_tool_cap.py::test_教学凝固三件套不许被_cap_劈开 钉着这条。
-    "catfish_teach_start",
-    "catfish_teach_end",
-    "catfish_freeze_skill",
 })
 
 
