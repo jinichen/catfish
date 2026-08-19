@@ -38,6 +38,7 @@ import base64
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -151,6 +152,56 @@ def _capture_via_playwright(selector: str, timeout_ms: int = 8000) -> tuple[byte
     except Exception as e:  # noqa: BLE001
         logger.warning("playwright 上下文异常: %s", e)
         return None, f"playwright 上下文异常: {type(e).__name__}: {e}"
+
+
+#: `<think>…</think>` 内联形态。有的上游把思考塞在 content 里而不是单独字段。
+_THINK_BLOCK = re.compile(r"<think\b[^>]*>.*?</think\s*>", re.S | re.I)
+
+
+def _extract_answer(message: dict[str, Any]) -> tuple[str, str]:
+    """从一条 assistant message 里取 OCR 结果。返 (答案, 诊断说明)。
+
+    # 为什么不能只读 content —— 8/19 实撞, 查了两轮
+
+    `catfish-private-vision` 是自建 Qwen3-VL, **默认开思考**。而这里原来发的是
+    `max_tokens: 30`, 注释写着"验证码很短" —— 短的是**答案**, 不是生成过程。
+    思考把 30 个 token 吃光, `content` 回来是空串, 于是:
+
+        text=''  confidence=0.00  →  "识别置信度低"
+
+    员工看到的是"验证码识别不了", 而模型其实一个字都还没开始写答案。
+
+    鸿波 8/10 打内网端点实测过同一件事 (记在 gateway 的 thinking_guard.py 里):
+    `max_tokens=100` 问 "1+1=?" , 思考开着时 `content` 就是 `''`。
+
+    所以这里两手都要:
+      · max_tokens 给够 (见调用处)
+      · content 空时看 reasoning_content —— 有些上游把话说在那儿
+      · content 里内联 `<think>` 的, 剥掉再用
+
+    第二个返回值是**给人看的诊断**。原来失败只说"置信度低 text=''", 那句话
+    把人往"图片太糊"上带, 而真相是"根本没返回内容" —— 今天就是被它带偏的。
+    """
+    raw = message.get("content")
+    raw = raw if isinstance(raw, str) else ""
+    if raw.strip():
+        cleaned = _THINK_BLOCK.sub("", raw).strip()
+        if cleaned:
+            return cleaned, ""
+        # 整段 content 就是一个 <think> 块, 剥完什么都不剩
+        return "", "content 里只有 <think> 块, 没有答案 (思考没写完就截断了?)"
+
+    rc = message.get("reasoning_content")
+    rc = rc if isinstance(rc, str) else ""
+    if rc.strip():
+        # 只到这一步说明 content 是空的 —— 思考占满了输出预算。
+        # reasoning 里**通常没有**干净的答案 (它被截断了), 所以不拿它当结果,
+        # 只用来把诊断说清楚: 是"没写答案", 不是"图片认不出"。
+        return "", (
+            f"上游只返了思考没返答案 (reasoning {len(rc)} 字, content 空) —— "
+            "多半是 max_tokens 不够, 被思考吃光了"
+        )
+    return "", "上游返回里 content 和 reasoning_content 都是空的"
 
 
 def _estimate_confidence(text: str, hint: str | None) -> float:
@@ -300,7 +351,19 @@ def recognize_captcha(args: dict[str, Any]) -> dict[str, Any]:
                             },
                         ],
                         "temperature": 0.0,  # OCR 不要创造性
-                        "max_tokens": 30,    # 验证码很短
+                        # ⚠ 这里原来是 30, 注释写着"验证码很短" —— **短的是答案,
+                        #   不是生成过程**。vision 角色现在指向自建 Qwen3-VL,
+                        #   它默认开思考, 30 个 token 全被思考吃掉, content 回来
+                        #   是空串。8/19 员工登 EIS 时连撞三次, 界面只说"识别不了"。
+                        #
+                        #   鸿波 8/10 在 gateway/thinking_guard.py 里记过同一件事:
+                        #   max_tokens=100 问 "1+1=?", 思考开着 content 就是 ''。
+                        #   所以 100 也不够, 得给思考留出真实空间。
+                        #
+                        #   4096 相对模型的 122880 输出上限微不足道, 而验证码答案
+                        #   本身仍然只有几个字符 —— 多出来的额度只在"思考写了很长"
+                        #   时才真的花掉。
+                        "max_tokens": 4096,
                         "stream": False,
                     },
                 )
@@ -314,15 +377,19 @@ def recognize_captcha(args: dict[str, Any]) -> dict[str, Any]:
 
         try:
             data = resp.json()
-            raw = (
-                data.get("choices", [{}])[0]
-                .get("message", {})
-                .get("content", "")
-                or ""
-            )
+            msg = data.get("choices", [{}])[0].get("message", {}) or {}
+            raw, why_empty = _extract_answer(msg)
             last_raw = raw
         except Exception as e:  # noqa: BLE001
             last_error = f"解析 gateway 响应失败: {type(e).__name__}: {e}"
+            continue
+
+        if not raw:
+            # ★ 空返回**不是**"图片认不出", 别混进置信度那条路 —— 混了之后错误
+            #   消息会说"识别置信度低 (text='')", 把人往"图片太糊"上带。
+            #   8/19 就是被这句话带着查了两轮。
+            finish = (data.get("choices", [{}])[0] or {}).get("finish_reason")
+            last_error = f"{why_empty} (finish_reason={finish!r})"
             continue
 
         # 清洗结果: strip / 去引号 / 取第一行
