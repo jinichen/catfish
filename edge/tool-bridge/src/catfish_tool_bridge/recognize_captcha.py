@@ -204,10 +204,58 @@ def _extract_answer(message: dict[str, Any]) -> tuple[str, str]:
     return "", "上游返回里 content 和 reasoning_content 都是空的"
 
 
+def _expected_charset(hint: str | None) -> str | None:
+    """hint 说的是哪种字符集。返 'digits' / 'alnum' / 'letters' / 'chinese' / None。
+
+    ⚠ **顺序是判据本身, 不能调**。`alphanumeric` 里含有 `numeric` 这个子串 ——
+      原来那句 `if "numeric" in hint.lower()` 会把 `alphanumeric_4` 也判成"纯数字",
+      于是传**对**的 hint 反而扣分 (8/19 实测: hint=alphanumeric_4 认对 '5KBz' → 0.65,
+      而 hint=numeric_4 被带偏认错成 '5482' → 0.85, **错的比对的分高**)。
+      判据比真事宽一格, 结果整条置信度就反了。
+    """
+    h = (hint or "").strip().lower()
+    if not h:
+        return None
+    if "alphanumeric" in h or "alnum" in h or "字母数字" in h:
+        return "alnum"
+    if "chinese" in h or "中文" in h or "汉字" in h:
+        return "chinese"
+    if "numeric" in h or "digit" in h or "数字" in h:
+        return "digits"
+    if "alpha" in h or "letter" in h or "字母" in h:
+        return "letters"
+    return None
+
+
+def _expected_len(hint: str | None) -> int | None:
+    """hint 里说的位数。取不出来返 None。
+
+    原来是 `if "4" in h: 4 elif "5" in h: 5 elif "6" in h: 6` —— 只认这三个数,
+    而且 "4-6位" 这种会被判成 4。
+
+    现在: 只接受 3..8 (验证码不会只有 1-2 位, 也不会有 9 位 —— 超出范围多半是
+    hint 里别的数字, 例 "hint_v2" 的 2), 并且**必须只有一个** —— "4-6位" 这种
+    范围说明调用方自己也不确定位数, 那就别拿它去扣分。取第一个还是最后一个都是
+    瞎定, 而扣错分的代价是把一个认对了的验证码判成低置信度。
+    """
+    h = (hint or "").lower()
+    nums = {int(n) for n in re.findall(r"\d+", h) if 3 <= int(n) <= 8}
+    return nums.pop() if len(nums) == 1 else None
+
+
 def _estimate_confidence(text: str, hint: str | None) -> float:
-    """简单 confidence 估算: hint 给的话长度对得上 +, '?' 大降, 含解释词大降.
+    """简单 confidence 估算: hint 给的话长度 / 字符集对得上 +, '?' 大降, 含解释词大降.
 
     返 0.0 - 1.0. 仅启发式, 不是真概率.
+
+    # 它挡不住的那件事
+
+    hint 是**调用方给的**, 可能本身就是错的。hint 错的时候模型会照着错的读
+    (numeric_4 → 把 S 读成 5), 返回一个跟错 hint 完全自洽的错答案, 这里给它满分。
+    这个函数没有任何办法识破 —— 它看不见图片。
+
+    所以真正的防线在**别传错 hint**: 工具 schema 里写了"不确定就别传"(不传反而
+    是最高分), skill 里把验证码字符集写死。这里只保证一件事: **对的 hint 不扣分**。
     """
     if not text or text == "?":
         return 0.0
@@ -217,25 +265,21 @@ def _estimate_confidence(text: str, hint: str | None) -> float:
     if any(w in text for w in bad_words):
         return 0.2
 
-    # hint 长度校验
-    expected_len = None
-    if hint:
-        h = hint.lower()
-        if "4" in h:
-            expected_len = 4
-        elif "5" in h:
-            expected_len = 5
-        elif "6" in h:
-            expected_len = 6
-
     base = 0.85
-    if expected_len and len(text) != expected_len:
+    want_len = _expected_len(hint)
+    if want_len and len(text) != want_len:
         return max(0.3, base - 0.3)
 
-    # 字符集校验
-    if hint and "numeric" in hint.lower() and not text.isdigit():
-        return max(0.3, base - 0.2)
-    if hint and "alpha" in hint.lower() and not all(c.isalnum() for c in text):
+    charset = _expected_charset(hint)
+    ok = {
+        "digits": text.isdigit(),
+        "alnum": text.isalnum(),
+        "letters": text.isalpha(),
+        # 中文验证码: 只要不是纯 ASCII 就当对得上, 不再细判
+        "chinese": not text.isascii(),
+        None: True,
+    }[charset]
+    if not ok:
         return max(0.3, base - 0.2)
 
     return base

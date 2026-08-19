@@ -15,7 +15,12 @@ from __future__ import annotations
 
 import pytest
 
-from catfish_tool_bridge.recognize_captcha import _extract_answer, _estimate_confidence
+from catfish_tool_bridge.recognize_captcha import (
+    _estimate_confidence,
+    _expected_charset,
+    _expected_len,
+    _extract_answer,
+)
 
 
 def ans(msg: dict) -> str:
@@ -99,6 +104,79 @@ class Test没返答案:
             got, note = _extract_answer(bad)
             assert got == ""
             assert note, f"没给诊断: {bad}"
+
+
+class Test字符集判据:
+    """★★★ 8/19: `"numeric" in "alphanumeric_4"` 是 True, 整条置信度因此是反的。
+
+    EIS 验证码实测样本 5KBz / cZf3 / W6UV —— 4 位字母数字混排, 不可能是全数字。
+    """
+
+    def test_alphanumeric_不许被认成纯数字(self) -> None:
+        # 这一条就是那个 bug 本身
+        assert _expected_charset("alphanumeric_4") == "alnum"
+        assert _expected_charset("alphanumeric_6") == "alnum"
+        assert _expected_charset("字母数字4位") == "alnum"
+
+    def test_纯数字还是纯数字(self) -> None:
+        for h in ["numeric_4", "numeric_6", "4位数字", "6 digits"]:
+            assert _expected_charset(h) == "digits", h
+
+    def test_其余几类(self) -> None:
+        assert _expected_charset("chinese") == "chinese"
+        assert _expected_charset("alpha_4") == "letters"
+        assert _expected_charset(None) is None
+        assert _expected_charset("") is None
+        assert _expected_charset("随便一句自然语言") is None
+
+    def test_传对的_hint_不扣分(self) -> None:
+        # 修之前这里是 0.65 —— 传对反而被罚
+        assert _estimate_confidence("5KBz", "alphanumeric_4") == 0.85
+        assert _estimate_confidence("cZf3", "alphanumeric_4") == 0.85
+        assert _estimate_confidence("W6UV", "alphanumeric_4") == 0.85
+
+    def test_不传_hint_也是满分(self) -> None:
+        assert _estimate_confidence("5KBz", None) == 0.85
+
+    def test_对的答案不该比错的低(self) -> None:
+        # ★ 修之前: 对的 0.65 < 错的 0.85。这条钉住那个反转不能再出现。
+        right = _estimate_confidence("5KBz", "alphanumeric_4")
+        wrong_but_consistent = _estimate_confidence("5482", "numeric_4")
+        assert right >= wrong_but_consistent
+
+    def test_字符集真对不上时才扣(self) -> None:
+        assert _estimate_confidence("5KBz", "numeric_4") < 0.85     # 说数字给了字母
+        assert _estimate_confidence("5482", "alpha_4") < 0.85       # 说字母给了数字
+
+
+class Test位数判据:
+    def test_从_hint_里取位数(self) -> None:
+        assert _expected_len("alphanumeric_4") == 4
+        assert _expected_len("numeric_6") == 6
+        assert _expected_len("5 位字母数字") == 5
+
+    def test_取不出来返_None(self) -> None:
+        for h in [None, "", "chinese", "看清楚点"]:
+            assert _expected_len(h) is None, h
+
+    def test_超出_3到8_的数字不当位数(self) -> None:
+        # "hint_v2" 里的 2、某个版本号里的 100 都不是位数
+        assert _expected_len("hint_v2") is None
+        assert _expected_len("captcha_100") is None
+
+    def test_范围写法不定长度(self) -> None:
+        # "4-6位" 说明调用方自己也不确定。取 4 还是取 6 都是瞎定, 而定错了就会
+        # 把一个认对了的验证码扣成低置信度 —— 宁可不扣。
+        for h in ["4-6位", "alphanumeric_4_to_6", "4 或 5 位"]:
+            assert _expected_len(h) is None, h
+        # 同一个数字重复出现不算歧义
+        assert _expected_len("4位, 就是 4 个字符") == 4
+
+    def test_范围写法下认对了不扣分(self) -> None:
+        assert _estimate_confidence("5KBz", "alphanumeric_4-6") == 0.85
+
+    def test_位数对不上扣分(self) -> None:
+        assert _estimate_confidence("5KB", "alphanumeric_4") < 0.85
 
 
 class Test诊断跟置信度是两条路:

@@ -556,8 +556,15 @@ BROWSER_TOOLS: List[Dict[str, Any]] = [
                 "hint": {
                     "type": "string",
                     "description": (
-                        "可选, 帮 vision 模型. 'numeric_4' (4 位数字) / 'alphanumeric_4' (4 位字母数字) / "
-                        "'numeric_5' / 'numeric_6' / 'alphanumeric_5' / 'alphanumeric_6' / 'chinese' / 自然语言"
+                        "可选. ⚠ **不确定就别传** —— 传错比不传糟得多。\n"
+                        "hint 会原样进 prompt ('提示: numeric_4'), 模型会照着它读: "
+                        "说是数字, 它就把 S 读成 5、B 读成 8, 而且返回的置信度**照样很高** "
+                        "(0.85), 于是一个错答案会被当成对的填进去。不传 hint 反而是最高分。\n"
+                        "8/19 实撞: EIS 验证码是 '5KBz' / 'cZf3' / 'W6UV' (字母数字混排), "
+                        "模型顺手传了 numeric_4 —— 这个值当时排在本行示例的第一个。\n"
+                        "只有**亲眼确认过这个站点的字符集**才传: "
+                        "'alphanumeric_4' (4 位字母数字, 最常见) / 'alphanumeric_5' / 'alphanumeric_6' / "
+                        "'numeric_4' (纯数字, 少见) / 'numeric_5' / 'numeric_6' / 'chinese' / 自然语言"
                     ),
                 },
                 "max_retry": {
