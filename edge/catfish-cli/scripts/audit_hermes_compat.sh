@@ -251,10 +251,58 @@ PY
 fi
 echo ""
 
+# ============================================================
+# Section 18 — P45 (8/19): 被 defer 工具的改名守卫锚点
+# ============================================================
+#
+# P45 包了两个上游函数。它们**一个都不能漂**, 漂了 patch 静默失效, 而现象是
+# "模型又开始乱调工具" —— 8/19 查这个花了一整天。
+#
+#   agent/agent_runtime_helpers.py   repair_tool_call(agent, tool_name)
+#   agent/conversation_loop.py       _invalid_tool_name_error_content(name, valid)
+#   tools/tool_search.py             is_deferrable_tool_name(name)  ← 判据靠它
+#
+# 还要盯**调用点是晚绑定**: run_agent.py 在方法内 import repair_tool_call,
+# conversation_loop 用模块级名字 —— 哪天上游改成模块顶部 import 或直接内联,
+# monkeypatch 就再也拦不住了, 而且照样不报错。
+echo "── Section 18: P45 被 defer 工具改名守卫 ──"
+
+check_grep "agent/agent_runtime_helpers.py" "def repair_tool_call" \
+    "P45 锚点 repair_tool_call 还在"
+check_grep "agent/conversation_loop.py" "def _invalid_tool_name_error_content" \
+    "P45 锚点 _invalid_tool_name_error_content 还在"
+check_grep "tools/tool_search.py" "def is_deferrable_tool_name" \
+    "P45 判据来源 is_deferrable_tool_name 还在"
+check_grep "tools/tool_search.py" "^TOOL_CALL_NAME" \
+    "P45 错误消息引用的 TOOL_CALL_NAME 还在"
+
+# 晚绑定检查: repair_tool_call 必须在函数体内 import (缩进的 from)
+if grep -qE "^[[:space:]]+from agent\.agent_runtime_helpers import repair_tool_call" \
+        "$HERMES_ROOT/run_agent.py" 2>/dev/null; then
+    echo "  ✓ run_agent.py 仍在方法内 import repair_tool_call (晚绑定, P45 拦得住)"
+    ((pass++))
+else
+    echo "  ✗ run_agent.py 的 repair_tool_call import 不再是方法内晚绑定"
+    echo "     → P45 的 monkeypatch 会**静默失效**, 被 defer 的工具又会被改成别的工具"
+    echo "     修法: 见 edge/hermes-plugins/catfish-xcatfish-user/plugin_deferred_tool_guard.py"
+    ((fail++))
+fi
+
+# valid_tool_names 仍然是从"装配后"的 tools 派生 —— P45 的前提
+if grep -q "agent.valid_tool_names = new_names" "$HERMES_ROOT/tools/mcp_tool.py" 2>/dev/null; then
+    echo "  ✓ valid_tool_names 仍由 tools 快照派生 (P45 判据前提成立)"
+    ((pass++))
+else
+    echo "  ✗ valid_tool_names 的赋值路径变了 — 重新确认"被 defer 的不在里面"还成不成立"
+    ((fail++))
+fi
+echo ""
+
 echo "========================================"
 echo "结果: pass=$pass  fail=$fail"
 if [ "$fail" -eq 0 ]; then
     echo "✓ 19 patch + memory + prefetch + approval/run_agent/connect 全适配 (sec 1-16)"
+    echo "  + P45 被 defer 工具改名守卫锚点在位 (sec 18)"
     echo "  + models.yaml chat model 全配 max_output_tokens (sec 17), 升级/加 model OK"
     exit 0
 else

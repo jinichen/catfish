@@ -172,6 +172,8 @@ _patch_p24_cors_allowlist = plugin_cors._patch_p24_cors_allowlist  # noqa: F401
 _patch_p44_service_call_lean = plugin_service_lean._patch_p44_service_call_lean  # noqa: F401  (re-export · 见 plugin_service_lean.py)
 plugin_core_tools = _import_sibling("plugin_core_tools")
 _patch_p43_promote_catfish_core_tools = plugin_core_tools._patch_p43_promote_catfish_core_tools  # noqa: F401  (re-export · 见 plugin_core_tools.py)
+plugin_deferred_tool_guard = _import_sibling("plugin_deferred_tool_guard")
+_install_p45_deferred_tool_guard = plugin_deferred_tool_guard.install  # noqa: F401  (re-export · 见 plugin_deferred_tool_guard.py)
 plugin_wechat_qr = _import_sibling("plugin_wechat_qr")
 _WECHAT_QR_SESSION_TTL = plugin_wechat_qr._WECHAT_QR_SESSION_TTL  # noqa: F401  (re-export · 见 plugin_wechat_qr.py)
 _wechat_qr_sessions = plugin_wechat_qr._wechat_qr_sessions  # noqa: F401  (re-export · 8/13 从这边搬过去, 注意是同一个 dict 对象)
@@ -404,6 +406,16 @@ def _apply_patches() -> None:
     # 下发给模型的 32 个工具里 catfish 一个都没有。把几个高频的提升为核心。
     # 详见 plugin_core_tools.py 模块 docstring。
     _try_patch(_patch_p43_promote_catfish_core_tools, "P43: _patch_p43_promote_catfish_core_tools 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
+
+    # P45 (8/19 鸿波"固化 eis-login SKILL"连转六轮): P43 只提升了 11 个, 剩下
+    # 67 个 catfish 工具仍然被 defer —— 那是**对的**。错的是它们被叫到时,
+    # repair_tool_call 会在**可见**列表里模糊匹配 (cutoff=0.7), 而 catfish 工具名
+    # 共享 28 字符前缀, 于是必定命中另一个工具:
+    #     catfish_freeze_skill → catfish_browser_fill  0.800
+    #     catfish_teach_start  → catfish_search_docs   0.872
+    # 改名是就地改, 落库前发生, 所以事后看记录像"模型自己调错了"。
+    # 详见 plugin_deferred_tool_guard.py 模块 docstring。
+    _try_patch(_install_p45_deferred_tool_guard, "P45: 被 defer 工具的改名守卫装载失败 (跳过, 不阻塞 hermes 启动): %s")
 
     # P23 (P3.5.79 6/23 鸿波): inbound message 路径 (微信/Discord/Slack/Telegram)
     # picker 联动 — 修 catfish picker 联动 sprint 漏 cover 的最后一个 platform.

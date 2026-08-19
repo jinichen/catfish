@@ -68,6 +68,36 @@ INTENTIONALLY_ADDED: dict[str, str] = {
         "      和记忆**读**，判据是**只含两项的白名单**。沿用 P42 那条宽判据会\n"
         "      误伤早安和知识库。"
     ),
+    "_install_p45_deferred_tool_guard": (
+        "8/19 加。被 defer 的工具被叫到时，不许被模糊改名成另一个工具。\n"
+        "  病: 鸿波说「固化 eis-login SKILL」，小鲶连发六次 catfish_browser_fill，\n"
+        "      参数却是 catfish_freeze_skill 的 (name/namespace/description/\n"
+        "      overwrite/target)。工具返 `'selector' is a required property`，\n"
+        "      模型看不懂，再发一次，六轮。看着像模型犯傻。\n"
+        "  真因: hermes 0.20 的 progressive disclosure 把 catfish 78 个工具里\n"
+        "      P43 没提升的那 67 个全 defer 掉 —— **这是对的**。而\n"
+        "      agent.valid_tool_names 是从装配**之后**的可见列表派生的\n"
+        "      (tools/mcp_tool.py:6832)，于是被 defer 的名字落进\n"
+        "      repair_tool_call 的模糊兜底 get_close_matches(cutoff=0.7)。\n"
+        "      catfish 工具名共享 28 字符前缀，这个阈值形同虚设，实算:\n"
+        "        catfish_teach_start  → catfish_search_docs   0.872\n"
+        "        catfish_freeze_skill → catfish_browser_fill  0.800\n"
+        "      跟当天日志里那两串一模一样。改名是就地改 tc.function.name，\n"
+        "      发生在落库之前，所以事后翻 state.db 看到的是「模型调错了工具」。\n"
+        "  改: 包一层 repair_tool_call —— 名字若「已注册但本次被 defer」\n"
+        "      (用上游自己的 tool_search.is_deferrable_tool_name 判，不另写一份)，\n"
+        "      返 None 不猜；错误消息改成指向 tool_call。\n"
+        "  影响面: 只作用于**已注册且不可见**的名字。没注册的幻觉名字\n"
+        "      (is_deferrable 返 False) 照常走上游模糊修复 —— 那本来就该修；\n"
+        "      P43 提升过的 11 个是 core，也返 False，不受影响。\n"
+        "  跟 P43 的关系: P43 是「把某几个工具提成核心免于 defer」，一次救一个，\n"
+        "      名单从 4 长到 11，每次都是等员工先撞一次。P45 不改可见性，只保证\n"
+        "      **剩下 67 个被叫到时不会被换成别的工具**，新加工具自动受保护。\n"
+        "      两者判据不冲突: P43 决定「发不发」，P45 决定「没发时怎么答」。\n"
+        "  升级: 锚点由 audit_hermes_compat.sh Section 18 盯着，含「run_agent.py\n"
+        "      仍是方法内晚绑定 import」这条 —— 上游改成顶部 import 的话\n"
+        "      monkeypatch 会静默失效，那一条会当场变红。"
+    ),
 }
 
 INTENTIONALLY_REMOVED: dict[str, str] = {
