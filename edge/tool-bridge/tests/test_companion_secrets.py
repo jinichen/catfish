@@ -308,6 +308,98 @@ def test_resolver_连不上时报的是_Companion_那句话(darwin: None, home: 
     assert "add-generic-password" not in str(ei.value), "这是走了 security 那条老路"
 
 
+# ─────────── ★★★ 连不上 ≠ 没存过 (8/19 实撞, 半小时) ───────────
+#
+# 那天 tool-bridge 是旧进程, 走 security 撞上员工看不见的授权框卡 5 秒超时。
+# 工具照样返 needs_credential → 界面弹密码框 → 鸿波删了重存三次 → 每次都存成功,
+# 每次都读不出来。界面从头到尾没有一处说得出"存没用"。
+#
+# 判据宽了一格 (把"取不出来"一律当成"该再问一次"), 代价是一个人在那儿转了半小时。
+
+
+def test_连不上时_ask_employee_是_False(darwin: None, home: Path) -> None:
+    with pytest.raises(secret_resolver.SecretResolveError) as ei:
+        secret_resolver.resolve_secret(f"keychain://{SERVICE}")
+    assert ei.value.ask_employee is False, "连不上还弹密码框 = 让人白输密码"
+
+
+def test_钥匙串里没有时_ask_employee_是_True(darwin: None, home: Path) -> None:
+    # 这种才是"再存一次就好"
+    resp = (
+        json.dumps({"jsonrpc": "2.0", "id": 1,
+                    "error": {"code": -32001, "message": "本机钥匙串里没有这一条"}})
+        + "\n"
+    ).encode()
+    with fake_companion(home / "companion-secrets.sock", lambda _: resp):
+        with pytest.raises(secret_resolver.SecretResolveError) as ei:
+            secret_resolver.resolve_secret(f"keychain://{SERVICE}")
+    assert ei.value.ask_employee is True
+
+
+def test_默认是_True_不要因为加了字段就把老路堵上(darwin: None) -> None:
+    # env:// / 不认识的 scheme 这些老分支没传 ask_employee, 必须还是"可以问"
+    for ref in ["env://NO_SUCH_VAR_XYZ", "怪://x", "env://"]:
+        with pytest.raises(secret_resolver.SecretResolveError) as ei:
+            secret_resolver.resolve_secret(ref)
+        assert ei.value.ask_employee is True, ref
+
+
+def _result_for(exc: Exception) -> dict:
+    """跑**生产的**那个函数, 不在测试里另写一套判据。"""
+    from catfish_tool_bridge.catfish_tools_browser_actions import _unreadable_result
+
+    return _unreadable_result(
+        exc=exc,
+        site="neis.ffcs.cn",
+        found=f"keychain://{SERVICE}",
+        page_url="http://neis.ffcs.cn/cas/login",
+        page_title="登录页",
+        selector="#pwd",
+    )
+
+
+def test_通道断了_不弹密码框(darwin: None, home: Path) -> None:
+    with pytest.raises(secret_resolver.SecretResolveError) as ei:
+        secret_resolver.resolve_secret(f"keychain://{SERVICE}")
+    out = _result_for(ei.value)
+
+    assert "needs_credential" not in out, "通道断了还弹框 = 让人一遍遍白输密码"
+    assert "reason" not in out
+    # 话要说清, 否则模型会自己发明"你手动输一下吧"
+    assert "再存一次没有用" in out["summary"]
+    assert "不是没存过" in out["summary"]
+    assert "打开 Companion" in out["error"]
+
+
+def test_钥匙串里没有_照旧弹框(darwin: None, home: Path) -> None:
+    resp = (
+        json.dumps({"jsonrpc": "2.0", "id": 1,
+                    "error": {"code": -32001, "message": "本机钥匙串里没有这一条"}})
+        + "\n"
+    ).encode()
+    with fake_companion(home / "companion-secrets.sock", lambda _: resp):
+        with pytest.raises(secret_resolver.SecretResolveError) as ei:
+            secret_resolver.resolve_secret(f"keychain://{SERVICE}")
+    out = _result_for(ei.value)
+
+    assert out["needs_credential"] is True
+    assert out["reason"] == "unreadable"   # 不是 missing —— 索引里明明有
+    assert "summary" not in out
+
+
+def test_没有_ask_employee_属性的异常_按可以问处理(darwin: None) -> None:
+    # 老代码 / 别的错。多问一次是安全的那一侧。
+    for e in [RuntimeError("随便什么错"), ValueError(""), OSError()]:
+        assert _result_for(e)["needs_credential"] is True
+
+
+def test_报错里绝不带密码(darwin: None) -> None:
+    # exc 的文本会原样拼进 error 字段 → 进模型上下文。下层任何一处把密码放进
+    # 异常消息, 都会从这儿漏出去 —— companion_secrets 那边有对应的几条钉着。
+    out = _result_for(secret_resolver.SecretResolveError("取不到"))
+    assert PROBE not in json.dumps(out, ensure_ascii=False)
+
+
 def test_resolver_老的手工条目还是走_security(darwin: None, monkeypatch: pytest.MonkeyPatch) -> None:
     # keychain://eis_password: 4/28 手工建的, 冻结的老 skill 在用, 一个字都不能变
     called: list[list[str]] = []

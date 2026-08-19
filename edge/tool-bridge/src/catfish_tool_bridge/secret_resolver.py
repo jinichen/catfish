@@ -60,7 +60,24 @@ logger = logging.getLogger("catfish.tool_bridge.secret_resolver")
 
 
 class SecretResolveError(Exception):
-    """secret_ref 解析失败 — 找不到 secret / 不支持的 scheme / 平台不支持."""
+    """secret_ref 解析失败 — 找不到 secret / 不支持的 scheme / 平台不支持.
+
+    `ask_employee` —— **让员工再存一次能不能解决**。调用方 (browser_fill) 拿它决定
+    要不要弹密码框。
+
+        True   钥匙串里没这条 / 值是空的 → 存一次就好
+        False  取值**通道**断了 (Companion 没在跑) → 存一百次也一样, 弹框只会
+               让人白输密码
+
+    加这个字段是因为 8/19 实撞: tool-bridge 是旧进程仍走 `security`, 钥匙串条目
+    只授权 Companion, `security` 撞上员工看不见的授权框卡满 5 秒超时。工具照样返
+    needs_credential, 鸿波删了重存三次, 每次都存成功、每次都读不出来 —— 界面从头
+    到尾没有一处说得出"存没用"。判据宽了一格, 代价是一个人在那儿转了半小时。
+    """
+
+    def __init__(self, message: str, *, ask_employee: bool = True) -> None:
+        super().__init__(message)
+        self.ask_employee = ask_employee
 
 
 def resolve_secret(ref: str) -> str:
@@ -140,7 +157,13 @@ def _resolve_keychain(name: str) -> str:
             # 老条目的 ACL 里还留着 `security` (8/18 那版加的), 回退会碰巧成功,
             # 于是没人发现通道断了; 新条目则会撞上看不见的授权框卡满 5 秒。
             # 两种都比"直说 Companion 没连上"糟。
-            raise SecretResolveError(str(e)) from e
+            #
+            # 连不上 ≠ 没存过。前者再存一次也读不出来, 别让上层弹密码框 —— 见
+            # SecretResolveError 的 ask_employee。
+            raise SecretResolveError(
+                str(e),
+                ask_employee=not isinstance(e, companion_secrets.CompanionUnavailable),
+            ) from e
 
     if platform.system() != "Darwin":
         raise SecretResolveError(

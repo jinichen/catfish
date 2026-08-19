@@ -263,6 +263,60 @@ def _browser_click_impl(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"type": "error", "error": f"playwright click 异常: {type(e).__name__}: {e}"}
 
 
+def _unreadable_result(
+    *,
+    exc: Exception,
+    site: str,
+    found: str,
+    page_url: str,
+    page_title: str,
+    selector: str,
+) -> Dict[str, Any]:
+    """索引里有这个站点、但密码取不出来时返什么。
+
+    # 为什么抽成一个函数
+
+    它原来内联在 `_browser_fill_impl` 的 playwright 块里 —— 那块要真起浏览器才跑
+    得到, 于是这段判据一条测试都没有。而它恰恰是最容易错的一处: 8/19 就是它把
+    "取值通道断了"也当成"该再问一次", 让鸿波删了重存三次, 每次都存成功、每次都读
+    不出来, 界面从头到尾没有一处说得出"存没用"。半小时耗在这个循环里。
+
+    # 判据只有一条: 再存一次能不能解决
+
+    由下层的 `SecretResolveError.ask_employee` 说了算, 这里不猜:
+
+      True   钥匙串里没这条 → `needs_credential`, 前端弹密码框
+      False  通道断了 (Companion 没在跑) → **不弹框**。弹框是有害的, 它让人相信
+             问题在自己这边, 然后一遍遍白输密码。
+
+    没有这个属性的异常 (老代码 / 别的错) 一律按 True —— 多问一次是安全的那一侧。
+    """
+    out: Dict[str, Any] = {
+        "type": "error",
+        # 只转述真正的原因, 不加"多半是钥匙串里那条被删了"这种猜测 —— 这句会进
+        # 模型上下文, 猜错了模型就照着把人往错方向带 (8/19 就是)。
+        "error": f"{site} 的密码在索引里有 ({found}), 但取不出来: {exc}",
+        "site": site,
+        "page_url": page_url,
+        "page_title": page_title,
+        "selector": selector,
+    }
+    if getattr(exc, "ask_employee", True):
+        out["needs_credential"] = True
+        # ★ 跟 missing 必须分开。索引说"存过了", 钥匙串里却没有 —— 前端要是按索引
+        #   判断"已存过, 不用再问", 就会把输入框藏起来, 员工卡死在一句"应该已经
+        #   处理完了"上 (8/18 实撞)。
+        out["reason"] = "unreadable"
+    else:
+        # 给模型一句能照着说的话, 免得它自己发明"你在浏览器里手动输一下吧"
+        # (SOUL 明令不许开口要密码)。
+        out["summary"] = (
+            f"⚠ 取不到 {site} 的密码, 但**不是没存过** —— 是取值通道断了。"
+            "再存一次没有用。请员工确认鲶鱼 Companion 在跑, 然后重试这一步。"
+        )
+    return out
+
+
 def browser_fill(args: Dict[str, Any]) -> Dict[str, Any]:
     """硬 timeout 兜底 wrapper, 调 _impl. 防 Playwright 卡死锁住整个 daemon."""
     # 延迟 import —— 见文件头。打桩打的是 catfish_tools_browser 那份,
@@ -403,29 +457,14 @@ def _browser_fill_impl(args: Dict[str, Any]) -> Dict[str, Any]:
                     from . import secret_resolver  # noqa: PLC0415
                     actual_text = secret_resolver.resolve_secret(found)
                 except Exception as e:
-                    return {
-                        "type": "error",
-                        # ⚠ 这里**只转述真正的原因, 不猜**。
-                        #
-                        # 原来这句写死"多半是钥匙串里那条被删了 —— 重新存一次"。
-                        # 8/19 起取密码要经过 Companion (companion_secrets.py),
-                        # 于是最常见的失败其实是"Companion 没在跑" —— 而这句话会
-                        # 进模型上下文, 模型照着说"钥匙串里那条被删了", 员工就去删
-                        # 了重存, 白折腾。
-                        #
-                        # 下层的报错自己说得清是哪种 (连不上 / 没这条 / 读失败),
-                        # 原样带上去就够了。
-                        "error": f"{site} 的密码在索引里有 ({found}), 但取不出来: {e}",
-                        "needs_credential": True,
-                        # ★ 跟 missing 必须分开。索引说"存过了", 钥匙串里却没有ta
-                        # —— 前端要是按索引判断"已存过, 不用再问", 就会把输入框
-                        # 藏起来, 员工卡死在一句"应该已经处理完了"上 (8/18 实撞)。
-                        "reason": "unreadable",
-                        "site": site,
-                        "page_url": page_url,
-                        "page_title": (page.title() or "")[:120],
-                        "selector": selector,
-                    }
+                    return _unreadable_result(
+                        exc=e,
+                        site=site,
+                        found=found,
+                        page_url=page_url,
+                        page_title=(page.title() or "")[:120],
+                        selector=selector,
+                    )
                 used_secret_ref = True
                 used_site_ref = found
 
