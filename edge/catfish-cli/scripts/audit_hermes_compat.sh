@@ -298,11 +298,32 @@ else
 fi
 echo ""
 
+# ============================================================
+# Section 19 — P36 退役之后依赖的上游行为 (8/19)
+# ============================================================
+#
+# P36 (setenv TERMINAL_CWD=$HOME) 8/19 退役, 因为上游 gateway/run.py 已经在
+# TERMINAL_CWD 空/占位时兜底到 home。**我们现在依赖它。**
+#
+# 它没了的话故障形状跟当年一样: launchd 起 hermes → cwd="/" → execute_code
+# 里的相对路径 FileNotFoundError, 而且不报错。升级前在这儿拦住。
+echo "── Section 19: P36 退役依赖 (TERMINAL_CWD home 兜底) ──"
+
+check_grep "gateway/run.py" "resolve_placeholder_terminal_cwd" \
+    "上游仍在 TERMINAL_CWD 空值时走兜底链"
+check_grep "gateway/run.py" "home_fallback\s*=" \
+    "兜底链仍然传 home_fallback"
+check_grep "gateway/cwd_placeholder.py" "return messaging or home_fallback" \
+    "local backend 仍然必然返值 (返 None 会让 TERMINAL_CWD 被 pop)"
+
+echo ""
+
 echo "========================================"
 echo "结果: pass=$pass  fail=$fail"
 if [ "$fail" -eq 0 ]; then
     echo "✓ 19 patch + memory + prefetch + approval/run_agent/connect 全适配 (sec 1-16)"
     echo "  + P45 被 defer 工具改名守卫锚点在位 (sec 18)"
+    echo "  + P36 退役依赖的 TERMINAL_CWD home 兜底还在 (sec 19)"
     echo "  + models.yaml chat model 全配 max_output_tokens (sec 17), 升级/加 model OK"
     exit 0
 else

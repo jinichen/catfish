@@ -165,7 +165,6 @@ _patch_p13_dump_naming_type_tag = plugin_misc._patch_p13_dump_naming_type_tag  #
 _patch_p19_status_callback_bridge = plugin_misc._patch_p19_status_callback_bridge  # noqa: F401
 _patch_p20_block_execute_code_permanent = plugin_misc._patch_p20_block_execute_code_permanent  # noqa: F401
 _patch_p29_learn_slash_translate = plugin_misc._patch_p29_learn_slash_translate  # noqa: F401
-_patch_p36_terminal_cwd_home = plugin_misc._patch_p36_terminal_cwd_home  # noqa: F401
 _patch_p7_companion_proxy_route = plugin_cors._patch_p7_companion_proxy_route  # noqa: F401
 _patch_p8_p9_cors = plugin_cors._patch_p8_p9_cors  # noqa: F401
 _patch_p24_cors_allowlist = plugin_cors._patch_p24_cors_allowlist  # noqa: F401
@@ -471,12 +470,16 @@ def _apply_patches() -> None:
     _try_patch(_patch_p30_wechat_qr_endpoints, "P30: _patch_p30_wechat_qr_endpoints 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
 
     # P36 (P3.5.199 7/8 鸿波 catch "chat sandbox 相对路径找不到 uploads"):
-    # hermes launchd 起 gateway → process cwd="/". LLM execute_code 里
-    # `.catfish/uploads/x.csv` 相对路径 → subprocess.Popen(cwd="/") → 404.
-    # 员工从来没期望 subprocess 从 `/` 起 (mac 员工机日常在 $HOME 干活).
-    # hermes upstream 公开 TERMINAL_CWD env API: execute_code / terminal /
-    # file_tools 都读它. setdefault 一次覆盖三条路径, 零 monkey-patch.
-    _try_patch(_patch_p36_terminal_cwd_home, "P36: _patch_p36_terminal_cwd_home 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
+    # P36 已退役 (8/19) —— 上游 gateway/run.py:2207 自己做了同一件事, 含
+    # "设过就尊重" 那半句:
+    #     _configured_cwd = os.environ.get("TERMINAL_CWD", "")
+    #     if not _configured_cwd or _configured_cwd in CWD_PLACEHOLDERS:
+    #         _resolved_cwd = resolve_placeholder_terminal_cwd(
+    #             ..., home_fallback=str(Path.home()))
+    # 而 cwd_placeholder.py:40-42 在 local backend 下 `return messaging or
+    # home_fallback` —— 必然返值, 不可能是 None。
+    # 详见 docs/HERMES-PATCH-AUDIT-2026-08-19.md 和
+    # tests/test_p36_retired_upstream_covers_it.py (钉住这个上游行为)。
 
     # P39 (7/31): Codex App Server 模式在 provider credential resolver 之前
     # short-circuit。登录继续只由 Codex CLI 管，不复制 OAuth token 到 Hermes。

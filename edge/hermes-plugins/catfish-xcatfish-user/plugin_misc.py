@@ -2,7 +2,8 @@
 
 P12 (update_system_prompt 静默失败) · P13 (dump 命名 type tag) ·
 P19 (status_callback 桥) · P20 (禁 execute_code 永久模式) ·
-P29 (/learn 中文翻译) · P36 (terminal cwd 回家目录)。
+P29 (/learn 中文翻译)。(P36 terminal cwd 8/19 退役 —— 上游
+gateway/run.py:2207 的 home_fallback 做了同一件事, 墓碑在 plugin_wechat_qr.py 尾。)
 
 放一起不是因为它们有关系, 恰恰是因为**没关系** —— 每个都独立 wrap 一个
 hermes 方法, 互不引用, 也不共享模块级状态。凑在一个文件里只是为了让
@@ -662,30 +663,3 @@ def _patch_p29_learn_slash_translate() -> None:
 # re-export 在文件头那段。
 
 
-def _patch_p36_terminal_cwd_home() -> None:
-    """P36 setenv TERMINAL_CWD=$HOME 兜底.
-
-    hermes execute_code / terminal / file_tools 都读这个 env 决定相对路径起点.
-    launchd 起 hermes 时 os.getcwd()="/", LLM 相对路径全部撞死. setenv 一次覆盖.
-    """
-    existing = os.environ.get("TERMINAL_CWD", "").strip()
-    if existing:
-        logger.info(
-            "P36: TERMINAL_CWD 已显式设 (%s), 尊重员工/装机脚本 export, 不覆盖.",
-            existing,
-        )
-        return
-    home = os.path.expanduser("~")
-    if not home or not os.path.isdir(home):
-        logger.warning(
-            "P36: $HOME=%r 不是有效目录, skip cwd 兜底 (execute_code 相对路径可能仍撞 /)",
-            home,
-        )
-        return
-    os.environ["TERMINAL_CWD"] = home
-    logger.info(
-        "P36 setenv TERMINAL_CWD=%s ✓ "
-        "(hermes execute_code / terminal / file_tools 相对路径从 $HOME 起, "
-        "不再走 launchd 遗留的 os.getcwd()=/)",
-        home,
-    )

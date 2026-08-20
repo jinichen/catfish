@@ -448,44 +448,35 @@ def _patch_p30_wechat_qr_endpoints() -> None:
     )
 
 
-# ── P36 (P3.5.199 7/8 鸿波): execute_code / terminal / file_tools 默认 cwd ──
+# ── P36 已退役 (8/19) ── 墓碑, 别再加回来 ──────────────────────────
 #
-# # 真因 (7/8 chat sandbox 找不到 .catfish/uploads 深审 8 项)
+# 原来这里是一大段说明: launchd 起 gateway 时 cwd="/", 所以 setenv
+# TERMINAL_CWD=$HOME 兜底, 一次覆盖 execute_code / terminal / file_tools 三条路径。
 #
-# hermes 由 launchd 起 gateway daemon (~/Library/LaunchAgents/ai.hermes.gateway.plist),
-# ProgramArguments 里没设 WorkingDirectory → process cwd = "/". LLM 里
-# execute_code 用相对路径 (`.catfish/uploads/x.csv`, `notes.md`) 就从 `/` 找
-# → FileNotFoundError.
+# 病是真的, 但**上游 hermes 0.20 已经做了同一件事**, 连"设过就尊重"那半句
+# 都一样 (gateway/run.py:2207-2221):
 #
-# hermes source grep 出 5 处 os.getcwd() 会返 "/":
-#   - tools/code_execution_tool.py:_resolve_child_cwd → execute_code subprocess cwd
-#   - tools/terminal_tool.py:_safe_getcwd → _get_env_config 用
-#   - tools/file_tools.py:_resolve_base_dir 兜底
-#   - tools/file_operations.py 链式 fallback 兜底
-#   - tools/environments/local.py 兜底
+#     _configured_cwd = os.environ.get("TERMINAL_CWD", "")
+#     if not _configured_cwd or _configured_cwd in CWD_PLACEHOLDERS:
+#         _resolved_cwd = resolve_placeholder_terminal_cwd(
+#             configured_cwd=_configured_cwd,
+#             terminal_backend=os.environ.get("TERMINAL_ENV", ""),
+#             ...
+#             home_fallback=str(Path.home()),          # ← 就是 P36 干的事
+#         )
 #
-# 前 3 处**都优先读 TERMINAL_CWD env** (hermes upstream 公开 API, 稳定, 有
-# unit test 覆盖). setdefault 兜底一次覆盖三条路径, 不 monkey-patch.
+# 而 gateway/cwd_placeholder.py:40-42 在 local backend 下:
 #
-# # 边界
+#     if backend == "local":
+#         return messaging or home_fallback            # ← 必然返值, 不会是 None
 #
-# 1. 员工/装机脚本已 export TERMINAL_CWD → 尊重, 不覆盖 (员工主权)
-# 2. $HOME 不是有效目录 → skip (edge case)
-# 3. 顶层 try/except 挂了不阻塞 hermes 启动 (跟 P29-P35 同 pattern)
+# 员工机实测 (8/19): config.yaml 没有 terminal 段, .env 里 TERMINAL_ENV /
+# TERMINAL_CWD / MESSAGING_CWD 三个都没配 → backend 默认 "local" →
+# home_fallback 必然生效。所以 P36 是纯 no-op。
 #
-# # 不 fail-loud 的原因
+# ⚠ 我们现在**依赖上游那个 home_fallback**。它要是没了, 故障形状跟当年一模一样
+#   (execute_code 相对路径从 / 起, FileNotFoundError), 而且不报错。两道保险:
+#     tests/test_p36_retired_upstream_covers_it.py   读真 hermes 树验行为
+#     edge/catfish-cli/scripts/audit_hermes_compat.sh Section 19   升级前验锚点
 #
-# 不列入 _PATCH_TARGETS. P36 不依赖任何 hermes 内部 attr / func, 只 setenv 一
-# 个公开 env var. hermes 未来重构 _resolve_child_cwd / _get_env_config 内部
-# 实现, TERMINAL_CWD env 语义都不会变 (hermes 自己 docstring 里明说 "session's
-# TERMINAL_CWD (same as the terminal tool)").
-#
-# # 影响面 (审 P36 audit 8 项后严格分类)
-#
-# 全部正向:
-#   ✓ execute_code 里 open(".catfish/uploads/x") 找到 $HOME/.catfish/uploads/x
-#   ✓ terminal 里 `ls .catfish` 找到 $HOME/.catfish
-#   ✓ file_tools read_file("notes.md") 找到 $HOME/notes.md
-#   ✓ cron scheduled 里 execute_code 也从 $HOME 起 (员工 cron script 更需要)
-#   ✓ LLM 用 terminal `cd /somewhere` 后 overrides.cwd 机制照旧生效, 不 touch
-#   ✓ SSH / Docker / Modal / Daytona backend 完全不 touch (它们本身有合理 default)
+# 判定过程见 docs/HERMES-PATCH-AUDIT-2026-08-19.md。

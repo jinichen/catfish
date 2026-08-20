@@ -101,6 +101,30 @@ INTENTIONALLY_ADDED: dict[str, str] = {
 }
 
 INTENTIONALLY_REMOVED: dict[str, str] = {
+    "_patch_p36_terminal_cwd_home": (
+        "8/19 删。P36 (7/8) setenv TERMINAL_CWD=$HOME —— launchd 起 hermes 时\n"
+        "process cwd='/'，execute_code / terminal / file_tools 的相对路径全从 / 起。\n"
+        "病是真的，但**上游 hermes 0.20 已经做了同一件事**，连「设过就尊重」那半句\n"
+        "都一样 (gateway/run.py:2207-2221):\n"
+        "    _configured_cwd = os.environ.get('TERMINAL_CWD', '')\n"
+        "    if not _configured_cwd or _configured_cwd in CWD_PLACEHOLDERS:\n"
+        "        _resolved_cwd = resolve_placeholder_terminal_cwd(\n"
+        "            ..., home_fallback=str(Path.home()))\n"
+        "而 gateway/cwd_placeholder.py:40-42 在 local backend 下\n"
+        "`return messaging or home_fallback` —— 必然返值，不会是 None\n"
+        "(返 None 上游会 pop 掉 TERMINAL_CWD，那才会退回 os.getcwd())。\n"
+        "\n"
+        "员工机实测 (8/19): config.yaml 无 terminal 段，.env 里 TERMINAL_ENV /\n"
+        "TERMINAL_CWD / MESSAGING_CWD 三个都没配 → backend 默认 'local' →\n"
+        "home_fallback 必然生效。所以 P36 是纯 no-op。\n"
+        "\n"
+        "⚠ 删掉之后我们**依赖上游那个 home_fallback**，它没了故障形状跟当年一样\n"
+        "而且不报错。两道保险钉着:\n"
+        "  tests/test_p36_retired_upstream_covers_it.py (读真 hermes 树验行为)\n"
+        "  audit_hermes_compat.sh Section 19 (升级前验锚点)\n"
+        "墓碑在 plugin_wechat_qr.py 尾部。判定过程见\n"
+        "docs/HERMES-PATCH-AUDIT-2026-08-19.md。"
+    ),
     "_patch_p18_compress_endpoint": (
         "8/13 删。P18 (6/17) 做的是「Companion 在 80% 上下文时主动触发 hermes 压缩」，"
         "但查证后确认它解的问题已经被别的机制解掉了:\n"

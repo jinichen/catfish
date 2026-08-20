@@ -163,7 +163,34 @@ catfish 这个插件做的是**协议层改造** (身份透传、审批、picker
 
 ## B 类逐条
 
-### P36 `_patch_p36_terminal_cwd_home` — ✅ 可退役
+### P36 `_patch_p36_terminal_cwd_home` — ✅ 已退役 (8/19 执行)
+
+> **执行时的修正**: 第一版说"换成 config.yaml 一行"。**读完桥接链之后发现更强 ——
+> 上游已经完整做了同一件事, 直接删就行, 连配置都不用加。**
+>
+> `gateway/run.py:2207-2221` (模块级, gateway 启动时执行):
+> ```python
+> _configured_cwd = os.environ.get("TERMINAL_CWD", "")
+> if not _configured_cwd or _configured_cwd in CWD_PLACEHOLDERS:
+>     _resolved_cwd = resolve_placeholder_terminal_cwd(
+>         ..., home_fallback=str(Path.home()))
+> ```
+> `if not _configured_cwd` 就是 P36 的「没设过才兜底」, `home_fallback` 就是
+> 「兜底到 $HOME」—— **语义一字不差**。
+>
+> `gateway/cwd_placeholder.py:40-42` local backend 下 `return messaging or
+> home_fallback` —— **必然返值**, 不会走到那条 `os.environ.pop()`。
+>
+> 员工机实测: config.yaml 无 `terminal` 段, `.env` 里 `TERMINAL_ENV` /
+> `TERMINAL_CWD` / `MESSAGING_CWD` 三个都没配 → backend 默认 `local`。
+>
+> 退役动作: 删函数 + 调用点 + re-export; 墓碑留在 plugin_wechat_qr.py 尾部;
+> `INTENTIONALLY_REMOVED` 登记; 新增
+> `tests/test_p36_retired_upstream_covers_it.py` (4 条, 读真 hermes 树) 和
+> `audit_hermes_compat.sh` Section 19 —— **两个反向验证都试过会变红**。
+
+<details><summary>第一版的判断 (保留)</summary>
+
 
 | | |
 |---|---|
@@ -179,6 +206,10 @@ config.yaml 是**升级保留**的 (upgrade-hermes-v020.sh 只备份不替换)�
 ⚠ 退役前确认一件事: P36 的语义是「**没设过才兜底**」(plugin_misc.py:671-677
 尊重员工/装机脚本已有的 export)。换成 config.yaml 之后这个"尊重已有值"的行为
 由谁保证 —— 要读 `_resolve_local_initial_cwd` 的优先级链。
+
+</details>
+
+*(上面那个待确认项查完了: 不需要 config.yaml, 上游那段自己就带「设过就尊重」。)*
 
 ### P25 `_patch_p25_cron_env_isolation` — 疑似可退役
 
