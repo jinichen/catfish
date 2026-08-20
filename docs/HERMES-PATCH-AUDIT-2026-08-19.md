@@ -58,6 +58,80 @@ P4)，都站得住。但 4/29 不足以支撑"29 个全是产品功能"这个结
 在补完之前，这份文档的"29"只能当**上界**看 —— 真实的产品功能数 ≤ 29，
 冗余候选 ≥ 8。
 
+## 第二轮: 真读了实现 (同日, 鸿波「继续仔细分析」)
+
+上一版欠的 25 个 A 类, 这轮逐个读了代码 (不是 docstring)。**结论有两处实质变化。**
+
+### ① 审批一族 P15 + P15.2 (212 行) —— 上游建了正规通道, 只是在另一条 API 上
+
+上游 hermes 0.20 现在**自带**完整审批流:
+
+| 上游 | 位置 |
+|---|---|
+| SSE 推审批请求 | `api_server.py:6422` `_approval_notify` → `event: "approval.request"`，含 `_redact_approval_command` 脱敏 + `_approval_event_choices` |
+| 能力清单登记 | `api_server.py:3004` `"approval_events": True` |
+| REST 回执 | `api_server.py:1976` `POST /v1/runs/{run_id}/approval` (`:3031` 也登记了) |
+
+而 catfish:
+
+| catfish | 做法 |
+|---|---|
+| P15 (151 行) | wrap `APIServerAdapter._run_agent`, 给 **chat/completions** 注入 `_approval_notify` |
+| P15.2 (61 行) | middleware 注册 `POST /v1/sessions/{sid}/approval` |
+
+**差别不是"重复"，是走的 API 不同**: 上游那套在 `_handle_runs()` 里, 按 `run_id`
+(`self._active_run_agents[run_id]` / `_set_run_status`)；catfish 走 OpenAI 兼容的
+`/v1/chat/completions`, 按 `session_id`。
+
+所以 P15/P15.2 **删不掉**, 但**迁得动**: Companion 若改用 `/v1/runs`,
+这 212 行可以整个下线, 换成用上游的正规面。
+
+这是这次 audit 里最像 Bot Mode 那句话的一条 —— 不是"上游已经有了所以砍掉",
+而是"**上游有正门, 我们从窗户进来的**"。
+
+⚠ 这是个**迁移项目**不是删除: 要评估 `/v1/runs` 跟 chat/completions 在流式、
+多轮、tool_call 上的差异, 以及 Companion 侧 `chat.ts` 要改多少。本次没评估。
+
+### ② 身份透传是 6 个补丁点在堵同一件事
+
+P1 (init_agent) / P2 (`_current_main_runtime`) / P3 (auxiliary_client) /
+P5_P6_P11 (api_server) / P10 (`_apply_client_headers`) / P17 (bg-review, **143 行**)
+—— 六处, 干的是同一件事: **让每一个出站 LLM 请求都带上 `X-Catfish-User`**。
+
+读完确认它们都是真产品功能 (A 类成立), 但六个补丁点本身就是信号:
+**hermes 没有"出站请求统一加 header"这个接缝**, 所以每新增一条出站路径
+(bg-review 就是这么来的) 就要补一个 patch。
+
+P17 的 docstring 写得很清楚: 「catfish-xcatfish-user 的 P1 wrap 的是 init_agent,
+bg-review 漏掉」——**这就是第七个、第八个补丁点的预告**。
+
+值得提给上游的一个 feature request: agent 级的 `default_headers` 钩子。
+
+### 其余 A 类逐条确认 (读了代码, 全部成立)
+
+| 组 | patch | 判据 |
+|---|---|---|
+| Companion 集成 | P7 / P8_P9 (259 行) / P24 | Tauri origin、`X-Catfish-*` CORS allowlist、Companion proxy route |
+| picker 联动 | P21 / P23 | 都读 `picker_state.json` 覆盖 model |
+| 中文化 | P14 / P28 | `_APPROVE_ALIASES` 中文审批词、outbound 中文化 |
+| 记忆/工具闸 | P42 / P44 | 都读 `CV_CF_SOURCE` ContextVar 判来源 |
+| 其它 | P29 / P30 / P39 | /learn 翻译、wechat qr endpoint、picker 授权 |
+
+⚠ 方法上的一个自我提醒: 我第一遍扫的时候用正则找 `catfish|picker|companion`,
+P14 报"0 命中"被我标成可疑 —— 其实它用的是 `_APPROVE_ALIASES` 和「批准」这类
+中文词, **是我的扫描判据窄了**, 不是它可疑。跟这份文档要找的病同款。
+
+### 第二轮之后的账
+
+| 判定 | 个数 | |
+|---|---|---|
+| 可退役 (删) | **1** | P36 → config.yaml |
+| 疑似可退役 | **1** | P25 (需实测) |
+| **可迁移下线** | **2 (212 行)** | P15 + P15.2 → 迁 `/v1/runs` |
+| 仍需要 | **4** | P27 / P12 / P13 / P26 |
+| 待实测 | **2** | P16 (性能) / contextvars (范围) |
+| 确认产品功能 | **27** | 已读实现 |
+
 ## 结论先行
 
 **「很多 patch 已经冗余」这个假设，量化之后不成立。**
