@@ -39,6 +39,18 @@ cd ~/person_task/catfish
 - `agent.log` 含 `P15 _stream_q 闭包` (说明 verify 跑过)
 - 最近 plugin install 是 `✓` 不是 `破坏` (说明 hermes 没 refactor)
 
+### Section 4b — catfish-memory 树外存活 (8/20 补)
+- `~/.hermes/plugins/catfish-memory` 在
+- `~/.hermes/hermes-agent/plugins/memory/` 底下**没有** catfish 残留
+- hermes 真解析得到 `catfish-memory`（位置对不代表认得出来）
+
+  软链原来建在 hermes 树里，而大版本升级换的正是整棵 `hermes-agent/`。
+  失败是静默的：provider 加载失败只打一条 warning 就返 `None`，
+  记忆停摆但 agent 照常回答。8/20 已改装到树外。
+
+  第二条要单独验，是因为两条链并存时**树内优先**——那时新链一行代码都跑不到，
+  却看不出任何异常。
+
 ### Section 5 — P15 approval SSE (核心)
 - POST chat completions 含 `execute_code` prompt
 - SSE 流含 `event: hermes.tool.progress`
@@ -47,6 +59,18 @@ cd ~/person_task/catfish
 ### Section 6 — P15.2 resolve endpoint
 - POST `/v1/sessions/{sid}/approval` body `{"choice": "deny"}`
 - 返 JSON 含 `resolved` / `choice` 字段
+
+### Section 6b — 审批 endpoint 必须验 token (8/20 补)
+- 同一条 URL, **不带** `Authorization` 头再 POST 一次
+- 必须返 `401`
+
+  6/6 到 8/20 这条 endpoint 一直是裸的 —— catfish 的 middleware 短路 return,
+  上游那行 `_check_auth` 在 handler 里, 永远跑不到。本机任意进程不带 token
+  POST 一下就能替员工点"批准"。
+
+  单元测试守代码, 这一条守**真在跑的那个进程**: 插件没装上 / 装了旧版 /
+  middleware 没进链, 单测都看不见。
+  拿到 `200` = 洞还开着; 拿到 `404` = 插件没装上。
 
 ---
 
@@ -116,9 +140,15 @@ CI ubuntu runner 装不上完整 hermes (~500MB venv + 沙箱配置 + macOS 特�
 
 ━━━ 6. P15.2 resolve endpoint ━━━
   ✓ POST /v1/sessions/{sid}/approval 返 JSON 含 resolved/choice
+  ✓ 不带 token POST /approval 被拒 (401)
+
+━━━ 4b. catfish-memory 树外存活 ━━━
+  ✓ catfish-memory 软链在树外 (~/.hermes/plugins/)
+  ✓ hermes 树内无 catfish 残留
+  ✓ hermes 解析得到 catfish-memory
 
 ━━━ 汇总 ━━━
-  ✓ 全过 (8/8)
+  ✓ 全过 (12/12)
 ```
 
 ---

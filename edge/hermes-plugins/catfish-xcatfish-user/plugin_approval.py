@@ -357,6 +357,70 @@ def _patch_p15_chat_completions_approval() -> None:
 # /v1/sessions/{session_id}/approval, Companion fetch 这条 endpoint
 # (走 hermes proxy 8642), 这调用走 hermes daemon 进程, resolve 真起效.
 
+def _require_api_auth(request):
+    """P15.2 短路前的 Bearer 校验 —— 返回 None 放行, 返回 Response 拒绝.
+
+    # 为什么需要这个函数 (2026-08-20 补)
+
+    这个 middleware 是**短路**的: 匹配到路径就直接 return, 从不调
+    ``handler(request)``. 而 hermes 的鉴权不是 middleware, 是每个 handler 自己
+    第一行调 ``self._check_auth(request)`` —— api_server.py 里 29 处, 全是手写的.
+    上游那 4 个 middleware (cors / body_limit / security_headers / profile_prefix)
+    没有一个做鉴权.
+
+    两件事撞在一起的结果: 请求在进 handler 之前就被我们截走了, ``_check_auth``
+    永远跑不到. 从 6/6 P15.2 落地到 8/20, 这条 endpoint 一直是裸的.
+
+    最刺眼的地方不是"忘了加", 是它**看起来**有鉴权:
+
+        Companion  tauri_services.ts:172  headers["Authorization"] = hermesAuthHeader
+        Rust 代理   http_proxy.rs:220      for (k, v) in &req.headers  ← 逐条透传
+        冒烟测试    smoke-test.sh:198      -H "Authorization: Bearer $HERMES_API_KEY"
+
+    三个客户端都在发, 头一路送到底, 只是没有任何人验它. 判据比真事宽一格,
+    而这一格底下是「execute_code 每次必须人工批准」这条红线 —— 本机任意进程
+    不带 token POST 一下, 就能替员工点"批准".
+
+    (监听是 127.0.0.1, 不是远程可利用; 但本地进程边界在政企环境里也是边界.)
+
+    # fail-closed 的取舍
+
+    拿不到 adapter, 或上游把 ``_check_auth`` 改名了 —— 这里**拒绝**, 不放行.
+
+      · 拒绝的代价: 审批按钮失效, agent 卡在等批准. 是看得见的故障.
+      · 放行的代价: 这道门重新变回摆设, 而且没有任何人会发现.
+
+    装载期另有一道: ``plugin_verify._APISERVER_METHOD_TARGETS`` 里钉了
+    ``_check_auth``, 上游改名会在插件加载时 fail-loud —— 不用等到员工点不动
+    按钮才发现.
+
+    # 两个已经核过的前提 (别再猜)
+
+      1. ``request.app.get("api_server_adapter")`` 拿得到实例 ——
+         api_server.py:6994 ``self._app["api_server_adapter"] = self``
+      2. ``_check_auth`` 读 ``_api_request_profile`` ContextVar, 而它由
+         ``profile_prefix_middleware`` 设. aiohttp 的顺序是「列表第一个 = 最外层」
+         (实测 3.13.5), 上游把 profile_prefix 放在 mws[0], 我们是 append 进去的
+         最内层 —— 所以我们跑的时候 ContextVar 已经设好了, profile 作用域有效.
+    """
+    import aiohttp.web as _aw
+
+    adapter = request.app.get("api_server_adapter")
+    check = getattr(adapter, "_check_auth", None)
+    if not callable(check):
+        logger.error(
+            "P15.2: 取不到 api_server_adapter._check_auth, fail-closed 拒绝审批请求. "
+            "上游可能动了 api_server.py (self._app['api_server_adapter'] 赋值, "
+            "或 APIServerAdapter._check_auth 改名). plugin_verify 应该已经在装载期报过."
+        )
+        return _aw.json_response(
+            {"error": "approval auth unavailable"}, status=503
+        )
+    # None = 通过; Response(401) = 拒绝. 直接把上游的 401 body 透出去,
+    # 跟其它 endpoint 的错误形状保持一致.
+    return check(request)
+
+
 def _patch_p15_2_chat_approval_route() -> None:
     """注册 chat_approval middleware 到 hermes api_server.
 
@@ -383,6 +447,13 @@ def _patch_p15_2_chat_approval_route() -> None:
             if path.startswith("/v1/sessions/") and path.endswith("/approval"):
                 parts = path.strip("/").split("/")
                 if len(parts) == 4 and parts[3] == "approval":
+                    # 鉴权必须在这里, 不能往下挪 —— 下面每一条路径都是 return,
+                    # handler 里那行 _check_auth 不会有机会跑. 见 _require_api_auth.
+                    # 也必须在 request.json() 之前: 未鉴权的请求不该让我们花 IO
+                    # 去读它的 body.
+                    auth_err = _require_api_auth(request)
+                    if auth_err is not None:
+                        return auth_err
                     session_id = parts[2]
                     try:
                         body = await request.json()
@@ -391,16 +462,17 @@ def _patch_p15_2_chat_approval_route() -> None:
                             {"error": "JSON body required"}, status=400
                         )
                     choice = str(body.get("choice", "")).strip().lower()
-                    resolve_all = bool(body.get("all", False))
                     if choice not in {"once", "session", "always", "deny"}:
                         return _aw.json_response(
                             {"error": f"choice ∈ once/session/always/deny, got: {choice!r}"},
                             status=400,
                         )
                     try:
-                        resolved = resolve_gateway_approval(
-                            session_id, choice, resolve_all=resolve_all,
-                        )
+                        # resolve_all (批量批准) 8/20 删掉: 全仓 grep 零调用方
+                        # (命中的全是各 venv 里 pygments/pip 的同名符号). 一个
+                        # 没人用、却在安全端点上放大权限的开关 —— 上游默认
+                        # resolve_all=False, 这里就是那个默认值, 行为不变.
+                        resolved = resolve_gateway_approval(session_id, choice)
                         logger.info(
                             "P15.2 chat_approval resolved=%d choice=%s sid=%s",
                             resolved, choice, session_id[:24],

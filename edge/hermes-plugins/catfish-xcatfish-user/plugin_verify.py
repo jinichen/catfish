@@ -106,6 +106,11 @@ _AIAGENT_METHOD_TARGETS = [
 
 _APISERVER_METHOD_TARGETS = [
     "_create_agent",
+    # _check_auth (8/20): P15.2 的 middleware 是短路的, handler 里那行鉴权跑不到,
+    # 所以它自己调 adapter._check_auth 补上 (见 plugin_approval._require_api_auth).
+    # 上游改名 → 运行时 fail-closed = 审批按钮直接失效. 钉在这里, 让它在**插件
+    # 装载期**就炸, 而不是等员工点不动按钮再来查。
+    "_check_auth",
     # _extract_catfish_outgoing_user 是我们新加的, 不要求 hermes 上游有
     # _handle_companion_proxy 同理
 ]

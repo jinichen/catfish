@@ -134,6 +134,57 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────
+# Section 4b · catfish-memory 还在树外, 且真能被 hermes 解析出来 (8/20)
+#
+# 病因: 软链原来建在 ~/.hermes/hermes-agent/plugins/memory/ —— 而大版本升级
+# 换的正是整棵 hermes-agent/ 树, 链跟着没。失败是**静默**的:
+#
+#   plugins/memory/__init__.py:201
+#     """Returns None if the provider is not found or fails to load."""
+#     logger.warning(...); return None
+#
+# 一条 warning 然后返 None, 记忆停摆但 agent 照常回答。
+#
+# 8/20 已改装到 ~/.hermes/plugins/ (树外, 跟 catfish-xcatfish-user 同级)。
+# 这里守两件事: 位置没被改回去 + provider 真解析得出来。
+# 单测 (catfish-memory/tests/test_plugin_survives_hermes_upgrade.py) 守代码和
+# 位置; 这一条守**真装好的那台机器**。
+# ─────────────────────────────────────────────────────────────────────
+section "4b. catfish-memory 树外存活"
+
+if [[ -e "$HOME/.hermes/plugins/catfish-memory" || -L "$HOME/.hermes/plugins/catfish-memory" ]]; then
+  pass "catfish-memory 软链在树外 (~/.hermes/plugins/)"
+else
+  fail "catfish-memory 不在 ~/.hermes/plugins/" \
+    "跑 edge/hermes-plugins/install-catfish-memory.sh 重装 (树外)"
+fi
+
+if [[ -e "$HOME/.hermes/hermes-agent/plugins/memory/catfish-memory" ]]; then
+  fail "catfish-memory 又出现在 hermes 树内了" \
+    "下次大版本升级会把它静默抹掉 (且并存时会盖住树外那条). 跑 install-catfish-memory.sh"
+else
+  pass "hermes 树内无 catfish 残留"
+fi
+
+# 真解析一次 —— 位置对不代表 hermes 认得出来
+HERMES_VENV_PY="$HOME/.hermes/hermes-agent/venv/bin/python"
+if [[ -x "$HERMES_VENV_PY" ]]; then
+  MEM_OUT=$(cd "$HOME/.hermes/hermes-agent" && "$HERMES_VENV_PY" -c "
+import sys; sys.path.insert(0, '.')
+from plugins.memory import find_provider_dir
+d = find_provider_dir('catfish-memory')
+print('FOUND' if d else 'MISSING', d or '')
+" 2>&1 | tail -1)
+  if [[ "$MEM_OUT" == FOUND* ]]; then
+    pass "hermes 解析得到 catfish-memory (${MEM_OUT#FOUND })"
+  else
+    fail "hermes 解析不到 catfish-memory — 记忆会静默停摆" "raw: $MEM_OUT"
+  fi
+else
+  echo -e "     ${YELLOW}↳${NC} 找不到 $HERMES_VENV_PY, 跳过解析自检"
+fi
+
+# ─────────────────────────────────────────────────────────────────────
 # Section 5 · P15 approval SSE event (curl chat completions, 触发
 # hermes execute_code guard, 验 SSE 流含 hermes.tool.progress event)
 # ─────────────────────────────────────────────────────────────────────
@@ -203,6 +254,32 @@ else
     pass "POST /v1/sessions/{sid}/approval 返 JSON 含 resolved/choice"
   else
     fail "POST /v1/sessions/{sid}/approval fail" "raw: $(echo "$RESOLVE_RESP" | head -c 200)"
+  fi
+
+  # ─────────────────────────────────────────────────────────────────
+  # Section 6b · 这条 endpoint 必须验 token (8/20)
+  #
+  # 6/6 到 8/20, 它一直是裸的: catfish 的 middleware 短路 return, 上游那行
+  # _check_auth 在 handler 里, 永远跑不到. 本机任意进程不带 token POST 一下就能
+  # 替员工点"批准" —— 而「execute_code 每次必须人工批准」是红线.
+  #
+  # 单元测试 (tests/test_p15_2_approval_auth.py) 守的是代码; 这一条守的是
+  # **真在跑的那个进程** —— 插件没装上 / 装了旧版 / middleware 没进链, 单测都
+  # 看不见, 只有真发一个不带 token 的请求才看得见.
+  #
+  # 这段跑在 HERMES_API_KEY 非空的分支里, 服务端读的是同一个 ~/.hermes/.env,
+  # 所以"服务端没配 key 所以放行"这种假警报不会出现.
+  # ─────────────────────────────────────────────────────────────────
+  NOAUTH_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+    "http://127.0.0.1:8642/v1/sessions/$SID/approval" \
+    -H "Content-Type: application/json" \
+    -d '{"choice": "deny"}' 2>&1 || true)
+
+  if [[ "$NOAUTH_CODE" == "401" ]]; then
+    pass "不带 token POST /approval 被拒 (401)"
+  else
+    fail "审批 endpoint 没验 token — 不带 token 拿到 $NOAUTH_CODE, 期望 401" \
+      "本机任意进程都能替员工点批准. 查 plugin_approval._require_api_auth 是否装上."
   fi
 fi
 
