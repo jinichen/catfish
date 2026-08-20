@@ -19,11 +19,12 @@ import plugin_cron as pc  # noqa: E402
 _CRON_SRC = (_DIR / "plugin_cron.py").read_text(encoding="utf-8")
 _PLUGIN_SRC = (_DIR / "plugin.py").read_text(encoding="utf-8")
 
+# 8/19: 去掉 _CATFISH_CRON_THREAD_LOCAL 和 _patch_p25_cron_env_isolation ——
+# P25 退役了 (上游 cron 改 ContextVar, 病因消失)。见 plugin_cron.py 尾部墓碑。
 CRON_SYMBOLS = [
-    "_CATFISH_CRON_THREAD_LOCAL",
     "_handle_cron_pause", "_handle_cron_resume", "_handle_cron_delete",
     "_patch_p26_cron_rest_endpoints", "_patch_p21_cron_picker_integration",
-    "_patch_p25_cron_env_isolation", "_patch_p27_cron_auto_retry",
+    "_patch_p27_cron_auto_retry",
 ]
 
 
@@ -57,53 +58,19 @@ def test_plugin_keeps_only_reexports():
             )
 
 
-# ── ★ cron threadlocal：改错了不报错，只是 execute_code 有时被拦 ──
-
-def test_cron_threadlocal_has_no_readers_outside_p25():
-    """`_CATFISH_CRON_THREAD_LOCAL` 只能由 `_patch_p25_cron_env_isolation` 读。
-
-    这个 threadlocal 是 P25 判定"本线程真的在 cron run_job 里"的唯一依据 ——
-    hermes 的 `cron/scheduler.py:1558` 把 `HERMES_CRON_SESSION` env set 了不清，
-    env 又是进程级跨线程的，整个 daemon 被污染；之后任何 chat / api 调
-    execute_code 走 `check_execute_code_guard:1714` 看见 env=1 + cron_mode=deny
-    就 BLOCKED（P3.5.104，6/24「execute_code 一直被拦」）。
-
-    搬这块之前手工查过"没有组外读者"，这条把它变成可执行的。要是将来有人在
-    别的模块里读它（而那个模块拿到的是另一个对象），后果是 execute_code 的
-    放行判定**有时对有时不对** —— 不报错，只是行为随线程飘。
-    """
-    readers: list[str] = []
-    for src, where in ((_CRON_SRC, "plugin_cron"), (_PLUGIN_SRC, "plugin")):
-        tree = ast.parse(src)
-        for node in tree.body:
-            fname = getattr(node, "name", None)
-            if fname == "_patch_p25_cron_env_isolation":
-                continue                      # 唯一合法的读者
-            for sub in ast.walk(node):
-                if isinstance(sub, ast.Name) and sub.id == "_CATFISH_CRON_THREAD_LOCAL":
-                    if isinstance(sub.ctx, ast.Load):
-                        readers.append(f"{where}.{fname or '<模块层>'} L{sub.lineno}")
-    # plugin.py 的 re-export 行是 Load，但它是"把同一个对象吐回去"，不是另起一份
-    readers = [r for r in readers if "<模块层>" not in r]
-    assert not readers, f"P25 之外还有人读这个 threadlocal: {readers}"
+# ── ★ cron threadlocal 那两条 8/19 随 P25 一起删了 ────────────────────
+#
+# 它们钉的是 `_CATFISH_CRON_THREAD_LOCAL` 只能被 P25 读、re-export 必须是同一个
+# 对象。P25 退役后这个 threadlocal 不存在了, 判据的主语没了。
+#
+# 那两条测试本身是对的 —— "改错了不报错, 只是 execute_code 有时被拦" 这个判断
+# 一直成立, 只是病因被上游治好了。接棒的是
+# tests/test_p25_pollution_visible.py: 从"钉我们的探针"改成"钉上游的 ContextVar
+# 化还在"。
 
 
-def test_plugin_reexports_the_same_threadlocal_object():
-    """re-export 必须是**同一个对象**，不能各造一个。
 
-    两个 threading.local() 实例互不可见 —— 一个线程在 A 上打了标记，P25 去 B 上
-    查，查不到，于是按"不在 cron 里"处理。同样是不报错的错。
-    """
-    tree = ast.parse(_PLUGIN_SRC)
-    found = False
-    for node in tree.body:
-        if (isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
-                and node.targets[0].id == "_CATFISH_CRON_THREAD_LOCAL"):
-            found = True
-            assert "plugin_cron._CATFISH_CRON_THREAD_LOCAL" in ast.unparse(node.value), (
-                "plugin.py 又造了一个 threading.local()，不是引用 plugin_cron 那个"
-            )
-    assert found, "plugin.py 没 re-export _CATFISH_CRON_THREAD_LOCAL"
+
 
 
 # ── 注入契约 ────────────────────────────────────────────────────

@@ -211,7 +211,31 @@ config.yaml 是**升级保留**的 (upgrade-hermes-v020.sh 只备份不替换)�
 
 *(上面那个待确认项查完了: 不需要 config.yaml, 上游那段自己就带「设过就尊重」。)*
 
-### P25 `_patch_p25_cron_env_isolation` — 实验跑完了, 差最后一个条件
+### P25 `_patch_p25_cron_env_isolation` — ✅ 已退役 (8/19 执行)
+
+> **最后那个条件满足了**: 鸿波 8/19 确认「员工机 hermes 现在是 0.20, 再大版本
+> 升级会一起升级」—— 当年写下的「先确认所有部署的 hermes 版本」达成。
+>
+> 退役动作跟 P36 同一套: 删函数 + threadlocal + 调用点 + re-export;
+> 墓碑留在 `plugin_cron.py` 尾部; `INTENTIONALLY_REMOVED` 登记;
+> `audit_hermes_compat.sh` Section 20 (5 条锚点)。
+>
+> **两个测试文件跟着转了主语**, 没有直接删:
+>
+> | 文件 | 原来钉什么 | 现在钉什么 |
+> |---|---|---|
+> | `test_p25_pollution_visible.py` | P25 的探针不能掉回 `logger.debug` | 上游的 ContextVar 化还在 (5 条, 读真 hermes 树, 含一条**全树扫「谁还在写全局 env」**) |
+> | `test_p2x_cron_split.py` | threadlocal 只能被 P25 读 / re-export 是同一对象 | 那两条删了, 留注释说明接棒给谁 |
+>
+> 反向验证两次都会红:
+> 把 `_cron_session_var.set("1")` 改回 `os.environ[...]="1"` → 「没有人往全局env写」红;
+> 把 `set_session_vars` 改名 → 「cron 把 session 标记放进 contextvar」红。
+>
+> 插件全量 **293 passed**。36 → **35** 个 patch。
+
+<details><summary>实验过程 (保留)</summary>
+
+### P25 —— 实验记录
 
 > **8/19 补: 不用手工实验 —— P25 自己内置了退役探针, 而且 8/13 有人为这个实验
 > 做过准备。**

@@ -6,23 +6,10 @@ plugin.py 3958 行, CLAUDE.md §1 的硬红线是 800。
 # 装了什么
 
     P21  cron 跑 job 时按 picker 定模型 (不听会话持久化那份)
-    P25  cron 线程隔离 —— 见下面那条硬约束
     P26  cron 的 REST 端点 (pause / resume / delete)
     P27  cron job 失败自动重试
 
-# 一条不能弄错的硬约束: _CATFISH_CRON_THREAD_LOCAL
-
-hermes 的 `cron/scheduler.py:1558` 把 `HERMES_CRON_SESSION` env set 了**不清**,
-而 env 是进程级跨线程的 —— 于是整个 daemon 被污染。之后任何 chat / api 调
-execute_code 走 `approval.check_execute_code_guard:1714`, 看见 env=1 +
-cron_mode=deny 就 BLOCKED。现象是"execute_code 一直被拦"(P3.5.104, 6/24)。
-
-P25 用这个 threadlocal 精准判定"本线程**真的**在 cron run_job 里", 不依赖那个
-被污染的全进程 env。
-
-搬它的时候专门查过: 全仓 3 处读取**全在 `_patch_p25_cron_env_isolation` 内部**,
-没有组外用户。要是别处也在读, 搬走就会静默改变 execute_code 的放行判定 ——
-那种错不报错, 只是员工的 execute_code 有时被拦有时不被拦。
+(P25 cron 线程隔离 8/19 退役 —— 见文件尾的墓碑。)
 
 # 依赖是注入进来的
 
@@ -65,13 +52,6 @@ def _require_wiring() -> None:
         )
 
 
-# P3.5.104 P25 (6/24 鸿波 catch "execute_code 一直被拦"): cron 真线程隔离.
-# hermes cron/scheduler.py:1558 真把 HERMES_CRON_SESSION env set 后不清, 整
-# daemon 进程被污染 (env 是进程级跨线程). 后续任何 chat / api 调 execute_code
-# 走 approval.check_execute_code_guard:1714, 看 env=1 + cron_mode=deny → BLOCKED.
-# threadlocal 标记本线程是否真在 cron run_job 内, P25 patched check_execute_code_guard
-# 用它精准判定, 不依赖被污染的全进程 env.
-_CATFISH_CRON_THREAD_LOCAL = threading.local()
 
 
 async def _handle_cron_pause(self, request):
@@ -258,127 +238,6 @@ def _patch_p21_cron_picker_integration() -> None:
     )
 
 
-def _patch_p25_cron_env_isolation() -> None:
-    """治 hermes cron HERMES_CRON_SESSION env 污染全 daemon 进程的 bug.
-
-    见上方真因 audit. 两 patch (wrap run_job + wrap check_execute_code_guard) +
-    装载急救 pop, 真治本 + 防 race.
-
-    fail-safe: import 失败 / wrap 失败 → silent skip 老路径 (鸿波会看到现有 bug,
-    但 hermes 不会因 patch 异常起不来).
-    """
-    # ── 急救清现有污染 ──
-    if os.environ.pop("HERMES_CRON_SESSION", None):
-        logger.warning(
-            "P25 装载时清掉 HERMES_CRON_SESSION 污染 — hermes daemon 已被某个 "
-            "cron job 留下的 env 污染过, 装载瞬间清."
-        )
-
-    # ── wrap cron.scheduler.run_job (在 P21 之后, P25 包 P21 包 orig) ──
-    try:
-        from cron import scheduler as _cron_scheduler  # noqa: PLC0415
-    except ImportError as e:
-        logger.warning("P25: hermes cron.scheduler 没导, skip run_job wrap (%s)", e)
-        _cron_scheduler = None
-
-    if _cron_scheduler is not None:
-        _current_run_job = _cron_scheduler.run_job  # 可能是 P21 patched, 也可能是 orig
-        if getattr(_current_run_job, "_p25_patched", False):
-            logger.info("P25 run_job 已 wrap 过, 跳过 (避免双重 wrap, dev hot-reload)")
-        else:
-            @functools.wraps(_current_run_job)
-            def _patched_run_job(job, *args, **kwargs):
-                _CATFISH_CRON_THREAD_LOCAL.in_cron = True
-                try:
-                    return _current_run_job(job, *args, **kwargs)
-                finally:
-                    _CATFISH_CRON_THREAD_LOCAL.in_cron = False
-                    # 兜底 pop env (即使 hermes run_job 内部 set 了)
-                    os.environ.pop("HERMES_CRON_SESSION", None)
-
-            _patched_run_job._p25_patched = True  # type: ignore[attr-defined]
-            _cron_scheduler.run_job = _patched_run_job
-            logger.info(
-                "P25 wrap cron.scheduler.run_job 完成 — threadlocal in_cron 标识 + "
-                "finally pop HERMES_CRON_SESSION env"
-            )
-
-    # ── wrap tools.approval.check_execute_code_guard ──
-    try:
-        from tools import approval as _approval  # noqa: PLC0415
-    except ImportError as e:
-        logger.warning(
-            "P25: hermes tools.approval 没导, skip check_execute_code_guard wrap (%s)",
-            e,
-        )
-        return
-
-    _orig_check = getattr(_approval, "check_execute_code_guard", None)
-    if _orig_check is None:
-        logger.warning(
-            "P25: tools.approval 没 check_execute_code_guard 属性 "
-            "(hermes 升级改名?), skip"
-        )
-        return
-    if getattr(_orig_check, "_p25_patched", False):
-        logger.info("P25 check_execute_code_guard 已 wrap 过, 跳过")
-        return
-
-    # P3.5.192 (7/7 鸿波军规审判): hermes v0.18 (P3.5.159, 7/3 升级) 严格
-    # `check_execute_code_guard(code, env_type, has_host_access=False)` 加了第 3 参数,
-    # code_execution_tool.py:1156 会传 `has_host_access=...`. 本 wrapper 老签名
-    # 只 2 参数 → 每次 execute_code 调用 TypeError. Fix: 用 *args, **kwargs
-    # 透传所有位置/关键字参数给 _orig_check, 未来 hermes 再加参数也不用改.
-    @functools.wraps(_orig_check)
-    def _patched_check_execute_code_guard(code, env_type, *args, **kwargs):
-        if getattr(_CATFISH_CRON_THREAD_LOCAL, "in_cron", False):
-            # 真在 cron 线程 — 走原始 cron deny 路径 (env=1 真意图)
-            return _orig_check(code, env_type, *args, **kwargs)
-        # 非 cron 线程 — 临时 pop 假装 env 没 set (即使被污染, chat 不该被当 cron)
-        _prev_env = os.environ.pop("HERMES_CRON_SESSION", None)
-        try:
-            return _orig_check(code, env_type, *args, **kwargs)
-        finally:
-            # 不恢复 — caller 是 chat / api, 帮 hermes 清污染 (上游 bug 兜底)
-            if _prev_env is not None:
-                # 8/13: debug → warning。
-                #
-                # 这一行是**整个 P25 唯一能证明自己还有用的时刻** —— 它意味着真
-                # 发生了一次污染, 而 threadlocal 判据把它接住了。原来是 debug,
-                # 而 agent.log 里 DEBUG 一条都没有 (9347 INFO / 304 WARNING),
-                # 所以这个事件三个月来从未可见。
-                #
-                # 顺便当实验用: hermes 上游已经把 cron session 从 os.environ 改成
-                # ContextVar + token 还原 (cron/scheduler.py:3124, 注释原话
-                # "one cron job cannot taint unrelated gateway/API/TUI turns"),
-                # 也就是 P25 当初 (6/24) 治的那个病在新版 hermes 上不存在了。
-                #
-                #   · 这条**打出来** → 这台机器上还有走真 env 的路径, P25 仍必要
-                #   · 长期**不打** → 是 P25 可以退役的证据 (但退役前要确认所有
-                #     部署的 hermes 版本都带那个 ContextVar 修复, 见下方 TODO)
-                #
-                # ⚠ TODO(退役前必读): 非 cron 分支这个 pop 是**不恢复**的。
-                #   hermes 现在把 os.environ 那条留作"standalone cron 入口和测试"
-                #   的合法兜底 (scheduler.py 注释明说), 而 get_session_env 的
-                #   解析顺序是 ContextVar 优先、从未设过才回落 env。在 gateway
-                #   进程里 ContextVar 一定设过, 所以 pop 无影响; 但在独立 cron
-                #   入口 / 测试进程里, 一次非 cron 的 execute_code 就会把那个兜底
-                #   删掉, 之后 cron 的 deny 策略失效 —— 方向跟本 patch 的意图相反。
-                #   真要退役或收紧, 从这里下手。
-                logger.warning(
-                    "P25 接住一次 cron env 污染: 非 cron 线程调 execute_code 时发现 "
-                    "HERMES_CRON_SESSION=%r 残留, 已清掉再放行 (不清的话这次调用会被 "
-                    "cron_mode=deny 误拦)。这条出现说明本机 hermes 仍走真 os.environ "
-                    "那条路, P25 还不能退役。",
-                    _prev_env,
-                )
-
-    _patched_check_execute_code_guard._p25_patched = True  # type: ignore[attr-defined]
-    _approval.check_execute_code_guard = _patched_check_execute_code_guard
-    logger.info(
-        "P25 wrap tools.approval.check_execute_code_guard 完成 — "
-        "threadlocal 隔离 cron 真线程, 非 cron 线程透传 (env 临时 pop)"
-    )
 
 
 # ── P27 (P3.5.106 6/25 鸿波 catch "失败不重试"): cron 任务失败 5/10/15 三档自动重试 ──
@@ -413,7 +272,7 @@ def _patch_p25_cron_env_isolation() -> None:
 #   显示 last_delivery_error 让用户手动处理.
 #
 # 真不冲突路径:
-#   - P21/P25 wrap run_job (cron.scheduler 模块) — P27 wrap mark_job_run (cron.jobs
+#   - P21 wrap run_job (cron.scheduler 模块) — P27 wrap mark_job_run (cron.jobs
 #     模块) — 真两个独立 module, 真零嵌套
 #   - _jobs_lock() 真 reentrant (cron/jobs.py:89-95 threadlocal depth counter) —
 #     mark_job_run 内已持锁, P27 wrap 后再调 update_job 真不死锁
@@ -563,3 +422,55 @@ def _patch_p27_cron_auto_retry() -> None:
         "成功后清 retry 计数 ✓"
     )
 
+
+# ── P25 已退役 (8/19) ── 墓碑, 别再加回来 ─────────────────────────────
+#
+# P25 (P3.5.104, 6/24) 治的是: hermes cron 把 HERMES_CRON_SESSION 写进
+# os.environ 不清, 而 env 是进程级跨线程的 → 整个 daemon 被污染 → 之后任何
+# chat / api 调 execute_code 看见 env=1 + cron_mode=deny 就 BLOCKED。
+# 现象是员工那句"execute_code 一直被拦"。
+#
+# 做法: 一个 threadlocal (_CATFISH_CRON_THREAD_LOCAL) 精准标记"本线程真在
+# cron run_job 里", 加 wrap check_execute_code_guard 在非 cron 线程临时 pop 掉
+# 污染的 env。
+#
+# # 为什么退役 —— 上游把病因改掉了
+#
+# hermes 0.20 的 cron 已经改成 ContextVar + token 还原:
+#
+#     cron/scheduler.py:3124   _cron_session_var = _VAR_MAP["HERMES_CRON_SESSION"]
+#                              _cron_session_token = _cron_session_var.set("1")
+#     cron/scheduler.py:3777   _cron_session_var.reset(_cron_session_token)
+#
+#     tools/approval.py:227    _is_cron_approval_context() 优先读 get_session_env,
+#                              docstring 原话 "so one cron job cannot taint
+#                              unrelated gateway/API/TUI turns in the same process"
+#
+# P25 自己注释里指名的病灶行 cron/scheduler.py:1558 —— 现在是 delivery
+# thread_id 的代码, 那个 env 写入早就不在了。
+#
+# 全树搜"谁还在写全局 HERMES_CRON_SESSION": catfish 0 处、~/.hermes/.env 0 处、
+# hermes 全树 0 处 (只剩 session_context.py:240 一句文档提到 os.environ fallback)。
+#
+# # 退役的现场证据 —— 是 P25 自己攒的
+#
+# P25 内置了退役探针, 而且 8/13 有人特意把它从 logger.debug 提到 warning
+# (理由见当年的 tests/test_p25_pollution_visible.py: "一个只在 debug 级打的
+# 证据等于没有证据")。8/19 读日志:
+#
+#     日志窗口                gateway.log 8/08 → 8/20 (12 天)
+#     同期 cron job           340 次
+#     同期 execute_code       494 次
+#     对照组「P25 wrap」      1810 次 (证明 patch 真装上了)
+#     「P25 接住一次污染」    0
+#     「P25 装载时清掉污染」  0
+#
+# 部署侧: 鸿波确认员工机 hermes 统一 0.20, 大版本升级一起升 —— 满足当年写下的
+# 退役条件「长期不打 → 可以考虑退役 (但要先确认所有部署的 hermes 版本)」。
+#
+# ⚠ 我们现在**依赖上游那个 ContextVar 化**。它要是改回 os.environ, 故障形状跟
+#   当年一样 (execute_code 被 cron_mode=deny 误拦), 而且不报错。两道保险:
+#     tests/test_p25_pollution_visible.py            读真 hermes 树验行为
+#     audit_hermes_compat.sh Section 20              升级前验锚点
+#
+# 判定过程见 docs/HERMES-PATCH-AUDIT-2026-08-19.md。

@@ -201,17 +201,16 @@ _p39_prune_codex_cache = plugin_codex_session._p39_prune_codex_cache  # noqa: F4
 _P39_CODEX_CACHE = plugin_codex_session._P39_CODEX_CACHE  # noqa: F401  (re-export · 注意是同一个 dict 对象)
 
 
-# cron 一族 (8/13 拆出, 456 行): P21 picker / P25 线程隔离 / P26 REST / P27 重试。
+# cron 一族 (8/13 拆出): P21 picker / P26 REST / P27 重试。
+# (P25 线程隔离 8/19 退役 —— 上游 cron 改 ContextVar 了, 见 plugin_cron.py 墓碑。)
 # 跟 plugin_codex_session 同一套注入协议 —— 只要一个 model_authority。
 plugin_cron = _import_sibling("plugin_cron")
 plugin_cron.model_authority = model_authority
 plugin_cron._require_wiring()          # 加载期验, 不等 cron 真触发
-_CATFISH_CRON_THREAD_LOCAL = plugin_cron._CATFISH_CRON_THREAD_LOCAL  # noqa: F401  (re-export · 注意是同一个对象)
 _handle_cron_pause = plugin_cron._handle_cron_pause  # noqa: F401  (re-export)
 _handle_cron_resume = plugin_cron._handle_cron_resume  # noqa: F401  (re-export)
 _handle_cron_delete = plugin_cron._handle_cron_delete  # noqa: F401  (re-export)
 _patch_p21_cron_picker_integration = plugin_cron._patch_p21_cron_picker_integration  # noqa: F401  (re-export)
-_patch_p25_cron_env_isolation = plugin_cron._patch_p25_cron_env_isolation  # noqa: F401  (re-export)
 _patch_p26_cron_rest_endpoints = plugin_cron._patch_p26_cron_rest_endpoints  # noqa: F401  (re-export)
 _patch_p27_cron_auto_retry = plugin_cron._patch_p27_cron_auto_retry  # noqa: F401  (re-export)
 
@@ -424,12 +423,10 @@ def _apply_patches() -> None:
     # 自定义 header 浏览器 preflight block 触发 TypeError: Load failed 真因.
     _try_patch(_patch_p24_cors_allowlist, "P24: _patch_p24_cors_allowlist 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
 
-    # P25 (P3.5.104 6/24 鸿波 catch "execute_code 不弹审批一直被拦"): cron env
-    # 隔离, 治 hermes cron/scheduler.py:1558 设 HERMES_CRON_SESSION 后不清污染
-    # 全 daemon 进程的 bug. P25 用 threadlocal 精准判定 cron 线程, 不依赖被污染
-    # 的全进程 env. 必须在 P21 (wrap run_job) 之后调用 — P25 内部也 wrap run_job
-    # set threadlocal, 顺序保证 P25 包 P21 包 orig, finally pop env 在最外层.
-    _try_patch(_patch_p25_cron_env_isolation, "P25: _patch_p25_cron_env_isolation 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
+    # P25 已退役 (8/19) —— 上游 cron 把 HERMES_CRON_SESSION 从 os.environ 改成
+    # ContextVar + token 还原 (cron/scheduler.py:3124 set / :3777 reset), 病因消失。
+    # 12 天实测 340 次 cron + 494 次 execute_code, P25 自带的两个探针 0 命中。
+    # 详见 plugin_cron.py 尾部墓碑 + docs/HERMES-PATCH-AUDIT-2026-08-19.md。
 
     # P26 (P3.5.105 6/25 鸿波 catch "定时任务跑没跑结果如何都看不到"): cron 监控
     # 操作 RESTful endpoint. attach handler 给 APIServerAdapter class; 真 route

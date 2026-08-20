@@ -318,12 +318,47 @@ check_grep "gateway/cwd_placeholder.py" "return messaging or home_fallback" \
 
 echo ""
 
+# ============================================================
+# Section 20 — P25 退役之后依赖的上游行为 (8/19)
+# ============================================================
+#
+# P25 (cron 线程隔离) 8/19 退役, 因为上游把 HERMES_CRON_SESSION 从 os.environ
+# 改成了 ContextVar + token 还原。**我们现在依赖它。**
+#
+# 它改回 os.environ 的话故障形状跟当年一样: cron 跑完污染整个 daemon, 之后任何
+# chat / api 调 execute_code 被 cron_mode=deny 误拦, 而且不报错。
+echo "── Section 20: P25 退役依赖 (cron session 走 ContextVar) ──"
+
+check_grep "cron/scheduler.py" "set_session_vars" \
+    "cron 仍走 session_context (不是全局 env)"
+check_grep "cron/scheduler.py" "_VAR_MAP\[.HERMES_CRON_SESSION.\]" \
+    "cron session 标记仍是 ContextVar"
+check_grep "cron/scheduler.py" "_cron_session_(var|token)" \
+    "cron session token 还原机制还在"
+check_grep "tools/approval.py" "cron job cannot taint unrelated" \
+    "上游仍承诺「一个 cron job 不污染无关 turn」"
+
+# 直接判据: 不该有人往全局 env 写这个变量
+_p25_writers=$(grep -rnE "os\.environ\[[\"']HERMES_CRON_SESSION[\"']\][[:space:]]*=" \
+    "$HERMES_ROOT" --include=*.py 2>/dev/null | grep -v "/tests/" | grep -v hermes-runtime | wc -l | tr -d ' ')
+if [ "${_p25_writers:-0}" -eq 0 ]; then
+    echo "  ✓ 没有人往全局 env 写 HERMES_CRON_SESSION (P25 的病因仍然不存在)"
+    ((pass++))
+else
+    echo "  ✗ 有 $_p25_writers 处往全局 env 写 HERMES_CRON_SESSION —— P25 的病回来了"
+    echo "     → cron 跑完污染整个 daemon, execute_code 会被 cron_mode=deny 误拦"
+    echo "     修法/背景: plugin_cron.py 尾部的 P25 墓碑"
+    ((fail++))
+fi
+echo ""
+
 echo "========================================"
 echo "结果: pass=$pass  fail=$fail"
 if [ "$fail" -eq 0 ]; then
     echo "✓ 19 patch + memory + prefetch + approval/run_agent/connect 全适配 (sec 1-16)"
     echo "  + P45 被 defer 工具改名守卫锚点在位 (sec 18)"
     echo "  + P36 退役依赖的 TERMINAL_CWD home 兜底还在 (sec 19)"
+    echo "  + P25 退役依赖的 cron ContextVar 化还在 (sec 20)"
     echo "  + models.yaml chat model 全配 max_output_tokens (sec 17), 升级/加 model OK"
     exit 0
 else
