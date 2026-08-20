@@ -1,13 +1,46 @@
 #!/usr/bin/env bash
-# install-catfish-memory.sh — 把 catfish-memory hermes plugin 装进
-# ~/.hermes/hermes-agent/plugins/memory/, 通过软链方式 (避免 hermes 升级时
-# 覆盖 plugin).
+# install-catfish-memory.sh — 把 catfish-memory hermes plugin 软链进
+# ~/.hermes/plugins/ (**树外**), 让它扛得住 hermes 升级.
 #
 # 装完会建议员工: hermes memory setup 激活 (或我们直接改 ~/.hermes/config.yaml
 # 的 memory.provider).
 #
 # 5/19 凌晨 (BL-CATFISH-MEMORY-PLUGIN-INSTALL-SCRIPT). 跟
 # install-catfish-autocompress.sh 同模式.
+#
+# ─────────────────────────────────────────────────────────────────────
+# 8/20: 改装到树外. 原来那行注释写的是"通过软链方式(避免 hermes 升级时覆盖
+# plugin)" —— 意图从一开始就是对的, 但链建在了
+# `~/.hermes/hermes-agent/plugins/memory/` 里, 而**升级换的正是整棵
+# hermes-agent 树**. 软链跟着树一起没.
+#
+# 更糟的是失败形状是静默的. 升级后:
+#
+#     config.yaml 里 memory.provider: catfish-memory   ← 还在
+#     软链                                              ← 没了
+#     plugins/memory/__init__.py:201
+#         """Returns None if the provider is not found or fails to load."""
+#         logger.warning("Failed to load memory provider '%s': %s", name, e)
+#         return None
+#
+# 一条 warning, 然后返 None —— 记忆静默停止工作, agent 照常回答, 只是不记事了.
+#
+# 对照组: `catfish-xcatfish-user` 链在 `~/.hermes/plugins/` (树外), 而且
+# upgrade-hermes-v019.sh / v020.sh 两个升级脚本里都点了名. catfish-memory
+# 一个都没有 —— 只在本脚本和日志脚本里出现过.
+#
+# 治本而不是往升级脚本里加一行的理由: 上游本来就支持树外的记忆 provider.
+#   · hermes_cli/plugins.py 扫三个根: bundled / user(~/.hermes/plugins) / project
+#   · 用户装的记忆 provider 会被 auto-coerce 成 kind="exclusive" (plugins.py:1613)
+#   · plugins/memory/__init__.py:_iter_provider_dirs() 第 2 步就是扫 user 目录
+#   · 判据 _is_memory_provider_dir(): __init__.py **前 8192 字节**里出现
+#     `register_memory_provider` 或 `MemoryProvider`
+#     (catfish-memory 实测在第 339 / 29 字节, 余量充足 —— 但这条判据有个
+#      静默失效的边: 标记被挤出 8192 就不再被发现. 有测试钉着, 见
+#      catfish-memory/tests/test_plugin_survives_hermes_upgrade.py)
+#
+# 放树外之后, 升级脚本不需要知道它 —— 少一处"必须记得同步"的地方.
+# ─────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
 
@@ -50,22 +83,28 @@ if [ ! -d "$HERMES_AGENT_DIR" ]; then
     err "找不到 $HERMES_AGENT_DIR. 先装 Hermes 再来 (https://hermes.fm)"
     exit 1
 fi
+# 我们不再往 plugins/memory/ 里装东西, 但它在不在仍然是"hermes 够不够新"的
+# 廉价判据 (0.13+ 才有 memory provider 体系). 留着当版本检查用.
 if [ ! -d "$HERMES_AGENT_DIR/plugins/memory" ]; then
     err "$HERMES_AGENT_DIR/plugins/memory 不存在 — Hermes 版本太老 (需要 0.13+ memory provider 体系)"
     exit 1
 fi
 ok "Hermes agent: $HERMES_AGENT_DIR"
-ok "plugins/memory/ 目录存在"
+ok "memory provider 体系存在 (0.13+)"
 
-# 2. 软链 catfish-memory
-step 2 "软链 catfish-memory 到 Hermes plugins/memory/"
+# 2. 软链 catfish-memory (树外)
+step 2 "软链 catfish-memory 到 ~/.hermes/plugins/ (树外)"
 SRC="$SCRIPT_DIR/catfish-memory"
-DST="$HERMES_AGENT_DIR/plugins/memory/catfish-memory"
+USER_PLUGINS="$HOME/.hermes/plugins"
+DST="$USER_PLUGINS/catfish-memory"
+LEGACY_DST="$HERMES_AGENT_DIR/plugins/memory/catfish-memory"
 
 if [ ! -d "$SRC" ]; then
     err "$SRC 不存在"
     exit 1
 fi
+
+mkdir -p "$USER_PLUGINS"
 
 # 幂等: 旧的软链或目录先清掉
 if [ -L "$DST" ] || [ -e "$DST" ]; then
@@ -73,6 +112,19 @@ if [ -L "$DST" ] || [ -e "$DST" ]; then
 fi
 ln -s "$SRC" "$DST"
 ok "$DST -> $SRC"
+
+# 迁移: 树内那条老链必须删掉, 不能留着"以防万一".
+#
+# _iter_provider_dirs() 是 bundled 优先 (第 1 步 seen.add, 第 2 步 `if child.name
+# in seen: continue`). 两条链并存的话, 生效的仍然是树内那条 —— 新链一行代码都
+# 跑不到, 而这里会打印"OK 已装到树外", 看上去完全正常.
+#
+# 那就又是一次「不会失败, 也不会生效」: 装好了, 也确实有个链在树外, 但真正在用
+# 的还是会被升级抹掉的那条, 直到升级当天才发现。
+if [ -L "$LEGACY_DST" ] || [ -e "$LEGACY_DST" ]; then
+    rm -rf "$LEGACY_DST"
+    ok "已清掉树内旧链 $LEGACY_DST (它会被 hermes 升级抹掉, 且并存时会盖住新链)"
+fi
 
 # 3. 自检 plugin 可加载
 step 3 "自检 plugin 可加载"

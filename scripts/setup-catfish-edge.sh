@@ -7,8 +7,11 @@
 #   1. 生成强随机 API_SERVER_KEY (hermes ↔ Companion 共享密钥)
 #   2. 写 ~/.hermes/.env (API_SERVER_ENABLED=true + API_SERVER_KEY=...)
 #   3. 写 ~/.catfish/companion.yaml hermes_api 段 (enabled + url + key)
-#   4. 软链 catfish-memory plugin 到 hermes plugins/memory/ + 改 hermes config
-#      memory.provider = catfish-memory (调 install-catfish-memory.sh -y)
+#   4. 软链 catfish-memory plugin 到 ~/.hermes/plugins/ (**树外**, 8/20 改) +
+#      改 hermes config memory.provider = catfish-memory
+#      (调 install-catfish-memory.sh -y)
+#      树外的原因: 升级换的是整棵 hermes-agent/, 装在树里的软链会静默消失,
+#      而 provider 加载失败只打一条 warning 就返 None。详见那个脚本的头注释。
 #   5. (可选) 软链 catfish-autocompress plugin (调 install-catfish-autocompress.sh)
 #   6. (可选) 重启 hermes gateway 让新 .env 生效
 #
