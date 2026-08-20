@@ -234,7 +234,10 @@ def test_render_script_py():
     assert "def main(" not in py  # 不再有 main
     assert "Step 1: 进资质管理" in py
     assert "parse_page" in py
-    assert '"ok": True' in py
+    # 8/20: 步骤只 emit 成注释, body 没实现 → 必须返 ok=False。
+    # 原来这里断言 '"ok": True', 把「什么都不做却报告成功」钉成了契约。
+    # 详见 test_skill_format.test_script_py_returns_dict_with_ok 的说明。
+    assert '"ok": False' in py
 
 
 def test_render_main_py_deprecated_alias_still_works():

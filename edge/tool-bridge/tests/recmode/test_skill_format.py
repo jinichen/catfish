@@ -205,9 +205,26 @@ def test_script_py_kebab_to_snake_for_fn_name():
 
 
 def test_script_py_returns_dict_with_ok():
+    """生成的默认 body 必须返 ok=False —— 因为它**什么都没实现**。
+
+    8/20 之前这条断言的是 `'"ok": True' in code`, 等于把
+    「什么都不做, 然后报告成功」钉成了契约。
+
+    生成器把每个步骤只 emit 成注释 (源码里那句 "skill 真跑接 catfish runtime,
+    这里 emit 模板" —— 那个 runtime 并不存在), 然后无条件 return ok=True。
+    于是 propose/install 出来的每个 skill 都是空壳; 8/19 凝固的
+    eis-zizhi-shenpi 就是 32 行、函数体只有一个 return, 而它骑在
+    「资质申请审批」这条政企流程上。
+
+    配上 catfish_tool_schemas_skill.py 里那条铁律 (返 ok=false 才允许模型手工
+    接管), ok=True 意味着模型会告诉员工"已办理", 实际什么都没提交。
+
+    失败要看得见, 不能伪装成成功。
+    """
     code = render_script_py(_valid_manifest())
-    # 默认 body 必含 return {"ok": True, ...}
-    assert '"ok": True' in code
+    assert '"ok": False' in code, "生成的空壳又开始报告成功了"
+    assert '"ok": True' not in code, "残留了无条件成功的返回"
+    assert "没有实现" in code, "得说清楚为什么失败, 否则员工看不懂"
 
 
 def test_script_py_includes_execute_code_segment():

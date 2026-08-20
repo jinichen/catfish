@@ -400,14 +400,59 @@ def run_skill(args: Dict[str, Any]) -> Dict[str, Any]:
     duration_ms = int((time.time() - started_at) * 1000)
     files = _extract_file_paths(result)
 
-    # 写 audit (成功)
+    # ── skill 自己说成没成 (8/20 修) ────────────────────────────────
+    #
+    # 这里原来是硬编码 `"ok": True` —— 只要 render 函数**没抛异常**就算成功,
+    # 完全不看它返回的 result 里写了什么。后果:
+    #
+    #   script.py 里:  return {"ok": False, "error": "验证码识别失败超过 max_captcha_retry 次"}
+    #   run_skill 返:  {"ok": True, "summary": "已通过 department/eis-login ..."}
+    #
+    # 模型收到「已通过」, 员工收到「已通过」, 而 EIS 根本没登进去。
+    # 8/17-8/18 有 7 次是这样, 审计里全记成 ok=True, 靠 mcp-stderr 里的
+    # `skill step ... 失败` 才对出来。
+    #
+    # 更糟的是它把上游那条铁律架空了: catfish_tool_schemas_skill.py 里写着
+    # 「本 tool 返 ok=false 时**必须**报告员工、禁止手工接管」—— 而它永远
+    # 等不到 false, 于是模型既不报告, 也不接管, 直接往下走。
+    #
+    # ── 判据为什么是「显式 falsy」而不是「没有 ok 就算失败」──
+    #
+    # 不是所有 skill 都返 dict、都带 ok 字段: 渲染类 (leadership-briefing 等)
+    # 可能直接返路径字符串或 {"docx": "/path/x.docx"}。把「没有 ok」当失败,
+    # 会一次性判死一批本来能用的 skill —— 那是把判据从太宽拨到太窄, 换个方向
+    # 犯同一个错。
+    #
+    # 所以只在**明确返了 ok 且为假**时判失败, 其余一律照旧当成功。
+    skill_reported_failure = isinstance(result, dict) and "ok" in result and not result["ok"]
+    skill_ok = not skill_reported_failure
+    skill_error = (
+        str(result.get("error") or result.get("last_step") or "")[:300]
+        if skill_reported_failure else ""
+    )
+
     audit_event.update({
-        "ok": True,
+        "ok": skill_ok,
         "duration_ms": duration_ms,
         "file_count": len(files),
         "files": files[:10],  # 限制 10 个 path 防 audit 过大
     })
+    if skill_reported_failure:
+        audit_event["error_type"] = "SkillReportedFailure"
+        audit_event["error_msg"] = skill_error
     _write_skill_audit(audit_event)
+
+    if skill_reported_failure:
+        return {
+            "ok": False,
+            "error": f"{skill_path} 执行未成功: {skill_error or '(skill 返回 ok=false, 未给 error)'}",
+            "result": result,
+            "files": files,
+            "summary": (
+                f"{skill_path} (v{metadata['version']}) 没跑成: "
+                f"{skill_error or '(skill 没给原因, 见 result)'}"
+            ),
+        }
 
     response: Dict[str, Any] = {
         "ok": True,

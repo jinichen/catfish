@@ -363,10 +363,27 @@ def render_script_py(manifest: SkillManifest) -> str:
             parts.append(f"    {line}")
         parts.append("")
 
+    # ── 返回 ok=False, 不是 ok=True (8/20 修) ──────────────────────
+    #
+    # 这里原来生成的是 `"ok": True, "summary": "skill X 跑完"` —— 而上面那些
+    # 步骤**只是注释**, 一行都没实现 (见上面那句 "skill 真跑接 catfish runtime,
+    # 这里 emit 模板" —— 那个 runtime 并不存在)。
+    #
+    # 于是每个 propose/install 出来的 skill 都是: 什么都不做, 然后报告成功。
+    # 8/19 凝固的 eis-zizhi-shenpi 就是这样, 32 行, 整个函数体只有一个
+    # 无条件 return。它骑在「资质申请审批」这条政企流程上。
+    #
+    # 配上 catfish_tool_schemas_skill.py 里那条铁律 (返 ok=false 才允许手工
+    # 接管), ok=True 意味着模型会告诉员工"已办理", 而实际什么都没提交。
+    #
+    # 改成 ok=False + 说清楚为什么。代价是这类 skill 调用会明确失败 ——
+    # 这正是我们要的: 失败要看得见, 而不是伪装成成功。
     parts.extend([
         '    return {',
-        '        "ok": True,',
-        f'        "summary": "skill {manifest.name} 跑完",',
+        '        "ok": False,',
+        f'        "error": "skill {manifest.name} 的步骤只凝固成了注释, 函数体没有实现 — '
+        '请按上面的步骤补实现, 或者把 SKILL.md 当文档用 (让模型照着步骤自己执行)。",',
+        f'        "summary": "skill {manifest.name} 未实现 (只有步骤注释)",',
         '        "files": [],',
         '    }',
         '',
