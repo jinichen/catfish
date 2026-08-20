@@ -211,6 +211,56 @@ config.yaml 是**升级保留**的 (upgrade-hermes-v020.sh 只备份不替换)�
 
 *(上面那个待确认项查完了: 不需要 config.yaml, 上游那段自己就带「设过就尊重」。)*
 
+### P25 `_patch_p25_cron_env_isolation` — 实验跑完了, 差最后一个条件
+
+> **8/19 补: 不用手工实验 —— P25 自己内置了退役探针, 而且 8/13 有人为这个实验
+> 做过准备。**
+>
+> `plugin_cron.py` 那个 `finally` 里的原话:
+> 「这条出现说明本机 hermes 仍走真 os.environ 那条路, **P25 还不能退役**」。
+> 而 `tests/test_p25_pollution_visible.py` 文件头写着 8/13 把它从 `logger.debug`
+> 提到 warning 的理由:「一个只在 debug 级打的证据等于没有证据」。
+>
+> **实验结果 (读真日志, 不是推断)**:
+>
+> | | |
+> |---|---|
+> | 日志窗口 | gateway.log 覆盖 **8/08 → 8/20** (12 天) |
+> | 同期 cron job | **340** 次 |
+> | 同期 execute_code | **494** 次 |
+> | 对照组「P25 wrap」装载记录 | **1810** 次 (证明 patch 真装上了) |
+> | **「P25 接住一次 cron env 污染」** | **0** |
+> | **「P25 装载时清掉…污染」** | **0** |
+>
+> **代码侧四条独立佐证**:
+>
+> 1. P25 注释指名的病灶行 `cron/scheduler.py:1558` —— 现在是 delivery
+>    thread_id 的代码, 那个 env 写入早就不在了
+> 2. 上游改成 ContextVar + token 还原:
+>    `scheduler.py:3124` `_cron_session_var.set("1")` /
+>    `:3777` `_cron_session_var.reset(_cron_session_token)`
+> 3. `approval.py:227` `_is_cron_approval_context()` 优先读
+>    `get_session_env`, docstring 原话「so one cron job cannot taint unrelated
+>    gateway/API/TUI turns in the same process」
+> 4. **没有任何一方还在写全局 env**: catfish 全仓 0 处、`.env` 0 处、
+>    hermes 全树 0 处 (只剩 session_context.py:240 一句文档)
+>
+> **⚠ 差的那个条件, 是仓库自己写的**:
+> `test_p25_pollution_visible.py` 的退役判据是
+> 「长期不打 → 可以考虑退役 **(但要先确认所有部署的 hermes 版本)**」。
+>
+> 我只能观测**一台**机器 (鸿波的, hermes v2026.8.3 / 0.20.0)。
+> 仓库里没有部署版本登记表 (`docs/HERMES-DEPLOYMENT-NOTES.md` 只有 0.15.1→0.16
+> 的历史)。而这个插件是**软链到 repo 共享的** —— 删了对所有员工同时生效。
+>
+> 如果还有员工停在 ContextVar 化之前的 hermes, P25 在那台机器上仍然必要。
+>
+> **所以停在这里, 等一个只有鸿波知道的答案: 员工机的 hermes 版本是不是都 ≥ 0.20?**
+> 若答案是否, 可行的折中是**按版本自退役** (探到上游有 ContextVar 就 skip),
+> 而不是硬删。
+
+<details><summary>第一版的判断 (保留)</summary>
+
 ### P25 `_patch_p25_cron_env_isolation` — 疑似可退役
 
 | | |
@@ -227,6 +277,10 @@ config.yaml 是**升级保留**的 (upgrade-hermes-v020.sh 只备份不替换)�
 ps eww $(pgrep -f "hermes.*gateway" | head -1) | tr ' ' '\n' | grep HERMES_CRON_SESSION
 # 空 = 上游确实修好了，P25 可退役
 ```
+
+</details>
+
+*(这个手工实验不用做了 —— P25 自带的探针已经把答案记在日志里了, 见上。)*
 
 ### P26 `_patch_p26_cron_rest_endpoints` — 部分冗余
 
