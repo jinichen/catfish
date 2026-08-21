@@ -31,9 +31,13 @@ description: |-
 ```
 catfish_run_skill(
   skill_path="department/eis-login",
-  params={"username": 'chenhb', "password_ref": 'keychain://eis_password', "max_captcha_retry": 3}
+  params={"username": 'chenhb', "max_captcha_retry": 3}
 )
 ```
+
+> **密码不用传。** 8/20 起这条 skill 走 `secret_for_site` —— 按当前页站点现查
+> 本机存的密码，员工在 Companion「登录密码」里改完，下一次跑就是新的。
+> 老写法 `password_ref` 传了也不会报错（落进 `**_kwargs` 被忽略），但**不再生效**。
 
 ## 凝固时的 8 步教学 trace
 
@@ -50,8 +54,14 @@ catfish_run_skill(
 | 参数 | 类型 | 默认 |
 |---|---|---|
 | `username` | str | 'chenhb' |
-| `password_ref` | str | 'keychain://eis_password' |
 | `max_captcha_retry` | int | 3 |
+
+密码不是参数 —— 运行时按 `page.url` 的站点从本机凭据库现查（`secret_for_site`）。
+
+> `password_ref` 8/20 删了。它焊死的 `keychain://eis_password` 是 4/28 手工建的
+> 那条，而员工改密码走的是 Companion 界面（存 `catfish-teaching:eis.ffcs.cn`）。
+> 8/20 比过两条的 sha256：**不一样**，这条 skill 一直在拿过期密码登，
+> 而界面上显示"已保存"。病因和修法见 `skill_freeze_template.py:175-190`。
 
 ## 修改方式
 

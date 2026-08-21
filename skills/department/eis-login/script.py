@@ -66,10 +66,13 @@ def _call(tool_name: str, args: dict[str, Any], retries: int = 2, retry_delay: f
 
 def render_eis_login(
     username: str = 'chenhb',
-    password_ref: str = 'keychain://eis_password',
     max_captcha_retry: int = 3,
     **_kwargs: Any,
 ) -> dict[str, Any]:
+    # password_ref 8/20 删掉 —— 密码改走 secret_for_site (按当前页站点现查)。
+    # 老调用方传 password_ref 不会炸: 它落进 **_kwargs 被忽略。
+    #   · run_skill 是 fn(**params) 展开调的
+    #   · SKILL.md 的示例也一并改了, 但对话历史里可能还留着老写法
     """跑凝固后的 department/eis-login 流程.
 
     Returns: {ok, ...} 业务结果. 失败时 ok=false + error + last_step.
@@ -86,9 +89,27 @@ def render_eis_login(
         last_step = "fill:#name"
         _r = _call("catfish_browser_fill", {"selector": '#name', "text": username})
         if not _r.get("ok"): raise _SkillStepFailure("fill", _r.get("error", "fill 失败"))
-        last_step = "fill_secret:#pwd"
-        _r = _call("catfish_browser_fill", {"selector": '#pwd', "secret_ref": password_ref})
-        if not _r.get("ok"): raise _SkillStepFailure("fill_secret", _r.get("error", "fill 失败"))
+        # 8/20 手改这一行 (破例, 理由见下)。改前是:
+        #     _call("catfish_browser_fill", {"selector": '#pwd', "secret_ref": password_ref})
+        # password_ref 默认焊的是 'keychain://eis_password' —— 4/28 手工建的那条。
+        # 而员工现在改密码走 Companion 界面, 存的是 catfish-teaching:eis.ffcs.cn。
+        # 8/20 比过两条的 sha256: **不一样**, 冻结 skill 拿的是过期密码, 登录会报
+        # "账号或密码错误", 而界面上显示"已保存" —— 两边谁也不知道谁。
+        #
+        # 这个病 skill_freeze_template.py:175-190 早就写着 (8/17 实撞), 修法也在
+        # 那儿: secret_for_site 不焊任何"当天的值", 站点是运行时从 page.url 取的,
+        # 员工改完密码下一次跑就是新的。
+        #
+        # 本 skill 5/12 凝固, 比 secret_for_site (8/18 才加) 早三个月 —— 不是坏了,
+        # 是生得早。
+        #
+        # 破例手改的理由: 这三行跟 skill_freeze_template.py 的 secret_for_site 分支
+        # 生成的**逐字一致** (含 last_step 名字和两行 raise 的换行), 所以将来真重新
+        # 凝固也会生成同一段, 不冲突。
+        last_step = "fill_secret_for_site:#pwd"
+        _r = _call("catfish_browser_fill", {"selector": '#pwd', "secret_for_site": True})
+        if not _r.get("ok"):
+            raise _SkillStepFailure("fill_secret_for_site", _r.get("error", "fill 失败"))
 
         # captcha retry loop (freeze 引擎自动插入: 识别失败时刷图重识)
         last_step = "captcha_recognize"
