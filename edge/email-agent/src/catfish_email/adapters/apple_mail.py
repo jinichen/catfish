@@ -181,6 +181,24 @@ class AppleMailAdapter(EmlxFallbackMixin, EmailAdapter):
         ]
 
     def list_messages(self, filt: ListFilter) -> list[Message]:
+        # 8/21 治本: 读侧 emlx-first。磁盘上有 Mail 数据目录就走索引
+        # (readdir+stat 对账 + SQLite), 不再每次用 AppleScript 逐封 8 字段抽
+        # (500 封 × 4 账号 ≈ 1.6 万次 Apple Event, 切一次 tab 全量重来 ——
+        # 这就是「切回邮件页要等很久」的真因)。
+        #
+        # AS 保留给写侧 (发送/草稿/标已读) 和 emlx 目录不存在时的读兜底。
+        # DESIGN.md 里 AS-first 的理由全是写侧的, 读列表没有非 AS 不可的理由。
+        #
+        # 逃生口: CATFISH_EMAIL_NO_INDEX=1 → 完全回老路。索引本身出怪事
+        # (权限/损坏) 也自动回老路, 不让新路径把 list 弄挂。
+        if not os.environ.get("CATFISH_EMAIL_NO_INDEX"):
+            if self._emlx_dir_for_reading() is not None:
+                try:
+                    return self._list_messages_indexed(filt)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "email_index 读侧失败, 回退 AppleScript: %s", e
+                    )
         if self._use_emlx_fallback:
             return self._list_messages_emlx(filt)
         try:

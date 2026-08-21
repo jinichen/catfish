@@ -108,9 +108,33 @@ interface EmailState {
   isRead: (id: string) => boolean;
   /** 清掉 readIds — 员工想 reset 时 (不常用, 隐私逃生) */
   clearReadHistory: () => void;
+
+  // ── 8/21 治本配套: 列表跨挂载缓存 (纯内存, 故意不 persist) ──────────
+  //
+  // EmailTab 是条件渲染 (App.tsx:268 `activeTab === "email" && <EmailTab/>`),
+  // 切走即卸载, items 这些 useState 全销毁 —— 切回就要重拉重等。这是
+  // 「切回邮件页要等很久」的前端一半 (后端一半是 AS 全量抽取, 已由
+  // catfish-email 的 emlx 索引治掉)。
+  //
+  // 放 store 里就跨挂载存活: 切回瞬间先显缓存, loadList 后台刷新。
+  // EmailTab.tsx:393 `loading && items.length === 0` 才显示"加载中",
+  // 所以有缓存时刷新是静默的。
+  //
+  // **故意不进 localStorage**: 500 封元数据 ~200KB, 会挤占 urgency 那份
+  // 配额; 而 App 冷启动本来就该拉一次 (后端热路径现在是毫秒级)。
+  // 这个缓存治的只是"切 tab", 不治"重启" —— 边界写清楚。
+  listCache: {
+    items: unknown[];
+    sentItems: unknown[];
+    accounts: unknown[];
+    savedAt: number;
+  } | null;
+  setListCache: (c: { items: unknown[]; sentItems: unknown[]; accounts: unknown[] }) => void;
 }
 
 export const useEmailStore = create<EmailState>((set, get) => ({
+  listCache: null,
+  setListCache: (c) => set({ listCache: { ...c, savedAt: Date.now() } }),
   urgencyMap: loadPersistedUrgency(),
   readIds: loadPersistedRead(),
   lastSyncedAt: null,

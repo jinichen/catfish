@@ -50,14 +50,25 @@ import { isReplied } from "../../lib/emailThread";
 const MAX_EMAIL_LIST_LIMIT = 500;
 
 export default function EmailTab() {
-  const [items, setItems] = useState<EmailDigestItem[]>([]);
+  // 8/21 治本配套: 初值取跨挂载缓存 (store 纯内存)。EmailTab 是条件渲染,
+  // 切走即卸载 —— 没有这份缓存, 切回就要白屏等 loadList。有了它, 切回瞬间
+  // 显示上次的列表, loadList 在后台静默刷新 (loading 只在 items 为空时显示,
+  // 见下面 headerSummary 的 `loading && items.length === 0`)。
+  const listCache = useEmailStore.getState().listCache;
+  const [items, setItems] = useState<EmailDigestItem[]>(
+    () => (listCache?.items as EmailDigestItem[]) ?? [],
+  );
   // P3.5.204.b (7/9): Sent (已发送) 邮件独立存. 只用于 isReplied 判定 (员工回
   // 复过的邮件 in_reply_to 指向 Inbox 里被回复邮件的 message_id, R.in_reply_to
   // 检索需要 R 在 list 里, 但 R 存 Sent 不在 Inbox items → repliedMap 永远返
   // false → replied badge 显示不出来). 不合并进 items (列表还是显 Inbox), 只
   // 拿来算 repliedMap.
-  const [sentItems, setSentItems] = useState<EmailDigestItem[]>([]);
-  const [accounts, setAccounts] = useState<EmailAccountItem[]>([]);
+  const [sentItems, setSentItems] = useState<EmailDigestItem[]>(
+    () => (listCache?.sentItems as EmailDigestItem[]) ?? [],
+  );
+  const [accounts, setAccounts] = useState<EmailAccountItem[]>(
+    () => (listCache?.accounts as EmailAccountItem[]) ?? [],
+  );
   // BL-COMPANION-EMAIL-DIGEST-STEP5 (5/20): urgencyMap 走 useEmailStore
   // (localStorage hydrate + Rust reconcile + 跨 tab 共享, 不再 local useState).
   const urgencyMap = useEmailStore((s) => s.urgencyMap);
@@ -117,6 +128,15 @@ export default function EmailTab() {
       if (Array.isArray(list)) setItems(list as EmailDigestItem[]);
       if (Array.isArray(sent)) setSentItems(sent as EmailDigestItem[]);
       if (Array.isArray(accs)) setAccounts(accs as EmailAccountItem[]);
+      // 8/21: 回写跨挂载缓存 — 下次切回瞬间有列表 (见 useState 初值那段注释)。
+      // 只在拉成功后写: 失败不覆盖上一份好的。
+      if (Array.isArray(list)) {
+        useEmailStore.getState().setListCache({
+          items: list,
+          sentItems: Array.isArray(sent) ? sent : [],
+          accounts: Array.isArray(accs) ? accs : [],
+        });
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

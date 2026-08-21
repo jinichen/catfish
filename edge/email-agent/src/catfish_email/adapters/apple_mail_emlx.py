@@ -255,6 +255,13 @@ def _parse_emlx_summary(emlx_path: Path, account_name: str, folder: str) -> Mess
     is_read = _emlx_is_read(plist)
     # ID 用 emlx 路径 (绝对) — Python 端能直接打开
     msg_id = f"emlx:{emlx_path}"
+    # 8/21: thread 三件套补上。AS 路径 (P3.5.58 升 8 字段) 一直有,
+    # emlx 路径漏了 —— 所以 emlx fallback 下 replied badge 从来没亮过。
+    # 8/21 读侧 emlx-first 之后这条路变成常走路径, 缺口从"降级才踩"
+    # 变成"永远踩", 必须补。同一次 message_from_bytes 里取, 零额外 IO。
+    rfc_message_id = _safe_header(msg, "Message-Id") or None
+    in_reply_to = _safe_header(msg, "In-Reply-To") or None
+    references = _safe_header(msg, "References") or None
     return Message(
         id=f"{account_name}|{msg_id}",
         account=account_name,
@@ -264,6 +271,9 @@ def _parse_emlx_summary(emlx_path: Path, account_name: str, folder: str) -> Mess
         date=date_iso,
         is_read=is_read,
         body_text="",
+        message_id=rfc_message_id,
+        in_reply_to=in_reply_to,
+        references=references,
     )
 
 
