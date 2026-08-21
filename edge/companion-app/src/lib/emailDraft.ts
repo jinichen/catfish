@@ -97,6 +97,10 @@ ${_personalityHint(personality)}
 - 不要"亲爱的 X" / "您好" / "祝您工作顺利" 这种套话, 除非原邮件特别正式.
 - 用员工第一人称 ("我", 不要"我们"代员工说话).
 - 不知道细节就用 [TODO: 这里待员工补充 X] 占位, 不要瞎编事实/数字/日期.
+- **写不了草稿就别写**: 如果连该回什么立场都定不了 (例: 不知道员工在这件事里的
+  角色 / 该确认还是该拒绝), 不要把问题写成"草稿"寄给对方 —— 返回以 [QUESTIONS]
+  开头的清单, 每行一个要员工回答的问题. 界面会把它显示给员工而不是填进发送框.
+  能用 [TODO] 占位写出立场明确的草稿时, 优先写草稿.
 - 中文邮件用中文回, 英文邮件用英文回.
 - 长度看原邮件复杂度: 简单确认 1-3 行, 实质回复 5-10 行, 不要超过 15 行.
 - 给了「你已知的背景」就先读完再动笔: 已经答应过的别再答应一遍, 对方已经给过的
@@ -166,10 +170,42 @@ export interface DraftEmailReplyInput {
 
 export interface DraftEmailReplyResult {
   ok: boolean;
-  /** 拟稿正文, ok=true 时非空 */
+  /** 拟稿正文, ok=true 且 kind="draft" 时非空 */
   body?: string;
   /** 错误描述, ok=false 时非空 */
   error?: string;
+  /** 8/21: 返回的是草稿还是**给员工的反问**。
+   *
+   *  病历: 员工点「重拟」, 模型信息不足 (不知道员工是不是工会小组长), 没按
+   *  prompt 用 [TODO] 占位, 而是整段反问员工「你不是个人工会小组长吧? …
+   *  先别急着动笔, 你告诉我」。这段被原样 setComposeBody 塞进**发送框** ——
+   *  员工点发送就会把它寄给对方 (还抄送 9 个人)。
+   *
+   *  8/8 已经治过同型病的另一半: 上游把 HTTP 错误当正文返 (upstreamErrorGuard)。
+   *  这次是**模型自己**返非草稿文本, 同样不能进正文框。
+   *
+   *  判据用显式协议, 不做模糊启发: prompt 要求模型在信息不足时以
+   *  [QUESTIONS] 开头列问题。带标记 → kind="questions", body 是问题清单
+   *  (已剥掉标记), 调用方**不许**填进正文框。
+   */
+  kind?: "draft" | "questions";
+}
+
+/** 模型信息不足时的显式标记 —— 见 DraftEmailReplyResult.kind。 */
+export const QUESTIONS_MARK = "[QUESTIONS]";
+
+/** 8/21: 清理后的模型输出 → 草稿还是反问。抽成纯函数是为了可测
+ *  (draftEmailReply 本体裹着网络重试, 单测不便)。判据只认显式标记, 不做
+ *  模糊启发 —— 「像不像在提问」这种判据必然比真事宽或窄。 */
+export function classifyDraftContent(cleaned: string): DraftEmailReplyResult {
+  if (cleaned.startsWith(QUESTIONS_MARK)) {
+    const questions = cleaned.slice(QUESTIONS_MARK.length).trim();
+    if (!questions) {
+      return { ok: false, error: "模型返回了空的问题清单" };
+    }
+    return { ok: true, kind: "questions", body: questions };
+  }
+  return { ok: true, kind: "draft", body: cleaned };
 }
 
 /** 调 catfish-gateway 一次性 LLM call 起邮件回复草稿。
@@ -262,7 +298,7 @@ export async function draftEmailReply(
       if (!cleaned) {
         return { ok: false, error: "LLM 返回内容清理后为空" };
       }
-      return { ok: true, body: cleaned };
+      return classifyDraftContent(cleaned);
     } catch (e) {
       clearTimeout(timeoutId);
       const msg = e instanceof Error ? e.message : String(e);

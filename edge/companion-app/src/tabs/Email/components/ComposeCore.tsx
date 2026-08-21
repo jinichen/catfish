@@ -129,6 +129,9 @@ export default function ComposeCore({
   const [draftLlmDone, setDraftLlmDone] = useState(false); // 拟过一次 → 按钮变"🔄 重拟"
   // 8/6: 这次拟稿参考了哪几篇本地资料, 显给员工看 (空 = 没检索到, 只喂了这一封)
   const [draftCtxNote, setDraftCtxNote] = useState("");
+  // 8/21: 模型信息不足时返回的**给员工的反问清单** ([QUESTIONS] 协议)。
+  // 显示在正文框上方, 绝不进正文框 —— 见 handleDraftWithLlm 里那段病历注释。
+  const [draftQuestions, setDraftQuestions] = useState("");
   // 8/7: 429 退避重试时的进度提示, 免得员工干等以为卡死
   const [draftRetry, setDraftRetry] = useState("");
 
@@ -240,6 +243,19 @@ export default function ComposeCore({
         setDraftLlmError(result.error || "未知错误");
         return;
       }
+      // 8/21: 模型返回的是**给员工的反问**, 不是草稿 —— 不进正文框。
+      //
+      // 病历: 模型不知道员工在这件事里的角色, 整段反问「你不是个人工会小组长
+      // 吧? … 你告诉我」被塞进发送框, 员工点发送就寄给对方了。跟 8/8 的
+      // upstreamErrorGuard 是同型病的另一半: 那次拦的是上游把错误当正文,
+      // 这次拦的是模型把问题当草稿。判据是 [QUESTIONS] 显式协议
+      // (emailDraft.ts), 不做模糊启发。
+      if (result.kind === "questions") {
+        setDraftQuestions(result.body);
+        setDraftLlmDone(true); // 按钮变"重拟" —— 员工答完可再来
+        return;
+      }
+      setDraftQuestions("");
       setComposeBody(result.body);
       setDraftLlmDone(true);
     } catch (e) {
@@ -469,6 +485,28 @@ export default function ComposeCore({
           </span>
         )}
       </div>
+
+      {/* 8/21: [QUESTIONS] 协议 —— 模型说"信息不足, 先答我几个问题"。
+          显示在这, **绝不进正文框** (进了就会被当草稿寄给对方, 见
+          handleDraftWithLlm 里那段病历)。员工答完自己写, 或补充后点"重拟"。 */}
+      {draftQuestions && (
+        <div
+          style={{
+            fontSize: 12,
+            lineHeight: 1.6,
+            color: "var(--catfish-text)",
+            background: "rgba(234, 179, 8, 0.10)",
+            border: "1px solid rgba(234, 179, 8, 0.45)",
+            borderRadius: 4,
+            padding: "8px 10px",
+            margin: "6px 0",
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          ❓ 小鲶写不了这份草稿, 先答它几个问题 (这段话不会发给对方):
+          {"\n"}{draftQuestions}
+        </div>
+      )}
 
       {/* body */}
       <textarea
