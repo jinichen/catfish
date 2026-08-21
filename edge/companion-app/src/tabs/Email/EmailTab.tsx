@@ -201,18 +201,31 @@ export default function EmailTab() {
   // 这两个 ref 只是让 effect **读得到最新的 map 而不用把它写进依赖**。
   // 同步用的 effect 自己不发任何请求, 所以它重跑没有代价。
   const urgencyMapRef = useRef(urgencyMap);
+  const actionMapRef = useRef(actionMap);  // 8/21 二修: 补评判据要看它
   const phishingMapRef = useRef(phishingMap);
   useEffect(() => {
     urgencyMapRef.current = urgencyMap;
   }, [urgencyMap]);
+  useEffect(() => {
+    actionMapRef.current = actionMap;
+  }, [actionMap]);
   useEffect(() => {
     phishingMapRef.current = phishingMap;
   }, [phishingMap]);
 
   useEffect(() => {
     if (items.length === 0) return;
+    // 8/21 二修: urgency **或** action 缺一个就要评 —— 第一版只看 urgency,
+    // 336 封存量全被跳过, action badge 永远出不来 (「升级了但啥也看不到」)。
+    // 防永动机: (1) ratedRef 本会话每封只提交一次 (8/15 修复, 不动);
+    // (2) Rust 侧对"评过但模型没给 action"的写空串哨兵进 actionMap,
+    //     所以 !actionMap[id] 在补评一轮之后就是 false, 不会反复重评。
+    // 注意判据是 `actionMap[it.id] === undefined` 而不是 truthy —— 哨兵
+    // {action:""} 也是"有", 用 truthy 判会把哨兵当缺失, 永动机就回来了。
     const unrated = items.filter(
-      (it) => !urgencyMapRef.current[it.id] && !ratedRef.current.has(it.id),
+      (it) =>
+        (!urgencyMapRef.current[it.id] || actionMapRef.current[it.id] === undefined)
+        && !ratedRef.current.has(it.id),
     );
     if (unrated.length === 0) return;
     let cancelled = false;

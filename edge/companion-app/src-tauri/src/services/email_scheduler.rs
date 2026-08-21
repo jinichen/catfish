@@ -123,11 +123,21 @@ pub async fn email_classify_now(
 ) -> Result<ClassifyNowResult, String> {
     // 过滤已 cache 的 (省 LLM 调用)。8/21 起 EmailItem 带 snippet (分诊要看正文
     // 才提得出截止日); input 的 account/date/is_read 仍仅作前端自描述, 丢掉。
+    //
+    // 跳过判据 (8/21 二修): **urgency 和 action 都有**才跳过。
+    // 第一版只查 urgency —— 336 封存量全在 urgency 缓存里, 于是永远轮不到
+    // 新的 action 分诊, 员工看到的效果是「升级了但啥也看不到」。
+    // 判据用"评过 urgency"代表"分诊完整", 比真事窄了一个维度。
+    //
+    // 防永动机 (8/15 教训): action 侧有**哨兵** —— rate_emails 评过但模型
+    // 没给 action 的 id 也写一条 action:"" 进缓存 (见 rate_emails), 所以
+    // "补评"每封最多发生一次, 不会因为模型永远不给 action 而每次挂载重评。
     let to_rate: Vec<EmailItem> = {
-        let cache = urgency_cache().lock().map_err(|e| e.to_string())?;
+        let ucache = urgency_cache().lock().map_err(|e| e.to_string())?;
+        let acache = action_cache().lock().map_err(|e| e.to_string())?;
         items
             .iter()
-            .filter(|it| !cache.contains_key(&it.id))
+            .filter(|it| !(ucache.contains_key(&it.id) && acache.contains_key(&it.id)))
             .map(|it| EmailItem {
                 id: it.id.clone(),
                 subject: it.subject.clone(),
@@ -672,12 +682,16 @@ async fn rate_emails(items: &[EmailItem]) -> Vec<Urgency> {
         Ok(cls) if cls.len() == items.len() => {
             if let Ok(mut ac) = action_cache().lock() {
                 for (it, c) in items.iter().zip(cls.iter()) {
-                    if let Some(a) = &c.action {
-                        ac.insert(
-                            it.id.clone(),
-                            ActionEntry { action: a.clone(), deadline: c.deadline.clone() },
-                        );
-                    }
+                    // 模型没给 action (老格式退化 / 没认出) → 写空串**哨兵**:
+                    // 表示"评过, 没结果"。前端 "" 不匹配 办/回, 不显 badge;
+                    // classify_now 的跳过判据认它, 所以不会反复重评同一封
+                    // (没有哨兵的话, "action 缺就再评"会在模型持续不给时
+                    // 变成每次挂载重评一轮 —— 8/15 永动机的低频版)。
+                    let entry = match &c.action {
+                        Some(a) => ActionEntry { action: a.clone(), deadline: c.deadline.clone() },
+                        None => ActionEntry { action: String::new(), deadline: None },
+                    };
+                    ac.insert(it.id.clone(), entry);
                 }
                 // 上限跟 urgency 同款 (8/15: 上限低于列表上限是永动机燃料)
                 if ac.len() > URGENCY_CACHE_MAX {
