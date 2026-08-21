@@ -47,6 +47,7 @@ pub mod hermes_install_steps;     // 装机各步骤 (8/15 切出)
 pub mod hermes_install; // 7/15 BL-CATFISH-MAC-OFFLINE-INSTALL: mac dmg 首启装 hermes-agent 本体 (offline install.sh + 4 artifacts)
 pub mod hermes_memory; // BL-DASHBOARD-HERMES-MEMORY-CARD (5/16)
 pub mod hermes_plugin_env; // 8/9: 从 hermes_plugin 抽出 —— ~/.hermes/.env 的 API_SERVER_KEY 维护
+pub mod hermes_plugin_baked; // 8/21: BAKED_* 常量表, 从 hermes_plugin 抽出 (800 行红线)
 pub mod hermes_plugin; // P3.5.56 (6/21 鸿波): Companion boot 自动装 catfish-xcatfish-user plugin (baked + ensure config.yaml enabled)
 pub mod http_proxy; // BL-CSP-PROXY (7/18 鸿波): Rust reqwest HTTP 代理, CSP connect-src 保持严格
 pub mod identity;
