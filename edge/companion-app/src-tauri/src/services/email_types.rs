@@ -13,6 +13,12 @@ pub(crate) struct EmailItem {
     pub(crate) id: String,
     pub(crate) subject: String,
     pub(crate) sender: String,
+    /// 8/21 分诊升级: 正文摘要 (list 场景 catfish-email 的 body_text 就是 snippet)。
+    /// 之前分诊只喂 主题60字+发件人40字, **连正文都不看** —— 于是永远提不出
+    /// "9月10日前报汇总表"这种截止日。rename 直接白拿 CLI JSON 里现成的字段;
+    /// default 兜底老调用方手工构造的 EmailItem (不给就空串, 行为同从前)。
+    #[serde(default, rename = "body_text")]
+    pub(crate) snippet: String,
 }
 
 /// LLM 评级结果. fallback 'medium' 时不通知, 不阻塞.

@@ -17,8 +17,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::services::{hermes_api_config, picker_config, upstream_error_guard};
 
+use super::email_classify_parse::{parse_classifications, Classification};
 use super::email_notify::truncate;
-use super::email_types::{EmailItem, Urgency};
+use super::email_types::EmailItem;
 
 #[derive(Serialize)]
 struct ChatMessage {
@@ -50,7 +51,7 @@ struct ChatResponse {
     choices: Vec<ChatChoice>,
 }
 
-pub(crate) async fn call_rate_llm(items: &[EmailItem]) -> Result<Vec<Urgency>, String> {
+pub(crate) async fn call_rate_llm(items: &[EmailItem]) -> Result<Vec<Classification>, String> {
     // P3.5.140 (6/29 鸿波"数据流应该是 companion → hermes → gateway(8999), 不是双路径,
     // 更不是 gateway(8999) 作为 hermes 的 fallback"):
     // 单路径: Companion → hermes 8642 → gateway 8999 → LLM. 没有 fallback.
@@ -78,27 +79,33 @@ pub(crate) async fn call_rate_llm(items: &[EmailItem]) -> Result<Vec<Urgency>, S
             .to_string()
     })?;
 
+    // 8/21 分诊升级: 带正文摘要 (160 字)。之前只有 主题60+发件人40 —— 连正文
+    // 都不看, "2026年9月10日前报汇总表" 这种截止日永远提不出来, 分诊只能分
+    // "重要程度"分不出"要我干什么"。token 账: 30 封/批 × ~160 字 ≈ 2-3K tokens,
+    // 换来 action+deadline 两个新产出, 且 LLM 调用次数不变 (一次调用三个产出)。
     let list = items
         .iter()
         .enumerate()
         .map(|(i, it)| {
             format!(
-                "{}. 主题: {} | 发件人: {}",
+                "{}. 主题: {} | 发件人: {} | 摘要: {}",
                 i + 1,
                 truncate(&it.subject, 60),
                 truncate(&it.sender, 40),
+                truncate(&it.snippet, 160),
             )
         })
         .collect::<Vec<_>>()
         .join("\n");
 
-    let system = "你是邮件分类助手. 按重要程度评级邮件: 急 / 中 / 低. \
-                  急 = 老板 / 客户 / 直接老板 / 含 deadline 关键词 / 紧急任务; \
-                  低 = newsletter / 促销 / 自动通知 / GitHub PR review 之类的常规事项; \
-                  其它一律 中. \
-                  返回 JSON 数组, 每个元素只一个字: '急' / '中' / '低'. 不要其它任何解释.";
+    // ⚠ 协议跟 email_classify_parse.rs 一体两面, 改一处必改另一处 (那边有测试钉着)。
+    let system = "你是邮件分诊助手. 对每封邮件给三个判断: \
+                  u = 紧急度: 急 (老板/客户/紧急任务/临近截止) / 低 (newsletter/促销/自动通知) / 其它一律 中. \
+                  a = 这封要收件人干什么: 知 (知悉即可, 不用动作) / 回 (要回信) / 办 (要办事, 如提交材料/审批/参加). \
+                  d = 截止日期, 格式严格 YYYY-MM-DD, 只在 a 为 回/办 且邮件里有明确日期时给, 没有就省略这个键. 不要编造日期. \
+                  返回 JSON 数组, 每封一个对象 {\"u\":..,\"a\":..,\"d\":..}. 不要其它任何解释.";
     let user = format!(
-        "{list}\n\n按上面顺序, 返回 {} 个评级的 JSON 数组, 例如 [\"急\",\"中\",\"低\"]. 只返 JSON, 不要任何解释.",
+        "{list}\n\n按上面顺序, 返回 {} 个对象的 JSON 数组, 例如 [{{\"u\":\"急\",\"a\":\"办\",\"d\":\"2026-09-10\"}},{{\"u\":\"低\",\"a\":\"知\"}}]. 只返 JSON, 不要任何解释.",
         items.len()
     );
 
@@ -109,7 +116,10 @@ pub(crate) async fn call_rate_llm(items: &[EmailItem]) -> Result<Vec<Urgency>, S
             ChatMessage { role: "user", content: user },
         ],
         temperature: 0.0,
-        max_tokens: 64,
+        // 8/21: 64 → 512。对象数组比单字数组长 (30 封 × ~25 tokens/对象)。
+        // 64 会把数组截半, 解析 Err → 冷却 → badge 全灭 —— 跟 8/19 验证码
+        // max_tokens:30 是同一族坑 ("答案短"不等于"生成短")。
+        max_tokens: 512,
         stream: false,
     };
 
@@ -157,49 +167,8 @@ pub(crate) async fn call_rate_llm(items: &[EmailItem]) -> Result<Vec<Urgency>, S
         return Err(format!("上游返回的是一条错误, 已冷却 {}s", cd.as_secs()));
     }
 
-    parse_urgencies(&content)
-}
-
-/// 从 LLM 输出文本解析 JSON 数组. 容错 — markdown code fence / 前后多余文字都试着扒出来.
-fn parse_urgencies(s: &str) -> Result<Vec<Urgency>, String> {
-    let trimmed = s.trim();
-    // 找第一个 [ 到最后一个 ]
-    let start = trimmed.find('[').ok_or_else(|| format!("没 JSON array: {trimmed:?}"))?;
-    let end = trimmed.rfind(']').ok_or_else(|| format!("没 ] 闭合: {trimmed:?}"))?;
-    if end <= start {
-        return Err(format!("] 在 [ 前: {trimmed:?}"));
-    }
-    let array_str = &trimmed[start..=end];
-    let labels: Vec<String> = serde_json::from_str(array_str)
-        .map_err(|e| format!("JSON 解析失败 ({e}): {array_str:?}"))?;
-    Ok(labels.iter().map(|l| Urgency::from_label(l)).collect())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_urgencies_clean_json() {
-        let r = parse_urgencies(r#"["急","中","低"]"#).unwrap();
-        assert_eq!(r, vec![Urgency::Urgent, Urgency::Medium, Urgency::Low]);
-    }
-
-    #[test]
-    fn parse_urgencies_with_markdown_fence() {
-        let r = parse_urgencies("```json\n[\"急\",\"低\"]\n```").unwrap();
-        assert_eq!(r, vec![Urgency::Urgent, Urgency::Low]);
-    }
-
-    #[test]
-    fn parse_urgencies_with_leading_text() {
-        let r = parse_urgencies("根据评级:\n[\"急\",\"中\"]\n谢谢").unwrap();
-        assert_eq!(r, vec![Urgency::Urgent, Urgency::Medium]);
-    }
-
-    #[test]
-    fn parse_urgencies_no_array_errors() {
-        assert!(parse_urgencies("急 中 低").is_err());
-        assert!(parse_urgencies("").is_err());
-    }
+    // 8/21: 解析搬到 email_classify_parse.rs (纯函数, 独立可测)。
+    // 老 parse_urgencies 删掉 —— 它的全部场景 (fence/前缀文字/纯字符串数组/
+    // 无数组报错) 都在新解析器的测试里, 含老格式兼容。
+    parse_classifications(&content)
 }

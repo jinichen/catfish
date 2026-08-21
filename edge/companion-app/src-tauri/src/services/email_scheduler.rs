@@ -55,8 +55,9 @@ use crate::services::phishing_scan::{self, PhishingScanResult, Severity};
 use super::email_llm::call_rate_llm;
 use super::email_notify::{emit_urgent_event, send_notification};
 use super::email_state::{
-    load_persisted_state, now_epoch_secs, persist_push_history, persist_urgency_cache,
-    push_history, urgency_cache, APP_HANDLE, DEDUP_WINDOW_SECS,
+    action_cache, load_persisted_action_cache, load_persisted_state, now_epoch_secs,
+    persist_action_cache, persist_push_history, persist_urgency_cache, push_history,
+    urgency_cache, ActionEntry, APP_HANDLE, DEDUP_WINDOW_SECS,
 };
 use super::email_types::{EmailItem, Urgency};
 
@@ -119,10 +120,9 @@ pub fn email_urgency_map() -> HashMap<String, String> {
 #[tauri::command]
 pub async fn email_classify_now(
     items: Vec<EmailItemInput>,
-) -> Result<HashMap<String, String>, String> {
-    // 过滤已 cache 的 (省 LLM 调用). EmailItem 只要 id/subject/sender 三字段
-    // (rate_emails 内部只用这三个), input 的 account/date/is_read 仅作前端
-    // 自描述方便调用方传 list_fetch 的整条 dict, 这里丢掉.
+) -> Result<ClassifyNowResult, String> {
+    // 过滤已 cache 的 (省 LLM 调用)。8/21 起 EmailItem 带 snippet (分诊要看正文
+    // 才提得出截止日); input 的 account/date/is_read 仍仅作前端自描述, 丢掉。
     let to_rate: Vec<EmailItem> = {
         let cache = urgency_cache().lock().map_err(|e| e.to_string())?;
         items
@@ -132,13 +132,14 @@ pub async fn email_classify_now(
                 id: it.id.clone(),
                 subject: it.subject.clone(),
                 sender: it.sender.clone(),
+                snippet: it.body_text.clone().unwrap_or_default(),
             })
             .collect()
     };
 
     if to_rate.is_empty() {
         // 全已 cache, 直接返
-        return Ok(urgency_cache().lock().map(|c| c.clone()).unwrap_or_default());
+        return Ok(classify_snapshot());
     }
 
     log::info!(
@@ -168,7 +169,23 @@ pub async fn email_classify_now(
     // BL-COMPANION-BRIEFING-V2 sub-task 2 (5/20): 持久化, 重启不重评
     persist_urgency_cache();
 
-    Ok(urgency_cache().lock().map(|c| c.clone()).unwrap_or_default())
+    Ok(classify_snapshot())
+}
+
+/// 8/21: classify_now 的返回 —— urgency 老 map + action 新 map, 一次拿全。
+/// urgency 的形状 (id → "急"/"中"/"低") 一个字没动: 8/15 永动机三处修复
+/// (ratedRef / 上限 600 / store merge) 全围着它, 破坏形状 = 全链重来。
+#[derive(serde::Serialize)]
+pub struct ClassifyNowResult {
+    pub urgency: HashMap<String, String>,
+    pub actions: HashMap<String, ActionEntry>,
+}
+
+fn classify_snapshot() -> ClassifyNowResult {
+    ClassifyNowResult {
+        urgency: urgency_cache().lock().map(|c| c.clone()).unwrap_or_default(),
+        actions: action_cache().lock().map(|c| c.clone()).unwrap_or_default(),
+    }
 }
 
 /// P3.3.58 段 2B (6/12 鸿波): 前端打开邮件 tab 时主动 trigger 钓鱼扫描.
@@ -190,6 +207,8 @@ pub async fn email_phishing_scan_now(
                 id: it.id.clone(),
                 subject: it.subject.clone(),
                 sender: it.sender.clone(),
+                // 钓鱼扫描不用 snippet (light scan 有自己的取正文路径), 空串即可
+                snippet: String::new(),
             })
             .collect()
     };
@@ -217,6 +236,9 @@ pub struct EmailItemInput {
     pub account: Option<String>,
     pub date: Option<String>,
     pub is_read: Option<bool>,
+    /// 8/21 分诊升级: 正文摘要 (列表场景的 body_text 就是 snippet)。
+    /// Option + 缺省 None: 老调用方不传也能编译/反序列化, 只是提不出截止日。
+    pub body_text: Option<String>,
 }
 
 /// app 启动时调一次. poll_secs=0 (yaml 或 env) 则不起.
@@ -231,6 +253,8 @@ pub fn schedule_email_scheduler(app: AppHandle) {
     // BL-COMPANION-BRIEFING-V2 sub-task 2 (5/20): load 持久化的 urgency cache +
     // push history. Companion 重启不重评 / 不再叫醒同一急邮件 24h.
     load_persisted_state();
+    // 8/21 分诊升级: action 缓存 (知/回/办+截止日) 同样重启不重评。
+    load_persisted_action_cache();
 
     if poll_secs == 0 {
         log::info!("email_scheduler: poll_secs=0 (yaml/env 关掉), 不起调度");
@@ -637,12 +661,39 @@ async fn rate_emails(items: &[EmailItem]) -> Vec<Urgency> {
         return vec![Urgency::Medium; items.len()];
     }
 
+    // 8/21 分诊升级: call_rate_llm 现在返 Vec<Classification> (u + a + d)。
+    // 签名保持 Vec<Urgency> —— 两个调用方 (classify_now / 后台通知循环) 的
+    // urgency 消费逻辑一行不用动; action/deadline 顺手写进平行的 action_cache,
+    // classify_now 返回时把它 snapshot 给前端。
+    //
+    // 三个 fallback 分支 (关评级/冷却/失败) 都**不写** action_cache —— fallback
+    // 的 Medium 是占位不是判断, action 占位没有意义, 缺席让 badge 空白即可。
     match call_rate_llm(items).await {
-        Ok(urgencies) if urgencies.len() == items.len() => urgencies,
-        Ok(urgencies) => {
+        Ok(cls) if cls.len() == items.len() => {
+            if let Ok(mut ac) = action_cache().lock() {
+                for (it, c) in items.iter().zip(cls.iter()) {
+                    if let Some(a) = &c.action {
+                        ac.insert(
+                            it.id.clone(),
+                            ActionEntry { action: a.clone(), deadline: c.deadline.clone() },
+                        );
+                    }
+                }
+                // 上限跟 urgency 同款 (8/15: 上限低于列表上限是永动机燃料)
+                if ac.len() > URGENCY_CACHE_MAX {
+                    let keys: Vec<_> = ac.keys().take(URGENCY_CACHE_MAX / 2).cloned().collect();
+                    for k in keys {
+                        ac.remove(&k);
+                    }
+                }
+            }
+            persist_action_cache();
+            cls.iter().map(|c| Urgency::from_label(&c.urgency_label)).collect()
+        }
+        Ok(cls) => {
             log::warn!(
                 "email_scheduler: 评级返 {} 条 != 期望 {}, fallback Medium",
-                urgencies.len(), items.len()
+                cls.len(), items.len()
             );
             vec![Urgency::Medium; items.len()]
         }

@@ -13,6 +13,7 @@ pub mod curator_config;
 pub mod memory_provider_config;
 pub mod curator_state;
 pub mod email_config;     // BL-COMPANION-EMAIL-YAML-CONFIG (5/18)
+pub mod email_classify_parse; // 分诊 LLM 输出解析 (8/21, 纯函数独立可测)
 pub mod email_llm;    // 评级 LLM 调用 (8/15 从 email_scheduler 切出)
 pub mod email_notify; // 前端事件 + 系统通知 (8/15 切出)
 pub mod email_state;  // 评级缓存 / push 历史 / 落盘 (8/15 切出)

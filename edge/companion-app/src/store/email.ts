@@ -130,11 +130,23 @@ interface EmailState {
     savedAt: number;
   } | null;
   setListCache: (c: { items: unknown[]; sentItems: unknown[]; accounts: unknown[] }) => void;
+
+  // ── 8/21 分诊升级: id → {action, deadline} ──────────────────────────
+  //
+  // **merge, 不整份覆盖** —— 8/15 永动机的三处修复之一就是 setUrgencyMap
+  // 从覆盖改 merge (Rust 缓存裁剪后返回的小 map 覆盖掉本地大 map → unrated
+  // 变多 → 再评 → 循环)。新 map 生下来就是 merge, 别再踩一遍。
+  // 纯内存不进 localStorage: Rust 侧有 email_action.json persist, 重启后
+  // classify_now 全 cache 命中会把完整 actions 返回来。
+  actionMap: Record<string, { action: string; deadline?: string }>;
+  mergeActionMap: (m: Record<string, { action: string; deadline?: string }>) => void;
 }
 
 export const useEmailStore = create<EmailState>((set, get) => ({
   listCache: null,
   setListCache: (c) => set({ listCache: { ...c, savedAt: Date.now() } }),
+  actionMap: {},
+  mergeActionMap: (m) => set({ actionMap: { ...get().actionMap, ...m } }),
   urgencyMap: loadPersistedUrgency(),
   readIds: loadPersistedRead(),
   lastSyncedAt: null,

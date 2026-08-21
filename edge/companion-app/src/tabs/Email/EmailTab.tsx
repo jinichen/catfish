@@ -32,6 +32,7 @@ import {
   type PhishingScanResult,        // P3.3.58 段 2B
   type PoliticalScanResult,       // P3.3.53.2
 } from "../../lib/tauri";
+import { buildAskCatfishStarter } from "../../lib/emailHandoff";
 import { useEmailStore } from "../../store/email";
 import { useUIStore } from "../../store/ui";
 // P3.5.158 Phase 4 (7/2 鸿波): 新建邮件入口
@@ -72,6 +73,7 @@ export default function EmailTab() {
   // BL-COMPANION-EMAIL-DIGEST-STEP5 (5/20): urgencyMap 走 useEmailStore
   // (localStorage hydrate + Rust reconcile + 跨 tab 共享, 不再 local useState).
   const urgencyMap = useEmailStore((s) => s.urgencyMap);
+  const actionMap = useEmailStore((s) => s.actionMap);  // 8/21 分诊
   const setUrgencyMap = useEmailStore((s) => s.setUrgencyMap);
   const reconcileUrgency = useEmailStore((s) => s.reconcileFromRust);
   const markEmailRead = useEmailStore((s) => s.markRead);
@@ -224,6 +226,8 @@ export default function EmailTab() {
         // (员工手动刷新 / 切 tab) 自然会重来。
         batch.forEach((it) => ratedRef.current.add(it.id));
         try {
+          // 8/21 分诊升级: 带 body_text (snippet) —— 不带的话分诊只看得到
+          // 主题+发件人, 截止日永远提不出来; 返回从裸 map 变 {urgency, actions}。
           const updated = await emailClassifyNow(batch.map((it) => ({
             id: it.id,
             subject: it.subject,
@@ -231,8 +235,12 @@ export default function EmailTab() {
             account: it.account,
             date: it.date,
             is_read: it.is_read,
+            body_text: it.body_text,
           })));
-          if (!cancelled) setUrgencyMap(updated);
+          if (!cancelled) {
+            setUrgencyMap(updated.urgency);
+            useEmailStore.getState().mergeActionMap(updated.actions);
+          }
         } catch {
           // 评级失败 (gateway 挂 / token 过期) — 跳过, badge 维持空白不阻塞 UI
           return;
@@ -370,30 +378,9 @@ export default function EmailTab() {
   }, [selectedId]);
 
   const handleAskCatfish = (m: FullMessage) => {
-    // 8/21: 交接必须带**句柄** (email_id), 不能只带给人看的摘要。
-    //
-    // 之前 starter 只有 发件人/主题/500 字摘要 —— 而 chat 里的 agent 手里握着
-    // catfish_email_read (必填 email_id) / catfish_email_attachment /
-    // catfish_email_search 四把工具, 却打不开员工正在看的这封: 只能拿主题去
-    // search 碰运气。工具齐备, 钥匙没给。
-    //
-    // 8/21 之后: id 直接给, agent 自己去读全文/拆附件/建提醒。摘要仍保留 ——
-    // 那是给**员工**看的开场白 (对话里第一条要能看懂), 不再是 agent 的数据源。
-    const snippet = (m.body_text || "").slice(0, 500);
-    const starter =
-      `这封邮件:\n` +
-      `- email_id: ${m.id}\n` +
-      `- 账号: ${m.account}\n` +
-      `- 发件人: ${m.sender}\n` +
-      `- 主题: ${m.subject}\n` +
-      `- 时间: ${m.date}\n` +
-      (m.has_attachments ? `- 有附件\n` : ``) +
-      `\n正文摘要 (给我看的, 你别只靠它):\n${snippet}${(m.body_text || "").length > 500 ? "…" : ""}\n\n` +
-      `请先用 catfish_email_read(email_id=上面那个) 读全文` +
-      (m.has_attachments ? `, 有附件就用 catfish_email_attachment 看` : ``) +
-      `, 然后告诉我: 这封要我做什么、有没有截止日期。要回的话再一起商量怎么回。\n` +
-      `涉及截止日期的, 问我要不要建提醒 (catfish_create_reminder)。`;
-    startProactiveChat(starter);
+    // 8/21: 交接带句柄 (email_id) + 工具指引, starter 构造抽到
+    // lib/emailHandoff.ts (纯函数可测; 为什么必须带 id 见那边头注)。
+    startProactiveChat(buildAskCatfishStarter(m));
     setActiveTab("chat");  // 跳到工作台看 chat
   };
 
@@ -676,6 +663,7 @@ export default function EmailTab() {
               phishing={phishingMap[m.id]}  // P3.3.58 段 2B
               political={politicalMap[m.id]}  // P3.3.53.2
               replied={repliedMap.get(m.id)}  // P3.5.204 (7/9)
+              actionEntry={actionMap[m.id]}  // 8/21 分诊: 知/回/办+截止日
               onClick={() => setSelectedId(m.id)}
             />
           ))}

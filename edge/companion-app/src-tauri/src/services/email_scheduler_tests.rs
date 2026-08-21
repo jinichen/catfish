@@ -78,6 +78,7 @@ fn mk(id: &str) -> EmailItem {
         id: id.to_string(),
         subject: "test".to_string(),
         sender: "x@y.com".to_string(),
+        snippet: String::new(),
     }
 }
 

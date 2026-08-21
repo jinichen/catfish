@@ -104,9 +104,20 @@ export const emailCreateDraft = (args: CreateDraftArgs) =>
 export const emailUrgencyMap = () =>
   rawInvoke<Record<string, string>>("email_urgency_map");
 
+/** 8/21 分诊升级: 一封邮件的行动分诊 (知悉/要回/要办 + 截止日)。 */
+export interface EmailActionEntry {
+  /** "知" | "回" | "办" */
+  action: string;
+  /** YYYY-MM-DD, 只有 回/办 且邮件里有明确日期才有 */
+  deadline?: string;
+}
+
 /** BL-EMAIL-URGENCY-BADGE (5/18): 前端主动评级一批邮件 (历史邮件也能评).
- * 已 cache 的跳过, 只评新 id. 返完整 cache map.
- * 性能: 一次评 batch (LLM 调一次), 前端最好 batch <=30 避免 prompt 太长. */
+ * 已 cache 的跳过, 只评新 id. 返完整 cache snapshot.
+ * 性能: 一次评 batch (LLM 调一次), 前端最好 batch <=30 避免 prompt 太长.
+ *
+ * 8/21 分诊升级: 传 body_text (列表场景的 snippet) —— 分诊要看正文才提得出
+ * 截止日; 返回从裸 urgency map 变 {urgency, actions} (同一次 LLM 调用三个产出)。 */
 export const emailClassifyNow = (
   items: Array<{
     id: string;
@@ -115,8 +126,13 @@ export const emailClassifyNow = (
     account?: string;
     date?: string;
     is_read?: boolean;
+    body_text?: string;
   }>,
-) => rawInvoke<Record<string, string>>("email_classify_now", { items });
+) =>
+  rawInvoke<{
+    urgency: Record<string, string>;
+    actions: Record<string, EmailActionEntry>;
+  }>("email_classify_now", { items });
 
 /** catfish-email list --json 单条 message 的 schema. 字段跟 base.py Message dataclass 对齐. */
 export interface EmailDigestItem {

@@ -14,6 +14,7 @@ function ListItem({
   phishing,
   political,
   replied,
+  actionEntry,
   onClick,
 }: {
   item: EmailDigestItem;
@@ -22,6 +23,8 @@ function ListItem({
   phishing?: PhishingScanResult;  // P3.3.58 段 2B: 钓鱼扫描结果
   political?: PoliticalScanResult; // P3.3.53.2: 政治敏感扫描 (仅 detail 打开过的有)
   replied?: boolean;  // P3.5.204 (7/9): 已回复标志, 由 EmailTab 一次算 O(N²) map 传下来
+  /** 8/21 分诊: {action:"知"|"回"|"办", deadline?:"YYYY-MM-DD"}, undef = 没分 */
+  actionEntry?: { action: string; deadline?: string };
   onClick: () => void;
 }) {
   return (
@@ -72,6 +75,46 @@ function ListItem({
         >
           {_extractSenderName(item.sender)}
         </strong>
+        {/* 8/21 分诊 badge — 办 (带截止日显 "办·9/10") / 回。
+            "知"不显: 知悉即可的邮件占大多数, 给它们都贴 badge 只会稀释
+            要办/要回的显著性 —— badge 的价值在于稀缺。
+            deadline 只显 月/日 (年份省掉, 列表宽度金贵; hover title 有全值)。 */}
+        {actionEntry?.action === "办" && (
+          <span
+            title={actionEntry.deadline ? `截止 ${actionEntry.deadline}` : "要办事"}
+            style={{
+              flex: "0 0 auto",
+              fontSize: 9,
+              padding: "1px 5px",
+              background: "rgba(168, 85, 247, 0.15)",
+              color: "rgb(126, 34, 206)",
+              borderRadius: 3,
+              fontWeight: 600,
+            }}
+          >
+            办{actionEntry.deadline
+              ? `·${actionEntry.deadline.slice(5).replace("-", "/")}`
+              : ""}
+          </span>
+        )}
+        {actionEntry?.action === "回" && (
+          <span
+            title={actionEntry.deadline ? `截止 ${actionEntry.deadline}` : "要回信"}
+            style={{
+              flex: "0 0 auto",
+              fontSize: 9,
+              padding: "1px 5px",
+              background: "rgba(59, 130, 246, 0.15)",
+              color: "rgb(29, 78, 216)",
+              borderRadius: 3,
+              fontWeight: 600,
+            }}
+          >
+            回{actionEntry.deadline
+              ? `·${actionEntry.deadline.slice(5).replace("-", "/")}`
+              : ""}
+          </span>
+        )}
         {/* 评级 badge — 急=红 / 中=黄 / 低=灰 / 未评=空.
             5/18 BL-EMAIL-URGENCY-BADGE: 老逻辑 "中=不显" 让用户以为没评级, 实际是
             已评但被藏起来. 鸿波反馈"现在邮件没有任何优先级"就是这问题. 改 中
