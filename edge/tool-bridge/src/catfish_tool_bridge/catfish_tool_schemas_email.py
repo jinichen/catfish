@@ -274,4 +274,40 @@ EMAIL_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    {
+        "name": "catfish_email_create_draft",
+        "description": (
+            "把**员工已点头的定稿**放进邮件客户端草稿箱 (Mail.app Drafts)。"
+            "**只建草稿, 绝不发送** —— 发送动作永远由员工在客户端里自己点, "
+            "这是能力边界不是约定: 系统根本没有发送工具。\n\n"
+            "✅ 调用场景:\n"
+            "  - 对话里把回信文案改定了, 员工说'就这样/可以/发吧' → 落草稿箱, "
+            "然后告诉员工: 草稿在草稿箱, 核对后自己点发送\n"
+            "  - 回复某封邮件时**必传 in_reply_to** (原邮件 id), 客户端才能串上 thread\n\n"
+            "❌ 不该调用:\n"
+            "  - 文案还没给员工看过 / 员工没点头 —— 先用 catfish_draft_email_reply "
+            "出稿讨论, 定了再落\n"
+            "  - 员工说'发吧'≠替他发: 落草稿箱后要明确告诉员工「没有发送, "
+            "去草稿箱核对后自己点」, 别让他以为已经发出去了\n\n"
+            "**返回**: {ok, draft_id, summary}. summary 原样转述给员工。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "to": {"type": "string", "description": "收件人, 多人逗号分隔"},
+                "subject": {"type": "string", "description": "主题 (回复时带 Re: 前缀)"},
+                "body": {"type": "string", "description": "正文定稿 (员工点头过的那版)"},
+                "cc": {"type": "string", "description": "(可选) 抄送, 多人逗号"},
+                "in_reply_to": {
+                    "type": "string",
+                    "description": "(回复场景必传) 原邮件 id — 客户端靠它串 thread",
+                },
+                "account": {"type": "string", "description": "(可选) 从哪个账号起草"},
+            },
+            "required": ["to", "subject", "body"],
+        },
+        "emoji": "📮",
+        "toolset": "catfish_native",
+        "available": True,
+    },
 ]

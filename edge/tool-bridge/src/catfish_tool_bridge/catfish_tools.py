@@ -622,6 +622,9 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_email_attachment":
         from . import email_read  # noqa: PLC0415
         return email_read.tool_email_attachment(args)
+    if name == "catfish_email_create_draft":  # 8/21 只建草稿不发送, 红线见实现头注
+        from . import email_draft_to_client  # noqa: PLC0415
+        return email_draft_to_client.tool_email_create_draft(args)
     # BL-SKILLS-RAG-TOOL (5/25 鸿波 "现在做") — Progressive Disclosure 折叠区主动捞
     if name == "catfish_search_skills":
         from . import search_skills  # noqa: PLC0415
