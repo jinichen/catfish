@@ -294,6 +294,43 @@ def is_always_on(name: str) -> bool:
     return False
 
 
+def pinned_tool_names(body: dict) -> frozenset[str]:
+    """caller 用 `tool_choice` 点名强制的工具 —— 谁都不许砍。
+
+    # 为什么需要这个 (8/24 实盘, 我自己砍出来的)
+
+    Companion 有一批 `catfish_direct=1` 的调用: 不走 agent loop, 只带**一个**
+    结构化输出工具 + 强制 tool_choice, 用来把模型输出压成 JSON。
+        companion-profile           → submit_profile
+        companion-advisor-transform → submit_advisor_result
+        companion-wiki-suggest      → ...
+
+    这些名字既不是 hermes 原生也不是 catfish_*, 老代码靠「非 catfish_ 前缀 →
+    不动」放行。8/24 收紧 source profile 后这条路堵上了, companion-profile
+    那一发的**唯一**工具 submit_profile 当场被砍光 —— tool_choice 指着一个
+    不存在的工具, 画像识别静默失效。
+
+    # 判据
+
+    「caller 点名了它」比「它属于哪一族」更根本: 砍掉被点名的工具, 这次请求
+    必然废掉, 没有任何情况下这是对的。所以它排在所有过滤规则最前面。
+
+    ⚠ 目前只有 profile 过滤这一层用了它。RBAC 过滤和 BL-TOOL-CAP 仍可能砍掉
+      被点名的工具 —— 那是既有行为, 至今没有实证出过问题, 没顺手改。真撞上了
+      往这儿加。
+
+    tool_choice 为 "auto"/"none"/"required" 或缺省时返空集 (没有点名)。
+    """
+    tc = body.get("tool_choice")
+    if not isinstance(tc, dict):
+        return frozenset()
+    fn = tc.get("function")
+    if not isinstance(fn, dict):
+        return frozenset()
+    name = fn.get("name")
+    return frozenset({name}) if isinstance(name, str) and name else frozenset()
+
+
 def is_hidden_from_llm(name: str) -> bool:
     """Hidden-from-LLM 判定 — 同时认裸名和 MCP 包装名 (P3.5.70 6/22 鸿波 catch).
 

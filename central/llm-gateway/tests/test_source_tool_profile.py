@@ -35,6 +35,7 @@ if str(SRC) not in sys.path:
 
 from catfish_gateway.tools_sanitizer import (  # noqa: E402
     _filter_by_source_profile,
+    sanitize_tools,
 )
 from catfish_gateway.tools_sanitizer_constants import (  # noqa: E402
     ALWAYS_ON_TOOLS,
@@ -42,6 +43,7 @@ from catfish_gateway.tools_sanitizer_constants import (  # noqa: E402
     MCP_CATFISH_PREFIX,
     SOURCE_NATIVE_TOOLS,
     SOURCE_TOOL_PROFILES,
+    pinned_tool_names,
 )
 
 ADVISOR = "companion-advisor"
@@ -249,6 +251,117 @@ def test_两表key必须一一对应():
         f"{set(SOURCE_TOOL_PROFILES) - set(SOURCE_NATIVE_TOOLS)}, "
         f"只在 native 表 = {set(SOURCE_NATIVE_TOOLS) - set(SOURCE_TOOL_PROFILES)}"
     )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 3.5 tool_choice 点名的工具, 谁都不许砍
+#     (8/24 实盘回归: 收紧 profile 那版把 submit_profile 砍光了)
+# ─────────────────────────────────────────────────────────────────────
+def test_tool_choice点名的工具不被砍_照抄线上那一发():
+    """gateway.log 11:19:44 原样:
+
+        sanitize entry: source=companion-profile tools_count=1 ALL=['submit_profile']
+        BL-TOOL-PROFILE: source=companion-profile 砍 1 个...: submit_profile
+
+    companion-profile 是 catfish_direct=1 调用 —— 不走 agent loop, 只带一个
+    结构化输出工具 + 强制 tool_choice 把输出压成 JSON。工具被砍光后 tool_choice
+    指向一个不存在的名字, 画像识别静默失效 (status 还是 ok, 所以不会报警)。
+    """
+    body = {
+        "tools": [_tool("submit_profile")],
+        "tool_choice": {"type": "function", "function": {"name": "submit_profile"}},
+    }
+    kept, dropped = _filter_by_source_profile(
+        body["tools"], "companion-profile", pinned_tool_names(body),
+    )
+    assert _names(kept) == {"submit_profile"}, "被点名的工具还是被砍了"
+    assert dropped == []
+
+
+def test_走sanitize_tools真实入口而不是内部函数():
+    """M15 变异抓出来的缺口: 上面那条测试自己手传 pinned, 所以 sanitize_tools
+    里**接不接这根线**它根本测不出来 —— 把调用点的 _pinned_tool_names(body)
+    删掉, 全绿。
+
+    这条走真实入口 sanitize_tools(body, source_hint=...), 照抄线上那一发的
+    完整 body。判据要贴着"整条链路", 不是"我挑的那个函数"。
+    """
+    body = {
+        "tools": [_tool("submit_profile")],
+        "tool_choice": {"type": "function", "function": {"name": "submit_profile"}},
+    }
+    out = sanitize_tools(body, source_hint="companion-profile")
+    assert _names(out["tools"]) == {"submit_profile"}, (
+        "走真实入口时 submit_profile 还是被砍了 —— 多半是调用点没把 pinned 传下去"
+    )
+
+
+def test_走真实入口时advisor的execute_code照样被砍():
+    """跟上一条配对: 证明真实入口下过滤**仍然在工作**, 不是被 pinned 全放行了。"""
+    body = {"tools": [_tool("execute_code"), _tool("clarify")]}
+    out = sanitize_tools(body, source_hint=ADVISOR)
+    assert _names(out["tools"]) == {"clarify"}
+
+
+def test_caller用裸名点名包装工具也保得住():
+    """M17 变异抓出来的缺口: `base in pinned` 那半边此前零覆盖。
+
+    归一化在这个文件里是核心原则 —— 裸名和 mcp__catfish_tools__ 包装名是同一个
+    工具的两种写法, 必须同命。pinned 也得守这条: caller 按裸名点名, tools 里是
+    包装名, 依然要保住。
+    """
+    body = {
+        "tools": [_tool(f"{MCP_CATFISH_PREFIX}catfish_style_fingerprint_refresh")],
+        "tool_choice": {
+            "type": "function",
+            "function": {"name": "catfish_style_fingerprint_refresh"},  # 裸名
+        },
+    }
+    kept, dropped = _filter_by_source_profile(
+        body["tools"], ADVISOR, pinned_tool_names(body),
+    )
+    assert len(kept) == 1 and dropped == [], (
+        "caller 用裸名点名, tools 里是包装名 —— 没认出来就被砍了"
+    )
+
+
+def test_没点名时该砍的照砍():
+    """pinned 不能变成"什么都不砍"的后门。
+
+    没有这条, 把 pinned 实现成"永远返回全部工具名"也能让上面那条绿。
+    """
+    body = {
+        "tools": [_tool("execute_code")],
+        "tool_choice": "auto",          # 没点名
+    }
+    kept, dropped = _filter_by_source_profile(
+        body["tools"], ADVISOR, pinned_tool_names(body),
+    )
+    assert kept == [] and dropped == ["execute_code"]
+
+
+@pytest.mark.parametrize("tc", [None, "auto", "none", "required", {}, {"type": "function"}])
+def test_各种非点名形态都返空集(tc):
+    """tool_choice 可以是字符串 / 缺省 / 半截 dict —— 都不算点名, 不能崩。"""
+    body = {"tools": []} if tc is None else {"tools": [], "tool_choice": tc}
+    assert pinned_tool_names(body) == frozenset()
+
+
+def test_点名一个always_on之外的原生工具也保得住():
+    """极端但真实: caller 点名 execute_code 强制调用。
+
+    我们不该在这层否决它 —— caller 明确知道自己要什么, 且砍了必然 400。
+    真要禁 advisor 用 execute_code, 是在"不给它出现在 tools 列表里"这一层
+    做的 (本文件前面那批测试), 不是在这里。
+    """
+    body = {
+        "tools": [_tool("execute_code")],
+        "tool_choice": {"type": "function", "function": {"name": "execute_code"}},
+    }
+    kept, _ = _filter_by_source_profile(
+        body["tools"], ADVISOR, pinned_tool_names(body),
+    )
+    assert _names(kept) == {"execute_code"}
 
 
 def test_桥名单必须正好是hermes那三个():

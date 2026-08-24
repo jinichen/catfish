@@ -57,6 +57,7 @@ from .tools_sanitizer_constants import (  # noqa: F401  re-export 保 caller 不
     SOURCE_TOOL_PROFILES as _SOURCE_TOOL_PROFILES,
     is_always_on as _is_always_on,
     is_hidden_from_llm as _is_hidden_from_llm,
+    pinned_tool_names as _pinned_tool_names,
 )
 
 logger = logging.getLogger("catfish.gateway.tools_sanitizer")
@@ -118,6 +119,7 @@ def _cap_tools_by_priority(tools: list[dict[str, Any]]) -> tuple[list[dict[str, 
 def _filter_by_source_profile(
     tools: list[dict[str, Any]],
     source_hint: str,
+    pinned: frozenset[str] = frozenset(),
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """5/22 BL-TOOL-PROFILE: 按 source_hint 把 tool 列表砍到该 source 的白名单.
 
@@ -181,6 +183,15 @@ def _filter_by_source_profile(
             if name.startswith(_MCP_CATFISH_PREFIX)
             else name
         )
+
+        # ── caller 用 tool_choice 点名的工具 → 谁都不许砍 ──
+        # 排在所有规则最前面: 砍掉被点名的工具, 这次请求必然废掉 (tool_choice
+        # 指向一个不存在的名字), 没有任何情况下这是对的。
+        # 8/24 实盘: companion-profile 那一发只带 submit_profile 一个工具, 被
+        # 下面的原生分支砍光, 画像识别静默失效。详见 pinned_tool_names()。
+        if name in pinned or base in pinned:
+            kept.append(t)
+            continue
 
         # ── 员工自装 MCP → 不动 (5/22 原意: 员工的 plugin 不归 catfish profile 管) ──
         # 注意这条要在原生分支之前: 归一化只 strip catfish-tools 自己的前缀,
@@ -504,7 +515,9 @@ def sanitize_tools(
     # 5/22 BL-TOOL-PROFILE 鸿波: 按 source_hint 砍 catfish_* 到 profile 白名单.
     # 在 RBAC + cap 之前砍 — 优先级是: 畸形 > RBAC > profile > cap. profile 砍掉
     # 的是 caller 不需要的 (caller 是 advisor 不会用 freeze_*), 不是权限问题.
-    profile_kept, profile_dropped = _filter_by_source_profile(cleaned, source_hint)
+    profile_kept, profile_dropped = _filter_by_source_profile(
+        cleaned, source_hint, _pinned_tool_names(body),
+    )
     if profile_dropped:
         logger.info(
             "BL-TOOL-PROFILE: source=%s 砍 %d 个非该 profile 的 catfish_* tool: %s",
