@@ -38,6 +38,7 @@ from catfish_gateway.tools_sanitizer import (  # noqa: E402
 )
 from catfish_gateway.tools_sanitizer_constants import (  # noqa: E402
     ALWAYS_ON_TOOLS,
+    DEFERRED_TOOL_BRIDGES,
     MCP_CATFISH_PREFIX,
     SOURCE_NATIVE_TOOLS,
     SOURCE_TOOL_PROFILES,
@@ -75,6 +76,10 @@ REAL_WORLD_TOOLS = [
     _tool("web_crawl"),
     _tool("skill_view"),
     _tool("skills_list"),
+    # hermes 0.20 渐进式披露的三个桥 —— 被 defer 的 67 个 catfish 工具全靠它们
+    _tool("tool_search"),
+    _tool("tool_describe"),
+    _tool("tool_call"),
     # catfish 业务工具 (advisor profile 白名单里的), MCP 包装名
     _tool(f"{MCP_CATFISH_PREFIX}catfish_check_compliance"),
     _tool(f"{MCP_CATFISH_PREFIX}catfish_draft_email_reply"),
@@ -122,13 +127,20 @@ def test_advisor拿不到任何执行或写入类原生工具(tool_name):
     assert tool_name not in _names(kept)
 
 
-def test_三条后台source原生工具全空():
-    """profile / briefing-card / email-scheduler 都是无人值守批处理,
-    没有员工在屏幕前, 给执行类工具风险比 advisor 还高。"""
+def test_三条后台source除了桥没有别的原生工具():
+    """profile / briefing-card / email-scheduler 都是无人值守批处理, 没有员工在
+    屏幕前, 给执行类工具的风险比 advisor 还高。
+
+    桥 (tool_search/describe/call) 是例外 —— 不给桥它们够不着自己的业务工具,
+    见 test_业务工具被defer的source必须留着三个桥。桥本身到不了 core 工具。
+    """
     for src in ("companion-profile", "companion-briefing-card",
                 "companion-email-scheduler"):
         kept, _ = _filter_by_source_profile(REAL_WORLD_TOOLS, src)
-        leaked = {n for n in _names(kept) if not n.startswith(("catfish_", "mcp__"))}
+        leaked = {
+            n for n in _names(kept)
+            if not n.startswith(("catfish_", "mcp__")) and n not in DEFERRED_TOOL_BRIDGES
+        }
         assert not leaked, f"{src} 漏了原生工具: {leaked}"
 
 
@@ -237,6 +249,82 @@ def test_两表key必须一一对应():
         f"{set(SOURCE_TOOL_PROFILES) - set(SOURCE_NATIVE_TOOLS)}, "
         f"只在 native 表 = {set(SOURCE_NATIVE_TOOLS) - set(SOURCE_TOOL_PROFILES)}"
     )
+
+
+def test_桥名单必须正好是hermes那三个():
+    """独立钉死三个名字, **不从 DEFERRED_TOOL_BRIDGES 自己派生**。
+
+    为什么单列一条: 下面那条一致性测试拿同一个常量既当"要求"又当"供给"
+    (`DEFERRED_TOOL_BRIDGES - native`), 是个自我循环 —— 常量本身漏了一个名字,
+    差集照样是空, 测试照样绿。变异实测: 从常量里删掉 tool_call, 23 条全过。
+
+    真事: 少了 tool_call, advisor 能 tool_search 搜到工具、能 tool_describe 看
+    schema, 就是**调不动** —— 半截路, 而且不报错。
+
+    名字来源 hermes tools/tool_search.py:59
+        BRIDGE_TOOL_NAMES = frozenset({TOOL_SEARCH_NAME, TOOL_DESCRIBE_NAME, TOOL_CALL_NAME})
+    """
+    assert DEFERRED_TOOL_BRIDGES == {"tool_search", "tool_describe", "tool_call"}
+
+
+def test_业务工具被defer的source必须留着三个桥():
+    """砍了桥 = 那条 source 当场变空手, 而且**测不出来** —— 上面所有"不误伤"
+    测试用的都是直接放进 tools 数组的假工具, 全绿。
+
+    真事: hermes 0.20 起 catfish 78 个工具除 P43 提升的 11 个外全被 defer,
+    只能走 tool_search → tool_describe → tool_call。advisor 的 8 个业务工具里
+    7 个在这一族。
+
+    这条测试跨仓读 P43 的 _PROMOTE 名单 (跟 test_p43_core_tools.py 同款做法):
+    profile 白名单里只要有 P43 名单外的工具, 该 source 就必须有桥。以后往
+    profile 白名单加新工具时, 这条会替你想起来问一句"它需要桥吗"。
+    """
+    promote_py = (
+        Path(__file__).resolve().parents[3]
+        / "edge/hermes-plugins/catfish-xcatfish-user/plugin_core_tools.py"
+    )
+    if not promote_py.exists():
+        pytest.skip(f"跨仓文件不在 (CI 可能只 checkout 了 central/): {promote_py}")
+
+    import re
+    src = promote_py.read_text(encoding="utf-8")
+    m = re.search(r"^_PROMOTE\s*=\s*\((.*?)^\)", src, re.S | re.M)
+    assert m, "plugin_core_tools.py 里找不到 _PROMOTE —— 上游改了结构, 先看清楚再改测试"
+    promoted = set(re.findall(r'"(catfish_[a-z_]+)"', m.group(1)))
+    assert promoted, "_PROMOTE 解析出来是空的 —— 十有八九是正则没对上语法"
+
+    for src_name, catfish_tools in SOURCE_TOOL_PROFILES.items():
+        deferred = catfish_tools - promoted
+        if not deferred:
+            continue
+        native = SOURCE_NATIVE_TOOLS[src_name]
+        missing = DEFERRED_TOOL_BRIDGES - native
+        assert not missing, (
+            f"{src_name} 的业务工具 {sorted(deferred)} 被 hermes defer, "
+            f"必须靠桥才够得着, 但它的 native 白名单缺了 {sorted(missing)} —— "
+            "这条 source 会变成空手, 且不会报错。"
+        )
+
+
+def test_桥够不到execute_code是hermes保证不是我们的():
+    """记一笔边界, 免得以后有人以为"给了 tool_call 等于给了全部工具"。
+
+    hermes tools/tool_search.py 的 parse 里:
+        if not is_deferrable_tool_name(name):
+            return None, {}, f"'{name}' is not a deferrable tool. ..."
+    而 is_deferrable_tool_name 对 _HERMES_CORE_TOOLS 一律返 False。
+    execute_code / write_file / patch / process 都是 core → 桥调不动。
+
+    所以 advisor 拿到桥之后, 可达集合 = 被 defer 的工具 = catfish 业务工具那族,
+    不含任何执行类原生工具。这里只断言我们这侧没把 core 工具误塞进桥名单。
+    """
+    assert not (DEFERRED_TOOL_BRIDGES & ALWAYS_ON_TOOLS), (
+        "桥名单跟 always-on 撞了 —— 桥本身应该是 hermes core 之外的东西"
+    )
+    for src_name, native in SOURCE_NATIVE_TOOLS.items():
+        dangerous = native & {"execute_code", "write_file", "patch", "process",
+                              "delegate_task", "memory"}
+        assert not dangerous, f"{src_name} 的 native 白名单里混进了执行类工具: {dangerous}"
 
 
 def test_native表里不许出现catfish工具名():

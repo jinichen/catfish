@@ -95,19 +95,47 @@ SOURCE_TOOL_PROFILES: dict[str, frozenset[str]] = {
 # ⚠ SOURCE_TOOL_PROFILES 的每个 key 必须在这里显式出现, 哪怕是空集; 由
 # test_source_native_tools.py::test_两表key必须一一对应 钉死。漏加会当场红,
 # 而不是静默按空集全砍 (误伤) 或静默放行 (漏)。
+#: hermes 0.20 的三个「渐进式披露」桥。**砍了会直接废掉一条 source。**
+#:
+#: 0.20 起 MCP/插件工具不再全量塞进 tools 数组, 而是收进这三个桥按需检索
+#: (tool_search 找 → tool_describe 看 schema → tool_call 调)。catfish 78 个工具
+#: 里, 除 P43 提升为核心的 11 个 (plugin_core_tools.py:_PROMOTE) 外, **其余 67 个
+#: 全部被 defer** —— 也就是说它们压根不出现在 gateway 收到的 tools 数组里, 只能
+#: 走桥。
+#:
+#: 具体到 advisor: 它 profile 白名单里那 8 个业务工具, 只有 catfish_today_summary
+#: 在 P43 名单内, 另外 7 个 (check_compliance / draft_email_reply / ...) 全靠桥。
+#: 桥砍掉 = advisor 一个业务工具都够不着, 变成空手参谋。
+#:
+#: 给桥安不安全? 安全, 且是**双保险**:
+#:   gateway 这层 —— execute_code 等已从 tools 数组砍掉, 模型看不见;
+#:   hermes 那层 —— tool_search.py:1044 `if not is_deferrable_tool_name(name)`
+#:                  直接拒绝, core 工具 (execute_code / write_file / ...) 永不
+#:                  deferrable, 所以 tool_call 根本调不动它们。
+#: 桥能到达的集合 = 被 defer 的工具, 恰好就是 catfish 业务工具那一族。
+DEFERRED_TOOL_BRIDGES: frozenset[str] = frozenset({
+    "tool_search",
+    "tool_describe",
+    "tool_call",
+})
+
+
 SOURCE_NATIVE_TOOLS: dict[str, frozenset[str]] = {
     # 早安智能参谋 —— 只出建议, 不动手。
-    "companion-advisor": frozenset({
+    "companion-advisor": DEFERRED_TOOL_BRIDGES | frozenset({
         "clarify",      # 参谋要能反问员工: 信息不足时问, 而不是瞎猜着给建议
         "web_search",   # 合规 / 政治敏感判断要能查政策原文 (BL-WEB-ALWAYS-ON 5/25:
         "web_extract",  # 不给 web_* 它会改用 browser 抓页面, 慢 30 倍贵 30 倍)
         "web_crawl",
     }),
-    # 下面三条都是**后台无人值守**批处理 —— 没有员工在屏幕前, 给执行类工具的风险
-    # 比 advisor 还高。它们的活全在各自的 catfish_* 白名单里, 原生工具一个不需要。
-    "companion-profile": frozenset(),          # 从邮件抽写作风格
-    "companion-briefing-card": frozenset(),    # 老版早安卡片, 纯汇总
-    "companion-email-scheduler": frozenset(),  # 邮件分类调度
+    # 下面三条都是**后台无人值守**批处理 —— 没有员工在屏幕前, 给执行 / 写入类工具
+    # 的风险比 advisor 还高, 所以除了够得着自己业务工具所必需的桥, 一个都不给。
+    #
+    # 谁要桥, 看该 source 的 catfish 白名单里有没有 P43 名单外的工具:
+    "companion-profile": DEFERRED_TOOL_BRIDGES,        # style_fingerprint_* 被 defer
+    "companion-briefing-card": DEFERRED_TOOL_BRIDGES,  # recall_decision_history 被 defer
+    # 它白名单里只有 catfish_email_search, 在 P43 名单内 = 直接可见, 不需要桥。
+    "companion-email-scheduler": frozenset(),
 }
 
 
