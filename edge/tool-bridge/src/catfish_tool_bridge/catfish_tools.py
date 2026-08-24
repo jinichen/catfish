@@ -31,18 +31,12 @@ import time
 from datetime import datetime, time as dtime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-
-
-
 # ============================================================
 # 工具 schema —— 给 LLM 看的描述
 # (BL-TOOL-SPLIT 5/20: 2088 行 schema 抽到 catfish_tool_schemas.py 防超 800 红线)
 # ============================================================
 
 from .catfish_tool_schemas import CATFISH_NATIVE_TOOLS  # noqa: E402
-
-
-
 
 # ============================================================
 # Today summary + Screenshot + utility helpers
@@ -679,6 +673,9 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_list_reminder_lists":
         from . import reminders  # noqa: PLC0415
         return reminders.tool_list_reminder_lists(args)
+    if name == "catfish_list_reminders":
+        from . import reminders  # noqa: PLC0415
+        return reminders.tool_list_reminders(args)
     # BL-CALENDAR (5/14 0:30 鸿波"ISO 会议 LLM 写脚本踩坑")
     if name == "catfish_create_calendar_event":
         from . import calendar_events  # noqa: PLC0415

@@ -21,9 +21,14 @@ import logging
 import platform
 import shlex
 import subprocess
+from datetime import datetime, time, timedelta
 from typing import Any
 
 logger = logging.getLogger("catfish.tool_bridge.reminders")
+
+_FIELD_SEPARATOR = "\x1f"
+_RECORD_SEPARATOR = "\x1e"
+_LIST_SCOPES = frozenset({"today", "week", "overdue", "all"})
 
 
 def _is_macos() -> bool:
@@ -212,9 +217,235 @@ end tell'''
     }
 
 
+def _now_local() -> datetime:
+    """当前本地时间；独立函数便于边界测试固定时间。"""
+    return datetime.now()
+
+
+def _parse_reminders_output(stdout: str) -> list[dict[str, Any]]:
+    """解析 AppleScript 返回的稳定分隔格式。
+
+    字段依次为 id/title/list/due/completed/priority/body。AppleScript 侧会把
+    换行和两个控制分隔符替换为空格，避免用户文本破坏记录边界。
+    """
+    reminders: list[dict[str, Any]] = []
+    for row in stdout.split(_RECORD_SEPARATOR):
+        if not row:
+            continue
+        fields = row.split(_FIELD_SEPARATOR)
+        # _run_osascript 对整个 stdout 做 strip；最后一条 body 为空时，末尾的
+        # ASCII 31 也会被当作空白吃掉，只剩 6 字段。仅允许这个明确形态补空 body。
+        if len(fields) == 6:
+            fields.append("")
+        if len(fields) != 7:
+            logger.warning("跳过无法解析的 Reminders 记录: fields=%d", len(fields))
+            continue
+        reminder_id, title, list_name, due, completed, priority, body = fields
+        try:
+            priority_value = int(priority or 0)
+        except ValueError:
+            priority_value = 0
+        reminders.append({
+            "id": reminder_id,
+            "title": title,
+            "list_name": list_name,
+            "due_date_iso": due or None,
+            "completed": completed.lower() == "true",
+            "priority": priority_value,
+            "body": body,
+        })
+    return reminders
+
+
+def _parse_local_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _filter_reminders(
+    reminders: list[dict[str, Any]],
+    scope: str,
+    *,
+    now: datetime | None = None,
+    include_completed: bool = False,
+    list_name: str = "",
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """按本地自然日/自然周筛选并稳定排序。"""
+    current = now or _now_local()
+    today_start = datetime.combine(current.date(), time.min)
+    tomorrow_start = today_start + timedelta(days=1)
+    week_start = today_start - timedelta(days=today_start.weekday())
+    next_week_start = week_start + timedelta(days=7)
+
+    selected: list[tuple[datetime | None, dict[str, Any]]] = []
+    for reminder in reminders:
+        if list_name and reminder.get("list_name") != list_name:
+            continue
+        if not include_completed and reminder.get("completed"):
+            continue
+
+        due = _parse_local_iso(reminder.get("due_date_iso"))
+        if due is not None and due.tzinfo is not None:
+            due = due.astimezone().replace(tzinfo=None)
+
+        matches = scope == "all"
+        if scope == "today":
+            matches = due is not None and today_start <= due < tomorrow_start
+        elif scope == "week":
+            matches = due is not None and week_start <= due < next_week_start
+        elif scope == "overdue":
+            matches = (
+                due is not None
+                and due < today_start
+                and not reminder.get("completed")
+            )
+        if matches:
+            selected.append((due, reminder))
+
+    selected.sort(key=lambda item: (item[0] is None, item[0] or datetime.max, item[1]["title"]))
+    return [item[1] for item in selected[:limit]]
+
+
+_LIST_REMINDERS_SCRIPT = r'''on cleanText(rawValue)
+    if rawValue is missing value then return ""
+    set valueText to rawValue as text
+    set AppleScript's text item delimiters to {return, linefeed, ASCII character 30, ASCII character 31}
+    set valueParts to text items of valueText
+    set AppleScript's text item delimiters to " "
+    set valueText to valueParts as text
+    set AppleScript's text item delimiters to ""
+    return valueText
+end cleanText
+
+on pad2(numberValue)
+    set valueText to numberValue as text
+    if (count of valueText) is 1 then return "0" & valueText
+    return valueText
+end pad2
+
+on isoDate(dateValue)
+    set yearText to (year of dateValue as integer) as text
+    set monthText to my pad2(month of dateValue as integer)
+    set dayText to my pad2(day of dateValue as integer)
+    set hourText to my pad2(hours of dateValue)
+    set minuteText to my pad2(minutes of dateValue)
+    set secondText to my pad2(seconds of dateValue)
+    return yearText & "-" & monthText & "-" & dayText & "T" & hourText & ":" & minuteText & ":" & secondText
+end isoDate
+
+tell application "Reminders"
+    set outputRows to {}
+    repeat with reminderList in lists
+        set listText to my cleanText(name of reminderList)
+        repeat with reminderItem in reminders of reminderList
+            set idText to my cleanText(id of reminderItem)
+            set titleText to my cleanText(name of reminderItem)
+            set dueText to ""
+            try
+                set reminderDue to due date of reminderItem
+                if reminderDue is not missing value then set dueText to my isoDate(reminderDue)
+            end try
+            set completedText to (completed of reminderItem) as text
+            set priorityText to "0"
+            try
+                set priorityText to (priority of reminderItem) as text
+            end try
+            set bodyText to ""
+            try
+                set bodyText to my cleanText(body of reminderItem)
+            end try
+            set fieldSeparator to ASCII character 31
+            set rowText to idText & fieldSeparator & titleText & fieldSeparator & listText & fieldSeparator & dueText & fieldSeparator & completedText & fieldSeparator & priorityText & fieldSeparator & bodyText
+            set end of outputRows to rowText
+        end repeat
+    end repeat
+end tell
+set AppleScript's text item delimiters to ASCII character 30
+set outputText to outputRows as text
+set AppleScript's text item delimiters to ""
+return outputText'''
+
+
+def tool_list_reminders(args: dict[str, Any]) -> dict[str, Any]:
+    """读取用户真实的 macOS Reminders.app 条目。"""
+    scope = str(args.get("scope") or "week").strip().lower()
+    if scope not in _LIST_SCOPES:
+        return {
+            "ok": False,
+            "error": "scope 只支持 today/week/overdue/all",
+            "reminders": [],
+        }
+
+    try:
+        limit = max(1, min(500, int(args.get("limit", 100))))
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "limit 应是 1-500 整数", "reminders": []}
+
+    if not _is_macos():
+        return {
+            "ok": False,
+            "error": "list_reminders 只 macOS 支持 (读取 Reminders.app). 当前平台: "
+                     + platform.system(),
+            "reminders": [],
+        }
+
+    ok, stdout, stderr = _run_osascript(_LIST_REMINDERS_SCRIPT, timeout_sec=30.0)
+    if not ok:
+        if "Not authorized" in stderr or "权限" in stderr or "not allowed" in stderr.lower():
+            return {
+                "ok": False,
+                "error": (
+                    "Reminders.app 权限未给 — 系统设置 → 隐私与安全性 → 提醒事项 → "
+                    "勾上 Catfish Companion (或 Terminal / Python)."
+                ),
+                "needs_permission": True,
+                "reminders": [],
+            }
+        return {"ok": False, "error": f"osascript 失败: {stderr}", "reminders": []}
+
+    all_items = _parse_reminders_output(stdout)
+    list_name = str(args.get("list_name") or "").strip()
+    include_completed = bool(args.get("include_completed", False))
+    selected = _filter_reminders(
+        all_items,
+        scope,
+        now=_now_local(),
+        include_completed=include_completed,
+        list_name=list_name,
+        limit=limit,
+    )
+    scope_names = {
+        "today": "今天",
+        "week": "本周",
+        "overdue": "已逾期",
+        "all": "全部",
+    }
+    logger.info(
+        "BL-REMINDER: 读取 %s 条提醒 (scope=%s, list=%s)",
+        len(selected), scope, list_name or "全部",
+    )
+    return {
+        "ok": True,
+        "scope": scope,
+        "list_name": list_name or None,
+        "include_completed": include_completed,
+        "reminders": selected,
+        "count": len(selected),
+        "summary": f"📋 Reminders.app {scope_names[scope]}共有 {len(selected)} 条符合条件的待办.",
+    }
+
+
 __all__ = [
     "tool_create_reminder",
+    "tool_list_reminders",
     "tool_list_reminder_lists",
     "_convert_iso_to_applescript_date",  # 给单测
     "_escape_applescript_string",  # 给单测
+    "_filter_reminders",  # 给单测
+    "_parse_reminders_output",  # 给单测
 ]

@@ -107,6 +107,9 @@ _PROMOTE = (
     "catfish_wiki_search",     # 知识库检索 —— 8/13 员工撞的就是它
     "catfish_search_docs",     # 本地文档检索, 跟上面是一对
     "catfish_today_summary",   # 今日 TODO / 邮件 / 日程汇总
+    # 8/24: 用户系统待办的唯一只读入口。没有它时 Qwen 把“查询 Reminders”
+    # 连续写进 Hermes 会话规划 todo 12 次；这个入口不能再藏到 tool_search 后面。
+    "catfish_list_reminders",
     "catfish_email_search",    # 邮件查询
     # ── 8/13 补: 上面 4 个的输出可能变成 [已归档], 那时必须能读回来 ──
     #

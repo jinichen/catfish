@@ -10,11 +10,36 @@
 from __future__ import annotations
 
 import platform
+from datetime import datetime
 from unittest.mock import patch
 
 import pytest
 
 from catfish_tool_bridge import reminders
+
+
+_FS = "\x1f"
+_RS = "\x1e"
+
+
+def _reminder_row(
+    reminder_id: str,
+    title: str,
+    list_name: str,
+    due_date_iso: str = "",
+    completed: bool = False,
+    priority: int = 0,
+    body: str = "",
+) -> str:
+    return _FS.join([
+        reminder_id,
+        title,
+        list_name,
+        due_date_iso,
+        "true" if completed else "false",
+        str(priority),
+        body,
+    ])
 
 
 # ─── 输入校验 ──────────────────────────────────────────────
@@ -115,6 +140,14 @@ def test_non_macos_list_returns_friendly_error():
     assert r["list_names"] == []
 
 
+@pytest.mark.skipif(platform.system() == "Darwin", reason="非 macOS 才测")
+def test_non_macos_list_reminders_returns_friendly_error():
+    r = reminders.tool_list_reminders({"scope": "week"})
+    assert r["ok"] is False
+    assert "macOS" in r["error"]
+    assert r["reminders"] == []
+
+
 # ─── mock osascript 错误处理 (跨平台跑) ──────────────────
 
 
@@ -199,6 +232,130 @@ def test_priority_clamping_to_0_9():
     assert "priority:0" in script
 
 
+# ─── 读取 Reminders.app 条目 ─────────────────────────────
+
+
+def test_parse_reminders_output_keeps_structured_fields():
+    stdout = _RS.join([
+        _reminder_row(
+            "x-1", "ISO 资质申报", "工作", "2026-08-28T18:00:00",
+            priority=1, body="准备申请材料",
+        ),
+        _reminder_row("x-2", "已完成事项", "家庭", completed=True),
+    ])
+
+    items = reminders._parse_reminders_output(stdout)
+
+    assert items == [
+        {
+            "id": "x-1",
+            "title": "ISO 资质申报",
+            "list_name": "工作",
+            "due_date_iso": "2026-08-28T18:00:00",
+            "completed": False,
+            "priority": 1,
+            "body": "准备申请材料",
+        },
+        {
+            "id": "x-2",
+            "title": "已完成事项",
+            "list_name": "家庭",
+            "due_date_iso": None,
+            "completed": True,
+            "priority": 0,
+            "body": "",
+        },
+    ]
+
+
+def test_parse_reminders_output_accepts_stripped_empty_last_body():
+    """_run_osascript.strip() 会吃掉末尾控制分隔符，最后一条空 body 只剩 6 字段。"""
+    stdout = _reminder_row(
+        "x-last", "最后一条", "工作", "2026-08-28T18:00:00",
+    ).strip()
+
+    items = reminders._parse_reminders_output(stdout)
+
+    assert len(items) == 1
+    assert items[0]["id"] == "x-last"
+    assert items[0]["body"] == ""
+
+
+def test_filter_reminders_supports_today_week_overdue_and_all():
+    now = datetime(2026, 8, 24, 13, 30, 0)  # 周一
+    items = reminders._parse_reminders_output(_RS.join([
+        _reminder_row("today", "今天", "工作", "2026-08-24T18:00:00"),
+        _reminder_row("week", "周五", "工作", "2026-08-28T18:00:00"),
+        _reminder_row("overdue", "昨天", "工作", "2026-08-23T18:00:00"),
+        _reminder_row("next", "下周", "工作", "2026-08-31T09:00:00"),
+        _reminder_row("none", "无截止", "工作"),
+        _reminder_row("done", "已完成", "工作", "2026-08-26T09:00:00", True),
+    ]))
+
+    assert [x["id"] for x in reminders._filter_reminders(items, "today", now=now)] == ["today"]
+    assert [x["id"] for x in reminders._filter_reminders(items, "week", now=now)] == ["today", "week"]
+    assert [x["id"] for x in reminders._filter_reminders(items, "overdue", now=now)] == ["overdue"]
+    assert [x["id"] for x in reminders._filter_reminders(items, "all", now=now)] == [
+        "overdue", "today", "week", "next", "none",
+    ]
+
+
+def test_filter_reminders_can_include_completed_and_filter_list():
+    now = datetime(2026, 8, 24, 13, 30, 0)
+    items = reminders._parse_reminders_output(_RS.join([
+        _reminder_row("work-open", "工作未完成", "工作", "2026-08-25T09:00:00"),
+        _reminder_row("work-done", "工作已完成", "工作", "2026-08-26T09:00:00", True),
+        _reminder_row("home", "家庭", "家庭", "2026-08-27T09:00:00"),
+    ]))
+
+    result = reminders._filter_reminders(
+        items,
+        "week",
+        now=now,
+        include_completed=True,
+        list_name="工作",
+        limit=1,
+    )
+
+    assert [x["id"] for x in result] == ["work-open"]
+
+
+def test_list_reminders_rejects_unknown_scope_before_osascript():
+    with patch.object(reminders, "_run_osascript") as mock_run:
+        result = reminders.tool_list_reminders({"scope": "month"})
+    assert result["ok"] is False
+    assert "scope" in result["error"]
+    mock_run.assert_not_called()
+
+
+def test_list_reminders_permission_denied_is_actionable():
+    with patch.object(reminders, "_is_macos", return_value=True), \
+         patch.object(reminders, "_run_osascript", return_value=(
+             False, "", "Not authorized to send Apple events to Reminders.",
+         )):
+        result = reminders.tool_list_reminders({"scope": "week"})
+    assert result["ok"] is False
+    assert result["needs_permission"] is True
+    assert result["reminders"] == []
+    assert "权限" in result["error"]
+
+
+def test_list_reminders_week_success():
+    stdout = _RS.join([
+        _reminder_row("week", "本周五交周报", "工作", "2026-08-28T18:00:00"),
+        _reminder_row("next", "下周任务", "工作", "2026-08-31T09:00:00"),
+    ])
+    fixed_now = datetime(2026, 8, 24, 13, 30, 0)
+    with patch.object(reminders, "_is_macos", return_value=True), \
+         patch.object(reminders, "_run_osascript", return_value=(True, stdout, "")), \
+         patch.object(reminders, "_now_local", return_value=fixed_now):
+        result = reminders.tool_list_reminders({"scope": "week"})
+    assert result["ok"] is True
+    assert result["count"] == 1
+    assert result["reminders"][0]["title"] == "本周五交周报"
+    assert "本周" in result["summary"]
+
+
 def test_dispatch_via_catfish_tools():
     """通过 catfish_tools.dispatch_native 走 tool 路由."""
     from catfish_tool_bridge import catfish_tools
@@ -208,13 +365,27 @@ def test_dispatch_via_catfish_tools():
     assert r["ok"] is True
 
 
+def test_list_reminders_dispatch_via_catfish_tools():
+    from catfish_tool_bridge import catfish_tools
+    with patch.object(reminders, "_is_macos", return_value=True), \
+         patch.object(reminders, "_run_osascript", return_value=(True, "", "")):
+        r = catfish_tools.dispatch_native("catfish_list_reminders", {"scope": "week"})
+    assert r["ok"] is True
+    assert r["reminders"] == []
+
+
 def test_schema_in_native_tools_list():
     """catfish_create_reminder + catfish_list_reminder_lists 都在 NATIVE_TOOL_NAMES."""
     from catfish_tool_bridge import catfish_tools
     assert "catfish_create_reminder" in catfish_tools.NATIVE_TOOL_NAMES
     assert "catfish_list_reminder_lists" in catfish_tools.NATIVE_TOOL_NAMES
+    assert "catfish_list_reminders" in catfish_tools.NATIVE_TOOL_NAMES
     schemas = {t["name"]: t for t in catfish_tools.CATFISH_NATIVE_TOOLS}
     assert "title" in schemas["catfish_create_reminder"]["input_schema"]["required"]
     # description 必告诉 LLM 跟 notify 区别
     assert "notify" in schemas["catfish_create_reminder"]["description"]
     assert "iCloud" in schemas["catfish_create_reminder"]["description"]
+    list_schema = schemas["catfish_list_reminders"]
+    assert "scope" in list_schema["input_schema"]["properties"]
+    assert "Reminders.app" in list_schema["description"]
+    assert "Hermes todo" in list_schema["description"]

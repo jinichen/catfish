@@ -361,6 +361,52 @@ TASK_TOOLS: List[Dict[str, Any]] = [
         "available": True,
     },
     {
+        "name": "catfish_list_reminders",
+        "description": (
+            "★ 读取用户 macOS Reminders.app 里的真实提醒事项条目，返回标题、清单、"
+            "截止时间、完成状态和优先级。用于‘本周待办是什么’、‘列出今天待办’、"
+            "‘有哪些逾期待办’、‘列出所有提醒事项’等查询。\n\n"
+            "**不要用 Hermes todo 读取 Reminders.app**：Hermes todo 只管理 Agent 当前"
+            "会话的执行计划，调用成功也不会读取用户的系统待办。遇到系统提醒查询必须"
+            "直接调用本工具。\n\n"
+            "scope: today=今天到期，week=本自然周到期，overdue=今天之前未完成，"
+            "all=全部；默认 week。默认不含已完成，可用 include_completed=true 查看。"
+            "list_name 可限定某个提醒清单，limit 默认 100、最大 500。\n\n"
+            "🔒 只读、100% 本机；不修改提醒事项，不上传中央。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "scope": {
+                    "type": "string",
+                    "enum": ["today", "week", "overdue", "all"],
+                    "default": "week",
+                    "description": "读取范围：today/week/overdue/all，默认 week",
+                },
+                "include_completed": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "是否包含已完成提醒，默认 false",
+                },
+                "list_name": {
+                    "type": "string",
+                    "description": "只看指定清单，如‘工作’；留空看全部清单",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 500,
+                    "default": 100,
+                    "description": "最多返回多少条，默认 100",
+                },
+            },
+            "required": [],
+        },
+        "emoji": "📋",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
         "name": "catfish_list_reminder_lists",
         "description": (
             "列 macOS Reminders.app 所有 list 名 (用户分类如 '工作' / '家庭' / '购物'). "

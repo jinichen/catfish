@@ -131,6 +131,28 @@ def register(ctx) -> None:
                 "memory 写入回落 prompt 自查模式)", e,
             )
 
+        # 8/24: Hermes todo 是 Agent 会话规划，不是 macOS Reminders。Qwen 曾把
+        # “查询 Reminders 中当前所有待办”连续写进 todo 12 次，工具每次都成功，
+        # 但从未读取系统提醒。只拦有明确 Reminders 查询语义的条目，正常计划放行。
+        try:
+            from pathlib import Path as _Path3
+            import importlib.util as _iu3
+            _guard_py = _Path3(__file__).parent / "todo_collision_guard.py"
+            _spec3 = _iu3.spec_from_file_location(
+                "_catfish_xcatfish_user_todo_collision_guard", _guard_py,
+            )
+            _guard = _iu3.module_from_spec(_spec3)
+            _spec3.loader.exec_module(_guard)
+            ctx.register_hook("pre_tool_call", _guard.todo_collision_guard_hook)
+            logger.info(
+                "catfish-xcatfish-user: todo collision pre_tool_call hook registered ✓"
+            )
+        except Exception as e:
+            logger.warning(
+                "catfish-xcatfish-user todo collision guard register fail: %s "
+                "(退化为 tool schema 路由提示)", e,
+            )
+
     # Step 2.5: BL-MEMORY-ROUTER-A2-V3 (6/2 凌晨鸿波拍): 替换 hermes builtin memory tool.
     # browser_navigate 5/6 同 pattern. catfish-memory plugin (5/19 ship) 在 gateway
     # mode 不 load, 真 enforce 位置在这里 (catfish-xcatfish-user plugin 真装载).

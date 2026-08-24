@@ -191,6 +191,7 @@ ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
     # 被 BL-TOOL-CAP 砍了. 这俩是员工高频场景 (看今日 TODO/邮件), 必须 always-on
     # 防 cap 误砍.
     "catfish_today_summary",   # 今日活动 (TODO / 邮件 / 日程 / chat 汇总)
+    "catfish_list_reminders",  # macOS Reminders.app 真实待办读取（不是 Hermes todo）
     "catfish_email_search",    # 邮件查询 (chat 常用)
     # 8/13 鸿波撞「你去知识库里面核对福富资质」→ 小鲶答"无法连接到知识库检索工具"。
     # 跟上面 5/23 那两条同一个病: 高频工具没进 always-on, 被 cap 误砍。

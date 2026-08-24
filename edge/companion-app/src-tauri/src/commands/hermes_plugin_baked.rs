@@ -50,6 +50,8 @@ const BAKED_MEMORY_ROUTER: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/memory_router.py");
 const BAKED_MEMORY_ENFORCE: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/memory_enforce.py");
+const BAKED_TODO_COLLISION_GUARD: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/todo_collision_guard.py");
 const BAKED_HERMES_TOKEN_RENEWAL: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/hermes_token_renewal.py");
 // ── 8/9 补: plugin.py 拆出来的 sibling, 之前漏了 (见上面 P0 说明) ──
@@ -125,6 +127,7 @@ pub(crate) const BAKED_FILES: &[(&str, &str)] = &[
     ("session_search_router.py", BAKED_SESSION_SEARCH_ROUTER),
     ("memory_router.py", BAKED_MEMORY_ROUTER),
     ("memory_enforce.py", BAKED_MEMORY_ENFORCE),
+    ("todo_collision_guard.py", BAKED_TODO_COLLISION_GUARD),
     ("hermes_token_renewal.py", BAKED_HERMES_TOKEN_RENEWAL),
     ("plugin_weixin_zh.py", BAKED_PLUGIN_WEIXIN_ZH),
     ("plugin_wechat_qr.py", BAKED_PLUGIN_WECHAT_QR),

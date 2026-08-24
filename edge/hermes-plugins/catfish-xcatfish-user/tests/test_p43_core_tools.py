@@ -49,6 +49,14 @@ def test_promoted_names_are_fully_prefixed():
         assert bare.startswith("catfish_"), f"{full} 剥完前缀应是 catfish_*"
 
 
+def test_reminders_reader_is_promoted_directly():
+    """系统待办是员工高频入口，不能要求模型先猜到 tool_search。"""
+    assert (
+        f"{pct._MCP_PREFIX}catfish_list_reminders"
+        in pct.PROMOTED_TOOL_NAMES
+    )
+
+
 def test_prefix_matches_hermes_convention_if_hermes_present():
     """能读到 hermes 源码时, 直接跟它的 MCP_TOOL_NAME_PREFIX 对。
 
