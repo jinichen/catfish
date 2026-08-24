@@ -88,6 +88,9 @@ REAL_WORLD_TOOLS = [
     # catfish always-on (知识库检索一族, 8/13 鸿波要求必须能用)
     _tool(f"{MCP_CATFISH_PREFIX}catfish_wiki_search"),
     _tool(f"{MCP_CATFISH_PREFIX}catfish_today_summary"),
+    _tool(f"{MCP_CATFISH_PREFIX}catfish_browser_snapshot"),
+    _tool(f"{MCP_CATFISH_PREFIX}catfish_browser_screenshot"),
+    _tool(f"{MCP_CATFISH_PREFIX}catfish_list_reminders"),
     # 不在 advisor profile 白名单里的 catfish 工具
     _tool(f"{MCP_CATFISH_PREFIX}catfish_style_fingerprint_refresh"),
     # 员工自己装的 MCP
@@ -149,20 +152,15 @@ def test_三条后台source除了桥没有别的原生工具():
 # ─────────────────────────────────────────────────────────────────────
 # 2. 不误伤: 砍过头 advisor 就干不了活
 # ─────────────────────────────────────────────────────────────────────
-def test_advisor保留反问和查证能力():
-    """clarify = 信息不足时问员工 (而不是瞎猜着给建议);
-    web_* = 合规/政治敏感判断要能查政策原文。
-
-    web_* 掉了不只是"少个工具": BL-WEB-ALWAYS-ON (5/25) 记过, 模型拿不到
-    web_search 会改用 browser 抓页面, 慢 30 倍贵 30 倍。
-    """
+def test_advisor不注入任何hermes原生工具():
+    """输入由 Companion 预取，advisor 不反问、不联网、不执行。"""
     kept, _ = _filter_by_source_profile(REAL_WORLD_TOOLS, ADVISOR)
     got = _names(kept)
-    for n in ("clarify", "web_search", "web_extract", "web_crawl"):
-        assert n in got, f"advisor 丢了 {n}"
+    native = {n for n in got if not n.startswith(("catfish_", "mcp__"))}
+    assert not native, f"advisor 漏了原生工具: {native}"
 
 
-def test_advisor的业务工具和知识库检索都还在():
+def test_advisor只保留显式业务工具():
     """MCP 包装名必须被认出来 —— 这是 bug 1 的正面证据。
 
     归一化写错的话, 这些包装名会被当成"原生裸名"送进 native 白名单比对,
@@ -170,21 +168,20 @@ def test_advisor的业务工具和知识库检索都还在():
     """
     kept, _ = _filter_by_source_profile(REAL_WORLD_TOOLS, ADVISOR)
     got = _names(kept)
-    for n in ("catfish_check_compliance",      # profile 白名单
-              "catfish_draft_email_reply",     # profile 白名单
-              "catfish_wiki_search",           # always-on (8/13)
-              "catfish_today_summary"):        # always-on (5/23)
+    for n in ("catfish_check_compliance",
+              "catfish_draft_email_reply",
+              "catfish_today_summary"):
         assert f"{MCP_CATFISH_PREFIX}{n}" in got, f"advisor 丢了 {n}"
 
+    for n in ("catfish_wiki_search", "catfish_browser_snapshot",
+              "catfish_browser_screenshot", "catfish_list_reminders"):
+        assert f"{MCP_CATFISH_PREFIX}{n}" not in got, f"advisor 多注入了 {n}"
 
-def test_员工自装的MCP不被catfish_profile砍():
-    """5/22 原意保留: 那是员工装的 plugin, 不归 catfish profile 管。
 
-    归一化只 strip catfish-tools 自己的前缀 —— 别家的 mcp__ 名字过不了 strip,
-    要是没先挡一道, 会被当成"原生裸名"误砍。
-    """
+def test_后台source不注入员工自装MCP():
+    """无人值守调用不能借员工插件扩大能力；普通聊天由下一条测试保证不受影响。"""
     kept, _ = _filter_by_source_profile(REAL_WORLD_TOOLS, ADVISOR)
-    assert "mcp__github__create_issue" in _names(kept)
+    assert "mcp__github__create_issue" not in _names(kept)
 
 
 def test_不在表里的source一个工具都不少():
@@ -300,7 +297,38 @@ def test_走真实入口时advisor的execute_code照样被砍():
     """跟上一条配对: 证明真实入口下过滤**仍然在工作**, 不是被 pinned 全放行了。"""
     body = {"tools": [_tool("execute_code"), _tool("clarify")]}
     out = sanitize_tools(body, source_hint=ADVISOR)
-    assert _names(out["tools"]) == {"clarify"}
+    assert _names(out["tools"]) == set()
+
+
+def test_advisor历史里的已禁工具调用也被清理():
+    """旧会话若已经调用过 browser_screenshot，下一轮收紧 tools 时必须同步 scrub。
+
+    否则 Qwen 会因 messages 仍引用一个已不在 tools 数组中的名字而直接 400。
+    """
+    screenshot = f"{MCP_CATFISH_PREFIX}catfish_browser_screenshot"
+    body = {
+        "tools": [
+            _tool(screenshot),
+            _tool(f"{MCP_CATFISH_PREFIX}catfish_check_compliance"),
+        ],
+        "messages": [
+            {"role": "user", "content": "分析本周事项"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "call-shot",
+                    "type": "function",
+                    "function": {"name": screenshot, "arguments": "{}"},
+                }],
+            },
+            {"role": "tool", "tool_call_id": "call-shot", "content": "截图完成"},
+        ],
+    }
+
+    out = sanitize_tools(body, source_hint=ADVISOR)
+    assert screenshot not in _names(out["tools"])
+    assert out["messages"] == [{"role": "user", "content": "分析本周事项"}]
 
 
 def test_caller用裸名点名包装工具也保得住():

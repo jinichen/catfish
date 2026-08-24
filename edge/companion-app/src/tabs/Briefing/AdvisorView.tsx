@@ -35,6 +35,7 @@ import {
   fetchBriefingAdvisor,
   type AdvisorResult,
 } from "../../lib/briefing_advisor";
+import { isAdvisorResultCacheSafe } from "../../lib/briefing_advisor_quality";
 import { ensureRecomputed, type Profile } from "../../lib/profile";
 import {
   briefingContextFetch,
@@ -201,7 +202,11 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
         if (!isManualRefresh && config) {
           const cached = await advisorCacheGet();
           if (cancelled) return;
-          if (cached && isCacheFresh(cached, config.cacheMaxAgeMinutes)) {
+          if (
+            cached
+            && isCacheFresh(cached, config.cacheMaxAgeMinutes)
+            && isAdvisorResultCacheSafe(cached.result)
+          ) {
             console.log("[advisor] cache 命中, 跳过 LLM 调用",
               { ageMin: cacheAgeMinutes(cached).toFixed(1) });
             setResult(cached.result);
@@ -286,7 +291,11 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
           todos: todos.length,
         });
         // 拉 stale cache 让 cancel button 有内容可显 (有 cache 才显按钮).
-        void advisorCacheGet().then((c) => !cancelled && setStaleCache(c));
+        void advisorCacheGet().then((c) => {
+          if (!cancelled) {
+            setStaleCache(c && isAdvisorResultCacheSafe(c.result) ? c : null);
+          }
+        });
         const r = await fetchBriefingAdvisor({
           profile: p,
           emails,
@@ -307,7 +316,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
           console.warn("[advisor] 客户端 timeout, 走 stale cache fallback");
           const stale = await advisorCacheGet();
           if (cancelled) return;
-          if (stale) {
+          if (stale && isAdvisorResultCacheSafe(stale.result)) {
             setResult(stale.result);
             // 8/8 鸿波 catch「这是公网模型, 怎么回事」: 原文案硬编码
             //   "公司内网模型响应慢 (>5min)" —— 两处都是错的:
@@ -329,6 +338,25 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
                 `也没有历史缓存可显示. 等几分钟点刷新重试.`,
             );
             setPhase("error");
+          }
+          return;
+        }
+
+        // Qwen 空转/偏航时 fetchBriefingAdvisor 会返回 null。旧逻辑直接 setResult(null)
+        // 后结束，已有的有效结果也被空白替掉。这里跟 timeout 一样优先显示安全旧缓存；
+        // 旧版“等待用户输入”占位缓存会被 isAdvisorResultCacheSafe 拒绝。
+        if (r === null) {
+          const stale = await advisorCacheGet();
+          if (cancelled) return;
+          if (stale && isAdvisorResultCacheSafe(stale.result)) {
+            setResult(stale.result);
+            setStaleNotice(
+              `⚠️ 模型 ${model} 本次没有形成可靠业务结论，显示上次有效结果。`,
+            );
+            setPhase("stale_fallback");
+          } else {
+            setResult(null);
+            setPhase("done");
           }
           return;
         }

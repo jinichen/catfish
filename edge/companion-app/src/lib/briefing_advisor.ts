@@ -57,6 +57,10 @@ import {
   parseAdvisorResult,
   robustJsonParse,
 } from "./briefing_advisor_parse";
+import {
+  filterAdvisorResultByEvidence,
+  isAdvisorTransformSourceUsable,
+} from "./briefing_advisor_quality";
 import { ensureTaskChatSummariesFresh } from "./briefing_advisor_summaries";
 
 // ── re-export: 外部文件 (AdvisorView / TaskPicker / BriefingDetailPane /
@@ -557,6 +561,13 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
         "[advisor] robustJsonParse 失败 (LLM 纯 reasoning / truncated), 触发 P3.4.E Call 2 转结构化. 原文前 200:",
         content.slice(0, 200),
       );
+      if (!isAdvisorTransformSourceUsable(content, filteredInput)) {
+        console.warn(
+          "[advisor] Call 1 无结构且没有本轮业务依据，拒绝交给 Call 2 补造:",
+          content.slice(0, 200),
+        );
+        return null;
+      }
       result = await transformToStructured(content, input.model, input.profile.tier);
       if (result === null) {
         console.warn("[advisor] P3.4.E Call 2 也挂, 返 null (UI 显数据诊断卡)");
@@ -570,6 +581,12 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
         console.warn(
           "[advisor] parseAdvisorResult strict 失败 (parsed 有但 schema 不匹配 / options<2), 触发 P3.4.E Call 2",
         );
+        if (!isAdvisorTransformSourceUsable(content, filteredInput)) {
+          console.warn(
+            "[advisor] Call 1 schema 不匹配且没有本轮业务依据，拒绝交给 Call 2 补造",
+          );
+          return null;
+        }
         result = await transformToStructured(content, input.model, input.profile.tier);
 
         // P3.4.E.7 (6/15 鸿波): 第 3 层 lenient 兜底 — Call 2 也挂时, 用 lenient mode
@@ -588,6 +605,23 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
         }
       }
     }
+    const evidenceFiltered = filterAdvisorResultByEvidence(result, filteredInput);
+    if (evidenceFiltered === null) {
+      console.warn(
+        "[advisor] 最终结构化结果未通过业务依据校验，拒绝显示及写缓存:",
+        result.mainTasks.map((task) => task.title),
+      );
+      return null;
+    }
+    if (evidenceFiltered.mainTasks.length !== result.mainTasks.length) {
+      console.warn(
+        "[advisor] 删除无本轮输入依据的任务:",
+        result.mainTasks
+          .filter((task) => !evidenceFiltered.mainTasks.some((kept) => kept.taskUid === task.taskUid))
+          .map((task) => task.title),
+      );
+    }
+    result = evidenceFiltered;
     // P3.3.40 BL-ADVISOR-RESOLVED-HARDFILTER (6/12 鸿波): prompt 里加了 §4.2
     // (P3.3.39), 但 LLM 听话率 80-90%, 仍会漏. 这里加 deterministic 客户端
     // 后处理 — 拿 prev task chatSummary + 当前 title, 命中"已结案信号"关键字
@@ -650,7 +684,9 @@ async function transformToStructured(
 
   const sys =
     "你是 catfish advisor 结构化转换器. 收到 advisor 的最终推理结论 (可能含 reasoning prose + 部分 JSON 混合), 必须调 submit_advisor_result tool 提交结构化 AdvisorResult. " +
-    "不要返 free-text content, 不要解释, 直接调 tool. 字段缺失就用合理默认值 (mainTasks 至少含已识别的, handledSilently 缺就 []). taskUid 如原文有就复用, 没有就生成 6 字符 [a-z0-9]. " +
+    "不要返 free-text content, 不要解释, 直接调 tool. 只能转换原文已经明确出现的业务事实，不得新增任务、项目、人名、截止时间或理由。" +
+    "如果原文没有具体业务事项，mainTasks 必须为空数组，绝对禁止生成‘等待用户输入’‘无具体任务’等占位任务。handledSilently 缺失时用空数组。" +
+    "taskUid 如原文有就复用, 没有就生成 6 字符 [a-z0-9]. " +
     tierDirective;
   const userPrompt = `# advisor 原始结论 (转结构化)\n\n${trimmed}`;
 

@@ -128,9 +128,8 @@ def _filter_by_source_profile(
         走这条: companion-chat / unknown / plugin:* 一律不受影响)
       - 在表里:
         * hermes 原生 (归一化后的裸名) → 只保 _SOURCE_NATIVE_TOOLS 白名单里的
-        * 员工自装 MCP (mcp__<非 catfish-tools>__*) 不动 — 那是员工的 plugin,
-          不归 catfish profile 管 (5/22 原意保留)
-        * catfish_* → always-on 豁免, 其余只保 profile 白名单
+        * 员工自装 MCP → 后台 source 不注入；普通会话不在 profile 表里，仍不受影响
+        * catfish_* → 只保 profile 显式白名单（always-on 只影响普通会话的 cap）
 
     ── 8/24 修的两个 bug (BL-ADVISOR-NATIVE-LEAK), 都属「不会失败, 也不会生效」──
 
@@ -193,11 +192,11 @@ def _filter_by_source_profile(
             kept.append(t)
             continue
 
-        # ── 员工自装 MCP → 不动 (5/22 原意: 员工的 plugin 不归 catfish profile 管) ──
-        # 注意这条要在原生分支之前: 归一化只 strip catfish-tools 自己的前缀,
-        # 别家的 mcp__ 名字过不了 strip, 会被下面当成"原生裸名"误砍。
+        # ── 员工自装 MCP → 后台 source 不注入 ──
+        # 普通 companion-chat 不在 profile 表里，已经在函数入口原样返回；只有
+        # advisor/profile 等无人值守调用走到这里，不能让任意外部 MCP 扩大能力面。
         if base.startswith("mcp__"):
-            kept.append(t)
+            dropped.append(name)
             continue
 
         # ── hermes 原生 → 查该 source 的原生白名单 (bug 2) ──
@@ -209,12 +208,9 @@ def _filter_by_source_profile(
                 dropped.append(name)
             continue
 
-        # ── catfish_* → 既有行为一字不动 ──
-        # always-on 豁免是 5/23 (today_summary / email_search) 和 8/13 (wiki_search /
-        # search_docs / read_tool_archive) 两次实盘教训换来的, 本次不碰。
-        if _is_always_on(name):
-            kept.append(t)
-            continue
+        # ── catfish_* → 后台 source 只认显式白名单 ──
+        # always-on 是普通会话做 tool cap 时的优先级，不是绕过 source 能力边界的
+        # 通行证。否则 browser / reminders / email 等都会重新漏进 advisor。
         if base in allowed_catfish:
             kept.append(t)
         else:
@@ -520,7 +516,7 @@ def sanitize_tools(
     )
     if profile_dropped:
         logger.info(
-            "BL-TOOL-PROFILE: source=%s 砍 %d 个非该 profile 的 catfish_* tool: %s",
+            "BL-TOOL-PROFILE: source=%s 砍 %d 个非该 source 能力边界的 tool: %s",
             source_hint,
             len(profile_dropped),
             ", ".join(sorted(profile_dropped)[:10]),
@@ -572,7 +568,7 @@ def sanitize_tools(
     # 路由, catfish_memory.py:1209 已 confirm), sanitizer 无 tools list 可扫,
     # 此 diag 不适用. 触发只是老 gateway 路径 (Companion 走 8999 直连 LiteLLM
     # 前端注入 tools) 的 diag 用途.
-    if cleaned:
+    if cleaned and source_hint not in _SOURCE_TOOL_PROFILES:
         seen_always_on: list[str] = []
         for t in cleaned:
             if not isinstance(t, dict):
@@ -596,6 +592,7 @@ def sanitize_tools(
     # BL-TOOL-CAP 同样的问题: 砍掉的 tool 在历史里有调用 → 撞校验 → 400. 一起 scrub.
     all_dropped_names: set[str] = (
         set(deduped_hermes_browser) | set(capped_dropped) | set(rbac_dropped)
+        | set(profile_dropped)
     )
     if all_dropped_names:
         _scrub_messages_for_dropped_tools(body, all_dropped_names)

@@ -49,7 +49,6 @@ SOURCE_TOOL_PROFILES: dict[str, frozenset[str]] = {
         "catfish_check_compliance",
         "catfish_political_sensitivity_scan",
         "catfish_recall_decision_history",
-        "catfish_forget_about",  # 5/22 新加, 员工说"老李是测试数据"用
         "catfish_today_summary",
     }),
     # 画像识别 (profile.ts) — 只要 style + user_profile
@@ -121,13 +120,10 @@ DEFERRED_TOOL_BRIDGES: frozenset[str] = frozenset({
 
 
 SOURCE_NATIVE_TOOLS: dict[str, frozenset[str]] = {
-    # 早安智能参谋 —— 只出建议, 不动手。
-    "companion-advisor": DEFERRED_TOOL_BRIDGES | frozenset({
-        "clarify",      # 参谋要能反问员工: 信息不足时问, 而不是瞎猜着给建议
-        "web_search",   # 合规 / 政治敏感判断要能查政策原文 (BL-WEB-ALWAYS-ON 5/25:
-        "web_extract",  # 不给 web_* 它会改用 browser 抓页面, 慢 30 倍贵 30 倍)
-        "web_crawl",
-    }),
+    # 早安智能参谋的输入已经由 Companion 确定性预取；SYSTEM_PROMPT 点名的业务
+    # 工具也全部由 Catfish 插件提升为直接可见。这里不再给 bridge / web / browser
+    # 等偏航入口：参谋只分析本轮数据，不反问、不联网、不执行外部动作。
+    "companion-advisor": frozenset(),
     # 下面三条都是**后台无人值守**批处理 —— 没有员工在屏幕前, 给执行 / 写入类工具
     # 的风险比 advisor 还高, 所以除了够得着自己业务工具所必需的桥, 一个都不给。
     #
