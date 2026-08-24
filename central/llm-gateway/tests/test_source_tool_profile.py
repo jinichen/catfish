@@ -440,6 +440,73 @@ def test_桥够不到execute_code是hermes保证不是我们的():
         assert not dangerous, f"{src_name} 的 native 白名单里混进了执行类工具: {dangerous}"
 
 
+def test_SYSTEM_PROMPT点名的工具_advisor必须真够得着():
+    """8/24「千问为什么一直出错」的治本测试 —— 把 prompt 和工具配置绑在一起。
+
+    # 那天的病
+
+    briefing_advisor_prompts.ts 的 SYSTEM_PROMPT「工作步骤」第 3 条点名要求:
+        涉及邮件回复 → catfish_draft_email_reply
+        涉及会议汇报 → catfish_draft_meeting_brief
+        涉及催办     → catfish_compose_followup_list
+        涉及决策     → catfish_recall_decision_history
+    而这 4 个当时全被 tool_search defer, 一个都不在模型收到的 tools 数组里,
+    整份 prompt 也没提过"得先 tool_search 找出来"。
+
+    DeepSeek 自己摸索出两步流程 (8/15、8/21 agent.log 实证), Qwen 不会 ——
+    tool_calls=0, 回了句「用户发送了系统提示内容, 无具体任务请求」。
+
+    # 这条测试盯什么
+
+    prompt 里每个被"→"路由指向的 catfish 工具, 都必须在 advisor 实际能拿到的
+    集合里 (profile 白名单 ∪ P43 提升 ∪ always-on)。
+
+    改 prompt 加个新工具却忘了提升 → 这条红。
+    从 P43 名单里拿掉一个 prompt 还在点名的工具 → 这条红。
+    两种都是"模型被命令去调一个它看不见的工具", 线上表现是模型发懵或空转,
+    没有任何报错。
+    """
+    # ⚠ 判据必须是 P43 提升名单, **不是** profile 白名单。
+    #
+    # 第一版我写成「profile 白名单 ∪ always-on」, 测试当场绿 —— 但它测的是
+    # "到达之后保不保留", 而病在"压根到不到得了"。决定工具出不出现在模型
+    # tools 数组里的是 P43 _PROMOTE (不在里面 = 被 tool_search defer)。
+    # 判据比真事宽, 于是 check_compliance / political_sensitivity_scan 这两个
+    # 同样够不着的工具被放过了。
+    #
+    # 两道关是串联的, 这条只管第一道:
+    #   第一关 P43 _PROMOTE      → 决定它出不出现在 tools 数组里
+    #   第二关 profile / always-on → 决定出现之后 gateway 砍不砍
+    # 第二关由本文件其它测试盯 (test_advisor的业务工具和知识库检索都还在)。
+    root = Path(__file__).resolve().parents[3]
+    prompts_ts = root / "edge/companion-app/src/lib/briefing_advisor_prompts.ts"
+    promote_py = root / "edge/hermes-plugins/catfish-xcatfish-user/plugin_core_tools.py"
+    for f in (prompts_ts, promote_py):
+        if not f.exists():
+            pytest.skip(f"跨仓文件不在 (CI 可能只 checkout 了 central/): {f}")
+
+    import re
+    src = prompts_ts.read_text(encoding="utf-8")
+    # 只抓"路由指向"形态 `→ catfish_xxx`, 不抓散落在说明文字里的提及
+    named = set(re.findall(r"→\s*(catfish_[a-z_]+)", src))
+    assert named, "SYSTEM_PROMPT 里一个 `→ catfish_*` 路由都没抓到 —— 正则该更新了"
+
+    m = re.search(r"^_PROMOTE\s*=\s*\((.*?)^\)", promote_py.read_text(encoding="utf-8"),
+                  re.S | re.M)
+    assert m, "plugin_core_tools.py 里找不到 _PROMOTE"
+    promoted = set(re.findall(r'"(catfish_[a-z_]+)"', m.group(1)))
+
+    unreachable = named - promoted
+    assert not unreachable, (
+        f"SYSTEM_PROMPT 点名了 {sorted(unreachable)}, 但它们不在 P43 _PROMOTE 里 "
+        "→ 被 tool_search defer → 压根不出现在模型的 tools 数组里。\n"
+        "要么把它们加进 plugin_core_tools.py 的 _PROMOTE + 本仓 ALWAYS_ON_TOOLS "
+        "(两处一起改), 要么把 prompt 里的点名去掉。\n"
+        "留着 = 命令模型调一个它看不见的工具。线上不报错, 只是干不成活 —— "
+        "8/24 Qwen 那次就是回了句「无具体任务请求」然后 tool_calls=0。"
+    )
+
+
 def test_native表里不许出现catfish工具名():
     """两张表分工: native 管 hermes 原生裸名, profile 管 catfish_*。
     混进来说明作者搞错了表, 而且会静默失效 (catfish_* 根本不查 native 表)。"""

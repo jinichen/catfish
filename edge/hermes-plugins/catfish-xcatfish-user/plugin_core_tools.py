@@ -156,6 +156,42 @@ _PROMOTE = (
     "catfish_browser_fill",
     "catfish_browser_find_by_text",
     "catfish_recognize_captcha",
+    # ── 8/24 补: advisor 的 4 个业务工具 ─────────────────────────────
+    #
+    # 这是上面那条"断头路"教训的第三种形态, 而且更直接: 不是**工具输出**
+    # 指向一个看不见的工具, 是 **prompt 直接点名**一个看不见的工具。
+    #
+    # briefing_advisor_prompts.ts 的 SYSTEM_PROMPT「工作步骤」第 3 条写死:
+    #     涉及邮件回复 → catfish_draft_email_reply
+    #     涉及会议汇报 → catfish_draft_meeting_brief
+    #     涉及催办     → catfish_compose_followup_list
+    #     涉及决策     → catfish_recall_decision_history
+    # 而这 4 个当时全在 defer 名单里, 一个都不出现在模型收到的 tools 数组中,
+    # 且整份 prompt 没有一个字提到"得先 tool_search 找出来"。
+    #
+    # 8/24 实盘 (鸿波「千问为什么一直出错」) 两个模型两种反应:
+    #   DeepSeek 自己摸索出 tool_search → tool_describe → 调用 (8/15、8/21
+    #            agent.log 有完整链路), 今天这次连它也没走完;
+    #   Qwen     不自发探索, 找不到被点名的工具 → 判定「用户发送了系统提示
+    #            内容, 无具体任务请求」→ 回一句"收到, 待命", tool_calls=0。
+    #
+    # 判据落在名单第 1 条「模型不会想到先去 tool_search 搜一下」上 —— Qwen
+    # 那一发是这条判据的直接实证。靠 prompt 教模型走两步是"prompt 约定",
+    # 提升成可见是"能力边界", 后者不挑模型。
+    #
+    # cap 账: .env CATFISH_MAX_TOOLS=110, 当前实测最大一发 44 个 (companion-chat),
+    # +4 = 48, 远在线内; BL-TOOL-CAP 历史从未触发。
+    "catfish_draft_email_reply",
+    "catfish_draft_meeting_brief",
+    "catfish_compose_followup_list",
+    "catfish_recall_decision_history",
+    # 同一份 SYSTEM_PROMPT 里还有两个被 `→` 点名的, 一起提升 —— 漏掉它们
+    # 就是同一个病换个工具复发。这两个是 8/15 日志里 DeepSeek 调用次数最多的
+    # (check_compliance 4 次、political_sensitivity_scan 2 次), 每次都得先
+    # tool_search 一轮。央国企场景里合规和政治敏感是每条主菜都要过的关,
+    # 让它们每次多绕一轮 tool_search 不合算。
+    "catfish_check_compliance",
+    "catfish_political_sensitivity_scan",
 )
 
 #: 提升后的完整注册名, 给单测和 gateway 侧对齐用。

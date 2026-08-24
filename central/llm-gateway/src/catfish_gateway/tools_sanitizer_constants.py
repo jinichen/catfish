@@ -218,6 +218,23 @@ ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
     "catfish_browser_fill",
     "catfish_browser_find_by_text",
     "catfish_recognize_captcha",
+    # 8/24: advisor 的 4 个业务工具跟着 P43 一起进来 —— 同样是两处必须一起改
+    # (理由见上面 8/17 那段)。
+    #
+    # 病根: briefing_advisor_prompts.ts 的 SYSTEM_PROMPT 点名要求调这 4 个,
+    # 但它们全被 tool_search defer, 一个都不在模型收到的 tools 数组里, 而
+    # 整份 prompt 没提过"要先 tool_search 找"。DeepSeek 能自己摸索出两步流程
+    # (8/15、8/21 实证), Qwen 不能 —— 8/24 那一发 tool_calls=0, 回了句
+    # 「用户发送了系统提示内容, 无具体任务请求」。
+    #
+    # 靠 prompt 教模型走两步是 prompt 约定, 提升成可见是能力边界, 后者不挑模型。
+    "catfish_draft_email_reply",
+    "catfish_draft_meeting_brief",
+    "catfish_compose_followup_list",
+    "catfish_recall_decision_history",
+    # 同一份 prompt 里另外两个被 `→` 点名的 (合规 / 政治敏感), 同理。
+    "catfish_check_compliance",
+    "catfish_political_sensitivity_scan",
     # BL-LLM-PLAN-WITHOUT-ACT (5/19): 内网 qwen 见到周报 / PPT 等关键词必须能立即
     # 找到对应 skill 并触发, 不能因 BL-TOOL-CAP 被砍. skill discovery + invocation
     # 这一族永不 drop. (catfish_run_skill 已在表里, 这里补 hermes 0.14 的 skill_*.)
