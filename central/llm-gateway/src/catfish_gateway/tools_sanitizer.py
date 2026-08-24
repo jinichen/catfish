@@ -53,6 +53,7 @@ from .tools_sanitizer_constants import (  # noqa: F401  re-export 保 caller 不
     HERMES_BROWSER_PREFIX as _HERMES_BROWSER_PREFIX,
     HIDDEN_FROM_LLM as _HIDDEN_FROM_LLM,
     MCP_CATFISH_PREFIX as _MCP_CATFISH_PREFIX,
+    SOURCE_NATIVE_TOOLS as _SOURCE_NATIVE_TOOLS,
     SOURCE_TOOL_PROFILES as _SOURCE_TOOL_PROFILES,
     is_always_on as _is_always_on,
     is_hidden_from_llm as _is_hidden_from_llm,
@@ -118,16 +119,37 @@ def _filter_by_source_profile(
     tools: list[dict[str, Any]],
     source_hint: str,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """5/22 BL-TOOL-PROFILE: 按 source_hint 砍 catfish_* tool 到 profile 白名单.
+    """5/22 BL-TOOL-PROFILE: 按 source_hint 把 tool 列表砍到该 source 的白名单.
 
     规则:
-      - source_hint 不在 _SOURCE_TOOL_PROFILES → 不过滤, 返原列表
+      - source_hint 不在 _SOURCE_TOOL_PROFILES → 不过滤, 返原列表 (员工正常会话
+        走这条: companion-chat / unknown / plugin:* 一律不受影响)
       - 在表里:
-        * always-on tool 永远保留 (LLM agent loop 底座)
-        * hermes builtin (不是 catfish_ 前缀) 不动 (它们是 hermes 0.14 注册的, 跟
-          catfish profile 无关. plugin tool / mcp__* 同理)
-        * catfish_* tool 只保留 profile 白名单里的 + hidden 已经在前面处理过
-        * MCP tool (mcp__*) 不动 (员工装的 plugin, 不该被 catfish profile 砍)
+        * hermes 原生 (归一化后的裸名) → 只保 _SOURCE_NATIVE_TOOLS 白名单里的
+        * 员工自装 MCP (mcp__<非 catfish-tools>__*) 不动 — 那是员工的 plugin,
+          不归 catfish profile 管 (5/22 原意保留)
+        * catfish_* → always-on 豁免, 其余只保 profile 白名单
+
+    ── 8/24 修的两个 bug (BL-ADVISOR-NATIVE-LEAK), 都属「不会失败, 也不会生效」──
+
+    (1) 判据认不出真名。catfish 工具经 MCP wrapper 暴露给 hermes 的注册名是
+        `mcp__catfish_tools__catfish_check_compliance`, **裸名从来不出现** (8/24
+        查 agent.log: 26/26、10/10 全是包装名)。老判据 `name.startswith("catfish_")`
+        对包装名为 False → 全从「非 catfish_ 前缀不动」那条溜过去。也就是说这份
+        profile 白名单从 5/22 写下到 8/24, **一次都没真正裁剪过任何 catfish 工具**
+        —— 既没按白名单保留, 也没按白名单砍, 是判据压根没对上真实工具名。
+        修法: 先 strip `mcp__catfish_tools__` 归一化再判断 (跟 is_always_on /
+        is_hidden_from_llm 的做法对齐, 那两个 5/25、6/22 已经各踩过一次同款坑)。
+
+    (2) 原生工具整族绕过。老规则「hermes builtin 不动」的理由写的是"它们跟 catfish
+        profile 无关" —— 但 execute_code / write_file / patch / process /
+        delegate_task 跟「参谋不代行」这条红线关系极大。8/24 实盘 advisor 就是在
+        execute_code 上连打 13 次打到上游 400。
+        修法: 原生走 _SOURCE_NATIVE_TOOLS 白名单。
+
+    ⚠ 顺序: 原生分支**必须在 always-on 之前**。execute_code / write_file / patch /
+      process / delegate_task 全都在 ALWAYS_ON_TOOLS 里, 放到 always-on 之后等于
+      没写 —— 白名单会被 always-on 抢先放行, 测试也照样绿。
 
     用法:
       kept, dropped = _filter_by_source_profile(cleaned, source_hint)
@@ -136,6 +158,9 @@ def _filter_by_source_profile(
         return tools, []
 
     allowed_catfish = _SOURCE_TOOL_PROFILES[source_hint]
+    # 缺表项按空集 = 全拒。配套一致性测试保证不会静默走到这个默认值上,
+    # 但真漏了时"少个工具"比"多个执行能力"安全。
+    allowed_native = _SOURCE_NATIVE_TOOLS.get(source_hint, frozenset())
     kept: list[dict[str, Any]] = []
     dropped: list[str] = []
 
@@ -149,16 +174,37 @@ def _filter_by_source_profile(
             kept.append(t)
             continue
 
-        # always-on 永远保留 (用 _is_always_on 同时认裸名 + mcp_catfish_tools_ 前缀)
+        # 归一化: `mcp__catfish_tools__catfish_x` 与裸名 `catfish_x` 是同一个工具
+        # 的两种暴露方式, 必须走同一条分支 (bug 1)。
+        base = (
+            name[len(_MCP_CATFISH_PREFIX):]
+            if name.startswith(_MCP_CATFISH_PREFIX)
+            else name
+        )
+
+        # ── 员工自装 MCP → 不动 (5/22 原意: 员工的 plugin 不归 catfish profile 管) ──
+        # 注意这条要在原生分支之前: 归一化只 strip catfish-tools 自己的前缀,
+        # 别家的 mcp__ 名字过不了 strip, 会被下面当成"原生裸名"误砍。
+        if base.startswith("mcp__"):
+            kept.append(t)
+            continue
+
+        # ── hermes 原生 → 查该 source 的原生白名单 (bug 2) ──
+        # ⚠ 必须在 always-on 之前, 理由见 docstring。
+        if not base.startswith("catfish_"):
+            if base in allowed_native:
+                kept.append(t)
+            else:
+                dropped.append(name)
+            continue
+
+        # ── catfish_* → 既有行为一字不动 ──
+        # always-on 豁免是 5/23 (today_summary / email_search) 和 8/13 (wiki_search /
+        # search_docs / read_tool_archive) 两次实盘教训换来的, 本次不碰。
         if _is_always_on(name):
             kept.append(t)
             continue
-        # 非 catfish_* (hermes / mcp__* / 其它) 不动
-        if not name.startswith("catfish_"):
-            kept.append(t)
-            continue
-        # catfish_* → 只保 profile 白名单
-        if name in allowed_catfish:
+        if base in allowed_catfish:
             kept.append(t)
         else:
             dropped.append(name)

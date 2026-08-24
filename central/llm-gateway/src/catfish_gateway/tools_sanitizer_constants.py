@@ -70,6 +70,47 @@ SOURCE_TOOL_PROFILES: dict[str, frozenset[str]] = {
 }
 
 
+# BL-ADVISOR-NATIVE-LEAK (8/24 鸿波「千问为什么一直出错」)
+#
+# 上面那份 SOURCE_TOOL_PROFILES 只管 catfish_* —— hermes 原生工具 (execute_code /
+# write_file / patch / process / delegate_task ...) 整族绕过。判据是「catfish_*
+# 工具」, 要治的真事是「这条 source 该有哪些**能力**」, 判据比真事窄。
+#
+# 后果不是"多几个工具"。8/24 实盘: advisor 拿到 execute_code, 在上面连打 13 次
+# (10:34:00→10:34:25, 约 2s 一发), prompt_tokens 44237→44997 而 completion 恒为
+# 69 —— 原地打转。上游百炼返 400 "Repetitive tool calls detected", 员工那头看到的
+# 就是「千问一直出错」。
+#
+# 更要紧的是它撞 CATFISH-ADVISOR-DESIGN.md:55 红线「任何级别都不代行」。参谋只
+# 出建议不动手, 却握着执行代码 / 写文件 / 派任务的能力; 且 advisor 是**后台无人
+# 值守**调用, 没有员工盯着它在跑什么。这跟 catfish_email_create_draft 那边一样,
+# 要落成能力边界而不是 prompt 约定 —— 模型手上根本没这个工具, 想调也调不到。
+#
+# 值 = 该 source 允许的 **hermes 原生 (裸名) ** 工具白名单。
+#
+# 为什么是白名单不是黑名单: 黑名单要求"每次 hermes 新增原生工具都记得来加一
+# 行", 漏一次就静默泄漏 —— 那正是本 bug 的复发温床。白名单默认全拒, 漏加的
+# 后果是"少个工具"(看得见), 不是"多个执行能力"(看不见)。
+#
+# ⚠ SOURCE_TOOL_PROFILES 的每个 key 必须在这里显式出现, 哪怕是空集; 由
+# test_source_native_tools.py::test_两表key必须一一对应 钉死。漏加会当场红,
+# 而不是静默按空集全砍 (误伤) 或静默放行 (漏)。
+SOURCE_NATIVE_TOOLS: dict[str, frozenset[str]] = {
+    # 早安智能参谋 —— 只出建议, 不动手。
+    "companion-advisor": frozenset({
+        "clarify",      # 参谋要能反问员工: 信息不足时问, 而不是瞎猜着给建议
+        "web_search",   # 合规 / 政治敏感判断要能查政策原文 (BL-WEB-ALWAYS-ON 5/25:
+        "web_extract",  # 不给 web_* 它会改用 browser 抓页面, 慢 30 倍贵 30 倍)
+        "web_crawl",
+    }),
+    # 下面三条都是**后台无人值守**批处理 —— 没有员工在屏幕前, 给执行类工具的风险
+    # 比 advisor 还高。它们的活全在各自的 catfish_* 白名单里, 原生工具一个不需要。
+    "companion-profile": frozenset(),          # 从邮件抽写作风格
+    "companion-briefing-card": frozenset(),    # 老版早安卡片, 纯汇总
+    "companion-email-scheduler": frozenset(),  # 邮件分类调度
+}
+
+
 #: BL-MEMORY-CATFISH-REMEMBER-BLACKLIST (5/16 鸿波 A 真切) — 永不暴露给 LLM 的工具.
 #:
 #: 5/16 实盘 Nemotron 49B 在 catfish_remember vs hermes memory 之间反复, 选了
