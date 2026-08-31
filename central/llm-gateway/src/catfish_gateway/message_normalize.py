@@ -31,8 +31,8 @@ BL-COMPRESS-BOUNDARY (5/15 撞 Qwen 122B 400) 是同一类事: 上游对 message
 ## 只做"删掉本来就没有意义的字段", 不做语义改写
 
 空的 tool_calls 表达的就是"这条没有工具调用", 删掉它跟不给它完全等价。
-这一层不碰非空的 tool_calls, 不补 tool_call_id, 不动配对关系 —— 那些是
-conversation_compressor 的 _strip_orphan_tool_boundary 在管的事。
+这一层不碰非空的 tool_calls, 不补 tool_call_id, 不动配对关系 —— 工具调用
+配对由上游会话层维护。
 """
 
 from __future__ import annotations
@@ -106,10 +106,9 @@ def collapse_extra_system(messages: Any) -> tuple[Any, int, int]:
     ── 两条规则, 各自保语义 ───────────────────────────────────────────
       开头连续的 system  → 合并成一条 (identity_inject / model_handoff 都是
                           insert(0), 合并后位置和语义都不变)
-      后面出现的 system  → **降级成 user** (conversation_compressor 的摘要
-                          插在中间, 它的位置有时序意义 —— 代表"这里曾经有
-                          467 条对话"。合并到开头会让摘要跑到它概括的内容
-                          前面去, 时序就错了, 所以只能原地降级)
+      后面出现的 system  → **降级成 user** (中间系统片段的位置有时序意义,
+                          合并到开头会让它跑到所描述的内容前面去, 所以只能
+                          原地降级)
 
     ── 为什么不按 provider 分 ─────────────────────────────────────────
     "只有一条 system" 对任何 OpenAI 兼容上游都是**合法**的, 一刀切不会给

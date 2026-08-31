@@ -57,8 +57,8 @@ from .tools_sanitizer_constants import (  # noqa: F401  re-export 保 caller 不
     SOURCE_TOOL_PROFILES as _SOURCE_TOOL_PROFILES,
     is_always_on as _is_always_on,
     is_hidden_from_llm as _is_hidden_from_llm,
-    pinned_tool_names as _pinned_tool_names,
 )
+from .tool_choice_policy import permitted_pinned_tool_names
 
 logger = logging.getLogger("catfish.gateway.tools_sanitizer")
 
@@ -183,11 +183,10 @@ def _filter_by_source_profile(
             else name
         )
 
-        # ── caller 用 tool_choice 点名的工具 → 谁都不许砍 ──
-        # 排在所有规则最前面: 砍掉被点名的工具, 这次请求必然废掉 (tool_choice
-        # 指向一个不存在的名字), 没有任何情况下这是对的。
-        # 8/24 实盘: companion-profile 那一发只带 submit_profile 一个工具, 被
-        # 下面的原生分支砍光, 画像识别静默失效。详见 pinned_tool_names()。
+        # ── source 合同已批准的结构化输出工具 ──
+        # pinned 只能由 tool_choice_policy 生成；不能把任意 caller 点名当授权。
+        # 8/24 实盘 companion-profile 的 submit_profile 需要保留，但 advisor
+        # 点名 execute_code 必须在进入本函数前直接拒绝。
         if name in pinned or base in pinned:
             kept.append(t)
             continue
@@ -465,6 +464,9 @@ def sanitize_tools(
             ", ".join(sorted(deduped_hermes_browser)[:8]),
         )
 
+    permitted_pins = permitted_pinned_tool_names(
+        body, source_hint, declared_tools=cleaned)
+
     # BL-RBAC-DAY4 (5/17): per-user/dept allowed_tools 白名单过滤.
     # user.effective_allowed_tools 空 = 全允许 (开放默认 / 无 dept 配置).
     # 非空 = 收紧, 只允许列出 tool. ALWAYS_ON_TOOLS 永远保留 (LLM agent loop 底座).
@@ -483,7 +485,7 @@ def sanitize_tools(
                 continue
             # ALWAYS_ON_TOOLS 兜底: 不论 RBAC 怎么收紧都保留 LLM 底座
             # (用 _is_always_on 同时认裸名 + mcp_catfish_tools_ 前缀, BL-MCP-PREFIX-FIX)
-            if _is_always_on(nm):
+            if nm in permitted_pins or _is_always_on(nm):
                 rbac_kept.append(t)
                 continue
             if user.can_use_tool(nm):
@@ -512,8 +514,7 @@ def sanitize_tools(
     # 在 RBAC + cap 之前砍 — 优先级是: 畸形 > RBAC > profile > cap. profile 砍掉
     # 的是 caller 不需要的 (caller 是 advisor 不会用 freeze_*), 不是权限问题.
     profile_kept, profile_dropped = _filter_by_source_profile(
-        cleaned, source_hint, _pinned_tool_names(body),
-    )
+        cleaned, source_hint, permitted_pins)
     if profile_dropped:
         logger.info(
             "BL-TOOL-PROFILE: source=%s 砍 %d 个非该 source 能力边界的 tool: %s",

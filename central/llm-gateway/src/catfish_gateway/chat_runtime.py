@@ -216,11 +216,11 @@ async def _stream_chat_completion(
         from .rate_limit_preflight import preflight_check_rate_limits  # noqa: PLC0415
         preflight_check_rate_limits(model, prompt_estimate, config=config)
 
-        # 8/10: 压完还是装不下, 就别发了 —— 发出去只会换回一个 reason/message
+        # 8/10: 请求还是装不下, 就别发了 —— 发出去只会换回一个 reason/message
         # 全空的 400, 员工看到「未知错误」, 谁都查不出原因 (今天为这个 400 做了
         # 两轮八个探针才靠 shape dump 找到)。dyn ≤ 0 已经说明装不下, 见
-        # context_preflight。**位置必须在压缩之后** —— 压缩能省 89%, 压之前拦
-        # 会把本来救得回来的对话也拒掉。
+        # context_preflight。Hermes 会话路径的语义压缩已经在会话层完成；
+        # 这里只做最终的网关长度校验。
         from .context_preflight import check_context_fits  # noqa: PLC0415
 
         _too_long = check_context_fits(prompt_estimate, model)

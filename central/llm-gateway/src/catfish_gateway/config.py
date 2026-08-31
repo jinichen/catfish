@@ -475,7 +475,7 @@ def load_raw_models(path: Path | None = None) -> list[dict[str, Any]]:
 #   app.state.config     启动时 load_config() 的快照, 之后永不更新 (10 处在用,
 #                        含 /v1/models、/v1/catalog、三个 hub proxy)
 #   load_config()        每次调用重读重解析 yaml (6 处在用, 含 proactive、
-#                        facts_pipeline、conversation_compressor)
+#                        facts_pipeline)
 #
 # 后果: 改完配置, 一部分代码立刻看到新值, 另一部分要重启才看到。表现是
 # "改了、页面上也变了、但实际调用还用旧的" —— 这类不一致极难查, 因为每次

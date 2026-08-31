@@ -146,7 +146,7 @@ async def fetch_user_metadata(email: str) -> dict | None:
     identity 仓 users 表, gateway 跟 identity 共用 PG). 显示 API (/api/me)
     需要真员工元数据让 Companion conditional render 对.
 
-    返 dict: {department, role, managed_departments} 或 None.
+    返 dict: {department, role, managed_departments, must_change_password} 或 None.
     None 含义: PG 没配 (dev/单机 sqlite fallback) / asyncpg 没装 / email 不存在
     / 软删. caller 应该 fallback 到 service token 自己的元数据 (graceful).
     """
@@ -157,7 +157,7 @@ async def fetch_user_metadata(email: str) -> dict | None:
     try:
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT department, role, managed_departments "
+                "SELECT department, role, managed_departments, must_change_password "
                 "FROM users WHERE email = $1 AND deleted_at IS NULL",
                 email,
             )
@@ -187,6 +187,7 @@ async def fetch_user_metadata(email: str) -> dict | None:
                 "department": row["department"],
                 "role": row["role"],
                 "managed_departments": mds,
+                "must_change_password": bool(row["must_change_password"]),
             }
     except Exception:
         logger.exception("fetch_user_metadata failed for email=%s", email)

@@ -39,6 +39,21 @@ PROXY_VARS = (
     "https_proxy", "http_proxy", "all_proxy",
 )
 
+_NO_PROXY_QUOTES = "\"'“”‘’"
+
+
+def _normalize_no_proxy_item(item: str) -> str:
+    """清理从文档/富文本复制进 NO_PROXY 的引号和无效通配前缀。
+
+    httpx 会把 ``*“localhost`` 当成带非法端口的 URL，导致客户端尚未发请求
+    就报错。NO_PROXY 只支持 ``*`` 本身或普通 host/domain；``*localhost``
+    没有额外语义，因此安全地归一为 ``localhost``。
+    """
+    normalized = item.strip().translate(str.maketrans("", "", _NO_PROXY_QUOTES))
+    if normalized.startswith("*") and normalized != "*":
+        normalized = normalized[1:]
+    return normalized.strip()
+
 
 def _check_tcp_port(host: str, port: int, timeout: float = 2.0) -> bool:
     """快速测 TCP 端口是否可连。代理活着的前置条件。"""
@@ -110,7 +125,11 @@ def precheck_and_setup() -> dict[str, str]:
     for var in ("NO_PROXY", "no_proxy"):
         val = os.environ.get(var, "")
         if val:
-            existing_parts.extend(p.strip() for p in val.split(",") if p.strip())
+            existing_parts.extend(
+                normalized
+                for part in val.split(",")
+                if (normalized := _normalize_no_proxy_item(part))
+            )
 
     merged: list[str] = []
     seen: set[str] = set()

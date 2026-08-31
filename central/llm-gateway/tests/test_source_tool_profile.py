@@ -28,6 +28,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 
 SRC = Path(__file__).resolve().parent.parent / "src"
 if str(SRC) not in sys.path:
@@ -44,6 +45,9 @@ from catfish_gateway.tools_sanitizer_constants import (  # noqa: E402
     SOURCE_NATIVE_TOOLS,
     SOURCE_TOOL_PROFILES,
     pinned_tool_names,
+)
+from catfish_gateway.tool_choice_policy import (  # noqa: E402
+    permitted_pinned_tool_names,
 )
 
 ADVISOR = "companion-advisor"
@@ -251,8 +255,8 @@ def test_两表key必须一一对应():
 
 
 # ─────────────────────────────────────────────────────────────────────
-# 3.5 tool_choice 点名的工具, 谁都不许砍
-#     (8/24 实盘回归: 收紧 profile 那版把 submit_profile 砍光了)
+# 3.5 tool_choice 点名只允许 source 约定的结构化输出工具
+#     (既保住 submit_profile，也不能让 advisor 借点名绕过能力边界)
 # ─────────────────────────────────────────────────────────────────────
 def test_tool_choice点名的工具不被砍_照抄线上那一发():
     """gateway.log 11:19:44 原样:
@@ -269,7 +273,8 @@ def test_tool_choice点名的工具不被砍_照抄线上那一发():
         "tool_choice": {"type": "function", "function": {"name": "submit_profile"}},
     }
     kept, dropped = _filter_by_source_profile(
-        body["tools"], "companion-profile", pinned_tool_names(body),
+        body["tools"], "companion-profile",
+        permitted_pinned_tool_names(body, "companion-profile"),
     )
     assert _names(kept) == {"submit_profile"}, "被点名的工具还是被砍了"
     assert dropped == []
@@ -331,13 +336,7 @@ def test_advisor历史里的已禁工具调用也被清理():
     assert out["messages"] == [{"role": "user", "content": "分析本周事项"}]
 
 
-def test_caller用裸名点名包装工具也保得住():
-    """M17 变异抓出来的缺口: `base in pinned` 那半边此前零覆盖。
-
-    归一化在这个文件里是核心原则 —— 裸名和 mcp__catfish_tools__ 包装名是同一个
-    工具的两种写法, 必须同命。pinned 也得守这条: caller 按裸名点名, tools 里是
-    包装名, 依然要保住。
-    """
+def test_advisor不能用裸名点名包装工具绕过能力边界():
     body = {
         "tools": [_tool(f"{MCP_CATFISH_PREFIX}catfish_style_fingerprint_refresh")],
         "tool_choice": {
@@ -345,12 +344,10 @@ def test_caller用裸名点名包装工具也保得住():
             "function": {"name": "catfish_style_fingerprint_refresh"},  # 裸名
         },
     }
-    kept, dropped = _filter_by_source_profile(
-        body["tools"], ADVISOR, pinned_tool_names(body),
-    )
-    assert len(kept) == 1 and dropped == [], (
-        "caller 用裸名点名, tools 里是包装名 —— 没认出来就被砍了"
-    )
+    with pytest.raises(HTTPException) as exc_info:
+        sanitize_tools(body, source_hint=ADVISOR)
+    assert getattr(exc_info.value, "status_code", None) == 400
+    assert "tool_choice" in str(getattr(exc_info.value, "detail", exc_info.value))
 
 
 def test_没点名时该砍的照砍():
@@ -375,21 +372,87 @@ def test_各种非点名形态都返空集(tc):
     assert pinned_tool_names(body) == frozenset()
 
 
-def test_点名一个always_on之外的原生工具也保得住():
-    """极端但真实: caller 点名 execute_code 强制调用。
-
-    我们不该在这层否决它 —— caller 明确知道自己要什么, 且砍了必然 400。
-    真要禁 advisor 用 execute_code, 是在"不给它出现在 tools 列表里"这一层
-    做的 (本文件前面那批测试), 不是在这里。
-    """
+def test_advisor点名execute_code直接拒绝而不是放行():
     body = {
         "tools": [_tool("execute_code")],
         "tool_choice": {"type": "function", "function": {"name": "execute_code"}},
     }
-    kept, _ = _filter_by_source_profile(
-        body["tools"], ADVISOR, pinned_tool_names(body),
+    with pytest.raises(HTTPException) as exc_info:
+        sanitize_tools(body, source_hint=ADVISOR)
+    assert getattr(exc_info.value, "status_code", None) == 400
+
+
+@pytest.mark.parametrize(
+    ("source", "tool_name"),
+    [
+        ("companion-profile", "submit_profile"),
+        ("companion-advisor-transform", "submit_advisor_result"),
+        ("companion-wiki-suggest", "suggest_wikilinks"),
+    ],
+)
+def test_已登记结构化输出source只保留自己的工具(source, tool_name):
+    body = {
+        "tools": [_tool(tool_name)],
+        "tool_choice": {"type": "function", "function": {"name": tool_name}},
+    }
+    out = sanitize_tools(body, source_hint=source)
+    assert _names(out["tools"]) == {tool_name}
+
+
+def test_结构化输出source不能点名别人的工具():
+    body = {
+        "tools": [_tool("submit_profile")],
+        "tool_choice": {"type": "function", "function": {"name": "submit_profile"}},
+    }
+    with pytest.raises(HTTPException) as exc_info:
+        sanitize_tools(body, source_hint="companion-advisor-transform")
+    assert getattr(exc_info.value, "status_code", None) == 400
+
+
+def test_点名工具不在tools数组中时提前报400():
+    body = {
+        "tools": [],
+        "tool_choice": {"type": "function", "function": {"name": "submit_profile"}},
+    }
+    with pytest.raises(HTTPException) as exc_info:
+        sanitize_tools(body, source_hint="companion-profile")
+    assert getattr(exc_info.value, "status_code", None) == 400
+
+
+def test_结构化输出source不能夹带额外工具():
+    body = {
+        "tools": [_tool("submit_advisor_result"), _tool("execute_code")],
+        "tool_choice": {
+            "type": "function",
+            "function": {"name": "submit_advisor_result"},
+        },
+    }
+    with pytest.raises(HTTPException) as exc_info:
+        sanitize_tools(body, source_hint="companion-advisor-transform")
+    assert exc_info.value.status_code == 400
+    assert "execute_code" in str(exc_info.value.detail)
+
+
+def test_已登记结构化输出工具不被普通RBAC误删():
+    class _DenyAllUser:
+        sub = "internal-test"
+        department = "test"
+        effective_allowed_tools = {"some_other_tool"}
+
+        @staticmethod
+        def can_use_tool(_name):
+            return False
+
+    body = {
+        "tools": [_tool("submit_profile")],
+        "tool_choice": {"type": "function", "function": {"name": "submit_profile"}},
+    }
+    out = sanitize_tools(
+        body,
+        user=_DenyAllUser(),
+        source_hint="companion-profile",
     )
-    assert _names(kept) == {"execute_code"}
+    assert _names(out["tools"]) == {"submit_profile"}
 
 
 def test_桥名单必须正好是hermes那三个():

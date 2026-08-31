@@ -67,8 +67,8 @@ vim .env  # 或 nano
 # 可选 (客户 IT 自己有 LLM provider 才填):
 #   DASHSCOPE_API_KEY / GEMINI_API_KEY / 私网 LLM 配置
 #
-# OIDC (默认 host.docker.internal · POC 测试可保留)
-#   CATFISH_OIDC_ISSUER=http://<server-ip>:8998   # 员工机能访问的 URL
+# OIDC (setup.sh 按 SERVER_IP / ENABLE_HTTPS 自动写入)
+#   CATFISH_OIDC_ISSUER=https://<server-ip>       # 仅需手工改域名部署
 ```
 
 ### 4. 起服务

@@ -29,7 +29,9 @@ CATFISH_BROWSER_PREFIX = "catfish_browser_"
 # 这个 cap 其实一直没触发过 —— 它是为 tool_search 之前那个「165 个全涌进来」
 # 的世界定的。P43 把 4 个 catfish 工具提升为核心后是 36, 留 4 个余量。
 # 上沿仍远离实测红线 (Qwen 122B 50+ 撞空 400), KV 代价约 +2K token。
-DEFAULT_MAX_TOOLS = 40
+# 8/31: Reminders 读写都提升为核心后需要 41 个；写入口不可再被 cap 静默砍掉，
+# 否则模型会把会话规划误报成系统提醒创建成功。
+DEFAULT_MAX_TOOLS = 41
 ENV_MAX_TOOLS = "CATFISH_MAX_TOOLS"
 
 
@@ -188,7 +190,13 @@ ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
     # 防 cap 误砍.
     "catfish_today_summary",   # 今日活动 (TODO / 邮件 / 日程 / chat 汇总)
     "catfish_list_reminders",  # macOS Reminders.app 真实待办读取（不是 Hermes todo）
+    "catfish_create_reminder",  # macOS Reminders.app 唯一用户待办写入口
     "catfish_email_search",    # 邮件查询 (chat 常用)
+    # 8/28: 邮件页交接带 email_id; Qwen 需要在当前终端直接看到读取链路,
+    # 否则会在 tool_search / execute_code 间空转。实现仍来自该终端自己的
+    # Tool Bridge, 这里不是中央工具目录。
+    "catfish_email_read",      # 读取指定邮件全文
+    "catfish_email_attachment",  # 查看指定邮件附件
     # 8/13 鸿波撞「你去知识库里面核对福富资质」→ 小鲶答"无法连接到知识库检索工具"。
     # 跟上面 5/23 那两条同一个病: 高频工具没进 always-on, 被 cap 误砍。
     # 配套 P43 (plugin_core_tools.py) 把它们提升为 hermes 核心, 两处都要改 ——
@@ -308,8 +316,8 @@ def is_always_on(name: str) -> bool:
     return False
 
 
-def pinned_tool_names(body: dict) -> frozenset[str]:
-    """caller 用 `tool_choice` 点名强制的工具 —— 谁都不许砍。
+def named_tool_choice_names(body: dict) -> frozenset[str]:
+    """解析 caller 用 `tool_choice` 点名的工具名，不在这里做授权。
 
     # 为什么需要这个 (8/24 实盘, 我自己砍出来的)
 
@@ -326,12 +334,8 @@ def pinned_tool_names(body: dict) -> frozenset[str]:
 
     # 判据
 
-    「caller 点名了它」比「它属于哪一族」更根本: 砍掉被点名的工具, 这次请求
-    必然废掉, 没有任何情况下这是对的。所以它排在所有过滤规则最前面。
-
-    ⚠ 目前只有 profile 过滤这一层用了它。RBAC 过滤和 BL-TOOL-CAP 仍可能砍掉
-      被点名的工具 —— 那是既有行为, 至今没有实证出过问题, 没顺手改。真撞上了
-      往这儿加。
+    返回值只是协议解析结果。是否允许由 tool_choice_policy 按 source 合同校验；
+    不能把“调用方点名”直接当成越过 source/RBAC 的授权。
 
     tool_choice 为 "auto"/"none"/"required" 或缺省时返空集 (没有点名)。
     """
@@ -343,6 +347,10 @@ def pinned_tool_names(body: dict) -> frozenset[str]:
         return frozenset()
     name = fn.get("name")
     return frozenset({name}) if isinstance(name, str) and name else frozenset()
+
+
+# 兼容旧测试/调用方；授权逻辑必须使用 tool_choice_policy。
+pinned_tool_names = named_tool_choice_names
 
 
 def is_hidden_from_llm(name: str) -> bool:

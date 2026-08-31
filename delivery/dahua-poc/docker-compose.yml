@@ -68,8 +68,8 @@ services:
       # OIDC 配置 (跟 gateway 共享, 必须跟 CATFISH_IDENTITY_ISSUER 一致 - JWT iss claim)
       CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://host.docker.internal:8998}
       # P3.5.79+ (7/22 达华 POC 血案): web 前端跨域调 identity discovery/token 必设.
-      # 默认 CORS 只 allow localhost/127.0.0.1/tauri:// · 客户内网 IP 需显式加.
-      # 多 origin 逗号分隔: http://<server-ip>:5173,https://catfish.company.com
+      # 默认 CORS 白名单只 allow localhost / 127.0.0.1 / tauri:// · 客户内网 IP 需显式加.
+      # 多 origin 逗号分隔: e.g. http://192.168.31.199:5173,https://catfish.company.com
       CATFISH_IDENTITY_CORS_ORIGINS: ${CATFISH_IDENTITY_CORS_ORIGINS:-}
     ports:
       # 7/15 BL-OIDC-ISSUER: 员工浏览器需 access identity /authorize.
@@ -110,22 +110,10 @@ services:
       HOST: 0.0.0.0
       PORT: 8999
       CATFISH_CONFIG: /app/config/models.yaml
-      # P3.5.84 (7/29 达华现场): /api/admin/* 反代到 identity 的上游地址。
-      #
-      # admin_proxy.py 的默认值是 http://127.0.0.1:8998 —— 开发机上四个服务
-      # 同机, 这个默认恰好对; 但容器里 127.0.0.1 是 gateway 自己, 连不上 →
-      # 「系统管理」页 Identity (admin) 显示"不可达"。
-      #
-      # 另外三个反代 (mcp / hub / wiki) 只能从 yaml 读, 见
-      # llm-gateway/config/models.yaml 末尾。
-      #
-      # 7/30 更正: 这里原本写的是 config-overlay/models.yaml —— **那个目录
-      # 没有任何东西读它**。本 compose 里挂进 gateway 的是
-      #     ./llm-gateway/config:/app/config:ro
-      # 且 CATFISH_CONFIG=/app/config/models.yaml, setup.sh 也不会把 overlay
-      # 拷进 config/。照着老注释去改 overlay 的人, 会改完、重启、然后发现
-      # 502 一点没变, 而且找不到原因 —— 因为改的那份文件从头到尾没被加载。
-      CATFISH_IDENTITY_URL: http://identity:8998
+      # models/roles 等基线配置只读；后台可编辑的 quotas.yaml 放在 gateway_data。
+      CATFISH_QUOTAS_PATH: /home/catfish/.catfish/quotas.yaml
+      # Admin API proxy endpoint; override at runtime when Identity is external.
+      CATFISH_IDENTITY_URL: ${CATFISH_IDENTITY_URL:-http://identity:8998}
       # 6/9 BL-F10 真实测: 单 worker GIL 卡死, 1000 user P99=34s; 4 worker P99=15s
       # (2.2× 吞吐, 56% latency 降). 默认 4, 4 vCPU 客户机房刚好用满. 8 vCPU 改 8.
       UVICORN_WORKERS: ${GATEWAY_WORKERS:-4}
@@ -137,11 +125,11 @@ services:
       # 实际返 id_token (aud=catfish-companion, OIDC 惯例), 不是 access_token. gateway 需
       # 双 audience 才接. 默认单值 catfish-gateway 会拒 Companion id_token · 员工 chat 401.
       CATFISH_OIDC_AUDIENCE: ${CATFISH_OIDC_AUDIENCE:-catfish-companion,catfish-gateway}
-      # P3.5.80 (7/28): HTTPS 模式下 issuer=https://IP, 而 oidc.py:80 默认
-      # jwks_uri = f"{issuer}/.well-known/jwks.json" —— gateway 在**容器内**
-      # 去拉这个 https 地址会撞自签证书验证失败 (Python urllib 不认自签).
-      # 走容器内网 HTTP 直连 identity 绕开; iss claim 仍按 https://IP 字符串
-      # 比对, 不受影响. auth/__init__.py:217 已支持该 env.
+      # P3.5.80 (7/28): 任何走 HTTPS 的部署里, issuer 会是 https://xxx, 而
+      # oidc.py:80 默认 jwks_uri = f"{issuer}/.well-known/jwks.json" ——
+      # gateway 在容器内拉这个地址, 自签证书场景会撞 SSL 验证失败.
+      # 走容器内网 HTTP 直连 identity 绕开; iss claim 仍按原 issuer 字符串比对.
+      # auth/__init__.py:217 已支持该 env.
       CATFISH_OIDC_JWKS_URI: ${CATFISH_OIDC_JWKS_URI:-http://identity:8998/.well-known/jwks.json}
       # facts_router 文件落地 (BL-Q3-FACT-PG-MIGRATE 之前的临时方案)
       CATFISH_FACTS_DIR: ${CATFISH_FACTS_DIR:-/home/catfish/.catfish/facts}
@@ -149,12 +137,9 @@ services:
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       # 私网 LLM (客户内网部署的 Qwen / embedding, base_url + key)
-      # 8/1: 主密钥。供应商 API key 加密存库用。
-      #
-      # ⚠ 这一行必须跟 central/docker-compose.yml 同步 —— 这一整块是
-      # **显式列名**转发 env 的, 漏了的话客户照 SOP 在 .env 里填了
-      # CATFISH_SECRET_KEY, 容器里读不到, 表现成"填了但说没配"。
-      # scripts/check_compose_env_sync.py 盯着这件事。
+      # 8/1: 主密钥。供应商 API key 加密存库用 —— 配了之后加供应商/换 key
+      # 全在界面上做, 不用再回来改这个文件 (那正是这一整块显式列名转发
+      # 带来的问题: 新变量容器看不见)。没配则退回老办法, 见下面几行。
       CATFISH_SECRET_KEY: ${CATFISH_SECRET_KEY:-}
       INTERNAL_LLM_KEY: ${INTERNAL_LLM_KEY:-}
       INTERNAL_LLM_BASE_QWEN_MAIN: ${INTERNAL_LLM_BASE_QWEN_MAIN:-http://127.0.0.1:9998/v1}
@@ -164,7 +149,7 @@ services:
       - "8999:8999"  # gateway 对员工 Companion 暴露, 反代 nginx 处理 SSL
     volumes:
       - ./llm-gateway/config:/app/config:ro
-      - gateway_data:/home/catfish/.catfish  # quota.db (sqlite fallback) / audit jsonl / facts
+      - gateway_data:/home/catfish/.catfish  # quotas.yaml / quota.db / audit jsonl / facts
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8999/healthz"]
       interval: 30s
@@ -210,21 +195,20 @@ services:
     image: catfish-web:0.1.0
     container_name: catfish-web
     restart: unless-stopped
-    # P3.5.79+ (7/22 达华 POC 血案): runtime config 注入 · 一份 image 到处装.
-    # docker-entrypoint 从容器 env 生成 /config.js · 换 IP 只改 .env 后 restart 秒生效.
+    # P3.5.79+ (7/22 达华 POC 血案 · runtime config 重构):
+    # 一份 image 到处部署 · docker-entrypoint-catfish-config.sh 从容器 env 生成
+    # /config.js · 前端 lib/env.ts 优先读 window.__CATFISH_CONFIG__. 客户换 IP
+    # 只改 .env + `docker compose restart web` · 不重编 image.
     environment:
+      # OIDC issuer · 复用 identity 段同名 env · 保持一致 (跨 identity+gateway+web)
       CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://127.0.0.1:8998}
       CATFISH_OIDC_CLIENT_ID: ${CATFISH_OIDC_CLIENT_ID:-catfish-companion}
       CATFISH_OIDC_SCOPE: ${CATFISH_OIDC_SCOPE:-openid email profile}
-    # P3.5.79+ (7/23 达华 POC catch): 直接暴露 5173 · 员工浏览器不需走中央 nginx
-    # 也能访 http://<server-ip>:5173. 达华 M mac 单机场景 127.0.0.1:5173 是 secure
-    # context · crypto.subtle 天然 OK · 无需 chrome flag / HTTPS. 若客户上生产
-    # 需 HTTPS · 起 nginx (443) 反代 · 5173 走内网访问不暴露.
     ports:
-      - "5173:80"
+      - "${CATFISH_HTTP_PORT:-5173}:80"
     healthcheck:
-      # P3.5.79+ (7/22): 127.0.0.1 强制 IPv4 · alpine wget 里 'localhost' 优先解
-      # 到 ::1 (IPv6) · nginx.docker.conf 只 listen 80 (v4) · IPv6 refused.
+      # P3.5.79+ (7/22): 127.0.0.1 强制 IPv4 · nginx.docker.conf 只 listen 80 (v4)
+      # · wget 里 'localhost' 优先解到 ::1 (IPv6) · refused. 用真 IPv4 loopback.
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
       interval: 30s
       timeout: 3s
@@ -298,36 +282,8 @@ services:
   # P3.4.1-cleanup2 (7/14): secret-broker service 段删.
   # P3.4.1 (56403d0, 6/13 hb) 已砍 secret-broker 中央存储, 目录+代码+docstring
   # 都清干净了, 但当时忘删 docker-compose.yml + deploy.sh + .env 里的定义.
-  # 7 服务栈现在是: postgres / identity / gateway / skills-hub / wiki-hub /
-  # web / mcp-registry / nginx (8 个, 加 wiki-hub 补 P3.3.18 漏, 减 broker 一个).
-
-  # nginx 反代: SSL 卸载 + 路由
-  #   / → web (SPA)
-  #   /v1/ /api/ /healthz → gateway
-  #   /sso/ → identity
-  #   /hub/ → skills-hub
-  #   /mcp/ → mcp-registry  (6/9 BL-MCP-DEPLOY 新加)
-  # 客户改 nginx.conf.example → nginx.conf 配域名 + Let's Encrypt cert
-  # ── nginx 服务已删除 (P3.5.80 · 7/28 鸿波) ────────────────────────
-  #
-  # 原因:
-  #   1. 它挂载 ./nginx.conf, 但**这个文件在本目录里根本不存在** ——
-  #      central/nginx.conf.example 从没被打包脚本拷过来. 客户一旦
-  #      ENABLE_HTTPS=1 全量 up, Docker 会把 ./nginx.conf 造成空目录,
-  #      nginx 挂载后启动失败. 这条路径从未在客户环境跑通过.
-  #   2. 就算把那份 example 补进来也跑不通, 三处硬冲突:
-  #      · 证书名 fullchain.pem/privkey.pem (Let's Encrypt) vs
-  #        setup.sh 生成的 cert.pem/key.pem
-  #      · identity 挂在 /sso/ 前缀下, 但 setup.sh 的 ISSUER_URL 无前缀,
-  #        且 identity 登录表单 action="/authorize" 是硬编码根相对路径,
-  #        挂前缀后 POST 会落到 SPA → 登录必挂
-  #      · server_name 是 catfish.example.com 占位符
-  #   3. web 容器本来就在反代 /api /v1 (7/23 达华血案的修复), 现在
-  #      443 + OIDC 反代也一并收进 web (见 web/catfish-ssl.conf),
-  #      单端口单证书, 不需要再套一层.
-  #
-  # central/docker-compose.yml 保留 nginx 服务 —— 那是另一套"中央 nginx"
-  # 架构的参考部署, 与达华单端口方案不同, 不要混用.
+  # 7 个服务: postgres / identity / gateway / skills-hub / wiki-hub /
+  # web / mcp-registry. web 自己负责 SPA、反代和可选 HTTPS, 不再套中央 nginx.
 
 volumes:
   pgdata:

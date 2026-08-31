@@ -48,7 +48,7 @@ def test_老版_function_call_一并处理():
 def test_删完没有content的补空串():
     """assistant 既没 content 又没 tool_calls = 空消息, Qwen 系同样报错。
 
-    跟 conversation_compressor._strip_orphan_tool_boundary 的处理保持一致。
+    跟工具调用边界规范化的处理保持一致。
     """
     out, n = drop_empty_tool_calls([{"role": "assistant", "content": None, "tool_calls": []}])
     assert n == 1
@@ -126,8 +126,8 @@ def _roles(msgs):
     return [m["role"] for m in msgs]
 
 
-def test_压缩摘要插中间_降级成user_不挪位置():
-    """conversation_compressor 的形状。**位置不能变** —— 摘要代表"这里曾经有
+def test_中间摘要插入后降级成user_不挪位置():
+    """中间摘要的形状。**位置不能变** —— 摘要代表"这里曾经有
     467 条对话", 挪到开头就跑到它概括的内容前面去了, 时序全错。"""
     msgs = [
         {"role": "system", "content": "你是小鲶"},

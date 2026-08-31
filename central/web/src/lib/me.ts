@@ -17,10 +17,29 @@ export interface MeInfo {
   role: Role;
   managed_departments: string[];
   auth_method: string;
+  /** 管理员要求用户首次登录/重置后修改密码。 */
+  must_change_password: boolean;
 }
 
 export async function fetchMe(): Promise<MeInfo> {
   return api.get<MeInfo>("/api/me");
+}
+
+export interface ChangePasswordResponse {
+  success: boolean;
+  message: string;
+  revoked_sessions?: number;
+}
+
+/** 修改当前登录用户密码。接口在 Identity，由 web nginx 反代到 /me/password。 */
+export async function changeOwnPassword(
+  oldPassword: string,
+  newPassword: string,
+): Promise<ChangePasswordResponse> {
+  return api.post<ChangePasswordResponse>("/me/password", {
+    old_password: oldPassword,
+    new_password: newPassword,
+  });
 }
 
 export interface QuotaWindow {

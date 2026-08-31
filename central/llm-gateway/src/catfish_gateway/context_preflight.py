@@ -33,11 +33,10 @@
 dyn ≤ 0 这个信号本来就已经说明了一切: **装不下**。在这里拦下来, 员工看到的是
 一句人话, 而不是 IT 都要查半天的裸 400。
 
-## 为什么放在压缩之后
+## 为什么放在请求发给上游之前
 
-conversation_compressor 能把 380K 压到 41K (实测省 89%)。压缩之前拦, 会把
-本来救得回来的对话也拒掉。所以这道闸只对"压过了还是装不下"的情况开火 ——
-调用点在 app.py 压缩之后、发请求之前。
+网关不再执行语义压缩；Hermes 会话由 Hermes 在更早的会话层负责压缩。
+这道闸只负责在请求发给上游前拦截已经装不下的上下文。
 
 ## 判据只看"还剩不剩得下一句回复", **不带 buffer**
 
@@ -122,7 +121,7 @@ def check_context_fits(prompt_est: int, model) -> str | None:
         "context preflight 拦下: model=%s prompt估算=%d context_window=%d "
         "→ 只剩 %d token, 连一句最短回复 (%d) 都塞不下。"
         "**没发给上游** —— 发了也是一个 reason/message 全空的 400, "
-        "员工只会看到「未知错误」。压缩已经跑过了 (或在 cooldown 内)。",
+        "员工只会看到「未知错误」。语义压缩应由 Hermes 会话层负责。",
         name, prompt_est, cw, remaining, MIN_USEFUL_OUTPUT,
     )
     return format_too_long_message(prompt_est, cw, name)

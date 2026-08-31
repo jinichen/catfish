@@ -31,6 +31,7 @@ import { getCurrentUser, handleCallback, login } from "./lib/auth";
 import { useAuthStore } from "./store/auth";
 
 import { HomePage } from "./routes/HomePage";
+import { PasswordPage } from "./routes/PasswordPage";
 // BL-CENTRAL-WEB-PURGE-MEPAGE (5/17 鸿波): 删 MePage — 个人数据展示违
 // BL-CENTRAL-EDGE-BOUNDARY spirit. 员工自查 → Companion 桌面 app.
 // BL-CENTRAL-WEB-CONSOLIDATE (5/17): Skills Hub + MCP 市场合到 /market 下,
@@ -245,6 +246,7 @@ export function App() {
         }}
       >
         <Routes>
+          <Route path="/account/password" element={<PasswordPage />} />
           <Route path="/" element={<HomePage />} />
           {/* BL-CENTRAL-WEB-PURGE-USERDATA + BL-CENTRAL-WEB-PURGE-MEPAGE
               (5/17 鸿波): 删 /me /sessions /kanban 三页 — 都涉及员工本机/

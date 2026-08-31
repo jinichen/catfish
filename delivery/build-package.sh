@@ -142,15 +142,29 @@ echo ""
 echo "── 交付配置检查 ──"
 CFG_FAIL=0
 
-# (a) gateway → identity 反代。admin_proxy.py 默认 127.0.0.1, 容器里那是
-#     gateway 自己 → 「系统管理」页 Identity 显示"不可达"。
-if grep -qE "^\s*CATFISH_IDENTITY_URL:\s*http://identity:8998" "$COMPOSE"; then
-    echo "  ✓ CATFISH_IDENTITY_URL → identity:8998"
+# (a) gateway → identity 反代。bundled stack 的默认值是 Docker DNS, 但允许
+#     现场通过 CATFISH_IDENTITY_URL 覆盖成外部 Identity 地址。
+if grep -qE '^[[:space:]]*CATFISH_IDENTITY_URL:[[:space:]]*(http://identity:8998|\$\{CATFISH_IDENTITY_URL:-http://identity:8998\})[[:space:]]*$' "$COMPOSE"; then
+    echo "  ✓ CATFISH_IDENTITY_URL → runtime configurable (default identity:8998)"
 else
-    echo "  ❌ docker-compose.yml 缺 CATFISH_IDENTITY_URL: http://identity:8998"
-    echo "     (gateway 的 environment 段; 少了它「系统管理」页 502)"
+    echo "  ❌ docker-compose.yml 缺可运行时覆盖的 CATFISH_IDENTITY_URL"
+    echo "     (default 应为 http://identity:8998; 外部 Identity 可在运行时覆盖)"
     CFG_FAIL=1
 fi
+
+# (a2) setup.sh 的 sed 只能改有效配置行。若模板把这些行写成注释,
+# 装机脚本会显示"生成"但 compose 实际仍回退到 host.docker.internal/127.0.0.1.
+for key in CATFISH_OIDC_ISSUER CATFISH_IDENTITY_ISSUER \
+           CATFISH_IDENTITY_CORS_ORIGINS CATFISH_ENABLE_HTTPS \
+           CATFISH_HTTPS_PORT; do
+    if grep -qE "^${key}=" "$TEMPLATE/.env.example"; then
+        echo "  ✓ .env.example → $key 有效字段"
+    else
+        echo "  ❌ .env.example 缺有效字段: $key"
+        echo "     (不能只有注释, 否则 setup.sh 无法写入实际部署配置)"
+        CFG_FAIL=1
+    fi
+done
 
 # (b) mcp / hub / wiki 三个上游。只能从 yaml 读, 且**必须是挂载进去的那份** ——
 #     config-overlay/ 没有任何东西读它 (7/30 查实), 改错文件等于没改。

@@ -19,9 +19,9 @@
  *
  * ## 两组常量, 不是一组
  *
- * `AUDIT_TOP_N` ← quota.py `audit_summary_global_since`   全公司审计
- * `DEPT_TOP_N`  ← quota.py `audit_summary_dept_since`     单个部门
- * `PERF_TOP_N`  ← metrics.py `query_perf_summary_global`  性能页
+ * `AUDIT_TOP_N` ← quota_audit.py `audit_summary_global_since` 全公司审计
+ * `DEPT_TOP_N`  ← quota_audit.py `audit_summary_dept_since`   单个部门
+ * `PERF_TOP_N`  ← metrics_perf.py `query_perf_summary_global` 性能页
  *
  * 三组不是一组: 不同的函数、不同的表、不同的排序键, 而且**值本来就不同**
  * (全公司 by_user 是 50, 部门 by_user 是 10)。合成一组的话, 改一处会把
@@ -61,7 +61,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 const ME_TS = resolve(here, "../src/lib/me.ts");
 const GW = resolve(here, "../../llm-gateway/src/catfish_gateway");
 const QUOTA_PY = resolve(GW, "quota.py");
+const QUOTA_AUDIT_PY = resolve(GW, "quota_audit.py");
 const METRICS_PY = resolve(GW, "metrics.py");
+const METRICS_PERF_PY = resolve(GW, "metrics_perf.py");
 
 function fail(msg) {
   console.error(`\n❌ ${msg}\n`);
@@ -89,6 +91,13 @@ for (const [f, why] of [
       `${f} 不在, 但 llm-gateway 源码树在 —— 文件被改名或挪走了?\n` +
         `   这个脚本靠它校验${why}。路径要跟着更新, 不然检查会静默失效。`,
     );
+
+// quota.py 现在是兼容旧 import 的 re-export 壳, 审计函数实际在
+// quota_audit.py。旧 checkout 仍可能把实现放在 quota.py, 两种布局都支持。
+const QUOTA_SOURCE = existsSync(QUOTA_AUDIT_PY) ? QUOTA_AUDIT_PY : QUOTA_PY;
+// metrics.py 同样是兼容旧 import 的 re-export 壳, 性能聚合实际在
+// metrics_perf.py。旧 checkout 仍可能把实现放在 metrics.py。
+const METRICS_SOURCE = existsSync(METRICS_PERF_PY) ? METRICS_PERF_PY : METRICS_PY;
 
 // ── 前端声明的值 ────────────────────────────────────────────────────
 const meSrc = readFileSync(ME_TS, "utf8");
@@ -151,18 +160,30 @@ function limitsIn(body, classify, where) {
 }
 
 const auditFound = limitsIn(
-  funcBody(readFileSync(QUOTA_PY, "utf8"), "audit_summary_global_since", QUOTA_PY),
+  funcBody(
+    readFileSync(QUOTA_SOURCE, "utf8"),
+    "audit_summary_global_since",
+    QUOTA_SOURCE,
+  ),
   (t) =>
     t === "model" ? "model" : t === "dept" ? "department" : t.startsWith("ue") ? "user" : undefined,
   "quota.py audit_summary_global_since",
 );
 const deptFound = limitsIn(
-  funcBody(readFileSync(QUOTA_PY, "utf8"), "audit_summary_dept_since", QUOTA_PY),
+  funcBody(
+    readFileSync(QUOTA_SOURCE, "utf8"),
+    "audit_summary_dept_since",
+    QUOTA_SOURCE,
+  ),
   (t) => (t === "model" ? "model" : t === "user_email" ? "user" : undefined),
   "quota.py audit_summary_dept_since",
 );
 const perfFound = limitsIn(
-  funcBody(readFileSync(METRICS_PY, "utf8"), "query_perf_summary_global", METRICS_PY),
+  funcBody(
+    readFileSync(METRICS_SOURCE, "utf8"),
+    "query_perf_summary_global",
+    METRICS_SOURCE,
+  ),
   (t) => (t === "model" ? "model" : t === "department" ? "department" : undefined),
   "metrics.py query_perf_summary_global",
 );

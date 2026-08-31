@@ -110,6 +110,10 @@ services:
       HOST: 0.0.0.0
       PORT: 8999
       CATFISH_CONFIG: /app/config/models.yaml
+      # models/roles 等基线配置只读；后台可编辑的 quotas.yaml 放在 gateway_data。
+      CATFISH_QUOTAS_PATH: /home/catfish/.catfish/quotas.yaml
+      # Admin API proxy endpoint; override at runtime when Identity is external.
+      CATFISH_IDENTITY_URL: ${CATFISH_IDENTITY_URL:-http://identity:8998}
       # 6/9 BL-F10 真实测: 单 worker GIL 卡死, 1000 user P99=34s; 4 worker P99=15s
       # (2.2× 吞吐, 56% latency 降). 默认 4, 4 vCPU 客户机房刚好用满. 8 vCPU 改 8.
       UVICORN_WORKERS: ${GATEWAY_WORKERS:-4}
@@ -145,7 +149,7 @@ services:
       - "8999:8999"  # gateway 对员工 Companion 暴露, 反代 nginx 处理 SSL
     volumes:
       - ./llm-gateway/config:/app/config:ro
-      - gateway_data:/home/catfish/.catfish  # quota.db (sqlite fallback) / audit jsonl / facts
+      - gateway_data:/home/catfish/.catfish  # quotas.yaml / quota.db / audit jsonl / facts
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8999/healthz"]
       interval: 30s

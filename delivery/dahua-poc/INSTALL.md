@@ -48,7 +48,7 @@ SERVER_IP=<服务器内网IP> ENABLE_HTTPS=1 bash setup.sh
 
 > ⚠ 不能填 `127.0.0.1` 或 `localhost` —— 员工浏览器会解析到自己的电脑,整个系统都用不了。
 
-脚本会自动完成:生成配置 → 建内部 CA 和服务器证书 → 导入 8 个镜像 → 启动 → 自检。首次约 5–15 分钟(导入镜像最慢)。
+脚本会自动完成:生成配置 → 建内部 CA 和服务器证书 → 导入 7 个镜像 → 启动 → 自检。首次约 5–15 分钟(导入镜像最慢)。
 
 **装完记下屏幕上这三项**,只显示这一次:
 
@@ -200,10 +200,10 @@ SERVER_IP=<新IP> ENABLE_HTTPS=1 bash setup.sh
 ```bash
 # 传新的 FULL 包，解开覆盖
 cd <装机目录>/delivery/dahua-poc/
-SERVER_IP=<IP> ENABLE_HTTPS=1 bash setup.sh
+UPGRADE=1 SERVER_IP=<IP> ENABLE_HTTPS=1 bash setup.sh
 ```
 
-`.env`、数据库、证书、用户都会保留。脚本会打印镜像 ID 变化,能看到到底换没换。
+`UPGRADE=1` 不会用 `.env.example` 覆盖现场配置；数据库密码、JWT、加密主密钥、API key 和外置 Identity 地址都会保留，部署 IP/OIDC/HTTPS/worker 等派生参数会按本次参数更新。数据库卷、证书、用户都会保留。脚本会打印镜像 ID 变化,能看到到底换没换。
 
 ---
 

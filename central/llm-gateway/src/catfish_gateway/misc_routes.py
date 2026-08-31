@@ -113,11 +113,14 @@ def register_misc_routes(app) -> None:
             department = real_meta["department"]
             role = real_meta["role"]
             managed_departments = real_meta["managed_departments"]
+            must_change_password = real_meta.get("must_change_password", False)
         else:
             # PG 没配 / 没找到 → fallback service token 元数据 (graceful)
             department = user.department
             role = user.role
             managed_departments = user.managed_departments or []
+            # 老 token / dev token 没有这个 claim, 默认不强制改密。
+            must_change_password = False
 
         return {
             "email": effective_email,
@@ -125,6 +128,7 @@ def register_misc_routes(app) -> None:
             "role": role,
             "managed_departments": managed_departments,
             "auth_method": user.auth_method,
+            "must_change_password": must_change_password,
         }
 
     @app.get("/v1/edge/tool-config/{tool_name}")

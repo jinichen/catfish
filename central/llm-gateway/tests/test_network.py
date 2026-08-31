@@ -121,3 +121,19 @@ def test_precheck_no_proxy_no_dup(monkeypatch):
     # 各只出现一次
     assert final.count("127.0.0.1") == 1
     assert final.count("10.0.0.0/8") == 1
+
+
+def test_precheck_sanitizes_smart_quotes_and_invalid_wildcard(monkeypatch):
+    """富文本复制产生的 *“localhost 不得让 httpx 解析 NO_PROXY 失败。"""
+    for var in network.PROXY_VARS:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("NO_PROXY", "*“localhost,127.0.0.1")
+    monkeypatch.setenv("no_proxy", "“localhost”,127.0.0.1")
+
+    network.precheck_and_setup()
+
+    final = os.environ["NO_PROXY"]
+    assert final.split(",").count("localhost") == 1
+    assert final.split(",").count("127.0.0.1") == 1
+    assert "“" not in final
+    assert "*localhost" not in final

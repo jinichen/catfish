@@ -4,13 +4,12 @@
 最后二选一分发到 stream / non-stream。这里搬出其中三段最大的:
 
     prepare_messages   消息数组的解包与规整 (unwrap_tool_images 等)
-    maybe_compress     超长上下文压缩 (写 request.state.compression_stats)
     enforce_quota      配额阻断 (超了 raise 429)
 
 # 为什么敢搬 (拆之前逐条查过, 不是看着像就动)
 
   · **读写集**: 用 AST 算出每块读入哪些局部、写出哪些后面还要用。
-    prepare_messages 读 3 写 body; maybe_compress 读 6 写 body;
+    prepare_messages 读 3 写 body;
     enforce_quota 读 5, 写出的东西后面**一个都不用** (纯守卫)。
   · **没有 return**: 三块里一条 return 都没有。这一条最要紧 ——
     块里若有 return, 外提之后就变成"从 helper 返回", 调用方继续往下跑,
@@ -19,9 +18,8 @@
 
 # 一个曾经的误报
 
-`maybe_compress` 里有 `request.state.compression_stats = ...`。
-第一版读写分析把它当成"重新绑定了 request", 差点以为要把 request 传回去 ——
-其实那是**属性写**, 同一个对象传进来照样写得到。
+Catfish 不负责语义上下文压缩。Hermes 会话路径由 Hermes 的 ContextEngine
+负责压缩；网关这里只做确定性的消息准备、工具结果裁剪和最终上下文校验。
 """
 from __future__ import annotations
 
@@ -105,51 +103,6 @@ def prepare_messages(body, model, model_name, effective_user_email):
         )
     return body
 
-
-async def maybe_compress(body, request, model, model_name, user, is_internal_call, _is_service_call, effective_user_email):
-    """超长上下文压缩。返回加工后的 body; 顺带写 request.state.compression_stats。"""
-    _compression_internal = (
-        request.headers.get("X-Catfish-Compression-Internal", "").lower() == "true"
-    )
-    # role 和 sub 前缀都认 —— role 来自 IdP 的 yaml 约定, sub 前缀是验签后的
-    # JWT 原文, 两个取并集才不会因为一边配错就漏判 (同 is_service_principal 的理由)。
-    _service_like = (user.role == "service") or _is_service_call
-    _service_on_behalf = _is_service_call and effective_user_email != user.sub
-    if (
-        not is_internal_call
-        and not _compression_internal
-        and (not _service_like or _service_on_behalf)
-    ):
-        try:
-            from .conversation_compressor import maybe_compress_messages  # noqa: PLC0415
-            ctx_window = getattr(model, "context_window", None) or 128000
-            # BL-AUTH-DECOUPLE-A1 (5/19): 压缩按 effective_user_email 归账 (service
-            # on-behalf-of 时 = X-Catfish-User 指定的员工).
-            new_msgs, compress_stats = await maybe_compress_messages(
-                body.get("messages") or [],
-                user_sub=effective_user_email,
-                model_context_window=ctx_window,
-                # BL-INTERNAL-MODEL-FOLLOW-USER (5/17): 压缩用员工选的同款 model
-                origin_model=model_name,
-            )
-            if compress_stats:
-                body["messages"] = new_msgs
-                logger.info(
-                    "BL-COMPRESSION-GATEWAY: sub=%s 压 %d 条历史 → 摘要, "
-                    "token %d→%d (省 %d%%)",
-                    effective_user_email,
-                    compress_stats["compressed_count"],
-                    compress_stats["pre_token"],
-                    compress_stats["post_token"],
-                    compress_stats["saved_pct"],
-                )
-                # 把统计塞 request state 让 audit log 能记
-                request.state.compression_stats = compress_stats
-        except Exception as e:
-            logger.warning(
-                "compression hook 异常 (不阻塞主流程, 用原 messages): %s",
-                e,
-            )
 
     # ── Quota 阻断 (BL-D9 完整 ship, 5/2 收尾) ────────────────
     # 真实接 chat: 在 LLM 调用前查 quota, 超了直接 429 + friendly message.

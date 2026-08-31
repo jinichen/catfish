@@ -9,14 +9,17 @@
  * 顶栏和侧栏各管一层, 不再互相重复。
  */
 
+import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 
 import { useAuthStore } from "../store/auth";
 import { logout } from "../lib/auth";
+import { PasswordDialog } from "../routes/PasswordPage";
 
 export function NavBar() {
   const me = useAuthStore((s) => s.me);
   const location = useLocation();
+  const [passwordOpen, setPasswordOpen] = useState(false);
   const isManagerOrAbove =
     me?.role === "manager" || me?.role === "admin" || me?.role === "sysadmin";
 
@@ -99,46 +102,69 @@ export function NavBar() {
           })}
       </div>
       {me && (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "var(--space-2)",
-            fontSize: 12,
-            color: "var(--text-muted)",
-          }}
-        >
-          <span>
-            {me.email}
-            {me.role !== "employee" && (
-              <span
-                style={{
-                  marginLeft: "var(--space-1)",
-                  background: "var(--accent)",
-                  color: "white",
-                  padding: "1px 6px",
-                  borderRadius: "var(--radius-sm)",
-                  fontSize: 10,
-                }}
-              >
-                {me.role}
-              </span>
-            )}
-          </span>
-          <button
-            onClick={() => void logout()}
+        <>
+          <div
             style={{
-              background: "transparent",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--radius-sm)",
-              padding: "4px 10px",
-              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: "var(--space-2)",
               fontSize: 12,
+              color: "var(--text-muted)",
             }}
           >
-            退登
-          </button>
-        </div>
+            <span>
+              {me.email}
+              {me.role !== "employee" && (
+                <span
+                  style={{
+                    marginLeft: "var(--space-1)",
+                    background: "var(--accent)",
+                    color: "white",
+                    padding: "1px 6px",
+                    borderRadius: "var(--radius-sm)",
+                    fontSize: 10,
+                  }}
+                >
+                  {me.role}
+                </span>
+              )}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPasswordOpen(true)}
+              style={{
+                border: 0,
+                padding: 0,
+                background: "transparent",
+                color: "var(--accent)",
+                cursor: "pointer",
+                fontSize: 12,
+              }}
+            >
+              修改密码
+            </button>
+            <button
+              type="button"
+              onClick={() => void logout()}
+              style={{
+                background: "transparent",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius-sm)",
+                padding: "4px 10px",
+                cursor: "pointer",
+                fontSize: 12,
+              }}
+            >
+              退登
+            </button>
+          </div>
+          {(passwordOpen || me.must_change_password) && (
+            <PasswordDialog
+              forced={me.must_change_password}
+              onClose={() => setPasswordOpen(false)}
+            />
+          )}
+        </>
       )}
     </nav>
   );

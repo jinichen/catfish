@@ -151,17 +151,17 @@ GEMINI_API_KEY=你的gemini key                   # 申请 https://aistudio.goog
 **默认可不改 3 项** (docker-compose.yml 已有 sensible default):
 
 ```env
-GATEWAY_WORKERS=4              # 4 vCPU 用 4, 8 vCPU 改 8
+GATEWAY_WORKERS=1              # 交付默认 1; 内网可达且资源充足时再改 4/8
 IDENTITY_WORKERS=2             # 4 vCPU 用 2, 8 vCPU 改 4
-CATFISH_OIDC_ISSUER=http://host.docker.internal:8998   # mac/Windows Docker Desktop 默认
+# setup.sh 会按 SERVER_IP / ENABLE_HTTPS 自动写 OIDC issuer, 不要保留 host.docker.internal
 ```
 
-**Linux 生产环境需改 CATFISH_OIDC_ISSUER**:
+**只有手工部署或使用域名时才需要手动改 OIDC**；一键装机脚本会自动生成 Linux 可访问地址:
 
 ```env
 # Docker Desktop mac/Win → host.docker.internal 直接生效
 # Linux 生产 (Ubuntu/CentOS) → 换成服务器 IP 或域名
-CATFISH_OIDC_ISSUER=http://<你的服务器 IP>:8998
+CATFISH_OIDC_ISSUER=https://<你的服务器 IP>
 # 或若有域名 + SSL 反代
 CATFISH_OIDC_ISSUER=https://catfish.dahua.com/sso
 ```
@@ -408,13 +408,13 @@ docker compose ps                # 再跑
 | `PG_USER` | postgres 用户名 | `catfish` | ⭕ |
 | `PG_PASSWORD` | postgres 密码 | 无 | ✅ **必填** |
 | `PG_DB` | postgres 数据库名 | `catfish` | ⭕ |
-| `GATEWAY_WORKERS` | gateway uvicorn worker 数 | `4` | ⭕ |
+| `GATEWAY_WORKERS` | gateway uvicorn worker 数 | `1` | ⭕ |
 | `IDENTITY_WORKERS` | identity uvicorn worker 数 | `2` | ⭕ |
 | `INTERNAL_LLM_KEY` | 内网 qwen API key | 无 | ✅ **必填** |
 | `INTERNAL_LLM_BASE_QWEN_MAIN` | 内网 qwen chat 端点 | `http://127.0.0.1:9998/v1` | ✅ **必填** |
 | `INTERNAL_LLM_BASE_QWEN_VISION` | 内网 qwen vision 端点 | 同上 | ✅ **必填** |
 | `INTERNAL_LLM_BASE_BGE_M3` | 内网 embedding 端点 | 同上 | ✅ **必填** |
-| `CATFISH_OIDC_ISSUER` | OIDC issuer URL | `http://host.docker.internal:8998` | ⭕ (Linux 生产要改) |
+| `CATFISH_OIDC_ISSUER` | OIDC issuer URL | `https://<server-ip>` (setup 自动写入) | ⭕ |
 | `CATFISH_OIDC_AUDIENCE` | OIDC audience | `catfish-gateway` | ⭕ |
 | `DASHSCOPE_API_KEY` | 阿里 qwen-flash key | 空 (禁用) | ⭕ |
 | `DEEPSEEK_API_KEY` | Deepseek key | 空 (禁用) | ⭕ |

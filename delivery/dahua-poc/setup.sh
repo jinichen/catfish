@@ -10,14 +10,21 @@
 #     5. docker compose up · verify
 #
 # 用法:
-#   # 自动探测 IP · 走 HTTP (dev/test 用)
+#   # 自动探测 IP · 默认走 HTTPS (交付/生产推荐)
 #   bash setup.sh
+#
+#   # 明确选择 HTTP (仅本机/测试, 裸 IP 浏览器会卡 PKCE)
+#   SERVER_IP=192.168.100.50 ENABLE_HTTPS=0 bash setup.sh
 #
 #   # 显式指定 IP + 自签 cert (推荐 · 生产 POC 走 HTTPS)
 #   SERVER_IP=192.168.100.50 ENABLE_HTTPS=1 bash setup.sh
 #
 #   # 只重生成 .env (不动 docker · 已装好想改 IP 时用)
 #   REGEN_ENV_ONLY=1 SERVER_IP=192.168.100.50 bash setup.sh
+#
+#   # 升级镜像 (保留现有 .env / 数据 / 证书, 不从 .env.example 覆盖)
+#   UPGRADE=1 IMAGE_TAR=./images/dahua-poc-central-amd64-<date>.tar.gz \
+#     SERVER_IP=192.168.100.50 ENABLE_HTTPS=1 bash setup.sh
 #
 # 前置:
 #   - Ubuntu 22.04+ / CentOS 8+ · x86_64
@@ -50,12 +57,42 @@ set -euo pipefail
 
 # ── 参数 · env 可 override ──────────────────────────────
 SERVER_IP="${SERVER_IP:-}"
-ENABLE_HTTPS="${ENABLE_HTTPS:-0}"
+ENABLE_HTTPS="${ENABLE_HTTPS:-}"
 REGEN_ENV_ONLY="${REGEN_ENV_ONLY:-0}"
+UPGRADE="${UPGRADE:-0}"
 IMAGE_TAR="${IMAGE_TAR:-}"   # 若未装 image · 指到 image tar 路径
+GATEWAY_WORKERS="${GATEWAY_WORKERS:-}"
+IDENTITY_WORKERS="${IDENTITY_WORKERS:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+
+if [ "$UPGRADE" = "1" ] && [ ! -f .env ]; then
+    echo "❌ UPGRADE=1 但当前目录没有 .env · 拒绝按新装流程生成配置"
+    echo "   请回到原安装目录, 或确认旧 .env 已备份后再升级"
+    exit 1
+fi
+
+# 升级命令未显式传 ENABLE_HTTPS 时, 沿用现场 .env 的模式, 避免 HTTPS
+# 部署被无意切回 HTTP. 老包没有模式字段时, 有证书按 HTTPS, 否则升级保守走 HTTP;
+# 新装没有 .env 时默认 HTTPS, 避免交付门户因 HTTP 裸 IP 卡在加载中.
+if [ -z "$ENABLE_HTTPS" ] && [ -f .env ]; then
+    ENABLE_HTTPS=$(grep -E '^CATFISH_ENABLE_HTTPS=' .env | head -1 | cut -d= -f2- || true)
+fi
+if [ -z "$ENABLE_HTTPS" ]; then
+    if [ "$UPGRADE" = "1" ] && [ -s certs/cert.pem ] && [ -s certs/key.pem ]; then
+        ENABLE_HTTPS=1
+    elif [ "$UPGRADE" = "1" ]; then
+        ENABLE_HTTPS=0
+    else
+        ENABLE_HTTPS=1
+    fi
+fi
+
+# 升级时沿用现场自定义 HTTPS 端口; 新装默认 443.
+if [ -z "${CATFISH_HTTPS_PORT:-}" ] && [ -f .env ]; then
+    CATFISH_HTTPS_PORT=$(grep -E '^CATFISH_HTTPS_PORT=' .env | head -1 | cut -d= -f2- || true)
+fi
 
 # ── sed -i 的 GNU / BSD 差异 ────────────────────────────────
 #
@@ -72,6 +109,19 @@ if sed --version >/dev/null 2>&1; then
 else
     sed_i() { sed -i '' "$@"; }     # BSD / macOS
 fi
+
+# 替换或追加 .env 字段。只给部署派生参数使用, 不碰密码/API key.
+set_env_value() {
+    local key="$1"
+    local value="$2"
+    local escaped
+    escaped=$(printf '%s' "$value" | sed 's/[&|\\]/\\&/g')
+    if grep -qE "^${key}=" .env; then
+        sed_i "s|^${key}=.*|${key}=${escaped}|" .env
+    else
+        printf '\n%s=%s\n' "$key" "$value" >> .env
+    fi
+}
 
 echo "═══════════════════════════════════════════════════════"
 echo "  Catfish 中央服务一键装机 · 达华 POC"
@@ -150,12 +200,15 @@ OLD_JWT_KEY=""
 #   跟第 108 段记录的 PG_PASSWORD 事故是同一个形状: 覆盖在先、保护在后。
 #   那次给 PG_PASSWORD 和 JWT_SIGNING_KEY 接上了捞取, 加第三个 key 时漏了。
 OLD_SECRET_KEY=""
+OLD_IDENTITY_URL=""
+REQUESTED_IDENTITY_URL="${CATFISH_IDENTITY_URL:-}"
 if [ -f .env ]; then
     echo "→ .env 已存在 · 备份到 .env.bak.$(date +%s)"
     cp .env ".env.bak.$(date +%s)"
     OLD_PG_PW=$(grep -E "^PG_PASSWORD=" .env | head -1 | cut -d= -f2- || true)
     OLD_JWT_KEY=$(grep -E "^JWT_SIGNING_KEY=" .env | head -1 | cut -d= -f2- || true)
     OLD_SECRET_KEY=$(grep -E "^CATFISH_SECRET_KEY=" .env | head -1 | cut -d= -f2- || true)
+    OLD_IDENTITY_URL=$(grep -E "^CATFISH_IDENTITY_URL=" .env | head -1 | cut -d= -f2- || true)
 else
     # ── .env 丢了但备份还在 → 自动救回 ──
     #
@@ -190,8 +243,11 @@ else
     fi
 fi
 
-cp .env.example .env
-sed_i \
+if [ "$UPGRADE" = "1" ]; then
+    echo "→ UPGRADE=1 · 保留现有 .env, 不从 .env.example 覆盖"
+else
+    cp .env.example .env
+    sed_i \
     -e "s|<server-ip>|$SERVER_IP|g" \
     -e "s|^CATFISH_OIDC_ISSUER=.*|CATFISH_OIDC_ISSUER=$ISSUER_URL|" \
     -e "s|^CATFISH_IDENTITY_ISSUER=.*|CATFISH_IDENTITY_ISSUER=$ISSUER_URL|" \
@@ -203,21 +259,29 @@ sed_i \
 sed_i "s|^CATFISH_ENABLE_HTTPS=.*|CATFISH_ENABLE_HTTPS=$ENABLE_HTTPS|" .env
 sed_i "s|^CATFISH_HTTPS_PORT=.*|CATFISH_HTTPS_PORT=$HTTPS_PORT|" .env
 
-echo "→ 生成 .env · 关键字段:"
-grep -E "^CATFISH_(OIDC|IDENTITY|ENABLE)_" .env | sed 's/^/    /'
+# Gateway → Identity admin API endpoint: explicit runtime input wins, then keep
+# the existing site value across upgrades, then use .env.example's default.
+    if [ -n "$REQUESTED_IDENTITY_URL" ]; then
+    sed_i "s|^CATFISH_IDENTITY_URL=.*|CATFISH_IDENTITY_URL=$REQUESTED_IDENTITY_URL|" .env
+    elif [ -n "$OLD_IDENTITY_URL" ]; then
+    sed_i "s|^CATFISH_IDENTITY_URL=.*|CATFISH_IDENTITY_URL=$OLD_IDENTITY_URL|" .env
+    fi
+
+    echo "→ 生成 .env · 关键字段:"
+    grep -E "^CATFISH_(OIDC|IDENTITY|ENABLE)_" .env | sed 's/^/    /'
 
 # ── 先写回上一次装机的 secret ──────────────
-if [ -n "$OLD_PG_PW" ]; then
+    if [ -n "$OLD_PG_PW" ]; then
     sed_i "s|^PG_PASSWORD=.*|PG_PASSWORD=$OLD_PG_PW|" .env
     echo "→ PG_PASSWORD 沿用既有值 (跨装机保留 · 必须与 pgdata 卷里的库一致)"
 fi
-if [ -n "$OLD_JWT_KEY" ]; then
+    if [ -n "$OLD_JWT_KEY" ]; then
     sed_i "s|^JWT_SIGNING_KEY=.*|JWT_SIGNING_KEY=$OLD_JWT_KEY|" .env
     echo "→ JWT_SIGNING_KEY 沿用既有值 (换了会让已签发的 token 全失效)"
 fi
 
 # PG_PASSWORD 若仍空 · 生成随机 (首次装机路径)
-if grep -qE "^PG_PASSWORD=$|^PG_PASSWORD= *$" .env; then
+    if grep -qE "^PG_PASSWORD=$|^PG_PASSWORD= *$" .env; then
     # fail-loud: 库卷还在却没有可沿用的密码 → 生成新的必然连不上, 提前拦住.
     # 不拦的话脚本会一路绿灯装完, 报错只出现在容器日志里, IT 查不到根因.
     EXISTING_VOL=$(docker volume ls -q 2>/dev/null | grep -E '_pgdata$' | head -1 || true)
@@ -240,14 +304,14 @@ if grep -qE "^PG_PASSWORD=$|^PG_PASSWORD= *$" .env; then
     RAND_PW=$(openssl rand -hex 16 2>/dev/null || head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 24)
     sed_i "s|^PG_PASSWORD=.*|PG_PASSWORD=$RAND_PW|" .env
     echo "→ PG_PASSWORD 空 · 已生成随机: $RAND_PW  ← ★ 记好 · 数据库唯一密码"
-fi
+    fi
 
 # JWT_SIGNING_KEY 若仍空 · 生成随机 (首次装机路径)
-if grep -qE "^JWT_SIGNING_KEY=$" .env; then
+    if grep -qE "^JWT_SIGNING_KEY=$" .env; then
     JWT_KEY=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | base64 | tr -d '/+=' | head -c 64)
     sed_i "s|^JWT_SIGNING_KEY=.*|JWT_SIGNING_KEY=$JWT_KEY|" .env
     echo "→ JWT_SIGNING_KEY 空 · 已生成随机 (64 字符)"
-fi
+    fi
 
 # ── CATFISH_SECRET_KEY (8/1) · 供应商 API key 的加密主密钥 ──────────
 #
@@ -262,17 +326,17 @@ fi
 #
 # 老 .env 里可能压根没有这一行 (8/1 之前的交付包), 所以要区分"没这行"和
 # "有这行但为空", 两种都要补。
-if ! grep -qE "^CATFISH_SECRET_KEY=" .env; then
+    if ! grep -qE "^CATFISH_SECRET_KEY=" .env; then
     echo "" >> .env
     echo "CATFISH_SECRET_KEY=" >> .env
-fi
+    fi
 # 先写回上一次装机的主密钥 —— 必须在下面"空则生成"之前。
 # 少了这一步, 下面那个判空必然成立 (cp 刚把它清成 .env.example 的空值),
 # 于是每次重跑都换一把新钥匙, 而"已有值·保持不变"那个 else 分支永远走不到。
-if [ -n "$OLD_SECRET_KEY" ]; then
+    if [ -n "$OLD_SECRET_KEY" ]; then
     sed_i "s|^CATFISH_SECRET_KEY=.*|CATFISH_SECRET_KEY=$OLD_SECRET_KEY|" .env
-fi
-if grep -qE "^CATFISH_SECRET_KEY=$|^CATFISH_SECRET_KEY= *$" .env; then
+    fi
+    if grep -qE "^CATFISH_SECRET_KEY=$|^CATFISH_SECRET_KEY= *$" .env; then
     SECRET_KEY=$(openssl rand -base64 32 2>/dev/null | tr '+/' '-_')
     if [ -z "$SECRET_KEY" ]; then
         echo "❌ 生成 CATFISH_SECRET_KEY 失败 · 这台机器上没有 openssl?"
@@ -293,6 +357,30 @@ if grep -qE "^CATFISH_SECRET_KEY=$|^CATFISH_SECRET_KEY= *$" .env; then
     echo ""
 else
     echo "→ CATFISH_SECRET_KEY 已有值 · 保持不变 (改了会让存库的 API key 全解不开)"
+    fi
+fi
+
+# ── 部署派生配置：新装和升级都必须写入 ─────────────────────────
+# UPGRADE=1 只跳过 .env.example 覆盖和 secret 生成; 不能把旧服务器地址、
+# HTTPS 模式或 worker 数带进新现场。持久化密码/API key 仍由上面的逻辑保护。
+set_env_value CATFISH_OIDC_ISSUER "$ISSUER_URL"
+set_env_value CATFISH_IDENTITY_ISSUER "$ISSUER_URL"
+set_env_value CATFISH_IDENTITY_CORS_ORIGINS "$WEB_URL"
+set_env_value CATFISH_ENABLE_HTTPS "$ENABLE_HTTPS"
+set_env_value CATFISH_HTTPS_PORT "$HTTPS_PORT"
+if [ -n "$GATEWAY_WORKERS" ]; then
+    set_env_value GATEWAY_WORKERS "$GATEWAY_WORKERS"
+fi
+if [ -n "$IDENTITY_WORKERS" ]; then
+    set_env_value IDENTITY_WORKERS "$IDENTITY_WORKERS"
+fi
+if [ "$UPGRADE" = "1" ]; then
+    if [ -n "$REQUESTED_IDENTITY_URL" ]; then
+        set_env_value CATFISH_IDENTITY_URL "$REQUESTED_IDENTITY_URL"
+    elif [ -n "$OLD_IDENTITY_URL" ]; then
+        set_env_value CATFISH_IDENTITY_URL "$OLD_IDENTITY_URL"
+    fi
+    echo "→ UPGRADE=1 · 已更新部署派生配置, 持久化 secret/现场参数保持不变"
 fi
 
 # ── 若只重生 .env · 到此为止 ───────────────────────────

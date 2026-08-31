@@ -28,6 +28,7 @@ trap 'rm -rf "$WORK"' EXIT
 cp setup.sh .env.example "$WORK/"
 
 run() { (cd "$WORK" && SERVER_IP=10.0.0.1 REGEN_ENV_ONLY=1 bash setup.sh >/dev/null 2>&1); }
+run_upgrade() { (cd "$WORK" && SERVER_IP=10.20.30.40 ENABLE_HTTPS=1 GATEWAY_WORKERS=1 UPGRADE=1 REGEN_ENV_ONLY=1 bash setup.sh >/dev/null 2>&1); }
 val() { grep -E "^$1=" "$WORK/.env" | head -1 | cut -d= -f2-; }
 
 echo "── 第一次装机 ──"
@@ -38,6 +39,14 @@ K1=$(val CATFISH_SECRET_KEY); P1=$(val PG_PASSWORD); J1=$(val JWT_SIGNING_KEY)
 [ -n "$J1" ] && ok "JWT_SIGNING_KEY 已生成"    || bad "JWT_SIGNING_KEY 是空的"
 grep -q '<server-ip>' "$WORK/.env" && bad "占位符没被替换 (sed 没生效?)" \
                                    || ok "<server-ip> 已全部替换"
+[ "$(val CATFISH_OIDC_ISSUER)" = "https://10.0.0.1" ] \
+  && ok "新装 OIDC issuer 按 IP 生成" || bad "新装 OIDC issuer 错误"
+[ "$(val CATFISH_IDENTITY_ISSUER)" = "https://10.0.0.1" ] \
+  && ok "新装 Identity issuer 按 IP 生成" || bad "新装 Identity issuer 错误"
+[ "$(val CATFISH_IDENTITY_CORS_ORIGINS)" = "https://10.0.0.1" ] \
+  && ok "新装 CORS origin 按 Web URL 生成" || bad "新装 CORS origin 错误"
+[ "$(val CATFISH_ENABLE_HTTPS)" = "1" ] \
+  && ok "新装默认 HTTPS" || bad "新装 HTTPS 默认值错误"
 
 echo "── 第二次装机 (同一目录重跑) ──"
 run || { echo "  ✗ setup.sh 重跑失败"; exit 1; }
@@ -46,6 +55,36 @@ K2=$(val CATFISH_SECRET_KEY); P2=$(val PG_PASSWORD); J2=$(val JWT_SIGNING_KEY)
   || bad "CATFISH_SECRET_KEY 被换了! 库里已存的 API key 全部解不开 ($K1 → $K2)"
 [ "$P2" = "$P1" ] && ok "PG_PASSWORD 保持不变" || bad "PG_PASSWORD 被换了 ($P1 → $P2)"
 [ "$J2" = "$J1" ] && ok "JWT_SIGNING_KEY 保持不变" || bad "JWT_SIGNING_KEY 被换了"
+
+echo "── UPGRADE=1 (现场参数完整保留) ──"
+# 模拟早期交付包: 现场 .env 没有这些有效字段, 升级必须自动补齐而不是回退 compose 默认值.
+sed -i.bak \
+  -e '/^CATFISH_OIDC_ISSUER=/d' \
+  -e '/^CATFISH_IDENTITY_ISSUER=/d' \
+  -e '/^CATFISH_IDENTITY_CORS_ORIGINS=/d' \
+  -e '/^CATFISH_ENABLE_HTTPS=/d' \
+  -e '/^CATFISH_HTTPS_PORT=/d' \
+  -e '/^GATEWAY_WORKERS=/d' \
+  "$WORK/.env"
+sed -i.bak 's|^CATFISH_IDENTITY_URL=.*|CATFISH_IDENTITY_URL=http://10.20.30.40:8998|' "$WORK/.env"
+sed -i.bak 's|^DASHSCOPE_API_KEY=.*|DASHSCOPE_API_KEY=keep-me|' "$WORK/.env"
+run_upgrade || { echo "  ✗ UPGRADE=1 失败"; exit 1; }
+[ "$(val CATFISH_IDENTITY_URL)" = "http://10.20.30.40:8998" ] \
+  && ok "CATFISH_IDENTITY_URL 保持不变" \
+  || bad "CATFISH_IDENTITY_URL 被覆盖"
+[ "$(val DASHSCOPE_API_KEY)" = "keep-me" ] \
+  && ok "现场 API 参数保持不变" \
+  || bad "现场 API 参数被覆盖"
+[ "$(val CATFISH_OIDC_ISSUER)" = "https://10.20.30.40" ] \
+  && ok "升级 OIDC issuer 按新 IP/HTTPS 更新" || bad "升级 OIDC issuer 未更新"
+[ "$(val CATFISH_IDENTITY_ISSUER)" = "https://10.20.30.40" ] \
+  && ok "升级 Identity issuer 按新 IP/HTTPS 更新" || bad "升级 Identity issuer 未更新"
+[ "$(val CATFISH_IDENTITY_CORS_ORIGINS)" = "https://10.20.30.40" ] \
+  && ok "升级 CORS origin 按新 Web URL 更新" || bad "升级 CORS origin 未更新"
+[ "$(val CATFISH_ENABLE_HTTPS)" = "1" ] \
+  && ok "升级 HTTPS 模式更新" || bad "升级 HTTPS 模式未更新"
+[ "$(val GATEWAY_WORKERS)" = "1" ] \
+  && ok "升级 worker 数更新" || bad "升级 worker 数未更新"
 
 echo "── .env 删了但 .env.bak.* 还在 (装机目录被清过) ──"
 rm -f "$WORK/.env"

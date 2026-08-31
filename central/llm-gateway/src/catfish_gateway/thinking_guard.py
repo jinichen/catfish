@@ -216,14 +216,8 @@ def _put_extra_body(params: dict[str, Any], key: str, value: Any) -> None:
 def disable_thinking(params: dict[str, Any], model: Any) -> str | None:
     """就地给 params 加上"关掉深度思考"的参数。返描述 (给日志), 不认识返 None。
 
-    **无条件关**, 不看 tool_choice —— 给那些"本来就不需要模型思考"的内部调用用。
-    目前唯一调用点是 conversation_compressor: 它要的是一段摘要文本, 思考过程
-    对它毫无价值, 却会把 max_tokens 吃光。
-
-    8/10 现场: 压缩器用员工同款模型 (内网 Qwen3-VL, 思考默认开着) 发
-    max_tokens=800 的摘要请求 → 800 全被 reasoning 吃掉 → content 空 →
-    压缩静默失败 → 449 条原样发给 128K 模型 → 400。
-    实测那个模型的输出构成就是 content 10 / reasoning 210 这个量级。
+    **无条件关**, 不看 tool_choice —— 供需要结构化结果但不需要推理过程的
+    单次内部调用复用。
 
     认不出 provider 就什么都不做 —— 编一个参数名塞过去只会换来更难查的 400。
     """

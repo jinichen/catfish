@@ -55,6 +55,9 @@ ENV PYTHONPATH=/app/src
 ENV PORT=8999
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+# quotas.yaml 是后台可编辑配置，不能写只读的 /app/config；放进持久卷，
+# 这样重建/升级 gateway 镜像也不会丢管理员在页面上改过的配额。
+ENV CATFISH_QUOTAS_PATH=/home/catfish/.catfish/quotas.yaml
 
 WORKDIR /app
 USER catfish
@@ -66,4 +69,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 
 # 生产启动: 先 alembic upgrade head 建表, 再启 gateway.
 # 容器入口 用 sh -c 串两个命令, 失败 (alembic 错) container 退出, k8s/docker-compose 重启.
-CMD ["sh", "-c", "alembic upgrade head && python -m catfish_gateway.app"]
+CMD ["sh", "-c", "if [ ! -f \"$CATFISH_QUOTAS_PATH\" ] && [ -f /app/config/quotas.yaml ]; then cp /app/config/quotas.yaml \"$CATFISH_QUOTAS_PATH\"; fi; alembic upgrade head && python -m catfish_gateway.app"]

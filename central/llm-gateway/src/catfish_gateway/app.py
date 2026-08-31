@@ -79,7 +79,6 @@ from .gateway_startup import (  # noqa: E402,F401
 )
 from .chat_prepare import (  # noqa: E402
     enforce_quota,
-    maybe_compress,
     prepare_messages,
 )
 from .model_handoff import apply_soft_handoff  # noqa: E402
@@ -562,10 +561,6 @@ async def chat_completions(
 
     body = harden_for_gemini(body, model)
 
-    body = await maybe_compress(
-        body, request, model, model_name, user,
-        is_internal_call, _is_service_call, effective_user_email,
-    )
     enforce_quota(body, user, model_name, effective_user_email, is_internal_call)
     is_stream = bool(body.get("stream", False))
 

@@ -9,7 +9,7 @@
     m.upstream.is_available  9 处      m.upstream.api_key_env   2 处 (报错文案)
 
 分布在 network.py / app.py / facts_pipeline.py / fallback.py / catalog.py /
-internal_models.py / user_model_resolver.py / conversation_compressor.py。
+internal_models.py / user_model_resolver.py。
 
 所以拆分的做法是: **UpstreamConfig 的对外接口一个字不改**, 只改它的值从哪来。
 库里模型的 upstream 从
