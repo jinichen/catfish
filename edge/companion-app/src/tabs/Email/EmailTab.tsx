@@ -7,7 +7,7 @@
  *   - toolbar: 仅未读 toggle / 刷新 / "🌐 开 Mail.app" 兜底
  *   - 列表显未读 5 列 (账号 / 发件人 / 主题 / 时间 / 状态), 滚动
  *   - 点单封 → 右侧加载全文 (subject / from / to / date / body_text)
- *   - 主区"💬 让小鲶处理这封" → useUIStore.startProactiveChat (跳工作台)
+ *   - 主区"💬 让小鲶处理这封" → 排队一次真实用户请求, 由 ChatTab 统一发送
  *
  * step2 留:
  *   - 主题 / 发件人 搜索框
@@ -103,8 +103,7 @@ export default function EmailTab() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
 
-  const startProactiveChat = useUIStore((s) => s.startProactiveChat);
-  const setActiveTab = useUIStore((s) => s.setActiveTab);
+  const startEmailChat = useUIStore((s) => s.startEmailChat);
 
   const loadList = useCallback(async () => {
     setLoading(true);
@@ -278,8 +277,7 @@ export default function EmailTab() {
   const handleAskCatfish = (m: FullMessage) => {
     // 8/21: 交接带句柄 (email_id) + 工具指引, starter 构造抽到
     // lib/emailHandoff.ts (纯函数可测; 为什么必须带 id 见那边头注)。
-    startProactiveChat(buildAskCatfishStarter(m));
-    setActiveTab("chat");  // 跳到工作台看 chat
+    startEmailChat(m.id, buildAskCatfishStarter(m));
   };
 
   // BL-COMPANION-EMAIL-TAB-MAILAPP-BUTTON-REMOVE (5/18 鸿波):
@@ -688,4 +686,3 @@ export default function EmailTab() {
     </div>
   );
 }
-

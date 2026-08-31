@@ -252,8 +252,8 @@ def _gateway_dev_token() -> str:
     ── 真因 ──
     老实现只读 CATFISH_INTERNAL_DEV_TOKEN. 但那是 **gateway 进程内 loopback 专用**
     (central/llm-gateway/.../auth/dev_token.py:11-15 明写 "启动时随机生成, 进程内存,
-    重启即变, 不写 .env 文件"), 真 caller 只有 gateway 自己的 proactive.py /
-    conversation_compressor.py. plugin 跑在 **hermes 进程** (另一进程 · 生产还跨机),
+    重启即变, 不写 .env 文件"), plugin 跑在 **hermes 进程**
+    (另一进程 · 生产还跨机), 不能依赖 gateway 进程内存里的 loopback token,
     永远拿不到 → _call_distill_llm 静默 return None → Dream Engine 自动蒸馏从没跑过.
 
     ── 正解 ──

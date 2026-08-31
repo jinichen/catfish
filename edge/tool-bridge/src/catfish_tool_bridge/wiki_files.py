@@ -48,6 +48,7 @@ create 的 frontmatter / slugify / 重名检测跟 wiki_write.rs 对齐, 保证�
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from datetime import date
@@ -65,6 +66,38 @@ _KIND_BY_SUBDIR = {
     "wiki/concepts": "concept",
     "wiki/queries": "query",
 }
+
+_RESERVED_TITLE_PREFIXES = ("raw/", "raw\\", "wiki/", "file:")
+
+
+def _reject_reserved_title(title: str) -> str | None:
+    """Reject storage references masquerading as ontology titles.
+
+    ``raw/sources`` is an archival namespace, not a wiki node.  Allowing it as
+    a title creates a visible pseudo-concept and makes every source link look
+    like an ontology edge.
+    """
+    normalized = title.strip().lower()
+    if normalized.startswith(_RESERVED_TITLE_PREFIXES):
+        return (
+            "title 不能是原始资料/文件路径: "
+            f"{title}。请用 catfish_wiki_ingest 归档原文，或把路径写入 sources。"
+        )
+    return None
+
+
+def _canonical_subtype(kind: str, subtype: str) -> str:
+    """Apply the shared vocabulary aliases when the contract is available."""
+    value = subtype.strip()
+    contract = Path(__file__).resolve().parents[3] / "contracts" / "wiki_type_vocab.json"
+    try:
+        data = json.loads(contract.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return value
+    aliases = data.get("aliases", {})
+    candidate = aliases.get(value, value)
+    allowed = set(data.get("entity_types" if kind == "entity" else "concept_types", ()))
+    return candidate if candidate in allowed else value
 
 
 def _catfish_home() -> Path:
@@ -110,6 +143,38 @@ def _parse_field(fm: str, key: str) -> str | None:
     return None
 
 
+def _split_top_level(value: str) -> list[str]:
+    """按顶层逗号切分，保留 inline map 内的逗号。"""
+    out: list[str] = []
+    depth = 0
+    quote: str | None = None
+    buf: list[str] = []
+    for char in value:
+        if quote:
+            buf.append(char)
+            if char == quote:
+                quote = None
+            continue
+        if char in ('"', "'"):
+            quote = char
+            buf.append(char)
+        elif char in "[{":
+            depth += 1
+            buf.append(char)
+        elif char in "]}":
+            depth = max(0, depth - 1)
+            buf.append(char)
+        elif char == "," and depth == 0:
+            if "".join(buf).strip():
+                out.append("".join(buf).strip())
+            buf = []
+        else:
+            buf.append(char)
+    if "".join(buf).strip():
+        out.append("".join(buf).strip())
+    return out
+
+
 def _parse_list(fm: str, key: str) -> list[str]:
     """对齐 wiki_read.rs:107 parse_list_field。"""
     raw = _parse_field(fm, key)
@@ -117,10 +182,66 @@ def _parse_list(fm: str, key: str) -> list[str]:
         return []
     inner = raw.strip().lstrip("[").rstrip("]")
     out = []
-    for piece in inner.split(","):
+    for piece in _split_top_level(inner):
         v = piece.strip().strip('"').strip("'")
         if v:
             out.append(v)
+    return out
+
+
+def _parse_related(fm: str) -> list[dict[str, str | None]]:
+    """对齐 wiki_read.rs:153 parse_related，兼容旧字符串和 typed map。"""
+    raw = _parse_field(fm, "related")
+    if raw is None:
+        return []
+    inner = raw.strip().lstrip("[").rstrip("]")
+    out: list[dict[str, str | None]] = []
+    for entry in _split_top_level(inner):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if entry.startswith("{") and entry.endswith("}"):
+            values: dict[str, str] = {}
+            for pair in _split_top_level(entry[1:-1]):
+                if ":" not in pair:
+                    continue
+                key, value = pair.split(":", 1)
+                values[key.strip()] = value.strip().strip('"').strip("'")
+            name = values.get("name", "").strip()
+            if name:
+                out.append({"name": name, "rel": values.get("rel") or None})
+            continue
+        name = entry.strip('"').strip("'").removeprefix("[[").strip()
+        name = name.removesuffix("]]").strip()
+        if name:
+            out.append({"name": name, "rel": None})
+    return out
+
+
+def _extract_body_wikilinks(body: str) -> list[dict[str, str | None]]:
+    """对齐 wiki_read.rs:265，把正文 wikilink 作为未标注关系读出。"""
+    out: list[dict[str, str | None]] = []
+    rest = body
+    while "[[" in rest:
+        _, after = rest.split("[[", 1)
+        if "]]" not in after:
+            break
+        inner, rest = after.split("]]", 1)
+        name = inner.split("|", 1)[0].strip()
+        if name and "\n" not in name and len(name) <= 100:
+            out.append({"name": name, "rel": None})
+    return out
+
+
+def _merge_related_with_body(
+    frontmatter_related: list[dict[str, str | None]], body: str
+) -> list[dict[str, str | None]]:
+    out = list(frontmatter_related)
+    names = {str(item["name"]) for item in out}
+    for item in _extract_body_wikilinks(body):
+        if item["name"] not in names:
+            out.append(item)
+            names.add(str(item["name"]))
     return out
 
 
@@ -179,10 +300,77 @@ def _build_file_info(home: Path, path: Path, subdir: str) -> dict[str, Any] | No
         "title": _parse_field(fm, "title") or slug,
         "subtype": _parse_field(fm, "entity_type") or _parse_field(fm, "concept_type"),
         "tags": _parse_list(fm, "tags"),
+        "related": _merge_related_with_body(_parse_related(fm), body),
         "sources": _parse_list(fm, "sources"),
+        "aliases": _parse_list(fm, "aliases"),
+        "ontology_status": _parse_field(fm, "ontology_status") or "active",
         "size_bytes": size_bytes,
         "mtime": stat.st_mtime,
     }
+
+
+def _ontology_status_for_create(
+    home: Path,
+    kind: str,
+    subtype: str,
+    related: list[str | dict[str, Any]],
+) -> tuple[str, list[str]]:
+    """让工具写入与蒸馏写入遵守同一条 pending 规则。"""
+    if kind == "concept" and subtype.strip().lower() == "system" and not related:
+        return "active", []
+    if not related:
+        return "pending", ["missing_relation"]
+    existing = list_wiki_files(limit=100000).get("items", [])
+    reasons: list[str] = []
+    for raw in related:
+        name = _relation_name(raw)
+        if not name:
+            continue
+        matches = [
+            item for item in existing
+            if item["kind"] in ("entity", "concept")
+            and item.get("ontology_status", "active") == "active"
+            and (item["title"].strip().lower() == name.lower()
+            or item["slug"].strip().lower() == name.lower()
+            or any(a.strip().lower() == name.lower() for a in item.get("aliases", [])))
+        ]
+        if len(matches) == 0:
+            reasons.append("unresolved_relation")
+        elif len(matches) > 1:
+            reasons.append("ambiguous_relation")
+    return ("pending", sorted(set(reasons))) if reasons else ("active", [])
+
+
+def _relation_name(value: str | dict[str, Any]) -> str:
+    if isinstance(value, dict):
+        return str(value.get("name", "")).strip().strip('"').strip("'")
+    return str(value).strip().strip('"').strip("'").replace("[[", "").replace("]]", "")
+
+
+def _relation_render(value: str | dict[str, Any]) -> str:
+    name = _relation_name(value).replace('"', "")
+    rel = str(value.get("rel", "")).strip().replace('"', "") if isinstance(value, dict) else ""
+    if rel:
+        return f'{{name: "{name}", rel: "{rel}"}}'
+    return f'"[[{name}]]"'
+
+
+def _upsert_ontology_status(content: str, status: str) -> str:
+    fm, body = _split_frontmatter(content)
+    if not fm:
+        return content
+    line = f"ontology_status: {status}"
+    if any(row.strip().startswith("ontology_status:") for row in fm.splitlines()):
+        new_fm = "\n".join(
+            line if row.strip().startswith("ontology_status:") else row
+            for row in fm.splitlines()
+        )
+    else:
+        rows = fm.splitlines()
+        index = next((i for i, row in enumerate(rows) if row.startswith("type:")), -1)
+        rows.insert(index + 1, line)
+        new_fm = "\n".join(rows)
+    return f"---\n{new_fm}\n---\n{body}"
 
 
 # ─────────────────────────────────────────────────────────────
@@ -333,7 +521,7 @@ def create_wiki_entry(
     body: str,
     subtype: str = "",
     tags: list[str] | None = None,
-    related: list[str] | None = None,
+    related: list[str | dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """建一个 entity/concept —— 写完**立刻**在 TAB 可见 (员工切走再切回即可)。
 
@@ -346,6 +534,12 @@ def create_wiki_entry(
     title = (title or "").strip()
     if not title:
         return {"ok": False, "error": "title 不能空"}
+    if err := _reject_reserved_title(title):
+        return {"ok": False, "error": err}
+    subtype = (subtype or "").strip()
+    if not subtype:
+        return {"ok": False, "error": "subtype 不能空，请选择 entity/concept 的细分类型"}
+    subtype = _canonical_subtype(kind, subtype)
 
     slug = _slugify(title)
     if err := _validate_slug(slug):
@@ -380,38 +574,56 @@ def create_wiki_entry(
     type_field = "entity_type" if kind == "entity" else "concept_type"
     tags_yaml = ", ".join((t or "").replace('"', "") for t in (tags or []) if t)
     related_yaml = ", ".join(
-        f'"[[{(r or "").strip().strip(chr(34)).replace(chr(34), "")}]]"'
+        _relation_render(r)
         for r in (related or [])
-        if r
+        if _relation_name(r)
+    )
+    for relation in related or []:
+        if _reject_reserved_title(_relation_name(relation)):
+            return {
+                "ok": False,
+                "error": "related 不能引用 raw/sources 等原始资料路径，请写入 sources",
+            }
+    aliases_line = "aliases: []\n" if kind == "entity" else ""
+    ontology_status, status_reasons = _ontology_status_for_create(
+        home, kind, subtype, related or []
     )
     content = (
         f"---\n"
         f"type: {kind}\n"
+        f"ontology_status: {ontology_status}\n"
         f"title: {title}\n"
         f"{type_field}: {subtype}\n"
         f"created: {today}\n"
         f"updated: {today}\n"
-        f"tags: [{tags_yaml}]\n"
-        f"related: [{related_yaml}]\n"
-        f"sources: [manual]\n"
-        f"---\n"
-        f"\n"
-        f"# {title}\n"
-        f"\n"
-        f"{body}\n"
+        + aliases_line
+        + f"tags: [{tags_yaml}]\n"
+        + f"related: [{related_yaml}]\n"
+        + f"sources: [manual]\n"
+        + f"---\n"
+        + f"\n"
+        + f"# {title}\n"
+        + f"\n"
+        + f"{body}\n"
     )
     try:
         path.write_text(content, encoding="utf-8")
     except OSError as e:
         return {"ok": False, "error": f"写 {path} 失败: {e}"}
 
-    return {
+    result = {
         "ok": True,
         "rel_path": f"{subdir}/{slug}.md",
         "bytes": len(content.encode("utf-8")),
         "created": True,
         "note": "已写入。员工在知识体系 TAB 切走再切回就能看到 (TAB 挂载时重新扫目录)。",
     }
+    if ontology_status == "pending":
+        result["warning"] = (
+            "条目已写入，但暂列为待确认，不进入关系图："
+            + ",".join(status_reasons)
+        )
+    return result
 
 
 def read_wiki_file(rel_path: str) -> dict[str, Any]:
@@ -457,6 +669,14 @@ def update_wiki_file(rel_path: str, content: str) -> dict[str, Any]:
             "ok": False,
             "error": f"文件不存在: {rel_path} — 建新条目用 catfish_wiki_create",
         }
+    if rel_path.startswith("wiki/entities/") or rel_path.startswith("wiki/concepts/"):
+        fm, _ = _split_frontmatter(content)
+        subtype = _parse_field(fm, "entity_type") or _parse_field(fm, "concept_type") or ""
+        related = _parse_related(fm)
+        status, reasons = _ontology_status_for_create(home, "entity" if rel_path.startswith("wiki/entities/") else "concept", subtype, related)
+        content = _upsert_ontology_status(content, status)
+    else:
+        status, reasons = "active", []
     try:
         abs_path.write_text(content, encoding="utf-8")
     except OSError as e:
@@ -469,6 +689,8 @@ def update_wiki_file(rel_path: str, content: str) -> dict[str, Any]:
         "bytes": size,
         "created": False,
     }
+    if status == "pending":
+        result["warning"] = "条目已保存，但暂列为待确认，不进入关系图：" + ",".join(reasons)
     # 写完顺手告诉调用方它还在不在 TAB 里 —— 覆写成一个 256 字节以内的空壳
     # 会让它变成 tombstone 从列表消失, 这种"写成功了但看不见"必须当场说出来,
     # 那正是 8/3 那一轮的形状。

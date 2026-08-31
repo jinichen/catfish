@@ -23,14 +23,14 @@ import { useEffect } from "react";
 import { fetchBriefingSuggestion, fetchMergedBriefing } from "../lib/briefing";
 
 import {
-  calendarTodayFetch,
+  calendarWeekFetch,
   emailDigestFetch,
-  journalTodosFetch,
+  remindersWeekFetch,
   petEmitBubble,
   petIsVisible,
   sendNotification,
   type CalendarEvent,
-  type JournalTodo,
+  type ReminderTodo,
 } from "../lib/tauri";
 import { useAgentStore } from "../store/agent";
 import { useChatStore } from "../store/chat";
@@ -113,7 +113,7 @@ function nowHHMM(): string {
 
 /** BL-COMPANION-MORNING-PUSH (5/20): 早安播报 starter 拉取.
  *
- * 并发拉 邮件 / 日历 / journal TODO 三源, 喂 LLM 生成播报字符串.
+ * 并发拉邮件、日历和 Reminders 三源，喂 LLM 生成播报字符串。
  * LLM 挂 → rule-based fallback (跟 BriefingCard 同套路). 三源全空 → 返 null skip.
  */
 async function fetchMorningBriefingStarter(): Promise<string | null> {
@@ -122,8 +122,8 @@ async function fetchMorningBriefingStarter(): Promise<string | null> {
 
   const [emailRes, calRes, todoRes] = await Promise.allSettled([
     emailDigestFetch(50),
-    calendarTodayFetch(false),  // 走 5min 缓存, 09:00 用昨晚 fetch 的也行
-    journalTodosFetch(),
+    calendarWeekFetch(false),  // 本自然周（周一至周日）
+    remindersWeekFetch(),
   ]);
 
   const unread = emailRes.status === "fulfilled"
@@ -133,7 +133,7 @@ async function fetchMorningBriefingStarter(): Promise<string | null> {
     ? (() => { try { const a = JSON.parse(calRes.value); return Array.isArray(a) ? (a as CalendarEvent[]) : []; } catch { return []; } })()
     : [];
   const todos = todoRes.status === "fulfilled"
-    ? (() => { try { const a = JSON.parse(todoRes.value); return Array.isArray(a) ? (a as JournalTodo[]) : []; } catch { return []; } })()
+    ? (() => { try { const a = JSON.parse(todoRes.value); return Array.isArray(a) ? (a as ReminderTodo[]) : []; } catch { return []; } })()
     : [];
 
   // 三源都空 → 没必要 push

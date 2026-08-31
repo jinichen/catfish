@@ -236,21 +236,3 @@ export interface IdentityBundle {
 
 export const fetchIdentityBundle = () =>
   rawInvoke<IdentityBundle>("identity_bundle");
-
-/** BL-JOURNAL-TODO-EDIT-CHAT Stage 1 (5/20): journal CRUD 给 LLM tool calling 用.
- * 双重定位 line + text_hint 防误伤 (员工改 journal 后行号偏移). */
-// P3.4.7b (6/15 鸿波): origin 路由 — weekly→current_todos.md, journal→employee_journal.md.
-//   None (老 caller 兼容) → Rust 端双文件试. TodosDetail 应该传 t.origin (P3.4.7a 加).
-export const journalMarkTodoDone = (
-  line: number,
-  textHint: string,
-  origin?: "weekly" | "journal",
-) =>
-  rawInvoke<string>("journal_mark_todo_done", { line, textHint, origin: origin ?? null });
-
-export const journalDeleteTodo = (
-  line: number,
-  textHint: string,
-  origin?: "weekly" | "journal",
-) =>
-  rawInvoke<string>("journal_delete_todo", { line, textHint, origin: origin ?? null });

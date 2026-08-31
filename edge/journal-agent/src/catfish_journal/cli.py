@@ -27,13 +27,6 @@ from . import core
 
 JOURNAL_PATH = Path.home() / ".catfish" / "employee_journal.md"
 
-# P3.4.7b (6/15 鸿波): current_todos.md = 本周待办主源 (鸿波 hermes MEMORY 写过的设计,
-#   "每周日 reset, 过周未完成自动带入新一周, 已完成清掉"). 跟 Rust journal.rs:current_todos_path
-#   同模式. cmd_add --origin 路由用. cmd_list/done/delete/sync 暂仍走 employee_journal.md
-#   (向后兼容老 catfish-todo-sync plugin + hermes skill 调用), 双源 list 下次重构.
-CURRENT_TODOS_PATH = Path.home() / ".catfish" / "current_todos.md"
-
-
 def _read_journal() -> str:
     """读 journal 全文, 没文件返空字符串."""
     if not JOURNAL_PATH.exists():
@@ -279,18 +272,9 @@ def cmd_archive(args: argparse.Namespace) -> int:
 
 
 def cmd_add(args: argparse.Namespace) -> int:
-    # P3.4.7b (6/15 鸿波): 路由 — 跟 Rust journal.rs:journal_add_todo 同优先级.
-    #   显式 --origin > 隐式 (section 给了→journal, 否则→weekly) > 默认 weekly.
-    if args.origin == "journal":
-        target_path = JOURNAL_PATH
-    elif args.origin == "weekly":
-        target_path = CURRENT_TODOS_PATH
-    elif args.section and args.section.strip():
-        # section 概念在流水帐 ## 日期段 才有意义 → journal
-        target_path = JOURNAL_PATH
-    else:
-        target_path = CURRENT_TODOS_PATH  # 默认本周待办
-
+    # 8/31: 用户待办统一到 Reminders.app；journal CLI 只维护员工流水帐，
+    # 不再写 ~/.catfish/current_todos.md。
+    target_path = JOURNAL_PATH
     content = _read_file_safe(target_path)
     try:
         new_content = core.add_todo(
@@ -380,22 +364,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_add.add_argument(
         "--section",
         default=None,
-        help="所属段标题 (默认追加到文末; 给定则插到该段尾). "
-             "P3.4.7b: section 给了隐式走 employee_journal.md (流水帐), 否则 current_todos.md (本周).",
+        help="所属段标题 (默认追加到 employee_journal.md 文末; 给定则插到该段尾).",
     )
     p_add.add_argument(
         "--done",
         action="store_true",
         help="加 `- [x]` 已完成行 (历史记录场景, BL-CATFISH-TODO-SYNC v0.1.9 用), 默认 `- [ ]`",
-    )
-    # P3.4.7b (6/15 鸿波): origin 路由跟 Rust journal.rs 同步 — weekly→current_todos.md,
-    #   journal→employee_journal.md. 默认: section 给了→journal, 否则→weekly.
-    p_add.add_argument(
-        "--origin",
-        choices=["weekly", "journal"],
-        default=None,
-        help="目标文件: weekly→current_todos.md (本周待办), journal→employee_journal.md "
-             "(流水帐). 默认: section 给了→journal, 否则→weekly. 跟 Rust journal_add_todo 路由对齐.",
     )
     p_add.set_defaults(func=cmd_add)
 

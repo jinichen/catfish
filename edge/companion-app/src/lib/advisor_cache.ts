@@ -8,16 +8,41 @@
 
 import { invoke as rawInvoke } from "@tauri-apps/api/core";
 import type { AdvisorResult } from "./briefing_advisor";
+import type { AdvisorInput } from "./briefing_advisor_common";
+
+/** 缓存格式版本。旧缓存没有来源指纹，不能再作为当前任务依据。 */
+export const ADVISOR_CACHE_SCHEMA_VERSION = 2;
+/** 提示词/来源边界变更时递增，避免旧模型输出跨规则复用。 */
+export const ADVISOR_CACHE_INPUT_VERSION = "current-week-sources-v2";
+
+export interface AdvisorCacheSourceMeta {
+  schemaVersion: number;
+  inputVersion: string;
+  inputFingerprint: string;
+  windowStart: string;
+  windowEnd: string;
+  sourceCounts: {
+    emails: number;
+    events: number;
+    todos: number;
+  };
+}
 
 export interface AdvisorCache {
   computedAt: string;          // ISO-8601
   result: AdvisorResult;
   model?: string;
   promptTokens?: number;
+  /** 当前输入快照。没有这些字段的旧 cache 只允许被清理，不允许复用。 */
+  sourceMeta?: AdvisorCacheSourceMeta;
   /** P3.3.12 (6/10): task chat summary cache, key=taskUid.
    *  jsonl size 没变就复用 — 没有新消息进 chat, summary 还是有效的. */
   taskChatSummaries?: Record<string, TaskChatSummary>;
 }
+
+// ── BL-ADVISOR-TASK-STATE (5/22 鸿波): done/snoozed/ignored ─────
+
+export type TaskStatus = "done" | "ignored" | "snoozed";
 
 /** P3.5.202 (C 方案 7/9 鸿波): LLM 判定员工在这条 task 的最新状态.
  *  用于 filterResolvedTasks 语义判 drop 而非 hardcode regex 关键字.
@@ -26,6 +51,13 @@ export interface AdvisorCache {
  *   - pending: 球在员工手里, 继续跟进
  */
 export type TaskChatStatus = "resolved" | "paused" | "pending";
+
+/** 员工显式重新打开任务时的手工状态。
+ *
+ * 仅用于 advisor cache，不是旧 advisor_task_state 后端命令支持的状态。
+ * 它让“撤销完成”可以覆盖仍然保留在聊天摘要里的 resolved 判断。
+ */
+export type ManualTaskStatus = TaskStatus | "pending";
 
 /** P3.3.12: 单条 task chat 的 LLM summary cache 项. */
 export interface TaskChatSummary {
@@ -48,7 +80,7 @@ export interface TaskChatSummary {
    *  跟 chatStatus 各存各的, 违 SSOT. 合到这里 (key=taskUid) 作**同一份存储**,
    *  跟 status (LLM 推断) 各占一字段, 读取时 mergeTaskStatus 判 effective.
    *  老 taskState.json 保留作 legacy fallback + migration source, 双写过渡期. */
-  manualStatus?: TaskStatus;
+  manualStatus?: ManualTaskStatus;
   /** ISO-8601, manualStatus 设置的时刻. */
   manualStatusTs?: string;
 }
@@ -67,12 +99,87 @@ export const advisorCacheSave = (cache: AdvisorCache) =>
 export const advisorCacheClear = () =>
   rawInvoke<void>("advisor_cache_clear");
 
+function normalizeForFingerprint(value: unknown): string {
+  return String(value ?? "").trim().normalize("NFKC").toLowerCase();
+}
+
+function naturalWeekWindow(now = new Date()): { start: string; end: string } {
+  const start = new Date(now);
+  const day = start.getDay();
+  const daysFromMonday = day === 0 ? 6 : day - 1;
+  start.setDate(start.getDate() - daysFromMonday);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 7);
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+
+function hashFingerprint(text: string): string {
+  // FNV-1a: 足够用于本地缓存失效判断，不承担密码学用途。
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+/** 构造与数组顺序无关的当前输入指纹。 */
+export function advisorCacheSourceMeta(input: AdvisorInput, now = new Date()): AdvisorCacheSourceMeta {
+  const window = naturalWeekWindow(now);
+  const emails = input.emails
+    .map((email) => [email.id, email.date, email.subject, email.sender, email.is_read])
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  const events = input.events
+    .map((event) => [event.start, event.end, event.summary, event.calendar, event.location ?? ""])
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  const todos = input.todos
+    .map((todo) => [todo.reminder_id ?? "", todo.due_date_iso ?? "", todo.text, todo.section, todo.priority ?? 0])
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  const activeContext = {
+    workplan: normalizeForFingerprint(input.ctx.workplan),
+    projects: normalizeForFingerprint(input.ctx.projects),
+    wikiRelevant: normalizeForFingerprint(input.wikiRelevant),
+  };
+  const payload = JSON.stringify({
+    version: ADVISOR_CACHE_INPUT_VERSION,
+    model: normalizeForFingerprint(input.model),
+    window,
+    emails,
+    events,
+    todos,
+    activeContext,
+  });
+  return {
+    schemaVersion: ADVISOR_CACHE_SCHEMA_VERSION,
+    inputVersion: ADVISOR_CACHE_INPUT_VERSION,
+    inputFingerprint: hashFingerprint(payload),
+    windowStart: window.start,
+    windowEnd: window.end,
+    sourceCounts: {
+      emails: input.emails.length,
+      events: input.events.length,
+      todos: input.todos.length,
+    },
+  };
+}
+
+/** 缓存是否对应当前数据快照；旧 cache 明确判无效。 */
+export function advisorCacheMatchesInput(
+  cache: AdvisorCache | null,
+  input: AdvisorInput,
+): boolean {
+  if (!cache?.sourceMeta) return false;
+  const expected = advisorCacheSourceMeta(input);
+  return cache.sourceMeta.schemaVersion === expected.schemaVersion
+    && cache.sourceMeta.inputVersion === expected.inputVersion
+    && cache.sourceMeta.inputFingerprint === expected.inputFingerprint
+    && cache.sourceMeta.windowStart === expected.windowStart
+    && cache.sourceMeta.windowEnd === expected.windowEnd;
+}
+
 export const advisorConfigGet = () =>
   rawInvoke<AdvisorConfig>("advisor_config_get");
-
-// ── BL-ADVISOR-TASK-STATE (5/22 鸿波): done/snoozed/ignored ─────
-
-export type TaskStatus = "done" | "ignored" | "snoozed";
 
 export interface TaskStateEntry {
   status: TaskStatus;
@@ -107,10 +214,11 @@ export const advisorTaskStateClear = (taskTitle: string) =>
 export type EffectiveTaskStatus = "resolved" | "paused" | "pending";
 
 export function mergeTaskStatus(
-  taskState: TaskStatus | undefined,
+  taskState: ManualTaskStatus | undefined,
   chatStatus: TaskChatStatus | undefined,
 ): EffectiveTaskStatus {
   // taskState 显式优先
+  if (taskState === "pending") return "pending";
   if (taskState === "done" || taskState === "ignored") return "resolved";
   if (taskState === "snoozed") return "paused";
   // 再看 chatStatus
@@ -156,36 +264,40 @@ export function getManualStatusByUid(
   const sums = cache?.taskChatSummaries;
   if (!sums) return m;
   for (const [uid, s] of Object.entries(sums)) {
-    if (s?.manualStatus) m.set(uid, s.manualStatus);
+    if (s?.manualStatus && s.manualStatus !== "pending") {
+      m.set(uid, s.manualStatus);
+    }
   }
   return m;
 }
 
 /** P3.5.208-A: 员工卡片按钮点 → 写 manualStatus 到 taskChatSummaries.
  *  内部 load-modify-save, race 概率极低 (员工点按钮频率 < 1/s + P3.4.C
- *  atomic write). null = 清除 manualStatus (撤销).
+ *  atomic write). null = 员工显式重新打开，写入 pending 覆盖 chatStatus.
  *
- *  P39 (5/22 SSOT 收敛): 删双写老 taskState.json 兼容. 老 taskState 后端
- *    仍在, AdvisorView migration useEffect 一次性搬运到 taskChatSummaries,
- *    7d 自然 prune 老文件. taskTitle 参数保签名兼容, 内部不再用.
+ *  P39 (5/22 SSOT 收敛): 新状态保存在 advisor cache；旧 taskState 仅在撤销
+ *    时清理残留，避免历史迁移数据重新覆盖“重新打开”状态。
  */
 export async function setTaskManualStatus(
   taskUid: string,
   taskTitle: string,
   status: TaskStatus | null,
 ): Promise<void> {
-  // P39: 双写老 taskState.json 层删. taskTitle 保签名兼容 (老 caller 不改).
-  // TS unused-vars 用 void 表达式吸掉 lint 警告.
-  void taskTitle;
+  // 新状态写入 cache SSOT。旧 taskState 只在撤销时清理残留，防止迁移/旧
+  // filter 把已经撤销的 done 又搬回来。
+  if (status === null) {
+    await advisorTaskStateClear(taskTitle).catch((e) => {
+      console.warn("[P3.5.208-A setTaskManualStatus] 清理旧 taskState 失败:", e);
+    });
+  }
 
   // 主写 taskChatSummaries[uid].manualStatus (SSOT)
   const cache = await advisorCacheGet();
   if (!cache) {
     console.warn(
-      "[P3.5.208-A setTaskManualStatus] 无 advisorCache, manualStatus 只存到 " +
-        "老 taskState. 下次 advisor refresh 后 cache 会补上.",
+      "[P3.5.208-A setTaskManualStatus] 无 advisorCache, 无法保存手工状态.",
     );
-    return;
+    throw new Error("advisorCache 不存在，无法保存手工状态");
   }
   const sums: Record<string, TaskChatSummary> = cache.taskChatSummaries ?? {};
   const entry = sums[taskUid] ?? {
@@ -194,8 +306,10 @@ export async function setTaskManualStatus(
     computedAt: new Date().toISOString(),
   };
   if (status === null) {
-    delete entry.manualStatus;
-    delete entry.manualStatusTs;
+    // 不能简单 delete：chat summary 仍可能是 resolved，删除后撤销按钮
+    // 看起来无效。pending 是员工对 chat 判定的明确覆盖。
+    entry.manualStatus = "pending";
+    entry.manualStatusTs = new Date().toISOString();
   } else {
     entry.manualStatus = status;
     entry.manualStatusTs = new Date().toISOString();

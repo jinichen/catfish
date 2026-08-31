@@ -4,7 +4,7 @@
  * (我的画像 / 服务 / 配额 / 设置), 早安播报偏"今日要事" (邮件 / 日历 / 工作计划).
  *
  * tab 容器 = BriefingCard 居中 + max-width 控制 + padding. 卡片样式保留.
- * 等 step2-5 接入 (calendar / journal TODO / LLM rank) 后再考虑做"展开版" 布局.
+ * 日历 / Reminders / LLM rank 接入后再考虑做"展开版"布局。
  */
 
 import BriefingCard from "../Dashboard/BriefingCard";

@@ -13,7 +13,9 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   advisorCacheGet,
+  advisorCacheMatchesInput,
   advisorCacheSave,
+  advisorCacheSourceMeta,
   advisorConfigGet,
   advisorTaskStateGet,
   advisorTaskStatePruneOld,
@@ -35,18 +37,15 @@ import {
   fetchBriefingAdvisor,
   type AdvisorResult,
 } from "../../lib/briefing_advisor";
-import { isAdvisorResultCacheSafe } from "../../lib/briefing_advisor_quality";
+import { isAdvisorResultGrounded } from "../../lib/briefing_advisor_quality";
 import { ensureRecomputed, type Profile } from "../../lib/profile";
 import {
-  briefingContextFetch,
-  calendarTodayFetch,
-  emailDigestFetch,
-  journalTodosFetch,
   type BriefingContext,
   type CalendarEvent,
   type EmailDigestItem,
-  type JournalTodo,
+  type ReminderTodo,
 } from "../../lib/tauri";
+import { fetchBriefingSources } from "../../lib/briefing_sources";
 import { useChatStore } from "../../store/chat";
 import { useEmailStore } from "../../store/email";
 
@@ -177,12 +176,6 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
   // P3.3.12.1 (6/10): mount / refresh 时后台 ensure 每条 mainTask 的 task chat
   //   summary 是最新的 (jsonl size 没变跳, 变了重跑 LLM 写 cache). 跟 advisor
   //   主 LLM call 解耦 — cache 命中场景也能更新 summary. 异步不阻塞 UI.
-  useEffect(() => {
-    void ensureTaskChatSummariesFresh(model).catch((e) => {
-      console.warn("[AdvisorView] ensure summary 异常 (不阻塞 UI):", e);
-    });
-  }, [refreshKey, model]);
-
   // 5/22 时段触发: 拉 yaml 配置 (refresh_times + cache_max_age_minutes)
   useEffect(() => {
     void advisorConfigGet().then(setConfig).catch(() => {
@@ -198,28 +191,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
 
     void (async () => {
       try {
-        // ─── 1. cache 优先 (非手动刷新时) ───
-        if (!isManualRefresh && config) {
-          const cached = await advisorCacheGet();
-          if (cancelled) return;
-          if (
-            cached
-            && isCacheFresh(cached, config.cacheMaxAgeMinutes)
-            && isAdvisorResultCacheSafe(cached.result)
-          ) {
-            console.log("[advisor] cache 命中, 跳过 LLM 调用",
-              { ageMin: cacheAgeMinutes(cached).toFixed(1) });
-            setResult(cached.result);
-            setPhase("cache_hit");
-            // profile 也读一下让 UI 显示 (ConfidenceHint)
-            const { profileGet } = await import("../../lib/profile");
-            const p = await profileGet();
-            if (!cancelled && p) setProfile(p);
-            return;
-          }
-        }
-
-        // ─── 2. profile — 同步等 recompute (in-flight 锁防 StrictMode 双调) ───
+        // ─── 1. profile — 同步等 recompute (in-flight 锁防 StrictMode 双调) ───
         setPhase("profile_loading");
         setPhaseStartedAt(Date.now());
         const p = await ensureRecomputed(model, isManualRefresh);
@@ -238,15 +210,10 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
         }
         setProfile(p);
 
-        // ─── 3. 并发拉数据 ───
+        // ─── 2. 并发拉数据 ───
         setPhase("data_loading");
         setPhaseStartedAt(Date.now());
-        const [emailRes, eventsRes, todosRes, ctx] = await Promise.allSettled([
-          emailDigestFetch(50),
-          calendarTodayFetch(false),
-          journalTodosFetch(),
-          briefingContextFetch(),
-        ]);
+        const [emailRes, eventsRes, todosRes, ctx] = await fetchBriefingSources();
         if (cancelled) return;
 
         // P3.4.4 (6/15 鸿波): 用 parseJsonListWithDiagnosis 保留每个 source
@@ -255,7 +222,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
         //   :451 那段精彩"仅添加访问权限...必须 Cmd+Q 重启" 文案推不到 UI.
         const emailDiag = parseJsonListWithDiagnosis<EmailDigestItem>(emailRes);
         const eventsDiag = parseJsonListWithDiagnosis<CalendarEvent>(eventsRes);
-        const todosDiag = parseJsonListWithDiagnosis<JournalTodo>(todosRes);
+        const todosDiag = parseJsonListWithDiagnosis<ReminderTodo>(todosRes);
         const ctxValue =
           ctx.status === "fulfilled" ? ctx.value as BriefingContext : emptyCtx();
 
@@ -290,22 +257,56 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
           events: events.length,
           todos: todos.length,
         });
-        // 拉 stale cache 让 cancel button 有内容可显 (有 cache 才显按钮).
-        void advisorCacheGet().then((c) => {
-          if (!cancelled) {
-            setStaleCache(c && isAdvisorResultCacheSafe(c.result) ? c : null);
-          }
-        });
-        const r = await fetchBriefingAdvisor({
+
+        // ─── 3. 只有拿到当前数据后才能判断 cache 是否可用 ───
+        // 旧逻辑先读 cache、后拉数据，导致过期缓存可以直接短路当前数据采集。
+        // 现在要求来源指纹、自然周、模型和输入边界全部一致；旧 cache 没有
+        // sourceMeta 时一律失效。
+        const currentInput = {
           profile: p,
           emails,
           events,
           todos,
           ctx: ctxValue,
           urgencyMap,
-          // sessionGoal 5/26 删 — hermes 0.14 原生 /goal 替代
           model,
+        };
+        const cached = await advisorCacheGet();
+        if (cancelled) return;
+        if (
+          !isManualRefresh
+          && config
+          && cached
+          && advisorCacheMatchesInput(cached, currentInput)
+          && isCacheFresh(cached, config.cacheMaxAgeMinutes)
+          && isAdvisorResultGrounded(cached.result, currentInput)
+        ) {
+          console.log("[advisor] 当前输入 cache 命中, 跳过 LLM 调用", {
+            ageMin: cacheAgeMinutes(cached).toFixed(1),
+          });
+          setResult(cached.result);
+          setPhase("cache_hit");
+          void ensureTaskChatSummariesFresh(
+            model,
+            new Set(cached.result.mainTasks.map((task) => task.taskUid)),
+          ).catch((e) => {
+            console.warn("[AdvisorView] cache 命中后的 summary 刷新失败:", e);
+          });
+          return;
+        }
+        // 拉 stale cache 让 cancel button 有内容可显 (有 cache 才显按钮).
+        void Promise.resolve(cached).then((c) => {
+          if (!cancelled) {
+            setStaleCache(
+              c
+              && advisorCacheMatchesInput(c, currentInput)
+              && isAdvisorResultGrounded(c.result, currentInput)
+                ? c
+                : null,
+            );
+          }
         });
+        const r = await fetchBriefingAdvisor(currentInput);
         if (cancelled) return;
 
         // 5/22 上游拥堵 fallback: 客户端 timeout → 拉 stale cache 撑场面 (即使过期).
@@ -316,7 +317,11 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
           console.warn("[advisor] 客户端 timeout, 走 stale cache fallback");
           const stale = await advisorCacheGet();
           if (cancelled) return;
-          if (stale && isAdvisorResultCacheSafe(stale.result)) {
+          if (
+            stale
+            && advisorCacheMatchesInput(stale, currentInput)
+            && isAdvisorResultGrounded(stale.result, currentInput)
+          ) {
             setResult(stale.result);
             // 8/8 鸿波 catch「这是公网模型, 怎么回事」: 原文案硬编码
             //   "公司内网模型响应慢 (>5min)" —— 两处都是错的:
@@ -348,7 +353,11 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
         if (r === null) {
           const stale = await advisorCacheGet();
           if (cancelled) return;
-          if (stale && isAdvisorResultCacheSafe(stale.result)) {
+          if (
+            stale
+            && advisorCacheMatchesInput(stale, currentInput)
+            && isAdvisorResultGrounded(stale.result, currentInput)
+          ) {
             setResult(stale.result);
             setStaleNotice(
               `⚠️ 模型 ${model} 本次没有形成可靠业务结论，显示上次有效结果。`,
@@ -365,10 +374,20 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
 
         // ─── 5. 写 cache (briefing_advisor 后台也会写一份, 这里走 happy path) ───
         if (r) {
+          // 不要用一个没有 summaries 的新对象覆盖刚由 task-chat 刷新的状态。
+          // 只保留本轮仍存在的 taskUid，避免历史摘要无限累积。
+          const latestCache = await advisorCacheGet().catch(() => null);
+          const currentTaskUids = new Set(r.mainTasks.map((task) => task.taskUid));
+          const taskChatSummaries = Object.fromEntries(
+            Object.entries(latestCache?.taskChatSummaries ?? {})
+              .filter(([taskUid]) => currentTaskUids.has(taskUid)),
+          );
           const newCache: AdvisorCache = {
             computedAt: new Date().toISOString(),
             result: r,
             model,
+            sourceMeta: advisorCacheSourceMeta(currentInput),
+            taskChatSummaries,
           };
           await advisorCacheSave(newCache).catch((e) =>
             console.warn("[advisor] cache 写入失败 (不影响显示):", e),
@@ -569,7 +588,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
             taskState={taskState}
             effectiveStatusByUid={effectiveStatusByUid}
             wasSnoozedYesterday={(title) => taskState.yesterdaySnoozed.includes(title)}
-            onStatusChange={(title, newStatus) => {
+            onStatusChange={(taskUid, title, newStatus) => {
               // 切状态后本地立刻反映 (不等下次 refresh)
               setTaskState((prev) => {
                 const today = { ...prev.today };
@@ -582,6 +601,23 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
                   };
                 }
                 return { ...prev, today };
+              });
+              // DetailPane 的写入已经完成；同步 SSOT 派生映射，避免必须
+              // 刷新页面才看到撤销结果。pending override 在这里表现为 pending。
+              setEffectiveStatusByUid((prev) => {
+                const next = new Map(prev);
+                if (newStatus === null) {
+                  next.delete(taskUid);
+                } else {
+                  next.set(taskUid, newStatus === "snoozed" ? "paused" : "resolved");
+                }
+                return next;
+              });
+              setManualStatusByUid((prev) => {
+                const next = new Map(prev);
+                if (newStatus === null) next.delete(taskUid);
+                else next.set(taskUid, newStatus);
+                return next;
               });
             }}
           />

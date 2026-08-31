@@ -7,9 +7,10 @@
  *   - 流式输出中, sidebar 切换 / 新建按钮禁用 (避免条件竞争)
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useChat } from "../../hooks/useChat";
 import { useChatStore } from "../../store/chat";
+import { useUIStore } from "../../store/ui";
 import { useCatalog } from "../../hooks/useCatalog";
 import { getSession, sessionGetTaskUid } from "../../lib/tauri";
 import * as streamRegistry from "../../lib/streamRegistry";
@@ -51,6 +52,51 @@ export default function ChatTab() {
     // P3.5.20.1 (6/17): steer 砍 — 整链退役.
     reset,
   } = useChat(defaultModel);
+
+  const pendingEmailChat = useUIStore((s) => s.pendingEmailChat);
+  const consumeEmailChat = useUIStore((s) => s.consumeEmailChat);
+  const setActiveEmailChatId = useUIStore((s) => s.setActiveEmailChatId);
+  const autoSentEmailRequest = useRef<string | null>(null);
+
+  /**
+   * 邮件交接必须走 useChat.send(): 它负责创建 session、持久化 user message、
+   * tool calls 和 assistant response。旧的 UI store 主动消息路径只追加 assistant,
+   * 并在另一个异步分支创建 session, 这会让模型根本没有收到“请处理这封邮件”的请求。
+   *
+   * 等模型和当前流都准备好后再消费 action。reset 只清空当前 Companion 视图并
+   * 开新 session, 不会删除旧 session, 这样邮件上下文不会混入上一段聊天。
+   */
+  useEffect(() => {
+    if (!pendingEmailChat || !model || isStreaming) return;
+    if (autoSentEmailRequest.current === pendingEmailChat.requestId) return;
+
+    const action = consumeEmailChat();
+    if (!action) return;
+    autoSentEmailRequest.current = action.requestId;
+    setActiveEmailChatId(action.emailId);
+
+    void (async () => {
+      reset();
+      try {
+        await send(action.prompt);
+      } catch (error) {
+        console.warn("[catfish chat] 邮件交接发送失败:", error);
+      } finally {
+        // 不要清掉另一个随后排队并已启动的邮件请求的状态。
+        if (useUIStore.getState().activeEmailChatId === action.emailId) {
+          setActiveEmailChatId(null);
+        }
+      }
+    })();
+  }, [
+    pendingEmailChat,
+    model,
+    isStreaming,
+    consumeEmailChat,
+    setActiveEmailChatId,
+    reset,
+    send,
+  ]);
 
   const persistedSessionId = useChatStore((s) => s.persistedSessionId);
   const loadSession = useChatStore((s) => s.loadSession);

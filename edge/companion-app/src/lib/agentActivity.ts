@@ -154,14 +154,9 @@ export function describeTurn(turn: AgentTurnActivity | null): string {
   if (turn.current_tool) parts.push(`正在用 ${translateTool(turn.current_tool)}`);
   const desc = translateActivityDescription(turn.last_activity_description);
   if (desc && !turn.current_tool) parts.push(desc);
-  if (typeof turn.api_call_count === "number" && turn.api_call_count > 0) {
-    const max = turn.max_iterations;
-    parts.push(
-      typeof max === "number" && max > 0
-        ? `第 ${turn.api_call_count}/${max} 轮`
-        : `第 ${turn.api_call_count} 轮`,
-    );
-  }
+  // api_call_count / max_iterations 是 Hermes 的内部观测和安全上限，不是
+  // 用户可理解的完成进度；“第 1/90 轮”首轮长时间不变时尤其像卡死。
+  // 用户只需要真实活动描述（模型输出 / 工具名）和 idle 提示。
   const idle = turn.seconds_since_activity;
   if (typeof idle === "number" && idle >= 30) {
     parts.push(`已 ${Math.round(idle)} 秒没动静`);

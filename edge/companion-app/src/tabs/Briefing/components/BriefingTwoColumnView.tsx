@@ -64,8 +64,9 @@ interface BriefingTwoColumnViewProps {
    *  或 chatStatusByUid raw 值 — 保证读取语义单调, 单一 source. */
   effectiveStatusByUid?: Map<string, EffectiveTaskStatus>;
   wasSnoozedYesterday: (title: string) => boolean;
-  onStatusChange: (taskTitle: string, status: TaskStatus | null) => void;
+  onStatusChange: (taskUid: string, taskTitle: string, status: TaskStatus | null) => void;
 }
+
 
 type UrgencyGroup = "high" | "medium" | "low";
 
@@ -225,7 +226,7 @@ export default function BriefingTwoColumnView({
                 && taskState.today[selected.title]?.status == null
             }
             wasSnoozedYesterday={wasSnoozedYesterday(selected.title)}
-            onStatusChange={(s) => onStatusChange(selected.title, s)}
+            onStatusChange={(s) => onStatusChange(selected.taskUid, selected.title, s)}
           />
         ) : (
           <div className="briefing-2col__detail-empty">选个待办看详情</div>
@@ -234,4 +235,3 @@ export default function BriefingTwoColumnView({
     </div>
   );
 }
-

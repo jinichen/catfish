@@ -13,6 +13,7 @@ node-embed.tar.gz
 chromium-embed.tar.gz
 # 7/30 新增: catfish-email 的 wheel 包, 同样由打包脚本生成
 catfish-email-dist.tar.gz
+catfish-wechat-reader-dist.tar.gz
 # 8/5 新增: jieba / playwright 的 wheel (要跟内嵌 cpython 3.11.15 的 ABI 对齐,
 # 所以只能在 [5.5/6] 段、下载完 cpython 之后用那个解释器去 pip download)
 hermes-deps-dist.tar.gz

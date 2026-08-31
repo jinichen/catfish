@@ -293,16 +293,114 @@ Write-Host "`n[Step 8/11] Pack hermes-agent bundle..." -ForegroundColor Yellow
 $hermesTarOut = "$PWD\edge\companion-app\src-tauri\resources\windows\hermes-agent-bundle.tar.gz"
 Push-Location $env:TEMP
 try {
-    tar czhf $hermesTarOut `
-        --exclude=hermes-agent-src/.git `
-        --exclude=hermes-agent-src/venv `
-        --exclude=hermes-agent-src/venv.bak `
-        --exclude=hermes-agent-src/.venv `
-        --exclude=hermes-agent-src/target `
-        hermes-agent-src
+    # Companion 只需要 Hermes 的 Python gateway/tool/plugin 运行链路。
+    # 裁剪只作用于 tar 输入, 不修改 $hermesDir, 避免污染下次构建缓存。
+    # agent-browser 是运行时依赖, 只保留 Windows x64 原生二进制。
+    $bundleExcludes = @(
+        'hermes-agent-src/.git',
+        'hermes-agent-src/venv',
+        'hermes-agent-src/venv.bak',
+        'hermes-agent-src/.venv',
+        'hermes-agent-src/target',
+        'hermes-agent-src/apps/desktop',
+        'hermes-agent-src/node_modules/electron',
+        'hermes-agent-src/node_modules/node-pty',
+        'hermes-agent-src/node_modules/emojibase-data',
+        'hermes-agent-src/node_modules/hermes',
+        'hermes-agent-src/node_modules/mermaid',
+        'hermes-agent-src/node_modules/@mermaid-js',
+        'hermes-agent-src/node_modules/@tabler',
+        'hermes-agent-src/node_modules/@icons-pack',
+        'hermes-agent-src/node_modules/lucide-react',
+        'hermes-agent-src/node_modules/three',
+        'hermes-agent-src/node_modules/three-stdlib',
+        'hermes-agent-src/node_modules/electron-winstaller',
+        'hermes-agent-src/node_modules/typescript',
+        'hermes-agent-src/node_modules/@rolldown',
+        'hermes-agent-src/node_modules/@tauri-apps',
+        'hermes-agent-src/node_modules/react-native-*',
+        'hermes-agent-src/node_modules/@types',
+        'hermes-agent-src/node_modules/agent-browser/bin/agent-browser-darwin-arm64',
+        'hermes-agent-src/node_modules/agent-browser/bin/agent-browser-darwin-x64',
+        'hermes-agent-src/node_modules/agent-browser/bin/agent-browser-linux-arm64',
+        'hermes-agent-src/node_modules/agent-browser/bin/agent-browser-linux-musl-arm64',
+        'hermes-agent-src/node_modules/agent-browser/bin/agent-browser-linux-musl-x64',
+        'hermes-agent-src/node_modules/agent-browser/bin/agent-browser-linux-x64',
+        'hermes-agent-src/website',
+        'hermes-agent-src/tests',
+        'hermes-agent-src/tests-js',
+        'hermes-agent-src/.github'
+    )
+    $tarArgs = @('czhf', $hermesTarOut)
+    $tarArgs += @($bundleExcludes | ForEach-Object { "--exclude=$($_)" })
+    $tarArgs += 'hermes-agent-src'
+    & tar.exe @tarArgs
     if ($LASTEXITCODE -ne 0) { throw "hermes-agent tar failed" }
 } finally { Pop-Location }
 Write-Host "  OK hermes-agent-bundle.tar.gz: $([math]::Round((Get-Item $hermesTarOut).Length/1MB,1)) MB" -ForegroundColor Green
+
+# 归档校验：防止 exclude 写错后悄悄把开发/跨平台文件重新打进去。
+$archiveList = @(tar.exe tzf $hermesTarOut)
+if ($LASTEXITCODE -ne 0) { throw "无法读取 hermes-agent-bundle.tar.gz" }
+$forbiddenArchivePaths = @(
+    'hermes-agent-src/.git/',
+    'hermes-agent-src/venv/',
+    'hermes-agent-src/target/',
+    'hermes-agent-src/apps/desktop/',
+    'hermes-agent-src/node_modules/electron/',
+    'hermes-agent-src/node_modules/node-pty/',
+    'hermes-agent-src/node_modules/emojibase-data/',
+    'hermes-agent-src/node_modules/hermes/',
+    'hermes-agent-src/node_modules/mermaid/',
+    'hermes-agent-src/node_modules/@mermaid-js/',
+    'hermes-agent-src/node_modules/@tabler/',
+    'hermes-agent-src/node_modules/@icons-pack/',
+    'hermes-agent-src/node_modules/lucide-react/',
+    'hermes-agent-src/node_modules/three/',
+    'hermes-agent-src/node_modules/three-stdlib/',
+    'hermes-agent-src/node_modules/electron-winstaller/',
+    'hermes-agent-src/node_modules/typescript/',
+    'hermes-agent-src/node_modules/@rolldown/',
+    'hermes-agent-src/node_modules/@tauri-apps/',
+    'hermes-agent-src/node_modules/@types/',
+    'hermes-agent-src/website/',
+    'hermes-agent-src/tests/',
+    'hermes-agent-src/tests-js/',
+    'hermes-agent-src/.github/'
+)
+foreach ($forbidden in $forbiddenArchivePaths) {
+    if ($archiveList | Where-Object { $_ -like "$forbidden*" }) {
+        throw "Hermes 归档包含被排除路径: $forbidden"
+    }
+}
+$requiredArchivePaths = @(
+    'hermes-agent-src/node_modules/agent-browser/bin/agent-browser.js',
+    'hermes-agent-src/node_modules/agent-browser/bin/agent-browser-win32-x64.exe'
+)
+foreach ($required in $requiredArchivePaths) {
+    if (-not ($archiveList | Where-Object { $_ -eq $required })) {
+        throw "Hermes 归档缺少运行时文件: $required"
+    }
+}
+$foreignAgentBins = @(
+    'agent-browser-darwin-arm64',
+    'agent-browser-darwin-x64',
+    'agent-browser-linux-arm64',
+    'agent-browser-linux-musl-arm64',
+    'agent-browser-linux-musl-x64',
+    'agent-browser-linux-x64'
+)
+foreach ($foreign in $foreignAgentBins) {
+    $foreignPath = "hermes-agent-src/node_modules/agent-browser/bin/$foreign"
+    if ($archiveList | Where-Object { $_ -eq $foreignPath }) {
+        throw "Hermes 归档包含非 Windows agent-browser 二进制: $foreign"
+    }
+}
+Write-Host "  OK Hermes runtime 裁剪校验通过 · $($archiveList.Count) 个归档条目" -ForegroundColor Green
+
+# Build the safe chat export reader wheel that the MSI post-install action installs offline.
+& "$scriptDir\build-wechat-reader-resource.ps1"
+if ($LASTEXITCODE -ne 0) { throw "catfish-wechat-reader resource build failed" }
 
 # ─── Step 9 · Mac placeholder ──────────────────────────────
 

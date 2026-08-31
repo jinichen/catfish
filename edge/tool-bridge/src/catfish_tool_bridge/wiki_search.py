@@ -111,6 +111,16 @@ def _discover_all_paths() -> list[tuple[Path, str]]:
 
 _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
 
+# 历史/失效条目仍保留在 wiki 中供旧链接解析，但不能作为当前事实参与
+# 默认检索。需要看历史时，应通过 wiki_read 打开明确的 rel_path。
+_NON_CURRENT_STATUSES = frozenset({
+    "expired",
+    "historical",
+    "archived",
+    "superseded",
+    "inactive",
+})
+
 
 def _parse_frontmatter_field(fm: str, key: str) -> str | None:
     """简单 YAML 字段抽 (跟 wiki_read.rs:78 parse_frontmatter_field 风格一致)."""
@@ -123,7 +133,11 @@ def _parse_frontmatter_field(fm: str, key: str) -> str | None:
 
 
 def _parse_wiki(path: Path, source: str) -> dict[str, Any] | None:
-    """读 wiki MD, 解 frontmatter (title/type) + head 2KB body."""
+    """读一份当前有效 wiki MD, 解 frontmatter + head 2KB body.
+
+    deprecated/status 是生命周期字段，不影响 wiki_resolve 对历史链接的解析，
+    但必须阻止旧事实进入默认回答检索。
+    """
     try:
         raw = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
@@ -136,6 +150,10 @@ def _parse_wiki(path: Path, source: str) -> dict[str, Any] | None:
     m = _FRONTMATTER_RE.match(raw)
     if m:
         fm = m.group(1)
+        deprecated = (_parse_frontmatter_field(fm, "deprecated") or "").lower()
+        status = (_parse_frontmatter_field(fm, "status") or "").lower()
+        if deprecated in {"true", "yes", "1"} or status in _NON_CURRENT_STATUSES:
+            return None
         title = _parse_frontmatter_field(fm, "title") or title
         kind = _parse_frontmatter_field(fm, "type") or kind
         body = raw[m.end():]

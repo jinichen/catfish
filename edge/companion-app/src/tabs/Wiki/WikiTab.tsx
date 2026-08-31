@@ -10,25 +10,41 @@
  *         filter (搜索 / tag / type) / graph (build from wikilink edges)
  */
 
-import WikiTree from "./WikiTree";
+import { useState } from "react";
+import { ShareNetwork } from "@phosphor-icons/react";
 import WikiPreview from "./WikiPreview";
 import WikiGraph from "./WikiGraph";
+import WikiOrganizer, { type WikiWorkspaceMode } from "./WikiOrganizer";
+import WikiRelationshipWorkbench from "./WikiRelationshipWorkbench";
 
 export default function WikiTab() {
+  const [mode, setMode] = useState<WikiWorkspaceMode>("organize");
+  const [graphVisible, setGraphVisible] = useState(true);
   // E4 (6/6 taste-skill 改造): 走 className `.wikitab*` (见 globals.css).
   // 老版 3 列 1px hairline border → bg shift (elevated/cream/elevated) + 内
   // box-shadow subtle 边界, 减视觉噪声, 跟 brand 墨青 hue tinted.
   return (
-    <div className="wikitab">
+    <div className={`wikitab${graphVisible ? "" : " wikitab--graph-hidden"}`}>
       <aside className="wikitab__pane-tree">
-        <WikiTree />
+        <WikiOrganizer mode={mode} onModeChange={setMode} />
       </aside>
       <main className="wikitab__pane-preview">
-        <WikiPreview />
+        {!graphVisible && (
+          <button
+            type="button"
+            className="wikitab__graph-reopen"
+            onClick={() => setGraphVisible(true)}
+          >
+            <ShareNetwork size={18} aria-hidden="true" />查看关联图谱
+          </button>
+        )}
+        {mode === "organize" ? <WikiRelationshipWorkbench /> : <WikiPreview />}
       </main>
-      <aside className="wikitab__pane-graph">
-        <WikiGraph />
-      </aside>
+      {graphVisible && (
+        <aside className="wikitab__pane-graph">
+          <WikiGraph onCollapse={() => setGraphVisible(false)} />
+        </aside>
+      )}
     </div>
   );
 }

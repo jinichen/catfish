@@ -109,18 +109,114 @@ def test_create_then_visible_immediately(tmp_path, monkeypatch):
     assert "中电系资质对标对齐矩阵" in titles, listed
 
 
+def test_create_without_relation_is_pending(tmp_path, monkeypatch):
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
+    result = wiki_files.create_wiki_entry("entity", "待确认实体", "正文", subtype="org")
+    assert result["ok"] and result["warning"]
+    content = (tmp_path / result["rel_path"]).read_text(encoding="utf-8")
+    assert "ontology_status: pending" in content
+
+
+def test_create_system_without_parent_is_active(tmp_path, monkeypatch):
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
+    result = wiki_files.create_wiki_entry("concept", "顶级体系", "正文", subtype="system")
+    assert result["ok"] and "warning" not in result
+    content = (tmp_path / result["rel_path"]).read_text(encoding="utf-8")
+    assert "ontology_status: active" in content
+
+
+def test_related_parser_keeps_typed_relation_shape():
+    frontmatter = "related: [{name: 中电福富, rel: 同一实体}, \"[[资质体系]]\"]"
+    assert wiki_files._parse_related(frontmatter) == [
+        {"name": "中电福富", "rel": "同一实体"},
+        {"name": "资质体系", "rel": None},
+    ]
+
+
+def test_list_merges_body_links_like_companion(tmp_path, monkeypatch):
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
+    path = tmp_path / "wiki/entities/正文关系.md"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "---\ntype: entity\ntitle: 正文关系\nrelated: [{name: 已有节点, rel: 依据}]\n---\n\n正文 [[正文节点]]",
+        encoding="utf-8",
+    )
+    item = wiki_files.list_wiki_files(limit=10)["items"][0]
+    assert item["related"] == [
+        {"name": "已有节点", "rel": "依据"},
+        {"name": "正文节点", "rel": None},
+    ]
+
+
+def test_create_typed_relation_is_active_only_for_active_target(tmp_path, monkeypatch):
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
+    root = wiki_files.create_wiki_entry("concept", "根体系", "正文", subtype="system")
+    assert root["ok"], root
+    created = wiki_files.create_wiki_entry(
+        "entity",
+        "受管对象",
+        "正文",
+        subtype="org",
+        related=[{"name": "根体系", "rel": "隶属"}],
+    )
+    assert created["ok"] and "warning" not in created, created
+    pending = wiki_files.create_wiki_entry(
+        "entity",
+        "悬空对象",
+        "正文",
+        subtype="org",
+        related=[{"name": "不存在的节点", "rel": "隶属"}],
+    )
+    assert pending["ok"] and "unresolved_relation" in pending["warning"], pending
+
+
 def test_create_rejects_equivalent_duplicate(tmp_path, monkeypatch):
     """防 8/3 实际发生过的事: 同一份内容躺成两个文件。"""
     monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
-    assert wiki_files.create_wiki_entry("entity", "中电系 资质", "a")["ok"]
-    dup = wiki_files.create_wiki_entry("entity", "中电系资质", "b")
+    assert wiki_files.create_wiki_entry("entity", "中电系 资质", "a", subtype="org")["ok"]
+    dup = wiki_files.create_wiki_entry("entity", "中电系资质", "b", subtype="org")
     assert not dup["ok"]
     assert "等价条目已存在" in dup["error"], dup
 
 
+def test_create_rejects_source_path_pseudo_concept(tmp_path, monkeypatch):
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
+    result = wiki_files.create_wiki_entry(
+        "concept", "raw/sources/组织架构.md", "原始资料", subtype="system"
+    )
+    assert not result["ok"]
+    assert "原始资料/文件路径" in result["error"]
+
+
+def test_create_normalizes_type_and_adds_entity_aliases(tmp_path, monkeypatch):
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
+    result = wiki_files.create_wiki_entry(
+        "entity", "一个部门", "部门正文", subtype="部门"
+    )
+    assert result["ok"], result
+    content = (tmp_path / result["rel_path"]).read_text(encoding="utf-8")
+    assert "entity_type: department" in content
+    assert "aliases: []" in content
+
+
+def test_create_rejects_source_path_relation(tmp_path, monkeypatch):
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
+    result = wiki_files.create_wiki_entry(
+        "entity",
+        "一个实体",
+        "正文",
+        subtype="org",
+        related=["raw/sources/原始材料"],
+    )
+    assert not result["ok"]
+    assert "sources" in result["error"]
+
+
 def test_read_reports_tab_visibility(tmp_path, monkeypatch):
     monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
-    wiki_files.create_wiki_entry("entity", "可见的", "正文足够长, 不会被当墓碑。")
+    wiki_files.create_wiki_entry(
+        "entity", "可见的", "正文足够长, 不会被当墓碑。", subtype="doc"
+    )
     got = wiki_files.read_wiki_file("wiki/entities/可见的.md")
     assert got["ok"] and got["visible_in_tab"], got
 
@@ -132,7 +228,7 @@ def test_update_warns_when_it_becomes_invisible(tmp_path, monkeypatch):
     自己发现再来问一遍。
     """
     monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
-    wiki_files.create_wiki_entry("entity", "待清空", "原本有内容。")
+    wiki_files.create_wiki_entry("entity", "待清空", "原本有内容。", subtype="doc")
     r = wiki_files.update_wiki_file("wiki/entities/待清空.md", "\n")
     assert r["ok"]
     assert r["visible_in_tab"] is False

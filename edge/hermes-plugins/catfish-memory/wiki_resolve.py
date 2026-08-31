@@ -74,6 +74,8 @@ class WikiNode:
     #: prefetch 的 wiki 清单会跳过废弃条目 (员工机器上 261 个里有 30 个是
     #: 废弃的, 之前连同正主一起注进去, 既费 token 又让 LLM 在两份之间犹豫)。
     deprecated: bool = False
+    #: ontology_status 缺失的历史条目按 active 兼容；其它未知状态不进图。
+    ontology_status: str = "active"
 
 
 @dataclass
@@ -84,12 +86,20 @@ class ResolveResult:
     candidates: list[WikiNode] = field(default_factory=list)
 
 
-def resolve_wiki_ref(name: str, nodes: list[WikiNode]) -> ResolveResult:
+def resolve_wiki_ref(
+    name: str, nodes: list[WikiNode], *, active_only: bool = False
+) -> ResolveResult:
     """精确优先, 别名是写下来的事实, 子串只在唯一命中时才认。
 
     **结果不依赖 nodes 的顺序** —— 这是跟老实现最大的区别, 也是那个
     "图长什么样取决于哪个文件最近被改过" 的根源。
     """
+    if active_only:
+        nodes = [
+            node
+            for node in nodes
+            if not node.deprecated and node.ontology_status in ("", "active")
+        ]
     n = _norm(name)
     if not n:
         return ResolveResult("miss")
@@ -197,6 +207,7 @@ def load_nodes(catfish_home: Path, *, head_bytes: int | None = None) -> list[Wik
                     title=_field(fm, "title").strip("\"'") or p.stem,
                     aliases=_list_field(fm, "aliases"),
                     deprecated=_field(fm, "deprecated").strip().lower() == "true",
+                    ontology_status=_field(fm, "ontology_status").strip().lower() or "active",
                 )
             )
     return out

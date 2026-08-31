@@ -1,4 +1,4 @@
-/** 早安播报 — 日历详情区 (今日 + 未来 7 天) — 抽自 BriefingCard.tsx (5/20 拆分).
+/** 早安播报 — 日历详情区 (今日 + 本自然周) — 抽自 BriefingCard.tsx (5/20 拆分).
  *
  * v2 (5/20 BL-COMPANION-BRIEFING-V2 sub-step 1.3): 单条日程点击展开, 显完整
  * ISO duration + 完整 location + calendar 全名 + 参会人 + 描述 (JXA e.attendees
@@ -203,7 +203,7 @@ export function WeekEventsDetailSection({
           marginBottom: 6,
         }}
       >
-        🗓️ 未来 7 天 · {futureEvents.length} 件
+        🗓️ 本周其他日程 · {futureEvents.length} 件
       </summary>
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
         {Array.from(groups.entries()).map(([day, events]) => (

@@ -16,63 +16,55 @@
  */
 
 import { useEffect, useRef, useMemo, useState } from "react";
+import {
+  ArrowsOut,
+  CaretRight,
+  CornersIn,
+  CornersOut,
+  Plus,
+  ShareNetwork,
+} from "@phosphor-icons/react";
 import Graph from "graphology";
 import Sigma from "sigma";
 import { random } from "graphology-layout";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import { useWikiStore } from "../../store/wiki";
-import { resolveWikiRefOrNull } from "../../lib/wikiResolve";
 import type { WikiFileInfo } from "../../lib/tauri";
+import {
+  buildWikiGraphModel,
+  buildWikiGraphOverview,
+  collectEgoPaths,
+  DEFAULT_GRAPH_NEIGHBOR_LIMIT,
+  GRAPH_NEIGHBOR_STEP,
+  limitWikiGraphPaths,
+} from "./wikiGraphModel";
 
 // E5: brand 一致 3 色 (tokens.css 没暴露 hex 给 JS, 这里 mirror).
 // 跟 .wiki-kind-badge--<kind> 视觉一致.
 const COLOR = {
   entity: "#0E5F66",   // 墨青 (catfish-cyan)
-  concept: "#F47B3D",  // 暖橙 (catfish-orange)
+  concept: "#4E8185",  // 柔和灰青，暖橙只留给待确认/异常
   query: "#6B8589",    // 灰青 (low-saturation, muted)
 };
 const COLOR_SELECTED = "#1A8A95"; // cyan-bright (替 #ff3366 粉红)
 
-export default function WikiGraph() {
+export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sigmaRef = useRef<Sigma | null>(null);
   const files = useWikiStore((s) => s.files);
+  const graphFiles = useMemo(
+    () => files.filter((file) => (file.ontology_status ?? "active") === "active"),
+    [files],
+  );
   const selectedPath = useWikiStore((s) => s.selectedPath);
   const selectFile = useWikiStore((s) => s.selectFile);
+  const graphModel = useMemo(() => buildWikiGraphModel(graphFiles), [graphFiles]);
+  const [neighborLimit, setNeighborLimit] = useState(DEFAULT_GRAPH_NEIGHBOR_LIMIT);
+  const [expanded, setExpanded] = useState(false);
   // P3.5.111/112 (6/25 鸿波): 虚拟体系name.
   // 鸿波点 dangling 体系 → setVirtualSystem(name) → WikiGraph 虚拟显子树.
   // P3.5.112 优先级反: virtualSystemName > selectedPath — 点子项保留虚拟态.
   const virtualSystemName = useWikiStore((s) => s.virtualSystemName);
-
-  // P3.5.107 B (6/25): ego-graph filter — 子图过滤
-  // P3.5.108 (6/25 鸿波 "选体系看全图, 概念看子图"): 真扩 3 档 viewMode:
-  //   - "auto" (默认/新加): 自动跟选中类型 — 选体系 → 体系子树 (B 方案 2 层 BFS),
-  //     选子级 concept / entity / query → 1-hop ego, 不选 → 全图
-  //   - "full": 强制全图 (鸿波手动覆盖路径, 跟 P3.5.107 B 真同)
-  //   - "ego":  强制 1-hop 子图 (鸿波手动覆盖, 跟 P3.5.107 B 真同)
-  // localStorage 老值 "ego" / "full" 真兼容 (不丢用户原配置), 新默认 "auto".
-  type ViewMode = "auto" | "full" | "ego";
-  const [viewMode, setViewMode] = useState<ViewMode>(() => {
-    try {
-      const v = localStorage.getItem("wiki_graph_view_mode");
-      if (v === "ego" || v === "full" || v === "auto") return v;
-      return "auto"; // P3.5.108 新默认
-    } catch {
-      return "auto";
-    }
-  });
-  const cycleViewMode = () => {
-    // P3.5.108: 3 态循环 auto → full → ego → auto
-    setViewMode((m) => {
-      const next: ViewMode = m === "auto" ? "full" : m === "full" ? "ego" : "auto";
-      try {
-        localStorage.setItem("wiki_graph_view_mode", next);
-      } catch {
-        /* ignore */
-      }
-      return next;
-    });
-  };
 
   // P3.5.108: 顶级体系判定 — kind=concept + (subtype="system" 优先, 或 title 含"体系"二字 fallback).
   //
@@ -90,8 +82,8 @@ export default function WikiGraph() {
 
   // P3.5.108: effectiveMode 真算 — auto 模式自动跟选中类型决定子图样式
   const selectedFile = useMemo(
-    () => files.find((f) => f.rel_path === selectedPath),
-    [files, selectedPath],
+    () => graphFiles.find((f) => f.rel_path === selectedPath),
+    [graphFiles, selectedPath],
   );
 
   // P3.5.111/112: effectiveRoot 抽象真实 file root vs 虚拟体系 root.
@@ -108,69 +100,51 @@ export default function WikiGraph() {
       return { title: virtualSystemName, rel_path: null };
     }
     if (selectedPath) {
-      const f = files.find((x) => x.rel_path === selectedPath);
+      const f = graphFiles.find((x) => x.rel_path === selectedPath);
       return f ? { title: f.title, rel_path: f.rel_path } : null;
     }
     return null;
-  }, [virtualSystemName, selectedPath, files]);
+  }, [virtualSystemName, selectedPath, graphFiles]);
 
   // effectiveMode 真实生效真 mode: "full" / "ego" / "subtree" (B 方案体系子树)
   const effectiveMode: "full" | "ego" | "subtree" = useMemo(() => {
-    if (viewMode === "full") return "full";
-    if (viewMode === "ego") return effectiveRoot ? "ego" : "full"; // ego 真无选中 fallback full
-    // viewMode === "auto"
-    if (!effectiveRoot) return "full";
-    // P3.5.111: 虚拟体系 (无 rel_path) 强制 subtree — 鸿波想看整片体系图
+    if (expanded) return "full";
+    if (!effectiveRoot) return "ego";
     if (effectiveRoot.rel_path === null) return "subtree";
     if (isSystemConcept(selectedFile)) return "subtree";
     return "ego";
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewMode, effectiveRoot, selectedFile]);
+  }, [expanded, effectiveRoot, selectedFile]);
 
   // P3.5.108/111: deps key 真精准 — full mode 真不依赖 selected (避免 sigma rebuild).
   // P3.5.111: 虚拟体系真 egoKey 含 virtualSystemName 虚拟切换也 rebuild.
   const egoKey =
     effectiveMode === "full" ? "" : selectedPath || virtualSystemName || "";
 
-  // build graphology graph from files + related wikilinks
-  const graph = useMemo(() => {
+  useEffect(() => {
+    setNeighborLimit(DEFAULT_GRAPH_NEIGHBOR_LIMIT);
+  }, [egoKey]);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setExpanded(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [expanded]);
+
+  // build graphology graph from the memoized relationship index
+  const graphState = useMemo(() => {
     const g = new Graph({ multi: false, type: "directed" });
 
-    // P3.5.107 B: ego mode 真子集 — 先算 1-hop neighborhood set, 只 add 这些 node.
-    //
-    // 8/4: 原来这里和下面 findTarget 是两份几乎一样的拷贝, 第三档
-    // `title.includes(name)` + `files.find()` 取第一个, 而 files 是按 mtime
-    // 倒序的 —— 「中电福富」的 97 条边指向 org 还是那张同名证书, 取决于哪个
-    // 文件最近被改过。统一走 resolveWikiRef, 歧义时不猜。
-    const findTargetForFilter = (name: string): WikiFileInfo | null =>
-      resolveWikiRefOrNull(name, files);
-
     let nodeFilter: Set<string> | null = null;
-    // P3.5.111: ego 仅真实 selectedPath 才走 (虚拟体系走 subtree, 不走 ego)
     if (effectiveMode === "ego" && selectedPath) {
-      // 1-hop ego: selected + 直接邻居 (out related + in 反向 related)
-      const ego = new Set<string>([selectedPath]);
-      const selFile = files.find((f) => f.rel_path === selectedPath);
-      // out-edges: selected 自己的 related
-      if (selFile) {
-        for (const r of selFile.related) {
-          // P3.5.132 #5: r 真 RelatedRef
-          const target = findTargetForFilter(r.name);
-          if (target) ego.add(target.rel_path);
-        }
-      }
-      // in-edges: 谁的 related 真包含 selected (反向扫所有 file)
-      for (const f of files) {
-        if (f.rel_path === selectedPath) continue;
-        for (const r of f.related) {
-          const target = findTargetForFilter(r.name);
-          if (target && target.rel_path === selectedPath) {
-            ego.add(f.rel_path);
-            break;
-          }
-        }
-      }
-      nodeFilter = ego;
+      nodeFilter = collectEgoPaths(graphModel, selectedPath);
+    } else if (effectiveMode === "ego") {
+      // 强制子图但尚未选择节点时不能退回全图，否则界面显示“子图”却把
+      // 所有节点一起画出来，用户会误以为本体突然出现了大量孤立项。
+      nodeFilter = new Set();
     } else if (effectiveMode === "subtree" && effectiveRoot) {
       // P3.5.108 B 方案 + P3.5.111 虚拟体系支持: 体系子树严格 2 层 BFS 下挖
       // (体系 → 子 concept → entity). 不 follow 其他 edge — 避免跨体系泄漏.
@@ -182,7 +156,7 @@ export default function WikiGraph() {
       const rootTitle = effectiveRoot.title.trim().toLowerCase();
       // 第 1 层: 找所有 concept 真 related[0] 指向 root (上位体系是 root)
       const layer1ConceptTitles = new Set<string>();
-      for (const f of files) {
+      for (const f of graphFiles) {
         if (f.kind !== "concept") continue;
         if (effectiveRoot.rel_path && f.rel_path === effectiveRoot.rel_path) continue;
         // P3.5.132 #5: related[0] 真 RelatedRef, 取 .name
@@ -193,7 +167,7 @@ export default function WikiGraph() {
         }
       }
       // 第 2 层: 找所有 entity 真 related[0] 指向第 1 层任意 concept
-      for (const f of files) {
+      for (const f of graphFiles) {
         if (f.kind !== "entity") continue;
         const parent = (f.related[0]?.name || "").trim().toLowerCase();
         if (layer1ConceptTitles.has(parent)) {
@@ -201,7 +175,7 @@ export default function WikiGraph() {
         }
       }
       // 兜底: 有 entity 直接指向 root 体系 (跨级关联), 也算
-      for (const f of files) {
+      for (const f of graphFiles) {
         if (f.kind !== "entity") continue;
         if (subtree.has(f.rel_path)) continue;
         const parent = (f.related[0]?.name || "").trim().toLowerCase();
@@ -211,11 +185,20 @@ export default function WikiGraph() {
       }
       nodeFilter = subtree;
     }
-    // effectiveMode === "full" — nodeFilter 真 null, 真全 build (现行为)
+    const candidatePaths = nodeFilter ?? new Set(graphModel.fileByPath.keys());
+    const availableNodeCount = candidatePaths.size;
+    const visiblePaths = effectiveMode === "full"
+      ? new Set(candidatePaths)
+      : limitWikiGraphPaths(
+          graphModel,
+          candidatePaths,
+          effectiveRoot?.rel_path ?? selectedPath,
+          neighborLimit,
+        );
 
-    // 1. node — 每 file 1 node (size 4-8 范围, 跟 Obsidian 一致小巧)
-    for (const f of files) {
-      if (nodeFilter && !nodeFilter.has(f.rel_path)) continue;
+    for (const path of visiblePaths) {
+      const f = graphModel.fileByPath.get(path);
+      if (!f) continue;
       const color = COLOR[f.kind] || "#888";
       g.addNode(f.rel_path, {
         label: f.title,
@@ -226,42 +209,24 @@ export default function WikiGraph() {
       });
     }
 
-    // 2. edge — frontmatter.related `[[name]]` 抽 → 找 target 真 rel_path
-    //    8/4: 统一走 resolveWikiRef (见 lib/wikiResolve.ts 顶部注释)
-    function findTarget(name: string): WikiFileInfo | null {
-      return resolveWikiRefOrNull(name, files);
+    for (const relation of graphModel.relations) {
+      if (!visiblePaths.has(relation.sourcePath) || !visiblePaths.has(relation.targetPath)) continue;
+      const edgeKey = `${relation.sourcePath}→${relation.targetPath}`;
+      if (g.hasEdge(edgeKey)) continue;
+      g.addEdgeWithKey(edgeKey, relation.sourcePath, relation.targetPath, {
+        size: 1,
+        color: "rgba(120, 120, 120, 0.6)",
+        rel: relation.relation,
+      });
     }
 
-    for (const f of files) {
-      if (nodeFilter && !nodeFilter.has(f.rel_path)) continue;
-      for (const r of f.related) {
-        // P3.5.132 #5: r 真 RelatedRef
-        const target = findTarget(r.name);
-        if (!target) continue; // dangling, skip
-        if (target.rel_path === f.rel_path) continue; // self-link
-        if (nodeFilter && !nodeFilter.has(target.rel_path)) continue; // ego 只内部 edge
-        // edge key `<src>→<dst>` 防重复
-        const edgeKey = `${f.rel_path}→${target.rel_path}`;
-        if (g.hasEdge(edgeKey)) continue;
-        try {
-          // P3.5.132 #5: edge attribute 真带 rel, hover tooltip 显示
-          g.addEdgeWithKey(edgeKey, f.rel_path, target.rel_path, {
-            size: 1,
-            color: "rgba(120, 120, 120, 0.6)",
-            rel: r.rel ?? null,
-          });
-        } catch {
-          /* duplicate / silent skip */
-        }
-      }
-    }
-
-    // P3.5.42.12 砍 (基于错假设): 我以为 subtype = concept name, 实际 LLM prompt
-    // 写的是 enum (person/org/system/cert/project), findTarget('cert') 永远找不
-    // 到同名 concept (concepts 是中文具体名), 那段 implicit edge 路径根本没生效.
-    // 真因在 wiki_read.rs: parse_related 只读 frontmatter, 不扫 body 的 wikilink.
-    // LLM 实际把"信息安全与安防类"这种 concept name 写在 entity body 里成
-    // `[[...]]` 形态. P3.5.42.13 修后端扫 body 合并进 related, 这边自动有 edge.
+    // 关系图只展示真正参与关系的节点。孤立条目仍保留在左侧知识库树中，
+    // 但不应在关系图里伪装成一条“关系”。
+    const isolatedNodes: string[] = [];
+    g.forEachNode((node) => {
+      if (g.degree(node) === 0) isolatedNodes.push(node);
+    });
+    for (const node of isolatedNodes) g.dropNode(node);
 
     // 3. size by degree — hub 略大但保紧凑 (4-8 范围, Obsidian 风格)
     g.forEachNode((node) => {
@@ -289,10 +254,14 @@ export default function WikiGraph() {
       });
     }
 
-    return g;
-    // P3.5.108: deps effectiveMode + egoKey — full mode 切 selectedPath 真不 rebuild
-    // (egoKey 真在 full 时空字串, 不变), ego/subtree mode 切 selectedPath 真 rebuild
-  }, [files, effectiveMode, egoKey]);
+    return {
+      graph: g,
+      availableNodeCount: effectiveMode === "full" ? g.order : availableNodeCount,
+      visiblePaths: new Set(g.nodes()),
+    };
+  }, [effectiveMode, effectiveRoot, graphFiles, graphModel, neighborLimit, selectedPath]);
+
+  const { graph, availableNodeCount, visiblePaths } = graphState;
 
   // sigma 初始化 + update真
   useEffect(() => {
@@ -314,7 +283,9 @@ export default function WikiGraph() {
 
     const sigma = new Sigma(graph, containerRef.current, {
       renderEdgeLabels: false,
-      labelRenderedSizeThreshold: 1,
+      // 默认一跳图只给中心和较重要邻居常驻标签；其余节点 hover 仍显示。
+      // 全量图不再出现 200 个标签叠成一团。
+      labelRenderedSizeThreshold: 4.6,
       labelFont: "ui-sans-serif, -apple-system, sans-serif",
       labelSize: 12,
       labelWeight: "500",
@@ -382,99 +353,113 @@ export default function WikiGraph() {
     sigma.refresh();
   }, [selectedPath]);
 
-  if (files.length === 0) {
-    return (
-      <div className="wiki-graph__empty">
-        <div className="wiki-graph__empty-icon">○</div>
-        <div>wiki/ 暂无图谱</div>
-      </div>
-    );
-  }
-
-  // P3.5.108: 真显当前节点数 + 真生效 mode 提示 (auto 显推断真子标签)
-  // P3.5.112 (6/25 鸿波 catch "不要橙色提示混乱"): modeLabel 不再区分虚拟/真实 — 视觉一致
+  const hasGraph = graph.order > 0;
   const visibleNodeCount = graph.order;
-  const modeLabel = (() => {
-    if (viewMode === "full") return { icon: "🌐", text: "全图", tip: "强制全图: 显示全部 wiki 节点 (点切到 🔍 子图)" };
-    if (viewMode === "ego") return { icon: "🔍", text: "子图", tip: "强制子图: 1-hop 邻居 (点切回 ✨ 自动)" };
-    // auto 显子标签 — P3.5.112: 虚拟态跟真实态视觉一致, 不区分
-    if (effectiveMode === "subtree") return { icon: "✨", text: "自动·体系", tip: "自动: 选中体系真显子树 (点切到 🌐 强制全图)" };
-    if (effectiveMode === "ego") return { icon: "✨", text: "自动·子图", tip: "自动: 选中概念/实体真显 1-hop (点切到 🌐 强制全图)" };
-    return { icon: "✨", text: "自动·全图", tip: "自动: 未选中真显全图 (点切到 🌐 强制全图)" };
-  })();
-  // ego 真但没选中真 fallback full — 提示用户先在左边点
-  const isManualEgoButNoSelection = viewMode === "ego" && !selectedPath && !virtualSystemName;
+  const overviewItems = useMemo(
+    () => buildWikiGraphOverview(graphModel, selectedPath, visiblePaths),
+    [graphModel, selectedPath, visiblePaths],
+  );
+  const canShowMore = effectiveMode !== "full" && visibleNodeCount < availableNodeCount;
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+    <div className={`wiki-graph${expanded ? " wiki-graph--expanded" : ""}`}>
       <div className="wiki-graph__header">
-        <span>
-          关系图谱 · {visibleNodeCount} 节点
-        </span>
-        {/* P3.5.108 (6/25 鸿波 "选体系看全图, 概念看子图"): 真 3 态 toggle */}
-        <button
-          type="button"
-          onClick={cycleViewMode}
-          title={modeLabel.tip}
-          style={{
-            fontSize: 11,
-            padding: "2px 8px",
-            marginLeft: 6,
-            border: "1px solid var(--catfish-border)",
-            borderRadius: 10,
-            background:
-              viewMode === "auto"
-                ? "var(--catfish-bg-elevated, rgba(0,0,0,0.03))"
-                : viewMode === "ego"
-                ? "var(--catfish-cyan, #0E5F66)"
-                : "var(--catfish-orange, #F47B3D)",
-            color:
-              viewMode === "auto" ? "var(--catfish-text)" : "#fff",
-            cursor: "pointer",
-            fontWeight: 500,
-          }}
-        >
-          {modeLabel.icon} {modeLabel.text}
-        </button>
-        <span className="wiki-graph__legend">
-          <span>
-            <span
-              className="wiki-graph__legend-dot"
-              style={{ background: COLOR.entity }}
-            />
-            实体
-          </span>
-          <span>
-            <span
-              className="wiki-graph__legend-dot"
-              style={{ background: COLOR.concept }}
-            />
-            概念
-          </span>
-          <span>
-            <span
-              className="wiki-graph__legend-dot"
-              style={{ background: COLOR.query }}
-            />
-            查询
-          </span>
-        </span>
+        <div className="wiki-graph__heading">
+          <ShareNetwork size={21} aria-hidden="true" />
+          <strong>关联图谱</strong>
+          {hasGraph && (
+            <span>
+              {visibleNodeCount < availableNodeCount
+                ? `${visibleNodeCount} / ${availableNodeCount}`
+                : `${visibleNodeCount} 个节点`}
+            </span>
+          )}
+        </div>
+        <div className="wiki-graph__controls">
+          {hasGraph && (
+            <>
+            <button
+              type="button"
+              onClick={() => setExpanded((current) => !current)}
+              aria-label={expanded ? "退出全屏图谱" : "打开完整图谱"}
+              title={expanded ? "退出全屏图谱" : "打开完整图谱"}
+            >
+              {expanded
+                ? <CornersIn size={18} aria-hidden="true" />
+                : <CornersOut size={18} aria-hidden="true" />}
+            </button>
+            </>
+          )}
+          {onCollapse && !expanded && (
+            <button type="button" onClick={onCollapse} aria-label="收起图谱" title="收起图谱">
+              <CaretRight size={18} aria-hidden="true" />
+            </button>
+          )}
+        </div>
       </div>
-      {isManualEgoButNoSelection && (
-        <div
-          style={{
-            padding: "6px 12px",
-            fontSize: 11,
-            color: "var(--catfish-text-muted)",
-            background: "var(--catfish-bg-elevated, rgba(0,0,0,0.03))",
-            borderBottom: "1px solid var(--catfish-border-soft, rgba(0,0,0,0.05))",
-          }}
-        >
-          💡 强制子图 — 在左边点一个体系/概念/实体, 拓扑只显它和邻居 (或切回 ✨ 自动)
+      <div className="wiki-graph__stage">
+        {/* 这个节点必须永久稳定：Sigma 会直接管理它的 canvas 子节点。
+            不能让 React 在空图/有图之间把它复用成带 React children 的空状态。 */}
+        <div className="wiki-graph__canvas" ref={containerRef} />
+        {hasGraph && (
+          <button
+            type="button"
+            className="wiki-graph__fit"
+            onClick={() => sigmaRef.current?.getCamera().animatedReset({ duration: 250 })}
+            aria-label="适应画布"
+            title="适应画布"
+          >
+            <ArrowsOut size={18} aria-hidden="true" />
+          </button>
+        )}
+        {hasGraph && canShowMore && (
+          <button
+            type="button"
+            className="wiki-graph__more"
+            onClick={() => setNeighborLimit((current) => current + GRAPH_NEIGHBOR_STEP)}
+          >
+            <Plus size={17} aria-hidden="true" />再显示 20 个
+          </button>
+        )}
+        {!hasGraph && (
+          <div className="wiki-graph__empty">
+            <ShareNetwork size={38} weight="duotone" aria-hidden="true" />
+            <strong>
+              {graphFiles.length === 0
+                ? "暂无已确认关系"
+                : selectedPath
+                  ? "这项知识还没有已确认关系"
+                  : "选择一项知识查看关系"}
+            </strong>
+            <span>
+              {graphFiles.length === 0
+                ? "完成左侧关系确认后，图谱会自动出现在这里。"
+                : selectedPath
+                  ? "可以回到关系整理，为它补充一条关键关系。"
+                  : "选择一项知识后，这里会优先显示最重要的关联。"}
+            </span>
+          </div>
+        )}
+      </div>
+      {hasGraph && (
+        <div className="wiki-graph__overview">
+          <div className="wiki-graph__overview-title">
+            <span>关联概览</span>
+            {canShowMore && <small>优先显示重要关系</small>}
+          </div>
+          {overviewItems.length > 0 ? overviewItems.map((item) => (
+            <button type="button" key={item.targetPath} onClick={() => void selectFile(item.targetPath)}>
+              <span>{item.relation}</span><strong>{item.title}</strong>
+            </button>
+          )) : (
+            <div className="wiki-graph__overview-empty">这项知识还没有已确认关系。</div>
+          )}
+          <div className="wiki-graph__legend">
+            <span><span className="wiki-graph__legend-dot" style={{ background: COLOR.entity }} />对象</span>
+            <span><span className="wiki-graph__legend-dot" style={{ background: COLOR.concept }} />主题</span>
+            <span><span className="wiki-graph__legend-dot" style={{ background: COLOR.query }} />记录</span>
+          </div>
         </div>
       )}
-      {/* P3.5.112 (6/25 鸿波 catch "不要橙色提示混乱"): 砍掉 P3.5.111 真橙色虚拟体系提示条.
-          鸿波**真想建立**体系走左上 "+新建" 按钮 已经够了, header 不需要重复入口. */}
-      <div ref={containerRef} style={{ flex: 1, background: "var(--catfish-bg)" }} />
     </div>
   );
 }

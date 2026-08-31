@@ -16,7 +16,7 @@
 //!
 //! step1 (5/20 上午): 当日 events 列表 (summary / start / end / location 可选)
 //! step2 (5/20 下午): 5 分钟内存缓存减少 osascript 调用. force_refresh 参数 bypass.
-//! step3 (5/20 下午, 本提交): calendar_week_fetch 跨日 7 天. 复用 osascript path, 独立缓存.
+//! step3 (5/20 下午, 本提交): calendar_week_fetch 本自然周. 复用 osascript path, 独立缓存.
 //! step4 (后续): Swift FFI EventKit binding (osascript 仍 ~2-5s, 太慢)
 
 use std::process::Command;
@@ -138,15 +138,17 @@ out.sort((a, b) => a.start.localeCompare(b.start));
 JSON.stringify(out);
 "#;
 
-/// BL-CALENDAR-WEEK (5/20): 跨日 7 天 events JXA 脚本.
-/// 跟 JXA_TODAY_EVENTS 区别: tomorrow 改 +7 days, 多带 1 天 (从今天 0 点开始).
+/// BL-CALENDAR-WEEK (5/20): 本自然周（周一 0 点至下周一 0 点）events JXA 脚本.
 const JXA_WEEK_EVENTS: &str = r#"
 const Calendar = Application("Calendar");
 Calendar.includeStandardAdditions = true;
 
 const today = new Date();
 today.setHours(0, 0, 0, 0);
-const weekEnd = new Date(today);
+const weekStart = new Date(today);
+const daysSinceMonday = (today.getDay() + 6) % 7;
+weekStart.setDate(weekStart.getDate() - daysSinceMonday);
+const weekEnd = new Date(weekStart);
 weekEnd.setDate(weekEnd.getDate() + 7);
 
 const out = [];
@@ -162,7 +164,7 @@ try {
     try {
       evts = cal.events.whose({
         _and: [
-          { startDate: { _greaterThanEquals: today } },
+          { startDate: { _greaterThanEquals: weekStart } },
           { startDate: { _lessThan: weekEnd } },
         ],
       })();
@@ -211,10 +213,10 @@ out.sort((a, b) => a.start.localeCompare(b.start));
 JSON.stringify(out);
 "#;
 
-/// 取未来 7 天 events 列表 (今天 0 点 — 7 天后 0 点). BL-CALENDAR-WEEK (5/20).
+/// 取本自然周 events 列表 (周一 0 点 — 下周一 0 点). BL-CALENDAR-WEEK (5/20).
 ///
 /// 设计同 calendar_today_fetch: osascript JXA + 5min 缓存 + force_refresh 跳缓存.
-/// 7 天 events 通常 20-100 条 (员工日历不同), JXA 单次拉, 不分日轮询.
+/// 本周 events 通常 20-100 条 (员工日历不同), JXA 单次拉, 不分日轮询.
 /// 前端按 start ISO 日期分组 (今天 / 明天 / 后天 / ...).
 ///
 /// 超时: 12 秒 (比 today 8s 宽, 7 天 events 多 JXA 跑长一点).
@@ -233,7 +235,9 @@ pub async fn calendar_week_fetch(force_refresh: Option<bool>) -> Result<String, 
 
     // BL-CALENDAR-EVENTKIT (5/21): 优先 EventKit binary, osascript fallback.
     let result = tokio::task::spawn_blocking(|| {
-        match run_eventkit("week", Duration::from_secs(3)) {
+        // 用新子命令名防旧 helper 静默沿用“从今天滚动 7 天”的历史语义。
+        // 旧 helper 会返回 unknown command，随后自动走下面的自然周 JXA fallback。
+        match run_eventkit("natural-week", Duration::from_secs(3)) {
             Ok(json) => Ok(json),
             Err(e) => {
                 eprintln!("[calendar] EventKit binary 不可用 ({}), fallback osascript", e);

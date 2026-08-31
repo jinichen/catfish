@@ -207,6 +207,9 @@ def _patch_p3_auxiliary_client() -> None:
     """
     from agent import auxiliary_client as aux
 
+    # P47: 私有模型的 auxiliary 失败后只报错，不允许 Hermes 自己降级到公网。
+    _sib("private_auxiliary_guard").patch(aux)
+
     # P3a
     if "catfish_outgoing_user" not in aux._MAIN_RUNTIME_FIELDS:
         aux._MAIN_RUNTIME_FIELDS = aux._MAIN_RUNTIME_FIELDS + ("catfish_outgoing_user",)
@@ -318,6 +321,15 @@ def _patch_p5_p6_p11_api_server_create_agent_and_picker() -> None:
                     )
                 if hasattr(agent, "_replace_primary_openai_client"):
                     agent._replace_primary_openai_client(reason="catfish_user_from_cv")
+
+            # P47/P4: 跨线程的标题任务需要知道当前请求是不是 Companion 内部服务。
+            sid = getattr(agent, "session_id", "") or ""
+            try:
+                cf_source = (_ctx().CV_CF_SOURCE.get() or "").strip()
+            except Exception:  # noqa: BLE001
+                cf_source = ""
+            if sid and cf_source:
+                _sib("session_registry").register_source(sid, cf_source)
 
             # P11 + P46: picker 是**唯一真源**.
             #

@@ -178,7 +178,9 @@ export const SYSTEM_PROMPT = `你是 catfish — 中国央国企员工的智能�
 
 # 工作步骤
 
-1. **看完全部信息**, 内部关联推理. 不要分块看, 把人/项目/历史/事件横向连起来.
+1. **只看本轮有效范围**, 内部关联推理. 本轮有效范围是本周一至周日的
+   邮件、日历、Reminders 待办、员工本周计划/项目和当前 wiki 结果.
+   不得从长期画像、Hermes memory、周报或历史会话新增待办.
 
 2. **按 profile.tier 识别主菜**:
    - frontline: 5-8 件具体 TODO, 按时间排
@@ -435,19 +437,9 @@ ${
   if (ctx.projects.trim()) {
     parts.push(`# 项目跟踪 (员工自维护)\n${ctx.projects.trim()}`);
   }
-  if (ctx.distilledFacts.trim()) {
-    parts.push(`# 关于这个员工 (长期画像)\n${ctx.distilledFacts.trim()}`);
-  }
-
-  // P3.4.6 (6/15 鸿波): hermes MEMORY 近期 § 段 — "近期事项 context".
-  //   跟 distilledFacts 两层: distilledFacts = 长期画像 (员工偏好 / 客户 / 项目),
-  //   hermesMemoryRecent = 近期事实 (e.g. "一级建造师补位 6/12 戴明利已入职"
-  //   "6/10 下午沟通单已反馈邱益亮暂停" "中电高新资质申报发票佐证已发起申请").
-  //   不是 TODO — todo 严格走 employee_journal - [ ] checkbox.
-  if (ctx.hermesMemoryRecent.trim()) {
-    parts.push(`# 近期事项 (员工 hermes memory 近期 § 段, 含近期事实 / 决策 / 跟进点, 非 TODO)
-${ctx.hermesMemoryRecent.trim()}`);
-  }
+  parts.push(`# 本轮范围（硬约束）
+只把本周邮件、日历、Reminders 待办、本周计划/项目和当前 wiki 中明确出现的事项列为主菜。
+长期画像、Hermes memory、历史周报、历史会话只能用于理解背景，不能单独生成待办、已处理项或风险提醒。`);
 
   // P3.5.40 (6/18 鸿波 audit huashu-design '不凭空创造, 查已有 spec'):
   //   wiki/entities/* 跟 wiki-shared/dept/* 里跟今日邮件/任务语义相关的 head 注入.
@@ -459,22 +451,6 @@ ${ctx.hermesMemoryRecent.trim()}`);
 ${input.wikiRelevant.trim()}`);
   }
 
-  // 周报历史 (文件名 + 时间, 不读内容)
-  if (ctx.weeklyReports.length > 0) {
-    const lines = ctx.weeklyReports
-      .slice(0, 5)
-      .map((r) => `${r.modifiedAt.slice(0, 10)} ${r.filename}`);
-    parts.push(`# 周报历史 (员工已生成过的)\n${lines.join("\n")}`);
-  }
-
-  // 7 天 session
-  if (ctx.recentSessionBriefs.length > 0) {
-    const lines = ctx.recentSessionBriefs.slice(0, 10).map((s) => {
-      const msg = (s.firstUserMessage || "").slice(0, 80);
-      return `[${s.startedAt.slice(0, 10)}] ${s.title || "(无 title)"}: ${msg}`;
-    });
-    parts.push(`# 最近 7 天对话\n${lines.join("\n")}`);
-  }
 
   // 邮件 + 评级
   if (emails.length > 0) {
@@ -491,7 +467,7 @@ ${input.wikiRelevant.trim()}`);
       const time = e.all_day ? "全天" : `${e.start} - ${e.end}`;
       return `${time} ${e.summary}${e.location ? ` @ ${e.location}` : ""}`;
     });
-    parts.push(`# 今日日程 (${events.length} 件)\n${lines.join("\n")}`);
+    parts.push(`# 本周日程（周一至周日，${events.length} 件）\n${lines.join("\n")}`);
   }
 
   // TODO
@@ -500,7 +476,7 @@ ${input.wikiRelevant.trim()}`);
       const star = t.is_priority ? "⭐ " : "";
       return `${star}${t.text} (${t.source})`;
     });
-    parts.push(`# 工作计划 TODO (${todos.length} 件)\n${lines.join("\n")}`);
+    parts.push(`# Reminders 本周待办（周一至周日，${todos.length} 件）\n${lines.join("\n")}`);
   }
 
   // P3.3.9 (6/10): 上次 advisor 输出 — 让 LLM 复用 task_uid (跨 refresh 稳定)
@@ -534,7 +510,9 @@ ${input.wikiRelevant.trim()}`);
             ? "manualStatus: done (员工在早安卡片点了'标记完成'按钮 — **绝不能再放 main_tasks**)"
             : t.taskState === "ignored"
               ? "manualStatus: ignored (员工在早安卡片点了'不做'按钮 — **绝不能再放 main_tasks**)"
-              : "manualStatus: snoozed (员工在早安卡片点了'推迟到明天'按钮 — 今天不能再放, 明天可以)";
+              : t.taskState === "snoozed"
+                ? "manualStatus: snoozed (员工在早安卡片点了'推迟到明天'按钮 — 今天不能再放, 明天可以)"
+                : "manualStatus: pending (员工刚刚撤销了完成/推迟，任务已重新打开 — 可以放 main_tasks)";
         bits.push(manualLabel);
       }
       return bits.length > 0 ? `${head}\n  └ ${bits.join("\n  └ ")}` : head;
@@ -552,7 +530,7 @@ title 表述差异不算新 task. 详见 SYSTEM_PROMPT § "task_uid 跨 refresh 
   员工在早安卡片显式点了'标记完成'/'不做', 员工意愿已明确, 再推是骚扰.
 - **manualStatus="snoozed" 的 task 今天绝不能放 main_tasks** (员工点了'推迟到明天').
 - 上述任一命中都挪去 handled_silently, 让员工在折叠区看得到但不打扰.
-- 只有 chatStatus=pending 且 无 manualStatus 才可以出 main_tasks.
+- 只有 chatStatus=pending 且 无 manualStatus，或 manualStatus=pending（员工已重新打开）才可以出 main_tasks.
 - 员工没聊过的新 task 依据紧急度/影响度自己判断.
 
 ${lines.join("\n")}`);

@@ -87,9 +87,9 @@ export function DataDiagnosisCard({ statuses, onRetry }: DataDiagnosisCardProps)
 
       <SourceRow
         icon="📅"
-        name="日历"
+        name="本周日程"
         status={statuses.events}
-        zeroHint="日历今天真没事件? 也可能是权限档错: 系统设置 → 隐私 → 日历 → Catfish Companion → 改 '完全日历访问权限' (常见踩坑). 改完 Cmd+Q 重启 Companion!"
+        zeroHint="本周确实没日程? 也可能是权限档错: 系统设置 → 隐私 → 日历 → Catfish Companion → 改 '完全日历访问权限' (常见踩坑). 改完 Cmd+Q 重启 Companion!"
         failHints={[
           {
             keywords: ["仅添加", "完全访问", "完全日历"],
@@ -107,42 +107,25 @@ export function DataDiagnosisCard({ statuses, onRetry }: DataDiagnosisCardProps)
       />
 
       <SourceRow
-        icon="✅"
-        name="TODO"
+        icon="☑️"
+        name="本周待办"
         status={statuses.todos}
         zeroHint={
           <>
-            本周待办文件{" "}
-            <code style={{ background: "var(--catfish-bg-2, #f1f5f9)", padding: "1px 4px", borderRadius: 3, fontSize: 12 }}>
-              ~/.catfish/current_todos.md
-            </code>{" "}
-            {/* P3.5.80 (7/28): 原文提到内部编号 "P3.4.7c 完工后会…自动 reset" ——
-                员工不知道那是什么, 只会觉得功能没做完. 只说现在该怎么做. */}
-            里面没有未完成的待办（或者文件还不存在）。手动加几条试试：
-            <pre
-              style={{
-                marginTop: 6,
-                padding: "8px 10px",
-                background: "var(--catfish-bg-2, #f1f5f9)",
-                borderRadius: 4,
-                fontSize: 11,
-                fontFamily: "ui-monospace, monospace",
-                overflow: "auto",
-              }}
-            >
-              {`mkdir -p ~/.catfish && cat > ~/.catfish/current_todos.md <<'EOF'
-## ${new Date().toISOString().slice(0, 10)} 本周待办
-- [ ] 测试 advisor TODO 抽取
-EOF`}
-            </pre>
-            或者在 chat 里说 &quot;加一个 TODO: xxx&quot;, advisor 自动写 current_todos.md. 老
-            <code style={{ background: "var(--catfish-bg-2, #f1f5f9)", padding: "1px 3px", borderRadius: 3, fontSize: 11 }}>
-              ~/.catfish/employee_journal.md
-            </code>{" "}
-            里的流水帐 - [ ] 也照样合并显示 (向后兼容).
+            Reminders.app 本自然周没有未完成且设置了截止时间的待办。可以直接在
+            Reminders 中添加，也可以在工作台里对小鲶说“提醒我周五前完成月报”。
           </>
         }
-        failHints={[]}
+        failHints={[
+          {
+            keywords: ["权限", "not authorized", "not allowed", "-1743"],
+            fix: "Reminders 读取权限未开启。系统设置 → 隐私与安全性 → 提醒事项/自动化 → 允许 Catfish Companion；然后 Cmd+Q 完全退出再重开。",
+          },
+          {
+            keywords: ["tool-bridge", "socket", "连接", "不可达"],
+            fix: "本地工具服务尚未就绪。到仪表盘 → 服务状态重启 tool-bridge，再点刷新。",
+          },
+        ]}
       />
 
       <div style={{ marginTop: 16, textAlign: "right" }}>

@@ -2,14 +2,15 @@
  *
  *  # 为什么是 wiki 而不是「历史邮件」(8/6)
  *
+ *  Wiki 只负责补充业务背景；同一线程的历史邮件由 emailReplyContext 按 RFC 头单独筛选。
  *  最初想的是串 thread：把同话题的历史邮件喂给拟稿。在鸿波本机实测下来这条路是堵的：
  *
  *    · Sent 只有 8 封 —— 他基本不在这台机器回邮件, 回信在手机/网页/别的机器,
  *      所以「我说过什么」这一半在本机根本不存在
  *    · thread 覆盖率 0.7% —— 且这个数还是在通知箱上量的, 参考价值也有限
  *
- *  换个角度：他跟小鲶的对话已经被沉淀成 wiki 了, 而 wiki 恰好装的就是 Sent 给不了的
- *  那一半。`wiki/entities/chenxiuping.md` 里原话:
+ *  因此 Wiki 用来补充邮件和线程里没有的业务背景，而不是替代线程。它恰好能装下
+ *  Sent 给不了的那一半。`wiki/entities/chenxiuping.md` 里原话:
  *
  *    > 员工曾收到其发送的第二期集采框架合同及采购方案文件, 在处理时发现版本与预期
  *    > 不符, 遂联系陈秀平要求提供包含侯婧媛批注意见的正确版本。
@@ -32,7 +33,7 @@
 import { wikiSearchText, wikiReadFile } from "./tauri";
 import type { DraftContextItem } from "./emailDraft";
 
-/** 最多喂几条。实测 wiki 页 300–1100 字, 4 条约 2500 字, 跟原邮件的 1500 字量级相当。 */
+/** 最多喂几条。实测 wiki 页 300–1100 字, 4 条约 2500 字。 */
 const MAX_ITEMS = 4;
 
 /** 整体预算。超了就用已经拿到的, 不阻塞拟稿 —— 有背景更好, 没有也得能出草稿。 */
@@ -68,9 +69,27 @@ export interface DraftContextResult {
   query: string;
 }
 
-/** 为「回复这封邮件」捞背景。任何一步失败都返空, 不抛 —— 拟稿不能被它挡住。 */
-export async function buildDraftContext(sender: string): Promise<DraftContextResult> {
-  const query = senderQueryKey(sender);
+/** 组装本地 Wiki 检索词：发件人 + 主题 + 正文前段。正文只用来改善相关性，
+ * 不把整封邮件复制进搜索请求；真正的邮件全文仍由 emailDraft 单独传入模型。 */
+export function buildDraftContextQuery(
+  sender: string,
+  subject = "",
+  bodyText = "",
+): string {
+  const bodyHint = bodyText.replace(/\s+/g, " ").trim().slice(0, 500);
+  return [senderQueryKey(sender), subject.trim(), bodyHint]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/** 为「回复这封邮件」捞背景。发件人、主题和正文前段共同提高相关性；
+ * 任何一步失败都返空, 不抛 —— 拟稿不能被它挡住。 */
+export async function buildDraftContext(
+  sender: string,
+  subject = "",
+  bodyText = "",
+): Promise<DraftContextResult> {
+  const query = buildDraftContextQuery(sender, subject, bodyText);
   if (!query) return { items: [], query: "" };
 
   const deadline = Date.now() + BUDGET_MS;
@@ -83,8 +102,11 @@ export async function buildDraftContext(sender: string): Promise<DraftContextRes
   if (!hits?.length) return { items: [], query };
 
   const items: DraftContextItem[] = [];
+  const seen = new Set<string>();
   for (const h of hits) {
     if (items.length >= MAX_ITEMS || Date.now() > deadline) break;
+    if (seen.has(h.rel_path)) continue;
+    seen.add(h.rel_path);
     try {
       const full = await wikiReadFile(h.rel_path);
       const body = (full?.body || "").trim();

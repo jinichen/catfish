@@ -129,6 +129,8 @@ export interface ToolInfo {
   emoji: string;
   toolset: string;
   available: boolean;
+  supported?: boolean;
+  reason_code?: "unsupported_platform" | "runtime_unavailable" | null;
 }
 export interface ToolCallResult {
   ok: boolean;

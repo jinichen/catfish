@@ -67,7 +67,10 @@ vi.mock("../../lib/tauri", () => ({
   //   老实现会因为"其余 4 封还没评"而反复重评 —— 永远停不下来。
   emailClassifyNow: vi.fn(async (items: { id: string }[]) => {
     classifyCalls.push(items.map((i) => i.id));
-    return { "id-0": "中" };
+    return {
+      urgency: { "id-0": "中" },
+      actions: {},
+    };
   }),
   emailPhishingScanNow: vi.fn(async (items: { id: string }[]) => {
     phishingCalls.push(items.map((i) => i.id));
@@ -77,7 +80,7 @@ vi.mock("../../lib/tauri", () => ({
 
 vi.mock("../../store/ui", () => ({
   useUIStore: (sel: (s: unknown) => unknown) =>
-    sel({ startProactiveChat: vi.fn(), setActiveTab: vi.fn() }),
+    sel({ startEmailChat: vi.fn(), startProactiveChat: vi.fn(), setActiveTab: vi.fn() }),
 }));
 vi.mock("../../store/agent", () => ({
   useAgentStore: (sel: (s: { name: string; personality: string }) => unknown) =>
@@ -86,18 +89,30 @@ vi.mock("../../store/agent", () => ({
 
 // store/email: 真实现的 merge 语义在这里不重要 —— 我们要测的是"即使 map
 // 一直不增长, effect 也不能重发". 用最朴素的覆盖语义 (也就是修之前那版),
-// 让第 1 道防线单独受考验。
-let _urgency: Record<string, string> = {};
+// 让第 1 道防线单独受考验。hook selector 和 getState 必须读取同一份完整快照，
+// 否则测试替身本身会制造真实 Zustand store 不会出现的 undefined。
+const emailStoreMock = vi.hoisted(() => {
+  let urgency: Record<string, string> = {};
+  const snapshot = () => ({
+    urgencyMap: urgency,
+    actionMap: {},
+    listCache: null,
+    setUrgencyMap: (m: Record<string, string>) => {
+      urgency = m;                  // 故意整份覆盖
+    },
+    reconcileFromRust: async () => ({}),
+    markRead: () => undefined,
+    setListCache: () => undefined,
+    mergeActionMap: () => undefined,
+  });
+  const hook = (sel: (s: ReturnType<typeof snapshot>) => unknown) => sel(snapshot());
+  return {
+    hook: Object.assign(hook, { getState: snapshot }),
+    reset: () => { urgency = {}; },
+  };
+});
 vi.mock("../../store/email", () => ({
-  useEmailStore: (sel: (s: unknown) => unknown) =>
-    sel({
-      urgencyMap: _urgency,
-      setUrgencyMap: (m: Record<string, string>) => {
-        _urgency = m;               // 故意整份覆盖
-      },
-      reconcileFromRust: async () => ({}),
-      markRead: vi.fn(),
-    }),
+  useEmailStore: emailStoreMock.hook,
 }));
 
 import EmailTab from "./EmailTab";
@@ -106,7 +121,7 @@ describe("EmailTab 评级/扫描 effect 不自触发", () => {
   beforeEach(() => {
     classifyCalls.length = 0;
     phishingCalls.length = 0;
-    _urgency = {};
+    emailStoreMock.reset();
   });
   afterEach(() => cleanup());
 

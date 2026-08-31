@@ -94,7 +94,7 @@ _MCP_PREFIX = f"mcp__{_MCP_SERVER}__"  # hermes 用双下划线分隔, 见模块
 #
 # 名额账 (按 shape dump 实测):
 #   29 visible + 3 bridge = 32, gateway cap 40
-#   加这 5 个 → 37, 余 3
+#   加这 7 个 → 39, 余 1
 # 再往上加要先确认 cap 抬得动: 注释里写着 Qwen 122B 实测 50+ tools 撞空 400。
 #
 # ⚠ 加名单的判据是两条, 8/13 当天补的第二条:
@@ -110,7 +110,15 @@ _PROMOTE = (
     # 8/24: 用户系统待办的唯一只读入口。没有它时 Qwen 把“查询 Reminders”
     # 连续写进 Hermes 会话规划 todo 12 次；这个入口不能再藏到 tool_search 后面。
     "catfish_list_reminders",
+    # 8/31: 写入口也必须直接可见。否则模型可能只写 Hermes 会话计划，
+    # 然后用自然语言宣称“创建成功”，实际 Reminders.app 没有新增项。
+    "catfish_create_reminder",
     "catfish_email_search",    # 邮件查询
+    # 8/28: “让小鲶处理这封邮件”交接带 email_id; 读取链路必须在当前终端
+    # 直接可见, 否则 Qwen 会在 tool_search / execute_code 间空转。这里只提升
+    # 工具名, 实际实现仍由该终端自己的 Tool Bridge/MCP registry 提供。
+    "catfish_email_read",      # 读取指定邮件全文 (mark_read=false)
+    "catfish_email_attachment",  # 查看指定邮件附件元数据/内容
     # ── 8/13 补: 上面 4 个的输出可能变成 [已归档], 那时必须能读回来 ──
     #
     # tool-bridge 的 adapter 对**任何**超 4KB 的 tool result 做归档 (

@@ -21,7 +21,7 @@ plugin discovery 路径 (`hermes_cli.plugins`), register(ctx) 真被调.
 | project_fact | hermes 原 memory_tool(target=memory) → MEMORY.md        |
 | workflow     | hint 让 LLM 调 catfish_propose_skill (BL-MM9 5/8 ship)  |
 | journal      | append ~/.catfish/employee_journal.md (catfish 现有)    |
-| todo         | append journal + hint 调 catfish_reminder_create (5/13) |
+| todo         | 拒绝落 journal，要求调 catfish_create_reminder          |
 
 ## 性能
 
@@ -390,32 +390,16 @@ def _call_hermes_original_memory_tool(args: Dict[str, Any], **kw: Any) -> str:
 
 
 def _route_to_reminder(content: str) -> str:
-    """kind=todo → append journal + hint 让 LLM 调 catfish_reminder_create (5/13 BL-REMINDER).
-
-    catfish_reminder_create 走 catfish-tool-bridge unix socket, 这个 module 在 hermes
-    进程内不能直接调. 兜底: 写 journal + hint, 让 LLM 看到 result 自己再调 reminder.
-    """
-    catfish_home = _catfish_home()
-    journal_path = catfish_home / "employee_journal.md"
-    ts = datetime.now(timezone.utc).isoformat()
-    entry = f"\n## 待办 (LLM 建议存 reminder) @ {ts}\n{content}\n"
-    try:
-        journal_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(journal_path, "a", encoding="utf-8") as f:
-            f.write(entry)
-        return json.dumps({
-            "success": True,
-            "routed_to": "journal (todo 兜底)",
-            "hint": (
-                "这是 todo, 已暂存 journal. 建议你再调 catfish_reminder_create "
-                "把 due_date 和 title 传过去, 真存进 macOS Reminders.app."
-            ),
-        }, ensure_ascii=False)
-    except Exception as e:  # noqa: BLE001
-        return json.dumps({
-            "success": False,
-            "error": f"todo 路由失败: {e}",
-        }, ensure_ascii=False)
+    """拒绝把用户待办降级写入 journal，强制模型改调唯一写入口。"""
+    return json.dumps({
+        "success": False,
+        "routed_to": "catfish_create_reminder",
+        "content": content,
+        "error": (
+            "用户待办只存 Reminders.app；请立即调用 catfish_create_reminder，"
+            "并且只有工具返回 ok=true 后才能向用户报告创建成功。"
+        ),
+    }, ensure_ascii=False)
 
 
 def _route_to_journal(content: str) -> str:

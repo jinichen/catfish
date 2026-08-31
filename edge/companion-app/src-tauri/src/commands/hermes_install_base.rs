@@ -38,6 +38,7 @@ pub struct HermesBootstrapProgress {
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum BootstrapProgressState {
+    #[cfg_attr(debug_assertions, allow(dead_code))]
     Queued,
     Waiting,
     Running,

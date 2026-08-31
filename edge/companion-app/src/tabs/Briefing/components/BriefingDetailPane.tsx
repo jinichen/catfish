@@ -496,15 +496,14 @@ export function DetailPane({
 
   const handleStatusChange = async (s: TaskStatus | null) => {
     setBackendError(null);
-    // P3.5.208-A: 走 setTaskManualStatus SSOT write helper. 内部同时写
-    // taskChatSummaries[uid].manualStatus (新 SSOT) + 老 taskState (过渡期
-    // 兼容, 直到 P3.5.209 删双写). 员工看不出差异, 但 briefing filter
-    // 下次跑时读的是 taskChatSummaries.manualStatus (单源).
+    // 写入 SSOT。撤销会写 manualStatus=pending，覆盖 chat summary 里的
+    // resolved/paused，保证按钮确实能把任务重新打开。
     try {
       await setTaskManualStatus(task.taskUid, task.title, s);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setBackendError(`状态没存 (Rust 后端没 build?): ${msg.slice(0, 100)}`);
+      return;
     }
     // P3.3.52 (6/12 鸿波): decisions audit 留痕. 不阻塞 UI, 错只 warn.
     //   走 audit_chain → decisions.jsonl 含 sha256 防篡改.
@@ -718,33 +717,24 @@ export function DetailPane({
       </div>
 
       <div className="briefing-2col__actions">
-        {/* P3.5.207: 用 effective status. statusFromChat=true 时"撤销"其实清不掉
-            chat 语义, 员工要撤要回 chat 里说. 按钮 title 显示提示. */}
+        {/* 员工显式操作优先于 chat 摘要；撤销后任务回到待处理。 */}
         {status === "resolved" ? (
           <button
             type="button"
             className="briefing-2col__action-btn"
             onClick={() => void handleStatusChange(null)}
-            title={
-              statusFromChat
-                ? "chat 里说过'办完了' → 撤销这里只是清卡片 marker; 想让 briefing 明天再推, 回 chat 里说 '再看看'"
-                : "撤销标记完成"
-            }
+            title="撤销完成并重新打开这条待办"
           >
-            撤销完成{statusFromChat ? " (仅撤按钮标记)" : ""}
+            撤销完成
           </button>
         ) : status === "paused" ? (
           <button
             type="button"
             className="briefing-2col__action-btn"
             onClick={() => void handleStatusChange(null)}
-            title={
-              statusFromChat
-                ? "chat 里说过'先放放' → 撤销这里只是清卡片 marker; 想让 briefing 明天再推, 回 chat 里说 '继续跟'"
-                : "撤销推迟"
-            }
+            title="撤销推迟并重新打开这条待办"
           >
-            撤销推迟{statusFromChat ? " (仅撤按钮标记)" : ""}
+            撤销推迟
           </button>
         ) : (
           <>

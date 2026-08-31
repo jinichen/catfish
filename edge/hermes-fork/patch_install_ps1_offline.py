@@ -76,7 +76,7 @@ if sys.platform == "win32":
 
 #: 当前测试通过的 install.ps1 SHA256. Bump 时必须重新 audit 7 处锚点是否稳定.
 #: 计算: `shasum -a 256 <hermes-agent>/scripts/install.ps1`
-UPSTREAM_SHA256 = "4dcbf2b665750cb578f69a6efa40770659e21821a463746f86da68af0d2bb31c"
+UPSTREAM_SHA256 = "d4f439920b9b4beb53c52ebbd4137deb01022b007106b2b615d72b596072fd38"
 
 #: 上面那个 SHA 是从**哪个上游 commit** 算出来的.
 #:
@@ -91,10 +91,16 @@ UPSTREAM_SHA256 = "4dcbf2b665750cb578f69a6efa40770659e21821a463746f86da68af0d2bb
 #: 版本号那条链有 check_version_sync.sh 当场拦, 这条没有。补上之后两条一样快。
 #:
 #: 更新方式: 跟 edge/companion-app/.hermes-git-commit 保持一致。
-UPSTREAM_COMMIT = "3c27eb6234bf91b8ceee9e9071591b31e9b148cb"
+UPSTREAM_COMMIT = "5fc308a70719a83cccdbba4c0e39c23f5a8239d5"
 
 #: 上游预期行数 (rough sanity check, 不 fatal, 只 warn)
-UPSTREAM_LINES_EXPECTED = 4027
+UPSTREAM_LINES_EXPECTED = 4897
+
+# ─── 8/31 v2026.8.3 → v2026.8.27 的 anchor 复审记录 ───────────
+#
+# 0.20.6 官方 install.ps1 的 7/7 anchor 各命中 1 次，行数 4027 → 4897。
+# Install-AgentBrowser 不再提前安装 agent-browser，而是交给 npx 按需解析；
+# Catfish 离线回退随之改为只安装 camofox-browser，不重新引入旧行为。
 
 # ─── 8/8 v2026.7.20 → v2026.8.3 的 anchor 复审记录 ────────────
 #
@@ -324,10 +330,11 @@ PATCH_4_INSTALL_REPO = f"""    $didUpdate = $false
 
 # BL-WIN-INSTALL-NPM-OFFLINE (7/17): 员工机完全无公网, npm install 挂. 加 2 处 patch.
 #
-# 处 5 · Install-AgentBrowser (line ~371): 全局 npm 装 agent-browser + camofox-browser.
-# CircleCI 上 `npm pack` 生成 .tgz 打进 hermes-agent-src\node-globals\, 装到 msi 里.
+# 处 5 · Install-AgentBrowser: 全局 npm 装 camofox-browser。0.20.6 已改为
+# agent-browser 由 npx 按需解析，不再在这里提前安装。CircleCI 上 `npm pack`
+# 生成 .tgz 打进 hermes-agent-src\node-globals\, 装到 msi 里.
 # install.ps1 改成先查 $HermesHome\hermes-agent\node-globals\, 有 .tgz 就装本地, 无 fallback registry.
-PATCH_5_NPM_GLOBAL = f"""    {MARKER}: Catfish offline — 装本地 .tgz (agent-browser + camofox-browser)
+PATCH_5_NPM_GLOBAL = f"""    {MARKER}: Catfish offline — 装本地 .tgz (camofox-browser 及预打包的其他全局依赖)
     $offlineTgzDir = Join-Path $HermesHome "hermes-agent\\node-globals"
     if (Test-Path $offlineTgzDir) {{
         $tgzFiles = @(Get-ChildItem -Path $offlineTgzDir -Filter "*.tgz" -ErrorAction SilentlyContinue)
@@ -337,10 +344,10 @@ PATCH_5_NPM_GLOBAL = f"""    {MARKER}: Catfish offline — 装本地 .tgz (agent
             & $npm install -g --prefix $prefixDir --silent --ignore-scripts @tgzPaths 2>&1 | Tee-Object -FilePath $npmLog | Out-Null
         }} else {{
             Write-Warn "Catfish offline: $offlineTgzDir 无 .tgz - fallback registry (员工无公网必挂)"
-            & $npm install -g --prefix $prefixDir --silent --ignore-scripts "agent-browser@^0.26.0" "@askjo/camofox-browser@^1.5.2" 2>&1 | Tee-Object -FilePath $npmLog | Out-Null
+            & $npm install -g --prefix $prefixDir --silent --ignore-scripts "@askjo/camofox-browser@^1.5.2" 2>&1 | Tee-Object -FilePath $npmLog | Out-Null
         }}
     }} else {{
-        & $npm install -g --prefix $prefixDir --silent --ignore-scripts "agent-browser@^0.26.0" "@askjo/camofox-browser@^1.5.2" 2>&1 | Tee-Object -FilePath $npmLog | Out-Null
+        & $npm install -g --prefix $prefixDir --silent --ignore-scripts "@askjo/camofox-browser@^1.5.2" 2>&1 | Tee-Object -FilePath $npmLog | Out-Null
     }}
 """
 
@@ -426,7 +433,7 @@ ANCHORS = {
         PATCH_4_INSTALL_REPO,
     ),
     "npm_global": (
-        '    & $npm install -g --prefix $prefixDir --silent --ignore-scripts "agent-browser@^0.26.0" "@askjo/camofox-browser@^1.5.2" 2>&1 | Tee-Object -FilePath $npmLog | Out-Null\n',
+        '    & $npm install -g --prefix $prefixDir --silent --ignore-scripts "@askjo/camofox-browser@^1.5.2" 2>&1 | Tee-Object -FilePath $npmLog | Out-Null\n',
         PATCH_5_NPM_GLOBAL,
     ),
     "npm_local_helper": (

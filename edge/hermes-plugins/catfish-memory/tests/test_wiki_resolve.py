@@ -63,6 +63,31 @@ def test_alias_beats_substring(tmp_path):
     assert resolve_wiki_ref("中电福富", nodes).kind == "ambiguous"
 
 
+def test_deprecated_node_remains_resolvable_for_historical_links():
+    """废弃条目不参与默认检索, 但历史 [[旧名]] 仍必须能解析."""
+    nodes = [
+        WikiNode("old.md", "old", "旧条目", ["旧名"], deprecated=True),
+        WikiNode("current.md", "current", "现行条目", ["现行名"]),
+    ]
+
+    result = resolve_wiki_ref("旧名", nodes)
+
+    assert result.kind == "hit"
+    assert result.node is not None and result.node.rel_path == "old.md"
+
+
+def test_active_only_excludes_pending_and_unknown_statuses():
+    nodes = [
+        WikiNode("pending.md", "pending", "待确认", ontology_status="pending"),
+        WikiNode("unknown.md", "unknown", "未知状态", ontology_status="future"),
+        WikiNode("active.md", "active", "现行节点"),
+    ]
+
+    assert resolve_wiki_ref("待确认", nodes, active_only=True).kind == "miss"
+    assert resolve_wiki_ref("未知状态", nodes, active_only=True).kind == "miss"
+    assert resolve_wiki_ref("现行节点", nodes, active_only=True).kind == "hit"
+
+
 def test_load_nodes_reads_aliases(tmp_path):
     ents = tmp_path / "wiki" / "entities"
     ents.mkdir(parents=True)
@@ -74,6 +99,17 @@ def test_load_nodes_reads_aliases(tmp_path):
     assert len(nodes) == 1
     assert nodes[0].aliases == ["中电福富", "福富"]
     assert resolve_wiki_ref("福富", nodes).how == "alias"
+
+
+def test_load_nodes_reads_ontology_status(tmp_path):
+    concepts = tmp_path / "wiki" / "concepts"
+    concepts.mkdir(parents=True)
+    (concepts / "pending.md").write_text(
+        "---\ntype: concept\ntitle: 待确认\nontology_status: pending\n---\n",
+        encoding="utf-8",
+    )
+    nodes = load_nodes(tmp_path)
+    assert nodes[0].ontology_status == "pending"
 
 
 def test_no_frontmatter_falls_back_to_stem():

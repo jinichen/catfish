@@ -1,4 +1,4 @@
-"""Session-id → catfish_outgoing_user 跨线程注册表.
+"""Session-id → Catfish runtime metadata 跨线程注册表.
 
 # 为什么需要这个
 
@@ -32,6 +32,7 @@ logger = logging.getLogger("catfish.xcatfish_user.session_registry")
 _MAX_ENTRIES = 1024  # 兜底防泄漏
 _lock = threading.Lock()
 _session_to_cf_user: "OrderedDict[str, str]" = OrderedDict()
+_session_to_source: "OrderedDict[str, str]" = OrderedDict()
 
 
 def register(session_id: str, cf_user: str) -> None:
@@ -65,6 +66,26 @@ def unregister(session_id: str) -> None:
         return
     with _lock:
         _session_to_cf_user.pop(session_id, None)
+        _session_to_source.pop(session_id, None)
+
+
+def register_source(session_id: str, source: str) -> None:
+    """注册来源给跨线程辅助任务；空值不覆盖已有来源。"""
+    if not session_id or not source:
+        return
+    with _lock:
+        _session_to_source[session_id] = source
+        _session_to_source.move_to_end(session_id)
+        while len(_session_to_source) > _MAX_ENTRIES:
+            _session_to_source.popitem(last=False)
+
+
+def lookup_source(session_id: str) -> Optional[str]:
+    """查 session 的 Catfish 来源。"""
+    if not session_id:
+        return None
+    with _lock:
+        return _session_to_source.get(session_id)
 
 
 def size() -> int:

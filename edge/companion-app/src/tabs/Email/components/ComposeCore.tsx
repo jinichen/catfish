@@ -21,7 +21,7 @@
  * - **account**: email_create_draft 走真账号. 回复场景传 msg.account (跟原邮件同
  *   账号), 新建场景 parent 决定 (通常传 default account).
  * - **originalMessage**: 拟稿 LLM call `draftEmailReply` 真原邮件 context.
- *   - 回复场景传 {sender, subject, date, bodyText}
+ *   - 回复场景传 {id, sender, subject, date, bodyText, RFC 线程头, attachments}
  *   - 新建场景传 null → 拟稿按钮禁用 + title 变文案 "新建邮件无原邮件, 拟稿不可用"
  * - **resetKey**: state 清除触发. msg.id 变化 (换邮件) / 新建打开 / 关闭都应该清
  *   state. parent 传 msg.id (回复场景) / "new-compose" (新建场景).
@@ -45,17 +45,34 @@ import { useChatStore } from "../../../store/chat";
 import {
   emailCreateDraft,
   emailSendMessage,
+  emailReadMessage,
+  emailAttachmentPreview,
   getPickerModel,
+  type EmailDigestItem,
 } from "../../../lib/tauri";
 import { draftEmailReply } from "../../../lib/emailDraft";
 import { buildDraftContext } from "../../../lib/emailDraftContext";
+import {
+  formatAttachmentContext,
+  formatThreadContext,
+  selectRecentThreadMessages,
+  selectReplyAttachments,
+  type ReplyAttachmentContext,
+  type ReplyThreadMessage,
+} from "../../../lib/emailReplyContext";
 import { type Personality } from "../../../lib/agent";
+import { _mergeReplyDraftWithQuote } from "./helpers";
 
 export interface ComposeOriginalMessage {
+  id: string;
   sender: string;
   subject: string;
   date: string;
   bodyText: string;
+  message_id?: string;
+  in_reply_to?: string;
+  references?: string;
+  attachments?: Array<{ filename: string; size_bytes: number; content_type: string }>;
 }
 
 export interface ComposeCoreProps {
@@ -81,6 +98,8 @@ export interface ComposeCoreProps {
 
   /** 拟稿真原邮件 context. null = 新建场景 → 拟稿按钮禁用 */
   originalMessage?: ComposeOriginalMessage | null;
+  /** Inbox + Sent 的邮件摘要，仅用于按 RFC 头挑同一线程的近期邮件。 */
+  threadCandidates?: EmailDigestItem[];
 
 
   /** agent 名字 / 人格 (拟稿真 prompt 用) */
@@ -103,6 +122,7 @@ export default function ComposeCore({
   inReplyToMsgId = null,
   account,
   originalMessage = null,
+  threadCandidates = [],
   agentName,
   agentPersonality,
   resetKey,
@@ -127,7 +147,7 @@ export default function ComposeCore({
   const [draftingLlm, setDraftingLlm] = useState(false);
   const [draftLlmError, setDraftLlmError] = useState<string | null>(null);
   const [draftLlmDone, setDraftLlmDone] = useState(false); // 拟过一次 → 按钮变"🔄 重拟"
-  // 8/6: 这次拟稿参考了哪几篇本地资料, 显给员工看 (空 = 没检索到, 只喂了这一封)
+  // 这次拟稿实际参考了哪些本地来源, 显给员工看 (空 = 没有额外来源)
   const [draftCtxNote, setDraftCtxNote] = useState("");
   // 8/21: 模型信息不足时返回的**给员工的反问清单** ([QUESTIONS] 协议)。
   // 显示在正文框上方, 绝不进正文框 —— 见 handleDraftWithLlm 里那段病历注释。
@@ -202,22 +222,72 @@ export default function ComposeCore({
         }
         model = persisted;
       }
-      // 8/6: 先从本地 wiki 捞背景 (见 emailDraftContext.ts —— 为什么是 wiki
-      // 而不是历史邮件, 那里有完整说明). 捞不到不阻塞拟稿.
+      // 所有补充上下文都在本机按需读取，失败不阻塞当前邮件拟稿。
       let context;
-      let ctxNote = "";
+      const contextNotes: string[] = [];
       try {
-        const ctx = await buildDraftContext(originalMessage.sender);
+        const ctx = await buildDraftContext(
+          originalMessage.sender,
+          originalMessage.subject,
+          originalMessage.bodyText,
+        );
         if (ctx.items.length) {
           context = ctx.items;
-          ctxNote = `已参考 ${ctx.items.length} 篇本地资料: ${ctx.items
+          contextNotes.push(`本地资料 ${ctx.items.length} 篇: ${ctx.items
             .map((c) => c.title)
-            .join(" · ")}`;
+            .join(" · ")}`);
         }
       } catch {
-        /* 捞背景失败 → 退回只喂这一封, 不打断 */
+        /* Wiki 失败 → 继续处理线程和附件 */
       }
-      setDraftCtxNote(ctxNote);
+
+      let threadContext = "";
+      const threadItems = selectRecentThreadMessages(originalMessage, threadCandidates);
+      if (threadItems.length) {
+        const fullThread = await Promise.all(threadItems.map(async (candidate) => {
+          try {
+            const raw = await emailReadMessage(candidate.id, { markRead: false });
+            const full = JSON.parse(raw) as ReplyThreadMessage;
+            return { ...candidate, ...full };
+          } catch {
+            // 列表摘要仍然比完全丢失线程线索好，并明确标注为摘要。
+            return {
+              ...candidate,
+              body_text: candidate.body_text || "(历史邮件正文读取失败)",
+            } as ReplyThreadMessage;
+          }
+        }));
+        threadContext = formatThreadContext(fullThread);
+        contextNotes.push(`线程历史 ${fullThread.length} 封`);
+      }
+
+      let attachmentContext = "";
+      const attachments = selectReplyAttachments(originalMessage.attachments);
+      if (attachments.length) {
+        // 逐个解析并清理：避免四个 10MB 附件同时落在临时目录里。
+        const usableAttachments: ReplyAttachmentContext[] = [];
+        for (const attachment of attachments) {
+          try {
+            const preview = await emailAttachmentPreview(originalMessage.id, attachment.filename);
+            if (preview.preview_text.trim()) {
+              usableAttachments.push({
+                filename: attachment.filename,
+                contentType: attachment.content_type,
+                sizeBytes: attachment.size_bytes,
+                previewText: preview.preview_text,
+                kind: preview.kind,
+              });
+            }
+          } catch {
+            // 单个附件解析失败不影响其他附件和当前邮件拟稿。
+          }
+        }
+        attachmentContext = formatAttachmentContext(usableAttachments);
+        if (usableAttachments.length) {
+          contextNotes.push(`附件预览 ${usableAttachments.length} 个`);
+        }
+      }
+      setDraftCtxNote(contextNotes.join(" · "));
 
       setDraftRetry("");
       const result = await draftEmailReply(
@@ -227,6 +297,8 @@ export default function ComposeCore({
           date: originalMessage.date,
           bodyText: originalMessage.bodyText,
           context,
+          threadContext,
+          attachmentContext,
           agentName,
           personality: agentPersonality,
           model,
@@ -256,7 +328,9 @@ export default function ComposeCore({
         return;
       }
       setDraftQuestions("");
-      setComposeBody(result.body);
+      // 回复场景的 initialBody 是原邮件引用。拟稿只替换回复正文，不能把引用
+      // 一起覆盖掉；重拟时仍从固定 initialBody 合并，避免引用越叠越多。
+      setComposeBody(_mergeReplyDraftWithQuote(result.body, initialBody));
       setDraftLlmDone(true);
     } catch (e) {
       setDraftLlmError(e instanceof Error ? e.message : String(e));
@@ -450,7 +524,7 @@ export default function ComposeCore({
               title={
                 canDraft
                   ? draftLlmDone
-                    ? "不满意? 重新生成一份草稿 (会覆盖正文区现有内容)"
+                    ? "不满意? 重新生成一份回复正文 (原邮件引用会保留)"
                     : `让${agentName}根据原邮件起一段回复草稿, 落到下面正文区. 你可改可不发.`
                   : originalMessage
                     ? "原邮件正文为空, 没法拟稿"

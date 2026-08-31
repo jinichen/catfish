@@ -28,6 +28,10 @@ pub struct ToolInfo {
     pub emoji: String,
     pub toolset: String,
     pub available: bool,
+    #[serde(default)]
+    pub supported: Option<bool>,
+    #[serde(default)]
+    pub reason_code: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

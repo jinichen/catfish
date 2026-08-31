@@ -30,6 +30,9 @@ const SERVICE_LLM_QUERY = "?catfish_source=companion-email-draft&catfish_skip_id
 /** 单次尝试的超时。总耗时最坏 = 3 × 30s + 退避 14s。 */
 const DRAFT_TIMEOUT_MS = 30_000;
 
+/** 当前邮件正文给模型的上限。详情页已经拿到全文，但仍需防止异常超长邮件挤掉上下文。 */
+const CURRENT_BODY_LIMIT = 12_000;
+
 /** 429 退避重试 (8/7 鸿波实盘).
  *
  *  现象: 点拟稿报
@@ -140,13 +143,19 @@ function _buildUserPrompt(opts: {
   date: string;
   bodyText: string;
   context?: DraftContextItem[];
+  threadContext?: string;
+  attachmentContext?: string;
 }): string {
   // 复用 EmailTab.handleAskCatfish 模板, 但末句改"直接给草稿"
   const { sender, subject, date, bodyText } = opts;
-  const snippet = bodyText.slice(0, 1500);
-  const truncated = bodyText.length > 1500 ? "…(原邮件过长, 已截 1500 字)" : "";
+  const snippet = bodyText.slice(0, CURRENT_BODY_LIMIT);
+  const truncated = bodyText.length > CURRENT_BODY_LIMIT
+    ? `…(原邮件过长, 已截 ${CURRENT_BODY_LIMIT} 字)`
+    : "";
   return (
     _renderContext(opts.context || []) +
+    (opts.threadContext || "") +
+    (opts.attachmentContext || "") +
     `要回的是这封:\n` +
     `- 发件人: ${sender}\n` +
     `- 主题: ${subject}\n` +
@@ -161,8 +170,12 @@ export interface DraftEmailReplyInput {
   subject: string;
   date: string;
   bodyText: string;
-  /** 本地知识库里跟这封邮件相关的背景。空/省略 = 只喂这一封。 */
+  /** 本地知识库里跟这封邮件相关的背景。空/省略 = 不附加 Wiki 背景。 */
   context?: DraftContextItem[];
+  /** 同一 RFC 822 线程的近期往来，已经在本地读取并格式化。 */
+  threadContext?: string;
+  /** 附件的本地解析预览，原始附件不上传。 */
+  attachmentContext?: string;
   agentName: string;
   personality?: Personality;
   model: string;
@@ -228,6 +241,8 @@ export async function draftEmailReply(
     date: input.date,
     bodyText: input.bodyText,
     context: input.context,
+    threadContext: input.threadContext,
+    attachmentContext: input.attachmentContext,
   });
 
   const url = `${config.backendUrl}/v1/chat/completions${SERVICE_LLM_QUERY}`;

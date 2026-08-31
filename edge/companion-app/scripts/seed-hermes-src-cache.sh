@@ -68,7 +68,7 @@ echo "  ✓ describe = $($GIT -C "$SRC_TREE" describe --tags 2>/dev/null || echo
 
 # 这条比上面那条更容易被忽略, 但后果一样严重: commit 对得上, 不代表工作区
 # 没被人改过。本机这棵树是天天在跑的, 谁临时改一行调试完忘了还原, 就会
-# **悄悄进到发给员工的包里**, 而包上写的还是 v2026.8.3。
+# **悄悄进到发给员工的包里**, 而包上写的还是 v2026.8.27。
 echo "→ [2] 已跟踪文件不许有任何改动 (未跟踪的不算)..."
 DIRTY="$($GIT -C "$SRC_TREE" status --porcelain --untracked-files=no)"
 if [ -n "$DIRTY" ]; then

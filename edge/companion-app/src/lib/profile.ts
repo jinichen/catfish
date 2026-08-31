@@ -130,7 +130,7 @@ export const profileNextRecomputeAt = (days?: number) =>
  *      - profileHintsRead: profile_hints.md (员工纠错痕迹)
  *    外部 (新员工也有):
  *      - emailListFetch: 邮件列表 (sender 频次 → 关键人脉, subject 词频 → 主管事务)
- *      - calendarWeekFetch: 过去 7 天日历 (参会人 → 团队 / 节奏)
+ *      - calendarWeekFetch: 本自然周日历 (参会人 → 团队 / 节奏)
  *      - catfish_style_fingerprint_get: 写作风格 (verbosity / structure / formality / signatureWords)
  */
 async function inferProfileFromContext(model: string): Promise<Profile | null> {

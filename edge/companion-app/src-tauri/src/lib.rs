@@ -352,7 +352,7 @@ pub fn run() {
             // 7/15 BL-CATFISH-MAC-OFFLINE-INSTALL: macOS/Linux dmg 首启装 hermes-agent 本体.
             // Windows msi CustomAction (wix/catfish-postinstall.wxs) 已在 msi 装机时装 hermes,
             // 跳过. Escape: CATFISH_HERMES_INSTALL_NO_BOOTSTRAP=1 (dev 已装本地 hermes).
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(all(any(target_os = "macos", target_os = "linux"), not(debug_assertions)))]
             {
                 if std::env::var("CATFISH_HERMES_INSTALL_NO_BOOTSTRAP").is_err() {
                     use tauri::Manager;
@@ -372,6 +372,8 @@ pub fn run() {
                     }
                 }
             }
+            #[cfg(all(any(target_os = "macos", target_os = "linux"), debug_assertions))]
+            log::info!("调试构建跳过 packaged Hermes bootstrap，使用本机已安装的 Hermes");
 
             if qa_mode {
                 log::info!(

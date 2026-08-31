@@ -21,12 +21,14 @@
 //! wiki_embed 这里只剩 wiki 业务路径 (wiki_search_semantic + ensure_index).
 
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
 
 use crate::services::embedding::{
     cosine, embed_text, provider_not_ready_reason, vector_from_blob, vector_to_blob,
 };
+use crate::commands::wiki_search::split_markdown_chunks;
 
 fn home_dir() -> Result<PathBuf, String> {
     crate::util::paths::home_env()
@@ -106,11 +108,17 @@ pub async fn wiki_search_semantic(
         let db_path = embed_db_path()?;
         let conn = rusqlite::Connection::open(&db_path)
             .map_err(|e| format!("SQLite open 失败: {e}"))?;
+        ensure_chunk_table(&conn)?;
         crate::services::embed_cache_meta::ensure_table(&conn)?;
         let cleared = crate::services::embed_cache_meta::reconcile(&conn, |c| {
-            c.execute("DELETE FROM wiki_embed", [])
-                .map(|n| log::warn!("[wiki_embed] 清掉 {n} 条旧向量"))
-                .map_err(|e| format!("清 wiki_embed 失败: {e}"))
+            let old = c
+                .execute("DELETE FROM wiki_embed", [])
+                .map_err(|e| format!("清 wiki_embed 失败: {e}"))?;
+            let chunks = c
+                .execute("DELETE FROM wiki_embed_chunk", [])
+                .map_err(|e| format!("清 wiki_embed_chunk 失败: {e}"))?;
+            log::warn!("[wiki_embed] 清掉 {} 条旧向量", old + chunks);
+            Ok(())
         })?;
         if cleared {
             log::warn!("[wiki_embed] 缓存刚重建, 这一轮会把全部条目重新 embed");
@@ -125,7 +133,7 @@ pub async fn wiki_search_semantic(
     let conn = rusqlite::Connection::open(&db_path)
         .map_err(|e| format!("SQLite open 失败: {e}"))?;
     let mut stmt = conn
-        .prepare("SELECT rel_path, title, kind, snippet, vector FROM wiki_embed")
+        .prepare("SELECT rel_path, title, kind, snippet, vector FROM wiki_embed_chunk")
         .map_err(|e| format!("SQL prep 失败: {e}"))?;
     let mut rows = stmt
         .query([])
@@ -158,6 +166,8 @@ pub async fn wiki_search_semantic(
     drop(stmt);
 
     hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    let mut unique_paths = std::collections::HashSet::new();
+    hits.retain(|hit| unique_paths.insert(hit.rel_path.clone()));
     let k = top_k.unwrap_or(20).min(hits.len());
     hits.truncate(k);
 
@@ -173,6 +183,28 @@ pub async fn wiki_search_semantic(
 /// 返 indexed count.
 ///
 /// P3.5.15: 改 async 因内部 embed_text 走 provider (local 同步 / remote HTTP), 都需要 .await.
+
+fn ensure_chunk_table(conn: &rusqlite::Connection) -> Result<(), String> {
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS wiki_embed_chunk (
+            chunk_id TEXT PRIMARY KEY,
+            rel_path TEXT NOT NULL,
+            title TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            heading TEXT NOT NULL,
+            chunk_index INTEGER NOT NULL,
+            snippet TEXT NOT NULL,
+            text TEXT NOT NULL,
+            vector BLOB NOT NULL,
+            mtime INTEGER NOT NULL,
+            content_hash TEXT NOT NULL
+        )",
+        [],
+    )
+    .map_err(|e| format!("create chunk table: {e}"))?;
+    Ok(())
+}
+
 async fn ensure_index() -> Result<usize, String> {
     let home = home_dir()?;
     let db_path = embed_db_path()?;
@@ -180,18 +212,7 @@ async fn ensure_index() -> Result<usize, String> {
     // init db
     let conn =
         rusqlite::Connection::open(&db_path).map_err(|e| format!("SQLite open 失败: {e}"))?;
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS wiki_embed (
-            rel_path TEXT PRIMARY KEY,
-            title TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            snippet TEXT NOT NULL,
-            vector BLOB NOT NULL,
-            mtime INTEGER NOT NULL
-        )",
-        [],
-    )
-    .map_err(|e| format!("create table: {e}"))?;
+    ensure_chunk_table(&conn)?;
 
     // P3.5.35 (6/18 鸿波 catch '装到本机后部门 wiki 不就是自家了吗'):
     // 用 collect_all_wiki_md helper 一并索引自家 + 装机部门 wiki, 不再 hardcode 3 子目录.
@@ -225,7 +246,7 @@ async fn ensure_index() -> Result<usize, String> {
         // skip if mtime unchanged → SQLite cache hit
         let cached_mtime: Option<i64> = conn
             .query_row(
-                "SELECT mtime FROM wiki_embed WHERE rel_path = ?1",
+                "SELECT MAX(mtime) FROM wiki_embed_chunk WHERE rel_path = ?1",
                 [&rel_path],
                 |row| row.get(0),
             )
@@ -236,24 +257,46 @@ async fn ensure_index() -> Result<usize, String> {
         }
 
         // parse title + kind from frontmatter + snippet
-        let (title, kind, snippet) = parse_for_embed(&content);
-        // embed full content (frontmatter + body)
-        let vec = match embed_text(&content).await {
-            Some(v) => v,
-            None => continue,
-        };
-        let blob = vector_to_blob(&vec);
+        let (title, kind, _snippet) = parse_for_embed(&content);
+        let content_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
         conn.execute(
-            "INSERT OR REPLACE INTO wiki_embed (rel_path, title, kind, snippet, vector, mtime)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![rel_path, title, kind, snippet, blob, mtime],
+            "DELETE FROM wiki_embed_chunk WHERE rel_path = ?1",
+            [&rel_path],
         )
-        .map_err(|e| format!("insert: {e}"))?;
-        count += 1;
+        .map_err(|e| format!("delete stale chunks: {e}"))?;
+        let chunks = split_markdown_chunks(&content, &title);
+        let mut embedded = 0usize;
+        for (chunk_index, chunk) in chunks.iter().enumerate() {
+            let Some(vec) = embed_text(&chunk.embedding_text).await else { continue };
+            let chunk_id = format!("{rel_path}#{chunk_index}");
+            conn.execute(
+                "INSERT OR REPLACE INTO wiki_embed_chunk
+                 (chunk_id, rel_path, title, kind, heading, chunk_index, snippet, text, vector, mtime, content_hash)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                rusqlite::params![
+                    chunk_id,
+                    rel_path,
+                    title,
+                    kind,
+                    chunk.heading,
+                    chunk_index as i64,
+                    chunk.snippet,
+                    chunk.text,
+                    vector_to_blob(&vec),
+                    mtime,
+                    content_hash,
+                ],
+            )
+            .map_err(|e| format!("insert chunk: {e}"))?;
+            embedded += 1;
+        }
+        if embedded > 0 {
+            count += 1;
+        }
     }
 
     // P3.5.132 #1: 扫 SQLite 所有 rel_path, 不在 existing_rels 真删.
-    let purged = purge_orphans(&conn, &existing_rels)?;
+    let purged = purge_chunk_orphans(&conn, &existing_rels)?;
     if purged > 0 {
         log::info!("[wiki_embed] purged {purged} orphan row(s)");
     }
@@ -261,31 +304,25 @@ async fn ensure_index() -> Result<usize, String> {
     Ok(count)
 }
 
-/// P3.5.132 #1: 删 wiki_embed 真不在 existing rel_path set 真孤儿 row.
-/// 抽纯函数让单测能用 in-memory SQLite 验.
-fn purge_orphans(
+fn purge_chunk_orphans(
     conn: &rusqlite::Connection,
     existing: &std::collections::HashSet<String>,
 ) -> Result<usize, String> {
     let cached_rels: Vec<String> = {
         let mut stmt = conn
-            .prepare("SELECT rel_path FROM wiki_embed")
-            .map_err(|e| format!("prep cached_rels: {e}"))?;
+            .prepare("SELECT DISTINCT rel_path FROM wiki_embed_chunk")
+            .map_err(|e| format!("prep chunk rels: {e}"))?;
         let rows = stmt
             .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|e| format!("query cached_rels: {e}"))?;
-        let mut v = Vec::new();
-        for s in rows.flatten() {
-            v.push(s);
-        }
-        v
+            .map_err(|e| format!("query chunk rels: {e}"))?;
+        rows.flatten().collect()
     };
     let mut purged = 0usize;
     for cached in cached_rels {
         if !existing.contains(&cached) {
-            conn.execute("DELETE FROM wiki_embed WHERE rel_path = ?1", [&cached])
-                .map_err(|e| format!("delete orphan {cached}: {e}"))?;
-            purged += 1;
+            purged += conn
+                .execute("DELETE FROM wiki_embed_chunk WHERE rel_path = ?1", [&cached])
+                .map_err(|e| format!("delete chunk orphan {cached}: {e}"))?;
         }
     }
     Ok(purged)
@@ -325,26 +362,17 @@ mod tests {
 
     fn setup_test_db() -> rusqlite::Connection {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute(
-            "CREATE TABLE wiki_embed (
-                rel_path TEXT PRIMARY KEY,
-                title TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                snippet TEXT NOT NULL,
-                vector BLOB NOT NULL,
-                mtime INTEGER NOT NULL
-            )",
-            [],
-        )
-        .unwrap();
+        ensure_chunk_table(&conn).unwrap();
         conn
     }
 
     fn insert_row(conn: &rusqlite::Connection, rel_path: &str) {
+        let chunk_id = format!("{rel_path}#0");
         conn.execute(
-            "INSERT INTO wiki_embed (rel_path, title, kind, snippet, vector, mtime)
-             VALUES (?1, 't', 'entity', 's', X'00', 1)",
-            [rel_path],
+            "INSERT INTO wiki_embed_chunk
+             (chunk_id, rel_path, title, kind, heading, chunk_index, snippet, text, vector, mtime, content_hash)
+             VALUES (?1, ?2, 't', 'entity', '', 0, 's', 'text', X'00', 1, 'hash')",
+            [&chunk_id, rel_path],
         )
         .unwrap();
     }
@@ -358,17 +386,17 @@ mod tests {
         let mut existing = HashSet::new();
         existing.insert("wiki/entities/alive.md".to_string());
 
-        let purged = purge_orphans(&conn, &existing).unwrap();
+        let purged = purge_chunk_orphans(&conn, &existing).unwrap();
         assert_eq!(purged, 1, "应删除 1 个孤儿 (deleted.md)");
 
         let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM wiki_embed", [], |r| r.get(0))
+            .query_row("SELECT COUNT(*) FROM wiki_embed_chunk", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 1, "alive.md 仍在");
 
         let remaining: String = conn
             .query_row(
-                "SELECT rel_path FROM wiki_embed LIMIT 1",
+                "SELECT rel_path FROM wiki_embed_chunk LIMIT 1",
                 [],
                 |r| r.get(0),
             )
@@ -382,11 +410,11 @@ mod tests {
         insert_row(&conn, "wiki/entities/x.md");
         insert_row(&conn, "wiki/entities/y.md");
 
-        let purged = purge_orphans(&conn, &HashSet::new()).unwrap();
+        let purged = purge_chunk_orphans(&conn, &HashSet::new()).unwrap();
         assert_eq!(purged, 2);
 
         let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM wiki_embed", [], |r| r.get(0))
+            .query_row("SELECT COUNT(*) FROM wiki_embed_chunk", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 0);
     }
@@ -401,7 +429,7 @@ mod tests {
         existing.insert("wiki/entities/a.md".to_string());
         existing.insert("wiki/entities/b.md".to_string());
 
-        let purged = purge_orphans(&conn, &existing).unwrap();
+        let purged = purge_chunk_orphans(&conn, &existing).unwrap();
         assert_eq!(purged, 0);
     }
 }

@@ -32,6 +32,55 @@ from .adapters.base import (
 from .cli_output import _err, _msg_to_dict
 
 
+def _message_dedupe_key(adapter_name: str, message: Any) -> tuple[str, ...]:
+    """Return the safest identity available for one aggregated message.
+
+    ``Message.id`` is only stable inside an adapter.  Apple Mail can expose
+    the same RFC message once through AppleScript and once through its EMLX
+    index, so the adapter id is deliberately not the primary key here.
+    Subject/date are not safe identities: different messages can share both.
+    """
+    message_id = (message.message_id or "").strip()
+    if message_id:
+        return ("rfc822", message.folder, message_id.casefold())
+    return ("adapter", adapter_name, message.folder, message.id)
+
+
+def _source_priority(adapter_name: str, message: Any) -> int:
+    """Prefer a live-client id over a local-cache id when records collide.
+
+    The EMLX record is still a valid fallback and remains usable when it is
+    the only record.  When both representations exist, the AppleScript id
+    keeps the normal account label and the existing Mail.app action route.
+    """
+    del adapter_name  # reserved for future adapter-specific priorities
+    return 0 if "|emlx:" in message.id else 1
+
+
+def _dedupe_messages(messages: list[tuple[str, Any]]) -> list[tuple[str, Any]]:
+    """Deduplicate messages after all adapters/accounts have been queried.
+
+    Keep input order for unique messages and replace a duplicate only when a
+    higher-quality source is available.  This makes the result deterministic
+    while preserving the adapter/id pair needed by ``read`` and actions.
+    """
+    result: list[tuple[str, Any]] = []
+    positions: dict[tuple[str, ...], int] = {}
+    for adapter_name, message in messages:
+        key = _message_dedupe_key(adapter_name, message)
+        existing_position = positions.get(key)
+        if existing_position is None:
+            positions[key] = len(result)
+            result.append((adapter_name, message))
+            continue
+        current_adapter, current_message = result[existing_position]
+        if _source_priority(adapter_name, message) > _source_priority(
+            current_adapter, current_message
+        ):
+            result[existing_position] = (adapter_name, message)
+    return result
+
+
 def _cmd_accounts(adapters: list[EmailAdapter], args) -> int:
     """5/18 BL-EMAIL-MULTI-CLIENT: 跨所有 adapter (Mail.app + Foxmail) 列账号."""
     all_accs = []
@@ -105,6 +154,10 @@ def _cmd_list(adapters: list[EmailAdapter], args) -> int:
                 # 兜一层保跨 adapter 流不挂. 真正想看哪挂用 --debug 看 traceback.
                 errors.append(f"[{adapter.name}] {acc_addr}: {type(e).__name__}: {e}")
                 continue
+
+    # 同一 RFC 邮件可能同时来自 AppleScript 和 EMLX 索引；先去重，再排序
+    # 和 trim，否则同一封邮件会占用两个列表位置。
+    msgs = _dedupe_messages(msgs)
 
     # 跨账号按 date 降序合并, 再 trim 到 limit
     msgs.sort(key=lambda am: am[1].date or "", reverse=True)
@@ -276,6 +329,7 @@ def _cmd_search(adapters: list[EmailAdapter], args) -> int:
             errors.append(f"[{adapter.name}] 搜索失败 ({type(e).__name__}): {e}")
             continue
 
+    hits = _dedupe_messages(hits)
     hits.sort(key=lambda am: am[1].date or "", reverse=True)
     hits = hits[: args.limit]
 

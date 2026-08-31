@@ -22,7 +22,7 @@
  * 它是**唯一有测试的一块** (briefing_advisor_resolved.test.ts 7 条), 走
  * briefing_advisor.ts 的 `__test__` 出口暴露 —— 那个出口保持不变。
  */
-import type { TaskChatStatus, TaskStatus } from "./advisor_cache";
+import type { ManualTaskStatus, TaskChatStatus } from "./advisor_cache";
 import { mergeTaskStatus } from "./advisor_cache";
 import type {
   AdvisorInput,
@@ -62,7 +62,7 @@ export function filterResolvedTasks(
   // P3.5.208-B (7/10 鸿波 catch '关了几次今天又出来'): filter 之前**只按 uid
   // 匹配**, LLM 每次生成新 uid 时 previousTasks 里查不到 → 不 drop. 加 title
   // fallback: 员工遇到 uid 漂移也能被过滤 (title 精确匹配, trim 后小写化对齐).
-  type Entry = { chatStatus?: TaskChatStatus; taskState?: TaskStatus };
+  type Entry = { chatStatus?: TaskChatStatus; taskState?: ManualTaskStatus };
   const bothByUid = new Map<string, Entry>();
   const bothByTitle = new Map<string, Entry>();
   for (const pt of previousTasks) {

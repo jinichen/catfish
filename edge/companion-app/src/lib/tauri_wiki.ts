@@ -60,6 +60,8 @@ export interface WikiFileInfo {
   /** 8/4: 员工亲手写/改的条目带 'employee' —— 没有这个标记的都是 LLM 生成、
    *  没人看过的。数据上区分开之前, 员工分不出哪些可信。 */
   authored_by?: string | null;
+  /** 缺失表示历史条目，按 active 兼容；pending 不进入关系图。 */
+  ontology_status?: string | null;
 }
 
 export interface WikiFileFull {
@@ -81,6 +83,9 @@ export interface WikiSearchHit {
 
 export const wikiSearchText = (query: string) =>
   rawInvoke<WikiSearchHit[]>("wiki_search_text", { query });
+
+export const wikiSearchHybrid = (query: string, topK?: number) =>
+  rawInvoke<WikiSearchHit[]>("wiki_search_hybrid", { query, topK });
 
 // P38 (6/5 鸿波): wiki 语义搜索 (本机 BGE-M3 ONNX). model 未装时 hits=[] + message 提示装法.
 export interface WikiSemanticHit {

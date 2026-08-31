@@ -21,13 +21,23 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use crate::util::date::chrono_today;
 use super::wiki_frontmatter::{mark_authored_by_employee, normalize_type_line};
+use super::wiki_read::ontology_target_is_active;
 use super::wiki_slug::{catfish_home, find_normalized_collision, slugify, validate_slug};
+
+fn reserved_ontology_title(title: &str) -> bool {
+    let normalized = title.trim().to_lowercase();
+    normalized.starts_with("raw/")
+        || normalized.starts_with("raw\\")
+        || normalized.starts_with("wiki/")
+        || normalized.starts_with("file:")
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WikiWriteResult {
     pub rel_path: String,
     pub bytes: u64,
     pub created: bool, // true 新建, false update
+    pub ontology_status: Option<String>,
 }
 
 /// P3.5.132 #5 (6/29 鸿波): typed relations 真 input shape.
@@ -61,6 +71,15 @@ pub async fn wiki_create_entity_or_concept(
     let title_trimmed = title.trim();
     if title_trimmed.is_empty() {
         return Err("title 不能空".to_string());
+    }
+    if reserved_ontology_title(title_trimmed) {
+        return Err(format!(
+            "title 不能是原始资料/文件路径: {title_trimmed}。请把路径写入 sources。"
+        ));
+    }
+    let subtype_trimmed = subtype.trim();
+    if subtype_trimmed.is_empty() {
+        return Err("subtype 不能空，请选择 entity/concept 的细分类型".to_string());
     }
 
     let slug = slugify(title_trimmed, 50);
@@ -116,13 +135,49 @@ pub async fn wiki_create_entity_or_concept(
         .collect::<Vec<_>>()
         .join(", ");
 
+    for relation in &related {
+        let name = match relation {
+            RelatedInput::Bare(name) => name,
+            RelatedInput::Typed { name, .. } => name,
+        };
+        if reserved_ontology_title(name.trim_matches('"')) {
+            return Err("related 不能引用 raw/sources 等原始资料路径，请写入 sources".to_string());
+        }
+    }
+
+    // 新建入口必须显式区分“可进图谱”和“待确认”。UI 选择的 typed relation
+    // 才能直接 active；旧 caller 的裸字符串仍兼容，但先隔离到 pending。
+    let has_untyped_relation = related.iter().any(|relation| match relation {
+        RelatedInput::Bare(_) => true,
+        RelatedInput::Typed { rel, .. } => rel.as_deref().map(str::trim).unwrap_or("").is_empty(),
+    });
+    let has_unresolved_relation = related.iter().any(|relation| {
+        let name = match relation {
+            RelatedInput::Bare(name) => name,
+            RelatedInput::Typed { name, .. } => name,
+        };
+        !ontology_target_is_active(&home, name.trim_matches('"'))
+    });
+    let ontology_status = if kind == "concept"
+        && subtype_trimmed.eq_ignore_ascii_case("system")
+        && related.is_empty()
+    {
+        "active"
+    } else if related.is_empty() || has_untyped_relation || has_unresolved_relation {
+        "pending"
+    } else {
+        "active"
+    };
+
     let content = format!(
         "---\n\
          type: {kind}\n\
+         ontology_status: {ontology_status}\n\
          title: {title_trimmed}\n\
-         {type_field}: {subtype}\n\
+         {type_field}: {subtype_trimmed}\n\
          created: {today}\n\
          updated: {today}\n\
+         {aliases}\
          tags: [{tags_yaml}]\n\
          related: [{related_yaml}]\n\
          sources: [manual]\n\
@@ -130,7 +185,8 @@ pub async fn wiki_create_entity_or_concept(
          \n\
          # {title_trimmed}\n\
          \n\
-         {body}\n"
+        {body}\n",
+        aliases = if is_entity { "aliases: []\n" } else { "" }
     );
 
     // 8/4: UI 新建的也是员工的
@@ -139,7 +195,12 @@ pub async fn wiki_create_entity_or_concept(
     let bytes = content.len() as u64;
     let rel_path = format!("{sub_dir}/{slug}.md");
 
-    Ok(WikiWriteResult { rel_path, bytes, created: true })
+    Ok(WikiWriteResult {
+        rel_path,
+        bytes,
+        created: true,
+        ontology_status: Some(ontology_status.to_string()),
+    })
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -165,6 +226,7 @@ pub async fn wiki_update_file(
         rel_path,
         bytes: content.len() as u64,
         created: false,
+        ontology_status: None,
     })
 }
 
@@ -409,6 +471,7 @@ pub async fn wiki_uninstall_shared(rel_path: String) -> Result<WikiWriteResult, 
         rel_path: format!("wiki-shared/.trash/{trashed_name}"),
         bytes,
         created: false,
+        ontology_status: None,
     })
 }
 

@@ -49,6 +49,21 @@ export function _buildQuotedBody(msg: {
   );
 }
 
+/**
+ * 把 AI 回复草稿放在原邮件引用前。
+ *
+ * 回复面板的 initialBody 是引用段；拟稿成功后不能直接覆盖它，否则员工
+ * 最终保存/发送的邮件只剩 AI 正文。每次重拟都从固定的 initialBody 合并，
+ * 不会把上一次生成的正文或引用重复叠加。
+ */
+export function _mergeReplyDraftWithQuote(draft: string, quotedBody: string): string {
+  const cleanDraft = draft.trim();
+  const cleanQuote = quotedBody.trim();
+  if (!cleanQuote) return draft;
+  if (!cleanDraft) return cleanQuote;
+  return `${cleanDraft}\n\n${cleanQuote}`;
+}
+
 export function _formatShortDate(iso: string): string {
   if (!iso) return "";
   try {

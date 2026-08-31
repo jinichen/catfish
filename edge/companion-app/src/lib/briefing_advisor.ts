@@ -20,6 +20,9 @@
 import { config } from "./env";
 import { fetchWithAuth } from "./me";
 import type { TaskStatus } from "./advisor_cache";
+import {
+  advisorCacheSourceMeta,
+} from "./advisor_cache";
 import { warnIfUpstreamError } from "./upstreamErrorGuard";
 
 // 8/15: 本文件原来 2281 行 —— 仓里最大的 TS 文件, 过了 CLAUDE.md §1 的 800 红线。
@@ -51,7 +54,11 @@ import type {
   AdvisorInput,
   AdvisorResult,
 } from "./briefing_advisor_common";
-import { ADVISOR_JSON_SCHEMA, SYSTEM_PROMPT, buildUserPrompt } from "./briefing_advisor_prompts";
+import { buildUserPrompt } from "./briefing_advisor_prompts";
+import {
+  buildAdvisorAgentRequest,
+  buildAdvisorTransformRequest,
+} from "./briefing_advisor_request";
 import {
   filterResolvedTasks,
   parseAdvisorResult,
@@ -59,6 +66,7 @@ import {
 } from "./briefing_advisor_parse";
 import {
   filterAdvisorResultByEvidence,
+  isAdvisorTaskBackedByCurrentInput,
   isAdvisorTransformSourceUsable,
 } from "./briefing_advisor_quality";
 import { ensureTaskChatSummariesFresh } from "./briefing_advisor_summaries";
@@ -121,11 +129,17 @@ export async function fetchBriefingAdvisor(input: AdvisorInput): Promise<Advisor
           // 里有 _fetchBriefingAdvisorImpl 阶段刚 pre-write 的 summaries, 直接 build
           // 新 cache 会丢. merge 进去.
           const oldCache = await advisorCacheGet().catch(() => null);
+          const currentTaskUids = new Set(result.mainTasks.map((task) => task.taskUid));
+          const taskChatSummaries = Object.fromEntries(
+            Object.entries(oldCache?.taskChatSummaries ?? {})
+              .filter(([taskUid]) => currentTaskUids.has(taskUid)),
+          );
           await advisorCacheSave({
             computedAt: new Date().toISOString(),
             result,
             model: input.model,
-            taskChatSummaries: oldCache?.taskChatSummaries,
+            sourceMeta: advisorCacheSourceMeta(input),
+            taskChatSummaries,
           });
           // P3.4.E.6 (6/15 鸿波): 区分 race 内完成 / race 外完成. 实际多数 cache 写
           //   在 race 内 (主 caller 拿到结果 + cache 同步写), 老文案"可能已 TIMEOUT"
@@ -207,133 +221,18 @@ async function fetchWikiRelevant(input: AdvisorInput): Promise<string> {
 }
 
 
-// ─── P3.5.4 (6/16 鸿波): BGE-M3 相关性筛选 ────────────────────────────
-//
-// distilled_facts / hermes memory § / prev_tasks 都按今天输入 (todos+emails+events)
-// 算语义相关性, top-K 注入. 砍 prompt 50%+, advisor Call 1 不再 truncated.
-//
-// 失败 fallback 返原 input (model 缺 / embed 异常都 silent).
-// caller 拿到的"过滤后 input" 喂 buildUserPrompt, buildUserPrompt 不需要改 — 它直接读
-// ctx.distilledFacts / ctx.hermesMemoryRecent / previousTasks, 我们只是替换这 3 个字段值.
-
-const RELEVANCE_TOP_K_DISTILLED = 3;     // distilled_facts 段保留前 N
-const RELEVANCE_TOP_K_MEMORY = 5;        // memory § 保留前 N
-const RELEVANCE_TOP_K_PREV_TASKS = 5;    // prev_tasks 保留前 N (LLM 复用 task_uid)
-
+// 早安的 advisor 不再把长期画像、Hermes memory、历史会话或周报当作本轮输入。
+// 这些内容仍可供 profile/其他功能使用，但不能重新生成已经结束的待办。
 async function applyRelevanceFilter(input: AdvisorInput): Promise<AdvisorInput> {
-  // 构造 query: 今天员工真要处理的事 (todos + emails subject + events summary)
-  const queryParts: string[] = [];
-  if (input.todos.length > 0) {
-    queryParts.push(input.todos.map((t) => t.text).join(" "));
-  }
-  if (input.emails.length > 0) {
-    queryParts.push(
-      input.emails.map((m) => `${m.sender}: ${m.subject}`).join(" "),
-    );
-  }
-  if (input.events.length > 0) {
-    queryParts.push(input.events.map((e) => e.summary).join(" "));
-  }
-  const query = queryParts.join("\n").trim();
-
-  if (!query) {
-    // 今天啥也没 (advisor 实际不会跑到这, 上游已 short-circuit), fallback
-    return input;
-  }
-
-  // 切段
-  const {
-    splitDistilledFacts,
-    splitMemoryRecent,
-    rankRelevance,
-    pickTopK,
-  } = await import("./advisor_relevance");
-
-  const distilledSegs = splitDistilledFacts(input.ctx.distilledFacts || "");
-  const memorySegs = splitMemoryRecent(input.ctx.hermesMemoryRecent || "");
-  const prevTaskTexts: string[] = (input.previousTasks ?? []).map((t) => {
-    // prev_task embed 输入: title + chatSummary (chat summary 更精准反映"已聊过啥")
-    return t.chatSummary ? `${t.title}\n${t.chatSummary}` : t.title;
-  });
-
-  // 没东西可筛 → fallback (不调 BGE-M3)
-  if (
-    distilledSegs.length <= RELEVANCE_TOP_K_DISTILLED &&
-    memorySegs.length <= RELEVANCE_TOP_K_MEMORY &&
-    prevTaskTexts.length <= RELEVANCE_TOP_K_PREV_TASKS
-  ) {
-    return input;
-  }
-
-  // 并发 3 个 rank
-  const [distilledRes, memoryRes, prevRes] = await Promise.all([
-    distilledSegs.length > RELEVANCE_TOP_K_DISTILLED
-      ? rankRelevance(query, distilledSegs, "distilled")
-      : Promise.resolve(null),
-    memorySegs.length > RELEVANCE_TOP_K_MEMORY
-      ? rankRelevance(query, memorySegs, "memory")
-      : Promise.resolve(null),
-    prevTaskTexts.length > RELEVANCE_TOP_K_PREV_TASKS
-      ? rankRelevance(query, prevTaskTexts, "prev_task")
-      : Promise.resolve(null),
-  ]);
-
-  // model 全挂 → fallback 全量
-  if (
-    distilledRes?.modelLoaded === false &&
-    memoryRes?.modelLoaded === false &&
-    prevRes?.modelLoaded === false
-  ) {
-    console.warn("[advisor relevance] BGE-M3 model 全挂, fallback 全量注入");
-    return input;
-  }
-
-  // 拼新 ctx + previousTasks
-  let newDistilled = input.ctx.distilledFacts;
-  let newMemory = input.ctx.hermesMemoryRecent;
-  let newPrevTasks = input.previousTasks;
-
-  if (distilledRes && distilledRes.modelLoaded && distilledRes.ranked.length > 0) {
-    const top = pickTopK(distilledSegs, distilledRes.ranked, RELEVANCE_TOP_K_DISTILLED);
-    newDistilled = top.join("\n\n");
-    const cacheHits = distilledRes.ranked.slice(0, RELEVANCE_TOP_K_DISTILLED).filter((r) => r.fromCache).length;
-    console.log(
-      `[advisor relevance] distilled: ${distilledSegs.length} → top-${top.length}, ` +
-        `${cacheHits} cache 命中, scores: [${distilledRes.ranked.slice(0, 3).map((r) => r.score.toFixed(3)).join(",")}]`,
-    );
-  }
-  if (memoryRes && memoryRes.modelLoaded && memoryRes.ranked.length > 0) {
-    const top = pickTopK(memorySegs, memoryRes.ranked, RELEVANCE_TOP_K_MEMORY);
-    newMemory = top.join("\n§\n");
-    const cacheHits = memoryRes.ranked.slice(0, RELEVANCE_TOP_K_MEMORY).filter((r) => r.fromCache).length;
-    console.log(
-      `[advisor relevance] memory: ${memorySegs.length} → top-${top.length}, ` +
-        `${cacheHits} cache 命中, scores: [${memoryRes.ranked.slice(0, 5).map((r) => r.score.toFixed(3)).join(",")}]`,
-    );
-  }
-  if (
-    prevRes && prevRes.modelLoaded && prevRes.ranked.length > 0 &&
-    input.previousTasks && input.previousTasks.length > RELEVANCE_TOP_K_PREV_TASKS
-  ) {
-    const topIndices = prevRes.ranked.slice(0, RELEVANCE_TOP_K_PREV_TASKS).map((r) => r.idx);
-    newPrevTasks = topIndices
-      .map((i) => input.previousTasks?.[i])
-      .filter((t): t is NonNullable<typeof t> => t !== undefined);
-    const cacheHits = prevRes.ranked.slice(0, RELEVANCE_TOP_K_PREV_TASKS).filter((r) => r.fromCache).length;
-    console.log(
-      `[advisor relevance] prev_tasks: ${prevTaskTexts.length} → top-${newPrevTasks.length}, ` +
-        `${cacheHits} cache 命中, scores: [${prevRes.ranked.slice(0, 5).map((r) => r.score.toFixed(3)).join(",")}]`,
-    );
-  }
-
   return {
     ...input,
     ctx: {
       ...input.ctx,
-      distilledFacts: newDistilled,
-      hermesMemoryRecent: newMemory,
+      distilledFacts: "",
+      hermesMemoryRecent: "",
+      recentSessionBriefs: [],
+      weeklyReports: [],
     },
-    previousTasks: newPrevTasks,
   };
 }
 
@@ -407,12 +306,8 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
   let inputWithPrev = input;
   if (!input.previousTasks) {
     try {
-      // P3.3.46: await summary fresh 先 (内部 in-flight 锁防双调)
-      await ensureTaskChatSummariesFresh(input.model).catch((e) => {
-        console.warn("[advisor] P3.3.46 await ensureSummary 失败 (降级用 stale):", e);
-      });
       const { advisorCacheGet, advisorTaskStateGet } = await import("./advisor_cache");
-      const cached = await advisorCacheGet();
+      let cached = await advisorCacheGet();
       // P3.5.208-B (7/10 鸿波 catch '关了几次今天又出来'): P3.5.208-A migration
       // 时序 race — AdvisorView migration useEffect 依赖 [result], 必须先 setResult
       // 才 trigger, 但 fetchBriefingAdvisor 里 filter 在 setResult **之前**跑完,
@@ -430,7 +325,11 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
       if (cached && cached.result?.mainTasks?.length > 0) {
         const summaries = cached.taskChatSummaries ?? {};
         const enriched = cached.result.mainTasks
-          .filter((t) => typeof t.taskUid === "string" && t.taskUid.length > 0)
+          .filter((t) =>
+            typeof t.taskUid === "string"
+            && t.taskUid.length > 0
+            && isAdvisorTaskBackedByCurrentInput(t, input),
+          )
           .map((t) => ({
             taskUid: t.taskUid,
             title: t.title,
@@ -452,6 +351,27 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
             `[advisor] 注入 ${enriched.length} 条 prev task ` +
               `(${withSummary} 含 chat summary, 全部来自 cache)`,
           );
+        }
+
+        // 摘要刷新只能处理仍有当前来源依据的任务。旧秦树鹏这类只存在于
+        // 历史 cache/事实库中的条目不会再触发并行 summary 写入。
+        const allowedTaskUids = new Set(enriched.map((task) => task.taskUid));
+        await ensureTaskChatSummariesFresh(input.model, allowedTaskUids).catch((e) => {
+          console.warn("[advisor] ensureSummary 失败 (降级继续):", e);
+        });
+        cached = await advisorCacheGet();
+        if (cached && inputWithPrev.previousTasks) {
+          const summariesAfterRefresh = cached.taskChatSummaries ?? {};
+          inputWithPrev = {
+            ...input,
+            previousTasks: inputWithPrev.previousTasks.map((task) => ({
+              ...task,
+              chatSummary: summariesAfterRefresh[task.taskUid]?.summary ?? task.chatSummary,
+              chatStatus: summariesAfterRefresh[task.taskUid]?.status ?? task.chatStatus,
+              taskState:
+                summariesAfterRefresh[task.taskUid]?.manualStatus ?? task.taskState,
+            })),
+          };
         }
       }
     } catch (e) {
@@ -475,14 +395,6 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
   const url = `${config.backendUrl}/v1/chat/completions${SERVICE_LLM_QUERY}`;
   console.log("[advisor] 发 fetch:", url, "prompt 长度:", userPrompt.length);
 
-  // P3.4.6 (6/15 鸿波) sanity: hermes MEMORY 近期事项段是否真拼到 prompt 里.
-  //   - "✓ 已注入" = Rust briefing_context_fetch 返了 hermes_memory_recent, 内容非空, prompt 拼了 "# 近期事项" 段
-  //   - "✗ 未注入" = MEMORY.md 不存在 / 全是空 § 段 / Rust 端没读 / advisor.ts buildUserPrompt 漏拼
-  // 完整 prompt dump: 在 DevTools Console 跑 localStorage.setItem("catfish:debug_advisor_prompt", "true") 再刷新.
-  console.log(
-    "[advisor] P3.4.6 hermes memory 近期事项注入:",
-    userPrompt.includes("# 近期事项") ? "✓ 已注入" : "✗ 未注入 (ctx.hermesMemoryRecent 空 / MEMORY.md 不存在 / 全空 § 段)",
-  );
   if (typeof localStorage !== "undefined" && localStorage.getItem("catfish:debug_advisor_prompt") === "true") {
     console.log("[advisor] 完整 prompt (P3.4.6 debug 模式, localStorage flag 打开):\n" + userPrompt);
   }
@@ -492,34 +404,7 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
     const resp = await fetchWithAuth(url, {
       method: "POST",
       headers: SERVICE_LLM_HEADERS,
-      body: JSON.stringify({
-        model: input.model,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: userPrompt },
-        ],
-        // P3.4.C (6/15 鸿波): 3000 → 6000.
-        //   真因 (鸿波 6/15 console raw content audit): DeepSeek Flash 仍
-        //   "reasoning out loud" — 跑完 tool 后输出 "所有扫描完成。结果汇总: ...
-        //   现在输出最终 JSON。{ "tier": "mid", "main_tasks": [{...]" — reasoning
-        //   prose ~1500 tokens + JSON ~1500 tokens, max_tokens=3000 边界刚好,
-        //   JSON 经常截断 (没闭合 ] }), robustJsonParse 救不了 truncated JSON.
-        //   6000 给 reasoning + JSON 都装下. 跟 P3.4.D robustJsonParse 改 brace
-        //   balanced match 一起救 truncated 场景.
-        max_tokens: 6000,
-        temperature: 0.4,
-        stream: false,
-        // P3.4.10 (6/15 鸿波): OpenAI 协议强制 JSON. P3.4.9 prompt 加强对
-        //   DeepSeek Flash 无效 (LLM 仍 "Good — consistent with TODO list.
-        //   Let me finalize..." 输出 markdown reasoning). 真因是 reasoning
-        //   model 倾向 think out loud, prompt 压不住. response_format 是 API
-        //   层面强制.
-        //
-        //   兼容性: catfish-gateway facts_pipeline.py:165 已有同款用法, 注释
-        //   "部分模型支持, 不支持的会忽略" — 加上零风险, 不破坏现有调用.
-        //   DeepSeek API / Anthropic Claude / OpenAI gpt-4o-mini 全支持.
-        response_format: { type: "json_object" },
-      }),
+      body: JSON.stringify(buildAdvisorAgentRequest(input.model, userPrompt)),
     });
 
     console.log("[advisor] HTTP status =", resp.status);
@@ -659,37 +544,6 @@ async function transformToStructured(
   tier: "frontline" | "mid" | "senior",
 ): Promise<AdvisorResult | null> {
   const url = `${config.gatewayUrl}/v1/chat/completions${ADVISOR_DIRECT_QUERY}`;
-  const trimmed = rawContent.length > 12000 ? rawContent.slice(0, 12000) + "\n\n[已截 ...]" : rawContent;
-
-  // P3.4.E.7 (6/15 鸿波): senior tier 异常型主菜 0 options 合法, frontline/mid 必须 ≥2.
-  //   ADVISOR_JSON_SCHEMA 默认 minItems=2 给 frontline/mid 强约束. senior 时动态 deep-clone
-  //   去掉 minItems 让 senior 0 options 合法.
-  let schemaForCall: typeof ADVISOR_JSON_SCHEMA | Record<string, unknown> = ADVISOR_JSON_SCHEMA;
-  if (tier === "senior") {
-    // 浅 deep-clone (JSON 不含函数 / 循环引用, 安全)
-    const cloned = JSON.parse(JSON.stringify(ADVISOR_JSON_SCHEMA));
-    // 路径: properties.mainTasks.items.properties.options.minItems
-    const opt = cloned?.properties?.mainTasks?.items?.properties?.options;
-    if (opt && typeof opt === "object") {
-      delete opt.minItems;
-      opt.description = "senior tier 异常型主菜可 0 个 options, 只列例外 + 风险";
-    }
-    schemaForCall = cloned;
-  }
-
-  const tierDirective =
-    tier === "senior"
-      ? "员工是 senior tier — 异常例外型主菜可 0 个 options, 只列例外 + 风险."
-      : `员工是 ${tier} tier — 每个 mainTask 必须 2-3 个 options (口径/语气选项), 不达标 schema 会拒.`;
-
-  const sys =
-    "你是 catfish advisor 结构化转换器. 收到 advisor 的最终推理结论 (可能含 reasoning prose + 部分 JSON 混合), 必须调 submit_advisor_result tool 提交结构化 AdvisorResult. " +
-    "不要返 free-text content, 不要解释, 直接调 tool. 只能转换原文已经明确出现的业务事实，不得新增任务、项目、人名、截止时间或理由。" +
-    "如果原文没有具体业务事项，mainTasks 必须为空数组，绝对禁止生成‘等待用户输入’‘无具体任务’等占位任务。handledSilently 缺失时用空数组。" +
-    "taskUid 如原文有就复用, 没有就生成 6 字符 [a-z0-9]. " +
-    tierDirective;
-  const userPrompt = `# advisor 原始结论 (转结构化)\n\n${trimmed}`;
-
   console.log(
     "[advisor] P3.4.E Call 2 transformToStructured 触发, tier:",
     tier,
@@ -701,27 +555,7 @@ async function transformToStructured(
     const resp = await fetchWithAuth(url, {
       method: "POST",
       headers: SERVICE_LLM_HEADERS,
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: sys },
-          { role: "user", content: userPrompt },
-        ],
-        max_tokens: 6000,  // 跟 Call 1 同, transform 不可能比 Call 1 输出大
-        temperature: 0.1,  // 转换任务用低温, 不要 LLM 重新发挥
-        stream: false,
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "submit_advisor_result",
-              description: "提交结构化 advisor 结果. 必须调这个 tool, 不允许 free-text content.",
-              parameters: schemaForCall,
-            },
-          },
-        ],
-        tool_choice: { type: "function", function: { name: "submit_advisor_result" } },
-      }),
+      body: JSON.stringify(buildAdvisorTransformRequest({ model, rawContent, tier })),
     });
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");

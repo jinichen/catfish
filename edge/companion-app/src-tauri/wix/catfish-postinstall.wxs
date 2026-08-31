@@ -124,6 +124,16 @@
                   Value="[INSTALLDIR]resources\windows\cpython-3.11.15-embed.zip"
                   Execute="immediate"/>
 
+    <CustomAction Id="SetCatfishWechatReaderInstallPath"
+                  Property="CatfishWechatReaderInstallPath"
+                  Value="[INSTALLDIR]resources\windows\install-wechat-reader.ps1"
+                  Execute="immediate"/>
+
+    <CustomAction Id="SetCatfishWechatReaderDistPath"
+                  Property="CatfishWechatReaderDistPath"
+                  Value="[INSTALLDIR]resources\windows\catfish-wechat-reader-dist.tar.gz"
+                  Execute="immediate"/>
+
     <!--
       Step 2: deferred CA. 引用 4 个 property 的 [XXX] format 展开.
       每个 property 值双引号 wrap 处理空格路径.
@@ -151,6 +161,13 @@
                   Return="check"
                   ExeCommand='-NoProfile -ExecutionPolicy Bypass -File "[CatfishInstallPs1Path]" -NonInteractive -OfflineSourceTar "[CatfishHermesTarPath]" -OfflineUvExe "[CatfishUvExePath]" -OfflinePythonZip "[CatfishPythonZipPath]" -OfflineChromiumTar "[CatfishChromiumTarPath]"'/>
 
+    <CustomAction Id="CatfishInstallWechatReader"
+                  Property="POWERSHELLEXE"
+                  Execute="deferred"
+                  Impersonate="yes"
+                  Return="ignore"
+                  ExeCommand='-NoProfile -ExecutionPolicy Bypass -File "[CatfishWechatReaderInstallPath]" -DistributionPath "[CatfishWechatReaderDistPath]"'/>
+
     <!--
       Step 3: sequence. 4 SetProperty CA 排 After=CostFinalize
       (此时 [INSTALLDIR] 已 resolve), deferred CA 排 After=InstallFiles
@@ -166,7 +183,10 @@
       <Custom Action="SetCatfishUvExePath"        After="SetCatfishHermesTarPath">NOT REMOVE</Custom>
       <Custom Action="SetCatfishPythonZipPath"    After="SetCatfishUvExePath">NOT REMOVE</Custom>
       <Custom Action="SetCatfishChromiumTarPath"  After="SetCatfishPythonZipPath">NOT REMOVE</Custom>
+      <Custom Action="SetCatfishWechatReaderInstallPath" After="SetCatfishChromiumTarPath">NOT REMOVE</Custom>
+      <Custom Action="SetCatfishWechatReaderDistPath" After="SetCatfishWechatReaderInstallPath">NOT REMOVE</Custom>
       <Custom Action="CatfishRunInstall"          After="InstallFiles">NOT REMOVE</Custom>
+      <Custom Action="CatfishInstallWechatReader" After="CatfishRunInstall">NOT REMOVE</Custom>
     </InstallExecuteSequence>
 
     <!--

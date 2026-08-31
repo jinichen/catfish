@@ -27,6 +27,7 @@ import * as React from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import { fetchMe, type MeInfo } from "../../lib/me";
+import WeChatArchiveCard from "./WeChatArchiveCard";
 import WeChatQrLoginModal from "./WeChatQrLoginModal";
 
 interface BindingEntry {
@@ -454,6 +455,8 @@ export default function WeChatBindingCard() {
           </table>
         </div>
       )}
+
+      <WeChatArchiveCard />
 
       {/* 6/1 鸿波: 删底部 "~/.hermes/platforms/pairing + hermes pairing list" 技术细节,
           跟隐私卡同原则 — 不让员工联想, 也不教 CLI. 真员工 IT 自查走另外的 catfish

@@ -18,6 +18,8 @@
  * 根本不是"没匹配" —— 是 provider 没就绪。鸿波今晚看到的就是这一句 +
  * 上面那段"未就绪", 两条凑在一起把人往"本地模型坏了"引。
  */
+import { wikiKindLabel } from "./wikiLabels";
+
 export function SearchResults({
   hits,
   searching,
@@ -27,66 +29,39 @@ export function SearchResults({
 }: {
   hits: import("../../lib/tauri").WikiSearchHit[];
   searching: boolean;
-  mode: "title" | "body" | "semantic";
+  mode: "title" | "body" | "semantic" | "hybrid";
   selectedPath: string | null;
   onSelect: (relPath: string) => Promise<void>;
 }) {
-  const isSemantic = mode === "semantic";
+  const isMeaningSearch = mode === "semantic" || mode === "hybrid";
   if (searching && hits.length === 0) {
-    return (
-      <div style={{ color: "var(--catfish-text-muted)", fontSize: 11, padding: 8 }}>
-        🔍 搜索中…
-      </div>
-    );
+    return <div className="wiki-search-results__status">正在搜索…</div>;
   }
   if (hits.length === 0) {
     return (
-      <div style={{ color: "var(--catfish-text-muted)", fontSize: 11, padding: 8 }}>
-        {isSemantic
-          ? "语义检索没找到相近的条目"
-          : "没匹配 (title / body / tags 都试过)"}
+      <div className="wiki-search-results__status">
+        {isMeaningSearch ? "没有找到含义相近的知识" : "没有找到匹配的知识"}
       </div>
     );
   }
   return (
-    <div style={{ marginTop: "var(--space-2)" }}>
-      <div style={{ fontSize: 10, color: "var(--catfish-text-muted)", marginBottom: 4 }}>
-        {isSemantic ? "🧭 语义检索" : "🔍 全文搜"} — {hits.length} 个结果
-      </div>
-      <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+    <div className="wiki-search-results">
+      <div className="wiki-search-results__summary">找到 {hits.length} 条知识</div>
+      <ul>
         {hits.map((h) => (
-          <li
-            key={h.rel_path}
-            onClick={() => void onSelect(h.rel_path)}
-            style={{
-              padding: "6px 8px",
-              marginBottom: 4,
-              cursor: "pointer",
-              borderRadius: 4,
-              fontSize: 11,
-              background:
-                selectedPath === h.rel_path ? "var(--catfish-bg-elevated, rgba(0,0,0,0.05))" : "transparent",
-              borderLeft: `2px solid ${kindColor(h.kind)}`,
-            }}
-          >
-            <div style={{ fontWeight: 600, marginBottom: 2 }}>
-              {kindEmoji(h.kind)} {h.title}
-              <span style={{ marginLeft: 6, fontSize: 9, color: "var(--catfish-text-muted)", fontWeight: 400 }}>
-                {h.matched_in.join(" · ")} · {h.score.toFixed(1)}
-              </span>
-            </div>
-            <div
-              style={{
-                color: "var(--catfish-text-muted)",
-                fontSize: 10,
-                lineHeight: 1.4,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-              }}
+          <li key={h.rel_path}>
+            <button
+              type="button"
+              onClick={() => void onSelect(h.rel_path)}
+              data-active={selectedPath === h.rel_path}
             >
-              {h.snippet}
-            </div>
+              <span className={`wiki-kind-badge wiki-kind-badge--${h.kind}`}>
+                {wikiKindLabel(h.kind)}
+              </span>
+              <strong>{h.title}</strong>
+              <small>匹配：{h.matched_in.map(matchedInLabel).join("、")}</small>
+              <span className="wiki-search-results__snippet">{h.snippet}</span>
+            </button>
           </li>
         ))}
       </ul>
@@ -94,9 +69,10 @@ export function SearchResults({
   );
 }
 
-function kindColor(k: string): string {
-  return k === "entity" ? "#4a9eff" : k === "concept" ? "#ff9933" : "#5fc878";
-}
-function kindEmoji(k: string): string {
-  return k === "entity" ? "🧑" : k === "concept" ? "📐" : "💬";
+function matchedInLabel(value: string): string {
+  if (value === "title") return "标题";
+  if (value === "body") return "正文";
+  if (value === "tags") return "标签";
+  if (value === "semantic") return "含义";
+  return value;
 }

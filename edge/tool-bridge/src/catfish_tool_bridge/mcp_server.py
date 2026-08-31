@@ -81,6 +81,16 @@ def _is_catfish_owned(name: str) -> bool:
     return name.startswith("mcp_")
 
 
+def _visible_catfish_schemas(schemas: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """MCP 只暴露 Catfish 所有且在当前终端实际可用的工具。"""
+    return [
+        schema
+        for schema in schemas
+        if _is_catfish_owned(schema.get("name"))
+        and schema.get("available") is not False
+    ]
+
+
 def _init_catfish_tool_bridge() -> None:
     """bootstrap hermes registry + 注入 adapter. 跟 server.py:init_and_serve 同顺序.
 
@@ -109,9 +119,6 @@ async def amain() -> None:
         )
         sys.exit(2)
 
-    app: Server = Server("catfish-tool-bridge")
-
-    @app.list_tools()
     async def list_tools() -> list[Tool]:
         """返 **catfish 自己的** tool. 不含 hermes registry 里的.
 
@@ -162,13 +169,19 @@ async def amain() -> None:
             sys.stderr.write(f"list_tools error: {e}\n")
             return []
         tools: list[Tool] = []
-        echoed_back = 0
-        for s in schemas:
+        visible_schemas = _visible_catfish_schemas(schemas)
+        echoed_back = sum(
+            1 for schema in schemas
+            if schema.get("name") and not _is_catfish_owned(schema.get("name"))
+        )
+        unavailable = sum(
+            1 for schema in schemas
+            if _is_catfish_owned(schema.get("name"))
+            and schema.get("available") is False
+        )
+        for s in visible_schemas:
             name = s.get("name")
             if not name:
-                continue
-            if not _is_catfish_owned(name):
-                echoed_back += 1
                 continue
             # adapter.list_tools() 返的 schema 用 input_schema (Anthropic/MCP
             # 格式); 老 OpenAI 格式叫 parameters. 双 fallback 容错.
@@ -185,13 +198,13 @@ async def amain() -> None:
                 )
             )
         logger.info(
-            "MCP list_tools: 返 %d 个 catfish 工具 (滤掉 %d 个 hermes registry 的, "
+            "MCP list_tools: 返 %d 个 catfish 工具 (滤掉 %d 个 hermes registry、"
+            "%d 个当前终端不可用工具, "
             "见 BL-MCP-ECHO-HERMES-TOOLS)",
-            len(tools), echoed_back,
+            len(tools), echoed_back, unavailable,
         )
         return tools
 
-    @app.call_tool()
     async def call_tool(name: str, arguments: Dict[str, Any] | None) -> list[TextContent]:
         """dispatch 一个 tool. 返 TextContent (JSON 字符串).
 
@@ -213,6 +226,42 @@ async def amain() -> None:
             }
         text = json.dumps(result, ensure_ascii=False)
         return [TextContent(type="text", text=text)]
+
+    # MCP Python SDK 2.0 删除了低层 Server 上的 ``@list_tools`` /
+    # ``@call_tool`` 装饰器，改成构造函数 handler。Hermes 0.20.6 首次带入
+    # 这个版本；旧 Hermes 仍需保留装饰器路径，方便 Companion 跨版本升级。
+    probe = Server("catfish-tool-bridge")
+    if hasattr(probe, "list_tools"):
+        app: Server = probe
+        app.list_tools()(list_tools)
+        app.call_tool()(call_tool)
+    else:
+        from mcp.types import (
+            CallToolRequestParams,
+            CallToolResult,
+            ListToolsResult,
+            PaginatedRequestParams,
+        )
+
+        async def list_tools_v2(
+            _ctx: Any,
+            _params: PaginatedRequestParams | None,
+        ) -> ListToolsResult:
+            return ListToolsResult(tools=await list_tools())
+
+        async def call_tool_v2(
+            _ctx: Any,
+            params: CallToolRequestParams,
+        ) -> CallToolResult:
+            return CallToolResult(
+                content=await call_tool(params.name, params.arguments),
+            )
+
+        app = Server(
+            "catfish-tool-bridge",
+            on_list_tools=list_tools_v2,
+            on_call_tool=call_tool_v2,
+        )
 
     # 跑 stdio server
     async with stdio_server() as (read_stream, write_stream):

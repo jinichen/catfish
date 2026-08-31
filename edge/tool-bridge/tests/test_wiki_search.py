@@ -225,6 +225,54 @@ def test_search_wiki_top_k_clamp(tmp_catfish):
     assert res["count"] <= 15
 
 
+def test_search_wiki_excludes_deprecated_records(tmp_catfish):
+    """废弃条目保留给历史链接解析, 但不能进入默认回答检索."""
+    _write_wiki(
+        tmp_catfish / "wiki" / "concepts" / "old-rule.md",
+        "旧规则", "concept", "唯一旧规则词 deprecated-rule",
+    )
+    old = tmp_catfish / "wiki" / "concepts" / "old-rule.md"
+    old.write_text(
+        old.read_text(encoding="utf-8").replace(
+            "title: 旧规则", "deprecated: true\ntitle: 旧规则"
+        ),
+        encoding="utf-8",
+    )
+    _write_wiki(
+        tmp_catfish / "wiki" / "concepts" / "current-rule.md",
+        "现行规则", "concept", "唯一现行规则词 deprecated-rule",
+    )
+
+    res = ws.search_wiki("deprecated-rule", top_k=15)
+
+    assert res["total_indexed"] == 1
+    assert [m["title"] for m in res["matches"]] == ["现行规则"]
+
+
+def test_search_wiki_excludes_expired_records(tmp_catfish):
+    """已过期事实不能被默认检索当作当前事实返回."""
+    _write_wiki(
+        tmp_catfish / "wiki" / "entities" / "expired-cert.md",
+        "过期证书", "entity", "唯一证书编号 expired-cert-number",
+    )
+    expired = tmp_catfish / "wiki" / "entities" / "expired-cert.md"
+    expired.write_text(
+        expired.read_text(encoding="utf-8").replace(
+            "title: 过期证书", "title: 过期证书\nstatus: expired"
+        ),
+        encoding="utf-8",
+    )
+    _write_wiki(
+        tmp_catfish / "wiki" / "entities" / "current-cert.md",
+        "现行证书", "entity", "唯一证书编号 current-cert-number",
+    )
+
+    res = ws.search_wiki("expired-cert-number", top_k=15)
+
+    assert all(m["title"] != "过期证书" for m in res["matches"])
+    assert res["total_indexed"] == 1
+
+
 def test_search_wiki_summary_mentions_dept_count(tmp_catfish):
     """summary 区分自家 / 部门 wiki 命中数."""
     _write_wiki(

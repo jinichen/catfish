@@ -20,7 +20,7 @@ import { type Personality } from "./agent";
 import { config } from "./env";
 import { warnIfUpstreamError } from "./upstreamErrorGuard";
 import { fetchWithAuth } from "./me";
-import { journalReadRecent, type CalendarEvent, type JournalTodo } from "./tauri";
+import { type CalendarEvent, type ReminderTodo } from "./tauri";
 
 /** BL-BRIEFING-LLM-PERSONALITY (5/20): 把员工选的桌宠人格 (gentle/direct/roast)
  * 注入到 LLM system prompt. 让早安播报 / 急邮件提醒 / TODO 抽取 4 个 LLM 调用
@@ -88,11 +88,27 @@ const SYSTEM_PROMPT = `你是用户的鲶鱼数字员工 (Catfish), 帮员工写
 
 只返一行建议, 不要任何前缀 (不要"建议:" / "今日:") / 解释 / markdown.`;
 
+function _formatUpcomingEvent(event: CalendarEvent): string {
+  const start = new Date(event.start);
+  const day = start.toLocaleDateString("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    weekday: "short",
+  });
+  if (event.all_day) return `${day} 全天 ${event.summary}`;
+  const time = start.toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  return `${day} ${time} ${event.summary}`;
+}
+
 /** 拼 LLM prompt — 把三源数据浓缩成一段 user message. */
 function _buildUserPrompt(
   unread: number,
   events: CalendarEvent[],
-  todos: JournalTodo[],
+  todos: ReminderTodo[],
 ): string {
   const lines: string[] = [];
 
@@ -107,18 +123,10 @@ function _buildUserPrompt(
 
   // 日历
   if (events.length === 0) {
-    lines.push("日历: 今天没排事.");
+    lines.push("日历: 本周没排事.");
   } else {
-    const summaries = events.slice(0, 5).map((e) => {
-      if (e.all_day) return `全天 ${e.summary}`;
-      const startTime = new Date(e.start).toLocaleTimeString("zh-CN", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-      });
-      return `${startTime} ${e.summary}`;
-    });
-    lines.push(`日历今天 ${events.length} 件: ${summaries.join(", ")}.`);
+    const summaries = events.slice(0, 5).map(_formatUpcomingEvent);
+    lines.push(`日历本周 ${events.length} 件: ${summaries.join(", ")}.`);
   }
 
   // 邮件
@@ -128,12 +136,12 @@ function _buildUserPrompt(
     lines.push(`邮件: 未读 ${unread} 封.`);
   }
 
-  // journal TODO
+  // Reminders 本周待办
   if (todos.length === 0) {
-    lines.push("journal: 没未完成待办.");
+    lines.push("Reminders: 本周没有未完成待办.");
   } else {
-    const top3 = todos.slice(-3).map((t) => t.text); // 最后 3 条 = 最新
-    lines.push(`journal 未完成 ${todos.length} 件 (最新: ${top3.join(", ")}).`);
+    const top3 = todos.slice(0, 3).map((t) => t.text);
+    lines.push(`Reminders 本周未完成 ${todos.length} 件 (最近到期: ${top3.join(", ")}).`);
   }
 
   return lines.join("\n");
@@ -147,7 +155,7 @@ function _buildUserPrompt(
 export async function fetchBriefingSuggestion(
   unread: number,
   events: CalendarEvent[],
-  todos: JournalTodo[],
+  todos: ReminderTodo[],
   model: string,
   personality?: Personality,
 ): Promise<string | null> {
@@ -212,35 +220,27 @@ export async function fetchBriefingSuggestion(
 
 // ── BL-BRIEFING-LLM-MERGE (5/20): 合并 2 个 LLM 调用为 1 个 ──────
 //
-// fetchBriefingSuggestion + fetchLlmJournalTodos 各跑 ~6s, 并发也要等慢的那个.
-// 合并后 1 个 prompt 同时返 `{todos, suggestion}`, 减一半延迟 + 减一半 token.
-// JSON 解析失败 → 调用方 fallback 到两个独立调用.
-// (5/21 Phase 6 后, BriefingCard 只读 .todos 字段, .suggestion 仅 useProactiveScheduler 用.)
+// 8/31: 用户待办统一到 Reminders 后，不再从 journal 猜测新 TODO；此调用只负责
+// 基于邮件、日历和 Reminders 写一行主动提醒。
 
-const MERGED_SYSTEM_PROMPT = `你是用户的鲶鱼数字员工 (Catfish), 帮员工同时干两件事:
+const MERGED_SYSTEM_PROMPT = `你是用户的鲶鱼数字员工 (Catfish)。根据今天的邮件、本周日历和 Reminders 本周待办写一行优先建议:
 
-1. **抽 journal 里"没标 TODO 但显然是待办"的事** (LLM 推断 TODO)
-   - 只抽未完成的事 (员工说"明天要 X" / "还得 Z")
-   - 不抽已发生 / 已完成 / 已有显式 \`- [ ]\` 或 \`TODO:\` 标记的
-   - 不要 hallucinate, 不要把"想法"当待办
-
-2. **写一行优先建议** (Daily Briefing 的 💡 行)
    - 一行字 30 字内, 按时间紧急度
    - 用"→"连接 2-3 件事
    - 口语化, 不要"为您" / 不要"祝您工作顺利"
+   - 只使用输入里已有的事项，不新增或猜测待办
    // P3.5.212 (7/10 鸿波 校正): 走 Companion → Hermes → Gateway, hermes
    // catfish-memory prefetch (P3.5.211) 已注入'事实为准'军规到 system,
    // 这里再加一份重复. 撤回, 军规单点在 hermes 保生效.
 
 返回严格 JSON, 不要 markdown 反引号包裹, 不要前缀:
 \`\`\`
-{"todos": ["待办描述 1", "待办描述 2"], "suggestion": "一会儿 14:00 跟老李会议 → 处理 5 封邮件"}
+{"suggestion": "一会儿 14:00 跟老李会议 → 处理 5 封邮件"}
 \`\`\`
 
-todos 数组可为空 \`[]\` (没抽到自然语言 TODO). suggestion 不能为空字符串 (数据三源都空时返 "今天比较松, 喝杯水?").`;
+suggestion 不能为空字符串 (数据三源都空时返 "今天比较松, 喝杯水?").`;
 
 export interface MergedBriefing {
-  todos: JournalTodo[];
   suggestion: string;
 }
 
@@ -251,33 +251,26 @@ export interface UrgentEmailHint {
   sender: string;
 }
 
-/** 合并 prompt 一次 LLM 调用拿 TODO + 优先建议.
+/** 合并 prompt 一次 LLM 调用生成优先建议。
  *
- * 成功 → 返 MergedBriefing. JSON 解析失败 / LLM 挂 → 返 null (调用方 fallback 两次独立调用).
+ * 成功 → 返 MergedBriefing。JSON 解析失败 / LLM 挂 → 返 null。
  *
- * timeout 8s (比单调用稍宽, 因为 LLM 要 reason 两件事 + 输出 JSON 更长).
+ * timeout 8s，给内网模型留出综合三类输入的时间。
  */
 export async function fetchMergedBriefing(
   unread: number,
   events: CalendarEvent[],
-  knownTodos: JournalTodo[],
+  knownTodos: ReminderTodo[],
   model: string,
   urgentEmails: UrgentEmailHint[] = [],
   personality?: Personality,
 ): Promise<MergedBriefing | null> {
   // 三源都空 → LLM 也写不出, 直接默认
   if (unread === 0 && events.length === 0 && knownTodos.length === 0) {
-    return { todos: [], suggestion: "今天比较松, 喝杯水?" };
+    return { suggestion: "今天比较松, 喝杯水?" };
   }
 
-  let journalText: string;
-  try {
-    journalText = await journalReadRecent();
-  } catch {
-    journalText = "";
-  }
-
-  const userPrompt = _buildMergedUserPrompt(unread, events, knownTodos, journalText, urgentEmails);
+  const userPrompt = _buildMergedUserPrompt(unread, events, knownTodos, urgentEmails);
   const url = `${config.backendUrl}/v1/chat/completions${SERVICE_LLM_QUERY}`;
 
   const controller = new AbortController();
@@ -326,20 +319,7 @@ export async function fetchMergedBriefing(
     }
 
     if (!parsed || typeof parsed !== "object") return null;
-    const obj = parsed as { todos?: unknown; suggestion?: unknown };
-
-    // todos 解析 — 同 fetchLlmJournalTodos 套路
-    const todosArr: JournalTodo[] = Array.isArray(obj.todos)
-      ? obj.todos
-          .filter((x): x is string => typeof x === "string" && x.trim().length > 0)
-          .slice(0, 10)
-          .map<JournalTodo>((text) => ({
-            text: text.trim(),
-            line: 0,
-            source: "inline",
-            section: "(LLM 推断)",
-          }))
-      : [];
+    const obj = parsed as { suggestion?: unknown };
 
     // suggestion 解析
     let suggestion = typeof obj.suggestion === "string" ? obj.suggestion.trim() : "";
@@ -350,7 +330,7 @@ export async function fetchMergedBriefing(
       .trim();
     if (!suggestion) suggestion = "今天比较松, 喝杯水?";
 
-    return { todos: todosArr, suggestion };
+    return { suggestion };
   } catch (e) {
     clearTimeout(timeoutId);
     // eslint-disable-next-line no-console
@@ -362,8 +342,7 @@ export async function fetchMergedBriefing(
 function _buildMergedUserPrompt(
   unread: number,
   events: CalendarEvent[],
-  knownTodos: JournalTodo[],
-  journalText: string,
+  knownTodos: ReminderTodo[],
   urgentEmails: UrgentEmailHint[] = [],
 ): string {
   const lines: string[] = [];
@@ -378,18 +357,10 @@ function _buildMergedUserPrompt(
 
   // 日历
   if (events.length === 0) {
-    lines.push("日历: 今天没排事.");
+    lines.push("日历: 本周没排事.");
   } else {
-    const summaries = events.slice(0, 5).map((e) => {
-      if (e.all_day) return `全天 ${e.summary}`;
-      const startTime = new Date(e.start).toLocaleTimeString("zh-CN", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-      });
-      return `${startTime} ${e.summary}`;
-    });
-    lines.push(`日历今天 ${events.length} 件: ${summaries.join(", ")}.`);
+    const summaries = events.slice(0, 5).map(_formatUpcomingEvent);
+    lines.push(`日历本周 ${events.length} 件: ${summaries.join(", ")}.`);
   }
 
   // 邮件 — 急邮件主题透出 (BL-COMPANION-EMAIL-DIGEST-STEP2 5/20)
@@ -405,15 +376,10 @@ function _buildMergedUserPrompt(
     lines.push(`邮件: 未读 ${unread} 封 (没"急"邮件).`);
   }
 
-  // 已显式抽到的 TODO
+  // Reminders 本周待办
   if (knownTodos.length > 0) {
     const list = knownTodos.map((t) => `- ${t.text}`).join("\n");
-    lines.push(`\nregex 已抽到的显式 TODO (跳过别重复):\n${list}`);
-  }
-
-  // journal 全文 (给 LLM 抽自然语言 TODO 用)
-  if (journalText.trim().length > 0) {
-    lines.push(`\njournal 最近内容 (抽未标 TODO 的自然语言待办):\n${journalText}`);
+    lines.push(`\nReminders 本周未完成待办:\n${list}`);
   }
 
   return lines.join("\n");
@@ -495,108 +461,5 @@ export async function fetchUrgentEmailStarter(
     // eslint-disable-next-line no-console
     console.warn("[briefing] 急邮件 LLM 调用挂", e);
     return null;
-  }
-}
-
-// ── BL-JOURNAL-TODO-EXTRACT step2: LLM 抽自然语言 TODO ────────
-
-const TODO_EXTRACT_SYSTEM_PROMPT = `你是用户的鲶鱼数字员工 (Catfish), 帮员工从 journal 文字里抽"显然是待办但没标 TODO 的事".
-
-规则:
-- 只抽**未完成**的事 (员工说"明天要 X" / "下周要 Y" / "还得 Z" 这种)
-- 不抽**已发生**的事 (员工说"今天搞定了 X" / "刚才跟老李谈了" 不抽)
-- 不抽**已有显式标记**的事 (如果员工写了 \`- [ ] X\` 或 \`TODO: X\`, 跳过 — 这些 regex 已抽过)
-- 不要 hallucinate / 不要把"想法"当待办 (员工说"觉得应该改架构"不是待办, 除非他后面写"下周要试")
-
-返回严格 JSON array, 每项是字符串 (一句话描述). 没找到返 \`[]\`. 不要任何 markdown / 解释 / 前缀.
-
-示例:
-- 输入: "今天跟老李会谈了 PPT 风格. 明天要去给领导汇报年度规划."
-- 输出: \`["给领导汇报年度规划"]\`
-- 输入: "- [x] 写完周报\\n- [ ] 改 P0 bug"
-- 输出: \`[]\`  (一个已完成, 一个 regex 已抽, 都跳过)`;
-
-/** LLM 抽 journal 自然语言 TODO. 跟 regex 已抽的合并去重.
- *
- * 失败返 [] (调用方按"没找到"处理, 不掉 regex 已抽的).
- */
-export async function fetchLlmJournalTodos(
-  knownTodos: JournalTodo[],
-  model: string,
-  // TODO 抽取是分析任务, personality 影响小, 但保签名一致方便调用方
-  personality?: Personality,
-): Promise<JournalTodo[]> {
-  let journalText: string;
-  try {
-    journalText = await journalReadRecent();
-  } catch {
-    return [];
-  }
-  if (journalText.trim().length === 0) return [];
-
-  // 喂 LLM "已抽的别再重" 提示, 减幻觉
-  const knownList = knownTodos.map((t) => `- ${t.text}`).join("\n");
-  const userPrompt =
-    `已经抽到的 TODO (跳过这些, 别重复):\n${knownList || "(无)"}\n\n` +
-    `journal 内容:\n${journalText}\n\n` +
-    `请返自然语言 TODO 的 JSON array.`;
-
-  const url = `${config.backendUrl}/v1/chat/completions${SERVICE_LLM_QUERY}`;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 6000);
-
-  try {
-    const resp = await fetchWithAuth(url, {
-      method: "POST",
-      headers: SERVICE_LLM_HEADERS,
-      body: JSON.stringify({
-        model,
-        messages: [
-          // TODO 抽取 personality 影响小, 仍注入 (返 JSON 时影响不大, 保一致)
-          { role: "system", content: TODO_EXTRACT_SYSTEM_PROMPT + _personalityHint(personality) },
-          { role: "user", content: userPrompt },
-        ],
-        max_tokens: 300,
-        temperature: 0.2,  // 抽取任务用低温度, 减幻觉
-        stream: false,
-      }),
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-    if (!resp.ok) return [];
-
-    const data = await resp.json();
-    const content = data?.choices?.[0]?.message?.content;
-    if (typeof content !== "string") return [];
-
-    // LLM 偶尔包 markdown ```json ... ``` 反引号, 剥一层
-    const cleaned = content
-      .trim()
-      .replace(/^```(?:json)?\s*/i, "")
-      .replace(/```$/, "")
-      .trim();
-
-    let arr: unknown;
-    try {
-      arr = JSON.parse(cleaned);
-    } catch {
-      return [];
-    }
-    if (!Array.isArray(arr)) return [];
-
-    return arr
-      .filter((x): x is string => typeof x === "string" && x.trim().length > 0)
-      .slice(0, 10)  // 最多 10 条防 LLM 爆量
-      .map<JournalTodo>((text) => ({
-        text: text.trim(),
-        line: 0,             // LLM 抽的没行号
-        source: "inline",    // 当 inline 同等优先级
-        section: "(LLM 推断)",
-      }));
-  } catch (e) {
-    clearTimeout(timeoutId);
-    // eslint-disable-next-line no-console
-    console.warn("[briefing] LLM 抽 TODO 挂", e);
-    return [];
   }
 }

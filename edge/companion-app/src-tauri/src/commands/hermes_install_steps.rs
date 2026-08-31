@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::hermes_install_artifacts::{
-    RuntimeArtifacts, CATFISH_EMAIL_ARCHIVE, HERMES_DEPS_ARCHIVE,
+    RuntimeArtifacts, CATFISH_EMAIL_ARCHIVE, CATFISH_WECHAT_READER_ARCHIVE,
+    HERMES_DEPS_ARCHIVE,
 };
 use super::hermes_install_base::{
     hermes_pinned_commit, hermes_pinned_tag, report, BootstrapProgressState, ProgressReporter,
@@ -139,6 +140,40 @@ fn initialize_offline_git(stage: &Path) -> Result<()> {
     Ok(())
 }
 
+/// 将离线包中的源码目录展平到 staging 根目录。
+///
+/// 历史包有两种布局：`pyproject.toml` 在归档根目录，或位于
+/// `hermes-agent-src/pyproject.toml`。不能固定 `--strip-components`，否则
+/// 两种包中必有一种会被解压到错误层级。
+fn flatten_hermes_source_stage(stage: &Path) -> Result<()> {
+    if stage.join("pyproject.toml").is_file() {
+        return Ok(());
+    }
+
+    let nested = std::fs::read_dir(stage)
+        .with_context(|| format!("读取 staging {}", stage.display()))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .find(|path| path.is_dir() && path.join("pyproject.toml").is_file());
+    let Some(nested) = nested else {
+        anyhow::bail!("离线 staging 缺 pyproject.toml: {}", stage.display());
+    };
+
+    for entry in std::fs::read_dir(&nested)
+        .with_context(|| format!("读取 Hermes 源码目录 {}", nested.display()))?
+    {
+        let entry = entry.with_context(|| format!("读取 {} 的目录项", nested.display()))?;
+        let destination = stage.join(entry.file_name());
+        if destination.exists() {
+            anyhow::bail!("Hermes staging 目录冲突: {}", destination.display());
+        }
+        std::fs::rename(entry.path(), &destination).with_context(|| {
+            format!("展平 Hermes 源码 {} -> {}", entry.path().display(), destination.display())
+        })?;
+    }
+    remove_any(&nested).context("清理 Hermes 源码嵌套目录")?;
+    Ok(())
+}
+
 pub(crate) fn prepare_source_stage(
     reusable_stage: Option<PathBuf>,
     artifacts: &RuntimeArtifacts,
@@ -184,12 +219,9 @@ pub(crate) fn prepare_source_stage(
             .arg("-xzf")
             .arg(archive)
             .arg("-C")
-            .arg(&stage)
-            .arg("--strip-components=1");
+            .arg(&stage);
         command_status(command, "解压 hermes-agent-bundle.tar.gz")?;
-        if !stage.join("pyproject.toml").is_file() {
-            anyhow::bail!("离线 staging 缺 pyproject.toml: {}", stage.display());
-        }
+        flatten_hermes_source_stage(&stage)?;
         // 发布归档在构建/签名流水线中已校验，但部分历史包没有携带版本文件，
         // 也没有 .git。解压成功并确认源码骨架后，由本客户端原子落同源 pin，
         // 后续健康检查和升级判断不再把它误判成“版本未知”。
@@ -531,5 +563,74 @@ pub(crate) fn link_catfish_email_bin(paths: &BootstrapPaths) -> Result<()> {
         .with_context(|| format!("创建软链 {} -> {}", link.display(), venv_bin.display()))?;
     #[cfg(not(unix))]
     log::debug!("Windows 由 MSI 管理 catfish-email launcher");
+    Ok(())
+}
+
+/// 安装 Catfish 自有的安全聊天导出读取器，不安装或修改微信客户端。
+pub(crate) fn install_catfish_wechat_reader(
+    artifacts: &RuntimeArtifacts,
+    paths: &BootstrapPaths,
+) -> Result<()> {
+    let Some(tar) = artifacts.wechat_reader_tar.as_ref() else {
+        anyhow::bail!(
+            "资源里没有 {}，聊天导出分析不可用",
+            CATFISH_WECHAT_READER_ARCHIVE
+        );
+    };
+    let venv_py = paths.install_dir.join("venv/bin/python");
+    if !venv_py.exists() {
+        anyhow::bail!("Hermes venv Python 不存在: {}", venv_py.display());
+    }
+    let stage = paths.unique_sibling("wechat-reader-dist");
+    remove_any(&stage)?;
+    std::fs::create_dir_all(&stage).with_context(|| format!("创建 {}", stage.display()))?;
+    let mut untar = Command::new("tar");
+    untar.arg("-xzf").arg(tar).arg("-C").arg(&stage);
+    let result = command_status(untar, "解压 catfish-wechat-reader 分发包").and_then(|()| {
+        let mut wheels: Vec<PathBuf> = std::fs::read_dir(&stage)
+            .with_context(|| format!("读 {}", stage.display()))?
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("whl"))
+            .collect();
+        wheels.sort();
+        if wheels.len() != 1 {
+            anyhow::bail!("聊天读取器分发包必须正好包含一个 wheel，实际 {}", wheels.len());
+        }
+        let mut pip = Command::new(&artifacts.uv);
+        pip.arg("pip")
+            .arg("install")
+            .arg("--python")
+            .arg(&venv_py)
+            .arg("--no-deps")
+            .arg(&wheels[0]);
+        command_status(pip, "uv pip install catfish-wechat-reader")?;
+        let reader = paths.install_dir.join("venv/bin/catfish-wechat-reader");
+        let output = Command::new(&reader)
+            .args(["doctor", "--json"])
+            .output()
+            .with_context(|| format!("运行 {} doctor", reader.display()))?;
+        if !output.status.success() || !String::from_utf8_lossy(&output.stdout).contains("\"read_only\":true") {
+            anyhow::bail!("catfish-wechat-reader 安全自检失败");
+        }
+        Ok(())
+    });
+    let _ = remove_any(&stage);
+    result
+}
+
+pub(crate) fn link_catfish_wechat_reader_bin(paths: &BootstrapPaths) -> Result<()> {
+    let reader = paths.install_dir.join("venv/bin/catfish-wechat-reader");
+    if !reader.exists() {
+        anyhow::bail!("聊天导出读取器未安装: {}", reader.display());
+    }
+    let bin_dir = paths.home.join(".catfish/bin");
+    std::fs::create_dir_all(&bin_dir).with_context(|| format!("创建 {}", bin_dir.display()))?;
+    let link = bin_dir.join("catfish-wechat-reader");
+    if std::fs::symlink_metadata(&link).is_ok() {
+        remove_any(&link)?;
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&reader, &link)
+        .with_context(|| format!("创建软链 {} -> {}", link.display(), reader.display()))?;
     Ok(())
 }

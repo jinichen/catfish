@@ -23,7 +23,7 @@
 import { useState } from "react";
 import { useWikiStore } from "../../store/wiki";
 import type { WikiFileInfo } from "../../lib/tauri";
-import { wikiCreateEntityOrConcept } from "../../lib/tauri"; // P3.5.114: dangling click → 真自动建真文件
+import { wikiSubtypeLabel } from "./wikiLabels";
 
 export function Group({
   label,
@@ -88,7 +88,7 @@ export function Group({
         style={{ color }}
       >
         <span className="wiki-group__caret">▶</span>
-        <span>{emoji} {label}</span>
+        <span>{emoji ? `${emoji} ` : ""}{label}</span>
         <span style={{ fontWeight: 400, color: "var(--catfish-text-muted)", marginLeft: "auto" }}>
           {files.length}
         </span>
@@ -107,7 +107,7 @@ export function Group({
                   width: "100%",
                   textAlign: "left",
                   padding: "4px 8px",
-                  fontSize: 12,
+                  fontSize: 14,
                   border: "none",
                   background: active ? "var(--catfish-bg-hover, #e8f0ff)" : "transparent",
                   color: active ? color : "var(--catfish-text)",
@@ -117,19 +117,27 @@ export function Group({
                 }}
               >
                 {f.title}
+                {f.ontology_status === "pending" && (
+                  <span
+                    title="关系尚未唯一确认；不会进入关系图"
+                    style={{ marginLeft: 6, color: "var(--catfish-orange, #F47B3D)", fontSize: 12 }}
+                  >
+                    待确认
+                  </span>
+                )}
                 {/* 8/4: 员工确认过的打个记号。219/220 条是 LLM 生成的, 在此之前
                     员工完全看不出哪些是没人看过的机器输出。 */}
                 {f.authored_by === "employee" && (
                   <span
                     title="你确认过这条 —— 后台蒸馏不会覆盖它的正文"
-                    style={{ marginLeft: 4, opacity: 0.7, fontSize: 10 }}
+                    style={{ marginLeft: 4, opacity: 0.7, fontSize: 12 }}
                   >
                     ✎
                   </span>
                 )}
                 {f.subtype && (
-                  <span style={{ fontSize: 10, color: "var(--catfish-text-muted)", marginLeft: 6 }}>
-                    {f.subtype}
+                  <span style={{ fontSize: 12, color: "var(--catfish-text-muted)", marginLeft: 6 }}>
+                    {wikiSubtypeLabel(f.subtype, f.kind)}
                   </span>
                 )}
               </button>
@@ -201,10 +209,10 @@ export function EntityGroup({
         role="button"
         tabIndex={0}
         aria-expanded={isOpen}
-        style={{ color: "#4a9eff" }}
+        style={{ color: "var(--catfish-cyan)" }}
       >
         <span className="wiki-group__caret">▶</span>
-        <span>🧑 实体 (entities)</span>
+        <span>对象</span>
         <span style={{ fontWeight: 400, color: "var(--catfish-text-muted)", marginLeft: "auto" }}>
           {total}
         </span>
@@ -232,8 +240,8 @@ export function EntityGroup({
  *
  *  P3.5.110 (6/25 鸿波 catch "体系名称不能选择") 升级:
  *  - 点 caret (▶) → 折叠 (跟原行为一致, stopPropagation)
- *  - 点 category name → 优先 selectFile(找到的 concept file), dangling 弹 +新建 modal
- *    (prefill title=category, 默认 kind=system) — 治体系 dangling 不能点的核心痛点
+ *  - 点 category name → 优先 selectFile(找到的 concept file), dangling 显示虚拟态
+ *    — 缺失分类不自动落盘，避免把展示分组变成本体节点
  */
 function CategorySubgroup({
   category,
@@ -255,8 +263,6 @@ function CategorySubgroup({
   const setVirtualSystem = useWikiStore((s) => s.setVirtualSystem);
   // P3.5.113: dangling click 也 clear selectedPath → 触发 useMemo rebuild
   const selectFile = useWikiStore((s) => s.selectFile);
-  // P3.5.114 (6/25 鸿波 catch "应该形成真文件才合理"): dangling click → 自动建真文件
-  const loadFiles = useWikiStore((s) => s.loadFiles);
   const lsKey = `wiki_subgroup_collapsed_${category}`;
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try {
@@ -281,18 +287,16 @@ function CategorySubgroup({
       return next;
     });
   };
-  // P3.5.110-114: 点 category name 真行为 (鸿波 6/25 P3.5.114 catch "应该形成真文件才合理"):
+  // P3.5.110-114: 点 category name 真行为：
   //   - 特殊组 ("🌟 顶级体系" / "未分类") → 只 toggle
   //   - 真实文件 (match): setVirtualSystem(null) + selectFile(rel_path) → 切到该 system 子树
   //     (清旧虚拟态, 避免被它优先级压住)
-  //   - dangling (虚拟体系): 自动建真文件 (concept + subtype=system) → selectFile(新 path)
-  //     → 走 P3.5.108 isSystemConcept 真 subtree 路径 → 显该体系子树 (跟虚拟态视觉一致)
-  //     0 弹窗 / 0 橙色提示 — 鸿波 P3.5.111-112 真 catch 都尊重
-  //     fail-safe: 网络/IO 失败 → fallback setVirtualSystem (走 P3.5.113 虚拟态)
+  //   - dangling (虚拟体系): 只显示虚拟态，不自动写入 concept 文件。
+  //     真实条目必须由员工明确新建，避免普通分类/来源路径污染本体。
   const handleCategoryClick = async (e: React.MouseEvent | React.KeyboardEvent) => {
     e.stopPropagation();
     const isSpecialGroup =
-      category === "🌟 顶级体系" || category === "未分类";
+      category === "知识体系" || category === "未分类";
     if (isSpecialGroup) {
       toggle();
       return;
@@ -312,26 +316,9 @@ function CategorySubgroup({
       onSelect(match.rel_path);
       return;
     }
-    // P3.5.114: dangling → 自动建真文件 (鸿波 catch "形成真文件才合理")
-    try {
-      const result = await wikiCreateEntityOrConcept({
-        kind: "concept",
-        title: category,
-        subtype: "system", // P3.5.109 顶级体系标记 → P3.5.108 isSystemConcept 自动判定 subtree
-        tags: [],
-        related: [], // 顶级体系无上位, 默认空 (用户后续可改)
-        body: `# ${category}\n\n(由 catfish 自动建立 — 点 group header 触发)\n\n下属概念自动反推: WikiGraph 走 children related[0] 指向本体系.`,
-      });
-      // 真建成功**: 刷新 files + 切到新 file → P3.5.108 isSystemConcept → subtree ✓
-      setVirtualSystem(null);
-      await loadFiles();
-      await selectFile(result.rel_path);
-    } catch (err) {
-      // P3.5.114 fail-safe: 已存在 / 网络失败 → fallback P3.5.113 虚拟态显
-      console.warn(`[wiki] auto-create system "${category}" failed: ${err} → fallback virtual`);
-      setVirtualSystem(category);
-      void selectFile(null);
-    }
+    // 缺失分类只显示虚拟体系，不自动落盘。
+    setVirtualSystem(category);
+    void selectFile(null);
   };
   if (files.length === 0) return null;
   return (
@@ -348,7 +335,7 @@ function CategorySubgroup({
           alignItems: "center",
           gap: 4,
           padding: "3px 6px",
-          fontSize: 11,
+          fontSize: 13,
           color: category === "未分类" ? "var(--catfish-text-muted)" : "var(--catfish-text)",
           userSelect: "none",
           fontWeight: 500,
@@ -393,7 +380,7 @@ function CategorySubgroup({
             }
           }}
           title={
-            category === "🌟 顶级体系" || category === "未分类"
+            category === "知识体系" || category === "未分类"
               ? `点击折叠/展开 (特殊组)`
               : `点击跳到"${category}" 真 preview (dangling 弹 +新建)`
           }
@@ -408,7 +395,7 @@ function CategorySubgroup({
         >
           {category}
         </span>
-        <span style={{ fontSize: 10, color: "var(--catfish-text-muted)", fontWeight: 400 }}>
+        <span style={{ fontSize: 12, color: "var(--catfish-text-muted)", fontWeight: 400 }}>
           {files.length}
         </span>
       </div>
@@ -426,29 +413,37 @@ function CategorySubgroup({
                     width: "100%",
                     textAlign: "left",
                     padding: "3px 8px 3px 14px",
-                    fontSize: 11,
+                    fontSize: 14,
                     border: "none",
                     background: active ? "var(--catfish-bg-hover, #e8f0ff)" : "transparent",
-                    color: active ? "#4a9eff" : "var(--catfish-text)",
+                    color: active ? "var(--catfish-cyan)" : "var(--catfish-text)",
                     cursor: "pointer",
                     borderRadius: 4,
                     fontWeight: active ? 600 : 400,
                   }}
                 >
                   {f.title}
+                  {f.ontology_status === "pending" && (
+                    <span
+                      title="关系尚未唯一确认；不会进入关系图"
+                      style={{ marginLeft: 6, color: "var(--catfish-orange, #F47B3D)", fontSize: 12 }}
+                    >
+                      待确认
+                    </span>
+                  )}
                 {/* 8/4: 员工确认过的打个记号。219/220 条是 LLM 生成的, 在此之前
                     员工完全看不出哪些是没人看过的机器输出。 */}
                 {f.authored_by === "employee" && (
                   <span
                     title="你确认过这条 —— 后台蒸馏不会覆盖它的正文"
-                    style={{ marginLeft: 4, opacity: 0.7, fontSize: 10 }}
+                    style={{ marginLeft: 4, opacity: 0.7, fontSize: 12 }}
                   >
                     ✎
                   </span>
                 )}
                   {f.subtype && (
-                    <span style={{ fontSize: 9, color: "var(--catfish-text-muted)", marginLeft: 6 }}>
-                      {f.subtype}
+                    <span style={{ fontSize: 12, color: "var(--catfish-text-muted)", marginLeft: 6 }}>
+                      {wikiSubtypeLabel(f.subtype, f.kind)}
                     </span>
                   )}
                 </button>
@@ -522,10 +517,10 @@ export function ConceptGroup({
         role="button"
         tabIndex={0}
         aria-expanded={isOpen}
-        style={{ color: "#ff9933" }}
+        style={{ color: "var(--catfish-cyan-bright)" }}
       >
         <span className="wiki-group__caret">▶</span>
-        <span>📐 概念 (concepts)</span>
+        <span>主题</span>
         <span style={{ fontWeight: 400, color: "var(--catfish-text-muted)", marginLeft: "auto" }}>
           {total}
         </span>

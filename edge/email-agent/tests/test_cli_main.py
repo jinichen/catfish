@@ -194,6 +194,64 @@ def test_cmd_list_json_table_sorted_by_date_desc(capsys):
     assert out[1]["adapter"] == "apple_mail"
 
 
+def test_cmd_list_deduplicates_same_rfc_message_id_and_prefers_live_id(capsys):
+    """AppleScript + EMLX 表示同一封信时只输出一条，并保留可路由的 live id."""
+    live = Message(
+        id="apple_mail|Chinatelecom|2221",
+        account="Chinatelecom",
+        folder="Inbox",
+        subject="同一封邮件",
+        sender="x@y.com",
+        date="2026-08-28T07:54:18+00:00",
+        message_id="<same@example.com>",
+    )
+    indexed = Message(
+        id="UUID|emlx:/tmp/2221.emlx",
+        account="UUID",
+        folder="Inbox",
+        subject="同一封邮件",
+        sender="x@y.com",
+        date="2026-08-28T07:54:17+00:00",
+        message_id="<SAME@example.com>",
+    )
+    adapter = _FakeAdapter(
+        name="apple_mail",
+        accounts=[Account("Chinatelecom", "ffchenhb@chinatelecom.cn")],
+        messages=[live, indexed],
+    )
+
+    rc = _cmd_list([adapter], _make_args(json=True, limit=20))
+
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert len(out) == 1
+    assert out[0]["id"] == live.id
+    assert out[0]["account"] == "Chinatelecom"
+
+
+def test_cmd_list_keeps_messages_without_rfc_id_when_adapter_ids_differ(capsys):
+    """缺 Message-ID 时不能用主题/时间误判为重复邮件."""
+    first = _make_msg("same subject", "alice@x.com", "2026-05-18T10:00:00")
+    second = Message(
+        id="id-second",
+        account="alice@x.com",
+        folder="Inbox",
+        subject=first.subject,
+        sender=first.sender,
+        date=first.date,
+    )
+    adapter = _FakeAdapter(
+        name="apple_mail",
+        accounts=[Account("工作", "alice@x.com")],
+        messages=[first, second],
+    )
+
+    rc = _cmd_list([adapter], _make_args(json=True, limit=20))
+
+    assert rc == 0
+    assert len(json.loads(capsys.readouterr().out)) == 2
+
+
 # ============================================================
 # BL-EMAIL-ACCOUNT-CROSS-ADAPTER-CRASH: 单 adapter 挂不阻塞其他
 # ============================================================

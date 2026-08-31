@@ -652,7 +652,7 @@ function DetailPane({
       </div>
 
       {/* P3.5.158 Phase 3 (7/2 鸿波): Compose panel 抽 ComposeCore 共享组件.
-          回复场景 originalMessage=msg + resetKey=msg.id. 保存/发送成功走 callback. */}
+          回复场景传当前邮件、RFC 线程候选和附件元数据；保存/发送成功走 callback. */}
       {composing ? (
         <ComposeCore
           isOpen={composing}
@@ -671,11 +671,17 @@ function DetailPane({
           inReplyToMsgId={msg.id}
           account={msg.account}
           originalMessage={{
+            id: msg.id,
             sender: msg.sender,
             subject: msg.subject || "",
             date: msg.date,
             bodyText: msg.body_text || "",
+            message_id: msg.message_id,
+            in_reply_to: msg.in_reply_to,
+            references: msg.references,
+            attachments: msg.attachments,
           }}
+          threadCandidates={repliedPool && repliedPool.length ? repliedPool : list}
           agentName={agentName}
           agentPersonality={agentPersonality}
           resetKey={msg.id}

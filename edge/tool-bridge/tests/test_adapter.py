@@ -11,7 +11,7 @@ from typing import Any, Dict, List
 
 import pytest
 
-from catfish_tool_bridge import adapter, catfish_tools
+from catfish_tool_bridge import adapter, catfish_tools, tool_availability
 
 
 # ---------- fake hermes registry ----------
@@ -93,6 +93,21 @@ def test_list_tools_native_collision_skipped(
     assert today["toolset"] == "catfish_native"
 
 
+def test_list_tools_marks_platform_specific_tools_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows 终端不能把 macOS Reminders/Calendar 宣称为可用。"""
+    _install_fake_registry(monkeypatch, [])
+    monkeypatch.setattr(tool_availability.platform, "system", lambda: "Windows")
+
+    by_name = {tool["name"]: tool for tool in adapter.list_tools()}
+
+    reminder = by_name["catfish_list_reminders"]
+    assert reminder["available"] is False
+    assert reminder["supported"] is False
+    assert reminder["reason_code"] == "unsupported_platform"
+
+
 # ---------- dispatch_tool ----------
 
 def test_dispatch_native_tool(
@@ -111,6 +126,20 @@ def test_dispatch_native_tool(
     assert "summary" in result["result"]
 
 
+def test_dispatch_rejects_platform_unsupported_native_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """即使调用方绕过工具列表直接点名，也不能执行不支持的平台工具。"""
+    monkeypatch.setattr(tool_availability.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(adapter, "_registry_module", None)
+
+    result = asyncio.run(adapter.dispatch_tool("catfish_list_reminders", {}))
+
+    assert result["ok"] is False
+    assert result["reason_code"] == "unsupported_platform"
+    assert result["error"] == "当前终端不支持此工具"
+
+
 def test_dispatch_hermes_tool(monkeypatch: pytest.MonkeyPatch) -> None:
     """hermes tool 走 fake registry"""
     _install_fake_registry(monkeypatch, ["alpha_tool"])
@@ -127,8 +156,13 @@ def test_dispatch_unknown_tool(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "unknown tool" in result["error"]
 
 
-def test_dispatch_native_does_not_truncate_for_no_max_size() -> None:
+def test_dispatch_native_does_not_truncate_for_no_max_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """native dispatch 不走 hermes 的 truncate —— 它返回的就是 dict, 大小可控"""
+    # 这个断言测 IPC truncate，不测本机大结果归档。显式关掉归档，避免读取
+    # 开发机 ~/.catfish 配置和已有 archive 状态造成测试污染。
+    monkeypatch.setenv("CATFISH_TOOL_ARCHIVE_ENABLED", "false")
     # 这个测试主要是确认 native 的 result 字段直接是 dict, 不是 _truncated 包裹
     result = asyncio.run(
         adapter.dispatch_tool("catfish_today_summary", {})

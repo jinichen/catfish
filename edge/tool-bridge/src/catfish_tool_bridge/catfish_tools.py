@@ -705,6 +705,9 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_forget_about":
         from . import forget_about  # noqa: PLC0415
         return forget_about.forget_about(args)
+    if name.startswith("catfish_wechat_"):
+        from . import wechat_archive  # noqa: PLC0415
+        return wechat_archive.dispatch(name, args)
     raise ValueError(f"unknown native tool: {name}")
 
 
@@ -736,16 +739,7 @@ def _load_employee_journal() -> str:
 
 
 def _expertise_llm_call(prompt: str) -> str:
-    """走 gateway loopback POST /v1/chat/completions, model=role_resolver(chat_default).
-
-    复用 browser_locate 同一套 GATEWAY_URL + id_token 模式. 不抛异常 — 失败返
-    空串, 让 expertise.extract_from_journal 走"返非 JSON"分支自然降级.
-
-    P3.5.29 Phase 5 (6/17 鸿波): model role-resolved —
-    ``role_resolver.resolve("chat_default")`` 优先, 失败 fallback hardcoded
-    ``catfish-private-main`` (客户改 roles.yaml 全代码跟着走, 这里**0**
-    硬编码改 sed Companion / hermes / tool-bridge 同步).
-    """
+    """走 gateway loopback；Picker 优先，失败返空串让调用方自然降级。"""
     try:
         import httpx  # noqa: PLC0415
     except ImportError:

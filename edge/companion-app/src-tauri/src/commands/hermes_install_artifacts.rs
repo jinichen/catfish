@@ -20,6 +20,8 @@ pub(crate) const RUNTIME_ARCHIVES: [&str; 4] = [
 /// 单独一个常量、**不进 RUNTIME_ARCHIVES** —— 那个数组是"离线运行时齐不齐"的
 /// 判据 (决定 hermes 走离线还是联网装), 邮件是附加功能, 不该影响那个决策。
 pub(crate) const CATFISH_EMAIL_ARCHIVE: &str = "catfish-email-dist.tar.gz";
+/// 员工选择的聊天导出文件读取器，零依赖 wheel，不含微信解密能力。
+pub(crate) const CATFISH_WECHAT_READER_ARCHIVE: &str = "catfish-wechat-reader-dist.tar.gz";
 /// hermes venv 的额外 Python 依赖 (jieba / playwright + 它们的依赖)。
 /// 8/5: 装机流程里这两个的安装语句一直是 0 处 —— 见 install_hermes_deps。
 pub(crate) const HERMES_DEPS_ARCHIVE: &str = "hermes-deps-dist.tar.gz";
@@ -41,6 +43,8 @@ pub(crate) struct RuntimeArtifacts {
     /// "离线运行时齐不齐"(决定要不要联网装 hermes), 而邮件是 catfish 自己的
     /// 附加功能, 缺了不该让整个 hermes 走联网路径。
     pub(crate) email_tar: Option<PathBuf>,
+    /// 安全聊天导出读取器 wheel 分发包；不计入 Hermes 核心运行时完整度。
+    pub(crate) wechat_reader_tar: Option<PathBuf>,
 }
 
 impl RuntimeArtifacts {
@@ -53,6 +57,7 @@ impl RuntimeArtifacts {
             node_tar: usable_artifact(&dir.join(RUNTIME_ARCHIVES[2])),
             chromium_tar: usable_artifact(&dir.join(RUNTIME_ARCHIVES[3])),
             email_tar: usable_artifact(&dir.join(CATFISH_EMAIL_ARCHIVE)),
+            wechat_reader_tar: usable_artifact(&dir.join(CATFISH_WECHAT_READER_ARCHIVE)),
             deps_tar: usable_artifact(&dir.join(HERMES_DEPS_ARCHIVE)),
             dir,
         }

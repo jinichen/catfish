@@ -17,7 +17,6 @@ import { topKRelated } from "../../lib/wikiRelevance";
 import {
   wikiDeleteFile,
   wikiUpdateFile,
-  wikiCreateEntityOrConcept, // P3.5.114: dangling click → 真自动建真文件
   toolBridgeCallTool,
   wikiUninstallShared,
   wikiSensitiveTermsEnsure,
@@ -39,12 +38,7 @@ import {
   WikiHubStaleBanner,
   WikiMetaHeader,
 } from "./WikiPreviewSections";
-
-const KIND_LABEL: Record<string, string> = {
-  entity: "实体",
-  concept: "概念",
-  query: "查询",
-};
+import { wikiKindLabel } from "./wikiLabels";
 
 export default function WikiPreview() {
   const selectedFile = useWikiStore((s) => s.selectedFile);
@@ -53,8 +47,8 @@ export default function WikiPreview() {
   const files = useWikiStore((s) => s.files);
   const selectFile = useWikiStore((s) => s.selectFile);
   const loadFiles = useWikiStore((s) => s.loadFiles);
-  // P3.5.111/114 (6/25 鸿波 catch "应该形成真文件才合理"): dangling wikilink click →
-  // 自动建真文件, 失败 fallback setVirtualSystem 虚拟态.
+  // 缺失链接只进入虚拟态，不自动落盘伪概念。真正的知识条目必须由员工
+  // 明确新建，或由蒸馏流程写入。
   const setVirtualSystem = useWikiStore((s) => s.setVirtualSystem);
 
   // P35 (6/5 鸿波): inline 编辑器 state. editing=true 时 body 渲染 textarea.
@@ -412,25 +406,10 @@ export default function WikiPreview() {
       void selectFile(match.rel_path);
       return;
     }
-    // P3.5.114 (6/25 鸿波 catch "应该形成真文件才合理"): dangling → 自动建真文件.
-    // 默认 concept + subtype=system (顶级体系视觉一致, 后续可手动编辑改子类型).
-    try {
-      const result = await wikiCreateEntityOrConcept({
-        kind: "concept",
-        title: name,
-        subtype: "system",
-        tags: [],
-        related: [],
-        body: `# ${name}\n\n(由 catfish 自动建立 — 点 dangling wikilink 触发)\n\n本体系下属概念自动反推: WikiGraph 走 children related[0] 指向本体系.`,
-      });
-      setVirtualSystem(null);
-      await loadFiles();
-      await selectFile(result.rel_path);
-    } catch (err) {
-      // fail-safe: 已存在 / 网络失败 → fallback 虚拟态显
-      console.warn(`[wiki] auto-create dangling "${name}" failed: ${err} → fallback virtual`);
-      setVirtualSystem(name);
-    }
+    // 缺失链接只显示虚拟体系；否则一次点击会把 raw/sources 路径或普通
+    // 文本误写成概念，污染后续图谱。
+    setVirtualSystem(name);
+    void selectFile(null);
   }
 
   if (selectedLoading) {
@@ -465,7 +444,7 @@ export default function WikiPreview() {
   };
 
   const kind = info.kind;
-  const kindLabel = KIND_LABEL[kind] || kind;
+  const kindLabel = wikiKindLabel(kind);
 
   return (
     <div className="wiki-preview">
@@ -721,19 +700,23 @@ function RelatedRecommend({
 
   return (
     <div className="wiki-related">
-      <div className="wiki-related__header">相关推荐 · 4 信号 ranked</div>
-      <div className="wiki-related__sub">
-        direct link (×3) · source overlap (×4) · Adamic-Adar (×1.5) · type affinity (×1)
-      </div>
+      <div className="wiki-related__header">你可能还想查看</div>
+      <div className="wiki-related__sub">根据已确认关系和共同来源推荐</div>
       <ul className="wiki-related__list">
         {recommends.map(({ file, breakdown }) => {
-          const signals: string[] = [];
-          if (breakdown.direct > 0) signals.push("↔");
-          if (breakdown.sourceOverlap > 0) signals.push("◇");
-          if (breakdown.adamicAdar > 0) signals.push("∗");
-          if (breakdown.typeAffinity > 0) signals.push("≈");
+          const reasons: string[] = [];
+          if (breakdown.direct > 0) reasons.push("直接关联");
+          if (breakdown.sourceOverlap > 0) reasons.push("共同来源");
+          if (breakdown.adamicAdar > 0) reasons.push("共同联系人");
+          if (breakdown.typeAffinity > 0 && reasons.length < 2) reasons.push("同类知识");
+          const confidence =
+            breakdown.direct > 0 || breakdown.total >= 20
+              ? "高"
+              : breakdown.total >= 8
+                ? "中"
+                : "低";
           const fileKind = file.kind;
-          const fileKindLabel = KIND_LABEL[fileKind] || fileKind;
+          const fileKindLabel = wikiKindLabel(fileKind);
           return (
             <li key={file.rel_path} className="wiki-related__item">
               <button
@@ -748,13 +731,7 @@ function RelatedRecommend({
                 {file.title}
               </button>
               <span className="wiki-related__score">
-                score {breakdown.total.toFixed(2)} {signals.join(" ")}
-                {breakdown.direct > 0 && ` · 直链`}
-                {breakdown.sourceOverlap > 0 &&
-                  ` · 共源 ${breakdown.sourceOverlap.toFixed(1)}`}
-                {breakdown.adamicAdar > 0 &&
-                  ` · 共邻 ${breakdown.adamicAdar.toFixed(1)}`}
-                {breakdown.typeAffinity > 0 && ` · 同型`}
+                关联度{confidence}{reasons.length > 0 ? ` · ${reasons.join("、")}` : ""}
               </span>
             </li>
           );

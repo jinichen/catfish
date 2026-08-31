@@ -51,7 +51,7 @@ FAIL=0
 # 现在缺它就不让发包。
 for f in install.sh uv cpython-3.11.15-embed.tar.gz \
          hermes-agent-bundle.tar.gz node-embed.tar.gz chromium-embed.tar.gz \
-         catfish-email-dist.tar.gz; do
+         catfish-email-dist.tar.gz catfish-wechat-reader-dist.tar.gz; do
     if [ ! -f "$RES/$f" ]; then
         echo "  ❌ 缺 $f"
         FAIL=1

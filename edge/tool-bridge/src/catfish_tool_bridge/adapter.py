@@ -22,10 +22,9 @@ from typing import Any, Dict, List, Optional
 
 import time
 
-from . import audit, catfish_tools, sandbox, skill_watcher
+from . import audit, catfish_tools, sandbox, skill_watcher, tool_availability
 
 logger = logging.getLogger("catfish.tool_bridge.adapter")
-
 # bootstrap 后由 server 注入
 _registry_module = None
 
@@ -82,7 +81,6 @@ def install_registry(registry_module) -> None:
     """server 启动后调一次,把 hermes 的 tools.registry 模块塞进来"""
     global _registry_module
     _registry_module = registry_module
-
 
 def _r():
     """快捷拿 ToolRegistry singleton"""
@@ -178,8 +176,6 @@ _HERMES_TOOLS_NEEDS_BRAND_SCRUB = {
 _MM3_INLINE_PREFIX = "_(BL-MM3 上次值, 已废"
 _MM3_INLINE_MAX_OLD_LEN = 200  # 旧值塞 inline 时截到这么长
 
-
-
 # 5/21 拆: memory_save_versioned 抽到 adapter_memory.py
 from .adapter_memory import (  # noqa: F401
     _extract_recall_text,
@@ -195,7 +191,8 @@ def list_tools() -> List[Dict[str, Any]]:
     hermes 的 builtin tools 按字母序。
     """
     r = _r()
-    out: List[Dict[str, Any]] = list(catfish_tools.CATFISH_NATIVE_TOOLS)
+    out = [tool_availability.with_runtime_availability(schema)
+           for schema in catfish_tools.CATFISH_NATIVE_TOOLS]
 
     # BL-D3 Phase 3 (5/9): 加 MCP server 暴露的 tools (subprocess 启动的).
     # 名带 mcp_<connector>_ 前缀, dispatch_tool 自动路由到 mcp_client.
@@ -397,6 +394,10 @@ async def dispatch_tool(
     (用于 Skill lifecycle 阶段 4 健康面板 / 30 天提醒 / 失败率告警 / billing).
     audit 写失败不影响 dispatch 主流程.
     """
+    unavailable = tool_availability.unavailable_result(
+        name, catfish_tools.CATFISH_NATIVE_TOOLS)
+    if unavailable is not None:
+        return unavailable
     # 给 skill_watcher 标记"现在 LLM 在繁忙地用工具", 防它在 LLM 调用循环中突然
     # 重启 tool-bridge. 这是廉价操作 (一次 lock + 时间戳更新)。
     skill_watcher.mark_dispatch()

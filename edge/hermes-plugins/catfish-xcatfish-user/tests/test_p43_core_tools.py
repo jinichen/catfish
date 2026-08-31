@@ -57,6 +57,20 @@ def test_reminders_reader_is_promoted_directly():
     )
 
 
+def test_reminders_writer_is_promoted_directly():
+    """创建提醒也必须直接可见，防止模型只写会话 todo 后假报成功。"""
+    assert (
+        f"{pct._MCP_PREFIX}catfish_create_reminder"
+        in pct.PROMOTED_TOOL_NAMES
+    )
+
+
+def test_email_handoff_readers_are_promoted_directly():
+    """邮件交接给出的 email_id 必须能在当前终端直接读全文和附件。"""
+    for tool in ("catfish_email_read", "catfish_email_attachment"):
+        assert f"{pct._MCP_PREFIX}{tool}" in pct.PROMOTED_TOOL_NAMES
+
+
 def test_prefix_matches_hermes_convention_if_hermes_present():
     """能读到 hermes 源码时, 直接跟它的 MCP_TOOL_NAME_PREFIX 对。
 

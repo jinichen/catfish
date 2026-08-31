@@ -28,7 +28,7 @@
  * **并发数 = 任务数, 无上限**。上游有 "max 10 concurrent runs" 的限制,
  * advisor 一扇出就把额度吃光, 前台的邮件拟稿和早安卡片被 429 挡在门外。
  */
-import type { TaskChatStatus } from "./advisor_cache";
+import type { ManualTaskStatus, TaskChatStatus } from "./advisor_cache";
 import { config } from "./env";
 import { fetchWithAuth } from "./me";
 import {
@@ -81,12 +81,15 @@ async function _mapWithLimit<T>(
  *
  *  in-flight 锁: 跟主 advisor 同款 — React StrictMode dev useEffect 双调会让本函数
  *  瞬间双跑, 两次都读老 cache 各跑 4 次 LLM, 浪费 8 次 token. 锁复用 promise. */
-export async function ensureTaskChatSummariesFresh(model: string): Promise<void> {
+export async function ensureTaskChatSummariesFresh(
+  model: string,
+  allowedTaskUids?: ReadonlySet<string>,
+): Promise<void> {
   if (_summaryEnsureInFlight) {
     console.log("[advisor summary] ensure 已在跑, 复用 in-flight promise");
     return _summaryEnsureInFlight;
   }
-  const p = _ensureTaskChatSummariesFreshImpl(model);
+  const p = _ensureTaskChatSummariesFreshImpl(model, allowedTaskUids);
   _summaryEnsureInFlight = p;
   try {
     await p;
@@ -97,7 +100,10 @@ export async function ensureTaskChatSummariesFresh(model: string): Promise<void>
 
 let _summaryEnsureInFlight: Promise<void> | null = null;
 
-async function _ensureTaskChatSummariesFreshImpl(model: string): Promise<void> {
+async function _ensureTaskChatSummariesFreshImpl(
+  model: string,
+  allowedTaskUids?: ReadonlySet<string>,
+): Promise<void> {
   try {
     const { advisorCacheGet, advisorCacheSave } = await import("./advisor_cache");
     const { taskChatGet, taskChatSize } = await import("./task_chat");
@@ -110,7 +116,9 @@ async function _ensureTaskChatSummariesFreshImpl(model: string): Promise<void> {
     }
     const mainTasks = cached.result.mainTasks.filter(
       (t: { taskUid?: string }) =>
-        typeof t.taskUid === "string" && t.taskUid.length > 0,
+        typeof t.taskUid === "string"
+        && t.taskUid.length > 0
+        && (!allowedTaskUids || allowedTaskUids.has(t.taskUid)),
     );
     if (mainTasks.length === 0) {
       console.log("[advisor summary] ensure 跳过 — mainTasks 全没 taskUid");
@@ -123,6 +131,9 @@ async function _ensureTaskChatSummariesFreshImpl(model: string): Promise<void> {
         summary: string;
         /** P3.5.202 (C 方案): LLM 判定的 status, 老 cache 没这字段. */
         status?: TaskChatStatus;
+        /** 员工手工状态，含 pending=重新打开；摘要刷新不能覆盖它。 */
+        manualStatus?: ManualTaskStatus;
+        manualStatusTs?: string;
         jsonlSize: number;
         messageCount?: number;
         computedAt: string;
@@ -230,6 +241,9 @@ async function _ensureTaskChatSummariesFreshImpl(model: string): Promise<void> {
               jsonlSize: currentCount,  // backward compat 留同字段, value 取 messageCount/size
               messageCount: currentCount,
               computedAt: new Date().toISOString(),
+              // 摘要是聊天侧数据，不能覆盖员工在卡片上的显式状态。
+              manualStatus: hit?.manualStatus,
+              manualStatusTs: hit?.manualStatusTs,
             };
           }
         } catch (e) {

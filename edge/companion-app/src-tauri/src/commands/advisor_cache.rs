@@ -27,6 +27,9 @@ pub struct AdvisorCache {
     /// 用了多少 token (可选, debug 用).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub prompt_tokens: Option<u32>,
+    /// 当前输入来源指纹与自然周窗口。Rust 不解析，原样透传给前端。
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub source_meta: Option<serde_json::Value>,
     /// P3.3.12 (6/10): task chat summary cache — key=task_uid, val={summary,
     /// jsonlSize, computedAt}. jsonl size 没变就复用, 不再调 LLM. Rust 不解析直接
     /// 透传 (跟 result 同款不绑死 schema, TS 端定义形状).
@@ -114,6 +117,7 @@ mod tests {
             }),
             model: Some("catfish-public-deepseek-flash".to_string()),
             prompt_tokens: Some(4854),
+            source_meta: None,
             task_chat_summaries: None,  // P3.3.12 字段; 老 test 没填, P3.3.51 跑 cargo test 暴露
         }
     }
@@ -130,12 +134,28 @@ mod tests {
     }
 
     #[test]
+    fn source_meta_survives_rust_roundtrip() {
+        let mut c = sample();
+        c.source_meta = Some(serde_json::json!({
+            "schemaVersion": 2,
+            "inputVersion": "active-sources-v1",
+            "inputFingerprint": "deadbeef",
+            "windowStart": "2026-08-31T00:00:00.000Z",
+            "windowEnd": "2026-09-07T00:00:00.000Z",
+        }));
+        let json = serde_json::to_string(&c).expect("serialize");
+        let back: AdvisorCache = serde_json::from_str(&json).expect("parse");
+        assert_eq!(back.source_meta, c.source_meta);
+    }
+
+    #[test]
     fn cache_minimal_no_optional() {
         let minimal = AdvisorCache {
             computed_at: "2026-05-22T12:00:00+08:00".to_string(),
             result: serde_json::json!({}),
             model: None,
             prompt_tokens: None,
+            source_meta: None,
             task_chat_summaries: None,  // P3.3.12 字段
         };
         let json = serde_json::to_value(&minimal).expect("serialize");

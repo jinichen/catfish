@@ -64,7 +64,7 @@ fi
 # 恰恰是那台机器上不了网, 于是表现成"装到一半卡住", 现场查不到原因。
 FILES=(install.sh uv cpython-3.11.15-embed.tar.gz
        hermes-agent-bundle.tar.gz node-embed.tar.gz chromium-embed.tar.gz
-       catfish-email-dist.tar.gz)
+       catfish-email-dist.tar.gz catfish-wechat-reader-dist.tar.gz)
 MISS=0
 for f in "${FILES[@]}"; do
     if [ ! -f "$SRC/$f" ] || [ "$(stat -f%z "$SRC/$f" 2>/dev/null || stat -c%s "$SRC/$f" 2>/dev/null || echo 0)" -lt 1024 ]; then

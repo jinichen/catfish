@@ -17,6 +17,7 @@
 
 import { describe, expect, it } from "vitest";
 import { __test__ } from "./briefing_advisor";
+import { getEffectiveStatusByUid, getManualStatusByUid } from "./advisor_cache";
 import type {
   AdvisorResult,
   MainTask,
@@ -65,6 +66,24 @@ describe("filterResolvedTasks — status 语义驱动 (P3.5.202 C 方案)", () =
     const dropped = out.handledSilently.find((h) => h.type === "task_resolved");
     expect(dropped).toBeDefined();
     expect(dropped!.category).toContain("预警邮件处理");
+  });
+
+  it("员工撤销后 taskState='pending' 覆盖 chatStatus='resolved'", () => {
+    const result = mkResult([
+      mkTask({ id: 1, taskUid: "reopen", title: "重新打开的任务" }),
+    ]);
+    const out = filterResolvedTasks(result, [
+      {
+        taskUid: "reopen",
+        title: "重新打开的任务",
+        urgency: "high",
+        chatSummary: "之前聊天里说已完成",
+        chatStatus: "resolved",
+        taskState: "pending",
+      },
+    ]);
+    expect(out.mainTasks).toHaveLength(1);
+    expect(out.handledSilently).toHaveLength(0);
   });
 
   it("chatStatus='paused' → drop (员工主动搁置)", () => {
@@ -144,6 +163,26 @@ describe("filterResolvedTasks — status 语义驱动 (P3.5.202 C 方案)", () =
     ];
     const out = filterResolvedTasks(result, prev);
     expect(out.mainTasks).toHaveLength(1);
+  });
+});
+
+describe("advisor cache 手工状态 selector", () => {
+  it("pending 手工状态覆盖 chat resolved，且不被当成 ignored", () => {
+    const cache = {
+      computedAt: "2026-08-27T00:00:00Z",
+      result: mkResult([]),
+      taskChatSummaries: {
+        reopen: {
+          summary: "员工重新打开",
+          status: "resolved" as const,
+          manualStatus: "pending" as const,
+          jsonlSize: 1,
+          computedAt: "2026-08-27T00:00:00Z",
+        },
+      },
+    };
+    expect(getEffectiveStatusByUid(cache).has("reopen")).toBe(false);
+    expect(getManualStatusByUid(cache).has("reopen")).toBe(false);
   });
 });
 

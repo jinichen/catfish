@@ -35,6 +35,7 @@ import pytest
 from catfish_memory_helpers import (
     _canon_subtype,
     _check_dangling_related,
+    _classify_ontology_status,
     _merge_wiki_file,
     _normalize_types,
     _parse_frontmatter_lists,
@@ -165,10 +166,28 @@ def test_dangling_reported_not_deleted(tmp_path, caplog):
 
 def test_dangling_check_never_blocks_write(tmp_path):
     (tmp_path / "wiki" / "entities").mkdir(parents=True)
-    content = '---\ntype: entity\ntitle: X\nrelated: ["[[不存在]]"]\n---\n\n正文。\n'
+    content = (
+        '---\ntype: entity\ntitle: X\nentity_type: doc\n'
+        'related: ["[[不存在]]"]\n---\n\n正文。\n'
+    )
     n_e, _ = _write_wiki_files(tmp_path, {"wiki/entities/x.md": content})
     assert n_e == 1
     assert (tmp_path / "wiki/entities/x.md").exists()
+
+
+def test_new_entry_with_unresolved_relation_is_pending(tmp_path):
+    content = (
+        '---\ntype: entity\ntitle: X\nentity_type: doc\n'
+        'related: [{name: "不存在", rel: "隶属"}]\n---\n\n正文。\n'
+    )
+    status, reasons = _classify_ontology_status(tmp_path, "wiki/entities/x.md", content)
+    assert status == "pending"
+    assert "unresolved_relation" in reasons
+
+
+def test_system_without_parent_relation_is_active(tmp_path):
+    content = "---\ntype: concept\ntitle: 顶级体系\nconcept_type: system\n---\n\n正文。\n"
+    assert _classify_ontology_status(tmp_path, "wiki/concepts/system.md", content) == ("active", [])
 
 
 def test_write_path_normalizes_type(tmp_path):
@@ -179,6 +198,17 @@ def test_write_path_normalizes_type(tmp_path):
         {"wiki/concepts/x.md": "---\ntype: concept\ntitle: X\nconcept_type: 流程\n---\n\n正文。\n"},
     )
     assert "concept_type: process" in (tmp_path / "wiki/concepts/x.md").read_text(encoding="utf-8")
+
+
+def test_write_rejects_source_path_wikilink(tmp_path):
+    (tmp_path / "wiki" / "concepts").mkdir(parents=True)
+    content = (
+        "---\ntype: concept\ntitle: X\nconcept_type: rule\n---\n\n"
+        "来源：[[raw/sources/材料]]\n"
+    )
+    n_e, n_c = _write_wiki_files(tmp_path, {"wiki/concepts/x.md": content})
+    assert (n_e, n_c) == (0, 0)
+    assert not (tmp_path / "wiki/concepts/x.md").exists()
 
 
 # ─────────────────────────────────────────────────────────────

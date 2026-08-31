@@ -308,6 +308,135 @@ def _normalize_types(rel_path: str, content: str) -> str:
     return f"---\n{new_fm}\n---\n{body}"
 
 
+_RESERVED_TITLE_PREFIXES = ("raw/", "raw\\", "wiki/", "file:")
+
+_ONTOLOGY_ACTIVE = "active"
+_ONTOLOGY_PENDING = "pending"
+_ONTOLOGY_TERMINAL = frozenset(("rejected", "deprecated"))
+
+
+def _frontmatter_value(fm: str, key: str) -> str:
+    match = re.search(rf"^{re.escape(key)}:\s*(.*?)\s*$", fm, re.MULTILINE)
+    return match.group(1).strip() if match else ""
+
+
+def _ensure_entity_aliases(rel_path: str, content: str) -> str:
+    """Keep generated entities structurally complete without inventing aliases."""
+    if "entities/" not in rel_path:
+        return content
+    fm, body = _split_frontmatter_body(content)
+    if not fm or re.search(r"^aliases:\s*", fm, re.MULTILINE):
+        return content
+    lines = fm.splitlines()
+    title_index = next(
+        (i for i, line in enumerate(lines) if line.startswith("title:")), None
+    )
+    insert_at = (title_index + 1) if title_index is not None else len(lines)
+    lines.insert(insert_at, "aliases: []")
+    new_fm = "\n".join(lines)
+    return f"---\n{new_fm}\n---\n{body}"
+
+
+def _validate_new_ontology(rel_path: str, content: str) -> str | None:
+    """Return a hard write error for records that cannot be ontology nodes."""
+    fm, body = _split_frontmatter_body(content)
+    if not fm:
+        return "缺少 frontmatter"
+    expected_kind = "entity" if "entities/" in rel_path else "concept"
+    if _frontmatter_value(fm, "type") != expected_kind:
+        return f"type 必须为 {expected_kind}"
+    title = _frontmatter_value(fm, "title")
+    if not title:
+        return "title 不能空"
+    if title.lower().startswith(_RESERVED_TITLE_PREFIXES):
+        return "title 不能是 raw/sources 等原始资料路径"
+    if re.search(r"\[\[\s*(?:raw/|raw\\|wiki/|file:)", body, re.IGNORECASE):
+        return "正文不能把 raw/sources 等原始资料路径写成 wikilink"
+    # 蒸馏结果允许先落盘再补齐词表，避免因为 LLM 漏一个字段而丢失整份内容。
+    # 缺 subtype 会在下方 ontology_status 中标成 pending，不能进入关系图。
+    return None
+
+
+def _upsert_ontology_status(content: str, status: str) -> str:
+    """写入本体状态；状态是机器可读的，不混进正文。"""
+    fm, body = _split_frontmatter_body(content)
+    if not fm:
+        return content
+    line = f"ontology_status: {status}"
+    if re.search(r"^ontology_status:\s*.*$", fm, re.MULTILINE):
+        new_fm = re.sub(r"^ontology_status:\s*.*$", line, fm, count=1, flags=re.MULTILINE)
+    else:
+        lines = fm.splitlines()
+        type_index = next((i for i, value in enumerate(lines) if value.startswith("type:")), None)
+        insert_at = type_index + 1 if type_index is not None else 0
+        lines.insert(insert_at, line)
+        new_fm = "\n".join(lines)
+    return f"---\n{new_fm}\n---\n{body}"
+
+
+def _ontology_relation_names(rel_path: str, content: str) -> tuple[list[str], bool]:
+    """读取 frontmatter 与正文中的关系，并指出是否存在旧式无类型关系。"""
+    fm, body = _split_frontmatter_body(content)
+    raw_items = _parse_frontmatter_lists(fm).get("related", [])
+    names: list[str] = []
+    untyped = False
+    for item in raw_items:
+        name = _rel_item_name(item).strip().strip('"').strip("'")
+        if not name:
+            continue
+        names.append(name.replace("[[", "").replace("]]", "").split("|", 1)[0].strip())
+        if not item.lstrip().startswith("{"):
+            untyped = True
+        elif not re.search(r"\brel\s*:", item):
+            untyped = True
+    # 图谱读侧也承认正文 wikilink；没有写进 typed related 时，只能待确认。
+    body_names = [m.strip() for m in re.findall(r"\[\[([^\]]+)\]\]", body) if m.strip()]
+    for name in body_names:
+        if name not in names:
+            names.append(name)
+            untyped = True
+    return names, untyped
+
+
+def _classify_ontology_status(catfish_home: Path, rel_path: str, content: str) -> tuple[str, list[str]]:
+    """在写盘前把条目分成 active/pending。
+
+    这是保护网，不删除内容：pending 条目仍在树中可见，只有关系图不消费它。
+    已明确标为 rejected/deprecated 的条目不被自动复活。
+    """
+    if "entities/" not in rel_path and "concepts/" not in rel_path:
+        return _ONTOLOGY_ACTIVE, []
+    fm, _ = _split_frontmatter_body(content)
+    explicit = _frontmatter_value(fm, "ontology_status").lower()
+    if explicit in _ONTOLOGY_TERMINAL:
+        return explicit, []
+    subtype_key = "entity_type" if "entities/" in rel_path else "concept_type"
+    subtype = _frontmatter_value(fm, subtype_key).strip().lower()
+    names, untyped = _ontology_relation_names(rel_path, content)
+    if not names and subtype == "system":
+        return _ONTOLOGY_ACTIVE, []
+    reasons: list[str] = []
+    if not subtype:
+        reasons.append("missing_type")
+    if not names:
+        reasons.append("missing_relation")
+        return _ONTOLOGY_PENDING, sorted(set(reasons))
+    if untyped:
+        reasons.append("untyped_relation")
+    try:
+        from .wiki_resolve import load_nodes, resolve_wiki_ref  # noqa: PLC0415
+    except ImportError:
+        from wiki_resolve import load_nodes, resolve_wiki_ref  # noqa: PLC0415
+    nodes = load_nodes(catfish_home)
+    for name in names:
+        result = resolve_wiki_ref(name, nodes, active_only=True)
+        if result.kind == "ambiguous":
+            reasons.append("ambiguous_relation")
+        elif result.kind != "hit":
+            reasons.append("unresolved_relation")
+    return (_ONTOLOGY_PENDING, sorted(set(reasons))) if reasons else (_ONTOLOGY_ACTIVE, [])
+
+
 # ─────────────────────────────────────────────────────────────
 # 引用完整性 —— related 指向不存在的节点 (8/4 实测 65/408 = 16%)
 # ─────────────────────────────────────────────────────────────
@@ -321,8 +450,8 @@ def _check_dangling_related(catfish_home: Path, rel_path: str, content: str) -> 
     为什么不自动删: dangling 有两种, 语义完全相反 ——
       · LLM 编了个不存在的东西        → 该删
       · 这个节点还没被蒸馏出来, 之后会有 → 删了反而破坏未来的连接
-    分不清就不该动。而且 WikiTree 有 dangling 点击自动建真文件的路径 (P3.5.114),
-    说明产品上是把它当"待补"而不是"错误"看的。
+    分不清就不该动。当前 UI 对缺失节点只显示虚拟态，不会自动建真文件；因此这里
+    也只报告，不会因为待补节点而生成伪概念。
 
     但 16% 无声无息不行 —— 图谱上那些边直接消失, 没人知道。报出来。
     """
@@ -532,6 +661,24 @@ def _write_wiki_files(
             for _gap in report_ontology_gaps(rel_path, final_content):
                 logger.info("catfish-memory wiki 体检: %s —— %s", rel_path, _gap)
             final_content = _normalize_types(rel_path, final_content)
+            final_content = _ensure_entity_aliases(rel_path, final_content)
+            ontology_error = _validate_new_ontology(rel_path, final_content)
+            if ontology_error:
+                logger.warning(
+                    "catfish-memory 拒绝写入不完整本体条目 %s: %s",
+                    rel_path,
+                    ontology_error,
+                )
+                continue
+            status, status_reasons = _classify_ontology_status(
+                catfish_home, rel_path, final_content
+            )
+            final_content = _upsert_ontology_status(final_content, status)
+            if status == _ONTOLOGY_PENDING:
+                logger.warning(
+                    "catfish-memory wiki: %s 写入 pending，关系需人工确认 (%s)",
+                    rel_path, ",".join(status_reasons),
+                )
             _scan_conclusion_words(rel_path, final_content)
             _check_dangling_related(catfish_home, rel_path, final_content)
             target.write_text(final_content + ("\n" if not final_content.endswith("\n") else ""), encoding="utf-8")

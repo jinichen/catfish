@@ -3,6 +3,12 @@ import { create } from "zustand";
 import { useChatStore } from "./chat";
 import { sessionCreate, sessionMessageAppend } from "../lib/tauri";
 
+export interface PendingEmailChat {
+  requestId: string;
+  emailId: string;
+  prompt: string;
+}
+
 // "sessions" tab 已并入 "chat" 的 sidebar (P0-3.1 后), 不再单独 tab.
 // "email" tab 5/18 BL-COMPANION-EMAIL-TAB 加 — AI 邮件管家独立 tab, 跟工作台 / 仪表盘同级.
 // "briefing" tab 5/20 BL-COMPANION-DAILY-BRIEFING-MVP 加 — 早安播报独立 tab,
@@ -20,6 +26,14 @@ interface UIState {
    *  这个字段保留 (兼容 ChatInput consumeChatPrefill 调用), 但永远空字符串.
    *  pendingChatPrefill = "" 永远 → ChatInput 不会自动 prefill. */
   pendingChatPrefill: string;
+  /**
+   * 邮件页交给工作台的一次性用户请求。
+   *
+   * 不能复用 startProactiveChat: 后者是给系统通知用的 assistant 消息路径,
+   * 会绕过 useChat.send() 自己落 session, 因而会产生会话竞态和“看到了但没处理”。
+   */
+  pendingEmailChat: PendingEmailChat | null;
+  activeEmailChatId: string | null;
   /** P3.3.55 (6/12 鸿波 "信合规审计闭环"): 员工自己开/关审计视图 tab.
    *  默认关. 关时 Dashboard 隐私 section 没第 5 tab "审计视图"; 开时显.
    *  跟 manifesto 公理 1 (员工主权): 员工**自己**决定何时给审计员看. 持久 localStorage. */
@@ -33,6 +47,9 @@ interface UIState {
    *  (不再塞员工输入框让员工自己按发送). 切到 chat tab + addMessage 当前会话末尾.
    *  顺手持久化 (sessionCreate / sessionMessageAppend), 切走会话回来还能看到. */
   startProactiveChat: (starter: string) => void;
+  startEmailChat: (emailId: string, prompt: string) => void;
+  consumeEmailChat: () => PendingEmailChat | null;
+  setActiveEmailChatId: (emailId: string | null) => void;
   consumeChatPrefill: () => string;
 }
 
@@ -46,6 +63,8 @@ export const useUIStore = create<UIState>((set, get) => ({
   darkMode: false,
   aboutOpen: false,
   pendingChatPrefill: "",
+  pendingEmailChat: null,
+  activeEmailChatId: null,
   // P3.3.55: 从 localStorage 恢复, 默认 false
   auditViewEnabled: (() => {
     try {
@@ -100,6 +119,31 @@ export const useUIStore = create<UIState>((set, get) => ({
       }
     })();
   },
+  startEmailChat: (emailId, prompt) => {
+    const state = get();
+    // 同一封邮件在尚未消费或正在处理时, 重复点击只切回工作台, 不再排第二次请求。
+    if (
+      state.pendingEmailChat?.emailId === emailId ||
+      state.activeEmailChatId === emailId
+    ) {
+      set({ activeTab: "chat" });
+      return;
+    }
+    set({
+      activeTab: "chat",
+      pendingEmailChat: {
+        requestId: `email-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        emailId,
+        prompt,
+      },
+    });
+  },
+  consumeEmailChat: () => {
+    const action = get().pendingEmailChat;
+    if (action) set({ pendingEmailChat: null });
+    return action;
+  },
+  setActiveEmailChatId: (emailId) => set({ activeEmailChatId: emailId }),
   consumeChatPrefill: () => {
     const s = get().pendingChatPrefill;
     if (s) set({ pendingChatPrefill: "" });

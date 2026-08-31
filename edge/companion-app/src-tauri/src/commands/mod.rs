@@ -100,8 +100,12 @@ pub mod server_config; // P28 (6/5 鸿波): Companion Dashboard 改 gateway URL/
 pub mod tts;
 pub mod types;
 pub mod wechat_binding; // BL-WECHAT-CATFISH-BIND v1 (5/26): WeChat ↔ catfish 员工绑定状态
+pub mod wechat_archive; // 8/28: 微信导出文件只读授权，分析沿用当前 Picker
 pub mod wiki_embed; // P38 (6/5 鸿波): 本机 ONNX BGE-M3 wiki 语义搜索, 100% 离线
+pub mod wiki_files;
+pub mod wiki_ontology;
 pub mod wiki_read; // BL-CATFISH-WIKI-MODE P3.3.2 (6/4): wiki read API (list_files + read_file)
+pub mod wiki_search;
 pub mod wiki_save; // BL-CATFISH-WIKI-MODE P1.2.2 (6/4): chat 真 💾 button → wiki/queries/ 写盘
 pub mod wiki_frontmatter; // 受控词表归一化 + authored_by 标记 (8/15 从 wiki_write 切出)
 pub mod wiki_slug; // slug 校验/归一化/碰撞检测 (8/15 从 wiki_write 切出)

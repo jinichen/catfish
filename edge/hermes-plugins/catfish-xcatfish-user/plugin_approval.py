@@ -50,6 +50,21 @@ logger = logging.getLogger("catfish.xcatfish_user.plugin")
 _APPROVE_REQUEST_TOOL_MARKER = "_approval_request"  # Companion 检测这字符串
 
 
+def _enqueue_stream_event(stream_q, event) -> None:
+    """向 Hermes SSE 队列投递事件，兼容新旧队列实现。
+
+    Hermes <= 0.20.0 使用 ``queue.Queue.put``；0.20.6 改为
+    ``ThreadSafeAsyncQueue.put_threadsafe``，因为 approval callback 在 agent
+    worker thread 中执行。新队列上直接调 ``asyncio.Queue.put`` 会返回
+    未 await 的 coroutine，事件实际不会进 SSE 通道。
+    """
+    put_threadsafe = getattr(stream_q, "put_threadsafe", None)
+    if callable(put_threadsafe):
+        put_threadsafe(event)
+        return
+    stream_q.put(event)
+
+
 # ── P14 ──────────────────────────────────────────────────────────────────
 #
 # P14 (6/5 鸿波) — 中文 "批准" / "拒绝" → hermes /approve / /deny slash command
@@ -263,9 +278,9 @@ def _patch_p15_chat_completions_approval() -> None:
                     "choices": ["once", "session", "always", "deny"],
                 }
                 try:
-                    stream_q.put(("__tool_progress__", event))
+                    _enqueue_stream_event(stream_q, ("__tool_progress__", event))
                 except Exception as e:  # noqa: BLE001
-                    logger.debug("P15: stream_q.put 失败 (%s)", e)
+                    logger.debug("P15: stream event enqueue 失败 (%s)", e)
 
             notify_cb = _approval_notify
             try:

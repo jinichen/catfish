@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "statuses": ["active", "pending", "rejected", "deprecated"],
+  "graph_statuses": ["active"],
+  "pending_reasons": [
+    "missing_relation",
+    "missing_type",
+    "untyped_relation",
+    "unresolved_relation",
+    "ambiguous_relation"
+  ]
+}

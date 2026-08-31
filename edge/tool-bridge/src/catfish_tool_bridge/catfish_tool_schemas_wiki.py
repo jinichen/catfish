@@ -271,7 +271,7 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
                 },
                 "subtype": {
                     "type": "string",
-                    "description": "细分类型, 写进 entity_type / concept_type (如 person / company / process / 资质)",
+                    "description": "必填细分类型, 写进 entity_type / concept_type (如 person / org / process / 资质)",
                 },
                 "tags": {
                     "type": "array",
@@ -280,11 +280,24 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
                 },
                 "related": {
                     "type": "array",
-                    "items": {"type": "string"},
-                    "description": "关联条目的标题, 会渲染成 [[wikilink]]",
+                    "items": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "name": {"type": "string"},
+                                    "rel": {"type": "string"},
+                                },
+                                "required": ["name", "rel"],
+                                "additionalProperties": False,
+                            },
+                        ]
+                    },
+                    "description": "关联条目；优先传 {name, rel}，只传标题会进入待确认状态",
                 },
             },
-            "required": ["kind", "title", "body"],
+            "required": ["kind", "title", "body", "subtype"],
         },
         "emoji": "📝",
         "toolset": "catfish_native",

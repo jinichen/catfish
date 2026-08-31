@@ -108,7 +108,7 @@ describe("describeTurn", () => {
 
   it("有工具名时优先说工具", () => {
     expect(describeTurn({ current_tool: "grep", api_call_count: 2 })).toBe(
-      "正在用 grep · 第 2 轮",
+      "正在用 grep",
     );
   });
 
@@ -118,8 +118,9 @@ describe("describeTurn", () => {
     );
   });
 
-  it("有 max_iterations 就显示分母", () => {
-    expect(describeTurn({ api_call_count: 3, max_iterations: 40 })).toBe("第 3/40 轮");
+  it("不把 API 轮次和 max_iterations 安全上限显示成进度", () => {
+    expect(describeTurn({ api_call_count: 1, max_iterations: 90 })).toBe("");
+    expect(describeTurn({ api_call_count: 3, max_iterations: 90 })).toBe("");
   });
 
   it("卡住超过 30 秒才提，免得正常等待也刷这句", () => {

@@ -235,6 +235,14 @@ def test_priority_clamping_to_0_9():
 # ─── 读取 Reminders.app 条目 ─────────────────────────────
 
 
+def test_list_script_uses_character_id_delimiters():
+    """新版 macOS 不再接受 ASCII character，必须使用 character id。"""
+    script = reminders._LIST_REMINDERS_SCRIPT
+    assert script.count("(character id 30)") == 2
+    assert script.count("(character id 31)") == 2
+    assert "ASCII character" not in script
+
+
 def test_parse_reminders_output_keeps_structured_fields():
     stdout = _RS.join([
         _reminder_row(
@@ -297,6 +305,21 @@ def test_filter_reminders_supports_today_week_overdue_and_all():
     assert [x["id"] for x in reminders._filter_reminders(items, "overdue", now=now)] == ["overdue"]
     assert [x["id"] for x in reminders._filter_reminders(items, "all", now=now)] == [
         "overdue", "today", "week", "next", "none",
+    ]
+
+
+def test_filter_reminders_week_is_monday_through_sunday():
+    now = datetime(2026, 8, 31, 10, 30, 0)  # 周一
+    items = reminders._parse_reminders_output(_RS.join([
+        _reminder_row("before", "上周日", "工作", "2026-08-30T18:00:00"),
+        _reminder_row("monday", "本周一", "工作", "2026-08-31T18:00:00"),
+        _reminder_row("friday", "本周五", "工作", "2026-09-04T18:00:00"),
+        _reminder_row("sunday", "本周日", "工作", "2026-09-06T18:00:00"),
+        _reminder_row("after", "下周一", "工作", "2026-09-07T09:00:00"),
+    ]))
+
+    assert [x["id"] for x in reminders._filter_reminders(items, "week", now=now)] == [
+        "monday", "friday", "sunday",
     ]
 
 

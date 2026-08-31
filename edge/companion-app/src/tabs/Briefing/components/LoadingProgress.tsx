@@ -22,7 +22,7 @@
  * 2. **elapsed timer** — 1s tick, '已等 1:23' 让员工知道时间
  * 3. **预估时间 model-aware** — catfish-private-main 慢 (5-10 min), deepseek-flash 快
  *    (2-3 min). 提前告诉员工预期, 减少焦虑.
- * 4. **数据 count 展示** — data_loading 完后显 '已识别: 48 邮件 / 3 日历 / 12 TODO',
+ * 4. **数据 count 展示** — data_loading 完后显 '48 邮件 / 12 条本周日程 / 9 条本周待办',
  *    让员工知道数据有多大, advisor 在处理什么.
  * 5. **cancel button** — '点这里用上次结果' (走 stale cache fallback), 不想等就跳.
  */
@@ -168,8 +168,8 @@ export default function LoadingProgress({
           }}
         >
           <span>📧 {counts.emails} 邮件</span>
-          <span>📅 {counts.events} 日历</span>
-          <span>✓ {counts.todos} TODO</span>
+          <span>📅 {counts.events} 条本周日程</span>
+          <span>☑️ {counts.todos} 条本周待办</span>
         </div>
       )}
 

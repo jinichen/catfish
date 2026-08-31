@@ -6,8 +6,15 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import {
+  ArrowClockwise,
+  MagnifyingGlass,
+  Plus,
+  SlidersHorizontal,
+} from "@phosphor-icons/react";
 import { useWikiStore } from "../../store/wiki";
 import type { WikiFileInfo } from "../../lib/tauri";
+import { resolveWikiRef, resolveWikiRefOrNull } from "../../lib/wikiResolve";
 import WikiCreateModal from "./WikiCreateModal";
 
 // 8/15: WikiTree.tsx 原本 1215 行, 过了 CLAUDE.md §1 的 800 红线。下面三块是
@@ -45,8 +52,8 @@ export default function WikiTree() {
   const openCreateModal = useWikiStore((s) => s.openCreateModal);
   const closeCreateModal = useWikiStore((s) => s.closeCreateModal);
 
-  // P37 (BM25) + P38 (语义) — mode tristate: "title" | "body" | "semantic"
-  const [searchMode, setSearchMode] = useState<"title" | "body" | "semantic">("title");
+  // P37/P38/P39 — 默认智能检索，保留旧模式用于排查和精确搜索。
+  const [searchMode, setSearchMode] = useState<"title" | "body" | "semantic" | "hybrid">("hybrid");
   const [searchHits, setSearchHits] = useState<import("../../lib/tauri").WikiSearchHit[]>([]);
   const [searching, setSearching] = useState(false);
   const [semanticMessage, setSemanticMessage] = useState<string>("");
@@ -63,7 +70,11 @@ export default function WikiTree() {
       setSemanticMessage("");
       try {
         const tauri = await import("../../lib/tauri");
-        if (searchMode === "body") {
+        if (searchMode === "hybrid") {
+          const hits = await tauri.wikiSearchHybrid(search, 20);
+          setSearchHits(hits);
+          setSemanticMessage("");
+        } else if (searchMode === "body") {
           const hits = await tauri.wikiSearchText(search);
           setSearchHits(hits);
         } else {
@@ -94,7 +105,7 @@ export default function WikiTree() {
       } finally {
         setSearching(false);
       }
-    }, searchMode === "semantic" ? 500 : 300);   // semantic `后台 indexer 慢, 500ms debounce真
+    }, searchMode === "semantic" || searchMode === "hybrid" ? 500 : 300);
     return () => clearTimeout(handle);
   }, [search, searchMode]);
 
@@ -113,14 +124,8 @@ export default function WikiTree() {
     const m = new Map<string, number>();
     for (const f of files) {
       for (const r of f.related) {
-        // P3.5.132 #5: r 真 RelatedRef, name match target file 真 title / slug.
-        const lower = r.name.toLowerCase();
-        const target = files.find(
-          (x) =>
-            x.title.toLowerCase() === lower ||
-            x.slug.toLowerCase() === lower ||
-            x.title.toLowerCase().includes(lower)
-        );
+        // 与 WikiGraph/体检共用唯一解析规则；不能再按数组顺序取第一个子串命中。
+        const target = resolveWikiRefOrNull(r.name, files);
         if (target) {
           m.set(target.rel_path, (m.get(target.rel_path) || 0) + 1);
         }
@@ -135,15 +140,8 @@ export default function WikiTree() {
     for (const f of files) {
       const dangling: string[] = [];
       for (const r of f.related) {
-        // P3.5.132 #5: 用 r.name match
-        const lower = r.name.toLowerCase();
-        const found = files.some(
-          (x) =>
-            x.title.toLowerCase() === lower ||
-            x.slug.toLowerCase() === lower ||
-            x.title.toLowerCase().includes(lower)
-        );
-        if (!found) dangling.push(r.name); // P3.5.132 #5: 存 name 字符串方便 UI 展示
+        const result = resolveWikiRef(r.name, files);
+        if (result.kind !== "hit") dangling.push(r.name);
       }
       if (dangling.length > 0) m.set(f.rel_path, dangling);
     }
@@ -267,8 +265,8 @@ export default function WikiTree() {
   //   3. 层级 3+ 严格靠 WikiGraph 走 body [[wikilink]] 关联可视化, 严格不侵入 UI 树
   const conceptCategories = useMemo(() => {
     const map = new Map<string, WikiFileInfo[]>();
-    const TOP_KEY = "🌟 顶级体系";
-    const OTHER_KEY = "概念";
+    const TOP_KEY = "知识体系";
+    const OTHER_KEY = "其他主题";
     for (const c of grouped.concept) {
       const key = c.subtype === "system" ? TOP_KEY : OTHER_KEY;
       if (!map.has(key)) map.set(key, []);
@@ -287,25 +285,25 @@ export default function WikiTree() {
   // 主要改: hardcoded `#0d9488` `#4a9eff` 非 brand 色统一到 brand 墨青;
   // mode + kind toggle 改 pill segmented control; 去 emoji; 加 hover/focus.
   return (
-    <div style={{ padding: "var(--space-3)", fontSize: 12 }}>
+    <div className="wiki-tree">
       <div className="wiki-tree__title">
         <h3>知识体系</h3>
-        <div style={{ display: "flex", gap: 6 }}>
+        <div className="wiki-tree__actions">
           <button
             onClick={() => openCreateModal()}
-            title="新建 entity / concept"
-            className="approval-banner__btn-primary"
-            style={{ padding: "4px 12px", fontSize: 12 }}
+            title="新建知识"
+            aria-label="新建知识"
+            className="wiki-tree__primary-action"
           >
-            + 新建
+            <Plus size={17} aria-hidden="true" />新建
           </button>
           <button
             onClick={() => void loadFiles()}
             title="刷新"
-            className="approval-banner__btn-link"
-            style={{ padding: "4px 10px", fontSize: 13 }}
+            aria-label="刷新知识库"
+            className="wiki-tree__icon-action"
           >
-            ↻
+            <ArrowClockwise size={18} aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -318,33 +316,30 @@ export default function WikiTree() {
         />
       )}
 
-      <input
-        type="text"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder={
-          searchMode === "title"
-            ? "按标题 / slug 搜..."
-            : searchMode === "body"
-              ? "全文 BM25 搜..."
-              : "语义搜索 (BGE-M3 本机)..."
-        }
-        className="wiki-search-input"
-        style={{ marginBottom: 6 }}
-      />
-      {/* P37+P38 (6/5) mode toggle — E4 改 pill segmented, 单 brand 墨青 accent */}
-      <div className="wiki-segmented">
-        {(["title", "body", "semantic"] as const).map((m) => (
+      <label className="wiki-tree__search">
+        <MagnifyingGlass size={20} aria-hidden="true" />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="搜索知识名称或内容"
+          aria-label="搜索知识"
+        />
+      </label>
+
+      <div className="wiki-segmented wiki-segmented--kinds" aria-label="知识类型">
+        {(["all", "entity", "concept", "query"] as const).map((k) => (
           <button
-            key={m}
-            onClick={() => setSearchMode(m)}
+            key={k}
+            onClick={() => setKindFilter(k)}
             className="wiki-segmented__btn"
-            data-active={searchMode === m}
+            data-active={kindFilter === k}
           >
-            {m === "title" ? "标题" : m === "body" ? "全文" : "语义"}
+            {k === "all" ? "全部" : k === "entity" ? "对象" : k === "concept" ? "主题" : "记录"}
           </button>
         ))}
       </div>
+
       {semanticMessage && (
         <div
           className={
@@ -356,71 +351,59 @@ export default function WikiTree() {
         </div>
       )}
 
-      {/* kind filter — 跟 mode toggle 同 segmented pattern, 视觉一致 */}
-      <div className="wiki-segmented">
-        {(["all", "entity", "concept", "query"] as const).map((k) => (
-          <button
-            key={k}
-            onClick={() => setKindFilter(k)}
-            className="wiki-segmented__btn"
-            data-active={kindFilter === k}
+      <details className="wiki-tree__advanced">
+        <summary><SlidersHorizontal size={16} aria-hidden="true" />高级搜索与筛选</summary>
+        <div className="wiki-tree__advanced-body">
+          <div className="wiki-tree__advanced-label">搜索方式</div>
+          <div className="wiki-segmented">
+            {(["hybrid", "title", "body", "semantic"] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => setSearchMode(m)}
+                className="wiki-segmented__btn"
+                data-active={searchMode === m}
+              >
+                {m === "hybrid" ? "智能" : m === "title" ? "标题" : m === "body" ? "全文" : "语义"}
+              </button>
+            ))}
+          </div>
+          <label className="wiki-tree__advanced-label" htmlFor="wiki-quick-filter">快速筛选</label>
+          <select
+            id="wiki-quick-filter"
+            value={query}
+            onChange={(e) => {
+              const v = e.target.value as typeof query;
+              setQuery(v);
+              if (v !== "top-tag") setSelectedTag(null);
+            }}
+            className="wiki-tree__quick-filter"
           >
-            {k === "all" ? "全部" : k === "entity" ? "实体" : k === "concept" ? "概念" : "查询"}
-          </button>
-        ))}
-      </div>
+            <option value="none">不使用额外筛选</option>
+            <option value="recent-week">最近一周新增</option>
+            <option value="orphan-concept">尚未建立关系的主题</option>
+            <option value="dangling">包含失效关系的条目</option>
+            <option value="top-tag">按标签筛选</option>
+          </select>
 
-      {/* P3.3.9 dataview 预制 query */}
-      <select
-        value={query}
-        onChange={(e) => {
-          const v = e.target.value as typeof query;
-          setQuery(v);
-          if (v !== "top-tag") setSelectedTag(null);
-        }}
-        style={{
-          width: "100%",
-          padding: "4px 8px",
-          fontSize: 11,
-          border: "1px solid var(--catfish-border)",
-          borderRadius: 4,
-          marginBottom: "var(--space-2)",
-          background: query !== "none" ? "rgba(74, 158, 255, 0.15)" : "var(--catfish-bg)",
-          color: "var(--catfish-text)",
-        }}
-      >
-        <option value="none">— 预制 query —</option>
-        <option value="recent-week">📅 本周新增 (mtime &lt; 7d)</option>
-        <option value="orphan-concept">🏝️ 孤立概念 (0 inbound)</option>
-        <option value="dangling">⚠️ 含 dangling wikilink</option>
-        <option value="top-tag">🏷️ 按标签 filter</option>
-      </select>
-
-      {query === "top-tag" && topTags.length > 0 && (
-        <div style={{ marginBottom: "var(--space-2)", display: "flex", flexWrap: "wrap", gap: 4 }}>
-          {topTags.map(([tag, count]) => (
-            <button
-              key={tag}
-              onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
-              style={{
-                padding: "2px 6px",
-                fontSize: 10,
-                border: "1px solid var(--catfish-border)",
-                borderRadius: 10,
-                background: selectedTag === tag ? "var(--catfish-accent, #4a9eff)" : "var(--catfish-bg)",
-                color: selectedTag === tag ? "#fff" : "var(--catfish-text)",
-                cursor: "pointer",
-              }}
-            >
-              #{tag} ({count})
-            </button>
-          ))}
+          {query === "top-tag" && topTags.length > 0 && (
+            <div className="wiki-tree__tags">
+              {topTags.map(([tag, count]) => (
+                <button
+                  key={tag}
+                  onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
+                  data-active={selectedTag === tag}
+                >
+                  {tag}（{count}）
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-      )}
+      </details>
 
       {filesLoading && <div style={{ color: "var(--catfish-text-muted)" }}>加载中...</div>}
       {filesError && (
-        <div style={{ color: "var(--status-err)", fontSize: 11 }}>
+        <div style={{ color: "var(--status-err)", fontSize: 13 }}>
           ✗ {filesError}
         </div>
       )}
@@ -429,7 +412,7 @@ export default function WikiTree() {
         <EmptyOnboarding onCreateClick={() => openCreateModal()} />
       )}
 
-      {/* P37+P38 (6/5 鸿波): body/semantic 模式 → hits 列表替 group tree */}
+      {/* P37/P38/P39: body/semantic/hybrid 模式 → hits 列表替 group tree */}
       {searchMode !== "title" && search.trim() && (
         <SearchResults
           hits={searchHits}
@@ -460,13 +443,13 @@ export default function WikiTree() {
             selectedPath={selectedPath}
             onSelect={selectFile}
           />
-          <Group label="查询 (queries)" emoji="💬" color="#5fc878" files={grouped.query} selectedPath={selectedPath} onSelect={selectFile} forceOpen={isFiltering} />
+          <Group label="记录" emoji="" color="var(--catfish-text-muted)" files={grouped.query} selectedPath={selectedPath} onSelect={selectFile} forceOpen={isFiltering} />
           {/* P3.3.18 Phase 4 (6/10): 已装部门 wiki — read-only, 跟个人 wiki 视觉分离 */}
           {sharedFiles.length > 0 && (
             <Group
-              label="部门 wiki (read-only)"
-              emoji="📥"
-              color="#7c3aed"
+              label="部门知识（只读）"
+              emoji=""
+              color="var(--catfish-cyan)"
               files={sharedFiles.map((s) => {
                 const kindNarrow: "entity" | "concept" | "query" =
                   s.kind === "concept" || s.kind === "query" ? s.kind : "entity";
@@ -493,4 +476,3 @@ export default function WikiTree() {
     </div>
   );
 }
-

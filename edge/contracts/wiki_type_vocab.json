@@ -32,7 +32,15 @@
     "文件": "doc",
     "文档": "doc",
     "数据": "data",
-    "通知": "notification"
+    "通知": "notification",
+    "分类类别": "category",
+    "分类": "category",
+    "统计口径": "scope",
+    "口径": "scope",
+    "统计规则": "rule",
+    "分类框架": "framework",
+    "框架": "framework",
+    "分类标准": "standard"
   },
   "entity_types": [
     "cert",
@@ -52,6 +60,9 @@
     "process",
     "rule",
     "standard",
-    "system"
+    "system",
+    "category",
+    "framework",
+    "scope"
   ]
 }

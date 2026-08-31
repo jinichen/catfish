@@ -339,8 +339,10 @@ async def test_call_llm_no_token_raises(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_call_llm_gateway_unreachable(monkeypatch):
-    """gateway 不可达 → friendly RuntimeError"""
+    """gateway 不可达 → friendly RuntimeError，且不受损坏的系统代理污染。"""
     monkeypatch.setenv("CATFISH_DEV_TOKEN", "fake")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:7890")
+    monkeypatch.setenv("NO_PROXY", "*“localhost,127.0.0.1")
     with pytest.raises(RuntimeError, match="不可达"):
         await aggregator.call_llm(
             [{"role": "user", "content": "test"}],

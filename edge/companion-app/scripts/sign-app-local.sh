@@ -142,8 +142,10 @@ codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 #     Authority=Developer ID Certification Authority
 #     Authority=Apple Root CA
 DISPLAY_OUT="$(codesign --display --verbose=2 "$APP_PATH" 2>&1 || true)"
-if printf '%s' "$DISPLAY_OUT" | grep -q "^Authority=Developer ID Application"; then
-  AUTH_LINE="$(printf '%s' "$DISPLAY_OUT" | grep -m1 '^Authority=Developer ID Application')"
+# 不能写成 `printf | grep -q`: 本脚本开了 pipefail，grep 命中后提前关闭管道，
+# printf 会收到 SIGPIPE，整个 pipeline 反而以 141 失败，导致 Developer ID 被误判。
+if grep -q "^Authority=Developer ID Application" <<< "$DISPLAY_OUT"; then
+  AUTH_LINE="$(grep -m1 '^Authority=Developer ID Application' <<< "$DISPLAY_OUT")"
   echo "✅ 已签 Developer ID · ${AUTH_LINE#Authority=}"
   echo "   → 完全磁盘访问等授权**跨重建保留**, 不用每次重授"
   echo "   (从 ad-hoc 切过来的那一次仍需重授, 之后不用)"

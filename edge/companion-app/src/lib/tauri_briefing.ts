@@ -1,5 +1,5 @@
 /**
- * 早安与日程 · journal / proactive context / 决策 / 日历 / 邮件摘要
+ * 早安与日程 · Reminders / journal context / 决策 / 日历 / 邮件摘要
  *
  * 2026-08-15 从 lib/tauri.ts 切出来 (1309 行超限)。纯搬迁, 逻辑一行未改。
  * 边界照抄原文件里作者早就画好的 `// ── xxx ──` 分节, 不是我另起的划分。
@@ -8,11 +8,11 @@
  */
 
 import { invoke as rawInvoke } from "@tauri-apps/api/core";
+import { toolBridgeCallTool } from "./tauri_services";
 
-// ── journal TODO (BL-JOURNAL-TODO-EXTRACT 5/20) ───────────
-// Rust regex 抽 ~/.catfish/employee_journal.md 未完成 TODO. 返 JSON 字符串.
-export const journalTodosFetch = () =>
-  rawInvoke<string>("journal_todos_fetch");
+// ── 用户待办 · Reminders.app ─────────────────────────────
+// 8/31: Reminders 是 macOS 用户待办唯一事实源。早安与 chat 共用
+// catfish_list_reminders，停用长期不更新的 ~/.catfish/current_todos.md。
 
 /** BL-JOURNAL-TODO-EXTRACT step2 (5/20): 读 journal 最近 5KB 给 LLM 抽自然语言 TODO. */
 export const journalReadRecent = () =>
@@ -44,32 +44,71 @@ export const fetchProactiveContext = () =>
 // hermes 0.14 原生 /goal + /subgoal (#25449) 替代. 员工在 chat 直接输 /goal xxx.
 // 3 个 export 删除, Tauri 后端改 stub 返 error 防回归.
 
-// P3.4.7b (6/15 鸿波): origin 路由跟 mark/delete 同款 — 默认 weekly (current_todos.md),
-//   section 给了隐式走 journal (employee_journal.md 流水帐), 显式 origin 优先.
-export const journalAddTodo = (
-  text: string,
-  section?: string,
-  origin?: "weekly" | "journal",
-) =>
-  rawInvoke<string>("journal_add_todo", {
-    text,
-    section: section ?? null,
-    origin: origin ?? null,
-  });
-
-export interface JournalTodo {
+export interface ReminderTodo {
   text: string;
-  line: number;        // 1-based 行号
-  source: "checkbox" | "inline";
-  section: string;     // 所在段标题
-  // 5/21 加: 员工 markdown 里 ⭐ / 🔝 / "重点:" 前缀 → is_priority=true
-  // text 字段已去除前缀, UI 看到 is_priority 自己打 ⭐ 标. 早安播报 priority 项排序置顶.
-  // 后端 Rust 端 (src-tauri/src/commands/journal.rs) 跟着加 serde 字段, 没加就 undefined.
+  line: number; // Reminders 没有 markdown 行号，固定 0
+  source: "reminder";
+  section: string; // Reminders 清单名
   is_priority?: boolean;
-  // P3.4.7a (6/15 鸿波): 来源文件 — "weekly" (current_todos.md) | "journal"
-  //   (employee_journal.md 流水帐, 向后兼容). UI 可按 origin 分组显 "本周" / "流水帐".
-  //   老 Rust 不返该字段时 undefined, UI 容忍.
-  origin?: "weekly" | "journal";
+  origin?: "reminders";
+  reminder_id?: string;
+  due_date_iso?: string | null;
+  priority?: number;
+  body?: string;
+}
+
+interface ReminderToolItem {
+  id?: unknown;
+  title?: unknown;
+  list_name?: unknown;
+  due_date_iso?: unknown;
+  priority?: unknown;
+  body?: unknown;
+}
+
+interface ReminderToolResult {
+  ok?: boolean;
+  error?: string;
+  reminders?: ReminderToolItem[];
+}
+
+/** 读取本自然周（周一至周日）未完成 Reminders，返 JSON 字符串以复用早安诊断解析链。 */
+export async function remindersWeekFetch(): Promise<string> {
+  const dispatched = await toolBridgeCallTool("catfish_list_reminders", {
+    scope: "week",
+    include_completed: false,
+    limit: 100,
+  });
+  if (!dispatched.ok) {
+    throw new Error(dispatched.error || "Reminders 工具调用失败");
+  }
+
+  const result = dispatched.result as ReminderToolResult | null;
+  if (!result?.ok) {
+    throw new Error(result?.error || "读取 Reminders 失败");
+  }
+  if (!Array.isArray(result.reminders)) {
+    throw new Error("Reminders 返回格式异常：reminders 不是数组");
+  }
+
+  const todos: ReminderTodo[] = result.reminders
+    .filter((item) => typeof item.title === "string" && item.title.trim().length > 0)
+    .map((item) => {
+      const priority = typeof item.priority === "number" ? item.priority : 0;
+      return {
+        text: (item.title as string).trim(),
+        line: 0,
+        source: "reminder",
+        section: typeof item.list_name === "string" ? item.list_name : "Reminders",
+        is_priority: priority >= 1 && priority <= 3,
+        origin: "reminders",
+        reminder_id: typeof item.id === "string" ? item.id : undefined,
+        due_date_iso: typeof item.due_date_iso === "string" ? item.due_date_iso : null,
+        priority,
+        body: typeof item.body === "string" ? item.body : "",
+      };
+    });
+  return JSON.stringify(todos);
 }
 
 // ── BL-BRIEFING-DECISION (5/21 Phase 5): 综合判断上下文包 ─────────────
@@ -96,7 +135,7 @@ export interface BriefingContext {
   projects: string;                 // ~/.catfish/projects.md 项目进度
   weeklyReports: WeeklyReportRef[]; // outputs/ 下 weekly-* 文件 + mtime
   // P3.4.6 (6/15 鸿波): hermes MEMORY 近期 § 段, 当"近期事项 context" 喂 advisor.
-  //   不当 TODO — todo 严格走 employee_journal - [ ] checkbox.
+  //   不当 TODO — 用户待办严格走 Reminders.app.
   hermesMemoryRecent: string;
 }
 
@@ -112,7 +151,7 @@ export const briefingContextFetch = () =>
 export const calendarTodayFetch = (forceRefresh = false) =>
   rawInvoke<string>("calendar_today_fetch", { forceRefresh });
 
-// BL-CALENDAR-WEEK (5/20): 未来 7 天 events (今天 0 点 — 7 天后). 同 5min 缓存.
+// BL-CALENDAR-WEEK (5/20): 本自然周 events (周一 0 点 — 下周一 0 点). 同 5min 缓存.
 export const calendarWeekFetch = (forceRefresh = false) =>
   rawInvoke<string>("calendar_week_fetch", { forceRefresh });
 
@@ -144,8 +183,11 @@ export const emailListFetch = (unreadOnly: boolean, limit?: number, folder?: str
     limit: limit ?? null,
     folder: folder ?? null,
   });
-export const emailReadMessage = (id: string) =>
-  rawInvoke<string>("email_read_message", { id });
+export const emailReadMessage = (id: string, options?: { markRead?: boolean }) =>
+  rawInvoke<string>("email_read_message", {
+    id,
+    mark_read: options?.markRead ?? null,
+  });
 // P3.5.204.c (7/9 鸿波 catch "客户端还没同步的邮件在鲶鱼里无法激活客户端去同步"):
 // 触发 catfish-email check → Apple Mail 立即 IMAP/POP fetch. EmailTab 刷新按钮
 // 先 check 再 refetch. account 空 = 全账号.
@@ -175,3 +217,17 @@ export const emailSendMessage = (id: string) =>
  *  前端拿到 path 调 openFile() 系统默认 app 打开 (Preview / Acrobat 等). */
 export const emailExportAttachment = (id: string, filename: string) =>
   rawInvoke<string>("email_export_attachment", { id, filename });
+
+/** 回复拟稿用：本地解析附件预览，原始附件不进入上传目录。 */
+export interface EmailAttachmentPreview {
+  filename: string;
+  ext: string;
+  kind: string;
+  preview_text: string;
+  preview_chars: number;
+  meta: Record<string, unknown>;
+  kept_path: string;
+  parsed_text_path?: string;
+}
+export const emailAttachmentPreview = (id: string, filename: string) =>
+  rawInvoke<EmailAttachmentPreview>("email_attachment_preview", { id, filename });

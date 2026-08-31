@@ -387,7 +387,10 @@ async def call_llm(
         "RecMode aggregator: 发 main %d messages (含 multipart 截图) → %s",
         len(messages), gw,
     )
-    async with httpx.AsyncClient(timeout=timeout_s) as client:
+    # Gateway 是 Catfish 自己的本机/内网服务，不应继承员工 shell 里的 Clash、
+    # PAC 或损坏的 NO_PROXY。继承代理不仅会把本地内容送错出口，NO_PROXY 中
+    # 混入智能引号时还会在真正发请求前直接抛 ProxyError。
+    async with httpx.AsyncClient(timeout=timeout_s, trust_env=False) as client:
         try:
             # 8/15 晚: 打归属标记 (见 catfish_memory_gateway.with_source 的说明)。
             resp = await client.post(

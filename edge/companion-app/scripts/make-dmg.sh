@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # BL-TAURI-DMG-WORKAROUND (7/24): Tauri 官方 bundle_dmg.sh 在 macOS Sequoia +
 # Tauri 2 上反复挂 (hdiutil 冲突 / SetFile 依赖 / rw.*.dmg 累积残留).
-# 手工用 hdiutil create UDZO 稳 · 输出跟官方等效.
+# 手工用 hdiutil create UDZO 稳 · 同时在 staging 目录里补齐标准拖拽安装入口.
 #
 # 前提 · .app 已 build (`npm run tauri build -- --bundles app`)
 # 用法 · bash scripts/make-dmg.sh [output-path.dmg]
@@ -114,10 +114,30 @@ for v in /Volumes/Catfish*; do
     hdiutil detach "$v" -force >/dev/null 2>&1 || true
 done
 
+# ── DMG 安装布局 ───────────────────────────────────────────────────
+#
+# 不能直接把 .app 当作 -srcfolder: 那样生成的 DMG 根目录只有一个应用，
+# 用户看不到可拖拽的 "Applications" 入口。标准 macOS 分发 DMG 至少要有:
+#
+#   Catfish Companion.app  → 应用本体
+#   Applications           → /Applications 的 Finder 快捷方式
+#
+# 使用临时 staging 目录而不是修改 build 产物。这样不会把快捷方式写进
+# .app，也不会影响签名、公证和后续架构构建。
+STAGING_DIR=$(mktemp -d "${TMPDIR:-/tmp}/catfish-dmg.XXXXXX")
+cleanup_staging() {
+    rm -rf "$STAGING_DIR"
+}
+trap cleanup_staging EXIT
+
+echo "→ 准备 DMG 拖拽安装布局"
+ditto "$APP_PATH" "$STAGING_DIR/Catfish Companion.app"
+ln -s /Applications "$STAGING_DIR/Applications"
+
 echo "→ hdiutil create UDZO  ·  $OUT_PATH"
 hdiutil create \
     -volname "Catfish Companion" \
-    -srcfolder "$APP_PATH" \
+    -srcfolder "$STAGING_DIR" \
     -ov -format UDZO \
     "$OUT_PATH"
 

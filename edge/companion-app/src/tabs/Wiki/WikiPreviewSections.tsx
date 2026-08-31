@@ -30,6 +30,7 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { WikiFileInfo } from "../../lib/tauri";
+import { wikiSourceLabel, wikiSubtypeLabel } from "./wikiLabels";
 
 /** 部门 wiki 已被原作者撤回的警告 banner (P3.3.18 Phase 4 P2, 6/10)。
  *
@@ -61,7 +62,7 @@ export function WikiHubStaleBanner({
     >
       <strong>⚠ 原作者已撤回这条 wiki</strong>
       {hubStaleInfo.unpublished_at && (
-        <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.8 }}>
+        <span style={{ marginLeft: 6, fontSize: 12, opacity: 0.8 }}>
           ({hubStaleInfo.unpublished_at.slice(0, 10)})
         </span>
       )}
@@ -142,19 +143,14 @@ export function WikiMetaHeader({
   isDangling: (name: string) => boolean;
   handleWikilinkClick: (name: string) => void;
 }) {
+  const subtypeLabel = wikiSubtypeLabel(info.subtype, info.kind);
   return (
   <div className="wiki-preview__meta">
     <div className="wiki-preview__meta-title">
       <span className={`wiki-kind-badge wiki-kind-badge--${kind}`}>{kindLabel}</span>
-      {info.title}
+      <span className="wiki-preview__title-text">{info.title}</span>
     </div>
-    <div className="wiki-preview__meta-row">
-      <span>类型 {info.subtype || info.kind}</span>
-      <span>
-        路径 <code>{info.rel_path}</code>
-      </span>
-      <span>{(info.size_bytes / 1024).toFixed(1)}KB</span>
-    </div>
+    <div className="wiki-preview__meta-summary">类型：{subtypeLabel}</div>
     {info.tags.length > 0 && (
       <div className="wiki-preview__meta-section">
         <span className="wiki-preview__meta-section-label">标签</span>
@@ -168,14 +164,14 @@ export function WikiMetaHeader({
     {info.related.length > 0 && (
       <div className="wiki-preview__meta-section">
         <span className="wiki-preview__meta-section-label">
-          相关 ({info.related.length})
+          已确认关系 ({info.related.length})
         </span>
+        <div className="wiki-preview__relations">
         {info.related.map((r, i) => {
-          // P3.5.132 #5: r 真 RelatedRef, 显 name + rel label
           const dangling = isDangling(r.name);
           const title = r.rel
-            ? `${dangling ? "找不到 file (dangling link)" : "跳转到 " + r.name} · 关系: ${r.rel}`
-            : (dangling ? "找不到 file (dangling link)" : "跳转到 " + r.name);
+            ? `${dangling ? "暂未找到对应条目" : "查看 " + r.name} · 关系：${r.rel}`
+            : (dangling ? "暂未找到对应条目" : "查看 " + r.name);
           return (
             <button
               key={i}
@@ -186,32 +182,28 @@ export function WikiMetaHeader({
               onClick={() => handleWikilinkClick(r.name)}
               title={title}
             >
-              [[{r.name}]]
+              <span>{r.name}</span>
               {r.rel && (
-                <span
-                  style={{
-                    marginLeft: 4,
-                    fontSize: 10,
-                    opacity: 0.7,
-                    color: "var(--catfish-text-muted)",
-                  }}
-                >
-                  ({r.rel})
-                </span>
+                <span className="wiki-preview__relation-label">{r.rel}</span>
               )}
             </button>
           );
         })}
+        </div>
       </div>
     )}
-    {info.sources.length > 0 && (
-      <div className="wiki-preview__meta-section">
-        <span className="wiki-preview__meta-section-label">来源</span>
-        <span style={{ color: "var(--catfish-text-muted)", fontSize: 12 }}>
-          {info.sources.join(", ")}
-        </span>
+    <details className="wiki-preview__technical">
+      <summary>文件信息</summary>
+      <div className="wiki-preview__meta-row">
+        <span>大小 {(info.size_bytes / 1024).toFixed(1)} KB</span>
+        <span>内部路径 <code>{info.rel_path}</code></span>
       </div>
-    )}
+      {info.sources.length > 0 && (
+        <div className="wiki-preview__technical-sources">
+          来源：{info.sources.map(wikiSourceLabel).join("、")}
+        </div>
+      )}
+    </details>
   </div>
   );
 }

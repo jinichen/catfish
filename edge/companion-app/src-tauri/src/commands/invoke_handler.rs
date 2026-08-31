@@ -200,16 +200,8 @@ pub(crate) fn handler(
             crate::commands::calendar::calendar_week_fetch,
             // BL-BRIEFING-DECISION (5/21 Phase 5): 综合判断上下文包 (distilled_facts + 24h sessions)
             crate::commands::briefing_context::briefing_context_fetch,
-            // BL-JOURNAL-TODO-EXTRACT (5/20): ~/.catfish/employee_journal.md 未完成 TODO
-            crate::commands::journal::journal_todos_fetch,
             // BL-JOURNAL-TODO-EXTRACT step2 (5/20): 读 journal 最近 5KB 给 LLM 抽自然语言 TODO
             crate::commands::journal::journal_read_recent,
-            // BL-JOURNAL-TODO-EDIT-CHAT Stage 1 (5/20): journal CRUD 给 LLM tool calling 改
-            crate::commands::journal::journal_mark_todo_done,
-            crate::commands::journal::journal_delete_todo,
-            crate::commands::journal::journal_add_todo,
-            // P3.4.7c (6/15 鸿波): current_todos.md 每周日 reset (autostart 自动跑 + 员工手动触发)
-            crate::commands::journal::current_todos_weekly_reset,
             // BL-PROACTIVE-DECOUPLE (5/26): journal_tail + last_model 一次拿, 给 /api/proactive/* header 透传
             crate::commands::proactive::proactive_context,
             // P3.5.45 (6/20 鸿波): 录屏 RPC 直调 tool-bridge sock, 砍 gateway HTTP path
@@ -222,6 +214,11 @@ pub(crate) fn handler(
             crate::commands::wechat_binding::wechat_binding_set_email,
             crate::commands::wechat_binding::wechat_binding_revoke,
             crate::commands::wechat_binding::wechat_binding_reject,
+            crate::commands::wechat_archive::wechat_archive_status,
+            crate::commands::wechat_archive::wechat_archive_pick_export,
+            crate::commands::wechat_archive::wechat_archive_clear_source,
+            crate::commands::wechat_archive::wechat_archive_enable,
+            crate::commands::wechat_archive::wechat_archive_disable,
             // BL-IDENTITY-INJECT-DECOUPLE (5/26): SOUL/USER/memories 6 字段, 给 /v1/chat/completions body 透传
             crate::commands::identity_bundle::identity_bundle,
             // BL-BRIEFING-GOAL-INPUT (5/20): /goal UI 路径 — BriefingCard 输入框
@@ -267,6 +264,8 @@ pub(crate) fn handler(
             crate::commands::email::email_political_get,
             // P3.5.103 (6/24 鸿波 catch "附件不能点"): 导出附件到本地 tmp, 配合 open_file 系统打开
             crate::commands::email::email_export_attachment,
+            // 回复拟稿：附件只在本地解析预览，不上传原始文件
+            crate::commands::email::email_attachment_preview,
             // P3.5.105 (6/25 鸿波 catch "定时任务跑没跑结果如何都看不到"): cron 监控 + 操作
             crate::commands::cron::cron_jobs_list,
             crate::commands::cron::cron_job_outputs,
@@ -393,10 +392,11 @@ pub(crate) fn handler(
             // BL-CATFISH-WIKI-MODE P1.2.2 (6/4): chat 真 💾 button → wiki/queries/ 写盘
             crate::commands::wiki_save::wiki_save_chat_message,
             // BL-CATFISH-WIKI-MODE P3.3.2 (6/4): wiki read API
-            crate::commands::wiki_read::wiki_list_files,
+            crate::commands::wiki_files::wiki_list_files,
             crate::commands::wiki_read::wiki_read_file,
             // P37 (6/5): wiki 全文搜索 (BM25 score)
-            crate::commands::wiki_read::wiki_search_text,
+            crate::commands::wiki_search::wiki_search_text,
+            crate::commands::wiki_search::wiki_search_hybrid,
             // P3.3.18 Phase 4 (6/10): 已装部门 wiki 扫描 (~/.catfish/wiki-shared/)
             crate::commands::wiki_read::list_installed_wiki_shared,
             // P38 (6/5): wiki 语义搜索 (本机 BGE-M3 ONNX)

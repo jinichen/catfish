@@ -9,6 +9,7 @@
       "resources/mac-x64/node-embed.tar.gz": "./resources/mac/node-embed.tar.gz",
       "resources/mac-x64/chromium-embed.tar.gz": "./resources/mac/chromium-embed.tar.gz",
       "resources/mac-x64/catfish-email-dist.tar.gz": "./resources/mac/catfish-email-dist.tar.gz",
+      "resources/mac-x64/catfish-wechat-reader-dist.tar.gz": "./resources/mac/catfish-wechat-reader-dist.tar.gz",
       "resources/mac-x64/hermes-deps-dist.tar.gz": "./resources/mac/hermes-deps-dist.tar.gz"
     }
   }

@@ -314,7 +314,7 @@ def _filter_reminders(
 _LIST_REMINDERS_SCRIPT = r'''on cleanText(rawValue)
     if rawValue is missing value then return ""
     set valueText to rawValue as text
-    set AppleScript's text item delimiters to {return, linefeed, ASCII character 30, ASCII character 31}
+    set AppleScript's text item delimiters to {return, linefeed, (character id 30), (character id 31)}
     set valueParts to text items of valueText
     set AppleScript's text item delimiters to " "
     set valueText to valueParts as text
@@ -359,13 +359,13 @@ tell application "Reminders"
             try
                 set bodyText to my cleanText(body of reminderItem)
             end try
-            set fieldSeparator to ASCII character 31
+            set fieldSeparator to (character id 31)
             set rowText to idText & fieldSeparator & titleText & fieldSeparator & listText & fieldSeparator & dueText & fieldSeparator & completedText & fieldSeparator & priorityText & fieldSeparator & bodyText
             set end of outputRows to rowText
         end repeat
     end repeat
 end tell
-set AppleScript's text item delimiters to ASCII character 30
+set AppleScript's text item delimiters to (character id 30)
 set outputText to outputRows as text
 set AppleScript's text item delimiters to ""
 return outputText'''

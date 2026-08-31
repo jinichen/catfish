@@ -29,15 +29,79 @@ FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---", re.DOTALL)
 
 
 def parse_related(fm: str) -> list[str]:
-    """frontmatter 真 `related: ["[[A]]", "[[B]]"]` 抽 name list."""
-    m = re.search(r"^related:\s*\[(.*?)\]", fm, re.MULTILINE | re.DOTALL)
+    """Parse all supported ``related`` shapes into target names.
+
+    The writer accepts both the historical string list and the structured
+    ``{name, rel}`` list.  The linter must use the same input vocabulary;
+    otherwise a valid structured edge is incorrectly reported as a dead end.
+    """
+    # 不要在第一个 `]` 处截断：`[[A]]` 本身就含有 `]`，而且 related
+    # 可能跨行。取 related 字段到下一个顶层 frontmatter 字段为止，再抽 wikilink。
+    m = re.search(
+        r"^related:\s*(.*?)(?=^\w[\w_-]*:\s|\Z)",
+        fm,
+        re.MULTILINE | re.DOTALL,
+    )
     if not m:
         return []
-    inner = m.group(1)
-    return [
-        s.strip()
-        for s in re.findall(r"\[\[([^\]]+)\]\]", inner)
-    ]
+    raw = m.group(1).strip()
+    inner = raw[1:-1].strip() if raw.startswith("[") and raw.endswith("]") else raw
+
+    # Split only on commas outside an inline map and quoted value.  This is
+    # deliberately small and dependency-free because lint_wiki.py is also
+    # shipped as a standalone CLI script.
+    entries: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    for char in inner:
+        if escaped:
+            buf.append(char)
+            escaped = False
+            continue
+        if quote and char == "\\":
+            buf.append(char)
+            escaped = True
+            continue
+        if char in ('"', "'"):
+            if quote == char:
+                quote = None
+            elif quote is None:
+                quote = char
+            buf.append(char)
+            continue
+        if quote is None and char == "{":
+            depth += 1
+        elif quote is None and char == "}":
+            depth = max(0, depth - 1)
+        if char == "," and quote is None and depth == 0:
+            entries.append("".join(buf).strip())
+            buf = []
+        else:
+            buf.append(char)
+    if buf:
+        entries.append("".join(buf).strip())
+
+    names: list[str] = []
+    for entry in entries:
+        if entry.startswith("{") and entry.endswith("}"):
+            name_match = re.search(
+                r"\bname\s*:\s*(?:\"([^\"]+)\"|'([^']+)'|([^,}]+))",
+                entry[1:-1],
+            )
+            if name_match:
+                name = next(group for group in name_match.groups() if group is not None).strip()
+            else:
+                continue
+        else:
+            name = entry.strip().strip('"').strip("'")
+            link_match = WIKILINK_RE.fullmatch(name)
+            if link_match:
+                name = link_match.group(1).strip()
+        if name and name not in names:
+            names.append(name)
+    return names
 
 
 _KIND_MAP = {"entities": "entity", "concepts": "concept", "queries": "query"}
@@ -59,6 +123,9 @@ def scan_files() -> dict[str, dict]:
             fm = fm_match.group(1) if fm_match else ""
             title_m = re.search(r"^title:\s*(.+)$", fm, re.MULTILINE)
             title = title_m.group(1).strip() if title_m else f.stem
+            deprecated = bool(
+                re.search(r"^deprecated:\s*(?:true|yes|1)\s*$", fm, re.MULTILINE | re.IGNORECASE)
+            )
             related = parse_related(fm)
             body = content[fm_match.end():] if fm_match else content
             body_links = [m.group(1).strip() for m in WIKILINK_RE.finditer(body)]
@@ -70,6 +137,7 @@ def scan_files() -> dict[str, dict]:
                 "related": related,
                 "body_links": body_links,
                 "all_outbound": list(set(related + body_links)),
+                "deprecated": deprecated,
             }
     return files
 
@@ -90,7 +158,8 @@ def lint(files: dict[str, dict]) -> dict:
     """Build inbound map + check 3 类 issue. Return report dict."""
     inbound = defaultdict(list)
     broken = []  # list of (src_path, link_name)
-    for src_path, info in files.items():
+    live = {p: info for p, info in files.items() if not info["deprecated"]}
+    for src_path, info in live.items():
         for link in info["all_outbound"]:
             target = find_target(link, files)
             if target:
@@ -99,17 +168,18 @@ def lint(files: dict[str, dict]) -> dict:
                 broken.append((src_path, link))
 
     orphans = [
-        p for p, info in files.items()
+        p for p, info in live.items()
         if info["kind"] == "concept" and not inbound.get(p)
     ]
-    dead_ends = [p for p, info in files.items() if not info["all_outbound"]]
+    dead_ends = [p for p, info in live.items() if not info["all_outbound"]]
 
     return {
-        "total": len(files),
+        "total": len(live),
+        "deprecated": len(files) - len(live),
         "by_kind": {
-            "entity": sum(1 for v in files.values() if v["kind"] == "entity"),
-            "concept": sum(1 for v in files.values() if v["kind"] == "concept"),
-            "query": sum(1 for v in files.values() if v["kind"] == "query"),
+            "entity": sum(1 for v in live.values() if v["kind"] == "entity"),
+            "concept": sum(1 for v in live.values() if v["kind"] == "concept"),
+            "query": sum(1 for v in live.values() if v["kind"] == "query"),
         },
         "broken_links": [{"src": s, "link": l} for s, l in broken],
         "orphans": [{"path": p, "title": files[p]["title"]} for p in orphans],

@@ -26,6 +26,19 @@ _PATCH_TARGETS = [
     ("agent.auxiliary_client", "_MAIN_RUNTIME_FIELDS", "attr"),
     ("agent.auxiliary_client", "_resolve_auto", "func"),
     ("agent.auxiliary_client", "_normalize_main_runtime", "func"),
+    # P47: private-model auxiliary calls must fail closed. If Hermes renames
+    # a fallback hook, the guard could silently stop blocking public spend.
+    ("agent.auxiliary_client", "_call_llm_impl", "func"),
+    ("agent.auxiliary_client", "_async_call_llm_impl", "func"),
+    ("agent.auxiliary_client", "_try_configured_fallback_chain", "func"),
+    ("agent.auxiliary_client", "_try_main_fallback_chain", "func"),
+    ("agent.auxiliary_client", "_try_payment_fallback", "func"),
+    ("agent.auxiliary_client", "_try_main_agent_model_fallback", "func"),
+    (
+        "agent.auxiliary_client",
+        "_try_configured_fallback_for_unavailable_client",
+        "func",
+    ),
     ("agent.title_generator", "auto_title_session", "func"),
     # P42 (8/8): 后台调用不进记忆 — 见 plugin_memory_gate.py
     ("agent.memory_manager", "MemoryManager", "attr"),
@@ -142,10 +155,12 @@ def _check_attr_in_source(module_path: str, attr: str) -> bool:
 
 def _check_p15_stream_q_in_source() -> bool:
     """P15 fragile patch verify: 检测 hermes _handle_chat_completions 内部
-    streaming branch 仍含 ``_stream_q.put`` 用法.
+    streaming branch 仍含可从 worker thread 投递的 ``_stream_q`` 用法.
 
-    P15 通过 ``_on_delta.__closure__`` 闭包反射拿 ``_stream_q`` (queue.Queue)
-    引用, 推 approval event 给 SSE writer. 这条**硬依赖 hermes 内部 local 变量名**:
+    P15 通过 ``_on_delta.__closure__`` 闭包反射拿 ``_stream_q`` 引用,
+    推 approval event 给 SSE writer. Hermes <= 0.20.0 用 ``queue.Queue.put``;
+    0.20.6 起用 ``ThreadSafeAsyncQueue.put_threadsafe``. 这条**硬依赖
+    hermes 内部 local 变量名**:
     hermes 重构改名 `_stream_q` → `_stream_queue` / `_q` / 不用 queue, P15
     silent break (闭包反射拿不到, _approval_notify 不注册, fallback path 跑,
     button 不弹, 用户看不出来).
@@ -161,9 +176,11 @@ def _check_p15_stream_q_in_source() -> bool:
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             src = f.read()
-        # 必须见: `_stream_q` 变量 + `_stream_q.put` (P15 闭包反射的 free var)
-        # 必须见: `async def _on_delta` (P15 闭包反射的 target callback)
-        has_stream_q_put = bool(re.search(r"\b_stream_q\.put\b", src))
+        # 必须见: `_stream_q` 变量 + 新旧任一投递 API
+        # (证明 _on_delta 真正捕获了 P15 要反射的 free var).
+        has_stream_q_put = bool(
+            re.search(r"\b_stream_q\.(?:put|put_threadsafe)\b", src)
+        )
         has_on_delta = bool(
             re.search(r"def\s+_on_delta\s*\(", src)
         )

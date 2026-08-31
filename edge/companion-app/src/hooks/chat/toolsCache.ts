@@ -46,7 +46,7 @@ export async function ensureTools(): Promise<OpenAITool[]> {
     _cachedTools = wire;
     _cachedAt = Date.now();
     console.info(
-      `[catfish chat] 加载 ${wire.length}/${list.length} 个工具(${list.length - wire.length} 个不可用 toolset, TTL 60s)`,
+      `[catfish chat] 加载 ${wire.length}/${list.length} 个工具(${list.length - wire.length} 个当前终端不可用, TTL 60s)`,
     );
     return wire;
   } catch (e) {

@@ -131,8 +131,10 @@ def _patch_p2_current_main_runtime() -> None:
 # ── P4 ───────────────────────────────────────────────────────────────────
 
 def _patch_p4_auto_title_session() -> None:
-    """auto_title_session 跨线程跑, 走 session_registry lookup 补 main_runtime."""
+    """跨线程补 runtime，并阻止私有/服务请求启动标题 LLM。"""
     from agent import title_generator
+
+    guard = _sib("private_auxiliary_guard")
 
     _orig = title_generator.auto_title_session
 
@@ -143,6 +145,18 @@ def _patch_p4_auto_title_session() -> None:
             if cf_user:
                 main_runtime["catfish_outgoing_user"] = cf_user
                 kwargs["main_runtime"] = main_runtime
+        model = (
+            (main_runtime or {}).get("model", "")
+            if isinstance(main_runtime, dict)
+            else ""
+        )
+        source = _session_registry().lookup_source(session_id)
+        if guard.should_skip_title(model, source):
+            logger.info(
+                "P47: skip auxiliary title_generation for model=%s source=%s",
+                model or "unknown", source or "unknown",
+            )
+            return None
         return _orig(session_db, session_id, *args, **kwargs)
 
     title_generator.auto_title_session = patched_auto_title_session

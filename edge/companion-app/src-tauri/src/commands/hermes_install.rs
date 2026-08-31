@@ -22,8 +22,9 @@ use super::hermes_install_state::{
     record_failure, remove_any, write_completion_marker, BootstrapPaths, FailureRecord,
 };
 use super::hermes_install_steps::{
-    activate_stage, install_catfish_email, install_hermes_deps, link_catfish_email_bin,
-    prepare_source_stage, rollback_install, run_install_stage,
+    activate_stage, install_catfish_email, install_catfish_wechat_reader, install_hermes_deps,
+    link_catfish_email_bin, link_catfish_wechat_reader_bin, prepare_source_stage,
+    rollback_install, run_install_stage,
 };
 
 /// 上一次装机失败的原因, 没失败过 / 已经装成功了返 None。
@@ -128,6 +129,18 @@ fn bootstrap_locked(
             // 原来是 `let _ =` —— 建软链失败 (权限 / ~/.local/bin 被占成普通
             // 文件 / 磁盘满) 一个字都不会有, 员工只看到"CLI 没装"。
             log::warn!("[catfish-email-link] 建软链失败: {e:#}");
+        }
+        if !paths.install_dir.join("venv/bin/catfish-wechat-reader").exists() {
+            match resolve_runtime_dir(resource_dir)
+                .map(RuntimeArtifacts::from_dir)
+                .and_then(|artifacts| install_catfish_wechat_reader(&artifacts, paths))
+            {
+                Ok(()) => log::info!("[wechat-reader] 补装完成"),
+                Err(e) => log::warn!("[wechat-reader] 补装失败，聊天导出分析不可用: {e:#}"),
+            }
+        }
+        if let Err(e) = link_catfish_wechat_reader_bin(paths) {
+            log::warn!("[wechat-reader] 稳定入口创建失败: {e:#}");
         }
         report(
             reporter,
@@ -275,7 +288,13 @@ fn bootstrap_locked(
         if let Err(e) = install_catfish_email(&artifacts, paths) {
             log::warn!("[catfish-email] 装失败, 邮件 tab 会不可用: {e:#}");
         }
+        if let Err(e) = install_catfish_wechat_reader(&artifacts, paths) {
+            log::warn!("[wechat-reader] 安装失败，聊天导出分析不可用: {e:#}");
+        }
         link_catfish_email_bin(paths)?;
+        if let Err(e) = link_catfish_wechat_reader_bin(paths) {
+            log::warn!("[wechat-reader] 稳定入口创建失败: {e:#}");
+        }
         Ok(())
     })();
 
@@ -350,6 +369,7 @@ fn ensure_hermes_installed_with_reporter(
 // 一行的事; 留一个没人走的公开包装只会让人以为它还在链路上。
 
 /// Tauri setup 使用：立即返回，所有磁盘/网络工作在后台线程完成。
+#[cfg_attr(debug_assertions, allow(dead_code))]
 pub fn spawn_hermes_bootstrap(app: tauri::AppHandle, resource_dir: PathBuf) {
     let queued_app = app.clone();
     let queued = HermesBootstrapProgress {

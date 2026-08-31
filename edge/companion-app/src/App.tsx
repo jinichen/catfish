@@ -233,37 +233,32 @@ function AppShell({ activeTab }: { activeTab: string }) {
   // P3.3.29 (6/11): briefing 也走 main overflow:hidden 路径 — BriefingTab 内
   //   .briefing-2col 已用 calc(100vh - 200px) 自管 sidebar/detail 独立 scroll,
   //   app-main 的 overflow-y:auto 跟它撞车导致外层多一根滚动条 (内容区左右各
-  //   自滚 ✓, 外层也滚 ✗). 给 briefing 单独走 chat 同款 main 即可.
-  if (activeTab === "chat" || activeTab === "briefing") {
-    return (
-      <div className="app-shell">
-        <TabBar />
-        <div className="app-workspace">
-          <AuthBanner />
-          <AdvisoryBanner />
-          <HermesReconnectBanner />
-          <DevUserSwitcher />
-          <main className="app-workspace__main app-workspace__main--locked">
-            {activeTab === "chat" ? <ChatTab /> : <BriefingTab />}
-          </main>
-        </div>
-      </div>
-    );
-  }
-
+  //   自滚 ✓, 外层也滚 ✗).
+  //
+  // 8/31: AppShell 以前按 activeTab 分成两套 return. 早安从 chat/其他 TAB 切换
+  //   时会被 React 卸载，切回来重新 mount AdvisorView，重新采集四个数据源并进入
+  //   loading。早安是需要保留结果和后台时段计时器的常驻面板，不能跟着 TAB 销毁。
+  //   现在 AppShell 只有一套稳定树，BriefingTab 始终挂载；非早安时只 display:none。
+  //   display:contents 保留早安原有布局，不额外引入一层可见容器。
+  const isBriefing = activeTab === "briefing";
+  const isChatOrBriefing = activeTab === "chat" || isBriefing;
   return (
     <div className="app-shell">
       <TabBar />
       <div className="app-workspace">
         <AuthBanner />
+        {isChatOrBriefing && <AdvisoryBanner />}
         <HermesReconnectBanner />
         <DevUserSwitcher />
-        <main className="app-main">
+        <main className={isChatOrBriefing ? "app-workspace__main app-workspace__main--locked" : "app-main"}>
           {/* BL-CONSOLE-TAB-KILL (5/16): {activeTab === "console" && <ConsoleTab />} */}
-          {/* 8/8: 这里原来还有一行 `{activeTab === "briefing" && <BriefingTab />}` —— 死代码。
-              上面第 237 行 `if (activeTab === "chat" || activeTab === "briefing")` 已经提前
-              return 了, briefing 永远走不到这条分支。留着的害处是会让人以为早安页有两条
-              渲染路径, 改布局时两边都得顾 —— 这次查"底部空间"就先在这上面绕了一圈。 */}
+          <div
+            style={{ display: isBriefing ? "contents" : "none" }}
+            aria-hidden={!isBriefing}
+          >
+            <BriefingTab />
+          </div>
+          {activeTab === "chat" && <ChatTab />}
           {activeTab === "dashboard" && <DashboardTab />}
           {activeTab === "email" && <EmailTab />}
           {activeTab === "wiki" && <WikiTab />}

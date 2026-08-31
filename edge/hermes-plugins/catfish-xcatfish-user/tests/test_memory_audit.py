@@ -338,3 +338,11 @@ def test_handle_5_kinds_all_audit(router, isolated_homes):
     assert len(audit) == 5
     kinds_seen = [rec["kind"] for rec in audit]
     assert kinds_seen == ["identity", "project_fact", "workflow", "journal", "todo"]
+
+
+def test_todo_route_never_writes_employee_journal(router, isolated_homes):
+    result = json.loads(router._route_to_reminder("周一交合同"))
+
+    assert result["success"] is False
+    assert result["routed_to"] == "catfish_create_reminder"
+    assert not (isolated_homes["catfish"] / "employee_journal.md").exists()

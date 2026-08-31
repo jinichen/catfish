@@ -358,6 +358,7 @@ TASK_TOOLS: List[Dict[str, Any]] = [
         },
         "emoji": "⏰",
         "toolset": "catfish_native",
+        "x_catfish_runtime": {"platforms": ["darwin"]},
         "available": True,
     },
     {
@@ -404,6 +405,7 @@ TASK_TOOLS: List[Dict[str, Any]] = [
         },
         "emoji": "📋",
         "toolset": "catfish_native",
+        "x_catfish_runtime": {"platforms": ["darwin"]},
         "available": True,
     },
     {
@@ -424,6 +426,7 @@ TASK_TOOLS: List[Dict[str, Any]] = [
         },
         "emoji": "📋",
         "toolset": "catfish_native",
+        "x_catfish_runtime": {"platforms": ["darwin"]},
         "available": True,
     },
     # ── BL-CALENDAR (5/14 0:30 鸿波"ISO 现场审核会议 LLM 写脚本踩坑") ──
@@ -494,6 +497,7 @@ TASK_TOOLS: List[Dict[str, Any]] = [
         },
         "emoji": "📅",
         "toolset": "catfish_native",
+        "x_catfish_runtime": {"platforms": ["darwin"]},
         "available": True,
     },
     {
@@ -510,6 +514,7 @@ TASK_TOOLS: List[Dict[str, Any]] = [
         },
         "emoji": "📅",
         "toolset": "catfish_native",
+        "x_catfish_runtime": {"platforms": ["darwin"]},
         "available": True,
     },
 ]

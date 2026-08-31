@@ -29,7 +29,10 @@ catfish 侧做的降级 / fallback 全没机会执行。
 from __future__ import annotations
 
 from catfish_tool_bridge import catfish_tools
-from catfish_tool_bridge.mcp_server import _is_catfish_owned
+from catfish_tool_bridge.mcp_server import (
+    _is_catfish_owned,
+    _visible_catfish_schemas,
+)
 
 
 def test_keeps_all_catfish_native_tools():
@@ -94,3 +97,19 @@ def test_filter_shrinks_tool_count_materially():
     kept = [n for n in sample if _is_catfish_owned(n)]
     assert len(kept) == len(catfish_tools.CATFISH_NATIVE_TOOLS)
     assert len(kept) < len(sample), "过滤必须真的减少数量"
+
+
+def test_mcp_hides_runtime_unavailable_catfish_tools():
+    schemas = [
+        {"name": "catfish_today_summary", "available": True},
+        {
+            "name": "catfish_list_reminders",
+            "available": False,
+            "reason_code": "unsupported_platform",
+        },
+        {"name": "browser_navigate", "available": True},
+    ]
+
+    kept = _visible_catfish_schemas(schemas)
+
+    assert [schema["name"] for schema in kept] == ["catfish_today_summary"]

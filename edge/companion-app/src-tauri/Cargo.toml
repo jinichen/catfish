@@ -3,7 +3,7 @@ name = "catfish-companion-app"
 # 5/18 BL-COMPANION-VERSION-SYNC: 跟 hermes (catfish brand) 同步.
 # 改时记得同步 src-tauri/tauri.conf.json + ../package.json + hermes VERSION.
 # CI lint: scripts/check_version_sync.sh
-version = "0.20.0"
+version = "0.20.6"
 description = "Catfish Companion App - desktop sidekick for the Catfish platform"
 authors = ["Catfish Team"]
 edition = "2021"
@@ -95,6 +95,8 @@ hex = "0.4"
 # P3.3.54 (6/12): 审计员看的 xlsx 多 sheet 导出 (decisions + tool_call + outbound +
 #   校验报告). pure Rust write-only, MIT, <2MB. 写本机 ~/.catfish/exports/.
 rust_xlsxwriter = "0.79"
+# 本机聊天导出文件选择。只返回员工显式选择的路径，不扫描微信目录。
+rfd = "0.15"
 
 [dev-dependencies]
 # tempfile: 给单测建临时 ~/.hermes 目录用 (session_write / learning / endpoints)

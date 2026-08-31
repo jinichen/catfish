@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { AdvisorInput, AdvisorResult } from "./briefing_advisor_common";
 import {
   filterAdvisorResultByEvidence,
+  isAdvisorTaskBackedByCurrentInput,
   isAdvisorResultCacheSafe,
   isAdvisorResultGrounded,
   isAdvisorTransformSourceUsable,
@@ -119,5 +120,72 @@ describe("advisor Qwen 空转质量门", () => {
 
     const filtered = filterAdvisorResultByEvidence(mixed, input());
     expect(filtered?.mainTasks.map((task) => task.taskUid)).toEqual(["iso001"]);
+  });
+
+  it("历史 distilled facts 不能让已结束任务重新获得当前依据", () => {
+    const historicalOnly = {
+      ...result("秦树鹏一级建造师补位"),
+      mainTasks: [
+        {
+          ...result("秦树鹏一级建造师补位").mainTasks[0],
+          taskUid: "qinjnr",
+          contextRefs: ["distilled_facts.md: 已 resolved"],
+        },
+      ],
+    };
+    const historicalInput = {
+      ...input(),
+      profile: {
+        ...input().profile,
+        keyPeople: [{ name: "秦树鹏", relation: "下属" }],
+      },
+      todos: [],
+      ctx: {
+        ...input().ctx,
+        distilledFacts: "一级建造师补位 | resolved（秦树鹏入职，已归档）",
+        workplan: "",
+      },
+    };
+    expect(isAdvisorTaskBackedByCurrentInput(historicalOnly.mainTasks[0], historicalInput)).toBe(false);
+    expect(isAdvisorResultGrounded(historicalOnly, historicalInput)).toBe(false);
+    expect(filterAdvisorResultByEvidence(historicalOnly, historicalInput)).toBeNull();
+  });
+
+  it("当前任务的选项不能夹带当前来源未证明的历史联系人", () => {
+    const contaminated = result("3项新资质采购招投标（ISO系列）");
+    contaminated.mainTasks[0].options[1].summary = "申请备用方案并同步给秦树鹏跟进";
+    const currentInput = {
+      ...input(),
+      profile: {
+        ...input().profile,
+        keyPeople: [{ name: "秦树鹏", relation: "下属" }],
+      },
+    };
+
+    expect(isAdvisorResultGrounded(contaminated, currentInput)).toBe(false);
+    expect(filterAdvisorResultByEvidence(contaminated, currentInput)?.mainTasks[0].options[1].summary)
+      .toBe("申请备用方案并同步给相关负责人跟进");
+  });
+
+  it("拒绝并清空依赖历史资料生成的洞察字段", () => {
+    const historical = result("3项新资质采购招投标（ISO系列）");
+    historical.graveyard = [{
+      name: "秦树鹏一级建造师补位",
+      lastSeen: "数月前",
+      evidence: "distilled_facts.md",
+    }];
+    historical.blindSpots = [{
+      topic: "旧项目",
+      signal: "历史记忆",
+      evidence: "MEMORY.md",
+      reflectPrompt: "查看旧项目",
+    }];
+
+    expect(isAdvisorResultGrounded(historical, input())).toBe(false);
+    expect(filterAdvisorResultByEvidence(historical, input())).toMatchObject({
+      graveyard: [],
+      blindSpots: [],
+      subconscious: [],
+    });
   });
 });

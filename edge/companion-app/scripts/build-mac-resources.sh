@@ -201,6 +201,9 @@ fi
 rm -rf "$EMAIL_STAGE"
 echo "  ✓ $(basename "$EMAIL_TAR") ($(du -h "$EMAIL_TAR" | cut -f1))"
 
+# 安全导出文件读取器：独立零依赖 wheel，避免员工机依赖系统 Python。
+bash "$COMPANION/scripts/build-wechat-reader-resource.sh" "$ARCH" "$RESOURCES"
+
 echo ""
 echo "=== [2/6] Patch install.sh offline mode ==="
 python3 ../hermes-fork/patch_install_sh_offline.py \
@@ -426,38 +429,29 @@ else
 fi
 echo "  OK 顶级 node_modules 装完 ($(du -sh node_modules | cut -f1))"
 
-# BL-HERMES-BUNDLE-SURGICAL (7/17): 手术级瘦身. hermes-agent 顶级 npm ci 装 1GB · 里面
-# TOP: node_modules/hermes 811MB (React Native Hermes JS engine · Electron 用) + mermaid
-# 80MB + @tabler 77MB + lucide-react 36MB + typescript 23MB + electron-winstaller 30MB.
-# 员工机跑 hermes-agent (Python 主) 只需 agent-browser + node-pty + playwright. 删大而不用的.
+# Hermes 的上游 lockfile 不声明 agent-browser, 但 Companion 的 browser 工具
+# 运行时需要它；显式装入并在下面只保留当前 macOS 架构。
+if [ ! -f "node_modules/agent-browser/bin/agent-browser.js" ]; then
+    AGENT_BROWSER_STAGE="/tmp/catfish-agent-browser-$ARCH"
+    rm -rf "$AGENT_BROWSER_STAGE"
+    mkdir -p "$AGENT_BROWSER_STAGE" "node_modules/agent-browser"
+    npm pack agent-browser@0.26.0 --pack-destination "$AGENT_BROWSER_STAGE" --loglevel=error >/dev/null
+    tar xzf "$AGENT_BROWSER_STAGE"/agent-browser-*.tgz -C node_modules/agent-browser --strip-components=1
+    rm -rf "$AGENT_BROWSER_STAGE"
+fi
+
+# BL-HERMES-BUNDLE-SURGICAL (7/17): 运行时包只需要 Python gateway/tool 链路和
+# agent-browser。这里**只记录归档排除规则**, 不再 rm Hermes 源目录里的依赖。
+# Hermes 源目录通常是缓存, 直接删除会污染下一次构建, 也会让 npm/Playwright 的
+# 后续步骤在同一棵树上得到不可预测的结果。
+#
+# 这些依赖原本由 workspace 的前端/桌面/测试安装带入根 node_modules。它们不是
+# Companion 启动 gateway 所需的运行时文件, 但仍保留在构建树中供 [6b] 下载和
+# 构建 Chromium; 到 [6d] 打包时再排除。
 echo ""
-echo "=== [6a.5/6] 手术级瘦身 · 删 npm 大依赖 (Electron/前端/dev 用) ==="
-cd "$HERMES_SRC/node_modules" 2>/dev/null || true
-SURGICAL_TARGETS=(
-    hermes                    # 811 MB · React Native Hermes JS engine
-    mermaid @mermaid-js       # 80 MB · 画图库
-    @tabler @icons-pack       # 77+27 MB · icon set
-    lucide-react              # 36 MB · icon set
-    three three-stdlib        # 30 MB · 3D
-    electron-winstaller       # 30 MB · electron 装机器
-    typescript                # 23 MB · dev tool
-    @rolldown                 # 17 MB · bundler
-    @tauri-apps               # 15 MB · Tauri (Companion 已含, 重复)
-    react-native-*            # React Native (Electron/mobile 用)
-    "@types"                  # dev TypeScript types
-)
-for t in "${SURGICAL_TARGETS[@]}"; do
-    # 支持通配符 (react-native-* 之类)
-    for match in $t; do
-        if [ -e "$match" ]; then
-            size=$(du -sh "$match" 2>/dev/null | cut -f1)
-            rm -rf "$match"
-            echo "  🔪 删 $match ($size)"
-        fi
-    done
-done
+echo "=== [6a.5/6] 记录 Companion runtime 裁剪规则 (不修改 Hermes 源目录) ==="
 cd "$HERMES_SRC"
-echo "  OK 手术后 node_modules 大小: $(du -sh node_modules | cut -f1)"
+echo "  Hermes source 保留: $(du -sh node_modules | cut -f1)"
 
 echo ""
 echo "=== [6b/6] npx playwright install chromium (arch=$NODE_ARCH) ==="
@@ -622,10 +616,12 @@ fi
 echo "  OK $CHROMIUM_TAR ($(ls -lh "$CHROMIUM_TAR" | awk '{print $5}'))"
 
 echo ""
-echo "=== [6d/6] tar pack hermes-agent bundle (含 node_modules · 排废件) ==="
-# BL-HERMES-BUNDLE-SLIM (7/17): hermes-agent 里 apps/desktop 是 Electron 桌面 app
-# (200MB Electron framework + electron/playwright 二次装 1.4GB, 总 1.6GB), 我们
-# 用 Tauri Companion 替代它, 完全不用. exclude 后 tar 从 955MB → ~200MB.
+echo "=== [6d/6] tar pack hermes-agent bundle (Companion runtime profile) ==="
+# Companion 使用 Hermes 的 Python gateway/tool/plugin 运行链路, 不需要桌面
+# Electron、前端构建、测试依赖。排除规则作用于 tar 输入, 不改动 HERMES_SRC。
+#
+# agent-browser 是运行时依赖, 但 npm 包默认同时带多个 OS/架构二进制。这里只
+# 保留当前构建目标, 避免 macOS/Windows 包互相携带无用的浏览器启动器。
 # --exclude patterns 支持 shell glob, 无需 leading 路径.
 cd /tmp
 HERMES_TAR="$RESOURCES/hermes-agent-bundle.tar.gz"
@@ -643,17 +639,54 @@ HERMES_TAR="$RESOURCES/hermes-agent-bundle.tar.gz"
 #   · 归档里 hermes_cli/ plugins/ apps/ 下带 electron 字样的路径: 0 条
 # 也就是说它只从 apps/desktop 来, 而 apps/desktop 已经排掉了。
 #
-# 这不是"排除失效"—— 那 5 条 exclude 全都生效, 是漏排了一项。7/17 时
-# upstream 的 apps/desktop 还小, 注释里写的 "→ ~200MB" 就是那时候量的;
-# 0.19 之后它长到 534MB 也没人回头看这条注释。
+# 8/27: 这些规则以前在 [6a.5] 通过 rm -rf 实施; 现在改为只作用于归档。
+BUNDLE_EXCLUDES=(
+    "--exclude=hermes-agent-src-$ARCH/.git"
+    "--exclude=hermes-agent-src-$ARCH/venv"
+    "--exclude=hermes-agent-src-$ARCH/venv.bak"
+    "--exclude=hermes-agent-src-$ARCH/.venv"
+    "--exclude=hermes-agent-src-$ARCH/target"
+    "--exclude=hermes-agent-src-$ARCH/apps/desktop"
+    "--exclude=hermes-agent-src-$ARCH/node_modules/electron"
+    "--exclude=hermes-agent-src-$ARCH/node_modules/node-pty"
+    "--exclude=hermes-agent-src-$ARCH/node_modules/emojibase-data"
+    "--exclude=hermes-agent-src-$ARCH/node_modules/hermes"
+    "--exclude=hermes-agent-src-$ARCH/node_modules/mermaid"
+    "--exclude=hermes-agent-src-$ARCH/node_modules/@mermaid-js"
+    "--exclude=hermes-agent-src-$ARCH/node_modules/@tabler"
+    "--exclude=hermes-agent-src-$ARCH/node_modules/@icons-pack"
+    "--exclude=hermes-agent-src-$ARCH/node_modules/lucide-react"
+    "--exclude=hermes-agent-src-$ARCH/node_modules/three"
+    "--exclude=hermes-agent-src-$ARCH/node_modules/three-stdlib"
+    "--exclude=hermes-agent-src-$ARCH/node_modules/electron-winstaller"
+    "--exclude=hermes-agent-src-$ARCH/node_modules/typescript"
+    "--exclude=hermes-agent-src-$ARCH/node_modules/@rolldown"
+    "--exclude=hermes-agent-src-$ARCH/node_modules/@tauri-apps"
+    "--exclude=hermes-agent-src-$ARCH/node_modules/react-native-*"
+    "--exclude=hermes-agent-src-$ARCH/node_modules/@types"
+    "--exclude=hermes-agent-src-$ARCH/website"
+    "--exclude=hermes-agent-src-$ARCH/tests"
+    "--exclude=hermes-agent-src-$ARCH/tests-js"
+    "--exclude=hermes-agent-src-$ARCH/.github"
+)
+
+case "$ARCH" in
+    aarch64) AGENT_BROWSER_KEEP="agent-browser-darwin-arm64" ;;
+    x64)     AGENT_BROWSER_KEEP="agent-browser-darwin-x64" ;;
+    *) echo "❌ 不支持的 macOS 架构: $ARCH" >&2; exit 1 ;;
+esac
+for _agent_bin in \
+    agent-browser-darwin-arm64 agent-browser-darwin-x64 \
+    agent-browser-linux-arm64 agent-browser-linux-musl-arm64 \
+    agent-browser-linux-musl-x64 agent-browser-linux-x64 \
+    agent-browser-win32-x64.exe; do
+    if [ "$_agent_bin" != "$AGENT_BROWSER_KEEP" ]; then
+        BUNDLE_EXCLUDES+=("--exclude=hermes-agent-src-$ARCH/node_modules/agent-browser/bin/$_agent_bin")
+    fi
+done
+
 tar czhf "$HERMES_TAR" \
-    --exclude="hermes-agent-src-$ARCH/.git" \
-    --exclude="hermes-agent-src-$ARCH/venv" \
-    --exclude="hermes-agent-src-$ARCH/venv.bak" \
-    --exclude="hermes-agent-src-$ARCH/.venv" \
-    --exclude="hermes-agent-src-$ARCH/target" \
-    --exclude="hermes-agent-src-$ARCH/apps/desktop" \
-    --exclude="hermes-agent-src-$ARCH/node_modules/electron" \
+    "${BUNDLE_EXCLUDES[@]}" \
     -s "|hermes-agent-src-$ARCH|hermes-agent-src|" \
     "hermes-agent-src-$ARCH"
 echo "  OK $HERMES_TAR ($(ls -lh "$HERMES_TAR" | awk '{print $5}'))"
@@ -677,9 +710,38 @@ _leak=0
 # 8/3 Windows CI run #71 被这个坑拦下: "node_modules/electron" 匹配到了
 # node_modules/electron-builder/, 而 electron/ 本身已被 --exclude 正确排掉。
 # mac 这边一直没炸, 只是因为这棵树上恰好没有 electron-builder。
-for _pat in "\.git/" "venv/" "target/" "apps/desktop/" "node_modules/electron/"; do
+for _pat in \
+    "\.git/" "venv/" "target/" "apps/desktop/" "node_modules/electron/" \
+    "node_modules/node-pty/" "node_modules/emojibase-data/" \
+    "node_modules/hermes/" "node_modules/mermaid/" \
+    "node_modules/@mermaid-js/" "node_modules/@tabler/" \
+    "node_modules/@icons-pack/" "node_modules/lucide-react/" \
+    "node_modules/three/" "node_modules/three-stdlib/" \
+    "node_modules/electron-winstaller/" "node_modules/typescript/" \
+    "node_modules/@rolldown/" "node_modules/@tauri-apps/" \
+    "node_modules/react-native-" "node_modules/@types/" \
+    "website/" "tests/" "tests-js/" ".github/"; do
     if grep -qE "^hermes-agent-src/${_pat}" "$_HLIST"; then
         echo "  ❌ exclude 没生效: 归档里仍然有 hermes-agent-src/${_pat}" >&2
+        _leak=1
+    fi
+done
+for _agent_bin in \
+    agent-browser-darwin-arm64 agent-browser-darwin-x64 \
+    agent-browser-linux-arm64 agent-browser-linux-musl-arm64 \
+    agent-browser-linux-musl-x64 agent-browser-linux-x64 \
+    agent-browser-win32-x64.exe; do
+    if [ "$_agent_bin" != "$AGENT_BROWSER_KEEP" ] && \
+       grep -qF "hermes-agent-src/node_modules/agent-browser/bin/$_agent_bin" "$_HLIST"; then
+        echo "  ❌ 归档仍包含非目标 agent-browser 二进制: $_agent_bin" >&2
+        _leak=1
+    fi
+done
+for _required in \
+    "hermes-agent-src/node_modules/agent-browser/bin/agent-browser.js" \
+    "hermes-agent-src/node_modules/agent-browser/bin/$AGENT_BROWSER_KEEP"; do
+    if ! grep -qF "$_required" "$_HLIST"; then
+        echo "  ❌ 归档缺少运行时文件: $_required" >&2
         _leak=1
     fi
 done

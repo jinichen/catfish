@@ -1,0 +1,55 @@
+import { describe, expect, it } from "vitest";
+import type { WikiFileInfo } from "../../lib/tauri_wiki";
+import {
+  buildConfirmedWikiContent,
+  buildWikiRelationshipTasks,
+} from "./wikiRelationshipTasks";
+
+function file(overrides: Partial<WikiFileInfo>): WikiFileInfo {
+  return {
+    rel_path: "wiki/entities/example.md",
+    kind: "entity",
+    slug: "example",
+    title: "示例",
+    subtype: "project",
+    tags: [],
+    related: [],
+    sources: [],
+    aliases: [],
+    size_bytes: 10,
+    mtime: 1,
+    ontology_status: "active",
+    ...overrides,
+  };
+}
+
+describe("buildWikiRelationshipTasks", () => {
+  it("分别生成待确认和缺少关系任务", () => {
+    const tasks = buildWikiRelationshipTasks([
+      file({ rel_path: "wiki/entities/pending.md", title: "待确认", ontology_status: "pending" }),
+      file({ rel_path: "wiki/entities/orphan.md", title: "孤立项" }),
+      file({ rel_path: "wiki/entities/linked.md", title: "已关联", related: [{ name: "孤立项", rel: "关联" }] }),
+    ]);
+    expect(tasks.map((task) => task.kind)).toEqual(["pending", "missing"]);
+  });
+
+  it("把标题和别名冲突合并成一个重复组", () => {
+    const tasks = buildWikiRelationshipTasks([
+      file({ rel_path: "wiki/entities/a.md", title: "中电福富", aliases: ["FFCS"], related: [{ name: "组织", rel: "属于" }] }),
+      file({ rel_path: "wiki/entities/b.md", title: "FFCS", related: [{ name: "组织", rel: "属于" }] }),
+    ]);
+    const duplicates = tasks.filter((task) => task.kind === "duplicate");
+    expect(duplicates).toHaveLength(1);
+    expect(duplicates[0].duplicatePaths).toHaveLength(2);
+  });
+});
+
+describe("buildConfirmedWikiContent", () => {
+  it("写入结构化关系并把待确认状态改为 active", () => {
+    const source = "---\ntitle: 示例\nrelated: []\nontology_status: pending\n---\n\n正文\n";
+    const result = buildConfirmedWikiContent(source, [{ name: "产品研发部", rel: "所属部门" }]);
+    expect(result).toContain('related: [{name: "产品研发部", rel: "所属部门"}]');
+    expect(result).toContain("ontology_status: active");
+    expect(result).toContain("\n正文\n");
+  });
+});

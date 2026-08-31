@@ -25,7 +25,7 @@ SECTION_RE = re.compile(r"^##\s+(.+?)\s*$")
 
 @dataclass
 class JournalTodo:
-    """journal_todos_fetch 返的单条 TODO. 跟 Rust JournalTodo struct 对齐.
+    """员工历史流水账中的单条 checkbox；不作为用户待办数据源。
 
     is_priority (5/21 加): 员工标记的"重点工作". 替代 5/20 ship 的 GoalInput
     独立输入框 — 在 journal markdown 里某条 TODO 前加 ⭐ / 🔝 / "重点:" 前缀,

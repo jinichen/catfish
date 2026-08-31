@@ -23,10 +23,10 @@ import type {
   BriefingContext,
   CalendarEvent,
   EmailDigestItem,
-  JournalTodo,
+  ReminderTodo,
 } from "./tauri";
 // P3.5.202 (C 方案): TaskChatStatus 从 advisor_cache colocated with TaskChatSummary.
-import type { TaskChatStatus, TaskStatus } from "./advisor_cache";
+import type { ManualTaskStatus, TaskChatStatus } from "./advisor_cache";
 import { LLM_RACE_TIMEOUT_MS } from "./timeouts";
 
 // 跟 briefing_workplan / briefing 同款 — 不带 X-Catfish-* header, 走 query param (5/21 CORS 修)
@@ -172,7 +172,7 @@ export interface AdvisorInput {
   profile: Profile;
   emails: EmailDigestItem[];
   events: CalendarEvent[];
-  todos: JournalTodo[];
+  todos: ReminderTodo[];
   ctx: BriefingContext;
   urgencyMap: Record<string, string>;
   // sessionGoal 5/26 删 — hermes 0.14 原生 /goal 替代
@@ -196,7 +196,7 @@ export interface AdvisorInput {
      *  filterResolvedTasks 只看 chatStatus, taskState 不参与 → 员工点了
      *  完成 briefing LLM 又推同一 task. 加这字段 + mergeTaskStatus 合并
      *  两路信号 (员工显式 action 优先, LLM chat 语义次之). */
-    taskState?: TaskStatus;
+    taskState?: ManualTaskStatus;
   }>;
   /** P3.5.40 (6/18 鸿波 audit huashu-design '不凭空创造, 查已有 spec'):
    *  跟今日邮件/任务相关的 wiki 条目 (entity/concept) head 拼接, 防 LLM 凭记忆造客户名/项目名/资质名.

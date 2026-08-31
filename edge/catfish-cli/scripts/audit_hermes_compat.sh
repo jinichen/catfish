@@ -141,6 +141,7 @@ check_grep "gateway/platforms/api_server.py" "async def _run_agent\b" "APIServer
 check_grep "gateway/platforms/api_server.py" "async def _handle_chat_completions\b" "APIServerAdapter._handle_chat_completions"
 check_grep "gateway/platforms/api_server.py" "_stream_q\s*[:=]" "_stream_q 闭包 freevar (P15 反射) " 1
 check_grep "gateway/platforms/api_server.py" "def _on_delta\b" "_on_delta 闭包 (P15 反射)"
+check_grep "gateway/platforms/api_server.py" "_stream_q\.(put|put_threadsafe)\b" "_stream_q 投递 API (P15 SSE 桥)" 1
 check_grep "gateway/platforms/api_server.py" "stream_delta_callback" "stream_delta_callback kwarg (P15 cb 入口)" 2
 echo ""
 

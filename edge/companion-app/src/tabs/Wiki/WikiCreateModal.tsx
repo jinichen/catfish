@@ -6,7 +6,7 @@
  *   - subtype: entity person/org/system/cert/project, concept process/rule/principle/standard,
  *              system 强制 "system" (concept_type, P3.5.109 isSystemConcept 真判定字段)
  *   - tags: comma-separated
- *   - related: comma-separated (name only, 真不`[[]]` 真rendered 时加)
+ *   - related: 从已有本体节点选择目标，并选择关系类型；不允许自由填关系名
  *   - body: textarea (2-5 段, Markdown 支持真)
  *
  * P3.5.109 (6/25 鸿波 catch "+ 新建少了体系"): 加第 3 选项"体系 (system)" —
@@ -16,15 +16,20 @@
  * Submit → wikiCreateEntityOrConcept → reload files + close modal + jump select 新 file.
  */
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { wikiCreateEntityOrConcept } from "../../lib/tauri";
 import { useWikiStore } from "../../store/wiki";
 
 interface Props {
   onClose: () => void;
-  // P3.5.110 (6/25): 鸿波点 dangling wikilink → 弹 modal prefill title + 默认 kind=system.
+  // P3.5.110: 点击待确认关系时可带入标题和类型，仍需人工确认后才能入图。
   prefillTitle?: string;
   prefillKind?: "entity" | "concept" | "system";
+}
+
+interface RelationDraft {
+  targetPath: string;
+  rel: string;
 }
 
 const ENTITY_SUBTYPES = ["person", "org", "system", "cert", "project"];
@@ -52,13 +57,32 @@ export default function WikiCreateModal({ onClose, prefillTitle, prefillKind }: 
   const [title, setTitle] = useState(prefillTitle ?? "");
   const [subtype, setSubtype] = useState(defaultSubtype(prefillKind ?? "entity"));
   const [tagsStr, setTagsStr] = useState("");
-  const [relatedStr, setRelatedStr] = useState("");
+  const [relatedDrafts, setRelatedDrafts] = useState<RelationDraft[]>([]);
   const [body, setBody] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const loadFiles = useWikiStore((s) => s.loadFiles);
   const selectFile = useWikiStore((s) => s.selectFile);
+  const files = useWikiStore((s) => s.files);
+  const ontologyFiles = useMemo(
+    () =>
+      files.filter(
+        (f) =>
+          (f.kind === "entity" || f.kind === "concept") &&
+          (f.ontology_status ?? "active") === "active",
+      ),
+    [files],
+  );
+  const relationTypes = useMemo(() => {
+    const values = new Set<string>();
+    for (const file of ontologyFiles) {
+      for (const relation of file.related) {
+        if (relation.rel?.trim()) values.add(relation.rel.trim());
+      }
+    }
+    return Array.from(values).sort((a, b) => a.localeCompare(b, "zh-CN"));
+  }, [ontologyFiles]);
 
   // P3.5.109: subtype 3 路径 — entity / concept / system (system 单选 system)
   const subtypes =
@@ -81,10 +105,11 @@ export default function WikiCreateModal({ onClose, prefillTitle, prefillKind }: 
         .split(/[,，]/)
         .map((t) => t.trim())
         .filter((t) => t.length > 0);
-      const related = relatedStr
-        .split(/[,，]/)
-        .map((r) => r.trim().replace(/^\[\[|\]\]$/g, ""))
-        .filter((r) => r.length > 0);
+      const related = relatedDrafts.flatMap((draft) => {
+        const target = ontologyFiles.find((file) => file.rel_path === draft.targetPath);
+        const rel = draft.rel.trim();
+        return target && rel ? [{ name: target.title, rel }] : [];
+      });
       // P3.5.109: UI kind "system" → backend "concept" 0 后端改动, concept_type=system
       // WikiTree P3.5.107 A 真自动归"🌟 顶级体系"组 (related 空 → 顶级).
       // P3.5.108 WikiGraph isSystemConcept 真升级看 subtype === "system" 优先于 title heuristic.
@@ -230,14 +255,63 @@ export default function WikiCreateModal({ onClose, prefillTitle, prefillKind }: 
           />
         </Field>
 
-        <Field label="相关 (逗号分隔, 不带 [[]] )">
-          <input
-            type="text"
-            value={relatedStr}
-            onChange={(e) => setRelatedStr(e.target.value)}
-            placeholder="陈鸿波, FFCS数字鲶鱼, 资质申报流程"
-            style={inputStyle}
-          />
+        <Field label="关系（从已有本体节点选择）">
+          {relatedDrafts.map((draft, index) => (
+            <div key={`${draft.targetPath}-${index}`} style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+              <select
+                value={draft.targetPath}
+                onChange={(e) =>
+                  setRelatedDrafts((current) => current.map((item, i) => i === index ? { ...item, targetPath: e.target.value } : item))
+                }
+                style={{ ...inputStyle, flex: 2 }}
+              >
+                <option value="">选择节点...</option>
+                {ontologyFiles.map((file) => (
+                  <option key={file.rel_path} value={file.rel_path}>
+                    {file.title} · {file.kind === "entity" ? "实体" : "概念"}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={draft.rel}
+                onChange={(e) =>
+                  setRelatedDrafts((current) => current.map((item, i) => i === index ? { ...item, rel: e.target.value } : item))
+                }
+                style={{ ...inputStyle, flex: 1 }}
+              >
+                <option value="">关系类型...</option>
+                {(relationTypes.length > 0 ? relationTypes : ["关联"]).map((rel) => (
+                  <option key={rel} value={rel}>{rel}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => setRelatedDrafts((current) => current.filter((_, i) => i !== index))}
+                style={{ padding: "0 8px", border: "1px solid var(--catfish-border)", borderRadius: 4, background: "transparent", cursor: "pointer" }}
+                aria-label="删除关系"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={() => setRelatedDrafts((current) => [...current, { targetPath: "", rel: relationTypes[0] || "关联" }])}
+            disabled={ontologyFiles.length === 0}
+            style={{ padding: "5px 10px", border: "1px solid var(--catfish-border)", borderRadius: 4, background: "transparent", cursor: ontologyFiles.length === 0 ? "not-allowed" : "pointer", fontSize: 12 }}
+          >
+            + 添加关系
+          </button>
+          {ontologyFiles.length === 0 && (
+            <div style={{ marginTop: 4, color: "var(--catfish-text-muted)", fontSize: 11 }}>
+              暂无可选择的本体节点；保存后会进入待确认状态。
+            </div>
+          )}
+          {relatedDrafts.length === 0 && ontologyFiles.length > 0 && (
+            <div style={{ marginTop: 4, color: "var(--catfish-text-muted)", fontSize: 11 }}>
+              可不选关系；非“体系”条目没有确认关系时会进入待确认状态，不会进入关系图。
+            </div>
+          )}
         </Field>
 
         <Field label="正文 (Markdown 支持)">

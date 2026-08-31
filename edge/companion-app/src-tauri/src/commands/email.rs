@@ -211,13 +211,21 @@ pub async fn email_list_fetch(
 /// 客户端一致). Companion 点开邮件 → catfish-email read → Mail.app/Foxmail
 /// 那侧的 read status 也跟着翻 → 用户下次回到客户端看到已读. 返回的 JSON
 /// is_read 字段也会反映新状态, 前端可乐观更新列表.
+/// `mark_read=false` 供只读上下文场景使用，不改变邮件已读状态。
 #[tauri::command]
-pub async fn email_read_message(id: String) -> Result<String, String> {
+pub async fn email_read_message(
+    id: String,
+    mark_read: Option<bool>,
+) -> Result<String, String> {
     let bin = catfish_paths::catfish_email_bin().ok_or_else(|| {
         "catfish-email CLI 没装".to_string()
     })?;
+    let mut args = vec!["read", "--id", id.as_str(), "--json"];
+    if mark_read == Some(false) {
+        args.push("--no-mark-read");
+    }
     let out = Command::new(&bin)
-        .args(["read", "--id", &id, "--json"])
+        .args(args)
         .output()
         .map_err(|e| format!("catfish-email 调用失败: {e}"))?;
     if !out.status.success() {
@@ -486,4 +494,31 @@ pub async fn email_export_attachment(id: String, filename: String) -> Result<Str
         .and_then(|v| v.as_str())
         .ok_or_else(|| format!("catfish-email 返没 path 字段: {stdout_str}"))?;
     Ok(path.to_string())
+}
+
+/// 回复拟稿专用：在本地导出并解析附件预览，完成后删除临时原文件。
+///
+/// 原始附件不进入 ~/.catfish/uploads，也不直接发送给模型；只返回现有
+/// parse_file.py 生成的 bounded preview。解析失败只影响该附件，不影响拟稿。
+#[tauri::command]
+pub async fn email_attachment_preview(
+    id: String,
+    filename: String,
+) -> Result<crate::commands::file_parse::ParseFileResult, String> {
+    let path = email_export_attachment(id, filename).await?;
+    let parsed = crate::commands::file_parse::parse_file(path.clone()).await;
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(format!("{path}.parsed.txt"));
+    // catfish-email 为每个附件创建独立的 /tmp/catfish-email-att-* 目录；
+    // 解析后连空目录也清掉，避免拟稿多次运行持续占用磁盘。
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        if parent
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("catfish-email-att-"))
+        {
+            let _ = std::fs::remove_dir(parent);
+        }
+    }
+    parsed
 }
