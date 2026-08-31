@@ -80,10 +80,9 @@
   - 或顶层 `tests/e2e/` 跨 module 全链路 (未来加)
 - **耗时**: 单个 <30s, 整套 <15 分钟
 - **执行**: **CI 不跑** (耗时 + 资源限制), **手动**或 **nightly** 跑
-- **当前状态**: 3 个 `test_e2e_*.py` 已存在但 CI 里 ignored:
+- **当前状态**: 2 个 `test_e2e_*.py` 已存在但 CI 里 ignored:
   - `edge/tool-bridge/tests/test_e2e_sandbox.py`
   - `edge/tool-bridge/tests/test_e2e_agent_workflow.py`
-  - `edge/tool-bridge/tests/test_fed25_e2e_chain.py`
 
 ### Layer 4 · 手动验收 (Manual Acceptance)
 - **定义**: 真用户操作 Companion / TUI, 验证 UX
@@ -359,7 +358,6 @@ strategy:
 |---|---|---|
 | `edge/tool-bridge/tests/test_e2e_sandbox.py` | 需要真启动 sandbox 子进程 | 本地: `pytest test_e2e_sandbox.py` |
 | `edge/tool-bridge/tests/test_e2e_agent_workflow.py` | 需要真 hermes daemon | 本地启 hermes 后跑 |
-| `edge/tool-bridge/tests/test_fed25_e2e_chain.py` | 跨包 E2E (需要 catfish_gateway 在 PYTHONPATH) | 本地 monorepo 跑 |
 | `central/llm-gateway/tests/test_a2a_jwt.py` | 需要 a2a 协议依赖 | 本地装完整 deps 后跑 |
 
 ---
