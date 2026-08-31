@@ -64,6 +64,9 @@ dist-ssr/
 nohup.out
 
 # 包管理器锁文件保留（lock 应该 commit）—— 不忽略 package-lock.json / pnpm-lock.yaml
+# Companion 正式链路使用 npm；本机临时 pnpm 文件不入库
+edge/companion-app/pnpm-lock.yaml
+edge/companion-app/pnpm-workspace.yaml
 
 # ============================================================
 # Rust / Tauri
@@ -101,6 +104,11 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json.example
+.impeccable/
+
+# 本地业务图片，不属于源码或交付包
+payment_qr.jpg
+payment_qryh.jpg
 
 # ============================================================
 # 日志 / 临时文件

@@ -26,3 +26,6 @@
 _phase1_*.log
 hermes-agent-src/
 hermes-agent/
+
+# 微信读取器真实 tar 由 Windows 构建阶段生成，不提交二进制产物
+catfish-wechat-reader-dist.tar.gz
