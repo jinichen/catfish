@@ -46,12 +46,15 @@ import sys
 import tempfile
 
 _HERE = pathlib.Path(__file__).resolve().parent
-RS = _HERE.parent / "src" / "commands" / "codex_backend.rs"
+# 2026-08-15: HERMES_HELPER 随 codex_backend.rs 拆分到了 codex_helper.rs。
+# 测试必须跟着常量的真实归属走，否则每次 Companion CI 都会在行为测试
+# 之前直接报“找不到 HERMES_HELPER”，完全测不到 helper 本身。
+RS = _HERE.parent / "src" / "commands" / "codex_helper.rs"
 
 
 def extract_helper(text: str) -> str:
     m = re.search(r'const HERMES_HELPER: &str = r#"(.*?)"#;', text, re.S)
-    assert m, "在 codex_backend.rs 里找不到 HERMES_HELPER —— 常量被改名或换了字符串形式?"
+    assert m, "在 codex_helper.rs 里找不到 HERMES_HELPER —— 常量被改名或换了字符串形式?"
     return m.group(1)
 
 

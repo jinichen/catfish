@@ -13,6 +13,7 @@
 // 失败处理:
 //   - swiftc 找不到 / Swift 编译报错 → 不挂 cargo build, log 警告, 让 Rust 端走 osascript fallback
 
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
 fn main() {

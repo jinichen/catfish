@@ -28,4 +28,5 @@ hermes-agent-src/
 hermes-agent/
 
 # 微信读取器真实 tar 由 Windows 构建阶段生成，不提交二进制产物
-catfish-wechat-reader-dist.tar.gz
+# 真实 tar 在 Windows 构建阶段覆盖这个可追踪占位文件；占位文件本身必须进 git，
+# 否则 Linux/macOS 的 Tauri 配置校验会在干净 checkout 上因资源缺失而无法编译。

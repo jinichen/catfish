@@ -46,9 +46,9 @@ dependencies = [
     # 不是依赖** —— 上游哪天换掉它, 我们的加密就会在客户现场 ImportError,
     # 而那时所有存库的 key 都读不出来。显式声明。
     #
-    # 锁上界防 2.x breaking: Fernet 的 API 很稳, 但这个包历史上动过
-    # backend 参数, 不锁的话 CI 会在某次 pip 升级后静默炸。
-    "cryptography>=42.0,<49.0",
+    # 安全审计要求 >=50.0.0 (修复 PYSEC-2026-3552/3553/3554)。Fernet API
+    # 保持兼容；上界留在当前主版本内，避免未来 breaking release 静默进入。
+    "cryptography>=50.0.0,<51.0.0",
     # alembic migration (替代 idempotent CREATE TABLE)
     "alembic>=1.13",
     "sqlalchemy>=2.0",

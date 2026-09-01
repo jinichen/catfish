@@ -16,7 +16,7 @@ WECHAT_TOOLS: List[Dict[str, Any]] = [
             "列出员工已显式授权的微信聊天导出文件中的会话摘要。只读，不上传中央；"
             "返回结果由当前聊天 Picker 模型继续分析。"
         ),
-        "parameters": {
+        "input_schema": {
             "type": "object",
             "properties": {
                 "limit": {
@@ -37,7 +37,7 @@ WECHAT_TOOLS: List[Dict[str, Any]] = [
             "读取一个聊天会话在明确时间范围内的微信导出文本记录。只在员工授权的当前 Picker"
             "未改变时可用；不返回附件二进制。"
         ),
-        "parameters": {
+        "input_schema": {
             "type": "object",
             "properties": {
                 "session_id": {"type": "string", "minLength": 1},
@@ -62,7 +62,7 @@ WECHAT_TOOLS: List[Dict[str, Any]] = [
             "在员工授权的微信聊天导出文件中按关键词和明确时间范围搜索。可限定单个会话；"
             "结果由当前聊天 Picker 模型继续分析。"
         ),
-        "parameters": {
+        "input_schema": {
             "type": "object",
             "properties": {
                 "query": {"type": "string", "minLength": 1, "maxLength": 200},

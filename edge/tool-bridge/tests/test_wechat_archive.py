@@ -84,7 +84,7 @@ def test_schemas_never_accept_a_model_override() -> None:
         "catfish_wechat_search",
     ):
         schema = _schema(name)
-        assert "model" not in schema["parameters"].get("properties", {})
+        assert "model" not in schema["input_schema"].get("properties", {})
         assert schema["x_catfish_runtime"] == {"platforms": ["darwin", "windows"]}
 
 

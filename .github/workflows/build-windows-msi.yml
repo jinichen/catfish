@@ -29,6 +29,11 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
       - name: Setup Rust stable-msvc
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -273,6 +278,16 @@ jobs:
               fi
           done
           echo "  (以上为空 = 除 apps/desktop 外没人依赖 electron*, 下一轮可以直接删)"
+
+      - name: Build offline WeChat reader resource
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & "${{ github.workspace }}\edge\companion-app\scripts\build-wechat-reader-resource.ps1"
+          if ($LASTEXITCODE -ne 0) { throw "catfish-wechat-reader resource build failed" }
+          $archive = "${{ github.workspace }}\edge\companion-app\src-tauri\resources\windows\catfish-wechat-reader-dist.tar.gz"
+          if (-not (Test-Path $archive)) { throw "reader resource was not generated: $archive" }
+          Write-Host "✓ $archive"
 
       - name: Pack hermes-agent bundle (follow symlink, exclude venv/cache)
         shell: bash

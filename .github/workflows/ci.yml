@@ -120,15 +120,12 @@ jobs:
           cache: pip
 
       - name: Install deps
+        working-directory: central/llm-gateway
         run: |
           python -m pip install --upgrade pip
-          # BL-CI-MISSING-DEPS (6/3): catfish_gateway.auth.oidc 真 import jwt + cryptography.
-          # pyyaml: test_allowed_models / 其他 test 可能 import yaml 的配置.
-          # P3.5.62 (6/22 鸿波 catch CVE-2026-49468): litellm pin >=1.84.0 跟
-          # pyproject.toml 一致, 修 Proxy Host header injection 绕过. <2.0 防
-          # 2.x breaking. (catfish 用 SDK 模式不跑 proxy, 但 SBOM 扫描会标 CVE.)
-          pip install pytest pytest-asyncio python-dotenv 'litellm>=1.84.0,<2.0.0' \
-            fastapi httpx 'pydantic>=2' pyjwt cryptography pyyaml
+          # 依赖真源是 pyproject.toml。手写最小依赖清单曾漏掉 ruamel.yaml，
+          # 导致 app import 直接失败；后续加字段还会继续漏掉同类依赖。
+          pip install -e '.[dev]'
 
       - name: Run gateway tests
         working-directory: central/llm-gateway
@@ -183,11 +180,10 @@ jobs:
           cache: pip
 
       - name: Install deps
+        working-directory: central/llm-gateway
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-asyncio python-dotenv 'litellm>=1.84.0,<2.0.0' \
-            fastapi httpx 'pydantic>=2' pyjwt cryptography pyyaml \
-            'psycopg[binary]' alembic sqlalchemy
+          pip install -e '.[dev]'
 
       - name: Alembic upgrade head
         working-directory: central/llm-gateway
@@ -317,7 +313,7 @@ jobs:
         run: npx vite build
 
   # ════════════════════════════════════════════════════════════
-  # 4. 中央服务 (skills-hub / mcp-registry / secret-broker / identity-server) — Python 3.12
+  # 4. 中央服务 (skills-hub / mcp-registry / identity-server) — Python 3.12
   # ════════════════════════════════════════════════════════════
   # B3 (6/6 鸿波 audit): 之前 CI 只跑 tool-bridge + gateway 2 个模块, 剩 10 个全
   # 没跑. 按 TESTING-SPEC.md §4 扩 matrix. fail-fast: false 让一个 module 挂
@@ -331,13 +327,8 @@ jobs:
       matrix:
         include:
           - module: skills-hub
-            extra_deps: "fastapi 'pydantic>=2' pyyaml python-multipart sqlalchemy alembic python-dotenv httpx"
           - module: mcp-registry
-            extra_deps: "fastapi 'pydantic>=2' pyyaml httpx pyjwt cryptography python-dotenv sqlalchemy alembic"
-          - module: secret-broker
-            extra_deps: "fastapi 'pydantic>=2' python-dotenv keyring httpx anyio"
           - module: identity-server
-            extra_deps: "fastapi 'pydantic>=2' pyyaml pyjwt bcrypt cryptography python-dotenv python-multipart httpx anyio"
     steps:
       - uses: actions/checkout@v5
 
@@ -348,9 +339,11 @@ jobs:
           cache: pip
 
       - name: Install deps
+        working-directory: central/${{ matrix.module }}
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-asyncio ${{ matrix.extra_deps }}
+          # 每个中央服务的 pyproject.toml 是唯一依赖真源，避免漏装运行时依赖。
+          pip install -e '.[dev]'
 
       - name: Run tests
         working-directory: central/${{ matrix.module }}
