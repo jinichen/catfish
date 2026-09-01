@@ -391,12 +391,22 @@ verify_tree "$MAC_RESOURCES"
 # (node-embed、catfish-email-dist、hermes-deps-dist 本来就不在那三条里) 不用记得
 # 回来改这里。非 Mach-O 内容由 sign_macho_files 的 `file | grep Mach-O` 自然过滤。
 #
-# resources/windows/ 下那几个是 0 字节占位文件 (真件由 CI 现下), 用 -s 跳过 ——
-# 否则 `tar xzf` 对空文件报错, set -e 会把整个脚本带走。
+# resources/windows/ 下有些文件是给 Windows 构建占位的空归档或文本标记
+# (真件由 Windows CI / 本地 Windows 构建生成)。macOS 出包不应尝试解压它们，
+# 否则 `tar xzf` 会把一个名为 .tar.gz 的占位文本当归档，报 mtree 错误。
+is_placeholder_archive() {
+  local archive="$1"
+  cmp -s "$archive" <(printf '%s\n' 'CATFISH-WINDOWS-RESOURCE-PLACEHOLDER')
+}
+
 echo "=== 签名归档内运行时 ==="
 while IFS= read -r -d '' archive; do
   if [[ ! -s "$archive" ]]; then
     echo "→ 跳过空归档 (占位文件) · $archive"
+    continue
+  fi
+  if is_placeholder_archive "$archive"; then
+    echo "→ 跳过 Windows 占位归档 · $archive"
     continue
   fi
   sign_archive "$archive"
