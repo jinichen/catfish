@@ -44,6 +44,7 @@
 use std::path::PathBuf;
 use tauri::Window;
 
+#[cfg(target_os = "macos")]
 const MAX_TTS_TEXT_LEN: usize = 5000;
 // 默认中文女声 medium — 鸿波 5/10 踩坑确认: HuggingFace zh_CN 系列 quality
 // 上限就是 medium, 没有 high (英文 voice 才有完整四档). 不要改 high.

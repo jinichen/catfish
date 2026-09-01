@@ -5,9 +5,11 @@
 //! unix / 非 unix 两套实现整组搬过来了 —— 非 unix 那两个是空壳, 但必须跟着,
 //! 否则 Windows 上编译不过。
 
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+use serde::{Deserialize, Serialize};
+#[cfg(unix)]
 use super::codex_probe::{home_dir, hermes_python};
 
 #[cfg(unix)]

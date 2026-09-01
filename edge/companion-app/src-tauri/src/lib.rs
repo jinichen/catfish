@@ -5,6 +5,7 @@
 //!   - `services/`  —— 内部进程管理（前端不可直接访问）
 //!   - `tray/`      —— menubar 托盘菜单
 
+#[cfg(target_os = "macos")]
 mod app_menu;
 mod commands;
 mod services;

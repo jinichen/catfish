@@ -4,6 +4,7 @@
 //! (SessionsTab/SessionLauncher/ChatSidebar 按钮) 一并清理. Sessions tab 已在
 //! P0-3.1 并入工作台 sidebar, 终端入口不再露给员工.
 
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
 #[tauri::command]
@@ -345,7 +346,15 @@ end tell"#,
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (title, start_iso, end_iso, location, description, calendar_name);
+        let _ = (
+            title,
+            start_iso,
+            end_iso,
+            location,
+            description,
+            calendar_name,
+            alarm_minutes_before,
+        );
         Err("create_calendar_event: 当前平台未实现 (只 macOS, 走 Calendar.app)".into())
     }
 }

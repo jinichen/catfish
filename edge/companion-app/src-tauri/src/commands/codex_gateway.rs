@@ -56,6 +56,7 @@ pub(crate) fn hermes_api_ready() -> bool {
     }
 }
 
+#[cfg(unix)]
 fn parse_gateway_pids(stdout: &[u8]) -> HashSet<u32> {
     String::from_utf8_lossy(stdout)
         .lines()

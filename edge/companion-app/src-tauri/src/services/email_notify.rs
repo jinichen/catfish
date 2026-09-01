@@ -5,6 +5,7 @@
 //! truncate / extract_sender_name 也在这里 —— 它俩主要为这里的文案服务
 //! (6 处), email_llm.rs 也用 truncate (2 处), 见那个文件头里的说明。
 
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
 use serde::Serialize;

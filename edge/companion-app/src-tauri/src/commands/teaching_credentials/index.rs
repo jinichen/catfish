@@ -13,6 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) const ACCOUNT: &str = "catfish-teaching";
 /// 教学凭据在系统凭据库里的命名空间。**这是唯一一份定义** —— socket_proto.rs 的
 /// 白名单直接 use 它, 不另抄。抄一份的后果是"存进去了但取不出来", 而且两边各自

@@ -7,6 +7,7 @@
 //! - 复用 Hermes 自己的 `codex_runtime_switch.apply()`，保留其 MCP/plugin 迁移逻辑。
 
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "macos")]
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};

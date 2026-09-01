@@ -152,6 +152,7 @@ pub fn tool_bridge_socket() -> Option<PathBuf> {
 ///
 /// ⚠ 用 $HOME 不用 CATFISH_HOME — 跟 tool_bridge_socket / __main__.py:18 一致.
 ///   两端必须指同一个文件, 多认一个 env 只会让设了它的机器上两端错开.
+#[cfg(target_os = "macos")]
 pub fn companion_secrets_socket() -> Option<PathBuf> {
     home_dir().map(|h| h.join(".catfish").join("companion-secrets.sock"))
 }

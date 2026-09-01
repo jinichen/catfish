@@ -45,6 +45,7 @@ compile_error!(
 
 mod index;
 /// 取值通道的判据 (纯逻辑, 没有 unix / keyring 依赖 → CI 沙箱里跑得了)。
+#[cfg(target_os = "macos")]
 mod socket_proto;
 /// 取值通道的接线。macOS only —— 它解的是钥匙串按二进制授权这个 macOS 特有的
 /// 问题, Windows 凭据管理器同用户下本来就都读得到, 没有要绕的东西。
@@ -58,7 +59,7 @@ use index::{
 };
 // 只有真去开凭据库的那个 entry_for 用得到 —— Linux 那版是个直接返错的桩,
 // 不 cfg 的话在 ubuntu CI 上会多一条 unused import 警告。
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 use index::ACCOUNT;
 use keyring::Entry;
 /// 打开凭据库条目。service / user 两个位置的用法必须跟 secret_resolver 一致,
@@ -101,6 +102,7 @@ fn entry_for(_target: &str) -> Result<Entry, String> {
 ///
 /// ⚠ 错误消息里不许有密码。keyring 的 Error 是状态码 / 系统消息, 本身不含值 ——
 ///   下面这个 `{e}` 是安全的, 但别往里加别的东西。
+#[cfg(target_os = "macos")]
 pub(crate) fn read_password(target: &str) -> Result<Option<String>, String> {
     match entry_for(target)?.get_password() {
         Ok(p) => Ok(Some(p)),

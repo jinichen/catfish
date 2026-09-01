@@ -58,6 +58,7 @@ const PLUGIN_NAME: &str = "catfish-xcatfish-user";
 /// 实测来源: 员工跑 `hermes gateway stop` 时 launchd 报
 /// `Could not find service "ai.hermes.gateway" in domain for user gui: 501`。
 /// CHANGELOG:1875 也记着 `launchctl kickstart -k gui/$(id -u)/ai.hermes.gateway`。
+#[cfg(target_os = "macos")]
 const HERMES_LAUNCHD_LABEL: &str = "ai.hermes.gateway";
 
 // ─────────────────────────────────────────────

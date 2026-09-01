@@ -13,9 +13,11 @@ use tauri::Emitter;
 
 use super::hermes_install_artifacts::{resolve_runtime_dir, RuntimeArtifacts};
 use super::hermes_install_base::{
-    hermes_pinned_tag, remember_progress, report, BootstrapProgressState, HermesBootstrapProgress,
-    ProgressReporter, HERMES_BOOTSTRAP_PROGRESS_EVENT, LAST_BOOTSTRAP_PROGRESS,
+    hermes_pinned_tag, report, BootstrapProgressState, HermesBootstrapProgress, ProgressReporter,
+    HERMES_BOOTSTRAP_PROGRESS_EVENT, LAST_BOOTSTRAP_PROGRESS,
 };
+#[cfg(all(any(target_os = "macos", target_os = "linux"), not(debug_assertions)))]
+use super::hermes_install_base::remember_progress;
 use super::hermes_install_health::core_health_problems;
 use super::hermes_install_recover::{acquire_bootstrap_lock, recover_interrupted_transaction};
 use super::hermes_install_state::{
@@ -369,7 +371,7 @@ fn ensure_hermes_installed_with_reporter(
 // 一行的事; 留一个没人走的公开包装只会让人以为它还在链路上。
 
 /// Tauri setup 使用：立即返回，所有磁盘/网络工作在后台线程完成。
-#[cfg_attr(debug_assertions, allow(dead_code))]
+#[cfg(all(any(target_os = "macos", target_os = "linux"), not(debug_assertions)))]
 pub fn spawn_hermes_bootstrap(app: tauri::AppHandle, resource_dir: PathBuf) {
     let queued_app = app.clone();
     let queued = HermesBootstrapProgress {

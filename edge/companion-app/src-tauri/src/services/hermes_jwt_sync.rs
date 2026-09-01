@@ -42,6 +42,7 @@ use std::path::PathBuf;
 /// 写进 `~/.hermes/.env` 不构成额外泄露(且 .env 会 chmod 600).
 ///
 /// 生产要换: 两侧一起换 —— identity 侧重算 hash, 这里改明文并重发客户端.
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 const HERMES_CLI_SECRET: &str = "hermes-dev-secret-2026-please-change";
 
 /// sync JWT 到 hermes · caller 传 access_token (真员工身份 · quota 正确归属).
@@ -95,6 +96,7 @@ pub fn sync_all(jwt: &str) -> Result<()> {
 /// daemon 用 env 的 service token 内部调 (P25 patch / catfish plugin) 走
 /// service 身份. **RBAC 审计** 走 X-Catfish-User header · 由 hermes/gateway
 /// 端注入 · 不看 JWT sub.
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub async fn sync_service_token_to_env(identity_url: &str) -> Result<()> {
     let home_str = crate::util::paths::home_env().context("拿 HOME")?;
     let hermes = PathBuf::from(&home_str).join(".hermes");
