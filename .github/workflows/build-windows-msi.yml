@@ -230,6 +230,19 @@ jobs:
           fi
           echo "顶级 node_modules 装完: $(du -sh node_modules | cut -f1)"
 
+          # Hermes 的上游 lockfile 不声明 agent-browser, 但 Companion 的 browser 工具
+          # 运行时需要它；显式装入。这里不能只依赖 npm ci 的传递依赖，否则上游一改
+          # workspace 依赖关系，Windows 离线包就会在下面的正向校验处失败。
+          if [ ! -f "node_modules/agent-browser/bin/agent-browser.js" ]; then
+              AGENT_BROWSER_STAGE="/tmp/catfish-agent-browser-windows"
+              rm -rf "$AGENT_BROWSER_STAGE"
+              mkdir -p "$AGENT_BROWSER_STAGE" "node_modules/agent-browser"
+              npm pack agent-browser@0.26.0 --pack-destination "$AGENT_BROWSER_STAGE" --loglevel=error >/dev/null
+              tar xzf "$AGENT_BROWSER_STAGE"/agent-browser-*.tgz \
+                  -C node_modules/agent-browser --strip-components=1
+              rm -rf "$AGENT_BROWSER_STAGE"
+          fi
+
           # 手术级瘦身 —— 与 build-mac-resources.sh 步骤 6a.5 保持同一份清单。
           # hermes 根 npm ci 装约 1GB, 其中绝大部分是 Electron 桌面版 / 前端 /
           # dev 工具链。员工机跑的是 Python 主进程, node 侧只需要
