@@ -127,7 +127,7 @@ echo "=== [1/6] Clone hermes-agent tag $HERMES_TAG · copy catfish plugins ==="
 
 # copy catfish plugins
 mkdir -p "$HERMES_SRC/plugins/memory"
-for plugin in catfish-memory catfish-todo-sync; do
+for plugin in catfish-memory; do
     src="../hermes-plugins/$plugin"
     if [ -d "$src" ]; then
         cp -R "$src" "$HERMES_SRC/plugins/memory/$plugin"

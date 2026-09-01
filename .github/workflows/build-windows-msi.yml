@@ -44,13 +44,6 @@ jobs:
         with:
           workspaces: edge/companion-app/src-tauri
 
-      - name: Cache npm
-        uses: actions/cache@v5
-        with:
-          path: ~/.npm
-          key: npm-${{ hashFiles('edge/companion-app/package-lock.json') }}
-          restore-keys: npm-
-
       # ─── Windows resources: install.ps1 patched + uv.exe + cpython zip + hermes tar ───
 
       - name: Clone hermes-agent 上游 pinned to .hermes-git-tag
@@ -81,17 +74,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # catfish repo edge/hermes-plugins/{catfish-memory,catfish-todo-sync}
+          # catfish repo edge/hermes-plugins/catfish-memory
           # 需要拷进 hermes-agent-src/plugins/memory/, hermes 启动时加载.
           # (dev 机是软链, CI clean clone 是空; 拷源码 = 展开等价)
           mkdir -p /tmp/hermes-agent-src/plugins/memory
-          for plugin in catfish-memory catfish-todo-sync; do
+          for plugin in catfish-memory; do
             if [[ -d "edge/hermes-plugins/${plugin}" ]]; then
               cp -R "edge/hermes-plugins/${plugin}" \
                     "/tmp/hermes-agent-src/plugins/memory/${plugin}"
               echo "OK copied ${plugin}"
-            else
-              echo "WARN: edge/hermes-plugins/${plugin} 不存在, hermes 启动会缺 plugin"
             fi
           done
           ls /tmp/hermes-agent-src/plugins/memory/
@@ -393,7 +384,7 @@ jobs:
               fi
           done
 
-          # ③ TUI 的 node_modules —— 只警告不拦。
+          # ③ TUI 的 node_modules —— 可选功能，缺失时安装器会保留联网安装路径。
           # install.ps1 有第二个 npm 调用点 (2678 行, _Run-NpmInstall "TUI" $tuiDir),
           # PATCH_6 patch 的是函数本身, 所以它也吃跳过分支 —— 前提是
           # ui-tui/node_modules 也在包里。npm workspaces 会把大部分依赖提升到根,
@@ -401,7 +392,7 @@ jobs:
           # 它失败是非致命的 (调用点写的是 [void](...)), 不值得为它挡构建。
           TUI_NM=$(grep -c '^hermes-agent-src/ui-tui/node_modules/' "$HLIST" || true)
           if [ "${TUI_NM:-0}" -eq 0 ]; then
-              echo "::warning::ui-tui/node_modules 不在包里, TUI 那步装机时仍会尝试联网 (非致命)"
+              echo "::notice::ui-tui/node_modules 不在包里, TUI 那步装机时仍会尝试联网 (可选功能)"
           else
               echo "  ui-tui/node_modules: ${TUI_NM} 条"
           fi
@@ -512,24 +503,8 @@ jobs:
           ls -lh edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/ || true
 
       - name: Upload msi artifact
-      # ⚠ 这一条**还会继续报** "Node.js 20 is deprecated" (8/1 查证):
-      #
-      # actions/upload-artifact 的 v5 / v5.0.0 标签, action.yml 里写的仍然是
-      # `using: 'node20'` —— 尽管 v5.0.0 的 release notes 白纸黑字写着
-      # "this update supports Node v24.x"。发版说明和标签实际声明的不一致。
-      #
-      # 上游 main 分支已经改成 node24 了, 但还没发带这个修复的 tag。所以现在
-      # 用 @v5 或 @v5.0.0 拿到的都是 node20, 我们这边无解。
-      #
-      # 教训: 判断一个 action 跑在哪个 Node 上, 要看
-      #   https://raw.githubusercontent.com/<owner>/<repo>/<tag>/action.yml
-      # 里的 `runs.using`, **不能信 release notes**。本仓其余 5 个
-      # (checkout@v5 / cache@v5 / setup-node@v6 / setup-python@v6 /
-      #  github-script@v9) 都逐个这么查过, 确认是 node24。
-      #
-      # 该做什么: 上游发新 tag 后升上去, 这条注释一起删。
-      # 在那之前 GitHub 会强制它跑在 node24 上, 功能不受影响。
-        uses: actions/upload-artifact@v5
+      # v7 使用 Node 24，避免 GitHub Actions 的 Node 20 弃用提示。
+        uses: actions/upload-artifact@v7
         with:
           name: catfish-companion-msi-${{ github.sha }}
           path: edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi

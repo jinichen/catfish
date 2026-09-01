@@ -101,7 +101,7 @@ if ($SkipHermesClone -and (Test-Path $hermesDir)) {
 
 Write-Host "`n[Step 3/11] Copy catfish plugins into hermes-agent-src..." -ForegroundColor Yellow
 New-Item -ItemType Directory -Force -Path "$hermesDir\plugins\memory" | Out-Null
-foreach ($plugin in @('catfish-memory', 'catfish-todo-sync')) {
+foreach ($plugin in @('catfish-memory')) {
     $src = "edge\hermes-plugins\$plugin"
     if (Test-Path $src) {
         Copy-Item -Recurse -Force $src "$hermesDir\plugins\memory\$plugin"

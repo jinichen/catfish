@@ -91,15 +91,13 @@
         <Property Id="ALLUSERS" Value="2" />
         <Property Id="MSIINSTALLPERUSER" Value="1" />
 
-        <!-- https://docs.microsoft.com/en-us/windows/win32/msi/reinstallmode -->
-        <Property Id="REINSTALLMODE" Value="amus" />
         <Property Id="AUTOLAUNCHAPP" Secure="yes" />
         <Property Id="LAUNCHAPPARGS" Secure="yes" />
 
         {{#if allow_downgrades}}
             <MajorUpgrade Schedule="afterInstallInitialize" AllowDowngrades="yes" />
         {{else}}
-            <MajorUpgrade Schedule="afterInstallInitialize" DowngradeErrorMessage="!(loc.DowngradeErrorMessage)" AllowSameVersionUpgrades="yes" />
+            <MajorUpgrade Schedule="afterInstallInitialize" DowngradeErrorMessage="!(loc.DowngradeErrorMessage)" />
         {{/if}}
 
         <InstallExecuteSequence>
@@ -239,21 +237,6 @@
             </Component>
             {{/if}}
             {{resources}}
-            <Component Id="CMP_UninstallShortcut" Guid="*">
-                <Shortcut Id="UninstallShortcut"
-                          Name="Uninstall {{product_name}}"
-                          Description="Uninstalls {{product_name}}"
-                          Target="[System64Folder]msiexec.exe"
-                          Arguments="/x [ProductCode]" />
-                <RemoveFolder Id="INSTALLDIR"
-                              On="uninstall" />
-                <RegistryValue Root="HKCU"
-                               Key="Software\{{manufacturer}}\{{product_name}}"
-                               Name="Uninstaller Shortcut"
-                               Type="integer"
-                               Value="1"
-                               KeyPath="yes" />
-            </Component>
         </DirectoryRef>
 
         <DirectoryRef Id="ApplicationProgramsFolder">
@@ -269,6 +252,20 @@
                 <RemoveFolder Id="ApplicationProgramsFolder" On="uninstall"/>
                 <RegistryValue Root="HKCU" Key="Software\{{manufacturer}}\{{product_name}}" Name="Start Menu Shortcut" Type="integer" Value="1" KeyPath="yes"/>
            </Component>
+            <Component Id="CMP_UninstallShortcut" Guid="*">
+                <Shortcut Id="UninstallShortcut"
+                          Name="Uninstall {{product_name}}"
+                          Description="Uninstalls {{product_name}}"
+                          Target="[System64Folder]msiexec.exe"
+                          Arguments="/x [ProductCode]" />
+                <RemoveFolder Id="INSTALLDIR" On="uninstall" />
+                <RegistryValue Root="HKCU"
+                               Key="Software\{{manufacturer}}\{{product_name}}"
+                               Name="Uninstaller Shortcut"
+                               Type="integer"
+                               Value="1"
+                               KeyPath="yes" />
+            </Component>
         </DirectoryRef>
 
         {{#each merge_modules as |msm| ~}}
