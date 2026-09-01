@@ -286,6 +286,29 @@ export function ModelForm({
               onChange={(e) => setUp({ timeout: Number(e.target.value) || 60 })}
             />
           </Field>
+
+          {Object.keys(model.upstream.param_overrides ?? {}).length > 0 ? (
+            <Field
+              label="参数覆盖范围"
+              hint="auto 会把思考开关限制在强制工具调用；all 才会覆盖每次请求。"
+            >
+              <select
+                style={INPUT}
+                value={model.upstream.param_overrides_scope ?? "auto"}
+                onChange={(e) =>
+                  setUp({
+                    param_overrides_scope: e.target.value as NonNullable<
+                      ModelConfig["upstream"]["param_overrides_scope"]
+                    >,
+                  })
+                }
+              >
+                <option value="auto">自动（推荐）</option>
+                <option value="forced_tool_choice">仅强制工具调用</option>
+                <option value="all">所有请求</option>
+              </select>
+            </Field>
+          ) : null}
         </div>
       </div>
 
@@ -681,4 +704,3 @@ function FallbackEditor({
     </div>
   );
 }
-

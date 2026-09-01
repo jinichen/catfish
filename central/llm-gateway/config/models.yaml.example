@@ -20,6 +20,12 @@
 
 version: 1
 
+# Hermes 工具循环保护：超过任一上限就返回结构化 409，避免任务无限消耗模型。
+# null 可关闭某一维度；不要在代码里按模型名写例外。
+tool_loop:
+  max_tool_messages: 64
+  max_tool_calls: 128
+
 models:
 
   # ---------- 内部 · 主力通用 ----------

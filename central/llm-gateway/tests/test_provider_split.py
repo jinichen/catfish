@@ -69,7 +69,14 @@ def _model(name: str, up: dict) -> dict:
     return {"name": name, "tier": "private", "display_name": name, "upstream": up}
 
 
-FIELDS = ("model", "api_base", "api_key_env", "timeout", "param_overrides")
+FIELDS = (
+    "model",
+    "api_base",
+    "api_key_env",
+    "timeout",
+    "param_overrides",
+    "param_overrides_scope",
+)
 
 
 # ── 黄金对照: 拆分前后 UpstreamConfig 逐字段相同 ────────────────────────

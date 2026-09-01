@@ -166,6 +166,36 @@ def test_dynamic_works_with_param_overrides():
     assert params["temperature"] == 1.0
 
 
+def test_thinking_override_auto_scope_does_not_touch_agent_loop():
+    """旧数据库行里的 thinking toggle 不能关掉 tool_choice=auto 的思考。"""
+    model = _fake_model(context_window=128000)
+    model.upstream.param_overrides = {"enable_thinking": False}
+    model.upstream.param_overrides_scope = "auto"
+
+    params = _build_litellm_params(
+        {"messages": [{"role": "user", "content": "做一个复杂任务"}], "tool_choice": "auto"},
+        model,
+    )
+
+    assert "enable_thinking" not in params
+
+
+def test_thinking_override_auto_scope_applies_to_forced_tool_choice():
+    model = _fake_model(context_window=128000)
+    model.upstream.param_overrides = {"enable_thinking": False}
+    model.upstream.param_overrides_scope = "auto"
+
+    params = _build_litellm_params(
+        {
+            "messages": [{"role": "user", "content": "返回结构化结果"}],
+            "tool_choice": "required",
+        },
+        model,
+    )
+
+    assert params["enable_thinking"] is False
+
+
 # ─── BL-MAX-TOKENS-CLIP (5/15 21:30 鸿波撞 NVIDIA ContextWindowExceededError) ──
 #
 # client 显式传 max_tokens 时, 仍 clip 到 model 真实剩余空间 (cw - prompt - safety).

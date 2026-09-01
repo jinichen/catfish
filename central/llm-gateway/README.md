@@ -56,6 +56,24 @@ python -m catfish_gateway.app
 | `catfish-private-vision` | chat | Qwen3-VL 30B (A3B MoE) · 多模态 |
 | `catfish-private-embed` | embedding | BGE-M3 · 给 Hermes memory 用 |
 
+### 工具循环保护
+
+Hermes 的代理循环会把每一轮工具结果重新提交给网关。`config/models.yaml` 的
+顶层 `tool_loop` 控制单次任务允许累计的工具历史：超过任一项，网关返回结构化
+`409 agent_loop_limit_exceeded`，不会自动切换模型、修改历史或继续消耗上游额度。
+
+```yaml
+tool_loop:
+  max_tool_messages: 64
+  max_tool_calls: 128
+```
+
+模型 `upstream.param_overrides_scope` 有三种值：`all`（每次请求）、
+`forced_tool_choice`（仅结构化单次调用）和 `auto`（默认）。`auto` 会把
+`enable_thinking` 这类请求敏感开关限制到强制工具调用，而像 Gemini 的温度这类
+普通协议参数仍按模型配置覆盖。已有数据库模型行也按这个兼容规则生效；YAML
+不会覆盖数据库里已存在的模型记录。
+
 ---
 
 ## Docker 方式

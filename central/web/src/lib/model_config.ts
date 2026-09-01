@@ -41,6 +41,8 @@ export interface Upstream {
   api_key_env?: string;
   /** 强制覆盖的请求参数, 客户端传什么都会被替换 */
   param_overrides?: Record<string, unknown>;
+  /** auto = 思考开关仅在强制工具调用时生效，其它参数保持全请求覆盖。 */
+  param_overrides_scope?: "auto" | "all" | "forced_tool_choice";
   timeout?: number;
 }
 
@@ -178,7 +180,13 @@ export function emptyModel(): ModelConfig {
     display_name: "",
     mode: "chat",
     default: false,
-    upstream: { model: "", api_base: "", api_key_env: "", timeout: 60 },
+    upstream: {
+      model: "",
+      api_base: "",
+      api_key_env: "",
+      timeout: 60,
+      param_overrides_scope: "auto",
+    },
     context_window: null,
     max_output_tokens: null,
     supports_tool_use: false,

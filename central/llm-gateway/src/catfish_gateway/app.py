@@ -83,6 +83,7 @@ from .chat_prepare import (  # noqa: E402
 )
 from .model_handoff import apply_soft_handoff  # noqa: E402
 from .tools_sanitizer import sanitize_tools  # noqa: E402
+from .tool_loop_guard import enforce_tool_loop_budget  # noqa: E402
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -558,6 +559,11 @@ async def chat_completions(
         )
 
     body = sanitize_tools(body, user=user, source_hint=source_hint)
+
+    # Hermes owns the agent loop and sends each round as a new HTTP request.
+    # Stop a runaway transcript before paying for one more upstream call; the
+    # limits live in models.yaml/config DB, not in model-name branches.
+    enforce_tool_loop_budget(body, config.tool_loop)
 
     body = harden_for_gemini(body, model)
 

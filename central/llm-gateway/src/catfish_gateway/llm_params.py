@@ -359,17 +359,28 @@ def _build_litellm_params(body: dict, model) -> dict:
             so["include_usage"] = True
         params["stream_options"] = so
 
-    # Apply per-model forced overrides (e.g. Gemini 3 requires temperature=1.0)
-    if model.upstream.param_overrides:
-        before = {k: params.get(k) for k in model.upstream.param_overrides}
-        params.update(model.upstream.param_overrides)
+    # Apply per-model overrides according to their explicit/request-derived
+    # scope. Thinking switches are not universal provider requirements: the
+    # legacy-safe ``auto`` policy only applies them to forced tool_choice.
+    from .request_param_overrides import applicable_overrides  # noqa: PLC0415
+
+    overrides = applicable_overrides(model.upstream, params.get("tool_choice"))
+    if overrides:
+        before = {k: params.get(k) for k in overrides}
+        params.update(overrides)
         changed = {
             k: {"from": before[k], "to": v}
-            for k, v in model.upstream.param_overrides.items()
+            for k, v in overrides.items()
             if before[k] != v
         }
         if changed:
             logger.info("applied param_overrides for %s: %s", model.name, changed)
+    elif getattr(model.upstream, "param_overrides", None):
+        logger.info(
+            "skipped request-scoped param_overrides for %s: tool_choice=%r",
+            model.name,
+            params.get("tool_choice"),
+        )
 
     # 8/8: 出口前最后一道 messages 规范化 —— 删掉"给了但是空的" tool_calls。
     # 放这儿而不是入口: 压缩 / model handoff / lean inject 都在入口之后动

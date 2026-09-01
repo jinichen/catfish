@@ -20,7 +20,7 @@ import re
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, PrivateAttr
@@ -90,11 +90,15 @@ class UpstreamConfig(BaseModel):
     api_base: str | None = None  # only set for OpenAI-compatible self-hosted endpoints
     api_key_env: str = "INTERNAL_LLM_KEY"
 
-    # Parameters the gateway will FORCE on every request, regardless of what
-    # the client sent. Use this for model-specific requirements like
-    # "Gemini 3 must run at temperature=1.0" or "Claude must not set n>1".
-    # Client-sent values for the same keys are silently replaced.
+    # Parameters the gateway will FORCE on requests. The default ``auto``
+    # keeps legacy behavior for ordinary provider parameters, while treating
+    # thinking toggles as valid only for forced tool_choice requests. This is
+    # deliberately based on parameter semantics, not a model-name allowlist.
+    # Set ``all`` for a genuinely universal provider requirement (for example
+    # Gemini temperature=1.0), or ``forced_tool_choice`` for a structured
+    # single-shot-only override.
     param_overrides: dict[str, Any] = Field(default_factory=dict)
+    param_overrides_scope: Literal["auto", "all", "forced_tool_choice"] = "auto"
 
     # Per-upstream timeout in seconds. Some preview models (Gemini 3) can
     # be slow to cold-start; private fast models rarely need more than 60s.
@@ -185,6 +189,19 @@ class RateLimitsConfig(BaseModel):
     rpd: int | None = None
     tpd: int | None = None
     tier: str | None = None
+
+
+class ToolLoopConfig(BaseModel):
+    """Budget for accumulated tool history in one client-side agent loop.
+
+    The gateway is stateless across HTTP calls, so it cannot count loop turns
+    itself. It can, however, count the assistant tool calls and tool results
+    already present in the next request. ``None`` disables one dimension;
+    positive values are configuration, not model-specific code paths.
+    """
+
+    max_tool_messages: int | None = Field(default=64, ge=1)
+    max_tool_calls: int | None = Field(default=128, ge=1)
 
 
 class ModelConfig(BaseModel):
@@ -311,6 +328,7 @@ class Config(BaseModel):
     skills_hub: SkillsHubConfig = Field(default_factory=SkillsHubConfig)
     # P3.3.18 (6/10): wiki-hub 配置默认 enabled — 客户不要部门 wiki 时 yaml 关
     wiki_hub: WikiHubConfig = Field(default_factory=WikiHubConfig)
+    tool_loop: ToolLoopConfig = Field(default_factory=ToolLoopConfig)
 
     # BL-FALLBACK-TOGGLE (2026-05-16 鸿波):
     # 默认 false — 上游挂直接返客户端, **不自动跳别的 model**.

@@ -20,6 +20,13 @@
 
 version: 1
 
+# ── 工具循环保护 ───────────────────────────────────────────────────
+# Hermes 每轮会重新请求网关。超过任一上限时，网关返回结构化 409，不再继续
+# 调模型；这里是部署策略，不绑定具体模型。按任务复杂度调整，不能写进代码。
+tool_loop:
+  max_tool_messages: 64
+  max_tool_calls: 128
+
 # ── 失败切换总开关 (8/8 鸿波拍板: false → true) ──────────────────────────
 #
 # 语义澄清: **打开它不等于"允许乱切"**。fallback.py:441-454 是四道门, 依次:
@@ -269,6 +276,8 @@ models:
         extra_body:
           thinking:
             type: disabled
+      # 明确声明这是 DeepSeek 的通用兼容要求；Qwen/DashScope 的思考开关不要照抄。
+      param_overrides_scope: all
 
     context_window: 1000000  # 1M
     # BL-MAX-OUTPUT-TOKENS (5/15 22:31 鸿波撞 400 'Invalid max_tokens [1, 393216]'):
@@ -579,4 +588,3 @@ models:
   #   # 故意**不配 fallback 块** — 跟 nvidia-llama / nemotron 同款 BL-NVIDIA-NIM-MANUAL-ONLY
   #   # 思路: 客户基建调研模型, 跪了直接报客户端, 不绕弯到其他公网. 防 demo 时
   #   # 'Groq 失败但 gateway 静默切到 DashScope, 客户以为 Groq 跑得很好'.
-

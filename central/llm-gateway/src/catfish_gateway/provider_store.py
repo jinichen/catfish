@@ -234,6 +234,8 @@ def migrate_models_to_providers(by: str = "migrate:provider-split") -> list[str]
                 # param_overrides 是模型级的, 跟着模型走
                 if up.get("param_overrides"):
                     new_up["param_overrides"] = up["param_overrides"]
+                if up.get("param_overrides_scope"):
+                    new_up["param_overrides_scope"] = up["param_overrides_scope"]
 
                 cur.execute(
                     "UPDATE gateway_models SET payload = %s::jsonb, "

@@ -98,9 +98,11 @@ final content, JSON 解析必然失败, 早安页反而更坏。
 
 ## 管理员显式配了就不覆盖
 
-`param_overrides` 的文档写着 "FORCE on every request"。管理员显式写了思考
-开关就是他的意思, 这里不越过他 —— 但会 WARNING 一声说这次请求大概率 400,
-因为静默失败正是这一整天在反复出现的那类问题。
+`request_param_overrides.py` 先按 `param_overrides_scope` 选择本次真正适用的
+配置，再把结果交给这里。管理员选择 `all` 时仍是每次请求强制覆盖；默认 `auto`
+会把 DashScope / 自建 Qwen 的思考开关限制在强制工具调用，避免污染 Hermes 的
+`tool_choice=auto` 代理循环。这里仍不改已经进入本次请求的显式思考参数，并会
+在它与强制 tool_choice 冲突时告警。
 """
 
 from __future__ import annotations
