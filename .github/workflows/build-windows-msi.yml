@@ -24,10 +24,10 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js 26.8.1 (Hermes v2026.8.31)
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '26.8.1'
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v6
