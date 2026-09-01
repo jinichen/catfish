@@ -6,7 +6,7 @@
 #   2. uv                    (下 astral.sh · macOS arm64 or x64)
 #   3. cpython-3.11.15-embed.tar.gz  (下 python-build-standalone · macOS arm64 or x64)
 #   4. hermes-agent-bundle.tar.gz    (clone + npm ci + tar 打包)
-#   5. node-embed.tar.gz     (下 nodejs.org · v22 darwin arm64 or x64) · 新增
+#   5. node-embed.tar.gz     (下 nodejs.org · v26 darwin arm64 or x64) · 新增
 #   6. chromium-embed.tar.gz (npx playwright install chromium + tar 打包) · 新增
 #
 # 用法:
@@ -213,16 +213,13 @@ chmod +x "$RESOURCES/install.sh"
 
 # ─── 3. Node.js darwin binary ────────────────────────────
 
-# 8/8: 22.14.0 → 22.23.2, 因为 hermes v0.20 把底线抬了。
+# Hermes v2026.8.31 的 engines.node 是
+# `^22.22.0 || ^24.11.0 || >=26.0.0`, 且上游 .npmrc 开启了 engine-strict。
+# 不能继续沿用 v22.23.2: npm ci 会直接以 EBADENGINE 失败。
 #
-# v0.19 的 package.json engines 是 `node >=20.0.0`, 22.14.0 富余得很。
-# v0.20 抬到 **`node >=22.22.0`**, 而上游 .npmrc 里写着 `engine-strict=true`
-# —— 不满足是 **EBADENGINE 硬失败**, 不是 warn。22.14.0 会让 npm ci 当场挂,
-# 而这一步在打包流程靠后, 要下完几百 MB 才炸。
-#
-# 选 22.23.2 (2026-07-29 发布) 而不是跳到 24/26: 留在 v22 LTS 线内是最小改动,
-# 它 bundle 的 npm 是 10.x, 满足 engines 的 `<11.10.0` 那一支。
-NODE_VERSION="22.23.2"
+# 选 Node v26.8.1: 它满足 Hermes 的 >=26.0.0 分支, Node 官方提供
+# darwin-arm64 / darwin-x64 二进制, 且不会依赖员工机器预装 Node。
+NODE_VERSION="26.8.1"
 NODE_FNAME="node-v${NODE_VERSION}-darwin-${NODE_ARCH}.tar.gz"
 NODE_URL="https://nodejs.org/dist/v${NODE_VERSION}/${NODE_FNAME}"
 
@@ -271,7 +268,7 @@ echo "  OK $RESOURCES/node-embed.tar.gz ($(ls -lh "$RESOURCES/node-embed.tar.gz"
 
 # 解一份出来给 [6a] 的 npm ci 用 —— **不能用本机的 node** (8/8)。
 #
-# 打进包的 node_modules 本来就该用打进包的那个 node 装: 员工机跑 22.23.2,
+# 打进包的 node_modules 本来就该用打进包的那个 node 装: 员工机跑 26.8.1,
 # 用别的版本装出来的带原生插件的包 (node-pty 这类) ABI 可能对不上, 而那种错
 # 要到员工那头才炸。[5.5] 取 Python wheel 早就是这个做法, Node 这边没跟上。
 #

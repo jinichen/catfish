@@ -57,7 +57,7 @@ from pathlib import Path
 
 #: 当前测试通过的 install.sh SHA256. Bump 时必须重新 audit 8 处 anchor 是否稳定.
 #: 计算: `shasum -a 256 ~/.hermes/hermes-agent/scripts/install.sh`
-UPSTREAM_SHA256 = "c0380bc1f78d3d662a77663ce20cc17e14cbc4bec35e61ab7a33bac5f3afed2d"
+UPSTREAM_SHA256 = "85ef536d455e51ab67aa74d79272efd49fe717597dbaadfd3cca179a905f4706"
 
 #: 上面那个 SHA 是从**哪个上游 commit** 算出来的.
 #:
@@ -69,14 +69,14 @@ UPSTREAM_SHA256 = "c0380bc1f78d3d662a77663ce20cc17e14cbc4bec35e61ab7a33bac5f3afe
 #: mac 恰恰是我们自己天天在用的那条路。
 #:
 #: 更新方式: 跟 edge/companion-app/.hermes-git-commit 保持一致。
-UPSTREAM_COMMIT = "5fc308a70719a83cccdbba4c0e39c23f5a8239d5"
+UPSTREAM_COMMIT = "29112bef099274229cadff79cdff7bf7b99c4b77"
 
 #: 上游预期行数 (rough sanity check, 不 fatal, 只 warn)
-UPSTREAM_LINES_EXPECTED = 3639
+UPSTREAM_LINES_EXPECTED = 3847
 
-# ─── 8/31 v2026.8.3 → v2026.8.27 的 anchor 复审记录 ───────────
+# ─── v2026.8.31 的 anchor 复审记录 ───────────────────────────
 #
-# 0.20.6 官方 install.sh 的 8/8 anchor 各命中 1 次，行数 3371 → 3639。
+# 0.21.0 官方 install.sh 的 8/8 anchor 各命中 1 次，行数 3639 → 3847。
 # 离线参数、uv/Python/Node/Chromium 和 venv 分支与上游流程仍兼容。
 
 # ─── 8/8 v2026.7.20 → v2026.8.3 的 anchor 复审记录 ────────────

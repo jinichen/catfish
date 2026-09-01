@@ -1,17 +1,11 @@
 name: Build Windows msi
 
 # 何时跑:
-#   - main push (companion-app 或 install.ps1 patch 改动时自动)
-#   - 手动触发 (Actions 页面 Run workflow 按钮 — 任何时候强制 rebuild)
-#   - 打 tag 时 build release msi (上传 GitHub Release asset)
+#   - 仅手动触发 (Actions 页面 Run workflow 按钮)
+#   - 在手动选择 tag 运行时, 上传 GitHub Release asset
+#
+# Windows 编译资源和 runner 成本较高, 不跟随每次 main push 自动编译。
 on:
-  push:
-    branches: [main]
-    tags: ['v*', 'p39-*']
-    paths:
-      - 'edge/companion-app/**'
-      - 'edge/hermes-fork/patch_install_ps1_offline.py'
-      - '.github/workflows/build-windows-msi.yml'
   workflow_dispatch:
 
 concurrency:
