@@ -11,9 +11,8 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use tauri::Emitter;
 
-use super::hermes_install_artifacts::{
-    resolve_addon_runtime_dir, resolve_runtime_dir, RuntimeArtifacts,
-};
+#[cfg(any(not(target_os = "windows"), test))]
+use super::hermes_install_artifacts::{resolve_runtime_dir, RuntimeArtifacts};
 use super::hermes_install_base::{
     hermes_pinned_tag, report, BootstrapProgressState,
     HermesBootstrapProgress, ProgressReporter, HERMES_BOOTSTRAP_PROGRESS_EVENT,
@@ -26,10 +25,12 @@ use super::hermes_install_base::{
 use super::hermes_install_base::remember_progress;
 use super::hermes_install_health::core_health_problems;
 use super::hermes_install_recover::{acquire_bootstrap_lock, recover_interrupted_transaction};
-use super::hermes_install_state::{
-    record_failure, remove_any, write_completion_marker, BootstrapPaths, FailureRecord,
-};
+use super::hermes_install_state::{record_failure, BootstrapPaths, FailureRecord};
+#[cfg(any(not(target_os = "windows"), test))]
+use super::hermes_install_state::{remove_any, write_completion_marker};
+#[cfg(any(not(target_os = "windows"), test))]
 use crate::services::catfish_paths::{hermes_venv_python, hermes_venv_tool};
+#[cfg(any(not(target_os = "windows"), test))]
 use super::hermes_install_steps::{
     activate_stage, install_catfish_email, install_catfish_wechat_reader, install_hermes_deps,
     link_catfish_email_bin, link_catfish_wechat_reader_bin, prepare_source_stage,
@@ -64,12 +65,9 @@ pub fn last_bootstrap_error() -> Option<String> {
     Some(msg.to_string())
 }
 
+#[cfg(not(target_os = "windows"))]
 fn resolve_optional_runtime_dir(resource_dir: &Path) -> Result<PathBuf> {
-    if cfg!(target_os = "windows") {
-        resolve_addon_runtime_dir(resource_dir)
-    } else {
-        resolve_runtime_dir(resource_dir)
-    }
+    resolve_runtime_dir(resource_dir)
 }
 
 /// 严格安装判断。`pyproject.toml` 单独存在不再代表安装成功。
@@ -80,6 +78,38 @@ pub fn hermes_agent_installed() -> bool {
     core_health_problems(&BootstrapPaths::new(PathBuf::from(home)), true).is_empty()
 }
 
+#[cfg(target_os = "windows")]
+fn bootstrap_locked(
+    resource_dir: &Path,
+    paths: &BootstrapPaths,
+    reporter: &ProgressReporter<'_>,
+) -> Result<()> {
+    recover_interrupted_transaction(paths)?;
+    let current_health = core_health_problems(paths, true);
+    if current_health.is_empty() {
+        // Windows 的 MSI 不再执行安装 CustomAction。已存在核心环境时只补缺
+        // 附加组件，绝不重新解压 Hermes，也不走 Unix wheel 安装路径。
+        super::hermes_install_windows::ensure_optional_components(resource_dir, paths);
+        report(
+            reporter,
+            "complete",
+            BootstrapProgressState::Skipped,
+            0,
+            0,
+            format!("Hermes {} 已完整安装，无需重复准备", hermes_pinned_tag()),
+            None,
+        );
+        return Ok(());
+    }
+
+    log::warn!(
+        "Hermes 健康检查未通过，将修复: {}",
+        current_health.join("; ")
+    );
+    super::hermes_install_windows::bootstrap(resource_dir, paths, reporter)
+}
+
+#[cfg(not(target_os = "windows"))]
 fn bootstrap_locked(
     resource_dir: &Path,
     paths: &BootstrapPaths,
@@ -88,23 +118,6 @@ fn bootstrap_locked(
     let reusable_stage = recover_interrupted_transaction(paths)?;
     let current_health = core_health_problems(paths, true);
     if current_health.is_empty() {
-        #[cfg(target_os = "windows")]
-        {
-            // Windows 的 MSI 不再执行安装 CustomAction。已存在核心环境时只补缺
-            // 附加组件，绝不重新解压 Hermes，也不走 Unix wheel 安装路径。
-            super::hermes_install_windows::ensure_optional_components(resource_dir, paths);
-            report(
-                reporter,
-                "complete",
-                BootstrapProgressState::Skipped,
-                0,
-                0,
-                format!("Hermes {} 已完整安装，无需重复准备", hermes_pinned_tag()),
-                None,
-            );
-            return Ok(());
-        }
-
         // 8/5 (达华现场): hermes 健康 ≠ catfish-email 装了。
         //
         // catfish-email 的 wheel 是 7/30 (beb25f0) 才开始进安装包的。在那之前
@@ -191,11 +204,6 @@ fn bootstrap_locked(
         "Hermes 健康检查未通过，将修复: {}",
         current_health.join("; ")
     );
-
-    #[cfg(target_os = "windows")]
-    {
-        return super::hermes_install_windows::bootstrap(resource_dir, paths, reporter);
-    }
 
     let runtime_dir = resolve_runtime_dir(resource_dir)?;
     let artifacts = RuntimeArtifacts::from_dir(runtime_dir);

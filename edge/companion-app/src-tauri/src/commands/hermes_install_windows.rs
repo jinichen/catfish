@@ -13,7 +13,9 @@ use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use super::hermes_install_artifacts::{RuntimeArtifacts, HERMES_DEPS_ARCHIVE};
+use super::hermes_install_artifacts::{
+    resolve_addon_runtime_dir, RuntimeArtifacts, HERMES_DEPS_ARCHIVE,
+};
 use super::hermes_install_base::{
     report, BootstrapProgressState, ProgressReporter,
 };
@@ -101,7 +103,10 @@ fn run_hidden_status(program: &Path, args: &[&str], description: &str) -> bool {
 }
 
 fn install_optional_components(resource_dir: &Path, paths: &BootstrapPaths) -> Vec<String> {
-    let resources = windows_resources(resource_dir);
+    let resources = match resolve_addon_runtime_dir(resource_dir) {
+        Ok(resources) => resources,
+        Err(error) => return vec![format!("附加组件资源不可用: {error:#}")],
+    };
     let artifacts = RuntimeArtifacts::from_dir(resources.clone());
     let mut failures = Vec::new();
 

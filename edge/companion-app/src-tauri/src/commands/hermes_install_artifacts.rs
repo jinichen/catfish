@@ -163,14 +163,10 @@ pub(crate) fn resolve_runtime_dir(resource_dir: &Path) -> Result<PathBuf> {
 /// `resolve_runtime_dir`，因此 Windows 即使有邮件归档也会被误判成“没有有效
 /// 运行时”，重启 Companion 无法补装邮件。附加组件只需要自己的归档，不能用
 /// Hermes 核心安装工具作为判据。
+#[cfg(target_os = "windows")]
 pub(crate) fn resolve_addon_runtime_dir(resource_dir: &Path) -> Result<PathBuf> {
     let home = crate::util::paths::home_env().ok().map(PathBuf::from);
-    let platform = if cfg!(target_os = "windows") {
-        "windows"
-    } else {
-        "mac"
-    };
-    let bundle = resource_dir.join("resources").join(platform);
+    let bundle = resource_dir.join("resources").join("windows");
     let external = home.map(|h| h.join(".catfish").join("runtime"));
     let mut candidates: Vec<(usize, usize, PathBuf)> = Vec::new();
     let mut tried = Vec::new();

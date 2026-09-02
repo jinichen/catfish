@@ -11,6 +11,7 @@ pub mod catfish_paths;
 pub mod codex_gate;       // 8/8: Codex 后端总开关 (旁路能力, 默认关 — 见该文件头)
 pub mod curator_config;
 pub mod memory_provider_config;
+pub mod tool_loop_config; // 9/2: Companion 默认启用 Hermes 每轮工具循环硬停止
 pub mod curator_state;
 pub mod email_config;     // BL-COMPANION-EMAIL-YAML-CONFIG (5/18)
 pub mod email_classify_parse; // 分诊 LLM 输出解析 (8/21, 纯函数独立可测)
