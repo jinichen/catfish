@@ -19,7 +19,7 @@ export default function AboutModal() {
   const open = useUIStore((s) => s.aboutOpen);
   const close = useUIStore((s) => s.closeAbout);
   const [version, setVersion] = useState<string>("…");
-  // BL-CATFISH-HERMES-VERSION-SYNC-B (6/1 鸿波): hermes 版本 + 漂移 warn.
+  // Hermes 是独立组件，只展示它自己的版本，不与 Companion 版本比较。
   // null = 没装 hermes / 读不到 → AboutModal 静默不显这行 (兼容非 Tauri / 老员工 mac).
   const [hermesVersion, setHermesVersion] = useState<string | null>(null);
 
@@ -133,19 +133,7 @@ export default function AboutModal() {
           {hermesVersion && (
             <>
               <div>hermes</div>
-              <div style={{ fontFamily: "var(--font-mono, monospace)" }}>
-                v{hermesVersion}
-                {hermesVersion !== version && (
-                  <span style={{
-                    marginLeft: 8,
-                    fontSize: 11,
-                    color: "var(--status-warn, #c98b00)",
-                    fontFamily: "inherit",
-                  }}>
-                    ⚠ 跟鲶鱼版本不一致, 提醒升级
-                  </span>
-                )}
-              </div>
+              <div style={{ fontFamily: "var(--font-mono, monospace)" }}>v{hermesVersion}</div>
             </>
           )}
         </div>
