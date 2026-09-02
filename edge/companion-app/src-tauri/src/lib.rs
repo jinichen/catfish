@@ -5,6 +5,10 @@
 //!   - `services/`  —— 内部进程管理（前端不可直接访问）
 //!   - `tray/`      —— menubar 托盘菜单
 
+// Windows 发布包不允许把未使用代码等编译告警继续埋在绿色 MSI 任务里。
+// debug/test 保持普通 warning，便于平台条件测试复用 Unix 安装模块。
+#![cfg_attr(all(target_os = "windows", not(debug_assertions)), deny(warnings))]
+
 #[cfg(target_os = "macos")]
 mod app_menu;
 mod commands;

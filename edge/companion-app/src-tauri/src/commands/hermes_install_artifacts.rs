@@ -2,9 +2,12 @@
 //!
 //! 2026-08-15 从 hermes_install.rs 切出来。纯搬迁, 逻辑一行未改。
 
-use anyhow::{Context, Result};
+#[cfg(any(not(target_os = "windows"), test))]
+use anyhow::Context;
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 
+#[cfg(any(not(target_os = "windows"), test))]
 pub(crate) const RUNTIME_ARCHIVES: [&str; 4] = [
     "cpython-3.11.15-embed.tar.gz",
     "hermes-agent-bundle.tar.gz",
@@ -28,12 +31,19 @@ pub(crate) const HERMES_DEPS_ARCHIVE: &str = "hermes-deps-dist.tar.gz";
 
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeArtifacts {
+    #[cfg(any(not(target_os = "windows"), test))]
     pub(crate) dir: PathBuf,
+    #[cfg(any(not(target_os = "windows"), test))]
     pub(crate) install_sh: PathBuf,
+    #[cfg(any(not(target_os = "windows"), test))]
     pub(crate) uv: PathBuf,
+    #[cfg(any(not(target_os = "windows"), test))]
     pub(crate) python_tar: Option<PathBuf>,
+    #[cfg(any(not(target_os = "windows"), test))]
     pub(crate) hermes_tar: Option<PathBuf>,
+    #[cfg(any(not(target_os = "windows"), test))]
     pub(crate) node_tar: Option<PathBuf>,
+    #[cfg(any(not(target_os = "windows"), test))]
     pub(crate) chromium_tar: Option<PathBuf>,
     /// hermes venv 额外依赖包 (8/5)。
     pub(crate) deps_tar: Option<PathBuf>,
@@ -49,25 +59,34 @@ pub(crate) struct RuntimeArtifacts {
 
 impl RuntimeArtifacts {
     pub(crate) fn from_dir(dir: PathBuf) -> Self {
+        #[cfg(any(not(target_os = "windows"), test))]
         let uv_name = if cfg!(target_os = "windows") {
             "uv.exe"
         } else {
             "uv"
         };
         Self {
+            #[cfg(any(not(target_os = "windows"), test))]
             install_sh: dir.join("install.sh"),
+            #[cfg(any(not(target_os = "windows"), test))]
             uv: dir.join(uv_name),
+            #[cfg(any(not(target_os = "windows"), test))]
             python_tar: usable_artifact(&dir.join(RUNTIME_ARCHIVES[0])),
+            #[cfg(any(not(target_os = "windows"), test))]
             hermes_tar: usable_artifact(&dir.join(RUNTIME_ARCHIVES[1])),
+            #[cfg(any(not(target_os = "windows"), test))]
             node_tar: usable_artifact(&dir.join(RUNTIME_ARCHIVES[2])),
+            #[cfg(any(not(target_os = "windows"), test))]
             chromium_tar: usable_artifact(&dir.join(RUNTIME_ARCHIVES[3])),
             email_tar: usable_artifact(&dir.join(CATFISH_EMAIL_ARCHIVE)),
             wechat_reader_tar: usable_artifact(&dir.join(CATFISH_WECHAT_READER_ARCHIVE)),
             deps_tar: usable_artifact(&dir.join(HERMES_DEPS_ARCHIVE)),
+            #[cfg(any(not(target_os = "windows"), test))]
             dir,
         }
     }
 
+    #[cfg(any(not(target_os = "windows"), test))]
     pub(crate) fn archive_count(&self) -> usize {
         [
             &self.python_tar,
@@ -80,10 +99,12 @@ impl RuntimeArtifacts {
         .count()
     }
 
+    #[cfg(any(not(target_os = "windows"), test))]
     pub(crate) fn is_complete_bundle(&self) -> bool {
         self.archive_count() == RUNTIME_ARCHIVES.len()
     }
 
+    #[cfg(any(not(target_os = "windows"), test))]
     pub(crate) fn validate_bootstrap_tools(&self) -> Result<()> {
         for path in [&self.install_sh, &self.uv] {
             let meta = std::fs::metadata(path)
@@ -110,7 +131,11 @@ fn usable_artifact(path: &Path) -> Option<PathBuf> {
 ///
 /// 旧逻辑看到 bundle 内 `install.sh + uv` 就立即返回，即使它是 0/4；结果会
 /// 永远忽略 `~/.catfish/runtime` 中用户已经准备好的 4/4 离线包。
-pub(crate) fn resolve_runtime_dir_for_home(resource_dir: &Path, home: Option<&Path>) -> Result<PathBuf> {
+#[cfg(any(not(target_os = "windows"), test))]
+pub(crate) fn resolve_runtime_dir_for_home(
+    resource_dir: &Path,
+    home: Option<&Path>,
+) -> Result<PathBuf> {
     let platform = if cfg!(windows) { "windows" } else { "mac" };
     let bundle = resource_dir.join("resources").join(platform);
     let external = home.map(|h| h.join(".catfish").join("runtime"));
@@ -151,6 +176,7 @@ pub(crate) fn resolve_runtime_dir_for_home(resource_dir: &Path, home: Option<&Pa
     )
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 pub(crate) fn resolve_runtime_dir(resource_dir: &Path) -> Result<PathBuf> {
     let home = crate::util::paths::home_env().ok().map(PathBuf::from);
     resolve_runtime_dir_for_home(resource_dir, home.as_deref())

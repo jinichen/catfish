@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 
@@ -16,17 +16,22 @@ import ChatTab from "./tabs/Chat/ChatTab";
 // BL-CONSOLE-TAB-KILL (5/16): 控制台 tab 砍, ConsoleTab.tsx 源码留着作 git 历史.
 // import ConsoleTab from "./tabs/Console/ConsoleTab";
 import BriefingTab from "./tabs/Briefing/BriefingTab";  // 5/20 BL-COMPANION-DAILY-BRIEFING-MVP
-import DashboardTab from "./tabs/Dashboard/DashboardTab";
-import EmailTab from "./tabs/Email/EmailTab";  // 5/18 BL-COMPANION-EMAIL-TAB
-import WikiTab from "./tabs/Wiki/WikiTab";  // BL-CATFISH-WIKI-MODE P3.3 (6/4)
 import { useUIStore } from "./store/ui";
 import { useAgentStore } from "./store/agent";
 import { useChatStore } from "./store/chat";  // P3.5.139 Phase 4: 启动同步 picker_model → store
+import { useEmailStore } from "./store/email";
 import { useFocusStore } from "./store/focus";
 import { useProactiveScheduler } from "./hooks/useProactiveScheduler";
 import { useProactiveTriggers } from "./hooks/useProactiveTriggers";
 import { usePetStatusBroadcast } from "./hooks/usePetStatusBroadcast";
 import { getPickerModel } from "./lib/tauri";  // P3.5.139 Phase 4
+import { fetchUrgentEmailStarter } from "./lib/briefing";
+
+// 非默认工作区按需加载，避免所有邮件/知识图谱/仪表盘代码挤进主包。
+// React.lazy 会缓存已加载模块，TAB 往返不会重复下载或重新初始化模块。
+const DashboardTab = lazy(() => import("./tabs/Dashboard/DashboardTab"));
+const EmailTab = lazy(() => import("./tabs/Email/EmailTab"));
+const WikiTab = lazy(() => import("./tabs/Wiki/WikiTab"));
 
 export default function App() {
   const activeTab = useUIStore((s) => s.activeTab);
@@ -122,7 +127,6 @@ export default function App() {
         // 不知道员工是否真读了; 前端 useEmailStore.readIds (localStorage 持久化)
         // 记录员工真读过的 id, 这里 filter.
         if (ids && ids.length > 0) {
-          const { useEmailStore } = await import("./store/email");
           const readSet = useEmailStore.getState().readIds;
           const unreadIds = ids.filter((id) => !readSet.has(id));
           if (unreadIds.length === 0) {
@@ -142,9 +146,6 @@ export default function App() {
         let finalStarter = fallbackStarter;
         if (items && items.length > 0) {
           try {
-            const { fetchUrgentEmailStarter } = await import("./lib/briefing");
-            const { useChatStore } = await import("./store/chat");
-            const { useAgentStore } = await import("./store/agent");
             const model = useChatStore.getState().model;
             const personality = useAgentStore.getState().personality;
             const llmStarter = await fetchUrgentEmailStarter(
@@ -259,9 +260,11 @@ function AppShell({ activeTab }: { activeTab: string }) {
             <BriefingTab />
           </div>
           {activeTab === "chat" && <ChatTab />}
-          {activeTab === "dashboard" && <DashboardTab />}
-          {activeTab === "email" && <EmailTab />}
-          {activeTab === "wiki" && <WikiTab />}
+          <Suspense fallback={<div className="app-tab-loading">正在打开…</div>}>
+            {activeTab === "dashboard" && <DashboardTab />}
+            {activeTab === "email" && <EmailTab />}
+            {activeTab === "wiki" && <WikiTab />}
+          </Suspense>
         </main>
       </div>
     </div>

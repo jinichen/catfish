@@ -36,6 +36,7 @@
 
 import type { MutableRefObject } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { authWhoami, getSession } from "../../lib/tauri";
 import { useChatStore } from "../../store/chat";
 import {
   useAutoContinueStore,
@@ -245,7 +246,6 @@ export async function sendMessage(
           // hermes 写的 content 就是 trimmed (没 Companion 的 "[📎...]" placeholder).
           let hermesRowid: string | null = null;
           try {
-            const { getSession } = await import("../../lib/tauri");
             for (let attempt = 0; attempt < 25; attempt++) {
               await new Promise((r) => setTimeout(r, 200));
               try {
@@ -278,7 +278,6 @@ export async function sendMessage(
 
           let userId = "anonymous";
           try {
-            const { authWhoami } = await import("../../lib/tauri");
             const who = await authWhoami();
             if (who.authenticated && who.email) userId = who.email;
           } catch {

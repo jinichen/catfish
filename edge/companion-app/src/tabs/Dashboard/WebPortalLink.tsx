@@ -26,6 +26,7 @@ import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 
 import { config } from "../../lib/env";
+import { fetchViaProxy } from "../../lib/http_proxy";
 import { useMe } from "../../hooks/useMe";
 import { useUIStore } from "../../store/ui";
 
@@ -93,7 +94,6 @@ interface PingResult {
 
 async function pingWeb(webBase: string, timeoutMs = PING_TIMEOUT_MS): Promise<PingResult> {
   try {
-    const { fetchViaProxy } = await import("../../lib/http_proxy");
     // BL-CSP-PROXY (7/18 鸿波): 走 Rust reqwest 代理, CSP 严格. GET / 而不是 HEAD —
     // vite dev server / nginx 都答 200 主页. Rust 端不做 CORS preflight, 直接返.
     //

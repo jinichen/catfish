@@ -11,6 +11,7 @@
 import { invoke as rawInvoke } from "@tauri-apps/api/core";
 import type { HermesBootstrapProgress } from "./hermesBootstrap";
 import { config } from "./env";
+import { fetchViaProxy } from "./http_proxy";
 import type { ServiceStatus } from "../types/service";
 import type { CatalogResponse } from "../types/catalog";
 
@@ -175,7 +176,6 @@ export const toolBridgeChatApproval = async (
     headers["Authorization"] = config.hermesAuthHeader;
   }
   // BL-CSP-PROXY (7/18 鸿波): 走 Rust reqwest 代理, CSP 严格.
-  const { fetchViaProxy } = await import("./http_proxy");
   const resp = await fetchViaProxy(url, {
     method: "POST",
     headers,

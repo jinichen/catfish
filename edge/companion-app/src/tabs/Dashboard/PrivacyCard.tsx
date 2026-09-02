@@ -20,6 +20,12 @@ import * as React from "react";
 import { fetchMyAudit, type MyAuditSummary } from "../../lib/me";
 import { formatTokens } from "../../lib/format";
 import { useUIStore } from "../../store/ui";  // P3.3.55 (6/12): 审计视图 tab 开关
+import {
+  selfServeExecuteReset,
+  selfServeExportData,
+  selfServePreviewReset,
+  type ResetSummary,
+} from "../../lib/tauri";
 
 // 30s 轮询 — 跟 AuditCard 同节奏 (避免一个卡 30s 一个卡 5s 让 UI 不同步)
 const POLL_MS = 30_000;
@@ -235,7 +241,7 @@ type Mode =
   | { kind: "idle" }
   | {
       kind: "reset-preview";
-      summary: import("../../lib/tauri").ResetSummary;
+      summary: ResetSummary;
       confirmStr: string;
     }
   | { kind: "export"; path: string };
@@ -262,8 +268,7 @@ function SelfServeButtons() {
     setToast(null);
     setBusy(true);
     try {
-      const lib = await import("../../lib/tauri");
-      const summary = await lib.selfServePreviewReset();
+      const summary = await selfServePreviewReset();
       setMode({ kind: "reset-preview", summary, confirmStr: "" });
     } catch (e) {
       setToast({ kind: "err", msg: `预览失败: ${e}` });
@@ -279,8 +284,7 @@ function SelfServeButtons() {
     }
     setBusy(true);
     try {
-      const lib = await import("../../lib/tauri");
-      const result = await lib.selfServeExecuteReset("我确认");
+      const result = await selfServeExecuteReset("我确认");
       setMode({ kind: "idle" });
       setToast({
         kind: "ok",
@@ -313,8 +317,7 @@ function SelfServeButtons() {
     }
     setBusy(true);
     try {
-      const lib = await import("../../lib/tauri");
-      const result = await lib.selfServeExportData(
+      const result = await selfServeExportData(
         {
           includeConversations: true,
           includeRecordings: true,

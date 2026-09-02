@@ -7,23 +7,28 @@
 //! 这里只放"每一步具体怎么做"。
 
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(any(not(target_os = "windows"), test))]
+use std::path::PathBuf;
 use std::process::Command;
 
-use crate::services::catfish_paths::{hermes_venv_python, hermes_venv_tool};
+use crate::services::catfish_paths::hermes_venv_python;
+#[cfg(any(not(target_os = "windows"), test))]
+use crate::services::catfish_paths::hermes_venv_tool;
 
-use super::hermes_install_artifacts::{
-    RuntimeArtifacts, CATFISH_EMAIL_ARCHIVE, CATFISH_WECHAT_READER_ARCHIVE,
-    HERMES_DEPS_ARCHIVE,
-};
+use super::hermes_install_artifacts::{RuntimeArtifacts, HERMES_DEPS_ARCHIVE};
+#[cfg(any(not(target_os = "windows"), test))]
+use super::hermes_install_artifacts::{CATFISH_EMAIL_ARCHIVE, CATFISH_WECHAT_READER_ARCHIVE};
+#[cfg(any(not(target_os = "windows"), test))]
 use super::hermes_install_base::{
     hermes_pinned_commit, hermes_pinned_tag, report, BootstrapProgressState, ProgressReporter,
     STAGE_READY_MARKER,
 };
+#[cfg(any(not(target_os = "windows"), test))]
 use super::hermes_install_health::{core_health_problems, installed_hermes_commit_at};
-use super::hermes_install_state::{
-    remove_any, write_bytes_atomic, write_transaction, BootstrapPaths,
-};
+use super::hermes_install_state::{remove_any, BootstrapPaths};
+#[cfg(any(not(target_os = "windows"), test))]
+use super::hermes_install_state::{write_bytes_atomic, write_transaction};
 
 fn command_status(mut command: Command, description: &str) -> Result<()> {
     // Companion 是 Windows GUI 子系统；没有这个 flag，tar/uv/python 这类
@@ -43,6 +48,7 @@ fn command_status(mut command: Command, description: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
     std::fs::create_dir_all(destination)
         .with_context(|| format!("创建目录 {}", destination.display()))?;
@@ -63,6 +69,7 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 fn add_common_installer_args(
     command: &mut Command,
     artifacts: &RuntimeArtifacts,
@@ -95,6 +102,7 @@ fn add_common_installer_args(
     }
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 pub(crate) fn run_install_stage(
     stage: &str,
     title: &str,
@@ -139,6 +147,7 @@ pub(crate) fn run_install_stage(
     Ok(())
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 fn initialize_offline_git(stage: &Path) -> Result<()> {
     // 干净 macOS 可能尚未安装 Xcode Command Line Tools；离线包有自己的版本
     // 文件，运行并不依赖 git，因此这里只做 future-update 的 best effort。
@@ -175,6 +184,7 @@ fn initialize_offline_git(stage: &Path) -> Result<()> {
 /// 历史包有两种布局：`pyproject.toml` 在归档根目录，或位于
 /// `hermes-agent-src/pyproject.toml`。不能固定 `--strip-components`，否则
 /// 两种包中必有一种会被解压到错误层级。
+#[cfg(any(not(target_os = "windows"), test))]
 fn flatten_hermes_source_stage(stage: &Path) -> Result<()> {
     if stage.join("pyproject.toml").is_file() {
         return Ok(());
@@ -204,6 +214,7 @@ fn flatten_hermes_source_stage(stage: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 pub(crate) fn prepare_source_stage(
     reusable_stage: Option<PathBuf>,
     artifacts: &RuntimeArtifacts,
@@ -304,12 +315,14 @@ pub(crate) fn prepare_source_stage(
 }
 
 #[derive(Debug)]
+#[cfg(any(not(target_os = "windows"), test))]
 pub(crate) struct PreviousInstall {
     pub(crate) path: PathBuf,
     /// 残缺安装可能包含现场诊断线索，成功后也保留为 `.broken-*`。
     pub(crate) preserve: bool,
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 pub(crate) fn activate_stage(
     paths: &BootstrapPaths,
     stage: &Path,
@@ -379,6 +392,7 @@ pub(crate) fn activate_stage(
     Ok(backup)
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 pub(crate) fn rollback_install(paths: &BootstrapPaths, backup: Option<&PreviousInstall>) -> Result<()> {
     remove_any(&paths.install_dir)?;
     if let Some(backup) = backup {
@@ -491,6 +505,7 @@ pub(crate) fn install_hermes_deps(artifacts: &RuntimeArtifacts, paths: &Bootstra
     result
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 pub(crate) fn install_catfish_email(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths) -> Result<()> {
     let Some(tar) = artifacts.email_tar.as_ref() else {
         log::warn!(
@@ -571,6 +586,7 @@ pub(crate) fn install_catfish_email(artifacts: &RuntimeArtifacts, paths: &Bootst
     result
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 pub(crate) fn link_catfish_email_bin(paths: &BootstrapPaths) -> Result<()> {
     let venv_bin = hermes_venv_tool(&paths.install_dir, "catfish-email");
     if !venv_bin.exists() {
@@ -596,6 +612,7 @@ pub(crate) fn link_catfish_email_bin(paths: &BootstrapPaths) -> Result<()> {
 }
 
 /// 安装 Catfish 自有的安全聊天导出读取器，不安装或修改微信客户端。
+#[cfg(any(not(target_os = "windows"), test))]
 pub(crate) fn install_catfish_wechat_reader(
     artifacts: &RuntimeArtifacts,
     paths: &BootstrapPaths,
@@ -653,6 +670,7 @@ pub(crate) fn install_catfish_wechat_reader(
     result
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 pub(crate) fn link_catfish_wechat_reader_bin(paths: &BootstrapPaths) -> Result<()> {
     let reader = hermes_venv_tool(&paths.install_dir, "catfish-wechat-reader");
     if !reader.exists() {

@@ -20,6 +20,7 @@ import QRCode from "qrcode";
 
 import { wechatQrStart, wechatQrPoll, type QrPollStatus } from "../../lib/wechat_qr";
 import { config } from "../../lib/env";
+import { fetchViaProxy } from "../../lib/http_proxy";
 
 // P3.5.201 (P38): Modal 侧不再 invoke Rust hermes_kill. plugin.py P38 已排
 // asyncio 3s 后 SIGUSR1 → hermes drain + exit → launchd 拉起. Modal 只做
@@ -31,7 +32,6 @@ import { config } from "../../lib/env";
 async function probeHermesHealth(): Promise<boolean> {
   try {
     // BL-CSP-PROXY (7/18 鸿波): 走 Rust reqwest 代理, CSP 严格.
-    const { fetchViaProxy } = await import("../../lib/http_proxy");
     const base = config.backendUrl.replace(/\/+$/, "");
     const r = await fetchViaProxy(`${base}/health`, { method: "GET" });
     return r.ok;

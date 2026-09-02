@@ -28,7 +28,15 @@
  * **并发数 = 任务数, 无上限**。上游有 "max 10 concurrent runs" 的限制,
  * advisor 一扇出就把额度吃光, 前台的邮件拟稿和早安卡片被 429 挡在门外。
  */
-import type { ManualTaskStatus, TaskChatStatus } from "./advisor_cache";
+import {
+  advisorCacheGet,
+  advisorCacheSave,
+  type ManualTaskStatus,
+  type TaskChatStatus,
+} from "./advisor_cache";
+import { loadSessionMessagesAsChat } from "./sessionMessages";
+import { getSession, sessionGetByTaskUid } from "./tauri";
+import { taskChatGet, taskChatSize } from "./task_chat";
 import { config } from "./env";
 import { fetchWithAuth } from "./me";
 import {
@@ -105,10 +113,6 @@ async function _ensureTaskChatSummariesFreshImpl(
   allowedTaskUids?: ReadonlySet<string>,
 ): Promise<void> {
   try {
-    const { advisorCacheGet, advisorCacheSave } = await import("./advisor_cache");
-    const { taskChatGet, taskChatSize } = await import("./task_chat");
-    const { sessionGetByTaskUid, getSession } = await import("./tauri");
-    const { loadSessionMessagesAsChat } = await import("./sessionMessages");
     const cached = await advisorCacheGet();
     if (!cached || !Array.isArray(cached.result?.mainTasks)) {
       console.log("[advisor summary] ensure 跳过 — 没 cache 或没 mainTasks");

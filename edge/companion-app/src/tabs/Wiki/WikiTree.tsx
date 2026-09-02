@@ -13,7 +13,13 @@ import {
   SlidersHorizontal,
 } from "@phosphor-icons/react";
 import { useWikiStore } from "../../store/wiki";
-import type { WikiFileInfo } from "../../lib/tauri";
+import {
+  wikiSearchHybrid,
+  wikiSearchSemantic,
+  wikiSearchText,
+  type WikiFileInfo,
+  type WikiSearchHit,
+} from "../../lib/tauri";
 import { resolveWikiRef, resolveWikiRefOrNull } from "../../lib/wikiResolve";
 import WikiCreateModal from "./WikiCreateModal";
 
@@ -54,7 +60,7 @@ export default function WikiTree() {
 
   // P37/P38/P39 — 默认智能检索，保留旧模式用于排查和精确搜索。
   const [searchMode, setSearchMode] = useState<"title" | "body" | "semantic" | "hybrid">("hybrid");
-  const [searchHits, setSearchHits] = useState<import("../../lib/tauri").WikiSearchHit[]>([]);
+  const [searchHits, setSearchHits] = useState<WikiSearchHit[]>([]);
   const [searching, setSearching] = useState(false);
   const [semanticMessage, setSemanticMessage] = useState<string>("");
 
@@ -69,17 +75,16 @@ export default function WikiTree() {
       setSearching(true);
       setSemanticMessage("");
       try {
-        const tauri = await import("../../lib/tauri");
         if (searchMode === "hybrid") {
-          const hits = await tauri.wikiSearchHybrid(search, 20);
+          const hits = await wikiSearchHybrid(search, 20);
           setSearchHits(hits);
           setSemanticMessage("");
         } else if (searchMode === "body") {
-          const hits = await tauri.wikiSearchText(search);
+          const hits = await wikiSearchText(search);
           setSearchHits(hits);
         } else {
           // semantic
-          const res = await tauri.wikiSearchSemantic(search);
+          const res = await wikiSearchSemantic(search);
           if (!res.model_loaded) {
             setSearchHits([]);
             setSemanticMessage(res.message);

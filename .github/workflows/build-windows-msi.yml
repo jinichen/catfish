@@ -51,6 +51,18 @@ jobs:
         with:
           workspaces: edge/companion-app/src-tauri
 
+      # 先按最终 MSI 相同的 Windows Release 条件编译。这样缺模块、平台 cfg
+      # 漂移和本仓 Rust warning 会在下载/重打几百 MB 离线资源之前直接失败；
+      # 后面的 Tauri build 会复用这里的 release 产物，不是重复做一套检查。
+      - name: Preflight Windows release compile (warnings are errors)
+        working-directory: edge/companion-app/src-tauri
+        run: >-
+          cargo build --release --target x86_64-pc-windows-msvc
+          --features tauri/custom-protocol
+        env:
+          CFLAGS_x86_64_pc_windows_msvc: "/MD"
+          CXXFLAGS_x86_64_pc_windows_msvc: "/MD"
+
       # ─── Windows resources: install.ps1 patched + uv.exe + cpython zip + hermes tar ───
 
       - name: Clone hermes-agent 上游 pinned to .hermes-git-tag

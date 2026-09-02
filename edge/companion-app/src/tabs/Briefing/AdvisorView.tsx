@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   advisorCacheGet,
+  advisorCacheClear,
   advisorCacheMatchesInput,
   advisorCacheSave,
   advisorCacheSourceMeta,
@@ -421,7 +422,6 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
         // 改用: 直接清缓存 + 再 mount 时会重新拉
         void (async () => {
           try {
-            const { advisorCacheClear } = await import("../../lib/advisor_cache");
             await advisorCacheClear();
             // 再触发一次 useEffect: 用一个 state 切换让依赖变化
             setConfig((c) => (c ? { ...c } : c));  // shallow copy 触发 useEffect 重跑

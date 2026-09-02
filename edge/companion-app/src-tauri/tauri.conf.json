@@ -91,6 +91,7 @@
       "infoPlist": "Info.plist"
     },
     "windows": {
+      "allowDowngrades": false,
       "webviewInstallMode": {
         "type": "embedBootstrapper"
       },

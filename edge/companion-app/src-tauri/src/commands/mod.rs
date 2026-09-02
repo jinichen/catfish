@@ -43,7 +43,7 @@ pub mod hermes_install_base;      // 常量 + 进度上报 + pinned 版本 (8/15
 pub mod hermes_install_health;    // 版本解析 + 健康检查 (8/15 切出)
 pub mod hermes_install_recover;   // 中断事务恢复 + 装机锁 (8/15 切出)
 pub mod hermes_install_state;     // 落盘状态 + 原子写 (8/15 切出)
-pub mod hermes_install_steps;     // 装机各步骤 (8/15 切出)
+pub mod hermes_install_steps;     // Unix 装机步骤 + Windows 共用的附加依赖安装
 pub mod hermes_install; // 7/15 BL-CATFISH-MAC-OFFLINE-INSTALL: mac dmg 首启装 hermes-agent 本体 (offline install.sh + 4 artifacts)
 #[cfg(target_os = "windows")]
 pub mod hermes_install_windows; // Windows 首启后台安装，避免 MSI CustomAction 弹黑窗

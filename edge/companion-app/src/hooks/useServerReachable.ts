@@ -17,6 +17,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { fetchViaProxy } from "../lib/http_proxy";
 
 export interface ServerReachableState {
   checking: boolean;
@@ -49,7 +50,6 @@ const PING_DEBOUNCE_MS = 500;    // 员工连续改 URL 时 debounce 500ms 再 r
  * 远端 IP 时 build 版被 CSP connect-src 拦 (dev 用 vite HMR self origin 不拦 · 有陷阱).
  */
 async function fetchWithTimeout(url: string, ms: number): Promise<Response> {
-  const { fetchViaProxy } = await import("../lib/http_proxy");
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ms);
   try {

@@ -21,8 +21,12 @@ import { config } from "./env";
 import { fetchWithAuth } from "./me";
 import type { TaskStatus } from "./advisor_cache";
 import {
+  advisorCacheGet,
+  advisorCacheSave,
   advisorCacheSourceMeta,
+  advisorTaskStateGet,
 } from "./advisor_cache";
+import { wikiSearchSemantic } from "./tauri";
 import { warnIfUpstreamError } from "./upstreamErrorGuard";
 
 // 8/15: 本文件原来 2281 行 —— 仓里最大的 TS 文件, 过了 CLAUDE.md §1 的 800 红线。
@@ -124,7 +128,6 @@ export async function fetchBriefingAdvisor(input: AdvisorInput): Promise<Advisor
         if (!result) return;
         const elapsedMs = Date.now() - startMs;
         try {
-          const { advisorCacheGet, advisorCacheSave } = await import("./advisor_cache");
           // P3.3.12 (6/10): save 前先读老 cache 拿到 taskChatSummaries — 老 cache
           // 里有 _fetchBriefingAdvisorImpl 阶段刚 pre-write 的 summaries, 直接 build
           // 新 cache 会丢. merge 进去.
@@ -196,7 +199,6 @@ async function fetchWikiRelevant(input: AdvisorInput): Promise<string> {
   }
 
   try {
-    const { wikiSearchSemantic } = await import("./tauri");
     const res = await wikiSearchSemantic(query, 3);
     if (!res.model_loaded || res.hits.length === 0) {
       return "";  // model 未装 / 没匹配 — 静默 fallback
@@ -306,7 +308,6 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
   let inputWithPrev = input;
   if (!input.previousTasks) {
     try {
-      const { advisorCacheGet, advisorTaskStateGet } = await import("./advisor_cache");
       let cached = await advisorCacheGet();
       // P3.5.208-B (7/10 鸿波 catch '关了几次今天又出来'): P3.5.208-A migration
       // 时序 race — AdvisorView migration useEffect 依赖 [result], 必须先 setResult
