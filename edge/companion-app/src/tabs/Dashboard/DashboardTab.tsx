@@ -187,7 +187,12 @@ export default function DashboardTab() {
           — 讲员工还是讲鲶鱼). */}
       <CollapsibleSection
         id="me"
-        title="🐟 小鲶设置"
+        title={
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+            <img src="/catfish-logo.svg" alt="" width={20} height={20} />
+            <span>小鲶设置</span>
+          </span>
+        }
         count={1}
       >
         <AgentPrefsCard />
@@ -241,7 +246,12 @@ export default function DashboardTab() {
           5/16 砍 MemoryHistoryCard + FeedbackSummaryCard 后 5 → 3. */}
       <CollapsibleSection
         id="rel"
-        title="🐟 鲶鱼对你的认识"
+        title={
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+            <img src="/catfish-logo.svg" alt="" width={20} height={20} />
+            <span>鲶鱼对你的认识</span>
+          </span>
+        }
         count={6}
       >
         {/* 6/8 BL-REL-SECTION-TABS (鸿波 6/8): 4 卡 → 4 tabs.

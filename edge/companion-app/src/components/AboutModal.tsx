@@ -85,7 +85,13 @@ export default function AboutModal() {
             marginBottom: "var(--space-3)",
           }}
         >
-          <span style={{ fontSize: 28 }}>🐟</span>
+          <img
+            src="/catfish-logo.svg"
+            alt=""
+            width={28}
+            height={28}
+            style={{ display: "block", flexShrink: 0 }}
+          />
           <div style={{ fontSize: 18, fontWeight: 600 }}>关于鲶鱼</div>
           <button
             type="button"

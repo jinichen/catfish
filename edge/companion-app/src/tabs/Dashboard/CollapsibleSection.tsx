@@ -5,7 +5,7 @@
  *
  * Props:
  *   id: 唯一标识, localStorage key 用
- *   title: 标题文字 (例 "🔥 今日")
+ *   title: 标题内容 (可包含规范图标和标题文字)
  *   defaultCollapsed: 首次访问时是否折叠 (员工后续手动展开/收起会覆盖)
  *   children: 卡片们
  *   gridSpan: 该组内部 grid 列数 (默认 2, 跟 Dashboard 主 grid 对齐)
@@ -14,7 +14,7 @@ import { useState, ReactNode } from "react";
 
 interface Props {
   id: string;
-  title: string;
+  title: ReactNode;
   defaultCollapsed?: boolean;
   children: ReactNode;
   /** BL-SECTION-COUNT-KILL (5/16): count prop 仍接收但不再渲染. 调用方传值不影响.

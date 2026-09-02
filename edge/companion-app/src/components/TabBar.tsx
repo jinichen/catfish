@@ -43,7 +43,7 @@ export default function TabBar() {
   return (
     <nav className="app-rail" aria-label="主导航">
       <div className="app-rail__brand" title="鲶鱼 Companion">
-        <img src="/catfish-avatar.svg" alt="" />
+        <img src="/catfish-logo.svg" alt="" />
       </div>
 
       <div className="app-rail__nav">
