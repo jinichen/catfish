@@ -24,6 +24,13 @@ jobs:
         with:
           fetch-depth: 1
 
+      # 先拦版本漂移，再开始下载/打包几百 MB 的离线资源。Companion 与 Hermes
+      # 各自版本独立；脚本只检查 Companion 三处一致和 Hermes pins 自洽。
+      - name: Validate Companion and Hermes versions
+        shell: bash
+        working-directory: edge/companion-app
+        run: bash scripts/check_version_sync.sh
+
       - name: Setup Node.js 26.8.1 (Hermes v2026.8.31)
         uses: actions/setup-node@v6
         with:

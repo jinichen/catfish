@@ -7,8 +7,10 @@
 #   - 前端关于页 vs 系统"关于本机"对不上
 #   - 升级检查脚本误判 (服务器看 package.json, 本地看 Cargo.toml)
 #
-# 这个脚本不强制要跟 hermes 同步 (那是 release runbook 的事 — hermes 装在
-# ~/.hermes/ 不在仓库里, CI 看不到). 只 lint 仓库内 3 处一致.
+# Companion 和 Hermes 是两个独立发布物，版本号不能强制相等。这个脚本负责：
+#   1. Companion 自己的 3 处版本一致；
+#   2. Hermes tag / commit / pyproject target 等 pin 自洽。
+# Companion 的补丁版本必须能独立递增，否则同版本 MSI 无法可靠覆盖旧二进制。
 #
 # 用法:
 #   bash edge/companion-app/scripts/check_version_sync.sh
@@ -54,33 +56,20 @@ fi
 if [ "$PKG_VER" = "$CARGO_VER" ] && [ "$CARGO_VER" = "$TAURI_VER" ]; then
     echo "✓ Companion 版本一致: $PKG_VER"
 
-    # P3.5.157 (7/1 鸿波 catch "版本一直没跟 hermes 同步"): 加 .hermes-target-version
-    # 强 check. 5/18 → 6/21 P3.5.47 (hermes v0.17 audit) → 7/1 都漂着 0.15.2 没人
-    # 发现 — 原因是 BL-CATFISH-HERMES-VERSION-SYNC-B 只 warn 不 fail + CI runner 上没
-    # hermes 直接跳过. 改成: 仓库里维护一份 .hermes-target-version, CI 上也强制校.
-    #
-    # 每次 hermes upgrade audit (docs/HERMES-*-UPGRADE-RUNBOOK.md) 完成后, 顺手
-    # update .hermes-target-version + bump 3 处 companion. CI 强制拦不同步.
+    # Hermes 的 pyproject 版本是独立 pin，只要求存在且格式合法。不要拿它跟
+    # Companion 比较：Companion 可能只修 UI / Windows 安装器，需要单独 bump，
+    # 而 Hermes 仍保持原版本。
     TARGET_VER_FILE="$COMPANION_DIR/.hermes-target-version"
-    if [ -f "$TARGET_VER_FILE" ]; then
-        TARGET_VER="$(head -1 "$TARGET_VER_FILE" | tr -d '[:space:]')"
-        if [ -n "$TARGET_VER" ]; then
-            if [ "$TARGET_VER" = "$PKG_VER" ]; then
-                echo "✓ 跟 hermes target 一致: $TARGET_VER (.hermes-target-version)"
-            else
-                echo "❌ Companion 版本 $PKG_VER != hermes target $TARGET_VER"
-                echo "   ($TARGET_VER_FILE)"
-                echo ""
-                echo "   两种修法:"
-                echo "   A. bump 3 处 companion 版本 → $TARGET_VER (推荐)"
-                echo "      sed -i '' 's/\"$PKG_VER\"/\"$TARGET_VER\"/' package.json"
-                echo "      sed -i '' 's/\"$PKG_VER\"/\"$TARGET_VER\"/' src-tauri/tauri.conf.json"
-                echo "      sed -i '' 's/\"$PKG_VER\"/\"$TARGET_VER\"/' src-tauri/Cargo.toml"
-                echo "   B. update .hermes-target-version → $PKG_VER (如果 hermes 还没升)"
-                exit 1
-            fi
-        fi
+    if [ ! -f "$TARGET_VER_FILE" ]; then
+        echo "❌ 找不到 Hermes target pin: $TARGET_VER_FILE" >&2
+        exit 2
     fi
+    TARGET_VER="$(head -1 "$TARGET_VER_FILE" | tr -d '[:space:]')"
+    if ! printf '%s' "$TARGET_VER" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$'; then
+        echo "❌ Hermes target 版本格式非法: '$TARGET_VER'" >&2
+        exit 2
+    fi
+    echo "✓ Hermes target pin: ${TARGET_VER}（与 Companion ${PKG_VER} 独立）"
 
     # ── Windows offline 补丁的上游 pin (8/1) ──────────────────────────
     #
@@ -143,17 +132,15 @@ if [ "$PKG_VER" = "$CARGO_VER" ] && [ "$CARGO_VER" = "$TAURI_VER" ]; then
         done
     fi
 
-    # BL-CATFISH-HERMES-VERSION-SYNC-B (6/1 鸿波): 本机有 hermes 时额外 sanity
-    # check — 本机装的 hermes 跟 target 是不是也一致. 不 fail (dev 本地可能刻意
-    # 装老 hermes 做兼容 test), 只 warn.
+    # 本机有 Hermes 时，跟 Hermes target 比较，不跟 Companion 版本比较。
+    # 不 fail：开发机可能刻意装旧 Hermes 做兼容测试。
     HERMES_PYPROJECT="${HOME}/.hermes/hermes-agent/pyproject.toml"
     if [ -f "$HERMES_PYPROJECT" ]; then
         HERMES_VER="$(awk -F'"' '/^version[[:space:]]*=/ {print $2; exit}' "$HERMES_PYPROJECT" 2>/dev/null)"
-        if [ -n "$HERMES_VER" ] && [ "$HERMES_VER" != "$PKG_VER" ]; then
-            echo "⚠ 本机装的 hermes 跟 companion 不一致 (不 fail, 仅提醒):"
-            echo "  catfish: $PKG_VER"
-            echo "  hermes : $HERMES_VER  ($HERMES_PYPROJECT)"
-            echo "  如果是新 hermes → update .hermes-target-version 触发 CI red 提醒 bump."
+        if [ -n "$HERMES_VER" ] && [ "$HERMES_VER" != "$TARGET_VER" ]; then
+            echo "⚠ 本机装的 Hermes 跟 target pin 不一致 (不 fail, 仅提醒):"
+            echo "  target : $TARGET_VER"
+            echo "  local  : $HERMES_VER  ($HERMES_PYPROJECT)"
         fi
     fi
 
