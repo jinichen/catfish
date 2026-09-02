@@ -8,6 +8,8 @@
 use std::path::Path;
 use std::process::Command;
 
+use crate::services::catfish_paths::{hermes_venv_python, hermes_venv_tool};
+
 use super::hermes_install_base::{
     hermes_pinned_commit, BOOTSTRAP_SCHEMA_VERSION, COMPLETION_MARKER, INSTALL_METHOD_MARKER,
     STAGE_READY_MARKER,
@@ -72,8 +74,8 @@ pub(crate) fn core_health_problems(paths: &BootstrapPaths, require_completion_ma
         problems.push("缺 pyproject.toml".to_owned());
     }
     for (label, executable) in [
-        ("Python", dir.join("venv/bin/python")),
-        ("Hermes CLI", dir.join("venv/bin/hermes")),
+        ("Python", hermes_venv_python(dir)),
+        ("Hermes CLI", hermes_venv_tool(dir, "hermes")),
     ] {
         if !executable_exists(&executable) {
             problems.push(format!(

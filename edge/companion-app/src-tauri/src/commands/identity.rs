@@ -110,10 +110,9 @@ fn read_config_yaml() -> (String, Option<String>) {
 }
 
 fn read_active_session() -> (Option<String>, Option<String>) {
-    let Some(home) = home_dir() else {
+    let Some(db_path) = catfish_paths::hermes_state_db_path() else {
         return (None, None);
     };
-    let db_path = home.join(".hermes").join("state.db");
     if !db_path.exists() {
         return (None, None);
     }

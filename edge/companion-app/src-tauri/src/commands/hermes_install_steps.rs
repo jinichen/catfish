@@ -10,6 +10,8 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::services::catfish_paths::{hermes_venv_python, hermes_venv_tool};
+
 use super::hermes_install_artifacts::{
     RuntimeArtifacts, CATFISH_EMAIL_ARCHIVE, CATFISH_WECHAT_READER_ARCHIVE,
     HERMES_DEPS_ARCHIVE,
@@ -29,6 +31,26 @@ fn command_status(mut command: Command, description: &str) -> Result<()> {
         .with_context(|| format!("启动 {description}"))?;
     if !status.success() {
         anyhow::bail!("{description} 失败: {status}");
+    }
+    Ok(())
+}
+
+fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
+    std::fs::create_dir_all(destination)
+        .with_context(|| format!("创建目录 {}", destination.display()))?;
+    for entry in std::fs::read_dir(source)
+        .with_context(|| format!("读取目录 {}", source.display()))?
+    {
+        let entry = entry.with_context(|| format!("读取目录项 {}", source.display()))?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if source_path.is_dir() {
+            copy_dir_recursive(&source_path, &destination_path)?;
+        } else {
+            std::fs::copy(&source_path, &destination_path).with_context(|| {
+                format!("复制 {} 到 {}", source_path.display(), destination_path.display())
+            })?;
+        }
     }
     Ok(())
 }
@@ -426,7 +448,7 @@ pub(crate) fn install_hermes_deps(artifacts: &RuntimeArtifacts, paths: &Bootstra
         );
         return Ok(());
     };
-    let venv_py = paths.install_dir.join("venv/bin/python");
+    let venv_py = hermes_venv_python(&paths.install_dir);
     if !venv_py.exists() {
         anyhow::bail!("hermes venv 的 python 不存在: {}", venv_py.display());
     }
@@ -471,7 +493,7 @@ pub(crate) fn install_catfish_email(artifacts: &RuntimeArtifacts, paths: &Bootst
         return Ok(());
     };
 
-    let venv_py = paths.install_dir.join("venv/bin/python");
+    let venv_py = hermes_venv_python(&paths.install_dir);
     if !venv_py.exists() {
         anyhow::bail!("hermes venv 的 python 不存在: {}", venv_py.display());
     }
@@ -512,7 +534,7 @@ pub(crate) fn install_catfish_email(artifacts: &RuntimeArtifacts, paths: &Bootst
 
         // entry point 必须真落地 —— 装了但没有可执行文件等于没装,
         // 而下游 link_catfish_email_bin 只会 warn 一句, 现场查不出来。
-        let bin = paths.install_dir.join("venv/bin/catfish-email");
+        let bin = hermes_venv_tool(&paths.install_dir, "catfish-email");
         if !bin.exists() {
             anyhow::bail!(
                 "uv 报告安装成功, 但 {} 不存在 —— entry point 没生成",
@@ -529,9 +551,8 @@ pub(crate) fn install_catfish_email(artifacts: &RuntimeArtifacts, paths: &Bootst
                     .with_context(|| format!("创建 {}", parent.display()))?;
             }
             remove_any(&skill_dst)?;
-            let mut cp = Command::new("cp");
-            cp.arg("-R").arg(&skill_src).arg(&skill_dst);
-            command_status(cp, "拷贝 catfish-email skill")?;
+            copy_dir_recursive(&skill_src, &skill_dst)
+                .with_context(|| format!("拷贝 catfish-email skill 到 {}", skill_dst.display()))?;
         } else {
             log::warn!("[catfish-email] 源码包里没有 hermes-skill/, 模型不会主动用邮件工具");
         }
@@ -543,7 +564,7 @@ pub(crate) fn install_catfish_email(artifacts: &RuntimeArtifacts, paths: &Bootst
 }
 
 pub(crate) fn link_catfish_email_bin(paths: &BootstrapPaths) -> Result<()> {
-    let venv_bin = paths.install_dir.join("venv/bin/catfish-email");
+    let venv_bin = hermes_venv_tool(&paths.install_dir, "catfish-email");
     if !venv_bin.exists() {
         log::warn!(
             "[catfish-email-link] {} 不存在，邮件功能可能未随 Hermes 安装",
@@ -577,7 +598,7 @@ pub(crate) fn install_catfish_wechat_reader(
             CATFISH_WECHAT_READER_ARCHIVE
         );
     };
-    let venv_py = paths.install_dir.join("venv/bin/python");
+    let venv_py = hermes_venv_python(&paths.install_dir);
     if !venv_py.exists() {
         anyhow::bail!("Hermes venv Python 不存在: {}", venv_py.display());
     }
@@ -604,7 +625,7 @@ pub(crate) fn install_catfish_wechat_reader(
             .arg("--no-deps")
             .arg(&wheels[0]);
         command_status(pip, "uv pip install catfish-wechat-reader")?;
-        let reader = paths.install_dir.join("venv/bin/catfish-wechat-reader");
+        let reader = hermes_venv_tool(&paths.install_dir, "catfish-wechat-reader");
         let output = Command::new(&reader)
             .args(["doctor", "--json"])
             .output()
@@ -619,7 +640,7 @@ pub(crate) fn install_catfish_wechat_reader(
 }
 
 pub(crate) fn link_catfish_wechat_reader_bin(paths: &BootstrapPaths) -> Result<()> {
-    let reader = paths.install_dir.join("venv/bin/catfish-wechat-reader");
+    let reader = hermes_venv_tool(&paths.install_dir, "catfish-wechat-reader");
     if !reader.exists() {
         anyhow::bail!("聊天导出读取器未安装: {}", reader.display());
     }

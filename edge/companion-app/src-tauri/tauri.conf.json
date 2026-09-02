@@ -92,6 +92,8 @@
       "resources/windows/cpython-3.11.15-embed.zip": "./resources/windows/cpython-3.11.15-embed.zip",
       "resources/windows/hermes-agent-bundle.tar.gz": "./resources/windows/hermes-agent-bundle.tar.gz",
       "resources/windows/chromium-embed.tar.gz": "./resources/windows/chromium-embed.tar.gz",
+      "resources/windows/catfish-email-dist.tar.gz": "./resources/windows/catfish-email-dist.tar.gz",
+      "resources/windows/hermes-deps-dist.tar.gz": "./resources/windows/hermes-deps-dist.tar.gz",
       "resources/windows/catfish-wechat-reader-dist.tar.gz": "./resources/windows/catfish-wechat-reader-dist.tar.gz",
       "resources/windows/install-wechat-reader.ps1": "./resources/windows/install-wechat-reader.ps1"
     },

@@ -47,8 +47,7 @@ fn journal_path() -> Option<PathBuf> {
 }
 
 fn hermes_state_db() -> Option<PathBuf> {
-    let home = crate::util::paths::home_env().ok()?;
-    Some(PathBuf::from(home).join(".hermes/state.db"))
+    crate::services::catfish_paths::hermes_state_db_path()
 }
 
 /// 读 journal 末尾 ~8KB. 找最近 utf-8 char 边界 + 再往前找最近换行,

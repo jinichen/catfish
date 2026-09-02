@@ -140,7 +140,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          UV_VERSION=0.4.30
+          UV_VERSION=$(tr -d '[:space:]' < edge/companion-app/.uv-version)
+          test -n "${UV_VERSION}"
           curl -fSL -o /tmp/uv.zip \
               "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-pc-windows-msvc.zip"
           unzip -o /tmp/uv.zip -d /tmp/uv-extract
@@ -175,7 +176,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "tar extract failed: $LASTEXITCODE" }
 
           # rename 顶层 python\ → cpython-3.11.15-windows-x86_64-none\
-          # audit uv 0.4.30 installation.rs fmt::Display InstallationKey format:
+          # audit uv installation.rs fmt::Display InstallationKey format:
           #   {impl}-{maj}.{min}.{patch}-{os}-{arch}-{libc} = cpython-3.11.15-windows-x86_64-none
           $expectedName = "cpython-${PYTHON_VER}-windows-x86_64-none"
           Rename-Item -Path "$extractDir\python" -NewName $expectedName
@@ -292,6 +293,50 @@ jobs:
           $archive = "${{ github.workspace }}\edge\companion-app\src-tauri\resources\windows\catfish-wechat-reader-dist.tar.gz"
           if (-not (Test-Path $archive)) { throw "reader resource was not generated: $archive" }
           Write-Host "✓ $archive"
+
+      - name: Build offline email and Hermes dependency resources
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $resourceDir = "${{ github.workspace }}\edge\companion-app\src-tauri\resources\windows"
+          $emailSource = "${{ github.workspace }}\edge\email-agent"
+          $emailStage = Join-Path $env:RUNNER_TEMP 'catfish-email-dist'
+          $depsStage = Join-Path $env:RUNNER_TEMP 'catfish-hermes-deps-dist'
+          foreach ($dir in @($emailStage, $depsStage)) {
+              if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
+              New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          }
+
+          # catfish-email 是 py3-none-any wheel，安装时用 uv --no-deps，完全离线。
+          python -m pip wheel --no-deps --wheel-dir $emailStage $emailSource
+          $wheels = @(Get-ChildItem $emailStage -Filter '*.whl')
+          if ($wheels.Count -ne 1) { throw "email wheel 数量不是 1，而是 $($wheels.Count)" }
+          $skillDest = Join-Path $emailStage 'hermes-skill'
+          New-Item -ItemType Directory -Force -Path $skillDest | Out-Null
+          Copy-Item -Recurse "$emailSource\hermes-skill\*" $skillDest
+          $emailTar = Join-Path $resourceDir 'catfish-email-dist.tar.gz'
+          if (Test-Path $emailTar) { Remove-Item -Force $emailTar }
+          tar -czf $emailTar -C $emailStage .
+          if ($LASTEXITCODE -ne 0) { throw 'catfish-email-dist.tar.gz 构建失败' }
+
+          # 这些 wheel 必须与 MSI 内置的 CPython 3.11 / Windows x64 匹配。
+          # pip download 会连同 playwright 的 pyee / greenlet 依赖一起取下。
+          python -m pip download --only-binary=:all: --dest $depsStage `
+              --python-version 3.11 --platform win_amd64 --implementation cp --abi cp311 playwright
+          python -m pip wheel --no-deps --wheel-dir $depsStage jieba
+          $depWheels = @(Get-ChildItem $depsStage -Filter '*.whl')
+          if (-not ($depWheels | Where-Object { $_.Name -like 'jieba-*' })) { throw 'deps 包缺 jieba wheel' }
+          if (-not ($depWheels | Where-Object { $_.Name -like 'playwright-*' })) { throw 'deps 包缺 playwright wheel' }
+          $depsTar = Join-Path $resourceDir 'hermes-deps-dist.tar.gz'
+          if (Test-Path $depsTar) { Remove-Item -Force $depsTar }
+          tar -czf $depsTar -C $depsStage .
+          if ($LASTEXITCODE -ne 0) { throw 'hermes-deps-dist.tar.gz 构建失败' }
+
+          foreach ($archive in @($emailTar, $depsTar)) {
+              $file = Get-Item $archive
+              if ($file.Length -le 1024) { throw "资源文件过小: $archive" }
+              Write-Host "✓ $($file.Name) · $([math]::Round($file.Length/1KB,1)) KB"
+          }
 
       - name: Pack hermes-agent bundle (follow symlink, exclude venv/cache)
         shell: bash

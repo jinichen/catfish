@@ -13,7 +13,6 @@
 //!     例如: 20260425_193045_a1b2c3
 //!     这样 hermes --resume <id> 直接能识别。
 
-use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::Local;
@@ -22,15 +21,9 @@ use serde::{Deserialize, Serialize};
 
 const BUSY_TIMEOUT_MS: u32 = 5000;
 
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-}
-
-fn state_db_path() -> Result<PathBuf, String> {
-    let home = home_dir().ok_or_else(|| "找不到 home 目录".to_string())?;
-    let path = home.join(".hermes").join("state.db");
+fn state_db_path() -> Result<std::path::PathBuf, String> {
+    let path = crate::services::catfish_paths::hermes_state_db_path()
+        .ok_or_else(|| "找不到 Hermes 用户目录".to_string())?;
     if !path.exists() {
         return Err(
             "state.db 不存在 — Hermes 至少要跑过一次, 才有这个 db 文件".to_string()

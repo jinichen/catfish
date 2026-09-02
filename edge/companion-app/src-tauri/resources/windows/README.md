@@ -11,6 +11,8 @@
 | `cpython-3.11.15-embed.zip` | Windows Python embed | `scripts/build-msi-local.ps1` |
 | `hermes-agent-bundle.tar.gz` | Hermes 源码和离线 Node 依赖 | `scripts/build-msi-local.ps1` |
 | `chromium-embed.tar.gz` | Playwright Chromium 离线资源 | `scripts/build-msi-local.ps1` |
+| `catfish-email-dist.tar.gz` | catfish-email wheel 和 Hermes 邮件 skill | `scripts/build-msi-local.ps1` / GitHub Actions |
+| `hermes-deps-dist.tar.gz` | jieba、Playwright 及其依赖 wheel | `scripts/build-msi-local.ps1` / GitHub Actions |
 
 ## 构建规则
 

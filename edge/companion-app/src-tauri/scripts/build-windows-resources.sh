@@ -16,7 +16,6 @@
 set -euo pipefail
 
 # ─── pin ─────────────────────────────────────────────────
-UV_VERSION="0.4.30"               # astral-sh/uv release tag (Oct 2024)
 PYTHON_VERSION="3.11.15"          # cpython version (must match hermes upstream requires)
 PYTHON_BUILD_TAG="20260623"       # python-build-standalone release date tag
                                   # 每 release 只带一个 3.11.x minor 版本;
@@ -37,6 +36,11 @@ COMPANION_APP_DIR="$(cd "${SRC_TAURI_DIR}/.." && pwd)"
 CATFISH_ROOT="$(cd "${COMPANION_APP_DIR}/../.." && pwd)"
 RESOURCES_DIR="${SRC_TAURI_DIR}/resources/windows"
 HERMES_FORK_DIR="${CATFISH_ROOT}/edge/hermes-fork"
+UV_VERSION="$(tr -d '[:space:]' < "${COMPANION_APP_DIR}/.uv-version")"
+if [[ -z "${UV_VERSION}" ]]; then
+    echo "  ERROR: .uv-version 为空: ${COMPANION_APP_DIR}/.uv-version" >&2
+    exit 1
+fi
 
 HERMES_VERSION="$(cat "${COMPANION_APP_DIR}/.hermes-target-version" | tr -d '[:space:]')"
 

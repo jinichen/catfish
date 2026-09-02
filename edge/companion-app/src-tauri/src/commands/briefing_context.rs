@@ -332,8 +332,8 @@ fn scan_weekly_reports(dir: &Path) -> Result<Vec<WeeklyReportRef>, String> {
 fn fetch_recent_sessions(limit: usize, hours: i64) -> Result<Vec<SessionBrief>, String> {
     use rusqlite::Connection;
 
-    let home = crate::util::paths::home_env().map_err(|e| format!("HOME 没设: {e}"))?;
-    let db_path = PathBuf::from(home).join(".hermes").join("state.db");
+    let db_path = crate::services::catfish_paths::hermes_state_db_path()
+        .ok_or_else(|| "Hermes 用户目录没设".to_string())?;
     if !db_path.exists() {
         return Ok(Vec::new());  // hermes 没装 / state.db 不存在
     }

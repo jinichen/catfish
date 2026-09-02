@@ -12,6 +12,8 @@ use chrono::DateTime;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
+use crate::services::catfish_paths;
+
 /// 5/5 鸿波拍板: 之前 MAX_SESSIONS=100 让 sidebar 永远显"100", 误解为总数.
 /// 改全量拉, sidebar 已有 overflow: auto 支持垂直滚动.
 /// 安全上限 10000 防 sqlite 瞎查 (sessions 历史几千条, sqlite ORDER BY started_at
@@ -87,15 +89,9 @@ pub struct SessionDetail {
     pub messages: Vec<SessionMessage>,
 }
 
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-}
-
 fn state_db_path() -> Result<PathBuf, String> {
-    let home = home_dir().ok_or_else(|| "找不到 home 目录".to_string())?;
-    let path = home.join(".hermes").join("state.db");
+    let path = catfish_paths::hermes_state_db_path()
+        .ok_or_else(|| "找不到 Hermes 用户目录".to_string())?;
     if !path.exists() {
         return Err(format!(
             "Hermes state.db 不存在 — {}（hermes 可能还没运行过）",

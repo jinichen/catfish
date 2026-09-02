@@ -31,7 +31,7 @@ pub(crate) struct BootstrapPaths {
 
 impl BootstrapPaths {
     pub(crate) fn new(home: PathBuf) -> Self {
-        let hermes_home = home.join(".hermes");
+        let hermes_home = crate::services::catfish_paths::hermes_home_for(&home);
         Self {
             install_dir: hermes_home.join("hermes-agent"),
             lock_file: hermes_home.join(LOCK_FILE),

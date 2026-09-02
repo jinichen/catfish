@@ -169,19 +169,33 @@ Write-Host "  OK install.ps1 patched" -ForegroundColor Green
 Write-Host "`n[Step 6/11] Download uv + repack cpython..." -ForegroundColor Yellow
 
 # uv.exe
-$UV_VERSION = '0.4.30'
+# Hermes uses duration syntax in [tool.uv]. The shared pin prevents the local
+# Windows build from drifting from the offline resource builders and CI.
+$UV_VERSION = (Get-Content .\edge\companion-app\.uv-version -Raw).Trim()
+if ([string]::IsNullOrWhiteSpace($UV_VERSION)) { throw '.uv-version is empty' }
 $uvOut = "edge\companion-app\src-tauri\resources\windows\uv.exe"
-if ((Test-Path $uvOut) -and (Get-Item $uvOut).Length -gt 1MB) {
-    Write-Host "  SKIP uv.exe (已在 · $([math]::Round((Get-Item $uvOut).Length/1MB,1)) MB)" -ForegroundColor DarkYellow
-} else {
+$uvInstalledVersion = ''
+if (Test-Path $uvOut) {
+    try {
+        $uvInstalledVersion = (& (Resolve-Path $uvOut).Path --version 2>$null | Out-String).Trim()
+    } catch {
+        $uvInstalledVersion = ''
+    }
+    if ($uvInstalledVersion -match "^uv $([regex]::Escape($UV_VERSION))(\s|$)") {
+        Write-Host "  SKIP uv.exe ($uvInstalledVersion)" -ForegroundColor DarkYellow
+    } else {
+        Write-Host "  REFRESH uv.exe (found: '$uvInstalledVersion'; need: uv $UV_VERSION)" -ForegroundColor Yellow
+    }
+}
+if (-not (Test-Path $uvOut) -or $uvInstalledVersion -notmatch "^uv $([regex]::Escape($UV_VERSION))(\s|$)") {
     $uvUrl = "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-x86_64-pc-windows-msvc.zip"
-    $uvZip = "$env:TEMP\uv.zip"
+    $uvZip = "$env:TEMP\uv-$UV_VERSION.zip"
     Invoke-WebRequest -Uri $uvUrl -OutFile $uvZip
-    $uvExtract = "$env:TEMP\uv-extract"
+    $uvExtract = "$env:TEMP\uv-extract-$UV_VERSION"
     if (Test-Path $uvExtract) { Remove-Item -Recurse -Force $uvExtract }
     Expand-Archive -Path $uvZip -DestinationPath $uvExtract -Force
     Copy-Item "$uvExtract\uv.exe" $uvOut -Force
-    Write-Host "  OK uv.exe" -ForegroundColor Green
+    Write-Host "  OK uv.exe (uv $UV_VERSION)" -ForegroundColor Green
 }
 
 # cpython 3.11.15
@@ -401,6 +415,48 @@ Write-Host "  OK Hermes runtime 裁剪校验通过 · $($archiveList.Count) 个�
 # Build the safe chat export reader wheel that the MSI post-install action installs offline.
 & "$scriptDir\build-wechat-reader-resource.ps1"
 if ($LASTEXITCODE -ne 0) { throw "catfish-wechat-reader resource build failed" }
+
+# ─── Step 8.5 · Offline email + Hermes dependency resources ───────
+
+Write-Host "`n[Step 8.5/11] Build offline email + Hermes dependency resources..." -ForegroundColor Yellow
+$emailSource = Join-Path $catfishRoot 'edge\email-agent'
+$resourceDir = Join-Path $catfishRoot 'edge\companion-app\src-tauri\resources\windows'
+$emailStage = Join-Path $env:TEMP 'catfish-email-dist'
+$depsStage = Join-Path $env:TEMP 'catfish-hermes-deps-dist'
+foreach ($dir in @($emailStage, $depsStage)) {
+    if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+}
+
+python -m pip wheel --no-deps --wheel-dir $emailStage $emailSource
+if ($LASTEXITCODE -ne 0) { throw 'catfish-email wheel build failed' }
+$emailWheels = @(Get-ChildItem $emailStage -Filter '*.whl')
+if ($emailWheels.Count -ne 1) { throw "expected one catfish-email wheel, got $($emailWheels.Count)" }
+$skillDest = Join-Path $emailStage 'hermes-skill'
+New-Item -ItemType Directory -Force -Path $skillDest | Out-Null
+Copy-Item -Recurse "$emailSource\hermes-skill\*" $skillDest
+$emailTar = Join-Path $resourceDir 'catfish-email-dist.tar.gz'
+if (Test-Path $emailTar) { Remove-Item -Force $emailTar }
+tar -czf $emailTar -C $emailStage .
+if ($LASTEXITCODE -ne 0) { throw 'catfish-email-dist.tar.gz build failed' }
+
+python -m pip download --only-binary=:all: --dest $depsStage `
+    --python-version 3.11 --platform win_amd64 --implementation cp --abi cp311 playwright
+if ($LASTEXITCODE -ne 0) { throw 'playwright dependency download failed' }
+python -m pip wheel --no-deps --wheel-dir $depsStage jieba
+if ($LASTEXITCODE -ne 0) { throw 'jieba wheel build failed' }
+$depWheels = @(Get-ChildItem $depsStage -Filter '*.whl')
+if (-not ($depWheels | Where-Object { $_.Name -like 'jieba-*' })) { throw 'deps archive missing jieba wheel' }
+if (-not ($depWheels | Where-Object { $_.Name -like 'playwright-*' })) { throw 'deps archive missing playwright wheel' }
+$depsTar = Join-Path $resourceDir 'hermes-deps-dist.tar.gz'
+if (Test-Path $depsTar) { Remove-Item -Force $depsTar }
+tar -czf $depsTar -C $depsStage .
+if ($LASTEXITCODE -ne 0) { throw 'hermes-deps-dist.tar.gz build failed' }
+foreach ($archive in @($emailTar, $depsTar)) {
+    $file = Get-Item $archive
+    if ($file.Length -le 1KB) { throw "resource archive too small: $archive" }
+    Write-Host "  OK $($file.Name) ($([math]::Round($file.Length/1KB,1)) KB)" -ForegroundColor Green
+}
 
 # ─── Step 9 · Mac placeholder ──────────────────────────────
 

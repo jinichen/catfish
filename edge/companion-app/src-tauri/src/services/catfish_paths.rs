@@ -327,21 +327,52 @@ pub fn find_on_path(name: &str) -> Option<PathBuf> {
 /// `~/.hermes`, 全 Rust 代码里这样的还有 40 多处。那是同一类 Windows 缺口,
 /// 但面比邮件大得多, 没在这次一起动。
 pub fn hermes_home() -> Option<PathBuf> {
+    Some(hermes_home_for(&home_dir()?))
+}
+
+/// Hermes 的用户数据目录。Windows 安装器使用 `%LOCALAPPDATA%\hermes`，
+/// Unix 使用 `~/.hermes`；显式 HERMES_HOME 始终优先。
+pub fn hermes_home_for(home: &Path) -> PathBuf {
     if let Some(p) = std::env::var_os("HERMES_HOME") {
         let path = PathBuf::from(p);
-        if path.exists() {
-            return Some(path);
+        if !path.as_os_str().is_empty() {
+            return path;
         }
     }
-    // 不加 #[cfg(windows)]: mac 上根本没有 LOCALAPPDATA, 这段自然跳过,
-    // 而不加 cfg 就能在 mac 上把 Windows 分支测出来。
+    // 不加 cfg(windows)：测试可以在 macOS 上复现 Windows 的路径选择；正常
+    // macOS 环境没有 LOCALAPPDATA，因此仍然回落到 ~/.hermes。
     if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        let path = PathBuf::from(local).join("hermes");
-        if path.exists() {
-            return Some(path);
-        }
+        return PathBuf::from(local).join("hermes");
     }
-    Some(home_dir()?.join(".hermes"))
+    home.join(".hermes")
+}
+
+/// Hermes venv 的 Python 路径。
+pub fn hermes_venv_python(install_dir: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        return install_dir.join("venv").join("Scripts").join("python.exe");
+    }
+    #[cfg(not(windows))]
+    install_dir.join("venv").join("bin").join("python")
+}
+
+/// Hermes venv 内 console script 的路径。
+pub fn hermes_venv_tool(install_dir: &Path, name: &str) -> PathBuf {
+    #[cfg(windows)]
+    {
+        return install_dir
+            .join("venv")
+            .join("Scripts")
+            .join(format!("{name}.exe"));
+    }
+    #[cfg(not(windows))]
+    install_dir.join("venv").join("bin").join(name)
+}
+
+/// Hermes state.db 的统一路径，避免 Companion 在 Windows 读错到 `~/.hermes`。
+pub fn hermes_state_db_path() -> Option<PathBuf> {
+    hermes_home().map(|path| path.join("state.db"))
 }
 
 /// catfish-email CLI 的绝对路径。

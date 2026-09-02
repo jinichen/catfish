@@ -287,7 +287,7 @@ echo "    node $("$EMBED_NODE_BIN/node" --version) · npm $(PATH="$EMBED_NODE_BI
 
 # ─── 4. uv binary ───────────────────────────────────────
 
-UV_VERSION="0.4.30"
+UV_VERSION="$(tr -d '[:space:]' < "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.uv-version")"
 UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_ARCH}.tar.gz"
 
 echo ""

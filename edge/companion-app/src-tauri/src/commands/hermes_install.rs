@@ -23,6 +23,7 @@ use super::hermes_install_recover::{acquire_bootstrap_lock, recover_interrupted_
 use super::hermes_install_state::{
     record_failure, remove_any, write_completion_marker, BootstrapPaths, FailureRecord,
 };
+use crate::services::catfish_paths::{hermes_venv_python, hermes_venv_tool};
 use super::hermes_install_steps::{
     activate_stage, install_catfish_email, install_catfish_wechat_reader, install_hermes_deps,
     link_catfish_email_bin, link_catfish_wechat_reader_bin, prepare_source_stage,
@@ -91,7 +92,7 @@ fn bootstrap_locked(
         // 为一个 76K 的 wheel 付这个代价不合理, 而且升级时长会吓到现场。
         //
         // 这里只补缺的那一个: 文件在就什么都不做 (零代价), 不在才装。
-        if !paths.install_dir.join("venv/bin/catfish-email").exists() {
+        if !hermes_venv_tool(&paths.install_dir, "catfish-email").exists() {
             log::warn!(
                 "[catfish-email] hermes 健康但 catfish-email 缺失 —— \
                  多半是 7/30 之前装的机器。只补装它, 不重装 hermes。"
@@ -109,7 +110,7 @@ fn bootstrap_locked(
         }
         // 同上: hermes 健康 ≠ jieba/playwright 装了。判据用 import 而不是
         // 看目录 —— site-packages 里有目录但 import 不了的情况见过 (装了一半)。
-        let deps_ok = std::process::Command::new(paths.install_dir.join("venv/bin/python"))
+        let deps_ok = std::process::Command::new(hermes_venv_python(&paths.install_dir))
             .args(["-c", "import jieba, playwright.sync_api"])
             .output()
             .map(|o| o.status.success())
@@ -132,7 +133,7 @@ fn bootstrap_locked(
             // 文件 / 磁盘满) 一个字都不会有, 员工只看到"CLI 没装"。
             log::warn!("[catfish-email-link] 建软链失败: {e:#}");
         }
-        if !paths.install_dir.join("venv/bin/catfish-wechat-reader").exists() {
+        if !hermes_venv_tool(&paths.install_dir, "catfish-wechat-reader").exists() {
             match resolve_runtime_dir(resource_dir)
                 .map(RuntimeArtifacts::from_dir)
                 .and_then(|artifacts| install_catfish_wechat_reader(&artifacts, paths))
@@ -489,8 +490,8 @@ mod tests {
         )
         .unwrap();
         fs::write(dir.join(INSTALL_METHOD_MARKER), b"git\n").unwrap();
-        make_executable(&dir.join("venv/bin/python"));
-        make_executable(&dir.join("venv/bin/hermes"));
+        make_executable(&hermes_venv_python(dir));
+        make_executable(&hermes_venv_tool(dir, "hermes"));
     }
 
     #[test]

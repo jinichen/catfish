@@ -133,7 +133,7 @@ download_with_retry() {
 }
 
 # --- 3.1 · x86_64 uv (走 ghfast.top 加速) ---
-UV_VERSION="0.4.30"
+UV_VERSION="$(tr -d '[:space:]' < "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.uv-version")"
 UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-apple-darwin.tar.gz"
 download_with_retry "$UV_URL" "/tmp/uv-x64.tar.gz" || exit 1
 tar -xzf /tmp/uv-x64.tar.gz -C /tmp/

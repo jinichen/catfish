@@ -106,7 +106,8 @@ fn usable_artifact(path: &Path) -> Option<PathBuf> {
 /// 旧逻辑看到 bundle 内 `install.sh + uv` 就立即返回，即使它是 0/4；结果会
 /// 永远忽略 `~/.catfish/runtime` 中用户已经准备好的 4/4 离线包。
 pub(crate) fn resolve_runtime_dir_for_home(resource_dir: &Path, home: Option<&Path>) -> Result<PathBuf> {
-    let bundle = resource_dir.join("resources").join("mac");
+    let platform = if cfg!(windows) { "windows" } else { "mac" };
+    let bundle = resource_dir.join("resources").join(platform);
     let external = home.map(|h| h.join(".catfish").join("runtime"));
     let mut candidates: Vec<(usize, usize, PathBuf)> = Vec::new();
     let mut tried = Vec::new();
