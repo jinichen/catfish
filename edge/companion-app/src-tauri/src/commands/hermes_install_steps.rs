@@ -7,9 +7,8 @@
 //! 这里只放"每一步具体怎么做"。
 
 use anyhow::{Context, Result};
-use std::path::Path;
 #[cfg(any(not(target_os = "windows"), test))]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::services::catfish_paths::hermes_venv_python;

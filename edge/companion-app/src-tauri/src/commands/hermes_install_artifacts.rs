@@ -35,7 +35,6 @@ pub(crate) struct RuntimeArtifacts {
     pub(crate) dir: PathBuf,
     #[cfg(any(not(target_os = "windows"), test))]
     pub(crate) install_sh: PathBuf,
-    #[cfg(any(not(target_os = "windows"), test))]
     pub(crate) uv: PathBuf,
     #[cfg(any(not(target_os = "windows"), test))]
     pub(crate) python_tar: Option<PathBuf>,
@@ -59,7 +58,6 @@ pub(crate) struct RuntimeArtifacts {
 
 impl RuntimeArtifacts {
     pub(crate) fn from_dir(dir: PathBuf) -> Self {
-        #[cfg(any(not(target_os = "windows"), test))]
         let uv_name = if cfg!(target_os = "windows") {
             "uv.exe"
         } else {
@@ -68,7 +66,6 @@ impl RuntimeArtifacts {
         Self {
             #[cfg(any(not(target_os = "windows"), test))]
             install_sh: dir.join("install.sh"),
-            #[cfg(any(not(target_os = "windows"), test))]
             uv: dir.join(uv_name),
             #[cfg(any(not(target_os = "windows"), test))]
             python_tar: usable_artifact(&dir.join(RUNTIME_ARCHIVES[0])),

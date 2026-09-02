@@ -51,6 +51,16 @@ jobs:
         with:
           workspaces: edge/companion-app/src-tauri
 
+      - name: Install Companion frontend dependencies
+        working-directory: edge/companion-app
+        run: npm ci --no-audit --no-fund
+
+      # generate_context! 在 Rust 编译期读取 frontendDist；前置编译之前必须
+      # 先产出 dist，不能依赖后面的 Tauri beforeBuildCommand。
+      - name: Build Companion frontend for Rust preflight
+        working-directory: edge/companion-app
+        run: npm run build
+
       # 先按最终 MSI 相同的 Windows Release 条件编译。这样缺模块、平台 cfg
       # 漂移和本仓 Rust warning 会在下载/重打几百 MB 离线资源之前直接失败；
       # 后面的 Tauri build 会复用这里的 release 产物，不是重复做一套检查。
@@ -481,12 +491,6 @@ jobs:
           [ "$leak" = "0" ] || exit 1
           echo "✓ exclude 生效 + node_modules 已进包 ($NM 条) · 归档共 $(wc -l < "$HLIST" | tr -d ' ') 条"
           ls -lh edge/companion-app/src-tauri/resources/windows/
-
-      # ─── Companion frontend build ───
-
-      - name: npm install
-        working-directory: edge/companion-app
-        run: npm ci --no-audit --no-fund
 
       # ─── Tauri msi build (Windows MSVC, no cross-compile) ───
 
