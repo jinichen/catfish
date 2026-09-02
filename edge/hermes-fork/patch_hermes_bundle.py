@@ -26,6 +26,21 @@ _DURATION_LINE = re.compile(
 _ANY_EXCLUDE_NEWER = re.compile(r"(?m)^\s*exclude-newer\s*=")
 
 
+def _configure_utf8_stdio() -> None:
+    """Keep status output portable on Windows runners using a legacy code page."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not callable(reconfigure):
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (LookupError, OSError, ValueError):
+            # Embedded/captured streams may reject reconfiguration.  The archive
+            # operation must not fail merely because diagnostics cannot change
+            # their encoding.
+            continue
+
+
 def patch_pyproject(text: str) -> tuple[str, bool]:
     """Remove one stale duration setting and leave valid date settings alone."""
     matches = list(_DURATION_LINE.finditer(text))
@@ -106,6 +121,7 @@ def patch_archive(input_path: Path, output_path: Path) -> bool:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True, help="Hermes tar.gz")
     parser.add_argument("--output", type=Path, help="patched tar.gz")
