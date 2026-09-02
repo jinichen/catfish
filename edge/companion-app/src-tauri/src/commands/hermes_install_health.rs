@@ -30,13 +30,18 @@ pub(crate) fn installed_hermes_commit_at(install_dir: &Path) -> Option<String> {
         }
     }
 
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .arg("-C")
         .arg(install_dir)
         .arg("rev-parse")
-        .arg("HEAD")
-        .output()
-        .ok()?;
+        .arg("HEAD");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }

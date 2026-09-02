@@ -316,8 +316,17 @@ jobs:
 
           # catfish-email 是 py3-none-any wheel，安装时用 uv --no-deps，完全离线。
           python -m pip wheel --no-deps --wheel-dir $emailStage $emailSource
+          # Outlook COM 适配器需要 pywin32；一起放入 Windows 离线归档。
+          python -m pip download --only-binary=:all: --dest $emailStage `
+              --python-version 3.11 --platform win_amd64 --implementation cp --abi cp311 pywin32
+          if ($LASTEXITCODE -ne 0) { throw 'pywin32 wheel 下载失败' }
           $wheels = @(Get-ChildItem $emailStage -Filter '*.whl')
-          if ($wheels.Count -ne 1) { throw "email wheel 数量不是 1，而是 $($wheels.Count)" }
+          if (-not ($wheels | Where-Object { $_.Name -like 'catfish_email-*.whl' })) {
+              throw 'email archive 缺少 catfish-email wheel'
+          }
+          if (-not ($wheels | Where-Object { $_.Name -like 'pywin32-*.whl' })) {
+              throw 'email archive 缺少 pywin32 wheel'
+          }
           $skillDest = Join-Path $emailStage 'hermes-skill'
           New-Item -ItemType Directory -Force -Path $skillDest | Out-Null
           Copy-Item -Recurse "$emailSource\hermes-skill\*" $skillDest
@@ -378,6 +387,15 @@ jobs:
               --exclude='hermes-agent-src/apps/desktop' \
               --exclude='hermes-agent-src/node_modules/electron' \
               hermes-agent-src
+
+          # uv 的 exclude-newer 只接受绝对日期；归档修补器移除上游遗留的
+          # duration 配置，避免 Windows 安装时 TOML warning + lockfile 失效。
+          BUNDLE=edge/companion-app/src-tauri/resources/windows/hermes-agent-bundle.tar.gz
+          PATCHED_BUNDLE="$BUNDLE.patched"
+          python3 edge/hermes-fork/patch_hermes_bundle.py \
+              --input "$BUNDLE" --output "$PATCHED_BUNDLE"
+          mv "$PATCHED_BUNDLE" "$BUNDLE"
+          python3 edge/hermes-fork/patch_hermes_bundle.py --input "$BUNDLE" --check
           #
           # 8/3: 删掉了原本的 node_modules / **/node_modules 两条 exclude。
           # 那两条不是"顺手排一下缓存", 它们**正是**离线安装做不成的原因:
@@ -387,7 +405,6 @@ jobs:
           # 我们用 Tauri Companion 替代掉的 Electron 桌面版, 后者是它被 npm
           # workspaces 提升到根的 790MB 运行时 —— 排掉 app 却留着运行时是
           # 8/1 在 mac 包上发现的漏排。
-          BUNDLE=edge/companion-app/src-tauri/resources/windows/hermes-agent-bundle.tar.gz
           #
           # 归档现在有十几万条, 只 tar tzf **一次**存下来再反复 grep。
           # 每个 pattern 单独解一遍 gzip 是几分钟起步。

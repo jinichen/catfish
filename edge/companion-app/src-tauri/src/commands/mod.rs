@@ -45,6 +45,8 @@ pub mod hermes_install_recover;   // 中断事务恢复 + 装机锁 (8/15 切出
 pub mod hermes_install_state;     // 落盘状态 + 原子写 (8/15 切出)
 pub mod hermes_install_steps;     // 装机各步骤 (8/15 切出)
 pub mod hermes_install; // 7/15 BL-CATFISH-MAC-OFFLINE-INSTALL: mac dmg 首启装 hermes-agent 本体 (offline install.sh + 4 artifacts)
+#[cfg(target_os = "windows")]
+pub mod hermes_install_windows; // Windows 首启后台安装，避免 MSI CustomAction 弹黑窗
 pub mod hermes_memory; // BL-DASHBOARD-HERMES-MEMORY-CARD (5/16)
 pub mod hermes_plugin_env; // 8/9: 从 hermes_plugin 抽出 —— ~/.hermes/.env 的 API_SERVER_KEY 维护
 pub mod hermes_plugin_baked; // 8/21: BAKED_* 常量表, 从 hermes_plugin 抽出 (800 行红线)

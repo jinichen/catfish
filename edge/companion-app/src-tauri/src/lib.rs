@@ -100,7 +100,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         // 7/15 BL-COMPANION-LOG-FILE: log::info!/warn!/error! → 文件 + stderr
         // 文件路径: macOS = ~/Library/Logs/com.catfish.companion/Catfish Companion.log
-        //           Windows = %APPDATA%/com.catfish.companion/logs/Catfish Companion.log
+        //           Windows = %LOCALAPPDATA%/com.catfish.companion/logs/Catfish Companion.log
         // rotate: 10MB 单文件, 保 5 份历史 (下游 debug 够用, 磁盘可控)
         .plugin(
             tauri_plugin_log::Builder::new()
@@ -293,6 +293,19 @@ pub fn run() {
                 Err(e) => log::warn!("[memory-provider] 激活失败 (不阻塞启动): {e}"),
             }
 
+            // 9/2: Hermes 已有完整的重复失败/无进展检测器，但硬停止默认关闭。
+            // Companion 场景里一次浏览器任务曾累计 65 个工具结果才撞中央 409。
+            // 这里只开启上游开关，阈值继承当前 Hermes 默认，避免维护第二套数字。
+            match services::tool_loop_config::ensure() {
+                Ok(true) => log::info!(
+                    "[tool-loop] 已启用 Hermes 每轮工具循环硬停止；下次 Hermes 重启生效"
+                ),
+                Ok(false) => log::debug!(
+                    "[tool-loop] 已有 tool_loop_guardrails 配置或 Hermes 尚未初始化，不动"
+                ),
+                Err(e) => log::warn!("[tool-loop] 配置失败 (不阻塞启动): {e}"),
+            }
+
             // 8/19: 教学凭据的取值通道。tool-bridge 教学时要填密码 → 走
             // ~/.catfish/companion-secrets.sock 问我们, 我们读钥匙串给它。
             //
@@ -350,10 +363,13 @@ pub fn run() {
             // Escape hatch: CATFISH_HERMES_PLUGIN_NO_BOOTSTRAP=1 跳全部 (调试用).
             commands::hermes_plugin::bootstrap_hermes_plugin();
 
-            // 7/15 BL-CATFISH-MAC-OFFLINE-INSTALL: macOS/Linux dmg 首启装 hermes-agent 本体.
-            // Windows msi CustomAction (wix/catfish-postinstall.wxs) 已在 msi 装机时装 hermes,
-            // 跳过. Escape: CATFISH_HERMES_INSTALL_NO_BOOTSTRAP=1 (dev 已装本地 hermes).
-            #[cfg(all(any(target_os = "macos", target_os = "linux"), not(debug_assertions)))]
+            // 首次启动后台准备 Hermes。MSI 只负责落盘，Windows 也走同一条 GUI
+            // bootstrap，避免安装事务中运行 PowerShell 导致黑窗和长时间卡住。
+            // Escape: CATFISH_HERMES_INSTALL_NO_BOOTSTRAP=1 (dev 已装本地 hermes).
+            #[cfg(any(
+                all(any(target_os = "macos", target_os = "linux"), not(debug_assertions)),
+                all(target_os = "windows", not(debug_assertions))
+            ))]
             {
                 if std::env::var("CATFISH_HERMES_INSTALL_NO_BOOTSTRAP").is_err() {
                     use tauri::Manager;
@@ -373,7 +389,10 @@ pub fn run() {
                     }
                 }
             }
-            #[cfg(all(any(target_os = "macos", target_os = "linux"), debug_assertions))]
+            #[cfg(any(
+                all(any(target_os = "macos", target_os = "linux"), debug_assertions),
+                all(target_os = "windows", debug_assertions)
+            ))]
             log::info!("调试构建跳过 packaged Hermes bootstrap，使用本机已安装的 Hermes");
 
             if qa_mode {
@@ -524,8 +543,14 @@ pub fn run() {
             // 因此正常安装路径等待严格完成标记；开发者显式禁用 bootstrap 时仍
             // 沿用立即启动，兼容自管 Hermes 环境。
             let runtime_services_app = app.handle().clone();
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
-            if std::env::var("CATFISH_HERMES_INSTALL_NO_BOOTSTRAP").is_err() {
+            #[cfg(any(
+                target_os = "macos",
+                target_os = "linux",
+                target_os = "windows"
+            ))]
+            if !cfg!(debug_assertions)
+                && std::env::var("CATFISH_HERMES_INSTALL_NO_BOOTSTRAP").is_err()
+            {
                 tauri::async_runtime::spawn(async move {
                     let mut waited_secs = 0u64;
                     loop {
@@ -555,7 +580,11 @@ pub fn run() {
                 services::email_scheduler::schedule_email_scheduler(runtime_services_app);
             }
 
-            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+            #[cfg(not(any(
+                target_os = "macos",
+                target_os = "linux",
+                target_os = "windows"
+            )))]
             {
                 services::autostart::schedule_autostart();
                 services::watchdog::schedule_watchdog();

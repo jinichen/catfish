@@ -46,10 +46,18 @@ powershell -ExecutionPolicy Bypass -File scripts\build-msi-local.ps1
 6. 下载 uv 和 CPython embed zip；
 7. 用 Playwright dry-run 解析 Chromium 地址，再用 `curl.exe` 下载、解压和校验 `.exe`，最后打包 `chromium-embed.tar.gz`；
 8. 打包 `hermes-agent-bundle.tar.gz`；
-9. 准备 Tauri 校验所需的 macOS placeholder；
+9. 准备 macOS 资源占位文件（Windows 配置不会再参与 macOS 构建）；
 10. 安装 Companion 前端依赖并运行 Tauri/WiX MSI 构建。
 
 Chromium 步骤不应手动再运行 `npx playwright install chromium`。当前脚本已经把下载、解压和校验拆开并打印阶段日志，避免下载进度到 100% 后长时间静默。
+
+MSI 只负责安装 Companion 和离线资源，不再在安装事务中运行 Hermes
+`install.ps1`、邮件或微信读取器脚本。用户第一次启动 Companion 后，应用会在后台
+以隐藏子进程完成准备，界面可继续使用并显示阶段进度；详细输出写入：
+
+```text
+%LOCALAPPDATA%\hermes\logs\catfish-companion-bootstrap.log
+```
 
 ## 可选跳过参数
 
@@ -83,7 +91,9 @@ hermes-agent-bundle.tar.gz
 chromium-embed.tar.gz
 ```
 
-这些大型资源由构建脚本生成，默认不提交到 Git。仓库里的空 placeholder 只用于让 Tauri 跨平台校验通过，不能直接拿来生成可用 MSI。
+这些大型资源由 Windows 构建脚本生成，默认不提交到 Git。Windows 资源只由
+`tauri.windows.conf.json` 在 Windows 构建时加载；macOS 构建不会读取这些文件。
+安装阶段不执行这些脚本，首次启动时由 Companion 后台任务按需执行。
 
 ## 输出位置
 
@@ -111,7 +121,9 @@ Start-Process msiexec.exe -ArgumentList @(
 ) -Wait
 ```
 
-当前 MSI 仍包含较大的离线 Runtime，并可能在安装期间执行较长的 post-install。遇到安装界面长时间无反馈时，先查看 `$log`；Burn Bootstrapper 的目标就是移除这种体验问题。
+当前 MSI 仍包含较大的离线 Runtime，但不再执行 Hermes 或附加组件的长耗时
+post-install。若首次启动后准备失败，查看前述 bootstrap 日志；MSI 安装日志
+`$log` 只用于排查安装器本身的问题。
 
 ## 构建前检查
 

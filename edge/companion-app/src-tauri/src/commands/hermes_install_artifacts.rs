@@ -49,9 +49,14 @@ pub(crate) struct RuntimeArtifacts {
 
 impl RuntimeArtifacts {
     pub(crate) fn from_dir(dir: PathBuf) -> Self {
+        let uv_name = if cfg!(target_os = "windows") {
+            "uv.exe"
+        } else {
+            "uv"
+        };
         Self {
             install_sh: dir.join("install.sh"),
-            uv: dir.join("uv"),
+            uv: dir.join(uv_name),
             python_tar: usable_artifact(&dir.join(RUNTIME_ARCHIVES[0])),
             hermes_tar: usable_artifact(&dir.join(RUNTIME_ARCHIVES[1])),
             node_tar: usable_artifact(&dir.join(RUNTIME_ARCHIVES[2])),
@@ -149,4 +154,57 @@ pub(crate) fn resolve_runtime_dir_for_home(resource_dir: &Path, home: Option<&Pa
 pub(crate) fn resolve_runtime_dir(resource_dir: &Path) -> Result<PathBuf> {
     let home = crate::util::paths::home_env().ok().map(PathBuf::from);
     resolve_runtime_dir_for_home(resource_dir, home.as_deref())
+}
+
+/// 找附加组件的资源目录。
+///
+/// Windows 的 MSI 由 WiX 直接安装 Hermes 核心，资源目录只有 `install.ps1`
+/// 和 `uv.exe`，没有 Unix 的 `install.sh` / `uv`。旧的补装路径复用
+/// `resolve_runtime_dir`，因此 Windows 即使有邮件归档也会被误判成“没有有效
+/// 运行时”，重启 Companion 无法补装邮件。附加组件只需要自己的归档，不能用
+/// Hermes 核心安装工具作为判据。
+pub(crate) fn resolve_addon_runtime_dir(resource_dir: &Path) -> Result<PathBuf> {
+    let home = crate::util::paths::home_env().ok().map(PathBuf::from);
+    let platform = if cfg!(target_os = "windows") {
+        "windows"
+    } else {
+        "mac"
+    };
+    let bundle = resource_dir.join("resources").join(platform);
+    let external = home.map(|h| h.join(".catfish").join("runtime"));
+    let mut candidates: Vec<(usize, usize, PathBuf)> = Vec::new();
+    let mut tried = Vec::new();
+
+    for (bundle_preference, candidate) in [(1usize, Some(bundle)), (0usize, external)] {
+        let Some(candidate) = candidate else {
+            continue;
+        };
+        let artifacts = RuntimeArtifacts::from_dir(candidate.clone());
+        let addon_count = [
+            &artifacts.email_tar,
+            &artifacts.deps_tar,
+            &artifacts.wechat_reader_tar,
+        ]
+        .into_iter()
+        .filter(|path| path.is_some())
+        .count();
+        tried.push(format!("{} (附加归档={addon_count}/3)", candidate.display()));
+        if addon_count > 0 {
+            candidates.push((addon_count, bundle_preference, candidate));
+        }
+    }
+
+    candidates.sort_by(|a, b| (b.0, b.1).cmp(&(a.0, a.1)));
+    if let Some((addon_count, _, selected)) = candidates.into_iter().next() {
+        log::info!(
+            "[runtime] 选择 {} · 附加归档 {addon_count}/3",
+            selected.display()
+        );
+        return Ok(selected);
+    }
+
+    anyhow::bail!(
+        "找不到附加组件资源目录。已尝试:\n  {}",
+        tried.join("\n  ")
+    )
 }

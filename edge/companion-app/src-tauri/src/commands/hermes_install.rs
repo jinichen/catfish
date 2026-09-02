@@ -11,12 +11,18 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use tauri::Emitter;
 
-use super::hermes_install_artifacts::{resolve_runtime_dir, RuntimeArtifacts};
-use super::hermes_install_base::{
-    hermes_pinned_tag, report, BootstrapProgressState, HermesBootstrapProgress, ProgressReporter,
-    HERMES_BOOTSTRAP_PROGRESS_EVENT, LAST_BOOTSTRAP_PROGRESS,
+use super::hermes_install_artifacts::{
+    resolve_addon_runtime_dir, resolve_runtime_dir, RuntimeArtifacts,
 };
-#[cfg(all(any(target_os = "macos", target_os = "linux"), not(debug_assertions)))]
+use super::hermes_install_base::{
+    hermes_pinned_tag, report, BootstrapProgressState,
+    HermesBootstrapProgress, ProgressReporter, HERMES_BOOTSTRAP_PROGRESS_EVENT,
+    LAST_BOOTSTRAP_PROGRESS,
+};
+#[cfg(any(
+    all(any(target_os = "macos", target_os = "linux"), not(debug_assertions)),
+    all(target_os = "windows", not(debug_assertions))
+))]
 use super::hermes_install_base::remember_progress;
 use super::hermes_install_health::core_health_problems;
 use super::hermes_install_recover::{acquire_bootstrap_lock, recover_interrupted_transaction};
@@ -58,6 +64,14 @@ pub fn last_bootstrap_error() -> Option<String> {
     Some(msg.to_string())
 }
 
+fn resolve_optional_runtime_dir(resource_dir: &Path) -> Result<PathBuf> {
+    if cfg!(target_os = "windows") {
+        resolve_addon_runtime_dir(resource_dir)
+    } else {
+        resolve_runtime_dir(resource_dir)
+    }
+}
+
 /// 严格安装判断。`pyproject.toml` 单独存在不再代表安装成功。
 pub fn hermes_agent_installed() -> bool {
     let Ok(home) = crate::util::paths::home_env() else {
@@ -74,6 +88,23 @@ fn bootstrap_locked(
     let reusable_stage = recover_interrupted_transaction(paths)?;
     let current_health = core_health_problems(paths, true);
     if current_health.is_empty() {
+        #[cfg(target_os = "windows")]
+        {
+            // Windows 的 MSI 不再执行安装 CustomAction。已存在核心环境时只补缺
+            // 附加组件，绝不重新解压 Hermes，也不走 Unix wheel 安装路径。
+            super::hermes_install_windows::ensure_optional_components(resource_dir, paths);
+            report(
+                reporter,
+                "complete",
+                BootstrapProgressState::Skipped,
+                0,
+                0,
+                format!("Hermes {} 已完整安装，无需重复准备", hermes_pinned_tag()),
+                None,
+            );
+            return Ok(());
+        }
+
         // 8/5 (达华现场): hermes 健康 ≠ catfish-email 装了。
         //
         // catfish-email 的 wheel 是 7/30 (beb25f0) 才开始进安装包的。在那之前
@@ -97,7 +128,7 @@ fn bootstrap_locked(
                 "[catfish-email] hermes 健康但 catfish-email 缺失 —— \
                  多半是 7/30 之前装的机器。只补装它, 不重装 hermes。"
             );
-            match resolve_runtime_dir(resource_dir)
+            match resolve_optional_runtime_dir(resource_dir)
                 .map(RuntimeArtifacts::from_dir)
                 .and_then(|artifacts| install_catfish_email(&artifacts, paths))
             {
@@ -120,7 +151,7 @@ fn bootstrap_locked(
                 "[hermes-deps] hermes 健康但 jieba/playwright 缺失 —— \
                  只补装它们, 不重装 hermes。"
             );
-            match resolve_runtime_dir(resource_dir)
+            match resolve_optional_runtime_dir(resource_dir)
                 .map(RuntimeArtifacts::from_dir)
                 .and_then(|artifacts| install_hermes_deps(&artifacts, paths))
             {
@@ -134,7 +165,7 @@ fn bootstrap_locked(
             log::warn!("[catfish-email-link] 建软链失败: {e:#}");
         }
         if !hermes_venv_tool(&paths.install_dir, "catfish-wechat-reader").exists() {
-            match resolve_runtime_dir(resource_dir)
+            match resolve_optional_runtime_dir(resource_dir)
                 .map(RuntimeArtifacts::from_dir)
                 .and_then(|artifacts| install_catfish_wechat_reader(&artifacts, paths))
             {
@@ -160,6 +191,11 @@ fn bootstrap_locked(
         "Hermes 健康检查未通过，将修复: {}",
         current_health.join("; ")
     );
+
+    #[cfg(target_os = "windows")]
+    {
+        return super::hermes_install_windows::bootstrap(resource_dir, paths, reporter);
+    }
 
     let runtime_dir = resolve_runtime_dir(resource_dir)?;
     let artifacts = RuntimeArtifacts::from_dir(runtime_dir);
@@ -372,7 +408,10 @@ fn ensure_hermes_installed_with_reporter(
 // 一行的事; 留一个没人走的公开包装只会让人以为它还在链路上。
 
 /// Tauri setup 使用：立即返回，所有磁盘/网络工作在后台线程完成。
-#[cfg(all(any(target_os = "macos", target_os = "linux"), not(debug_assertions)))]
+#[cfg(any(
+    all(any(target_os = "macos", target_os = "linux"), not(debug_assertions)),
+    all(target_os = "windows", not(debug_assertions))
+))]
 pub fn spawn_hermes_bootstrap(app: tauri::AppHandle, resource_dir: PathBuf) {
     let queued_app = app.clone();
     let queued = HermesBootstrapProgress {

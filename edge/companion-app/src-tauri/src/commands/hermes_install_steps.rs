@@ -26,6 +26,14 @@ use super::hermes_install_state::{
 };
 
 fn command_status(mut command: Command, description: &str) -> Result<()> {
+    // Companion 是 Windows GUI 子系统；没有这个 flag，tar/uv/python 这类
+    // console 子进程可能各自创建黑色控制台窗口。所有安装步骤统一从这里过，
+    // 因此隐藏策略不会漏在某一个附加组件上。
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
     let status = command
         .status()
         .with_context(|| format!("启动 {description}"))?;
@@ -626,8 +634,14 @@ pub(crate) fn install_catfish_wechat_reader(
             .arg(&wheels[0]);
         command_status(pip, "uv pip install catfish-wechat-reader")?;
         let reader = hermes_venv_tool(&paths.install_dir, "catfish-wechat-reader");
-        let output = Command::new(&reader)
-            .args(["doctor", "--json"])
+        let mut doctor = Command::new(&reader);
+        doctor.args(["doctor", "--json"]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            doctor.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        let output = doctor
             .output()
             .with_context(|| format!("运行 {} doctor", reader.display()))?;
         if !output.status.success() || !String::from_utf8_lossy(&output.stdout).contains("\"read_only\":true") {

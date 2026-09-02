@@ -38,6 +38,8 @@ const PHASE_LABELS: Record<string, string> = {
   finalize: "即将完成",
   finalizing: "即将完成",
   retry: "重新尝试",
+  core: "Hermes 核心",
+  addons: "附加组件",
 };
 
 function phaseLabel(phase: string): string | null {

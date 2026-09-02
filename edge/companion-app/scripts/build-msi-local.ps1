@@ -353,6 +353,16 @@ try {
 } finally { Pop-Location }
 Write-Host "  OK hermes-agent-bundle.tar.gz: $([math]::Round((Get-Item $hermesTarOut).Length/1MB,1)) MB" -ForegroundColor Green
 
+# uv 的 exclude-newer 只接受绝对日期；归档修补器移除上游遗留的
+# duration 配置，避免 Windows 安装时 TOML warning + lockfile 失效。
+$bundlePatch = Join-Path $catfishRoot 'edge\hermes-fork\patch_hermes_bundle.py'
+$patchedHermesTar = "$hermesTarOut.patched"
+python $bundlePatch --input $hermesTarOut --output $patchedHermesTar
+if ($LASTEXITCODE -ne 0) { throw "Hermes archive uv config patch failed" }
+Move-Item -Force $patchedHermesTar $hermesTarOut
+python $bundlePatch --input $hermesTarOut --check
+if ($LASTEXITCODE -ne 0) { throw "Hermes archive uv config validation failed" }
+
 # 归档校验：防止 exclude 写错后悄悄把开发/跨平台文件重新打进去。
 $archiveList = @(tar.exe tzf $hermesTarOut)
 if ($LASTEXITCODE -ne 0) { throw "无法读取 hermes-agent-bundle.tar.gz" }
@@ -412,7 +422,7 @@ foreach ($foreign in $foreignAgentBins) {
 }
 Write-Host "  OK Hermes runtime 裁剪校验通过 · $($archiveList.Count) 个归档条目" -ForegroundColor Green
 
-# Build the safe chat export reader wheel that the MSI post-install action installs offline.
+# Build the safe chat export reader wheel that Companion installs offline on first launch.
 & "$scriptDir\build-wechat-reader-resource.ps1"
 if ($LASTEXITCODE -ne 0) { throw "catfish-wechat-reader resource build failed" }
 
@@ -430,8 +440,18 @@ foreach ($dir in @($emailStage, $depsStage)) {
 
 python -m pip wheel --no-deps --wheel-dir $emailStage $emailSource
 if ($LASTEXITCODE -ne 0) { throw 'catfish-email wheel build failed' }
+# Outlook COM 适配器依赖 pywin32；把 Windows x64 / CPython 3.11 wheel 一并放进
+# 同一个离线归档，安装器用 uv --no-index 一次装完，现场不会偷偷访问 PyPI。
+python -m pip download --only-binary=:all: --dest $emailStage `
+    --python-version 3.11 --platform win_amd64 --implementation cp --abi cp311 pywin32
+if ($LASTEXITCODE -ne 0) { throw 'pywin32 wheel download failed' }
 $emailWheels = @(Get-ChildItem $emailStage -Filter '*.whl')
-if ($emailWheels.Count -ne 1) { throw "expected one catfish-email wheel, got $($emailWheels.Count)" }
+if (-not ($emailWheels | Where-Object { $_.Name -like 'catfish_email-*.whl' })) {
+    throw 'catfish-email archive missing catfish_email wheel'
+}
+if (-not ($emailWheels | Where-Object { $_.Name -like 'pywin32-*.whl' })) {
+    throw 'catfish-email archive missing pywin32 wheel'
+}
 $skillDest = Join-Path $emailStage 'hermes-skill'
 New-Item -ItemType Directory -Force -Path $skillDest | Out-Null
 Copy-Item -Recurse "$emailSource\hermes-skill\*" $skillDest
