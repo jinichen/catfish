@@ -106,7 +106,19 @@ fn bootstrap_locked(
         "Hermes 健康检查未通过，将修复: {}",
         current_health.join("; ")
     );
-    super::hermes_install_windows::bootstrap(resource_dir, paths, reporter)
+    let result = super::hermes_install_windows::bootstrap(resource_dir, paths, reporter);
+    if result.is_err() {
+        // 邮件组件与 Hermes 核心是两个独立能力。核心资源损坏、版本迁移或
+        // Chromium 下载包异常时，不能让已经存在的 Python venv 也失去自动补装
+        // catfish-email 的机会；否则现场只能手动执行 install-catfish-email.ps1。
+        // ensure_optional_components 自己会检查 venv/归档并把失败写入同一份日志，
+        // 因此这里是可重入的 best-effort，不掩盖核心安装错误。
+        log::warn!(
+            "[windows-bootstrap] Hermes 核心准备失败，仍尝试独立补装邮件/附加组件"
+        );
+        super::hermes_install_windows::ensure_optional_components(resource_dir, paths);
+    }
+    result
 }
 
 #[cfg(not(target_os = "windows"))]

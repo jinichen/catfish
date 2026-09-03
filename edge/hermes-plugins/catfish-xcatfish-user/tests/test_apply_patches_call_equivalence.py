@@ -54,6 +54,12 @@ REFACTOR_BASE = "cc4d71a"
 #: 一个 patch 悄悄多出来跟悄悄少一个同等危险 —— monkey-patch 是全进程生效的，
 #: 谁加的、为什么加、影响面多大，得有地方写。
 INTENTIONALLY_ADDED: dict[str, str] = {
+    "_patch_p15_4_companion_manual_approval": (
+        "9/1 加。Hermes 0.21 将未配置的审批模式按 smart 处理；Companion 这条"
+        "有实时 SSE 回调和审批 resolve endpoint，不能让 Auxiliary LLM 自动放行"
+        "execute_code。只在当前会话存在 Companion callback 时把有效模式收窄为"
+        "manual；无 UI 的 API / cron / webhook 仍沿用 Hermes 原配置。"
+    ),
     "_patch_p44_service_call_lean": (
         "8/15 加。后台分类调用不背 agent 上下文。\n"
         "  病: 邮件评级一次 42,114 输入 token 换 185 输出 token (230:1)。8/15 百炼\n"

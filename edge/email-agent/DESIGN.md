@@ -28,7 +28,7 @@
 不要试图重写一个邮件客户端。**让 catfish 跟员工已经登录的桌面客户端对话**, 借助:
 - macOS **Apple Mail (Mail.app)** → AppleScript (Apple 官方 dictionary 完整)  ← **5/17 替代 Outlook for Mac**
 - Windows Outlook → COM (pywin32, Microsoft 官方接口)
-- Windows Foxmail → 解析本地 `.box` 数据文件 (无官方 API, 逆向)
+- Windows Foxmail → 解析本地 `.box` / `.eml` 数据文件 (无官方 API, 只读)
 - macOS Foxmail → 同 Windows 但**只读** (写入路径不可靠)
 
 凭据 / OAuth / Exchange auth 全部由客户端自己管, catfish 完全不碰密码。
@@ -67,7 +67,7 @@ edge/email-agent/
 │   │   ├── base.py                 # EmailAdapter ABC + 数据类
 │   │   ├── apple_mail.py           # macOS Mail.app AppleScript + EMLX 兜底  ← 5/18 替代 outlook_mac.py
 │   │   ├── outlook_win.py          # Windows COM (TODO)
-│   │   ├── foxmail_win.py          # Foxmail Win 完整读写 (含 draft 注入, TODO)
+│   │   ├── foxmail_win.py          # Foxmail Win 只读 (.box / .eml)
 │   │   └── foxmail_mac.py          # Foxmail Mac 只读 (draft 抛 NotSupportedError)
 │   │
 │   ├── box_parser.py               # Foxmail .box / .ind 解析器 (Win/Mac 共用)
@@ -302,14 +302,12 @@ mail.Save()  # 落到草稿箱; .Send() 不调!
 
 ### 4.3 Foxmail Windows (`foxmail_win.py`)
 
-**机制 (读)**: 解析 `~/AppData/Local/Tencent/Foxmail7/Storage/<email>/Mail/<folder>/*.box`
+**机制 (只读)**: 解析 `~/AppData/Local/Tencent/Foxmail7/Storage/<email>/Mail/<folder>/*.box` 或 `.eml`。
+路径优先使用 `CATFISH_FOXMAIL_ROOT`，否则探测 `%LOCALAPPDATA%` / `%APPDATA%` 下常见的 `Foxmail7/Storage`。
 
-**机制 (起草)**:
-1. 生成 RFC 5322 .eml 内容 (Python `email.message.EmailMessage`)
-2. 写到 `Storage/<email>/Mail/Drafts/`
-3. 触发 Foxmail rescan (改 `.lst` 或 `.ind` 索引文件 + 等用户重启或主动按 F5)
+**写操作**: 当前不支持。起草、发送、删除、移动、标记已读等操作统一返回 `NotSupportedError`，避免直接修改 Foxmail 索引或同步状态。
 
-**坑**: .box 二进制格式逆向; Foxmail 7 vs 8 vs 9 路径和格式不一致; rescan 触发不稳定 — **MVP 接受"员工 F5 / 重启 Foxmail 才看到草稿"** 的妥协, 文档里写明。
+**坑**: `.box` 二进制格式可能随 Foxmail 版本变化；无法解析的文件只读跳过并记录日志，不阻断其他账号和邮件读取。
 
 ### 4.4 Foxmail Mac (`foxmail_mac.py`)
 

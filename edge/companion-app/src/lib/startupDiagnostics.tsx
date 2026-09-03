@@ -73,7 +73,7 @@ function LogPathHint() {
     <div style={HINT}>
       完整日志在：
       <br />
-      Windows <code>%APPDATA%\com.catfish.companion\logs\</code>
+      Windows <code>%LOCALAPPDATA%\com.catfish.companion\logs\</code>
       <br />
       macOS <code>~/Library/Logs/com.catfish.companion/</code>
       <br />
@@ -147,7 +147,7 @@ function showOverlay(title: string, detail: string) {
   const [h, hint, pre] = Array.from(el.children) as HTMLElement[];
   h.textContent = title;
   hint.textContent =
-    "完整日志: Windows %APPDATA%\\com.catfish.companion\\logs\\ · " +
+    "完整日志: Windows %LOCALAPPDATA%\\com.catfish.companion\\logs\\ · " +
     "macOS ~/Library/Logs/com.catfish.companion/";
   pre.textContent = detail + oversizedReport();
   document.body.appendChild(el);

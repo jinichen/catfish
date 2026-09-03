@@ -29,9 +29,9 @@ CATFISH_BROWSER_PREFIX = "catfish_browser_"
 # 这个 cap 其实一直没触发过 —— 它是为 tool_search 之前那个「165 个全涌进来」
 # 的世界定的。P43 把 4 个 catfish 工具提升为核心后是 36, 留 4 个余量。
 # 上沿仍远离实测红线 (Qwen 122B 50+ 撞空 400), KV 代价约 +2K token。
-# 8/31: Reminders 读写都提升为核心后需要 41 个；写入口不可再被 cap 静默砍掉，
-# 否则模型会把会话规划误报成系统提醒创建成功。
-DEFAULT_MAX_TOOLS = 41
+# 8/31: Reminders 读写都提升为核心后需要 41 个；写入口不可再被 cap 静默砍掉。
+# 9/2: browser_evaluate 直达后需要 42 个，仍低于 Qwen 50+ tools 的实测风险线。
+DEFAULT_MAX_TOOLS = 42
 ENV_MAX_TOOLS = "CATFISH_MAX_TOOLS"
 
 
@@ -222,6 +222,7 @@ ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
     "catfish_browser_click",
     "catfish_browser_fill",
     "catfish_browser_find_by_text",
+    "catfish_browser_evaluate",
     "catfish_recognize_captcha",
     # 8/24: advisor 的 4 个业务工具跟着 P43 一起进来 —— 同样是两处必须一起改
     # (理由见上面 8/17 那段)。

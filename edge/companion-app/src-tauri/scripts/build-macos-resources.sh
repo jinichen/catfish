@@ -152,6 +152,12 @@ tar czhf "${TAR_DEST}" \
     --exclude="${HERMES_BASE}/logs" \
     --exclude="${HERMES_BASE}/*.log" \
     "${HERMES_BASE}"
+PATCHED_TAR="${TAR_DEST}.patched"
+python3 "${HERMES_FORK_DIR}/patch_hermes_bundle.py" \
+    --input "${TAR_DEST}" --output "${PATCHED_TAR}"
+mv "${PATCHED_TAR}" "${TAR_DEST}"
+python3 "${HERMES_FORK_DIR}/patch_hermes_bundle.py" \
+    --input "${TAR_DEST}" --check
 TAR_SIZE="$(du -h "${TAR_DEST}" | cut -f1)"
 echo "  ✓ hermes-agent → ${TAR_DEST} (${TAR_SIZE})"
 echo ""

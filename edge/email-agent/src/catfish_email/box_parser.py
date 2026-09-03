@@ -194,21 +194,25 @@ def parse_eml_directory(dir_path: Path) -> Iterable[ParsedMessage]:
     files = sorted(dir_path.glob("*.eml"))
     for f in files:
         try:
-            data = f.read_bytes()
-            msg = email.message_from_bytes(data, policy=email.policy.default)
+            parsed = parse_eml_file(f)
         except Exception as e:  # noqa: BLE001
             logger.warning("eml parser: %s 解析失败 (%s), 跳过", f.name, e)
             continue
+        yield parsed
 
-        if not isinstance(msg, EmailMessage):
-            continue
 
-        yield ParsedMessage(
-            raw_offset=0,
-            raw_length=len(data),
-            flags=0,
-            message=msg,
-        )
+def parse_eml_file(path: Path) -> ParsedMessage:
+    """解析单个 per-message `.eml` 文件。"""
+    data = path.read_bytes()
+    msg = email.message_from_bytes(data, policy=email.policy.default)
+    if not isinstance(msg, EmailMessage):
+        raise ValueError(f"{path.name} 不是 EmailMessage")
+    return ParsedMessage(
+        raw_offset=0,
+        raw_length=len(data),
+        flags=0,
+        message=msg,
+    )
 
 
 def detect_storage_mode(folder_dir: Path) -> str:

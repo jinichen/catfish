@@ -17,6 +17,7 @@ import {
   type EmailAccountItem,
   type EmailDigestItem,
 } from "../../lib/tauri";
+import { emailClientName, emailFailureHint } from "../../lib/emailPlatformHints";
 import { useUIStore } from "../../store/ui";
 
 const DISPLAY_LIMIT = 5;
@@ -75,7 +76,7 @@ export default function EmailDigestCard() {
   const handleOpenMail = async () => {
     try {
       const { open } = await import("@tauri-apps/plugin-shell");
-      // mailto:? 让 Mail.app 起 (没参数 = 开 inbox)
+      // mailto:? 交给系统默认邮件客户端处理 (没参数 = 打开客户端)
       await open("mailto:");
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -138,7 +139,7 @@ export default function EmailDigestCard() {
         </button>
       </header>
 
-      {/* 错误态 — 主要是 Mail.app 没开 / 没装 CLI / Automation 没权限 */}
+      {/* 错误态 — 根据操作系统给对应邮件客户端的排查指引 */}
       {error && (
         <div
           style={{
@@ -152,8 +153,7 @@ export default function EmailDigestCard() {
         >
           <div style={{ marginBottom: 4 }}>{error}</div>
           <div style={{ fontSize: 11, opacity: 0.7 }}>
-            常见: Mail.app 没开 → 先开 Mail.app · 第一次用 → 系统会问 catfish 是否能控制
-            Mail, 必须点允许 · 装 CLI: <code>cd ~/person_task/catfish/edge/email-agent && bash install.sh</code>
+            {emailFailureHint()}
           </div>
         </div>
       )}
@@ -256,7 +256,7 @@ export default function EmailDigestCard() {
             fontFamily: "inherit",
           }}
         >
-          📬 开 Mail.app
+          📬 开 {emailClientName()}
         </button>
       </div>
 

@@ -6,7 +6,7 @@
   - foxmail_mac.py    ✅ 实现 (SQLite + .mail 文件, 只读)
   - apple_mail.py     ⏳ scaffold (5/17 BL-EMAIL-APPLEMAIL, AppleScript-first)
   - outlook_win.py    ⏳ scaffold (W2 BL-EMAIL-OUTLOOK-WIN 7/11, pywin32 COM; 4 abstract done, 6 optional method 待 W3 集成)
-  - foxmail_win.py    ⏳ planned (.box parser)
+  - foxmail_win.py    ✅ read-only (.box / .eml parser)
 
 5/17 调整: macOS 端 outlook_mac.py → apple_mail.py
   Mail.app 100% 装机 / AS dictionary 完整 / 免 Microsoft 365.

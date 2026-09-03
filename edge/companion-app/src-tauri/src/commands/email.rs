@@ -30,6 +30,19 @@ use crate::services::phishing_scan::PhishingScanResult;
 /// 83 分钟 2470 万 token)。见 email_scheduler.rs 上那条测试。
 pub(crate) const EMAIL_LIST_MAX: u32 = 500;
 
+fn email_component_missing_error() -> String {
+    let log_dir = if cfg!(target_os = "windows") {
+        r"%LOCALAPPDATA%\com.catfish.companion\logs\"
+    } else if cfg!(target_os = "macos") {
+        "~/Library/Logs/com.catfish.companion/"
+    } else {
+        "应用日志目录"
+    };
+    format!(
+        "邮件组件未安装。请重启鲶鱼 Companion —— 启动时会自动补装；若重启后仍提示，请把 {log_dir} 里的日志发给 IT。"
+    )
+}
+
 /// Apple Mail 数据目录读不读得到 —— 用来提示"有账号但少了几个"。
 ///
 /// # 为什么要有这条
@@ -81,14 +94,10 @@ pub async fn email_mail_dir_status() -> Result<String, String> {
 /// 拉未读邮件简报. 返 raw JSON 字符串, 前端自己解析 (避开 Rust/TS 类型重复维护).
 ///
 /// limit 默认 10 — 简报卡只显前 5, 多取 5 是 buffer (前端再 slice).
-/// timeout 用 osascript subprocess 内置 30s, 不在 Tauri 层加.
+/// 客户端调用超时由各平台的邮件适配器处理, 不在 Tauri 层重复加一层固定超时.
 #[tauri::command]
 pub async fn email_digest_fetch(limit: Option<u32>) -> Result<String, String> {
-    let bin = catfish_paths::catfish_email_bin().ok_or_else(|| {
-        "邮件组件未安装。请重启鲶鱼 Companion —— 启动时会自动补装; \
-         若重启后仍提示, 请把 ~/Library/Logs/com.catfish.companion/ 里的日志发给 IT。"
-            .to_string()
-    })?;
+    let bin = catfish_paths::catfish_email_bin().ok_or_else(email_component_missing_error)?;
 
     let n = limit.unwrap_or(10).clamp(1, 100);
     let out = Command::new(&bin)
@@ -164,11 +173,7 @@ pub async fn email_list_fetch(
     limit: Option<u32>,
     folder: Option<String>,
 ) -> Result<String, String> {
-    let bin = catfish_paths::catfish_email_bin().ok_or_else(|| {
-        "邮件组件未安装。请重启鲶鱼 Companion —— 启动时会自动补装; \
-         若重启后仍提示, 请把 ~/Library/Logs/com.catfish.companion/ 里的日志发给 IT。"
-            .to_string()
-    })?;
+    let bin = catfish_paths::catfish_email_bin().ok_or_else(email_component_missing_error)?;
 
     let n = limit.unwrap_or(50).clamp(1, EMAIL_LIST_MAX);
     let mut args = vec!["list".to_string(), "--json".to_string()];

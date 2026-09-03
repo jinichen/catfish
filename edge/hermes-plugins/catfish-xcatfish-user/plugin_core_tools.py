@@ -157,7 +157,7 @@ _PROMOTE = (
     #             那里最不该多一次 tool_search 往返
     #
     # 没提升的留在 defer: catfish_browser_locate (1,022 tok, find_by_text 失败
-    # 后的视觉兜底, 本身是异常路径) / screenshot / evaluate / console。
+    # 后的视觉兜底, 本身是异常路径) / screenshot / console。
     #
     # token 账 (tiktoken 实测): -6,872 (hermes 12 个) + 3,961 (这 6 个)
     #                         = 净省 ~2,900 /轮
@@ -166,6 +166,10 @@ _PROMOTE = (
     "catfish_browser_click",
     "catfish_browser_fill",
     "catfish_browser_find_by_text",
+    # 9/2 实盘: evaluate 留在 bridge 后, 模型一边直接调用不可见工具、一边生成
+    # 多包一层的 tool_call 参数，累计出 9 组重复结果并最终撞 409。它是复杂页面
+    # DOM 读取/操作的高频兜底，直接可见比每次桥接更稳定。
+    "catfish_browser_evaluate",
     "catfish_recognize_captcha",
     # ── 8/24 补: advisor 的 4 个业务工具 ─────────────────────────────
     #

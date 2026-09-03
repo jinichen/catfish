@@ -1,4 +1,4 @@
-"""Bound accumulated client-side tool loops before another LLM call."""
+"""Bound the current user turn's client-side tool loop before another LLM call."""
 
 from __future__ import annotations
 
@@ -19,13 +19,30 @@ class ToolLoopStats:
 
 
 def count_tool_history(messages: Any) -> ToolLoopStats:
-    """Count tool results and assistant tool calls without inspecting content."""
+    """Count tool activity after the latest user message.
+
+    Hermes submits the whole conversation on every model call.  Counting the
+    whole transcript makes a session permanently unusable after one runaway
+    turn: the next user message still carries the old 65 tool results and is
+    rejected with the same 409 before the model can recover.  A tool loop is a
+    per-turn concept, so a new user message resets this gateway budget just as
+    Hermes' own per-turn guardrails do.
+
+    Histories without a user message (service callers and focused tests) keep
+    the old behaviour and are counted in full.
+    """
     if not isinstance(messages, list):
         return ToolLoopStats(tool_messages=0, tool_calls=0)
 
+    latest_user = -1
+    for index, message in enumerate(messages):
+        if isinstance(message, dict) and message.get("role") == "user":
+            latest_user = index
+    current_turn = messages[latest_user + 1:] if latest_user >= 0 else messages
+
     tool_messages = 0
     tool_calls = 0
-    for message in messages:
+    for message in current_turn:
         if not isinstance(message, dict):
             continue
         role = message.get("role")
@@ -64,8 +81,8 @@ def enforce_tool_loop_budget(body: dict[str, Any], config: ToolLoopConfig) -> To
             detail={
                 "error": "agent_loop_limit_exceeded",
                 "message": (
-                    "工具调用历史超过当前网关配置的安全上限，已停止继续调用模型。"
-                    "请拆小任务或清理失败的工具调用后重试。"
+                    "本轮工具调用超过当前网关配置的安全上限，已停止继续调用模型。"
+                    "请直接发送下一条消息继续；新一轮会重新计数。"
                 ),
                 "limits": {
                     "max_tool_messages": config.max_tool_messages,

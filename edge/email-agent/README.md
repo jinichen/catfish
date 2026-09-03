@@ -17,7 +17,7 @@
 | **macOS Apple Mail** (Mail.app) | ✅ | ✅ | ✅ | ✅ (草稿落 Drafts) | **MVP 可用** (5/18 BL-EMAIL-APPLEMAIL-IMPL) |
 | **macOS Foxmail 1.5+** | ✅ | ✅ | ✅ | ❌(红线 + 写入不可靠) | **可用** |
 | Windows Outlook | ✅ | ✅ | ✅ | ❌ | **只读可用** (W2 pywin32 COM). 起草 / 发送 / 删除 / 标已读 6 个可选 method 待 W3 在真 Windows 机器上补 |
-| Windows Foxmail | ⏳ | ⏳ | ⏳ | ⏳ | TODO (.box parser 已有, adapter 没接) |
+| Windows Foxmail | ✅ | ✅ | ✅ | ❌ | **只读可用**（读取本地 `.box` / `.eml`） |
 
 > **5/17-18 BL-EMAIL-APPLEMAIL**: macOS 端从 Outlook for Mac 改 Apple Mail.app.
 > 5/18 真 ship MVP — 5 方法走 AppleScript via osascript subprocess, 32 单测覆盖.
@@ -57,6 +57,16 @@ powershell -ExecutionPolicy Bypass -File edge\email-agent\install.ps1
 路径按平台不同 —— Windows 的 hermes 在 `%LOCALAPPDATA%\hermes` 而不是
 `~/.hermes`, 可执行文件在 `venv\Scripts\catfish-email.exe` 而不是 `venv/bin/`。
 `install.ps1` 头部注释逐条列了这四处差异。
+
+Windows Foxmail 不需要把账号再次“关联”到 Companion：适配器直接读取 Foxmail
+已经同步到本机的 Storage 数据。默认探测 `%LOCALAPPDATA%` 和 `%APPDATA%` 下的
+Foxmail7/Foxmail Storage；如果企业版使用了自定义目录，可设置
+`CATFISH_FOXMAIL_ROOT` 指向包含账号目录的 `Storage` 目录。首次启动会由
+Companion 自动安装 `catfish-email`，不需要员工手动执行 PowerShell。
+
+当前 Windows Foxmail 是只读能力：列账号、列收件箱、全文搜索、打开正文和读取
+附件元数据；起草、删除、发送仍明确提示去 Foxmail 操作，不直接修改 Foxmail
+本地数据库。
 
 > **install.ps1 还没在真 Windows 机器上跑过。** 其中 hermes 读 skills 的目录
 > 是按 `_phase1_win_install_hermes.ps1` 的 `$HermesHome` 约定推导的, 仓库里

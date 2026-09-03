@@ -34,6 +34,7 @@ import {
 } from "../../lib/tauri";
 import { filterAndRankEmails, type ActionFilter } from "../../lib/emailActionFilter";
 import { buildAskCatfishStarter } from "../../lib/emailHandoff";
+import { emailFailureHint } from "../../lib/emailPlatformHints";
 import ActionFilterChips from "./components/ActionFilterChips";
 import { useEmailStore } from "../../store/email";
 import { useUIStore } from "../../store/ui";
@@ -524,9 +525,7 @@ export default function EmailTab() {
                 (而且 catfish-email 长期就没被打包过, 见 hermes_install.rs
                  的 install_catfish_email。) 改成员工真能做的两件事。 */}
             <div style={{ marginTop: 6, fontSize: 11, opacity: 0.7 }}>
-              常见原因：Mail.app 没打开 · 系统没给「自动化」权限（系统设置 →
-              隐私与安全性 → 自动化，勾上鲶鱼下面的「邮件」）。
-              都正常还是不行，去仪表盘点「重新安装 Hermes」；仍然不行请找 IT。
+              {emailFailureHint()}
             </div>
           </div>
         )}

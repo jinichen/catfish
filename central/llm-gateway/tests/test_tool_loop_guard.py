@@ -63,3 +63,56 @@ def test_no_tool_history_is_unaffected():
 
     assert stats.tool_messages == 0
     assert stats.tool_calls == 0
+
+
+def test_previous_runaway_turn_does_not_poison_next_user_turn():
+    old_turn = []
+    for i in range(65):
+        old_turn.extend([
+            {"role": "assistant", "tool_calls": [{"id": f"old-{i}"}]},
+            {"role": "tool", "tool_call_id": f"old-{i}"},
+        ])
+
+    stats = enforce_tool_loop_budget(
+        {
+            "messages": [
+                {"role": "user", "content": "first"},
+                *old_turn,
+                {"role": "assistant", "content": "stopped"},
+                {"role": "user", "content": "continue with another approach"},
+            ]
+        },
+        ToolLoopConfig(max_tool_messages=64, max_tool_calls=64),
+    )
+
+    assert stats == count_tool_history([])
+
+
+def test_current_turn_still_enforces_limit_after_latest_user_message():
+    current_turn = []
+    for i in range(3):
+        current_turn.extend([
+            {"role": "assistant", "tool_calls": [{"id": f"new-{i}"}]},
+            {"role": "tool", "tool_call_id": f"new-{i}"},
+        ])
+
+    with pytest.raises(HTTPException) as exc:
+        enforce_tool_loop_budget(
+            {
+                "messages": [
+                    {"role": "user", "content": "old"},
+                    _assistant_calls(20),
+                    {"role": "tool"},
+                    {"role": "user", "content": "current"},
+                    *current_turn,
+                ]
+            },
+            ToolLoopConfig(max_tool_messages=2, max_tool_calls=2),
+        )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail["observed"] == {
+        "tool_messages": 3,
+        "tool_calls": 3,
+    }
+    assert "新一轮会重新计数" in exc.value.detail["message"]

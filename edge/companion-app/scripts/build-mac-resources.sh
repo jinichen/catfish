@@ -686,6 +686,10 @@ tar czhf "$HERMES_TAR" \
     "${BUNDLE_EXCLUDES[@]}" \
     -s "|hermes-agent-src-$ARCH|hermes-agent-src|" \
     "hermes-agent-src-$ARCH"
+_PATCHED_HERMES_TAR="${HERMES_TAR}.patched"
+python3 "$COMPANION/../hermes-fork/patch_hermes_bundle.py" --input "$HERMES_TAR" --output "$_PATCHED_HERMES_TAR"
+mv "$_PATCHED_HERMES_TAR" "$HERMES_TAR"
+python3 "$COMPANION/../hermes-fork/patch_hermes_bundle.py" --input "$HERMES_TAR" --check
 echo "  OK $HERMES_TAR ($(ls -lh "$HERMES_TAR" | awk '{print $5}'))"
 
 # ─── 打完就验 exclude 真的生效了 ────────────────────────────────

@@ -92,8 +92,13 @@ def test_adapter_discovery_actually_finds_adapters():
     classes = _all_adapter_classes()
     names = {c.__name__ for c in classes}
     assert len(classes) >= 3, f"只发现 {len(classes)} 个 adapter, 发现机制可能断了: {names}"
-    # 三个已知 adapter 必须在里面 —— 少任何一个都说明发现漏了
-    for expected in ("AppleMailAdapter", "FoxmailMacAdapter", "OutlookWinAdapter"):
+    # 已知 adapter 必须在里面 —— 少任何一个都说明发现漏了
+    for expected in (
+        "AppleMailAdapter",
+        "FoxmailMacAdapter",
+        "FoxmailWinAdapter",
+        "OutlookWinAdapter",
+    ):
         assert expected in names, f"{expected} 没被发现, 实际发现: {sorted(names)}"
 
 

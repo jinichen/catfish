@@ -301,6 +301,16 @@ if ($SkipChromium -and (Test-Path $chromiumOut) -and (Get-Item $chromiumOut).Len
     Write-Host "  OK chromium-embed.tar.gz: $([math]::Round((Get-Item $chromiumOut).Length/1MB,1)) MB" -ForegroundColor Green
 }
 
+# 这个文件是 Hermes 核心离线安装的必需资源。不能只检查文件存在：历史上
+# 0 字节 placeholder 也会被 Tauri 带进 MSI，结果员工首启才发现核心安装失败，
+# 并且连带跳过 catfish-email 自动补装。
+if (-not (Test-Path $chromiumOut) -or (Get-Item $chromiumOut).Length -le 50MB) {
+    throw "chromium-embed.tar.gz 无效或过小，禁止继续打 MSI: $chromiumOut"
+}
+tar.exe -tzf $chromiumOut *> $null
+if ($LASTEXITCODE -ne 0) { throw "chromium-embed.tar.gz 无法读取: $chromiumOut" }
+Write-Host "  OK Chromium archive integrity verified" -ForegroundColor Green
+
 # ─── Step 8 · Pack hermes-agent bundle ──────────────────────
 
 Write-Host "`n[Step 8/11] Pack hermes-agent bundle..." -ForegroundColor Yellow

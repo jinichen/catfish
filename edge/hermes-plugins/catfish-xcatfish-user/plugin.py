@@ -136,6 +136,8 @@ _verify_patch_targets = plugin_verify._verify_patch_targets  # noqa: F401
 plugin_approval = _import_sibling("plugin_approval")
 _patch_p14_approve_chinese_alias = plugin_approval._patch_p14_approve_chinese_alias  # noqa: F401
 _patch_p15_chat_completions_approval = plugin_approval._patch_p15_chat_completions_approval  # noqa: F401
+_patch_p15_3_unattended_companion_approval = plugin_approval._patch_p15_3_unattended_companion_approval  # noqa: F401
+_patch_p15_4_companion_manual_approval = plugin_approval._patch_p15_4_companion_manual_approval  # noqa: F401
 _patch_p15_2_chat_approval_route = plugin_approval._patch_p15_2_chat_approval_route  # noqa: F401
 
 plugin_cors = _import_sibling("plugin_cors")
@@ -363,6 +365,11 @@ def _apply_patches() -> None:
     _patch_p13_dump_naming_type_tag()
     _patch_p14_approve_chinese_alias()
     _patch_p15_chat_completions_approval()
+    _patch_p15_3_unattended_companion_approval()
+    _try_patch(
+        _patch_p15_4_companion_manual_approval,
+        "P15.4: Companion manual approval compatibility failed (skip): %s",
+    )
     _patch_p15_2_chat_approval_route()
     # P3.4.C 6/15 鸿波: hard replace session_search. 用 try/except 包住 — P16 挂也不
     #   阻塞 hermes 启动 (鸿波 6/15 21:35 撞 hermes 起不来 "Could not connect", 真因

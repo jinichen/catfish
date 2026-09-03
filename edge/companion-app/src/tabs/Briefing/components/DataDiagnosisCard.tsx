@@ -24,6 +24,7 @@
 // 文案直接推到 UI, 不在前端瞎写指引.
 
 import type { SourceStatus } from "../diagnosis_types";
+import { emailFailureHint } from "../../../lib/emailPlatformHints";
 
 export interface DataDiagnosisCardProps {
   statuses: {
@@ -72,15 +73,15 @@ export function DataDiagnosisCard({ statuses, onRetry }: DataDiagnosisCardProps)
         icon="📧"
         name="邮件"
         status={statuses.emails}
-        zeroHint="Mail.app 真没未读邮件 (可能你都看完了). 收新邮件后点刷新."
+        zeroHint="系统邮件客户端当前没有未读邮件 (可能你都看完了). 收新邮件后点刷新."
         failHints={[
           {
             keywords: ["没装", "没找到", "CLI"],
-            fix: "catfish-email CLI 没装. 装: cd ~/person_task/catfish/edge/email-agent && bash install.sh",
+            fix: emailFailureHint(),
           },
           {
-            keywords: ["没开", "Mail.app", "权限"],
-            fix: "Mail.app 没开 / 没给 catfish-email 自动化权限. 开 Mail.app + 系统设置 → 隐私 → 自动化 → 勾 Mail.",
+            keywords: ["没开", "Mail.app", "Outlook", "权限", "邮件组件"],
+            fix: emailFailureHint(),
           },
         ]}
       />

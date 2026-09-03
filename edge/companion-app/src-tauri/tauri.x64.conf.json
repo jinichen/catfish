@@ -2,6 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "bundle": {
     "resources": {
+      "swift/catfish-calendar": "./",
       "resources/mac-x64/install.sh": "./resources/mac/install.sh",
       "resources/mac-x64/uv": "./resources/mac/uv",
       "resources/mac-x64/cpython-3.11.15-embed.tar.gz": "./resources/mac/cpython-3.11.15-embed.tar.gz",

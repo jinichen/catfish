@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
+  LEGACY / NOT INCLUDED IN THE MSI.
+  Hermes installation now starts after the GUI launches, through the hidden
+  Windows bootstrap worker. Keep this file only as historical reference; do
+  not add it back to tauri.conf.json, because these CustomActions start
+  powershell.exe during the MSI transaction and cause black console windows.
+
   Catfish postinstall WiX fragment (W2 BL-CATFISH-WIN-MSI 7/11 → W2.5 refine 7/11).
 
   msi CustomAction: 装完 files 后自动跑 install.ps1 装 hermes 到
@@ -134,6 +140,16 @@
                   Value="[INSTALLDIR]resources\windows\catfish-wechat-reader-dist.tar.gz"
                   Execute="immediate"/>
 
+    <CustomAction Id="SetCatfishEmailInstallPath"
+                  Property="CatfishEmailInstallPath"
+                  Value="[INSTALLDIR]resources\windows\install-catfish-email.ps1"
+                  Execute="immediate"/>
+
+    <CustomAction Id="SetCatfishEmailDistPath"
+                  Property="CatfishEmailDistPath"
+                  Value="[INSTALLDIR]resources\windows\catfish-email-dist.tar.gz"
+                  Execute="immediate"/>
+
     <!--
       Step 2: deferred CA. 引用 4 个 property 的 [XXX] format 展开.
       每个 property 值双引号 wrap 处理空格路径.
@@ -168,6 +184,13 @@
                   Return="ignore"
                   ExeCommand='-NoProfile -ExecutionPolicy Bypass -File "[CatfishWechatReaderInstallPath]" -DistributionPath "[CatfishWechatReaderDistPath]"'/>
 
+    <CustomAction Id="CatfishInstallEmail"
+                  Property="POWERSHELLEXE"
+                  Execute="deferred"
+                  Impersonate="yes"
+                  Return="check"
+                  ExeCommand='-NoProfile -ExecutionPolicy Bypass -File "[CatfishEmailInstallPath]" -DistributionPath "[CatfishEmailDistPath]"'/>
+
     <!--
       Step 3: sequence. 4 SetProperty CA 排 After=CostFinalize
       (此时 [INSTALLDIR] 已 resolve), deferred CA 排 After=InstallFiles
@@ -185,8 +208,11 @@
       <Custom Action="SetCatfishChromiumTarPath"  After="SetCatfishPythonZipPath">NOT REMOVE</Custom>
       <Custom Action="SetCatfishWechatReaderInstallPath" After="SetCatfishChromiumTarPath">NOT REMOVE</Custom>
       <Custom Action="SetCatfishWechatReaderDistPath" After="SetCatfishWechatReaderInstallPath">NOT REMOVE</Custom>
+      <Custom Action="SetCatfishEmailInstallPath" After="SetCatfishWechatReaderDistPath">NOT REMOVE</Custom>
+      <Custom Action="SetCatfishEmailDistPath" After="SetCatfishEmailInstallPath">NOT REMOVE</Custom>
       <Custom Action="CatfishRunInstall"          After="InstallFiles">NOT REMOVE</Custom>
-      <Custom Action="CatfishInstallWechatReader" After="CatfishRunInstall">NOT REMOVE</Custom>
+      <Custom Action="CatfishInstallEmail"         After="CatfishRunInstall">NOT REMOVE</Custom>
+      <Custom Action="CatfishInstallWechatReader" After="CatfishInstallEmail">NOT REMOVE</Custom>
     </InstallExecuteSequence>
 
     <!--

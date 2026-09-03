@@ -144,8 +144,8 @@ def _get_adapter_explicit(client: str) -> EmailAdapter:
         from .adapters.outlook_win import OutlookWinAdapter
         return OutlookWinAdapter()
     if client == "foxmail-win":
-        # TODO: Foxmail Windows 7+ 的 .box / SQLite 路径还没探
-        raise NotImplementedError("foxmail-win adapter 还没实现")
+        from .adapters.foxmail_win import FoxmailWinAdapter
+        return FoxmailWinAdapter()
     raise ValueError(
         f"未知 client: {client!r} "
         f"(合法: apple-mail / foxmail-mac / outlook-win / foxmail-win)",

@@ -80,12 +80,14 @@ schema 错误, 没有任何线索指回"我调的那个其实被 defer 了"。�
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 
 logger = logging.getLogger("catfish.xcatfish_user.plugin")
 
 #: 原函数, 打补丁时存下来。用于幂等判断 + 包一层调用。
 _ORIG_REPAIR = None
 _ORIG_INVALID_CONTENT = None
+_ORIG_RESOLVE = None
 
 
 def _is_deferred_but_registered(agent, name: str) -> bool:
@@ -206,7 +208,66 @@ def _patch_p45_deferred_tool_error_hint() -> None:
     logger.info("P45 ✓ 被 defer 的工具报错改成指向 tool_call")
 
 
+def _normalize_bridge_args(args):  # noqa: ANN001, ANN202
+    """修正模型偶发生成的单层嵌套 ``tool_call`` 参数。
+
+    正确形态是 ``{name, arguments}``，但 9/2 的真实请求里出现过
+    ``{arguments: {name, arguments}}``。这里只做可证明的一层解包：没有顶层
+    name、下一层明确有 name 才修；不猜工具名、不递归，也不覆盖正确参数。
+    """
+    if not isinstance(args, Mapping):
+        return args
+    if str(args.get("name") or "").strip():
+        return args
+    nested = args.get("arguments")
+    if not isinstance(nested, Mapping):
+        return args
+    nested_name = str(nested.get("name") or "").strip()
+    if not nested_name:
+        return args
+
+    normalized = dict(args)
+    normalized["name"] = nested_name
+    normalized["arguments"] = nested.get("arguments", {})
+    return normalized
+
+
+def _patch_p48_tool_call_argument_shape() -> None:
+    """让 bridge 接受模型多包一层的参数，但继续由上游做全部校验。"""
+    global _ORIG_RESOLVE
+    try:
+        from tools import tool_search as ts  # noqa: PLC0415
+    except Exception as e:  # noqa: BLE001
+        logger.warning("P48 skip: import tools.tool_search 失败 (%s)", e)
+        return
+
+    orig = getattr(ts, "resolve_underlying_call", None)
+    if not callable(orig):
+        logger.warning(
+            "P48 skip: tools.tool_search.resolve_underlying_call 不存在或不可调用 "
+            "(实际 %s) —— hermes 可能改了结构, 不硬改",
+            type(orig).__name__,
+        )
+        return
+    if getattr(orig, "_catfish_p48", False):
+        logger.debug("P48: resolve_underlying_call 已打过补丁, noop")
+        return
+
+    _ORIG_RESOLVE = orig
+
+    def resolve_underlying_call(args):  # noqa: ANN001, ANN202
+        normalized = _normalize_bridge_args(args)
+        if normalized is not args:
+            logger.info("P48 修正一次单层嵌套的 tool_call 参数: name=%r", normalized["name"])
+        return orig(normalized)
+
+    resolve_underlying_call._catfish_p48 = True  # noqa: SLF001
+    ts.resolve_underlying_call = resolve_underlying_call
+    logger.info("P48 ✓ tool_call 单层嵌套参数会在上游校验前自动纠形")
+
+
 def install() -> None:
-    """两个补丁一起装。任一失败只 warn, 不阻塞 hermes 启动。"""
+    """兼容补丁一起装。任一失败只 warn, 不阻塞 hermes 启动。"""
     _patch_p45_no_fuzzy_repair_for_deferred()
     _patch_p45_deferred_tool_error_hint()
+    _patch_p48_tool_call_argument_shape()

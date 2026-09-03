@@ -22,6 +22,7 @@
 
 set -u
 HERMES_ROOT="${HERMES_ROOT:-$HOME/.hermes/hermes-agent}"
+CATFISH_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 
 echo "========================================"
 echo "hermes 兼容性 audit"
@@ -50,6 +51,20 @@ check_grep() {
     # `[ "0\n0" -ge 1 ]` → "integer expression expected". grep -c 总自己输出
     # 数字 (0 或更大) 到 stdout, 这层 fallback 只为 file 不存在 grep stderr.
     local hits=$(grep -cE "$pat" "$HERMES_ROOT/$f" 2>/dev/null)
+    hits=${hits:-0}
+    if [ "$hits" -ge "$min" ]; then
+        echo "  ✓ $desc ($hits 处): $f"
+        ((pass++))
+    else
+        echo "  ✗ $desc ($hits 处, 期望 $min+): $f → 模式 '$pat'"
+        ((fail++))
+    fi
+}
+
+check_repo_grep() {
+    local f="$1" pat="$2" desc="$3" min="${4:-1}"
+    local hits
+    hits=$(grep -cE "$pat" "$CATFISH_ROOT/$f" 2>/dev/null)
     hits=${hits:-0}
     if [ "$hits" -ge "$min" ]; then
         echo "  ✓ $desc ($hits 处): $f"
@@ -176,6 +191,34 @@ check_grep "tools/approval.py" "^def resolve_gateway_approval\b" "approval.resol
 # 内部数据结构, 漂了 register/notify 不工作.
 check_grep "tools/approval.py" "_gateway_notify_cbs\s*[:=]" "_gateway_notify_cbs dict (P15 桥)" 1
 check_grep "tools/approval.py" "_approval_session_key\s*[:=]" "_approval_session_key contextvar (P15)" 1
+echo ""
+
+echo "── 13.1 P15.3 unattended approval compatibility (Hermes 2026.8.31+) ──"
+# Hermes 2026.8.31 added an unattended api_server gate. Catfish must retain
+# the gate for ordinary API callers while allowing only a session with the
+# Companion SSE approval callback to enter the interactive pending path.
+# Older Hermes versions do not have this predicate, so this section is
+# informational rather than a hard failure.
+if grep -qE "_is_unattended_platform_approval_context" "$HERMES_ROOT/tools/approval.py" 2>/dev/null; then
+    check_grep "tools/approval.py" "def _is_unattended_platform_approval_context\b" "Hermes unattended approval predicate"
+    check_repo_grep "edge/hermes-plugins/catfish-xcatfish-user/plugin_approval.py" "def _patch_p15_3_unattended_companion_approval\b" "Catfish P15.3 compatibility hook"
+    check_repo_grep "edge/hermes-plugins/catfish-xcatfish-user/plugin_approval.py" "_gateway_notify_cbs" "P15.3 callback presence gate"
+else
+    echo "  · Hermes 没有 unattended approval predicate (旧版), P15.3 不需要"
+fi
+echo ""
+
+echo "── 13.2 P15.4 Companion manual approval mode ──"
+# Hermes 0.21 的 `approvals.smart: false` 仍可能由缺省 mode 解析成 smart。
+# Companion 有 SSE approval callback 时必须收窄为 manual，防止 Auxiliary LLM
+# 自动放行 execute_code；没有 callback 的后台会话不受影响。
+if grep -qE "^def _get_approval_mode\b" "$HERMES_ROOT/tools/approval.py" 2>/dev/null; then
+    check_grep "tools/approval.py" "^def _get_approval_mode\b" "Hermes approval mode resolver"
+    check_repo_grep "edge/hermes-plugins/catfish-xcatfish-user/plugin_approval.py" "def _patch_p15_4_companion_manual_approval\b" "Catfish P15.4 manual approval hook"
+    check_repo_grep "edge/hermes-plugins/catfish-xcatfish-user/plugin_approval.py" "_catfish_p15_4" "P15.4 idempotent marker"
+else
+    echo "  · Hermes 没有 approval mode resolver (旧版), P15.4 不需要"
+fi
 echo ""
 
 echo "── 14. P16 session_search_tool 存在 (catfish 主入口加速) ──"

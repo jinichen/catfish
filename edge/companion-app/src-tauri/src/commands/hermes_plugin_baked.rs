@@ -113,6 +113,8 @@ const BAKED_PLUGIN_SESSION: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_session.py");
 const BAKED_PLUGIN_VERIFY: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_verify.py");
+const BAKED_PRIVATE_AUXILIARY_GUARD: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/private_auxiliary_guard.py");
 
 /// Plugin 的全部文件 (filename, baked content).
 ///
@@ -149,4 +151,5 @@ pub(crate) const BAKED_FILES: &[(&str, &str)] = &[
     ("plugin_service_lean.py", BAKED_PLUGIN_SERVICE_LEAN),
     ("plugin_session.py", BAKED_PLUGIN_SESSION),
     ("plugin_verify.py", BAKED_PLUGIN_VERIFY),
+    ("private_auxiliary_guard.py", BAKED_PRIVATE_AUXILIARY_GUARD),
 ];

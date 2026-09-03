@@ -323,6 +323,30 @@ jobs:
           if (-not (Test-Path $archive)) { throw "reader resource was not generated: $archive" }
           Write-Host "✓ $archive"
 
+      - name: Build offline Chromium resource
+        shell: bash
+        run: |
+          set -euo pipefail
+          # npm ci 上一步设置了 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1；这里显式
+          # 下载一次，确保 Chromium 真正进入 MSI，而不是留下 0 字节占位文件。
+          export PLAYWRIGHT_BROWSERS_PATH="/tmp/catfish-windows-playwright"
+          rm -rf "$PLAYWRIGHT_BROWSERS_PATH"
+          mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
+          cd /tmp/hermes-agent-src
+          npx --no-install playwright install chromium
+          mapfile -t chromium_dirs < <(find "${PLAYWRIGHT_BROWSERS_PATH}" \
+              -maxdepth 1 -mindepth 1 -type d -name 'chromium*' -printf '%f\n' | sort)
+          if [ "${#chromium_dirs[@]}" -eq 0 ]; then
+              echo "没有找到 Playwright chromium 目录: ${PLAYWRIGHT_BROWSERS_PATH}" >&2
+              exit 1
+          fi
+          archive="${GITHUB_WORKSPACE}/edge/companion-app/src-tauri/resources/windows/chromium-embed.tar.gz"
+          rm -f "$archive"
+          tar czf "$archive" -C "$PLAYWRIGHT_BROWSERS_PATH" "${chromium_dirs[@]}"
+          [ "$(stat -c '%s' "$archive")" -gt 52428800 ]
+          tar tzf "$archive" >/dev/null
+          echo "✓ chromium-embed.tar.gz · $(du -h "$archive" | cut -f1)"
+
       - name: Build offline email and Hermes dependency resources
         shell: pwsh
         run: |

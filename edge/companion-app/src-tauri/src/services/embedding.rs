@@ -204,7 +204,9 @@ fn init_active_provider() -> Provider {
 ///
 /// `log::warn!("...失败: {e}")` 打的是 Display, 而 reqwest 的 Display 只有最外层:
 ///
-///     error sending request for url (http://127.0.0.1:8999/v1/embeddings)
+/// ```text
+/// error sending request for url (http://127.0.0.1:8999/v1/embeddings)
+/// ```
 ///
 /// 这一句**分不出来**是连不上、被代理劫了、还是超时 —— 而这三种的处置完全不同。
 /// 今晚就卡在这里: 我先按"被代理劫了"改了一版 (那个 asymmetry 确实是 bug),

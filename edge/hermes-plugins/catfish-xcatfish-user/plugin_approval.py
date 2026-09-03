@@ -359,6 +359,133 @@ def _patch_p15_chat_completions_approval() -> None:
     )
 
 
+# ── P15.3 ──────────────────────────────────────────────────────────────
+#
+# Hermes v2026.8.31 introduced a fail-closed unattended gate for api_server.
+# That is correct for ordinary programmatic requests, but Companion's
+# chat/completions path is different: P15 registers a per-session SSE callback
+# and P15.2 exposes the authenticated approval route that resolves the same
+# in-process approval queue.  When that callback exists, a human is present in
+# the Companion UI and the request must reach Hermes' normal pending-approval
+# path instead of being rejected before the button can be shown.
+#
+# Do not set approvals.unattended_mode=approve.  That would silently approve
+# every api_server execute_code request, including callers that have no UI.
+# This compatibility hook only changes the predicate for the current session
+# while its Companion callback is registered; all other unattended callers
+# remain fail-closed.
+
+def _patch_p15_3_unattended_companion_approval() -> None:
+    """Keep Companion's per-request approval loop working on new Hermes.
+
+    Older Hermes versions do not have the unattended predicate, so this is a
+    no-op there.  If the new predicate or its session state cannot be
+    inspected, the original fail-closed result is preserved.
+    """
+    try:
+        import tools.approval as approval
+    except ImportError as e:
+        logger.info("P15.3: Hermes unattended approval gate absent (%s), skip", e)
+        return
+
+    original = getattr(approval, "_is_unattended_platform_approval_context", None)
+    if not callable(original):
+        logger.info("P15.3: Hermes unattended approval gate absent, skip")
+        return
+    if getattr(original, "_catfish_p15_3", False):
+        return
+
+    get_session_key = getattr(approval, "get_current_session_key", None)
+    callbacks = getattr(approval, "_gateway_notify_cbs", None)
+
+    def _companion_callback_is_registered() -> bool:
+        """Return true only for the current session's live SSE callback."""
+        if not callable(get_session_key) or not hasattr(callbacks, "get"):
+            return False
+        try:
+            session_key = get_session_key()
+            return bool(session_key and callable(callbacks.get(session_key)))
+        except Exception:  # noqa: BLE001
+            # Compatibility code must never turn an inspection failure into
+            # an approval bypass.
+            logger.debug("P15.3: 无法检查 Companion approval callback", exc_info=True)
+            return False
+
+    def patched_unattended_context() -> bool:
+        if not original():
+            return False
+        if _companion_callback_is_registered():
+            logger.debug("P15.3: current Companion session uses interactive approval")
+            return False
+        return True
+
+    patched_unattended_context._catfish_p15_3 = True
+    patched_unattended_context._catfish_p15_3_original = original
+    approval._is_unattended_platform_approval_context = patched_unattended_context
+    logger.info(
+        "P15.3 Companion approval compatibility patched: "
+        "only sessions with a live SSE callback use interactive approval"
+    )
+
+
+# ── P15.4 ──────────────────────────────────────────────────────────────
+#
+# Hermes 的配置兼容性陷阱: `approvals.smart: false` 不是审批模式开关。
+# v0.21 的有效模式仍会从缺省值解析成 `smart`，于是 Companion 的
+# execute_code 先交给 Auxiliary LLM 判断，低风险脚本直接放行，员工看不到
+# 审批卡。P15.3 只解决 unattended gate，解决不了 smart auto-approve。
+#
+# Companion 有真实的 SSE 回调和审批 resolve endpoint，因此这个会话应当走
+# 人工确认；没有 UI 的 API / cron / webhook 会话继续使用 Hermes 原有配置。
+# 这样不把 `approvals.mode` 全局写死，也不会让后台调用意外等待人工。
+
+def _patch_p15_4_companion_manual_approval() -> None:
+    """Use manual approval for Companion sessions with a live approval UI."""
+    try:
+        import tools.approval as approval
+    except ImportError as e:
+        logger.info("P15.4: Hermes approval module absent (%s), skip", e)
+        return
+
+    original = getattr(approval, "_get_approval_mode", None)
+    if not callable(original):
+        logger.info("P15.4: Hermes approval mode resolver absent, skip")
+        return
+    if getattr(original, "_catfish_p15_4", False):
+        return
+
+    get_session_key = getattr(approval, "get_current_session_key", None)
+    callbacks = getattr(approval, "_gateway_notify_cbs", None)
+
+    def _companion_callback_is_registered() -> bool:
+        if not callable(get_session_key) or not hasattr(callbacks, "get"):
+            return False
+        try:
+            session_key = get_session_key()
+            return bool(session_key and callable(callbacks.get(session_key)))
+        except Exception:  # noqa: BLE001
+            logger.debug("P15.4: 无法检查 Companion approval callback", exc_info=True)
+            return False
+
+    def patched_approval_mode() -> str:
+        configured = original()
+        if _companion_callback_is_registered():
+            if configured != "manual":
+                logger.info(
+                    "P15.4: Companion session approval mode %r → manual",
+                    configured,
+                )
+            return "manual"
+        return configured
+
+    patched_approval_mode._catfish_p15_4 = True
+    patched_approval_mode._catfish_p15_4_original = original
+    approval._get_approval_mode = patched_approval_mode
+    logger.info(
+        "P15.4 Companion approval mode patched: live Companion sessions use manual"
+    )
+
+
 # ── P15.2 ──────────────────────────────────────────────────────────────
 #
 # P15.2 (6/6 鸿波 audit 真根因): 跨进程 dict 问题.

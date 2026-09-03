@@ -359,7 +359,7 @@ if [[ ! -d "$APP_PATH" ]]; then
   exit 1
 fi
 
-# 8/5: 遍历**整个** Contents/Resources, 不是只 resources/mac。
+# 8/5: 直接遍历 Contents/Resources 里的 Mach-O。
 #
 # Apple 公证驳回 (submission 8c3f698a) 的唯一硬错误就是这个:
 #   Contents/Resources/catfish-calendar —— The binary is not signed.
@@ -369,9 +369,9 @@ fi
 # 于是从来没被签过 —— 而且构建、签 App、做 dmg、spctl 全部一路绿, 直到提交给
 # Apple 才炸。又是一个"本地全过、外部才发现"。
 #
-# 改成遍历整个 Resources: sign_macho_files 里用 `file | grep Mach-O` 过滤,
-# 非 Mach-O (Windows 的 exe / tar.gz / 文本) 自然跳过, 不会误签。
-# 好处是以后再往 Resources 里加二进制不用记得改这里。
+# 非 Mach-O (例如 mac 资源里的文本和归档) 自然跳过。
+# Windows 资源由 tauri.windows.conf.json 只在 Windows 构建时加入，不能依赖
+# 这里的 Mach-O 过滤来掩盖跨平台资源混包。
 MAC_RESOURCES="$APP_PATH/Contents/Resources"
 
 echo "=== 签名 App 内直接二进制 ==="
@@ -387,30 +387,18 @@ verify_tree "$MAC_RESOURCES"
 # 悄无声息地走完 —— 日志里"=== 签名归档内运行时 ==="下面一行都没有, 谁也没看出来。
 # 又是一次"检查写了, 但恒假", 跟 catfish-calendar 漏签是同一个病。
 #
-# 改成扫出 Resources 下**所有** .tar.gz。好处跟上面签二进制一样: 以后再加归档
-# (node-embed、catfish-email-dist、hermes-deps-dist 本来就不在那三条里) 不用记得
-# 回来改这里。非 Mach-O 内容由 sign_macho_files 的 `file | grep Mach-O` 自然过滤。
-#
-# resources/windows/ 下有些文件是给 Windows 构建占位的空归档或文本标记
-# (真件由 Windows CI / 本地 Windows 构建生成)。macOS 出包不应尝试解压它们，
-# 否则 `tar xzf` 会把一个名为 .tar.gz 的占位文本当归档，报 mtree 错误。
-is_placeholder_archive() {
-  local archive="$1"
-  cmp -s "$archive" <(printf '%s\n' 'CATFISH-WINDOWS-RESOURCE-PLACEHOLDER')
+# 只扫描 resources/mac。Windows 归档属于另一条构建产线，不能在 macOS 签名时
+# 解压，也不能把占位文件是否可识别交给签名脚本猜。
+MAC_RUNTIME_RESOURCES="$MAC_RESOURCES/resources/mac"
+[ -d "$MAC_RUNTIME_RESOURCES" ] || {
+  echo "✗ 找不到 macOS runtime 资源目录: $MAC_RUNTIME_RESOURCES" >&2
+  exit 1
 }
 
 echo "=== 签名归档内运行时 ==="
 while IFS= read -r -d '' archive; do
-  if [[ ! -s "$archive" ]]; then
-    echo "→ 跳过空归档 (占位文件) · $archive"
-    continue
-  fi
-  if is_placeholder_archive "$archive"; then
-    echo "→ 跳过 Windows 占位归档 · $archive"
-    continue
-  fi
   sign_archive "$archive"
-done < <(find "$MAC_RESOURCES" -type f -name '*.tar.gz' -print0)
+done < <(find "$MAC_RUNTIME_RESOURCES" -type f -name '*.tar.gz' -print0)
 
 echo "=== 签名 App ==="
 codesign --deep --force --options runtime --timestamp \

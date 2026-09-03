@@ -1,24 +1,16 @@
 # Windows msi resources (W1 BL-CATFISH-OFFLINE-INSTALL 7/11).
 #
-# 4 个真实 artifact 由 build-windows-resources.sh 在 build 前打包生成,
-# 大小 ~300-400MB, 不进 git.
-#
-# 但**空 placeholder** (git 里 track, size=0 或 stub 内容) 必须留, 因为
-# tauri.conf.json bundle.resources 跨平台 validate source 存在 (config.rs:1633
-# top-level, WindowsConfig 无 resources 字段). macOS/Linux build 也走 validate,
-# 挂在 uv.exe 不存在 → 无法 build macOS .app.
+# Windows artifact 由 Windows 本地脚本或 Windows CI 在构建前生成，不进 git。
+# Windows 资源现在只由 tauri.windows.conf.json 在 Windows 构建时加载，
+# macOS/Linux 不再需要用空 placeholder 满足跨平台配置校验。
 #
 # Windows build 流程:
 #   1. bash src-tauri/scripts/build-windows-resources.sh
-#      → 覆盖 4 个 placeholder 成真 300-400MB artifact
+#      → 生成真实 Windows artifact
 #   2. npx tauri build --target x86_64-pc-windows-msvc --bundles msi
 #      → 出 msi (~350MB)
-#   3. git checkout resources/windows/*.{exe,ps1,zip,gz}
-#      → 恢复空 placeholder, working tree clean
+#   3. 构建产物不提交，构建后清理 resources/windows/ 即可
 #
-# macOS build 流程 (今天):
-#   直接 npx tauri build, 打进 dmg 的是 4 个 <1KB 空文件, 无实际影响.
-
 *.log
 # W2.8 (7/13) 修 encoding 根治: _phase1_win_* kit (3 files, ~20KB 总) 进 git,
 # 让员工 Windows 侧走 Invoke-WebRequest 拉 GitHub raw 覆盖本地 (从此稳定).
@@ -28,5 +20,14 @@ hermes-agent-src/
 hermes-agent/
 
 # 微信读取器真实 tar 由 Windows 构建阶段生成，不提交二进制产物
-# 真实 tar 在 Windows 构建阶段覆盖这个可追踪占位文件；占位文件本身必须进 git，
-# 否则 Linux/macOS 的 Tauri 配置校验会在干净 checkout 上因资源缺失而无法编译。
+# 真实 tar 在 Windows 构建阶段生成；不把 Windows 空文件带入 macOS 包。
+
+# 构建生成的 Windows 运行时资源不进 Git。
+/install.ps1
+/uv.exe
+/cpython-3.11.15-embed.zip
+/hermes-agent-bundle.tar.gz
+/chromium-embed.tar.gz
+/catfish-email-dist.tar.gz
+/hermes-deps-dist.tar.gz
+/catfish-wechat-reader-dist.tar.gz
