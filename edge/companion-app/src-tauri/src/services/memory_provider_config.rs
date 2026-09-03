@@ -64,11 +64,121 @@ fn has_memory_section(raw: &str) -> bool {
         .any(|l| l == "memory:" || l.starts_with("memory:"))
 }
 
+/// 判断顶层 memory provider 是否确实是 catfish-memory。
+fn has_catfish_memory_provider(raw: &str) -> bool {
+    let mut in_memory = false;
+    for line in raw.lines() {
+        if line == "memory:" || line.starts_with("memory:") {
+            in_memory = true;
+            continue;
+        }
+        if in_memory && !line.starts_with(' ') && !line.starts_with('#') && !line.is_empty() {
+            in_memory = false;
+        }
+        if in_memory && line.trim() == "provider: catfish-memory" {
+            return true;
+        }
+    }
+    false
+}
+
+/// 判断 plugins.entries.catfish-memory 是否允许覆盖 builtin memory 工具。
+fn has_catfish_memory_override(raw: &str) -> bool {
+    raw.contains("    catfish-memory:\n      allow_tool_override: true")
+}
+
+/// 在不重写 YAML 的前提下，补上 catfish-memory 的工具覆盖权限。
+fn ensure_catfish_memory_override(raw: &str) -> String {
+    if has_catfish_memory_override(raw) {
+        return raw.to_owned();
+    }
+
+    let mut lines: Vec<String> = raw.lines().map(str::to_owned).collect();
+    let plugin_idx = lines
+        .iter()
+        .position(|line| line == "plugins:" || line.starts_with("plugins:"));
+    let Some(plugin_idx) = plugin_idx else {
+        if !lines.is_empty() && lines.last().is_some_and(|line| !line.is_empty()) {
+            lines.push(String::new());
+        }
+        lines.extend([
+            "plugins:".to_owned(),
+            "  entries:".to_owned(),
+            "    catfish-memory:".to_owned(),
+            "      allow_tool_override: true".to_owned(),
+        ]);
+        return lines.join("\n") + "\n";
+    };
+
+    if let Some(entries_idx) = lines
+        .iter()
+        .enumerate()
+        .skip(plugin_idx + 1)
+        .find_map(|(idx, line)| (line == "  entries:").then_some(idx))
+    {
+        if let Some(catfish_idx) = lines
+            .iter()
+            .enumerate()
+            .skip(entries_idx + 1)
+            .find_map(|(idx, line)| (line == "    catfish-memory:").then_some(idx))
+        {
+            let block_end = lines
+                .iter()
+                .enumerate()
+                .skip(catfish_idx + 1)
+                .find_map(|(idx, line)| {
+                    (!line.is_empty() && line.starts_with("    ") && !line.starts_with("      "))
+                        .then_some(idx)
+                })
+                .unwrap_or(lines.len());
+            if let Some(allow_idx) = lines[catfish_idx + 1..block_end]
+                .iter()
+                .position(|line| line.trim_start().starts_with("allow_tool_override:"))
+            {
+                lines[catfish_idx + 1 + allow_idx] =
+                    "      allow_tool_override: true".to_owned();
+            } else {
+                lines.insert(
+                    catfish_idx + 1,
+                    "      allow_tool_override: true".to_owned(),
+                );
+            }
+            return lines.join("\n") + "\n";
+        }
+        lines.splice(
+            entries_idx + 1..entries_idx + 1,
+            [
+                "    catfish-memory:".to_owned(),
+                "      allow_tool_override: true".to_owned(),
+            ],
+        );
+        return lines.join("\n") + "\n";
+    }
+
+    let section_end = lines
+        .iter()
+        .enumerate()
+        .skip(plugin_idx + 1)
+        .find_map(|(idx, line)| {
+            (!line.is_empty() && !line.starts_with(' ') && !line.starts_with('#')).then_some(idx)
+        })
+        .unwrap_or(lines.len());
+    lines.splice(
+        section_end..section_end,
+        [
+            "  entries:".to_owned(),
+            "    catfish-memory:".to_owned(),
+            "      allow_tool_override: true".to_owned(),
+        ],
+    );
+    lines.join("\n") + "\n"
+}
+
 /// 确保 `memory.provider` 存在。
 ///
 /// - `Ok(true)`  这次写入了
-/// - `Ok(false)` 已有 `memory:` 段 —— **不动**。员工可能自己配了 mem0 / honcho
-///   之类, 尊重他的选择, 跟 curator_config 同一个原则。
+/// - 其他 provider 已存在时不动；catfish-memory 已存在时只补它自己的工具权限。
+///   员工可能自己配了 mem0 / honcho 之类, 继续尊重他的选择。
 pub fn ensure_at(path: &Path) -> Result<bool> {
     let raw = if path.exists() {
         fs::read_to_string(path).with_context(|| format!("读 {} 失败", path.display()))?
@@ -77,15 +187,26 @@ pub fn ensure_at(path: &Path) -> Result<bool> {
         return Ok(false);
     };
 
-    if has_memory_section(&raw) {
+    let mut out = if has_memory_section(&raw) {
+        if !has_catfish_memory_provider(&raw) {
+            return Ok(false);
+        }
+        raw.clone()
+    } else {
+        let mut appended = raw.clone();
+        if !appended.is_empty() && !appended.ends_with('\n') {
+            appended.push('\n');
+        }
+        appended.push_str(&format!("\nmemory:\n  provider: {PROVIDER}\n"));
+        appended
+    };
+
+    if !has_catfish_memory_override(&out) {
+        out = ensure_catfish_memory_override(&out);
+    }
+    if out == raw {
         return Ok(false);
     }
-
-    let mut out = raw;
-    if !out.is_empty() && !out.ends_with('\n') {
-        out.push('\n');
-    }
-    out.push_str(&format!("\nmemory:\n  provider: {PROVIDER}\n"));
 
     // 原子写 —— config.yaml 里有 JWT 和 mcp_servers 配置, 半截写挂会让 hermes
     // 整个起不来。tmp + rename 保证要么全新要么全旧。
@@ -173,6 +294,42 @@ mod tests {
         let p = write(&d, "plugins:\n  enabled: []"); // 无末尾换行
         assert!(ensure_at(&p).unwrap());
         let out = fs::read_to_string(&p).unwrap();
-        assert!(out.contains("enabled: []\n\nmemory:\n"), "换行没补上: {out:?}");
+        assert!(out.contains("enabled: []\n\n  entries:\n"), "换行没补上: {out:?}");
+        assert!(out.contains("memory:\n  provider: catfish-memory"));
+    }
+
+    #[test]
+    fn adds_override_permission_for_catfish_provider() {
+        let d = TempDir::new().unwrap();
+        let p = write(
+            &d,
+            "plugins:\n  enabled:\n  - catfish-xcatfish-user\n  entries:\n    catfish-xcatfish-user:\n      allow_tool_override: true\n\nmemory:\n  provider: catfish-memory\n",
+        );
+        assert!(ensure_at(&p).unwrap());
+        let out = fs::read_to_string(&p).unwrap();
+        assert!(out.contains("    catfish-memory:\n      allow_tool_override: true"));
+        assert!(!ensure_at(&p).unwrap());
+    }
+
+    #[test]
+    fn repairs_existing_disabled_catfish_override() {
+        let d = TempDir::new().unwrap();
+        let p = write(
+            &d,
+            "plugins:\n  entries:\n    catfish-memory:\n      allow_tool_override: false\n\nmemory:\n  provider: catfish-memory\n",
+        );
+        assert!(ensure_at(&p).unwrap());
+        let out = fs::read_to_string(&p).unwrap();
+        assert!(out.contains("allow_tool_override: true"));
+        assert!(!out.contains("allow_tool_override: false"));
+    }
+
+    #[test]
+    fn does_not_add_catfish_override_for_other_provider() {
+        let d = TempDir::new().unwrap();
+        let p = write(&d, "plugins:\n  enabled: []\n\nmemory:\n  provider: mem0\n");
+        assert!(!ensure_at(&p).unwrap());
+        let out = fs::read_to_string(&p).unwrap();
+        assert!(!out.contains("catfish-memory"));
     }
 }

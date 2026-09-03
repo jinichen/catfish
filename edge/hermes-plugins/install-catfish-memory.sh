@@ -218,6 +218,23 @@ old = mem.get("provider")
 mem["provider"] = "catfish-memory"
 data["memory"] = mem
 
+# catfish-memory 也注册一个名为 memory 的工具来替换 Hermes builtin。
+# 只设置 memory.provider 不会授予工具覆盖权限，Hermes 会每次启动打印
+# "cannot override built-in tool 'memory'"，并退回 builtin memory。
+plugins = data.get("plugins") or {}
+if not isinstance(plugins, dict):
+    plugins = {}
+entries = plugins.get("entries") or {}
+if not isinstance(entries, dict):
+    entries = {}
+memory_plugin = entries.get("catfish-memory") or {}
+if not isinstance(memory_plugin, dict):
+    memory_plugin = {}
+memory_plugin["allow_tool_override"] = True
+entries["catfish-memory"] = memory_plugin
+plugins["entries"] = entries
+data["plugins"] = plugins
+
 cfg.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
 if old and old != "catfish-memory":

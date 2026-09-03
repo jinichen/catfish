@@ -708,3 +708,69 @@ summarize:
     assert provider._get_summarize_model() == "catfish-private-vision"
     assert provider._get_n_turns_threshold() == 8
     assert provider._get_min_interval_seconds() == 3600
+
+
+def test_background_worker_reloads_picker_after_trigger(
+    provider, env_enable, mock_llm, fake_home, monkeypatch,
+):
+    """后台任务不能沿用触发时的旧 picker model。"""
+    picker_state = fake_home / "picker_state.json"
+    picker_state.write_text(
+        '{"chat_model": "catfish-public-qwen-flash"}',
+        encoding="utf-8",
+    )
+
+    scheduled = {}
+
+    class _DeferredThread:
+        def __init__(self, target=None, **kwargs):
+            scheduled["target"] = target
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(catfish_memory_distill.threading, "Thread", _DeferredThread)
+
+    for i in range(5):
+        provider.sync_turn(f"user msg {i}", f"assistant {i}", session_id="s1")
+
+    picker_state.write_text(
+        '{"chat_model": "catfish-private-vision"}',
+        encoding="utf-8",
+    )
+    scheduled["target"]()
+
+    assert mock_llm["summarize"][0]["model"] == "catfish-private-vision"
+
+
+def test_background_worker_keeps_data_when_picker_disappears(
+    provider, env_enable, mock_llm, fake_home, monkeypatch,
+):
+    """picker 在排队期间被清空时，保留原文且不偷偷调用旧模型。"""
+    picker_state = fake_home / "picker_state.json"
+    picker_state.write_text(
+        '{"chat_model": "catfish-public-qwen-flash"}',
+        encoding="utf-8",
+    )
+
+    scheduled = {}
+
+    class _DeferredThread:
+        def __init__(self, target=None, **kwargs):
+            scheduled["target"] = target
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(catfish_memory_distill.threading, "Thread", _DeferredThread)
+
+    for i in range(5):
+        provider.sync_turn(f"user msg {i}", f"assistant {i}", session_id="s1")
+
+    picker_state.unlink()
+    monkeypatch.delenv("CATFISH_PLUGIN_SUMMARIZE_MODEL")
+    scheduled["target"]()
+
+    assert mock_llm["summarize"] == []
+    journal = (fake_home / "employee_journal.md").read_text(encoding="utf-8")
+    assert "user msg 4" in journal

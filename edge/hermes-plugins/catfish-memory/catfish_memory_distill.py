@@ -188,7 +188,7 @@ class _DistillMixin:
         self,
         session_id: str,
         message_pairs: List[Tuple[str, str]],
-        model: str,
+        trigger_model: str,
         catfish_home: Path,
     ) -> None:
         """后台 thread 主体: 总结 → 写 journal → 看条件蒸馏 → 写 distilled.
@@ -197,6 +197,21 @@ class _DistillMixin:
         """
         try:
             # 1. 总结
+            model = self._resolve_background_model(
+                session_id, trigger_model, "summarize",
+            )
+            if not model:
+                summary = self._build_raw_journal_fallback(message_pairs)
+                _append_journal(
+                    catfish_home,
+                    _format_journal_entry(session_id, summary),
+                )
+                logger.warning(
+                    "catfish-memory bg session=%s: 当前 picker 无模型 → "
+                    "写入 raw fallback, 不调用 LLM",
+                    session_id,
+                )
+                return
             summary = await _call_summarize_llm(message_pairs, model)
             if not summary:
                 # BL-CATFISH-MEMORY-SUMMARIZE-UPSTREAM-502 (6/4 凌晨):
@@ -247,6 +262,11 @@ class _DistillMixin:
 
             # 3a. legacy single-step distill (cooldown 满才跑, queries 触发不重复跑)
             if cooldown_passed and journal_text:
+                model = self._resolve_background_model(
+                    session_id, trigger_model, "distill",
+                )
+                if not model:
+                    return
                 distilled = await _call_distill_llm(journal_text, model)
                 if distilled:
                     _write_distilled(catfish_home, distilled)
@@ -293,6 +313,11 @@ class _DistillMixin:
                                 "%d files merged into Analysis input",
                                 session_id, len(pending_sources),
                             )
+                    model = self._resolve_background_model(
+                        session_id, trigger_model, "wiki-analysis",
+                    )
+                    if not model:
+                        return
                     analysis = await _call_analysis_llm(combined_input, model)
                     if not analysis:
                         logger.info(
@@ -300,6 +325,11 @@ class _DistillMixin:
                             session_id,
                         )
                     else:
+                        model = self._resolve_background_model(
+                            session_id, trigger_model, "wiki-generation",
+                        )
+                        if not model:
+                            return
                         generation = await _call_generation_llm(analysis, model, catfish_home)
                         if not generation:
                             logger.info(
@@ -314,6 +344,11 @@ class _DistillMixin:
                             llm_merged_paths: set = set()
                             if files:
                                 try:
+                                    model = self._resolve_background_model(
+                                        session_id, trigger_model, "wiki-merge",
+                                    )
+                                    if not model:
+                                        return
                                     merged_files, llm_merged_paths, n_llm_fail = await merge_files_with_llm(
                                         catfish_home, files, model,
                                     )
@@ -378,6 +413,32 @@ class _DistillMixin:
             logger.warning(
                 "catfish-memory bg session=%s 异常 (静默): %s", session_id, e,
             )
+
+    def _resolve_background_model(
+        self,
+        session_id: str,
+        trigger_model: str,
+        stage: str,
+    ) -> str:
+        """在后台每个发送阶段重新读取当前 picker，拒绝沿用旧会话模型。
+
+        ``sync_turn`` 是 fire-and-forget：worker 可能在 picker 切换后很久才真正
+        发请求。trigger_model 仅用于诊断，绝不能作为请求模型。
+        """
+        current_model = self._get_summarize_model().strip()
+        if not current_model:
+            logger.warning(
+                "catfish-memory bg session=%s stage=%s skip: 当前 picker 未解析出模型",
+                session_id, stage,
+            )
+            return ""
+        if trigger_model.strip() != current_model:
+            logger.info(
+                "catfish-memory bg model refreshed: source=plugin:memory-distill "
+                "session=%s stage=%s trigger_model=%s effective_model=%s",
+                session_id, stage, trigger_model.strip() or "<empty>", current_model,
+            )
+        return current_model
 
     def _sync_turn_impl(
         self,
@@ -641,16 +702,18 @@ class _DistillMixin:
     def _spawn_summarize_thread(
         self,
         pairs: List[Tuple[str, str]],
-        model: str,
+        trigger_model: str,
     ) -> None:
-        """spawn 后台 daemon thread 跑 async LLM summary + 写文件. fire-and-forget."""
+        """spawn worker；模型只作诊断，真正发送前必须重新解析 picker。"""
         if not pairs:
             return
         sid = self._session_id
         catfish_home = self._catfish_home_cached or _catfish_home()
         thread = threading.Thread(
             target=lambda: asyncio.run(
-                self._summarize_and_distill_async(sid, pairs, model, catfish_home)
+                self._summarize_and_distill_async(
+                    sid, pairs, trigger_model, catfish_home,
+                )
             ),
             name=f"catfish-memory-summarize-{sid[:8]}" if sid else "catfish-memory-summarize",
             daemon=True,
@@ -727,4 +790,3 @@ class _DistillMixin:
             return yaml_val
         # env 兜底: =0 关掉, 否则启用 (默认 enabled)
         return os.environ.get("CATFISH_PLUGIN_SUMMARIZE", "1") != "0"
-
