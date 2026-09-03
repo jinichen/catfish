@@ -328,7 +328,10 @@ jobs:
               echo "没有找到 Playwright chromium 目录: ${PLAYWRIGHT_BROWSERS_PATH}" >&2
               exit 1
           fi
-          archive="${GITHUB_WORKSPACE}/edge/companion-app/src-tauri/resources/windows/chromium-embed.tar.gz"
+          # Git Bash 下 GITHUB_WORKSPACE 仍可能是 D:\\a\\...；直接传给
+          # tar 会把 `D:` 误判成远程主机名。先转换成 POSIX 路径。
+          workspace_dir="$(cygpath -u "${GITHUB_WORKSPACE}")"
+          archive="${workspace_dir}/edge/companion-app/src-tauri/resources/windows/chromium-embed.tar.gz"
           rm -f "$archive"
           tar czf "$archive" -C "$PLAYWRIGHT_BROWSERS_PATH" "${chromium_dirs[@]}"
           [ "$(stat -c '%s' "$archive")" -gt 52428800 ]
