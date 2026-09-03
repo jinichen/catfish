@@ -61,18 +61,6 @@ jobs:
         working-directory: edge/companion-app
         run: npm run build
 
-      # 先按最终 MSI 相同的 Windows Release 条件编译。这样缺模块、平台 cfg
-      # 漂移和本仓 Rust warning 会在下载/重打几百 MB 离线资源之前直接失败；
-      # 后面的 Tauri build 会复用这里的 release 产物，不是重复做一套检查。
-      - name: Preflight Windows release compile (warnings are errors)
-        working-directory: edge/companion-app/src-tauri
-        run: >-
-          cargo build --release --target x86_64-pc-windows-msvc
-          --features tauri/custom-protocol
-        env:
-          CFLAGS_x86_64_pc_windows_msvc: "/MD"
-          CXXFLAGS_x86_64_pc_windows_msvc: "/MD"
-
       # ─── Windows resources: install.ps1 patched + uv.exe + cpython zip + hermes tar ───
 
       - name: Clone hermes-agent 上游 pinned to .hermes-git-tag
@@ -515,6 +503,18 @@ jobs:
           [ "$leak" = "0" ] || exit 1
           echo "✓ exclude 生效 + node_modules 已进包 ($NM 条) · 归档共 $(wc -l < "$HLIST" | tr -d ' ') 条"
           ls -lh edge/companion-app/src-tauri/resources/windows/
+
+      # 必须放在所有 Tauri resources 生成之后：tauri.conf.json 会在 build
+      # script 阶段校验每个 resources 路径。此前预编译放在资源生成之前，
+      # cpython/chromium 等文件尚不存在，导致预编译失败并把后续资源步骤全部跳过。
+      - name: Preflight Windows release compile (warnings are errors)
+        working-directory: edge/companion-app/src-tauri
+        run: >-
+          cargo build --release --target x86_64-pc-windows-msvc
+          --features tauri/custom-protocol
+        env:
+          CFLAGS_x86_64_pc_windows_msvc: "/MD"
+          CXXFLAGS_x86_64_pc_windows_msvc: "/MD"
 
       # ─── Tauri msi build (Windows MSVC, no cross-compile) ───
 
