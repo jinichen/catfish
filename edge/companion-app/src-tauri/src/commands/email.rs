@@ -14,10 +14,11 @@
 //!     都返 Err(String), 前端显错误不挂卡
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::services::catfish_paths;
+use crate::services::email_config;
 use crate::services::email_scheduler;
 use crate::services::phishing_scan::PhishingScanResult;
 
@@ -30,9 +31,31 @@ use crate::services::phishing_scan::PhishingScanResult;
 /// 83 分钟 2470 万 token)。见 email_scheduler.rs 上那条测试。
 pub(crate) const EMAIL_LIST_MAX: u32 = 500;
 
+/// 创建邮件 CLI 子进程，并传递桌面端无法继承的邮件配置。
+///
+/// macOS/Windows 的 GUI 启动通常没有 shell 环境。Foxmail 自定义目录因此
+/// 不能只依赖 PowerShell 中临时设置的环境变量，必须从 Companion 配置传给
+/// 每一次 CLI 调用。配置了根目录时同时明确选 Foxmail，避免 Outlook COM
+/// 探测失败污染 Foxmail 结果。
+fn email_command(bin: &Path) -> Command {
+    let mut command = Command::new(bin);
+    if cfg!(target_os = "windows") {
+        if let Some(root) = email_config::email_config().foxmail_root.as_deref() {
+            command
+                .env("CATFISH_FOXMAIL_ROOT", root)
+                .env("CATFISH_EMAIL_CLIENT", "foxmail-win");
+        } else if std::env::var_os("CATFISH_FOXMAIL_ROOT").is_some() {
+            // 直接从 shell 启动 Companion 的临时 override 仍然可用；这里只
+            // 补选客户端，避免 catfish-email 再去尝试 Outlook。
+            command.env("CATFISH_EMAIL_CLIENT", "foxmail-win");
+        }
+    }
+    command
+}
+
 fn email_component_missing_error() -> String {
     let log_dir = if cfg!(target_os = "windows") {
-        r"%LOCALAPPDATA%\com.catfish.companion\logs\"
+        r"%LOCALAPPDATA%\hermes\logs\"
     } else if cfg!(target_os = "macos") {
         "~/Library/Logs/com.catfish.companion/"
     } else {
@@ -100,7 +123,7 @@ pub async fn email_digest_fetch(limit: Option<u32>) -> Result<String, String> {
     let bin = catfish_paths::catfish_email_bin().ok_or_else(email_component_missing_error)?;
 
     let n = limit.unwrap_or(10).clamp(1, 100);
-    let out = Command::new(&bin)
+    let out = email_command(&bin)
         .args(["list", "--unread", "--json"])
         .arg("--limit")
         .arg(n.to_string())
@@ -142,7 +165,7 @@ pub async fn email_check_new(account: Option<String>) -> Result<String, String> 
         }
     }
 
-    let out = Command::new(&bin)
+    let out = email_command(&bin)
         .args(&args)
         .output()
         .map_err(|e| format!("catfish-email check 调用失败: {e}"))?;
@@ -189,7 +212,7 @@ pub async fn email_list_fetch(
     args.push("--limit".to_string());
     args.push(n.to_string());
 
-    let out = Command::new(&bin)
+    let out = email_command(&bin)
         .args(&args)
         .output()
         .map_err(|e| format!("catfish-email 调用失败: {e}"))?;
@@ -229,7 +252,7 @@ pub async fn email_read_message(
     if mark_read == Some(false) {
         args.push("--no-mark-read");
     }
-    let out = Command::new(&bin)
+    let out = email_command(&bin)
         .args(args)
         .output()
         .map_err(|e| format!("catfish-email 调用失败: {e}"))?;
@@ -254,7 +277,7 @@ pub async fn email_send_message(id: String) -> Result<String, String> {
     let bin = catfish_paths::catfish_email_bin().ok_or_else(|| {
         "catfish-email CLI 没装".to_string()
     })?;
-    let out = Command::new(&bin)
+    let out = email_command(&bin)
         .args(["send", "--id", &id, "--json"])
         .output()
         .map_err(|e| format!("catfish-email 调用失败: {e}"))?;
@@ -281,7 +304,7 @@ pub async fn email_delete_message(id: String) -> Result<String, String> {
     let bin = catfish_paths::catfish_email_bin().ok_or_else(|| {
         "catfish-email CLI 没装".to_string()
     })?;
-    let out = Command::new(&bin)
+    let out = email_command(&bin)
         .args(["delete", "--id", &id, "--json"])
         .output()
         .map_err(|e| format!("catfish-email 调用失败: {e}"))?;
@@ -311,7 +334,7 @@ pub async fn email_mark_read(id: String, read: Option<bool>) -> Result<String, S
     if read == Some(false) {
         args.push("--unread");
     }
-    let out = Command::new(&bin)
+    let out = email_command(&bin)
         .args(&args)
         .output()
         .map_err(|e| format!("catfish-email 调用失败: {e}"))?;
@@ -375,7 +398,7 @@ pub async fn email_create_draft(
         args.push("--account".to_string()); args.push(a);
     }
 
-    let out = Command::new(&bin)
+    let out = email_command(&bin)
         .args(&args)
         .output()
         .map_err(|e| format!("catfish-email draft 调用失败: {e}"))?;
@@ -400,7 +423,7 @@ pub async fn email_accounts_fetch() -> Result<String, String> {
     let bin = catfish_paths::catfish_email_bin().ok_or_else(|| {
         "catfish-email CLI 没装".to_string()
     })?;
-    let out = Command::new(&bin)
+    let out = email_command(&bin)
         .args(["accounts", "--json"])
         .output()
         .map_err(|e| format!("catfish-email 调用失败: {e}"))?;
@@ -478,7 +501,7 @@ pub async fn email_export_attachment(id: String, filename: String) -> Result<Str
     let bin = catfish_paths::catfish_email_bin().ok_or_else(|| {
         "catfish-email CLI 没装".to_string()
     })?;
-    let out = Command::new(&bin)
+    let out = email_command(&bin)
         .args(["attachment", "--id", &id, "--filename", &filename, "--json"])
         .output()
         .map_err(|e| format!("catfish-email 调用失败: {e}"))?;

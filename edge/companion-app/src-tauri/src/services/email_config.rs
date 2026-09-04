@@ -31,6 +31,7 @@
 //!   poll_secs: 30           # 邮件扫描间隔, 默认 600 (10 分钟). 0=关.
 //!   rate_enabled: true      # LLM 评级: true=只急通知 / false=任何新邮件都通知
 //!   rate_model: catfish-private-main  # 评级 model 显式 override (可选, 不配走 chain)
+//!   foxmail_root: 'E:\\mail\\Storage'  # Windows Foxmail 自定义 Storage 目录
 //! ```
 
 use std::sync::OnceLock;
@@ -46,6 +47,8 @@ pub struct EmailConfig {
     /// P3.5.139 (6/29 鸿波"都要去除硬编码"): None = yaml/env 没显式 override,
     /// caller 走 chain picker > role > Err. yaml/env 设了非空字符串才 Some.
     pub rate_model: Option<String>,
+    /// Windows Foxmail 自定义 Storage 根目录。None = 由 catfish-email 自动探测。
+    pub foxmail_root: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,6 +61,7 @@ struct EmailYaml {
     poll_secs: Option<u64>,
     rate_enabled: Option<bool>,
     rate_model: Option<String>,
+    foxmail_root: Option<String>,
 }
 
 fn yaml_path() -> Option<std::path::PathBuf> {
@@ -102,7 +106,13 @@ fn build() -> EmailConfig {
         .or_else(|| std::env::var("CATFISH_EMAIL_RATE_MODEL").ok())
         .filter(|s| !s.is_empty());
 
-    EmailConfig { poll_secs, rate_enabled, rate_model }
+    let foxmail_root = yaml.as_ref()
+        .and_then(|y| y.foxmail_root.clone())
+        .or_else(|| std::env::var("CATFISH_FOXMAIL_ROOT").ok())
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty());
+
+    EmailConfig { poll_secs, rate_enabled, rate_model, foxmail_root }
 }
 
 static EMAIL_CONFIG: OnceLock<EmailConfig> = OnceLock::new();
@@ -125,6 +135,7 @@ pub struct EmailConfigPublic {
     pub poll_secs: u64,
     pub rate_enabled: bool,
     pub rate_model: Option<String>,
+    pub foxmail_root: Option<String>,
     /// yaml 文件绝对路径 (前端 shell.open 用)
     pub yaml_path: String,
 }
@@ -139,6 +150,7 @@ pub fn email_config_get() -> EmailConfigPublic {
         poll_secs: cfg.poll_secs,
         rate_enabled: cfg.rate_enabled,
         rate_model: cfg.rate_model.clone(),
+        foxmail_root: cfg.foxmail_root.clone(),
         yaml_path: path,
     }
 }

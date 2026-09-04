@@ -12,7 +12,7 @@ describe("email platform hints", () => {
       .toBe("windows");
     expect(emailClientName("windows")).toContain("Outlook");
     expect(emailClientName("windows")).toContain("Foxmail");
-    expect(emailFailureHint("windows")).toContain("Outlook");
+    expect(emailFailureHint("windows")).toContain("Foxmail");
     expect(emailFailureHint("windows")).not.toContain("Mail.app");
   });
 

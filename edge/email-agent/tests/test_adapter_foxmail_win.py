@@ -12,6 +12,7 @@ import pytest
 
 from catfish_email.adapters.base import DataNotFoundError, ListFilter, NotSupportedError
 from catfish_email.adapters.foxmail_win import FoxmailWinAdapter
+import catfish_email.inbox as inbox
 
 
 def _make_storage(make_box_file, tmp_path: Path):
@@ -77,6 +78,38 @@ def test_windows_foxmail_supports_explicit_root(monkeypatch, make_box_file, tmp_
     monkeypatch.setenv("CATFISH_FOXMAIL_ROOT", str(storage))
     adapter = FoxmailWinAdapter()
     assert adapter.list_accounts()[0].address == "hongbo@example.com"
+
+
+def test_windows_foxmail_supports_custom_root_pointing_at_one_account(
+    monkeypatch, make_box_file, tmp_path
+):
+    """用户配置的路径可以直接指向一个账号目录，而不要求补写 Storage 父目录。"""
+    storage = _make_storage(make_box_file, tmp_path)
+    account_root = storage / "hongbo@example.com"
+    monkeypatch.setenv("CATFISH_FOXMAIL_ROOT", str(account_root))
+
+    adapter = FoxmailWinAdapter()
+
+    assert [account.address for account in adapter.list_accounts()] == [
+        "hongbo@example.com"
+    ]
+
+
+def test_configured_windows_root_does_not_probe_outlook(monkeypatch):
+    """配置 Foxmail 根目录时，自动探测不应触发 Outlook COM。"""
+    called: list[str] = []
+    monkeypatch.setattr(inbox.platform, "system", lambda: "Windows")
+    monkeypatch.setenv("CATFISH_FOXMAIL_ROOT", "E:/mail/Storage")
+    monkeypatch.setattr(
+        inbox,
+        "_get_adapter_explicit",
+        lambda client: called.append(client) or object(),
+    )
+
+    adapters = inbox.get_all_adapters()
+
+    assert len(adapters) == 1
+    assert called == ["foxmail-win"]
 
 
 def test_windows_foxmail_missing_message_is_data_error(make_box_file, tmp_path):

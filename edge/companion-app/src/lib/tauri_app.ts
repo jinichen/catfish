@@ -93,6 +93,8 @@ export interface EmailConfigPublic {
    * 改 null 无 UI break. 后续要展示走 useRole hook 拿 effective 值.
    */
   rate_model: string | null;
+  /** Windows Foxmail 自定义 Storage 目录；null = 自动探测。 */
+  foxmail_root: string | null;
   yaml_path: string;
 }
 

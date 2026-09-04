@@ -301,8 +301,8 @@ def test_cmd_list_unexpected_filenotfound_is_caught(capsys):
     assert "foxmail_mac" in captured.err
 
 
-def test_cmd_list_all_adapters_fail_still_returns_empty_not_crash(capsys):
-    """所有 adapter 都挂 → 返空 list 不爆, errors 全进 stderr"""
+def test_cmd_list_all_adapters_fail_returns_error_instead_of_fake_empty(capsys):
+    """所有 adapter 都挂 → 保持 JSON 输出, 但用非零码标记真实失败。"""
     a = _FakeAdapter(
         name="apple_mail",
         accounts=[Account("iCloud", "alice@icloud.com", is_default=True)],
@@ -314,7 +314,7 @@ def test_cmd_list_all_adapters_fail_still_returns_empty_not_crash(capsys):
         raise_on_list=FileNotFoundError("/missing.db"),
     )
     rc = _cmd_list([a, b], _make_args(json=True))
-    assert rc == 0
+    assert rc == 1
     captured = capsys.readouterr()
     out = json.loads(captured.out)
     assert out == []

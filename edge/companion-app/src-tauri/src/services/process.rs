@@ -13,6 +13,8 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+use fs2::FileExt;
+
 #[derive(Debug, Clone)]
 pub struct SpawnConfig {
     pub program: PathBuf,
@@ -25,6 +27,38 @@ pub struct SpawnConfig {
 #[derive(Debug)]
 pub struct SpawnHandle {
     pub pid: u32,
+}
+
+/// Companion 进程级单实例锁。保留打开的文件句柄即可让锁覆盖整个进程生命周期。
+pub struct InstanceGuard {
+    _file: std::fs::File,
+}
+
+/// 获取指定路径的跨平台独占锁；已有 Companion 时返回 None，不等待也不重复启动。
+pub fn try_acquire_instance_lock(path: &std::path::Path) -> anyhow::Result<Option<InstanceGuard>> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(path)?;
+    match file.try_lock_exclusive() {
+        Ok(()) => Ok(Some(InstanceGuard { _file: file })),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Companion 启动时使用的锁路径。放在用户配置目录，不依赖安装目录和盘符。
+pub fn try_acquire_companion_instance_lock() -> anyhow::Result<Option<InstanceGuard>> {
+    let home = crate::util::paths::home_env()?;
+    try_acquire_instance_lock(
+        &std::path::PathBuf::from(home)
+            .join(".catfish")
+            .join("companion-instance.lock"),
+    )
 }
 
 /// 单个日志文件的上限, 超过就轮转。
@@ -305,5 +339,15 @@ mod rotate_tests {
     fn missing_file_is_not_an_error() {
         let d = tempfile::tempdir().unwrap();
         rotate_with_limit(&d.path().join("never-existed.log"), LIMIT, KEEP); // 不该 panic
+    }
+
+    #[test]
+    fn instance_lock_is_single_flight() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("companion.lock");
+        let first = try_acquire_instance_lock(&path).unwrap();
+        assert!(first.is_some());
+        let second = try_acquire_instance_lock(&path).unwrap();
+        assert!(second.is_none());
     }
 }

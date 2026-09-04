@@ -9,6 +9,8 @@
 // debug/test 保持普通 warning，便于平台条件测试复用 Unix 安装模块。
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), deny(warnings))]
 
+use tauri::Manager;
+
 #[cfg(target_os = "macos")]
 mod app_menu;
 mod commands;
@@ -258,6 +260,23 @@ pub fn run() {
             // services. Hermes bootstrap still runs so first-launch timing and
             // recovery are exercised end to end.
             let qa_mode = std::env::var_os("CATFISH_QA_MODE").is_some();
+
+            // Companion 必须单实例：多个旧进程会各自触发 bootstrap，导致 Windows
+            // 安装脚本反复运行。锁句柄由 Tauri state 持有到进程退出；已有实例时
+            // 当前进程静默退出，不再创建第二个窗口或第二个安装 worker。
+            match services::process::try_acquire_companion_instance_lock() {
+                Ok(Some(guard)) => {
+                    app.manage(guard);
+                }
+                Ok(None) => {
+                    log::info!("已有 Companion 实例运行，当前重复启动将退出");
+                    std::process::exit(0);
+                }
+                Err(error) => {
+                    // 锁目录不可写时不阻塞主界面，但记录原因，便于诊断多实例。
+                    log::warn!("无法获取 Companion 单实例锁，将继续启动: {error:#}");
+                }
+            }
 
             #[cfg(desktop)]
             tray::install(app.handle())?;

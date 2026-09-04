@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import platform
 
 from .adapters.base import ClientNotRunningError, DataNotFoundError, EmailAdapter
@@ -39,7 +40,11 @@ def get_adapter(client: str | None = None) -> EmailAdapter:
     if system == "Darwin":
         candidates = ["apple-mail", "foxmail-mac"]
     elif system == "Windows":
-        candidates = ["outlook-win", "foxmail-win"]
+        # 配置了 Foxmail 自定义目录就明确使用 Foxmail，避免无关的
+        # Outlook COM 探测和误导性错误。没有配置时保留旧的自动探测行为。
+        candidates = ["foxmail-win"] if os.environ.get(
+            "CATFISH_FOXMAIL_ROOT", ""
+        ).strip() else ["outlook-win", "foxmail-win"]
     else:
         raise DataNotFoundError(
             f"catfish-email 暂不支持 {system} 平台 (仅 macOS / Windows)"
@@ -77,7 +82,9 @@ def get_all_adapters() -> list[EmailAdapter]:
     if system == "Darwin":
         candidates = ["apple-mail", "foxmail-mac"]
     elif system == "Windows":
-        candidates = ["outlook-win", "foxmail-win"]
+        candidates = ["foxmail-win"] if os.environ.get(
+            "CATFISH_FOXMAIL_ROOT", ""
+        ).strip() else ["outlook-win", "foxmail-win"]
     else:
         return []
 

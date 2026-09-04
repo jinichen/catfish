@@ -33,6 +33,17 @@ MSI 不再执行 Hermes 或附加组件安装 CustomAction，避免安装时弹�
 `%LOCALAPPDATA%\hermes\logs\catfish-companion-bootstrap.log`。因此发布新版本
 后不需要把 Hermes 安装塞进 MSI 事务，旧的 Hermes 核心也不会被重复解压。
 
+Foxmail 如果使用自定义存储目录，可在 `%USERPROFILE%\.catfish\companion.yaml`
+中配置，不要把个人盘符写进程序：
+
+```yaml
+email:
+  foxmail_root: 'E:\\nextcloud\\mailstore\\ffchenhb@chinatelecom.cn'
+```
+
+配置后重启 Companion。程序会只调用 Foxmail 适配器，不再探测 Outlook COM；
+目录不存在或没有可读邮件文件时，邮件页会显示真实错误，不会伪装成空收件箱。
+
 ## MSI 与 Burn 的边界
 
 当前 MSI 仍通过 WiX/Tauri 处理运行时资源。Burn Bootstrapper 完成后，Windows 员工安装应改用 Burn 生成的 `Catfish-Companion-Setup.exe`，而不是直接分发这个 MSI。

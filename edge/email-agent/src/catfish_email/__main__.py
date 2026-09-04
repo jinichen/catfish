@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 
 from .adapters.base import DataNotFoundError, EmailAdapter
@@ -62,9 +63,12 @@ def main(argv: list[str] | None = None) -> int:
 
     # 5/18 BL-EMAIL-MULTI-CLIENT: --client 显式 → 单 adapter; 没传 → 全部 adapter
     # (e.g. Mail.app + Foxmail 同时跑). 防 factory 短路漏 Foxmail 数据.
+    # Windows Foxmail 自定义目录由 Companion 通过环境变量传入；此时 factory
+    # 会只选择 Foxmail，避免 Outlook COM 错误污染结果。
+    selected_client = args.client or os.environ.get("CATFISH_EMAIL_CLIENT", "").strip() or None
     try:
-        if args.client:
-            adapters: list[EmailAdapter] = [get_adapter(args.client)]
+        if selected_client:
+            adapters: list[EmailAdapter] = [get_adapter(selected_client)]
         else:
             adapters = get_all_adapters()
             if not adapters:

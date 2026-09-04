@@ -52,7 +52,7 @@ class FoxmailWinAdapter(EmailAdapter):
             self.profiles_dir
             if self.profiles_dir is not None
             and _has_mail_data(self.profiles_dir)
-            and not any(path.is_dir() and _has_mail_data(path) for path in self.profiles_dir.iterdir())
+            and _looks_like_account_root(self.profiles_dir)
             else None
         )
         if self.profiles_dir is None or not self.profiles_dir.is_dir():
@@ -289,6 +289,22 @@ def _mail_files(root: Path) -> list[Path]:
 
 def _has_mail_data(root: Path) -> bool:
     return bool(_mail_files(root))
+
+
+def _looks_like_account_root(root: Path) -> bool:
+    """识别直接配置到单个账号目录的情况。
+
+    Foxmail 的显式目录可能是 Storage 根目录，也可能是
+    ``Storage/<account>``。后者通常直接包含 ``Mail`` 子目录；旧逻辑把
+    ``Mail`` 错当成账号，最终界面显示账号名 ``Mail`` 而不是邮箱地址。
+    """
+    try:
+        return any(
+            child.is_dir() and child.name.casefold() == "mail"
+            for child in root.iterdir()
+        )
+    except OSError:
+        return False
 
 
 def _folder_for(path: Path, account_dir: Path) -> str:

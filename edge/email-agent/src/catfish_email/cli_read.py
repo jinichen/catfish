@@ -84,17 +84,21 @@ def _dedupe_messages(messages: list[tuple[str, Any]]) -> list[tuple[str, Any]]:
 def _cmd_accounts(adapters: list[EmailAdapter], args) -> int:
     """5/18 BL-EMAIL-MULTI-CLIENT: 跨所有 adapter (Mail.app + Foxmail) 列账号."""
     all_accs = []
+    errors: list[str] = []
     for adapter in adapters:
         try:
             accs = adapter.list_accounts()
         except EmailAdapterError as e:
-            print(f"⚠ {adapter.name} 列账号失败: {e}", file=sys.stderr)
+            errors.append(f"[{adapter.name}] 列账号失败: {e}")
             continue
         # 每个 account dict 加 client 字段标识从哪来
         for a in accs:
             d = asdict(a)
             d["client"] = adapter.name
             all_accs.append(d)
+
+    for error in errors:
+        print(f"⚠ {error}", file=sys.stderr)
 
     if args.json:
         print(json.dumps(all_accs, ensure_ascii=False, indent=2))
@@ -103,7 +107,9 @@ def _cmd_accounts(adapters: list[EmailAdapter], args) -> int:
         for d in all_accs:
             mark = "★" if d.get("is_default") else " "
             print(f"  {mark} [{d['client']}] {d['address']}")
-    return 0
+    # 空账号是正常状态，只有所有客户端都失败时才返回错误。此前这里始终
+    # 返回 0，Companion 会把 Outlook/Foxmail 适配器失败伪装成“0 个账号”。
+    return 1 if errors and not all_accs else 0
 
 
 def _cmd_list(adapters: list[EmailAdapter], args) -> int:
@@ -116,7 +122,9 @@ def _cmd_list(adapters: list[EmailAdapter], args) -> int:
     # 输出 JSON 时注入 adapter 字段, 方便 jq group_by(.adapter) / debug.
     msgs: list[tuple[str, Any]] = []  # (adapter_name, Message)
     errors: list[str] = []
+    successful_adapters = 0
     for adapter in adapters:
+        adapter_succeeded = False
         # 这个 adapter 里要查哪些账号
         if args.account:
             accounts_to_query: list[str | None] = [args.account]
@@ -143,6 +151,7 @@ def _cmd_list(adapters: list[EmailAdapter], args) -> int:
             )
             try:
                 msgs.extend((adapter.name, m) for m in adapter.list_messages(filt))
+                adapter_succeeded = True
             except EmailAdapterError as e:
                 # 单账号失败不阻塞 (Gmail INBOX 名兼容性 / Foxmail 没数据等), 记下继续
                 errors.append(f"[{adapter.name}] {acc_addr}: {e}")
@@ -154,6 +163,8 @@ def _cmd_list(adapters: list[EmailAdapter], args) -> int:
                 # 兜一层保跨 adapter 流不挂. 真正想看哪挂用 --debug 看 traceback.
                 errors.append(f"[{adapter.name}] {acc_addr}: {type(e).__name__}: {e}")
                 continue
+        if adapter_succeeded:
+            successful_adapters += 1
 
     # 同一 RFC 邮件可能同时来自 AppleScript 和 EMLX 索引；先去重，再排序
     # 和 trim，否则同一封邮件会占用两个列表位置。
@@ -187,7 +198,9 @@ def _cmd_list(adapters: list[EmailAdapter], args) -> int:
             subj = m.subject[:40].replace("|", "\\|")
             sender = m.sender[:30].replace("|", "\\|")
             print(f"| {a} | {state}{star} | {date} | {subj} | {sender} |")
-    return 0
+    # “没有邮件”只有在至少一个适配器成功完成查询时才是正常结果。
+    # 所有适配器失败必须用非零退出码交给 Companion，不能显示空收件箱。
+    return 1 if errors and successful_adapters == 0 and not msgs else 0
 
 
 def _cmd_read(adapters: list[EmailAdapter], args) -> int:
