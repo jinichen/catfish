@@ -19,10 +19,10 @@ from urllib.parse import quote, unquote
 
 from .. import box_parser
 from .base import Account, Attachment, DataNotFoundError, EmailAdapter, ListFilter, Message
+from .foxmail_discovery import ROOT_ENV, discover_storage_path
 
 logger = logging.getLogger("catfish_email.adapters.foxmail_win")
 
-_ROOT_ENV = "CATFISH_FOXMAIL_ROOT"
 _MAX_SCAN_DEPTH = 6
 _FOLDER_ALIASES = {
     "inbox": "Inbox", "收件箱": "Inbox",
@@ -245,29 +245,8 @@ class FoxmailWinAdapter(EmailAdapter):
 
 
 def _detect_profiles_dir() -> Path | None:
-    """按 Windows 真实目录约定探测 Storage；环境变量优先。"""
-    env_root = os.environ.get(_ROOT_ENV, "").strip()
-    candidates: list[Path] = [Path(env_root)] if env_root else []
-    for base_name in ("LOCALAPPDATA", "APPDATA"):
-        base_value = os.environ.get(base_name, "").strip()
-        if not base_value:
-            continue
-        base = Path(base_value)
-        candidates.extend(
-            base / relative
-            for relative in (
-                "Tencent/Foxmail7/Storage", "Foxmail7/Storage",
-                "Tencent/Foxmail/Storage", "Foxmail/Storage",
-            )
-        )
-    for candidate in candidates:
-        try:
-            if candidate.is_dir() and (_has_mail_data(candidate) or any(p.is_dir() for p in candidate.iterdir())):
-                logger.info("探测到 Foxmail Windows Storage: %s", candidate)
-                return candidate
-        except OSError:
-            continue
-    return None
+    """按环境变量、参数/注册表、默认目录顺序探测 Storage。"""
+    return discover_storage_path()
 
 
 def _mail_files(root: Path) -> list[Path]:

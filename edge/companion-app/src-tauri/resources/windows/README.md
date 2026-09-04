@@ -33,8 +33,9 @@ MSI 不再执行 Hermes 或附加组件安装 CustomAction，避免安装时弹�
 `%LOCALAPPDATA%\hermes\logs\catfish-companion-bootstrap.log`。因此发布新版本
 后不需要把 Hermes 安装塞进 MSI 事务，旧的 Hermes 核心也不会被重复解压。
 
-Foxmail 如果使用自定义存储目录，可在 `%USERPROFILE%\.catfish\companion.yaml`
-中配置，不要把个人盘符写进程序：
+Foxmail 会自动读取相关注册表分支和 Foxmail 参数文件寻找 Storage，并验证目录内
+确实存在 `.box` / `.eml` 邮件文件，不扫描整盘。如果企业版没有在参数中暴露路径，
+可在 `%USERPROFILE%\.catfish\companion.yaml` 中配置兜底路径，不要把个人盘符写进程序：
 
 ```yaml
 email:

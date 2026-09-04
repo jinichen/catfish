@@ -303,7 +303,9 @@ mail.Save()  # 落到草稿箱; .Send() 不调!
 ### 4.3 Foxmail Windows (`foxmail_win.py`)
 
 **机制 (只读)**: 解析 `~/AppData/Local/Tencent/Foxmail7/Storage/<email>/Mail/<folder>/*.box` 或 `.eml`。
-路径优先使用 `CATFISH_FOXMAIL_ROOT`，否则探测 `%LOCALAPPDATA%` / `%APPDATA%` 下常见的 `Foxmail7/Storage`。
+路径优先使用 `CATFISH_FOXMAIL_ROOT`；未配置时依次读取 Foxmail 相关注册表分支、
+Foxmail 参数文件和 `%LOCALAPPDATA%` / `%APPDATA%` 下的常见目录。候选必须通过
+真实 `.box` / `.eml` 数据签名校验，不扫描整个磁盘，也不读取密码字段。
 
 **写操作**: 当前不支持。起草、发送、删除、移动、标记已读等操作统一返回 `NotSupportedError`，避免直接修改 Foxmail 索引或同步状态。
 

@@ -59,10 +59,12 @@ powershell -ExecutionPolicy Bypass -File edge\email-agent\install.ps1
 `install.ps1` 头部注释逐条列了这四处差异。
 
 Windows Foxmail 不需要把账号再次“关联”到 Companion：适配器直接读取 Foxmail
-已经同步到本机的 Storage 数据。默认探测 `%LOCALAPPDATA%` 和 `%APPDATA%` 下的
-Foxmail7/Foxmail Storage；如果企业版使用了自定义目录，可设置
-`CATFISH_FOXMAIL_ROOT` 指向包含账号目录的 `Storage` 目录。首次启动会由
-Companion 自动安装 `catfish-email`，不需要员工手动执行 PowerShell。
+已经同步到本机的 Storage 数据。适配器会先读取 Foxmail 相关注册表分支和默认
+目录下的参数文件，再检查 `%LOCALAPPDATA%` / `%APPDATA%` 下的 Foxmail7/Foxmail
+Storage；每个候选必须真的包含 `.box` / `.eml` 邮件文件才会采用，不扫描整盘。
+如果企业版参数文件没有暴露路径，仍可设置 `CATFISH_FOXMAIL_ROOT` 指向包含
+账号目录的 `Storage` 目录。首次启动会由 Companion 自动安装 `catfish-email`，
+不需要员工手动执行 PowerShell。
 
 当前 Windows Foxmail 是只读能力：列账号、列收件箱、全文搜索、打开正文和读取
 附件元数据；起草、删除、发送仍明确提示去 Foxmail 操作，不直接修改 Foxmail
