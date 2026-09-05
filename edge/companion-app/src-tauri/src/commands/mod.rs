@@ -32,6 +32,11 @@ pub mod curator;
 pub mod dream; // P3.5.1 (6/15 鸿波): Dream Engine — 员工主动触发 long-term 蒸馏, picker model
 pub mod email; // BL-COMPANION-EMAIL-DIGEST (5/18): 邮件简报卡的后端 shell-out
 pub mod endpoints;
+pub mod expert_bots; // Hermes Profile 专家 Bot 管理器（默认关闭）
+mod expert_bots_config;
+mod expert_bots_gateway;
+mod expert_bots_profiles;
+mod expert_bots_types;
 pub mod feedback;
 pub mod file;
 pub mod file_parse;

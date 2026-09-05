@@ -16,6 +16,7 @@ import { type Personality } from "./agent";
 import { config } from "./env";
 import { fetchWithAuth } from "./me";
 import { warnIfUpstreamError } from "./upstreamErrorGuard";
+import { resolveExpertBotRequest } from "./expertBots";
 
 const SERVICE_LLM_HEADERS = {
   "Content-Type": "application/json",
@@ -76,7 +77,19 @@ function _humanError(status: number, raw: string): string {
   return `LLM 调用失败 (${status})${msg ? `: ${msg}` : ""}`;
 }
 
-const _sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const _sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve) => {
+  if (signal?.aborted) {
+    resolve();
+    return;
+  }
+  const timer = setTimeout(done, ms);
+  function done() {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", done);
+    resolve();
+  }
+  signal?.addEventListener("abort", done, { once: true });
+});
 
 function _personalityHint(p: Personality | undefined): string {
   switch (p) {
@@ -229,6 +242,7 @@ export function classifyDraftContent(cleaned: string): DraftEmailReplyResult {
 export async function draftEmailReply(
   input: DraftEmailReplyInput,
   onRetry?: (attempt: number, total: number, status: number) => void,
+  externalSignal?: AbortSignal,
 ): Promise<DraftEmailReplyResult> {
   if (!input.bodyText.trim()) {
     return { ok: false, error: "原邮件正文为空, 没法拟稿" };
@@ -245,9 +259,16 @@ export async function draftEmailReply(
     attachmentContext: input.attachmentContext,
   });
 
-  const url = `${config.backendUrl}/v1/chat/completions${SERVICE_LLM_QUERY}`;
+  const expertRoute = await resolveExpertBotRequest({
+    baseUrl: config.backendUrl,
+    useHermes: config.useHermes,
+    scenario: "email.draft",
+    pickerModel: input.model,
+    query: SERVICE_LLM_QUERY,
+  });
+  const url = expertRoute.url;
   const body = JSON.stringify({
-    model: input.model,
+    model: expertRoute.model,
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
@@ -261,7 +282,12 @@ export async function draftEmailReply(
   let lastErr = "未知错误";
 
   for (let attempt = 0; attempt < total; attempt++) {
+    if (externalSignal?.aborted) {
+      return { ok: false, error: "已停止拟稿" };
+    }
     const controller = new AbortController();
+    const stop = () => controller.abort();
+    externalSignal?.addEventListener("abort", stop, { once: true });
     const timeoutId = setTimeout(() => controller.abort(), DRAFT_TIMEOUT_MS);
     try {
       const resp = await fetchWithAuth(url, {
@@ -271,6 +297,7 @@ export async function draftEmailReply(
         signal: controller.signal,
       });
       clearTimeout(timeoutId);
+      externalSignal?.removeEventListener("abort", stop);
 
       if (!resp.ok) {
         const text = await resp.text().catch(() => "");
@@ -278,7 +305,7 @@ export async function draftEmailReply(
         // 可重试且还有次数 → 退避后再来
         if (_retryable(resp.status) && attempt < total - 1) {
           onRetry?.(attempt + 2, total, resp.status);
-          await _sleep(RETRY_BACKOFF_MS[attempt]);
+          await _sleep(RETRY_BACKOFF_MS[attempt], externalSignal);
           continue;
         }
         return { ok: false, error: lastErr };
@@ -316,7 +343,11 @@ export async function draftEmailReply(
       return classifyDraftContent(cleaned);
     } catch (e) {
       clearTimeout(timeoutId);
+      externalSignal?.removeEventListener("abort", stop);
       const msg = e instanceof Error ? e.message : String(e);
+      if (externalSignal?.aborted) {
+        return { ok: false, error: "已停止拟稿" };
+      }
       // 超时不重试 —— 已经等了 30s, 再等两轮员工早走了
       if (msg.includes("abort")) {
         return { ok: false, error: `LLM 调用超时 (>${DRAFT_TIMEOUT_MS / 1000}s)` };
@@ -324,7 +355,7 @@ export async function draftEmailReply(
       lastErr = `LLM 调用异常: ${msg}`;
       if (attempt < total - 1) {
         onRetry?.(attempt + 2, total, 0);
-        await _sleep(RETRY_BACKOFF_MS[attempt]);
+        await _sleep(RETRY_BACKOFF_MS[attempt], externalSignal);
         continue;
       }
       return { ok: false, error: lastErr };

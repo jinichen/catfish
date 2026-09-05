@@ -28,6 +28,8 @@ import {
 } from "./advisor_cache";
 import { wikiSearchSemantic } from "./tauri";
 import { warnIfUpstreamError } from "./upstreamErrorGuard";
+import { resolveExpertBotRequest } from "./expertBots";
+import { beginAdvisorRun } from "./advisorRunControl";
 
 // 8/15: 本文件原来 2281 行 —— 仓里最大的 TS 文件, 过了 CLAUDE.md §1 的 800 红线。
 // 拆成四块, 都是从这里搬出去的**同一批代码**, 不是新东西:
@@ -101,7 +103,7 @@ export { ensureTaskChatSummariesFresh } from "./briefing_advisor_summaries";
  *  跟 recomputeProfile 同款 in-flight 锁. */
 let _advisorInFlight: Promise<AdvisorResult | null> | null = null;
 
-/** 主入口. 不挂 AbortSignal (Tauri webview suspend 经验, 5/21 学到). */
+/** 主入口。内部 AbortSignal 只由员工点“停止”触发，不绑定 WebView 失焦。 */
 export async function fetchBriefingAdvisor(input: AdvisorInput): Promise<AdvisorFetchResult> {
   // in-flight 锁: 已在跑就复用 promise
   if (_advisorInFlight) {
@@ -114,7 +116,8 @@ export async function fetchBriefingAdvisor(input: AdvisorInput): Promise<Advisor
   //   老 log "可能已 TIMEOUT 走 stale" 永远打 — 不论 race 是否真超时, 误导诊断
   //   方向 (P3.4.3 同款 pattern, 鸿波 6/15 撞到误以为 LLM 慢, 实际 race 内完成).
   const startMs = Date.now();
-  const myPromise = _fetchBriefingAdvisorImpl(input);
+  const run = beginAdvisorRun();
+  const myPromise = _fetchBriefingAdvisorImpl(input, run.signal);
   _advisorInFlight = myPromise;
   // 注: 不 await 整个 promise (它要 5min), 用 race 让本次调用早返;
   // myPromise 后台跑完后:
@@ -125,7 +128,7 @@ export async function fetchBriefingAdvisor(input: AdvisorInput): Promise<Advisor
   } finally {
     void myPromise
       .then(async (result) => {
-        if (!result) return;
+        if (!result || run.signal.aborted) return;
         const elapsedMs = Date.now() - startMs;
         try {
           // P3.3.12 (6/10): save 前先读老 cache 拿到 taskChatSummaries — 老 cache
@@ -164,6 +167,7 @@ export async function fetchBriefingAdvisor(input: AdvisorInput): Promise<Advisor
       })
       .catch(() => {})
       .finally(() => {
+        run.finish();
         if (_advisorInFlight === myPromise) {
           _advisorInFlight = null;
         }
@@ -269,7 +273,10 @@ async function raceWithTimeout(
   }
 }
 
-async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorResult | null> {
+async function _fetchBriefingAdvisorImpl(
+  input: AdvisorInput,
+  signal: AbortSignal,
+): Promise<AdvisorResult | null> {
   console.log("[advisor] 调用开始", {
     tier: input.profile.tier,
     centralState: input.profile.centralState,
@@ -393,19 +400,27 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
   filteredInput.wikiRelevant = await fetchWikiRelevant(filteredInput);
 
   const userPrompt = buildUserPrompt(filteredInput);
-  const url = `${config.backendUrl}/v1/chat/completions${SERVICE_LLM_QUERY}`;
+  const expertRoute = await resolveExpertBotRequest({
+    baseUrl: config.backendUrl,
+    useHermes: config.useHermes,
+    scenario: "briefing.advisor",
+    pickerModel: input.model,
+    query: SERVICE_LLM_QUERY,
+  });
+  const url = expertRoute.url;
   console.log("[advisor] 发 fetch:", url, "prompt 长度:", userPrompt.length);
 
   if (typeof localStorage !== "undefined" && localStorage.getItem("catfish:debug_advisor_prompt") === "true") {
     console.log("[advisor] 完整 prompt (P3.4.6 debug 模式, localStorage flag 打开):\n" + userPrompt);
   }
 
-  // 不挂 AbortSignal — Tauri webview 失焦会 suspend, 让 fetch 自己生命周期
+  // signal 只来自显式“停止”，不会因切换 tab / WebView 失焦而误取消。
   try {
     const resp = await fetchWithAuth(url, {
       method: "POST",
       headers: SERVICE_LLM_HEADERS,
-      body: JSON.stringify(buildAdvisorAgentRequest(input.model, userPrompt)),
+      body: JSON.stringify(buildAdvisorAgentRequest(expertRoute.model, userPrompt)),
+      signal,
     });
 
     console.log("[advisor] HTTP status =", resp.status);
@@ -454,7 +469,7 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
         );
         return null;
       }
-      result = await transformToStructured(content, input.model, input.profile.tier);
+      result = await transformToStructured(content, expertRoute.model, input.profile.tier, signal);
       if (result === null) {
         console.warn("[advisor] P3.4.E Call 2 也挂, 返 null (UI 显数据诊断卡)");
         return null;
@@ -473,7 +488,7 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
           );
           return null;
         }
-        result = await transformToStructured(content, input.model, input.profile.tier);
+        result = await transformToStructured(content, expertRoute.model, input.profile.tier, signal);
 
         // P3.4.E.7 (6/15 鸿波): 第 3 层 lenient 兜底 — Call 2 也挂时, 用 lenient mode
         //   重新 parse Call 1 原 parsed (LLM 极端不听话场景, schema 都强不动).
@@ -543,6 +558,7 @@ async function transformToStructured(
   rawContent: string,
   model: string,
   tier: "frontline" | "mid" | "senior",
+  signal: AbortSignal,
 ): Promise<AdvisorResult | null> {
   const url = `${config.gatewayUrl}/v1/chat/completions${ADVISOR_DIRECT_QUERY}`;
   console.log(
@@ -557,6 +573,7 @@ async function transformToStructured(
       method: "POST",
       headers: SERVICE_LLM_HEADERS,
       body: JSON.stringify(buildAdvisorTransformRequest({ model, rawContent, tier })),
+      signal,
     });
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");

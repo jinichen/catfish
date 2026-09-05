@@ -38,7 +38,7 @@
  * 抽 ComposeCore 后红线**完全保留** — 两步 confirm state machine + `disabled=!composeTo.trim()`
  * + 只暴露 onSendSuccess callback (parent 不能自己触发发送).
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useChatStore } from "../../../store/chat";
 
@@ -154,6 +154,7 @@ export default function ComposeCore({
   const [draftQuestions, setDraftQuestions] = useState("");
   // 8/7: 429 退避重试时的进度提示, 免得员工干等以为卡死
   const [draftRetry, setDraftRetry] = useState("");
+  const draftAbortRef = useRef<AbortController | null>(null);
 
   // 3s 自动取消 send confirm (抽自 DetailPane 相同逻辑)
   useEffect(() => {
@@ -165,6 +166,8 @@ export default function ComposeCore({
   // resetKey 变化清 state — 换邮件 / 新建打开 / 关闭都清. 之前 DetailPane 里
   // 靠 msg.id useEffect 触发, 现在 parent 传 resetKey 达到相同效果.
   useEffect(() => {
+    draftAbortRef.current?.abort();
+    draftAbortRef.current = null;
     setComposeTo(initialTo);
     setComposeCc(initialCc);
     setComposeSubject(initialSubject);
@@ -176,6 +179,8 @@ export default function ComposeCore({
     setDraftLlmDone(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetKey]);
+
+  useEffect(() => () => draftAbortRef.current?.abort(), []);
 
   /** P3.5.57 Phase 2 (6/22 鸿波): "让小鲶帮我拟稿" — 一次性 LLM call 填 composeBody.
    *
@@ -192,6 +197,9 @@ export default function ComposeCore({
       return;
     }
     setDraftingLlm(true);
+    draftAbortRef.current?.abort();
+    const draftController = new AbortController();
+    draftAbortRef.current = draftController;
     setDraftLlmError(null);
     try {
       // P3.5.139 (6/29 鸿波"都要去除硬编码"): 删 "catfish-private-main" 字面值.
@@ -309,6 +317,7 @@ export default function ComposeCore({
               ? `模型正忙, 重试中 (${attempt}/${total})…`
               : `连接不稳, 重试中 (${attempt}/${total})…`,
           ),
+        draftController.signal,
       );
       setDraftRetry("");
       if (!result.ok || !result.body) {
@@ -335,6 +344,7 @@ export default function ComposeCore({
     } catch (e) {
       setDraftLlmError(e instanceof Error ? e.message : String(e));
     } finally {
+      if (draftAbortRef.current === draftController) draftAbortRef.current = null;
       setDraftingLlm(false);
     }
   };
@@ -506,8 +516,8 @@ export default function ComposeCore({
           return (
             <button
               type="button"
-              onClick={() => void handleDraftWithLlm()}
-              disabled={draftingLlm || !canDraft}
+              onClick={() => draftingLlm ? draftAbortRef.current?.abort() : void handleDraftWithLlm()}
+              disabled={!canDraft}
               style={{
                 background: draftLlmDone ? "var(--catfish-bg)" : "rgba(34, 197, 94, 0.1)",
                 color: draftLlmDone ? "var(--catfish-text)" : "rgb(21, 128, 61)",
@@ -517,7 +527,7 @@ export default function ComposeCore({
                 borderRadius: 4,
                 padding: "4px 10px",
                 fontSize: 12,
-                cursor: draftingLlm ? "wait" : canDraft ? "pointer" : "not-allowed",
+                cursor: canDraft ? "pointer" : "not-allowed",
                 fontFamily: "inherit",
                 opacity: canDraft ? 1 : 0.4,
               }}
@@ -532,7 +542,7 @@ export default function ComposeCore({
               }
             >
               {draftingLlm
-                ? `⏳ ${agentName}拟稿中…`
+                ? "■ 停止拟稿"
                 : draftLlmDone
                   ? "🔄 重拟"
                   : `💡 让${agentName}帮我拟稿`}

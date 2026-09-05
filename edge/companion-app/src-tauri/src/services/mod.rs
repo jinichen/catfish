@@ -36,6 +36,7 @@ pub mod political_scan;   // P3.3.53 (6/13 鸿波): 政治敏感规则引擎 + a
 pub mod political_config; // P3.3.53 (6/13 鸿波): 政治敏感规则配置 — yaml 段, 集团信安/党办下发
 pub mod hermes_api_config; // BL-COMPANION-HERMES-API-CONFIG (5/19, Phase 2-2A)
 pub mod hermes_jwt_sync;   // BL-HERMES-JWT-SYNC (7/19 Task #15): JWT auto-sync hermes 3 处
+pub mod hermes_profile_sync; // 命名 Profile 同步 JWT/service token/gateway URL
 pub mod oauth_config; // OIDC 配置来源 (8/15 从 oauth 切出)
 pub mod oauth_store;  // ⚠ 凭证落盘 —— 改这里前先看文件头 (8/15 切出)
 pub mod oauth_token;  // 换 token + id_token 解码 (8/15 切出)

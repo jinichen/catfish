@@ -39,6 +39,7 @@ import {
   type AdvisorResult,
 } from "../../lib/briefing_advisor";
 import { isAdvisorResultGrounded } from "../../lib/briefing_advisor_quality";
+import { cancelBriefingAdvisor } from "../../lib/advisorRunControl";
 import { ensureRecomputed, type Profile } from "../../lib/profile";
 import {
   type BriefingContext,
@@ -86,6 +87,19 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
   const [dataCounts, setDataCounts] = useState<{ emails: number; events: number; todos: number } | null>(null);
   // cancel 按钮 — 有 stale cache 时显, 点了走 stale fallback (跳 LLM 等待).
   const [staleCache, setStaleCache] = useState<AdvisorCache | null>(null);
+  const advisorStoppedRef = useRef(false);
+  const stopAdvisor = () => {
+    advisorStoppedRef.current = true;
+    cancelBriefingAdvisor();
+    if (staleCache) {
+      setResult(staleCache.result);
+      setStaleNotice("已停止本次分析，显示上次有效结果。");
+      setPhase("stale_fallback");
+    } else {
+      setErrorMsg("本次分析已停止，可点刷新重新开始。");
+      setPhase("error");
+    }
+  };
   /** 5/22 鸿波: 任务状态 (key = task.title → status). 启动时从后端拉. */
   const [taskState, setTaskState] = useState<TaskStateFetch>({
     today: {},
@@ -192,6 +206,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
 
     void (async () => {
       try {
+        advisorStoppedRef.current = false;
         // ─── 1. profile — 同步等 recompute (in-flight 锁防 StrictMode 双调) ───
         setPhase("profile_loading");
         setPhaseStartedAt(Date.now());
@@ -308,12 +323,9 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
           }
         });
         const r = await fetchBriefingAdvisor(currentInput);
-        if (cancelled) return;
+        if (cancelled || advisorStoppedRef.current) return;
 
-        // 5/22 上游拥堵 fallback: 客户端 timeout → 拉 stale cache 撑场面 (即使过期).
-        // P3.3.25 (6/11): 60s → 180s; P3.4.8 (6/15 鸿波): 180s → 300s (5min,
-        //   因为 advisor 走 hermes agent loop 多轮, 实际跑完 ~2-3min, 见
-        //   briefing_advisor.ts:CLIENT_TIMEOUT_MS 注释).
+        // 客户端 timeout 后优先用同一批输入对应的安全旧缓存撑场面。
         if (r === ADVISOR_TIMEOUT) {
           console.warn("[advisor] 客户端 timeout, 走 stale cache fallback");
           const stale = await advisorCacheGet();
@@ -324,14 +336,6 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
             && isAdvisorResultGrounded(stale.result, currentInput)
           ) {
             setResult(stale.result);
-            // 8/8 鸿波 catch「这是公网模型, 怎么回事」: 原文案硬编码
-            //   "公司内网模型响应慢 (>5min)" —— 两处都是错的:
-            //   · 模型归属写死成"内网"。员工实际跑的是公网 dashscope
-            //     (picker 选的), 这条提示把排查方向直接指反了。
-            //   · ">5min" 是 P3.4.8 时的值, 后来 CLIENT_TIMEOUT_MS 调到 600s
-            //     没人同步这句, 于是界面说等 5 分钟、实际等 10 分钟。
-            //   现在: 模型名从 props 取 (它本来就是员工 picker 选的那个),
-            //   超时数从 CLIENT_TIMEOUT_MS 算。都不再手写。
             setStaleNotice(
               `⚠️ 模型 ${model} 响应慢 (>${Math.round(CLIENT_TIMEOUT_MS / 60000)} 分钟), ` +
                 `显示上次结果. 后台仍在算, 完成会自动更新.`,
@@ -447,11 +451,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
         phase="profile_loading"
         startedAt={phaseStartedAt}
         model={model}
-        onCancel={staleCache ? () => {
-          setResult(staleCache.result);
-          setStaleNotice("已切到上次结果. 后台仍在算, 完成会自动更新.");
-          setPhase("stale_fallback");
-        } : undefined}
+        onCancel={staleCache ? stopAdvisor : undefined}
       />
     );
   }
@@ -471,11 +471,8 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
         startedAt={phaseStartedAt}
         model={model}
         counts={dataCounts ?? undefined}
-        onCancel={staleCache ? () => {
-          setResult(staleCache.result);
-          setStaleNotice("已切到上次结果. 后台仍在算, 完成会自动更新.");
-          setPhase("stale_fallback");
-        } : undefined}
+        onCancel={phase === "llm_running" || staleCache ? stopAdvisor : undefined}
+        cancelLabel={staleCache ? "不等了 · 用上次结果" : "停止本次分析"}
       />
     );
   }

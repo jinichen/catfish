@@ -18,7 +18,6 @@
 
 use anyhow::{Context, Result};
 use std::fs;
-use std::path::PathBuf;
 
 /// P3.5.82 (7/29): 保证 `~/.hermes/.env` 里有 `API_SERVER_KEY` + `API_SERVER_ENABLED`.
 ///
@@ -48,8 +47,8 @@ use std::path::PathBuf;
 /// (它的场景是"手动轮换"), 但装机路径不能这样: 换了 key 而正在跑的 hermes 内存里
 /// 还是旧的, Companion 调 8642 直接 401, 而且要等 hermes 重启才自愈。
 pub(crate) fn ensure_api_server_key() -> Result<()> {
-    let home = crate::util::paths::home_env().context("拿 HOME")?;
-    let hermes = PathBuf::from(&home).join(".hermes");
+    let hermes = crate::services::catfish_paths::hermes_home()
+        .context("无法定位 Hermes home")?;
     if !hermes.exists() {
         log::debug!("[P3.5.82] {} 不存在 (hermes 未装) · skip", hermes.display());
         return Ok(());
@@ -79,6 +78,7 @@ pub(crate) fn ensure_api_server_key() -> Result<()> {
     out = replace_or_append_env_line(&out, "API_SERVER_ENABLED", "true");
 
     if out == text {
+        crate::services::hermes_profile_sync::sync_api_server_key(&hermes, &key);
         return Ok(()); // 没变化就不写盘, 免得每次启动都动 mtime
     }
     fs::write(&env_path, out).with_context(|| format!("写 {}", env_path.display()))?;
@@ -92,6 +92,7 @@ pub(crate) fn ensure_api_server_key() -> Result<()> {
          (hermes 下次启动生效, 之后聊天经 hermes, 记忆开始积累)",
         env_path.display()
     );
+    crate::services::hermes_profile_sync::sync_api_server_key(&hermes, &key);
     Ok(())
 }
 
@@ -188,4 +189,3 @@ mod tests_api_server_key {
         assert!(out.ends_with('\n'), "dotenv 末尾必须有换行");
     }
 }
-

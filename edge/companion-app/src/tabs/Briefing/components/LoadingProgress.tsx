@@ -48,6 +48,7 @@ interface Props {
   counts?: Counts;
   /** 有 stale cache 时显 cancel button. 点 → 跳 LLM 用上次结果. */
   onCancel?: () => void;
+  cancelLabel?: string;
 }
 
 /** Model-aware 预估时间. catfish-private-main 慢 (40K context 70-100s/call), agent
@@ -77,6 +78,7 @@ export default function LoadingProgress({
   model,
   counts,
   onCancel,
+  cancelLabel = "不等了 · 用上次结果",
 }: Props) {
   // 1s tick 更新 elapsed
   const [now, setNow] = useState(Date.now());
@@ -218,7 +220,7 @@ export default function LoadingProgress({
             cursor: "pointer",
           }}
         >
-          不等了 · 用上次结果
+          {cancelLabel}
         </button>
       )}
     </div>

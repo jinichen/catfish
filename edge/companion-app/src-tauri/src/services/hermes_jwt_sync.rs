@@ -33,7 +33,11 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+fn hermes_root() -> Result<PathBuf> {
+    crate::services::catfish_paths::hermes_home().context("无法定位 Hermes home")
+}
 
 /// hermes-cli 的 client_secret (BL-P26-DEMO-SECRET).
 ///
@@ -62,8 +66,7 @@ pub fn sync_all(jwt: &str) -> Result<()> {
         return Ok(());
     }
 
-    let home_str = crate::util::paths::home_env().context("拿 HOME 挂")?;
-    let hermes = PathBuf::from(&home_str).join(".hermes");
+    let hermes = hermes_root()?;
     if !hermes.exists() {
         log::debug!("[hermes-jwt-sync] {} 不存在 (hermes 未装) · 全 skip", hermes.display());
         return Ok(());
@@ -78,6 +81,8 @@ pub fn sync_all(jwt: &str) -> Result<()> {
     if let Err(e) = sync_auth_json(&hermes) {
         log::warn!("[hermes-jwt-sync] auth.json reset 挂 (不阻塞): {e:#}");
     }
+
+    super::hermes_profile_sync::sync_access_token(&hermes, jwt);
 
     Ok(())
 }
@@ -98,8 +103,7 @@ pub fn sync_all(jwt: &str) -> Result<()> {
 /// 端注入 · 不看 JWT sub.
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub async fn sync_service_token_to_env(identity_url: &str) -> Result<()> {
-    let home_str = crate::util::paths::home_env().context("拿 HOME")?;
-    let hermes = PathBuf::from(&home_str).join(".hermes");
+    let hermes = hermes_root()?;
     if !hermes.exists() {
         log::debug!("[hermes-jwt-sync-service] {} 不存在 · skip", hermes.display());
         return Ok(());
@@ -214,6 +218,12 @@ pub async fn sync_service_token_to_env(identity_url: &str) -> Result<()> {
 
     // 顺便 · reset auth.json (让 hermes credential_pool 重试)
     let _ = sync_auth_json(&hermes);
+    super::hermes_profile_sync::sync_service_env(
+        &hermes,
+        &tok.access_token,
+        identity_url,
+        HERMES_CLI_SECRET,
+    );
 
     Ok(())
 }
@@ -224,7 +234,7 @@ pub async fn sync_service_token_to_env(identity_url: &str) -> Result<()> {
 // service token 导致 Companion 关 1h 后 hermes 挂 401. env 现在由
 // sync_service_token_to_env 独立管 · 用 client_credentials 拿 30 天 service token.
 
-fn sync_config_yaml(hermes: &PathBuf, jwt: &str) -> Result<()> {
+pub(super) fn sync_config_yaml(hermes: &Path, jwt: &str) -> Result<()> {
     let config_path = hermes.join("config.yaml");
     if !config_path.exists() {
         log::debug!("[hermes-jwt-sync] {} 不存在 · skip", config_path.display());
@@ -305,7 +315,7 @@ fn ensure_model_api_mode(text: &str) -> String {
     replace_model_field(text, "api_mode", "chat_completions")
 }
 
-fn sync_auth_json(hermes: &PathBuf) -> Result<()> {
+pub(super) fn sync_auth_json(hermes: &Path) -> Result<()> {
     let auth_path = hermes.join("auth.json");
     if !auth_path.exists() {
         log::debug!("[hermes-jwt-sync] {} 不存在 · skip", auth_path.display());
@@ -349,7 +359,7 @@ fn sync_auth_json(hermes: &PathBuf) -> Result<()> {
 /// dotenv line-based replace/append. 跟 server_config.rs::replace_or_append_env_line 同款.
 ///
 /// (不 dedupe 到 util module: 循环依赖风险 + 两处逻辑一致, 复用不难维护.)
-fn replace_or_append_env_line(text: &str, key: &str, value: &str) -> String {
+pub(super) fn replace_or_append_env_line(text: &str, key: &str, value: &str) -> String {
     let mut lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();
     let mut replaced = false;
     let prefix = format!("{key}=");
@@ -416,8 +426,7 @@ pub fn sync_base_url(url_base: &str) -> Result<()> {
     }
     let openai_base = format!("{base}/v1");
 
-    let home_str = crate::util::paths::home_env().context("拿 HOME 挂")?;
-    let hermes = PathBuf::from(&home_str).join(".hermes");
+    let hermes = hermes_root()?;
     if !hermes.exists() {
         log::debug!(
             "[hermes-url-sync] {} 不存在 (hermes 未装) · 全 skip",
@@ -467,6 +476,8 @@ pub fn sync_base_url(url_base: &str) -> Result<()> {
         log::warn!("[hermes-url-sync] auth.json base_url 挂 (不阻塞): {e:#}");
     }
 
+    super::hermes_profile_sync::sync_base_url(&hermes, base);
+
     Ok(())
 }
 
@@ -478,7 +489,7 @@ pub fn sync_base_url(url_base: &str) -> Result<()> {
 ///
 /// 只改**指向我们自己 gateway** 的那些(靠 `:8999` 判定): auth.json 里可能
 /// 还有员工自己配的第三方 provider(OpenAI 官方 / Azure), 不能一起改掉.
-fn sync_auth_json_base_url(hermes: &PathBuf, openai_base: &str) -> Result<()> {
+pub(super) fn sync_auth_json_base_url(hermes: &Path, openai_base: &str) -> Result<()> {
     let auth_path = hermes.join("auth.json");
     if !auth_path.exists() {
         log::debug!("[hermes-url-sync] auth.json 不存在 · skip");
@@ -534,7 +545,7 @@ fn rewrite_base_urls(v: &mut Value, new_base: &str) -> usize {
 ///
 /// P3.5.81 (7/29): 原来只有 api_key 版本, base_url 那半边根本不存在, 见
 /// `sync_base_url` 的注释.
-fn replace_model_field(text: &str, field: &str, new_value: &str) -> String {
+pub(super) fn replace_model_field(text: &str, field: &str, new_value: &str) -> String {
     let mut lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();
     let mut in_model = false;
     let mut model_start_idx: Option<usize> = None;

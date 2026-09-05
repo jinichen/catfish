@@ -12,8 +12,9 @@
 //!
 //! 命令:
 //!   http_proxy         — 一次性 request/response (JSON 类, 非流)
+//!   http_proxy_abortable — 可由 request_id 取消的一次性请求 (advisor 等长调用)
 //!   http_proxy_stream  — SSE streaming (chat completions 用), Tauri event bridge
-//!   http_proxy_abort   — 取消进行中的 stream (chat 用户点停止)
+//!   http_proxy_abort   — 取消进行中的 stream / abortable request
 //!
 //! Streaming event 命名:
 //!   http_proxy_chunk_{request_id} — data chunk (可能多次)
@@ -189,21 +190,11 @@ fn collect_response_headers(resp: &reqwest::Response) -> HashMap<String, String>
     headers
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// http_proxy (非 stream)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// 一次性 request/response 代理. 用于非流场景 (fetchCatalog / fetchMe / etc).
-///
-/// 返完整 body. 若 body 是二进制 (非 UTF-8), 自动 base64 编码.
-#[tauri::command]
-pub async fn http_proxy(req: HttpProxyRequest) -> Result<HttpProxyResponse, String> {
+async fn perform_http_request(req: &HttpProxyRequest) -> Result<HttpProxyResponse, String> {
     let timeout_ms = req.timeout_ms.unwrap_or(30_000);
     let client = build_client(timeout_ms)?;
     let method = parse_method(&req.method)?;
 
-    // DEBUG (7/18 鸿波 catch Companion 401 但 curl 通): log header keys 检查 Authorization
-    // 是否真到 Rust. auth value preview 只前 30 char 防泄.
     let header_keys: Vec<&str> = req.headers.keys().map(|k| k.as_str()).collect();
     let auth_preview: String = req
         .headers
@@ -220,28 +211,21 @@ pub async fn http_proxy(req: HttpProxyRequest) -> Result<HttpProxyResponse, Stri
     for (k, v) in &req.headers {
         request = request.header(k, v);
     }
-    if let Some(body_bytes) = build_request_body(&req)? {
+    if let Some(body_bytes) = build_request_body(req)? {
         request = request.body(body_bytes);
     }
 
-    let resp = request
-        .send()
-        .await
-        .map_err(|e| {
-            // P3.5.80 (7/28): 用 error_chain 而不是 {e} —— 见该函数说明.
-            let detail = error_chain(&e);
-            log::warn!("[http_proxy] {} {} 失败: {detail}", req.method, req.url);
-            format!("请求失败: {detail}")
-        })?;
-
+    let resp = request.send().await.map_err(|e| {
+        let detail = error_chain(&e);
+        log::warn!("[http_proxy] {} {} 失败: {detail}", req.method, req.url);
+        format!("请求失败: {detail}")
+    })?;
     let status = resp.status().as_u16();
     let headers = collect_response_headers(&resp);
     let body_bytes = resp
         .bytes()
         .await
         .map_err(|e| format!("读 body 失败: {e}"))?;
-
-    // 尝试 UTF-8; 挂了走 base64. Chat/JSON 都是 UTF-8, 走 fast path.
     let (body, body_base64) = match std::str::from_utf8(&body_bytes) {
         Ok(s) => (s.to_string(), false),
         Err(_) => (
@@ -249,13 +233,43 @@ pub async fn http_proxy(req: HttpProxyRequest) -> Result<HttpProxyResponse, Stri
             true,
         ),
     };
-
     Ok(HttpProxyResponse {
         status,
         headers,
         body,
         body_base64,
     })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// http_proxy (非 stream)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// 一次性 request/response 代理. 用于非流场景 (fetchCatalog / fetchMe / etc).
+///
+/// 返完整 body. 若 body 是二进制 (非 UTF-8), 自动 base64 编码.
+#[tauri::command]
+pub async fn http_proxy(req: HttpProxyRequest) -> Result<HttpProxyResponse, String> {
+    perform_http_request(&req).await
+}
+
+/// 可取消的一次性请求。用于 `stream:false` 但可能运行数分钟的 advisor 调用。
+#[tauri::command]
+pub async fn http_proxy_abortable(
+    req: HttpProxyRequest,
+    request_id: String,
+) -> Result<HttpProxyResponse, String> {
+    let mut cancel_rx = register_stream(&request_id);
+    let result = tokio::select! {
+        biased;
+        _ = &mut cancel_rx => {
+            log::info!("[http_proxy] request {} aborted by client", request_id);
+            Err("请求已取消".to_string())
+        }
+        response = perform_http_request(&req) => response,
+    };
+    unregister_stream(&request_id);
+    result
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -372,7 +386,7 @@ pub async fn http_proxy_stream(
 // http_proxy_abort
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// 取消进行中的 stream. 前端 chat.ts abort signal 触发时调.
+/// 取消进行中的 stream 或一次性长请求. 前端 AbortSignal 触发时调.
 ///
 /// 幂等: 已结束 / 不存在的 request_id 也返 OK.
 #[tauri::command]

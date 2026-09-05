@@ -27,6 +27,7 @@ describe("超时分档: LLM 调用要长, 其它保持短", () => {
   it.each([
     ["http://127.0.0.1:8999/v1/chat/completions", "直连网关"],
     ["http://localhost:8642/v1/chat/completions", "无 query"],
+    ["http://localhost:8642/p/catfish-advisor/v1/chat/completions", "Hermes 命名 profile"],
     ["http://127.0.0.1:8999/v1/responses", "responses 协议"],
   ])("LLM 调用 %s (%s)", (url) => expect(isLlmCall(url)).toBe(true));
 

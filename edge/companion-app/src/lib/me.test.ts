@@ -157,6 +157,28 @@ describe("fetchWithAuth — hermes 路径 (useHermes=true)", () => {
     expect(cmdsCalled).not.toContain("auth_get_access_token");
   });
 
+  it("命名 profile 路由仍透传 Hermes key 与员工身份", async () => {
+    config.useHermes = true;
+    config.hermesAuthHeader = "Bearer hermes-profile-key";
+    config.backendUrl = "http://localhost:8642";
+
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "auth_whoami") {
+        return { authenticated: true, email: "advisor-user@catfish.dev" };
+      }
+      throw new Error(`unexpected invoke: ${cmd}`);
+    });
+    const { calls } = setProxyMock(() => jsonResp(200, { ok: true }));
+
+    await fetchWithAuth(
+      `${config.backendUrl}/p/catfish-advisor/v1/chat/completions` +
+        "?catfish_source=companion-advisor",
+    );
+    expect(calls[0].headers["authorization"]).toBe("Bearer hermes-profile-key");
+    expect(calls[0].headers["x-catfish-user"]).toBe("advisor-user@catfish.dev");
+    expect(invokeMock.mock.calls.map((call) => call[0])).not.toContain("auth_login");
+  });
+
   // 8/9 P44 回归: /api/catfish/* 是 hermes 自己的端点 (注册在 8642, 走
   // adapter._check_auth 要 API_SERVER_KEY)。默认规则"含 /api/ 就是 gateway"
   // 会让它拿 OAuth JWT → 401 → auth_login → **反复弹登录页**。

@@ -149,7 +149,30 @@ export async function httpProxy(url: string, init?: RequestInit): Promise<Respon
     url, init,
     isLlmCall(url) ? LLM_TRANSPORT_TIMEOUT_MS : DEFAULT_TRANSPORT_TIMEOUT_MS,
   );
-  const resp = await invoke<HttpProxyResponse>("http_proxy", { req });
+  let resp: HttpProxyResponse;
+  if (init?.signal) {
+    const requestId = crypto.randomUUID();
+    const abort = () => {
+      void invoke("http_proxy_abort", { requestId }).catch(() => {});
+    };
+    if (init.signal.aborted) {
+      abort();
+      throw new DOMException("请求已取消", "AbortError");
+    }
+    init.signal.addEventListener("abort", abort, { once: true });
+    try {
+      resp = await invoke<HttpProxyResponse>("http_proxy_abortable", { req, requestId });
+    } catch (error) {
+      if (init.signal.aborted) {
+        throw new DOMException("请求已取消", "AbortError");
+      }
+      throw error;
+    } finally {
+      init.signal.removeEventListener("abort", abort);
+    }
+  } else {
+    resp = await invoke<HttpProxyResponse>("http_proxy", { req });
+  }
 
   // 名字不能叫 init —— 会盖住函数参数 init: RequestInit
   const respInit = { status: resp.status, headers: toResponseHeaders(resp.headers) };

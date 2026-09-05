@@ -83,6 +83,7 @@ import SkillsHubCard from "./SkillsHubCard";
 // 今日区现在只剩 CronJobsCard (定时任务监控). 想恢复主动闲聊 → 早安 tab AdvisorView.
 import CronJobsCard from "./CronJobsCard";  // P3.5.105 (6/25 鸿波 catch "定时任务跑没跑结果如何都看不到")
 import AgentPrefsCard from "./AgentPrefsCard";
+import ExpertBotsCard from "./ExpertBotsCard";
 import ServerConfigCard from "./ServerConfigCard"; // P28 (6/5 鸿波): UI 改 gateway URL/token
 import RelationCard from "./RelationCard";
 import HermesMemoryCard from "./HermesMemoryCard";  // BL-DASHBOARD-HERMES-MEMORY-CARD (5/16)
@@ -196,6 +197,15 @@ export default function DashboardTab() {
         count={1}
       >
         <AgentPrefsCard />
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        id="expert-bots"
+        title="🧠 专家 Bot"
+        count={1}
+        defaultCollapsed
+      >
+        <ExpertBotsCard />
       </CollapsibleSection>
 
       {/* P28 (6/5 鸿波): 服务器配置 — gateway URL + internal token.

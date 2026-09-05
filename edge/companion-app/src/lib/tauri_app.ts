@@ -98,6 +98,105 @@ export interface EmailConfigPublic {
   yaml_path: string;
 }
 
+// ── Hermes Profile 专家 Bot 管理器（默认关闭）──────────────────
+export interface ExpertBotsStatus {
+  enabled: boolean;
+  ready: boolean;
+  advisorProfile: string;
+  reason: string;
+}
+
+export const expertBotsStatus = () =>
+  rawInvoke<ExpertBotsStatus>("expert_bots_status");
+
+export const expertBotsSetEnabled = (enabled: boolean) =>
+  rawInvoke<ExpertBotsStatus>("expert_bots_set_enabled", { enabled });
+
+export type ExpertBotModelPolicy =
+  | { mode: "inherit_picker"; model_id?: null }
+  | { mode: "fixed"; model_id: string };
+
+export interface ExpertBotSummary {
+  id: string;
+  displayName: string;
+  description: string;
+  managedByCompanion: boolean;
+  enabled: boolean;
+  ready: boolean;
+  reason: string;
+  modelPolicy: ExpertBotModelPolicy;
+  configuredModel: string | null;
+  provider: string | null;
+  skillCount: number;
+  boundScenarios: string[];
+}
+
+export interface AvailableExpertProfile {
+  id: string;
+  displayName: string;
+  description: string;
+  registered: boolean;
+  managedByCompanion: boolean;
+}
+
+export interface ExpertBotScenario {
+  id: string;
+  label: string;
+  profileId: string | null;
+}
+
+export interface ExpertBotsSnapshot {
+  enabled: boolean;
+  bots: ExpertBotSummary[];
+  availableProfiles: AvailableExpertProfile[];
+  scenarios: ExpertBotScenario[];
+}
+
+export interface ExpertBotCreateInput {
+  id: string;
+  displayName: string;
+  description: string;
+  soul: string;
+  cloneFrom?: string | null;
+  modelPolicy: ExpertBotModelPolicy;
+}
+
+export interface ExpertBotUpdateInput {
+  id: string;
+  displayName?: string | null;
+  description?: string | null;
+  soul?: string | null;
+  enabled?: boolean | null;
+  modelPolicy?: ExpertBotModelPolicy | null;
+}
+
+export interface ExpertBotRoute {
+  enabled: boolean;
+  ready: boolean;
+  profileId: string | null;
+  model: string;
+  reason: string;
+}
+
+export const expertBotsList = () =>
+  rawInvoke<ExpertBotsSnapshot>("expert_bots_list");
+export const expertBotCreate = (input: ExpertBotCreateInput) =>
+  rawInvoke<ExpertBotsSnapshot>("expert_bot_create", { input });
+export const expertBotUpdate = (input: ExpertBotUpdateInput) =>
+  rawInvoke<ExpertBotsSnapshot>("expert_bot_update", { input });
+export const expertBotRegisterExisting = (profileId: string) =>
+  rawInvoke<ExpertBotsSnapshot>("expert_bot_register_existing", { profileId });
+export const expertBotUnregister = (profileId: string) =>
+  rawInvoke<ExpertBotsSnapshot>("expert_bot_unregister", { profileId });
+export const expertBotDelete = (profileId: string) =>
+  rawInvoke<ExpertBotsSnapshot>("expert_bot_delete", { profileId });
+export const expertBotBind = (scenario: string, profileId: string | null) =>
+  rawInvoke<ExpertBotsSnapshot>("expert_bot_bind", { scenario, profileId });
+export const expertBotSoulGet = (profileId: string) =>
+  rawInvoke<string>("expert_bot_soul_get", { profileId });
+export const expertBotRoute = (scenario: string, pickerModel: string) =>
+  rawInvoke<ExpertBotRoute>("expert_bot_route", { scenario, pickerModel });
+
 
 // ── 桌宠跨窗通信 (5/6: Tauri 跨 webview event 不通, 走 Rust polling buffer) ─
 export interface PetEmitBubbleDiag {

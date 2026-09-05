@@ -23,6 +23,7 @@ pub(crate) fn handler(
             // BL-CSP-PROXY (7/18 鸿波): Rust reqwest HTTP 代理, 让前端 fetch 走 Rust,
             // CSP connect-src 保持严格 (无外网白名单). 达华 POC 员工输达华 IP 才能通 chat.
             crate::commands::http_proxy::http_proxy,
+            crate::commands::http_proxy::http_proxy_abortable,
             crate::commands::http_proxy::http_proxy_stream,
             crate::commands::http_proxy::http_proxy_abort,
             // chrome
@@ -314,6 +315,18 @@ pub(crate) fn handler(
             crate::commands::profile::profile_hints_read,
             crate::commands::profile::profile_needs_recompute,
             crate::commands::profile::profile_next_recompute_at,
+            // Hermes Profile 专家 Bot：管理、场景绑定与请求路由
+            crate::commands::expert_bots::expert_bots_status,
+            crate::commands::expert_bots::expert_bots_list,
+            crate::commands::expert_bots::expert_bots_set_enabled,
+            crate::commands::expert_bots::expert_bot_create,
+            crate::commands::expert_bots::expert_bot_update,
+            crate::commands::expert_bots::expert_bot_register_existing,
+            crate::commands::expert_bots::expert_bot_unregister,
+            crate::commands::expert_bots::expert_bot_delete,
+            crate::commands::expert_bots::expert_bot_bind,
+            crate::commands::expert_bots::expert_bot_soul_get,
+            crate::commands::expert_bots::expert_bot_route,
             // BL-ADVISOR-DRAFTS (5/21 Phase 7 第 2 步): ~/.catfish/outputs/<date>/ 草稿存储
             crate::commands::drafts::draft_save,
             crate::commands::drafts::draft_read,
