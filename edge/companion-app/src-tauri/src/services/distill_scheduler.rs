@@ -36,7 +36,7 @@ use tauri::AppHandle;
 use tokio::time;
 
 use crate::commands::dream;
-use crate::services::{catfish_paths, picker_config};
+use crate::services::{catfish_paths, picker_config, process};
 
 /// 敲门间隔。真正的 24h 判定在 memory_distill_state.json, 不在这里。
 const TICK_SECS: u64 = 15 * 60;
@@ -103,7 +103,7 @@ fn log_wiki_health() {
     if !script.exists() {
         return;
     }
-    match std::process::Command::new(&python)
+    match process::background_command(&python)
         .arg(&script)
         .output()
     {

@@ -35,7 +35,6 @@
 //! - 失败静默 — Mail.app 没开 / 没权限 / CLI 没装 / 评级 LLM 挂, log debug 不 spam 通知.
 
 use std::collections::{HashMap, HashSet};
-use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
@@ -43,6 +42,7 @@ use tauri::AppHandle;
 use tokio::time;
 use tokio::time::MissedTickBehavior;
 
+use crate::commands::email::email_command;
 use crate::services::{
     catfish_paths, email_config, hermes_api_config, picker_config, upstream_error_guard,
 };
@@ -402,7 +402,7 @@ async fn fetch_unread() -> Result<Vec<EmailItem>, String> {
 
     // tokio spawn_blocking 让阻塞 subprocess 不卡 runtime
     let output = tokio::task::spawn_blocking(move || {
-        Command::new(&bin)
+        email_command(&bin)
             .args(["list", "--unread", "--json", "--limit", "20"])
             .output()
     })

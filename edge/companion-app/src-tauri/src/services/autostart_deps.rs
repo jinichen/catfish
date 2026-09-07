@@ -6,7 +6,7 @@
 //! 字符二元组; agent-browser 没装, 走 npx fallback 在受限网络下干等 26 秒。
 //! 所以这里一律**真跑一次**再下结论, 而且只打日志不阻塞启动。
 
-use crate::services::catfish_paths;
+use crate::services::{catfish_paths, process};
 
 // ============================================================
 // 运行时依赖自检 (BL-DEPS-SILENT-DEGRADE 7/27 鸿波定)
@@ -60,7 +60,7 @@ fn check_jieba_installed() {
     let Some(python) = catfish_paths::tool_bridge_python() else {
         return;
     };
-    let ok = std::process::Command::new(&python)
+    let ok = process::background_command(&python)
         .args(["-c", "import jieba"])
         .output()
         .map(|o| o.status.success())
@@ -108,7 +108,7 @@ fn check_playwright_installed() {
     let Some(python) = catfish_paths::tool_bridge_python() else {
         return;
     };
-    let ok = std::process::Command::new(&python)
+    let ok = process::background_command(&python)
         .args(["-c", "import playwright.sync_api"])
         .output()
         .map(|o| o.status.success())
@@ -148,7 +148,7 @@ fn check_agent_browser_runnable() {
         return;
     };
     // 关键: 真执行一次。见函数头注释里 postinstall / dangling symlink 那段。
-    match std::process::Command::new(&bin).arg("--version").output() {
+    match process::background_command(&bin).arg("--version").output() {
         Ok(o) if o.status.success() => {
             let ver = String::from_utf8_lossy(&o.stdout).trim().to_string();
             log::info!("deps: agent-browser ✓ {} ({})", ver, bin.display());

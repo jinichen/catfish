@@ -9,9 +9,8 @@ use anyhow::{Context, Result};
 use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use super::hermes_install_artifacts::{
     resolve_addon_runtime_dir, RuntimeArtifacts, HERMES_DEPS_ARCHIVE,
@@ -23,8 +22,8 @@ use super::hermes_install_health::core_health_problems;
 use super::hermes_install_state::{write_completion_marker, BootstrapPaths};
 use super::hermes_install_steps::install_hermes_deps;
 use crate::services::catfish_paths::{hermes_venv_python, hermes_venv_tool};
+use crate::services::process;
 
-const CREATE_NO_WINDOW: u32 = 0x08000000;
 const TOTAL_STEPS: u8 = 5;
 
 fn windows_resources(resource_dir: &Path) -> PathBuf {
@@ -63,9 +62,8 @@ fn run_hidden_powershell(
     writeln!(log, "\n=== {description} ===")?;
     writeln!(log, "script: {}", script.display())?;
 
-    let mut command = Command::new("powershell.exe");
+    let mut command = process::background_command("powershell.exe");
     command
-        .creation_flags(CREATE_NO_WINDOW)
         .args([
             OsString::from("-NoProfile"),
             OsString::from("-NonInteractive"),
@@ -91,8 +89,8 @@ fn run_hidden_powershell(
 }
 
 fn run_hidden_status(program: &Path, args: &[&str], description: &str) -> bool {
-    let mut command = Command::new(program);
-    command.args(args).creation_flags(CREATE_NO_WINDOW);
+    let mut command = process::background_command(program);
+    command.args(args);
     match command.status() {
         Ok(status) => status.success(),
         Err(error) => {

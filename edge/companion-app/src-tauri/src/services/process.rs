@@ -10,6 +10,7 @@
 //!
 //! 不依赖 libc/nix —— 用标准库 Command 包装系统命令，跨平台够用且少一层 crate。
 
+use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -32,6 +33,43 @@ pub struct SpawnHandle {
 /// Companion 进程级单实例锁。保留打开的文件句柄即可让锁覆盖整个进程生命周期。
 pub struct InstanceGuard {
     _file: std::fs::File,
+}
+
+/// 创建不会在 Windows GUI 应用旁弹出控制台窗口的短期子进程。
+///
+/// `catfish-email.exe`、Python、PowerShell、tasklist/wmic 都属于 console
+/// subsystem。Companion 本身是 windows subsystem，直接 `Command::new` 它们会
+/// 让系统临时创建黑框。其它平台保持标准 `Command` 行为。
+pub fn background_command<S: AsRef<OsStr>>(program: S) -> Command {
+    let command = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut command = command;
+        command.creation_flags(CREATE_NO_WINDOW);
+        command
+    }
+    #[cfg(not(windows))]
+    {
+        command
+    }
+}
+
+/// Tokio 版本的无窗口短期子进程构造器。
+pub fn background_tokio_command<S: AsRef<OsStr>>(program: S) -> tokio::process::Command {
+    let command = tokio::process::Command::new(program);
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut command = command;
+        command.creation_flags(CREATE_NO_WINDOW);
+        command
+    }
+    #[cfg(not(windows))]
+    {
+        command
+    }
 }
 
 /// 获取指定路径的跨平台独占锁；已有 Companion 时返回 None，不等待也不重复启动。
@@ -124,7 +162,7 @@ pub fn spawn_detached(cfg: SpawnConfig) -> anyhow::Result<SpawnHandle> {
         .open(&cfg.log_path)?;
     let log_clone = log_file.try_clone()?;
 
-    let mut cmd = Command::new(&cfg.program);
+    let mut cmd = background_command(&cfg.program);
     cmd.args(&cfg.args)
         .current_dir(&cfg.working_dir)
         .stdin(Stdio::null())
@@ -180,7 +218,7 @@ pub fn kill(pid: u32) -> anyhow::Result<()> {
     }
     #[cfg(windows)]
     {
-        let _ = Command::new("taskkill")
+        let _ = background_command("taskkill")
             .args(["/PID", &pid.to_string(), "/F"])
             .output();
     }
@@ -204,7 +242,7 @@ pub fn is_alive(pid: u32) -> bool {
     }
     #[cfg(windows)]
     {
-        Command::new("tasklist")
+        background_command("tasklist")
             .args(["/FI", &format!("PID eq {}", pid), "/NH"])
             .output()
             .ok()
@@ -266,7 +304,7 @@ fn cmdline_matches(pid: u32, substr: &str) -> Option<bool> {
     }
     #[cfg(windows)]
     {
-        let output = Command::new("wmic")
+        let output = background_command("wmic")
             .args([
                 "process",
                 "where",
@@ -349,5 +387,59 @@ mod rotate_tests {
         assert!(first.is_some());
         let second = try_acquire_instance_lock(&path).unwrap();
         assert!(second.is_none());
+    }
+
+    #[test]
+    fn recurring_windows_console_commands_use_background_constructor() {
+        // Windows GUI 程序直接 spawn console subsystem 的 exe，会短暂创建黑框。
+        // 这几条都是启动时或定时执行的高频路径，不能再绕过统一入口。
+        for (name, source, forbidden) in [
+            (
+                "commands/email.rs",
+                include_str!("../commands/email.rs"),
+                "Command::new(bin)",
+            ),
+            (
+                "services/email_scheduler.rs",
+                include_str!("email_scheduler.rs"),
+                "Command::new(&bin)",
+            ),
+            (
+                "services/autostart_deps.rs",
+                include_str!("autostart_deps.rs"),
+                "std::process::Command::new",
+            ),
+            (
+                "commands/hermes_install_windows.rs",
+                include_str!("../commands/hermes_install_windows.rs"),
+                "Command::new(",
+            ),
+            (
+                "commands/dream.rs",
+                include_str!("../commands/dream.rs"),
+                "Command::new(&python)",
+            ),
+            (
+                "services/distill_scheduler.rs",
+                include_str!("distill_scheduler.rs"),
+                "std::process::Command::new",
+            ),
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{name} 仍直接启动 Windows console 子进程：{forbidden}"
+            );
+        }
+        let source = include_str!("process.rs");
+        for forbidden in ["Command::new(\"tasklist\")", "Command::new(\"wmic\")"] {
+            assert!(
+                !source.contains(forbidden),
+                "进程巡检仍可能周期性弹黑框：{forbidden}"
+            );
+        }
+        assert!(
+            include_str!("email_scheduler.rs").contains("email_command(&bin)"),
+            "后台扫描必须复用邮件页的 command builder，才能继承 foxmail_root"
+        );
     }
 }

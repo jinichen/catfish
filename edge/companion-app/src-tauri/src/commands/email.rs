@@ -20,8 +20,8 @@ use std::process::Command;
 use crate::services::catfish_paths;
 use crate::services::email_config;
 use crate::services::email_scheduler;
+use crate::services::process;
 use crate::services::phishing_scan::PhishingScanResult;
-
 
 /// 一次 list 最多返多少封。EmailTab 的 MAX_EMAIL_LIST_LIMIT 跟这个值对齐。
 ///
@@ -37,8 +37,8 @@ pub(crate) const EMAIL_LIST_MAX: u32 = 500;
 /// 不能只依赖 PowerShell 中临时设置的环境变量，必须从 Companion 配置传给
 /// 每一次 CLI 调用。配置了根目录时同时明确选 Foxmail，避免 Outlook COM
 /// 探测失败污染 Foxmail 结果。
-fn email_command(bin: &Path) -> Command {
-    let mut command = Command::new(bin);
+pub(crate) fn email_command(bin: &Path) -> Command {
+    let mut command = process::background_command(bin);
     if cfg!(target_os = "windows") {
         if let Some(root) = email_config::email_config().foxmail_root.as_deref() {
             command

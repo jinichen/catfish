@@ -35,9 +35,8 @@ use std::process::Stdio;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
 
-use crate::services::catfish_paths;
+use crate::services::{catfish_paths, process};
 
 const DREAM_EVENT: &str = "dream:progress";
 
@@ -164,7 +163,7 @@ pub(crate) async fn run_dream(
         );
     }
 
-    let mut cmd = Command::new(&python);
+    let mut cmd = process::background_tokio_command(&python);
     cmd.args(&args)
         .env("PYTHONUNBUFFERED", "1")
         .stdin(Stdio::null())
