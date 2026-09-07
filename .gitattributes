@@ -1,0 +1,61 @@
+# 换行符规范 —— 让 Windows 上 checkout 出来的东西仍然能在 Linux 容器里跑。
+#
+# # 为什么需要这个文件
+#
+# Windows 的 git 默认 core.autocrlf=true, clone 时会把文本文件转成 CRLF。
+# 而下面这几类文件是**在 Linux 容器里被执行 / 解析**的:
+#
+#   central/web/docker-entrypoint-catfish-config.sh   容器 ENTRYPOINT
+#   central/web/docker-entrypoint-catfish-ssl.sh      容器 ENTRYPOINT
+#
+# 转成 CRLF 之后, 容器里报的是:
+#
+#   exec /docker-entrypoint-catfish-config.sh: no such file or directory
+#   或  bad interpreter: /bin/sh^M
+#
+# 两条错误信息都**不指向真因** —— 文件明明在, 报的却是找不到。这是那种
+# 能烧掉客户 IT 一下午的坑, 而且每台 Windows 机器都会中一次。
+#
+# .env 更隐蔽: docker compose 读它的时候 CRLF 会让值末尾多一个 \r,
+# 于是 PG_PASSWORD=abc123 实际变成 abc123\r —— 库连不上, 报的是密码错误,
+# 而你复制粘贴出来看又完全正确。
+#
+# # 为什么不用 `* text=auto eol=lf`
+#
+# 那是 git 官方推荐的写法, 但对一个已经有几千个文件的仓库来说, 加上去会让
+# 下一次 checkout 产生大范围的行尾变更, 淹掉真正的 diff。这里只钉住确实会
+# 出事的那几类, 改动最小、风险为零。以后想全仓统一, 单独做一次。
+
+# ── 必须 LF: 在 Linux 容器里执行 / 被容器解析 ──
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+Dockerfile.*    text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+.env            text eol=lf
+.env.*          text eol=lf
+*.env           text eol=lf
+
+# ── Windows 脚本: CRLF (PowerShell 读 LF 也没问题, 但记事本打开不至于糊成一行) ──
+*.ps1           text eol=crlf
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+
+# ── 二进制: 一律不转换 ──
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.ico           binary
+*.icns          binary
+*.pdf           binary
+*.zip           binary
+*.gz            binary
+*.tar           binary
+*.woff          binary
+*.woff2         binary
+*.ttf           binary
+*.dylib         binary
+*.so            binary
+*.dll           binary
+*.exe           binary
