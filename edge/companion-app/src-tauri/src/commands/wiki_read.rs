@@ -150,7 +150,7 @@ fn parse_list_field(fm: &str, key: &str) -> Vec<String> {
 ///   - 新 inline map: `related: [{name: 陈鸿波, rel: 同事}, FFCS]` → mixed
 ///
 /// brace-aware splitter — 不能简单按 `,` split, 否则 `{a, b}` 会被切坏.
-fn parse_related(fm: &str) -> Vec<RelatedRef> {
+pub(crate) fn parse_related(fm: &str) -> Vec<RelatedRef> {
     let Some(raw) = parse_frontmatter_field(fm, "related") else {
         return Vec::new();
     };

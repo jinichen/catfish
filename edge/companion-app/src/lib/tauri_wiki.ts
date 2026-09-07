@@ -158,6 +158,17 @@ export const wikiCreateEntityOrConcept = (args: {
 export const wikiUpdateFile = (relPath: string, content: string) =>
   rawInvoke<WikiWriteResult>("wiki_update_file", { relPath, content });
 
+export interface WikiRelationMigrationResult {
+  dry_run: boolean;
+  scanned_files: number;
+  changed_files: number;
+  converted_relations: number;
+  backup_dir: string | null;
+}
+
+export const wikiMigrateLegacyRelations = (dryRun = true) =>
+  rawInvoke<WikiRelationMigrationResult>("wiki_migrate_legacy_relations", { dryRun });
+
 /** P3.3.4 (6/9 鸿波): 软删 entity/concept/query → mv 到 wiki/.trash/<ts>-原名.md.
  * P3.5.132 #3 (6/29 鸿波): 加 dryRun + affectedFiles 先报谁会变 dangling. */
 export interface AffectedFile {

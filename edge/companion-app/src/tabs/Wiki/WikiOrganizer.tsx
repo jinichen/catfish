@@ -9,6 +9,7 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react";
 import { useWikiStore } from "../../store/wiki";
+import { wikiMigrateLegacyRelations, type WikiRelationMigrationResult } from "../../lib/tauri_wiki";
 import WikiTree from "./WikiTree";
 import {
   buildWikiRelationshipTasks,
@@ -42,6 +43,9 @@ export default function WikiOrganizer({
   const selectFile = useWikiStore((state) => state.selectFile);
   const [search, setSearch] = useState("");
   const [kindFilter, setKindFilter] = useState<WikiRelationshipTaskKind | "all">("all");
+  const [migration, setMigration] = useState<WikiRelationMigrationResult | null>(null);
+  const [migrationRunning, setMigrationRunning] = useState(false);
+  const [migrationError, setMigrationError] = useState<string | null>(null);
 
   useEffect(() => {
     if (files.length === 0 && !filesLoading) void loadFiles();
@@ -64,6 +68,33 @@ export default function WikiOrganizer({
       return !query || `${task.title} ${task.detail}`.toLocaleLowerCase("zh-CN").includes(query);
     });
   }, [kindFilter, search, tasks]);
+
+  const previewLegacyMigration = async () => {
+    setMigrationRunning(true);
+    setMigrationError(null);
+    try {
+      setMigration(await wikiMigrateLegacyRelations(true));
+    } catch (error) {
+      setMigrationError(String(error));
+    } finally {
+      setMigrationRunning(false);
+    }
+  };
+
+  const executeLegacyMigration = async () => {
+    if (!migration || migration.converted_relations === 0 || migrationRunning) return;
+    if (!window.confirm(`将把 ${migration.converted_relations} 条旧关系补成“关联”，执行前会自动备份。继续吗？`)) return;
+    setMigrationRunning(true);
+    setMigrationError(null);
+    try {
+      setMigration(await wikiMigrateLegacyRelations(false));
+      await loadFiles();
+    } catch (error) {
+      setMigrationError(String(error));
+    } finally {
+      setMigrationRunning(false);
+    }
+  };
 
   useEffect(() => {
     if (mode !== "organize" || selectedPath || tasks.length === 0) return;
@@ -128,6 +159,28 @@ export default function WikiOrganizer({
               );
             })}
           </div>
+
+          <section className="wiki-organizer__migration" aria-label="旧关系格式整理">
+            <div>
+              <strong>旧关系格式</strong>
+              <span>只补通用“关联”，不改变目标或猜测具体语义。</span>
+            </div>
+            <button type="button" onClick={() => void previewLegacyMigration()} disabled={migrationRunning}>
+              {migrationRunning ? "处理中…" : "检查旧关系"}
+            </button>
+            {migration && (
+              <div className="wiki-organizer__migration-result">
+                <span>扫描 {migration.scanned_files} 个文件，发现 {migration.converted_relations} 条可整理关系。</span>
+                {migration.dry_run && migration.converted_relations > 0 && (
+                  <button type="button" onClick={() => void executeLegacyMigration()} disabled={migrationRunning}>
+                    一次性整理
+                  </button>
+                )}
+                {!migration.dry_run && migration.backup_dir && <small>原文件已备份：{migration.backup_dir}</small>}
+              </div>
+            )}
+            {migrationError && <span className="wiki-organizer__migration-error">整理失败：{migrationError}</span>}
+          </section>
 
           <div className="wiki-organizer__task-heading">
             <div>

@@ -2015,6 +2015,35 @@ button {
   border-color: var(--catfish-cyan-bright);
   background: var(--catfish-bg-cream);
 }
+.wiki-organizer__migration {
+  display: grid;
+  gap: 8px;
+  margin: -6px 0 16px;
+  padding: 12px;
+  border: 1px solid rgba(240, 112, 58, 0.28);
+  border-radius: var(--radius-md);
+  background: rgba(240, 112, 58, 0.06);
+  font-size: 12px;
+}
+.wiki-organizer__migration > div:first-child { display: grid; gap: 4px; }
+.wiki-organizer__migration span,
+.wiki-organizer__migration small { color: var(--catfish-text-muted); line-height: 1.4; }
+.wiki-organizer__migration button {
+  min-height: 36px;
+  justify-self: start;
+  padding: 0 12px;
+  border: 1px solid var(--catfish-cyan);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--catfish-cyan);
+  font: 600 13px/1 var(--font-sans);
+  cursor: pointer;
+}
+.wiki-organizer__migration button:hover:not(:disabled) { background: rgba(14, 97, 105, 0.08); }
+.wiki-organizer__migration button:disabled { cursor: wait; opacity: 0.55; }
+.wiki-organizer__migration-result { display: grid; gap: 6px; }
+.wiki-organizer__migration-result button { border-color: var(--catfish-orange); color: var(--catfish-orange); }
+.wiki-organizer__migration-error { color: var(--status-err); }
 .wiki-organizer__task-heading {
   min-height: 36px;
   display: flex;
