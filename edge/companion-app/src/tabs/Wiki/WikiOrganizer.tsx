@@ -83,7 +83,6 @@ export default function WikiOrganizer({
 
   const executeLegacyMigration = async () => {
     if (!migration || migration.converted_relations === 0 || migrationRunning) return;
-    if (!window.confirm(`将把 ${migration.converted_relations} 条旧关系补成“关联”，执行前会自动备份。继续吗？`)) return;
     setMigrationRunning(true);
     setMigrationError(null);
     try {
@@ -169,8 +168,12 @@ export default function WikiOrganizer({
               {migrationRunning ? "处理中…" : "检查旧关系"}
             </button>
             {migration && (
-              <div className="wiki-organizer__migration-result">
-                <span>扫描 {migration.scanned_files} 个文件，发现 {migration.converted_relations} 条可整理关系。</span>
+              <div className="wiki-organizer__migration-result" aria-live="polite">
+                <span>
+                  {migration.dry_run
+                    ? `扫描 ${migration.scanned_files} 个文件，发现 ${migration.converted_relations} 条可整理关系。`
+                    : `已整理 ${migration.converted_relations} 条旧关系，修改 ${migration.changed_files} 个文件。`}
+                </span>
                 {migration.dry_run && migration.converted_relations > 0 && (
                   <button type="button" onClick={() => void executeLegacyMigration()} disabled={migrationRunning}>
                     一次性整理
