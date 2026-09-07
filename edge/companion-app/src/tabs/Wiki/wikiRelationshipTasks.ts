@@ -1,6 +1,7 @@
 import type { RelatedRef, WikiFileInfo } from "../../lib/tauri_wiki";
+import { resolveWikiRef } from "../../lib/wikiResolve";
 
-export type WikiRelationshipTaskKind = "pending" | "missing" | "duplicate";
+export type WikiRelationshipTaskKind = "pending" | "missing" | "duplicate" | "broken";
 
 export interface WikiRelationshipTask {
   id: string;
@@ -9,6 +10,7 @@ export interface WikiRelationshipTask {
   detail: string;
   file: WikiFileInfo;
   duplicatePaths?: string[];
+  relationName?: string;
 }
 
 const DEFAULT_RELATION_TYPES = [
@@ -103,6 +105,30 @@ export function buildWikiRelationshipTasks(files: WikiFileInfo[]): WikiRelations
       file,
     }));
 
+  const broken = files.flatMap((file): WikiRelationshipTask[] =>
+    file.related.flatMap((relation) => {
+      const name = relation.name.trim();
+      if (!name) return [];
+      const resolution = resolveWikiRef(name, files);
+      const reason = !relation.rel?.trim()
+        ? "缺少关系类型"
+        : resolution.kind === "miss"
+          ? "找不到目标条目"
+          : resolution.kind === "ambiguous"
+            ? `有 ${resolution.candidates.length} 个可能目标`
+            : null;
+      if (!reason) return [];
+      return [{
+        id: `broken:${file.rel_path}:${name}`,
+        kind: "broken",
+        title: `修复「${file.title}」的关系`,
+        detail: `“${name}”：${reason}`,
+        file,
+        relationName: name,
+      }];
+    }),
+  );
+
   const duplicates = duplicateGroups(files).map((group): WikiRelationshipTask => ({
     id: `duplicate:${group.map((file) => file.rel_path).sort().join("|")}`,
     kind: "duplicate",
@@ -112,7 +138,7 @@ export function buildWikiRelationshipTasks(files: WikiFileInfo[]): WikiRelations
     duplicatePaths: group.map((file) => file.rel_path),
   }));
 
-  return [...pending, ...missing, ...duplicates];
+  return [...pending, ...broken, ...missing, ...duplicates];
 }
 
 export function relationTypeOptions(files: WikiFileInfo[]): string[] {

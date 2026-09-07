@@ -99,6 +99,13 @@ export default function WikiRelationshipWorkbench() {
     try {
       const nextRelation: RelatedRef = { name: selectedTarget.title, rel: relationType.trim() };
       const existing = info.related.filter((relation) => {
+        if (
+          selectedTask?.kind === "broken" &&
+          selectedTask.relationName &&
+          relation.name.trim() === selectedTask.relationName.trim()
+        ) {
+          return false;
+        }
         const target = resolveWikiRefOrNull(relation.name, files);
         return target?.rel_path !== selectedTarget.rel_path;
       });

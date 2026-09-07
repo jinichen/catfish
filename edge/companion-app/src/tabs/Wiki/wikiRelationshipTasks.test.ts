@@ -42,6 +42,33 @@ describe("buildWikiRelationshipTasks", () => {
     expect(duplicates).toHaveLength(1);
     expect(duplicates[0].duplicatePaths).toHaveLength(2);
   });
+
+  it("把断链和缺少关系类型拆成可逐条修复的任务", () => {
+    const tasks = buildWikiRelationshipTasks([
+      file({
+        rel_path: "wiki/entities/broken.md",
+        title: "问题条目",
+        related: [
+          { name: "不存在的目标", rel: "依据" },
+          { name: "示例" },
+        ],
+      }),
+      file({ rel_path: "wiki/entities/target.md", title: "示例" }),
+    ]);
+    const broken = tasks.filter((task) => task.kind === "broken");
+    expect(broken).toHaveLength(2);
+    expect(broken.map((task) => task.relationName)).toEqual(["不存在的目标", "示例"]);
+    expect(broken[0].detail).toContain("找不到目标条目");
+    expect(broken[1].detail).toContain("缺少关系类型");
+  });
+
+  it("正常的 typed relation 不生成异常任务", () => {
+    const tasks = buildWikiRelationshipTasks([
+      file({ related: [{ name: "目标", rel: "依据" }] }),
+      file({ rel_path: "wiki/entities/target.md", title: "目标" }),
+    ]);
+    expect(tasks.filter((task) => task.kind === "broken")).toHaveLength(0);
+  });
 });
 
 describe("buildConfirmedWikiContent", () => {

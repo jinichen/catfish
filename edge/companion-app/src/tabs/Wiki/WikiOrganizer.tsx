@@ -24,6 +24,7 @@ const TASK_META: Record<
   pending: { label: "待确认", icon: CheckCircle },
   missing: { label: "缺少关系", icon: LinkSimple },
   duplicate: { label: "可能重复", icon: Copy },
+  broken: { label: "关系异常", icon: WarningCircle },
 };
 
 export default function WikiOrganizer({
@@ -52,6 +53,7 @@ export default function WikiOrganizer({
       pending: tasks.filter((task) => task.kind === "pending").length,
       missing: tasks.filter((task) => task.kind === "missing").length,
       duplicate: tasks.filter((task) => task.kind === "duplicate").length,
+      broken: tasks.filter((task) => task.kind === "broken").length,
     }),
     [tasks],
   );
