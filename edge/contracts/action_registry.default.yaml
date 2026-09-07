@@ -1,0 +1,59 @@
+# Companion 内置行动目录。
+# 普通员工不需要编辑本文件，也不需要维护 ~/.catfish/action-registry.yaml。
+# action_refs 只会在 Wiki 文件中保存这些稳定 ID；真正执行仍走 catfish_run_skill bridge。
+version: 1
+actions:
+  - id: "skill.eis-login"
+    label: "登录 EIS"
+    description: "打开 EIS 信息门户并完成登录"
+    executor: "skill"
+    skill_path: "department/eis-login"
+    approval: "required"
+    enabled: true
+    platforms: ["macos", "windows"]
+    timeout_seconds: 300
+  - id: "skill.eis-checkin"
+    label: "EIS 上班打卡"
+    description: "登录 EIS 后完成上班打卡"
+    executor: "skill"
+    skill_path: "department/eis-checkin"
+    approval: "required"
+    enabled: true
+    platforms: ["macos", "windows"]
+    timeout_seconds: 300
+  - id: "skill.eis-checkout"
+    label: "EIS 下班签退"
+    description: "登录 EIS 后完成下班签退"
+    executor: "skill"
+    skill_path: "department/eis-checkout"
+    approval: "required"
+    enabled: true
+    platforms: ["macos", "windows"]
+    timeout_seconds: 300
+  - id: "skill.leadership-briefing"
+    label: "生成领导汇报材料"
+    description: "按企业公文模板生成领导汇报材料"
+    executor: "skill"
+    skill_path: "department/leadership-briefing"
+    approval: "required"
+    enabled: true
+    platforms: ["macos", "windows"]
+    timeout_seconds: 600
+  - id: "skill.project-approval"
+    label: "生成项目立项材料"
+    description: "按企业公文模板生成项目立项材料"
+    executor: "skill"
+    skill_path: "department/project-approval"
+    approval: "required"
+    enabled: true
+    platforms: ["macos", "windows"]
+    timeout_seconds: 600
+  - id: "skill.weekly-report"
+    label: "生成员工周报"
+    description: "按企业模板生成员工周报"
+    executor: "skill"
+    skill_path: "department/weekly-report"
+    approval: "required"
+    enabled: true
+    platforms: ["macos", "windows"]
+    timeout_seconds: 600

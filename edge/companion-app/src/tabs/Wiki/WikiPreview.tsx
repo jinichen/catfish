@@ -30,6 +30,7 @@ import WikiLinkSuggestModal from "./WikiLinkSuggestModal";
 import { config } from "../../lib/env";
 import { fetchWithAuth } from "../../lib/me";
 import WikiShareDialog from "./WikiShareDialog";
+import WikiActionPanel from "./WikiActionPanel";
 // 8/15: 下面三段是从本文件搬出去的 JSX section, 不是新组件。挑它们是因为
 // props 少 (1 / 4 / 5 个)。action bar 那 119 行要 18 个 props, 所以留在原地 ——
 // 理由写在 WikiPreviewSections.tsx 的模块 docstring 里。
@@ -593,6 +594,11 @@ export default function WikiPreview() {
       {uninstallErr && (
         <div className="wiki-preview__save-err">卸载失败: {uninstallErr}</div>
       )}
+
+      <WikiActionPanel
+        selectedFile={selectedFile}
+        readOnly={selectedFile.info.rel_path.startsWith("wiki-shared/")}
+      />
 
       {/* P3.3.18 (6/10): 分享 dialog */}
       {shareDialogOpen && selectedFile && (

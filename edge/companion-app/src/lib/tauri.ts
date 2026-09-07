@@ -25,6 +25,7 @@
 export * from "./tauri_services";
 export * from "./tauri_sessions";
 export * from "./tauri_wiki";
+export * from "./wikiActions";
 export * from "./tauri_compliance";
 export * from "./tauri_briefing";
 export * from "./tauri_cron";

@@ -8,5 +8,10 @@
     "untyped_relation",
     "unresolved_relation",
     "ambiguous_relation"
-  ]
+  ],
+  "action_refs": {
+    "frontmatter_key": "action_refs",
+    "pattern": "^[A-Za-z0-9._:-]{1,120}$",
+    "meaning": "stable ids resolved by the local Action Registry; never a tool or model name"
+  }
 }

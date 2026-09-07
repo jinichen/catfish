@@ -16,6 +16,7 @@ import {
   buildWikiRelationshipTasks,
   relationTypeOptions,
 } from "./wikiRelationshipTasks";
+import WikiActionPanel from "./WikiActionPanel";
 
 function evidenceExcerpt(body: string): string {
   return body
@@ -66,7 +67,7 @@ export default function WikiRelationshipWorkbench() {
     setRelationType(first?.rel?.trim() || "关联");
     const target = first ? resolveWikiRefOrNull(first.name, files) : null;
     setTargetPath(target?.rel_path ?? targets[0]?.rel_path ?? "");
-  }, [files, selectedFile?.info.rel_path, selectedFile?.info.related, targets]);
+  }, [files, selectedFile?.frontmatter, selectedFile?.info.rel_path, selectedFile?.info.related, targets]);
 
   if (selectedLoading) {
     return <div className="wiki-workbench__empty"><SpinnerGap className="wiki-spin" size={30} />正在读取关系…</div>;
@@ -192,6 +193,8 @@ export default function WikiRelationshipWorkbench() {
           </div>
         ) : <div className="wiki-workbench__quiet">完成上面的确认后，这里会出现第一条关系。</div>}
       </section>
+
+      <WikiActionPanel selectedFile={selectedFile} />
 
       <section className="wiki-workbench__section">
         <div className="wiki-workbench__section-title">

@@ -1,0 +1,16 @@
+# This file is only for advanced local extensions. Companion already ships with
+# a built-in action catalog; ordinary employees should select actions in the UI.
+# Put this file at ~/.catfish/action-registry.yaml (or set CATFISH_ACTION_REGISTRY
+# for development/tests) to override a built-in action or add a local action.
+# Wiki files store only the id below; they never store a tool name or model name.
+version: 1
+actions:
+  - id: "skill.example-report"
+    label: "生成示例报告"
+    description: "通过已安装的 Catfish skill 执行这项工作"
+    executor: "skill"
+    skill_path: "catfish/example-report"
+    approval: "required"
+    enabled: true
+    platforms: ["macos", "windows"]
+    timeout_seconds: 300

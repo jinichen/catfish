@@ -149,6 +149,9 @@ export default function WikiOrganizer({
               <CheckCircle size={32} weight="duotone" aria-hidden="true" />
               <strong>当前关系已整理完成</strong>
               <span>新知识进入后，会自动出现在这里。</span>
+              <button type="button" onClick={() => onModeChange("browse")}>
+                去全部知识关联行动
+              </button>
             </div>
           )}
 
