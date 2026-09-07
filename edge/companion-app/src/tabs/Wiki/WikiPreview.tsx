@@ -678,6 +678,7 @@ export default function WikiPreview() {
           currentTitle={selectedFile.info.title}
           currentRelPath={selectedFile.info.rel_path}
           currentBody={selectedFile.body}
+          currentFrontmatter={selectedFile.frontmatter}
           model={chatModel}
           onClose={() => setSuggestOpen(false)}
           onApplied={() => {

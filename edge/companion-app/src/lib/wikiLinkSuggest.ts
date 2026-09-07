@@ -444,3 +444,10 @@ export function applyWikilinkSuggestions(
 
   return `${beforeSection}${merged}${afterSection}`;
 }
+
+/** 把更新后的 body 重新装回完整 wiki 文件，保留原 frontmatter。 */
+export function buildWikiContentWithBody(frontmatter: string, body: string): string {
+  const normalizedFrontmatter = frontmatter.trim();
+  if (!normalizedFrontmatter) return body;
+  return `---\n${normalizedFrontmatter}\n---\n\n${body}`;
+}

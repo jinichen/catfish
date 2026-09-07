@@ -13,6 +13,7 @@ import { wikiMigrateLegacyRelations, type WikiRelationMigrationResult } from "..
 import WikiTree from "./WikiTree";
 import {
   buildWikiRelationshipTasks,
+  hasLegacyWikiRelations,
   type WikiRelationshipTaskKind,
 } from "./wikiRelationshipTasks";
 
@@ -52,6 +53,7 @@ export default function WikiOrganizer({
   }, [files.length, filesLoading, loadFiles]);
 
   const tasks = useMemo(() => buildWikiRelationshipTasks(files), [files]);
+  const hasLegacyRelations = useMemo(() => hasLegacyWikiRelations(files), [files]);
   const counts = useMemo(
     () => ({
       pending: tasks.filter((task) => task.kind === "pending").length,
@@ -159,31 +161,33 @@ export default function WikiOrganizer({
             })}
           </div>
 
-          <section className="wiki-organizer__migration" aria-label="旧关系格式整理">
-            <div>
-              <strong>旧关系格式</strong>
-              <span>只补通用“关联”，不改变目标或猜测具体语义。</span>
-            </div>
-            <button type="button" onClick={() => void previewLegacyMigration()} disabled={migrationRunning}>
-              {migrationRunning ? "处理中…" : "检查旧关系"}
-            </button>
-            {migration && (
-              <div className="wiki-organizer__migration-result" aria-live="polite">
-                <span>
-                  {migration.dry_run
-                    ? `扫描 ${migration.scanned_files} 个文件，发现 ${migration.converted_relations} 条可整理关系。`
-                    : `已整理 ${migration.converted_relations} 条旧关系，修改 ${migration.changed_files} 个文件。`}
-                </span>
-                {migration.dry_run && migration.converted_relations > 0 && (
-                  <button type="button" onClick={() => void executeLegacyMigration()} disabled={migrationRunning}>
-                    一次性整理
-                  </button>
-                )}
-                {!migration.dry_run && migration.backup_dir && <small>原文件已备份：{migration.backup_dir}</small>}
+          {hasLegacyRelations && (
+            <section className="wiki-organizer__migration" aria-label="旧关系格式整理">
+              <div>
+                <strong>发现旧关系格式</strong>
+                <span>只补通用“关联”，不改变目标或猜测具体语义。</span>
               </div>
-            )}
-            {migrationError && <span className="wiki-organizer__migration-error">整理失败：{migrationError}</span>}
-          </section>
+              <button type="button" onClick={() => void previewLegacyMigration()} disabled={migrationRunning}>
+                {migrationRunning ? "处理中…" : "检查旧关系"}
+              </button>
+              {migration && (
+                <div className="wiki-organizer__migration-result" aria-live="polite">
+                  <span>
+                    {migration.dry_run
+                      ? `扫描 ${migration.scanned_files} 个文件，发现 ${migration.converted_relations} 条可整理关系。`
+                      : `已整理 ${migration.converted_relations} 条旧关系，修改 ${migration.changed_files} 个文件。`}
+                  </span>
+                  {migration.dry_run && migration.converted_relations > 0 && (
+                    <button type="button" onClick={() => void executeLegacyMigration()} disabled={migrationRunning}>
+                      一次性整理
+                    </button>
+                  )}
+                  {!migration.dry_run && migration.backup_dir && <small>原文件已备份：{migration.backup_dir}</small>}
+                </div>
+              )}
+              {migrationError && <span className="wiki-organizer__migration-error">整理失败：{migrationError}</span>}
+            </section>
+          )}
 
           <div className="wiki-organizer__task-heading">
             <div>

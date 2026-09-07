@@ -24,6 +24,7 @@ import { wikiUpdateFile } from "../../lib/tauri";
 import {
   suggestWikilinks,
   applyWikilinkSuggestions,
+  buildWikiContentWithBody,
   type WikiLinkSuggestion,
 } from "../../lib/wikiLinkSuggest";
 import { useWikiStore } from "../../store/wiki";
@@ -33,6 +34,7 @@ interface Props {
   currentTitle: string;
   currentRelPath: string;
   currentBody: string;
+  currentFrontmatter: string;
   /** 员工在聊天页 picker 上选的 model。
    *  7/30: 改成由 WikiPreview 直接读 useChatStore().model 传进来 ——
    *  原来走 picker_state.json (chat 发送时才写的滞后副本) + 写死兜底,
@@ -49,6 +51,7 @@ export default function WikiLinkSuggestModal({
   currentTitle,
   currentRelPath,
   currentBody,
+  currentFrontmatter,
   model,
   onClose,
   onApplied,
@@ -119,7 +122,11 @@ export default function WikiLinkSuggestModal({
         setTimeout(onClose, 800);
         return;
       }
-      await wikiUpdateFile(currentRelPath, newBody);
+      // wikiUpdateFile 接收完整 Markdown；扫描只改正文，不能丢掉 YAML frontmatter。
+      await wikiUpdateFile(
+        currentRelPath,
+        buildWikiContentWithBody(currentFrontmatter, newBody),
+      );
       setView("done");
       onApplied(); // 严格 WikiPreview 侧 reload files (拿新 related edges → 图更新)
       setTimeout(onClose, 800);

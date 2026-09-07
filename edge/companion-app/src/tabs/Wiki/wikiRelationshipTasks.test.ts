@@ -3,6 +3,7 @@ import type { WikiFileInfo } from "../../lib/tauri_wiki";
 import {
   buildConfirmedWikiContent,
   buildWikiRelationshipTasks,
+  hasLegacyWikiRelations,
 } from "./wikiRelationshipTasks";
 
 function file(overrides: Partial<WikiFileInfo>): WikiFileInfo {
@@ -76,6 +77,14 @@ describe("buildWikiRelationshipTasks", () => {
       file({ rel_path: "wiki/entities/target.md", title: "目标" }),
     ]);
     expect(tasks.filter((task) => task.kind === "broken")).toHaveLength(0);
+  });
+});
+
+describe("hasLegacyWikiRelations", () => {
+  it("只把缺少关系类型的 frontmatter 关系识别为旧格式", () => {
+    expect(hasLegacyWikiRelations([file({ related: [{ name: "目标" }] })])).toBe(true);
+    expect(hasLegacyWikiRelations([file({ related: [{ name: "目标", source: "body" }] })])).toBe(false);
+    expect(hasLegacyWikiRelations([file({ related: [{ name: "目标", rel: "关联" }] })])).toBe(false);
   });
 });
 

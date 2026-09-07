@@ -17,7 +17,6 @@
 
 import { useEffect, useRef, useMemo, useState } from "react";
 import {
-  ArrowsOut,
   CaretRight,
   CornersIn,
   CornersOut,
@@ -405,17 +404,6 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
         {/* 这个节点必须永久稳定：Sigma 会直接管理它的 canvas 子节点。
             不能让 React 在空图/有图之间把它复用成带 React children 的空状态。 */}
         <div className="wiki-graph__canvas" ref={containerRef} />
-        {hasGraph && (
-          <button
-            type="button"
-            className="wiki-graph__fit"
-            onClick={() => sigmaRef.current?.getCamera().animatedReset({ duration: 250 })}
-            aria-label="适应画布"
-            title="适应画布"
-          >
-            <ArrowsOut size={18} aria-hidden="true" />
-          </button>
-        )}
         {hasGraph && canShowMore && (
           <button
             type="button"

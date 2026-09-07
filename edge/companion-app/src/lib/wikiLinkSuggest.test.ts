@@ -22,6 +22,7 @@ import {
   extractSuggestions,
   repairTruncatedJson,
   robustJsonParse,
+  buildWikiContentWithBody,
 } from "./wikiLinkSuggest";
 
 describe("robustJsonParse", () => {
@@ -85,5 +86,17 @@ describe("extractSuggestions —— 接受模型可能返的几种形状", () =>
     expect(extractSuggestions({ a: [1], b: [2] })).toBeNull();
     expect(extractSuggestions("字符串")).toBeNull();
     expect(extractSuggestions(null)).toBeNull();
+  });
+});
+
+describe("buildWikiContentWithBody", () => {
+  it("保存扫描结果时保留 frontmatter", () => {
+    expect(buildWikiContentWithBody("title: 示例\ntype: entity", "# 示例\n\n正文")).toBe(
+      "---\ntitle: 示例\ntype: entity\n---\n\n# 示例\n\n正文",
+    );
+  });
+
+  it("没有 frontmatter 的历史文件保持原样写入", () => {
+    expect(buildWikiContentWithBody("", "# 示例\n\n正文")).toBe("# 示例\n\n正文");
   });
 });

@@ -13,6 +13,13 @@ export interface WikiRelationshipTask {
   relationName?: string;
 }
 
+/** 只识别 frontmatter 里的旧关系；正文 wikilink 不属于迁移范围。 */
+export function hasLegacyWikiRelations(files: WikiFileInfo[]): boolean {
+  return files.some((file) =>
+    file.related.some((relation) => relation.source !== "body" && !relation.rel?.trim()),
+  );
+}
+
 const DEFAULT_RELATION_TYPES = [
   "关联",
   "负责人",
