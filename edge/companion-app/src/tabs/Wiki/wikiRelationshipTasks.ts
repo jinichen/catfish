@@ -109,6 +109,8 @@ export function buildWikiRelationshipTasks(files: WikiFileInfo[]): WikiRelations
     file.related.flatMap((relation) => {
       const name = relation.name.trim();
       if (!name) return [];
+      // 正文 wikilink 用于导航/图谱，不等于用户声明的语义关系。
+      if (relation.source === "body") return [];
       const resolution = resolveWikiRef(name, files);
       const reason = !relation.rel?.trim()
         ? "缺少关系类型"
@@ -160,6 +162,7 @@ export function buildConfirmedWikiContent(content: string, relations: RelatedRef
   if (end < 0) throw new Error("该条目的 frontmatter 不完整");
 
   const serialized = relations
+    .filter((relation) => relation.source !== "body")
     .map((relation) => {
       const rel = relation.rel?.trim();
       return rel

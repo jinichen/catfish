@@ -27,6 +27,8 @@ pub struct RelatedRef {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub rel: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -186,7 +188,7 @@ fn parse_related_entry(entry: &str) -> Option<RelatedRef> {
                 }
             }
         }
-        name.filter(|n| !n.is_empty()).map(|name| RelatedRef { name, rel })
+        name.filter(|n| !n.is_empty()).map(|name| RelatedRef { name, rel, source: Some("frontmatter".into()) })
     } else {
         // bare string / wikilink
         let cleaned = entry
@@ -199,7 +201,7 @@ fn parse_related_entry(entry: &str) -> Option<RelatedRef> {
         if cleaned.is_empty() {
             None
         } else {
-            Some(RelatedRef { name: cleaned, rel: None })
+            Some(RelatedRef { name: cleaned, rel: None, source: Some("frontmatter".into()) })
         }
     }
 }
@@ -241,7 +243,7 @@ fn split_top_level(s: &str) -> Vec<String> {
 ///
 /// 修法: 扫 body 抽所有 wikilink, 合并进 related 返前端, WikiGraph 自动建 edge.
 /// 支持 alias 形态 `[[name|display]]` (取 name 部分跟 frontmatter 同语义).
-/// P3.5.132 #5: body wikilink 真无 rel 信息, 全部返 rel=None.
+/// P3.5.132 #5: body wikilink 真无 rel 信息, 标记 source=body.
 fn extract_body_wikilinks(body: &str) -> Vec<RelatedRef> {
     let mut out = Vec::new();
     let mut rest = body;
@@ -253,7 +255,7 @@ fn extract_body_wikilinks(body: &str) -> Vec<RelatedRef> {
         let name = inner.split('|').next().unwrap_or(inner).trim();
         // 跨行 / 太长大概率是 markdown table / code fence 误抓, 过滤
         if !name.is_empty() && !name.contains('\n') && name.chars().count() <= 100 {
-            out.push(RelatedRef { name: name.to_string(), rel: None });
+            out.push(RelatedRef { name: name.to_string(), rel: None, source: Some("body".into()) });
         }
         rest = &after[end + 2..];
     }
@@ -674,12 +676,9 @@ mod tests {
         }
     }
 
-    fn rr(name: &str) -> RelatedRef {
-        RelatedRef { name: name.to_string(), rel: None }
-    }
-    fn rr_with(name: &str, rel: &str) -> RelatedRef {
-        RelatedRef { name: name.to_string(), rel: Some(rel.to_string()) }
-    }
+    fn rr(name: &str) -> RelatedRef { RelatedRef { name: name.to_string(), rel: None, source: Some("body".into()) } }
+    fn rr_frontmatter(name: &str) -> RelatedRef { RelatedRef { name: name.to_string(), rel: None, source: Some("frontmatter".into()) } }
+    fn rr_with(name: &str, rel: &str) -> RelatedRef { RelatedRef { name: name.to_string(), rel: Some(rel.to_string()), source: Some("frontmatter".into()) } }
 
     /// P3.5.42.13: 鸿波 entity 实景 body 形态. P3.5.132 #5: 升级返 Vec<RelatedRef>.
     #[test]
@@ -719,15 +718,15 @@ mod tests {
     #[test]
     fn merge_related_dedupes_body_against_frontmatter() {
         let body = "看 [[陈鸿波]] 跟 [[信息安全与安防类]]";
-        let out = merge_related_with_body(vec![rr("陈鸿波")], body);
-        assert_eq!(out, vec![rr("陈鸿波"), rr("信息安全与安防类")]);
+        let out = merge_related_with_body(vec![rr_frontmatter("陈鸿波")], body);
+        assert_eq!(out, vec![rr_frontmatter("陈鸿波"), rr("信息安全与安防类")]);
     }
 
     #[test]
     fn merge_related_preserves_frontmatter_first() {
         let body = "[[A]] [[B]]";
-        let out = merge_related_with_body(vec![rr("X"), rr("Y")], body);
-        assert_eq!(out, vec![rr("X"), rr("Y"), rr("A"), rr("B")]);
+        let out = merge_related_with_body(vec![rr_frontmatter("X"), rr_frontmatter("Y")], body);
+        assert_eq!(out, vec![rr_frontmatter("X"), rr_frontmatter("Y"), rr("A"), rr("B")]);
     }
 
     /// P3.5.132 #5: dedupe by name 真 — frontmatter 真 typed rel 优先, body wikilink
@@ -745,14 +744,14 @@ mod tests {
     fn parse_related_old_bare_strings() {
         let fm = "related: [陈鸿波, FFCS]";
         let out = parse_related(fm);
-        assert_eq!(out, vec![rr("陈鸿波"), rr("FFCS")]);
+        assert_eq!(out, vec![rr_frontmatter("陈鸿波"), rr_frontmatter("FFCS")]);
     }
 
     #[test]
     fn parse_related_old_wikilink_form() {
         let fm = "related: [\"[[陈鸿波]]\", \"[[FFCS]]\"]";
         let out = parse_related(fm);
-        assert_eq!(out, vec![rr("陈鸿波"), rr("FFCS")]);
+        assert_eq!(out, vec![rr_frontmatter("陈鸿波"), rr_frontmatter("FFCS")]);
     }
 
     #[test]
@@ -768,7 +767,7 @@ mod tests {
         let out = parse_related(fm);
         assert_eq!(
             out,
-            vec![rr_with("陈鸿波", "同事"), rr("FFCS"), rr("项目X")]
+            vec![rr_with("陈鸿波", "同事"), rr_frontmatter("FFCS"), rr_frontmatter("项目X")]
         );
     }
 

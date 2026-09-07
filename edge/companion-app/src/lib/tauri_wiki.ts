@@ -39,6 +39,7 @@ export const wikiSaveChatMessage = (args: {
 export interface RelatedRef {
   name: string;
   rel?: string | null;
+  source?: "frontmatter" | "body" | null;
 }
 
 export interface WikiFileInfo {

@@ -194,7 +194,7 @@ export default function WikiRelationshipWorkbench() {
           <div className="wiki-workbench__relations">
             {info.related.map((relation, index) => (
               <div key={`${relation.name}:${relation.rel ?? index}`}>
-                <span>{relation.rel || "关联"}</span><strong>{relation.name}</strong>
+                <span>{relation.rel || (relation.source === "body" ? "正文引用" : "关联")}</span><strong>{relation.name}</strong>
               </div>
             ))}
           </div>

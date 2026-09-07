@@ -69,6 +69,14 @@ describe("buildWikiRelationshipTasks", () => {
     ]);
     expect(tasks.filter((task) => task.kind === "broken")).toHaveLength(0);
   });
+
+  it("不把正文引用当成关系异常", () => {
+    const tasks = buildWikiRelationshipTasks([
+      file({ related: [{ name: "目标", source: "body" }] }),
+      file({ rel_path: "wiki/entities/target.md", title: "目标" }),
+    ]);
+    expect(tasks.filter((task) => task.kind === "broken")).toHaveLength(0);
+  });
 });
 
 describe("buildConfirmedWikiContent", () => {
@@ -78,5 +86,15 @@ describe("buildConfirmedWikiContent", () => {
     expect(result).toContain('related: [{name: "产品研发部", rel: "所属部门"}]');
     expect(result).toContain("ontology_status: active");
     expect(result).toContain("\n正文\n");
+  });
+
+  it("写回关系时不把正文引用升级成 frontmatter 关系", () => {
+    const source = "---\ntitle: 示例\nrelated: []\n---\n\n正文含 [[目标]]\n";
+    const result = buildConfirmedWikiContent(source, [
+      { name: "目标", source: "body" },
+      { name: "部门", rel: "所属部门", source: "frontmatter" },
+    ]);
+    expect(result).toContain('related: [{name: "部门", rel: "所属部门"}]');
+    expect(result).toContain("正文含 [[目标]]");
   });
 });
