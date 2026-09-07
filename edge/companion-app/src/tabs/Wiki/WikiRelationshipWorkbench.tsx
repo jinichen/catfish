@@ -6,6 +6,7 @@ import {
   FileText,
   LinkSimple,
   SpinnerGap,
+  Trash,
   WarningCircle,
 } from "@phosphor-icons/react";
 import { wikiUpdateFile, type RelatedRef } from "../../lib/tauri";
@@ -63,11 +64,13 @@ export default function WikiRelationshipWorkbench() {
   useEffect(() => {
     setSaveError(null);
     setSaved(false);
-    const first = selectedFile?.info.related[0];
+    const first = selectedTask?.kind === "broken" && selectedTask.relationName
+      ? selectedFile?.info.related.find((relation) => relation.name.trim() === selectedTask.relationName?.trim())
+      : selectedFile?.info.related[0];
     setRelationType(first?.rel?.trim() || "关联");
     const target = first ? resolveWikiRefOrNull(first.name, files) : null;
     setTargetPath(target?.rel_path ?? targets[0]?.rel_path ?? "");
-  }, [files, selectedFile?.frontmatter, selectedFile?.info.rel_path, selectedFile?.info.related, targets]);
+  }, [files, selectedFile?.frontmatter, selectedFile?.info.rel_path, selectedFile?.info.related, selectedTask?.id, selectedTask?.kind, selectedTask?.relationName, targets]);
 
   if (selectedLoading) {
     return <div className="wiki-workbench__empty"><SpinnerGap className="wiki-spin" size={30} />正在读取关系…</div>;
@@ -110,6 +113,28 @@ export default function WikiRelationshipWorkbench() {
         return target?.rel_path !== selectedTarget.rel_path;
       });
       const content = buildConfirmedWikiContent(selectedFile.content, [...existing, nextRelation]);
+      await wikiUpdateFile(info.rel_path, content);
+      await loadFiles();
+      await selectFile(info.rel_path);
+      setSaved(true);
+    } catch (error) {
+      setSaveError(String(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteBrokenRelation = async () => {
+    const relationName = selectedTask?.kind === "broken" ? selectedTask.relationName?.trim() : "";
+    if (!relationName || !window.confirm(`确认删除“${info.title}”中的错误关系“${relationName}”吗？\n只删除这条关系，不删除知识文件和正文引用。`)) return;
+    setSaving(true);
+    setSaveError(null);
+    setSaved(false);
+    try {
+      const remaining = info.related.filter(
+        (relation) => relation.source === "body" || relation.name.trim() !== relationName,
+      );
+      const content = buildConfirmedWikiContent(selectedFile.content, remaining);
       await wikiUpdateFile(info.rel_path, content);
       await loadFiles();
       await selectFile(info.rel_path);
@@ -174,6 +199,12 @@ export default function WikiRelationshipWorkbench() {
           <div className="wiki-relation-editor__actions">
             {saveError && <span className="wiki-workbench__error">{saveError}</span>}
             {saved && <span className="wiki-workbench__success"><CheckCircle size={18} />关系已更新</span>}
+            {selectedTask?.kind === "broken" && selectedTask.relationName && (
+              <button type="button" className="wiki-workbench__danger" onClick={() => void deleteBrokenRelation()} disabled={saving}>
+                {saving ? <SpinnerGap className="wiki-spin" size={18} /> : <Trash size={18} />}
+                删除错误关系
+              </button>
+            )}
             <button type="button" className="wiki-workbench__secondary" onClick={selectNextTask} disabled={tasks.length < 2}>
               稍后处理
             </button>

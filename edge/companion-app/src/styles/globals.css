@@ -2210,6 +2210,23 @@ button {
 .wiki-workbench__secondary:hover:not(:disabled) { color: var(--catfish-cyan); border-color: var(--catfish-cyan); }
 .wiki-workbench__secondary:disabled { cursor: not-allowed; opacity: 0.45; }
 .wiki-workbench__secondary:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.wiki-workbench__danger {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 14px;
+  border: 1px solid color-mix(in srgb, var(--status-err) 55%, transparent);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--status-err);
+  font: 14px/1 var(--font-sans);
+  cursor: pointer;
+}
+.wiki-workbench__danger:hover:not(:disabled) { background: color-mix(in srgb, var(--status-err) 10%, transparent); }
+.wiki-workbench__danger:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.wiki-workbench__danger:disabled { cursor: not-allowed; opacity: 0.45; }
 .wiki-workbench__primary:hover:not(:disabled) { background: var(--catfish-cyan-dim); }
 .wiki-workbench__primary:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .wiki-workbench__primary:disabled { cursor: not-allowed; opacity: 0.5; }
