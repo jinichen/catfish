@@ -48,6 +48,11 @@ const COLOR = {
 };
 const COLOR_SELECTED = "#1A8A95"; // cyan-bright (替 #ff3366 粉红)
 
+function graphLabel(title: string): string {
+  const chars = Array.from(title.trim());
+  return chars.length > 14 ? `${chars.slice(0, 14).join("")}…` : title;
+}
+
 export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sigmaRef = useRef<Sigma | null>(null);
@@ -201,7 +206,7 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
       if (!f) continue;
       const color = COLOR[f.kind] || "#888";
       g.addNode(f.rel_path, {
-        label: f.title,
+        label: graphLabel(f.title),
         kind: f.kind,
         slug: f.slug,
         color,

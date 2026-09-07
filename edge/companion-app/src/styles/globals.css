@@ -1916,6 +1916,7 @@ button {
 /* Wiki 关系整理工作台 */
 .wiki-organizer {
   min-height: 100%;
+  min-width: 0;
   padding: 16px;
   box-sizing: border-box;
   color: var(--catfish-text);
@@ -1982,7 +1983,7 @@ button {
 .wiki-organizer__search input::placeholder { color: var(--catfish-text-muted); }
 .wiki-organizer__summary {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
   margin: 14px 0 20px;
 }
@@ -2016,6 +2017,7 @@ button {
   background: var(--catfish-bg-cream);
 }
 .wiki-organizer__migration {
+  min-width: 0;
   display: grid;
   gap: 8px;
   margin: -6px 0 16px;
@@ -2025,9 +2027,16 @@ button {
   background: rgba(240, 112, 58, 0.06);
   font-size: 12px;
 }
-.wiki-organizer__migration > div:first-child { display: grid; gap: 4px; }
+.wiki-organizer__migration > div:first-child,
+.wiki-organizer__migration-result { min-width: 0; display: grid; gap: 4px; }
 .wiki-organizer__migration span,
-.wiki-organizer__migration small { color: var(--catfish-text-muted); line-height: 1.4; }
+.wiki-organizer__migration small {
+  min-width: 0;
+  color: var(--catfish-text-muted);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 .wiki-organizer__migration button {
   min-height: 36px;
   justify-self: start;
@@ -2041,7 +2050,7 @@ button {
 }
 .wiki-organizer__migration button:hover:not(:disabled) { background: rgba(14, 97, 105, 0.08); }
 .wiki-organizer__migration button:disabled { cursor: wait; opacity: 0.55; }
-.wiki-organizer__migration-result { display: grid; gap: 6px; }
+.wiki-organizer__migration-result > span { overflow-wrap: anywhere; }
 .wiki-organizer__migration-result button { border-color: var(--catfish-orange); color: var(--catfish-orange); }
 .wiki-organizer__migration-error { color: var(--status-err); }
 .wiki-organizer__task-heading {
@@ -2133,7 +2142,7 @@ button {
   color: var(--catfish-text);
 }
 .wiki-workbench__header { padding: 6px 0 4px; }
-.wiki-workbench__header h2 { display: inline; margin: 0; font-size: 24px; letter-spacing: -0.02em; }
+.wiki-workbench__header h2 { display: inline; margin: 0; font-size: 24px; letter-spacing: -0.02em; overflow-wrap: anywhere; text-wrap: balance; }
 .wiki-workbench__header p { margin: 10px 0 0; color: var(--catfish-text-muted); font-size: 14px; }
 .wiki-workbench__section {
   min-width: 0;
@@ -2217,6 +2226,7 @@ button {
 }
 .wiki-workbench__relations > div:last-child { box-shadow: none; }
 .wiki-workbench__relations span { color: var(--catfish-text-muted); }
+.wiki-workbench__relations strong { min-width: 0; overflow-wrap: anywhere; }
 .wiki-workbench__quiet { padding: 12px 0; color: var(--catfish-text-muted); font-size: 14px; }
 .wiki-action-editor { display: flex; gap: 10px; align-items: center; }
 .wiki-action-editor input { flex: 1; min-width: 0; height: 40px; padding: 0 12px; border: 1px solid var(--catfish-border); border-radius: 8px; background: var(--catfish-surface); color: var(--catfish-text); }
@@ -2904,7 +2914,7 @@ button {
 }
 .wiki-graph__controls button:hover { border-color: var(--catfish-cyan-bright); color: var(--catfish-cyan); }
 .wiki-graph__controls button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.wiki-graph__stage { min-height: 260px; flex: 1; position: relative; background: var(--catfish-bg); }
+.wiki-graph__stage { min-height: 260px; flex: 1; position: relative; overflow: hidden; background: var(--catfish-bg); }
 .wiki-graph__canvas { position: absolute; inset: 0; background: var(--catfish-bg); }
 .wiki-graph__fit {
   position: absolute;
