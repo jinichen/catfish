@@ -160,6 +160,7 @@ pub fn sync_profile_from_default(hermes: &Path, profile: &Path) {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub fn sync_service_env(
     hermes: &Path,
     token: &str,

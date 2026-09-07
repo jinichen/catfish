@@ -20,7 +20,7 @@ use super::expert_bots_profiles::{
 pub use super::expert_bots_types::{
     AvailableProfileSummary, BotRegistration, ExpertBotCreateInput, ExpertBotRoute,
     ExpertBotSummary, ExpertBotUpdateInput, ExpertBotsConfig, ExpertBotsSnapshot,
-    ExpertBotsStatus, ExpertScenarioSummary, ModelPolicy, ModelPolicyMode,
+    ExpertBotsStatus, ExpertScenarioSummary,
     DEFAULT_ADVISOR_PROFILE, SUPPORTED_SCENARIOS,
 };
 use super::expert_bots_types::{is_supported_scenario, is_valid_profile_name};
@@ -479,6 +479,7 @@ pub async fn expert_bot_route(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::expert_bots_types::{ModelPolicy, ModelPolicyMode};
     use tempfile::tempdir;
 
     #[test]
