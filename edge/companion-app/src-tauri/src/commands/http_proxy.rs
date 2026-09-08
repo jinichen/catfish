@@ -190,21 +190,38 @@ fn collect_response_headers(resp: &reqwest::Response) -> HashMap<String, String>
     headers
 }
 
+fn auth_log_state(headers: &HashMap<String, String>) -> &'static str {
+    if headers.keys().any(|key| key.eq_ignore_ascii_case("authorization")) {
+        "<PRESENT>"
+    } else {
+        "<MISSING>"
+    }
+}
+
+/// 日志不记录 query / fragment / URL 凭据，避免 OAuth code、签名参数等落盘。
+fn safe_url_for_log(raw: &str) -> String {
+    let Ok(mut parsed) = url::Url::parse(raw) else {
+        return "<invalid-url>".to_string();
+    };
+    parsed.set_query(None);
+    parsed.set_fragment(None);
+    let _ = parsed.set_username("");
+    let _ = parsed.set_password(None);
+    parsed.to_string()
+}
+
 async fn perform_http_request(req: &HttpProxyRequest) -> Result<HttpProxyResponse, String> {
     let timeout_ms = req.timeout_ms.unwrap_or(30_000);
     let client = build_client(timeout_ms)?;
     let method = parse_method(&req.method)?;
 
     let header_keys: Vec<&str> = req.headers.keys().map(|k| k.as_str()).collect();
-    let auth_preview: String = req
-        .headers
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("authorization"))
-        .map(|(_, v)| format!("{}...", v.chars().take(30).collect::<String>()))
-        .unwrap_or_else(|| "<MISSING>".to_string());
     log::info!(
         "[http_proxy] {} {} · headers_keys={:?} · auth={}",
-        req.method, req.url, header_keys, auth_preview
+        req.method,
+        safe_url_for_log(&req.url),
+        header_keys,
+        auth_log_state(&req.headers)
     );
 
     let mut request = client.request(method, &req.url);
@@ -217,7 +234,11 @@ async fn perform_http_request(req: &HttpProxyRequest) -> Result<HttpProxyRespons
 
     let resp = request.send().await.map_err(|e| {
         let detail = error_chain(&e);
-        log::warn!("[http_proxy] {} {} 失败: {detail}", req.method, req.url);
+        log::warn!(
+            "[http_proxy] {} {} 失败: {detail}",
+            req.method,
+            safe_url_for_log(&req.url)
+        );
         format!("请求失败: {detail}")
     })?;
     let status = resp.status().as_u16();
@@ -293,17 +314,15 @@ pub async fn http_proxy_stream(
     let client = build_client(timeout_ms)?;
     let method = parse_method(&req.method)?;
 
-    // DEBUG (7/18 鸿波): 同 http_proxy · log header keys 检查 Authorization 是否到 Rust.
+    // 只记录 Authorization 是否存在，绝不记录 token 内容。
     let header_keys: Vec<&str> = req.headers.keys().map(|k| k.as_str()).collect();
-    let auth_preview: String = req
-        .headers
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("authorization"))
-        .map(|(_, v)| format!("{}...", v.chars().take(30).collect::<String>()))
-        .unwrap_or_else(|| "<MISSING>".to_string());
     log::info!(
         "[http_proxy_stream] {} {} · headers_keys={:?} · auth={} · req_id={}",
-        req.method, req.url, header_keys, auth_preview, request_id
+        req.method,
+        safe_url_for_log(&req.url),
+        header_keys,
+        auth_log_state(&req.headers),
+        request_id
     );
 
     let mut request = client.request(method, &req.url);
@@ -320,7 +339,11 @@ pub async fn http_proxy_stream(
         .map_err(|e| {
             // P3.5.80 (7/28): 用 error_chain 而不是 {e} —— 见该函数说明.
             let detail = error_chain(&e);
-            log::warn!("[http_proxy] {} {} 失败: {detail}", req.method, req.url);
+            log::warn!(
+                "[http_proxy] {} {} 失败: {detail}",
+                req.method,
+                safe_url_for_log(&req.url)
+            );
             format!("请求失败: {detail}")
         })?;
 
@@ -400,4 +423,25 @@ pub fn http_proxy_abort(request_id: String) -> Result<(), String> {
         log::info!("[http_proxy] abort stream {}", request_id);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auth_log_never_contains_token() {
+        let mut headers = HashMap::new();
+        headers.insert("Authorization".to_string(), "Bearer secret-token".to_string());
+        assert_eq!(auth_log_state(&headers), "<PRESENT>");
+        assert!(!auth_log_state(&headers).contains("secret-token"));
+    }
+
+    #[test]
+    fn logged_url_drops_query_fragment_and_credentials() {
+        let safe = safe_url_for_log(
+            "https://alice:secret@example.com/oauth/callback?code=private#token",
+        );
+        assert_eq!(safe, "https://example.com/oauth/callback");
+    }
 }

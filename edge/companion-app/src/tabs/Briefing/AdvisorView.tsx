@@ -68,6 +68,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
   // components/RefreshInfo.tsx polling 自管 advisorCacheGet, 不再需要 AdvisorView 中转.
   const [config, setConfig] = useState<AdvisorConfig | null>(null);
   const [phase, setPhase] = useState<"booting" | "profile_loading" | "data_loading" | "llm_running" | "done" | "no_profile" | "no_data" | "error" | "cache_hit" | "stale_fallback">("booting");
+  const [loadKey, setLoadKey] = useState(0);
   const [errorMsg, setErrorMsg] = useState<string>("");
   // P3.4.4 (6/15 鸿波): 三件套各自拉取状态, no_data 阶段渲染诊断卡用.
   //   parseJsonList 老 helper 把失败原因吞成 [], 改 parseJsonListWithDiagnosis 保留 reason.
@@ -115,6 +116,18 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
    *  effectiveStatusByUid 把 done + ignored 都合并 "resolved", 无法在 filter
    *  层区分 "藏 ignored" vs "保留 done 让 sidebar 打勾". 加这个 selector 精准判. */
   const [manualStatusByUid, setManualStatusByUid] = useState<Map<string, TaskStatus>>(new Map());
+
+  // booting 只应存在一个 render tick. 如果主加载 effect 没有启动, 不能让页面
+  // 永久显示“准备中…”而不留下任何线索。
+  useEffect(() => {
+    if (phase !== "booting") return;
+    const timer = window.setTimeout(() => {
+      console.error("[advisor] 初始化 effect 未启动, booting 超时");
+      setErrorMsg("早安页初始化没有启动，请点击刷新重试；若仍失败，请查看 Companion 日志。");
+      setPhase("error");
+    }, 5_000);
+    return () => window.clearTimeout(timer);
+  }, [phase]);
 
   // 5/22 鸿波: 启动时拉今日任务状态 + 清旧 (>7d)
   useEffect(() => {
@@ -207,6 +220,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
     void (async () => {
       try {
         advisorStoppedRef.current = false;
+        console.info("[advisor] 加载开始", { loadKey, refreshKey, model });
         // ─── 1. profile — 同步等 recompute (in-flight 锁防 StrictMode 双调) ───
         setPhase("profile_loading");
         setPhaseStartedAt(Date.now());
@@ -231,6 +245,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
         setPhaseStartedAt(Date.now());
         const [emailRes, eventsRes, todosRes, ctx] = await fetchBriefingSources();
         if (cancelled) return;
+        console.info("[advisor] 数据源返回");
 
         // P3.4.4 (6/15 鸿波): 用 parseJsonListWithDiagnosis 保留每个 source
         //   真实失败原因 (Tauri rejected reason / JSON parse err), 给诊断卡用.
@@ -410,7 +425,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshKey, config?.cacheMaxAgeMinutes]);
+  }, [refreshKey, config?.cacheMaxAgeMinutes, loadKey, model]);
 
   // ─── 后台时段触发: setInterval 每分钟检查 now 跨时段就 setRefreshKey 触发刷新 ───
   const tickRef = useRef<Date>(new Date());
@@ -422,13 +437,11 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
       tickRef.current = now;
       if (didCrossRefreshTime(prev, now, config.refreshTimes)) {
         console.log("[advisor] 时段触发后台刷新", { time: now.toLocaleTimeString() });
-        // 通过设置一个内部触发让 useEffect 重跑 — 但 refreshKey 是 props 不能直接改
-        // 改用: 直接清缓存 + 再 mount 时会重新拉
+        // refreshKey 是 props 不能直接改，用 loadKey 触发主加载 effect 重跑。
         void (async () => {
           try {
             await advisorCacheClear();
-            // 再触发一次 useEffect: 用一个 state 切换让依赖变化
-            setConfig((c) => (c ? { ...c } : c));  // shallow copy 触发 useEffect 重跑
+            setLoadKey((key) => key + 1);
           } catch (e) {
             console.warn("[advisor] 时段刷新失败:", e);
           }
@@ -492,6 +505,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
           // 重新触发 mount effect — 跟父组件 refresh 同款语义
           setPhase("booting");
           setSourceStatuses(null);
+          setLoadKey((key) => key + 1);
         }}
       />
     );

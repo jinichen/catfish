@@ -10,8 +10,14 @@
 //!
 //! 5/22 鸿波: 每次切早安 tab 重算浪费 token, 这是修法.
 
-use std::path::PathBuf;
+use std::fs::{File, OpenOptions};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
+
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// 缓存条目. result 字段是不透明 JSON (跟 TS AdvisorResult 对齐, Rust 不解析).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,10 +50,60 @@ fn cache_path() -> Result<PathBuf, String> {
     Ok(dir.join("advisor_cache.json"))
 }
 
+fn lock_cache(target: &Path, exclusive: bool) -> Result<File, String> {
+    let lock_path = target.with_extension("json.lock");
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|e| format!("打开 {} 失败: {e}", lock_path.display()))?;
+    let result = if exclusive {
+        FileExt::lock_exclusive(&file)
+    } else {
+        FileExt::lock_shared(&file)
+    };
+    result.map_err(|e| format!("锁定 {} 失败: {e}", lock_path.display()))?;
+    Ok(file)
+}
+
+fn unique_temp_path(target: &Path) -> PathBuf {
+    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    target.with_extension(format!("json.tmp.{}.{}", std::process::id(), sequence))
+}
+
+fn replace_cache_file(tmp: &Path, target: &Path) -> Result<(), std::io::Error> {
+    #[cfg(target_os = "windows")]
+    {
+        // Windows 的 rename 不会覆盖已存在的目标文件。copy 在锁内执行，
+        // 所有 Companion 读写都经过同一把锁，因此不会读到半截 JSON。
+        std::fs::copy(tmp, target)?;
+        std::fs::remove_file(tmp)?;
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::fs::rename(tmp, target)
+    }
+}
+
+fn write_cache_text(target: &Path, text: &str) -> Result<(), String> {
+    let _lock = lock_cache(target, true)?;
+    let tmp = unique_temp_path(target);
+    std::fs::write(&tmp, text).map_err(|e| format!("写 {} 失败: {e}", tmp.display()))?;
+    if let Err(e) = replace_cache_file(&tmp, target) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("替换 {} 失败，旧缓存已保留: {e}", target.display()));
+    }
+    Ok(())
+}
+
 /// 读 cache. 不存在返 None.
 #[tauri::command]
 pub async fn advisor_cache_get() -> Result<Option<AdvisorCache>, String> {
     let path = cache_path()?;
+    let _lock = lock_cache(&path, false)?;
     if !path.exists() {
         return Ok(None);
     }
@@ -58,44 +114,21 @@ pub async fn advisor_cache_get() -> Result<Option<AdvisorCache>, String> {
     Ok(Some(c))
 }
 
-/// 写 cache. 原子写 (tmp + rename), 失败 fallback 直写.
-///
-/// P3.4.C (6/15 鸿波): 加 fallback 直写, 解 P3.3.50 同款 race.
-/// 鸿波 6/15 console 撞 "rename cache.json 失败: No such file or directory" —
-/// 两个 advisor call 并发, 后到的 rename 时 tmp 已被前者 rename 走. fallback
-/// fs::write 直写 (非原子但 advisor cache 不致命, 最差 partial-write 下次重写).
+/// 写 cache：跨进程文件锁串行化，先写唯一临时文件；Unix 用 rename，Windows
+/// 用锁内覆盖复制，保证经过本模块读取的读者看不到半截 JSON。
 #[tauri::command]
 pub async fn advisor_cache_save(cache: AdvisorCache) -> Result<(), String> {
     let target = cache_path()?;
-    let tmp = target.with_extension("json.tmp");
     let text = serde_json::to_string_pretty(&cache)
         .map_err(|e| format!("serialize cache 失败: {e}"))?;
-
-    // 原子路径: tmp + rename
-    if let Err(e) = std::fs::write(&tmp, &text) {
-        log::warn!(
-            "[advisor_cache] tmp 写挂 ({e}), fallback 直写 (非原子但不致命)"
-        );
-        return std::fs::write(&target, &text)
-            .map_err(|e2| format!("fallback 直写 cache.json 失败: {e2}"));
-    }
-    if let Err(e) = std::fs::rename(&tmp, &target) {
-        // rename 挂 — tmp 可能已被并发 rename 走 (P3.3.50 同 race), 或 target 目录消失.
-        // 删 tmp (best-effort) + fallback 直写.
-        log::warn!(
-            "[advisor_cache] rename 挂 ({e}), fallback 直写"
-        );
-        let _ = std::fs::remove_file(&tmp);
-        return std::fs::write(&target, &text)
-            .map_err(|e2| format!("fallback 直写 cache.json 失败: {e2}"));
-    }
-    Ok(())
+    write_cache_text(&target, &text)
 }
 
 /// 清缓存. 调试或员工显式重置时用.
 #[tauri::command]
 pub async fn advisor_cache_clear() -> Result<(), String> {
     let path = cache_path()?;
+    let _lock = lock_cache(&path, true)?;
     if path.exists() {
         std::fs::remove_file(&path)
             .map_err(|e| format!("删 cache 失败: {e}"))?;
@@ -162,5 +195,47 @@ mod tests {
         // None 应被 skip
         assert!(json.get("model").is_none());
         assert!(json.get("promptTokens").is_none());
+    }
+
+    #[test]
+    fn concurrent_writes_never_leave_partial_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("advisor_cache.json");
+        let handles: Vec<_> = (0..12)
+            .map(|value| {
+                let target = target.clone();
+                std::thread::spawn(move || {
+                    write_cache_text(&target, &format!(r#"{{"value":{value}}}"#)).unwrap();
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        let final_text = std::fs::read_to_string(&target).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&final_text).unwrap();
+        assert!(parsed["value"].as_u64().is_some());
+        let temp_files = dir
+            .path()
+            .read_dir()
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp."))
+            .count();
+        assert_eq!(temp_files, 0);
+    }
+
+    #[test]
+    fn replacement_overwrites_existing_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("advisor_cache.json");
+        std::fs::write(&target, r#"{"value":"old"}"#).unwrap();
+        let tmp = dir.path().join("advisor_cache.json.tmp.test");
+        std::fs::write(&tmp, r#"{"value":"new"}"#).unwrap();
+
+        replace_cache_file(&tmp, &target).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), r#"{"value":"new"}"#);
+        assert!(!tmp.exists());
     }
 }

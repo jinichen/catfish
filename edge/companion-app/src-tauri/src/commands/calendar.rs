@@ -307,9 +307,9 @@ pub async fn calendar_today_fetch(force_refresh: Option<bool>) -> Result<String,
 ///
 /// 路径查找顺序:
 ///   1. .app/Contents/Resources/catfish-calendar  (生产 build 后打包路径)
-///   2. ../../catfish-calendar  (开发期 tauri dev, swift/ 目录里 swiftc -o ../catfish-calendar)
-///   3. src-tauri/swift/catfish-calendar         (开发期, 跟源码同目录)
-///   4. PATH 找  (员工手动 swiftc 编译装 /usr/local/bin/)
+///   2. $CARGO_MANIFEST_DIR/swift/catfish-calendar (开发期，不依赖启动目录)
+///   3. $CARGO_MANIFEST_DIR/catfish-calendar       (兼容旧输出位置)
+///   4. PATH 找 (员工手动 swiftc 编译装 /usr/local/bin/)
 ///
 /// 子命令: today / week / list-cals / create
 /// 超时 3s (EventKit < 100ms 正常, 给到 3s 应对系统繁忙)
@@ -382,14 +382,17 @@ fn locate_eventkit_binary() -> Option<std::path::PathBuf> {
         }
     }
 
-    // 2 + 3. 开发期: src-tauri/swift/catfish-calendar / src-tauri/catfish-calendar
-    let dev_candidates: [PathBuf; 2] = [
-        PathBuf::from("src-tauri/swift/catfish-calendar"),
-        PathBuf::from("src-tauri/catfish-calendar"),
-    ];
-    for c in dev_candidates {
-        if c.exists() {
-            return Some(c);
+    // 开发期不要依赖 `cargo run` 的 cwd；Tauri CLI 和直接 cargo run 的启动目录不同。
+    #[cfg(debug_assertions)]
+    {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        for candidate in [
+            manifest_dir.join("swift/catfish-calendar"),
+            manifest_dir.join("catfish-calendar"),
+        ] {
+            if candidate.exists() {
+                return Some(candidate);
+            }
         }
     }
 
@@ -470,5 +473,18 @@ fn run_osascript(script: &str, timeout: Duration) -> Result<String, String> {
                 return Err(format!("osascript wait 失败: {e}"));
             }
         }
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dev_eventkit_binary_is_found_from_manifest_dir() {
+        let expected = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("swift/catfish-calendar");
+        assert!(expected.exists());
+        assert_eq!(locate_eventkit_binary(), Some(expected));
     }
 }
