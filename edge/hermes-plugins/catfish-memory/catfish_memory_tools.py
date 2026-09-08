@@ -101,7 +101,7 @@ class _ToolsMixin:
     # | project_fact  | hermes 原 memory_tool(target=memory) → MEMORY.md     |
     # | workflow      | catfish_propose_skill (BL-MM9, 5/8 ship)              |
     # | journal       | ~/.catfish/employee_journal.md (catfish 现有)          |
-    # | todo          | catfish_reminder_create (5/13 ship, macOS Reminders)  |
+    # | todo          | catfish_create_task (本机任务库)                     |
     #
     # # 性能
     # LLM 在 tool call 时自己填 kind, plugin 直接路由 (0 后端 LLM 调用).
@@ -136,7 +136,7 @@ class _ToolsMixin:
                         "- project_fact: **项目/技术**事实 (API 字段含义/客户机房 IP/工具约定) → MEMORY.md\n"
                         "- workflow: 工作**流程** (有 input/output/step 序列) → 自动提议存成 skill\n"
                         "- journal: 已发生**事件**/session 总结/会议记录 → 写 catfish 员工日志 (不是 memory)\n"
-                        "- todo: 带 deadline 的**待办任务** → 自动转 macOS Reminders (不是 memory)\n"
+                        "- todo: 用户行动 → 调 catfish_create_task 写入本机任务库 (不是 memory)\n"
                         "- expense: **收支记账** (员工说 花/付/买/收/卖/加油/吃饭 + 金额数字, "
                         "e.g. '今天午饭13', '加油300', '工资25000到账') → ~/.catfish/bookkeep.jsonl\n"
                         "拿不准 → 先看是不是 expense (金额数字+消费/收入动词), 再 fallback journal."
@@ -185,38 +185,17 @@ class _ToolsMixin:
         }
 
     def _route_to_reminder(self, content: str) -> str:
-        """kind=todo → 调 catfish_reminder_create (macOS Reminders, 5/13 BL-REMINDER).
-
-        catfish-tool-bridge 走 unix socket, 我们 plugin 在 hermes 进程内, 用
-        subprocess 调 catfish-cli 触发 (松耦合, 不直接 import tool-bridge).
-
-        Fallback: 没 deadline / catfish-cli 没装 → 转 journal 兜底.
-        """
+        """kind=todo → 引导 LLM 调 catfish_create_task，不再偷偷落 journal。"""
         import json as _json
-        # 简单实现: 没办法从 plugin 直接调 tool-bridge tool, 写"建议" 到 journal,
-        # LLM 看到 result 后自己再调 reminder_create. 未来 PR 真接 socket.
-        catfish_home = self._catfish_home_cached or _catfish_home()
-        # BL-CATFISH-WIKI-MODE P0.3 (6/3): 格式 `## [YYYY-MM-DD HH:MM] kind | title`
-        ts_short = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
-        # title 取 content 首 50 字, 单行
-        title = (content or "").strip().replace("\n", " ")[:50] or "unknown"
-        entry = f"\n## [{ts_short}] todo | {title}\n\n{content}\n"
-        try:
-            (catfish_home / "employee_journal.md").parent.mkdir(
-                parents=True, exist_ok=True
-            )
-            with open(catfish_home / "employee_journal.md", "a", encoding="utf-8") as f:
-                f.write(entry)
-            return _json.dumps({
-                "success": True,
-                "routed_to": "journal (todo 兜底)",
-                "hint": "提示: 这是 todo, 建议 LLM 再调 catfish_reminder_create 真存 Reminders.app",
-            }, ensure_ascii=False)
-        except Exception as e:  # noqa: BLE001
-            return _json.dumps({
-                "success": False,
-                "error": f"todo 路由失败: {e}",
-            }, ensure_ascii=False)
+        return _json.dumps({
+            "success": False,
+            "routed_to": "catfish_create_task",
+            "content": content,
+            "error": (
+                "用户行动必须先写入本机任务库；请调用 catfish_create_task。"
+                "需要 macOS 提醒时，再调用 catfish_sync_tasks_to_reminders。"
+            ),
+        }, ensure_ascii=False)
 
     def _route_to_propose_skill(self, content: str) -> str:
         """kind=workflow → 提议存 skill (LLM 看到 hint 后再调 catfish_propose_skill)."""
@@ -272,4 +251,3 @@ class _ToolsMixin:
                 "success": False,
                 "error": f"journal 写失败: {e}",
             }, ensure_ascii=False)
-

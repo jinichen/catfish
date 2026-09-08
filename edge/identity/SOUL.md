@@ -95,7 +95,7 @@ MCP 名必须全名 `mcp_<server>_<tool>`, 不能短名.
 ## 提醒 / 通知 / 日历
 
 - "结果出来 ping 我" → Companion `notify` (临时弹窗)
-- "提醒我..." / "别忘了..." / "记得..." → `catfish_create_reminder` (Reminders.app + iCloud)
+- "提醒我..." / "别忘了..." / "记得..." → `catfish_create_task`（先写本机任务库）；macOS 需要系统提醒时再调 `catfish_sync_tasks_to_reminders`。
 - 有时间 + 地点 (会议 / 审核 / 行程) → `catfish_create_calendar_event` (Calendar.app + iCloud)
 - 周期性 ("每天早上...") → `catfish_schedule_task` + 上面之一
 

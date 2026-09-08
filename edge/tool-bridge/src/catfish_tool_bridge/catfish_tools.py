@@ -676,6 +676,15 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_list_reminders":
         from . import reminders  # noqa: PLC0415
         return reminders.tool_list_reminders(args)
+    if name == "catfish_list_tasks":
+        from . import task_library  # noqa: PLC0415
+        return task_library.tool_list_tasks(args)
+    if name == "catfish_create_task":
+        from . import task_library  # noqa: PLC0415
+        return task_library.tool_create_task(args)
+    if name == "catfish_sync_tasks_to_reminders":
+        from . import task_library  # noqa: PLC0415
+        return task_library.tool_sync_tasks_to_reminders(args)
     # BL-CALENDAR (5/14 0:30 鸿波"ISO 会议 LLM 写脚本踩坑")
     if name == "catfish_create_calendar_event":
         from . import calendar_events  # noqa: PLC0415

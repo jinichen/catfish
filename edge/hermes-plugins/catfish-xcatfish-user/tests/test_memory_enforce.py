@@ -207,7 +207,7 @@ def test_hook_block_when_target_mismatch(tmp_catfish, monkeypatch):
 
 
 def test_hook_block_when_route_todo(tmp_catfish, monkeypatch):
-    """带 deadline 任务 → todo, block + 建议 catfish_create_reminder."""
+    """带 deadline 任务 → todo, block + 建议 catfish_create_task."""
     monkeypatch.setattr(memory_enforce, "_classify_memory_route",
                         _mock_classify("todo"))
     monkeypatch.setattr(memory_enforce, "get_verifier_model", lambda: "test-model")
@@ -217,7 +217,7 @@ def test_hook_block_when_route_todo(tmp_catfish, monkeypatch):
               "content": "9 月底前提交 ISO 27001 复审报告"},
         task_id="t1",
     )
-    assert "catfish_create_reminder" in result["message"]
+    assert "catfish_create_task" in result["message"]
 
 
 def test_hook_block_when_route_skill(tmp_catfish, monkeypatch):

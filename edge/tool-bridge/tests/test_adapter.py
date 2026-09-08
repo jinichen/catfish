@@ -171,6 +171,20 @@ def test_dispatch_native_does_not_truncate_for_no_max_size(
     assert "_truncated" not in result["result"]
 
 
+@pytest.mark.parametrize("tool_name", ["catfish_list_tasks", "catfish_list_reminders"])
+def test_structured_task_queries_are_not_archived(
+    monkeypatch: pytest.MonkeyPatch, tool_name: str
+) -> None:
+    """Companion 要直接解析任务查询 envelope，不能被大结果归档成字符串。"""
+    monkeypatch.setenv("CATFISH_TOOL_ARCHIVE_ENABLED", "true")
+    result = {"ok": True, "tool": tool_name, "result": {"tasks": ["x" * 5000]}}
+
+    archived = adapter._maybe_archive_oversized_result(result)
+
+    assert archived["result"] is result["result"]
+    assert isinstance(archived["result"], dict)
+
+
 # ---------- execute_code 误用守卫 ----------
 
 

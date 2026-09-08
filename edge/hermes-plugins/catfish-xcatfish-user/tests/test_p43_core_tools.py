@@ -60,7 +60,7 @@ def test_reminders_reader_is_promoted_directly():
 def test_reminders_writer_is_promoted_directly():
     """创建提醒也必须直接可见，防止模型只写会话 todo 后假报成功。"""
     assert (
-        f"{pct._MCP_PREFIX}catfish_create_reminder"
+        f"{pct._MCP_PREFIX}catfish_create_task"
         in pct.PROMOTED_TOOL_NAMES
     )
 

@@ -171,7 +171,7 @@ export default function LoadingProgress({
         >
           <span>📧 {counts.emails} 邮件</span>
           <span>📅 {counts.events} 条本周日程</span>
-          <span>☑️ {counts.todos} 条本周待办</span>
+          <span>☑️ {counts.todos} 条当前待办</span>
         </div>
       )}
 

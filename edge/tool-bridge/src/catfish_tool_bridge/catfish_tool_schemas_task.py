@@ -301,17 +301,119 @@ TASK_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── 本机任务库：任务事实源，Reminders 只是同步提醒 ───────────────
+    {
+        "name": "catfish_create_task",
+        "description": (
+            "★ 创建或更新一个用户行动到本机任务库。任务库是长期任务、下一步行动和状态的事实来源；"
+            "Reminders 只是 macOS 上的提醒投影。明确的用户行动应写入这里，不要写入周报正文。\n\n"
+            "task_id 用于更新已有任务；没有 task_id 时可用 source + source_id 幂等，或由系统生成。"
+            "长期任务应拆成近期可执行的下一步，并给出真实截止时间。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "稳定任务 ID；更新任务时传入"},
+                "title": {"type": "string", "description": "行动标题，必填"},
+                "due_date_iso": {"type": "string", "description": "本地 ISO 8601 截止时间，可选"},
+                "body": {"type": "string", "description": "任务详情，可选"},
+                "priority": {"type": "integer", "minimum": 0, "maximum": 9, "description": "优先级 0-9"},
+                "status": {
+                    "type": "string",
+                    "enum": ["pending", "in_progress", "completed", "cancelled"],
+                    "default": "pending",
+                    "description": "任务状态，默认 pending",
+                },
+                "source": {"type": "string", "description": "来源，如 conversation/email/calendar"},
+                "source_id": {"type": "string", "description": "来源系统中的稳定 ID，可选"},
+                "list_name": {"type": "string", "description": "Reminders 清单名，可选"},
+            },
+            "required": ["title"],
+        },
+        "emoji": "✅",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_list_tasks",
+        "description": (
+            "★ 读取员工本机任务库中的用户行动，作为待办的事实来源。"
+            "任务库保存任务状态、截止时间、来源和稳定 task_id；macOS 首次读取会导入现有 Reminders。\n\n"
+            "scope: active=全部未完成，today=今天到期，week=本周到期，overdue=逾期，all=全部；默认 active。"
+            "默认不含已完成和已取消任务。\n\n"
+            "不要从周报正文生成任务；周报只是输出，任务库才是输入。"
+            "后台执行任务请使用 catfish_task_list，两者不是同一个概念。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "scope": {
+                    "type": "string",
+                    "enum": ["active", "today", "week", "overdue", "all"],
+                    "default": "active",
+                    "description": "读取范围：active/today/week/overdue/all，默认 active",
+                },
+                "include_completed": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "是否包含已完成或已取消任务，默认 false",
+                },
+                "list_name": {
+                    "type": "string",
+                    "description": "只看指定的任务清单；留空看全部",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 500,
+                    "default": 100,
+                    "description": "最多返回多少条，默认 100",
+                },
+            },
+            "required": [],
+        },
+        "emoji": "✅",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_sync_tasks_to_reminders",
+        "description": (
+            "★ 将任务库中未完成的行动同步到 macOS Reminders，作为个人待办标识。"
+            "同步使用 task_id 标记，重复执行不会重复创建；任务库仍是事实来源。\n\n"
+            "不要从周报正文创建任务；先写入 catfish_create_task，再按需同步。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "scope": {
+                    "type": "string",
+                    "enum": ["active", "today", "week", "overdue", "all"],
+                    "default": "active",
+                    "description": "同步范围，默认全部未完成行动",
+                },
+                "list_name": {"type": "string", "description": "Reminders 目标清单，可选"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
+            },
+            "required": [],
+        },
+        "emoji": "🔁",
+        "toolset": "catfish_native",
+        "x_catfish_runtime": {"platforms": ["darwin"]},
+        "available": True,
+    },
     # ── BL-REMINDER (5/13 鸿波"macOS 提醒联动") ──────────────────────
     {
         "name": "catfish_create_reminder",
         "description": (
-            "★ 在 macOS Reminders.app 创建提醒 (用户管理的真 to-do, iCloud 同步到 iPhone/iPad). "
+            "★ 按用户明确要求在 macOS Reminders.app 创建系统提醒 (iCloud 同步到 iPhone/iPad)。"
+            "普通用户行动请使用 catfish_create_task；本工具是直接 Reminders 操作和兼容入口。"
+            "需要在系统提醒中显示任务时，优先先写任务库，再用 catfish_sync_tasks_to_reminders。\n\n"
             "**跟 notify (右上角横幅消息几秒消失) 互补** — Reminder 是用户能勾完成、跨设备的持久 to-do.\n\n"
             "✅ 调用场景:\n"
-            "  - 员工 '提醒我明早 9 点交月报' → title='交月报' due_date_iso='2026-05-14T09:00:00'\n"
+            "  - 员工明确要求‘在系统提醒里创建’ → title='交月报' due_date_iso='2026-05-14T09:00:00'\n"
             "  - 员工 '每周五晚 6 点提醒我备份' → title='备份' due_date_iso='2026-05-17T18:00:00' (Reminders.app 内自己设重复, AppleScript 一次性创建有限制)\n"
-            "  - 员工 '帮我记下下周三要给王总汇报' → title='给王总汇报' due_date_iso='...' body='Q2 进度 / 项目风险'\n"
-            "  - LLM 自己识别 '这是个待办' → 主动调 (e.g. 看到员工说 '别忘了... ' / '记得...')\n\n"
+            "  - 员工要求‘把任务同步到 iCloud/提醒事项’ → title='给王总汇报' body='Q2 进度 / 项目风险'\n\n"
             "❌ 不调用:\n"
             "  - 一次性弹窗消息 (用 notify, 例如 '验证码已复制')\n"
             "  - 当前会话内提示 (LLM 直接说就行)\n"
@@ -364,9 +466,9 @@ TASK_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_list_reminders",
         "description": (
-            "★ 读取用户 macOS Reminders.app 里的真实提醒事项条目，返回标题、清单、"
+            "读取用户 macOS Reminders.app 里的原始提醒条目，返回标题、清单、"
             "截止时间、完成状态和优先级。用于‘本周待办是什么’、‘列出今天待办’、"
-            "‘有哪些逾期待办’、‘列出所有提醒事项’等查询。\n\n"
+            "‘有哪些逾期待办’、‘列出所有提醒事项’等直接查询；普通任务查询请使用 catfish_list_tasks。\n\n"
             "**不要用 Hermes todo 读取 Reminders.app**：Hermes todo 只管理 Agent 当前"
             "会话的执行计划，调用成功也不会读取用户的系统待办。遇到系统提醒查询必须"
             "直接调用本工具。\n\n"

@@ -1,8 +1,9 @@
 """BL-REMINDER (5/13 鸿波"macOS 提醒联动") — catfish_create_reminder 模块.
 
-跟 5/2 BL-E13 notify (macOS 通知中心右上角横幅消息) 互补:
+跟本机任务库（用户行动事实源）以及 5/2 BL-E13 notify（macOS 通知中心右上角横幅消息）互补:
 - notify: 一次性弹窗, 几秒消失, 不持久, 不跨设备
-- create_reminder: 真 to-do, 用户能勾完成, iCloud 同步到 iPhone/iPad
+- task library: 用户行动、状态和截止时间的本机事实源
+- create_reminder: 直接系统提醒, 用户能勾完成, iCloud 同步到 iPhone/iPad
 
 实现走 osascript + Reminders.app (跟 commands/system.rs Tauri command 同源).
 tool-bridge 这边是给 LLM 调用用 (走 hermes adapter dispatch_native), Companion
@@ -11,9 +12,9 @@ tool-bridge 这边是给 LLM 调用用 (走 hermes adapter dispatch_native), Com
 为什么两份实现? 因为 tool-bridge 跟 Companion 是不同进程, 各自需要 osascript 调用.
 
 用例:
-- 鸿波: "提醒我明早 9 点交月报" → LLM 调 catfish_create_reminder(title='交月报', due_date_iso='2026-05-14T09:00:00')
-- 鸿波: "记下下周三给王总汇报" → LLM 调 catfish_create_reminder(title='给王总汇报', due_date_iso='...', body='Q2 进度')
-- LLM 自己识别 "别忘了... " / "记得..." → 主动调
+- 普通用户行动 → LLM 调 catfish_create_task(title='交月报', due_date_iso='2026-05-14T09:00:00')
+- 用户明确要求写入系统提醒 → LLM 调 catfish_create_reminder(title='交月报', due_date_iso='...')
+- 需要把任务库行动显示在 macOS Reminders → 调 catfish_sync_tasks_to_reminders
 """
 from __future__ import annotations
 
@@ -266,6 +267,60 @@ def _parse_local_iso(value: str | None) -> datetime | None:
         return None
 
 
+def _scope_bounds(scope: str, now: datetime) -> tuple[datetime, datetime] | None:
+    """返回 AppleScript 预过滤所需的本地自然日边界。"""
+    today_start = datetime.combine(now.date(), time.min)
+    if scope == "today":
+        return today_start, today_start + timedelta(days=1)
+    if scope == "week":
+        week_start = today_start - timedelta(days=today_start.weekday())
+        return week_start, week_start + timedelta(days=7)
+    if scope == "overdue":
+        # AppleScript cannot reliably parse datetime.min; reminders predating
+        # 1970 are outside any supported local mailbox/calendar dataset.
+        return datetime(1970, 1, 1), today_start
+    return None
+
+
+def _build_list_reminders_script(
+    scope: str,
+    *,
+    include_completed: bool,
+    list_name: str,
+    now: datetime,
+) -> str:
+    """为 Reminders 生成带服务端预过滤的 AppleScript。
+
+    原脚本会把所有清单、所有字段先完整传回 Python，再由 Python 做 scope
+    筛选。清单或历史提醒较多时，AppleScript 序列化本身就可能超过早安页的
+    15 秒来源超时。把同样的条件前移到 AppleScript，只序列化候选记录；Python
+    侧仍保留二次过滤，防止时区或 AppleScript 类型转换差异越界。
+    """
+    bounds = _scope_bounds(scope, now)
+    if bounds is None:
+        # all 不会用到边界，但仍填合法的本地日期，避免 AppleScript 无法解析
+        # datetime.min/max 这类超出系统日期范围的值。
+        scope_start, scope_end = now, now
+    else:
+        scope_start, scope_end = bounds
+
+    replacements = {
+        "__SCOPE__": _escape_applescript_string(scope),
+        "__INCLUDE_COMPLETED__": "true" if include_completed else "false",
+        "__LIST_NAME__": _escape_applescript_string(list_name),
+        "__SCOPE_START__": _convert_iso_to_applescript_date(
+            scope_start.isoformat(timespec="seconds")
+        ),
+        "__SCOPE_END__": _convert_iso_to_applescript_date(
+            scope_end.isoformat(timespec="seconds")
+        ),
+    }
+    script = _LIST_REMINDERS_SCRIPT
+    for marker, value in replacements.items():
+        script = script.replace(marker, value)
+    return script
+
+
 def _filter_reminders(
     reminders: list[dict[str, Any]],
     scope: str,
@@ -338,31 +393,60 @@ on isoDate(dateValue)
     return yearText & "-" & monthText & "-" & dayText & "T" & hourText & ":" & minuteText & ":" & secondText
 end isoDate
 
+set scopeMode to "__SCOPE__"
+set includeCompleted to __INCLUDE_COMPLETED__
+set targetListName to "__LIST_NAME__"
+set scopeStart to date "__SCOPE_START__"
+set scopeEnd to date "__SCOPE_END__"
+
 tell application "Reminders"
     set outputRows to {}
     repeat with reminderList in lists
         set listText to my cleanText(name of reminderList)
-        repeat with reminderItem in reminders of reminderList
-            set idText to my cleanText(id of reminderItem)
-            set titleText to my cleanText(name of reminderItem)
-            set dueText to ""
-            try
-                set reminderDue to due date of reminderItem
-                if reminderDue is not missing value then set dueText to my isoDate(reminderDue)
-            end try
-            set completedText to (completed of reminderItem) as text
-            set priorityText to "0"
-            try
-                set priorityText to (priority of reminderItem) as text
-            end try
-            set bodyText to ""
-            try
-                set bodyText to my cleanText(body of reminderItem)
-            end try
-            set fieldSeparator to (character id 31)
-            set rowText to idText & fieldSeparator & titleText & fieldSeparator & listText & fieldSeparator & dueText & fieldSeparator & completedText & fieldSeparator & priorityText & fieldSeparator & bodyText
-            set end of outputRows to rowText
-        end repeat
+        if targetListName is "" or listText is targetListName then
+            repeat with reminderItem in reminders of reminderList
+                set includeRow to true
+                if not includeCompleted then
+                    try
+                        if completed of reminderItem then set includeRow to false
+                    end try
+                end if
+                if includeRow and scopeMode is not "all" then
+                    set includeRow to false
+                    try
+                        set reminderDue to due date of reminderItem
+                        if reminderDue is not missing value then
+                            if scopeMode is "overdue" then
+                                set includeRow to reminderDue < scopeEnd
+                            else
+                                set includeRow to reminderDue >= scopeStart and reminderDue < scopeEnd
+                            end if
+                        end if
+                    end try
+                end if
+                if includeRow then
+                    set idText to my cleanText(id of reminderItem)
+                    set titleText to my cleanText(name of reminderItem)
+                    set dueText to ""
+                    try
+                        set reminderDue to due date of reminderItem
+                        if reminderDue is not missing value then set dueText to my isoDate(reminderDue)
+                    end try
+                    set completedText to (completed of reminderItem) as text
+                    set priorityText to "0"
+                    try
+                        set priorityText to (priority of reminderItem) as text
+                    end try
+                    set bodyText to ""
+                    try
+                        set bodyText to my cleanText(body of reminderItem)
+                    end try
+                    set fieldSeparator to (character id 31)
+                    set rowText to idText & fieldSeparator & titleText & fieldSeparator & listText & fieldSeparator & dueText & fieldSeparator & completedText & fieldSeparator & priorityText & fieldSeparator & bodyText
+                    set end of outputRows to rowText
+                end if
+            end repeat
+        end if
     end repeat
 end tell
 set AppleScript's text item delimiters to (character id 30)
@@ -394,7 +478,16 @@ def tool_list_reminders(args: dict[str, Any]) -> dict[str, Any]:
             "reminders": [],
         }
 
-    ok, stdout, stderr = _run_osascript(_LIST_REMINDERS_SCRIPT, timeout_sec=30.0)
+    list_name = str(args.get("list_name") or "").strip()
+    include_completed = bool(args.get("include_completed", False))
+    query_now = _now_local()
+    query_script = _build_list_reminders_script(
+        scope,
+        include_completed=include_completed,
+        list_name=list_name,
+        now=query_now,
+    )
+    ok, stdout, stderr = _run_osascript(query_script, timeout_sec=30.0)
     if not ok:
         if "Not authorized" in stderr or "权限" in stderr or "not allowed" in stderr.lower():
             return {
@@ -409,12 +502,10 @@ def tool_list_reminders(args: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": f"osascript 失败: {stderr}", "reminders": []}
 
     all_items = _parse_reminders_output(stdout)
-    list_name = str(args.get("list_name") or "").strip()
-    include_completed = bool(args.get("include_completed", False))
     selected = _filter_reminders(
         all_items,
         scope,
-        now=_now_local(),
+        now=query_now,
         include_completed=include_completed,
         list_name=list_name,
         limit=limit,
@@ -447,5 +538,6 @@ __all__ = [
     "_convert_iso_to_applescript_date",  # 给单测
     "_escape_applescript_string",  # 给单测
     "_filter_reminders",  # 给单测
+    "_build_list_reminders_script",  # 给单测
     "_parse_reminders_output",  # 给单测
 ]

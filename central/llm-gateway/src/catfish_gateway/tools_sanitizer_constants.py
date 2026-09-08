@@ -31,7 +31,8 @@ CATFISH_BROWSER_PREFIX = "catfish_browser_"
 # 上沿仍远离实测红线 (Qwen 122B 50+ 撞空 400), KV 代价约 +2K token。
 # 8/31: Reminders 读写都提升为核心后需要 41 个；写入口不可再被 cap 静默砍掉。
 # 9/2: browser_evaluate 直达后需要 42 个，仍低于 Qwen 50+ tools 的实测风险线。
-DEFAULT_MAX_TOOLS = 42
+# 9/8: task library 查询直达后需要 43 个，仍保留 7 个工具的实测安全余量。
+DEFAULT_MAX_TOOLS = 43
 ENV_MAX_TOOLS = "CATFISH_MAX_TOOLS"
 
 
@@ -189,8 +190,10 @@ ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
     # 被 BL-TOOL-CAP 砍了. 这俩是员工高频场景 (看今日 TODO/邮件), 必须 always-on
     # 防 cap 误砍.
     "catfish_today_summary",   # 今日活动 (TODO / 邮件 / 日程 / chat 汇总)
-    "catfish_list_reminders",  # macOS Reminders.app 真实待办读取（不是 Hermes todo）
-    "catfish_create_reminder",  # macOS Reminders.app 唯一用户待办写入口
+    "catfish_list_tasks",      # 本机任务库真实待办读取（macOS 会导入 Reminders）
+    "catfish_create_task",     # 本机任务库唯一结构化待办写入口
+    "catfish_list_reminders",  # macOS Reminders.app 原始兼容查询
+    "catfish_create_reminder", # macOS Reminders.app 直接写入兼容工具
     "catfish_email_search",    # 邮件查询 (chat 常用)
     # 8/28: 邮件页交接带 email_id; Qwen 需要在当前终端直接看到读取链路,
     # 否则会在 tool_search / execute_code 间空转。实现仍来自该终端自己的

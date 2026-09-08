@@ -8,6 +8,8 @@ import {
 
 /** 早安数据源单独超时，避免一个系统 API 卡住就让页面永久显示“加载中”。 */
 export const BRIEFING_SOURCE_TIMEOUT_MS = 15_000;
+/** macOS 任务库首次导入 Reminders 可能较慢，略高于 tool-bridge 的 30s 上限。 */
+export const BRIEFING_TASKS_TIMEOUT_MS = 35_000;
 
 export type BriefingSourceResults = [
   PromiseSettledResult<string>,
@@ -16,12 +18,16 @@ export type BriefingSourceResults = [
   PromiseSettledResult<BriefingContext>,
 ];
 
-function withSourceTimeout<T>(name: string, promise: Promise<T>): Promise<T> {
+function withSourceTimeout<T>(
+  name: string,
+  promise: Promise<T>,
+  timeoutMs = BRIEFING_SOURCE_TIMEOUT_MS,
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<T>((_, reject) => {
     timer = setTimeout(() => {
-      reject(new Error(`${name} 数据源超过 ${BRIEFING_SOURCE_TIMEOUT_MS / 1000} 秒未返回`));
-    }, BRIEFING_SOURCE_TIMEOUT_MS);
+      reject(new Error(`${name} 数据源超过 ${timeoutMs / 1000} 秒未返回`));
+    }, timeoutMs);
   });
 
   return Promise.race([promise, timeout]).finally(() => {
@@ -29,12 +35,12 @@ function withSourceTimeout<T>(name: string, promise: Promise<T>): Promise<T> {
   });
 }
 
-/** 拉取早安四个来源；每个来源最多等待 15 秒，结果仍保留给诊断卡。 */
+/** 拉取早安四个来源；普通来源 15 秒，任务库单独给更长窗口。 */
 export async function fetchBriefingSources(): Promise<BriefingSourceResults> {
   const results = await Promise.allSettled([
     withSourceTimeout("邮件", emailDigestFetch(50)),
     withSourceTimeout("日历", calendarWeekFetch(false)),
-    withSourceTimeout("Reminders", remindersWeekFetch()),
+    withSourceTimeout("任务库", remindersWeekFetch(), BRIEFING_TASKS_TIMEOUT_MS),
     withSourceTimeout("工作上下文", briefingContextFetch()),
   ]);
   return results as BriefingSourceResults;

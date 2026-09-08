@@ -93,7 +93,7 @@ class _SectionsMixin:
             "| `project_fact` | `~/.hermes/memories/MEMORY.md` (cap 5000 chars) | 项目/技术常量 — 资质评估流程/工具配置/平台特征 |\n"
             "| `workflow` | hint → 调 `catfish_propose_skill` | 多步流程 — 有 step 序列的全部 |\n"
             "| `journal` | `~/.catfish/employee_journal.md` (append) | 本次会话总结 / 已发生事件 / pending TODO |\n"
-            "| `todo` | hint → 调 `catfish_reminder_create` | 带 deadline 的任务 (会写 Reminders.app) |\n"
+            "| `todo` | hint → 调 `catfish_create_task` | 用户行动 (写入本机任务库) |\n"
             "| `expense` | `~/.catfish/bookkeep.jsonl` (append) | 收支记账 — 员工说花/付/买/收/卖/加油/吃饭 + 金额 |\n\n"
             "**4 个长期存储分工**:\n\n"
             "- **USER.md (identity)** — 员工本人, 一年后还成立. 例: 偏好直接输出不要确认.\n"
@@ -113,7 +113,7 @@ class _SectionsMixin:
             "3. 多步流程? → workflow → 改调 catfish_propose_skill\n"
             "4. **金额数字 + 消费/收入动词** (花/付/买/收/卖/加油/吃饭/打车/工资)? → **expense → bookkeep.jsonl**\n"
             "5. 这次会话的事 / 已发生事件? → journal → employee_journal.md\n"
-            "6. 带 deadline 的任务? → todo → 改调 catfish_reminder_create\n"
+            "6. 用户行动? → todo → 改调 catfish_create_task\n"
             "7. 拿不准 → 先看是不是 expense (金额数字+动词), 再 fallback journal\n"
         )
 

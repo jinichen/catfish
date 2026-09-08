@@ -10,9 +10,9 @@
 import { invoke as rawInvoke } from "@tauri-apps/api/core";
 import { toolBridgeCallTool } from "./tauri_services";
 
-// ── 用户待办 · Reminders.app ─────────────────────────────
-// 8/31: Reminders 是 macOS 用户待办唯一事实源。早安与 chat 共用
-// catfish_list_reminders，停用长期不更新的 ~/.catfish/current_todos.md。
+// ── 用户任务库 · Reminders.app 同步 ──────────────────────
+// 9/8: 本机任务库是用户行动的事实源；macOS 上首次读取会导入 Reminders。
+// 早安不再直接把周报或旧 current_todos.md 当作待办来源。
 
 /** BL-JOURNAL-TODO-EXTRACT step2 (5/20): 读 journal 最近 5KB 给 LLM 抽自然语言 TODO. */
 export const journalReadRecent = () =>
@@ -58,8 +58,12 @@ export interface ReminderTodo {
 }
 
 interface ReminderToolItem {
+  task_id?: unknown;
   id?: unknown;
   title?: unknown;
+  source?: unknown;
+  source_id?: unknown;
+  reminder_id?: unknown;
   list_name?: unknown;
   due_date_iso?: unknown;
   priority?: unknown;
@@ -70,12 +74,13 @@ interface ReminderToolResult {
   ok?: boolean;
   error?: string;
   reminders?: ReminderToolItem[];
+  tasks?: ReminderToolItem[];
 }
 
-/** 读取本自然周（周一至周日）未完成 Reminders，返 JSON 字符串以复用早安诊断解析链。 */
+/** 读取全部未完成任务，复用早安诊断解析链；截止时间只用于排序。 */
 export async function remindersWeekFetch(): Promise<string> {
-  const dispatched = await toolBridgeCallTool("catfish_list_reminders", {
-    scope: "week",
+  const dispatched = await toolBridgeCallTool("catfish_list_tasks", {
+    scope: "active",
     include_completed: false,
     limit: 100,
   });
@@ -87,11 +92,11 @@ export async function remindersWeekFetch(): Promise<string> {
   if (!result?.ok) {
     throw new Error(result?.error || "读取 Reminders 失败");
   }
-  if (!Array.isArray(result.reminders)) {
-    throw new Error("Reminders 返回格式异常：reminders 不是数组");
+  if (!Array.isArray(result.tasks)) {
+    throw new Error("任务库返回格式异常：tasks 不是数组");
   }
 
-  const todos: ReminderTodo[] = result.reminders
+  const todos: ReminderTodo[] = result.tasks
     .filter((item) => typeof item.title === "string" && item.title.trim().length > 0)
     .map((item) => {
       const priority = typeof item.priority === "number" ? item.priority : 0;
@@ -102,7 +107,11 @@ export async function remindersWeekFetch(): Promise<string> {
         section: typeof item.list_name === "string" ? item.list_name : "Reminders",
         is_priority: priority >= 1 && priority <= 3,
         origin: "reminders",
-        reminder_id: typeof item.id === "string" ? item.id : undefined,
+        reminder_id: typeof item.reminder_id === "string"
+          ? item.reminder_id
+          : typeof item.source_id === "string" && item.source === "reminders"
+            ? item.source_id
+            : typeof item.id === "string" ? item.id : undefined,
         due_date_iso: typeof item.due_date_iso === "string" ? item.due_date_iso : null,
         priority,
         body: typeof item.body === "string" ? item.body : "",
@@ -135,7 +144,7 @@ export interface BriefingContext {
   projects: string;                 // ~/.catfish/projects.md 项目进度
   weeklyReports: WeeklyReportRef[]; // outputs/ 下 weekly-* 文件 + mtime
   // P3.4.6 (6/15 鸿波): hermes MEMORY 近期 § 段, 当"近期事项 context" 喂 advisor.
-  //   不当 TODO — 用户待办严格走 Reminders.app.
+  //   不当 TODO — 用户待办严格走本机任务库，macOS Reminders 只是同步投影.
   hermesMemoryRecent: string;
 }
 

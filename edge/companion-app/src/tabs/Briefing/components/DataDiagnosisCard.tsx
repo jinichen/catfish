@@ -109,18 +109,18 @@ export function DataDiagnosisCard({ statuses, onRetry }: DataDiagnosisCardProps)
 
       <SourceRow
         icon="☑️"
-        name="本周待办"
+        name="当前待办"
         status={statuses.todos}
         zeroHint={
           <>
-            Reminders.app 本自然周没有未完成且设置了截止时间的待办。可以直接在
-            Reminders 中添加，也可以在工作台里对小鲶说“提醒我周五前完成月报”。
+            本机任务库当前没有未完成待办。可以在工作台里对小鲶说“提醒我周五前完成月报”；
+            macOS 如需系统提醒，再同步到 Reminders。
           </>
         }
         failHints={[
           {
             keywords: ["权限", "not authorized", "not allowed", "-1743"],
-            fix: "Reminders 读取权限未开启。系统设置 → 隐私与安全性 → 提醒事项/自动化 → 允许 Catfish Companion；然后 Cmd+Q 完全退出再重开。",
+            fix: "任务库读取失败；如果是在 macOS 首次导入 Reminders，请在系统设置 → 隐私与安全性 → 提醒事项/自动化允许 Catfish Companion，然后 Cmd+Q 完全退出再重开。",
           },
           {
             keywords: ["tool-bridge", "socket", "连接", "不可达"],

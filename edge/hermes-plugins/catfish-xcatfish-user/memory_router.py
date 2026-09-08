@@ -21,7 +21,7 @@ plugin discovery 路径 (`hermes_cli.plugins`), register(ctx) 真被调.
 | project_fact | hermes 原 memory_tool(target=memory) → MEMORY.md        |
 | workflow     | hint 让 LLM 调 catfish_propose_skill (BL-MM9 5/8 ship)  |
 | journal      | append ~/.catfish/employee_journal.md (catfish 现有)    |
-| todo         | 拒绝落 journal，要求调 catfish_create_reminder          |
+| todo         | 拒绝落 journal，要求调 catfish_create_task              |
 
 ## 性能
 
@@ -262,7 +262,7 @@ CATFISH_MEMORY_SCHEMA: Dict[str, Any] = {
                 "- project_fact: **项目/技术**事实 (API 字段含义/客户机房 IP/工具约定) → MEMORY.md\n"
                 "- workflow: 工作**流程** (有 input/output/step 序列) → 自动提议存成 skill\n"
                 "- journal: 已发生**事件**/session 总结/会议记录 → 写 catfish 员工日志 (不是 memory)\n"
-                "- todo: 带 deadline 的**待办任务** → 自动转 Reminders.app (不是 memory)\n"
+                "- todo: 用户行动 → 调 catfish_create_task 写入本机任务库 (不是 memory)\n"
                 "拿不准 → 80% 概率是 journal 不是 identity/project_fact."
             ),
         },
@@ -393,11 +393,12 @@ def _route_to_reminder(content: str) -> str:
     """拒绝把用户待办降级写入 journal，强制模型改调唯一写入口。"""
     return json.dumps({
         "success": False,
-        "routed_to": "catfish_create_reminder",
+        "routed_to": "catfish_create_task",
         "content": content,
         "error": (
-            "用户待办只存 Reminders.app；请立即调用 catfish_create_reminder，"
-            "并且只有工具返回 ok=true 后才能向用户报告创建成功。"
+            "用户待办先写入本机任务库；请立即调用 catfish_create_task，"
+            "只有工具返回 ok=true 后才能向用户报告创建成功。需要 macOS 提醒时再调用"
+            " catfish_sync_tasks_to_reminders。"
         ),
     }, ensure_ascii=False)
 

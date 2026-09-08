@@ -136,12 +136,12 @@ function _buildUserPrompt(
     lines.push(`邮件: 未读 ${unread} 封.`);
   }
 
-  // Reminders 本周待办
+  // 当前未完成任务
   if (todos.length === 0) {
-    lines.push("Reminders: 本周没有未完成待办.");
+    lines.push("任务库: 当前没有未完成待办.");
   } else {
     const top3 = todos.slice(0, 3).map((t) => t.text);
-    lines.push(`Reminders 本周未完成 ${todos.length} 件 (最近到期: ${top3.join(", ")}).`);
+    lines.push(`当前任务库未完成 ${todos.length} 件 (优先关注: ${top3.join(", ")}).`);
   }
 
   return lines.join("\n");
@@ -220,10 +220,10 @@ export async function fetchBriefingSuggestion(
 
 // ── BL-BRIEFING-LLM-MERGE (5/20): 合并 2 个 LLM 调用为 1 个 ──────
 //
-// 8/31: 用户待办统一到 Reminders 后，不再从 journal 猜测新 TODO；此调用只负责
-// 基于邮件、日历和 Reminders 写一行主动提醒。
+// 9/8: 用户待办统一到本机任务库后，不再从 journal 猜测新 TODO；此调用只负责
+// 基于邮件、日历和当前任务写一行主动提醒。
 
-const MERGED_SYSTEM_PROMPT = `你是用户的鲶鱼数字员工 (Catfish)。根据今天的邮件、本周日历和 Reminders 本周待办写一行优先建议:
+const MERGED_SYSTEM_PROMPT = `你是用户的鲶鱼数字员工 (Catfish)。根据今天的邮件、本周日历和当前未完成任务写一行优先建议:
 
    - 一行字 30 字内, 按时间紧急度
    - 用"→"连接 2-3 件事
@@ -376,10 +376,10 @@ function _buildMergedUserPrompt(
     lines.push(`邮件: 未读 ${unread} 封 (没"急"邮件).`);
   }
 
-  // Reminders 本周待办
+  // 当前未完成任务
   if (knownTodos.length > 0) {
     const list = knownTodos.map((t) => `- ${t.text}`).join("\n");
-    lines.push(`\nReminders 本周未完成待办:\n${list}`);
+    lines.push(`\n当前未完成任务:\n${list}`);
   }
 
   return lines.join("\n");

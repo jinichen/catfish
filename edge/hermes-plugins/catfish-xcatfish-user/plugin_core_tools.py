@@ -107,12 +107,12 @@ _PROMOTE = (
     "catfish_wiki_search",     # 知识库检索 —— 8/13 员工撞的就是它
     "catfish_search_docs",     # 本地文档检索, 跟上面是一对
     "catfish_today_summary",   # 今日 TODO / 邮件 / 日程汇总
-    # 8/24: 用户系统待办的唯一只读入口。没有它时 Qwen 把“查询 Reminders”
-    # 连续写进 Hermes 会话规划 todo 12 次；这个入口不能再藏到 tool_search 后面。
+    # 8/24: 用户系统待办的兼容只读入口。普通待办查询使用 task library，
+    # 但直接查询 Reminders 仍需这个入口，不能藏到 tool_search 后面。
     "catfish_list_reminders",
-    # 8/31: 写入口也必须直接可见。否则模型可能只写 Hermes 会话计划，
-    # 然后用自然语言宣称“创建成功”，实际 Reminders.app 没有新增项。
-    "catfish_create_reminder",
+    # 9/8: 用户行动的事实源写入口必须直接可见，避免只写 Hermes 会话计划。
+    "catfish_create_task",
+    "catfish_list_tasks",
     "catfish_email_search",    # 邮件查询
     # 8/28: “让小鲶处理这封邮件”交接带 email_id; 读取链路必须在当前终端
     # 直接可见, 否则 Qwen 会在 tool_search / execute_code 间空转。这里只提升

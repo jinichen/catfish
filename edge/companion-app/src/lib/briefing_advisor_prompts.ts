@@ -476,7 +476,7 @@ ${input.wikiRelevant.trim()}`);
       const star = t.is_priority ? "⭐ " : "";
       return `${star}${t.text} (${t.source})`;
     });
-    parts.push(`# Reminders 本周待办（周一至周日，${todos.length} 件）\n${lines.join("\n")}`);
+    parts.push(`# 当前未完成任务（${todos.length} 件；截止时间仅用于排序）\n${lines.join("\n")}`);
   }
 
   // P3.3.9 (6/10): 上次 advisor 输出 — 让 LLM 复用 task_uid (跨 refresh 稳定)

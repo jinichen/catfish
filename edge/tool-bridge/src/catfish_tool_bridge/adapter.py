@@ -240,9 +240,7 @@ def _maybe_archive_oversized_result(result: Dict[str, Any]) -> Dict[str, Any]:
       - result["result"] 是 str → 直接 archive 这个 str.
       - 是 dict/list → json.dumps 后 archive (二进制 / 嵌套结构同 gateway 老逻辑).
       - 阈值 < threshold → 不动, 原样返.
-      - 不动 result["ok"] / result["tool"] / result["error"] — 让 hermes / LLM
-        看到的 envelope 结构不变, 只有 result["result"] 从原始 content 变成
-        "[已归档: archive_ref=..., tool=..., XKB / N 行] 摘要 + 头尾预览" 字符串.
+      - 保持 envelope 字段不变，只替换 result["result"] 为归档引用和头尾预览.
 
     LLM 看到 [已归档 ref=xxx] 后, 想看全文调 catfish_read_tool_archive(ref=xxx)
     → 走 tool-bridge 直读本机 (Phase 3 改过, 不再走 HTTP).
@@ -254,7 +252,9 @@ def _maybe_archive_oversized_result(result: Dict[str, Any]) -> Dict[str, Any]:
     raw = result.get("result")
     if raw is None:
         return result
-
+    # Companion parses these query envelopes directly; archiving would destroy `tasks`.
+    if result.get("tool") in {"catfish_list_tasks", "catfish_list_reminders"}:
+        return result
     # 序列化为 str (跟 gateway 老逻辑同 — gateway 处理的是 hermes 序列化后的 content)
     if isinstance(raw, str):
         content = raw

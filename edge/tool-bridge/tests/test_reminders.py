@@ -243,6 +243,24 @@ def test_list_script_uses_character_id_delimiters():
     assert "ASCII character" not in script
 
 
+def test_week_query_pushes_scope_and_completion_filter_into_applescript():
+    """早安查询不能先序列化全部历史提醒再等 Python 慢慢过滤。"""
+    fixed_now = datetime(2026, 9, 8, 14, 0, 0)
+    with patch.object(reminders, "_is_macos", return_value=True), \
+         patch.object(reminders, "_now_local", return_value=fixed_now), \
+         patch.object(reminders, "_run_osascript", return_value=(True, "", "")) as mock_run:
+        result = reminders.tool_list_reminders({"scope": "week"})
+
+    assert result["ok"] is True
+    script = mock_run.call_args.args[0]
+    assert 'set scopeMode to "week"' in script
+    assert 'set includeCompleted to false' in script
+    assert 'set scopeStart to date "2026-09-07 00:00:00"' in script
+    assert 'set scopeEnd to date "2026-09-14 00:00:00"' in script
+    assert "if completed of reminderItem then set includeRow to false" in script
+    assert "set end of outputRows to rowText" in script
+
+
 def test_parse_reminders_output_keeps_structured_fields():
     stdout = _RS.join([
         _reminder_row(

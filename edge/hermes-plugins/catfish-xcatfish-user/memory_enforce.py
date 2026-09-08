@@ -166,7 +166,7 @@ _CLASSIFY_SYSTEM_PROMPT = (
     "本名鸿波, 不喜欢确认) |\n"
     "| `journal` | ~/.catfish/employee_journal.md | **单次事件 / 已发生 / 含具体日期的状态变更** "
     "(例: 陈某 6/19 飞抵福州, X 会议结束, Y 已完成) |\n"
-    "| `todo` | catfish_create_reminder | **带 deadline 的任务** (例: 9 月底前提交 X 报告, "
+    "| `todo` | catfish_create_task | **用户行动** (例: 9 月底前提交 X 报告, "
     "周三前回复 Y) |\n"
     "| `skill` | ~/.hermes/skills/<name>/SKILL.md | **多步流程 / 操作指引** (例: 如何申报资质, "
     "如何跑测试) |\n\n"
@@ -479,7 +479,7 @@ def memory_enforce_hook(tool_name: str = "", args: Optional[dict] = None,
         })
         kind_to_tool = {
             "journal": "直接写 ~/.catfish/employee_journal.md (append `## [YYYY-MM-DD HH:MM] kind | title`)",
-            "todo": "调 catfish_create_reminder tool (有 deadline 的任务)",
+            "todo": "调 catfish_create_task tool (写入本机任务库)",
             "skill": "调 catfish_propose_skill tool (多步流程 / SKILL.md)",
         }
         suggested = kind_to_tool.get(route, route)

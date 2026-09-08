@@ -1,7 +1,7 @@
 ---
 name: catfish-journal
-description: 维护员工本机历史流水账 employee_journal.md。不得用于新增、查询、完成或删除用户待办；用户待办统一调用 Hermes 的 catfish_create_reminder / catfish_list_reminders 等 Reminders 工具。
-version: 0.3.0
+description: 维护员工本机历史流水账 employee_journal.md。不得用于新增、查询、完成或删除用户待办；用户待办统一写入 catfish_create_task，本机任务库是事实源，macOS Reminders 仅按需同步。
+version: 0.4.0
 author: 鲶鱼 Catfish Platform Team
 license: MIT
 metadata:
@@ -14,14 +14,15 @@ prerequisites:
 # catfish-journal
 
 本 skill 只维护 `~/.catfish/employee_journal.md` 中已经存在的历史流水账内容，
-不再承担用户待办管理。早安模块、对话和系统提醒必须共享同一个 Reminders 数据源。
+不再承担用户待办管理。早安模块和对话共享本机任务库；macOS 上可按需把任务同步到 Reminders。
 
 ## 数据边界
 
-- 用户说“提醒我”“新建待办”“本周有什么待办”时，使用 Hermes 原生 Reminders 工具。
-- 查询待办使用 `catfish_list_reminders`。
-- 新建待办使用 `catfish_create_reminder`。
-- 完成或删除待办使用 Hermes 对应的 Reminders 工具；如果当前版本尚未暴露，明确告知用户，不能退回写 journal。
+- 用户说“提醒我”“新建待办”或要求记录行动时，使用 `catfish_create_task` 写入本机任务库。
+- 查询待办使用 `catfish_list_tasks`；它是早安模块使用的统一任务来源。
+- macOS 需要在系统 Reminders 中显示时，再使用 `catfish_sync_tasks_to_reminders`；该同步按 task_id 幂等。
+- 直接查询或操作 Reminders 仅在用户明确要求查看系统提醒时使用 `catfish_list_reminders` / `catfish_create_reminder`。
+- 完成或取消任务使用 `catfish_create_task` 更新 status；不能退回写 journal。
 - `employee_journal.md` 是员工历史流水账，不是提醒系统，也不参与早安模块计数。
 - `~/.catfish/current_todos.md` 已停用；不得创建、读取、同步或改写它。
 
