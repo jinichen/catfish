@@ -289,7 +289,8 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
       renderEdgeLabels: false,
       // 默认一跳图只给中心和较重要邻居常驻标签；其余节点 hover 仍显示。
       // 全量图不再出现 200 个标签叠成一团。
-      labelRenderedSizeThreshold: 4.6,
+      // 普通一跳节点尺寸约为 4.4，阈值必须低于它才能显示关联实体名称。
+      labelRenderedSizeThreshold: 3.5,
       labelFont: "ui-sans-serif, -apple-system, sans-serif",
       labelSize: 12,
       labelWeight: "500",
