@@ -125,7 +125,16 @@ fn install_optional_components(resource_dir: &Path, paths: &BootstrapPaths) -> V
     }
 
     let email_exe = hermes_venv_tool(&paths.install_dir, "catfish-email");
-    if !email_exe.is_file() {
+    // 仅判断 exe 存在是不够的：旧版本可能留下入口文件，但 wheel 或 pywin32
+    // 已损坏，重装 MSI 又不会覆盖 Hermes venv。用同一个 Python 做无网络导入
+    // 探针，失败时复用现有隐藏安装流程修复。
+    let email_ready = email_exe.is_file()
+        && run_hidden_status(
+            &hermes_venv_python(&paths.install_dir),
+            &["-c", "import catfish_email, win32api"],
+            "catfish-email/pywin32",
+        );
+    if !email_ready {
         let script = resources.join("install-catfish-email.ps1");
         match artifacts.email_tar.as_ref() {
             Some(archive) if script.is_file() => {

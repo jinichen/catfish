@@ -25,6 +25,10 @@ import {
   emailAccountsFetch,
   emailCheckNew,                  // P3.5.204.c (7/9 鸿波): 触发客户端 IMAP/POP fetch
   emailMailDirStatus,             // 8/8: 缺完全磁盘访问权限时提示"少账号"
+  emailSourcesDiscover,
+  emailSourcePickDirectory,
+  emailSourceSelect,
+  type EmailSourceDiscovery,
   // emailClassifyNow / emailPhishingScanNow 8/21 随扫描 effect 搬去 useEmailScanners
   emailPoliticalGet,              // P3.3.53.2 (6/13 鸿波): list 仅查已扫
   type EmailDigestItem,
@@ -35,12 +39,14 @@ import {
 import { filterAndRankEmails, type ActionFilter } from "../../lib/emailActionFilter";
 import { buildAskCatfishStarter } from "../../lib/emailHandoff";
 import { emailFailureHint } from "../../lib/emailPlatformHints";
+import { parseEmailSourceDiscovery, readyEmailSources } from "../../lib/emailSourceDiscovery";
 import ActionFilterChips from "./components/ActionFilterChips";
 import { useEmailStore } from "../../store/email";
 import { useUIStore } from "../../store/ui";
 // P3.5.158 Phase 4 (7/2 鸿波): 新建邮件入口
 import { useAgentStore } from "../../store/agent";
 import ComposeCore from "./components/ComposeCore";
+import EmailSourceSetup from "./components/EmailSourceSetup";
 
 // 5/20: ListItem / DetailPane / helpers 抽到 components/ (拆 1204 → <500)
 import DetailPane, { type FullMessage } from "./components/DetailPane";
@@ -103,8 +109,25 @@ export default function EmailTab() {
   const [detail, setDetail] = useState<FullMessage | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [sourceDiscovery, setSourceDiscovery] = useState<EmailSourceDiscovery | null>(null);
+  const [sourceDiscoveryError, setSourceDiscoveryError] = useState<string | null>(null);
+  const [sourceBusy, setSourceBusy] = useState(false);
 
   const startEmailChat = useUIStore((s) => s.startEmailChat);
+
+  const scanEmailSources = useCallback(async () => {
+    setSourceDiscoveryError(null);
+    try {
+      const result = parseEmailSourceDiscovery(await emailSourcesDiscover());
+      setSourceDiscovery(result);
+    } catch (e) {
+      setSourceDiscoveryError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    void scanEmailSources();
+  }, [scanEmailSources]);
 
   const loadList = useCallback(async () => {
     setLoading(true);
@@ -172,6 +195,32 @@ export default function EmailTab() {
       void loadList();
     }
   }, [loadList]);
+
+  const handleSelectEmailSource = useCallback(async (client: string, root?: string) => {
+    setSourceBusy(true);
+    setSourceDiscoveryError(null);
+    try {
+      await emailSourceSelect(client, root);
+      await scanEmailSources();
+      await loadList();
+    } catch (e) {
+      setSourceDiscoveryError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSourceBusy(false);
+    }
+  }, [loadList, scanEmailSources]);
+
+  const handlePickFoxmailDirectory = useCallback(async () => {
+    const directory = await emailSourcePickDirectory();
+    if (directory) await handleSelectEmailSource("foxmail-win", directory);
+  }, [handleSelectEmailSource]);
+
+  const readySourceCount = sourceDiscovery ? readyEmailSources(sourceDiscovery).length : 0;
+  const needsEmailSourceSetup = sourceDiscovery && (
+    Boolean(error) ||
+    readySourceCount === 0 ||
+    (readySourceCount > 1 && !sourceDiscovery.selected_client)
+  );
 
   // 评级(分诊)+钓鱼扫描的两个后台 effect —— 8/21 纯搬迁到
   // hooks/useEmailScanners.ts (本文件撞 800 行红线)。逻辑一行未改;
@@ -482,6 +531,16 @@ export default function EmailTab() {
               </span>
             </div>
           )}
+          {needsEmailSourceSetup && (
+              <EmailSourceSetup
+                discovery={sourceDiscovery}
+                busy={sourceBusy}
+                error={sourceDiscoveryError}
+                onRescan={() => void scanEmailSources()}
+                onSelect={(client, root) => void handleSelectEmailSource(client, root)}
+                onPickFoxmailDirectory={() => void handlePickFoxmailDirectory()}
+              />
+            )}
           {/* 搜索框 — 前端 filter 主题/发件人/账号 */}
           <input
             type="search"

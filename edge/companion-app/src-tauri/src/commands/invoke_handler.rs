@@ -248,6 +248,9 @@ pub(crate) fn handler(
             // BL-COMPANION-EMAIL-DIGEST (5/18): 邮件简报 shell-out
             crate::commands::email::email_digest_fetch,
             crate::commands::email::email_accounts_fetch,
+            crate::commands::email::email_sources_discover,
+            crate::commands::email::email_source_pick_directory,
+            crate::commands::email::email_source_select,
             // BL-COMPANION-EMAIL-TAB (5/18): 邮件 tab 用的扩展能力 (全列表 + 读全文 + 起草)
             crate::commands::email::email_list_fetch,
             crate::commands::email::email_read_message,

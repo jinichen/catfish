@@ -40,10 +40,12 @@ pub(crate) const EMAIL_LIST_MAX: u32 = 500;
 pub(crate) fn email_command(bin: &Path) -> Command {
     let mut command = process::background_command(bin);
     if cfg!(target_os = "windows") {
-        if let Some(root) = email_config::email_config().foxmail_root.as_deref() {
+        if let Some(root) = email_config::foxmail_root_override() {
             command
                 .env("CATFISH_FOXMAIL_ROOT", root)
                 .env("CATFISH_EMAIL_CLIENT", "foxmail-win");
+        } else if let Some(client) = email_config::selected_email_client() {
+            command.env("CATFISH_EMAIL_CLIENT", client);
         } else if std::env::var_os("CATFISH_FOXMAIL_ROOT").is_some() {
             // 直接从 shell 启动 Companion 的临时 override 仍然可用；这里只
             // 补选客户端，避免 catfish-email 再去尝试 Outlook。
@@ -51,6 +53,71 @@ pub(crate) fn email_command(bin: &Path) -> Command {
         }
     }
     command
+}
+
+/// 探测 Windows 邮件来源。返回 catfish-email 的结构化 JSON，避免 Rust 和 Python
+/// 各自维护一套 Outlook/Foxmail 发现规则。
+#[tauri::command]
+pub async fn email_sources_discover() -> Result<String, String> {
+    let bin = catfish_paths::catfish_email_bin().ok_or_else(email_component_missing_error)?;
+    let mut command = email_command(&bin);
+    // discovery 必须重新检查所有客户端。应用内上次选择的 Foxmail 外置盘
+    // 可能已经断开；不能把旧选择重新注入 discovery，否则永远发现不到新的
+    // Storage。只有用户/企业在 companion.yaml 或环境中显式指定时才保留 override。
+    if email_config::email_config().foxmail_root.is_none() {
+        command
+            .env_remove("CATFISH_FOXMAIL_ROOT")
+            .env_remove("CATFISH_EMAIL_CLIENT");
+        if let Some(root) = email_config::selected_foxmail_root()
+            .filter(|root| !root.trim().is_empty() && std::path::Path::new(root).is_dir())
+        {
+            // 外置盘目录可能无法从注册表反推出；保留有效的用户选择，
+            // 但不设置 client，让 Outlook 和 Foxmail 仍然独立探测。
+            command.env("CATFISH_FOXMAIL_ROOT", root);
+        }
+    }
+    let output = command
+        .args(["discover", "--json"])
+        .output()
+        .map_err(|e| format!("邮件客户端发现失败: {e}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("邮件客户端发现退出码 {:?}", output.status.code())
+        } else {
+            stderr
+        });
+    }
+    let mut payload: serde_json::Value = serde_json::from_str(&stdout)
+        .map_err(|e| format!("邮件客户端发现返回格式异常: {e}"))?;
+    if let Some(object) = payload.as_object_mut() {
+        object.insert(
+            "selected_client".to_string(),
+            email_config::selected_email_client()
+                .map(serde_json::Value::String)
+                .unwrap_or(serde_json::Value::Null),
+        );
+    }
+    serde_json::to_string(&payload).map_err(|e| format!("序列化邮件发现结果失败: {e}"))
+}
+
+/// 通过原生目录选择器选择 Foxmail Storage/Profile 目录。
+#[tauri::command]
+pub fn email_source_pick_directory() -> Option<String> {
+    rfd::FileDialog::new()
+        .set_title("选择 Foxmail 邮件数据目录")
+        .pick_folder()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+/// 保存员工在界面中选择的来源；不要求员工编辑 companion.yaml。
+#[tauri::command]
+pub fn email_source_select(client: String, root: Option<String>) -> Result<(), String> {
+    if !cfg!(target_os = "windows") {
+        return Err("邮件来源选择目前只用于 Windows".to_string());
+    }
+    email_config::save_selected_email_source(&client, root.as_deref())
 }
 
 fn email_component_missing_error() -> String {

@@ -73,3 +73,18 @@ def test_default_config_scan_is_limited_to_foxmail_directories(monkeypatch, tmp_
         tmp_path / "Tencent/Foxmail",
         tmp_path / "Foxmail",
     ]
+
+
+def test_install_config_bases_cover_external_storage_setup(monkeypatch, tmp_path):
+    monkeypatch.setenv("ProgramFiles", str(tmp_path))
+    monkeypatch.delenv("ProgramFiles(x86)", raising=False)
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+
+    bases = list(discovery._windows_install_bases())
+
+    assert bases == [
+        tmp_path / "Tencent/Foxmail",
+        tmp_path / "Tencent/Foxmail7",
+        tmp_path / "Foxmail",
+        tmp_path / "Foxmail7",
+    ]

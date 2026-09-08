@@ -64,6 +64,12 @@ struct EmailYaml {
     foxmail_root: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct SelectedEmailSource {
+    client: String,
+    root: Option<String>,
+}
+
 fn yaml_path() -> Option<std::path::PathBuf> {
     let home = crate::util::paths::home_env()
         .or_else(|_| std::env::var("USERPROFILE"))
@@ -79,6 +85,80 @@ fn read_yaml() -> Option<EmailYaml> {
     let content = std::fs::read_to_string(&path).ok()?;
     let parsed: YamlFile = serde_yaml::from_str(&content).ok()?;
     parsed.email
+}
+
+fn selected_source_path() -> Option<std::path::PathBuf> {
+    let home = crate::util::paths::home_env()
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()?;
+    Some(std::path::PathBuf::from(home).join(".catfish").join("email-source.json"))
+}
+
+fn read_selected_source() -> Option<SelectedEmailSource> {
+    let path = selected_source_path()?;
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+/// 应用内选择的来源。它独立于 companion.yaml，避免 GUI 用户手写配置。
+pub fn selected_email_client() -> Option<String> {
+    read_selected_source()
+        .map(|source| source.client)
+        .filter(|client| matches!(client.as_str(), "outlook-win" | "foxmail-win"))
+}
+
+/// 返回用户在 Companion 中选择的 Foxmail 目录；不包含 YAML/env 的企业 override。
+pub fn selected_foxmail_root() -> Option<String> {
+    let source = read_selected_source()?;
+    (source.client == "foxmail-win").then_some(source.root).flatten()
+}
+
+/// 返回 Foxmail 显式目录：企业 YAML 优先，其次是应用内选择。
+pub fn foxmail_root_override() -> Option<String> {
+    email_config().foxmail_root.clone().or_else(|| {
+        let source = read_selected_source()?;
+        if source.client == "foxmail-win" {
+            source.root
+        } else {
+            None
+        }
+    })
+}
+
+pub fn save_selected_email_source(client: &str, root: Option<&str>) -> Result<(), String> {
+    if !matches!(client, "outlook-win" | "foxmail-win") {
+        return Err(format!("不支持的 Windows 邮件客户端: {client}"));
+    }
+    if client == "foxmail-win" {
+        let value = root.unwrap_or_default().trim();
+        if value.is_empty() {
+            return Err("Foxmail 目录不能为空".to_string());
+        }
+        if !std::path::Path::new(value).is_dir() {
+            return Err(format!("Foxmail 目录不存在或不可读: {value}"));
+        }
+    }
+    let path = selected_source_path().ok_or_else(|| "无法确定用户配置目录".to_string())?;
+    let parent = path.parent().ok_or_else(|| "用户配置目录无效".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {e}"))?;
+    let content = serde_json::to_vec_pretty(&SelectedEmailSource {
+        client: client.to_string(),
+        root: root.map(str::trim).filter(|value| !value.is_empty()).map(str::to_string),
+    }).map_err(|e| format!("序列化邮件来源失败: {e}"))?;
+    let temp = path.with_extension("json.tmp");
+    std::fs::write(&temp, content).map_err(|e| format!("写入邮件来源失败: {e}"))?;
+    // Windows 的 rename 不能覆盖已有目标文件；先尝试无损原子替换，
+    // 目标已存在时删除旧选择再完成替换，保证用户切换来源不会失败。
+    if let Err(error) = std::fs::rename(&temp, &path) {
+        if path.exists() {
+            std::fs::remove_file(&path).map_err(|e| format!("替换旧邮件来源失败: {e}"))?;
+            std::fs::rename(&temp, &path)
+                .map_err(|e| format!("保存邮件来源失败: {e}; 首次替换错误: {error}"))?;
+        } else {
+            return Err(format!("保存邮件来源失败: {error}"));
+        }
+    }
+    Ok(())
 }
 
 fn build() -> EmailConfig {

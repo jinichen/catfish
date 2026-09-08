@@ -174,6 +174,24 @@ export const emailDigestFetch = (limit?: number) =>
   rawInvoke<string>("email_digest_fetch", { limit: limit ?? null });
 export const emailAccountsFetch = () =>
   rawInvoke<string>("email_accounts_fetch");
+export interface EmailSourceDiscovery {
+  platform: string;
+  ready_client: "outlook-win" | "foxmail-win" | null;
+  selected_client?: "outlook-win" | "foxmail-win" | null;
+  sources: Array<{
+    client: string;
+    status: "ready" | "unavailable" | "unsupported";
+    accounts: Array<{ name: string; address: string; is_default: boolean; client: string }>;
+    root: string | null;
+    reason: string | null;
+  }>;
+}
+export const emailSourcesDiscover = () =>
+  rawInvoke<string>("email_sources_discover");
+export const emailSourcePickDirectory = () =>
+  rawInvoke<string | null>("email_source_pick_directory");
+export const emailSourceSelect = (client: string, root?: string) =>
+  rawInvoke<void>("email_source_select", { client, root: root ?? null });
 // BL-COMPANION-EMAIL-TAB (5/18): 邮件 tab 用的全列表 + 读单封 + 起草 + 评级 map.
 // P3.5.204.b (7/9): folder 参数支持 (默认 Inbox, EmailTab 传 "Sent" 拉发件箱
 // 补 isReplied 数据源, 让 replied badge 能对回复过的收件邮件正确显示).

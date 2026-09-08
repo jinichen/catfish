@@ -42,6 +42,7 @@ from .cli_action import (
 )
 from .cli_output import _err, _msg_to_dict
 from .cli_read import _cmd_accounts, _cmd_list, _cmd_read, _cmd_search
+from .discovery import discover_human, discover_payload
 
 __all__ = [
     "main",
@@ -60,6 +61,15 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.WARNING if not args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    if args.cmd == "discover":
+        if args.json:
+            import json
+
+            print(json.dumps(discover_payload(), ensure_ascii=False, indent=2))
+        else:
+            print(discover_human())
+        return 0
 
     # 5/18 BL-EMAIL-MULTI-CLIENT: --client 显式 → 单 adapter; 没传 → 全部 adapter
     # (e.g. Mail.app + Foxmail 同时跑). 防 factory 短路漏 Foxmail 数据.
@@ -136,6 +146,13 @@ def _build_parser() -> argparse.ArgumentParser:
     pa = sub.add_parser("accounts", help="列所有邮箱账号")
     pa.add_argument("--json", action="store_true", default=True, help="(默认) JSON 输出")
     pa.add_argument("--human", dest="json", action="store_false", help="markdown 输出给员工看")
+
+    # discover — 不读取邮件正文，只报告 Windows 客户端和账号可用性。
+    pdiscover = sub.add_parser(
+        "discover", help="自动发现 Outlook/Foxmail 客户端和邮箱账号"
+    )
+    pdiscover.add_argument("--json", action="store_true", default=True)
+    pdiscover.add_argument("--human", dest="json", action="store_false")
 
     # list
     pl = sub.add_parser("list", help="列收件箱 (或其它文件夹)")

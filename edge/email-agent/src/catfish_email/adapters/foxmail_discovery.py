@@ -113,6 +113,12 @@ def _registry_and_config_paths() -> Iterable[Path]:
     for base in _default_config_bases():
         yield from _paths_from_config_files(base)
 
+    # 某些 Foxmail 版本把 StoragePath 写在安装目录的参数文件里，而注册表
+    # 只记录 InstallPath。补充 Windows 常见安装根目录，但仍限制为 Foxmail
+    # 命名目录和小型配置文件，绝不遍历整个磁盘。
+    for base in _windows_install_bases():
+        yield from _paths_from_config_files(base)
+
 
 def _registry_paths() -> Iterable[Path]:
     if os.name != "nt":
@@ -173,6 +179,22 @@ def _default_config_bases() -> Iterable[Path]:
                 "Foxmail",
             ):
                 yield base / relative
+
+
+def _windows_install_bases() -> Iterable[Path]:
+    """返回可能包含 Foxmail 参数文件的安装目录。"""
+    for env_name in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+        value = os.environ.get(env_name, "").strip()
+        if not value:
+            continue
+        base = Path(value)
+        for relative in (
+            "Tencent/Foxmail",
+            "Tencent/Foxmail7",
+            "Foxmail",
+            "Foxmail7",
+        ):
+            yield base / relative
 
 
 def _paths_from_config_files(base: Path) -> Iterable[Path]:
