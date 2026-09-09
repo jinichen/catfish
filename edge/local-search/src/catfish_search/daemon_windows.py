@@ -1,10 +1,6 @@
-"""Windows 用 Task Scheduler + 包装 .bat 做守护进程。
+"""旧 Windows BAT 守护入口已停用；由 Companion 管理启动和迁移。
 
-schtasks 本身没有"崩了自动拉起"的直接选项（/SC ONFAILURE 很别扭），
-所以我们额外写一个 wrapper .bat，内部死循环跑 watcher，崩了就 sleep 10 秒再起。
-schtasks 只负责"登录时把这个 .bat 启起来"。
-
-只影响当前用户，不需要管理员权限。
+保留旧脚本模板用于识别/回归，不再生成。status 仍可诊断旧任务。
 """
 from __future__ import annotations
 
@@ -36,77 +32,23 @@ def _render_wrapper() -> str:
 
 
 def install() -> int:
-    CATFISH_DIR.mkdir(parents=True, exist_ok=True)
-    WRAPPER_BAT.write_text(_render_wrapper(), encoding="utf-8")
-    print(f"已写入 {WRAPPER_BAT}")
-
-    # 幂等：装过就先删再装。
-    subprocess.run(  # noqa: S603
-        ["schtasks", "/Delete", "/TN", TASK_NAME, "/F"],
-        check=False,
-        capture_output=True,
-    )
-
-    # /SC ONLOGON     登录时触发
-    # /RL LIMITED     普通权限运行（不要求管理员）
-    # /F              覆盖已存在的同名任务
-    # /TR             要跑的命令
-    r = subprocess.run(  # noqa: S603
-        [
-            "schtasks",
-            "/Create",
-            "/TN", TASK_NAME,
-            "/TR", f'cmd /c "{WRAPPER_BAT}"',
-            "/SC", "ONLOGON",
-            "/RL", "LIMITED",
-            "/F",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if r.returncode != 0:
-        print(f"schtasks 注册失败：{r.stderr.strip() or r.stdout.strip()}")
-        print("可能的原因：Task Scheduler 被组策略禁用。")
-        print("备选：把 wrapper.bat 放到 Startup 文件夹（shell:startup）手动启动。")
-        return 1
-
-    # 立即触发一次，不用等下次登录。
-    subprocess.run(  # noqa: S603
-        ["schtasks", "/Run", "/TN", TASK_NAME],
-        check=False,
-        capture_output=True,
-    )
-    print(f"已注册为登录任务 '{TASK_NAME}'。开机登录时自启，已立即运行一次。")
-    print(f"日志：{LOG_PATH}")
-    return 0
+    # Companion owns the watchdog. Never recreate the deprecated visible BAT loop.
+    print("Windows 搜索守护已改由 Catfish Companion 管理，请启动或升级 Companion。")
+    print("不再创建 CatfishSearchWatcher 登录任务；新版 Companion 会迁移旧入口。")
+    return 1
 
 
 def uninstall() -> int:
-    r = subprocess.run(  # noqa: S603
-        ["schtasks", "/Delete", "/TN", TASK_NAME, "/F"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if r.returncode == 0:
-        print(f"已删除任务 '{TASK_NAME}'。")
-    else:
-        print("任务不存在或已被删除。")
-
-    if WRAPPER_BAT.exists():
-        WRAPPER_BAT.unlink()
-        print(f"已删除 {WRAPPER_BAT}")
-
-    # watcher 进程本身：查一下 python 进程里跑 catfish_search.cli watch 的，杀掉。
-    # 简化做法：靠 wrapper.bat 循环退出。这里不主动 kill。
-    print("注意：当前正在跑的 watcher 进程会在下次循环结束时退出。")
-    return 0
+    # Avoid claiming success after deleting only a file: the running BAT may loop forever.
+    # The signed MSI/current Companion has the owner-checked migration implementation.
+    print("请通过新版 Catfish Companion 启动迁移，或卸载 Companion 完成清理。")
+    print("需要停止旧 BAT 及其子进程，不能只删任务或脚本。此次未删除任何数据。")
+    return 1
 
 
 def status() -> int:
     if not WRAPPER_BAT.exists():
-        print("未安装。运行 `catfish-search daemon install` 启用。")
+        print("没有旧版 watcher 脚本；Windows 后台搜索由 Catfish Companion 管理。")
         return 0
 
     r = subprocess.run(  # noqa: S603
@@ -114,6 +56,7 @@ def status() -> int:
         check=False,
         capture_output=True,
         text=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     if r.returncode != 0:
         print(f"任务 '{TASK_NAME}' 未注册（wrapper 还在）。")

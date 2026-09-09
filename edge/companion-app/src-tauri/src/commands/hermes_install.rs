@@ -89,7 +89,7 @@ fn bootstrap_locked(
     if current_health.is_empty() {
         // Windows 的 MSI 不再执行安装 CustomAction。已存在核心环境时只补缺
         // 附加组件，绝不重新解压 Hermes，也不走 Unix wheel 安装路径。
-        super::hermes_install_windows::ensure_optional_components(resource_dir, paths);
+        super::hermes_install_windows::ensure_optional_components(resource_dir, paths)?;
         report(
             reporter,
             "complete",
@@ -116,7 +116,9 @@ fn bootstrap_locked(
         log::warn!(
             "[windows-bootstrap] Hermes 核心准备失败，仍尝试独立补装邮件/附加组件"
         );
-        super::hermes_install_windows::ensure_optional_components(resource_dir, paths);
+        if let Err(error) = super::hermes_install_windows::ensure_optional_components(resource_dir, paths) {
+            log::warn!("[windows-bootstrap] 独立补装附加组件仍失败: {error:#}");
+        }
     }
     result
 }

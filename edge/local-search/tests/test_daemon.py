@@ -54,6 +54,12 @@ def test_windows_wrapper_bat_has_loop():
     assert "\r\n" in bat
 
 
+def test_windows_install_cannot_recreate_legacy_console_task():
+    with mock.patch.object(daemon_windows.subprocess, "run") as run:
+        assert daemon_windows.install() == 1
+        run.assert_not_called()
+
+
 def test_linux_service_unit_valid():
     unit = daemon_linux._render_service()
     assert "[Service]" in unit

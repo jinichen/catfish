@@ -68,22 +68,6 @@ function evidenceTokens(text: string): Set<string> {
   return tokens;
 }
 
-function sourceCorpus(input: AdvisorInput): string {
-  return JSON.stringify({
-    emails: input.emails,
-    events: input.events,
-    todos: input.todos,
-    // distilled_facts / hermesMemoryRecent 是历史上下文，不能单独把旧事项
-    // 重新升级成当前待办。只有用户明确维护的当前计划与本轮 wiki 结果进入
-    // grounding；wikiRelevant 本身由当前邮件/日历/Reminders 查询得到。
-    activeContext: {
-      workplan: input.ctx.workplan,
-      projects: input.ctx.projects,
-    },
-    wikiRelevant: input.wikiRelevant ?? "",
-  });
-}
-
 function activeSourceCorpus(input: AdvisorInput): string {
   return JSON.stringify({
     emails: input.emails,
@@ -146,7 +130,7 @@ function taskCorpus(task: MainTask): string {
 }
 
 function hasEvidenceOverlap(candidate: string, input: AdvisorInput): boolean {
-  const source = evidenceTokens(sourceCorpus(input));
+  const source = evidenceTokens(activeSourceCorpus(input));
   if (source.size === 0) return false;
   for (const token of evidenceTokens(candidate)) {
     if (source.has(token)) return true;

@@ -7,6 +7,11 @@
 from __future__ import annotations
 
 import platform
+import os
+import json
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -42,7 +47,34 @@ def discover_sources() -> list[EmailSource]:
             )
         ]
 
-    return [_discover_client(client) for client in ("outlook-win", "foxmail-win")]
+    clients = ("outlook-win", "foxmail-win")
+    if os.name == "nt":
+        # COM may hang inside native code: a thread timeout cannot stop it.
+        # Independent hidden processes keep Foxmail usable when Outlook hangs.
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            return list(executor.map(_discover_isolated, clients))
+    return [_discover_client(client) for client in clients]
+
+
+def _discover_isolated(client: str) -> EmailSource:
+    try:
+        output = subprocess.run(
+            [sys.executable, "-m", "catfish_email.discovery", client],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=15, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        )
+        if output.returncode != 0:
+            raise ValueError(f"发现子进程退出码 {output.returncode}: {_safe_reason(output.stderr)}")
+        data = json.loads(output.stdout)
+        if not isinstance(data, dict) or data.get("client") != client or not isinstance(data.get("accounts"), list):
+            raise ValueError("发现结果格式无效")
+        return EmailSource(**data)
+    except subprocess.TimeoutExpired:
+        return EmailSource(client, "unavailable", [], reason="客户端探测超过 15 秒；不影响其他邮箱的发现，请稍后重试")
+    except (OSError, ValueError, TypeError) as error:
+        return EmailSource(client, "unavailable", [], reason=_safe_reason(str(error)))
 
 
 def _discover_client(client: str) -> EmailSource:
@@ -110,3 +142,9 @@ def discover_human() -> str:
         if source.get("reason"):
             lines.append(f"  原因: {source['reason']}")
     return "\n".join(lines)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2 or sys.argv[1] not in ("outlook-win", "foxmail-win"):
+        raise SystemExit(2)
+    print(json.dumps(_discover_client(sys.argv[1]).as_json(), ensure_ascii=True))

@@ -427,14 +427,14 @@ async function _fetchBriefingAdvisorImpl(
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
       console.warn("[advisor] LLM 非 2xx:", resp.status, text.slice(0, 200));
-      return null;
+      throw new Error(`早安分析请求失败（HTTP ${resp.status}），请稍后重试。`);
     }
 
     const data = await resp.json();
     const content = data?.choices?.[0]?.message?.content;
     if (typeof content !== "string") {
       console.warn("[advisor] LLM 返非字符串 content:", content);
-      return null;
+      throw new Error("模型没有返回分析正文，请重试。");
     }
     console.log("[advisor] raw content (前 400):", content.slice(0, 400));
 
@@ -445,7 +445,7 @@ async function _fetchBriefingAdvisorImpl(
     // 8/8: 正则和阈值挪去 upstreamErrorGuard.ts 共用 —— 6/1 加这道防御时只加在
     // 这一处, emailDraft 和 briefing 的三个调用点一直裸着, 8/8 拟稿框里就
     // 出现了 "API call failed after 3 retries" 当草稿。别再靠人记得复制那行正则。
-    if (warnIfUpstreamError("advisor", content)) return null;
+    if (warnIfUpstreamError("advisor", content)) throw new Error("上游模型调用失败，尚未取得分析结果。");
 
     // 5/22 cold start 修: 鲁棒 JSON 解析 — LLM 输出常含前后解释文字
     // (e.g. "现在我已经分析完..."), 不只 strip markdown 反引号.
@@ -467,12 +467,12 @@ async function _fetchBriefingAdvisorImpl(
           "[advisor] Call 1 无结构且没有本轮业务依据，拒绝交给 Call 2 补造:",
           content.slice(0, 200),
         );
-        return null;
+        throw new Error("模型回复缺少本轮业务依据，已拦截，未生成待办。请重试。");
       }
       result = await transformToStructured(content, expertRoute.model, input.profile.tier, signal);
       if (result === null) {
         console.warn("[advisor] P3.4.E Call 2 也挂, 返 null (UI 显数据诊断卡)");
-        return null;
+        throw new Error("模型结果无法转换为有效分析格式，请重试。");
       }
     } else {
       result = parseAdvisorResult(parsed, "strict");
@@ -486,7 +486,7 @@ async function _fetchBriefingAdvisorImpl(
           console.warn(
             "[advisor] Call 1 schema 不匹配且没有本轮业务依据，拒绝交给 Call 2 补造",
           );
-          return null;
+          throw new Error("模型回复缺少本轮业务依据，已拦截，未生成待办。请重试。");
         }
         result = await transformToStructured(content, expertRoute.model, input.profile.tier, signal);
 
@@ -501,7 +501,7 @@ async function _fetchBriefingAdvisorImpl(
           result = parseAdvisorResult(parsed, "lenient");
           if (result === null) {
             console.warn("[advisor] P3.4.E.7 lenient 兜底也挂 (schema 真坏), 返 null UI 显数据诊断卡");
-            return null;
+            throw new Error("模型结果格式不符合要求，未写入缓存。请重试。");
           }
         }
       }
@@ -512,7 +512,7 @@ async function _fetchBriefingAdvisorImpl(
         "[advisor] 最终结构化结果未通过业务依据校验，拒绝显示及写缓存:",
         result.mainTasks.map((task) => task.title),
       );
-      return null;
+      throw new Error("分析未通过当前来源校验：未得到可由本轮邮件、日程或任务支持的待办。已拦截结果，未写入缓存；这不是任务库为空。请重试。");
     }
     if (evidenceFiltered.mainTasks.length !== result.mainTasks.length) {
       console.warn(
@@ -533,7 +533,7 @@ async function _fetchBriefingAdvisorImpl(
     return result;
   } catch (e) {
     console.warn("[advisor] LLM 调用挂:", e);
-    return null;
+    throw e;
   }
 }
 

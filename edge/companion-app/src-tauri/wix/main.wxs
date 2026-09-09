@@ -93,6 +93,9 @@
 
         <Property Id="AUTOLAUNCHAPP" Secure="yes" />
         <Property Id="LAUNCHAPPARGS" Secure="yes" />
+        <!-- Embedded GUI helper, available before file replacement and during uninstall. -->
+        <CustomActionRef Id="CatfishMaintainInstall" />
+        <CustomActionRef Id="CatfishMaintainUninstall" />
 
         {{#if allow_downgrades}}
             <MajorUpgrade Schedule="afterInstallInitialize" AllowDowngrades="yes" />

@@ -4,6 +4,10 @@
 //! commands/ 调它，前端不能直接 invoke。
 
 pub mod agent_prefs;
+#[cfg(any(windows, test))]
+pub mod windows_lifecycle;
+#[cfg(any(windows, test))]
+pub mod addon_fingerprint;
 pub mod autostart_deps; // 运行时依赖自检 (8/15 从 autostart 切出)
 pub mod autostart_mcp;  // hermes config 自愈 + 其测试 (8/15 切出)
 pub mod autostart;

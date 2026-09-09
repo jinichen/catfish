@@ -73,6 +73,7 @@ fn run_hidden_powershell(
         ])
         .arg(script)
         .args(args)
+        .env("HERMES_HOME", &paths.hermes_home)
         .stdout(Stdio::from(log.try_clone()?))
         .stderr(Stdio::from(log));
 
@@ -134,17 +135,32 @@ fn install_optional_components(resource_dir: &Path, paths: &BootstrapPaths) -> V
             &["-c", "import catfish_email, win32api"],
             "catfish-email/pywin32",
         );
-    if !email_ready {
-        let script = resources.join("install-catfish-email.ps1");
+    let script = resources.join("install-catfish-email.ps1");
+    let marker = paths.install_dir.join(".catfish-email-installed.sha256");
+    let expected = artifacts.email_tar.as_ref().and_then(|archive| {
+        crate::services::addon_fingerprint::fingerprint(&[archive, &script]).ok()
+    });
+    let email_current = expected.as_ref().is_some_and(|hash| {
+        crate::services::addon_fingerprint::matches(&marker, hash, email_ready)
+    });
+    if !email_current {
         match artifacts.email_tar.as_ref() {
             Some(archive) if script.is_file() => {
                 let args = vec![
                     OsString::from("-DistributionPath"),
                     archive.clone().into_os_string(),
                 ];
-                if let Err(error) =
-                    run_hidden_powershell(&script, &args, paths, "安装 catfish-email")
-                {
+                let installed = run_hidden_powershell(&script, &args, paths, "安装/更新 catfish-email")
+                    .and_then(|()| {
+                        anyhow::ensure!(run_hidden_status(
+                            &hermes_venv_python(&paths.install_dir),
+                            &["-c", "import catfish_email.discovery, win32api"],
+                            "新版邮件发现模块",
+                        ), "邮件组件更新后自检失败");
+                        let hash = expected.as_ref().context("无法读取邮件安装资源指纹")?;
+                        super::hermes_install_state::write_bytes_atomic(&marker, hash.as_bytes())
+                    });
+                if let Err(error) = installed {
                     failures.push(format!("catfish-email: {error:#}"));
                 }
             }
@@ -176,10 +192,13 @@ fn install_optional_components(resource_dir: &Path, paths: &BootstrapPaths) -> V
     failures
 }
 
-pub(crate) fn ensure_optional_components(resource_dir: &Path, paths: &BootstrapPaths) {
-    for failure in install_optional_components(resource_dir, paths) {
+pub(crate) fn ensure_optional_components(resource_dir: &Path, paths: &BootstrapPaths) -> Result<()> {
+    let failures = install_optional_components(resource_dir, paths);
+    for failure in &failures {
         log::warn!("[windows-bootstrap] 附加组件未就绪: {failure}");
     }
+    anyhow::ensure!(failures.is_empty(), "附加组件准备失败: {}", failures.join("; "));
+    Ok(())
 }
 
 pub(crate) fn bootstrap(
@@ -269,11 +288,12 @@ pub(crate) fn bootstrap(
     report(
         reporter,
         "complete",
-        BootstrapProgressState::Completed,
+        if failures.is_empty() { BootstrapProgressState::Completed } else { BootstrapProgressState::Failed },
         TOTAL_STEPS,
         TOTAL_STEPS,
         message,
         None,
     );
+    anyhow::ensure!(failures.is_empty(), "附加组件准备失败: {}", failures.join("; "));
     Ok(())
 }

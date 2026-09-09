@@ -33,9 +33,11 @@ export interface DataDiagnosisCardProps {
     todos: SourceStatus;
   };
   onRetry: () => void;
+  title?: string;
+  description?: string;
 }
 
-export function DataDiagnosisCard({ statuses, onRetry }: DataDiagnosisCardProps) {
+export function DataDiagnosisCard({ statuses, onRetry, title = "今天没有素材推早安", description = "本轮没有取得可用于分析的素材。下面是每条数据源的实际状态：" }: DataDiagnosisCardProps) {
   return (
     <div
       style={{
@@ -56,7 +58,7 @@ export function DataDiagnosisCard({ statuses, onRetry }: DataDiagnosisCardProps)
           fontWeight: 500,
         }}
       >
-        今天没有素材推早安
+        {title}
       </div>
       <div
         style={{
@@ -65,8 +67,7 @@ export function DataDiagnosisCard({ statuses, onRetry }: DataDiagnosisCardProps)
           marginBottom: 16,
         }}
       >
-        三件套 (邮件 / 日历 / TODO) 都拉到 0 条, advisor 没素材可推. 不调 LLM (省 token).
-        下面看每条数据源真状态:
+        {description}
       </div>
 
       <SourceRow

@@ -38,7 +38,7 @@ try {
     # Windows 包可同时携带 pywin32；--no-index 确保现场不会偷偷访问公网。
     $InstallArgs = @(
         'pip', 'install', '--python', $PythonExe,
-        '--no-index', '--find-links', $Stage
+        '--no-index', '--reinstall', '--find-links', $Stage
     ) + @($Wheels.FullName)
     & $UvExe @InstallArgs
     if ($LASTEXITCODE -ne 0) {

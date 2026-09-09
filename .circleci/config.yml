@@ -45,6 +45,10 @@ jobs:
 
     steps:
       - checkout
+      - run:
+          name: Verify Windows lifecycle cleanup with isolated fixtures
+          shell: powershell.exe -ExecutionPolicy Bypass
+          command: '& "edge/companion-app/scripts/test-windows-maintenance.ps1"'
 
       # ─── 装 toolchain (Windows Server 2022 image 有 git/pwsh/choco/node/python,
       #      需自装 Rust MSVC target) ───

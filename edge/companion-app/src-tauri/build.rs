@@ -15,8 +15,12 @@
 
 #[cfg(target_os = "macos")]
 use std::process::Command;
+#[cfg(windows)]
+mod build_windows;
 
 fn main() {
+    #[cfg(windows)]
+    build_windows::build();
     // Swift binary 只 macOS 编译; Win/Linux 跳过
     #[cfg(target_os = "macos")]
     {

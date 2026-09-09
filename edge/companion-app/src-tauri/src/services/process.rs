@@ -3,7 +3,7 @@
 //! 实现策略：
 //!   - spawn 完全脱离父进程（detached）：父进程 Companion 退了子进程不死
 //!     - Unix: `process_group(0)` 让子进程在新的 process group
-//!     - Windows: CREATE_NO_WINDOW + DETACHED_PROCESS
+//!     - Windows: CREATE_NO_WINDOW（不要组合 DETACHED_PROCESS，会使此标记失效）
 //!   - 日志重定向到文件（stdout+stderr 合流到一个 .log）
 //!   - kill: SIGTERM → 等 800ms → 还活就 SIGKILL（Unix），Windows 走 taskkill /F
 //!   - is_alive: `kill -0 <pid>` (Unix) / tasklist (Windows)
@@ -185,13 +185,13 @@ pub fn spawn_detached(cfg: SpawnConfig) -> anyhow::Result<SpawnHandle> {
         cmd.process_group(0);
     }
 
-    // Windows: 不弹 cmd 黑窗 + 脱离 Companion
+    // Windows 子进程本来就不会因父进程退出而结束。不叠加 DETACHED_PROCESS：
+    // Windows 会忽略与其组合的 CREATE_NO_WINDOW，后代可能重新分配控制台。
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        const DETACHED_PROCESS: u32 = 0x0000_0008;
-        cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
+        cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
     let child = cmd.spawn()?;

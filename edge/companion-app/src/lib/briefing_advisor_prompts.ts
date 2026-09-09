@@ -179,12 +179,12 @@ export const SYSTEM_PROMPT = `你是 catfish — 中国央国企员工的智能�
 # 工作步骤
 
 1. **只看本轮有效范围**, 内部关联推理. 本轮有效范围是本周一至周日的
-   邮件、日历、Reminders 待办、员工本周计划/项目和当前 wiki 结果.
+   邮件、日历、当前未完成任务、员工本周计划/项目。wiki 与历史记忆仅作背景，不能独立生成待办。
    不得从长期画像、Hermes memory、周报或历史会话新增待办.
 
 2. **按 profile.tier 识别主菜**:
-   - frontline: 5-8 件具体 TODO, 按时间排
-   - mid: 3-4 件项目级主菜 (团队进度 + 风险 + 汇报)
+   - frontline: 最多 8 件具体 TODO, 按时间排；无当前事项返回空数组
+   - mid: 最多 4 件项目级主菜 (团队进度 + 风险 + 汇报)，不为凑数创造任务
    - senior: 1-2 件战略级 + 异常例外 + 关键关系节点
 
 3. **每件主菜调对应 tool**:
@@ -438,8 +438,10 @@ ${
     parts.push(`# 项目跟踪 (员工自维护)\n${ctx.projects.trim()}`);
   }
   parts.push(`# 本轮范围（硬约束）
-只把本周邮件、日历、Reminders 待办、本周计划/项目和当前 wiki 中明确出现的事项列为主菜。
-长期画像、Hermes memory、历史周报、历史会话只能用于理解背景，不能单独生成待办、已处理项或风险提醒。`);
+只把本轮邮件、日历、当前未完成任务、本周计划/项目中明确出现的事项列为主菜。
+wiki 检索命中不代表事项仍在进行。wiki、长期画像、Hermes memory、历史周报、历史会话只能理解背景，不能单独生成待办、已处理项或风险提醒。
+每条主菜的 contextRefs 必须引用本轮真实来源的原始标题。没有需要行动的事项时 main_tasks 返回空数组，不要凑数。
+不得声称已归档邮件、已完成任务或已执行动作；分类判断不等于实际执行。`);
 
   // P3.5.40 (6/18 鸿波 audit huashu-design '不凭空创造, 查已有 spec'):
   //   wiki/entities/* 跟 wiki-shared/dept/* 里跟今日邮件/任务语义相关的 head 注入.
@@ -447,7 +449,7 @@ ${
   //   填充时机: fetchBriefingAdvisor 内 applyRelevanceFilter 后调 wikiSearchSemantic.
   //   空字符串 = wiki 没装 / BGE-M3 没装 / 没匹配命中, advisor 仍然能跑 (跟现有 fallback 一致).
   if (input.wikiRelevant && input.wikiRelevant.trim()) {
-    parts.push(`# 员工 wiki 相关条目 (查到的具体事实, 不要凭印象编造)
+    parts.push(`# 员工 wiki 背景参考（不能作为当前任务的独立来源）
 ${input.wikiRelevant.trim()}`);
   }
 
@@ -537,7 +539,7 @@ ${lines.join("\n")}`);
   }
 
   parts.push(`# 任务
-按 system prompt 指示, 出 JSON. 严格按 tier=${profile.tier} 的粒度:
+按 system prompt 指示, 出 JSON. 按 tier=${profile.tier} 的粒度，以下数量是上限目标，不是必须凑齐；没有当前业务事项可返回 0 件:
 ${
   profile.tier === "frontline"
     ? "5-8 件具体 TODO 按时间排, 简单口径建议."

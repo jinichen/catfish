@@ -491,6 +491,11 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
   }
 
   if (phase === "error") {
+    if (sourceStatuses) return (
+      <DataDiagnosisCard statuses={sourceStatuses} title="早安分析未完成"
+        description={errorMsg}
+        onRetry={() => { setPhase("booting"); setLoadKey((key) => key + 1); }} />
+    );
     return <Placeholder text={`出错了: ${errorMsg}`} error />;
   }
 
@@ -511,28 +516,16 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
     );
   }
 
-  // phase === "done" / "cache_hit" / "stale_fallback"
-  // 这里 !result 是 LLM 真返 null (LLM 调用失败 / 解析失败), 不是数据全空 —
-  // 数据全空已经在 phase === "no_data" 分支接掉了 (P3.4.4).
-  // BL-P11-ADVISOR-FALLBACK (7/19 Task #11): advisor LLM 4 层 parse 全 null · 老
-  // 显红色 error 挡数据统计. 改 · 用中性提示 · 不 error 样式 · 员工可看下方
-  // 数据统计 (邮件/日历/TODO) · advisor 内容缺失也不影响用早安页.
+  // 未取得结果时仍保留来源状态，不把所有失败统一误报为 JSON 解析失败。
   if (!result) {
-    // 8/8: 去掉「通常网络慢」这句归因。
-    //
-    // 走到这里意味着 LLM **确实被调用过**且结果没成型 —— 上面
-    // no_profile (confidence<0.5) 和 no_data (三件套全空) 两个分支已经把
-    // _fetchBriefingAdvisorImpl 里那两个"不调 LLM"的短路完全挡住了, 所以
-    // 剩下的四种 null 全是"调了但没拿到结构": 非 2xx / content 非字符串 /
-    // 上游错误当 content 返 / 四层 parse 全挂。
-    //
-    // 「网络慢」是这四种里最不像的一种 —— 真慢会走 ADVISOR_TIMEOUT 那条路
-    // (stale fallback), 不会到这里。写着它只会把排查往错的方向带
-    // (8/8 那半天就是这么被带偏的)。改成指向真正有答案的地方: console 里
-    // [advisor] raw content / HTTP status 两行直接说明是哪一种。
+    if (sourceStatuses) return (
+      <DataDiagnosisCard statuses={sourceStatuses} title="暂未取得可用分析结果"
+        description="下方是本轮数据源状态，可刷新重新分析。分析不可用不等于没有待办。"
+        onRetry={() => { setPhase("booting"); setLoadKey((key) => key + 1); }} />
+    );
     return (
       <Placeholder
-        text="advisor 综合判断暂不可用 (模型返回没成结构). 点右上刷新重试 · 或看下方邮件/日历/TODO 统计."
+        text="暂未取得可用分析结果，请刷新重试。"
       />
     );
   }

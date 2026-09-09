@@ -20,6 +20,16 @@ mod util;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(windows)]
+    let _instance_guard = match services::windows_lifecycle::initialize() {
+        Ok(Some(guard)) => guard,
+        Ok(None) => return,
+        Err(error) => {
+            rfd::MessageDialog::new().set_title("鲶鱼启动检查失败")
+                .set_description(format!("{error:#}")).show();
+            return;
+        }
+    };
     // 7/15 BL-COMPANION-LOG-FILE: tauri-plugin-log 替代 env_logger.
     // - env_logger 只写 stdout/stderr, GUI app (从 Applications launch) 拿不到, log::info! 全丢
     // - tauri-plugin-log 在 setup() 里注册, 写 ~/Library/Logs/com.catfish.companion/*.log
@@ -255,6 +265,8 @@ pub fn run() {
 
     builder
         .setup(move |app| {
+            #[cfg(windows)]
+            services::windows_lifecycle::listen_for_activation(app.handle().clone());
             // Release QA can launch against an isolated HOME without touching
             // the user's real launch agents, global shortcuts or background
             // services. Hermes bootstrap still runs so first-launch timing and

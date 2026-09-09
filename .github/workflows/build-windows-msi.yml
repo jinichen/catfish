@@ -31,6 +31,10 @@ jobs:
         working-directory: edge/companion-app
         run: bash scripts/check_version_sync.sh
 
+      - name: Verify Windows lifecycle cleanup with isolated fixtures
+        shell: powershell
+        run: '& "edge/companion-app/scripts/test-windows-maintenance.ps1"'
+
       - name: Setup Node.js 26.8.1 (Hermes v2026.8.31)
         uses: actions/setup-node@v6
         with:

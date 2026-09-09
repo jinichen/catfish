@@ -117,6 +117,7 @@ def _registry_and_config_paths() -> Iterable[Path]:
     # 只记录 InstallPath。补充 Windows 常见安装根目录，但仍限制为 Foxmail
     # 命名目录和小型配置文件，绝不遍历整个磁盘。
     for base in _windows_install_bases():
+        yield from _path_variants(base)
         yield from _paths_from_config_files(base)
 
 
@@ -129,10 +130,22 @@ def _registry_paths() -> Iterable[Path]:
         return
 
     for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
-        for subkey in _REGISTRY_SUBKEYS:
+        for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+            for subkey in _REGISTRY_SUBKEYS:
+                try:
+                    with winreg.OpenKey(hive, subkey, 0, winreg.KEY_READ | view) as key:
+                        yield from _walk_registry(key, winreg, depth=0)
+                except OSError:
+                    continue
+            # App Paths stores the executable as its unnamed default value.
+            # Do not parse arbitrary shell commands or read unrelated registry trees.
             try:
-                with winreg.OpenKey(hive, subkey) as key:
-                    yield from _walk_registry(key, winreg, depth=0)
+                with winreg.OpenKey(hive, r"Software\Microsoft\Windows\CurrentVersion\App Paths\Foxmail.exe",
+                                    0, winreg.KEY_READ | view) as key:
+                    value, _ = winreg.QueryValueEx(key, "")
+                    path = _normalise_path(os.path.expandvars(value)) if isinstance(value, str) else None
+                    if path is not None and path.name.casefold() == "foxmail.exe":
+                        yield path.parent
             except OSError:
                 continue
 
@@ -141,7 +154,7 @@ def _walk_registry(key, winreg, *, depth: int) -> Iterable[Path]:
     if depth > 3:
         return
     try:
-        value_count, subkey_count, _ = winreg.QueryInfoKey(key)
+        subkey_count, value_count, _ = winreg.QueryInfoKey(key)
     except OSError:
         return
 

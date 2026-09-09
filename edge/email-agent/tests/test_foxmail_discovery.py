@@ -3,8 +3,55 @@
 from __future__ import annotations
 
 from pathlib import Path
+from contextlib import nullcontext
 
 import catfish_email.adapters.foxmail_discovery as discovery
+
+
+def test_registry_enumerates_values_when_there_are_no_subkeys():
+    class Registry:
+        REG_SZ, REG_EXPAND_SZ = 1, 2
+
+        def QueryInfoKey(self, key):
+            return (0, 2, 0)
+
+        def EnumValue(self, key, index):
+            return [("InstallPath", "D:/Foxmail", 1), ("StoragePath", "E:/Mail", 1)][index]
+
+        def EnumKey(self, key, index):
+            raise AssertionError("no subkeys")
+
+    assert list(discovery._walk_registry("root", Registry(), depth=0)) == [
+        Path("D:/Foxmail"), Path("E:/Mail"),
+    ]
+
+
+def test_registry_walks_subkeys_even_when_parent_has_no_values():
+    class Registry:
+        REG_SZ, REG_EXPAND_SZ = 1, 2
+
+        def QueryInfoKey(self, key):
+            return (1, 0, 0) if key == "root" else (0, 1, 0)
+
+        def EnumKey(self, key, index):
+            return "Profile"
+
+        def OpenKey(self, key, child):
+            return nullcontext(child)
+
+        def EnumValue(self, key, index):
+            assert key == "Profile"
+            return "StoragePath", "E:/Mail", 1
+
+    assert list(discovery._walk_registry("root", Registry(), depth=0)) == [Path("E:/Mail")]
+
+
+def test_default_install_directory_can_be_storage(monkeypatch, tmp_path):
+    storage = _storage(tmp_path)
+    monkeypatch.delenv(discovery.ROOT_ENV, raising=False)
+    monkeypatch.setattr(discovery, "_registry_paths", lambda: iter([]))
+    monkeypatch.setattr(discovery, "_windows_install_bases", lambda: iter([storage]))
+    assert storage.resolve() in discovery.discover_storage_roots()
 
 
 def _storage(tmp_path: Path) -> Path:

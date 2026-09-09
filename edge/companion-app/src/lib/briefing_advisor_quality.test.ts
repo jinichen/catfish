@@ -70,6 +70,18 @@ function result(title: string): AdvisorResult {
 }
 
 describe("advisor Qwen 空转质量门", () => {
+  it("wiki 命中不能让历史事项进入格式修复或最终结果", () => {
+    const current = input();
+    current.todos = [];
+    current.ctx.workplan = "";
+    current.wikiRelevant = "历史采购方案评分标准修改意见回复，联合体分签分付条款";
+    const old = result("采购方案评分标准修改意见回复");
+    old.mainTasks[0].contextRefs = [current.wikiRelevant];
+    expect(isAdvisorTransformSourceUsable(current.wikiRelevant, current)).toBe(false);
+    expect(filterAdvisorResultByEvidence(old, current)).toBeNull();
+    expect(filterAdvisorResultByEvidence({ ...old, mainTasks: [] }, current)?.mainTasks).toEqual([]);
+  });
+
   it("拒绝线上 Qwen 的系统占位回复进入结构化 Call 2", () => {
     expect(
       isAdvisorTransformSourceUsable(
