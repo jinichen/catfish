@@ -59,6 +59,7 @@ import ThumbCard from "../../Chat/components/ThumbCard";
 import { useChatStore } from "../../../store/chat";
 import { useTaskChat } from "../../../hooks/useTaskChat";
 import { ChatMsg } from "./BriefingChatMsg";
+import TaskChatProgress from "./TaskChatProgress";
 
 /** P3.3.10: hermes approval pending event 数据 (跟 ChatPanel PendingApproval 同款).
  *
@@ -189,7 +190,7 @@ export function DetailPane({
     buildSystemPrompt,
     ensureSessionId,
   });
-  const { messages, isStreaming, send, cancel, loadHistory } = taskChat;
+  const { messages, isStreaming, status: taskChatStatus, send, cancel, retry, loadHistory } = taskChat;
 
   const [input, setInput] = useState("");
   // P3.3.20 (6/11): in-memory attachments — image base64 / file preview,
@@ -578,6 +579,11 @@ export function DetailPane({
         {chatError && (
           <div className="briefing-2col__chat-err">⚠️ {chatError}</div>
         )}
+        <TaskChatProgress
+          status={taskChatStatus}
+          onCancel={cancel}
+          onRetry={retry}
+        />
       </div>
 
       {/* P3.3.10: floating approval banner (跟工作台 ChatPanel 同款 UI) */}
@@ -712,7 +718,7 @@ export function DetailPane({
           onClick={() => void handleSend()}
           disabled={(!input.trim() && attachments.length === 0) || isStreaming}
         >
-          {isStreaming ? "…" : "发送"}
+          {isStreaming ? "处理中" : "发送"}
         </button>
       </div>
 

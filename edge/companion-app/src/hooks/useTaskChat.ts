@@ -21,11 +21,77 @@ import type { Attachment, ChatMessage, ToolCall } from "../types/chat";
 
 /** 跟 useChat 同款上限. 跨 skill 一次最多 20 轮 (5/13 鸿波拍). */
 const MAX_TOOL_ROUNDS = 20;
+const TASK_CHAT_TOOLS_TIMEOUT_MS = 60_000;
+const TASK_CHAT_TOOL_TIMEOUT_MS = 60_000;
 
 /** P3.3.14 (6/10): 单次 send 最多带 N 条历史 message 进 LLM history.
  *  audit (#2): 没截窗时 100 轮 chat ≈ 16K token / 次 send, 重复发整个历史浪费.
  *  40 条 ≈ 20 轮对话 (user/assistant 配对), 够 LLM 拿上下文, 又控 token. */
 const HISTORY_WINDOW = 40;
+
+export type TaskChatPhase =
+  | "preparing"
+  | "loading_tools"
+  | "waiting_model"
+  | "generating"
+  | "running_tool"
+  | "error"
+  | "cancelled";
+
+export interface TaskChatStatus {
+  phase: TaskChatPhase;
+  startedAt: number;
+  detail?: string;
+  error?: string;
+}
+
+function readableError(value: unknown): string {
+  const raw = value instanceof Error ? value.message : String(value ?? "");
+  const message = raw.replace(/^Error:\s*/i, "").trim();
+  return message || "模型没有返回可用结果";
+}
+
+function isAbortError(value: unknown): boolean {
+  return /abort|cancel|停止|取消/i.test(readableError(value));
+}
+
+/** 给任务对话的准备步骤和工具调用设置上限，并能响应界面上的停止操作。 */
+function withTaskChatTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string,
+  signal: AbortSignal,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const timer = window.setTimeout(() => finishReject(new Error(timeoutMessage)), timeoutMs);
+    const onAbort = () => finishReject(new Error("已停止"));
+
+    const cleanup = () => {
+      window.clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+    };
+    const finishResolve = (value: T) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const finishReject = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+
+    if (signal.aborted) {
+      finishReject(new Error("已停止"));
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(finishResolve, finishReject);
+  });
+}
 
 function uuid(): string {
   return crypto.randomUUID
@@ -56,19 +122,23 @@ export interface UseTaskChatOpts {
 export interface UseTaskChatReturn {
   messages: ChatMessage[];
   isStreaming: boolean;
+  status: TaskChatStatus | null;
   /** 直接 set 一组消息 (mount 时 load jsonl 历史用). */
   loadHistory: (msgs: ChatMessage[]) => void;
   /** P3.3.20 (6/11): attachments 走 in-memory (跟 useChat 同款 MVP),
    *  关掉再回来附件丢, state.db 只存占位文字 "[📎 N 张图 + 📄 M 份文档]". */
   send: (text: string, attachments?: Attachment[]) => Promise<void>;
   cancel: () => void;
+  retry: () => void;
   reset: () => void;
 }
 
 export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [status, setStatus] = useState<TaskChatStatus | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const lastRequestRef = useRef<{ text: string; attachments: Attachment[] } | null>(null);
 
   // P3.3.13 (6/10): mountedRef 防 unmount 后 setState ghost write.
   //   audit 报告 (#5): 切 task 时 DetailPane unmount + remount, 老 useTaskChat
@@ -138,13 +208,29 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
 
   const reset = useCallback(() => {
     abortRef.current?.abort();
+    abortRef.current = null;
     setMessages([]);
     setIsStreaming(false);
+    setStatus(null);
   }, []);
 
   const cancel = useCallback(() => {
-    abortRef.current?.abort();
+    const ctrl = abortRef.current;
+    if (!ctrl) return;
+    ctrl.abort();
     setIsStreaming(false);
+    setMessages((prev) =>
+      prev.map((message) =>
+        message.status === "streaming"
+          ? { ...message, status: "done", content: message.content || "已停止" }
+          : message,
+      ),
+    );
+    setStatus((prev) =>
+      prev
+        ? { ...prev, phase: "cancelled", detail: "正在停止本次回答…", error: undefined }
+        : null,
+    );
   }, []);
 
   const send = useCallback(async (text: string, attachments?: Attachment[]) => {
@@ -157,6 +243,13 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
       console.warn("[useTaskChat] 流进行中, 跳过 send");
       return;
     }
+
+    const startedAt = Date.now();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    lastRequestRef.current = { text: trimmed, attachments: atts };
+    setIsStreaming(true);
+    setStatus({ phase: "preparing", startedAt });
 
     // 1. append user msg (带 attachments, in-memory only) + persist
     const userMsg: ChatMessage = {
@@ -199,12 +292,27 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
     // + sessionSetTaskUid 建关联 + setSessionId. 整轮 send 都用这一个 sid
     // (snapshot, 防 send 中途用户切走 task 让后续 assistant/tool persist 落到错 session).
     // 拿不到 (建 session 失败) → null → persistMessage 软退化跳过 persist, chat UI 仍 work.
-    const sidForRound = await optsRef.current.ensureSessionId();
-    void persistMessage({ ...userMsg, content: persistContent, attachments: undefined }, sidForRound);
-    setIsStreaming(true);
+    let terminal: "success" | "error" | "cancelled" = "success";
+    try {
+      const sidForRound = await optsRef.current.ensureSessionId();
+      if (ctrl.signal.aborted) {
+        terminal = "cancelled";
+        return;
+      }
+      void persistMessage({ ...userMsg, content: persistContent, attachments: undefined }, sidForRound);
 
-    // 2. 拉 tools (跟工作台同款 — 60s TTL cache, tool_bridge 不可达返 [])
-    const tools = await ensureTools();
+      // 2. 拉 tools (跟工作台同款 — 60s TTL cache, tool_bridge 不可达返 [])
+      setStatus({ phase: "loading_tools", startedAt, detail: "正在准备可用工具" });
+      const tools = await withTaskChatTimeout(
+        ensureTools(),
+        TASK_CHAT_TOOLS_TIMEOUT_MS,
+        "工具准备超过 60 秒未返回",
+        ctrl.signal,
+      );
+      if (ctrl.signal.aborted) {
+        terminal = "cancelled";
+        return;
+      }
 
     // 3. 构建 LLM history: system + 所有可见消息 (含 tool 历史轮的 assistant + tool msg)
     const sysMsg: ChatMessage = {
@@ -219,11 +327,12 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
     const windowedMessages = curMessages.slice(-HISTORY_WINDOW);
     let history: ChatMessage[] = [sysMsg, ...windowedMessages];
 
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
-
-    try {
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        setStatus({
+          phase: "waiting_model",
+          startedAt,
+          detail: round === 0 ? "已连接模型，等待首段输出" : `等待模型继续（第 ${round + 1} 轮）`,
+        });
         // 新一轮的 assistant 消息
         const assistantId = uuid();
         const assistantMsg: ChatMessage = {
@@ -244,7 +353,11 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
           messages: history,
           tools,
           onDelta: (chunk) => {
+            if (ctrl.signal.aborted) return;
             finalContent += chunk;
+            if (chunk.trim()) {
+              setStatus({ phase: "generating", startedAt, detail: "正在生成回答" });
+            }
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === assistantId
@@ -254,14 +367,24 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
             );
           },
           onToolCalls: (calls) => {
+            if (ctrl.signal.aborted) return;
             callsRef.calls = calls;
+            if (calls.length > 0) {
+              setStatus({
+                phase: "running_tool",
+                startedAt,
+                detail: `模型准备执行 ${calls.length} 个动作`,
+              });
+            }
           },
           onDone: () => {
             // approval-pending event 由 chat.ts 在解 SSE 时自动 dispatch,
             // DetailPane 自己 listen 弹 banner. 这里 nothing-to-do.
           },
           onError: (err) => {
+            if (ctrl.signal.aborted) return;
             streamErr = err;
+            setStatus({ phase: "error", startedAt, error: readableError(err) });
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === assistantId
@@ -273,8 +396,13 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
           signal: ctrl.signal,
         });
 
+        if (ctrl.signal.aborted) {
+          terminal = "cancelled";
+          break;
+        }
         if (streamErr) {
           // 错误就停, 不再进 tool 循环
+          terminal = ctrl.signal.aborted ? "cancelled" : "error";
           break;
         }
 
@@ -312,6 +440,11 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
 
         // 跑 tool (跟 useChat runOneRound 同款串行)
         for (const tc of collectedCalls) {
+          setStatus({
+            phase: "running_tool",
+            startedAt,
+            detail: `正在执行 ${tc.name}（第 ${round + 1} 轮）`,
+          });
           // mark running (assistant 卡片里那条 tool_calls[i] 进度)
           setMessages((prev) =>
             prev.map((m) =>
@@ -329,9 +462,11 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
           let resultStr = "";
           let ok = false;
           try {
-            const res = await toolBridgeCallTool(
-              tc.name,
-              tc.args as Record<string, unknown>,
+            const res = await withTaskChatTimeout(
+              toolBridgeCallTool(tc.name, tc.args as Record<string, unknown>),
+              TASK_CHAT_TOOL_TIMEOUT_MS,
+              `工具 ${tc.name} 超过 60 秒未返回`,
+              ctrl.signal,
             );
             ok = res.ok;
             resultStr =
@@ -346,8 +481,9 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
               ok = false;
             }
           } catch (e) {
+            if (ctrl.signal.aborted) throw e;
             ok = false;
-            resultStr = String(e);
+            resultStr = readableError(e);
           }
 
           // update tool_call.result + status
@@ -392,12 +528,33 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
         }
       }
     } catch (e) {
-      console.warn("[useTaskChat] send 异常:", e);
+      if (ctrl.signal.aborted || isAbortError(e)) {
+        terminal = "cancelled";
+        if (mountedRef.current && abortRef.current === ctrl) {
+          setStatus({ phase: "cancelled", startedAt, detail: "本次回答已停止，可重新发送" });
+        }
+      } else {
+        terminal = "error";
+        const message = readableError(e);
+        console.warn("[useTaskChat] send 异常:", e);
+        if (mountedRef.current && abortRef.current === ctrl) {
+          setStatus({ phase: "error", startedAt, error: message });
+        }
+      }
     } finally {
-      setIsStreaming(false);
-      abortRef.current = null;
+      // 取消后立即重试可能已经创建了新 ctrl，旧请求不能清掉新请求的状态。
+      if (abortRef.current === ctrl) {
+        setIsStreaming(false);
+        abortRef.current = null;
+        if (terminal === "success") setStatus(null);
+      }
     }
   }, []);
 
-  return { messages, isStreaming, loadHistory, send, cancel, reset };
+  const retry = useCallback(() => {
+    const request = lastRequestRef.current;
+    if (request) void send(request.text, request.attachments);
+  }, [send]);
+
+  return { messages, isStreaming, status, loadHistory, send, cancel, retry, reset };
 }

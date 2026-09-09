@@ -32,6 +32,9 @@ export function ChatMsg({ msg }: { msg: ChatMessage }) {
   // assistant: markdown 文本 + tool_calls 卡片 (P3.3.10 fix 6/10: 用 Markdown 组件)
   const hasContent = (msg.content ?? "").length > 0;
   const hasToolCalls = (msg.tool_calls ?? []).length > 0;
+  // 任务详情已有 TaskChatProgress 展示阶段、耗时和停止入口；空的 assistant
+  // 气泡只会让员工误以为页面卡死，因此在首段输出前不渲染它。
+  if (!hasContent && !hasToolCalls && msg.status === "streaming") return null;
   return (
     <div
       className={
@@ -41,7 +44,9 @@ export function ChatMsg({ msg }: { msg: ChatMessage }) {
       }
     >
       {hasContent && <Markdown text={msg.content} />}
-      {!hasContent && !hasToolCalls && msg.status === "streaming" ? "…" : null}
+      {msg.status === "error" && (
+        <div>⚠️ {msg.error || "回答失败，请重新发送"}</div>
+      )}
       {hasToolCalls && (
         <div style={{ marginTop: hasContent ? 8 : 0 }}>
           {msg.tool_calls!.map((tc) => (
