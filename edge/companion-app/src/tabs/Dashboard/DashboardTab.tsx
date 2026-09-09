@@ -113,6 +113,7 @@ import StyleFingerprintCard from "./StyleFingerprintCard";
 // backend daemon 不动 (hermes 自家 housekeeping). 真要看状态去"控制台" tab.
 // import CuratorCard from "./CuratorCard";
 import CollapsibleSection from "./CollapsibleSection";
+import WeChatArchiveCard from "./WeChatArchiveCard";
 import WebPortalLink from "./WebPortalLink";
 // BL-EMPLOYEE-PRIVACY-VERIFICATION (#77, 5/25): 员工自查"中央存了我啥 / 本机存了啥".
 // 跟 #76 (CLI privacy-audit) / #79 (gateway /api/audit/me) / #78 (员工 doc) 配套.
@@ -228,6 +229,7 @@ export default function DashboardTab() {
       <CollapsibleSection
         id="privacy"
         title="🔒 隐私 / 本机数据"
+        layout="stacked"
         count={3}
       >
         {/* 6/8 BL-PRIVACY-SECTION-TABS (鸿波 6/8): 3 卡 → 3 tabs.
@@ -245,7 +247,12 @@ export default function DashboardTab() {
             ...(auditViewEnabled
               ? [{ key: "audit-view", label: "🔍 审计视图", render: () => <AuditViewCard /> }]
               : []),
-            { key: "wechat", label: "💬 微信接入", render: () => <WeChatBindingCard /> },
+            { key: "wechat", label: "💬 微信接入", render: () => (
+              <div style={{ display: "grid", gap: 24, minWidth: 0 }}>
+                <WeChatBindingCard />
+                <WeChatArchiveCard />
+              </div>
+            ) },
             // BL-SELF-CHANGE-PASSWORD (7/20): 员工自主改密码
             { key: "account", label: "🔐 账号安全", render: () => <AccountSecurityCard /> },
           ]}

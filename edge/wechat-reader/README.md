@@ -4,6 +4,11 @@ This package reads a chat export file explicitly selected by the employee. It
 does not inspect the WeChat database, extract keys, modify WeChat, call a model,
 use the network, or persist a plaintext index.
 
+Only JSON, JSONL and CSV export analysis is supported. The experimental database
+selection and automatic-access Provider implementation has been removed. Old
+database-source configurations are not used; select an export file to enable
+analysis again. No user database or export file is deleted by this removal.
+
 The Companion file picker accepts JSON, JSONL, and CSV. A message needs these
 logical fields:
 

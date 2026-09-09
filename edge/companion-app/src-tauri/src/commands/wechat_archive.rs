@@ -418,6 +418,10 @@ mod tests {
             consented_at: String::new(),
         };
         assert!(source_ready(&config));
+        let mut retired = config.clone();
+        retired.source_type = "authorized_database".to_string();
+        retired.enabled = true;
+        assert!(!source_ready(&retired));
         std::fs::write(&source, b"{}\n{}\n").unwrap();
         assert!(!source_ready(&config));
     }

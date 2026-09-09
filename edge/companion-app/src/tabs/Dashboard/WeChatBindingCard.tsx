@@ -27,7 +27,6 @@ import * as React from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import { fetchMe, type MeInfo } from "../../lib/me";
-import WeChatArchiveCard from "./WeChatArchiveCard";
 import WeChatQrLoginModal from "./WeChatQrLoginModal";
 
 interface BindingEntry {
@@ -220,7 +219,7 @@ export default function WeChatBindingCard() {
           flexWrap: "wrap",
         }}
       >
-        <h3 style={{ margin: 0 }}>💬 微信接入</h3>
+        <h3 style={{ margin: 0 }}>微信账号绑定</h3>
         {/* BL-WECHAT-CATFISH-BIND v3 (5/26): 一键扫码绑自己微信. 后端走 hermes
             /api/platforms/wechat/qr_login/start → ilink. 替代 hermes setup CLI. */}
         <button
@@ -323,11 +322,12 @@ export default function WeChatBindingCard() {
               {status!.total_approved - status!.total_bound} 个走合成身份 (跟真员工隔离)
             </span>
           </div>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", minWidth: 640, borderCollapse: "collapse", fontSize: 14 }}>
             <thead>
               <tr style={{ textAlign: "left", color: "var(--catfish-text-muted)" }}>
                 <th style={th()}>平台</th>
-                <th style={th()}>谁</th>
+                <th style={th()}>微信账号</th>
                 <th style={th()}>绑到的员工身份</th>
                 <th style={th()}>接入时间</th>
                 <th style={{ ...th(), textAlign: "right" }}>操作</th>
@@ -343,17 +343,14 @@ export default function WeChatBindingCard() {
                   <tr key={rowKey} style={{ borderTop: "1px solid var(--catfish-border)" }}>
                     <td style={td()}>{fmtPlatform(e.platform)}</td>
                     <td style={td()}>
-                      <div style={{ fontWeight: 500 }}>{e.user_name || "(没昵称)"}</div>
-                      <div
-                        style={{
-                          fontFamily: "monospace",
-                          fontSize: 10,
-                          color: "var(--catfish-text-muted)",
-                        }}
-                        title={e.user_id}
-                      >
-                        {shortenId(e.user_id)}
+                      <div style={{ fontWeight: 500, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={e.user_name || e.user_id}>
+                        {e.user_name && e.user_name !== e.user_id && !e.user_name.includes("@im.wechat")
+                          ? e.user_name : shortenId(e.user_id)}
                       </div>
+                      <details style={{ maxWidth: 220, fontSize: 14 }}>
+                        <summary style={{ cursor: "pointer", padding: "8px 0" }}>查看完整账号</summary>
+                        <span style={{ overflowWrap: "anywhere", userSelect: "text" }}>{e.user_id}</span>
+                      </details>
                     </td>
                     <td style={td()}>
                       {isEditing ? (
@@ -453,10 +450,10 @@ export default function WeChatBindingCard() {
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
-      <WeChatArchiveCard />
 
       {/* 6/1 鸿波: 删底部 "~/.hermes/platforms/pairing + hermes pairing list" 技术细节,
           跟隐私卡同原则 — 不让员工联想, 也不教 CLI. 真员工 IT 自查走另外的 catfish

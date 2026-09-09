@@ -25,6 +25,7 @@ interface Props {
    *  (当前所有 section 都是这模式). 鲶鱼对你的认识 4 卡传 2 → 2x2 整齐, 不
    *  会 3 列第二行孤零零. */
   maxColumns?: number;
+  layout?: "sidebar" | "stacked";
 }
 
 const STORAGE_PREFIX = "dashboard_section_";
@@ -54,6 +55,7 @@ export default function CollapsibleSection({
   children,
   count: _count,  // BL-SECTION-COUNT-KILL: 接收不渲染 (兼容现有调用方传 count)
   maxColumns,
+  layout = "sidebar",
 }: Props) {
   const [collapsed, setCollapsed] = useState(() =>
     readCollapsed(id, defaultCollapsed)
@@ -131,7 +133,7 @@ export default function CollapsibleSection({
             display: "grid",
             // 180px sidebar 跟 PrivacyCard 内 Row 一致 (统一视觉节奏).
             // 窄屏 (< 720px) fallback 到单列 (sidebar 占整行), 防小屏挤碎.
-            gridTemplateColumns: "180px 1fr",
+            gridTemplateColumns: layout === "stacked" ? "minmax(0, 1fr)" : "180px 1fr",
             gap: "var(--space-4)",
             // 顶部薄分割线 (替代原 button border-bottom), 视觉分隔 section.
             paddingTop: "var(--space-2)",

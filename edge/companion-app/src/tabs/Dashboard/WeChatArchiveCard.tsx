@@ -102,13 +102,15 @@ export default function WeChatArchiveCard() {
   return (
     <section
       style={{
-        borderTop: "1px solid var(--catfish-border)",
-        marginTop: 16,
-        paddingTop: 14,
+        border: "1px solid var(--catfish-border)",
+        borderRadius: "var(--radius-md)",
+        background: "var(--catfish-bg-elevated)",
+        padding: "var(--space-4)",
+        minWidth: 0,
       }}
     >
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <strong style={{ fontSize: 13 }}>🗂️ 微信聊天记录分析</strong>
+        <h3 style={{ margin: 0 }}>导出聊天记录分析</h3>
         {status?.authorized && (
           <span style={{ color: "var(--status-ok, #2a8b3f)", fontSize: 12 }}>已授权</span>
         )}
@@ -119,10 +121,14 @@ export default function WeChatArchiveCard() {
         )}
       </div>
 
-      <p style={{ margin: "8px 0", fontSize: 12, lineHeight: 1.65 }}>
-        只读员工选择的 JSON、JSONL 或 CSV，不复制原文件。分析使用当前 Picker：{" "}
-        <code>{pickerModel || status?.currentPickerModel || "尚未选择"}</code>
+      <p style={{ margin: "12px 0", fontSize: 14, lineHeight: 1.65 }}>
+        无需绑定微信账号。选择 JSON、JSONL 或 CSV 导出文件后，即可授权分析；不会自动读取微信。
       </p>
+      {status?.sourceReady && (
+        <p style={{ margin: "12px 0", fontSize: 14, overflowWrap: "anywhere" }}>
+          分析模型：<code>{pickerModel || status.currentPickerModel || "尚未选择"}</code>
+        </p>
+      )}
 
       {status && !status.supported && (
         <p style={{ margin: "6px 0", fontSize: 12, color: "var(--catfish-text-muted)" }}>
@@ -131,13 +137,13 @@ export default function WeChatArchiveCard() {
       )}
 
       {status?.supported && (
-        <div style={{ margin: "8px 0", display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ margin: "12px 0", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <button type="button" onClick={() => void pickExport()} disabled={busy} style={button(true)}>
             {status.sourceType === "export_file" && status.sourceReady ? "更换导出文件" : "选择导出文件"}
           </button>
           {status.sourceType === "export_file" && status.sourceReady && sourceLabel && (
             <>
-              <span style={{ fontSize: 12 }} title={status.sourcePath || undefined}>✓ {sourceLabel}</span>
+              <span style={{ fontSize: 14, overflowWrap: "anywhere", minWidth: 0 }} title={status.sourcePath || undefined}>✓ {sourceLabel}</span>
               <button type="button" onClick={() => void clearSource()} disabled={busy} style={button(false)}>
                 移除
               </button>
@@ -152,7 +158,7 @@ export default function WeChatArchiveCard() {
             padding: 8,
             borderRadius: 4,
             background: "rgba(201, 139, 0, 0.06)",
-            fontSize: 12,
+            fontSize: 14,
             lineHeight: 1.6,
           }}
         >
@@ -202,7 +208,7 @@ export default function WeChatArchiveCard() {
         </div>
       )}
 
-      {status?.supported && status.helperInstalled && (
+      {status?.supported && status.helperInstalled && status.sourceReady && (
         <div style={{ marginTop: 10 }}>
           {status.authorized ? (
             <button type="button" onClick={() => void disable()} disabled={busy} style={button(false)}>
@@ -213,7 +219,7 @@ export default function WeChatArchiveCard() {
               type="button"
               onClick={() => void enable()}
               disabled={busy || !acknowledged || !status.currentPickerModel}
-              style={button(true)}
+              style={{ ...button(true), opacity: busy || !acknowledged || !status.currentPickerModel ? 0.5 : 1, cursor: busy || !acknowledged || !status.currentPickerModel ? "not-allowed" : "pointer" }}
             >
               {busy ? "安全检查中…" : "确认并启用"}
             </button>
@@ -230,8 +236,9 @@ function button(primary: boolean): React.CSSProperties {
     background: primary ? "var(--catfish-accent, #2a7fbb)" : "transparent",
     color: primary ? "#fff" : "inherit",
     borderRadius: 4,
-    padding: "4px 12px",
+    padding: "8px 16px",
+    minHeight: 40,
     cursor: "pointer",
-    fontSize: 12,
+    fontSize: 14,
   };
 }

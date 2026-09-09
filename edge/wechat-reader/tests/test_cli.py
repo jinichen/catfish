@@ -67,6 +67,28 @@ def test_doctor_reports_safe_export_reader(capsys: pytest.CaptureFixture[str]) -
     assert set(payload["formats"]) == {"json", "jsonl", "csv"}
 
 
+@pytest.mark.parametrize("command", [
+    "provider-authorize", "provider-run", "provider-plan", "authorized-access-plan",
+])
+def test_removed_provider_commands_are_not_available(command: str) -> None:
+    with pytest.raises(SystemExit) as error:
+        main([command, "--json"])
+    assert error.value.code == 2
+
+
+@pytest.mark.parametrize("suffix", ["db", "sqlite", "sqlite3"])
+def test_database_sources_are_rejected_without_modification(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], suffix: str,
+) -> None:
+    source = tmp_path / f"messages.{suffix}"
+    original = b"SQLite format 3\x00not-a-chat-export"
+    source.write_bytes(original)
+    code, payload = _run(capsys, "sessions", "--source", str(source))
+    assert code == 2
+    assert payload["reason_code"] == "unsupported_format"
+    assert source.read_bytes() == original
+
+
 @pytest.mark.parametrize("shape", ["array", "object"])
 def test_json_sessions_aggregate_without_persisting_index(
     tmp_path: Path,

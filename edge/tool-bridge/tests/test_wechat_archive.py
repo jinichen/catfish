@@ -120,6 +120,23 @@ def test_authorized_reader_is_visible_to_hermes(configured_reader: Path) -> None
     assert resolved["reason_code"] is None
 
 
+@pytest.mark.parametrize("source_type", ["authorized_database", "notification_preview"])
+def test_removed_source_configs_never_start_a_provider(
+    configured_reader: Path, monkeypatch: pytest.MonkeyPatch, source_type: str,
+) -> None:
+    path = wechat_archive._config_path()
+    config = json.loads(path.read_text(encoding="utf-8"))
+    config["source_type"] = source_type
+    config["provider_id"] = "catfish-wechat-authorized-macos"
+    path.write_text(json.dumps(config), encoding="utf-8")
+    monkeypatch.setattr(
+        wechat_archive, "_run_helper_json",
+        lambda *_args, **_kwargs: pytest.fail("旧配置不能启动 Provider"),
+    )
+    assert wechat_archive.runtime_available() is False
+    assert wechat_archive.tool_wechat_sessions({})["ok"] is False
+
+
 def test_picker_change_invalidates_previous_authorization(
     configured_reader: Path,
     monkeypatch: pytest.MonkeyPatch,
