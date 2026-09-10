@@ -601,6 +601,7 @@ pub(super) fn replace_model_field(text: &str, field: &str, new_value: &str) -> S
 ///
 /// 只认精确的 `API_SERVER_HOST=0.0.0.0` 一行 —— 带空格 / 引号 / 大小写变体都算
 /// "还得改", 交给 replace_or_append_env_line 统一写成规范形态.
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 fn api_server_host_needs_update(env_text: &str) -> bool {
     !env_text.lines().any(|l| l.trim() == "API_SERVER_HOST=0.0.0.0")
 }
@@ -632,6 +633,7 @@ fn api_server_host_needs_update(env_text: &str) -> bool {
 ///
 /// 幂等: 已经是 0.0.0.0 就连文件都不碰 (mtime 不动, 免得触发别的 watcher)。
 /// `.env` 不存在 = hermes 没装, skip。
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub fn ensure_api_server_reachable() -> Result<()> {
     let hermes = hermes_root()?;
     let env_path = hermes.join(".env");
