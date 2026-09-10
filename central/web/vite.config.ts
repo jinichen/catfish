@@ -24,6 +24,13 @@ export default defineConfig({
         target: "http://127.0.0.1:8999",
         changeOrigin: true,
       },
+      // 9/10: 员工自助改密 /me/password 在 identity:8998, 生产由 nginx
+      // (catfish-locations.conf `location = /me/password`) 反代; dev 这里之前漏了,
+      // 落到 vite 的 SPA 回退 → "HTTP 404 (响应体为空)"。跟 nginx 一样精确匹配, /me 仍是 SPA 路由。
+      "^/me/password$": {
+        target: "http://127.0.0.1:8998",
+        changeOrigin: true,
+      },
     },
   },
   build: {
