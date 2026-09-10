@@ -61,7 +61,7 @@ echo
 echo "== 真库测试 =="
 # ⚠ 不设 CATFISH_TEST_PG_URL 时这个文件会整体 skip, 而 skip 在 pytest 里是绿的。
 # 所以下面额外确认它**真的跑了** —— 否则连不上库时这个脚本会安静地成功。
-out=$(PYTHONPATH=src python -m pytest tests/test_provider_split_real_pg.py -v -p no:cacheprovider 2>&1) || {
+out=$(PYTHONPATH=src python -m pytest tests/test_provider_split_real_pg.py tests/test_room_link_mailbox_real_pg.py -v -p no:cacheprovider 2>&1) || {
   echo "$out"; exit 1;
 }
 echo "$out"

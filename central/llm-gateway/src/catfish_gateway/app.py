@@ -312,6 +312,13 @@ try:
 except Exception as e:
     logger.warning("advisory_router 挂载失败: %s", e)
 
+try:
+    from .room_link_router import router as room_link_router  # noqa: PLC0415
+    app.include_router(room_link_router)
+    logger.info("room_link_router: /api/room-link/mailbox 已挂载 (P50 横向协同邮筒)")
+except Exception as e:
+    logger.warning("room_link_router 挂载失败: %s", e)
+
 def _resolve_model(config: Config, name: str):
     model = config.get_model(name)
     if not model:
