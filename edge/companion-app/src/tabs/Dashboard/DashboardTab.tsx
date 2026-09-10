@@ -82,6 +82,7 @@ import SkillsHubCard from "./SkillsHubCard";
 //      状态 vs 早安偏今日要事". 员工进 Companion 就是早安 default tab, 已经看到.
 // 今日区现在只剩 CronJobsCard (定时任务监控). 想恢复主动闲聊 → 早安 tab AdvisorView.
 import CronJobsCard from "./CronJobsCard";  // P3.5.105 (6/25 鸿波 catch "定时任务跑没跑结果如何都看不到")
+import RoomLinkPendingCard from "./RoomLinkPendingCard";  // P49 (9/10): 横向协同待审批
 import AgentPrefsCard from "./AgentPrefsCard";
 import ExpertBotsCard from "./ExpertBotsCard";
 import ServerConfigCard from "./ServerConfigCard"; // P28 (6/5 鸿波): UI 改 gateway URL/token
@@ -178,6 +179,10 @@ export default function DashboardTab() {
         title="🔥 今日"
         count={1}
       >
+        {/* P49 (9/10 鸿波): 同事的小鲶让我的小鲶干活时, 要我点头的两类事 ——
+            工具调用 + 出站回复。没待审批时不渲染, 平时看不见这张卡。
+            放最前: 对方的 run 在 hermes 里挂着等, 10 分钟不点当拒绝。 */}
+        <RoomLinkPendingCard />
         {/* P3.5.105 (6/25 鸿波): 定时任务监控 — 跑没跑 / 失败信息 / 历史输出
             BL-TODAY-SECTION-DEDUP (7/24): 今日区曾有 2 张卡, 另一张 (ProactiveCard /
             TodoTopicCard) 跟早安 tab AdvisorView 重复被砍. */}
