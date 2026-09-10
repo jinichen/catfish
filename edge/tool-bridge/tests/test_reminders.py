@@ -257,8 +257,27 @@ def test_week_query_pushes_scope_and_completion_filter_into_applescript():
     assert 'set includeCompleted to false' in script
     assert 'set scopeStart to date "2026-09-07 00:00:00"' in script
     assert 'set scopeEnd to date "2026-09-14 00:00:00"' in script
-    assert "if completed of reminderItem then set includeRow to false" in script
+    # 9/10: 已完成过滤交给 Reminders 自己 (whose), 属性整列批量取 —— 不再逐条访问
+    assert "whose completed is false" in script
+    assert "set idList to id of candidates" in script
+    assert "completed of reminderItem" not in script, "逐条访问属性 = 每条一次 Apple Event, 几千条要 30s"
     assert "set end of outputRows to rowText" in script
+
+
+def test_task_library_import_uses_bounded_timeout():
+    """task_library 每次读都先导 Reminders; 上限必须短于 Companion 30s RPC,
+    否则导入慢 = 早安页「RPC tools/dispatch 超时」(9/10 实盘)。"""
+    from catfish_tool_bridge import task_library
+
+    assert task_library.REMINDERS_IMPORT_TIMEOUT_SEC < 15
+    with patch.object(task_library.platform, "system", return_value="Darwin"), \
+         patch.object(reminders, "tool_list_reminders",
+                      return_value={"ok": False, "error": "osascript 超 12.0s"}) as mock_list, \
+         patch.object(task_library, "list_tasks", return_value={"ok": True, "tasks": [], "count": 0}):
+        result = task_library.tool_list_tasks({"scope": "active"})
+    assert mock_list.call_args.kwargs["timeout_sec"] == task_library.REMINDERS_IMPORT_TIMEOUT_SEC
+    assert result["ok"] is True, "导入超时要退化成本地数据, 不能让整个读失败"
+    assert "超" in result["sync_warning"]
 
 
 def test_parse_reminders_output_keeps_structured_fields():

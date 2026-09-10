@@ -404,17 +404,30 @@ tell application "Reminders"
     repeat with reminderList in lists
         set listText to my cleanText(name of reminderList)
         if targetListName is "" or listText is targetListName then
-            repeat with reminderItem in reminders of reminderList
-                set includeRow to true
-                if not includeCompleted then
-                    try
-                        if completed of reminderItem then set includeRow to false
-                    end try
-                end if
-                if includeRow and scopeMode is not "all" then
-                    set includeRow to false
-                    try
-                        set reminderDue to due date of reminderItem
+            -- 9/10 性能: 一次 Apple Event 拿整列属性, 不逐条访问。
+            -- 逐条 repeat 里访问每条的属性, 每个属性都是一次跨进程
+            -- 往返, 提醒事项攒到几千条后单次读取 25-30 秒, 撞 Companion 30 秒 RPC 超时。
+            -- whose 让 Reminders 自己过滤已完成; every reminder 的属性批量返回是列表。
+            -- a reference to: 保持是对象说明符, "id of candidates" 才是一次批量事件;
+            -- 若先求值成引用列表, "id of {...}" 会报 Can't get id。
+            if includeCompleted then
+                set candidates to a reference to (every reminder of reminderList)
+            else
+                set candidates to a reference to (every reminder of reminderList whose completed is false)
+            end if
+            set candidateCount to count of candidates
+            if candidateCount > 0 then
+                set idList to id of candidates
+                set nameList to name of candidates
+                set dueList to due date of candidates
+                set completedList to completed of candidates
+                set priorityList to priority of candidates
+                set bodyList to body of candidates
+                repeat with i from 1 to candidateCount
+                    set includeRow to true
+                    set reminderDue to item i of dueList
+                    if scopeMode is not "all" then
+                        set includeRow to false
                         if reminderDue is not missing value then
                             if scopeMode is "overdue" then
                                 set includeRow to reminderDue < scopeEnd
@@ -422,30 +435,24 @@ tell application "Reminders"
                                 set includeRow to reminderDue >= scopeStart and reminderDue < scopeEnd
                             end if
                         end if
-                    end try
-                end if
-                if includeRow then
-                    set idText to my cleanText(id of reminderItem)
-                    set titleText to my cleanText(name of reminderItem)
-                    set dueText to ""
-                    try
-                        set reminderDue to due date of reminderItem
+                    end if
+                    if includeRow then
+                        set idText to my cleanText(item i of idList)
+                        set titleText to my cleanText(item i of nameList)
+                        set dueText to ""
                         if reminderDue is not missing value then set dueText to my isoDate(reminderDue)
-                    end try
-                    set completedText to (completed of reminderItem) as text
-                    set priorityText to "0"
-                    try
-                        set priorityText to (priority of reminderItem) as text
-                    end try
-                    set bodyText to ""
-                    try
-                        set bodyText to my cleanText(body of reminderItem)
-                    end try
-                    set fieldSeparator to (character id 31)
-                    set rowText to idText & fieldSeparator & titleText & fieldSeparator & listText & fieldSeparator & dueText & fieldSeparator & completedText & fieldSeparator & priorityText & fieldSeparator & bodyText
-                    set end of outputRows to rowText
-                end if
-            end repeat
+                        set completedText to (item i of completedList) as text
+                        set priorityText to "0"
+                        try
+                            set priorityText to (item i of priorityList) as text
+                        end try
+                        set bodyText to my cleanText(item i of bodyList)
+                        set fieldSeparator to (character id 31)
+                        set rowText to idText & fieldSeparator & titleText & fieldSeparator & listText & fieldSeparator & dueText & fieldSeparator & completedText & fieldSeparator & priorityText & fieldSeparator & bodyText
+                        set end of outputRows to rowText
+                    end if
+                end repeat
+            end if
         end if
     end repeat
 end tell
@@ -455,8 +462,15 @@ set AppleScript's text item delimiters to ""
 return outputText'''
 
 
-def tool_list_reminders(args: dict[str, Any]) -> dict[str, Any]:
-    """读取用户真实的 macOS Reminders.app 条目。"""
+def tool_list_reminders(
+    args: dict[str, Any], *, timeout_sec: float = 30.0,
+) -> dict[str, Any]:
+    """读取用户真实的 macOS Reminders.app 条目。
+
+    timeout_sec: osascript 上限。task_library 每次读任务库都要先导一遍 Reminders,
+    它传一个比早安页来源预算 (15s) 更短的值, 超了退化成本地数据 + sync_warning,
+    而不是把整个 RPC 拖到 Companion 的 30s 超时。
+    """
     scope = str(args.get("scope") or "week").strip().lower()
     if scope not in _LIST_SCOPES:
         return {
@@ -487,7 +501,7 @@ def tool_list_reminders(args: dict[str, Any]) -> dict[str, Any]:
         list_name=list_name,
         now=query_now,
     )
-    ok, stdout, stderr = _run_osascript(query_script, timeout_sec=30.0)
+    ok, stdout, stderr = _run_osascript(query_script, timeout_sec=timeout_sec)
     if not ok:
         if "Not authorized" in stderr or "权限" in stderr or "not allowed" in stderr.lower():
             return {

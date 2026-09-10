@@ -285,12 +285,21 @@ def tool_sync_tasks_to_reminders(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# Reminders 导入的时间上限。早安页给每个来源 15s, Companion RPC 30s; 导入
+# 超过这个数就放弃这一轮, 用本地库应答并带 sync_warning —— 任务库是真源,
+# Reminders 只是投影, 投影慢不该让真源读不出来。
+REMINDERS_IMPORT_TIMEOUT_SEC = 12.0
+
+
 def tool_list_tasks(args: dict[str, Any]) -> dict[str, Any]:
-    """读取任务库；macOS 首次读取时把现有 Reminders 导入，避免迁移丢数据。"""
+    """读取任务库；macOS 每次读取前把 Reminders 快照导入 (幂等 upsert)，避免迁移丢数据。"""
     sync_warning = None
     if platform.system() == "Darwin":
         from . import reminders  # noqa: PLC0415
-        snapshot = reminders.tool_list_reminders({"scope": "all", "include_completed": True, "limit": 500})
+        snapshot = reminders.tool_list_reminders(
+            {"scope": "all", "include_completed": True, "limit": 500},
+            timeout_sec=REMINDERS_IMPORT_TIMEOUT_SEC,
+        )
         if snapshot.get("ok"):
             upsert_reminders(snapshot.get("reminders", []))
         else:
