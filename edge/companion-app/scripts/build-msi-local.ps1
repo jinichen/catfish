@@ -450,6 +450,8 @@ foreach ($dir in @($emailStage, $depsStage)) {
 
 python -m pip wheel --no-deps --wheel-dir $emailStage $emailSource
 if ($LASTEXITCODE -ne 0) { throw 'catfish-email wheel build failed' }
+python (Join-Path $PSScriptRoot 'verify-email-wheel.py') $emailStage $emailSource
+if ($LASTEXITCODE -ne 0) { throw 'email wheel source verification failed' }
 # Outlook COM 适配器依赖 pywin32；把 Windows x64 / CPython 3.11 wheel 一并放进
 # 同一个离线归档，安装器用 uv --no-index 一次装完，现场不会偷偷访问 PyPI。
 python -m pip download --only-binary=:all: --dest $emailStage `

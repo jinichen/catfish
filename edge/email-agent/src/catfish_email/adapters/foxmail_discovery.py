@@ -71,6 +71,9 @@ def discover_storage_roots() -> list[Path]:
         return [candidate] if candidate is not None and _looks_like_storage(candidate) else []
 
     roots: list[Path] = []
+    hint = _normalise_path(os.environ.get("CATFISH_FOXMAIL_HINT", "").strip())
+    if hint is not None:
+        roots.append(hint)
     roots.extend(_registry_and_config_paths())
     roots.extend(_default_paths())
     return _unique_valid_paths(roots)

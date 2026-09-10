@@ -49,7 +49,8 @@ try {
     if (-not (Test-Path -LiteralPath $EmailExe -PathType Leaf)) {
         throw "邮件 CLI 安装后不存在: $EmailExe"
     }
-    & $EmailExe --help *> $null
+    # An old CLI also passes --help. Validate discovery without touching mail/COM.
+    & $EmailExe discover --help
     if ($LASTEXITCODE -ne 0) {
         throw "邮件 CLI 自检失败: $EmailExe"
     }

@@ -357,6 +357,9 @@ jobs:
 
           # catfish-email 是 py3-none-any wheel，安装时用 uv --no-deps，完全离线。
           python -m pip wheel --no-deps --wheel-dir $emailStage $emailSource
+          if ($LASTEXITCODE -ne 0) { throw 'email wheel build failed' }
+          python edge/companion-app/scripts/verify-email-wheel.py $emailStage $emailSource
+          if ($LASTEXITCODE -ne 0) { throw 'email wheel source verification failed' }
           # Outlook COM 适配器需要 pywin32；一起放入 Windows 离线归档。
           python -m pip download --only-binary=:all: --dest $emailStage `
               --python-version 3.11 --platform win_amd64 --implementation cp --abi cp311 pywin32

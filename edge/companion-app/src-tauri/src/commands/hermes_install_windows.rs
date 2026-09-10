@@ -130,6 +130,7 @@ fn install_optional_components(resource_dir: &Path, paths: &BootstrapPaths) -> V
     // 已损坏，重装 MSI 又不会覆盖 Hermes venv。用同一个 Python 做无网络导入
     // 探针，失败时复用现有隐藏安装流程修复。
     let email_ready = email_exe.is_file()
+        && run_hidden_status(&email_exe, &["discover", "--help"], "邮件发现 CLI 能力")
         && run_hidden_status(
             &hermes_venv_python(&paths.install_dir),
             &["-c", "import catfish_email, win32api"],
@@ -193,7 +194,11 @@ fn install_optional_components(resource_dir: &Path, paths: &BootstrapPaths) -> V
 }
 
 pub(crate) fn ensure_optional_components(resource_dir: &Path, paths: &BootstrapPaths) -> Result<()> {
+    let mut log = open_bootstrap_log(paths)?;
+    writeln!(log, "Component check: executable={:?}, resources={}, runtime={}",
+        std::env::current_exe(), resource_dir.display(), paths.install_dir.display())?;
     let failures = install_optional_components(resource_dir, paths);
+    writeln!(log, "Component check result: {:?}", failures)?;
     for failure in &failures {
         log::warn!("[windows-bootstrap] 附加组件未就绪: {failure}");
     }

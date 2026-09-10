@@ -73,7 +73,7 @@ pub async fn email_sources_discover() -> Result<String, String> {
         {
             // 外置盘目录可能无法从注册表反推出；保留有效的用户选择，
             // 但不设置 client，让 Outlook 和 Foxmail 仍然独立探测。
-            command.env("CATFISH_FOXMAIL_ROOT", root);
+            command.env("CATFISH_FOXMAIL_HINT", root);
         }
     }
     let output = command

@@ -8,6 +8,26 @@ from contextlib import nullcontext
 import catfish_email.adapters.foxmail_discovery as discovery
 
 
+def test_empty_cached_directory_does_not_block_registry(monkeypatch, tmp_path):
+    storage = _storage(tmp_path)
+    empty = tmp_path / "old-storage"
+    empty.mkdir()
+    monkeypatch.delenv(discovery.ROOT_ENV, raising=False)
+    monkeypatch.setenv("CATFISH_FOXMAIL_HINT", str(empty))
+    monkeypatch.setattr(discovery, "_registry_and_config_paths", lambda: [storage])
+    monkeypatch.setattr(discovery, "_default_paths", lambda: [])
+    assert discovery.discover_storage_roots() == [storage.resolve()]
+
+
+def test_valid_cached_directory_is_a_candidate(monkeypatch, tmp_path):
+    storage = _storage(tmp_path)
+    monkeypatch.delenv(discovery.ROOT_ENV, raising=False)
+    monkeypatch.setenv("CATFISH_FOXMAIL_HINT", str(storage))
+    monkeypatch.setattr(discovery, "_registry_and_config_paths", lambda: [])
+    monkeypatch.setattr(discovery, "_default_paths", lambda: [])
+    assert discovery.discover_storage_roots() == [storage.resolve()]
+
+
 def test_registry_enumerates_values_when_there_are_no_subkeys():
     class Registry:
         REG_SZ, REG_EXPAND_SZ = 1, 2
