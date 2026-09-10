@@ -19,35 +19,19 @@ import {
   type RoomLinkOutput,
   type RoomLinkPending,
 } from "../../lib/roomLink";
-import {
-  approveInboxRequest,
-  startMailboxPolling,
-  type InboxRequest,
-} from "../../lib/roomLinkInbox";
+import type { InboxRequest } from "../../lib/roomLinkInbox";
+import { resolveInbox, useRoomLink } from "../../lib/roomLinkStore";
+import { Btn, cardStyle, ErrorLine, itemStyle } from "./roomLinkUi";
 
 export default function RoomLinkPendingCard() {
   const [pending, setPending] = useState<RoomLinkPending | null>(null);
   const [busy, setBusy] = useState<string | null>(null); // run_id 正在处理
   const [error, setError] = useState<string | null>(null);
-  // P50: 同事发来的「能不能让你的小鲶帮忙」。邮筒取走即清空, 所以攥在 state 里
-  // 直到员工处理; 同一封 (同 id) 不重复入列。
-  const [inbox, setInbox] = useState<InboxRequest[]>([]);
+  // P50: 同事发来的「能不能让你的小鲶帮忙」。邮筒轮询在 roomLinkStore 单例里
+  // (取走即清空, 只能有一个轮询者), 这里只订阅。
+  const { inbox } = useRoomLink();
 
   useEffect(() => startRoomLinkPolling(setPending), []);
-  useEffect(
-    () =>
-      startMailboxPolling(
-        (items) =>
-          setInbox((cur) => {
-            const seen = new Set(cur.map((x) => x.id));
-            return [...cur, ...items.filter((x) => !seen.has(x.id))];
-          }),
-        () => {
-          /* grant 是回给发起方那半边, 第 2 步接 UI */
-        },
-      ),
-    [],
-  );
 
   const hasInbox = inbox.length > 0;
   if (!hasInbox && (!pending || !hasPending(pending))) return null;
@@ -92,9 +76,8 @@ export default function RoomLinkPendingCard() {
     setBusy(key);
     setError(null);
     try {
-      if (choice === "approve") await approveInboxRequest(item);
       // 拒绝 = 本地丢掉不回信, 对方等超时
-      setInbox((cur) => cur.filter((x) => x.id !== item.id));
+      await resolveInbox(item, choice);
     } catch (e) {
       setError(`回复同事失败: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
@@ -105,19 +88,7 @@ export default function RoomLinkPendingCard() {
   const total = inbox.length + (pending?.approvals.length ?? 0) + (pending?.outputs.length ?? 0);
 
   return (
-    <div
-      style={{
-        background: "var(--catfish-bg-elevated)",
-        border: "1px solid var(--catfish-border)",
-        borderRadius: "var(--radius-md)",
-        padding: "var(--space-4)",
-        height: "100%",
-        boxSizing: "border-box",
-        display: "flex",
-        flexDirection: "column",
-        gap: "var(--space-3)",
-      }}
-    >
+    <div style={cardStyle}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>
           🤝 同事的小鲶在等你点头
@@ -127,19 +98,7 @@ export default function RoomLinkPendingCard() {
         </span>
       </div>
 
-      {error && (
-        <div
-          style={{
-            fontSize: 11,
-            color: "var(--status-error, #dc2626)",
-            background: "rgba(220, 38, 38, 0.06)",
-            padding: "4px 8px",
-            borderRadius: 4,
-          }}
-        >
-          {error}
-        </div>
-      )}
+      {error && <ErrorLine>{error}</ErrorLine>}
 
       {hasInbox && (
         <Section
@@ -235,32 +194,14 @@ function Section({ title, hint, children }: { title: string; hint: string; child
 }
 
 function Item({ busy, children }: { busy: boolean; children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        border: "1px solid var(--catfish-border)",
-        borderRadius: "var(--radius-sm, 6px)",
-        padding: "var(--space-3)",
-        opacity: busy ? 0.6 : 1,
-        display: "flex",
-        flexDirection: "column",
-        gap: "var(--space-2)",
-      }}
-    >
-      {children}
-    </div>
-  );
+  return <div style={{ ...itemStyle, opacity: busy ? 0.6 : 1 }}>{children}</div>;
 }
 
 function Buttons({ busy, onYes, onNo, yes }: { busy: boolean; onYes: () => void; onNo: () => void; yes: string }) {
   return (
     <div style={{ display: "flex", gap: "var(--space-2)", justifyContent: "flex-end" }}>
-      <button type="button" disabled={busy} onClick={onNo} className="btn btn--ghost btn--sm">
-        拒绝
-      </button>
-      <button type="button" disabled={busy} onClick={onYes} className="btn btn--primary btn--sm">
-        {yes}
-      </button>
+      <Btn kind="ghost" disabled={busy} onClick={onNo}>拒绝</Btn>
+      <Btn kind="primary" disabled={busy} onClick={onYes}>{yes}</Btn>
     </div>
   );
 }
