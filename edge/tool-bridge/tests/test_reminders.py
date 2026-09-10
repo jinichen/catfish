@@ -258,9 +258,11 @@ def test_week_query_pushes_scope_and_completion_filter_into_applescript():
     assert 'set scopeStart to date "2026-09-07 00:00:00"' in script
     assert 'set scopeEnd to date "2026-09-14 00:00:00"' in script
     # 9/10: 已完成过滤交给 Reminders 自己 (whose), 属性整列批量取 —— 不再逐条访问
-    assert "whose completed is false" in script
-    assert "set idList to id of candidates" in script
-    assert "completed of reminderItem" not in script, "逐条访问属性 = 每条一次 Apple Event, 几千条要 30s"
+    # 只看代码行, 去掉 AppleScript 的 -- 注释, 免得注释里提一句就把判据绊倒
+    code = "\n".join(l for l in script.splitlines() if not l.strip().startswith("--"))
+    assert "properties of every reminder of reminderList" in code, "每清单只许一次 Apple Event"
+    assert "whose" not in code, "whose 过滤实测比全取还慢 (9/10: 50 条 13s vs 6s)"
+    assert "of reminderItem" not in code, "逐条访问属性 = 每条每属性一次 Apple Event, 50 条 30s"
     assert "set end of outputRows to rowText" in script
 
 

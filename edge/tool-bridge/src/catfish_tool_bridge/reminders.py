@@ -404,29 +404,25 @@ tell application "Reminders"
     repeat with reminderList in lists
         set listText to my cleanText(name of reminderList)
         if targetListName is "" or listText is targetListName then
-            -- 9/10 性能: 一次 Apple Event 拿整列属性, 不逐条访问。
-            -- 逐条 repeat 里访问每条的属性, 每个属性都是一次跨进程
-            -- 往返, 提醒事项攒到几千条后单次读取 25-30 秒, 撞 Companion 30 秒 RPC 超时。
-            -- whose 让 Reminders 自己过滤已完成; every reminder 的属性批量返回是列表。
-            -- a reference to: 保持是对象说明符, "id of candidates" 才是一次批量事件;
-            -- 若先求值成引用列表, "id of {...}" 会报 Can't get id。
-            if includeCompleted then
-                set candidates to a reference to (every reminder of reminderList)
-            else
-                set candidates to a reference to (every reminder of reminderList whose completed is false)
-            end if
-            set candidateCount to count of candidates
+            -- 9/10 性能: 每个清单只发一次 Apple Event (properties of every reminder),
+            -- 之后全在本地列表上过滤。逐条 repeat 里访问每条的属性, 每个属性都是
+            -- 一次跨进程往返, 本机实测 ~80ms/次, 50 条就 30s, 撞 Companion 30s RPC 超时。
+            -- 不用 whose 过滤已完成: 实测 whose 比全取还慢 (50 条 13s vs 6s)。
+            set candidateCount to count of reminders of reminderList
             if candidateCount > 0 then
-                set idList to id of candidates
-                set nameList to name of candidates
-                set dueList to due date of candidates
-                set completedList to completed of candidates
-                set priorityList to priority of candidates
-                set bodyList to body of candidates
+                set propsList to properties of every reminder of reminderList
                 repeat with i from 1 to candidateCount
-                    set includeRow to true
-                    set reminderDue to item i of dueList
-                    if scopeMode is not "all" then
+                    set props to item i of propsList
+                    set isCompleted to false
+                    try
+                        set isCompleted to completed of props
+                    end try
+                    set includeRow to includeCompleted or (not isCompleted)
+                    set reminderDue to missing value
+                    try
+                        set reminderDue to due date of props
+                    end try
+                    if includeRow and scopeMode is not "all" then
                         set includeRow to false
                         if reminderDue is not missing value then
                             if scopeMode is "overdue" then
@@ -437,16 +433,19 @@ tell application "Reminders"
                         end if
                     end if
                     if includeRow then
-                        set idText to my cleanText(item i of idList)
-                        set titleText to my cleanText(item i of nameList)
+                        set idText to my cleanText(id of props)
+                        set titleText to my cleanText(name of props)
                         set dueText to ""
                         if reminderDue is not missing value then set dueText to my isoDate(reminderDue)
-                        set completedText to (item i of completedList) as text
+                        set completedText to isCompleted as text
                         set priorityText to "0"
                         try
-                            set priorityText to (item i of priorityList) as text
+                            set priorityText to (priority of props) as text
                         end try
-                        set bodyText to my cleanText(item i of bodyList)
+                        set bodyText to ""
+                        try
+                            set bodyText to my cleanText(body of props)
+                        end try
                         set fieldSeparator to (character id 31)
                         set rowText to idText & fieldSeparator & titleText & fieldSeparator & listText & fieldSeparator & dueText & fieldSeparator & completedText & fieldSeparator & priorityText & fieldSeparator & bodyText
                         set end of outputRows to rowText
