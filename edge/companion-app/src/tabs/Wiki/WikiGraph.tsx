@@ -65,6 +65,7 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
   const graphModel = useMemo(() => buildWikiGraphModel(graphFiles), [graphFiles]);
   const [neighborLimit, setNeighborLimit] = useState(DEFAULT_GRAPH_NEIGHBOR_LIMIT);
   const [expanded, setExpanded] = useState(false);
+  const [fullGraph, setFullGraph] = useState(false);
   // P3.5.111/112 (6/25 鸿波): 虚拟体系name.
   // 鸿波点 dangling 体系 → setVirtualSystem(name) → WikiGraph 虚拟显子树.
   // P3.5.112 优先级反: virtualSystemName > selectedPath — 点子项保留虚拟态.
@@ -112,13 +113,13 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
 
   // effectiveMode 真实生效真 mode: "full" / "ego" / "subtree" (B 方案体系子树)
   const effectiveMode: "full" | "ego" | "subtree" = useMemo(() => {
-    if (expanded) return "full";
+    if (fullGraph) return "full";
     if (!effectiveRoot) return "ego";
     if (effectiveRoot.rel_path === null) return "subtree";
     if (isSystemConcept(selectedFile)) return "subtree";
     return "ego";
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expanded, effectiveRoot, selectedFile]);
+  }, [fullGraph, effectiveRoot, selectedFile]);
 
   // P3.5.108/111: deps key 真精准 — full mode 真不依赖 selected (避免 sigma rebuild).
   // P3.5.111: 虚拟体系真 egoKey 含 virtualSystemName 虚拟切换也 rebuild.
@@ -209,7 +210,7 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
         kind: f.kind,
         slug: f.slug,
         color,
-        size: 4,
+        size: effectiveMode === "full" ? 3 : 4,
       });
     }
 
@@ -219,7 +220,9 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
       if (g.hasEdge(edgeKey)) continue;
       g.addEdgeWithKey(edgeKey, relation.sourcePath, relation.targetPath, {
         size: 1,
-        color: "rgba(120, 120, 120, 0.6)",
+        color: effectiveMode === "full"
+          ? "rgba(150, 160, 162, 0.14)"
+          : "rgba(120, 120, 120, 0.52)",
         rel: relation.relation,
       });
     }
@@ -235,7 +238,10 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
     // 3. size by degree — hub 略大但保紧凑 (4-8 范围, Obsidian 风格)
     g.forEachNode((node) => {
       const degree = g.degree(node);
-      g.setNodeAttribute(node, "size", 4 + Math.min(degree * 0.4, 4));
+      const size = effectiveMode === "full"
+        ? 3 + Math.min(degree * 0.18, 2)
+        : 4 + Math.min(degree * 0.4, 4);
+      g.setNodeAttribute(node, "size", size);
     });
 
     // 4. positions — 真 random scale 小 + ForceAtlas2 适度 iter — 让节点紧凑成 cluster,
@@ -283,13 +289,18 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
     // #444 (暗背景下不可读).
     const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
     const labelColor = isDark ? "#e0e0e0" : "#444";
-    const edgeColor = isDark ? "rgba(180, 180, 180, 0.4)" : "rgba(120, 120, 120, 0.6)";
+    const edgeColor = effectiveMode === "full"
+      ? "rgba(150, 160, 162, 0.24)"
+      : isDark
+        ? "rgba(180, 180, 180, 0.42)"
+        : "rgba(120, 120, 120, 0.52)";
 
     const sigma = new Sigma(graph, containerRef.current, {
       renderEdgeLabels: false,
       // 默认一跳图只给中心和较重要邻居常驻标签；其余节点 hover 仍显示。
       // 全量图不再出现 200 个标签叠成一团。
       // 普通一跳节点尺寸约为 4.4，阈值必须低于它才能显示关联实体名称。
+      // 全图仅保留大节点标签，避免 200+ 个名称在首次缩放时互相覆盖。
       labelRenderedSizeThreshold: 3.5,
       labelFont: "ui-sans-serif, -apple-system, sans-serif",
       labelSize: 12,
@@ -303,6 +314,7 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
 
     // hover: highlight 真节点 + 邻居, 其余 fade (跟 Obsidian graph 一致)
     let hoveredNode: string | null = null;
+    const focusNode = selectedPath && graph.hasNode(selectedPath) ? selectedPath : null;
     const refreshFade = () => {
       const g = sigma.getGraph();
       const neighbors = new Set<string>();
@@ -311,6 +323,11 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
         g.forEachNeighbor(hoveredNode, (n) => neighbors.add(n));
       }
       sigma.setSetting("nodeReducer", (node, data) => {
+        // 图谱只保留当前对象名称；其余标签在悬停关联节点时出现。
+        // 关系名称由右侧“关联概览”承担，画布专注于结构，避免节点文字互相覆盖。
+        if (node !== focusNode && !neighbors.has(node)) {
+          return { ...data, label: "" };
+        }
         if (!hoveredNode) return data;
         if (neighbors.has(node)) return data;
         return { ...data, color: "#e0e0e0", label: "" };
@@ -344,7 +361,7 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
       sigma.kill();
       sigmaRef.current = null;
     };
-  }, [graph, selectFile]);
+  }, [effectiveMode, graph, selectFile, selectedPath]);
 
   // highlight selected node — sigma.refresh 后真 update color**真
   useEffect(() => {
@@ -366,7 +383,7 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
   );
   const canShowMore = effectiveMode !== "full" && visibleNodeCount < availableNodeCount;
   return (
-    <div className={`wiki-graph${expanded ? " wiki-graph--expanded" : ""}`}>
+    <div className={`wiki-graph${expanded ? " wiki-graph--expanded" : ""}${expanded && hasGraph ? " wiki-graph--expanded-with-overview" : ""}`}>
       <div className="wiki-graph__header">
         <div className="wiki-graph__heading">
           <ShareNetwork size={21} aria-hidden="true" />
@@ -384,9 +401,18 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
             <>
             <button
               type="button"
+              className={`wiki-graph__mode-toggle${fullGraph ? " is-active" : ""}`}
+              onClick={() => setFullGraph((current) => !current)}
+              aria-pressed={fullGraph}
+              title={fullGraph ? "返回重点关系" : "显示完整关系图谱"}
+            >
+              {fullGraph ? "返回重点" : "查看全图"}
+            </button>
+            <button
+              type="button"
               onClick={() => setExpanded((current) => !current)}
-              aria-label={expanded ? "退出全屏图谱" : "打开完整图谱"}
-              title={expanded ? "退出全屏图谱" : "打开完整图谱"}
+              aria-label={expanded ? "退出放大图谱" : "放大图谱"}
+              title={expanded ? "退出放大图谱" : "放大图谱"}
             >
               {expanded
                 ? <CornersIn size={18} aria-hidden="true" />

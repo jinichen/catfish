@@ -15,6 +15,8 @@ const SUBTYPE_LABELS: Record<string, string> = {
   certificate: "证书",
   policy: "制度",
   process: "流程",
+  rule: "规则",
+  principle: "原则",
   standard: "标准",
   product: "产品",
   vendor: "供应商",

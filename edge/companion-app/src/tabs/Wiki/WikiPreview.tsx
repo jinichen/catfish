@@ -707,7 +707,7 @@ function RelatedRecommend({
 
   return (
     <div className="wiki-related">
-      <div className="wiki-related__header">你可能还想查看</div>
+      <div className="wiki-related__header">相关知识</div>
       <div className="wiki-related__sub">根据已确认关系和共同来源推荐</div>
       <ul className="wiki-related__list">
         {recommends.map(({ file, breakdown }) => {

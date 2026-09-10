@@ -146,11 +146,18 @@ export function WikiMetaHeader({
   const subtypeLabel = wikiSubtypeLabel(info.subtype, info.kind);
   return (
   <div className="wiki-preview__meta">
-    <div className="wiki-preview__meta-title">
+    <div className="wiki-preview__meta-kicker">
       <span className={`wiki-kind-badge wiki-kind-badge--${kind}`}>{kindLabel}</span>
+      <span>{subtypeLabel}</span>
+    </div>
+    <div className="wiki-preview__meta-title">
       <span className="wiki-preview__title-text">{info.title}</span>
     </div>
-    <div className="wiki-preview__meta-summary">类型：{subtypeLabel}</div>
+    <div className="wiki-preview__meta-summary">已确认知识 · 可继续补充关系</div>
+    <div className="wiki-preview__meta-facts" aria-label="知识摘要">
+      <span>关系 <strong>{info.related.length}</strong></span>
+      <span>来源 <strong>{info.sources.length}</strong></span>
+    </div>
     {info.tags.length > 0 && (
       <div className="wiki-preview__meta-section">
         <span className="wiki-preview__meta-section-label">标签</span>
@@ -179,9 +186,11 @@ export function WikiMetaHeader({
                 "wiki-preview__wikilink" +
                 (dangling ? " wiki-preview__wikilink--dangling" : "")
               }
+              aria-label={title}
               onClick={() => handleWikilinkClick(r.name)}
               title={title}
             >
+              <span className="wiki-preview__relation-dot" aria-hidden="true" />
               <span>{r.name}</span>
               {r.rel && (
                 <span className="wiki-preview__relation-label">{r.rel}</span>

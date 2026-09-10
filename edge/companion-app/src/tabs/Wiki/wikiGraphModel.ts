@@ -1,8 +1,9 @@
 import type { WikiFileInfo } from "../../lib/tauri";
 import { resolveWikiRefOrNull } from "../../lib/wikiResolve";
 
-export const DEFAULT_GRAPH_NEIGHBOR_LIMIT = 24;
-export const GRAPH_NEIGHBOR_STEP = 20;
+// 首屏只承担“理解当前知识”的任务；完整关系网在用户明确切换后再展开。
+export const DEFAULT_GRAPH_NEIGHBOR_LIMIT = 8;
+export const GRAPH_NEIGHBOR_STEP = 6;
 
 export interface WikiGraphRelation {
   sourcePath: string;
