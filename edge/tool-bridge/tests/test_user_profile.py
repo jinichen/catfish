@@ -28,6 +28,13 @@ def isolated_profile(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
         "catfish_tool_bridge.user_profile.USER_PROFILE_PATH", fake_path
     )
+    monkeypatch.setattr(
+        "catfish_tool_bridge.user_profile.JOURNAL_PATH",
+        tmp_path / "employee_journal.md",
+    )
+    monkeypatch.setattr(
+        "catfish_tool_bridge.user_profile._last_journal_signature", None
+    )
     return fake_path
 
 
@@ -69,6 +76,43 @@ def test_get_returns_summary_not_full_evidence(up, isolated_profile):
     assert item["value"] == "直接"
     assert item["evidence_count"] == 2
     assert "evidence" not in item  # 完整 list 不返
+
+
+def test_get_auto_observes_journal_without_overwriting_profile(up, isolated_profile):
+    """新 journal 自动形成待确认建议，但不能静默覆盖已确认值."""
+    from catfish_tool_bridge import user_profile
+
+    user_profile.user_profile_confirm({
+        "field": "writing_style.tone",
+        "value": "直接",
+    })
+    user_profile.JOURNAL_PATH.write_text(
+        "\n".join([
+            "员工偏好委婉，先说明背景。",
+            "员工偏好委婉，语气保持温和。",
+            "员工偏好委婉，不要太生硬。",
+        ]),
+        encoding="utf-8",
+    )
+
+    first = up.user_profile_get({})["result"]["writing_style.tone"]
+    second = up.user_profile_get({})["result"]["writing_style.tone"]
+
+    assert first["value"] == "直接"
+    assert first["proposed_value"] == "委婉"
+    assert first["proposed_evidence_count"] == 3
+    assert second["evidence_count"] == first["evidence_count"]
+
+
+def test_propose_deduplicates_same_evidence(up):
+    args = {
+        "field": "writing_style.tone",
+        "value": "直接",
+        "evidence": "员工说不要绕弯子",
+    }
+    assert up.user_profile_propose(args)["type"] == "result"
+    duplicate = up.user_profile_propose(args)
+    assert duplicate == {"type": "skipped", "reason": "evidence already recorded"}
 
 
 # ── propose ──────────────────────────────────────────────────

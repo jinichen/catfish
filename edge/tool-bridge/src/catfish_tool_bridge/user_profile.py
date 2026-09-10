@@ -42,12 +42,20 @@
 from __future__ import annotations
 
 import json
+import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
 USER_PROFILE_PATH = Path.home() / ".catfish" / "user_profile.json"
+JOURNAL_PATH = Path.home() / ".catfish" / "employee_journal.md"
+
+# Dashboard 和聊天都会读取画像。自动观察只在 journal 发生变化后执行，避免每次
+# get 都扫描大型日志；锁保证 Companion 与 tool-bridge 并发刷新时不会重复写入。
+_JOURNAL_SYNC_LOCK = threading.Lock()
+_last_journal_signature: Optional[tuple[int, int]] = None
 
 # 允许的字段 (扩展时加这里). 用 dotted name 分类.
 # 值类型: list of allowed values (枚举) 或 None (自由文本)
@@ -81,6 +89,35 @@ MAX_VALUE_LEN = 200
 MAX_EVIDENCE_LEN = 500
 MAX_EVIDENCE_PER_FIELD = 10
 MAX_FIELDS = 50  # 防员工/LLM 乱塞
+
+# journal 里的总结可能已经包含足够明确的偏好信号。这里只抽取低风险、可审计的
+# 工作/沟通偏好，仍然只调用 propose，绝不绕过员工确认直接修改已确认画像。
+_JOURNAL_RULES: List[tuple[re.Pattern[str], str, str]] = [
+    (re.compile(r"简洁直接|直接[、，]?简洁|偏好直接|沟通方式.*直接|直接.*沟通|避免冗余|不要套话|不绕弯|不要绕弯"), "writing_style.tone", "直接"),
+    (re.compile(r"风格.*正式|公文风格"), "writing_style.tone", "formal"),
+    (re.compile(r"风格.*随意|风格.*轻松|偏好.*闲聊"), "writing_style.tone", "casual"),
+    (re.compile(r"幽默|搞笑|风格.*幽默"), "writing_style.tone", "幽默"),
+    (re.compile(r"委婉|偏好.*温和"), "writing_style.tone", "委婉"),
+    (re.compile(r"偏好.*简短|偏好.*简洁|偏好.*短|不要.*冗长|避免冗长|长篇.*删除"), "writing_style.length_pref", "短"),
+    (re.compile(r"偏好.*长篇|偏好.*详尽|偏好.*完整列出|偏好.*面面俱到"), "writing_style.length_pref", "长"),
+    (re.compile(r"偏好.*列表|偏好.*bullet|偏好.*列清单"), "writing_style.bullet_pref", "列表"),
+    (re.compile(r"偏好.*段落|偏好.*纯文字|不要.*列表"), "writing_style.bullet_pref", "段落"),
+    (re.compile(r"偏好.*列清单|清单形式|偏好.*列出"), "work_pattern.task_pref", "列清单"),
+    (re.compile(r"偏好.*图表|图表展示|偏好.*可视化"), "work_pattern.task_pref", "看图表"),
+    (re.compile(r"偏好.*纯文字|偏好.*文字"), "work_pattern.task_pref", "纯文字"),
+    (re.compile(r"偏好.*对照表|对照表.*偏好|偏好.*表格"), "work_pattern.task_pref", "对照表"),
+    (re.compile(r"偏好.*摘要|先看.*摘要|只看.*摘要"), "work_pattern.review_pref", "先看摘要"),
+    (re.compile(r"偏好.*全量|全量.*查看|偏好.*完整查看"), "work_pattern.review_pref", "全量看"),
+    (re.compile(r"偏好.*异常|只看.*异常|关注.*异常"), "work_pattern.review_pref", "只看异常"),
+    (re.compile(r"偏好.*快|节奏.*快|偏好.*立即|偏好.*马上|跳过.*确认|拒绝.*重复"), "personality.pace", "急"),
+    (re.compile(r"偏好.*慢|偏好.*稳|偏好.*仔细"), "personality.pace", "缓"),
+    (re.compile(r"偏好.*结果|结果导向|偏好.*直接执行|跳过.*草稿|跳过.*审查|直接执行.*修改"), "personality.feedback_style", "结果导向"),
+    (re.compile(r"偏好.*细节|细节确认|逐一.*确认"), "personality.feedback_style", "细节确认"),
+    (re.compile(r"偏好.*大方向|大点拨|大局.*偏好"), "personality.feedback_style", "大点拨"),
+    (re.compile(r"偏好.*平等|对等.*交流|偏好.*平视"), "personality.deference", "平等"),
+    (re.compile(r"偏好.*尊敬|偏好.*正式|偏好.*礼貌"), "personality.deference", "尊重正式"),
+    (re.compile(r"偏好.*随意|偏好.*随便|偏好.*放松"), "personality.deference", "随意"),
+]
 
 
 def _read_profile() -> Dict[str, Any]:
@@ -117,6 +154,52 @@ def _ensure_field(profile: Dict[str, Any], field: str) -> Dict[str, Any]:
     return profile[field]
 
 
+def _journal_signature() -> Optional[tuple[int, int]]:
+    """返回 journal 的轻量签名；不存在时返 None。"""
+    try:
+        stat = JOURNAL_PATH.stat()
+    except OSError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size)
+
+
+def _journal_preference_hits(line: str) -> List[tuple[str, str]]:
+    """从一条可审计的 journal 总结中抽取低风险画像候选。"""
+    if not line.strip() or not ("偏好" in line or "员工" in line):
+        return []
+    hits = {(field, value) for pattern, field, value in _JOURNAL_RULES if pattern.search(line)}
+    return sorted(hits)
+
+
+def _auto_observe_journal() -> None:
+    """把 journal 中的新偏好作为 evidence 自动送入 propose 阶段。
+
+    该函数只负责观察：达到阈值后仍保留 proposed_value，不能自动 confirm。这样
+    新设备可以自动开始积累画像，同时不会因为一段历史总结就静默改变员工已确认的值。
+    """
+    global _last_journal_signature
+    signature = _journal_signature()
+    if signature is None or signature == _last_journal_signature:
+        return
+    with _JOURNAL_SYNC_LOCK:
+        signature = _journal_signature()
+        if signature is None or signature == _last_journal_signature:
+            return
+        try:
+            lines = JOURNAL_PATH.read_text(encoding="utf-8", errors="ignore").splitlines()
+            for line in lines:
+                evidence = line.strip()[:200]
+                for field, value in _journal_preference_hits(evidence):
+                    user_profile_propose({
+                        "field": field,
+                        "value": value,
+                        "evidence": evidence,
+                    })
+        except OSError:
+            return
+        _last_journal_signature = signature
+
+
 def _validate_field(field: str) -> Optional[str]:
     """返 error 字符串或 None (合法)."""
     if not isinstance(field, str) or not field.strip():
@@ -150,17 +233,24 @@ def user_profile_get(args: Dict[str, Any]) -> Dict[str, Any]:
     返回精简形式 (不含 evidence 全文, 节省 tokens):
       {field: {value, evidence_count, locked, last_confirmed_iso}}
     """
+    _auto_observe_journal()
     profile = _read_profile()
     summary: Dict[str, Any] = {}
     for field, data in profile.items():
         if not isinstance(data, dict):
             continue
+        proposed_value = data.get("proposed_value")
+        proposed_count = sum(
+            1 for evidence in (data.get("evidence") or [])
+            if isinstance(evidence, dict) and evidence.get("value") == proposed_value
+        ) if proposed_value else 0
         summary[field] = {
             "value": data.get("value"),
             "evidence_count": len(data.get("evidence") or []),
             "locked": bool(data.get("locked")),
             "last_confirmed": data.get("last_confirmed"),
-            "proposed_value": data.get("proposed_value"),
+            "proposed_value": proposed_value,
+            "proposed_evidence_count": proposed_count,
         }
     return {"type": "result", "result": summary}
 
@@ -213,6 +303,8 @@ def user_profile_propose(args: Dict[str, Any]) -> Dict[str, Any]:
 
     # 累 evidence
     ev_list: List[Dict[str, Any]] = list(f.get("evidence") or [])
+    if any(e.get("text") == evidence and e.get("value") == value for e in ev_list if isinstance(e, dict)):
+        return {"type": "skipped", "reason": "evidence already recorded"}
     ev_list.append({"text": evidence, "ts": time.time(), "value": value})
     if len(ev_list) > MAX_EVIDENCE_PER_FIELD:
         ev_list = ev_list[-MAX_EVIDENCE_PER_FIELD:]

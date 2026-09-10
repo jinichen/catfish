@@ -67,6 +67,12 @@ def isolated_fp(tmp_path: Path, monkeypatch):
         "catfish_tool_bridge.style_fingerprint.STYLE_FINGERPRINT_PATH",
         fake_fp,
     )
+    # 自动刷新会检查索引签名；测试不能读取开发机真实 ~/.catfish/search.db。
+    monkeypatch.setattr(
+        "catfish_tool_bridge.style_fingerprint.SEARCH_DB_PATH",
+        tmp_path / "search.db",
+    )
+    monkeypatch.setattr("catfish_tool_bridge.style_fingerprint._last_auto_refresh_at", 0.0)
     return fake_fp
 
 
@@ -123,6 +129,18 @@ def test_get_returns_summary_after_refresh(sf, fake_index):
     assert r["result"]["source_count"] == 2
     assert isinstance(r["result"]["top_words"], list)
     assert len(r["result"]["sample_sentences"]) <= 3
+
+
+def test_get_automatically_refreshes_after_index_changes(sf, fake_index):
+    """索引新增文档后，读取 fingerprint 应自动更新而不依赖按钮。"""
+    fake_index("/h/out/旧报告.docx", ".docx", GONGWEN)
+    first = sf.style_fingerprint_get({})["result"]
+    assert first["source_count"] == 1
+
+    fake_index("/h/out/新报告.docx", ".docx", GONGWEN)
+    sf._last_auto_refresh_at = 0.0
+    refreshed = sf.style_fingerprint_get({})["result"]
+    assert refreshed["source_count"] == 2
 
 
 def test_get_with_corrupted_file(sf, isolated_fp):

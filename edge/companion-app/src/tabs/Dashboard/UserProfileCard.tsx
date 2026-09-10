@@ -24,11 +24,13 @@ interface FieldSummary {
   locked: boolean;
   last_confirmed: number | null;
   proposed_value: string | null;
+  proposed_evidence_count?: number;
 }
 
 type ProfileMap = Record<string, FieldSummary>;
 
 const REFRESH_MS = 30_000;
+const MIN_EVIDENCE_TO_CONFIRM = 3;
 
 function humanTime(ts: number | null): string {
   if (!ts || ts <= 0) return "未确认";
@@ -107,6 +109,22 @@ export default function UserProfileCard() {
     }
   };
 
+  const confirmProposal = async (field: string) => {
+    const cur = profile[field];
+    if (!cur || !cur.proposed_value) return;
+    setBusy(field);
+    try {
+      await toolBridgeCallTool("catfish_user_profile_confirm", {
+        field,
+        value: cur.proposed_value,
+        locked: cur.locked,
+      });
+      await refresh();
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const clearField = async (field: string) => {
     setBusy(field);
     try {
@@ -163,7 +181,7 @@ export default function UserProfileCard() {
       </div>
 
       <div style={{ fontSize: 12, color: "var(--catfish-text-muted)", marginBottom: "var(--space-3)" }}>
-        累积 3 次 evidence 后{agentName}会跟你确认才记。锁定 = 它以后不再 propose 修改。
+        新对话会自动累积低风险偏好；达到 3 次后显示待确认，不会静默覆盖当前画像。锁定 = 不再 propose 修改。
       </div>
 
       {error && (
@@ -192,6 +210,9 @@ export default function UserProfileCard() {
         const f = profile[field];
         const display = f.value || f.proposed_value || "(空)";
         const isProposed = !f.value && !!f.proposed_value;
+        const hasPendingProposal = !!f.proposed_value && f.proposed_value !== f.value;
+        const proposalEvidenceCount = f.proposed_evidence_count || 0;
+        const proposalReady = hasPendingProposal && proposalEvidenceCount >= MIN_EVIDENCE_TO_CONFIRM;
         return (
           <div
             key={field}
@@ -212,19 +233,47 @@ export default function UserProfileCard() {
                     🔒 锁定
                   </span>
                 )}
-                {isProposed && (
+                {isProposed && proposalReady && (
                   <span style={{ fontSize: 10, color: "var(--status-warn)", border: "1px solid var(--status-warn)", borderRadius: 3, padding: "0 4px" }}>
                     待确认
+                  </span>
+                )}
+                {isProposed && !proposalReady && (
+                  <span style={{ fontSize: 10, color: "var(--catfish-text-muted)", border: "1px solid var(--catfish-border)", borderRadius: 3, padding: "0 4px" }}>
+                    观察中
+                  </span>
+                )}
+                {!isProposed && proposalReady && (
+                  <span style={{ fontSize: 10, color: "var(--status-warn)", border: "1px solid var(--status-warn)", borderRadius: 3, padding: "0 4px" }}>
+                    有新建议
                   </span>
                 )}
               </div>
               <div style={{ marginTop: 2, color: isProposed ? "var(--catfish-text-muted)" : "var(--catfish-text)" }}>
                 {display}
               </div>
+              {hasPendingProposal && (
+                <div style={{ marginTop: 2, color: "var(--status-warn)" }}>
+                  {proposalReady ? "待确认新画像" : "正在观察"}：{f.proposed_value}（{proposalEvidenceCount}/{MIN_EVIDENCE_TO_CONFIRM} 次 evidence）
+                </div>
+              )}
               <div style={{ marginTop: 2, fontSize: 11, color: "var(--catfish-text-muted)" }}>
                 {f.evidence_count} 次 evidence · {humanTime(f.last_confirmed)}
               </div>
             </div>
+            {proposalReady && (
+              <button
+                onClick={() => void confirmProposal(field)}
+                disabled={busy === field}
+                style={{
+                  fontSize: 11, padding: "2px 6px", background: "transparent",
+                  border: "1px solid var(--status-warn)", borderRadius: 3, cursor: "pointer",
+                  color: "var(--status-warn)",
+                }}
+              >
+                确认
+              </button>
+            )}
             <button
               onClick={() => void toggleLock(field, f.locked)}
               disabled={busy === field || !f.value}

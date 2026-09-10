@@ -91,6 +91,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -108,6 +109,11 @@ SEARCH_DB_PATH = Path.home() / ".catfish" / "search.db"
 # 撞锁时最多等这么久 (秒). 跟 catfish_search.indexer.DB_BUSY_TIMEOUT_SEC 对齐.
 # 全量索引一跑几分钟, sqlite 默认 busy_timeout=0 会让这边当场抛 "database is locked".
 DB_BUSY_TIMEOUT_SEC = 30.0
+# 风格读取本身可能被对话、Dashboard 和多个 skill 同时调用。自动刷新要有
+# 进程内互斥和短冷却，避免一次索引变化触发多次 469 篇文档的重复计算。
+AUTO_REFRESH_COOLDOWN_SEC = 30.0
+_AUTO_REFRESH_LOCK = threading.Lock()
+_last_auto_refresh_at = 0.0
 
 # 算"文书"的扩展名 (存进索引时是带点小写的, indexer.py:139 path.suffix.lower()).
 # 为什么是这几个 / 为什么没有 .xlsx: 见模块 docstring "收哪些文档".
@@ -531,6 +537,54 @@ def _write_fingerprint(fp: Dict[str, Any]) -> None:
     tmp.replace(STYLE_FINGERPRINT_PATH)
 
 
+def _source_db_signature() -> str | None:
+    """返回索引文件版本标记；索引变化后让下一次读取自动重抽。"""
+    stats = []
+    for path in (
+        SEARCH_DB_PATH,
+        Path(f"{SEARCH_DB_PATH}-wal"),
+        Path(f"{SEARCH_DB_PATH}-shm"),
+    ):
+        try:
+            stat = path.stat()
+        except OSError:
+            stats.append((str(path), None))
+        else:
+            stats.append((str(path), (stat.st_mtime_ns, stat.st_size)))
+    if stats[0][1] is None:
+        return None
+    # 索引器启用 WAL 时，新增文档可能暂时只写入 -wal；主库 mtime 不变。
+    return repr(stats)
+
+
+def _auto_refresh_if_stale(fp: Dict[str, Any]) -> Dict[str, Any]:
+    """索引有新版本时自动更新，失败则继续使用上一份有效指纹。"""
+    signature = _source_db_signature()
+    if signature is None or fp.get("source_db_signature") == signature:
+        return fp
+
+    global _last_auto_refresh_at
+    now = time.monotonic()
+    if now - _last_auto_refresh_at < AUTO_REFRESH_COOLDOWN_SEC:
+        return fp
+    with _AUTO_REFRESH_LOCK:
+        now = time.monotonic()
+        if now - _last_auto_refresh_at < AUTO_REFRESH_COOLDOWN_SEC:
+            return fp
+        _last_auto_refresh_at = now
+        try:
+            refreshed = style_fingerprint_refresh({})
+        except Exception:
+            # 自动路径不能让一次索引锁/损坏把写作流程打断；refresh 自身仍会
+            # 对已知错误返回结构化结果，未知错误则保留上一份指纹并等待下次重试。
+            return fp
+        result = refreshed.get("result", {})
+        if result.get("error"):
+            # refresh 在索引不可用时不会覆盖旧文件；旧指纹仍可安全供 LLM 使用。
+            return fp
+        return _read_fingerprint()
+
+
 # ============================================================
 # 工具入口
 # ============================================================
@@ -542,13 +596,13 @@ def style_fingerprint_get(args: Dict[str, Any]) -> Dict[str, Any]:
     LLM 用法: leadership-briefing / weekly-report / project-approval skill 在 render
     前调一次, 拿到风格描述拼到 system prompt. 没 fingerprint (员工首次用) 返空.
     """
-    fp = _read_fingerprint()
+    fp = _auto_refresh_if_stale(_read_fingerprint())
     if not fp:
         return {
             "type": "result",
             "result": {
                 "exists": False,
-                "hint": "fingerprint 还没生成, 调 catfish_style_fingerprint_refresh 扫一次员工历史文档",
+                "hint": "正在等待本地文档索引；索引完成后会自动抽取文书风格",
             },
         }
     # 精简输出 — 不返完整 sources path
@@ -595,6 +649,7 @@ def style_fingerprint_refresh(args: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     fp = _build_fingerprint(docs)
+    fp["source_db_signature"] = _source_db_signature()
     _write_fingerprint(fp)
 
     result: Dict[str, Any] = {
