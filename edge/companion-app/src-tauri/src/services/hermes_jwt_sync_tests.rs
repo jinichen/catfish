@@ -112,3 +112,48 @@
         assert!(out.contains("api_mode: chat_completions"));
         assert!(out.contains("provider: openai-api"));
     }
+
+    // ─── P49 · API_SERVER_HOST → 0.0.0.0 ──────────────────────────────
+
+    /// 本机 .env 现状就是这一行 (9/10 查证第 483 行), 必须判"要改"。
+    #[test]
+    fn api_server_host_127_要改() {
+        let env = "API_SERVER_KEY=k\nAPI_SERVER_ENABLED=true\nAPI_SERVER_HOST=127.0.0.1\nAPI_SERVER_PORT=8642\n";
+        assert!(api_server_host_needs_update(env));
+    }
+
+    /// 幂等的判据: 已经是规范形态就不碰文件 (mtime 不动)。
+    #[test]
+    fn api_server_host_已是_0000_不改() {
+        let env = "API_SERVER_HOST=0.0.0.0\n";
+        assert!(!api_server_host_needs_update(env));
+    }
+
+    /// 没这行 (hermes 老版本 / 手动删过) 也要补。
+    #[test]
+    fn api_server_host_缺行_要改() {
+        assert!(api_server_host_needs_update("API_SERVER_KEY=k\n"));
+        assert!(api_server_host_needs_update(""));
+    }
+
+    /// 带空格 / 引号的变体算"还得改" —— 交给 replace_or_append 统一写成规范形态,
+    /// 不在判据里做宽松匹配 (宽了会把 `0.0.0.0 # 注释` 这种半吊子也当已改)。
+    #[test]
+    fn api_server_host_变体_要改() {
+        assert!(api_server_host_needs_update("API_SERVER_HOST = 0.0.0.0\n"));
+        assert!(api_server_host_needs_update("API_SERVER_HOST=\"0.0.0.0\"\n"));
+        assert!(api_server_host_needs_update("api_server_host=0.0.0.0\n"));
+    }
+
+    /// 跟 replace_or_append_env_line 串起来: 127.0.0.1 → 0.0.0.0, 邻居行一个不动。
+    /// 这条钉的是"改对了那一行、没伤到 KEY/PORT"—— KEY 被改掉等于门锁没了。
+    #[test]
+    fn api_server_host_替换_不伤邻居() {
+        let env = "API_SERVER_KEY=secret\nAPI_SERVER_HOST=127.0.0.1\nAPI_SERVER_PORT=8642\n";
+        let out = replace_or_append_env_line(env, "API_SERVER_HOST", "0.0.0.0");
+        assert!(out.contains("API_SERVER_HOST=0.0.0.0"));
+        assert!(!out.contains("127.0.0.1"));
+        assert!(out.contains("API_SERVER_KEY=secret"), "KEY 行被动了: {out}");
+        assert!(out.contains("API_SERVER_PORT=8642"), "PORT 行被动了: {out}");
+        assert!(!api_server_host_needs_update(&out), "改完再判应该是'不用改'");
+    }

@@ -608,9 +608,15 @@ def run():
     port_source = "env PORT" if "PORT" in os.environ else "default"
     host_source = "env HOST" if "HOST" in os.environ else "default(127.0.0.1)"
     if host == "0.0.0.0":
+        # 9/10 P49: 这条只说 gateway 8999 的 HOST。员工电脑上 hermes 8642 的
+        # API_SERVER_HOST 从 P49 起**有意**是 0.0.0.0 (横向协同要同事能直连),
+        # 由 Companion 在边缘端自己维护 —— 两个变量两回事, 文案里点名,
+        # 免得下一个看到"员工电脑应改回"的人把 hermes 那扇门也关回去。
+        # (中央端代码不写边缘端路径, BL-CENTRAL-EDGE-BOUNDARY 扫注释也算。)
         print(
-            "[catfish] ⚠️ HOST=0.0.0.0 — gateway 暴露到所有网卡 (局域网可访问). "
-            "仅服务器部署用. 员工电脑应改回 127.0.0.1.",
+            "[catfish] ⚠️ HOST=0.0.0.0 — gateway 8999 暴露到所有网卡 (局域网可访问). "
+            "仅服务器部署用. 员工电脑上 gateway 的 HOST 应改回 127.0.0.1 "
+            "(这条不涉及 hermes 8642 的 API_SERVER_HOST, 那个 P49 起有意开放).",
             flush=True,
         )
     workers = int(os.environ.get("UVICORN_WORKERS", "1"))

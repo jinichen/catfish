@@ -595,6 +595,65 @@ pub(super) fn replace_model_field(text: &str, field: &str, new_value: &str) -> S
     out
 }
 
+// ─── P49 · 让 hermes 8642 对内网可达 ──────────────────────────────────────
+
+/// `.env` 里 `API_SERVER_HOST` 是不是还得改. 纯函数, 好测.
+///
+/// 只认精确的 `API_SERVER_HOST=0.0.0.0` 一行 —— 带空格 / 引号 / 大小写变体都算
+/// "还得改", 交给 replace_or_append_env_line 统一写成规范形态.
+fn api_server_host_needs_update(env_text: &str) -> bool {
+    !env_text.lines().any(|l| l.trim() == "API_SERVER_HOST=0.0.0.0")
+}
+
+/// P49 (9/10 鸿波「那就应该打开, 没有选择」): hermes 8642 改绑 `0.0.0.0`.
+///
+/// # 为什么
+///
+/// 横向协同 (同事 A 的小鲶让我的小鲶干活) 走 hermes 0.21 的 RoomLink, 而它只支持
+/// 直连 (`hosted_room_peer.py` catalog `link_modes=("direct",)`, 不走中继):
+/// A 的 Companion 要直接 HTTP 打这台机器的 `/v1/runs`。hermes 默认
+/// `API_SERVER_HOST=127.0.0.1` —— 只有本机能连, 别的机器到不了。
+///
+/// 绑 `0.0.0.0` 而不是本机内网 IP: 员工电脑是 DHCP, IP 会变, 绑具体 IP 下次
+/// 换 IP 就起不来。`0.0.0.0` 是所有网卡, 本机 `127.0.0.1` 照样能连, Companion
+/// 现有功能不受影响。
+///
+/// # 这是全员部署级的安全变化, 说在明处
+///
+/// 每台员工电脑的 8642 从「只有自己能连」变成「全公司内网能连」。守门的是
+/// `API_SERVER_KEY` (本机 Companion) + room grant (同事, 只有 dispatch/status,
+/// 见插件 P49.1)。`central/deploy.sh` 那句「员工电脑应改回 127.0.0.1」说的是
+/// gateway 8999, 对 hermes 8642 从此不再适用, 那边注释已同步改。
+///
+/// # 什么时候生效
+///
+/// 改的是文件, hermes 是 launchd 起的、可能已经在跑 —— **要重启 hermes 才绑
+/// 新地址**。第一次改完日志会说。不在这里主动 kill: 会打断员工正在跑的对话。
+///
+/// 幂等: 已经是 0.0.0.0 就连文件都不碰 (mtime 不动, 免得触发别的 watcher)。
+/// `.env` 不存在 = hermes 没装, skip。
+pub fn ensure_api_server_reachable() -> Result<()> {
+    let hermes = hermes_root()?;
+    let env_path = hermes.join(".env");
+    if !env_path.exists() {
+        log::debug!("[room-link] {} 不存在 (hermes 未装) · skip", env_path.display());
+        return Ok(());
+    }
+    let old = fs::read_to_string(&env_path)
+        .with_context(|| format!("读 {}", env_path.display()))?;
+    if !api_server_host_needs_update(&old) {
+        log::debug!("[room-link] API_SERVER_HOST 已是 0.0.0.0 · 不动");
+        return Ok(());
+    }
+    let new = replace_or_append_env_line(&old, "API_SERVER_HOST", "0.0.0.0");
+    fs::write(&env_path, new).with_context(|| format!("写 {}", env_path.display()))?;
+    log::warn!(
+        "[room-link] ✓ hermes/.env API_SERVER_HOST → 0.0.0.0 —— 8642 将对内网可达 \
+         (横向协同需要), 守门: API_SERVER_KEY + room grant。**重启 hermes 后生效**。"
+    );
+    Ok(())
+}
+
 // ─── tests ──────────────────────────────
 
 /// P3.5.81 (7/29): URL 同步的回归测试.

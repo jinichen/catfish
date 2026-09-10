@@ -461,6 +461,15 @@ pub fn run() {
                         log::debug!("[startup-jwt-sync] 未 SSO 登 (access_token 空) · skip");
                     }
 
+                    // P49 (9/10 鸿波「那就应该打开, 没有选择」): hermes 8642 改绑 0.0.0.0,
+                    // 让同事的 Companion 能直接打这台机器的 /v1/runs (横向协同)。
+                    // 纯本地文件操作, 不依赖网络, 放 service token 同步之前 —— identity
+                    // 挂了这条也得成立。改的是 .env, 要重启 hermes 才生效, 函数里日志会说。
+                    // 安全含义写在 ensure_api_server_reachable 的 doc 里, 别在这里重复。
+                    if let Err(e) = services::hermes_jwt_sync::ensure_api_server_reachable() {
+                        log::warn!("[room-link] API_SERVER_HOST 同步挂 (不阻塞): {e:#}");
+                    }
+
                     // BL-P26-SERVICE-TOKEN-STARTUP (7/19 Task #26): 启动时 · 拿 30 天
                     // service token 塞 ~/.hermes/.env OPENAI_API_KEY. 老 sync_all 用
                     // access_token 覆盖 env (TTL 1h) · Companion 关闭无 refresh 就
