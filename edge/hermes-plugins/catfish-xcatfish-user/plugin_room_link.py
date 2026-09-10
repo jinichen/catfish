@@ -24,16 +24,28 @@ catfish 的红线撞:
 之后, 851 行 reset 在 run_conversation 返回之后。三个 patch 点上它都绑着。
 catfish 的 _patch_asyncio_executor_for_contextvars 保证它跨 executor 线程。
 
-# 出站审批为什么不做成"run 挂起等 B 批"
+# 出站审批: run 挂起等 B 批 —— 第一版这里写错了, 记一笔
 
-run 完成路径 (api_server_runs.py:894-917) 是 async 函数体, 没有可 patch 的
-独立函数; 909 行 `_put_event_if_active(completed_event)` 在 910 行
-`_set_run_status("completed")` **之前**, 在后者上拦已经出端。
+第一版的设计是「截走 final_response, run 照常 completed 但 output 为空, B 批了
+之后由 Companion 发进房间」。这个前提是错的: **B 这边没有房间。**
 
-所以截点提到 run_conversation 返回处: room run 照常 completed 但 output 为空,
-真实回复存进 `_pending_outputs`, B 在 Companion 里点了之后**由 Companion 发进
-房间** —— 跟 catfish_email_create_draft 同一个形状: 插件只管截和审批, 发送
-在客户端。A 通过房间收 B 的回复, 不通过 run output。
+tui_gateway/hosted_room_peer_transport.py 文件头说得很清楚 —— remote member
+不是"加入房间", 而是 host (A) 通过 HostedRoomPeerClient 远程驱动 B 的 hermes
+跑一个隐藏的 `Group: <room_id>` session。房间数据在 A 的 DB 里, B 的回复回到
+A 的**唯一通道就是 run output**。截走了就没路可回。
+
+所以正确的形状是: run_conversation 返回前**阻塞**等 B 批。批了原样返回, output
+进 run.completed 给 A; 拒了 / 超时以 failed 结束 (result["failed"]=True 走
+api_server_runs.py:880 那个分支), A 明确知道"B 没放行", 而不是收到一个空回复
+猜是不是 bot 没说话。
+
+阻塞用 threading.Event().wait() —— 跟 hermes 自己的工具审批同款
+(tools/approval.py:4670 那段, 5 分钟超时)。run_in_executor(None, ...) 是默认
+线程池, 挂起占一个线程, 所以超时不能像待审批表的 TTL 那样给 24 小时;
+给 10 分钟, B 不在电脑前就当拒绝, A 可以重发。
+
+run 本身没有整体超时 (api_server_runs.py:1117 那 30 秒是 SSE keepalive),
+挂着不会被 hermes 杀掉。
 
 # 改道后的审批 cb 为什么不调原 cb
 
@@ -78,6 +90,15 @@ ROOM_LINK_PERMISSIONS: tuple[str, ...] = ("dispatch", "status")
 
 #: 待审批条目最长保留 (秒)。超过说明 B 一直没处理, 不能无限攒。
 PENDING_TTL_SECONDS = 24 * 3600
+
+#: 出站审批阻塞多久 (秒)。挂起占 executor 线程, 不能跟上面一样给 24 小时。
+#: hermes 自己的工具审批是 5 分钟 (tools/approval.py:4670); 出站是"看一眼
+#: 点一下", 给宽一倍。到点当拒绝, run 以 failed 结束, A 收到明确原因可重发。
+OUTBOUND_APPROVAL_TIMEOUT_SECONDS = 10 * 60
+
+#: B 拒绝 / 超时时 run 的 error 文案。A 侧靠这两个字符串区分, 别随手改。
+OUTBOUND_DECLINED = "outbound declined by target"
+OUTBOUND_TIMED_OUT = "outbound approval timed out"
 
 _ORIG: dict[str, Any] = {}
 _PATCHED = False
@@ -154,19 +175,43 @@ def _patch_run_conversation() -> None:
         run_key = kwargs.get("task_id") or (args[2] if len(args) > 2 else None) or ""
         run_key = str(run_key)
 
+        gate = threading.Event()
+        entry = {
+            "final_response": final,
+            "_at": time.time(),
+            "_gate": gate,
+            "_decision": None,
+        }
         with _LOCK:
             _gc_pending()
-            _pending_outputs[run_key] = {
-                "final_response": final,
-                "_at": time.time(),
-            }
+            _pending_outputs[run_key] = entry
         logger.info(
-            "P49.2 room run %s: final_response (%d 字) 截进待审批表, run output 置空",
-            run_key, len(final),
+            "P49.2 room run %s: final_response (%d 字) 待 B 审批, run 挂起 (最多 %ds)",
+            run_key, len(final), OUTBOUND_APPROVAL_TIMEOUT_SECONDS,
         )
-        # 浅拷贝再改, 别动 hermes 内部持有的那个 dict
+
+        # 阻塞等 B。轮询式 wait 跟 tools/approval.py:4704 同款 —— 1 秒一醒,
+        # 让 uninstall / 进程退出有机会打断, 不是一觉睡到超时。
+        deadline = time.time() + OUTBOUND_APPROVAL_TIMEOUT_SECONDS
+        while time.time() < deadline:
+            if gate.wait(timeout=1.0):
+                break
+        with _LOCK:
+            _pending_outputs.pop(run_key, None)
+        decision = entry["_decision"]
+
+        if decision == "approve":
+            logger.info("P49.2 room run %s: B 放行, output 原样给 A", run_key)
+            return result
+        reason = OUTBOUND_DECLINED if decision == "deny" else OUTBOUND_TIMED_OUT
+        logger.info("P49.2 room run %s: %s, run 以 failed 结束", run_key, reason)
+        # 浅拷贝再改, 别动 hermes 内部持有的那个 dict。
+        # failed=True 走 api_server_runs.py:880 的 failed 分支, A 拿到明确的 error
+        # 而不是一个空 output 猜是不是 bot 没说话。
         result = dict(result)
         result["final_response"] = ""
+        result["failed"] = True
+        result["error"] = reason
         return result
 
     _ORIG["run_conversation"] = orig
@@ -214,12 +259,13 @@ ROUTE_OUTPUT_ITEM = "/api/catfish/room-link/outputs/{run_id}"
 
 def snapshot_pending() -> dict[str, Any]:
     """给 Companion 看的快照。approval 的 command 已经在 hermes 侧脱敏过
-    (_approval_notify 调 _redact_approval_command), 这里原样透。"""
+    (_approval_notify 调 _redact_approval_command), 这里原样透。
+    下划线开头的是内部字段 (时间戳 / Event / 决定), 不透。"""
     with _LOCK:
         _gc_pending()
         return {
             "approvals": [
-                {"run_id": k, **{kk: vv for kk, vv in v.items() if kk != "_at"}}
+                {"run_id": k, **{kk: vv for kk, vv in v.items() if not kk.startswith("_")}}
                 for k, v in _pending_approvals.items()
             ],
             "outputs": [
@@ -229,10 +275,20 @@ def snapshot_pending() -> dict[str, Any]:
         }
 
 
-def pop_output(run_id: str) -> dict[str, Any] | None:
-    """Companion 发完 (或拒了) 之后清掉。返被清的那条, 没有返 None。"""
+def resolve_output(run_id: str, choice: str) -> bool:
+    """B 对出站回复拍板。choice ∈ {approve, deny}。返 True = 有这条且已放行/拒绝。
+
+    真正的收尾 (从表里 pop) 在 patched_run_conversation 醒来之后做 —— 那边
+    要先读 _decision 再 pop, 这里只负责写决定 + 叫醒。"""
+    if choice not in ("approve", "deny"):
+        raise ValueError(f"choice 必须是 approve/deny, 收到 {choice!r}")
     with _LOCK:
-        return _pending_outputs.pop(run_id, None)
+        entry = _pending_outputs.get(run_id)
+        if entry is None:
+            return False
+        entry["_decision"] = choice
+        entry["_gate"].set()
+    return True
 
 
 def pop_approval(run_id: str) -> dict[str, Any] | None:
@@ -257,20 +313,30 @@ def register_routes(router: Any) -> bool:
             return denied
         return _w.json_response(snapshot_pending())
 
-    async def _delete_output(request):
+    async def _resolve_output(request):
+        """POST {"choice": "approve"|"deny"} —— B 对出站回复拍板, 叫醒挂起的 run。"""
         denied = plugin_route_auth.check_auth(request)
         if denied is not None:
             return denied
         run_id = request.match_info.get("run_id", "")
-        gone = pop_output(run_id)
-        if gone is None:
-            return _w.json_response({"error": "not found"}, status=404)
-        return _w.json_response({"ok": True, "run_id": run_id})
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            return _w.json_response({"error": "invalid JSON"}, status=400)
+        choice = str(body.get("choice", "")).strip().lower()
+        try:
+            found = resolve_output(run_id, choice)
+        except ValueError as e:
+            return _w.json_response({"error": str(e)}, status=400)
+        if not found:
+            # 可能已超时被 run 自己收尾了, 或 run_id 写错。都算 404, 前端刷新列表。
+            return _w.json_response({"error": "not found or already resolved"}, status=404)
+        return _w.json_response({"ok": True, "run_id": run_id, "choice": choice})
 
     try:
         router.add_get(ROUTE_LIST, _list)
-        router.add_delete(ROUTE_OUTPUT_ITEM, _delete_output)
-        logger.info("P49 routes registered ✓: GET %s / DELETE %s", ROUTE_LIST, ROUTE_OUTPUT_ITEM)
+        router.add_post(ROUTE_OUTPUT_ITEM, _resolve_output)
+        logger.info("P49 routes registered ✓: GET %s / POST %s", ROUTE_LIST, ROUTE_OUTPUT_ITEM)
         return True
     except Exception as e:  # noqa: BLE001
         logger.warning("P49 route 注册失败: %s", e)
@@ -307,5 +373,9 @@ def uninstall() -> None:
     _ap.register_gateway_notify = _ORIG.pop("register_gateway_notify")
     with _LOCK:
         _pending_approvals.clear()
+        # 挂起的 run 得叫醒, 不然那些 executor 线程会一直等到超时
+        for e in _pending_outputs.values():
+            e["_decision"] = "deny"
+            e["_gate"].set()
         _pending_outputs.clear()
     _PATCHED = False

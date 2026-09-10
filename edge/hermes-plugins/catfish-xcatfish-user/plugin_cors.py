@@ -377,8 +377,9 @@ def _patch_p8_p9_cors() -> None:
                     # (P1-P11 那些错位会跨员工串数据, 那才必须让 hermes 起不来。)
                     logger.warning("P44 activity_probe 路由注册失败: %s", e)
                 # ── P49 (9/10 鸿波): 横向协同待审批出口 ──
-                # GET  /api/catfish/room-link/pending          B 的 Companion 读
-                # DELETE /api/catfish/room-link/outputs/{id}    发完/拒了清掉
+                # GET  /api/catfish/room-link/pending        B 的 Companion 读
+                # POST /api/catfish/room-link/outputs/{id}   {"choice":"approve"|"deny"}
+                #      叫醒挂起的 run: 批了 output 原样给 A, 拒了 run 以 failed 结束
                 # 跟 P44 同一个 fence。路由挂不上只是 B 看不到待审批 —— 三个
                 # patch 本身 (plugin.py 走 _try_patch) 照样生效, 红线不漏。
                 try:

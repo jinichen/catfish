@@ -115,23 +115,84 @@ def test_approve和stop永远不在默认里(hermes):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# P49.2  出站截走
+# P49.2  出站审批: run 挂起等 B
 # ─────────────────────────────────────────────────────────────────────
-def test_room_run的回复被截走_output置空(hermes):
-    """堵"B 的本地数据出端无审批"的洞。"""
+import threading
+
+
+def _run_in_thread(hermes, msg, task_id):
+    """在后台线程里跑 room run (它会阻塞等审批), 返 (thread, box)。
+    box["result"] 在线程结束后可读。"""
+    box = {}
+
+    def _t():
+        box["result"] = hermes.AIAgent().run_conversation(msg, task_id=task_id)
+    th = threading.Thread(target=_t, daemon=True)
+    th.start()
+    return th, box
+
+
+def _wait_pending(hermes, run_id, timeout=3.0):
+    """等到 run_id 出现在待审批表里 (线程刚起来时表可能还是空的)。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if any(o["run_id"] == run_id for o in hermes.rl.snapshot_pending()["outputs"]):
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_room_run挂起等B_批了output原样给A(hermes):
+    """堵"B 的本地数据出端无审批"的洞 —— 正面: B 放行后 A 拿到完整回复。"""
     hermes.room(True)
-    r = hermes.AIAgent().run_conversation("查进度", task_id="run-1")
-    assert r["final_response"] == "", "output 没置空, A 会直接拿到 B 的回复"
+    th, box = _run_in_thread(hermes, "查进度", "run-1")
+    assert _wait_pending(hermes, "run-1"), "run 没挂起进待审批表"
+    assert th.is_alive(), "run 没阻塞, 直接返回了 —— 回复已经出端"
+
     snap = hermes.rl.snapshot_pending()
-    assert [o["run_id"] for o in snap["outputs"]] == ["run-1"]
     assert snap["outputs"][0]["final_response"] == "B 的回复: 查进度"
 
+    assert hermes.rl.resolve_output("run-1", "approve") is True
+    th.join(timeout=3.0)
+    assert not th.is_alive(), "B 批了 run 还没醒"
+    assert box["result"]["final_response"] == "B 的回复: 查进度"
+    assert not box["result"].get("failed")
+    assert hermes.rl.snapshot_pending()["outputs"] == [], "放行后表里还留着"
 
-def test_非room_run一个字不动(hermes):
-    """判据不能宽 —— 员工自己在 Companion 里的对话不许被截。"""
+
+def test_B拒绝_run以failed结束_A收到明确原因(hermes):
+    """反面: 拒了不是给 A 一个空 output 让它猜, 是 failed + 说清楚为什么。"""
+    hermes.room(True)
+    th, box = _run_in_thread(hermes, "查进度", "run-2")
+    assert _wait_pending(hermes, "run-2")
+    hermes.rl.resolve_output("run-2", "deny")
+    th.join(timeout=3.0)
+    r = box["result"]
+    assert r["final_response"] == "", "拒了回复还出去了"
+    assert r["failed"] is True
+    assert r["error"] == hermes.rl.OUTBOUND_DECLINED
+
+
+def test_超时当拒绝_不无限占executor线程(hermes, monkeypatch):
+    """B 不在电脑前, run 不能永远挂着。"""
+    monkeypatch.setattr(hermes.rl, "OUTBOUND_APPROVAL_TIMEOUT_SECONDS", 0.3)
+    hermes.room(True)
+    th, box = _run_in_thread(hermes, "x", "run-3")
+    th.join(timeout=3.0)
+    assert not th.is_alive(), "超时了 run 还挂着"
+    assert box["result"]["failed"] is True
+    assert box["result"]["error"] == hermes.rl.OUTBOUND_TIMED_OUT
+    assert hermes.rl.snapshot_pending()["outputs"] == [], "超时后表里还留着"
+
+
+def test_非room_run一个字不动_也不阻塞(hermes):
+    """判据不能宽 —— 员工自己在 Companion 里的对话既不被截也不被挂起。"""
     hermes.room(False)
-    r = hermes.AIAgent().run_conversation("查进度", task_id="run-2")
+    t0 = time.time()
+    r = hermes.AIAgent().run_conversation("查进度", task_id="run-4")
+    assert time.time() - t0 < 0.5, "非 room run 被阻塞了"
     assert r["final_response"] == "B 的回复: 查进度"
+    assert not r.get("failed")
     assert hermes.rl.snapshot_pending()["outputs"] == []
 
 
@@ -140,31 +201,68 @@ def _swap_impl(hermes, fn):
 
     顺序要紧: **先 uninstall 再换**。反过来的话 uninstall 会把 _ORIG 里存的
     fixture 原始 fake 写回去, 换上的实现就丢了 —— 第一版就是这么写的, 结果
-    test_空回复 跑的是 fake, test_原dict 更是"假通过" (fake 返新 dict, 原 dict
-    当然没被改)。
+    两条测试"假通过" (跑的是 fake)。
     """
     hermes.rl.uninstall()
     hermes.AIAgent.run_conversation = fn
     hermes.rl.install()
 
 
-def test_截走不动hermes持有的原dict(hermes):
+def test_拒绝时不动hermes持有的原dict(hermes):
     """浅拷贝再改。hermes 内部可能还引用着那个 dict (usage 统计等)。"""
     hermes.room(True)
     orig_result = {"final_response": "secret", "usage": {"t": 1}}
     _swap_impl(hermes, lambda self, *a, **kw: orig_result)
-    r = hermes.AIAgent().run_conversation("x", task_id="run-3")
-    assert r["final_response"] == ""
-    assert r is not orig_result, "返回了 hermes 的原 dict 而不是拷贝"
+    th, box = _run_in_thread(hermes, "x", "run-5")
+    assert _wait_pending(hermes, "run-5")
+    hermes.rl.resolve_output("run-5", "deny")
+    th.join(timeout=3.0)
+    assert box["result"] is not orig_result, "返回了 hermes 的原 dict 而不是拷贝"
     assert orig_result["final_response"] == "secret", "改到了 hermes 的原 dict"
+    assert "failed" not in orig_result, "failed 标记写进了原 dict"
 
 
-def test_空回复不进待审批表(hermes):
-    """final_response 为空 (模型没说话) 没什么可审的, 别往表里塞空条目。"""
+def test_批准时返回的就是原dict_不多拷一份(hermes):
+    """放行路径原样返回 —— 不需要拷, 也别拷 (usage 等字段 hermes 要用)。"""
+    hermes.room(True)
+    orig_result = {"final_response": "ok", "usage": {"t": 1}}
+    _swap_impl(hermes, lambda self, *a, **kw: orig_result)
+    th, box = _run_in_thread(hermes, "x", "run-6")
+    assert _wait_pending(hermes, "run-6")
+    hermes.rl.resolve_output("run-6", "approve")
+    th.join(timeout=3.0)
+    assert box["result"] is orig_result
+
+
+def test_空回复不挂起(hermes):
+    """final_response 为空 (模型没说话) 没什么可审的, 直接过。"""
     hermes.room(True)
     _swap_impl(hermes, lambda self, *a, **kw: {"final_response": ""})
-    hermes.AIAgent().run_conversation("x", task_id="run-4")
+    t0 = time.time()
+    r = hermes.AIAgent().run_conversation("x", task_id="run-7")
+    assert time.time() - t0 < 0.5
     assert hermes.rl.snapshot_pending()["outputs"] == []
+
+
+def test_resolve不认识的run_id返False(hermes):
+    assert hermes.rl.resolve_output("nope", "approve") is False
+
+
+def test_resolve非法choice抛错(hermes):
+    with pytest.raises(ValueError):
+        hermes.rl.resolve_output("x", "maybe")
+
+
+def test_uninstall叫醒所有挂起的run(hermes):
+    """单测/进程退出时不能留线程挂着等 10 分钟。"""
+    hermes.room(True)
+    th, box = _run_in_thread(hermes, "x", "run-8")
+    assert _wait_pending(hermes, "run-8")
+    hermes.rl.uninstall()
+    th.join(timeout=3.0)
+    assert not th.is_alive(), "uninstall 没叫醒挂起的 run"
+    assert box["result"]["failed"] is True
+    hermes.rl.install()  # fixture teardown 还要 uninstall 一次
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -202,44 +300,55 @@ def test_非room_run的审批原样走hermes(hermes):
 # ─────────────────────────────────────────────────────────────────────
 # 待审批表的生命周期
 # ─────────────────────────────────────────────────────────────────────
-def test_pop之后不再出现(hermes):
-    hermes.room(True)
-    hermes.AIAgent().run_conversation("x", task_id="run-7")
-    assert hermes.rl.pop_output("run-7")["final_response"].startswith("B 的回复")
-    assert hermes.rl.pop_output("run-7") is None
-    assert hermes.rl.snapshot_pending()["outputs"] == []
+def _push_approval(hermes, run_id, command="c"):
+    """往 approvals 表塞一条 (走真实的 P49.3 改道路径)。"""
+    from tools.approval import register_gateway_notify
+    register_gateway_notify(run_id, lambda d: None)
+    hermes.state["notify_cbs"][run_id]({"command": command})
 
 
-def test_超过TTL自动清掉(hermes, monkeypatch):
-    """B 一直不处理不能无限攒。"""
+def test_pop_approval之后不再出现(hermes):
     hermes.room(True)
-    hermes.AIAgent().run_conversation("x", task_id="run-8")
-    assert len(hermes.rl.snapshot_pending()["outputs"]) == 1
-    # 插入用的是真实时钟; 现在把时钟拨到 TTL 之后再看一眼
+    _push_approval(hermes, "run-9")
+    assert hermes.rl.pop_approval("run-9")["command"] == "c"
+    assert hermes.rl.pop_approval("run-9") is None
+    assert hermes.rl.snapshot_pending()["approvals"] == []
+
+
+def test_approvals超过TTL自动清掉(hermes, monkeypatch):
+    """B 一直不处理不能无限攒。(outputs 表由 run 自己收尾, 不靠 TTL。)"""
+    hermes.room(True)
+    _push_approval(hermes, "run-10")
+    assert len(hermes.rl.snapshot_pending()["approvals"]) == 1
     later = time.time() + hermes.rl.PENDING_TTL_SECONDS + 1
     monkeypatch.setattr(hermes.rl.time, "time", lambda: later)
-    assert hermes.rl.snapshot_pending()["outputs"] == []
+    assert hermes.rl.snapshot_pending()["approvals"] == []
 
 
-def test_TTL之内不清(hermes, monkeypatch):
-    """跟上一条配对: 证明 GC 是按 TTL 算的, 不是每次 snapshot 都清空。"""
+def test_approvals_TTL之内不清(hermes, monkeypatch):
+    """跟上一条配对: GC 是按 TTL 算的, 不是每次 snapshot 都清空。"""
     hermes.room(True)
-    hermes.AIAgent().run_conversation("x", task_id="run-8b")
+    _push_approval(hermes, "run-11")
     later = time.time() + hermes.rl.PENDING_TTL_SECONDS - 60
     monkeypatch.setattr(hermes.rl.time, "time", lambda: later)
-    assert len(hermes.rl.snapshot_pending()["outputs"]) == 1
+    assert len(hermes.rl.snapshot_pending()["approvals"]) == 1
 
 
-def test_快照不带内部时间戳(hermes):
-    """_at 是内部字段, 不该透给 Companion。"""
+def test_快照不透内部字段(hermes):
+    """_at / _gate / _decision 是内部字段, 不该透给 Companion —— Event 对象
+    透出去 json 直接炸, 时间戳和决定透出去是多余信息。"""
     hermes.room(True)
-    hermes.AIAgent().run_conversation("x", task_id="run-9")
-    from tools.approval import register_gateway_notify
-    register_gateway_notify("run-9", lambda d: None)
-    hermes.state["notify_cbs"]["run-9"]({"command": "c"})
+    _push_approval(hermes, "run-12")
+    th, _ = _run_in_thread(hermes, "x", "run-13")
+    assert _wait_pending(hermes, "run-13")
     snap = hermes.rl.snapshot_pending()
-    assert "_at" not in snap["outputs"][0]
-    assert "_at" not in snap["approvals"][0]
+    for item in snap["approvals"] + snap["outputs"]:
+        leaked = [k for k in item if k.startswith("_")]
+        assert not leaked, f"透了内部字段: {leaked}"
+    import json
+    json.dumps(snap)  # 能序列化 —— Event 对象混进去这里会炸
+    hermes.rl.resolve_output("run-13", "deny")
+    th.join(timeout=3.0)
 
 
 # ─────────────────────────────────────────────────────────────────────
