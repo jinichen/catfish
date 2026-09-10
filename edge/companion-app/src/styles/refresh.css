@@ -114,6 +114,25 @@ progress {
     var(--shadow-brand),
     inset 0 1px rgba(255, 255, 255, 0.14);
 }
+/* P50 (9/10): 协同 tab 的待点头红点。位置相对 .app-rail__item (它已是定位容器则不动) */
+.app-rail__item {
+  position: relative;
+}
+.app-rail__badge {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--status-error, #dc2626);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+}
 
 /* 底部身份区: 头像加品牌描边环 */
 .app-rail__identity img {

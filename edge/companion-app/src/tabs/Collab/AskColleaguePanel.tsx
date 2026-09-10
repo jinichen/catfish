@@ -3,7 +3,7 @@
  *
  * 填同事邮箱 + 想让对方小鲶做什么 → 投邮筒 → 等对方在自己的 Companion 里点头
  * → 拿到 grant 后直连对方 8642 派工 → 轮询结果。全部状态机在 lib/roomLinkStore,
- * 这里只显示和按钮。
+ * 这里只显示和按钮。放在「协同」tab 左栏 (9/10 鸿波: 塞工作台「今日」区不人性)。
  *
  * 员工看到的每一步都对应对方那边一次人工点头: 同意被找 / 批工具 / 放行回复。
  * 所以状态文案写的是「对方在做什么」, 不是技术阶段名。
@@ -43,7 +43,7 @@ function phaseLabel(o: OutgoingRequest): { text: string; tone: "muted" | "ok" | 
   }
 }
 
-export default function AskColleagueCard() {
+export default function AskColleaguePanel() {
   const { outgoing } = useRoomLink();
   const [to, setTo] = useState("");
   const [text, setText] = useState("");

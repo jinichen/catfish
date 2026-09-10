@@ -16,6 +16,21 @@ vi.mock("./roomLinkInbox", () => ({
   approveInboxRequest: (...a: unknown[]) => approveInboxRequest(...a),
 }));
 
+const p49 = {
+  startRoomLinkPolling: vi.fn(),
+  resolveRoomLinkApproval: vi.fn(),
+  resolveRoomLinkOutput: vi.fn(),
+};
+vi.mock("./roomLink", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./roomLink")>();
+  return {
+    ...real,
+    startRoomLinkPolling: (...a: unknown[]) => p49.startRoomLinkPolling(...a),
+    resolveRoomLinkApproval: (...a: unknown[]) => p49.resolveRoomLinkApproval(...a),
+    resolveRoomLinkOutput: (...a: unknown[]) => p49.resolveRoomLinkOutput(...a),
+  };
+});
+
 const handshake = {
   buildDispatch: vi.fn(),
   dispatchToPeer: vi.fn(),
@@ -42,7 +57,10 @@ import {
   dismissOutgoing,
   getSnapshot,
   GRANT_WAIT_TIMEOUT_MS,
+  pendingCount,
+  resolveApproval,
   resolveInbox,
+  resolveOutput,
   RUN_POLL_INTERVAL_MS,
   sendRequest,
   subscribe,
@@ -51,13 +69,20 @@ import {
 type Handlers = { onRequests: (x: unknown[]) => void; onGrants: (x: unknown[]) => void };
 let handlers: Handlers;
 let stopPolling: ReturnType<typeof vi.fn>;
+let stopPendingPolling: ReturnType<typeof vi.fn>;
+let pushPending: (p: unknown) => void;
 
 beforeEach(() => {
   vi.useFakeTimers();
   stopPolling = vi.fn();
+  stopPendingPolling = vi.fn();
   startMailboxPolling.mockImplementation((onRequests, onGrants) => {
     handlers = { onRequests, onGrants };
     return stopPolling;
+  });
+  p49.startRoomLinkPolling.mockImplementation((onUpdate) => {
+    pushPending = onUpdate;
+    return stopPendingPolling;
   });
   handshake.fetchLocalIdentity.mockResolvedValue({ authority_gateway_id: "install:a", lan_ip: "10.0.0.1" });
   handshake.newRoomLinkRequest.mockImplementation((_self, note: string) => ({
@@ -83,14 +108,38 @@ const grantFrom = (from: string, room_id = "catfish-room-1") => ({
 const flush = () => vi.advanceTimersByTimeAsync(0);
 
 describe("单例轮询", () => {
-  it("两个订阅者只起一个轮询; 最后一个走了才停", () => {
+  it("两个订阅者只起一个轮询 (邮筒 + P49 探针各一); 最后一个走了才停", () => {
     const u1 = subscribe(() => {});
     const u2 = subscribe(() => {});
     expect(startMailboxPolling).toHaveBeenCalledTimes(1);
+    expect(p49.startRoomLinkPolling).toHaveBeenCalledTimes(1);
     u1();
     expect(stopPolling).not.toHaveBeenCalled();
     u2();
     expect(stopPolling).toHaveBeenCalledTimes(1);
+    expect(stopPendingPolling).toHaveBeenCalledTimes(1);
+  });
+
+  it("pendingCount = 同事请求 + 工具审批 + 出站回复; 探针不可用不算", () => {
+    subscribe(() => {});
+    expect(pendingCount()).toBe(0);
+    handlers.onRequests([{ id: 1, from: "a@x", received_at: "t", request: { note: "n" } }]);
+    pushPending({ available: true, approvals: [{ run_id: "r1" }], outputs: [{ run_id: "r2", final_response: "x" }, { run_id: "r3", final_response: "y" }] });
+    expect(pendingCount()).toBe(4);
+    pushPending({ available: false, approvals: [], outputs: [] });
+    expect(pendingCount()).toBe(1);
+  });
+
+  it("resolveApproval / resolveOutput 拍完立刻从本地摘掉, 不等下一轮探针", async () => {
+    subscribe(() => {});
+    pushPending({ available: true, approvals: [{ run_id: "r1" }], outputs: [{ run_id: "r2", final_response: "x" }] });
+    p49.resolveRoomLinkApproval.mockResolvedValue(undefined);
+    await resolveApproval({ run_id: "r1" }, "once");
+    expect(p49.resolveRoomLinkApproval).toHaveBeenCalledWith("r1", "once");
+    expect(getSnapshot().pending?.approvals).toEqual([]);
+    p49.resolveRoomLinkOutput.mockResolvedValue({ ok: false, gone: true });
+    expect(await resolveOutput({ run_id: "r2", final_response: "x" }, "approve")).toMatchObject({ gone: true });
+    expect(getSnapshot().pending?.outputs).toEqual([]);
   });
 
   it("request 进 inbox, 同 id 去重; resolveInbox approve 走 approveInboxRequest 后移除", async () => {

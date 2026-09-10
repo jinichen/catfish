@@ -32,6 +32,7 @@ import { fetchUrgentEmailStarter } from "./lib/briefing";
 const DashboardTab = lazy(() => import("./tabs/Dashboard/DashboardTab"));
 const EmailTab = lazy(() => import("./tabs/Email/EmailTab"));
 const WikiTab = lazy(() => import("./tabs/Wiki/WikiTab"));
+const CollabTab = lazy(() => import("./tabs/Collab/CollabTab"));  // P50 (9/10): 横向协同
 
 export default function App() {
   const activeTab = useUIStore((s) => s.activeTab);
@@ -264,6 +265,7 @@ function AppShell({ activeTab }: { activeTab: string }) {
             {activeTab === "dashboard" && <DashboardTab />}
             {activeTab === "email" && <EmailTab />}
             {activeTab === "wiki" && <WikiTab />}
+            {activeTab === "collab" && <CollabTab />}
           </Suspense>
         </main>
       </div>

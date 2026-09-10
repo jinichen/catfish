@@ -36,6 +36,15 @@ import {
   type InboxGrant,
   type InboxRequest,
 } from "./roomLinkInbox";
+import {
+  hasPending,
+  resolveRoomLinkApproval,
+  resolveRoomLinkOutput,
+  startRoomLinkPolling,
+  type RoomLinkApproval,
+  type RoomLinkOutput,
+  type RoomLinkPending,
+} from "./roomLink";
 
 export type OutgoingPhase = "waiting_grant" | "dispatching" | "running" | "done" | "failed";
 
@@ -52,17 +61,23 @@ export interface OutgoingRequest {
 }
 
 export interface RoomLinkState {
+  /** 同事发来的「能不能让你的小鲶帮忙」(邮筒 request)。 */
   inbox: InboxRequest[];
+  /** 我发出去的请求。 */
   outgoing: OutgoingRequest[];
+  /** P49: 本机 hermes 里挂着等我点头的工具调用 / 出站回复。null = 还没探过。 */
+  pending: RoomLinkPending | null;
 }
 
 /** 等 grant 的上限 = 邮筒 TTL。过了对方就算同意, 信也已经被中央清掉了。 */
 export const GRANT_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
 export const RUN_POLL_INTERVAL_MS = 3_000;
 
-let state: RoomLinkState = { inbox: [], outgoing: [] };
+const EMPTY: RoomLinkState = { inbox: [], outgoing: [], pending: null };
+let state: RoomLinkState = EMPTY;
 const listeners = new Set<() => void>();
 let stopPolling: (() => void) | null = null;
+let stopPendingPolling: (() => void) | null = null;
 const runPollers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function emit(next: RoomLinkState) {
@@ -153,13 +168,24 @@ export function subscribe(cb: () => void): () => void {
       (items) => { expireStale(Date.now()); onGrants(items); },
     );
   }
+  if (!stopPendingPolling) {
+    stopPendingPolling = startRoomLinkPolling((pending) => emit({ ...state, pending }));
+  }
   return () => {
     listeners.delete(cb);
-    if (listeners.size === 0 && stopPolling) {
-      stopPolling();
+    if (listeners.size === 0) {
+      stopPolling?.();
       stopPolling = null;
+      stopPendingPolling?.();
+      stopPendingPolling = null;
     }
   };
+}
+
+/** 导航红点用: 等我点头的总数 = 同事请求 + 工具审批 + 出站回复。 */
+export function pendingCount(s: RoomLinkState = state): number {
+  const p = s.pending && hasPending(s.pending) ? s.pending : null;
+  return s.inbox.length + (p ? p.approvals.length + p.outputs.length : 0);
 }
 
 export const getSnapshot = (): RoomLinkState => state;
@@ -197,12 +223,35 @@ export async function resolveInbox(item: InboxRequest, choice: "approve" | "deny
   emit({ ...state, inbox: state.inbox.filter((x) => x.id !== item.id) });
 }
 
+/** P49 工具审批: 只给 once / deny, 拍完先从本地列表摘掉 (不等下一轮 3s 轮询)。 */
+export async function resolveApproval(a: RoomLinkApproval, choice: "once" | "deny"): Promise<void> {
+  await resolveRoomLinkApproval(a.run_id, choice);
+  dropPending("approvals", a.run_id);
+}
+
+/** P49 出站回复。返 gone = hermes 那边已超时收尾, 不算错但要告诉员工。 */
+export async function resolveOutput(o: RoomLinkOutput, choice: "approve" | "deny"): Promise<{ gone: boolean }> {
+  const r = await resolveRoomLinkOutput(o.run_id, choice);
+  dropPending("outputs", o.run_id);
+  return r;
+}
+
+function dropPending(kind: "approvals" | "outputs", runId: string) {
+  if (!state.pending) return;
+  emit({
+    ...state,
+    pending: { ...state.pending, [kind]: state.pending[kind].filter((x) => x.run_id !== runId) },
+  });
+}
+
 /** 测试用: 清空。 */
 export function _resetForTest(): void {
   for (const t of runPollers.values()) clearTimeout(t);
   runPollers.clear();
-  if (stopPolling) stopPolling();
+  stopPolling?.();
   stopPolling = null;
+  stopPendingPolling?.();
+  stopPendingPolling = null;
   listeners.clear();
-  state = { inbox: [], outgoing: [] };
+  state = EMPTY;
 }

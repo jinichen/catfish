@@ -5,50 +5,34 @@
  * 弹的审批一样) 和出站回复 (我的本地数据要发回给 A)。逻辑全在
  * lib/roomLink.ts, 这里只管显示和按钮。
  *
- * 没有待审批时 **不渲染** (return null): 这个 Card 只在真有跨机器协作时才
- * 有意义, 平时不该占工作台一格。
+ * 9/10 挪进「协同」tab 右栏, 空态显示说明而不是隐藏 —— 员工得知道这一栏是干嘛的。
  */
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
-import {
-  hasPending,
-  resolveRoomLinkApproval,
-  resolveRoomLinkOutput,
-  startRoomLinkPolling,
-  type RoomLinkApproval,
-  type RoomLinkOutput,
-  type RoomLinkPending,
-} from "../../lib/roomLink";
+import type { RoomLinkApproval, RoomLinkOutput } from "../../lib/roomLink";
 import type { InboxRequest } from "../../lib/roomLinkInbox";
-import { resolveInbox, useRoomLink } from "../../lib/roomLinkStore";
+import {
+  pendingCount,
+  resolveApproval,
+  resolveInbox,
+  resolveOutput,
+  useRoomLink,
+} from "../../lib/roomLinkStore";
 import { Btn, cardStyle, ErrorLine, itemStyle } from "./roomLinkUi";
 
-export default function RoomLinkPendingCard() {
-  const [pending, setPending] = useState<RoomLinkPending | null>(null);
+export default function PendingPanel() {
   const [busy, setBusy] = useState<string | null>(null); // run_id 正在处理
   const [error, setError] = useState<string | null>(null);
-  // P50: 同事发来的「能不能让你的小鲶帮忙」。邮筒轮询在 roomLinkStore 单例里
-  // (取走即清空, 只能有一个轮询者), 这里只订阅。
-  const { inbox } = useRoomLink();
-
-  useEffect(() => startRoomLinkPolling(setPending), []);
-
+  // 三类都从 roomLinkStore 来 (邮筒 + P49 探针都只在那里轮询一次), 这里只订阅。
+  const state = useRoomLink();
+  const { inbox, pending } = state;
   const hasInbox = inbox.length > 0;
-  if (!hasInbox && (!pending || !hasPending(pending))) return null;
-
-  // 点了按钮先从本地列表里摘掉, 不等下一轮轮询 —— 不然按钮点完 3 秒内还在,
-  // 员工会以为没生效再点一次。
-  const dropLocal = (kind: "approvals" | "outputs", runId: string) =>
-    setPending((p) =>
-      p ? { ...p, [kind]: p[kind].filter((x) => x.run_id !== runId) } : p,
-    );
 
   async function onApproval(a: RoomLinkApproval, choice: "once" | "deny") {
     setBusy(a.run_id);
     setError(null);
     try {
-      await resolveRoomLinkApproval(a.run_id, choice);
-      dropLocal("approvals", a.run_id);
+      await resolveApproval(a, choice);
     } catch (e) {
       setError(`工具审批失败: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
@@ -60,9 +44,8 @@ export default function RoomLinkPendingCard() {
     setBusy(o.run_id);
     setError(null);
     try {
-      const r = await resolveRoomLinkOutput(o.run_id, choice);
       // gone = 已经超时被 hermes 自己收尾了, 列表里摘掉就行, 不算错
-      dropLocal("outputs", o.run_id);
+      const r = await resolveOutput(o, choice);
       if (r.gone) setError("这条已超时 (10 分钟没处理), 对方会收到「未放行」。");
     } catch (e) {
       setError(`出站审批失败: ${e instanceof Error ? e.message : String(e)}`);
@@ -85,18 +68,25 @@ export default function RoomLinkPendingCard() {
     }
   }
 
-  const total = inbox.length + (pending?.approvals.length ?? 0) + (pending?.outputs.length ?? 0);
+  const total = pendingCount(state);
 
   return (
     <div style={cardStyle}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>
-          🤝 同事的小鲶在等你点头
+          等我点头
         </h3>
         <span style={{ fontSize: "var(--text-xs)", color: "var(--catfish-text-muted)" }}>
-          {total} 条待处理
+          {total > 0 ? `${total} 条待处理` : "暂无"}
         </span>
       </div>
+
+      {total === 0 && (
+        <div style={{ fontSize: "var(--text-sm)", color: "var(--catfish-text-muted)" }}>
+          同事想借用你的小鲶、或对方的小鲶要在你机器上跑工具、要把回复发回去时, 都会在这里等你点头。
+          不点头就什么都不会发生。
+        </div>
+      )}
 
       {error && <ErrorLine>{error}</ErrorLine>}
 

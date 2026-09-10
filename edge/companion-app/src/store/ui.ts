@@ -15,7 +15,8 @@ export interface PendingEmailChat {
 //   开窗一眼看今日 (邮件 / 日历 / 工作计划 / 建议). 跟 Dashboard 解耦免跟"我的画像 /
 //   服务"等系统信息混淆.
 // BL-CATFISH-WIKI-MODE P3.3 (6/4): "知识体系" tab — 3 列 wiki UI (tree/preview/sigma)
-export type TabId = "chat" | "console" | "dashboard" | "email" | "briefing" | "wiki";
+// P50 (9/10): "collab" 协同 tab — 请同事的小鲶帮忙 / 等我点头. 鸿波: 塞工作台「今日」区不人性.
+export type TabId = "chat" | "console" | "dashboard" | "email" | "briefing" | "wiki" | "collab";
 
 interface UIState {
   activeTab: TabId;
