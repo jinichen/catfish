@@ -83,6 +83,7 @@ pub mod profile; // BL-ADVISOR-PROFILE (5/21 Phase 7): 员工职级 + 画像自�
 pub mod recmode; // P3.5.45 (6/20 鸿波): 录屏 Tauri command 直调 tool-bridge sock, 砍 gateway HTTP path  // BL-PROACTIVE-DECOUPLE (5/26): journal_tail + last_model 给 /api/proactive/* header 透传
 pub mod recordings; // BL-RECMODE-DASHBOARD-UI (#75, 5/25): 我的录屏 inventory / show in Finder / delete
 pub mod relation;
+pub mod room_link; // P50 (9/10): 横向协同 —— 本机 install_id + 内网地址
 pub mod session_goal; // BL-BRIEFING-GOAL-INPUT (5/20): /goal UI 路径
 pub mod session_write;
 pub mod sessions;
