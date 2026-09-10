@@ -108,12 +108,24 @@ _PATCH_TARGETS = [
     ("gateway.platforms.weixin", "_api_get", "func"),
     ("gateway.platforms.weixin", "save_weixin_account", "func"),
     ("hermes_constants", "get_hermes_home", "func"),
+    # P49 (9/10): 横向协同 RoomLink 三个补丁的目标 — 见 plugin_room_link.py。
+    # 任一改名 → 那一个 patch 静默失效 → 对应的红线漏洞 (A 拿到 approve 权限 /
+    # B 的回复未经审批出端 / B 的工具审批推给 A)。三个都必须 fail-loud。
+    # run_conversation 是 AIAgent 方法, 走下面 _AIAGENT_METHOD_TARGETS。
+    ("gateway.hosted_room_peer", "issue_room_grant", "func"),
+    ("gateway.hosted_room_execution_policy", "current_room_execution_policy", "func"),
+    ("tools.approval", "register_gateway_notify", "func"),
 ]
 
 
 _AIAGENT_METHOD_TARGETS = [
     "_current_main_runtime",
     "_apply_client_headers_for_base_url",
+    # P49.2: room run 的 final_response 在这里截走 — 见 plugin_room_link.py。
+    # 它是 forwarder (run_agent.py:8690 → conversation_loop.run_conversation),
+    # patch 方法而不是模块函数, 因为 api_server_runs.py:820 调的是
+    # agent.run_conversation(...)。
+    "run_conversation",
 ]
 
 

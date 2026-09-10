@@ -175,6 +175,8 @@ plugin_core_tools = _import_sibling("plugin_core_tools")
 _patch_p43_promote_catfish_core_tools = plugin_core_tools._patch_p43_promote_catfish_core_tools  # noqa: F401  (re-export · 见 plugin_core_tools.py)
 plugin_deferred_tool_guard = _import_sibling("plugin_deferred_tool_guard")
 _install_p45_deferred_tool_guard = plugin_deferred_tool_guard.install  # noqa: F401  (re-export · 见 plugin_deferred_tool_guard.py)
+plugin_room_link = _import_sibling("plugin_room_link")
+_install_p49_room_link = plugin_room_link.install  # noqa: F401  (re-export · 见 plugin_room_link.py)
 plugin_wechat_qr = _import_sibling("plugin_wechat_qr")
 _WECHAT_QR_SESSION_TTL = plugin_wechat_qr._WECHAT_QR_SESSION_TTL  # noqa: F401  (re-export · 见 plugin_wechat_qr.py)
 _wechat_qr_sessions = plugin_wechat_qr._wechat_qr_sessions  # noqa: F401  (re-export · 8/13 从这边搬过去, 注意是同一个 dict 对象)
@@ -421,6 +423,11 @@ def _apply_patches() -> None:
     # 改名是就地改, 落库前发生, 所以事后看记录像"模型自己调错了"。
     # 详见 plugin_deferred_tool_guard.py 模块 docstring。
     _try_patch(_install_p45_deferred_tool_guard, "P45: 被 defer 工具的改名守卫装载失败 (跳过, 不阻塞 hermes 启动): %s")
+
+    # P49 (9/10 鸿波「只做横向」): 跨机器协同 (RoomLink) 的三个红线补丁 ——
+    # A 拿不到 approve 权限 / B 的回复出站前要 B 点头 / B 机器上的工具审批
+    # 不推给 A。三个一起装, 少一个就留洞, 见 plugin_room_link.install 的说明。
+    _try_patch(_install_p49_room_link, "P49: 横向协同 RoomLink 补丁装载失败 (跳过, 不阻塞 hermes 启动; 但跨机器协作此时**不安全**, 别开 bot_peers): %s")
 
     # P23 (P3.5.79 6/23 鸿波): inbound message 路径 (微信/Discord/Slack/Telegram)
     # picker 联动 — 修 catfish picker 联动 sprint 漏 cover 的最后一个 platform.

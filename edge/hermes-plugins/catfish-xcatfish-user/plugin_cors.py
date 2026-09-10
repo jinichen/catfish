@@ -376,6 +376,16 @@ def _patch_p8_p9_cors() -> None:
                     # 进度显示挂了是体验降级, 不是隐私漏洞 —— 不 fail loud。
                     # (P1-P11 那些错位会跨员工串数据, 那才必须让 hermes 起不来。)
                     logger.warning("P44 activity_probe 路由注册失败: %s", e)
+                # ── P49 (9/10 鸿波): 横向协同待审批出口 ──
+                # GET  /api/catfish/room-link/pending          B 的 Companion 读
+                # DELETE /api/catfish/room-link/outputs/{id}    发完/拒了清掉
+                # 跟 P44 同一个 fence。路由挂不上只是 B 看不到待审批 —— 三个
+                # patch 本身 (plugin.py 走 _try_patch) 照样生效, 红线不漏。
+                try:
+                    from . import plugin_room_link  # noqa: PLC0415
+                    plugin_room_link.register_routes(self.router)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("P49 room-link 路由注册失败: %s", e)
                 # ── P30 (P3.5.198 7/8 鸿波): wechat qr_login start/poll ──
                 #
                 # 跟 P26 同时机注册 (router 未 freeze), handler 走 P7 stashed

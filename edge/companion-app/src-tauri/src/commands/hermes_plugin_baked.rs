@@ -115,6 +115,9 @@ const BAKED_PLUGIN_VERIFY: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_verify.py");
 const BAKED_PRIVATE_AUXILIARY_GUARD: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/private_auxiliary_guard.py");
+// 9/10 P49: 横向协同 RoomLink 三个红线补丁 (见 plugin_room_link.py 文件头)
+const BAKED_PLUGIN_ROOM_LINK: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_room_link.py");
 
 /// Plugin 的全部文件 (filename, baked content).
 ///
@@ -152,4 +155,5 @@ pub(crate) const BAKED_FILES: &[(&str, &str)] = &[
     ("plugin_session.py", BAKED_PLUGIN_SESSION),
     ("plugin_verify.py", BAKED_PLUGIN_VERIFY),
     ("private_auxiliary_guard.py", BAKED_PRIVATE_AUXILIARY_GUARD),
+    ("plugin_room_link.py", BAKED_PLUGIN_ROOM_LINK),
 ];

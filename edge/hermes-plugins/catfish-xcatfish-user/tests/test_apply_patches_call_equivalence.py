@@ -104,6 +104,38 @@ INTENTIONALLY_ADDED: dict[str, str] = {
         "      仍是方法内晚绑定 import」这条 —— 上游改成顶部 import 的话\n"
         "      monkeypatch 会静默失效，那一条会当场变红。"
     ),
+    "_install_p49_room_link": (
+        "9/10 加。横向协同 (员工 A 的小鲶让员工 B 的小鲶干活) 走 hermes 0.21 的\n"
+        "  hosted room。hermes 的信任模型是「持有 key = 完全信任」，三处撞红线，\n"
+        "  三个 patch 一起装 (任一失败整体不装，少一个就留洞):\n"
+        "  P49.1 issue_room_grant: 邀请时 permissions 默认四个全给，A 能批准 B 机器\n"
+        "        上的 execute_code。改成没显式传就只给 dispatch+status。刷新路径\n"
+        "        显式传 claims[permissions] 原样继承，不会放大回去。\n"
+        "  P49.2 AIAgent.run_conversation: room run 的 final_response 直接进\n"
+        "        run.completed 推给 A —— B 的本地数据出端，审批只在工具调用不在\n"
+        "        回复出站。截走进待审批表，B 在 Companion 点了才由 Companion 发\n"
+        "        进房间 (跟 catfish_email_create_draft 同一形状)。截点必须在\n"
+        "        run_conversation 返回处: api_server_runs.py:909 推 SSE 在 910\n"
+        "        _set_run_status 之前，后者上拦已经出端。\n"
+        "  P49.3 register_gateway_notify: B 机器上的工具审批推进 run 的 SSE，poll\n"
+        "        那条 SSE 的是 A —— 审批方反了，且 event 带 B 要跑的 command。\n"
+        "        room run 的 cb 换成只存不推，B 走 P15.2 的 /v1/sessions/{sid}\n"
+        "        /approval 批 (session_key 就是 run_id，api_server_runs.py:613)。\n"
+        "  判据统一 current_room_execution_policy() is not None —— hermes 自己在\n"
+        "      api_server_runs.py:813 绑的 contextvar，三个 patch 点上都绑着。\n"
+        "  影响面: 只碰 room run。非 room run (Companion 本人对话 / cron / 微信)\n"
+        "      三个 patch 都直接放行，有成对测试钉着。\n"
+        "  跟已有闸的关系: P15 patch 的是 _run_agent，/v1/runs 不走它 (:816 注释\n"
+        "      明说 no _run_agent)，所以 P49.2 是新 seam 不是 P15 的延伸；P49.3 跟\n"
+        "      P15 共用 _gateway_notify_cbs 但判据不同 (room vs chat)，不冲突。\n"
+        "  副作用: P49.1 也影响 tui_gateway/methods_groups.py:311 (hermes 桌面自己\n"
+        "      的房间邀请)，同样没显式传 permissions。Companion 不走 TUI，且方向\n"
+        "      是限权，可接受。\n"
+        "  升级: 三个目标进 plugin_verify._PATCH_TARGETS / _AIAGENT_METHOD_TARGETS。\n"
+        "      issue_room_grant 的 permissions 子集能力上游本来就有 (hosted_room_\n"
+        "      peer.py:739-746)，只是 handler 没暴露 —— 值得提 PR，接了 P49.1 就不\n"
+        "      需要了。"
+    ),
 }
 
 INTENTIONALLY_REMOVED: dict[str, str] = {
