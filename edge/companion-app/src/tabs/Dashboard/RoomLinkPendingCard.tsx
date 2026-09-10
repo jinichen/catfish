@@ -19,15 +19,38 @@ import {
   type RoomLinkOutput,
   type RoomLinkPending,
 } from "../../lib/roomLink";
+import {
+  approveInboxRequest,
+  startMailboxPolling,
+  type InboxRequest,
+} from "../../lib/roomLinkInbox";
 
 export default function RoomLinkPendingCard() {
   const [pending, setPending] = useState<RoomLinkPending | null>(null);
   const [busy, setBusy] = useState<string | null>(null); // run_id 正在处理
   const [error, setError] = useState<string | null>(null);
+  // P50: 同事发来的「能不能让你的小鲶帮忙」。邮筒取走即清空, 所以攥在 state 里
+  // 直到员工处理; 同一封 (同 id) 不重复入列。
+  const [inbox, setInbox] = useState<InboxRequest[]>([]);
 
   useEffect(() => startRoomLinkPolling(setPending), []);
+  useEffect(
+    () =>
+      startMailboxPolling(
+        (items) =>
+          setInbox((cur) => {
+            const seen = new Set(cur.map((x) => x.id));
+            return [...cur, ...items.filter((x) => !seen.has(x.id))];
+          }),
+        () => {
+          /* grant 是回给发起方那半边, 第 2 步接 UI */
+        },
+      ),
+    [],
+  );
 
-  if (!pending || !hasPending(pending)) return null;
+  const hasInbox = inbox.length > 0;
+  if (!hasInbox && (!pending || !hasPending(pending))) return null;
 
   // 点了按钮先从本地列表里摘掉, 不等下一轮轮询 —— 不然按钮点完 3 秒内还在,
   // 员工会以为没生效再点一次。
@@ -64,7 +87,22 @@ export default function RoomLinkPendingCard() {
     }
   }
 
-  const total = pending.approvals.length + pending.outputs.length;
+  async function onInbox(item: InboxRequest, choice: "approve" | "deny") {
+    const key = `inbox-${item.id}`;
+    setBusy(key);
+    setError(null);
+    try {
+      if (choice === "approve") await approveInboxRequest(item);
+      // 拒绝 = 本地丢掉不回信, 对方等超时
+      setInbox((cur) => cur.filter((x) => x.id !== item.id));
+    } catch (e) {
+      setError(`回复同事失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const total = inbox.length + (pending?.approvals.length ?? 0) + (pending?.outputs.length ?? 0);
 
   return (
     <div
@@ -103,7 +141,29 @@ export default function RoomLinkPendingCard() {
         </div>
       )}
 
-      {pending.approvals.length > 0 && (
+      {hasInbox && (
+        <Section
+          title="同事想让你的小鲶帮忙"
+          hint="同意只是允许对方来找你的小鲶。之后每个工具、每条发回去的回复, 都还会在这里再问你一次。一小时后自动失效。"
+        >
+          {inbox.map((item) => (
+            <Item key={item.id} busy={busy === `inbox-${item.id}`}>
+              <div style={{ fontSize: "var(--text-sm)" }}>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>{item.from}</div>
+                <div style={{ whiteSpace: "pre-wrap" }}>{item.request.note}</div>
+              </div>
+              <Buttons
+                busy={busy === `inbox-${item.id}`}
+                onYes={() => onInbox(item, "approve")}
+                onNo={() => onInbox(item, "deny")}
+                yes="同意, 可以来找我"
+              />
+            </Item>
+          ))}
+        </Section>
+      )}
+
+      {pending && pending.approvals.length > 0 && (
         <Section title="要在你机器上跑的工具" hint="跟你自己对话时弹的审批是同一回事, 只是发起的是同事的小鲶。">
           {pending.approvals.map((a) => (
             <Item key={a.run_id} busy={busy === a.run_id}>
@@ -136,7 +196,7 @@ export default function RoomLinkPendingCard() {
         </Section>
       )}
 
-      {pending.outputs.length > 0 && (
+      {pending && pending.outputs.length > 0 && (
         <Section title="要发回给同事的回复" hint="这是你小鲶起草的、会离开你机器的内容。放行才发, 拒绝对方会收到「未放行」。">
           {pending.outputs.map((o) => (
             <Item key={o.run_id} busy={busy === o.run_id}>
