@@ -51,8 +51,32 @@ def _connect() -> sqlite3.Connection:
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(due_date_iso)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source, source_id)")
+    # 9/10: 库级元数据 (目前只有一项: 上次成功导入 Reminders 的时间)
+    conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
     conn.commit()
     return conn
+
+
+_META_REMINDERS_IMPORTED_AT = "reminders_imported_at"
+
+
+def _meta_get_float(key: str) -> float | None:
+    with _connect() as conn:
+        row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    try:
+        return float(row["value"]) if row else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _meta_set(key: str, value: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        conn.commit()
 
 
 def _now() -> float:
@@ -290,11 +314,26 @@ def tool_sync_tasks_to_reminders(args: dict[str, Any]) -> dict[str, Any]:
 # Reminders 只是投影, 投影慢不该让真源读不出来。
 REMINDERS_IMPORT_TIMEOUT_SEC = 12.0
 
+# 两次导入之间的最短间隔。Reminders 的 AppleScript 桥每批属性 ~0.9s/50 条
+# (9/10 逐句实测), 全量导一次 ≈ 5.5s, 而 list_tasks 一天被调几十次 (早安页
+# 每轮刷新 + 对话里模型调用)。每次读都导 = 每次读都等 5 秒起。改成: 距上次
+# 成功导入不到这个间隔就直接读本地库; 早安页一轮刷新 (~80 分钟一次) 最多导一次。
+REMINDERS_IMPORT_MIN_INTERVAL_SEC = 5 * 60
+
+
+def _reminders_import_due(now: float) -> bool:
+    last = _meta_get_float(_META_REMINDERS_IMPORTED_AT)
+    return last is None or now - last >= REMINDERS_IMPORT_MIN_INTERVAL_SEC
+
 
 def tool_list_tasks(args: dict[str, Any]) -> dict[str, Any]:
-    """读取任务库；macOS 每次读取前把 Reminders 快照导入 (幂等 upsert)，避免迁移丢数据。"""
+    """读取任务库；macOS 上先把 Reminders 快照导入 (幂等 upsert, 按间隔节流)。
+
+    args.force_sync=true 跳过节流 (员工刚在 Reminders.app 里改了东西, 想马上看到)。
+    """
     sync_warning = None
-    if platform.system() == "Darwin":
+    now = _now()
+    if platform.system() == "Darwin" and (bool(args.get("force_sync")) or _reminders_import_due(now)):
         from . import reminders  # noqa: PLC0415
         snapshot = reminders.tool_list_reminders(
             {"scope": "all", "include_completed": True, "limit": 500},
@@ -302,6 +341,7 @@ def tool_list_tasks(args: dict[str, Any]) -> dict[str, Any]:
         )
         if snapshot.get("ok"):
             upsert_reminders(snapshot.get("reminders", []))
+            _meta_set(_META_REMINDERS_IMPORTED_AT, repr(now))
         else:
             sync_warning = snapshot.get("error") or "Reminders 导入失败"
     result = list_tasks(args)

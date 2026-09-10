@@ -220,3 +220,73 @@ def test_sync_tasks_to_reminders_is_idempotent(tmp_path, monkeypatch):
     assert first["created"] == ["action-sync"]
     assert second["created"] == []
     create.assert_called_once()
+
+
+# ── 9/10: Reminders 导入节流 (早安页「RPC tools/dispatch 超时」真因的后半) ──
+
+def _fake_reminders(monkeypatch, ok: bool):
+    """替换真 reminders.tool_list_reminders (from . import 走包属性, 换 sys.modules 不生效)。"""
+    from unittest.mock import MagicMock
+
+    from catfish_tool_bridge import reminders
+
+    m = MagicMock()
+    m.tool_list_reminders.return_value = (
+        {"ok": True, "reminders": [{"id": "r1", "title": "来自提醒事项", "completed": False}]}
+        if ok else {"ok": False, "error": "osascript 超 12.0s"}
+    )
+    monkeypatch.setattr(reminders, "tool_list_reminders", m.tool_list_reminders)
+    return m
+
+
+def test_import_throttled_within_interval(tmp_path, monkeypatch):
+    """5 分钟内第二次读不再碰 Reminders —— 每次读都导 = 每次读都等 5 秒起。"""
+    monkeypatch.setenv("CATFISH_TASK_LIBRARY_PATH", str(tmp_path / "tasks.db"))
+    monkeypatch.setattr(task_library.platform, "system", lambda: "Darwin")
+    fake = _fake_reminders(monkeypatch, ok=True)
+    clock = {"t": 1_000_000.0}
+    monkeypatch.setattr(task_library, "_now", lambda: clock["t"])
+
+    r1 = task_library.tool_list_tasks({"scope": "all"})
+    assert fake.tool_list_reminders.call_count == 1
+    assert [t["title"] for t in r1["tasks"]] == ["来自提醒事项"], "第一次要导进来"
+
+    clock["t"] += task_library.REMINDERS_IMPORT_MIN_INTERVAL_SEC - 1
+    task_library.tool_list_tasks({"scope": "all"})
+    assert fake.tool_list_reminders.call_count == 1, "间隔内不许再导"
+
+    clock["t"] += 2
+    task_library.tool_list_tasks({"scope": "all"})
+    assert fake.tool_list_reminders.call_count == 2, "过了间隔要再导"
+
+
+def test_force_sync_bypasses_throttle(tmp_path, monkeypatch):
+    monkeypatch.setenv("CATFISH_TASK_LIBRARY_PATH", str(tmp_path / "tasks.db"))
+    monkeypatch.setattr(task_library.platform, "system", lambda: "Darwin")
+    fake = _fake_reminders(monkeypatch, ok=True)
+    monkeypatch.setattr(task_library, "_now", lambda: 1_000_000.0)
+
+    task_library.tool_list_tasks({"scope": "all"})
+    task_library.tool_list_tasks({"scope": "all", "force_sync": True})
+    assert fake.tool_list_reminders.call_count == 2
+
+
+def test_failed_import_does_not_arm_throttle(tmp_path, monkeypatch):
+    """导入失败 (超时) 不能记成"刚导过", 否则接下来 5 分钟都拿不到 Reminders。"""
+    monkeypatch.setenv("CATFISH_TASK_LIBRARY_PATH", str(tmp_path / "tasks.db"))
+    monkeypatch.setattr(task_library.platform, "system", lambda: "Darwin")
+    fake = _fake_reminders(monkeypatch, ok=False)
+    monkeypatch.setattr(task_library, "_now", lambda: 1_000_000.0)
+
+    r = task_library.tool_list_tasks({"scope": "all"})
+    assert r["ok"] is True and "超" in r["sync_warning"]
+    task_library.tool_list_tasks({"scope": "all"})
+    assert fake.tool_list_reminders.call_count == 2
+
+
+def test_non_macos_never_imports(tmp_path, monkeypatch):
+    monkeypatch.setenv("CATFISH_TASK_LIBRARY_PATH", str(tmp_path / "tasks.db"))
+    monkeypatch.setattr(task_library.platform, "system", lambda: "Windows")
+    fake = _fake_reminders(monkeypatch, ok=True)
+    task_library.tool_list_tasks({"scope": "all", "force_sync": True})
+    assert fake.tool_list_reminders.call_count == 0

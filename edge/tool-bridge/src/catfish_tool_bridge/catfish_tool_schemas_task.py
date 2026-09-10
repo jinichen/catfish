@@ -369,6 +369,10 @@ TASK_TOOLS: List[Dict[str, Any]] = [
                     "default": 100,
                     "description": "最多返回多少条，默认 100",
                 },
+                "force_sync": {
+                    "type": "boolean",
+                    "description": "macOS: 跳过 5 分钟节流, 立刻重新导入 Reminders (员工刚在提醒事项里改了东西时用). 默认 false.",
+                },
             },
             "required": [],
         },
