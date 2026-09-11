@@ -74,5 +74,6 @@ function matchedInLabel(value: string): string {
   if (value === "body") return "正文";
   if (value === "tags") return "标签";
   if (value === "semantic") return "含义";
+  if (value === "graph-1hop") return "关联实体";
   return value;
 }

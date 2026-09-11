@@ -2482,6 +2482,19 @@ button {
 .wiki-tree__advanced > summary:hover { color: var(--catfish-cyan); }
 .wiki-tree__advanced-body { padding: 8px 0 2px; }
 .wiki-tree__advanced-label { display: block; margin: 0 0 6px; color: var(--catfish-text-muted); font-size: 13px; }
+.wiki-tree__graph-status {
+  margin: 8px 0 10px;
+  padding: 7px 9px;
+  border: 1px solid var(--catfish-border);
+  border-radius: var(--radius-sm);
+  color: var(--catfish-text-muted);
+  font-size: 12px;
+}
+.wiki-tree__graph-status summary { cursor: pointer; list-style: none; }
+.wiki-tree__graph-status summary::-webkit-details-marker { display: none; }
+.wiki-tree__graph-status summary:hover { color: var(--catfish-cyan); }
+.wiki-tree__graph-status-body { margin-top: 6px; line-height: 1.5; }
+.wiki-tree__graph-status-item { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wiki-tree__quick-filter {
   width: 100%;
   min-height: 38px;

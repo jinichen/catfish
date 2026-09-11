@@ -95,6 +95,7 @@ export interface WikiSemanticHit {
   kind: string;
   score: number;
   snippet: string;
+  matched_in?: string[];
 }
 export interface WikiSemanticResult {
   hits: WikiSemanticHit[];
@@ -105,6 +106,26 @@ export interface WikiSemanticResult {
 
 export const wikiSearchSemantic = (query: string, topK?: number) =>
   rawInvoke<WikiSemanticResult>("wiki_search_semantic", { query, topK });
+
+export interface WikiGraphUnresolved {
+  sourcePath: string;
+  sourceName: string;
+  reason: string;
+  candidates: string[];
+}
+
+export interface WikiGraphStatus {
+  nodeCount: number;
+  edgeCount: number;
+  unresolvedCount: number;
+  lastSyncAt: string | null;
+  changedFiles: number;
+  syncMode: string;
+  unresolvedSamples: WikiGraphUnresolved[];
+}
+
+export const wikiGraphStatus = () =>
+  rawInvoke<WikiGraphStatus>("wiki_graph_status");
 
 export const wikiListFiles = () => rawInvoke<WikiFileInfo[]>("wiki_list_files");
 export const wikiReadFile = (relPath: string) =>

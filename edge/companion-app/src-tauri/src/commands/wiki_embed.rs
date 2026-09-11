@@ -49,6 +49,7 @@ pub struct WikiSemanticHit {
     pub kind: String,
     pub score: f64,
     pub snippet: String,
+    pub matched_in: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -160,6 +161,7 @@ pub async fn wiki_search_semantic(
             kind,
             score,
             snippet,
+            matched_in: vec!["semantic".to_string()],
         });
     }
     drop(rows);
@@ -168,7 +170,39 @@ pub async fn wiki_search_semantic(
     hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     let mut unique_paths = std::collections::HashSet::new();
     hits.retain(|hit| unique_paths.insert(hit.rel_path.clone()));
-    let k = top_k.unwrap_or(20).min(hits.len());
+    let k = top_k.unwrap_or(20).min(50);
+    let seeds: Vec<(String, usize)> = hits
+        .iter()
+        .take(50)
+        .enumerate()
+        .map(|(rank, hit)| (hit.rel_path.clone(), rank))
+        .collect();
+    if let Ok(graph_hits) = crate::commands::wiki_graph::expand_one_hop(&seeds) {
+        for candidate in graph_hits {
+            let bonus = crate::commands::wiki_graph::semantic_graph_bonus(candidate.score);
+            if let Some(index) = hits
+                .iter()
+                .position(|hit| hit.rel_path == candidate.rel_path)
+            {
+                hits[index].score += bonus;
+                if !hits[index].matched_in.iter().any(|value| value == "graph-1hop") {
+                    hits[index].matched_in.push("graph-1hop".to_string());
+                }
+            } else {
+                hits.push(WikiSemanticHit {
+                    rel_path: candidate.rel_path,
+                    title: candidate.title,
+                    kind: candidate.kind,
+                    score: bonus,
+                    snippet: format!("由关联知识「{}」扩展", candidate.seed_title),
+                    matched_in: vec!["graph-1hop".to_string()],
+                });
+            }
+        }
+        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    } else {
+        log::debug!("[wiki_embed] 图关系扩展不可用，保留语义结果");
+    }
     hits.truncate(k);
 
     Ok(WikiSemanticResult {

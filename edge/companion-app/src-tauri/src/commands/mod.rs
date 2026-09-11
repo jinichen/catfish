@@ -111,6 +111,7 @@ pub mod wechat_binding; // BL-WECHAT-CATFISH-BIND v1 (5/26): WeChat ↔ catfish 
 pub mod wechat_archive; // 8/28: 微信导出文件只读授权，分析沿用当前 Picker
 pub mod wiki_embed; // P38 (6/5 鸿波): 本机 ONNX BGE-M3 wiki 语义搜索, 100% 离线
 pub mod wiki_files;
+pub(crate) mod wiki_graph; // 9/11: SQLite 关系镜像 + 一跳图检索扩展
 pub mod wiki_ontology;
 pub mod wiki_read; // BL-CATFISH-WIKI-MODE P3.3.2 (6/4): wiki read API (list_files + read_file)
 pub mod wiki_search;

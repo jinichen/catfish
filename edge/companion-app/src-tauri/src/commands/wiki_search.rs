@@ -353,7 +353,7 @@ fn merge_sources(target: &mut Vec<String>, values: &[String]) {
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn wiki_search_text(query: String) -> Result<Vec<WikiSearchHit>, String> {
-    Ok(lexical_candidates(&query, 50))
+    Ok(apply_graph_expansion(lexical_candidates(&query, 50), 50))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -377,7 +377,50 @@ pub async fn wiki_search_hybrid(query: String, top_k: Option<usize>) -> Result<V
             Vec::new()
         }
     };
-    Ok(rrf_fuse(lexical, semantic, top_k.unwrap_or(20).min(50)))
+    let limit = top_k.unwrap_or(20).min(50);
+    Ok(apply_graph_expansion(rrf_fuse(lexical, semantic, 50), limit))
+}
+
+fn apply_graph_expansion(mut hits: Vec<WikiSearchHit>, top_k: usize) -> Vec<WikiSearchHit> {
+    if hits.is_empty() {
+        return hits;
+    }
+    let seeds: Vec<(String, usize)> = hits
+        .iter()
+        .enumerate()
+        .map(|(rank, hit)| (hit.rel_path.clone(), rank))
+        .collect();
+    let candidates = match super::wiki_graph::expand_one_hop(&seeds) {
+        Ok(candidates) => candidates,
+        Err(error) => {
+            log::warn!("[wiki_search] graph expansion skipped: {error}");
+            hits.truncate(top_k);
+            return hits;
+        }
+    };
+    for candidate in candidates {
+        if let Some(existing) = hits.iter_mut().find(|hit| hit.rel_path == candidate.rel_path) {
+            existing.score += candidate.score;
+            merge_sources(&mut existing.matched_in, &["graph-1hop".into()]);
+            continue;
+        }
+        hits.push(WikiSearchHit {
+            rel_path: candidate.rel_path,
+            title: candidate.title,
+            kind: candidate.kind,
+            score: candidate.score,
+            snippet: format!("由关联知识「{}」扩展", candidate.seed_title),
+            matched_in: vec!["graph-1hop".into()],
+        });
+    }
+    hits.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.rel_path.cmp(&b.rel_path))
+    });
+    hits.truncate(top_k);
+    hits
 }
 
 fn snippet_around(text: &str, query: &str) -> String {

@@ -15,9 +15,11 @@ import {
 import { useWikiStore } from "../../store/wiki";
 import {
   wikiSearchHybrid,
+  wikiGraphStatus,
   wikiSearchSemantic,
   wikiSearchText,
   type WikiFileInfo,
+  type WikiGraphStatus,
   type WikiSearchHit,
 } from "../../lib/tauri";
 import { resolveWikiRef, resolveWikiRefOrNull } from "../../lib/wikiResolve";
@@ -63,6 +65,7 @@ export default function WikiTree() {
   const [searchHits, setSearchHits] = useState<WikiSearchHit[]>([]);
   const [searching, setSearching] = useState(false);
   const [semanticMessage, setSemanticMessage] = useState<string>("");
+  const [graphStatus, setGraphStatus] = useState<WikiGraphStatus | null>(null);
 
   // P37/P38: body/semantic 真 debounce 300ms
   useEffect(() => {
@@ -97,7 +100,7 @@ export default function WikiTree() {
                 kind: h.kind,
                 score: h.score,
                 snippet: h.snippet,
-                matched_in: ["semantic"],
+                matched_in: h.matched_in?.length ? h.matched_in : ["semantic"],
               })),
             );
             setSemanticMessage(`✓ ${res.indexed_count} entries 已 index`);
@@ -121,8 +124,30 @@ export default function WikiTree() {
     if (!filesLoading) {
       void loadFiles();
     }
+    let cancelled = false;
+    void wikiGraphStatus()
+      .then((status) => {
+        if (!cancelled) setGraphStatus(status);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!searchHits.length) return;
+    let cancelled = false;
+    void wikiGraphStatus()
+      .then((status) => {
+        if (!cancelled) setGraphStatus(status);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [searchHits.length]);
 
   // 真 inbound link count per file (dangling/orphan 用)
   const inboundMap = useMemo(() => {
@@ -354,6 +379,32 @@ export default function WikiTree() {
         >
           {semanticMessage}
         </div>
+      )}
+
+      {graphStatus && (
+        <details className="wiki-tree__graph-status">
+          <summary>
+            关系图 {graphStatus.nodeCount} 节点 · {graphStatus.edgeCount} 条关系
+            {graphStatus.unresolvedCount > 0 && ` · ${graphStatus.unresolvedCount} 条待核对`}
+          </summary>
+          <div className="wiki-tree__graph-status-body">
+            <div>
+              同步：{graphStatus.syncMode} · {graphStatus.changedFiles} 个文件更新 · 最近：
+              {graphStatus.lastSyncAt
+                ? new Date(graphStatus.lastSyncAt).toLocaleString()
+                : "未同步"}
+            </div>
+            {graphStatus.unresolvedSamples.map((item) => (
+              <div
+                className="wiki-tree__graph-status-item"
+                key={`${item.sourcePath}:${item.sourceName}`}
+              >
+                {item.sourcePath} → {item.sourceName}（
+                {item.reason === "ambiguous" ? "名称有歧义" : "未找到目标"}）
+              </div>
+            ))}
+          </div>
+        </details>
       )}
 
       <details className="wiki-tree__advanced">
