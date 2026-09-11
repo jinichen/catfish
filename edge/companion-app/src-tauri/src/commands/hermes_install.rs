@@ -78,6 +78,24 @@ pub fn hermes_agent_installed() -> bool {
     core_health_problems(&BootstrapPaths::new(PathBuf::from(home)), true).is_empty()
 }
 
+/// 后台服务的启动条件。Windows 还必须确认附加邮件组件已升级，不能只看
+/// Hermes 核心完成标记，否则旧 catfish-email 会被继续当成可用。
+pub fn hermes_runtime_ready() -> bool {
+    let Ok(home) = crate::util::paths::home_env() else {
+        return false;
+    };
+    let paths = BootstrapPaths::new(PathBuf::from(home));
+    if !core_health_problems(&paths, true).is_empty() {
+        return false;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return super::hermes_install_windows::optional_components_ready(&paths);
+    }
+    #[cfg(not(target_os = "windows"))]
+    true
+}
+
 #[cfg(target_os = "windows")]
 fn bootstrap_locked(
     resource_dir: &Path,

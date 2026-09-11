@@ -4,7 +4,7 @@ name = "catfish-companion-app"
 # Hermes 是独立发布物，由 .hermes-target-version / tag / commit 单独固定。
 # 改时记得同步 src-tauri/tauri.conf.json + ../package.json + package-lock.json。
 # CI lint: scripts/check_version_sync.sh
-version = "1.0.0"
+version = "1.0.1"
 description = "Catfish Companion App - desktop sidekick for the Catfish platform"
 authors = ["Catfish Team"]
 edition = "2021"

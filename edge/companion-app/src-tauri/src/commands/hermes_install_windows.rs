@@ -193,6 +193,26 @@ fn install_optional_components(resource_dir: &Path, paths: &BootstrapPaths) -> V
     failures
 }
 
+/// 只有邮件组件也升级完成后，Windows 后台服务才允许启动。
+///
+/// 核心 Hermes 的完成标记不能代表附加组件已经更新：旧机器可能保留着
+/// 没有 `discover` 子命令的 catfish-email，若此处只看核心标记，邮件扫描器
+/// 会过早启动并继续使用旧入口。
+pub(crate) fn optional_components_ready(paths: &BootstrapPaths) -> bool {
+    let email_exe = hermes_venv_tool(&paths.install_dir, "catfish-email");
+    email_exe.is_file()
+        && run_hidden_status(
+            &email_exe,
+            &["discover", "--help"],
+            "邮件发现 CLI 能力",
+        )
+        && run_hidden_status(
+            &hermes_venv_python(&paths.install_dir),
+            &["-c", "import catfish_email.discovery, win32api"],
+            "新版邮件发现模块",
+        )
+}
+
 pub(crate) fn ensure_optional_components(resource_dir: &Path, paths: &BootstrapPaths) -> Result<()> {
     let mut log = open_bootstrap_log(paths)?;
     writeln!(log, "Component check: executable={:?}, resources={}, runtime={}",

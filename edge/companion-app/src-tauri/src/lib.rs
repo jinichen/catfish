@@ -598,7 +598,7 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     let mut waited_secs = 0u64;
                     loop {
-                        if commands::hermes_install::hermes_agent_installed() {
+                        if commands::hermes_install::hermes_runtime_ready() {
                             log::info!(
                                 "Hermes bootstrap 就绪（等待 {waited_secs}s），启动本地服务"
                             );
