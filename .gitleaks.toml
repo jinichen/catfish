@@ -74,6 +74,13 @@ regexes = [
   # 中文 placeholder
   '''(?i)替换为.*token''',
   '''(?i)REPLACE_WITH''',
+
+  # 部署文档 / 测试 fixture 中的固定占位值。
+  # 只匹配这些明确写有 CHANGE_ME 或固定测试串的值，不豁免同名环境变量的真实内容。
+  '''^CHANGE_ME_TO_STRONG_PASSWORD$''',
+  '''^CHANGE_ME_RANDOM_32_CHARS$''',
+  '''^bench-master-key-change-me$''',
+  '''^0123456789abcdef$''',
 ]
 
 # 历史 commit fingerprint (用于精确豁免特定 commit 已有的 leak)
