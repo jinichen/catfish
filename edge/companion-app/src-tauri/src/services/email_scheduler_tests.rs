@@ -16,6 +16,7 @@ use serial_test::serial;
 // 引兄弟模块仍要走 crate::services::。
 use crate::services::email_state::{now_epoch_secs, push_history};
 use crate::services::email_types::EmailItem;
+use crate::services::phishing_scan::{PhishingFlag, PhishingScanResult, Severity};
 
 #[test]
 fn urgency_cache_上限必须大于列表上限() {
@@ -26,6 +27,40 @@ fn urgency_cache_上限必须大于列表上限() {
         URGENCY_CACHE_MAX,
         EMAIL_LIST_MAX,
     );
+}
+
+#[test]
+fn safe_llm_can_clear_only_low_confidence_urgent_rule() {
+    let scan = PhishingScanResult {
+        message_id: "safe-business-mail".into(),
+        flags: vec![PhishingFlag {
+            rule_id: "PHISH-011-urgent-keywords".into(),
+            severity: Severity::Medium,
+            category: crate::services::phishing_scan::Category::UrgentKeywords,
+            reason: "单个业务词".into(),
+            matched_text: Some("补贴".into()),
+        }],
+        highest_severity: Severity::Medium,
+        ..Default::default()
+    };
+    assert!(is_low_confidence_rule_only(&scan));
+}
+
+#[test]
+fn safe_llm_does_not_clear_high_risk_rule() {
+    let scan = PhishingScanResult {
+        message_id: "spoofed-mail".into(),
+        flags: vec![PhishingFlag {
+            rule_id: "PHISH-002-similar-domain".into(),
+            severity: Severity::High,
+            category: crate::services::phishing_scan::Category::SenderSpoofing,
+            reason: "同形域名".into(),
+            matched_text: Some("ch1natelecom.cn".into()),
+        }],
+        highest_severity: Severity::High,
+        ..Default::default()
+    };
+    assert!(!is_low_confidence_rule_only(&scan));
 }
 
 /// 本文件里每个 `time::interval(` 都必须显式设 MissedTickBehavior。

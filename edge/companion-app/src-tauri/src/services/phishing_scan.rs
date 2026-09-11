@@ -300,6 +300,36 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_subsidy_notice_is_not_phishing() {
+        let (sub, send, body, recv, att, dom) = msg(
+            "关于一级建造师证书补贴相关要求的通知",
+            "ffyanzb@chinatelecom.cn",
+            "请各位同事按通知办理证书补贴，具体要求见附件说明。",
+            &[],
+            vec![],
+        );
+        let m = make("id-business", &sub, &send, &body, &recv, &att, &dom);
+        let r = scan_rules(&m);
+        assert!(!r.flags.iter().any(|f| f.rule_id == "PHISH-011-urgent-keywords"));
+        assert_eq!(r.highest_severity, Severity::None, "业务通知不应被紧迫词规则抬高: {:?}", r.flags);
+    }
+
+    #[test]
+    fn one_urgent_keyword_without_context_is_not_suspicious() {
+        let (sub, send, body, recv, att, dom) = msg(
+            "项目进度提醒",
+            "colleague@chinatelecom.cn",
+            "请尽快处理本周项目台账。",
+            &[],
+            vec![],
+        );
+        let m = make("id-single-urgent", &sub, &send, &body, &recv, &att, &dom);
+        let r = scan_rules(&m);
+        assert!(!r.flags.iter().any(|f| f.rule_id == "PHISH-011-urgent-keywords"));
+        assert_eq!(r.highest_severity, Severity::None);
+    }
+
+    #[test]
     fn personal_info_request_high() {
         let (sub, send, body, recv, att, dom) = msg(
             "账户问题",

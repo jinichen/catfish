@@ -59,7 +59,7 @@
 //!     max_recipients: 50
 //!     min_body_chars_with_link: 30
 //!
-//!   # 模式串 (urgent subject 升 High / http 登录页判定)
+//!   # 模式串 (登录页判定；urgent_subject 保留用于兼容旧配置)
 //!   patterns:
 //!     urgent_subject: ["紧急", "urgent"]
 //!     login_keywords: ["login", "verify", "pay", "signin"]
@@ -79,7 +79,7 @@ const DEFAULT_URGENT_CN: &[&str] = &[
     "付款逾期", "欠费", "立即缴费", "停服通知",
     "可疑活动", "异常登录", "异地登录",
     "中奖", "抽奖", "奖金领取",
-    "退税", "补贴", "政府补助",
+    // “补贴 / 政府补助”是常见业务主题，不能单独作为钓鱼信号。
     "包裹异常", "海关扣押", "签收失败",
     "法院传票", "法律警告", "起诉",
 ];

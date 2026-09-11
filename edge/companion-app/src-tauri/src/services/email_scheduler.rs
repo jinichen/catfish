@@ -587,8 +587,11 @@ async fn scan_phishing_for_new(new_items: &[EmailItem]) {
                 // marketing → Low (灰 badge "营销", 不显 banner 避免警报麻木)
                 // safe → None (无 banner 无 badge)
                 //
-                // 只在规则没触发时才用 LLM 判决覆盖 (规则优先, LLM 补漏).
-                if s.highest_severity == Severity::None {
+                // 高危规则继续优先；但 PHISH-011 单独命中的中风险是低置信度
+                // 信号，LLM 明确判 safe 时应撤掉可疑标记，避免正常业务通知误报。
+                if v.verdict == "safe" && is_low_confidence_rule_only(s) {
+                    s.highest_severity = Severity::None;
+                } else if s.highest_severity == Severity::None {
                     s.highest_severity = match v.verdict.as_str() {
                         "phishing" => Severity::High,
                         "suspicious" => Severity::Medium,
@@ -614,6 +617,14 @@ async fn scan_phishing_for_new(new_items: &[EmailItem]) {
     }
 
     store_and_audit(new_items, scans).await;
+}
+
+fn is_low_confidence_rule_only(scan: &PhishingScanResult) -> bool {
+    scan.highest_severity == Severity::Medium
+        && !scan.flags.is_empty()
+        && scan.flags.iter().all(|flag| {
+            flag.rule_id == "PHISH-011-urgent-keywords" && flag.severity == Severity::Medium
+        })
 }
 
 /// store + audit 提抽成单独函数防多入口重复.

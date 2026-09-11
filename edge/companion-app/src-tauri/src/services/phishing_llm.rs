@@ -88,6 +88,8 @@ pub async fn batch_llm_review(
                   safe (常规工作邮件). \
                   区分要点: 营销邮件从合法域名/知名品牌发来, 内容是产品推广/newsletter/促销, \
                   不诱导密码/汇款/紧急操作 — 归 marketing 不归 suspicious. \
+                  规则未触发发件人仿冒时, 不能仅因地址 local-part 含下划线、salary 或业务缩写就判 suspicious; \
+                  合法企业域名下的工资条、补贴、证书通知等常规业务邮件, 没有仿冒域名、敏感信息、登录或转账诱导时归 safe. \
                   返 JSON 数组, 每元素 {\"verdict\":\"...\",\"reason\":\"一句话理由\"}. \
                   不要 markdown, 不要解释, 只返 JSON 数组.";
     let user = format!(

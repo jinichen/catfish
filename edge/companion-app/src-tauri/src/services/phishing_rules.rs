@@ -212,9 +212,10 @@ pub(crate) fn scan_sender(msg: &MessageData, cfg: &PhishingConfig, flags: &mut V
 
 pub(crate) fn scan_urgent_keywords(msg: &MessageData, cfg: &PhishingConfig, flags: &mut Vec<PhishingFlag>) {
     let haystack = format!("{} {}", msg.subject, msg.body_text).to_lowercase();
-    let subject_lower = msg.subject.to_lowercase();
 
-    // PHISH-011: 紧迫感关键词 (中英 合扫)
+    // PHISH-011: 紧迫感关键词 (中英合扫)。普通业务词只作为背景信号，
+    // 单独命中一个词不能把正常邮件标成可疑；要么命中至少两个独立关键词，
+    // 要么同时伴随链接、附件或敏感信息请求。
     if cfg.is_rule_enabled("PHISH-011") {
         let mut hits = 0;
         let mut matched: Option<String> = None;
@@ -227,21 +228,21 @@ pub(crate) fn scan_urgent_keywords(msg: &MessageData, cfg: &PhishingConfig, flag
             }
         }
         if hits > 0 {
-            let subj_urgent = cfg.patterns.urgent_subject
-                .iter()
-                .any(|p| subject_lower.contains(&p.to_lowercase()));
-            let sev = if hits >= cfg.thresholds.urgent_kw_hits_for_high || subj_urgent {
-                Severity::High
-            } else {
-                Severity::Medium
-            };
-            flags.push(PhishingFlag {
-                rule_id: "PHISH-011-urgent-keywords".into(),
-                severity: sev,
-                category: Category::UrgentKeywords,
-                reason: format!("命中 {} 个紧迫感关键词 (e.g. '{}')", hits, matched.as_deref().unwrap_or("")),
-                matched_text: matched,
-            });
+            let has_link = !extract_urls(msg.body_text, msg.body_html).is_empty();
+            let has_attachment = !msg.attachments.is_empty();
+            let has_personal_info = cfg.keywords.personal_info.iter().any(|kw| haystack.contains(&kw.to_lowercase()));
+            let high_signal = hits >= cfg.thresholds.urgent_kw_hits_for_high.max(2);
+            let contextual_signal = has_link || has_attachment || has_personal_info;
+            if high_signal || contextual_signal {
+                let sev = if high_signal { Severity::High } else { Severity::Medium };
+                flags.push(PhishingFlag {
+                    rule_id: "PHISH-011-urgent-keywords".into(),
+                    severity: sev,
+                    category: Category::UrgentKeywords,
+                    reason: format!("命中 {} 个紧迫感关键词 (e.g. '{}')", hits, matched.as_deref().unwrap_or("")),
+                    matched_text: matched,
+                });
+            }
         }
     }
 
