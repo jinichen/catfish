@@ -25,6 +25,7 @@ import { useChatStore } from "../store/chat";
 import { useUIStore } from "../store/ui";
 import { useAgentStore } from "../store/agent";
 import { petEmitBubble, petIsVisible } from "../lib/tauri";
+import { isTauriRuntime } from "../lib/runtime";
 import { fetchContextualStarter } from "../lib/me";
 import { detectAnyTrigger, type TriggerKind, type TriggerResult } from "../lib/triggers";
 
@@ -89,6 +90,9 @@ export function useProactiveTriggers(): void {
 
   // 监听 Companion 主窗 focus / blur (Tauri 2 API)
   useEffect(() => {
+    // Web/Vite 预览没有 Tauri 注入的内部对象；链接跳转等页面交互不能
+    // 因为主动触发器的桌面窗口监听而整页报错。
+    if (!isTauriRuntime()) return;
     const win = getCurrentWindow();
     const unlistenPromise = win.onFocusChanged(({ payload: focused }) => {
       const now = Date.now();
@@ -107,6 +111,7 @@ export function useProactiveTriggers(): void {
 
   // 主 tick: 1 分钟看一次有没有信号命中
   useEffect(() => {
+    if (!isTauriRuntime()) return;
     let cancelled = false;
 
     const tick = async () => {

@@ -1,8 +1,8 @@
 /** BL-CATFISH-WIKI-MODE P3.3.5 (6/4) — sigma + graphology graph view.
  *
- * Obsidian graph view 风:
- *   - entities 墨青 / concepts 暖橙 / queries 灰青
- *   - 节点 size ~ inbound link count (degree centrality)
+ * Focus graph view:
+ *   - entities / concepts / records remain in one restrained brand palette
+ *   - the selected node and its direct relationships form the visual focus
  *   - 点击 node → store.selectFile (跳 preview)
  *   - hover 显示 title
  *   - drag + zoom + pan (sigma default)
@@ -31,11 +31,11 @@ import { useWikiStore } from "../../store/wiki";
 import type { WikiFileInfo } from "../../lib/tauri";
 import {
   buildWikiGraphModel,
-  buildWikiGraphOverview,
   collectEgoPaths,
   DEFAULT_GRAPH_NEIGHBOR_LIMIT,
   GRAPH_NEIGHBOR_STEP,
   limitWikiGraphPaths,
+  type WikiGraphModel,
 } from "./wikiGraphModel";
 
 // E5: brand 一致 3 色 (tokens.css 没暴露 hex 给 JS, 这里 mirror).
@@ -46,10 +46,37 @@ const COLOR = {
   query: "#6B8589",    // 灰青 (low-saturation, muted)
 };
 const COLOR_SELECTED = "#1A8A95"; // cyan-bright (替 #ff3366 粉红)
+const COLOR_SELECTED_BORDER = "#8FE3E4";
+const COLOR_MUTED = "#789094";
 
 function graphLabel(title: string): string {
   const chars = Array.from(title.trim());
   return chars.length > 14 ? `${chars.slice(0, 14).join("")}…` : title;
+}
+
+function relationPaths(model: WikiGraphModel, path: string | null) {
+  if (!path) return new Set<string>();
+  return new Set([
+    ...(model.outgoingByPath.get(path) ?? []).map((item) => item.targetPath),
+    ...(model.incomingByPath.get(path) ?? []).map((item) => item.sourcePath),
+  ]);
+}
+
+function arrangeFocusedGraph(graph: Graph, anchorPath: string | null) {
+  if (!anchorPath || !graph.hasNode(anchorPath)) return;
+  const neighbors = graph.neighbors(anchorPath).sort((left, right) => {
+    const degreeDifference = graph.degree(right) - graph.degree(left);
+    return degreeDifference || left.localeCompare(right);
+  });
+  graph.setNodeAttribute(anchorPath, "x", 0);
+  graph.setNodeAttribute(anchorPath, "y", 0);
+
+  const radius = 42 + Math.min(neighbors.length, 12) * 2.5;
+  neighbors.forEach((node, index) => {
+    const angle = (index / Math.max(neighbors.length, 1)) * Math.PI * 2 - Math.PI / 2;
+    graph.setNodeAttribute(node, "x", Math.cos(angle) * radius);
+    graph.setNodeAttribute(node, "y", Math.sin(angle) * radius);
+  });
 }
 
 export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
@@ -201,16 +228,38 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
           neighborLimit,
         );
 
+    const focusPath = selectedPath && visiblePaths.has(selectedPath)
+      ? selectedPath
+      : effectiveRoot?.rel_path && visiblePaths.has(effectiveRoot.rel_path)
+        ? effectiveRoot.rel_path
+        : null;
+    const directPaths = relationPaths(graphModel, focusPath);
+    const rankedPaths = [...visiblePaths].sort((left, right) => {
+      const degreeDifference = (graphModel.degreeByPath.get(right) ?? 0) - (graphModel.degreeByPath.get(left) ?? 0);
+      return degreeDifference || left.localeCompare(right);
+    });
+    const labelPaths = effectiveMode === "full"
+      ? new Set([...(focusPath ? [focusPath] : []), ...rankedPaths.slice(0, 9)])
+      : new Set([
+        ...(focusPath ? [focusPath] : []),
+        ...rankedPaths.filter((path) => directPaths.has(path)).slice(0, 6),
+      ]);
+
     for (const path of visiblePaths) {
       const f = graphModel.fileByPath.get(path);
       if (!f) continue;
       const color = COLOR[f.kind] || "#888";
       g.addNode(f.rel_path, {
         label: graphLabel(f.title),
+        showLabel: labelPaths.has(f.rel_path),
         kind: f.kind,
         slug: f.slug,
-        color,
-        size: effectiveMode === "full" ? 3 : 4,
+        baseColor: color,
+        color: f.rel_path === focusPath ? COLOR_SELECTED : color,
+        borderColor: f.rel_path === focusPath ? COLOR_SELECTED_BORDER : "transparent",
+        borderSize: f.rel_path === focusPath ? 2 : 0,
+        zIndex: f.rel_path === focusPath ? 2 : 1,
+        size: f.rel_path === focusPath ? 8 : effectiveMode === "full" ? 3 : 4,
       });
     }
 
@@ -218,11 +267,19 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
       if (!visiblePaths.has(relation.sourcePath) || !visiblePaths.has(relation.targetPath)) continue;
       const edgeKey = `${relation.sourcePath}→${relation.targetPath}`;
       if (g.hasEdge(edgeKey)) continue;
+      const isFocusEdge = relation.sourcePath === focusPath || relation.targetPath === focusPath;
       g.addEdgeWithKey(edgeKey, relation.sourcePath, relation.targetPath, {
-        size: 1,
-        color: effectiveMode === "full"
-          ? "rgba(150, 160, 162, 0.14)"
-          : "rgba(120, 120, 120, 0.52)",
+        size: isFocusEdge ? 1.8 : effectiveMode === "full" ? 0.7 : 1,
+        color: isFocusEdge
+          ? "rgba(26, 138, 149, 0.78)"
+          : effectiveMode === "full"
+            ? "rgba(150, 160, 162, 0.16)"
+            : "rgba(120, 120, 120, 0.44)",
+        baseColor: isFocusEdge
+          ? "rgba(26, 138, 149, 0.78)"
+          : effectiveMode === "full"
+            ? "rgba(150, 160, 162, 0.16)"
+            : "rgba(120, 120, 120, 0.44)",
         rel: relation.relation,
       });
     }
@@ -238,40 +295,45 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
     // 3. size by degree — hub 略大但保紧凑 (4-8 范围, Obsidian 风格)
     g.forEachNode((node) => {
       const degree = g.degree(node);
-      const size = effectiveMode === "full"
-        ? 3 + Math.min(degree * 0.18, 2)
-        : 4 + Math.min(degree * 0.4, 4);
+      const isFocus = node === focusPath;
+      const isDirect = directPaths.has(node);
+      const size = isFocus
+        ? 8
+        : effectiveMode === "full"
+          ? 3 + Math.min(degree * 0.18, 2.4)
+          : (isDirect ? 5 : 4) + Math.min(degree * 0.32, 3);
       g.setNodeAttribute(node, "size", size);
+      g.setNodeAttribute(node, "zIndex", isFocus ? 2 : 1);
     });
 
-    // 4. positions — 真 random scale 小 + ForceAtlas2 适度 iter — 让节点紧凑成 cluster,
-    //    不飞散到边. Obsidian graph view 同风格.
+    // 4. 重点视图使用环形轨道，让当前知识与直接关系一眼可辨；全图则使用
+    //    LinLog + hub 归一化，尽量把关系簇拉开，避免所有线挤成一个球。
     random.assign(g, { scale: 100, center: 0 });
     if (g.order > 1) {
       forceAtlas2.assign(g, {
-        iterations: 300,
+        iterations: effectiveMode === "full" ? 220 : 80,
         settings: {
-          gravity: 1,
-          scalingRatio: 5,
-          slowDown: 2,
+          gravity: effectiveMode === "full" ? 0.65 : 1,
+          scalingRatio: effectiveMode === "full" ? 8 : 5,
+          slowDown: 3,
           barnesHutOptimize: true,
-          strongGravityMode: true,
-          linLogMode: false,
-          outboundAttractionDistribution: false,
+          strongGravityMode: effectiveMode !== "full",
+          linLogMode: effectiveMode === "full",
+          outboundAttractionDistribution: effectiveMode === "full",
           edgeWeightInfluence: 1,
           adjustSizes: true,
         },
       });
     }
+    if (effectiveMode !== "full") arrangeFocusedGraph(g, focusPath);
 
     return {
       graph: g,
       availableNodeCount: effectiveMode === "full" ? g.order : availableNodeCount,
-      visiblePaths: new Set(g.nodes()),
     };
   }, [effectiveMode, effectiveRoot, graphFiles, graphModel, neighborLimit, selectedPath]);
 
-  const { graph, availableNodeCount, visiblePaths } = graphState;
+  const { graph, availableNodeCount } = graphState;
 
   // sigma 初始化 + update真
   useEffect(() => {
@@ -288,20 +350,17 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
     // P41 (6/5 鸿波): 暗色 mode `label color `runtime detect, 不再硬编码
     // #444 (暗背景下不可读).
     const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    const labelColor = isDark ? "#e0e0e0" : "#444";
+    const labelColor = isDark ? "#d8e8e9" : "#183439";
     const edgeColor = effectiveMode === "full"
-      ? "rgba(150, 160, 162, 0.24)"
+      ? "rgba(150, 160, 162, 0.18)"
       : isDark
-        ? "rgba(180, 180, 180, 0.42)"
-        : "rgba(120, 120, 120, 0.52)";
+        ? "rgba(180, 180, 180, 0.36)"
+        : "rgba(120, 120, 120, 0.44)";
 
     const sigma = new Sigma(graph, containerRef.current, {
       renderEdgeLabels: false,
-      // 默认一跳图只给中心和较重要邻居常驻标签；其余节点 hover 仍显示。
-      // 全量图不再出现 200 个标签叠成一团。
-      // 普通一跳节点尺寸约为 4.4，阈值必须低于它才能显示关联实体名称。
-      // 全图仅保留大节点标签，避免 200+ 个名称在首次缩放时互相覆盖。
-      labelRenderedSizeThreshold: 3.5,
+      // 标签由 nodeReducer 按“重点节点 / 悬停邻居”决定，避免全图变成文字毛球。
+      labelRenderedSizeThreshold: effectiveMode === "full" ? 4.5 : 3.2,
       labelFont: "ui-sans-serif, -apple-system, sans-serif",
       labelSize: 12,
       labelWeight: "500",
@@ -312,7 +371,7 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
       maxCameraRatio: 10,
     });
 
-    // hover: highlight 真节点 + 邻居, 其余 fade (跟 Obsidian graph 一致)
+    // hover: highlight 真节点 + 邻居, 其余 fade；标签只在需要时出现。
     let hoveredNode: string | null = null;
     const focusNode = selectedPath && graph.hasNode(selectedPath) ? selectedPath : null;
     const refreshFade = () => {
@@ -323,22 +382,43 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
         g.forEachNeighbor(hoveredNode, (n) => neighbors.add(n));
       }
       sigma.setSetting("nodeReducer", (node, data) => {
-        // 图谱只保留当前对象名称；其余标签在悬停关联节点时出现。
-        // 关系名称由右侧“关联概览”承担，画布专注于结构，避免节点文字互相覆盖。
-        if (node !== focusNode && !neighbors.has(node)) {
-          return { ...data, label: "" };
+        const isFocus = node === focusNode;
+        const isHoveredNeighbor = neighbors.has(node);
+        const shouldShowLabel = Boolean(data.showLabel) || isHoveredNeighbor || isFocus;
+        if (!hoveredNode) {
+          return {
+            ...data,
+            label: shouldShowLabel ? data.label : "",
+            color: isFocus ? COLOR_SELECTED : data.baseColor,
+            borderColor: isFocus ? COLOR_SELECTED_BORDER : "transparent",
+            borderSize: isFocus ? 2 : 0,
+          };
         }
-        if (!hoveredNode) return data;
-        if (neighbors.has(node)) return data;
-        return { ...data, color: "#e0e0e0", label: "" };
+        if (isHoveredNeighbor) {
+          return { ...data, label: data.label, color: isFocus ? COLOR_SELECTED : data.baseColor };
+        }
+        return {
+          ...data,
+          color: isFocus ? COLOR_SELECTED : COLOR_MUTED,
+          label: shouldShowLabel && isFocus ? data.label : "",
+          borderColor: isFocus ? COLOR_SELECTED_BORDER : "transparent",
+          borderSize: isFocus ? 2 : 0,
+        };
       });
       sigma.setSetting("edgeReducer", (edge, data) => {
-        if (!hoveredNode) return data;
         const [src, dst] = g.extremities(edge);
-        if (src === hoveredNode || dst === hoveredNode) {
-          return { ...data, color: "rgba(80, 80, 80, 0.8)" };
+        const isFocusEdge = focusNode && (src === focusNode || dst === focusNode);
+        if (!hoveredNode) {
+          return {
+            ...data,
+            color: isFocusEdge ? "rgba(26, 138, 149, 0.78)" : data.baseColor,
+            size: isFocusEdge ? 1.8 : data.size,
+          };
         }
-        return { ...data, color: "rgba(220, 220, 220, 0.2)" };
+        if (src === hoveredNode || dst === hoveredNode) {
+          return { ...data, color: COLOR_SELECTED, size: 2 };
+        }
+        return { ...data, color: isFocusEdge ? "rgba(26, 138, 149, 0.35)" : "rgba(150, 160, 162, 0.08)" };
       });
     };
 
@@ -365,34 +445,32 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
 
   // highlight selected node — sigma.refresh 后真 update color**真
   useEffect(() => {
-    if (!sigmaRef.current || !selectedPath) return;
+    if (!sigmaRef.current) return;
     const sigma = sigmaRef.current;
     const g = sigma.getGraph();
     g.forEachNode((node) => {
-      const original = COLOR[g.getNodeAttribute(node, "kind") as "entity" | "concept" | "query"] || "#888";
-      g.setNodeAttribute(node, "color", node === selectedPath ? COLOR_SELECTED : original);
+      const original = g.getNodeAttribute(node, "baseColor") || "#888";
+      const isSelected = node === selectedPath;
+      g.setNodeAttribute(node, "color", isSelected ? COLOR_SELECTED : original);
+      g.setNodeAttribute(node, "borderColor", isSelected ? COLOR_SELECTED_BORDER : "transparent");
+      g.setNodeAttribute(node, "borderSize", isSelected ? 2 : 0);
     });
     sigma.refresh();
   }, [selectedPath]);
 
   const hasGraph = graph.order > 0;
   const visibleNodeCount = graph.order;
-  const overviewItems = useMemo(
-    () => buildWikiGraphOverview(graphModel, selectedPath, visiblePaths),
-    [graphModel, selectedPath, visiblePaths],
-  );
   const canShowMore = effectiveMode !== "full" && visibleNodeCount < availableNodeCount;
   return (
-    <div className={`wiki-graph${expanded ? " wiki-graph--expanded" : ""}${expanded && hasGraph ? " wiki-graph--expanded-with-overview" : ""}`}>
+    <div className={`wiki-graph${expanded ? " wiki-graph--expanded" : ""}`}>
       <div className="wiki-graph__header">
         <div className="wiki-graph__heading">
           <ShareNetwork size={21} aria-hidden="true" />
           <strong>关联图谱</strong>
           {hasGraph && (
-            <span>
-              {visibleNodeCount < availableNodeCount
-                ? `${visibleNodeCount} / ${availableNodeCount}`
-                : `${visibleNodeCount} 个节点`}
+            <span className="wiki-graph__count" aria-label={`显示 ${visibleNodeCount} 个节点，共 ${availableNodeCount} 个节点`}>
+              <b>{visibleNodeCount}</b>
+              <em>{visibleNodeCount < availableNodeCount ? ` / ${availableNodeCount}` : " 个节点"}</em>
             </span>
           )}
         </div>
@@ -460,26 +538,6 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
           </div>
         )}
       </div>
-      {hasGraph && (
-        <div className="wiki-graph__overview">
-          <div className="wiki-graph__overview-title">
-            <span>关联概览</span>
-            {canShowMore && <small>优先显示重要关系</small>}
-          </div>
-          {overviewItems.length > 0 ? overviewItems.map((item) => (
-            <button type="button" key={item.targetPath} onClick={() => void selectFile(item.targetPath)}>
-              <span>{item.relation}</span><strong>{item.title}</strong>
-            </button>
-          )) : (
-            <div className="wiki-graph__overview-empty">这项知识还没有已确认关系。</div>
-          )}
-          <div className="wiki-graph__legend">
-            <span><span className="wiki-graph__legend-dot" style={{ background: COLOR.entity }} />对象</span>
-            <span><span className="wiki-graph__legend-dot" style={{ background: COLOR.concept }} />主题</span>
-            <span><span className="wiki-graph__legend-dot" style={{ background: COLOR.query }} />记录</span>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

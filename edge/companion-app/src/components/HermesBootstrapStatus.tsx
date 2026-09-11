@@ -9,6 +9,7 @@ import {
   type HermesBootstrapViewState,
 } from "../lib/hermesBootstrap";
 import { getHermesBootstrapStatus, reinstallHermesAgent } from "../lib/tauri";
+import { isTauriRuntime } from "../lib/runtime";
 
 const SUCCESS_VISIBLE_MS = 4_500;
 
@@ -81,6 +82,7 @@ export default function HermesBootstrapStatus() {
   const [retrying, setRetrying] = useState(false);
 
   useEffect(() => {
+    if (!isTauriRuntime()) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
 

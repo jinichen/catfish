@@ -4,7 +4,7 @@
  *   点击 → find target file (按 slug / title match) → store.selectFile.
  * 顶部 frontmatter metadata 块 (title / type / tags / related / sources / mtime).
  *
- * E5 (6/6 taste-skill 改造): 走 className `.wiki-preview*` / `.wiki-related*`.
+ * E5 (6/6 taste-skill 改造): 走 className `.wiki-preview*`.
  * 7 类 anti-pattern 修法见 globals.css 顶 `.wiki-preview` block 注释.
  */
 
@@ -13,7 +13,6 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useChatStore } from "../../store/chat";
 import { useWikiStore } from "../../store/wiki";
-import { topKRelated } from "../../lib/wikiRelevance";
 import {
   wikiDeleteFile,
   wikiUpdateFile,
@@ -40,6 +39,34 @@ import {
   WikiMetaHeader,
 } from "./WikiPreviewSections";
 import { wikiKindLabel } from "./wikiLabels";
+import { isExternalLink } from "../../lib/linkBehavior";
+import { wikiMarkdownUrl } from "../../lib/wikiMarkdownUrl";
+import { resolveWikiRefOrNull } from "../../lib/wikiResolve";
+
+/** Hide the legacy generated `## Related` block from older wiki documents.
+ *
+ * Confirmed relationships already have one canonical presentation in the
+ * metadata section. This only removes the old, machine-generated list when it
+ * contains wikilink bullets; a human-authored prose section remains untouched.
+ */
+function removeLegacyRelatedSection(body: string): string {
+  const header = body.match(/^##\s+Related\s*$/im);
+  if (!header || header.index === undefined) return body;
+
+  const start = header.index;
+  const afterHeader = start + header[0].length;
+  const rest = body.slice(afterHeader);
+  const nextHeading = rest.match(/^#{1,6}\s+/m);
+  const end = nextHeading?.index === undefined
+    ? body.length
+    : afterHeader + nextHeading.index;
+  const section = body.slice(start, end);
+  if (!/^\s*[-*]\s+.*\[\[[^\]]+\]\]/m.test(section)) return body;
+
+  const before = body.slice(0, start).trimEnd();
+  const after = body.slice(end).trimStart();
+  return [before, after].filter(Boolean).join("\n\n");
+}
 
 export default function WikiPreview() {
   const selectedFile = useWikiStore((s) => s.selectedFile);
@@ -196,7 +223,7 @@ export default function WikiPreview() {
     setConfirmDelete(false);
     setDeleteErr(null);
     if (selectedFile) {
-      setDraftBody(selectedFile.body);
+      setDraftBody(removeLegacyRelatedSection(selectedFile.body));
     }
   }, [selectedFile?.info.rel_path]);
 
@@ -209,7 +236,7 @@ export default function WikiPreview() {
 
   const startEdit = () => {
     if (!selectedFile) return;
-    setDraftBody(selectedFile.body);
+    setDraftBody(removeLegacyRelatedSection(selectedFile.body));
     setEditing(true);
     setSaveErr(null);
   };
@@ -366,7 +393,7 @@ export default function WikiPreview() {
   // merge 自动生成 section), 拆 main body + history section. UI 默认 collapsed.
   const { mainBody, historyBody } = useMemo(() => {
     if (!selectedFile) return { mainBody: "", historyBody: "" };
-    const body = selectedFile.body;
+    const body = removeLegacyRelatedSection(selectedFile.body);
     // 匹配 "## 变更历史" 或 "## 变更日志" / "## Changelog" — 兼容 LLM 生成的不同标题
     const re = /^(##\s+(?:变更历史|变更日志|更新历史|Changelog|Change Log)\s*)$/im;
     const match = body.match(re);
@@ -383,7 +410,12 @@ export default function WikiPreview() {
   const rendered = useMemo(() => {
     if (!selectedFile) return "";
     // [[name]] → special token <wikilink:name>, ReactMarkdown components.a hook 或 custom regex 处理
-    return mainBody.replace(
+    // Metadata already displays the title; omit only an identical leading H1.
+    const leadingTitle = mainBody.match(/^\s*#\s+([^\n]+)\n?/);
+    const body = leadingTitle?.[1].trim() === selectedFile.info.title.trim()
+      ? mainBody.slice(leadingTitle[0].length).trimStart()
+      : mainBody;
+    return body.replace(
       /\[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]/g,
       (_match, name, alias) => {
         const display = alias || name;
@@ -396,13 +428,7 @@ export default function WikiPreview() {
 
   async function handleWikilinkClick(name: string) {
     // 找 title / slug match file
-    const lower = name.toLowerCase().trim();
-    const match = files.find(
-      (f) =>
-        f.title.toLowerCase() === lower ||
-        f.slug.toLowerCase() === lower ||
-        f.title.toLowerCase().includes(lower)
-    );
+    const match = resolveWikiRefOrNull(name, files);
     if (match) {
       void selectFile(match.rel_path);
       return;
@@ -435,13 +461,7 @@ export default function WikiPreview() {
 
   const info = selectedFile.info;
   const isDangling = (name: string) => {
-    const lower = name.toLowerCase().trim();
-    return !files.some(
-      (f) =>
-        f.title.toLowerCase() === lower ||
-        f.slug.toLowerCase() === lower ||
-        f.title.toLowerCase().includes(lower)
-    );
+    return !resolveWikiRefOrNull(name, files);
   };
 
   const kind = info.kind;
@@ -456,9 +476,6 @@ export default function WikiPreview() {
         isDangling={isDangling}
         handleWikilinkClick={handleWikilinkClick}
       />
-
-      {/* P3.2 4 信号 相关推荐 — 渲染 in body 前, 先 build top-K */}
-      <RelatedRecommend info={info} />
 
       <WikiHubStaleBanner hubStaleInfo={hubStaleInfo} />
 
@@ -595,11 +612,6 @@ export default function WikiPreview() {
         <div className="wiki-preview__save-err">卸载失败: {uninstallErr}</div>
       )}
 
-      <WikiActionPanel
-        selectedFile={selectedFile}
-        readOnly={selectedFile.info.rel_path.startsWith("wiki-shared/")}
-      />
-
       {/* P3.3.18 (6/10): 分享 dialog */}
       {shareDialogOpen && selectedFile && (
         <WikiShareDialog
@@ -631,6 +643,7 @@ export default function WikiPreview() {
         /* markdown body */
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
+          urlTransform={wikiMarkdownUrl}
           components={{
             a: ({ href, children }) => {
               if (href?.startsWith("catfish-wikilink://")) {
@@ -640,6 +653,7 @@ export default function WikiPreview() {
                 const dangling = isDangling(name);
                 return (
                   <button
+                    type="button"
                     className={
                       "wiki-preview__wikilink" +
                       (dangling ? " wiki-preview__wikilink--dangling" : "")
@@ -651,8 +665,16 @@ export default function WikiPreview() {
                   </button>
                 );
               }
+              const external = isExternalLink(href);
               return (
-                <a href={href} target="_blank" rel="noreferrer">
+                <a
+                  href={href}
+                  target={external ? "_blank" : undefined}
+                  rel={external ? "noreferrer" : undefined}
+                  onClick={(event) => {
+                    if (!external) event.preventDefault();
+                  }}
+                >
                   {children}
                 </a>
               );
@@ -669,6 +691,13 @@ export default function WikiPreview() {
         showHistory={showHistory}
         setShowHistory={setShowHistory}
       />
+      <details className="wiki-preview__action-details" key={info.rel_path}>
+        <summary>关联行动 · 查看与配置</summary>
+        <WikiActionPanel
+          selectedFile={selectedFile}
+          readOnly={info.rel_path.startsWith("wiki-shared/")}
+        />
+      </details>
 
       {/* P3.5.172 Phase C (7/3 鸿波): 🔗 扫描关联 modal. Portal-style render, 独
           立于 preview 内容, ModalShell 已包 fixed overlay. 员工确认后 onApplied
@@ -689,61 +718,6 @@ export default function WikiPreview() {
           }}
         />
       )}
-    </div>
-  );
-}
-
-function RelatedRecommend({
-  info,
-}: {
-  info: import("../../lib/tauri").WikiFileInfo;
-}) {
-  const files = useWikiStore((s) => s.files);
-  const selectFile = useWikiStore((s) => s.selectFile);
-
-  const recommends = useMemo(() => topKRelated(info, files, 5), [info, files]);
-
-  if (recommends.length === 0) return null;
-
-  return (
-    <div className="wiki-related">
-      <div className="wiki-related__header">相关知识</div>
-      <div className="wiki-related__sub">根据已确认关系和共同来源推荐</div>
-      <ul className="wiki-related__list">
-        {recommends.map(({ file, breakdown }) => {
-          const reasons: string[] = [];
-          if (breakdown.direct > 0) reasons.push("直接关联");
-          if (breakdown.sourceOverlap > 0) reasons.push("共同来源");
-          if (breakdown.adamicAdar > 0) reasons.push("共同联系人");
-          if (breakdown.typeAffinity > 0 && reasons.length < 2) reasons.push("同类知识");
-          const confidence =
-            breakdown.direct > 0 || breakdown.total >= 20
-              ? "高"
-              : breakdown.total >= 8
-                ? "中"
-                : "低";
-          const fileKind = file.kind;
-          const fileKindLabel = wikiKindLabel(fileKind);
-          return (
-            <li key={file.rel_path} className="wiki-related__item">
-              <button
-                className="wiki-related__link"
-                onClick={() => void selectFile(file.rel_path)}
-              >
-                <span
-                  className={`wiki-kind-badge wiki-kind-badge--${fileKind}`}
-                >
-                  {fileKindLabel}
-                </span>
-                {file.title}
-              </button>
-              <span className="wiki-related__score">
-                关联度{confidence}{reasons.length > 0 ? ` · ${reasons.join("、")}` : ""}
-              </span>
-            </li>
-          );
-        })}
-      </ul>
     </div>
   );
 }

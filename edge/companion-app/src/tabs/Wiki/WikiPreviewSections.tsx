@@ -153,26 +153,21 @@ export function WikiMetaHeader({
     <div className="wiki-preview__meta-title">
       <span className="wiki-preview__title-text">{info.title}</span>
     </div>
-    <div className="wiki-preview__meta-summary">已确认知识 · 可继续补充关系</div>
     <div className="wiki-preview__meta-facts" aria-label="知识摘要">
+      <span>已确认知识</span>
       <span>关系 <strong>{info.related.length}</strong></span>
       <span>来源 <strong>{info.sources.length}</strong></span>
-    </div>
-    {info.tags.length > 0 && (
-      <div className="wiki-preview__meta-section">
-        <span className="wiki-preview__meta-section-label">标签</span>
         {info.tags.map((t) => (
           <span key={t} className="wiki-preview__tag">
             #{t}
           </span>
         ))}
-      </div>
-    )}
+    </div>
     {info.related.length > 0 && (
-      <div className="wiki-preview__meta-section">
-        <span className="wiki-preview__meta-section-label">
+      <details className="wiki-preview__relation-details">
+        <summary>
           已确认关系 ({info.related.length})
-        </span>
+        </summary>
         <div className="wiki-preview__relations">
         {info.related.map((r, i) => {
           const dangling = isDangling(r.name);
@@ -199,7 +194,7 @@ export function WikiMetaHeader({
           );
         })}
         </div>
-      </div>
+      </details>
     )}
     <details className="wiki-preview__technical">
       <summary>文件信息</summary>

@@ -19,7 +19,8 @@ import WikiRelationshipWorkbench from "./WikiRelationshipWorkbench";
 
 export default function WikiTab() {
   const [mode, setMode] = useState<WikiWorkspaceMode>("organize");
-  const [graphVisible, setGraphVisible] = useState(true);
+  // 阅读优先：进入知识库先把正文铺开，图谱按需打开，不抢占首屏空间。
+  const [graphVisible, setGraphVisible] = useState(false);
   // E4 (6/6 taste-skill 改造): 走 className `.wikitab*` (见 globals.css).
   // 老版 3 列 1px hairline border → bg shift (elevated/cream/elevated) + 内
   // box-shadow subtle 边界, 减视觉噪声, 跟 brand 墨青 hue tinted.

@@ -18,6 +18,7 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import rehypeRaw from "rehype-raw";
 import { linkifyChildren } from "./linkify_paths";
+import { isExternalLink } from "./linkBehavior";
 
 interface Props {
   text: string;
@@ -190,30 +191,37 @@ export function Markdown({ text }: Props) {
           li: ({ children }) => <li>{linkifyChildren(children, "li")}</li>,
           // <br> 单独 style 一下, 让表格里的换行显得自然
           br: () => <br />,
-          // 链接外开 — Tauri webview 默认吞 <a target="_blank">, 必须程序化
-          // 调 shell.open 才能真在系统浏览器开 (BL-ARCH2 fix1, 5/10 鸿波反馈).
-          a: ({ children, href }) => (
-            <a
-              href={href}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => {
-                if (!href) return;
-                e.preventDefault();
-                void (async () => {
-                  try {
-                    const { open } = await import("@tauri-apps/plugin-shell");
-                    await open(href);
-                  } catch {
-                    try { window.open(href, "_blank", "noopener,noreferrer"); } catch { /* ignore */ }
+          // 只有真正的外部链接才外开。当前应用/localhost 链接留在当前页面，
+          // 避免把 Companion 自己重新开进 Safari，触发缺少 Tauri bridge 的白屏。
+          a: ({ children, href }) => {
+            const external = isExternalLink(href);
+            return (
+              <a
+                href={href}
+                target={external ? "_blank" : undefined}
+                rel={external ? "noopener noreferrer" : undefined}
+                onClick={(e) => {
+                  if (!href) return;
+                  if (!external) {
+                    e.preventDefault();
+                    return;
                   }
-                })();
-              }}
-              style={{ color: "var(--catfish-cyan-dim)", cursor: "pointer" }}
-            >
-              {children}
-            </a>
-          ),
+                  e.preventDefault();
+                  void (async () => {
+                    try {
+                      const { open } = await import("@tauri-apps/plugin-shell");
+                      await open(href);
+                    } catch {
+                      try { window.open(href, "_blank", "noopener,noreferrer"); } catch { /* ignore */ }
+                    }
+                  })();
+                }}
+                style={{ color: "var(--catfish-cyan-dim)", cursor: "pointer" }}
+              >
+                {children}
+              </a>
+            );
+          },
         }}
       >
         {normalized}

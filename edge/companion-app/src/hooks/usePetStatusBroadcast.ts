@@ -15,6 +15,7 @@ import { useEffect, useRef } from "react";
 
 import { petEmitStatus } from "../lib/tauri";
 import { useChatStore } from "../store/chat";
+import { isTauriRuntime } from "../lib/runtime";
 
 type AgentStatus = "idle" | "thinking" | "running" | "done";
 
@@ -27,6 +28,7 @@ export function usePetStatusBroadcast(): void {
   const wasStreamingRef = useRef<boolean>(false);
 
   useEffect(() => {
+    if (!isTauriRuntime()) return;
     let nextStatus: AgentStatus = "idle";
 
     if (isStreaming) {

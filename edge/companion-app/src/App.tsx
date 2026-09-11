@@ -26,6 +26,7 @@ import { useProactiveTriggers } from "./hooks/useProactiveTriggers";
 import { usePetStatusBroadcast } from "./hooks/usePetStatusBroadcast";
 import { getPickerModel } from "./lib/tauri";  // P3.5.139 Phase 4
 import { fetchUrgentEmailStarter } from "./lib/briefing";
+import { isTauriRuntime } from "./lib/runtime";
 
 // 非默认工作区按需加载，避免所有邮件/知识图谱/仪表盘代码挤进主包。
 // React.lazy 会缓存已加载模块，TAB 往返不会重复下载或重新初始化模块。
@@ -47,6 +48,7 @@ export default function App() {
   // BL-E11 命名权: 启动拉一次 agent prefs (员工自定义鲶鱼名 + 人设),
   // ChatPanel / Onboarding / 通知等多处 UI 共用. Onboarding 改了立即更新 store.
   useEffect(() => {
+    if (!isTauriRuntime()) return;
     void loadAgentPrefs();
   }, [loadAgentPrefs]);
 
@@ -58,6 +60,7 @@ export default function App() {
   // 失败 (file 不在 / 空 / 权限) → 不动 store, model="" 走 ChatTab catalog.default
   // useEffect 兜底注入 catalog.default. 客户第一次启动没 picker_model 文件就是这个路径.
   useEffect(() => {
+    if (!isTauriRuntime()) return;
     void (async () => {
       try {
         const m = await getPickerModel();
@@ -80,6 +83,7 @@ export default function App() {
   // BL-E15 专注模式: 监听 Tauri 后端 emit 的 toggle 事件 (Cmd+Shift+F 触发).
   // 切到 store, App 顶层根据 active 决定渲染 FocusModeView 还是正常 AppShell.
   useEffect(() => {
+    if (!isTauriRuntime()) return;
     let unlisten: (() => void) | null = null;
     void (async () => {
       unlisten = await listen("catfish:focus_mode_toggle", () => {
@@ -94,6 +98,7 @@ export default function App() {
   // 5/18 BL-COMPANION-ABOUT-HIJACK: macOS app menu "鲶鱼 Companion → 关于鲶鱼"
   // 走自定义 React 模态, 不走原生 NSPanel. Rust 端 emit "show-about", 这里接.
   useEffect(() => {
+    if (!isTauriRuntime()) return;
     let unlisten: (() => void) | null = null;
     void (async () => {
       unlisten = await listen("show-about", () => {
@@ -112,6 +117,7 @@ export default function App() {
   // LLM 挂了 fallback 老 Rust 拼的 hard-coded starter.
   const startProactiveChat = useUIStore((s) => s.startProactiveChat);
   useEffect(() => {
+    if (!isTauriRuntime()) return;
     let unlisten: (() => void) | null = null;
     void (async () => {
       unlisten = await listen<{
@@ -186,6 +192,7 @@ export default function App() {
       // 输入态 (textarea/input/contenteditable) 不抢, 让组件用 (清空输入 / 关弹窗).
       if (tag === "textarea" || tag === "input" || target?.isContentEditable) return;
       e.preventDefault();
+      if (!isTauriRuntime()) return;
       void getCurrentWindow().hide();
     };
     window.addEventListener("keydown", handler);

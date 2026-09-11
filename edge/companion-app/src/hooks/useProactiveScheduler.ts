@@ -35,6 +35,7 @@ import {
 import { useAgentStore } from "../store/agent";
 import { useChatStore } from "../store/chat";
 import { useUIStore } from "../store/ui";
+import { isTauriRuntime } from "../lib/runtime";
 
 interface ScheduledTime {
   time: string;                 // "HH:MM"
@@ -224,6 +225,7 @@ function _hhmmGE(a: string, b: string): boolean {
 /** 每分钟看一次, 到点了就发. 简单 polling, 不用 cron. */
 export function useProactiveScheduler(): void {
   useEffect(() => {
+    if (!isTauriRuntime()) return;
     if (!isEnabled()) {
       console.log("[proactive] disabled (localStorage:catfish:proactive_enabled=false)");
       return;
