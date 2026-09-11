@@ -15,6 +15,19 @@ Companion 启动时同样迁移旧入口，并用当前用户文件锁防止多�
 
 ## Windows 现场验收（本机 macOS 无法替代）
 
+### 同版本覆盖回归（9/11 现场报告）
+
+旧主程序日期仍为 9/2，邮件 CLI 不支持 discover；维护日志 install 成功不能作为升级成功的依据。
+默认禁止降级的 WiX 分支必须启用 AllowSameVersionUpgrades，保持 afterInstallInitialize 移除旧产品。
+这允许相同公开版本的包互相替换，也意味着不能靠该版本号区分同版本的新旧构建。
+
+- 先安装旧 1.0.0，再安装本次 1.0.0 MSI，保留 msiexec `/l*v` 日志。
+- 比较安装后的主 EXE SHA256 与本次构建 EXE SHA256，必须一致；不能只看界面的 1.0.0。
+- 启动安装后的 EXE，确认 bootstrap 日志产生，邮件 CLI `discover --help` 返回 0。
+- `discover --json` 必须返回 Foxmail 来源；再在应用里验证自动读取和后续刷新。
+- 运行 scripts/diagnose-windows.ps1 捕获进程；记录可见黑框时间以对应进程链。
+  深信服 Ingress/sfwget 的控制台与 Companion 分开核对，不修改企业软件。
+
 1. 在测试用户下安装旧版，并保留旧 BAT 登录任务和已运行的循环，再安装新版。
    验证旧循环和子进程终止、任务删除、XML/BAT 备份存在、新版只运行一个实例。
 2. 退出/重开、连点两次快捷方式，验证第二次激活原窗口，不启动第二套后台服务。

@@ -100,7 +100,9 @@
         {{#if allow_downgrades}}
             <MajorUpgrade Schedule="afterInstallInitialize" AllowDowngrades="yes" />
         {{else}}
-            <MajorUpgrade Schedule="afterInstallInitialize" DowngradeErrorMessage="!(loc.DowngradeErrorMessage)" />
+            <!-- Rebuilt releases can share the public version. Remove the previous
+                 product before costing/installing files so equal-version EXEs are replaced. -->
+            <MajorUpgrade Schedule="afterInstallInitialize" AllowSameVersionUpgrades="yes" DowngradeErrorMessage="!(loc.DowngradeErrorMessage)" />
         {{/if}}
 
         <InstallExecuteSequence>
