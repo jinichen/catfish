@@ -161,12 +161,62 @@ function quoteYaml(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
-export function buildConfirmedWikiContent(content: string, relations: RelatedRef[]): string {
-  if (!content.startsWith("---\n")) {
-    throw new Error("该条目缺少标准 frontmatter，暂不能在关系工作台修改");
+type WikiRelationFileMetadata = Pick<
+  WikiFileInfo,
+  "kind" | "title" | "subtype" | "tags" | "sources" | "aliases"
+>;
+
+function serializeList(values: string[]): string {
+  return `[${values.map((value) => quoteYaml(value)).join(", ")}]`;
+}
+
+function buildLegacyFrontmatter(metadata: WikiRelationFileMetadata, relations: RelatedRef[]): string {
+  const lines = [
+    `type: ${metadata.kind}`,
+    `title: ${quoteYaml(metadata.title)}`,
+  ];
+  if (metadata.subtype?.trim()) {
+    lines.push(`${metadata.kind === "concept" ? "concept_type" : "entity_type"}: ${quoteYaml(metadata.subtype.trim())}`);
   }
-  const end = content.indexOf("\n---", 4);
-  if (end < 0) throw new Error("该条目的 frontmatter 不完整");
+  if (metadata.kind === "entity" && metadata.aliases.length > 0) {
+    lines.push(`aliases: ${serializeList(metadata.aliases)}`);
+  }
+  lines.push(`tags: ${serializeList(metadata.tags)}`);
+  lines.push(`related: [${relations
+    .filter((relation) => relation.source !== "body")
+    .map((relation) => {
+      const rel = relation.rel?.trim();
+      return rel
+        ? `{name: ${quoteYaml(relation.name)}, rel: ${quoteYaml(rel)}}`
+        : quoteYaml(relation.name);
+    })
+    .join(", ")}]`);
+  lines.push(`sources: ${serializeList(metadata.sources)}`);
+  lines.push("ontology_status: active");
+  return lines.join("\n");
+}
+
+/**
+ * 更新关系时兼容旧 Markdown：读取端允许 BOM、空白和 CRLF，写入端也必须如此。
+ * 没有 frontmatter 的历史条目只在用户点击“确认关系”后补齐最小元数据。
+ */
+export function buildConfirmedWikiContent(
+  content: string,
+  relations: RelatedRef[],
+  metadata?: WikiRelationFileMetadata,
+): string {
+  const normalized = content.replace(/^\uFEFF/, "");
+  const opening = normalized.match(/^[\t ]*---\r?\n/);
+  if (!opening) {
+    if (!metadata) throw new Error("该条目缺少标准 frontmatter，无法确定条目类型");
+    return `---\n${buildLegacyFrontmatter(metadata, relations)}\n---\n\n${content}`;
+  }
+
+  const frontmatterStart = opening[0].length;
+  const remainder = normalized.slice(frontmatterStart);
+  const closing = /\r?\n---(?=\r?\n|$)/.exec(remainder);
+  if (!closing || closing.index === undefined) throw new Error("该条目的 frontmatter 不完整");
+  const end = frontmatterStart + closing.index;
 
   const serialized = relations
     .filter((relation) => relation.source !== "body")
@@ -177,7 +227,7 @@ export function buildConfirmedWikiContent(content: string, relations: RelatedRef
         : quoteYaml(relation.name);
     })
     .join(", ");
-  const lines = content.slice(4, end).split("\n");
+  const lines = normalized.slice(frontmatterStart, end).replace(/\r\n/g, "\n").split("\n");
   let foundRelated = false;
   let foundStatus = false;
   const nextLines = lines.map((line) => {
@@ -193,5 +243,5 @@ export function buildConfirmedWikiContent(content: string, relations: RelatedRef
   });
   if (!foundRelated) nextLines.push(`related: [${serialized}]`);
   if (!foundStatus) nextLines.push("ontology_status: active");
-  return `---\n${nextLines.join("\n")}\n---${content.slice(end + 4)}`;
+  return `---\n${nextLines.join("\n")}\n---${normalized.slice(end + closing[0].length)}`;
 }

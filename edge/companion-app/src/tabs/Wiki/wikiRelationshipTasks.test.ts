@@ -106,4 +106,23 @@ describe("buildConfirmedWikiContent", () => {
     expect(result).toContain('related: [{name: "部门", rel: "所属部门"}]');
     expect(result).toContain("正文含 [[目标]]");
   });
+
+  it("兼容 CRLF frontmatter", () => {
+    const source = "---\r\ntitle: 示例\r\nrelated: []\r\n---\r\n\r\n正文\r\n";
+    const result = buildConfirmedWikiContent(source, [{ name: "部门", rel: "所属部门" }]);
+    expect(result).toContain('related: [{name: "部门", rel: "所属部门"}]');
+    expect(result).toContain("\n正文\r\n");
+  });
+
+  it("用户确认关系时为无 frontmatter 的历史条目补齐最小元数据", () => {
+    const result = buildConfirmedWikiContent(
+      "# 历史条目\n\n正文\n",
+      [{ name: "部门", rel: "所属部门" }],
+      file({ title: "历史条目", subtype: null, tags: ["历史"], sources: ["legacy"] }),
+    );
+    expect(result).toContain('type: entity');
+    expect(result).toContain('title: "历史条目"');
+    expect(result).toContain('related: [{name: "部门", rel: "所属部门"}]');
+    expect(result).toContain("# 历史条目");
+  });
 });

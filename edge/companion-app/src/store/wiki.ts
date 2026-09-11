@@ -75,6 +75,8 @@ interface WikiState {
   setVirtualSystem: (name: string | null) => void;
 }
 
+let selectRequest = 0;
+
 export const useWikiStore = create<WikiState>((set) => ({
   files: [],
   filesLoading: false,
@@ -149,6 +151,7 @@ export const useWikiStore = create<WikiState>((set) => ({
     // 清虚拟态靠: setVirtualSystem(null) 显式 / 点别的体系 header (覆盖) /
     // 强制全图 mode (隐含).
     if (relPath === null) {
+      selectRequest += 1;
       set({
         selectedPath: null,
         selectedFile: null,
@@ -157,6 +160,7 @@ export const useWikiStore = create<WikiState>((set) => ({
       });
       return;
     }
+    const request = ++selectRequest;
     set({
       selectedPath: relPath,
       selectedLoading: true,
@@ -164,8 +168,10 @@ export const useWikiStore = create<WikiState>((set) => ({
     });
     try {
       const full = await wikiReadFile(relPath);
+      if (request !== selectRequest) return;
       set({ selectedFile: full, selectedLoading: false });
     } catch (e) {
+      if (request !== selectRequest) return;
       set({ selectedLoading: false, selectedError: String(e) });
     }
   },

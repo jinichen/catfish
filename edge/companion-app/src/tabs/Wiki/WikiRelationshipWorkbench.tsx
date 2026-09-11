@@ -112,7 +112,7 @@ export default function WikiRelationshipWorkbench() {
         const target = resolveWikiRefOrNull(relation.name, files);
         return target?.rel_path !== selectedTarget.rel_path;
       });
-      const content = buildConfirmedWikiContent(selectedFile.content, [...existing, nextRelation]);
+      const content = buildConfirmedWikiContent(selectedFile.content, [...existing, nextRelation], info);
       await wikiUpdateFile(info.rel_path, content);
       await loadFiles();
       await selectFile(info.rel_path);
@@ -134,7 +134,7 @@ export default function WikiRelationshipWorkbench() {
       const remaining = info.related.filter(
         (relation) => relation.source === "body" || relation.name.trim() !== relationName,
       );
-      const content = buildConfirmedWikiContent(selectedFile.content, remaining);
+      const content = buildConfirmedWikiContent(selectedFile.content, remaining, info);
       await wikiUpdateFile(info.rel_path, content);
       await loadFiles();
       await selectFile(info.rel_path);

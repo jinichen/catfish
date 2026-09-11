@@ -98,9 +98,10 @@ export default function WikiOrganizer({
   };
 
   useEffect(() => {
-    if (mode !== "organize" || selectedPath || tasks.length === 0) return;
+    if (mode !== "organize" || filesLoading || tasks.length === 0) return;
+    if (selectedPath && tasks.some((task) => task.file.rel_path === selectedPath)) return;
     void selectFile(tasks[0].file.rel_path);
-  }, [mode, selectFile, selectedPath, tasks]);
+  }, [filesLoading, mode, selectFile, selectedPath, tasks]);
 
   return (
     <div className="wiki-organizer">
