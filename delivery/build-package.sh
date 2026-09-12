@@ -289,6 +289,11 @@ for ARCH in $ARCHES; do
           "$STAGE/delivery/dahua-poc/users.yaml" \
           "$STAGE/delivery/dahua-poc/clients.yaml"
     rm -rf "$STAGE/delivery/dahua-poc/certs"
+    # 9/12 鸿波: 文档不进包。docs/ 整个目录 + 各级 *.md (README / INSTALL / SOP /
+    # config 说明) 全去掉; 装机手册在仓库 delivery/dahua-poc/ 里, 给客户 IT 单独发。
+    # 留下的只有脚本、compose、配置模板、镜像, 以及 BUILD-INFO.txt (溯源, 不是文档)。
+    rm -rf "$STAGE/delivery/dahua-poc/docs"
+    find "$STAGE/delivery/dahua-poc" -name "*.md" -delete
     find "$STAGE" -name ".DS_Store" -delete 2>/dev/null || true
 
     IMG_TAR="$STAGE/delivery/dahua-poc/images/dahua-poc-central-$ARCH-$DATE.tar.gz"
@@ -315,6 +320,12 @@ for ARCH in $ARCHES; do
             exit 1
         fi
     done
+    # 反向核对: 文档没混进去 (9/12)
+    if tar tzf "$OUT" | grep -qE '\.md$|/docs/'; then
+        echo "  ❌ 包里混进了文档:"
+        tar tzf "$OUT" | grep -E '\.md$|/docs/' | sed 's/^/      /'
+        exit 1
+    fi
     echo "  ✓ 结构核对通过 · $(du -h "$OUT" | cut -f1)"
     rm -rf "$STAGE"
 done
@@ -324,7 +335,7 @@ echo "════════════════════════�
 echo "✅ 完成"
 ls -lh "$OUT_DIR"/dahua-poc-FULL-*-"$DATE".tar.gz 2>/dev/null | sed 's/^/   /'
 echo ""
-echo "客户侧装机 (照 INSTALL.md):"
+echo "客户侧装机 (手册在仓库 delivery/dahua-poc/INSTALL.md, 不随包走):"
 echo "    tar xzf dahua-poc-FULL-<arch>-$DATE.tar.gz"
 echo "    cd delivery/dahua-poc/"
 echo "    SERVER_IP=<服务器内网IP> ENABLE_HTTPS=1 bash setup.sh"
