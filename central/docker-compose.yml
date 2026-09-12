@@ -201,7 +201,18 @@ services:
     # 只改 .env + `docker compose restart web` · 不重编 image.
     environment:
       # OIDC issuer · 复用 identity 段同名 env · 保持一致 (跨 identity+gateway+web)
-      CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://127.0.0.1:8998}
+      #
+      # 9/12 默认值 127.0.0.1 → host.docker.internal, 跟 identity/gateway 对齐。
+      # 7/22 写成 127.0.0.1 的假设是"浏览器不认 host.docker.internal", 但这个值
+      # 在浏览器里只用来拉一次 {authority}/.well-known/openid-configuration
+      # (oidc-client-ts 3.5 不校验 id_token 的 iss, 也不拿 discovery 的 issuer 跟
+      # authority 比对); 之后跳转登录用的 authorization_endpoint 是 identity 拿
+      # **它自己的** CATFISH_IDENTITY_ISSUER 拼的 (routes.py)。所以浏览器反正要能
+      # 解析 identity 那个 host, web 这里写个不同的默认只会造成 "discovery 拿到、
+      # 跳转跳不过去" 的半残态。三处同值: Docker Desktop 上一起能跑 (它往宿主
+      # /etc/hosts 写 host.docker.internal), Linux 上一起要求显式 .env (SOP 已写)。
+      # vite dev (不走 docker) 仍由 env.ts 的 127.0.0.1 兜底, 那条不受影响。
+      CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://host.docker.internal:8998}
       CATFISH_OIDC_CLIENT_ID: ${CATFISH_OIDC_CLIENT_ID:-catfish-companion}
       CATFISH_OIDC_SCOPE: ${CATFISH_OIDC_SCOPE:-openid email profile}
     # 内部 service, 不需要 ports — 中央 nginx 走 docker network 名解析 (web:80)
