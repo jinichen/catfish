@@ -4,6 +4,8 @@
  * 一张伪 IDE 假日志图, 不屏蔽任何通知/调度, 5/4 后没人动过; 对政企客户是信任风险。
  */
 
+import { useEffect } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Icon } from "@phosphor-icons/react";
 import {
   BookOpenText,
@@ -16,6 +18,8 @@ import {
 import { useUIStore, type TabId } from "../store/ui";
 import { useAgentStore } from "../store/agent";
 import { pendingCount, useRoomLink } from "../lib/roomLinkStore";
+import { markSeen, unseenCount, useTaskDone } from "../lib/taskDoneStore";
+import { isTauriRuntime } from "../lib/runtime";
 
 // 注: "会话" tab 已并入 "工作台" 的左侧 sidebar (P0-3.1), 这里不再列出
 // BL-CONSOLE-TAB-KILL (5/16): 控制台 tab 砍, 90% 跟仪表盘"本地服务"卡重叠 + log
@@ -46,6 +50,27 @@ export default function TabBar() {
   const agentName = useAgentStore((s) => s.name);
   // 订阅即开始轮询邮筒 + P49 探针 —— 导航常驻, 所以员工不进「协同」页也能看到红点。
   const collabPending = pendingCount(useRoomLink());
+  // 9/12: 后台任务做完/没做成、员工还没看 —— 桌宠删了, 信号改挂在「工作台」项上。
+  const taskUnseen = unseenCount(useTaskDone());
+
+  // 员工在工作台 tab 且窗口有焦点 = 看到了。窗口重新获焦时也再判一次
+  // (Cmd+Tab 回来的那一下, activeTab 没变但人回来了)。
+  useEffect(() => {
+    if (activeTab !== "chat" || taskUnseen === 0) return;
+    const check = () => {
+      if (document.hasFocus()) markSeen();
+    };
+    check();
+    window.addEventListener("focus", check);
+    return () => window.removeEventListener("focus", check);
+  }, [activeTab, taskUnseen]);
+
+  // Dock 角标 = 等我点头的 + 没看的任务结果。员工不在 Companion 里也知道有事。
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    const n = collabPending + taskUnseen;
+    void getCurrentWindow().setBadgeCount(n > 0 ? n : undefined).catch(() => {});
+  }, [collabPending, taskUnseen]);
 
   return (
     <nav className="app-rail" aria-label="主导航">
@@ -71,6 +96,11 @@ export default function TabBar() {
               {t.id === "collab" && collabPending > 0 && (
                 <span className="app-rail__badge" aria-label={`${collabPending} 条等你点头`}>
                   {collabPending > 9 ? "9+" : collabPending}
+                </span>
+              )}
+              {t.id === "chat" && taskUnseen > 0 && (
+                <span className="app-rail__badge" aria-label={`${taskUnseen} 个任务有结果了`}>
+                  {taskUnseen > 9 ? "9+" : taskUnseen}
                 </span>
               )}
             </button>
