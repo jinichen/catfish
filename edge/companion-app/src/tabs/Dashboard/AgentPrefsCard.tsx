@@ -8,12 +8,7 @@ import { getVersion } from "@tauri-apps/api/app";
 
 import { PERSONALITY_LABELS, type Personality } from "../../lib/agent";
 import { useAgentStore } from "../../store/agent";
-import {
-  emailConfigGet,
-  petHide,
-  petShow,
-  type EmailConfigPublic,
-} from "../../lib/tauri";
+import { emailConfigGet, type EmailConfigPublic } from "../../lib/tauri";
 
 // BL-COMPANION-PREFS-TOGGLES (5/20): localStorage key 跟 useProactiveScheduler 对齐
 const MORNING_PUSH_KEY = "catfish:morning_push_enabled";
@@ -144,58 +139,6 @@ export default function AgentPrefsCard() {
           <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 6, lineHeight: 1.5 }}>
             {PERSONALITY_LABELS[personality]?.desc}
           </div>
-          {/* BL-E27 spike (5/5 凌晨): 桌宠开关. 临时放这里, 后续 BL-E27.1 ship 时
-              移到 Onboarding consent toggle. */}
-          <div
-            style={{
-              marginTop: "var(--space-3)",
-              paddingTop: "var(--space-2)",
-              borderTop: "1px dashed var(--catfish-border)",
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
-                🐟 桌宠 (实验):
-              </span>
-              <button
-                type="button"
-                onClick={() => void petShow().catch((e) => alert("show 失败: " + e))}
-                style={{
-                  fontSize: 11,
-                  padding: "3px 10px",
-                  border: "1px solid var(--catfish-border)",
-                  borderRadius: 4,
-                  background: "var(--catfish-bg-cream)",
-                  color: "var(--catfish-text)",
-                  cursor: "pointer",
-                }}
-              >
-                显示
-              </button>
-              <button
-                type="button"
-                onClick={() => void petHide().catch((e) => alert("hide 失败: " + e))}
-                style={{
-                  fontSize: 11,
-                  padding: "3px 10px",
-                  border: "1px solid var(--catfish-border)",
-                  borderRadius: 4,
-                  background: "transparent",
-                  color: "var(--catfish-text-muted)",
-                  cursor: "pointer",
-                }}
-              >
-                隐藏
-              </button>
-              <span style={{ fontSize: 10, color: "var(--catfish-text-muted)", marginLeft: 4 }}>
-                (开/关 ⌘⇧P)
-              </span>
-            </div>
-            <div style={{ fontSize: 10, color: "var(--catfish-text-muted)", marginTop: 4, lineHeight: 1.5 }}>
-              点鲶鱼唤主窗 · 空白处穿透到桌面 · ⌥⇧1/2/3/4 切 4 屏角
-            </div>
-          </div>
-
           {/* BL-COMPANION-PREFS-TOGGLES (5/20): 早安播报 9:00 push + 邮件 LLM 评级
               两个 toggle. 前者 localStorage 即时, 后者 yaml 配置展示 + 跳 yaml. */}
           <div
@@ -401,7 +344,7 @@ export default function AgentPrefsCard() {
 }
 
 /** BL-COMPANION-PREFS-TOGGLES (5/20): 两段式开/关 toggle button.
- * active=true 高亮, 跟 桌宠 "显示 / 隐藏" 按钮风格保持一致. */
+ * active=true 高亮. */
 function ToggleButton({
   active,
   onClick,

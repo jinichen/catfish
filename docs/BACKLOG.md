@@ -353,7 +353,7 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 | ID | IDEAS# | 项 | 估时 | 前置 |
 |---|---|---|---|---|
 | BL-E14 | #13 | 鲶鱼吐槽 PPT — 上传 PPT 毒舌点评 | 3-5 天 | PPTX parser + critical personality. **demo 后下周开** (5/15+) |
-| BL-E15 | #14 | 专注模式快捷键 (前 "领导来了" — 央企语境改名) — Cmd+Shift+F 全屏伪 IDE | ✅ 5/3 | (FocusModeView + Tauri 全局快捷键 + TabBar 入口) |
+| BL-E15 | #14 | 专注模式快捷键 (前 "领导来了" — 央企语境改名) — Cmd+Shift+F 全屏伪 IDE | ❌ 9/12 删 | 5/3 做, 之后没人用; 本质是伪造工作日志, 对政企客户是信任风险; 全局 Cmd+Shift+F 还抢别的 app 的搜索键 (954e8f7) |
 | BL-E16 | #15 | 社交健康检查 — 扫 IM 记录分析人际 | 1-2 周 | Slack/IM 适配器 + 员工授权 |
 
 ### E.5 🌐 组织协作型 (Plan D)
@@ -396,6 +396,16 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 > **背景**: 鸿波 5/4 看到 OpenAI Codex 加了"电子宠物" (桌面悬浮动画显 AI 状态), 问"我们要不要做". 评估: **应该做, demo 后 ship**.
 > **跟 brand kit 完美契合**: 我们 5/3 做的 mascot SVG (圆胖鲶鱼 + 双须) 物化到桌面.
 > **跟 BL-E11/E15/E19 (人格 sprint) 同思路**: AI 从"工具" → "在场的存在".
+>
+> **❌ 9/12 整个 BL-E27 删除** (鸿波"没用的删干净"): 5/5 spike 一直到 5/8 的 E27.4 全部撤。
+> 证据: 默认隐藏 + 开关埋在设置卡 11px 小字, 没人开过; `pet_pending_bubbles.jsonl` 攒了
+> 423 条事件, `pet_status_seen_ts.json` 停在 7/27 —— 六周系统一直往桌宠推, 没人看过一眼;
+> 它做的三件事 (状态色 / 气泡 / 点击唤主窗) 主窗、系统通知、Dock 各有更好的版本;
+> 5/6 定的"桌宠 = 主动信息统一出口"在 7/24 BL-PROACTIVE-STARTER-KILL 后已无信息可出;
+> 技术上一直在妥协 (跨 webview 事件不通 → 三个轮询; NSPanel 拖不动 → 快捷键切四角;
+> 靠 macOSPrivateApi 才透明)。政企客户桌面上常驻一条 always-on-top 卡通鱼也不合定位。
+> "任务做完/失败、你还没看"这个信号有价值, 接到导航红点 (协同 tab 那套) + Dock 角标上, 不靠副窗。
+> 下表保留作决策记录。
 
 | ID | 阶段 | 估时 | 何时 | 范围 |
 |---|---|---|---|---|
@@ -824,7 +834,7 @@ M  ★ 5/10 架构反思     3 项   (2 ⬜ + 1 ❄️)         · 5/15 起做 (
 | BL-ARCH3 | **catfish-edge-daemon (可选, 性能评估后定)** — Tauri Companion 瘦身后 watchdog/OAuth/文件 IO 拆出来成本机系统服务 (launchd/systemd), Tauri ↔ daemon localhost:8994 HTTP. ❄️ 暂不做, 先看 BL-ARCH1 落地后 Companion 还多重 | ❄️ | 1-2 周 | BL-ARCH1 完成 + 性能评估 |
 | BL-VOICE2 P0 | **Piper local TTS — 让鲶鱼说话** (mac, 5/10 鸿波 "这么好玩的没理由不现在做"). subprocess 调 piper 二进制 (跟 whisper.cpp 同模板), 中文 voice ~30MB, 100% 本地数据不出公司. 文件: `commands/tts.rs` + `lib/tts.ts` + `TTSButton.tsx` + ChatMessage 集成 + Tauri assetProtocol scope. 部署: `brew install piper-tts` + curl voice. | ✅ 5/10 | 1 天 | BL-FIX23 (chat 流式稳定) |
 | BL-VOICE2-WIN | Piper Windows 打包 — piper.exe 内置 .exe bundle resource, find_executable 走 Tauri resource path (跟 BL-WIN9 同模板) | ⬜ | 1 天 | BL-VOICE2 P0 |
-| BL-VOICE2-PET | 桌宠"说话"动画 — catfish-pet.svg 加嘴巴帧 + 跟音频时长同步 cycle (员工看到桌宠真在说话, 央企演示加分明显) | ⬜ | 1-2 天 | BL-VOICE2 P0 |
+| BL-VOICE2-PET | 桌宠"说话"动画 | ❌ 9/12 作废 | 桌宠 (BL-E27) 整个删了: 默认隐藏没人开过, 事件攒 423 条六周没人看; 提醒并回系统通知 + 导航红点 | — |
 | BL-VOICE2-PRO | Proactive 闲聊触发 → 自动播 (员工 opt-in, 默认关). 配合 BL-VOICE2-PET 桌宠动画做"会主动找你说话的鲶鱼" | ⬜ | 半天 | BL-VOICE2-PET |
 | BL-VOICE2-AGENT | AgentPrefsCard 加 voice 选择器 (huayan/bizhao) + 试听按钮 + tts.enabled toggle | ⬜ | 半天 | BL-VOICE2 P0 |
 

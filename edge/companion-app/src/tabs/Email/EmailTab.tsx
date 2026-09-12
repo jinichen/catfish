@@ -313,7 +313,7 @@ export default function EmailTab() {
             prev.map((it) => (it.id === selectedId ? { ...it, is_read: true } : it)),
           );
           // BL-COMPANION-EMAIL-DIGEST-STEP5 sub-task 2 (5/20): 同步告诉 store
-          // 这封被读了 → 桌宠主动闲聊 (BL-E13) 不再 push 这封, 即使 24h
+          // 这封被读了 → 主动闲聊 (BL-E13) 不再 push 这封, 即使 24h
           // dedup window 还在. 写 localStorage 持久化跨 Companion 重启.
           markEmailRead(selectedId);
         }

@@ -46,9 +46,7 @@ pub mod oauth_store;  // ⚠ 凭证落盘 —— 改这里前先看文件头 (8/
 pub mod oauth_token;  // 换 token + id_token 解码 (8/15 切出)
 pub mod oauth;
 pub mod distill_scheduler;
-pub mod pet_hover;
 pub mod picker_config;    // P3.5.28 (6/17 鸿波): chat picker 选的 model 桥给 background task
-pub mod pet_status;
 pub mod process;
 pub mod upstream_error_guard; // 8/8: 上游把错误当正文返 (HTTP 200 + 错误文本) 的识别 + 冷却
 pub mod tool_bridge_rpc;  // P3.5.45 (6/20 鸿波): tool-bridge sock NDJSON RPC 公共 helper, recmode + 后续 callers 复用

@@ -15,7 +15,9 @@
  *   memory sync_turn 5 轮/30 min 节流 vs 死时间不同步 + 无历史 dedupe. 员工
  *   反馈 "刚说过的事又弹". 05/25 BL-PROACTIVE-RUNAWAY 里说的 "4 死时间 + 5
  *   triggers = 9 条/天 spam" 里的 4 里, 09:00 早安留 (真信息), 另外 3 砍.
- *   桌宠气泡 (useProactiveTriggers silence/deadline/focus 事件驱动) 保留.
+ *
+ * 9/12: 桌宠 (BL-E27) 删了。它曾是"主动信息统一出口", 但默认隐藏、没人开过,
+ *   而且隐藏时本来就兜底走 macOS 通知 —— 现在直接走通知, 少一层分支。
  */
 
 import { useEffect } from "react";
@@ -26,8 +28,6 @@ import {
   calendarWeekFetch,
   emailDigestFetch,
   remindersWeekFetch,
-  petEmitBubble,
-  petIsVisible,
   sendNotification,
   type CalendarEvent,
   type ReminderTodo,
@@ -143,8 +143,8 @@ async function fetchMorningBriefingStarter(): Promise<string | null> {
   }
 
   // BL-BRIEFING-LLM-MERGE (5/20): 试合并版 (1 调拿 todos + suggestion).
-  // 桌宠 push 只用 suggestion, todos 部分丢掉 — 老路径 fallback 用单调用 suggestion.
-  // BL-BRIEFING-LLM-PERSONALITY (5/20): 喂员工选的桌宠人格给 LLM
+  // 通知 push 只用 suggestion, todos 部分丢掉 — 老路径 fallback 用单调用 suggestion.
+  // BL-BRIEFING-LLM-PERSONALITY (5/20): 喂员工选的小鲶人格给 LLM
   const merged = await fetchMergedBriefing(unread, evts, todos, model, [], personality);
   if (merged) return merged.suggestion;
 
@@ -174,35 +174,15 @@ async function fireOne(time: string, source: ScheduledTime["source"]): Promise<v
     // 5/18 BL-COMPANION-VITE-CHUNK-WARN: useAgentStore 顶部 static (跟 App.tsx 等保持一致).
     const agentName = useAgentStore.getState().name || "小鲶";
 
-    // 5/6 鸿波: 桌宠 = 主动信息统一出口, 不再砸 macOS 通知刷屏.
-    //
-    // 流程:
-    //   1. 总是 prefill chat input (员工开 Companion 时一眼看到 starter, 改一下就发)
-    //   2. 桌宠 visible → emit pet_bubble (桌宠头顶冒气泡, 桌宠 idle → thinking)
-    //      桌宠 hidden  → 兜底 macOS 通知 (员工自己关了桌宠, 不能漏消息)
+    // 两个出口, 都走:
+    //   1. 工作台里以 assistant 身份直接出现这条 (员工开 Companion 就看到)
+    //   2. macOS 通知 (员工没开 Companion 也能被拉回)
     useUIStore.getState().startProactiveChat(starter);
-
-    let usedBubble = false;
-    try {
-      const visible = await petIsVisible();
-      console.log(`[proactive] 桌宠 visible=${visible}`);
-      if (visible) {
-        // 5/6: emitTo frontend 跨窗目测不可靠, 走 Rust 命令 (app.emit_to) 100% 准
-        const diag = await petEmitBubble(starter, agentName);
-        console.log("[proactive] pet_emit_bubble Rust 返回诊断:", diag);
-        usedBubble = true;
-      }
-    } catch (e) {
-      console.warn("[proactive] pet_is_visible 失败, fallback macOS 通知:", e);
-    }
-    if (!usedBubble) {
-      // BL-PROACTIVE-STARTER-KILL (7/24): 只剩 morning_briefing 分支, title 直接用.
-      const title = `☀️ ${agentName}的早安播报`;
-      console.log(`[proactive] 桌宠不可见, 走 macOS 通知 fallback (${title})`);
-      await sendNotification(title, starter);
-    }
+    // BL-PROACTIVE-STARTER-KILL (7/24): 只剩 morning_briefing 分支, title 直接用.
+    const title = `☀️ ${agentName}的早安播报`;
+    await sendNotification(title, starter);
     // 5/6 fix: markFired 已在 tick() 决定 fire 时立即标过, 这里不重复.
-    console.log(`[proactive] fireOne(${time}, ${source}): ✅ 完成 (usedBubble=${usedBubble})`);
+    console.log(`[proactive] fireOne(${time}, ${source}): ✅ 完成`);
   } catch (e) {
     console.warn(`[proactive] fireOne(${time}, ${source}) 失败:`, e);
   }

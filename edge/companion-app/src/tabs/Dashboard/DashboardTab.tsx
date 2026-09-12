@@ -185,7 +185,7 @@ export default function DashboardTab() {
         <CronJobsCard />
       </CollapsibleSection>
 
-      {/* 第二组: 小鲶设置 — 鲶鱼名 / 人设 / 桌宠. 5/16 砍 IdentityCard (BL-IDENTITY-CARD-KILL)
+      {/* 第二组: 小鲶设置 — 鲶鱼名 / 人设. 5/16 砍 IdentityCard (BL-IDENTITY-CARD-KILL)
           整合后只剩 1 卡, section 标题从"我自己"改"小鲶设置"消歧义 (原"我自己"模棱两可
           — 讲员工还是讲鲶鱼). */}
       <CollapsibleSection

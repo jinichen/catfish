@@ -35,17 +35,11 @@
 - 区别: 鲶鱼**记得你以前的对话** (新对话也能引用一周前的事)
 - 拖入 PDF/Excel/Word/CSV/图片附件直接 chat
 
-### 3.2 桌宠
-- **Cmd+Shift+P** — 桌宠出现/消失
-- 桌宠在屏幕角落待着, 鲶鱼有话直接顶上冒气泡
-- 点桌宠 = 唤起主窗
-- **Option+Shift+1/2/3/4** = 桌宠去 4 个屏角
-
-### 3.3 全局召唤
+### 3.2 全局召唤
 - **Cmd+Shift+Space** — 任何 app 里都能召唤主窗 (不用切回 Companion)
-- 想专心工作?  Cmd+Shift+F = 切"专注模式" (主窗变成伪 IDE 风格, 干扰最少)
+- 鲶鱼有话说 (早安、急邮件、任务做完) 走 macOS 系统通知 + 工作台里直接说
 
-### 3.4 主动闲聊
+### 3.3 主动闲聊
 - 鲶鱼**自己会找你** — 9:30 / 14:00 / 17:30 各一次
 - 桌宠头顶冒气泡, 主窗 chat 直接出现 assistant message
 - 不想被打扰? 仪表盘 → 主动闲聊卡 → 关掉
@@ -78,8 +72,6 @@
 |---|---|---|
 | Companion 起不来 | 重启 mac | 删 `~/.companion-state/` 整个 + 重启 |
 | chat 卡住不响应 | Cmd+R 刷新 webview (Cmd+Option+I 开 DevTools 后用) | 切其他 tab 再回来 |
-| 桌宠不显 | Cmd+Shift+P 再按一次 | 仪表盘 → 桌宠卡 → "重置位置" |
-| 桌宠不冒气泡 | 仪表盘 → ProactiveCard 点 "测一下 ▶" | 见底部"工程师救命" |
 | 上传文件没反应 | 文件 < 50MB? 格式支持? (.pdf .xlsx .docx .csv .txt .md) | 看仪表盘 tool-bridge 卡是不是绿 |
 | LLM 响应慢 / 报错 | chat 顶部模型下拉换 qwen-flash | 看仪表盘 gateway 卡有没有错 log |
 | 主动闲聊不弹 | 仪表盘 → ProactiveCard "测一下 ▶" 验证 | localStorage 清"catfish:proactive_last_fired" 重启 |
@@ -106,9 +98,6 @@
 | 快捷键 | 干啥 |
 |---|---|
 | `Cmd+Shift+Space` | 召唤主窗 (任何 app 里) |
-| `Cmd+Shift+P` | 桌宠显示 / 隐藏 |
-| `Cmd+Shift+F` | 切专注模式 (主窗) |
-| `Option+Shift+1/2/3/4` | 桌宠去 4 个屏角 |
 | `Cmd+R` | 刷新主窗 webview |
 | `Cmd+Option+I` | 开 DevTools (排查问题用) |
 | `Enter` | chat 发送 |

@@ -14,8 +14,9 @@ import os
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from catfish_tool_bridge import task_manager
+from catfish_tool_bridge import task_manager, task_manager_notify
 
 
 def _run(coro):
@@ -300,7 +301,7 @@ class TestTaskManager(unittest.TestCase):
 
 
 class TestTaskNotification(unittest.TestCase):
-    """BL-A2.3: 任务完成通知 (macOS + 桌宠 bubble)."""
+    """BL-A2.3: 任务完成通知 (macOS 系统通知)."""
 
     def setUp(self):
         task_manager._manager = task_manager.TaskManager()
@@ -318,93 +319,44 @@ class TestTaskNotification(unittest.TestCase):
             os.environ.pop("HOME", None)
         shutil.rmtree(self._tmphome, ignore_errors=True)
 
-    def test_short_task_writes_bubble_but_no_macos_notify(self):
-        """BL-E27.4 (5/8) 重写: 短任务也写桌宠 bubble (主通道), 但不发 macOS 通知.
-
-        行为变化原因: 鸿波 5/8 凌晨拍板 — 桌宠状态着色是主通道, macOS 通知降级到辅
-        (失败 / ≥30s 长任务才发系统通知). 桌宠通道全发, 颜色聚合多个通知到一个 dot.
-        """
+    def _run_task(self, label: str, *, fail: bool = False, seconds: float = 0.0):
         async def _t():
             mgr = task_manager.manager()
 
             async def runner():
-                return "fast"
+                if seconds:
+                    await asyncio.sleep(seconds)
+                if fail:
+                    raise RuntimeError("boom")
+                return "ok"
 
-            task = mgr.submit("test_short", "短任务", runner)
+            task = mgr.submit("test", label, runner)
             await task._async_task
+            return task
 
-        _run(_t())
-        # 桌宠 bubble: 即使短任务也写 (主通道)
-        bubble_file = Path(self._tmphome) / ".catfish" / "pet_pending_bubbles.jsonl"
-        self.assertTrue(bubble_file.exists(), "短任务也该写桌宠 bubble (BL-E27.4)")
+        return _run(_t())
 
-    def test_long_task_writes_bubble(self):
-        """任务 >= 3 秒 + completed 写 bubble."""
-        async def _t():
-            mgr = task_manager.manager()
-
-            async def runner():
-                await asyncio.sleep(3.1)
-                return "done"
-
-            task = mgr.submit("test", "长任务测试", runner)
-            await task._async_task
-
-        _run(_t())
-        bubble_file = Path(self._tmphome) / ".catfish" / "pet_pending_bubbles.jsonl"
-        self.assertTrue(bubble_file.exists())
-        content = bubble_file.read_text(encoding="utf-8")
-        # bubble 含任务 label + "做完了"
-        self.assertIn("长任务测试", content)
-        self.assertIn("做完了", content)
-        # JSON 格式正确
-        line = content.strip().split("\n")[0]
-        d = json.loads(line)
-        self.assertEqual(d["kind"], "task_done")
-        self.assertEqual(d["task_status"], "completed")
-
-    def test_failed_task_writes_failure_bubble(self):
-        """failed task 也通知, 文案区分."""
-        async def _t():
-            mgr = task_manager.manager()
-
-            async def runner():
-                await asyncio.sleep(3.1)
-                raise RuntimeError("boom")
-
-            task = mgr.submit("test", "失败任务", runner)
-            await task._async_task
-
-        _run(_t())
-        bubble_file = Path(self._tmphome) / ".catfish" / "pet_pending_bubbles.jsonl"
-        self.assertTrue(bubble_file.exists())
-        content = bubble_file.read_text(encoding="utf-8")
-        self.assertIn("失败任务", content)
-        self.assertIn("没做成", content)
+    def test_task_done_does_not_write_pet_bubble_file(self):
+        """9/12 桌宠 (BL-E27) 删了: 任务完成/失败都**不再**写
+        ~/.catfish/pet_pending_bubbles.jsonl —— 那是桌宠的轮询队列, 没有读者了。
+        回归闸: 谁把"通道 2"加回来, 这条先红。"""
+        self._run_task("短任务")
+        self._run_task("长任务测试", seconds=3.1)
+        self._run_task("失败任务", fail=True, seconds=3.1)
+        catfish_dir = Path(self._tmphome) / ".catfish"
+        self.assertFalse(
+            (catfish_dir / "pet_pending_bubbles.jsonl").exists(),
+            "桌宠已删, 不该再写 pet_pending_bubbles.jsonl",
+        )
 
     def test_notify_disabled_via_env(self):
-        """env CATFISH_TASK_NOTIFY=0 关 macOS 通知通道, 但桌宠 bubble (主通道) 仍发.
-
-        BL-E27.4 (5/8) 重写: env 只控 macOS 通知, 桌宠由 CATFISH_PET_BUBBLE 控.
-        想全关请同时设两个 env, 或改用 BL-E15 专注模式 (临时屏蔽).
-        """
+        """env CATFISH_TASK_NOTIFY=0 → 不发 macOS 通知 (osascript 不被调)."""
         old = os.environ.get("CATFISH_TASK_NOTIFY")
         os.environ["CATFISH_TASK_NOTIFY"] = "0"
         try:
-            async def _t():
-                mgr = task_manager.manager()
-
-                async def runner():
-                    await asyncio.sleep(3.1)
-                    return "x"
-
-                task = mgr.submit("real_kind", "real label", runner)
-                await task._async_task
-
-            _run(_t())
-            bubble_file = Path(self._tmphome) / ".catfish" / "pet_pending_bubbles.jsonl"
-            # bubble 仍写 (主通道)
-            self.assertTrue(bubble_file.exists(), "BL-E27.4: env 只关 macOS, bubble 主通道仍发")
+            with mock.patch.object(task_manager_notify.subprocess, "Popen") as popen:
+                self._run_task("real label", fail=True, seconds=0.0)
+            popen.assert_not_called()
         finally:
             if old is None:
                 os.environ.pop("CATFISH_TASK_NOTIFY", None)

@@ -7,13 +7,12 @@
  *   1. 1 分钟一次 tick
  *   2. 拉当前 chat messages + journal raw + focus 状态 + fired log
  *   3. 调 detectAnyTrigger 看有没有信号命中 + 不打扰守卫
- *   4. 命中 → petEmitBubble (桌宠头顶) + startProactiveChat (chat assistant 直接出)
- *      + 写 firedLog 给下次 tick 防重
+ *   4. 命中 → startProactiveChat (chat assistant 直接出) + 写 firedLog 给下次 tick 防重
  *
  * focus 状态: getCurrentWindow().onFocusChanged 事件, useRef 维护离开 / 回来时间戳
  *
- * Dismiss: 桌宠气泡 8s 自动收 (现有 pet.tsx 逻辑); 员工显式点桌宠唤主窗算"互动",
- *   可以视为 dismiss → 写 lastDismissTs. 暂不做这个细化, 先观察用户体验.
+ * 9/12: 桌宠气泡出口 (BL-E27) 删了, 只剩工作台 assistant 消息这一个出口。
+ *   这类信号触发的闲聊本来就是员工在看 Companion 时才有意义, 不另发系统通知。
  */
 
 import { useEffect, useRef } from "react";
@@ -23,8 +22,6 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { useChatStore } from "../store/chat";
 import { useUIStore } from "../store/ui";
-import { useAgentStore } from "../store/agent";
-import { petEmitBubble, petIsVisible } from "../lib/tauri";
 import { isTauriRuntime } from "../lib/runtime";
 import { fetchContextualStarter } from "../lib/me";
 import { detectAnyTrigger, type TriggerKind, type TriggerResult } from "../lib/triggers";
@@ -180,21 +177,8 @@ export function useProactiveTriggers(): void {
           `[triggers]   starter (${starterSource}): "${finalStarter.slice(0, 80)}"`,
         );
 
-        // 走桌宠气泡 + chat assistant 直接发 (跟死时间触发同一出口)
-        const agentName = useAgentStore.getState().name || "小鲶";
+        // chat assistant 直接发 (跟死时间触发同一出口)
         useUIStore.getState().startProactiveChat(finalStarter);
-
-        try {
-          const visible = await petIsVisible();
-          if (visible) {
-            await petEmitBubble(finalStarter, agentName);
-            console.log("[triggers] pet_emit_bubble OK");
-          } else {
-            console.log("[triggers] 桌宠不可见, 仅 chat 直接 push assistant message");
-          }
-        } catch (e) {
-          console.warn("[triggers] petEmitBubble 失败:", e);
-        }
 
         // focus return 触发后, 清掉 lastFocusLeftTs 防重复触发
         if (trigger.kind === "focus") {

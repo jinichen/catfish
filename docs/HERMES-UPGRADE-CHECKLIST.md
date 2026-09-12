@@ -95,7 +95,6 @@ grep -E "Hermes|Nous Research|⚕|Goodbye!" /tmp/catfish_boot.txt
 ## 5. BL-E 系列功能
 
 - [ ] **BL-E11 命名权**: 改名 → LLM 自我介绍用新名, agent_name 状态栏跟随
-- [ ] **BL-E15 专注模式**: Cmd+Shift+F → 切伪 IDE 视图, 再按一次切回
 - [ ] **BL-E16 关系建立 RelationCard**:
   - [ ] 显"鲶鱼对你的印象", recent_entries 5+ 条 (BL-E16 修复后从 30 条拉)
   - [ ] 标题用 LLM `### 主题`, 不显 session_id

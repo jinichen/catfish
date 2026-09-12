@@ -10,12 +10,10 @@ BL-TASKMGR-SPLIT 8/15: 从 task_manager.py 抽出来 (1133 行超限)。纯搬�
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 import subprocess
 import time
-from pathlib import Path
 
 from .task_manager_types import Task
 
@@ -67,23 +65,18 @@ def _should_send_macos_notify(task: Task, elapsed: float) -> bool:
 
 
 def _notify_task_done(task: Task) -> None:
-    """BL-A2.3 + BL-E27.4 (5/8 重写): 任务完成 双通道通知.
+    """BL-A2.3 + BL-E27.4 (5/8 重写): 任务完成通知.
 
-    通道 1: macOS osascript 通知 — 收紧规则:
+    macOS osascript 通知 — 收紧规则:
       - 失败 → 始终发
       - 成功 → ≥ 30s 才发
       - 测试任务过滤 ('_test' / '测试')
       - 同 label 1h 内去重 (防 demo 反复跑刷屏 — 鸿波 5/8 凌晨抱怨)
       - env CATFISH_TASK_NOTIFY=0 一键关
 
-    通道 2: 桌宠 bubble + 状态着色 (BL-E27.4 主通道):
-      - 写 ~/.catfish/pet_pending_bubbles.jsonl, 桌宠 polling 读
-      - 桌宠头部颜色 indicator (services/pet_status.rs 聚合)
-      - 单击桌宠 → 打开 Companion 看详情, 同时清 unseen 标记
-      - 比 macOS 通知中心累积一周直观
-
-    设计哲学 (5/8 鸿波): 鲶鱼是同事不是工具, 同事不会每件小事打断你 —
-    桌宠颜色低打扰是主, macOS 通知降级到"出错 / 长任务" 兜底.
+    9/12: 原"通道 2"—— 写 ~/.catfish/pet_pending_bubbles.jsonl 给桌宠冒泡/着色
+    —— 随桌宠 (BL-E27) 一起删了。本机实测那个文件攒了 423 条、六周没人看过
+    (pet_status_seen_ts.json 停在 7/27)。系统通知本来就是这条路径的兜底, 现在是唯一出口。
     """
     if task.finished_at is None or task.started_at is None:
         return
@@ -98,7 +91,7 @@ def _notify_task_done(task: Task) -> None:
     else:
         return  # other states 不通知
 
-    # === 通道 1: macOS osascript 通知 (BL-E27.4 收紧) ===
+    # macOS osascript 通知 (BL-E27.4 收紧)
     if (
         os.environ.get("CATFISH_TASK_NOTIFY", "1") != "0"
         and _platform_is_macos()
@@ -116,28 +109,6 @@ def _notify_task_done(task: Task) -> None:
             )
         except Exception:
             logger.warning("macOS osascript 通知失败", exc_info=True)
-
-    # 通道 2: 桌宠 bubble queue (写 ~/.catfish/pet_pending_bubbles.jsonl)
-    # Companion pet.tsx 端 polling 读这个文件 + 触发 pet 冒泡
-    try:
-        catfish_dir = Path(os.environ.get("HOME") or ".") / ".catfish"
-        catfish_dir.mkdir(parents=True, exist_ok=True)
-        bubble_file = catfish_dir / "pet_pending_bubbles.jsonl"
-        bubble_text = (
-            f"{task.label or task.kind} 做完了" if task.status == "completed"
-            else f"{task.label or task.kind} 没做成"
-        )
-        bubble = {
-            "ts": time.time(),
-            "kind": "task_done",
-            "task_id": task.task_id,
-            "task_status": task.status,
-            "text": bubble_text,
-        }
-        with bubble_file.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(bubble, ensure_ascii=False) + "\n")
-    except Exception:
-        logger.warning("写 pet_pending_bubbles.jsonl 失败", exc_info=True)
 
 
 def _platform_is_macos() -> bool:

@@ -14,7 +14,7 @@ use tauri::Emitter;
 use super::email_state::APP_HANDLE;
 use super::email_types::EmailItem;
 
-/// emit `catfish:email-urgent` 给前端 — 前端 App.tsx 接, 调桌宠主动闲聊.
+/// emit `catfish:email-urgent` 给前端 — 前端 App.tsx 接, 调主动闲聊 (BL-E13).
 /// 同时填一份简洁 starter 字符串, 前端不用再造句.
 pub(crate) fn emit_urgent_event(urgent: &[&EmailItem]) {
     let Some(app) = APP_HANDLE.get() else {

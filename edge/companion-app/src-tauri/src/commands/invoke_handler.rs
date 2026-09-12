@@ -385,22 +385,6 @@ pub(crate) fn handler(
             crate::commands::feedback::feedback_record,
             crate::commands::feedback::feedback_summary,
             crate::commands::feedback::feedback_clear,
-            // BL-E27 spike (5/5 凌晨): 桌宠副窗 toggle + 点击唤主窗 + 4 屏角切换
-            crate::commands::pet::pet_show,
-            crate::commands::pet::pet_hide,
-            crate::commands::pet::pet_is_visible,
-            crate::commands::pet::pet_clicked,
-            crate::commands::pet::pet_move_corner,
-            crate::commands::pet::pet_set_bubble_visible,
-            crate::commands::pet::pet_start_drag,
-            crate::commands::pet::pet_emit_bubble,
-            crate::commands::pet::pet_emit_status,
-            crate::commands::pet::pet_pop_bubble,
-            crate::commands::pet::pet_pop_status,
-            crate::commands::pet::pet_log,
-            // BL-E27.4 (5/8): 桌宠状态颜色 indicator + 单击重置
-            crate::commands::pet::pet_status_summary,
-            crate::commands::pet::pet_status_clear,
             // BL-MM11 (5/8): skill 级 👍/👎/改 评分
             crate::commands::skill_feedback::skill_feedback_record,
             crate::commands::skill_feedback::skill_feedback_summary,

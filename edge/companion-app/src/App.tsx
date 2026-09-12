@@ -21,7 +21,6 @@ import { useChatStore } from "./store/chat";  // P3.5.139 Phase 4: 启动同步 
 import { useEmailStore } from "./store/email";
 import { useProactiveScheduler } from "./hooks/useProactiveScheduler";
 import { useProactiveTriggers } from "./hooks/useProactiveTriggers";
-import { usePetStatusBroadcast } from "./hooks/usePetStatusBroadcast";
 import { getPickerModel } from "./lib/tauri";  // P3.5.139 Phase 4
 import { fetchUrgentEmailStarter } from "./lib/briefing";
 import { isTauriRuntime } from "./lib/runtime";
@@ -37,9 +36,6 @@ export default function App() {
   const activeTab = useUIStore((s) => s.activeTab);
   const loadAgentPrefs = useAgentStore((s) => s.loadAgentPrefs);
   const openAbout = useUIStore((s) => s.openAbout);
-
-  // BL-E27 一次到位: 桌宠状态联动 LLM (idle/thinking/running/done)
-  usePetStatusBroadcast();
 
   // BL-E11 命名权: 启动拉一次 agent prefs (员工自定义鲶鱼名 + 人设),
   // ChatPanel / Onboarding / 通知等多处 UI 共用. Onboarding 改了立即更新 store.
@@ -92,7 +88,7 @@ export default function App() {
   }, [openAbout]);
 
   // 5/18 BL-COMPANION-EMAIL-DIGEST-STEP4: 邮件 scheduler 检测到"急"邮件 →
-  // Rust 端 emit catfish:email-urgent. 这里接 → 走桌宠主动闲聊路径 (BL-E13 同套).
+  // Rust 端 emit catfish:email-urgent. 这里接 → 走主动闲聊路径 (BL-E13 同套).
   //
   // 5/20 BL-EMAIL-URGENT-LLM-PUSH: 改用 LLM 写 starter (跟早安播报同套路, 更自然),
   // LLM 挂了 fallback 老 Rust 拼的 hard-coded starter.
@@ -119,7 +115,7 @@ export default function App() {
           const unreadIds = ids.filter((id) => !readSet.has(id));
           if (unreadIds.length === 0) {
             console.log(
-              `[email-urgent] ${ids.length} 封急邮件员工都已读过, 跳过桌宠通知`,
+              `[email-urgent] ${ids.length} 封急邮件员工都已读过, 跳过通知`,
             );
             return;
           }

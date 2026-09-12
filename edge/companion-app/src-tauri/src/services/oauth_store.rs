@@ -35,7 +35,7 @@ use anyhow::{Context, Result};
 fn _oauth_storage_dir() -> Result<std::path::PathBuf> {
     // BL-WIN-HOME (7/17 · 达华): Windows 没有 $HOME (只有 %USERPROFILE%).
     // 老代码只查 HOME · SSO 回来 token 换成功但存文件时挂在 "登录失败: $HOME 未设置".
-    // 全项目其他 service (email_config/agent_prefs/curator_config/pet_status/hermes_api_config)
+    // 全项目其他 service (email_config/agent_prefs/curator_config/hermes_api_config)
     // 都写了 USERPROFILE fallback, 就这里漏了.
     let home = crate::util::paths::home_env()
         .or_else(|_| std::env::var("USERPROFILE"))

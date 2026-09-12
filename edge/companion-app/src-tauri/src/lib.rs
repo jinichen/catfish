@@ -55,53 +55,6 @@ pub fn run() {
     // 9/12: 专注模式 (BL-E15) 的全局 Cmd+Shift+F 删了 —— 那个组合在 VS Code /
     // JetBrains / Finder 里是"全局搜索", 全局注册会把别的 app 里的按键抢走。
 
-    // BL-E27 桌宠快捷键 (五一 sprint 5/5 凌晨) — Cmd+Shift+P (Pet).
-    // 切显示 / 隐藏桌宠副窗. 鸿波 spike 后反馈"是不是有快捷键关闭" → 加这条.
-    // 行为: visible → hide; hidden → show.
-    #[cfg(desktop)]
-    let pet_shortcut = tauri_plugin_global_shortcut::Shortcut::new(
-        Some(
-            tauri_plugin_global_shortcut::Modifiers::SUPER
-                | tauri_plugin_global_shortcut::Modifiers::SHIFT,
-        ),
-        tauri_plugin_global_shortcut::Code::KeyP,
-    );
-    // BL-E27 4 屏角快捷键 (5/5 凌晨拖拽 NSPanel 不工作的妥协):
-    // Option+Shift+1 左上 / 2 右上 / 3 左下 / 4 右下.
-    // ⚠️ 不用 Cmd+Shift+3/4/5 — 跟 macOS 截屏快捷键冲突.
-    #[cfg(desktop)]
-    let pet_corner_tl = tauri_plugin_global_shortcut::Shortcut::new(
-        Some(
-            tauri_plugin_global_shortcut::Modifiers::ALT
-                | tauri_plugin_global_shortcut::Modifiers::SHIFT,
-        ),
-        tauri_plugin_global_shortcut::Code::Digit1,
-    );
-    #[cfg(desktop)]
-    let pet_corner_tr = tauri_plugin_global_shortcut::Shortcut::new(
-        Some(
-            tauri_plugin_global_shortcut::Modifiers::ALT
-                | tauri_plugin_global_shortcut::Modifiers::SHIFT,
-        ),
-        tauri_plugin_global_shortcut::Code::Digit2,
-    );
-    #[cfg(desktop)]
-    let pet_corner_bl = tauri_plugin_global_shortcut::Shortcut::new(
-        Some(
-            tauri_plugin_global_shortcut::Modifiers::ALT
-                | tauri_plugin_global_shortcut::Modifiers::SHIFT,
-        ),
-        tauri_plugin_global_shortcut::Code::Digit3,
-    );
-    #[cfg(desktop)]
-    let pet_corner_br = tauri_plugin_global_shortcut::Shortcut::new(
-        Some(
-            tauri_plugin_global_shortcut::Modifiers::ALT
-                | tauri_plugin_global_shortcut::Modifiers::SHIFT,
-        ),
-        tauri_plugin_global_shortcut::Code::Digit4,
-    );
-
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -157,84 +110,6 @@ pub fn run() {
                             }
                         }
                         return;
-                    }
-                    // BL-E27 桌宠 Cmd+Shift+P → toggle pet 副窗显示/隐藏
-                    if shortcut == &pet_shortcut {
-                        if let Some(pet) = app.get_webview_window("pet") {
-                            let visible = pet.is_visible().unwrap_or(false);
-                            if visible {
-                                let _ = pet.hide();
-                                log::info!("Cmd+Shift+P: 桌宠隐藏");
-                            } else {
-                                // 5/6 BL-E27.2: 默认 ignore=true (透明区穿透),
-                                // hover tracker 80ms 后会在鲶鱼区切回 false
-                                let _ = pet.set_ignore_cursor_events(true);
-                                let _ = pet.show();
-                                log::info!("Cmd+Shift+P: 桌宠显示");
-                            }
-                        }
-                        return;
-                    }
-                    // BL-E27 4 屏角 Cmd+Shift+1/2/3/4 — 拖拽不工作的妥协.
-                    // 复用 pet_move_corner 命令逻辑 (避免 Rust 重写).
-                    let corner: Option<&str> = if shortcut == &pet_corner_tl {
-                        Some("tl")
-                    } else if shortcut == &pet_corner_tr {
-                        Some("tr")
-                    } else if shortcut == &pet_corner_bl {
-                        Some("bl")
-                    } else if shortcut == &pet_corner_br {
-                        Some("br")
-                    } else {
-                        None
-                    };
-                    if let Some(corner) = corner {
-                        if let Some(pet) = app.get_webview_window("pet") {
-                            // 5/5 鸿波二报"3/4 出屏幕" 修: 用 logical 坐标. Retina 2x 屏
-                            // monitor.size() 返物理像素 (2880x1800), 直接用 setPosition
-                            // 桌宠会被定位到 logical (1440x900) 屏外.
-                            if let Ok(Some(monitor)) = pet.current_monitor() {
-                                let m_size = monitor.size();
-                                let m_pos = monitor.position();
-                                let scale = monitor.scale_factor();
-                                let logical_w = (m_size.width as f64 / scale) as i32;
-                                let logical_h = (m_size.height as f64 / scale) as i32;
-                                let logical_pos_x = (m_pos.x as f64 / scale) as i32;
-                                let logical_pos_y = (m_pos.y as f64 / scale) as i32;
-                                const W: i32 = 200;  // 5/6 桌宠窗 120 → 200 留气泡空间
-                                const H: i32 = 200;
-                                const MARGIN: i32 = 16;
-                                const TOP_RESERVED: i32 = 32;     // menu bar
-                                const BOTTOM_RESERVED: i32 = 80;  // dock 估值
-                                let (x, y) = match corner {
-                                    "tl" => (logical_pos_x + MARGIN, logical_pos_y + TOP_RESERVED),
-                                    "tr" => (
-                                        logical_pos_x + logical_w - W - MARGIN,
-                                        logical_pos_y + TOP_RESERVED,
-                                    ),
-                                    "bl" => (
-                                        logical_pos_x + MARGIN,
-                                        logical_pos_y + logical_h - H - BOTTOM_RESERVED,
-                                    ),
-                                    "br" => (
-                                        logical_pos_x + logical_w - W - MARGIN,
-                                        logical_pos_y + logical_h - H - BOTTOM_RESERVED,
-                                    ),
-                                    _ => unreachable!(),
-                                };
-                                let _ = pet.set_position(
-                                    tauri::LogicalPosition::new(x as f64, y as f64),
-                                );
-                                // 5/6 BL-E27.2: 默认 ignore=true, hover tracker 80ms 修
-                                let _ = pet.set_ignore_cursor_events(true);
-                                let _ = pet.show();
-                                log::info!(
-                                    "Option+Shift+{} (corner {}): logical ({}, {}) on {}x{} scale {}",
-                                    match corner { "tl" => 1, "tr" => 2, "bl" => 3, "br" => 4, _ => 0 },
-                                    corner, x, y, logical_w, logical_h, scale,
-                                );
-                            }
-                        }
                     }
                 })
                 .build(),
@@ -410,7 +285,7 @@ pub fn run() {
 
             if qa_mode {
                 log::info!(
-                    "CATFISH_QA_MODE: 跳过 JWT、全局快捷键、自动服务、迁移和桌宠调度"
+                    "CATFISH_QA_MODE: 跳过 JWT、全局快捷键、自动服务和迁移"
                 );
                 return Ok(());
             }
@@ -527,25 +402,6 @@ pub fn run() {
                     log::warn!("注册 Cmd+Shift+Space 失败 (已被其他 app 占用?): {e}");
                 } else {
                     log::info!("已注册全局快捷键 Cmd+Shift+Space → 召唤鲶鱼浮窗");
-                }
-                if let Err(e) = app.global_shortcut().register(pet_shortcut) {
-                    log::warn!("注册 Cmd+Shift+P 失败 (已被其他 app 占用?): {e}");
-                } else {
-                    log::info!("已注册全局快捷键 Cmd+Shift+P → 切桌宠显示/隐藏");
-                }
-                // 4 屏角快捷键 (拖拽妥协方案), 用 Option+Shift+1/2/3/4 避开
-                // macOS 截屏快捷键 (Cmd+Shift+3/4/5).
-                for (sc, label) in [
-                    (pet_corner_tl, "Option+Shift+1 → 桌宠左上"),
-                    (pet_corner_tr, "Option+Shift+2 → 桌宠右上"),
-                    (pet_corner_bl, "Option+Shift+3 → 桌宠左下"),
-                    (pet_corner_br, "Option+Shift+4 → 桌宠右下"),
-                ] {
-                    if let Err(e) = app.global_shortcut().register(sc) {
-                        log::warn!("注册 {label} 失败: {e}");
-                    } else {
-                        log::info!("已注册全局快捷键 {label}");
-                    }
                 }
             }
 
@@ -672,23 +528,11 @@ pub fn run() {
                 }
             });
 
-            // 5/6 BL-E27.2: 桌宠 hover tracker — 80ms 一次轮询鼠标位置,
-            // 切 set_ignore_cursor_events 让透明区真透 (附近点击穿到桌面),
-            // 桌宠区接事件 (能点能拖). 见 services/pet_hover.rs.
-            services::pet_hover::schedule_pet_hover_tracker(app.handle().clone());
             // 8/4: 定时蒸馏。以前那句"由 hermes plugin 自动每 24h 跑"是空的 ——
             // catfish-memory 根本没被 hermes 加载 (config.yaml plugins.enabled
             // 里没有它), 蒸馏只在员工点按钮时以 dream_cli.py 子进程形态跑过。
             // 详见 services/distill_scheduler.rs 顶部。
             services::distill_scheduler::schedule_distill(app.handle().clone());
-
-            // BL-E27 spike (5/5 凌晨): macOS 透明窗 — 不依赖 unsafe NSWindow 调用.
-            // 单纯 transparent:true 在某些 macOS 版本仍白底, macOSPrivateApi:true (config 顶层加)
-            // 让 Tauri 用 NSPanel 替代 NSWindow, NSPanel 默认 backgroundColor=clear,
-            // 配合 pet.html body { background: transparent } 真透明.
-            //
-            // 如果 macOSPrivateApi 还不够 (5/5 鸿波报"白底"), 5/22 BL-E27.1 真做时
-            // 加 tauri-plugin-window-vibrancy crate 用 setBackgroundColor:clearColor.
 
             Ok(())
         })

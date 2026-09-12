@@ -24,7 +24,7 @@ pub(crate) struct EmailItem {
 /// LLM 评级结果. fallback 'medium' 时不通知, 不阻塞.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Urgency {
-    Urgent,   // 急: 系统通知 + (step4 桌宠主动闲聊)
+    Urgent,   // 急: 系统通知 + 前端主动闲聊 (BL-E13)
     Medium,   // 中: 静默, 卡片显但不打扰
     Low,      // 低: 静默 (newsletter / 自动通知类)
 }

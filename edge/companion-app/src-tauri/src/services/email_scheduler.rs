@@ -10,12 +10,12 @@
 //! ## step3 (本轮): LLM 评级 → 只"急"通知, "中/低"静默
 //!
 //! 新未读 → 喂给 gateway 快速 model 评 急/中/低 → 只"急"发系统通知 (Glass 声音 +
-//! 桌宠提示框, 等 step4 BL-E13 hook), "中/低" 静默进 log 不打扰员工. 防通知疲劳.
+//! 主动闲聊, BL-E13 hook), "中/低" 静默进 log 不打扰员工. 防通知疲劳.
 //!
 //! ## 不做的事
 //!
 //! - 不缓存邮件元数据到 Tauri state 给前端用 — 卡片仍然自己 shell out 拉.
-//! - 桌宠主动闲聊 hook 留 step4 (跟 BL-E13 集成).
+//! - 主动闲聊 hook 留 step4 (跟 BL-E13 集成).
 //! - 评级失败 → fallback 当"中" (不通知) — 不 fail 闭路径上不重要的事
 //!
 //! ## 配置
@@ -254,7 +254,7 @@ pub struct EmailItemInput {
 /// app 启动时调一次. poll_secs=0 (yaml 或 env) 则不起.
 ///
 /// `app` 参数: 给 background task 存进 OnceLock, 用来 emit `catfish:email-urgent`
-/// 事件 → 前端 App.tsx 监听 → 调起桌宠主动闲聊 (BL-E13 路径).
+/// 事件 → 前端 App.tsx 监听 → 调起主动闲聊 (BL-E13 路径, 工作台 assistant 消息 + 系统通知).
 pub fn schedule_email_scheduler(app: AppHandle) {
     let _ = APP_HANDLE.set(app);
     let cfg = email_config::email_config();
@@ -368,7 +368,7 @@ pub fn schedule_email_scheduler(app: AppHandle) {
                                 // BL-COMPANION-BRIEFING-V2 sub-task 2 (5/20): 24h dedup
                                 // 同一急邮件不重复 push macOS 通知. 第一次 push 之后,
                                 // 24h 内 scheduler tick 检测到这封仍 unread 不再叫醒.
-                                // 仍 emit Tauri 事件给前端 — 前端桌宠主动闲聊 path
+                                // 仍 emit Tauri 事件给前端 — 前端主动闲聊 path
                                 // (BL-E13 step4) 自己有 dedup, 这里不替它做主.
                                 let to_push = dedup_for_push(&urgent);
                                 if !to_push.is_empty() {

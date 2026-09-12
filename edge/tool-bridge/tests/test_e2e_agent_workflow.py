@@ -5,7 +5,7 @@ BL-A1.5 + A2.5 端到端 Agent workflow 测试.
   - 真 sandbox (sandbox-exec)
   - 真 task_manager (asyncio task store)
   - 真 docx 文件读写
-  - 真通知 jsonl 写
+  - 完成通知不再写桌宠 jsonl (9/12 桌宠删了)
 
 模拟 demo 场景:
   Scenario A (BL-A1.5): 单任务 Agent 自完成
@@ -14,7 +14,7 @@ BL-A1.5 + A2.5 端到端 Agent workflow 测试.
 
   Scenario B (BL-A2.5): 多任务并发
     LLM → 同时启动 2 个后台 task → 第 1 个写 docx + 第 2 个查数据
-    验证: 两任务真并发 + 各自完成 + 通知 jsonl 真写
+    验证: 两任务真并发 + 各自完成
 
 跑法:
     cd edge/tool-bridge
@@ -24,7 +24,6 @@ BL-A1.5 + A2.5 端到端 Agent workflow 测试.
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import platform
 import shutil
@@ -205,8 +204,9 @@ class TestE2EConcurrentTasks(unittest.TestCase):
 
         _run(_t())
 
-    def test_long_task_writes_notification_bubble(self):
-        """场景 2.7 完成通知: 任务 ≥ 3s 完成后写 bubble jsonl."""
+    def test_long_task_does_not_write_pet_bubble(self):
+        """9/12 桌宠 (BL-E27) 删了: 场景 2.7 的"完成通知"只剩 macOS 系统通知,
+        不再写 pet_pending_bubbles.jsonl。回归闸。"""
         from catfish_tool_bridge import task_manager
 
         async def _t():
@@ -221,16 +221,7 @@ class TestE2EConcurrentTasks(unittest.TestCase):
 
         _run(_t())
         bubble_file = Path(self._tmphome) / ".catfish" / "pet_pending_bubbles.jsonl"
-        self.assertTrue(bubble_file.exists(), "桌宠 bubble jsonl 没写")
-        content = bubble_file.read_text(encoding="utf-8")
-        # demo 场景 2.7 期望的桌宠文案
-        self.assertIn("修订《资质管理办法》", content)
-        self.assertIn("做完了", content)
-        # 解析 JSON 校验 task_status
-        line = content.strip().split("\n")[-1]
-        d = json.loads(line)
-        self.assertEqual(d["kind"], "task_done")
-        self.assertEqual(d["task_status"], "completed")
+        self.assertFalse(bubble_file.exists(), "桌宠已删, 不该再写 pet_pending_bubbles.jsonl")
 
     def test_e2e_concurrent_sandbox_tasks(self):
         """端到端: 两个 sandbox execute_code 任务并发跑, 各自独立."""

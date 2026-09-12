@@ -273,7 +273,6 @@ let us bring that to ~5 minutes per release.
 - [ ] hermes builtin tool 能 dispatch (memory_save / file_read 等)
 - [ ] memory_save 响应里 `~/.hermes` 已脱敏成"鲶鱼本机存储"
 - [ ] BL-E11 命名权: 改名后 LLM 自我介绍用新名
-- [ ] BL-E15 专注模式: Cmd+Shift+F 切伪 IDE
 - [ ] BL-E16 关系建立: session_meta 注入正确
 - [ ] 主动闲聊: 9:30 / 14:00 / 17:30 macOS 通知触发
 - [ ] Quota: chat 超限正确返 429 + 友好话术

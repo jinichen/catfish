@@ -9,15 +9,14 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react()],
 
-  // 5/5 BL-E27 spike: 多入口 (主 Companion + 桌宠副窗 pet.html)
   build: {
     // P3.5.29 Phase 6.2 (6/17 鸿波): main bundle 1.17 MB → chunkSizeWarningLimit
     // 设 800 KB 降 warning 噪音, 真code split** 见 manualChunks.
     chunkSizeWarningLimit: 800,
     rollupOptions: {
+      // 9/12: 桌宠副窗 pet.html 入口删了 (BL-E27), 回到单入口
       input: {
         main: "index.html",
-        pet: "pet.html",
       },
       output: {
         // P3.5.29 Phase 6.2 (6/17 鸿波) — vendor chunk split.

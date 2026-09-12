@@ -5,7 +5,7 @@
  *   - 最近 5 封未读元数据 (发件人 + 主题, 不显正文 — 隐私 + 重要邮件员工自己开 Mail 看)
  *   - 两个按钮: "💬 让小鲶处理" (跳 chat + auto prompt) / "📬 开 Mail.app"
  *
- * step1 不带 scheduler / LLM 评级 / 桌宠主动闲聊集成 — 这些 step2/3 加.
+ * step1 不带 scheduler / LLM 评级 / 主动闲聊集成 — 这些 step2/3 加.
  * 数据走 Rust shell out `catfish-email list --unread --json`, 不缓存.
  */
 

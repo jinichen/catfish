@@ -22,7 +22,7 @@ import { warnIfUpstreamError } from "./upstreamErrorGuard";
 import { fetchWithAuth } from "./me";
 import { type CalendarEvent, type ReminderTodo } from "./tauri";
 
-/** BL-BRIEFING-LLM-PERSONALITY (5/20): 把员工选的桌宠人格 (gentle/direct/roast)
+/** BL-BRIEFING-LLM-PERSONALITY (5/20): 把员工选的小鲶人格 (gentle/direct/roast)
  * 注入到 LLM system prompt. 让早安播报 / 急邮件提醒 / TODO 抽取 4 个 LLM 调用
  * 都按选的人格说话.
  *
@@ -385,13 +385,13 @@ function _buildMergedUserPrompt(
   return lines.join("\n");
 }
 
-// ── BL-EMAIL-URGENT-LLM-PUSH (5/20): 急邮件桌宠播报 LLM 化 ──────
+// ── BL-EMAIL-URGENT-LLM-PUSH (5/20): 急邮件提醒 LLM 化 ──────
 //
 // 5/18 scheduler 拼的 hard-coded starter ("X 那封紧的来了 — Y 帮你看?") 太机械.
 // 这里调 LLM 写一句更自然的提醒, 跟早安播报同风格. LLM 挂了 → 调用方用 fallback.
 
 const URGENT_EMAIL_SYSTEM_PROMPT = `你是用户的鲶鱼数字员工 (Catfish). 用户刚收到一批 LLM 评为"急"的邮件,
-你的任务: 写一句给桌宠的提醒 (员工抬头看到桌宠头顶气泡).
+你的任务: 写一句提醒 (会以小鲶的口吻直接出现在员工的工作台对话里).
 
 风格:
 - 一句话, 25 字内
@@ -401,9 +401,9 @@ const URGENT_EMAIL_SYSTEM_PROMPT = `你是用户的鲶鱼数字员工 (Catfish).
 
 只返一句话, 不要任何前缀 (不要"提醒:" / "急邮件:") / 解释 / markdown.`;
 
-/** 调 LLM 写一句给桌宠的急邮件提醒. 失败 → 返 null (调用方用 scheduler 给的 fallback).
+/** 调 LLM 写一句急邮件提醒. 失败 → 返 null (调用方用 scheduler 给的 fallback).
  *
- * timeout 4s — 桌宠播报体验 critical, 不能卡员工.
+ * timeout 4s — 提醒是即时体验, 不能卡员工.
  */
 export async function fetchUrgentEmailStarter(
   urgentEmails: UrgentEmailHint[],
@@ -416,7 +416,7 @@ export async function fetchUrgentEmailStarter(
     .slice(0, 5)
     .map((e, i) => `${i + 1}. ${e.sender} - ${e.subject}`)
     .join("\n");
-  const userPrompt = `刚到 ${urgentEmails.length} 封急邮件:\n${list}\n\n写一句桌宠提醒.`;
+  const userPrompt = `刚到 ${urgentEmails.length} 封急邮件:\n${list}\n\n写一句提醒.`;
 
   const url = `${config.backendUrl}/v1/chat/completions${SERVICE_LLM_QUERY}`;
   const controller = new AbortController();

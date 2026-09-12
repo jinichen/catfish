@@ -12,7 +12,7 @@
  *   - localStorage 镜像 urgency map → 启动立即从 localStorage 取, badge 即出
  *   - 后台拉 Rust 真 map 后 reconcile (Rust > localStorage 权威)
  *   - emailMarkRead 后, 调 markUrgencyRead(id) — 让该 id 不再触发主动通知
- *     (push_history dedup window 24h 内仍生效, 但桌宠主动闲聊 BL-E13 跳过)
+ *     (push_history dedup window 24h 内仍生效, 但主动闲聊 BL-E13 跳过)
  *
  * 不持久化的:
  *   - 单封邮件 body cache (隐私, 跟 Rust 端红线一致 — 不缓存邮件正文)
@@ -100,11 +100,11 @@ interface EmailState {
   reconcileFromRust: () => Promise<Record<string, string>>;
   /** 前端主动评级一批后写入 (e.g. emailClassifyNow 返完整 map). 同步 localStorage. */
   setUrgencyMap: (map: Record<string, string>) => void;
-  /** 标某封已读 — 加进 readIds, 持久化. 桌宠主动闲聊路径检查这个 set 跳过. */
+  /** 标某封已读 — 加进 readIds, 持久化. 主动闲聊路径检查这个 set 跳过. */
   markRead: (id: string) => void;
   /** 批量标已读 (e.g. 员工在 EmailTab 选多封) */
   markReadBulk: (ids: string[]) => void;
-  /** 检查某 id 是否被标过 — 桌宠主动闲聊 / 通知 dedup 用 */
+  /** 检查某 id 是否被标过 — 主动闲聊 / 通知 dedup 用 */
   isRead: (id: string) => boolean;
   /** 清掉 readIds — 员工想 reset 时 (不常用, 隐私逃生) */
   clearReadHistory: () => void;

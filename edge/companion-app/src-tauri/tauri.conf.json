@@ -11,7 +11,6 @@
   },
   "app": {
     "withGlobalTauri": true,
-    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "鲶鱼 Companion",
@@ -24,28 +23,6 @@
         "minimizable": true,
         "maximizable": true,
         "closable": true,
-        "dragDropEnabled": false
-      },
-      {
-        "label": "pet",
-        "title": "鲶鱼桌宠",
-        "url": "/pet.html",
-        "width": 200,
-        "height": 200,
-        "x": 1200,
-        "y": 600,
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "resizable": false,
-        "minimizable": false,
-        "maximizable": false,
-        "closable": true,
-        "focus": false,
-        "visible": false,
-        "shadow": false,
-        "acceptFirstMouse": true,
         "dragDropEnabled": false
       }
     ],

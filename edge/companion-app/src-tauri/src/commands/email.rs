@@ -5,7 +5,7 @@
 //!   - 这里只 shell out `catfish-email list --unread --json`, 拿"未读邮件元数据"
 //!     (subject / sender / date / id) 给 Dashboard 卡片渲染.
 //!   - 每次调用都 fork 子进程, 简单, 不维护 daemon.
-//!   - step1 没 scheduler, 手动点刷新 / 切 tab 触发. scheduler / LLM 评级 / 桌宠
+//!   - step1 没 scheduler, 手动点刷新 / 切 tab 触发. scheduler / LLM 评级 / 主动闲聊
 //!     集成留 step2-3.
 //!
 //! 红线:

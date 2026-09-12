@@ -7,7 +7,7 @@
 //!   Windows 用 `%USERPROFILE%` (或 `%HOMEDRIVE%%HOMEPATH%` 拼接).
 //!
 //!   全项目里有 6 处 service (email_config/agent_prefs/curator_config/
-//!   pet_status/hermes_api_config/curator_state/server_config/endpoints)
+//!   hermes_api_config/curator_state/server_config/endpoints)
 //!   手写了 `.or_else(|_| std::env::var("USERPROFILE"))` fallback, 但另外
 //!   60+ 处 command 全部漏了. 达华 Windows 员工任何一处触发都会挂或跳过.
 //!

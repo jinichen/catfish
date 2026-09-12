@@ -18,7 +18,7 @@ interface Props {
   text: string;
   /** 可选: 替默认 voice (zh_CN-huayan-medium) */
   voice?: string;
-  /** 16-20px 给 ChatMessage / 24px 给桌宠 */
+  /** 16-20px 给 ChatMessage */
   size?: number;
 }
 

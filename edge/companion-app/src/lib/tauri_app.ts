@@ -1,19 +1,15 @@
 /**
- * 应用自身 · 桌宠副窗与跨窗通信 / 技能与 MCP 安装 / 系统 / 偏好 / 文件
+ * 应用自身 · 技能与 MCP 安装 / 系统 / 偏好 / 文件
  *
  * 2026-08-15 从 lib/tauri.ts 切出来 (1309 行超限)。纯搬迁, 逻辑一行未改。
  * 边界照抄原文件里作者早就画好的 `// ── xxx ──` 分节, 不是我另起的划分。
  *
  * lib/tauri.ts 现在是 barrel, 只做 re-export —— 62 个调用方一行没动。
+ *
+ * 9/12: 桌宠副窗 (BL-E27) 的 pet_* 命令全删。
  */
 
 import { invoke as rawInvoke } from "@tauri-apps/api/core";
-
-// ── BL-E27 spike: 桌宠副窗 ─────────────────────────────────
-export const petShow = () => rawInvoke<void>("pet_show");
-export const petHide = () => rawInvoke<void>("pet_hide");
-export const petIsVisible = () => rawInvoke<boolean>("pet_is_visible");
-
 
 // ── E7 phase 2 (6/6): skill 安装/卸载, MCP 接入/移除 ───────────
 //
@@ -197,20 +193,6 @@ export const expertBotSoulGet = (profileId: string) =>
 export const expertBotRoute = (scenario: string, pickerModel: string) =>
   rawInvoke<ExpertBotRoute>("expert_bot_route", { scenario, pickerModel });
 
-
-// ── 桌宠跨窗通信 (5/6: Tauri 跨 webview event 不通, 走 Rust polling buffer) ─
-export interface PetEmitBubbleDiag {
-  pet_window_exists: boolean;
-  pet_visible: boolean;
-  /** 已 push 到 polling buffer, pet.tsx 300ms 内拉走 */
-  queued: boolean;
-}
-/** 主窗调: 桌宠头顶冒气泡, 8s 后自动收. */
-export const petEmitBubble = (text: string, agentName?: string) =>
-  rawInvoke<PetEmitBubbleDiag>("pet_emit_bubble", { text, agentName });
-/** 主窗调: 切桌宠 4 状态 (idle / thinking / running / done). */
-export const petEmitStatus = (status: "idle" | "thinking" | "running" | "done") =>
-  rawInvoke<void>("pet_emit_status", { status });
 
 // ── file (Phase 2 优雅下载: skill 生成的文件,在 Finder 打开/显示) ───
 /** 在 Finder/资源管理器里高亮选中文件 (macOS: open -R). */

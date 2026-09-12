@@ -77,7 +77,6 @@ pub mod transparent_log; // 6/8 BL-EMPLOYEE-SELF-SERVE A4: 数据外发日志 (�
                          // companion.yaml style_fingerprint.scan_dirs 配置.
 pub mod decisions; // BL-ADVISOR-DECISIONS (5/21 Phase 7): ~/.catfish/decisions.jsonl 决策留痕
 pub mod drafts; // BL-ADVISOR-DRAFTS (5/21 Phase 7): ~/.catfish/outputs/<date>/ 草稿存储
-pub mod pet;
 pub mod proactive;
 pub mod profile; // BL-ADVISOR-PROFILE (5/21 Phase 7): 员工职级 + 画像自动识别
 pub mod recmode; // P3.5.45 (6/20 鸿波): 录屏 Tauri command 直调 tool-bridge sock, 砍 gateway HTTP path  // BL-PROACTIVE-DECOUPLE (5/26): journal_tail + last_model 给 /api/proactive/* header 透传
