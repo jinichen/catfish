@@ -1,17 +1,19 @@
-/** 主导航栏 + BL-E15 专注模式按钮 */
+/** 主导航栏。
+ *
+ * 9/12: 底部「专注」按钮 (BL-E15, 5/3) 连同专注模式一起删了 —— 它只是把界面换成
+ * 一张伪 IDE 假日志图, 不屏蔽任何通知/调度, 5/4 后没人动过; 对政企客户是信任风险。
+ */
 
 import type { Icon } from "@phosphor-icons/react";
 import {
   BookOpenText,
   ChartBar,
   EnvelopeSimple,
-  CornersIn,
   Handshake,
   SquaresFour,
   SunHorizon,
 } from "@phosphor-icons/react";
 import { useUIStore, type TabId } from "../store/ui";
-import { useFocusStore } from "../store/focus";
 import { useAgentStore } from "../store/agent";
 import { pendingCount, useRoomLink } from "../lib/roomLinkStore";
 
@@ -41,7 +43,6 @@ const TABS: { id: TabId; label: string; icon: Icon }[] = [
 export default function TabBar() {
   const activeTab = useUIStore((s) => s.activeTab);
   const setActiveTab = useUIStore((s) => s.setActiveTab);
-  const enterFocus = useFocusStore((s) => s.toggle);
   const agentName = useAgentStore((s) => s.name);
   // 订阅即开始轮询邮筒 + P49 探针 —— 导航常驻, 所以员工不进「协同」页也能看到红点。
   const collabPending = pendingCount(useRoomLink());
@@ -78,15 +79,6 @@ export default function TabBar() {
       </div>
 
       <div className="app-rail__footer">
-        <button
-          type="button"
-          onClick={enterFocus}
-          title="进入专注模式 (Cmd+Shift+F)"
-          className="app-rail__item app-rail__item--quiet"
-        >
-          <CornersIn size={20} aria-hidden="true" />
-          <span>专注</span>
-        </button>
         <div className="app-rail__identity" title={`当前数字副手：${agentName}`}>
           <img src="/catfish-avatar.svg" alt="" />
           <span>{agentName}</span>

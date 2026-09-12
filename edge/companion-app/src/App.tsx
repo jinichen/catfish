@@ -8,7 +8,6 @@ import AuthBanner from "./components/AuthBanner";
 import HermesReconnectBanner from "./components/HermesReconnectBanner";  // P3.3.5 (6/9): hermes 重连 banner
 import HermesBootstrapStatus from "./components/HermesBootstrapStatus";
 import DevUserSwitcher from "./components/DevUserSwitcher";
-import FocusModeView from "./components/FocusModeView";
 import LoginGate from "./components/LoginGate";
 import OnboardingWizard from "./components/OnboardingWizard";
 import TabBar from "./components/TabBar";
@@ -20,7 +19,6 @@ import { useUIStore } from "./store/ui";
 import { useAgentStore } from "./store/agent";
 import { useChatStore } from "./store/chat";  // P3.5.139 Phase 4: 启动同步 picker_model → store
 import { useEmailStore } from "./store/email";
-import { useFocusStore } from "./store/focus";
 import { useProactiveScheduler } from "./hooks/useProactiveScheduler";
 import { useProactiveTriggers } from "./hooks/useProactiveTriggers";
 import { usePetStatusBroadcast } from "./hooks/usePetStatusBroadcast";
@@ -38,8 +36,6 @@ const CollabTab = lazy(() => import("./tabs/Collab/CollabTab"));  // P50 (9/10):
 export default function App() {
   const activeTab = useUIStore((s) => s.activeTab);
   const loadAgentPrefs = useAgentStore((s) => s.loadAgentPrefs);
-  const focusActive = useFocusStore((s) => s.active);
-  const toggleFocus = useFocusStore((s) => s.toggle);
   const openAbout = useUIStore((s) => s.openAbout);
 
   // BL-E27 一次到位: 桌宠状态联动 LLM (idle/thinking/running/done)
@@ -79,21 +75,6 @@ export default function App() {
 
   // 5/6 BL-E13.5 真主动 Phase A: chat 沉默 / journal deadline / focus 切换 信号触发
   useProactiveTriggers();
-
-  // BL-E15 专注模式: 监听 Tauri 后端 emit 的 toggle 事件 (Cmd+Shift+F 触发).
-  // 切到 store, App 顶层根据 active 决定渲染 FocusModeView 还是正常 AppShell.
-  useEffect(() => {
-    if (!isTauriRuntime()) return;
-    let unlisten: (() => void) | null = null;
-    void (async () => {
-      unlisten = await listen("catfish:focus_mode_toggle", () => {
-        toggleFocus();
-      });
-    })();
-    return () => {
-      if (unlisten) unlisten();
-    };
-  }, [toggleFocus]);
 
   // 5/18 BL-COMPANION-ABOUT-HIJACK: macOS app menu "鲶鱼 Companion → 关于鲶鱼"
   // 走自定义 React 模态, 不走原生 NSPanel. Rust 端 emit "show-about", 这里接.
@@ -181,12 +162,9 @@ export default function App() {
 
   // 五一 sprint 5/5: Esc 隐藏浮窗 (配合 Cmd+Shift+Space 召唤)
   // 输入框聚焦时 Esc 由组件自己处理 (e.g. 关闭弹层); 这里只在 body 聚焦时拦截.
-  // BL-E15: 专注模式激活时这个 Esc-hide 不能跑, FocusModeView 自己 capture Esc 退专注.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      // 专注模式打开时, FocusModeView 用 capture 阶段抢先处理 Esc, 这里不该再 hide
-      if (useFocusStore.getState().active) return;
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName?.toLowerCase() ?? "";
       // 输入态 (textarea/input/contenteditable) 不抢, 让组件用 (清空输入 / 关弹窗).
@@ -198,21 +176,6 @@ export default function App() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []);
-
-  // BL-E15: 专注模式激活 → 整个 App 替换成 FocusModeView (不显聊天/Dashboard 杂讯).
-  // 注意放在 LoginGate 之前: 即使没登录, 按 Cmd+Shift+F 也能进专注 (员工常用场景:
-  // 临时打开 Companion 没登, 按快捷键挡屏).
-  if (focusActive) {
-    // 5/18 BL-COMPANION-ABOUT-HIJACK: AboutModal 在专注模式也要能弹 (员工
-    // 从 macOS menu 触发, 不应被专注 view 吞掉).
-    return (
-      <>
-        <FocusModeView />
-        <AboutModal />
-        <HermesBootstrapStatus />
-      </>
-    );
-  }
 
   // SSO Phase 1C: LoginGate 包整个 App. 没登录时挡住, 让员工先点登录.
   // dev_token 模式下 try_load_session 自动返已登录, gate 直接放过.

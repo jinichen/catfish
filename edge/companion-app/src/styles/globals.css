@@ -1024,11 +1024,6 @@ body {
   flex: 0 0 auto;
 }
 
-.app-rail__item--quiet {
-  min-height: 40px;
-  opacity: 0.88;
-}
-
 .app-rail__identity {
   display: flex;
   min-width: 0;

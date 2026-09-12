@@ -52,17 +52,8 @@ pub fn run() {
         tauri_plugin_global_shortcut::Code::Space,
     );
 
-    // BL-E15 专注模式快捷键 (五一 sprint 5/3 晚) — Cmd+Shift+F.
-    // 触发后给前端发 "catfish:focus_mode_toggle" 事件, App.tsx 切伪 IDE 视图.
-    // 跟召唤快捷键独立, 互不影响.
-    #[cfg(desktop)]
-    let focus_shortcut = tauri_plugin_global_shortcut::Shortcut::new(
-        Some(
-            tauri_plugin_global_shortcut::Modifiers::SUPER
-                | tauri_plugin_global_shortcut::Modifiers::SHIFT,
-        ),
-        tauri_plugin_global_shortcut::Code::KeyF,
-    );
+    // 9/12: 专注模式 (BL-E15) 的全局 Cmd+Shift+F 删了 —— 那个组合在 VS Code /
+    // JetBrains / Finder 里是"全局搜索", 全局注册会把别的 app 里的按键抢走。
 
     // BL-E27 桌宠快捷键 (五一 sprint 5/5 凌晨) — Cmd+Shift+P (Pet).
     // 切显示 / 隐藏桌宠副窗. 鸿波 spike 后反馈"是不是有快捷键关闭" → 加这条.
@@ -141,7 +132,7 @@ pub fn run() {
         builder = builder.plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
-                    use tauri::{Emitter, Manager};
+                    use tauri::Manager;
                     use tauri_plugin_global_shortcut::ShortcutState;
                     // 只在 Pressed 时响应 (Released 也会触发, 不去重就抖)
                     if event.state() != ShortcutState::Pressed {
@@ -163,19 +154,6 @@ pub fn run() {
                                 let _ = window.show();
                                 let _ = window.center();
                                 let _ = window.set_focus();
-                            }
-                        }
-                        return;
-                    }
-                    // BL-E15 专注模式 Cmd+Shift+F → 给前端发事件 (toggle, 不区分开/关).
-                    // 顺手把窗口拉到前台 (没显示就显示), 切完员工立刻看到伪 IDE.
-                    if shortcut == &focus_shortcut {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.unminimize();
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                            if let Err(e) = window.emit("catfish:focus_mode_toggle", ()) {
-                                log::warn!("emit focus_mode_toggle 失败: {e}");
                             }
                         }
                         return;
@@ -541,7 +519,7 @@ pub fn run() {
                 });
             }
 
-            // 注册全局快捷键 Cmd+Shift+Space (浮窗召唤) + Cmd+Shift+F (BL-E15 专注模式)
+            // 注册全局快捷键 Cmd+Shift+Space (浮窗召唤)
             #[cfg(desktop)]
             {
                 use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -549,11 +527,6 @@ pub fn run() {
                     log::warn!("注册 Cmd+Shift+Space 失败 (已被其他 app 占用?): {e}");
                 } else {
                     log::info!("已注册全局快捷键 Cmd+Shift+Space → 召唤鲶鱼浮窗");
-                }
-                if let Err(e) = app.global_shortcut().register(focus_shortcut) {
-                    log::warn!("注册 Cmd+Shift+F 失败 (已被其他 app 占用?): {e}");
-                } else {
-                    log::info!("已注册全局快捷键 Cmd+Shift+F → 切专注模式");
                 }
                 if let Err(e) = app.global_shortcut().register(pet_shortcut) {
                     log::warn!("注册 Cmd+Shift+P 失败 (已被其他 app 占用?): {e}");

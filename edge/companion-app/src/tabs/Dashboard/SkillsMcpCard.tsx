@@ -607,7 +607,7 @@ export default function SkillsMcpCard() {
             会改 <code>~/.hermes/config.yaml</code> 删 <code>mcp_servers.{modal.mcp.name}</code> 段.
             5 秒内 toast 可点"撤销"重接 (重新写回 config.yaml).
             <br />
-            <strong>注意</strong>: hermes daemon 要重启 (右上"专注" → 退出 → 重开 catfish) MCP 才完全脱钩.
+            <strong>注意</strong>: hermes daemon 要重启 (退出 → 重开 catfish) MCP 才完全脱钩.
           </div>
           <div className="install-dialog__actions">
             <button
