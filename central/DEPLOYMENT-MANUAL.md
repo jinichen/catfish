@@ -119,15 +119,20 @@ docker images | grep -E 'catfish|postgres|nginx'
 
 ### 3.2 打包所有 image → tar
 
+> 9/12: 不要再手抄镜像清单。这一段以前写死 `catfish-gateway:0.1.0`, 而 compose 里
+> 早已是 0.1.1 —— 照着打就把旧 gateway 装进新包, 全程无报错 (见
+> `delivery/build-package.sh` 头部 7/30 复盘)。统一用它, 镜像 tag 从 compose 读:
+
+```bash
+bash delivery/build-package.sh both      # 或 amd64 / arm64
+# 产出 ~/Downloads/dahua-poc-FULL-<arch>-<日期>.tar.gz, 含镜像 + compose + setup.sh + 文档
+```
+
+以下是它内部等价的 `docker save` 清单, 仅供理解, **不要手动执行**:
+
 ```bash
 docker save -o ~/catfish-all-images.tar \
-    catfish-identity:0.1.0 \
-    catfish-gateway:0.1.0 \
-    catfish-skills-hub:0.1.0 \
-    catfish-wiki-hub:0.1.0 \
-    catfish-mcp-registry:0.1.0 \
-    catfish-web:0.1.0 \
-    postgres:16-alpine \
+    $(grep -E '^\s+image:' delivery/dahua-poc/docker-compose.yml | awk '{print $2}') \
     nginx:1.27-alpine
 
 ls -lh ~/catfish-all-images.tar
@@ -460,7 +465,8 @@ docker compose build gateway    # 只 rebuild gateway
 
 **save 只这一个 image**:
 ```bash
-docker save -o ~/catfish-gateway-v0.19.tar catfish-gateway:0.1.0
+# 9/12: 交付统一走 FULL 包 (delivery/build-package.sh), 不再单发 gateway; 下面仅作历史记录
+docker save -o ~/catfish-gateway-v0.19.tar catfish-gateway:0.1.2
 ```
 
 **传目标机 load + restart**:

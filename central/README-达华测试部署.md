@@ -94,7 +94,7 @@ tar -xzf $env:USERPROFILE\Downloads\catfish-central-config-mac.tar.gz
 docker load -i $env:USERPROFILE\Downloads\catfish-central-images-mac.tar
 ```
 
-**期望**: 看到 8 行 `Loaded image: catfish-identity:0.1.0` 等.
+**期望**: 看到 8 行 `Loaded image: catfish-identity:0.1.2` 等.
 
 ---
 

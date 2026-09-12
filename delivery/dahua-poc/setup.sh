@@ -65,6 +65,20 @@ GATEWAY_WORKERS="${GATEWAY_WORKERS:-}"
 IDENTITY_WORKERS="${IDENTITY_WORKERS:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ── 镜像 tag 的唯一来源 = docker-compose.yml ──────────────────────
+# 9/12: 以前 tag 在这个脚本里写死两处 (identity 生成 admin hash / 关键镜像清单),
+# gateway 0.1.0→0.1.1 那次只改了 compose, 这里没跟 —— 就是 build-package.sh 头部
+# 复盘说的漂移。build-package.sh 也是从 compose 读 tag, 现在三边只剩一个源头。
+compose_images() {
+    grep -E '^[[:space:]]+image:[[:space:]]+[^[:space:]]+' "$SCRIPT_DIR/docker-compose.yml" \
+        | awk '{print $2}'
+}
+IDENTITY_IMAGE="$(compose_images | grep '^catfish-identity:' | head -1)"
+if [ -z "$IDENTITY_IMAGE" ]; then
+    echo "❌ docker-compose.yml 里找不到 catfish-identity 的 image 行"
+    exit 1
+fi
 cd "$SCRIPT_DIR"
 
 if [ "$UPGRADE" = "1" ] && [ ! -f .env ]; then
@@ -404,8 +418,8 @@ ADMIN_HASH=""   # 显式初始化 · 防 set -u 未定义变量挂
 
 if [ ! -f "$IDENTITY_CFG/users.yaml" ]; then
     # 用 identity image 里的 python + bcrypt 生成 hash (host 不需 pip install bcrypt)
-    if docker image inspect catfish-identity:0.1.0 >/dev/null 2>&1; then
-        ADMIN_HASH=$(docker run --rm catfish-identity:0.1.0 python3 -c \
+    if docker image inspect "$IDENTITY_IMAGE" >/dev/null 2>&1; then
+        ADMIN_HASH=$(docker run --rm "$IDENTITY_IMAGE" python3 -c \
             "from catfish_identity.users import hash_password; print(hash_password('$ADMIN_PW'))" 2>/dev/null)
     fi
     if [ -z "$ADMIN_HASH" ]; then
@@ -626,7 +640,7 @@ if [ -n "$IMAGE_TAR" ]; then
     fi
     # ── 无条件 load ─────────────────
     #
-    # 老逻辑: `docker image inspect catfish-gateway:0.1.1` 成功就 skip load.
+    # 老逻辑: `docker image inspect catfish-gateway:<tag>` 成功就 skip load.
     # 判据只看**tag 在不在**, 不看是不是同一个镜像 —— 而升级场景恰恰是
     # "新 image tar + 完全相同的 tag". 结果:
     #   IT 拿新包重装 → 脚本 skip load → 跑的还是旧镜像 → 一路绿灯装完.
@@ -670,9 +684,8 @@ fi
 
 # ── 4.5 · verify 关键 image 本地存 (fail loud · 别让 docker compose 去 pull 挂) ──
 MISSING_IMG=""
-for img in catfish-identity:0.1.0 catfish-gateway:0.1.1 catfish-web:0.1.0 \
-           catfish-skills-hub:0.1.0 catfish-mcp-registry:0.1.0 catfish-wiki-hub:0.1.0 \
-           postgres:16-alpine; do
+# 清单从 compose 读 (含 postgres:16-alpine), 不再手抄。
+for img in $(compose_images); do
     if ! docker image inspect "$img" >/dev/null 2>&1; then
         MISSING_IMG="$MISSING_IMG $img"
     fi

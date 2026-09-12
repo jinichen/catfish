@@ -147,7 +147,7 @@ A: 常见:
 - identity restart 后员工需重新 SSO (rm ~/.catfish/oauth · 重开 Companion)
 
 ### Q3: chat 500 · litellm APIConnectionError orjson
-A: image `catfish-gateway:0.1.1` 已含 orjson (Task #68 fix). 若挂 · `docker exec catfish-gateway pip show orjson` verify.
+A: image `catfish-gateway:0.1.2` (0.1.1 起) 已含 orjson (Task #68 fix). 若挂 · `docker exec catfish-gateway pip show orjson` verify.
 
 ### Q4: 员工 Companion 提示 CATFISH_ENV=prod 但 gateway 起不来
 A: 检查 · `docker compose logs gateway --tail 50` · 若 · alembic 挂 · postgres 未 healthy · 等 60 秒 · postgres 起来后 gateway 会自动重连.

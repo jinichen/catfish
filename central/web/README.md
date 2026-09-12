@@ -67,8 +67,8 @@ sudo nginx -s reload
 ### prod (Docker)
 
 ```bash
-docker build -t catfish-web:0.1.0 .
-docker run -d -p 80:80 --name catfish-web catfish-web:0.1.0
+docker build -t catfish-web:0.1.2 .
+docker run -d -p 80:80 --name catfish-web catfish-web:0.1.2
 # 跟 gateway / identity / mcp-registry / skills-hub / secret-broker 一起 docker-compose
 ```
 

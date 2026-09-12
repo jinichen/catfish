@@ -1,7 +1,7 @@
 services:
   gateway:
     build: .
-    image: catfish-gateway:0.1.0
+    image: catfish-gateway:0.1.2   # 9/12: 跟 central/docker-compose.yml 同步, 六镜像统一版本
     container_name: catfish-gateway
     ports:
       # 从 .env 读，未设则默认 8999

@@ -16,7 +16,7 @@
 **7/18 关键 fix 已 mirror 到本 bundle**:
 - ✅ Task #61: `CATFISH_ENV=prod` (docker-compose.yml default 已 prod)
 - ✅ Task #66: `CATFISH_OIDC_AUDIENCE=catfish-companion,catfish-gateway` 双值 (default 已双值 · 员工 Companion id_token 通)
-- ✅ Task #68: `catfish-gateway:0.1.1` 含 orjson (litellm mcp code path 不再 502)
+- ✅ Task #68: `catfish-gateway:0.1.2` 含 orjson (litellm mcp code path 不再 502)
 
 ---
 
@@ -25,12 +25,12 @@
 | # | Service | Image | 端口 | 功能 |
 |---|---------|-------|------|------|
 | 1 | postgres | `postgres:16-alpine` | 5432 (127.0.0.1 only) | 主数据库 (users / quota / audit / facts) |
-| 2 | identity | `catfish-identity:0.1.0` | **8998 (0.0.0.0)** | OIDC 认证服务 · 员工 SSO 登录 |
-| 3 | gateway | `catfish-gateway:0.1.1` | **8999 (0.0.0.0)** | LLM 网关 · 员工 chat 走这 · fallback 链路由 (7/18 Task #68: 加 orjson 解 litellm 502) |
-| 4 | skills-hub | `catfish-skills-hub:0.1.0` | 8997 (127.0.0.1) | 技能包托管 · manager 发布 skill |
-| 5 | mcp-registry | `catfish-mcp-registry:0.1.0` | 8996 (127.0.0.1) | MCP 连接器仓库 · 员工订阅 Jira/GitLab |
-| 6 | wiki-hub | `catfish-wiki-hub:0.1.0` | 8994 (127.0.0.1) | Wiki 中央 · 员工发布知识 |
-| 7 | web | `catfish-web:0.1.0` | **5173 (0.0.0.0)** | admin 面板 (员工管理/审计) |
+| 2 | identity | `catfish-identity:0.1.2` | **8998 (0.0.0.0)** | OIDC 认证服务 · 员工 SSO 登录 |
+| 3 | gateway | `catfish-gateway:0.1.2` | **8999 (0.0.0.0)** | LLM 网关 · 员工 chat 走这 · fallback 链路由 (7/18 Task #68: 加 orjson 解 litellm 502) |
+| 4 | skills-hub | `catfish-skills-hub:0.1.2` | 8997 (127.0.0.1) | 技能包托管 · manager 发布 skill |
+| 5 | mcp-registry | `catfish-mcp-registry:0.1.2` | 8996 (127.0.0.1) | MCP 连接器仓库 · 员工订阅 Jira/GitLab |
+| 6 | wiki-hub | `catfish-wiki-hub:0.1.2` | 8994 (127.0.0.1) | Wiki 中央 · 员工发布知识 |
+| 7 | web | `catfish-web:0.1.2` | **5173 (0.0.0.0)** | admin 面板 (员工管理/审计) |
 | 8 | nginx | `nginx:1.27-alpine` | 80 / 443 | 反代 · **需要域名 + SSL 证书, 测试期可跳过** |
 
 **只 0.0.0.0 的 3 个** (identity 8998 / gateway 8999 / web 5173) 是员工浏览器 + Companion 访问. 别的 (skills-hub / mcp-registry / wiki-hub) 内部 network 用, 不对外.
@@ -82,18 +82,18 @@ docker load -i /path/to/catfish-central-images-<你的架构>.tar
 docker images | grep -E "catfish-|postgres:16-alpine|nginx:1.27-alpine"
 
 # 关键 verify 架构 (必须跟 uname -m 一致 or Docker 说"platform doesn't match" 警告)
-docker inspect catfish-gateway:0.1.0 --format '{{.Architecture}}/{{.Os}}'
+docker inspect catfish-gateway:0.1.2 --format '{{.Architecture}}/{{.Os}}'
 # 期望: amd64/linux 或 arm64/linux (跟 uname -m 一致)
 ```
 
 **期望 8 行**:
 ```
-catfish-gateway        0.1.0    xxx    494MB
-catfish-identity       0.1.0    xxx    266MB
-catfish-mcp-registry   0.1.0    xxx    250MB
-catfish-skills-hub     0.1.0    xxx    232MB
-catfish-web            0.1.0    xxx     49MB
-catfish-wiki-hub       0.1.0    xxx    232MB
+catfish-gateway        0.1.2    xxx    494MB
+catfish-identity       0.1.2    xxx    266MB
+catfish-mcp-registry   0.1.2    xxx    250MB
+catfish-skills-hub     0.1.2    xxx    232MB
+catfish-web            0.1.2    xxx     49MB
+catfish-wiki-hub       0.1.2    xxx    232MB
 nginx                  1.27-alpine  xxx  49MB
 postgres               16-alpine    xxx  288MB
 ```
