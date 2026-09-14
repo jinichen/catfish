@@ -162,18 +162,23 @@ PATCH_1_PARAM = f"""    [switch]$IncludeDesktop,
 )"""
 
 
-PATCH_2_INSTALL_UV = f"""    {MARKER}: Catfish offline — copy embedded uv.exe, skip astral.sh
-    if ($OfflineUvExe -and (Test-Path $OfflineUvExe)) {{
+PATCH_2_INSTALL_UV = f"""    $managedUv = Join-Path $HermesHome "bin\\uv.exe"
+    {MARKER}: Catfish offline — refresh bundled uv BEFORE existing-install early return
+    if ($OfflineUvExe) {{
+        if (-not (Test-Path -LiteralPath $OfflineUvExe -PathType Leaf)) {{
+            throw "Bundled uv is missing: $OfflineUvExe"
+        }}
         Write-Info "Catfish offline: copying uv.exe from $OfflineUvExe"
         New-Item -ItemType Directory -Path (Join-Path $HermesHome "bin") -Force | Out-Null
         Copy-Item -LiteralPath $OfflineUvExe -Destination $managedUv -Force
         $script:UvCmd = $managedUv
         $version = & $managedUv --version
+        if ($LASTEXITCODE -ne 0) {{ throw "Bundled uv cannot run: $managedUv" }}
         Write-Success "Managed uv installed from offline bundle ($version)"
         return $true
     }}
 
-    Write-Info "Installing managed uv into $HermesHome\\bin ..."
+    if (Test-Path $managedUv) {{
 """
 
 
@@ -270,11 +275,11 @@ PATCH_4_INSTALL_REPO = f"""    $didUpdate = $false
         $roboOk = $false
         if (Get-Command robocopy -ErrorAction SilentlyContinue) {{
             Write-Info "  (用 robocopy 多线程复制, node_modules 文件多, 请等一会)"
-            robocopy $roboSrc $roboDst /E /MT:16 /R:1 /W:1 /NFL /NDL /NP | Out-Null
+            robocopy $roboSrc $roboDst /E /MT:16 /R:1 /W:1 /NFL /NDL /NP /XJ
             if ($LASTEXITCODE -lt 8) {{
                 $roboOk = $true
             }} else {{
-                Write-Warn "robocopy 退出码 $LASTEXITCODE (>=8 = 失败), 回退 Copy-Item"
+                throw "robocopy failed (exit $LASTEXITCODE): $roboSrc -> $roboDst"
             }}
             $global:LASTEXITCODE = 0
         }}
@@ -420,7 +425,8 @@ ANCHORS = {
         PATCH_1_PARAM,                       # AFTER (含 marker)
     ),
     "install_uv": (
-        '    Write-Info "Installing managed uv into $HermesHome\\bin ..."\n',
+        '    $managedUv = Join-Path $HermesHome "bin\\uv.exe"\n\n'
+        '    if (Test-Path $managedUv) {\n',
         PATCH_2_INSTALL_UV,
     ),
     "test_python": (

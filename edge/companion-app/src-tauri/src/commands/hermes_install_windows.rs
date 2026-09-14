@@ -11,6 +11,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::time::{Duration, Instant};
 
 use super::hermes_install_artifacts::{
     resolve_addon_runtime_dir, RuntimeArtifacts, HERMES_DEPS_ARCHIVE,
@@ -57,6 +58,7 @@ fn run_hidden_powershell(
     args: &[OsString],
     paths: &BootstrapPaths,
     description: &str,
+    reporter: Option<&ProgressReporter<'_>>,
 ) -> Result<()> {
     require_file(script, "PowerShell 安装脚本")?;
     let mut log = open_bootstrap_log(paths)?;
@@ -75,12 +77,40 @@ fn run_hidden_powershell(
         .arg(script)
         .args(args)
         .env("HERMES_HOME", &paths.hermes_home)
+        // Do not reuse the distribution cache that failed with Windows error 4390.
+        .env("UV_CACHE_DIR", paths.unique_sibling("uv-cache"))
+        .env("UV_LINK_MODE", "copy")
         .stdout(Stdio::from(log.try_clone()?))
         .stderr(Stdio::from(log));
 
-    let status = command
-        .status()
+    let mut child = command
+        .spawn()
         .with_context(|| format!("启动 {description}"))?;
+    let started = Instant::now();
+    let mut last_update = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().context("检查 Windows 安装进程")? {
+            break status;
+        }
+        if started.elapsed() >= Duration::from_secs(30 * 60) {
+            // Stop only this installer and its descendants, before releasing the install lock.
+            let status = process::background_command("taskkill.exe")
+                .args(["/PID", &child.id().to_string(), "/T", "/F"])
+                .status()
+                .context("停止超时安装进程")?;
+            anyhow::ensure!(status.success(), "安装超时，停止安装进程失败: {status}");
+            child.wait().context("等待超时安装进程退出")?;
+            anyhow::bail!("{description}超过 30 分钟，已停止。请查看 logs/catfish-companion-bootstrap.log");
+        }
+        if last_update.elapsed() >= Duration::from_secs(10) {
+            if let Some(reporter) = reporter {
+                report(reporter, "core", BootstrapProgressState::Running, 0, TOTAL_STEPS,
+                    format!("{description}，已运行 {} 秒；详细进度见安装日志", started.elapsed().as_secs()), None);
+            }
+            last_update = Instant::now();
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    };
     if !status.success() {
         anyhow::bail!(
             "{description}失败: {status}，详细日志: {}",
@@ -244,7 +274,7 @@ fn install_optional_components(resource_dir: &Path, paths: &BootstrapPaths) -> V
                     OsString::from("-DistributionPath"),
                     archive.clone().into_os_string(),
                 ];
-                let installed = run_hidden_powershell(&script, &args, paths, "安装/更新 catfish-email")
+                let installed = run_hidden_powershell(&script, &args, paths, "安装/更新 catfish-email", None)
                     .and_then(|()| {
                         anyhow::ensure!(run_hidden_status(
                             &hermes_venv_python(&paths.install_dir),
@@ -273,7 +303,7 @@ fn install_optional_components(resource_dir: &Path, paths: &BootstrapPaths) -> V
                     archive.clone().into_os_string(),
                 ];
                 if let Err(error) =
-                    run_hidden_powershell(&script, &args, paths, "安装 catfish-wechat-reader")
+                    run_hidden_powershell(&script, &args, paths, "安装 catfish-wechat-reader", None)
                 {
                     failures.push(format!("catfish-wechat-reader: {error:#}"));
                 }
@@ -351,6 +381,9 @@ pub(crate) fn bootstrap(
     );
     let core_args = vec![
         OsString::from("-NonInteractive"),
+        // Upstream's full-install catch exits nonzero only in JSON/stage mode.
+        OsString::from("-Json"),
+        OsString::from("-SkipSetup"),
         OsString::from("-Commit"),
         OsString::from(hermes_pinned_commit()),
         OsString::from("-OfflineSourceTar"),
@@ -367,6 +400,7 @@ pub(crate) fn bootstrap(
         &core_args,
         paths,
         "安装 Windows Hermes 核心环境",
+        Some(reporter),
     )?;
 
     if let Err(error) = repair_missing_hermes_cli(paths) {

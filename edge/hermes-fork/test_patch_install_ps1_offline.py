@@ -35,6 +35,23 @@ from patch_install_ps1_offline import (  # noqa: E402
 UPSTREAM_INSTALL_PS1 = Path.home() / ".hermes/hermes-agent/scripts/install.ps1"
 
 
+def test_bundled_uv_precedes_existing_uv_early_return(upstream_install_ps1: str):
+    patched = apply_patches(upstream_install_ps1)
+    install_uv = patched.split("function Install-Uv {", 1)[1]
+    assert install_uv.index("Copy-Item -LiteralPath $OfflineUvExe") < install_uv.index(
+        "if (Test-Path $managedUv)"
+    )
+    assert 'throw "Bundled uv cannot run:' in install_uv
+
+
+def test_robocopy_failure_is_fatal_and_output_is_preserved(upstream_install_ps1: str):
+    patched = apply_patches(upstream_install_ps1)
+    copy_line = next(line for line in patched.splitlines() if "robocopy $roboSrc" in line)
+    assert "Out-Null" not in copy_line
+    assert "/XJ" in copy_line
+    assert 'throw "robocopy failed' in patched
+
+
 # ─── 前置: fixture 拉真实上游 install.ps1 ─────────────────────
 
 
