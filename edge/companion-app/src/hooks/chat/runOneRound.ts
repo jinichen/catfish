@@ -88,6 +88,7 @@ export async function runOneRound(
       };
       addMessage(assistantMsg);
       setStreamingId(assistantId);
+      setLifecycleStatus("正在等待模型首个回复…");
 
       // 5/24 BL-MULTI-SESSION-STREAM: 局部 raf-throttled flush (不再共享 hook ref).
       // 每条 stream 自己一套, 跨 session 并发不会串 delta.
@@ -158,11 +159,14 @@ export async function runOneRound(
         sessionId: ctx.sessionId ?? undefined,
         signal: ctx.ctrl.signal,
         onDelta: (text) => {
+          // 首个正文 chunk 到达后，状态条让位给实际回答，避免重复占用消息区。
+          if (text) setLifecycleStatus(null);
           pendingDelta += text;
           scheduleFlushThisRound();
         },
         onToolCalls: (calls) => {
           refs.calls = calls;
+          setLifecycleStatus("正在准备执行工具…");
         },
         onDone: (info) => {
           if (rafId !== null) {

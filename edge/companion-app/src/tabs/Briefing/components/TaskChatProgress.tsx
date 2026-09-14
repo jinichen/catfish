@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import type { TaskChatStatus } from "../../../hooks/useTaskChat";
 
-const FIRST_OUTPUT_HINT_MS = 8_000;
+// 首段响应超过几秒并不代表异常，尤其是早安分析需要较长上下文时。
+// 只有等待明显偏长时才补充说明，避免正常等待被渲染成告警。
+const FIRST_OUTPUT_HINT_MS = 30_000;
 
 function formatElapsed(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
@@ -64,7 +66,7 @@ export default function TaskChatProgress({
       </div>
       {waitingForFirstOutput && (
         <div className="briefing-2col__task-progress-hint">
-          模型还没有返回首段内容，仍在处理；如果超过预期，可以停止后重新发送。
+          首段内容仍在准备中，模型正在处理较长的分析任务；你可以继续等待，或点击“停止生成”。
         </div>
       )}
       <div className="briefing-2col__task-progress-actions">

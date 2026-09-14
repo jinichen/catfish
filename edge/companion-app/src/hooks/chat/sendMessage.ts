@@ -329,6 +329,9 @@ export async function sendMessage(
         })();
       }
       setIsStreaming(true);
+      // 首个模型 chunk 到达前，前端不能只显示空 assistant 的省略号。
+      // 先给出可解释的阶段状态；runOneRound 开始请求后会切换成更具体的文案。
+      setLifecycleStatus("正在准备请求…");
 
       // 2. 拉 tools(第一次会调 tool_bridge,后续走 cache)
       const tools = await ensureTools();

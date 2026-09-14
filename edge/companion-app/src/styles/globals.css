@@ -3544,7 +3544,8 @@ button {
   line-height: 1.5;
 }
 .briefing-2col__task-progress-hint {
-  color: var(--status-warn, #a16207);
+  /* 等待说明是进度信息，不是异常；警示色只留给真正的 error/warn 状态。 */
+  color: var(--catfish-text-muted);
 }
 .briefing-2col__task-progress-actions {
   margin-left: auto;
