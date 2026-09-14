@@ -74,6 +74,7 @@ vi.mock("./tauri", () => ({
 vi.mock("./chatWire", () => ({ toWire: (m: unknown) => m }));
 
 import { prepareChatRequest } from "./chatRequest";
+import { FACT_EVIDENCE_RULES } from "./factEvidence";
 
 const BASE = {
   useHermes: false,
@@ -83,6 +84,18 @@ const BASE = {
 };
 
 describe("prepareChatRequest", () => {
+  it.each([false, true])("聊天和任务对话在 Hermes=%s 时保留上下文并携带证据规则", async (useHermes) => {
+    const messages = [{ role: "user", content: "审核通过是否已经领取证书？" }] as never[];
+    const original = JSON.stringify(messages);
+    const r = await prepareChatRequest({
+      ...BASE, messages, useHermes,
+      hermesCfg: { enabled: true, url: "http://h", has_key: true },
+    });
+    expect(r.body.messages).toEqual([
+      ...messages, { role: "system", content: FACT_EVIDENCE_RULES },
+    ]);
+    expect(JSON.stringify(messages)).toBe(original);
+  });
   beforeEach(() => {
     markModelSent.mockClear();
     agentState = { loaded: false, name: "", personality: "" };

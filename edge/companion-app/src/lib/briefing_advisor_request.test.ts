@@ -1,15 +1,26 @@
 import { describe, expect, it } from "vitest";
+import { FACT_EVIDENCE_RULES } from "./factEvidence";
 
 import {
   buildAdvisorAgentRequest,
+  advisorTriageUrl,
   buildAdvisorTransformRequest,
 } from "./briefing_advisor_request";
 
 describe("Advisor 两阶段请求合同", () => {
+  it("首轮直连网关且不要求草稿或扫描", () => {
+    const url = new URL(advisorTriageUrl("https://gateway.example/"));
+    expect(url.pathname).toBe("/v1/chat/completions");
+    expect(url.searchParams.get("catfish_direct")).toBe("1");
+    const prompt = buildAdvisorAgentRequest("model-a", "今日输入").messages[0].content;
+    expect(prompt).toContain("不生成草稿");
+    expect(prompt).toContain("handledSilently必须为空");
+  });
   it("agent 分析使用场景参数且不强制结构化工具", () => {
     const body = buildAdvisorAgentRequest("model-a", "今日输入");
 
     expect(body.model).toBe("model-a");
+    expect(body.messages[0].content).toContain(FACT_EVIDENCE_RULES);
     expect(body.max_tokens).toBe(6000);
     expect(body.temperature).toBe(0.4);
     expect(body.stream).toBe(false);
@@ -28,6 +39,7 @@ describe("Advisor 两阶段请求合同", () => {
     expect(body.model).toBe("model-a");
     expect(body.max_tokens).toBe(6000);
     expect(body.temperature).toBe(0.1);
+    expect(body.messages[0].content).toContain(FACT_EVIDENCE_RULES);
     expect(body.stream).toBe(false);
     expect(body.tools).toHaveLength(1);
     expect(body.tools[0].function.name).toBe("submit_advisor_result");

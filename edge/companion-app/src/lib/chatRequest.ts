@@ -37,6 +37,7 @@ import { config } from "./env";
 import { fetchIdentityBundle } from "./tauri";
 // 5/20 拆 805 → ~550: wire format (toWire + formatFileAttachment) 抽到 chatWire.ts
 import { toWire } from "./chatWire";
+import { FACT_EVIDENCE_RULES } from "./factEvidence";
 import { useAgentStore } from "../store/agent";
 import { useChatStore } from "../store/chat";
 import { useTeachingStore } from "../store/teaching";
@@ -112,7 +113,10 @@ export async function prepareChatRequest(opts: {
 
   const body: Record<string, unknown> = {
     model: effectiveModel,
-    messages: toWire(messages),
+    messages: [
+      ...toWire(messages),
+      { role: "system", content: FACT_EVIDENCE_RULES },
+    ],
     stream: true,
   };
   // 5/19 切 hermes 后**不再传 tools** — hermes 内部管 tool calling, 拼好结果返.

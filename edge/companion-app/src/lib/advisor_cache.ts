@@ -13,7 +13,7 @@ import type { AdvisorInput } from "./briefing_advisor_common";
 /** 缓存格式版本。旧缓存没有来源指纹，不能再作为当前任务依据。 */
 export const ADVISOR_CACHE_SCHEMA_VERSION = 2;
 /** 提示词/来源边界变更时递增，避免旧模型输出跨规则复用。 */
-export const ADVISOR_CACHE_INPUT_VERSION = "current-week-sources-v2";
+export const ADVISOR_CACHE_INPUT_VERSION = "current-week-sources-v4-triage";
 
 export interface AdvisorCacheSourceMeta {
   schemaVersion: number;

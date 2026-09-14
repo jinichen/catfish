@@ -288,8 +288,8 @@ user prompt 的 "# 上次 advisor 输出" section 里, 某些 prev task 后会�
 - 如果员工跟 AI 已经说"放一放" / "等通知" / "已完成" → urgency 降一档 +
   reason 解释为啥降. 别再当 high 推一遍.
 
-不要忽略 chat summary — 它代表员工跟 task 的真实进度, 比 advisor 上次的
-建议口径权威多了 (advisor 是猜的, summary 是员工真做过的).
+chat summary 是模型摘要，不是执行凭证。应区分员工确认和模型推断；
+实际进度以员工明确状态、原始记录及工具结果核对，不能把讨论当成已执行。
 
 ## 4.2) BL-ADVISOR-RESOLVED-DROP (P3.3.39, 6/12 鸿波撞误报后这条仍出): 已 resolved 不放 main_tasks
 
@@ -458,7 +458,7 @@ ${input.wikiRelevant.trim()}`);
   if (emails.length > 0) {
     const lines = emails.slice(0, 20).map((m) => {
       const u = urgencyMap[m.id] ?? "未评";
-      return `[${u}] ${m.sender}: ${m.subject}`;
+      return `[${u}] ${m.sender}: ${m.subject} [邮件 ID: ${m.id}; 时间: ${m.date || "未知"}]`;
     });
     parts.push(`# 今日邮件 (${emails.length} 封, 前 20 列, 含 LLM 评级)\n${lines.join("\n")}`);
   }
@@ -476,7 +476,7 @@ ${input.wikiRelevant.trim()}`);
   if (todos.length > 0) {
     const lines = todos.map((t) => {
       const star = t.is_priority ? "⭐ " : "";
-      return `${star}${t.text} (${t.source})`;
+      return `${star}${t.text} (${t.source}; 任务 ID: ${t.reminder_id || "未知"}; 截止时间: ${t.due_date_iso || "未知"})`;
     });
     parts.push(`# 当前未完成任务（${todos.length} 件；截止时间仅用于排序）\n${lines.join("\n")}`);
   }

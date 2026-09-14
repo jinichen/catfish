@@ -5,18 +5,33 @@
  * 的中央模型配置约束。
  */
 import type { AdvisorInput } from "./briefing_advisor_common";
-import { ADVISOR_JSON_SCHEMA, SYSTEM_PROMPT } from "./briefing_advisor_prompts";
+import { ADVISOR_JSON_SCHEMA } from "./briefing_advisor_prompts";
+import { withFactEvidence } from "./factEvidence";
 
 const ADVISOR_MAX_TOKENS = 6000;
 const AGENT_TEMPERATURE = 0.4;
 const TRANSFORM_TEMPERATURE = 0.1;
 const TRANSFORM_TOOL_NAME = "submit_advisor_result";
 
+const TRIAGE_PROMPT = `你是早安任务整理助手。本轮只核对当前来源、去重并按紧急程度排序，不执行任何行动。
+只输出 JSON：{ "tier":"frontline|mid|senior", "mainTasks":[], "handledSilently":[] }。
+tier 使用员工档案值。frontline 最多8项，mid最多4项，senior最多2项；没有有据任务就返回空数组。
+每项字段：id（从1开始）、taskUid（复用已有，否则6位小写字母数字）、title、urgency（high/medium/low）、reason、contextRefs（具体来源ID与时间）、options、complianceFlags:[]、politicalFlags:[]。
+每项 reason 简述责任、时间和来源，不展开推理。frontline/mid 给2个简短建议选项，senior可为空。
+选项格式：{ "label":"A或B", "tone":"balanced或hold", "summary":"一句建议", "aiLean":true或false }。
+不生成草稿、draftPath，不运行或声称完成合规/敏感扫描，不声称归档、发送或执行；handledSilently必须为空。
+草稿与扫描由用户进入具体任务后按需请求。已完成/忽略事项不得重新变成待办，手动状态优先；历史仅帮助复用ID，不得新增无当前来源任务。`;
+
+/** Initial triage deliberately bypasses the Hermes tool loop. */
+export function advisorTriageUrl(gatewayUrl: string): string {
+  return `${gatewayUrl.replace(/\/$/, "")}/v1/chat/completions?catfish_source=companion-advisor&catfish_skip_identity=1&catfish_internal=1&catfish_direct=1`;
+}
+
 export function buildAdvisorAgentRequest(model: string, userPrompt: string) {
   return {
     model,
     messages: [
-      { role: "system", content: SYSTEM_PROMPT },
+      { role: "system", content: withFactEvidence(TRIAGE_PROMPT) },
       { role: "user", content: userPrompt },
     ],
     max_tokens: ADVISOR_MAX_TOKENS,
@@ -67,7 +82,7 @@ export function buildAdvisorTransformRequest(args: {
   return {
     model: args.model,
     messages: [
-      { role: "system", content: transformSystemPrompt(args.tier) },
+      { role: "system", content: withFactEvidence(transformSystemPrompt(args.tier)) },
       { role: "user", content: `# advisor 原始结论（转结构化）\n\n${trimmed}` },
     ],
     max_tokens: ADVISOR_MAX_TOKENS,

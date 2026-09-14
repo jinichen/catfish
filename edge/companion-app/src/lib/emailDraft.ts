@@ -17,6 +17,7 @@ import { config } from "./env";
 import { fetchWithAuth } from "./me";
 import { warnIfUpstreamError } from "./upstreamErrorGuard";
 import { resolveExpertBotRequest } from "./expertBots";
+import { withFactEvidence } from "./factEvidence";
 
 const SERVICE_LLM_HEADERS = {
   "Content-Type": "application/json",
@@ -121,7 +122,7 @@ ${_personalityHint(personality)}
 - 长度看原邮件复杂度: 简单确认 1-3 行, 实质回复 5-10 行, 不要超过 15 行.
 - 给了「你已知的背景」就先读完再动笔: 已经答应过的别再答应一遍, 对方已经给过的
   信息不要当作未知去问, 还欠对方或欠自己的事该提就提.
-- 背景来自员工本地知识库, 可能过时。跟原邮件冲突时以原邮件为准, 不确定就用 [TODO] 占位.`;
+- 背景与原邮件都可能过时。冲突时核对同一事项的事件时间和确认情况，无法确认就用 [TODO] 占位。`;
 }
 
 /** 拟稿参考的一条本地知识 —— 来自 catfish wiki (entities / concepts)。 */
@@ -141,7 +142,7 @@ function _renderContext(items: DraftContextItem[]): string {
   const blocks = items.map((c, i) => {
     const body = c.body.slice(0, CONTEXT_BODY_LIMIT);
     const cut = c.body.length > CONTEXT_BODY_LIMIT ? "…(略)" : "";
-    return `【${i + 1}】${c.title}\n${body}${cut}`;
+    return `【${i + 1}】${c.title}\n来源: ${c.relPath}；事件时间: 未知（以原文明确记载为准）\n${body}${cut}`;
   });
   return (
     `你已知的背景 (来自员工本地知识库, 共 ${items.length} 条):\n\n` +
@@ -248,7 +249,7 @@ export async function draftEmailReply(
     return { ok: false, error: "原邮件正文为空, 没法拟稿" };
   }
 
-  const systemPrompt = _buildSystemPrompt(input.agentName, input.personality);
+  const systemPrompt = withFactEvidence(_buildSystemPrompt(input.agentName, input.personality));
   const userPrompt = _buildUserPrompt({
     sender: input.sender,
     subject: input.subject,

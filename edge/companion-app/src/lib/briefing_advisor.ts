@@ -63,6 +63,7 @@ import type {
 import { buildUserPrompt } from "./briefing_advisor_prompts";
 import {
   buildAdvisorAgentRequest,
+  advisorTriageUrl,
   buildAdvisorTransformRequest,
 } from "./briefing_advisor_request";
 import {
@@ -212,7 +213,7 @@ async function fetchWikiRelevant(input: AdvisorInput): Promise<string> {
     let totalChars = 0;
     const MAX_CHARS = 1500;
     for (const hit of res.hits) {
-      const seg = `## ${hit.title} (${hit.kind})\n${hit.snippet}`;
+      const seg = `## ${hit.title} (${hit.kind})\n来源: ${hit.rel_path}；事件时间: 未知（以原文明确记载为准）\n${hit.snippet}`;
       if (totalChars + seg.length > MAX_CHARS) {
         break;
       }
@@ -407,7 +408,7 @@ async function _fetchBriefingAdvisorImpl(
     pickerModel: input.model,
     query: SERVICE_LLM_QUERY,
   });
-  const url = expertRoute.url;
+  const url = advisorTriageUrl(config.gatewayUrl);
   console.log("[advisor] 发 fetch:", url, "prompt 长度:", userPrompt.length);
 
   if (typeof localStorage !== "undefined" && localStorage.getItem("catfish:debug_advisor_prompt") === "true") {
