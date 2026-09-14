@@ -16,10 +16,11 @@ use super::hermes_install_artifacts::{
     resolve_addon_runtime_dir, RuntimeArtifacts, HERMES_DEPS_ARCHIVE,
 };
 use super::hermes_install_base::{
-    report, BootstrapProgressState, ProgressReporter,
+    hermes_pinned_commit, hermes_pinned_tag, report, BootstrapProgressState, ProgressReporter,
+    INSTALL_METHOD_MARKER,
 };
 use super::hermes_install_health::core_health_problems;
-use super::hermes_install_state::{write_completion_marker, BootstrapPaths};
+use super::hermes_install_state::{write_bytes_atomic, write_completion_marker, BootstrapPaths};
 use super::hermes_install_steps::install_hermes_deps;
 use crate::services::catfish_paths::{hermes_venv_python, hermes_venv_tool};
 use crate::services::process;
@@ -99,6 +100,98 @@ fn run_hidden_status(program: &Path, args: &[&str], description: &str) -> bool {
             false
         }
     }
+}
+
+/// 离线安装脚本来自 Hermes 上游，不能假设它一定会留下鲶鱼自己的状态文件。
+/// Windows 安装完成后由客户端补齐这两个文件，健康检查和下次启动就能识别同一份 pin。
+fn write_windows_install_markers(paths: &BootstrapPaths) -> Result<()> {
+    if !paths.install_dir.is_dir() {
+        return Ok(());
+    }
+    let version = format!("{}\n{}\n", hermes_pinned_tag(), hermes_pinned_commit());
+    write_bytes_atomic(
+        &paths.install_dir.join(".catfish-hermes-version"),
+        version.as_bytes(),
+    )
+    .context("写 Windows Hermes 版本标记")?;
+    write_bytes_atomic(
+        &paths.install_dir.join(INSTALL_METHOD_MARKER),
+        b"offline\n",
+    )
+    .context("写 Windows Hermes 安装方式标记")?;
+    Ok(())
+}
+
+/// 某些旧资源包会把源码和 venv 解压成功，但没有生成 Hermes 入口 exe。
+/// 在健康检查前用现有 uv/venv 做一次无网络 editable 安装，修复入口而不引入联网 fallback。
+fn repair_missing_hermes_cli(paths: &BootstrapPaths) -> Result<()> {
+    let cli = hermes_venv_tool(&paths.install_dir, "hermes");
+    if cli.is_file() {
+        return Ok(());
+    }
+    let python = hermes_venv_python(&paths.install_dir);
+    if !python.is_file() {
+        return Ok(());
+    }
+
+    let uv = paths.hermes_home.join("bin/uv.exe");
+    if uv.is_file() {
+        let mut command = process::background_command(&uv);
+        command
+            .current_dir(&paths.install_dir)
+            .args([
+                OsString::from("pip"),
+                OsString::from("install"),
+                OsString::from("--offline"),
+                OsString::from("--python"),
+                python.clone().into_os_string(),
+                OsString::from("--reinstall"),
+                OsString::from("--no-deps"),
+                OsString::from("--no-build-isolation"),
+                OsString::from("--editable"),
+            ])
+            .arg(&paths.install_dir)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if command
+            .status()
+            .context("修复 Windows Hermes CLI 入口")?
+            .success()
+            && cli.is_file()
+        {
+            return Ok(());
+        }
+    }
+
+    // 兼容已经安装 pip 的旧 venv；仍通过 --no-index 保证不联网。
+    let mut command = process::background_command(&python);
+    command
+        .current_dir(&paths.install_dir)
+        .args([
+            OsString::from("-m"),
+            OsString::from("pip"),
+            OsString::from("install"),
+            OsString::from("--no-index"),
+            OsString::from("--no-deps"),
+            OsString::from("--no-build-isolation"),
+            OsString::from("--force-reinstall"),
+            OsString::from("--editable"),
+        ])
+        .arg(&paths.install_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if command
+        .status()
+        .context("修复 Windows Hermes CLI 入口")?
+        .success()
+        && cli.is_file()
+    {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "Hermes CLI 入口修复失败: {}",
+        cli.display()
+    );
 }
 
 fn install_optional_components(resource_dir: &Path, paths: &BootstrapPaths) -> Vec<String> {
@@ -257,6 +350,9 @@ pub(crate) fn bootstrap(
         None,
     );
     let core_args = vec![
+        OsString::from("-NonInteractive"),
+        OsString::from("-Commit"),
+        OsString::from(hermes_pinned_commit()),
         OsString::from("-OfflineSourceTar"),
         hermes_tar.into_os_string(),
         OsString::from("-OfflineUvExe"),
@@ -272,6 +368,11 @@ pub(crate) fn bootstrap(
         paths,
         "安装 Windows Hermes 核心环境",
     )?;
+
+    if let Err(error) = repair_missing_hermes_cli(paths) {
+        log::warn!("[windows-bootstrap] {error:#}");
+    }
+    write_windows_install_markers(paths)?;
 
     let core_problems = core_health_problems(paths, false);
     if !core_problems.is_empty() {
