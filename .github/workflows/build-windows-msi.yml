@@ -615,6 +615,33 @@ jobs:
           Write-Host "===== catfish-postinstall.wxs (源码, 不 handlebars) ====="
           Get-Content "edge/companion-app/src-tauri/wix/catfish-postinstall.wxs"
 
+      - name: Record Windows artifact identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $releaseDir = 'edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release'
+          $msiDir = Join-Path $releaseDir 'bundle/msi'
+          $exe = Join-Path $releaseDir 'catfish-companion-app.exe'
+          $script = 'edge/companion-app/src-tauri/resources/windows/install.ps1'
+          $packages = @(Get-ChildItem -LiteralPath $msiDir -Filter '*.msi')
+          if ($packages.Count -eq 0) { throw 'No MSI produced' }
+          $files = @($exe, $script) + @($packages | ForEach-Object { $_.FullName })
+          $manifest = [ordered]@{
+            commit = $env:GITHUB_SHA
+            run_id = $env:GITHUB_RUN_ID
+            run_attempt = $env:GITHUB_RUN_ATTEMPT
+            files = @($files | ForEach-Object {
+              $item = Get-Item -LiteralPath $_
+              [ordered]@{
+                name = $item.Name
+                bytes = $item.Length
+                sha256 = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash
+              }
+            })
+          }
+          $manifest | ConvertTo-Json -Depth 5 |
+            Set-Content -LiteralPath (Join-Path $msiDir 'build-identity.json') -Encoding utf8
+
       - name: List msi output
         shell: bash
         run: |
@@ -626,7 +653,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: catfish-companion-msi-${{ github.sha }}
-          path: edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+          path: |
+            edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+            edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/build-identity.json
           if-no-files-found: error
           retention-days: 30
 
@@ -635,5 +664,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+          files: |
+            edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+            edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/build-identity.json
           fail_on_unmatched_files: false

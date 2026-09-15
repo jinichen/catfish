@@ -54,6 +54,15 @@ def test_robocopy_failure_is_fatal_and_output_is_preserved(upstream_install_ps1:
 
 # ─── 前置: fixture 拉真实上游 install.ps1 ─────────────────────
 
+def test_offline_copy_does_not_block_on_temporary_cleanup(upstream_install_ps1: str):
+    patched = apply_patches(upstream_install_ps1)
+    stage = patched.split('Write-Info "Catfish offline: copying hermes-agent', 1)[1]
+    stage = stage.split('Write-Success "hermes-agent installed from offline bundle"', 1)[0]
+    assert "Remove-Item -Recurse -Force $tempExtractRoot" not in stage
+    assert "Temporary source retained (cleanup deferred): $tempExtractRoot" in stage
+    assert "Preparing offline Git metadata" in stage
+    assert "Offline Git metadata stage finished" in stage
+
 
 @pytest.fixture
 def upstream_install_ps1() -> str:

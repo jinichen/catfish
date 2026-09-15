@@ -301,6 +301,7 @@ PATCH_4_INSTALL_REPO = f"""    $didUpdate = $false
         #
         # 什么时候会"目录已存在": 上一次装到一半失败 (网络断/权限)、员工重装、
         # msi 修复安装 —— 都是常态, 不是边角。
+        Write-Info "Preparing offline Git metadata"
         try {{
             Push-Location $InstallDir
             $env:GIT_CONFIG_COUNT = "1"
@@ -321,9 +322,12 @@ PATCH_4_INSTALL_REPO = f"""    $didUpdate = $false
         }} finally {{
             Pop-Location -ErrorAction SilentlyContinue
         }}
-        # 清理 tar 临时解压目录
+        Write-Info "Offline Git metadata stage finished"
+        # Never synchronously delete the extracted node_modules tree here.
+        # On Windows tens of thousands of small deletions can block core setup
+        # for minutes. Retain the disposable TEMP source; preserve runtime backups.
         if ($tempExtractRoot -and (Test-Path $tempExtractRoot)) {{
-            Remove-Item -Recurse -Force $tempExtractRoot -ErrorAction SilentlyContinue
+            Write-Info "Temporary source retained (cleanup deferred): $tempExtractRoot"
         }}
         Write-Success "hermes-agent installed from offline bundle"
         # 跳过下面的 update / clone 3-tier fallback
