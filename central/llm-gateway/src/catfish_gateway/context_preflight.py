@@ -1,68 +1,14 @@
-"""prompt 已经超过模型上下文时, 别发出去 —— 直接告诉员工对话太长 (8/10).
+"""Context admission shares the same fixed-safety budget as output allocation.
 
-## 现象
-
-员工在一个 700 条的会话里发消息, 界面只显示
-
-    ✗ 未知错误 —— 可以重发一次; 如果一直失败, 把这条截图给 IT
-
-网关日志里是上游返的裸 400 (`reason` / `message` 全空)。为这一个 400 做了两轮
-共八个探针都没复现, 最后靠 request_shape_dump 抓到真身, 第一眼就看见:
-
-    "max_tokens": 4096,
-    "n_messages": 477,
-
-## 4096 是怎么来的
-
-`_compute_max_allowed_output_tokens`:
-
-    dyn = context_window - prompt_est * 1.3 - safety
-    return max(4096, min(dyn, upper))   # ← 注释写着"防压成 0/负数"
-
-这次 prompt_est = 388576, context_window = 128000:
-
-    dyn = 128000 - 505148 - 2048 = **-379196**
-
-不是"稍微紧张", 是 prompt 本身就超了 3 倍。兜底把它变成 4096 **照样发出去**,
-上游收到一个装不下的 prompt, 返 400。
-
-**那个"保护"把"对话超长"伪装成了"未知错误"。** 它防住的是 max_tokens 变成负数
-(参数非法), 却没防住真正的问题 —— 而且防的方式是让请求继续走, 于是失败发生在
-上游、错误信息又是空的, 现场完全看不出原因。
-
-dyn ≤ 0 这个信号本来就已经说明了一切: **装不下**。在这里拦下来, 员工看到的是
-一句人话, 而不是 IT 都要查半天的裸 400。
-
-## 为什么放在请求发给上游之前
-
-网关不再执行语义压缩；Hermes 会话由 Hermes 在更早的会话层负责压缩。
-这道闸只负责在请求发给上游前拦截已经装不下的上下文。
-
-## 判据只看"还剩不剩得下一句回复", **不带 buffer**
-
-⚠ 8/10 第一版拿 `dyn = cw - est*1.3 - safety ≤ 0` 当判据, 并且在这里写着
-"比直接比 prompt > context 更保守"。**写反了 —— 乘 1.3 是更激进。** 倒推:
-
-    dyn ≤ 0  ⟺  est ≥ (128000 - 2048) / 1.3 = 96886
-
-也就是 prompt 一过 9.7 万就拦, 而模型装得下 12.8 万 —— **24% 的可用空间被
-白白判死**。现场立刻撞上: 一个只有 38 条的会话被拦, 文案自己都荒谬 ——
-「已经积累到大约 19 万字, 而模型一次最多能读 19 万字左右」, 两个数一样。
-
-那个 1.3 是给"算 max_tokens 时保守留余量"用的 (宁可少给输出空间也别撑爆),
-拿它判"装不装得下"是把两件事混了。边界测试当时也跑出了 `est=97000 → 拦`,
-我只验了"边界在 dyn 变号那一刻"就收工, **没问 97000 到底该不该拦**。
-
-现在的判据: `cw - est < MIN_USEFUL_OUTPUT` 才拦 —— 连一句最短的回复都塞不下
-才算真装不下。est 用**原始估算**, 不乘 buffer。
-
-宁可放过边界情况让上游去判: 上游真返 400 还有 request_shape_dump 兜着, 而
-误拦是员工**直接用不了**。两种代价不对等。
+Do not multiply prompt estimates by 1.3: that previously admitted long chats
+but clipped every retry to 512 tokens. Semantic compression belongs to Hermes;
+the gateway rejects exhausted capacity rather than forwarding a fake budget.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 
 logger = logging.getLogger("catfish.gateway.context_preflight")
 
@@ -75,6 +21,26 @@ logger = logging.getLogger("catfish.gateway.context_preflight")
 #: "回复够不够长"。边界情况放过去让上游判 —— 上游真返 400 还有 shape dump
 #: 兜着, 而误拦是员工直接用不了。
 MIN_USEFUL_OUTPUT = 512
+
+
+def remaining_output_tokens(prompt_est: int, model) -> int | None:
+    """Shared admission/allocation capacity; never invent a positive floor.
+
+    A proportional 1.3 prompt buffer used to erase ~30K of usable output in
+    long chats. Use only a fixed, nonnegative reserve on both paths instead.
+    CATFISH_PROMPT_BUFFER_FACTOR is intentionally no longer used.
+    """
+    try:
+        cw = int(getattr(model, "context_window", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    if cw <= 0:
+        return None
+    try:
+        safety = max(0, int(os.environ.get("CATFISH_MAX_TOKENS_SAFETY", "2048")))
+    except ValueError:
+        safety = 2048
+    return max(0, cw - max(0, prompt_est) - safety)
 
 
 def format_too_long_message(prompt_est: int, context_window: int, model_name: str) -> str:
@@ -100,9 +66,8 @@ def format_too_long_message(prompt_est: int, context_window: int, model_name: st
 def check_context_fits(prompt_est: int, model) -> str | None:
     """装得下返 None; 装不下返一句给员工看的话 (caller 负责怎么抛)。
 
-    判据只有一条: **减掉 prompt 之后, 还剩不剩得下一句最短的回复。**
-    不乘 buffer —— 见模块头, 第一版就是拿 max_tokens 那套 1.3 buffer 当判据,
-    把 24% 的可用 context 判死了。
+    扣除 prompt 和与输出分配一致的固定安全余量后，至少还能容纳 512。
+    不再乘比例 buffer；也不通过输出下限伪造剩余容量。
     """
     try:
         cw = int(getattr(model, "context_window", 0) or 0)
@@ -112,7 +77,7 @@ def check_context_fits(prompt_est: int, model) -> str | None:
         # 不知道容量就不拦 —— 让上游去判, 总比拦错强
         return None
 
-    remaining = cw - prompt_est
+    remaining = remaining_output_tokens(prompt_est, model)
     if remaining >= MIN_USEFUL_OUTPUT:
         return None
 

@@ -164,22 +164,10 @@ def _safe_float_env(key: str, default: float) -> float:
 def _compute_max_allowed_output_tokens(
     messages: list, tools: list | None, model
 ) -> int | None:
-    """算当前 model 真实剩余 output 空间. 返 None 表示算不出 (cw=0).
+    """Return shared remaining context capacity capped by the model output limit.
 
-    BL-MAX-TOKENS-DYNAMIC (5/15): cw - prompt_est*buffer - safety. 比硬编码 32K 优:
-      - 短 prompt (5-10K) 输出空间 ~120K, 不再被 32K 上限卡住
-      - 长 prompt (>96K) 自动留够 prompt 空间, 不会跑 OOM
-    BL-TOKEN-COUNTER-LITELLM (5/15 22:00): estimator 走 LiteLLM token_counter, 认
-      Llama/Qwen/Gemini/DeepSeek 各家 tokenizer, 准估 ±5%. 准估后 dyn 自然在剩余
-      空间内, **不需要硬编码 HARD CAP** (那是偷懒, 鸿波拍过).
-    BL-TOOLS-IN-ESTIMATE (5/15 22:00): tools schema 也算 prompt 一部分 (50 tools *
-      200 token = 10K, 漏算会撞 ContextWindowExceeded).
-    BL-ESTIMATE-ERROR-MARGIN (5/15 22:10): tokenizer 仍有 10-25% 误差 (系统 inject
-      markdown / 特殊 token / chat format 差异), 用 buffer_factor (默认 1.3, env
-      CATFISH_PROMPT_BUFFER_FACTOR 可调) 给 prompt_est 加成比例 buffer.
-    BL-MAX-OUTPUT-TOKENS (5/15 22:31): context_window 跟 max_output_tokens 是俩字段:
-      cw = prompt+output 总上限 (DeepSeek 1M); max_out = 单次 output 上限 (DeepSeek
-      393K). dyn 必须 clip 到 min(cw, max_out), 否则撞 400 [1, 393216].
+    Include tool schemas in the estimate. Reject exhausted context instead of
+    manufacturing a 512-token allowance. Unknown context capacity returns None.
     """
     try:
         cw = int(getattr(model, "context_window", 0) or 0)
@@ -195,26 +183,20 @@ def _compute_max_allowed_output_tokens(
         )
     except Exception:  # noqa: BLE001
         prompt_est = 0
-    safety = _safe_int_env("CATFISH_MAX_TOKENS_SAFETY", 2048)
-    buffer_factor = _safe_float_env("CATFISH_PROMPT_BUFFER_FACTOR", 1.3)
-    dyn = cw - int(prompt_est * buffer_factor) - safety
+    from .context_preflight import check_context_fits, remaining_output_tokens
+
+    too_long = check_context_fits(prompt_est, model)
+    if too_long:
+        raise HTTPException(status_code=413, detail=too_long)
+    dyn = remaining_output_tokens(prompt_est, model)
     try:
         max_out = int(getattr(model, "max_output_tokens", 0) or 0)
     except (TypeError, ValueError):
         max_out = 0
     upper = min(cw, max_out) if max_out > 0 else cw
-    # ⚠ 8/10: 下限从 4096 改成 MIN_USEFUL_OUTPUT (512)。
-    #
-    # 原来写 max(4096, ...) 注释是"防压成 0/负数"。防住了参数非法, 却带来一个
-    # 更糟的后果: prompt 逼近 context 时 dyn 是负数, 兜底 4096 **照样发出去**,
-    # 而 prompt + 4096 已经超了 —— 上游返一个 reason/message 全空的 400,
-    # 员工看到「未知错误」。8/10 实测: est=126666 + 4096 = 130762 > 128000。
-    #
-    # 512 是"还能回一句话"的下限。真到了连 512 都挤不出来的地步, 上游
-    # context_preflight 已经在前面拦掉并告诉员工"对话太长了"了, 走不到这里。
-    from .context_preflight import MIN_USEFUL_OUTPUT  # noqa: PLC0415
+    # No lower bound: it must never override actual context or output limits.
 
-    return max(MIN_USEFUL_OUTPUT, min(dyn, upper))
+    return min(dyn, upper)
 
 def _apply_max_tokens(params: dict, model) -> None:
     """In-place 决定 params['max_tokens']:

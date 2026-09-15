@@ -36,9 +36,9 @@ def test_每个区间都问过该不该拦():
         (38_000, False, "单轮正常"),
         (96_886, False, "旧门槛 —— 这里以前会误拦"),
         (120_000, False, "紧但还能回话"),
-        (126_666, False, "★ 8/10 现场那个 38 条会话"),
-        (CW - MIN_USEFUL_OUTPUT, False, "正好剩得下一句"),
-        (CW - MIN_USEFUL_OUTPUT + 1, True, "少一个 token 都塞不下"),
+        (126_666, True, "扣除统一安全余量后已不足"),
+        (CW - 2048 - MIN_USEFUL_OUTPUT, False, "扣除余量后正好剩得下一句"),
+        (CW - 2048 - MIN_USEFUL_OUTPUT + 1, True, "少一个 token 都塞不下"),
         (CW, True, "刚好占满"),
         (380_000, True, "真超长 (703 条那个)"),
     ]
