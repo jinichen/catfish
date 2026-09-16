@@ -8,6 +8,9 @@ name: Build Windows msi
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 concurrency:
   group: build-msi-${{ github.ref }}
   cancel-in-progress: true
@@ -664,7 +667,7 @@ jobs:
       # Release asset 走 objects.githubusercontent.com CDN, 国内快一个量级.
       # tag 名 = run id + attempt + 完整 sha, 唯一且不冲突.
       - name: Upload msi to Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3.0.3
         with:
           tag_name: "msi-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}"
           name: "MSI build ${{ github.sha }}"
@@ -674,5 +677,5 @@ jobs:
           fail_on_unmatched_files: true
           draft: false
           prerelease: true
-          overwrite: true
+          overwrite_files: true
           make_latest: false
