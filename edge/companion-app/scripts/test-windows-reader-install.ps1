@@ -52,7 +52,27 @@ try {
     for ($attempt = 1; $attempt -le 2; $attempt++) {
         $stdout = Join-Path $testRoot "stdout-$attempt.log"
         $stderr = Join-Path $testRoot "stderr-$attempt.log"
-        $arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -DistributionPath "{1}"' -f $installer, $DistributionPath
+        $wrapper = Join-Path $testRoot "run-reader-installer-$attempt.ps1"
+        $statusFile = Join-Path $testRoot "status-$attempt.txt"
+        # Start-Process in Windows PowerShell 5.1 can expose a null ExitCode
+        # even after HasExited is true. Let the child persist its own result.
+        Set-Content -LiteralPath $wrapper -Encoding UTF8 -Value @'
+$ErrorActionPreference = 'Stop'
+try {
+    & $env:CATFISH_TEST_INSTALLER -DistributionPath $env:CATFISH_TEST_DISTRIBUTION
+    $code = if ($LASTEXITCODE -is [int]) { $LASTEXITCODE } else { 0 }
+    Set-Content -LiteralPath $env:CATFISH_TEST_STATUS -Encoding ASCII -Value $code
+    exit $code
+} catch {
+    Write-Error $_
+    Set-Content -LiteralPath $env:CATFISH_TEST_STATUS -Encoding ASCII -Value 1
+    exit 1
+}
+'@
+        $env:CATFISH_TEST_INSTALLER = $installer
+        $env:CATFISH_TEST_DISTRIBUTION = $DistributionPath
+        $env:CATFISH_TEST_STATUS = $statusFile
+        $arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}"' -f $wrapper
         $process = Start-Process powershell.exe -ArgumentList $arguments -PassThru -WindowStyle Hidden `
             -RedirectStandardOutput $stdout -RedirectStandardError $stderr
         $deadline = (Get-Date).AddSeconds(120)
@@ -63,12 +83,17 @@ try {
             & taskkill.exe /PID $process.Id /T /F
             throw 'reader installer exceeded two minutes in offline test'
         }
-        # Polling HasExited avoids the PowerShell 5.1 Start-Process overload
-        # occasionally returning a null ExitCode after WaitForExit(Int32).
+        # Polling HasExited keeps the timeout independent from the child result.
         $process.WaitForExit()
-        $exitCode = $process.ExitCode
         Get-Content -LiteralPath $stdout, $stderr
-        if ($null -eq $exitCode) { throw 'reader installer exited without a status code' }
+        if (-not (Test-Path -LiteralPath $statusFile)) {
+            throw 'reader installer exited without writing a status code'
+        }
+        $statusText = (Get-Content -LiteralPath $statusFile -Raw).Trim()
+        $exitCode = 0
+        if (-not [int]::TryParse($statusText, [ref]$exitCode)) {
+            throw "reader installer wrote an invalid status code: $statusText"
+        }
         if ($exitCode -ne 0) { throw "reader installer failed: $exitCode" }
         $reader = Join-Path $venv 'Scripts\catfish-wechat-reader.exe'
         $report = (& $reader doctor --json) | ConvertFrom-Json

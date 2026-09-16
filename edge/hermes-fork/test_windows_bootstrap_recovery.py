@@ -41,5 +41,6 @@ def test_reader_resource_build_runs_windows_installer_test():
 def test_windows_reader_harness_captures_exit_code_after_process_exit():
     source = (ROOT / "edge/companion-app/scripts/test-windows-reader-install.ps1").read_text()
     assert "while (-not $process.HasExited" in source
-    assert "$exitCode = $process.ExitCode" in source
-    assert "WaitForExit(120000)" not in source
+    assert "CATFISH_TEST_STATUS" in source
+    assert "TryParse($statusText" in source
+    assert "$process.ExitCode" not in source
