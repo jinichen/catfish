@@ -53,15 +53,23 @@ try {
         $stdout = Join-Path $testRoot "stdout-$attempt.log"
         $stderr = Join-Path $testRoot "stderr-$attempt.log"
         $arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -DistributionPath "{1}"' -f $installer, $DistributionPath
-        $process = Start-Process powershell.exe -ArgumentList $arguments -PassThru -NoNewWindow `
+        $process = Start-Process powershell.exe -ArgumentList $arguments -PassThru -WindowStyle Hidden `
             -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-        if (-not $process.WaitForExit(120000)) {
+        $deadline = (Get-Date).AddSeconds(120)
+        while (-not $process.HasExited -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 100
+        }
+        if (-not $process.HasExited) {
             & taskkill.exe /PID $process.Id /T /F
             throw 'reader installer exceeded two minutes in offline test'
         }
-        $process.Refresh()
+        # Polling HasExited avoids the PowerShell 5.1 Start-Process overload
+        # occasionally returning a null ExitCode after WaitForExit(Int32).
+        $process.WaitForExit()
+        $exitCode = $process.ExitCode
         Get-Content -LiteralPath $stdout, $stderr
-        if ($process.ExitCode -ne 0) { throw "reader installer failed: $($process.ExitCode)" }
+        if ($null -eq $exitCode) { throw 'reader installer exited without a status code' }
+        if ($exitCode -ne 0) { throw "reader installer failed: $exitCode" }
         $reader = Join-Path $venv 'Scripts\catfish-wechat-reader.exe'
         $report = (& $reader doctor --json) | ConvertFrom-Json
         if ($LASTEXITCODE -ne 0 -or $report.protocol_version -ne 1 -or
