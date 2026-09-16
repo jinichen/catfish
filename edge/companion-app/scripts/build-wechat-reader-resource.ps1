@@ -17,4 +17,6 @@ if ($wheels.Count -ne 1) { throw "expected one reader wheel, got $($wheels.Count
 if (Test-Path $archive) { Remove-Item -Force $archive }
 tar -czf $archive -C $stage $wheels[0].Name
 if ($LASTEXITCODE -ne 0) { throw 'reader distribution archive build failed' }
+& (Join-Path $scriptDir 'test-windows-reader-install.ps1') -DistributionPath $archive
+if ($LASTEXITCODE -ne 0) { throw 'Windows reader installation regression failed' }
 Write-Host "  OK catfish-wechat-reader-dist.tar.gz ($([math]::Round((Get-Item $archive).Length/1KB,1)) KB)" -ForegroundColor Green

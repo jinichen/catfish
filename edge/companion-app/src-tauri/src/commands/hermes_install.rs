@@ -104,9 +104,11 @@ fn bootstrap_locked(
 ) -> Result<()> {
     recover_interrupted_transaction(paths)?;
     let current_health = core_health_problems(paths, true);
-    if current_health.is_empty() {
+    if super::hermes_install_windows::reuse_verified_core(paths)? {
         // Windows 的 MSI 不再执行安装 CustomAction。已存在核心环境时只补缺
         // 附加组件，绝不重新解压 Hermes，也不走 Unix wheel 安装路径。
+        report(reporter, "addons", BootstrapProgressState::Running, 1, 2,
+            "Hermes 核心已验证并保留，正在检查/修复附加组件", None);
         super::hermes_install_windows::ensure_optional_components(resource_dir, paths)?;
         report(
             reporter,
@@ -125,7 +127,7 @@ fn bootstrap_locked(
         current_health.join("; ")
     );
     let result = super::hermes_install_windows::bootstrap(resource_dir, paths, reporter);
-    if result.is_err() {
+    if result.is_err() && !core_health_problems(paths, true).is_empty() {
         // 邮件组件与 Hermes 核心是两个独立能力。核心资源损坏、版本迁移或
         // Chromium 下载包异常时，不能让已经存在的 Python venv 也失去自动补装
         // catfish-email 的机会；否则现场只能手动执行 install-catfish-email.ps1。
@@ -436,6 +438,9 @@ fn ensure_hermes_installed_with_reporter(
             "Hermes 运行环境准备失败，可稍后重试",
             Some(format!("{error:#}")),
         );
+    } else {
+        // Both platform paths must clear an old failure after a successful repair.
+        let _ = std::fs::remove_file(&paths.last_error_file);
     }
     result
 }

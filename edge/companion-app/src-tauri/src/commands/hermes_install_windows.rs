@@ -8,7 +8,7 @@
 use anyhow::{Context, Result};
 use std::ffi::OsString;
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -20,13 +20,17 @@ use super::hermes_install_base::{
     hermes_pinned_commit, hermes_pinned_tag, report, BootstrapProgressState, ProgressReporter,
     INSTALL_METHOD_MARKER,
 };
-use super::hermes_install_health::core_health_problems;
+use super::hermes_install_health::{core_health_problems, installed_hermes_commit_at};
 use super::hermes_install_state::{write_bytes_atomic, write_completion_marker, BootstrapPaths};
 use super::hermes_install_steps::install_hermes_deps;
 use crate::services::catfish_paths::{hermes_venv_python, hermes_venv_tool};
 use crate::services::process;
 
 const TOTAL_STEPS: u8 = 5;
+
+#[cfg(all(test, unix))]
+#[path = "hermes_install_windows_tests.rs"]
+mod tests;
 
 fn windows_resources(resource_dir: &Path) -> PathBuf {
     resource_dir.join("resources").join("windows")
@@ -53,6 +57,37 @@ fn open_bootstrap_log(paths: &BootstrapPaths) -> Result<std::fs::File> {
         .with_context(|| format!("打开 Windows Hermes 安装日志 {}", log_path.display()))
 }
 
+fn current_stage(paths: &BootstrapPaths) -> &'static str {
+    let Ok(mut file) = std::fs::File::open(paths.hermes_home.join("logs/catfish-companion-bootstrap.log")) else {
+        return "正在准备 Windows Hermes";
+    };
+    let length = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let _ = file.seek(SeekFrom::Start(length.saturating_sub(16384)));
+    let mut bytes = Vec::new();
+    let _ = file.take(16384).read_to_end(&mut bytes);
+    // Only emit fixed descriptions, never forward arbitrary child-process output.
+    for line in String::from_utf8_lossy(&bytes).lines().rev() {
+        for (needle, label) in [
+            ("Installation Complete", "Hermes 安装脚本已完成，正在检查结果"),
+            ("configuration files", "正在保存 Hermes 配置"),
+            ("TUI dependencies", "正在检查终端界面组件"),
+            ("Chromium", "正在准备离线浏览器"),
+            ("Node.js dependencies", "正在检查浏览器工具"),
+            ("Downloaded ", "正在下载和安装 Python 依赖"),
+            ("Downloading ", "正在下载 Python 依赖"),
+            ("Trying tier:", "正在解析 Python 依赖"),
+            ("Installing dependencies", "正在安装 Python 依赖"),
+            ("virtual environment", "正在准备 Python 虚拟环境"),
+            ("Preparing offline Git", "正在准备离线版本信息"),
+            ("copying hermes-agent", "正在复制 Hermes 离线源码"),
+            ("extracting hermes-agent", "正在解压 Hermes 离线源码"),
+        ] {
+            if line.contains(needle) { return label; }
+        }
+    }
+    "正在准备 Windows Hermes"
+}
+
 fn run_hidden_powershell(
     script: &Path,
     args: &[OsString],
@@ -64,6 +99,7 @@ fn run_hidden_powershell(
     let mut log = open_bootstrap_log(paths)?;
     writeln!(log, "\n=== {description} ===")?;
     writeln!(log, "script: {}", script.display())?;
+    writeln!(log, "arguments: {:?}", args)?;
 
     let mut command = process::background_command("powershell.exe");
     command
@@ -105,7 +141,7 @@ fn run_hidden_powershell(
         if last_update.elapsed() >= Duration::from_secs(10) {
             if let Some(reporter) = reporter {
                 report(reporter, "core", BootstrapProgressState::Running, 0, TOTAL_STEPS,
-                    format!("{description}，已运行 {} 秒；详细进度见安装日志", started.elapsed().as_secs()), None);
+                    format!("{}，本轮已运行 {} 秒", current_stage(paths), started.elapsed().as_secs()), None);
             }
             last_update = Instant::now();
         }
@@ -122,12 +158,30 @@ fn run_hidden_powershell(
 
 fn run_hidden_status(program: &Path, args: &[&str], description: &str) -> bool {
     let mut command = process::background_command(program);
-    command.args(args);
-    match command.status() {
-        Ok(status) => status.success(),
+    command.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    let mut child = match command.spawn() {
+        Ok(child) => child,
         Err(error) => {
             log::debug!("[windows-bootstrap] {description} 检查失败: {error}");
-            false
+            return false;
+        }
+    };
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if started.elapsed() < Duration::from_secs(30) => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            result => {
+                log::warn!("[windows-bootstrap] {description} 检查超时或失败: {result:?}");
+                #[cfg(windows)]
+                let _ = process::background_command("taskkill.exe")
+                    .args(["/PID", &child.id().to_string(), "/T", "/F"]).status();
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
         }
     }
 }
@@ -150,6 +204,34 @@ fn write_windows_install_markers(paths: &BootstrapPaths) -> Result<()> {
     )
     .context("写 Windows Hermes 安装方式标记")?;
     Ok(())
+}
+
+/// Old desktop installers could finish the runtime but fail before writing our
+/// completion marker. Never rebuild that venv merely to retry an addon.
+/// Adoption requires the actual pinned source identity AND working core tools.
+pub(crate) fn reuse_verified_core(paths: &BootstrapPaths) -> Result<bool> {
+    if core_health_problems(paths, true).is_empty() {
+        return Ok(true);
+    }
+    if installed_hermes_commit_at(&paths.install_dir).as_deref() != Some(hermes_pinned_commit())
+        || !paths.install_dir.join("pyproject.toml").is_file()
+    {
+        return Ok(false);
+    }
+    if !run_hidden_status(
+        &hermes_venv_python(&paths.install_dir),
+        &["-I", "-c", "import hermes_cli.main, httpx, rich, prompt_toolkit"],
+        "existing Hermes core imports",
+    ) || !run_hidden_status(
+        &hermes_venv_tool(&paths.install_dir, "hermes"), &["--help"], "existing Hermes CLI",
+    ) {
+        return Ok(false);
+    }
+    write_windows_install_markers(paths)?;
+    anyhow::ensure!(core_health_problems(paths, false).is_empty(), "Recovered core health check failed");
+    write_completion_marker(&paths.install_dir)?;
+    writeln!(open_bootstrap_log(paths)?, "Verified pinned Hermes core retained; retrying addons only")?;
+    Ok(true)
 }
 
 /// 某些旧资源包会把源码和 venv 解压成功，但没有生成 Hermes 入口 exe。
@@ -294,17 +376,39 @@ fn install_optional_components(resource_dir: &Path, paths: &BootstrapPaths) -> V
     }
 
     let reader_exe = hermes_venv_tool(&paths.install_dir, "catfish-wechat-reader");
-    if !reader_exe.is_file() {
-        let script = resources.join("install-wechat-reader.ps1");
+    let script = resources.join("install-wechat-reader.ps1");
+    let marker = paths.install_dir.join(".catfish-wechat-reader-installed.sha256");
+    let expected = artifacts.wechat_reader_tar.as_ref().and_then(|archive| {
+        crate::services::addon_fingerprint::fingerprint(&[archive, &script]).ok()
+    });
+    // An exe left behind by a failed safety check is NOT a successful install.
+    let reader_current = expected.as_ref().is_some_and(|hash| {
+        crate::services::addon_fingerprint::matches(&marker, hash, reader_exe.is_file())
+            && run_hidden_status(
+                &hermes_venv_python(&paths.install_dir),
+                &["-I", "-c", r#"import json, subprocess, sys
+r = json.loads(subprocess.check_output([sys.argv[1], 'doctor', '--json'], timeout=20))
+assert isinstance(r, dict) and type(r.get('protocol_version')) is int and r['protocol_version'] == 1
+assert all(r.get(k) is True for k in ('read_only', 'secure_key_store', 'ephemeral_plaintext_cache'))
+assert r.get('modifies_wechat_app') is False
+"#, &reader_exe.to_string_lossy()],
+                "微信读取器安全协议",
+            )
+    });
+    if !reader_current {
         match artifacts.wechat_reader_tar.as_ref() {
             Some(archive) if script.is_file() => {
                 let args = vec![
                     OsString::from("-DistributionPath"),
                     archive.clone().into_os_string(),
                 ];
-                if let Err(error) =
-                    run_hidden_powershell(&script, &args, paths, "安装 catfish-wechat-reader", None)
-                {
+                let installed = run_hidden_powershell(
+                    &script, &args, paths, "安装/校验 catfish-wechat-reader", None,
+                ).and_then(|()| {
+                    let hash = expected.as_ref().context("无法读取微信读取器资源指纹")?;
+                    write_bytes_atomic(&marker, hash.as_bytes())
+                });
+                if let Err(error) = installed {
                     failures.push(format!("catfish-wechat-reader: {error:#}"));
                 }
             }
@@ -384,6 +488,8 @@ pub(crate) fn bootstrap(
         // Upstream's full-install catch exits nonzero only in JSON/stage mode.
         OsString::from("-Json"),
         OsString::from("-SkipSetup"),
+        // Optional GUI automation is installed on demand, never in first-use setup.
+        OsString::from("-SkipComputerUse"),
         OsString::from("-Commit"),
         OsString::from(hermes_pinned_commit()),
         OsString::from("-OfflineSourceTar"),
