@@ -659,12 +659,20 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      # ─── 打 tag 时, 作 release asset (可选) ───
-      - name: Release msi on tag push
-        if: startsWith(github.ref, 'refs/tags/')
+      # ─── 上传 Release asset (手动触发也传, 走 CDN 下载快) ───
+      # 员工从 Artifact 页下载 638MB 走 api.github.com 只有几十 KB/s;
+      # Release asset 走 objects.githubusercontent.com CDN, 国内快一个量级.
+      # tag 名 = run id + attempt + 完整 sha, 唯一且不冲突.
+      - name: Upload msi to Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: "msi-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}"
+          name: "MSI build ${{ github.sha }}"
           files: |
             edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
             edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/build-identity.json
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: true
+          overwrite: true
+          make_latest: false

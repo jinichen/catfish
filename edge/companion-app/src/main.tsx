@@ -15,6 +15,7 @@ import "./styles/globals.css";
 import "highlight.js/styles/github.css";
 // 8/7 UI REFRESH 覆盖层 — 必须最后 import (同名类靠源顺序覆盖 globals.css)
 import "./styles/refresh.css";
+import "./styles/workspace-glass.css";
 
 // BL-CSP-PROXY-GLOBAL (7/18 鸿波): 全局 monkey-patch window.fetch → fetchViaProxy.
 //
