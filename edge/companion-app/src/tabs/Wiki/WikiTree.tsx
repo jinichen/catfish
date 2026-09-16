@@ -385,9 +385,14 @@ export default function WikiTree() {
         <details className="wiki-tree__graph-status">
           <summary>
             关系图 {graphStatus.nodeCount} 节点 · {graphStatus.edgeCount} 条关系
-            {graphStatus.unresolvedCount > 0 && ` · ${graphStatus.unresolvedCount} 条待核对`}
+            {graphStatus.unresolvedCount > 0 && ` · ${graphStatus.unresolvedCount} 条关系待确认`}
           </summary>
           <div className="wiki-tree__graph-status-body">
+            {graphStatus.unresolvedCount > 0 && (
+              <div>
+                这些关系暂未连入图谱：目标不存在或名称有歧义，确认后才会建立连接。
+              </div>
+            )}
             <div>
               同步：{graphStatus.syncMode} · {graphStatus.changedFiles} 个文件更新 · 最近：
               {graphStatus.lastSyncAt
