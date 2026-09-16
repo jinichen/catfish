@@ -17,6 +17,86 @@
 /// (catfish_memory_helpers._load_type_vocab) 运行时读它, 两边不会漂。
 const TYPE_VOCAB_JSON: &str = include_str!("../../../../contracts/wiki_type_vocab.json");
 
+/// 返回给知识库列表使用的显示标题。
+///
+/// 历史条目可能没有完整 frontmatter，或者 `title` 被错误地写成了文件
+/// slug。显示层仍应尽量使用文件中已有的中文标题；只有确实没有标题时，
+/// 才退回 slug。这里不改文件名，避免破坏既有关系和内部路径。
+pub(crate) fn display_title(frontmatter: &str, body: &str, slug: &str) -> String {
+    let frontmatter_title = scalar_field(frontmatter, "title");
+    let legacy_title = if frontmatter_title.is_none() {
+        legacy_unfenced_title(body)
+    } else {
+        None
+    };
+    let markdown_title = first_chinese_heading(body);
+
+    if let Some(title) = frontmatter_title.or(legacy_title) {
+        let title = clean_scalar(&title);
+        if !title.is_empty() && !(title == slug && markdown_title.is_some()) {
+            return title;
+        }
+    }
+    markdown_title.unwrap_or_else(|| slug.to_string())
+}
+
+fn scalar_field(frontmatter: &str, key: &str) -> Option<String> {
+    frontmatter.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix(&format!("{key}:"))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn clean_scalar(value: &str) -> String {
+    value.trim().trim_matches('"').trim_matches('\'').trim().to_string()
+}
+
+/// 兼容 8/4 之前已经落盘的坏文件：`title:` 在正文开头，只有收尾 `---`。
+fn legacy_unfenced_title(body: &str) -> Option<String> {
+    let mut saw_yaml_key = false;
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if trimmed == "---" {
+            let fm_end = body.find("\n---")?;
+            return saw_yaml_key
+                .then(|| scalar_field(&body[..fm_end], "title"))
+                .flatten();
+        }
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with('#') || !trimmed.contains(':') {
+            return None;
+        }
+        saw_yaml_key = true;
+    }
+    None
+}
+
+fn first_chinese_heading(body: &str) -> Option<String> {
+    body.lines().find_map(|line| {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('#') {
+            return None;
+        }
+        let heading = trimmed.trim_start_matches('#').trim();
+        if !heading.is_empty() && has_chinese(heading) {
+            Some(heading.to_string())
+        } else {
+            None
+        }
+    })
+}
+
+fn has_chinese(value: &str) -> bool {
+    value
+        .chars()
+        .any(|ch| ('\u{4e00}'..='\u{9fff}').contains(&ch))
+}
+
 /// 把 entity_type / concept_type 归一化到受控词表。
 ///
 /// # 为什么 UI 侧也要做 (8/4 鸿波「新增的知识库能不能自动满足 ontology 规则」)
@@ -234,5 +314,47 @@ mod type_vocab_tests {
         let v: serde_json::Value = serde_json::from_str(TYPE_VOCAB_JSON).unwrap();
         assert_eq!(v["aliases"]["规则"], "rule");
         assert!(v["entity_types"].as_array().unwrap().len() >= 5);
+    }
+}
+
+#[cfg(test)]
+mod display_title_tests {
+    use super::display_title;
+
+    #[test]
+    fn keeps_a_real_frontmatter_title() {
+        assert_eq!(
+            display_title("title: 资质申报流程", "# 其他标题", "zizhi-shenbao"),
+            "资质申报流程"
+        );
+    }
+
+    #[test]
+    fn recovers_title_from_unfenced_legacy_frontmatter() {
+        let body = "type: entity\ntitle: 高新资质申报\ntags: [项目]\n---\n\n# 高新资质申报\n";
+        assert_eq!(
+            display_title("", body, "gaoxin-zizhi-shenbao"),
+            "高新资质申报"
+        );
+    }
+
+    #[test]
+    fn prefers_chinese_heading_when_title_is_the_slug() {
+        assert_eq!(
+            display_title(
+                "title: wu-ren-ji-shou-hou-fu-wu-zhuan-xiang-qi-ye-fu-wu-neng-li-deng-ji-zi-zhi-zheng-shu",
+                "# 无人机售后服务专项企业服务能力等级资质证书\n",
+                "wu-ren-ji-shou-hou-fu-wu-zhuan-xiang-qi-ye-fu-wu-neng-li-deng-ji-zi-zhi-zheng-shu"
+            ),
+            "无人机售后服务专项企业服务能力等级资质证书"
+        );
+    }
+
+    #[test]
+    fn uses_chinese_heading_when_frontmatter_is_missing() {
+        assert_eq!(
+            display_title("", "## 中文知识标题\n\n正文。", "some-slug"),
+            "中文知识标题"
+        );
     }
 }

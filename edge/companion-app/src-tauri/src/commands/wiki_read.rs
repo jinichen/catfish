@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::wiki_frontmatter::display_title;
+
 /// P3.5.132 #5 (6/29 鸿波): typed relations.
 ///
 /// related 真原是 `Vec<String>`, 现升级 `Vec<RelatedRef>` 支持给关系标真 rel 字段
@@ -39,7 +41,7 @@ pub struct WikiFileInfo {
     pub kind: String,
     /// slug (filename 去 .md)
     pub slug: String,
-    /// title (frontmatter 真 `title:` field, 或 fallback slug)
+    /// title (frontmatter / 历史正文标题, 或 fallback slug)
     pub title: String,
     /// type tag: entity_type / concept_type (e.g. "person", "process")
     pub subtype: Option<String>,
@@ -357,7 +359,7 @@ fn build_file_info_inner(
         return None;
     }
 
-    let title = parse_frontmatter_field(&fm, "title").unwrap_or_else(|| slug.clone());
+    let title = display_title(&fm, &body, &slug);
     let subtype = parse_frontmatter_field(&fm, "entity_type")
         .or_else(|| parse_frontmatter_field(&fm, "concept_type"));
     let tags = parse_list_field(&fm, "tags");
