@@ -53,7 +53,25 @@ __all__ = [
 ]
 
 
+def _force_utf8_stdio() -> None:
+    """9/17: 输出一律 UTF-8。
+
+    Companion (Rust) 按 UTF-8 解码我们的 stdout; 中文 Windows 上 Python 对管道
+    默认用 GBK, discover 里的中文原因就成了乱码。调用方设 PYTHONIOENCODING 是
+    一道, 这里再钉一道, 谁忘了都不至于出乱码。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_stdio()
     parser = _build_parser()
     args = parser.parse_args(argv)
 

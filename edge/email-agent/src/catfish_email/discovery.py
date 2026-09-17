@@ -96,6 +96,17 @@ def _discover_client(client: str) -> EmailSource:
             accounts=[],
             reason=_safe_reason(str(error)),
         )
+    except Exception as error:  # noqa: BLE001
+        # 9/17: 截图实锤 —— Foxmail 探测抛了一个不在上面清单里的异常, 子进程直接
+        # 吐 traceback 退出码 1, 前端把整段 traceback 当"原因"显示。发现是探测,
+        # 任何失败都只是"这个客户端不可用", 不该让员工看 Python 栈。异常类型留在
+        # reason 里, 方便定位真因 (下一步再按类型收窄)。
+        return EmailSource(
+            client=client,
+            status="unavailable",
+            accounts=[],
+            reason=_safe_reason(f"{type(error).__name__}: {error}"),
+        )
 
     root = getattr(adapter, "profiles_dir", None)
     return EmailSource(
@@ -147,4 +158,8 @@ def discover_human() -> str:
 if __name__ == "__main__":
     if len(sys.argv) != 2 or sys.argv[1] not in ("outlook-win", "foxmail-win"):
         raise SystemExit(2)
-    print(json.dumps(_discover_client(sys.argv[1]).as_json(), ensure_ascii=True))
+    try:
+        source = _discover_client(sys.argv[1])
+    except BaseException as error:  # noqa: BLE001 — 子进程的最后一道: 永远给父进程一个 JSON
+        source = EmailSource(sys.argv[1], "unavailable", [], reason=_safe_reason(f"{type(error).__name__}: {error}"))
+    print(json.dumps(source.as_json(), ensure_ascii=True))
