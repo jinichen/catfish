@@ -107,6 +107,24 @@ describe("buildConfirmedWikiContent", () => {
     expect(result).toContain("正文含 [[目标]]");
   });
 
+  it("9/17: 原样确认现有候选关系 —— 5 条不增不减不改, 只把 pending 翻成 active", () => {
+    // 现场: 小鲶批量建的条目互相引用, 每条都 pending; 员工核对后候选全对, 只想盖章。
+    const related = [
+      { name: "通信工程施工总承包(二级)", rel: "关联" },
+      { name: "机电工程施工总承包(二级)", rel: "关联" },
+      { name: "建筑装修装饰工程专业承包-二级", rel: "关联" },
+      { name: "消防设施工程专业承包-二级", rel: "关联" },
+      { name: "业绩合同额与承包范围口径", rel: "关联" },
+    ];
+    const serialized = related.map((r) => `{name: "${r.name}", rel: "${r.rel}"}`).join(", ");
+    const source = `---\ntype: concept\nontology_status: pending\ntitle: 闽建许161号\nrelated: [${serialized}]\nsources: [manual]\n---\n\n# 正文\n`;
+    const result = buildConfirmedWikiContent(source, related);
+    expect(result).toContain("ontology_status: active");
+    expect(result).toContain(`related: [${serialized}]`);
+    expect(result).not.toContain("pending");
+    expect(result.endsWith("\n# 正文\n")).toBe(true);
+  });
+
   it("兼容 CRLF frontmatter", () => {
     const source = "---\r\ntitle: 示例\r\nrelated: []\r\n---\r\n\r\n正文\r\n";
     const result = buildConfirmedWikiContent(source, [{ name: "部门", rel: "所属部门" }]);

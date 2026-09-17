@@ -92,7 +92,7 @@ export function buildWikiRelationshipTasks(files: WikiFileInfo[]): WikiRelations
       kind: "pending",
       title: `确认「${file.title}」的关系`,
       detail: file.related.length > 0
-        ? `已有 ${file.related.length} 条候选关系，需要核对`
+        ? `小鲶写了 ${file.related.length} 条候选关系，还没人核对；对的话一键确认`
         : "尚未确认它与谁有关",
       file,
     }));

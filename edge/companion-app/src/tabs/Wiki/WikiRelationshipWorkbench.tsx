@@ -124,6 +124,28 @@ export default function WikiRelationshipWorkbench() {
     }
   };
 
+  // 9/17 鸿波「都关联了为什么还要处理」: 小鲶批量建条目时互相引用, 目标当时还是
+  // pending, 于是每一条都被判 pending (wiki_write.rs:161)。候选关系本身可能全对,
+  // 但工作台只有"再加一条"的入口, 没有"这几条就是对的"。这个按钮把现有关系原样
+  // 写回并置 active, 不改关系内容。
+  const confirmExisting = async () => {
+    if (!selectedFile || info.related.length === 0) return;
+    setSaving(true);
+    setSaveError(null);
+    setSaved(false);
+    try {
+      const content = buildConfirmedWikiContent(selectedFile.content, info.related, info);
+      await wikiUpdateFile(info.rel_path, content);
+      await loadFiles();
+      await selectFile(info.rel_path);
+      setSaved(true);
+    } catch (error) {
+      setSaveError(String(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const deleteBrokenRelation = async () => {
     const relationName = selectedTask?.kind === "broken" ? selectedTask.relationName?.trim() : "";
     if (!relationName || !window.confirm(`确认删除“${info.title}”中的错误关系“${relationName}”吗？\n只删除这条关系，不删除知识文件和正文引用。`)) return;
@@ -208,6 +230,18 @@ export default function WikiRelationshipWorkbench() {
             <button type="button" className="wiki-workbench__secondary" onClick={selectNextTask} disabled={tasks.length < 2}>
               稍后处理
             </button>
+            {selectedTask?.kind === "pending" && info.related.length > 0 && (
+              <button
+                type="button"
+                className="wiki-workbench__secondary"
+                disabled={saving}
+                onClick={() => void confirmExisting()}
+                title="现有候选关系不改, 只把这条知识标为已确认"
+              >
+                {saving ? <SpinnerGap className="wiki-spin" size={18} /> : <Check size={18} />}
+                这 {info.related.length} 条都对，确认
+              </button>
+            )}
             <button type="button" className="wiki-workbench__primary" disabled={!selectedTarget || saving} onClick={() => void confirmRelation()}>
               {saving ? <SpinnerGap className="wiki-spin" size={20} /> : <Check size={20} />}
               确认关系
