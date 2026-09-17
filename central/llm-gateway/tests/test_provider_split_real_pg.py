@@ -171,32 +171,47 @@ def test_共用一家供应商但timeout不同的两个模型各自保留(db):
     assert flash.timeout == 60
 
 
-def test_七个模型拆成六个供应商(db):
-    """去重是按 (api_base, api_key_env) 做的, 不是按模型个数。
+def _expected_provider_count(raw: list[dict]) -> int:
+    """按迁移同款去重键 (api_base, api_key_env) 从 yaml 原始行算出该建几家。
 
-    7 个模型里 gemini 那两个共用一家 → 6 家。这个数字写在设计文档和迁移的
-    docstring 里, 钉一下免得三处各说各的。
+    9/17: 这条测试 8/1 写死 "7 个模型 → 6 家", 之后 models.yaml 注掉了 groq
+    (8/x) 变成 6 个模型 → 5 家, CI 真 PG job 从那天起一直红 —— 拿真实配置文件
+    当夹具, 数字就不能写死。gemini 两个共用一家这件事仍然由下面
+    test_共用一家供应商但timeout不同的两个模型各自保留 钉着。
     """
+    keys = set()
+    for m in raw:
+        up = m.get("upstream") or {}
+        if up.get("provider"):
+            continue  # 已是新形态, 迁移会跳过
+        keys.add(f"{(up.get('api_base') or '').strip()}|{(up.get('api_key_env') or '').strip()}")
+    return len(keys)
+
+
+def test_模型按_api_base_和_key_去重成供应商(db):
+    """去重是按 (api_base, api_key_env) 做的, 不是按模型个数 —— gemini 那两个共用一家。"""
     from catfish_gateway import model_store, provider_store
 
-    _seed_from_yaml()
+    raw = _seed_from_yaml()
+    want = _expected_provider_count(raw)
+    assert want < len(raw), "yaml 里至少要有两个模型共用一家, 否则这条测的不是去重"
     created = provider_store.migrate_models_to_providers(by="test")
-    assert len(created) == 6, f"应该建 6 家供应商, 实际 {len(created)}: {created}"
+    assert len(created) == want, f"应该建 {want} 家供应商, 实际 {len(created)}: {created}"
 
     rows = provider_store.read_providers()
     assert rows is not None, "表不在 —— alembic 008 没跑?"
-    assert len(rows) == 6
+    assert len(rows) == want
 
 
 def test_重复跑迁移不会建出重复供应商(db):
     """幂等。启动时每次都会跑, 不幂等的话开一次机多一批 dashscope-2/3/4。"""
     from catfish_gateway import model_store, provider_store
 
-    _seed_from_yaml()
+    raw = _seed_from_yaml()
     first = provider_store.migrate_models_to_providers(by="test")
     second = provider_store.migrate_models_to_providers(by="test")
 
-    assert len(first) == 6
+    assert len(first) == _expected_provider_count(raw)
     assert second == [], f"第二次不该再建: {second}"
     assert len(provider_store.read_providers() or {}) == 6
 
