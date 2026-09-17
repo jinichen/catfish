@@ -33,6 +33,13 @@ export default function AboutModal() {
         console.warn("[AboutModal] getVersion 失败:", e);
         setVersion("?");
       });
+    // 9/17: 关于页显示 git sha + 构建时间。Windows 上 1.0.1 的旧包跑了一周没人看出来,
+    // 版本号是人手改的会忘, sha 是构建时自动带的不会错。
+    invoke<{ summary: string }>("get_build_info")
+      .then((b) => setVersion(b.summary.replace(/^v/, "")))
+      .catch(() => {
+        /* 老后端没这个命令 → 保留 getVersion 给的裸版本号 */
+      });
     invoke<string | null>("get_hermes_version")
       .then((v) => setHermesVersion(v))
       .catch(() => {

@@ -157,6 +157,7 @@ pub(crate) fn handler(
             crate::commands::system::list_calendars,
             // BL-CATFISH-HERMES-VERSION-SYNC-B (6/1): AboutModal 显 hermes 版本
             crate::commands::system::get_hermes_version,
+            crate::commands::system::get_build_info,
             // file (Phase 2 优雅下载: skill 生成的 .docx/.xlsx/.pptx 在 Finder 显示)
             crate::commands::file::reveal_in_finder,
             crate::commands::file::open_file,

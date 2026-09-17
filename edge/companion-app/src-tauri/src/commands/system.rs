@@ -410,6 +410,54 @@ end tell"#;
 ///   - 不 spawn `hermes --version` 进程 (慢 + venv activate 复杂)
 ///   - 直读 pyproject.toml 第一个 `version = "..."` 行 (toml crate 不引入新依赖)
 ///   - 永不抛 — 拿不到返 None, AboutModal 静默隐藏
+/// 9/17: 构建身份 —— 版本 + git sha + 构建时间。关于页显示, bootstrap 日志每轮头部也打。
+/// 一句话就能回答"机器上跑的是哪份代码", 不用再猜 MSI 装没装上。
+pub fn build_identity() -> String {
+    format!(
+        "v{} ({}, built {})",
+        env!("CARGO_PKG_VERSION"),
+        env!("CATFISH_GIT_SHA"),
+        build_time_utc(),
+    )
+}
+
+fn build_time_utc() -> String {
+    // 只做到"日期 + 时分", 不引 chrono。CATFISH_BUILD_UNIX 是 build.rs 注入的秒级 UTC。
+    let secs: i64 = env!("CATFISH_BUILD_UNIX").parse().unwrap_or(0);
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    // civil-from-days (Howard Hinnant), 够用且无依赖
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02} {:02}:{:02}Z", rem / 3600, (rem % 3600) / 60)
+}
+
+#[derive(serde::Serialize)]
+pub struct BuildInfo {
+    pub version: String,
+    pub git_sha: String,
+    pub built_at: String,
+    pub summary: String,
+}
+
+#[tauri::command]
+pub fn get_build_info() -> BuildInfo {
+    BuildInfo {
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        git_sha: env!("CATFISH_GIT_SHA").to_owned(),
+        built_at: build_time_utc(),
+        summary: build_identity(),
+    }
+}
+
 #[tauri::command]
 pub async fn get_hermes_version() -> Result<Option<String>, String> {
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);

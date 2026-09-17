@@ -98,6 +98,9 @@ fn run_hidden_powershell(
     require_file(script, "PowerShell 安装脚本")?;
     let mut log = open_bootstrap_log(paths)?;
     writeln!(log, "\n=== {description} ===")?;
+    // 9/17: 每轮先打构建身份。9/11 之前的包在机器上跑了一周, 日志里没有任何一行
+    // 能说明是哪个版本 —— 这一行以后就是判断"修复到底装没装上"的依据。
+    writeln!(log, "companion: {}", crate::commands::system::build_identity())?;
     writeln!(log, "script: {}", script.display())?;
     writeln!(log, "arguments: {:?}", args)?;
 

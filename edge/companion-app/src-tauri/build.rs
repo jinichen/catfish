@@ -13,12 +13,45 @@
 // 失败处理:
 //   - swiftc 找不到 / Swift 编译报错 → 不挂 cargo build, log 警告, 让 Rust 端走 osascript fallback
 
-#[cfg(target_os = "macos")]
 use std::process::Command;
 #[cfg(windows)]
 mod build_windows;
 
+/// 9/17: 把 git sha 编进二进制。Windows 上一周的修复没装上机器却没人能看出来 ——
+/// MSI 版本一直 1.0.1，关于页、文件属性、日志全都一样。有了 sha，关于页和
+/// bootstrap 日志头一眼能分辨机器上跑的是哪份代码。
+/// 拿不到 git (交付包源码不带 .git / 没装 git) 时给 "unknown"，不挂构建。
+fn emit_build_identity() {
+    let sha = Command::new("git")
+        .args(["rev-parse", "--short=10", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_owned());
+    let dirty = Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=no"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| !o.stdout.is_empty())
+        .unwrap_or(false);
+    let sha = if dirty { format!("{sha}-dirty") } else { sha };
+    // 秒级 UTC, 不引 chrono
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    println!("cargo:rustc-env=CATFISH_GIT_SHA={sha}");
+    println!("cargo:rustc-env=CATFISH_BUILD_UNIX={secs}");
+    // HEAD 变了就重跑 (切分支 / 新 commit)
+    println!("cargo:rerun-if-changed=../../../.git/HEAD");
+    println!("cargo:rerun-if-changed=../../../.git/refs/heads");
+}
+
 fn main() {
+    emit_build_identity();
     #[cfg(windows)]
     build_windows::build();
     // Swift binary 只 macOS 编译; Win/Linux 跳过
