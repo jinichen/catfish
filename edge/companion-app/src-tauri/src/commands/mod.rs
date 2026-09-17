@@ -112,6 +112,7 @@ pub mod wiki_embed; // P38 (6/5 鸿波): 本机 ONNX BGE-M3 wiki 语义搜索, 1
 pub mod wiki_files;
 pub(crate) mod wiki_graph; // 9/11: SQLite 关系镜像 + 一跳图检索扩展
 pub mod wiki_ontology;
+pub mod wiki_conflicts; // 9/17: frontmatter conflicts 解析 + 员工二选一 (semantica 第 2 条)
 pub mod wiki_read; // BL-CATFISH-WIKI-MODE P3.3.2 (6/4): wiki read API (list_files + read_file)
 pub mod wiki_search;
 pub mod wiki_save; // BL-CATFISH-WIKI-MODE P1.2.2 (6/4): chat 真 💾 button → wiki/queries/ 写盘

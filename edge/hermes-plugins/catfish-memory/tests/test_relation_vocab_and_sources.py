@@ -226,3 +226,88 @@ def test_rust_and_ts_read_the_same_contract():
     d = json.loads(_CONTRACT.read_text(encoding="utf-8"))
     for rel in d["relations"]:
         assert f'"{rel}"' in ts, f"TS DEFAULT_RELATION_TYPES 缺 {rel}"
+
+
+# ─────────────────────────────────────────────────────────────
+# ⑦ 冲突检测 (semantica 第 2 条): 不静默覆盖
+# ─────────────────────────────────────────────────────────────
+
+from catfish_memory_helpers import detect_conflicts, parse_conflicts, record_conflicts  # noqa: E402
+
+
+def _note(subtype: str, rel_a: str, extra_fm: str = "") -> str:
+    return (
+        f"---\ntype: entity\ntitle: X\nentity_type: {subtype}\naliases: []\n"
+        f'related: [{{name: "A", rel: "{rel_a}"}}, {{name: "B", rel: "持有"}}]\n'
+        f'sources: ["journal:2026-07-14"]\n{extra_fm}---\n\n正文。\n'
+    )
+
+
+def test_detects_type_and_relation_conflicts_only():
+    found = detect_conflicts(_note("org", "隶属"), _note("department", "协作"), "journal:2026-09-17")
+    assert [(c["field"], c["current"], c["proposed"]) for c in found] == [
+        ("entity_type", "org", "department"), ("rel:A", "隶属", "协作"),
+    ]
+    assert detect_conflicts(_note("org", "隶属"), _note("org", "隶属")) == []
+
+
+def test_fallback_and_missing_relations_are_not_conflicts():
+    """「关联」/裸 wikilink 是"还没定", 不是"定了不一样"; 新增关系也不是冲突。"""
+    old = _note("org", "隶属")
+    assert detect_conflicts(old, _note("org", "关联")) == []
+    new = old.replace('{name: "B", rel: "持有"}', '{name: "C", rel: "使用"}')
+    assert detect_conflicts(old, new) == []
+
+
+def test_record_keeps_old_values_and_writes_conflicts_line(caplog):
+    with caplog.at_level("WARNING"):
+        out = record_conflicts("wiki/entities/x.md", _note("department", "协作"), _note("org", "隶属"), "journal:2026-09-17")
+    assert "entity_type: org" in out
+    assert '{name: "A", rel: "隶属"}' in out and '{name: "B", rel: "持有"}' in out
+    conflicts = parse_conflicts(out.split("---")[1])
+    assert conflicts == [
+        {"field": "entity_type", "current": "org", "proposed": "department", "seen": "journal:2026-09-17"},
+        {"field": "rel:A", "current": "隶属", "proposed": "协作", "seen": "journal:2026-09-17"},
+    ]
+    assert "保留旧值" in caplog.text
+
+
+def test_record_carries_old_conflicts_and_clears_adopted_ones():
+    old = _note("department", "隶属",
+                'conflicts: [{field: "entity_type", current: "org", proposed: "department", seen: "j"}, '
+                '{field: "rel:A", current: "隶属", proposed: "协作", seen: "j"}]\n')
+    out = record_conflicts("x.md", _note("department", "隶属"), old)
+    assert parse_conflicts(out.split("---")[1]) == [
+        {"field": "rel:A", "current": "隶属", "proposed": "协作", "seen": "j"},
+    ]
+
+
+def test_no_conflicts_means_no_conflicts_line():
+    out = record_conflicts("x.md", _note("org", "隶属"), _note("org", "隶属"))
+    assert "conflicts:" not in out
+
+
+def test_write_path_does_not_silently_overwrite(tmp_path):
+    """端到端: 第二次蒸馏换了类型和关系 → 盘上还是旧值 + conflicts 字段。"""
+    (tmp_path / "wiki" / "entities").mkdir(parents=True)
+    for name in ("a", "b"):
+        (tmp_path / f"wiki/entities/{name}.md").write_text(
+            f"---\ntype: entity\nontology_status: active\ntitle: {name.upper()}\nentity_type: org\n---\n\n正文。\n",
+            encoding="utf-8",
+        )
+    prov = Provenance(journal_dates={"2026-07-14"})
+    _write_wiki_files(tmp_path, {"wiki/entities/x.md": _note("org", "隶属")}, provenance=prov)
+    _write_wiki_files(tmp_path, {"wiki/entities/x.md": _note("department", "协作")}, provenance=prov)
+    text = (tmp_path / "wiki/entities/x.md").read_text(encoding="utf-8")
+    assert "entity_type: org" in text and '{name: "A", rel: "隶属"}' in text
+    assert 'conflicts: [{field: "entity_type", current: "org", proposed: "department"' in text
+    assert 'rel:A' in text
+
+
+def test_write_path_old_chinese_type_is_not_a_false_conflict(tmp_path):
+    (tmp_path / "wiki" / "concepts").mkdir(parents=True)
+    (tmp_path / "wiki/concepts/x.md").write_text(
+        "---\ntype: concept\ntitle: X\nconcept_type: 规则\n---\n\n正文。\n", encoding="utf-8",
+    )
+    _write_wiki_files(tmp_path, {"wiki/concepts/x.md": "---\ntype: concept\ntitle: X\nconcept_type: rule\n---\n\n新正文。\n"})
+    assert "conflicts:" not in (tmp_path / "wiki/concepts/x.md").read_text(encoding="utf-8")

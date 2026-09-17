@@ -7,6 +7,7 @@ import {
   RELATION_VOCAB,
   buildConfirmedWikiContent,
   buildWikiRelationshipTasks,
+  conflictFieldLabel,
   hasLegacyWikiRelations,
   relationTypeOptions,
 } from "./wikiRelationshipTasks";
@@ -166,5 +167,39 @@ describe("关系词表 (9/17)", () => {
     expect(options).not.toContain("持有主体");
     expect(options[0]).toBe("隶属");
     expect(options.at(-1)).toBe(RELATION_FALLBACK);
+  });
+});
+
+describe("冲突任务 (9/17, semantica 第 2 条)", () => {
+  it("frontmatter conflicts 每条一个任务, 排在最前, 带两个值", () => {
+    const tasks = buildWikiRelationshipTasks([
+      file({ rel_path: "wiki/entities/pending.md", title: "待确认", ontology_status: "pending" }),
+      file({
+        rel_path: "wiki/entities/x.md",
+        title: "中电福富",
+        related: [{ name: "A", rel: "隶属" }],
+        conflicts: [
+          { field: "entity_type", current: "org", proposed: "department", seen: "journal:2026-09-17" },
+          { field: "rel:A", current: "隶属", proposed: "协作", seen: "" },
+        ],
+      }),
+    ]);
+    expect(tasks.slice(0, 2).map((task) => task.kind)).toEqual(["conflict", "conflict"]);
+    expect(tasks[0].title).toBe("「中电福富」的类型有两个说法");
+    expect(tasks[0].detail).toContain("org");
+    expect(tasks[0].detail).toContain("journal:2026-09-17");
+    expect(tasks[1].title).toBe("「中电福富」的与「A」的关系有两个说法");
+    expect(tasks[1].conflict?.proposed).toBe("协作");
+  });
+
+  it("没有 conflicts 字段的老条目不生成冲突任务", () => {
+    const tasks = buildWikiRelationshipTasks([file({ related: [{ name: "A", rel: "隶属" }] })]);
+    expect(tasks.some((task) => task.kind === "conflict")).toBe(false);
+  });
+
+  it("字段名翻译成员工看得懂的", () => {
+    expect(conflictFieldLabel("entity_type")).toBe("类型");
+    expect(conflictFieldLabel("concept_type")).toBe("类型");
+    expect(conflictFieldLabel("rel:中电福富")).toBe("与「中电福富」的关系");
   });
 });

@@ -63,6 +63,17 @@ export interface WikiFileInfo {
   authored_by?: string | null;
   /** 缺失表示历史条目，按 active 兼容；pending 不进入关系图。 */
   ontology_status?: string | null;
+  /** 9/17: 蒸馏想改、但跟已有值不一样的字段 —— 盘上保留旧值, 这里列给员工二选一。 */
+  conflicts?: WikiConflict[];
+}
+
+/** frontmatter `conflicts:` 一项。field = entity_type / concept_type / `rel:<对方名字>`。 */
+export interface WikiConflict {
+  field: string;
+  current: string;
+  proposed: string;
+  /** 新值来自哪 (journal:日期 / raw/sources/...), 可能为空 */
+  seen: string;
 }
 
 export interface WikiFileFull {
@@ -190,6 +201,10 @@ export interface WikiRelationMigrationResult {
 
 export const wikiMigrateLegacyRelations = (dryRun = true) =>
   rawInvoke<WikiRelationMigrationResult>("wiki_migrate_legacy_relations", { dryRun });
+
+/** 9/17: 员工对一条冲突做决定。takeProposed=true 把值改成蒸馏提的新值, false 保留现值; 两种都清掉这条冲突。 */
+export const wikiResolveConflict = (relPath: string, field: string, takeProposed: boolean) =>
+  rawInvoke<{ rel_path: string; remaining: number }>("wiki_resolve_conflict", { relPath, field, takeProposed });
 
 /** P3.3.4 (6/9 鸿波): 软删 entity/concept/query → mv 到 wiki/.trash/<ts>-原名.md.
  * P3.5.132 #3 (6/29 鸿波): 加 dryRun + affectedFiles 先报谁会变 dangling. */

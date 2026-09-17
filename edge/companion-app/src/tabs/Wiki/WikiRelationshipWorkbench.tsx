@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ArrowRight,
+  ArrowsLeftRight,
   Check,
   CheckCircle,
   FileText,
@@ -10,11 +11,13 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react";
 import { wikiUpdateFile, type RelatedRef } from "../../lib/tauri";
+import { wikiResolveConflict } from "../../lib/tauri_wiki";
 import { resolveWikiRefOrNull } from "../../lib/wikiResolve";
 import { useWikiStore } from "../../store/wiki";
 import {
   buildConfirmedWikiContent,
   buildWikiRelationshipTasks,
+  conflictFieldLabel,
   relationTypeOptions,
 } from "./wikiRelationshipTasks";
 import WikiActionPanel from "./WikiActionPanel";
@@ -168,6 +171,25 @@ export default function WikiRelationshipWorkbench() {
     }
   };
 
+  // 9/17 (semantica 第 2 条): 蒸馏想改类型/关系, 但跟盘上已有的不一样 —— 写入侧
+  // 保留了旧值、把新值记进 conflicts。这里员工二选一, 后端改文件 + 清掉那条冲突。
+  const resolveConflict = async (field: string, takeProposed: boolean) => {
+    if (!selectedFile) return;
+    setSaving(true);
+    setSaveError(null);
+    setSaved(false);
+    try {
+      await wikiResolveConflict(info.rel_path, field, takeProposed);
+      await loadFiles();
+      await selectFile(info.rel_path);
+      setSaved(true);
+    } catch (error) {
+      setSaveError(String(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const selectNextTask = () => {
     const next = tasks.find((task) => task.id !== selectedTask?.id);
     if (next) void selectFile(next.file.rel_path);
@@ -186,6 +208,41 @@ export default function WikiRelationshipWorkbench() {
             : "核对这条知识与人员、部门、项目或制度之间的关系。"}
         </p>
       </header>
+
+      {(info.conflicts?.length ?? 0) > 0 && (
+        <section className="wiki-workbench__section">
+          <div className="wiki-workbench__section-title">
+            <ArrowsLeftRight size={22} aria-hidden="true" />
+            <div><h3>两个说法</h3><p>小鲶后来读到的跟现在记的不一样。文件里保留的是现在的值，选一个。</p></div>
+          </div>
+          <div className="wiki-workbench__conflicts">
+            {info.conflicts!.map((conflict) => (
+              <div className="wiki-workbench__conflict" key={conflict.field}>
+                <div className="wiki-workbench__conflict-field">{conflictFieldLabel(conflict.field)}</div>
+                <button
+                  type="button"
+                  className="wiki-workbench__secondary"
+                  disabled={saving}
+                  onClick={() => void resolveConflict(conflict.field, false)}
+                  title="保留现在的值"
+                >
+                  现在：<strong>{conflict.current}</strong>
+                </button>
+                <button
+                  type="button"
+                  className="wiki-workbench__secondary"
+                  disabled={saving}
+                  onClick={() => void resolveConflict(conflict.field, true)}
+                  title={conflict.seen ? `来自 ${conflict.seen}` : "小鲶提出的新值"}
+                >
+                  改成：<strong>{conflict.proposed}</strong>
+                  {conflict.seen && <small>{conflict.seen}</small>}
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {selectedTask?.kind === "duplicate" ? (
         <section className="wiki-workbench__section">

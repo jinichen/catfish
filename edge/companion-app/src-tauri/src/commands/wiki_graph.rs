@@ -627,6 +627,7 @@ mod tests {
             mtime: 1.0,
             authored_by: None,
             ontology_status: None,
+            conflicts: Vec::new(),
         };
         GraphFile {
             aliases_json: serde_json::to_string(&info.aliases).unwrap(),

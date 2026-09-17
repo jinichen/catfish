@@ -27,11 +27,13 @@ try:
     from .catfish_memory_wiki_provenance import (  # noqa: F401
         Provenance, _RELATION_FALLBACK, _canon_relation, _canon_source,
         _is_untyped_relation, _normalize_relations, _normalize_sources,
+        detect_conflicts, parse_conflicts, record_conflicts,
     )
 except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_wiki_provenance import (  # noqa: F401
         Provenance, _RELATION_FALLBACK, _canon_relation, _canon_source,
         _is_untyped_relation, _normalize_relations, _normalize_sources,
+        detect_conflicts, parse_conflicts, record_conflicts,
     )
 try:
     from .catfish_memory_fm import _FM_LIST_FIELDS_UNION, _ensure_frontmatter_fence, _merge_wiki_file, _parse_frontmatter_lists, _rel_item_name, _split_frontmatter_body  # noqa: F401
@@ -634,6 +636,8 @@ def _write_wiki_files(
             # 9/17: 新内容先过 sources 校验 (丢编造的日期 / 回填本轮真来源), 再进 merge
             content = _normalize_sources(rel_path, _ensure_frontmatter_fence(rel_path, content), provenance)
             final_content = content
+            # 9/17 冲突检测要对照的是**写盘前**的旧文件 (merge 之后就看不出谁覆盖了谁)
+            old_on_disk = target.read_text(encoding="utf-8", errors="replace") if target.exists() else None
             # 8/4: 本体规则体检 —— 只报不拦, 见 report_ontology_gaps 文档
             for _gap in report_ontology_gaps(rel_path, final_content):
                 logger.info("catfish-memory wiki 体检: %s —— %s", rel_path, _gap)
@@ -681,6 +685,14 @@ def _write_wiki_files(
             final_content = _normalize_relations(rel_path, final_content)
             final_content = _normalize_sources(rel_path, final_content, None)
             final_content = _ensure_entity_aliases(rel_path, final_content)
+            if old_on_disk is not None:
+                # 9/17 (semantica 第 2 条): 类型 / typed relation 跟旧文件不一致 →
+                # 保留旧值, 新值记进 conflicts 等员工在关系工作台二选一。不静默覆盖。
+                seen = (provenance.fill() or [""])[0] if provenance is not None else ""
+                # 旧文件也先归一化类型词 (老条目可能还是「规则」而不是 rule), 免得假冲突
+                final_content = record_conflicts(
+                    rel_path, final_content, _normalize_types(rel_path, old_on_disk), seen,
+                )
             ontology_error = _validate_new_ontology(rel_path, final_content)
             if ontology_error:
                 logger.warning(

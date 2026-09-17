@@ -412,6 +412,7 @@ pub(crate) fn handler(
             crate::commands::wiki_write::wiki_create_entity_or_concept,
             crate::commands::wiki_write::wiki_update_file,
             crate::commands::wiki_ontology::wiki_migrate_legacy_relations,
+            crate::commands::wiki_conflicts::wiki_resolve_conflict,
             // P3.3.4 (6/9): wiki 软删 (mv 到 .trash)
             crate::commands::wiki_write::wiki_delete_file,
             // P3.3.18 Phase 4 P2 (6/10): 卸载本机部门 wiki 副本 (软删 → wiki-shared/.trash/)

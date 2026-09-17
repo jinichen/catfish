@@ -1,7 +1,7 @@
-import type { RelatedRef, WikiFileInfo } from "../../lib/tauri_wiki";
+import type { RelatedRef, WikiConflict, WikiFileInfo } from "../../lib/tauri_wiki";
 import { resolveWikiRef } from "../../lib/wikiResolve";
 
-export type WikiRelationshipTaskKind = "pending" | "missing" | "duplicate" | "broken";
+export type WikiRelationshipTaskKind = "pending" | "missing" | "duplicate" | "broken" | "conflict";
 
 export interface WikiRelationshipTask {
   id: string;
@@ -11,6 +11,15 @@ export interface WikiRelationshipTask {
   file: WikiFileInfo;
   duplicatePaths?: string[];
   relationName?: string;
+  /** kind === "conflict" 时: 哪个字段、两个值 */
+  conflict?: WikiConflict;
+}
+
+/** `entity_type` → 类型; `rel:中电福富` → 与「中电福富」的关系 */
+export function conflictFieldLabel(field: string): string {
+  if (field.startsWith("rel:")) return `与「${field.slice(4)}」的关系`;
+  if (field === "entity_type" || field === "concept_type") return "类型";
+  return field;
 }
 
 /** 只识别 frontmatter 里的旧关系；正文 wikilink 不属于迁移范围。 */
@@ -162,7 +171,20 @@ export function buildWikiRelationshipTasks(files: WikiFileInfo[]): WikiRelations
     duplicatePaths: group.map((file) => file.rel_path),
   }));
 
-  return [...pending, ...broken, ...missing, ...duplicates];
+  // 9/17 (semantica 第 2 条): 蒸馏跟已有内容打架 —— 盘上保留了旧值, 新值等员工定。
+  // 排最前: 这是"两个说法哪个对", 比"还没定"更需要人。
+  const conflicts = files.flatMap((file): WikiRelationshipTask[] =>
+    (file.conflicts ?? []).map((conflict) => ({
+      id: `conflict:${file.rel_path}:${conflict.field}`,
+      kind: "conflict",
+      title: `「${file.title}」的${conflictFieldLabel(conflict.field)}有两个说法`,
+      detail: `现在是“${conflict.current}”，小鲶${conflict.seen ? `根据 ${conflict.seen} ` : ""}认为是“${conflict.proposed}”；选一个`,
+      file,
+      conflict,
+    })),
+  );
+
+  return [...conflicts, ...pending, ...broken, ...missing, ...duplicates];
 }
 
 /**

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  ArrowsLeftRight,
   Books,
   CheckCircle,
   Copy,
@@ -23,6 +24,7 @@ const TASK_META: Record<
   WikiRelationshipTaskKind,
   { label: string; icon: typeof CheckCircle }
 > = {
+  conflict: { label: "两个说法", icon: ArrowsLeftRight },
   pending: { label: "待确认", icon: CheckCircle },
   missing: { label: "缺少关系", icon: LinkSimple },
   duplicate: { label: "可能重复", icon: Copy },
@@ -56,6 +58,7 @@ export default function WikiOrganizer({
   const hasLegacyRelations = useMemo(() => hasLegacyWikiRelations(files), [files]);
   const counts = useMemo(
     () => ({
+      conflict: tasks.filter((task) => task.kind === "conflict").length,
       pending: tasks.filter((task) => task.kind === "pending").length,
       missing: tasks.filter((task) => task.kind === "missing").length,
       duplicate: tasks.filter((task) => task.kind === "duplicate").length,

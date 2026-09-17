@@ -425,6 +425,9 @@ try:
         _is_untyped_relation,
         _canon_source,
         _normalize_sources,
+        detect_conflicts,
+        parse_conflicts,
+        record_conflicts,
     )
 except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_wiki import (  # noqa: F401
@@ -456,6 +459,9 @@ except ImportError:  # 独立脚本模式 (无父包)
         _is_untyped_relation,
         _canon_source,
         _normalize_sources,
+        detect_conflicts,
+        parse_conflicts,
+        record_conflicts,
     )
 
 try:

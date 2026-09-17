@@ -82,6 +82,8 @@ pub struct WikiFileInfo {
     pub authored_by: Option<String>,
     /// 本体写入状态。缺失的历史字段按 active 兼容；pending 不进入关系图。
     pub ontology_status: Option<String>,
+    /// 9/17: 蒸馏跟已有内容打架的字段 (frontmatter `conflicts:`), 工作台列成冲突任务
+    pub conflicts: Vec<super::wiki_conflicts::WikiConflict>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -208,35 +210,8 @@ fn parse_related_entry(entry: &str) -> Option<RelatedRef> {
     }
 }
 
-/// 顶层 split — brace `{...}` 内真 `,` 不切.
-fn split_top_level(s: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut depth = 0;
-    let mut buf = String::new();
-    for c in s.chars() {
-        match c {
-            '{' | '[' => {
-                depth += 1;
-                buf.push(c);
-            }
-            '}' | ']' => {
-                depth -= 1;
-                buf.push(c);
-            }
-            ',' if depth == 0 => {
-                if !buf.trim().is_empty() {
-                    out.push(buf.clone());
-                }
-                buf.clear();
-            }
-            _ => buf.push(c),
-        }
-    }
-    if !buf.trim().is_empty() {
-        out.push(buf);
-    }
-    out
-}
+// 顶层 split (brace-aware) —— 9/17 搬到 wiki_conflicts.rs (那边还要认引号), 这里复用。
+pub(crate) use super::wiki_conflicts::split_top_level;
 
 /// P3.5.42.13 (鸿波 6/20 catch '概念和实体没有关联连接'): 扫 body 抽 `[[name]]`
 /// wikilink. LLM 写 entity wiki 时常把 concept 关联写在 body 里 (e.g.
@@ -389,6 +364,7 @@ fn build_file_info_inner(
         mtime,
         authored_by: parse_frontmatter_field(&fm, "authored_by"),
         ontology_status: parse_frontmatter_field(&fm, "ontology_status"),
+        conflicts: super::wiki_conflicts::parse_conflicts(&fm),
     })
 }
 
