@@ -152,7 +152,7 @@ _GENERATION_PROMPT_TEMPLATE = (
     # 8/4: 加上 typed 形式。读侧 6/29 (P3.5.132 #5) 就支持 {name, rel} 了, 但
     # **prompt 从头到尾没提过 rel** —— 实测 408 条边 0 条带类型, 不是 LLM 不配合,
     # 是根本没人要求过它。功能建在读侧、写侧不知道, 等于没建。
-    "related: [{name: \"<名字>\", rel: \"<关系, 2-4 字>\"}, \"[[<关系拿不准就用这种>]]\"]\n"
+    "related: [{name: \"<名字>\", rel: \"<下面 15 个关系词之一>\"}, {name: \"<名字>\", rel: \"关联\"}]\n"
     # P3.5.205 (7/9 鸿波 catch): sources 从常量 `[employee_journal]` 改**日志日期列表**,
     # 让员工能反查每 wiki 页来自哪几天日志. 格式: `[journal:YYYY-MM-DD, ...]` (取自
     # Analysis Decisions 段的 YYYY-MM-DD 字段, 或员工日志里 heading `## [ts] journal`
@@ -195,7 +195,7 @@ _GENERATION_PROMPT_TEMPLATE = (
     # 8/4: 加上 typed 形式。读侧 6/29 (P3.5.132 #5) 就支持 {name, rel} 了, 但
     # **prompt 从头到尾没提过 rel** —— 实测 408 条边 0 条带类型, 不是 LLM 不配合,
     # 是根本没人要求过它。功能建在读侧、写侧不知道, 等于没建。
-    "related: [{name: \"<名字>\", rel: \"<关系, 2-4 字>\"}, \"[[<关系拿不准就用这种>]]\"]\n"
+    "related: [{name: \"<名字>\", rel: \"<下面 15 个关系词之一>\"}, {name: \"<名字>\", rel: \"关联\"}]\n"
     # P3.5.205 (7/9 鸿波 catch): sources 从常量 `[employee_journal]` 改**日志日期列表**,
     # 让员工能反查每 wiki 页来自哪几天日志. 格式: `[journal:YYYY-MM-DD, ...]` (取自
     # Analysis Decisions 段的 YYYY-MM-DD 字段, 或员工日志里 heading `## [ts] journal`
@@ -236,13 +236,28 @@ _GENERATION_PROMPT_TEMPLATE = (
     "比没有别名更糟。没有别名就写 `aliases: []`.\n"
     "- 别的条目引用它时, `related` 里用简称还是全称都行, 系统靠 aliases 认得出"
     "是同一个。\n"
-    "- `related:` **优先带关系类型**: `{name: \"中电福富\", rel: \"隶属\"}`. "
-    "rel 用 2-4 字中文短词 (隶属/认证/负责/参与/依赖/上级/同类). "
-    "关系拿不准就退回裸 wikilink `\"[[名字]]\"` —— **编一个关系比没有关系更糟**.\n"
+    # 9/17: rel 改成**闭合词表** (contracts/wiki_relation_vocab.json)。之前写的是
+    # "2-4 字短词 + 几个例子", LLM 只能自造 (持有主体/采用口径/同期项目/不同条目),
+    # 写入侧现在会把表外值归成「关联」→ pending。词表直接印在 prompt 里, 让它
+    # 有得选; 方向也说清 —— rel 是 <本条目> → <对方>。
+    "- `related:` **必须带关系类型**: `{name: \"中电福富\", rel: \"隶属\"}`. "
+    "rel **只能从这 15 个里选** (方向: 本条目 → 对方): "
+    "隶属 (本条目属于对方) / 包含 (本条目包含对方) / 负责 / 参与 / 协作 / "
+    "依据 (本条目以对方为依据) / 遵循 / 使用 / 持有 (公司→证书) / 认证 (公司→评估机构或标准) / "
+    "对标 / 配套 / 替代 (新→旧) / 前置 (本条目是对方的前置条件) / 同类. "
+    "15 个都不贴切才写 `rel: \"关联\"` —— 它会进待确认队列由员工定, "
+    "**不要自造别的词** (写了也会被归成「关联」).\n"
     "- `related:` 必须真双引号 string list — 正确: "
     "`related: [\"[[陈鸿波]]\", \"[[FFCS]]\"]`. "
     "**错**: `related: [[[陈鸿波]]]` (3 个 `[` YAML 真 inline list of list, "
     "Obsidian 不能 parse)\n"
+    # 9/17: sources 也说死。51 篇还挂着 `employee_journal`, 等于没写来源;
+    # 写入侧现在只收下面三种, 日期还会对照本轮真读过的日志, 编的直接丢。
+    "- `sources:` 只允许三种写法, 每一篇至少一条: "
+    "`\"journal:YYYY-MM-DD\"` (日期必须是输入日志里 `## [YYYY-MM-DD ...]` 抬头真出现过的, "
+    "只列跟本条目有关的那几天) / "
+    "`\"raw/sources/<文件名不含.md>\"` (来自 `### source: <文件名>` 段) / `manual`. "
+    "**禁止** `employee_journal` 这种泛称, 禁止编日期.\n"
     "- 每 file title 不重复\n"
     "- related wikilinks 真 `[[name]]` 必须指真 Analysis 里出现真 name\n"
     "- 同 slug 真 entity vs concept 真不允许 (按 type 分)\n"
@@ -265,7 +280,7 @@ def _build_generation_prompt() -> str:
 
     而模板里有三处**写给 LLM 看的字面量花括号** (frontmatter 示例):
 
-        {name: "<名字>", rel: "<关系, 2-4 字>"}     ×2
+        {name: "<名字>", rel: "<下面 15 个关系词之一>"} ×2 (9/17 起每行还多一个「关联」示例)
         {name: "中电福富", rel: "隶属"}              ×1
 
     `.format()` 见到 `{name: ...}` 就去找名叫 `name` 的参数, 抛 KeyError('name')。

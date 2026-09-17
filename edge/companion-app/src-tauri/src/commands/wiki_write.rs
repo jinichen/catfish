@@ -20,7 +20,9 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use crate::util::date::chrono_today;
-use super::wiki_frontmatter::{mark_authored_by_employee, normalize_type_line};
+use super::wiki_frontmatter::{
+    canon_relation, mark_authored_by_employee, normalize_type_line, RELATION_FALLBACK,
+};
 use super::wiki_read::ontology_target_is_active;
 use super::wiki_slug::{catfish_home, find_normalized_collision, slugify, validate_slug};
 
@@ -105,6 +107,18 @@ pub async fn wiki_create_entity_or_concept(
         ));
     }
 
+    // 9/17: rel 归一到 contracts/wiki_relation_vocab.json (所属部门 → 隶属; 表外 →
+    // 「关联」)。跟蒸馏侧同一份词表, UI 手工建的和后台蒸馏的不再两套词。
+    let related: Vec<RelatedInput> = related
+        .into_iter()
+        .map(|r| match r {
+            RelatedInput::Typed { name, rel: Some(rel_val) } if !rel_val.trim().is_empty() => {
+                RelatedInput::Typed { name, rel: Some(canon_relation(&rel_val)) }
+            }
+            other => other,
+        })
+        .collect();
+
     let today = chrono_today();
     let type_field = if kind == "entity" { "entity_type" } else { "concept_type" };
     let tags_yaml = tags
@@ -147,9 +161,14 @@ pub async fn wiki_create_entity_or_concept(
 
     // 新建入口必须显式区分“可进图谱”和“待确认”。UI 选择的 typed relation
     // 才能直接 active；旧 caller 的裸字符串仍兼容，但先隔离到 pending。
+    // 9/17: 兜底「关联」也算没类型 —— 它只说明有关系, 不说明是什么关系。跟蒸馏侧
+    // (_is_untyped_relation) 同口径: 员工选了「关联」= "有关系但说不清", 进待确认。
     let has_untyped_relation = related.iter().any(|relation| match relation {
         RelatedInput::Bare(_) => true,
-        RelatedInput::Typed { rel, .. } => rel.as_deref().map(str::trim).unwrap_or("").is_empty(),
+        RelatedInput::Typed { rel, .. } => {
+            let r = rel.as_deref().map(str::trim).unwrap_or("");
+            r.is_empty() || r == RELATION_FALLBACK
+        }
     });
     let has_unresolved_relation = related.iter().any(|relation| {
         let name = match relation {

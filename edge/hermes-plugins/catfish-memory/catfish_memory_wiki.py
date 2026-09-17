@@ -24,6 +24,16 @@ try:
 except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_helpers import logger  # noqa: F401
 try:
+    from .catfish_memory_wiki_provenance import (  # noqa: F401
+        Provenance, _RELATION_FALLBACK, _canon_relation, _canon_source,
+        _is_untyped_relation, _normalize_relations, _normalize_sources,
+    )
+except ImportError:  # 独立脚本模式 (无父包)
+    from catfish_memory_wiki_provenance import (  # noqa: F401
+        Provenance, _RELATION_FALLBACK, _canon_relation, _canon_source,
+        _is_untyped_relation, _normalize_relations, _normalize_sources,
+    )
+try:
     from .catfish_memory_fm import _FM_LIST_FIELDS_UNION, _ensure_frontmatter_fence, _merge_wiki_file, _parse_frontmatter_lists, _rel_item_name, _split_frontmatter_body  # noqa: F401
 except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_fm import _FM_LIST_FIELDS_UNION, _ensure_frontmatter_fence, _merge_wiki_file, _parse_frontmatter_lists, _rel_item_name, _split_frontmatter_body  # noqa: F401
@@ -385,9 +395,8 @@ def _ontology_relation_names(rel_path: str, content: str) -> tuple[list[str], bo
         if not name:
             continue
         names.append(name.replace("[[", "").replace("]]", "").split("|", 1)[0].strip())
-        if not item.lstrip().startswith("{"):
-            untyped = True
-        elif not re.search(r"\brel\s*:", item):
+        # 9/17: 兜底「关联」也算没类型 —— 它只说明有关系, 不说明是什么关系
+        if _is_untyped_relation(item):
             untyped = True
     # 图谱读侧也承认正文 wikilink；没有写进 typed related 时，只能待确认。
     body_names = [m.strip() for m in re.findall(r"\[\[([^\]]+)\]\]", body) if m.strip()]
@@ -597,6 +606,7 @@ def _write_wiki_files(
     catfish_home: Path,
     files: Dict[str, str],
     skip_merge_paths: Optional[set] = None,
+    provenance: "Provenance | None" = None,
 ) -> Tuple[int, int]:
     """写 wiki files 真 ~/.catfish/wiki/entities/ + wiki/concepts/. 返 (n_entities, n_concepts).
 
@@ -605,6 +615,9 @@ def _write_wiki_files(
     P19 (6/5 鸿波): skip_merge_paths 真 path set 已被 _call_merge_llm 处理过
     (LLM merge), 直接 overwrite. 没 merge `走 P18 regex merge 安全网`.
     新建 file (不重名) 沿用 overwrite.
+    9/17: provenance = 本轮实际读过的日志日期 + 上传资料, 用来校验/回填 sources
+    (见 _normalize_sources)。merge 前对新内容做一次带 provenance 的校验, merge 后
+    再做一次不带 provenance 的格式收敛 —— 老条目的历史来源不能被这一轮否定。
     """
     if not files:
         return (0, 0)
@@ -618,7 +631,9 @@ def _write_wiki_files(
         target = catfish_home / rel_path
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            final_content = _ensure_frontmatter_fence(rel_path, content)
+            # 9/17: 新内容先过 sources 校验 (丢编造的日期 / 回填本轮真来源), 再进 merge
+            content = _normalize_sources(rel_path, _ensure_frontmatter_fence(rel_path, content), provenance)
+            final_content = content
             # 8/4: 本体规则体检 —— 只报不拦, 见 report_ontology_gaps 文档
             for _gap in report_ontology_gaps(rel_path, final_content):
                 logger.info("catfish-memory wiki 体检: %s —— %s", rel_path, _gap)
@@ -661,6 +676,10 @@ def _write_wiki_files(
             for _gap in report_ontology_gaps(rel_path, final_content):
                 logger.info("catfish-memory wiki 体检: %s —— %s", rel_path, _gap)
             final_content = _normalize_types(rel_path, final_content)
+            # 9/17: rel 归一到词表 (表外 → 「关联」等人定); sources 格式收敛
+            # (merge 并进来的 employee_journal 这类老值在这里被清掉)
+            final_content = _normalize_relations(rel_path, final_content)
+            final_content = _normalize_sources(rel_path, final_content, None)
             final_content = _ensure_entity_aliases(rel_path, final_content)
             ontology_error = _validate_new_ontology(rel_path, final_content)
             if ontology_error:
@@ -715,7 +734,7 @@ def report_ontology_gaps(rel_path: str, content: str) -> list[str]:
         gaps.append("没有 aliases 字段 (简称/全称对不上时会连不上或连错)")
 
     items = _parse_frontmatter_lists(fm).get("related", [])
-    untyped = [i for i in items if not i.lstrip().startswith("{")]
+    untyped = [i for i in items if _is_untyped_relation(i)]
     if items and untyped:
         gaps.append(
             f"{len(untyped)}/{len(items)} 条关系没有 rel 类型 "

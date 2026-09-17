@@ -8,7 +8,7 @@
 
 而模板里有三处**写给 LLM 看的字面量花括号** (frontmatter 示例):
 
-    {name: "<名字>", rel: "<关系, 2-4 字>"}     ×2
+    {name: "<名字>", rel: "<关系, 2-4 字>"}     ×2   (9/17 起每行两个示例 → ×4)
     {name: "中电福富", rel: "隶属"}              ×1
 
 `.format()` 见到 `{name: ...}` 就去找名叫 `name` 的参数 → `KeyError('name')`。
@@ -90,10 +90,11 @@ def test_给LLM看的花括号示例原样保留():
     p = _build_generation_prompt()
     # 只认单个 `{`: 前面不是 `{`、后面也不是 `{`
     single = re.findall(r"(?<!\{)\{name:", p)
-    assert len(single) == 3, (
-        f"frontmatter 的 related 示例剩 {len(single)} 处单花括号 (应该 3 处)。\n"
+    # 9/17: 两行 frontmatter 示例各两个 typed 项 (词表词 + 兜底「关联」) + 约束里 1 个具体例子 = 5
+    assert len(single) == 5, (
+        f"frontmatter 的 related 示例剩 {len(single)} 处单花括号 (应该 5 处)。\n"
         f"整串 '{{name:' 出现 {p.count('{name:')} 次 —— 两个数对不上就是被转义成 "
-        "`{{name:` 了。那三处是给 LLM 看的格式示例, 不是占位符。"
+        "`{{name:` 了。那几处是给 LLM 看的格式示例, 不是占位符。"
     )
     assert '{name: "中电福富", rel: "隶属"}' in p, "具体例子没了"
     assert "{{" not in p, "prompt 里出现了 `{{` —— 转义符漏给 LLM 了"

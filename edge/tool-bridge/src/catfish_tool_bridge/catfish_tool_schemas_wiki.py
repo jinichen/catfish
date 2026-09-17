@@ -287,14 +287,28 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
                                 "type": "object",
                                 "properties": {
                                     "name": {"type": "string"},
-                                    "rel": {"type": "string"},
+                                    "rel": {
+                                        "type": "string",
+                                        "enum": [
+                                            "隶属", "包含", "负责", "参与", "协作",
+                                            "依据", "遵循", "使用", "持有", "认证",
+                                            "对标", "配套", "替代", "前置", "同类",
+                                            "关联",
+                                        ],
+                                        "description": (
+                                            "关系类型 (方向: 本条目 → 对方)。只能从 15 个里选: "
+                                            "隶属(本条目属于对方)/包含/负责/参与/协作/依据/遵循/使用/"
+                                            "持有(公司→证书)/认证/对标/配套/替代(新→旧)/前置/同类。"
+                                            "都不贴切才用「关联」—— 它会进待确认状态由员工定。"
+                                        ),
+                                    },
                                 },
                                 "required": ["name", "rel"],
                                 "additionalProperties": False,
                             },
                         ]
                     },
-                    "description": "关联条目；优先传 {name, rel}，只传标题会进入待确认状态",
+                    "description": "关联条目；传 {name, rel}。只传标题或 rel=关联 会进入待确认状态",
                 },
             },
             "required": ["kind", "title", "body", "subtype"],

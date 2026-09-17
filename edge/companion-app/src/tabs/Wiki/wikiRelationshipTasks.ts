@@ -20,14 +20,29 @@ export function hasLegacyWikiRelations(files: WikiFileInfo[]): boolean {
   );
 }
 
-const DEFAULT_RELATION_TYPES = [
-  "关联",
-  "负责人",
-  "所属部门",
-  "依据",
-  "协作部门",
+// 9/17: 关系词表是闭合的, 跟 edge/contracts/wiki_relation_vocab.json 一份
+// (Python 蒸馏侧运行时读, Rust include_str, 这里手抄 + 测试钉住三份一致)。
+// 顺序 = 下拉顺序; 兜底「关联」放最后 —— 它只说明有关系, 不说明是什么关系,
+// 写入侧按"没类型"处理 (pending), 所以不能是默认选中的第一项。
+export const RELATION_VOCAB = [
+  "隶属",
   "包含",
-];
+  "负责",
+  "参与",
+  "协作",
+  "依据",
+  "遵循",
+  "使用",
+  "持有",
+  "认证",
+  "对标",
+  "配套",
+  "替代",
+  "前置",
+  "同类",
+] as const;
+export const RELATION_FALLBACK = "关联";
+const DEFAULT_RELATION_TYPES: string[] = [...RELATION_VOCAB, RELATION_FALLBACK];
 
 function normalizeName(value: string): string {
   return value
@@ -150,11 +165,13 @@ export function buildWikiRelationshipTasks(files: WikiFileInfo[]): WikiRelations
   return [...pending, ...broken, ...missing, ...duplicates];
 }
 
-export function relationTypeOptions(files: WikiFileInfo[]): string[] {
-  const discovered = files.flatMap((file) =>
-    file.related.map((relation) => relation.rel?.trim()).filter(Boolean) as string[],
-  );
-  return [...new Set([...DEFAULT_RELATION_TYPES, ...discovered])];
+/**
+ * 下拉选项 = 词表 + 兜底。9/17 之前还会把库里已出现的 rel 一并列出来 —— 那正是
+ * 自造词 (持有主体/采用口径/不同条目) 越滚越多的入口; 现在写入侧会把表外值归成
+ * 「关联」, 再列出来只会让员工选一个存不进去的词。
+ */
+export function relationTypeOptions(_files: WikiFileInfo[]): string[] {
+  return [...DEFAULT_RELATION_TYPES];
 }
 
 function quoteYaml(value: string): string {

@@ -419,6 +419,12 @@ try:
         _append_as_appendix,
         _write_wiki_files,
         report_ontology_gaps,
+        Provenance,
+        _canon_relation,
+        _normalize_relations,
+        _is_untyped_relation,
+        _canon_source,
+        _normalize_sources,
     )
 except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_wiki import (  # noqa: F401
@@ -444,6 +450,12 @@ except ImportError:  # 独立脚本模式 (无父包)
         _append_as_appendix,
         _write_wiki_files,
         report_ontology_gaps,
+        Provenance,
+        _canon_relation,
+        _normalize_relations,
+        _is_untyped_relation,
+        _canon_source,
+        _normalize_sources,
     )
 
 try:

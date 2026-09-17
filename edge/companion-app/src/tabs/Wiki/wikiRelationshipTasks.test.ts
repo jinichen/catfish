@@ -1,9 +1,14 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { WikiFileInfo } from "../../lib/tauri_wiki";
 import {
+  RELATION_FALLBACK,
+  RELATION_VOCAB,
   buildConfirmedWikiContent,
   buildWikiRelationshipTasks,
   hasLegacyWikiRelations,
+  relationTypeOptions,
 } from "./wikiRelationshipTasks";
 
 function file(overrides: Partial<WikiFileInfo>): WikiFileInfo {
@@ -142,5 +147,24 @@ describe("buildConfirmedWikiContent", () => {
     expect(result).toContain('title: "历史条目"');
     expect(result).toContain('related: [{name: "部门", rel: "所属部门"}]');
     expect(result).toContain("# 历史条目");
+  });
+});
+
+describe("关系词表 (9/17)", () => {
+  it("跟 edge/contracts/wiki_relation_vocab.json 一字不差 —— 三条产线同一份词表", () => {
+    const contract = JSON.parse(
+      readFileSync(resolve(__dirname, "../../../../contracts/wiki_relation_vocab.json"), "utf-8"),
+    ) as { fallback: string; relations: Record<string, string> };
+    expect([...RELATION_VOCAB]).toEqual(Object.keys(contract.relations));
+    expect(RELATION_FALLBACK).toBe(contract.fallback);
+  });
+
+  it("下拉只给词表 + 兜底, 库里的自造词不再出现; 兜底在最后", () => {
+    const options = relationTypeOptions([
+      file({ related: [{ name: "A", rel: "持有主体", source: "frontmatter" }] }),
+    ]);
+    expect(options).not.toContain("持有主体");
+    expect(options[0]).toBe("隶属");
+    expect(options.at(-1)).toBe(RELATION_FALLBACK);
   });
 });

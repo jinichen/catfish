@@ -53,6 +53,7 @@ try:
         _write_state,
         _write_wiki_files,
         merge_files_with_llm,
+        Provenance,
     )
 except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_helpers import (  # noqa: F401
@@ -87,6 +88,7 @@ except ImportError:  # 独立脚本模式 (无父包)
         _write_state,
         _write_wiki_files,
         merge_files_with_llm,
+        Provenance,
     )
 
 # 跟 catfish_memory.py 同名 —— logging.getLogger 同名返回同一对象
@@ -364,7 +366,9 @@ class _DistillMixin:
                                         "catfish-memory P19 merge_files_with_llm 异常 (fallback P18): %s",
                                         e,
                                     )
-                            n_e, n_c = _write_wiki_files(catfish_home, files, skip_merge_paths=llm_merged_paths)
+                            # 9/17: 本轮实际读过的日志日期 + 上传资料 → sources 校验/回填
+                            provenance = Provenance.from_run("" if explicit_only else journal_text, pending_sources)
+                            n_e, n_c = _write_wiki_files(catfish_home, files, skip_merge_paths=llm_merged_paths, provenance=provenance)
                             if n_e + n_c > 0:
                                 # journal 加 distill entry — Karpathy log.md 风格
                                 ts_short = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")

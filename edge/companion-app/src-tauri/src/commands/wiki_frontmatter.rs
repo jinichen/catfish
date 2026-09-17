@@ -17,6 +17,45 @@
 /// (catfish_memory_helpers._load_type_vocab) 运行时读它, 两边不会漂。
 const TYPE_VOCAB_JSON: &str = include_str!("../../../../contracts/wiki_type_vocab.json");
 
+/// 9/17: related[].rel 的受控词表 —— edge/contracts/wiki_relation_vocab.json。
+/// 蒸馏侧 (catfish_memory_wiki._normalize_relations) 运行时读同一份。
+const RELATION_VOCAB_JSON: &str = include_str!("../../../../contracts/wiki_relation_vocab.json");
+
+/// 词表兜底词。UI 里员工选了它 = "有关系但说不清", 跟蒸馏侧一样按 untyped 处理
+/// → 新建条目落 pending。
+pub(crate) const RELATION_FALLBACK: &str = "关联";
+
+/// 把一个关系词归一到词表: 别名 → 正式词; 表外 → 兜底「关联」。
+///
+/// 表外**不保留原词** —— 9/17 本机量出 418/500 条 rel 是「关联」, 另有
+/// 持有主体/采用口径/同期项目/不同条目 这种自造词; 词表要长就改 contracts
+/// 文件, 不让它在数据里悄悄长。
+pub(crate) fn canon_relation(raw: &str) -> String {
+    let v = raw.trim().trim_matches('"').trim();
+    if v.is_empty() {
+        return RELATION_FALLBACK.to_string();
+    }
+    let Ok(vocab) = serde_json::from_str::<serde_json::Value>(RELATION_VOCAB_JSON) else {
+        log::warn!("关系词表解析失败, 关系不归一化");
+        return v.to_string();
+    };
+    let canon = vocab["aliases"]
+        .get(v)
+        .and_then(|x| x.as_str())
+        .unwrap_or(v)
+        .to_string();
+    if vocab["relations"].get(&canon).is_some() {
+        if canon != v {
+            log::info!("关系归一化: {v} → {canon}");
+        }
+        return canon;
+    }
+    if canon != RELATION_FALLBACK {
+        log::warn!("关系「{v}」不在词表内, 归到「{RELATION_FALLBACK}」等员工确认 (contracts/wiki_relation_vocab.json)");
+    }
+    RELATION_FALLBACK.to_string()
+}
+
 /// 返回给知识库列表使用的显示标题。
 ///
 /// 历史条目可能没有完整 frontmatter，或者 `title` 被错误地写成了文件
@@ -319,7 +358,7 @@ mod type_vocab_tests {
 
 #[cfg(test)]
 mod display_title_tests {
-    use super::display_title;
+    use super::{canon_relation, display_title, RELATION_FALLBACK, RELATION_VOCAB_JSON};
 
     #[test]
     fn keeps_a_real_frontmatter_title() {
@@ -356,5 +395,35 @@ mod display_title_tests {
             display_title("", "## 中文知识标题\n\n正文。", "some-slug"),
             "中文知识标题"
         );
+    }
+
+    // ── 9/17 关系词表 ──
+
+    #[test]
+    fn relation_vocab_is_embedded_and_parses() {
+        let v: serde_json::Value = serde_json::from_str(RELATION_VOCAB_JSON).unwrap();
+        assert_eq!(v["fallback"], RELATION_FALLBACK);
+        assert!(v["relations"].as_object().unwrap().len() >= 10);
+        assert!(v["relations"].get(RELATION_FALLBACK).is_none(), "兜底词不能同时是正式词");
+    }
+
+    #[test]
+    fn relation_alias_is_canonicalized() {
+        assert_eq!(canon_relation("所属部门"), "隶属");
+        assert_eq!(canon_relation("负责人"), "负责");
+        assert_eq!(canon_relation("\"持有主体\""), "持有");
+    }
+
+    #[test]
+    fn relation_in_vocab_is_kept() {
+        assert_eq!(canon_relation("隶属"), "隶属");
+        assert_eq!(canon_relation(" 对标 "), "对标");
+    }
+
+    #[test]
+    fn relation_out_of_vocab_falls_back() {
+        assert_eq!(canon_relation("瞎编的"), RELATION_FALLBACK);
+        assert_eq!(canon_relation(""), RELATION_FALLBACK);
+        assert_eq!(canon_relation("不同条目"), RELATION_FALLBACK);
     }
 }

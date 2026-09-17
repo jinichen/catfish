@@ -117,6 +117,28 @@ def test_create_without_relation_is_pending(tmp_path, monkeypatch):
     assert "ontology_status: pending" in content
 
 
+def test_create_canonicalizes_relation_and_treats_fallback_as_untyped(tmp_path, monkeypatch):
+    """9/17: rel 归一到 contracts/wiki_relation_vocab.json; 「关联」= 没类型 → pending。"""
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
+    parent = wiki_files.create_wiki_entry("concept", "顶级体系", "正文", subtype="system")
+    assert parent["ok"]
+    ok = wiki_files.create_wiki_entry(
+        "entity", "市场部", "正文", subtype="department",
+        related=[{"name": "顶级体系", "rel": "所属部门"}],
+    )
+    assert ok["ok"] and "warning" not in ok, ok
+    text = (tmp_path / ok["rel_path"]).read_text(encoding="utf-8")
+    assert '{name: "顶级体系", rel: "隶属"}' in text and "ontology_status: active" in text
+
+    vague = wiki_files.create_wiki_entry(
+        "entity", "销售部", "正文", subtype="department",
+        related=[{"name": "顶级体系", "rel": "瞎编的"}],
+    )
+    assert vague["ok"] and "untyped_relation" in vague["warning"], vague
+    text = (tmp_path / vague["rel_path"]).read_text(encoding="utf-8")
+    assert 'rel: "关联"' in text and "ontology_status: pending" in text
+
+
 def test_create_system_without_parent_is_active(tmp_path, monkeypatch):
     monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
     result = wiki_files.create_wiki_entry("concept", "顶级体系", "正文", subtype="system")
