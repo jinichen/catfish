@@ -73,6 +73,21 @@ jobs:
           done
           curl -fs http://localhost:8999/healthz || (echo "::error::gateway 没起" && exit 1)
 
+      # 9/18: 这个 job 在 GitHub 上跑过的 6 次全红, 而且症状是"300 用户 3 分钟
+      # **零个请求完成**" —— 统计表空、错误报告也空。本机 Mac 起同一套 compose
+      # 单发 / locust 10 用户都正常。runner 上到底卡在哪, 之前的 workflow 一个字
+      # 都不打: 没探针、gateway 日志也不导。先让它失败时自己说清楚。
+      - name: Smoke one streaming request (跟 locust 同一条路)
+        run: |
+          set -o pipefail
+          curl -sN --max-time 30 http://localhost:8999/v1/chat/completions \
+            -H "Authorization: Bearer bench-token-alice" \
+            -H "Content-Type: application/json" \
+            -d '{"model":"catfish-mock-bench","messages":[{"role":"user","content":"smoke"}],"stream":true,"max_tokens":20}' \
+            | tee /tmp/smoke.txt | tail -3
+          grep -q "\[DONE\]" /tmp/smoke.txt || {
+            echo "::error::单发流式请求 30s 内没收到 [DONE] —— locust 零完成的直接原因"; exit 1; }
+
       - name: Run locust
         env:
           USERS: ${{ github.event.inputs.users || '300' }}
@@ -103,6 +118,14 @@ jobs:
             --md "bench/nightly-${TS}/summary.md"
         # exit code 1 = regression, 让 step 红, job 失败. 0 = OK.
         continue-on-error: false
+
+      - name: Dump stack logs on failure
+        if: failure()
+        run: |
+          echo "===== gateway ====="; docker compose -f bench/docker-compose-bench.yml logs --no-color --tail 200 gateway || true
+          echo "===== mock_upstream ====="; docker compose -f bench/docker-compose-bench.yml logs --no-color --tail 60 mock_upstream || true
+          echo "===== pg ====="; docker compose -f bench/docker-compose-bench.yml logs --no-color --tail 30 pg || true
+          docker compose -f bench/docker-compose-bench.yml ps || true
 
       - name: Upload bench artifacts
         if: always()
