@@ -84,9 +84,8 @@ async def take_inbox(
         logger.warning("room-link 邮筒取件失败 (%s): %s", user.sub, e)
         raise HTTPException(503, "邮筒暂不可用") from None
     if messages:
-        logger.info(
-            "room-link 取件 %s ← %s",
-            user.sub,
-            ", ".join(f"{m['from']}({m['kind']})" for m in messages),
-        )
+        # 审计只留 谁(kind): 先归约再打, 不把 messages 本身放进日志参数
+        # (test_central_log_no_content 按变量名静态扫, payload 一个字都不能沾)
+        senders = ", ".join(f"{m['from']}({m['kind']})" for m in messages)
+        logger.info("room-link 取件 %s ← %s", user.sub, senders)
     return {"messages": messages}

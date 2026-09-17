@@ -159,10 +159,12 @@ def test_native_task_tool_is_registered_and_dispatches(tmp_path, monkeypatch):
 
     monkeypatch.setattr(task_library.platform, "system", lambda: "Linux")
     assert "catfish_list_tasks" in catfish_tools.NATIVE_TOOL_NAMES
+    # 9/17: dispatch_native 没有 now 参数, scope=today 按真实当天算 —— 之前写死
+    # "2026-09-08" 在 9/8 当天绿, 9/9 起 CI 就一直红 (第一版 date-dependent)。
     task_library.upsert_task({
         "task_id": "dispatch-1",
         "title": "通过 native tool 读取",
-        "due_date_iso": "2026-09-08T12:00:00",
+        "due_date_iso": datetime.now().strftime("%Y-%m-%dT23:00:00"),
     })
     result = catfish_tools.dispatch_native("catfish_list_tasks", {"scope": "today"})
     assert result["ok"] is True
