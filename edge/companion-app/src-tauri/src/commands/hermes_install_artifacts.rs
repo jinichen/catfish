@@ -187,6 +187,9 @@ pub(crate) fn resolve_runtime_dir(resource_dir: &Path) -> Result<PathBuf> {
 /// 运行时”，重启 Companion 无法补装邮件。附加组件只需要自己的归档，不能用
 /// Hermes 核心安装工具作为判据。
 #[cfg(any(target_os = "windows", test))]
+// 9/17: 唯一调用方是 hermes_install_windows::install_optional_components, 在 mac
+// 的 test 构建里那条链是死的 (见 hermes_install_windows.rs 顶部说明)。
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn resolve_addon_runtime_dir(resource_dir: &Path) -> Result<PathBuf> {
     let home = crate::util::paths::home_env().ok().map(PathBuf::from);
     let bundle = resource_dir.join("resources").join("windows");

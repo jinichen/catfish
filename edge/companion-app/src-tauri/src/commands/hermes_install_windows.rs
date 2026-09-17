@@ -4,6 +4,14 @@
 //! 由这里后台执行。所有 PowerShell、tar、uv 子进程都没有窗口，输出统一写入
 //! %LOCALAPPDATA%\hermes\logs\catfish-companion-bootstrap.log，前端通过
 //! hermes-bootstrap-progress 显示阶段进度。
+//!
+//! 9/17: 这个模块在 mac 上也整个编译 —— 为了 `hermes_install_windows_tests.rs`
+//! 能在 mac 上跑 (标记文件 / 健康判定 / 日志头这些纯逻辑)。但调用方
+//! (hermes_install.rs 的 `#[cfg(target_os = "windows")]` 分支) 在 mac 上不存在,
+//! 于是 bootstrap / run_hidden_powershell 等 9 个函数在 mac 构建里是"死代码",
+//! 每次 cargo test 刷 10 条 warning。它们在 Windows 构建里全部活着, 不是真死 ——
+//! 所以只在非 Windows 上静音, Windows 构建里真的没人用的函数照样会喊。
+#![cfg_attr(not(target_os = "windows"), allow(dead_code))]
 
 use anyhow::{Context, Result};
 use std::ffi::OsString;
