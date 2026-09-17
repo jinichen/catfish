@@ -43,6 +43,59 @@ use std::path::{Path, PathBuf};
 
 const PROVIDER: &str = "catfish-memory";
 
+/// 9/17 鸿波: MEMORY.md 常年顶着 hermes 默认 2200 字符 (2199/2200), 15 条政企口径
+/// 挤不下, 每加一条先删一条, 整理时还打转。翻一倍。只在 memory 段**没有**这两个
+/// key 时补 —— 员工自己调过的值不动; 已有的 catfish 默认值也不会被将来改小的
+/// 常量覆盖掉 (要改就改这里再删机器上的行, 这是有意的)。
+const MEMORY_CHAR_LIMIT: u32 = 4000;
+const USER_CHAR_LIMIT: u32 = 2000;
+
+/// memory 段的行范围 [start, end): start 是 `memory:` 那行, end 是下一个顶层 key 或文件尾。
+fn memory_section_range(lines: &[String]) -> Option<(usize, usize)> {
+    let start = lines
+        .iter()
+        .position(|l| l == "memory:" || l.starts_with("memory:"))?;
+    let end = lines
+        .iter()
+        .enumerate()
+        .skip(start + 1)
+        .find_map(|(idx, line)| {
+            (!line.is_empty() && !line.starts_with(' ') && !line.starts_with('#')).then_some(idx)
+        })
+        .unwrap_or(lines.len());
+    Some((start, end))
+}
+
+/// 在 memory 段末尾补缺失的字符上限。段内已有同名 key (不论值) 就不碰。
+fn ensure_memory_char_limits(raw: &str) -> String {
+    let mut lines: Vec<String> = raw.lines().map(str::to_owned).collect();
+    let Some((start, end)) = memory_section_range(&lines) else {
+        return raw.to_owned();
+    };
+    let has = |key: &str| {
+        lines[start + 1..end]
+            .iter()
+            .any(|l| l.trim_start().starts_with(&format!("{key}:")))
+    };
+    let mut add: Vec<String> = Vec::new();
+    if !has("memory_char_limit") {
+        add.push(format!("  memory_char_limit: {MEMORY_CHAR_LIMIT}"));
+    }
+    if !has("user_char_limit") {
+        add.push(format!("  user_char_limit: {USER_CHAR_LIMIT}"));
+    }
+    if add.is_empty() {
+        return raw.to_owned();
+    }
+    // 插在段内最后一个非空行之后, 让段尾的空行仍留在段尾
+    let mut insert_at = end;
+    while insert_at > start + 1 && lines[insert_at - 1].trim().is_empty() {
+        insert_at -= 1;
+    }
+    lines.splice(insert_at..insert_at, add);
+    lines.join("\n") + "\n"
+}
+
 /// 跟 `curator_config::yaml_path` 同款 —— 项目里没有 `dirs` crate, 且要保留
 /// `HERMES_HOME` 这个测试重定向口子 (不污染真 `~/.hermes`)。
 fn yaml_path() -> Result<PathBuf> {
@@ -204,6 +257,7 @@ pub fn ensure_at(path: &Path) -> Result<bool> {
     if !has_catfish_memory_override(&out) {
         out = ensure_catfish_memory_override(&out);
     }
+    out = ensure_memory_char_limits(&out);
     if out == raw {
         return Ok(false);
     }
@@ -322,6 +376,44 @@ mod tests {
         let out = fs::read_to_string(&p).unwrap();
         assert!(out.contains("allow_tool_override: true"));
         assert!(!out.contains("allow_tool_override: false"));
+    }
+
+    #[test]
+    fn adds_char_limits_when_missing() {
+        let d = TempDir::new().unwrap();
+        let p = write(
+            &d,
+            "plugins:\n  entries:\n    catfish-memory:\n      allow_tool_override: true\n\nmemory:\n  provider: catfish-memory\n\nskills:\n  external_dirs: []\n",
+        );
+        assert!(ensure_at(&p).unwrap());
+        let out = fs::read_to_string(&p).unwrap();
+        assert!(out.contains("memory:\n  provider: catfish-memory\n  memory_char_limit: 4000\n  user_char_limit: 2000\n\nskills:"), "{out}");
+        assert!(!ensure_at(&p).unwrap(), "第二次应幂等");
+    }
+
+    #[test]
+    fn keeps_user_tuned_limits() {
+        // 员工自己调过 (或以后我们想改默认) —— 已有的值一个字节都不动
+        let d = TempDir::new().unwrap();
+        let p = write(
+            &d,
+            "plugins:\n  entries:\n    catfish-memory:\n      allow_tool_override: true\n\nmemory:\n  provider: catfish-memory\n  memory_char_limit: 6000\n",
+        );
+        assert!(ensure_at(&p).unwrap()); // 只补缺的 user_char_limit
+        let out = fs::read_to_string(&p).unwrap();
+        assert!(out.contains("memory_char_limit: 6000"));
+        assert!(!out.contains("memory_char_limit: 4000"));
+        assert!(out.contains("user_char_limit: 2000"));
+    }
+
+    #[test]
+    fn fresh_memory_section_gets_limits_too() {
+        // 没有 memory 段 → 补 provider 的同时把上限一起带上
+        let d = TempDir::new().unwrap();
+        let p = write(&d, "plugins:\n  enabled: []\n");
+        assert!(ensure_at(&p).unwrap());
+        let out = fs::read_to_string(&p).unwrap();
+        assert!(out.contains("memory:\n  provider: catfish-memory\n  memory_char_limit: 4000\n  user_char_limit: 2000\n"), "{out}");
     }
 
     #[test]
