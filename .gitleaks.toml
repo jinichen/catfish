@@ -65,6 +65,9 @@ regexes = [
   '''Bearer <[^>]+>''',             # Bearer <jwt> / Bearer <id_token>
   '''Bearer xxx[a-z]*''',           # Bearer xxx / xxxx / xxxxyyyy
   '''Bearer abc[a-z]*''',           # Bearer abc...
+  # 9/18: 压测夹具 —— bench/dev_users.bench.yaml 里 5 个假员工的 token
+  # (bench-token-admin/alice/bob/carol/dave), bench-nightly.yml 的 curl 探针用它
+  '''(?i)bench-token-[a-z]+''',
 
   # 单测里的明显 fake pattern (前缀对但内容显然是占位)
   '''ghp_abcdef[0-9a-f]+''',        # GitHub fake (真的 ghp_ 是 36 hex chars)
