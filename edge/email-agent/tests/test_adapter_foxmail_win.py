@@ -122,3 +122,16 @@ def test_windows_foxmail_does_not_claim_writes(make_box_file, tmp_path):
     adapter = FoxmailWinAdapter(profiles_dir=_make_storage(make_box_file, tmp_path))
     with pytest.raises(NotSupportedError):
         adapter.create_draft(to=("a@example.com",), subject="x", body="y")
+
+
+def test_missing_storage_raises_data_not_found_not_name_error(monkeypatch):
+    """9/17 Windows 现场: 没装 Foxmail 的机器上, "找不到 Storage" 这条报错本身炸了 ——
+    错误文案里引用了不存在的 `_ROOT_ENV` (9/4 dcd2bce 改名漏了一处), NameError 一路
+    冒到 discovery 子进程, 前端显示整段 traceback。发现路径必须拿到 DataNotFoundError。"""
+    from catfish_email.adapters import foxmail_win
+    from catfish_email.adapters.base import DataNotFoundError
+
+    monkeypatch.setattr(foxmail_win, "_detect_profiles_dir", lambda: None)
+    with pytest.raises(DataNotFoundError) as excinfo:
+        foxmail_win.FoxmailWinAdapter()
+    assert "CATFISH_FOXMAIL_ROOT" in str(excinfo.value)

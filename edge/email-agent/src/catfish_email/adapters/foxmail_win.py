@@ -58,7 +58,7 @@ class FoxmailWinAdapter(EmailAdapter):
         if self.profiles_dir is None or not self.profiles_dir.is_dir():
             raise DataNotFoundError(
                 "找不到 Foxmail Windows Storage 目录。请确认 Foxmail 已配置账号，"
-                f"或设置 {_ROOT_ENV}=Foxmail\\Storage。"
+                f"或设置 {ROOT_ENV}=Foxmail\\Storage。"
             )
         if not self._account_dirs():
             raise DataNotFoundError(
