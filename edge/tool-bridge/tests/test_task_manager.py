@@ -271,7 +271,12 @@ class TestTaskManager(unittest.TestCase):
             "elapsed_ms": 1.0,
             "timed_out": False,
         }
-        with _mock.patch.object(_sandbox, "run_in_sandbox", return_value=fake_result):
+        # 9/17: manager 跑 execute_code 时**总是**带 progress_cb (task_manager.py:463),
+        # 于是 _runner_execute_code 走的是 run_in_sandbox_streaming, 不是 run_in_sandbox
+        # —— 6/3 只 mock 了后者, 真 sandbox 照样起, CI 慢一点就撞 5s deadline
+        # ('running' != 'completed', 时红时绿)。两个都 mock, 这条才真的只测 sync 入口。
+        with _mock.patch.object(_sandbox, "run_in_sandbox", return_value=fake_result), \
+             _mock.patch.object(_sandbox, "run_in_sandbox_streaming", return_value=fake_result):
             # 这跟 catfish_tools.py:call_tool sync 入口路径一致
             result = task_manager.submit_typed_task(
                 kind="execute_code",
