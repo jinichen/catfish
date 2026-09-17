@@ -213,7 +213,7 @@ def test_重复跑迁移不会建出重复供应商(db):
 
     assert len(first) == _expected_provider_count(raw)
     assert second == [], f"第二次不该再建: {second}"
-    assert len(provider_store.read_providers() or {}) == 6
+    assert len(provider_store.read_providers() or {}) == _expected_provider_count(raw)
 
 
 # ════════════════════════════════════════════════════════════════════
