@@ -8,14 +8,20 @@ Foxmail 7+ (Windows + Mac) 把邮件存成两种主要文件:
                    (每封邮件之间用 14-byte 标记分隔)
   <folder>.ind   — 索引文件, 每条记录是一封邮件的元信息 + 在 .box 里的 byte 偏移
 
-更新版本 (7.2+) 的部分文件夹会改成 per-message 文件:
-  <folder>/<msgid>.eml   — 单封 RFC822
-  <folder>/index.lst     — 简单的 id 列表
+7.2 实测不是这样 (9/18 在真机上量出来的, 之前这段是猜的):
+  Mails/<id%32>/<id//32%32>/<id>   — 单封邮件, **文件名是纯数字 id, 没有扩展名**
+  Boxes/<folder>.box              — 只是该文件夹的 id 列表, magic 'LSTG', 不含正文
+  Boxes/mId_bId.map               — mail id → box id 映射
+  Mime/Decode.*                   — 解码缓存, 不是邮件
 
-我们的 parser 同时处理两种:
-  - 如果目录里有 .box + .ind → 走 box 模式
-  - 如果目录里有大量 .eml → 走 per-message 模式
-  - 都没有 → DataNotFoundError
+也就是说 7.2 换了存储模型: .box 从"数据文件"变成了"索引文件"。
+拿 6.x 的判据去读 7.2 的结果是: .box 里找不到 FOXM magic, 逐字节试探几千次,
+而真正的 5671 封邮件因为没有 .box/.eml 后缀, 根本没被扫到。
+
+我们的 parser 处理三种:
+  - .box 开头是 'LSTG' → 索引文件, 不是邮件容器, 交给 foxmail7_store
+  - .box 开头是 FOXM / legacy magic → 6.x 数据文件, 走 parse_box_file
+  - 单个文件 (.eml 或无后缀) → parse_mail_file, 起始偏移靠嗅探而不是假设
 
 # .box 文件格式 (经多个公开逆向项目对齐)
 =========================================
@@ -50,6 +56,7 @@ from __future__ import annotations
 import email
 import email.policy
 import logging
+import re
 import struct
 from dataclasses import dataclass
 from email.message import EmailMessage
@@ -63,11 +70,18 @@ logger = logging.getLogger("catfish_email.box_parser")
 MAGIC_FOXM = b"FOXM"
 #: 旧版本另一种 magic (实测 7.0.x 中文版偶见)
 MAGIC_LEGACY = b"\xfa\xfa\xff\x60"
+#: Foxmail 7.2 的 .box —— 'LSTG' (list group), 是 id 列表索引, **不含邮件正文**
+MAGIC_LSTG = b"LSTG"
 HEADER_SIZE = 14
 """14 bytes: 4 magic + 4 length + 4 flags + 2 reserved。"""
 
 #: 单封邮件大小硬上限 (50 MB) —— 超过认为格式错乱, 跳过
 MAX_MESSAGE_SIZE = 50 * 1024 * 1024
+
+#: 一个文件最多报几条坏 header 警告。
+#: 9/18: 格式判据不匹配时旧代码逐字节试探, 每字节一条 WARNING, 真机上刷了
+#: 四千多行才结束。解析器认错格式是**一个**事实, 不该产生 O(文件大小) 条日志。
+MAX_BAD_HEADER_WARNINGS = 5
 
 
 # ============================================================
@@ -120,8 +134,15 @@ def parse_box_file(path: Path) -> Iterable[ParsedMessage]:
         raise FileNotFoundError(f".box 文件不存在: {path}")
 
     data = path.read_bytes()
+    if is_lstg_index(data):
+        # Foxmail 7.2: 这个 .box 是 id 列表, 邮件正文在 Mails/ 下。
+        # 说一次就够, 让调用方去走 foxmail7_store。
+        logger.debug("box parser: %s 是 LSTG 索引文件, 不含正文, 跳过", path.name)
+        return
+
     pos = 0
     n = 0
+    bad_headers = 0
     while pos + HEADER_SIZE <= len(data):
         header = data[pos : pos + HEADER_SIZE]
         magic = header[:4]
@@ -129,10 +150,18 @@ def parse_box_file(path: Path) -> Iterable[ParsedMessage]:
         flags = struct.unpack("<I", header[8:12])[0]
 
         if magic not in (MAGIC_FOXM, MAGIC_LEGACY):
-            logger.warning(
-                "box parser: 跳过位置 %d 的坏 header (magic=%r), 试探下个字节",
-                pos, magic,
-            )
+            bad_headers += 1
+            if bad_headers <= MAX_BAD_HEADER_WARNINGS:
+                logger.warning(
+                    "box parser: 跳过位置 %d 的坏 header (magic=%r), 试探下个字节",
+                    pos, magic,
+                )
+            elif bad_headers == MAX_BAD_HEADER_WARNINGS + 1:
+                logger.warning(
+                    "box parser: %s 连续对不上 header, 后续同类警告不再逐条打印 "
+                    "—— 这通常意味着文件不是 6.x 的 .box 数据文件",
+                    path.name,
+                )
             pos += 1  # 试探: 错位 1 字节再来 (保守, 大概率到下一个 magic 处会重新对齐)
             continue
 
@@ -179,7 +208,13 @@ def parse_box_file(path: Path) -> Iterable[ParsedMessage]:
         n += 1
         pos = body_end
 
-    logger.info("box parser: %s 解析出 %d 封邮件", path.name, n)
+    if n == 0 and bad_headers:
+        logger.warning(
+            "box parser: %s 一封也没解析出来, 共 %d 处 header 对不上 —— 格式判据可能不适用",
+            path.name, bad_headers,
+        )
+    else:
+        logger.info("box parser: %s 解析出 %d 封邮件", path.name, n)
 
 
 def parse_eml_directory(dir_path: Path) -> Iterable[ParsedMessage]:
@@ -211,6 +246,133 @@ def parse_eml_file(path: Path) -> ParsedMessage:
         raw_offset=0,
         raw_length=len(data),
         flags=0,
+        message=msg,
+    )
+
+
+def is_lstg_index(data: bytes) -> bool:
+    """这份字节是不是 Foxmail 7.2 的 'LSTG' id 列表索引 (而非邮件数据)。"""
+    return data[:4] == MAGIC_LSTG
+
+
+# ============================================================
+# 7.2 per-message 文件: 起始偏移靠嗅探, 不靠假设
+# ============================================================
+
+#: 嗅探只看文件开头这么多字节 —— 邮件头不可能比这还靠后
+_SNIFF_WINDOW = 64 * 1024
+#: 判定"这确实是邮件头"至少要凑够几行 header
+_MIN_HEADER_LINES = 3
+#: 并且至少出现一个真正的邮件头字段 (只有 X-Foo: 这类不算)
+_ESSENTIAL_HEADERS = frozenset(
+    {
+        b"received", b"from", b"to", b"subject", b"date",
+        b"message-id", b"mime-version", b"content-type", b"return-path",
+    }
+)
+
+
+def _header_name(line: bytes) -> bytes | None:
+    """``b'Subject: x'`` → ``b'subject'``; 不是 header 行则 None。"""
+    colon = line.find(b":")
+    if colon <= 0 or colon > 60:
+        return None
+    name = line[:colon]
+    if not all(c == 0x2D or (0x30 <= c <= 0x39) or (0x41 <= c <= 0x5A) or (0x61 <= c <= 0x7A)
+               for c in name):
+        return None
+    if not (0x41 <= name[0] <= 0x5A or 0x61 <= name[0] <= 0x7A):
+        return None
+    return name.lower()  # bytes 没有 casefold
+
+
+#: 候选起点的形状: 一个 header 字段名加冒号
+_HEADER_START_RE = re.compile(rb"[A-Za-z][A-Za-z0-9-]{0,40}:")
+#: 最多验证几个候选起点 —— 纯文本正文里冒号很多, 不封顶会白跑
+_MAX_SNIFF_CANDIDATES = 2000
+
+
+def sniff_rfc822_offset(data: bytes) -> int | None:
+    """在 ``data`` 里找 RFC822 邮件头的起始偏移; 找不到返回 None。
+
+    为什么要嗅探而不是写死偏移量:
+        9/18 一天之内在 Foxmail 这条线上踩了五个同族 bug, 全都是"按某个版本的
+        布局写死判据, 换个版本全不匹配"。单封邮件文件可能是裸 RFC822 (offset 0),
+        也可能前面挂了一段专有头。与其再猜一次, 不如让代码自己找到邮件头在哪 ——
+        判据是"连续若干行长得像 header, 且含至少一个真实邮件头字段", 这个特征
+        跨版本稳定, 因为它来自 RFC822 而不是来自 Foxmail。
+
+    Args:
+        data: 邮件文件的字节 (整份或开头一段都行)
+
+    Returns:
+        邮件头第一个字节的偏移量, 或 None。
+    """
+    window = data[:_SNIFF_WINDOW]
+    # 候选起点不能只取行首: 专有前缀如果不以换行结尾, 会跟第一行 header 粘成
+    # 一行 (实测就是这样), 那样只能从第二个字段开始, 会丢掉 From。
+    # 所以对"字段名+冒号"的每个出现位置都试一次, 取最靠前的那个能站住的。
+    for index, match in enumerate(_HEADER_START_RE.finditer(window)):
+        if index >= _MAX_SNIFF_CANDIDATES:
+            break
+        if _looks_like_header_block(window, match.start()):
+            return match.start()
+    return None
+
+
+def _looks_like_header_block(window: bytes, start: int) -> bool:
+    """从 ``start`` 起是不是一整块邮件头 (而不是正文里一行碰巧带冒号)。"""
+    names: set[bytes] = set()
+    lines = 0
+    pos = start
+    while pos < len(window):
+        end = window.find(b"\n", pos)
+        raw = window[pos : (len(window) if end == -1 else end + 1)]
+        line = raw.rstrip(b"\r\n")
+        if not line:  # 空行 = 头部结束
+            break
+        if line[:1] in (b" ", b"\t"):  # 折行续上一个字段
+            pos += len(raw)
+            continue
+        name = _header_name(line)
+        if name is None:
+            return False  # 头部中间冒出非 header 行 → 这不是头部
+        names.add(name)
+        lines += 1
+        pos += len(raw)
+        if end == -1:
+            break
+    return lines >= _MIN_HEADER_LINES and bool(names & _ESSENTIAL_HEADERS)
+
+
+def parse_mail_file(path: Path, *, head_bytes: int | None = None) -> ParsedMessage:
+    """解析 Foxmail 7.2 的单封邮件文件 (``Mails/<桶>/<桶>/<id>``, 无扩展名)。
+
+    跟 :func:`parse_eml_file` 的区别: 不假设文件从第 0 字节就是 RFC822,
+    而是嗅探邮件头起点, 前面的专有字节丢掉。嗅不到就 ValueError, 由 adapter
+    跳过这一封 —— 一封读不了不该让整个收件箱空。
+
+    Args:
+        path: 邮件文件路径
+        head_bytes: 只读开头这么多字节。列清单只需要头部 (主题/发件人/日期),
+            而真机上一个账号 5671 封共 7.8 GB, 整份读进来是不可接受的。
+            ``None`` = 整份读 (打开单封邮件时用)。
+    """
+    if head_bytes is None:
+        data = path.read_bytes()
+    else:
+        with path.open("rb") as handle:
+            data = handle.read(head_bytes)
+    offset = sniff_rfc822_offset(data)
+    if offset is None:
+        raise ValueError(f"{path.name} 里找不到 RFC822 邮件头")
+    msg = email.message_from_bytes(data[offset:], policy=email.policy.default)
+    if not isinstance(msg, EmailMessage):
+        raise ValueError(f"{path.name} 不是 EmailMessage")
+    return ParsedMessage(
+        raw_offset=offset,
+        raw_length=len(data) - offset,
+        flags=0,  # 7.2 的已读位在索引里, 不在邮件文件里
         message=msg,
     )
 

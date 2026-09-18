@@ -18,6 +18,8 @@ import re
 from pathlib import Path
 from typing import Iterable
 
+from . import foxmail7_store
+
 logger = logging.getLogger("catfish_email.adapters.foxmail_discovery")
 
 ROOT_ENV = "CATFISH_FOXMAIL_ROOT"
@@ -36,8 +38,12 @@ _SECRET_VALUE_NAMES = re.compile(
     r"(?:password|passwd|token|secret|credential|apikey|api_key)",
     re.IGNORECASE,
 )
-_CONFIG_SUFFIXES = {".ini", ".cfg", ".conf", ".json", ".xml"}
+# 9/18: 加 .list —— Foxmail 7.2 把 Storage 路径写在安装目录的 `FMStorage.list`
+# 里 (实测内容就是一行 `E:\nextcloud\mailstore\<账号>\`)。后缀白名单里没有它,
+# 于是自动发现永远找不到 7.2 的邮件目录, 只能手配 CATFISH_FOXMAIL_ROOT。
+_CONFIG_SUFFIXES = {".ini", ".cfg", ".conf", ".json", ".xml", ".list"}
 _CONFIG_NAMES = {
+    "fmstorage.list",
     "foxmail.ini",
     "foxmail.cfg",
     "foxmail.json",
@@ -296,6 +302,19 @@ def _looks_like_storage(path: Path) -> bool:
 
 
 def _has_mail_files(root: Path) -> bool:
+    # 7.x 的账号目录按目录特征认, 不靠扩展名 —— 它的邮件文件没有扩展名。
+    # (实测 7.2 的 Boxes/ 下确实还有 .box 索引, 所以下面的扫描也能撞上;
+    #  但判据不该依赖那个巧合, 下一版把索引改名我们就又瞎了。)
+    if foxmail7_store.is_foxmail7_account(root):
+        return True
+    try:
+        if any(
+            child.is_dir() and foxmail7_store.is_foxmail7_account(child)
+            for child in root.iterdir()
+        ):
+            return True
+    except OSError:
+        pass
     for directory, dirs, names in os.walk(root):
         try:
             depth = len(Path(directory).relative_to(root).parts)
