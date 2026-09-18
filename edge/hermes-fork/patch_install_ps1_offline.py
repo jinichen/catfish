@@ -249,9 +249,32 @@ PATCH_4_INSTALL_REPO = f"""    $didUpdate = $false
 
     if ($effectiveSourceDir) {{
         Write-Info "Catfish offline: copying hermes-agent from $effectiveSourceDir to $InstallDir"
-        if (Test-Path $InstallDir) {{
+        # 9/18: 只有**换版本**才把旧目录挪走, 同版本原地覆盖。
+        #
+        # 老代码无条件 Move-Item。后果在真机上实测出来了: 一次装到一半失败后,
+        # 每次重试都把上一轮(可能已经装好的)整个目录挪成 .replaced-<时间戳>,
+        # 再 robocopy 十万个文件重拷 —— 单轮 18 分钟, 攒了 22 个目录 18 GB,
+        # 而且**越重试离成功越远**, 因为上一轮的 venv 也被一起挪走了。
+        #
+        # 判据用 .catfish-hermes-version 里的 commit。那个文件原来只有 Rust 侧
+        # 在整轮成功后才写 (hermes_install_windows.rs::write_windows_install_markers),
+        # 于是形成死锁: 想复用得有标记, 想有标记得先成功一整轮。所以下面
+        # 拷完就由安装器自己写 —— 它记的是"源码身份", 不是"装完了";
+        # "装完了"是另一个标记 (.catfish-bootstrap-complete.json), 两者不该混。
+        $versionMarker = Join-Path $InstallDir ".catfish-hermes-version"
+        $sameCommit = $false
+        if ($Commit -and (Test-Path $versionMarker)) {{
+            $installedCommit = @(Get-Content -LiteralPath $versionMarker -ErrorAction SilentlyContinue) |
+                Where-Object {{ $_ -match '^[0-9a-fA-F]{{40}}$' }} |
+                Select-Object -First 1
+            if ($installedCommit -and $installedCommit -eq $Commit) {{ $sameCommit = $true }}
+        }}
+        if ((Test-Path $InstallDir) -and (-not $sameCommit)) {{
             $backupDir = "$InstallDir.replaced-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+            Write-Info "Catfish offline: 版本不同或无法确认, 旧目录挪到 $backupDir"
             Move-Item -LiteralPath $InstallDir -Destination $backupDir -ErrorAction SilentlyContinue
+        }} elseif ($sameCommit) {{
+            Write-Info "Catfish offline: 已装的就是 $Commit, 原地覆盖 (不挪走, 保住现有 venv)"
         }}
         New-Item -ItemType Directory -Force -Path (Split-Path $InstallDir) -ErrorAction SilentlyContinue | Out-Null
         # 8/4: 改用 robocopy —— Copy-Item 在这个文件量级上是小时级。
@@ -286,6 +309,22 @@ PATCH_4_INSTALL_REPO = f"""    $didUpdate = $false
         if (-not $roboOk) {{
             Write-Info "  (回退 Copy-Item —— 文件多的话会很慢, 别以为死了)"
             Copy-Item -LiteralPath $effectiveSourceDir -Destination $InstallDir -Recurse -Force
+        }}
+        # 源码已到位 → 立刻记下它的身份。
+        #
+        # 这一步**必须在依赖安装之前**。后面 venv / uv sync 任何一步失败, 下一次
+        # 重试都能凭这个标记认出"源码已经是对的版本", 于是走上面的原地覆盖分支,
+        # 也让 Rust 侧的 reuse_verified_core 有机会复用已有 venv, 而不是从零再来。
+        # 注意它只声明"源码是哪个 commit", 不声明"装成功了" —— 完成标记是
+        # .catfish-bootstrap-complete.json, 由 Rust 侧在健康检查通过后才写。
+        if ($Commit) {{
+            try {{
+                Set-Content -LiteralPath (Join-Path $InstallDir ".catfish-hermes-version") `
+                    -Value "$Tag`n$Commit" -Encoding ascii -ErrorAction Stop
+                Write-Info "Catfish offline: 已记录源码身份 $Commit"
+            }} catch {{
+                Write-Warn "Catfish offline: 写 .catfish-hermes-version 失败 ($_) — 不影响本次安装, 但下次重试会重新整拷"
+            }}
         }}
         # git init 让上游 update 路径能工作 (未来员工有网时 hermes update)
         #

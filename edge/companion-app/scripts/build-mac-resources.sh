@@ -686,10 +686,9 @@ tar czhf "$HERMES_TAR" \
     "${BUNDLE_EXCLUDES[@]}" \
     -s "|hermes-agent-src-$ARCH|hermes-agent-src|" \
     "hermes-agent-src-$ARCH"
-_PATCHED_HERMES_TAR="${HERMES_TAR}.patched"
-python3 "$COMPANION/../hermes-fork/patch_hermes_bundle.py" --input "$HERMES_TAR" --output "$_PATCHED_HERMES_TAR"
-mv "$_PATCHED_HERMES_TAR" "$HERMES_TAR"
-python3 "$COMPANION/../hermes-fork/patch_hermes_bundle.py" --input "$HERMES_TAR" --check
+# 9/18: 不再改归档, 只校验 (原委见 verify_hermes_bundle.py 的 docstring —— 老的
+# patch 删掉 exclude-newer 反而让 uv.lock 失效, 断网装不上)。
+python3 "$COMPANION/../hermes-fork/verify_hermes_bundle.py" --input "$HERMES_TAR"
 echo "  OK $HERMES_TAR ($(ls -lh "$HERMES_TAR" | awk '{print $5}'))"
 
 # ─── 打完就验 exclude 真的生效了 ────────────────────────────────

@@ -52,6 +52,50 @@ def test_robocopy_failure_is_fatal_and_output_is_preserved(upstream_install_ps1:
     assert 'throw "robocopy failed' in patched
 
 
+# ─── 9/18: 重装死循环 —— 挪目录要有条件, 身份标记要早写 ──────
+#
+# 真机实测: 一次装到一半失败后, 每次重试都把上一轮(已经装好的)整个目录挪成
+# .replaced-<时间戳> 再重拷十万个文件, 单轮 18 分钟, 攒了 22 个目录 18 GB,
+# 而且越重试离成功越远 —— 上一轮的 venv 也被一起挪走了。
+#
+# 死锁的成因是两处叠加:
+#   · install.ps1 无条件 Move-Item
+#   · .catfish-hermes-version 只由 Rust 侧在**整轮成功后**才写, 于是
+#     "想复用得有标记, 想有标记得先成功一整轮"
+
+
+def test_same_commit_is_copied_in_place_not_moved_aside(upstream_install_ps1: str):
+    patched = apply_patches(upstream_install_ps1)
+    stage = patched.split('Write-Info "Catfish offline: copying hermes-agent', 1)[1]
+    stage = stage.split("Write-Success \"hermes-agent installed from offline bundle\"", 1)[0]
+    move = stage.index("Move-Item -LiteralPath $InstallDir -Destination $backupDir")
+    guard = stage.index("-not $sameCommit")
+    assert guard < move, "挪目录必须在 $sameCommit 判断之内, 不能无条件执行"
+    assert "$installedCommit -eq $Commit" in stage
+    assert "原地覆盖" in stage
+
+
+def test_identity_marker_is_written_right_after_the_copy(upstream_install_ps1: str):
+    """拷完就写, 不等整轮成功 —— 否则下次重试认不出源码已经是对的版本。"""
+    patched = apply_patches(upstream_install_ps1)
+    stage = patched.split('Write-Info "Catfish offline: copying hermes-agent', 1)[1]
+    stage = stage.split("Write-Success \"hermes-agent installed from offline bundle\"", 1)[0]
+    # 注意找**写**那一处: 文件名在前面判断分支里还被读过一次
+    marker = stage.index('Set-Content -LiteralPath (Join-Path $InstallDir ".catfish-hermes-version")')
+    robocopy = stage.index("robocopy $roboSrc")
+    git_stage = stage.index("Preparing offline Git metadata")
+    assert robocopy < marker < git_stage, "身份标记要在拷完之后、其它步骤之前写"
+    assert "-Encoding ascii" in stage
+
+
+def test_marker_write_failure_is_not_fatal(upstream_install_ps1: str):
+    """写标记失败只是"下次要重拷", 不该让整个装机失败。"""
+    patched = apply_patches(upstream_install_ps1)
+    stage = patched.split('Set-Content -LiteralPath (Join-Path $InstallDir ".catfish-hermes-version")', 1)[1]
+    head = stage.split("}}", 1)[0] if "}}" in stage else stage[:600]
+    assert "Write-Warn" in head and "throw" not in head
+
+
 # ─── 前置: fixture 拉真实上游 install.ps1 ─────────────────────
 
 def test_offline_copy_does_not_block_on_temporary_cleanup(upstream_install_ps1: str):

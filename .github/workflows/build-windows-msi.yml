@@ -435,14 +435,13 @@ jobs:
               --exclude='hermes-agent-src/node_modules/electron' \
               hermes-agent-src
 
-          # uv 的 exclude-newer 只接受绝对日期；归档修补器移除上游遗留的
-          # duration 配置，避免 Windows 安装时 TOML warning + lockfile 失效。
+          # 9/18: 不再改归档, 只校验 pyproject 与 uv.lock 的 exclude-newer 一致。
+          # 老代码删掉 pyproject 的 exclude-newer, 反而让 uv.lock 失效 ——
+          # uv 0.12.3 实测原样 `uv lock --check` exit 0, 删掉后 exit 1。
+          # 后果: install.ps1 的 Tier-0 `uv sync --locked` 必然失败, 退到不校验
+          # 哈希的 PyPI 重解析, 断网现场装不上。
           BUNDLE=edge/companion-app/src-tauri/resources/windows/hermes-agent-bundle.tar.gz
-          PATCHED_BUNDLE="$BUNDLE.patched"
-          python3 edge/hermes-fork/patch_hermes_bundle.py \
-              --input "$BUNDLE" --output "$PATCHED_BUNDLE"
-          mv "$PATCHED_BUNDLE" "$BUNDLE"
-          python3 edge/hermes-fork/patch_hermes_bundle.py --input "$BUNDLE" --check
+          python3 edge/hermes-fork/verify_hermes_bundle.py --input "$BUNDLE"
           #
           # 8/3: 删掉了原本的 node_modules / **/node_modules 两条 exclude。
           # 那两条不是"顺手排一下缓存", 它们**正是**离线安装做不成的原因:

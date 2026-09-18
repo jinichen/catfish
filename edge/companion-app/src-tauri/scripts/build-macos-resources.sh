@@ -152,12 +152,14 @@ tar czhf "${TAR_DEST}" \
     --exclude="${HERMES_BASE}/logs" \
     --exclude="${HERMES_BASE}/*.log" \
     "${HERMES_BASE}"
-PATCHED_TAR="${TAR_DEST}.patched"
-python3 "${HERMES_FORK_DIR}/patch_hermes_bundle.py" \
-    --input "${TAR_DEST}" --output "${PATCHED_TAR}"
-mv "${PATCHED_TAR}" "${TAR_DEST}"
-python3 "${HERMES_FORK_DIR}/patch_hermes_bundle.py" \
-    --input "${TAR_DEST}" --check
+# 9/18: 不再改归档, 只校验。
+# 老代码在这里删掉 pyproject 的 `[tool.uv] exclude-newer = "14 days"`, 理由是
+# "uv 只收绝对日期"。那个前提早不成立, 而删除动作本身让 uv.lock 失效 ——
+# uv 0.12.3 实测: 原样 `uv lock --check` exit 0, 删掉后 exit 1
+# ("Resolving despite existing lockfile due to removal of global exclude newer")。
+# 后果是 install.ps1 的 Tier-0 `uv sync --locked` 必然失败, 退到不校验哈希的
+# PyPI 重解析, 断网现场直接装不上。
+python3 "${HERMES_FORK_DIR}/verify_hermes_bundle.py" --input "${TAR_DEST}"
 TAR_SIZE="$(du -h "${TAR_DEST}" | cut -f1)"
 echo "  ✓ hermes-agent → ${TAR_DEST} (${TAR_SIZE})"
 echo ""

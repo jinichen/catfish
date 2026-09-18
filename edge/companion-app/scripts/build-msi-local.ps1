@@ -363,14 +363,13 @@ try {
 } finally { Pop-Location }
 Write-Host "  OK hermes-agent-bundle.tar.gz: $([math]::Round((Get-Item $hermesTarOut).Length/1MB,1)) MB" -ForegroundColor Green
 
-# uv 的 exclude-newer 只接受绝对日期；归档修补器移除上游遗留的
-# duration 配置，避免 Windows 安装时 TOML warning + lockfile 失效。
-$bundlePatch = Join-Path $catfishRoot 'edge\hermes-fork\patch_hermes_bundle.py'
-$patchedHermesTar = "$hermesTarOut.patched"
-python $bundlePatch --input $hermesTarOut --output $patchedHermesTar
-if ($LASTEXITCODE -ne 0) { throw "Hermes archive uv config patch failed" }
-Move-Item -Force $patchedHermesTar $hermesTarOut
-python $bundlePatch --input $hermesTarOut --check
+# 9/18: 不再改归档，只校验 pyproject 与 uv.lock 的 exclude-newer 是否一致。
+# 老代码在这里删掉 pyproject 的 exclude-newer，理由是"uv 只收绝对日期"。
+# 那个前提早不成立，而删除动作本身让 uv.lock 失效：uv 0.12.3 实测原样
+# `uv lock --check` exit 0，删掉后 exit 1。后果是 install.ps1 的 Tier-0
+# `uv sync --locked` 必然失败，退到不校验哈希的 PyPI 重解析，断网装不上。
+$bundleVerify = Join-Path $catfishRoot 'edge\hermes-fork\verify_hermes_bundle.py'
+python $bundleVerify --input $hermesTarOut
 if ($LASTEXITCODE -ne 0) { throw "Hermes archive uv config validation failed" }
 
 # 归档校验：防止 exclude 写错后悄悄把开发/跨平台文件重新打进去。

@@ -217,6 +217,56 @@ fn write_windows_install_markers(paths: &BootstrapPaths) -> Result<()> {
     Ok(())
 }
 
+/// 离线安装器换版本时把旧目录挪成 `hermes-agent.replaced-<时间戳>`。
+/// 那是有意的退路，但**从来没人清**：真机上攒了 22 个、18 GB。
+///
+/// 安装成功后保留最近一份（万一新版本有问题还能手工翻回去），更早的删掉。
+/// 只认 `hermes-agent.replaced-` 这个前缀、只看 hermes_home 的直接子目录，
+/// 绝不碰 `hermes-agent` 本身。
+pub(crate) fn prune_replaced_backups(paths: &BootstrapPaths, keep: usize) -> usize {
+    let prefix = format!(
+        "{}.replaced-",
+        paths
+            .install_dir
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "hermes-agent".to_owned())
+    );
+    let Ok(entries) = std::fs::read_dir(&paths.hermes_home) else {
+        return 0;
+    };
+    let mut backups: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().is_dir())
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().starts_with(&prefix))
+                .unwrap_or(false)
+        })
+        .collect();
+    if backups.len() <= keep {
+        return 0;
+    }
+    // 名字尾巴是 yyyyMMdd-HHmmss，字典序即时间序
+    backups.sort();
+    let doomed = backups.len() - keep;
+    let mut removed = 0;
+    for path in backups.into_iter().take(doomed) {
+        match std::fs::remove_dir_all(&path) {
+            Ok(()) => {
+                removed += 1;
+                log::info!("[windows-bootstrap] 清理旧安装备份: {}", path.display());
+            }
+            Err(error) => log::warn!(
+                "[windows-bootstrap] 清理旧安装备份失败 {}: {error}",
+                path.display()
+            ),
+        }
+    }
+    removed
+}
+
 /// Old desktop installers could finish the runtime but fail before writing our
 /// completion marker. Never rebuild that venv merely to retry an addon.
 /// Adoption requires the actual pinned source identity AND working core tools.
@@ -241,6 +291,7 @@ pub(crate) fn reuse_verified_core(paths: &BootstrapPaths) -> Result<bool> {
     write_windows_install_markers(paths)?;
     anyhow::ensure!(core_health_problems(paths, false).is_empty(), "Recovered core health check failed");
     write_completion_marker(&paths.install_dir)?;
+    prune_replaced_backups(paths, 1);
     writeln!(open_bootstrap_log(paths)?, "Verified pinned Hermes core retained; retrying addons only")?;
     Ok(true)
 }
@@ -533,6 +584,8 @@ pub(crate) fn bootstrap(
         );
     }
     write_completion_marker(&paths.install_dir)?;
+    // 装成功了才清 —— 失败时那些备份可能是现场唯一能翻回去的东西
+    prune_replaced_backups(paths, 1);
     report(
         reporter,
         "core",
