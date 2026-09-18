@@ -45,13 +45,13 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Sequence
+from typing import Callable, Iterable, Iterator, Sequence
 
 from .adapters.base import Message
 
 logger = logging.getLogger(__name__)
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -59,9 +59,19 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS messages (
-    source_path   TEXT PRIMARY KEY,   -- .emlx 绝对路径 (对账主键)
-    mtime         REAL NOT NULL,      -- stat().st_mtime  (对账判据 1)
-    size          INTEGER NOT NULL,   -- stat().st_size   (对账判据 2)
+    -- 9/18: 从 (source_path, mtime, size) 泛化成 (source_key, fingerprint)。
+    --
+    -- 原来写死了"来源是文件"这个假设: 主键是 .emlx 绝对路径, 变更判据是
+    -- stat 的 mtime+size。IMAP 两样都没有 —— 它的身份是 UID, 变更判据是 FLAGS。
+    --
+    -- source_key  文件型: 绝对路径
+    --             IMAP:  imap:<folder>:<uidvalidity>:<uid>
+    --                    (必须带 UIDVALIDITY —— 服务器重建邮箱后旧 UID 指向
+    --                     完全不相干的邮件)
+    -- fingerprint 文件型: "mtime:size"
+    --             IMAP:  flags 串 (UID 不变, 只有已读/标记会变)
+    source_key    TEXT PRIMARY KEY,
+    fingerprint   TEXT NOT NULL,
     account       TEXT NOT NULL,
     folder        TEXT NOT NULL,
     msg_id        TEXT NOT NULL,      -- adapter 的稳定 id ('account|emlx:path')
@@ -128,60 +138,86 @@ class ReconcileStats:
     elapsed_ms: int = 0
 
 
+def _known_fingerprints(
+    conn: sqlite3.Connection, *, account: str, folder: str
+) -> dict[str, str]:
+    return dict(
+        conn.execute(
+            "SELECT source_key, fingerprint FROM messages WHERE account=? AND folder=?",
+            (account, folder),
+        )
+    )
+
+
+def changed_keys(
+    conn: sqlite3.Connection,
+    *,
+    account: str,
+    folder: str,
+    items: Iterable[tuple[str, str]],
+) -> list[str]:
+    """哪些 key 需要重新解析。**纯 SQLite, 不碰网络、不碰磁盘。**
+
+    reconcile 自己也会算一遍同样的东西 (两者共用 _known_fingerprints), 这里
+    单独暴露出来是给**远程来源批量取**用的:
+
+        文件型来源 parse 一次 = 读一个本地文件, 一封一次无所谓。
+        IMAP parse 一次 = 一个网络往返。首次同步两千封就是两千个往返,
+        跨广域网按 100ms 算要三分多钟, 而这两千封本可以十次 FETCH 取完。
+
+    所以远程 adapter 的用法是: 先 changed_keys 问"要取哪些" → 批量取进内存
+    → 再 reconcile, parse 从内存里拿。多一次 SELECT, 省掉 N-1 个往返。
+    """
+    known = _known_fingerprints(conn, account=account, folder=folder)
+    return [key for key, fingerprint in items if known.get(key) != fingerprint]
+
+
 def reconcile(
     conn: sqlite3.Connection,
     *,
     account: str,
     folder: str,
-    emlx_files: Iterable[Path],
-    parse: Callable[[Path], Message],
+    items: Iterable[tuple[str, str]],
+    parse: Callable[[str], Message],
 ) -> ReconcileStats:
-    """把磁盘上的 emlx 集合对账进索引。**只解析新增/变更的文件。**
+    """把一组 (source_key, fingerprint) 对账进索引。**只解析新增/变更的。**
 
     Args:
-        emlx_files: 这个 account+folder 下的全部 .emlx (调用方 rglob 来的)
-        parse:      单文件解析器 (生产传 _parse_emlx_summary 的偏函数;
-                    测试传假的 —— 解析次数是增量正确性的**直接判据**)
+        items: 这个 account+folder 下当前存在的全部条目。
+               fingerprint 变了就重新解析, 没变就跳过 —— 增量的全部秘密。
+               **没出现在这里的 key 会被当成"没了"删掉**, 所以调用方必须给全,
+               不能只给一页。
+        parse: 按 source_key 取一封邮件。生产传偏函数, 测试传假的 ——
+               解析次数是增量正确性的**直接判据**。
+
+    9/18: 从"文件路径 + mtime/size"泛化过来。原来的形状把"来源是文件"焊死在
+    表结构里, IMAP 接不上 —— 它的身份是 UID, 变更判据是 FLAGS。
     """
     t0 = time.monotonic()
     stats = ReconcileStats()
 
-    known: dict[str, tuple[float, int]] = {
-        path: (mtime, size)
-        for path, mtime, size in conn.execute(
-            "SELECT source_path, mtime, size FROM messages WHERE account=? AND folder=?",
-            (account, folder),
-        )
-    }
+    known = _known_fingerprints(conn, account=account, folder=folder)
     seen: set[str] = set()
 
-    for p in emlx_files:
+    for key, fingerprint in items:
         stats.scanned += 1
-        sp = str(p)
-        seen.add(sp)
-        try:
-            st = p.stat()
-        except OSError:
-            # 枚举到但 stat 不到 (刚被 Mail.app 删掉) → 当不存在
-            seen.discard(sp)
-            continue
-        prev = known.get(sp)
-        if prev is not None and prev[0] == st.st_mtime and prev[1] == st.st_size:
+        seen.add(key)
+        if known.get(key) == fingerprint:
             stats.unchanged += 1
             continue
         try:
-            m = parse(p)
-        except Exception as e:  # noqa: BLE001 — 单文件坏不拖垮整次对账
+            m = parse(key)
+        except Exception as e:  # noqa: BLE001 — 单条坏不拖垮整次对账
             stats.errors += 1
-            logger.debug("email_index: 解析失败跳过 %s: %s", p, e)
+            logger.debug("email_index: 解析失败跳过 %s: %s", key, e)
             continue
         conn.execute(
-            """INSERT INTO messages (source_path, mtime, size, account, folder,
+            """INSERT INTO messages (source_key, fingerprint, account, folder,
                    msg_id, subject, sender, recipients, date, is_read,
                    has_attachments, snippet, message_id, in_reply_to, refs, indexed_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-               ON CONFLICT(source_path) DO UPDATE SET
-                   mtime=excluded.mtime, size=excluded.size,
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(source_key) DO UPDATE SET
+                   fingerprint=excluded.fingerprint,
                    subject=excluded.subject, sender=excluded.sender,
                    recipients=excluded.recipients, date=excluded.date,
                    is_read=excluded.is_read,
@@ -190,7 +226,7 @@ def reconcile(
                    in_reply_to=excluded.in_reply_to, refs=excluded.refs,
                    indexed_at=excluded.indexed_at""",
             (
-                sp, st.st_mtime, st.st_size, account, folder,
+                key, fingerprint, account, folder,
                 m.id, m.subject, m.sender, json.dumps(list(m.recipients)),
                 m.date, int(m.is_read), int(m.has_attachments),
                 (m.body_text or "")[:300], m.message_id, m.in_reply_to,
@@ -199,17 +235,46 @@ def reconcile(
         )
         stats.parsed += 1
 
-    # 磁盘上没了的 → 删索引行 (Mail.app 删信/挪文件夹)
-    gone = [sp for sp in known if sp not in seen]
+    # 来源里没了的 → 删索引行 (文件被删/挪走, 或服务器上那封没了)
+    gone = [k for k in known if k not in seen]
     if gone:
         conn.executemany(
-            "DELETE FROM messages WHERE source_path=?", [(g,) for g in gone]
+            "DELETE FROM messages WHERE source_key=?", [(g,) for g in gone]
         )
         stats.removed = len(gone)
 
     conn.commit()
     stats.elapsed_ms = int((time.monotonic() - t0) * 1000)
     return stats
+
+
+def file_items(paths: Iterable[Path]) -> Iterator[tuple[str, str]]:
+    """文件型来源的 (source_key, fingerprint) 生成器。
+
+    stat 不到的**直接不产出** —— 那样它既不会被解析, 也不会算进 seen,
+    于是会被当成"没了"删掉。这正是想要的: 枚举到但 stat 不到, 说明刚被删。
+    """
+    for path in paths:
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        yield str(path), f"{st.st_mtime}:{st.st_size}"
+
+
+def reconcile_files(
+    conn: sqlite3.Connection,
+    *,
+    account: str,
+    folder: str,
+    files: Iterable[Path],
+    parse: Callable[[Path], Message],
+) -> ReconcileStats:
+    """文件型来源的便利封装 —— 调用方不用自己拼 fingerprint。"""
+    return reconcile(
+        conn, account=account, folder=folder,
+        items=file_items(files), parse=lambda key: parse(Path(key)),
+    )
 
 
 def query_messages(

@@ -76,9 +76,11 @@ def env(tmp_path, monkeypatch):
 def _reconcile(mail_dir: Path, parser: _CountingParser) -> index_store.ReconcileStats:
     conn = index_store.open_index()
     try:
-        return index_store.reconcile(
+        # 9/18: reconcile 泛化成 (source_key, fingerprint) 之后, 文件型走这个封装。
+        # 下面 9 条测的都是文件型增量行为 —— 泛化不该改变其中任何一条。
+        return index_store.reconcile_files(
             conn, account=parser.account, folder=parser.folder,
-            emlx_files=sorted(mail_dir.glob("*.emlx")), parse=parser,
+            files=sorted(mail_dir.glob("*.emlx")), parse=parser,
         )
     finally:
         conn.close()

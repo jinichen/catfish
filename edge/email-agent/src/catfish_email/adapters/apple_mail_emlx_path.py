@@ -95,11 +95,13 @@ class EmlxFallbackMixin:
 
         conn = index_store.open_index()
         try:
-            stats = index_store.reconcile(
+            # 9/18: reconcile 泛化成 (source_key, fingerprint) 之后, 文件型
+            # 走 reconcile_files —— 这边一个字都不用改 fingerprint 怎么算。
+            stats = index_store.reconcile_files(
                 conn,
                 account=account.name,
                 folder=filt.folder,
-                emlx_files=emlx_files,
+                files=emlx_files,
                 parse=lambda p: _parse_emlx_summary(p, account.name, filt.folder),
             )
             if stats.parsed or stats.removed:

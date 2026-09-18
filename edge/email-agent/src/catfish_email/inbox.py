@@ -174,8 +174,12 @@ def _get_adapter_explicit(client: str) -> EmailAdapter:
     if client == "imap":
         # 9/18: 唯一不依赖邮件客户端的路径。两条本地路都被厂商堵死了 ——
         # Foxmail 7.2 加密邮件文件, 新版 Outlook 既无 COM 也无本地数据。
-        from .adapters.imap_mail import ImapAdapter  # noqa: PLC0415
-        return ImapAdapter()
+        #
+        # 用带索引的那个: 列清单是热路径 (后台每隔几分钟就要问一次), 走索引
+        # 之后稳定期一次对账只剩一个 FETCH FLAGS 往返。读单封仍旧直连服务器
+        # (继承自基类) —— 正文不进索引, 索引里只有列表要用的那些字段。
+        from .adapters.imap_mail import ImapSyncAdapter  # noqa: PLC0415
+        return ImapSyncAdapter()
     if client in ("eml-dir", "foxmail-win"):
         # 9/18: foxmail-win 这条线删了 —— Foxmail 7.2 把邮件文件加密了,
         # 本地解不出正文, 读它的私有存储没有意义。改成读客户端导出的 .eml。
