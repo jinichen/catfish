@@ -73,7 +73,29 @@ def _raw(subject: str = _SUBJ, sender: str = "ff_nic@chinatelecom.cn", day: int 
 
 
 class FakeIMAP:
-    """照 imaplib 的真实响应形态造 —— 包括那个恶心的 FETCH 元组结构。"""
+    """照 imaplib 的真实响应形态造 —— 包括那个恶心的 FETCH 元组结构。
+
+    ⚠ 这个形状**在真服务器上对过**, 不是照我的理解编的 (9/18,
+    imap.chinatelecom.cn, 拿真 UID FETCH 的响应逐项打印):
+
+        [0] tuple len=2  parts=['bytes', 'bytes']
+             prefix: b'55 (UID 8416 FLAGS () BODY[HEADER] {1322}'
+        [1] bytes: b')'
+        [2] tuple len=2  ...  b'56 (UID 8417 FLAGS () BODY[HEADER] {6099}'
+        [3] bytes: b')'
+        ...
+        parsed 3 of 3 requested
+
+    要点:
+      · 每封是 (前缀 bytes, 原始邮件 bytes) 的二元组, 后面跟一个单独的 b')'
+      · **UID 和 FLAGS 都在前缀里**, 不在邮件内容里 —— 取错整条 id 就是错的
+      · 前缀开头那个数字是序号 (55/56/57), 不是 UID。别混
+      · 真机上 FLAGS 是空的 `()` (57 封全未读), 所以空 flags 这条路必须能走通
+
+    为什么强调这个: 上一版 Foxmail 的 .box 夹具是照我们"记录的格式"造的,
+    绿了四个月, 到真机上六个 bug —— 当时 conftest 自己就留过警告说
+    "这些测试不证明能读真文件"。同样的错不犯第二次。
+    """
 
     def __init__(self, folders=None, messages=None, uidvalidity=b"1", login_ok=True):
         self.folders = folders or REAL_FOLDERS
@@ -224,6 +246,31 @@ def test_malformed_id_is_refused(adapter):
 def test_gb2312_subject_is_decoded(adapter):
     subjects = {m.subject for m in adapter.list_messages(ListFilter(folder="Inbox", limit=10))}
     assert "在建项目清单" in subjects
+
+
+def test_empty_flags_means_unread(monkeypatch):
+    """真机上 FLAGS 是空的 `()` (9/18: 57 封全未读)。空 flags 必须能走通,
+    不能因为正则匹配不到就把整封丢掉。"""
+    fake = FakeIMAP(messages={"INBOX": [(b"8416", b"", _raw("未读的"))]})
+    monkeypatch.setattr(
+        "catfish_email.adapters.imap_mail.imaplib.IMAP4_SSL",
+        lambda host, port, timeout=None: fake,
+    )
+    a = ImapAdapter(ImapConfig(host="h", user="u", password="p"))
+    msgs = a.list_messages(ListFilter(folder="Inbox", limit=5))
+    assert len(msgs) == 1
+    assert msgs[0].is_read is False
+
+
+def test_sequence_number_prefix_is_not_mistaken_for_uid(monkeypatch):
+    """前缀开头那个数字是序号不是 UID。真机上 55/56/57 对应 UID 8416/8417/8418。"""
+    fake = FakeIMAP(messages={"INBOX": [(b"8416", b"", _raw())]})
+    monkeypatch.setattr(
+        "catfish_email.adapters.imap_mail.imaplib.IMAP4_SSL",
+        lambda host, port, timeout=None: fake,
+    )
+    a = ImapAdapter(ImapConfig(host="h", user="u", password="p"))
+    assert a.list_messages(ListFilter(folder="Inbox", limit=5))[0].id.endswith("|8416")
 
 
 def test_seen_flag_becomes_is_read(adapter):
