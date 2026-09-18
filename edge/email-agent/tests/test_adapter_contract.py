@@ -96,7 +96,7 @@ def test_adapter_discovery_actually_finds_adapters():
     for expected in (
         "AppleMailAdapter",
         "FoxmailMacAdapter",
-        "FoxmailWinAdapter",
+        "EmlDirAdapter",
         "OutlookWinAdapter",
     ):
         assert expected in names, f"{expected} 没被发现, 实际发现: {sorted(names)}"

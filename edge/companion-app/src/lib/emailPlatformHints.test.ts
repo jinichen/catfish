@@ -7,12 +7,12 @@ import {
 } from "./emailPlatformHints";
 
 describe("email platform hints", () => {
-  it("detects Windows and guides users to Outlook or Foxmail", () => {
+  it("detects Windows and guides users to Outlook or an exported .eml dir", () => {
     expect(emailPlatformFromUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64)"))
       .toBe("windows");
     expect(emailClientName("windows")).toContain("Outlook");
-    expect(emailClientName("windows")).toContain("Foxmail");
-    expect(emailFailureHint("windows")).toContain("Foxmail");
+    expect(emailClientName("windows")).toContain("邮件目录");
+    expect(emailFailureHint("windows")).toContain(".eml");
     expect(emailFailureHint("windows")).not.toContain("Mail.app");
   });
 

@@ -19,11 +19,23 @@ from .adapters.base import ClientNotRunningError, DataNotFoundError, EmailAdapte
 logger = logging.getLogger("catfish_email.inbox")
 
 
+def _eml_dir_configured() -> bool:
+    """用户是不是已经指定了邮件目录 (新键名或老键名)。
+
+    老键名 ``CATFISH_FOXMAIL_ROOT`` 以前指 Foxmail 的 Storage 目录; 9/18 之后
+    那条线删了 (7.2 把邮件加密了, 读它的私有存储没意义), 语义变成"邮件目录"。
+    已经配过的机器升级后不该突然找不到邮件, 所以两个都认。
+    """
+    from .adapters.eml_dir import LEGACY_ROOT_ENV, ROOT_ENV  # noqa: PLC0415
+
+    return any(os.environ.get(var, "").strip() for var in (ROOT_ENV, LEGACY_ROOT_ENV))
+
+
 def get_adapter(client: str | None = None) -> EmailAdapter:
     """工厂: 返回合适的 adapter。
 
     Args:
-        client: 显式指定 'apple-mail' / 'foxmail-mac' / 'outlook-win' / 'foxmail-win'
+        client: 显式指定 'apple-mail' / 'foxmail-mac' / 'outlook-win' / 'eml-dir'
                 None 则按平台自动挑 (Mac → 优先 Apple Mail, 没装就 Foxmail; Win 同理)
 
     Raises:
@@ -40,11 +52,9 @@ def get_adapter(client: str | None = None) -> EmailAdapter:
     if system == "Darwin":
         candidates = ["apple-mail", "foxmail-mac"]
     elif system == "Windows":
-        # 配置了 Foxmail 自定义目录就明确使用 Foxmail，避免无关的
-        # Outlook COM 探测和误导性错误。没有配置时保留旧的自动探测行为。
-        candidates = ["foxmail-win"] if os.environ.get(
-            "CATFISH_FOXMAIL_ROOT", ""
-        ).strip() else ["outlook-win", "foxmail-win"]
+        # 配置了邮件目录就直接用它，避免无关的 Outlook COM 探测和误导性错误。
+        # 没配置时保留自动探测。
+        candidates = ["eml-dir"] if _eml_dir_configured() else ["outlook-win", "eml-dir"]
     else:
         raise DataNotFoundError(
             f"catfish-email 暂不支持 {system} 平台 (仅 macOS / Windows)"
@@ -60,8 +70,9 @@ def get_adapter(client: str | None = None) -> EmailAdapter:
             continue
 
     raise DataNotFoundError(
-        f"{system} 上没找到可用的邮件客户端 (尝试过: {', '.join(candidates)})。"
-        f"装个 Outlook 或 Foxmail 再加邮箱账号。最后一个错: {last_err}"
+        f"{system} 上没找到可用的邮件来源 (尝试过: {', '.join(candidates)})。"
+        f"Windows 上请在邮件客户端里把邮件导出为 .eml, 再选择导出目录。"
+        f"最后一个错: {last_err}"
     )
 
 
@@ -82,9 +93,7 @@ def get_all_adapters() -> list[EmailAdapter]:
     if system == "Darwin":
         candidates = ["apple-mail", "foxmail-mac"]
     elif system == "Windows":
-        candidates = ["foxmail-win"] if os.environ.get(
-            "CATFISH_FOXMAIL_ROOT", ""
-        ).strip() else ["outlook-win", "foxmail-win"]
+        candidates = ["eml-dir"] if _eml_dir_configured() else ["outlook-win", "eml-dir"]
     else:
         return []
 
@@ -147,13 +156,18 @@ def _get_adapter_explicit(client: str) -> EmailAdapter:
     if client == "outlook-win":
         # W2 BL-EMAIL-OUTLOOK-WIN (7/11): outlook_win.py 骨架完成. 非 Win 平台
         # __init__ 里 _import_pywin32 抛 NotSupportedError (继承 NotImplementedError),
-        # inbox.py:52 会自动 fallback 到 foxmail-win 候选.
+        # inbox.py 会自动 fallback 到 eml-dir 候选.
         from .adapters.outlook_win import OutlookWinAdapter
         return OutlookWinAdapter()
-    if client == "foxmail-win":
-        from .adapters.foxmail_win import FoxmailWinAdapter
-        return FoxmailWinAdapter()
+    if client in ("eml-dir", "foxmail-win"):
+        # 9/18: foxmail-win 这条线删了 —— Foxmail 7.2 把邮件文件加密了,
+        # 本地解不出正文, 读它的私有存储没有意义。改成读客户端导出的 .eml。
+        # 老名字留作 alias, 免得升级后已有配置直接报"未知 client"。
+        if client == "foxmail-win":
+            logger.warning("client='foxmail-win' 已废弃, 改用 'eml-dir' (读导出的 .eml 目录)")
+        from .adapters.eml_dir import EmlDirAdapter
+        return EmlDirAdapter()
     raise ValueError(
         f"未知 client: {client!r} "
-        f"(合法: apple-mail / foxmail-mac / outlook-win / foxmail-win)",
+        f"(合法: apple-mail / foxmail-mac / outlook-win / eml-dir)",
     )

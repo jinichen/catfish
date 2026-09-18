@@ -31,7 +31,9 @@
 //!   poll_secs: 30           # 邮件扫描间隔, 默认 600 (10 分钟). 0=关.
 //!   rate_enabled: true      # LLM 评级: true=只急通知 / false=任何新邮件都通知
 //!   rate_model: catfish-private-main  # 评级 model 显式 override (可选, 不配走 chain)
-//!   foxmail_root: 'E:\\mail\\Storage'  # Windows Foxmail 自定义 Storage 目录
+//!   mail_dir: 'E:\\邮件导出'   # Windows: 邮件客户端导出的 .eml 目录
+//!   # 老键名 foxmail_root 仍然认 —— 9/18 之前它指 Foxmail Storage 目录,
+//!   # 那条线删了 (7.2 把邮件加密了, 读私有存储拿不到正文), 语义改成"邮件目录"。
 //! ```
 
 use std::sync::OnceLock;
@@ -40,6 +42,14 @@ use serde::{Deserialize, Serialize};
 
 const DEFAULT_POLL_SECS: u64 = 600;
 
+/// 当前的 Windows 邮件来源 id。9/18 之前叫 "foxmail-win"。
+pub const EML_DIR: &str = "eml-dir";
+
+/// 是不是"读导出的 .eml 目录"这个来源 (含已废弃的老名字)。
+fn is_eml_dir(client: &str) -> bool {
+    matches!(client, EML_DIR | "foxmail-win")
+}
+
 #[derive(Debug, Clone)]
 pub struct EmailConfig {
     pub poll_secs: u64,
@@ -47,8 +57,12 @@ pub struct EmailConfig {
     /// P3.5.139 (6/29 鸿波"都要去除硬编码"): None = yaml/env 没显式 override,
     /// caller 走 chain picker > role > Err. yaml/env 设了非空字符串才 Some.
     pub rate_model: Option<String>,
-    /// Windows Foxmail 自定义 Storage 根目录。None = 由 catfish-email 自动探测。
-    pub foxmail_root: Option<String>,
+    /// Windows 上邮件客户端导出的 .eml 目录。None = 未配置。
+    ///
+    /// 9/18: 原来叫 foxmail_root, 指 Foxmail 的 Storage 目录。Foxmail 7.2 把
+    /// 邮件文件加密了 (实测熵 7.96, 本地解不出正文), 读它的私有存储没有意义,
+    /// 整条线删了。现在读的是用户自己导出的标准 .eml。
+    pub mail_dir: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,6 +75,8 @@ struct EmailYaml {
     poll_secs: Option<u64>,
     rate_enabled: Option<bool>,
     rate_model: Option<String>,
+    mail_dir: Option<String>,
+    /// 老键名, 只为已经配过的机器升级后不至于突然找不到邮件。
     foxmail_root: Option<String>,
 }
 
@@ -104,45 +120,43 @@ fn read_selected_source() -> Option<SelectedEmailSource> {
 pub fn selected_email_client() -> Option<String> {
     read_selected_source()
         .map(|source| source.client)
-        .filter(|client| matches!(client.as_str(), "outlook-win" | "foxmail-win"))
+        .map(|client| if client == "foxmail-win" { EML_DIR.to_string() } else { client })
+        .filter(|client| matches!(client.as_str(), "outlook-win" | EML_DIR))
 }
 
-/// 返回用户在 Companion 中选择的 Foxmail 目录；不包含 YAML/env 的企业 override。
-pub fn selected_foxmail_root() -> Option<String> {
+/// 返回用户在 Companion 中选择的邮件目录；不包含 YAML/env 的企业 override。
+pub fn selected_mail_dir() -> Option<String> {
     let source = read_selected_source()?;
-    (source.client == "foxmail-win").then_some(source.root).flatten()
+    is_eml_dir(&source.client).then_some(source.root).flatten()
 }
 
-/// 返回 Foxmail 显式目录：企业 YAML 优先，其次是应用内选择。
-pub fn foxmail_root_override() -> Option<String> {
-    email_config().foxmail_root.clone().or_else(|| {
+/// 返回邮件目录：企业 YAML 优先，其次是应用内选择。
+pub fn mail_dir_override() -> Option<String> {
+    email_config().mail_dir.clone().or_else(|| {
         let source = read_selected_source()?;
-        if source.client == "foxmail-win" {
-            source.root
-        } else {
-            None
-        }
+        if is_eml_dir(&source.client) { source.root } else { None }
     })
 }
 
 pub fn save_selected_email_source(client: &str, root: Option<&str>) -> Result<(), String> {
-    if !matches!(client, "outlook-win" | "foxmail-win") {
-        return Err(format!("不支持的 Windows 邮件客户端: {client}"));
+    if !matches!(client, "outlook-win" | EML_DIR | "foxmail-win") {
+        return Err(format!("不支持的 Windows 邮件来源: {client}"));
     }
-    if client == "foxmail-win" {
+    if is_eml_dir(client) {
         let value = root.unwrap_or_default().trim();
         if value.is_empty() {
-            return Err("Foxmail 目录不能为空".to_string());
+            return Err("邮件目录不能为空".to_string());
         }
         if !std::path::Path::new(value).is_dir() {
-            return Err(format!("Foxmail 目录不存在或不可读: {value}"));
+            return Err(format!("邮件目录不存在或不可读: {value}"));
         }
     }
     let path = selected_source_path().ok_or_else(|| "无法确定用户配置目录".to_string())?;
     let parent = path.parent().ok_or_else(|| "用户配置目录无效".to_string())?;
     std::fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {e}"))?;
     let content = serde_json::to_vec_pretty(&SelectedEmailSource {
-        client: client.to_string(),
+        // 老名字写进去就永远留着了, 存盘前归一成新名字
+        client: if client == "foxmail-win" { EML_DIR.to_string() } else { client.to_string() },
         root: root.map(str::trim).filter(|value| !value.is_empty()).map(str::to_string),
     }).map_err(|e| format!("序列化邮件来源失败: {e}"))?;
     let temp = path.with_extension("json.tmp");
@@ -186,13 +200,16 @@ fn build() -> EmailConfig {
         .or_else(|| std::env::var("CATFISH_EMAIL_RATE_MODEL").ok())
         .filter(|s| !s.is_empty());
 
-    let foxmail_root = yaml.as_ref()
-        .and_then(|y| y.foxmail_root.clone())
+    // 新键名优先, 老键名兜底 —— 已经配过 foxmail_root 的机器升级后照样能用
+    let mail_dir = yaml.as_ref()
+        .and_then(|y| y.mail_dir.clone())
+        .or_else(|| yaml.as_ref().and_then(|y| y.foxmail_root.clone()))
+        .or_else(|| std::env::var("CATFISH_EML_DIR").ok())
         .or_else(|| std::env::var("CATFISH_FOXMAIL_ROOT").ok())
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty());
 
-    EmailConfig { poll_secs, rate_enabled, rate_model, foxmail_root }
+    EmailConfig { poll_secs, rate_enabled, rate_model, mail_dir }
 }
 
 static EMAIL_CONFIG: OnceLock<EmailConfig> = OnceLock::new();
@@ -215,7 +232,7 @@ pub struct EmailConfigPublic {
     pub poll_secs: u64,
     pub rate_enabled: bool,
     pub rate_model: Option<String>,
-    pub foxmail_root: Option<String>,
+    pub mail_dir: Option<String>,
     /// yaml 文件绝对路径 (前端 shell.open 用)
     pub yaml_path: String,
 }
@@ -230,7 +247,7 @@ pub fn email_config_get() -> EmailConfigPublic {
         poll_secs: cfg.poll_secs,
         rate_enabled: cfg.rate_enabled,
         rate_model: cfg.rate_model.clone(),
-        foxmail_root: cfg.foxmail_root.clone(),
+        mail_dir: cfg.mail_dir.clone(),
         yaml_path: path,
     }
 }

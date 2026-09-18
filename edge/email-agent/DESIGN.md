@@ -67,10 +67,9 @@ edge/email-agent/
 │   │   ├── base.py                 # EmailAdapter ABC + 数据类
 │   │   ├── apple_mail.py           # macOS Mail.app AppleScript + EMLX 兜底  ← 5/18 替代 outlook_mac.py
 │   │   ├── outlook_win.py          # Windows COM (TODO)
-│   │   ├── foxmail_win.py          # Foxmail Win 只读 (.box / .eml)
+│   │   ├── eml_dir.py              # 通用 .eml 导出目录 (只读, 不认识任何客户端)
 │   │   └── foxmail_mac.py          # Foxmail Mac 只读 (draft 抛 NotSupportedError)
 │   │
-│   ├── box_parser.py               # Foxmail .box / .ind 解析器 (Win/Mac 共用)
 │   ├── draft.py                    # 调 gateway LLM 起草 (平台无关)
 │   ├── relevance.py                # (可选) 复用 feishu-monitor 风格关键词过滤
 │   └── inbox.py                    # Adapter 工厂 + 高层协调
@@ -81,7 +80,6 @@ edge/email-agent/
 │       └── (helper bash 脚本调 CLI)
 │
 ├── tests/
-│   ├── test_box_parser.py          # 用 fixture .box 文件
 │   ├── test_adapter_apple_mail.py  # mock osascript + EMLX 文件 (50 tests)  ← 5/18
 │   ├── test_adapter_foxmail_mac.py # 真合成 Profile 目录 (32 tests)
 │   ├── test_adapter_outlook_win.py # mock win32com (TODO)
@@ -298,9 +296,9 @@ mail.Save()  # 落到草稿箱; .Send() 不调!
     - `references` header (PropertyAccessor `PR_INTERNET_REFERENCES` = `0x1039001F`)
     - 6 个 optional method (create_draft / send_message / delete_message / mark_read / check_new_mail / export_attachment)
 
-- **平台 fallback**: 非 Windows 平台 `OutlookWinAdapter.__init__` 立即抛 `NotSupportedError`. `NotSupportedError` 继承 `NotImplementedError`, `inbox.get_adapter` line 52 `except (DataNotFoundError, ImportError, NotImplementedError)` 自动 fallback 候选 `foxmail-win`. macOS 开发机跑 `_get_adapter_explicit("outlook-win")` 不会挂 Python interpreter, 只会抛可捕获异常.
+- **平台 fallback**: 非 Windows 平台 `OutlookWinAdapter.__init__` 立即抛 `NotSupportedError`. `NotSupportedError` 继承 `NotImplementedError`, `inbox.get_adapter` `except (DataNotFoundError, ImportError, NotImplementedError)` 自动 fallback 候选 `eml-dir`. macOS 开发机跑 `_get_adapter_explicit("outlook-win")` 不会挂 Python interpreter, 只会抛可捕获异常.
 
-### 4.3 Foxmail Windows (`foxmail_win.py`)
+### 4.3 通用 .eml 导出目录 (`eml_dir.py`)
 
 **机制 (只读)**: 解析 `~/AppData/Local/Tencent/Foxmail7/Storage/<email>/Mail/<folder>/*.box` 或 `.eml`。
 路径优先使用 `CATFISH_FOXMAIL_ROOT`；未配置时依次读取 Foxmail 相关注册表分支、
@@ -313,7 +311,15 @@ Foxmail 参数文件和 `%LOCALAPPDATA%` / `%APPDATA%` 下的常见目录。候�
 
 ### 4.4 Foxmail Mac (`foxmail_mac.py`)
 
-**机制**: 复用 `box_parser.py` 读 `~/Library/Containers/.../Foxmail/Storage/`, **`create_draft` 抛 NotSupportedError**。
+**机制**: 读用户从邮件客户端导出的标准 `.eml`，起始偏移靠嗅探 RFC822 头而不是假设第 0 字节，**所有写操作抛 NotSupportedError**。
+
+> 9/18: 这里原本是 `foxmail_win.py`，直接解析 Foxmail 的私有存储。一天踩了六个 bug，
+> 前五个都是「把某一版的私有布局当判据写死」，第六个把路堵死了 —— **Foxmail 7.2 把邮件
+> 文件加密了**（五个样本 16 KB–262 MB，熵 7.96–7.97，彼此无共同前缀）。没有正文，邮件
+> 进知识库这件事就没价值，于是整条线删除，改读导出的 `.eml`。
+>
+> 教训写在这里免得再犯：**格式可读性要第一个验，不是最后一个。** 我们先修了五个
+> 「怎么读到文件」的 bug，才发现读到了也没用。
 
 ---
 
@@ -361,11 +367,10 @@ description: 帮员工读公司邮箱 + 起草回复 (Outlook / Foxmail 桌面�
 
 | 类型 | 怎么做 |
 |---|---|
-| **box_parser** | fixture `.box` / `.ind` 文件 + 解析后跟期望值对比 (主题 / 发件人 / 正文) |
 | **apple_mail** | mock subprocess (osascript) + 合成 EMLX 文件; 验证 AS 输出解析 + EMLX fallback chain + body_html 抽取 (50 tests) |
 | **outlook_win** | mock `win32com.client.Dispatch`; 验证 COM 调用序列 (TODO) |
-| **foxmail_win** | mock 文件系统 (pyfakefs / tmp_path); 写 draft 后验证 .eml 在指定目录 (TODO) |
-| **foxmail_mac** | 复用 box_parser fixture; 验证 `create_draft` 抛 NotSupportedError (32 tests) |
+| **eml_dir** | tmp_path 造真实 RFC822；覆盖平铺/分账号/分文件夹三种形态、GB2312 主题、带前缀文件、坏文件不清空收件箱 |
+| **foxmail_mac** | 自带 sqlite fixture; 验证 `create_draft` 抛 NotSupportedError |
 | **draft** | mock gateway HTTP; 验证 prompt 含必要 context (in_reply_to body / 收件人 / 语气配置) |
 | **inbox 工厂** | mock platform 检测; 验证返回正确的 adapter 实例 |
 | **端到端** (真客户端) | 手工跑 + checklist; 自动化太脆 |

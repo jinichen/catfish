@@ -185,8 +185,8 @@ export const emailAccountsFetch = () =>
   rawInvoke<string>("email_accounts_fetch");
 export interface EmailSourceDiscovery {
   platform: string;
-  ready_client: "outlook-win" | "foxmail-win" | null;
-  selected_client?: "outlook-win" | "foxmail-win" | null;
+  ready_client: "outlook-win" | "eml-dir" | null;
+  selected_client?: "outlook-win" | "eml-dir" | null;
   sources: Array<{
     client: string;
     status: "ready" | "unavailable" | "unsupported";
@@ -224,7 +224,7 @@ export const emailCheckNew = (account?: string) =>
  *
  *  8/8: `no_access` 意味着 Apple Mail 里有账号但**进程没权限读**, 表现是邮件页
  *  少了几个邮箱而界面上什么都不说 (鸿波实撞: 授权前 1 个账号, 授权后 5 个)。
- *  这条只用来挂提示, 不影响取数 —— 取数那边已经会安静降级到 Foxmail。 */
+ *  这条只用来挂提示, 不影响取数 —— 取数那边已经会安静降级到其它来源。 */
 export const emailMailDirStatus = () =>
   rawInvoke<string>("email_mail_dir_status");
 // BL-EMAIL-MARK-READ (5/18): 单独标已读 / 反向标未读. CLI read 默认已自动标,

@@ -148,7 +148,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--client",
-        help="显式指定 client (apple-mail / foxmail-mac / outlook-win / foxmail-win); 默认按平台自动选 (macOS → apple-mail 优先, foxmail-mac 兜底)",
+        help="显式指定 client (apple-mail / foxmail-mac / outlook-win / eml-dir); 默认按平台自动选 (macOS → apple-mail 优先, foxmail-mac 兜底)",
     )
     p.add_argument("-v", "--verbose", action="store_true", help="打开 INFO 日志")
 

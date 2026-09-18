@@ -34,7 +34,7 @@ class _FailingAccountsAdapter(EmailAdapter):
 def test_cmd_accounts_all_adapters_fail_returns_error_instead_of_empty(capsys):
     adapters = [
         _FailingAccountsAdapter("outlook_win", "Outlook COM 不可用"),
-        _FailingAccountsAdapter("foxmail_win", "Foxmail Storage 不存在"),
+        _FailingAccountsAdapter("eml_dir", "邮件目录不存在"),
     ]
 
     rc = _cmd_accounts(adapters, argparse.Namespace(json=True))
@@ -43,4 +43,4 @@ def test_cmd_accounts_all_adapters_fail_returns_error_instead_of_empty(capsys):
     captured = capsys.readouterr()
     assert json.loads(captured.out) == []
     assert "outlook_win" in captured.err
-    assert "foxmail_win" in captured.err
+    assert "eml_dir" in captured.err

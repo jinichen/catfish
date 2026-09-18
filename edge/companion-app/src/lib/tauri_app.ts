@@ -89,8 +89,10 @@ export interface EmailConfigPublic {
    * 改 null 无 UI break. 后续要展示走 useRole hook 拿 effective 值.
    */
   rate_model: string | null;
-  /** Windows Foxmail 自定义 Storage 目录；null = 自动探测。 */
-  foxmail_root: string | null;
+  /** Windows: 邮件客户端导出的 .eml 目录；null = 未配置。
+   *  9/18 之前叫 foxmail_root (指 Foxmail Storage)。Foxmail 7.2 把邮件加密了,
+   *  本地读不出正文, 那条线删了。 */
+  mail_dir: string | null;
   yaml_path: string;
 }
 

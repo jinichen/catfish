@@ -3,19 +3,19 @@ import { describe, expect, it } from "vitest";
 import { parseEmailSourceDiscovery, readyEmailSources } from "./emailSourceDiscovery";
 
 describe("email source discovery", () => {
-  it("parses independent Outlook and Foxmail statuses", () => {
+  it("parses independent Outlook and .eml-dir statuses", () => {
     const result = parseEmailSourceDiscovery(JSON.stringify({
       platform: "Windows",
-      ready_client: "foxmail-win",
-      selected_client: "foxmail-win",
+      ready_client: "eml-dir",
+      selected_client: "eml-dir",
       sources: [
         { client: "outlook-win", status: "unavailable", accounts: [], root: null, reason: "未配置" },
-        { client: "foxmail-win", status: "ready", accounts: [], root: "E:\\mail", reason: null },
+        { client: "eml-dir", status: "ready", accounts: [], root: "E:\\邮件导出", reason: null },
       ],
     }));
 
     expect(readyEmailSources(result)).toHaveLength(1);
-    expect(readyEmailSources(result)[0].client).toBe("foxmail-win");
+    expect(readyEmailSources(result)[0].client).toBe("eml-dir");
   });
 
   it("rejects malformed discovery output", () => {

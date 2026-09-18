@@ -22,7 +22,7 @@ def test_payload_contains_independent_client_status(monkeypatch):
             return [FakeAccount()]
 
     class FakeFoxmail:
-        name = "foxmail_win"
+        name = "eml_dir"
         profiles_dir = r"E:\mail\Storage"
 
         def list_accounts(self):
@@ -69,11 +69,11 @@ def test_isolated_outlook_timeout_is_diagnostic_not_empty_success(monkeypatch):
 def test_isolated_foxmail_validates_worker_result(monkeypatch):
     monkeypatch.setattr(discovery.subprocess, "run", lambda *a, **k: SimpleNamespace(
         returncode=0, stdout='[]', stderr=''))
-    assert discovery._discover_isolated("foxmail-win").status == "unavailable"
-    payload = discovery.EmailSource("foxmail-win", "ready", [{"name": "work"}], root="E:/mail")
+    assert discovery._discover_isolated("eml-dir").status == "unavailable"
+    payload = discovery.EmailSource("eml-dir", "ready", [{"name": "work"}], root="E:/mail")
     monkeypatch.setattr(discovery.subprocess, "run", lambda *a, **k: SimpleNamespace(
         returncode=0, stdout=json.dumps(payload.as_json()), stderr=''))
-    assert discovery._discover_isolated("foxmail-win") == payload
+    assert discovery._discover_isolated("eml-dir") == payload
 
 
 def test_windows_probes_both_clients_independently(monkeypatch):
@@ -91,13 +91,13 @@ def test_windows_probes_both_clients_independently(monkeypatch):
 
 def test_unlisted_exception_becomes_unavailable_not_traceback(monkeypatch):
     class BrokenFoxmail:
-        name = "foxmail_win"
+        name = "eml_dir"
 
         def list_accounts(self):
             raise KeyError("Storage")  # 不在 except 清单里的类型
 
     monkeypatch.setattr(discovery, "_get_adapter_explicit", lambda client: BrokenFoxmail())
-    source = discovery._discover_client("foxmail-win")
+    source = discovery._discover_client("eml-dir")
     assert source.status == "unavailable"
     assert source.accounts == []
     # 类型名留着定位真因, 但不是 traceback
@@ -114,7 +114,7 @@ def test_worker_main_always_emits_json(monkeypatch, capsys):
         raise RuntimeError("adapter import exploded")
 
     monkeypatch.setattr(discovery, "_discover_client", boom)
-    monkeypatch.setattr(_sys, "argv", ["discovery", "foxmail-win"])
+    monkeypatch.setattr(_sys, "argv", ["discovery", "eml-dir"])
     # 直接执行模块的 __main__ 段, 用已 patch 的 discovery 命名空间
     code = open(discovery.__file__, encoding="utf-8").read().split('if __name__ == "__main__":')[1]
     ns = dict(vars(discovery))
@@ -122,6 +122,6 @@ def test_worker_main_always_emits_json(monkeypatch, capsys):
     exec("if True:" + code, ns)  # noqa: S102 — 测试里跑模块尾部
     out = capsys.readouterr().out.strip()
     data = json.loads(out)
-    assert data["client"] == "foxmail-win"
+    assert data["client"] == "eml-dir"
     assert data["status"] == "unavailable"
     assert data["reason"].startswith("RuntimeError:")

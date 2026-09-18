@@ -439,7 +439,7 @@ mod rotate_tests {
         }
         assert!(
             include_str!("email_scheduler.rs").contains("email_command(&bin)"),
-            "后台扫描必须复用邮件页的 command builder，才能继承 foxmail_root"
+            "后台扫描必须复用邮件页的 command builder，才能继承 mail_dir"
         );
     }
 }

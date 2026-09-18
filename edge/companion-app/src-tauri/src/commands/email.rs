@@ -47,40 +47,46 @@ pub(crate) fn email_command(bin: &Path) -> Command {
         .env("PYTHONIOENCODING", "utf-8")
         .env("PYTHONUTF8", "1");
     if cfg!(target_os = "windows") {
-        if let Some(root) = email_config::foxmail_root_override() {
+        if let Some(dir) = email_config::mail_dir_override() {
             command
-                .env("CATFISH_FOXMAIL_ROOT", root)
-                .env("CATFISH_EMAIL_CLIENT", "foxmail-win");
+                .env("CATFISH_EML_DIR", dir)
+                .env("CATFISH_EMAIL_CLIENT", email_config::EML_DIR);
         } else if let Some(client) = email_config::selected_email_client() {
             command.env("CATFISH_EMAIL_CLIENT", client);
-        } else if std::env::var_os("CATFISH_FOXMAIL_ROOT").is_some() {
+        } else if std::env::var_os("CATFISH_EML_DIR").is_some()
+            || std::env::var_os("CATFISH_FOXMAIL_ROOT").is_some()
+        {
             // 直接从 shell 启动 Companion 的临时 override 仍然可用；这里只
-            // 补选客户端，避免 catfish-email 再去尝试 Outlook。
-            command.env("CATFISH_EMAIL_CLIENT", "foxmail-win");
+            // 补选来源，避免 catfish-email 再去尝试 Outlook。
+            command.env("CATFISH_EMAIL_CLIENT", email_config::EML_DIR);
         }
     }
     command
 }
 
 /// 探测 Windows 邮件来源。返回 catfish-email 的结构化 JSON，避免 Rust 和 Python
-/// 各自维护一套 Outlook/Foxmail 发现规则。
+/// 各自维护一套发现规则。
 #[tauri::command]
 pub async fn email_sources_discover() -> Result<String, String> {
     let bin = catfish_paths::catfish_email_bin().ok_or_else(email_component_missing_error)?;
     let mut command = email_command(&bin);
-    // discovery 必须重新检查所有客户端。应用内上次选择的 Foxmail 外置盘
-    // 可能已经断开；不能把旧选择重新注入 discovery，否则永远发现不到新的
-    // Storage。只有用户/企业在 companion.yaml 或环境中显式指定时才保留 override。
-    if email_config::email_config().foxmail_root.is_none() {
-        command
-            .env_remove("CATFISH_FOXMAIL_ROOT")
-            .env_remove("CATFISH_EMAIL_CLIENT");
-        if let Some(root) = email_config::selected_foxmail_root()
-            .filter(|root| !root.trim().is_empty() && std::path::Path::new(root).is_dir())
-        {
-            // 外置盘目录可能无法从注册表反推出；保留有效的用户选择，
-            // 但不设置 client，让 Outlook 和 Foxmail 仍然独立探测。
-            command.env("CATFISH_FOXMAIL_HINT", root);
+    // discovery 要重新检查所有来源, 所以不注入 client —— 让 Outlook 和
+    // .eml 目录各自独立探测, 一个不可用不影响另一个。
+    //
+    // 9/18: 邮件目录跟以前的 Foxmail 不一样, **没有**自动探测可言 —— 它就是
+    // 用户选的那个目录。所以这里要把它传下去, 否则 discovery 永远报"未配置",
+    // 哪怕用户早就选好了。(以前要 env_remove 是因为 Foxmail 能从注册表反推,
+    // 注入旧值会盖住新装的 Storage;  现在没有这个反推了。)
+    command.env_remove("CATFISH_EMAIL_CLIENT");
+    match email_config::mail_dir_override()
+        .filter(|dir| !dir.trim().is_empty() && std::path::Path::new(dir).is_dir())
+    {
+        Some(dir) => {
+            command.env("CATFISH_EML_DIR", dir);
+        }
+        // 目录没配, 或者配了但盘已经拔了 —— 让 discovery 如实报"不可用"
+        None => {
+            command.env_remove("CATFISH_EML_DIR").env_remove("CATFISH_FOXMAIL_ROOT");
         }
     }
     let output = command

@@ -153,7 +153,7 @@ class OutlookWinAdapter(EmailAdapter):
     # —— 把**打算实现**当成**已经实现**写进了 flag。
     #
     # 后果不是抽象的: __main__.py 的 _cmd_draft 正是靠这个 flag 挑 adapter。
-    # Windows 上候选只有 outlook_win (foxmail-win 工厂里就 NotImplementedError),
+    # Windows 上候选只有 outlook_win (eml-dir 没配目录时就 DataNotFoundError),
     # 于是它必被选中, 然后 create_draft 落到基类抛 NotSupportedError。员工在
     # Companion 里点"起草回复", 拿到的是"该 adapter 不支持起草" —— 而 flag
     # 一直在说支持。

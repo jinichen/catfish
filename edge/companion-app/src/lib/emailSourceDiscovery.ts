@@ -10,7 +10,7 @@ export function parseEmailSourceDiscovery(raw: string): EmailSourceDiscovery {
     throw new Error("邮件发现缺少来源信息");
   }
   if (payload.selected_client !== undefined && payload.selected_client !== null &&
-      payload.selected_client !== "outlook-win" && payload.selected_client !== "foxmail-win") {
+      payload.selected_client !== "outlook-win" && payload.selected_client !== "eml-dir") {
     throw new Error("邮件发现的已选来源无效");
   }
   return payload as EmailSourceDiscovery;

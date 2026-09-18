@@ -10,7 +10,7 @@ def verify(stage: Path, source: Path) -> None:
         raise ValueError(f"Expected one email wheel, found {len(wheels)}")
     package = source / "src" / "catfish_email"
     with zipfile.ZipFile(wheels[0]) as archive:
-        for required in ("discovery.py", "adapters/foxmail_discovery.py", "__main__.py"):
+        for required in ("discovery.py", "adapters/eml_dir.py", "__main__.py"):
             if not (package / required).is_file():
                 raise ValueError(f"Missing discovery source: {required}")
         for path in package.rglob("*.py"):

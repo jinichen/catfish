@@ -465,7 +465,7 @@ function DetailPane({
                     key={i}
                     onClick={async () => {
                       // P3.5.103 (6/24 鸿波): 点附件 → CLI 导出到本地 tmp → 系统默认 app 打开.
-                      // CLI 退出码 4 = adapter 不支持 (foxmail / outlook 暂未 implement export_attachment).
+                      // CLI 退出码 4 = adapter 不支持 (outlook 暂未 implement export_attachment).
                       try {
                         const path = await emailExportAttachment(msg.id, a.filename);
                         await openFile(path);

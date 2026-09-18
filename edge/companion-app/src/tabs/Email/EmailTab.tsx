@@ -210,9 +210,9 @@ export default function EmailTab() {
     }
   }, [loadList, scanEmailSources]);
 
-  const handlePickFoxmailDirectory = useCallback(async () => {
+  const handlePickMailDirectory = useCallback(async () => {
     const directory = await emailSourcePickDirectory();
-    if (directory) await handleSelectEmailSource("foxmail-win", directory);
+    if (directory) await handleSelectEmailSource("eml-dir", directory);
   }, [handleSelectEmailSource]);
 
   const readySourceCount = sourceDiscovery ? readyEmailSources(sourceDiscovery).length : 0;
@@ -538,7 +538,7 @@ export default function EmailTab() {
                 error={sourceDiscoveryError}
                 onRescan={() => void scanEmailSources()}
                 onSelect={(client, root) => void handleSelectEmailSource(client, root)}
-                onPickFoxmailDirectory={() => void handlePickFoxmailDirectory()}
+                onPickMailDirectory={() => void handlePickMailDirectory()}
               />
             )}
           {/* 搜索框 — 前端 filter 主题/发件人/账号 */}

@@ -231,8 +231,8 @@ export default function AgentPrefsCard() {
                 lineHeight: 1.5,
               }}
             >
-              Windows Foxmail 目录：{emailCfg?.foxmail_root ?? "自动探测"}；配置改要改
-              ~/.catfish/companion.yaml → email.foxmail_root，评级开关仍是 email.rate_enabled，重启 Companion 生效
+              Windows 邮件目录：{emailCfg?.mail_dir ?? "未配置"}；配置改要改
+              ~/.catfish/companion.yaml → email.mail_dir，评级开关仍是 email.rate_enabled，重启 Companion 生效
             </div>
           </div>
         </>

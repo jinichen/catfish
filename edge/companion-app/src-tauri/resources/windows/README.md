@@ -33,23 +33,33 @@ MSI 不再执行 Hermes 或附加组件安装 CustomAction，避免安装时弹�
 `%LOCALAPPDATA%\hermes\logs\catfish-companion-bootstrap.log`。因此发布新版本
 后不需要把 Hermes 安装塞进 MSI 事务，旧的 Hermes 核心也不会被重复解压。
 
-Foxmail 会自动读取相关注册表分支、安装目录参数文件和常见用户目录寻找 Storage，
-并验证目录内确实存在 `.box` / `.eml` 邮件文件，不扫描整盘。Windows 邮件页会同时
-独立探测 Outlook 和 Foxmail：一个客户端不可用不会阻塞另一个。普通员工不需要编辑
-配置文件；如果找到多个来源，可在页面选择一次，选择会保存到
+Windows 的邮件来源有两个：Outlook（COM）和**邮件客户端导出的 `.eml` 目录**。
+两者独立探测，一个不可用不会阻塞另一个；选择会保存到
 `%USERPROFILE%\.catfish\email-source.json`。
 
-如果企业版没有在参数中暴露路径，邮件页也可通过原生目录选择器选择 Foxmail
-Storage/Profile 目录，仍不需要手写配置。`companion.yaml` 只保留给企业部署和故障
-排查使用，不要把个人盘符写进程序：
+9/18 之前这里读的是 Foxmail 自己的 Storage 目录。**Foxmail 7.2 把邮件文件加密了**
+（实测五个样本 16 KB–262 MB，熵 7.96–7.97，彼此没有共同前缀），本地解不出正文，
+那条线已经整体删除。现在的做法是让用户在邮件客户端里把邮件导出成标准 `.eml`
+（Foxmail：选中邮件右键「另存为」），再在邮件页选择导出目录 —— 正文、附件、编码
+全是 RFC822 标准，不依赖任何厂商私有格式，也不需要邮箱凭据。
+
+导出目录三种形态都认，不用额外配置：
+
+```
+<目录>/*.eml                      单账号
+<目录>/<账号>/*.eml               每个子目录一个账号
+<目录>/<账号>/<文件夹>/*.eml      再分一层就是文件夹（收件箱/已发送…）
+```
+
+`companion.yaml` 只保留给企业部署和故障排查使用，不要把个人盘符写进程序：
 
 ```yaml
 email:
-  foxmail_root: 'E:\\nextcloud\\mailstore\\ffchenhb@chinatelecom.cn'
+  mail_dir: 'E:\\邮件导出'
 ```
 
-配置后重启 Companion。程序会只调用 Foxmail 适配器，不再探测 Outlook COM；
-目录不存在或没有可读邮件文件时，邮件页会显示真实错误，不会伪装成空收件箱。
+配置后重启 Companion。目录不存在或里面没有 `.eml` 时，邮件页会显示真实错误，
+不会伪装成空收件箱。老键名 `foxmail_root` 仍然认，语义已变成"邮件目录"。
 
 ## MSI 与 Burn 的边界
 
