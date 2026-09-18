@@ -592,6 +592,9 @@ jobs:
           )
           $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           $lines | ForEach-Object { Write-Host $_ }
+          # 也落一份到产物里。国内 api.github.com 经常 EOF (gh run view 取不到日志),
+          # 而 MSI 包本来就要下载 —— 报告跟着它走, 不依赖 API 和日志权限。
+          $lines | Out-File -FilePath (Join-Path $env:RUNNER_TEMP 'offline-uv-cache-report.txt') -Encoding utf8
           if ($offlineExit -ne 0) { Write-Host "::warning::断网重放失败 —— 随包发缓存这条路要重新评估" }
 
       # 必须放在所有 Tauri resources 生成之后：tauri.conf.json 会在 build
@@ -728,6 +731,20 @@ jobs:
           set -euo pipefail
           ls -lh edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/ || true
 
+      # 测量报告跟着 MSI 走 —— 见上面 "Measure offline uv cache" 里的理由。
+      - name: Attach offline uv cache report to artifact
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $report = Join-Path $env:RUNNER_TEMP 'offline-uv-cache-report.txt'
+          $msiDir = "${{ github.workspace }}\edge\companion-app\src-tauri\target\x86_64-pc-windows-msvc\release\bundle\msi"
+          if ((Test-Path $report) -and (Test-Path $msiDir)) {
+              Copy-Item $report $msiDir -Force
+              Write-Host "报告已放入产物: $msiDir\offline-uv-cache-report.txt"
+          } else {
+              Write-Host "::notice::没有测量报告可附加 (测量步骤可能被跳过或失败)"
+          }
+
       - name: Upload msi artifact
       # v7 使用 Node 24，避免 GitHub Actions 的 Node 20 弃用提示。
         uses: actions/upload-artifact@v7
@@ -736,6 +753,7 @@ jobs:
           path: |
             edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
             edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/build-identity.json
+            edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/offline-uv-cache-report.txt
           if-no-files-found: error
           retention-days: 30
 
