@@ -76,6 +76,7 @@ NotSupportedError). W3 集成阶段 (在 Windows 机器上) 逐个补.
 from __future__ import annotations
 
 import logging
+import subprocess
 import sys
 import threading
 from typing import Sequence
@@ -115,6 +116,48 @@ FOLDER_ALIASES: dict[str, int] = {
 _DASL_RECEIVED = "urn:schemas:httpmail:datereceived"
 _DASL_SUBJECT = "urn:schemas:httpmail:subject"
 _DASL_UNREAD = "urn:schemas:httpmail:read"
+
+
+def _new_outlook_only() -> bool:
+    """这台机器是不是只有"新版 Outlook" (Microsoft.OutlookForWindows)。
+
+    9/18 真机实测: 新版 Outlook 开着, COM 照样 REGDB_E_CLASSNOTREG。它是
+    WebView 套壳的 Store 应用, **根本不提供 Outlook.Application 自动化接口** ——
+    只有经典桌面版 Outlook 才有。而微软正在把用户往新版上迁。
+
+    探测失败一律返 False: 这只是用来把报错说清楚, 绝不能让它自己变成故障。
+    """
+    try:
+        probe = subprocess.run(  # noqa: S603
+            [
+                "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                "if (Get-AppxPackage Microsoft.OutlookForWindows) { 'newoutlook' }",
+            ],
+            capture_output=True, text=True, timeout=15, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception:  # noqa: BLE001
+        return False
+    return "newoutlook" in (probe.stdout or "")
+
+
+def _com_failure_hint() -> str:
+    """COM 起不来时该跟员工说什么。
+
+    老文案是"员工先打开 Outlook 桌面版再试"。9/18 实测这句会害人: 员工的新版
+    Outlook 明明开着, 照做一百遍也没用, 而真因是那个客户端压根没有 COM。
+    提示必须能区分"没开"和"开了也没用"。
+    """
+    if _new_outlook_only():
+        return (
+            "这台机器装的是新版 Outlook (Microsoft.OutlookForWindows), "
+            "它不提供 COM 自动化接口, 开着也读不了 —— 不是配置问题, 再试也没用。"
+            "需要经典桌面版 Outlook, 或改用其它邮件来源。"
+        )
+    return (
+        "员工先打开 Outlook 桌面版再试. 常见: (1) Outlook 未装; "
+        "(2) 系统崩溃后 COM 挂; (3) Office 365 需先注册账户."
+    )
 
 
 def _import_pywin32() -> None:
@@ -200,9 +243,7 @@ class OutlookWinAdapter(EmailAdapter):
         except pywintypes.com_error as e:
             hresult = e.hresult & 0xFFFFFFFF if e.hresult else 0
             raise ClientNotRunningError(
-                f"Outlook COM 初始化失败 (hresult=0x{hresult:08X}). "
-                "员工先打开 Outlook 桌面版再试. 常见: (1) Outlook 未装; "
-                "(2) 系统崩溃后 COM 挂; (3) Office 365 需先注册账户."
+                f"Outlook COM 初始化失败 (hresult=0x{hresult:08X}). {_com_failure_hint()}"
             ) from e
         self._tls.ol = ol
         self._tls.ns = ns
