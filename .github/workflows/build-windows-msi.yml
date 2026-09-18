@@ -801,6 +801,11 @@ jobs:
           files: |
             edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
             edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/build-identity.json
+            edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/offline-uv-cache-report.txt
+          # 报告也挂 Release: 上面那条"跟着 MSI 走"只做了一半 —— 报告进了
+          # Artifact, 可 Artifact 是 640 MB 的整包, 而且走 api.github.com。
+          # 为一个文本文件下 640 MB 没道理, 国内还经常下不动。Release asset
+          # 走 CDN, 单个文件可直取, 登出也能拿。
           fail_on_unmatched_files: true
           draft: false
           prerelease: true
