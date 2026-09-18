@@ -1,4 +1,12 @@
 import type { EmailSourceDiscovery } from "../../../lib/tauri";
+import ImapSetup from "./ImapSetup";
+
+/** 来源的显示名。9/18 加了 imap —— 唯一不依赖邮件客户端的路径。 */
+const SOURCE_LABEL: Record<string, string> = {
+  "outlook-win": "Outlook",
+  "eml-dir": "导出的邮件目录",
+  imap: "邮箱直连 (IMAP)",
+};
 
 interface Props {
   discovery: EmailSourceDiscovery;
@@ -17,7 +25,8 @@ export default function EmailSourceSetup({
   onSelect,
   onPickMailDirectory,
 }: Props) {
-  if (discovery.platform !== "Windows") return null;
+  // IMAP 不挑平台 (它不依赖任何邮件客户端), 所以非 Windows 上也要给配置入口。
+  if (discovery.platform !== "Windows") return <ImapSetup onConfigured={onRescan} />;
 
   const ready = discovery.sources.filter((source) => source.status === "ready");
   return (
@@ -38,7 +47,7 @@ export default function EmailSourceSetup({
       {discovery.sources.map((source) => (
         <div key={source.client} style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
           <span style={{ flex: 1 }}>
-            {source.client === "outlook-win" ? "Outlook" : "导出的邮件目录"} · {source.status === "ready" ? `${source.accounts.length} 个账号` : source.reason ?? "暂不可用"}
+            {SOURCE_LABEL[source.client] ?? source.client} · {source.status === "ready" ? `${source.accounts.length} 个账号` : source.reason ?? "暂不可用"}
           </span>
           {source.status === "ready" && (
             <button type="button" disabled={busy} onClick={() => onSelect(source.client, source.root ?? undefined)}>
@@ -52,6 +61,7 @@ export default function EmailSourceSetup({
         <button type="button" disabled={busy} onClick={onRescan}>重新扫描</button>
       </div>
       {error && <div style={{ color: "var(--status-danger)", marginTop: 6 }}>{error}</div>}
+      <ImapSetup onConfigured={onRescan} />
     </div>
   );
 }

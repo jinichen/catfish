@@ -433,5 +433,10 @@ pub(crate) fn handler(
             crate::commands::teaching_credentials::teaching_credential_list,
             crate::commands::teaching_credentials::teaching_credential_delete,
             crate::commands::teaching_credentials::teaching_credential_add_site,
+            // 9/18: IMAP 凭据。注意**没有**读密码的 command —— 前端只能存和删,
+            // 取值走 Rust 内部 (commands::email 注入子进程环境变量)。
+            crate::commands::imap_credentials::imap_credential_save,
+            crate::commands::imap_credentials::imap_credential_clear,
+            crate::commands::imap_credentials::imap_credential_status,
     ]
 }

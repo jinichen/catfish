@@ -28,21 +28,28 @@ def test_payload_contains_independent_client_status(monkeypatch):
         def list_accounts(self):
             raise discovery.DataNotFoundError("Storage 不可读")
 
+    class FakeImap:
+        name = "imap"
+
+        def list_accounts(self):
+            raise discovery.DataNotFoundError("IMAP 没配置")
+
+    fakes = {"outlook-win": FakeOutlook, "eml-dir": FakeFoxmail, "imap": FakeImap}
     monkeypatch.setattr(discovery.platform, "system", lambda: "Windows")
     monkeypatch.setattr(discovery, "_discover_isolated", discovery._discover_client)
-    monkeypatch.setattr(
-        discovery,
-        "_get_adapter_explicit",
-        lambda client: FakeOutlook() if client == "outlook-win" else FakeFoxmail(),
-    )
+    monkeypatch.setattr(discovery, "_get_adapter_explicit", lambda client: fakes[client]())
 
     payload = discovery.discover_payload()
+    # 按 client 取, 不按下标 —— 9/18 加 imap 时下标全错位了一次。
+    # 来源顺序是实现细节, 这条测的是每个来源各自的状态。
+    by_client = {s["client"]: s for s in payload["sources"]}
 
     assert payload["ready_client"] == "outlook-win"
-    assert payload["sources"][0]["status"] == "ready"
-    assert payload["sources"][0]["accounts"][0]["address"] == "work@example.com"
-    assert payload["sources"][1]["status"] == "unavailable"
-    assert "Storage 不可读" in payload["sources"][1]["reason"]
+    assert by_client["outlook-win"]["status"] == "ready"
+    assert by_client["outlook-win"]["accounts"][0]["address"] == "work@example.com"
+    assert by_client["eml-dir"]["status"] == "unavailable"
+    assert "Storage 不可读" in by_client["eml-dir"]["reason"]
+    assert by_client["imap"]["status"] == "unavailable"
     assert "password" not in json.dumps(payload).lower()
 
 
@@ -76,12 +83,19 @@ def test_isolated_foxmail_validates_worker_result(monkeypatch):
     assert discovery._discover_isolated("eml-dir") == payload
 
 
-def test_windows_probes_both_clients_independently(monkeypatch):
+def test_windows_probes_every_client_independently(monkeypatch):
+    """一个来源不可用绝不能拖垮另一个。
+
+    9/18: 从两个来源变三个 —— 加了 imap, 而且它排第一 (唯一不依赖邮件客户端的
+    路径, 配了就该优先)。这条测的是"独立探测"这个性质, 不是具体几个。
+    """
     monkeypatch.setattr(discovery.platform, "system", lambda: "Windows")
     monkeypatch.setattr(discovery, "os", SimpleNamespace(name="nt"))
     monkeypatch.setattr(discovery, "_discover_isolated", lambda client:
         discovery.EmailSource(client, "unavailable" if client == "outlook-win" else "ready", []))
-    assert [source.status for source in discovery.discover_sources()] == ["unavailable", "ready"]
+    sources = discovery.discover_sources()
+    assert [s.client for s in sources] == ["imap", "outlook-win", "eml-dir"]
+    assert [s.status for s in sources] == ["ready", "unavailable", "ready"]
 
 
 # ── 9/17: 截图实锤的两件事 ──────────────────────────────────────────

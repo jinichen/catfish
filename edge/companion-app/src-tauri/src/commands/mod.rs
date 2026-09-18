@@ -97,6 +97,7 @@ pub mod speech;
 pub mod system;
 pub mod task_chat; // P3.3.7 Phase 2 (6/10): ~/.catfish/task_chat/<key>.jsonl task-scoped chat 持久化
 pub mod task_chat_migration; // P3.3.19 C Phase 4 (6/11): jsonl → ~/.hermes/state.db 一次性 migration
+pub mod imap_credentials; // 9/18: IMAP 凭据 —— 密码进系统凭据库, 配置进不含密码的 JSON
 pub mod teaching_credentials;
 pub mod tasks_history; // BL-LONG-RUNNING-V1 (5/30): 读 ~/.catfish/tasks.jsonl 历史任务
 pub mod tool_bridge;

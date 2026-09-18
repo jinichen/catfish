@@ -46,6 +46,25 @@ pub(crate) fn email_command(bin: &Path) -> Command {
     command
         .env("PYTHONIOENCODING", "utf-8")
         .env("PYTHONUTF8", "1");
+
+    // 9/18: 配了 IMAP 就优先走它 —— **两个平台都适用**, 不在 windows 分支里。
+    //
+    // 这一天在两条"读客户端本地数据"的路上各撞一次墙: Foxmail 7.2 把邮件文件
+    // 加密了 (熵 7.96), 新版 Outlook 既无 COM 也无本地邮件 (WebView 套壳)。
+    // IMAP 是唯一不看客户端脸色的路径。
+    //
+    // 密码从系统凭据库读出来注入子进程环境。前端**拿不到**它 ——
+    // imap_credentials 里刻意没有读密码的 tauri command。
+    if let Some((source, password)) = super::imap_credentials::configured_source() {
+        command
+            .env("CATFISH_IMAP_HOST", &source.host)
+            .env("CATFISH_IMAP_PORT", source.port.to_string())
+            .env("CATFISH_IMAP_USER", &source.user)
+            .env("CATFISH_IMAP_PASSWORD", password)
+            .env("CATFISH_EMAIL_CLIENT", "imap");
+        return command;
+    }
+
     if cfg!(target_os = "windows") {
         if let Some(dir) = email_config::mail_dir_override() {
             command

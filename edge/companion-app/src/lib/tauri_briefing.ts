@@ -185,8 +185,8 @@ export const emailAccountsFetch = () =>
   rawInvoke<string>("email_accounts_fetch");
 export interface EmailSourceDiscovery {
   platform: string;
-  ready_client: "outlook-win" | "eml-dir" | null;
-  selected_client?: "outlook-win" | "eml-dir" | null;
+  ready_client: "outlook-win" | "eml-dir" | "imap" | null;
+  selected_client?: "outlook-win" | "eml-dir" | "imap" | null;
   sources: Array<{
     client: string;
     status: "ready" | "unavailable" | "unsupported";

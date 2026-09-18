@@ -47,11 +47,12 @@ def discover_sources() -> list[EmailSource]:
             )
         ]
 
-    clients = ("outlook-win", "eml-dir")
+    # 9/18: imap 排第一 —— 它是唯一不依赖邮件客户端的来源, 配了就该优先用。
+    clients = ("imap", "outlook-win", "eml-dir")
     if os.name == "nt":
         # COM may hang inside native code: a thread timeout cannot stop it.
         # Independent hidden processes keep the .eml source usable when Outlook hangs.
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        with ThreadPoolExecutor(max_workers=3) as executor:
             return list(executor.map(_discover_isolated, clients))
     return [_discover_client(client) for client in clients]
 
@@ -156,7 +157,7 @@ def discover_human() -> str:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2 or sys.argv[1] not in ("outlook-win", "eml-dir"):
+    if len(sys.argv) != 2 or sys.argv[1] not in ("imap", "outlook-win", "eml-dir"):
         raise SystemExit(2)
     try:
         source = _discover_client(sys.argv[1])
