@@ -124,12 +124,6 @@ pub fn selected_email_client() -> Option<String> {
         .filter(|client| matches!(client.as_str(), "outlook-win" | EML_DIR))
 }
 
-/// 返回用户在 Companion 中选择的邮件目录；不包含 YAML/env 的企业 override。
-pub fn selected_mail_dir() -> Option<String> {
-    let source = read_selected_source()?;
-    is_eml_dir(&source.client).then_some(source.root).flatten()
-}
-
 /// 返回邮件目录：企业 YAML 优先，其次是应用内选择。
 pub fn mail_dir_override() -> Option<String> {
     email_config().mail_dir.clone().or_else(|| {
