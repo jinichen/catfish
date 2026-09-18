@@ -516,6 +516,84 @@ jobs:
           echo "✓ exclude 生效 + node_modules 已进包 ($NM 条) · 归档共 $(wc -l < "$HLIST" | tr -d ' ') 条"
           ls -lh edge/companion-app/src-tauri/resources/windows/
 
+      # 9/18: 量"随包分发 uv 缓存"到底多大, 并在 Windows 上证明离线重放可行。
+      #
+      # 背景: 现场能上网但受国内防火墙限制。**国内镜像救不了这件事** —— uv.lock 把
+      # 2058 个包的下载地址钉死在 files.pythonhosted.org, `uv sync --locked` 就照那些
+      # URL 下载, 镜像压根不会被访问 (实测 -v 日志直接打出 pythonhosted 的请求)。
+      # 把镜像设成默认索引反而让锁失效:
+      #   "Resolving despite existing lockfile due to missing remote index:
+      #    `certifi` from `https://pypi.org/simple`"
+      # 那等于回到不校验哈希的 PyPI 重解析 —— 正是 b4bd403 刚修掉的那个退化。
+      # `--find-links` 也不行: 离线时 uv 只查缓存, 不看 find-links。
+      #
+      # 唯一可行的机制: 构建期预热 UV_CACHE_DIR → 随包发 → 装机期 --offline 重放。
+      # 已在 Linux 上端到端验过, 这一步是拿真 Windows wheel 复核 + 量体积。
+      #
+      # ⚠ 不要对缓存跑 `uv cache prune --ci`: 它名字像是为这个场景设计的, 但删掉的
+      #    正是离线要用的归档 —— 实测瘦身后离线 sync 立刻失败。
+      #
+      # 先只测量, 不改产物。拿到数字再决定整包发还是先砍 [all] 里用不到的 extra。
+      - name: Measure offline uv cache (measurement only, non-blocking)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $res    = "${{ github.workspace }}\edge\companion-app\src-tauri\resources\windows"
+          $uv     = Join-Path $res 'uv.exe'
+          $bundle = Join-Path $res 'hermes-agent-bundle.tar.gz'
+          $work   = Join-Path $env:RUNNER_TEMP 'uvcache-probe'
+          if (Test-Path $work) { Remove-Item -Recurse -Force $work }
+          New-Item -ItemType Directory -Force -Path $work | Out-Null
+
+          tar -xzf $bundle -C $work
+          $src = Join-Path $work 'hermes-agent-src'
+          if (-not (Test-Path $src)) { throw "解包后没有 hermes-agent-src" }
+
+          $env:UV_CACHE_DIR          = Join-Path $work 'cache'
+          $env:UV_PROJECT_ENVIRONMENT = Join-Path $work 'venv'
+          $env:UV_PYTHON             = '3.11'
+          $env:UV_LINK_MODE          = 'copy'
+
+          & $uv python install 3.11
+          Push-Location $src
+          $warm = Measure-Command { & $uv sync --extra all --locked }
+          $warmExit = $LASTEXITCODE
+          Pop-Location
+          if ($warmExit -ne 0) {
+              Write-Host "::warning::预热失败 exit=$warmExit —— 这本身就是个结论: Tier-0 在 CI 上都装不成"
+              exit 0
+          }
+
+          $raw = (Get-ChildItem $env:UV_CACHE_DIR -Recurse -File | Measure-Object Length -Sum).Sum
+          $tgz = Join-Path $work 'uv-cache.tar.gz'
+          tar -czf $tgz -C $env:UV_CACHE_DIR .
+          $packed = (Get-Item $tgz).Length
+          $msi = (Get-ChildItem $res -File | Measure-Object Length -Sum).Sum
+
+          # 真正的验证: 删掉 venv, 只留缓存, 断网重放
+          Remove-Item -Recurse -Force $env:UV_PROJECT_ENVIRONMENT -ErrorAction SilentlyContinue
+          Push-Location $src
+          & $uv sync --extra all --locked --offline
+          $offlineExit = $LASTEXITCODE
+          Pop-Location
+
+          $lines = @(
+            "## 离线 uv 缓存实测 (Windows / cp311)",
+            "",
+            "| 项 | 值 |",
+            "| --- | --- |",
+            ("| 预热耗时 | {0:n1} 分钟 |" -f $warm.TotalMinutes),
+            ("| 缓存原始体积 | {0:n0} MB |" -f ($raw/1MB)),
+            ("| 打包后 (tar.gz) | {0:n0} MB |" -f ($packed/1MB)),
+            ("| 现有 windows 资源合计 | {0:n0} MB |" -f ($msi/1MB)),
+            ("| 加上缓存后 | {0:n0} MB |" -f (($msi+$packed)/1MB)),
+            ("| **断网重放** | {0} |" -f $(if ($offlineExit -eq 0) { "✅ 成功 (机制可行)" } else { "❌ 失败 exit=$offlineExit" }))
+          )
+          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $lines | ForEach-Object { Write-Host $_ }
+          if ($offlineExit -ne 0) { Write-Host "::warning::断网重放失败 —— 随包发缓存这条路要重新评估" }
+
       # 必须放在所有 Tauri resources 生成之后：tauri.conf.json 会在 build
       # script 阶段校验每个 resources 路径。此前预编译放在资源生成之前，
       # cpython/chromium 等文件尚不存在，导致预编译失败并把后续资源步骤全部跳过。
