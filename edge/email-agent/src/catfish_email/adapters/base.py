@@ -188,6 +188,15 @@ class EmailAdapter(ABC):
     #: 是否支持写操作 (起草)
     supports_drafts: bool = False
 
+    #: 这个来源只能看, 不能动 —— 删除 / 标已读 / 起草一律 NotSupportedError。
+    #:
+    #: 9/18: 加它是因为多来源合并时要判"同一封邮件保留哪个来源的 id"。
+    #: 同一个邮箱可能既能从本地客户端读到, 又能从 IMAP 读到; 列表上看不出
+    #: 区别, 但**员工点删除时能不能删得掉取决于留下的是谁的 id**。只读的那
+    #: 个赢了, 列表照样好看, 一点删除就报错 —— 这种失败很难往"来源选错了"
+    #: 上想。所以能执行动作的来源优先, 见 cli_read._source_priority。
+    read_only: bool = False
+
     @abstractmethod
     def list_accounts(self) -> list[Account]:
         """列当前客户端配的所有邮箱账号。

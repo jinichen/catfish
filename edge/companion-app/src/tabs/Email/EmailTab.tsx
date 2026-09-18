@@ -39,7 +39,7 @@ import {
 import { filterAndRankEmails, type ActionFilter } from "../../lib/emailActionFilter";
 import { buildAskCatfishStarter } from "../../lib/emailHandoff";
 import { emailFailureHint } from "../../lib/emailPlatformHints";
-import { parseEmailSourceDiscovery, readyEmailSources } from "../../lib/emailSourceDiscovery";
+import { needsEmailSourceSetup, parseEmailSourceDiscovery } from "../../lib/emailSourceDiscovery";
 import ActionFilterChips from "./components/ActionFilterChips";
 import { useEmailStore } from "../../store/email";
 import { useUIStore } from "../../store/ui";
@@ -263,12 +263,14 @@ export default function EmailTab() {
     if (directory) await handleSelectEmailSource("eml-dir", directory);
   }, [handleSelectEmailSource]);
 
-  const readySourceCount = sourceDiscovery ? readyEmailSources(sourceDiscovery).length : 0;
-  const needsEmailSourceSetup = sourceDiscovery && (
-    Boolean(error) ||
-    readySourceCount === 0 ||
-    (readySourceCount > 1 && !sourceDiscovery.selected_client)
-  );
+  // 判据搬去 lib/emailSourceDiscovery.ts —— 它是条纯判断, 放那边能直接测,
+  // 而且这个文件已经贴着 800 行红线了。那边有一段注释讲清楚了为什么判据
+  // 是"有没有拿到邮件"而不是"认得几个来源"。
+  const needsSourceSetup = needsEmailSourceSetup({
+    discovery: sourceDiscovery,
+    noMailAtAll: !loading && items.length === 0,
+    failed: Boolean(error),
+  });
 
   // 评级(分诊)+钓鱼扫描的两个后台 effect —— 8/21 纯搬迁到
   // hooks/useEmailScanners.ts (本文件撞 800 行红线)。逻辑一行未改;
@@ -579,7 +581,10 @@ export default function EmailTab() {
               </span>
             </div>
           )}
-          {needsEmailSourceSetup && (
+          {/* sourceDiscovery 再判一次是给 TS 收窄类型用的 —— needsSourceSetup
+              为真时它一定不是 null (函数里第一句就是 `if (!discovery) return
+              false`), 但那个事实跨不过函数边界。 */}
+          {needsSourceSetup && sourceDiscovery && (
               <EmailSourceSetup
                 discovery={sourceDiscovery}
                 busy={sourceBusy}

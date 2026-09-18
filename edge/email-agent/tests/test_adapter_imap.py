@@ -97,7 +97,13 @@ class FakeIMAP:
     "这些测试不证明能读真文件"。同样的错不犯第二次。
     """
 
-    def __init__(self, folders=None, messages=None, uidvalidity=b"1", login_ok=True):
+    def __init__(
+        self, folders=None, messages=None, uidvalidity=b"1", login_ok=True,
+        capabilities=("IMAP4REV1", "ID", "XLIST"),
+    ):
+        #: 真机 (imap.chinatelecom.cn) 的 CAPABILITY 里**没有 UIDPLUS**,
+        #: 所以默认就不给 —— 夹具要长得像真机, 不是长得像理想服务器。
+        self.capabilities = capabilities
         self.folders = folders or REAL_FOLDERS
         # {folder_raw: [(uid, flags, raw_bytes), ...]}
         self.messages = messages if messages is not None else {
@@ -108,6 +114,13 @@ class FakeIMAP:
         self.login_ok = login_ok
         self.selected: str | None = None
         self.logged_out = False
+        #: 每次 SELECT 的 (文件夹, readonly) —— 读路径必须全是 readonly=True
+        self.selects: list[tuple[str, bool]] = []
+        #: 每次 STORE 的 (uid, 操作, flags), 给写操作的测试核对
+        self.stores: list[tuple[bytes, str, str]] = []
+        self.copies: list[tuple[bytes, str]] = []
+        self.expunges: list[bytes] = []
+        self.appends: list[tuple[str, str, bytes]] = []
 
     def login(self, user, password):
         if not self.login_ok:
@@ -121,7 +134,12 @@ class FakeIMAP:
         ]
 
     def select(self, folder, readonly=False):
-        assert readonly, "只读适配器绝不能用可写方式 SELECT"
+        # 9/18 下午: 原来这里是 `assert readonly, "只读适配器绝不能用可写方式
+        # SELECT"` —— 那时 adapter 确实一个写操作都没有。补了标已读/删除/
+        # 存草稿之后这条不变量不得不松, 但**不是松成"随便写"**: 改成记账,
+        # 由 test_only_write_operations_open_a_writable_folder 逐条核对哪些
+        # 操作开了可写。松一条不变量就得换一条更细的, 不能直接删掉。
+        self.selects.append((folder.strip('"'), readonly))
         self.selected = folder.strip('"')
         if self.selected not in dict(self.folders):
             return "NO", [b"no such mailbox"]
@@ -132,12 +150,27 @@ class FakeIMAP:
             return "OK", [self.uidvalidity]
         return "OK", [None]
 
+    @staticmethod
+    def _as_bytes(value):
+        """imaplib 的 uid() str/bytes 都收, 夹具也得都收 —— 我们自己的调用点
+        两种都有 (列清单拼 bytes, 读单封传 str)。夹具比真库挑剔的话, 测试会
+        挂在一个真机上根本不存在的问题上。"""
+        return value if isinstance(value, bytes) else str(value).encode()
+
     def uid(self, command, *args):
         box = self.messages.get(self.selected or "", [])
         if command == "search":
+            # HEADER Message-ID <x> —— APPEND 之后靠这个把新 UID 找回来
+            # (服务器没有 UIDPLUS 的 APPENDUID)。真按头过滤, 别让测试靠
+            # "反正返回全部, 取最后一个"蒙混过去。
+            if len(args) >= 3 and str(args[1]).upper() == "MESSAGE-ID":
+                needle = str(args[2]).encode()
+                return "OK", [
+                    b" ".join(uid for uid, _, raw in box if needle in raw)
+                ]
             return "OK", [b" ".join(uid for uid, _, _ in box)]
         if command == "fetch":
-            wanted = set(args[0].split(b","))
+            wanted = set(self._as_bytes(args[0]).split(b","))
             out = []
             for uid, flags, raw in box:
                 if uid not in wanted:
@@ -146,7 +179,46 @@ class FakeIMAP:
                 out.append((prefix, raw))
                 out.append(b")")
             return "OK", out
+        if command == "store":
+            # imaplib 的 uid() 两种都收 (str 和 bytes), 我们的调用点也是两
+            # 种都有 —— 取列表时拼的是 bytes, 写操作传的是 str uid。夹具
+            # 要跟真库一样宽容, 不然测试会挂在一个真机上不存在的问题上。
+            uid_arg = self._as_bytes(args[0])
+            self.stores.append((uid_arg, args[1], args[2]))
+            box = self.messages.get(self.selected or "", [])
+            wanted = set(uid_arg.split(b","))
+            add = args[1].startswith("+")
+            flag = args[2].strip("()")
+            self.messages[self.selected or ""] = [
+                (
+                    uid,
+                    (
+                        (flags + b" " + flag.encode()).strip()
+                        if add
+                        else flags.replace(flag.encode(), b"").strip()
+                    )
+                    if uid in wanted
+                    else flags,
+                    raw,
+                )
+                for uid, flags, raw in box
+            ]
+            return "OK", [b"STORE completed"]
+        if command == "copy":
+            self.copies.append((args[0], args[1].strip('"')))
+            return "OK", [b"COPY completed"]
+        if command == "expunge":
+            self.expunges.append(
+                args[0] if isinstance(args[0], str) else args[0].decode()
+            )
+            return "OK", [b"EXPUNGE completed"]
         return "NO", [b"unsupported"]
+
+    def append(self, folder, flags, date_time, message):
+        self.appends.append((folder.strip('"'), flags, message))
+        box = self.messages.setdefault(folder.strip('"'), [])
+        box.append((str(9000 + len(box)).encode(), flags.strip("()").encode(), message))
+        return "OK", [b"APPEND completed"]
 
     def logout(self):
         self.logged_out = True
@@ -326,17 +398,33 @@ def test_redacted_form_has_no_password():
 # ─────────────────────────────────────────────────────────────
 
 
-def test_writes_are_not_claimed(adapter):
-    msg = adapter.list_messages(ListFilter(folder="Inbox", limit=1))[0]
-    with pytest.raises(NotSupportedError):
-        adapter.delete_message(msg.id)
-    with pytest.raises(NotSupportedError):
-        adapter.mark_read(msg.id)
+def test_read_paths_never_open_a_writable_folder(adapter):
+    """列表 / 读单封 / 搜索一律只读打开。
 
+    9/18 下午补写操作之前, 这条是靠 FakeIMAP.select 里一句 assert 守着的
+    (`只读适配器绝不能用可写方式 SELECT`)。现在 adapter 确实要写了, 那句
+    assert 只好去掉 —— 但**不是就此不管**: 改成记账, 读路径这条单独钉。
 
-def test_select_is_always_readonly(adapter):
-    """FakeIMAP.select 里断言了 readonly —— 这条测的是我们没传可写。"""
+    可写地打开文件夹本身就有副作用: 有些服务器会在可写 SELECT 时把
+    \\Recent 清掉。读邮件不该动任何状态。
+    """
     adapter.list_messages(ListFilter(folder="*", limit=5))
+    msg = adapter.list_messages(ListFilter(folder="Inbox", limit=1))[0]
+    adapter.read_message(msg.id)
+    adapter.search("清单", folder="*")
+    assert adapter._fake.selects, "一次都没 SELECT? 那这条测试什么都没测到"
+    assert all(readonly for _, readonly in adapter._fake.selects), (
+        f"有读路径用可写方式打开了文件夹: "
+        f"{[f for f, ro in adapter._fake.selects if not ro]}"
+    )
+
+
+def test_only_write_operations_open_a_writable_folder(adapter):
+    """反过来: 真要写的时候必须是可写打开, 否则服务器会拒绝 STORE。"""
+    msg = adapter.list_messages(ListFilter(folder="Inbox", limit=1))[0]
+    adapter._fake.selects.clear()
+    adapter.mark_read(msg.id)
+    assert any(not readonly for _, readonly in adapter._fake.selects)
 
 
 def test_one_broken_message_does_not_empty_the_inbox(monkeypatch, caplog):

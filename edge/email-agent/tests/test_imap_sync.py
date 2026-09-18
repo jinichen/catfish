@@ -24,10 +24,10 @@ from pathlib import Path
 import pytest
 
 from catfish_email import index_store
-from catfish_email.adapters import imap_mail
+from catfish_email.adapters import imap_sync
 from catfish_email.adapters.base import ListFilter
-from catfish_email.adapters.imap_mail import (
-    ImapConfig,
+from catfish_email.adapters.imap_mail import ImapConfig
+from catfish_email.adapters.imap_sync import (
     ImapSyncAdapter,
     _parse_sync_key,
     sync_key,
@@ -126,7 +126,7 @@ def test_a_batch_is_one_round_trip_not_one_per_message(isolated_index, monkeypat
     到了五年的邮箱就是两千个往返, 跨广域网按 100ms 算三分多钟, 用户以为卡死。
     这条盯的是往返数, 不是取到的封数, 因为两者只在这个 bug 下才会不一样。
     """
-    monkeypatch.setattr(imap_mail, "SYNC_FETCH_BATCH", 100)
+    monkeypatch.setattr(imap_sync, "SYNC_FETCH_BATCH", 100)
     many = [
         (str(9000 + i).encode(), b"", _raw(f"第 {i} 封", day=1 + i % 28))
         for i in range(500)
@@ -145,14 +145,14 @@ def test_a_batch_is_one_round_trip_not_one_per_message(isolated_index, monkeypat
 
 def test_the_shipped_batch_size_is_actually_a_batch():
     """上一条把批量大小调小了才好数往返, 这条守的是**出厂值**没被改成 1。"""
-    assert imap_mail.SYNC_FETCH_BATCH >= 50
+    assert imap_sync.SYNC_FETCH_BATCH >= 50
 
 
 def test_index_is_capped_so_a_five_year_mailbox_syncs_in_bounded_time(
     isolated_index, monkeypatch
 ):
     """只索引最新的 SYNC_INDEX_CAP 封。索引是给"看收件箱"用的, 不是归档。"""
-    monkeypatch.setattr(imap_mail, "SYNC_INDEX_CAP", 10)
+    monkeypatch.setattr(imap_sync, "SYNC_INDEX_CAP", 10)
     many = [
         (str(9000 + i).encode(), b"", _raw(f"第 {i} 封", day=1 + i % 28))
         for i in range(50)

@@ -35,24 +35,38 @@ IMAP 是公开协议, 跟客户端版本、厂商策略完全无关。代价是�
 # 红线
 
   · 凭据只从环境变量/keyring 取, **绝不写日志、绝不进异常消息**
-  · 只读: SELECT 一律 readonly, 写操作走基类 NotSupportedError
+  · 写操作的入口只有三处 `_select(..., writable=True)`, 读路径一律只读打开。
+    9/18 下午之前这里写的是「只读: 写操作走基类 NotSupportedError」——
+    补齐标已读/删除/草稿/发送之后换成这条更细的。松一条不变量就得
+    换一条更细的, 不能直接划掉
   · id 里必须带 UIDVALIDITY —— 服务器重置它时旧 UID 全部失效, 不带的话
     会去拉到完全不相干的邮件
 """
 from __future__ import annotations
 
-import binascii
 import email
 import email.policy
 import imaplib
 import logging
 import os
 import re
+import tempfile
 from dataclasses import dataclass
 from email.message import EmailMessage
+from email.utils import formatdate, getaddresses, make_msgid
+from pathlib import Path
+from typing import Sequence
 from urllib.parse import quote, unquote
 
 from .. import rfc822_util as rfc822
+# 9/18 拆分: 文件夹名的编解码和角色识别跟 IMAP 协议无关, 单独一个文件
+from .imap_folders import (  # noqa: F401  utf7_encode 是给外部用的
+    FOLDER_ALIASES,
+    folder_matches,
+    folder_role,
+    utf7_decode,
+    utf7_encode,
+)
 from .base import (
     Account,
     Attachment,
@@ -66,6 +80,26 @@ from .base import (
 
 logger = logging.getLogger("catfish_email.adapters.imap_mail")
 
+
+def _bare_address(value: str) -> str:
+    """``张三 <a@b.cn>`` → ``a@b.cn``。SMTP 信封只认光地址。"""
+    parsed = getaddresses([value or ""])
+    return parsed[0][1].strip() if parsed else ""
+
+
+def smtp_send(config: "ImapConfig", raw: bytes, recipients: list[str]) -> None:
+    """发信在 smtp_send.py 里 —— 那不是 IMAP, 是另一个协议。
+
+    这里包一层只为把 SmtpError 翻译成 adapter 的异常体系, 让上层不用认识
+    两套错误类型。
+    """
+    from ..smtp_send import SmtpError, send  # noqa: PLC0415
+
+    try:
+        send(config, raw, recipients)
+    except SmtpError as error:
+        raise EmailAdapterError(str(error)) from None
+
 HOST_ENV = "CATFISH_IMAP_HOST"
 PORT_ENV = "CATFISH_IMAP_PORT"
 USER_ENV = "CATFISH_IMAP_USER"
@@ -77,121 +111,12 @@ DEFAULT_PORT = 993
 #: 列清单一次最多解析几封 —— 只取最新的那批, 不整箱拉
 LIST_FETCH_CAP = 200
 
-#: 索引每个文件夹最多留多少封 (取最新的)。索引服务的是"看收件箱", 不是全文
-#: 归档 —— 五年的邮箱全收进来, 首次同步的代价用户等不起。
-SYNC_INDEX_CAP = 2000
-#: 一个 FETCH 里塞多少封。往返数 = 变更数 / 这个值。
-SYNC_FETCH_BATCH = 200
 #: 网络超时。现场网络差时宁可报错, 不要挂死在 socket 上
 TIMEOUT_SECONDS = 30
-
-#: 解码后的文件夹名 → 统一角色。跟 eml_dir 的表同源 (9/18 实测 chinatelecom.cn
-#: 的六个文件夹正好全落在里面: 已发送/草稿箱/垃圾箱/已删除/广告文件夹)。
-FOLDER_ALIASES = {
-    "inbox": "Inbox", "收件箱": "Inbox",
-    "sent": "Sent", "sent items": "Sent", "已发送": "Sent", "已发送邮件": "Sent",
-    "drafts": "Drafts", "draft": "Drafts", "草稿": "Drafts", "草稿箱": "Drafts",
-    "trash": "Trash", "deleted": "Trash", "已删除": "Trash",
-    "junk": "Junk", "spam": "Junk", "垃圾箱": "Junk", "垃圾邮件": "Junk",
-}
 
 _LIST_LINE = re.compile(rb'^\((?P<flags>[^)]*)\) "(?P<delim>[^"]*)" (?P<name>.+)$')
 _UID_IN_FETCH = re.compile(rb"UID (\d+)")
 _FLAGS_IN_FETCH = re.compile(rb"FLAGS \(([^)]*)\)")
-
-
-# ============================================================
-# modified UTF-7 (RFC 3501 §5.1.3)
-# ============================================================
-#
-# IMAP 的文件夹名不是 UTF-8, 是一种改过的 UTF-7: `&` 起头、`-` 收尾, 中间是
-# base64 但用 `,` 代替 `/`。实测 chinatelecom.cn:
-#     &XfJT0ZAB-        → 已发送
-#     &Xn9USmWHTvZZOQ-  → 广告文件夹
-# Python 标准库没有这个 codec, 只能自己写。
-
-
-_B64_ALPHABET = re.compile(r"^[A-Za-z0-9+/]+$")
-
-
-def _decode_chunk(chunk: str) -> str:
-    """一段 modified-base64 → 文本; 解不出返回空串 (调用方回退原文)。
-
-    ⚠ 必须自己校验字母表: `binascii.a2b_base64` 默认**忽略**非法字符而不是报错,
-    所以 "&@@@@-" 会被静默解成空串 —— 文件夹名直接消失, 比保留乱码还糟。
-    (`strict_mode=True` 是 3.11+ 才有的, 不能依赖。)
-    """
-    b64 = chunk.replace(",", "/")
-    if not _B64_ALPHABET.match(b64):
-        return ""
-    b64 += "=" * (-len(b64) % 4)
-    try:
-        data = binascii.a2b_base64(b64)
-    except binascii.Error:
-        return ""
-    if not data or len(data) % 2:  # UTF-16-BE 必须是偶数字节
-        return ""
-    try:
-        return data.decode("utf-16-be")
-    except UnicodeDecodeError:
-        return ""
-
-
-def utf7_decode(raw: str) -> str:
-    out: list[str] = []
-    index = 0
-    while index < len(raw):
-        if raw[index] != "&":
-            out.append(raw[index])
-            index += 1
-            continue
-        end = raw.find("-", index)
-        if end == -1:  # 没有收尾符 —— 坏名字, 原样保留
-            out.append(raw[index:])
-            break
-        chunk = raw[index + 1 : end]
-        if chunk == "":
-            out.append("&")  # `&-` 是转义的字面 &
-        else:
-            out.append(_decode_chunk(chunk) or raw[index : end + 1])
-        index = end + 1
-    return "".join(out)
-
-
-def utf7_encode(text: str) -> str:
-    out: list[str] = []
-    buffer: list[str] = []
-
-    def flush() -> None:
-        if not buffer:
-            return
-        data = "".join(buffer).encode("utf-16-be")
-        b64 = binascii.b2a_base64(data, newline=False).decode("ascii").rstrip("=")
-        out.append("&" + b64.replace("/", ",") + "-")
-        buffer.clear()
-
-    for char in text:
-        if char == "&":
-            flush()
-            out.append("&-")
-        elif 0x20 <= ord(char) <= 0x7E:
-            flush()
-            out.append(char)
-        else:
-            buffer.append(char)
-    flush()
-    return "".join(out)
-
-
-def folder_role(decoded_name: str) -> str:
-    """解码后的文件夹名 → 统一角色; 认不出的原样保留。"""
-    return FOLDER_ALIASES.get(decoded_name.casefold(), decoded_name)
-
-
-def folder_matches(actual: str, requested: str) -> bool:
-    if requested == "*":
-        return True
-    return folder_role(actual).casefold() == folder_role(requested).casefold()
 
 
 # ============================================================
@@ -242,10 +167,20 @@ class _Remote:
 
 
 class ImapAdapter(EmailAdapter):
-    """只读 IMAP。写操作一律走基类的 NotSupportedError。"""
+    """IMAP 收发。
+
+    9/18 上午写的第一版是纯只读的, 下午补齐了写: 附件 / 标已读 / 删除 /
+    存草稿 / 发送。补的理由是达华那些机器上 IMAP 是**唯一**的路 —— 新版
+    Outlook 无 COM、Foxmail 加密, 只读意味着员工打开邮件页看得见、什么都
+    做不了, 按钮都在, 一点就报错。
+
+    写操作的入口只有三处 `_select(..., writable=True)`, grep 得到完整清单。
+    删除格外小心, 见 delete_message 里那段 EXPUNGE 的说明。
+    """
 
     name = "imap"
-    supports_drafts = False
+    supports_drafts = True
+    read_only = False
 
     def __init__(self, config: ImapConfig | None = None) -> None:
         self.config = config or config_from_env()
@@ -371,6 +306,152 @@ class ImapAdapter(EmailAdapter):
         found.sort(key=lambda r: rfc822.date_iso(r.message), reverse=True)
         return [self._to_message(r, full=False) for r in found[: max(limit, 0)]]
 
+    # ── 写操作 ────────────────────────────────────────────
+    #
+    # 9/18 补齐。在这之前这个 adapter 全部写操作都落到基类的
+    # NotSupportedError —— 在 macOS 上无所谓 (Apple Mail 还在), 但达华那些
+    # 机器上 IMAP 是唯一的路, 员工打开邮件页会发现: 看得见, 什么都做不了,
+    # 按钮都在, 一点就报错。
+
+    def export_attachment(self, message_id: str, filename: str) -> Path:
+        """把附件解到本地临时文件。
+
+        这本来就是个**纯读**操作 (FETCH 整封再 walk MIME), 之前落到基类的
+        NotSupportedError 纯粹是没写, 算 bug 不算限制。
+        """
+        msg = self._fetch_raw(message_id)
+        for part in msg.walk():
+            if part.get_filename() == filename:
+                payload = part.get_payload(decode=True) or b""
+                out_dir = Path(tempfile.mkdtemp(prefix="catfish-imap-att-"))
+                # 用原文件名落盘 —— 系统用默认程序打开时显示的是这个名字
+                out = out_dir / filename
+                out.write_bytes(payload)
+                return out
+        raise DataNotFoundError(f"这封邮件里没有名为 {filename!r} 的附件")
+
+    def mark_read(self, message_id: str, *, read: bool = True) -> None:
+        folder_raw, uid = self._locate(message_id, writable=True)
+        conn = self._connect()
+        op = "+FLAGS" if read else "-FLAGS"
+        typ, _ = conn.uid("store", uid, op, r"(\Seen)")
+        if typ != "OK":
+            raise EmailAdapterError(f"标记已读失败: uid={uid} {typ}")
+        # 索引里的 fingerprint 就是 flags 串, 下一轮对账自己就对上了, 不用
+        # 在这里手工改索引 (手工改就有了第二个真相来源)。
+
+    def delete_message(self, message_id: str) -> None:
+        r"""移到「已删除」, 而不是物理清除。
+
+        # 为什么这里格外小心
+
+        真机 CAPABILITY 里**没有 UIDPLUS, 也没有 MOVE** (9/18 实测
+        imap.chinatelecom.cn)。于是:
+
+          · 没有 MOVE       → 只能 COPY 到已删除, 再给原件打 \Deleted
+          · 没有 UIDPLUS    → 没有 `UID EXPUNGE`, 只有裸 `EXPUNGE`
+
+        **裸 EXPUNGE 会清掉当前文件夹里所有打了 \Deleted 的邮件** —— 包括
+        员工在 Foxmail / Outlook 上标了删除、还没执行压缩的那些。员工在鲶鱼
+        里删一封, 结果另一个客户端里攒了半年的待删邮件一起没了, 而且不可恢复。
+        这个代价换来的只是"邮件从服务器上早几天消失", 完全不值。
+
+        所以: 有 UIDPLUS 就用 `UID EXPUNGE` 只清这一封; 没有就**不 expunge**,
+        留着 \Deleted 标记 —— 邮件已经在已删除里了, 而我们自己的列表会把
+        \Deleted 的过滤掉, 员工看到的效果就是删掉了。原件最终由服务器或别的
+        客户端压缩时清理。
+        """
+        folder_raw, uid = self._locate(message_id, writable=True)
+        conn = self._connect()
+        trash = self._folder_by_role("Trash")
+        if trash and trash != folder_raw:
+            typ, _ = conn.uid("copy", uid, f'"{trash}"')
+            if typ != "OK":
+                raise EmailAdapterError(f"复制到已删除失败: uid={uid} {typ}")
+        else:
+            logger.warning("找不到「已删除」文件夹, 只打删除标记不留副本")
+        typ, _ = conn.uid("store", uid, "+FLAGS", r"(\Deleted)")
+        if typ != "OK":
+            raise EmailAdapterError(f"打删除标记失败: uid={uid} {typ}")
+        if self._has_capability("UIDPLUS"):
+            # 只清这一封 —— 别人标的 \Deleted 一根汗毛都不动
+            conn.uid("expunge", uid)
+        else:
+            logger.info(
+                "服务器没有 UIDPLUS, 不执行 EXPUNGE (裸 EXPUNGE 会连带清掉"
+                "别处标记的邮件)。邮件已在已删除里, 列表会过滤掉原件。"
+            )
+
+    def create_draft(
+        self, *, to: Sequence[str], subject: str, body: str,
+        cc: Sequence[str] = (), bcc: Sequence[str] = (),
+        in_reply_to: str | None = None, account: str | None = None,
+    ) -> str:
+        """APPEND 一封草稿到草稿箱, 返回它的 id。
+
+        没有 UIDPLUS 就拿不到 APPEND 之后的新 UID (那是 UIDPLUS 的
+        APPENDUID 提供的)。所以**我们自己生成 Message-ID**, APPEND 完再用
+        `UID SEARCH HEADER Message-ID` 把它找回来。自己生成还有个好处: 发送
+        时 Sent 里那份和草稿是同一个 Message-ID, 线程能对上。
+        """
+        assert self.config is not None
+        drafts = self._folder_by_role("Drafts")
+        if not drafts:
+            raise DataNotFoundError("服务器上找不到草稿箱")
+        msg_id = make_msgid(domain=self.config.user.rsplit("@", 1)[-1] or "catfish")
+        raw = self._build_rfc822(
+            to=to, subject=subject, body=body, cc=cc, bcc=bcc,
+            in_reply_to=in_reply_to, message_id=msg_id,
+        )
+        conn = self._connect()
+        typ, _ = conn.append(f'"{drafts}"', r"(\Draft \Seen)", None, raw)
+        if typ != "OK":
+            raise EmailAdapterError(f"存草稿失败: {typ}")
+        uid = self._uid_by_message_id(drafts, msg_id)
+        if uid is None:
+            raise EmailAdapterError(
+                "草稿存进去了, 但找不回它的 UID —— 请去邮箱网页版确认"
+            )
+        return self._pack_id(drafts, self._select(conn, drafts), uid)
+
+    def send_message(self, message_id: str) -> None:
+        """把草稿箱里的一封真发出去。
+
+        ⚠ 发送走的是 **SMTP**, 不是 IMAP —— 另一个协议、另一个端口、另一次
+        认证。IMAP 协议本身没有"发信"这回事。
+
+        红线 (抄自基类): **AI 永不自动调这个**, 必须是员工在界面上人工点
+        「发送」之后才走到这里。发出去不可撤销, 没有后悔药。
+
+        顺序是: SMTP 发 → APPEND 一份到已发送 → 删掉草稿。
+        先发后归档: 归档失败顶多是"已发送里少一封", 反过来则可能重复发送。
+        """
+        assert self.config is not None
+        raw_msg = self._fetch_raw(message_id)
+        recipients = [
+            addr for name in ("To", "Cc", "Bcc")
+            for addr in rfc822.addresses(raw_msg, name)
+        ]
+        recipients = [_bare_address(a) for a in recipients if _bare_address(a)]
+        if not recipients:
+            raise EmailAdapterError("这封草稿没有收件人")
+
+        smtp_send(self.config, raw_msg.as_bytes(), recipients)
+
+        conn = self._connect()
+        sent = self._folder_by_role("Sent")
+        if sent:
+            # 服务器不会因为你 SMTP 发了就自动往已发送塞一份, 得自己 APPEND
+            typ, _ = conn.append(f'"{sent}"', r"(\Seen)", None, raw_msg.as_bytes())
+            if typ != "OK":
+                logger.warning("邮件已发出, 但存进已发送失败: %s", typ)
+        else:
+            logger.warning("找不到「已发送」文件夹, 发出去的邮件没留底")
+        try:
+            self.delete_message(message_id)
+        except EmailAdapterError as error:
+            logger.warning("邮件已发出, 但草稿没删掉: %s", error)
+
     def check_new_mail(self, *, account: str | None = None) -> None:
         """空操作, 而且**不该报错**。
 
@@ -386,15 +467,123 @@ class ImapAdapter(EmailAdapter):
 
     # ── 内部 ──────────────────────────────────────────────
 
-    def _select(self, conn: imaplib.IMAP4_SSL, folder_raw: str) -> str:
-        """只读方式打开文件夹, 返回它的 UIDVALIDITY。"""
-        typ, _ = conn.select(f'"{folder_raw}"', readonly=True)
+    def _select(
+        self, conn: imaplib.IMAP4_SSL, folder_raw: str, *, writable: bool = False
+    ) -> str:
+        """打开文件夹, 返回它的 UIDVALIDITY。
+
+        **默认只读。** 9/18 之前是永远只读, 连参数都没有 —— 那时 adapter
+        本来就不支持任何写操作。现在补了标已读 / 删除 / 存草稿, 这条不变量
+        不得不松, 但松的方式是**每个调用点自己声明要不要写**, 而不是全局
+        改成可写:
+
+            读路径 (list / read / search / 同步) 一律 writable=False
+            只有 mark_read / delete / append 这三处显式传 True
+
+        这样"哪几行可能改动员工的邮箱"是能一眼数清的 —— 全仓 grep
+        `writable=True` 就是完整清单。
+        """
+        typ, _ = conn.select(f'"{folder_raw}"', readonly=not writable)
         if typ != "OK":
             raise DataNotFoundError(f"打不开文件夹: {utf7_decode(folder_raw)}")
         typ, data = conn.response("UIDVALIDITY")
         if typ == "OK" and data and data[0]:
             return data[0].decode("ascii", "replace").strip()
         return "0"
+
+    def _locate(self, message_id: str, *, writable: bool = False) -> tuple[str, str]:
+        """解开 id, 打开它所在的文件夹, 校验 UIDVALIDITY。返回 (folder_raw, uid)。
+
+        UIDVALIDITY 这一步不能省: 服务器重建邮箱后 UID 会从头发放, 拿着旧 id
+        去 STORE 就是**对另一封不相干的邮件动手**。读错了顶多显示错, 写错了
+        是删错邮件。
+        """
+        folder_raw, uidvalidity, uid = self._unpack_id(message_id)
+        conn = self._connect()
+        current = self._select(conn, folder_raw, writable=writable)
+        if current != uidvalidity:
+            raise DataNotFoundError(
+                f"邮箱已重建 (UIDVALIDITY {uidvalidity} → {current}), 这条 id 失效了, "
+                "请重新拉取列表"
+            )
+        return folder_raw, uid
+
+    def _fetch_raw(self, message_id: str) -> EmailMessage:
+        """把整封原始邮件取下来解析好。"""
+        folder_raw, uid = self._locate(message_id)
+        conn = self._connect()
+        typ, data = conn.uid("fetch", uid, "(UID FLAGS BODY.PEEK[])")
+        if typ != "OK":
+            raise DataNotFoundError(f"取邮件失败: uid={uid}")
+        parsed = self._parse_fetch(
+            data, folder_raw, folder_role(utf7_decode(folder_raw)), "0"
+        )
+        if not parsed:
+            raise DataNotFoundError(f"邮件不存在或已删除: uid={uid}")
+        return parsed[0].message
+
+    def _folder_by_role(self, role: str) -> str | None:
+        """按角色找服务器上的文件夹原名 (「已删除」「草稿箱」这些)。
+
+        只能靠**解码后的名字**认 —— 真机上 flags 只有 (\\Marked), 没有
+        \\Trash / \\Drafts 这些 special-use 标记 (9/18 实测)。
+        """
+        for raw, decoded in self.folders():
+            if folder_role(decoded) == role:
+                return raw
+        return None
+
+    def _uid_by_message_id(self, folder_raw: str, msg_id: str) -> str | None:
+        """按 Message-ID 在一个文件夹里找 UID。
+
+        APPEND 之后拿新 UID 的唯一办法 (服务器没有 UIDPLUS 的 APPENDUID)。
+        """
+        conn = self._connect()
+        self._select(conn, folder_raw)
+        try:
+            typ, data = conn.uid("search", None, "HEADER", "Message-ID", msg_id)
+        except imaplib.IMAP4.error:
+            return None
+        if typ != "OK" or not data or not data[0]:
+            return None
+        uids = data[0].split()
+        return uids[-1].decode("ascii") if uids else None
+
+    def _build_rfc822(
+        self, *, to: Sequence[str], subject: str, body: str,
+        cc: Sequence[str], bcc: Sequence[str],
+        in_reply_to: str | None, message_id: str,
+    ) -> bytes:
+        """拼一封纯文本邮件。
+
+        UTF-8 + base64 传输编码由 EmailMessage 自己处理 —— 中文正文和中文
+        主题都不用我们手工编码 (国内企业邮箱那些 =?GB2312?B?= 我们只负责读,
+        自己发一律 UTF-8)。
+        """
+        assert self.config is not None
+        msg = EmailMessage()
+        msg["From"] = self.config.user
+        msg["To"] = ", ".join(to)
+        if cc:
+            msg["Cc"] = ", ".join(cc)
+        if bcc:
+            msg["Bcc"] = ", ".join(bcc)
+        msg["Subject"] = subject
+        msg["Date"] = formatdate(localtime=True)
+        msg["Message-ID"] = message_id
+        if in_reply_to:
+            msg["In-Reply-To"] = in_reply_to
+            msg["References"] = in_reply_to
+        msg.set_content(body)
+        return msg.as_bytes()
+
+    def _has_capability(self, name: str) -> bool:
+        conn = self._connect()
+        try:
+            caps = conn.capabilities
+        except Exception:  # noqa: BLE001
+            return False
+        return name.upper() in {c.upper() for c in caps}
 
     @staticmethod
     def _search_uids(conn: imaplib.IMAP4_SSL, needle: str) -> list[bytes]:
@@ -478,6 +667,13 @@ class ImapAdapter(EmailAdapter):
 
     def _matches(self, remote: _Remote, filt: ListFilter) -> bool:
         msg = remote.message
+        # 打了 \Deleted 的不进列表。
+        #
+        # 我们删邮件时故意不执行 EXPUNGE (见 delete_message 里那段: 裸
+        # EXPUNGE 会连带清掉员工在别的客户端标记待删的邮件), 所以原件会
+        # 带着 \Deleted 留在原文件夹里。不过滤的话员工删完一刷新它又回来了。
+        if r"\Deleted" in remote.flags:
+            return False
         if filt.sender_contains and filt.sender_contains.casefold() not in rfc822.header(
             msg, "From"
         ).casefold():
@@ -524,7 +720,11 @@ class ImapAdapter(EmailAdapter):
             has_attachments=bool(attachments) or "X-Has-Attach: yes" in str(msg),
             attachments=attachments if full else (),
             body_text=body if full else body[:200] + ("…" if len(body) > 200 else ""),
-            body_html=rfc822.body_html(msg) if full else "",
+            # 内嵌图的 cid: 换成 data: —— 只在读整封时做, 列清单不该为了
+            # 缩略图去解几百 KB 的 base64 (full=False 时 body_html 本来就是空的)。
+            body_html=(
+                rfc822.embed_inline_images(rfc822.body_html(msg), msg) if full else ""
+            ),
             in_reply_to=rfc822.header(msg, "In-Reply-To") or None,
             references=rfc822.header(msg, "References") or None,
             message_id=rfc822.header(msg, "Message-ID") or None,
@@ -542,173 +742,3 @@ class ImapAdapter(EmailAdapter):
             raise DataNotFoundError(f"非法的 imap message id: {message_id}")
         return unquote(parts[1]), parts[2], parts[3]
 
-
-# ============================================================
-# 增量同步 (9/18)
-# ============================================================
-#
-# 服务器**没有** CONDSTORE / QRESYNC (真机 CAPABILITY 实测), 所以拿不到
-# "自从上次以来变了什么"。但不需要 —— IMAP 的两个性质就够了:
-#
-#   · UID 在一个 UIDVALIDITY 周期内**永不改变、永不复用**
-#   · `UID FETCH <range> (FLAGS)` 不带正文, 很便宜
-#
-# 于是: 先廉价地拉一遍全部 (uid, flags), 跟索引里的对账, 只对新增的和 flags
-# 变了的去取邮件头。57 封的邮箱一次对账就是一个 FETCH FLAGS 往返。
-#
-# fingerprint 用 flags: UID 不变, 会变的只有已读/标记这些。
-
-
-def sync_key(folder_raw: str, uidvalidity: str, uid: str) -> str:
-    """索引里的主键。**必须带 UIDVALIDITY** —— 服务器重建邮箱后 UID 会从头
-    发放, 不带的话新旧两封会撞在同一个 key 上, 而且内容完全不相干。"""
-    return f"imap:{folder_raw}:{uidvalidity}:{uid}"
-
-
-def _parse_sync_key(key: str) -> tuple[str, str, str]:
-    """`imap:<folder>:<uidvalidity>:<uid>` → 三段。
-
-    folder 名里可能有冒号 (IMAP 分隔符通常是 / 或 . , 但没规定不能是 :),
-    所以从**右边**切两刀, 剩下的都算 folder。
-    """
-    body = key[len("imap:"):] if key.startswith("imap:") else key
-    head, _, uid = body.rpartition(":")
-    folder_raw, _, uidvalidity = head.rpartition(":")
-    return folder_raw, uidvalidity, uid
-
-
-class ImapSyncAdapter(ImapAdapter):
-    """带本地索引的 IMAP。列清单走索引, 只有新增/变更的才上服务器取。
-
-    跟基类的分工: 基类是"直连, 每次都问服务器", 这个是"先对账再查本地"。
-    ``--client imap`` 走的是这个 (inbox.py), 基类现在只作为它的实现基础 ——
-    读单封、搜索、文件夹列表这些非热路径原样继承, 不经过索引。
-
-    **正文不进索引**: 索引里只有列表要显示的那些字段 + 一段 snippet。读一封
-    完整邮件仍旧直连服务器。理由是员工邮件正文落盘的面越小越好, 而列表页
-    本来也不显示正文。
-    """
-
-    name = "imap_sync"
-
-    def sync_folder(self, folder_raw: str, role: str) -> "object":
-        """把一个文件夹对账进索引, 返回 ReconcileStats。
-
-        三步, 每步的成本都要算清楚:
-
-          ① 一个往返, 问全部 (uid, flags)  —— 不带正文, 便宜
-          ② 一个往返, 问"要取哪些"          —— 纯本地 SQLite
-          ③ ⌈变更数/SYNC_FETCH_BATCH⌉ 个往返 —— 只有这步贵
-
-        稳定期 ③ 是 0 个往返 (什么都没变)。**绝不能退化成"一封一个往返"** ——
-        首次同步 SYNC_INDEX_CAP 封, 跨广域网按 100ms 算那是三分多钟。
-        """
-        from .. import index_store  # noqa: PLC0415 — 避免 adapter 装载时连 DB
-
-        conn = self._connect()
-        uidvalidity = self._select(conn, folder_raw)
-
-        # ① 廉价地问一遍"现在有哪些, 各自什么状态"
-        typ, data = conn.uid("search", None, "ALL")
-        uids = data[0].split() if typ == "OK" and data and data[0] else []
-        # UID 递增 → 尾部就是最新的。索引只留最近这批: 它服务的是"看收件箱",
-        # 不是全文归档。五年的邮箱全收进来, 首次同步的代价用户等不起。
-        uids = uids[-SYNC_INDEX_CAP:]
-        pairs: list[tuple[str, str]] = []
-        if uids:
-            typ, flag_data = conn.uid("fetch", b",".join(uids), "(UID FLAGS)")
-            if typ == "OK":
-                for line in flag_data or []:
-                    raw = line if isinstance(line, bytes) else (line[0] if isinstance(line, tuple) else b"")
-                    uid_match = _UID_IN_FETCH.search(raw)
-                    if uid_match is None:
-                        continue
-                    flags_match = _FLAGS_IN_FETCH.search(raw)
-                    flags = flags_match.group(1).decode("ascii", "replace") if flags_match else ""
-                    pairs.append(
-                        (sync_key(folder_raw, uidvalidity, uid_match.group(1).decode()), flags)
-                    )
-
-        assert self.config is not None
-        db = index_store.open_index()
-        try:
-            # ② 先问清楚要取哪些, 再**成批**取 —— 别让 reconcile 的 parse
-            #    回调变成一封一个往返。
-            wanted = index_store.changed_keys(
-                db, account=self.config.user, folder=role, items=pairs
-            )
-            fetched: dict[str, Message] = {}
-            for i in range(0, len(wanted), SYNC_FETCH_BATCH):
-                batch = wanted[i : i + SYNC_FETCH_BATCH]
-                uid_bytes = [_parse_sync_key(k)[2].encode() for k in batch]
-                for remote in self._fetch_uids(
-                    conn, folder_raw, role, uidvalidity, uid_bytes, True
-                ):
-                    key = sync_key(folder_raw, remote.uidvalidity, remote.uid)
-                    fetched[key] = self._to_message(remote, full=False)
-
-            # ③ 取不到的那些 (SEARCH 之后、FETCH 之前被删了) 让 reconcile 记
-            #    成 error 跳过 —— 不进索引, 下一轮自然就不在 pairs 里了。
-            stats = index_store.reconcile(
-                db, account=self.config.user, folder=role,
-                items=pairs, parse=lambda key: fetched[key],
-            )
-        finally:
-            db.close()
-        logger.info(
-            "imap_sync[%s/%s]: 服务器 %d · 没变 %d · 取 %d · 删 %d · %dms",
-            self.config.user, role, stats.scanned, stats.unchanged,
-            stats.parsed, stats.removed, stats.elapsed_ms,
-        )
-        return stats
-
-    def sync_all(self) -> dict[str, object]:
-        """所有认识的文件夹各对账一次。返回 {角色: ReconcileStats}。"""
-        out: dict[str, object] = {}
-        for raw, decoded in self.folders():
-            role = folder_role(decoded)
-            try:
-                out[role] = self.sync_folder(raw, role)
-            except Exception as error:  # noqa: BLE001 — 一个文件夹坏不拖垮其余
-                logger.warning("imap_sync: 文件夹 %s 同步失败: %s", decoded, error)
-        return out
-
-    def check_new_mail(self, *, account: str | None = None) -> None:
-        """界面上的「收信」: 立刻把所有文件夹对一遍账。
-
-        基类那个是空操作 (直连, 列表本来就是现问服务器的)。带索引之后就有了
-        实质内容 —— 列表读的是索引, 「收信」就该是"现在就去把索引刷新了",
-        而且是**全部文件夹**, 不只当前在看的那个。
-        """
-        self.sync_all()
-
-    def list_messages(self, filt: ListFilter) -> list[Message]:
-        """先对账, 再从本地索引出结果。
-
-        对账失败**不让列表挂掉** —— 索引里还有上一轮的数据, 给旧数据远好过
-        给一个空收件箱 (今天在 Foxmail 上看够了空收件箱有多难排查)。
-        """
-        from .. import index_store  # noqa: PLC0415
-
-        try:
-            for raw, decoded in self.folders():
-                role = folder_role(decoded)
-                if folder_matches(role, filt.folder):
-                    self.sync_folder(raw, role)
-        except Exception as error:  # noqa: BLE001
-            logger.warning("imap_sync: 对账失败, 用索引里的旧数据: %s", error)
-
-        assert self.config is not None
-        db = index_store.open_index()
-        try:
-            rows: list[Message] = []
-            for raw, decoded in self.folders() if filt.folder == "*" else [(None, filt.folder)]:
-                role = folder_role(decoded) if raw is not None else filt.folder
-                rows.extend(index_store.query_messages(
-                    db, account=self.config.user, folder=role,
-                    unread_only=filt.unread_only, limit=filt.limit,
-                ))
-        finally:
-            db.close()
-        rows.sort(key=lambda m: m.date, reverse=True)
-        return rows[: max(filt.limit, 0)]

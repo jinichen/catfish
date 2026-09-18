@@ -56,15 +56,22 @@ def get_adapter(client: str | None = None) -> EmailAdapter:
     # 5/18 BL-EMAIL-APPLEMAIL: macOS 默认 Apple Mail.app 优先 (100% 装机), Foxmail 兜底
     system = platform.system()
     candidates: list[str]
-    # 配了 IMAP 就优先 —— 它是唯一不看客户端脸色的路径 (9/18)。
-    imap_first = ["imap"] if _imap_configured() else []
+    # 配了 IMAP 就把它加进候选, 但**排在本地客户端后面**。
+    #
+    # 9/18 最初写的是排第一, 理由"它是唯一不看客户端脸色的路径"。那个理由
+    # 在 Windows 上成立 (新版 Outlook 无 COM、Foxmail 加密), 在 macOS 上不
+    # 成立 —— Apple Mail 好好的, 而且它能删能标已读, IMAP 只能看。让只读的
+    # 来源赢是拿功能换了个没必要的"独立性"。
+    #
+    # 本地客户端取不到时它们会抛异常, 自然落到 IMAP, 所以排最后不影响兜底。
+    imap_last = ["imap"] if _imap_configured() else []
     if system == "Darwin":
-        candidates = imap_first + ["apple-mail", "foxmail-mac"]
+        candidates = ["apple-mail", "foxmail-mac"] + imap_last
     elif system == "Windows":
         # 配置了邮件目录就直接用它，避免无关的 Outlook COM 探测和误导性错误。
         # 没配置时保留自动探测。
         local = ["eml-dir"] if _eml_dir_configured() else ["outlook-win", "eml-dir"]
-        candidates = imap_first + local
+        candidates = local + imap_last
     else:
         raise DataNotFoundError(
             f"catfish-email 暂不支持 {system} 平台 (仅 macOS / Windows)"
@@ -100,12 +107,14 @@ def get_all_adapters() -> list[EmailAdapter]:
         所有能初始化的 adapter list (按平台候选顺序). 全挂返空 list (caller 自决怎么报).
     """
     system = platform.system()
-    imap_first = ["imap"] if _imap_configured() else []
+    # IMAP 排最后, 理由同 get_adapter()。这里是合并列表, 顺序只影响去重时的
+    # 先后, 而去重本身已经按"能不能执行动作"定优先级 (cli_read._source_priority)。
+    imap_last = ["imap"] if _imap_configured() else []
     if system == "Darwin":
-        candidates = imap_first + ["apple-mail", "foxmail-mac"]
+        candidates = ["apple-mail", "foxmail-mac"] + imap_last
     elif system == "Windows":
         local = ["eml-dir"] if _eml_dir_configured() else ["outlook-win", "eml-dir"]
-        candidates = imap_first + local
+        candidates = local + imap_last
     else:
         return []
 
@@ -178,7 +187,7 @@ def _get_adapter_explicit(client: str) -> EmailAdapter:
         # 用带索引的那个: 列清单是热路径 (后台每隔几分钟就要问一次), 走索引
         # 之后稳定期一次对账只剩一个 FETCH FLAGS 往返。读单封仍旧直连服务器
         # (继承自基类) —— 正文不进索引, 索引里只有列表要用的那些字段。
-        from .adapters.imap_mail import ImapSyncAdapter  # noqa: PLC0415
+        from .adapters.imap_sync import ImapSyncAdapter  # noqa: PLC0415
         return ImapSyncAdapter()
     if client in ("eml-dir", "foxmail-win"):
         # 9/18: foxmail-win 这条线删了 —— Foxmail 7.2 把邮件文件加密了,

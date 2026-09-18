@@ -46,23 +46,45 @@ def _message_dedupe_key(adapter_name: str, message: Any) -> tuple[str, ...]:
     return ("adapter", adapter_name, message.folder, message.id)
 
 
-def _source_priority(adapter_name: str, message: Any) -> int:
-    """Prefer a live-client id over a local-cache id when records collide.
+def _source_priority(
+    adapter_name: str, message: Any, read_only_adapters: frozenset[str] = frozenset()
+) -> int:
+    """同一封邮件被多个来源读到时, 留哪个来源的 id。
 
+    判据是**这个 id 还能不能用来做事**, 不是哪个来源"更新"或"更快":
+
+        2  能执行动作的客户端 id (Apple Mail 的 AppleScript id / Outlook)
+        1  只读来源 (IMAP) —— 能看, 删除 / 标已读一律 NotSupportedError
+        0  本地缓存 id (EMLX) —— 只是个文件, 动作路由不回客户端
+
+    Prefer a live-client id over a local-cache id when records collide.
     The EMLX record is still a valid fallback and remains usable when it is
     the only record.  When both representations exist, the AppleScript id
     keeps the normal account label and the existing Mail.app action route.
+
+    9/18 加只读这一档: 配了 IMAP 之后同一个邮箱会同时被本地客户端和 IMAP
+    读到。两边都有 Message-ID, 去重能合上, 但**留下谁的 id 决定了删除按钮
+    还能不能用**。没有这一档的话两者都是 1, 先到先得 —— 而 IMAP 当时排在
+    候选第一位, 于是它赢, 员工点删除才发现废了。列表上一点征兆都没有。
     """
-    del adapter_name  # reserved for future adapter-specific priorities
-    return 0 if "|emlx:" in message.id else 1
+    if "|emlx:" in message.id:
+        return 0
+    return 1 if adapter_name in read_only_adapters else 2
 
 
-def _dedupe_messages(messages: list[tuple[str, Any]]) -> list[tuple[str, Any]]:
+def _dedupe_messages(
+    messages: list[tuple[str, Any]],
+    read_only_adapters: frozenset[str] = frozenset(),
+) -> list[tuple[str, Any]]:
     """Deduplicate messages after all adapters/accounts have been queried.
 
     Keep input order for unique messages and replace a duplicate only when a
     higher-quality source is available.  This makes the result deterministic
     while preserving the adapter/id pair needed by ``read`` and actions.
+
+    read_only_adapters 由调用方从**真实的 adapter 对象**算出来 (adapter.read_only),
+    不在这里按名字写死 —— 写死的话加一个只读来源就得记得回来改这里, 而漏改
+    的症状是"删除按钮偶尔失灵", 没人会往这儿查。
     """
     result: list[tuple[str, Any]] = []
     positions: dict[tuple[str, ...], int] = {}
@@ -74,8 +96,8 @@ def _dedupe_messages(messages: list[tuple[str, Any]]) -> list[tuple[str, Any]]:
             result.append((adapter_name, message))
             continue
         current_adapter, current_message = result[existing_position]
-        if _source_priority(adapter_name, message) > _source_priority(
-            current_adapter, current_message
+        if _source_priority(adapter_name, message, read_only_adapters) > _source_priority(
+            current_adapter, current_message, read_only_adapters
         ):
             result[existing_position] = (adapter_name, message)
     return result
@@ -168,7 +190,12 @@ def _cmd_list(adapters: list[EmailAdapter], args) -> int:
 
     # 同一 RFC 邮件可能同时来自 AppleScript 和 EMLX 索引；先去重，再排序
     # 和 trim，否则同一封邮件会占用两个列表位置。
-    msgs = _dedupe_messages(msgs)
+    #
+    # 9/18: 只读来源 (IMAP) 从真实 adapter 对象上取, 不按名字写死 —— 决定
+    # 留谁的 id 就是决定删除按钮还能不能用, 见 _source_priority。
+    msgs = _dedupe_messages(
+        msgs, frozenset(a.name for a in adapters if getattr(a, "read_only", False))
+    )
 
     # 跨账号按 date 降序合并, 再 trim 到 limit
     msgs.sort(key=lambda am: am[1].date or "", reverse=True)
