@@ -19,6 +19,13 @@ from .adapters.base import ClientNotRunningError, DataNotFoundError, EmailAdapte
 logger = logging.getLogger("catfish_email.inbox")
 
 
+def _imap_configured() -> bool:
+    """IMAP 三件套齐了没。齐了就优先用它 —— 不依赖任何邮件客户端。"""
+    from .adapters.imap_mail import HOST_ENV, PASSWORD_ENV, USER_ENV  # noqa: PLC0415
+
+    return all(os.environ.get(var, "").strip() for var in (HOST_ENV, USER_ENV, PASSWORD_ENV))
+
+
 def _eml_dir_configured() -> bool:
     """用户是不是已经指定了邮件目录 (新键名或老键名)。
 
@@ -35,7 +42,7 @@ def get_adapter(client: str | None = None) -> EmailAdapter:
     """工厂: 返回合适的 adapter。
 
     Args:
-        client: 显式指定 'apple-mail' / 'foxmail-mac' / 'outlook-win' / 'eml-dir'
+        client: 显式指定 'apple-mail' / 'foxmail-mac' / 'outlook-win' / 'eml-dir' / 'imap'
                 None 则按平台自动挑 (Mac → 优先 Apple Mail, 没装就 Foxmail; Win 同理)
 
     Raises:
@@ -49,12 +56,15 @@ def get_adapter(client: str | None = None) -> EmailAdapter:
     # 5/18 BL-EMAIL-APPLEMAIL: macOS 默认 Apple Mail.app 优先 (100% 装机), Foxmail 兜底
     system = platform.system()
     candidates: list[str]
+    # 配了 IMAP 就优先 —— 它是唯一不看客户端脸色的路径 (9/18)。
+    imap_first = ["imap"] if _imap_configured() else []
     if system == "Darwin":
-        candidates = ["apple-mail", "foxmail-mac"]
+        candidates = imap_first + ["apple-mail", "foxmail-mac"]
     elif system == "Windows":
         # 配置了邮件目录就直接用它，避免无关的 Outlook COM 探测和误导性错误。
         # 没配置时保留自动探测。
-        candidates = ["eml-dir"] if _eml_dir_configured() else ["outlook-win", "eml-dir"]
+        local = ["eml-dir"] if _eml_dir_configured() else ["outlook-win", "eml-dir"]
+        candidates = imap_first + local
     else:
         raise DataNotFoundError(
             f"catfish-email 暂不支持 {system} 平台 (仅 macOS / Windows)"
@@ -90,10 +100,12 @@ def get_all_adapters() -> list[EmailAdapter]:
         所有能初始化的 adapter list (按平台候选顺序). 全挂返空 list (caller 自决怎么报).
     """
     system = platform.system()
+    imap_first = ["imap"] if _imap_configured() else []
     if system == "Darwin":
-        candidates = ["apple-mail", "foxmail-mac"]
+        candidates = imap_first + ["apple-mail", "foxmail-mac"]
     elif system == "Windows":
-        candidates = ["eml-dir"] if _eml_dir_configured() else ["outlook-win", "eml-dir"]
+        local = ["eml-dir"] if _eml_dir_configured() else ["outlook-win", "eml-dir"]
+        candidates = imap_first + local
     else:
         return []
 
@@ -159,6 +171,11 @@ def _get_adapter_explicit(client: str) -> EmailAdapter:
         # inbox.py 会自动 fallback 到 eml-dir 候选.
         from .adapters.outlook_win import OutlookWinAdapter
         return OutlookWinAdapter()
+    if client == "imap":
+        # 9/18: 唯一不依赖邮件客户端的路径。两条本地路都被厂商堵死了 ——
+        # Foxmail 7.2 加密邮件文件, 新版 Outlook 既无 COM 也无本地数据。
+        from .adapters.imap_mail import ImapAdapter  # noqa: PLC0415
+        return ImapAdapter()
     if client in ("eml-dir", "foxmail-win"):
         # 9/18: foxmail-win 这条线删了 —— Foxmail 7.2 把邮件文件加密了,
         # 本地解不出正文, 读它的私有存储没有意义。改成读客户端导出的 .eml。
@@ -169,5 +186,5 @@ def _get_adapter_explicit(client: str) -> EmailAdapter:
         return EmlDirAdapter()
     raise ValueError(
         f"未知 client: {client!r} "
-        f"(合法: apple-mail / foxmail-mac / outlook-win / eml-dir)",
+        f"(合法: apple-mail / foxmail-mac / outlook-win / eml-dir / imap)",
     )

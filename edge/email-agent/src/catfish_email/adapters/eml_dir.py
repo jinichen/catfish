@@ -44,12 +44,11 @@ import logging
 import os
 import re
 from dataclasses import dataclass
-from email.header import decode_header, make_header
 from email.message import EmailMessage
-from email.utils import getaddresses, parsedate_to_datetime
 from pathlib import Path
 from urllib.parse import quote, unquote
 
+from .. import rfc822_util as rfc822
 from .base import Account, Attachment, DataNotFoundError, EmailAdapter, ListFilter, Message
 
 logger = logging.getLogger("catfish_email.adapters.eml_dir")
@@ -417,78 +416,19 @@ def _folder_matches(actual: str, requested: str) -> bool:
     )
 
 
-def _header(msg: EmailMessage, name: str) -> str:
-    value = msg.get(name)
-    return str(value) if value else ""
-
-
-def _subject(msg: EmailMessage) -> str:
-    """``=?GB2312?B?...?=`` → 中文。坏编码原样返回, 好过丢。"""
-    raw = _header(msg, "Subject")
-    if not raw:
-        return ""
-    try:
-        return str(make_header(decode_header(raw)))
-    except Exception:  # noqa: BLE001
-        return raw
-
-
-def _addresses(msg: EmailMessage, name: str) -> list[str]:
-    return [
-        f"{display} <{address}>" if display else address
-        for display, address in getaddresses(msg.get_all(name, []))
-        if address
-    ]
-
-
-def _format_address(raw: str) -> str:
-    found = getaddresses([raw])
-    if not found:
-        return raw.strip()
-    display, address = found[0]
-    return f"{display} <{address}>" if display else address
-
-
-def _date_key(msg: EmailMessage) -> str:
-    raw = _header(msg, "Date")
-    if not raw:
-        return ""
-    try:
-        return parsedate_to_datetime(raw).isoformat()
-    except (TypeError, ValueError):
-        return ""
-
-
-def _body_text(msg: EmailMessage) -> str:
-    try:
-        part = msg.get_body(preferencelist=("plain",))
-    except Exception:  # noqa: BLE001
-        part = None
-    if part is None:
-        return ""
-    try:
-        return part.get_content()
-    except Exception:  # noqa: BLE001
-        return ""
-
-
-def _body_html(msg: EmailMessage) -> str:
-    try:
-        part = msg.get_body(preferencelist=("html",))
-        return part.get_content() if part is not None else ""
-    except Exception:  # noqa: BLE001
-        return ""
-
-
-def _has_attachments(msg: EmailMessage) -> bool:
-    return any(True for _ in msg.iter_attachments())
-
-
-def _attachment_meta(msg: EmailMessage) -> list[tuple[str, int, str]]:
-    out: list[tuple[str, int, str]] = []
-    for part in msg.iter_attachments():
-        payload = part.get_payload(decode=True) or b""
-        out.append(
-            (part.get_filename() or "(未命名附件)", len(payload), part.get_content_type())
-        )
-    return out
+# ─── RFC822 取值: 逻辑在 rfc822_util, 这里只留别名 ───────────
+#
+# 9/18: imap_mail 要用同一套 (主题都是 =?GB2312?B?=, 地址、日期、附件元信息
+# 的处理一模一样)。抄第二份的那一刻就该抽出去 —— 今天刚在 wiki 那边吃过
+# 三条产线各写各的、然后各自漂移的亏。
+#
+# 用别名而不是改调用点: 调用点一个字没动, 这次重构不可能改变行为。
+_header = rfc822.header
+_subject = rfc822.subject
+_addresses = rfc822.addresses
+_format_address = rfc822.format_address
+_date_key = rfc822.date_iso
+_body_text = rfc822.body_text
+_body_html = rfc822.body_html
+_has_attachments = rfc822.has_attachments
+_attachment_meta = rfc822.attachment_meta
