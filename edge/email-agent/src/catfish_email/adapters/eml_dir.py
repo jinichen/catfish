@@ -338,7 +338,10 @@ class EmlDirAdapter(EmailAdapter):
             has_attachments=bool(attachments),
             attachments=attachments if full else (),
             body_text=body if full else body[:200] + ("…" if len(body) > 200 else ""),
-            body_html=_body_html(msg) if full else "",
+            # 内嵌图的 cid: 换成 data: —— 跟 imap_mail 同一条理由, 只在整封时做
+            body_html=(
+                rfc822.embed_inline_images(_body_html(msg), msg) if full else ""
+            ),
             in_reply_to=_header(msg, "In-Reply-To") or None,
             references=_header(msg, "References") or None,
             message_id=_header(msg, "Message-ID") or None,

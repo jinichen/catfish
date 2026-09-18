@@ -21,6 +21,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Optional
 
+from .. import rfc822_util as rfc822
 from .base import Attachment, Message
 
 logger = logging.getLogger(__name__)
@@ -150,7 +151,7 @@ def _save_attachment_payload_from_source(
 def _extract_attachments_from_source_file(source_path: str) -> list[Attachment]:
     """从 AS dump 出的 RFC822 source 文件抽出附件元.
 
-    P3.5.100 (6/24). 跟 _extract_html_from_source_file 同 pattern.
+    P3.5.100 (6/24). 跟 _extract_display_html_from_source_file 同 pattern.
     source 拿不到 (老版 / 网络 fetch 失败 / AS 没写) 时返空 list.
     """
     try:
@@ -165,11 +166,19 @@ def _extract_attachments_from_source_file(source_path: str) -> list[Attachment]:
         return []
 
 
-def _extract_html_from_source_file(source_path: str) -> str:
-    """从 AS 写的 RFC822 源码文件抽出 text/html 部分.
+def _extract_display_html_from_source_file(source_path: str) -> str:
+    """从 AS 写的 RFC822 源码文件抽出**能直接渲染的** text/html.
 
     BL-EMAIL-APPLEMAIL-FULL (5/18). source 拿不到 (老版本 / 网络 fetch 失败 /
     AS 没写) 时返空字符串.
+
+    9/18 改名 (原 _extract_html_from_source_file): 现在它返的不是原样 HTML ——
+    内嵌图的 ``<img src="cid:…">`` 会被换成 ``data:`` URL, 因为浏览器不认
+    cid: 那个协议, 不换就是一个白洞 (鸿波 catch "为什么图片显示不出来")。
+    名字跟着变是故意的: 调用方拿到的东西已经不是邮件里的原文, 这个差别不该
+    藏在实现里。
+
+    只解一遍文件 —— 抽 HTML 和取内嵌图用的是同一棵 MIME 树。
     """
     try:
         with open(source_path, "rb") as f:
@@ -177,23 +186,27 @@ def _extract_html_from_source_file(source_path: str) -> str:
         if not raw:
             return ""
         msg = email.message_from_bytes(raw, policy=email.policy.default)
+        html = ""
         # 遍历 multipart, 找 text/html
         if msg.is_multipart():
             for part in msg.walk():
                 if part.get_content_type() == "text/html":
                     try:
-                        return part.get_content()
+                        html = part.get_content()
                     except Exception:  # noqa: BLE001
                         # 编码解析失败, 退到原 bytes decode
                         payload = part.get_payload(decode=True) or b""
-                        return payload.decode("utf-8", errors="replace")
+                        html = payload.decode("utf-8", errors="replace")
+                    break
+        elif msg.get_content_type() == "text/html":
+            html = msg.get_content()
+        if not html:
             return ""
-        # 非 multipart: 看本身是不是 html
-        if msg.get_content_type() == "text/html":
-            return msg.get_content()
-        return ""
+        return rfc822.embed_inline_images(html, msg)
     except (OSError, ValueError) as e:
-        logger.debug("_extract_html_from_source_file 解析失败 %s: %s", source_path, e)
+        logger.debug(
+            "_extract_display_html_from_source_file 解析失败 %s: %s", source_path, e
+        )
         return ""
 
 

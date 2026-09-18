@@ -117,7 +117,7 @@ from .apple_mail_emlx import (  # noqa: F401
     _detect_mail_data_dir,
     _emlx_is_read,
     _extract_attachments_from_source_file,  # P3.5.100 (6/24): 治附件看不到
-    _extract_html_from_source_file,
+    _extract_display_html_from_source_file,
     _find_emlx_files,
     _parse_applescript_date,
     _parse_email_from_dir_name,
@@ -330,7 +330,7 @@ class AppleMailAdapter(EmlxFallbackMixin, EmailAdapter):
             except OSError as e:
                 logger.warning("body tmp 文件读失败: %s", e)
             # BL-EMAIL-APPLEMAIL-FULL (5/18): 从 source RFC822 抽 body_html
-            body_html = _extract_html_from_source_file(source_path)
+            body_html = _extract_display_html_from_source_file(source_path)
             # P3.3.60 (6/12 鸿波): HTML-only 邮件 (HeyGen newsletter / Google Calendar
             # invite 等) AS 返 body 为空但 RFC822 含 body_html. fallback strip HTML
             # 让 detail pane 不再显 (无正文).

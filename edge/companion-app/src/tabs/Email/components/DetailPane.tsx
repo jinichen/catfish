@@ -24,6 +24,7 @@ import { useAgentStore } from "../../../store/agent";
 // P3.5.58 (6/22 鸿波 catch "有回复了为啥还要让小鲶处理 是不是重复了"):
 // RFC 822 thread chain 算法 + 已回复 badge
 import { isReplied, formatReplyTime } from "../../../lib/emailThread";
+import { buildEmailSrcDoc, countRemoteRefs } from "../../../lib/emailSrcDoc";
 // P3.5.158 Phase 3 (7/2 鸿波): Compose panel 抽到 ComposeCore 共享组件
 import ComposeCore from "./ComposeCore";
 
@@ -91,6 +92,19 @@ function DetailPane({
   onAskCatfish: (m: FullMessage) => void;
   onDeleted: () => void;  // 5/18 BL-EMAIL-DELETE: 删除成功 → 父组件移除 item
 }) {
+  // 9/18: 外链图默认不加载 —— 它们是跟踪像素, 一打开发件人就知道你看了。
+  //
+  // 「显示图片」是**每封单独决定**的。存的是"对哪一封点过", 不是一个布尔 +
+  // 换邮件时复位: 后者靠的是记得写那行复位, 漏了就是上一封点过对下一封也
+  // 放行 —— 一个看不出来的隐私泄漏。存 id 的话, 陈旧的值永远配不上新的 id,
+  // 结构上就串不了。
+  const [showRemoteFor, setShowRemoteFor] = useState<string | null>(null);
+  const showRemote = showRemoteFor === msg.id;
+  const remoteRefCount = useMemo(
+    () => countRemoteRefs(msg.body_html || ""),
+    [msg.body_html],
+  );
+
   // P3.5.58: 算已回复状态. msg / list 任一变即重算 (useMemo 兜 O(N) 性能).
   //
   // ★ 8/6 修 bug: 原来用的是 list (只有 Inbox). 员工的回信在 Sent, 不在 Inbox
@@ -687,26 +701,69 @@ function DetailPane({
           resetKey={msg.id}
         />
       ) : msg.body_html ? (
-        /* P3.5.31 (6/17): HTML 邮件 iframe srcdoc render.
-           P3.5.38.3 (6/18): 砍 sandbox attribute - parent 能拿 contentDocument 监听 click.
-           P3.5.38.4 (6/18 鸿波 catch '内容太靠左, 部分内容超出左边界'):
-           audit: iframe 默认 body margin 8px, 但邮件 HTML 常用 margin:0 reset + 自定 layout,
-           内容紧贴 iframe edge. 部分 newsletter (例 Superlinear) 用大 fixed-width container
-           + negative margin, 在窄 iframe 内会被裁掉左侧.
-           修: srcDoc 注入 reset CSS — body padding/margin + img/table max-width 100% +
-           long-word break-word, 防超出 iframe 视口. 邮件原 CSS 后置覆盖, 这是 default-only.
-           bg 白: 邮件默认 white, override Companion dark theme. */
-        <iframe
-          title="邮件正文"
-          srcDoc={buildEmailSrcDoc(msg.body_html)}
-          onLoad={handleEmailIframeLoad}
-          style={{
-            flex: 1,
-            width: "100%",
-            border: "none",
-            background: "white",
-          }}
-        />
+        <>
+          {remoteRefCount > 0 && !showRemote && (
+            /* 9/18: 外链图默认不加载。不给这条提示的话, 员工看到的是几个
+               空洞 —— 跟"鲶鱼坏了"长得一模一样, 而真相是我们**故意**拦的。
+               降级必须说话, 这跟空收件箱是同一类病。 */
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "6px 12px",
+                fontSize: 11,
+                lineHeight: 1.5,
+                color: "var(--catfish-text-muted)",
+                background: "rgba(180, 160, 60, 0.08)",
+                borderBottom: "1px solid var(--catfish-border)",
+              }}
+            >
+              <span style={{ flex: 1 }}>
+                这封邮件有 {remoteRefCount} 处外部图片未加载 ——
+                加载它们会让发件人知道你打开了这封邮件。
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowRemoteFor(msg.id)}
+                style={{
+                  border: "1px solid var(--catfish-border)",
+                  borderRadius: 4,
+                  background: "transparent",
+                  color: "inherit",
+                  fontSize: 11,
+                  fontFamily: "inherit",
+                  padding: "2px 8px",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                显示图片
+              </button>
+            </div>
+          )}
+          {/* P3.5.31 (6/17): HTML 邮件 iframe srcdoc render.
+              P3.5.38.3 (6/18): 砍 sandbox attribute - parent 能拿 contentDocument 监听 click.
+              9/18: reset CSS + CSP 搬去 lib/emailSrcDoc.ts, 见那边的注释。
+              bg 白: 邮件默认 white, override Companion dark theme.
+
+              ⚠ 外面这对花括号是必须的。9/18 加提示条时这里从三元表达式变成
+              了 JSX 子节点, 而 C 风格注释在子节点位置**是字面文本**, 不是注
+              释 —— 鸿波截图里那段"P3.5.31 (6/17): HTML 邮件 iframe srcdoc
+              render…"就这么显到邮件正文上面去了。TypeScript 不报, 它语法上
+              完全合法。 */}
+          <iframe
+            title="邮件正文"
+            srcDoc={buildEmailSrcDoc(msg.body_html, { allowRemote: showRemote })}
+            onLoad={handleEmailIframeLoad}
+            style={{
+              flex: 1,
+              width: "100%",
+              border: "none",
+              background: "white",
+            }}
+          />
+        </>
       ) : (
         /* 正文 (非 compose 时, body_html 空 fallback plain text)
            触发场景: 纯文本邮件 (CTFF 通知 / 系统通知) — body_html 空, body_text 唯一来源 */
@@ -731,26 +788,8 @@ function DetailPane({
 
 /** ─── 工具函数 ───────────────────────────────────────── */
 
-/** P3.5.38.4 (6/18 鸿波 catch '内容太靠左, 部分内容超出左边界'): 构造邮件 srcDoc.
- *
- * 注入 default CSS:
- * - body padding 16px / margin 0 / box-sizing border-box → 内容跟 iframe edge 留 buffer
- * - img/table max-width 100% → 防大图把 iframe 推宽
- * - word-wrap / overflow-wrap break-word → 长 URL 折行不溢出
- * - 邮件原 <style> 后置, 覆盖这些 default 是预期 — 这只是邮件没 padding 时的 fallback
- *
- * <base target="_blank">: 兜底 (没 sandbox 时 noop, parent contentDocument click handler 真实生效)
- */
-function buildEmailSrcDoc(bodyHtml: string): string {
-  const defaultCss = `<style>
-html,body{margin:0;padding:0;background:#fff;color:#000;word-wrap:break-word;overflow-wrap:break-word;}
-body{padding:16px;box-sizing:border-box;}
-img,table,video,iframe{max-width:100% !important;height:auto;}
-pre,code{white-space:pre-wrap;word-break:break-word;}
-a{word-break:break-all;}
-</style>`;
-  return `<base target="_blank">${defaultCss}${bodyHtml}`;
-}
+// 9/18: buildEmailSrcDoc 搬去 lib/emailSrcDoc.ts —— 它现在有分支 (远程图拦
+// 不拦), 而在这个文件里要测就得拖上 jsdom + React。那边是纯字符串函数。
 
 export default DetailPane;
 export type { FullMessage };

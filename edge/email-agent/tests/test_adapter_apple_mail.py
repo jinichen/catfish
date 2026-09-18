@@ -515,7 +515,7 @@ def test_create_draft_no_bcc_passes_empty_string():
 
 def test_extract_html_from_source_multipart():
     """multipart/alternative 邮件 → 抽 text/html 部分."""
-    from catfish_email.adapters.apple_mail import _extract_html_from_source_file
+    from catfish_email.adapters.apple_mail import _extract_display_html_from_source_file
 
     raw = (
         b"From: a@x.com\r\n"
@@ -539,7 +539,7 @@ def test_extract_html_from_source_multipart():
         tf.write(raw)
         path = tf.name
     try:
-        html = _extract_html_from_source_file(path)
+        html = _extract_display_html_from_source_file(path)
         assert "<html>" in html
         assert "hi" in html
         assert "plain body" not in html  # 只抽 HTML 部分, 不要 plain
@@ -549,7 +549,7 @@ def test_extract_html_from_source_multipart():
 
 def test_extract_html_from_source_plain_only_returns_empty():
     """只有 text/plain 没 HTML → 返空字符串 (caller 用 body_text)."""
-    from catfish_email.adapters.apple_mail import _extract_html_from_source_file
+    from catfish_email.adapters.apple_mail import _extract_display_html_from_source_file
 
     raw = (
         b"From: a@x.com\r\n"
@@ -563,15 +563,15 @@ def test_extract_html_from_source_plain_only_returns_empty():
         tf.write(raw)
         path = tf.name
     try:
-        assert _extract_html_from_source_file(path) == ""
+        assert _extract_display_html_from_source_file(path) == ""
     finally:
         os.unlink(path)
 
 
 def test_extract_html_from_missing_file_returns_empty():
     """文件不存在 (AS source 没写) → 返空, 不抛."""
-    from catfish_email.adapters.apple_mail import _extract_html_from_source_file
-    assert _extract_html_from_source_file("/tmp/no-such-file-xyz.eml") == ""
+    from catfish_email.adapters.apple_mail import _extract_display_html_from_source_file
+    assert _extract_display_html_from_source_file("/tmp/no-such-file-xyz.eml") == ""
 
 
 # ── EMLX fallback ───────────────────────────────────────
