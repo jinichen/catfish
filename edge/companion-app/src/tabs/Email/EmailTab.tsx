@@ -16,7 +16,7 @@
  *   - 已读 / 删除 etc.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useEmailScanners } from "../../hooks/useEmailScanners";
 import {
@@ -58,6 +58,14 @@ import { isReplied } from "../../lib/emailThread";
 // 硬编码了"): list 拉取上限. Rust 端 email_list_fetch clamp(1, 500), 这里取最大
 // 不再硬编码 100. items.length >= 此值时 header 加 "+" 提示被 cap 截.
 const MAX_EMAIL_LIST_LIMIT = 500;
+
+/** 后台轮询间隔。
+ *
+ * 三分钟是"邮件来了大致就能看见"和"别老去敲服务器"之间的取舍。往下调之前先
+ * 算一轮的真实成本: 一轮要起一次 catfish-email 子进程 + 登一次 IMAP (进程间
+ * 不复用连接), 这部分跟有没有新邮件无关, 调到 30 秒就是每小时 120 次登录。
+ */
+export const EMAIL_POLL_MS = 3 * 60 * 1000;
 
 export default function EmailTab() {
   // 8/21 治本配套: 初值取跨挂载缓存 (store 纯内存)。EmailTab 是条件渲染,
@@ -129,9 +137,29 @@ export default function EmailTab() {
     void scanEmailSources();
   }, [scanEmailSources]);
 
-  const loadList = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  // 9/18: 后台轮询用的两个闸。
+  //
+  // inFlight —— 一次拉取要起 catfish-email 子进程 + 登录 IMAP, 慢起来可能
+  //   超过一个轮询间隔。不挡的话定时器会叠罗汉: 第二轮还没回来第三轮又发,
+  //   越积越多, 最后是一串并发的 IMAP 登录。
+  //   **只挡后台那轮**: 员工自己按下的刷新/收信不能被默默吞掉, 按了没反应
+  //   比多发一次请求糟得多。所以用计数不用布尔 —— 前台和后台真并发时, 谁先
+  //   回来都不会把另一个的在途状态一起清掉。
+  // quiet ——— 后台那轮失败**不许**把一份好好的列表换成红色错误条。断一下网
+  //   就清屏, 比不刷新糟得多。前台 (进门、切筛选、按刷新) 仍旧照常报错。
+  const inFlight = useRef(0);
+  // 手里有几封 —— 用 ref 不用 items.length。loadList 一旦把 items.length 写进
+  // 依赖, 它的身份每次列表更新都会变, 而下面那个挂载 effect 依赖 loadList:
+  // 拉取 → 改 items → loadList 换身份 → effect 重跑 → 再拉取, 死循环。
+  const itemCount = useRef(0);
+  useEffect(() => { itemCount.current = items.length; }, [items]);
+
+  const loadList = useCallback(async (opts?: { quiet?: boolean }) => {
+    const quiet = opts?.quiet === true;
+    if (quiet && inFlight.current > 0) return;
+    inFlight.current += 1;
+    if (!quiet) setLoading(true);
+    if (!quiet) setError(null);
     try {
       const [listJson, sentJson, accountsJson, _urgency] = await Promise.all([
         // P3.5.58 Phase 3 (6/22 鸿波 catch "邮件数量没有 100, 为什么一直显示
@@ -166,14 +194,34 @@ export default function EmailTab() {
         });
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      // 后台轮询失败: 安静吞掉, 留着上一份列表。但**只在真有东西可留**的时候
+      // —— 手里本来就是空的还不报错, 那员工看到的就是一个永远空着、一句解释
+      // 也没有的收件箱 (Foxmail 那次就是这么难排查的)。
+      const keepQuiet = quiet && itemCount.current > 0;
+      if (!keepQuiet) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      inFlight.current -= 1;
+      if (!quiet) setLoading(false);
     }
   }, [unreadOnly]);
 
   useEffect(() => {
     void loadList();
+  }, [loadList]);
+
+  // 9/18: 后台轮询。在这之前邮件页只在挂载时拉一次 —— 开着不动就是一张快照,
+  // 新邮件要么手动按「收信」, 要么切走再切回来才看得见。
+  //
+  // 为什么现在才做: 轮询的前提是"一轮很便宜"。IMAP 换成增量同步之后, 没有
+  // 新邮件的一轮在服务器侧只剩一个 FETCH (FLAGS) 往返 (见 imap_mail.py 的
+  // ImapSyncAdapter)。在那之前每轮都要重下最近 200 封的邮件头, 三分钟一次
+  // 纯属糟蹋带宽。
+  //
+  // 只在 tab 挂载期间转 —— EmailTab 是条件渲染, 切走即卸载, 定时器跟着清掉。
+  // 不看邮件页的时候不该有后台流量。
+  useEffect(() => {
+    const t = window.setInterval(() => void loadList({ quiet: true }), EMAIL_POLL_MS);
+    return () => window.clearInterval(t);
   }, [loadList]);
 
   // P3.5.204.c (7/9 鸿波 catch "客户端还没同步的邮件在鲶鱼里无法激活客户端去同步"):
