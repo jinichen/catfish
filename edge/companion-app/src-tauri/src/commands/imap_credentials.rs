@@ -44,10 +44,12 @@ use std::path::PathBuf;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use keyring::Entry;
 
-/// 凭据库里的服务名。Windows 侧 `Entry::new(SERVICE, target)`,
-/// macOS 侧 `Entry::new(target, account)` —— 跟 teaching_credentials 的用法一致,
-/// 写进去读不出来就白存了。
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+/// 凭据库里的服务名。**只有 Windows 用**: 那边是 `Entry::new(SERVICE, target)`,
+/// macOS 那边是 `Entry::new(target, account)` —— 两边位置不同, 跟
+/// teaching_credentials 的用法一致 (写进去读不出来就白存了)。
+///
+/// cfg 写成 macos|windows 会在 macOS 上留一条 unused const 警告 —— 编译器逮到的。
+#[cfg(target_os = "windows")]
 const SERVICE: &str = "catfish";
 
 const DEFAULT_PORT: u16 = 993;
@@ -297,15 +299,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn status_never_carries_a_password_field() {
-        // 结构体层面就没有密码字段 —— 这条是防止后来人图省事加一个。
-        let json = serde_json::to_string(&status_of(None)).unwrap();
-        for forbidden in ["password", "secret", "token"] {
-            assert!(
-                !json.contains(forbidden),
-                "状态里不该出现 {forbidden}: {json}"
-            );
-        }
+    fn status_shape_is_pinned_so_nobody_adds_a_secret_field() {
+        // 这条的目的是防止后来人往状态里塞密码。
+        //
+        // 第一版的判据是"JSON 里不能出现 password 这个词" —— 判错了对象:
+        // `password_present` 是个**布尔标志**, 合法地含有这个词, 于是测试自己红了。
+        // 要防的是密码**值**泄漏, 不是字段名里有这个词。
+        //
+        // 所以改成钉住字段集合: 加任何新字段都会让这条红, 那时人得停下来想一下
+        // "这个字段该不该给前端"。
+        let json = serde_json::to_value(status_of(None)).unwrap();
+        let object = json.as_object().expect("状态应该是个 JSON object");
+        let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["configured", "host", "password_present", "port", "user"],
+            "状态的字段集合变了 —— 新字段会不会把秘密带给前端?"
+        );
+        assert!(
+            object["password_present"].is_boolean(),
+            "password_present 必须是布尔, 绝不能变成密码本身"
+        );
     }
 
     #[test]
