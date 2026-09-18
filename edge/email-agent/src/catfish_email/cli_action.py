@@ -52,11 +52,29 @@ def _cmd_draft(adapters: list[EmailAdapter], args) -> int:
         body = args.body or ""
 
     # 找一个 supports_drafts=True 的 adapter (Apple Mail 支持, Foxmail Mac 不支持)
+    #
+    # 9/18: 回复的话**先按原邮件的来源找** —— --in-reply-to 传的是原邮件的
+    # 完整 id (带来源前缀), 前端回复场景一定会带上。
+    #
+    # 为什么这条重要: 多来源并存之后 (Apple Mail + IMAP), "第一个支持草稿的"
+    # 就是 Apple Mail。员工在鲶鱼里回一封只有 IMAP 读得到的邮件, 草稿会落进
+    # Apple Mail 的草稿箱 —— 那个账号里根本没有这封原邮件, 线程对不上, 而且
+    # 员工在服务器那边(网页版/手机)压根看不到这份草稿。回复要落回它来的地方。
     target = None
-    for a in adapters:
-        if getattr(a, "supports_drafts", False):
-            target = a
-            break
+    reply_to_id = getattr(args, "in_reply_to", None) or ""
+    if "|" in reply_to_id:
+        prefix = reply_to_id.split("|", 1)[0]
+        for a in adapters:
+            if (a.name == prefix or a.name.replace("_", "-") == prefix) and getattr(
+                a, "supports_drafts", False
+            ):
+                target = a
+                break
+    if target is None:
+        for a in adapters:
+            if getattr(a, "supports_drafts", False):
+                target = a
+                break
     if target is None:
         # 这条文案原来写死成 "Apple Mail.app 支持; Foxmail Mac 不支持" —— 两个
         # 都是 macOS 客户端, 而这条分支在 Windows 上同样会走到 (那边只有

@@ -25,16 +25,44 @@ export interface ImapStatus {
   /** 凭据库里到底还有没有那条密码。配置在但密码没了是真实状态 ——
    *  用户清过钥匙串, 或者换机器同步了配置没同步凭据。 */
   password_present: boolean;
+  /** 发信服务器。空串 = 没显式配过, 发信时从 IMAP 主机猜 smtp.<域名>。 */
+  smtp_host: string;
+  /** 0 = 用默认 465 (隐式 TLS)。 */
+  smtp_port: number;
 }
 
-/** 保存前 Rust 会**真连一次**服务器; 连不上就不保存, 直接抛错。 */
+/** 保存前 Rust 会**真连一次**服务器; 连不上就不保存, 直接抛错。
+ *
+ *  ⚠ 那次验证只验 IMAP (收信)。SMTP (发信) 是另一套主机和端口, **这里验
+ *  不到** —— 收信正常不代表发得出去。第一次回复邮件时才会知道。
+ */
 export async function saveImapCredential(input: {
   host: string;
   user: string;
   password: string;
   port?: number;
+  /** 留空就让后端从 IMAP 主机猜 */
+  smtpHost?: string;
+  /** 留空/0 就用默认 465 */
+  smtpPort?: number;
 }): Promise<ImapStatus> {
-  return invoke<ImapStatus>("imap_credential_save", input);
+  const { smtpHost, smtpPort, ...rest } = input;
+  return invoke<ImapStatus>("imap_credential_save", {
+    ...rest,
+    smtpHost: smtpHost?.trim() || null,
+    smtpPort: smtpPort || null,
+  });
+}
+
+/** 从 IMAP 主机猜发信服务器, 跟后端 smtp_send.guess_host 同一条规则。
+ *
+ *  只用来**给界面填个默认值让员工看见**, 不参与真正的发信 —— 真发信时
+ *  后端自己会猜一次。两边各猜一次听着重复, 但界面这次是为了"让员工知道
+ *  我们会用哪台服务器", 不填的话他到发失败为止都不知道。
+ */
+export function guessSmtpHost(imapHost: string): string {
+  const host = (imapHost || "").trim().toLowerCase();
+  return host.startsWith("imap.") ? `smtp.${host.slice(5)}` : host;
 }
 
 export async function clearImapCredential(): Promise<ImapStatus> {

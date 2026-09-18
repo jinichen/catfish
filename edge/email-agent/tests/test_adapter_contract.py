@@ -191,3 +191,63 @@ def test_contract_table_points_at_real_base_methods(flag: str, method: str):
     """
     assert hasattr(EmailAdapter, flag), f"基类没有 {flag} 这个 flag"
     assert callable(getattr(EmailAdapter, method, None)), f"基类没有 {method}() 方法"
+
+
+# ============================================================
+# id 前缀必须等于 adapter 名
+# ============================================================
+#
+# 9/18: 各 CLI 命令 (read / delete / mark-read / send / attachment) 都按
+# `id.split("|")[0]` 找 adapter:
+#
+#     prefix = msg_id.split("|", 1)[0]
+#     if a.name == prefix or a.name.replace("_", "-") == prefix: ...
+#
+# 所以 adapter 名和它自己产出的 id 前缀**必须是同一个词**。对不上时不会报
+# "路由失败", 而是**静静地落到「逐个 try」**, 把 `imap|INBOX|1|8418` 递给
+# Apple Mail 去解 —— 轻则一句莫名其妙的报错, 重则动到另一封邮件。
+#
+# 真发生过: ImapSyncAdapter 我为了日志好认起名 "imap_sync", 而它继承的
+# _pack_id 产出的是 "imap|..."。当时没暴露, 因为 Companion 强制了单一
+# client 把多 adapter 那条路盖住了 —— 一解除强制就会炸。
+
+_PACKERS = {
+    # adapter 类名 → 拿一条样本 id 出来 (不实例化, 都是 staticmethod)
+    "ImapAdapter": lambda c: c._pack_id("INBOX", "1", "8418"),
+    "ImapSyncAdapter": lambda c: c._pack_id("INBOX", "1", "8418"),
+}
+
+
+def test_id_prefix_equals_adapter_name():
+    """能拿到样本 id 的 adapter, 前缀必须等于它的 name。"""
+    checked = 0
+    for cls in _all_adapter_classes():
+        make = _PACKERS.get(cls.__name__)
+        if make is None:
+            continue
+        checked += 1
+        sample = make(cls)
+        prefix = sample.split("|", 1)[0]
+        assert prefix in (cls.name, cls.name.replace("_", "-")), (
+            f"{cls.__name__}: id 长这样 {sample!r} (前缀 {prefix!r}), "
+            f"但 name={cls.name!r} —— 按前缀路由会找不到它"
+        )
+    assert checked >= 2, "一个都没检到, 这条测试是摆设"
+
+
+def test_every_adapter_name_is_unique():
+    """两个 adapter 重名的话, 按前缀路由会随机命中一个。
+
+    只看 name 是**字符串**的类。`__subclasses__()` 是全局遍历, 跑全量时会把
+    别的测试文件里那些假 adapter 也捞进来, 其中有把 name 写成 property 的 ——
+    那不是产线代码, 不该让这条红。(单跑这个文件绿、跑全量红, 就是这个原因。)
+    """
+    names = [
+        c.name
+        for c in _all_adapter_classes()
+        if isinstance(getattr(c, "name", None), str) and c.name != "base"
+    ]
+    dupes = {n for n in names if names.count(n) > 1}
+    # imap 和 imap_sync 是**故意**同名的 (后者是前者加了层索引, id 格式相同,
+    # 路由到哪个都对)。除它之外不许重名。
+    assert dupes <= {"imap"}, f"这些 adapter 重名了: {dupes}"

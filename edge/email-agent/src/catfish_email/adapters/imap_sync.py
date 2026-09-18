@@ -64,7 +64,15 @@ class ImapSyncAdapter(ImapAdapter):
     本来也不显示正文。
     """
 
-    name = "imap_sync"
+    # ⚠ 必须跟基类一样是 "imap" —— **id 前缀就是 adapter 名**, 各 CLI 命令
+    # (read / delete / mark-read / send / attachment) 都按 `id.split("|")[0]`
+    # 找 adapter。这里写 "imap_sync" 的话, `imap|INBOX|1|8418` 这条 id 永远
+    # 匹配不上它, 会落到"逐个 try", 被递给 Apple Mail 去解 —— 删错邮件或者
+    # 一句莫名其妙的报错。
+    #
+    # 9/18 我原本为了日志好认写成了 imap_sync, 当时没暴露是因为 Companion
+    # 强制了单一 client 把它盖住了。见 test_adapter_contract 里那条不变量。
+    name = "imap"
 
     def sync_folder(self, folder_raw: str, role: str) -> "object":
         """把一个文件夹对账进索引, 返回 ReconcileStats。

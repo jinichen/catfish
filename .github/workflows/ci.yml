@@ -514,6 +514,16 @@ jobs:
         continue-on-error: true
         run: cargo test --lib --no-fail-fast
 
+      - name: cargo doctest (必过)
+        working-directory: edge/companion-app/src-tauri
+        # 9/18: 补这一步是因为 `--lib` **不含 doctest**, 于是
+        # wiki_conflicts.rs 里一段缩进四格的 YAML 被 rustdoc 当成 Rust 代码,
+        # 从 9/17 起本机 `cargo test` 一直红着, CI 却一路绿 —— 谁也没看见。
+        #
+        # 这一步不给逃生口: doctest 跟平台无关, 挂了就是注释里的代码块写错了
+        # (要么加 ```text 围栏, 要么它真的该能编过)。全仓也就两条, 很快。
+        run: cargo test --doc
+
   # ════════════════════════════════════════════════════════════
   # 9. 全套总结 — 核心 job 都过才算 CI 绿
   # ════════════════════════════════════════════════════════════

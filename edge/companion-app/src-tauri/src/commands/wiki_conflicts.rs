@@ -3,8 +3,14 @@
 //! 写侧在蒸馏插件 (catfish_memory_wiki_provenance.record_conflicts): 第二次蒸馏把
 //! 同一条目的类型或 typed relation 改成不同的值时, **保留旧值**, 新值记进
 //!
-//!     conflicts: [{field: "entity_type", current: "org", proposed: "department", seen: "journal:2026-09-17"},
-//!                 {field: "rel:中电福富", current: "隶属", proposed: "协作", seen: "..."}]
+//! ```text
+//! conflicts: [{field: "entity_type", current: "org", proposed: "department", seen: "journal:2026-09-17"},
+//!             {field: "rel:中电福富", current: "隶属", proposed: "协作", seen: "..."}]
+//! ```
+//!
+//! (```text 围栏是必须的: rustdoc 把缩进四格的块当成 **Rust 代码** 去编译,
+//!  于是这段 YAML 变成一条永远失败的 doctest。9/17 起 `cargo test` 就一直
+//!  红着 —— 没人发现是因为 CI 跑的是 `cargo test --lib`, 不含 doctest。)
 //!
 //! 这里只做两件事: 把这一行解析成结构给前端 (关系工作台列成"冲突"任务), 以及
 //! 员工选了之后把文件改掉 —— 选 proposed 就把值换过去, 选 current 什么都不动;

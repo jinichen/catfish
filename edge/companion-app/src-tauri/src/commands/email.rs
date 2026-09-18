@@ -60,9 +60,25 @@ pub(crate) fn email_command(bin: &Path) -> Command {
             .env("CATFISH_IMAP_HOST", &source.host)
             .env("CATFISH_IMAP_PORT", source.port.to_string())
             .env("CATFISH_IMAP_USER", &source.user)
-            .env("CATFISH_IMAP_PASSWORD", password)
-            .env("CATFISH_EMAIL_CLIENT", "imap");
-        return command;
+            .env("CATFISH_IMAP_PASSWORD", password);
+        // 发信是 SMTP, 另一套主机/端口。空着就让 Python 从 IMAP 主机猜
+        // (smtp.<域名>:465) —— 猜法只放一处, 两处早晚会漂。
+        if !source.smtp_host.is_empty() {
+            command.env("CATFISH_SMTP_HOST", &source.smtp_host);
+        }
+        if source.smtp_port != 0 {
+            command.env("CATFISH_SMTP_PORT", source.smtp_port.to_string());
+        }
+        // ⚠ 这里**不再**钉 CATFISH_EMAIL_CLIENT=imap。
+        //
+        // 原来配了 IMAP 就钉死它并直接 return —— 等于"配了 IMAP 就只用
+        // IMAP", 本地客户端再也不查。鸿波 catch "现在同时从客户端和 IMAP
+        // 一起吗？会打架的" 之后定的是**并存**: 同一封邮件两边都读得到时,
+        // 保留能执行动作的那个来源 (cli_read._source_priority)。钉死 client
+        // 的话 Python 那套合并和优先级根本走不到。
+        //
+        // 不 return, 继续往下走 —— Windows 上邮件目录那些 override 仍然
+        // 该生效, 它们和 IMAP 不冲突, 是两个并列的来源。
     }
 
     if cfg!(target_os = "windows") {

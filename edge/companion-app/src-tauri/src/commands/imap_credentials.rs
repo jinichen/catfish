@@ -66,6 +66,20 @@ pub struct ImapSource {
     pub user: String,
     #[serde(default = "default_port")]
     pub port: u16,
+    /// 发信服务器。空 = 从 IMAP 主机猜 (imap.x → smtp.x), Python 那边
+    /// smtp_send.guess_host 负责。
+    ///
+    /// 9/18: 发信走 **SMTP**, 不是 IMAP —— 另一个端口、另一次认证。猜得对
+    /// 的话员工什么都不用填; 猜错了没有这两个字段就**完全没有补救的办法**,
+    /// 只能眼看着回复发不出去。
+    ///
+    /// serde(default) 是必须的: 已经配过 IMAP 的机器上 JSON 里没有这两个键,
+    /// 升级后不该直接读不出配置。
+    #[serde(default)]
+    pub smtp_host: String,
+    /// 0 = 用默认 465 (隐式 TLS)。
+    #[serde(default)]
+    pub smtp_port: u16,
 }
 
 fn default_port() -> u16 {
@@ -90,6 +104,12 @@ pub struct ImapStatus {
     /// 凭据库里到底有没有那条密码。JSON 在但密码没了是真实状态 ——
     /// 用户清过钥匙串、或者换了机器同步了配置没同步凭据。
     pub password_present: bool,
+    /// 发信服务器。空串 = 没显式配过, 发信时从 IMAP 主机猜。
+    /// 界面要把这个**如实显示**: 员工得知道回复会从哪台服务器发出去,
+    /// 而不是等发失败了才去猜我们猜了什么。
+    pub smtp_host: String,
+    /// 0 = 用默认 465。
+    pub smtp_port: u16,
 }
 
 fn config_path() -> Result<PathBuf, String> {
@@ -202,6 +222,8 @@ pub async fn imap_credential_save(
     user: String,
     password: String,
     port: Option<u16>,
+    smtp_host: Option<String>,
+    smtp_port: Option<u16>,
 ) -> Result<ImapStatus, String> {
     let host = host.trim().to_string();
     let user = user.trim().to_string();
@@ -211,7 +233,15 @@ pub async fn imap_credential_save(
     if password.is_empty() {
         return Err("密码/授权码不能为空".to_string());
     }
-    let source = ImapSource { host, user, port: port.unwrap_or(DEFAULT_PORT) };
+    let source = ImapSource {
+        host,
+        user,
+        port: port.unwrap_or(DEFAULT_PORT),
+        // 空着就让 Python 那边从 IMAP 主机猜 (smtp_send.guess_host)。
+        // 这里不替它猜 —— 猜法只该有一处, 两处早晚会漂。
+        smtp_host: smtp_host.unwrap_or_default().trim().to_string(),
+        smtp_port: smtp_port.unwrap_or(0),
+    };
 
     // 先验证再保存 —— 存一份连不上的配置没有意义
     verify_login(&source, &password).await?;
@@ -250,6 +280,8 @@ fn status_of(source: Option<ImapSource>) -> ImapStatus {
             host: s.host,
             user: s.user,
             port: s.port,
+            smtp_host: s.smtp_host,
+            smtp_port: s.smtp_port,
         },
         None => ImapStatus {
             configured: false,
@@ -257,6 +289,8 @@ fn status_of(source: Option<ImapSource>) -> ImapStatus {
             user: String::new(),
             port: DEFAULT_PORT,
             password_present: false,
+            smtp_host: String::new(),
+            smtp_port: 0,
         },
     }
 }
@@ -314,9 +348,21 @@ mod tests {
         keys.sort_unstable();
         assert_eq!(
             keys,
-            ["configured", "host", "password_present", "port", "user"],
+            [
+                "configured",
+                "host",
+                "password_present",
+                "port",
+                "smtp_host",
+                "smtp_port",
+                "user",
+            ],
             "状态的字段集合变了 —— 新字段会不会把秘密带给前端?"
         );
+        // 9/18 加 smtp_host / smtp_port 时这条红了, 正是它该干的事。停下来想过:
+        // 这两个不是秘密 (主机名和端口号), 而且员工**必须**看得见回复会从哪台
+        // 服务器发出去 —— 我们会替他猜 smtp.<域名>, 猜错了得让他能发现并改掉,
+        // 而不是等回复发不出去再去猜我们猜了什么。
         assert!(
             object["password_present"].is_boolean(),
             "password_present 必须是布尔, 绝不能变成密码本身"
@@ -329,8 +375,22 @@ mod tests {
             host: "imap.example.cn".into(),
             user: "me@example.cn".into(),
             port: 993,
+            smtp_host: String::new(),
+            smtp_port: 0,
         };
         assert_eq!(source.redacted(), "me@example.cn@imap.example.cn:993");
+    }
+
+    #[test]
+    fn old_config_without_smtp_fields_still_loads() {
+        // 9/18 之前配过 IMAP 的机器上, JSON 里没有这两个键。升级后要是读不出来,
+        // 员工的邮箱配置会凭空消失 —— 而他只会觉得"鲶鱼把我配置弄丢了"。
+        let parsed: ImapSource = serde_json::from_str(
+            r#"{"host":"imap.example.cn","user":"me@example.cn","port":993}"#,
+        )
+        .expect("老配置必须还能读");
+        assert_eq!(parsed.smtp_host, "");
+        assert_eq!(parsed.smtp_port, 0, "0 = 用默认 465");
     }
 
     #[test]

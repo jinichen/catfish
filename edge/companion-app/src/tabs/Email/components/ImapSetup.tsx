@@ -4,6 +4,7 @@ import {
   clearImapCredential,
   getImapStatus,
   guessImapHost,
+  guessSmtpHost,
   saveImapCredential,
   type ImapStatus,
 } from "../../../lib/tauri_imap";
@@ -27,6 +28,13 @@ export default function ImapSetup({ onConfigured }: { onConfigured?: () => void 
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 9/18: 发信是 SMTP, 跟收信完全是两套。绝大多数企业邮箱 smtp.<域名>:465
+  // 就对, 所以默认折叠、自动填好, 员工不用管; 但猜错时**必须有地方改**,
+  // 否则回复永远发不出去而他无从下手。
+  const [smtpOpen, setSmtpOpen] = useState(false);
+  const [smtpHost, setSmtpHost] = useState("");
+  const [smtpHostTouched, setSmtpHostTouched] = useState(false);
+  const [smtpPort, setSmtpPort] = useState("465");
 
   useEffect(() => {
     getImapStatus().then(setStatus).catch(() => setStatus(null));
@@ -41,6 +49,13 @@ export default function ImapSetup({ onConfigured }: { onConfigured?: () => void 
     if (guess) setHost(guess);
   }, [user, hostTouched]);
 
+  // 发信服务器跟着收信服务器走 —— 同样是"改过就不再覆盖"。
+  useEffect(() => {
+    if (smtpHostTouched) return;
+    const guess = guessSmtpHost(host);
+    if (guess) setSmtpHost(guess);
+  }, [host, smtpHostTouched]);
+
   async function handleSave() {
     setBusy(true);
     setError(null);
@@ -50,6 +65,10 @@ export default function ImapSetup({ onConfigured }: { onConfigured?: () => void 
         user: user.trim(),
         password,
         port: Number(port) || 993,
+        // 跟猜出来的一样就不存 —— 存下来的话等于把"当时猜的那个值"钉死,
+        // 以后我们改了猜法, 这台机器还用着旧的。只存员工真改过的。
+        smtpHost: smtpHost.trim() === guessSmtpHost(host.trim()) ? "" : smtpHost.trim(),
+        smtpPort: Number(smtpPort) === 465 ? 0 : Number(smtpPort) || 0,
       });
       setStatus(next);
       setPassword(""); // 存完立刻从内存里抹掉
@@ -93,7 +112,10 @@ export default function ImapSetup({ onConfigured }: { onConfigured?: () => void 
       <div style={box}>
         <strong>邮箱直连 (IMAP)</strong>
         <div style={{ marginTop: 4 }}>
-          {status.user} · {status.host}:{status.port}
+          {status.user} · 收 {status.host}:{status.port} · 发{" "}
+          {/* 如实显示发信走哪台 —— 没配过就显示我们会猜成什么, 别让员工
+              到发失败了才去猜我们猜了什么。 */}
+          {(status.smtp_host || guessSmtpHost(status.host))}:{status.smtp_port || 465}
           {!status.password_present && (
             <span style={{ color: "var(--status-danger)" }}>
               {" "}· 凭据库里找不到密码了, 请重新填写
@@ -157,9 +179,52 @@ export default function ImapSetup({ onConfigured }: { onConfigured?: () => void 
           onChange={(e) => setPassword(e.target.value)}
         />
       </div>
+      {/* 发信 —— 默认折叠。绝大多数情况自动填的就对, 但猜错时必须能改,
+          否则员工的回复永远发不出去而他无从下手。 */}
+      <div style={{ marginTop: 8 }}>
+        <button
+          type="button"
+          onClick={() => setSmtpOpen((v) => !v)}
+          style={{
+            border: "none", background: "transparent", padding: 0,
+            color: "var(--catfish-muted)", fontSize: 12, fontFamily: "inherit",
+            cursor: "pointer", textDecoration: "underline",
+          }}
+        >
+          {smtpOpen ? "收起发信设置" : "发信设置（一般不用改）"}
+        </button>
+      </div>
+      {smtpOpen && (
+        <>
+          <div style={field}>
+            <span style={label}>发信服务器</span>
+            <input
+              style={input}
+              value={smtpHost}
+              placeholder="smtp.company.com"
+              onChange={(e) => { setSmtpHostTouched(true); setSmtpHost(e.target.value); }}
+            />
+          </div>
+          <div style={field}>
+            <span style={label}>发信端口</span>
+            <input
+              style={{ ...input, maxWidth: 80 }}
+              value={smtpPort}
+              onChange={(e) => setSmtpPort(e.target.value)}
+            />
+          </div>
+          <div style={{ marginTop: 4, color: "var(--catfish-muted)", fontSize: 11 }}>
+            465 是加密连接, 推荐。587 也行, 但只在服务器支持加密升级时才发 ——
+            不支持就报错, 绝不明文把密码和正文发出去。
+          </div>
+        </>
+      )}
       <div style={{ marginTop: 6, color: "var(--catfish-muted)" }}>
         企业邮箱通常要用「授权码」而不是登录密码 —— 在邮箱网页版的设置里生成。
         密码保存在本机系统凭据库, 不会上传, 存进去之后鲶鱼自己也读不出来给界面。
+        <br />
+        保存时会**真连一次收信服务器**验证。发信是另一套服务器, 这一步验不到,
+        第一次回复邮件时才知道通不通。
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
         <button type="button" disabled={busy || !user || !host || !password} onClick={handleSave}>
