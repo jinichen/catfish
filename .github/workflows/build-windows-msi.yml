@@ -571,12 +571,36 @@ jobs:
           $packed = (Get-Item $tgz).Length
           $msi = (Get-ChildItem $res -File | Measure-Object Length -Sum).Sum
 
-          # 真正的验证: 删掉 venv, 只留缓存, 断网重放
+          # 装了多少个包 —— 没有这个数, "断网重放成功"可能是假绿:
+          # 什么都不装当然也会 exit 0。预热只花了十几秒, 更得把这个数亮出来。
+          $warmPkgs = @(Get-ChildItem (Join-Path $env:UV_PROJECT_ENVIRONMENT 'Lib\site-packages') `
+                        -Filter '*.dist-info' -Directory -ErrorAction SilentlyContinue).Count
+
+          # 验证一: 原路径断网重放
           Remove-Item -Recurse -Force $env:UV_PROJECT_ENVIRONMENT -ErrorAction SilentlyContinue
           Push-Location $src
           & $uv sync --extra all --locked --offline
           $offlineExit = $LASTEXITCODE
           Pop-Location
+          $offlinePkgs = @(Get-ChildItem (Join-Path $env:UV_PROJECT_ENVIRONMENT 'Lib\site-packages') `
+                           -Filter '*.dist-info' -Directory -ErrorAction SilentlyContinue).Count
+
+          # 验证二: 解压到**另一个路径**再重放。
+          # 现场拿到的是 tar.gz, 解到哪儿由安装器定, 跟 CI 上这个路径必然不同。
+          # uv 缓存里要是嵌了绝对路径, 这一步就会暴露 —— 上面那次是从原路径放的,
+          # 证明不了可搬运。
+          $moved = Join-Path $work 'cache-relocated'
+          New-Item -ItemType Directory -Force -Path $moved | Out-Null
+          tar -xzf $tgz -C $moved
+          Remove-Item -Recurse -Force $env:UV_PROJECT_ENVIRONMENT -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force $env:UV_CACHE_DIR -ErrorAction SilentlyContinue
+          $env:UV_CACHE_DIR = $moved
+          Push-Location $src
+          & $uv sync --extra all --locked --offline
+          $movedExit = $LASTEXITCODE
+          Pop-Location
+          $movedPkgs = @(Get-ChildItem (Join-Path $env:UV_PROJECT_ENVIRONMENT 'Lib\site-packages') `
+                         -Filter '*.dist-info' -Directory -ErrorAction SilentlyContinue).Count
 
           $lines = @(
             "## 离线 uv 缓存实测 (Windows / cp311)",
@@ -588,7 +612,11 @@ jobs:
             ("| 打包后 (tar.gz) | {0:n0} MB |" -f ($packed/1MB)),
             ("| 现有 windows 资源合计 | {0:n0} MB |" -f ($msi/1MB)),
             ("| 加上缓存后 | {0:n0} MB |" -f (($msi+$packed)/1MB)),
-            ("| **断网重放** | {0} |" -f $(if ($offlineExit -eq 0) { "✅ 成功 (机制可行)" } else { "❌ 失败 exit=$offlineExit" }))
+            ("| 预热装了几个包 | {0} |" -f $warmPkgs),
+            ("| **断网重放 (原路径)** | {0} · {1} 个包 |" -f $(if ($offlineExit -eq 0) { "✅" } else { "❌ exit=$offlineExit" }), $offlinePkgs),
+            ("| **断网重放 (换路径)** | {0} · {1} 个包 |" -f $(if ($movedExit -eq 0) { "✅ 缓存可搬运" } else { "❌ exit=$movedExit 缓存嵌了绝对路径" }), $movedPkgs),
+            "",
+            "> 三个包数必须一致且远大于 0。只要有一个是 0, 上面的 ✅ 就是假绿 —— 什么都不装也会 exit 0。"
           )
           $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           $lines | ForEach-Object { Write-Host $_ }
@@ -596,6 +624,10 @@ jobs:
           # 而 MSI 包本来就要下载 —— 报告跟着它走, 不依赖 API 和日志权限。
           $lines | Out-File -FilePath (Join-Path $env:RUNNER_TEMP 'offline-uv-cache-report.txt') -Encoding utf8
           if ($offlineExit -ne 0) { Write-Host "::warning::断网重放失败 —— 随包发缓存这条路要重新评估" }
+          if ($movedExit -ne 0) { Write-Host "::warning::换路径后失败 —— 缓存不可搬运, 现场解压到别处就用不了" }
+          if ($warmPkgs -lt 50 -or $offlinePkgs -ne $warmPkgs -or $movedPkgs -ne $warmPkgs) {
+              Write-Host "::warning::包数对不上 (预热 $warmPkgs / 原路径 $offlinePkgs / 换路径 $movedPkgs) —— 重放可能是假绿"
+          }
 
       # 必须放在所有 Tauri resources 生成之后：tauri.conf.json 会在 build
       # script 阶段校验每个 resources 路径。此前预编译放在资源生成之前，
