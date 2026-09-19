@@ -183,7 +183,7 @@ export default function ServerConfigCard() {
           <input
             value={draftWeb}
             onChange={(e) => setDraftWeb(e.target.value)}
-            placeholder="https://192.168.10.20 (HTTPS 部署) 或 http://IP:5173"
+            placeholder="https://中央端IP (HTTPS 部署) 或 http://中央端IP:5173"
             style={inputStyle}
           />
         ) : cfg?.web_url ? (

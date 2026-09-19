@@ -135,7 +135,7 @@ fn use_system_proxy() -> bool {
 /// 内网段时, reqwest 报出来是:
 ///
 /// ```text
-/// error sending request for url (https://192.168.31.199/)
+/// error sending request for url (https://<内网IP>/)
 ///   ← client error (Connect)
 ///   ← tunnel error: failed to create underlying connection
 ///   ← tcp connect error
@@ -257,7 +257,7 @@ mod tests {
     /// 跑法 (⚠ 带 --lib —— 不带的话 `--ignored` 会连 doctest 里标 ignore 的
     /// 代码块一起编译执行, 7/28 踩过):
     /// ```text
-    /// CATFISH_TEST_URL=https://192.168.31.199/ cargo test --lib -- --ignored --nocapture
+    /// CATFISH_TEST_URL=https://<内网IP>/ cargo test --lib -- --ignored --nocapture
     /// ```
     #[tokio::test]
     #[ignore]
@@ -265,7 +265,7 @@ mod tests {
         let Ok(url) = std::env::var("CATFISH_TEST_URL") else {
             // 不 panic —— 裸跑 `cargo test -- --ignored` 时没配 URL 是正常情况,
             // 红一条会让人误以为代码坏了 (7/28 就误会过一次). 打提示跳过.
-            eprintln!("跳过: 未设 CATFISH_TEST_URL (例: CATFISH_TEST_URL=https://192.168.31.199/)");
+            eprintln!("跳过: 未设 CATFISH_TEST_URL (例: CATFISH_TEST_URL=https://<内网IP>/)");
             return;
         };
 

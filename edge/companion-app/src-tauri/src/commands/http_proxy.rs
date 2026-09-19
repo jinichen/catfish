@@ -138,7 +138,7 @@ fn build_client(timeout_ms: u64) -> Result<reqwest::Client, String> {
 ///
 /// 为什么需要: `reqwest::Error` 的 `Display` **只打最外层**. 一次证书失败
 /// 打出来只有
-///     error sending request for url (https://192.168.31.199/)
+///     error sending request for url (https://<内网IP>/)
 /// 真正的原因 —— 证书不受信 / DNS 解不出 / 连接被拒 / 代理挡了 —— 全在
 /// `.source()` 链里. 之前 `format!("请求失败: {e}")` 把这些整个丢了.
 ///

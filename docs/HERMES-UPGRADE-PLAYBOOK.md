@@ -350,7 +350,7 @@ secure contexts (HTTPS or loopback)`. 所有 OIDC PKCE flow 挂 · 员工登不�
 - ✓ http://localhost / http://127.0.0.1 / http://[::1]  (loopback 特权)
 - ✗ http://192.168.x.x  (LAN IP · 非 loopback 非 HTTPS · **不算 secure**)
 
-达华 POC 装机 · 员工 mac 通过 `http://192.168.31.199:5173` 访问中央 web · 命中第 3 条 ·
+达华 POC 装机 · 员工 mac 通过 `http://<内网IP>:5173` 访问中央 web · 命中第 3 条 ·
 `crypto.subtle` undefined · OIDC PKCE `oidc-client-ts` 库在 `generateCodeChallenge`
 里 crash.
 

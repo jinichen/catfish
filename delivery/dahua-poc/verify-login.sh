@@ -7,7 +7,7 @@
 #
 # 用法:
 #   bash verify-login.sh                                  # 从 .env 读 issuer
-#   BASE=https://192.168.31.199 bash verify-login.sh       # 显式指定
+#   BASE=https://<中央端IP> bash verify-login.sh            # 显式指定
 #   EMAIL=admin@catfish.com PASSWORD=catfish_2026 bash verify-login.sh
 #
 # ── 这个脚本验得到什么 / 验不到什么 ──────────────────────────────
@@ -41,7 +41,7 @@ BASE="${BASE:-}"
 if [ -z "$BASE" ]; then
     if [ ! -f .env ]; then
         echo "❌ 没有 .env 且未指定 BASE"
-        echo "   用法: BASE=https://192.168.31.199 bash verify-login.sh"
+        echo "   用法: BASE=https://<中央端IP> bash verify-login.sh"
         exit 1
     fi
     BASE=$(grep -E "^CATFISH_IDENTITY_ISSUER=" .env | head -1 | cut -d= -f2- || true)

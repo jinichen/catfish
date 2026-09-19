@@ -510,7 +510,7 @@ mod tests_web_url_yaml {
 
     /// 典型现场配置: endpoints 段已有 gateway_url, 后面跟着 oidc 段.
     fn sample() -> String {
-        "endpoints:\n  gateway_url: http://192.168.31.199:8999\noidc:\n  issuer: http://192.168.31.199:8998\n".to_string()
+        "endpoints:\n  gateway_url: http://central.example.com:8999\noidc:\n  issuer: http://central.example.com:8998\n".to_string()
     }
 
     #[test]
@@ -519,7 +519,7 @@ mod tests_web_url_yaml {
             &sample(),
             "endpoints",
             "web_url",
-            "https://192.168.31.199",
+            "https://central.example.com",
         );
         // 必须插在 endpoints 段内, 不能掉进 oidc 段
         let ep_idx = out.find("endpoints:").expect("endpoints 段没了");
@@ -528,8 +528,8 @@ mod tests_web_url_yaml {
         assert!(ep_idx < web_idx && web_idx < oidc_idx,
             "web_url 落在了错误的段里:\n{out}");
         // 既有字段不能动
-        assert!(out.contains("gateway_url: http://192.168.31.199:8999"));
-        assert!(out.contains("issuer: http://192.168.31.199:8998"));
+        assert!(out.contains("gateway_url: http://central.example.com:8999"));
+        assert!(out.contains("issuer: http://central.example.com:8998"));
     }
 
     #[test]
@@ -541,10 +541,10 @@ mod tests_web_url_yaml {
             &sample(),
             "endpoints",
             "web_url",
-            "https://192.168.31.199",
+            "https://central.example.com",
         );
         let back = read_yaml_field(&out, "endpoints", "web_url");
-        assert_eq!(back.as_deref(), Some("https://192.168.31.199"));
+        assert_eq!(back.as_deref(), Some("https://central.example.com"));
     }
 
     #[test]
@@ -552,10 +552,10 @@ mod tests_web_url_yaml {
         let first = replace_or_insert_yaml_field(
             &sample(), "endpoints", "web_url", "https://old.example.com");
         let second = replace_or_insert_yaml_field(
-            &first, "endpoints", "web_url", "https://192.168.31.199");
+            &first, "endpoints", "web_url", "https://central.example.com");
         assert_eq!(
             read_yaml_field(&second, "endpoints", "web_url").as_deref(),
-            Some("https://192.168.31.199")
+            Some("https://central.example.com")
         );
         assert!(!second.contains("old.example.com"), "旧值没被替换掉:\n{second}");
         // 不能写成两行
@@ -564,14 +564,14 @@ mod tests_web_url_yaml {
 
     #[test]
     fn no_endpoints_section_creates_one() {
-        let input = "oidc:\n  issuer: http://192.168.31.199:8998\n";
+        let input = "oidc:\n  issuer: http://central.example.com:8998\n";
         let out = replace_or_insert_yaml_field(
-            &input, "endpoints", "web_url", "https://192.168.31.199");
+            &input, "endpoints", "web_url", "https://central.example.com");
         assert_eq!(
             read_yaml_field(&out, "endpoints", "web_url").as_deref(),
-            Some("https://192.168.31.199")
+            Some("https://central.example.com")
         );
-        assert!(out.contains("issuer: http://192.168.31.199:8998"), "oidc 段被弄丢:\n{out}");
+        assert!(out.contains("issuer: http://central.example.com:8998"), "oidc 段被弄丢:\n{out}");
     }
 
     #[test]
@@ -586,10 +586,10 @@ mod tests_web_url_yaml {
         // ServerSetupCard 只传 gateway+identity 时不会走到 web_url 分支;
         // 反过来这里确认写 web_url 不会动 gateway_url.
         let out = replace_or_insert_yaml_field(
-            &sample(), "endpoints", "web_url", "https://192.168.31.199");
+            &sample(), "endpoints", "web_url", "https://central.example.com");
         assert_eq!(
             read_yaml_field(&out, "endpoints", "gateway_url").as_deref(),
-            Some("http://192.168.31.199:8999")
+            Some("http://central.example.com:8999")
         );
     }
 }
