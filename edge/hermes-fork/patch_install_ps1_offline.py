@@ -256,8 +256,20 @@ PATCH_4_INSTALL_REPO = f"""    $didUpdate = $false
         $tempExtractRoot = Join-Path $env:TEMP ("catfish-hermes-extract-" + [Guid]::NewGuid().ToString("N"))
         New-Item -ItemType Directory -Force -Path $tempExtractRoot | Out-Null
         try {{
-            tar -xzf $OfflineSourceTar -C $tempExtractRoot
-            if ($LASTEXITCODE -ne 0) {{ throw "tar 解压 exit=$LASTEXITCODE" }}
+            # 9/19: 把 tar 自己的输出抓下来带进异常。
+            #
+            # 原来是光 `throw "tar 解压 exit=$LASTEXITCODE"` —— 鸿波真机上
+            # 就撞了一次 exit=2, 日志里只有这一句, **tar 说的原因一个字都
+            # 没有**。而 exit=2 在 bsdtar 里是个笼统的"致命错误": 路径太长、
+            # 建不了符号链接、磁盘满、文件名非法, 全是这一个码。
+            #
+            # 没有原文就只能靠猜 + 让人去真机上手工复跑一遍 —— 那正是我们
+            # 今天在别处反复修的那种"降级了但不说话"。
+            $tarOutput = & tar -xzf $OfflineSourceTar -C $tempExtractRoot 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) {{
+                $detail = if ($tarOutput.Trim()) {{ $tarOutput.Trim() }} else {{ "(tar 没有输出任何错误文本)" }}
+                throw "tar 解压 exit=$LASTEXITCODE`n$detail"
+            }}
         }} catch {{
             Write-Warn "Catfish offline: tar 解压挂: $_"
             Remove-Item -Recurse -Force $tempExtractRoot -ErrorAction SilentlyContinue

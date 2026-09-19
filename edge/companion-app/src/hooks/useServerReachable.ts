@@ -49,6 +49,35 @@ const PING_DEBOUNCE_MS = 500;    // 员工连续改 URL 时 debounce 500ms 再 r
  * BL-CSP-PROXY (7/18 鸿波): 走 fetchViaProxy (Rust reqwest), 不直接 fetch — 员工输
  * 远端 IP 时 build 版被 CSP connect-src 拦 (dev 用 vite HMR self origin 不拦 · 有陷阱).
  */
+/** 把任何形态的 rejection 变成一句人能看懂的话。
+ *
+ * 9/19 鸿波截图里那条是:
+ *
+ *     认证服务不通 (http://127.0.0.1:8998): undefined
+ *
+ * 原来直接写 `(res.reason as Error).message` —— 那个 `as` 是个谎: 通过
+ * Tauri 代理层 reject 出来的东西不一定是 Error, 可能是字符串、可能是
+ * `{ message?: ... }` 形状的对象。不是 Error 时 `.message` 就是 undefined,
+ * 于是模板串出 "undefined", 员工拿到一句**比没有还糟**的提示 —— 它看起来
+ * 像我们报了原因, 其实什么都没说。
+ */
+export function reasonText(err: unknown): string {
+  if (err instanceof Error && err.message) return err.message;
+  if (typeof err === "string" && err.trim()) return err;
+  if (err && typeof err === "object") {
+    const m = (err as { message?: unknown }).message;
+    if (typeof m === "string" && m.trim()) return m;
+    try {
+      const j = JSON.stringify(err);
+      if (j && j !== "{}") return j;
+    } catch {
+      /* 循环引用之类, 往下走 */
+    }
+  }
+  // 到这儿说明真的什么信息都没有 —— 也要说清楚"没有", 别丢个 undefined 出去
+  return `无错误信息 (${Object.prototype.toString.call(err)})`;
+}
+
 async function fetchWithTimeout(url: string, ms: number): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ms);
@@ -115,14 +144,14 @@ export function useServerReachable() {
     if (!identityReachable) {
       const reason =
         identityRes.status === "rejected"
-          ? (identityRes.reason as Error).message
+          ? reasonText(identityRes.reason)
           : `HTTP ${(identityRes as PromiseFulfilledResult<Response>).value.status}`;
       errors.push(`认证服务不通 (${identityUrl || "URL 未配"}): ${reason}`);
     }
     if (!gatewayReachable) {
       const reason =
         gatewayRes.status === "rejected"
-          ? (gatewayRes.reason as Error).message
+          ? reasonText(gatewayRes.reason)
           : `HTTP ${(gatewayRes as PromiseFulfilledResult<Response>).value.status}`;
       errors.push(`网关不通 (${gatewayUrl || "URL 未配"}): ${reason}`);
     }
