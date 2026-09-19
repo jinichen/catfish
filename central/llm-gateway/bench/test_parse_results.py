@@ -120,3 +120,81 @@ def test_the_shipped_baseline_matches_some_real_config(users: str, run_time: str
     cfg = shipped.get("config") or {}
     assert cfg.get("users"), "基线必须记下它是多少用户采的"
     assert cfg.get("run_time"), "基线必须记下它跑了多久"
+
+
+# ─── 重采基线 (9/19) ────────────────────────────────────────
+
+
+def test_emit_baseline_shape_is_what_compare_actually_reads(tmp_path: Path):
+    """--emit-baseline 产出的东西必须真能被 compare() 读。
+
+    9/19: baseline.json 自己的 _comment 教人
+
+        cp bench/result_summary.json bench/baseline.json
+
+    **那是坏的**。两边 endpoints 形状不一样:
+
+        summary   → list,  每项带 name
+        baseline  → dict,  按名字索引
+
+    照着 cp 之后 `name not in base_endpoints` 对 list 永远成立, 每个 endpoint
+    都被判"新增", 回归检查一条都不报 —— 门禁还在但已经空了, 而且毫无迹象。
+    """
+    stats = tmp_path / "run_stats.csv"
+    stats.write_text(STATS_CSV, encoding="utf-8")
+    out = tmp_path / "new-baseline.json"
+    r = subprocess.run(
+        [sys.executable, str(SCRIPT), "--stats", str(stats),
+         "--baseline", str(tmp_path / "nonexistent.json"),
+         "--users", "300", "--run-time", "3m",
+         "--emit-baseline", str(out)],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 0, r.stderr
+    data = json.loads(out.read_text())
+
+    assert isinstance(data["endpoints"], dict), "endpoints 必须是按名字索引的 dict"
+    assert "GET /api/quota/me" in data["endpoints"]
+    # config 不能少 —— 少了 check_config_match 就是摆设
+    assert data["config"]["users"] == 300
+    assert data["config"]["run_time"] == "3m"
+    assert data.get("captured_at")
+
+
+def test_emitted_baseline_round_trips_through_compare(tmp_path: Path):
+    """拿产出的基线立刻再比一次, 必须 exit 0 —— 自己跟自己比不该有回归。"""
+    stats = tmp_path / "run_stats.csv"
+    stats.write_text(STATS_CSV, encoding="utf-8")
+    base = tmp_path / "b.json"
+    subprocess.run(
+        [sys.executable, str(SCRIPT), "--stats", str(stats), "--baseline", str(base),
+         "--users", "300", "--run-time", "3m", "--emit-baseline", str(base)],
+        capture_output=True, text=True, check=True,
+    )
+    r = run(tmp_path, base, "--users", "300", "--run-time", "3m")
+    assert r.returncode == 0, f"自己跟自己比居然报回归: {r.stdout}{r.stderr}"
+
+
+def test_a_summary_json_pasted_as_baseline_is_refused(tmp_path: Path):
+    """有人真照老注释 cp 了 summary.json 过来 —— 必须当场红, 不能静默零回归。"""
+    bad = tmp_path / "baseline.json"
+    bad.write_text(json.dumps({
+        "endpoints": [{"name": "GET /api/quota/me", "p50_ms": 120}],   # list, 错的形状
+    }), encoding="utf-8")
+    r = run(tmp_path, bad, "--users", "300", "--run-time", "3m")
+    assert r.returncode == 2, "形状不对却放行了 —— 门禁会静默失效"
+    assert "endpoints" in r.stderr and "dict" in r.stderr
+    assert "--emit-baseline" in r.stderr, "得告诉人正确做法"
+
+
+def test_the_shipped_baseline_comment_does_not_teach_the_broken_cp():
+    """出厂 baseline.json 的注释不许再教人 cp summary.json。
+
+    这条测的是**文档**: 上一版就是照着那句话做会坏事。留着它, 下一个人照做
+    一遍, 回归检查又空一次。
+    """
+    shipped = json.loads((HERE / "baseline.json").read_text())
+    comment = shipped.get("_comment", "")
+    assert "cp bench/result_summary.json" not in comment, (
+        "注释还在教 cp summary.json —— 那会让回归检查静默失效"
+    )

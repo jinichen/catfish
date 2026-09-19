@@ -1,5 +1,5 @@
 {
-  "_comment": "P3.5.61 (6/22 鸿波) — nightly bench baseline. 跑 bench/run.sh 1000 10m 后 parse_results.py 比这文件. 想 reset baseline: 跑成功后 cp bench/result_summary.json bench/baseline.json (人工 review 不是脚本自动).",
+  "_comment": "P3.5.61 (6/22 鸿波) — nightly bench baseline。重采方式: parse_results.py --stats <locust 的 *_stats.csv> --users <N> --run-time <T> --emit-baseline <新文件>, 人工 review 之后再替换本文件 (不要脚本自动覆盖)。⚠ 9/19: 这里原来教人直接把 summary 那份产物拷过来当基线 —— 那是坏的: 两者的 endpoints 形状不同 (一个是 list 一个是按名字索引的 dict), 拷过去之后 每个 endpoint 都被判成「新增」, 回归检查从此一条都不报, 而且毫无迹象。现在 compare() 会检查形状并当场 exit 2。config 段必须跟 bench-nightly.yml 实跑的 USERS/RUN_TIME 一致, 否则 check_config_match 会 exit 2 拒绝比较。",
   "captured_at": "2026-06-22",
   "captured_from": "csv-1000-20260609-052027_stats.csv (1000 users, 10min, mock upstream, 1 uvicorn worker)",
   "config": {
@@ -14,7 +14,7 @@
       "p50_ms": 13000,
       "p95_ms": 18000,
       "p99_ms": 19000,
-      "rps": 2.30,
+      "rps": 2.3,
       "fail_rate": 0.0116
     },
     "GET GET /api/audit/me": {
@@ -28,7 +28,7 @@
       "p50_ms": 13000,
       "p95_ms": 18000,
       "p99_ms": 19000,
-      "rps": 8.90,
+      "rps": 8.9,
       "fail_rate": 0.0071
     },
     "GET GET /v1/catalog": {

@@ -176,7 +176,20 @@ def compare(result: Result, baseline_path: Path, threshold: float) -> None:
     except json.JSONDecodeError as e:
         print(f"[err] baseline 解 JSON 失败: {e}", file=sys.stderr)
         sys.exit(2)
-    base_endpoints: dict[str, dict] = baseline_data.get("endpoints", {})
+    base_endpoints = baseline_data.get("endpoints", {})
+    # 9/19: 形状不对就当场报, 别静默变成"零回归"。
+    # summary.json 的 endpoints 是 list, baseline 要的是 dict —— 拿 list 当
+    # dict 用的话 `name not in base_endpoints` 永远成立, 每个 endpoint 都被
+    # 判成新增, 门禁还在但已经空了。这种失效没有任何外部迹象。
+    if not isinstance(base_endpoints, dict):
+        print(
+            f"[err] baseline {baseline_path} 的 endpoints 是 "
+            f"{type(base_endpoints).__name__}, 应该是按名字索引的 dict。\n"
+            "      八成是手工 cp 了 summary.json —— 那两个形状不一样。\n"
+            "      正确做法: parse_results.py --stats <csv> --emit-baseline <路径>",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     current_by_name = {ep.name: ep for ep in result.endpoints}
 
@@ -219,6 +232,64 @@ def compare(result: Result, baseline_path: Path, threshold: float) -> None:
     for name in base_endpoints:
         if name not in current_by_name:
             result.missing_endpoints.append(name)
+
+
+def render_baseline(result: Result, users: int | None, run_time: str | None) -> dict:
+    """产出一份**能直接当 baseline.json 用**的结构。
+
+    9/19: 加这个是因为 baseline.json 自己的 _comment 写的是
+
+        想 reset baseline: 跑成功后 cp bench/result_summary.json bench/baseline.json
+
+    而那条**是坏的**。两边的 endpoints 形状根本不一样:
+
+        render_summary → list, 每项带 name     [{"name": "GET /x", "p50_ms": ...}]
+        compare()      → dict, 按名字取         base_endpoints[name]
+
+    照着 cp 过去之后, `name not in base_endpoints` 对一个 list 永远成立, 于是
+    每个 endpoint 都被判成"新增", **回归检查从此一条都不报** —— 门禁还在,
+    但已经空了, 而且没有任何迹象。
+
+    所以不留"照着抄"的路子, 直接给一个产出正确形状的开关。顺便把 config
+    和 captured_at 一起写进去 —— 没有它们, check_config_match 就是摆设。
+    """
+    return {
+        "_comment": (
+            "nightly bench baseline。重采: parse_results.py --emit-baseline <路径> "
+            "(**别**手工 cp summary.json —— 两者 endpoints 形状不同, 见 render_baseline)。"
+            "采完人工 review 再替换, 不要脚本自动覆盖。"
+        ),
+        "captured_at": _today(),
+        "captured_from": f"{users or '?'} users / {run_time or '?'}",
+        "config": {"users": users, "run_time": run_time},
+        "endpoints": {
+            ep.name: {
+                "p50_ms": ep.p50_ms,
+                "p95_ms": ep.p95_ms,
+                "p99_ms": ep.p99_ms,
+                "rps": round(ep.rps, 2),
+                "fail_rate": round(ep.fail_rate, 4),
+            }
+            for ep in result.endpoints
+        },
+        "aggregated": (
+            {
+                "p50_ms": result.aggregated.p50_ms,
+                "p95_ms": result.aggregated.p95_ms,
+                "p99_ms": result.aggregated.p99_ms,
+                "rps": round(result.aggregated.rps, 2),
+                "fail_rate": round(result.aggregated.fail_rate, 4),
+            }
+            if result.aggregated
+            else None
+        ),
+    }
+
+
+def _today() -> str:
+    from datetime import date
+
+    return date.today().isoformat()
 
 
 def render_summary(result: Result, threshold: float, baseline_path: Path) -> dict:
@@ -317,6 +388,12 @@ def main() -> int:
     # 只有调用方知道自己跑的是多少用户、多久。不传就退化成老行为 (不校验)。
     ap.add_argument("--users", type=int, help="这次实跑的并发用户数 (校验基线可比性)")
     ap.add_argument("--run-time", dest="run_time", help="这次实跑的时长, 如 3m")
+    ap.add_argument(
+        "--emit-baseline",
+        type=Path,
+        help="把这次结果写成一份新的 baseline.json (形状正确, 含 config)。"
+        "写完不比较、直接退出 0 —— 重采基线时用, 人工 review 后再替换正式文件。",
+    )
     args = ap.parse_args()
 
     if not args.stats.exists():
@@ -327,6 +404,15 @@ def main() -> int:
     if not result.endpoints and not result.aggregated:
         print(f"[err] stats {args.stats} 解出 0 endpoint — locust 没跑/失败", file=sys.stderr)
         return 2
+
+    if args.emit_baseline:
+        args.emit_baseline.parent.mkdir(parents=True, exist_ok=True)
+        args.emit_baseline.write_text(
+            json.dumps(render_baseline(result, args.users, args.run_time),
+                       indent=2, ensure_ascii=False) + "\n"
+        )
+        print(f"[ok] 新基线已写到 {args.emit_baseline} —— 请人工 review 后再替换正式 baseline.json")
+        return 0
 
     check_config_match(args.baseline, args.users, args.run_time)
     compare(result, args.baseline, args.threshold)
