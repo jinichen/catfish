@@ -402,3 +402,55 @@ def test_按cp1252重解会毁掉中文_证明bom不是可选项(upstream_instal
     assert not has_cjk(body.decode("cp1252", errors="replace")), (
         "cp1252 重解之后中文居然还在 —— 反证的前提不对, 重新想"
     )
+
+
+# ─── 离线 Python 解到哪 (9/19 真机 bug) ─────────────────────
+
+
+def test_python_install_dir_is_never_guessed(upstream_install_ps1: str):
+    """打出来的脚本里**不许**出现猜 %LOCALAPPDATA% 的那行。
+
+    9/19 鸿波在一台干净的 Windows 上装, Hermes 核心环境挂在 python 这步:
+
+        {"ok":false,"reason":"error: No interpreter found for Python 3.11 in
+         virtual environments, managed installations, search path, or registry",
+         "stage":"python"}
+
+    查下来 zip 解压成功了, 目录结构也对 (python.exe 在顶层), 但解在了
+
+        %LOCALAPPDATA%\\uv\\python      ← 补丁猜的
+        %APPDATA%\\uv\\python           ← uv python dir 实际返回的
+
+    两个不是一个地方。补丁上面的注释写着"不用猜 %APPDATA% vs %LOCALAPPDATA%",
+    而 else 分支干的就是猜 —— 注释跟代码对不上, 而且代码是错的那个。
+
+    **跟架构无关, 每台 Windows 都中。** 之前没炸是因为后面有"回退网络路径":
+    有网的机器 uv 直接下一个, 把它盖住了。断网现场盖不住。
+    """
+    patched = apply_patches(upstream_install_ps1)
+    assert "Join-Path $env:LOCALAPPDATA \"uv\\python\"" not in patched, (
+        "又在猜 %LOCALAPPDATA% —— uv 用的是 %APPDATA%"
+    )
+    assert "uv python dir" in patched or "python dir" in patched, (
+        "应该问 uv 自己要目录, 而不是猜"
+    )
+
+
+def test_python_install_dir_falls_back_to_appdata_not_localappdata(
+    upstream_install_ps1: str,
+):
+    """老版本 uv 没有 `python dir` 子命令时的退路要退对地方。
+
+    退回 %LOCALAPPDATA% 等于把刚修掉的 bug 又原样放回来 —— 只是换了个触发
+    条件 (老 uv 而不是所有机器)。
+    """
+    patched = apply_patches(upstream_install_ps1)
+    fallback_line = [
+        line for line in patched.splitlines()
+        if "Join-Path $env:" in line and "uv" in line and "python" in line
+    ]
+    assert fallback_line, "找不到兜底那行"
+    for line in fallback_line:
+        assert "APPDATA" in line and "LOCALAPPDATA" not in line, (
+            f"兜底退到了错的盘: {line.strip()}"
+        )

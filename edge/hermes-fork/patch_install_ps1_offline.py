@@ -186,12 +186,39 @@ PATCH_2_INSTALL_UV = f"""    $managedUv = Join-Path $HermesHome "bin\\uv.exe"
 # 走 UV_PYTHON_INSTALL_DIR 环境变量 (uv 0.4+ 官方支持) 而不是猜路径.
 # uv doc: https://docs.astral.sh/uv/reference/environment/#uv_python_install_dir
 # 让 uv 自己决定 cache root, 我们只 push zip 内容进去. build 前不用 spike.
+#
+# 9/19 修一个真 bug: 上面这段注释说"不用猜", 可下面那行 else 分支干的**就是猜**,
+# 而且猜错了 ——
+#
+#     猜的:       %LOCALAPPDATA%\\uv\\python
+#     uv 实际用:  %APPDATA%\\uv\\python        (即 Roaming, 不是 Local)
+#
+# 于是 zip 解压到了一个 uv 根本不看的目录, uv python find 当然找不到, 报
+# "No interpreter found for Python 3.11 in ... managed installations ..."。
+#
+# **这跟平台架构无关, 每台 Windows 都中。** 之前没炸是因为后面还有一层
+# "回退网络路径": 有网的机器 uv 直接去下载一个, 把这个 bug 完全盖住了。
+# 断网现场盖不住 —— 这很可能就是"断网装不上"的一大块。
+#
+# 改成**问 uv 自己**(`uv python dir`), 一处真相, 不再有猜的余地。拿不到
+# 就退回 %APPDATA% (老版本 uv 没有这个子命令), 而不是退回那个已知错的路径。
 PATCH_3_TEST_PYTHON = f"""    {MARKER}: Catfish offline — expand embedded python zip, skip uv install (network)
     if ($OfflinePythonZip -and (Test-Path $OfflinePythonZip)) {{
         Write-Info "Catfish offline: expanding python from $OfflinePythonZip"
-        # 走 UV_PYTHON_INSTALL_DIR 让 uv 自己识别 (不用猜 %APPDATA% vs %LOCALAPPDATA%)
-        $uvPythonRoot = if ($env:UV_PYTHON_INSTALL_DIR) {{ $env:UV_PYTHON_INSTALL_DIR }}
-                       else {{ Join-Path $env:LOCALAPPDATA "uv\\python" }}
+        # 问 uv 自己要目录 —— 9/19 之前这里猜 %LOCALAPPDATA%, 而 uv 用的是
+        # %APPDATA%, 解压到了没人看的地方。别再猜。
+        $uvPythonRoot = $env:UV_PYTHON_INSTALL_DIR
+        if (-not $uvPythonRoot) {{
+            $uvPythonRoot = (& $UvCmd python dir 2>$null | Select-Object -First 1)
+            if ($uvPythonRoot) {{ $uvPythonRoot = $uvPythonRoot.Trim() }}
+        }}
+        if (-not $uvPythonRoot) {{
+            # 老版本 uv 没有 `python dir` 子命令。退到 %APPDATA% (uv 的真实
+            # 默认值), 不是退到那个已经证明是错的 %LOCALAPPDATA%。
+            $uvPythonRoot = Join-Path $env:APPDATA "uv\\python"
+            Write-Warn "Catfish offline: uv python dir 拿不到, 退回 $uvPythonRoot"
+        }}
+        Write-Info "Catfish offline: python install dir = $uvPythonRoot"
         New-Item -ItemType Directory -Path $uvPythonRoot -Force | Out-Null
         try {{
             Expand-Archive -Path $OfflinePythonZip -DestinationPath $uvPythonRoot -Force
