@@ -1,45 +1,74 @@
-# gitleaks 历史豁免 —— 9/19
+# gitleaks 历史 commit fingerprint 豁免 — BL-SEC2 (5/10).
 #
-# ⚠ 这个文件里的每一条都是**真泄漏**, 不是误报。列在这里只表示
-#    "已知、已处理、历史不可改", 不表示"没事"。
+# 用途: 精确豁免特定 commit 里已经合并的 leak。
+# 跟 .gitleaks.toml 双层防御: toml 走 path/regex 一般规则, 这里走具体 fingerprint.
+#
+# 格式: <commit_sha>:<file_path>:<rule_id>:<line>
+# (跟 gitleaks scan 输出的 fingerprint 一致, 直接复制粘贴)
+#
+# 原则 (5/10 立的): 加新 fingerprint 前先确认是**误报**。真泄漏应该 revoke +
+# 重写历史, 而不是 ignore。
+#
+# ⚠ 9/19 破了这条原则一次, 理由写在下面第二节。破规矩就得写清楚为什么,
+#   不然下一个人会以为"往这儿加一行"是处理泄漏的标准动作。
+
+
+# ── 一、误报 (CI run #36, 5/10) ──────────────────────────────
+
+# 1. tests/test_prompt_security.py:257 — 单测里的 "token: ghp_abcdef1234567890"
+#    用来验 BL-FIX13 detect_credentials_in_text 函数能逮到这种 pattern, 不是真 token.
+96e5179a189c7186fd1481bbd04cbebad485a1b1:central/llm-gateway/tests/test_prompt_security.py:generic-api-key:257
+
+# 2. skills-hub app.py 旧版 line 156 的 curl docstring
+#    (现在迁到 line 216, 但 commit blob 里旧版仍触发 curl-auth-header 规则)
+2762b2486b6a1b8bfc7c82503273e49382543dfb:central/skills-hub/src/catfish_skills_hub/app.py:curl-auth-header:156
+
+# 3. P42 (6/5 鸿波) — memory_distill.py:280 是 LLM 调用的参数 dict
+#    ("max_tokens" / "frequency_penalty" / "presence_penalty"), 不是 secret。
+#    gitleaks 的 generic-api-key 规则对这种 key-value 会 fuzzy 误判。
+#    文件后来被 refactor 掉了, 但 commit 3151362f 的 blob 还在历史里。
+3151362ff559d583a8b98353d2bdafc29de75866:central/llm-gateway/src/catfish_gateway/memory_distill.py:generic-api-key:280
+
+
+# ── 二、真泄漏 (9/19) ────────────────────────────────────────
+#
+# ⚠ 下面 7 条**不是误报**。列在这里只表示"已知、已处理、历史不可改",
+#    不表示"没事"。
 #
 # # 发生了什么
 #
 # 达华交付文档里写死过两个真值:
 #
-#     PG_PASSWORD=Dahua_PG_…          (24 字符, 看名字就是给达华用的)
+#     PG_PASSWORD=Dahua_PG_…          (24 字符, 名字就是给达华用的)
 #     SKILLS_HUB_TOKEN=aad226ad…      (64 位十六进制)
 #
 # 外加一份压测 compose 里的 CATFISH_SECRET_MASTER_KEY。
 #
 # # 为什么躺了两个月没人发现
 #
-# .gitleaks.toml 的路径白名单里有一条 `docs/.*\.md$`。它看着像"只豁免顶层
-# docs/", 实际 gitleaks 的 path regex 是**子串匹配** —— 于是
-# `delivery/dahua-poc/docs/达华服务端一键部署SOP.md` 也命中了, 那份**给客户
-# 的交付文档**从此对秘密扫描隐形。
+# 不是"扫得不够勤" —— security.yml 每次 push、每个 PR 都跑 gitleaks。
+# 是 .gitleaks.toml 里那条 `docs/.*\.md$` 白名单: 它看着像"只豁免顶层
+# docs/", 而 gitleaks 的 path regex 是**子串匹配**, 于是
+# `delivery/dahua-poc/docs/达华服务端一键部署SOP.md` 也命中 —— 那份**给客户
+# 的交付文档**从此对秘密扫描隐形。最该查真凭据的地方反而不查。
+# 9/19 收紧成 `^docs/`, 藏着的两条当场露出来。
 #
-# security.yml 每次 push 都跑 gitleaks, 一次没漏, 每次都被这条白名单豁免掉。
-# 9/19 收紧成 `^docs/` 之后, 藏着的两条当场就露出来了。
+# # 为什么破"真泄漏要重写历史"那条规矩
 #
-# # 已经做了什么
+# 这个仓库是 **public** 的。这些值早就被爬过、fork 过、归档过了。
+# filter-repo 重写历史删不掉别人手里的副本, 只会把所有人的 clone 弄坏 ——
+# 付出全部代价, 换不回任何保密性。
 #
-#   · 工作树里的真值全部换成占位符 (CHANGE_ME_*), git grep 确认零残留
-#   · `docs/.*\.md$` → `^docs/.*\.md$`, 交付文档和归档手册不再豁免
+# 所以: 不改历史, 登记在案, 把力气花在**唯一真正有效的动作**上 —— 轮换。
 #
-# # 还没做, 而且只能由人来做
+# # 还没做的事 (只能由人做)
 #
-#   **轮换**。这个仓库是 public 的, 这些值早就被爬过、fork 过、归档过了。
-#   改 git 历史 (filter-repo) 不能把它们从别人的副本里删掉, 只会把所有人的
-#   clone 弄坏 —— 所以不改历史, 列在这里, 然后去换掉真正的凭据:
+#     PG_PASSWORD               → 换掉达华现网 postgres 密码
+#     SKILLS_HUB_TOKEN          → 换掉 skills-hub 发布 token
+#     CATFISH_SECRET_MASTER_KEY → 若在任何真实部署里用过, 一并换
 #
-#     PG_PASSWORD        → 达华现网 postgres 密码
-#     SKILLS_HUB_TOKEN   → skills-hub 发布 token
-#     CATFISH_SECRET_MASTER_KEY → 若在任何真实部署里用过
-#
-#   换完之后这几行仍然留着 (历史不会变), 但它们指向的东西已经失效。
-#
-# fingerprint 格式: <commit>:<file>:<rule>:<line>
+# 换完之后这几行仍然留着 (历史不会变), 但它们指向的东西已经失效。
+# 在轮换完成之前, 这一节就是一张**未结清的欠条**。
 
 732b73577846aa2950da50d172f53a7667b826d3:delivery/dahua-poc/docs/达华服务端一键部署SOP.md:generic-api-key:129
 732b73577846aa2950da50d172f53a7667b826d3:delivery/dahua-poc/docs/达华服务端一键部署SOP.md:generic-api-key:140
