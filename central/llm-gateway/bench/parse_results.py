@@ -103,6 +103,64 @@ def parse_stats_csv(path: Path) -> Result:
     return Result(endpoints=endpoints, aggregated=aggregated)
 
 
+def check_config_match(baseline_path: Path, users: int | None, run_time: str | None) -> None:
+    """跑的负载跟基线不是一个量级的话, 拒绝比较。
+
+    9/19 查 Bench Nightly #90 挂的时候发现:
+
+        baseline.json  captured_at 2026-06-22, config = 1000 users / 10m
+        bench-nightly  实跑 300 users / 3m
+
+    两边不是一回事, 比出来的结论**双向失真**:
+
+      · 基线 p50 是 13000ms —— 1000 用户压满队列的数字。300 用户跑出来
+        几百毫秒, 要慢 **26 倍**才够触发 10% 阈值。延迟检查等于是死的,
+        真回归了也照样绿。
+      · 反过来, 任何一点 fail_rate 抖动都会被判成回归, 因为那条规则不看
+        负载差异。
+
+    一个既拦不住真回归、又会为噪声报警的门禁, 比没有门禁更坏 —— 它让人
+    以为性能有人看着。
+
+    所以配置不一致就**当场报错退出**, 而不是给一个没意义的判决。修法只有
+    两条, 错误信息里都写了: 要么把 nightly 跑成基线的负载, 要么按当前负载
+    重新采一份基线 (人工 review, 不是脚本自动覆盖)。
+    """
+    if users is None and run_time is None:
+        return  # 调用方没告诉我们跑的什么, 没法判 —— 老调用方兼容
+    if not baseline_path.exists():
+        return
+    try:
+        cfg = json.loads(baseline_path.read_text()).get("config") or {}
+    except json.JSONDecodeError:
+        return  # 解析失败交给 compare() 报, 别在这儿抢
+
+    mismatch = []
+    if users is not None and cfg.get("users") is not None and int(cfg["users"]) != int(users):
+        mismatch.append(f"users: 基线 {cfg['users']} vs 实跑 {users}")
+    if (
+        run_time is not None
+        and cfg.get("run_time") is not None
+        and str(cfg["run_time"]) != str(run_time)
+    ):
+        mismatch.append(f"run_time: 基线 {cfg['run_time']} vs 实跑 {run_time}")
+    if not mismatch:
+        return
+
+    print(
+        "[err] 基线和这次实跑的负载对不上, 拒绝比较:\n  "
+        + "\n  ".join(mismatch)
+        + f"\n\n基线采于 {json.loads(baseline_path.read_text()).get('captured_at', '?')}。"
+        "\n负载不同的两次压测之间比 p50/p95 没有意义 —— 会同时**漏报真回归**"
+        "\n和**为噪声报警**。两条修法二选一:"
+        "\n  1. 把 bench-nightly.yml 的 USERS / RUN_TIME 改成跟基线一致"
+        "\n  2. 按当前负载重新采基线: 跑一次成功的 bench 之后"
+        "\n     cp bench/result_summary.json bench/baseline.json (人工 review)",
+        file=sys.stderr,
+    )
+    sys.exit(2)
+
+
 def compare(result: Result, baseline_path: Path, threshold: float) -> None:
     """diff result.endpoints vs baseline.json. 副作用: 填 result.regressions /
     new_endpoints / missing_endpoints."""
@@ -255,6 +313,10 @@ def main() -> int:
     ap.add_argument("--threshold", type=float, default=0.10, help="regression threshold (0.10 = 10%)")
     ap.add_argument("--out", type=Path, help="JSON summary out path (optional)")
     ap.add_argument("--md", type=Path, help="markdown summary out path (optional)")
+    # 9/19: 这两个是给 check_config_match 用的 —— locust 的 csv 不记负载参数,
+    # 只有调用方知道自己跑的是多少用户、多久。不传就退化成老行为 (不校验)。
+    ap.add_argument("--users", type=int, help="这次实跑的并发用户数 (校验基线可比性)")
+    ap.add_argument("--run-time", dest="run_time", help="这次实跑的时长, 如 3m")
     args = ap.parse_args()
 
     if not args.stats.exists():
@@ -266,6 +328,7 @@ def main() -> int:
         print(f"[err] stats {args.stats} 解出 0 endpoint — locust 没跑/失败", file=sys.stderr)
         return 2
 
+    check_config_match(args.baseline, args.users, args.run_time)
     compare(result, args.baseline, args.threshold)
     summary = render_summary(result, args.threshold, args.baseline)
 

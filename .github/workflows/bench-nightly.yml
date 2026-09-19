@@ -109,11 +109,16 @@ jobs:
       - name: Parse + regression check
         env:
           THRESHOLD: ${{ github.event.inputs.threshold || '0.10' }}
+          # 9/19: 传给 --users / --run-time 做基线可比性校验。locust 的 csv
+          # 不记负载参数, 只有这里知道。跟上面 Run locust 那步保持同一个默认值。
+          USERS: ${{ github.event.inputs.users || '300' }}
+          RUN_TIME: ${{ github.event.inputs.run_time || '3m' }}
         run: |
           python bench/parse_results.py \
             --stats "bench/nightly-${TS}/run_stats.csv" \
             --baseline bench/baseline.json \
             --threshold "$THRESHOLD" \
+            --users "$USERS" --run-time "$RUN_TIME" \
             --out "bench/nightly-${TS}/summary.json" \
             --md "bench/nightly-${TS}/summary.md"
         # exit code 1 = regression, 让 step 红, job 失败. 0 = OK.
