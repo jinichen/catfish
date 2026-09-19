@@ -31,8 +31,18 @@ paths = [
   '''.*/test_.*\.py$''',
   '''.*\.test\.tsx?$''',
 
-  # 设计 / 部署文档 — 含 curl 示例 + 占位符
-  '''docs/.*\.md$''',
+  # 设计文档 — 含 curl 示例 + 占位符
+  #
+  # ⚠ 9/19: 这里原来是 '''docs/.*\.md$''' —— 看着像"只豁免顶层 docs/",
+  # 实际上 gitleaks 的 path regex 是**子串匹配**, 于是
+  # `delivery/dahua-poc/docs/达华服务端一键部署SOP.md` 也命中了。
+  # 结果: 那份文档里两个**真值**
+  #     PG_PASSWORD=Dahua_PG_…   SKILLS_HUB_TOKEN=aad226ad…(64 hex)
+  # 被这条豁免掉, 夜扫一直看不见, 一直躺在 public 仓库里。
+  #
+  # 钉成 ^docs/ —— 只豁免仓库顶层那个设计文档目录。交付文档 (delivery/)、
+  # 归档手册 (archive-*/) 这些**给客户看的东西里最可能夹真凭据**, 不豁免。
+  '''^docs/.*\.md$''',
   '''.*/README\.md$''',
   '''.*/CHANGELOG\.md$''',
   '''.*/SOUL\.md$''',           # edge/identity/SOUL.md 含 prompt 提到 api_key 占位
@@ -86,7 +96,11 @@ regexes = [
   '''^0123456789abcdef$''',
 ]
 
-# 历史 commit fingerprint (用于精确豁免特定 commit 已有的 leak)
-# fingerprint 格式: <commit_sha>:<file_path>:<rule_id>:<line>
-# 加这里的 fingerprint 就算 path/regex 没匹配也豁免.
+# 按 commit SHA 整条豁免。**不是**放 fingerprint 的地方 ——
+# 9/19 之前这里的注释写的是"fingerprint 格式: <commit>:<file>:<rule>:<line>",
+# 那是 `.gitleaksignore` 文件的格式, 不是这个字段的。写错的注释比没注释更坏:
+# 照着它往这里塞 fingerprint 不会报错, 只会**静默地不生效**。
+#
+# 历史泄漏的豁免在仓库根的 .gitleaksignore 里, 那边写清楚了每一条是什么、
+# 为什么还留着、以及"必须轮换"这件事没做完。
 commits = []
