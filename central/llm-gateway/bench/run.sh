@@ -81,16 +81,33 @@ echo "==> locust host 跑 $USERS 用户 → $GATEWAY_HOST..."
 HTML="bench/report-${USERS}-${TS}.html"
 CSV_PREFIX="bench/csv-${USERS}-${TS}"
 
+# 9/20: 加 --exit-code-on-error 0, 跟 bench-nightly.yml 保持**同一个行为**。
+#
+# 原来这里是 `locust ... || echo "(locust exit non-0, 继续 collect 数据)"`:
+# 本机容忍, CI 不容忍。locust 默认"有任何一个请求失败就 exit 1", 而 300 用户
+# 压 3 分钟出现千分之几失败是常态, 于是同一套东西在 Mac 上"正常"、在 runner 上
+# 全红 —— 查了两轮环境差异, 差异其实在这两行脚本里。
+#
+# 一个 `|| echo` 把退出码整片吞掉, 代价是**真崩了也看不出来**。改成: 失败当量
+# 交给 locust 的 flag 处理 (请求级失败不算), 剩下的非零退出如实记下并在末尾
+# 复述一遍, 但不中断 —— 后面几步还要收 gateway 日志和 quota, 崩了才最需要它们。
+LOCUST_EXIT=0
 locust \
     -f bench/locustfile.py \
     --host "$GATEWAY_HOST" \
     --headless \
+    --exit-code-on-error 0 \
     --users "$USERS" \
     --spawn-rate "$SPAWN_RATE" \
     --run-time "$RUN_TIME" \
     --html "$HTML" \
     --csv "$CSV_PREFIX" \
-    || echo "    (locust exit non-0, 继续 collect 数据)"
+    || LOCUST_EXIT=$?
+if [ "$LOCUST_EXIT" -ne 0 ]; then
+    echo "    ⚠ locust 自身非零退出 (exit=$LOCUST_EXIT) —— 这不是「有请求失败」,"
+    echo "      请求级失败已经由 --exit-code-on-error 0 排除了。继续收数据,"
+    echo "      末尾会再提醒一次, gateway 日志在第 7 步。"
+fi
 
 # 5. 停 stats 采样
 if [ -f bench/.stats.pid ]; then
@@ -143,3 +160,11 @@ echo "    打开 HTML 看 P50/P95/P99 + RPS + error rate"
 echo "    pg-quota 看 user 数 / token 总和, 比对 locust 期望"
 echo ""
 echo "    遇 100% 401: grep 'BL-DEBUG-401\\|auth:' $GATEWAY_LOG | head -20"
+
+if [ "$LOCUST_EXIT" -ne 0 ]; then
+    echo ""
+    echo "⚠⚠ 这次 locust 自身非零退出 (exit=$LOCUST_EXIT), 上面的数据**可能不完整**。"
+    echo "    请求级失败不会走到这里 (--exit-code-on-error 0 已排除), 所以这是"
+    echo "    locust 进程本身出了问题: 被 OOM kill (137)、脚本异常、端口连不上之类。"
+    echo "    别拿这次的 csv 采基线 —— parse_results.py --emit-baseline 也会拦。"
+fi

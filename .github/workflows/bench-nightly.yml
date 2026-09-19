@@ -96,9 +96,28 @@ jobs:
           TS="$(date +%Y%m%d-%H%M%S)"
           echo "TS=$TS" >> $GITHUB_ENV
           mkdir -p bench/nightly-${TS}
+          # 9/20: --exit-code-on-error 0 —— 这是 #91 (以及之前那批) 红在
+          # 「Run locust」而不是回归检查上的直接原因。
+          #
+          # locust --headless 的默认是"只要有任何一个请求失败就 exit 1"。
+          # 300 用户压 3 分钟出现千分之几的失败是常态 (6/22 那份基线自己的
+          # fail_rate 就是 0.86%), 于是 job 在这一步就死了, **根本走不到真正
+          # 的判据那一步** —— 而判据本来就该由 parse_results.py 下:
+          # 它比的是 fail_rate 相对基线有没有升 (compare() 里那条 +0.01 规则),
+          # 而不是"有没有失败过"。
+          #
+          # 本机 bench/run.sh 一直是 `locust ... || echo "(exit non-0, 继续)"`,
+          # 也就是本机早就在容忍这个退出码。"Mac 上正常、runner 上全红"里有
+          # 一半是这个不对称造成的, 不是环境差异。
+          #
+          # 把它设成 0 之后, locust 非零退出就只剩"locust 自己崩了"一种含义,
+          # 那种情况仍然让这步红。至于跑坏了的情形有两道兜底都在 parse 里:
+          #   · 零个请求完成 → exit 2 (9/19 加)
+          #   · 大面积失败   → fail_rate 相对基线暴涨 → exit 1
           locust -f bench/locustfile.py \
             --host http://localhost:8999 \
             --headless \
+            --exit-code-on-error 0 \
             --users "$USERS" \
             --spawn-rate 50 \
             --run-time "$RUN_TIME" \
