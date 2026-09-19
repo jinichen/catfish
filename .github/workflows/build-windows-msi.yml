@@ -637,9 +637,6 @@ jobs:
         run: >-
           cargo build --release --target x86_64-pc-windows-msvc
           --features tauri/custom-protocol
-        env:
-          CFLAGS_x86_64_pc_windows_msvc: "/MD"
-          CXXFLAGS_x86_64_pc_windows_msvc: "/MD"
 
       # ─── Tauri msi build (Windows MSVC, no cross-compile) ───
 
@@ -700,10 +697,18 @@ jobs:
         run: npx tauri build --target x86_64-pc-windows-msvc --bundles msi --verbose
         env:
           RUST_LOG: 'info'
-          # W2.14: force /MD dynamic CRT (Rust MSVC default). esaxx-rs C++ 编译
-          # 用 cc-rs, 默认 /MT static CRT 跟 ort-sys /MD 撞 LNK2038.
-          CFLAGS_x86_64_pc_windows_msvc: "/MD"
-          CXXFLAGS_x86_64_pc_windows_msvc: "/MD"
+          # 9/19: 这里原来强制 CFLAGS/CXXFLAGS = /MD (W2.14 修的
+          # esaxx-rs /MT 跟 ort-sys /MD 撞 LNK2038)。**那个冲突已经不存在了**:
+          # 7/16 起 ort + tokenizers 被限定成 cfg(target_arch = "aarch64"),
+          # 而 Windows msi 是 x86_64-pc-windows-msvc —— 这两个 crate 在这条
+          # 构建线上根本不编。留着的 /MD 成了死代码, 而且反过来咬了一口:
+          # 9/19 给主程序加 +crt-static (静态链接 MSVC 运行库, 治干净装机上
+          # 的 "找不到 VCRUNTIME140.dll") 之后, Rust 用 /MT 而 C 被这两行按
+          # 在 /MD 上, 直接 LNK2038。
+          #
+          # 删掉而不是改成 /MT: cc crate 会自己跟着 rustflags 的 crt-static
+          # 走。写死 /MT 的话就有了两个真相来源, 哪天去掉 crt-static 这里
+          # 又会变成新的死代码。
 
       # W2.15 (7/13 CI run #10): candle.exe 挂但 Tauri 只报上层"failed to run".
       # failure 时 dump Handlebars 展开后的 wxs + candle stderr 让 audit.
