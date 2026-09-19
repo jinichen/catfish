@@ -22,3 +22,31 @@ ar = "x86_64-w64-mingw32-ar"
 
 # Windows GNU 默认 link 静态 libgcc / pthread, 否则真机跑时找不到 dll.
 rustflags = ["-C", "link-args=-static-libgcc"]
+
+
+# ── 真正发版走的 target (CI 在 windows-latest 上编这个) ──────────
+#
+# 9/19: 静态链接 MSVC 运行库。
+#
+# 鸿波在一台干净装的 Windows 上启动 Companion, 弹的是:
+#     "由于找不到 VCRUNTIME140.dll, 无法继续执行代码。
+#      重新安装程序可能会解决此问题。"
+#
+# 动态链接的话目标机器必须先装 Visual C++ Redistributable, 而我们的 MSI
+# 不带它 (WiX 的 MSI 本来也没法链式装一个 exe)。之前没暴露是**运气**:
+# 企业装机镜像里 Office / 驱动 / 各种客户端早把这个运行库带进去了。达华
+# 那边只要有一台干净的机器, 员工就会撞上 —— 而弹窗给的建议("重新安装
+# 程序")是无效的, 照做一遍还是起不来。
+#
+# 选静态链接而不是"随包装 redist": 前者是**依赖消失**, 后者是依赖还在、
+# 只是我们帮着装 —— 装上的东西还可能被卸载、被别的安装包降级。
+#
+# ⚠ 风险点在 C 依赖: rusqlite 用 bundled (从源码编 SQLite)。C 那边也必须
+#   跟着用 /MT 而不是 /MD, 否则链接时撞 LNK2038 (运行库不匹配)。cc crate
+#   会自己跟着 rustflags 走, 但这条**只有真在 Windows 上编一次才算数** ——
+#   mac 上编不出 msvc target, 本机验不了。
+#
+# 怎么验: CI 出 MSI → 装在一台**干净的** Windows 上 (没装过 VC++ redist)
+#   → 能起来才算真解决。装过 redist 的机器验不出来, 它本来就不报错。
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
