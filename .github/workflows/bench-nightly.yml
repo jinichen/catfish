@@ -124,6 +124,30 @@ jobs:
         # exit code 1 = regression, 让 step 红, job 失败. 0 = OK.
         continue-on-error: false
 
+      # 9/19: 每次都顺手产一份「按这次结果采的候选基线」, 塞进 artifact。
+      #
+      # 为什么要在 CI 里产, 而不是让人在自己机器上跑 bench/run.sh 采:
+      # 基线和实跑必须在**同一台机器**上取, 否则我们刚修掉的「负载不可比」
+      # 会立刻换成「硬件不可比」—— 一台 M4 Mac 和 GitHub 的 2-core runner
+      # 差出的倍数比任何真回归都大, 门禁又会同时漏报和误报。
+      # 基线的唯一合法产地就是跑对比的那台机器。
+      #
+      # 这一步不改 baseline.json, 只产候选 —— 替换永远是人看过之后的动作。
+      # if: always() 是因为上一步有回归就 exit 1, 而恰恰是那种时候最需要
+      # 拿候选基线对着看「到底是退化了还是基线本来就不对」。
+      - name: Emit candidate baseline (给人 review, 不自动替换)
+        if: always()
+        env:
+          USERS: ${{ github.event.inputs.users || '300' }}
+          RUN_TIME: ${{ github.event.inputs.run_time || '3m' }}
+        run: |
+          python bench/parse_results.py \
+            --stats "bench/nightly-${TS}/run_stats.csv" \
+            --baseline bench/baseline.json \
+            --users "$USERS" --run-time "$RUN_TIME" \
+            --emit-baseline "bench/nightly-${TS}/candidate-baseline.json" \
+          || echo "::notice::候选基线没产出 (这次跑本身不健康, parse 拒绝了) —— 详情看上面 stderr"
+
       - name: Dump stack logs on failure
         if: failure()
         run: |

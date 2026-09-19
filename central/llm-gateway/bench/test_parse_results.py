@@ -187,6 +187,75 @@ def test_a_summary_json_pasted_as_baseline_is_refused(tmp_path: Path):
     assert "--emit-baseline" in r.stderr, "得告诉人正确做法"
 
 
+def test_emit_without_config_flags_is_refused(tmp_path: Path):
+    """漏传 --users/--run-time 采基线 → 拒绝。
+
+    不是洁癖。check_config_match 只在**两边都不是 None** 时才比负载:
+
+        if users is not None and cfg.get("users") is not None and ...
+
+    所以 config 是 null 的基线永远不会因为负载对不上被拒。那正是 6/22 那份
+    基线埋了三个月的坑, 只是换了个形状 —— 从"记了个没人跑的负载"变成
+    "什么都没记, 于是跟任何负载都不冲突"。后者更难发现。
+    """
+    stats = tmp_path / "run_stats.csv"
+    stats.write_text(STATS_CSV, encoding="utf-8")
+    out = tmp_path / "new-baseline.json"
+    r = subprocess.run(
+        [sys.executable, str(SCRIPT), "--stats", str(stats),
+         "--baseline", str(tmp_path / "nonexistent.json"),
+         "--emit-baseline", str(out)],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 2, "没给负载参数也让采基线了 —— 采出来的门禁是空的"
+    assert not out.exists(), "拒绝了却还是把文件写出去了"
+    assert "--users" in r.stderr and "--run-time" in r.stderr
+
+
+def test_emit_from_a_zero_request_run_is_refused(tmp_path: Path):
+    """零个请求完成的跑不能当基线。
+
+    bench-nightly 在 GitHub runner 上连红 6 次, 症状就是"300 用户 3 分钟零个
+    请求完成" —— 统计表有行, 计数全 0。拿它采基线会写出 p50=0 / rps=0:
+    之后每次跑都是无限倍延迟回归 (吵到没人看), 而 rps 那条永远不会报 (漏)。
+    一次失败的压测被记成"正常", 比没有基线坏得多。
+    """
+    stats = tmp_path / "run_stats.csv"
+    stats.write_text(
+        "Type,Name,Request Count,Failure Count,Median Response Time,Average Response Time,"
+        "Min Response Time,Max Response Time,Average Content Size,Requests/s,Failures/s,"
+        "50%,66%,75%,80%,90%,95%,98%,99%,99.9%,99.99%,100%\n"
+        "GET,/api/quota/me,0,0,0,0,0,0,0,0.0,0.0,0,0,0,0,0,0,0,0,0,0,0\n"
+        ",Aggregated,0,0,0,0,0,0,0,0.0,0.0,0,0,0,0,0,0,0,0,0,0,0\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "new-baseline.json"
+    r = subprocess.run(
+        [sys.executable, str(SCRIPT), "--stats", str(stats),
+         "--baseline", str(tmp_path / "nonexistent.json"),
+         "--users", "300", "--run-time", "3m",
+         "--emit-baseline", str(out)],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 2, "零请求的跑被采成基线了"
+    assert not out.exists()
+    assert "0" in r.stderr
+
+
+def test_the_refusal_message_itself_does_not_teach_the_broken_cp(tmp_path: Path):
+    """配置不匹配那条报错**自己**不许再教 cp summary.json。
+
+    9/19 的教训第二遍: 我改了 baseline.json 的 _comment, 也改了 render_baseline
+    的 docstring, 却漏了这条 —— 而这条才是人真正会读到的那句 (门禁报红时打在
+    stderr 上)。注释没人看, 报错人人看。修文档的时候先修报错。
+    """
+    base = write_baseline(tmp_path, users=1000, run_time="10m")
+    r = run(tmp_path, base, "--users", "300", "--run-time", "3m")
+    assert r.returncode == 2
+    assert "cp bench/result_summary.json" not in r.stderr
+    assert "--emit-baseline" in r.stderr, "拒绝了就得给出正确做法"
+
+
 def test_the_shipped_baseline_comment_does_not_teach_the_broken_cp():
     """出厂 baseline.json 的注释不许再教人 cp summary.json。
 

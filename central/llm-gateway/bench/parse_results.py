@@ -154,8 +154,11 @@ def check_config_match(baseline_path: Path, users: int | None, run_time: str | N
         "\n负载不同的两次压测之间比 p50/p95 没有意义 —— 会同时**漏报真回归**"
         "\n和**为噪声报警**。两条修法二选一:"
         "\n  1. 把 bench-nightly.yml 的 USERS / RUN_TIME 改成跟基线一致"
-        "\n  2. 按当前负载重新采基线: 跑一次成功的 bench 之后"
-        "\n     cp bench/result_summary.json bench/baseline.json (人工 review)",
+        "\n  2. 按当前负载重新采基线 —— 在**同一台机器**上跑一次干净的 bench, 然后"
+        f"\n     parse_results.py --stats <那次的 *_stats.csv> --baseline {baseline_path} \\"
+        f"\n         --users {users} --run-time {run_time} --emit-baseline /tmp/new-baseline.json"
+        "\n     人工 review /tmp/new-baseline.json 再替换。**不要**手工 cp summary 产物:"
+        "\n     两者 endpoints 形状不同 (list vs 按名字索引的 dict), 拷过去会让回归检查静默失效。",
         file=sys.stderr,
     )
     sys.exit(2)
@@ -406,6 +409,39 @@ def main() -> int:
         return 2
 
     if args.emit_baseline:
+        # ⚠ 下面两道拦的是同一件事: **别把一次坏的跑记成"正常"**。基线的全部
+        #   价值在于它代表健康状态, 一旦记错, 门禁不是失灵而是反过来背书。
+        #
+        # 1) 没有 config 的基线, check_config_match 会整条跳过 (它只在两边都
+        #    不是 None 时才比)。也就是说漏传 --users/--run-time 采出来的基线,
+        #    永远不会因为负载对不上被拒 —— 正是 6/22 那份基线埋了三个月的坑,
+        #    只是换成了"null 对什么都不冲突"的形式。
+        if args.users is None or args.run_time is None:
+            print(
+                "[err] --emit-baseline 必须同时给 --users 和 --run-time。\n"
+                "      locust 的 csv 不记负载参数, 只有调用方知道。少了它们,\n"
+                "      采出来的基线 config 是 null, 而 check_config_match 对 null\n"
+                "      一律放过 —— 门禁看着在, 实际上永远不会拒绝任何负载。",
+                file=sys.stderr,
+            )
+            return 2
+
+        # 2) 一个请求都没完成的跑不能当基线。bench-nightly 在 GitHub runner 上
+        #    连红 6 次的症状恰恰是"300 用户 3 分钟零个请求完成", 统计表有行但
+        #    计数全 0。拿它采基线会写出 p50=0 / rps=0, 之后每次都是无限倍回归
+        #    (吵), 而 rps 那条永远不会报 (漏)。
+        total_requests = sum(ep.request_count for ep in result.endpoints)
+        if result.aggregated is not None:
+            total_requests = max(total_requests, result.aggregated.request_count)
+        if total_requests <= 0:
+            print(
+                f"[err] {args.stats} 里一个完成的请求都没有 (总请求数 0), 拒绝当基线。\n"
+                "      这次 bench 是失败的, 不是跑得快。先查 locust/gateway 为什么零完成\n"
+                "      (bench-nightly.yml 里那道单发流式探针就是为这个加的), 跑出真数据再采。",
+                file=sys.stderr,
+            )
+            return 2
+
         args.emit_baseline.parent.mkdir(parents=True, exist_ok=True)
         args.emit_baseline.write_text(
             json.dumps(render_baseline(result, args.users, args.run_time),
