@@ -159,7 +159,37 @@ PATCH_1_PARAM = f"""    [switch]$IncludeDesktop,
     [string]$OfflineUvExe = "",
     [string]$OfflinePythonZip = "",
     [string]$OfflineChromiumTar = ""
-)"""
+)
+
+# Catfish offline — 剥掉 \\?\\ 前缀再交给原生 exe
+#
+# (这段**不带 MARKER** —— marker 数量被 verify_patched 钉成 7 (ANCHORS 每条
+#  一处), 多一个就红。那个计数是故意的: 加/删锚点必须有人来复核。这个
+#  helper 是附在 param 那处锚点里的, 不是新锚点。)
+#
+# 9/19 真机实撞: hermes 源码解压挂在 `tar 解压 exit=2`, 而同一个包在同一台
+# 机器上手工 `tar -xzf` 是 exit=0。差别只有一个 —— msi 传进来的路径带
+# \\?\\ 前缀 (Win32 的"长路径"记法):
+#
+#     \\?\\C:\\Users\\...\\resources\\windows\\hermes-agent-bundle.tar.gz
+#
+# **.NET / PowerShell 的 API 认它** (Test-Path / Copy-Item -LiteralPath /
+# Expand-Archive 一路都过), 而**原生 exe 不认** —— bsdtar 把它当成一个不
+# 存在的文件名, 报个笼统的 exit=2。
+#
+# 于是组成一个很难查的局面: 前面每一步检查都说"文件在", 偏偏真正干活的
+# 那一步说找不到, 而且不告诉你为什么。
+#
+# 规矩: 交给原生 exe (tar) 之前剥前缀; 交给 .NET API 的**不要剥** ——
+# 它们认, 而且真遇上超长路径还得靠这个前缀。
+function Catfish-StripLongPathPrefix {{
+    param([string]$Path)
+    if (-not $Path) {{ return $Path }}
+    if ($Path.StartsWith("\\\\?\\UNC\\")) {{ return "\\\\" + $Path.Substring(8) }}
+    if ($Path.StartsWith("\\\\?\\")) {{ return $Path.Substring(4) }}
+    return $Path
+}}
+"""
 
 
 PATCH_2_INSTALL_UV = f"""    $managedUv = Join-Path $HermesHome "bin\\uv.exe"
@@ -265,7 +295,9 @@ PATCH_4_INSTALL_REPO = f"""    $didUpdate = $false
             #
             # 没有原文就只能靠猜 + 让人去真机上手工复跑一遍 —— 那正是我们
             # 今天在别处反复修的那种"降级了但不说话"。
-            $tarOutput = & tar -xzf $OfflineSourceTar -C $tempExtractRoot 2>&1 | Out-String
+            # tar 是原生 exe, 不认 \\?\\ 前缀 —— 见 Catfish-StripLongPathPrefix
+            $tarSrc = Catfish-StripLongPathPrefix $OfflineSourceTar
+            $tarOutput = & tar -xzf $tarSrc -C $tempExtractRoot 2>&1 | Out-String
             if ($LASTEXITCODE -ne 0) {{
                 $detail = if ($tarOutput.Trim()) {{ $tarOutput.Trim() }} else {{ "(tar 没有输出任何错误文本)" }}
                 throw "tar 解压 exit=$LASTEXITCODE`n$detail"
@@ -477,7 +509,8 @@ PATCH_7_PLAYWRIGHT_CHROMIUM = f"""        $browserNpmOk = _Run-NpmInstall "Brows
             Write-Info "Catfish offline: 解压 Playwright Chromium bundle 到 $chromiumDest"
             New-Item -ItemType Directory -Force -Path $chromiumDest -ErrorAction SilentlyContinue | Out-Null
             try {{
-                tar -xzf $OfflineChromiumTar -C $chromiumDest
+                # 同上: 原生 exe 不认 \\?\\ 前缀
+                tar -xzf (Catfish-StripLongPathPrefix $OfflineChromiumTar) -C $chromiumDest
                 if ($LASTEXITCODE -ne 0) {{ throw "tar chromium exit=$LASTEXITCODE" }}
                 Write-Success "Playwright Chromium installed from offline bundle"
                 $catfishSkipChromium = $true

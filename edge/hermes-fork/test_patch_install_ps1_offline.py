@@ -454,3 +454,60 @@ def test_python_install_dir_falls_back_to_appdata_not_localappdata(
         assert "APPDATA" in line and "LOCALAPPDATA" not in line, (
             f"兜底退到了错的盘: {line.strip()}"
         )
+
+
+# ─── \\?\ 前缀 (9/19 真机 bug) ──────────────────────────────
+
+
+def test_tar_gets_a_path_without_the_long_path_prefix(upstream_install_ps1: str):
+    """交给 tar 的路径必须先剥掉 \\\\?\\\\ 前缀。
+
+    9/19 真机: hermes 源码解压挂在 `tar 解压 exit=2`, 而同一个包在同一台机器
+    上手工 `tar -xzf` 是 exit=0。差别只有一个 —— msi 传进来的是
+
+        \\\\?\\\\C:\\\\Users\\\\...\\\\hermes-agent-bundle.tar.gz
+
+    .NET/PowerShell 的 API 认这个前缀 (Test-Path / Copy-Item -LiteralPath /
+    Expand-Archive 一路都过), **原生 exe 不认** —— bsdtar 当成不存在的文件名,
+    回一个笼统的 exit=2。于是前面每步检查都说"文件在", 真干活那步说找不到。
+    """
+    patched = apply_patches(upstream_install_ps1)
+    assert "tar -xzf $OfflineSourceTar" not in patched, "源码 tar 还在用带前缀的原值"
+    assert "tar -xzf $OfflineChromiumTar" not in patched, "chromium tar 还在用带前缀的原值"
+    assert "Catfish-StripLongPathPrefix $OfflineSourceTar" in patched
+    assert "Catfish-StripLongPathPrefix $OfflineChromiumTar" in patched
+
+
+def test_the_prefix_literals_are_actually_right(upstream_install_ps1: str):
+    """剥前缀那两个字面量的转义必须真的对。
+
+    写这条是因为我连写错两遍: 第一次少一倍 (产出 `\\?\\`), 第二次多一倍
+    (产出 `\\\\?\\\\UNC\\\\`)。f-string 里每个 \\\\ 产出一个 \\, 中间隔着
+    PowerShell 又是一层, 光看源码推不准 —— 只能拿**产出的文本**来量。
+
+    量的是长度: Win32 前缀 `\\\\?\\` 是 4 个字符, `\\\\?\\UNC\\` 是 8 个,
+    正好对上代码里的 Substring(4) / Substring(8)。错一个字符, 要么剥不掉、
+    要么把盘符也啃掉。
+    """
+    import re
+
+    patched = apply_patches(upstream_install_ps1)
+    unc = re.search(r'StartsWith\("([^"]*)"\)\) \{ return "([^"]*)"', patched)
+    assert unc, "找不到 UNC 那一行"
+    assert len(unc.group(1)) == 8, f"UNC 前缀应为 8 字符, 实际 {unc.group(1)!r}"
+    assert len(unc.group(2)) == 2, f"UNC 换回来的应为 2 字符, 实际 {unc.group(2)!r}"
+
+    plain = re.findall(r'StartsWith\("([^"]*)"\)\) \{ return \$Path\.Substring\(4\)', patched)
+    assert plain, "找不到普通前缀那一行"
+    assert len(plain[0]) == 4, f"普通前缀应为 4 字符, 实际 {plain[0]!r}"
+
+
+def test_dotnet_api_calls_keep_the_prefix(upstream_install_ps1: str):
+    """反过来: 交给 .NET API 的**不要**剥 —— 它们认, 而且超长路径还得靠它。
+
+    一刀切全剥掉的话, 真遇上 >260 字符的路径会退回老毛病。
+    """
+    patched = apply_patches(upstream_install_ps1)
+    assert "Copy-Item -LiteralPath $OfflineUvExe" in patched
+    assert "Catfish-StripLongPathPrefix $OfflineUvExe" not in patched
+    assert "Catfish-StripLongPathPrefix $OfflinePythonZip" not in patched

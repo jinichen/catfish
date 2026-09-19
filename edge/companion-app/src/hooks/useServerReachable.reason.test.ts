@@ -36,10 +36,19 @@ describe("reasonText", () => {
     }
   });
 
-  it("message 是空串 / 非字符串时不当成有效原因", () => {
+  it("message 是空串 / 空白时不当成有效原因", () => {
     expect(reasonText(new Error(""))).not.toBe("");
-    expect(reasonText({ message: 42 })).not.toContain("42");
     expect(reasonText({ message: "   " })).not.toBe("   ");
+  });
+
+  it("message 不是字符串时, 把整个对象如实 JSON 出来", () => {
+    // 这条第一版我写反了, 断言的是 `not.toContain("42")` —— 想当然地认为
+    // "message 不是字符串就该丢掉"。跑出来红了才想清楚: `{"message":42}`
+    // 恰恰是**好输出**, 它把上游真正给的东西原样呈现了。丢掉它换一句
+    // "无错误信息", 等于我们自己制造了一次信息损失 —— 正是这个函数要治的病。
+    //
+    // 真正要守的性质只有两条: 不产出 undefined, 不丢信息。
+    expect(reasonText({ message: 42 })).toBe('{"message":42}');
   });
 
   it("循环引用不炸", () => {
