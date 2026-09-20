@@ -137,14 +137,23 @@ class ImapSyncAdapter(ImapAdapter):
 
             # ③ 取不到的那些 (SEARCH 之后、FETCH 之前被删了) 让 reconcile 记
             #    成 error 跳过 —— 不进索引, 下一轮自然就不在 pairs 里了。
+            # on_missing="keep": 服务器上没了的**不删索引行**, 只标 on_server=0。
+            #
+            # 9/20 定位从镜子改成档案馆。公司邮箱有容量上限、会自动清理, 而
+            # 越老的信越可能已经被清掉 —— 偏偏越老的信越是要沉淀的那些。
+            # 这里如果沿用默认的 "delete", 档案就会跟着服务器的清理策略一起
+            # 消失, 那这套东西就白做了。
+            #
+            # 反过来 emlx / eml-dir 仍然是 "delete": 那些文件是员工自己管的。
             stats = index_store.reconcile(
                 db, account=self.config.user, folder=role,
                 items=pairs, parse=lambda key: fetched[key],
+                on_missing="keep",
             )
         finally:
             db.close()
         logger.info(
-            "imap_sync[%s/%s]: 服务器 %d · 没变 %d · 取 %d · 删 %d · %dms",
+            "imap_sync[%s/%s]: 服务器 %d · 没变 %d · 取 %d · 服务器上已无 %d · %dms",
             self.config.user, role, stats.scanned, stats.unchanged,
             stats.parsed, stats.removed, stats.elapsed_ms,
         )

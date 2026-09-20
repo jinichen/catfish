@@ -51,7 +51,30 @@ from .adapters.base import Message
 
 logger = logging.getLogger(__name__)
 
-_SCHEMA_VERSION = 2
+# ══════════════════════════════════════════════════════════════════
+# 9/20: 从「镜子」改成「档案馆」
+# ══════════════════════════════════════════════════════════════════
+#
+# 上面那段设计写于 8/21, 前提是"索引是纯缓存, 丢了重扫一遍就有"。对 emlx
+# 成立 —— 真源是 Mail.app 的文件, 我们只是建目录。对 IMAP **不成立**:
+#
+#   · 正文从来没落过地, 点开一封信就得连服务器 FETCH
+#   · reconcile 的规则是"没出现在 items 里的 key 就删掉", 于是服务器上一删,
+#     本地连那 300 字 snippet 都跟着没
+#   · 公司邮箱有容量上限、会自动清理 —— 而越老的信越可能已经不在服务器上,
+#     偏偏越老的信越是要沉淀的那些
+#
+# 定位改成档案馆之后, 真源换了个地方:
+#
+#     ~/.catfish/mail_archive/<account>/<YYYY-MM>/<id>.eml   ← 真源
+#     ~/.catfish/email_index.db                              ← 仍然是纯缓存
+#
+# **这个分工是刻意的, 别合并。** 下面 open_index 遇到 schema 不匹配会 DROP
+# 重建, 那句话之所以还能成立, 全靠 .eml 是自描述的 —— 原始 RFC822 里有
+# Message-ID、日期、收发件人、正文、附件, 索引里的每一列都能从它重新算出来。
+# 一旦哪天往索引里塞了"只有索引里有"的东西 (比如员工打的标签), DROP 重建
+# 就变成数据丢失, 那时候必须先写迁移再改 schema。
+_SCHEMA_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -85,12 +108,36 @@ CREATE TABLE IF NOT EXISTS messages (
     message_id    TEXT,               -- RFC822 Message-ID (thread 三件套)
     in_reply_to   TEXT,
     refs          TEXT,               -- RFC822 References (refs: references 是保留字)
-    indexed_at    REAL NOT NULL
+    indexed_at    REAL NOT NULL,
+
+    -- ── 档案馆 (9/20) ──────────────────────────────────────
+    -- archive_path   相对 archive_root 的路径; NULL = 这封还没归档
+    -- archive_bytes  .eml 字节数, 校验用
+    -- archive_sha256 .eml 内容哈希, 校验用
+    -- archived_at    写完 .eml 的时刻
+    -- verified_at    **独立回读**校验通过的时刻。NULL 表示没校验过 ——
+    --                服务器端清理只认这一列, 绝不认 archived_at。
+    --                写入返回 OK 不等于盘上那份是对的: 截断、编码错、
+    --                写一半断电, 每一种都会让 archived_at 有值而内容是坏的。
+    -- on_server      0 = 服务器上已经没有这封了 (被清理/被员工删)。
+    --                注意这跟"删索引行"是两回事: 档案馆里行永远留着。
+    archive_path   TEXT,
+    archive_bytes  INTEGER,
+    archive_sha256 TEXT,
+    archived_at    REAL,
+    verified_at    REAL,
+    on_server      INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_messages_list
     ON messages (account, folder, date DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_unread
     ON messages (account, folder, is_read, date DESC);
+-- 待归档队列: 后台渐进归档每轮问"还有哪些没落地"
+CREATE INDEX IF NOT EXISTS idx_messages_unarchived
+    ON messages (account, archived_at) WHERE archive_path IS NULL;
+-- 服务器端清理的候选集: 已校验 且 服务器上还在
+CREATE INDEX IF NOT EXISTS idx_messages_purgeable
+    ON messages (verified_at) WHERE verified_at IS NOT NULL AND on_server = 1;
 """
 
 
@@ -133,7 +180,10 @@ class ReconcileStats:
     scanned: int = 0      # 磁盘上枚举到的文件数
     unchanged: int = 0    # (path,mtime,size) 没变, 跳过解析
     parsed: int = 0       # 真正解析了的 (新增 + 变更)
-    removed: int = 0      # 磁盘上没了, 索引里删掉
+    # 来源里没了的条数。**注意这不一定等于"删了几行"** —— on_missing="keep"
+    # (IMAP 档案馆) 下它们只是被标成 on_server=0, 行和 .eml 一个没少。
+    # 名字保留是因为调用方和测试都在用, 但日志别再写成"删 N 封"。
+    removed: int = 0
     errors: int = 0       # 解析失败 (跳过, 不进索引)
     elapsed_ms: int = 0
 
@@ -179,6 +229,7 @@ def reconcile(
     folder: str,
     items: Iterable[tuple[str, str]],
     parse: Callable[[str], Message],
+    on_missing: str = "delete",
 ) -> ReconcileStats:
     """把一组 (source_key, fingerprint) 对账进索引。**只解析新增/变更的。**
 
@@ -235,13 +286,70 @@ def reconcile(
         )
         stats.parsed += 1
 
-    # 来源里没了的 → 删索引行 (文件被删/挪走, 或服务器上那封没了)
+    # ── 来源里没了的怎么办 —— 这一步决定这张表是镜子还是档案馆 ──────
+    #
+    # on_missing="delete"  (emlx / eml-dir): 删索引行。
+    #     那些 .eml/.emlx 文件是**员工自己管的**, 他删掉或挪走了文件, 意思
+    #     就是不想要了。我们是那个目录的镜子, 跟着走是对的。
+    #
+    # on_missing="keep"    (IMAP 档案馆): 只标 on_server=0, 行和 .eml 都留着。
+    #     服务器上没了**不等于**这封信不存在了 —— 公司邮箱有容量上限、会
+    #     自动清理, 而越老的信越可能已经被清掉, 偏偏越老的信越是要沉淀的
+    #     那些。档案馆的全部意义就在于活过这次清理。
+    #
+    # ⚠ 必须是显式参数, 不能在这里按 adapter 名字猜。猜错任何一边都是
+    #   静默的数据损失: 对 IMAP 猜成 delete = 档案被服务器的清理策略同步
+    #   删光; 对 emlx 猜成 keep = 员工删了邮件鲶鱼里还在, 列表永远在涨。
+    #   这两个方向的错都不会报错, 只会在几个月后被发现。
+    if on_missing not in ("delete", "keep"):
+        raise ValueError(f"on_missing 只能是 'delete' 或 'keep', 收到 {on_missing!r}")
+
     gone = [k for k in known if k not in seen]
     if gone:
-        conn.executemany(
-            "DELETE FROM messages WHERE source_key=?", [(g,) for g in gone]
-        )
+        if on_missing == "delete":
+            conn.executemany(
+                "DELETE FROM messages WHERE source_key=?", [(g,) for g in gone]
+            )
+        else:
+            conn.executemany(
+                "UPDATE messages SET on_server=0 WHERE source_key=?",
+                [(g,) for g in gone],
+            )
         stats.removed = len(gone)
+
+    # ── 邮箱重建之后的去重 ────────────────────────────────────────
+    #
+    # UIDVALIDITY 一变, 同一封信会拿到全新的 source_key, 而旧那行在
+    # on_missing="keep" 下**不会被删**, 只是标了 on_server=0。于是列表里
+    # 同一封信出现两次。
+    #
+    # 这不是边角情况: "邮箱容量满了 → 清理/重建" 正是最常触发 UIDVALIDITY
+    # 变化的场景, 而那恰恰也是这套档案馆存在的理由。不处理的话, 档案馆第一次
+    # 真正派上用场的那天就开始出重复。
+    #
+    # 判据用 RFC822 Message-ID —— 它是这封信跨服务器、跨 UIDVALIDITY 唯一
+    # 稳定的身份。空的不参与去重 (少数客户端不发 Message-ID), 那种情况留重复
+    # 也好过误删。
+    #
+    # ⚠ 只删**还没归档**的旧行 (archive_path IS NULL)。已经落地 .eml 的旧行
+    #   删掉等于扔掉档案本体 —— 那时候正确做法是把 archive 指针挪到新行上,
+    #   而不是删。归档写完之前这里恒为 NULL, 所以现在这条是安全的; 归档上线
+    #   时必须回来处理 (见 task「主键从 UID 换成 Message-ID」)。
+    if on_missing == "keep":
+        conn.execute(
+            """DELETE FROM messages
+                WHERE account = ?
+                  AND folder = ?
+                  AND on_server = 0
+                  AND archive_path IS NULL
+                  AND message_id IS NOT NULL AND message_id != ''
+                  AND message_id IN (
+                      SELECT message_id FROM messages
+                       WHERE account = ? AND folder = ? AND on_server = 1
+                         AND message_id IS NOT NULL AND message_id != ''
+                  )""",
+            (account, folder, account, folder),
+        )
 
     conn.commit()
     stats.elapsed_ms = int((time.monotonic() - t0) * 1000)

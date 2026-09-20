@@ -215,21 +215,54 @@ def test_flag_change_refetches_only_that_one(isolated_index, monkeypatch):
     assert by_uid["8417"].is_read is True
 
 
-def test_message_gone_from_server_is_dropped_from_the_index(isolated_index, monkeypatch):
+def test_message_gone_from_server_is_kept_as_archive(isolated_index, monkeypatch):
+    """服务器上没了 ≠ 索引里删掉。
+
+    9/20 这条**反过来了**。原来叫 ..._is_dropped_from_the_index, 断言的是
+    "服务器删了本地跟着删" —— 那是镜子的语义。
+
+    定位改成档案馆之后那是错的: 公司邮箱有容量上限、会自动清理, 而越老的信
+    越可能已经被清掉, 偏偏越老的信越是要沉淀的那些。跟着删 = 这套东西白做。
+
+    现在的语义: 行留着, 只把 on_server 置 0。
+    """
+    from catfish_email import index_store
+
     fake = CountingIMAP()
     adapter = make(fake, monkeypatch)
     adapter.sync_folder("INBOX", "Inbox")
 
     fake.messages["INBOX"] = [m for m in fake.messages["INBOX"] if m[0] != b"8417"]
     stats = adapter.sync_folder("INBOX", "Inbox")
-    assert stats.removed == 1
+    assert stats.removed == 1, "统计上仍然记'来源里没了 1 封'"
 
-    rows = adapter.list_messages(ListFilter(folder="Inbox", limit=10))
-    assert [m.id.split("|")[-1] for m in rows] == ["8418"]
+    db = index_store.open_index()
+    try:
+        rows = list(db.execute(
+            "SELECT source_key, on_server FROM messages ORDER BY source_key"
+        ))
+    finally:
+        db.close()
+    assert len(rows) == 2, f"档案馆里两行都该在, 实际 {rows}"
+    by_uid = {r[0].rsplit(":", 1)[1]: r[1] for r in rows}
+    assert by_uid["8417"] == 0, "服务器上没了的要标 on_server=0"
+    assert by_uid["8418"] == 1, "还在服务器上的不该被动"
 
 
 def test_uidvalidity_reset_rebuilds_instead_of_mixing(isolated_index, monkeypatch):
-    """服务器重建邮箱 → UID 从头发放。旧行必须整批换掉, 绝不能新旧混在一起。"""
+    """服务器重建邮箱 → UID 从头发放。旧行必须整批换掉, 绝不能新旧混在一起。
+
+    9/20 改档案馆之后这条差点被破坏, 而且是最坏的那种"差点":
+
+    on_missing="keep" 意味着旧 UIDVALIDITY 那批**不再被删**, 只标 on_server=0。
+    新周期的信拿到全新 key 插进来, 于是同一封信在列表里出现两次。
+
+    而这绝不是边角情况 —— "邮箱容量满了 → 清理/重建" 正是最常触发
+    UIDVALIDITY 变化的场景, 也正是这套档案馆存在的理由。不处理的话,
+    档案馆第一次真正派上用场那天就开始出重复。
+
+    解法是按 RFC822 Message-ID 去重: 它是这封信跨 UIDVALIDITY 唯一稳定的身份。
+    """
     fake = CountingIMAP()
     adapter = make(fake, monkeypatch)
     adapter.sync_folder("INBOX", "Inbox")
@@ -237,10 +270,54 @@ def test_uidvalidity_reset_rebuilds_instead_of_mixing(isolated_index, monkeypatc
     fake.uidvalidity = b"2"
     stats = adapter.sync_folder("INBOX", "Inbox")
     assert stats.parsed == 2, "新周期的 UID 是全新的 key, 全部要重取"
-    assert stats.removed == 2, "旧周期那两行必须删掉"
+    assert stats.removed == 2, "旧周期那两行在服务器上确实没了"
 
     rows = adapter.list_messages(ListFilter(folder="Inbox", limit=10))
+    assert len(rows) == 2, f"邮箱重建后列表里出现重复: {[m.id for m in rows]}"
     assert all(m.id.split("|")[2] == "2" for m in rows), "不该留着旧 UIDVALIDITY 的行"
+
+
+def test_uidvalidity_reset_does_not_throw_away_an_archived_copy(
+    isolated_index, monkeypatch
+):
+    """去重只许删**还没归档**的旧行。
+
+    旧行一旦落了 .eml, 它就不只是一条索引记录, 而是档案本体的指针。
+    连同 archive_path 一起删掉 = 磁盘上那个 .eml 成了没人认识的孤儿,
+    而它可能是服务器上早已不存在的那封信的唯一副本。
+
+    正确做法是把 archive 指针挪到新行上 —— 归档功能上线时要做的事。
+    在那之前, 这条测试保证去重不会先把东西删了。
+    """
+    from catfish_email import index_store
+
+    fake = CountingIMAP()
+    adapter = make(fake, monkeypatch)
+    adapter.sync_folder("INBOX", "Inbox")
+
+    # 假装其中一封已经归档落地
+    db = index_store.open_index()
+    try:
+        db.execute(
+            "UPDATE messages SET archive_path=?, archived_at=1.0 "
+            "WHERE source_key LIKE '%:8417'",
+            ("acct/2026-09/x.eml",),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    fake.uidvalidity = b"2"
+    adapter.sync_folder("INBOX", "Inbox")
+
+    db = index_store.open_index()
+    try:
+        kept = list(db.execute(
+            "SELECT source_key FROM messages WHERE archive_path IS NOT NULL"
+        ))
+    finally:
+        db.close()
+    assert len(kept) == 1, "已归档的旧行被去重顺手删了 —— 那是档案本体的指针"
 
 
 # ─────────────────────────────────────────────────────────────
