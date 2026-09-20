@@ -144,6 +144,66 @@ if [ "$PKG_VER" = "$CARGO_VER" ] && [ "$CARGO_VER" = "$TAURI_VER" ]; then
         fi
     fi
 
+    # ── 版本号必须跟着代码一起动 (9/20) ──────────────────────────
+    #
+    # 本文件开头第 14 行从 5/18 起就写着:
+    #
+    #     "Companion 的补丁版本必须能独立递增, 否则同版本 MSI 无法可靠覆盖旧二进制"
+    #
+    # 然后版本号从 4 月的初始提交一直停在 1.0.2, 没有任何东西查过它。
+    # 9/20 的代价: MSI #209 (638da56) 构建成功、安装成功、注册表 InstallDate
+    # 写的是当天 —— 而 exe 还是 9/17 那个文件, 因为两个包都叫 1.0.2。Windows
+    # Installer 对带版本资源的文件只在"新版本更高"时覆盖, 相等就保留磁盘上的。
+    # 表现是界面上整个 IMAP 功能不存在, 而所有环节都显示成功。查了半天才从
+    # bootstrap 日志尾巴上那行 `companion: v1.0.2 (e8f1cf7fbe, built 09-17)`
+    # 看出来跑的是旧包。
+    #
+    # 一条只写在注释里、没有执行机制的规矩 = 没有规矩。跟这个仓库里
+    # gitleaks 的 docs/ 白名单、bench 基线那两桩是同一个形状。
+    #
+    # 判据: 从"当前版本号被引入的那个 commit"到 HEAD, Companion 的**源码**
+    # 有没有改过。改过就必须 bump。
+    #
+    # 只看源码目录 (src/ 和 src-tauri/src/ 和 wix/), 不看测试、文档、脚本 ——
+    # 改一个注释就逼人 bump 版本, 三天之内所有人都会学会绕过它, 那就跟
+    # pre-commit 钩子当年那版一个下场。判据是"发出去的二进制会不会不一样"。
+    if git -C "$COMPANION_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+        # 当前版本号是哪个 commit 引入的 (-S 查内容增删, tail -1 取最早那次)
+        VER_COMMIT="$(git -C "$COMPANION_DIR" log --format=%H \
+            -S"\"version\": \"$PKG_VER\"" -- package.json 2>/dev/null | tail -1)"
+        if [ -n "$VER_COMMIT" ]; then
+            CHANGED="$(git -C "$COMPANION_DIR" log --oneline "$VER_COMMIT..HEAD" -- \
+                src src-tauri/src src-tauri/wix 2>/dev/null | wc -l | tr -d ' ')"
+            if [ "${CHANGED:-0}" -gt 0 ]; then
+                echo "❌ 版本号还是 $PKG_VER, 但从它被定下来之后 Companion 源码改了 $CHANGED 次。" >&2
+                echo "" >&2
+                echo "   同版本号的两个 MSI 在 Windows 上是**无法区分**的: 安装程序会认为" >&2
+                echo "   磁盘上那个 exe 已经是这个版本, 直接跳过覆盖, 然后报告安装成功。" >&2
+                echo "   9/20 就是这么丢了一整天 —— 详见本文件这一段的注释。" >&2
+                echo "" >&2
+                echo "   改法: 把 patch 位 +1, 三处一起改" >&2
+                echo "     package.json / src-tauri/Cargo.toml / src-tauri/tauri.conf.json" >&2
+                echo "     (Cargo.lock 里 catfish-companion-app 那条也要跟)" >&2
+                echo "" >&2
+                echo "   最近改动:" >&2
+                # ⚠ `| head -5` 会让 git 吃到 SIGPIPE, 而本脚本开头是
+                #    `set -euo pipefail` —— 于是整条管道返 141, set -e 当场把
+                #    脚本杀掉, **根本走不到下面的 exit 1**。
+                #    第一版就是这样, 自测时退出码是 141 不是 1。CI 只认 1,
+                #    141 会被当成"脚本自己崩了"而不是"版本号没 bump"。
+                #    报错信息照样打全了, 所以肉眼看不出问题 —— 正是这个脚本
+                #    通篇在治的那种病。
+                git -C "$COMPANION_DIR" log --oneline "$VER_COMMIT..HEAD" -- \
+                    src src-tauri/src src-tauri/wix 2>/dev/null | head -5 \
+                    | sed 's/^/     /' >&2 || true
+                exit 1
+            fi
+            echo "✓ 版本 $PKG_VER 之后源码没动过, 不需要 bump"
+        else
+            echo "⚠ 查不到版本 $PKG_VER 是哪个 commit 引入的, 跳过 bump 校验"
+        fi
+    fi
+
     exit 0
 fi
 
