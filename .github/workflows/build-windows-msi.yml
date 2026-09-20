@@ -25,7 +25,12 @@ jobs:
       - name: Checkout catfish
         uses: actions/checkout@v5
         with:
-          fetch-depth: 1
+          # 9/20: 1 → 0。check_version_sync.sh 要沿历史找"当前版本号是哪个
+          # commit 引入的", 浅克隆里 git log -S 会把 HEAD 自己算成引入者,
+          # 那道检查就静默放行 —— 而这个 workflow 正是产出 MSI 的地方,
+          # 版本号没 bump 的后果(装了等于没装)全部由它承担。
+          # 代价: 全量 fetch 几十秒, 对一个 39 分钟的 job 可以忽略。
+          fetch-depth: 0
 
       # 先拦版本漂移，再开始下载/打包几百 MB 的离线资源。Companion 与 Hermes
       # 各自版本独立；脚本只检查 Companion 三处一致和 Hermes pins 自洽。

@@ -168,6 +168,23 @@ if [ "$PKG_VER" = "$CARGO_VER" ] && [ "$CARGO_VER" = "$TAURI_VER" ]; then
     # 改一个注释就逼人 bump 版本, 三天之内所有人都会学会绕过它, 那就跟
     # pre-commit 钩子当年那版一个下场。判据是"发出去的二进制会不会不一样"。
     if git -C "$COMPANION_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+        # ⚠ 浅克隆里这道检查是**空的**, 必须当场拦住, 不能"查不到就跳过"。
+        #
+        # actions/checkout 默认 fetch-depth: 1。那种仓库里只有一个 commit,
+        # 没有父提交, 于是 `git log -S` 会把 HEAD 自己算成"引入版本号的那次",
+        # 范围 HEAD..HEAD 为空, CHANGED=0, 检查放行 —— 而且什么都不说。
+        #
+        # 9/20 第一版就是这样交出去的: 本机跑得好好的, CI 上从来不会触发。
+        # 一道只在作者机器上生效的门禁, 比没有门禁更坏。
+        if [ "$(git -C "$COMPANION_DIR" rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+            echo "❌ 这是个浅克隆, 版本号 bump 检查在这里跑不了 (会静默放行)。" >&2
+            echo "" >&2
+            echo "   CI 里给对应 job 的 actions/checkout 加:" >&2
+            echo "       with:" >&2
+            echo "         fetch-depth: 0" >&2
+            echo "   本机: git fetch --unshallow" >&2
+            exit 2
+        fi
         # 当前版本号是哪个 commit 引入的 (-S 查内容增删, tail -1 取最早那次)
         VER_COMMIT="$(git -C "$COMPANION_DIR" log --format=%H \
             -S"\"version\": \"$PKG_VER\"" -- package.json 2>/dev/null | tail -1)"

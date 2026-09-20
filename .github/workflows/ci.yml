@@ -214,7 +214,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # fetch-depth: 0 是 check_version_sync.sh 的「版本号必须跟着代码动」
+      # 那道检查需要的 —— 它要沿历史找「当前版本号是哪个 commit 引入的」。
+      # 浅克隆里只有一个 commit, git log -S 会把 HEAD 自己算成引入者, 范围
+      # 变成空, 检查**静默放行**。加这道检查的那次差点就这么交出去了。
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Set up Node 20
         uses: actions/setup-node@v6
