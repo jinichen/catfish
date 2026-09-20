@@ -33,6 +33,7 @@ index_store 顶上那句"schema 变了就 DROP 重建"之所以还能成立, 全
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -40,6 +41,19 @@ import unicodedata
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+#: 起点文件名。放在 <account>/ 下面, 跟这个账号的 .eml 在一起。
+#:
+#: ⚠ **不能只存在索引里。** index_store 遇到 schema 不匹配会 DROP 重建 ——
+#:   那条设计之所以成立, 前提是索引里每一列都能从 .eml 重算。起点不能,
+#:   它是"我们什么时候开始管这个邮箱"这个事实, 磁盘上任何一封邮件里都没有。
+#:
+#:   丢了之后两条路都很难看:
+#:     当成"从今天开始" → 中间那段永远没人归档, 而且没有任何迹象
+#:     当成"没设过"     → 整个邮箱重灌一遍, 用户莫名其妙等一夜
+#:
+#:   所以跟 .eml 放在一起。档案目录自描述, 索引照样随时可重建。
+_CUTOFF_NAME = ".archive-since.json"
 
 #: 单个文件名最长多少字符 (留余量给 .eml 后缀和哈希后缀)。
 #: ext4/APFS/NTFS 都是 255 **字节**, 中文一个字 3 字节, 所以按字节算。
@@ -185,3 +199,108 @@ def verify_message(root: Path, relpath: str, *, expect_bytes: int, expect_sha256
             f"({relpath})"
         )
     return ""
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 起点 —— "从使用的第一天开始"
+# ═══════════════════════════════════════════════════════════════════
+#
+# 不回填历史邮件。启用那一刻记一条水位线, 之后新来的才归档。
+#
+# # 为什么用 UID 水位线而不是日期
+#
+# 三个候选:
+#
+#   Date 头        **发件人可控**。垃圾邮件写 Date: 2030 是家常便饭, 那封
+#                  会永远在水位线之上; 写 1970 的则永远归不了档。
+#   INTERNALDATE   服务器收到的时间, 可信, 但要多一次 FETCH, 而且跨时区/
+#                  服务器时钟偏移都得处理。
+#   UID            IMAP **保证**在一个 UIDVALIDITY 周期内单调递增、不复用。
+#                  新到的信 UID 一定比启用时的最大 UID 大。
+#
+# UID 不需要任何时钟, 也不受发件人摆布, 判据就是一个整数比大小。
+#
+# # UIDVALIDITY 变了怎么办
+#
+# 水位线跟着失效 (UID 从头发放, 旧的数没有可比性)。这时候**重新取当前最大
+# UID 当新起点**, 也就是继续"不管以前"。
+#
+# 换一个做法 —— 把水位线归零 —— 会在邮箱重建的那天把整个邮箱重灌一遍,
+# 而邮箱重建往往正是因为容量满了在清理, 用户那天最不需要的就是这个。
+
+
+def _cutoff_file(root: Path, account: str) -> Path:
+    return root / safe_name(account) / _CUTOFF_NAME
+
+
+def read_cutoff(root: Path, account: str) -> dict[str, dict]:
+    """读起点。返回 {folder_raw: {"uidvalidity": str, "uid": int}}。
+
+    文件不存在 / 读坏了都返回空 dict —— 调用方看到空就知道"还没设过起点",
+    该去设一条。**绝不能因为读不出来就当成 uid=0**, 那等于从头重灌。
+    """
+    path = _cutoff_file(root, account)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError) as e:
+        # 坏了要出声。静默返回 {} 的话, 调用方会以为"还没启用"然后重设起点,
+        # 于是从今天开始 —— 中间那段就这么无声无息地漏了。
+        logger.warning("档案起点文件读不出来 (%s): %s —— 当成还没设过起点", path, e)
+        return {}
+    if not isinstance(data, dict):
+        logger.warning("档案起点文件形状不对 (%s): 是 %s 不是 dict", path, type(data).__name__)
+        return {}
+    out: dict[str, dict] = {}
+    for folder, mark in data.items():
+        if isinstance(mark, dict) and "uid" in mark:
+            try:
+                out[folder] = {
+                    "uidvalidity": str(mark.get("uidvalidity", "")),
+                    "uid": int(mark["uid"]),
+                }
+            except (TypeError, ValueError):
+                logger.warning("档案起点里 %s 那条坏了, 跳过: %r", folder, mark)
+    return out
+
+
+def write_cutoff(root: Path, account: str, marks: dict[str, dict]) -> None:
+    """原子地写起点。理由跟 write_message 一样: 写一半的起点比没有更坏。"""
+    path = _cutoff_file(root, account)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + f".tmp-{os.getpid()}")
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(marks, fh, ensure_ascii=False, indent=2, sort_keys=True)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def above_cutoff(
+    marks: dict[str, dict], folder_raw: str, uidvalidity: str, uid: str | int
+) -> bool:
+    """这封信在水位线之上 (= 该归档) 吗？
+
+    没设过这个文件夹的起点 → **False**。不是 True。
+
+    这一条的方向很要紧: 拿不准的时候宁可不归档, 也不要把整个历史邮箱
+    灌下来。漏归档是"少存了", 用户能看出来也能补; 误判成要归档是几小时
+    的下载 + 几个 GB 磁盘, 而且发生在用户完全没预期的时候。
+
+    UIDVALIDITY 对不上也返回 False —— 旧水位线跟新周期的 UID 没有可比性,
+    调用方该重设起点而不是拿两个不相干的数比大小。
+    """
+    mark = marks.get(folder_raw)
+    if not mark:
+        return False
+    if mark.get("uidvalidity") != str(uidvalidity):
+        return False
+    try:
+        return int(uid) > int(mark["uid"])
+    except (TypeError, ValueError, KeyError):
+        return False
