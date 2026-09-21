@@ -160,17 +160,79 @@ def _com_failure_hint() -> str:
     )
 
 
+def classic_outlook_registered() -> bool:
+    """经典桌面版 Outlook 有没有注册 COM。**纯注册表读, 不碰 pywin32。**
+
+    # 为什么要在 import pywin32 之前先问这一句
+
+    9/21 真机日志:
+
+        error: failed to remove file `...\\site-packages\\pywin32_system32/
+               pythoncom311.dll`: 拒绝访问。 (os error 5)
+        uv 安装 catfish-email 失败: 2
+
+    链条是这样的:
+
+      1. 邮件页每次挂载/重扫, discovery 给三个来源各起一个子进程
+      2. outlook-win 那个子进程 import pywin32 → **加载 pythoncom311.dll**
+      3. 新版 Outlook (Microsoft.OutlookForWindows) 不提供 COM 自动化接口,
+         所以这次尝试注定失败 —— 但 DLL 已经加载进去了
+      4. 与此同时 bootstrap 在装/升级 catfish-email, uv 要替换 pywin32,
+         而那个 DLL 正被占用 → 安装失败 → 整个邮件功能起不来
+
+    也就是说: 一次**注定失败**的扫描, 代价是把安装器搞挂。鸿波问"WINDOWS
+    都不支持了为什么还去扫描", 这不只是界面噪声的问题。
+
+    # 判据
+
+    经典 Outlook 会把 ProgID `Outlook.Application` 注册进 HKCR。新版 Outlook
+    是 Store 应用, 不注册。读注册表用 winreg (标准库), 不需要 pywin32,
+    因此**不会加载任何 COM DLL**。
+
+    这是一道**只能否定不能肯定**的快速判断: 键不在 → 一定连不上, 直接跳过;
+    键在 → 还是得真去 Dispatch 才知道 (Outlook 卸载后可能留下死键)。
+    方向是对的 —— 它只会拦掉注定失败的尝试, 不会拦掉可能成功的。
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg  # noqa: PLC0415 — 只有 Windows 有
+    except ImportError:  # pragma: no cover - 非 Windows 已经在上面返回了
+        return False
+    for hive in (winreg.HKEY_CLASSES_ROOT, winreg.HKEY_CURRENT_USER):
+        sub = r"Outlook.Application\CLSID"
+        if hive is winreg.HKEY_CURRENT_USER:
+            sub = r"Software\Classes\Outlook.Application\CLSID"
+        try:
+            with winreg.OpenKey(hive, sub) as key:
+                clsid, _ = winreg.QueryValueEx(key, "")
+                if clsid:
+                    return True
+        except OSError:
+            continue
+    return False
+
+
 def _import_pywin32() -> None:
     """Lazy import pywin32. 非 Windows 平台不 import.
 
     Raises:
-        NotSupportedError: 不在 Windows 上 (inbox.py get_adapter fallback 会捕获)
+        NotSupportedError: 不在 Windows 上 / 经典 Outlook 没注册 COM
         ImportError: pywin32 没装 (提示 pip install catfish-email[windows])
     """
     if sys.platform != "win32":
         raise NotSupportedError(
             "outlook_win adapter 仅支持 Windows (当前 sys.platform="
             f"{sys.platform!r}). macOS 请用 apple-mail; Linux 未来看情况."
+        )
+    # ⚠ 这一句必须在 import pythoncom **之前**。整句话的作用就是别让那个 DLL
+    #   被加载 —— 加载之后 uv 就替换不了 pywin32, catfish-email 装不上
+    #   (9/21 真机: os error 5, 拒绝访问)。详见 classic_outlook_registered。
+    if not classic_outlook_registered():
+        raise NotSupportedError(
+            "这台机器没有注册 Outlook COM 接口 —— 装的多半是新版 Outlook "
+            "(Microsoft.OutlookForWindows), 它不提供 COM 自动化, 开着也读不了。"
+            "需要经典桌面版 Outlook, 或改用邮箱直连 (IMAP)。"
         )
     try:
         import pythoncom  # noqa: F401
