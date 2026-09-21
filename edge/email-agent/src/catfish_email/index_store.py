@@ -222,6 +222,67 @@ def changed_keys(
     return [key for key, fingerprint in items if known.get(key) != fingerprint]
 
 
+def _inherit_archive_across_uidvalidity(
+    conn: sqlite3.Connection, *, account: str, folder: str
+) -> int:
+    """邮箱重建后, 把档案指针从旧 UID 那行挪到新 UID 那行。返回挪了几条。
+
+    # 什么时候发生
+
+    UIDVALIDITY 一变, 同一封信拿到全新的 source_key。旧行 on_server=0 (它的
+    UID 在新周期里不存在了) 但**带着 archive_path**; 新行 on_server=1 而
+    archive_path 是 NULL。
+
+    不处理的话两条路都坏:
+
+      直接删旧行  → 磁盘上那个 .eml 成了孤儿, 而它可能是服务器上早已不存在
+                    那封信的唯一副本
+      留着旧行    → 列表里同一封信出现两次, 而且新行还会被当成"没归档"
+                    重新下载一遍
+
+    # 判据
+
+    RFC822 Message-ID —— 它是这封信跨 UIDVALIDITY、跨服务器唯一稳定的身份。
+    空的不参与 (少数客户端不发这个头), 那种情况宁可重下一遍也不认错。
+
+    # 为什么挪指针而不是重新归档
+
+    .eml 已经落地并且**独立回读核对过**了。重下一遍的代价是一次网络往返 +
+    一次写盘, 而收益是零 —— 内容是同一封信。更要紧的是: 服务器重建邮箱往往
+    正是因为容量满了在清理, 那时候最不该做的就是把整个档案重下一遍。
+    """
+    pairs = conn.execute(
+        """SELECT old.source_key, new.source_key,
+                  old.archive_path, old.archive_bytes, old.archive_sha256,
+                  old.archived_at, old.verified_at
+             FROM messages AS old
+             JOIN messages AS new
+               ON new.account = old.account
+              AND new.folder  = old.folder
+              AND new.message_id = old.message_id
+            WHERE old.account = ? AND old.folder = ?
+              AND old.on_server = 0 AND old.archive_path IS NOT NULL
+              AND new.on_server = 1 AND new.archive_path IS NULL
+              AND old.message_id IS NOT NULL AND old.message_id != ''
+              AND old.source_key != new.source_key""",
+        (account, folder),
+    ).fetchall()
+    for old_key, new_key, path, size, digest, archived_at, verified_at in pairs:
+        conn.execute(
+            "UPDATE messages SET archive_path=?, archive_bytes=?, archive_sha256=?, "
+            "archived_at=?, verified_at=? WHERE source_key=?",
+            (path, size, digest, archived_at, verified_at, new_key),
+        )
+        # 指针挪走了, 旧行才可以删 —— 顺序反了就是扔掉档案。
+        conn.execute("DELETE FROM messages WHERE source_key=?", (old_key,))
+    if pairs:
+        conn.commit()
+        logger.info(
+            "邮箱重建: %d 封的档案指针已挪到新 UID (没有重新下载)", len(pairs)
+        )
+    return len(pairs)
+
+
 def reconcile(
     conn: sqlite3.Connection,
     *,
@@ -332,9 +393,15 @@ def reconcile(
     # 也好过误删。
     #
     # ⚠ 只删**还没归档**的旧行 (archive_path IS NULL)。已经落地 .eml 的旧行
-    #   删掉等于扔掉档案本体 —— 那时候正确做法是把 archive 指针挪到新行上,
-    #   而不是删。归档写完之前这里恒为 NULL, 所以现在这条是安全的; 归档上线
-    #   时必须回来处理 (见 task「主键从 UID 换成 Message-ID」)。
+    #   删掉等于扔掉档案本体 —— 磁盘上那个 .eml 成了没人认识的孤儿, 而它可能
+    #   是服务器上早已不存在那封信的唯一副本。
+    #
+    #   所以在去重之前先把档案指针**挪到新行**上 (下面那步)。9/21 归档上线
+    #   之后这一步就不再是可选的了: 在那之前 archive_path 恒为 NULL, 现在
+    #   邮箱重建时真的会有已归档的旧行。
+    if on_missing == "keep":
+        _inherit_archive_across_uidvalidity(conn, account=account, folder=folder)
+
     if on_missing == "keep":
         conn.execute(
             """DELETE FROM messages

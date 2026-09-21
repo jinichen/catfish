@@ -295,3 +295,86 @@ def test_archive_failure_does_not_break_syncing(home, monkeypatch):
     finally:
         db.close()
     assert n > 0, "归档炸了把索引也带没了"
+
+
+# ─────────────────────────────────────────────────────────────
+# 邮箱重建 —— 档案不能跟着 UID 一起失效
+# ─────────────────────────────────────────────────────────────
+
+
+def test_rebuilt_mailbox_inherits_the_archive_instead_of_redownloading(
+    home, monkeypatch
+):
+    """UIDVALIDITY 变了, 已归档那封要把档案指针挪到新行, 而不是重下。
+
+    这不是边角情况: "邮箱容量满了 → 清理/重建" 正是最常触发 UIDVALIDITY
+    变化的场景, 也正是这套档案馆存在的理由。而那时候最不该做的, 就是把整个
+    档案重新下载一遍。
+    """
+    fake = ArchivingIMAP()
+    adapter = make(fake, monkeypatch)
+    _archive_everything(adapter, fake)
+
+    root = archive_store.archive_root()
+    before = {p.name: p.read_bytes() for p in root.rglob("*.eml")}
+    assert len(before) == 1
+
+    fetches_before = len([s for s in fake.fetch_specs if "PEEK[]" in s])
+
+    fake.uidvalidity = b"2"
+    adapter.sync_folder("INBOX", "Inbox")
+
+    db = index_store.open_index()
+    try:
+        rows = list(db.execute(
+            "SELECT source_key, archive_path, verified_at, on_server FROM messages "
+            "WHERE archive_path IS NOT NULL"
+        ))
+    finally:
+        db.close()
+
+    assert len(rows) == 1, f"档案指针没挪过来或者重复了: {rows}"
+    assert ":9000" in rows[0][0], "指针还挂在旧 UIDVALIDITY 那行上"
+    assert rows[0][2] is not None, "verified_at 没继承 —— 会被当成没校验过"
+    assert rows[0][3] == 1, "新行该是服务器上还有"
+
+    # 磁盘上那份一个字节没动, 也没重新下载
+    after = {p.name: p.read_bytes() for p in root.rglob("*.eml")}
+    assert after == before, "档案文件被改/被重写了"
+
+    adapter.archive_folder("INBOX", "Inbox")
+    assert len([s for s in fake.fetch_specs if "PEEK[]" in s]) == fetches_before, \
+        "邮箱重建后把已归档的又下了一遍"
+
+
+def test_a_message_without_message_id_is_not_merged(home, monkeypatch):
+    """没有 Message-ID 的不参与继承 —— 宁可重下一遍也不认错。
+
+    少数客户端不发这个头。拿别的字段 (主题+日期) 凑一个身份出来, 在群发
+    邮件上会把不同的信判成同一封 —— 那样档案指针会挪到错的信上, 而两边
+    看起来都正常。
+    """
+    from catfish_email.index_store import _inherit_archive_across_uidvalidity
+
+    db = index_store.open_index()
+    try:
+        for key, uidv, on_server, path in (
+            ("imap:INBOX:1:1", "1", 0, "old.eml"),
+            ("imap:INBOX:2:1", "2", 1, None),
+        ):
+            db.execute(
+                "INSERT INTO messages (source_key, fingerprint, account, folder, "
+                "msg_id, message_id, indexed_at, archive_path, verified_at, on_server) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (key, "f", "me@example.cn", "Inbox", key, "", 1.0, path,
+                 1.0 if path else None, on_server),
+            )
+        db.commit()
+        moved = _inherit_archive_across_uidvalidity(
+            db, account="me@example.cn", folder="Inbox"
+        )
+        assert moved == 0, "空 Message-ID 也被当成同一封信了"
+        n = db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+        assert n == 2, "旧行被删了 —— 档案成了孤儿"
+    finally:
+        db.close()
