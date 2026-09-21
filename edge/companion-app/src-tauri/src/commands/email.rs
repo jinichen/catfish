@@ -60,7 +60,10 @@ pub(crate) fn email_command(bin: &Path) -> Command {
             .env("CATFISH_IMAP_HOST", &source.host)
             .env("CATFISH_IMAP_PORT", source.port.to_string())
             .env("CATFISH_IMAP_USER", &source.user)
-            .env("CATFISH_IMAP_PASSWORD", password);
+            .env("CATFISH_IMAP_PASSWORD", password)
+            // 保留策略。漏注的话 Python 拿不到就退回 never —— 方向是安全的
+            // (不会误删), 但员工在界面上选了"两周"却一直不删, 同样是 bug。
+            .env("CATFISH_IMAP_RETENTION", &source.retention);
         // 发信是 SMTP, 另一套主机/端口。空着就让 Python 从 IMAP 主机猜
         // (smtp.<域名>:465) —— 猜法只放一处, 两处早晚会漂。
         if !source.smtp_host.is_empty() {
@@ -97,6 +100,38 @@ pub(crate) fn email_command(bin: &Path) -> Command {
         }
     }
     command
+}
+
+/// 邮件档案进度。**纯本地** —— 只读 SQLite 和档案目录, 一个 IMAP 命令都不发。
+///
+/// 界面会频繁问它 (进度条), 每次都去连服务器的话, 光是看一眼进度就要一次
+/// 登录往返。Python 那边 archive-status 同样保证不连网。
+#[tauri::command]
+pub async fn email_archive_status() -> Result<String, String> {
+    let bin = catfish_paths::catfish_email_bin().ok_or_else(email_component_missing_error)?;
+    let mut command = email_command(&bin);
+    if let Some((source, _password)) = super::imap_credentials::configured_source() {
+        // 只要 user 和 retention —— 这条命令不连服务器, 密码不必注入。
+        // 少注一样就少一条泄漏面, 而且它确实用不上。
+        command
+            .env("CATFISH_IMAP_USER", &source.user)
+            .env("CATFISH_IMAP_HOST", &source.host)
+            .env("CATFISH_IMAP_RETENTION", &source.retention);
+    }
+    let output = command
+        .args(["archive-status"])
+        .output()
+        .map_err(|e| format!("读档案进度失败: {e}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("读档案进度退出码 {:?}", output.status.code())
+        } else {
+            stderr
+        });
+    }
+    Ok(stdout)
 }
 
 /// 探测 Windows 邮件来源。返回 catfish-email 的结构化 JSON，避免 Rust 和 Python

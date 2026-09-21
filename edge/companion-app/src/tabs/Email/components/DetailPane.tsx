@@ -13,8 +13,6 @@ import {
   emailDeleteMessage,
   emailPhishingGet,                 // P3.3.58 段 2C (6/12 鸿波)
   emailPoliticalScanNow,            // P3.3.53.2 (6/13 鸿波)
-  emailExportAttachment,            // P3.5.103 (6/24 鸿波): 附件能点
-  openFile,                         // P3.5.103: 系统默认 app 打开
   type EmailDigestItem,
   type PhishingScanResult,          // P3.3.58 段 2C
   type PoliticalScanResult,         // P3.3.53.2
@@ -27,6 +25,7 @@ import { isReplied, formatReplyTime } from "../../../lib/emailThread";
 import { buildEmailSrcDoc, countRemoteRefs } from "../../../lib/emailSrcDoc";
 // P3.5.158 Phase 3 (7/2 鸿波): Compose panel 抽到 ComposeCore 共享组件
 import ComposeCore from "./ComposeCore";
+import MessageHeaderFields from "./MessageHeaderFields";
 
 interface FullMessage extends EmailDigestItem {
   recipients?: string[];
@@ -41,38 +40,6 @@ interface FullMessage extends EmailDigestItem {
   body_html?: string;
 }
 
-/** P3.3.57 (6/12 鸿波): 大群发邮件 header 收件人/抄送默认折叠.
- *  默认显前 N 个 + "... 共 X 人 [展开]", 点击切换 [折叠].
- *  防 81 收件人 + 30 抄送一次铺开把邮件正文挤出 viewport.
- */
-function CollapsibleAddresses({ addrs, previewN = 3 }: { addrs: string[]; previewN?: number }) {
-  const [expanded, setExpanded] = useState(false);
-  if (addrs.length <= previewN) {
-    return <>{addrs.join(", ")}</>;
-  }
-  return (
-    <>
-      {expanded ? addrs.join(", ") : addrs.slice(0, previewN).join(", ")}
-      {!expanded && <span style={{ color: "var(--catfish-text-muted)" }}>... 共 {addrs.length} 人</span>}
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        style={{
-          marginLeft: 6,
-          background: "transparent",
-          border: "1px solid var(--catfish-border)",
-          borderRadius: 3,
-          padding: "0 6px",
-          fontSize: 10,
-          color: "var(--catfish-cyan)",
-          cursor: "pointer",
-        }}
-      >
-        {expanded ? "折叠" : "展开"}
-      </button>
-    </>
-  );
-}
 
 
 function DetailPane({
@@ -100,6 +67,16 @@ function DetailPane({
   // 结构上就串不了。
   const [showRemoteFor, setShowRemoteFor] = useState<string | null>(null);
   const showRemote = showRemoteFor === msg.id;
+
+  /** 这封信服务器上已经没有了, 只剩本地档案。
+   *
+   * 后端 _locate() 会对这种邮件抛 DataNotFoundError, 所以删除/标已读这些
+   * **做不了**。按钮必须提前禁掉并说明原因 —— 让员工点下去才报一句
+   * "邮件不存在", 他会以为是 bug, 而实际上这正是档案馆在正常工作。
+   *
+   * `!== false` 而不是 `=== false`: 老数据和非 IMAP 来源没有这个字段,
+   * 按"服务器上还有"处理, 保持原有行为不变。 */
+  const onlyInArchive = msg.on_server === false;
   const remoteRefCount = useMemo(
     () => countRemoteRefs(msg.body_html || ""),
     [msg.body_html],
@@ -428,85 +405,28 @@ function DetailPane({
         >
           {msg.subject || "(无主题)"}
         </h2>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "auto 1fr",
-            gap: "4px 12px",
-            fontSize: 12,
-            color: "var(--catfish-text-muted)",
-            marginTop: 12,
-          }}
-        >
-          <div>发件人</div>
-          <div style={{ color: "var(--catfish-text)" }}>{msg.sender}</div>
-          {msg.recipients && msg.recipients.length > 0 && (
-            <>
-              <div>收件人</div>
-              <div><CollapsibleAddresses addrs={msg.recipients} /></div>
-            </>
-          )}
-          {msg.cc && msg.cc.length > 0 && (
-            <>
-              <div>抄送</div>
-              <div><CollapsibleAddresses addrs={msg.cc} /></div>
-            </>
-          )}
-          <div>时间</div>
-          {/* 8/8 评审: 原样输出 ISO 串 (2026-08-07T15:45:51.210Z) → 格式化为人话.
-              解析失败 (老数据格式怪) 时回退原串. */}
-          <div>
-            {(() => {
-              const d = new Date(msg.date);
-              return Number.isNaN(d.getTime())
-                ? msg.date
-                : d.toLocaleString("zh-CN", {
-                    month: "long",
-                    day: "numeric",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  });
-            })()}
+        {/* 只在本地档案里 —— 这是档案馆兑现承诺的时刻, 要说出来。
+            光把删除按钮变灰, 员工只会觉得"怎么点不动了"; 说清楚是因为
+            服务器上已经没有了, 他才知道**这封信能看到本身就是收益**。 */}
+        {onlyInArchive && (
+          <div
+            style={{
+              marginTop: 8,
+              padding: "6px 8px",
+              fontSize: 11,
+              lineHeight: 1.5,
+              borderRadius: "var(--radius-sm)",
+              color: "var(--catfish-hint-amber-text)",
+              background: "var(--catfish-hint-amber-bg)",
+              border: "1px solid var(--catfish-hint-amber-border)",
+            }}
+          >
+            📦 服务器上已经没有这封了，你看到的是本地档案。
+            <br />
+            删除、标记已读这些需要连服务器的操作对它无效。
           </div>
-          <div>账号</div>
-          <div>{msg.account}</div>
-          {msg.has_attachments && msg.attachments && msg.attachments.length > 0 && (
-            <>
-              <div>附件</div>
-              <div>
-                {msg.attachments.map((a, i) => (
-                  <button
-                    key={i}
-                    onClick={async () => {
-                      // P3.5.103 (6/24 鸿波): 点附件 → CLI 导出到本地 tmp → 系统默认 app 打开.
-                      // CLI 退出码 4 = adapter 不支持 (outlook 暂未 implement export_attachment).
-                      try {
-                        const path = await emailExportAttachment(msg.id, a.filename);
-                        await openFile(path);
-                      } catch (e) {
-                        console.warn("[EmailDetail] 打开附件失败:", e);
-                        alert(`打开附件失败: ${e instanceof Error ? e.message : String(e)}`);
-                      }
-                    }}
-                    title={`点击下载并用系统默认 app 打开: ${a.filename}`}
-                    style={{
-                      marginRight: 8,
-                      padding: "3px 10px",
-                      border: "1px solid var(--catfish-accent, #0d9488)",
-                      borderRadius: 4,
-                      background: "transparent",
-                      color: "var(--catfish-accent, #0d9488)",
-                      cursor: "pointer",
-                      fontSize: 12,
-                    }}
-                  >
-                    📎 {a.filename} ({Math.round(a.size_bytes / 1024)} KB)
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
+        )}
+        <MessageHeaderFields msg={msg} />
         {/* P3.5.58 (6/22 鸿波 catch): 已回复 badge — RFC 822 thread chain 算法.
             ∃ R: R.in_reply_to == msg.message_id OR msg.message_id ∈ R.references.
             老邮件 / 老 Mail.app 没 message_id 时 isReplied 返 false 静默不显. */}
@@ -596,7 +516,7 @@ function DetailPane({
           <button
             type="button"
             onClick={() => void handleDelete()}
-            disabled={deleting}
+            disabled={deleting || onlyInArchive}
             style={{
               background: confirmPending ? "rgba(220, 80, 60, 0.15)" : "var(--catfish-bg)",
               color: "rgb(220, 80, 60)",
@@ -610,9 +530,11 @@ function DetailPane({
               marginLeft: "auto",
             }}
             title={
-              confirmPending
-                ? "再次点击确认删除 (3s 内有效, 否则自动取消)"
-                : "把这封邮件移到客户端 Trash 文件夹 (软删, 30 天内可恢复)"
+              onlyInArchive
+                ? "服务器上已经没有这封了 (只在本地档案里), 删不了"
+                : confirmPending
+                  ? "再次点击确认删除 (3s 内有效, 否则自动取消)"
+                  : "把这封邮件移到客户端 Trash 文件夹 (软删, 30 天内可恢复)"
             }
           >
             {deleting

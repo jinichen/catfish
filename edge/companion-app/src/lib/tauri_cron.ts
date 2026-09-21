@@ -152,6 +152,16 @@ export interface EmailDigestItem {
   message_id?: string;   // RFC 822 Message-ID, 形如 <abc@x.com>
   in_reply_to?: string;  // RFC 822 In-Reply-To, 直接父级 Message-ID
   references?: string;   // RFC 822 References, 空格分隔的完整祖先链
+
+  // ─── 档案馆 (9/21) ────────────────────────────────────────
+  /** 原文已落到本地档案**并且独立回读核对过**。注意不是"写过"。 */
+  archived?: boolean;
+  /** 服务器上还有没有这封。
+   *
+   *  false 时删除/标已读这些写操作**做不了** —— 后端 _locate() 会抛
+   *  DataNotFoundError。界面要据此禁按钮并说明原因, 不能让员工点了才报错。
+   *  老数据/非 IMAP 来源没有这个字段, 按 true 处理 (原有行为不变)。 */
+  on_server?: boolean;
 }
 /** catfish-email accounts --json 单条 schema.
  * BL-EMAIL-MULTI-CLIENT (5/18): 多客户端时每个 account 多了 client 字段标识来源.

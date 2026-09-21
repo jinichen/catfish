@@ -136,6 +136,24 @@ class Message:
     """RFC 822 References header — 完整祖先链, 空格分隔的多个 Message-ID.
     长 thread 用 References 算 isReplied, 不依赖直接父级 in_reply_to."""
 
+    # ─── 档案馆 (9/21) ───────────────────────────────────────
+    archived: bool = False
+    """这封信的原文有没有落到本地档案并**独立回读核对过**。
+
+    注意是"校验过"不是"写过"。界面上拿它区分两件事:
+      archived=True  + on_server=True   服务器和本地都有
+      archived=True  + on_server=False  只在本地档案里 —— 服务器已清理
+      archived=False + on_server=True   还在队列里, 没落地
+      archived=False + on_server=False  **两边都没有** (旧数据/归档前就被删的)
+    """
+
+    on_server: bool = True
+    """服务器上还有没有这封。
+
+    False 时删除/标已读这些**写操作做不了** —— _locate() 会抛
+    DataNotFoundError。界面要据此禁掉按钮并说明原因, 不能让员工点了报错。
+    """
+
 
 @dataclass(frozen=True)
 class ListFilter:

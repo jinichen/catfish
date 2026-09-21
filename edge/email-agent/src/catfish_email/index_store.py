@@ -396,7 +396,9 @@ def query_messages(
     """从索引出 list 结果, 形状与 adapter.list_messages 一致 (Message 序列)。"""
     sql = (
         "SELECT msg_id, account, folder, subject, sender, recipients, date, "
-        "is_read, has_attachments, snippet, message_id, in_reply_to, refs "
+        "is_read, has_attachments, snippet, message_id, in_reply_to, refs, "
+        # 档案状态跟着列表一起出来 —— 界面要靠它区分"只在本地档案"
+        "verified_at, on_server "
         "FROM messages WHERE account=? AND folder=?"
     )
     args: list = [account, folder]
@@ -412,6 +414,9 @@ def query_messages(
             recipients=tuple(json.loads(r[5] or "[]")), date=r[6],
             is_read=bool(r[7]), has_attachments=bool(r[8]), body_text=r[9],
             message_id=r[10], in_reply_to=r[11], references=r[12],
+            # archived 用的是 verified_at 不是 archived_at —— 界面上说"已归档"
+            # 意味着"服务器没了也还在", 而只有独立回读核对过才敢这么说。
+            archived=r[13] is not None, on_server=bool(r[14]),
         ))
     return out
 

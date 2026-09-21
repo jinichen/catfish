@@ -29,6 +29,56 @@ export interface ImapStatus {
   smtp_host: string;
   /** 0 = 用默认 465 (隐式 TLS)。 */
   smtp_port: number;
+  /** 归档校验通过之后多久把服务器上那份删掉。 */
+  retention: RetentionPolicy;
+}
+
+/** 邮件归档之后, 服务器上那份留多久。
+ *
+ * ⚠ **默认永远是 never, 而且认不出来的值也退回 never。** 删服务器上的邮件
+ * 不可逆, 不能因为员工没注意到设置项、或者哪里传了个拼错的字符串就开始删。
+ * 这个兜底在三层都有 (这里 / Rust / Python) —— 三层都兜是因为这一步没有
+ * 任何后悔的余地。 */
+export type RetentionPolicy = "immediate" | "1w" | "2w" | "never";
+
+export const RETENTION_LABELS: Record<RetentionPolicy, string> = {
+  never: "不删除（服务器上一直保留）",
+  "2w": "归档两周后删除",
+  "1w": "归档一周后删除",
+  immediate: "归档校验通过后立即删除",
+};
+
+/** 界面上的顺序: 从最安全到最激进。
+ *
+ * 不是按时间长短排 —— 是按"删错了有多惨"排。下拉框第一项是员工最可能
+ * 不小心选中的那个, 所以第一项必须是 never。 */
+export const RETENTION_ORDER: RetentionPolicy[] = ["never", "2w", "1w", "immediate"];
+
+export function normalizeRetention(value: unknown): RetentionPolicy {
+  return value === "immediate" || value === "1w" || value === "2w" ? value : "never";
+}
+
+/** 档案进度。纯本地读 SQLite, 不连服务器 —— 界面可以放心频繁问。 */
+export interface ArchiveStatus {
+  account: string;
+  root: string;
+  retention: RetentionPolicy;
+  /** 索引里一共多少封 */
+  total: number;
+  /** 原文已落地的 */
+  archived: number;
+  /** **独立回读核对过**的。服务器端清理只认这个数。 */
+  verified: number;
+  /** 服务器上已经没有、只剩本地档案的 */
+  only_local: number;
+  /** 档案占了多少字节 */
+  bytes: number;
+}
+
+export async function getArchiveStatus(): Promise<ArchiveStatus> {
+  const raw = await invoke<string>("email_archive_status");
+  const parsed = JSON.parse(raw) as ArchiveStatus;
+  return { ...parsed, retention: normalizeRetention(parsed.retention) };
 }
 
 /** 保存前 Rust 会**真连一次**服务器; 连不上就不保存, 直接抛错。
@@ -45,12 +95,18 @@ export async function saveImapCredential(input: {
   smtpHost?: string;
   /** 留空/0 就用默认 465 */
   smtpPort?: number;
+  /** 不传 = never。见 RetentionPolicy 上那段。 */
+  retention?: RetentionPolicy;
 }): Promise<ImapStatus> {
-  const { smtpHost, smtpPort, ...rest } = input;
+  const { smtpHost, smtpPort, retention, ...rest } = input;
   return invoke<ImapStatus>("imap_credential_save", {
     ...rest,
     smtpHost: smtpHost?.trim() || null,
     smtpPort: smtpPort || null,
+    // 不传 null 而传 "never": null 走 Rust 的 default_retention() 也是 never,
+    // 两条路结果一样。显式传是为了让"界面上选了什么"跟"存进去什么"一一对应,
+    // 排查时不用再去猜哪一层填的默认值。
+    retention: normalizeRetention(retention),
   });
 }
 

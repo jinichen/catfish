@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import type { EmailSourceDiscovery } from "../../../lib/tauri";
+import ArchivePanel from "./ArchivePanel";
 import ImapSetup from "./ImapSetup";
 
 /** 来源的显示名。9/18 加了 imap —— 唯一不依赖邮件客户端的路径。 */
@@ -59,7 +60,14 @@ export default function EmailSourceSetup({
   onPickMailDirectory,
 }: Props) {
   // IMAP 不挑平台 (它不依赖任何邮件客户端), 所以非 Windows 上也要给配置入口。
-  if (discovery.platform !== "Windows") return <ImapSetup onConfigured={onRescan} />;
+  if (discovery.platform !== "Windows") {
+    return (
+      <>
+        <ImapSetup onConfigured={onRescan} />
+        <ArchivePanel />
+      </>
+    );
+  }
 
   return (
     <WindowsSetup
@@ -94,6 +102,10 @@ function WindowsSetup({
     >
       {/* ① 能用的那条路放最前面 */}
       <ImapSetup onConfigured={onRescan} />
+
+      {/* 档案进度紧跟着 IMAP —— 它是 IMAP 这条路的产物, 挨着才说得通。
+          没配 IMAP / 索引是空的时候它自己不渲染。 */}
+      <ArchivePanel />
 
       {/* ② 有现成可用的本地客户端才值得占版面。
           没有的时候不该拿"暂时没有找到可用邮箱"这种话当开场白 ——

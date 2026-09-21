@@ -80,6 +80,19 @@ pub struct ImapSource {
     /// 0 = 用默认 465 (隐式 TLS)。
     #[serde(default)]
     pub smtp_port: u16,
+
+    /// 归档校验通过之后多久把服务器上那份删掉:
+    /// `immediate` / `1w` / `2w` / `never`。
+    ///
+    /// ⚠ 默认 never, 而且 serde(default) 让老配置读出来也是 never。
+    /// 删服务器上的邮件**不可逆** —— 升级之后不能因为多了个字段就开始删。
+    /// Python 那边认不出来的值同样退回 never 并出声 (imap_config)。
+    #[serde(default = "default_retention")]
+    pub retention: String,
+}
+
+fn default_retention() -> String {
+    "never".to_string()
 }
 
 fn default_port() -> u16 {
@@ -89,7 +102,9 @@ fn default_port() -> u16 {
 impl ImapSource {
     /// 能进日志的形态。这个类型本来就不含密码, 但写出来提醒后来人别加字段。
     pub fn redacted(&self) -> String {
-        format!("{}@{}:{}", self.user, self.host, self.port)
+        // 保留策略一起打 —— 它是这套配置里唯一不可逆的一项, 查"邮件怎么
+        // 没了"时第一眼就该看到。跟 Python 侧 ImapConfig.redacted 对齐。
+        format!("{}@{}:{} (保留策略={})", self.user, self.host, self.port, self.retention)
     }
 }
 
@@ -110,6 +125,8 @@ pub struct ImapStatus {
     pub smtp_host: String,
     /// 0 = 用默认 465。
     pub smtp_port: u16,
+    /// immediate / 1w / 2w / never —— 界面上那个下拉要回显它。
+    pub retention: String,
 }
 
 fn config_path() -> Result<PathBuf, String> {
@@ -224,6 +241,7 @@ pub async fn imap_credential_save(
     port: Option<u16>,
     smtp_host: Option<String>,
     smtp_port: Option<u16>,
+    retention: Option<String>,
 ) -> Result<ImapStatus, String> {
     let host = host.trim().to_string();
     let user = user.trim().to_string();
@@ -241,6 +259,15 @@ pub async fn imap_credential_save(
         // 这里不替它猜 —— 猜法只该有一处, 两处早晚会漂。
         smtp_host: smtp_host.unwrap_or_default().trim().to_string(),
         smtp_port: smtp_port.unwrap_or(0),
+        // 认不出来的一律 never。**这个方向不能反** —— 前端传了个拼错的值
+        // 就开始删员工服务器上的邮件, 是不可接受的。Python 那边同样兜一次:
+        // 两层都兜是因为这一步不可逆, 而且没有任何后悔的余地。
+        retention: match retention.as_deref().map(str::trim) {
+            Some("immediate") => "immediate".to_string(),
+            Some("1w") => "1w".to_string(),
+            Some("2w") => "2w".to_string(),
+            _ => default_retention(),
+        },
     };
 
     // 先验证再保存 —— 存一份连不上的配置没有意义
@@ -282,6 +309,7 @@ fn status_of(source: Option<ImapSource>) -> ImapStatus {
             port: s.port,
             smtp_host: s.smtp_host,
             smtp_port: s.smtp_port,
+            retention: s.retention,
         },
         None => ImapStatus {
             configured: false,
@@ -291,6 +319,7 @@ fn status_of(source: Option<ImapSource>) -> ImapStatus {
             password_present: false,
             smtp_host: String::new(),
             smtp_port: 0,
+            retention: default_retention(),
         },
     }
 }
@@ -309,6 +338,7 @@ async fn verify_login(source: &ImapSource, password: &str) -> Result<(), String>
         .env("CATFISH_IMAP_PORT", source.port.to_string())
         .env("CATFISH_IMAP_USER", &source.user)
         .env("CATFISH_IMAP_PASSWORD", password)
+        .env("CATFISH_IMAP_RETENTION", &source.retention)
         .env("PYTHONIOENCODING", "utf-8")
         .env("PYTHONUTF8", "1")
         .args(["--client", "imap", "accounts"]);
@@ -377,8 +407,13 @@ mod tests {
             port: 993,
             smtp_host: String::new(),
             smtp_port: 0,
+            retention: "never".into(),
         };
-        assert_eq!(source.redacted(), "me@example.cn@imap.example.cn:993");
+        // 保留策略也在里面 —— 它是唯一不可逆的一项, 查"邮件怎么没了"时
+        // 第一眼就该看到。跟 Python 侧 ImapConfig.redacted() 对齐。
+        assert!(!source.redacted().contains("s3cret"));
+        assert!(source.redacted().contains("me@example.cn@imap.example.cn:993"));
+        assert!(source.redacted().contains("never"));
     }
 
     #[test]

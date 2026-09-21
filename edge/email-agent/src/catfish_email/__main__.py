@@ -92,6 +92,34 @@ def main(argv: list[str] | None = None) -> int:
             print(discover_human(force_scan=args.force_scan))
         return 0
 
+    if args.cmd == "archive-status":
+        # **纯本地**: 只读 SQLite 和档案目录, 一个 IMAP 命令都不发。
+        # 界面会频繁问它 (进度条), 不能每次都去连服务器。
+        import json
+
+        from .adapters.imap_config import config_from_env
+        from .archive_store import archive_root
+        from .index_store import archive_stats, open_index
+
+        cfg = config_from_env()
+        account = args.account or (cfg.user if cfg else "")
+        if not account:
+            _err("不知道问哪个账号: 没传 --account, IMAP 也没配")
+            return 2
+        db = open_index()
+        try:
+            payload = archive_stats(db, account=account)
+        finally:
+            db.close()
+        payload["account"] = account
+        payload["root"] = str(archive_root())
+        payload["retention"] = cfg.retention if cfg else "never"
+        # 没有 UIDPLUS 的服务器上容量释放不了。这个事实要一路传到界面 ——
+        # 员工开保留策略就是为了腾空间, 腾不出来而界面一切正常是最坏的。
+        # 这里不连服务器, 所以只报"策略是什么", 能不能真清由 purge 那边说。
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+
     # 5/18 BL-EMAIL-MULTI-CLIENT: --client 显式 → 单 adapter; 没传 → 全部 adapter
     # (e.g. Mail.app + Foxmail 同时跑). 防 factory 短路漏 Foxmail 数据.
     # Windows Foxmail 自定义目录由 Companion 通过环境变量传入；此时 factory
@@ -181,6 +209,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--force-scan", dest="force_scan", action="store_true",
         help="无视判断, 本机客户端全探一遍 (界面上的「扫描一次」)",
     )
+
+    # archive-status — 档案进度, 纯本地 SQLite, 不连服务器
+    parch = sub.add_parser(
+        "archive-status", help="邮件档案进度 (已归档/已校验/只在本地)"
+    )
+    parch.add_argument("--account", help="账号地址 (默认用 IMAP 配置里那个)")
 
     # list
     pl = sub.add_parser("list", help="列收件箱 (或其它文件夹)")
