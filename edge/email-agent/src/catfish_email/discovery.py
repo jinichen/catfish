@@ -32,10 +32,15 @@ class EmailSource:
         return asdict(self)
 
 
-def discover_sources() -> list[EmailSource]:
-    """独立探测 Windows 上的 Outlook 和导出的 .eml 目录。
+def discover_sources(force_scan: bool = False) -> list[EmailSource]:
+    """探测这台机器上可用的邮件来源。
 
     每个客户端都隔离异常。一个客户端不可用是正常状态，不应阻塞其它客户端。
+
+    Args:
+        force_scan: 无视"值不值得探"的判断, 三个来源全探一遍。界面上
+            「扫描一次」走这条。默认 False —— 见 _windows_clients 里
+            9/21 那个把安装器搞挂的 bug。
     """
     if platform.system() != "Windows":
         return [
@@ -48,13 +53,91 @@ def discover_sources() -> list[EmailSource]:
         ]
 
     # 9/18: imap 排第一 —— 它是唯一不依赖邮件客户端的来源, 配了就该优先用。
-    clients = ("imap", "outlook-win", "eml-dir")
+    clients, skipped = _windows_clients(force_scan)
     if os.name == "nt":
         # COM may hang inside native code: a thread timeout cannot stop it.
         # Independent hidden processes keep the .eml source usable when Outlook hangs.
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            return list(executor.map(_discover_isolated, clients))
-    return [_discover_client(client) for client in clients]
+        with ThreadPoolExecutor(max_workers=max(1, len(clients))) as executor:
+            found = list(executor.map(_discover_isolated, clients))
+    else:
+        found = [_discover_client(client) for client in clients]
+    return found + skipped
+
+
+#: 跳过探测时用的 status。前端只认 "ready", 所以它自然落进折叠的诊断区 ——
+#: 但**必须出现**, 不能从列表里消失。"我们没去试" 和 "试了不行" 是两回事,
+#: 后者员工无能为力, 前者他点一下就能试。静默消失的话, 装着经典 Outlook 的
+#: 人会以为这软件不支持 Outlook。
+SKIPPED = "skipped"
+
+
+def _windows_clients(force_scan: bool) -> tuple[tuple[str, ...], list[EmailSource]]:
+    """Windows 上这一轮真正要去探的有哪些, 以及跳过了哪些。
+
+    # 为什么不再无条件探三个
+
+    原来是 ("imap", "outlook-win", "eml-dir") 三个各起一个子进程, 每次邮件页
+    挂载/重扫都跑。9/21 真机日志证明这不只是浪费:
+
+        error: failed to remove file `...pywin32_system32/pythoncom311.dll`:
+               拒绝访问。 (os error 5)
+        uv 安装 catfish-email 失败: 2
+
+    outlook-win 那个子进程 import pywin32 就把 COM DLL 加载了, 而新版 Outlook
+    根本不提供 COM —— 这次探测注定失败。与此同时 bootstrap 在升级
+    catfish-email, uv 替换不了被占用的 pywin32, 整个邮件功能装不上。
+
+    一次注定失败的探测, 代价是把安装器搞挂。
+
+    # 判据都是"纯本地、零成本"的
+
+      outlook-win  注册表里有没有 Outlook.Application 的 COM 注册 (winreg,
+                   标准库, 不加载任何 COM DLL)
+      eml-dir      CATFISH_EML_DIR 有没有指向一个真实存在的目录 (env + stat)
+
+    两个都不起子进程、不碰客户端。判断为否就连子进程都不 spawn。
+
+    # force_scan 是给少数派留的门
+
+    装着经典 Outlook、或者刚导出完 .eml 还没设环境变量的人, 点界面上那个
+    「扫描一次」就走 force_scan=True, 三个照探。默认不探不等于不能探。
+    """
+    clients = ["imap"]
+    skipped: list[EmailSource] = []
+
+    from .adapters.outlook_win import classic_outlook_registered  # noqa: PLC0415
+
+    if force_scan or classic_outlook_registered():
+        clients.append("outlook-win")
+    else:
+        skipped.append(EmailSource(
+            client="outlook-win", status=SKIPPED, accounts=[],
+            reason="没有检测到经典桌面版 Outlook 的 COM 注册, 已跳过探测。"
+                   "新版 Outlook (Microsoft.OutlookForWindows) 不提供 COM 自动化接口, "
+                   "读不到邮件。装了经典版的话点「扫描一次」。",
+        ))
+
+    if force_scan or _eml_dir_configured():
+        clients.append("eml-dir")
+    else:
+        skipped.append(EmailSource(
+            client="eml-dir", status=SKIPPED, accounts=[],
+            reason="还没有选过邮件导出目录, 已跳过探测。"
+                   "在邮件客户端里把邮件导出为 .eml 之后, 点「选择邮件目录」。",
+        ))
+
+    return tuple(clients), skipped
+
+
+def _eml_dir_configured() -> bool:
+    """导出目录配过没有。纯 env + stat, 不扫盘。"""
+    from .adapters.eml_dir import _detect_root  # noqa: PLC0415
+
+    try:
+        root = _detect_root()
+    except Exception:  # noqa: BLE001 — 探测的判据出错只意味着"当成没配"
+        return False
+    return root is not None and root.is_dir()
 
 
 def _discover_isolated(client: str) -> EmailSource:
@@ -131,8 +214,8 @@ def _safe_reason(reason: str) -> str:
     return " ".join(reason.split())[:500]
 
 
-def discover_payload() -> dict[str, Any]:
-    sources = discover_sources()
+def discover_payload(force_scan: bool = False) -> dict[str, Any]:
+    sources = discover_sources(force_scan)
     ready = [source for source in sources if source.status == "ready"]
     return {
         "platform": platform.system(),
@@ -141,8 +224,8 @@ def discover_payload() -> dict[str, Any]:
     }
 
 
-def discover_human() -> str:
-    payload = discover_payload()
+def discover_human(force_scan: bool = False) -> str:
+    payload = discover_payload(force_scan)
     lines = [f"平台: {payload['platform']}"]
     for source in payload["sources"]:
         label = "可用" if source["status"] == "ready" else "不可用"

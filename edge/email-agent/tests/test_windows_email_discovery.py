@@ -39,7 +39,11 @@ def test_payload_contains_independent_client_status(monkeypatch):
     monkeypatch.setattr(discovery, "_discover_isolated", discovery._discover_client)
     monkeypatch.setattr(discovery, "_get_adapter_explicit", lambda client: fakes[client]())
 
-    payload = discovery.discover_payload()
+    # 9/21: 加 force_scan=True。默认路径现在**不探**没注册 COM 的 Outlook 和
+    # 没配目录的 .eml (见 discovery._windows_clients —— 那次注定失败的 COM 探测
+    # 把 catfish-email 的安装搞挂过)。这条测的是"三个来源状态各自独立",
+    # 那个性质跟"默认探不探"无关, 所以显式要求全探, 别把两件事搅在一起。
+    payload = discovery.discover_payload(force_scan=True)
     # 按 client 取, 不按下标 —— 9/18 加 imap 时下标全错位了一次。
     # 来源顺序是实现细节, 这条测的是每个来源各自的状态。
     by_client = {s["client"]: s for s in payload["sources"]}
@@ -93,7 +97,8 @@ def test_windows_probes_every_client_independently(monkeypatch):
     monkeypatch.setattr(discovery, "os", SimpleNamespace(name="nt"))
     monkeypatch.setattr(discovery, "_discover_isolated", lambda client:
         discovery.EmailSource(client, "unavailable" if client == "outlook-win" else "ready", []))
-    sources = discovery.discover_sources()
+    # force_scan=True: 同上, 这条测的是"一个挂了不拖垮另一个", 不是默认探几个。
+    sources = discovery.discover_sources(force_scan=True)
     assert [s.client for s in sources] == ["imap", "outlook-win", "eml-dir"]
     assert [s.status for s in sources] == ["ready", "unavailable", "ready"]
 

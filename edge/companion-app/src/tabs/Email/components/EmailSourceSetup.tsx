@@ -15,6 +15,12 @@ interface Props {
   busy: boolean;
   error: string | null;
   onRescan: () => void;
+  /** 「扫描一次」—— 无视"值不值得探"的判断, 本机客户端全探一遍。
+   *
+   * ⚠ 跟 onRescan 是两件事, 别合并。onRescan 是普通刷新 (比如刚配完 IMAP),
+   * 走默认路径; 这个会真的去 Dispatch Outlook COM, 而那正是 9/21 把
+   * catfish-email 安装搞挂的动作。只能挂在员工**主动点**的按钮上。 */
+  onForceScan: () => void;
   onSelect: (client: string, root?: string) => void;
   onPickMailDirectory: () => void;
 }
@@ -48,13 +54,18 @@ export default function EmailSourceSetup({
   busy,
   error,
   onRescan,
+  onForceScan,
   onSelect,
   onPickMailDirectory,
 }: Props) {
   // IMAP 不挑平台 (它不依赖任何邮件客户端), 所以非 Windows 上也要给配置入口。
   if (discovery.platform !== "Windows") return <ImapSetup onConfigured={onRescan} />;
 
-  return <WindowsSetup {...{ discovery, busy, error, onRescan, onSelect, onPickMailDirectory }} />;
+  return (
+    <WindowsSetup
+      {...{ discovery, busy, error, onRescan, onForceScan, onSelect, onPickMailDirectory }}
+    />
+  );
 }
 
 function WindowsSetup({
@@ -62,6 +73,7 @@ function WindowsSetup({
   busy,
   error,
   onRescan,
+  onForceScan,
   onSelect,
   onPickMailDirectory,
 }: Props) {
@@ -152,15 +164,23 @@ function WindowsSetup({
               <strong style={{ color: "var(--catfish-text)" }}>
                 {SOURCE_LABEL[source.client] ?? source.client}
               </strong>
-              <div>{source.status === "ready" ? `${source.accounts.length} 个账号` : source.reason ?? "暂不可用"}</div>
+              <div>
+                {source.status === "ready"
+                  ? `${source.accounts.length} 个账号`
+                  : source.reason ?? (source.status === "skipped" ? "已跳过探测" : "暂不可用")}
+              </div>
             </div>
           ))}
           <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
             <button type="button" disabled={busy} onClick={onPickMailDirectory}>
               选择邮件目录
             </button>
-            <button type="button" disabled={busy} onClick={onRescan}>
-              重新扫描
+            {/* 「扫描一次」不是「重新扫描」的换皮:
+                默认路径根本不去碰这两个来源 (见 discovery._windows_clients),
+                所以这里按下去是**第一次**真的去探, 而不是再探一遍。
+                名字要对得上行为, 否则员工按了以为没生效。 */}
+            <button type="button" disabled={busy} onClick={onForceScan}>
+              扫描一次
             </button>
           </div>
         </div>

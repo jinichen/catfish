@@ -124,10 +124,10 @@ export default function EmailTab() {
 
   const startEmailChat = useUIStore((s) => s.startEmailChat);
 
-  const scanEmailSources = useCallback(async () => {
+  const scanEmailSources = useCallback(async (forceScan = false) => {
     setSourceDiscoveryError(null);
     try {
-      const result = parseEmailSourceDiscovery(await emailSourcesDiscover());
+      const result = parseEmailSourceDiscovery(await emailSourcesDiscover(forceScan));
       setSourceDiscovery(result);
     } catch (e) {
       setSourceDiscoveryError(e instanceof Error ? e.message : String(e));
@@ -135,6 +135,9 @@ export default function EmailTab() {
   }, []);
 
   useEffect(() => {
+    // ⚠ 这次是**自动**跑的 (每次邮件页挂载), 绝不能 forceScan。
+    // 强制探测只能是员工点「扫描一次」的结果 —— 自动路径上做它, 就等于把
+    // 9/21 那个"COM 探测锁住 pywin32 → catfish-email 装不上"的 bug 原样放回去。
     void scanEmailSources();
   }, [scanEmailSources]);
 
@@ -569,6 +572,7 @@ export default function EmailTab() {
                 busy={sourceBusy}
                 error={sourceDiscoveryError}
                 onRescan={() => void scanEmailSources()}
+                onForceScan={() => void scanEmailSources(true)}
                 onSelect={(client, root) => void handleSelectEmailSource(client, root)}
                 onPickMailDirectory={() => void handlePickMailDirectory()}
               />

@@ -84,9 +84,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.json:
             import json
 
-            print(json.dumps(discover_payload(), ensure_ascii=False, indent=2))
+            print(json.dumps(
+                discover_payload(force_scan=args.force_scan),
+                ensure_ascii=False, indent=2,
+            ))
         else:
-            print(discover_human())
+            print(discover_human(force_scan=args.force_scan))
         return 0
 
     # 5/18 BL-EMAIL-MULTI-CLIENT: --client 显式 → 单 adapter; 没传 → 全部 adapter
@@ -171,6 +174,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     pdiscover.add_argument("--json", action="store_true", default=True)
     pdiscover.add_argument("--human", dest="json", action="store_false")
+    # 9/21: 默认**不探**本机客户端 (没注册 COM 的 Outlook / 没配目录的 .eml)。
+    # 界面上「扫描一次」走这个开关。为什么默认不探, 见 discovery._windows_clients
+    # —— 那次注定失败的 COM 探测把 catfish-email 的安装搞挂过。
+    pdiscover.add_argument(
+        "--force-scan", dest="force_scan", action="store_true",
+        help="无视判断, 本机客户端全探一遍 (界面上的「扫描一次」)",
+    )
 
     # list
     pl = sub.add_parser("list", help="列收件箱 (或其它文件夹)")

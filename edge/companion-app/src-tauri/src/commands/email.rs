@@ -102,7 +102,7 @@ pub(crate) fn email_command(bin: &Path) -> Command {
 /// 探测 Windows 邮件来源。返回 catfish-email 的结构化 JSON，避免 Rust 和 Python
 /// 各自维护一套发现规则。
 #[tauri::command]
-pub async fn email_sources_discover() -> Result<String, String> {
+pub async fn email_sources_discover(force_scan: Option<bool>) -> Result<String, String> {
     let bin = catfish_paths::catfish_email_bin().ok_or_else(email_component_missing_error)?;
     let mut command = email_command(&bin);
     // discovery 要重新检查所有来源, 所以不注入 client —— 让 Outlook 和
@@ -124,8 +124,20 @@ pub async fn email_sources_discover() -> Result<String, String> {
             command.env_remove("CATFISH_EML_DIR").env_remove("CATFISH_FOXMAIL_ROOT");
         }
     }
+    // 9/21: 默认**不探**没注册 COM 的 Outlook 和没配目录的 .eml。
+    //
+    // 那次注定失败的 COM 探测有实际代价: 子进程 import pywin32 加载
+    // pythoncom311.dll, 而 bootstrap 正在升级 catfish-email, uv 替换不了被
+    // 占用的 pywin32 → 整个邮件功能装不上 (9/21 真机, os error 5)。
+    //
+    // force_scan 是界面上「扫描一次」按的那下 —— 装着经典 Outlook 或刚导出完
+    // .eml 的人点它就全探一遍。默认不探不等于不能探。
+    let mut args: Vec<&str> = vec!["discover", "--json"];
+    if force_scan.unwrap_or(false) {
+        args.push("--force-scan");
+    }
     let output = command
-        .args(["discover", "--json"])
+        .args(&args)
         .output()
         .map_err(|e| format!("邮件客户端发现失败: {e}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();

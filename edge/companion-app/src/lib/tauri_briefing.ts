@@ -189,14 +189,25 @@ export interface EmailSourceDiscovery {
   selected_client?: "outlook-win" | "eml-dir" | "imap" | null;
   sources: Array<{
     client: string;
-    status: "ready" | "unavailable" | "unsupported";
+    /** 9/21 加了 "skipped": 我们**没去探**这个来源, 跟"探了不行"是两回事。
+     *
+     * 后者员工无能为力, 前者他点一下「扫描一次」就能试。界面上要分开说,
+     * 别都写成"暂不可用"。默认不探的理由见 discovery._windows_clients ——
+     * 那次注定失败的 Outlook COM 探测把 catfish-email 的安装搞挂过。 */
+    status: "ready" | "unavailable" | "unsupported" | "skipped";
     accounts: Array<{ name: string; address: string; is_default: boolean; client: string }>;
     root: string | null;
     reason: string | null;
   }>;
 }
-export const emailSourcesDiscover = () =>
-  rawInvoke<string>("email_sources_discover");
+/** 探测邮件来源。
+ *
+ * forceScan=true 是界面上「扫描一次」按的那下: 无视"值不值得探"的判断,
+ * 本机客户端全探一遍。默认 false —— 那次注定失败的 Outlook COM 探测会加载
+ * pythoncom311.dll, 把 catfish-email 的安装挂掉 (9/21 真机)。
+ */
+export const emailSourcesDiscover = (forceScan = false) =>
+  rawInvoke<string>("email_sources_discover", { forceScan });
 export const emailSourcePickDirectory = () =>
   rawInvoke<string | null>("email_source_pick_directory");
 export const emailSourceSelect = (client: string, root?: string) =>

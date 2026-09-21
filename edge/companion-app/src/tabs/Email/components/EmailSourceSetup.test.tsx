@@ -39,6 +39,7 @@ const props = {
   busy: false,
   error: null,
   onRescan: noop,
+  onForceScan: noop,
   onSelect: noop,
   onPickMailDirectory: noop,
 };
@@ -83,14 +84,14 @@ describe("Windows 上的顺序", () => {
     expect(container.textContent).not.toContain("暂时没有找到可用邮箱");
   });
 
-  it("「重新扫描」不再占据主版面 —— Windows 上扫不出东西是常态", () => {
+  it("「扫描一次」不在主版面 —— 默认根本不探本机客户端", () => {
     /** 9/18 之后: Foxmail 本地解析删了, 新版 Outlook 没有 COM。
      *  把一个大概率扫不出结果的按钮摆在最显眼处, 是在邀请员工反复做无用功。 */
     render(<EmailSourceSetup discovery={windowsDiscovery()} {...props} />);
-    expect(screen.queryByRole("button", { name: "重新扫描" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "扫描一次" })).toBeNull();
 
     fireEvent.click(screen.getByText(/读不到本机 Outlook/));
-    expect(screen.getByRole("button", { name: "重新扫描" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "扫描一次" })).toBeTruthy();
   });
 
   it("真有可用的本地客户端时, 它要直接可见, 不藏在折叠里", () => {
@@ -124,6 +125,43 @@ describe("Windows 上的顺序", () => {
     render(<EmailSourceSetup discovery={d} {...props} />);
     fireEvent.click(screen.getByText(/读不到本机 Outlook/));
     expect(screen.queryByText("IMAP 没配置")).toBeNull();
+  });
+  it("「扫描一次」走的是 force, 不是普通刷新", () => {
+    /** ⚠ 这两个不能合并。普通刷新走默认路径 (不碰 Outlook COM);
+     *  force 才会真去 Dispatch —— 而那正是 9/21 把 catfish-email 安装
+     *  搞挂的动作。接错了的话, 要么按钮没用, 要么每次自动刷新都在冒那个险。 */
+    const calls: string[] = [];
+    render(
+      <EmailSourceSetup
+        discovery={windowsDiscovery()}
+        {...props}
+        onRescan={() => calls.push("rescan")}
+        onForceScan={() => calls.push("force")}
+      />,
+    );
+    fireEvent.click(screen.getByText(/读不到本机 Outlook/));
+    fireEvent.click(screen.getByRole("button", { name: "扫描一次" }));
+    expect(calls).toEqual(["force"]);
+  });
+
+  it("跳过的来源要说成「跳过」, 不能说成「不可用」", () => {
+    /** "我们没去试" 和 "试了不行" 对员工是完全不同的信息:
+     *  后者他无能为力, 前者他点一下就能试。 */
+    const d = windowsDiscovery({
+      sources: [
+        {
+          client: "outlook-win",
+          status: "skipped",
+          reason: "没有检测到经典桌面版 Outlook 的 COM 注册, 已跳过探测。装了经典版的话点「扫描一次」。",
+          accounts: [],
+          root: null,
+        },
+      ],
+    });
+    render(<EmailSourceSetup discovery={d} {...props} />);
+    fireEvent.click(screen.getByText(/读不到本机 Outlook/));
+    expect(screen.getByText(/已跳过探测/)).toBeTruthy();
+    expect(screen.queryByText(/暂不可用/)).toBeNull();
   });
 });
 
