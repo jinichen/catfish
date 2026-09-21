@@ -630,6 +630,51 @@ class ImapAdapter(EmailAdapter):
             return []
         return self._parse_fetch(data, folder_raw, role, uidvalidity)
 
+    def _fetch_raw_bytes(
+        self, conn: imaplib.IMAP4_SSL, uids: list[bytes],
+    ) -> dict[str, bytes]:
+        """成批取整封邮件的**原始字节**。返回 {uid: raw}。
+
+        # 为什么不能复用 _fetch_uids
+
+        那条路返回的是解析好的 EmailMessage。归档必须存**服务器原样发来的
+        字节** —— 把 EmailMessage 再 serialize 一遍得到的不是同一份东西:
+        Python 的 email 库会重新折行、规范化头部大小写、按 policy 重编码。
+
+        差别不只是"不好看":
+
+          · archive_sha256 是拿来跟服务器那份核对的。存的是我们重写过的
+            版本, 这个哈希就只能证明"我们的序列化是确定的", 证明不了
+            档案跟原件一致 —— 而那正是它唯一的用途。
+          · 附件的 Content-Transfer-Encoding、边界串、非标准头 (很多企业
+            邮件系统会塞自己的 X- 头), 重新序列化之后未必逐字节还原。
+          · 档案的承诺是"服务器清了本地还在"。还在的那份如果不是原件,
+            承诺就打了折, 而且是悄悄打折。
+
+        # BODY.PEEK[] 不是 BODY[]
+
+        PEEK 不会给邮件打 \Seen。归档是后台行为, **绝不能把员工没读过的
+        邮件标成已读** —— 那是直接改员工邮箱的状态, 而且他看不出是谁干的。
+        """
+        if not uids:
+            return {}
+        typ, data = conn.uid("fetch", b",".join(uids), "(UID BODY.PEEK[])")
+        if typ != "OK":
+            logger.warning("归档取原文失败, 这批跳过 (下一轮会重试)")
+            return {}
+        out: dict[str, bytes] = {}
+        for item in data or []:
+            if not isinstance(item, tuple) or len(item) < 2:
+                continue
+            prefix, raw = item[0], item[1]
+            if not isinstance(prefix, bytes) or not isinstance(raw, (bytes, bytearray)):
+                continue
+            uid_match = _UID_IN_FETCH.search(prefix)
+            if uid_match is None:
+                continue
+            out[uid_match.group(1).decode("ascii")] = bytes(raw)
+        return out
+
     @staticmethod
     def _parse_fetch(data, folder_raw: str, role: str, uidvalidity: str) -> list[_Remote]:
         """把 imaplib 的 FETCH 响应拆成一封封邮件。

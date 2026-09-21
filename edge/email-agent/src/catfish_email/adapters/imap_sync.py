@@ -18,6 +18,16 @@ SYNC_INDEX_CAP = 2000
 #: 一个 FETCH 里塞多少封。往返数 = 变更数 / 这个值。
 SYNC_FETCH_BATCH = 200
 
+#: 每轮同步顺手归档多少封。
+#:
+#: 比 SYNC_FETCH_BATCH 小得多是**故意的**: 归档取的是整封带附件的原文,
+#: 一封可能几 MB, 200 封一个 FETCH 会让服务器和内存都很难受, 而且这一批
+#: 没传完中间断了就全白费。20 封一批, 断了最多重来 20 封。
+#:
+#: 归档不赶时间 —— 它是后台的、渐进的, 每轮同步推进一点。赶时间的是列表,
+#: 那条路一个字节正文都不取。
+ARCHIVE_BATCH = 20
+
 logger = logging.getLogger("catfish_email.adapters.imap_sync")
 
 
@@ -94,9 +104,15 @@ class ImapSyncAdapter(ImapAdapter):
         # ① 廉价地问一遍"现在有哪些, 各自什么状态"
         typ, data = conn.uid("search", None, "ALL")
         uids = data[0].split() if typ == "OK" and data and data[0] else []
-        # UID 递增 → 尾部就是最新的。索引只留最近这批: 它服务的是"看收件箱",
-        # 不是全文归档。五年的邮箱全收进来, 首次同步的代价用户等不起。
-        uids = uids[-SYNC_INDEX_CAP:]
+        # 索引只留最近这批: 它服务的是"看收件箱", 不是全文归档。五年的邮箱
+        # 全收进来, 首次同步的代价用户等不起。
+        #
+        # ⚠ 先排序再切尾。原来直接 uids[-SYNC_INDEX_CAP:], 注释写的是
+        #   "UID 递增 → 尾部就是最新的" —— 那是**服务器的惯例, 不是 RFC 的
+        #   保证**。乱序时切到的是任意 2000 封, 而不是最新的 2000 封;
+        #   症状是收件箱里缺最近的邮件, 极难往这儿想。
+        #   (9/21 归档那边同款假设被测试夹具当场逮到, 顺手把这里也钉了。)
+        uids = sorted(uids, key=int)[-SYNC_INDEX_CAP:]
         pairs: list[tuple[str, str]] = []
         if uids:
             typ, flag_data = conn.uid("fetch", b",".join(uids), "(UID FLAGS)")
@@ -157,6 +173,119 @@ class ImapSyncAdapter(ImapAdapter):
             self.config.user, role, stats.scanned, stats.unchanged,
             stats.parsed, stats.removed, stats.elapsed_ms,
         )
+        return stats
+
+    def archive_folder(self, folder_raw: str, role: str) -> dict[str, int]:
+        """把这个文件夹里还没落地的邮件归档一批。返回这轮的账目。
+
+        # 顺序: 先定起点, 再落地, 最后校验
+
+        ① 这个文件夹没设过起点 → 拿当前最大 UID 当起点, 这轮**一封都不归档**。
+           "从使用的第一天开始"就是这个意思: 启用之前已经在的不回填。
+        ② 队列里取一批 (最老优先 —— 归档要抢在服务器清理之前, 而服务器
+           总是先清老的)
+        ③ 一个 FETCH 取原始字节 → 原子写盘 → 记 archive_path
+        ④ **重新打开文件读一遍**核对 → 记 verified_at
+
+        ③ 和 ④ 分开、而且 ④ 真的重读磁盘, 是整个档案馆最要紧的一条:
+        服务器端清理只认 verified_at。写入返回成功只说明 write() 没抛异常。
+
+        校验没过 → clear_archive 把登记整条抹掉, 让它回到队列。只清
+        verified_at 而留着 archive_path 的话, 它既不在队列里又永远不算已校验,
+        **于是悄悄地谁也不管了**。
+        """
+        from .. import archive_store, index_store  # noqa: PLC0415
+
+        assert self.config is not None
+        account = self.config.user
+        root = archive_store.archive_root()
+        conn = self._connect()
+        uidvalidity = self._select(conn, folder_raw)
+
+        # ① 起点
+        marks = archive_store.read_cutoff(root, account)
+        mark = marks.get(folder_raw)
+        if not mark or mark.get("uidvalidity") != str(uidvalidity):
+            typ, data = conn.uid("search", None, "ALL")
+            uids = data[0].split() if typ == "OK" and data and data[0] else []
+            # ⚠ max() 而不是 uids[-1]。**RFC 3501 不保证 SEARCH 的结果有序** ——
+            #   多数服务器返回升序, 但那是惯例不是规范, 而且测试夹具里的响应
+            #   (照真机抄的) 就是 8418 在 8417 前面。
+            #
+            #   取错的后果不是差一个数: 起点被设成某个任意 UID, 比它大的历史
+            #   邮件全部进队列 —— 也就是**回填历史**, 正是"从第一天开始"要防
+            #   的那件事。而且一声不响。
+            top = max((int(u) for u in uids), default=0)
+            marks[folder_raw] = {"uidvalidity": str(uidvalidity), "uid": top}
+            archive_store.write_cutoff(root, account, marks)
+            logger.info(
+                "归档起点已设 [%s/%s]: UIDVALIDITY=%s UID>%d 的才归档 "
+                "(之前已有的 %d 封不回填)",
+                account, role, uidvalidity, top, len(uids),
+            )
+            return {"archived": 0, "verified": 0, "failed": 0, "cutoff_set": 1}
+
+        # ② 队列 —— 只要水位线之上的
+        stats = {"archived": 0, "verified": 0, "failed": 0, "cutoff_set": 0}
+        db = index_store.open_index()
+        try:
+            todo = [
+                (key, date_iso, mid)
+                for key, date_iso, mid in index_store.pending_archive(
+                    db, account=account, folder=role, limit=ARCHIVE_BATCH * 4
+                )
+                if archive_store.above_cutoff(
+                    marks, folder_raw, uidvalidity, _parse_sync_key(key)[2]
+                )
+            ][:ARCHIVE_BATCH]
+            if not todo:
+                return stats
+
+            # ③ 一个往返取这一批的原文
+            raws = self._fetch_raw_bytes(conn, [_parse_sync_key(k)[2].encode() for k, _, _ in todo])
+
+            for key, date_iso, message_id in todo:
+                uid = _parse_sync_key(key)[2]
+                raw = raws.get(uid)
+                if not raw:
+                    # 取不到不算失败: 可能刚被别的客户端删了, 也可能这批没传全。
+                    # 它还在队列里, 下一轮自然重试。
+                    continue
+                # Message-ID 缺失的用 source_key 兜底 —— 少数客户端不发这个头,
+                # 而没有文件名就等于不归档, 那个代价大得多。
+                ident = message_id or key
+                rel = archive_store.relpath_for(
+                    account=account, ident=ident, date_iso=date_iso
+                )
+                try:
+                    size, digest = archive_store.write_message(root, rel, raw)
+                except OSError as e:
+                    logger.warning("归档写盘失败 %s: %s", rel, e)
+                    stats["failed"] += 1
+                    continue
+                index_store.mark_archived(db, key, path=rel, size=size, sha256=digest)
+                stats["archived"] += 1
+
+                # ④ 独立回读
+                problem = archive_store.verify_message(
+                    root, rel, expect_bytes=size, expect_sha256=digest
+                )
+                if problem:
+                    logger.error("归档校验没过, 已退回队列: %s", problem)
+                    index_store.clear_archive(db, key)
+                    stats["failed"] += 1
+                    stats["archived"] -= 1
+                    continue
+                index_store.mark_verified(db, key)
+                stats["verified"] += 1
+        finally:
+            db.close()
+
+        if stats["archived"] or stats["failed"]:
+            logger.info(
+                "归档 [%s/%s]: 落地 %d · 校验通过 %d · 失败 %d",
+                account, role, stats["archived"], stats["verified"], stats["failed"],
+            )
         return stats
 
     def sync_all(self) -> dict[str, object]:

@@ -414,3 +414,93 @@ def query_messages(
             message_id=r[10], in_reply_to=r[11], references=r[12],
         ))
     return out
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 档案队列 (9/21)
+# ═══════════════════════════════════════════════════════════════════
+#
+# 归档是**渐进**的: 每轮同步顺手落地一批, 没落完的留到下一轮。进度不另外
+# 记状态 —— "archive_path IS NULL" 就是待办队列本身。
+#
+# 这样断点续传是免费的: 关掉 App、断网、装机重启, 下一轮接着从队列头取。
+# 要是另起一张 progress 表, 它和 messages 就有了两份真相, 而它们迟早不一致。
+
+
+def pending_archive(
+    conn: sqlite3.Connection, *, account: str, folder: str, limit: int
+) -> list[tuple[str, str, str]]:
+    """还没落地的。返回 [(source_key, date, message_id)]，**最老的优先**。
+
+    为什么最老优先: 归档的意义是抢在服务器清理之前。服务器的保留策略总是
+    先清老的, 所以老的那头最危险。新邮件反正还在服务器上, 晚一轮无所谓。
+    """
+    rows = conn.execute(
+        "SELECT source_key, date, COALESCE(message_id, '') FROM messages "
+        "WHERE account=? AND folder=? AND archive_path IS NULL "
+        "ORDER BY date ASC LIMIT ?",
+        (account, folder, max(1, limit)),
+    )
+    return [(r[0], r[1], r[2]) for r in rows]
+
+
+def mark_archived(
+    conn: sqlite3.Connection, source_key: str, *,
+    path: str, size: int, sha256: str,
+) -> None:
+    """落地了。**注意这里不置 verified_at** —— 那要等独立回读核对过。
+
+    两者分开不是多此一举: 写入返回成功只说明 write() 没抛异常, 不说明盘上
+    那份是对的。服务器端清理只认 verified_at, 所以这两列绝不能在同一步写。
+    """
+    conn.execute(
+        "UPDATE messages SET archive_path=?, archive_bytes=?, archive_sha256=?, "
+        "archived_at=?, verified_at=NULL WHERE source_key=?",
+        (path, size, sha256, time.time(), source_key),
+    )
+    conn.commit()
+
+
+def mark_verified(conn: sqlite3.Connection, source_key: str) -> None:
+    """独立回读核对通过。这一列是服务器端删除的唯一依据。"""
+    conn.execute(
+        "UPDATE messages SET verified_at=? WHERE source_key=?",
+        (time.time(), source_key),
+    )
+    conn.commit()
+
+
+def clear_archive(conn: sqlite3.Connection, source_key: str) -> None:
+    """校验没过 → 把档案登记整条抹掉, 让它回到待办队列。
+
+    不能只清 verified_at 留着 archive_path: 那样它既不在队列里 (有 path),
+    又永远不会被认为已校验, 于是**悄悄地谁也不管**了。盘上那个坏文件下一轮
+    会被原子写覆盖掉。
+    """
+    conn.execute(
+        "UPDATE messages SET archive_path=NULL, archive_bytes=NULL, "
+        "archive_sha256=NULL, archived_at=NULL, verified_at=NULL "
+        "WHERE source_key=?",
+        (source_key,),
+    )
+    conn.commit()
+
+
+def archive_stats(conn: sqlite3.Connection, *, account: str) -> dict[str, int]:
+    """界面上要显示的进度。一次查询, 别在渲染时逐行算。"""
+    row = conn.execute(
+        "SELECT COUNT(*), "
+        "       SUM(CASE WHEN archive_path IS NOT NULL THEN 1 ELSE 0 END), "
+        "       SUM(CASE WHEN verified_at  IS NOT NULL THEN 1 ELSE 0 END), "
+        "       SUM(CASE WHEN on_server = 0 THEN 1 ELSE 0 END), "
+        "       COALESCE(SUM(archive_bytes), 0) "
+        "  FROM messages WHERE account=?",
+        (account,),
+    ).fetchone()
+    return {
+        "total": row[0] or 0,
+        "archived": row[1] or 0,
+        "verified": row[2] or 0,
+        "only_local": row[3] or 0,
+        "bytes": row[4] or 0,
+    }
