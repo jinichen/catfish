@@ -5,9 +5,8 @@
  * 这些测试钉的是**信息顺序**, 不是像素。判据只有一条: 员工第一眼看到的,
  * 得是他真正该做的那件事。
  */
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import EmailSourceSetup from "./EmailSourceSetup";
 
@@ -42,6 +41,8 @@ const props = {
 };
 
 beforeEach(() => vi.clearAllMocks());
+// 同一个文件里多次 render 会叠在一起, 不清的话 getByText 撞多个节点
+afterEach(cleanup);
 
 describe("Windows 上的顺序", () => {
   it("IMAP 排在所有失败信息前面", () => {
@@ -63,10 +64,9 @@ describe("Windows 上的顺序", () => {
     expect(screen.queryByText(/导出为 \.eml/)).toBeNull();
   });
 
-  it("想看的人点一下能展开 —— 诊断信息没被删掉", async () => {
-    const user = userEvent.setup();
+  it("想看的人点一下能展开 —— 诊断信息没被删掉", () => {
     render(<EmailSourceSetup discovery={windowsDiscovery()} {...props} />);
-    await user.click(screen.getByText(/读不到本机 Outlook/));
+    fireEvent.click(screen.getByText(/读不到本机 Outlook/));
     expect(screen.getByText(/hresult/)).toBeTruthy();
     expect(screen.getByText(/导出为 \.eml/)).toBeTruthy();
   });
@@ -80,14 +80,13 @@ describe("Windows 上的顺序", () => {
     expect(container.textContent).not.toContain("暂时没有找到可用邮箱");
   });
 
-  it("「重新扫描」不再占据主版面 —— Windows 上扫不出东西是常态", async () => {
+  it("「重新扫描」不再占据主版面 —— Windows 上扫不出东西是常态", () => {
     /** 9/18 之后: Foxmail 本地解析删了, 新版 Outlook 没有 COM。
      *  把一个大概率扫不出结果的按钮摆在最显眼处, 是在邀请员工反复做无用功。 */
-    const user = userEvent.setup();
     render(<EmailSourceSetup discovery={windowsDiscovery()} {...props} />);
     expect(screen.queryByRole("button", { name: "重新扫描" })).toBeNull();
 
-    await user.click(screen.getByText(/读不到本机 Outlook/));
+    fireEvent.click(screen.getByText(/读不到本机 Outlook/));
     expect(screen.getByRole("button", { name: "重新扫描" })).toBeTruthy();
   });
 
@@ -113,7 +112,6 @@ describe("Windows 上的顺序", () => {
     /** ImapSetup 自己就有完整的已配置/未配置状态。
      *  discovery.sources 里那条 imap 再渲染一遍 = 同一件事说两遍, 而且两处
      *  状态可能不一致。 */
-    const user = userEvent.setup();
     const d = windowsDiscovery({
       sources: [
         { client: "imap", status: "unavailable", reason: "IMAP 没配置", accounts: [], root: null },
@@ -121,9 +119,8 @@ describe("Windows 上的顺序", () => {
       ],
     });
     render(<EmailSourceSetup discovery={d} {...props} />);
-    return user.click(screen.getByText(/读不到本机 Outlook/)).then(() => {
-      expect(screen.queryByText("IMAP 没配置")).toBeNull();
-    });
+    fireEvent.click(screen.getByText(/读不到本机 Outlook/));
+    expect(screen.queryByText("IMAP 没配置")).toBeNull();
   });
 });
 
