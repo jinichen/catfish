@@ -47,6 +47,7 @@ import { useUIStore } from "../../store/ui";
 import { useAgentStore } from "../../store/agent";
 import ComposeCore from "./components/ComposeCore";
 import EmailSourceSetup from "./components/EmailSourceSetup";
+import FullDiskAccessHint from "./components/FullDiskAccessHint";
 
 // 5/20: ListItem / DetailPane / helpers 抽到 components/ (拆 1204 → <500)
 import DetailPane, { type FullMessage } from "./components/DetailPane";
@@ -457,11 +458,18 @@ export default function EmailTab() {
           background: "var(--catfish-bg-elevated)",
         }}
       >
-        {/* 列表 header: 概要 + toolbar */}
+        {/* 列表 header: 概要 + toolbar
+            9/21: minHeight:0 和 overflowY 必须成对。flex 子项的 min-height
+            默认 auto, 不会被压到比内容矮 → 不产生溢出 → 不出滚动条, 而外层
+            overflow:hidden 照样切。只加 overflowY 等于没加。
+            (症状: 邮件来源配置卡片下半截看不见也滚不到) */}
         <div
           style={{
             padding: "var(--space-3)",
             borderBottom: "1px solid var(--catfish-border)",
+            minHeight: 0,
+            overflowY: "auto",
+            scrollbarWidth: "thin",
           }}
         >
           <div
@@ -551,36 +559,7 @@ export default function EmailTab() {
             />
           </div>
 
-          {/* 缺完全磁盘访问权限的提示 —— **独占一行, 不能塞进上面 header**。
-            *
-            * 8/8 我第一版把它做成 header 概要后面的一个 "⚠ 少账号?" chip, 当场把
-            * 标题挤成竖排的"邮"↵"件"。而这个坑文件里就记着 (P3.5.204.f):
-            * 左栏 340px 硬编码, header 那一行塞 邮件 + 概要 + 新建 + 收信中…
-            * 已经是临界的, 上次为了腾 28px 才把 📧 图标删掉 —— 我转手加了 5 个字回去。
-            *
-            * 独占一行还有个好处: 说得下人话。chip 只能塞四五个字, 员工看不懂要做什么。 */}
-          {mailDirBlocked && (
-            <div
-              style={{
-                fontSize: 11,
-                lineHeight: 1.5,
-                color: "var(--catfish-hint-amber-text)",
-                background: "var(--catfish-hint-amber-bg)",
-                border: "1px solid var(--catfish-hint-amber-border)",
-                borderRadius: "var(--radius-sm)",
-                padding: "6px 8px",
-                marginBottom: 6,
-              }}
-            >
-              ⚠ 有邮箱账号读不到 —— 缺「完全磁盘访问权限」。
-              <br />
-              系统设置 → 隐私与安全性 → 完全磁盘访问权限 → 打开「鲶鱼 Companion」→ 重启。
-              <br />
-              <span style={{ opacity: 0.8 }}>
-                注: 每次重装 Companion 都要重授一次 (app 还没做代码签名, 系统当成新程序)。
-              </span>
-            </div>
-          )}
+          {mailDirBlocked && <FullDiskAccessHint />}
           {/* sourceDiscovery 再判一次是给 TS 收窄类型用的 —— needsSourceSetup
               为真时它一定不是 null (函数里第一句就是 `if (!discovery) return
               false`), 但那个事实跨不过函数边界。 */}
@@ -649,6 +628,9 @@ export default function EmailTab() {
             margin: 0,
             padding: 0,
             flex: 1,
+            // 9/21: 跟上面 header 同一个道理 —— flex 子项 min-height 默认 auto,
+            // 不加这条, 列表长的时候是**列表**把 header 挤扁而不是自己滚。
+            minHeight: 0,
             overflowY: "auto",
             scrollbarWidth: "thin",
           }}
