@@ -229,3 +229,69 @@ def test_write_failure_is_counted_and_does_not_abort_the_batch(home, monkeypatch
     )
     got = adapter.archive_folder("INBOX", "Inbox")
     assert got["failed"] == 1 and got["archived"] == 0
+
+
+# ─────────────────────────────────────────────────────────────
+# 挂到哪条路上 —— 这一步漏了, 上面全部代码在真机上一次都不会跑
+# ─────────────────────────────────────────────────────────────
+
+
+def test_check_new_mail_archives(home, monkeypatch):
+    """「收信」和后台轮询要推进归档。
+
+    ⚠ 这条钉的是**接线**, 不是逻辑。archive_folder 写得再对, 没有任何地方
+    调用它的话, 真机上一次都不会执行 —— 而所有别的测试照样全绿, 因为它们
+    都直接调 archive_folder。这种"功能写完了但没接上"的缺口, 只有从入口
+    往下测才发现得了。
+    """
+    fake = ArchivingIMAP()
+    adapter = make(fake, monkeypatch)
+    calls: list[tuple[str, str]] = []
+    real = adapter.archive_folder
+    monkeypatch.setattr(
+        adapter, "archive_folder",
+        lambda raw, role: (calls.append((raw, role)), real(raw, role))[1],
+    )
+
+    adapter.check_new_mail()
+    assert calls, "收信没有触发归档 —— archive_folder 没被接到任何入口上"
+
+
+def test_listing_mail_does_not_archive(home, monkeypatch):
+    """列表页**不**归档。
+
+    sync_folder 是 list_messages 的热路径, 员工每次切到邮件页都会走。
+    归档取的是整封带附件的原文, 挂在那里等于每次打开邮件页都卡一下 ——
+    而列表快正是这套索引存在的全部理由 (8/21 治的就是"切 tab 要等很久")。
+    """
+    fake = ArchivingIMAP()
+    adapter = make(fake, monkeypatch)
+    calls: list[str] = []
+    monkeypatch.setattr(adapter, "archive_folder", lambda raw, role: calls.append(raw))
+
+    from catfish_email.adapters.base import ListFilter
+    adapter.list_messages(ListFilter(folder="Inbox", limit=10))
+    assert calls == [], "列表页顺手归档了 —— 热路径会被拖慢"
+
+
+def test_archive_failure_does_not_break_syncing(home, monkeypatch):
+    """归档挂了不能拖垮同步。
+
+    索引是员工马上要用的, 档案是后台慢慢补的 —— 前者的可用性优先级高得多。
+    归档一个异常把 check_new_mail 整个带崩, 症状是「收信」按钮报错而列表
+    其实已经更新好了。
+    """
+    fake = ArchivingIMAP()
+    adapter = make(fake, monkeypatch)
+    monkeypatch.setattr(
+        adapter, "archive_folder",
+        lambda raw, role: (_ for _ in ()).throw(RuntimeError("归档炸了")),
+    )
+    adapter.check_new_mail()  # 不抛就是对的
+
+    db = index_store.open_index()
+    try:
+        n = db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+    finally:
+        db.close()
+    assert n > 0, "归档炸了把索引也带没了"

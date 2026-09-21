@@ -504,3 +504,37 @@ def archive_stats(conn: sqlite3.Connection, *, account: str) -> dict[str, int]:
         "only_local": row[3] or 0,
         "bytes": row[4] or 0,
     }
+
+
+def purgeable(
+    conn: sqlite3.Connection, *, account: str, folder: str,
+    older_than: float, limit: int,
+) -> list[str]:
+    """可以从服务器上删掉的 source_key。
+
+    三个条件缺一不可:
+
+      verified_at IS NOT NULL   **独立回读核对过**。绝不看 archived_at ——
+                                写入返回成功只说明 write() 没抛异常。
+      verified_at <= older_than 保留期满了
+      on_server = 1             服务器上还在 (已经没了的不用再删)
+
+    最老的先删 —— 跟归档同一个方向: 老邮件占的容量先释放, 而且它们最可能
+    已经被员工忘掉了。
+    """
+    rows = conn.execute(
+        "SELECT source_key FROM messages "
+        "WHERE account=? AND folder=? AND on_server=1 "
+        "  AND verified_at IS NOT NULL AND verified_at <= ? "
+        "ORDER BY verified_at ASC LIMIT ?",
+        (account, folder, older_than, max(1, limit)),
+    )
+    return [r[0] for r in rows]
+
+
+def mark_off_server(conn: sqlite3.Connection, source_key: str) -> None:
+    """服务器上那份没了, 本地档案照旧。"""
+    conn.execute(
+        "UPDATE messages SET on_server=0 WHERE source_key=?", (source_key,)
+    )
+    conn.commit()

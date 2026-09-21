@@ -28,6 +28,10 @@ SYNC_FETCH_BATCH = 200
 #: 那条路一个字节正文都不取。
 ARCHIVE_BATCH = 20
 
+#: 每轮从服务器清理多少封。比归档还小 —— 这是**不可逆**操作, 慢比快好。
+#: 出了问题, 每轮 10 封给人留的反应时间比每轮 200 封多一个数量级。
+PURGE_BATCH = 10
+
 logger = logging.getLogger("catfish_email.adapters.imap_sync")
 
 
@@ -288,8 +292,98 @@ class ImapSyncAdapter(ImapAdapter):
             )
         return stats
 
-    def sync_all(self) -> dict[str, object]:
-        """所有认识的文件夹各对账一次。返回 {角色: ReconcileStats}。"""
+    def purge_folder(self, folder_raw: str, role: str) -> dict[str, int]:
+        """保留期满的, 从服务器上删掉。返回这轮的账目。
+
+        # 这跟员工手动删邮件是两条不同的路
+
+        手动删 (delete_message): COPY 一份到「已删除」再打 \Deleted ——
+        员工可能后悔, 要留退路。
+
+        到期清理 (这里): **不 COPY**。副本同样占容量, 而腾容量正是这个功能
+        存在的理由 —— 留一份等于删完更胖。本地档案就是那条退路, 而且它已经
+        独立回读核对过了。
+
+        # 判据只认 verified_at
+
+        绝不看 archived_at。写入返回成功只说明 write() 没抛异常, 盘上那份
+        到底对不对只有重读核对过才知道。这里判错一次, 邮件是真的没了。
+
+        # 没有 UIDPLUS 时容量释放不了, 而且必须说出来
+
+        裸 EXPUNGE 会清掉**整个文件夹里所有打了 \Deleted 的邮件** —— 包括
+        员工在 Foxmail/Outlook 里标了删除还没压缩的那些, 不可恢复。宁可
+        不释放容量也不能干这个。
+
+        但"没释放"必须让员工知道: 他开了这个功能就是为了腾空间, 结果空间
+        没腾出来而界面一切正常, 那是最坏的一种。返回值里带 needs_expunge,
+        界面照着它说话。
+        """
+        from .. import index_store  # noqa: PLC0415
+
+        assert self.config is not None
+        stats = {"purged": 0, "flagged": 0, "needs_expunge": 0}
+        window = self.config.retention_seconds()
+        if window is None:
+            return stats           # never —— 什么都不做
+
+        import time  # noqa: PLC0415
+
+        conn = self._connect()
+        self._select(conn, folder_raw, writable=True)
+        has_uidplus = self._has_capability("UIDPLUS")
+
+        db = index_store.open_index()
+        try:
+            keys = index_store.purgeable(
+                db, account=self.config.user, folder=role,
+                older_than=time.time() - window, limit=PURGE_BATCH,
+            )
+            for key in keys:
+                uid = _parse_sync_key(key)[2]
+                typ, _ = conn.uid("store", uid, "+FLAGS", r"(\Deleted)")
+                if typ != "OK":
+                    logger.warning("标记删除失败 uid=%s, 跳过", uid)
+                    continue
+                if has_uidplus:
+                    conn.uid("expunge", uid)      # 只清这一封
+                    stats["purged"] += 1
+                else:
+                    stats["flagged"] += 1
+                index_store.mark_off_server(db, key)
+        finally:
+            db.close()
+
+        if stats["flagged"]:
+            stats["needs_expunge"] = stats["flagged"]
+            logger.warning(
+                "[%s/%s] %d 封已标记删除, 但这台服务器没有 UIDPLUS —— "
+                "不能只清这几封, 所以没有执行 EXPUNGE。**容量还没释放**, "
+                "要等服务器自己压缩或员工在邮件客户端里清空已删除。",
+                self.config.user, role, stats["flagged"],
+            )
+        if stats["purged"]:
+            logger.info(
+                "[%s/%s] 从服务器清理 %d 封 (本地档案已校验保留)",
+                self.config.user, role, stats["purged"],
+            )
+        return stats
+
+    def sync_all(self, *, archive: bool = True) -> dict[str, object]:
+        """所有认识的文件夹各对账一次, 顺手归档一批。返回 {角色: ReconcileStats}。
+
+        # 为什么归档挂在这儿, 不挂在 sync_folder 上
+
+        sync_folder 是 list_messages 的热路径 —— 员工每次切到邮件页都会走。
+        归档要取整封带附件的原文, 挂在那里等于**每次打开邮件页都卡一下**,
+        而列表本来是这套索引的全部意义 (8/21 治的就是"切 tab 要等很久")。
+
+        sync_all 只有两个调用方: 界面上的「收信」和后台轮询。两个都是
+        "现在去跟服务器对一遍"的语义, 慢一点是预期之内的。每轮推进
+        ARCHIVE_BATCH 封, 渐进地把档案补齐。
+
+        archive=False 留给不想付这个代价的调用方 (比如只想刷新列表)。
+        """
         out: dict[str, object] = {}
         for raw, decoded in self.folders():
             role = folder_role(decoded)
@@ -297,6 +391,15 @@ class ImapSyncAdapter(ImapAdapter):
                 out[role] = self.sync_folder(raw, role)
             except Exception as error:  # noqa: BLE001 — 一个文件夹坏不拖垮其余
                 logger.warning("imap_sync: 文件夹 %s 同步失败: %s", decoded, error)
+                continue
+            if not archive:
+                continue
+            try:
+                self.archive_folder(raw, role)
+            except Exception as error:  # noqa: BLE001
+                # 归档挂了**不能拖垮同步**。索引是员工马上要用的, 档案是
+                # 后台慢慢补的 —— 前者的可用性优先级高得多。
+                logger.warning("imap_sync: 文件夹 %s 归档失败: %s", decoded, error)
         return out
 
     def check_new_mail(self, *, account: str | None = None) -> None:

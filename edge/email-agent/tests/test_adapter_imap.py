@@ -388,9 +388,20 @@ def test_password_never_appears_in_login_failure(monkeypatch, caplog):
 
 
 def test_redacted_form_has_no_password():
+    """要守的是"密码不出现", 不是某个精确字符串。
+
+    9/21 加保留策略时这条红了 —— 断言写的是 == "u@x.cn@h:993"。放宽成
+    性质断言, 并补上新的那条:
+
+    保留策略进 redacted() 是**有意的**。它是这套配置里最有后果的一项 ——
+    决定要不要删员工服务器上的邮件, 而且不可逆。redacted() 正是进日志的
+    那一行, 将来查"我的邮件怎么没了"时, 第一眼就该看到当时用的是什么策略。
+    """
     cfg = ImapConfig(host="h", user="u@x.cn", password="TOPSECRET", port=993)
-    assert "TOPSECRET" not in cfg.redacted()
-    assert cfg.redacted() == "u@x.cn@h:993"
+    out = cfg.redacted()
+    assert "TOPSECRET" not in out, "密码泄进日志了"
+    assert "u@x.cn" in out and "h:993" in out, "看不出是哪个连接"
+    assert "never" in out, "日志里看不出用的什么保留策略"
 
 
 # ─────────────────────────────────────────────────────────────

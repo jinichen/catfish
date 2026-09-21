@@ -100,14 +100,22 @@ def smtp_send(config: "ImapConfig", raw: bytes, recipients: list[str]) -> None:
     except SmtpError as error:
         raise EmailAdapterError(str(error)) from None
 
-HOST_ENV = "CATFISH_IMAP_HOST"
-PORT_ENV = "CATFISH_IMAP_PORT"
-USER_ENV = "CATFISH_IMAP_USER"
-#: 凭据。阶段一从环境变量取 (Companion 从 keyring 读出来再注入子进程),
-#: 这样 catfish-email 自己永远不碰 keyring, 也不需要平台后端。
-PASSWORD_ENV = "CATFISH_IMAP_PASSWORD"
+# 配置 9/21 搬到 imap_config.py (本文件越过 800 行红线)。这里 re-export ——
+# 全仓有一堆 `from .imap_mail import ImapConfig`, 改全部调用点的风险不如
+# 留一行别名。新代码请直接 from .imap_config import ...
+from .imap_config import (  # noqa: E402,F401
+    DEFAULT_PORT,
+    DEFAULT_RETENTION,
+    HOST_ENV,
+    PASSWORD_ENV,
+    PORT_ENV,
+    RETENTION_ENV,
+    RETENTION_SECONDS,
+    USER_ENV,
+    ImapConfig,
+    config_from_env,
+)
 
-DEFAULT_PORT = 993
 #: 列清单一次最多解析几封 —— 只取最新的那批, 不整箱拉
 LIST_FETCH_CAP = 200
 
@@ -122,31 +130,6 @@ _FLAGS_IN_FETCH = re.compile(rb"FLAGS \(([^)]*)\)")
 # ============================================================
 # 连接配置
 # ============================================================
-
-
-@dataclass(frozen=True)
-class ImapConfig:
-    host: str
-    user: str
-    password: str
-    port: int = DEFAULT_PORT
-
-    def redacted(self) -> str:
-        """能进日志的形态 —— 密码永远不出现。"""
-        return f"{self.user}@{self.host}:{self.port}"
-
-
-def config_from_env() -> ImapConfig | None:
-    host = os.environ.get(HOST_ENV, "").strip()
-    user = os.environ.get(USER_ENV, "").strip()
-    password = os.environ.get(PASSWORD_ENV, "")
-    if not (host and user and password):
-        return None
-    try:
-        port = int(os.environ.get(PORT_ENV, "").strip() or DEFAULT_PORT)
-    except ValueError:
-        port = DEFAULT_PORT
-    return ImapConfig(host=host, user=user, password=password, port=port)
 
 
 # ============================================================
