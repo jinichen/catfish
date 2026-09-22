@@ -41,6 +41,20 @@ cd "$REPO_ROOT"
 
 # 暂存区里将要提交的文件 (排除删除的)
 STAGED=$(git diff --cached --name-only --diff-filter=ACM)
+
+# ── 点名豁免表: 直接从 check_file_sizes.sh 读, 不另抄一份 ────────
+#
+# 9/22 之前两边对同一个文件给出相反答案: check_file_sizes.sh 说
+# delivery/catfish-poc/setup.sh 豁免 (8/15 鸿波拍板, 理由写在那边 —— 交付给
+# 客户 IT 的单文件装机脚本, 拆了就破坏"一条命令"这件事), 而这个钩子不认。
+# 结果那条豁免在实践中用不了: 想改这个文件只能 --no-verify, 而那正是纪律
+# 禁止的。一条逼人走后门的规则比没有规则更坏。
+#
+# 故意不在这里另抄一份清单 —— 两份迟早跑偏, 而跑偏的那天没人会发现
+# (两边都"有检查")。读不到就当空表, 照常拦 (宁可误拦, 不可漏放)。
+EXEMPT_HIT=""   # set -u 下必须先初始化, 否则引用时直接炸
+NAMED_EXEMPT=$(sed -n '/^NAMED_EXEMPT_LIST="/,/^"/p' scripts/check_file_sizes.sh 2>/dev/null \
+               | sed '1d;$d' | grep -v '^[[:space:]]*$' || true)
 [ -z "$STAGED" ] && exit 0
 
 FAIL=0
@@ -105,6 +119,11 @@ PYCHK
   old_n=$(git show "HEAD:$f" 2>/dev/null | wc -l | tr -d ' ')
   [ -z "$old_n" ] && old_n=0
 
+  if printf '%s\n' "$NAMED_EXEMPT" | grep -qxF "$f"; then
+    [ "$new_n" -ge 800 ] && EXEMPT_HIT="${EXEMPT_HIT}  ${f}  (${new_n} 行)"$'\n'
+    continue
+  fi
+
   if [ "$new_n" -ge 800 ]; then
     if [ "$old_n" -lt 800 ]; then
       why=$([ "$old_n" -eq 0 ] && echo "新文件" || echo "从 ${old_n} 行推过 800")
@@ -114,6 +133,13 @@ PYCHK
     fi
   fi
 done <<< "$STAGED"
+
+# 豁免不静默 —— 一个明文豁免的文件如果悄悄放过, 下一个人不会知道它为什么
+# 能超, 也不会知道这条豁免还在不在。
+if [ -n "$EXEMPT_HIT" ]; then
+  echo "ⓘ 以下文件 ≥800 行但在点名豁免表里 (理由见 scripts/check_file_sizes.sh):"
+  printf '%s' "$EXEMPT_HIT"
+fi
 
 if [ -n "$OVERSIZE" ]; then
   echo "🔴 文件越过 800 行红线 (CLAUDE.md §1):"

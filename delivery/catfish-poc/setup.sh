@@ -64,6 +64,33 @@ IMAGE_TAR="${IMAGE_TAR:-}"   # 若未装 image · 指到 image tar 路径
 GATEWAY_WORKERS="${GATEWAY_WORKERS:-}"
 IDENTITY_WORKERS="${IDENTITY_WORKERS:-}"
 
+# ── 参数写法: 环境变量必须在命令**前面** ──────────────────
+#
+# 9/22 现场撞到: `bash setup.sh SERVER_IP=127.0.0.1`。
+# shell 把 `SERVER_IP=127.0.0.1` 当成位置参数传给脚本, 而不是环境变量 ——
+# 脚本原样忽略, 然后去自动探测 IP, 报了个跟真实原因完全无关的错。
+#
+# 这个错法很自然 (很多命令行工具确实收 key=value 参数), 而且静默忽略的
+# 代价不只是这一次: 它会让人以为自己指定过了。所以认出来当场拦。
+for _arg in "$@"; do
+    case "$_arg" in
+        *=*)
+            _k="${_arg%%=*}"
+            echo "❌ 参数写法不对: $_arg"
+            echo ""
+            echo "   环境变量要写在命令**前面**, 不是后面:"
+            echo "       $_arg bash setup.sh          ← 对"
+            echo "       bash setup.sh $_arg          ← 错 (被当成位置参数忽略)"
+            echo ""
+            echo "   写在后面的话 shell 不会把它设成环境变量, 脚本收不到,"
+            echo "   然后会以\"你没指定\"继续往下走 —— 报的错跟真实原因无关。"
+            [ "$_k" = "SERVER_IP" ] && echo "   (顺带: 别用 127.0.0.1, 那样只有这台机器自己能访问)"
+            echo ""
+            exit 1
+            ;;
+    esac
+done
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── 镜像 tag 的唯一来源 = docker-compose.yml ──────────────────────
@@ -233,12 +260,46 @@ echo "════════════════════════�
 # ── 1. 探测 / 确认 server IP ─────────────────────────────
 if [ -z "$SERVER_IP" ]; then
     # 探测: 取第一条非 loopback / 非 docker 的 IPv4
+    # ⚠ 结尾那个 `|| true` 不是装饰。
+    #
+    # grep 没匹配到任何东西时返回 1, 而 `set -euo pipefail` 会让整条管道的
+    # 失败**直接杀掉脚本** —— 于是下面那句"无法自动探测 server IP"的提示,
+    # 恰恰在它该出现的那种情况下永远打不出来, 现场看到的是脚本印完标题
+    # 就没声了。
+    #
+    # 9/22 实测确认 (WSL 里 hostname -I 返回 172.29.x.x, 被下面的排除规则
+    # 全部滤掉 → grep 返回 1 → 静默退出, 一个字都不打)。
     SERVER_IP=$(hostname -I 2>/dev/null | tr ' ' '\n' | \
         grep -vE '^(127\.|172\.1[7-9]\.|172\.2[0-9]\.|172\.3[0-1]\.|169\.254\.)' | \
-        head -1)
+        head -1 || true)
     if [ -z "$SERVER_IP" ]; then
-        echo "❌ 无法自动探测 server IP · 请显式指定:"
-        echo "   SERVER_IP=192.168.x.x bash setup.sh"
+        echo "❌ 无法自动探测 server IP"
+        echo ""
+        # WSL 要单独说。WSL2 虚拟机的 IP 通常落在 172.16-172.31, 正好被上面
+        # 那条"排除 Docker NAT 网段"的规则滤掉 —— 但**就算探到也是错的**:
+        # Docker Desktop 把端口发布在 Windows 宿主机上, 员工连的是 Windows
+        # 的局域网 IP, 不是 WSL 虚拟机的。填了 WSL 的 IP 会装完就绿, 然后
+        # 除了这台机器谁也连不上。
+        if grep -qiE 'microsoft|wsl' /proc/sys/kernel/osrelease 2>/dev/null; then
+            echo "   检测到这里是 WSL。"
+            echo ""
+            echo "   ⚠ WSL 虚拟机自己的 IP **不能**用 —— Docker Desktop 把端口发布在"
+            echo "     Windows 宿主机上, 员工要连的是 Windows 那边的局域网 IP。"
+            echo "     填了 WSL 的 IP, 装完会全绿, 但除了这台机器谁也访问不了。"
+            echo ""
+            echo "   取 Windows 侧的局域网 IP (在 WSL 里就能跑):"
+            echo "       ipconfig.exe | grep -A4 -iE 'ethernet|wi-?fi' | grep -i 'IPv4'"
+            echo ""
+            echo "   然后:"
+            echo "       SERVER_IP=<上面那个 IP> bash setup.sh"
+        else
+            echo "   请显式指定 (注意写在命令前面):"
+            echo "       SERVER_IP=192.168.x.x bash setup.sh"
+            echo ""
+            echo "   本机有哪些地址:"
+            (hostname -I 2>/dev/null | tr ' ' '\n' | grep -v '^$' | sed 's/^/       /') || true
+        fi
+        echo ""
         exit 1
     fi
     echo "→ 自动探测 server IP: $SERVER_IP"
