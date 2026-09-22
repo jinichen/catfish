@@ -48,7 +48,7 @@ fn resolve_soul() -> (String, Option<String>) {
     let Some(home) = home_dir() else {
         return ("(找不到 home)".into(), None);
     };
-    let soul_path = home.join(".hermes").join("SOUL.md");
+    let soul_path = crate::services::catfish_paths::hermes_home_for(&home).join("SOUL.md");
     if !soul_path.exists() {
         return ("(无 SOUL.md)".into(), None);
     }
@@ -79,7 +79,7 @@ fn read_config_yaml() -> (String, Option<String>) {
     let Some(home) = home_dir() else {
         return ("default".into(), None);
     };
-    let cfg_path = home.join(".hermes").join("config.yaml");
+    let cfg_path = crate::services::catfish_paths::hermes_home_for(&home).join("config.yaml");
     let Ok(text) = std::fs::read_to_string(&cfg_path) else {
         return ("default".into(), None);
     };

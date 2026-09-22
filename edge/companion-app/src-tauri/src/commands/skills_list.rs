@@ -365,7 +365,7 @@ pub(crate) fn list_installed_skills_blocking() -> Result<Vec<SkillNamespace>, St
     // 2. hermes skills (LLM 自学 + 内置 + marketplaces 装的) — 全收, 这路径不混
     // 教学产物 (freeze 不落 ~/.hermes/skills/).
     if let Some(home) = home_dir() {
-        let hermes_skills = home.join(".hermes").join("skills");
+        let hermes_skills = crate::services::catfish_paths::hermes_home_for(&home).join("skills");
         let mut hermes_namespaces = scan_skills_root(&hermes_skills, "");
         hermes_namespaces.sort_by(|a, b| a.namespace.cmp(&b.namespace));
         result.extend(hermes_namespaces);

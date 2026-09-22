@@ -77,7 +77,7 @@ fn hermes_env_path() -> Option<PathBuf> {
     let home = crate::util::paths::home_env()
         .or_else(|_| std::env::var("USERPROFILE"))
         .ok()?;
-    Some(PathBuf::from(home).join(".hermes").join(".env"))
+    Some(crate::services::catfish_paths::hermes_home_for(&PathBuf::from(home)).join(".env"))
 }
 
 /// Codex 后端现在允许用吗。

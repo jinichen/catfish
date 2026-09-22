@@ -99,7 +99,7 @@ fn cron_home() -> Result<PathBuf, String> {
     let home = crate::util::paths::home_env()
         .or_else(|_| std::env::var("USERPROFILE"))
         .map_err(|_| "找不到 HOME".to_string())?;
-    Ok(PathBuf::from(home).join(".hermes").join("cron"))
+    Ok(crate::services::catfish_paths::hermes_home_for(&PathBuf::from(home)).join("cron"))
 }
 
 fn jobs_json_path() -> Result<PathBuf, String> {

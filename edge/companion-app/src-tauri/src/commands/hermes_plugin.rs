@@ -71,7 +71,7 @@ fn hermes_home() -> Option<PathBuf> {
         return Some(PathBuf::from(env));
     }
     let home = crate::util::paths::home_env().ok()?;
-    Some(PathBuf::from(home).join(".hermes"))
+    Some(crate::services::catfish_paths::hermes_home_for(&PathBuf::from(home)))
 }
 
 fn plugin_dir() -> Option<PathBuf> {

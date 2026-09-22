@@ -166,7 +166,7 @@ fn is_today(mtime_unix: f64) -> bool {
 fn collect_memories(home: &Path) -> Vec<MemoryFile> {
     let mut out = Vec::new();
     // ~/.hermes/USER.md
-    let user_md = home.join(".hermes").join("USER.md");
+    let user_md = crate::services::catfish_paths::hermes_home_for(&home).join("USER.md");
     if let Ok(meta) = std::fs::metadata(&user_md) {
         let mtime = meta
             .modified()
@@ -183,7 +183,7 @@ fn collect_memories(home: &Path) -> Vec<MemoryFile> {
     }
 
     // ~/.hermes/memories/*.md  —— name 加 "memories/" 前缀,跟顶层 USER.md 区分
-    let mem_dir = home.join(".hermes").join("memories");
+    let mem_dir = crate::services::catfish_paths::hermes_home_for(&home).join("memories");
     if let Ok(entries) = std::fs::read_dir(&mem_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -217,7 +217,7 @@ fn collect_memories(home: &Path) -> Vec<MemoryFile> {
 
 fn collect_new_skills(home: &Path) -> Vec<NewSkill> {
     let mut out = Vec::new();
-    let skills_dir = home.join(".hermes").join("skills");
+    let skills_dir = crate::services::catfish_paths::hermes_home_for(&home).join("skills");
     let Ok(ns_entries) = std::fs::read_dir(&skills_dir) else {
         return out;
     };
@@ -394,7 +394,7 @@ fn extract_description(text: &str) -> Option<String> {
 }
 
 fn collect_db_stats(home: &Path) -> (u32, u32, u64) {
-    let db_path = home.join(".hermes").join("state.db");
+    let db_path = crate::services::catfish_paths::hermes_home_for(&home).join("state.db");
     if !db_path.exists() {
         return (0, 0, 0);
     }
@@ -466,7 +466,7 @@ struct SoftSkillStats {
 }
 
 fn collect_soft_skill_stats(home: &Path) -> SoftSkillStats {
-    let db_path = home.join(".hermes").join("state.db");
+    let db_path = crate::services::catfish_paths::hermes_home_for(&home).join("state.db");
     if !db_path.exists() {
         return SoftSkillStats::default();
     }

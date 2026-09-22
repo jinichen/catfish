@@ -28,7 +28,7 @@ pub(crate) fn hermes_root() -> Result<PathBuf, String> {
     if let Some(value) = std::env::var_os("HERMES_HOME") {
         return Ok(PathBuf::from(value));
     }
-    Ok(home_dir()?.join(".hermes"))
+    Ok(crate::services::catfish_paths::hermes_home_for(&home_dir()?))
 }
 
 pub(crate) fn hermes_agent_root() -> Result<PathBuf, String> {

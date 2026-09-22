@@ -33,7 +33,7 @@ fn flag_path() -> Option<PathBuf> {
 }
 
 fn state_db_path() -> Option<PathBuf> {
-    let path = home_dir()?.join(".hermes").join("state.db");
+    let path = crate::services::catfish_paths::hermes_home()?.join("state.db");
     if !path.exists() {
         return None;
     }

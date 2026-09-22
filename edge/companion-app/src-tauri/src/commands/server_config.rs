@@ -350,11 +350,11 @@ pub fn write_server_config(
     //
     // 加写 hermes .env 保 line-level replace, 不影响别的 env vars (API_SERVER_KEY /
     // OPENAI_API_KEY 等). hermes 重启后 load_hermes_dotenv 读新值.
-    let hermes_env_path = home
-        .parent()
-        .ok_or_else(|| "home 目录无 parent (不该发生)".to_string())?
-        .join(".hermes")
-        .join(".env");
+    let hermes_env_path = crate::services::catfish_paths::hermes_home_for(
+        home.parent()
+            .ok_or_else(|| "home 目录无 parent (不该发生)".to_string())?,
+    )
+    .join(".env");
     if hermes_env_path.exists() {
         // 已有 .env: line-level replace 或追加
         let old = fs::read_to_string(&hermes_env_path)

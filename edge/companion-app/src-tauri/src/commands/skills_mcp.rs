@@ -32,7 +32,7 @@ pub(crate) fn list_mcp_servers_blocking() -> Result<Vec<McpServerEntry>, String>
     let Some(home) = home_dir() else {
         return Ok(vec![]);
     };
-    let cfg_path = home.join(".hermes").join("config.yaml");
+    let cfg_path = crate::services::catfish_paths::hermes_home_for(&home).join("config.yaml");
     let Ok(text) = std::fs::read_to_string(&cfg_path) else {
         return Ok(vec![]);
     };
@@ -92,7 +92,7 @@ pub(crate) fn add_mcp_server_blocking(
         ));
     }
     let home = home_dir().ok_or("找不到 HOME")?;
-    let cfg_path = home.join(".hermes").join("config.yaml");
+    let cfg_path = crate::services::catfish_paths::hermes_home_for(&home).join("config.yaml");
     let text = std::fs::read_to_string(&cfg_path)
         .map_err(|e| format!("读 ~/.hermes/config.yaml 失败: {e}"))?;
     let mut value: serde_yaml::Value = serde_yaml::from_str(&text)
@@ -146,7 +146,7 @@ pub(crate) fn remove_mcp_server_blocking(name: String) -> Result<(), String> {
         ));
     }
     let home = home_dir().ok_or("找不到 HOME")?;
-    let cfg_path = home.join(".hermes").join("config.yaml");
+    let cfg_path = crate::services::catfish_paths::hermes_home_for(&home).join("config.yaml");
     let text = std::fs::read_to_string(&cfg_path)
         .map_err(|e| format!("读 ~/.hermes/config.yaml 失败: {e}"))?;
     let mut value: serde_yaml::Value = serde_yaml::from_str(&text)

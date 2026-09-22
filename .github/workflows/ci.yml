@@ -471,6 +471,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # 9/22: 禁止写死 ~/.hermes。Windows 上 hermes 装在 %LOCALAPPDATA%\hermes,
+      # 写死的路径让四个本地服务全部起不来。放在 Rust 工具链之前: 纯 grep,
+      # 一秒出结果, 别让人等五分钟编译才知道路径写错了。
+      - name: No hardcoded ~/.hermes
+        run: bash edge/companion-app/scripts/check_no_hardcoded_hermes_home.sh
+
       - name: Set up Rust stable
         uses: dtolnay/rust-toolchain@stable
 

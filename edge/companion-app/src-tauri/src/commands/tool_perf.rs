@@ -102,7 +102,7 @@ fn audit_path() -> PathBuf {
     let home = crate::util::paths::home_env()
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join(".hermes").join(".catfish_audit.jsonl")
+    crate::services::catfish_paths::hermes_home_for(&PathBuf::from(home)).join(".catfish_audit.jsonl")
 }
 
 /// 读最近 TAIL_LINES 行 — 复用 audit.rs read_tail_lines 同 pattern

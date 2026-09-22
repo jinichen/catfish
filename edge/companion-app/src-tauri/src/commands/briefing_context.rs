@@ -170,8 +170,7 @@ fn read_hermes_memory_recent(max_bytes: usize) -> String {
         Ok(h) => h,
         Err(_) => return String::new(),
     };
-    let path = PathBuf::from(home)
-        .join(".hermes")
+    let path = crate::services::catfish_paths::hermes_home_for(&PathBuf::from(home))
         .join("memories")
         .join("MEMORY.md");
     if !path.exists() {

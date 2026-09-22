@@ -158,27 +158,30 @@ pub fn companion_secrets_socket() -> Option<PathBuf> {
 }
 
 /// tool-bridge 必须复用 hermes-agent 的 venv（tool 依赖都在那）
+///
+/// 9/22: 走 hermes_home()。原来写死 `~/.hermes/hermes-agent/venv/...`, 而 Windows
+/// 安装器装在 `%LOCALAPPDATA%\hermes` —— 于是 Windows 上永远找不到, 退回裸
+/// `python3` (Windows 上要么不存在, 要么是 Store 的占位 stub), tool-bridge 起不来。
+///
+/// 这是鸿波 9/22 截图里「四个本地服务全红」的直接原因: 不是四个 bug, 是
+/// 同一个路径假设。local-search / chrome 同款。
 pub fn tool_bridge_python() -> Option<PathBuf> {
-    // hermes-agent 在 ~/.hermes/hermes-agent 有自己的 venv
-    let h = home_dir()?;
-    let venv_py = h
-        .join(".hermes")
-        .join("hermes-agent")
-        .join("venv")
-        .join("bin")
-        .join("python");
+    let venv = hermes_home()?.join("hermes-agent").join("venv");
+    let venv_py = venv.join("bin").join("python");
     if venv_py.exists() {
         return Some(venv_py);
     }
-    let venv_py_win = h
-        .join(".hermes")
-        .join("hermes-agent")
-        .join("venv")
-        .join("Scripts")
-        .join("python.exe");
+    let venv_py_win = venv.join("Scripts").join("python.exe");
     if venv_py_win.exists() {
         return Some(venv_py_win);
     }
+    // ⚠ 找不到时**出声**再退回。原来静默退回 python3, 症状是 tool-bridge
+    //   "未启动"三个字, 为什么没启动一个字都不说 —— 排查靠猜。
+    log::warn!(
+        "hermes venv 里找不到 python ({}), 退回 PATH 上的 python3 —— \
+         tool-bridge 多半起不来。hermes 装完了吗?",
+        venv.display()
+    );
     Some(PathBuf::from("python3"))
 }
 
@@ -223,7 +226,7 @@ pub fn chrome_user_data_dir() -> Option<PathBuf> {
 
 /// hermes 主 config 路径 (~/.hermes/config.yaml)
 pub fn hermes_config_path() -> Option<PathBuf> {
-    home_dir().map(|h| h.join(".hermes").join("config.yaml"))
+    hermes_home().map(|h| h.join("config.yaml"))
 }
 
 // —————————————— 可执行文件查找 (跨平台) ——————————————

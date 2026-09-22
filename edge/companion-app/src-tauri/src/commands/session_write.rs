@@ -621,7 +621,10 @@ mod tests {
     fn setup_test_env() -> (TempDir, std::sync::MutexGuard<'static, ()>) {
         let guard = crate::util::test_env::env_lock();
         let tmp = TempDir::new().expect("tempdir");
-        let hermes = tmp.path().join(".hermes");
+        // 9/22: 跟被测代码用**同一个**推导 (hermes_home_for), 别在夹具里再写死
+        // 一遍 ".hermes"。两边各写一份, 哪天推导规则变了 (比如 Windows 走
+        // LOCALAPPDATA) 夹具就和真代码指向两个不同的目录, 测试照样绿。
+        let hermes = crate::services::catfish_paths::hermes_home_for(tmp.path());
         std::fs::create_dir_all(&hermes).unwrap();
         let db_path = hermes.join("state.db");
         let conn = Connection::open(&db_path).unwrap();

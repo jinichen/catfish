@@ -71,7 +71,7 @@ fn decisions_jsonl_path() -> Result<PathBuf, String> {
 }
 
 fn hermes_audit_path() -> Result<PathBuf, String> {
-    Ok(home_dir()?.join(".hermes").join(".catfish_audit.jsonl"))
+    Ok(crate::services::catfish_paths::hermes_home_for(&home_dir()?).join(".catfish_audit.jsonl"))
 }
 
 /// ts 字符串在 [from, to] 范围内 (ISO-8601 字典序 = 时序).

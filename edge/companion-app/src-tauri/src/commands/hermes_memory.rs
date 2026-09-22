@@ -49,7 +49,7 @@ fn home_dir() -> Option<std::path::PathBuf> {
 /// 真生效在 hermes service (agent_init.py:1079 真 mem_config.get), 真 Dashboard
 /// 真显假象 (USER 1059/1375 真 77% 撞 cap, 真实 1059/3500 真 30%).
 fn read_hermes_config_limits(home: &std::path::Path) -> (usize, usize) {
-    let config_path = home.join(".hermes").join("config.yaml");
+    let config_path = crate::services::catfish_paths::hermes_home_for(&home).join("config.yaml");
     let Ok(text) = fs::read_to_string(&config_path) else {
         return (DEFAULT_USER_CHAR_LIMIT, DEFAULT_MEMORY_CHAR_LIMIT);
     };
@@ -106,7 +106,7 @@ pub fn hermes_memory_remove(target: String, entry_text: String) -> Result<(), St
         return Err(format!("target 必须是 'user' 或 'memory', 真给的: {target}"));
     }
     let home = home_dir().ok_or_else(|| "HOME 环境变量缺失".to_string())?;
-    let mem_dir = home.join(".hermes").join("memories");
+    let mem_dir = crate::services::catfish_paths::hermes_home_for(&home).join("memories");
     let path = mem_dir.join(if target == "user" { "USER.md" } else { "MEMORY.md" });
 
     let content = fs::read_to_string(&path)
@@ -167,7 +167,7 @@ pub fn hermes_memory_remove(target: String, entry_text: String) -> Result<(), St
 #[tauri::command]
 pub fn hermes_memory_read() -> Result<HermesMemoryView, String> {
     let home = home_dir().ok_or_else(|| "HOME 环境变量缺失".to_string())?;
-    let mem_dir = home.join(".hermes").join("memories");
+    let mem_dir = crate::services::catfish_paths::hermes_home_for(&home).join("memories");
     let user_path = mem_dir.join("USER.md");
     let memory_path = mem_dir.join("MEMORY.md");
 

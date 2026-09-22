@@ -307,7 +307,7 @@ fn read_hermes_dev_env() -> (Option<String>, Option<String>) {
         Some(h) => PathBuf::from(h),
         None => return (None, None),
     };
-    let env_path = home.join(".hermes").join(".env");
+    let env_path = crate::services::catfish_paths::hermes_home_for(&home).join(".env");
     let text = match std::fs::read_to_string(&env_path) {
         Ok(s) => s,
         Err(e) => {

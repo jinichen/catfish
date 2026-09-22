@@ -86,7 +86,7 @@ fn is_legal_skill_root(skill_path: &Path) -> bool {
         return false;
     };
     let legal_roots = [
-        home.join(".hermes").join("skills"),
+        crate::services::catfish_paths::hermes_home_for(&home).join("skills"),
         home.join(".claude").join("skills"),
         home.join(".catfish").join("skills"),
     ];

@@ -47,8 +47,7 @@ fn state_path() -> Result<PathBuf> {
     let home = crate::util::paths::home_env()
         .or_else(|_| std::env::var("USERPROFILE"))
         .map_err(|_| anyhow!("找不到 HOME 环境变量"))?;
-    Ok(PathBuf::from(home)
-        .join(".hermes")
+    Ok(crate::services::catfish_paths::hermes_home_for(&PathBuf::from(home))
         .join("skills")
         .join(".curator_state"))
 }
