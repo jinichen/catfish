@@ -211,13 +211,28 @@ def main() -> int:
     # 这些跟着 IP / HTTPS 模式走, 不是秘密, 每次都按当前参数刷新。
     # 升级时现场可能换了 IP 或从 HTTP 切到 HTTPS, 不刷新的话 OIDC 的 issuer
     # 会对不上, 表现为登录验签失败。
+    # ⚠ HTTP 和 HTTPS 两种模式下, issuer 和 CORS origin **不是同一个地址**。
+    #
+    #   HTTPS: 443 由 web 容器自己扛, 前端和 OIDC 都走同一个入口
+    #          → issuer = cors = https://IP  (非 443 端口时带上端口)
+    #   HTTP:  没有统一入口, identity 和 web 各自暴露自己的端口
+    #          → issuer = http://IP:8998   (identity)
+    #            cors   = http://IP:5173   (web 开发端口)
+    #
+    # 9/22 重构时这里一度写成两者都等于 http://IP —— HTTPS 路径看不出问题
+    # (那时两者本来就相同), 但 HTTP 模式下 issuer 指向一个没有 OIDC 的端口,
+    # 登录会直接挂。而当时的 20 条回归测试**全是 HTTPS**, 没兜住。
+    # 现在两种模式都有测试 (test_setup_env.sh 里的 HTTP 段)。
     port = (args.https_port or "443").strip() or "443"
-    scheme = "https" if args.https == "1" else "http"
-    suffix = "" if (args.https != "1" or port == "443") else f":{port}"
-    web_url = f"{scheme}://{args.server_ip}{suffix}"
+    if args.https == "1":
+        base = f"https://{args.server_ip}" + ("" if port == "443" else f":{port}")
+        issuer_url, web_url = base, base
+    else:
+        issuer_url = f"http://{args.server_ip}:8998"
+        web_url = f"http://{args.server_ip}:5173"
 
-    text = set_value(text, "CATFISH_OIDC_ISSUER", web_url)
-    text = set_value(text, "CATFISH_IDENTITY_ISSUER", web_url)
+    text = set_value(text, "CATFISH_OIDC_ISSUER", issuer_url)
+    text = set_value(text, "CATFISH_IDENTITY_ISSUER", issuer_url)
     text = set_value(text, "CATFISH_IDENTITY_CORS_ORIGINS", web_url)
     text = set_value(text, "CATFISH_ENABLE_HTTPS", args.https)
     text = set_value(text, "CATFISH_HTTPS_PORT", port)
@@ -263,7 +278,7 @@ def main() -> int:
     kept = sorted(set(old) - set(generated))
     if kept:
         print(f"→ 保持不变 (改了会出事): {', '.join(kept)}")
-    print(f"→ .env 已写入 · 对外地址 {web_url}")
+    print(f"→ .env 已写入 · issuer {issuer_url} · 前端 {web_url}")
     return 0
 
 

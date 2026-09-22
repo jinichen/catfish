@@ -408,6 +408,31 @@ else
 
 fi
 
+# ── 对外地址 —— 后面端口检查和验证都要用 ──────────────────
+#
+# ⚠ 这几行必须跟 tools/envgen.py 里那段**算法一致**。写两遍是因为:
+#   envgen 要把它们写进 .env, 而这个脚本后面要拿它们去探健康。
+#   (给 envgen 加一个"把算好的值吐回来"的出口也行, 但那样每个 wrapper
+#    都要解析它的输出 —— 反而多一处会跑偏的地方。)
+#
+# HTTP 和 HTTPS 下 issuer 和前端**不是同一个地址**:
+#   HTTPS: 443 由 web 容器自己扛, 两者同一个入口
+#   HTTP:  identity 和 web 各暴露各的端口 (8998 / 5173)
+# 9/22 重构时一度把 HTTP 模式也写成同一个地址, HTTPS 路径看不出来,
+# 而当时的回归测试全是 HTTPS。现在两种模式都有测试。
+HTTPS_PORT="${CATFISH_HTTPS_PORT:-443}"
+if [ "$ENABLE_HTTPS" = "1" ]; then
+    if [ "$HTTPS_PORT" = "443" ]; then
+        ISSUER_URL="https://$SERVER_IP"
+    else
+        ISSUER_URL="https://$SERVER_IP:$HTTPS_PORT"
+    fi
+    WEB_URL="$ISSUER_URL"
+else
+    ISSUER_URL="http://$SERVER_IP:8998"
+    WEB_URL="http://$SERVER_IP:5173"
+fi
+
 # ── 2. 生成 / 升级 .env ───────────────────────────────────
 #
 # 9/22: 这里原来是 235 行 bash —— 捞旧密钥、备份、cp 模板、写回、判空生成、

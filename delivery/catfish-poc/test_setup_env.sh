@@ -106,3 +106,46 @@ run || { echo "  ✗ setup.sh 在只剩备份时失败"; exit 1; }
 echo
 echo "通过 $PASS · 失败 $FAIL"
 [ "$FAIL" -eq 0 ]
+
+# ─────────────────────────────────────────────────────────────────────
+# 9/22: HTTP 模式。
+#
+# 加这一段是因为 9/22 重构时把 HTTP 模式的 issuer 和 CORS origin 写成了
+# 同一个地址 (都是 http://IP), 而正确的是:
+#
+#     issuer = http://IP:8998   (identity 自己的端口)
+#     cors   = http://IP:5173   (web 的端口)
+#
+# HTTPS 模式下两者本来就相同 (443 由 web 容器统一扛), 所以那条路完全看不
+# 出问题 —— 而当时这个文件里的 20 条断言**全是 HTTPS**。回归一路绿灯,
+# 到现场跑 HTTP 才会发现登录挂了, 且错误在浏览器里, 不在我们日志里。
+#
+# 教训不是"多写几条测试", 是: 一个有分支的行为, 测试只覆盖了其中一支时,
+# 绿灯的含义比看上去小得多。
+# ─────────────────────────────────────────────────────────────────────
+echo "── HTTP 模式 (issuer 和 CORS 不是同一个地址) ──"
+WORK2=$(mktemp -d)
+trap 'rm -rf "$WORK" "$WORK2"' EXIT
+cp setup.sh .env.example docker-compose.yml "$WORK2/"
+cp -R tools "$WORK2/" 2>/dev/null || true
+(cd "$WORK2" && SERVER_IP=10.1.2.3 ENABLE_HTTPS=0 REGEN_ENV_ONLY=1 bash setup.sh >/dev/null 2>&1) \
+    || { echo "  ✗ HTTP 模式跑失败"; exit 1; }
+v2() { grep -E "^$1=" "$WORK2/.env" | head -1 | cut -d= -f2-; }
+
+[ "$(v2 CATFISH_OIDC_ISSUER)" = "http://10.1.2.3:8998" ] \
+    && ok "HTTP · OIDC issuer 指向 identity 的 8998" \
+    || bad "HTTP · OIDC issuer = $(v2 CATFISH_OIDC_ISSUER) (应为 http://10.1.2.3:8998)"
+[ "$(v2 CATFISH_IDENTITY_ISSUER)" = "http://10.1.2.3:8998" ] \
+    && ok "HTTP · Identity issuer 指向 8998" \
+    || bad "HTTP · Identity issuer = $(v2 CATFISH_IDENTITY_ISSUER)"
+[ "$(v2 CATFISH_IDENTITY_CORS_ORIGINS)" = "http://10.1.2.3:5173" ] \
+    && ok "HTTP · CORS origin 指向 web 的 5173" \
+    || bad "HTTP · CORS origin = $(v2 CATFISH_IDENTITY_CORS_ORIGINS) (应为 http://10.1.2.3:5173)"
+[ "$(v2 CATFISH_OIDC_ISSUER)" != "$(v2 CATFISH_IDENTITY_CORS_ORIGINS)" ] \
+    && ok "HTTP · issuer 和 CORS origin 确实不同 (正是 9/22 写错的那处)" \
+    || bad "HTTP · issuer 和 CORS origin 相同了 —— 回到 9/22 那个 bug"
+[ "$(v2 CATFISH_ENABLE_HTTPS)" = "0" ] && ok "HTTP · 模式字段写对" || bad "HTTP · 模式字段错"
+
+echo ""
+echo "通过 $PASS · 失败 $FAIL"
+[ "$FAIL" -eq 0 ] || exit 1
