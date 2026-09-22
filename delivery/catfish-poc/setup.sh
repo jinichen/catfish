@@ -795,9 +795,12 @@ fi
 # 9/22 加。六个镜像的 tag 从 9/12 起一直是 0.1.2, 每次交付都一样 —— 于是
 # `docker images` 看不出装的是哪一版, 出了问题第一句"你装的哪个包"就答不上来。
 #
-# tag 那条另外治 (central/VERSION + scripts/check_central_image_version.sh
-# 强制改了源码就 bump)。但 tag 靠的是人守纪律, **digest 是内在的** ——
-# 同一个 tag 的两次构建 digest 必然不同。所以这里记 digest。
+# 9/22 之后 tag 也带上了身份 (日期 + 源码内容哈希, 由 scripts/central_version.sh
+# 算出来, 不是人填的), 所以 docker images 那一列已经能区分了。
+#
+# 但 digest 仍然记 —— tag 是**构建时**贴上去的标签, digest 是镜像内容本身。
+# 两者对不上的情况真实存在: 有人手工 docker tag 过, 或者 load 了一个别处
+# 打的同名包。报障时认 digest 不会错。
 #
 # 写成文件而不是只打屏幕: 装完半个月后来查的人不会有当时的终端。
 {

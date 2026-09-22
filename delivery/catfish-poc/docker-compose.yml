@@ -40,7 +40,7 @@ services:
     build:
       context: ./identity-server
       dockerfile: Dockerfile
-    image: catfish-identity:0.1.2
+    image: catfish-identity:20260922-619e023e
     container_name: catfish-identity
     restart: unless-stopped
     depends_on:
@@ -97,7 +97,7 @@ services:
     # 及 pyproject.toml orjson>=3.10 依赖. rebuild + docker save 分发客户 IT.
     # 9/12 0.1.2: P50 横向协同邮筒 (/api/room-link/mailbox + room_link_mailbox 表迁移);
     #   六个自造镜像版本从此一起走, 升版本只改 compose (setup.sh / build-package.sh 都从这读)。
-    image: catfish-gateway:0.1.2
+    image: catfish-gateway:20260922-619e023e
     container_name: catfish-gateway
     restart: unless-stopped
     depends_on:
@@ -169,7 +169,7 @@ services:
     build:
       context: ./skills-hub
       dockerfile: Dockerfile
-    image: catfish-skills-hub:0.1.2
+    image: catfish-skills-hub:20260922-619e023e
     container_name: catfish-skills-hub
     restart: unless-stopped
     environment:
@@ -194,7 +194,7 @@ services:
     build:
       context: ./web
       dockerfile: Dockerfile
-    image: catfish-web:0.1.2
+    image: catfish-web:20260922-619e023e
     container_name: catfish-web
     restart: unless-stopped
     # P3.5.79+ (7/22 POC 现场血案 · runtime config 重构):
@@ -222,7 +222,7 @@ services:
     build:
       context: ./mcp-registry
       dockerfile: Dockerfile
-    image: catfish-mcp-registry:0.1.2
+    image: catfish-mcp-registry:20260922-619e023e
     container_name: catfish-mcp-registry
     restart: unless-stopped
     depends_on:
@@ -255,7 +255,7 @@ services:
     build:
       context: ./wiki-hub
       dockerfile: Dockerfile
-    image: catfish-wiki-hub:0.1.2
+    image: catfish-wiki-hub:20260922-619e023e
     container_name: catfish-wiki-hub
     restart: unless-stopped
     depends_on:

@@ -33,12 +33,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      # fetch-depth: 0 —— check_central_image_version.sh 要用 `git log -S` 找
-      # VERSION 是哪个提交引入的, 再看那之后源码动没动。浅克隆下找不到引入点,
-      # 脚本会 exit 2 明说"没法判断" (而不是给一个没根据的绿灯)。
+      # 9/22: 这里一度需要 fetch-depth: 0 —— 旧的版本号判据要用 git log -S
+      # 找"VERSION 是哪个提交引入的"。新判据改成直接比内容哈希, 不看历史,
+      # 所以浅克隆就够了 (CI 也快一点)。
       - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
@@ -83,10 +81,16 @@ jobs:
       - name: 交付装机脚本 .env 生成回归
         run: bash delivery/catfish-poc/test_setup_env.sh
 
-      # 9/22: 中央端六个镜像的版本号 —— 单一来源 + 改了源码就必须 bump。
-      # 同版本号的两个镜像在 docker images 里无法区分, 装完看不出是哪一版,
-      # 也没法回滚。跟 Companion 那条 check_version_sync.sh 同一个思路。
-      # 需要完整历史才能判断"VERSION 之后源码动没动" —— 见 fetch-depth 那条。
+      # 9/22: 中央端六个镜像的版本号。
+      #
+      # 版本号是**算出来的** (日期 + 源码内容哈希, 见 scripts/central_version.sh),
+      # 这条检查只问一件事: VERSION 跟源码现在算出来的对不对得上。
+      # 红了的修法只有一条命令, 不需要任何判断:
+      #     bash scripts/central_version.sh --write
+      #
+      # 之所以不用 semver: 9/12 到 9/22 那十天里六个镜像一直是 0.1.2, 每次
+      # 交付都一样 —— 因为"这次算 patch 还是 minor"需要人判断, 而需要判断的
+      # 事在交付前会被跳过。同版本号的两个镜像在 docker images 里无法区分。
       - name: 中央端镜像版本同步
         run: bash scripts/check_central_image_version.sh
 

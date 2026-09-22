@@ -161,6 +161,23 @@ DELIVERY_HASH="${_tree_central:0:8}-${_tree_delivery:0:8}"
 # 未提交改动同理只看这两处 —— edge/ 有脏文件不影响这个包, 报出来只是噪音。
 GIT_DIRTY=$(_git status --porcelain -- central delivery || true)
 
+# ── 版本号: 打包前先算一次, 保证 compose 的 tag 跟这次构建的源码一致 ──
+#
+# 9/22: 版本号改成"算出来的" (日期 + 六个镜像源码目录的内容哈希)。
+# 在这里跑一次 --write, 是为了让**打出来的包**里的 tag 一定对得上包里的镜像。
+#
+# 之前靠人记得手动 bump —— 9/12 到 9/22 那十天一次都没发生, 六个镜像一直是
+# 0.1.2, 于是 docker images 里新旧包完全分不出来。现在没有"记得"这一步。
+if [ -x "$REPO_ROOT/scripts/central_version.sh" ]; then
+    echo ""
+    echo "--- 0.pre · 生成版本号 ---"
+    bash "$REPO_ROOT/scripts/central_version.sh" --write
+    CENTRAL_VERSION="$(tr -d '[:space:]' < "$REPO_ROOT/central/VERSION")"
+else
+    echo "⚠ 找不到 scripts/central_version.sh · 沿用 compose 里现有的 tag"
+    CENTRAL_VERSION="(未生成)"
+fi
+
 # ── 前置检查: Docker daemon 必须活着 (P3.5.80 · 7/28) ──────────────
 #
 # 7/28 撞过: Docker Desktop 没启动就跑本脚本. `docker compose config` 是纯
@@ -502,6 +519,7 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
                 echo "arch=$arch"
                 echo "date=$DATE"
                 echo "git_sha=$GIT_SHA"
+                echo "central_version=${CENTRAL_VERSION:-未知}"
                 # 跨平台比对用的就是这一行 (不是 git_sha, 理由见文件上方)。
                 echo "delivery_hash=$DELIVERY_HASH"
                 echo "git_dirty=$([ -n "$GIT_DIRTY" ] && echo yes || echo no)"
