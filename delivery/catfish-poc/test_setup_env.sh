@@ -25,7 +25,16 @@ bad()  { echo "  ✗ $1"; FAIL=$((FAIL+1)); }
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
-cp setup.sh .env.example "$WORK/"
+# docker-compose.yml 也要拷 —— 9/12 (020f172) 把镜像 tag 的唯一来源改成
+# compose 之后, setup.sh 起手就要读它, 读不到直接 exit 1。
+#
+# ⚠ 这个测试从那天起就一直是红的, 到 9/22 才被发现 —— 因为**没有任何地方
+#   在跑它**。一个写得挺好、记着真实 bug 的测试, 躺在仓库里死了十天。
+#   已经挂进 CI (repo-checks job), 别再让它变成这样。
+#
+# tools/ 里是 certgen.py, REGEN_ENV_ONLY 路径用不到, 但拷上省得以后又漏。
+cp setup.sh .env.example docker-compose.yml "$WORK/"
+cp -R tools "$WORK/" 2>/dev/null || true
 
 run() { (cd "$WORK" && SERVER_IP=10.0.0.1 REGEN_ENV_ONLY=1 bash setup.sh >/dev/null 2>&1); }
 run_upgrade() { (cd "$WORK" && SERVER_IP=10.20.30.40 ENABLE_HTTPS=1 GATEWAY_WORKERS=1 UPGRADE=1 REGEN_ENV_ONLY=1 bash setup.sh >/dev/null 2>&1); }

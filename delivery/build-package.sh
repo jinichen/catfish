@@ -311,7 +311,17 @@ for ARCH in $ARCHES; do
     #
     # 按 INSTALL.md 的解压步骤反推: 解开后必须是 delivery/catfish-poc/,
     # 客户才能照文档 `cd delivery/catfish-poc/`。结构错了现场会卡在第二步。
+    # 9/22: setup.ps1 和 tools/ 也必须在包里。
+    #   · setup.ps1 漏了 → Windows 客户没有装机脚本 (deploy.ps1 会去 build,
+    #     而包里没源码, 必然失败)。这正是 9/22 之前的状态。
+    #   · tools/*.py 漏了 → 两个 wrapper 都调不到共享逻辑, 装机第一步就断。
+    #     它们是 .py 不是 .md, 不会被上面那条 `find -name "*.md" -delete` 删掉,
+    #     但结构校验必须钉住, 否则哪天改了排除规则没人会发现。
     for must in "delivery/catfish-poc/setup.sh" \
+                "delivery/catfish-poc/setup.ps1" \
+                "delivery/catfish-poc/tools/envgen.py" \
+                "delivery/catfish-poc/tools/seedgen.py" \
+                "delivery/catfish-poc/tools/certgen.py" \
                 "delivery/catfish-poc/docker-compose.yml" \
                 "delivery/catfish-poc/llm-gateway/config/models.yaml" \
                 "delivery/catfish-poc/images/catfish-poc-central-$ARCH-$DATE.tar.gz"; do

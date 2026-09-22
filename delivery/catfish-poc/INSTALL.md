@@ -37,12 +37,36 @@ sudo ss -tlnp | grep ':443'
 
 ## 三、服务端安装
 
+### Linux / macOS
+
 ```bash
 tar xzf catfish-poc-FULL-amd64-20260728.tar.gz
 cd delivery/catfish-poc/
 
 SERVER_IP=<服务器内网IP> ENABLE_HTTPS=1 bash setup.sh
 ```
+
+### Windows (Docker Desktop, WSL2 后端)
+
+```powershell
+tar xzf catfish-poc-FULL-amd64-20260728.tar.gz      # Windows 10 1803+ 自带 tar
+cd delivery\catfish-poc\
+
+powershell -ExecutionPolicy Bypass -File .\setup.ps1 -ServerIp <服务器内网IP>
+```
+
+`-ExecutionPolicy Bypass` 只对这一次调用生效，不改系统设置。
+
+装机前确认 **Docker Desktop 已经启动**（托盘图标不再转）——装了不等于起了，
+这是 Windows 上最常见的一种失败，表现为一堆看不懂的 docker 报错。
+
+> ⚠ 不要用 `central\deploy.ps1`。那个脚本会跑 `docker compose build`，而交付包里
+> 只有镜像没有源码，必然失败；它是给我们自己有源码的机器用的。客户机器上用的是
+> 这个目录下的 `setup.ps1`。
+
+两个平台做的事完全一样：密钥生成、证书签发、配置写入这些判断都在 `tools/` 下的
+共享脚本里，跑在 `catfish-identity` 镜像里执行，所以宿主机不需要装 openssl 或
+Python——有 Docker 就够了。
 
 `SERVER_IP` 必须填**服务器真实内网 IP**(如 `10.10.40.50`)。
 

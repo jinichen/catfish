@@ -137,6 +137,69 @@ set_env_value() {
     fi
 }
 
+# ── 随机密钥的来源 ─────────────────────────────────────────
+#
+# 9/22 改。原来是:
+#     openssl rand -hex 16 2>/dev/null || head -c 32 /dev/urandom | base64 | ...
+# 旁边还写着一句 "openssl 装了 docker 的机器上都有"。
+#
+# 那句话在 Linux / macOS 上成立, 在 **Windows 上不成立** —— Windows 既没有
+# openssl 也没有 /dev/urandom。这正是 Windows 一直没法照着装的原因之一
+# (另一个是 deploy.ps1 去跑 docker compose build, 而客户包里没有源码)。
+#
+# 现在优先用**我们自己镜像里的 python**: Docker 本来就是硬前提, 镜像在
+# 上一步 (2.pre) 已经 load 过, 所以这条路在三个平台上完全一样 ——
+# setup.ps1 里也是同一行命令。
+#
+# 后面两级是给开发机 / REGEN_ENV_ONLY 用的 (那时没 load 镜像)。
+# **降级会出声**: 不响的降级最后总会变成"为什么它在我这儿不一样"。
+_RAND_SOURCE=""
+_pick_rand_source() {
+    [ -n "$_RAND_SOURCE" ] && return 0
+    if docker image inspect "$IDENTITY_IMAGE" >/dev/null 2>&1; then
+        _RAND_SOURCE="container"
+    elif command -v openssl >/dev/null 2>&1; then
+        _RAND_SOURCE="openssl"
+        # ⚠ 这些提示必须走 stderr。rand_hex / rand_fernet 都是在 $(...) 里调用的,
+        #   往 stdout 打一个字都会被当成密钥值捕获 —— 实测现象是
+        #   `sed: -e expression #1, char 93: unterminated 's' command`,
+        #   因为密钥变成了多行。错得很隐蔽: 提示文字看着无害。
+        echo "  ⓘ 随机数走宿主机 openssl —— 镜像还没 load。" >&2
+        echo "    正常装机路径会先 load 镜像再生成密钥, 走容器里的 python。" >&2
+    elif [ -r /dev/urandom ]; then
+        _RAND_SOURCE="urandom"
+        echo "  ⚠ 宿主机没有 openssl, 退到 /dev/urandom。" >&2
+    else
+        echo "❌ 找不到可用的随机数来源 (容器 / openssl / /dev/urandom 都不可用)。" >&2
+        echo "   密钥必须是真随机 —— 这里不给\"凑合能跑\"的兜底值, 因为那种值" >&2
+        echo "   会一路装完、绿灯通过, 然后成为所有客户共用的同一把钥匙。" >&2
+        exit 1
+    fi
+    return 0
+}
+
+# $1 = 字节数; 输出 2*N 个 hex 字符
+rand_hex() {
+    _pick_rand_source
+    case "$_RAND_SOURCE" in
+        container) docker run --rm "$IDENTITY_IMAGE" python3 -c \
+                     'import secrets,sys; print(secrets.token_hex(int(sys.argv[1])))' "$1" ;;
+        openssl)   openssl rand -hex "$1" ;;
+        urandom)   od -An -tx1 -N "$1" /dev/urandom | tr -d ' \n'; echo ;;
+    esac
+}
+
+# Fernet key = 32 字节随机的 url-safe base64。CATFISH_SECRET_KEY 用。
+rand_fernet() {
+    _pick_rand_source
+    case "$_RAND_SOURCE" in
+        container) docker run --rm "$IDENTITY_IMAGE" python3 -c \
+                     'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())' ;;
+        openssl)   openssl rand -base64 32 | tr '+/' '-_' ;;
+        urandom)   head -c 32 /dev/urandom | base64 | tr '+/' '-_' ;;
+    esac
+}
+
 echo "═══════════════════════════════════════════════════════"
 echo "  Catfish 中央服务一键装机"
 echo "═══════════════════════════════════════════════════════"
@@ -162,239 +225,150 @@ else
     echo "→ 使用指定 IP: $SERVER_IP"
 fi
 
-# ── 2. 从 .env.example 生成 .env ──────────────────────────
-if [ ! -f .env.example ]; then
-    echo "❌ 找不到 .env.example · 请确认在 delivery/catfish-poc/ 目录跑"
-    exit 1
-fi
-
-# HTTP vs HTTPS
-# 宿主机 443 常被已有 nginx/apache 占用, 允许换端口.
-# 换了端口, issuer / CORS 三项必须带同一端口, 否则 OIDC issuer 对不上验签失败.
-HTTPS_PORT="${CATFISH_HTTPS_PORT:-443}"
-if [ "$ENABLE_HTTPS" = "1" ]; then
-    if [ "$HTTPS_PORT" = "443" ]; then
-        ISSUER_URL="https://$SERVER_IP"
-        WEB_URL="https://$SERVER_IP"
-    else
-        ISSUER_URL="https://$SERVER_IP:$HTTPS_PORT"
-        WEB_URL="https://$SERVER_IP:$HTTPS_PORT"
-    fi
+# ── 2.pre · 先装 image, 再写任何配置 ───────────────────────
+#
+# 9/22 从「步骤 4」挪到这里。两个原因:
+#
+#  1. 缺镜像应该在**写任何配置之前**就报。原来的顺序是先生成 .env、
+#     users.yaml、证书, 走到第 4 步才发现 tar 不在 —— 现场看到的是
+#     "装到一半停了", 得先搞清楚哪些文件已经被改过才敢重来。
+#
+#  2. 镜像 load 完之后, 后面生成密钥就能借容器里的 python 干活, 不再
+#     依赖宿主机有没有 openssl / /dev/urandom。这是 Windows 能照着装的
+#     前提 —— 见下面 rand_hex 那段。
+#
+# REGEN_ENV_ONLY=1 只重写 .env, 不该为此等几分钟 load, 所以跳过。
+if [ "$REGEN_ENV_ONLY" = "1" ]; then
+    echo "→ REGEN_ENV_ONLY=1 · 跳过 image load"
 else
-    ISSUER_URL="http://$SERVER_IP:8998"
-    WEB_URL="http://$SERVER_IP:5173"
-fi
-
-# ── 保留既有 .env 的持久化 secret ────
-#
-# 早期版本的问题: 下面 `cp .env.example .env` 无条件覆盖 → PG_PASSWORD 变空 →
-# 第 101 段判定"空"生成**新**随机密码. 但 pgdata 是**命名卷**,
-# `docker compose up` 不会删它; 而 postgres 的 POSTGRES_PASSWORD **只在
-# 数据目录为空(首次 initdb)时生效**, 已有库照旧认**旧**密码 →
-# identity / gateway / skills-hub / wiki-hub 四个服务全部连库认证失败.
-#
-# 实测: 第二次跑 setup.sh 必炸, 且报错在容器日志里,
-# 装机脚本本身一路绿, IT 完全看不出是密码被换了.
-#
-# 修: cp 之前把旧值抽出来, 覆盖后写回 (见第 101 段).
-OLD_PG_PW=""
-OLD_JWT_KEY=""
-# CATFISH_SECRET_KEY 也必须在 cp 之前捞出来 —— 8/4 鸿波跑装机时查出来的:
-#
-#   8/1 加这个 key 时, 保护逻辑写在第 235 段 ("有值就不动"), 但那段是在
-#   `cp .env.example .env` **之后**读 .env 的。而 .env.example:19 是
-#   `CATFISH_SECRET_KEY=` (空) —— 于是每次重跑必然命中"空"分支, 生成**新**主密钥。
-#   第 255 行那句"已有值 · 保持不变 (改了会让存库的 API key 全解不开)"
-#   **重跑时永远走不到**。
-#
-#   后果比 PG_PASSWORD 更狠: 密码错了服务连不上库, 至少会炸给你看; 主密钥换了
-#   服务照常起, 只是界面上所有已存的供应商 API key 全部解不开, 而且**旧密文
-#   无法恢复** —— 除非有人留着 .env.bak。
-#
-#   跟第 108 段记录的 PG_PASSWORD 事故是同一个形状: 覆盖在先、保护在后。
-#   那次给 PG_PASSWORD 和 JWT_SIGNING_KEY 接上了捞取, 加第三个 key 时漏了。
-OLD_SECRET_KEY=""
-OLD_IDENTITY_URL=""
-REQUESTED_IDENTITY_URL="${CATFISH_IDENTITY_URL:-}"
-if [ -f .env ]; then
-    echo "→ .env 已存在 · 备份到 .env.bak.$(date +%s)"
-    cp .env ".env.bak.$(date +%s)"
-    OLD_PG_PW=$(grep -E "^PG_PASSWORD=" .env | head -1 | cut -d= -f2- || true)
-    OLD_JWT_KEY=$(grep -E "^JWT_SIGNING_KEY=" .env | head -1 | cut -d= -f2- || true)
-    OLD_SECRET_KEY=$(grep -E "^CATFISH_SECRET_KEY=" .env | head -1 | cut -d= -f2- || true)
-    OLD_IDENTITY_URL=$(grep -E "^CATFISH_IDENTITY_URL=" .env | head -1 | cut -d= -f2- || true)
-else
-    # ── .env 丢了但备份还在 → 自动救回 ──
-    #
-    # 场景: 装机目录被清过 / 重新解包到别处 / 误删 .env, 但 pgdata 命名卷
-    # 还在. postgres 的密码只在**首次建库**时写入, 新生成的随机密码连不上
-    # 已有的库, 四个服务全挂.
-    #
-    # 之前只是 fail-loud 拦住, 然后让 IT 自己去 grep .env.bak.* —— 但备份
-    # 就在旁边, 脚本完全有能力自己捞回来. 让人手动执行一条我们本可以自动
-    # 完成的命令, 是把自己的活推给现场.
-    #
-    # 只在**唯一**一个候选值时自动沿用: 多个不同的旧密码说明历史复杂,
-    # 猜错会静默连错库, 那种情况必须人来判断.
-    LATEST_BAK=$(ls -t .env.bak.* 2>/dev/null | head -1 || true)
-    if [ -n "$LATEST_BAK" ]; then
-        CAND=$(grep -h '^PG_PASSWORD=' .env.bak.* 2>/dev/null \
-               | cut -d= -f2- | grep -v '^$' | sort -u || true)
-        CAND_N=$(echo "$CAND" | grep -c . || true)
-        if [ "$CAND_N" = "1" ]; then
-            OLD_PG_PW="$CAND"
-            OLD_JWT_KEY=$(grep -h '^JWT_SIGNING_KEY=' "$LATEST_BAK" 2>/dev/null \
-                          | head -1 | cut -d= -f2- || true)
-            OLD_SECRET_KEY=$(grep -h '^CATFISH_SECRET_KEY=' "$LATEST_BAK" 2>/dev/null \
-                             | head -1 | cut -d= -f2- || true)
-            echo "→ .env 不存在, 但从 $LATEST_BAK 找回了 PG_PASSWORD / JWT_SIGNING_KEY / CATFISH_SECRET_KEY"
-            echo "  (装机目录被清过? 密钥必须跟 pgdata 卷里的库一致, 否则四个服务全连不上)"
-        elif [ "$CAND_N" -gt 1 ]; then
-            echo "→ .env 不存在 · 备份里有 $CAND_N 个不同的 PG_PASSWORD · 不自动猜"
-            echo "  (猜错会连错库且报错只在容器日志里. 手动确认后写进 .env:)"
-            echo "$CAND" | sed 's/^/       PG_PASSWORD=/'
+    # ── 4. 装 image tar (若指定 / 若 images/ 里有) ──────────
+    # IMAGE_TAR 未传 · 自动探 images/*.tar.gz.
+    # 用户命令 `\ ` 续行错时 · IMAGE_TAR 没进 env · 老版直接 skip load · 后面 docker
+    # compose up 去 docker.io pull · 内网挂. 现在自动探 · 兜底更稳.
+    if [ -z "$IMAGE_TAR" ]; then
+        AUTO_TAR=$(ls "$SCRIPT_DIR/images/"*.tar.gz 2>/dev/null | head -1)
+        if [ -n "$AUTO_TAR" ]; then
+            echo "→ 自动发现 image tar: $(basename "$AUTO_TAR") (IMAGE_TAR 未传 · 兜底)"
+            IMAGE_TAR="$AUTO_TAR"
         fi
     fi
-fi
 
-if [ "$UPGRADE" = "1" ]; then
-    echo "→ UPGRADE=1 · 保留现有 .env, 不从 .env.example 覆盖"
-else
-    cp .env.example .env
-    sed_i \
-    -e "s|<server-ip>|$SERVER_IP|g" \
-    -e "s|^CATFISH_OIDC_ISSUER=.*|CATFISH_OIDC_ISSUER=$ISSUER_URL|" \
-    -e "s|^CATFISH_IDENTITY_ISSUER=.*|CATFISH_IDENTITY_ISSUER=$ISSUER_URL|" \
-    -e "s|^CATFISH_IDENTITY_CORS_ORIGINS=.*|CATFISH_IDENTITY_CORS_ORIGINS=$WEB_URL|" \
-    .env
+    if [ -n "$IMAGE_TAR" ]; then
+        if [ ! -f "$IMAGE_TAR" ]; then
+            echo "❌ IMAGE_TAR=$IMAGE_TAR 找不到"
+            exit 1
+        fi
+        # ── 无条件 load ─────────────────
+        #
+        # 老逻辑: `docker image inspect catfish-gateway:<tag>` 成功就 skip load.
+        # 判据只看**tag 在不在**, 不看是不是同一个镜像 —— 而升级场景恰恰是
+        # "新 image tar + 完全相同的 tag". 结果:
+        #   IT 拿新包重装 → 脚本 skip load → 跑的还是旧镜像 → 一路绿灯装完.
+        #
+        # 实测: 测试机 down -v + 删目录后用新包重装, 6 个 image ID 跟
+        # 三小时前那批一模一样, 新构建的修复一个都没进去, 而 verify 全绿.
+        # 这种"假绿灯"比报错危险得多 —— 报错至少会叫住人.
+        #
+        # 改成无条件 load. load 本身是幂等的 (层已存在就秒过), 代价是重装时多等
+        # 几分钟解压校验; 拿几分钟换"包里是什么就跑什么", 值.
+        # 真要跳过 (比如同一天反复调 .env), 显式 SKIP_IMAGE_LOAD=1.
+        if [ "${SKIP_IMAGE_LOAD:-0}" = "1" ]; then
+            echo "→ SKIP_IMAGE_LOAD=1 · 跳过 load"
+            echo "  ⚠ 本地镜像可能不是包里那份 · 只在明确知道两者一致时才用这个开关"
+        else
+            echo "→ load image tar: $IMAGE_TAR (~5-15 min)"
+            BEFORE_IDS=$(docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' 2>/dev/null \
+                         | grep -E '^catfish' | sort || true)
+            if [[ "$IMAGE_TAR" =~ \.gz$ ]]; then
+                gunzip -c "$IMAGE_TAR" | docker load
+            else
+                docker load < "$IMAGE_TAR"
+            fi
+            echo "  ✓ 装完"
 
-# HTTPS 开关写进 .env 而不是只 export ——
-# 只 export 的话客户之后手动 `docker compose up` 会退回默认 0, HTTPS 悄悄关掉.
-sed_i "s|^CATFISH_ENABLE_HTTPS=.*|CATFISH_ENABLE_HTTPS=$ENABLE_HTTPS|" .env
-sed_i "s|^CATFISH_HTTPS_PORT=.*|CATFISH_HTTPS_PORT=$HTTPS_PORT|" .env
-
-# Gateway → Identity admin API endpoint: explicit runtime input wins, then keep
-# the existing site value across upgrades, then use .env.example's default.
-    if [ -n "$REQUESTED_IDENTITY_URL" ]; then
-    sed_i "s|^CATFISH_IDENTITY_URL=.*|CATFISH_IDENTITY_URL=$REQUESTED_IDENTITY_URL|" .env
-    elif [ -n "$OLD_IDENTITY_URL" ]; then
-    sed_i "s|^CATFISH_IDENTITY_URL=.*|CATFISH_IDENTITY_URL=$OLD_IDENTITY_URL|" .env
+            # 把 load 前后的 image ID 差异打出来 —— 让"到底换没换"这件事可见,
+            # 不用 IT 自己去比对.
+            AFTER_IDS=$(docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' 2>/dev/null \
+                        | grep -E '^catfish' | sort || true)
+            if [ "$BEFORE_IDS" = "$AFTER_IDS" ]; then
+                echo "  · image ID 无变化 (本地原本就是包里这份)"
+            else
+                echo "  · image ID 有更新:"
+                diff <(echo "$BEFORE_IDS") <(echo "$AFTER_IDS") \
+                    | grep -E '^[<>]' | sed 's/^</      旧 /; s/^>/      新 /' || true
+            fi
+        fi
+        echo "  现有 image:"
+        docker images | grep -E "catfish|postgres:16-alpine" | sed 's/^/    /'
     fi
 
-    echo "→ 生成 .env · 关键字段:"
-    grep -E "^CATFISH_(OIDC|IDENTITY|ENABLE)_" .env | sed 's/^/    /'
-
-# ── 先写回上一次装机的 secret ──────────────
-    if [ -n "$OLD_PG_PW" ]; then
-    sed_i "s|^PG_PASSWORD=.*|PG_PASSWORD=$OLD_PG_PW|" .env
-    echo "→ PG_PASSWORD 沿用既有值 (跨装机保留 · 必须与 pgdata 卷里的库一致)"
-fi
-    if [ -n "$OLD_JWT_KEY" ]; then
-    sed_i "s|^JWT_SIGNING_KEY=.*|JWT_SIGNING_KEY=$OLD_JWT_KEY|" .env
-    echo "→ JWT_SIGNING_KEY 沿用既有值 (换了会让已签发的 token 全失效)"
-fi
-
-# PG_PASSWORD 若仍空 · 生成随机 (首次装机路径)
-    if grep -qE "^PG_PASSWORD=$|^PG_PASSWORD= *$" .env; then
-    # fail-loud: 库卷还在却没有可沿用的密码 → 生成新的必然连不上, 提前拦住.
-    # 不拦的话脚本会一路绿灯装完, 报错只出现在容器日志里, IT 查不到根因.
-    EXISTING_VOL=$(docker volume ls -q 2>/dev/null | grep -E '_pgdata$' | head -1 || true)
-    if [ -n "$EXISTING_VOL" ]; then
+    # ── 4.5 · verify 关键 image 本地存 (fail loud · 别让 docker compose 去 pull 挂) ──
+    MISSING_IMG=""
+    # 清单从 compose 读 (含 postgres:16-alpine), 不再手抄。
+    for img in $(compose_images); do
+        if ! docker image inspect "$img" >/dev/null 2>&1; then
+            MISSING_IMG="$MISSING_IMG $img"
+        fi
+    done
+    if [ -n "$MISSING_IMG" ]; then
         echo ""
-        echo "❌ 检测到既有数据库卷: $EXISTING_VOL"
-        echo "   但 .env 里没有可沿用的 PG_PASSWORD."
-        echo ""
-        echo "   postgres 的密码只在**首次建库**时写入, 现在生成新密码"
-        echo "   连不上已有的库 (identity/gateway/skills-hub/wiki-hub 全挂)."
-        echo ""
-        echo "   二选一:"
-        echo "     A. 保数据 — 从备份找回旧密码, 写进 .env 后重跑本脚本:"
-        echo "          grep -h '^PG_PASSWORD=' .env.bak.* | sort -u"
-        echo "     B. 清库重来 — 删卷后重跑 (⚠ 库内数据全丢):"
-        echo "          docker compose down -v && bash setup.sh"
-        echo ""
+        echo "❌ 本地缺 image ·$MISSING_IMG"
+        echo "   fix · 指定 IMAGE_TAR 或放 tar 到 images/ 目录:"
+        echo "     IMAGE_TAR=./images/catfish-poc-central-<arch>-<date>.tar.gz bash setup.sh"
+        echo "   (内网机不能连 docker.io · 必须本地 load)"
         exit 1
     fi
-    RAND_PW=$(openssl rand -hex 16 2>/dev/null || head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 24)
-    sed_i "s|^PG_PASSWORD=.*|PG_PASSWORD=$RAND_PW|" .env
-    echo "→ PG_PASSWORD 空 · 已生成随机: $RAND_PW  ← ★ 记好 · 数据库唯一密码"
-    fi
 
-# JWT_SIGNING_KEY 若仍空 · 生成随机 (首次装机路径)
-    if grep -qE "^JWT_SIGNING_KEY=$" .env; then
-    JWT_KEY=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | base64 | tr -d '/+=' | head -c 64)
-    sed_i "s|^JWT_SIGNING_KEY=.*|JWT_SIGNING_KEY=$JWT_KEY|" .env
-    echo "→ JWT_SIGNING_KEY 空 · 已生成随机 (64 字符)"
-    fi
+fi
 
-# ── CATFISH_SECRET_KEY (8/1) · 供应商 API key 的加密主密钥 ──────────
+# ── 2. 生成 / 升级 .env ───────────────────────────────────
 #
-# ⚠⚠ 这一项跟 PG_PASSWORD / JWT_SIGNING_KEY 的最大区别: **绝对不能重新生成**。
-#    换掉它 = 所有存在数据库里的供应商 API key 全部解不开, 只能逐个去
-#    dashscope / deepseek / gemini 后台重新申请再重填。所以下面只在"确实
-#    还没有"时生成, 已有值一个字节都不碰。
+# 9/22: 这里原来是 235 行 bash —— 捞旧密钥、备份、cp 模板、写回、判空生成、
+# 刷派生配置。整段搬进 tools/envgen.py, **setup.ps1 调的是同一个文件**。
 #
-# 值的格式 = Fernet key = 32 字节随机的 url-safe base64。用 openssl 而不是
-# python cryptography: 客户服务器上不一定装了那个包 (它在容器里), 而 openssl
-# 装了 docker 的机器上都有。tr 把标准 base64 的 +/ 换成 url-safe 的 -_。
+# 为什么不把它翻译一份 PowerShell: 这段代码的价值全在几条不变量上, 而每条
+# 都是踩出来的 ——
 #
-# 老 .env 里可能压根没有这一行 (8/1 之前的交付包), 所以要区分"没这行"和
-# "有这行但为空", 两种都要补。
-    if ! grep -qE "^CATFISH_SECRET_KEY=" .env; then
-    echo "" >> .env
-    echo "CATFISH_SECRET_KEY=" >> .env
-    fi
-# 先写回上一次装机的主密钥 —— 必须在下面"空则生成"之前。
-# 少了这一步, 下面那个判空必然成立 (cp 刚把它清成 .env.example 的空值),
-# 于是每次重跑都换一把新钥匙, 而"已有值·保持不变"那个 else 分支永远走不到。
-    if [ -n "$OLD_SECRET_KEY" ]; then
-    sed_i "s|^CATFISH_SECRET_KEY=.*|CATFISH_SECRET_KEY=$OLD_SECRET_KEY|" .env
-    fi
-    if grep -qE "^CATFISH_SECRET_KEY=$|^CATFISH_SECRET_KEY= *$" .env; then
-    SECRET_KEY=$(openssl rand -base64 32 2>/dev/null | tr '+/' '-_')
-    if [ -z "$SECRET_KEY" ]; then
-        echo "❌ 生成 CATFISH_SECRET_KEY 失败 · 这台机器上没有 openssl?"
-        echo "   手工生成一个 44 字符的 url-safe base64 填进 .env:"
-        echo "     head -c 32 /dev/urandom | base64 | tr '+/' '-_'"
-        exit 1
-    fi
-    sed_i "s|^CATFISH_SECRET_KEY=.*|CATFISH_SECRET_KEY=$SECRET_KEY|" .env
-    echo ""
-    echo "════════════════════════════════════════════════════════════"
-    echo "→ CATFISH_SECRET_KEY 已生成:"
-    echo "     $SECRET_KEY"
-    echo ""
-    echo "  ★★ 现在就把它存进公司密码管理器 ★★"
-    echo "     它丢了的话, 之后在界面上填的所有供应商 API key 都解不开 ——"
-    echo "     只能逐个去各家后台重新申请。代码兜不住。"
-    echo "════════════════════════════════════════════════════════════"
-    echo ""
+#   · 先捞旧值再覆盖 (8/1 和 8/4 各踩一次: 保护逻辑写在 cp 之后, 于是
+#     "已有值·保持不变"那个分支**重跑时永远走不到")
+#   · PG_PASSWORD 换了 → 连不上已有的库, 四个服务全挂, 报错只在容器日志里
+#   · CATFISH_SECRET_KEY 换了 → 服务照常起, 但库里所有供应商 API key 全部
+#     解不开, 且旧密文无法恢复
+#
+# 两份实现里漏掉任何一条, 症状都是"装完看起来正常"。所以只留一份。
+#
+# 跑法: 优先容器 (镜像在 2.pre 已 load, 宿主机不用装 python), 宿主机有
+# python3 时直接跑 —— test_setup_env.sh 走的是后一条, CI 里不需要 docker。
+ENVGEN_ARGS=(
+    --server-ip "$SERVER_IP"
+    --https "$ENABLE_HTTPS"
+    --https-port "${CATFISH_HTTPS_PORT:-443}"
+    --upgrade "$UPGRADE"
+    --gateway-workers "${GATEWAY_WORKERS:-}"
+    --identity-workers "${IDENTITY_WORKERS:-}"
+    --identity-url "${CATFISH_IDENTITY_URL:-}"
+)
+
+# 既有 pgdata 卷 —— 查卷要 docker, 所以在这边查; **判断**在 envgen 里,
+# 免得两个平台各写一遍"有卷但没密码该怎么办"。
+PG_VOL=$(docker volume ls -q 2>/dev/null | grep -E '_pgdata$' | head -1 || true)
+[ -n "$PG_VOL" ] && ENVGEN_ARGS+=(--pg-volume "$PG_VOL")
+
+if docker image inspect "$IDENTITY_IMAGE" >/dev/null 2>&1; then
+    docker run --rm \
+        --user "$(id -u):$(id -g)" \
+        -v "$SCRIPT_DIR:/work" \
+        -v "$SCRIPT_DIR/tools:/tools:ro" \
+        "$IDENTITY_IMAGE" \
+        python3 /tools/envgen.py --dir /work "${ENVGEN_ARGS[@]}"
+elif command -v python3 >/dev/null 2>&1; then
+    echo "  ⓘ 镜像还没 load, 用宿主机的 python3 生成 .env" >&2
+    python3 "$SCRIPT_DIR/tools/envgen.py" --dir "$SCRIPT_DIR" "${ENVGEN_ARGS[@]}"
 else
-    echo "→ CATFISH_SECRET_KEY 已有值 · 保持不变 (改了会让存库的 API key 全解不开)"
-    fi
-fi
-
-# ── 部署派生配置：新装和升级都必须写入 ─────────────────────────
-# UPGRADE=1 只跳过 .env.example 覆盖和 secret 生成; 不能把旧服务器地址、
-# HTTPS 模式或 worker 数带进新现场。持久化密码/API key 仍由上面的逻辑保护。
-set_env_value CATFISH_OIDC_ISSUER "$ISSUER_URL"
-set_env_value CATFISH_IDENTITY_ISSUER "$ISSUER_URL"
-set_env_value CATFISH_IDENTITY_CORS_ORIGINS "$WEB_URL"
-set_env_value CATFISH_ENABLE_HTTPS "$ENABLE_HTTPS"
-set_env_value CATFISH_HTTPS_PORT "$HTTPS_PORT"
-if [ -n "$GATEWAY_WORKERS" ]; then
-    set_env_value GATEWAY_WORKERS "$GATEWAY_WORKERS"
-fi
-if [ -n "$IDENTITY_WORKERS" ]; then
-    set_env_value IDENTITY_WORKERS "$IDENTITY_WORKERS"
-fi
-if [ "$UPGRADE" = "1" ]; then
-    if [ -n "$REQUESTED_IDENTITY_URL" ]; then
-        set_env_value CATFISH_IDENTITY_URL "$REQUESTED_IDENTITY_URL"
-    elif [ -n "$OLD_IDENTITY_URL" ]; then
-        set_env_value CATFISH_IDENTITY_URL "$OLD_IDENTITY_URL"
-    fi
-    echo "→ UPGRADE=1 · 已更新部署派生配置, 持久化 secret/现场参数保持不变"
+    echo "❌ 既没有 load 好的 catfish-identity 镜像, 宿主机也没有 python3。"
+    echo "   .env 生成需要其中之一。正常装机路径会先 load 镜像 (见 2.pre),"
+    echo "   所以走到这里多半是 image tar 没放进 images/ 目录。"
+    exit 1
 fi
 
 # ── 若只重生 .env · 到此为止 ───────────────────────────
@@ -406,297 +380,60 @@ if [ "$REGEN_ENV_ONLY" = "1" ]; then
     exit 0
 fi
 
-# ── 2.5 · 生成 users.yaml 含 admin ──────
-# delivery tar 里只带 users.yaml.example (真 hash 不进 tar · 安全 · 军规).
-# 装机时用 docker load 好的 identity image 里的 bcrypt 生成真 hash · 写 users.yaml.
-# 首次 identity 启动 · seed_pg_from_yaml_if_empty() 读 yaml · 灌 admin 进 PG.
-# 后续 identity 从 PG 读 · yaml 忽略. 员工首次登进后立即改密.
-IDENTITY_CFG="$SCRIPT_DIR/identity-server/config"
-mkdir -p "$IDENTITY_CFG"
-ADMIN_PW="${ADMIN_PASSWORD:-catfish_2026}"
-ADMIN_HASH=""   # 显式初始化 · 防 set -u 未定义变量挂
-
-if [ ! -f "$IDENTITY_CFG/users.yaml" ]; then
-    # 用 identity image 里的 python + bcrypt 生成 hash (host 不需 pip install bcrypt)
-    if docker image inspect "$IDENTITY_IMAGE" >/dev/null 2>&1; then
-        ADMIN_HASH=$(docker run --rm "$IDENTITY_IMAGE" python3 -c \
-            "from catfish_identity.users import hash_password; print(hash_password('$ADMIN_PW'))" 2>/dev/null)
-    fi
-    if [ -z "$ADMIN_HASH" ]; then
-        # fallback · catfish_2026 硬编 bcrypt hash (若 image 未 load · 兜底)
-        ADMIN_HASH='$2b$12$vN9eb7i7voFcdwzM8W5SOuVmjV3ETViwyA9DDAVQXz1JXhUBFzV2m'
-        [ "$ADMIN_PW" != "catfish_2026" ] && \
-            echo "  ⚠ image 未 load · 用兜底 hash · 密码强制为 catfish_2026"
-        ADMIN_PW="catfish_2026"
-    fi
-
-    cat > "$IDENTITY_CFG/users.yaml" <<EOF
-# 装机时 setup.sh 自动生成 · $(date '+%Y-%m-%d %H:%M')
-# admin 首次登进后立即改密 (Companion 内建改密 UI · 或 sysadmin 面板)
-users:
-  - email: admin@catfish.com
-    password_hash: $ADMIN_HASH
-    name: 系统管理员
-    department: IT
-    role: sysadmin
-EOF
-    chmod 600 "$IDENTITY_CFG/users.yaml"
-    echo "→ users.yaml 生成 · sysadmin: admin@catfish.com / $ADMIN_PW"
-    echo "  ⚠ 首次登进立即改密 (delivery/docs 里 SOP 有指引)"
-else
-    echo "→ users.yaml 已存在 · skip (跨装机保留)"
-fi
-
-# ── 2.55 · clients.yaml ──────────────
+# ── 2.5 · identity 的 users.yaml / clients.yaml ───────────
 #
-# Companion 启动时用 client_credentials (client_id=hermes-cli) 向 identity 换
-# 30 天 service token 给本机 hermes. identity 从 clients.yaml 认 client ——
-# 这个文件之前**整个被交付漏了** (打包排除真 clients.yaml 是对的, 但没有
-# example 也没有生成步骤), 于是任何一台机器上这条链路都是:
-#     401 invalid_client (client 认证失败)
-# 模板里的 hash 对应 Companion 内置的 demo secret, 详见 example 头注.
-if [ ! -f "$IDENTITY_CFG/clients.yaml" ]; then
-    if [ ! -f "$IDENTITY_CFG/clients.yaml.example" ]; then
-        echo "❌ 缺 clients.yaml.example · 交付包不完整 (Companion 的 hermes"
-        echo "   service token 链路会全挂 invalid_client). 重新解包或联系交付方."
-        exit 1
-    fi
-    cp "$IDENTITY_CFG/clients.yaml.example" "$IDENTITY_CFG/clients.yaml"
-    echo "→ clients.yaml 生成 (hermes-cli · Companion service token 用)"
-else
-    echo "→ clients.yaml 已存在 · skip (跨装机保留)"
+# 9/22 搬进 tools/seedgen.py, setup.ps1 调同一个文件。原来这里是两段 bash,
+# 其中 users.yaml 那段还带一个硬编码的 bcrypt hash 兜底 —— 镜像没 load 时
+# 用它, 并把密码强制回 catfish_2026。那个兜底现在不需要了: 2.pre 已经保证
+# 镜像在位, 走不到"没镜像"的情况; 而留着一个所有客户共用的 hash 本身就是
+# 个隐患。
+ADMIN_PW="${ADMIN_PASSWORD:-catfish_2026}"
+if ! docker run --rm \
+        --user "$(id -u):$(id -g)" \
+        -v "$SCRIPT_DIR:/work" \
+        -v "$SCRIPT_DIR/tools:/tools:ro" \
+        "$IDENTITY_IMAGE" \
+        python3 /tools/seedgen.py --dir /work --admin-password "$ADMIN_PW"; then
+    echo "❌ identity 种子配置生成失败 (详情见上)"
+    exit 1
 fi
-
-# ── 2.6 · gateway config 存在性 check ─
-# gateway 启动读 /app/config/models.yaml + roles.yaml. 若 delivery tar 里没打进
-# llm-gateway/config · docker mount 空目录 · gateway worker startup 挂反复 die.
-# 检 · 若空 · 明报 error 让 IT 从 delivery tar / rsync 补齐.
-GATEWAY_CFG="$SCRIPT_DIR/llm-gateway/config"
-mkdir -p "$GATEWAY_CFG"
-if [ ! -f "$GATEWAY_CFG/models.yaml" ] || [ ! -f "$GATEWAY_CFG/roles.yaml" ]; then
-    echo "❌ llm-gateway/config 缺 models.yaml 或 roles.yaml · gateway 启动会挂"
-    echo "   fix (2 选 1):"
-    echo "     A) 重解压 delivery tar (最新版含 config)"
-    echo "     B) 从 catfish 源码 rsync:"
-    echo "        rsync -av <mac>:person_task/catfish/central/llm-gateway/config/ $GATEWAY_CFG/"
-    echo ""
-    read -rp "  确认已补齐后回车继续? (Ctrl+C 中止): "
-    if [ ! -f "$GATEWAY_CFG/models.yaml" ]; then
-        echo "❌ 仍缺 models.yaml · 中止"
-        exit 1
-    fi
-fi
-echo "→ gateway config OK ($(ls "$GATEWAY_CFG" | wc -l | tr -d ' ') files)"
 
 # ── 3. HTTPS 自签 cert (若 ENABLE_HTTPS=1) ────────────────
-# certs/ 无条件建 —— compose 里 web 段挂了 ./certs, 目录不存在时
-# Docker 会自己造一个 (Linux 上属主 root), 留下野目录. 先建好省事.
+#
+# 9/22: 原来这里是 130 行 openssl 命令 (建 CA、签 CSR、拼 fullchain、再用
+# openssl x509/verify 做三项自检)。整段搬进 tools/certgen.py, 跑在 identity
+# 镜像里。
+#
+# 为什么搬:
+#
+#   · Windows 没有 openssl —— 这是中央端一直没法在 Windows 上照着装的原因之一。
+#     certgen.py 用的是 identity 的直接依赖 cryptography, 一定在镜像里,
+#     三个平台调用方式一模一样 (setup.ps1 里是同一行)。
+#   · openssl < 1.1.1 不支持 -addext, 现场撞到过; 新写法没有这个变量。
+#   · "要不要重签" 的判断 (SAN 对不对 / 快到期没有 / CA 存不存在) 原来散在
+#     shell 的 if 里, 现在跟生成逻辑待在一起, 不用在两种语言里各写一遍。
+#
+# 证书体系没变: CA 十年只建一次 (重建会让员工机器上已装的 ca.pem 全失效),
+# 服务器证书 397 天 (Apple 的上限是 398, 超了连装进信任库都会被拒)。
+# 自检也没少 —— certgen.py 写完会**独立回读**核对签发关系、SAN、fullchain 顺序。
+#
+# Docker 会自己造 certs 目录 (Linux 上属主 root), 留下野目录. 先建好省事.
 # HTTP 模式下目录是空的, web 容器的 41-catfish-ssl.sh 检测不到证书会降级只跑 :80.
 mkdir -p certs
 if [ "$ENABLE_HTTPS" = "1" ]; then
-    # ── 证书体系 ────────────────────
-    #
-    # 老做法: 一张 `openssl req -x509 -days 3650` 的自签证书直接给 nginx.
-    # 浏览器点一次「继续前往」能用, 但**桌面端 (Companion) 连不上**, 报:
-    #     The validity period in the certificate exceeds the maximum allowed.
-    # macOS Security.framework (以及 iOS) 对 TLS 服务器证书有最长有效期限制
-    # (2020-09-01 之后签发的是 398 天). 10 年的证书一律拒, 而且这个拒绝
-    # **跟证书受不受信任无关** —— 就算把它装进信任库照样拒.
-    #
-    # 现在改成两级:
-    #   ca.pem      内部 CA, 10 年       ← 发给员工机器, 只装一次
-    #   cert.pem    服务器证书, 397 天   ← nginx 用, 每年在服务器上换, 客户端不用动
-    #
-    # 这样做的现实意义: 500 台机器只装一次 CA. 若沿用单张短效证书, 每 13 个月
-    # 就要把新证书重新推到每一台机器上, 运维上不可行.
-    #
-    # cert.pem 是 fullchain (服务器证书 + CA), nginx 直接用; 客户端拿 ca.pem.
-    CERT_DAYS=397          # < 398, 留 1 天余量
-    CA_DAYS=3650
-
-    # CA 只在不存在时生成 —— **绝不能每次重跑都换**, 换了等于让所有已装机器
-    # 上的 ca.pem 全部失效, 而它们不会自动更新.
-    if [ ! -f certs/ca.pem ] || [ ! -f certs/ca-key.pem ]; then
-        echo "→ 生成内部 CA (${CA_DAYS} 天 · 发给员工机器, 只装一次)..."
-        # 不加 2>/dev/null: openssl < 1.1.1 不支持 -addext, 吞掉报错的话
-        # 脚本只会 set -e 静默退出, IT 完全看不出原因.
-        if ! openssl req -x509 -newkey rsa:2048 -sha256 -days "$CA_DAYS" -nodes \
-            -keyout certs/ca-key.pem -out certs/ca.pem \
-            -subj "/CN=Catfish Internal CA" \
-            -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
-            -addext "keyUsage=critical,keyCertSign,cRLSign"; then
-            echo ""
-            echo "❌ CA 生成失败 (openssl 报错见上)."
-            echo "   常见原因: openssl < 1.1.1 不支持 -addext.  查版本: openssl version"
-            exit 1
-        fi
-        chmod 600 certs/ca-key.pem
-        echo "  ✓ certs/ca.pem · certs/ca-key.pem"
-    else
-        echo "→ 内部 CA 已存在 · 复用 (换 CA 会让所有已装机器失效)"
-    fi
-
-    # 服务器证书: 缺失 / IP 变了 / 快过期 时重签. CA 不动, 所以客户端无感.
-    NEED_SERVER_CERT=0
-    if [ ! -f certs/cert.pem ] || [ ! -f certs/key.pem ]; then
-        NEED_SERVER_CERT=1
-        REASON="不存在"
-    elif ! openssl x509 -in certs/cert.pem -noout -ext subjectAltName 2>/dev/null \
-            | grep -q "IP Address:$SERVER_IP"; then
-        NEED_SERVER_CERT=1
-        REASON="SAN 里没有 IP:$SERVER_IP (换过 IP?)"
-    elif ! openssl x509 -in certs/cert.pem -noout -checkend 2592000 >/dev/null 2>&1; then
-        NEED_SERVER_CERT=1
-        REASON="30 天内到期"
-    fi
-
-    if [ "$NEED_SERVER_CERT" = "1" ]; then
-        echo "→ 签发服务器证书 (${CERT_DAYS} 天 · IP $SERVER_IP · 原因: $REASON)..."
-        openssl req -new -newkey rsa:2048 -nodes \
-            -keyout certs/key.pem -out certs/server.csr \
-            -subj "/CN=$SERVER_IP" 2>/dev/null
-        # SAN 必须有 IP: 现代浏览器不再回退看 CN, 缺了报
-        # ERR_CERT_COMMON_NAME_INVALID, 连"继续前往"都点不了.
-        cat > certs/server.ext <<EXT
-subjectAltName=IP:$SERVER_IP,DNS:catfish.local
-basicConstraints=critical,CA:FALSE
-keyUsage=critical,digitalSignature,keyEncipherment
-extendedKeyUsage=serverAuth
-EXT
-        if ! openssl x509 -req -in certs/server.csr \
-            -CA certs/ca.pem -CAkey certs/ca-key.pem -CAcreateserial \
-            -out certs/server.pem -days "$CERT_DAYS" -sha256 \
-            -extfile certs/server.ext; then
-            echo ""
-            echo "❌ 服务器证书签发失败 (openssl 报错见上)."
-            exit 1
-        fi
-        # nginx 用 fullchain (服务器证书 + CA)
-        cat certs/server.pem certs/ca.pem > certs/cert.pem
-        chmod 600 certs/key.pem certs/ca-key.pem
-        rm -f certs/server.csr certs/server.ext
-        echo "  ✓ certs/cert.pem (fullchain) · certs/key.pem"
-    else
-        echo "→ 服务器证书有效 · skip"
-    fi
-
-    # ── 三条硬断言 · 任一不过就别装了 ────────────────────────────
-    # 这三条都是实测踩过的, 不验就发给客户 = 现场必然出问题.
-
-    # 1) SAN 含 IP —— 缺了浏览器直接拒且无法绕过
-    if ! openssl x509 -in certs/server.pem -noout -ext subjectAltName 2>/dev/null \
-         | grep -q "IP Address:$SERVER_IP"; then
-        echo "❌ 服务器证书里没有 IP:$SERVER_IP 的 SAN · 浏览器会拒绝且无法绕过."
-        openssl x509 -in certs/server.pem -noout -ext subjectAltName 2>&1 | sed 's/^/     /'
+    echo "→ 证书 (SAN 含 $SERVER_IP)"
+    # --user: 让产物属主是当前用户, 否则 Linux 上会变成镜像里的 uid 1000,
+    # 下次非 root 的运维想动 certs/ 会 permission denied。
+    # Windows/macOS 的 Docker Desktop 自己处理属主, 那边不传这个参数 (见 setup.ps1)。
+    if ! docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -v "$SCRIPT_DIR/certs:/certs" \
+            -v "$SCRIPT_DIR/tools:/tools:ro" \
+            "$IDENTITY_IMAGE" \
+            python3 /tools/certgen.py --ip "$SERVER_IP" --out /certs; then
+        echo "❌ 证书生成失败 (详情见上)"
         exit 1
     fi
-
-    # 2) 有效期 ≤ 398 天 —— 超了 macOS/iOS 一律拒, 且跟信任与否无关.
-    #    实测报错原文: "The validity period in the certificate exceeds
-    #    the maximum allowed." 这一条就是本次改动的起因.
-    CERT_SPAN=$(python3 - <<'PY' 2>/dev/null || echo 9999
-import subprocess, datetime
-o = subprocess.run(["openssl","x509","-in","certs/server.pem","-noout","-dates"],
-                   capture_output=True, text=True).stdout
-d = dict(l.split("=",1) for l in o.strip().split("\n"))
-f = datetime.datetime.strptime(d["notBefore"].strip(), "%b %d %H:%M:%S %Y %Z")
-t = datetime.datetime.strptime(d["notAfter"].strip(),  "%b %d %H:%M:%S %Y %Z")
-print((t-f).days)
-PY
-)
-    if [ "$CERT_SPAN" -gt 398 ] 2>/dev/null; then
-        echo "❌ 服务器证书有效期 $CERT_SPAN 天 > 398 · macOS/iOS 会直接拒绝连接"
-        echo "   (报错: The validity period in the certificate exceeds the maximum allowed)"
-        echo "   删掉 certs/ 重跑本脚本重新签发."
-        exit 1
-    fi
-
-    # 3) CA 能校验服务器证书 —— 链断了客户端装了 CA 也没用
-    if ! openssl verify -CAfile certs/ca.pem certs/server.pem >/dev/null 2>&1; then
-        echo "❌ CA 校验服务器证书失败 · 证书链断了"
-        openssl verify -CAfile certs/ca.pem certs/server.pem 2>&1 | sed 's/^/     /'
-        exit 1
-    fi
-
-    echo "  ✓ 证书自检通过 (SAN 含 IP · 有效期 ${CERT_SPAN} 天 ≤ 398 · 链完整)"
-fi
-
-# ── 4. 装 image tar (若指定 / 若 images/ 里有) ──────────
-# IMAGE_TAR 未传 · 自动探 images/*.tar.gz.
-# 用户命令 `\ ` 续行错时 · IMAGE_TAR 没进 env · 老版直接 skip load · 后面 docker
-# compose up 去 docker.io pull · 内网挂. 现在自动探 · 兜底更稳.
-if [ -z "$IMAGE_TAR" ]; then
-    AUTO_TAR=$(ls "$SCRIPT_DIR/images/"*.tar.gz 2>/dev/null | head -1)
-    if [ -n "$AUTO_TAR" ]; then
-        echo "→ 自动发现 image tar: $(basename "$AUTO_TAR") (IMAGE_TAR 未传 · 兜底)"
-        IMAGE_TAR="$AUTO_TAR"
-    fi
-fi
-
-if [ -n "$IMAGE_TAR" ]; then
-    if [ ! -f "$IMAGE_TAR" ]; then
-        echo "❌ IMAGE_TAR=$IMAGE_TAR 找不到"
-        exit 1
-    fi
-    # ── 无条件 load ─────────────────
-    #
-    # 老逻辑: `docker image inspect catfish-gateway:<tag>` 成功就 skip load.
-    # 判据只看**tag 在不在**, 不看是不是同一个镜像 —— 而升级场景恰恰是
-    # "新 image tar + 完全相同的 tag". 结果:
-    #   IT 拿新包重装 → 脚本 skip load → 跑的还是旧镜像 → 一路绿灯装完.
-    #
-    # 实测: 测试机 down -v + 删目录后用新包重装, 6 个 image ID 跟
-    # 三小时前那批一模一样, 新构建的修复一个都没进去, 而 verify 全绿.
-    # 这种"假绿灯"比报错危险得多 —— 报错至少会叫住人.
-    #
-    # 改成无条件 load. load 本身是幂等的 (层已存在就秒过), 代价是重装时多等
-    # 几分钟解压校验; 拿几分钟换"包里是什么就跑什么", 值.
-    # 真要跳过 (比如同一天反复调 .env), 显式 SKIP_IMAGE_LOAD=1.
-    if [ "${SKIP_IMAGE_LOAD:-0}" = "1" ]; then
-        echo "→ SKIP_IMAGE_LOAD=1 · 跳过 load"
-        echo "  ⚠ 本地镜像可能不是包里那份 · 只在明确知道两者一致时才用这个开关"
-    else
-        echo "→ load image tar: $IMAGE_TAR (~5-15 min)"
-        BEFORE_IDS=$(docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' 2>/dev/null \
-                     | grep -E '^catfish' | sort || true)
-        if [[ "$IMAGE_TAR" =~ \.gz$ ]]; then
-            gunzip -c "$IMAGE_TAR" | docker load
-        else
-            docker load < "$IMAGE_TAR"
-        fi
-        echo "  ✓ 装完"
-
-        # 把 load 前后的 image ID 差异打出来 —— 让"到底换没换"这件事可见,
-        # 不用 IT 自己去比对.
-        AFTER_IDS=$(docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' 2>/dev/null \
-                    | grep -E '^catfish' | sort || true)
-        if [ "$BEFORE_IDS" = "$AFTER_IDS" ]; then
-            echo "  · image ID 无变化 (本地原本就是包里这份)"
-        else
-            echo "  · image ID 有更新:"
-            diff <(echo "$BEFORE_IDS") <(echo "$AFTER_IDS") \
-                | grep -E '^[<>]' | sed 's/^</      旧 /; s/^>/      新 /' || true
-        fi
-    fi
-    echo "  现有 image:"
-    docker images | grep -E "catfish|postgres:16-alpine" | sed 's/^/    /'
-fi
-
-# ── 4.5 · verify 关键 image 本地存 (fail loud · 别让 docker compose 去 pull 挂) ──
-MISSING_IMG=""
-# 清单从 compose 读 (含 postgres:16-alpine), 不再手抄。
-for img in $(compose_images); do
-    if ! docker image inspect "$img" >/dev/null 2>&1; then
-        MISSING_IMG="$MISSING_IMG $img"
-    fi
-done
-if [ -n "$MISSING_IMG" ]; then
-    echo ""
-    echo "❌ 本地缺 image ·$MISSING_IMG"
-    echo "   fix · 指定 IMAGE_TAR 或放 tar 到 images/ 目录:"
-    echo "     IMAGE_TAR=./images/catfish-poc-central-<arch>-<date>.tar.gz bash setup.sh"
-    echo "   (内网机不能连 docker.io · 必须本地 load)"
-    exit 1
 fi
 
 # ── 5. docker compose up ──────────────────────────────
@@ -940,4 +677,41 @@ else
     echo "       B. 每台机器加 chrome://flags 的"
     echo "          unsafely-treat-insecure-origin-as-secure (Safari 无此 flag)"
 fi
+
+# ── 7. 记下"这次装的到底是哪一版" ──────────────────────────
+#
+# 9/22 加。六个镜像的 tag 从 9/12 起一直是 0.1.2, 每次交付都一样 —— 于是
+# `docker images` 看不出装的是哪一版, 出了问题第一句"你装的哪个包"就答不上来。
+#
+# tag 那条另外治 (central/VERSION + scripts/check_central_image_version.sh
+# 强制改了源码就 bump)。但 tag 靠的是人守纪律, **digest 是内在的** ——
+# 同一个 tag 的两次构建 digest 必然不同。所以这里记 digest。
+#
+# 写成文件而不是只打屏幕: 装完半个月后来查的人不会有当时的终端。
+{
+    echo "# Catfish 中央端装机记录 —— setup.sh 自动生成, 请勿手改"
+    echo "installed_at=$(date '+%Y-%m-%d %H:%M:%S %z')"
+    echo "server_ip=$SERVER_IP"
+    echo "https=$ENABLE_HTTPS"
+    if [ -f BUILD-INFO.txt ]; then
+        echo "# ↓ 来自交付包的 BUILD-INFO.txt"
+        sed 's/^/package_/' BUILD-INFO.txt
+    fi
+    echo "# ↓ 每个服务实际跑的镜像 (tag 可能重名, image_id 不会)"
+    for img in $(compose_images); do
+        id=$(docker image inspect "$img" --format '{{.Id}}' 2>/dev/null || echo "<查不到>")
+        created=$(docker image inspect "$img" --format '{{.Created}}' 2>/dev/null || echo "?")
+        echo "image=$img id=${id#sha256:} created=$created"
+    done
+} > INSTALLED-BUILD.txt 2>/dev/null || true
+
+echo ""
+echo "── 这次装的是哪一版 ──"
+echo "  已写入 INSTALLED-BUILD.txt (报障时把这个文件发给我们)"
+for img in $(compose_images); do
+    id=$(docker image inspect "$img" --format '{{.Id}}' 2>/dev/null | cut -c8-19 || echo "??")
+    printf '    %-34s %s\n' "$img" "$id"
+done
+echo "  ⚠ tag 相同不代表镜像相同 —— 认上面那串 id, 不是认 tag。"
+
 echo "═══════════════════════════════════════════════════════"

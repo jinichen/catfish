@@ -33,7 +33,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # fetch-depth: 0 —— check_central_image_version.sh 要用 `git log -S` 找
+      # VERSION 是哪个提交引入的, 再看那之后源码动没动。浅克隆下找不到引入点,
+      # 脚本会 exit 2 明说"没法判断" (而不是给一个没根据的绿灯)。
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
@@ -66,6 +71,31 @@ jobs:
       # 包一起发给 B 客户。那种错误发出去就收不回来, 值得让 PR 当场红。
       - name: 交付目录不带客户名
         run: bash scripts/check_no_customer_names_in_delivery.sh
+
+      # 9/22: setup.sh 的 .env 生成回归测试。
+      #
+      # 这个测试 9/12 (020f172, 镜像 tag 改从 compose 读) 起就一直是红的,
+      # 到 9/22 才被发现 —— 因为**没有任何地方在跑它**。它守的是"重跑装机
+      # 不能换密钥"这件事: 换掉 CATFISH_SECRET_KEY 等于数据库里所有供应商
+      # API key 全部解不开, 只能逐个去后台重新申请。
+      #
+      # 一个写得挺好、记着真实 bug 的测试, 躺在仓库里死了十天。挂上。
+      - name: 交付装机脚本 .env 生成回归
+        run: bash delivery/catfish-poc/test_setup_env.sh
+
+      # 9/22: 中央端六个镜像的版本号 —— 单一来源 + 改了源码就必须 bump。
+      # 同版本号的两个镜像在 docker images 里无法区分, 装完看不出是哪一版,
+      # 也没法回滚。跟 Companion 那条 check_version_sync.sh 同一个思路。
+      # 需要完整历史才能判断"VERSION 之后源码动没动" —— 见 fetch-depth 那条。
+      - name: 中央端镜像版本同步
+        run: bash scripts/check_central_image_version.sh
+
+      # 9/22: setup.sh 和 setup.ps1 必须以同样的方式调用 tools/ 下的共享脚本。
+      # 漏传一个参数不会报错, 只会让某一个平台少一道保护 —— 比如 --pg-volume
+      # 漏了, 那边重装时既有数据库卷那道闸就失效了。
+      # 静态比对, 不需要 PowerShell (CI runner 上没有)。
+      - name: 装机脚本两平台参数一致
+        run: python3 delivery/catfish-poc/test_wrapper_parity.py
 
   # ════════════════════════════════════════════════════════════
   # 1. tool-bridge Python tests
