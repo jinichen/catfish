@@ -1,56 +1,53 @@
 {
-  "_comment": "P3.5.61 (6/22 鸿波) — nightly bench baseline。重采方式: parse_results.py --stats <locust 的 *_stats.csv> --users <N> --run-time <T> --emit-baseline <新文件>, 人工 review 之后再替换本文件 (不要脚本自动覆盖)。⚠ 9/19: 这里原来教人直接把 summary 那份产物拷过来当基线 —— 那是坏的: 两者的 endpoints 形状不同 (一个是 list 一个是按名字索引的 dict), 拷过去之后 每个 endpoint 都被判成「新增」, 回归检查从此一条都不报, 而且毫无迹象。现在 compare() 会检查形状并当场 exit 2。config 段必须跟 bench-nightly.yml 实跑的 USERS/RUN_TIME 一致, 否则 check_config_match 会 exit 2 拒绝比较。",
-  "captured_at": "2026-06-22",
-  "captured_from": "csv-1000-20260609-052027_stats.csv (1000 users, 10min, mock upstream, 1 uvicorn worker)",
+  "_comment": "P3.5.61 nightly bench baseline。9/22 重采 (鸿波, 取自 Bench Nightly #93 run 35653160064 的 candidate-baseline.json, GitHub 2-core ubuntu runner, 300 users / 3m, mock upstream)。6/22 那份是 1000 users/10m 在本机采的, 跟 CI 负载和硬件都不可比, 9/19 加了 check_config_match 之后每晚都在这里 exit 2 —— 那不是回归, 是基线过期。⚠ 看到「基线和这次实跑的负载对不上」就来这里: 用 gh run download <run-id> 拿当次 artifact 里的 candidate-baseline.json, 核对 config / endpoints 集合没少 / fail_rate 跟上一份同水平, 然后替换本文件。**别**手工 cp summary.json (endpoints 形状不同, 会让回归检查静默失效); 别在自己机器上跑 run.sh 采 (硬件不可比)。基线唯一合法产地是跑对比的那台 runner。",
+  "captured_at": "2026-09-21",
+  "captured_from": "Bench Nightly #93 (run 35653160064) nightly-20260921-204951/run_stats.csv, 300 users / 3m, GitHub ubuntu 2-core, mock upstream",
   "config": {
-    "users": 1000,
-    "run_time": "10m",
-    "spawn_rate": 50,
-    "uvicorn_workers": 1,
-    "mock_fail_rate": 0
+    "users": 300,
+    "run_time": "3m"
   },
   "endpoints": {
     "GET GET /api/advisory/feed.json": {
-      "p50_ms": 13000,
-      "p95_ms": 18000,
-      "p99_ms": 19000,
-      "rps": 2.3,
-      "fail_rate": 0.0116
+      "p50_ms": 3700.0,
+      "p95_ms": 5400.0,
+      "p99_ms": 8200.0,
+      "rps": 0.99,
+      "fail_rate": 0.0113
     },
     "GET GET /api/audit/me": {
-      "p50_ms": 14000,
-      "p95_ms": 18000,
-      "p99_ms": 19000,
-      "rps": 4.46,
-      "fail_rate": 0.0082
+      "p50_ms": 4100.0,
+      "p95_ms": 5700.0,
+      "p99_ms": 8500.0,
+      "rps": 1.89,
+      "fail_rate": 0.0059
     },
     "GET GET /api/quota/me": {
-      "p50_ms": 13000,
-      "p95_ms": 18000,
-      "p99_ms": 19000,
-      "rps": 8.9,
-      "fail_rate": 0.0071
+      "p50_ms": 3700.0,
+      "p95_ms": 5200.0,
+      "p99_ms": 7300.0,
+      "rps": 3.88,
+      "fail_rate": 0.0072
     },
     "GET GET /v1/catalog": {
-      "p50_ms": 13000,
-      "p95_ms": 18000,
-      "p99_ms": 19000,
-      "rps": 2.36,
-      "fail_rate": 0.0099
+      "p50_ms": 3500.0,
+      "p95_ms": 5200.0,
+      "p99_ms": 7900.0,
+      "rps": 0.95,
+      "fail_rate": 0.0058
     },
     "POST POST /v1/chat/completions [stream]": {
-      "p50_ms": 13000,
-      "p95_ms": 18000,
-      "p99_ms": 19000,
-      "rps": 26.86,
-      "fail_rate": 0.0088
+      "p50_ms": 3800.0,
+      "p95_ms": 5200.0,
+      "p99_ms": 7500.0,
+      "rps": 10.81,
+      "fail_rate": 0.0036
     }
   },
   "aggregated": {
-    "p50_ms": 13000,
-    "p95_ms": 18000,
-    "p99_ms": 19000,
-    "rps": 44.88,
-    "fail_rate": 0.0086
+    "p50_ms": 3800.0,
+    "p95_ms": 5300.0,
+    "p99_ms": 7700.0,
+    "rps": 18.52,
+    "fail_rate": 0.0051
   }
 }
