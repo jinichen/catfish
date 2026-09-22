@@ -109,6 +109,15 @@ jobs:
       - name: 交付 config 不是空的
         run: bash scripts/check_delivery_config_not_empty.sh
 
+      # 9/22: 交付目录的 images/ 里不许留 image tar。
+      #
+      # 8/29 的 15 个 .tar (3.9GB) 在那儿躺了三周多, 每个交付包都白带着它们
+      # (压缩后约 1GB)。没被发现是因为三件事叠加: 清理规则只匹配 .tar.gz、
+      # .gitignore 把它们排掉所以 git status 永远干净、包大一倍没人觉得奇怪。
+      # 没有任何外部迹象, 只有人主动 ls 才看得见 —— 所以让 CI 去看。
+      - name: 交付目录没有残留 image tar
+        run: bash scripts/check_no_stale_image_tars.sh
+
   # ════════════════════════════════════════════════════════════
   # 1. tool-bridge Python tests
   # ════════════════════════════════════════════════════════════

@@ -430,9 +430,26 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
     if [ ! -d "$DELIVERY_DIR" ]; then
         echo "❌ $DELIVERY_DIR 找不到 · skip Phase 3"
     else
-        # 临时把 image tar 拷进 delivery/catfish-poc/images/ (打完清)
+        # 临时把 image tar 拷进 delivery/catfish-poc/images/
         TEMP_IMAGES="$DELIVERY_DIR/images"
         mkdir -p "$TEMP_IMAGES"
+
+        # ⚠ 9/22: 打包**前**先清空, 且 .tar / .tar.gz 两种都清。
+        #
+        # 之前只在结尾清、只清 .tar.gz, 于是 8/29 留下的 15 个 .tar (3.9GB) 一直
+        # 躺着; FULL 包把整个 delivery/catfish-poc/ 打进去 —— 从 8/29 起每个交付包
+        # 都白带这 3.9GB (压缩后约 1GB), 1.7G 那个包就是这么来的。第二个入口:
+        # 结尾清理排在验包 exit 1 后面, 验包一失败就留下一个。没被发现是因为
+        # .gitignore 把 images/*.tar 排掉了, git status 永远干净。
+        #
+        # 改成"进来之前先清": 每次从已知状态开始, 不依赖上次有没有正常收尾。
+        # 防回归: scripts/check_no_stale_image_tars.sh
+        STALE_N=$(find "$TEMP_IMAGES" -maxdepth 1 -type f \( -name '*.tar' -o -name '*.tar.gz' \) | wc -l | tr -d ' ')
+        if [ "$STALE_N" -gt 0 ]; then
+            STALE_SZ=$(du -sh "$TEMP_IMAGES" 2>/dev/null | cut -f1)
+            echo "  ⚠ images/ 里有 $STALE_N 个上次残留的 image tar ($STALE_SZ) · 清掉再打"
+            find "$TEMP_IMAGES" -maxdepth 1 -type f \( -name '*.tar' -o -name '*.tar.gz' \) -delete
+        fi
 
         # ── P3.5.79+ (7/23 达华 199 blood catch) · 补 config 目录 ──
         # 老 bug: delivery/catfish-poc/ 里没 identity-server/ 和 llm-gateway/ 目录 ·
@@ -553,7 +570,7 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
             fi
             # P3.5.79+ (7/23 catch): 每循环前清 images/ · 别累加 · 否则第 2 arch
             # 循环开始时 images/ 里还有第 1 arch 的 tar · 一起打进 FULL · 大 400M+.
-            rm -f "$TEMP_IMAGES"/*.tar.gz
+            rm -f "$TEMP_IMAGES"/*.tar.gz "$TEMP_IMAGES"/*.tar
             cp "$SRC_TAR" "$TEMP_IMAGES/"
 
             # 打 tar (从 repo 根 · tar 里路径 delivery/catfish-poc/...)
@@ -650,8 +667,8 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
             echo "  ✅ $arch 完整 tar 完成"
         done
 
-        # 清临时 image (delivery/catfish-poc/images/ 里不留 tar · git 也 ignore)
-        rm -f "$TEMP_IMAGES"/*.tar.gz
+        # 两种后缀都清 —— 只清 .tar.gz 的话 .tar 会一直攒 (见上面 STALE_N 那段)。
+        rm -f "$TEMP_IMAGES"/*.tar.gz "$TEMP_IMAGES"/*.tar
         echo ""
         echo "→ 客户 IT 装机 3 步:"
         echo "    1. tar xzf catfish-poc-FULL-<arch>-${DATE}.tar.gz"
