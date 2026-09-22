@@ -267,3 +267,152 @@ def test_the_shipped_baseline_comment_does_not_teach_the_broken_cp():
     assert "cp bench/result_summary.json" not in comment, (
         "注释还在教 cp summary.json —— 那会让回归检查静默失效"
     )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 9/22: 门禁分层之后的变异测试。
+#
+# 背景在 parse_results.py 顶部: 延迟阈值降为 advisory (这台 runner 上同一份
+# gateway 代码两次跑的 p50 就能差 35%), 红绿改由硬指标决定。
+#
+# 下面每条都是**变异测试**: 拿健康数据改坏一处, 断言门真的会红。只测"健康
+# 数据是绿的"证明不了门还在 —— 一个 `return 0` 也能过。
+#
+# 每处变异前先 assert 原串在 CSV 里, 否则 replace 静默不生效, 测试就变成
+# "改了个没用的东西, 还是绿的" —— 那种绿比红更危险。
+# ─────────────────────────────────────────────────────────────────────
+
+HEALTHY_CSV = """Type,Name,Request Count,Failure Count,Median Response Time,Average Response Time,Min Response Time,Max Response Time,Average Content Size,Requests/s,Failures/s,50%,66%,75%,80%,90%,95%,98%,99%,99.9%,99.99%,100%
+GET,/api/quota/me,1000,5,120,130,10,400,512,8.9,0.0,120,130,140,150,180,200,220,240,300,350,400
+,Aggregated,1000,5,120,130,10,400,512,8.9,0.0,120,130,140,150,180,200,220,240,300,350,400
+"""
+
+
+def _run_csv(tmp: Path, csv_text: str, *extra: str):
+    """拿给定 csv 跑一遍, 基线是配套的健康基线。"""
+    baseline = tmp / "baseline.json"
+    baseline.write_text(json.dumps({
+        "captured_at": "2026-09-22",
+        "config": {"users": 300, "run_time": "3m"},
+        "endpoints": {
+            "GET /api/quota/me": {
+                "p50_ms": 120, "p95_ms": 200, "p99_ms": 240,
+                "rps": 8.9, "fail_rate": 0.005,
+            }
+        },
+        "aggregated": {
+            "p50_ms": 120, "p95_ms": 200, "p99_ms": 240,
+            "rps": 8.9, "fail_rate": 0.005,
+        },
+    }), encoding="utf-8")
+    stats = tmp / "run_stats.csv"
+    stats.write_text(csv_text, encoding="utf-8")
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), "--stats", str(stats),
+         "--baseline", str(baseline), "--users", "300", "--run-time", "3m", *extra],
+        capture_output=True, text=True,
+    )
+
+
+def _mutate(text: str, old: str, new: str) -> str:
+    """改一处并**确认真的改到了**。见本段顶部。"""
+    assert old in text, f"变异没生效 —— CSV 里根本没有 {old!r}, 这条测试是假的"
+    return text.replace(old, new, 1)
+
+
+def test_healthy_run_is_green():
+    """先钉住基准: 这份数据是健康的, 必须绿。下面的变异才有意义。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        r = _run_csv(Path(d), HEALTHY_CSV)
+    assert r.returncode == 0, f"健康数据不该红: {r.stderr}"
+
+
+def test_hard_fail_rate_over_absolute_line_is_red(tmp_path: Path):
+    """失败率 5% 以上 = 真故障 (token 挂了 / upstream 断了), 必须红。"""
+    # 1000 请求里 200 个失败 = 20%
+    bad = _mutate(HEALTHY_CSV, "/api/quota/me,1000,5,", "/api/quota/me,1000,200,")
+    bad = _mutate(bad, "Aggregated,1000,5,", "Aggregated,1000,200,")
+    r = _run_csv(tmp_path, bad)
+    assert r.returncode == 1, f"20% 失败率必须红, 实际 {r.returncode}"
+    assert "fail_rate" in r.stderr
+
+
+def test_fail_rate_just_under_the_line_stays_green(tmp_path: Path):
+    """4% 不红 —— 阈值必须是它声称的那个数, 不能实际上更严。
+
+    这条跟上一条成对: 只有上一条的话, 一个"永远红"的实现也能过。"""
+    bad = _mutate(HEALTHY_CSV, "/api/quota/me,1000,5,", "/api/quota/me,1000,40,")
+    bad = _mutate(bad, "Aggregated,1000,5,", "Aggregated,1000,40,")
+    r = _run_csv(tmp_path, bad)
+    assert r.returncode == 0, f"4% 在 5% 线以下, 不该红: {r.stderr}"
+
+
+def test_hard_throughput_collapse_is_red(tmp_path: Path):
+    """吞吐掉到基线一半以下 = 相当一部分请求根本没跑起来。"""
+    bad = _mutate(HEALTHY_CSV, "512,8.9,0.0", "512,3.0,0.0")
+    bad = _mutate(bad, "512,8.9,0.0", "512,3.0,0.0")  # Aggregated 行
+    r = _run_csv(tmp_path, bad)
+    assert r.returncode == 1, f"吞吐从 8.9 掉到 3.0 必须红, 实际 {r.returncode}"
+    assert "throughput" in r.stderr
+
+
+def test_throughput_dip_within_noise_stays_green(tmp_path: Path):
+    """掉 10% 不红 —— 实测噪声就有 8.8%, 在这儿报警就又回到老问题了。"""
+    bad = _mutate(HEALTHY_CSV, "512,8.9,0.0", "512,8.0,0.0")
+    bad = _mutate(bad, "512,8.9,0.0", "512,8.0,0.0")
+    r = _run_csv(tmp_path, bad)
+    assert r.returncode == 0, f"掉 10% 在噪声范围内, 不该红: {r.stderr}"
+
+
+def test_missing_endpoint_is_red(tmp_path: Path):
+    """基线里有、这次一条没跑到 = 半个栈没起来。
+
+    这条最重要: 这种情况下"没有回归"是**假绿** —— 没跑的东西当然不退化。"""
+    bad = _mutate(HEALTHY_CSV, "GET,/api/quota/me,1000,5,120,130,10,400,512,8.9,0.0,120,130,140,150,180,200,220,240,300,350,400\n", "")
+    r = _run_csv(tmp_path, bad)
+    assert r.returncode == 1, f"endpoint 缺失必须红, 实际 {r.returncode}"
+    assert "missing_endpoints" in r.stderr
+
+
+def test_latency_blowup_is_reported_but_not_red(tmp_path: Path):
+    """延迟涨 10 倍也**不红** —— 这是这次改动的核心, 必须钉死。
+
+    不是说延迟不重要, 是说这台 runner 上的延迟数字没有判据价值 (依据见
+    parse_results.py 顶部)。但它必须**出声**: 降级不说话比大声失败更糟。"""
+    bad = _mutate(HEALTHY_CSV, ",512,8.9,0.0,120,130,140,150,180,200,220,240,",
+                               ",512,8.9,0.0,1200,1300,1400,1500,1800,2000,2200,2400,")
+    bad = _mutate(bad, ",512,8.9,0.0,120,130,140,150,180,200,220,240,",
+                       ",512,8.9,0.0,1200,1300,1400,1500,1800,2000,2200,2400,")
+    r = _run_csv(tmp_path, bad)
+    assert r.returncode == 0, "延迟不再决定退出码"
+    assert "advisory" in r.stderr, "降级必须出声 —— 不能静悄悄 return 0"
+    assert "不拦" in r.stderr
+
+
+def test_summary_md_shows_improvements_not_only_regressions(tmp_path: Path):
+    """摘要要给全貌。
+
+    #94 是一次 p50 -35% 的跑, 摘要却只写「⚠️ 2 regressions」, 因为当时只
+    渲染超阈值的那几条。报告本身把人误导了, 这条钉住不许再这样。"""
+    # 这次比基线快一半
+    fast = _mutate(HEALTHY_CSV, ",512,8.9,0.0,120,130,140,150,180,200,220,240,",
+                                ",512,8.9,0.0,60,65,70,75,90,100,110,120,")
+    fast = _mutate(fast, ",512,8.9,0.0,120,130,140,150,180,200,220,240,",
+                         ",512,8.9,0.0,60,65,70,75,90,100,110,120,")
+    md = tmp_path / "summary.md"
+    r = _run_csv(tmp_path, fast, "--md", str(md))
+    assert r.returncode == 0
+    body = md.read_text()
+    assert "-50.0%" in body, "变好的那些也要列出来, 不能只列变差的"
+    assert "不决定红绿" in body, "摘要必须说清延迟只是参考"
+
+
+def test_summary_json_says_latency_gate_is_advisory(tmp_path: Path):
+    """机器可读的那份也要说。以后接仪表盘的人不会来读注释。"""
+    out = tmp_path / "summary.json"
+    r = _run_csv(tmp_path, HEALTHY_CSV, "--out", str(out))
+    assert r.returncode == 0
+    data = json.loads(out.read_text())
+    assert data["latency_gate"] == "advisory"
+    assert "hard_failures" in data

@@ -140,8 +140,28 @@ jobs:
             --users "$USERS" --run-time "$RUN_TIME" \
             --out "bench/nightly-${TS}/summary.json" \
             --md "bench/nightly-${TS}/summary.md"
-        # exit code 1 = regression, 让 step 红, job 失败. 0 = OK.
+        # exit code: 0 = 硬指标通过 / 1 = 硬指标失败 (step 红) / 2 = 没法比
+        #
+        # ⚠ 9/22 起 **延迟不在这里面**。这台 runner 上同一份 gateway 代码
+        # 两次跑的 p50 就能差 35% (实测 #93 vs #94, 两次之间 gateway 侧零
+        # 改动), 10% 的阈值比噪声还小。延迟照报但不拦, 理由和数据见
+        # bench/parse_results.py 顶部那段。
         continue-on-error: false
+
+      # 把摘要贴到 job summary 页。不贴的话那张延迟趋势表只躺在 artifact 里,
+      # 要先 gh run download 才看得见 —— 等于没人看。既然它已经不决定红绿,
+      # 唯一的价值就是有人真的会瞄一眼。
+      #
+      # always(): 上一步硬指标红的时候更需要看到这张表。
+      - name: 摘要贴到 job summary
+        if: always()
+        run: |
+          f="bench/nightly-${TS}/summary.md"
+          if [ -f "$f" ]; then
+            cat "$f" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "⚠️ 没有 summary.md —— parse 那步在写文件之前就退出了, 看它的 stderr。" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       # 9/19: 每次都顺手产一份「按这次结果采的候选基线」, 塞进 artifact。
       #

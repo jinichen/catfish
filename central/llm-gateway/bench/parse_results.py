@@ -12,9 +12,49 @@ Usage:
       --out bench/result_summary.json
 
 返 exit code:
-  0 = 健康 / 改善
-  1 = regression > threshold (CI 卡 PR)
-  2 = parse 错 (stats 缺失或格式坏)
+  0 = 硬指标通过 (延迟可能有漂移, 只报不拦 —— 见下)
+  1 = 硬指标失败 (endpoint 缺失 / 失败率超绝对线 / 吞吐跌到基线一半以下)
+  2 = parse 错 (stats 缺失, 格式坏, 或负载跟基线不可比)
+
+⚠ 9/22: **延迟阈值不再决定退出码**, 降为 advisory。
+
+为什么 —— 有实测依据, 不是嫌它烦:
+
+  Bench Nightly #93 (bf0ea03) 和 #94 (ff30ddd) 之间, gateway 侧代码
+  一个字没改 (两次之间只动了 companion-app 和 baseline.json, 都不在
+  bench 栈里)。所以两次的差值就是这套 bench 的**重复性实测值**:
+
+      p50   每个 endpoint 都 -31% ~ -37%
+      p95   -29% ~ -39%
+      p99   -33% ~ +11%
+
+  10% 的阈值架在 35% 的噪声上, 报出来的东西没有信息量。#94 就是这么
+  报的: 一次 p50 -35%、p95 -33%、失败率下降、吞吐 +9% 的跑, 摘要顶上
+  写着「⚠️ 2 regressions」—— 两条 p99 各 +11%。
+
+噪声不是运气, 是量出来的:
+
+      GET /v1/catalog          读个配置列表        p50 2400ms
+      GET /api/quota/me        查一次 PG           p50 2400ms
+      GET /api/advisory/feed   读 JSON             p50 2400ms
+      POST /v1/chat/... [TTFB] 流式转发 LLM        p50 2400ms
+
+  一个读配置的 GET 和一个流式 LLM 调用延迟一模一样 —— 这不是各自的
+  工作量, 是**同一个队列的排队时间**。旧的 1000-user 基线同样如此
+  (13000/14000/13000/13000/13000)。UVICORN_WORKERS=1, 60% 流量是流式
+  chat, 每条在单个 event loop 上活 ~5.5s、每 55ms 醒一次写 chunk;
+  系统跑在吞吐上限附近, 这时 runner 的 CPU 快一点慢一点会被排队放大
+  成几十个百分点。compose 还给 gateway 要了 cpus:'4.0', 而 locust
+  (跑在 host)、PG、mock upstream 全在同一台 4 核 runner 上抢。
+
+  也就是说: 这个门禁测的是「今晚这台 runner 有多闲」, 不是 gateway
+  有多快。调阈值救不了 —— 放宽到 40% 才不误报, 那时真有 30% 的退化
+  也照样放过。
+
+所以不装作还有延迟门禁。延迟照报 (而且现在**全量报**, 不只报变差的那
+几条 —— 只报坏消息正是 #94 那份摘要误导人的原因), 但退出码只认那些
+无论 runner 多慢都不该发生的事。真修复 (把负载降到不饱和 / 多 worker /
+流式改测明确的 TTFB) 见 BACKLOG 里的 bench 饱和条目。
 
 Baseline 格式 (bench/baseline.json):
   {
@@ -63,10 +103,52 @@ class Regression:
 
 
 @dataclass
+class HardFailure:
+    """让 job 变红的东西。
+
+    跟 Regression 的区别不是"更严重", 是**判据的性质不同**: Regression 比
+    的是跟基线的相对变化, 而基线在这台 runner 上本身就带 35% 的噪声;
+    HardFailure 比的是绝对值, 不看基线, 所以 runner 慢不慢都不影响判断。
+    """
+
+    check: str
+    detail: str
+
+
+# ── 硬指标的绝对阈值 ────────────────────────────────────────────────
+#
+# 定法: 必须低于/高于**任何一次健康跑的实测值**, 且余量要大到 runner
+# 抖动够不着。实测样本 (全部是健康跑):
+#
+#   fail_rate  单 endpoint 最高 1.16% (#93 advisory / 6月 1000-user 跑)
+#              聚合 0.47% ~ 0.86%
+#   rps (聚合) 18.52 (#93) / 20.15 (#94) / 44.88 (6月 1000-user)
+#
+# 失败率取 5% —— 是实测上限的 4 倍多。真故障长什么样: token 校验挂了、
+# upstream 连不上、PG 连接池耗尽, 这些都是几十个百分点起步, 5% 抓得住。
+#
+# 吞吐则**不能**写成绝对数字。第一版写了 `HARD_MIN_AGG_RPS = 10.0`,
+# 立刻被单测的小样本 fixture (8.9 rps) 打红 —— 那不是测试碰巧, 是它说对了:
+# 每秒多少请求是**负载的属性**, 不是这个解析器的属性。换个 users 数,
+# 写死的 10 就是错的, 而且是那种没人会发现的错。
+#
+# 所以吞吐这条按基线的比例算: 掉到基线的一半以下才算。这是四条硬指标里
+# 唯一还依赖基线的 —— 可以这么做, 是因为吞吐的实测噪声只有 8.8%
+# (#93 18.52 → #94 20.15, 同代码), 砍半的带宽是它的 5 倍多, 抖不进来。
+# 它抓的是"一半的请求根本没跑起来", 不是"今晚慢了点"。
+HARD_MAX_FAIL_RATE = 0.05
+HARD_MIN_RPS_RATIO = 0.5
+
+
+@dataclass
 class Result:
     endpoints: list[EndpointStat]
     aggregated: EndpointStat | None = None
     regressions: list[Regression] = field(default_factory=list)
+    #: 全量 delta (含变好的)。只报变差的那几条会给人错误印象 —— #94 就是
+    #: 一次全面变好的跑被摘要写成「2 regressions」。
+    deltas: list[Regression] = field(default_factory=list)
+    hard_failures: list[HardFailure] = field(default_factory=list)
     new_endpoints: list[str] = field(default_factory=list)
     missing_endpoints: list[str] = field(default_factory=list)
 
@@ -208,16 +290,19 @@ def compare(result: Result, baseline_path: Path, threshold: float) -> None:
             if base_v <= 0:
                 continue  # baseline 无, 不报
             delta = (curr_v - base_v) / base_v
+            entry = Regression(
+                endpoint=name,
+                metric=metric,
+                baseline=base_v,
+                current=curr_v,
+                delta_pct=delta * 100,
+            )
+            # 两边都记: deltas 是给人看全貌的 (含变好的), regressions 是
+            # 超阈值的子集。9/22 起 regressions **不再决定退出码**, 见模块
+            # 顶部那段 —— 这台 runner 上同代码两次跑就能差 35%。
+            result.deltas.append(entry)
             if delta > threshold:
-                result.regressions.append(
-                    Regression(
-                        endpoint=name,
-                        metric=metric,
-                        baseline=base_v,
-                        current=curr_v,
-                        delta_pct=delta * 100,
-                    )
-                )
+                result.regressions.append(entry)
         # fail_rate 任何上升都报 (不在 threshold 范围, 因为 baseline 通常 0)
         base_fail = float(b.get("fail_rate", 0) or 0)
         if ep.fail_rate > base_fail + 0.01 and ep.fail_rate > 0.01:
@@ -235,6 +320,120 @@ def compare(result: Result, baseline_path: Path, threshold: float) -> None:
     for name in base_endpoints:
         if name not in current_by_name:
             result.missing_endpoints.append(name)
+
+
+def _baseline_agg_rps(baseline_path: Path) -> float | None:
+    """基线的整体吞吐。优先用 aggregated, 没有就把各 endpoint 加起来。
+
+    老基线 (和单测的 fixture) 没有 aggregated 段, 那不是坏数据, 只是旧格式 ——
+    endpoint 的 rps 加总是同一个量。两条路都走不通才返回 None。
+    """
+    try:
+        data = json.loads(baseline_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    agg = data.get("aggregated")
+    if isinstance(agg, dict) and float(agg.get("rps", 0) or 0) > 0:
+        return float(agg["rps"])
+    endpoints = data.get("endpoints")
+    if isinstance(endpoints, dict):
+        total = sum(float(v.get("rps", 0) or 0) for v in endpoints.values() if isinstance(v, dict))
+        if total > 0:
+            return total
+    return None
+
+
+def check_hard_limits(result: Result, baseline_path: Path) -> None:
+    """填 result.hard_failures —— 唯一能让 job 变红的东西。
+
+    这里每一条都是**绝对判据**, 不跟基线比。理由见模块顶部: 基线比较在这台
+    runner 上的噪声有 35%, 而下面这些事情无论 runner 多慢都不该发生。
+
+    反过来说也成立 —— 这些条件必须真的能抓住事故。写完之后是拿变异测试验
+    的 (test_parse_results.py 里 test_hard_*), 不是看着觉得对。
+    """
+    # ① baseline 里有、这次没跑出来 = 半个栈没起来, 或者 locust 根本没打到。
+    #    这种时候"没有回归"是假的绿: 没跑的东西当然不会退化。
+    if result.missing_endpoints:
+        result.hard_failures.append(
+            HardFailure(
+                check="missing_endpoints",
+                detail=(
+                    f"基线里有 {len(result.missing_endpoints)} 个 endpoint 这次一条请求都没跑到: "
+                    + ", ".join(result.missing_endpoints)
+                    + "。半个栈没起来 / locust 没打到 —— 这时候「没有回归」是假绿。"
+                ),
+            )
+        )
+
+    # ② 跑到了但一条都没成功, 也是同一类事 (计数为 0 的 endpoint 不会进
+    #    missing, 但同样意味着这块没被测到)。
+    for ep in result.endpoints:
+        if ep.request_count <= 0:
+            result.hard_failures.append(
+                HardFailure(
+                    check="zero_requests",
+                    detail=f"{ep.name} 请求数为 0 —— 这个 endpoint 这次完全没被压到。",
+                )
+            )
+
+    # ③ 失败率。绝对线, 跟基线无关 —— token 校验挂了、upstream 连不上、
+    #    连接池耗尽, 都是几十个百分点。
+    for ep in result.endpoints:
+        if ep.fail_rate > HARD_MAX_FAIL_RATE:
+            result.hard_failures.append(
+                HardFailure(
+                    check="fail_rate",
+                    detail=(
+                        f"{ep.name} 失败率 {ep.fail_rate*100:.2f}% "
+                        f"超过绝对上限 {HARD_MAX_FAIL_RATE*100:.0f}% "
+                        f"({ep.failure_count}/{ep.request_count})。"
+                    ),
+                )
+            )
+    if result.aggregated and result.aggregated.fail_rate > HARD_MAX_FAIL_RATE:
+        result.hard_failures.append(
+            HardFailure(
+                check="fail_rate",
+                detail=(
+                    f"整体失败率 {result.aggregated.fail_rate*100:.2f}% "
+                    f"超过绝对上限 {HARD_MAX_FAIL_RATE*100:.0f}%。"
+                ),
+            )
+        )
+
+    # ④ 吞吐。runner 慢会让延迟涨, 但不会让吞吐掉一半 —— 掉一半是"一半的
+    #    请求根本没跑起来"。底线按基线比例算, 理由见 HARD_MIN_RPS_RATIO。
+    base_rps = _baseline_agg_rps(baseline_path)
+    if result.aggregated is None:
+        # locust 的 csv 没有 Aggregated 行 —— 要么 csv 被截断了, 要么根本没跑完。
+        result.hard_failures.append(
+            HardFailure(
+                check="no_aggregated_row",
+                detail="stats csv 里没有 Aggregated 行 —— 这次跑没跑完 / csv 被截断。",
+            )
+        )
+    elif base_rps is None:
+        # 降级必须出声: 少了这条检查要让人知道, 而不是静悄悄少守一样东西。
+        print(
+            f"[warn] 基线 {baseline_path} 里既没有 aggregated.rps 也没有可加总的 "
+            "endpoint rps —— **吞吐这条硬指标这次没有守**。"
+            "\n       重采一次基线 (--emit-baseline) 就会带上 aggregated 段。",
+            file=sys.stderr,
+        )
+    elif result.aggregated.rps < base_rps * HARD_MIN_RPS_RATIO:
+        result.hard_failures.append(
+            HardFailure(
+                check="throughput",
+                detail=(
+                    f"整体吞吐 {result.aggregated.rps:.2f} RPS, 不到基线 "
+                    f"{base_rps:.2f} RPS 的 {HARD_MIN_RPS_RATIO*100:.0f}% "
+                    f"(下限 {base_rps * HARD_MIN_RPS_RATIO:.2f})。"
+                    "吞吐的实测噪声只有 8.8%, 掉这么多不是 runner 慢, "
+                    "是有相当一部分请求根本没跑起来。"
+                ),
+            )
+        )
 
 
 def render_baseline(result: Result, users: int | None, run_time: str | None) -> dict:
@@ -300,6 +499,26 @@ def render_summary(result: Result, threshold: float, baseline_path: Path) -> dic
         "threshold_pct": threshold * 100,
         "baseline_file": str(baseline_path),
         "endpoint_count": len(result.endpoints),
+        # 9/22: 延迟门禁是 advisory —— 消费 summary.json 的人 (以后的仪表盘/
+        # 脚本) 不该再把 regressions 非空当成"坏了"。写在数据里, 不只写在注释里。
+        "latency_gate": "advisory",
+        "hard_limits": {
+            "max_fail_rate": HARD_MAX_FAIL_RATE,
+            "min_rps_ratio_vs_baseline": HARD_MIN_RPS_RATIO,
+        },
+        "hard_failures": [
+            {"check": h.check, "detail": h.detail} for h in result.hard_failures
+        ],
+        "deltas": [
+            {
+                "endpoint": d.endpoint,
+                "metric": d.metric,
+                "baseline": d.baseline,
+                "current": d.current,
+                "delta_pct": round(d.delta_pct, 2),
+            }
+            for d in result.deltas
+        ],
         "regressions": [
             {
                 "endpoint": r.endpoint,
@@ -352,20 +571,48 @@ def render_markdown(summary: dict) -> str:
             f"p99 {agg['p99_ms']:.0f}ms · fail {agg['fail_rate']*100:.2f}%",
             "",
         ])
-    regs = summary.get("regressions", [])
-    if regs:
-        lines.append(f"### ⚠️ {len(regs)} regression(s) (> {summary['threshold_pct']:.0f}%)")
-        lines.append("| Endpoint | Metric | Baseline | Current | Δ |")
-        lines.append("|---|---|---:|---:|---:|")
-        for r in regs:
-            lines.append(
-                f"| `{r['endpoint']}` | {r['metric']} | "
-                f"{r['baseline']:.0f} | {r['current']:.0f} | "
-                f"**+{r['delta_pct']:.1f}%** |"
-            )
+    # ① 硬指标先说 —— 这是唯一决定红绿的东西, 必须在最上面。
+    hard = summary.get("hard_failures", [])
+    if hard:
+        lines.append(f"### ❌ {len(hard)} 项硬指标不过 (job 因此变红)")
+        for h in hard:
+            lines.append(f"- **{h['check']}** — {h['detail']}")
         lines.append("")
     else:
-        lines.append("### ✅ No regressions vs baseline")
+        lines.append("### ✅ 硬指标全过")
+        lines.append(
+            f"（失败率 < {summary['hard_limits']['max_fail_rate']*100:.0f}%、"
+            f"整体吞吐 > 基线的 {summary['hard_limits']['min_rps_ratio_vs_baseline']*100:.0f}%、"
+            "基线里的 endpoint 都跑到了）"
+        )
+        lines.append("")
+
+    # ② 延迟部分。**全量列出**, 不只列变差的 ——
+    #    #94 就是一次 p50 全面 -35% 的跑, 被摘要写成「⚠️ 2 regressions」,
+    #    因为当时只渲染超阈值的那几条。报告本身把人误导了。
+    deltas = summary.get("deltas", [])
+    if deltas:
+        regs = summary.get("regressions", [])
+        lines.append(
+            f"### 📊 延迟 vs 基线 — **仅供参考, 不决定红绿** "
+            f"({len(regs)} 项超 {summary['threshold_pct']:.0f}%)"
+        )
+        lines.append(
+            "> 这台 runner 上, **同一份 gateway 代码**两次跑的 p50 就能差 35% "
+            "(实测: Bench Nightly #93 vs #94, 两次之间 gateway 侧零改动)。"
+            "五个 endpoint 无论干什么活延迟都一样 —— 测到的是队列, 不是代码。"
+            "所以下表用来看趋势, 不用来判成败。真修复见 BACKLOG 的 bench 饱和条目。"
+        )
+        lines.append("")
+        lines.append("| Endpoint | Metric | Baseline | Current | Δ |")
+        lines.append("|---|---|---:|---:|---:|")
+        for d in deltas:
+            mark = "⚠️ " if d["delta_pct"] > summary["threshold_pct"] else ""
+            lines.append(
+                f"| `{d['endpoint']}` | {d['metric']} | "
+                f"{d['baseline']:.0f} | {d['current']:.0f} | "
+                f"{mark}{d['delta_pct']:+.1f}% |"
+            )
         lines.append("")
     if summary.get("new_endpoints"):
         lines.append(f"### 🆕 New endpoints (not in baseline)")
@@ -452,6 +699,7 @@ def main() -> int:
 
     check_config_match(args.baseline, args.users, args.run_time)
     compare(result, args.baseline, args.threshold)
+    check_hard_limits(result, args.baseline)
     summary = render_summary(result, args.threshold, args.baseline)
 
     if args.out:
@@ -463,7 +711,25 @@ def main() -> int:
 
     print(json.dumps(summary, indent=2, ensure_ascii=False))
 
+    # 延迟漂移照说, 但不决定退出码。不出声的降级比响亮的失败更糟 —— 如果
+    # 这里静悄悄地 return 0, 下一个人会以为延迟还有人守着。
     if result.regressions:
+        print(
+            f"[advisory] {len(result.regressions)} 项延迟指标超过 "
+            f"{args.threshold*100:.0f}% —— **不拦**。"
+            "\n           这台 runner 上同代码两次跑的 p50 就能差 35%, 阈值比噪声小,"
+            "\n           报出来的东西没有信息量 (依据见 parse_results.py 顶部)。"
+            "\n           延迟趋势看 summary.md 的全量表。",
+            file=sys.stderr,
+        )
+
+    if result.hard_failures:
+        print(
+            f"[err] {len(result.hard_failures)} 项硬指标不过:",
+            file=sys.stderr,
+        )
+        for h in result.hard_failures:
+            print(f"  · [{h.check}] {h.detail}", file=sys.stderr)
         return 1
     return 0
 
