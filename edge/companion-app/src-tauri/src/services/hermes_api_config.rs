@@ -81,7 +81,8 @@ fn read_hermes_env_api_key() -> Option<String> {
     let home = crate::util::paths::home_env()
         .or_else(|_| std::env::var("USERPROFILE"))
         .ok()?;
-    let env_path = std::path::crate::services::catfish_paths::hermes_home_for(&PathBuf::from(home)).join(".env");
+    let env_path = crate::services::catfish_paths::hermes_home_for(&std::path::PathBuf::from(home))
+        .join(".env");
     let content = std::fs::read_to_string(&env_path).ok()?;
     for line in content.lines() {
         let trimmed = line.trim();
