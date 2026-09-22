@@ -52,7 +52,7 @@ for arg in "$@"; do
             exit 0
             ;;
         *)
-            err "未知参数：$arg（用 --help 看说明）"
+            err "未知参数：${arg}（用 --help 看说明）"
             exit 2
             ;;
     esac
@@ -287,7 +287,7 @@ PRIVACY_NOTE
         if [ -x "$ATTACH_SCRIPT" ]; then
             bash "$ATTACH_SCRIPT" || warn "attach 脚本执行出错（不影响别的功能）"
         else
-            warn "没找到 $ATTACH_SCRIPT，跳过"
+            warn "没找到 ${ATTACH_SCRIPT}，跳过"
         fi
     else
         ok "跳过。默认保持 local Chromium 模式（首次 navigate 30~60s，但员工 Chrome 纯私人）"

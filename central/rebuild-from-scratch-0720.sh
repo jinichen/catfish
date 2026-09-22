@@ -477,11 +477,20 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
                 echo "  ⚠ $SRC_CFG 不存在 · skip baseline"
             fi
             # b. overlay 覆盖 · 排 README (说明文档 · 客户不需要)
+            # ⚠ 9/22: 必须排掉 *.example。
+            #
+            # 那天把 overlay 清成"带说明的空模板"之后, 这里原样把模板 rsync 到
+            # config/ 上, 于是**整份 baseline 被注释文件冲掉** —— 打出来的包里
+            # models.yaml 一个 model 都没有, mcp/hub/wiki 三段上游也没了。
+            # 包照样打完、照样报成功, 装上去 gateway 起得来但什么都调不了。
+            #
+            # overlay 的语义是"跟通用不一样的地方", 而**没有定制是常态**。
+            # 所以模板存成 *.example (不参与覆盖), overlay 目录默认为空。
             if [ -d "$OVERLAY" ]; then
-                OVERLAY_COUNT=$(find "$OVERLAY" -type f ! -name 'README.md' | wc -l | tr -d ' ')
+                OVERLAY_COUNT=$(find "$OVERLAY" -type f ! -name 'README.md' ! -name '*.example' | wc -l | tr -d ' ')
                 if [ "$OVERLAY_COUNT" -gt 0 ]; then
-                    rsync -a --exclude='README.md' "$OVERLAY/" "$DST_CFG/" 2>/dev/null
-                    echo "  ✓ $svc overlay applied ($OVERLAY_COUNT files · 达华定制)"
+                    rsync -a --exclude='README.md' --exclude='*.example' "$OVERLAY/" "$DST_CFG/" 2>/dev/null
+                    echo "  ✓ $svc overlay applied ($OVERLAY_COUNT files · 客户定制)"
                 fi
             fi
         done
@@ -616,11 +625,21 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
             #   哪怕打进去的是漏了整段密钥生成的老 setup.sh, 验包照样打勾。
             #   以后每往 setup.sh 加一段**装不上就废**的逻辑, 这里补一条。
             SETUP_IN_TAR=$(tar xzf "$OUT_TAR" -O delivery/catfish-poc/setup.sh)
-            for marker in "clients.yaml 生成" "DASHSCOPE_API_KEY 是空的" "CERT_DAYS=397" \
-                          "CATFISH_SECRET_KEY 已生成"; do
+            # 9/22 更新: 上一版四个标记里有三个失效了 —— 不是 setup.sh 退化,
+            # 是那些逻辑被搬进了 tools/*.py (clients.yaml 生成 → seedgen.py,
+            # CERT_DAYS=397 → certgen.py, CATFISH_SECRET_KEY 生成 → envgen.py)。
+            #
+            # 这正好演示了上面那段注释说的"会过期": 清单认得的是写它那天的形状,
+            # 而重构会换掉形状。这次它**红得对** —— 它确实发现 setup.sh 变了,
+            # 只是原因不是退化。
+            #
+            # 新清单改成认**结构**而不是认某一句话: 三个共享工具必须都被调到。
+            # 少调一个的后果是装机跑到一半缺东西, 而那是真的不能发。
+            for marker in "tools/envgen.py" "tools/seedgen.py" "tools/certgen.py" \
+                          "DASHSCOPE_API_KEY 是空的"; do
                 MARKER_N=$((MARKER_N + 1))
                 if ! echo "$SETUP_IN_TAR" | grep -q "$marker"; then
-                    echo "  ❌ 验包: setup.sh 缺标记「$marker」→ 打进去的是老版本"; VERIFY_FAIL=1
+                    echo "  ❌ 验包: setup.sh 缺标记「${marker}」→ 打进去的是老版本"; VERIFY_FAIL=1
                 fi
             done
             if [ "$VERIFY_FAIL" = "1" ]; then

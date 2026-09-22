@@ -17,7 +17,7 @@ fi
 if [ -f "$BACKUP" ]; then
     cp "$BACKUP" "$SOUL_DST"
     echo "    已还原备份：$BACKUP -> $SOUL_DST"
-    echo "    （备份文件保留在 $BACKUP，确认无误后可手动删）"
+    echo "    （备份文件保留在 ${BACKUP}，确认无误后可手动删）"
 else
     echo "    没有备份文件，~/.hermes/SOUL.md 现在不存在"
     echo "    Hermes 会用默认 SOUL（自我介绍恢复成 'I'm Hermes'）"

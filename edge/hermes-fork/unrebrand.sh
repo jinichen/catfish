@@ -23,7 +23,7 @@ while IFS= read -r f; do
         echo "    ${GREEN}✓${RESET} $(basename "$f")"
         n=$((n + 1))
     else
-        echo "    ${YELLOW}!${RESET} 备份缺失：$backup（跳过）"
+        echo "    ${YELLOW}!${RESET} 备份缺失：${backup}（跳过）"
         fail=$((fail + 1))
     fi
 done < "$MANIFEST"

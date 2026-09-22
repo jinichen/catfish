@@ -114,7 +114,7 @@ cat <<EOF
     语气直接、不堆套话、跟你像同事讨论
 
 不满意改 SOUL.md：
-    编辑 $SOUL_SRC（catfish 仓库内，软链立即生效）
+    编辑 ${SOUL_SRC}（catfish 仓库内，软链立即生效）
     下一条消息就用新 SOUL
 
 卸载：

@@ -89,7 +89,7 @@ if [ -L "$LOCAL_BIN_LINK" ]; then
     target="$(readlink "$LOCAL_BIN_LINK")"
     case "$target" in
         *catfish*) rm -f "$LOCAL_BIN_LINK"; echo "    已删 $LOCAL_BIN_LINK -> $target";;
-        *) echo "    $LOCAL_BIN_LINK 指向 $target（非 catfish），保留";;
+        *) echo "    $LOCAL_BIN_LINK 指向 ${target}（非 catfish），保留";;
     esac
 fi
 

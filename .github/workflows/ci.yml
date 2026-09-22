@@ -101,6 +101,14 @@ jobs:
       - name: 装机脚本两平台参数一致
         run: python3 delivery/catfish-poc/test_wrapper_parity.py
 
+      # 9/22: 交付包里的 gateway 配置不能是空的。
+      #
+      # 那天真实发生过: overlay 的空模板把整份 baseline 冲掉, 打出来的包里
+      # 0 个 model, 而包照样打完报成功。装上去门户打得开、登录正常, 只有员工
+      # 发第一条消息才会发现没有模型可用。
+      - name: 交付 config 不是空的
+        run: bash scripts/check_delivery_config_not_empty.sh
+
   # ════════════════════════════════════════════════════════════
   # 1. tool-bridge Python tests
   # ════════════════════════════════════════════════════════════

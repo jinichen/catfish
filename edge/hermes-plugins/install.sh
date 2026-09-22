@@ -67,7 +67,7 @@ echo
 # 1. 前置
 step 1 "检查 Hermes 安装"
 if [ ! -d "$HERMES_AGENT_DIR" ]; then
-    err "找不到 $HERMES_AGENT_DIR。先装 Hermes 再来。"
+    err "找不到 ${HERMES_AGENT_DIR}。先装 Hermes 再来。"
     exit 1
 fi
 if [ ! -d "$HERMES_AGENT_DIR/plugins/context_engine" ]; then
@@ -95,7 +95,7 @@ ok "$DST -> $SRC"
 step 3 "自检插件可加载"
 VENV_PY="$HERMES_AGENT_DIR/venv/bin/python"
 if [ ! -x "$VENV_PY" ]; then
-    warn "找不到 $VENV_PY，跳过自检（不影响装载，只是失去 pre-flight 验证）"
+    warn "找不到 ${VENV_PY}，跳过自检（不影响装载，只是失去 pre-flight 验证）"
 else
     cd "$HERMES_AGENT_DIR"
     if "$VENV_PY" -c "
@@ -121,7 +121,7 @@ step 4 "激活 catfish-autocompress（改 ~/.hermes/config.yaml）"
 if ! confirm "把 context.engine 改成 catfish-autocompress 激活自动压缩吗？"; then
     cat <<EOF
     跳过激活。以后要启用：
-        编辑 $HERMES_CONFIG，找到或新增：
+        编辑 ${HERMES_CONFIG}，找到或新增：
             context:
               engine: catfish-autocompress
         然后重启 hermes。

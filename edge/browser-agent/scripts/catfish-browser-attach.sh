@@ -80,7 +80,7 @@ if [ "$CHROME_ALREADY_UP" = "0" ]; then
         exit 1
     fi
 
-    # 注意：我们用独立 profile 目录（$CHROME_PROFILE_DIR），所以**跟员工日常 Chrome 不冲突**。
+    # 注意：我们用独立 profile 目录（${CHROME_PROFILE_DIR}），所以**跟员工日常 Chrome 不冲突**。
     # 不需要让员工关掉日常 Chrome。两个 Chrome 实例可以并存。
     mkdir -p "$CHROME_PROFILE_DIR"
 
@@ -216,7 +216,7 @@ cat <<EOF
       · Hermes 只能看到这个专用 Chrome 里的东西
       · 你日常 Chrome 的登录态 / cookies / 书签 / 扩展**完全不被看到**
       · 要让 Hermes 能访问公司 Jira / Confluence，**在这个专用 Chrome 里单独登一次**
-        登录态会存在 $CHROME_PROFILE_DIR，下次 attach 自动复用
+        登录态会存在 ${CHROME_PROFILE_DIR}，下次 attach 自动复用
       · 这个设计比"让 Hermes 共用日常 Chrome"**更安全**
 
     首次使用建议：
