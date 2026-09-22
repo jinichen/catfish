@@ -168,15 +168,25 @@ GIT_DIRTY=$(_git status --porcelain -- central delivery || true)
 #
 # 之前靠人记得手动 bump —— 9/12 到 9/22 那十天一次都没发生, 六个镜像一直是
 # 0.1.2, 于是 docker images 里新旧包完全分不出来。现在没有"记得"这一步。
-if [ -x "$REPO_ROOT/scripts/central_version.sh" ]; then
-    echo ""
-    echo "--- 0.pre · 生成版本号 ---"
-    bash "$REPO_ROOT/scripts/central_version.sh" --write
-    CENTRAL_VERSION="$(tr -d '[:space:]' < "$REPO_ROOT/central/VERSION")"
-else
-    echo "⚠ 找不到 scripts/central_version.sh · 沿用 compose 里现有的 tag"
-    CENTRAL_VERSION="(未生成)"
+# ⚠ 缺了就**停**, 不 warn 一声继续。
+#
+# 第一版写的是 `if [ -x ... ]; then ... else warn; fi` —— 那等于给自己留了
+# 一条"静默打出旧 tag"的路: 脚本没找到 / 权限位丢了, 包照打, tag 还是上次的,
+# 而那正是这套机制存在的全部理由。一个可以被跳过的必要步骤不是必要步骤。
+#
+# 用 -f 不用 -x: 走 `bash <脚本>` 不需要执行位, 而执行位在某些 checkout
+# 方式下会丢 —— 拿它当判据会造成"在我这儿好好的"。
+if [ ! -f "$REPO_ROOT/scripts/central_version.sh" ]; then
+    echo "❌ 找不到 $REPO_ROOT/scripts/central_version.sh"
+    echo "   版本号由它生成。没有它就只能打出一个 tag 跟内容对不上的包 ——"
+    echo "   那种包装完之后没人分得清是哪一版, 不如不打。"
+    exit 1
 fi
+echo ""
+echo "--- 0.pre · 生成版本号 ---"
+bash "$REPO_ROOT/scripts/central_version.sh" --write
+CENTRAL_VERSION="$(tr -d '[:space:]' < "$REPO_ROOT/central/VERSION")"
+[ -n "$CENTRAL_VERSION" ] || { echo "❌ 版本号生成了但 central/VERSION 是空的"; exit 1; }
 
 # ── 前置检查: Docker daemon 必须活着 (P3.5.80 · 7/28) ──────────────
 #
