@@ -383,11 +383,23 @@ mod tests {
                 "host",
                 "password_present",
                 "port",
+                "retention",
                 "smtp_host",
                 "smtp_port",
                 "user",
             ],
             "状态的字段集合变了 —— 新字段会不会把秘密带给前端?"
+        );
+        // 9/21 加 retention 时这条又红了一次 (be7deb1 加了字段, 9/22 才补到这里)。
+        // 想过: 它是四个固定字符串之一 (immediate/1w/2w/never), 不是秘密。而且
+        // 它是整套邮件功能里**唯一不可逆**的设置 —— 员工必须能在界面上看到当前
+        // 到底选的是哪一档, 不然"服务器上邮件怎么没了"没法自查。
+        assert!(
+            matches!(
+                object["retention"].as_str(),
+                Some("immediate" | "1w" | "2w" | "never")
+            ),
+            "retention 只能是四档之一, 不该夹带别的东西"
         );
         // 9/18 加 smtp_host / smtp_port 时这条红了, 正是它该干的事。停下来想过:
         // 这两个不是秘密 (主机名和端口号), 而且员工**必须**看得见回复会从哪台
