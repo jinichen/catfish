@@ -70,6 +70,32 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 9/12: 以前 tag 在这个脚本里写死两处 (identity 生成 admin hash / 关键镜像清单),
 # gateway 0.1.0→0.1.1 那次只改了 compose, 这里没跟 —— 就是 build-package.sh 头部
 # 复盘说的漂移。build-package.sh 也是从 compose 读 tag, 现在三边只剩一个源头。
+# 9/22: 先确认文件在。不查的话 grep 会直接把
+#     grep: /path/docker-compose.yml: No such file or directory
+# 甩给现场 —— 那行字既不说明该干什么, 也不像是我们的脚本报的。
+# (setup.ps1 那边一直有这个检查, 是 sh 这边漏了。)
+#
+# 最常见的成因是**把补丁包解到了空目录**: 补丁只带 setup.sh / setup.ps1 /
+# tools/, 完整交付包才有 compose、.env.example 和 images/。
+if [ ! -f "$SCRIPT_DIR/docker-compose.yml" ]; then
+    echo "❌ 这个目录里没有 docker-compose.yml: $SCRIPT_DIR"
+    echo ""
+    if [ -d "$SCRIPT_DIR/tools" ] && [ ! -d "$SCRIPT_DIR/images" ]; then
+        echo "   看目录内容, 这里只有装机脚本补丁, 没有完整交付包。"
+        echo "   补丁是**覆盖**用的, 要解到已经装过的目录上, 不是单独解一份。"
+        echo ""
+        echo "   正确顺序:"
+        echo "     1. 先解完整包:  tar xzf catfish-poc-FULL-<arch>-<date>.tar.gz"
+        echo "     2. 再解补丁到同一层: tar xzf catfish-setup-patch-<date>.tar.gz"
+        echo "     3. cd delivery/catfish-poc && bash setup.sh"
+    else
+        echo "   请在解包后的 delivery/catfish-poc/ 目录里运行。"
+        echo "   那个目录里应该同时有 docker-compose.yml / .env.example / images/。"
+    fi
+    echo ""
+    exit 1
+fi
+
 compose_images() {
     grep -E '^[[:space:]]+image:[[:space:]]+[^[:space:]]+' "$SCRIPT_DIR/docker-compose.yml" \
         | awk '{print $2}'
