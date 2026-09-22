@@ -16,7 +16,7 @@
 | **部署配置** | `delivery/<客户>-<阶段>/` | docker-compose · config-overlay · setup.sh · 部署 SOP |
 | **业务资产** | **`projects/<项目>/`** (本层) | 产业规划 · 申报材料 · 知识库 schema · 业务 skill |
 
-`delivery/` 已存在（`dahua-poc/` 是活例子），管"怎么把鲶鱼装到客户环境"。
+`delivery/` 已存在（`catfish-poc/` 是活例子），管"怎么把鲶鱼装到客户环境"。
 本层管"客户业务上要做什么、怎么做"。
 
 **不建分支**：分支是给代码演进用的（feature/hotfix），客户项目长期分支必然与 main 分叉，merge 地狱。
@@ -56,7 +56,7 @@ projects/
 | PPT 源码 + 脱敏输出 | 含客户机密的版本 |
 
 真数据走 `~/.catfish/` （员工本机）或客户自己的存储。
-跟 `delivery/dahua-poc/.gitignore` 同思路 — **生成产物和敏感内容一律不进 git，source of truth 才 track**。
+跟 `delivery/catfish-poc/.gitignore` 同思路 — **生成产物和敏感内容一律不进 git，source of truth 才 track**。
 
 ### 2 · 通用能力沉淀回 catfish
 

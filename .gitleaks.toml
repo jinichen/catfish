@@ -35,7 +35,7 @@ paths = [
   #
   # ⚠ 9/19: 这里原来是 '''docs/.*\.md$''' —— 看着像"只豁免顶层 docs/",
   # 实际上 gitleaks 的 path regex 是**子串匹配**, 于是
-  # `delivery/dahua-poc/docs/达华服务端一键部署SOP.md` 也命中了。
+  # `delivery/catfish-poc/docs/达华服务端一键部署SOP.md` 也命中了。
   # 结果: 那份文档里两个**真值**
   #     PG_PASSWORD=Dahua_PG_…   SKILLS_HUB_TOKEN=aad226ad…(64 hex)
   # 被这条豁免掉, 夜扫一直看不见, 一直躺在 public 仓库里。

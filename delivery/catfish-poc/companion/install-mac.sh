@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 达华员工 Mac 装 Companion · 一键脚本
+# 员工 Mac 装 Companion · 一键脚本
 #
 # 用法:
 #   bash install-mac.sh
@@ -62,8 +62,8 @@ echo "════════════════════════�
 echo "✅ 装完 · Companion 起来了"
 echo "════════════════════════════════════════════"
 echo "下一步 (你手动做):"
-echo "  1. Onboarding · 输达华 gateway/identity URL"
+echo "  1. Onboarding · 输客户 gateway/identity URL"
 echo "  2. SSO 登录"
 echo "  3. 发 chat 'hi' verify"
 echo ""
-echo "分发 SOP: 达华POC-3台mac-分发SOP.md"
+echo "分发 SOP: Companion-Mac分发SOP.md"

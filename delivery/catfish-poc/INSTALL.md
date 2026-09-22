@@ -8,7 +8,7 @@
 
 | 文件 | 给谁 | 说明 |
 |---|---|---|
-| `dahua-poc-FULL-<arch>-20260728.tar.gz` | 服务器 | 一体包,含全部镜像 + 安装脚本,不依赖外网 |
+| `catfish-poc-FULL-<arch>-20260728.tar.gz` | 服务器 | 一体包,含全部镜像 + 安装脚本,不依赖外网 |
 | `Catfish-Companion-0.20.0-aarch64.dmg` | 员工机器 | 桌面端,**当前仅 Apple Silicon**;Intel Mac 需另 build x64 dmg |
 
 架构选择:x86_64 服务器用 `amd64`,ARM 服务器(鲲鹏 / Graviton / Apple Silicon)用 `arm64`。选错装不起来。
@@ -38,8 +38,8 @@ sudo ss -tlnp | grep ':443'
 ## 三、服务端安装
 
 ```bash
-tar xzf dahua-poc-FULL-amd64-20260728.tar.gz
-cd delivery/dahua-poc/
+tar xzf catfish-poc-FULL-amd64-20260728.tar.gz
+cd delivery/catfish-poc/
 
 SERVER_IP=<服务器内网IP> ENABLE_HTTPS=1 bash setup.sh
 ```
@@ -121,7 +121,7 @@ bash verify-login.sh
 
 ### 2. 装证书(必做)
 
-把服务器上 `delivery/dahua-poc/certs/ca.pem` 发给员工,放到:
+把服务器上 `delivery/catfish-poc/certs/ca.pem` 发给员工,放到:
 
 ```
 ~/.catfish/server-ca.pem
@@ -170,7 +170,7 @@ oidc:
 服务器证书 **397 天**到期。到期前在服务器上:
 
 ```bash
-cd <装机目录>/delivery/dahua-poc/
+cd <装机目录>/delivery/catfish-poc/
 SERVER_IP=<IP> ENABLE_HTTPS=1 bash setup.sh
 ```
 
@@ -199,7 +199,7 @@ SERVER_IP=<新IP> ENABLE_HTTPS=1 bash setup.sh
 
 ```bash
 # 传新的 FULL 包，解开覆盖
-cd <装机目录>/delivery/dahua-poc/
+cd <装机目录>/delivery/catfish-poc/
 UPGRADE=1 SERVER_IP=<IP> ENABLE_HTTPS=1 bash setup.sh
 ```
 

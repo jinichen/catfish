@@ -229,12 +229,12 @@ mv "$KEPT_V" "$TMPFILE"
 #   · 一样打印出来, 不静默消失
 #   · 只对**具体文件**生效, 不接受目录或通配
 NAMED_EXEMPT_LIST="
-delivery/dahua-poc/setup.sh
+delivery/catfish-poc/setup.sh
 projects/daosheng/docs/build-规划-v2.js
 "
 # 理由 (鸿波 8/15 拍板「就不要拆了」):
 #
-#   delivery/dahua-poc/setup.sh (842)
+#   delivery/catfish-poc/setup.sh (842)
 #     交付给客户 IT 的**单文件**一键装机脚本 —— 探 IP / 生成 .env / 装 image /
 #     签证书 / docker compose up 一条命令走完。拆成几个 source 进来的子脚本
 #     就破坏了"拿到 tar 敲一条命令"这件事本身, 而那正是它存在的理由。

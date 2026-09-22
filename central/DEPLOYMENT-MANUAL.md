@@ -125,14 +125,14 @@ docker images | grep -E 'catfish|postgres|nginx'
 
 ```bash
 bash delivery/build-package.sh both      # 或 amd64 / arm64
-# 产出 ~/Downloads/dahua-poc-FULL-<arch>-<日期>.tar.gz, 含镜像 + compose + setup.sh + 文档
+# 产出 ~/Downloads/catfish-poc-FULL-<arch>-<日期>.tar.gz, 含镜像 + compose + setup.sh + 文档
 ```
 
 以下是它内部等价的 `docker save` 清单, 仅供理解, **不要手动执行**:
 
 ```bash
 docker save -o ~/catfish-all-images.tar \
-    $(grep -E '^\s+image:' delivery/dahua-poc/docker-compose.yml | awk '{print $2}') \
+    $(grep -E '^\s+image:' delivery/catfish-poc/docker-compose.yml | awk '{print $2}') \
     nginx:1.27-alpine
 
 ls -lh ~/catfish-all-images.tar

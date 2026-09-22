@@ -59,6 +59,14 @@ jobs:
         continue-on-error: true
         run: bash scripts/check_file_sizes.sh --strict
 
+      # 9/22: 交付目录里不许出现客户名。
+      #
+      # 这条**不挂 continue-on-error** —— 跟上面那条不一样, 它没有存量问题
+      # (9/22 已经清干净并验证过), 而且失效的代价是把 A 客户的现场记录连同
+      # 包一起发给 B 客户。那种错误发出去就收不回来, 值得让 PR 当场红。
+      - name: 交付目录不带客户名
+        run: bash scripts/check_no_customer_names_in_delivery.sh
+
   # ════════════════════════════════════════════════════════════
   # 1. tool-bridge Python tests
   # ════════════════════════════════════════════════════════════

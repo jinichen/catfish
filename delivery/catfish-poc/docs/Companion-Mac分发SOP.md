@@ -1,6 +1,6 @@
-# 达华 POC · 3 台 mac 分发 SOP —— **这份是旧的, 别照着做**
+# POC · 3 台 mac 分发 SOP —— **这份是旧的, 别照着做**
 
-**活的那份在**: [`delivery/dahua-poc/companion/达华POC-3台mac-分发SOP.md`](../companion/达华POC-3台mac-分发SOP.md)
+**活的那份在**: [`delivery/catfish-poc/companion/Companion-Mac分发SOP.md`](../companion/Companion-Mac分发SOP.md)
 
 ---
 
@@ -11,11 +11,11 @@
 
 | 路径 | 版本 | 状态 |
 |------|------|------|
-| `delivery/dahua-poc/companion/…` | v0.20.0 | ✅ 在维护 |
+| `delivery/catfish-poc/companion/…` | v0.20.0 | ✅ 在维护 |
 | `edge/companion-app/scripts/…` | v0.18.1 | 空壳指针 (8/1 处理) |
-| `delivery/dahua-poc/docs/…`（本文件） | v0.18.1 | 空壳指针 (8/8 处理) |
+| `delivery/catfish-poc/docs/…`（本文件） | v0.18.1 | 空壳指针 (8/8 处理) |
 
-三份都叫「达华POC-3台mac-分发SOP.md」, 编辑器里按文件名搜会同时跳出来,
+三份都叫「Companion-Mac分发SOP.md」, 编辑器里按文件名搜会同时跳出来,
 谁也看不出哪份是活的。
 
 **照这份走会出什么事**: 它里面写着给员工装

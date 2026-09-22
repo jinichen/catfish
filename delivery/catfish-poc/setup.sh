@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 达华 POC · Catfish 中央服务一键装机脚本
+# Catfish 中央服务一键装机脚本
 #
 # 用途:
 #   客户 IT 拿到 delivery tar 后 · 一条命令完成:
@@ -23,7 +23,7 @@
 #   REGEN_ENV_ONLY=1 SERVER_IP=192.168.100.50 bash setup.sh
 #
 #   # 升级镜像 (保留现有 .env / 数据 / 证书, 不从 .env.example 覆盖)
-#   UPGRADE=1 IMAGE_TAR=./images/dahua-poc-central-amd64-<date>.tar.gz \
+#   UPGRADE=1 IMAGE_TAR=./images/catfish-poc-central-amd64-<date>.tar.gz \
 #     SERVER_IP=192.168.100.50 ENABLE_HTTPS=1 bash setup.sh
 #
 # 前置:
@@ -138,7 +138,7 @@ set_env_value() {
 }
 
 echo "═══════════════════════════════════════════════════════"
-echo "  Catfish 中央服务一键装机 · 达华 POC"
+echo "  Catfish 中央服务一键装机"
 echo "═══════════════════════════════════════════════════════"
 
 # ── 1. 探测 / 确认 server IP ─────────────────────────────
@@ -164,7 +164,7 @@ fi
 
 # ── 2. 从 .env.example 生成 .env ──────────────────────────
 if [ ! -f .env.example ]; then
-    echo "❌ 找不到 .env.example · 请确认在 delivery/dahua-poc/ 目录跑"
+    echo "❌ 找不到 .env.example · 请确认在 delivery/catfish-poc/ 目录跑"
     exit 1
 fi
 
@@ -694,7 +694,7 @@ if [ -n "$MISSING_IMG" ]; then
     echo ""
     echo "❌ 本地缺 image ·$MISSING_IMG"
     echo "   fix · 指定 IMAGE_TAR 或放 tar 到 images/ 目录:"
-    echo "     IMAGE_TAR=./images/dahua-poc-central-<arch>-<date>.tar.gz bash setup.sh"
+    echo "     IMAGE_TAR=./images/catfish-poc-central-<arch>-<date>.tar.gz bash setup.sh"
     echo "   (内网机不能连 docker.io · 必须本地 load)"
     exit 1
 fi
@@ -815,14 +815,14 @@ else
     echo "⚠ 待查 · 看 docker exec catfish-web cat /usr/share/nginx/html/config.js"
 fi
 
-# ── gateway 到其它容器的反代 (P3.5.84 · 7/29 达华现场) ──────────────
+# ── gateway 到其它容器的反代 (P3.5.84 · 7/29 现场) ──────────────
 #
 # gateway 把这几类请求转发给同网内的别的容器. 它们的上游地址默认写的是
 # 127.0.0.1 —— 开发机上四个服务同机, 这个默认恰好对; 容器里 127.0.0.1 是
 # gateway 自己, 于是全部 502.
 #
 # 为什么必须单独验: 这条链路挂了**不影响登录、不影响聊天、门户照常打开**,
-# 只有中央门户的「系统管理」页会显示 "不可达". 7/29 达华装完才被人点开发现,
+# 只有中央门户的「系统管理」页会显示 "不可达". 7/29 现场装完才被人点开发现,
 # 而错误的默认值从第一版就在, 只是没人验过。
 #
 # 这里用 401 也算通: 没带 token 时上游返 401 说明**网络这一跳是通的**,

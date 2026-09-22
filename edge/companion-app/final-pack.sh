@@ -27,8 +27,8 @@ exit_deprecated
 set -uo pipefail
 
 TS=$(date +%Y%m%d)
-STAGING=/tmp/dahua-final-$TS
-OUT=~/catfish-companion-dahua-$TS-FINAL.tar.gz
+STAGING=/tmp/catfish-companion-final-$TS
+OUT=~/catfish-companion-$TS-FINAL.tar.gz
 
 echo "════════════════════════════════════════════"
 echo " 达华 POC 最终打包 · $TS"
@@ -55,9 +55,9 @@ if [[ -z "$X64_APP" ]]; then
     echo ""
     echo "  → 若你只需 arm64 (M-series mac) · 只打 arm64 · 手工跑:"
     echo "    ARM64_APP='$ARM64_APP'"
-    echo "    mkdir -p /tmp/dahua-arm-only/arm64"
-    echo "    cp -R \"\$ARM64_APP\" /tmp/dahua-arm-only/arm64/"
-    echo "    cd /tmp && tar -czf ~/catfish-companion-dahua-arm64-only.tar.gz dahua-arm-only/"
+    echo "    mkdir -p /tmp/catfish-companion-arm-only/arm64"
+    echo "    cp -R \"\$ARM64_APP\" /tmp/catfish-companion-arm-only/arm64/"
+    echo "    cd /tmp && tar -czf ~/catfish-companion-arm64-only.tar.gz catfish-companion-arm-only/"
     exit 1
 fi
 
@@ -194,4 +194,4 @@ echo "════════════════════════�
 tar -tzf "$OUT" | head -10
 echo ""
 echo "→ scp 达华现场:"
-echo "  scp $OUT dahua@<ip>:/tmp/"
+echo "  scp $OUT <user>@<服务器 IP>:/tmp/"

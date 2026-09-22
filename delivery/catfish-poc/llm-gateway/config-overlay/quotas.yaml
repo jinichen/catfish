@@ -1,0 +1,38 @@
+# ============================================================
+# llm-gateway quotas overlay —— 每个客户一份, 默认空
+# ============================================================
+#
+# 空 = 用 central/llm-gateway/config/quotas.yaml 的通用额度。
+# 只有这家客户要按自己的部门/人头改额度时才写。
+#
+# 9/22 之前这里是某一家客户的真实部门表 (研发部/财务部/市场部/人力资源部)
+# 和他们谈定的额度。那份还带着一处自相矛盾: defaults 里给研发部
+# 30000000, overrides 里又把研发部设成 0 —— overrides 后生效, 等于研发部
+# 被停掉了。不知道是有意还是手滑, 但无论哪种, 都不该跟着包发给下一家。
+#
+# ⚠ 部门名必须跟 identity 里 users.yaml 的 department 字段**逐字一致**,
+#    包括中英文。写"研发部"而用户填的是 "engineering", 这条限额就静默不
+#    生效 —— 不报错, 只是永远匹配不上。配完请拿真实用户验一次。
+#
+# ── 写法示例 (需要时取消注释, 数字按客户实际谈定的填) ─────────
+#
+# defaults:
+#   per_user:
+#     tokens_per_minute: <每人每分钟上限>
+#     tokens_per_day: <每人每天上限>
+#   per_model:
+#     <models.yaml 里的 model name>:
+#       tokens_per_day: <这个模型每天的总上限>
+#   per_department:
+#     <部门名, 跟 users.yaml 的 department 逐字一致>:
+#       tokens_per_day: <该部门每天上限>
+#
+# overrides:
+#   users:
+#     <邮箱>:
+#       tokens_per_minute: <覆盖值>
+#       tokens_per_day: <覆盖值>
+#   departments:
+#     <部门名>:
+#       tokens_per_day: <覆盖值 · 填 0 等于停用该部门, 想清楚再填>
+# ============================================================

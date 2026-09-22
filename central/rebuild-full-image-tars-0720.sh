@@ -19,7 +19,7 @@
 #
 # 睡醒验:
 #   grep -E "===|✅|❌" /tmp/full-rebuild-0720.log
-#   ls -lh ~/Downloads/catfish-达华POC-0715/dahua-poc-central-*-20260720.tar.gz
+#   ls -lh ~/Downloads/catfish-达华POC-0715/catfish-poc-central-*-20260720.tar.gz
 
 set -euo pipefail
 
@@ -27,12 +27,12 @@ CENTRAL="$HOME/person_task/catfish/central"
 DELIVERY="$HOME/Downloads/catfish-达华POC-0715"
 
 # 源 (7/18 老 tar · 拿来 load 出 postgres/nginx/hub/web/mcp-registry/wiki-hub 底子)
-ARM_SRC="$DELIVERY/dahua-poc-central-arm64-20260718.tar.gz"
-AMD_SRC="$DELIVERY/dahua-poc-central-amd64-20260718.tar.gz"
+ARM_SRC="$DELIVERY/catfish-poc-central-arm64-20260718.tar.gz"
+AMD_SRC="$DELIVERY/catfish-poc-central-amd64-20260718.tar.gz"
 
 # 目标 (今天 7/20 打的 · 覆盖累积改动)
-ARM_OUT="$DELIVERY/dahua-poc-central-arm64-20260720.tar.gz"
-AMD_OUT="$DELIVERY/dahua-poc-central-amd64-20260720.tar.gz"
+ARM_OUT="$DELIVERY/catfish-poc-central-arm64-20260720.tar.gz"
+AMD_OUT="$DELIVERY/catfish-poc-central-amd64-20260720.tar.gz"
 
 cd "$CENTRAL"
 
@@ -109,7 +109,7 @@ echo "=== DONE ==="
 ls -lh "$ARM_OUT" "$AMD_OUT"
 echo ""
 echo "达华 IT 现场用法:"
-echo "  gunzip -c dahua-poc-central-<ARCH>-20260720.tar.gz | docker load"
+echo "  gunzip -c catfish-poc-central-<ARCH>-20260720.tar.gz | docker load"
 echo "  cd /path/to/catfish/central && docker compose up -d"
 echo ""
 echo "累积 fix:"

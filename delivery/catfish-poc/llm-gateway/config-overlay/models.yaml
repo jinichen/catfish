@@ -1,0 +1,65 @@
+# ============================================================
+# llm-gateway models overlay —— 每个客户一份, 默认空
+# ============================================================
+#
+# 这个文件里放的是**这家客户跟通用 baseline 不一样的地方**, 打包时
+# 覆盖到 config/models.yaml 上 (见同目录 README.md)。
+#
+# ⚠ 默认是空的, 而且**空是正常状态**。
+#
+#   空 overlay  → 客户拿到 central/llm-gateway/config/models.yaml 的
+#                 通用 6 个 model, 直接能用。
+#   非空 overlay → 只列出要改的部分, 不用抄整份。
+#
+# 9/22 之前这里躺着某一家客户的真实配置 (单 model + 他们的上游),
+# 于是每打一个包都会把那家的选择带给下一家。现在清空了。
+#
+# ── 什么该写进来 ────────────────────────────────────────────
+#
+# 只有**这家客户特有**的东西:
+#   · 客户内网自建的推理服务 (vLLM / Xinference / 厂商一体机)
+#   · 客户自己采购的云上模型 (跟通用清单里那几个不同的)
+#   · 客户要求砍掉通用清单里的某些 model
+#
+# ── 什么不该写进来 ──────────────────────────────────────────
+#
+# 任何 docker 部署都需要的东西不属于这里。典型反例是
+# mcp_registry / skills_hub / wiki_hub 那三段 upstream_url ——
+# 它们 9/22 从这里搬回了 central/llm-gateway/config/models.yaml。
+# 原因见那边的注释: 放在 overlay 里意味着换一家客户就会漏掉,
+# 而漏掉的症状 (「系统管理」页显示不可达) 没人会第一时间点开。
+#
+# 判据: 问一句「下一家客户是不是也需要这条?」
+#       是 → 进 central 的 baseline; 只有这家要 → 才写在这里。
+#
+# ── 写法示例 (需要时取消注释, 按实际填) ──────────────────────
+#
+# version: 1
+#
+# models:
+#
+#   - name: catfish-internal-<给这个模型起的名字>
+#     tier: internal
+#     display_name: "界面上显示给员工看的名字"
+#     mode: chat
+#     default: true            # roles.yaml 的 chat_default 要指向同名 model
+#
+#     upstream:
+#       model: openai/<上游模型名>          # LiteLLM 的 provider/model 写法
+#       api_base: http://<客户内网 IP>:<port>/v1
+#       api_key_env: INTERNAL_LLM_KEY      # 真 key 从 .env 读, 不写在这里
+#       timeout: 180
+#
+#     context_window: <上游文档给的数, 别猜>
+#     max_output_tokens: <上游单次上限, 超了上游直接返 400>
+#     supports_tool_use: true
+#     supports_streaming: true
+#     supports_vision: false               # 上游返 vision-not-supported 就是 false
+#     recommended_for: [general, chat, tool_use]
+#     cost_tier: internal
+#
+#     # fallback 配不配是个取舍, 不是默认该配:
+#     # 不配 → 上游挂了员工立刻看到报错, IT 知道去查哪台机器
+#     # 配了 → 自动切备份, 但"主力其实一直是挂的"会被盖住很久
+#     # POC 期建议不配。
+# ============================================================

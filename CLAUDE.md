@@ -55,7 +55,7 @@
   人就会往里塞东西。点名的成本是加一项就得改那个文件, 改了 review 里要说清楚。
 
   当前 2 项 (鸿波 8/15 拍板):
-  `delivery/dahua-poc/setup.sh` (交付给客户 IT 的单文件装机脚本, 拆了就破坏
+  `delivery/catfish-poc/setup.sh` (交付给客户 IT 的单文件装机脚本, 拆了就破坏
   "一条命令"这件事本身) 和 `projects/daosheng/docs/build-规划-v2.js`
   (投资人 deck 生成器, 九成行数是文案字符串, 内容即代码)。
 

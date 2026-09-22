@@ -8,7 +8,7 @@
 #   - buildx builder create 好 · `docker buildx use catfishbuilder`
 #
 # 输出:
-#   ~/person_task/catfish/delivery/dahua-poc/images/
+#   ~/person_task/catfish/delivery/catfish-poc/images/
 #     catfish-{identity,gateway,skills-hub,web,mcp-registry,wiki-hub}-<version>-<arch>.tar
 #     postgres-16-alpine-<arch>.tar
 #
@@ -24,7 +24,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."   # 到 catfish/central/
 
-DELIVERY_ROOT="${HOME}/person_task/catfish/delivery/dahua-poc"
+DELIVERY_ROOT="${HOME}/person_task/catfish/delivery/catfish-poc"
 IMG_DIR="${DELIVERY_ROOT}/images"
 mkdir -p "$IMG_DIR"
 
@@ -135,4 +135,4 @@ du -sh "$IMG_DIR"
 echo ""
 echo "分发 tar (合并成一个包给 IT):"
 echo "  cd $DELIVERY_ROOT"
-echo "  tar czf ~/dahua-poc-central-\$(date +%Y%m%d).tar.gz images docker-compose.yml .env.example"
+echo "  tar czf ~/catfish-poc-central-\$(date +%Y%m%d).tar.gz images docker-compose.yml .env.example"

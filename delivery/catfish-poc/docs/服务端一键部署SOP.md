@@ -1,17 +1,17 @@
-# 鲶鱼 Catfish · 达华服务端一键部署 SOP
+# 鲶鱼 Catfish · 服务端一键部署 SOP
 
 **版本**: v0.18.1 (2026-07-18 · 7/18 code fix 全 mirror)
-**目标读者**: 达华 IT 部署人员 (Linux / macOS / Windows Docker Desktop 均可)
+**目标读者**: 客户 IT 部署人员 (Linux / macOS / Windows Docker Desktop 均可)
 **预计时长**: 首次 20-40 分钟 (含 image load + 配置 + 首次启动 warm up)
 
 **你会拿到 2 个 tar.gz** (根据服务器 CPU 架构选一个):
 
 | 文件 | 大小 | 架构 | 内容 |
 |------|------|------|------|
-| `dahua-poc-central-amd64-<date>.tar.gz` | ~601 MB | x86_64 (99% 政企/云服务器) | 7 image + docker-compose.yml + .env.example + README.md |
-| `dahua-poc-central-arm64-<date>.tar.gz` | ~604 MB | aarch64 (鲲鹏/ARM) | 同上 · arm64 image |
+| `catfish-poc-central-amd64-<date>.tar.gz` | ~601 MB | x86_64 (99% 政企/云服务器) | 7 image + docker-compose.yml + .env.example + README.md |
+| `catfish-poc-central-arm64-<date>.tar.gz` | ~604 MB | aarch64 (鲲鹏/ARM) | 同上 · arm64 image |
 
-**员工 Companion dmg/msi 分开分发** (见 `达华POC-3台mac-分发SOP.md` · 员工机独立分发到 3 台 mac).
+**员工 Companion dmg/msi 分开分发** (见 `Companion-Mac分发SOP.md` · 员工机独立分发到 3 台 mac).
 
 **7/18 关键 fix 已 mirror 到本 bundle**:
 - ✅ Task #61: `CATFISH_ENV=prod` (docker-compose.yml default 已 prod)
@@ -128,10 +128,10 @@ vim .env       # 或 nano/notepad
 # 1. Postgres 密码 (16+ 位强密码 · 大小写+数字+符号)
 PG_PASSWORD=CHANGE_ME_TO_STRONG_PASSWORD
 
-# 2. 内网 LLM API key (达华内网 qwen 平台申请)
-INTERNAL_LLM_KEY=达华内网qwen平台的真key
+# 2. 内网 LLM API key (客户内网 qwen 平台申请)
+INTERNAL_LLM_KEY=客户内网qwen平台的真key
 
-# 3-5. 内网 LLM 3 个端点 URL (换成达华内网真实 IP:port)
+# 3-5. 内网 LLM 3 个端点 URL (换成客户内网真实 IP:port)
 INTERNAL_LLM_BASE_QWEN_MAIN=http://10.10.40.102:32730/openapi/xxx/v1
 INTERNAL_LLM_BASE_QWEN_VISION=http://10.10.40.102:32730/openapi/yyy/v1
 INTERNAL_LLM_BASE_BGE_M3=http://10.10.40.102:32730/openapi/zzz/v1
@@ -163,7 +163,7 @@ IDENTITY_WORKERS=2             # 4 vCPU 用 2, 8 vCPU 改 4
 # Linux 生产 (Ubuntu/CentOS) → 换成服务器 IP 或域名
 CATFISH_OIDC_ISSUER=https://<你的服务器 IP>
 # 或若有域名 + SSL 反代
-CATFISH_OIDC_ISSUER=https://catfish.dahua.com/sso
+CATFISH_OIDC_ISSUER=https://catfish.example.com/sso
 ```
 
 ### Step 6 · 建 identity 员工 seed (users.yaml) (5-10 分钟)
@@ -178,8 +178,8 @@ sleep 20    # 等 postgres init + identity migrate
 **生成 admin 密码 hash**:
 
 ```bash
-# 换成你的强密码 (给达华管理员登录用)
-docker compose exec identity python -c "from catfish_identity.users import hash_password; print(hash_password('Dahua_Admin_2026!'))"
+# 换成你的强密码 (给管理员登录用)
+docker compose exec identity python -c "from catfish_identity.users import hash_password; print(hash_password('改成你的强密码'))"
 ```
 
 **输出**类似:
@@ -200,9 +200,9 @@ vim identity-server/config/users.yaml
 
 ```yaml
 users:
-  - email: admin@dahua.com
+  - email: admin@example.com
     password_hash: $2b$12$abcXXXXXX...     # ← 粘贴 hash
-    name: 达华管理员
+    name: 管理员
     department: IT
     role: sysadmin
 ```
@@ -282,7 +282,7 @@ Identity URL:    http://<服务器 IP>:8998
 
 **Step 2 · 登录**:
 
-- 邮箱: `admin@dahua.com`
+- 邮箱: `admin@example.com`
 - 密码: 你在 Step 6 用的强密码
 - 点 "登录" · 浏览器打开 identity 登录页 · 再输一次同样账号提交
 
@@ -301,7 +301,7 @@ docker compose exec identity python -c "from catfish_identity.users import hash_
 # psql insert
 docker compose exec postgres psql -U catfish -d catfish -c "
 INSERT INTO users (email, password_hash, name, department, tier, role, managed_departments)
-VALUES ('zhang.san@dahua.com', '刚生成的hash', '张三', '研发', 'employee', 'employee', '[]'::jsonb);
+VALUES ('zhang.san@example.com', '刚生成的hash', '张三', '研发', 'employee', 'employee', '[]'::jsonb);
 "
 ```
 
@@ -375,7 +375,7 @@ docker compose logs identity | grep "users 加载"
 ```bash
 # 建 nginx.conf (从 example)
 cp web/nginx.conf.example nginx.conf
-vim nginx.conf           # 改 server_name 到达华域名
+vim nginx.conf           # 改 server_name 到客户域名
 
 # 建 certs 目录 + 放 cert.pem + key.pem (Let's Encrypt certbot 生成)
 mkdir certs
@@ -469,7 +469,7 @@ SELECT COUNT(*) FROM users_audit;                         # 用户操作审计�
 
 # 改员工密码
 UPDATE users SET password_hash='$2b$12$xxx', must_change_password=TRUE
-WHERE email='zhang.san@dahua.com';
+WHERE email='zhang.san@example.com';
 
 # 退出
 \q

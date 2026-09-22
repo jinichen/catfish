@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# BL-DAHUA-APP-PACK (7/19): x64 dmg 卡 bundle_dmg.sh · 直接打 .app 分发 · 员工 cp 装.
+# BL-COMPANION-APP-PACK (7/19): x64 dmg 卡 bundle_dmg.sh · 直接打 .app 分发 · 员工 cp 装.
 #
-# 用法: bash ~/person_task/catfish/edge/companion-app/pack-dahua-app-based.sh
+# 用法: bash ~/person_task/catfish/edge/companion-app/pack-companion-app-based.sh
 #
 # 内含:
-#   catfish-companion-dahua-YYYYMMDD/
+#   catfish-companion-YYYYMMDD/
 #     arm64/Catfish Companion.app          (M-series mac)
 #     arm64/Catfish Companion_0.18.0_aarch64.dmg  (如已好)
 #     x64/Catfish Companion.app            (Intel mac)
@@ -36,10 +36,10 @@ exit_deprecated
 set -uo pipefail
 
 BUILD_DIR=~/person_task/catfish/edge/companion-app/src-tauri/target
-DELIVERY_DIR=~/person_task/catfish/delivery/dahua-poc/companion
+DELIVERY_DIR=~/person_task/catfish/delivery/catfish-poc/companion
 TS=$(date +%Y%m%d)
-STAGING=/tmp/catfish-dahua-$TS
-OUT=~/catfish-companion-dahua-$TS.tar.gz
+STAGING=/tmp/catfish-companion-$TS
+OUT=~/catfish-companion-$TS.tar.gz
 
 echo "════════════════════════════════════════════"
 echo " 达华 POC · .app 分发 · $TS"
@@ -240,5 +240,5 @@ echo "→ tar 目录预览:"
 tar -tzf "$OUT" | head -15
 echo ""
 echo "→ 分发到达华现场:"
-echo "  scp $OUT dahua-it@<ip>:/tmp/"
+echo "  scp $OUT <user>@<服务器 IP>:/tmp/"
 echo "  或 airdrop / 阿里云盘"

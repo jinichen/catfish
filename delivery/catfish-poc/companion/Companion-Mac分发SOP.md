@@ -1,4 +1,4 @@
-# 达华 POC · 3 台 mac 分发 SOP
+# POC · 3 台 mac 分发 SOP
 
 **规模**: 2 台 Apple Silicon + 1 台 Intel
 **版本**: v0.20.0 (2026-08-08 · 跟 hermes v2026.8.3 对齐; 服务端 HTTPS / CA 信任 / 绕系统代理那几条仍按 7-28 那版)
@@ -60,7 +60,7 @@
 
 | Task | Fix | 员工场景影响 |
 |------|-----|-----|
-| #60 | chat 走 gateway 直连还是经 hermes, 取决于本机有没有 `API_SERVER_KEY` | Onboarding 填达华 IP 即通 · 无需额外 config |
+| #60 | chat 走 gateway 直连还是经 hermes, 取决于本机有没有 `API_SERVER_KEY` | Onboarding 填客户 IP 即通 · 无需额外 config |
 | #63/#64 | CSP `connect-src` 严格 + Rust reqwest 代理 (`http_proxy`) | 员工输**任意远端 IP** · WebView 不再拦 (老版本 dmg 会挂 `TypeError: Load failed`) |
 | #66 | gateway 支持双 audience `catfish-companion,catfish-gateway` | Companion Rust 返 id_token · aud=companion · gateway 认 (老版本单值 aud=gateway 会 401) |
 | #68 | gateway image `0.1.1` 加 orjson | litellm mcp code path 不再 502 |
@@ -104,17 +104,17 @@ ls -la ~/Downloads/Catfish-Companion-*-x64.dmg
 ### 2. Copy 到分发目录 · 上传 Nextcloud
 
 ```bash
-mkdir -p ~/Downloads/catfish-达华POC-0715/
-cp ~/Downloads/Catfish-Companion-0.20.0-aarch64.dmg ~/Downloads/catfish-达华POC-0715/
+mkdir -p ~/Downloads/catfish-poc/
+cp ~/Downloads/Catfish-Companion-0.20.0-aarch64.dmg ~/Downloads/catfish-poc/
 ```
 
-上传 Nextcloud `paixiao2.duckdns.org:9997/catfish-达华POC/`.
+上传 Nextcloud `paixiao2.duckdns.org:9997/catfish-poc/`.
 
 ### 3. 你 mac 上先 verify aarch64 dmg (10 min)
 
 ```bash
 # 装
-open ~/Downloads/catfish-达华POC-0715/Catfish-Companion-0.20.0-aarch64.dmg
+open ~/Downloads/catfish-poc/Catfish-Companion-0.20.0-aarch64.dmg
 # 拖到 Applications
 
 # 打开
@@ -122,8 +122,8 @@ open -a "Catfish Companion"
 ```
 
 **Onboarding 填**:
-- gateway_url: `http://<达华内网服务器 IP>:8999`
-- identity_url: `http://<达华内网服务器 IP>:8998`
+- gateway_url: `http://<客户内网服务器 IP>:8999`
+- identity_url: `http://<客户内网服务器 IP>:8998`
 
 **SSO 登录 · 试 chat "hi"**:
 - ✅ 通 → POC dmg 就绪 · 分发
@@ -242,7 +242,7 @@ pkill -f hermes-agent          # launchd 会自动拉起, 别手动 start
 
    > 拿到 Apple 开发者证书并完成签名 + 公证后, 这一步整个消失, 员工双击即用。
 3.5. **装公司证书 (7/28 新增 · HTTPS 后必做)**:
-   把服务器 `delivery/dahua-poc/certs/ca.pem` 拷到员工机:
+   把服务器 `delivery/catfish-poc/certs/ca.pem` 拷到员工机:
    ```bash
    mkdir -p ~/.catfish && cp <拿到的>/ca.pem ~/.catfish/server-ca.pem
    ```
@@ -296,7 +296,7 @@ catfish-email --version
 
 **装机过程会自动跑 install.sh** (装 hermes-agent 到 ~/.hermes/):
 - 从 dmg 内嵌 copy uv · Python 3.11 · hermes-agent 源码 · **0 网络**
-- **若员工机装了 Node.js** → 会尝试 npm install (需公网 · 达华可能挂 · 但只 `log_warn` 不 throw · installer 依然成功)
+- **若员工机装了 Node.js** → 会尝试 npm install (需公网 · 客户内网可能挂 · 但只 `log_warn` 不 throw · installer 依然成功)
 - **若员工机没装 Node.js** → 自动 skip npm + Playwright chromium · installer 成功
 
 3-5 min 装完.
@@ -343,7 +343,7 @@ npx playwright install chromium
 - [ ] 员工 C (Intel) · 装 x64 dmg · chat 通
 - [ ] (可选) 3 员工中要 browser_* tools 的手动装 chromium
 
-**全绿** = POC 通过 · 达华可考虑规模化 (500 员工 Windows msi · 之前做的代码到时候用).
+**全绿** = POC 通过 · 客户可考虑规模化 (500 员工 Windows msi · 之前做的代码到时候用).
 
 ---
 
@@ -356,7 +356,7 @@ npx playwright install chromium
 - `edge/companion-app/scripts/build-msi-local.ps1` (本地 build 一键脚本)
 - `edge/companion-app/scripts/build-windows-msi-local.md` (SOP)
 
-**POC 通过后**·**达华 500 员工规模化时启用** · 30 min 打新 msi 就绪.
+**POC 通过后**·**客户 500 员工规模化时启用** · 30 min 打新 msi 就绪.
 
 ---
 

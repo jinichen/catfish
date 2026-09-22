@@ -1,6 +1,6 @@
-# 达华 POC · 鲶鱼 (Catfish) 中央服务器 · 部署 SOP
+# POC · 鲶鱼 (Catfish) 中央服务器 · 部署 SOP
 
-**版本**: 2026-07-18  ·  **交付**: 鲶鱼团队 → 达华智能 IT
+**版本**: 2026-07-18  ·  **交付**: 鲶鱼团队 → 客户 IT
 
 ---
 
@@ -32,9 +32,9 @@ uname -m
 
 ```bash
 # amd64 服务器
-tar xzf dahua-poc-central-amd64-20260718.tar.gz -C /opt/catfish-central/
+tar xzf catfish-poc-central-amd64-20260718.tar.gz -C /opt/catfish-central/
 # 或 arm64 服务器
-# tar xzf dahua-poc-central-arm64-20260718.tar.gz -C /opt/catfish-central/
+# tar xzf catfish-poc-central-arm64-20260718.tar.gz -C /opt/catfish-central/
 
 cd /opt/catfish-central/
 ls
@@ -161,7 +161,7 @@ A: 检查 · `docker compose logs gateway --tail 50` · 若 · alembic 挂 · po
 ```bash
 docker compose down
 # 覆盖 (保 .env · 保 volumes)
-tar xzf dahua-poc-central-<arch>-<新日期>.tar.gz --exclude='.env*' -C /opt/catfish-central/
+tar xzf catfish-poc-central-<arch>-<新日期>.tar.gz --exclude='.env*' -C /opt/catfish-central/
 for f in /opt/catfish-central/images/*.tar; do docker load < "$f"; done
 docker compose up -d
 ```

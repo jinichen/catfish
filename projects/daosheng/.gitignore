@@ -1,7 +1,7 @@
 # projects/daosheng/.gitignore
 #
 # 军规 (BL-PROJECTS-LAYER 7/27): 真业务数据不进 git · 只 track schema 和方法论.
-# 跟 delivery/dahua-poc/.gitignore 同思路 — source of truth 才 track,
+# 跟 delivery/catfish-poc/.gitignore 同思路 — source of truth 才 track,
 # 生成产物和敏感内容一律不进.
 
 # ── 客户机密 · 绝不 commit ──

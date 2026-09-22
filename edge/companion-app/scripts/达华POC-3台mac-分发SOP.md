@@ -3,7 +3,7 @@
 **真正在维护的那份在:**
 
 ```
-delivery/dahua-poc/companion/达华POC-3台mac-分发SOP.md
+delivery/catfish-poc/companion/达华POC-3台mac-分发SOP.md
 ```
 
 ---
@@ -14,7 +14,7 @@ delivery/dahua-poc/companion/达华POC-3台mac-分发SOP.md
 
 | 路径 | 版本 | 最后更新 |
 |------|------|---------|
-| `delivery/dahua-poc/companion/…`（在维护） | v0.19.0 | 2026-08-01 |
+| `delivery/catfish-poc/companion/…`（在维护） | v0.19.0 | 2026-08-01 |
 | `edge/companion-app/scripts/…`（本文件） | v0.18.1 | 2026-07-22 |
 
 两份都叫「达华POC-3台mac-分发SOP.md」，编辑器里按文件名搜会同时跳出来，谁也

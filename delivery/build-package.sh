@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 打达华 POC 交付包 —— 双架构, 且**打不出坏包**。
+# 打 catfish POC 交付包 —— 双架构, 且**打不出坏包**。
 #
 # ── 为什么要有这个脚本 ──────────────────────────────────────────────
 #
@@ -29,7 +29,7 @@
 #   bash delivery/build-package.sh amd64
 #   bash delivery/build-package.sh arm64
 #
-# 产出: ~/Downloads/dahua-poc-FULL-<arch>-<日期>.tar.gz
+# 产出: ~/Downloads/catfish-poc-FULL-<arch>-<日期>.tar.gz
 #
 # 前提: Docker 在跑; Apple Silicon 上打 amd64 靠 buildx + QEMU, 会慢很多
 #       (十几分钟到半小时, 取决于机器), 属正常。
@@ -49,13 +49,13 @@ esac
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 CENTRAL="$REPO/central"
-TEMPLATE="$SCRIPT_DIR/dahua-poc"          # 交付目录模板 (配置 / setup.sh / 文档)
+TEMPLATE="$SCRIPT_DIR/catfish-poc"          # 交付目录模板 (配置 / setup.sh / 文档)
 COMPOSE="$TEMPLATE/docker-compose.yml"
 OUT_DIR="${OUT_DIR:-$HOME/Downloads}"
 DATE="$(date +%Y%m%d)"
 
 echo "═══════════════════════════════════════════════════════"
-echo "  达华 POC 交付包 · $DATE · 架构: $ARCHES"
+echo "  catfish POC 交付包 · $DATE · 架构: $ARCHES"
 echo "═══════════════════════════════════════════════════════"
 
 # ── 0. 前置检查 ─────────────────────────────────────────────────────
@@ -276,45 +276,45 @@ for ARCH in $ARCHES; do
     fi
 
     # ── save + 组装 ────────────────────────────────────────────────
-    STAGE="/tmp/dahua-pkg-$ARCH-$$"
+    STAGE="/tmp/catfish-pkg-$ARCH-$$"
     rm -rf "$STAGE"
     mkdir -p "$STAGE/delivery"
     # 交付目录 = 模板的副本, 但不带模板里可能残留的旧镜像
-    cp -R "$TEMPLATE" "$STAGE/delivery/dahua-poc"
-    rm -rf "$STAGE/delivery/dahua-poc/images"
-    mkdir -p "$STAGE/delivery/dahua-poc/images"
+    cp -R "$TEMPLATE" "$STAGE/delivery/catfish-poc"
+    rm -rf "$STAGE/delivery/catfish-poc/images"
+    mkdir -p "$STAGE/delivery/catfish-poc/images"
     # 装机时生成的东西不该跟着包走 (会覆盖客户现场的值)
-    rm -f "$STAGE/delivery/dahua-poc/.env" \
-          "$STAGE/delivery/dahua-poc/.env.bak."* \
-          "$STAGE/delivery/dahua-poc/users.yaml" \
-          "$STAGE/delivery/dahua-poc/clients.yaml"
-    rm -rf "$STAGE/delivery/dahua-poc/certs"
+    rm -f "$STAGE/delivery/catfish-poc/.env" \
+          "$STAGE/delivery/catfish-poc/.env.bak."* \
+          "$STAGE/delivery/catfish-poc/users.yaml" \
+          "$STAGE/delivery/catfish-poc/clients.yaml"
+    rm -rf "$STAGE/delivery/catfish-poc/certs"
     # 9/12 鸿波: 文档不进包。docs/ 整个目录 + 各级 *.md (README / INSTALL / SOP /
-    # config 说明) 全去掉; 装机手册在仓库 delivery/dahua-poc/ 里, 给客户 IT 单独发。
+    # config 说明) 全去掉; 装机手册在仓库 delivery/catfish-poc/ 里, 给客户 IT 单独发。
     # 留下的只有脚本、compose、配置模板、镜像, 以及 BUILD-INFO.txt (溯源, 不是文档)。
-    rm -rf "$STAGE/delivery/dahua-poc/docs"
-    find "$STAGE/delivery/dahua-poc" -name "*.md" -delete
+    rm -rf "$STAGE/delivery/catfish-poc/docs"
+    find "$STAGE/delivery/catfish-poc" -name "*.md" -delete
     find "$STAGE" -name ".DS_Store" -delete 2>/dev/null || true
 
-    IMG_TAR="$STAGE/delivery/dahua-poc/images/dahua-poc-central-$ARCH-$DATE.tar.gz"
+    IMG_TAR="$STAGE/delivery/catfish-poc/images/catfish-poc-central-$ARCH-$DATE.tar.gz"
     echo "→ docker save → $(basename "$IMG_TAR")"
     # shellcheck disable=SC2086
     docker save $ALL_IMGS | gzip -1 > "$IMG_TAR" || { echo "❌ save 失败"; exit 1; }
     echo "  ✓ $(du -h "$IMG_TAR" | cut -f1)"
 
-    OUT="$OUT_DIR/dahua-poc-FULL-$ARCH-$DATE.tar.gz"
+    OUT="$OUT_DIR/catfish-poc-FULL-$ARCH-$DATE.tar.gz"
     mkdir -p "$OUT_DIR"
     echo "→ 打包 → $OUT"
     tar czf "$OUT" -C "$STAGE" delivery || { echo "❌ tar 失败"; exit 1; }
 
     # ── 验产物 ──────────────────────────────────────────────────────
     #
-    # 按 INSTALL.md 的解压步骤反推: 解开后必须是 delivery/dahua-poc/,
-    # 客户才能照文档 `cd delivery/dahua-poc/`。结构错了现场会卡在第二步。
-    for must in "delivery/dahua-poc/setup.sh" \
-                "delivery/dahua-poc/docker-compose.yml" \
-                "delivery/dahua-poc/llm-gateway/config/models.yaml" \
-                "delivery/dahua-poc/images/dahua-poc-central-$ARCH-$DATE.tar.gz"; do
+    # 按 INSTALL.md 的解压步骤反推: 解开后必须是 delivery/catfish-poc/,
+    # 客户才能照文档 `cd delivery/catfish-poc/`。结构错了现场会卡在第二步。
+    for must in "delivery/catfish-poc/setup.sh" \
+                "delivery/catfish-poc/docker-compose.yml" \
+                "delivery/catfish-poc/llm-gateway/config/models.yaml" \
+                "delivery/catfish-poc/images/catfish-poc-central-$ARCH-$DATE.tar.gz"; do
         if ! tar tzf "$OUT" | grep -qx "$must"; then
             echo "  ❌ 包里缺 $must"
             exit 1
@@ -333,11 +333,11 @@ done
 echo ""
 echo "═══════════════════════════════════════════════════════"
 echo "✅ 完成"
-ls -lh "$OUT_DIR"/dahua-poc-FULL-*-"$DATE".tar.gz 2>/dev/null | sed 's/^/   /'
+ls -lh "$OUT_DIR"/catfish-poc-FULL-*-"$DATE".tar.gz 2>/dev/null | sed 's/^/   /'
 echo ""
-echo "客户侧装机 (手册在仓库 delivery/dahua-poc/INSTALL.md, 不随包走):"
-echo "    tar xzf dahua-poc-FULL-<arch>-$DATE.tar.gz"
-echo "    cd delivery/dahua-poc/"
+echo "客户侧装机 (手册在仓库 delivery/catfish-poc/INSTALL.md, 不随包走):"
+echo "    tar xzf catfish-poc-FULL-<arch>-$DATE.tar.gz"
+echo "    cd delivery/catfish-poc/"
 echo "    SERVER_IP=<服务器内网IP> ENABLE_HTTPS=1 bash setup.sh"
 echo ""
 echo "⚠ 给包之前先确认对方机器架构 —— x86_64 服务器用 amd64,"

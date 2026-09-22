@@ -13,7 +13,7 @@
 ### Task 1: Make the delivery template contain active runtime fields
 
 **Files:**
-- Modify: `delivery/dahua-poc/.env.example`
+- Modify: `delivery/catfish-poc/.env.example`
 
 **Step 1:** Add active OIDC issuer, Identity issuer/CORS, HTTPS, and worker fields.
 
@@ -22,7 +22,7 @@
 ### Task 2: Separate derived settings from persistent secrets
 
 **Files:**
-- Modify: `delivery/dahua-poc/setup.sh`
+- Modify: `delivery/catfish-poc/setup.sh`
 
 **Step 1:** Add a safe replace-or-append helper for env fields.
 
@@ -35,7 +35,7 @@
 ### Task 3: Lock behavior with regression tests
 
 **Files:**
-- Modify: `delivery/dahua-poc/test_setup_env.sh`
+- Modify: `delivery/catfish-poc/test_setup_env.sh`
 
 **Step 1:** Assert fresh HTTP and HTTPS values are generated.
 

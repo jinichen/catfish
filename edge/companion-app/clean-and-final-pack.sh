@@ -87,8 +87,8 @@ mdimport /Applications/Catfish\ Companion.app 2>/dev/null || true
 echo ""
 echo "→ [5/6] 打分发 tar.gz · 只 arm64 (M-series mac)"
 TS=$(date +%Y%m%d-%H%M)
-STAGING=/tmp/dahua-clean-$TS
-OUT=~/catfish-companion-dahua-arm64-CLEAN-$TS.tar.gz
+STAGING=/tmp/catfish-companion-clean-$TS
+OUT=~/catfish-companion-arm64-CLEAN-$TS.tar.gz
 
 rm -rf "$STAGING"
 mkdir -p "$STAGING/arm64"
@@ -223,7 +223,7 @@ echo "✅ 分发包 · $OUT · $SIZE"
 echo "════════════════════════════════════════════"
 echo ""
 echo "→ scp 到达华:"
-echo "  scp $OUT dahua@<ip>:/tmp/"
+echo "  scp $OUT <user>@<服务器 IP>:/tmp/"
 echo ""
 echo "→ Spotlight 搜 'cat' 现在应只出 1 个 (/Applications 里的)"
 echo "  等 10 秒 Spotlight cache 刷 · 若还多 · 手工搜: mdfind -name 'Catfish Companion.app'"

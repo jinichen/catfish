@@ -142,7 +142,7 @@
 
 | 文件 | 现状 (8/9 复核) | 该怎么改 |
 |---|---|---|
-| `facts_router.py` | 落盘位置 5/26 已 env 化 (`CATFISH_FACTS_DIR`), `central/` 与 `delivery/dahua-poc/` 两个 docker-compose 都配到容器卷; `Path.home()` 分支只是 dev fallback + startup warning。**剩余缺口不是落盘位置, 是 PG 写入面无闸** —— `pg_write_facts_json(fact_id, facts)` 写整个 dict, 内含 `raw_quote` (schema 明确要求逐字摘录 50-200 字), 既无结构性约束也无 CI gate, 全靠 `_require_admin` 一道运行时检查 | 给 facts PG 写入面加 CI 闸 (对标 `tests/test_central_log_no_content.py`)。**不搬 Companion** —— 见下 |
+| `facts_router.py` | 落盘位置 5/26 已 env 化 (`CATFISH_FACTS_DIR`), `central/` 与 `delivery/catfish-poc/` 两个 docker-compose 都配到容器卷; `Path.home()` 分支只是 dev fallback + startup warning。**剩余缺口不是落盘位置, 是 PG 写入面无闸** —— `pg_write_facts_json(fact_id, facts)` 写整个 dict, 内含 `raw_quote` (schema 明确要求逐字摘录 50-200 字), 既无结构性约束也无 CI gate, 全靠 `_require_admin` 一道运行时检查 | 给 facts PG 写入面加 CI 闸 (对标 `tests/test_central_log_no_content.py`)。**不搬 Companion** —— 见下 |
 | `facts_db.py` | jsonl 兜底落 `~/.catfish/` | 砍 jsonl 兜底 (PG-only, 见 BL-QUOTA-SQLITE-DEPRECATE) |
 
 **为什么 facts 不搬 Companion** (8/9 改; 原处方「facts upload 端点搬 Companion / gateway 只做 proxy 不存」作废):

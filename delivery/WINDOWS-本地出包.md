@@ -132,7 +132,7 @@ Component 必须用 HKCU 注册表值做 KeyPath，不能用 File → **构建�
 Tauri v2 又不暴露 `additionalLightArgs`，没法从配置传抑制参数。
 所以编一个 wrapper 顶掉 `light.exe`，它加上 ICE 抑制参数再转给 `light-real.exe`。
 
-抑制的三条影响（可接受，达华是单用户企业机）：
+抑制的三条影响（可接受，目标是单用户企业机）：
 
 - **ICE38** — 多用户机上第二个用户装会无效
 - **ICE64** — 卸载可能残留 `%LOCALAPPDATA%\Catfish Companion\` 子目录
@@ -165,7 +165,7 @@ Copy-Item -Recurse -Force edge\hermes-plugins\* "$hermesDir\plugins\"
 > 具体路径以 `.circleci/config.yml` 第 7 步 `Copy catfish plugins into hermes-agent-src` 为准，
 > 那份是事实源。
 
-### 3. 预装 node 依赖（达华无公网，必须打进包）
+### 3. 预装 node 依赖（客户内网无公网，必须打进包）
 
 对 `$hermesDir` 下所有 `package.json`（Depth 4 内，排 `node_modules` 内嵌的）跑 `npm install`，
 再 `npm pack` 两个全局包到 `$hermesDir\node-globals\`：

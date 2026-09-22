@@ -27,7 +27,7 @@
 #
 # 睡醒验:
 #   grep -E "===|✅|❌|⚠" /tmp/build-arm64.log
-#   ls -lh ~/Downloads/catfish-达华POC-0715/dahua-poc-*.tar.gz
+#   ls -lh ~/Downloads/catfish-达华POC-0715/catfish-poc-*.tar.gz
 
 set -euo pipefail
 
@@ -123,16 +123,16 @@ esac
 
 CENTRAL="$HOME/person_task/catfish/central"
 REPO_ROOT="$HOME/person_task/catfish"
-DELIVERY_DIR="$REPO_ROOT/delivery/dahua-poc"
+DELIVERY_DIR="$REPO_ROOT/delivery/catfish-poc"
 DELIVERY="$HOME/Downloads/catfish-达华POC-0715"
 
 # 目标 tar (dynamic date · gzip 压缩)
-ARM_OUT="$DELIVERY/dahua-poc-central-arm64-${DATE}.tar.gz"
-AMD_OUT="$DELIVERY/dahua-poc-central-amd64-${DATE}.tar.gz"
+ARM_OUT="$DELIVERY/catfish-poc-central-arm64-${DATE}.tar.gz"
+AMD_OUT="$DELIVERY/catfish-poc-central-amd64-${DATE}.tar.gz"
 
 # 完整交付 tar (Phase 3 · image + setup + config + companion + docs 一坨)
-FULL_ARM_OUT="$DELIVERY/dahua-poc-FULL-arm64-${DATE}.tar.gz"
-FULL_AMD_OUT="$DELIVERY/dahua-poc-FULL-amd64-${DATE}.tar.gz"
+FULL_ARM_OUT="$DELIVERY/catfish-poc-FULL-arm64-${DATE}.tar.gz"
+FULL_AMD_OUT="$DELIVERY/catfish-poc-FULL-amd64-${DATE}.tar.gz"
 
 cd "$CENTRAL"
 
@@ -143,7 +143,7 @@ cd "$CENTRAL"
 #
 # 第一版比的是 `git rev-parse HEAD`。但这个仓里还有 edge/ (Companion 客户端、
 # hermes 插件), 那边一提交整仓 SHA 就变, 而交付包里**一个字节都不会变** ——
-# 镜像是从 central/ 构建的, 包的骨架来自 delivery/dahua-poc/。
+# 镜像是从 central/ 构建的, 包的骨架来自 delivery/catfish-poc/。
 #
 # 后果是: 两个平台的构建之间只要有人动过 Companion, 结尾就喊一句
 # "❌ 两个平台不是同一次代码"。喊几次狼来了之后就没人看了 —— 而这个检查
@@ -223,8 +223,8 @@ if [ -n "$ONLY_SERVICES" ]; then
     # 1. tar 名加 -only-<services> 后缀 · 别覆盖全套 image tar (全套是"新客户装机" ·
     #    only 是"已装客户增量更新" · 两码事 · 不能混).
     _svcs_suffix=$(echo "$ONLY_SERVICES" | tr ' ' '_')
-    ARM_OUT="$DELIVERY/dahua-poc-central-arm64-${DATE}-only-${_svcs_suffix}.tar.gz"
-    AMD_OUT="$DELIVERY/dahua-poc-central-amd64-${DATE}-only-${_svcs_suffix}.tar.gz"
+    ARM_OUT="$DELIVERY/catfish-poc-central-arm64-${DATE}-only-${_svcs_suffix}.tar.gz"
+    AMD_OUT="$DELIVERY/catfish-poc-central-amd64-${DATE}-only-${_svcs_suffix}.tar.gz"
     echo "  tar 名带 -only-${_svcs_suffix} 后缀 · 防跟全套 tar 混 (image-only tar)"
 
     # 2. 自动关 BUILD_FULL_DELIVERY · FULL tar 场景是"新客户装机 · 需全 image" ·
@@ -403,26 +403,26 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
     if [ ! -d "$DELIVERY_DIR" ]; then
         echo "❌ $DELIVERY_DIR 找不到 · skip Phase 3"
     else
-        # 临时把 image tar 拷进 delivery/dahua-poc/images/ (打完清)
+        # 临时把 image tar 拷进 delivery/catfish-poc/images/ (打完清)
         TEMP_IMAGES="$DELIVERY_DIR/images"
         mkdir -p "$TEMP_IMAGES"
 
         # ── P3.5.79+ (7/23 达华 199 blood catch) · 补 config 目录 ──
-        # 老 bug: delivery/dahua-poc/ 里没 identity-server/ 和 llm-gateway/ 目录 ·
+        # 老 bug: delivery/catfish-poc/ 里没 identity-server/ 和 llm-gateway/ 目录 ·
         # docker-compose.yml mount ./identity-server/config:/app/config · host 端
         # 空目录 · 容器 /app/config 空 · users.yaml 不存在 · identity seed 0 用户 ·
         # admin@catfish.com 完全无法创建 · 客户装完根本登不进.
         # 修: tar czf 前 · 把 central/{identity-server,llm-gateway}/config 拷进
-        # delivery/dahua-poc/ 对应位置 · 打进 tar. 客户装机就有 seed 源.
+        # delivery/catfish-poc/ 对应位置 · 打进 tar. 客户装机就有 seed 源.
         #
-        # ── P3.5.79+ (7/23 达华 POC · overlay 机制) ─────────────────────
+        # ── P3.5.79+ (7/23 · overlay 机制) ──────────────────────────────
         # 两步 rsync 实现 · 通用 baseline + 客户定制 override:
         #   1. central/$svc/config             → delivery/$svc/config      (baseline)
         #   2. delivery/$svc/config-overlay/*  → delivery/$svc/config/*    (覆盖)
         # overlay 目录里只放**跟通用不同**的文件 · git track 差异 · 打 tar
         # 时 exclude · 客户看不到 overlay · 只见 merge 后 config/.
-        # 现有 overlay · delivery/dahua-poc/llm-gateway/config-overlay/roles.yaml
-        # (达华单 model qwen3.7-plus · 覆盖通用 7-role 版)
+        # overlay 默认是空的 (只有带说明的模板) —— 空是正常状态, 客户直接用
+        # 通用 baseline。只有某家客户确实要改才往 overlay 里写。
         echo ""
         echo "--- 3.pre · sync central config → delivery + apply overlay ---"
         for svc in identity-server llm-gateway; do
@@ -431,7 +431,10 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
             OVERLAY="$DELIVERY_DIR/$svc/config-overlay"
             if [ -d "$SRC_CFG" ]; then
                 mkdir -p "$DST_CFG"
-                # a. 通用 baseline · 排敏感 + 排 .dahua 后缀 (老 · 已挪 overlay)
+                # a. 通用 baseline · 排敏感文件
+                # 9/22: 原来还排 '*.dahua' —— 那是 overlay 机制之前的老做法
+                # (客户定制存成 roles.yaml.<客户名> 放在 baseline 目录里)。
+                # 那些文件已经删了, 定制一律走 config-overlay/, exclude 跟着去掉。
                 # 7/23 加 database.yaml exclude · 军规血泪 · central/*/config/database.yaml
                 # 含开发环境 PG 密码 (URL-encoded 明文) · rsync 不排会拷进 delivery ·
                 # 若 tar 也不排会打进客户包. 客户不该看到我们本地 dev DB 密码. 加 exclude
@@ -440,7 +443,6 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
                       --exclude='users.yaml' --exclude='clients.yaml' \
                       --exclude='database.yaml' \
                       --exclude='*.bak' \
-                      --exclude='*.dahua' \
                       "$SRC_CFG/" "$DST_CFG/" 2>/dev/null || \
                 cp -R "$SRC_CFG/"* "$DST_CFG/" 2>/dev/null
                 echo "  ✓ $svc/config baseline ($(ls "$DST_CFG" | wc -l | tr -d ' ') files)"
@@ -517,7 +519,7 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
             rm -f "$TEMP_IMAGES"/*.tar.gz
             cp "$SRC_TAR" "$TEMP_IMAGES/"
 
-            # 打 tar (从 repo 根 · tar 里路径 delivery/dahua-poc/...)
+            # 打 tar (从 repo 根 · tar 里路径 delivery/catfish-poc/...)
             # P3.5.79+ (7/23 鸿波 catch '最简 · 多余不要 · 缺的必带'):
             # 排 · docs      (客户自己写 SOP)
             #    · README    (太长 · setup.sh 里已注释)
@@ -530,16 +532,16 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
             # P3.5.81 (7/28) 追加 3 条敏感兜底 (rsync 已排 · tar 再挡一道:
             # 21:01 的包实际带出过 database.yaml · 内含真实 dev PG 密码):
             tar czf "$OUT_TAR" \
-                --exclude='delivery/dahua-poc/certs' \
-                --exclude='delivery/dahua-poc/.env' \
-                --exclude='delivery/dahua-poc/docs' \
-                --exclude='delivery/dahua-poc/README.md' \
-                --exclude='delivery/dahua-poc/companion' \
-                --exclude='delivery/dahua-poc/*/config-overlay' \
-                --exclude='delivery/dahua-poc/*/config/database.yaml' \
+                --exclude='delivery/catfish-poc/certs' \
+                --exclude='delivery/catfish-poc/.env' \
+                --exclude='delivery/catfish-poc/docs' \
+                --exclude='delivery/catfish-poc/README.md' \
+                --exclude='delivery/catfish-poc/companion' \
+                --exclude='delivery/catfish-poc/*/config-overlay' \
+                --exclude='delivery/catfish-poc/*/config/database.yaml' \
                 --exclude='*.bak' \
                 --exclude='.env.bak.*' \
-                delivery/dahua-poc/
+                delivery/catfish-poc/
             cd "$CENTRAL"
 
             ls -lh "$OUT_TAR"
@@ -556,24 +558,24 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
             # 它让人开始怀疑整行输出. 改成边跑边数.
             MUST_N=0; MUSTNOT_N=0; MARKER_N=0
             for must in \
-                "delivery/dahua-poc/setup.sh" \
-                "delivery/dahua-poc/verify-login.sh" \
-                "delivery/dahua-poc/docker-compose.yml" \
-                "delivery/dahua-poc/docker-compose.https.yml" \
-                "delivery/dahua-poc/.env.example" \
-                "delivery/dahua-poc/BUILD-INFO.txt" \
-                "delivery/dahua-poc/identity-server/config/users.yaml.example" \
-                "delivery/dahua-poc/identity-server/config/clients.yaml.example"; do
+                "delivery/catfish-poc/setup.sh" \
+                "delivery/catfish-poc/verify-login.sh" \
+                "delivery/catfish-poc/docker-compose.yml" \
+                "delivery/catfish-poc/docker-compose.https.yml" \
+                "delivery/catfish-poc/.env.example" \
+                "delivery/catfish-poc/BUILD-INFO.txt" \
+                "delivery/catfish-poc/identity-server/config/users.yaml.example" \
+                "delivery/catfish-poc/identity-server/config/clients.yaml.example"; do
                 MUST_N=$((MUST_N + 1))
                 if ! echo "$TLIST" | grep -qx "$must"; then
                     echo "  ❌ 验包: 缺 $must"; VERIFY_FAIL=1
                 fi
             done
             for mustnot in \
-                "delivery/dahua-poc/.env" \
-                "delivery/dahua-poc/identity-server/config/users.yaml" \
-                "delivery/dahua-poc/identity-server/config/clients.yaml" \
-                "delivery/dahua-poc/identity-server/config/database.yaml"; do
+                "delivery/catfish-poc/.env" \
+                "delivery/catfish-poc/identity-server/config/users.yaml" \
+                "delivery/catfish-poc/identity-server/config/clients.yaml" \
+                "delivery/catfish-poc/identity-server/config/database.yaml"; do
                 MUSTNOT_N=$((MUSTNOT_N + 1))
                 if echo "$TLIST" | grep -qx "$mustnot"; then
                     echo "  ❌ 验包: 不该带 $mustnot (敏感 / 应装机时生成)"; VERIFY_FAIL=1
@@ -585,7 +587,7 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
             #   8/1 加 CATFISH_SECRET_KEY 生成时就发现: 三个 marker 全是 7/28 的,
             #   哪怕打进去的是漏了整段密钥生成的老 setup.sh, 验包照样打勾。
             #   以后每往 setup.sh 加一段**装不上就废**的逻辑, 这里补一条。
-            SETUP_IN_TAR=$(tar xzf "$OUT_TAR" -O delivery/dahua-poc/setup.sh)
+            SETUP_IN_TAR=$(tar xzf "$OUT_TAR" -O delivery/catfish-poc/setup.sh)
             for marker in "clients.yaml 生成" "DASHSCOPE_API_KEY 是空的" "CERT_DAYS=397" \
                           "CATFISH_SECRET_KEY 已生成"; do
                 MARKER_N=$((MARKER_N + 1))
@@ -601,13 +603,13 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
             echo "  ✅ $arch 完整 tar 完成"
         done
 
-        # 清临时 image (delivery/dahua-poc/images/ 里不留 tar · git 也 ignore)
+        # 清临时 image (delivery/catfish-poc/images/ 里不留 tar · git 也 ignore)
         rm -f "$TEMP_IMAGES"/*.tar.gz
         echo ""
         echo "→ 客户 IT 装机 3 步:"
-        echo "    1. tar xzf dahua-poc-FULL-<arch>-${DATE}.tar.gz"
-        echo "    2. cd delivery/dahua-poc/"
-        echo "    3. IMAGE_TAR=./images/dahua-poc-central-<arch>-${DATE}.tar.gz bash setup.sh"
+        echo "    1. tar xzf catfish-poc-FULL-<arch>-${DATE}.tar.gz"
+        echo "    2. cd delivery/catfish-poc/"
+        echo "    3. IMAGE_TAR=./images/catfish-poc-central-<arch>-${DATE}.tar.gz bash setup.sh"
     fi
 fi
 
@@ -671,13 +673,13 @@ case "$ARCH" in
 esac
 if [ -n "$_other" ]; then
     echo ""
-    _other_full="$DELIVERY/dahua-poc-FULL-${_other}-${DATE}.tar.gz"
+    _other_full="$DELIVERY/catfish-poc-FULL-${_other}-${DATE}.tar.gz"
     if [ -f "$_other_full" ]; then
         # 日期相同**不代表代码相同** —— 7/31 就是这么撞的: arm64 打完之后
         # 修了个 bug, amd64 再打就带上了修复, 两个包却都叫 -20260731。
         # 比的是 delivery_hash (central/ + delivery/ 两棵树), 不是整仓 SHA,
         # 更不是日期 —— 理由见文件上方那段。
-        _other_info=$(tar xzf "$_other_full" -O delivery/dahua-poc/BUILD-INFO.txt 2>/dev/null || true)
+        _other_info=$(tar xzf "$_other_full" -O delivery/catfish-poc/BUILD-INFO.txt 2>/dev/null || true)
         _other_hash=$(printf '%s\n' "$_other_info" | sed -n 's/^delivery_hash=//p')
         _other_sha=$(printf '%s\n' "$_other_info" | sed -n 's/^git_sha=//p')
         if [ -z "$_other_hash" ]; then
@@ -709,7 +711,7 @@ if [ -n "$_other" ]; then
         echo "        > /tmp/build-${_other}-${DATE}.log 2>&1 &"
     fi
     # ls 没匹配 / grep 全过滤掉都会返回非 0 · set -e 下必须兜住
-    _drift=$(ls "$DELIVERY"/dahua-poc-FULL-"${_other}"-*.tar.gz 2>/dev/null \
+    _drift=$(ls "$DELIVERY"/catfish-poc-FULL-"${_other}"-*.tar.gz 2>/dev/null \
              | grep -v -- "-${DATE}.tar.gz" || true)
     if [ -n "$_drift" ]; then
         echo ""
@@ -724,9 +726,9 @@ echo ""
 # 跟上面刚打印的 3 步装机流程互相矛盾, 且 central 目录根本不在交付包里.
 # 同一份输出给两套冲突指令, 客户 IT 必然照错的那套做. 删掉, 只留增量更新场景.
 echo "已装机客户做增量更新 (只换 image · 不动 .env / 数据卷):"
-echo "  1. 把 dahua-poc-central-<ARCH>-${DATE}.tar.gz 传到服务器"
-echo "  2. gunzip -c dahua-poc-central-<ARCH>-${DATE}.tar.gz | docker load"
-echo "  3. cd <装机目录>/delivery/dahua-poc/"
+echo "  1. 把 catfish-poc-central-<ARCH>-${DATE}.tar.gz 传到服务器"
+echo "  2. gunzip -c catfish-poc-central-<ARCH>-${DATE}.tar.gz | docker load"
+echo "  3. cd <装机目录>/delivery/catfish-poc/"
 echo "     docker compose up -d --force-recreate      # HTTP 模式"
 echo "     docker compose -f docker-compose.yml -f docker-compose.https.yml \\"
 echo "                    up -d --force-recreate      # HTTPS 模式"

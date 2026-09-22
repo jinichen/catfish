@@ -30,8 +30,8 @@ done
 pack_platform() {
     local name=$1
     local app=$2
-    local staging=/tmp/catfish-dahua-$name-$TS
-    local out=~/catfish-companion-dahua-$name-$TS.tar.gz
+    local staging=/tmp/catfish-companion-$name-$TS
+    local out=~/catfish-companion-$name-$TS.tar.gz
 
     echo ""
     echo "→ 打 $name 包..."
@@ -168,9 +168,9 @@ echo ""
 echo "════════════════════════════════════════════"
 echo "✅ 两个独立分发包 · 达华 IT 按员工 mac 架构选"
 echo "════════════════════════════════════════════"
-ls -lh ~/catfish-companion-dahua-{arm64,x64}-$TS.tar.gz 2>/dev/null
+ls -lh ~/catfish-companion-{arm64,x64}-$TS.tar.gz 2>/dev/null
 
 echo ""
 echo "→ scp:"
-echo "  scp ~/catfish-companion-dahua-arm64-$TS.tar.gz dahua@<ip>:/tmp/  # M-series 员工"
-echo "  scp ~/catfish-companion-dahua-x64-$TS.tar.gz   dahua@<ip>:/tmp/  # Intel 员工"
+echo "  scp ~/catfish-companion-arm64-$TS.tar.gz <user>@<服务器 IP>:/tmp/  # M-series 员工"
+echo "  scp ~/catfish-companion-x64-$TS.tar.gz   <user>@<服务器 IP>:/tmp/  # Intel 员工"

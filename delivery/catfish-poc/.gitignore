@@ -1,4 +1,4 @@
-# delivery/dahua-poc/.gitignore  (7/23 达华 POC · 军规血泪)
+# delivery/catfish-poc/.gitignore  (7/23 POC · 军规血泪)
 #
 # rebuild-from-scratch-0720.sh Phase 3.pre 会 rsync central/*/config → delivery/*/config
 # 作 baseline · 客户装机时 overlay 层再覆盖. baseline 是**生成产物** · 每次 rebuild
@@ -11,7 +11,7 @@
 llm-gateway/config/
 identity-server/config/
 
-# overlay 是达华专属真配置 · 手动写 · 必 track (rebuild 只覆盖 config/ · 不动 overlay)
+# overlay 是客户专属真配置 · 手动写 · 必 track (rebuild 只覆盖 config/ · 不动 overlay)
 !llm-gateway/config-overlay/
 !identity-server/config-overlay/
 

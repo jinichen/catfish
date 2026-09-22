@@ -588,3 +588,44 @@ models:
   #   # 故意**不配 fallback 块** — 跟 nvidia-llama / nemotron 同款 BL-NVIDIA-NIM-MANUAL-ONLY
   #   # 思路: 客户基建调研模型, 跪了直接报客户端, 不绕弯到其他公网. 防 demo 时
   #   # 'Groq 失败但 gateway 静默切到 DashScope, 客户以为 Groq 跑得很好'.
+
+# ============================================================
+# 内部服务反代上游 (P3.5.84 · 7/29 现场)
+# ============================================================
+#
+# gateway 把三类请求转发给同网内的其它容器:
+#     /v1/mcp/*   → mcp-registry
+#     /v1/hub/*   → skills-hub
+#     /v1/wiki/*  → wiki-hub
+#
+# 代码里的默认值是 http://127.0.0.1:<port> —— 那是**开发机**的形态
+# (四个服务都在同一台机器上跑, 127.0.0.1 恰好是对的)。
+#
+# 但在 Docker 里, gateway 容器的 127.0.0.1 是**它自己**, 那几个端口在别的
+# 容器上, 连不上 → 502 Bad Gateway。必须走 compose 服务名。
+#
+# 现场表现有迷惑性: 登录正常、聊天正常、门户能开, 只有「系统管理」页面上
+# MCP Registry / Skills Hub 显示"不可达" —— 因为 gateway 自己的接口
+# (/api/me 等) 不经这一跳。7/29 装机后才被发现, 而这个默认值从一开始
+# 就是错的, 只是之前没人点开过那个页面。
+#
+# ⚠ 9/22 从交付包的 config-overlay/ 搬到这里。
+#
+# 之前它只存在于某一家客户的 overlay 里 —— 那是放错了位置: 这三条不是
+# 客户定制, 是**任何 docker 部署都必需**的基础配置。留在 overlay 里意味着
+# 下一家客户的包只要没照抄那份 overlay, 就会原样复现 7/29 那个 502,
+# 而且症状同样只在「系统管理」页面上, 同样没人会第一时间点开。
+#
+# 这三个服务名在 central/docker-compose.yml 和交付包的 compose 里一致
+# (已核对), 所以两边都对。
+mcp_registry:
+  upstream_url: http://mcp-registry:8996
+  enabled: true
+
+skills_hub:
+  upstream_url: http://skills-hub:8997
+  enabled: true
+
+wiki_hub:
+  upstream_url: http://wiki-hub:8994
+  enabled: true

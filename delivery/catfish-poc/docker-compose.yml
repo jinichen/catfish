@@ -67,7 +67,7 @@ services:
       CATFISH_IDENTITY_ISSUER: ${CATFISH_IDENTITY_ISSUER:-http://host.docker.internal:8998}
       # OIDC 配置 (跟 gateway 共享, 必须跟 CATFISH_IDENTITY_ISSUER 一致 - JWT iss claim)
       CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://host.docker.internal:8998}
-      # P3.5.79+ (7/22 达华 POC 血案): web 前端跨域调 identity discovery/token 必设.
+      # P3.5.79+ (7/22 POC 现场血案): web 前端跨域调 identity discovery/token 必设.
       # 默认 CORS 白名单只 allow localhost / 127.0.0.1 / tauri:// · 客户内网 IP 需显式加.
       # 多 origin 逗号分隔: e.g. http://<客户内网IP>:5173,https://catfish.company.com
       CATFISH_IDENTITY_CORS_ORIGINS: ${CATFISH_IDENTITY_CORS_ORIGINS:-}
@@ -77,7 +77,7 @@ services:
       - "8998:8998"
     volumes:
       - ./identity-server/config:/app/config:ro
-      # P3.5.80 (7/28 鸿波达华现场): identity 的 RSA 签名密钥写在
+      # P3.5.80 (7/28 鸿波现场): identity 的 RSA 签名密钥写在
       # /home/catfish/.catfish/identity-server/keys, 之前**没有持久卷** ——
       # 容器一重建密钥就没, 已签发的 JWT 全部作废(员工要重登),
       # 且两个 worker 每次都要重新抢一次生成(见 jwt_signer 竞态修复).
@@ -93,8 +93,8 @@ services:
     build:
       context: ./llm-gateway
       dockerfile: Dockerfile
-    # BL-DAHUA-POC-IMAGE (7/18): 0.1.1 加 orjson (Task #68) · Companion audience 双值兼容 (Task #66) ·
-    # 及 pyproject.toml orjson>=3.10 依赖. rebuild + docker save 分发达华 IT.
+    # BL-POC-IMAGE (7/18): 0.1.1 加 orjson (Task #68) · Companion audience 双值兼容 (Task #66) ·
+    # 及 pyproject.toml orjson>=3.10 依赖. rebuild + docker save 分发客户 IT.
     # 9/12 0.1.2: P50 横向协同邮筒 (/api/room-link/mailbox + room_link_mailbox 表迁移);
     #   六个自造镜像版本从此一起走, 升版本只改 compose (setup.sh / build-package.sh 都从这读)。
     image: catfish-gateway:0.1.2
@@ -197,7 +197,7 @@ services:
     image: catfish-web:0.1.2
     container_name: catfish-web
     restart: unless-stopped
-    # P3.5.79+ (7/22 达华 POC 血案 · runtime config 重构):
+    # P3.5.79+ (7/22 POC 现场血案 · runtime config 重构):
     # 一份 image 到处部署 · docker-entrypoint-catfish-config.sh 从容器 env 生成
     # /config.js · 前端 lib/env.ts 优先读 window.__CATFISH_CONFIG__. 客户换 IP
     # 只改 .env + `docker compose restart web` · 不重编 image.

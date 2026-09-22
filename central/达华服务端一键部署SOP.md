@@ -8,8 +8,8 @@
 
 | 文件 | 大小 | 架构 | 内容 |
 |------|------|------|------|
-| `dahua-poc-central-amd64-<date>.tar.gz` | ~601 MB | x86_64 (99% 政企/云服务器) | 7 image + docker-compose.yml + .env.example + README.md |
-| `dahua-poc-central-arm64-<date>.tar.gz` | ~604 MB | aarch64 (鲲鹏/ARM) | 同上 · arm64 image |
+| `catfish-poc-central-amd64-<date>.tar.gz` | ~601 MB | x86_64 (99% 政企/云服务器) | 7 image + docker-compose.yml + .env.example + README.md |
+| `catfish-poc-central-arm64-<date>.tar.gz` | ~604 MB | aarch64 (鲲鹏/ARM) | 同上 · arm64 image |
 
 **员工 Companion dmg/msi 分开分发** (见 `达华POC-3台mac-分发SOP.md` · 员工机独立分发到 3 台 mac).
 
