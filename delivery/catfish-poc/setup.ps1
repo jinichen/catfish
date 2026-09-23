@@ -304,9 +304,20 @@ if ($GatewayWorkers)  { $envArgs += @('--gateway-workers', $GatewayWorkers) }
 if ($IdentityWorkers) { $envArgs += @('--identity-workers', $IdentityWorkers) }
 if ($env:CATFISH_IDENTITY_URL) { $envArgs += @('--identity-url', $env:CATFISH_IDENTITY_URL) }
 
+# 正在跑的 catfish 容器属于哪个 compose 项目 —— 升级时新容器必须接上它的卷
+# (9/23 现场: 包目录改名后 compose 当成新项目, 新建了 5 个空卷; 见 envgen)。
+$existingProject = (docker inspect catfish-postgres --format '{{ index .Config.Labels "com.docker.compose.project" }}' 2>$null)
+if ($LASTEXITCODE -ne 0) { $existingProject = '' }
+$existingProject = "$existingProject".Trim()
+$envArgs += @('--project-name', $existingProject)
+
 # 既有 pgdata 卷 —— 查卷要 docker, 所以在这边查; 判断在 envgen 里, 免得
-# 两个平台各写一遍"有卷但没密码该怎么办"。
-$pgVol = docker volume ls -q 2>$null | Where-Object { $_ -match '_pgdata$' } | Select-Object -First 1
+# 两个平台各写一遍"有卷但没密码该怎么办"。有现成项目名就只认它的卷。
+if ($existingProject) {
+    $pgVol = docker volume ls -q 2>$null | Where-Object { $_ -eq "${existingProject}_pgdata" } | Select-Object -First 1
+} else {
+    $pgVol = docker volume ls -q 2>$null | Where-Object { $_ -match '_pgdata$' } | Select-Object -First 1
+}
 if ($pgVol) { $envArgs += @('--pg-volume', $pgVol) }
 
 if ($RegenEnvOnly -eq '1') {
@@ -319,6 +330,11 @@ if ($RegenEnvOnly -eq '1') {
     }
 }
 if ((Invoke-Tool 'envgen.py' $envArgs) -ne 0) { Die ".env 生成失败 (详情见上)" }
+
+# .env 里的项目名导出给后面所有 docker compose 调用 (compose 自己也读 .env,
+# 但显式导出一遍, 让"用哪套卷"只有一个来源)。
+$env:COMPOSE_PROJECT_NAME = Get-EnvValue 'COMPOSE_PROJECT_NAME'
+if (-not $env:COMPOSE_PROJECT_NAME) { Die ".env 里没有 COMPOSE_PROJECT_NAME (envgen 应该写了)" }
 
 if ($RegenEnvOnly -eq '1') {
     Say ""
@@ -508,6 +524,22 @@ foreach ($img in $ComposeImages) {
     Say ("    {0,-34} {1}" -f $img, $short)
 }
 SayWarn "tag 相同不代表镜像相同 —— 认上面那串 id, 不是认 tag。"
+
+# ── 8. 删旧镜像 (9/23) ── 跟 setup.sh 同一条规则: 只删 catfish-* 且 tag 不在
+# 本次 compose 里的; 放在 verify 全绿之后; rmi 失败只报不停。
+Say ""
+Say "── 清理旧镜像 ──"
+$keep = $ComposeImages | Where-Object { $_ -like 'catfish-*' }
+$removed = 0
+$all = docker images --format '{{.Repository}}:{{.Tag}}' 2>$null | Where-Object { $_ -like 'catfish-*' } | Sort-Object
+foreach ($img in $all) {
+    if ($keep -contains $img) { continue }
+    docker rmi $img 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) { Say "  已删 $img"; $removed++ }
+    else { SayWarn "删不掉 $img (还有容器引着它? docker ps -a 看看)" }
+}
+if ($removed -eq 0) { Say "  没有旧镜像要删" }
+docker image prune -f 2>&1 | Out-Null
 
 Say ""
 Say "═══════════════════════════════════════════════════════"

@@ -42,7 +42,10 @@ import time
 from pathlib import Path
 
 # 跨装机必须原样保留的值。换掉任何一个都会出事, 见文件顶部。
-PERSISTENT = ("PG_PASSWORD", "JWT_SIGNING_KEY", "CATFISH_SECRET_KEY")
+PERSISTENT = ("PG_PASSWORD", "JWT_SIGNING_KEY", "CATFISH_SECRET_KEY", "COMPOSE_PROJECT_NAME")
+
+#: compose 项目名的默认值。**必须钉死**, 不能让 compose 用目录名 —— 见 main 里那段。
+DEFAULT_PROJECT_NAME = "catfish"
 
 
 def read_value(text: str, key: str) -> str:
@@ -127,6 +130,12 @@ def main() -> int:
     ap.add_argument("--identity-workers", default="")
     ap.add_argument("--identity-url", default="", help="显式指定的 CATFISH_IDENTITY_URL")
     ap.add_argument(
+        "--project-name", default="",
+        help="宿主机上**已经在跑**的 catfish 容器所属的 compose 项目名 (wrapper 用 "
+             "docker inspect 读 com.docker.compose.project 标签得到, 没容器就留空)。"
+             "升级时用它保证新容器接上老的卷。",
+    )
+    ap.add_argument(
         "--pg-volume", default="",
         help="宿主机上已存在的 pgdata 卷名 (由 wrapper 查 docker volume ls 得到, "
              "没有就留空)。有卷但捞不到旧密码时会拒绝继续 —— 见 main 里那段。",
@@ -172,6 +181,33 @@ def main() -> int:
     # ── 3. 把旧密钥写回去, 然后只补"确实还空着"的 ──────────────
     for k, v in old.items():
         text = set_value(text, k, v)
+
+    # ── compose 项目名: 钉死, 且升级时必须等于老容器的 ────────────────
+    #
+    # compose 的网络和卷都带项目名前缀 (<项目>_pgdata), 而项目名默认 = 目录名。
+    # 9/23 现场升级: 包目录从 catfish-<客户名>-0715 改成了 catfish-poc (9/22 去客户
+    # 名那次), 于是 compose 认为这是一个**新项目** —— 新建了 5 个空卷和一个新网络,
+    # 准备在一个空库上把网关起起来。是 container_name 撞名 (catfish-postgres 已
+    # 存在) 把它拦住的, 纯属侥幸: 换个没钉 container_name 的服务就直接跑在空库上了。
+    #
+    # 所以项目名进 .env (COMPOSE_PROJECT_NAME, compose 自己会读), 从此跟目录名无关:
+    #   · 新装: 写 "catfish"
+    #   · 升级: .env 里有就沿用 (PERSISTENT); .env 里没有 (老包装的) → 用 wrapper
+    #     从现有容器标签读到的那个
+    #   · 两边都有但不一样 → 这是真冲突, 停下来说清楚, 不猜
+    running = args.project_name.strip()
+    in_env = read_value(text, "COMPOSE_PROJECT_NAME")
+    if in_env and running and in_env != running:
+        print("")
+        print(f"❌ compose 项目名对不上: .env 里是 {in_env!r}, 但正在跑的容器属于 {running!r}。")
+        print("   继续的话会新建一套空的卷和网络, 服务起在空库上。")
+        print("   先搞清楚哪套是你要的: docker volume ls | grep pgdata")
+        print("   要接上正在跑的那套 → 把 .env 里 COMPOSE_PROJECT_NAME 改成它, 重跑。")
+        return 1
+    project = in_env or running or DEFAULT_PROJECT_NAME
+    src = ".env" if in_env else ("现有容器" if running else "默认")
+    text = set_value(text, "COMPOSE_PROJECT_NAME", project)
+    print(f"→ compose 项目名: {project} (来源: {src}) · 卷和网络都挂在它下面, 跟目录名无关")
 
     generated: list[str] = []
     if not read_value(text, "PG_PASSWORD"):

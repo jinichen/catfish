@@ -461,9 +461,21 @@ ENVGEN_ARGS=(
     --identity-url "${CATFISH_IDENTITY_URL:-}"
 )
 
+# 正在跑的 catfish 容器属于哪个 compose 项目 —— 升级时新容器必须接上它的卷。
+# 9/23 现场: 包目录改名后 compose 当成新项目, 新建了 5 个空卷 (见 envgen 里那段)。
+# 判断在 envgen 里, 这边只负责把标签读出来。
+EXISTING_PROJECT=$(docker inspect catfish-postgres \
+    --format '{{ index .Config.Labels "com.docker.compose.project" }}' 2>/dev/null || true)
+ENVGEN_ARGS+=(--project-name "${EXISTING_PROJECT:-}")
+
 # 既有 pgdata 卷 —— 查卷要 docker, 所以在这边查; **判断**在 envgen 里,
 # 免得两个平台各写一遍"有卷但没密码该怎么办"。
-PG_VOL=$(docker volume ls -q 2>/dev/null | grep -E '_pgdata$' | head -1 || true)
+# 有现成项目名就只认它的卷; 没有才退回"任何 _pgdata" (老包装的、容器已停的情况)。
+if [ -n "${EXISTING_PROJECT:-}" ]; then
+    PG_VOL=$(docker volume ls -q 2>/dev/null | grep -Fx "${EXISTING_PROJECT}_pgdata" || true)
+else
+    PG_VOL=$(docker volume ls -q 2>/dev/null | grep -E '_pgdata$' | head -1 || true)
+fi
 [ -n "$PG_VOL" ] && ENVGEN_ARGS+=(--pg-volume "$PG_VOL")
 
 if docker image inspect "$IDENTITY_IMAGE" >/dev/null 2>&1; then
@@ -482,6 +494,12 @@ else
     echo "   所以走到这里多半是 image tar 没放进 images/ 目录。"
     exit 1
 fi
+
+# .env 里的项目名导出给后面所有 docker compose 调用。compose 自己也会读 .env,
+# 但显式导出一遍: 这样"用哪套卷"这个决定只有一个来源, 不依赖 compose 的读法。
+COMPOSE_PROJECT_NAME=$(grep -E '^COMPOSE_PROJECT_NAME=' .env | head -1 | cut -d= -f2- || true)
+[ -n "$COMPOSE_PROJECT_NAME" ] || { echo "❌ .env 里没有 COMPOSE_PROJECT_NAME (envgen 应该写了)"; exit 1; }
+export COMPOSE_PROJECT_NAME
 
 # ── 若只重生 .env · 到此为止 ───────────────────────────
 if [ "$REGEN_ENV_ONLY" = "1" ]; then
@@ -828,5 +846,30 @@ for img in $(compose_images); do
     printf '    %-34s %s\n' "$img" "$id"
 done
 echo "  ⚠ tag 相同不代表镜像相同 —— 认上面那串 id, 不是认 tag。"
+
+# ── 8. 删旧镜像 (9/23) ────────────────────────────────────
+#
+# 不做回滚 (9/22 鸿波定的), 所以旧 tag 留着只占盘: 六个镜像一套 ~1.2G,
+# 升三次就是 5G 的死重, 而现场机器往往就 40G。之前靠人手 docker rmi,
+# 也就是没人删。
+#
+# 只删 catfish-* 且 tag 不在本次 compose 里的; postgres 之类不碰。
+# 放在 verify 全绿、INSTALLED-BUILD 写完之后 —— 装到一半失败时旧镜像还在,
+# 至少还能靠它把旧版本起回来。
+# rmi 失败 (还有停掉的旧容器引着它) 只报不停。
+echo ""
+echo "── 清理旧镜像 ──"
+KEEP="$(compose_images | grep '^catfish-' | sort)"
+REMOVED=0
+for img in $(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep '^catfish-' | sort); do
+    if echo "$KEEP" | grep -Fxq "$img"; then continue; fi
+    if docker rmi "$img" >/dev/null 2>&1; then
+        echo "  已删 $img"; REMOVED=$((REMOVED+1))
+    else
+        echo "  ⚠ 删不掉 $img (还有容器引着它? docker ps -a | grep 看看)"
+    fi
+done
+[ "$REMOVED" -eq 0 ] && echo "  没有旧镜像要删"
+docker image prune -f >/dev/null 2>&1 || true   # 顺手清掉悬空层
 
 echo "═══════════════════════════════════════════════════════"

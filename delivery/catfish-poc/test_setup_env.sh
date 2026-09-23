@@ -146,6 +146,45 @@ v2() { grep -E "^$1=" "$WORK2/.env" | head -1 | cut -d= -f2-; }
     || bad "HTTP · issuer 和 CORS origin 相同了 —— 回到 9/22 那个 bug"
 [ "$(v2 CATFISH_ENABLE_HTTPS)" = "0" ] && ok "HTTP · 模式字段写对" || bad "HTTP · 模式字段错"
 
+# ─────────────────────────────────────────────────────────────────────
+# compose 项目名 (9/23 现场: 包目录改名 → compose 当成新项目 → 5 个空卷)
+#
+# 项目名必须进 .env 且跟目录名脱钩; 升级时必须接上正在跑的那套。
+# 这几条直接调 envgen.py (setup.sh 那层只是把容器标签读出来传进去)。
+# ─────────────────────────────────────────────────────────────────────
+echo "── compose 项目名 ──"
+[ "$(val COMPOSE_PROJECT_NAME)" = "catfish" ] \
+    && ok "新装 · COMPOSE_PROJECT_NAME=catfish (不是目录名 $(basename "$WORK"))" \
+    || bad "新装 · COMPOSE_PROJECT_NAME = '$(val COMPOSE_PROJECT_NAME)' (应为 catfish)"
+
+WORK3=$(mktemp -d)
+trap 'rm -rf "$WORK" "$WORK2" "$WORK3"' EXIT
+cp .env.example docker-compose.yml "$WORK3/"; cp -R tools "$WORK3/"
+# 老包装的现场: .env 里没有 COMPOSE_PROJECT_NAME, 但容器在跑, 标签说项目叫 (老目录名) oldpkg-0715
+cp "$WORK3/.env.example" "$WORK3/.env"
+sed -i.bak -e 's/^PG_PASSWORD=.*/PG_PASSWORD=oldpw/' -e 's/^JWT_SIGNING_KEY=.*/JWT_SIGNING_KEY=oldjwt/' \
+    -e 's/^CATFISH_SECRET_KEY=.*/CATFISH_SECRET_KEY=oldsec/' -e '/^COMPOSE_PROJECT_NAME=/d' "$WORK3/.env"
+python3 "$WORK3/tools/envgen.py" --dir "$WORK3" --server-ip 10.0.0.9 --https 1 --upgrade 1 \
+    --project-name oldpkg-0715 >/dev/null 2>&1 \
+    || bad "升级 · envgen 在老包 + 现有容器的情况下失败了"
+v3() { grep -E "^$1=" "$WORK3/.env" | head -1 | cut -d= -f2-; }
+[ "$(v3 COMPOSE_PROJECT_NAME)" = "oldpkg-0715" ] \
+    && ok "升级 · .env 没项目名时沿用正在跑的容器的 (接上老的卷)" \
+    || bad "升级 · 项目名 = '$(v3 COMPOSE_PROJECT_NAME)' (应沿用 oldpkg-0715, 否则起在空库上)"
+# 再跑一次, 这回容器标签和 .env 一致 → 照常
+python3 "$WORK3/tools/envgen.py" --dir "$WORK3" --server-ip 10.0.0.9 --https 1 --upgrade 1 \
+    --project-name oldpkg-0715 >/dev/null 2>&1 \
+    && ok "升级 · 项目名一致时照常" || bad "升级 · 项目名一致却失败"
+# .env 说 A, 正在跑的容器说 B → 必须停下, 不能猜
+if python3 "$WORK3/tools/envgen.py" --dir "$WORK3" --server-ip 10.0.0.9 --https 1 --upgrade 1 \
+    --project-name some-other-project >/dev/null 2>&1; then
+    bad "升级 · .env 和容器的项目名不一致却放行了 —— 会起在一套空卷上"
+else
+    ok "升级 · .env 和容器的项目名不一致 → 拒绝"
+    [ "$(v3 COMPOSE_PROJECT_NAME)" = "oldpkg-0715" ] \
+        && ok "升级 · 拒绝时没有动 .env" || bad "升级 · 拒绝了却改了 .env"
+fi
+
 echo ""
 echo "通过 $PASS · 失败 $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
