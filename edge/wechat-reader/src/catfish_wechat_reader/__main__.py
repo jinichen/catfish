@@ -42,6 +42,11 @@ def _parser() -> argparse.ArgumentParser:
     target.add_argument("--group-id")
     target.add_argument("--group-name")
     imp.add_argument("--self-name", help='空字符串表示「我不在这些发送人里」')
+    render = commands.add_parser("render")
+    render.add_argument("--json", action="store_true")
+    render.add_argument("--source", required=True)
+    render.add_argument("--self-name")
+    render.add_argument("--max-chars", type=int, default=30000)
     groups = commands.add_parser("groups")
     groups.add_argument("--json", action="store_true")
     groups.add_argument("--library", required=True)
@@ -59,7 +64,16 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _emit(payload: object) -> None:
-    print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+    # 9/23: 输出里有中文 (群名 / 正文)。Windows 上管道 stdout 按系统代码页编码,
+    # 直接 print 会 UnicodeEncodeError —— 调用方 (Companion / Tool Bridge) 一律按
+    # UTF-8 解, 所以这里固定写 UTF-8 字节, 不依赖调用方有没有设 PYTHONIOENCODING。
+    data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
+    buffer = getattr(sys.stdout, "buffer", None)
+    if buffer is None:  # pytest capsys 之类的文本流
+        sys.stdout.write(data)
+        return
+    buffer.write(data.encode("utf-8"))
+    buffer.flush()
 
 
 def _doctor() -> dict[str, object]:
@@ -88,6 +102,7 @@ _LIBRARY_COMMANDS = {
     "import": lambda a: library.import_export(
         a.source, a.library, a.group_id, a.group_name, a.self_name,
     ),
+    "render": lambda a: library.render(a.source, a.self_name, max(1000, min(a.max_chars, 200000))),
     "groups": _groups,
     "update-group": lambda a: library.update_group(a.library, a.group_id, a.name, a.self_name),
     "remove-group": lambda a: library.remove_group(a.library, a.group_id),

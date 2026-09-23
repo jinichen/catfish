@@ -8,6 +8,7 @@
  */
 
 import type { ChatMessage } from "../types/chat";
+import { formatWeChatAttachment } from "./wechatImport";
 // P3.5.20.1 (6/17): applySteerPrefix import 砍 — steer 整链退役.
 
 
@@ -52,6 +53,9 @@ export function formatFileAttachment(att: {
 }): string {
   const kind = att.fileKind || "file";
   const meta = att.meta || {};
+
+  // 9/23: 微信聊天记录 —— 不是文件路径 + execute_code 那一套, 走读取器工具
+  if (kind === "wechat") return formatWeChatAttachment(att);
 
   // meta 简短描述, 给 LLM 一眼看出"这文件多大"
   let metaLine = "";

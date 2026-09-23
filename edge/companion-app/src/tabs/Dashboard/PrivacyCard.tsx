@@ -48,6 +48,8 @@ const LOCAL_DATA_ITEMS: { what: string; path: string; uploaded: boolean }[] = [
   // 无 history" 兜底. 每次 add/replace/remove 落 jsonl, prev_value 全保留. 周一拍
   // 专卡 + Tauri 命令前, 员工/IT 想查直接 cat / jq 这文件.
   { what: "我对你的记忆修改历史 (覆盖/删除全留, 可查可追溯)", path: "~/.catfish/memory_audit.jsonl", uploaded: false },
+  // 9/23: 聊天框拖入的微信「合并转发」导出。删除入口在「微信接入」tab。
+  { what: "你导入的微信聊天记录 (你自己导出的原包)", path: "~/.catfish/wechat-exports/", uploaded: false },
 ];
 
 export default function PrivacyCard() {

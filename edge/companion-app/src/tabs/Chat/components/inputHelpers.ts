@@ -44,6 +44,11 @@ export function metaSummary(att: Attachment): string {
   if (kind === "text") {
     return `${m.total_chars ?? "?"} 字 · ${sizeLabel}`;
   }
+  // 9/23: 微信聊天记录 (导入后 name 已经是群名)
+  if (kind === "wechat") {
+    const partial = m.truncated ? ` · 带了前 ${m.rendered_count ?? "?"} 条` : "";
+    return `微信 · ${m.message_count ?? "?"} 条${partial}`;
+  }
   // BL-VOICE3 (5/10): 音频转录后显示时长 + 转录字数 (字段名跟 chat.ts 对齐)
   if (kind === "audio") {
     const sec = m.duration_sec as number | null | undefined;

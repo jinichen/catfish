@@ -111,6 +111,7 @@ pub mod tts;
 pub mod types;
 pub mod wechat_binding; // BL-WECHAT-CATFISH-BIND v1 (5/26): WeChat ↔ catfish 员工绑定状态
 pub mod wechat_archive; // 8/28: 微信导出文件只读授权，分析沿用当前 Picker
+pub mod wechat_exports; // 9/23: 聊天框拖入微信合并转发 ZIP → 导入库
 pub mod wiki_embed; // P38 (6/5 鸿波): 本机 ONNX BGE-M3 wiki 语义搜索, 100% 离线
 pub mod wiki_files;
 pub(crate) mod wiki_graph; // 9/11: SQLite 关系镜像 + 一跳图检索扩展

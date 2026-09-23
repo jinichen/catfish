@@ -148,6 +148,7 @@ def test_groups_update_and_remove(tmp_path: Path, library: Path, capsys) -> None
     _, listing = _run(capsys, "groups", "--json", "--library", str(library))
     assert listing["items"][0]["name"] == "年审-材料收集"
     assert listing["items"][0]["message_count"] == len(GROUP_A)
+    assert "我自己" in listing["items"][0]["members"]
     _, sessions = _run(capsys, "sessions", "--json", "--source", str(library))
     assert sessions["items"][0]["name"] == "年审-材料收集"
     _, removed = _run(capsys, "remove-group", "--json", "--library", str(library),
@@ -187,3 +188,35 @@ def test_orphans_are_ignored_but_missing_archives_fail(tmp_path: Path, library: 
     code, payload = _run(capsys, "history", "--json", "--source", str(library),
                          "--session-id", group["group_id"], *WIDE)
     assert code == 2 and payload["reason_code"] == "source_missing"
+
+
+def test_render_marks_self_and_missing_attachments(tmp_path: Path, capsys) -> None:
+    source = make_export(tmp_path / "a.zip", GROUP_A, GROUP_A_MEDIA)
+    code, payload = _run(capsys, "render", "--json", "--source", str(source),
+                         "--self-name", "我自己")
+    assert code == 0
+    lines = payload["text"].split("\n")
+    assert lines[0] == "[2026-09-14 15:06] 测试甲: 大家把材料发一下"
+    assert "[文件] 原始底稿.rar  (附件未随导出)" in payload["text"]
+    assert "[文件] 年审材料-盖章版.pdf" in payload["text"]
+    assert "未随导出" not in [l for l in lines if "年审材料" in l][0]
+    assert lines[-1] == "[2026-09-14 15:12] 我自己(我): [语音通话]"
+    assert "    第二行说明" in lines  # 多行正文缩进, 不会被当成新消息
+    assert payload["truncated"] is False and payload["rendered_count"] == len(GROUP_A)
+
+
+def test_render_truncates_honestly(tmp_path: Path, capsys) -> None:
+    many = [("测试甲", f"2026年9月1日 {9 + i // 60:02d}:{i % 60:02d}", "x" * 50) for i in range(100)]
+    source = make_export(tmp_path / "big.zip", many)
+    _, payload = _run(capsys, "render", "--json", "--source", str(source), "--max-chars", "1000")
+    assert payload["truncated"] is True
+    assert payload["message_count"] == 100
+    assert 0 < payload["rendered_count"] < 100
+    assert len(payload["text"]) <= 1000
+
+
+def test_reimport_reports_existing_group_name(tmp_path: Path, library: Path, capsys) -> None:
+    source = make_export(tmp_path / "a.zip", GROUP_A, GROUP_A_MEDIA)
+    _import(capsys, source, library, "--group-name", "年审群", "--self-name", "我自己")
+    again = _import(capsys, source, library)
+    assert (again["already_imported"], again["name"], again["self_name"]) == (True, "年审群", "我自己")

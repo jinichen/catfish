@@ -205,7 +205,9 @@ def import_export(
     sidecar = lib / f"{parsed.sha256}.json"
     if sidecar.exists():
         meta = json.loads(sidecar.read_text(encoding="utf-8"))
-        return {"imported": False, "already_imported": True, "group_id": meta.get("group_id")}
+        existing = groups.get(str(meta.get("group_id")), {})
+        return {"imported": False, "already_imported": True, "group_id": meta.get("group_id"),
+                "name": existing.get("name"), "self_name": existing.get("self_name")}
 
     senders = {name for name, _ in parsed.senders}
     if group_id:
@@ -256,6 +258,36 @@ def import_export(
     })
     return {"imported": True, "already_imported": False, "group_id": group_id,
             "name": group["name"], "self_name": group.get("self_name")}
+
+
+def render(source: str | Path, self_name: str | None, max_chars: int) -> dict[str, object]:
+    """把一个包整理成给模型读的纯文本 (导入后直接放进聊天附件)。
+
+    一行一条: `[2026-09-14 15:06] 发送人(我): 正文`; 正文多行时后续行缩进。
+    附件微信没随导出的, 行尾标出来, 免得模型以为能读到文件内容。
+    超过 max_chars 就截断并如实标 truncated —— 剩下的让模型用 history 工具按需查。
+    """
+    parsed = read_export(source)
+    lines: list[str] = []
+    used = 0
+    truncated = False
+    for message in parsed.messages:
+        who = message.sender + ("(我)" if self_name and message.sender == self_name else "")
+        body = message.text.replace("\n", "\n    ")
+        if message.attachment_name and not message.attachment_present:
+            body += "  (附件未随导出)"
+        line = f"[{message.minute.strftime('%Y-%m-%d %H:%M')}] {who}: {body}"
+        if used + len(line) + 1 > max_chars:
+            truncated = True
+            break
+        lines.append(line)
+        used += len(line) + 1
+    return {
+        "text": "\n".join(lines),
+        "truncated": truncated,
+        "rendered_count": len(lines),
+        "message_count": len(parsed.messages),
+    }
 
 
 def _message_id(group_id: str, sender: str, minute: datetime, text: str, occurrence: int) -> str:
@@ -335,6 +367,8 @@ def list_groups(library: str | Path) -> list[dict[str, object]]:
             "name": group.get("name", ""),
             "self_name": group.get("self_name"),
             "member_count": len(group.get("members") or []),
+            # 给 Companion 的「我是」下拉用; 只是发送人昵称, 本来就在本机 groups.json 里
+            "members": sorted(group.get("members") or []),
             "export_count": len(exports.get(group_id, [])),
             "message_count": item.get("count", 0),
             "start": item.get("start"),

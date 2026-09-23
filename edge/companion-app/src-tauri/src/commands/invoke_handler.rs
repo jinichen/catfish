@@ -222,10 +222,15 @@ pub(crate) fn handler(
             crate::commands::wechat_binding::wechat_binding_revoke,
             crate::commands::wechat_binding::wechat_binding_reject,
             crate::commands::wechat_archive::wechat_archive_status,
-            crate::commands::wechat_archive::wechat_archive_pick_export,
-            crate::commands::wechat_archive::wechat_archive_clear_source,
             crate::commands::wechat_archive::wechat_archive_enable,
             crate::commands::wechat_archive::wechat_archive_disable,
+            // 9/23: 聊天框拖入微信合并转发 ZIP (选文件的 pick_export / clear_source 随看板卡片一起退役)
+            crate::commands::wechat_exports::wechat_export_stage,
+            crate::commands::wechat_exports::wechat_export_import,
+            crate::commands::wechat_exports::wechat_export_discard,
+            crate::commands::wechat_exports::wechat_export_groups,
+            crate::commands::wechat_exports::wechat_export_update_group,
+            crate::commands::wechat_exports::wechat_export_remove_group,
             // BL-IDENTITY-INJECT-DECOUPLE (5/26): SOUL/USER/memories 6 字段, 给 /v1/chat/completions body 透传
             crate::commands::identity_bundle::identity_bundle,
             // BL-BRIEFING-GOAL-INPUT (5/20): /goal UI 路径 — BriefingCard 输入框

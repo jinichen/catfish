@@ -113,7 +113,8 @@ import StyleFingerprintCard from "./StyleFingerprintCard";
 // backend daemon 不动 (hermes 自家 housekeeping). 真要看状态去"控制台" tab.
 // import CuratorCard from "./CuratorCard";
 import CollapsibleSection from "./CollapsibleSection";
-import WeChatArchiveCard from "./WeChatArchiveCard";
+// 9/23: 「导出聊天记录分析」卡片退役 —— 导入入口挪到聊天框 (拖 ZIP), 这里只管已导入的
+import WeChatImportsCard from "./WeChatImportsCard";
 import WebPortalLink from "./WebPortalLink";
 // BL-EMPLOYEE-PRIVACY-VERIFICATION (#77, 5/25): 员工自查"中央存了我啥 / 本机存了啥".
 // 跟 #76 (CLI privacy-audit) / #79 (gateway /api/audit/me) / #78 (员工 doc) 配套.
@@ -251,7 +252,7 @@ export default function DashboardTab() {
             { key: "wechat", label: "💬 微信接入", render: () => (
               <div style={{ display: "grid", gap: 24, minWidth: 0 }}>
                 <WeChatBindingCard />
-                <WeChatArchiveCard />
+                <WeChatImportsCard />
               </div>
             ) },
             // BL-SELF-CHANGE-PASSWORD (7/20): 员工自主改密码

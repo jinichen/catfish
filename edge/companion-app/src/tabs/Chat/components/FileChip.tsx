@@ -29,9 +29,13 @@ function FileChip({
         fontSize: 12,
         maxWidth: 320,
       }}
-      title={`${attachment.name}\n${summary}\n完整文件: ${attachment.keptPath || "(未保留)"}`}
+      title={attachment.fileKind === "wechat"
+        ? `${attachment.name}\n${summary}\n已导入本机 (隐私 → 微信接入 可删除)`
+        : `${attachment.name}\n${summary}\n完整文件: ${attachment.keptPath || "(未保留)"}`}
     >
-      <span style={{ fontSize: 16 }}>{fileEmoji(attachment.name)}</span>
+      <span style={{ fontSize: 16 }}>
+        {attachment.fileKind === "wechat" ? "💬" : fileEmoji(attachment.name)}
+      </span>
       <span
         style={{
           overflow: "hidden",

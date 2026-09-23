@@ -2,27 +2,34 @@
 //!
 //! 本模块只保存授权元数据并校验独立读取器；不读取聊天、不保存密钥，也不调用模型。
 //! 真读取走 Tool Bridge，分析沿用当前会话 Picker。
+//!
+//! 9/23: 数据源从「员工选一个 JSON/CSV 文件」改成「微信导出 ZIP 的导入库」
+//! (`export_library`, 见 wechat_exports.rs)。入口在聊天框拖入 ZIP, 首次导入时
+//! 在确认框里同意授权 —— 看板上单独选文件、单独授权的卡片去掉了。老的
+//! `export_file` 配置仍然认 (Tool Bridge 也认), 员工第一次导入 ZIP 后切到导入库。
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-const CONFIG_VERSION: u32 = 2;
+pub(crate) const CONFIG_VERSION: u32 = 2;
+pub(crate) const SOURCE_LIBRARY: &str = "export_library";
+const SOURCE_FILE: &str = "export_file";
 const EXPORT_READER_NAME: &str = "catfish-wechat-reader";
 const MAX_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct WeChatArchiveConfig {
-    version: u32,
-    enabled: bool,
-    helper_path: String,
-    source_type: String,
-    source_path: String,
-    source_size: u64,
-    source_modified_ns: u64,
-    consented_picker_model: String,
-    consented_at: String,
+pub(crate) struct WeChatArchiveConfig {
+    pub(crate) version: u32,
+    pub(crate) enabled: bool,
+    pub(crate) helper_path: String,
+    pub(crate) source_type: String,
+    pub(crate) source_path: String,
+    pub(crate) source_size: u64,
+    pub(crate) source_modified_ns: u64,
+    pub(crate) consented_picker_model: String,
+    pub(crate) consented_at: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -42,7 +49,7 @@ pub struct WeChatArchiveStatus {
     message: String,
 }
 
-fn catfish_home() -> Result<PathBuf, String> {
+pub(crate) fn catfish_home() -> Result<PathBuf, String> {
     let home = crate::util::paths::home_env()
         .or_else(|_| std::env::var("USERPROFILE"))
         .map_err(|_| "找不到用户目录".to_string())?;
@@ -78,16 +85,16 @@ fn default_reader_path(name: &str, env_name: &str) -> Result<PathBuf, String> {
     Ok(catfish_home()?.join("bin").join(name))
 }
 
-fn default_export_helper_path() -> Result<PathBuf, String> {
+pub(crate) fn default_export_helper_path() -> Result<PathBuf, String> {
     default_reader_path(EXPORT_READER_NAME, "CATFISH_WECHAT_READER")
 }
 
-fn load_config() -> Option<WeChatArchiveConfig> {
+pub(crate) fn load_config() -> Option<WeChatArchiveConfig> {
     let text = std::fs::read_to_string(config_path().ok()?).ok()?;
     serde_json::from_str(&text).ok()
 }
 
-fn write_config(config: &WeChatArchiveConfig) -> Result<(), String> {
+pub(crate) fn write_config(config: &WeChatArchiveConfig) -> Result<(), String> {
     let path = config_path()?;
     let parent = path.parent().ok_or_else(|| "授权文件路径无父目录".to_string())?;
     std::fs::create_dir_all(parent).map_err(|e| format!("创建授权目录失败: {e}"))?;
@@ -102,7 +109,7 @@ fn write_config(config: &WeChatArchiveConfig) -> Result<(), String> {
     Ok(())
 }
 
-fn helper_installed(path: &Path) -> bool {
+pub(crate) fn helper_installed(path: &Path) -> bool {
     if !path.is_absolute() || !path.is_file() {
         return false;
     }
@@ -118,7 +125,7 @@ fn helper_installed(path: &Path) -> bool {
     true
 }
 
-fn supported_platform() -> bool {
+pub(crate) fn supported_platform() -> bool {
     cfg!(any(target_os = "macos", target_os = "windows"))
 }
 
@@ -157,7 +164,8 @@ fn source_ready(config: &WeChatArchiveConfig) -> bool {
         return false;
     }
     match config.source_type.as_str() {
-        "export_file" => export_snapshot(Path::new(&config.source_path))
+        SOURCE_LIBRARY => Path::new(&config.source_path).is_dir(),
+        SOURCE_FILE => export_snapshot(Path::new(&config.source_path))
             .map(|(_, size, modified)| {
                 size == config.source_size && modified == config.source_modified_ns
             })
@@ -177,18 +185,27 @@ fn doctor_is_safe(report: &Value) -> bool {
         && report.get("modifies_wechat_app").and_then(Value::as_bool) == Some(false)
 }
 
-async fn verify_helper(path: &Path) -> Result<(), String> {
-    let mut command = crate::services::process::background_tokio_command(path);
-    command
-        .arg("doctor")
-        .arg("--json")
-        .env_clear()
-        .kill_on_drop(true);
-    for key in ["HOME", "PATH", "LANG", "LC_ALL"] {
+/// 启动读取器用的最小环境。env_clear 之后只放回这些 —— 不透传 API key / 代理。
+///
+/// 9/23 补 SYSTEMROOT / WINDIR / USERPROFILE / TEMP: 以前只放 HOME/PATH/LANG,
+/// Windows 上 Python 没有 SYSTEMROOT 连随机数都初始化不了, 跟 Tool Bridge 那边
+/// (`wechat_archive._safe_env`) 也对不齐。
+pub(crate) fn reader_command(helper: &Path) -> tokio::process::Command {
+    let mut command = crate::services::process::background_tokio_command(helper);
+    command.env_clear().kill_on_drop(true);
+    for key in [
+        "HOME", "USERPROFILE", "PATH", "LANG", "LC_ALL", "SYSTEMROOT", "WINDIR", "TEMP", "TMP",
+    ] {
         if let Ok(value) = std::env::var(key) {
             command.env(key, value);
         }
     }
+    command
+}
+
+pub(crate) async fn verify_helper(path: &Path) -> Result<(), String> {
+    let mut command = reader_command(path);
+    command.arg("doctor").arg("--json");
     let output = tokio::time::timeout(std::time::Duration::from_secs(10), command.output())
         .await
         .map_err(|_| "安全读取器自检超时".to_string())?
@@ -207,9 +224,10 @@ async fn verify_helper(path: &Path) -> Result<(), String> {
 fn build_status() -> WeChatArchiveStatus {
     let supported = supported_platform();
     let config = load_config();
-    let export_config = config
-        .as_ref()
-        .filter(|item| item.version == CONFIG_VERSION && item.source_type == "export_file");
+    let export_config = config.as_ref().filter(|item| {
+        item.version == CONFIG_VERSION
+            && (item.source_type == SOURCE_LIBRARY || item.source_type == SOURCE_FILE)
+    });
     let helper = export_config
         .and_then(|item| {
             (!item.helper_path.trim().is_empty()).then(|| PathBuf::from(&item.helper_path))
@@ -217,7 +235,7 @@ fn build_status() -> WeChatArchiveStatus {
         .or_else(|| default_export_helper_path().ok())
         .unwrap_or_default();
     let installed = supported && helper_installed(&helper);
-    let source_type = export_config.map(|_| "export_file".to_string());
+    let source_type = export_config.map(|item| item.source_type.clone());
     let source_path = export_config
         .map(|item| item.source_path.clone())
         .filter(|value| !value.is_empty());
@@ -235,7 +253,7 @@ fn build_status() -> WeChatArchiveStatus {
     } else if !installed {
         "安全读取器尚未安装".to_string()
     } else if !ready {
-        "请选择聊天导出文件".to_string()
+        "还没有导入微信聊天记录：在聊天框拖入微信「合并转发」导出的 ZIP".to_string()
     } else if current.is_none() {
         "请先在聊天 Picker 中选择模型".to_string()
     } else if requires_reauthorization {
@@ -267,60 +285,6 @@ pub fn wechat_archive_status() -> WeChatArchiveStatus {
 }
 
 #[tauri::command]
-pub async fn wechat_archive_pick_export() -> Result<WeChatArchiveStatus, String> {
-    if !supported_platform() {
-        return Err("当前系统不支持聊天导出文件分析".to_string());
-    }
-    let picked = rfd::AsyncFileDialog::new()
-        .set_title("选择聊天导出文件")
-        .add_filter("聊天导出文件", &["json", "jsonl", "csv"])
-        .pick_file()
-        .await;
-    let Some(file) = picked else {
-        return Ok(build_status());
-    };
-    let (source, source_size, source_modified_ns) = export_snapshot(file.path())?;
-    let helper_path = load_config()
-        .filter(|item| item.source_type == "export_file")
-        .map(|item| item.helper_path)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(default_export_helper_path()?.to_string_lossy().to_string());
-    write_config(&WeChatArchiveConfig {
-        version: CONFIG_VERSION,
-        enabled: false,
-        helper_path,
-        source_type: "export_file".to_string(),
-        source_path: source.to_string_lossy().to_string(),
-        source_size,
-        source_modified_ns,
-        consented_picker_model: String::new(),
-        consented_at: String::new(),
-    })?;
-    Ok(build_status())
-}
-
-#[tauri::command]
-pub fn wechat_archive_clear_source() -> Result<WeChatArchiveStatus, String> {
-    let helper_path = load_config()
-        .filter(|item| item.source_type == "export_file")
-        .map(|item| item.helper_path)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(default_export_helper_path()?.to_string_lossy().to_string());
-    write_config(&WeChatArchiveConfig {
-        version: CONFIG_VERSION,
-        enabled: false,
-        helper_path,
-        source_type: String::new(),
-        source_path: String::new(),
-        source_size: 0,
-        source_modified_ns: 0,
-        consented_picker_model: String::new(),
-        consented_at: String::new(),
-    })?;
-    Ok(build_status())
-}
-
-#[tauri::command]
 pub async fn wechat_archive_enable(acknowledged: bool) -> Result<WeChatArchiveStatus, String> {
     if !supported_platform() {
         return Err("当前系统不支持聊天导出文件分析".to_string());
@@ -330,12 +294,12 @@ pub async fn wechat_archive_enable(acknowledged: bool) -> Result<WeChatArchiveSt
     }
     let model = crate::services::picker_config::current_model()
         .ok_or_else(|| "请先在聊天 Picker 中选择模型".to_string())?;
-    let mut config = load_config().ok_or_else(|| "请先选择聊天数据源".to_string())?;
-    if config.source_type != "export_file" {
-        return Err("请先选择聊天导出文件".to_string());
+    let mut config = load_config().ok_or_else(|| "还没有导入微信聊天记录".to_string())?;
+    if config.source_type != SOURCE_LIBRARY && config.source_type != SOURCE_FILE {
+        return Err("还没有导入微信聊天记录".to_string());
     }
     if !source_ready(&config) {
-        return Err("聊天导出文件已失效，请重新选择".to_string());
+        return Err("微信聊天数据源已失效，请重新导入".to_string());
     }
     let configured_path = if config.helper_path.trim().is_empty() {
         default_export_helper_path()?

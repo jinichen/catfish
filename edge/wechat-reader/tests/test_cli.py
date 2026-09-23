@@ -243,3 +243,22 @@ def test_limit_is_capped_at_200(
     )
     assert code == 0
     assert payload["count"] == 200
+
+
+def test_output_is_utf8_even_when_the_console_code_page_is_not(tmp_path: Path) -> None:
+    """Windows 管道 stdout 是系统代码页; 中文会话名不能把 reader 打崩。"""
+    import os
+    import subprocess
+    import sys
+
+    source = tmp_path / "wechat.json"
+    source.write_text(json.dumps(_messages(), ensure_ascii=False), encoding="utf-8")
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252",
+           "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
+    completed = subprocess.run(
+        [sys.executable, "-m", "catfish_wechat_reader", "sessions", "--json", "--source", str(source)],
+        capture_output=True, env=env, timeout=30, check=False,
+    )
+    assert completed.returncode == 0, completed.stderr.decode("utf-8", "replace")
+    payload = json.loads(completed.stdout.decode("utf-8"))
+    assert {item["name"] for item in payload["items"]} == {"项目群", "财务"}

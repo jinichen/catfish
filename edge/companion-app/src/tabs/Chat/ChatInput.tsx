@@ -57,6 +57,17 @@ import QueuedMessagesStrip from "./components/QueuedMessagesStrip";
 // 不再作独立 button render. 未来若需彻底删可 grep 无 caller 后再动.
 // import TeachingToggleButton from "./components/TeachingToggleButton";
 import ThumbCard from "./components/ThumbCard";
+// 9/23: 拖入微信「合并转发」导出的 ZIP → 确认框 → 导入本机 → 作为附件发给模型
+import WeChatImportDialog from "./components/WeChatImportDialog";
+import {
+  discardWeChatStage,
+  importWeChatExport,
+  isZipFile,
+  stageWeChatExport,
+  toAttachment,
+  type WeChatImportChoice,
+  type WeChatStage,
+} from "../../lib/wechatImport";
 
 export default function ChatInput({
   isStreaming,
@@ -73,6 +84,9 @@ export default function ChatInput({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachError, setAttachError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [wechatStage, setWechatStage] = useState<WeChatStage | null>(null);
+  const [wechatBusy, setWechatBusy] = useState(false);
+  const [wechatError, setWechatError] = useState<string | null>(null);
   // 5/5 鸿波报"上传 Excel 没反应" 修: 大文件 base64 + Python 解析需要几秒,
   // 之前 UI 0 反馈, 员工以为坏了. 加个 "正在解析..." 状态.
   // BL-VOICE3 (5/10): 音频转录耗时更长 (30 分钟会议录音可能跑 1-2 分钟),
@@ -154,13 +168,31 @@ export default function ChatInput({
   /** 把一组 File 加进 attachments, 校验失败显示在 attachError */
   async function addFiles(files: FileList | File[]): Promise<void> {
     setAttachError(null);
-    const arr = Array.from(files);
-    if (attachments.length + arr.length > MAX_ATTACHMENTS) {
+    const all = Array.from(files);
+    // 9/23: .zip 只认微信「合并转发」导出, 走确认框; 其余照旧解析
+    const zips = all.filter(isZipFile);
+    const arr = all.filter((f) => !isZipFile(f));
+    if (zips.length > 1 || (zips.length === 1 && wechatStage)) {
+      setAttachError("一次导入一个微信聊天记录 ZIP");
+      return;
+    }
+    if (attachments.length + all.length > MAX_ATTACHMENTS) {
       setAttachError(`最多 ${MAX_ATTACHMENTS} 张图, 删几张再加`);
       return;
     }
     setIsParsingFile(true);
     try {
+      if (zips.length === 1) {
+        setParseLabel("正在读取微信聊天记录…");
+        try {
+          setWechatError(null);
+          setWechatStage(await stageWeChatExport(zips[0]));
+        } catch (e) {
+          // 读取器的原话 (比如「不是认识的微信聊天记录格式」) 直接给员工看
+          setAttachError((e as Error).message || String(e));
+          return;
+        }
+      }
       const next: Attachment[] = [];
       for (const f of arr) {
         // BL-VOICE3 (5/10): 音频转录可能跑 30s+, 用专属 label 安抚员工
@@ -186,6 +218,31 @@ export default function ChatInput({
     } finally {
       setIsParsingFile(false);
     }
+  }
+
+  async function confirmWeChatImport(choice: WeChatImportChoice): Promise<void> {
+    if (!wechatStage) return;
+    setWechatBusy(true);
+    setWechatError(null);
+    try {
+      const result = await importWeChatExport(wechatStage, choice);
+      const attachment = toAttachment(wechatStage, result);
+      setAttachments((cur) => [...cur, attachment]);
+      setWechatStage(null);
+    } catch (e) {
+      setWechatError((e as Error).message || String(e));
+    } finally {
+      setWechatBusy(false);
+    }
+  }
+
+  function cancelWeChatImport(): void {
+    if (wechatStage) {
+      // 暂存文件删不掉也不挡员工 —— Rust 那边一小时后会自己清
+      void discardWeChatStage(wechatStage).catch(() => undefined);
+    }
+    setWechatStage(null);
+    setWechatError(null);
   }
 
   function removeAttachment(idx: number): void {
@@ -340,6 +397,15 @@ export default function ChatInput({
       onDrop={onDrop}
       className={`chat-composer${isDragOver ? " chat-composer--dragover" : ""}`}
     >
+      {wechatStage && (
+        <WeChatImportDialog
+          stage={wechatStage}
+          busy={wechatBusy}
+          error={wechatError}
+          onConfirm={(choice) => void confirmWeChatImport(choice)}
+          onCancel={cancelWeChatImport}
+        />
+      )}
       {/* 缩略图行 —— 只有 attachments 非空才渲染 */}
       {attachments.length > 0 && (
         <div
@@ -416,7 +482,7 @@ export default function ChatInput({
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*,.pdf,.xlsx,.xls,.docx,.csv,.txt,.md,.markdown,.log,.mp3,.wav,.m4a,.flac,.aac,.ogg,.mp4,.mov,.m4v,.mkv,.webm"
+          accept="image/*,.pdf,.xlsx,.xls,.docx,.csv,.txt,.md,.markdown,.log,.zip,.mp3,.wav,.m4a,.flac,.aac,.ogg,.mp4,.mov,.m4v,.mkv,.webm"
           multiple
           onChange={onFileInputChange}
           style={{ display: "none" }}
