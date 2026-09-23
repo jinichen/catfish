@@ -50,6 +50,11 @@ def collect() -> list[tuple[str, Path]]:
 
 
 def main() -> int:
+    # Windows runner 上 stdout 是 cp1252, 中文输出直接 UnicodeEncodeError → exit 1
+    # (9/23 MSI 构建就是这么挂的: 包已经打好, 死在最后一行 print)。
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     if len(sys.argv) != 2:
         print(__doc__)
         return 2

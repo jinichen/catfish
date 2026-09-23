@@ -352,6 +352,10 @@ jobs:
 
       - name: Build offline email and Hermes dependency resources
         shell: pwsh
+        env:
+          # Windows 上 Python stdout 默认 cp1252, 脚本里的中文输出会直接崩
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
         run: |
           $ErrorActionPreference = 'Stop'
           $resourceDir = "${{ github.workspace }}\edge\companion-app\src-tauri\resources\windows"
