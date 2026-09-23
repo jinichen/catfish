@@ -145,11 +145,39 @@ pub fn schedule_watchdog() {
              tick={}s, max_failures={}, backoff={}s",
             TICK_INTERVAL_SECS, MAX_CONSECUTIVE_FAILURES, BACKOFF_AFTER_FAILURES_SECS
         );
+        // 9/23: "没装"不是"死了"。
+        //
+        // Windows MSI 不带 tool-bridge / local-search (它们要一个源码树:
+        // catfish_paths::catfish_root 找的是 ~/person_task/catfish 或 ~/catfish)。
+        // 之前 watchdog 把"目录不存在"当成一次 spawn 失败, 于是每 5s 试一次、
+        // 5 次进 backoff 180s、到期再来 5 次 —— 永远循环, 日志里每 3 分钟
+        // 一组 6 行 WARN, 而且每次都真的去 pkill / 起进程。9/23 鸿波 Windows
+        // 机器上的日志就是这个样子。
+        //
+        // 装没装是启动时就能知道的事: 目录不在, 说一次, 以后不看。
+        // (员工中途装上要重启 Companion 才会被监控 —— 可以接受, 装东西本来就要重启。)
+        let tool_bridge_installed = catfish_paths::tool_bridge_dir()
+            .map(|d| d.exists())
+            .unwrap_or(false);
+        let local_search_installed = catfish_paths::local_search_dir()
+            .map(|d| d.exists())
+            .unwrap_or(false);
+        if !tool_bridge_installed {
+            log::warn!(
+                "watchdog: tool-bridge 没装 (找不到 edge/tool-bridge 目录), 不监控。\
+                 LLM 工具调用 (浏览器 / 文件 / 录屏) 在这台机器上不可用。"
+            );
+        }
+        if !local_search_installed {
+            log::warn!("watchdog: local-search 没装 (找不到 edge/local-search 目录), 不监控。本机文件搜索不可用。");
+        }
+
         loop {
             interval.tick().await;
 
             // tool-bridge (client-side MCP server)
-            if !tool_bridge_health.is_in_backoff()
+            if tool_bridge_installed
+                && !tool_bridge_health.is_in_backoff()
                 && !is_alive(catfish_paths::tool_bridge_pid_file, "catfish_tool_bridge")
             {
                 log::info!("watchdog: tool-bridge dead, respawning");
@@ -164,7 +192,8 @@ pub fn schedule_watchdog() {
             }
 
             // local-search (文件 FTS watcher, 死了 respawn 让索引继续)
-            if !local_search_health.is_in_backoff()
+            if local_search_installed
+                && !local_search_health.is_in_backoff()
                 && !is_alive(catfish_paths::local_search_pid_file, "catfish_search")
             {
                 log::info!("watchdog: local-search dead, respawning");

@@ -102,7 +102,7 @@ fn find_python() -> Option<PathBuf> {
 ///
 /// 一次 subprocess 调用, ~100ms, 只在启动找 Python 时跑一次. 不影响每次 parse 性能.
 fn _has_parse_deps(py: &Path) -> bool {
-    let out = std::process::Command::new(py)
+    let out = crate::services::process::background_command(py)
         .arg("-c")
         .arg("import pypdfium2, openpyxl, docx")
         .output();
@@ -171,7 +171,7 @@ async fn parse_file_inner(tmp_path: &str) -> Result<ParseFileFromPython, String>
 
     log::info!("parse_file: {} {} {}", py.display(), script.display(), tmp_path);
 
-    let output = std::process::Command::new(&py)
+    let output = crate::services::process::background_command(&py)
         .arg(&script)
         .arg(tmp_path)
         .output()
@@ -391,7 +391,7 @@ pub async fn attachment_bm25_search(
         parsed_text_path, query.chars().take(30).collect::<String>(), k,
     );
 
-    let output = std::process::Command::new(&py)
+    let output = crate::services::process::background_command(&py)
         .arg(&script)
         .arg("--text-path").arg(&parsed_text_path)
         .arg("--query").arg(&query)

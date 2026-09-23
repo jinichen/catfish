@@ -22,6 +22,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from .hermes_paths import hermes_home as _hermes_home
 
 logger = logging.getLogger("catfish.adapter")
 
@@ -344,7 +345,7 @@ def _read_hermes_memory_config() -> dict:
 
     返回的 dict 用 MemoryStore 默认值兜底 (memory_char_limit=2200, user_char_limit=1375).
     """
-    cfg_path = Path.home() / ".hermes" / "config.yaml"
+    cfg_path = _hermes_home() / "config.yaml"
     if not cfg_path.exists():
         return {}
     try:

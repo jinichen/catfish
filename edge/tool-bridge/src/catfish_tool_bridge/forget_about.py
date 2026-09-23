@@ -41,6 +41,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from .hermes_paths import hermes_home as _hermes_home
 
 logger = logging.getLogger("catfish.tool_bridge.forget_about")
 
@@ -53,7 +54,7 @@ def _catfish_dir() -> Path:
 
 
 def _hermes_memories_dir() -> Path:
-    return Path.home() / ".hermes" / "memories"
+    return _hermes_home() / "memories"
 
 
 def _backup_dir() -> Path:

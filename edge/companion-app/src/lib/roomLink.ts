@@ -148,6 +148,22 @@ export async function resolveRoomLinkApproval(
 }
 
 /** 起轮询, 返停止函数。setTimeout 链, 慢响应不堆积。 */
+/** 下一次轮询隔多久。
+ *
+ * 9/23: Windows MSI 的 hermes 没装 catfish-xcatfish-user 插件, 这条路由就是
+ * 404 —— 之前照样每 3 秒打一次, 两个轮询点一起, Companion 日志每分钟 40 行
+ * INFO, 真正的错误 (那天是聊天报错) 被淹在里面翻不到。
+ *
+ *   404          路由不存在 = 插件没装, 重启 hermes 之前不会变 → 5 分钟看一眼
+ *   unreachable  hermes 没起 / 在重启                          → 30 秒
+ *   其它          正常节奏
+ */
+export function nextInterval(r: RoomLinkPending, base: number): number {
+  if (r.reason === "http_404") return 5 * 60_000;
+  if (r.reason === PROBE_UNREACHABLE) return 30_000;
+  return base;
+}
+
 export function startRoomLinkPolling(
   onUpdate: (r: RoomLinkPending) => void,
   intervalMs: number = POLL_INTERVAL_MS,
@@ -160,7 +176,7 @@ export function startRoomLinkPolling(
     const r = await fetchRoomLinkPending();
     if (stopped) return;
     onUpdate(r);
-    timer = setTimeout(tick, intervalMs);
+    timer = setTimeout(tick, nextInterval(r, intervalMs));
   };
 
   void tick();

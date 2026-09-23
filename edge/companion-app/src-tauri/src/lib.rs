@@ -45,9 +45,14 @@ pub fn run() {
     // 全局快捷键, 任何 app 都能召唤鲶鱼.
     #[cfg(desktop)]
     let toggle_shortcut = tauri_plugin_global_shortcut::Shortcut::new(
+        // 9/23: Windows 上 SUPER = Win 键, 而 Win+Shift+Space 是系统的"切换输入法
+        // (反向)" —— 注册要么失败、要么把中文员工切输入法的键抢走。Windows 用 Ctrl。
         Some(
-            tauri_plugin_global_shortcut::Modifiers::SUPER
-                | tauri_plugin_global_shortcut::Modifiers::SHIFT,
+            if cfg!(target_os = "macos") {
+                tauri_plugin_global_shortcut::Modifiers::SUPER
+            } else {
+                tauri_plugin_global_shortcut::Modifiers::CONTROL
+            } | tauri_plugin_global_shortcut::Modifiers::SHIFT,
         ),
         tauri_plugin_global_shortcut::Code::Space,
     );
@@ -300,7 +305,9 @@ pub fn run() {
             //
             // 等 30 秒是给 · hermes install 完 (首启 offline install ~10min · 不首启秒过) +
             // OAuth session 从 keyring load 完. 保守 · 免 race.
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            // 9/23: 这整块原来是 cfg(macos | linux) —— Windows 上于是没有任何东西
+            // 往 hermes 的 .env 写 OPENAI_API_KEY, hermes 连网关都调不了 (见
+            // hermes_jwt_sync.rs HERMES_CLI_SECRET 上面那段)。三个平台一套。
             {
                 tauri::async_runtime::spawn(async {
                     tokio::time::sleep(std::time::Duration::from_secs(30)).await;
@@ -399,9 +406,9 @@ pub fn run() {
             {
                 use tauri_plugin_global_shortcut::GlobalShortcutExt;
                 if let Err(e) = app.global_shortcut().register(toggle_shortcut) {
-                    log::warn!("注册 Cmd+Shift+Space 失败 (已被其他 app 占用?): {e}");
+                    log::warn!("注册召唤快捷键 (mac Cmd / Win Ctrl + Shift + Space) 失败 (已被其他 app 占用?): {e}");
                 } else {
-                    log::info!("已注册全局快捷键 Cmd+Shift+Space → 召唤鲶鱼浮窗");
+                    log::info!("已注册全局快捷键 (mac Cmd / Win Ctrl) + Shift + Space → 召唤鲶鱼浮窗");
                 }
             }
 
@@ -431,6 +438,14 @@ pub fn run() {
                             log::info!(
                                 "Hermes bootstrap 就绪（等待 {waited_secs}s），启动本地服务"
                             );
+                            // 9/23: tool-bridge / local-search 源码从安装包解出来,
+                            // 必须在 autostart 之前 (autostart 按目录在不在决定起不起)。
+                            {
+                                use tauri::Manager;
+                                if let Ok(res) = runtime_services_app.path().resource_dir() {
+                                    services::edge_runtime::ensure_extracted(&res);
+                                }
+                            }
                             services::autostart::schedule_autostart();
                             services::watchdog::schedule_watchdog();
                             services::email_scheduler::schedule_email_scheduler(

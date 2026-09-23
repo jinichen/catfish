@@ -472,18 +472,24 @@ tar -czf $emailTar -C $emailStage .
 if ($LASTEXITCODE -ne 0) { throw 'catfish-email-dist.tar.gz build failed' }
 
 python -m pip download --only-binary=:all: --dest $depsStage `
-    --python-version 3.11 --platform win_amd64 --implementation cp --abi cp311 playwright
+    --python-version 3.11 --platform win_amd64 --implementation cp --abi cp311 playwright watchdog
 if ($LASTEXITCODE -ne 0) { throw 'playwright dependency download failed' }
 python -m pip wheel --no-deps --wheel-dir $depsStage jieba
 if ($LASTEXITCODE -ne 0) { throw 'jieba wheel build failed' }
 $depWheels = @(Get-ChildItem $depsStage -Filter '*.whl')
 if (-not ($depWheels | Where-Object { $_.Name -like 'jieba-*' })) { throw 'deps archive missing jieba wheel' }
 if (-not ($depWheels | Where-Object { $_.Name -like 'playwright-*' })) { throw 'deps archive missing playwright wheel' }
+if (-not ($depWheels | Where-Object { $_.Name -like 'watchdog-*' })) { throw 'deps archive missing watchdog wheel (local-search 文件监听)' }
 $depsTar = Join-Path $resourceDir 'hermes-deps-dist.tar.gz'
 if (Test-Path $depsTar) { Remove-Item -Force $depsTar }
 tar -czf $depsTar -C $depsStage .
 if ($LASTEXITCODE -ne 0) { throw 'hermes-deps-dist.tar.gz build failed' }
-foreach ($archive in @($emailTar, $depsTar)) {
+# 9/23: tool-bridge / local-search 源码 —— 之前两个平台的包都没带, 客户机器上
+# Companion 找不到它们 (见 src-tauri/src/services/edge_runtime.rs)。跟 mac 同一个脚本。
+$edgeTar = Join-Path $resourceDir 'catfish-edge-runtime.tar.gz'
+python (Join-Path $PSScriptRoot 'build_edge_runtime.py') $edgeTar
+if ($LASTEXITCODE -ne 0) { throw 'catfish-edge-runtime.tar.gz build failed' }
+foreach ($archive in @($emailTar, $depsTar, $edgeTar)) {
     $file = Get-Item $archive
     if ($file.Length -le 1KB) { throw "resource archive too small: $archive" }
     Write-Host "  OK $($file.Name) ($([math]::Round($file.Length/1KB,1)) KB)" -ForegroundColor Green
@@ -496,7 +502,7 @@ $macDir = "edge\companion-app\src-tauri\resources\mac"
 New-Item -ItemType Directory -Force -Path $macDir | Out-Null
 foreach ($f in @('install.sh', 'uv', 'cpython-3.11.15-embed.tar.gz', 'hermes-agent-bundle.tar.gz')) {
     $p = "$macDir\$f"
-    if (-not (Test-Path $p)) { Set-Content -Path $p -Value '' }
+    if (-not (Test-Path $p)) { New-Item -ItemType File -Force -Path $p | Out-Null }
 }
 
 # ─── Step 10 · Frontend npm install ─────────────────────────

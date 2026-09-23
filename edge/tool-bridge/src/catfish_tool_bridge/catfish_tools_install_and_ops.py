@@ -152,6 +152,7 @@ from .catfish_tools_install import (  # noqa: E402, F401
     _list_existing_skills,
     skill_install,
 )
+from .hermes_paths import hermes_home as _hermes_home  # noqa: E402
 
 # ============================================================
 # BL-MEMORY-DEDUPE-COMPRESS (5/17 凌晨, P2 #1+#2 lite 版)
@@ -169,7 +170,7 @@ def _read_hermes_memory_entries(target: str) -> List[str]:
     if target not in ("user", "memory"):
         return []
     filename = "USER.md" if target == "user" else "MEMORY.md"
-    path = Path.home() / ".hermes" / "memories" / filename
+    path = _hermes_home() / "memories" / filename
     if not path.exists():
         return []
     try:

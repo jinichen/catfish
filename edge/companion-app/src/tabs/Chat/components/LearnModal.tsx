@@ -24,6 +24,7 @@ import { useState } from "react";
 // P3.5.170: 复用 RecMode ModalShell + T theme tokens (UX 一致性). btnStyle 未用
 // (本 modal 按钮内联 style 走 T 变量, 跟 SetupModal 保持一致模式).
 import { ModalShell, T } from "../RecMode/shared";
+import { modKey } from "../../../lib/platformLabels";
 
 interface Props {
   /** 员工点"开始学" → 传纯描述 (无 /learn 前缀). 上层 (EduPopover → ChatInput)
@@ -341,7 +342,7 @@ export default function LearnModal({ onStart, onClose }: Props) {
           textAlign: "right",
         }}
       >
-        ⌘ + Enter 提交 · Esc 关闭
+        {modKey()} + Enter 提交 · Esc 关闭
       </div>
     </ModalShell>
   );

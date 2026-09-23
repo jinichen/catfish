@@ -56,6 +56,54 @@
         assert!(out.contains("cdp_url: ws://x"));
     }
 
+    // ── provider / default 钉死 (9/23) ──────────────────────────────────
+    //
+    // 见 ensure_gateway_model_route 的注释: fresh 装的 Windows 上 hermes config
+    // 是上游出厂默认 (anthropic/claude-opus-4.6 + provider auto), Companion 从来
+    // 没写过这两行, 聊天一律"未知错误"。
+
+    /// 9/23 鸿波机器上那份 config 的形态 —— 上游默认, 得掰成走网关。
+    #[test]
+    fn 上游出厂默认掰成走网关() {
+        let input = "model:\n  default: anthropic/claude-opus-4.6\n  provider: auto\n  base_url: http://127.0.0.1:8999/v1\nweb:\n  backend: tavily\n";
+        let out = ensure_gateway_model_route(input);
+        assert_eq!(read_model_field(&out, "provider").as_deref(), Some("openai-api"), "{out}");
+        assert_eq!(read_model_field(&out, "default").as_deref(), Some("catfish-auto"), "{out}");
+        assert_eq!(out.matches("provider:").count(), 1, "重复插了: {out}");
+        assert_eq!(out.matches("default:").count(), 1, "重复插了: {out}");
+        assert!(out.contains("base_url: http://127.0.0.1:8999/v1") && out.contains("backend: tavily"));
+        assert_eq!(ensure_gateway_model_route(&out), out, "要幂等");
+    }
+
+    /// 两行都没有 (更老的 bootstrap) → 插进 model 段, 不能掉到别的段。
+    #[test]
+    fn 缺_provider_和_default_时插进去() {
+        let input = "model:\n  api_key: jwt\n  base_url: http://127.0.0.1:8999/v1\nweb:\n  backend: tavily\n";
+        let out = ensure_gateway_model_route(input);
+        let model_block: String = out
+            .lines()
+            .skip_while(|l| !l.starts_with("model:"))
+            .skip(1)
+            .take_while(|l| l.starts_with(' '))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(model_block.contains("provider: openai-api") && model_block.contains("default: catfish-auto"), "插错段了: {out}");
+    }
+
+    /// 员工切到了 Codex 运行时 (HERMES_HELPER 写的) —— 不许掰回来。
+    #[test]
+    fn codex_运行时原样放过() {
+        let input = "model:\n  provider: openai-codex\n  default: gpt-5-codex\n  api_key: jwt\n";
+        assert_eq!(ensure_gateway_model_route(input), input);
+    }
+
+    /// 已经指着某个 catfish-* 模型 (开发机手写) —— 不改成 catfish-auto。
+    #[test]
+    fn 已是_catfish_模型不动() {
+        let input = "model:\n  provider: openai-api\n  default: catfish-private-main\n";
+        assert_eq!(ensure_gateway_model_route(input), input);
+    }
+
     // ── api_mode 钉死 (8/8) ────────────────────────────────────────────
     //
     // 见 ensure_model_api_mode 的注释: hermes v0.20 会让 provider 声明的

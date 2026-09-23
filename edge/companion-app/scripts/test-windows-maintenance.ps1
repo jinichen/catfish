@@ -15,9 +15,9 @@ try {
     $startup = Join-Path $fixture 'Startup'
     $wrapper = Join-Path $env:APPDATA 'catfish\catfish-search-watcher.bat'
     New-Item -ItemType Directory -Force -Path $appDir, $startup, (Split-Path $wrapper) | Out-Null
-    Set-Content -LiteralPath $wrapper -Value 'rem catfish-search watcher wrapper; python -m catfish_search.cli watch'
+    Set-Content -LiteralPath $wrapper -Encoding ASCII -Value 'rem catfish-search watcher wrapper; python -m catfish_search.cli watch'
     $data = Join-Path $appDir 'user-data.md'
-    Set-Content -LiteralPath $data -Value 'keep me'
+    Set-Content -LiteralPath $data -Encoding ASCII -Value 'keep me'
     $script:sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     $script:tasks = @([pscustomobject]@{
         TaskName='CatfishSearchWatcher'; TaskPath='\'; Principal=[pscustomobject]@{UserId=$script:sid}

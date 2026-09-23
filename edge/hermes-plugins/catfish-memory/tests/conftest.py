@@ -112,16 +112,6 @@ if "catfish_memory" not in sys.modules:
         _alias_submodules()   # catfish_memory 又带进来一批子模块
 
 
-# P3.5.29 Phase 7.1 (6/17 鸿波): hermes-memory _get_summarize_model 加 role_resolver
-# 真second tier** 改后, 老 yaml/env 测 真break** — 真测真 LIVE gateway 真
-# fetch 真roles.yaml summarize: catfish-public-gemini-pro** → winning over yaml/env.
-#
-# fix path D: autouse fixture reset role_resolver cache + monkeypatch fetch 返 None.
-# 所有 test 真默认 mock role_resolver 0 干扰, 测真yaml/env path
-# 真保留**. 真单独测 role_resolver path 需要 真显式 monkeypatch.undo 或 测真直**.
-#
-# 为啥 autouse: 6 个 sync_turn / on_session_end 测真 hit _get_summarize_model,
-# 真单测漏 mock 真LIVE gateway 真 break**. autouse 0 漏.
 import pytest  # noqa: E402
 
 
@@ -171,25 +161,3 @@ def _isolate_home(tmp_path_factory, monkeypatch):
     yield fake_home
 
 
-@pytest.fixture(autouse=True)
-def _mock_role_resolver(monkeypatch):
-    """默认 mock 真`role_resolver.resolve` 真 None → fallback yaml/env path.
-
-    测真 role_resolver 真positive path 真测显式 monkeypatch.setattr(
-    role_resolver_mod, 'resolve', lambda role: ...) override autouse default.
-    """
-    try:
-        import importlib
-        _role_resolver_mod = importlib.import_module(f"{_PKG_NAME}.role_resolver")
-        # reset cache 防 test 间 stale state
-        _role_resolver_mod._reset_cache_for_tests()
-        # 默认 mock 真resolve 返 None** → fallback yaml/env
-        monkeypatch.setattr(
-            _role_resolver_mod,
-            "resolve",
-            lambda role: None,
-        )
-    except Exception:
-        # role_resolver.py 真没装 / load 失败** — 老测 path, 不需 mock.
-        pass
-    yield

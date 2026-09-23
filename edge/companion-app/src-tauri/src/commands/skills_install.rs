@@ -113,7 +113,7 @@ pub(crate) fn install_skill_from_url_blocking(url: String) -> Result<InstallResu
         ));
     }
     let path = augmented_path();
-    let output = std::process::Command::new("npx")
+    let output = crate::services::process::background_command("npx")
         .args(["-y", "skills", "add", &url])
         .env("PATH", &path)
         .output()

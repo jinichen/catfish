@@ -259,7 +259,7 @@ fn execute_export_blocking(
         args.push(sub.to_string());
     }
 
-    let output = std::process::Command::new("tar")
+    let output = crate::services::process::background_command("tar")
         .args(&args)
         .output()
         .map_err(|e| format!("启动 tar 失败 (确认 PATH 有 tar): {e}"))?;

@@ -7,26 +7,26 @@
 //! 这里只放"每一步具体怎么做"。
 
 use anyhow::{Context, Result};
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(not(target_os = "windows"))]
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::services::catfish_paths::hermes_venv_python;
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(not(target_os = "windows"))]
 use crate::services::catfish_paths::hermes_venv_tool;
 
 use super::hermes_install_artifacts::{RuntimeArtifacts, HERMES_DEPS_ARCHIVE};
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(not(target_os = "windows"))]
 use super::hermes_install_artifacts::{CATFISH_EMAIL_ARCHIVE, CATFISH_WECHAT_READER_ARCHIVE};
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(not(target_os = "windows"))]
 use super::hermes_install_base::{
     hermes_pinned_commit, hermes_pinned_tag, report, BootstrapProgressState, ProgressReporter,
     STAGE_READY_MARKER,
 };
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(not(target_os = "windows"))]
 use super::hermes_install_health::{core_health_problems, installed_hermes_commit_at};
 use super::hermes_install_state::{remove_any, BootstrapPaths};
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(not(target_os = "windows"))]
 use super::hermes_install_state::{write_bytes_atomic, write_transaction};
 
 fn command_status(mut command: Command, description: &str) -> Result<()> {
@@ -47,7 +47,7 @@ fn command_status(mut command: Command, description: &str) -> Result<()> {
     Ok(())
 }
 
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(not(target_os = "windows"))]
 fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
     std::fs::create_dir_all(destination)
         .with_context(|| format!("创建目录 {}", destination.display()))?;
@@ -68,7 +68,7 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(not(target_os = "windows"))]
 fn add_common_installer_args(
     command: &mut Command,
     artifacts: &RuntimeArtifacts,
@@ -101,7 +101,7 @@ fn add_common_installer_args(
     }
 }
 
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(not(target_os = "windows"))]
 pub(crate) fn run_install_stage(
     stage: &str,
     title: &str,
@@ -122,7 +122,7 @@ pub(crate) fn run_install_stage(
         title,
         None,
     );
-    let mut command = Command::new("bash");
+    let mut command = crate::services::process::background_command("bash");
     command.arg(&artifacts.install_sh);
     add_common_installer_args(
         &mut command,
@@ -146,11 +146,11 @@ pub(crate) fn run_install_stage(
     Ok(())
 }
 
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(not(target_os = "windows"))]
 fn initialize_offline_git(stage: &Path) -> Result<()> {
     // 干净 macOS 可能尚未安装 Xcode Command Line Tools；离线包有自己的版本
     // 文件，运行并不依赖 git，因此这里只做 future-update 的 best effort。
-    let initialized = Command::new("git")
+    let initialized = crate::services::process::background_command("git")
         .arg("init")
         .arg(stage)
         .status()
@@ -160,14 +160,14 @@ fn initialize_offline_git(stage: &Path) -> Result<()> {
         log::warn!("无法初始化离线 Hermes git 元数据；不影响当前运行，未来更新需先安装 git");
         return Ok(());
     }
-    let _ = Command::new("git")
+    let _ = crate::services::process::background_command("git")
         .arg("-C")
         .arg(stage)
         .arg("config")
         .arg("core.autocrlf")
         .arg("false")
         .status();
-    let _ = Command::new("git")
+    let _ = crate::services::process::background_command("git")
         .arg("-C")
         .arg(stage)
         .arg("remote")
@@ -183,7 +183,7 @@ fn initialize_offline_git(stage: &Path) -> Result<()> {
 /// 历史包有两种布局：`pyproject.toml` 在归档根目录，或位于
 /// `hermes-agent-src/pyproject.toml`。不能固定 `--strip-components`，否则
 /// 两种包中必有一种会被解压到错误层级。
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(not(target_os = "windows"))]
 fn flatten_hermes_source_stage(stage: &Path) -> Result<()> {
     if stage.join("pyproject.toml").is_file() {
         return Ok(());
@@ -213,7 +213,7 @@ fn flatten_hermes_source_stage(stage: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(not(target_os = "windows"))]
 pub(crate) fn prepare_source_stage(
     reusable_stage: Option<PathBuf>,
     artifacts: &RuntimeArtifacts,
@@ -254,7 +254,7 @@ pub(crate) fn prepare_source_stage(
 
     if let Some(archive) = &artifacts.hermes_tar {
         std::fs::create_dir(&stage).with_context(|| format!("创建 staging {}", stage.display()))?;
-        let mut command = Command::new("tar");
+        let mut command = crate::services::process::background_command("tar");
         command
             .arg("-xzf")
             .arg(archive)
@@ -271,7 +271,7 @@ pub(crate) fn prepare_source_stage(
         initialize_offline_git(&stage)?;
     } else {
         // 在线路径也先 clone 到同盘 staging，依赖尚未写入；失败不会碰旧版本。
-        let mut command = Command::new("bash");
+        let mut command = crate::services::process::background_command("bash");
         command.arg(&artifacts.install_sh);
         add_common_installer_args(&mut command, artifacts, paths, &stage, false);
         command
@@ -314,14 +314,14 @@ pub(crate) fn prepare_source_stage(
 }
 
 #[derive(Debug)]
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(not(target_os = "windows"))]
 pub(crate) struct PreviousInstall {
     pub(crate) path: PathBuf,
     /// 残缺安装可能包含现场诊断线索，成功后也保留为 `.broken-*`。
     pub(crate) preserve: bool,
 }
 
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(not(target_os = "windows"))]
 pub(crate) fn activate_stage(
     paths: &BootstrapPaths,
     stage: &Path,
@@ -391,7 +391,7 @@ pub(crate) fn activate_stage(
     Ok(backup)
 }
 
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(not(target_os = "windows"))]
 pub(crate) fn rollback_install(paths: &BootstrapPaths, backup: Option<&PreviousInstall>) -> Result<()> {
     remove_any(&paths.install_dir)?;
     if let Some(backup) = backup {
@@ -478,10 +478,10 @@ pub(crate) fn install_hermes_deps(artifacts: &RuntimeArtifacts, paths: &Bootstra
     remove_any(&stage)?;
     std::fs::create_dir_all(&stage).with_context(|| format!("创建 {}", stage.display()))?;
 
-    let mut untar = Command::new("tar");
+    let mut untar = crate::services::process::background_command("tar");
     untar.arg("-xzf").arg(tar).arg("-C").arg(&stage);
     let result = command_status(untar, "解压 hermes-deps-dist.tar.gz").and_then(|()| {
-        let mut pip = Command::new(&artifacts.uv);
+        let mut pip = crate::services::process::background_command(&artifacts.uv);
         pip.arg("pip")
             .arg("install")
             .arg("--python")
@@ -489,22 +489,21 @@ pub(crate) fn install_hermes_deps(artifacts: &RuntimeArtifacts, paths: &Bootstra
             .arg("--no-index")           // 离线现场必须 —— 否则会去连 PyPI 干等超时
             .arg("--find-links")
             .arg(&stage)
-            .arg("jieba")
-            .arg("playwright");
-        command_status(pip, "uv pip install jieba playwright")?;
+            .args(super::hermes_install_artifacts::HERMES_EXTRA_PACKAGES);
+        command_status(pip, "uv pip install hermes 额外依赖")?;
 
         // 装了但 import 不了等于没装 —— 而下游只会 warn 一句, 现场查不出来。
         // 判据跟 autostart.rs 的自检一致 (playwright.sync_api, 不是 playwright)。
-        let mut check = Command::new(&venv_py);
-        check.args(["-c", "import jieba, playwright.sync_api"]);
-        command_status(check, "验证 jieba / playwright 可导入")
+        let mut check = crate::services::process::background_command(&venv_py);
+        check.args(["-c", super::hermes_install_artifacts::HERMES_EXTRA_IMPORT_CHECK]);
+        command_status(check, "验证 hermes 额外依赖可导入")
     });
 
     let _ = remove_any(&stage);
     result
 }
 
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(not(target_os = "windows"))]
 pub(crate) fn install_catfish_email(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths) -> Result<()> {
     let Some(tar) = artifacts.email_tar.as_ref() else {
         log::warn!(
@@ -525,7 +524,7 @@ pub(crate) fn install_catfish_email(artifacts: &RuntimeArtifacts, paths: &Bootst
     std::fs::create_dir_all(&stage).with_context(|| format!("创建 {}", stage.display()))?;
 
     // tar 内容是平铺的: 一个 *.whl + hermes-skill/
-    let mut untar = Command::new("tar");
+    let mut untar = crate::services::process::background_command("tar");
     untar.arg("-xzf").arg(tar).arg("-C").arg(&stage);
     let extract = command_status(untar, "解压 catfish-email-dist.tar.gz");
 
@@ -545,7 +544,7 @@ pub(crate) fn install_catfish_email(artifacts: &RuntimeArtifacts, paths: &Bootst
             n => anyhow::bail!("catfish-email 包里有 {n} 个 wheel, 不确定装哪个"),
         };
 
-        let mut pip = Command::new(&artifacts.uv);
+        let mut pip = crate::services::process::background_command(&artifacts.uv);
         pip.arg("pip")
             .arg("install")
             .arg("--python")
@@ -585,7 +584,7 @@ pub(crate) fn install_catfish_email(artifacts: &RuntimeArtifacts, paths: &Bootst
     result
 }
 
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(not(target_os = "windows"))]
 pub(crate) fn link_catfish_email_bin(paths: &BootstrapPaths) -> Result<()> {
     let venv_bin = hermes_venv_tool(&paths.install_dir, "catfish-email");
     if !venv_bin.exists() {
@@ -611,7 +610,7 @@ pub(crate) fn link_catfish_email_bin(paths: &BootstrapPaths) -> Result<()> {
 }
 
 /// 安装 Catfish 自有的安全聊天导出读取器，不安装或修改微信客户端。
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(not(target_os = "windows"))]
 pub(crate) fn install_catfish_wechat_reader(
     artifacts: &RuntimeArtifacts,
     paths: &BootstrapPaths,
@@ -629,7 +628,7 @@ pub(crate) fn install_catfish_wechat_reader(
     let stage = paths.unique_sibling("wechat-reader-dist");
     remove_any(&stage)?;
     std::fs::create_dir_all(&stage).with_context(|| format!("创建 {}", stage.display()))?;
-    let mut untar = Command::new("tar");
+    let mut untar = crate::services::process::background_command("tar");
     untar.arg("-xzf").arg(tar).arg("-C").arg(&stage);
     let result = command_status(untar, "解压 catfish-wechat-reader 分发包").and_then(|()| {
         let mut wheels: Vec<PathBuf> = std::fs::read_dir(&stage)
@@ -641,7 +640,7 @@ pub(crate) fn install_catfish_wechat_reader(
         if wheels.len() != 1 {
             anyhow::bail!("聊天读取器分发包必须正好包含一个 wheel，实际 {}", wheels.len());
         }
-        let mut pip = Command::new(&artifacts.uv);
+        let mut pip = crate::services::process::background_command(&artifacts.uv);
         pip.arg("pip")
             .arg("install")
             .arg("--python")
@@ -650,7 +649,7 @@ pub(crate) fn install_catfish_wechat_reader(
             .arg(&wheels[0]);
         command_status(pip, "uv pip install catfish-wechat-reader")?;
         let reader = hermes_venv_tool(&paths.install_dir, "catfish-wechat-reader");
-        let mut doctor = Command::new(&reader);
+        let mut doctor = crate::services::process::background_command(&reader);
         doctor.args(["doctor", "--json"]);
         #[cfg(windows)]
         {
@@ -669,7 +668,7 @@ pub(crate) fn install_catfish_wechat_reader(
     result
 }
 
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(not(target_os = "windows"))]
 pub(crate) fn link_catfish_wechat_reader_bin(paths: &BootstrapPaths) -> Result<()> {
     let reader = hermes_venv_tool(&paths.install_dir, "catfish-wechat-reader");
     if !reader.exists() {

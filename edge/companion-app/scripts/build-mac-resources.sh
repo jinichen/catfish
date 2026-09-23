@@ -383,7 +383,7 @@ echo "  → 复核内嵌 Python 的 SQLite..."
 #   · jieba: 纯 Python, 我们自己 pip wheel 现打一个 py3-none-any 的轮子。
 #     不能把 sdist 丢给员工机 —— 装的时候 uv --no-index 要构建 sdist, 得有
 #     setuptools 后端, 离线环境下拿不到, 又是一个"到现场才炸"。
-"$EMBED_PY" -m pip download --only-binary=:all: -d "$DEPS_STAGE" playwright >/dev/null || {
+"$EMBED_PY" -m pip download --only-binary=:all: -d "$DEPS_STAGE" playwright watchdog >/dev/null || {
     echo "❌ 取 playwright wheel 失败 (需要外网; 若已联网请看上面 pip 的原始报错)"
     exit 1
 }
@@ -394,7 +394,7 @@ echo "  → 复核内嵌 Python 的 SQLite..."
 # 正向断言: 这三个必须真的在, 而且必须是 .whl —— 光看 pip 退出码不够。
 # 限定 *.whl (不是 *-*) 是因为员工机上 uv 带 --no-index 装, sdist 装不了;
 # 混进一个 sdist 会一路绿到达华的机器上才炸。
-for pkg in jieba playwright greenlet; do
+for pkg in jieba playwright greenlet watchdog; do
     if ! find "$DEPS_STAGE" -maxdepth 1 -iname "${pkg}-*.whl" | grep -q .; then
         echo "❌ $DEPS_STAGE 里没有 $pkg 的 **wheel** —— 装机时会静默缺功能"
         find "$DEPS_STAGE" -maxdepth 1 -type f -exec basename {} \; | sed 's/^/     现有: /'
@@ -404,6 +404,7 @@ done
 tar czf "$DEPS_TAR" -C "$DEPS_STAGE" .
 echo "  OK hermes-deps-dist.tar.gz ($(ls -lh "$DEPS_TAR" | awk '{print $5}')) · $(find "$DEPS_STAGE" -maxdepth 1 -name '*.whl' | wc -l | tr -d ' ') 个 wheel"
 rm -rf "$PY_UNPACK"
+python3 "$(dirname "$0")/build_edge_runtime.py" "$RESOURCES/catfish-edge-runtime.tar.gz" || { echo "❌ edge-runtime 打包失败 (tool-bridge/local-search 源码, 见 edge_runtime.rs)"; exit 1; }
 
 # ─── 6. hermes-agent bundle · npm ci · npx playwright install chromium · tar 打包 ─────
 

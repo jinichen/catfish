@@ -306,11 +306,11 @@ pub async fn ensure_chrome_running() {
 /// 用 pkill -f 模糊匹配 cmdline. 'catfish_search.cli watch' 这串够特异, 不会
 /// 误杀别的进程. 失败静默 (没 pkill 命令 / 没匹配进程都不算错).
 ///
-/// macOS / Linux only. Windows 暂不处理 (Companion 当前只 macOS).
+/// macOS / Linux 走 pkill; Windows 走 process::kill_by_cmdline (9/23)。
 ///
 /// pub: commands/local_search.rs:local_search_start 也调 (UI 重启路径).
 pub fn pkill_local_search_watchers() {
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux"))] // windows-parity: pkill 只在 unix, Windows 分支见下面 kill_by_cmdline
     {
         let out = std::process::Command::new("pkill")
             .args(["-f", "catfish_search.cli watch"])
@@ -332,9 +332,13 @@ pub fn pkill_local_search_watchers() {
             }
         }
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    // 9/23: Windows 原来直接跳过 —— 旧进程残留着, 新 spawn 起不来或双开。
+    #[cfg(windows)]
     {
-        log::debug!("autostart: pkill_local_search_watchers 跳过 (非 unix)");
+        if process::kill_by_cmdline("catfish_search.cli watch") > 0 {
+            log::info!("autostart: 清掉旧 local-search 进程");
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
     }
 }
 
@@ -349,11 +353,11 @@ pub fn pkill_local_search_watchers() {
 /// hermes 里 mcp_server 子进程 'catfish_tool_bridge.mcp_server' 区分开), 不误杀.
 /// 失败静默 (没 pkill 命令 / 无匹配都不算错).
 ///
-/// macOS / Linux only. Windows 暂不处理 (Companion 当前只 macOS).
+/// macOS / Linux 走 pkill; Windows 走 process::kill_by_cmdline (9/23)。
 ///
 /// pub: 让 commands/ 也能调 (未来 UI restart 按钮).
 pub fn pkill_tool_bridge() {
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux"))] // windows-parity: pkill 只在 unix, Windows 分支见下面 kill_by_cmdline
     {
         let out = std::process::Command::new("pkill")
             .args(["-f", "catfish_tool_bridge --socket"])
@@ -375,9 +379,13 @@ pub fn pkill_tool_bridge() {
             }
         }
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    // 9/23: Windows 原来直接跳过 —— 旧进程残留着, 新 spawn 起不来或双开。
+    #[cfg(windows)]
     {
-        log::debug!("autostart: pkill_tool_bridge 跳过 (非 unix)");
+        if process::kill_by_cmdline("catfish_tool_bridge --socket") > 0 {
+            log::info!("autostart: 清掉旧 tool-bridge 进程");
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
     }
 }
 

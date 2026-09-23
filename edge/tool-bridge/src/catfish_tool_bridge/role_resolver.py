@@ -102,8 +102,9 @@ def resolve(role: str) -> Optional[str]:
 
     Args:
         role: 真 ``roles.yaml`` role 名 (snake_case), 例如:
-              ``"chat_default"``, ``"rate_fast"``, ``"vision"``, ``"summarize"``,
-              ``"embedding"``, ``"advisor_call2"``, ``"public_flash"``.
+              9/23 起 /v1/roles 是网关**算出来**的 (模型页的「默认」徽章):
+              ``"chat_default"`` / ``"embedding"`` / ``"vision"`` / ``"summarize"``。
+              别的 key (rate_fast / advisor_call2 / public_flash) 已经没有了。
 
     Returns:
         物理 model name (例如 ``"catfish-private-main"``), 或 None.

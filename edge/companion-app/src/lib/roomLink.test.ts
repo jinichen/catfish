@@ -22,6 +22,7 @@ vi.mock("./tauri", () => ({
 import {
   fetchRoomLinkPending,
   hasPending,
+  nextInterval,
   PROBE_UNREACHABLE,
   resolveRoomLinkApproval,
   resolveRoomLinkOutput,
@@ -83,6 +84,22 @@ describe("fetchRoomLinkPending", () => {
     const r = await fetchRoomLinkPending();
     expect(r.approvals.map((a) => a.run_id)).toEqual(["ok"]);
     expect(r.outputs.map((o) => o.run_id)).toEqual(["o2"]);
+  });
+});
+
+describe("nextInterval (9/23: 插件没装时别每 3 秒打一次 404)", () => {
+  const EMPTY = { available: false, approvals: [], outputs: [] };
+  it("正常 → 基础间隔", () => {
+    expect(nextInterval({ ...EMPTY, available: true }, 3000)).toBe(3000);
+  });
+  it("404 = 路由不存在 = 插件没装, 重启前不会变 → 5 分钟", () => {
+    expect(nextInterval({ ...EMPTY, reason: "http_404" }, 3000)).toBe(5 * 60_000);
+  });
+  it("hermes 没起 → 30 秒, 别刷屏但也别等太久", () => {
+    expect(nextInterval({ ...EMPTY, reason: PROBE_UNREACHABLE }, 3000)).toBe(30_000);
+  });
+  it("别的错误码 (500 / 401) 照正常节奏 —— 那些会自己好", () => {
+    expect(nextInterval({ ...EMPTY, reason: "http_500" }, 3000)).toBe(3000);
   });
 });
 

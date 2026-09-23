@@ -8,7 +8,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 
 #[derive(Debug, Clone)]
 pub(crate) struct CodexProbe {
@@ -88,7 +88,7 @@ fn parse_version(text: &str) -> Option<(u32, u32, u32)> {
 }
 
 fn command_output(binary: &Path, args: &[&str]) -> Option<Output> {
-    Command::new(binary)
+    crate::services::process::background_command(binary)
         .args(args)
         .stdin(Stdio::null())
         .output()

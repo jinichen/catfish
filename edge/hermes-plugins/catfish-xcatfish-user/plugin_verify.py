@@ -15,6 +15,33 @@ logger = logging.getLogger("catfish.xcatfish_user.plugin")
 import os
 
 
+def _hermes_home():
+    """hermes 的数据目录。**不是**永远 ~/.hermes —— Windows 上是 %LOCALAPPDATA%\\hermes。
+
+    9/23: 这个插件里原来有 6 处写死 `Path.home() / ".hermes"`, Windows 上全部指向
+    一个不存在的目录 (state.db / memories / .env / skills 都读不到, 且静默)。
+    优先级跟 hermes 自己一致: HERMES_HOME > hermes_constants.get_hermes_home()
+    > 平台默认。每个文件内联一份而不是抽模块: 这个包名带 dash, 兄弟模块互相
+    import 要绕 _import_sibling 三段 fallback (见 plugin.py:100), 为 8 行不值。
+    """
+    import os as _os
+    import sys as _sys
+    from pathlib import Path as _P
+
+    env = _os.environ.get("HERMES_HOME", "").strip()
+    if env:
+        return _P(env).expanduser()
+    try:
+        from hermes_constants import get_hermes_home  # noqa: PLC0415
+
+        return _P(get_hermes_home())
+    except Exception:  # noqa: BLE001  — 插件加载早期 hermes_constants 可能还不在 sys.path
+        pass
+    if _sys.platform == "win32" and _os.environ.get("LOCALAPPDATA"):
+        return _P(_os.environ["LOCALAPPDATA"]) / "hermes"
+    return _P.home() / ".hermes"
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Step 1: import-time verify — patch 目标 attribute 必须存在, 否则 fail loud
 # ─────────────────────────────────────────────────────────────────────────
@@ -150,7 +177,7 @@ def _check_attr_in_source(module_path: str, attr: str) -> bool:
     """
     import os
     import re
-    hermes_root = os.environ.get("HERMES_ROOT") or os.path.expanduser("~/.hermes/hermes-agent")
+    hermes_root = os.environ.get("HERMES_ROOT") or str(_hermes_home() / "hermes-agent")
     # module_path "agent.agent_init" → 文件 agent/agent_init.py
     file_path = os.path.join(hermes_root, module_path.replace(".", "/") + ".py")
     if not os.path.exists(file_path):
@@ -181,7 +208,7 @@ def _check_p15_stream_q_in_source() -> bool:
     """
     import os
     import re
-    hermes_root = os.environ.get("HERMES_ROOT") or os.path.expanduser("~/.hermes/hermes-agent")
+    hermes_root = os.environ.get("HERMES_ROOT") or str(_hermes_home() / "hermes-agent")
     file_path = os.path.join(hermes_root, "gateway/platforms/api_server.py")
     if not os.path.exists(file_path):
         return False
@@ -205,7 +232,7 @@ def _check_class_method_in_source(module_path: str, class_name: str, method: str
     """静态文件检查 class 是否含某 method (不 import). 同 _check_attr_in_source."""
     import os
     import re
-    hermes_root = os.environ.get("HERMES_ROOT") or os.path.expanduser("~/.hermes/hermes-agent")
+    hermes_root = os.environ.get("HERMES_ROOT") or str(_hermes_home() / "hermes-agent")
     file_path = os.path.join(hermes_root, module_path.replace(".", "/") + ".py")
     if not os.path.exists(file_path):
         return False

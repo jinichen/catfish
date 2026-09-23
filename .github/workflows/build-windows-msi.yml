@@ -390,17 +390,22 @@ jobs:
           # 这些 wheel 必须与 MSI 内置的 CPython 3.11 / Windows x64 匹配。
           # pip download 会连同 playwright 的 pyee / greenlet 依赖一起取下。
           python -m pip download --only-binary=:all: --dest $depsStage `
-              --python-version 3.11 --platform win_amd64 --implementation cp --abi cp311 playwright
+              --python-version 3.11 --platform win_amd64 --implementation cp --abi cp311 playwright watchdog
           python -m pip wheel --no-deps --wheel-dir $depsStage jieba
           $depWheels = @(Get-ChildItem $depsStage -Filter '*.whl')
           if (-not ($depWheels | Where-Object { $_.Name -like 'jieba-*' })) { throw 'deps 包缺 jieba wheel' }
           if (-not ($depWheels | Where-Object { $_.Name -like 'playwright-*' })) { throw 'deps 包缺 playwright wheel' }
+          if (-not ($depWheels | Where-Object { $_.Name -like 'watchdog-*' })) { throw 'deps archive missing watchdog wheel (local-search 文件监听)' }
           $depsTar = Join-Path $resourceDir 'hermes-deps-dist.tar.gz'
           if (Test-Path $depsTar) { Remove-Item -Force $depsTar }
           tar -czf $depsTar -C $depsStage .
           if ($LASTEXITCODE -ne 0) { throw 'hermes-deps-dist.tar.gz 构建失败' }
 
-          foreach ($archive in @($emailTar, $depsTar)) {
+          # 9/23: tool-bridge / local-search 源码 (见 src-tauri/src/services/edge_runtime.rs)
+          $edgeTar = Join-Path $resourceDir 'catfish-edge-runtime.tar.gz'
+          python edge/companion-app/scripts/build_edge_runtime.py $edgeTar
+          if ($LASTEXITCODE -ne 0) { throw 'catfish-edge-runtime.tar.gz 构建失败' }
+          foreach ($archive in @($emailTar, $depsTar, $edgeTar)) {
               $file = Get-Item $archive
               if ($file.Length -le 1024) { throw "资源文件过小: $archive" }
               Write-Host "✓ $($file.Name) · $([math]::Round($file.Length/1KB,1)) KB"

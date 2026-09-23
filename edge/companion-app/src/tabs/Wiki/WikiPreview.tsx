@@ -42,6 +42,7 @@ import { wikiKindLabel } from "./wikiLabels";
 import { isExternalLink } from "../../lib/linkBehavior";
 import { wikiMarkdownUrl } from "../../lib/wikiMarkdownUrl";
 import { resolveWikiRefOrNull } from "../../lib/wikiResolve";
+import { fileManagerName } from "../../lib/platformLabels";
 
 /** Hide the legacy generated `## Related` block from older wiki documents.
  *
@@ -333,9 +334,9 @@ export default function WikiPreview() {
     try {
       const result = await wikiSensitiveTermsEnsure();
       if (result.created) {
-        setSensitiveTermsHint(`✓ 已创建模板: ${result.path}. 用 Finder 打开编辑, 删 # 启用对应行.`);
+        setSensitiveTermsHint(`✓ 已创建模板: ${result.path}. 用 ${fileManagerName()} 打开编辑, 删 # 启用对应行.`);
       } else {
-        setSensitiveTermsHint(`✓ 已存在: ${result.path}. 用 Finder 打开编辑.`);
+        setSensitiveTermsHint(`✓ 已存在: ${result.path}. 用 ${fileManagerName()} 打开编辑.`);
       }
     } catch (e) {
       setSensitiveTermsHint(`✗ 创建失败: ${e instanceof Error ? e.message : String(e)}`);

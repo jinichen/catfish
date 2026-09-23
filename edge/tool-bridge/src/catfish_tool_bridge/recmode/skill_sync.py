@@ -26,11 +26,12 @@ import logging
 import re
 import shutil
 from pathlib import Path
+from ..hermes_paths import hermes_home as _hermes_home
 
 logger = logging.getLogger("catfish.recmode.skill_sync")
 
 
-HERMES_SKILLS_ROOT = Path.home() / ".hermes" / "skills"
+HERMES_SKILLS_ROOT = _hermes_home() / "skills"
 
 
 def _is_recmode_generated(skill_md_path: Path) -> bool:

@@ -21,7 +21,8 @@ const PUSH_HISTORY_FILE: &str = "email_push_history.json";
 
 /// 解 ~/.catfish/<file>. None = HOME 找不到 (不发声明跳过持久化).
 fn catfish_state_file(name: &str) -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
+    // 9/23: Windows 没有 HOME, 原来这里直接返 None → 邮件状态从不持久化。
+    let home = crate::util::paths::home_env().ok()?;
     let mut p = PathBuf::from(home);
     p.push(".catfish");
     p.push(name);

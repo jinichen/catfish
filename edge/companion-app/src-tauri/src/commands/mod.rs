@@ -95,6 +95,8 @@ pub mod skills_list; // 扫描 / 解析 / 列举
 pub mod skills_mcp; // MCP servers 的读和写 (同一段 config.yaml)
 pub mod speech;
 pub mod system;
+#[cfg(windows)]
+mod system_outlook; // 9/23: Windows 提醒 / 日历走 Outlook COM
 pub mod task_chat; // P3.3.7 Phase 2 (6/10): ~/.catfish/task_chat/<key>.jsonl task-scoped chat 持久化
 pub mod task_chat_migration; // P3.3.19 C Phase 4 (6/11): jsonl → ~/.hermes/state.db 一次性 migration
 pub mod imap_credentials; // 9/18: IMAP 凭据 —— 密码进系统凭据库, 配置进不含密码的 JSON

@@ -74,8 +74,8 @@ pub struct WeChatBindingStatus {
 }
 
 fn pairing_dir() -> Option<PathBuf> {
-    let home = crate::util::paths::home_env().ok()?;
-    Some(PathBuf::from(home).join(".hermes/platforms/pairing"))
+    // 9/23: 走 hermes_home() —— Windows 上是 %LOCALAPPDATA%\hermes, 不是 ~/.hermes。
+    Some(crate::services::catfish_paths::hermes_home()?.join("platforms").join("pairing"))
 }
 
 /// 列出 pairing_dir 下所有 `<platform>-approved.json` 的 platform 名.

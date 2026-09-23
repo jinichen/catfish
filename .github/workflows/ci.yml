@@ -536,6 +536,13 @@ jobs:
       - name: No hardcoded ~/.hermes
         run: bash edge/companion-app/scripts/check_no_hardcoded_hermes_home.sh
 
+      # 9/23: Windows / macOS 一致性 (R1–R8, 规则见脚本开头)。上面那条只管
+      # Rust 里的 ".hermes"; 这条把 9/23 第一台干净 Windows 上撞的十几件事全收了:
+      # cfg 排除 Windows / 裸 Command::new 弹黑框 / Python 写死 ~/.hermes /
+      # PowerShell 写文件不带编码 / 两个平台安装包资源不一致 / 非 mac 分支是空架子。
+      - name: Windows / macOS parity
+        run: python3 edge/companion-app/scripts/check_windows_parity.py
+
       - name: Set up Rust stable
         uses: dtolnay/rust-toolchain@stable
 
@@ -547,6 +554,15 @@ jobs:
             ~/.cargo/git
             edge/companion-app/src-tauri/target
           key: ${{ runner.os }}-cargo-${{ hashFiles('edge/companion-app/src-tauri/Cargo.lock') }}
+
+      # 9/23: 真的按 Windows 目标类型检查一遍 (release 带 deny(warnings))。
+      # mac 上 cargo check 看不到 cfg(windows) 分支 —— unused import 这类只在
+      # Windows 上是错误, 以前要打 MSI 才炸。C 依赖和资源编译器用假工具顶上:
+      # check 不链接, 只需要 build script 跑完。
+      - name: cargo check --target x86_64-pc-windows-msvc
+        run: |
+          rustup target add x86_64-pc-windows-msvc
+          bash edge/companion-app/scripts/cargo_check_windows.sh
 
       - name: Install Linux Tauri deps
         run: |

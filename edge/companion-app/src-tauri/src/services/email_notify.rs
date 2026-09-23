@@ -5,9 +5,6 @@
 //! truncate / extract_sender_name 也在这里 —— 它俩主要为这里的文案服务
 //! (6 处), email_llm.rs 也用 truncate (2 处), 见那个文件头里的说明。
 
-#[cfg(target_os = "macos")]
-use std::process::Command;
-
 use serde::Serialize;
 use tauri::Emitter;
 
@@ -96,21 +93,9 @@ pub(crate) fn send_notification(new_items: &[&EmailItem]) {
         )
     };
 
-    #[cfg(target_os = "macos")]
-    {
-        let safe_title = title.replace('"', "\\\"");
-        let safe_body = body.replace('"', "\\\"");
-        let script = format!(
-            "display notification \"{}\" with title \"{}\" sound name \"Glass\"",
-            safe_body, safe_title,
-        );
-        let _ = Command::new("osascript").args(["-e", &script]).status();
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (title, body);
-        log::info!("email_scheduler: 非 macOS 不通知 (TODO Linux/Win)");
+    // 9/23: 原来 macOS 之外只打一行 "TODO Linux/Win" —— Windows 上紧急邮件从不弹。
+    if let Err(e) = crate::services::desktop_notify::show(&title, &body) {
+        log::warn!("email_scheduler: 系统通知失败: {e}");
     }
 }
 

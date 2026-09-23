@@ -378,8 +378,8 @@ fn install_optional_components(resource_dir: &Path, paths: &BootstrapPaths) -> V
 
     let deps_ready = run_hidden_status(
         &hermes_venv_python(&paths.install_dir),
-        &["-c", "import jieba, playwright.sync_api"],
-        "jieba/playwright",
+        &["-c", super::hermes_install_artifacts::HERMES_EXTRA_IMPORT_CHECK],
+        "hermes 额外依赖 (jieba/playwright/watchdog)",
     );
     if !deps_ready {
         match artifacts.deps_tar.as_ref() {

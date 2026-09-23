@@ -36,6 +36,7 @@ from pathlib import Path
 
 # 复用 skill_watcher 的 quiet period 等待 + dispatch 时间戳
 from .skill_watcher import _wait_quiet  # noqa: PLC2701
+from .hermes_paths import hermes_home as _hermes_home
 
 logger = logging.getLogger("catfish.tool_bridge.config_watcher")
 
@@ -138,7 +139,7 @@ def start(config_path: Path | None = None) -> threading.Thread:
         Thread 对象 (daemon, 不会阻止主进程退出)
     """
     if config_path is None:
-        config_path = Path.home() / ".hermes" / "config.yaml"
+        config_path = _hermes_home() / "config.yaml"
     t = threading.Thread(
         target=_watcher_loop,
         args=(config_path,),

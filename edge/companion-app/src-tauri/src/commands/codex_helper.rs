@@ -241,7 +241,7 @@ pub(crate) fn run_hermes_helper(
 ) -> Result<HermesState, String> {
     let python = hermes_python()?;
     let root = hermes_agent_root()?;
-    let mut command = Command::new(&python);
+    let mut command = crate::services::process::background_command(&python);
     command
         .arg("-c")
         .arg(HERMES_HELPER)

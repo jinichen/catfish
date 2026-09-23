@@ -1,7 +1,6 @@
 use serde_yaml::{Mapping, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::services::catfish_paths::hermes_venv_tool;
 
@@ -114,25 +113,15 @@ pub fn list_profiles(hermes_home: &Path) -> Result<Vec<HermesProfileInfo>, Strin
     Ok(profiles)
 }
 
-fn hide_console(command: &mut Command) {
-    #[cfg(not(windows))]
-    let _ = command;
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000);
-    }
-}
-
 pub fn run_hermes(hermes_home: &Path, args: &[&str]) -> Result<(), String> {
     let install_dir = hermes_home.join("hermes-agent");
     let hermes = hermes_venv_tool(&install_dir, "hermes");
     if !hermes.is_file() {
         return Err(format!("Hermes CLI 不存在: {}", hermes.display()));
     }
-    let mut command = Command::new(&hermes);
+    // 9/23: 统一走 background_command (原来这里手写一份 CREATE_NO_WINDOW)
+    let mut command = crate::services::process::background_command(&hermes);
     command.args(args).env("HERMES_HOME", hermes_home);
-    hide_console(&mut command);
     let output = command
         .output()
         .map_err(|e| format!("运行 Hermes 失败: {e}"))?;

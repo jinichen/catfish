@@ -603,24 +603,27 @@ class _DistillMixin:
             logger.warning("catfish-memory tick_session_meta 失败 (静默): %s", e)
 
     def _get_summarize_model(self) -> str:
-        """LLM model. 优先级 picker_state.json > role_resolver("summarize") > yaml > env. 没设返空字符串.
+        """LLM model. 优先级 picker_state.json > 本机 yaml > 本机 env. 没设返空字符串.
 
         P3.5.2 (6/16 鸿波): 加 picker_state.json 最高优先级 — companion chat.ts 每次 send
         前 fire-and-forget 写 ~/.catfish/picker_state.json 含当前 picker model. 这让 plugin
         sync_turn 自动跟随 picker, 解决方案 D 的 split 问题 (员工切 picker 后 summary 模型
         立即同步, 不再 yaml 静态).
 
-        P3.5.29 Phase 7 (6/17 鸿波): 加 role_resolver("summarize") second tier —
-        客户改 roles.yaml `summarize: customer-x-long-ctx` → plugin sync_turn
-        自动跟着走, 不需改 catfish-memory yaml. picker 优先
-        (员工临时切), role 默认 (客户部署值), yaml/env 老兜底.
+        9/23 砍掉了 P3.5.29 Phase 7 加的第二跳 role_resolver("summarize"):
+        那是中央 roles.yaml 里的一个角色, 跟 8/9 email_scheduler.rs 砍掉的
+        rate_fast 是同一种东西 —— "模型只能来自 picker, 不许有第二个来源,
+        后台悄悄换一个来源, 界面上毫无痕迹"。9/23 现场删 gemini 被拦, 拦的
+        就是这个 summarize 角色。roles.yaml 已整个删掉; /v1/roles 里 summarize 键
+        现在恒等于 chat_default, 只是给老版本插件留的, 新代码不再问它。
 
         真因 audit: hermes MemoryProvider.sync_turn 签名是
         `(user_content, assistant_content, session_id)`, 没 client request header 入参.
         plugin 直接拿不到 picker. 文件中转是 hermes API 限制下的最简解法.
 
-        文件不存在 / parse 错 / chat_model 缺 → fallback role_resolver → fallback yaml → fallback env.
-        兼容老路径 (yaml/env 仍可 override role_resolver).
+        文件不存在 / parse 错 / chat_model 缺 → fallback yaml → fallback env → 空
+        (调用方看到空就跳过并 warn, 见 _effective_bg_model)。yaml/env 是**本机**
+        配置, 留着给测试和本机 dev 用。
         """
         home = self._catfish_home_cached or _catfish_home()
 
@@ -629,18 +632,7 @@ class _DistillMixin:
         if picker_model:
             return picker_model
 
-        # P3.5.29 Phase 7: role_resolver("summarize") second tier.
-        # fail-silent: gateway 挂 / httpx 没装 / 网络抖 → 返 None → 走 yaml.
-        try:
-            from . import role_resolver  # noqa: PLC0415
-            role_model = role_resolver.resolve("summarize")
-            if role_model:
-                return role_model
-        except Exception:  # noqa: BLE001
-            # import 失败 (旧 plugin tree, role_resolver.py 没装) — silent fallback.
-            pass
-
-        # Fallback: yaml > env (老逻辑保留, 兼容客户已有 catfish-memory yaml override)
+        # Fallback: 本机 yaml > env
         cfg = _load_plugin_config(home)
         yaml_val = cfg.get("summarize", {}).get("model") if isinstance(cfg, dict) else None
         if isinstance(yaml_val, str) and yaml_val.strip():

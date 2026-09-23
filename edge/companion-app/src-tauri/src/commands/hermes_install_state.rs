@@ -21,7 +21,7 @@ use super::hermes_install_base::{
 
 #[derive(Clone, Debug)]
 pub(crate) struct BootstrapPaths {
-    #[cfg(any(not(target_os = "windows"), test))]
+    #[cfg(not(target_os = "windows"))]
     pub(crate) home: PathBuf,
     pub(crate) hermes_home: PathBuf,
     pub(crate) install_dir: PathBuf,
@@ -38,7 +38,7 @@ impl BootstrapPaths {
             lock_file: hermes_home.join(LOCK_FILE),
             transaction_file: hermes_home.join(TRANSACTION_FILE),
             last_error_file: hermes_home.join(LAST_ERROR_FILE),
-            #[cfg(any(not(target_os = "windows"), test))]
+            #[cfg(not(target_os = "windows"))]
             home,
             hermes_home,
         }

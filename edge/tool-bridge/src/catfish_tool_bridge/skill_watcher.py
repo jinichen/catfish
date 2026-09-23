@@ -39,6 +39,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from .hermes_paths import hermes_home as _hermes_home
 
 logger = logging.getLogger("catfish.tool_bridge.skill_watcher")
 
@@ -165,7 +166,7 @@ def start(skills_dir: Path | None = None) -> threading.Thread:
         Thread 对象 (daemon, 不会阻止主进程退出)
     """
     if skills_dir is None:
-        skills_dir = Path.home() / ".hermes" / "skills"
+        skills_dir = _hermes_home() / "skills"
     t = threading.Thread(
         target=_watcher_loop,
         args=(skills_dir,),

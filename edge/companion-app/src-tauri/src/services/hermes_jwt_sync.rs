@@ -46,7 +46,14 @@ fn hermes_root() -> Result<PathBuf> {
 /// 写进 `~/.hermes/.env` 不构成额外泄露(且 .env 会 chmod 600).
 ///
 /// 生产要换: 两侧一起换 —— identity 侧重算 hash, 这里改明文并重发客户端.
-#[cfg(any(target_os = "macos", target_os = "linux", test))]
+///
+/// 9/23: 这个常量和下面 sync_service_token_to_env / ensure_api_server_reachable
+/// 原来都是 `#[cfg(any(macos, linux, test))]` —— 那是"Companion 当前只 macOS
+/// 发布"时代留下的。结果 Windows 上**没有任何代码往 hermes 的 .env 写
+/// OPENAI_API_KEY**, hermes 起来就是
+///     No usable credentials found for provider 'openai-api'. Set OPENAI_API_KEY.
+/// 聊天一律"未知错误"。9/23 鸿波第一台干净装的 Windows 撞上。
+/// 这几段代码里真正 unix-only 的只有 chmod 600 那三行, 它自己有 cfg(unix)。
 const HERMES_CLI_SECRET: &str = "hermes-dev-secret-2026-please-change";
 
 /// sync JWT 到 hermes · caller 传 access_token (真员工身份 · quota 正确归属).
@@ -101,7 +108,6 @@ pub fn sync_all(jwt: &str) -> Result<()> {
 /// daemon 用 env 的 service token 内部调 (P25 patch / catfish plugin) 走
 /// service 身份. **RBAC 审计** 走 X-Catfish-User header · 由 hermes/gateway
 /// 端注入 · 不看 JWT sub.
-#[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub async fn sync_service_token_to_env(identity_url: &str) -> Result<()> {
     let hermes = hermes_root()?;
     if !hermes.exists() {
@@ -244,10 +250,77 @@ pub(super) fn sync_config_yaml(hermes: &Path, jwt: &str) -> Result<()> {
         .with_context(|| format!("读 {}", config_path.display()))?;
     let new = replace_model_api_key(&text, jwt);
     let new = ensure_model_api_mode(&new);
+    let new = ensure_gateway_model_route(&new);
     fs::write(&config_path, new)
         .with_context(|| format!("写 {}", config_path.display()))?;
-    log::info!("[hermes-jwt-sync] ✓ config.yaml model.api_key / api_mode 更新");
+    log::info!("[hermes-jwt-sync] ✓ config.yaml model.api_key / api_mode / provider / default 更新");
     Ok(())
+}
+
+/// 钉死 `model.provider: openai-api` + `model.default: catfish-auto` (9/23)。
+///
+/// ── 病 ────────────────────────────────────────────────────────────────
+///
+/// 9/23 鸿波 Windows 机器: 聊天一律"未知错误"。追到 hermes 真正读的那份
+/// config (`%LOCALAPPDATA%\hermes\config.yaml`) 里是
+///
+/// ```text
+///     model:
+///       default: anthropic/claude-opus-4.6
+///       provider: auto
+///       base_url: http://127.0.0.1:8999/v1
+/// ```
+///
+/// —— hermes **上游的出厂默认**。Companion 同步进 config.yaml 的只有 api_key /
+/// base_url / api_mode 三样 (上面两个函数), `provider` 和 `default` 从来没写过;
+/// mac 上能跑是因为开发机的 config 是手写的。fresh 装的 Windows 没人写这两行,
+/// hermes 就拿着 `anthropic/claude-opus-4.6` 去问网关, 网关 404 model not found,
+/// Companion 兜成"未知错误"。
+///
+/// `catfish-auto` 是网关认的哨兵 (llm_params.AUTO_MODEL_SENTINEL): 网关收到后
+/// 换成默认对话模型。`openai-api` 是走 base_url 的那个 provider。
+///
+/// ── 不碰 Codex ────────────────────────────────────────────────────────
+///
+/// codex_helper 的 HERMES_HELPER 切到 Codex 运行时会写 `provider: openai-codex`
+/// + `default: <选的模型>`。那是另一条路, 这里看到 openai-codex 就原样放过 ——
+/// 否则每次 JWT 同步都会把员工切到 Codex 的选择掰回来。
+///
+/// 幂等: 已经是 openai-api / catfish-* 就不动。
+fn ensure_gateway_model_route(text: &str) -> String {
+    let provider = read_model_field(text, "provider").unwrap_or_default();
+    if provider == "openai-codex" {
+        return text.to_string();
+    }
+    let mut out = text.to_string();
+    if provider != "openai-api" {
+        out = replace_model_field(&out, "provider", "openai-api");
+    }
+    let default = read_model_field(&out, "default").unwrap_or_default();
+    if !default.starts_with("catfish-") {
+        out = replace_model_field(&out, "default", "catfish-auto");
+    }
+    out
+}
+
+/// 读 `model.<field>` 的值 (只看顶层 model 段, 跟 replace_model_field 同一套判段规则)。
+fn read_model_field(text: &str, field: &str) -> Option<String> {
+    let mut in_model = false;
+    let prefix = format!("{field}:");
+    for line in text.lines() {
+        let t = line.trim_end();
+        if !line.starts_with(char::is_whitespace) {
+            in_model = t == "model:" || (t.starts_with("model:") && !t.starts_with("model::"));
+            continue;
+        }
+        if in_model {
+            let s = t.trim_start();
+            if let Some(v) = s.strip_prefix(&prefix) {
+                return Some(v.trim().trim_matches('"').trim_matches('\'').to_string());
+            }
+        }
+    }
+    None
 }
 
 /// 钉死 `model.api_mode: chat_completions` (8/8).
@@ -601,7 +674,6 @@ pub(super) fn replace_model_field(text: &str, field: &str, new_value: &str) -> S
 ///
 /// 只认精确的 `API_SERVER_HOST=0.0.0.0` 一行 —— 带空格 / 引号 / 大小写变体都算
 /// "还得改", 交给 replace_or_append_env_line 统一写成规范形态.
-#[cfg(any(target_os = "macos", target_os = "linux", test))]
 fn api_server_host_needs_update(env_text: &str) -> bool {
     !env_text.lines().any(|l| l.trim() == "API_SERVER_HOST=0.0.0.0")
 }
@@ -633,7 +705,6 @@ fn api_server_host_needs_update(env_text: &str) -> bool {
 ///
 /// 幂等: 已经是 0.0.0.0 就连文件都不碰 (mtime 不动, 免得触发别的 watcher)。
 /// `.env` 不存在 = hermes 没装, skip。
-#[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub fn ensure_api_server_reachable() -> Result<()> {
     let hermes = hermes_root()?;
     let env_path = hermes.join(".env");

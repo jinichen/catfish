@@ -19,6 +19,7 @@
 //! step3 (5/20 下午, 本提交): calendar_week_fetch 本自然周. 复用 osascript path, 独立缓存.
 //! step4 (后续): Swift FFI EventKit binding (osascript 仍 ~2-5s, 太慢)
 
+#[cfg(not(windows))]
 use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -46,6 +47,7 @@ fn week_cache() -> &'static Mutex<Option<(Instant, String)>> {
 
 const CACHE_TTL: Duration = Duration::from_secs(300);  // 5 分钟
 
+#[cfg(not(windows))] // Windows 读 Outlook (system_outlook::read_events)
 /// JXA 脚本 — 取今天 0:00-24:00 所有 calendar 的 events, 返 JSON array.
 /// 注意 Calendar.app object model 的 `.events.whose(...)` filter 比 JS 自己滤快 100x
 /// (osascript 跑 .events() 会全量加载, 几十秒).
@@ -138,6 +140,7 @@ out.sort((a, b) => a.start.localeCompare(b.start));
 JSON.stringify(out);
 "#;
 
+#[cfg(not(windows))] // Windows 读 Outlook (system_outlook::read_events)
 /// BL-CALENDAR-WEEK (5/20): 本自然周（周一 0 点至下周一 0 点）events JXA 脚本.
 const JXA_WEEK_EVENTS: &str = r#"
 const Calendar = Application("Calendar");
@@ -237,6 +240,14 @@ pub async fn calendar_week_fetch(force_refresh: Option<bool>) -> Result<String, 
     let result = tokio::task::spawn_blocking(|| {
         // 用新子命令名防旧 helper 静默沿用“从今天滚动 7 天”的历史语义。
         // 旧 helper 会返回 unknown command，随后自动走下面的自然周 JXA fallback。
+
+        // 9/23: Windows 读 Outlook 默认日历 (原来走 EventKit / osascript, Windows 上两个都没有,
+        // 早安页"本周日程"在 Windows 上永远是空的或报错)。
+        #[cfg(windows)]
+        {
+            super::system_outlook::read_events("natural-week")
+        }
+        #[cfg(not(windows))]
         match run_eventkit("natural-week", Duration::from_secs(3)) {
             Ok(json) => Ok(json),
             Err(e) => {
@@ -281,6 +292,14 @@ pub async fn calendar_today_fetch(force_refresh: Option<bool>) -> Result<String,
     // EventKit 直调 macOS 原生 API < 100ms 稳定, 不走 AppleScript subprocess 冷启动慢.
     // Swift binary 不存在 (未编译 / 跨平台) → fallback osascript 老路径.
     let result = tokio::task::spawn_blocking(|| {
+
+        // 9/23: Windows 读 Outlook 默认日历 (原来走 EventKit / osascript, Windows 上两个都没有,
+        // 早安页"本周日程"在 Windows 上永远是空的或报错)。
+        #[cfg(windows)]
+        {
+            super::system_outlook::read_events("today")
+        }
+        #[cfg(not(windows))]
         match run_eventkit("today", Duration::from_secs(3)) {
             Ok(json) => Ok(json),
             Err(e) => {
@@ -303,6 +322,7 @@ pub async fn calendar_today_fetch(force_refresh: Option<bool>) -> Result<String,
     result
 }
 
+#[cfg(not(windows))] // Windows 读 Outlook (system_outlook::read_events)
 /// BL-CALENDAR-EVENTKIT (5/21): spawn catfish-calendar Swift binary 调 EventKit.
 ///
 /// 路径查找顺序:
@@ -320,7 +340,7 @@ fn run_eventkit(subcmd: &str, timeout: Duration) -> Result<String, String> {
     let bin_path = locate_eventkit_binary()
         .ok_or_else(|| "catfish-calendar binary 未找到 (尚未编译? cd src-tauri/swift && bash build.sh)".to_string())?;
 
-    let mut child = Command::new(&bin_path)
+    let mut child = crate::services::process::background_command(&bin_path)
         .args([subcmd, "--json"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -366,6 +386,7 @@ fn run_eventkit(subcmd: &str, timeout: Duration) -> Result<String, String> {
     }
 }
 
+#[cfg(not(windows))] // Windows 读 Outlook (system_outlook::read_events)
 fn locate_eventkit_binary() -> Option<std::path::PathBuf> {
     use std::path::PathBuf;
 
@@ -409,6 +430,7 @@ fn locate_eventkit_binary() -> Option<std::path::PathBuf> {
     None
 }
 
+#[cfg(not(windows))] // Windows 读 Outlook (system_outlook::read_events)
 fn run_osascript(script: &str, timeout: Duration) -> Result<String, String> {
     use std::io::Read;
 

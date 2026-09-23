@@ -116,7 +116,7 @@ pub fn speech_start_recording(_window: Window) -> Result<(), String> {
     })?;
     log::info!("speech_start_recording: 启 {} → {}", ffmpeg_bin.display(), wav_path.display());
 
-    let child = std::process::Command::new(&ffmpeg_bin)
+    let child = crate::services::process::background_command(&ffmpeg_bin)
         .args([
             "-y",
             "-hide_banner",
@@ -227,7 +227,7 @@ fn run_whisper_cpp(
         公文汇报、月度总结、周报、资质管理、项目部署、团队、合规、安全、\
         ISO27001、27000、客户、PoC、demo、SSO、skill、agent 等场景.";
 
-    let whisper_result = std::process::Command::new(&whisper_bin)
+    let whisper_result = crate::services::process::background_command(&whisper_bin)
         .args([
             "-m", model_path.to_str().unwrap(),
             "-l", "zh",
@@ -357,7 +357,7 @@ pub async fn transcribe_audio_from_b64(
         "ffmpeg 找不到. 请装: brew install ffmpeg".to_string()
     })?;
 
-    let ffmpeg_result = std::process::Command::new(&ffmpeg_bin)
+    let ffmpeg_result = crate::services::process::background_command(&ffmpeg_bin)
         .args([
             "-y",
             "-hide_banner",

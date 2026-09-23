@@ -2,7 +2,7 @@
 //!
 //! 2026-08-15 从 hermes_install.rs 切出来。纯搬迁, 逻辑一行未改。
 
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(not(target_os = "windows"))] // 只有 validate_bootstrap_tools 用 (Unix 装机)
 use anyhow::Context;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -29,9 +29,20 @@ pub(crate) const CATFISH_WECHAT_READER_ARCHIVE: &str = "catfish-wechat-reader-di
 /// 8/5: 装机流程里这两个的安装语句一直是 0 处 —— 见 install_hermes_deps。
 pub(crate) const HERMES_DEPS_ARCHIVE: &str = "hermes-deps-dist.tar.gz";
 
+/// hermes venv 里要装的额外包 —— **唯一**清单, 安装和自检都从这里读。
+///
+/// 9/23 加 watchdog: local-search 的文件监听要它 (catfish_search/watcher.py),
+/// 客户机器上 local-search 跑在 hermes venv 里 (没有源码树, 也就没有它自己的
+/// venv), 不装就是"本机文件搜索"起来了但从不更新索引。
+/// 原来包名在 4 个地方各写一遍 (mac 安装 / Windows 自检 / 启动自检 / 打包脚本)。
+pub(crate) const HERMES_EXTRA_PACKAGES: &[&str] = &["jieba", "playwright", "watchdog"];
+/// 装没装的判据: import 得了才算。playwright 要 sync_api (装了一半时顶层能 import)。
+pub(crate) const HERMES_EXTRA_IMPORT_CHECK: &str =
+    "import jieba, playwright.sync_api, watchdog.observers";
+
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeArtifacts {
-    #[cfg(any(not(target_os = "windows"), test))]
+    #[cfg(not(target_os = "windows"))]
     pub(crate) dir: PathBuf,
     #[cfg(any(not(target_os = "windows"), test))]
     pub(crate) install_sh: PathBuf,
@@ -78,7 +89,7 @@ impl RuntimeArtifacts {
             email_tar: usable_artifact(&dir.join(CATFISH_EMAIL_ARCHIVE)),
             wechat_reader_tar: usable_artifact(&dir.join(CATFISH_WECHAT_READER_ARCHIVE)),
             deps_tar: usable_artifact(&dir.join(HERMES_DEPS_ARCHIVE)),
-            #[cfg(any(not(target_os = "windows"), test))]
+            #[cfg(not(target_os = "windows"))]
             dir,
         }
     }
@@ -101,7 +112,7 @@ impl RuntimeArtifacts {
         self.archive_count() == RUNTIME_ARCHIVES.len()
     }
 
-    #[cfg(any(not(target_os = "windows"), test))]
+    #[cfg(not(target_os = "windows"))]
     pub(crate) fn validate_bootstrap_tools(&self) -> Result<()> {
         for path in [&self.install_sh, &self.uv] {
             let meta = std::fs::metadata(path)
@@ -173,7 +184,7 @@ pub(crate) fn resolve_runtime_dir_for_home(
     )
 }
 
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(not(target_os = "windows"))]
 pub(crate) fn resolve_runtime_dir(resource_dir: &Path) -> Result<PathBuf> {
     let home = crate::util::paths::home_env().ok().map(PathBuf::from);
     resolve_runtime_dir_for_home(resource_dir, home.as_deref())

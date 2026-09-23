@@ -15,6 +15,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from .hermes_paths import hermes_home as _hermes_home
 
 logger = logging.getLogger("catfish.tool_bridge.bootstrap")
 
@@ -33,7 +34,7 @@ def find_hermes_agent_path() -> Path:
             f"HERMES_AGENT_PATH 设置了 {p} 但 model_tools.py 不在那 — 路径错了？"
         )
 
-    default = Path.home() / ".hermes" / "hermes-agent"
+    default = _hermes_home() / "hermes-agent"
     if (default / "model_tools.py").exists():
         return default
 

@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from .hermes_paths import hermes_home as _hermes_home
 
 logger = logging.getLogger("catfish.tool_bridge.search_skills")
 
@@ -130,7 +131,7 @@ _FRONTMATTER_RE = re.compile(r"^---\s*\n(.+?)\n---\s*\n?", re.DOTALL)
 
 
 def _hermes_skills_root() -> Path:
-    return Path.home() / ".hermes" / "skills"
+    return _hermes_home() / "skills"
 
 
 def _catfish_skills_root() -> Path | None:

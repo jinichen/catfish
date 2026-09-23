@@ -57,6 +57,33 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List
 
+
+def _hermes_home():
+    """hermes 的数据目录。**不是**永远 ~/.hermes —— Windows 上是 %LOCALAPPDATA%\\hermes。
+
+    9/23: 这个插件里原来有 6 处写死 `Path.home() / ".hermes"`, Windows 上全部指向
+    一个不存在的目录 (state.db / memories / .env / skills 都读不到, 且静默)。
+    优先级跟 hermes 自己一致: HERMES_HOME > hermes_constants.get_hermes_home()
+    > 平台默认。每个文件内联一份而不是抽模块: 这个包名带 dash, 兄弟模块互相
+    import 要绕 _import_sibling 三段 fallback (见 plugin.py:100), 为 8 行不值。
+    """
+    import os as _os
+    import sys as _sys
+    from pathlib import Path as _P
+
+    env = _os.environ.get("HERMES_HOME", "").strip()
+    if env:
+        return _P(env).expanduser()
+    try:
+        from hermes_constants import get_hermes_home  # noqa: PLC0415
+
+        return _P(get_hermes_home())
+    except Exception:  # noqa: BLE001  — 插件加载早期 hermes_constants 可能还不在 sys.path
+        pass
+    if _sys.platform == "win32" and _os.environ.get("LOCALAPPDATA"):
+        return _P(_os.environ["LOCALAPPDATA"]) / "hermes"
+    return _P.home() / ".hermes"
+
 logger = logging.getLogger("catfish.xcatfish_user.session_search_router")
 
 
@@ -70,7 +97,7 @@ _PREVIEW_CHARS = 200  # 命中行 snippet ±N 字符
 
 
 def _state_db_path() -> Path | None:
-    p = Path.home() / ".hermes" / "state.db"
+    p = _hermes_home() / "state.db"
     return p if p.exists() else None
 
 

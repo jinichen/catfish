@@ -18,6 +18,8 @@ import { useEffect, useState } from "react";
 import { revealInFinder, openFile, emailCreateDraft } from "../lib/tauri";
 import { draftParseMd, type ParsedDraft } from "../lib/drafts";
 import { basename, fileEmoji } from "../lib/path_detect";
+import { fileManagerName, modKey } from "../lib/platformLabels";
+import { emailClientName } from "../lib/emailPlatformHints";
 
 interface Props {
   path: string;
@@ -75,7 +77,7 @@ export default function FilePill({ path }: Props) {
   const handleSendToMail = async () => {
     if (!parsed || parsed.kind !== "reply") return;
     if (!parsed.recipient || !parsed.subject) {
-      setErr("草稿缺收件人 / 主题, 无法放 Mail.app");
+      setErr(`草稿缺收件人 / 主题, 无法放 ${emailClientName()}`);
       return;
     }
     setErr(null);
@@ -151,18 +153,18 @@ export default function FilePill({ path }: Props) {
               background: "var(--catfish-blue, #2563eb)",
               opacity: sending ? 0.5 : 1,
             }}
-            title="放 Mail.app 草稿箱 (Mail.app 自动切前台 + 草稿窗口弹), 你审改后 ⌘+Shift+D 发送"
+            title={`放 ${emailClientName()} 草稿箱 (自动切前台 + 草稿窗口弹), 你审改后 ⌘+Shift+D 发送`}
           >
-            {sending ? "放中…" : "📥 放 Mail.app 草稿箱"}
+            {sending ? "放中…" : `📥 放 ${emailClientName()} 草稿箱`}
           </button>
         )}
         <button
           type="button"
           onClick={handleReveal}
           style={pillBtnStyle(canSendToMail ? "secondary" : "primary")}
-          title="在 Finder 显示"
+          title={`在 ${fileManagerName()} 显示`}
         >
-          在 Finder 显示
+          在 {fileManagerName()} 显示
         </button>
         <button
           type="button"
@@ -182,8 +184,8 @@ export default function FilePill({ path }: Props) {
             maxWidth: 360,
           }}
         >
-          ✓ 已放 Mail.app 草稿箱, Mail.app 已切前台 + 草稿窗口弹出 —
-          审改后按 ⌘+Shift+D 发送 (catfish 不替你按, 红线)
+          ✓ 已放 {emailClientName()} 草稿箱, 已切前台 + 草稿窗口弹出 —
+          审改后按 {modKey()}+Shift+D 发送 (catfish 不替你按, 红线)
         </div>
       )}
       {err && (

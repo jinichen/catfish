@@ -198,6 +198,26 @@ pub fn spawn_detached(cfg: SpawnConfig) -> anyhow::Result<SpawnHandle> {
     Ok(SpawnHandle { pid: child.id() })
 }
 
+/// 按命令行子串杀进程 (Windows 版 `pkill -f`)。返回杀掉的个数, 失败当 0。
+///
+/// 9/23 加: autostart 的 pkill_* 原来在 Windows 上直接跳过, 注释写着
+/// "Companion 当前只 macOS"。走 PowerShell + CIM 而不是 wmic —— wmic 在
+/// Windows 11 24H2 起默认不装了。pattern 里的单引号转义成两个。
+#[cfg(windows)]
+pub fn kill_by_cmdline(pattern: &str) -> usize {
+    let pat = pattern.replace('\'', "''");
+    let script = format!(
+        "$n=0; Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like '*{pat}*' -and $_.ProcessId -ne $PID }} | \
+         ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; $n++ }}; $n"
+    );
+    background_command("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
+        .unwrap_or(0)
+}
+
 pub fn kill(pid: u32) -> anyhow::Result<()> {
     if !is_alive(pid) {
         return Ok(()); // 已经死了，幂等返回

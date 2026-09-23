@@ -6,7 +6,7 @@
 //! 写死 127.0.0.1:8642) 是一条真踩过的坑, 原样搬过来了 —— 别删。
 
 use std::collections::HashSet;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::Duration;
 
 use super::codex_helper::prepend_path;
@@ -70,7 +70,9 @@ fn parse_gateway_pids(stdout: &[u8]) -> HashSet<u32> {
 fn gateway_process_ids() -> HashSet<u32> {
     #[cfg(unix)]
     {
-        return Command::new("pgrep")
+        // 9/23: 全限定 —— Command 只在这个 cfg(unix) 块里用, 顶部 import 在 Windows
+        // release (lib.rs deny(warnings)) 会变成 unused import 错误。
+        return std::process::Command::new("pgrep")
             .args(["-f", "[h]ermes_cli\\.main gateway run"])
             .output()
             .ok()
@@ -91,7 +93,7 @@ pub(crate) fn restart_hermes_gateway() -> Result<(), String> {
     let python = hermes_python()?;
     let root = hermes_root()?;
     let agent_root = hermes_agent_root()?;
-    let mut command = Command::new(&python);
+    let mut command = crate::services::process::background_command(&python);
     command
         .args(["-m", "hermes_cli.main", "gateway", "restart"])
         .env("HERMES_HOME", &root)
@@ -146,6 +148,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(unix)] // parse_gateway_pids 是 unix-only (pgrep); 9/23 Windows 上 --tests 编不过
     fn parses_gateway_pid_generation() {
         assert_eq!(
             parse_gateway_pids(b"123\nnot-a-pid\n456\n"),

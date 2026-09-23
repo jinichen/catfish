@@ -53,6 +53,7 @@ import re
 import sqlite3
 from pathlib import Path
 from typing import Any
+from .hermes_paths import hermes_home as _hermes_home
 
 logger = logging.getLogger("catfish.tool_bridge.wiki_trace")
 
@@ -74,7 +75,7 @@ def _state_db() -> Path | None:
     if env := os.environ.get("HERMES_STATE_DB"):
         p = Path(env)
         return p if p.exists() else None
-    p = Path.home() / ".hermes" / "state.db"
+    p = _hermes_home() / "state.db"
     return p if p.exists() else None
 
 

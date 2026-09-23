@@ -12,6 +12,7 @@ import * as React from "react";
 
 import { auditExportXlsx, type AuditExportResult } from "../../lib/tauri";
 import { invoke } from "@tauri-apps/api/core";
+import { fileManagerName } from "../../lib/platformLabels";
 
 // P3.3.54 polish (6/12): 本地时区, 不走 toISOString UTC 漂移
 //   bug 现象: PT 时区 6/1 00:00 → toISOString → "2026-05-31..." (UTC 还在 5/31)
@@ -219,7 +220,7 @@ export default function AuditExportCard() {
               cursor: "pointer",
             }}
           >
-            📂 在 Finder 显示
+            📂 在 {fileManagerName()} 显示
           </button>
         </div>
       )}

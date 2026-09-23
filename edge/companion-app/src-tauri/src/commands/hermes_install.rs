@@ -12,7 +12,9 @@ use std::path::{Path, PathBuf};
 use tauri::Emitter;
 
 #[cfg(any(not(target_os = "windows"), test))]
-use super::hermes_install_artifacts::{resolve_runtime_dir, RuntimeArtifacts};
+use super::hermes_install_artifacts::RuntimeArtifacts;
+#[cfg(not(target_os = "windows"))]
+use super::hermes_install_artifacts::resolve_runtime_dir;
 use super::hermes_install_base::{
     hermes_pinned_tag, report, BootstrapProgressState,
     HermesBootstrapProgress, ProgressReporter, HERMES_BOOTSTRAP_PROGRESS_EVENT,
@@ -27,10 +29,12 @@ use super::hermes_install_health::core_health_problems;
 use super::hermes_install_recover::{acquire_bootstrap_lock, recover_interrupted_transaction};
 use super::hermes_install_state::{record_failure, BootstrapPaths, FailureRecord};
 #[cfg(any(not(target_os = "windows"), test))]
-use super::hermes_install_state::{remove_any, write_completion_marker};
+use super::hermes_install_state::write_completion_marker;
+#[cfg(not(target_os = "windows"))]
+use super::hermes_install_state::remove_any;
 #[cfg(any(not(target_os = "windows"), test))]
 use crate::services::catfish_paths::{hermes_venv_python, hermes_venv_tool};
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(not(target_os = "windows"))]
 use super::hermes_install_steps::{
     activate_stage, install_catfish_email, install_catfish_wechat_reader, install_hermes_deps,
     link_catfish_email_bin, link_catfish_wechat_reader_bin, prepare_source_stage,
@@ -188,8 +192,8 @@ fn bootstrap_locked(
         }
         // 同上: hermes 健康 ≠ jieba/playwright 装了。判据用 import 而不是
         // 看目录 —— site-packages 里有目录但 import 不了的情况见过 (装了一半)。
-        let deps_ok = std::process::Command::new(hermes_venv_python(&paths.install_dir))
-            .args(["-c", "import jieba, playwright.sync_api"])
+        let deps_ok = crate::services::process::background_command(hermes_venv_python(&paths.install_dir))
+            .args(["-c", super::hermes_install_artifacts::HERMES_EXTRA_IMPORT_CHECK])
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false);

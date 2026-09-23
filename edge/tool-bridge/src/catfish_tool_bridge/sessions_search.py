@@ -29,6 +29,7 @@ import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from .hermes_paths import hermes_home as _hermes_home
 
 logger = logging.getLogger("catfish.tool_bridge.sessions_search")
 
@@ -40,7 +41,7 @@ _PREVIEW_CHARS = 200  # 命中行 snippet ±N 字符
 
 
 def _state_db_path() -> Path | None:
-    p = Path.home() / ".hermes" / "state.db"
+    p = _hermes_home() / "state.db"
     return p if p.exists() else None
 
 

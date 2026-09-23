@@ -9,34 +9,8 @@ use std::process::Command;
 
 #[tauri::command]
 pub async fn notify(title: String, body: String) -> Result<(), String> {
-    // 五一 sprint 5/2 收尾 BL-E13 主动闲聊: macOS 通知用 osascript 发, 不引 tauri-plugin-notification 新依赖.
-    // Linux / Windows 后续按需扩展 (notify-send / Win toast).
-    #[cfg(target_os = "macos")]
-    {
-        use std::process::Command;
-        // osascript 字符串里 " 要 escape, 防 starter 含双引号炸
-        let safe_title = title.replace('"', "\\\"");
-        let safe_body = body.replace('"', "\\\"");
-        let script = format!(
-            "display notification \"{}\" with title \"{}\" sound name \"Glass\"",
-            safe_body, safe_title,
-        );
-        let status = Command::new("osascript")
-            .arg("-e")
-            .arg(&script)
-            .status()
-            .map_err(|e| format!("osascript 启动失败: {e}"))?;
-        if !status.success() {
-            return Err(format!("osascript 退出非 0: {status}"));
-        }
-        Ok(())
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (title, body);
-        Err("notify: 当前平台未实现 (只有 macOS)".into())
-    }
+    // 9/23: 走 desktop_notify —— 原来这里只有 macOS 分支, Windows 返 Err("未实现")。
+    crate::services::desktop_notify::show(&title, &body)
 }
 
 /// BL-REMINDER (5/13 鸿波拍板): 在 macOS Reminders.app 创建提醒.
@@ -134,10 +108,21 @@ end tell"#,
         Ok(stdout)
     }
 
-    #[cfg(not(target_os = "macos"))]
+    // 9/23: Windows 写进 Outlook 任务 (原来这里是 Err("当前平台未实现"))
+    #[cfg(windows)]
+    {
+        if title.trim().is_empty() {
+            return Err("title 不能空".into());
+        }
+        super::system_outlook::create_reminder(
+            &title, body.as_deref(), due_date_iso.as_deref(), list_name.as_deref(), priority,
+        )
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))] // windows-parity: Linux 不发布, 没有对应的系统应用
     {
         let _ = (title, body, due_date_iso, list_name, priority);
-        Err("create_reminder: 当前平台未实现 (只 macOS, 走 Reminders.app)".into())
+        Err("create_reminder: Linux 上没有提醒事项应用".into())
     }
 }
 
@@ -178,9 +163,14 @@ end tell"#;
         Ok(lists)
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
     {
-        Err("list_reminder_lists: 当前平台未实现 (只 macOS)".into())
+        super::system_outlook::list_reminder_lists()
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))] // windows-parity: Linux 不发布, 没有对应的系统应用
+    {
+        Err("list_reminder_lists: Linux 上没有提醒事项应用".into())
     }
 }
 
@@ -344,7 +334,29 @@ end tell"#,
         Ok(stdout)
     }
 
-    #[cfg(not(target_os = "macos"))]
+    // 9/23: Windows 写进 Outlook 日历 (原来这里是 Err("当前平台未实现"))
+    #[cfg(windows)]
+    {
+        if title.trim().is_empty() {
+            return Err("title 不能空".into());
+        }
+        if start_iso.trim().is_empty() {
+            return Err("start_iso 不能空 (ISO 8601, e.g. '2026-05-18T08:40:00')".into());
+        }
+        // 跟 mac 分支同一个默认: 没传 = 提前 15 分钟; 显式传 [] = 不提醒
+        let alarms = alarm_minutes_before.unwrap_or_else(|| vec![15]);
+        super::system_outlook::create_calendar_event(
+            &title,
+            &start_iso,
+            end_iso.as_deref(),
+            location.as_deref(),
+            description.as_deref(),
+            calendar_name.as_deref(),
+            &alarms,
+        )
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))] // windows-parity: Linux 不发布, 没有对应的系统应用
     {
         let _ = (
             title,
@@ -355,7 +367,7 @@ end tell"#,
             calendar_name,
             alarm_minutes_before,
         );
-        Err("create_calendar_event: 当前平台未实现 (只 macOS, 走 Calendar.app)".into())
+        Err("create_calendar_event: Linux 上没有日历应用".into())
     }
 }
 
@@ -395,9 +407,14 @@ end tell"#;
         Ok(cals)
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
     {
-        Err("list_calendars: 当前平台未实现 (只 macOS)".into())
+        super::system_outlook::list_calendars()
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))] // windows-parity: Linux 不发布, 没有对应的系统应用
+    {
+        Err("list_calendars: Linux 上没有日历应用".into())
     }
 }
 
@@ -460,9 +477,9 @@ pub fn get_build_info() -> BuildInfo {
 
 #[tauri::command]
 pub async fn get_hermes_version() -> Result<Option<String>, String> {
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-    let Some(home) = home else { return Ok(None); };
-    let path = home.join(".hermes/hermes-agent/pyproject.toml");
+    // 9/23: 原来是 $HOME/.hermes —— Windows 没有 HOME, 且 hermes 装在 %LOCALAPPDATA%\hermes。
+    let Some(hermes) = crate::services::catfish_paths::hermes_home() else { return Ok(None); };
+    let path = hermes.join("hermes-agent").join("pyproject.toml");
     let content = match std::fs::read_to_string(&path) {
         Ok(s) => s,
         Err(_) => return Ok(None), // 没装 hermes / 路径不对 — 静默

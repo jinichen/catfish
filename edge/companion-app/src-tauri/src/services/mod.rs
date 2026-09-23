@@ -31,6 +31,8 @@ pub mod embedding_config; // P3.5.15 (6/16 鸿波): embedding provider yaml 配�
 #[cfg(target_arch = "aarch64")] // ort 只在 aarch64 有 prebuilt, 见文件头
 pub mod embedding_local;
 pub mod embedding_remote;
+pub mod desktop_notify;  // 9/23: 系统通知三平台一个入口 (原来只有 macOS)
+pub mod edge_runtime;  // 9/23: tool-bridge / local-search 从安装包解到 ~/.catfish/edge-runtime
 pub mod endpoints;
 pub mod phishing_llm; // LLM batch 复审 (8/15 从 phishing_scan 切出)
 pub mod phishing_rules; // 5 个工具 + 5 个 scan_* 纯函数 (8/15 从 phishing_scan 切出)

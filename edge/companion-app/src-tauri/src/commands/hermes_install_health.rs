@@ -6,7 +6,6 @@
 //! hermes.rs 按老路径调它), 它只是这里 core_health_problems 的一层薄封装。
 
 use std::path::Path;
-use std::process::Command;
 
 use crate::services::catfish_paths::{hermes_venv_python, hermes_venv_tool};
 
@@ -30,17 +29,13 @@ pub(crate) fn installed_hermes_commit_at(install_dir: &Path) -> Option<String> {
         }
     }
 
-    let mut command = Command::new("git");
+    // 9/23: 统一走 background_command (原来这里手写一份 CREATE_NO_WINDOW)
+    let mut command = crate::services::process::background_command("git");
     command
         .arg("-C")
         .arg(install_dir)
         .arg("rev-parse")
         .arg("HEAD");
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
     let output = command.output().ok()?;
     if !output.status.success() {
         return None;

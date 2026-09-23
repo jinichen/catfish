@@ -310,7 +310,7 @@ pub async fn tts_synthesize(
         // 鸿波反馈"断句不太合理" → 默认 sentence-silence=0.2 中文听起来偏快, 加到 0.4
         // (句间换气更明显). length-scale=1.05 整体语速放慢 5% (原速 1.0 偏快).
         // (CLI 参数都是长选项, piper 1.x + piper1-gpl 都接受这俩)
-        let mut child = std::process::Command::new(&piper_bin)
+        let mut child = crate::services::process::background_command(&piper_bin)
             .args([
                 "-m",
                 model.to_str().unwrap(),

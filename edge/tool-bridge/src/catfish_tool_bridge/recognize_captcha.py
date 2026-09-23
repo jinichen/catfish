@@ -360,13 +360,22 @@ def recognize_captcha(args: dict[str, Any]) -> dict[str, Any]:
 
     user_prompt = f"识别这个验证码{f' (提示: {hint})' if hint else ''}:"
 
-    # P3.5.42.1 (6/18 鸿波拍 '所有遵循 picker, 不乱改'): vision model 走 role_resolver
-    # chain, 不再 hardcode 'catfish-private-vision'. 兜底仍是 'catfish-private-vision'
-    # (gateway 挂时用). 这是注释 line 234-236 留的 TODO: '后续 catalog 加 captcha_ocr tag
-    # 走 pick_internal_model 选'.
+    # 9/23: 发**员工 picker 选的模型** (picker > chat_default > 兜底), 跟本模块
+    # 别的 LLM 调用同一条链。请求里带图, 网关的 multimodal_guard 见到当前模型
+    # 不能看图就自动换成同 tier 里能看图的那个 —— 员工在聊天里贴截图走的就是
+    # 这条规则, 这里没理由另搞一套。
+    #
+    # 之前是 role_resolver.resolve("vision"): 中央 roles.yaml 里一个"看图角色"。
+    # 追下来网关自己根本不用那个角色 (它按 supports_vision 挑), 角色只在这两处
+    # 被 tool-bridge 读 —— 一份只有边缘端在看的中央配置。9/23 连同 roles.yaml
+    # 一起删了。/v1/roles 里还有个算出来的 vision 键, 给老版本 tool-bridge 用。
     try:
-        from . import role_resolver  # noqa: PLC0415
-        _vision_model = role_resolver.resolve("vision") or "catfish-private-vision"
+        from . import picker_state, role_resolver  # noqa: PLC0415
+        _vision_model = (
+            picker_state.read_picker_model()
+            or role_resolver.resolve("chat_default")
+            or "catfish-private-vision"
+        )
     except Exception:  # noqa: BLE001
         _vision_model = "catfish-private-vision"
 
@@ -382,7 +391,7 @@ def recognize_captcha(args: dict[str, Any]) -> dict[str, Any]:
                         "Content-Type": "application/json",
                     },
                     json={
-                        # P3.5.42.1: role_resolver("vision") chain, 不再 hardcode.
+                        # 9/23: picker 的模型; 含图时网关自动换成能看图的 (见上面)。
                         "model": _vision_model,
                         "messages": [
                             {"role": "system", "content": _OCR_SYSTEM_PROMPT},

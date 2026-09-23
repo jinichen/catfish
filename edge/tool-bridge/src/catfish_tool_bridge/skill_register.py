@@ -45,6 +45,7 @@ import os
 import tempfile
 from pathlib import Path
 from typing import Any
+from .hermes_paths import hermes_home as _hermes_home
 
 logger = logging.getLogger("catfish.tool_bridge.skill_register")
 
@@ -52,7 +53,7 @@ logger = logging.getLogger("catfish.tool_bridge.skill_register")
 LOCAL_SKILLS_ROOT = Path.home() / ".catfish" / "skills"
 
 #: hermes config.yaml 标准位置
-HERMES_CONFIG_PATH = Path.home() / ".hermes" / "config.yaml"
+HERMES_CONFIG_PATH = _hermes_home() / "config.yaml"
 
 
 def ensure_local_skills_dir() -> Path:

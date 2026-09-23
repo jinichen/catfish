@@ -178,7 +178,7 @@ fn doctor_is_safe(report: &Value) -> bool {
 }
 
 async fn verify_helper(path: &Path) -> Result<(), String> {
-    let mut command = tokio::process::Command::new(path);
+    let mut command = crate::services::process::background_tokio_command(path);
     command
         .arg("doctor")
         .arg("--json")

@@ -135,7 +135,7 @@ pub async fn open_file(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        let out = Command::new("cmd")
+        let out = crate::services::process::background_command("cmd")
             .args(["/C", "start", "", &path_str])
             .output()
             .map_err(|e| format!("start spawn 失败: {e}"))?;

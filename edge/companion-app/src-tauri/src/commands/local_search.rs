@@ -148,7 +148,7 @@ async fn run_search_cli(args: Vec<String>) -> Result<IndexRunResult, String> {
     // 索引是同步 subprocess 且可能跑几十秒，丢进 spawn_blocking，
     // 不占 tokio runtime 线程（跟 tts.rs:304 同款处理）。
     tokio::task::spawn_blocking(move || -> Result<IndexRunResult, String> {
-        let out = std::process::Command::new(&python)
+        let out = crate::services::process::background_command(&python)
             .args(&args)
             .current_dir(&dir)
             .env("PYTHONPATH", &pythonpath)

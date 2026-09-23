@@ -26,6 +26,7 @@ import {
   selfServePreviewReset,
   type ResetSummary,
 } from "../../lib/tauri";
+import { fileManagerName } from "../../lib/platformLabels";
 
 // 30s 轮询 — 跟 AuditCard 同节奏 (避免一个卡 30s 一个卡 5s 让 UI 不同步)
 const POLL_MS = 30_000;
@@ -288,7 +289,7 @@ function SelfServeButtons() {
       setMode({ kind: "idle" });
       setToast({
         kind: "ok",
-        msg: `✓ 重置完成. trash: ${result.trashPath} (5 秒内可 sqlite3/Finder 手工恢复)`,
+        msg: `✓ 重置完成. trash: ${result.trashPath} (5 秒内可 sqlite3/${fileManagerName()} 手工恢复)`,
       });
     } catch (e) {
       setToast({ kind: "err", msg: `重置失败: ${e}` });
@@ -433,7 +434,7 @@ function SelfServeButtons() {
             <li>共 {(mode.summary.bytesFreedTotal / (1024 * 1024)).toFixed(1)} MB</li>
           </ul>
           <div style={{ marginTop: 8, fontSize: 12, color: "var(--catfish-text-muted)" }}>
-            数据先移到 ~/.catfish-reset-trash/&lt;ts&gt;/, 你可 Finder/CLI 手工 mv 回去.
+            数据先移到 ~/.catfish-reset-trash/&lt;ts&gt;/, 你可 {fileManagerName()}/CLI 手工 mv 回去.
           </div>
           <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center" }}>
             <input

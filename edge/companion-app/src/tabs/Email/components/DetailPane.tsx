@@ -26,6 +26,7 @@ import { buildEmailSrcDoc, countRemoteRefs } from "../../../lib/emailSrcDoc";
 // P3.5.158 Phase 3 (7/2 鸿波): Compose panel 抽到 ComposeCore 共享组件
 import ComposeCore from "./ComposeCore";
 import MessageHeaderFields from "./MessageHeaderFields";
+import { modKey } from "../../../lib/platformLabels";
 
 interface FullMessage extends EmailDigestItem {
   recipients?: string[];
@@ -576,7 +577,7 @@ function DetailPane({
           {draftResult && (
             <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
               ✓ 草稿已落 Mail.app Drafts, Mail.app 已切前台 + 草稿窗口弹出 —
-              在那审改后按 ⌘+Shift+D 发送
+              在那审改后按 {modKey()}+Shift+D 发送
             </span>
           )}
           {draftError && (

@@ -160,7 +160,8 @@ pub fn sync_profile_from_default(hermes: &Path, profile: &Path) {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux", test))]
+// 9/23: 原来 cfg(macos | linux | test)。hermes_jwt_sync 的 service token 同步
+// 已经三平台一套, 这里跟着 —— 否则 Windows 上多 profile (专家 Bot) 拿不到 token。
 pub fn sync_service_env(
     hermes: &Path,
     token: &str,

@@ -362,12 +362,41 @@ fn restart_hermes_gateway() {
     }
 }
 
+/// 非 macOS: 没有 launchd, 走 hermes 自己的 CLI `hermes gateway restart`。
+///
+/// 9/23: 原来这里只打一行 "请手动重启"。Windows 上插件文件同步过去了、但 hermes
+/// 不重启就不加载 —— 8/9 在 mac 上修掉的"新端点 404 且完全静默"在 Windows 上
+/// 原样存在 (鸿波机器 /api/catfish/room-link/pending 一直 404)。
 #[cfg(not(target_os = "macos"))]
 fn restart_hermes_gateway() {
-    log::info!(
-        "[P3.5.56] plugin 变了。非 macOS 平台没有 launchctl —— \
-         请手动重启 hermes 让新 plugin 生效"
-    );
+    let Some(home) = hermes_home() else { return };
+    let cli = crate::services::catfish_paths::hermes_venv_tool(&home.join("hermes-agent"), "hermes");
+    if !cli.exists() {
+        log::info!(
+            "[P3.5.56] plugin 变了, 但 hermes 还没装好 ({} 不在) —— 装完启动时会加载新 plugin",
+            cli.display()
+        );
+        return;
+    }
+    match crate::services::process::background_command(&cli)
+        .args(["gateway", "restart"])
+        .env("HERMES_HOME", &home)
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            log::info!("[P3.5.56] plugin 变了 → 已重启 hermes gateway ({})", cli.display());
+        }
+        Ok(out) => log::warn!(
+            "[P3.5.56] plugin 变了但 `hermes gateway restart` 失败 ({}): {}\n\
+             → 新 plugin 代码**还没生效**。手动跑: hermes gateway restart",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
+        Err(e) => log::warn!(
+            "[P3.5.56] plugin 变了但起不了 {} ({e}) → 手动跑: hermes gateway restart",
+            cli.display()
+        ),
+    }
 }
 
 // ─────────────────────────────────────────────
