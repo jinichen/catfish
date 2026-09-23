@@ -61,10 +61,13 @@ import ThumbCard from "./components/ThumbCard";
 import WeChatImportDialog from "./components/WeChatImportDialog";
 import {
   discardWeChatStage,
+  documentSlots,
   importWeChatExport,
   isZipFile,
+  skippedDocumentsNote,
   stageWeChatExport,
   toAttachment,
+  toDocumentAttachments,
   type WeChatImportChoice,
   type WeChatStage,
 } from "../../lib/wechatImport";
@@ -225,9 +228,13 @@ export default function ChatInput({
     setWechatBusy(true);
     setWechatError(null);
     try {
-      const result = await importWeChatExport(wechatStage, choice);
-      const attachment = toAttachment(wechatStage, result);
-      setAttachments((cur) => [...cur, attachment]);
+      const result = await importWeChatExport(
+        wechatStage, choice, documentSlots(MAX_ATTACHMENTS, attachments.length),
+      );
+      // 二期: 包里的 pdf/docx 跟聊天记录一起进这条消息, 是普通文件附件
+      const added = [toAttachment(wechatStage, result), ...toDocumentAttachments(result)];
+      setAttachments((cur) => [...cur, ...added]);
+      setAttachError(skippedDocumentsNote(result));
       setWechatStage(null);
     } catch (e) {
       setWechatError((e as Error).message || String(e));
@@ -400,6 +407,7 @@ export default function ChatInput({
       {wechatStage && (
         <WeChatImportDialog
           stage={wechatStage}
+          maxDocuments={documentSlots(MAX_ATTACHMENTS, attachments.length)}
           busy={wechatBusy}
           error={wechatError}
           onConfirm={(choice) => void confirmWeChatImport(choice)}

@@ -29,8 +29,9 @@ U+2005 (四分之一全角空格), 不归一的话按人名搜不到。
 
 # 安全
 
-只在内存里读, 不解压到磁盘。加密条目、条目数 > 1000、解压后总量 > 1 GB、
+解析只在内存里读。加密条目、条目数 > 1000、解压后总量 > 1 GB、
 TXT > 16 MB、路径穿越 / 绝对路径 / 反斜杠 一律拒收。CRC 由 zipfile 在读取时校验。
+唯一落盘的是 `extract_documents` (二期): 只写文档类附件、只写到调用方给的空目录。
 """
 from __future__ import annotations
 
@@ -49,6 +50,13 @@ MAX_TOTAL_EXPANDED = 1024 * 1024 * 1024
 MAX_TRANSCRIPT_BYTES = 16 * 1024 * 1024
 MAX_TEXT_CHARS = 12000
 NATIVE_TRANSCRIPT = "聊天记录.txt"
+# 二期 (9/23): 包里能交给 Companion 文档解析 (parse_file.py) 的附件。图片 / 音视频不在内 ——
+# 图片要走视觉模型、音视频要转写, 成本和时长都不是「导入时顺手读」的量级。
+DOCUMENT_EXTS = {
+    ".pdf", ".docx", ".xlsx", ".xlsm", ".xls", ".pptx",
+    ".csv", ".json", ".txt", ".md", ".markdown", ".log",
+}
+MAX_DOCUMENT_BYTES = 20 * 1024 * 1024  # 跟聊天框单个附件上限一致
 
 _RECORD_HEAD = re.compile(
     r"^·([^\n]+)\n(\d{4})年(\d{1,2})月(\d{1,2})日 (\d{2}):(\d{2})\n", re.MULTILINE
@@ -99,6 +107,17 @@ class ParsedExport:
     @property
     def end(self) -> datetime:
         return max(message.minute for message in self.messages)
+
+    @property
+    def documents(self) -> list[str]:
+        """包里的文档附件: 先按聊天里被提到的先后, 没被提到的排后面。"""
+        docs = {n for n in self.attachments if PurePosixPath(n).suffix.lower() in DOCUMENT_EXTS}
+        ordered: list[str] = []
+        for message in self.messages:
+            name = message.attachment_name
+            if name in docs and name not in ordered:
+                ordered.append(name)
+        return ordered + sorted(docs - set(ordered))
 
     def attachment_summary(self) -> dict[str, int]:
         referenced = [m for m in self.messages if m.attachment_name]
@@ -244,3 +263,47 @@ def _read_archive(archive: zipfile.ZipFile, sha: str, size: int, tz) -> ParsedEx
             attachments=sorted(attachment_names),
         )
     raise last_error or _fail("ZIP 里没有可解析的聊天记录")
+
+
+def extract_documents(source, dest, limit: int, max_bytes: int = MAX_DOCUMENT_BYTES) -> dict:
+    """把包里的文档附件写到调用方给的**空**目录, 交给 Companion 的文档解析。
+
+    只写 `documents` 里的名字 (basename, 已过 _safe_name 校验), O_EXCL 新建, 不覆盖、
+    不跟随符号链接; 单个超过 max_bytes 的跳过并说明原因。CRC 由 zipfile 读时校验。
+    """
+    import os
+    from pathlib import Path
+
+    target_dir = Path(dest)
+    if not target_dir.is_dir() or any(target_dir.iterdir()):
+        raise _fail("文档输出目录必须是已存在的空目录", "invalid_scope")
+    parsed = read_export(source, compute_hash=False)
+    wanted = parsed.documents
+    extracted: list[dict] = []
+    skipped: list[dict] = [{"name": n, "reason": "超过本条消息的附件数量上限"} for n in wanted[limit:]]
+    try:
+        with zipfile.ZipFile(source) as archive:
+            by_name: dict[str, zipfile.ZipInfo] = {}
+            for info in archive.infolist():
+                if info.is_dir() or info.filename == parsed.transcript_path:
+                    continue
+                by_name.setdefault(PurePosixPath(info.filename).name, info)
+            for name in wanted[:max(0, limit)]:
+                info = by_name.get(name)
+                if info is None:
+                    skipped.append({"name": name, "reason": "包里找不到"})
+                    continue
+                if info.file_size > max_bytes:
+                    skipped.append({"name": name, "reason": "超过 20 MB"})
+                    continue
+                data = archive.read(info)
+                path = target_dir / name
+                flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) \
+                    | getattr(os, "O_BINARY", 0)
+                fd = os.open(path, flags, 0o600)
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(data)
+                extracted.append({"name": name, "path": str(path), "size": len(data)})
+    except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
+        raise _fail("文档附件读取失败") from exc
+    return {"extracted": extracted, "skipped": skipped}

@@ -3,10 +3,13 @@ import { describe, expect, it } from "vitest";
 import { formatFileAttachment } from "./chatWire";
 import {
   choiceProblem,
+  documentSlots,
   formatWeChatAttachment,
   initialChoice,
+  skippedDocumentsNote,
   stageSummary,
   toAttachment,
+  toDocumentAttachments,
   type WeChatImportResult,
   type WeChatStage,
 } from "./wechatImport";
@@ -127,5 +130,50 @@ describe("摘要与附件", () => {
     expect(text).toContain("微信聊天记录");
     expect(text).not.toContain("execute_code");
     expect(text).not.toContain("[完整文件:");
+  });
+});
+
+
+describe("二期: 包里的文档", () => {
+  const withDocs = { ...result,
+    transcriptPath: "/u/1-年审群-微信聊天记录.txt",
+    documents: [{
+      filename: "成交通知书.pdf", ext: ".pdf", kind: "pdf", preview_text: "成交通知书正文",
+      meta: { page_count: 1 }, kept_path: "/u/1-成交通知书.pdf", size_bytes: 1024,
+    }],
+    skippedDocuments: [{ name: "扫描件.pdf", reason: "超过 20 MB" }],
+  };
+
+  it("有文档默认勾上, 没文档不勾", () => {
+    expect(initialChoice(stage({ documents: ["a.pdf"] })).includeDocuments).toBe(true);
+    expect(initialChoice(stage()).includeDocuments).toBe(false);
+  });
+
+  it("文档附件位置 = 上限 - 已有 - 聊天记录本身", () => {
+    expect(documentSlots(6, 0)).toBe(5);
+    expect(documentSlots(6, 5)).toBe(0);
+    expect(documentSlots(6, 9)).toBe(0);
+  });
+
+  it("文档变成普通文件附件, 跟聊天框上传同形", () => {
+    const [doc] = toDocumentAttachments(withDocs);
+    expect(doc).toMatchObject({
+      kind: "file", name: "成交通知书.pdf", fileKind: "pdf", sizeBytes: 1024,
+      previewText: "成交通知书正文", keptPath: "/u/1-成交通知书.pdf",
+    });
+    // 走的是普通 PDF 的格式, 模型能拿 keptPath 读全文
+    expect(formatFileAttachment(doc)).toContain("[完整文件: /u/1-成交通知书.pdf]");
+  });
+
+  it("聊天记录附件带上全文路径和入库方式, 并列出附上的文档", () => {
+    const text = formatWeChatAttachment(toAttachment(stage(), withDocs));
+    expect(text).toContain("[整理后的全文: /u/1-年审群-微信聊天记录.txt");
+    expect(text).toContain("catfish_wiki_ingest");
+    expect(text).toContain("包里的 1 个文档已作为单独附件附在这条消息里: 成交通知书.pdf");
+  });
+
+  it("没读成的文档告诉员工原因", () => {
+    expect(skippedDocumentsNote(withDocs)).toBe("有 1 个文档没有读: 扫描件.pdf（超过 20 MB）");
+    expect(skippedDocumentsNote(result)).toBeNull();
   });
 });

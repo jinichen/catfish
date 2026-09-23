@@ -6,7 +6,7 @@ import json
 import sys
 from typing import Sequence
 
-from . import library
+from . import library, wechat_zip
 from .commands import bounded_limit, history, search, sessions
 from .readers import ReaderFailure, iter_records
 
@@ -47,6 +47,11 @@ def _parser() -> argparse.ArgumentParser:
     render.add_argument("--source", required=True)
     render.add_argument("--self-name")
     render.add_argument("--max-chars", type=int, default=30000)
+    docs = commands.add_parser("extract-documents")
+    docs.add_argument("--json", action="store_true")
+    docs.add_argument("--source", required=True)
+    docs.add_argument("--dest", required=True)
+    docs.add_argument("--limit", type=int, default=5)
     groups = commands.add_parser("groups")
     groups.add_argument("--json", action="store_true")
     groups.add_argument("--library", required=True)
@@ -103,6 +108,9 @@ _LIBRARY_COMMANDS = {
         a.source, a.library, a.group_id, a.group_name, a.self_name,
     ),
     "render": lambda a: library.render(a.source, a.self_name, max(1000, min(a.max_chars, 200000))),
+    "extract-documents": lambda a: wechat_zip.extract_documents(
+        a.source, a.dest, max(0, min(a.limit, 20)),
+    ),
     "groups": _groups,
     "update-group": lambda a: library.update_group(a.library, a.group_id, a.name, a.self_name),
     "remove-group": lambda a: library.remove_group(a.library, a.group_id),

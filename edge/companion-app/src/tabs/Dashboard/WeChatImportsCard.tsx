@@ -93,6 +93,8 @@ export default function WeChatImportsCard() {
       <p style={hintStyle}>
         在 Mac 微信 (4.1.13 及以上) 里多选消息 → 合并转发 → 转发到其他应用, 把得到的 ZIP
         拖进聊天框即可。原包只存在本机 <code>~/.catfish/wechat-exports/</code>, 不上传。
+        导入时发进对话的整理全文和包里的文档, 跟聊天框上传的文件一样放在
+        <code>~/.catfish/uploads/</code>; 在这里删除群不会删掉它们。
       </p>
 
       {status?.supported && !status.helperInstalled && (

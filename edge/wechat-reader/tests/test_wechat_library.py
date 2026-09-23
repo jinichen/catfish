@@ -220,3 +220,42 @@ def test_reimport_reports_existing_group_name(tmp_path: Path, library: Path, cap
     _import(capsys, source, library, "--group-name", "年审群", "--self-name", "我自己")
     again = _import(capsys, source, library)
     assert (again["already_imported"], again["name"], again["self_name"]) == (True, "年审群", "我自己")
+
+
+def test_inspect_lists_documents_in_mention_order(tmp_path: Path, capsys) -> None:
+    media = {**GROUP_A_MEDIA, "附带说明.txt": "说明".encode(), "未提及.docx": b"PK-docx"}
+    source = make_export(tmp_path / "a.zip", GROUP_A, media)
+    _, payload = _run(capsys, "inspect", "--json", "--source", str(source))
+    # 图片不算文档; 被提到的排前面; 聊天记录.txt 本身不算附件
+    assert payload["documents"] == ["年审材料-盖章版.pdf", "未提及.docx", "附带说明.txt"]
+
+
+def test_extract_documents_writes_only_documents_into_an_empty_dir(tmp_path: Path, capsys) -> None:
+    media = {**GROUP_A_MEDIA, "未提及.docx": b"PK-docx"}
+    source = make_export(tmp_path / "a.zip", GROUP_A, media)
+    dest = tmp_path / "out"
+    dest.mkdir()
+    code, payload = _run(capsys, "extract-documents", "--json", "--source", str(source),
+                         "--dest", str(dest), "--limit", "1")
+    assert code == 0
+    assert [d["name"] for d in payload["extracted"]] == ["年审材料-盖章版.pdf"]
+    assert (dest / "年审材料-盖章版.pdf").read_bytes() == b"%PDF-1.4 fake"
+    assert payload["skipped"] == [{"name": "未提及.docx", "reason": "超过本条消息的附件数量上限"}]
+    assert sorted(p.name for p in dest.iterdir()) == ["年审材料-盖章版.pdf"]  # 图片没写出来
+
+
+def test_extract_documents_refuses_non_empty_dest_and_oversized(tmp_path: Path, capsys, monkeypatch) -> None:
+    from catfish_wechat_reader import wechat_zip
+
+    source = make_export(tmp_path / "a.zip", GROUP_A, GROUP_A_MEDIA)
+    dest = tmp_path / "out"
+    dest.mkdir()
+    (dest / "leftover").write_text("x")
+    code, payload = _run(capsys, "extract-documents", "--json", "--source", str(source),
+                         "--dest", str(dest))
+    assert code == 2 and payload["reason_code"] == "invalid_scope"
+    (dest / "leftover").unlink()
+    monkeypatch.setattr(wechat_zip, "MAX_DOCUMENT_BYTES", 4)
+    result = wechat_zip.extract_documents(source, dest, 5, max_bytes=4)
+    assert result["extracted"] == []
+    assert result["skipped"] == [{"name": "年审材料-盖章版.pdf", "reason": "超过 20 MB"}]

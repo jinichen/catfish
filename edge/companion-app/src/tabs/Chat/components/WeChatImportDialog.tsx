@@ -1,8 +1,9 @@
 /** 微信聊天记录导入确认框 (9/23) —— 聊天框拖入 ZIP 后弹出。
  *
- * 只问三件事, 而且尽量不用问:
+ * 只问这几件事, 而且尽量不用问:
  *   归到哪个群  —— 认出来就默认选中; 认不出来就新建, 群名先按发送人自动起好
  *   我是谁      —— 别的群里记过就自动带上; 一次记住, 以后不再问
+ *   读文档      —— 包里有 pdf/docx 等才出现, 默认勾上 (二期)
  *   授权        —— 只在第一次 (或换了模型) 时出现, 取代原来看板上的授权卡片
  *
  * 规则 (能不能点导入) 在 lib/wechatImport.ts 的 choiceProblem, 这里只画。
@@ -24,12 +25,15 @@ const SELF_NONE = "__none__";
 
 export default function WeChatImportDialog({
   stage,
+  maxDocuments,
   busy,
   error,
   onConfirm,
   onCancel,
 }: {
   stage: WeChatStage;
+  /** 这条消息还能放几个文档附件 (lib/wechatImport.documentSlots) */
+  maxDocuments: number;
   busy: boolean;
   error: string | null;
   onConfirm: (choice: WeChatImportChoice) => void;
@@ -40,6 +44,8 @@ export default function WeChatImportDialog({
   const already = inspect.already_imported_group_id;
   const problem = choiceProblem(stage, choice);
   const groupOptions = inspect.candidates;
+  const documents = inspect.documents ?? [];
+  const readable = Math.min(documents.length, maxDocuments);
   const selfValue = choice.selfName === undefined
     ? SELF_UNSET
     : choice.selfName === "" ? SELF_NONE : choice.selfName;
@@ -112,6 +118,25 @@ export default function WeChatImportDialog({
           </select>
         </label>
 
+        {documents.length > 0 && (
+          <label style={consentStyle}>
+            <input
+              type="checkbox"
+              checked={choice.includeDocuments && readable > 0}
+              disabled={busy || readable === 0}
+              onChange={(e) => setChoice({ ...choice, includeDocuments: e.target.checked })}
+            />
+            <span>
+              同时读取包里的 {documents.length} 个文档 (pdf、docx 等; 图片不读)
+              {readable < documents.length && (
+                readable === 0
+                  ? " —— 这条消息的附件已经放满了, 先删几个再导入"
+                  : ` —— 这条消息只剩 ${readable} 个附件位置, 只读前 ${readable} 个`
+              )}
+            </span>
+          </label>
+        )}
+
         {stage.needsConsent && (
           <label style={consentStyle}>
             <input
@@ -137,7 +162,7 @@ export default function WeChatImportDialog({
             disabled={Boolean(problem) || busy}
             onClick={() => onConfirm(choice)}
           >
-            {busy ? "导入中…" : "导入"}
+            {busy ? (choice.includeDocuments && readable > 0 ? "导入并读取文档…" : "导入中…") : "导入"}
           </button>
         </div>
       </div>

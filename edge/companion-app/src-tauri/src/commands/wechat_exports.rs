@@ -27,6 +27,8 @@ use super::wechat_archive::{
 const MAX_ZIP_BYTES: usize = 200 * 1024 * 1024;
 /// 放进聊天消息的整理文本上限 (字符)。超过的部分模型用 catfish_wechat_history 按需查。
 const RENDER_MAX_CHARS: u32 = 30_000;
+/// 落进 uploads 的全文上限 (读取器 render 自己也封顶 20 万)。
+const FULL_RENDER_MAX_CHARS: u32 = 200_000;
 const READER_TIMEOUT: Duration = Duration::from_secs(90);
 /// 员工拖进来却没点「导入」也没点「取消」(比如直接关了窗口) —— 暂存文件留一小时就清。
 const STAGE_TTL: Duration = Duration::from_secs(3600);
@@ -233,6 +235,7 @@ pub async fn wechat_export_import(
     group_name: Option<String>,
     self_name: Option<String>,
     consent: bool,
+    max_documents: Option<u32>,
 ) -> Result<Value, String> {
     let path = staged_path(&stage_id)?;
     if !path.is_file() {
@@ -265,15 +268,34 @@ pub async fn wechat_export_import(
     let imported = run_reader(&helper, args).await?;
 
     let effective_self = imported.get("self_name").and_then(Value::as_str).unwrap_or("");
-    let mut render_args = vec![
-        arg("render"), arg("--json"),
-        arg("--source"), path.clone().into_os_string(),
-        arg("--max-chars"), arg(RENDER_MAX_CHARS.to_string()),
-    ];
-    if !effective_self.is_empty() {
-        render_args.extend([arg("--self-name"), arg(effective_self)]);
-    }
-    let rendered = run_reader(&helper, render_args).await?;
+    let group_label = imported
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("微信聊天")
+        .to_string();
+    let render = |max_chars: u32| {
+        let mut render_args = vec![
+            arg("render"), arg("--json"),
+            arg("--source"), path.clone().into_os_string(),
+            arg("--max-chars"), arg(max_chars.to_string()),
+        ];
+        if !effective_self.is_empty() {
+            render_args.extend([arg("--self-name"), arg(effective_self)]);
+        }
+        render_args
+    };
+    // 全文 (读取器上限 20 万字) 落一份 .txt 进 uploads, 作为这个附件的 keptPath ——
+    // 员工说「存进知识库」时, 现成的 catfish_wiki_ingest 就读它, 不用另写入库逻辑。
+    let full = run_reader(&helper, render(FULL_RENDER_MAX_CHARS)).await?;
+    let full_text = full.get("text").and_then(Value::as_str).unwrap_or("");
+    let rendered = if full_text.chars().count() <= RENDER_MAX_CHARS as usize {
+        full.clone()
+    } else {
+        run_reader(&helper, render(RENDER_MAX_CHARS)).await?
+    };
+    let transcript_path = write_transcript_upload(&group_label, &full)?;
+    let (documents, skipped_documents) =
+        read_documents(&helper, &path, &stage_id, max_documents.unwrap_or(0)).await;
 
     if consent_required {
         // 首次 (或换了模型后) 的授权: 读取器过一遍安全自检才写, 跟原来卡片上的
@@ -301,7 +323,101 @@ pub async fn wechat_export_import(
         "truncated": rendered.get("truncated"),
         "renderedCount": rendered.get("rendered_count"),
         "messageCount": rendered.get("message_count"),
+        "transcriptPath": transcript_path,
+        "documents": documents,
+        "skippedDocuments": skipped_documents,
     }))
+}
+
+/// 整理好的全文写成 `~/.catfish/uploads/<ts>-<群名>-微信聊天记录.txt`。
+/// 跟聊天框上传的文件放在一起、同一种命名, 隐私清单 / 清理逻辑不用为它另开一类。
+fn write_transcript_upload(group: &str, full: &Value) -> Result<String, String> {
+    let home = crate::util::paths::home_env().map_err(|_| "找不到用户目录".to_string())?;
+    let dir = PathBuf::from(home).join(".catfish").join("uploads");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("uploads 目录创建失败: {e}"))?;
+    let safe: String = group
+        .chars()
+        .map(|c| if matches!(c, '/' | '\\' | '\0' | ':' | '\n' | '\r') { '_' } else { c })
+        .take(60)
+        .collect();
+    let ts = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let target = dir.join(format!("{ts}-{safe}-微信聊天记录.txt"));
+    let count = full.get("message_count").and_then(Value::as_u64).unwrap_or(0);
+    let shown = full.get("rendered_count").and_then(Value::as_u64).unwrap_or(0);
+    let mut body = format!("# 微信聊天记录: {group} ({count} 条)\n");
+    if shown < count {
+        body.push_str(&format!("# 只包含前 {shown} 条 (超出单文件上限)\n"));
+    }
+    body.push('\n');
+    body.push_str(full.get("text").and_then(Value::as_str).unwrap_or(""));
+    body.push('\n');
+    std::fs::write(&target, body).map_err(|e| format!("写聊天记录全文失败: {e}"))?;
+    Ok(target.to_string_lossy().to_string())
+}
+
+/// 二期: 包里的 pdf/docx/xlsx… 抽出来, 逐个走聊天框上传同一条解析路
+/// (`file_parse::keep_parsed_upload`)。单个失败不影响导入, 原因带回给员工和模型。
+async fn read_documents(
+    helper: &Path,
+    source: &Path,
+    stage_id: &str,
+    limit: u32,
+) -> (Vec<Value>, Vec<Value>) {
+    let mut documents = Vec::new();
+    let mut skipped = Vec::new();
+    if limit == 0 {
+        return (documents, skipped);
+    }
+    let Ok(dir) = staging_dir().map(|d| d.join(format!("{stage_id}-docs"))) else {
+        return (documents, skipped);
+    };
+    let _ = std::fs::remove_dir_all(&dir);
+    if let Err(error) = std::fs::create_dir_all(&dir) {
+        skipped.push(json!({ "name": "*", "reason": format!("无法创建临时目录: {error}") }));
+        return (documents, skipped);
+    }
+    let extracted = run_reader(helper, vec![
+        arg("extract-documents"), arg("--json"),
+        arg("--source"), source.to_path_buf().into_os_string(),
+        arg("--dest"), dir.clone().into_os_string(),
+        arg("--limit"), arg(limit.min(20).to_string()),
+    ])
+    .await;
+    match extracted {
+        Err(error) => skipped.push(json!({ "name": "*", "reason": error })),
+        Ok(report) => {
+            if let Some(items) = report.get("skipped").and_then(Value::as_array) {
+                skipped.extend(items.iter().cloned());
+            }
+            for item in report.get("extracted").and_then(Value::as_array).into_iter().flatten() {
+                let (Some(name), Some(file)) = (
+                    item.get("name").and_then(Value::as_str),
+                    item.get("path").and_then(Value::as_str),
+                ) else {
+                    continue;
+                };
+                let size = item.get("size").cloned().unwrap_or(Value::Null);
+                match super::file_parse::keep_parsed_upload(PathBuf::from(file), name.to_string()).await {
+                    Ok(parsed) => {
+                        let mut value = serde_json::to_value(parsed).unwrap_or(Value::Null);
+                        if let Value::Object(map) = &mut value {
+                            map.insert("size_bytes".to_string(), size);
+                        }
+                        documents.push(value);
+                    }
+                    Err(error) => skipped.push(json!({
+                        "name": name,
+                        "reason": error.chars().take(120).collect::<String>(),
+                    })),
+                }
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    (documents, skipped)
 }
 
 #[tauri::command]

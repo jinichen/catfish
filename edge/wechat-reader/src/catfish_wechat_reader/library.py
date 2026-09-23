@@ -180,6 +180,7 @@ def inspect(source: str | Path, library: str | Path | None) -> dict[str, object]
         "end": parsed.end.isoformat(),
         "senders": [{"name": name, "count": count} for name, count in parsed.senders],
         "attachments": parsed.attachment_summary(),
+        "documents": parsed.documents,
         "already_imported_group_id": already,
         "matched_group_id": already or matched,
         "candidates": candidates,

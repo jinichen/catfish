@@ -249,7 +249,19 @@ pub async fn parse_file_from_b64(
 
     std::fs::write(&tmp, &bytes).map_err(|e| format!("写 tmp 失败: {e}"))?;
     log::info!("parse_file_from_b64: 写 {} ({} bytes)", tmp.display(), bytes.len());
+    keep_parsed_upload(tmp, filename).await
+}
 
+/// 解析一个已经落在临时位置的文件, 再把原文件 (和 BM25 sidecar) 搬进
+/// `~/.catfish/uploads/`。成功或失败, `tmp` 都归这里处理 (搬走或删掉)。
+///
+/// 9/23 从 `parse_file_from_b64` 拆出来: 微信导出包里的 pdf/docx 在导入时也要走
+/// **同一条**路 (wechat_exports.rs), 不能各写一份 —— 员工在聊天框直接拖一个 PDF
+/// 和从微信包里带出来的 PDF, 模型看到的必须是同一种附件。
+pub(crate) async fn keep_parsed_upload(
+    tmp: std::path::PathBuf,
+    filename: String,
+) -> Result<ParseFileResult, String> {
     // parse Python (preview-only)
     let inner = match parse_file_inner(&tmp.to_string_lossy()).await {
         Ok(r) => r,

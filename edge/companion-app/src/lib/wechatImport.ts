@@ -1,8 +1,9 @@
 /** 微信「合并转发」导出 ZIP 的导入 —— 聊天框拖入 (9/23)。
  *
  * 流程: 拖入 .zip → `wechat_export_stage` (Rust 暂存 + 读取器 inspect, 只看不存)
- *   → 确认框 (群名 / 我是谁 / 首次授权) → `wechat_export_import` (导入库 + 整理文本)
- *   → 变成这条消息的一个附件 (fileKind="wechat")。
+ *   → 确认框 (群名 / 我是谁 / 首次授权 / 要不要读包里的文档) → `wechat_export_import`
+ *   → 变成这条消息的附件: 一个聊天记录 (fileKind="wechat") + 包里的 pdf/docx 等,
+ *     后者跟聊天框直接上传的文件是同一种附件 (同一条解析路, 见 file_parse.rs)。
  *
  * 解析 / 认群 / 去重都在 catfish-wechat-reader 里, 这里只有界面要用的类型和
  * 纯函数 (可单测), 不重复任何格式规则。
@@ -38,6 +39,8 @@ export interface WeChatInspect {
   candidates: WeChatGroupCandidate[];
   suggested_name: string;
   known_self_name: string | null;
+  /** 包里的文档附件 (pdf/docx/xlsx…)。老版本读取器没有这个字段 → 当成没有。 */
+  documents?: string[];
 }
 
 export interface WeChatStage {
@@ -49,6 +52,18 @@ export interface WeChatStage {
   pickerModel: string | null;
 }
 
+/** 包里文档的解析结果 —— 就是 file_parse.rs 的 ParseFileResult (蛇形字段) + 字节数。 */
+export interface WeChatParsedDocument {
+  filename: string;
+  ext: string;
+  kind: string;
+  preview_text: string;
+  meta: Record<string, unknown>;
+  kept_path: string;
+  parsed_text_path?: string;
+  size_bytes?: number;
+}
+
 export interface WeChatImportResult {
   groupId: string;
   name: string;
@@ -58,6 +73,10 @@ export interface WeChatImportResult {
   truncated: boolean;
   renderedCount: number;
   messageCount: number;
+  /** 整理后的全文 .txt (uploads 里), 员工要「存知识库」时 catfish_wiki_ingest 读它 */
+  transcriptPath?: string;
+  documents?: WeChatParsedDocument[];
+  skippedDocuments?: Array<{ name: string; reason: string }>;
 }
 
 /** 确认框里员工的选择。groupId 有值 = 归到已有群; 否则按 newGroupName 新建。 */
@@ -67,6 +86,8 @@ export interface WeChatImportChoice {
   /** undefined = 不指定 (沿用已记的); "" = 我不在这些发送人里 */
   selfName: string | undefined;
   consent: boolean;
+  /** 同时读包里的文档 (有文档时默认勾上) */
+  includeDocuments: boolean;
 }
 
 export function isZipFile(file: File): boolean {
@@ -97,6 +118,7 @@ export async function stageWeChatExport(file: File): Promise<WeChatStage> {
 export async function importWeChatExport(
   stage: WeChatStage,
   choice: WeChatImportChoice,
+  maxDocuments: number,
 ): Promise<WeChatImportResult> {
   return invoke<WeChatImportResult>("wechat_export_import", {
     stageId: stage.stageId,
@@ -104,7 +126,13 @@ export async function importWeChatExport(
     groupName: choice.groupId ? undefined : choice.newGroupName.trim(),
     selfName: choice.selfName,
     consent: choice.consent,
+    maxDocuments: choice.includeDocuments ? Math.max(0, maxDocuments) : 0,
   });
+}
+
+/** 这条消息还能放几个文档附件: 总上限减去已有的, 再给聊天记录本身留一个位置。 */
+export function documentSlots(maxAttachments: number, existing: number): number {
+  return Math.max(0, maxAttachments - existing - 1);
 }
 
 export async function discardWeChatStage(stage: WeChatStage): Promise<void> {
@@ -119,6 +147,7 @@ export function initialChoice(stage: WeChatStage): WeChatImportChoice {
     newGroupName: inspect.suggested_name,
     selfName: inspect.known_self_name ?? undefined,
     consent: false,
+    includeDocuments: (inspect.documents?.length ?? 0) > 0,
   };
 }
 
@@ -158,6 +187,7 @@ export function toAttachment(
     sizeBytes: stage.sizeBytes,
     fileKind: "wechat",
     previewText: result.transcript,
+    keptPath: result.transcriptPath,
     meta: {
       session_id: result.groupId,
       group_name: result.name,
@@ -168,8 +198,32 @@ export function toAttachment(
       start: stage.inspect.start,
       end: stage.inspect.end,
       missing_attachments: stage.inspect.attachments.missing,
+      documents: (result.documents ?? []).map((d) => d.filename),
     },
   };
+}
+
+/** 包里解析出来的文档 → 普通文件附件 (跟 attachmentHelpers.fileToAttachment 的文档分支同形)。 */
+export function toDocumentAttachments(result: WeChatImportResult): Attachment[] {
+  return (result.documents ?? []).map((d) => ({
+    kind: "file" as const,
+    mimeType: "application/octet-stream",
+    name: d.filename,
+    sizeBytes: d.size_bytes ?? 0,
+    fileKind: d.kind,
+    previewText: d.preview_text,
+    meta: d.meta,
+    keptPath: d.kept_path,
+    parsedTextPath: d.parsed_text_path,
+  }));
+}
+
+/** 没读成的文档, 一句话告诉员工 (null = 全读了)。 */
+export function skippedDocumentsNote(result: WeChatImportResult): string | null {
+  const skipped = result.skippedDocuments ?? [];
+  if (skipped.length === 0) return null;
+  const list = skipped.map((s) => `${s.name === "*" ? "文档" : s.name}（${s.reason}）`).join("、");
+  return `有 ${skipped.length} 个文档没有读: ${list}`;
 }
 
 /** 发给模型的附件段。全文在就直接给; 被截断或是历史会话恢复的 (没有全文),
@@ -178,15 +232,25 @@ export function formatWeChatAttachment(att: {
   name: string;
   previewText?: string;
   meta?: Record<string, unknown>;
+  keptPath?: string;
 }): string {
   const meta = att.meta || {};
   const sessionId = String(meta.session_id ?? "");
   const count = meta.message_count ?? "?";
   const start = String(meta.start ?? "");
   const end = String(meta.end ?? "");
+  const fullPath = att.keptPath;
+  const docs = (meta.documents as string[] | undefined) ?? [];
   const header =
     `\n\n=== 微信聊天记录: ${att.name} (${count} 条 · ${day(start)} ~ ${day(end)}) ===\n` +
-    `[已导入本机; 会话 session_id=${sessionId}]\n`;
+    `[已导入本机; 会话 session_id=${sessionId}]\n` +
+    (fullPath
+      ? `[整理后的全文: ${fullPath} —— 员工明确要求存进知识库时, 用 catfish_wiki_ingest ` +
+        `(kept_path=这个路径, filename="${att.name}-微信聊天记录.txt")]\n`
+      : "") +
+    (docs.length
+      ? `[包里的 ${docs.length} 个文档已作为单独附件附在这条消息里: ${docs.join("、")}]\n`
+      : "");
   const lookup =
     `用 catfish_wechat_history (session_id="${sessionId}", 时间范围在 ${start} ~ ${end} 之内, ` +
     `每次最多 31 天) 读取完整记录, 不要凭空补全。`;
