@@ -17,3 +17,5 @@ catfish-wechat-reader-dist.tar.gz
 *.log
 # 8/5 新增: jieba / playwright 的 wheel (见 mac-aarch64/.gitignore)
 hermes-deps-dist.tar.gz
+# 9/23: tool-bridge / local-search 源码包 (build_edge_runtime.py 生成)
+catfish-edge-runtime.tar.gz

@@ -60,7 +60,10 @@ download_with_retry() {
     for attempt in 1 2 3 4 5 6 7 8 9 10; do
         echo "  [attempt $attempt/10] $output"
         # -C - 断点续传, --retry 3 内部小 retry, --retry-max-time 15 min
+        # --speed-limit/--speed-time: 连上了但 60 秒平均不到 10KB/s 就算这次失败,
+        # 交给外面的重试。没有这两个参数时, 挂住的连接会让 curl 永远等下去 (9/23 实测)。
         if curl -fL --retry 3 --retry-delay 5 --retry-max-time 900 --continue-at - \
+                --connect-timeout 20 --speed-limit 10240 --speed-time 60 \
                 -o "$output" "$url_proxied"; then
             # verify gzip 完整性 (若 tar.gz)
             if [[ "$output" == *.gz ]] || [[ "$output" == *.tar.gz ]]; then
@@ -258,11 +261,8 @@ echo ""
 echo "=== [3/6] Download Node.js $NODE_VERSION darwin-$NODE_ARCH ==="
 # Node.js 官方源 nodejs.org 不走 GH proxy (nodejs.org 直接 CDN 快)
 NODE_TMP="/tmp/$NODE_FNAME"
-if [ ! -f "$NODE_TMP" ] || ! gzip -t "$NODE_TMP" 2>/dev/null; then
-    rm -f "$NODE_TMP"
-    curl -fL --retry 3 --retry-delay 5 --retry-max-time 900 -o "$NODE_TMP" "$NODE_URL"
-    gzip -t "$NODE_TMP" || { echo "❌ Node tar corrupted, re-run"; exit 1; }
-fi
+# 下载 (多源 + 低速超时 + sha256) 抽到隔壁; source 而不是子进程 —— 它用上面这些变量。
+. "$COMPANION/scripts/fetch-node-embed.sh"
 cp "$NODE_TMP" "$RESOURCES/node-embed.tar.gz"
 echo "  OK $RESOURCES/node-embed.tar.gz ($(ls -lh "$RESOURCES/node-embed.tar.gz" | awk '{print $5}'))"
 

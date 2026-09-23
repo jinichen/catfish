@@ -18,3 +18,5 @@ catfish-wechat-reader-dist.tar.gz
 # 所以只能在 [5.5/6] 段、下载完 cpython 之后用那个解释器去 pip download)
 hermes-deps-dist.tar.gz
 *.log
+# 9/23: tool-bridge / local-search 源码包 (build_edge_runtime.py 生成)
+catfish-edge-runtime.tar.gz
