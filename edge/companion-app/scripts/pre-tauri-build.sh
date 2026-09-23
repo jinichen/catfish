@@ -226,3 +226,49 @@ EOF
         fi
     done
 fi
+
+# ─── 5 · 资源包是不是比源码旧 (9/23) ─────────────────────────────────
+#
+# 9/23 实测: resources/mac-aarch64 还是 9/1 生成的, 签名打包直接拿它用 ——
+# 缺 9/23 新加的 catfish-edge-runtime.tar.gz (tauri 报 "resource path doesn't
+# exist" 才停下来), 而更要命的是**没报错的那几个**: 里面的微信读取器还是 0.1.0、
+# hermes-deps 没有 watchdog。要是没缺文件, 这种包会一路签名公证发出去, 员工
+# 装上就是旧功能, 没人会发现。
+#
+# 判据: 从仓库源码打出来的资源包, 文件时间必须晚于对应源码**最后一次提交**。
+# 只比已提交的 —— 发给现场的包本来就该从提交过的代码打。
+# 下载来的大件 (python / node / chromium / uv) 不跟源码走, 不在这里比。
+# GNU 的 `stat -c` 在 macOS 上直接报错退出; 反过来不行 —— GNU 把 `-f` 当成
+# 「文件系统信息」照样成功, 吐一大段文字 (9/23 在 Linux 上试出来的)。
+_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
+_last_commit() { git -C "$APP_ROOT" log -1 --format=%ct -- "$@" 2>/dev/null || echo 0; }
+_stale=0
+for _res in "$APP_ROOT/src-tauri/resources/mac-aarch64" "$APP_ROOT/src-tauri/resources/mac-x64"; do
+    [ -f "$_res/hermes-agent-bundle.tar.gz" ] || continue   # 没生成过的架构不管
+    while IFS='|' read -r _archive _sources; do
+        _file="$_res/$_archive"
+        # shellcheck disable=SC2086
+        _src_time="$(_last_commit $_sources)"
+        if [ ! -f "$_file" ]; then
+            echo "❌ $(basename "$_res")/$_archive 不存在"
+            _stale=1
+        elif [ "${_src_time:-0}" -gt "$(_mtime "$_file")" ]; then
+            echo "❌ $(basename "$_res")/$_archive 比源码旧 (源码最后提交: $(date -r "$_src_time" '+%m-%d %H:%M' 2>/dev/null || echo "$_src_time"))"
+            _stale=1
+        fi
+    done <<EOF
+catfish-edge-runtime.tar.gz|../tool-bridge/src ../local-search/src scripts/build_edge_runtime.py
+catfish-wechat-reader-dist.tar.gz|../wechat-reader/src scripts/build-wechat-reader-resource.sh
+catfish-email-dist.tar.gz|../email-agent
+hermes-agent-bundle.tar.gz|../hermes-plugins/catfish-memory
+hermes-deps-dist.tar.gz|scripts/build-mac-resources.sh
+EOF
+    if [ "$_stale" = 1 ]; then
+        echo ""
+        echo "   这样打出来的包带的是旧组件, 签名公证照样会过, 员工装上才发现不对。"
+        echo "   修: bash scripts/build-mac-resources.sh $(basename "$_res" | sed 's/^mac-//')"
+        echo "   (不打这个架构的话, 直接删掉 $(basename "$_res") 也行 —— 它会被跳过)"
+        exit 1
+    fi
+    echo "  ✓ $(basename "$_res") 里从源码打的资源包都不旧于源码"
+done
