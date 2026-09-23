@@ -107,15 +107,10 @@ export interface ModelListResponse {
    * 答案既不在这份配置里也不在数据库里, 而在服务器的 .env 里。
    * 只有 true/false, 不含 key 的任何内容。 */
   api_key_configured?: Record<string, boolean>;
-  /** roles.yaml 里指向"不存在的模型"的角色 (角色名 → 它指着的那个模型名).
-   *
-   * 跟 config_errors 不是一回事: 那个按**模型名**索引, 而这里出问题的模型
-   * 压根不在列表里 —— 塞进那个 dict 等于永远不显示。
-   *
-   * 后果不显眼但很实: 用到该角色的请求拿 404, 而调用方普遍静默降级
-   * (Companion 的向量退回本机 ONNX; Windows 客户端没编 ort, 等于没有向量)。
-   * 所以要在页面上明说, 不能只留在服务器日志里。 */
-  role_errors?: Record<string, string>;
+  /** 9/23: 两个 mode 各自生效中的默认 —— 跟行上的 default 标志不完全一样:
+   *  只有一个向量模型时它就是默认, 不用勾; 对话模型没人勾时是第一个。
+   *  徽章按这个显示, 否则"没勾但实际就是它"看起来像没有默认。 */
+  effective_defaults?: { chat: string | null; embedding: string | null };
   models: ModelConfig[];
 }
 
@@ -159,8 +154,14 @@ export interface DeleteResponse {
 export const modelConfigApi = {
   list: () => api.get<ModelListResponse>("/api/admin/models"),
 
-  put: (name: string, cfg: ModelConfig) =>
-    api.put<PutResponse>(`/api/admin/models/${encodeURIComponent(name)}`, cfg),
+  /** `confirm_reindex` 不是模型字段, 是这次请求的确认位: 把默认向量模型换成
+   *  另一个时后端要求它为 true (换向量模型 = 已算好的向量作废)。后端会把它
+   *  从 body 里摘掉, 不进库。 */
+  put: (name: string, cfg: ModelConfig, opts?: { confirm_reindex?: boolean }) =>
+    api.put<PutResponse>(`/api/admin/models/${encodeURIComponent(name)}`, {
+      ...cfg,
+      ...(opts?.confirm_reindex ? { confirm_reindex: true } : {}),
+    }),
 
   remove: (name: string) =>
     api.delete<DeleteResponse>(`/api/admin/models/${encodeURIComponent(name)}`),

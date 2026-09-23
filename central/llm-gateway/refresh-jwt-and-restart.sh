@@ -5,7 +5,7 @@
 #   1. 若 identity 8998 挂 · 提示手动起
 #   2. 用 hermes-cli client_credentials 拿 30 天 service JWT (aud=catfish-gateway)
 #   3. sed 塞 hermes/config.yaml api_key
-#   4. sed roles.yaml chat_default → catfish-public-deepseek-flash (家里能通)
+#   4. 打印当前默认对话模型 (9/23 起来自模型页「默认」徽章, 不再 sed 文件)
 #   5. gateway restart (nohup + disown)
 #   6. hermes gateway restart (让 config.yaml 生效)
 #
@@ -17,11 +17,10 @@ GW_PY=~/person_task/catfish/central/llm-gateway/venv/bin/python
 GW_DIR=~/person_task/catfish/central/llm-gateway
 IDENTITY_URL=http://127.0.0.1:8998
 HERMES_CFG=~/.hermes/config.yaml
-ROLES_YAML=$GW_DIR/config/roles.yaml
 LOG=~/catfish-gateway-$(date +%Y%m%d).log
 
 echo "════════════════════════════════════════════"
-echo " Refresh JWT + roles.yaml + restart · 7/19"
+echo " Refresh JWT + restart · 7/19"
 echo "════════════════════════════════════════════"
 
 # ─── [1/6] verify identity 8998 起 ─────────────
@@ -74,18 +73,10 @@ with open(p, 'w') as f: f.write(new)
 print('  ✓ api_key 替换完')
 "
 
-# ─── [4/6] sed roles.yaml chat_default → deepseek ─────────────
+# ─── [4/6] 默认对话模型 (9/23 起看模型页的「默认」徽章, 没有 roles.yaml 了) ─────
 echo ""
-echo "→ [4/6] roles.yaml chat_default → catfish-public-deepseek-flash..."
-CUR=$(grep "^  chat_default:" $ROLES_YAML | head -1 | awk '{print $2}')
-echo "  当前: $CUR"
-if [[ "$CUR" != "catfish-public-deepseek-flash" ]]; then
-    cp "$ROLES_YAML" "$ROLES_YAML.bak-$(date +%s)"
-    sed -i '' 's|^  chat_default: .*|  chat_default: catfish-public-deepseek-flash|' $ROLES_YAML
-    echo "  ✓ 已切"
-else
-    echo "  ✓ 已是 deepseek · 跳过"
-fi
+echo "→ [4/6] 默认对话模型 (装机时想切 deepseek 去控制台 /admin/models 勾「默认」)"
+curl -s http://127.0.0.1:8999/v1/roles 2>/dev/null | python3 -c "import sys,json; print('  当前 chat_default:', json.load(sys.stdin)['roles'].get('chat_default'))" 2>/dev/null || echo "  (网关没起, 重启后再看)"
 
 # ─── [5/6] gateway restart ─────────────
 echo ""

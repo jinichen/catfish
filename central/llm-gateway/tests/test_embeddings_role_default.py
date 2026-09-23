@@ -16,17 +16,18 @@ sysadmin 在控制台 /admin/models 把向量模型换掉之后, 员工端还按
 # 修法
 
 向量模型是**管道类**, 员工不选也选不了 (catalog.py:48 把 mode=embedding 从
-/v1/catalog 里摘掉了)。所以真源只能在中央: roles.yaml 的 `embedding` 角色。
-让 /v1/embeddings 的 model 可省, 员工端一份副本都不用存。
+/v1/catalog 里摘掉了)。所以真源只能在中央: 模型页上挂「默认」的那个向量模型
+(9/23 起; 8/14 到 9/23 之间是 roles.yaml 的 embedding 角色 —— 那是第二份真相,
+已删, 见 roles.py 开头)。让 /v1/embeddings 的 model 可省, 员工端一份副本都不用存。
 
 # 这个文件钉什么
 
-1. 省略 model → 走 roles.yaml 的 embedding 角色 (换模型全网跟着走)
+1. 省略 model → 用默认向量模型 (换模型全网跟着走)
 2. 传了 model → 还是用传的 (向后兼容, 老客户端不能被这次改动打死)
 3. 解析出来的名字要真的用到 —— 进 litellm 的 upstream、进用量日志、进配额
-4. roles.yaml 没配 embedding → 400 且话说清楚, 不能 500 也不能静默用别的模型
-5. 解析到的模型必须仍然是 mode=embedding —— roles.yaml 被人指到一个对话模型
-   上时要当场拒绝, 不能把对话模型当向量模型调
+4. 推不出默认向量模型 → 400 且话说清楚, 不能 500 也不能静默用别的模型
+5. 解析到的模型必须仍然是 mode=embedding —— 打桩指到对话模型上时要当场拒绝
+6. Config.default_embedding_model 本身的推导规则 (不打桩)
 """
 from __future__ import annotations
 
@@ -96,7 +97,7 @@ def harness(monkeypatch):
     cfg = SimpleNamespace(models=models, get_model=by_name.get)
     monkeypatch.setattr(M, "get_config", lambda: cfg)
 
-    # roles.yaml 的内容 —— 就地改它 = 在控制台换向量模型
+    # 打桩的"默认向量模型" —— 就地改它 = 在控制台换向量模型
     roles_map = {"embedding": EMBED_MODEL}
     monkeypatch.setattr(R, "resolve_or_none", lambda role: roles_map.get(
         role.value if hasattr(role, "value") else str(role)
@@ -131,7 +132,7 @@ def harness(monkeypatch):
 # ── 核心 ────────────────────────────────────────────────────
 
 
-def test_省略_model_走_roles_yaml_的_embedding_角色(harness):
+def test_省略_model_走默认向量模型(harness):
     """★★★ 员工端不用存模型名。"""
     c, _roles, calls = harness
     r = c.post("/v1/embeddings", json={"input": "你好"})
@@ -176,18 +177,18 @@ def test_解析出来的名字要进用量日志和配额(harness):
 # ── 失败面 ──────────────────────────────────────────────────
 
 
-def test_roles_没配_embedding_时_400_且说得清楚(harness):
+def test_推不出默认向量模型时_400_且说得清楚(harness):
     """★★ 不能 500, 也不能静默挑一个模型顶上。"""
     c, roles, calls = harness
     roles.clear()
     r = c.post("/v1/embeddings", json={"input": "x"})
     assert r.status_code == 400, r.text
-    assert "roles.yaml" in r.json()["detail"], r.json()
+    assert "默认向量模型" in r.json()["detail"] and "默认" in r.json()["detail"], r.json()
     assert "params" not in calls, "没解析出模型却把请求发出去了"
 
 
 def test_roles_指到对话模型上时拒绝(harness):
-    """★★★ roles.yaml 是人手改的, 指错很正常。
+    """★★★ 默认向量模型是打桩的, 这里模拟它指到对话模型。
 
     指错了必须当场 400。要是放过去, 就是拿对话模型算向量 —— 维度对不上,
     写进 sqlite 的 BLOB 长度也不对, 症状会推迟到"语义搜索全是乱的"才出现。
@@ -201,30 +202,57 @@ def test_roles_指到对话模型上时拒绝(harness):
 
 
 def test_roles_指到不存在的模型上时_404(harness):
-    """★ 控制台把模型删了但 roles.yaml 没跟着改 —— 要报出来, 不是静默。"""
+    """★ 推导出的名字不在模型列表里 (打桩才可能) —— 要报出来, 不是静默。"""
     c, roles, _calls = harness
     roles["embedding"] = "已经删掉的模型"
     r = c.post("/v1/embeddings", json={"input": "x"})
     assert r.status_code == 404, r.text
 
 
-# ── 配置本身 ────────────────────────────────────────────────
+# ── 推导规则本身 (不打桩) ──────────────────────────────────
 
 
-def test_仓里的_roles_yaml_真的配了_embedding():
-    """★★ 上面全是打桩的 roles。真文件没配的话, 生产上第一次请求就 400。
+def _cfg(*models):
+    from catfish_gateway.config import Config, ModelConfig
 
-    这条不打桩, 读真 config/roles.yaml。
-    """
-    from pathlib import Path
+    return Config(models=[
+        ModelConfig(name=n, display_name=n, mode=mode, default=d,
+                    upstream={"model": f"openai/{n}", "api_key_env": "K"})
+        for n, mode, d in models
+    ])
 
-    import yaml
 
-    p = Path(__file__).resolve().parents[1] / "config" / "roles.yaml"
-    assert p.exists(), f"roles.yaml 不在 {p}"
-    data = yaml.safe_load(p.read_text(encoding="utf-8"))
-    roles = (data or {}).get("roles") or {}
-    assert "embedding" in roles, (
-        "config/roles.yaml 的 roles 段没有 embedding —— "
-        "员工端已经不传模型名了, 这里没配就等于向量整个不可用"
+def test_默认向量模型的推导():
+    """只有一个向量模型 → 就是它, 不用勾; 多个 → 勾了默认的; 多个都没勾 → None."""
+    from catfish_gateway import roles
+
+    assert _cfg(("c", "chat", False)).default_embedding_model() is None
+    assert _cfg(("c", "chat", True), ("e", "embedding", False)).default_embedding_model().name == "e"
+    two = _cfg(("e1", "embedding", False), ("e2", "embedding", True))
+    assert two.default_embedding_model().name == "e2"
+    assert _cfg(("e1", "embedding", False), ("e2", "embedding", False)).default_embedding_model() is None
+    # 对话默认不受向量模型影响, 反之亦然
+    both = _cfg(("e", "embedding", True), ("c1", "chat", False), ("c2", "chat", True))
+    assert both.default_model().name == "c2" and both.default_embedding_model().name == "e"
+    # /v1/roles 就是这两个推出来的
+    import catfish_gateway.roles as R
+    from unittest import mock
+
+    with mock.patch.object(R, "_cfg", lambda: both):
+        d = R.to_public_dict()
+    assert d["source"] == "derived"
+    assert d["roles"]["chat_default"] == "c2" and d["roles"]["embedding"] == "e"
+    assert d["roles"]["summarize"] == "c2"
+    assert "vision" not in d["roles"], "没有能看图的模型 → 推不出, key 不出现"
+
+
+def test_仓里的_models_yaml_有向量模型且能推出默认():
+    """★★ 上面全是打桩的。真文件推不出默认向量模型的话, 生产上第一次请求就 400。"""
+    from catfish_gateway.config import load_config
+
+    cfg = load_config()
+    assert cfg.default_embedding_model() is not None, (
+        "config/models.yaml 推不出默认向量模型 —— 要么没有 mode: embedding 的模型, "
+        "要么有多个但都没标 default: true。员工端已经不传模型名了, 这里推不出就等于向量整个不可用"
     )
+    assert cfg.default_model() is not None

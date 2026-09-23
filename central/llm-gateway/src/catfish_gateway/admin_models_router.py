@@ -39,7 +39,6 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException
 
 from . import model_store, provider_store
-from . import roles as roles_module
 from .auth import User, get_current_user
 from .config import (
     Config,
@@ -263,6 +262,14 @@ def register_model_admin_routes(app: FastAPI) -> None:
         return HTTPException(500, detail=f"写模型配置失败: {msg}")
 
 
+    def _store_default_embedding(rows: list[dict[str, Any]]) -> str | None:
+        """库里生效中的默认向量模型名. 规则同 Config.default_embedding_model."""
+        emb = [r for r in rows if r.get("mode") == "embedding"]
+        for r in emb:
+            if r.get("default"):
+                return str(r.get("name"))
+        return str(emb[0].get("name")) if len(emb) == 1 else None
+
     def _require_model_store() -> None:
         """没配库时明确拒绝, 而不是假装成功.
 
@@ -315,17 +322,16 @@ def register_model_admin_routes(app: FastAPI) -> None:
             # 哪些模型的 env 占位符没解析成功。不显示的话, "这个模型为什么不工作"
             # 在界面上没有任何线索 —— 只有服务器日志里有一行。
             "config_errors": model_config_errors(),
-            # roles.yaml 里指向"不存在的模型"的角色 (8/14)。
-            #
-            # 跟上面 config_errors 不是一回事, 所以**不能塞进那个 dict**:
-            # config_errors 按模型名索引 (前端 ModelConfigPage.tsx:321 写死了
-            # `config_errors[m.name]`), 而这里出问题的模型压根不在列表里 ——
-            # 塞进去等于永远不显示。
-            #
-            # 形态: {角色名: 它指着的那个不存在的模型名}。
-            "role_errors": roles_module.stale_model_refs(
-                {m.name for m in cfg.models}
-            ),
+            # 9/23: 两个 mode 各自的"生效默认"。跟行上的 default 标志不完全一样 ——
+            # 只有一个向量模型时它就是默认, 不用勾; 对话模型没人勾时是第一个。
+            # 界面上的徽章要按这个显示, 否则"没勾但实际就是它"看起来像没有默认。
+            "effective_defaults": {
+                "chat": (cfg.default_model().name if cfg.default_model() else None),
+                "embedding": (
+                    cfg.default_embedding_model().name
+                    if cfg.default_embedding_model() else None
+                ),
+            },
             # 每个模型引用的那个 key 变量, 在服务器上到底设没设。
             #
             # 这是管理员问得最多的那个问题 ——「我把变量名填进去了, 生效了吗」。
@@ -358,6 +364,10 @@ def register_model_admin_routes(app: FastAPI) -> None:
             )
         body = {**body, "name": name}
 
+        # `confirm_reindex` 不是模型字段, 是这次请求的确认位 (见下面向量默认那段)。
+        # 先摘出来, 不然 pydantic 会因为多余字段拒绝 / 或者被存进库。
+        confirm_reindex = bool(body.pop("confirm_reindex", False))
+
         # 用跟启动时同一个 pydantic 模型校验 —— 库里存的必须是能被 gateway 正常
         # 加载的东西。这里放过去的话, 下次重载配置时整个 gateway 都起不来。
         try:
@@ -380,8 +390,13 @@ def register_model_admin_routes(app: FastAPI) -> None:
         cfg = get_config()
         existing = {m.name for m in cfg.models}
 
-        # default 是全局唯一的 —— 两个 default 时 Config.default_model 返回的是
-        # 列表里第一个, 也就是"取决于排序", 不可预测。设新 default 时清掉旧的。
+        # default 是**每个 mode** 唯一的 (9/23: 对话一个、向量一个) —— 同 mode 两个
+        # default 时 default_model() 返回列表里第一个, 也就是"取决于排序", 不可
+        # 预测。设新 default 时清掉同 mode 的旧的。
+        #
+        # 向量模型换默认要人确认: 换了之后员工端已经算好的向量跟新模型不在一个
+        # 空间里, 语义搜索、advisor 相关度、记忆检索都退化成随机, 而且不报错,
+        # 要重建索引才恢复。所以不是勾一下就完的事 —— body 要带 confirm_reindex。
         #
         # ⚠ 这里必须遍历**库里的**模型, 不能用 cfg.models。
         #   cfg 是"当前生效配置", 库还空着的时候它等于 yaml 那份 —— 拿它来清
@@ -389,10 +404,29 @@ def register_model_admin_routes(app: FastAPI) -> None:
         #   普通的"设为默认"变成了"把出厂配置全量导入"。
         #   7/30 被 test_删掉默认模型会自动指定新默认 逮到: 库空时 PUT 一个
         #   default=True 的模型, 库里凭空多出 7 个 yaml 模型。
+        mode = validated.mode or "chat"
+        if validated.default and mode == "embedding":
+            # ⚠ 看**库里的行**, 不看 cfg —— 同上面那条理由: 库空时 cfg 等于 yaml,
+            #   会把出厂 yaml 里的向量模型当成"现在的默认"来要求确认。
+            cur = _store_default_embedding(model_store.read_models() or [])
+            if cur is not None and cur != name and not confirm_reindex:
+                raise HTTPException(
+                    400,
+                    detail=(
+                        f"把默认向量模型从 {cur} 换成 {name} 需要明确确认。\n\n"
+                        "换了之后, 员工端已经算好的向量跟新模型不在一个空间里 —— 语义搜索、"
+                        "advisor 相关度、记忆检索都会退化成随机结果, 而且不会报错; 要重建"
+                        "索引才能恢复。\n\n确定要换的话, 勾上「我知道要重建索引」再保存。"
+                    ),
+                )
         try:
             if validated.default:
                 for row in model_store.read_models() or []:
-                    if row.get("name") != name and row.get("default"):
+                    if (
+                        row.get("name") != name
+                        and row.get("default")
+                        and (row.get("mode") or "chat") == mode
+                    ):
                         model_store.upsert_model(
                             row["name"], {**row, "default": False}, by=user.sub
                         )
@@ -418,11 +452,13 @@ def register_model_admin_routes(app: FastAPI) -> None:
     ) -> dict[str, Any]:
         """删一个模型. sysadmin only.
 
-        有三道拦截, 都是为了不让一次误操作把服务打瘫:
+        有四道拦截, 都是为了不让一次误操作把服务打瘫:
           · 不许删到一个不剩 —— 没有模型的 gateway 无法服务任何聊天请求
           · 不许删掉还被别的模型 fallback.chain 引用的 —— 那条链会在运行时
             指向一个不存在的模型, 而 fallback 只在上游出错时才走, 平时看不出来
-          · 不许删掉还被 roles.yaml 引用的 (8/14) —— 见下面那段
+          · 不许删掉**生效中的默认向量模型** —— 见下面那段
+          · 不许删到没有对话模型
+        删默认对话模型可以 —— 自动把另一个对话模型设为默认并在返回里说明。
         """
         _require_model_admin(user)
         _require_model_store()
@@ -455,41 +491,37 @@ def register_model_admin_routes(app: FastAPI) -> None:
                 ),
             )
 
-        # roles.yaml 引用检查 (8/14)
+        # 默认向量模型不能删 (8/14 加角色引用检查; 9/23 收敛成这一条)
         #
-        # 在这之前, admin 路由**完全不认识 roles** —— 整个文件 grep 不到一个
-        # roles 字样。于是删模型 (以及改名, 改名 = 删 + 新建, 因为 PUT 拒绝
-        # body.name 跟路径名不一致) 之后, roles.yaml 里那条就成了 stale:
+        # 对话模型删了默认可以自动换人 (下面 promoted 那段)。向量模型**不行**:
+        # 换向量模型 = 员工端已经算好的向量全部作废, 语义搜索变成随机而且不报错。
+        # 8/14 那次事故就是这么来的: 删掉 catfish-private-embed → /v1/embeddings
+        # 404 → Companion 静默退回本机 ONNX → Windows 的 msi 没编 ort, 那边等于
+        # 完全没有向量。
         #
-        #   控制台删掉 catfish-private-embed
-        #   → roles.yaml 的 `embedding` 还指着它
-        #   → /v1/embeddings 里 _resolve_model 抛 404 model not found
-        #   → Companion 拿到非 200 → **静默退回本机 ONNX**
-        #   → 而 Windows 的 msi 根本没编 ort, 那边等于完全没有向量
+        # 所以: 它是默认向量模型**且还有别的向量模型** → 拦, 出路是先把默认挪过去
+        # (那一步会要求确认重建索引), 再回来删。
         #
-        # 全程没有一处报错, 表现是"语义搜索悄悄变差了"。跟上面 fallback.chain
-        # 那条是同一类病, 只是发作面更大 —— chain 只在上游出错时才走, 而 role
-        # 是每次请求都要解析的。
-        #
-        # 拦在这里而不是等运行时: roles.yaml 在容器里是文件, 改它要重新部署,
-        # 而模型在界面上点一下就没了。两边的修改成本差太多, 所以让成本低的那边
-        # 先停下来问一句。
-        roles_using = roles_module.roles_referencing(name)
-        if roles_using:
-            raise HTTPException(
-                400,
-                detail=(
-                    f"模型 {name} 还被 roles.yaml 的这些角色引用:\n"
-                    + "\n".join(f"    · {r}" for r in roles_using)
-                    + "\n\n"
-                    "请先改 config/roles.yaml 把这些角色指到别的模型上, "
-                    "重启网关生效后再删。\n\n"
-                    "为什么要拦: 角色指向不存在的模型时, 用到它的请求会拿到 "
-                    "404 model not found, 而调用方 (Companion 的向量、"
-                    "tool-bridge、hermes 插件) 普遍是拿不到就静默降级 —— "
-                    "没有任何一处会报错, 只是效果悄悄变差。"
-                ),
-            )
+        # 它是**唯一的**向量模型 → 不拦 (9/23 鸿波: "如果确实没有向量模型为什么
+        # 不能删")。"这家客户不用中央向量" 是合法的部署选择, 网关不该把它做成
+        # 不可能; 该做的是把后果说清楚 —— 确认框里说, 模型页顶上常驻提示,
+        # 启动日志也提一句。后果是: /v1/embeddings 不带 model 会 400, Companion
+        # 退回本机向量, Windows 客户端 (msi 没编 ort) 则完全没有向量。
+        cur_emb = cfg.default_embedding_model()
+        if cur_emb is not None and cur_emb.name == name:
+            others = [m.name for m in cfg.models if m.mode == "embedding" and m.name != name]
+            if others:
+                raise HTTPException(
+                    400,
+                    detail=(
+                        f"{name} 是生效中的默认向量模型, 而还有别的向量模型 "
+                        f"({', '.join(others)})。\n\n"
+                        "先到其中一个的编辑页勾上「默认」(会要求确认重建索引), 再回来删这个。\n\n"
+                        "为什么不自动换: 换向量模型之后, 已经算好的向量跟新模型对不上, "
+                        "语义搜索会变成随机结果而且不报错 —— 那是一次需要重建索引的决定, "
+                        "得由人明确做。"
+                    ),
+                )
 
         # ⚠ 下面一律用**库里的原样行**, 不用 cfg.models。
         #   cfg.models 是插值后的 (${VAR} 已经换成真实地址), 拿它 model_dump 再
@@ -525,6 +557,8 @@ def register_model_admin_routes(app: FastAPI) -> None:
                 ),
             )
 
+        needs_heir = was_default or not any(r.get("default") for r in chat_rest)
+
         try:
             deleted = model_store.delete_model(name, by=user.sub)
         except Exception as e:
@@ -534,8 +568,7 @@ def register_model_admin_routes(app: FastAPI) -> None:
         # 否则 default_model() 退化成"列表第一个", 也就是取决于排序, 员工下次
         # 开聊用到哪个模型不可预测。
         promoted = None
-        needs_heir = deleted and (was_default or not any(r.get("default") for r in chat_rest))
-        if needs_heir and chat_rest:
+        if deleted and needs_heir and chat_rest:
             heir = chat_rest[0]
             try:
                 model_store.upsert_model(

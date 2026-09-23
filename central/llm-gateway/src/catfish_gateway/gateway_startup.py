@@ -76,9 +76,9 @@ def _seed_and_migrate_models() -> None:
                 len(fixed), ", ".join(fixed),
             )
             invalidate_config()
-        # 库里撞出多个 default 时清到只剩一个。default 必须全局唯一 ——
-        # default_model() 返回列表里第一个 default=True 的, 两个的话就取决于
-        # 排序, 员工下次开聊用哪个模型不可预测。
+        # 同一个 mode 里撞出多个 default 时清到只剩一个 (对话一个、向量一个是
+        # 正常状态, 9/23 起按 mode 分)。default_model() 返回第一个 default=True
+        # 的, 两个的话就取决于排序, 员工下次开聊用哪个模型不可预测。
         cleared = model_store.enforce_single_default()
         if cleared:
             logger.warning(
@@ -154,59 +154,30 @@ async def run_startup(app, env_file_loaded):
     else:
         logger.info(".env not found -- using process env vars only")
 
-    # P3.5.29 (6/17 鸿波) — model role 抽象层 load. config/roles.yaml 业务
-    # 意图 → 物理 model name 映射, 客户改这一文件全代码跟着走.
-    #
-    # P3.5.29 Phase 6 (6/17 鸿波) — hard fail 改 raise: Phase 1-5 全 ship 完,
-    # 全代码 (gateway / Companion / tool-bridge) 都依赖 /v1/roles. roles.yaml load
-    # 失败raise 真 production 立刻挂, 好过 silent gateway 跑但 caller
-    # 拿不到 role mapping (Companion email scheduler / tool-bridge fallback
-    # hardcoded 也跑, 但客户改 roles.yaml 改错 真无人察觉**, production
-    # 红线).
+    # 9/23: 没有 roles.yaml 了。角色 (/v1/roles) 从模型页的「默认」徽章算出来,
+    # 见 roles.py 开头。这里只剩一件事要在启动时**说出来**: 向量模型多个但一个
+    # 都没勾默认 —— /v1/embeddings 不带 model 会 400, 而 Companion 拿到非 200
+    # 会静默退回本机 ONNX (Windows 没编 ort, 等于没有向量)。
     try:
-        from . import roles as roles_module
-        roles_module.load_roles()
-    except Exception as e:
-        logger.error(
-            "roles.yaml 加载失败 — production hard fail "
-            "(P3.5.29 Phase 6). 客户改 yaml 真错 / 文件不存在 / 循环 ref, "
-            "检查 central/llm-gateway/config/roles.yaml. 原因: %s", e,
-        )
-        raise
-
-    # roles 指的模型到底存不存在 (8/14)
-    #
-    # load_roles() 只校验 yaml 自身自洽 (_validate_schema 的注释原话:
-    # 「不能 detect 物理 name 错 (catalog 没 load), 只 catch role typo」)。
-    # 也就是说 `embedding: 一个早就删掉的模型` 能顺利加载, 直到第一次请求才
-    # 404 —— 而调用方 (Companion 的向量 / tool-bridge / hermes 插件) 普遍是
-    # 拿不到就静默降级, 没有一处会报错。
-    #
-    # ## 为什么这里是 error 日志而不是 raise
-    #
-    # 上面 load_roles 失败是 hard fail, 但那是"yaml 坏了", 跟这里不同类。
-    # 模型列表可能来自库 (model_store), 而 config.py:578 写明: 冷启动时库不可用
-    # 会**降级到 models.yaml**。那种时刻只在库里的模型全都"不存在" —— 这时候
-    # raise 等于把一次库抖动变成网关起不来。
-    #
-    # 真正该拦的位置是"制造 stale 的那一刻": 控制台删模型时 (admin_models_router
-    # 的 roles_referencing 检查)。这里只负责让已经 stale 的状态**看得见**,
-    # 另外 /api/admin/models 的 role_errors 会把它显示在界面上。
-    try:
-        _known = {m.name for m in get_config().models}
-        _stale = roles_module.stale_model_refs(_known)
-        if _stale:
+        _cfg = get_config()
+        _emb = [m.name for m in _cfg.models if m.mode == "embedding"]
+        if len(_emb) > 1 and _cfg.default_embedding_model() is None:
             logger.error(
-                "⚠️ roles.yaml 里这些角色指向不存在的模型: %s。"
-                "用到它们的请求会拿到 404 model not found, 而调用方普遍静默降级 "
-                "(Companion 的向量会退回本机 ONNX, Windows 客户端则完全没有向量)。"
-                "当前模型列表: %s",
-                ", ".join(f"{r} → {m}" for r, m in sorted(_stale.items())),
-                ", ".join(sorted(_known)),
+                "⚠️ 有 %d 个向量模型 (%s) 但一个都没勾「默认」—— /v1/embeddings 不带 "
+                "model 的请求会 400, Companion 会静默退回本机向量。去控制台 → 模型, "
+                "给一个向量模型勾上「默认」。",
+                len(_emb), ", ".join(_emb),
             )
+        if not _emb:
+            logger.warning(
+                "没有向量模型 —— 语义搜索 / advisor 相关度 / 记忆检索走员工本机向量; "
+                "Windows 客户端 (msi 没编 ort) 完全没有向量。不用中央向量是合法选择, "
+                "但要知道这一点。"
+            )
+        if _cfg.default_model() is None:
+            logger.error("⚠️ 一个对话模型都没有 —— hermes 的 catfish-auto 会 500, 选择器没有初始值。")
     except Exception:  # noqa: BLE001
-        # 这只是一条诊断, 不能因为它把启动搞挂
-        logger.exception("roles ↔ 模型列表一致性检查本身出错 (不影响启动)")
+        logger.exception("默认模型自检本身出错 (不影响启动)")
 
     env_mode = os.environ.get("CATFISH_ENV", "dev")
     dev_token = os.environ.get("CATFISH_DEV_TOKEN", "dev-token-local")

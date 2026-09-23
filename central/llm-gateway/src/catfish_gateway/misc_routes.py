@@ -276,25 +276,19 @@ def register_misc_routes(app) -> None:
     async def list_roles() -> dict[str, Any]:
         """P3.5.29 (6/17 鸿波) — model role 抽象 机器可读 mapping.
 
-        返 roles.yaml resolve 后全 payload: roles dict + fallback_chain
-        (flat model names, 已递归 resolve) + rbac_default_allowed (RBAC role
-        → model list).
+        返 {"roles": {角色: 模型名}, "source": "derived"}。
+
+        9/23 起是**算出来的**, 不是配置: chat_default = 模型页挂「默认」的对话模型,
+        embedding = 挂「默认」的向量模型, vision = 默认对话模型看不了图时网关会
+        换成的那个, summarize = chat_default (老 catfish-memory 插件还问这个 key)。
+        没有 roles.yaml、没有库表、没有角色页 (见 roles.py 开头为什么)。
 
         anonymous endpoint (不要求 auth) — Companion / hermes 启动时拉预 auth.
         内容不敏感 (业务意图 → model name, 没 token / 没员工数据).
-
-        failure mode:
-            - roles.yaml 没 load (startup 失败 / 文件不存在) → 503
-            - load 成功 → 200 + 完整 payload
         """
         from . import roles as roles_module
-        try:
-            return roles_module.to_public_dict()
-        except roles_module.RolesNotLoadedError as e:
-            raise HTTPException(
-                status_code=503,
-                detail=f"roles.yaml 没加载 — gateway startup 失败 / 文件不存在: {e}",
-            )
+
+        return roles_module.to_public_dict()
 
     @app.get("/v1/models")
     async def list_models(user: User = Depends(get_current_user)) -> dict[str, Any]:
@@ -355,7 +349,8 @@ def register_misc_routes(app) -> None:
         #
         # 向量模型跟对话模型不一样, 它是**管道类**, 员工不选也选不了 —— catalog.py:48
         # 就把 mode=embedding 的模型从 /v1/catalog 里摘掉了。所以它的真源只能在中央:
-        # roles.yaml 的 `embedding` 角色 (= 控制台 /admin/models 里那条"向量"类型的模型)。
+        # 模型页上挂着「默认」的那个向量模型 (9/23 起; 之前是 roles.yaml 的 embedding
+        # 角色 —— 那是第二份真相, 已删)。
         #
         # 为什么要开这个口子: 员工端 (Companion services/embedding_config.rs) 原来自己
         # 存了一份模型名 "catfish-private-embed"。sysadmin 在控制台换掉向量模型之后,
@@ -364,27 +359,20 @@ def register_misc_routes(app) -> None:
         #
         # 让 model 可省, 员工端就一份副本都不用存了。
         #
-        # 顺带: roles.yaml 里 `embedding: catfish-private-embed` 和 roles.py 的
-        # Role.EMBEDDING 从 P3.5.29 起就定义着, 但**生产代码零消费方** (只有
-        # tests/test_roles.py 断言它能解析)。这里是第一个真用它的地方。
-        #
         # 向后兼容: 传了 model 就还是用传的, 老客户端不受影响。
         if not model_name:
             from . import roles as roles_module
 
             model_name = roles_module.resolve_or_none(roles_module.Role.EMBEDDING)
             if model_name:
-                logger.info(
-                    "embeddings: 请求没带 model, 按 roles.yaml embedding 角色解析 → %s",
-                    model_name,
-                )
+                logger.info("embeddings: 请求没带 model, 用默认向量模型 → %s", model_name)
 
         if not model_name:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "model parameter required — 或者在 roles.yaml 里配 "
-                    "`embedding: <模型名>` 让网关自己解析"
+                    "没有默认向量模型: 请求没带 model, 而模型页上要么没有向量模型, "
+                    "要么有多个但都没勾「默认」。到控制台 → 模型, 给一个向量模型勾上「默认」。"
                 ),
             )
 

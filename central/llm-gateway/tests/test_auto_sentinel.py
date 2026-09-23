@@ -56,7 +56,7 @@ def test_sentinel_match_is_case_insensitive(chat_default):
 
 
 def test_real_model_names_pass_through_untouched(chat_default):
-    """非 sentinel 一律原样返回 —— 连 roles.yaml 都不该去读。"""
+    """非 sentinel 一律原样返回 —— 连默认模型都不该去查。"""
     chat_default("catfish-public-deepseek-flash")
     for name in ("catfish-private-vision", "gpt-5.6-luna", "catfish-public-gemini-pro"):
         assert _resolve_auto_sentinel(name) == name
@@ -74,23 +74,23 @@ def test_only_exact_name_matches_not_substring(chat_default):
 
 
 def test_unconfigured_chat_default_is_500_not_404(chat_default):
-    """roles.yaml 没配 = 部署错误, 不是请求错误。
+    """一个对话模型都没有 = 部署错误, 不是请求错误。
 
-    返 404 会让 IT 以为"是模型名写错了"去改客户端, 而真正要改的是 roles.yaml。
+    返 404 会让 IT 以为"是模型名写错了"去改客户端, 而真正要改的是模型配置。
     """
     chat_default(None)
     with pytest.raises(HTTPException) as exc:
         _resolve_auto_sentinel(AUTO_MODEL_SENTINEL)
     assert exc.value.status_code == 500
-    assert "chat_default" in str(exc.value.detail)
+    assert "默认对话模型" in str(exc.value.detail)
 
 
-def test_error_detail_names_the_file_to_edit(chat_default):
-    """报错要说"改哪个文件的哪一行", 不是"model not found"。"""
+def test_error_detail_names_where_to_fix(chat_default):
+    """报错要说去哪改 (9/23 起是控制台的模型页), 不是"model not found"。"""
     chat_default(None)
     with pytest.raises(HTTPException) as exc:
         _resolve_auto_sentinel(AUTO_MODEL_SENTINEL)
-    assert "roles.yaml" in str(exc.value.detail)
+    assert "模型" in str(exc.value.detail) and "roles.yaml" not in str(exc.value.detail)
 
 
 

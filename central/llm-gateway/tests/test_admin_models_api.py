@@ -344,13 +344,16 @@ def test_删到没有默认时会补一个(client):
 
 
 def test_删非默认模型不受这条影响(client):
+    """9/23: 向量模型也有默认了 (一个 mode 一个)。删**非默认**的向量模型照常。"""
     c, store, *_ = client
     c.put("/api/admin/models/m1", json=_model("m1", default=True))
-    c.put("/api/admin/models/embed", json=_model("embed", mode="embedding"))
-    r = c.delete("/api/admin/models/embed")
+    c.put("/api/admin/models/embed", json=_model("embed", mode="embedding", default=True))
+    c.put("/api/admin/models/embed2", json=_model("embed2", mode="embedding"))
+    r = c.delete("/api/admin/models/embed2")
     assert r.status_code == 200
     assert r.json()["promoted_default"] is None
-    assert "embed" not in store
+    assert "embed2" not in store
+    assert store["embed"]["default"] is True, "对话默认和向量默认互不影响"
 
 
 # ── 管理接口必须走库里的原样, 不能走 cfg.models (7/30 三修) ──────────────
@@ -484,8 +487,11 @@ def test_播种不会带进来第二个默认(monkeypatch):
             self._r = None
 
         def execute(self, sql, args=None):
-            if "count(*)" in sql:
-                self._r = [sum(1 for v in store.values() if v.get("default"))]
+            if "DISTINCT" in sql:
+                # 9/23: 播种按 mode 看"哪些 mode 已有默认"
+                self._rows = sorted(
+                    {(v.get("mode") or "chat",) for v in store.values() if v.get("default")}
+                )
             elif "INSERT" in sql:
                 import json as _j
 
@@ -500,7 +506,11 @@ def test_播种不会带进来第二个默认(monkeypatch):
         def fetchone(self):
             return self._r
 
+        def fetchall(self):
+            return self._rows
+
         rowcount = 0
+        _rows: list = []
 
         def __enter__(self):
             return self
@@ -525,13 +535,17 @@ def test_播种不会带进来第二个默认(monkeypatch):
     monkeypatch.setattr(MS, "_conn", lambda: _Conn())
     monkeypatch.setattr(MS, "_bump_revision", lambda cur: None)
 
-    MS.seed_from_yaml([{"name": "新来的", "default": True}])
+    MS.seed_from_yaml([
+        {"name": "新来的", "default": True},
+        {"name": "新向量", "default": True, "mode": "embedding"},
+    ])
 
-    assert inserted, "没播种"
+    assert len(inserted) == 2, "没播种"
     assert inserted[0]["default"] is False, (
-        "库里已经有默认模型了, 播种不该再带进来一个 —— "
+        "库里已经有默认对话模型了, 播种不该再带进来一个 —— "
         "两个 default 时 default_model() 取决于排序"
     )
+    assert inserted[1]["default"] is True, "库里没有默认向量模型, 种子的向量默认应保留 (按 mode 分)"
 
 
 def test_库里已经有两个默认时清到只剩一个(monkeypatch):
@@ -541,6 +555,9 @@ def test_库里已经有两个默认时清到只剩一个(monkeypatch):
     rows = [
         ("main", {"name": "main", "default": True}),
         ("vision", {"name": "vision", "default": True}),
+        # 9/23: 向量模型的默认是另一个 mode 的, 不该被清
+        ("embed", {"name": "embed", "default": True, "mode": "embedding"}),
+        ("embed2", {"name": "embed2", "default": True, "mode": "embedding"}),
     ]
     updated: dict[str, dict] = {}
 
@@ -580,9 +597,10 @@ def test_库里已经有两个默认时清到只剩一个(monkeypatch):
     monkeypatch.setattr(MS, "_bump_revision", lambda cur: None)
 
     cleared = MS.enforce_single_default()
-    assert cleared == ["vision"], "留 sort_order 最靠前的那个 (main)"
+    assert cleared == ["vision", "embed2"], "每个 mode 留 sort_order 最靠前的那个"
     assert updated["vision"]["default"] is False
-    assert "main" not in updated, "第一个不该被动"
+    assert updated["embed2"]["default"] is False
+    assert "main" not in updated and "embed" not in updated, "每个 mode 的第一个不该被动"
 
 
 # ── api_key_env 填的必须是变量名, 不是 key 本身 (7/30 六修) ──────────────

@@ -581,7 +581,7 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
             #    · certs     (自签 cert setup.sh --ENABLE_HTTPS=1 现生成)
             #    · .env      (敏感 · 客户自填)
             # 保 · identity-server/config (users.yaml.example 必带 · setup.sh cp 到 users.yaml)
-            #    · llm-gateway/config     (models.yaml + roles.yaml 必带 · gateway mount 用)
+            #    · llm-gateway/config     (models.yaml 必带 · gateway mount 用; roles.yaml 9/23 删了)
             cd "$REPO_ROOT"
             # P3.5.81 (7/28) 追加 3 条敏感兜底 (rsync 已排 · tar 再挡一道:
             # 21:01 的包实际带出过 database.yaml · 内含真实 dev PG 密码):

@@ -39,6 +39,9 @@ export function ModelForm({
   keyState,
   providers,
   masterKeyEnv = "CATFISH_SECRET_KEY",
+  currentDefaultEmbedding = null,
+  confirmReindex = false,
+  onConfirmReindex,
   onChange,
   onCancel,
   onSave,
@@ -57,6 +60,10 @@ export function ModelForm({
   providers?: Provider[] | null;
   /** 主密钥的环境变量名, 给 describeKey 用。 */
   masterKeyEnv?: string;
+  /** 9/23: 现在生效的默认向量模型。把默认挪到另一个向量模型上时要确认重建索引。 */
+  currentDefaultEmbedding?: string | null;
+  confirmReindex?: boolean;
+  onConfirmReindex?: (v: boolean) => void;
   onChange: (m: ModelConfig) => void;
   onCancel: () => void;
   onSave: () => void;
@@ -476,7 +483,10 @@ export function ModelForm({
               checked={model.default}
               onChange={(e) => set({ default: e.target.checked })}
             />
-            设为默认模型
+            {/* 9/23: 一个 mode 一个默认。对话默认 = 员工选择器的初始值 / hermes
+                catfish-auto 的落点; 向量默认 = /v1/embeddings 不带 model 时用的。
+                之前向量的默认在 roles.yaml 里另配一份, 跟这里的徽章是两份真相。 */}
+            {model.mode === "embedding" ? "设为默认向量模型" : "设为默认对话模型"}
           </label>
           <label style={{ fontSize: 12, display: "flex", gap: 4 }}>
             <input
@@ -489,8 +499,38 @@ export function ModelForm({
         </div>
         {model.default ? (
           <div style={HINT}>
-            保存后会自动取消其它模型的默认标记 —— 默认模型全局只能有一个。
+            保存后会自动取消其它{model.mode === "embedding" ? "向量" : "对话"}模型的默认标记 ——
+            每种类型只能有一个默认。
           </div>
+        ) : null}
+        {/* 换默认向量模型要人确认: 员工端已经算好的向量跟新模型不在一个空间里,
+            语义搜索 / advisor 相关度 / 记忆检索退化成随机, 而且不报错。
+            后端没这个确认位就 400, 所以在保存前就把话说完、把框放在这。 */}
+        {model.mode === "embedding" &&
+        model.default &&
+        currentDefaultEmbedding &&
+        currentDefaultEmbedding !== model.name ? (
+          <label
+            style={{
+              fontSize: 11,
+              color: "var(--status-err)",
+              display: "flex",
+              gap: 4,
+              alignItems: "flex-start",
+              lineHeight: 1.4,
+              marginTop: 6,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={confirmReindex}
+              onChange={(e) => onConfirmReindex?.(e.target.checked)}
+            />
+            <span>
+              默认向量模型会从 <code>{currentDefaultEmbedding}</code> 换成这个。我知道换了之后员工端
+              已算好的向量全部作废，语义搜索要重建索引才能恢复。
+            </span>
+          </label>
         ) : null}
       </div>
 

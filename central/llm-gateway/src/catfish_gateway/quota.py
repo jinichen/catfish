@@ -204,19 +204,16 @@ def _resolve_friendly_model(role_str: str) -> str:
     """超额错误文案里"建议换的 model 名" — 文案降级 chain (不是路由!).
 
     P3.5.29 Phase 2 (6/17 鸿波): error message 用 role 动态 resolve, 不 hardcode.
-    客户改 roles.yaml → error message 跟着走.
 
-    P3.5.139 (6/29 鸿波"都要去除硬编码"): chain 升级:
-      1. roles.yaml (gateway startup load 成功 — 正常情况, 99% 走这)
-      2. .env CATFISH_FALLBACK_{ROLE.upper()} — roles 没 load 时兜底
-         (e.g. roles.yaml 语法错 / 文件不在). 客户改 .env 跟着走.
+    P3.5.139 (6/29 鸿波"都要去除硬编码"): chain:
+      1. roles.resolve_or_none — 9/23 起从模型页「默认」徽章算出来 (正常情况走这)
+      2. .env CATFISH_FALLBACK_{ROLE.upper()} — 一个对话模型都没有时兜底
       3. 空字符串 — env 也没配 → 文案渲染成 "换 (内网不限)" 略丑,
-         dev 启动 gateway 没 .env 时可见. 不应该出现在正常 production.
+         dev 启动 gateway 没模型时可见. 不应该出现在正常 production.
 
-    注意: 这是文案降级, 不影响路由. 路由 chain (picker/role/yaml) 在 Companion,
-    gateway 自己只有 roles.yaml 一个 truth source. 文案兜底字面值全删.
+    注意: 这是文案降级, 不影响路由.
     """
-    # 1. roles.yaml
+    # 1. 默认模型
     try:
         from . import roles as roles_module
         m = roles_module.resolve_or_none(role_str)
@@ -250,13 +247,12 @@ def friendly_quota_message(qc: QuotaCheck, user_email: str, model: str) -> str:
             "明天重置. 急用找 manager 临时升 quota."
         )
     if qc.dimension == "per_model_day":
-        # P3.5.29 Phase 2: chat_default + public_flash dynamic resolve.
-        # P3.5.139 (6/29 鸿波): 同上 chain roles.yaml → .env → 空字符串.
+        # 9/23: 只剩 chat_default 一个建议 —— public_flash 角色删了 (它在代码里
+        # 唯一的用处就是这句文案里的一个词)。
         chat_default = _resolve_friendly_model("chat_default")
-        public_flash = _resolve_friendly_model("public_flash")
         return (
             f"模型 {model} 今天全员 quota 满了 ({qc.current:,}/{qc.limit:,}). "
-            f"换 {chat_default} 或 {public_flash}."
+            f"换 {chat_default} 试试."
         )
     if qc.dimension == "per_dept_day":
         return (

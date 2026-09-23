@@ -89,7 +89,11 @@ file_list() {
         [ -d "$d" ] || { echo "❌ 镜像源码目录不存在: $d" >&2
                          echo "   目录改名/新增镜像时要同步改本脚本的 SRC_DIRS。" >&2
                          exit 1; }
-        git ls-files -- "$d"
+        # 9/23: 排掉"已在工作区删除、还没 git rm"的文件 —— 它们不进 docker 构建
+        # 上下文, 而且 sha256sum 读不到会打一行错继续算, 哈希就悄悄变成了另一个值。
+        # (那天一次 git stash / pop 把几个删除从暂存区弹回了工作区, 撞上的。)
+        comm -23 <(git ls-files -- "$d" | LC_ALL=C sort) \
+                 <(git ls-files --deleted -- "$d" | LC_ALL=C sort)
     done | LC_ALL=C sort
 }
 

@@ -17,10 +17,10 @@ echo ""
 echo "→ [1/5] gateway 8999 + hermes 8642 pid"
 lsof -i:8999,8642 -sTCP:LISTEN 2>/dev/null | grep -v COMMAND || echo "  (两个都空)"
 
-# ─── Step 2: roles.yaml chat_default ─────────────
+# ─── Step 2: 默认对话模型 (9/23 起 = 模型页「默认」徽章, /v1/roles 算出来的) ─────
 echo ""
-echo "→ [2/5] roles.yaml chat_default (是否已切 deepseek)"
-grep "^  chat_default:" ~/person_task/catfish/central/llm-gateway/config/roles.yaml | head -1
+echo "→ [2/5] 默认对话模型 (是否已切 deepseek)"
+curl -s http://127.0.0.1:8999/v1/roles | python3 -c "import sys,json; print('  chat_default:', json.load(sys.stdin)['roles'].get('chat_default'))" 2>/dev/null || echo "  (网关没起)"
 
 # ─── Step 3: hermes/config.yaml api_key 解析 ─────────────
 echo ""

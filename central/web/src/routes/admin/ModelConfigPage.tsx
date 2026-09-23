@@ -70,6 +70,8 @@ function ModelConfigEditor() {
   /** 正在等确认删除的那个模型。用应用内对话框而不是 window.prompt ——
    *  见 components/Dialog.tsx 文件头。 */
   const [confirming, setConfirming] = useState<ModelConfig | null>(null);
+  /** 9/23: 把默认向量模型换成另一个时的确认位。每次开编辑页都归零。 */
+  const [confirmReindex, setConfirmReindex] = useState(false);
   /** 供应商下拉的选项。单独拉一次 —— 模型列表接口不该被塞进供应商信息,
    *  那两组配置的生命周期不一样 (改供应商不必刷新模型列表)。 */
   const [providers, setProviders] = useState<Provider[] | null>(null);
@@ -137,7 +139,9 @@ function ModelConfigEditor() {
     setBusy(true);
     try {
       setErr(null);
-      const r = await modelConfigApi.put(editing.name, editing);
+      const r = await modelConfigApi.put(editing.name, editing, {
+        confirm_reindex: confirmReindex,
+      });
       setNotice(
         `${r.created ? "已新增" : "已保存"} ${editing.name}。` +
           "其它 gateway 进程最多 3 秒后生效。",
@@ -157,11 +161,10 @@ function ModelConfigEditor() {
     try {
       setErr(null);
       const r = await modelConfigApi.remove(m.name);
-      setNotice(
-        r.promoted_default
-          ? `已删除 ${m.name}。它原本是默认模型，已自动把 ${r.promoted_default} 设为新默认。`
-          : `已删除 ${m.name}。`,
-      );
+      const lines = [`已删除 ${m.name}。`];
+      if (r.promoted_default)
+        lines.push(`它原本是默认模型，已自动把 ${r.promoted_default} 设为新默认。`);
+      setNotice(lines.join("\n"));
       await load();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -191,6 +194,30 @@ function ModelConfigEditor() {
               它现在是<b>默认模型</b>，删除后会自动把另一个对话模型设为默认。
             </>
           ) : null}
+          {/* 9/23: 默认向量模型的两种情况, 在点之前就说, 别让人走完确认框、
+              输完 ID 才撞 400:
+                · 还有别的向量模型 → 后端会拒, 先把默认挪过去 (换向量模型 =
+                  员工端已算好的向量作废, 得由人明确做)
+                · 它是唯一的 → 能删 (不用中央向量是合法选择), 但后果要说清楚 */}
+          {data?.effective_defaults?.embedding === confirming.name ? (
+            (data?.models ?? []).some((x) => x.mode === "embedding" && x.name !== confirming.name) ? (
+              <>
+                <br />
+                <b style={{ color: "var(--status-err)" }}>
+                  它是生效中的默认向量模型，而还有别的向量模型 —— 删不掉。
+                </b>
+                先在另一个向量模型的编辑页勾上「默认」（会要求确认重建索引），再回来删这个。
+              </>
+            ) : (
+              <>
+                <br />
+                它是<b>唯一的向量模型</b>。删了之后中央就没有向量服务：语义搜索、advisor
+                相关度、记忆检索会退回员工本机向量；
+                <b style={{ color: "var(--status-err)" }}>Windows 客户端则完全没有向量</b>。
+                不用中央向量是可以的，但要知道这一点。
+              </>
+            )
+          ) : null}
           <br />
           审计里的历史记录不会受影响，但这个模型会从员工的模型列表里消失。
         </ConfirmDialog>
@@ -214,6 +241,7 @@ function ModelConfigEditor() {
               onClick={() => {
                 setEditing(emptyModel());
                 setIsNew(true);
+                setConfirmReindex(false);
                 setErr(null);
               }}
             >
@@ -275,30 +303,37 @@ function ModelConfigEditor() {
         </div>
       ) : null}
 
-      {/* roles.yaml 指向不存在的模型 (8/14)。
-          这条必须显示在**列表之外** —— 出问题的模型已经不在列表里了,
-          按模型行渲染的 config_errors 永远碰不到它。
-          不显示的话, 症状是"语义搜索悄悄变差", 界面上一点线索都没有。 */}
-      {Object.keys(data?.role_errors ?? {}).length > 0 ? (
+      {/* 9/23: 一个向量模型都没有 —— 合法, 但常驻提醒: 这个状态在列表上只表现为
+          "没有一行是向量", 而后果 (Windows 客户端没有向量) 在这里完全看不见。 */}
+      {data && data.models.length > 0 && !data.models.some((m) => m.mode === "embedding") ? (
+        <div style={{ ...BOX, fontSize: 12, lineHeight: 1.7, borderColor: "var(--status-warn)" }}>
+          <b>没有向量模型</b>
+          <div style={{ marginTop: 4, color: "var(--text-muted)" }}>
+            语义搜索、advisor 相关度、记忆检索现在走员工本机向量；Windows 客户端完全没有向量。
+            要用中央向量的话，新增一个类型为「向量」的模型即可（只有一个时自动就是默认）。
+          </div>
+        </div>
+      ) : null}
+
+      {/* 9/23: 向量模型有多个但一个都没勾默认 —— /v1/embeddings 不带 model 会 400,
+          Companion 拿到非 200 静默退回本机 ONNX (Windows 没编 ort, 等于没有向量)。
+          这个状态在列表上只表现为"没有一行带「默认向量」徽章", 不点破没人注意。 */}
+      {data &&
+      data.effective_defaults &&
+      !data.effective_defaults.embedding &&
+      data.models.filter((m) => m.mode === "embedding").length > 1 ? (
         <div
           style={{
             ...BOX,
             fontSize: 12,
             color: "var(--status-err)",
             borderColor: "var(--status-err)",
-            whiteSpace: "pre-wrap",
           }}
         >
-          <strong>roles.yaml 里有角色指向不存在的模型</strong>
-          {Object.entries(data?.role_errors ?? {}).map(([role, model]) => (
-            <div key={role} style={{ marginTop: 4 }}>
-              · <code>{role}</code> → <code>{model}</code>（模型列表里没有它）
-            </div>
-          ))}
-          <div style={{ marginTop: 8, opacity: 0.85 }}>
-            用到这些角色的请求会拿到 404，而调用方普遍是拿不到就静默降级
-            （比如向量会退回员工本机模型，Windows 客户端则完全没有向量）——
-            不会有任何报错。请改服务器上的 config/roles.yaml 后重启网关。
+          <strong>有 {data.models.filter((m) => m.mode === "embedding").length} 个向量模型，但一个都没设为默认</strong>
+          <div style={{ marginTop: 4, opacity: 0.85 }}>
+            员工端不带模型名请求向量时会拿到 400，而 Companion 会静默退回本机向量（Windows
+            客户端则完全没有向量）。到其中一个向量模型的编辑页勾上「默认」。
           </div>
         </div>
       ) : null}
@@ -319,6 +354,9 @@ function ModelConfigEditor() {
           keyState={data?.api_key_configured?.[editing.name]}
           providers={providers}
           masterKeyEnv={masterKeyEnv}
+          currentDefaultEmbedding={data?.effective_defaults?.embedding ?? null}
+          confirmReindex={confirmReindex}
+          onConfirmReindex={setConfirmReindex}
           onChange={setEditing}
           onCancel={() => {
             setEditing(null);
@@ -383,7 +421,16 @@ function ModelConfigEditor() {
                       {/* 徽章 flexShrink:0, 名字才是可压缩的那个 ——
                           反过来窄屏下会先把徽章挤没 */}
                       <span style={{ display: "inline-flex", gap: 4, flexShrink: 0 }}>
-                        {m.default ? <Badge tone="accent">默认</Badge> : null}
+                        {/* 按**生效**默认显示, 不按行上的标志: 唯一的向量模型不用勾
+                            就是默认; 对话模型没人勾时第一个就是。 */}
+                        {data?.effective_defaults?.chat === m.name ? (
+                          <Badge tone="accent">默认</Badge>
+                        ) : null}
+                        {data?.effective_defaults?.embedding === m.name ? (
+                          <Badge tone="accent" title="/v1/embeddings 不带 model 时用它。换它要重建索引。">
+                            默认向量
+                          </Badge>
+                        ) : null}
                         {badErr ? (
                           <Badge tone="err" title={badErr}>
                             配置有误
@@ -436,6 +483,7 @@ function ModelConfigEditor() {
                       onClick={() => {
                         setEditing(JSON.parse(JSON.stringify(m)) as ModelConfig);
                         setIsNew(false);
+                        setConfirmReindex(false);
                         setErr(null);
                       }}
                     >

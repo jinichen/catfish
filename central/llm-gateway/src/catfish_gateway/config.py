@@ -362,11 +362,36 @@ class Config(BaseModel):
                 return m
         return None
 
+    # ── 默认模型: 一个 mode 一个 (9/23) ────────────────────────────
+    #
+    # `default: true` 的含义是**这个 mode 的默认**: 对话模型里挂默认的是员工
+    # 选择器的初始值、hermes 发 `catfish-auto` 时的落点; 向量模型里挂默认的是
+    # /v1/embeddings 不带 model 时用的那个。
+    #
+    # 之前"默认"只有对话一种含义, 向量模型由 roles.yaml 的 `embedding` 角色
+    # 单独指定 —— 于是"哪个模型是默认"有两份真相 (模型页的徽章 / 角色页),
+    # 9/23 鸿波截图里两边就不一致。现在只剩这一个标志, 按 mode 各取一个。
+
     def default_model(self) -> ModelConfig | None:
-        for m in self.models:
+        """默认**对话**模型. 没挂默认 → 第一个对话模型; 一个对话模型都没有 → None."""
+        chat = [m for m in self.models if (m.mode or "chat") == "chat"]
+        for m in chat:
             if m.default:
                 return m
-        return self.models[0] if self.models else None
+        return chat[0] if chat else None
+
+    def default_embedding_model(self) -> ModelConfig | None:
+        """默认**向量**模型.
+
+        没挂默认时: 只有一个向量模型 → 就是它 (不用配); 多个都没挂 → None ——
+        这时候不能随便挑一个: 向量模型换了, 已经算好的向量就跟新模型对不上,
+        必须由人在模型页明确勾一个。
+        """
+        emb = [m for m in self.models if m.mode == "embedding"]
+        for m in emb:
+            if m.default:
+                return m
+        return emb[0] if len(emb) == 1 else None
 
 
 def resolve_config_path(path: Path | None = None) -> Path:

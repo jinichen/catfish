@@ -123,15 +123,19 @@ def seed_from_yaml(models: list[dict[str, Any]]) -> int:
         return 0
     try:
         with _conn() as conn, conn.cursor() as cur:
+            # 9/23: default 是**按 mode** 唯一的 (对话一个、向量一个), 所以查的
+            # 是"库里哪些 mode 已经有默认了", 只把那些 mode 的种子去掉 default。
             cur.execute(
-                "SELECT count(*) FROM gateway_models "
+                "SELECT DISTINCT COALESCE(payload->>'mode', 'chat') FROM gateway_models "
                 "WHERE (payload->>'default')::boolean IS TRUE"
             )
-            has_default = (cur.fetchone() or [0])[0] > 0
-            if has_default:
-                models = [
-                    {**m, "default": False} if m.get("default") else m for m in models
-                ]
+            modes_with_default = {r[0] for r in cur.fetchall()}
+            models = [
+                {**m, "default": False}
+                if m.get("default") and (m.get("mode") or "chat") in modes_with_default
+                else m
+                for m in models
+            ]
             n = 0
             for i, m in enumerate(models):
                 cur.execute(
@@ -162,11 +166,13 @@ def _bump_revision(cur) -> None:
 
 
 def enforce_single_default() -> list[str]:
-    """库里有多个 default 时, 只留 sort_order 最靠前的那个. 返回被清掉的模型名.
+    """每个 mode 里有多个 default 时, 只留 sort_order 最靠前的那个. 返回被清掉的模型名.
 
     光在播种时防住不够 —— 已经撞出两个 default 的库需要修回来, 而这个状态
     从界面上看是"两行都挂着「默认」徽章", 不点进去不会有人意识到它意味着
     "员工用哪个模型取决于排序"。
+
+    9/23: 按 mode 分组 —— 一个对话默认 + 一个向量默认是正常状态, 不能互相清。
 
     幂等。每次启动跑一次。
     """
@@ -180,10 +186,12 @@ def enforce_single_default() -> list[str]:
                 "WHERE (payload->>'default')::boolean IS TRUE "
                 "ORDER BY sort_order, name"
             )
-            rows = cur.fetchall()
-            if len(rows) < 2:
-                return []
-            for name, payload in rows[1:]:  # 留第一个
+            seen_modes: set[str] = set()
+            for name, payload in cur.fetchall():
+                mode = payload.get("mode") or "chat"
+                if mode not in seen_modes:
+                    seen_modes.add(mode)  # 这个 mode 的第一个, 留
+                    continue
                 cur.execute(
                     "UPDATE gateway_models SET payload = %s::jsonb, "
                     "updated_by = 'migrate:single-default', updated_at = now() "
@@ -191,6 +199,8 @@ def enforce_single_default() -> list[str]:
                     (json.dumps({**payload, "default": False}, ensure_ascii=False), name),
                 )
                 cleared.append(name)
+            if not cleared:
+                return []
             _bump_revision(cur)
             conn.commit()
     except Exception:

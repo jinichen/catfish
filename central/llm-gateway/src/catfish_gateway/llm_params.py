@@ -91,14 +91,14 @@ def _model_info_payload(m) -> dict[str, Any]:
 
 #: hermes config.yaml `model.default` 的静态占位符 —— **不是**真 model 名。
 #:
-#: 微信那条路员工没有 picker, hermes 恒发这个名字, gateway 收到后从 roles.yaml
-#: 的 chat_default 动态解析成真 model。edge 侧的对应常量在
+#: 微信那条路员工没有 picker, hermes 恒发这个名字, gateway 收到后换成默认对话
+#: 模型 (模型页挂「默认」的那个; 9/23 之前是 roles.yaml 的 chat_default)。edge 侧的对应常量在
 #: `edge/hermes-plugins/catfish-xcatfish-user/model_authority.py:AUTO_SENTINEL`
 #: —— 两边字面量必须一致, test_auto_sentinel.py 里有跨仓一致性测试钉住。
 AUTO_MODEL_SENTINEL = "catfish-auto"
 
 def _resolve_auto_sentinel(model_name: str) -> str:
-    """`catfish-auto` → roles.yaml chat_default 的真 model 名; 其它名原样返回。
+    """`catfish-auto` → 默认对话模型的真 model 名; 其它名原样返回。
 
     # 为什么要抽成函数
 
@@ -129,7 +129,7 @@ def _resolve_auto_sentinel(model_name: str) -> str:
     只会让"为什么我的 model 名被换掉了"更难查。
 
     Raises:
-        HTTPException: 500, sentinel 收到了但 roles.yaml 没配 chat_default。
+        HTTPException: 500, sentinel 收到了但一个对话模型都没有。
             这是部署错误不是请求错误, 所以是 5xx 不是 4xx。
     """
     if model_name.lower() != AUTO_MODEL_SENTINEL:
@@ -142,8 +142,8 @@ def _resolve_auto_sentinel(model_name: str) -> str:
         raise HTTPException(
             status_code=500,
             detail=(
-                f"{AUTO_MODEL_SENTINEL}: roles.yaml chat_default 未配 · "
-                "IT 请填 roles.yaml 里 chat_default: <真 model 名>"
+                f"{AUTO_MODEL_SENTINEL}: 没有默认对话模型 · "
+                "到控制台 → 模型, 至少要有一个对话模型 (勾上「默认」更好)"
             ),
         )
     return resolved
