@@ -116,7 +116,49 @@ async fn run_reader(helper: &Path, args: Vec<OsString>) -> Result<Value, String>
             .chars()
             .take(300)
             .collect()),
-        None => Err(format!("微信聊天读取器没有返回有效结果 (退出码 {:?})", output.status.code())),
+        None => {
+            // 没有 JSON 多半是命令行本身没认出来 (比如老版本读取器没有这个子命令),
+            // argparse 的报错在 stderr, 只含命令名, 不含聊天内容 —— 带最后一行出来好排查。
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let hint: String = stderr
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("")
+                .chars()
+                .take(200)
+                .collect();
+            Err(format!(
+                "微信聊天读取器没有返回有效结果 (退出码 {}){}",
+                output.status.code().map_or("?".to_string(), |code| code.to_string()),
+                if hint.is_empty() { String::new() } else { format!(": {hint}") },
+            ))
+        }
+    }
+}
+
+/// 9/23 实测: 开发机上装的还是 0.1.0 读取器 (没有 inspect / import), 拖进 ZIP 只得到
+/// 「退出码 2」。先问读取器自己支不支持微信 ZIP, 不支持就直接说清楚要升级。
+async fn ensure_supports_wechat_zip(helper: &Path) -> Result<(), String> {
+    // doctor 的输出没有 ok 字段, 不走 run_reader
+    let mut command = reader_command(helper);
+    command.arg("doctor").arg("--json");
+    let output = tokio::time::timeout(READER_TIMEOUT, command.output())
+        .await
+        .map_err(|_| "微信聊天读取器自检超时".to_string())?
+        .map_err(|e| format!("微信聊天读取器无法启动: {e}"))?;
+    let report: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|_| "微信聊天读取器自检没有返回有效结果".to_string())?;
+    let supported = report
+        .get("formats")
+        .and_then(Value::as_array)
+        .is_some_and(|formats| formats.iter().any(|f| f.as_str() == Some("wechat_zip")));
+    if supported {
+        Ok(())
+    } else {
+        Err("本机的微信聊天读取器版本太旧，还不支持微信导出的 ZIP。重启 Companion 会自动升级；\
+             开发环境请手动重装 edge/wechat-reader。"
+            .to_string())
     }
 }
 
@@ -148,6 +190,7 @@ pub async fn wechat_export_stage(file_b64: String, filename: String) -> Result<V
         return Err("微信导出文件超过 200 MB".to_string());
     }
     let helper = resolve_helper()?;
+    ensure_supports_wechat_zip(&helper).await?;
     let dir = staging_dir()?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建暂存目录失败: {e}"))?;
     prune_stale_stages(&dir);
