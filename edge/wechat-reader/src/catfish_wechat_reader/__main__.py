@@ -6,6 +6,7 @@ import json
 import sys
 from typing import Sequence
 
+from . import library
 from .commands import bounded_limit, history, search, sessions
 from .readers import ReaderFailure, iter_records
 
@@ -28,6 +29,32 @@ def _parser() -> argparse.ArgumentParser:
         if name == "search":
             command.add_argument("--query", required=True)
             command.add_argument("--session-id")
+    # 9/23: 微信导出 ZIP 导入库。--library 由调用方 (Companion) 显式给, reader 不自己猜路径。
+    inspect = commands.add_parser("inspect")
+    inspect.add_argument("--json", action="store_true")
+    inspect.add_argument("--source", required=True)
+    inspect.add_argument("--library")
+    imp = commands.add_parser("import")
+    imp.add_argument("--json", action="store_true")
+    imp.add_argument("--source", required=True)
+    imp.add_argument("--library", required=True)
+    target = imp.add_mutually_exclusive_group()
+    target.add_argument("--group-id")
+    target.add_argument("--group-name")
+    imp.add_argument("--self-name", help='空字符串表示「我不在这些发送人里」')
+    groups = commands.add_parser("groups")
+    groups.add_argument("--json", action="store_true")
+    groups.add_argument("--library", required=True)
+    update = commands.add_parser("update-group")
+    update.add_argument("--json", action="store_true")
+    update.add_argument("--library", required=True)
+    update.add_argument("--group-id", required=True)
+    update.add_argument("--name")
+    update.add_argument("--self-name")
+    remove = commands.add_parser("remove-group")
+    remove.add_argument("--json", action="store_true")
+    remove.add_argument("--library", required=True)
+    remove.add_argument("--group-id", required=True)
     return parser
 
 
@@ -42,11 +69,29 @@ def _doctor() -> dict[str, object]:
         "secure_key_store": True,
         "ephemeral_plaintext_cache": True,
         "modifies_wechat_app": False,
-        "source_types": ["export_file"],
-        "formats": ["json", "jsonl", "csv"],
+        "source_types": ["export_file", "export_library"],
+        "formats": ["json", "jsonl", "csv", "wechat_zip"],
+        # 查询从不落明文; `import` 只在员工显式导入时把原包复制进库, 不建派生索引。
         "persists_plaintext": False,
+        "copies_imported_exports": True,
         "network_access": False,
     }
+
+
+def _groups(args: argparse.Namespace) -> dict[str, object]:
+    items = library.list_groups(args.library)
+    return {"items": items, "count": len(items)}
+
+
+_LIBRARY_COMMANDS = {
+    "inspect": lambda a: library.inspect(a.source, a.library),
+    "import": lambda a: library.import_export(
+        a.source, a.library, a.group_id, a.group_name, a.self_name,
+    ),
+    "groups": _groups,
+    "update-group": lambda a: library.update_group(a.library, a.group_id, a.name, a.self_name),
+    "remove-group": lambda a: library.remove_group(a.library, a.group_id),
+}
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -55,6 +100,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         _emit(_doctor())
         return 0
     try:
+        if args.command in _LIBRARY_COMMANDS:
+            _emit({"ok": True, **_LIBRARY_COMMANDS[args.command](args)})
+            return 0
         records = iter_records(args.source)
         limit = bounded_limit(args.limit, 50 if args.command == "sessions" else 100)
         if args.command == "sessions":

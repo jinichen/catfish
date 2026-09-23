@@ -6,7 +6,7 @@
 pub mod agent_prefs;
 #[cfg(any(windows, test))]
 pub mod windows_lifecycle;
-#[cfg(any(windows, test))]
+// 9/23: mac 也用它判断附加组件是不是本安装包的版本 (hermes_install_steps::addon_current)
 pub mod addon_fingerprint;
 pub mod autostart_deps; // 运行时依赖自检 (8/15 从 autostart 切出)
 pub mod autostart_mcp;  // hermes config 自愈 + 其测试 (8/15 切出)

@@ -13,7 +13,8 @@ WECHAT_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_wechat_sessions",
         "description": (
-            "列出员工已显式授权的微信聊天导出文件中的会话摘要。只读，不上传中央；"
+            "列出员工已导入并授权的微信聊天会话 (群 / 私聊) 摘要, 含 first_message_at / "
+            "last_message_at, 用来确定 history / search 的时间范围。只读，不上传中央；"
             "返回结果由当前聊天 Picker 模型继续分析。"
         ),
         "input_schema": {
@@ -35,7 +36,8 @@ WECHAT_TOOLS: List[Dict[str, Any]] = [
         "name": "catfish_wechat_history",
         "description": (
             "读取一个聊天会话在明确时间范围内的微信导出文本记录。只在员工授权的当前 Picker"
-            "未改变时可用；不返回附件二进制。"
+            "未改变时可用；不返回附件二进制。附件消息带 attachment_name, "
+            "attachment_present=false 表示微信没有随导出带出该文件 (如压缩包)。"
         ),
         "input_schema": {
             "type": "object",
@@ -59,7 +61,7 @@ WECHAT_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_wechat_search",
         "description": (
-            "在员工授权的微信聊天导出文件中按关键词和明确时间范围搜索。可限定单个会话；"
+            "在员工授权的微信聊天记录中按关键词和明确时间范围搜索。可限定单个会话；"
             "结果由当前聊天 Picker 模型继续分析。"
         ),
         "input_schema": {

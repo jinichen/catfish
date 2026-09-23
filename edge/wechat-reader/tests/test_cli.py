@@ -63,8 +63,8 @@ def test_doctor_reports_safe_export_reader(capsys: pytest.CaptureFixture[str]) -
     assert payload["secure_key_store"] is True
     assert payload["ephemeral_plaintext_cache"] is True
     assert payload["modifies_wechat_app"] is False
-    assert payload["source_types"] == ["export_file"]
-    assert set(payload["formats"]) == {"json", "jsonl", "csv"}
+    assert payload["source_types"] == ["export_file", "export_library"]
+    assert set(payload["formats"]) == {"json", "jsonl", "csv", "wechat_zip"}
 
 
 @pytest.mark.parametrize("command", [
@@ -109,6 +109,7 @@ def test_json_sessions_aggregate_without_persisting_index(
         "session_id": "finance",
         "name": "财务",
         "type": "chat",
+        "first_message_at": "2026-08-28T11:00:00+08:00",
         "last_message_at": "2026-08-28T11:00:00+08:00",
         "message_count": 1,
     }

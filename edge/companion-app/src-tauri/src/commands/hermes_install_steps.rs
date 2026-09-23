@@ -503,6 +503,43 @@ pub(crate) fn install_hermes_deps(artifacts: &RuntimeArtifacts, paths: &Bootstra
     result
 }
 
+/// 附加组件 (catfish-email / catfish-wechat-reader) 的安装指纹 —— 跟 Windows
+/// (`hermes_install_windows::ensure_optional_components`) 同一套判据, 同名 marker。
+///
+/// 9/23 之前 mac 只看「可执行文件在不在」: 升级 Companion 带来新版 wheel,
+/// 老机器因为文件已经在, 永远不重装 —— reader 0.2.0 (微信 ZIP) 到不了已装过的 mac。
+#[cfg(not(target_os = "windows"))]
+pub(crate) const EMAIL_ADDON: &str = "catfish-email";
+#[cfg(not(target_os = "windows"))]
+pub(crate) const WECHAT_READER_ADDON: &str = "catfish-wechat-reader";
+
+#[cfg(not(target_os = "windows"))]
+fn addon_marker(paths: &BootstrapPaths, name: &str) -> PathBuf {
+    paths.install_dir.join(format!(".{name}-installed.sha256"))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn record_addon_installed(paths: &BootstrapPaths, name: &str, archive: &Path) -> Result<()> {
+    let hash = crate::services::addon_fingerprint::fingerprint(&[archive])
+        .with_context(|| format!("计算 {} 指纹", archive.display()))?;
+    write_bytes_atomic(&addon_marker(paths, name), hash.as_bytes())
+}
+
+/// 装好的附加组件是否就是这个安装包里的那一份。没有归档可比 (资源缺失) 时
+/// 只能退回「文件在就算」, 不因为资源问题反复重装。
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn addon_current(paths: &BootstrapPaths, name: &str, archive: Option<&PathBuf>) -> bool {
+    let installed = hermes_venv_tool(&paths.install_dir, name).exists();
+    match archive {
+        None => installed,
+        Some(archive) => crate::services::addon_fingerprint::fingerprint(&[archive.as_path()])
+            .map(|hash| {
+                crate::services::addon_fingerprint::matches(&addon_marker(paths, name), &hash, installed)
+            })
+            .unwrap_or(installed),
+    }
+}
+
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn install_catfish_email(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths) -> Result<()> {
     let Some(tar) = artifacts.email_tar.as_ref() else {
@@ -581,7 +618,7 @@ pub(crate) fn install_catfish_email(artifacts: &RuntimeArtifacts, paths: &Bootst
     });
 
     let _ = remove_any(&stage);
-    result
+    result.and_then(|()| record_addon_installed(paths, EMAIL_ADDON, tar))
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -665,7 +702,7 @@ pub(crate) fn install_catfish_wechat_reader(
         Ok(())
     });
     let _ = remove_any(&stage);
-    result
+    result.and_then(|()| record_addon_installed(paths, WECHAT_READER_ADDON, tar))
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -684,4 +721,39 @@ pub(crate) fn link_catfish_wechat_reader_bin(paths: &BootstrapPaths) -> Result<(
     std::os::unix::fs::symlink(&reader, &link)
         .with_context(|| format!("创建软链 {} -> {}", link.display(), reader.display()))?;
     Ok(())
+}
+
+#[cfg(all(test, not(target_os = "windows")))]
+mod addon_marker_tests {
+    use super::*;
+
+    /// 9/23: 老机器上 reader 已经在, 但升级带来了新 wheel —— 必须判定「要重装」。
+    #[test]
+    fn existing_addon_from_an_older_package_is_not_current() {
+        let home = tempfile::tempdir().unwrap();
+        let paths = BootstrapPaths::new(home.path().to_path_buf());
+        // HERMES_HOME / LOCALAPPDATA 会把路径指回真实安装目录 —— 那种环境下绝不能往里写
+        if !paths.install_dir.starts_with(home.path()) {
+            eprintln!("skip: HERMES_HOME/LOCALAPPDATA 已设置, 不在真实安装目录上做测试");
+            return;
+        }
+        let tool = hermes_venv_tool(&paths.install_dir, WECHAT_READER_ADDON);
+        std::fs::create_dir_all(tool.parent().unwrap()).unwrap();
+        std::fs::write(&tool, "installed before markers existed").unwrap();
+        let archive = home.path().join("reader.tar.gz");
+        std::fs::write(&archive, "wheel 0.1.0").unwrap();
+
+        // 升级前装的机器没有 marker: 文件在也不算当前版本
+        assert!(!addon_current(&paths, WECHAT_READER_ADDON, Some(&archive)));
+        record_addon_installed(&paths, WECHAT_READER_ADDON, &archive).unwrap();
+        assert!(addon_current(&paths, WECHAT_READER_ADDON, Some(&archive)));
+
+        std::fs::write(&archive, "wheel 0.2.0").unwrap();
+        assert!(!addon_current(&paths, WECHAT_READER_ADDON, Some(&archive)));
+
+        // 资源缺失时不反复重装, 退回「文件在就算」
+        assert!(addon_current(&paths, WECHAT_READER_ADDON, None));
+        std::fs::remove_file(&tool).unwrap();
+        assert!(!addon_current(&paths, WECHAT_READER_ADDON, None));
+    }
 }

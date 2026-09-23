@@ -19,12 +19,20 @@ _MAX_ITEMS = 200
 _MAX_OUTPUT_BYTES = 5 * 1024 * 1024
 _MAX_RANGE = timedelta(days=31)
 _SAFE_SESSION_FIELDS = (
-    "session_id", "name", "type", "last_message_at", "message_count",
+    "session_id", "name", "type", "first_message_at", "last_message_at", "message_count",
 )
 _SAFE_MESSAGE_FIELDS = (
     "message_id", "session_id", "sender_id", "sender_name", "timestamp",
     "type", "text", "is_self",
+    # 9/23 微信 ZIP: `[文件] x.rar` 这类附件微信不随导出, 模型要知道「提到了但拿不到」
+    "attachment_name", "attachment_present",
 )
+# reader 失败时自己报的原因码; 只透传这些, 别的一律归 reader_failed
+_READER_REASON_CODES = {
+    "source_missing", "invalid_source", "unsupported_format", "source_too_large",
+    "invalid_record", "invalid_scope", "group_required",
+}
+_MAX_READER_ERROR_CHARS = 300
 _DOCTOR_REQUIREMENTS = {
     "protocol_version": 1,
     "read_only": True,
@@ -37,6 +45,10 @@ _EXPORT_SUFFIXES = {".json", ".jsonl", ".csv"}
 
 class ReaderError(RuntimeError):
     """本机读取器协议错误；消息不得包含密钥或聊天正文。"""
+
+    def __init__(self, message: str, reason_code: str = "reader_failed") -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
 
 
 def _config_path() -> Path:
@@ -58,7 +70,7 @@ def _load_config() -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
-def _authorized_reader() -> tuple[Path, str, Path] | dict[str, Any]:
+def _authorized_reader() -> tuple[Path, str, Path, str] | dict[str, Any]:
     config = _load_config()
     if not config or config.get("version") != 2 or config.get("enabled") is not True:
         return _failure(
@@ -80,7 +92,21 @@ def _authorized_reader() -> tuple[Path, str, Path] | dict[str, Any]:
 
     source_type = str(config.get("source_type") or "").strip()
     source: Path | None = None
-    if source_type == "export_file":
+    if source_type == "export_library":
+        # 9/23: 微信 ZIP 导入库 (catfish-wechat-reader library.py)。员工自己往库里
+        # 导包不算越权, 所以不像单文件那样按大小 / 修改时间要求重新授权 ——
+        # 授权只跟 Picker 模型走 (上面已校验)。
+        raw_source = str(config.get("source_path") or "").strip()
+        source_candidate = Path(raw_source).expanduser()
+        if not raw_source or not source_candidate.is_absolute():
+            return _failure("微信聊天导入库路径无效", "source_missing")
+        try:
+            source = source_candidate.resolve(strict=True)
+        except OSError:
+            return _failure("还没有导入过微信聊天记录", "source_missing")
+        if not source.is_dir():
+            return _failure("微信聊天导入库必须是目录", "source_missing")
+    elif source_type == "export_file":
         raw_source = str(config.get("source_path") or "").strip()
         source_candidate = Path(raw_source).expanduser()
         if not raw_source or not source_candidate.is_absolute():
@@ -109,7 +135,7 @@ def _authorized_reader() -> tuple[Path, str, Path] | dict[str, Any]:
         return _failure("微信历史安全读取器未安装", "reader_missing")
     if not helper.is_file() or not os.access(helper, os.X_OK):
         return _failure("微信历史安全读取器不可执行", "reader_missing")
-    return helper, current_model, source
+    return helper, current_model, source, source_type
 
 
 def runtime_available() -> bool:
@@ -140,13 +166,33 @@ def _run_helper_json(helper: Path, command: str, args: list[str]) -> object:
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise ReaderError(f"本机读取器启动失败: {type(exc).__name__}") from exc
     if completed.returncode != 0:
-        raise ReaderError(f"本机读取器返回失败状态: {completed.returncode}")
+        raise _reader_failure(completed.returncode, completed.stdout)
     if len(completed.stdout) > _MAX_OUTPUT_BYTES:
         raise ReaderError("本机读取器输出超过 5 MB 安全上限")
     try:
         return json.loads(completed.stdout.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ReaderError("本机读取器没有返回有效 JSON") from exc
+
+
+def _reader_failure(returncode: int, stdout: bytes) -> ReaderError:
+    """reader 失败时 stdout 仍是 `{"ok": false, "error", "reason_code"}`。
+
+    以前这里只报「返回失败状态: 2」, 把「格式不认识」「导入库缺少原包」这类
+    员工能照着处理的原因全吞了。reader 的报错只含文件名 / 条数, 不含聊天正文
+    (见 catfish_wechat_reader), 这里仍截断长度、只认已知原因码。
+    """
+    try:
+        payload = json.loads(stdout.decode("utf-8")) if len(stdout) <= 65536 else None
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        payload = None
+    if isinstance(payload, dict) and isinstance(payload.get("error"), str):
+        code = str(payload.get("reason_code") or "")
+        return ReaderError(
+            payload["error"][:_MAX_READER_ERROR_CHARS],
+            code if code in _READER_REASON_CODES else "reader_failed",
+        )
+    return ReaderError(f"本机读取器返回失败状态: {returncode}")
 
 
 def _check_doctor(helper: Path) -> dict[str, Any] | None:
@@ -224,7 +270,7 @@ def _execute(command: str, cli_args: list[str], fields: tuple[str, ...], limit: 
     authorized = _authorized_reader()
     if isinstance(authorized, dict):
         return authorized
-    helper, current_model, source = authorized
+    helper, current_model, source, source_type = authorized
     doctor_error = _check_doctor(helper)
     if doctor_error is not None:
         return doctor_error
@@ -234,13 +280,13 @@ def _execute(command: str, cli_args: list[str], fields: tuple[str, ...], limit: 
         payload = _run_helper_json(helper, command, helper_args)
         items = _sanitize_items(payload, fields, limit)
     except ReaderError as exc:
-        return _failure(str(exc), "reader_failed")
+        return _failure(str(exc), exc.reason_code)
     return {
         "ok": True,
         "items": items,
         "count": len(items),
         "picker_model": current_model,
-        "source_type": "export_file",
+        "source_type": source_type,
         "storage": "edge_only",
     }
 

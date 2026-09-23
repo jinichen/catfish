@@ -159,6 +159,12 @@ jobs:
             --ignore=tests/test_fed25_e2e_chain.py \
             -p no:cacheprovider
 
+      # 9/23: wechat-reader 的测试以前 CI 一次都没跑过。它零依赖、同是 3.10+,
+      # 跟 tool-bridge 放一个 job (Tool Bridge 正是它的调用方)。
+      - name: Run wechat-reader tests
+        working-directory: edge/wechat-reader
+        run: PYTHONPATH=src python -m pytest tests/ -v -p no:cacheprovider
+
   # ════════════════════════════════════════════════════════════
   # 2. gateway Python tests
   # ════════════════════════════════════════════════════════════

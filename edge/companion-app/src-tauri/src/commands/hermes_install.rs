@@ -33,10 +33,13 @@ use super::hermes_install_state::write_completion_marker;
 #[cfg(not(target_os = "windows"))]
 use super::hermes_install_state::remove_any;
 #[cfg(any(not(target_os = "windows"), test))]
-use crate::services::catfish_paths::{hermes_venv_python, hermes_venv_tool};
+use crate::services::catfish_paths::hermes_venv_python;
+// 9/23: 附加组件改按安装指纹判断后, 非测试代码不再直接探可执行文件
+#[cfg(test)]
+use crate::services::catfish_paths::hermes_venv_tool;
 #[cfg(not(target_os = "windows"))]
 use super::hermes_install_steps::{
-    activate_stage, install_catfish_email, install_catfish_wechat_reader, install_hermes_deps,
+    activate_stage, addon_current, install_catfish_email, EMAIL_ADDON, WECHAT_READER_ADDON, install_catfish_wechat_reader, install_hermes_deps,
     link_catfish_email_bin, link_catfish_wechat_reader_bin, prepare_source_stage,
     rollback_install, run_install_stage,
 };
@@ -173,15 +176,18 @@ fn bootstrap_locked(
         // 老机器判定不健康, 走完整路径重装几百 MB 的 python/node/chromium ——
         // 为一个 76K 的 wheel 付这个代价不合理, 而且升级时长会吓到现场。
         //
-        // 这里只补缺的那一个: 文件在就什么都不做 (零代价), 不在才装。
-        if !hermes_venv_tool(&paths.install_dir, "catfish-email").exists() {
-            log::warn!(
-                "[catfish-email] hermes 健康但 catfish-email 缺失 —— \
-                 多半是 7/30 之前装的机器。只补装它, 不重装 hermes。"
-            );
-            match resolve_optional_runtime_dir(resource_dir)
-                .map(RuntimeArtifacts::from_dir)
-                .and_then(|artifacts| install_catfish_email(&artifacts, paths))
+        // 这里只补那一个, 不动 hermes。9/23 起判据从「文件在不在」改成「装的是不是
+        // 这个安装包里的那一份」(安装指纹, 跟 Windows 同一套): 文件在但版本旧, 一样
+        // 要重装 —— 否则升级 Companion 带来的新 wheel 永远到不了老机器。
+        let addon_artifacts = resolve_optional_runtime_dir(resource_dir).map(RuntimeArtifacts::from_dir);
+        let email_tar = addon_artifacts.as_ref().ok().and_then(|a| a.email_tar.as_ref());
+        let reader_tar = addon_artifacts.as_ref().ok().and_then(|a| a.wechat_reader_tar.as_ref());
+        if !addon_current(paths, EMAIL_ADDON, email_tar) {
+            log::warn!("[catfish-email] 缺失或不是本安装包的版本 —— 只重装它, 不重装 hermes。");
+            match addon_artifacts
+                .as_ref()
+                .map_err(|e| anyhow::anyhow!("{e:#}"))
+                .and_then(|artifacts| install_catfish_email(artifacts, paths))
             {
                 Ok(()) => log::info!("[catfish-email] 补装完成"),
                 // 补装失败不能挡住启动 —— 邮件不可用是局部功能缺失,
@@ -215,10 +221,12 @@ fn bootstrap_locked(
             // 文件 / 磁盘满) 一个字都不会有, 员工只看到"CLI 没装"。
             log::warn!("[catfish-email-link] 建软链失败: {e:#}");
         }
-        if !hermes_venv_tool(&paths.install_dir, "catfish-wechat-reader").exists() {
-            match resolve_optional_runtime_dir(resource_dir)
-                .map(RuntimeArtifacts::from_dir)
-                .and_then(|artifacts| install_catfish_wechat_reader(&artifacts, paths))
+        if !addon_current(paths, WECHAT_READER_ADDON, reader_tar) {
+            log::warn!("[wechat-reader] 缺失或不是本安装包的版本 —— 只重装它。");
+            match addon_artifacts
+                .as_ref()
+                .map_err(|e| anyhow::anyhow!("{e:#}"))
+                .and_then(|artifacts| install_catfish_wechat_reader(artifacts, paths))
             {
                 Ok(()) => log::info!("[wechat-reader] 补装完成"),
                 Err(e) => log::warn!("[wechat-reader] 补装失败，聊天导出分析不可用: {e:#}"),

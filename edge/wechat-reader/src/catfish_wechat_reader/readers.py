@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 MAX_SOURCE_BYTES = 512 * 1024 * 1024
-SUPPORTED_SUFFIXES = {".json", ".jsonl", ".csv"}
+SUPPORTED_SUFFIXES = {".json", ".jsonl", ".csv", ".zip"}
 
 _ALIASES: dict[str, tuple[str, ...]] = {
     "message_id": ("message_id", "msg_id", "id", "消息id", "消息ID"),
@@ -145,13 +145,27 @@ def iter_records(source: str | Path) -> Iterator[dict[str, object]]:
         size = resolved.stat().st_size
     except OSError as exc:
         raise ReaderFailure("导出文件不存在或不可读取", "source_missing") from exc
+    if resolved.is_dir():
+        # 9/23: 微信 ZIP 导入库 (见 library.py)。延迟导入, 避免跟 wechat_zip 循环引用。
+        from .library import iter_library_records
+        yield from iter_library_records(resolved)
+        return
     if not resolved.is_file():
         raise ReaderFailure("数据源必须是文件", "invalid_source")
     suffix = resolved.suffix.casefold()
     if suffix not in SUPPORTED_SUFFIXES:
-        raise ReaderFailure("只支持 JSON、JSONL、CSV", "unsupported_format")
+        raise ReaderFailure("只支持 JSON、JSONL、CSV 和微信导出的 ZIP", "unsupported_format")
     if size > MAX_SOURCE_BYTES:
         raise ReaderFailure("导出文件超过 512 MB 安全上限", "source_too_large")
+    if suffix == ".zip":
+        # 没导入库、直接查一个包: 会话 ID 取内容哈希, 名字按发送人起。
+        from .library import records_from_export, suggest_name
+        from .wechat_zip import read_export
+        parsed = read_export(resolved)
+        yield from records_from_export(
+            parsed, f"zip-{parsed.sha256[:12]}", suggest_name(parsed, None), None,
+        )
+        return
     factory = {".json": _json_records, ".jsonl": _jsonl_records, ".csv": _csv_records}[suffix]
     for ordinal, raw in enumerate(factory(resolved), 1):
         yield normalize_record(raw, ordinal)

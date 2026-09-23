@@ -9,6 +9,7 @@ from .readers import parse_timestamp
 MAX_ITEMS = 200
 _MESSAGE_FIELDS = (
     "message_id", "session_id", "sender_id", "sender_name", "timestamp", "type", "text", "is_self",
+    "attachment_name", "attachment_present",
 )
 
 
@@ -38,12 +39,18 @@ def sessions(records: Iterable[dict[str, object]], limit: int) -> list[dict[str,
                 "session_id": session_id,
                 "name": item["session_name"],
                 "type": "chat",
+                # 9/23: 模型要知道从哪天开始有记录, 才能给 history 定 ≤31 天的窗口
+                "first_message_at": item["timestamp"],
                 "last_message_at": item["timestamp"],
+                "_first": item["_timestamp"],
                 "_last": item["_timestamp"],
                 "message_count": 1,
             }
             continue
         current["message_count"] = int(current["message_count"]) + 1
+        if item["_timestamp"] < current["_first"]:
+            current["first_message_at"] = item["timestamp"]
+            current["_first"] = item["_timestamp"]
         if item["_timestamp"] > current["_last"]:
             current["last_message_at"] = item["timestamp"]
             current["_last"] = item["_timestamp"]

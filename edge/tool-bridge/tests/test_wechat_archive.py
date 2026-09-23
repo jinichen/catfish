@@ -275,3 +275,110 @@ def test_helper_process_does_not_receive_model_or_api_credentials(
     assert payload["model"] is None
     assert payload["tmp"]
     assert not os.path.exists(payload["tmp"]), "调用结束后临时目录必须被清理"
+
+
+# ── 9/23: 微信 ZIP 导入库 ─────────────────────────────────────────────
+
+_READER_SRC = Path(__file__).resolve().parents[2] / "wechat-reader" / "src"
+
+
+def _library_config(path: Path, helper: Path, library: Path, model: str = "catfish-private-main") -> None:
+    path.write_text(json.dumps({
+        "version": 2, "enabled": True, "helper_path": str(helper),
+        "source_type": "export_library", "source_path": str(library),
+        "consented_picker_model": model, "consented_at": "2026-09-23T10:00:00+08:00",
+    }), encoding="utf-8")
+
+
+@pytest.fixture
+def real_library(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, str]:
+    """真 reader (源码树) + 一个合成的微信导出 ZIP 导进库。"""
+    if not _READER_SRC.is_dir():
+        pytest.skip("wechat-reader 源码不在旁边")
+    import zipfile
+    helper = tmp_path / "catfish-wechat-reader"
+    helper.write_text(
+        f"#!{sys.executable}\nimport sys\nsys.path.insert(0, {str(_READER_SRC)!r})\n"
+        "from catfish_wechat_reader.__main__ import main\nsys.exit(main())\n",
+        encoding="utf-8",
+    )
+    helper.chmod(0o700)
+    export = tmp_path / "聊天记录.zip"
+    body = ("·测试甲\n2026年9月14日 15:06\n材料发一下\n\n"
+            "·测试乙\n2026年9月14日 15:07\n[文件] 底稿.rar\n\n"
+            "·测试丙\n2026年9月14日 15:08\n收到\n\n")
+    with zipfile.ZipFile(export, "w") as archive:
+        archive.writestr("聊天记录.txt", body.encode("utf-8"))
+    library = tmp_path / "wechat-exports"
+    imported = wechat_archive._run_helper_json(helper, "import", [
+        "--source", str(export), "--library", str(library), "--group-name", "年审群"])
+    config = tmp_path / "wechat_archive.json"
+    _library_config(config, helper, library)
+    monkeypatch.setenv("CATFISH_WECHAT_ARCHIVE_CONFIG", str(config))
+    monkeypatch.setattr(picker_state, "read_picker_model", lambda: "catfish-private-main")
+    return library, imported["group_id"]
+
+
+def test_library_source_end_to_end_with_real_reader(real_library) -> None:
+    library, group_id = real_library
+    sessions = wechat_archive.tool_wechat_sessions({})
+    assert sessions["ok"] is True, sessions
+    assert sessions["source_type"] == "export_library"
+    assert sessions["items"] == [{
+        "session_id": group_id, "name": "年审群", "type": "chat",
+        "first_message_at": sessions["items"][0]["first_message_at"],
+        "last_message_at": sessions["items"][0]["last_message_at"], "message_count": 3,
+    }]
+    assert sessions["items"][0]["first_message_at"].startswith("2026-09-14T15:06")
+
+    found = wechat_archive.tool_wechat_search({
+        "query": "底稿", "start_time": "2026-09-01T00:00:00+08:00",
+        "end_time": "2026-09-30T00:00:00+08:00",
+    })
+    assert found["ok"] is True, found
+    item = found["items"][0]
+    assert (item["type"], item["attachment_name"], item["attachment_present"]) == (
+        "file", "底稿.rar", False)
+
+
+def test_library_import_does_not_require_reauthorization(real_library) -> None:
+    library, _ = real_library
+    (library / "unrelated-new-file.tmp").write_text("x", encoding="utf-8")
+    assert wechat_archive.tool_wechat_sessions({})["ok"] is True
+
+
+def test_reader_failure_reason_is_surfaced_not_swallowed(real_library) -> None:
+    library, group_id = real_library
+    for archive in library.glob("*.zip"):
+        archive.unlink()
+    result = wechat_archive.tool_wechat_history({
+        "session_id": group_id, "start_time": "2026-09-01T00:00:00+08:00",
+        "end_time": "2026-09-30T00:00:00+08:00",
+    })
+    assert result["ok"] is False
+    assert result["reason_code"] == "source_missing"
+    assert "导入库缺少原包" in result["error"]
+
+
+def test_missing_library_is_reported_before_starting_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    helper = tmp_path / "reader"
+    helper.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    helper.chmod(0o700)
+    config = tmp_path / "wechat_archive.json"
+    _library_config(config, helper, tmp_path / "never-imported")
+    monkeypatch.setenv("CATFISH_WECHAT_ARCHIVE_CONFIG", str(config))
+    monkeypatch.setattr(picker_state, "read_picker_model", lambda: "catfish-private-main")
+    monkeypatch.setattr(wechat_archive, "_run_helper_json",
+                        lambda *_a, **_k: pytest.fail("库不存在时不应启动读取器"))
+    result = wechat_archive.tool_wechat_sessions({})
+    assert result["reason_code"] == "source_missing"
+
+
+def test_unknown_reader_reason_codes_are_not_passed_through() -> None:
+    error = wechat_archive._reader_failure(
+        2, json.dumps({"ok": False, "error": "x" * 1000, "reason_code": "weird"}).encode())
+    assert error.reason_code == "reader_failed"
+    assert len(str(error)) == 300
+    assert wechat_archive._reader_failure(2, b"not json").reason_code == "reader_failed"
