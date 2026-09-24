@@ -201,3 +201,28 @@ describe("advisor Qwen 空转质量门", () => {
     });
   });
 });
+
+describe("9/24 CMMI-5 已拿证仍出卡片", () => {
+  it("contextRefs 抄了本周日程原文也不能让旧画像项目过门; 标题本身要在本轮输入里", () => {
+    const base = input();
+    const current: AdvisorInput = {
+      ...base,
+      todos: [],
+      ctx: { ...base.ctx, workplan: "" },
+      events: [
+        { title: "履约能力服务认证 现场审核 末次会议", start: "2026-09-21T09:00:00+08:00" },
+        { title: "发起CCRC要的人员毕业证、劳动合同收集", start: "2026-09-22T09:00:00+08:00" },
+      ] as unknown as AdvisorInput["events"],
+    };
+    const stale = {
+      ...result("CMMI-5级评审进行中事项").mainTasks[0],
+      contextRefs: ["员工画像: 重点项目 CMMI-5级评审 (进行中)", "本周日程: 履约能力服务认证 现场审核 末次会议 (2026-09-21)"],
+    };
+    expect(isAdvisorTaskBackedByCurrentInput(stale, current)).toBe(false);
+    const real = {
+      ...result("CCRC要的人员毕业证、劳动合同收集").mainTasks[0],
+      contextRefs: ["本周日程: 发起CCRC要的人员毕业证、劳动合同收集 (2026-09-22)"],
+    };
+    expect(isAdvisorTaskBackedByCurrentInput(real, current)).toBe(true);
+  });
+});

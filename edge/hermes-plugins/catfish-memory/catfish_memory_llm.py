@@ -35,9 +35,13 @@ try:
 except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_gateway import with_source
 try:
-    from .catfish_memory_prompts import _ANALYSIS_PROMPT, _DISTILL_PROMPT, _SUMMARIZE_PROMPT, _build_generation_prompt  # noqa: F401
+    from .catfish_memory_prompts import _ANALYSIS_PROMPT, _DISTILL_PROMPT, _RECONCILE_PROMPT, _SUMMARIZE_PROMPT, _build_generation_prompt  # noqa: F401
 except ImportError:  # 独立脚本模式 (无父包)
-    from catfish_memory_prompts import _ANALYSIS_PROMPT, _DISTILL_PROMPT, _SUMMARIZE_PROMPT, _build_generation_prompt  # noqa: F401
+    from catfish_memory_prompts import _ANALYSIS_PROMPT, _DISTILL_PROMPT, _RECONCILE_PROMPT, _SUMMARIZE_PROMPT, _build_generation_prompt  # noqa: F401
+try:
+    from .catfish_memory_distill_reconcile import assemble, chunk_date_range, status_digest
+except ImportError:  # 独立脚本模式 (无父包)
+    from catfish_memory_distill_reconcile import assemble, chunk_date_range, status_digest
 
 
 async def _call_summarize_llm(
@@ -147,19 +151,22 @@ async def _call_distill_llm(
         except Exception as e:  # noqa: BLE001
             logger.debug("distill progress_cb 抛错 (吞掉, 不影响 distill): %s", e)
 
-    results: List[str] = []
+    # 9/24: (日期范围, 蒸馏文本), 旧→新。最后合并出"当前状态"并按新在前输出, 见
+    # catfish_memory_distill_reconcile.py (CMMI-5 拿证后又被当成进行中的根因)
+    results: List[Tuple[str, str]] = []
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-Catfish-Skip-Identity": "true",
+        "X-Catfish-Internal": "true",
+        "Content-Type": "application/json",
+    }
     async with httpx.AsyncClient(timeout=_LLM_HTTP_TIMEOUT) as client:
         for idx, chunk in enumerate(chunks):
             _notify(idx)
             try:
                 resp = await client.post(
                     with_source(_gateway_url(), "plugin:memory-distill"),
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        "X-Catfish-Skip-Identity": "true",
-                        "X-Catfish-Internal": "true",
-                        "Content-Type": "application/json",
-                    },
+                    headers=headers,
                     json={
                         "model": model,
                         "messages": [{"role": "user", "content": _DISTILL_PROMPT + "\n\n" + chunk}],
@@ -178,16 +185,37 @@ async def _call_distill_llm(
                 text = data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
                 text = text.strip()
                 if text:
-                    results.append(f"### 蒸馏段 {len(results) + 1}\n\n{text}")
+                    results.append((chunk_date_range(chunk), text))
             except Exception as e:  # noqa: BLE001
                 logger.debug("catfish-memory distill chunk 异常 (跳过): %s", e)
                 continue
+
+        current: Optional[str] = None
+        if results:
+            try:
+                resp = await client.post(
+                    with_source(_gateway_url(), "plugin:memory-distill"),
+                    headers=headers,
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": _RECONCILE_PROMPT + "\n\n" + status_digest(results)}],
+                        "temperature": 0.1,
+                        "max_tokens": 1500,
+                        "stream": False,
+                    },
+                )
+                if resp.status_code == 200:
+                    current = (resp.json().get("choices", [{}])[0].get("message", {}).get("content", "") or "").strip() or None
+                else:
+                    logger.warning("catfish-memory 当前状态合并 HTTP %d, 用确定性兜底", resp.status_code)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("catfish-memory 当前状态合并失败, 用确定性兜底: %s", e)
 
     _notify(total)  # 跑完通知一次
 
     if not results:
         return None
-    return "\n\n".join(results)
+    return assemble(results, current)
 
 
 # ── BL-CATFISH-WIKI-MODE P1.1 wiki two-step ─────────────────────

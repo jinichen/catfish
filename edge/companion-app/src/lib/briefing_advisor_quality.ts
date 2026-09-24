@@ -152,7 +152,11 @@ export function isAdvisorTaskBackedByCurrentInput(
   const source = normalize(activeSource);
   if (title.length >= 4 && source.includes(title)) return true;
 
-  const titleTokens = evidenceTokens(`${task.title} ${task.contextRefs.join(" ")}`);
+  // 9/24: 只看标题, 不再把 contextRefs 算进证据。contextRefs 是 LLM 自己填的, 实测它把
+  // 画像里的旧项目「CMMI-5级评审 (进行中)」配上一条毫不相干的本周日程 ("履约能力服务认证
+  // 现场审核 末次会议") 当引用, 日程原文进了 contextRefs, token 自然跟本轮输入重合 ——
+  // 一张 8/11 就已拿证的"进行中"卡片就这样过了门。任务本身 (标题) 必须能在本轮输入里找到。
+  const titleTokens = evidenceTokens(task.title);
   const sourceTokens = evidenceTokens(activeSource);
   let overlap = 0;
   for (const token of titleTokens) {

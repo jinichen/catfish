@@ -17,6 +17,9 @@ export const PROFILE_SYSTEM_PROMPT = `你是 catfish 员工画像分析师. 看�
 3. 关心风格 style ∈ {合规优先, 业务优先, 关系优先, 数字优先}
 4. 关键人脉 keyPeople (最多 10 人, 含 relation: 上级/客户/下属/平级/同事/兄弟单位)
 5. 重点项目 keyProjects (最多 5 个, 含 status: 进行中/暂停/完成/待启动)
+   —— 状态以 distilled_facts 开头的「当前状态」段为准; 后面各段是不同时期的历史记录,
+   旧段写的"进行中"可能早已结束 (9/24: 8/11 已拿证的 CMMI-5 被列成"进行中", 早安又据此出卡)。
+   已完结/已拿证的不要列为进行中。
 6. 推断置信度 confidence ∈ [0.0, 1.0]
 7. 证据 evidence (3-5 条, 引用具体语料)
 8. **5/21 cold start 补丁**: personality (员工写作 / 沟通风格), 含:
