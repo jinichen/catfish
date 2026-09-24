@@ -448,9 +448,29 @@ pub fn run() {
                             }
                             services::autostart::schedule_autostart();
                             services::watchdog::schedule_watchdog();
-                            services::email_scheduler::schedule_email_scheduler(
-                                runtime_services_app,
-                            );
+                            // 9/24: 邮件扫描器单独等邮件组件, 不再跟核心服务绑在一起
+                            // (见 hermes_install::hermes_runtime_ready)。探针要起两个进程,
+                            // 30 秒看一次就够。
+                            let email_app = runtime_services_app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let mut email_waited = 0u64;
+                                loop {
+                                    let ready = tauri::async_runtime::spawn_blocking(
+                                        commands::hermes_install::email_components_ready,
+                                    )
+                                    .await
+                                    .unwrap_or(false);
+                                    if ready {
+                                        services::email_scheduler::schedule_email_scheduler(email_app);
+                                        break;
+                                    }
+                                    if email_waited % 300 == 0 {
+                                        log::warn!("邮件组件未就绪, 邮件扫描器暂不启动 ({email_waited}s)");
+                                    }
+                                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                                    email_waited += 30;
+                                }
+                            });
                             break;
                         }
                         if waited_secs == 0 {

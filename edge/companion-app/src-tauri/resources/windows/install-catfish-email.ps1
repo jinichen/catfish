@@ -36,10 +36,30 @@ try {
     }
 
     # Windows 包可同时携带 pywin32；--no-index 确保现场不会偷偷访问公网。
+    # 9/24: 以前是 --reinstall (所有 wheel 都强制重装)。pywin32 同版本 312 也会被
+    # 卸了重装, 而 Hermes / 邮件扫描器正在跑时 Python 已经加载了
+    # pywin32_system32\pythoncom311.dll —— Windows 不让删已加载的 DLL:
+    #   failed to remove file ...pythoncom311.dll: 拒绝访问 (os error 5)
+    # 装到一半失败, pywin32 被拆坏 (下次报 missing RECORD), 连带 Hermes 都起不来。
+    # 现在只强制重装 catfish-email 本身; pywin32 只在它真的坏了 (导入失败) 时才重装。
     $InstallArgs = @(
         'pip', 'install', '--python', $PythonExe,
-        '--no-index', '--reinstall', '--find-links', $Stage
-    ) + @($Wheels.FullName)
+        '--no-index', '--find-links', $Stage,
+        '--reinstall-package', 'catfish-email'
+    )
+    # 探针失败时 Python 往 stderr 打 traceback; Windows PowerShell 5.1 在
+    # ErrorActionPreference=Stop 下会把 native 命令的 stderr 当成终止错误,
+    # 脚本当场退出 —— 恰好在最需要修复的时候。探针期间临时放宽。
+    $PreviousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    & $PythonExe -c "import win32api" *> $null
+    $Pywin32Probe = $LASTEXITCODE
+    $ErrorActionPreference = $PreviousPreference
+    if ($Pywin32Probe -ne 0) {
+        Write-Host "pywin32 导入失败, 一并修复" -ForegroundColor Yellow
+        $InstallArgs += @('--reinstall-package', 'pywin32')
+    }
+    $InstallArgs += @($Wheels.FullName)
     & $UvExe @InstallArgs
     if ($LASTEXITCODE -ne 0) {
         throw "uv 安装 catfish-email 失败: $LASTEXITCODE"

@@ -85,19 +85,30 @@ pub fn hermes_agent_installed() -> bool {
     core_health_problems(&BootstrapPaths::new(PathBuf::from(home)), true).is_empty()
 }
 
-/// 后台服务的启动条件。Windows 还必须确认附加邮件组件已升级，不能只看
-/// Hermes 核心完成标记，否则旧 catfish-email 会被继续当成可用。
+/// 本地核心服务 (Hermes / Tool Bridge / Local Search) 的启动条件: 只看 Hermes 核心。
+///
+/// 9/24 之前 Windows 上这里还要求邮件组件就绪。现场实测: 邮件组件重装时
+/// pywin32 的 DLL 被占用, 装到一半失败, 邮件探针从此不过 —— Hermes 跟着永远
+/// 不启动, 聊天整个不可用。一个附加组件坏了不该拖垮核心; 邮件扫描器单独等
+/// [`email_components_ready`]。
 pub fn hermes_runtime_ready() -> bool {
     let Ok(home) = crate::util::paths::home_env() else {
         return false;
     };
-    let paths = BootstrapPaths::new(PathBuf::from(home));
-    if !core_health_problems(&paths, true).is_empty() {
-        return false;
-    }
+    core_health_problems(&BootstrapPaths::new(PathBuf::from(home)), true).is_empty()
+}
+
+/// 邮件扫描器的启动条件。Windows 上要确认 catfish-email 是带 `discover` 的新版
+/// 且 pywin32 能导入, 否则扫描器会拿旧入口跑 (原来放在 hermes_runtime_ready 里的判据)。
+pub fn email_components_ready() -> bool {
     #[cfg(target_os = "windows")]
     {
-        return super::hermes_install_windows::optional_components_ready(&paths);
+        let Ok(home) = crate::util::paths::home_env() else {
+            return false;
+        };
+        return super::hermes_install_windows::optional_components_ready(&BootstrapPaths::new(
+            PathBuf::from(home),
+        ));
     }
     #[cfg(not(target_os = "windows"))]
     true
@@ -441,14 +452,22 @@ fn ensure_hermes_installed_with_reporter(
     let result = bootstrap_locked(resource_dir, &paths, reporter);
     if let Err(error) = &result {
         record_failure(&paths, error);
+        let detail = format!("{error:#}");
+        // 9/24: 附加组件 (邮件等) 失败时核心照常启动 (见 hermes_runtime_ready),
+        // 提示不能再说成「运行环境准备失败」—— 员工会以为整个小鲶都不能用。
+        let summary = if detail.contains("附加组件准备失败") {
+            "邮件等附加组件准备失败，聊天等核心功能不受影响，可稍后重试"
+        } else {
+            "Hermes 运行环境准备失败，可稍后重试"
+        };
         report(
             reporter,
             "complete",
             BootstrapProgressState::Failed,
             0,
             0,
-            "Hermes 运行环境准备失败，可稍后重试",
-            Some(format!("{error:#}")),
+            summary,
+            Some(detail),
         );
     } else {
         // Both platform paths must clear an old failure after a successful repair.
