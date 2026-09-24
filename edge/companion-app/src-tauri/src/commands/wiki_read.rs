@@ -84,7 +84,17 @@ pub struct WikiFileInfo {
     pub ontology_status: Option<String>,
     /// 9/17: 蒸馏跟已有内容打架的字段 (frontmatter `conflicts:`), 工作台列成冲突任务
     pub conflicts: Vec<super::wiki_conflicts::WikiConflict>,
+    /// 9/24: frontmatter `updated` (YYYY-MM-DD)。mtime 不能用 —— 批量整理/格式迁移
+    /// 会碰到每个文件, mtime 反映不了内容上次被核对是哪天。
+    #[serde(default)]
+    pub updated: Option<String>,
+    /// 9/24: 正文里有没有"进度/状态"类段落 (当前状态、办理中、等出证…)。
+    /// 工作台据此把"带进度、但一个多月没更新"的项目/证书列成"核对进度"任务 ——
+    /// 9/24 体检时公司条目、ISO 50001 等的进度都停在几周前, 内容已经不对了。
+    #[serde(default)]
+    pub tracks_status: bool,
 }
+
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WikiFileFull {
@@ -365,6 +375,8 @@ fn build_file_info_inner(
         authored_by: parse_frontmatter_field(&fm, "authored_by"),
         ontology_status: parse_frontmatter_field(&fm, "ontology_status"),
         conflicts: super::wiki_conflicts::parse_conflicts(&fm),
+        updated: parse_frontmatter_field(&fm, "updated"),
+        tracks_status: super::wiki_status::body_tracks_status(&body),
     })
 }
 

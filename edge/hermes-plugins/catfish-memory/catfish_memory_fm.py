@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import re
+import time
 from typing import Dict, List, Optional, Tuple
 
 # 本模块有两种加载方式, import 形式必须两种都活:
@@ -203,8 +204,11 @@ def _merge_wiki_file(old_text: str, new_text: str) -> str:
         created: 保留旧 (entity `真`身份历史不丢`**)
         updated: 用新 (今天日期)
         title / *_type: 用新 (允许 reclassify)
-      body: 用新, 旧 body 转 HTML 注释 `<!-- legacy body (created=<旧updated>) -->`
-            放文末, 便于人工对照. 多次 update `只保留最近一份 legacy`.
+      body (9/24 改): 旧正文保留, 新内容里旧正文没有的部分追加为「## 补充 (日期)」。
+            以前是"新正文替换旧正文, 旧正文转 `<!-- legacy body -->` 注释放文末,
+            只留最近一份" —— 两个问题: ① 旧正文里新一轮没提到的事实被挪进注释,
+            再合并一次就彻底丢了; ② 注释块在文件里越堆越多 (9/24 清出 11 处, 最多一个
+            文件 4 段), 员工看到的是同一件事的几个过时版本。
     """
     old_fm, old_body = _split_frontmatter_body(old_text)
     new_fm, new_body = _split_frontmatter_body(new_text)
@@ -265,26 +269,42 @@ def _merge_wiki_file(old_text: str, new_text: str) -> str:
             flags=re.MULTILINE,
         )
 
-    # 3. body: 新 + 旧 legacy 注释
-    old_updated = _parse_frontmatter_scalar(old_fm, "updated") or "unknown"
-    stripped_old = old_body.strip()
-    if stripped_old:
-        # 防嵌套: 如果旧 body 已含 legacy 注释, 抽 inner 替, 不层叠
-        inner_old = re.sub(
-            r"<!--\s*legacy body \(.*?\)\s*-->\n?(.*?)\n?<!--\s*/legacy\s*-->",
-            "",
-            stripped_old,
-            flags=re.DOTALL,
-        ).strip()
-        if inner_old:
-            legacy_block = (
-                f"\n\n<!-- legacy body (last updated={old_updated}) -->\n"
-                f"{inner_old}\n"
-                f"<!-- /legacy -->\n"
-            )
-            new_body = new_body.rstrip() + legacy_block
+    # 3. body: 旧正文为底, 新增部分追加 (见 docstring)
+    body = _merge_bodies(old_body, new_body, _parse_frontmatter_scalar(new_fm, "updated"))
+    return f"---\n{merged_fm}\n---\n{body}"
 
-    return f"---\n{merged_fm}\n---\n{new_body}"
+
+_LEGACY_BLOCK = re.compile(r"\n*<!--\s*legacy body[^>]*-->.*?(?:<!--\s*/legacy\s*-->|\Z)", re.DOTALL)
+_HISTORY_HEADING = re.compile(r"^##\s+(?:变更历史|变更日志|更新历史|Changelog|Change Log)\s*$", re.MULTILINE | re.IGNORECASE)
+
+
+def _body_key(text: str) -> str:
+    """比较用: 去掉标题行、Related 小节、空白和标点。"""
+    text = re.sub(r"^#\s+[^\n]*\n", "", text.strip())
+    text = re.sub(r"^##\s+Related\s*\n.*?(?=^##\s|\Z)", "", text, flags=re.MULTILINE | re.DOTALL)
+    return re.sub(r"[\s\W_]+", "", text)
+
+
+def _merge_bodies(old_body: str, new_body: str, today: str) -> str:
+    old = _LEGACY_BLOCK.sub("", old_body).rstrip()
+    new = new_body.strip()
+    if not old.strip():
+        return "\n" + new + "\n"
+    old_key, new_key = _body_key(old), _body_key(new)
+    if not new_key or new_key in old_key:
+        return old + "\n"                     # 新一轮没有新东西
+    if old_key and old_key in new_key:
+        return "\n" + new + "\n"             # 新正文已包含旧的全部内容
+    addition = re.sub(r"^#\s+[^\n]*\n+", "", new)                    # 去掉重复的 # 标题
+    addition = re.sub(r"^##\s+Related\s*\n.*?(?=^##\s|\Z)", "", addition,
+                      flags=re.MULTILINE | re.DOTALL).strip()           # Related 旧正文已有
+    section = f"## 补充 ({today or time.strftime('%Y-%m-%d')})\n\n{addition}\n"
+    m = _HISTORY_HEADING.search(old)
+    if m:                                          # 插在「变更历史」前, 别被折叠进历史里
+        return old[: m.start()].rstrip() + "\n\n" + section + "\n" + old[m.start():] + "\n"
+    return old + "\n\n" + section
+
+
 
 
 _FM_KEY_LINE = re.compile(r"^[a-z_]+:\s")

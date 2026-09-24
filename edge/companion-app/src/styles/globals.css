@@ -5341,3 +5341,12 @@ button {
   font-size: 11px;
   line-height: 16px;
 }
+.wiki-workbench__status-lines {
+  margin: 0 0 4px;
+  padding: 10px 14px 10px 28px;
+  border-radius: var(--radius-md);
+  background: var(--catfish-bg-cream);
+  color: var(--catfish-text);
+  font-size: 14px;
+  line-height: 1.7;
+}

@@ -3,6 +3,7 @@ import {
   ArrowsLeftRight,
   Books,
   CheckCircle,
+  ClockCounterClockwise,
   Copy,
   LinkSimple,
   ListChecks,
@@ -35,6 +36,7 @@ const TASK_META: Record<
   ambiguous: { label: "指向不明", icon: LinkSimple },
   pending: { label: "待确认", icon: CheckCircle },
   broken: { label: "关系要改", icon: WarningCircle },
+  stale: { label: "进度待核对", icon: ClockCounterClockwise },
   duplicate: { label: "可能重复", icon: Copy },
 };
 
@@ -67,7 +69,7 @@ export default function WikiOrganizer({
   const tasks = useMemo(() => buildWikiRelationshipTasks(files), [files]);
   const hasLegacyRelations = useMemo(() => hasLegacyWikiRelations(files), [files]);
   const counts = useMemo(() => {
-    const out: Record<WikiRelationshipTaskKind, number> = { conflict: 0, ambiguous: 0, pending: 0, broken: 0, duplicate: 0 };
+    const out: Record<WikiRelationshipTaskKind, number> = { conflict: 0, ambiguous: 0, pending: 0, broken: 0, stale: 0, duplicate: 0 };
     for (const task of tasks) out[task.kind] += 1;
     return out;
   }, [tasks]);

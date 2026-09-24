@@ -154,3 +154,17 @@ def test_有字面量花括号的模板不许走format(name: str):
         f"(例: {{{literal[0][:40]}}}), 而这个文件里还有真的 .format 调用:\n  "
         + "\n  ".join(fmt_calls)
     )
+
+def test_analysis_prompt_does_not_force_concepts():
+    """9/24: 原提示词要求"至少 3 个 concepts", 逼 LLM 把一次群聊拔高成 5 条"规则"。"""
+    from catfish_memory_prompts import _ANALYSIS_PROMPT
+    assert "至少 3" not in _ANALYSIS_PROMPT
+    assert "不要凑" in _ANALYSIS_PROMPT
+    assert "单位-姓名" in _ANALYSIS_PROMPT          # 昵称 vs 真名 (杨❤宇 → 杨新宇)
+
+
+def test_generation_prompt_bans_speculation_and_padding():
+    from catfish_memory_prompts import _GENERATION_PROMPT_TEMPLATE
+    assert _GENERATION_PROMPT_TEMPLATE.count("禁推测句") == 2   # concept + entity 两处
+    assert "3-5 段" not in _GENERATION_PROMPT_TEMPLATE and "2-4 段" not in _GENERATION_PROMPT_TEMPLATE
+    assert "截至 YYYY-MM-DD" in _GENERATION_PROMPT_TEMPLATE

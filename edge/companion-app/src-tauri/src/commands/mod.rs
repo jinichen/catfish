@@ -118,6 +118,7 @@ pub(crate) mod wiki_graph; // 9/11: SQLite 关系镜像 + 一跳图检索扩展
 pub mod wiki_ontology;
 pub mod wiki_conflicts; // 9/17: frontmatter conflicts 解析 + 员工二选一 (semantica 第 2 条)
 pub mod wiki_read; // BL-CATFISH-WIKI-MODE P3.3.2 (6/4): wiki read API (list_files + read_file)
+pub(crate) mod wiki_status; // 9/24: 正文是否记着进度 (工作台「进度待核对」)
 pub mod wiki_search;
 pub mod wiki_save; // BL-CATFISH-WIKI-MODE P1.2.2 (6/4): chat 真 💾 button → wiki/queries/ 写盘
 pub mod wiki_frontmatter; // 受控词表归一化 + authored_by 标记 (8/15 从 wiki_write 切出)

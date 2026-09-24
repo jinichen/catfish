@@ -201,3 +201,20 @@ def test_no_frontmatter_file_still_deduped(tmp_path):
         tmp_path, "wiki/entities/xinxi-anquan-zhongxin.md", _fm("信息安全中心")
     )
     assert rel == "wiki/entities/信息安全中心.md", rel
+
+
+def test_merge_keeps_old_facts_and_appends_new_without_legacy_blocks(tmp_path):
+    """9/24: 合并不再把旧正文挪进 <!-- legacy body --> 注释 (会越堆越多、再合并一次就丢)。
+    旧正文保留, 新内容里旧正文没有的部分追加为「## 补充 (日期)」。"""
+    from catfish_memory_fm import _merge_wiki_file
+    old = "---\ntype: entity\ntitle: X\nupdated: 2026-09-01\n---\n\n# X\n\n旧事实 A。\n\n## 变更历史\n- 9/1 建\n"
+    new = "---\ntype: entity\ntitle: X\nupdated: 2026-09-24\n---\n\n# X\n\n新事实 B。\n"
+    out = _merge_wiki_file(old, new)
+    assert "legacy" not in out
+    assert "旧事实 A" in out and "新事实 B" in out
+    assert out.index("## 补充 (2026-09-24)") < out.index("## 变更历史"), "补充要在变更历史之前"
+    # 同样内容再合并一次: 不重复追加
+    assert _merge_wiki_file(out, new).count("新事实 B") == 1
+    # 旧文件里残留的 legacy 块在合并时被清掉
+    dirty = old.replace("## 变更历史", "<!-- legacy body (last updated=x) -->\n老版本\n<!-- /legacy -->\n\n## 变更历史")
+    assert "老版本" not in _merge_wiki_file(dirty, new)

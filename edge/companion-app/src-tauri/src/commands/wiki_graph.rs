@@ -628,6 +628,8 @@ mod tests {
             authored_by: None,
             ontology_status: None,
             conflicts: Vec::new(),
+            updated: None,
+            tracks_status: false,
         };
         GraphFile {
             aliases_json: serde_json::to_string(&info.aliases).unwrap(),

@@ -1,15 +1,17 @@
 import { useMemo, useState } from "react";
 import {
   ArrowRight,
+  CheckCircle,
   ArrowsLeftRight,
+  ClockCounterClockwise,
   FileText,
   LinkSimple,
   SpinnerGap,
   WarningCircle,
 } from "@phosphor-icons/react";
-import { wikiResolveConflict } from "../../lib/tauri_wiki";
+import { wikiResolveConflict, wikiUpdateFile } from "../../lib/tauri_wiki";
 import { useWikiStore } from "../../store/wiki";
-import { buildWikiRelationshipTasks, conflictFieldLabel } from "./wikiRelationshipTasks";
+import { buildWikiRelationshipTasks, conflictFieldLabel, markReviewedContent, statusLines } from "./wikiRelationshipTasks";
 import WikiActionPanel from "./WikiActionPanel";
 import WikiAmbiguousPanel from "./WikiAmbiguousPanel";
 import WikiRelationsEditor from "./WikiRelationsEditor";
@@ -27,6 +29,7 @@ const HEADER_HINT: Record<string, string> = {
   conflict: "小鲶后来读到的跟现在记的不一样，选一个。",
   pending: "小鲶新建的条目。看一眼关系对不对，对就确认；关系可以没有。",
   broken: "有一条关系要改：改类型或删掉。",
+  stale: "这条记着进度，但很久没更新了。核对正文里的进度还对不对。",
   duplicate: "名称相近的条目需要人工核对，避免错误合并。",
 };
 
@@ -107,6 +110,21 @@ export default function WikiRelationshipWorkbench({
     }
   };
 
+  // 9/24: 进度核对 —— "还对" 只把 updated 改成今天, 正文不动
+  const markReviewed = async () => {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await wikiUpdateFile(info.rel_path, markReviewedContent(selectedFile.content));
+      await loadFiles();
+      await selectFile(info.rel_path);
+    } catch (error) {
+      setSaveError(String(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="wiki-workbench">
       <header className="wiki-workbench__header">
@@ -149,6 +167,31 @@ export default function WikiRelationshipWorkbench({
                 </button>
               </div>
             ))}
+          </div>
+        </section>
+      )}
+
+      {selectedTask?.kind === "stale" && (
+        <section className="wiki-workbench__section">
+          <div className="wiki-workbench__section-title">
+            <ClockCounterClockwise size={22} aria-hidden="true" />
+            <div>
+              <h3>核对进度</h3>
+              <p>
+                上次更新是 {info.updated}（{selectedTask.staleDays} 天前）。正文里记的进度如下;
+                不对就到「全部知识」里打开这条编辑, 还对就点确认。
+              </p>
+            </div>
+          </div>
+          <ul className="wiki-workbench__status-lines">
+            {statusLines(selectedFile.body).map((line) => <li key={line}>{line}</li>)}
+          </ul>
+          <div className="wiki-relation-editor__actions">
+            {onLater && <button type="button" className="wiki-workbench__secondary" onClick={onLater}>稍后处理</button>}
+            <button type="button" className="wiki-workbench__primary" disabled={saving} onClick={() => void markReviewed()}>
+              {saving ? <SpinnerGap className="wiki-spin" size={20} /> : <CheckCircle size={20} />}
+              进度还对，标记已核对
+            </button>
           </div>
         </section>
       )}

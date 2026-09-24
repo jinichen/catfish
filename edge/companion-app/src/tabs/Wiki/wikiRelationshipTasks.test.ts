@@ -9,6 +9,8 @@ import {
   buildWikiRelationshipTasks,
   cleanPendingFiles,
   conflictFieldLabel,
+  markReviewedContent,
+  statusLines,
   hasLegacyWikiRelations,
   relationTypeOptions,
   renameRelationTarget,
@@ -251,5 +253,33 @@ describe("冲突任务 (9/17, semantica 第 2 条)", () => {
     expect(conflictFieldLabel("entity_type")).toBe("类型");
     expect(conflictFieldLabel("concept_type")).toBe("类型");
     expect(conflictFieldLabel("rel:中电福富")).toBe("与「中电福富」的关系");
+  });
+});
+
+describe("进度待核对 (9/24)", () => {
+  const today = new Date(2026, 8, 24);
+  it("带进度的项目/证书超过 30 天没更新才列出, 部门、没进度的不列", () => {
+    const tasks = buildWikiRelationshipTasks([
+      file({ rel_path: "wiki/entities/a.md", title: "ISO 20000", subtype: "cert", tracks_status: true, updated: "2026-08-01" }),
+      file({ rel_path: "wiki/entities/b.md", title: "新项目", subtype: "project", tracks_status: true, updated: "2026-09-20" }),
+      file({ rel_path: "wiki/entities/c.md", title: "市场部", subtype: "department", tracks_status: true, updated: "2026-01-01" }),
+      file({ rel_path: "wiki/entities/d.md", title: "旧证书", subtype: "cert", tracks_status: false, updated: "2026-01-01" }),
+    ], today);
+    const stale = tasks.filter((t) => t.kind === "stale");
+    expect(stale.map((t) => t.file.title)).toEqual(["ISO 20000"]);
+    expect(stale[0].staleDays).toBe(54);
+  });
+
+  it("标记已核对只改 updated, 正文不动", () => {
+    const src = "---\ntitle: X\nupdated: 2026-08-01\n---\n\n## 当前状态\n换证推进中\n";
+    const out = markReviewedContent(src, today);
+    expect(out).toContain("updated: 2026-09-24");
+    expect(out.endsWith("## 当前状态\n换证推进中\n")).toBe(true);
+  });
+
+  it("statusLines 摘出进度行, 标题行带上下一行", () => {
+    expect(statusLines("# X\n\n## 当前状态（截至 2026-09-22）\n现场审核进行中\n\n证书编号 A")).toEqual([
+      "当前状态（截至 2026-09-22）：现场审核进行中",
+    ]);
   });
 });

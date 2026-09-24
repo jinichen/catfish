@@ -8,7 +8,7 @@ import { resolveWikiRef } from "../../lib/wikiResolve";
  *     报成 24 条"关系异常", 其实只要选一次它指谁
  *   · 待确认条目自己的关系问题在工作台里逐条标出, 不再另开 broken 任务重复列
  */
-export type WikiRelationshipTaskKind = "conflict" | "pending" | "ambiguous" | "broken" | "duplicate";
+export type WikiRelationshipTaskKind = "conflict" | "pending" | "ambiguous" | "broken" | "stale" | "duplicate";
 
 export interface WikiRelationshipTask {
   id: string;
@@ -23,6 +23,54 @@ export interface WikiRelationshipTask {
   /** kind === "ambiguous" 时: 哪些条目写了这个名字 / 它可能指的条目 */
   refs?: WikiFileInfo[];
   candidates?: WikiFileInfo[];
+  /** kind === "stale" 时: 距上次更新多少天 */
+  staleDays?: number;
+}
+
+/** 9/24: 带进度的项目/证书, 超过这么多天没更新就列出来核对 */
+export const STALE_DAYS = 30;
+const STALE_SUBTYPES = new Set(["project", "cert"]);
+
+function daysSince(date: string | null | undefined, today: Date): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec((date ?? "").trim());
+  if (!m) return null;
+  const then = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const now = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  return Math.floor((now - then) / 86400000);
+}
+
+/** 进度可能过时的条目: 正文带进度段落 + 项目/证书 + 超过 STALE_DAYS 天没更新 */
+export function staleFiles(files: WikiFileInfo[], today: Date = new Date()): Array<[WikiFileInfo, number]> {
+  return files.flatMap((file): Array<[WikiFileInfo, number]> => {
+    if (!file.tracks_status || !STALE_SUBTYPES.has((file.subtype ?? "").toLowerCase())) return [];
+    if ((file.ontology_status ?? "active") === "pending") return [];
+    const days = daysSince(file.updated, today);
+    return days !== null && days > STALE_DAYS ? [[file, days]] : [];
+  });
+}
+
+/** 与 Rust wiki_read.rs STATUS_MARKERS 同一份词 */
+export const STATUS_MARKERS = ["当前状态", "状态（", "状态(", "进度（", "进度(", "**进度", "办理中", "等出证", "待出证", "等审核", "待审核"];
+
+/** 正文里带进度的那几行 (核对时直接给员工看, 不用翻全文) */
+export function statusLines(body: string, limit = 6): string[] {
+  const lines = body.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const out: string[] = [];
+  lines.forEach((line, i) => {
+    if (out.length >= limit || !STATUS_MARKERS.some((marker) => line.includes(marker))) return;
+    // 标题行 ("## 当前状态") 本身没内容, 带上下一行
+    out.push(/^#{1,6}\s/.test(line) && lines[i + 1] ? `${line.replace(/^#+\s*/, "")}：${lines[i + 1]}` : line);
+  });
+  return out.map((line) => line.replace(/\*\*/g, "").slice(0, 200));
+}
+
+/** "内容还对": 只把 frontmatter updated 改成今天, 正文不动 */
+export function markReviewedContent(content: string, today: Date = new Date()): string {
+  const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const m = /^(\uFEFF?[\t ]*---\r?\n)([\s\S]*?)(\r?\n---)/.exec(content);
+  if (!m) throw new Error("该条目缺少 frontmatter");
+  const fm = /^updated\s*:.*$/m.test(m[2]) ? m[2].replace(/^updated\s*:.*$/m, `updated: ${iso}`) : `${m[2]}\nupdated: ${iso}`;
+  return content.slice(0, m.index) + m[1] + fm + content.slice(m.index + m[1].length + m[2].length);
 }
 
 /** 一条 frontmatter 关系的问题; 正文引用和没问题的返回 null。 */
@@ -130,7 +178,7 @@ function duplicateGroups(files: WikiFileInfo[]): WikiFileInfo[][] {
   return groups;
 }
 
-export function buildWikiRelationshipTasks(files: WikiFileInfo[]): WikiRelationshipTask[] {
+export function buildWikiRelationshipTasks(files: WikiFileInfo[], today: Date = new Date()): WikiRelationshipTask[] {
   const isPending = (file: WikiFileInfo) => (file.ontology_status ?? "active") === "pending";
 
   const pending = files.filter(isPending).map((file): WikiRelationshipTask => {
@@ -210,7 +258,19 @@ export function buildWikiRelationshipTasks(files: WikiFileInfo[]): WikiRelations
     })),
   );
 
-  return [...conflicts, ...ambiguous, ...pending, ...broken, ...duplicates];
+  // 9/24: 进度可能过时 —— 公司条目、ISO 50001 等的进度曾停在几周前没人发现
+  const stale = staleFiles(files, today)
+    .sort((a, b) => b[1] - a[1])
+    .map(([file, days]): WikiRelationshipTask => ({
+      id: `stale:${file.rel_path}`,
+      kind: "stale",
+      title: `「${file.title}」的进度 ${days} 天没更新`,
+      detail: `上次更新 ${file.updated}；看一下正文里的进度还对不对`,
+      file,
+      staleDays: days,
+    }));
+
+  return [...conflicts, ...ambiguous, ...pending, ...broken, ...stale, ...duplicates];
 }
 
 /** 待确认里「没有要改的关系」的那些 —— 可以一次全部确认。 */
