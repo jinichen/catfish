@@ -34,6 +34,7 @@ import WikiCreateModal from "./WikiCreateModal";
 // Step / ocode 没有 export —— 它们各自只在所属文件内部用, 露出来只会让人以为
 // 可以到处引。
 import { ConceptGroup, EntityGroup, Group } from "./WikiTreeGroups";
+import { CONCEPT_TYPE_ORDER, ENTITY_TYPE_ORDER, groupByType } from "./wikiLabels";
 import { SearchResults } from "./WikiTreeSearchResults";
 import { EmptyOnboarding } from "./WikiTreeEmptyOnboarding";
 
@@ -247,69 +248,21 @@ export default function WikiTree() {
   const isFiltering =
     !!search.trim() || kindFilter !== "all" || query !== "none";
 
-  // P3.5.99 (6/24 鸿波 catch "62 实体看不过来, 200 真要爆"): 实体内部按
-  // related[0] (第一个关联的 concept) 自动二级分组. 数据天然形成 — 鲶鱼
-  // distill 时把 entity 的 body 写了 `[[XXX 类]]` wikilink (P3.5.42.13 后
-  // 端 merge 进 related). 7 个 concept hub 已经是天然类目.
+  // 9/24 (鸿波"左侧也应该优化"): 对象、主题都按类型分组。
   //
-  // 无 related 的 entity → "未分类" 组. 默认推到最后.
-  // count desc 排, 大类在前 (UX: 先看主流, 末尾扫边角).
-  const entityCategories = useMemo(() => {
-    const map = new Map<string, WikiFileInfo[]>();
-    for (const e of grouped.entity) {
-      const category = e.related[0]?.name?.trim() || "未分类"; // P3.5.132 #5
-      if (!map.has(category)) map.set(category, []);
-      map.get(category)!.push(e);
-    }
-    return Array.from(map.entries()).sort((a, b) => {
-      // 未分类推最后
-      if (a[0] === "未分类") return 1;
-      if (b[0] === "未分类") return -1;
-      // 其他按 count desc
-      return b[1].length - a[1].length;
-    });
-  }, [grouped.entity]);
-
-  // P3.5.182 (7/6 鸿波军规审判): 严格 REMOVE hardcode assumption
-  // "concept.related[0] = 上位体系" — 严格 P3.5.107 6/25 加此 assumption 严格
-  // = 硬编码 rule form (data 层 hardcode inference — 位置约定当 semantic).
-  //
-  // 严格军规: enum / example / rule / principle 严格全是硬编码 4 form.
-  // 严格 P3.5.176 删 enum, P3.5.180 删 example, P3.5.182 严格严格严格 rule.
-  //
-  // 严格 root cause 触发场景 (鸿波 7/6 严格 audit "为什么还是市场部"):
-  //   LLM 严格写 concepts/组织架构.md 严格无 frontmatter → wiki_read.rs
-  //   严格 merge_related_with_body 严格 body 第一 `[[市场部]]` 严格 merge 严格
-  //   related[0]="市场部" (是 entity) → 老逻辑 UI 严格误当上位 → 严格生假
-  //   "▼ 市场部" 父组. 严格严格 assumption 严格根本失效.
-  //
-  // 严格新逻辑 (AI-first, 0 hardcode 位置约定):
-  //   - concept.subtype === "system" → "🌟 顶级体系" 组 (LLM 自主填 semantic label,
-  //     严格不 enum, 严格 concept_type=system 严格 P3.5.176 保留约定)
-  //   - 其他 concept → 平铺"概念"组 (严格无上位/下属假设, 严格 body wikilink 保留
-  //     给 WikiGraph 走 graph 关联, 严格但 UI 树严格不假当"上位")
-  //
-  // 严格员工加"政企客户体系"顶级 concept 严格路径 (0 code 改, 语义驱动):
-  //   1. 员工 chat 说"存政企客户体系为顶级体系" → LLM 严格生 concept.subtype=system
-  //   2. 严格进 "🌟 顶级体系" 组 (severity subtype semantic 严格识别)
-  //   3. 层级 3+ 严格靠 WikiGraph 走 body [[wikilink]] 关联可视化, 严格不侵入 UI 树
-  const conceptCategories = useMemo(() => {
-    const map = new Map<string, WikiFileInfo[]>();
-    const TOP_KEY = "知识体系";
-    const OTHER_KEY = "其他主题";
-    for (const c of grouped.concept) {
-      const key = c.subtype === "system" ? TOP_KEY : OTHER_KEY;
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(c);
-    }
-    return Array.from(map.entries()).sort((a, b) => {
-      // 顶级体系 推最前 — 根节点先看
-      if (a[0] === TOP_KEY) return -1;
-      if (b[0] === TOP_KEY) return 1;
-      // 其他按 count desc
-      return b[1].length - a[1].length;
-    });
-  }, [grouped.concept]);
+  // 以前对象按 related[0] (第一条关系的名字) 分组, 主题只分"知识体系 / 其他主题"两堆。
+  // related[0] 只是写入时碰巧排第一的那条关系, 于是左侧冒出「资质对标分析流程 2」
+  // 「ISO 20000… 1」这类组, 一半是单条组; 部门、人员、证书又混在「中电福富…」一个大组里。
+  // 类型 (entity_type / concept_type) 是写入侧受控词表管着的字段, 用它分组稳定可预期。
+  // 组内按标题排序; 没填类型的放「未分类」排最后。
+  const entityCategories = useMemo(
+    () => groupByType(grouped.entity, ENTITY_TYPE_ORDER),
+    [grouped.entity],
+  );
+  const conceptCategories = useMemo(
+    () => groupByType(grouped.concept, CONCEPT_TYPE_ORDER),
+    [grouped.concept],
+  );
 
   // E4 (6/6 taste-skill 改造): 走 globals.css `.wiki-*` class.
   // 主要改: hardcoded `#0d9488` `#4a9eff` 非 brand 色统一到 brand 墨青;
@@ -486,8 +439,7 @@ export default function WikiTree() {
 
       {!(searchMode !== "title" && search.trim()) && (
         <>
-          {/* P3.5.99 (6/24 鸿波): 实体改 EntityGroup 走二级分组 (related[0]),
-              避免 62/200 全平铺. */}
+          {/* 9/24: 对象 / 主题都按类型二级分组 (见 entityCategories 注释) */}
           <EntityGroup
             total={grouped.entity.length}
             categories={entityCategories}
@@ -495,8 +447,6 @@ export default function WikiTree() {
             selectedPath={selectedPath}
             onSelect={selectFile}
           />
-          {/* P3.5.182 (7/6 鸿波军规审判): 概念严格删 related[0]=上位体系 hardcode assumption.
-              严格 只按 concept.subtype=system 二分 → "🌟 顶级体系" + "概念" 平铺. */}
           <ConceptGroup
             total={grouped.concept.length}
             categories={conceptCategories}
@@ -504,13 +454,11 @@ export default function WikiTree() {
             selectedPath={selectedPath}
             onSelect={selectFile}
           />
-          <Group label="记录" emoji="" color="var(--catfish-text-muted)" files={grouped.query} selectedPath={selectedPath} onSelect={selectFile} forceOpen={isFiltering} />
+          <Group label="记录" files={grouped.query} selectedPath={selectedPath} onSelect={selectFile} forceOpen={isFiltering} />
           {/* P3.3.18 Phase 4 (6/10): 已装部门 wiki — read-only, 跟个人 wiki 视觉分离 */}
           {sharedFiles.length > 0 && (
             <Group
               label="部门知识（只读）"
-              emoji=""
-              color="var(--catfish-cyan)"
               files={sharedFiles.map((s) => {
                 const kindNarrow: "entity" | "concept" | "query" =
                   s.kind === "concept" || s.kind === "query" ? s.kind : "entity";

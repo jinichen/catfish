@@ -20,7 +20,37 @@ const SUBTYPE_LABELS: Record<string, string> = {
   standard: "标准",
   product: "产品",
   vendor: "供应商",
+  doc: "文档",
+  data: "数据",
+  notification: "通知",
+  scope: "口径",
+  category: "分类",
+  framework: "框架",
+  method: "方法",
 };
+
+/** 左侧目录的类型分组顺序 (9/24)。不在表里的类型排在这些之后, 「未分类」最后。 */
+export const ENTITY_TYPE_ORDER = ["org", "department", "person", "project", "cert", "standard", "doc", "data", "notification", "system"];
+export const CONCEPT_TYPE_ORDER = ["system", "process", "rule", "principle", "standard", "scope", "method", "category", "framework"];
+
+export function groupByType<T extends { subtype: string | null; kind: string; title: string }>(
+  files: T[],
+  order: string[],
+): Array<[string, T[]]> {
+  const buckets = new Map<string, T[]>();
+  for (const f of files) {
+    const key = f.subtype?.trim().toLowerCase() || "";
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key)!.push(f);
+  }
+  const rank = (key: string) => (key === "" ? 1e6 : order.indexOf(key) === -1 ? 1e5 : order.indexOf(key));
+  return [...buckets.entries()]
+    .sort(([a, la], [b, lb]) => rank(a) - rank(b) || lb.length - la.length || a.localeCompare(b))
+    .map(([key, list]): [string, T[]] => [
+      key === "" ? "未分类" : wikiSubtypeLabel(key, list[0].kind),
+      [...list].sort((x, y) => x.title.localeCompare(y.title, "zh-CN")),
+    ]);
+}
 
 export function wikiKindLabel(kind: string): string {
   return KIND_LABELS[kind] ?? "知识";

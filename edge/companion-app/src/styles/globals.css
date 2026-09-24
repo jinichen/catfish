@@ -1958,8 +1958,6 @@ button {
 .wiki-organizer__browse .wiki-tree__title h3 { font-size: 17px; }
 .wiki-organizer__browse .wiki-search-input { min-height: 44px; font-size: 14px; }
 .wiki-organizer__browse .wiki-segmented__btn { min-height: 36px; font-size: 13px; }
-.wiki-organizer__browse .wiki-group__header { min-height: 36px; font-size: 14px; padding: 6px 8px; }
-.wiki-organizer__browse .wiki-group button { min-height: 40px; font-size: 14px !important; padding: 8px !important; }
 .wiki-organizer__search {
   min-height: 44px;
   display: flex;
@@ -5256,3 +5254,90 @@ button {
   text-underline-offset: 3px;
 }
 .wiki-doc .wiki-preview__wikilink:hover { background: none; text-decoration-color: currentColor; }
+
+/* ─────────────────────────────────────────────────────────────────────
+ * 知识体系左侧目录 .wiki-tree-* (9/24 鸿波"左侧也应该优化")
+ *
+ * 以前三层 (对象/主题 → 分组 → 条目) 全是内联 style, 字号 11/13/14 各写各的,
+ * 外层 .wiki-organizer__browse 又用 !important 把条目撑成 40px + 8px padding;
+ * 条目后面挂"✎ 证书"小字, 长标题折行时小字掉到第二行。统一成:
+ *   一级 13px 600 muted · 二级 13px 500 · 条目 14px 单行省略, 行高一致 32px,
+ *   缩进靠左侧细线表达层级。选中态只换底色和字色, 不加粗 (避免宽度跳动)。
+ * ─────────────────────────────────────────────────────────────────────*/
+.wiki-tree-group { margin-top: 12px; }
+.wiki-tree-group__header,
+.wiki-tree-subgroup__header {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-sans);
+  user-select: none;
+  transition: background-color 150ms ease;
+}
+.wiki-tree-group__header { font-size: 13px; font-weight: 600; color: var(--catfish-text-muted); letter-spacing: 0.02em; }
+.wiki-tree-subgroup__header { font-size: 13px; font-weight: 500; color: var(--catfish-text); }
+.wiki-tree-group__header:hover,
+.wiki-tree-subgroup__header:hover { background: var(--catfish-bg-cream); }
+.wiki-tree-group__header:focus-visible,
+.wiki-tree-subgroup__header:focus-visible,
+.wiki-tree-item:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.wiki-tree-group__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wiki-tree-group__count {
+  flex: 0 0 auto;
+  color: var(--catfish-text-muted);
+  font-size: 12px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+.wiki-tree__caret {
+  flex: 0 0 12px;
+  font-size: 8px;
+  color: var(--catfish-text-muted);
+  transition: transform 150ms ease;
+}
+.wiki-tree__caret[data-open="true"] { transform: rotate(90deg); }
+.wiki-tree-group__body { margin-left: 13px; padding-left: 6px; border-left: 1px solid var(--catfish-border); }
+.wiki-tree-subgroup + .wiki-tree-subgroup { margin-top: 2px; }
+.wiki-tree-subgroup > .wiki-tree-items { margin-left: 13px; padding-left: 6px; border-left: 1px solid var(--catfish-border); }
+.wiki-tree-group > .wiki-tree-items { margin-left: 13px; padding-left: 6px; border-left: 1px solid var(--catfish-border); }
+.wiki-tree-items { margin: 0; padding: 0; list-style: none; }
+.wiki-tree-item {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--catfish-text);
+  cursor: pointer;
+  text-align: left;
+  font: 400 14px/1.3 var(--font-sans);
+  transition: background-color 150ms ease, color 150ms ease;
+}
+.wiki-tree-item:hover { background: var(--catfish-bg-cream); }
+.wiki-tree-item[data-active="true"] {
+  background: var(--catfish-bg-cream);
+  color: var(--catfish-cyan);
+  box-shadow: inset 2px 0 0 var(--catfish-cyan);
+}
+.wiki-tree-item__title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wiki-tree-item__flag {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--catfish-orange) 12%, transparent);
+  color: var(--catfish-orange);
+  font-size: 11px;
+  line-height: 16px;
+}
