@@ -4,6 +4,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# KEEP THIS FILE ASCII-ONLY. Windows PowerShell 5.1 reads a .ps1 without BOM in the
+# system ANSI code page (GBK on Chinese Windows); UTF-8 Chinese text can then eat a
+# closing quote and the whole script fails to parse (1.0.14). Guarded by a cargo test.
+
+# Write our own output as UTF-8 so the bootstrap log (UTF-8 from Companion and uv)
+# is not mixed with GBK. May fail without a console; that only affects the log.
+try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch { }
+
 $HermesHome = if ($env:HERMES_HOME) {
     $env:HERMES_HOME
 } else {
@@ -18,7 +26,7 @@ $SkillDst = Join-Path $SkillsDir 'catfish-email'
 
 foreach ($path in @($DistributionPath, $PythonExe, $UvExe)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        throw "邮件组件安装所需文件不存在: $path"
+        throw "catfish-email install input missing: $path"
     }
 }
 
@@ -26,59 +34,58 @@ try {
     New-Item -ItemType Directory -Force -Path $Stage | Out-Null
     tar.exe -xzf $DistributionPath -C $Stage
     if ($LASTEXITCODE -ne 0) {
-        throw "解压 catfish-email 分发包失败: $LASTEXITCODE"
+        throw "extract catfish-email distribution failed: $LASTEXITCODE"
     }
 
     $Wheels = @(Get-ChildItem -LiteralPath $Stage -Filter '*.whl' -File)
     $EmailWheel = @($Wheels | Where-Object { $_.Name -like 'catfish_email-*.whl' })
     if ($EmailWheel.Count -ne 1) {
-        throw "邮件分发包必须正好包含一个 catfish-email wheel，实际 $($EmailWheel.Count)"
+        throw "distribution must contain exactly one catfish-email wheel, found $($EmailWheel.Count)"
     }
 
-    # Windows 包可同时携带 pywin32；--no-index 确保现场不会偷偷访问公网。
-    # 9/24: 以前是 --reinstall (所有 wheel 都强制重装)。pywin32 同版本 312 也会被
-    # 卸了重装, 而 Hermes / 邮件扫描器正在跑时 Python 已经加载了
-    # pywin32_system32\pythoncom311.dll —— Windows 不让删已加载的 DLL:
-    #   failed to remove file ...pythoncom311.dll: 拒绝访问 (os error 5)
-    # 装到一半失败, pywin32 被拆坏 (下次报 missing RECORD), 连带 Hermes 都起不来。
-    # 现在只强制重装 catfish-email 本身; pywin32 只在它真的坏了 (导入失败) 时才重装。
+    # The Windows package may also carry pywin32; --no-index keeps uv off the network.
+    # 9/24: this used to be --reinstall (force every wheel). Reinstalling the same
+    # pywin32 312 means deleting pywin32_system32\pythoncom311.dll / pywintypes311.dll,
+    # which Windows refuses while any running Python has them loaded (os error 5).
+    # The install then stops half way and leaves pywin32 broken (missing RECORD).
+    # Now only catfish-email is force-reinstalled; pywin32 only when it fails to import.
     $InstallArgs = @(
         'pip', 'install', '--python', $PythonExe,
         '--no-index', '--find-links', $Stage,
         '--reinstall-package', 'catfish-email'
     )
-    # 探针失败时 Python 往 stderr 打 traceback; Windows PowerShell 5.1 在
-    # ErrorActionPreference=Stop 下会把 native 命令的 stderr 当成终止错误,
-    # 脚本当场退出 —— 恰好在最需要修复的时候。探针期间临时放宽。
+    # When the probe fails Python prints a traceback to stderr. Windows PowerShell 5.1
+    # with ErrorActionPreference=Stop turns native stderr into a terminating error and
+    # the script would exit exactly when a repair is needed, so relax it for the probe.
     $PreviousPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     & $PythonExe -c "import win32api" *> $null
     $Pywin32Probe = $LASTEXITCODE
     $ErrorActionPreference = $PreviousPreference
     if ($Pywin32Probe -ne 0) {
-        Write-Host "pywin32 导入失败, 一并修复" -ForegroundColor Yellow
+        Write-Host "pywin32 import failed; reinstalling it too" -ForegroundColor Yellow
         $InstallArgs += @('--reinstall-package', 'pywin32')
     }
     $InstallArgs += @($Wheels.FullName)
     & $UvExe @InstallArgs
     if ($LASTEXITCODE -ne 0) {
-        throw "uv 安装 catfish-email 失败: $LASTEXITCODE"
+        throw "uv install catfish-email failed: $LASTEXITCODE"
     }
 
     $EmailExe = Join-Path $InstallDir 'venv\Scripts\catfish-email.exe'
     if (-not (Test-Path -LiteralPath $EmailExe -PathType Leaf)) {
-        throw "邮件 CLI 安装后不存在: $EmailExe"
+        throw "catfish-email CLI missing after install: $EmailExe"
     }
     # An old CLI also passes --help. Validate discovery without touching mail/COM.
     & $EmailExe discover --help
     if ($LASTEXITCODE -ne 0) {
-        throw "邮件 CLI 自检失败: $EmailExe"
+        throw "catfish-email CLI self-check failed: $EmailExe"
     }
 
     $SkillSrc = Join-Path $Stage 'hermes-skill\catfish-email'
     $SkillFile = Join-Path $SkillSrc 'SKILL.md'
     if (-not (Test-Path -LiteralPath $SkillFile -PathType Leaf)) {
-        throw "邮件分发包缺少 Hermes skill: $SkillFile"
+        throw "distribution is missing the Hermes skill: $SkillFile"
     }
     New-Item -ItemType Directory -Force -Path $SkillsDir | Out-Null
     if (Test-Path -LiteralPath $SkillDst) {

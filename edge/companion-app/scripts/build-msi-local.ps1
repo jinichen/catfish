@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     本地 Windows 一键打 catfish Companion msi (Step 2-11 全自动跑).
 
