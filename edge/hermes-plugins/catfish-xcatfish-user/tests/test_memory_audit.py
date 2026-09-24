@@ -346,3 +346,15 @@ def test_todo_route_never_writes_employee_journal(router, isolated_homes):
     assert result["success"] is False
     assert result["routed_to"] == "catfish_create_task"
     assert not (isolated_homes["catfish"] / "employee_journal.md").exists()
+
+
+def test_knowledge_kind_is_routed_to_wiki_not_memory(router, isolated_homes):
+    """9/24: 业务事实 (kind=knowledge) 不进 MEMORY.md, 提示改调知识库工具, 且照常留审计。"""
+    result = json.loads(router.handle_memory_tool(
+        {"action": "add", "kind": "knowledge", "content": "CMMI-5 编号 83824, 有效至 2029-08-10"},
+    ))
+    assert result["success"] is False and result["routed_to"] == "catfish_wiki"
+    assert "catfish_wiki_search" in result["error"]
+    assert "knowledge" in router.CATFISH_MEMORY_SCHEMA["properties"]["kind"]["enum"]
+    memory_md = router._hermes_memory_dir() / "MEMORY.md"
+    assert not memory_md.exists() or "83824" not in memory_md.read_text(encoding="utf-8")

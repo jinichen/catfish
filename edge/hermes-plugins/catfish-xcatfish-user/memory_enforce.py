@@ -156,12 +156,16 @@ def get_verifier_model() -> Optional[str]:
 
 _CLASSIFY_SYSTEM_PROMPT = (
     "你是 catfish memory 路由审核员. 下面是 LLM 想写到 hermes 持久化记忆的一条 content. "
-    "用 catfish 5 kind 决策树判定它该写到哪.\n\n"
+    "用 catfish 决策树判定它该写到哪.\n\n"
+    "MEMORY.md 每轮对话都会整篇带上, 只有 4000 字, 只放**做事的规矩**; "
+    "关于某个人/公司/证书/项目的**事实**放知识库, 用到时再查.\n\n"
     "## 决策树\n\n"
     "| kind | 路由 | 该存什么 |\n"
     "|---|---|---|\n"
-    "| `memory` | ~/.hermes/memories/MEMORY.md | **项目/技术常量** — 一年后还成立 (例: ISO 27001 流程, "
-    "API 字段约定, 客户机房 IP, 资质评估流程) |\n"
+    "| `memory` | ~/.hermes/memories/MEMORY.md | **工作口径 / 规则 / 约定** — 以后做这类事都该怎么做 "
+    "(例: 周报下周计划列写下个节点, 起草邮件前先确认收件人, 附件 HEIC 先转 jpg, 资料以一手来源为准) |\n"
+    "| `wiki` | 个人知识库 (知识体系) | **业务知识** — 某个人/公司/证书/项目/合同的事实 "
+    "(例: 证书编号与有效期, 人员与邮箱对照, 某项目当前进展, 某资质缺几人, 某公告条款解读) |\n"
     "| `user` | ~/.hermes/memories/USER.md | **员工本人** — 身份/偏好/习惯/昵称/关系 (例: 喜欢直接输出, "
     "本名鸿波, 不喜欢确认) |\n"
     "| `journal` | ~/.catfish/employee_journal.md | **单次事件 / 已发生 / 含具体日期的状态变更** "
@@ -171,12 +175,14 @@ _CLASSIFY_SYSTEM_PROMPT = (
     "| `skill` | ~/.hermes/skills/<name>/SKILL.md | **多步流程 / 操作指引** (例: 如何申报资质, "
     "如何跑测试) |\n\n"
     "## 判定原则\n"
-    "- memory: 跨 session 稳定 + 没 deadline + 不是 skill workflow\n"
+    "- memory: 跨 session 稳定 + 没 deadline + 不是 skill workflow + **说的是怎么做, 不是某个东西是什么**\n"
+    "- 含证书/合同编号、有效期、人名对照、项目状态、金额、公司概况 → wiki (哪怕长期有效)\n"
+    "- 一条里既有规矩又有事实 → 按主要内容判; 规矩为主判 memory\n"
     "- 含具体日期 (X 月 X 日 / 飞抵 / 已完成) → 大概率 journal\n"
     "- 含 deadline (之前/之后/截止) → todo\n"
     "- 拿不准 → 80% 概率 journal, 不是 memory\n\n"
     "## 输出格式 (严格 JSON, 不要 markdown 包裹)\n"
-    "{\"route\": \"memory\"|\"user\"|\"journal\"|\"todo\"|\"skill\", "
+    "{\"route\": \"memory\"|\"user\"|\"wiki\"|\"journal\"|\"todo\"|\"skill\", "
     "\"reason\": \"< 30 字短解释\", \"confidence\": 0.0-1.0}"
 )
 
@@ -313,8 +319,8 @@ def _classify_memory_route_diag(content: str, model: str) -> tuple[Optional[dict
             except (ValueError, json.JSONDecodeError) as e:
                 return None, f"LLM 返非 JSON (response_format 没生效?): {raw[:150]}"
             route = parsed.get("route", "").strip().lower()
-            if route not in ("memory", "user", "journal", "todo", "skill"):
-                return None, f"route 字段无效: {parsed.get('route')!r} (该是 memory/user/journal/todo/skill)"
+            if route not in ("memory", "user", "wiki", "journal", "todo", "skill"):
+                return None, f"route 字段无效: {parsed.get('route')!r} (该是 memory/user/wiki/journal/todo/skill)"
             return {
                 "route": route,
                 "reason": str(parsed.get("reason", ""))[:200],
@@ -478,6 +484,11 @@ def memory_enforce_hook(tool_name: str = "", args: Optional[dict] = None,
             "confidence": confidence,
         })
         kind_to_tool = {
+            # 9/24: 业务事实进知识库, 不再挤进 4000 字的 MEMORY.md (那边清一次满一次)
+            "wiki": (
+                "先 catfish_wiki_search 找对应条目 (人/证书/项目), 有就 catfish_wiki_read 后 "
+                "catfish_wiki_update 补进去, 没有再 catfish_wiki_create"
+            ),
             "journal": "直接写 ~/.catfish/employee_journal.md (append `## [YYYY-MM-DD HH:MM] kind | title`)",
             "todo": "调 catfish_create_task tool (写入本机任务库)",
             "skill": "调 catfish_propose_skill tool (多步流程 / SKILL.md)",
@@ -486,7 +497,7 @@ def memory_enforce_hook(tool_name: str = "", args: Optional[dict] = None,
         return {
             "action": "block",
             "message": (
-                f"⚠️ catfish memory_enforce: 这条疑似 {route}, 不是 project_fact. "
+                f"⚠️ catfish memory_enforce: 这条疑似 {route}, 不该写进常驻记忆. "
                 f"reason: {reason}. 改调对应 tool: {suggested}."
             ),
         }

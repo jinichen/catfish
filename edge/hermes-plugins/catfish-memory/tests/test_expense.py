@@ -248,11 +248,14 @@ def test_handle_expense_with_date(provider, fake_home: Path):
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def test_schema_6_kind_includes_expense(provider):
+def test_schema_kinds_include_expense_and_knowledge(provider):
     schema = provider.get_catfish_memory_schema()
     kinds = schema["properties"]["kind"]["enum"]
     assert "expense" in kinds
-    assert len(kinds) == 6
+    # 9/24 加 knowledge (业务事实进知识库, 不挤常驻记忆)
+    assert set(kinds) == {
+        "identity", "project_fact", "knowledge", "workflow", "journal", "todo", "expense",
+    }
 
 
 def test_schema_expense_fields_present(provider):

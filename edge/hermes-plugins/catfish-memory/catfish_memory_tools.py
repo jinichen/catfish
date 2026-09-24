@@ -55,6 +55,17 @@ class _ToolsMixin:
                 return self._route_to_reminder(content)
             elif kind == "journal":
                 return self._route_to_journal(content)
+            elif kind == "knowledge":
+                # 9/24: 跟 catfish-xcatfish-user/memory_router.py 同一规则 —— 业务事实进知识库
+                return _json.dumps({
+                    "success": False,
+                    "routed_to": "catfish_wiki",
+                    "content": content,
+                    "error": (
+                        "这是业务知识, 不写常驻记忆。先 catfish_wiki_search 找对应条目, "
+                        "有就 catfish_wiki_read 后 catfish_wiki_update 补进去, 没有再 catfish_wiki_create。"
+                    ),
+                }, ensure_ascii=False)
             elif kind == "workflow":
                 return self._route_to_propose_skill(content)
             elif kind == "expense":
@@ -129,11 +140,12 @@ class _ToolsMixin:
                 },
                 "kind": {
                     "type": "string",
-                    "enum": ["identity", "project_fact", "workflow", "journal", "todo", "expense"],
+                    "enum": ["identity", "project_fact", "knowledge", "workflow", "journal", "todo", "expense"],
                     "description": (
                         "内容性质 (必填, 决定存哪):\n"
                         "- identity: 关于员工**这个人**的稳定事实 (姓名/部门/偏好/沟通风格) → USER.md\n"
-                        "- project_fact: **项目/技术**事实 (API 字段含义/客户机房 IP/工具约定) → MEMORY.md\n"
+                        "- project_fact: **工作口径/规则/约定** (以后这类事该怎么做) → MEMORY.md\n"
+                        "- knowledge: 某个人/公司/证书/项目的**事实** (编号/有效期/人员对照/进展) → 个人知识库, 不是 memory\n"
                         "- workflow: 工作**流程** (有 input/output/step 序列) → 自动提议存成 skill\n"
                         "- journal: 已发生**事件**/session 总结/会议记录 → 写 catfish 员工日志 (不是 memory)\n"
                         "- todo: 用户行动 → 调 catfish_create_task 写入本机任务库 (不是 memory)\n"

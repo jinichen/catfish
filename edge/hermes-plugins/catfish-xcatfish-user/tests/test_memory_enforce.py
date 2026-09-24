@@ -266,3 +266,51 @@ def test_hook_fail_silent_when_classify_raises(tmp_catfish, monkeypatch):
         task_id="t1",
     )
     assert result is None  # 放行兜底
+
+
+# ── 9/24: 业务事实进知识库 ──────────────────────────────────────
+
+
+def test_prompt_separates_rules_from_business_facts():
+    prompt = memory_enforce._CLASSIFY_SYSTEM_PROMPT
+    assert '"wiki"' in prompt
+    assert "工作口径" in prompt and "证书编号" in prompt
+    # 以前的 memory 例子里有「资质评估流程」这类业务内容, 正是 MEMORY.md 塞满的原因
+    assert "资质评估流程" not in prompt
+
+
+def test_hook_blocks_business_fact_and_points_to_wiki(tmp_catfish, monkeypatch):
+    (tmp_catfish / "picker_state.json").write_text(
+        json.dumps({"chat_model": "catfish-private-main"}), encoding="utf-8",
+    )
+    monkeypatch.setattr(memory_enforce, "_classify_memory_route", _mock_classify("wiki"))
+    result = memory_enforce.memory_enforce_hook(
+        tool_name="memory",
+        args={"action": "add", "target": "memory",
+              "content": "ISO45001 已出证, 编号 05326S00235R201, 有效至 2029-09-07"},
+    )
+    assert result is not None and result["action"] == "block"
+    assert "catfish_wiki_search" in result["message"]
+    record = json.loads((tmp_catfish / "memory_audit.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    assert record["decision"] == "block_wrong_kind" and record["llm_route"] == "wiki"
+
+
+def test_classifier_accepts_wiki_route(monkeypatch):
+    """LLM 返 route=wiki 不能被当成无效字段 (否则 fail-silent 放行, 又写进 MEMORY.md)。"""
+    class _Resp:
+        status_code = 200
+        def json(self):
+            return {"choices": [{"message": {"content":
+                '{"route": "wiki", "reason": "证书事实", "confidence": 0.9}'}}]}
+    class _Client:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, *a, **k): return _Resp()
+    import types
+    fake_httpx = types.SimpleNamespace(Client=_Client)
+    monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
+    monkeypatch.setattr(memory_enforce, "_gateway_auth_token", lambda: "t")
+    result, error = memory_enforce._classify_memory_route_diag("证书编号 X", "m")
+    assert error == "" or result is not None, error
+    assert result and result["route"] == "wiki"

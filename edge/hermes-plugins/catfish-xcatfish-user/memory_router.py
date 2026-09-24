@@ -18,7 +18,8 @@ plugin discovery 路径 (`hermes_cli.plugins`), register(ctx) 真被调.
 | kind         | 路由                                                    |
 |--------------|---------------------------------------------------------|
 | identity     | hermes 原 memory_tool(target=user) → USER.md            |
-| project_fact | hermes 原 memory_tool(target=memory) → MEMORY.md        |
+| project_fact | hermes 原 memory_tool(target=memory) → MEMORY.md (9/24 起只放工作口径) |
+| knowledge    | 提示改调 catfish_wiki_* (业务事实进知识库, 9/24 加)       |
 | workflow     | hint 让 LLM 调 catfish_propose_skill (BL-MM9 5/8 ship)  |
 | journal      | append ~/.catfish/employee_journal.md (catfish 现有)    |
 | todo         | 拒绝落 journal，要求调 catfish_create_task              |
@@ -279,11 +280,12 @@ CATFISH_MEMORY_SCHEMA: Dict[str, Any] = {
         },
         "kind": {
             "type": "string",
-            "enum": ["identity", "project_fact", "workflow", "journal", "todo"],
+            "enum": ["identity", "project_fact", "knowledge", "workflow", "journal", "todo"],
             "description": (
                 "内容性质 (必填, 决定存哪):\n"
                 "- identity: 关于员工**这个人**的稳定事实 (姓名/部门/偏好/沟通风格) → USER.md\n"
-                "- project_fact: **项目/技术**事实 (API 字段含义/客户机房 IP/工具约定) → MEMORY.md\n"
+                "- project_fact: **工作口径/规则/约定** (以后这类事该怎么做) → MEMORY.md\n"
+                "- knowledge: 某个人/公司/证书/项目的**事实** (编号/有效期/人员对照/进展) → 个人知识库, 不是 memory\n"
                 "- workflow: 工作**流程** (有 input/output/step 序列) → 自动提议存成 skill\n"
                 "- journal: 已发生**事件**/session 总结/会议记录 → 写 catfish 员工日志 (不是 memory)\n"
                 "- todo: 用户行动 → 调 catfish_create_task 写入本机任务库 (不是 memory)\n"
@@ -321,7 +323,7 @@ def handle_memory_tool(args: Dict[str, Any], **kw: Any) -> str:
     if not kind:
         return json.dumps({
             "success": False,
-            "error": "kind 必填 (identity/project_fact/workflow/journal/todo).",
+            "error": "kind 必填 (identity/project_fact/knowledge/workflow/journal/todo).",
         }, ensure_ascii=False)
 
     # 6/2 BL-MEMORY-AUDIT-TRAIL: replace/remove 前**先读 prev_value** — 必须在 hermes
@@ -347,6 +349,8 @@ def handle_memory_tool(args: Dict[str, Any], **kw: Any) -> str:
             result = _route_to_reminder(content)
         elif kind == "journal":
             result = _route_to_journal(content)
+        elif kind == "knowledge":
+            result = _route_to_wiki(content)
         elif kind == "workflow":
             result = _route_to_propose_skill(content)
         elif kind == "identity":
@@ -360,7 +364,7 @@ def handle_memory_tool(args: Dict[str, Any], **kw: Any) -> str:
         else:
             result = json.dumps({
                 "success": False,
-                "error": f"unknown kind '{kind}'. 看 schema 选 5 个之一.",
+                "error": f"unknown kind '{kind}'. 看 schema 选 6 个之一.",
             }, ensure_ascii=False)
     except Exception as e:  # noqa: BLE001
         logger.exception("catfish memory router 异常: %s", e)
@@ -447,6 +451,24 @@ def _route_to_journal(content: str) -> str:
             "success": False,
             "error": f"journal 写失败: {e}",
         }, ensure_ascii=False)
+
+
+def _route_to_wiki(content: str) -> str:
+    """kind=knowledge → 引导去知识库 (9/24)。
+
+    MEMORY.md 每轮整篇注入、只有 4000 字; 证书编号 / 人员对照 / 项目进展这类业务事实
+    塞进去, 清一次满一次。知识库按条目存、用时检索, 才装得下。
+    plugin 跟 tool-bridge 进程隔离, 这里不直接写, 跟 workflow 一样返提示让 LLM 调工具。
+    """
+    return json.dumps({
+        "success": False,
+        "routed_to": "catfish_wiki",
+        "content": content,
+        "error": (
+            "这是业务知识, 不写常驻记忆。先 catfish_wiki_search 找对应条目 (人/证书/项目), "
+            "有就 catfish_wiki_read 后 catfish_wiki_update 补进去, 没有再 catfish_wiki_create。"
+        ),
+    }, ensure_ascii=False)
 
 
 def _route_to_propose_skill(content: str) -> str:
