@@ -1,7 +1,4 @@
-// P3.5.125 (6/26 鸿波 catch "catfish 没监控 hermes/chrome hang"): 加 hermes 服务监控.
-// hermes 默认 launchd KeepAlive crash 时拉, 但 hang (GIL deadlock / IO block)
-// launchd 不知道. Companion 主动 ping /healthz + 连续 N 次 unhealthy → kill -9
-// 触发 launchd 自动重启.
+// Service diagnostics are read-only; a failed probe must not trigger kill/restart.
 export type ServiceId = "gateway" | "hermes" | "chrome" | "local_search" | "tool_bridge";
 
 export interface ServiceStatus {
@@ -9,6 +6,8 @@ export interface ServiceStatus {
   pid: number | null;
   /** 业务面是否健康 —— 进程活着不等于服务能用 */
   healthy: boolean;
+  /** IPC failed; the process state could not be established. */
+  probeError?: boolean;
   /** 监听端口（如果适用） */
   port?: number;
   /** 给 UI 显示的状态描述 */

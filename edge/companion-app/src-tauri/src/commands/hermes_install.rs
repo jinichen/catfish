@@ -27,7 +27,7 @@ use super::hermes_install_base::{
 use super::hermes_install_base::remember_progress;
 use super::hermes_install_health::core_health_problems;
 use super::hermes_install_recover::{acquire_bootstrap_lock, recover_interrupted_transaction};
-use super::hermes_install_state::{record_failure, BootstrapPaths, FailureRecord};
+use super::hermes_install_state::{record_failure, BootstrapPaths};
 #[cfg(any(not(target_os = "windows"), test))]
 use super::hermes_install_state::write_completion_marker;
 #[cfg(not(target_os = "windows"))]
@@ -43,34 +43,6 @@ use super::hermes_install_steps::{
     link_catfish_email_bin, link_catfish_wechat_reader_bin, prepare_source_stage,
     rollback_install, run_install_stage,
 };
-
-/// 上一次装机失败的原因, 没失败过 / 已经装成功了返 None。
-///
-/// # 为什么要读回来
-///
-/// 装不上 hermes 的机器, 界面上其他部分看着都正常 —— 员工只会觉得"聊天没反应"。
-/// 而 Dashboard 的服务状态在探不到 TCP 时, 原来一律报
-/// "hermes 未启动 — 检查 brew services list hermes (launchd 应自动拉)",
-/// 把人往 launchd 方向带; 真实原因是**它从来就没装上**, 没有任何东西可供
-/// launchd 去拉。达华现场就是这么过去的, 最后靠手工装 hermes 收场。
-///
-/// 数据源是 `record_failure()` 落的
-/// `~/.hermes/.catfish-hermes-bootstrap-last-error.json`, 装成功后由
-/// `remove_any(&paths.last_error_file)` 删掉。
-///
-/// 落盘而不是放进程内存, 是为了让"昨天装挂了"这件事在今天重开 Companion
-/// 之后仍然说得出来 —— 员工重启一次就把线索丢了的话, 这个字段等于没有。
-pub fn last_bootstrap_error() -> Option<String> {
-    let home = crate::util::paths::home_env().ok()?;
-    let paths = BootstrapPaths::new(PathBuf::from(home));
-    let raw = std::fs::read_to_string(&paths.last_error_file).ok()?;
-    let rec: FailureRecord = serde_json::from_str(&raw).ok()?;
-    let msg = rec.error.trim();
-    if msg.is_empty() {
-        return None;
-    }
-    Some(msg.to_string())
-}
 
 #[cfg(not(target_os = "windows"))]
 fn resolve_optional_runtime_dir(resource_dir: &Path) -> Result<PathBuf> {
@@ -92,10 +64,7 @@ pub fn hermes_agent_installed() -> bool {
 /// 不启动, 聊天整个不可用。一个附加组件坏了不该拖垮核心; 邮件扫描器单独等
 /// [`email_components_ready`]。
 pub fn hermes_runtime_ready() -> bool {
-    let Ok(home) = crate::util::paths::home_env() else {
-        return false;
-    };
-    core_health_problems(&BootstrapPaths::new(PathBuf::from(home)), true).is_empty()
+    hermes_agent_installed()
 }
 
 /// 邮件扫描器的启动条件。Windows 上要确认 catfish-email 是带 `discover` 的新版

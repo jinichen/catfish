@@ -15,8 +15,6 @@ use std::time::Duration;
 use crate::commands::types::ServiceStatus;
 use crate::services::{catfish_paths, endpoints, process};
 
-const TCP_TIMEOUT: Duration = Duration::from_millis(800);
-const HTTP_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[tauri::command]
 pub async fn chrome_launch() -> Result<(), String> {
@@ -238,68 +236,9 @@ pub async fn chrome_kill() -> Result<(), String> {
 #[tauri::command]
 pub async fn chrome_status() -> Result<ServiceStatus, String> {
     let ep = endpoints::endpoints();
-    let host = ep.chrome_host.clone();
-    let port = ep.chrome_port;
-    let tcp_alive = tokio::time::timeout(
-        TCP_TIMEOUT,
-        tokio::net::TcpStream::connect((host.as_str(), port)),
-    )
-    .await
-    .map(|r| r.is_ok())
-    .unwrap_or(false);
-
-    if !tcp_alive {
-        return Ok(ServiceStatus::down(
-            Some(port),
-            "未启动 — 点 \"启动\" 拉起 Catfish Chrome",
-        ));
-    }
-
-    // P3.5.125 (6/26 鸿波 catch "chrome page-level hang 不检测"): 升级 health check.
-    // 老逻辑: GET /json/version → 只测 DevTools 协议在不在, 不测真 DOM/page
-    // 是不是卡住. 真因: chrome 9222 端口活, 但 page 卡死 (JS infinite loop /
-    // OOM 边缘 / NetworkIdle 永不返). 新逻辑:
-    //   1. /json/version → 协议 alive
-    //   2. /json/list → 拿到 page tabs (TCP 通但 page hang 时这步会卡住或空)
-    let chrome_base = ep.chrome_base();
-    let client = reqwest::Client::builder()
-        .timeout(HTTP_TIMEOUT)
-        .no_proxy()
-        .build();
-    let healthy = match client {
-        Ok(c) => {
-            let version_ok = c
-                .get(format!("{chrome_base}/json/version"))
-                .send()
-                .await
-                .map(|r| r.status().is_success())
-                .unwrap_or(false);
-            if !version_ok {
-                false
-            } else {
-                // page-level: /json/list 返page tabs JSON array, hang 时timeout
-                c.get(format!("{chrome_base}/json/list"))
-                    .send()
-                    .await
-                    .map(|r| r.status().is_success())
-                    .unwrap_or(false)
-            }
-        }
-        Err(_) => false,
-    };
-
-    let pid = catfish_paths::chrome_pid_file()
-        .and_then(|p| process::read_pid_file_alive_strict(&p, "remote-debugging-port"));
-
-    Ok(ServiceStatus {
-        running: true,
-        healthy,
-        pid,
-        port: Some(port),
-        message: Some(if healthy {
-            format!("DevTools 已就绪 :{port}")
-        } else {
-            "⚠ TCP 通但 page-level 失败 — Chrome 可能 hang, 连续 3 次将自动重启".into()
-        }),
-    })
+    // Test the actual CDP protocol; a preliminary TCP timeout can reject working
+    // localhost IPv4 services on Windows before the HTTP client's fallback runs.
+    crate::util::service_probe::http_health(
+        &ep.chrome_base(), "/json/version", Some(ep.chrome_port), true,
+    ).await
 }

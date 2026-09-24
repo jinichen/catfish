@@ -27,6 +27,8 @@ import { getVersion } from "@tauri-apps/api/app";
 
 import { config } from "../../lib/env";
 import { fetchViaProxy } from "../../lib/http_proxy";
+import { classifyProbeFailure } from "../../lib/probeFailure";
+import { ServerCertificateImport } from "./ServerCertificateImport";
 import { useMe } from "../../hooks/useMe";
 import { useUIStore } from "../../store/ui";
 
@@ -90,51 +92,25 @@ const PING_TIMEOUT_MS = 5000;
 interface PingResult {
   ok: boolean;
   kind: PingFailKind;
+  detail?: string;
 }
 
-async function pingWeb(webBase: string, timeoutMs = PING_TIMEOUT_MS): Promise<PingResult> {
+export async function pingWeb(webBase: string, timeoutMs = PING_TIMEOUT_MS): Promise<PingResult> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    // BL-CSP-PROXY (7/18 鸿波): 走 Rust reqwest 代理, CSP 严格. GET / 而不是 HEAD —
-    // vite dev server / nginx 都答 200 主页. Rust 端不做 CORS preflight, 直接返.
-    //
-    // P3.5.80 (7/28): 原来这里建了 AbortController + setTimeout(2s) 传 signal ——
-    // **完全是空转**. http_proxy.ts 的非流路径 `httpProxy()` 只从 init 里取
-    // method/headers/body, 压根不读 signal (signal 桥接只写在 httpProxyStream).
-    // 实际生效的是 Rust 侧 30 秒超时, 而探活每 15 秒一轮 → 请求叠着排队.
-    //
-    // 改成在 JS 侧真的赛跑. 注: 这只是让 UI 别干等, Rust 那边的请求还会跑完
-    // (代理层没有取消通道), 但 30s 后自己超时, 不会泄漏.
-    await Promise.race([
-      fetchViaProxy(`${webBase}/`, { method: "GET", cache: "no-store" }),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error(`探活超时 (${timeoutMs}ms)`)), timeoutMs),
-      ),
-    ]);
+    const response = await fetchViaProxy(`${webBase.replace(/\/$/, "")}/`, {
+      method: "GET", cache: "no-store", signal: controller.signal,
+    });
+    // A response proves reachability, but an HTTP error must not be called healthy.
+    if (!response.ok) throw new Error(`门户返回 HTTP ${response.status}`);
     return { ok: true, kind: "other" };
-  } catch (e) {
-    // reqwest 的证书错误文本形态不止一种 (native-tls / rustls / 各平台文案不同),
-    // 所以匹配几个共同关键词而不是某一条精确消息.
-    const raw = String(e);
-    const msg = raw.toLowerCase();
-    // 顺序有意义: 先判超时 (那是我们自己抛的, 最确定), 再判证书.
-    const kind: PingFailKind = msg.includes("探活超时")
-      ? "timeout"
-      : msg.includes("certificate") ||
-          msg.includes("cert") ||
-          msg.includes("tls") ||
-          msg.includes("ssl") ||
-          msg.includes("handshake") ||
-          msg.includes("self-signed") ||
-          msg.includes("self signed") ||
-          msg.includes("unknownissuer") ||
-          msg.includes("not trusted")
-        ? "cert"
-        : "other";
-    // eslint-disable-next-line no-console
-    // 打完整原文 —— Rust 侧现在会把 reqwest 的 source 链拼进来 (error_chain),
-    // 这是判断"到底为什么连不上"的唯一依据, 别再截断.
-    console.warn(`[WebPortalLink] 探活 ${webBase} 失败 [${kind}]: ${raw}`);
-    return { ok: false, kind };
+  } catch (error) {
+    const kind = controller.signal.aborted ? "timeout" : classifyProbeFailure(error);
+    console.warn(`[WebPortalLink] ${webBase}: ${String(error)}`);
+    return { ok: false, kind, detail: String(error) };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -174,19 +150,22 @@ export default function WebPortalLink() {
   const [status, setStatus] = useState<WebStatus>("checking");
   // P3.5.80 (7/28): 失败原因跟 status 一起进 state, 提示才能说到点子上.
   const [failKind, setFailKind] = useState<PingFailKind>("other");
+  const [detail, setDetail] = useState("");
   useEffect(() => {
     let alive = true;
+    let id: ReturnType<typeof setTimeout> | undefined;
     const check = async () => {
       const r = await pingWeb(webBase);
       if (!alive) return;
       setStatus(r.ok ? "online" : "offline");
+      setDetail(r.detail ?? "");
       if (!r.ok) setFailKind(r.kind);
+      id = setTimeout(check, 15_000);
     };
     void check();
-    const id = setInterval(check, 15_000);
     return () => {
       alive = false;
-      clearInterval(id);
+      clearTimeout(id);
     };
   }, [webBase]);
 
@@ -206,10 +185,10 @@ export default function WebPortalLink() {
         marginRight: "calc(-1 * var(--space-6))",
         marginBottom: "var(--space-3)",
         background: isOffline
-          ? "rgba(239, 68, 68, 0.08)"  // 淡红色, 区分 offline 状态
+          ? "rgba(245, 158, 11, 0.08)"
           : "var(--catfish-bg-elevated)",
         // toolbar 风 — 只 borderBottom (砍 borderRadius + 四向 border)
-        borderBottom: `1px solid ${isOffline ? "rgba(239, 68, 68, 0.4)" : "var(--catfish-border)"}`,
+        borderBottom: `1px solid ${isOffline ? "rgba(245, 158, 11, 0.4)" : "var(--catfish-border)"}`,
         // 水平 padding 补回 24 — inner content 不贴 toolbar 边, vertical 真 12 toolbar 风
         padding: "var(--space-3) var(--space-6)",
       }}
@@ -245,11 +224,11 @@ export default function WebPortalLink() {
           {!isOffline ? (
             <>管理 + 跨员工市场在 web. 桌面端管个人 (对话 / 画像 / skill 装卸 / 配额自查)</>
           ) : failKind === "cert" ? (
-            <>连不上 (<code>{webBase}</code>) — 服务器证书没被信任。请 IT 把公司的证书文件放到你电脑的 <code>~/.catfish/server-ca.pem</code>，然后重开鲶鱼。</>
+            <>连不上 (<code>{webBase}</code>) — 客户端尚未信任服务器证书，不代表服务未运行。请导入 IT 提供的 PEM 证书；浏览器的信任设置与客户端独立。</>
           ) : failKind === "timeout" ? (
             <>连不上 (<code>{webBase}</code>) — 服务器 {PING_TIMEOUT_MS / 1000} 秒内没响应。可能不在公司网络里（VPN 没连？），或服务器很慢。</>
           ) : (
-            <>连不上 (<code>{webBase}</code>) — 地址可能填错了，或公司服务器没开。到下面「服务器配置」核对门户地址，还是不行找 IT。</>
+            <>连不上 (<code>{webBase}</code>) — 客户端检测失败，不能据此认定服务器未运行。可继续在浏览器打开，并核对「服务器配置」。</>
           )}
         </span>
         {/* BL-COMPANION-ABOUT-CHIP (5/18): 右侧版本徽章, 点开"关于鲶鱼"模态.
@@ -259,12 +238,16 @@ export default function WebPortalLink() {
           <AboutChip />
         </span>
       </div>
+      {isOffline && <details><summary>查看检测详情 / 证书配置</summary>
+        <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{detail}</pre>
+        {failKind === "cert" && <ServerCertificateImport />}
+      </details>}
       <div
         style={{
           display: "flex",
           flexWrap: "wrap",
           gap: "var(--space-2)",
-          opacity: isOffline ? 0.5 : 1,
+          opacity: 1,
         }}
       >
         {links.map((l) => {
@@ -275,13 +258,9 @@ export default function WebPortalLink() {
               href={fullUrl}
               target="_blank"
               rel="noopener noreferrer"
-              title={isOffline ? "中央门户没起, 点也没用" : l.desc}
+              title={l.desc}
               onClick={(e) => {
                 e.preventDefault();
-                if (isOffline) {
-                  // BL-ARCH2 fix4: offline 直接拒, 别让员工点了看 Safari 报错
-                  return;
-                }
                 void openInSystemBrowser(fullUrl);
               }}
               style={{
@@ -295,7 +274,7 @@ export default function WebPortalLink() {
                 display: "inline-flex",
                 alignItems: "center",
                 gap: 4,
-                cursor: isOffline ? "not-allowed" : "pointer",
+                cursor: "pointer",
                 transition: "border-color 0.15s ease",
               }}
               onMouseEnter={(e) => {
@@ -369,10 +348,10 @@ function StatusDot({ status }: { status: WebStatus }) {
     status === "online"
       ? "rgb(34, 197, 94)"
       : status === "offline"
-        ? "rgb(239, 68, 68)"
+        ? "rgb(245, 158, 11)"
         : "rgb(156, 163, 175)";
   const label =
-    status === "online" ? "在线" : status === "offline" ? "未运行" : "检测中";
+    status === "online" ? "在线" : status === "offline" ? "检测未通过" : "检测中";
   return (
     <span
       title={label}

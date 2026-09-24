@@ -35,7 +35,6 @@
 //! 信任客户内网的自签 CA.
 
 use std::path::PathBuf;
-use std::sync::OnceLock;
 use std::time::Duration;
 
 /// IT 推给员工机器的中央服务证书. 没有就走默认严格校验.
@@ -52,44 +51,77 @@ fn cert_path() -> Option<PathBuf> {
     Some(PathBuf::from(home).join(".catfish").join(CERT_FILE))
 }
 
-/// 读证书文件 → reqwest::Certificate. 进程内只读一次.
+/// 每次创建客户端重新读取，首次缺失或证书更新不得永久缓存。
 ///
 /// 读失败 (文件不存在 / 格式不对) 都返 None 走默认严格校验, 但**格式不对要
 /// 打 error**: 文件明明在那儿却没生效, 不说的话现场会以为"证书推了还是不通"
 /// 而去查网络.
-fn extra_root_cert() -> Option<&'static reqwest::Certificate> {
-    static CERT: OnceLock<Option<reqwest::Certificate>> = OnceLock::new();
-    CERT.get_or_init(|| {
-        let path = cert_path()?;
-        if !path.exists() {
-            log::debug!(
-                "未找到 {} · 中央服务若用自签证书会连不上 (走系统信任库 / 或放这个文件)",
-                path.display()
-            );
-            return None;
+fn extra_root_cert() -> Option<reqwest::Certificate> {
+    load_root_cert(&cert_path()?)
+}
+
+#[cfg(test)]
+mod certificate_reload_tests {
+    use super::*;
+    // Public root certificate fixture; contains no private key.
+    const PEM: &str = include_str!("test_root_ca.txt");
+    #[test]
+    fn missing_then_imported_then_removed_is_not_cached() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join(".catfish/server-ca.pem");
+        assert!(load_root_cert(&path).is_none());
+        save_root_cert(&path, PEM).unwrap();
+        assert!(load_root_cert(&path).is_some());
+        std::fs::remove_file(&path).unwrap();
+        assert!(load_root_cert(&path).is_none());
+    }
+    #[test]
+    fn invalid_import_does_not_overwrite_existing_trust() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("server-ca.pem");
+        save_root_cert(&path, PEM).unwrap();
+        for invalid in ["not a certificate".to_string(), "PRIVATE KEY".into(), "x".repeat(65537)] {
+            assert!(save_root_cert(&path, &invalid).is_err());
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), PEM);
         }
-        let pem = match std::fs::read(&path) {
-            Ok(b) => b,
-            Err(e) => {
-                log::error!("读 {} 失败: {e} · 自签证书不会被信任", path.display());
-                return None;
-            }
-        };
-        match reqwest::Certificate::from_pem(&pem) {
-            Ok(c) => {
-                log::info!("已加载中央服务证书 {} · 该证书签发的 HTTPS 会被信任", path.display());
-                Some(c)
-            }
-            Err(e) => {
-                log::error!(
-                    "{} 不是合法 PEM 证书: {e} · 请确认推的是 setup.sh 生成的 certs/cert.pem",
-                    path.display()
-                );
+    }
+}
+
+fn load_root_cert(path: &std::path::Path) -> Option<reqwest::Certificate> {
+    match std::fs::read(path) {
+        Ok(pem) => match reqwest::Certificate::from_pem(&pem) {
+            Ok(cert) => Some(cert),
+            Err(error) => {
+                log::error!("无效公司证书 {}: {error}", path.display());
                 None
             }
+        },
+        Err(error) => {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                log::error!("无法读取公司证书 {}: {error}", path.display());
+            }
+            None
         }
-    })
-    .as_ref()
+    }
+}
+
+/// Explicitly supplied by the user/IT; never download and silently trust an unknown peer.
+#[tauri::command]
+pub fn import_server_certificate(pem: String) -> Result<String, String> {
+    let path = cert_path().ok_or("无法确定用户证书目录")?;
+    save_root_cert(&path, &pem)?;
+    Ok(path.display().to_string())
+}
+
+fn save_root_cert(path: &std::path::Path, pem: &str) -> Result<(), String> {
+    if pem.len() > 64 * 1024 || pem.contains("PRIVATE KEY") {
+        return Err("只接受不含私钥的 PEM 公共证书（最大 64KB）".into());
+    }
+    reqwest::Certificate::from_pem(pem.as_bytes())
+        .map_err(|e| format!("PEM 证书无效: {e}"))?;
+    std::fs::create_dir_all(path.parent().ok_or("无效证书路径")?)
+        .map_err(|e| format!("创建证书目录失败: {e}"))?;
+    std::fs::write(path, pem).map_err(|e| format!("保存证书失败: {e}"))
 }
 
 /// 开关取值的解析 —— 纯函数, 不碰环境变量.
@@ -153,7 +185,7 @@ fn use_system_proxy() -> bool {
 /// 中央服务按定义在客户内网, 走代理没有任何意义, 所以这里一律绕过.
 pub fn trust_central(mut b: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
     if let Some(cert) = extra_root_cert() {
-        b = b.add_root_certificate(cert.clone());
+        b = b.add_root_certificate(cert);
     }
     if allow_self_signed() {
         log::warn!(

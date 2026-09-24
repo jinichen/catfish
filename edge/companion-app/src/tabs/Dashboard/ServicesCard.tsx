@@ -45,7 +45,7 @@ const SERVICE_ACTIONS: Record<
 
 async function restartService(id: ServiceId): Promise<void> {
   // BL-COMPANION-SERVICES-DEMOTE (5/17): gateway 不可重启, 这里直接 return.
-  // P3.5.125 (6/26): hermes 也跳过 — 由 watchdog 自动 kill (走 hermesKill 触发 launchd)
+  // Hermes 生命周期由服务管理器负责，健康探测不进行强杀。
   if (id === "gateway" || id === "hermes") return;
   const a = SERVICE_ACTIONS[id as LocalServiceId];
   if (!a) return;
@@ -73,15 +73,13 @@ function buildServices(agentName: string): ServiceRow[] {
       name: "LLM Gateway",
       // BL-COMPANION-SERVICES-DEMOTE (5/17): 文案改成"中央服务"明确身份, 提示
       // 员工挂了找 IT/ops, 不要自己尝试重启 (按钮也没了).
-      why: "中央服务 (你 mac 上是过渡, 未来云端). 挂了联系 IT, 没起来 = 聊天用不了",
+      why: "中央模型网关；连接异常请核对服务器配置或联系 IT。",
     },
-    // P3.5.125 (6/26 鸿波 catch "hermes 没监控"): hermes API server (8642),
-    // : 真:** chat / 早安 / cron / wechat 都依赖. hang 时连续 3 次
-    // /healthz 失败 → 自动 kill -9 触发 launchd 拉.
+    // Hermes API readiness, not a process-killing watchdog.
     {
       id: "hermes",
       name: "Hermes Agent",
-      why: `${agentName}核心 runtime (chat / 早安 / cron / 微信). hang 自动重启, 不用管`,
+      why: `${agentName}核心运行服务（对话 / 早安 / 定时任务）；检测失败不等于进程已停止。`,
     },
     {
       id: "tool_bridge",
@@ -91,7 +89,7 @@ function buildServices(agentName: string): ServiceRow[] {
     {
       id: "chrome",
       name: "Catfish Chrome",
-      why: "浏览器自动化 (browser_navigate 等), 不需要可不起. page-level hang 自动重启",
+      why: "浏览器自动化专用实例；检测 CDP 是否就绪，不影响日常浏览器，不因探测失败自动重启。",
     },
     {
       id: "local_search",
@@ -249,7 +247,7 @@ function ServiceRowItem({ row }: { row: ServiceRow }) {
             员工 90% 撞 bug 时想做的就是"重启这个服务", 直接前置.
             BL-COMPANION-SERVICES-DEMOTE (5/17): Gateway 不显示重启按钮 —
             中央服务边缘不该有启停权. 留个占位灰字"只读"提示员工知道. */}
-        {row.id === "gateway" ? (
+        {row.id === "gateway" || row.id === "hermes" ? (
           <span
             style={{
               fontSize: 10,
@@ -258,7 +256,7 @@ function ServiceRowItem({ row }: { row: ServiceRow }) {
               border: "1px dashed var(--catfish-border)",
               borderRadius: "var(--radius-sm)",
             }}
-            title="中央服务由 IT / ops 管理, Companion 只读监控状态"
+            title="由服务管理器负责生命周期，此处只读检测"
           >
             只读
           </span>
@@ -272,6 +270,11 @@ function ServiceRowItem({ row }: { row: ServiceRow }) {
           </button>
         )}
       </div>
+      {status?.message && (!status.healthy || status.probeError) && (
+        <div style={{ fontSize: 11, paddingLeft: 18, overflowWrap: "anywhere", color: "var(--catfish-text-muted)" }}>
+          {status.message}
+        </div>
+      )}
       {/* BL-FIX18: why 改 inline 副标题, 不再 native tooltip 出界 */}
       <div
         style={{
@@ -289,6 +292,7 @@ function ServiceRowItem({ row }: { row: ServiceRow }) {
 
 function dotKindFor(status: ServiceStatus | undefined): "ok" | "warn" | "err" | "idle" {
   if (!status) return "idle";
+  if (status.probeError) return "warn";
   if (!status.running) return "err";
   if (status.healthy) return "ok";
   return "warn";
@@ -296,7 +300,8 @@ function dotKindFor(status: ServiceStatus | undefined): "ok" | "warn" | "err" | 
 
 function compactStatusText(status: ServiceStatus | undefined): string {
   if (!status) return "探测中…";
-  if (!status.running) return "未启动";
+  if (status.probeError) return status.message ?? "检测失败，状态未知";
+  if (!status.running) return status.message ?? "未连接";
   if (!status.healthy) return status.message ?? "进程在但未就绪";
   // healthy: 显示端口或 PID
   if (status.port) return `:${status.port}`;

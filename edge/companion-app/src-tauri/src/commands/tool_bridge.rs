@@ -162,63 +162,15 @@ pub async fn tool_bridge_restart() -> Result<(), String> {
 
 #[tauri::command]
 pub async fn tool_bridge_status() -> Result<ServiceStatus, String> {
-    let pid = catfish_paths::tool_bridge_pid_file()
-        .and_then(|p| process::read_pid_file_alive_strict(&p, "catfish_tool_bridge"));
-
-    if pid.is_none() {
-        // BL-TOOL-BRIDGE-SOCK-FALLBACK (6/1): 兜底外部托管场景 — 别的工具 / 员工
-        // 手动 / dev 残留起的 tool-bridge socket 模式进程, 没经过 autostart 写
-        // pid 文件. 走 socket health RPC 探活 — 探到 → 标 running, 不误报"未启动".
-        //
-        // 历史: 6/1 加这 fallback 时误诊了一次 — 我们以为 autostart spawn 后 fs::write
-        // pid 失败, 但**真因是 catfish_task_schemas.py:1044 syntax bug** (同 commit
-        // 修了): tool-bridge 启动立刻 exit, read_pid_file_alive_strict 检测 PID 死
-        // 自动删 stale pid, 看上去像"pid 文件没写". syntax 修后正常路径完全 work.
-        // fallback 留着对真外部托管场景仍有兜底价值, 没副作用.
-        if let Some(sock) = catfish_paths::tool_bridge_socket() {
-            if sock.exists() {
-                let healthy = matches!(
-                    tool_bridge_rpc::call_with_timeout("health", json!(null), RPC_TIMEOUT).await,
-                    Ok(v) if v.get("ok").and_then(|b| b.as_bool()).unwrap_or(false)
-                );
-                if healthy {
-                    return Ok(ServiceStatus {
-                        running: true,
-                        healthy: true,
-                        pid: None,
-                        port: None,
-                        message: Some(
-                            "已就绪 (无 pid 文件 — 外部托管或 autostart 异常)".into(),
-                        ),
-                    });
-                }
-            }
-        }
-        return Ok(ServiceStatus::down(
-            None,
-            "未启动 — 点 \"启动\" 拉起（让 Companion 调 hermes 35 tools）",
-        ));
-    }
-
-    // 进程在 → 试 RPC 探活
-    let healthy = match tool_bridge_rpc::call_with_timeout("health", json!(null), RPC_TIMEOUT).await {
-        Ok(v) => v
-            .get("ok")
-            .and_then(|b| b.as_bool())
-            .unwrap_or(false),
-        Err(_) => false,
-    };
-
+    // Protocol first: Windows endpoint files contain a TCP port, Unix uses a socket.
+    // PID/WMIC inspection is neither necessary nor authoritative for RPC readiness.
+    let value = tool_bridge_rpc::call_with_timeout("health", json!(null), RPC_TIMEOUT).await?;
+    let healthy = value.get("ok").and_then(|v| v.as_bool()) == Some(true);
     Ok(ServiceStatus {
-        running: true,
-        healthy,
-        pid,
-        port: None, // unix socket 没端口
+        running: true, healthy, pid: None, port: None,
         message: Some(if healthy {
-            "已就绪（unix socket）".into()
-        } else {
-            "进程在但 RPC 未响应 — 可能还在 import tools（首次启动 ~5s）".into()
-        }),
+            if cfg!(windows) { "已就绪（本机 TCP RPC）" } else { "已就绪（Unix socket RPC）" }.into()
+        } else { "RPC 已连接，但健康响应未确认就绪".into() }),
     })
 }
 

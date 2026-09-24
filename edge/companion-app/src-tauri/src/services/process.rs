@@ -263,12 +263,13 @@ pub fn is_alive(pid: u32) -> bool {
     #[cfg(windows)]
     {
         background_command("tasklist")
-            .args(["/FI", &format!("PID eq {}", pid), "/NH"])
+            .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV", "/NH"])
             .output()
             .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.contains(&pid.to_string()))
-            .unwrap_or(false)
+            .filter(|o| o.status.success())
+            .map(|o| tasklist_contains_pid(&o.stdout, pid))
+            // Inspection failure is not proof of death; never trigger a destructive respawn.
+            .unwrap_or(true)
     }
 }
 
@@ -324,21 +325,51 @@ fn cmdline_matches(pid: u32, substr: &str) -> Option<bool> {
     }
     #[cfg(windows)]
     {
-        let output = background_command("wmic")
-            .args([
-                "process",
-                "where",
-                &format!("ProcessId={}", pid),
-                "get",
-                "CommandLine",
-            ])
+        // WMIC is absent on current Windows installations. Emit UTF-8 explicitly:
+        // decoding localized command output as UTF-8 used to discard live PIDs.
+        let script = format!(
+            "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false; \
+             $ErrorActionPreference='Stop'; \
+             (Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine"
+        );
+        let output = background_command("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .output()
             .ok()?;
+        if !output.status.success() { return None; }
         let s = String::from_utf8(output.stdout).ok()?;
         if s.trim().is_empty() {
             return None;
         }
         Some(s.contains(substr))
+    }
+}
+
+#[cfg(any(windows, test))]
+fn tasklist_contains_pid(bytes: &[u8], pid: u32) -> bool {
+    // PID is ASCII even when image/user names use the Windows ANSI code page.
+    String::from_utf8_lossy(bytes).lines().any(|line| {
+        line.split(',').nth(1)
+            .and_then(|value| value.trim().trim_matches('"').parse::<u32>().ok()) == Some(pid)
+    })
+}
+
+#[cfg(test)]
+mod windows_pid_tests {
+    use super::tasklist_contains_pid;
+    #[test]
+    fn localized_names_do_not_hide_live_processes() {
+        assert!(tasklist_contains_pid(b"\"\xd6\xd0\xce\xc4.exe\",\"123\",\"Console\",\"1\"", 123));
+        assert!(!tasklist_contains_pid(b"\"python.exe\",\"1234\",\"Console\",\"1\"", 123));
+        assert!(!tasklist_contains_pid(b"INFO: No tasks are running", 123));
+    }
+    #[cfg(windows)]
+    #[test]
+    fn live_windows_test_process_is_recognized_without_wmic() {
+        assert!(super::is_alive(std::process::id()));
+        let executable = std::env::current_exe().unwrap();
+        let name = executable.file_name().unwrap().to_str().unwrap();
+        assert_eq!(super::cmdline_matches(std::process::id(), name), Some(true));
     }
 }
 

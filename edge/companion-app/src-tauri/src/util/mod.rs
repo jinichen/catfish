@@ -2,6 +2,7 @@
 
 pub mod date; // 日期换算 (8/15 从 commands/wiki_write.rs 挪来, 跟 wiki 无关)
 pub mod http_client;
+pub mod service_probe;
 pub mod paths;
 
 // P3.5.80 (7/28): 全进程唯一的 env 锁, 只在 test build 里编译.

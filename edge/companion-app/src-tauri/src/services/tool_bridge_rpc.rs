@@ -54,6 +54,15 @@ pub async fn call_with_timeout(
     rpc_timeout: Duration,
 ) -> Result<Value, String> {
     let endpoint_path = sock_path()?;
+    call_at_path(&endpoint_path, method, params, rpc_timeout).await
+}
+
+async fn call_at_path(
+    endpoint_path: &std::path::Path,
+    method: &str,
+    params: Value,
+    rpc_timeout: Duration,
+) -> Result<Value, String> {
     if !endpoint_path.exists() {
         return Err("tool-bridge endpoint 不存在 — 还没启动？".into());
     }
@@ -127,4 +136,36 @@ pub async fn call_with_timeout(
     }
 
     Ok(resp.get("result").cloned().unwrap_or(Value::Null))
+}
+
+#[cfg(all(test, windows))]
+mod windows_rpc_tests {
+    use super::*;
+    #[tokio::test]
+    async fn health_uses_port_file_without_pid_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("tool-bridge.sock");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        std::fs::write(&path, listener.local_addr().unwrap().port().to_string()).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = stream.into_split();
+            let mut line = String::new();
+            BufReader::new(read).read_line(&mut line).await.unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["method"], "health");
+            write.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\n").await.unwrap();
+        });
+        let result = call_at_path(&path, "health", Value::Null, Duration::from_secs(2)).await.unwrap();
+        assert_eq!(result["ok"], true);
+        server.await.unwrap();
+    }
+    #[tokio::test]
+    async fn malformed_endpoint_keeps_diagnostic() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("tool-bridge.sock");
+        std::fs::write(&path, "not-a-port").unwrap();
+        let error = call_at_path(&path, "health", Value::Null, Duration::from_secs(2)).await.unwrap_err();
+        assert!(error.contains("不是端口号"));
+    }
 }
