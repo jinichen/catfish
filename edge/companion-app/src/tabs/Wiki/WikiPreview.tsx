@@ -641,7 +641,9 @@ export default function WikiPreview() {
           spellCheck={false}
         />
       ) : (
-        /* markdown body */
+        /* markdown body —— 9/24: 包一层 .wiki-doc, 之前没有任何正文排版样式,
+           h2/表格全是浏览器默认 (h2 比页面标题还显眼, 表格首列被挤成一字一行) */
+        <div className="wiki-doc">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           urlTransform={wikiMarkdownUrl}
@@ -684,6 +686,7 @@ export default function WikiPreview() {
         >
           {rendered}
         </ReactMarkdown>
+        </div>
       )}
 
       <WikiHistorySection

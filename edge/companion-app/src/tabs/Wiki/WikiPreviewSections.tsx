@@ -115,7 +115,7 @@ export function WikiHistorySection({
         </span>
       </button>
       {showHistory && (
-        <div className="wiki-preview__history-body">
+        <div className="wiki-preview__history-body wiki-doc">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>
             {historyBody}
           </ReactMarkdown>

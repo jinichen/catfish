@@ -5157,3 +5157,102 @@ button {
     border-color: #5c4a26;
   }
 }
+
+/* ─────────────────────────────────────────────────────────────────────
+ * 知识条目正文排版 .wiki-doc (9/24 鸿波"字体是不是很乱")
+ *
+ * 之前 ReactMarkdown 输出没有任何样式, 全走浏览器默认:
+ *   · 正文里的 ## 小标题 = 1.5em 粗体, 跟页面标题 (24px) 几乎一样大, 层级乱
+ *   · 表格无边框无宽度, 首列被挤成"技术负责/人"一字一行, 表头居中、内容左对齐
+ *   · 段落/列表间距是浏览器默认
+ * 这里定一套只服务知识正文的层级: 页面标题 24 > 小标题 17 > 三级 15 > 正文 15 > 表格 14。
+ * ─────────────────────────────────────────────────────────────────────*/
+.wiki-doc {
+  color: var(--catfish-text);
+  font-size: 15px;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+.wiki-doc > :first-child { margin-top: 0; }
+.wiki-doc p { margin: 0 0 12px; }
+.wiki-doc h1,
+.wiki-doc h2,
+.wiki-doc h3,
+.wiki-doc h4 {
+  color: var(--catfish-text);
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0;
+}
+.wiki-doc h1 { margin: 28px 0 12px; font-size: 18px; }
+.wiki-doc h2 {
+  margin: 28px 0 12px;
+  padding-bottom: 6px;
+  font-size: 17px;
+  box-shadow: inset 0 -1px 0 var(--catfish-border);
+}
+.wiki-doc h3 { margin: 20px 0 8px; font-size: 15px; }
+.wiki-doc h4 { margin: 16px 0 6px; font-size: 14px; color: var(--catfish-text-muted); }
+.wiki-doc strong { font-weight: 600; }
+.wiki-doc ul,
+.wiki-doc ol { margin: 0 0 12px; padding-left: 22px; }
+.wiki-doc li { margin: 4px 0; }
+.wiki-doc li > p { margin: 0; }
+.wiki-doc blockquote {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--catfish-border-strong);
+  border-radius: 0 6px 6px 0;
+  background: var(--catfish-bg-cream);
+  color: var(--catfish-text-muted);
+  font-size: 14px;
+}
+.wiki-doc blockquote p:last-child { margin-bottom: 0; }
+.wiki-doc code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--catfish-bg-cream);
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+}
+.wiki-doc hr { margin: 20px 0; border: 0; border-top: 1px solid var(--catfish-border); }
+.wiki-doc table {
+  width: 100%;
+  margin: 4px 0 16px;
+  border-collapse: collapse;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.wiki-doc th,
+.wiki-doc td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--catfish-border);
+  text-align: left;
+  vertical-align: top;
+}
+.wiki-doc th {
+  background: var(--catfish-bg-cream);
+  color: var(--catfish-text-muted);
+  font-weight: 600;
+}
+/* 首列通常是"项目/字段名" (技术负责人/注册建造师…): 留够 7 个字宽, 不再被挤成一字一行;
+   不用 nowrap —— 首列偶尔是长句, nowrap 会把表格撑出横向滚动 */
+.wiki-doc th:first-child,
+.wiki-doc td:first-child { min-width: 7em; }
+.wiki-doc td:first-child { color: var(--catfish-text-muted); }
+/* 正文里的 [[链接]]: 原样式是 34px 高的带框按钮 (给"关系"区用的), 夹在句子里会把行距撑开;
+   正文内改成普通行内链接 */
+.wiki-doc .wiki-preview__wikilink {
+  display: inline;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  font: inherit;
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--catfish-cyan) 35%, transparent);
+  text-underline-offset: 3px;
+}
+.wiki-doc .wiki-preview__wikilink:hover { background: none; text-decoration-color: currentColor; }

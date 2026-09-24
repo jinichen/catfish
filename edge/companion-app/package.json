@@ -1,6 +1,6 @@
 {
   "name": "catfish-companion-app",
-  "version": "1.0.17",
+  "version": "1.0.18",
   "description": "Catfish Companion App — desktop sidekick for managing local Catfish components, sessions, and quota",
   "private": true,
   "type": "module",
