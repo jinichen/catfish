@@ -7,9 +7,11 @@ import {
   RELATION_VOCAB,
   buildConfirmedWikiContent,
   buildWikiRelationshipTasks,
+  cleanPendingFiles,
   conflictFieldLabel,
   hasLegacyWikiRelations,
   relationTypeOptions,
+  renameRelationTarget,
 } from "./wikiRelationshipTasks";
 
 function file(overrides: Partial<WikiFileInfo>): WikiFileInfo {
@@ -31,13 +33,45 @@ function file(overrides: Partial<WikiFileInfo>): WikiFileInfo {
 }
 
 describe("buildWikiRelationshipTasks", () => {
-  it("分别生成待确认和缺少关系任务", () => {
+  it("9/24: 没有关系不再算任务 —— 只有待确认条目要人看", () => {
     const tasks = buildWikiRelationshipTasks([
       file({ rel_path: "wiki/entities/pending.md", title: "待确认", ontology_status: "pending" }),
       file({ rel_path: "wiki/entities/orphan.md", title: "孤立项" }),
       file({ rel_path: "wiki/entities/linked.md", title: "已关联", related: [{ name: "孤立项", rel: "关联" }] }),
     ]);
-    expect(tasks.map((task) => task.kind)).toEqual(["pending", "missing"]);
+    expect(tasks.map((task) => task.kind)).toEqual(["pending"]);
+    expect(tasks[0].detail).toContain("关系可选");
+  });
+
+  it("9/24: 同一个名字指向不明, 不管多少处引用只算一条任务", () => {
+    const company = file({ rel_path: "wiki/entities/company.md", title: "中电福富信息科技有限公司", aliases: ["中电福富"] });
+    const dup = file({ rel_path: "wiki/entities/fufu.md", title: "福富", aliases: ["中电福富"] });
+    const refs = Array.from({ length: 24 }, (_, i) =>
+      file({ rel_path: `wiki/concepts/c${i}.md`, title: `规则${i}`, related: [{ name: "中电福富", rel: "隶属" }] }));
+    const tasks = buildWikiRelationshipTasks([company, dup, ...refs]);
+    const ambiguous = tasks.filter((task) => task.kind === "ambiguous");
+    expect(ambiguous).toHaveLength(1);
+    expect(ambiguous[0].refs).toHaveLength(24);
+    expect(ambiguous[0].candidates?.map((c) => c.title).sort()).toEqual(["中电福富信息科技有限公司", "福富"].sort());
+    expect(tasks.some((task) => task.kind === "broken")).toBe(false);
+  });
+
+  it("9/24: 待确认条目自己的关系问题不另开任务, 在工作台里逐条标", () => {
+    const tasks = buildWikiRelationshipTasks([
+      file({ rel_path: "wiki/concepts/p.md", title: "新流程", ontology_status: "pending", related: [{ name: "不存在", rel: "依据" }] }),
+    ]);
+    expect(tasks.map((task) => task.kind)).toEqual(["pending"]);
+    expect(tasks[0].detail).toContain("1 条要改");
+  });
+
+  it("9/24: 目标是待确认条目也算连得上 (同一批互相引用)", () => {
+    const tasks = buildWikiRelationshipTasks([
+      file({ rel_path: "wiki/concepts/a.md", title: "材料版本控制流程", ontology_status: "pending", related: [{ name: "终验报告归档规则", rel: "配套" }] }),
+      file({ rel_path: "wiki/concepts/b.md", title: "终验报告归档规则", ontology_status: "pending" }),
+    ]);
+    expect(tasks.every((task) => task.kind === "pending")).toBe(true);
+    expect(cleanPendingFiles(tasks.map((task) => task.file)).map((f) => f.title).sort())
+      .toEqual(["材料版本控制流程", "终验报告归档规则"].sort());
   });
 
   it("把标题和别名冲突合并成一个重复组", () => {
@@ -65,8 +99,8 @@ describe("buildWikiRelationshipTasks", () => {
     const broken = tasks.filter((task) => task.kind === "broken");
     expect(broken).toHaveLength(2);
     expect(broken.map((task) => task.relationName)).toEqual(["不存在的目标", "示例"]);
-    expect(broken[0].detail).toContain("找不到目标条目");
-    expect(broken[1].detail).toContain("缺少关系类型");
+    expect(broken[0].detail).toContain("找不到这个条目");
+    expect(broken[1].detail).toContain("没写关系类型");
   });
 
   it("正常的 typed relation 不生成异常任务", () => {
@@ -95,6 +129,22 @@ describe("hasLegacyWikiRelations", () => {
 });
 
 describe("buildConfirmedWikiContent", () => {
+  it("9/24: keepStatus —— 只改关系 (删/加/改名) 不等于员工核对过, 待确认状态原样", () => {
+    const source = "---\ntitle: 示例\nrelated: [{name: \"A\", rel: \"依据\"}]\nontology_status: pending\n---\n\n正文\n";
+    const result = buildConfirmedWikiContent(source, [], undefined, { keepStatus: true });
+    expect(result).toContain("related: []");
+    expect(result).toContain("ontology_status: pending");
+  });
+
+  it("9/24: renameRelationTarget 只改写了这个名字的关系, 正文引用不动", () => {
+    const next = renameRelationTarget(
+      [{ name: "中电福富", rel: "隶属" }, { name: "中电福富", source: "body" }, { name: "B", rel: "依据" }],
+      "中电福富",
+      "中电福富信息科技有限公司",
+    );
+    expect(next.map((r) => r.name)).toEqual(["中电福富信息科技有限公司", "中电福富", "B"]);
+  });
+
   it("写入结构化关系并把待确认状态改为 active", () => {
     const source = "---\ntitle: 示例\nrelated: []\nontology_status: pending\n---\n\n正文\n";
     const result = buildConfirmedWikiContent(source, [{ name: "产品研发部", rel: "所属部门" }]);

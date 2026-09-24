@@ -185,6 +185,33 @@ def test_new_entry_with_unresolved_relation_is_pending(tmp_path):
     assert "unresolved_relation" in reasons
 
 
+def test_entry_without_relation_is_active(tmp_path):
+    """9/24: 关系可选 —— 没写关系直接 active, 不再逼员工硬配一条。"""
+    content = "---\ntype: concept\ntitle: 独立流程\nconcept_type: process\n---\n\n正文。\n"
+    assert _classify_ontology_status(tmp_path, "wiki/concepts/x.md", content) == ("active", [])
+
+
+def test_entry_without_type_still_pending(tmp_path):
+    content = "---\ntype: concept\ntitle: 没类型\n---\n\n正文。\n"
+    assert _classify_ontology_status(tmp_path, "wiki/concepts/x.md", content) == ("pending", ["missing_type"])
+
+
+def test_relation_to_pending_target_resolves(tmp_path):
+    """9/24: 目标是待确认也算找得到 (9/20 那批 6 条互相引用, 一条 pending 全体 pending)。
+    废弃/驳回的目标仍然算找不到。"""
+    concepts = tmp_path / "wiki" / "concepts"
+    concepts.mkdir(parents=True)
+    (concepts / "a.md").write_text(
+        "---\ntype: concept\ntitle: 归档规则\nconcept_type: rule\nontology_status: pending\n---\n", encoding="utf-8")
+    (concepts / "b.md").write_text(
+        "---\ntype: concept\ntitle: 旧流程\nconcept_type: rule\nontology_status: rejected\n---\n", encoding="utf-8")
+    ok = '---\ntype: concept\ntitle: X\nconcept_type: process\nrelated: [{name: "归档规则", rel: "配套"}]\n---\n\n正文。\n'
+    assert _classify_ontology_status(tmp_path, "wiki/concepts/x.md", ok) == ("active", [])
+    gone = '---\ntype: concept\ntitle: X\nconcept_type: process\nrelated: [{name: "旧流程", rel: "替代"}]\n---\n\n正文。\n'
+    status, reasons = _classify_ontology_status(tmp_path, "wiki/concepts/x.md", gone)
+    assert status == "pending" and "unresolved_relation" in reasons
+
+
 def test_system_without_parent_relation_is_active(tmp_path):
     content = "---\ntype: concept\ntitle: 顶级体系\nconcept_type: system\n---\n\n正文。\n"
     assert _classify_ontology_status(tmp_path, "wiki/concepts/system.md", content) == ("active", [])

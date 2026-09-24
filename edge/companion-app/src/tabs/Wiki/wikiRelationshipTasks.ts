@@ -1,7 +1,14 @@
 import type { RelatedRef, WikiConflict, WikiFileInfo } from "../../lib/tauri_wiki";
 import { resolveWikiRef } from "../../lib/wikiResolve";
 
-export type WikiRelationshipTaskKind = "pending" | "missing" | "duplicate" | "broken" | "conflict";
+/**
+ * 9/24 (鸿波「没有关系的还要强制确定关系, 不是很乱吗」) 重排:
+ *   · 删掉「缺少关系」—— 关系是可选的, 三条写入产线也不再因为没关系判 pending
+ *   · 同一个名字指向不明 (ambiguous) 合成一条任务: 「中电福富」一个撞名曾经
+ *     报成 24 条"关系异常", 其实只要选一次它指谁
+ *   · 待确认条目自己的关系问题在工作台里逐条标出, 不再另开 broken 任务重复列
+ */
+export type WikiRelationshipTaskKind = "conflict" | "pending" | "ambiguous" | "broken" | "duplicate";
 
 export interface WikiRelationshipTask {
   id: string;
@@ -13,6 +20,21 @@ export interface WikiRelationshipTask {
   relationName?: string;
   /** kind === "conflict" 时: 哪个字段、两个值 */
   conflict?: WikiConflict;
+  /** kind === "ambiguous" 时: 哪些条目写了这个名字 / 它可能指的条目 */
+  refs?: WikiFileInfo[];
+  candidates?: WikiFileInfo[];
+}
+
+/** 一条 frontmatter 关系的问题; 正文引用和没问题的返回 null。 */
+export function relationIssue(relation: RelatedRef, files: WikiFileInfo[]): string | null {
+  if (relation.source === "body") return null;
+  const name = relation.name.trim();
+  if (!name) return null;
+  if (!relation.rel?.trim()) return "没写关系类型";
+  const resolution = resolveWikiRef(name, files);
+  if (resolution.kind === "miss") return "找不到这个条目";
+  if (resolution.kind === "ambiguous") return `有 ${resolution.candidates.length} 个条目都叫这个名字`;
+  return null;
 }
 
 /** `entity_type` → 类型; `rel:中电福富` → 与「中电福富」的关系 */
@@ -109,58 +131,62 @@ function duplicateGroups(files: WikiFileInfo[]): WikiFileInfo[][] {
 }
 
 export function buildWikiRelationshipTasks(files: WikiFileInfo[]): WikiRelationshipTask[] {
-  const pending = files
-    .filter((file) => (file.ontology_status ?? "active") === "pending")
-    .map((file): WikiRelationshipTask => ({
+  const isPending = (file: WikiFileInfo) => (file.ontology_status ?? "active") === "pending";
+
+  const pending = files.filter(isPending).map((file): WikiRelationshipTask => {
+    const typed = file.related.filter((relation) => relation.source !== "body");
+    const issues = typed.filter((relation) => relationIssue(relation, files)).length;
+    return {
       id: `pending:${file.rel_path}`,
       kind: "pending",
-      title: `确认「${file.title}」的关系`,
-      detail: file.related.length > 0
-        ? `小鲶写了 ${file.related.length} 条候选关系，还没人核对；对的话一键确认`
-        : "尚未确认它与谁有关",
+      title: `确认「${file.title}」`,
+      detail: typed.length === 0
+        ? "小鲶新建的条目，没有写关系（关系可选），看一眼就能确认"
+        : issues > 0
+          ? `小鲶写了 ${typed.length} 条关系，其中 ${issues} 条要改`
+          : `小鲶写了 ${typed.length} 条关系，没问题就确认`,
       file,
-    }));
+    };
+  });
 
-  const missing = files
-    .filter(
-      (file) =>
-        file.kind !== "query" &&
-        (file.ontology_status ?? "active") === "active" &&
-        file.related.length === 0,
-    )
-    .map((file): WikiRelationshipTask => ({
-      id: `missing:${file.rel_path}`,
-      kind: "missing",
-      title: `补充「${file.title}」的关系`,
-      detail: "至少补充一条关键关系，图谱才便于理解",
-      file,
-    }));
-
-  const broken = files.flatMap((file): WikiRelationshipTask[] =>
-    file.related.flatMap((relation) => {
+  // 指向不明: 按名字合并。待确认条目也算进引用方 —— 选一次, 所有写这个名字的一起改。
+  const ambiguousByName = new Map<string, { refs: WikiFileInfo[]; candidates: WikiFileInfo[] }>();
+  const broken: WikiRelationshipTask[] = [];
+  for (const file of files) {
+    for (const relation of file.related) {
+      if (relation.source === "body") continue;
       const name = relation.name.trim();
-      if (!name) return [];
-      // 正文 wikilink 用于导航/图谱，不等于用户声明的语义关系。
-      if (relation.source === "body") return [];
-      const resolution = resolveWikiRef(name, files);
-      const reason = !relation.rel?.trim()
-        ? "缺少关系类型"
-        : resolution.kind === "miss"
-          ? "找不到目标条目"
-          : resolution.kind === "ambiguous"
-            ? `有 ${resolution.candidates.length} 个可能目标`
-            : null;
-      if (!reason) return [];
-      return [{
+      if (!name) continue;
+      const resolution = relation.rel?.trim() ? resolveWikiRef(name, files) : null;
+      if (resolution?.kind === "ambiguous") {
+        const group = ambiguousByName.get(name) ?? { refs: [], candidates: resolution.candidates };
+        if (!group.refs.includes(file)) group.refs.push(file);
+        ambiguousByName.set(name, group);
+        continue;
+      }
+      if (isPending(file)) continue; // 在它自己的待确认任务里逐条标出
+      const issue = relationIssue(relation, files);
+      if (!issue) continue;
+      broken.push({
         id: `broken:${file.rel_path}:${name}`,
         kind: "broken",
-        title: `修复「${file.title}」的关系`,
-        detail: `“${name}”：${reason}`,
+        title: `「${file.title}」的一条关系要改`,
+        detail: `“${name}”：${issue}`,
         file,
         relationName: name,
-      }];
-    }),
-  );
+      });
+    }
+  }
+  const ambiguous = [...ambiguousByName.entries()].map(([name, group]): WikiRelationshipTask => ({
+    id: `ambiguous:${name}`,
+    kind: "ambiguous",
+    title: `「${name}」指的是哪一个`,
+    detail: `${group.refs.length} 处关系写了这个名字，${group.candidates.length} 个条目都叫它；选一次，全部一起改`,
+    file: group.refs[0],
+    relationName: name,
+    refs: group.refs,
+    candidates: group.candidates,
+  }));
 
   const duplicates = duplicateGroups(files).map((group): WikiRelationshipTask => ({
     id: `duplicate:${group.map((file) => file.rel_path).sort().join("|")}`,
@@ -184,7 +210,24 @@ export function buildWikiRelationshipTasks(files: WikiFileInfo[]): WikiRelations
     })),
   );
 
-  return [...conflicts, ...pending, ...broken, ...missing, ...duplicates];
+  return [...conflicts, ...ambiguous, ...pending, ...broken, ...duplicates];
+}
+
+/** 待确认里「没有要改的关系」的那些 —— 可以一次全部确认。 */
+export function cleanPendingFiles(files: WikiFileInfo[]): WikiFileInfo[] {
+  return files.filter(
+    (file) =>
+      (file.ontology_status ?? "active") === "pending" &&
+      (file.conflicts?.length ?? 0) === 0 &&
+      file.related.every((relation) => !relationIssue(relation, files)),
+  );
+}
+
+/** 把关系里写的名字 from 换成 to (指向不明 → 选定的那个条目), 其它关系原样。 */
+export function renameRelationTarget(relations: RelatedRef[], from: string, to: string): RelatedRef[] {
+  return relations.map((relation) =>
+    relation.source !== "body" && relation.name.trim() === from.trim() ? { ...relation, name: to } : relation,
+  );
 }
 
 /**
@@ -243,6 +286,8 @@ export function buildConfirmedWikiContent(
   content: string,
   relations: RelatedRef[],
   metadata?: WikiRelationFileMetadata,
+  /** 9/24: 只改关系、不代表员工已核对 (删一条 / 加一条 / 批量改名) → 状态原样 */
+  options: { keepStatus?: boolean } = {},
 ): string {
   const normalized = content.replace(/^\uFEFF/, "");
   const opening = normalized.match(/^[\t ]*---\r?\n/);
@@ -276,11 +321,11 @@ export function buildConfirmedWikiContent(
     }
     if (/^\s*ontology_status\s*:/.test(line)) {
       foundStatus = true;
-      return "ontology_status: active";
+      return options.keepStatus ? line : "ontology_status: active";
     }
     return line;
   });
   if (!foundRelated) nextLines.push(`related: [${serialized}]`);
-  if (!foundStatus) nextLines.push("ontology_status: active");
+  if (!foundStatus && !options.keepStatus) nextLines.push("ontology_status: active");
   return `---\n${nextLines.join("\n")}\n---${normalized.slice(end + closing[0].length)}`;
 }

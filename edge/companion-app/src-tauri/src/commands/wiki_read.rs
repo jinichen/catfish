@@ -294,7 +294,7 @@ pub(crate) fn build_file_info(home: &Path, abs_path: &Path) -> Option<WikiFileIn
     build_file_info_inner(home, abs_path, /* allow_tombstone */ false)
 }
 
-pub use super::wiki_ontology::ontology_target_is_active;
+pub use super::wiki_ontology::{name_owner, ontology_target_resolves};
 
 /// allow_tombstone=true 时不跳 tombstone (wiki_read_file 用, 员工想直接打开看).
 fn build_file_info_inner(

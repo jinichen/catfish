@@ -23,7 +23,7 @@ use crate::util::date::chrono_today;
 use super::wiki_frontmatter::{
     canon_relation, mark_authored_by_employee, normalize_type_line, RELATION_FALLBACK,
 };
-use super::wiki_read::ontology_target_is_active;
+use super::wiki_read::{name_owner, ontology_target_resolves};
 use super::wiki_slug::{catfish_home, find_normalized_collision, slugify, validate_slug};
 
 fn reserved_ontology_title(title: &str) -> bool {
@@ -107,6 +107,14 @@ pub async fn wiki_create_entity_or_concept(
         ));
     }
 
+    // 9/24: 标题已是别的条目的标题/别名 (「福富」是「中电福富信息科技有限公司」的
+    // 别名) —— 同一个东西, 去改那一条。跟蒸馏侧 / tool-bridge 同一道闸。
+    if let Some((owner_path, owner_title)) = name_owner(&home, title_trimmed) {
+        return Err(format!(
+            "「{title_trimmed}」已是「{owner_title}」({owner_path}) 的名字或别名 —— 请直接编辑那一条, 不要建重复的。"
+        ));
+    }
+
     // 9/17: rel 归一到 contracts/wiki_relation_vocab.json (所属部门 → 隶属; 表外 →
     // 「关联」)。跟蒸馏侧同一份词表, UI 手工建的和后台蒸馏的不再两套词。
     let related: Vec<RelatedInput> = related
@@ -175,14 +183,10 @@ pub async fn wiki_create_entity_or_concept(
             RelatedInput::Bare(name) => name,
             RelatedInput::Typed { name, .. } => name,
         };
-        !ontology_target_is_active(&home, name.trim_matches('"'))
+        !ontology_target_resolves(&home, name.trim_matches('"'))
     });
-    let ontology_status = if kind == "concept"
-        && subtype_trimmed.eq_ignore_ascii_case("system")
-        && related.is_empty()
-    {
-        "active"
-    } else if related.is_empty() || has_untyped_relation || has_unresolved_relation {
+    // 9/24: 关系是可选的 —— 没写关系直接 active (以前判 pending, 员工只能硬配一条)。
+    let ontology_status = if has_untyped_relation || has_unresolved_relation {
         "pending"
     } else {
         "active"

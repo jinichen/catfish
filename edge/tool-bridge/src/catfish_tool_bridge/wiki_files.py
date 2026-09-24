@@ -55,6 +55,10 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from .wiki_names import drop_claimed_aliases as _drop_claimed_aliases
+from .wiki_names import name_owners as _name_owners
+from .wiki_names import ontology_status_for_create as _ontology_status_for_create
+
 logger = logging.getLogger("catfish.tool_bridge.wiki_files")
 
 # 自家 wiki 的三个子目录 —— 跟 wiki_read.rs:412 同一份清单。
@@ -307,41 +311,6 @@ def _build_file_info(home: Path, path: Path, subdir: str) -> dict[str, Any] | No
         "size_bytes": size_bytes,
         "mtime": stat.st_mtime,
     }
-
-
-def _ontology_status_for_create(
-    home: Path,
-    kind: str,
-    subtype: str,
-    related: list[str | dict[str, Any]],
-) -> tuple[str, list[str]]:
-    """让工具写入与蒸馏写入遵守同一条 pending 规则。"""
-    if kind == "concept" and subtype.strip().lower() == "system" and not related:
-        return "active", []
-    if not related:
-        return "pending", ["missing_relation"]
-    existing = list_wiki_files(limit=100000).get("items", [])
-    reasons: list[str] = []
-    # 9/17: 没 rel / rel 是兜底「关联」都算没类型 —— 跟蒸馏侧同口径
-    if any(_relation_is_untyped(raw) for raw in related):
-        reasons.append("untyped_relation")
-    for raw in related:
-        name = _relation_name(raw)
-        if not name:
-            continue
-        matches = [
-            item for item in existing
-            if item["kind"] in ("entity", "concept")
-            and item.get("ontology_status", "active") == "active"
-            and (item["title"].strip().lower() == name.lower()
-            or item["slug"].strip().lower() == name.lower()
-            or any(a.strip().lower() == name.lower() for a in item.get("aliases", [])))
-        ]
-        if len(matches) == 0:
-            reasons.append("unresolved_relation")
-        elif len(matches) > 1:
-            reasons.append("ambiguous_relation")
-    return ("pending", sorted(set(reasons))) if reasons else ("active", [])
 
 
 def _relation_name(value: str | dict[str, Any]) -> str:
@@ -606,6 +575,18 @@ def create_wiki_entry(
             "rel_path": existing,
         }
 
+    # 9/24: 标题已是别的条目的标题/别名 (「福富」是「中电福富信息科技有限公司」的
+    # 别名) —— 那就是同一个东西, 去更新那一条, 不建第二份。
+    if owners := _name_owners(title):
+        return {
+            "ok": False,
+            "error": (
+                f"「{title}」已是 {owners[0]['rel_path']} (「{owners[0]['title']}」) 的名字或别名 — "
+                "用 catfish_wiki_update 改那一条, 不要建重复的。"
+            ),
+            "rel_path": owners[0]["rel_path"],
+        }
+
     today = date.today().isoformat()
     type_field = "entity_type" if kind == "entity" else "concept_type"
     tags_yaml = ", ".join((t or "").replace('"', "") for t in (tags or []) if t)
@@ -705,7 +686,9 @@ def update_wiki_file(rel_path: str, content: str) -> dict[str, Any]:
             "ok": False,
             "error": f"文件不存在: {rel_path} — 建新条目用 catfish_wiki_create",
         }
+    dropped_aliases: list[str] = []
     if rel_path.startswith("wiki/entities/") or rel_path.startswith("wiki/concepts/"):
+        content, dropped_aliases = _drop_claimed_aliases(rel_path, content)
         fm, _ = _split_frontmatter(content)
         subtype = _parse_field(fm, "entity_type") or _parse_field(fm, "concept_type") or ""
         related = _parse_related(fm)
@@ -727,6 +710,10 @@ def update_wiki_file(rel_path: str, content: str) -> dict[str, Any]:
     }
     if status == "pending":
         result["warning"] = "条目已保存，但暂列为待确认，不进入关系图：" + ",".join(reasons)
+    if dropped_aliases:
+        result["warning"] = (result.get("warning", "") + " " if result.get("warning") else "") + (
+            "这些别名已属于别的条目, 没有写入 (同一个名字只能指一个条目): " + "、".join(dropped_aliases)
+        )
     # 写完顺手告诉调用方它还在不在 TAB 里 —— 覆写成一个 256 字节以内的空壳
     # 会让它变成 tombstone 从列表消失, 这种"写成功了但看不见"必须当场说出来,
     # 那正是 8/3 那一轮的形状。

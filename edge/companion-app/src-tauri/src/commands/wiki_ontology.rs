@@ -158,8 +158,11 @@ pub async fn wiki_migrate_legacy_relations(
     })
 }
 
-/// 判断关系目标是否是唯一且 active 的本体节点。
-pub fn ontology_target_is_active(home: &Path, name: &str) -> bool {
+/// 判断关系目标是否唯一解析到一个未废弃的本体节点。
+/// 9/24: 目标「待确认」也算找得到, 只排除明确废弃/驳回的 (旧名 ontology_target_is_active
+/// 只认 active —— 同一批互相引用的条目一条 pending 就全体 pending)。
+/// 跟蒸馏侧 _classify_ontology_status / tool-bridge _ontology_status_for_create 同口径。
+pub fn ontology_target_resolves(home: &Path, name: &str) -> bool {
     let needle = name.trim().to_lowercase();
     if needle.is_empty() {
         return false;
@@ -170,7 +173,7 @@ pub fn ontology_target_is_active(home: &Path, name: &str) -> bool {
         .filter(|info| matches!(info.kind.as_str(), "entity" | "concept"))
         .filter(|info| {
             let status = info.ontology_status.as_deref().unwrap_or("active").to_lowercase();
-            status == "active"
+            !matches!(status.as_str(), "rejected" | "deprecated")
                 && (info.title.to_lowercase() == needle
                     || info.slug.to_lowercase() == needle
                     || info
@@ -180,6 +183,30 @@ pub fn ontology_target_is_active(home: &Path, name: &str) -> bool {
         })
         .count();
     matches == 1
+}
+
+/// 9/24「福富」: 这个名字是否已被某个条目 (title 或 aliases) 认领 —— 返回那个条目的
+/// (rel_path, title)。新建时标题被认领 = 同一个东西, 应该更新那一条而不是建第二份;
+/// 否则两个条目认领同一个名字, 所有写这个名字的关系都会解析成"指向不明"。
+/// 跟 catfish-memory wiki_resolve.name_owners / tool-bridge wiki_names.name_owners 同口径。
+pub fn name_owner(home: &Path, name: &str) -> Option<(String, String)> {
+    let needle = name.trim().to_lowercase();
+    if needle.is_empty() {
+        return None;
+    }
+    collect_all_wiki_md(home)
+        .into_iter()
+        .filter_map(|path| build_file_info(home, &path))
+        .filter(|info| matches!(info.kind.as_str(), "entity" | "concept"))
+        .filter(|info| {
+            let status = info.ontology_status.as_deref().unwrap_or("active").to_lowercase();
+            !matches!(status.as_str(), "rejected" | "deprecated")
+        })
+        .find(|info| {
+            info.title.trim().to_lowercase() == needle
+                || info.aliases.iter().any(|alias| alias.trim().to_lowercase() == needle)
+        })
+        .map(|info| (info.rel_path, info.title))
 }
 
 #[cfg(test)]
@@ -202,5 +229,29 @@ mod tests {
         let (result, converted) = migrate_content(source);
         assert_eq!(converted, 0);
         assert_eq!(result, source);
+    }
+
+    #[test]
+    fn name_owner_sees_titles_and_aliases_but_not_rejected() {
+        let home = tempfile::tempdir().unwrap();
+        let ents = home.path().join("wiki/entities");
+        std::fs::create_dir_all(&ents).unwrap();
+        std::fs::write(
+            ents.join("company.md"),
+            "---\ntype: entity\ntitle: 中电福富信息科技有限公司\nentity_type: org\naliases: [\"中电福富\", \"福富\"]\n---\n\n公司简介, 写长一点免得被当成墓碑条目隐藏掉。公司简介, 写长一点免得被当成墓碑条目隐藏掉。\n",
+        )
+        .unwrap();
+        std::fs::write(
+            ents.join("old.md"),
+            "---\ntype: entity\ntitle: 旧主体\nentity_type: org\nontology_status: rejected\n---\n\n已驳回的条目, 写长一点免得被当成墓碑条目隐藏掉。已驳回的条目。\n",
+        )
+        .unwrap();
+        let owner = super::name_owner(home.path(), " 福富 ").map(|(_, title)| title);
+        assert_eq!(owner.as_deref(), Some("中电福富信息科技有限公司"));
+        assert!(super::name_owner(home.path(), "中电福富信息科技有限公司").is_some());
+        assert!(super::name_owner(home.path(), "旧主体").is_none());
+        assert!(super::name_owner(home.path(), "别的公司").is_none());
+        // 别名唯一时关系能解析到它
+        assert!(super::ontology_target_resolves(home.path(), "中电福富"));
     }
 }

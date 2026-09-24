@@ -10,10 +10,17 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react";
 import { useWikiStore } from "../../store/wiki";
-import { wikiMigrateLegacyRelations, type WikiRelationMigrationResult } from "../../lib/tauri_wiki";
+import {
+  wikiMigrateLegacyRelations,
+  wikiReadFile,
+  wikiUpdateFile,
+  type WikiRelationMigrationResult,
+} from "../../lib/tauri_wiki";
 import WikiTree from "./WikiTree";
 import {
+  buildConfirmedWikiContent,
   buildWikiRelationshipTasks,
+  cleanPendingFiles,
   hasLegacyWikiRelations,
   type WikiRelationshipTaskKind,
 } from "./wikiRelationshipTasks";
@@ -25,23 +32,26 @@ const TASK_META: Record<
   { label: string; icon: typeof CheckCircle }
 > = {
   conflict: { label: "两个说法", icon: ArrowsLeftRight },
+  ambiguous: { label: "指向不明", icon: LinkSimple },
   pending: { label: "待确认", icon: CheckCircle },
-  missing: { label: "缺少关系", icon: LinkSimple },
+  broken: { label: "关系要改", icon: WarningCircle },
   duplicate: { label: "可能重复", icon: Copy },
-  broken: { label: "关系异常", icon: WarningCircle },
 };
 
 export default function WikiOrganizer({
   mode,
   onModeChange,
+  taskId,
+  onSelectTask,
 }: {
   mode: WikiWorkspaceMode;
   onModeChange: (mode: WikiWorkspaceMode) => void;
+  taskId: string | null;
+  onSelectTask: (taskId: string | null) => void;
 }) {
   const files = useWikiStore((state) => state.files);
   const filesLoading = useWikiStore((state) => state.filesLoading);
   const filesError = useWikiStore((state) => state.filesError);
-  const selectedPath = useWikiStore((state) => state.selectedPath);
   const loadFiles = useWikiStore((state) => state.loadFiles);
   const selectFile = useWikiStore((state) => state.selectFile);
   const [search, setSearch] = useState("");
@@ -56,16 +66,33 @@ export default function WikiOrganizer({
 
   const tasks = useMemo(() => buildWikiRelationshipTasks(files), [files]);
   const hasLegacyRelations = useMemo(() => hasLegacyWikiRelations(files), [files]);
-  const counts = useMemo(
-    () => ({
-      conflict: tasks.filter((task) => task.kind === "conflict").length,
-      pending: tasks.filter((task) => task.kind === "pending").length,
-      missing: tasks.filter((task) => task.kind === "missing").length,
-      duplicate: tasks.filter((task) => task.kind === "duplicate").length,
-      broken: tasks.filter((task) => task.kind === "broken").length,
-    }),
-    [tasks],
-  );
+  const counts = useMemo(() => {
+    const out: Record<WikiRelationshipTaskKind, number> = { conflict: 0, ambiguous: 0, pending: 0, broken: 0, duplicate: 0 };
+    for (const task of tasks) out[task.kind] += 1;
+    return out;
+  }, [tasks]);
+  const visibleKinds = (Object.keys(TASK_META) as WikiRelationshipTaskKind[]).filter((kind) => counts[kind] > 0);
+  const cleanPending = useMemo(() => cleanPendingFiles(files), [files]);
+  const [bulkRunning, setBulkRunning] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+
+  // 9/24: 待确认里关系都没问题的 (含一条关系都没写的) —— 一次确认完, 不用逐条点。
+  const confirmAllClean = async () => {
+    setBulkRunning(true);
+    setBulkError(null);
+    const failed: string[] = [];
+    for (const file of cleanPending) {
+      try {
+        const full = await wikiReadFile(file.rel_path);
+        await wikiUpdateFile(file.rel_path, buildConfirmedWikiContent(full.content, full.info.related, full.info));
+      } catch (error) {
+        failed.push(`${file.title}: ${String(error)}`);
+      }
+    }
+    await loadFiles();
+    setBulkRunning(false);
+    if (failed.length > 0) setBulkError(failed.join("\n"));
+  };
   const visibleTasks = useMemo(() => {
     const query = search.trim().toLocaleLowerCase("zh-CN");
     return tasks.filter((task) => {
@@ -101,10 +128,16 @@ export default function WikiOrganizer({
   };
 
   useEffect(() => {
-    if (mode !== "organize" || filesLoading || tasks.length === 0) return;
-    if (selectedPath && tasks.some((task) => task.file.rel_path === selectedPath)) return;
-    void selectFile(tasks[0].file.rel_path);
-  }, [filesLoading, mode, selectFile, selectedPath, tasks]);
+    if (mode !== "organize" || filesLoading) return;
+    if (tasks.length === 0) {
+      if (taskId) onSelectTask(null);
+      return;
+    }
+    if (taskId && tasks.some((task) => task.id === taskId)) return;
+    const first = tasks[0];
+    onSelectTask(first.id);
+    void selectFile(first.file.rel_path);
+  }, [filesLoading, mode, onSelectTask, selectFile, taskId, tasks]);
 
   return (
     <div className="wiki-organizer">
@@ -146,7 +179,7 @@ export default function WikiOrganizer({
           </label>
 
           <div className="wiki-organizer__summary" aria-label="关系健康概览">
-            {(Object.keys(TASK_META) as WikiRelationshipTaskKind[]).map((kind) => {
+            {visibleKinds.map((kind) => {
               const Icon = TASK_META[kind].icon;
               return (
                 <button
@@ -164,6 +197,16 @@ export default function WikiOrganizer({
               );
             })}
           </div>
+
+          {cleanPending.length > 1 && (
+            <div className="wiki-organizer__bulk">
+              <span>{cleanPending.length} 条待确认的关系都没问题</span>
+              <button type="button" onClick={() => void confirmAllClean()} disabled={bulkRunning}>
+                {bulkRunning ? "确认中…" : "全部确认"}
+              </button>
+              {bulkError && <small className="wiki-organizer__migration-error">{bulkError}</small>}
+            </div>
+          )}
 
           {hasLegacyRelations && (
             <section className="wiki-organizer__migration" aria-label="旧关系格式整理">
@@ -228,9 +271,9 @@ export default function WikiOrganizer({
                 <button
                   type="button"
                   key={task.id}
-                  data-active={selectedPath === task.file.rel_path}
+                  data-active={taskId === task.id}
                   data-kind={task.kind}
-                  onClick={() => void selectFile(task.file.rel_path)}
+                  onClick={() => { onSelectTask(task.id); void selectFile(task.file.rel_path); }}
                 >
                   <span className="wiki-organizer__task-icon">
                     <Icon size={20} aria-hidden="true" />

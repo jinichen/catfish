@@ -109,12 +109,28 @@ def test_create_then_visible_immediately(tmp_path, monkeypatch):
     assert "中电系资质对标对齐矩阵" in titles, listed
 
 
-def test_create_without_relation_is_pending(tmp_path, monkeypatch):
+def test_create_without_relation_is_active(tmp_path, monkeypatch):
+    """9/24: 关系是可选的 —— 没写关系不再进待确认 (以前员工只能硬配一条)。"""
     monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
-    result = wiki_files.create_wiki_entry("entity", "待确认实体", "正文", subtype="org")
-    assert result["ok"] and result["warning"]
+    result = wiki_files.create_wiki_entry("entity", "独立实体", "正文", subtype="org")
+    assert result["ok"] and "warning" not in result, result
     content = (tmp_path / result["rel_path"]).read_text(encoding="utf-8")
-    assert "ontology_status: pending" in content
+    assert "ontology_status: active" in content
+
+
+def test_relation_to_pending_target_is_not_pending(tmp_path, monkeypatch):
+    """9/24: 同一批互相引用 —— 目标还是待确认也算找得到, 不连锁 pending。"""
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
+    first = wiki_files.create_wiki_entry(
+        "concept", "归档规则", "正文", subtype="rule",
+        related=[{"name": "还没建的流程", "rel": "配套"}],
+    )
+    assert "unresolved_relation" in first["warning"], first
+    second = wiki_files.create_wiki_entry(
+        "concept", "版本控制流程", "正文", subtype="process",
+        related=[{"name": "归档规则", "rel": "配套"}],
+    )
+    assert second["ok"] and "warning" not in second, second
 
 
 def test_create_canonicalizes_relation_and_treats_fallback_as_untyped(tmp_path, monkeypatch):
@@ -277,3 +293,35 @@ def test_path_traversal_blocked(bad, tmp_path, monkeypatch):
     monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
     assert not wiki_files.read_wiki_file(bad)["ok"]
     assert not wiki_files.update_wiki_file(bad, "x")["ok"]
+
+
+def test_create_refuses_title_that_is_existing_alias(tmp_path, monkeypatch):
+    """9/24「福富」: 标题已是别的条目的别名 → 同一个东西, 让它去更新那一条。"""
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
+    ents = tmp_path / "wiki" / "entities"
+    ents.mkdir(parents=True)
+    (ents / "company.md").write_text(
+        '---\ntype: entity\ntitle: 中电福富信息科技有限公司\nentity_type: org\naliases: ["中电福富", "福富"]\n---\n\n公司。\n',
+        encoding="utf-8",
+    )
+    r = wiki_files.create_wiki_entry("entity", "福富", "中标单位", subtype="org")
+    assert not r["ok"] and r["rel_path"] == "wiki/entities/company.md", r
+    assert not (ents / "福富.md").exists()
+
+
+def test_update_drops_alias_claimed_by_another_entry(tmp_path, monkeypatch):
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
+    ents = tmp_path / "wiki" / "entities"
+    ents.mkdir(parents=True)
+    (ents / "company.md").write_text(
+        '---\ntype: entity\ntitle: 中电福富信息科技有限公司\nentity_type: org\naliases: ["中电福富"]\n---\n\n公司。\n',
+        encoding="utf-8",
+    )
+    (ents / "group.md").write_text("---\ntype: entity\ntitle: 某集团\nentity_type: org\n---\n\n旧。\n", encoding="utf-8")
+    r = wiki_files.update_wiki_file(
+        "wiki/entities/group.md",
+        '---\ntype: entity\ntitle: 某集团\nentity_type: org\naliases: ["中电福富", "某集团公司"]\n---\n\n新。\n',
+    )
+    assert r["ok"] and "中电福富" in r["warning"], r
+    text = (ents / "group.md").read_text(encoding="utf-8")
+    assert 'aliases: ["某集团公司"]' in text, text

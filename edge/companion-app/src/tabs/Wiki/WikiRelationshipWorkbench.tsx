@@ -1,26 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ArrowRight,
   ArrowsLeftRight,
-  Check,
-  CheckCircle,
   FileText,
   LinkSimple,
   SpinnerGap,
-  Trash,
   WarningCircle,
 } from "@phosphor-icons/react";
-import { wikiUpdateFile, type RelatedRef } from "../../lib/tauri";
 import { wikiResolveConflict } from "../../lib/tauri_wiki";
-import { resolveWikiRefOrNull } from "../../lib/wikiResolve";
 import { useWikiStore } from "../../store/wiki";
-import {
-  buildConfirmedWikiContent,
-  buildWikiRelationshipTasks,
-  conflictFieldLabel,
-  relationTypeOptions,
-} from "./wikiRelationshipTasks";
+import { buildWikiRelationshipTasks, conflictFieldLabel } from "./wikiRelationshipTasks";
 import WikiActionPanel from "./WikiActionPanel";
+import WikiAmbiguousPanel from "./WikiAmbiguousPanel";
+import WikiRelationsEditor from "./WikiRelationsEditor";
 
 function evidenceExcerpt(body: string): string {
   return body
@@ -31,50 +23,53 @@ function evidenceExcerpt(body: string): string {
     .slice(0, 240);
 }
 
-export default function WikiRelationshipWorkbench() {
+const HEADER_HINT: Record<string, string> = {
+  conflict: "小鲶后来读到的跟现在记的不一样，选一个。",
+  pending: "小鲶新建的条目。看一眼关系对不对，对就确认；关系可以没有。",
+  broken: "有一条关系要改：改类型或删掉。",
+  duplicate: "名称相近的条目需要人工核对，避免错误合并。",
+};
+
+/** 9/24 重做: 任务按 id 选中 (一个名字指向不明 = 一条任务, 不再跟着某个文件走)。 */
+export default function WikiRelationshipWorkbench({
+  taskId,
+  onSelectTask,
+}: {
+  taskId: string | null;
+  onSelectTask: (taskId: string) => void;
+}) {
   const files = useWikiStore((state) => state.files);
   const selectedFile = useWikiStore((state) => state.selectedFile);
   const selectedLoading = useWikiStore((state) => state.selectedLoading);
   const selectedError = useWikiStore((state) => state.selectedError);
   const selectFile = useWikiStore((state) => state.selectFile);
   const loadFiles = useWikiStore((state) => state.loadFiles);
-  const [relationType, setRelationType] = useState("关联");
-  const [targetPath, setTargetPath] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
 
   const tasks = useMemo(() => buildWikiRelationshipTasks(files), [files]);
   const selectedTask = useMemo(
-    () => tasks.find(
-      (task) =>
-        task.file.rel_path === selectedFile?.info.rel_path ||
-        task.duplicatePaths?.includes(selectedFile?.info.rel_path ?? ""),
-    ),
-    [selectedFile?.info.rel_path, tasks],
+    () => tasks.find((task) => task.id === taskId)
+      ?? tasks.find((task) =>
+        task.kind !== "ambiguous" &&
+        (task.file.rel_path === selectedFile?.info.rel_path ||
+          task.duplicatePaths?.includes(selectedFile?.info.rel_path ?? ""))),
+    [selectedFile?.info.rel_path, taskId, tasks],
   );
-  const relationTypes = useMemo(() => relationTypeOptions(files), [files]);
-  const targets = useMemo(
-    () => files.filter(
-      (file) =>
-        file.rel_path !== selectedFile?.info.rel_path &&
-        (file.ontology_status ?? "active") === "active" &&
-        file.kind !== "query",
-    ),
-    [files, selectedFile?.info.rel_path],
-  );
+  const next = tasks.find((task) => task.id !== selectedTask?.id);
+  const onLater = next ? () => { onSelectTask(next.id); void selectFile(next.file.rel_path); } : null;
 
-  useEffect(() => {
-    setSaveError(null);
-    setSaved(false);
-    const first = selectedTask?.kind === "broken" && selectedTask.relationName
-      ? selectedFile?.info.related.find((relation) => relation.name.trim() === selectedTask.relationName?.trim())
-      : selectedFile?.info.related[0];
-    setRelationType(first?.rel?.trim() || "关联");
-    const target = first ? resolveWikiRefOrNull(first.name, files) : null;
-    setTargetPath(target?.rel_path ?? targets[0]?.rel_path ?? "");
-  }, [files, selectedFile?.frontmatter, selectedFile?.info.rel_path, selectedFile?.info.related, selectedTask?.id, selectedTask?.kind, selectedTask?.relationName, targets]);
-
+  if (selectedTask?.kind === "ambiguous") {
+    return (
+      <div className="wiki-workbench">
+        <header className="wiki-workbench__header">
+          <h2>「{selectedTask.relationName}」指的是哪一个</h2>
+          <p>同一个名字被几个条目占着，写了这个名字的关系都连不上。</p>
+        </header>
+        <WikiAmbiguousPanel key={selectedTask.id} task={selectedTask} onLater={onLater} />
+      </div>
+    );
+  }
   if (selectedLoading) {
     return <div className="wiki-workbench__empty"><SpinnerGap className="wiki-spin" size={30} />正在读取关系…</div>;
   }
@@ -85,114 +80,31 @@ export default function WikiRelationshipWorkbench() {
     return (
       <div className="wiki-workbench__empty">
         <LinkSimple size={36} weight="duotone" aria-hidden="true" />
-        <strong>从左侧选择一项关系任务</strong>
-        <span>逐条确认后，知识图谱会自动变得清晰。</span>
+        <strong>从左侧选一项</strong>
+        <span>逐条处理后，知识图谱会自动变得清晰。</span>
       </div>
     );
   }
 
   const info = selectedFile.info;
-  const selectedTarget = targets.find((file) => file.rel_path === targetPath);
   const duplicateFiles = selectedTask?.duplicatePaths
     ?.map((path) => files.find((file) => file.rel_path === path))
     .filter(Boolean) ?? [];
 
-  const confirmRelation = async () => {
-    if (!selectedTarget || !relationType.trim()) return;
-    setSaving(true);
-    setSaveError(null);
-    setSaved(false);
-    try {
-      const nextRelation: RelatedRef = { name: selectedTarget.title, rel: relationType.trim() };
-      const existing = info.related.filter((relation) => {
-        if (
-          selectedTask?.kind === "broken" &&
-          selectedTask.relationName &&
-          relation.name.trim() === selectedTask.relationName.trim()
-        ) {
-          return false;
-        }
-        const target = resolveWikiRefOrNull(relation.name, files);
-        return target?.rel_path !== selectedTarget.rel_path;
-      });
-      const content = buildConfirmedWikiContent(selectedFile.content, [...existing, nextRelation], info);
-      await wikiUpdateFile(info.rel_path, content);
-      await loadFiles();
-      await selectFile(info.rel_path);
-      setSaved(true);
-    } catch (error) {
-      setSaveError(String(error));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  // 9/17 鸿波「都关联了为什么还要处理」: 小鲶批量建条目时互相引用, 目标当时还是
-  // pending, 于是每一条都被判 pending (wiki_write.rs:161)。候选关系本身可能全对,
-  // 但工作台只有"再加一条"的入口, 没有"这几条就是对的"。这个按钮把现有关系原样
-  // 写回并置 active, 不改关系内容。
-  const confirmExisting = async () => {
-    if (!selectedFile || info.related.length === 0) return;
-    setSaving(true);
-    setSaveError(null);
-    setSaved(false);
-    try {
-      const content = buildConfirmedWikiContent(selectedFile.content, info.related, info);
-      await wikiUpdateFile(info.rel_path, content);
-      await loadFiles();
-      await selectFile(info.rel_path);
-      setSaved(true);
-    } catch (error) {
-      setSaveError(String(error));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const deleteBrokenRelation = async () => {
-    const relationName = selectedTask?.kind === "broken" ? selectedTask.relationName?.trim() : "";
-    if (!relationName || !window.confirm(`确认删除“${info.title}”中的错误关系“${relationName}”吗？\n只删除这条关系，不删除知识文件和正文引用。`)) return;
-    setSaving(true);
-    setSaveError(null);
-    setSaved(false);
-    try {
-      const remaining = info.related.filter(
-        (relation) => relation.source === "body" || relation.name.trim() !== relationName,
-      );
-      const content = buildConfirmedWikiContent(selectedFile.content, remaining, info);
-      await wikiUpdateFile(info.rel_path, content);
-      await loadFiles();
-      await selectFile(info.rel_path);
-      setSaved(true);
-    } catch (error) {
-      setSaveError(String(error));
-    } finally {
-      setSaving(false);
-    }
-  };
-
   // 9/17 (semantica 第 2 条): 蒸馏想改类型/关系, 但跟盘上已有的不一样 —— 写入侧
   // 保留了旧值、把新值记进 conflicts。这里员工二选一, 后端改文件 + 清掉那条冲突。
   const resolveConflict = async (field: string, takeProposed: boolean) => {
-    if (!selectedFile) return;
     setSaving(true);
     setSaveError(null);
-    setSaved(false);
     try {
       await wikiResolveConflict(info.rel_path, field, takeProposed);
       await loadFiles();
       await selectFile(info.rel_path);
-      setSaved(true);
     } catch (error) {
       setSaveError(String(error));
     } finally {
       setSaving(false);
     }
-  };
-
-  const selectNextTask = () => {
-    const next = tasks.find((task) => task.id !== selectedTask?.id);
-    if (next) void selectFile(next.file.rel_path);
   };
 
   return (
@@ -202,11 +114,8 @@ export default function WikiRelationshipWorkbench() {
           {info.kind === "entity" ? "实体" : info.kind === "concept" ? "概念" : "记录"}
         </span>
         <h2>{info.title}</h2>
-        <p>
-          {selectedTask?.kind === "duplicate"
-            ? "名称相近的条目需要人工核对，避免错误合并。"
-            : "核对这条知识与人员、部门、项目或制度之间的关系。"}
-        </p>
+        <p>{HEADER_HINT[selectedTask?.kind ?? ""] ?? "这条知识和其它条目的关系。"}</p>
+        {saveError && <p className="wiki-workbench__error">{saveError}</p>}
       </header>
 
       {(info.conflicts?.length ?? 0) > 0 && (
@@ -260,68 +169,8 @@ export default function WikiRelationshipWorkbench() {
           </div>
         </section>
       ) : (
-        <section className="wiki-workbench__section wiki-workbench__section--editor">
-          <div className="wiki-workbench__section-title">
-            <LinkSimple size={22} aria-hidden="true" />
-            <div><h3>编辑关系</h3><p>用一句话确认，系统会写入知识文件并更新图谱。</p></div>
-          </div>
-          <div className="wiki-relation-editor">
-            <div className="wiki-relation-editor__subject" title={info.title}>{info.title}</div>
-            <select value={relationType} onChange={(event) => setRelationType(event.target.value)} aria-label="关系类型">
-              {relationTypes.map((type) => <option key={type} value={type}>{type}</option>)}
-            </select>
-            <select value={targetPath} onChange={(event) => setTargetPath(event.target.value)} aria-label="关系目标">
-              {targets.length === 0 && <option value="">暂无可关联条目</option>}
-              {targets.map((target) => <option key={target.rel_path} value={target.rel_path}>{target.title}</option>)}
-            </select>
-          </div>
-          <div className="wiki-relation-editor__actions">
-            {saveError && <span className="wiki-workbench__error">{saveError}</span>}
-            {saved && <span className="wiki-workbench__success"><CheckCircle size={18} />关系已更新</span>}
-            {selectedTask?.kind === "broken" && selectedTask.relationName && (
-              <button type="button" className="wiki-workbench__danger" onClick={() => void deleteBrokenRelation()} disabled={saving}>
-                {saving ? <SpinnerGap className="wiki-spin" size={18} /> : <Trash size={18} />}
-                删除错误关系
-              </button>
-            )}
-            <button type="button" className="wiki-workbench__secondary" onClick={selectNextTask} disabled={tasks.length < 2}>
-              稍后处理
-            </button>
-            {selectedTask?.kind === "pending" && info.related.length > 0 && (
-              <button
-                type="button"
-                className="wiki-workbench__secondary"
-                disabled={saving}
-                onClick={() => void confirmExisting()}
-                title="现有候选关系不改, 只把这条知识标为已确认"
-              >
-                {saving ? <SpinnerGap className="wiki-spin" size={18} /> : <Check size={18} />}
-                这 {info.related.length} 条都对，确认
-              </button>
-            )}
-            <button type="button" className="wiki-workbench__primary" disabled={!selectedTarget || saving} onClick={() => void confirmRelation()}>
-              {saving ? <SpinnerGap className="wiki-spin" size={20} /> : <Check size={20} />}
-              确认关系
-            </button>
-          </div>
-        </section>
+        <WikiRelationsEditor key={info.rel_path} selectedFile={selectedFile} onLater={onLater} />
       )}
-
-      <section className="wiki-workbench__section">
-        <div className="wiki-workbench__section-title">
-          <CheckCircle size={22} aria-hidden="true" />
-          <div><h3>当前关系</h3><p>{info.related.length > 0 ? `已记录 ${info.related.length} 条关系` : "尚未记录关系"}</p></div>
-        </div>
-        {info.related.length > 0 ? (
-          <div className="wiki-workbench__relations">
-            {info.related.map((relation, index) => (
-              <div key={`${relation.name}:${relation.rel ?? index}`}>
-                <span>{relation.rel || (relation.source === "body" ? "正文引用" : "关联")}</span><strong>{relation.name}</strong>
-              </div>
-            ))}
-          </div>
-        ) : <div className="wiki-workbench__quiet">完成上面的确认后，这里会出现第一条关系。</div>}
-      </section>
 
       <WikiActionPanel selectedFile={selectedFile} />
 

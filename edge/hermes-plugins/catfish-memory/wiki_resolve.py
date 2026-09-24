@@ -29,7 +29,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-__all__ = ["WikiNode", "resolve_wiki_ref", "load_nodes", "ResolveResult"]
+__all__ = ["WikiNode", "resolve_wiki_ref", "load_nodes", "ResolveResult", "name_owners"]
 
 _SLUG_NOISE = re.compile(r"[\s\-_.　]")
 # 标点/分隔符 —— 中英文都要。实测断链里有一半是纯标点差异:
@@ -211,3 +211,23 @@ def load_nodes(catfish_home: Path, *, head_bytes: int | None = None) -> list[Wik
                 )
             )
     return out
+
+
+def name_owners(nodes: list[WikiNode], name: str, *, exclude: str = "") -> list[WikiNode]:
+    """哪些条目已经用 title 或 aliases「认领」了这个名字 (大小写/首尾空白无关)。
+
+    9/24: 新建「福富」时别名填了「中电福富」, 跟「中电福富信息科技有限公司」的
+    别名撞了 —— 库里 24 处指向「中电福富」的关系当场全变成"指向不明"。
+    写入前用它查: 标题被认领 → 该更新那一条; 别名被认领 → 不能再占。
+    废弃/驳回的条目不算 (它们不再参与解析的竞争)。
+    """
+    n = _norm(name)
+    if not n:
+        return []
+    return [
+        node for node in nodes
+        if node.rel_path != exclude
+        and not node.deprecated
+        and node.ontology_status not in ("rejected", "deprecated")
+        and (_norm(node.title) == n or any(_norm(a) == n for a in node.aliases))
+    ]
