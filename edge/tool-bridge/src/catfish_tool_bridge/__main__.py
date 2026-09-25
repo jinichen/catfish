@@ -11,6 +11,11 @@ from . import server
 
 
 def main() -> int:
+    # Windows pipe encoding is otherwise locale-dependent; the startup banner
+    # contains Unicode. All launcher paths, including manual CLI, must survive it.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(
         prog="catfish-tool-bridge",
         description="Bridge Companion App 调 hermes-agent tools",

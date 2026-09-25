@@ -21,9 +21,7 @@
 //!   LLM 操作浏览器是 catfish 核心场景 (EIS / 周报 / 资质等), 员工不该手动
 //!   每次点 'chrome 启动' 按钮. 默认 spawn, 窗口可手动最小化.
 
-use std::path::Path;
-
-use crate::services::{catfish_paths, endpoints, process};
+use crate::services::{catfish_paths, process};
 
 use super::autostart_deps::check_runtime_deps;
 use super::autostart_mcp::ensure_catfish_tools_mcp_registered;
@@ -116,7 +114,11 @@ pub async fn ensure_tool_bridge_running() {
         ],
         log_path,
         working_dir: dir,
-        env: vec![("PYTHONPATH".into(), pythonpath)],
+        env: vec![
+            ("PYTHONPATH".into(), pythonpath),
+            ("PYTHONUTF8".into(), "1".into()),
+            ("PYTHONIOENCODING".into(), "utf-8".into()),
+        ],
     };
 
     match process::spawn_detached(cfg) {
@@ -227,70 +229,8 @@ pub async fn ensure_local_search_running() {
 // ============================================================
 
 pub async fn ensure_chrome_running() {
-    if pid_alive(catfish_paths::chrome_pid_file().as_deref(), "remote-debugging-port") {
-        log::info!("autostart: chrome already running");
-        return;
-    }
-
-    let chrome_bin = match catfish_paths::find_chrome() {
-        Some(p) => p,
-        None => {
-            log::warn!(
-                "autostart: 找不到 Chrome / Chromium, 跳过 chrome autostart \
-                 (LLM 浏览器操作场景不可用, 装 Google Chrome 后 Companion 重启自动起)"
-            );
-            return;
-        }
-    };
-    let user_data_dir = match catfish_paths::chrome_user_data_dir() {
-        Some(p) => p,
-        None => return,
-    };
-    let log_path = match catfish_paths::chrome_log_path() {
-        Some(p) => p,
-        None => return,
-    };
-    let pid_file = match catfish_paths::chrome_pid_file() {
-        Some(p) => p,
-        None => return,
-    };
-    let working_dir = user_data_dir
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(std::env::temp_dir);
-
-    let chrome_port = endpoints::endpoints().chrome_port;
-    // 跟 commands/chrome.rs:chrome_launch 同款 spawn (隔离 user-data-dir + CDP 端口).
-    // 5/22 鸿波: 默认 autostart 时窗口仍会显示, 员工可手动最小化. 不上 headless,
-    // 因为 LLM 操作时员工要看屏幕确认 (5 内部初衷"催 不代行" — 透明可监督).
-    let cfg = process::SpawnConfig {
-        program: chrome_bin,
-        args: vec![
-            format!("--remote-debugging-port={chrome_port}"),
-            format!("--user-data-dir={}", user_data_dir.display()),
-            "--no-first-run".into(),
-            "--no-default-browser-check".into(),
-            "--disable-features=DialMediaRouteProvider".into(),
-            // Chrome 138+ 默认 CDP WebSocket Origin 白名单, hermes browser tool 默认空 Origin
-            "--remote-allow-origins=*".into(),
-            "about:blank".into(),
-        ],
-        log_path,
-        working_dir,
-        env: vec![],
-    };
-
-    match process::spawn_detached(cfg) {
-        Ok(handle) => {
-            if let Err(e) = std::fs::write(&pid_file, handle.pid.to_string()) {
-                log::warn!("autostart: chrome started but failed to write PID: {e}");
-            } else {
-                log::info!("autostart: chrome started (PID {})", handle.pid);
-            }
-        }
-        Err(e) => {
-            log::warn!("autostart: chrome spawn failed: {e}");
-        }
+    if let Err(error) = crate::commands::chrome::chrome_launch().await {
+        log::warn!("autostart: Chrome 未就绪: {error}");
     }
 }
 
@@ -387,16 +327,4 @@ pub fn pkill_tool_bridge() {
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
     }
-}
-
-fn pid_alive(pid_file: Option<&Path>, cmdline_substr: &str) -> bool {
-    pid_file
-        .and_then(|p| {
-            if p.exists() {
-                process::read_pid_file_alive_strict(p, cmdline_substr)
-            } else {
-                None
-            }
-        })
-        .is_some()
 }

@@ -30,7 +30,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shutil
 import subprocess
 import tempfile
 from typing import Any
@@ -41,14 +40,8 @@ _SUBPROCESS_TIMEOUT = 20.0  # AppleScript 建草稿要跟 Mail.app 打交道, �
 
 
 def _find_catfish_email() -> str | None:
-    """跟 email_read 一样的 CLI 定位逻辑."""
-    p = shutil.which("catfish-email")
-    if p:
-        return p
-    cand = os.path.expanduser("~/.local/bin/catfish-email")
-    if os.path.exists(cand) and os.access(cand, os.X_OK):
-        return cand
-    return None
+    from .email_runtime import find_email_cli
+    return find_email_cli()
 
 
 def tool_email_create_draft(args: dict[str, Any]) -> dict[str, Any]:

@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import json
 import logging
-import shutil
 import subprocess
 from typing import Any
 
@@ -75,17 +74,8 @@ def _build_snippet(body: str, query: str) -> str:
 
 
 def _find_catfish_email() -> str | None:
-    """优先 PATH, 再 ~/.local/bin (跟 hermes plugin install 路径对齐)."""
-    # PATH
-    p = shutil.which("catfish-email")
-    if p:
-        return p
-    # 用户 home ~/.local/bin
-    import os
-    cand = os.path.expanduser("~/.local/bin/catfish-email")
-    if os.path.exists(cand) and os.access(cand, os.X_OK):
-        return cand
-    return None
+    from .email_runtime import find_email_cli
+    return find_email_cli()
 
 
 def tool_email_search(args: dict[str, Any]) -> dict[str, Any]:

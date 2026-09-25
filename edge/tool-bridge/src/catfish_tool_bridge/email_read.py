@@ -30,7 +30,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shutil
 import subprocess
 from typing import Any
 
@@ -42,14 +41,8 @@ _MAX_BODY_TEXT_CHARS = 40000  # 邮件正文超过 40k 字截断 (防 context �
 
 
 def _find_catfish_email() -> str | None:
-    """跟 email_search 一样的 CLI 定位逻辑."""
-    p = shutil.which("catfish-email")
-    if p:
-        return p
-    cand = os.path.expanduser("~/.local/bin/catfish-email")
-    if os.path.exists(cand) and os.access(cand, os.X_OK):
-        return cand
-    return None
+    from .email_runtime import find_email_cli
+    return find_email_cli()
 
 
 def _run_cli(cmd: list[str], timeout: float) -> tuple[bool, str, str]:

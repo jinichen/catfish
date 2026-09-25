@@ -23,6 +23,8 @@ $UvExe = Join-Path $HermesHome 'bin\uv.exe'
 $Stage = Join-Path $env:TEMP ("catfish-email-" + [guid]::NewGuid().ToString('N'))
 $SkillsDir = Join-Path $HermesHome 'skills\productivity'
 $SkillDst = Join-Path $SkillsDir 'catfish-email'
+$EmailVenv = $null
+$Published = $false
 
 foreach ($path in @($DistributionPath, $PythonExe, $UvExe)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
@@ -43,44 +45,23 @@ try {
         throw "distribution must contain exactly one catfish-email wheel, found $($EmailWheel.Count)"
     }
 
-    # The Windows package may also carry pywin32; --no-index keeps uv off the network.
-    # 9/24: this used to be --reinstall (force every wheel). Reinstalling the same
-    # pywin32 312 means deleting pywin32_system32\pythoncom311.dll / pywintypes311.dll,
-    # which Windows refuses while any running Python has them loaded (os error 5).
-    # The install then stops half way and leaves pywin32 broken (missing RECORD).
-    # Now only catfish-email is force-reinstalled; pywin32 only when it fails to import.
-    $InstallArgs = @(
-        'pip', 'install', '--python', $PythonExe,
-        '--no-index', '--find-links', $Stage,
-        '--reinstall-package', 'catfish-email'
-    )
-    # When the probe fails Python prints a traceback to stderr. Windows PowerShell 5.1
-    # with ErrorActionPreference=Stop turns native stderr into a terminating error and
-    # the script would exit exactly when a repair is needed, so relax it for the probe.
-    $PreviousPreference = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    & $PythonExe -c "import win32api" *> $null
-    $Pywin32Probe = $LASTEXITCODE
-    $ErrorActionPreference = $PreviousPreference
-    if ($Pywin32Probe -ne 0) {
-        Write-Host "pywin32 import failed; reinstalling it too" -ForegroundColor Yellow
-        $InstallArgs += @('--reinstall-package', 'pywin32')
-    }
-    $InstallArgs += @($Wheels.FullName)
-    & $UvExe @InstallArgs
-    if ($LASTEXITCODE -ne 0) {
-        throw "uv install catfish-email failed: $LASTEXITCODE"
-    }
-
-    $EmailExe = Join-Path $InstallDir 'venv\Scripts\catfish-email.exe'
-    if (-not (Test-Path -LiteralPath $EmailExe -PathType Leaf)) {
-        throw "catfish-email CLI missing after install: $EmailExe"
-    }
-    # An old CLI also passes --help. Validate discovery without touching mail/COM.
+    # Never replace pywin32 DLLs in the live Hermes environment. Build a fresh
+    # generation, validate it, then publish a pointer. Old generations stay usable
+    # by in-flight CLI processes; no user Python/Outlook process is terminated.
+    $RuntimeRoot = Join-Path $HermesHome 'email-runtime'
+    $Generation = 'env-' + [guid]::NewGuid().ToString('N')
+    $EmailVenv = Join-Path $RuntimeRoot $Generation
+    New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
+    & $UvExe venv --python $PythonExe --no-python-downloads $EmailVenv
+    if ($LASTEXITCODE -ne 0) { throw "email venv creation failed: $LASTEXITCODE" }
+    $EmailPython = Join-Path $EmailVenv 'Scripts\python.exe'
+    & $UvExe pip install --python $EmailPython --no-index --find-links $Stage @($Wheels.FullName)
+    if ($LASTEXITCODE -ne 0) { throw "isolated email install failed: $LASTEXITCODE" }
+    $EmailExe = Join-Path $EmailVenv 'Scripts\catfish-email.exe'
+    & $EmailPython -c "import catfish_email.discovery, win32api, pythoncom"
+    if ($LASTEXITCODE -ne 0) { throw "isolated email imports failed: $LASTEXITCODE" }
     & $EmailExe discover --help
-    if ($LASTEXITCODE -ne 0) {
-        throw "catfish-email CLI self-check failed: $EmailExe"
-    }
+    if ($LASTEXITCODE -ne 0) { throw "catfish-email self-check failed: $LASTEXITCODE" }
 
     $SkillSrc = Join-Path $Stage 'hermes-skill\catfish-email'
     $SkillFile = Join-Path $SkillSrc 'SKILL.md'
@@ -93,8 +74,27 @@ try {
     }
     Copy-Item -LiteralPath $SkillSrc -Destination $SkillDst -Recurse -Force
 
+    # Give terminal-based skill users the same executable as Companion/tools.
+    $InstalledSkill = Join-Path $SkillDst 'SKILL.md'
+    $RuntimeNote = "`r`n## Windows runtime`r`nUse this installed executable instead of a legacy PATH entry: ``$EmailExe``. In PowerShell use the call operator: & '$EmailExe' accounts.`r`n"
+    [IO.File]::AppendAllText($InstalledSkill, $RuntimeNote, (New-Object Text.UTF8Encoding $false))
+    $Pointer = Join-Path $RuntimeRoot 'current.txt'
+    $Pending = Join-Path $RuntimeRoot ($Generation + '.txt')
+    [IO.File]::WriteAllText($Pending, $Generation, (New-Object Text.UTF8Encoding $false))
+    if (Test-Path -LiteralPath $Pointer) {
+        [IO.File]::Replace($Pending, $Pointer, $null)
+    } else {
+        [IO.File]::Move($Pending, $Pointer)
+    }
+    $Published = $true
+
     Write-Host "Catfish email installed: $EmailExe" -ForegroundColor Green
 } finally {
+    # Only clean the fresh, unpublished generation from this attempt. Never touch
+    # the active pointer target or an older environment held by a running CLI.
+    if (-not $Published -and $EmailVenv -and (Test-Path -LiteralPath $EmailVenv)) {
+        Remove-Item -LiteralPath $EmailVenv -Recurse -Force -ErrorAction Continue
+    }
     if (Test-Path -LiteralPath $Stage) {
         Remove-Item -LiteralPath $Stage -Recurse -Force
     }

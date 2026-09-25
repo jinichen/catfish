@@ -84,6 +84,8 @@ pub async fn tool_bridge_start() -> Result<(), String> {
     let gateway_url = std::env::var("CATFISH_GATEWAY_URL").unwrap_or_else(|_| ep.gateway_base());
     let mut env_pairs: Vec<(String, String)> = vec![
         ("PYTHONPATH".into(), pythonpath),
+        ("PYTHONUTF8".into(), "1".into()),
+        ("PYTHONIOENCODING".into(), "utf-8".into()),
         ("CATFISH_MCP_REGISTRY_URL".into(), gateway_url.clone()),
     ];
     // 员工身份 (登录后才有, 没登录时不传 → tool-bridge fallback 路径 2)

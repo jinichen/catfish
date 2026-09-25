@@ -735,12 +735,11 @@ async def _do_dispatch(
     if mcp_client.is_mcp_tool(name):
         return await _dispatch_mcp_tool(name, args)
 
-    # 3. sandboxed execute_code (BL-S29.2/29.5)
+    # Required isolation must fail closed, never fall through to Hermes on Windows.
     sandbox_lang = sandbox.detect_lang_from_tool_name(name)
     if (
         sandbox_lang is not None
         and sandbox.is_sandbox_enabled()
-        and sandbox.is_sandbox_supported()
     ):
         return await _dispatch_sandboxed_code(name, args, sandbox_lang)
 

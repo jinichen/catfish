@@ -548,6 +548,13 @@ jobs:
       #    正是离线要用的归档 —— 实测瘦身后离线 sync 立刻失败。
       #
       # 先只测量, 不改产物。拿到数字再决定整包发还是先砍 [all] 里用不到的 extra。
+      - name: Verify packaged Windows runtime startup and email upgrade
+        shell: pwsh
+        timeout-minutes: 20
+        run: |
+          & edge/companion-app/scripts/smoke-windows-runtime.ps1 -Resources edge/companion-app/src-tauri/resources/windows
+          if ($LASTEXITCODE -ne 0) { throw 'Windows runtime smoke failed' }
+
       - name: Measure offline uv cache (measurement only, non-blocking)
         shell: pwsh
         continue-on-error: true
@@ -661,11 +668,23 @@ jobs:
             'util::service_probe::tests',
             'util::http_client::certificate_reload_tests',
             'services::process::windows_pid_tests',
-            'services::tool_bridge_rpc::windows_rpc_tests'
+            'services::tool_bridge_rpc::windows_rpc_tests',
+            'services::chrome_runtime::tests',
+            'services::browser_paths::tests',
+            'services::email_runtime::tests'
           )) {
             cargo test --release --lib --target x86_64-pc-windows-msvc --features tauri/custom-protocol $suite -- --nocapture
             if ($LASTEXITCODE -ne 0) { throw "Windows regression failed: $suite" }
           }
+          $browserRoot = Join-Path $env:RUNNER_TEMP 'catfish-chrome-lifecycle'
+          New-Item -ItemType Directory -Force -Path $browserRoot | Out-Null
+          tar -xzf resources/windows/chromium-embed.tar.gz -C $browserRoot
+          if ($LASTEXITCODE -ne 0) { throw 'Chromium extraction failed' }
+          $browser = Get-ChildItem $browserRoot -Recurse -Filter chrome.exe | Select-Object -First 1
+          if (-not $browser) { throw 'Packaged Chromium executable missing' }
+          $env:CATFISH_TEST_CHROME_BIN = $browser.FullName
+          cargo test --release --lib --target x86_64-pc-windows-msvc --features tauri/custom-protocol services::chrome_runtime::tests::packaged_browser_lifecycle -- --ignored --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged Chromium lifecycle failed' }
 
       # ─── Tauri msi build (Windows MSVC, no cross-compile) ───
 
