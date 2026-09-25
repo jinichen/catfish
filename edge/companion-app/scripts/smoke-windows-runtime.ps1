@@ -61,6 +61,16 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Email update while COM DLL loaded failed' }
     $New = (Get-Content -LiteralPath (Join-Path $Runtime 'current.txt') -Raw).Trim()
     if ($New -eq $Old -or $DllHolder.HasExited) { throw 'Update did not preserve the active old runtime' }
+    $Backup = Join-Path $Runtime ($New + '.previous.txt')
+    if (-not (Test-Path -LiteralPath $Backup -PathType Leaf)) {
+        throw 'Atomic email update did not retain the previous pointer'
+    }
+    if ((Get-Content -LiteralPath $Backup -Raw).Trim() -ne $Old) {
+        throw 'Atomic email update backed up the wrong generation'
+    }
+    if (Test-Path -LiteralPath (Join-Path $Runtime ($New + '.txt'))) {
+        throw 'Atomic email update left its pending pointer behind'
+    }
     $After = @($SharedDlls | Get-FileHash | Select-Object -ExpandProperty Hash) -join ','
     if ($Before -ne $After) { throw 'Email update modified Hermes shared DLLs' }
     $NewPython = Join-Path $Runtime "$New\Scripts\python.exe"

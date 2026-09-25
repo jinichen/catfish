@@ -82,7 +82,11 @@ try {
     $Pending = Join-Path $RuntimeRoot ($Generation + '.txt')
     [IO.File]::WriteAllText($Pending, $Generation, (New-Object Text.UTF8Encoding $false))
     if (Test-Path -LiteralPath $Pointer) {
-        [IO.File]::Replace($Pending, $Pointer, $null)
+        # Windows PowerShell 5.1 may bind $null to an empty System.String,
+        # which File.Replace rejects as an invalid backup path. Use a unique,
+        # real sibling path and retain the previous pointer for recovery.
+        $Backup = Join-Path $RuntimeRoot ($Generation + '.previous.txt')
+        [IO.File]::Replace($Pending, $Pointer, $Backup)
     } else {
         [IO.File]::Move($Pending, $Pointer)
     }
