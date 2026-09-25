@@ -112,12 +112,12 @@ pub async fn sync_service_token_to_env(identity_url: &str) -> Result<()> {
     let hermes = hermes_root()?;
     if !hermes.exists() {
         log::debug!("[hermes-jwt-sync-service] {} 不存在 · skip", hermes.display());
-        return Ok(());
+        return Err(anyhow::anyhow!("Hermes runtime is not installed yet"));
     }
     let env_path = hermes.join(".env");
     if !env_path.exists() {
         log::debug!("[hermes-jwt-sync-service] {} 不存在 · skip", env_path.display());
-        return Ok(());
+        return Err(anyhow::anyhow!("Hermes environment is not ready yet"));
     }
 
     // 拿 30 天 service token

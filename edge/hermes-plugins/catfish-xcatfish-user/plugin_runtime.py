@@ -180,6 +180,9 @@ def _patch_p1_agent_init() -> None:
     _orig = agent_init.init_agent
 
     def patched_init_agent(agent: Any, **kwargs: Any) -> Any:
+        kwargs = _sib("windows_chat_credentials").select_chat_credentials(
+            kwargs, _ctx().CV_CF_SOURCE.get()
+        )
         result = _orig(agent, **kwargs)
         try:
             if hasattr(agent, "_apply_client_headers_for_base_url"):

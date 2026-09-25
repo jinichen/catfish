@@ -128,6 +128,8 @@ jobs:
           python3 edge/hermes-fork/patch_install_ps1_offline.py \
               --input /tmp/hermes-agent-src/scripts/install.ps1 \
               --output edge/companion-app/src-tauri/resources/windows/install.ps1
+          python3 edge/hermes-fork/patch_windows_watchdog.py /tmp/hermes-agent-src
+          python3 edge/hermes-fork/verify_windows_watchdog.py /tmp/hermes-agent-src
           # verify marker
           grep -q 'CATFISH-OFFLINE-PATCH-v1' \
               edge/companion-app/src-tauri/resources/windows/install.ps1

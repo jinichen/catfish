@@ -39,6 +39,7 @@ import base64
 import json
 import logging
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -271,7 +272,7 @@ async def get_fresh_service_token() -> Optional[str]:
     过期但 mint 失败时仍返).
 
     流程:
-      1. 读 env HERMES_SERVICE_TOKEN. 没设 → 返 None (caller 该 fail-silent).
+      1. Windows 先重读服务凭据文件；缺 token 但有客户端凭据时允许补发。
       2. should_renew=False (剩 > 5 天) → 返当前 token
       3. should_renew=True + 有 CLIENT_SECRET → 尝试 mint:
          - 成功: 写 ~/.hermes/.env + 更新 os.environ + 返新
@@ -279,10 +280,22 @@ async def get_fresh_service_token() -> Optional[str]:
       4. should_renew=True + 无 CLIENT_SECRET → warn (员工没配 secret 不自动续)
          + 返当前 token
     """
+    # Companion can provision credentials after the Windows daemon starts.
+    # Reload only service credentials, never employee OPENAI_API_KEY.
+    if sys.platform == "win32":
+        try:
+            from dotenv import dotenv_values
+
+            values = dotenv_values(_env_path(), encoding="utf-8-sig", interpolate=False)
+            for key in ("HERMES_SERVICE_TOKEN", "CATFISH_IDENTITY_URL",
+                        "CATFISH_HERMES_CLIENT_ID", "CATFISH_HERMES_CLIENT_SECRET"):
+                value = values.get(key)
+                if isinstance(value, str) and value.strip():
+                    os.environ[key] = value.strip()
+        except (OSError, UnicodeError):
+            logger.warning("Unable to reload service credential file")
     current = os.environ.get("HERMES_SERVICE_TOKEN", "").strip()
-    if not current:
-        return None
-    if not should_renew(current):
+    if current and not should_renew(current):
         return current
 
     # 需要续, 拿锁 (防多个并发请求同时 mint)
@@ -291,7 +304,7 @@ async def get_fresh_service_token() -> Optional[str]:
         current = os.environ.get("HERMES_SERVICE_TOKEN", "").strip()
         if current and not should_renew(current):
             logger.debug("等锁期间 HERMES_SERVICE_TOKEN 已被别人续上, 用新的")
-            return current
+            return current or None
 
         secret = _client_secret()
         if not secret:
@@ -306,14 +319,14 @@ async def get_fresh_service_token() -> Optional[str]:
                 "--persist-secret 一次.",
                 remain,
             )
-            return current
+            return current or None
 
         new_token = await mint_service_token(
             _identity_url(), _client_id(), secret,
         )
         if not new_token:
             # mint 失败, 用旧的 (即使过期). caller 看 gateway 401 自己处理.
-            return current
+            return current or None
 
         # 写盘 + 内存 env 都更新
         env_path = _env_path()

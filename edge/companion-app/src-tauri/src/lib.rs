@@ -334,25 +334,24 @@ pub fn run() {
                     // service token 塞 ~/.hermes/.env OPENAI_API_KEY. 老 sync_all 用
                     // access_token 覆盖 env (TTL 1h) · Companion 关闭无 refresh 就
                     // 过期 · hermes 401. 现在 env 独立 · 30 天 service token · 稳.
-                    let identity_url = match services::oauth::OidcConfig::load() {
-                        Ok(cfg) => cfg.issuer,
-                        Err(e) => {
-                            log::debug!(
-                                "[startup-service-token-sync] OidcConfig::load 挂 · skip: {e:#}"
-                            );
-                            return;
+                    loop {
+                        let identity_url = match services::oauth::OidcConfig::load() {
+                            Ok(cfg) => cfg.issuer,
+                            Err(e) => {
+                                log::debug!("[startup-service-token-sync] 配置未就绪，60 秒后重试: {e:#}");
+                                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                                continue;
+                            }
+                        };
+                        if let Err(e) = services::hermes_jwt_sync::sync_service_token_to_env(
+                            &identity_url,
+                        ).await {
+                            log::warn!("[startup-service-token-sync] 同步失败，60 秒后重试: {e:#}");
+                        } else {
+                            log::info!("[startup-service-token-sync] service token 已写入 Hermes 环境文件");
+                            break;
                         }
-                    };
-                    if let Err(e) = services::hermes_jwt_sync::sync_service_token_to_env(
-                        &identity_url,
-                    ).await {
-                        log::warn!(
-                            "[startup-service-token-sync] service token 塞 env 挂: {e:#}"
-                        );
-                    } else {
-                        log::info!(
-                            "[startup-service-token-sync] ✓ hermes/.env OPENAI_API_KEY = 30 天 service token"
-                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                     }
                 });
 
@@ -380,8 +379,10 @@ pub fn run() {
                 // 也不撞 401.
                 tauri::async_runtime::spawn(async {
                     let period = std::time::Duration::from_secs(25 * 24 * 60 * 60);
+                    let mut delay = period;
                     loop {
-                        tokio::time::sleep(period).await;
+                        tokio::time::sleep(delay).await;
+                        delay = std::time::Duration::from_secs(60);
                         let identity_url = match services::oauth::OidcConfig::load() {
                             Ok(cfg) => cfg.issuer,
                             Err(_) => continue,
@@ -390,9 +391,10 @@ pub fn run() {
                             &identity_url,
                         ).await {
                             log::warn!(
-                                "[periodic-service-token-sync] 挂 (env 里旧 token 还有效): {e:#}"
+                                "[periodic-service-token-sync] 失败，60 秒后重试: {e:#}"
                             );
                         } else {
+                            delay = period;
                             log::info!(
                                 "[periodic-service-token-sync] ✓ hermes/.env service token 续 30 天"
                             );
