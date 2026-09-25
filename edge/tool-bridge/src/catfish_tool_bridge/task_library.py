@@ -19,6 +19,7 @@ from typing import Any
 _COMPLETED_STATUSES = {"completed", "cancelled"}
 _VALID_STATUSES = {"pending", "in_progress", "completed", "cancelled"}
 _SCOPES = {"active", "today", "week", "overdue", "all"}
+_SNAPSHOT_LIMIT = 500  # Reminders 全量快照上限; 撑满就当可能截断, 不据此关任务
 
 
 def _db_path() -> Path:
@@ -158,33 +159,113 @@ def upsert_task(task: dict[str, Any]) -> dict[str, Any]:
     return _row_to_dict(row)
 
 
+def _rows_by_reminder_id(conn: sqlite3.Connection) -> dict[str, list[sqlite3.Row]]:
+    rows: dict[str, list[sqlite3.Row]] = {}
+    for row in conn.execute(
+        "SELECT * FROM tasks WHERE source = 'reminders' AND source_id IS NOT NULL "
+        "ORDER BY updated_at DESC"
+    ):
+        rows.setdefault(row["source_id"], []).append(row)
+    return rows
+
+
+def _append_note(body: str, note: str) -> str:
+    return f"{body.rstrip()}\n\n{note}".strip() if note not in body else body
+
+
 def upsert_reminders(reminders: list[dict[str, Any]]) -> int:
+    """把 Reminders 快照并进任务库 (9/26 重做, 之前反复冒重复/已删条目的根因都在这)。
+
+    · 一条提醒只对应一行: 先认正文里的 [catfish-task:ID]; 标记被改备注时抹掉了,
+      就认 source_id 相同的已有行。以前这里直接按提醒 ID 新建一行, 结果同一条提醒
+      在任务库里两行 (一行新备注, 一行旧备注), 早安页两条都读。
+    · 同一条提醒已经有多行 (历史遗留) → 留一行, 其余标 cancelled。
+    · 任务库里已取消的不被导入改回 pending —— 取消是员工/小鲶的决定, 提醒还挂着
+      只说明没去 Reminders 里删, 不说明事情又活了。提醒勾完成照常记 completed。
+    """
     count = 0
+    with _connect() as conn:
+        by_reminder = _rows_by_reminder_id(conn)
     for reminder in reminders:
         title = str(reminder.get("title") or "").strip()
         if not title:
             continue
         body = str(reminder.get("body") or "")
+        reminder_id = str(reminder.get("id") or "").strip() or None
+        existing = by_reminder.get(reminder_id or "", [])
         marker = re.search(r"\[catfish-task:([^\]]+)\]", body)
-        task_id = marker.group(1) if marker else _stable_id(
-            "reminders",
-            str(reminder.get("id") or "").strip() or None,
-            title,
-            reminder.get("due_date_iso"),
-        )
+        if marker:
+            task_id = marker.group(1)
+        elif existing:
+            live = [row for row in existing if row["status"] != "cancelled"]
+            task_id = (live or existing)[0]["task_id"]
+        else:
+            task_id = _stable_id("reminders", reminder_id, title, reminder.get("due_date_iso"))
+        with _connect() as conn:
+            prev = conn.execute("SELECT status FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+        status = "completed" if reminder.get("completed") else "pending"
+        if prev is not None and prev["status"] == "cancelled" and status == "pending":
+            status = "cancelled"
         upsert_task({
             "task_id": task_id,
             "title": title,
-            "status": "completed" if reminder.get("completed") else "pending",
+            "status": status,
             "due_date_iso": reminder.get("due_date_iso"),
             "body": body,
             "priority": reminder.get("priority"),
             "source": "reminders",
-            "source_id": str(reminder.get("id") or "").strip() or None,
+            "source_id": reminder_id,
             "list_name": reminder.get("list_name"),
         })
+        for row in existing:
+            if row["task_id"] != task_id and row["status"] not in _COMPLETED_STATUSES:
+                _close_row(row, "cancelled", f"重复：同一条提醒已由 {task_id} 承载")
         count += 1
     return count
+
+
+def _close_row(row: sqlite3.Row, status: str, note: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE tasks SET status = ?, body = ?, updated_at = ? WHERE task_id = ?",
+            (status, _append_note(row["body"], f"（{note}，{datetime.now():%Y-%m-%d} 自动关闭）"),
+             _now(), row["task_id"]),
+        )
+        conn.commit()
+
+
+def close_deleted_reminders(snapshot: list[dict[str, Any]], *, limit: int) -> list[str]:
+    """Reminders 里已经删掉的提醒, 任务库里对应的未完成行一起关掉。
+
+    以前导入只增改不删: 员工在 Reminders 删了一条, 任务库那行永远是 pending,
+    早安页每天照读, 删了的待办第二天又冒出来 (9/24「新提醒事项」、9/26 北京福富
+    高新那张卡都是这样)。只在拿到完整快照时做: 快照撑满 limit 可能被截断,
+    快照为空而库里有未完成提醒多半是读取出了问题, 这两种都不动。
+    """
+    if len(snapshot) >= limit:
+        return []
+    seen = {str(item.get("id") or "").strip() for item in snapshot} - {""}
+    with _connect() as conn:
+        open_rows = [
+            row for row in conn.execute(
+                "SELECT * FROM tasks WHERE source = 'reminders' AND source_id IS NOT NULL "
+                "AND status IN ('pending', 'in_progress')"
+            )
+        ]
+    if not seen and open_rows:
+        return []
+    closed = []
+    for row in open_rows:
+        if row["source_id"] not in seen:
+            _close_row(row, "cancelled", "Reminders 里已删除")
+            closed.append(row["task_id"])
+    return closed
+
+
+def _import_snapshot(snapshot: dict[str, Any], limit: int) -> None:
+    items = snapshot.get("reminders", [])
+    upsert_reminders(items)
+    close_deleted_reminders(items, limit=limit)
 
 
 def list_tasks(args: dict[str, Any] | None = None, *, now: datetime | None = None) -> dict[str, Any]:
@@ -247,9 +328,14 @@ def tool_create_task(args: dict[str, Any]) -> dict[str, Any]:
     due = args.get("due_date_iso")
     if due is not None and str(due).strip() and _parse_due(str(due)) is None:
         return {"ok": False, "error": "due_date_iso 格式错，应是本地 ISO 8601 时间"}
+    task_id = str(args.get("task_id") or "").strip() or None
+    similar: list[dict[str, Any]] = []
+    if task_id is None and not str(args.get("source_id") or "").strip():
+        same, similar = _find_existing_by_title(title)
+        task_id = same
     try:
         task = upsert_task({
-            "task_id": args.get("task_id"),
+            "task_id": task_id,
             "title": title,
             "status": args.get("status", "pending"),
             "due_date_iso": due,
@@ -261,11 +347,52 @@ def tool_create_task(args: dict[str, Any]) -> dict[str, Any]:
         })
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
-    return {
+    result: dict[str, Any] = {
         "ok": True,
         "task": task,
         "summary": f"✅ 已写入本机任务库：{task['title']}",
     }
+    if similar:
+        result["possible_duplicates"] = similar
+        result["summary"] += (
+            "\n⚠️ 任务库里还有标题相近的未完成任务："
+            + "；".join(f"{t['title']} (task_id={t['task_id']})" for t in similar)
+            + "。如果是同一件事，把刚建的这条用 status=cancelled 关掉，改那条 (带 task_id)。"
+        )
+    return result
+
+
+def _title_key(title: str) -> str:
+    return re.sub(r"[\s\W_]+", "", title).lower()
+
+
+def _bigrams(text: str) -> set[str]:
+    return {text[i:i + 2] for i in range(len(text) - 1)}
+
+
+def _find_existing_by_title(title: str) -> tuple[str | None, list[dict[str, Any]]]:
+    """没带 task_id 的新建: 标题 (去标点空格) 相同的未完成任务直接复用;
+    相近的列出来提醒模型。以前 task_id 由标题哈希生成, 小鲶每换一种说法
+    (「高新资质申报跟进」「跟进北京福富高新申报受理/补件反馈」「中电高新申报跟进」)
+    就多一条任务, 早安页当成几件事分别出卡片。"""
+    key = _title_key(title)
+    grams = _bigrams(key)
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT task_id, title FROM tasks WHERE status IN ('pending', 'in_progress') "
+            "ORDER BY updated_at DESC"
+        ).fetchall()
+    similar = []
+    for row in rows:
+        other = _title_key(row["title"])
+        if other == key:
+            return row["task_id"], []
+        other_grams = _bigrams(other)
+        if grams and other_grams:
+            overlap = len(grams & other_grams) / min(len(grams), len(other_grams))
+            if overlap >= 0.4:
+                similar.append({"task_id": row["task_id"], "title": row["title"]})
+    return None, similar[:5]
 
 
 def tool_sync_tasks_to_reminders(args: dict[str, Any]) -> dict[str, Any]:
@@ -273,11 +400,13 @@ def tool_sync_tasks_to_reminders(args: dict[str, Any]) -> dict[str, Any]:
     if platform.system() != "Darwin":
         return {"ok": False, "error": "任务同步到 Reminders 只 macOS 支持", "created": []}
     from . import reminders  # noqa: PLC0415
-    snapshot = reminders.tool_list_reminders({"scope": "all", "include_completed": True, "limit": 500})
+    snapshot = reminders.tool_list_reminders(
+        {"scope": "all", "include_completed": True, "limit": _SNAPSHOT_LIMIT},
+    )
     if not snapshot.get("ok"):
         return {"ok": False, "error": snapshot.get("error") or "读取 Reminders 失败", "created": []}
     current = snapshot.get("reminders", [])
-    upsert_reminders(current)
+    _import_snapshot(snapshot, _SNAPSHOT_LIMIT)
     existing_markers: set[str] = set()
     for reminder in current:
         marker = re.search(r"\[catfish-task:([^\]]+)\]", str(reminder.get("body") or ""))
@@ -336,11 +465,11 @@ def tool_list_tasks(args: dict[str, Any]) -> dict[str, Any]:
     if platform.system() == "Darwin" and (bool(args.get("force_sync")) or _reminders_import_due(now)):
         from . import reminders  # noqa: PLC0415
         snapshot = reminders.tool_list_reminders(
-            {"scope": "all", "include_completed": True, "limit": 500},
+            {"scope": "all", "include_completed": True, "limit": _SNAPSHOT_LIMIT},
             timeout_sec=REMINDERS_IMPORT_TIMEOUT_SEC,
         )
         if snapshot.get("ok"):
-            upsert_reminders(snapshot.get("reminders", []))
+            _import_snapshot(snapshot, _SNAPSHOT_LIMIT)
             _meta_set(_META_REMINDERS_IMPORTED_AT, repr(now))
         else:
             sync_warning = snapshot.get("error") or "Reminders 导入失败"

@@ -308,7 +308,10 @@ TASK_TOOLS: List[Dict[str, Any]] = [
             "★ 创建或更新一个用户行动到本机任务库。任务库是长期任务、下一步行动和状态的事实来源；"
             "Reminders 只是 macOS 上的提醒投影。明确的用户行动应写入这里，不要写入周报正文。\n\n"
             "task_id 用于更新已有任务；没有 task_id 时可用 source + source_id 幂等，或由系统生成。"
-            "长期任务应拆成近期可执行的下一步，并给出真实截止时间。"
+            "长期任务应拆成近期可执行的下一步，并给出真实截止时间。\n\n"
+            "更新/关闭已有任务必须带它的 task_id（先 catfish_list_tasks 查），不要换个标题再建一条——"
+            "换标题新建会变成两条任务，早安页当成两件事。删掉一件事用 status=cancelled。"
+            "返回里有 possible_duplicates 时，确认是否同一件事，是就关掉多余那条。"
         ),
         "input_schema": {
             "type": "object",

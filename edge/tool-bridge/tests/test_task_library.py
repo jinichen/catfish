@@ -292,3 +292,89 @@ def test_non_macos_never_imports(tmp_path, monkeypatch):
     fake = _fake_reminders(monkeypatch, ok=True)
     task_library.tool_list_tasks({"scope": "all", "force_sync": True})
     assert fake.tool_list_reminders.call_count == 0
+
+
+# ── 9/26: 删了/改过的提醒在任务库里残留 → 早安页反复冒重复卡 ──
+
+def test_reminder_deleted_in_reminders_closes_task_row(tmp_path, monkeypatch):
+    monkeypatch.setenv("CATFISH_TASK_LIBRARY_PATH", str(tmp_path / "tasks.db"))
+    task_library.upsert_reminders([
+        {"id": "keep", "title": "高新资质申报跟进"},
+        {"id": "gone", "title": "跟进北京福富高新申报受理/补件反馈"},
+    ])
+    snapshot = [{"id": "keep", "title": "高新资质申报跟进"}]
+    task_library.upsert_reminders(snapshot)
+    closed = task_library.close_deleted_reminders(snapshot, limit=500)
+
+    assert closed == ["reminders:gone"]
+    active = task_library.list_tasks({"scope": "active"})
+    assert [t["title"] for t in active["tasks"]] == ["高新资质申报跟进"]
+
+
+def test_close_deleted_skips_truncated_or_empty_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setenv("CATFISH_TASK_LIBRARY_PATH", str(tmp_path / "tasks.db"))
+    task_library.upsert_reminders([{"id": "a", "title": "甲"}, {"id": "b", "title": "乙"}])
+    assert task_library.close_deleted_reminders([], limit=500) == [], "空快照多半是读失败, 不许清库"
+    assert task_library.close_deleted_reminders([{"id": "a"}], limit=1) == [], "撑满 limit 可能被截断"
+    assert task_library.list_tasks({"scope": "active"})["count"] == 2
+
+
+def test_marker_stripped_from_notes_does_not_create_second_row(tmp_path, monkeypatch):
+    """小鲶用 remindctl 改备注时把 [catfish-task:...] 抹了, 以前会按提醒 ID 再建一行。"""
+    monkeypatch.setenv("CATFISH_TASK_LIBRARY_PATH", str(tmp_path / "tasks.db"))
+    task_library.upsert_task({"task_id": "action-50001", "title": "确认能源数据怎么取"})
+    task_library.upsert_reminders([{
+        "id": "r-50001", "title": "确认能源数据怎么取", "body": "等擎标来福州 [catfish-task:action-50001]",
+    }])
+    task_library.upsert_reminders([{
+        "id": "r-50001", "title": "确认能源数据怎么取", "body": "总经办提供原始凭证, 我方自行填报",
+    }])
+
+    rows = task_library.list_tasks({"scope": "all"})["tasks"]
+    assert [(t["task_id"], t["body"]) for t in rows] == [("action-50001", "总经办提供原始凭证, 我方自行填报")]
+
+
+def test_existing_duplicate_rows_for_same_reminder_are_collapsed(tmp_path, monkeypatch):
+    monkeypatch.setenv("CATFISH_TASK_LIBRARY_PATH", str(tmp_path / "tasks.db"))
+    clock = {"t": 1_000.0}
+    monkeypatch.setattr(task_library, "_now", lambda: clock["t"])
+    task_library.upsert_task({"task_id": "old", "title": "X", "body": "旧口径", "source": "reminders", "source_id": "r1"})
+    clock["t"] += 10
+    task_library.upsert_task({"task_id": "reminders:r1", "title": "X", "body": "新口径", "source": "reminders", "source_id": "r1"})
+
+    task_library.upsert_reminders([{"id": "r1", "title": "X", "body": "新口径"}])
+
+    active = task_library.list_tasks({"scope": "active"})["tasks"]
+    assert [(t["task_id"], t["body"]) for t in active] == [("reminders:r1", "新口径")]
+
+
+def test_import_does_not_revive_cancelled_task(tmp_path, monkeypatch):
+    monkeypatch.setenv("CATFISH_TASK_LIBRARY_PATH", str(tmp_path / "tasks.db"))
+    task_library.upsert_reminders([{"id": "r1", "title": "重复条目"}])
+    task_library.upsert_task({"task_id": "reminders:r1", "title": "重复条目", "status": "cancelled",
+                              "source": "reminders", "source_id": "r1"})
+    task_library.upsert_reminders([{"id": "r1", "title": "重复条目"}])
+    assert task_library.list_tasks({"scope": "active"})["count"] == 0
+    task_library.upsert_reminders([{"id": "r1", "title": "重复条目", "completed": True}])
+    assert task_library.list_tasks({"scope": "all", "include_completed": True})["tasks"][0]["status"] == "completed"
+
+
+def test_create_task_reuses_same_title_and_flags_similar(tmp_path, monkeypatch):
+    monkeypatch.setenv("CATFISH_TASK_LIBRARY_PATH", str(tmp_path / "tasks.db"))
+    first = task_library.tool_create_task({"title": "高新资质申报跟进", "body": "旧"})
+    again = task_library.tool_create_task({"title": "高新资质申报 跟进", "body": "新"})
+    assert again["task"]["task_id"] == first["task"]["task_id"]
+    assert task_library.list_tasks({"scope": "active"})["count"] == 1
+
+    other = task_library.tool_create_task({"title": "中电高新申报跟进"})
+    assert [d["title"] for d in other["possible_duplicates"]] == ["高新资质申报 跟进"]
+    assert "同一件事" in other["summary"]
+
+
+def test_list_tasks_import_closes_deleted_reminders(tmp_path, monkeypatch):
+    monkeypatch.setenv("CATFISH_TASK_LIBRARY_PATH", str(tmp_path / "tasks.db"))
+    monkeypatch.setattr(task_library.platform, "system", lambda: "Darwin")
+    task_library.upsert_reminders([{"id": "gone", "title": "新提醒事项"}])
+    _fake_reminders(monkeypatch, ok=True)
+    titles = [t["title"] for t in task_library.tool_list_tasks({"scope": "active", "force_sync": True})["tasks"]]
+    assert titles == ["来自提醒事项"]
