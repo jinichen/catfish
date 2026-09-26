@@ -15,8 +15,10 @@ class _BrokenReadAdapter(_FakeAdapter):
 
 
 def test_cmd_read_unprefixed_id_skips_broken_client_and_reaches_imap(capsys):
-    """9/26 Windows: 候选顺序 outlook-win → imap。Outlook 装了但没配账号时, 以前
-    第一个 COM 报错就退出 1, 存着这封信的 IMAP 从来没被问到。"""
+    """9/26: 任何一个来源出错都不该挡住后面的来源。起因是 Windows 当时候选顺序
+    outlook-win → imap, Outlook COM 一报错就退出 1, 存着这封信的 IMAP 没被问到。
+    (Windows 配了 IMAP 后已不再用 Outlook, 见 inbox._windows_candidates; 这条守的是
+    CLI 回退本身。)"""
     m = Message(id="legacy-id-1", account="me@corp.cn", folder="Inbox",
                 subject="采购合同", sender="x@y.com", date="2026-09-23T10:23:00", is_read=True)
     rc = _cmd_read(

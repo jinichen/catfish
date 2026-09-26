@@ -10,17 +10,22 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 logger = logging.getLogger("catfish_email.adapters.imap_config")
 
 HOST_ENV = "CATFISH_IMAP_HOST"
 PORT_ENV = "CATFISH_IMAP_PORT"
 USER_ENV = "CATFISH_IMAP_USER"
-#: 凭据。阶段一从环境变量取 (Companion 从 keyring 读出来再注入子进程),
-#: 这样 catfish-email 自己永远不碰 keyring, 也不需要平台后端。
+#: 凭据。优先从环境变量取 (Companion 从凭据库读出来注入子进程)。
+#:
+#: 9/26 起 Windows 多一条: 环境变量没有时自己去凭据管理器读 —— 见
+#: _windows_stored_config。macOS 仍然只认环境变量 (钥匙串 ACL 只放行 Companion)。
 PASSWORD_ENV = "CATFISH_IMAP_PASSWORD"
 #: 归档之后多久把服务器上那份删掉。员工在界面上选, Companion 注进来。
 RETENTION_ENV = "CATFISH_IMAP_RETENTION"
@@ -67,7 +72,7 @@ def config_from_env() -> ImapConfig | None:
     user = os.environ.get(USER_ENV, "").strip()
     password = os.environ.get(PASSWORD_ENV, "")
     if not (host and user and password):
-        return None
+        return _windows_stored_config() if sys.platform == "win32" else None
     try:
         port = int(os.environ.get(PORT_ENV, "").strip() or DEFAULT_PORT)
     except ValueError:
@@ -83,4 +88,85 @@ def config_from_env() -> ImapConfig | None:
         retention = DEFAULT_RETENTION
     return ImapConfig(
         host=host, user=user, password=password, port=port, retention=retention
+    )
+
+
+# ── Windows: 没有注入环境变量时, 自己读 Companion 存的那份 ─────────────────
+#
+# 9/26 Windows 实证: 小鲶的 catfish_email_read 连调 4 次都退出 1。邮件 CLI 有两个
+# 调用方 —— Companion (email.rs, 会注入 IMAP 环境变量) 和 tool-bridge (小鲶的邮件
+# 工具, **什么都不注入**)。tool-bridge 起的 CLI 看不到 IMAP, 在只有 IMAP 的 Windows
+# 机器上等于没有邮件来源, 于是去试 Outlook COM, 报错退出。macOS 上 Apple Mail 兜着,
+# 从来没暴露。
+#
+# 为什么只在 Windows 自己读: Windows 凭据管理器没有按程序的访问名单, 同一个用户下
+# 的任何进程本来就读得到 (companion_secrets.py 文件头同一结论, 教学凭据的 wincred://
+# 也是这么走的)。这里读并没有扩大谁能拿到密码。macOS 钥匙串只放行 Companion, 别的
+# 进程去读会弹一个后台看不见的授权框, 所以 macOS 不这么做。
+#
+# 条目格式跟 Companion 写入端 (imap_credentials.rs::entry_for) 一致:
+#   keyring-rs 的 Entry::new("catfish", "imap:<邮箱>") 在 Windows 上存成
+#   Generic 凭据, target = "imap:<邮箱>.catfish"。
+
+_CATFISH_SERVICE = "catfish"
+
+
+def _source_json() -> Path:
+    return Path.home() / ".catfish" / "imap-source.json"
+
+
+def _read_windows_credential(target: str) -> str | None:
+    import ctypes  # noqa: PLC0415
+    from ctypes import wintypes  # noqa: PLC0415
+
+    class CREDENTIAL(ctypes.Structure):
+        _fields_ = [
+            ("Flags", wintypes.DWORD), ("Type", wintypes.DWORD),
+            ("TargetName", wintypes.LPWSTR), ("Comment", wintypes.LPWSTR),
+            ("LastWritten", wintypes.FILETIME), ("CredentialBlobSize", wintypes.DWORD),
+            ("CredentialBlob", ctypes.POINTER(ctypes.c_ubyte)), ("Persist", wintypes.DWORD),
+            ("AttributeCount", wintypes.DWORD), ("Attributes", ctypes.c_void_p),
+            ("TargetAlias", wintypes.LPWSTR), ("UserName", wintypes.LPWSTR),
+        ]
+
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    pcred = ctypes.POINTER(CREDENTIAL)()
+    if not advapi.CredReadW(target, 1, 0, ctypes.byref(pcred)):  # 1 = CRED_TYPE_GENERIC
+        return None
+    try:
+        cred = pcred.contents
+        blob = ctypes.string_at(cred.CredentialBlob, cred.CredentialBlobSize)
+    finally:
+        advapi.CredFree(pcred)
+    # keyring-rs 按 UTF-16LE 存密码
+    return blob.decode("utf-16-le") if blob else None
+
+
+def _windows_stored_config() -> ImapConfig | None:
+    try:
+        source = json.loads(_source_json().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    host = str(source.get("host") or "").strip()
+    user = str(source.get("user") or "").strip()
+    if not (host and user):
+        return None
+    try:
+        password = _read_windows_credential(f"imap:{user}.{_CATFISH_SERVICE}")
+    except OSError:
+        password = None
+    if not password:
+        logger.warning("配置了 IMAP (%s) 但凭据管理器里取不到密码, 请在邮件页重新保存一次", user)
+        return None
+    # 发信用的 SMTP 设置也在这份 JSON 里; Companion 那条路是注环境变量,
+    # 这里补到本进程环境 (只影响这一次 CLI), smtp_send 照旧从环境变量读。
+    if source.get("smtp_host"):
+        os.environ.setdefault("CATFISH_SMTP_HOST", str(source["smtp_host"]))
+    if source.get("smtp_port"):
+        os.environ.setdefault("CATFISH_SMTP_PORT", str(source["smtp_port"]))
+    retention = str(source.get("retention") or DEFAULT_RETENTION)
+    return ImapConfig(
+        host=host, user=user, password=password,
+        port=int(source.get("port") or DEFAULT_PORT),
+        retention=retention if retention in RETENTION_SECONDS else DEFAULT_RETENTION,
     )

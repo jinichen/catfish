@@ -55,7 +55,9 @@ pub(crate) fn email_command(bin: &Path) -> Command {
     //
     // 密码从系统凭据库读出来注入子进程环境。前端**拿不到**它 ——
     // imap_credentials 里刻意没有读密码的 tauri command。
-    if let Some((source, password)) = super::imap_credentials::configured_source() {
+    let imap = super::imap_credentials::configured_source();
+    let imap_configured = imap.is_some();
+    if let Some((source, password)) = imap {
         command
             .env("CATFISH_IMAP_HOST", &source.host)
             .env("CATFISH_IMAP_PORT", source.port.to_string())
@@ -84,7 +86,15 @@ pub(crate) fn email_command(bin: &Path) -> Command {
         // 该生效, 它们和 IMAP 不冲突, 是两个并列的来源。
     }
 
-    if cfg!(target_os = "windows") {
+    // 9/26: Windows 配了 IMAP 就不再钉客户端。钉了 CATFISH_EMAIL_CLIENT, Python 那边
+    // 只用被钉的那一个来源 —— 以前在界面上扫描选过 Outlook / 邮件目录的机器, 配好
+    // IMAP 之后照样只去问 Outlook, IMAP 根本用不上。来源顺序交给
+    // catfish_email.inbox._windows_candidates (IMAP 为主, 选过的邮件目录排在后面)。
+    if cfg!(target_os = "windows") && imap_configured {
+        if let Some(dir) = email_config::mail_dir_override() {
+            command.env("CATFISH_EML_DIR", dir);
+        }
+    } else if cfg!(target_os = "windows") {
         if let Some(dir) = email_config::mail_dir_override() {
             command
                 .env("CATFISH_EML_DIR", dir)

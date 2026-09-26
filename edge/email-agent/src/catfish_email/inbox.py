@@ -20,10 +20,14 @@ logger = logging.getLogger("catfish_email.inbox")
 
 
 def _imap_configured() -> bool:
-    """IMAP 三件套齐了没。齐了就优先用它 —— 不依赖任何邮件客户端。"""
-    from .adapters.imap_mail import HOST_ENV, PASSWORD_ENV, USER_ENV  # noqa: PLC0415
+    """IMAP 配好了没 —— 跟 ImapAdapter 用同一个判据 (config_from_env)。
 
-    return all(os.environ.get(var, "").strip() for var in (HOST_ENV, USER_ENV, PASSWORD_ENV))
+    9/26: 原来只看三个环境变量。Windows 上 tool-bridge 起的 CLI 没有这些变量,
+    但 IMAP 其实配好了 (凭据在凭据管理器里), 判据不一致就等于"没配"。
+    """
+    from .adapters.imap_config import config_from_env  # noqa: PLC0415
+
+    return config_from_env() is not None
 
 
 def _eml_dir_configured() -> bool:
@@ -36,6 +40,24 @@ def _eml_dir_configured() -> bool:
     from .adapters.eml_dir import LEGACY_ROOT_ENV, ROOT_ENV  # noqa: PLC0415
 
     return any(os.environ.get(var, "").strip() for var in (ROOT_ENV, LEGACY_ROOT_ENV))
+
+
+def _windows_candidates() -> list[str]:
+    """Windows 的取数来源。9/26 鸿波「理论上 Windows 下不再使用客户端了吧?」—— 对。
+
+    9/18 做 IMAP 就是因为 Windows 上两条客户端路都走不通 (ccc2ecb): Foxmail 7.2
+    邮件文件加密, 新版 Outlook 没有 COM、本地也没有邮件。同一天 d7833dc 为了 macOS
+    (Apple Mail 能删能标已读, 不该让只读的 IMAP 抢先) 把 IMAP 挪到候选最后, 这个
+    改动顺手也套在了 Windows 上, 于是 Windows 又变成先问 Outlook —— 跟挪动时写下
+    的理由自相矛盾。结果: Outlook 装了没配账号的机器上, 读信先吃一个 COM 错误。
+
+    现在: 配了 IMAP 就以 IMAP 为准, 不再碰 Outlook。员工在界面上明确选过的 .eml
+    导出目录 (多半是迁移过来的旧邮件) 仍然保留, 排在 IMAP 后面。没配 IMAP 的老
+    机器保持原来的自动探测, 不让它们升级后突然一封信都没有。
+    """
+    if _imap_configured():
+        return ["imap"] + (["eml-dir"] if _eml_dir_configured() else [])
+    return ["eml-dir"] if _eml_dir_configured() else ["outlook-win", "eml-dir"]
 
 
 def get_adapter(client: str | None = None) -> EmailAdapter:
@@ -64,14 +86,12 @@ def get_adapter(client: str | None = None) -> EmailAdapter:
     # 来源赢是拿功能换了个没必要的"独立性"。
     #
     # 本地客户端取不到时它们会抛异常, 自然落到 IMAP, 所以排最后不影响兜底。
+    # (以上只说 macOS。Windows 配了 IMAP 就只用 IMAP, 见 _windows_candidates。)
     imap_last = ["imap"] if _imap_configured() else []
     if system == "Darwin":
         candidates = ["apple-mail", "foxmail-mac"] + imap_last
     elif system == "Windows":
-        # 配置了邮件目录就直接用它，避免无关的 Outlook COM 探测和误导性错误。
-        # 没配置时保留自动探测。
-        local = ["eml-dir"] if _eml_dir_configured() else ["outlook-win", "eml-dir"]
-        candidates = local + imap_last
+        candidates = _windows_candidates()
     else:
         raise DataNotFoundError(
             f"catfish-email 暂不支持 {system} 平台 (仅 macOS / Windows)"
@@ -88,7 +108,7 @@ def get_adapter(client: str | None = None) -> EmailAdapter:
 
     raise DataNotFoundError(
         f"{system} 上没找到可用的邮件来源 (尝试过: {', '.join(candidates)})。"
-        f"Windows 上请在邮件客户端里把邮件导出为 .eml, 再选择导出目录。"
+        f"Windows 上请在邮件页配置 IMAP (推荐), 或选择 .eml 导出目录。"
         f"最后一个错: {last_err}"
     )
 
@@ -107,14 +127,13 @@ def get_all_adapters() -> list[EmailAdapter]:
         所有能初始化的 adapter list (按平台候选顺序). 全挂返空 list (caller 自决怎么报).
     """
     system = platform.system()
-    # IMAP 排最后, 理由同 get_adapter()。这里是合并列表, 顺序只影响去重时的
+    # macOS 上 IMAP 排最后, 理由同 get_adapter(); Windows 见 _windows_candidates()。这里是合并列表, 顺序只影响去重时的
     # 先后, 而去重本身已经按"能不能执行动作"定优先级 (cli_read._source_priority)。
     imap_last = ["imap"] if _imap_configured() else []
     if system == "Darwin":
         candidates = ["apple-mail", "foxmail-mac"] + imap_last
     elif system == "Windows":
-        local = ["eml-dir"] if _eml_dir_configured() else ["outlook-win", "eml-dir"]
-        candidates = local + imap_last
+        candidates = _windows_candidates()
     else:
         return []
 
