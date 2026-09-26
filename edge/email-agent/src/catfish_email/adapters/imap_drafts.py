@@ -108,3 +108,28 @@ def uid_by_recent_headers(conn, msg_id: str) -> str | None:
         if match:
             return match.group(1).decode("ascii")
     return None
+
+
+def uids_in(conn, folder_raw: str, select) -> set[str]:
+    """APPEND 之前草稿箱里已有的 UID。"""
+    select(conn, folder_raw)
+    typ, data = conn.uid("search", None, "ALL")
+    if typ != "OK" or not data or not data[0]:
+        return set()
+    return {u.decode("ascii") for u in data[0].split()}
+
+
+def new_uid_since(conn, folder_raw: str, select, before: set[str]) -> str | None:
+    """最后的兜底: APPEND 前后对比, 多出来的那个 UID 就是刚存的草稿。
+
+    9/26 真机第二次: HEADER 搜索和按 Message-ID 翻最新几封都没找到 —— 有的服务器
+    在 APPEND 时会改写 Message-ID, 按内容认不出来。UID 是服务器分配的、只增不减,
+    前后一比就知道。多出来不止一个 (别的客户端同时也在存草稿) 时取最大的,
+    那是最后存进去的。
+    """
+    select(conn, folder_raw)
+    typ, data = conn.uid("search", None, "ALL")
+    if typ != "OK" or not data or not data[0]:
+        return None
+    added = [u.decode("ascii") for u in data[0].split() if u.decode("ascii") not in before]
+    return max(added, key=int) if added else None

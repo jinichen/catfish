@@ -393,10 +393,12 @@ class ImapAdapter(EmailAdapter):
             in_reply_to=irt, references=refs, message_id=msg_id,
         )
         conn = self._connect()
+        before = imap_drafts.uids_in(conn, drafts, self._select)
         typ, _ = conn.append(f'"{drafts}"', r"(\Draft \Seen)", None, raw)
         if typ != "OK":
             raise EmailAdapterError(f"存草稿失败: {typ}")
-        uid = self._uid_by_message_id(drafts, msg_id)
+        uid = self._uid_by_message_id(drafts, msg_id) or imap_drafts.new_uid_since(
+            conn, drafts, self._select, before)
         if uid is None:
             raise EmailAdapterError(
                 "草稿存进去了, 但找不回它的 UID —— 请去邮箱网页版确认"

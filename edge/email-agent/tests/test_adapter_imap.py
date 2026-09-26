@@ -163,8 +163,12 @@ class FakeIMAP:
             # HEADER Message-ID <x> —— APPEND 之后靠这个把新 UID 找回来
             # (服务器没有 UIDPLUS 的 APPENDUID)。真按头过滤, 别让测试靠
             # "反正返回全部, 取最后一个"蒙混过去。
-            if len(args) >= 3 and str(args[1]).upper() == "MESSAGE-ID":
-                needle = str(args[2]).encode()
+            # 9/26: 原来按 args[1]/args[2] 取 —— 但 imaplib 的 uid("search", None,
+            # "HEADER", "Message-ID", x) 里 args[0] 是字符集 None, 下标整体错一位,
+            # 于是这里从来没命中, 一直走下面"返回全部", 取最后一个恰好就是刚存的。
+            # 夹具蒙混过关, 真机 (电信邮箱) 上存草稿一直「找不回 UID」却没有测试红。
+            if len(args) >= 4 and str(args[1]).upper() == "HEADER" and str(args[2]).upper() == "MESSAGE-ID":
+                needle = str(args[3]).encode()
                 return "OK", [
                     b" ".join(uid for uid, _, raw in box if needle in raw)
                 ]

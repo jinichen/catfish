@@ -49,7 +49,7 @@ def test_draft_is_found_again_when_the_server_ignores_header_search(adapter):  #
     real_uid = fake.uid
 
     def header_search_returns_nothing(command, *args):
-        if command == "search" and len(args) >= 3 and str(args[1]).upper() == "MESSAGE-ID":
+        if command == "search" and len(args) >= 4 and str(args[2]).upper() == "MESSAGE-ID":
             return "OK", [b""]
         return real_uid(command, *args)
 
@@ -59,3 +59,18 @@ def test_draft_is_found_again_when_the_server_ignores_header_search(adapter):  #
 
     new_id = adapter.create_draft(to=["a@b.cn"], subject="预算回复", body="改过", replaces=draft_id)
     assert "改过" in adapter.read_message(new_id).body_text
+
+
+def test_draft_is_found_even_when_the_server_rewrites_message_id(adapter):  # noqa: F811
+    """9/26 真机第二次还是「找不回它的 UID」: 按 Message-ID 的两条路都不通 (服务器
+    APPEND 时改写了 Message-ID)。最后按 APPEND 前后多出来的 UID 认。"""
+    fake = adapter._fake
+    real_append = fake.append
+
+    def rewriting_append(folder, flags, date_time, message):
+        rewritten = message.replace(b"Message-ID: <", b"Message-ID: <server-rewrote-")
+        return real_append(folder, flags, date_time, rewritten)
+
+    fake.append = rewriting_append
+    draft_id = adapter.create_draft(to=["a@b.cn"], subject="单价-上海擎标", body="正文")
+    assert adapter.read_message(draft_id).subject == "单价-上海擎标"
