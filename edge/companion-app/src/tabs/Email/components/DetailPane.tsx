@@ -43,12 +43,15 @@ interface FullMessage extends EmailDigestItem {
 
 
 
+import DraftSendButton from "./DraftSendButton";
+
 function DetailPane({
   msg,
   list,
   repliedPool,
   onAskCatfish,
   onDeleted,
+  isDraft = false,
 }: {
   msg: FullMessage;
   // P3.5.58 (6/22 鸿波): 全 list 传进来给 isReplied 算法用. 算"当前邮件
@@ -59,6 +62,9 @@ function DetailPane({
   repliedPool?: EmailDigestItem[];
   onAskCatfish: (m: FullMessage) => void;
   onDeleted: () => void;  // 5/18 BL-EMAIL-DELETE: 删除成功 → 父组件移除 item
+  /** 9/26: 草稿箱里的一封 —— 行动按钮换成「发送这封草稿」, 不再是回复它。
+   *  发出后草稿会从草稿箱消失, 父组件按删除一样处理。 */
+  isDraft?: boolean;
 }) {
   // 9/18: 外链图默认不加载 —— 它们是跟踪像素, 一打开发件人就知道你看了。
   //
@@ -459,6 +465,7 @@ function DetailPane({
         )}
         {/* 行动按钮 */}
         <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap", alignItems: "center" }}>
+          {isDraft ? <DraftSendButton id={msg.id} onSent={onDeleted} /> : (<>
           <button
             type="button"
             onClick={() => onAskCatfish(msg)}
@@ -512,6 +519,7 @@ function DetailPane({
           >
             ✏️ 回复
           </button>
+          </>)}
           {/* 5/18 BL-EMAIL-DELETE: 两步点击确认 (window.confirm 在 Tauri 不可靠).
               第一次点 → "🗑 再次点击确认" (3s 内有效), 第二次才真删. */}
           <button

@@ -41,6 +41,7 @@ import { buildAskCatfishStarter } from "../../lib/emailHandoff";
 import { emailFailureHint } from "../../lib/emailPlatformHints";
 import { needsEmailSourceSetup, parseEmailSourceDiscovery } from "../../lib/emailSourceDiscovery";
 import ActionFilterChips from "./components/ActionFilterChips";
+import FolderTabs, { type MailFolder } from "./components/FolderTabs";
 import { useEmailStore } from "../../store/email";
 import { useUIStore } from "../../store/ui";
 // P3.5.158 Phase 4 (7/2 鸿波): 新建邮件入口
@@ -115,6 +116,7 @@ export default function EmailTab() {
   const [politicalMap, setPoliticalMap] = useState<Record<string, PoliticalScanResult>>({});
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [folder, setFolder] = useState<MailFolder>("Inbox"); // 9/26 见 FolderTabs
   const [detail, setDetail] = useState<FullMessage | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -172,7 +174,7 @@ export default function EmailTab() {
         // 改成 Rust 端 clamp 上限 500 (clamp(1, 500) 见 email.rs:89), 比 100 大
         // 5x. 一般员工 INBOX < 500 封, 真能看见全量. ≥500 时 header 显"500+"
         // 提示 user 真值被截 (见 headerSummary).
-        emailListFetch(unreadOnly, MAX_EMAIL_LIST_LIMIT),
+        emailListFetch(unreadOnly, MAX_EMAIL_LIST_LIMIT, folder === "Inbox" ? undefined : folder),
         // P3.5.204.b (7/9): 并行拉 Sent (最近 200 封), 只用于 isReplied 数据源.
         // 出错不阻塞 (Sent 拉不到只影响 replied badge, 不影响主流程) → catch 空数组.
         emailListFetch(false, 200, "Sent").catch(() => "[]"),
@@ -190,7 +192,7 @@ export default function EmailTab() {
       if (Array.isArray(accs)) setAccounts(accs as EmailAccountItem[]);
       // 8/21: 回写跨挂载缓存 — 下次切回瞬间有列表 (见 useState 初值那段注释)。
       // 只在拉成功后写: 失败不覆盖上一份好的。
-      if (Array.isArray(list)) {
+      if (Array.isArray(list) && folder === "Inbox") {
         useEmailStore.getState().setListCache({
           items: list,
           sentItems: Array.isArray(sent) ? sent : [],
@@ -207,7 +209,7 @@ export default function EmailTab() {
       inFlight.current -= 1;
       if (!quiet) setLoading(false);
     }
-  }, [unreadOnly]);
+  }, [unreadOnly, folder]);
 
   useEffect(() => {
     void loadList();
@@ -562,6 +564,7 @@ export default function EmailTab() {
             />
           </div>
 
+          <FolderTabs value={folder} onChange={(f) => { setFolder(f); setItems([]); setSelectedId(null); }} />
           {mailDirBlocked && <FullDiskAccessHint />}
           {/* sourceDiscovery 再判一次是给 TS 收窄类型用的 —— needsSourceSetup
               为真时它一定不是 null (函数里第一句就是 `if (!discovery) return
@@ -768,6 +771,7 @@ export default function EmailTab() {
             // 8/6: 算「已回复」要 Sent, 传含 Sent 的 combined
             repliedPool={combined}
             onAskCatfish={handleAskCatfish}
+            isDraft={folder === "Drafts"}
             onDeleted={() => {
               // 5/18 BL-EMAIL-DELETE: 删除成功后从列表移除 + 清详情. 不重新拉
               // list_fetch (avoid 网络 + 抖动), Mail.app 那边已经移到 Trash, 列表
