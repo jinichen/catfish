@@ -55,7 +55,7 @@ class CountingIMAP(FakeIMAP):
         if command == "fetch" and args[1] == "(UID FLAGS)":
             self.flag_fetches += 1
             box = self.messages.get(self.selected or "", [])
-            wanted = set(args[0].split(b","))
+            wanted = set(self._as_bytes(args[0]).split(b","))
             return "OK", [
                 b"1 (UID " + uid + b" FLAGS (" + flags + b"))"
                 for uid, flags, _ in box
@@ -63,7 +63,7 @@ class CountingIMAP(FakeIMAP):
             ]
         if command == "fetch":
             self.header_fetches += 1
-            self.header_fetch_uids.extend(args[0].split(b","))
+            self.header_fetch_uids.extend(self._as_bytes(args[0]).split(b","))
         return super().uid(command, *args)
 
 

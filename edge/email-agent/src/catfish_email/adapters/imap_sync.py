@@ -118,6 +118,7 @@ class ImapSyncAdapter(ImapAdapter):
         #   (9/21 归档那边同款假设被测试夹具当场逮到, 顺手把这里也钉了。)
         uids = sorted(uids, key=int)[-SYNC_INDEX_CAP:]
         pairs: list[tuple[str, str]] = []
+        deleted: list[str] = []
         if uids:
             typ, flag_data = conn.uid("fetch", b",".join(uids), "(UID FLAGS)")
             if typ == "OK":
@@ -132,6 +133,7 @@ class ImapSyncAdapter(ImapAdapter):
                     # 会把索引里的那行删掉。我们删邮件时故意不 EXPUNGE, 原件
                     # 还留在文件夹里 (见 delete_message), 这里不滤就删不掉。
                     if r"\Deleted" in flags:
+                        deleted.append(sync_key(folder_raw, uidvalidity, uid_match.group(1).decode()))
                         continue
                     pairs.append(
                         (sync_key(folder_raw, uidvalidity, uid_match.group(1).decode()), flags)
@@ -168,8 +170,16 @@ class ImapSyncAdapter(ImapAdapter):
             stats = index_store.reconcile(
                 db, account=self.config.user, folder=role,
                 items=pairs, parse=lambda key: fetched[key],
-                on_missing="keep",
+                # 草稿箱不当档案馆: 草稿是工作底稿, 发出去 / 改过之后旧的就该消失。
+                on_missing="delete" if role == "Drafts" else "keep",
             )
+            # 9/26: 打了 \Deleted 的是**有人明确删了** (鲶鱼里删、改草稿替换掉的旧版、
+            # 或别的客户端删的), 不是服务器容量清理。原来它们跟"服务器上没了"一样
+            # 标 on_server=0 留在列表里, 一点开就报「邮件不存在或已删除」。
+            # 删索引行; 磁盘上已归档的 .eml 不动 (档案本体不因为列表清理而丢)。
+            if deleted:
+                db.executemany("DELETE FROM messages WHERE source_key=?", [(k,) for k in deleted])
+                db.commit()
         finally:
             db.close()
         logger.info(
