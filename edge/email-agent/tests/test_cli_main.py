@@ -775,3 +775,4 @@ def test_cmd_draft_surfaces_not_supported_from_a_lying_flag(capsys):
     rc = _cmd_draft([_Liar(name="outlook_win")], _make_draft_args())
     assert rc == 1
     assert "不支持起草" in capsys.readouterr().err
+

@@ -286,6 +286,7 @@ def _cmd_read(adapters: list[EmailAdapter], args) -> int:
         # 无前缀 / 不认识的前缀 → 兼容老 2 段格式, 逐 adapter try
         last_err: Exception | None = None
         last_value_err: ValueError | None = None
+        adapter_errors: list[str] = []
         m = None
         for adapter in adapters:
             try:
@@ -300,8 +301,14 @@ def _cmd_read(adapters: list[EmailAdapter], args) -> int:
                 last_value_err = e
                 continue
             except EmailAdapterError as e:
-                _err(f"[{adapter.name}] 读邮件失败: {e}")
-                return 1
+                # 9/26: 以前第一个出错的客户端就直接退出 1。Windows 上候选顺序是
+                # outlook-win → eml-dir → imap, Outlook 装了但没配账号时 COM 报错,
+                # 真正存着这封信的 IMAP 根本没被问到。记下来, 接着试下一个。
+                adapter_errors.append(f"[{adapter.name}] {e}")
+                continue
+        if m is None and adapter_errors:
+            _err("读邮件失败: " + "; ".join(adapter_errors))
+            return 1
         if m is None:
             # 所有 adapter 都因 id 格式不认 → 友好提示而不是 "不存在"
             if last_err is None and last_value_err is not None:
