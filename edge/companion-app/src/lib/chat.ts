@@ -24,6 +24,7 @@ import { hermesApiConfigGet, hermesApiAuthHeader, authWhoami } from "./tauri";
 import { fetchViaProxy } from "./http_proxy";
 import { prepareChatRequest } from "./chatRequest";
 import { chatStreamError } from "./chatStreamError";
+import { noteToolProgress } from "./draftJump";
 
 // 8/15: 5 个类型声明搬去 chat_types.ts。
 //
@@ -567,6 +568,7 @@ export async function streamChat(params: SendChatParams): Promise<void> {
         if (sseEventType === "hermes.tool.progress") {
           try {
             const ev = JSON.parse(sseData);
+            noteToolProgress(ev?.tool, ev?.status);
             if (ev?.tool === "catfish-lifecycle") {
               const status = ev?.status === "completed" ? "completed" : "running";
               const text = String(ev?.label ?? ev?.preview ?? "").trim();

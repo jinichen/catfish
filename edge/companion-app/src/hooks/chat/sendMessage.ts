@@ -34,6 +34,7 @@
  * 中间 406 行可以逐字比对。
  */
 
+import { jumpToFreshDraft } from "../../lib/draftJump";
 import type { MutableRefObject } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { authWhoami, getSession } from "../../lib/tauri";
@@ -486,6 +487,8 @@ export async function sendMessage(
           setLifecycleStatus(null);
         }
         abortRef.current = null;
+        // 9/27: 这一回合小鲶存了草稿 → 核实后切到邮件页草稿箱 (见 lib/draftJump.ts)
+        if (currentStoreSession === sessionIdForStream) void jumpToFreshDraft();
         // 通知 registry stream 结束 (sidebar ⏳ 也跟着消失)
         if (sessionIdForStream) {
           streamRegistry.finish(sessionIdForStream);

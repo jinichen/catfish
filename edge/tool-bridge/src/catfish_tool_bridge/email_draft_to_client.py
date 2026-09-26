@@ -52,6 +52,7 @@ def tool_email_create_draft(args: dict[str, Any]) -> dict[str, Any]:
         cc (str, 可选): 抄送, 多人逗号
         in_reply_to (str, 可选): 原邮件 id (回复场景传, 客户端才能串 thread)
         account (str, 可选): 从哪个账号起草
+        replaces (str, 可选): 改已有草稿时传旧草稿 id, 存好新的后旧的去掉
 
     Returns:
         {ok, draft_id, summary} / {ok: False, error}
@@ -97,6 +98,11 @@ def tool_email_create_draft(args: dict[str, Any]) -> dict[str, Any]:
         account = str(args.get("account") or "").strip()
         if account:
             cmd += ["--account", account]
+        # 9/27: 改草稿箱里已有的那封 —— 新版本存好后旧的自动去掉, 不留重复。
+        # 以前只能再建一封, 员工改几次草稿箱里就堆几封一样的。
+        replaces = str(args.get("replaces") or "").strip()
+        if replaces:
+            cmd += ["--replace", replaces]
 
         try:
             result = subprocess.run(
@@ -129,8 +135,9 @@ def tool_email_create_draft(args: dict[str, Any]) -> dict[str, Any]:
             "draft_id": draft_id,
             # summary 是模型转述给员工的底稿 —— 把"发送在你"说死
             "summary": (
-                "草稿已放进邮件客户端的草稿箱 (没有发送)。"
-                "请打开 Mail.app 草稿箱 (或鲶鱼邮件页) 核对内容, 确认无误后自己点发送。"
+                ("草稿已改好, 草稿箱里只留这一版 (没有发送)。" if replaces
+                 else "草稿已放进草稿箱 (没有发送)。")
+                + "鲶鱼会打开邮件页的草稿箱并选中它, 核对内容后由你自己点发送。"
             ),
         }
     finally:

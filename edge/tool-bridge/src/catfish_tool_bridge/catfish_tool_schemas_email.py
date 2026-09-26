@@ -48,7 +48,7 @@ EMAIL_TOOLS: List[Dict[str, Any]] = [
                 },
                 "folder": {
                     "type": "string",
-                    "description": "搜哪个文件夹: '*' = 跨所有 (默认), 'Inbox' = 仅收件箱",
+                    "description": "搜哪个文件夹: '*' = 跨所有 (默认), 'Inbox' = 仅收件箱, 'Drafts' = 草稿箱 (改草稿前先用它找到旧草稿 id)",
                 },
                 "account": {
                     "type": "string",
@@ -303,6 +303,13 @@ EMAIL_TOOLS: List[Dict[str, Any]] = [
                     "description": "(回复场景必传) 原邮件 id — 客户端靠它串 thread",
                 },
                 "account": {"type": "string", "description": "(可选) 从哪个账号起草"},
+                "replaces": {
+                    "type": "string",
+                    "description": (
+                        "(改已有草稿时传) 草稿箱里那封旧草稿的 id。员工说'把草稿改一下'时用它, "
+                        "新版本存好后旧的自动去掉 —— 不传的话草稿箱里会多出一封重复的"
+                    ),
+                },
             },
             "required": ["to", "subject", "body"],
         },

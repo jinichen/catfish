@@ -42,6 +42,7 @@ import { emailFailureHint } from "../../lib/emailPlatformHints";
 import { needsEmailSourceSetup, parseEmailSourceDiscovery } from "../../lib/emailSourceDiscovery";
 import ActionFilterChips from "./components/ActionFilterChips";
 import FolderTabs, { type MailFolder } from "./components/FolderTabs";
+import { useDraftFocus } from "./useDraftFocus";
 import { useEmailStore } from "../../store/email";
 import { useUIStore } from "../../store/ui";
 // P3.5.158 Phase 4 (7/2 鸿波): 新建邮件入口
@@ -117,12 +118,6 @@ export default function EmailTab() {
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [folder, setFolder] = useState<MailFolder>("Inbox"); // 9/26 见 FolderTabs
-  // 9/26: 存进草稿箱就跳过去并选中那封 —— 不然员工不知道它落到哪了
-  const showDraft = (id: string) => {
-    setSelectedId(id);
-    if (folder === "Drafts") void loadList({ quiet: true });
-    else { setFolder("Drafts"); setItems([]); }
-  };
   const [detail, setDetail] = useState<FullMessage | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -216,6 +211,8 @@ export default function EmailTab() {
       if (!quiet) setLoading(false);
     }
   }, [unreadOnly, folder]);
+  // 存进草稿箱 (邮件页或对话里) 就跳过去并选中那封 —— 见 useDraftFocus
+  const showDraft = useDraftFocus({ folder, setFolder, clearItems: () => setItems([]), setSelectedId, reload: () => void loadList({ quiet: true }) });
 
   useEffect(() => {
     void loadList();

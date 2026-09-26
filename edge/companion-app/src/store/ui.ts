@@ -52,6 +52,10 @@ interface UIState {
   consumeEmailChat: () => PendingEmailChat | null;
   setActiveEmailChatId: (emailId: string | null) => void;
   consumeChatPrefill: () => string;
+  /** 9/27: 小鲶在对话里存了草稿 → 切到邮件页草稿箱并选中它 (EmailTab 挂载后消费) */
+  pendingDraftFocus: string | null;
+  openEmailDraft: (draftId: string) => void;
+  consumeDraftFocus: () => string | null;
 }
 
 export const useUIStore = create<UIState>((set, get) => ({
@@ -66,6 +70,13 @@ export const useUIStore = create<UIState>((set, get) => ({
   pendingChatPrefill: "",
   pendingEmailChat: null,
   activeEmailChatId: null,
+  pendingDraftFocus: null,
+  openEmailDraft: (draftId) => set({ activeTab: "email", pendingDraftFocus: draftId }),
+  consumeDraftFocus: () => {
+    const id = get().pendingDraftFocus;
+    if (id) set({ pendingDraftFocus: null });
+    return id;
+  },
   // P3.3.55: 从 localStorage 恢复, 默认 false
   auditViewEnabled: (() => {
     try {

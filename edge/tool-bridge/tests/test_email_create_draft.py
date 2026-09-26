@@ -159,3 +159,14 @@ def test_CLI失败如实报错(fake_cli, monkeypatch, tmp_path):
     r = edc.tool_email_create_draft({"to": "a@x.com", "subject": "s", "body": "b"})
     assert r["ok"] is False
     assert "3" in r["error"] and "boom" in r["error"]
+
+
+def test_改草稿_replaces透传_不留重复(fake_cli):
+    """9/27: 员工在对话里让小鲶改草稿, 以前只能再建一封 —— 草稿箱里越改越多。"""
+    r = edc.tool_email_create_draft({
+        "to": "a@x.com", "subject": "Re: 单价", "body": "改过的",
+        "replaces": "imap|%26g0l6P3ux-|2|8519",
+    })
+    argv = _recorded(fake_cli)["argv"]
+    assert argv[argv.index("--replace") + 1] == "imap|%26g0l6P3ux-|2|8519"
+    assert "只留这一版" in r["summary"] and "没有发送" in r["summary"]
