@@ -89,6 +89,8 @@ export interface CreateDraftArgs {
   bcc?: string;
   inReplyTo?: string;
   account?: string;
+  /** 9/26: 改草稿 —— 被替换的旧草稿 id */
+  replaces?: string;
 }
 export const emailCreateDraft = (args: CreateDraftArgs) =>
   rawInvoke<string>("email_create_draft", {
@@ -99,6 +101,7 @@ export const emailCreateDraft = (args: CreateDraftArgs) =>
     body: args.body,
     inReplyTo: args.inReplyTo ?? null,
     account: args.account ?? null,
+    replaces: args.replaces ?? null,
   });
 /** id → "急" | "中" | "低" map, scheduler 后台评级缓存. */
 export const emailUrgencyMap = () =>

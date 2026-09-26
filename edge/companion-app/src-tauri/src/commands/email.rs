@@ -533,6 +533,8 @@ pub async fn email_create_draft(
     body: String,
     in_reply_to: Option<String>,
     account: Option<String>,
+    // 9/26: 改草稿 —— 草稿箱里旧草稿的 id。新的存好后旧的去掉 (见 imap_drafts.py)。
+    replaces: Option<String>,
 ) -> Result<String, String> {
     let bin = catfish_paths::catfish_email_bin().ok_or_else(|| {
         "catfish-email CLI 没装".to_string()
@@ -568,6 +570,9 @@ pub async fn email_create_draft(
     }
     if let Some(a) = account.filter(|s| !s.is_empty()) {
         args.push("--account".to_string()); args.push(a);
+    }
+    if let Some(r) = replaces.filter(|s| !s.is_empty()) {
+        args.push("--replace".to_string()); args.push(r);
     }
 
     let out = email_command(&bin)

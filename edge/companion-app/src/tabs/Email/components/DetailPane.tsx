@@ -465,7 +465,23 @@ function DetailPane({
         )}
         {/* 行动按钮 */}
         <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap", alignItems: "center" }}>
-          {isDraft ? <DraftSendButton id={msg.id} onSent={onDeleted} /> : (<>
+          {isDraft ? (<>
+            <DraftSendButton id={msg.id} onSent={onDeleted} />
+            <button
+              type="button"
+              onClick={handleOpenCompose}
+              disabled={composing}
+              title="在这里改收件人 / 主题 / 正文, 改完存回草稿箱或直接发送"
+              style={{
+                background: "var(--catfish-bg)", color: "var(--catfish-text)",
+                border: "1px solid var(--catfish-border)", borderRadius: 4,
+                padding: "8px 16px", fontSize: 13, fontFamily: "inherit",
+                cursor: composing ? "default" : "pointer", opacity: composing ? 0.4 : 1,
+              }}
+            >
+              ✏️ 修改草稿
+            </button>
+          </>) : (<>
           <button
             type="button"
             onClick={() => onAskCatfish(msg)}
@@ -602,20 +618,23 @@ function DetailPane({
         <ComposeCore
           isOpen={composing}
           onClose={() => setComposing(false)}
-          onSaveDraftSuccess={handleComposeSaveSuccess}
-          onSendSuccess={handleComposeSendSuccess}
-          initialTo={_replyAddress(msg.sender)}
-          initialCc=""
-          initialSubject={_buildReplySubject(msg.subject)}
-          initialBody={_buildQuotedBody({
+          // 9/26: 草稿箱里的一封 → 这个面板是「改这封草稿」, 不是「回复它」:
+          // 字段取草稿自己的, 存/发都替换掉旧草稿 (replacesDraftId), 完成后旧的从列表消失。
+          onSaveDraftSuccess={isDraft ? () => onDeleted() : handleComposeSaveSuccess}
+          onSendSuccess={isDraft ? () => onDeleted() : handleComposeSendSuccess}
+          initialTo={isDraft ? (msg.recipients ?? []).join(", ") : _replyAddress(msg.sender)}
+          initialCc={isDraft ? (msg.cc ?? []).join(", ") : ""}
+          initialSubject={isDraft ? msg.subject || "" : _buildReplySubject(msg.subject)}
+          initialBody={isDraft ? msg.body_text || "" : _buildQuotedBody({
             sender: msg.sender,
             date: msg.date,
             subject: msg.subject || "",
             body_text: msg.body_text,
           })}
-          inReplyToMsgId={msg.id}
+          inReplyToMsgId={isDraft ? null : msg.id}
+          replacesDraftId={isDraft ? msg.id : null}
           account={msg.account}
-          originalMessage={{
+          originalMessage={isDraft ? null : {
             id: msg.id,
             sender: msg.sender,
             subject: msg.subject || "",

@@ -19,6 +19,7 @@ Trash; draft 落 Drafts 不发送) —— 见各函数 docstring。
 """
 from __future__ import annotations
 
+import inspect
 import json
 
 from .adapters.base import (
@@ -61,7 +62,9 @@ def _cmd_draft(adapters: list[EmailAdapter], args) -> int:
     # Apple Mail 的草稿箱 —— 那个账号里根本没有这封原邮件, 线程对不上, 而且
     # 员工在服务器那边(网页版/手机)压根看不到这份草稿。回复要落回它来的地方。
     target = None
-    reply_to_id = getattr(args, "in_reply_to", None) or ""
+    replaces = getattr(args, "replace", None) or None
+    # 改草稿: 落回旧草稿所在的来源 (跟回复落回原邮件来源同一个道理)
+    reply_to_id = replaces or getattr(args, "in_reply_to", None) or ""
     if "|" in reply_to_id:
         prefix = reply_to_id.split("|", 1)[0]
         for a in adapters:
@@ -93,8 +96,13 @@ def _cmd_draft(adapters: list[EmailAdapter], args) -> int:
     cc_list = [t.strip() for t in (args.cc or "").split(",") if t.strip()]
     bcc_list = [t.strip() for t in (args.bcc or "").split(",") if t.strip()]
 
+    if replaces and "replaces" not in inspect.signature(target.create_draft).parameters:
+        _err(f"[{target.name}] 不支持在鲶鱼里改草稿, 请在邮件客户端里修改这封草稿")
+        return 1
+    extra = {"replaces": replaces} if replaces else {}
     try:
         msg_id = target.create_draft(
+            **extra,
             to=to_list,
             cc=cc_list,
             bcc=bcc_list,

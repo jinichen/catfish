@@ -93,6 +93,8 @@ export interface ComposeCoreProps {
 
   /** 回复场景传 msg.id, 新建场景传 null. 直接透传给 email_create_draft */
   inReplyToMsgId?: string | null;
+  /** 9/26: 改草稿场景传旧草稿 id —— 存草稿 / 发送都先替换掉它 (后端 --replace) */
+  replacesDraftId?: string | null;
   /** 走真账号. 回复场景传 msg.account, 新建场景 parent 决定 (default account) */
   account?: string;
 
@@ -120,6 +122,7 @@ export default function ComposeCore({
   initialSubject = "",
   initialBody = "",
   inReplyToMsgId = null,
+  replacesDraftId = null,
   account,
   originalMessage = null,
   threadCandidates = [],
@@ -361,6 +364,7 @@ export default function ComposeCore({
         body: composeBody,
         inReplyTo: inReplyToMsgId || undefined,
         account: account,
+        replaces: replacesDraftId || undefined,
       });
       const parsed = JSON.parse(resultJson);
       const draftId = parsed?.draft_id ?? "ok";
@@ -396,6 +400,7 @@ export default function ComposeCore({
         body: composeBody,
         inReplyTo: inReplyToMsgId || undefined,
         account: account,
+        replaces: replacesDraftId || undefined,
       });
       const draftParsed = JSON.parse(draftJson);
       const draftId = draftParsed?.draft_id;

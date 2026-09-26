@@ -779,6 +779,7 @@ export default function EmailTab() {
               if (selectedId) {
                 setItems((prev) => prev.filter((it) => it.id !== selectedId));
                 setSelectedId(null);
+                if (folder === "Drafts") void loadList({ quiet: true }); // 改草稿后新版本要出现
               }
             }}
           />

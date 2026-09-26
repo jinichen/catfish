@@ -103,6 +103,7 @@ def smtp_send(config: "ImapConfig", raw: bytes, recipients: list[str]) -> None:
 # 配置 9/21 搬到 imap_config.py (本文件越过 800 行红线)。这里 re-export ——
 # 全仓有一堆 `from .imap_mail import ImapConfig`, 改全部调用点的风险不如
 # 留一行别名。新代码请直接 from .imap_config import ...
+from . import imap_drafts  # noqa: E402
 from .imap_config import (  # noqa: E402,F401
     DEFAULT_PORT,
     DEFAULT_RETENTION,
@@ -369,8 +370,11 @@ class ImapAdapter(EmailAdapter):
         self, *, to: Sequence[str], subject: str, body: str,
         cc: Sequence[str] = (), bcc: Sequence[str] = (),
         in_reply_to: str | None = None, account: str | None = None,
+        replaces: str | None = None,
     ) -> str:
         """APPEND 一封草稿到草稿箱, 返回它的 id。
+
+        replaces: 草稿箱里一封旧草稿的 id —— 改草稿。见 imap_drafts.py。
 
         没有 UIDPLUS 就拿不到 APPEND 之后的新 UID (那是 UIDPLUS 的
         APPENDUID 提供的)。所以**我们自己生成 Message-ID**, APPEND 完再用
@@ -382,9 +386,11 @@ class ImapAdapter(EmailAdapter):
         if not drafts:
             raise DataNotFoundError("服务器上找不到草稿箱")
         msg_id = make_msgid(domain=self.config.user.rsplit("@", 1)[-1] or "catfish")
+        irt, refs = (imap_drafts.inherited_headers(self, replaces) if replaces
+                     else imap_drafts.threading_headers(self, in_reply_to))
         raw = self._build_rfc822(
             to=to, subject=subject, body=body, cc=cc, bcc=bcc,
-            in_reply_to=in_reply_to, message_id=msg_id,
+            in_reply_to=irt, references=refs, message_id=msg_id,
         )
         conn = self._connect()
         typ, _ = conn.append(f'"{drafts}"', r"(\Draft \Seen)", None, raw)
@@ -395,7 +401,10 @@ class ImapAdapter(EmailAdapter):
             raise EmailAdapterError(
                 "草稿存进去了, 但找不回它的 UID —— 请去邮箱网页版确认"
             )
-        return self._pack_id(drafts, self._select(conn, drafts), uid)
+        new_id = self._pack_id(drafts, self._select(conn, drafts), uid)
+        if replaces:
+            imap_drafts.drop_old_draft(self, replaces)
+        return new_id
 
     def send_message(self, message_id: str) -> None:
         """把草稿箱里的一封真发出去。
@@ -535,7 +544,7 @@ class ImapAdapter(EmailAdapter):
     def _build_rfc822(
         self, *, to: Sequence[str], subject: str, body: str,
         cc: Sequence[str], bcc: Sequence[str],
-        in_reply_to: str | None, message_id: str,
+        in_reply_to: str | None, message_id: str, references: str | None = None,
     ) -> bytes:
         """拼一封纯文本邮件。
 
@@ -556,7 +565,7 @@ class ImapAdapter(EmailAdapter):
         msg["Message-ID"] = message_id
         if in_reply_to:
             msg["In-Reply-To"] = in_reply_to
-            msg["References"] = in_reply_to
+            msg["References"] = references or in_reply_to
         msg.set_content(body)
         return msg.as_bytes()
 

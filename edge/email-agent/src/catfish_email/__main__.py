@@ -302,6 +302,7 @@ def _build_parser() -> argparse.ArgumentParser:
     pd.add_argument("--body", help="正文 (字符串). 跟 --body-file 二选一")
     pd.add_argument("--body-file", help="正文从文件读 (避 shell 转义坑, --body 长时用)")
     pd.add_argument("--in-reply-to", help="原邮件 id (回复时引用, 让客户端串 thread)")
+    pd.add_argument("--replace", help="改草稿: 草稿箱里旧草稿的 id。新的存好后旧的去掉, 线程头沿用旧的")
     pd.add_argument("--account", help="从哪个账号起草 (默认第一个)")
     pd.add_argument("--json", action="store_true", default=True)
     pd.add_argument("--human", dest="json", action="store_false")

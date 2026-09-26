@@ -37,3 +37,21 @@ def test_cmd_read_reports_every_client_error_when_all_fail(capsys):
     assert rc == 1
     err = capsys.readouterr().err
     assert "[outlook_win]" in err and "[imap]" in err
+
+
+def test_draft_replace_is_refused_by_a_source_that_cannot_edit(capsys):
+    """Apple Mail 等不支持 replaces 的来源: 明说不支持, 不要悄悄存成第二份草稿。"""
+    import argparse
+
+    from catfish_email.__main__ import _cmd_draft
+
+    class _DraftOnly(_FakeAdapter):
+        supports_drafts = True
+
+        def create_draft(self, *, to, subject, body, cc=(), bcc=(), in_reply_to=None, account=None):
+            raise AssertionError("不该走到存草稿")
+
+    args = argparse.Namespace(to="a@b.cn", cc="", bcc="", subject="s", body="b", body_file=None,
+                              in_reply_to=None, account=None, json=True, replace="apple_mail|x|1")
+    assert _cmd_draft([_DraftOnly(name="apple_mail")], args) == 1
+    assert "不支持在鲶鱼里改草稿" in capsys.readouterr().err
