@@ -46,7 +46,7 @@ REAL_UPSTREAMS = {
         "timeout": 60,
     },
     "catfish-public-deepseek-flash": {
-        "model": "deepseek/deepseek-v4-flash",
+        "model": "deepseek/deepseek-flash",
         "api_base": "https://api.deepseek.com/v1",
         "api_key_env": "DEEPSEEK_API_KEY",
         "timeout": 60,

@@ -233,7 +233,10 @@ models:
     mode: chat
 
     upstream:
-      model: deepseek/deepseek-v4-flash
+      # 9/26: DeepSeek API 只认 deepseek-flash / deepseek-v4-pro。199 实测 400 原文:
+      #   "The supported API model names are deepseek-flash, deepseek-v4-pro,
+      #    but you passed deepseek-v4.1-flash" —— 改成 deepseek-flash 后当天恢复。
+      model: deepseek/deepseek-flash
       # P3.5.148 (6/30 鸿波 audit 切回 /v1): /beta → /v1
       #
       #   背景: P3.4.E (6/15) 把 endpoint 从 /v1 切到 /beta, 论据是当时实测 /v1 对

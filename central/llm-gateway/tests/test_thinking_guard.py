@@ -30,7 +30,7 @@ _QWEN = dict(
     upstream_model="openai/qwen3.8-max",
     api_base="https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
 )
-_DS = dict(provider="deepseek", upstream_model="deepseek/deepseek-v4-flash")
+_DS = dict(provider="deepseek", upstream_model="deepseek/deepseek-flash")
 
 
 # ── tool_choice 形态判定 ───────────────────────────────────
@@ -134,7 +134,7 @@ def test_没有provider字段时靠域名认出百炼():
 
 
 def test_靠litellm前缀认出deepseek():
-    m = _model(provider=None, upstream_model="deepseek/deepseek-v4-flash")
+    m = _model(provider=None, upstream_model="deepseek/deepseek-flash")
     p = {"tool_choice": "required"}
     assert apply(p, m)
     assert p["extra_body"]["thinking"] == {"type": "disabled"}

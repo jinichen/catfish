@@ -43,7 +43,7 @@ def _model(upstream_name: str) -> SimpleNamespace:
 def test_provider_support_anthropic_via_openai_proto() -> None:
     """deepseek / dashscope qwen / 私有 vLLM qwen 走 openai/deepseek prefix → 支持
     (LiteLLM 转或 server 端 implicit / vLLM prefix cache 自动)."""
-    assert _provider_supports_cache_marker("deepseek/deepseek-v4-flash") is True
+    assert _provider_supports_cache_marker("deepseek/deepseek-flash") is True
     assert _provider_supports_cache_marker("openai/qwen_v3_5_122b_a10b") is True
     assert _provider_supports_cache_marker("openai/qwen3.7-max-2026-05-20") is True
 
@@ -87,7 +87,7 @@ def test_system_str_converted_to_blocks_with_cache_control() -> None:
         ],
         "tools": [],
     }
-    _apply_prompt_cache_markers(params, _model("deepseek/deepseek-v4-flash"))
+    _apply_prompt_cache_markers(params, _model("deepseek/deepseek-flash"))
     assert params["messages"][0]["content"] == [
         {
             "type": "text",
@@ -139,7 +139,7 @@ def test_system_already_has_cache_control_no_duplicate() -> None:
         "tools": [],
     }
     snap = copy.deepcopy(params)
-    _apply_prompt_cache_markers(params, _model("deepseek/deepseek-v4-flash"))
+    _apply_prompt_cache_markers(params, _model("deepseek/deepseek-flash"))
     assert params == snap  # 0 变
 
 
@@ -153,7 +153,7 @@ def test_tools_last_gets_cache_control_others_untouched() -> None:
             {"type": "function", "function": {"name": "c"}},
         ],
     }
-    _apply_prompt_cache_markers(params, _model("deepseek/deepseek-v4-flash"))
+    _apply_prompt_cache_markers(params, _model("deepseek/deepseek-flash"))
     assert "cache_control" not in params["tools"][0]
     assert "cache_control" not in params["tools"][1]
     assert params["tools"][2]["cache_control"] == {"type": "ephemeral"}
@@ -192,16 +192,16 @@ def test_groq_params_completely_untouched() -> None:
 def test_no_messages_no_crash() -> None:
     """messages 缺 / 空 list 不该 crash."""
     p1 = {"tools": []}
-    _apply_prompt_cache_markers(p1, _model("deepseek/deepseek-v4-flash"))
+    _apply_prompt_cache_markers(p1, _model("deepseek/deepseek-flash"))
     p2 = {"messages": [], "tools": []}
-    _apply_prompt_cache_markers(p2, _model("deepseek/deepseek-v4-flash"))
+    _apply_prompt_cache_markers(p2, _model("deepseek/deepseek-flash"))
     assert p2["messages"] == []
 
 
 def test_no_tools_no_crash() -> None:
     """tools 缺 / 空 list / None 不该 crash."""
     params = {"messages": [{"role": "system", "content": "x"}]}
-    _apply_prompt_cache_markers(params, _model("deepseek/deepseek-v4-flash"))
+    _apply_prompt_cache_markers(params, _model("deepseek/deepseek-flash"))
     # system 仍被处理
     assert isinstance(params["messages"][0]["content"], list)
 
@@ -212,7 +212,7 @@ def test_first_message_not_system_skips_system_marker() -> None:
         "messages": [{"role": "user", "content": "hi"}],
         "tools": [{"type": "function", "function": {"name": "a"}}],
     }
-    _apply_prompt_cache_markers(params, _model("deepseek/deepseek-v4-flash"))
+    _apply_prompt_cache_markers(params, _model("deepseek/deepseek-flash"))
     # user 不动
     assert params["messages"][0]["content"] == "hi"
     # tools 仍标
@@ -225,6 +225,6 @@ def test_empty_system_content_skipped() -> None:
         "messages": [{"role": "system", "content": ""}],
         "tools": [],
     }
-    _apply_prompt_cache_markers(params, _model("deepseek/deepseek-v4-flash"))
+    _apply_prompt_cache_markers(params, _model("deepseek/deepseek-flash"))
     # 仍是 str (没真有内容值得 cache)
     assert params["messages"][0]["content"] == ""
