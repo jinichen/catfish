@@ -195,7 +195,13 @@ pub fn bootstrap_hermes_plugin() {
     //
     // 放在最后: config.yaml 的 plugins.enabled 和 .env 的 API_SERVER_KEY 都
     // 处理完再重启, 免得 hermes 起来时读到写了一半的配置。
-    if plugin_changed {
+    // 5) Windows: 已装机器补打心跳补丁 (见 hermes_windows_watchdog.rs 文件头)
+    let watchdog_changed = cfg!(windows)
+        && hermes_home()
+            .map(|h| super::hermes_windows_watchdog::ensure_logged(&h.join("hermes-agent")))
+            .unwrap_or(false);
+
+    if plugin_changed || watchdog_changed {
         restart_hermes_gateway();
     }
 }
