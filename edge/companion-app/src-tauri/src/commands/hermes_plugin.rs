@@ -313,7 +313,7 @@ fn sync_plugin_files(plugin_path: &Path) -> Result<bool> {
 /// 没装 LaunchAgent (员工手动前台跑 hermes) / kickstart 返非 0 → 只 warn,
 /// 并把手动命令打出来。Companion 启动不该因为这个挂掉。
 #[cfg(target_os = "macos")]
-fn restart_hermes_gateway() {
+pub(crate) fn restart_hermes_gateway() {
     use std::process::Command;
 
     // 拿 uid 走 `id -u` 而不是加一个 libc 依赖 —— 为一个整数引 crate 不值,
@@ -368,7 +368,7 @@ fn restart_hermes_gateway() {
 /// 不重启就不加载 —— 8/9 在 mac 上修掉的"新端点 404 且完全静默"在 Windows 上
 /// 原样存在 (鸿波机器 /api/catfish/room-link/pending 一直 404)。
 #[cfg(not(target_os = "macos"))]
-fn restart_hermes_gateway() {
+pub(crate) fn restart_hermes_gateway() {
     let Some(home) = hermes_home() else { return };
     let cli = crate::services::catfish_paths::hermes_venv_tool(&home.join("hermes-agent"), "hermes");
     if !cli.exists() {

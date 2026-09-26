@@ -481,6 +481,12 @@ pub fn write_server_config(
         if let Err(e) = crate::services::oauth::logout() {
             log::warn!("[server_config] 换服务器后登出失败: {e:#}");
         }
+        // 9/26 Windows 实证: hermes 进程启动时把 .env 的 OPENAI_BASE_URL /
+        // CATFISH_GATEWAY_URL 读进了进程环境, 上面改文件它看不到 —— 换服务器后
+        // 仍拿旧地址 + 旧 token 发请求, 每句 401。Windows 聊天选凭证还要求
+        // config.yaml 地址 = 进程环境里的地址, 不重启永远对不上。所以换服务器
+        // 就重启 hermes (后台做, 不卡保存按钮)。
+        std::thread::spawn(crate::commands::hermes_plugin::restart_hermes_gateway);
         log::info!("[server_config] 服务器已更换 → 旧登录作废, 需要重新登录");
         return Ok(true);
     }
