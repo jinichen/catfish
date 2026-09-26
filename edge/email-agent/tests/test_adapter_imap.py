@@ -100,7 +100,17 @@ class FakeIMAP:
     def __init__(
         self, folders=None, messages=None, uidvalidity=b"1", login_ok=True,
         capabilities=("IMAP4REV1", "ID", "XLIST"),
+        appenduid=True, stale_session_after_append=True,
     ):
+        #: 9/27 真机探测 (imap.chinatelecom.cn) 实测的两条, 默认照真机来:
+        #:  · CAPABILITY 里没有 UIDPLUS, 但 APPEND 的 OK 里照样带 [APPENDUID v uid]
+        #:  · 做 APPEND 的那个连接**永远看不到**自己刚存的邮件 —— 重新 SELECT、
+        #:    NOOP、等 10 秒都没用, 只有新连接 (重新登录) 才看得到
+        #: 之前夹具两条都不像真机 (同连接立刻可见、没有 APPENDUID), 于是存草稿后
+        #: "找回 UID" 的三种办法在测试里全绿, 在真机上全挂。
+        self.appenduid = appenduid
+        self.stale_session_after_append = stale_session_after_append
+        self.hidden: set[tuple[str, bytes]] = set()
         #: 真机 (imap.chinatelecom.cn) 的 CAPABILITY 里**没有 UIDPLUS**,
         #: 所以默认就不给 —— 夹具要长得像真机, 不是长得像理想服务器。
         self.capabilities = capabilities
@@ -126,7 +136,11 @@ class FakeIMAP:
         if not self.login_ok:
             import imaplib
             raise imaplib.IMAP4.error(f"AUTHENTICATIONFAILED for {user}")
+        self.hidden.clear()  # 新会话看得到之前会话 APPEND 的邮件
         return ("OK", [b"LOGIN completed"])
+
+    def noop(self):
+        return "OK", [b"NOOP completed"]
 
     def list(self):
         return "OK", [
@@ -158,7 +172,8 @@ class FakeIMAP:
         return value if isinstance(value, bytes) else str(value).encode()
 
     def uid(self, command, *args):
-        box = self.messages.get(self.selected or "", [])
+        box = [m for m in self.messages.get(self.selected or "", [])
+               if (self.selected, m[0]) not in self.hidden]
         if command == "search":
             # HEADER Message-ID <x> —— APPEND 之后靠这个把新 UID 找回来
             # (服务器没有 UIDPLUS 的 APPENDUID)。真按头过滤, 别让测试靠
@@ -221,7 +236,12 @@ class FakeIMAP:
     def append(self, folder, flags, date_time, message):
         self.appends.append((folder.strip('"'), flags, message))
         box = self.messages.setdefault(folder.strip('"'), [])
-        box.append((str(9000 + len(box)).encode(), flags.strip("()").encode(), message))
+        uid = str(9000 + len(box)).encode()
+        box.append((uid, flags.strip("()").encode(), message))
+        if self.stale_session_after_append:
+            self.hidden.add((folder.strip('"'), uid))
+        if self.appenduid:
+            return "OK", [b"[APPENDUID " + self.uidvalidity + b" " + uid + b"] APPEND completed"]
         return "OK", [b"APPEND completed"]
 
     def logout(self):

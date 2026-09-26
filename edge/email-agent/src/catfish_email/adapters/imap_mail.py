@@ -394,18 +394,18 @@ class ImapAdapter(EmailAdapter):
         )
         conn = self._connect()
         before = imap_drafts.uids_in(conn, drafts, self._select)
-        typ, _ = conn.append(f'"{drafts}"', r"(\Draft \Seen)", None, raw)
+        typ, data = conn.append(f'"{drafts}"', r"(\Draft \Seen)", None, raw)
         if typ != "OK":
             raise EmailAdapterError(f"存草稿失败: {typ}")
-        uid = self._uid_by_message_id(drafts, msg_id) or imap_drafts.new_uid_since(
-            conn, drafts, self._select, before)
+        uidvalidity, uid = imap_drafts.locate_appended(self, data, drafts, msg_id, before)
         if uid is None:
             raise EmailAdapterError(
                 "草稿存进去了, 但找不回它的 UID —— 请去邮箱网页版确认"
             )
-        new_id = self._pack_id(drafts, self._select(conn, drafts), uid)
+        new_id = self._pack_id(drafts, uidvalidity, uid)
         if replaces:
             imap_drafts.drop_old_draft(self, replaces)
+        self.close()  # 这个连接看不到刚存的草稿 (见 locate_appended), 后续操作用新连接
         return new_id
 
     def send_message(self, message_id: str) -> None:
@@ -445,6 +445,7 @@ class ImapAdapter(EmailAdapter):
             self.delete_message(message_id)
         except EmailAdapterError as error:
             logger.warning("邮件已发出, 但草稿没删掉: %s", error)
+        self.close()  # 同上: APPEND 过的连接看不到已发送里那份
 
     def check_new_mail(self, *, account: str | None = None) -> None:
         """空操作, 而且**不该报错**。

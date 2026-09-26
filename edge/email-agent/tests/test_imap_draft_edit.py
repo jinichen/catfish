@@ -46,6 +46,7 @@ def test_draft_is_found_again_when_the_server_ignores_header_search(adapter):  #
     """9/26 真机: 电信邮箱 `UID SEARCH HEADER Message-ID` 返回空, 存草稿报
     「草稿存进去了, 但找不回它的 UID」(草稿其实在)。兜底翻最新几封的 Message-ID。"""
     fake = adapter._fake
+    fake.appenduid = False  # 逼它走"新连接上找回"那条兜底
     real_uid = fake.uid
 
     def header_search_returns_nothing(command, *args):
@@ -65,6 +66,7 @@ def test_draft_is_found_even_when_the_server_rewrites_message_id(adapter):  # no
     """9/26 真机第二次还是「找不回它的 UID」: 按 Message-ID 的两条路都不通 (服务器
     APPEND 时改写了 Message-ID)。最后按 APPEND 前后多出来的 UID 认。"""
     fake = adapter._fake
+    fake.appenduid = False
     real_append = fake.append
 
     def rewriting_append(folder, flags, date_time, message):

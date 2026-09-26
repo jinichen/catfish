@@ -619,6 +619,10 @@ function DetailPane({
           回复场景传当前邮件、RFC 线程候选和附件元数据；保存/发送成功走 callback. */}
       {composing ? (
         <ComposeCore
+          // 9/27: 每次打开/换信都重建组件, 输入框直接用本次的初始值 —— 不依赖
+          // ComposeCore 内部"resetKey 变了再 setState"的时序 (那条路上出现过改草稿
+          // 却填着自己地址的情况)。
+          key={`${msg.id}|${isDraft ? "edit" : "reply"}|${composing ? "open" : "closed"}`}
           isOpen={composing}
           onClose={() => setComposing(false)}
           // 9/26: 草稿箱里的一封 → 这个面板是「改这封草稿」, 不是「回复它」:

@@ -133,3 +133,37 @@ def new_uid_since(conn, folder_raw: str, select, before: set[str]) -> str | None
         return None
     added = [u.decode("ascii") for u in data[0].split() if u.decode("ascii") not in before]
     return max(added, key=int) if added else None
+
+
+def appenduid(append_data) -> tuple[str | None, str | None]:
+    """APPEND 的 OK 响应里的 `[APPENDUID <uidvalidity> <uid>]`。"""
+    for item in append_data or []:
+        text = item if isinstance(item, bytes) else str(item).encode()
+        match = re.search(rb"APPENDUID (\d+) (\d+)", text)
+        if match:
+            return match.group(1).decode("ascii"), match.group(2).decode("ascii")
+    return None, None
+
+
+def locate_appended(adapter: "ImapAdapter", append_data, drafts: str, msg_id: str,
+                    before: set[str]) -> tuple[str | None, str | None]:
+    """刚 APPEND 进草稿箱的那封 → (UIDVALIDITY, UID)。
+
+    9/27 真机探测 (imap.chinatelecom.cn) 的结论, 前两次修复都是猜的, 这次按实测:
+
+      · APPEND 的 OK 里**带着** `[APPENDUID 2 8526]` —— 虽然 CAPABILITY 没写
+        UIDPLUS。直接用它, 一个往返都不用多花。
+      · 做 APPEND 的那个连接**永远看不到**自己刚存的邮件: 重新 SELECT、NOOP、
+        等 10 秒都搜不到; 换一个新连接立刻就在。之前三种"找回"办法都在旧连接上
+        做, 所以在真机上全挂 (测试夹具同连接立刻可见, 所以全绿)。
+
+    所以: 先看 APPENDUID; 没有才断开重连, 在新连接上按 Message-ID / 新增 UID 找。
+    """
+    uidvalidity, uid = appenduid(append_data)
+    if uid is not None:
+        return uidvalidity, uid
+    adapter.close()
+    conn = adapter._connect()
+    uid = adapter._uid_by_message_id(drafts, msg_id) or new_uid_since(
+        conn, drafts, adapter._select, before)
+    return (adapter._select(conn, drafts), uid) if uid is not None else (None, None)
