@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -70,3 +71,40 @@ def drop_old_draft(adapter: "ImapAdapter", draft_id: str) -> None:
             conn.uid("expunge", uid)
     except Exception as error:  # noqa: BLE001
         logger.warning("新草稿已保存, 但旧草稿没去掉 (%s): %s", draft_id, error)
+
+
+#: 找回刚存的草稿时往回翻多少封。刚 APPEND 的一定在最新的那几封里。
+_RECENT_WINDOW = 30
+
+
+def uid_by_recent_headers(conn, msg_id: str) -> str | None:
+    """HEADER 搜索不管用时的兜底: 取文件夹里最新几封的 Message-ID 逐个比。
+
+    9/26 Windows 实测: 存草稿「草稿存进去了, 但找不回它的 UID」—— 电信邮箱对
+    `UID SEARCH HEADER Message-ID <...>` 返回空。服务器没有 UIDPLUS, 拿不到
+    APPENDUID, 只剩这条路。调用前已经 SELECT 了目标文件夹。
+    """
+    typ, data = conn.uid("search", None, "ALL")
+    if typ != "OK" or not data or not data[0]:
+        return None
+    recent = data[0].split()[-_RECENT_WINDOW:]
+    if not recent:
+        return None
+    wanted = msg_id.strip().lower()
+    typ, fetched = conn.uid(
+        "fetch", b",".join(recent).decode("ascii"),
+        "(UID BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])",
+    )
+    if typ != "OK" or not fetched:
+        return None
+    for item in fetched:
+        if not isinstance(item, tuple) or len(item) < 2:
+            continue
+        meta, header = item[0], item[1]
+        text = header.decode("utf-8", "replace") if isinstance(header, bytes) else str(header)
+        if wanted not in text.lower():
+            continue
+        match = re.search(rb"UID (\d+)", meta if isinstance(meta, bytes) else str(meta).encode())
+        if match:
+            return match.group(1).decode("ascii")
+    return None

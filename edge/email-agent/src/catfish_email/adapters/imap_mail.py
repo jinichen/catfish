@@ -535,11 +535,12 @@ class ImapAdapter(EmailAdapter):
         try:
             typ, data = conn.uid("search", None, "HEADER", "Message-ID", msg_id)
         except imaplib.IMAP4.error:
-            return None
-        if typ != "OK" or not data or not data[0]:
-            return None
-        uids = data[0].split()
-        return uids[-1].decode("ascii") if uids else None
+            typ, data = "NO", None
+        uids = data[0].split() if typ == "OK" and data and data[0] else []
+        if uids:
+            return uids[-1].decode("ascii")
+        # 9/26 真机: 电信邮箱的 HEADER 搜索对 Message-ID 返回空 —— 草稿其实存进去了。
+        return imap_drafts.uid_by_recent_headers(conn, msg_id)
 
     def _build_rfc822(
         self, *, to: Sequence[str], subject: str, body: str,

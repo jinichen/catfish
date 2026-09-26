@@ -117,6 +117,12 @@ export default function EmailTab() {
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [folder, setFolder] = useState<MailFolder>("Inbox"); // 9/26 见 FolderTabs
+  // 9/26: 存进草稿箱就跳过去并选中那封 —— 不然员工不知道它落到哪了
+  const showDraft = (id: string) => {
+    setSelectedId(id);
+    if (folder === "Drafts") void loadList({ quiet: true });
+    else { setFolder("Drafts"); setItems([]); }
+  };
   const [detail, setDetail] = useState<FullMessage | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -699,6 +705,7 @@ export default function EmailTab() {
             agentName={agentName}
             agentPersonality={agentPersonality}
             resetKey="new-compose"
+            onSaveDraftSuccess={showDraft}
           />
         )}
 
@@ -772,6 +779,7 @@ export default function EmailTab() {
             repliedPool={combined}
             onAskCatfish={handleAskCatfish}
             isDraft={folder === "Drafts"}
+            onDraftSaved={showDraft}
             onDeleted={() => {
               // 5/18 BL-EMAIL-DELETE: 删除成功后从列表移除 + 清详情. 不重新拉
               // list_fetch (avoid 网络 + 抖动), Mail.app 那边已经移到 Trash, 列表

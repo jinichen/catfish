@@ -40,3 +40,22 @@ def test_editing_never_copies_the_old_version_into_trash(adapter):  # noqa: F811
     copies_before = len(getattr(adapter._fake, "copies", []))
     adapter.create_draft(to=["a@b.cn"], subject="s", body="v2", replaces=old_id)
     assert len(getattr(adapter._fake, "copies", [])) == copies_before
+
+
+def test_draft_is_found_again_when_the_server_ignores_header_search(adapter):  # noqa: F811
+    """9/26 真机: 电信邮箱 `UID SEARCH HEADER Message-ID` 返回空, 存草稿报
+    「草稿存进去了, 但找不回它的 UID」(草稿其实在)。兜底翻最新几封的 Message-ID。"""
+    fake = adapter._fake
+    real_uid = fake.uid
+
+    def header_search_returns_nothing(command, *args):
+        if command == "search" and len(args) >= 3 and str(args[1]).upper() == "MESSAGE-ID":
+            return "OK", [b""]
+        return real_uid(command, *args)
+
+    fake.uid = header_search_returns_nothing
+    draft_id = adapter.create_draft(to=["a@b.cn"], subject="预算回复", body="正文")
+    assert adapter.read_message(draft_id).subject == "预算回复"
+
+    new_id = adapter.create_draft(to=["a@b.cn"], subject="预算回复", body="改过", replaces=draft_id)
+    assert "改过" in adapter.read_message(new_id).body_text

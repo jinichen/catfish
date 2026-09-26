@@ -52,6 +52,7 @@ function DetailPane({
   onAskCatfish,
   onDeleted,
   isDraft = false,
+  onDraftSaved,
 }: {
   msg: FullMessage;
   // P3.5.58 (6/22 鸿波): 全 list 传进来给 isReplied 算法用. 算"当前邮件
@@ -65,6 +66,8 @@ function DetailPane({
   /** 9/26: 草稿箱里的一封 —— 行动按钮换成「发送这封草稿」, 不再是回复它。
    *  发出后草稿会从草稿箱消失, 父组件按删除一样处理。 */
   isDraft?: boolean;
+  /** 9/26: 存进草稿箱之后 —— 父组件切到草稿箱并选中这封 */
+  onDraftSaved?: (draftId: string) => void;
 }) {
   // 9/18: 外链图默认不加载 —— 它们是跟踪像素, 一打开发件人就知道你看了。
   //
@@ -620,7 +623,11 @@ function DetailPane({
           onClose={() => setComposing(false)}
           // 9/26: 草稿箱里的一封 → 这个面板是「改这封草稿」, 不是「回复它」:
           // 字段取草稿自己的, 存/发都替换掉旧草稿 (replacesDraftId), 完成后旧的从列表消失。
-          onSaveDraftSuccess={isDraft ? () => onDeleted() : handleComposeSaveSuccess}
+          onSaveDraftSuccess={(id) => {
+            if (!isDraft) handleComposeSaveSuccess(id);
+            if (onDraftSaved) onDraftSaved(id);
+            else if (isDraft) onDeleted();
+          }}
           onSendSuccess={isDraft ? () => onDeleted() : handleComposeSendSuccess}
           initialTo={isDraft ? (msg.recipients ?? []).join(", ") : _replyAddress(msg.sender)}
           initialCc={isDraft ? (msg.cc ?? []).join(", ") : ""}
@@ -648,7 +655,9 @@ function DetailPane({
           threadCandidates={repliedPool && repliedPool.length ? repliedPool : list}
           agentName={agentName}
           agentPersonality={agentPersonality}
-          resetKey={msg.id}
+          // 9/26: 每次打开都按当前这封重新填 —— 只按 msg.id 重置时, 面板里可能留着
+          // 上一次 (另一种模式 / 读取完成前) 的收件人, 员工看到改草稿却填着自己的地址。
+          resetKey={`${msg.id}|${isDraft ? "edit" : "reply"}|${composing ? "open" : "closed"}`}
         />
       ) : msg.body_html ? (
         <>
