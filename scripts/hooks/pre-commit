@@ -208,6 +208,19 @@ print("\n".join(out))
   fi
 fi
 
+# ── 中央端镜像版本号 (9/26 补) ─────────────────────────────────
+#
+# CI 的「全仓自检」里有这一步, 本地没有。9/26 改了 central/llm-gateway 的默认
+# 模型配置, 本地提交顺利, 推上去 CI 红 —— 版本号没跟着源码变。改到 central/
+# 就在提交前算一次, 不等 CI 才发现。
+if printf '%s\n' "$STAGED" | grep -q '^central/'; then
+  if ! bash scripts/check_central_image_version.sh >/dev/null 2>&1; then
+    echo "🔴 central/ 源码改了, 中央端镜像版本号没跟上。修: bash scripts/central_version.sh --write"
+    echo "   然后把 central/VERSION 和两份 docker-compose.yml 一起提交。"
+    FAIL=1
+  fi
+fi
+
 if [ "$FAIL" -ne 0 ]; then
   echo
   echo "❌ pre-commit 拦下。确实要提交就加 --no-verify。"
