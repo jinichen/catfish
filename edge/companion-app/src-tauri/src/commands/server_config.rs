@@ -231,6 +231,36 @@ pub fn read_server_config() -> Result<ServerConfig, String> {
     })
 }
 
+/// 9/26: 地址校验。以前只看 http(s):// 前缀, 于是 `http://192.168.31.199::8998`
+/// (多一个冒号) 和 `https://192.168.31.199:` (冒号后没端口) 都能存进去 —— 登录用的
+/// issuer 是坏的, 换服务器后怎么也登不上新服务器, 旧 token 一直 401。
+pub(crate) fn check_server_url(label: &str, raw: &str) -> Result<String, String> {
+    let url = raw.trim().trim_end_matches('/');
+    let Some(rest) = url.strip_prefix("http://").or_else(|| url.strip_prefix("https://")) else {
+        return Err(format!("{label} 必须 http:// 或 https:// 开头: {url}"));
+    };
+    let authority = rest.split('/').next().unwrap_or("");
+    let bad = || format!("{label} 格式不对: {url} (应是 http://主机:端口, 例 http://192.168.1.10:8999)");
+    if authority.is_empty() {
+        return Err(bad());
+    }
+    if !authority.starts_with('[') {
+        let mut parts = authority.split(':');
+        let host = parts.next().unwrap_or("");
+        let port = parts.next();
+        if host.is_empty() || parts.next().is_some() {
+            return Err(bad());
+        }
+        if let Some(port) = port {
+            if port.is_empty() || !port.chars().all(|c| c.is_ascii_digit()) || port.parse::<u16>().is_err() {
+                return Err(bad());
+            }
+        }
+    }
+    url::Url::parse(url).map_err(|_| bad())?;
+    Ok(url.to_string())
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub fn write_server_config(
     gateway_url: String,
@@ -247,21 +277,37 @@ pub fn write_server_config(
     // 若声明成 String, 它那次调用会把已配好的 web_url 擦成空.
     // None / Some("") 一律"保持原值不动", 跟 identity_url 同语义.
     web_url: Option<String>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let _ = secret_broker_url; // 显式忽略
     let home = catfish_home()?;
     fs::create_dir_all(&home).map_err(|e| format!("建 {home:?} 失败: {e}"))?;
     let companion = home.join("companion.yaml");
     let memplugin = home.join("memory_plugin.yaml");
 
-    // 校验
-    let trimmed_url = gateway_url.trim();
-    if !trimmed_url.starts_with("http://") && !trimmed_url.starts_with("https://") {
-        return Err(format!(
-            "gateway_url 必须 http:// 或 https:// 开头: {trimmed_url}"
-        ));
-    }
-    let url_clean = trimmed_url.trim_end_matches('/');
+    // 校验 (先全部校验完再写盘, 不留半截配置)
+    let url_owned = check_server_url("gateway 地址", &gateway_url)?;
+    let url_clean = url_owned.as_str();
+    let identity_url = match identity_url.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        Some(v) => Some(check_server_url("identity 地址", v)?),
+        None => None,
+    };
+    let web_url = match web_url.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        Some(v) => Some(check_server_url("门户地址", v)?),
+        None => None,
+    };
+
+    // 9/26: 换了服务器 → 旧登录作废。token 是旧服务器的 identity 签的, 新网关验签
+    // 必 401。以前这里反而把旧 token 同步进 hermes (下面 sync_all), 结果 hermes
+    // 每句话都 401, 界面只显示「未知错误」。
+    let (old_gateway, old_issuer) = fs::read_to_string(&companion)
+        .map(|t| (
+            read_yaml_field(&t, "endpoints", "gateway_url").unwrap_or_default(),
+            read_yaml_field(&t, "oidc", "issuer").unwrap_or_default(),
+        ))
+        .unwrap_or_default();
+    let same = |a: &str, b: &str| a.trim().trim_end_matches('/') == b.trim().trim_end_matches('/');
+    let server_changed = !same(&old_gateway, url_clean)
+        || identity_url.as_deref().is_some_and(|id| !same(&old_issuer, id));
 
     // 1. companion.yaml: endpoints.gateway_url + (可选) oidc.issuer + endpoints.secret_broker_url
     let mut companion_text = fs::read_to_string(&companion).unwrap_or_else(|_| {
@@ -276,18 +322,7 @@ pub fn write_server_config(
 
     // P29: identity_url → oidc.issuer (oauth.rs 读这)
     if let Some(id_url) = identity_url.as_ref() {
-        let trimmed = id_url.trim().trim_end_matches('/');
-        if !trimmed.is_empty() {
-            if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
-                return Err(format!("identity_url 必须 http:// 或 https:// 开头: {trimmed}"));
-            }
-            companion_text = replace_or_insert_yaml_field(
-                &companion_text,
-                "oidc",
-                "issuer",
-                trimmed,
-            );
-        }
+        companion_text = replace_or_insert_yaml_field(&companion_text, "oidc", "issuer", id_url);
     }
 
     // P3.4.1 (6/13 hb): secret_broker_url 不再写 yaml, secret-broker 服务删了
@@ -295,18 +330,7 @@ pub fn write_server_config(
     // P3.5.80 (7/28): web_url → endpoints.web_url (endpoints.rs 读这个).
     // 跟上面 identity_url 同样的"空则不动"语义, 原因见参数处注释.
     if let Some(w_url) = web_url.as_ref() {
-        let trimmed = w_url.trim().trim_end_matches('/');
-        if !trimmed.is_empty() {
-            if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
-                return Err(format!("web_url 必须 http:// 或 https:// 开头: {trimmed}"));
-            }
-            companion_text = replace_or_insert_yaml_field(
-                &companion_text,
-                "endpoints",
-                "web_url",
-                trimmed,
-            );
-        }
+        companion_text = replace_or_insert_yaml_field(&companion_text, "endpoints", "web_url", w_url);
     }
 
     fs::write(&companion, companion_text)
@@ -452,6 +476,14 @@ pub fn write_server_config(
     // (~/.hermes/.env OPENAI_API_KEY + config.yaml model.api_key + auth.json reset).
     // hermes daemon 用老 JWT 调新 IP gateway → 401 → WeChat 显英文. 军规大坑.
     // 7/19 前只写 CATFISH_GATEWAY_URL (1 处) · JWT 3 处漏 · 员工 1 天后 100% 撞英文.
+    if server_changed {
+        // 登录 (oauth.rs) 成功后会把新服务器签的 token 同步进 hermes。
+        if let Err(e) = crate::services::oauth::logout() {
+            log::warn!("[server_config] 换服务器后登出失败: {e:#}");
+        }
+        log::info!("[server_config] 服务器已更换 → 旧登录作废, 需要重新登录");
+        return Ok(true);
+    }
     if let Some(jwt) = crate::services::oauth::current_access_token() {
         if let Err(e) = crate::services::hermes_jwt_sync::sync_all(&jwt) {
             log::warn!(
@@ -464,7 +496,7 @@ pub fn write_server_config(
         );
     }
 
-    Ok(())
+    Ok(false)
 }
 
 /// 保 line-level replace / 追加一个 KEY=VALUE 到 dotenv 文本. 保留 comments + 别的 vars.
@@ -620,5 +652,26 @@ mod tests_env_line {
     fn append_when_empty() {
         let out = replace_or_append_env_line("", "CATFISH_GATEWAY_URL", "http://new");
         assert_eq!(out, "CATFISH_GATEWAY_URL=http://new\n");
+    }
+}
+
+
+#[cfg(test)]
+mod tests_check_server_url {
+    use super::check_server_url;
+
+    #[test]
+    fn accepts_normal_addresses() {
+        for ok in ["http://192.168.31.199:8998", "https://catfish.example.com", "http://10.0.0.5:8999/", "http://[::1]:8999"] {
+            assert!(check_server_url("x", ok).is_ok(), "{ok}");
+        }
+        assert_eq!(check_server_url("x", " http://a:1/ ").unwrap(), "http://a:1");
+    }
+
+    #[test]
+    fn rejects_the_typos_seen_on_9_26() {
+        for bad in ["http://192.168.31.199::8998", "https://192.168.31.199:", "http://:8999", "http://h:99999", "ftp://h", "http://"] {
+            assert!(check_server_url("x", bad).is_err(), "{bad}");
+        }
     }
 }

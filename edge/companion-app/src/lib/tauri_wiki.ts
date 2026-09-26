@@ -263,7 +263,8 @@ export const writeServerConfig = (
    *  登录门那张卡 (ServerSetupCard) 就是不传的, 别让它把配好的擦掉. */
   webUrl?: string,
 ) =>
-  rawInvoke<void>("write_server_config", {
+  /** true = 换了服务器, 旧登录已作废, 需要重新登录 (9/26)。 */
+  rawInvoke<boolean>("write_server_config", {
     gatewayUrl,
     gatewayToken,
     identityUrl,

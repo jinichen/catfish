@@ -109,6 +109,10 @@ export async function runOneRound(
       // 闭包累不变. mirror 用 ctx.currentMessages (round 入口锁定) + 闭包 assistant
       // snapshot, 完全不读 store. session 安全.
       let assistantContent = "";
+      // 9/26: onError 的原文也记在闭包里。下面 finalAssistant 会镜像进 streamRegistry,
+      // 以前只带 status:"error" 不带 error —— ChatTab 从 registry 恢复 (切会话 /
+      // 本轮收尾) 后红框只剩「未知错误」, 网关/hermes 给的 401、404 原因全丢了。
+      let roundError: string | undefined;
       const flushThisRound = () => {
         const delta = pendingDelta;
         pendingDelta = "";
@@ -201,6 +205,7 @@ export async function runOneRound(
             rafId = null;
           }
           flushThisRound();
+          roundError = err;
           // 5/24: 用 assistantId (闭包) 替代 currentStreamIdRef, 防并发串.
           updateMessage(assistantId, {
             status: "error",
@@ -239,6 +244,7 @@ export async function runOneRound(
         tool_calls:
           collectedToolCalls.length > 0 ? collectedToolCalls : undefined,
         status: isError ? "error" : "done",
+        ...(isError ? { error: roundError } : {}),
       };
       if (isError) {
         // streamChat onError 已经处理了 status + error 字段, 这里不动

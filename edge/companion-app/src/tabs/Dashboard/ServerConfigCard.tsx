@@ -61,6 +61,8 @@ export default function ServerConfigCard() {
     };
   }, []);
 
+  const [relogin, setRelogin] = useState(false);
+
   const startEdit = () => {
     if (!cfg) return;
     setDraftUrl(cfg.gateway_url);
@@ -95,7 +97,14 @@ export default function ServerConfigCard() {
         throw new Error("门户 URL 必须 http:// 或 https:// 开头");
       }
       const keepToken = cfg?.gateway_token || "";
-      await writeServerConfig(url, keepToken, idUrl || undefined, webUrl || undefined);
+      const reloginRequired = await writeServerConfig(url, keepToken, idUrl || undefined, webUrl || undefined);
+      if (reloginRequired) {
+        // 9/26: 换了服务器, 旧 token 是旧服务器签的, 新服务器一律 401。
+        // 后端已登出; 刷新后 LoginGate 让员工在新服务器上登录, 登录会把新 token 同步给 hermes。
+        setRelogin(true);
+        setTimeout(() => window.location.reload(), 2500);
+        return;
+      }
       const fresh = await readServerConfig();
       setCfg(fresh);
       setDraftUrl(fresh.gateway_url);
@@ -222,6 +231,12 @@ export default function ServerConfigCard() {
           }}
         >
           ✗ {err}
+        </div>
+      )}
+
+      {relogin && (
+        <div style={{ marginTop: 12, fontSize: 12, color: "var(--catfish-text)" }}>
+          ✓ 已切换到新服务器。原来的登录只在旧服务器有效，马上跳到登录页，请重新登录。
         </div>
       )}
 
