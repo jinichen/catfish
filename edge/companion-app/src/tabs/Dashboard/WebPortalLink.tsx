@@ -184,8 +184,12 @@ export default function WebPortalLink() {
         marginLeft: "calc(-1 * var(--space-6))",
         marginRight: "calc(-1 * var(--space-6))",
         marginBottom: "var(--space-3)",
+        // 9/26 鸿波「头部透明度太高, 出现重影」: 这条是 sticky, 下面的卡片会从它
+        // 底下滚过去。离线时原来只铺一层 8% 的橙色, 等于 92% 透明, 滚过去的
+        // 「服务器配置」「资源市场」跟头部文字叠在一起。橙色提示保留, 但先垫一层
+        // 不透明底色, 再把橙色叠在上面。
         background: isOffline
-          ? "rgba(245, 158, 11, 0.08)"
+          ? "linear-gradient(rgba(245, 158, 11, 0.08), rgba(245, 158, 11, 0.08)), var(--catfish-bg-elevated)"
           : "var(--catfish-bg-elevated)",
         // toolbar 风 — 只 borderBottom (砍 borderRadius + 四向 border)
         borderBottom: `1px solid ${isOffline ? "rgba(245, 158, 11, 0.4)" : "var(--catfish-border)"}`,
