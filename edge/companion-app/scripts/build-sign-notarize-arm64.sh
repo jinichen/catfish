@@ -352,6 +352,9 @@ sign_archive() {
 echo "=== 构建完整 ARM64 App ==="
 cd "$APP_ROOT"
 npm run tauri:build:clean
+# 9/28: 邮件组件资源包每次打包都重建 —— 它不跟前端一起编译, 手动漏跑一次就会
+# 打出"前端是新的、邮件组件是旧的"包 (见 scripts/refresh-email-resource.mjs)
+node scripts/refresh-email-resource.mjs aarch64
 npx tauri build --bundles app --config src-tauri/tauri.aarch64.conf.json
 
 if [[ ! -d "$APP_PATH" ]]; then

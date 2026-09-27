@@ -9,6 +9,8 @@
  * 再说保留时间只管哪一类 (IMAP 直连; 客户端里的账号由客户端自己管), 最后才是
  * IMAP 卡片和档案进度。
  */
+import { useState } from "react";
+
 import type { EmailAccountItem } from "../../../lib/tauri";
 import ArchivePanel from "./ArchivePanel";
 import ImapSetup from "./ImapSetup";
@@ -39,6 +41,11 @@ export default function MailSettingsPanel({
     groups.set(key, [...(groups.get(key) ?? []), a]);
   }
   const hasClientAccounts = accounts.some((a) => a.client && a.client !== "imap");
+  const imapConfigured = accounts.some((a) => a.client === "imap");
+  // 鸿波 (9/28): "是不是原生和 IMAP 会很混乱?" —— 已经靠邮件客户端读着信、又没配
+  // IMAP 的人, 用不着一上来就看一张 IMAP 配置卡片。收成一行, 要用再展开。
+  const [showImap, setShowImap] = useState(false);
+  const imapVisible = imapConfigured || !hasClientAccounts || showImap;
 
   return (
     <>
@@ -72,7 +79,20 @@ export default function MailSettingsPanel({
           </div>
         )}
       </div>
-      <ImapSetup onConfigured={onChanged} />
+      {imapVisible ? (
+        <ImapSetup onConfigured={onChanged} />
+      ) : (
+        <button
+          type="button"
+          onClick={() => setShowImap(true)}
+          style={{
+            margin: "0 12px 8px", background: "none", border: "none", padding: 0, font: "inherit",
+            fontSize: 12, color: "var(--catfish-text-muted)", cursor: "pointer", textDecoration: "underline",
+          }}
+        >
+          要在本机留存邮件原文、设置服务器上保留多久? 开启邮箱直连 (IMAP)
+        </button>
+      )}
       <ArchivePanel />
     </>
   );
