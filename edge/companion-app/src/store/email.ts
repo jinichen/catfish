@@ -166,7 +166,13 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       const rust = await rustUrgencyMap();
       // 9/27: 旧 id → 新 id。已读记录只存在前端, 不改名的话迁移后这些邮件会
       // 重新触发主动提醒; 评级镜像顺手也改, 免得本地留一堆永远用不上的旧键。
-      const mapping = await emailIdMigrationMap().catch(() => ({} as Record<string, string>));
+      // 改名表拿不到 (老 Companion 后端 / 调用失败) 不能拖垮评级同步
+      let mapping: Record<string, string> = {};
+      try {
+        mapping = (await emailIdMigrationMap()) ?? {};
+      } catch {
+        /* ignore */
+      }
       if (Object.keys(mapping).length > 0) {
         const read = get().readIds;
         const renamed = new Set(Array.from(read, (id) => mapping[id] ?? id));
