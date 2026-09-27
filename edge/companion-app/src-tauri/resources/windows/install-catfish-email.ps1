@@ -26,6 +26,23 @@ $SkillDst = Join-Path $SkillsDir 'catfish-email'
 $EmailVenv = $null
 $Published = $false
 
+# A freshly created python.exe / catfish-email.exe can be locked for a few seconds
+# by antivirus scanning. 9/27 (1.0.38 upgrade): right after `uv venv`, uv failed with
+# "os error 32: the file is being used by another process" when querying the new
+# interpreter, the update was abandoned and the old email runtime stayed in use.
+# Retry the native steps on the fresh environment before giving up.
+function Invoke-Native([string]$What, [scriptblock]$Command, [int]$Attempts = 5) {
+    for ($i = 1; $i -le $Attempts; $i++) {
+        & $Command
+        if ($LASTEXITCODE -eq 0) { return }
+        if ($i -lt $Attempts) {
+            Write-Host "$What failed (exit $LASTEXITCODE), retry $i/$($Attempts - 1) in 3s"
+            Start-Sleep -Seconds 3
+        }
+    }
+    throw "$What failed: $LASTEXITCODE"
+}
+
 foreach ($path in @($DistributionPath, $PythonExe, $UvExe)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "catfish-email install input missing: $path"
@@ -55,13 +72,14 @@ try {
     & $UvExe venv --python $PythonExe --no-python-downloads $EmailVenv
     if ($LASTEXITCODE -ne 0) { throw "email venv creation failed: $LASTEXITCODE" }
     $EmailPython = Join-Path $EmailVenv 'Scripts\python.exe'
-    & $UvExe pip install --python $EmailPython --no-index --find-links $Stage @($Wheels.FullName)
-    if ($LASTEXITCODE -ne 0) { throw "isolated email install failed: $LASTEXITCODE" }
+    Invoke-Native 'isolated email install' {
+        & $UvExe pip install --python $EmailPython --no-index --find-links $Stage @($Wheels.FullName)
+    }
     $EmailExe = Join-Path $EmailVenv 'Scripts\catfish-email.exe'
-    & $EmailPython -c "import catfish_email.discovery, win32api, pythoncom"
-    if ($LASTEXITCODE -ne 0) { throw "isolated email imports failed: $LASTEXITCODE" }
-    & $EmailExe discover --help
-    if ($LASTEXITCODE -ne 0) { throw "catfish-email self-check failed: $LASTEXITCODE" }
+    Invoke-Native 'isolated email imports' {
+        & $EmailPython -c "import catfish_email.discovery, win32api, pythoncom"
+    }
+    Invoke-Native 'catfish-email self-check' { & $EmailExe discover --help }
 
     $SkillSrc = Join-Path $Stage 'hermes-skill\catfish-email'
     $SkillFile = Join-Path $SkillSrc 'SKILL.md'
