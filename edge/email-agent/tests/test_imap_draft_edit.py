@@ -74,5 +74,5 @@ def test_draft_is_found_even_when_the_server_rewrites_message_id(adapter):  # no
         return real_append(folder, flags, date_time, rewritten)
 
     fake.append = rewriting_append
-    draft_id = adapter.create_draft(to=["a@b.cn"], subject="单价-上海擎标", body="正文")
-    assert adapter.read_message(draft_id).subject == "单价-上海擎标"
+    draft_id = adapter.create_draft(to=["a@b.cn"], subject="报价单", body="正文")
+    assert adapter.read_message(draft_id).subject == "报价单"

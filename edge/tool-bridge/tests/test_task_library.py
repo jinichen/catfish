@@ -324,7 +324,7 @@ def test_marker_stripped_from_notes_does_not_create_second_row(tmp_path, monkeyp
     monkeypatch.setenv("CATFISH_TASK_LIBRARY_PATH", str(tmp_path / "tasks.db"))
     task_library.upsert_task({"task_id": "action-50001", "title": "确认能源数据怎么取"})
     task_library.upsert_reminders([{
-        "id": "r-50001", "title": "确认能源数据怎么取", "body": "等擎标来福州 [catfish-task:action-50001]",
+        "id": "r-50001", "title": "确认能源数据怎么取", "body": "等供应商来现场 [catfish-task:action-50001]",
     }])
     task_library.upsert_reminders([{
         "id": "r-50001", "title": "确认能源数据怎么取", "body": "总经办提供原始凭证, 我方自行填报",

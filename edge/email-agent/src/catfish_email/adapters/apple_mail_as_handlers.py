@@ -9,8 +9,8 @@ osascript 每次跑一段独立脚本, handler 不能跨脚本共享, 以前只�
 **按 id 找信不再只信一种办法** (findMessage)。原来只有一条路: 在账号的每个邮箱里
 `first message of mb whose id is N`。这台机器上 whose 过滤漏过信 —— 小鲶 8/31
 实测: 草稿箱里明明有两封主题以 "tst" 开头的信, `whose subject starts with "tst"`
-仍然报 -1728; `[Gmail]/草稿` 里有 "Re: 公共日常费用滚动预计",
-`whose subject = "Re: 公共日常费用滚动预计"` 也报 -1728。
+仍然报 -1728; `[Gmail]/草稿` 里有一封主题完全相同的信,
+`whose subject = "<那个主题>"` 也报 -1728。
 
 更正 (9/27 诊断之后): 当初把 Google 收件箱那封点开报「找不到」归到 whose 头上,
 诊断不支持 —— 同一套老代码读 Google 的 2753 是好的 (whose 在「重要」里就命中了)。

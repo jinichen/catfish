@@ -96,7 +96,7 @@ catfish-email list --sender=张三 --human
 catfish-email search "周报" --human
 
 # 读单封 (id 从 list/search 拿)
-catfish-email read --id "foxmail-mac|706574875@qq.com|12345" --human
+catfish-email read --id "foxmail-mac|user@example.com|12345" --human
 ```
 
 JSON 输出 (默认): SKILL helper / 脚本调用用; `--human` 切 markdown 给员工自己看.

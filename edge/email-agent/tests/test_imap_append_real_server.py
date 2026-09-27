@@ -13,9 +13,9 @@ from tests.test_imap_writes import adapter  # noqa: F401  (pytest fixture)
 
 
 def test_uses_appenduid_from_the_append_response(adapter):  # noqa: F811
-    draft_id = adapter.create_draft(to=["a@b.cn"], subject="单价-上海擎标", body="正文")
+    draft_id = adapter.create_draft(to=["a@b.cn"], subject="报价单", body="正文")
     assert draft_id.endswith("|9000"), "UID 取自 APPENDUID"
-    assert adapter.read_message(draft_id).subject == "单价-上海擎标"
+    assert adapter.read_message(draft_id).subject == "报价单"
 
 
 def test_new_draft_id_matches_the_ids_in_the_list(adapter):  # noqa: F811

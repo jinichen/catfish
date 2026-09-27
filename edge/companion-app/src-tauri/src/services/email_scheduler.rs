@@ -268,6 +268,8 @@ pub fn schedule_email_scheduler(app: AppHandle) {
     load_persisted_state();
     // 8/21 分诊升级: action 缓存 (知/回/办+截止日) 同样重启不重评。
     load_persisted_action_cache();
+    // 9/27: IMAP 归档不跟着评级的开关走 —— poll_secs=0 也要归档
+    super::email_archive::schedule_email_archive();
 
     if poll_secs == 0 {
         log::info!("email_scheduler: poll_secs=0 (yaml/env 关掉), 不起调度");

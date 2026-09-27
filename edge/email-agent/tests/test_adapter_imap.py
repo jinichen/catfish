@@ -64,7 +64,7 @@ def _raw(subject: str = _SUBJ, sender: str = "ff_nic@chinatelecom.cn", day: int 
     return (
         f"Date: Fri, {day} Sep 2026 13:05:57 +0800\r\n"
         f"From: =?GB2312?B?0MXPorCyyKvW0NDE?= <{sender}>\r\n"
-        f"To: ffchenhb@chinatelecom.cn\r\n"
+        f"To: me@example.cn\r\n"
         f"Subject: {subject}\r\n"
         f"Message-ID: <{day}@chinatelecom.cn>\r\n"
         f"MIME-Version: 1.0\r\n"

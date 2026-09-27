@@ -8,7 +8,10 @@
   · 没独立回读核对过的 —— 绝不删
   · 保留期没到的 —— 绝不删
   · 策略是 never / 认不出来的 —— 绝不删
-  · 没有 UIDPLUS 时 —— 绝不裸 EXPUNGE, 而且要说出来容量没释放
+  · 别的客户端标记待删的 —— 绝不连带清掉 (没有 UIDPLUS 时也一样)
+
+9/27: 夹具改成**有状态**的 —— STORE 真改标记, EXPUNGE 真删信。原来的夹具
+只记命令, "只清我们这几封、别人的待删标记原样挂回去"这件事它表达不了。
 """
 from __future__ import annotations
 
@@ -29,26 +32,42 @@ WEEK = 7 * 24 * 3600
 
 
 class PurgingIMAP(FakeIMAP):
-    """记下 STORE 和 EXPUNGE —— 判据全在"发了什么命令"上。"""
+    """像真服务器一样改状态: STORE 改标记 (基类), EXPUNGE 真删, SEARCH 认
+    DELETED / UID 条件。命令照样记在 stores / expunges / copies 里。"""
 
-    def __init__(self, capabilities=(), **kw):
+    def __init__(self, capabilities=(), expunge_ok=True, **kw):
         super().__init__(**kw)
         self.capabilities = tuple(capabilities)
-        self.stores: list[tuple[str, str]] = []
-        self.expunges: list[str] = []
-        self.copies: list[str] = []
+        self.expunge_ok = expunge_ok
+        self.bare_expunges = 0
+
+    def _box(self):
+        return self.messages.setdefault(self.selected or "", [])
 
     def uid(self, command, *args):
-        if command == "store":
-            self.stores.append((args[0].decode() if isinstance(args[0], bytes) else str(args[0]), str(args[2])))
-            return "OK", [b""]
-        if command == "expunge":
-            self.expunges.append(args[0].decode() if isinstance(args[0], bytes) else str(args[0]))
-            return "OK", [b""]
-        if command == "copy":
-            self.copies.append(str(args[1]))
-            return "OK", [b""]
+        if command == "search" and len(args) >= 2 and str(args[1]).upper() == "DELETED":
+            return "OK", [b" ".join(u for u, f, _ in self._box() if rb"\Deleted" in f)]
+        if command == "search" and len(args) >= 3 and str(args[1]).upper() == "UID":
+            wanted = set(self._as_bytes(args[2]).split(b","))
+            return "OK", [b" ".join(u for u, _, _ in self._box() if u in wanted)]
+        if command == "expunge":            # UID EXPUNGE: 只清给定的且带 \Deleted 的
+            wanted = set(self._as_bytes(args[0]).split(b","))
+            self.expunges.append(self._as_bytes(args[0]).decode())
+            self.messages[self.selected] = [
+                m for m in self._box() if not (m[0] in wanted and rb"\Deleted" in m[1])
+            ]
+            return "OK", [b"UID EXPUNGE completed"]
         return super().uid(command, *args)
+
+    def expunge(self):                       # 裸 EXPUNGE: 清掉所有带 \Deleted 的
+        self.bare_expunges += 1
+        if not self.expunge_ok:
+            return "NO", [b"EXPUNGE failed"]
+        self.messages[self.selected] = [m for m in self._box() if rb"\Deleted" not in m[1]]
+        return "OK", [b"EXPUNGE completed"]
+
+    def flags_of(self, uid: bytes) -> bytes | None:
+        return next((f for u, f, _ in self.messages.get("INBOX", []) if u == uid), None)
 
 
 @pytest.fixture
@@ -102,8 +121,8 @@ def test_never_deletes_anything(home, monkeypatch):
     adapter = make(fake, monkeypatch, retention="never")
     seed(adapter, verified_ago=WEEK * 10)
     got = adapter.purge_folder("INBOX", "Inbox")
-    assert got == {"purged": 0, "flagged": 0, "needs_expunge": 0}
-    assert fake.stores == [] and fake.expunges == []
+    assert got == {"purged": 0, "failed": 0}
+    assert fake.stores == [] and fake.expunges == [] and fake.bare_expunges == 0
 
 
 def test_unverified_mail_is_never_purged(home, monkeypatch):
@@ -117,7 +136,7 @@ def test_unverified_mail_is_never_purged(home, monkeypatch):
     adapter = make(fake, monkeypatch, retention="immediate")
     seed(adapter, verified_ago=None)          # archived 了但没 verified
     got = adapter.purge_folder("INBOX", "Inbox")
-    assert got["purged"] == 0 and got["flagged"] == 0
+    assert got["purged"] == 0
     assert fake.stores == [], "没校验过的被删了"
 
 
@@ -136,6 +155,7 @@ def test_expired_mail_is_purged(home, monkeypatch):
     got = adapter.purge_folder("INBOX", "Inbox")
     assert got["purged"] == 1
     assert fake.expunges, "有 UIDPLUS 却没精准清"
+    assert fake.bare_expunges == 0, "有 UIDPLUS 还用裸 EXPUNGE"
 
 
 @pytest.mark.parametrize("bad", ["3w", "", "immediate ", "IMMEDIATE", "0"])
@@ -151,37 +171,64 @@ def test_an_unrecognised_policy_never_deletes(home, monkeypatch, bad):
 # ─────────────────────────────────────────────────────────────
 
 
-def test_without_uidplus_it_flags_but_never_bare_expunges(home, monkeypatch):
-    """裸 EXPUNGE 会清掉整个文件夹里所有打了 \\Deleted 的邮件 ——
-    包括员工在 Foxmail/Outlook 里标了删除还没压缩的那些, 不可恢复。
+def _mixed_inbox():
+    """8416 是要清的 (归档校验过), 8417 是员工在别的客户端里标了待删的, 8418 普通。"""
+    return {"INBOX": [
+        (b"8416", rb"\Seen", _raw("到期的", day=16)),
+        (b"8417", rb"\Seen \Deleted", _raw("别处标了待删", day=17)),
+        (b"8418", rb"\Seen", _raw("普通", day=18)),
+    ]}
 
-    宁可不释放容量也不能干这个。
-    """
-    fake = PurgingIMAP(capabilities=("IMAP4rev1",))     # 没有 UIDPLUS
+
+def test_without_uidplus_only_our_mail_is_expunged(home, monkeypatch):
+    """真机 (电信邮箱) 没有 UIDPLUS, 只有裸 EXPUNGE —— 它会清掉文件夹里所有
+    带 \\Deleted 的。别人标记待删的必须原样留着, 而且标记要挂回去。
+
+    9/21 版的做法是只打标记不清, 容量腾不出来; 而且这个函数从来没被调用,
+    界面上的保留策略一直没生效。"""
+    fake = PurgingIMAP(capabilities=("IMAP4rev1",), messages=_mixed_inbox())
     adapter = make(fake, monkeypatch, retention="immediate")
-    seed(adapter, verified_ago=10)
+    seed(adapter, verified_ago=10)                   # 索引里只留 8416 (最小的那个)
     got = adapter.purge_folder("INBOX", "Inbox")
 
-    assert got["flagged"] == 1 and got["purged"] == 0
-    assert fake.stores, "连标记都没打"
-    assert fake.expunges == [], "裸 EXPUNGE 了 —— 会连带清掉别处标记的邮件"
+    uids = [u for u, _, _ in fake.messages["INBOX"]]
+    assert got == {"purged": 1, "failed": 0}
+    assert b"8416" not in uids, "到期的没删掉"
+    assert b"8417" in uids, "别的客户端标记待删的被连带清掉了 —— 不可恢复"
+    assert rb"\Deleted" in fake.flags_of(b"8417"), "别人的待删标记没挂回去"
+    assert b"8418" in uids and rb"\Deleted" not in fake.flags_of(b"8418")
+    assert fake.bare_expunges == 1
 
 
-def test_it_says_out_loud_that_capacity_was_not_reclaimed(home, monkeypatch, caplog):
-    """降级必须说话。
-
-    员工开这个功能就是为了腾空间。结果空间没腾出来而界面一切正常, 是最坏
-    的一种 —— 他会以为已经腾了, 继续等容量下降。
-    """
-    fake = PurgingIMAP(capabilities=("IMAP4rev1",))
+def test_failed_expunge_rolls_back_every_mark(home, monkeypatch):
+    """EXPUNGE 失败: 我们这封的删除标记撤回 (否则下一轮同步会把它当成员工删了,
+    连档案登记一起抹掉), 别人的标记挂回去, 索引里仍算在服务器上。"""
+    fake = PurgingIMAP(capabilities=("IMAP4rev1",), messages=_mixed_inbox(), expunge_ok=False)
     adapter = make(fake, monkeypatch, retention="immediate")
-    seed(adapter, verified_ago=10)
-    with caplog.at_level("WARNING"):
-        got = adapter.purge_folder("INBOX", "Inbox")
+    key = seed(adapter, verified_ago=10)
+    got = adapter.purge_folder("INBOX", "Inbox")
 
-    assert got["needs_expunge"] == 1, "界面拿不到「容量没释放」这个事实"
-    assert any("容量还没释放" in r.message for r in caplog.records), \
-        "只在返回值里说了, 日志一声不吭"
+    assert got == {"purged": 0, "failed": 1}
+    assert rb"\Deleted" not in fake.flags_of(b"8416"), "删除标记没撤回"
+    assert rb"\Deleted" in fake.flags_of(b"8417"), "别人的待删标记丢了"
+    db = index_store.open_index()
+    try:
+        on_server = db.execute("SELECT on_server FROM messages WHERE source_key=?", (key,)).fetchone()[0]
+    finally:
+        db.close()
+    assert on_server == 1, "没删掉却标成了服务器上已无"
+
+
+def test_sync_all_runs_the_retention_policy_but_never_on_drafts(home, monkeypatch):
+    """接线: 保留策略写好之后一直没人调用 (9/27 查出)。sync_all (收信 / 后台归档)
+    每个文件夹归档之后接着清到期的; 草稿箱不清。"""
+    fake = PurgingIMAP(capabilities=("IMAP4rev1",))
+    adapter = make(fake, monkeypatch, retention="1w")
+    called: list[str] = []
+    monkeypatch.setattr(adapter, "purge_folder", lambda raw, role: called.append(role) or {})
+    adapter.sync_all()
+    assert "Inbox" in called and "Sent" in called
+    assert "Drafts" not in called, "草稿箱不是归档对象, 不能按保留策略清"
 
 
 # ─────────────────────────────────────────────────────────────
@@ -232,5 +279,32 @@ def test_mail_from_an_older_uidvalidity_is_never_purged(home, monkeypatch):
     seed(adapter, verified_ago=WEEK)
     fake.uidvalidity = b"99"                 # 服务器重建了邮箱
     got = adapter.purge_folder("INBOX", "Inbox")
-    assert got["purged"] == 0 and got["flagged"] == 0
-    assert fake.stores == [] and fake.expunges == [], "版本对不上还删了 —— 删的是别的信"
+    assert got["purged"] == 0
+    assert fake.stores == [] and fake.expunges == [] and fake.bare_expunges == 0, \
+        "版本对不上还删了 —— 删的是别的信"
+
+
+def test_background_archive_command_only_touches_sources_with_an_index(capsys):
+    """Companion 每 10 分钟调 `catfish-email archive`: 只跑有本地索引的来源 (IMAP)
+    的 sync_all, 不去让 Apple Mail 收信 —— 后台定时的动作不惊动别的客户端。"""
+    import json
+
+    from catfish_email.cli_action import _cmd_archive
+
+    calls: list[str] = []
+
+    class Indexed:
+        name = "imap"
+
+        def sync_all(self):
+            calls.append("sync_all")
+
+    class Client:
+        name = "apple_mail"
+
+        def check_new_mail(self, **_):
+            calls.append("check_new_mail")
+
+    assert _cmd_archive([Client(), Indexed()], None) == 0
+    assert calls == ["sync_all"]
+    assert json.loads(capsys.readouterr().out)["ran"] == ["imap"]

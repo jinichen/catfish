@@ -216,7 +216,7 @@ def test_cmd_list_deduplicates_same_rfc_message_id_and_prefers_live_id(capsys):
     )
     adapter = _FakeAdapter(
         name="apple_mail",
-        accounts=[Account("Chinatelecom", "ffchenhb@chinatelecom.cn")],
+        accounts=[Account("Chinatelecom", "me@example.cn")],
         messages=[live, indexed],
     )
 

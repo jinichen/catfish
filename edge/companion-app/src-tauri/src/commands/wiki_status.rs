@@ -20,7 +20,7 @@ mod status_marker_tests {
     fn detects_progress_paragraphs_only() {
         assert!(body_tracks_status("## 当前状态（截至 2026-09-22）\n现场审核进行中"));
         assert!(body_tracks_status("## 状态（2026-09-11 员工确认）\nISO20000 未出证"));
-        assert!(body_tracks_status("**进度（2026-09-07）**：擎标中标"));
+        assert!(body_tracks_status("**进度（2026-09-07）**：供应商中标"));
         // 组织架构里的"经营推进中心"不是进度 (所以词表里不放"推进中": 它是"推进中心"的子串)
         assert!(!body_tracks_status("下辖产品管理中心、经营推进中心、市场规划中心"));
         assert!(!body_tracks_status("证书编号 X，有效期至 2029-01-27。"));

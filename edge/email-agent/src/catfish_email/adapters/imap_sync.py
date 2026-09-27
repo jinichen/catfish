@@ -322,7 +322,7 @@ class ImapSyncAdapter(ImapAdapter):
         return stats
 
     def purge_folder(self, folder_raw: str, role: str) -> dict[str, int]:
-        """保留期满的, 从服务器上删掉。返回这轮的账目。
+        r"""保留期满的, 从服务器上彻底删掉。返回这轮的账目 {purged, failed}。
 
         # 这跟员工手动删邮件是两条不同的路
 
@@ -338,20 +338,18 @@ class ImapSyncAdapter(ImapAdapter):
         绝不看 archived_at。写入返回成功只说明 write() 没抛异常, 盘上那份
         到底对不对只有重读核对过才知道。这里判错一次, 邮件是真的没了。
 
-        # 没有 UIDPLUS 时容量释放不了, 而且必须说出来
+        # 服务器没有 UIDPLUS 时怎么只删这几封
 
-        裸 EXPUNGE 会清掉**整个文件夹里所有打了 \Deleted 的邮件** —— 包括
-        员工在 Foxmail/Outlook 里标了删除还没压缩的那些, 不可恢复。宁可
-        不释放容量也不能干这个。
-
-        但"没释放"必须让员工知道: 他开了这个功能就是为了腾空间, 结果空间
-        没腾出来而界面一切正常, 那是最坏的一种。返回值里带 needs_expunge,
-        界面照着它说话。
+        9/21 写好这个函数时, 电信邮箱没有 UIDPLUS, 裸 EXPUNGE 会连带清掉别处
+        标记待删的邮件, 于是只打标记不清 —— 容量腾不出来, 而且这个函数从来
+        没被调用过, 界面上的保留策略一直没生效 (9/27 查出)。现在由
+        imap_purge.expunge_only 处理: 清之前先摘掉别人的删除标记, 清完挂回去。
         """
         from .. import index_store  # noqa: PLC0415
+        from . import imap_purge  # noqa: PLC0415
 
         assert self.config is not None
-        stats = {"purged": 0, "flagged": 0, "needs_expunge": 0}
+        stats = {"purged": 0, "failed": 0}
         window = self.config.retention_seconds()
         if window is None:
             return stats           # never —— 什么都不做
@@ -360,47 +358,41 @@ class ImapSyncAdapter(ImapAdapter):
 
         conn = self._connect()
         current = self._select(conn, folder_raw, writable=True)
-        has_uidplus = self._has_capability("UIDPLUS")
-
         db = index_store.open_index()
         try:
-            keys = index_store.purgeable(
+            targets: dict[str, str] = {}   # uid -> source_key
+            for key in index_store.purgeable(
                 db, account=self.config.user, folder=role,
                 older_than=time.time() - window, limit=PURGE_BATCH,
-            )
-            for key in keys:
+            ):
                 _, key_validity, uid = _parse_sync_key(key)
                 # 9/27: 删服务器上的邮件之前核对 UIDVALIDITY。版本对不上 = 邮箱重建过,
-                # 这个 UID 现在指向的是另一封信 —— 照删就是删错。原来这里不核对,
-                # 而 UIDVALIDITY 又一直读成 0, 两层保护同时缺席。
+                # 这个 UID 现在指向的是另一封信 —— 照删就是删错。
                 if key_validity != current:
                     logger.warning("跳过清理 %s: UIDVALIDITY %s ≠ 当前 %s", key, key_validity, current)
                     continue
-                typ, _ = conn.uid("store", uid, "+FLAGS", r"(\Deleted)")
-                if typ != "OK":
-                    logger.warning("标记删除失败 uid=%s, 跳过", uid)
-                    continue
-                if has_uidplus:
-                    conn.uid("expunge", uid)      # 只清这一封
-                    stats["purged"] += 1
-                else:
-                    stats["flagged"] += 1
-                index_store.mark_off_server(db, key)
+                targets[uid] = key
+            if not targets:
+                return stats
+            gone = imap_purge.expunge_only(
+                conn, list(targets), has_uidplus=self._has_capability("UIDPLUS"),
+            )
+            for uid in gone:
+                # 索引行留着, 只标"服务器上已无" —— 档案登记就挂在这一行上
+                index_store.mark_off_server(db, targets[uid])
+            stats["purged"] = len(gone)
+            stats["failed"] = len(targets) - len(gone)
         finally:
             db.close()
-
-        if stats["flagged"]:
-            stats["needs_expunge"] = stats["flagged"]
-            logger.warning(
-                "[%s/%s] %d 封已标记删除, 但这台服务器没有 UIDPLUS —— "
-                "不能只清这几封, 所以没有执行 EXPUNGE。**容量还没释放**, "
-                "要等服务器自己压缩或员工在邮件客户端里清空已删除。",
-                self.config.user, role, stats["flagged"],
-            )
         if stats["purged"]:
             logger.info(
-                "[%s/%s] 从服务器清理 %d 封 (本地档案已校验保留)",
+                "[%s/%s] 保留期满, 从服务器清理 %d 封 (本地档案已校验保留)",
                 self.config.user, role, stats["purged"],
+            )
+        if stats["failed"]:
+            logger.warning(
+                "[%s/%s] %d 封到期但服务器没删掉, 删除标记已撤回, 下一轮再试",
+                self.config.user, role, stats["failed"],
             )
         return stats
 
@@ -413,9 +405,11 @@ class ImapSyncAdapter(ImapAdapter):
         归档要取整封带附件的原文, 挂在那里等于**每次打开邮件页都卡一下**,
         而列表本来是这套索引的全部意义 (8/21 治的就是"切 tab 要等很久")。
 
-        sync_all 只有两个调用方: 界面上的「收信」和后台轮询。两个都是
-        "现在去跟服务器对一遍"的语义, 慢一点是预期之内的。每轮推进
-        ARCHIVE_BATCH 封, 渐进地把档案补齐。
+        sync_all 的调用方: 界面上的「收信」(check) 和 Companion 每 10 分钟一次的
+        后台归档 (archive 命令, 9/27 补 —— 之前注释写着"后台轮询"会调, 实际
+        后台轮询只刷列表, 不点收信归档就一直不动)。都是"现在去跟服务器对一遍"
+        的语义, 慢一点是预期之内的。每轮推进 ARCHIVE_BATCH 封, 渐进地把档案补齐;
+        保留期满的再清 PURGE_BATCH 封。
 
         archive=False 留给不想付这个代价的调用方 (比如只想刷新列表)。
         """
@@ -435,6 +429,14 @@ class ImapSyncAdapter(ImapAdapter):
                 # 归档挂了**不能拖垮同步**。索引是员工马上要用的, 档案是
                 # 后台慢慢补的 —— 前者的可用性优先级高得多。
                 logger.warning("imap_sync: 文件夹 %s 归档失败: %s", decoded, error)
+            # 9/27: 保留策略到期清理接上 (写好后一直没人调用)。草稿箱不清 ——
+            # 草稿是还没写完的东西, 不是归档对象。策略是 never 时 purge 直接返回。
+            if role == "Drafts":
+                continue
+            try:
+                self.purge_folder(raw, role)
+            except Exception as error:  # noqa: BLE001
+                logger.warning("imap_sync: 文件夹 %s 到期清理失败: %s", decoded, error)
         return out
 
     def _current_id(self, message_id: str) -> str:

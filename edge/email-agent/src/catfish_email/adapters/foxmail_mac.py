@@ -49,7 +49,7 @@ class FoxmailMacAdapter(EmailAdapter):
         """
         Args:
             profiles_dir: Foxmail Profiles 目录绝对路径; None 则自动探测。
-                          每个子目录是一个邮箱账号 (例如 706574875@qq.com)。
+                          每个子目录是一个邮箱账号 (例如 user@example.com)。
         Raises:
             DataNotFoundError: 找不到 Foxmail 数据目录
         """

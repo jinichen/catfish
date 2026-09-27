@@ -458,3 +458,30 @@ def _cmd_attachment(adapters: list[EmailAdapter], args) -> int:
     else:
         _err(f"邮件 / 附件不存在 (跨 {len(candidates)} 客户端都没找到): {last_err}")
     return 3
+
+
+def _cmd_archive(adapters: list[EmailAdapter], args) -> int:
+    """后台归档一轮 (9/27): 有本地索引的来源 (IMAP) 同步 + 归档一批 + 保留期满的清理。
+
+    Companion 每 10 分钟调一次。以前归档只挂在「收信」(check) 上 —— 员工不点
+    收信, 归档就一直不动, 保留策略也就无从谈起。
+
+    不直接复用 check: check 还会让 Apple Mail 去服务器收一次信。后台定时的
+    动作只该碰 IMAP 这一条, 不在员工不知情时惊动别的客户端。
+    """
+    ran: list[str] = []
+    errs: list[tuple[str, str]] = []
+    for adapter in adapters:
+        sync_all = getattr(adapter, "sync_all", None)
+        if sync_all is None:
+            continue
+        try:
+            sync_all()
+            ran.append(adapter.name)
+        except Exception as e:  # noqa: BLE001 — 一轮失败, 下一轮再来
+            errs.append((adapter.name, str(e)))
+    print(json.dumps(
+        {"ok": not errs, "ran": ran, "errors": [{"adapter": n, "msg": m} for n, m in errs]},
+        ensure_ascii=False,
+    ))
+    return 1 if errs and not ran else 0

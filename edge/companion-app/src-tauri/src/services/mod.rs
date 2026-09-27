@@ -28,6 +28,7 @@ pub mod email_notify; // 前端事件 + 系统通知 (8/15 切出)
 pub mod email_state;  // 评级缓存 / push 历史 / 落盘 (8/15 切出)
 pub mod email_types;  // EmailItem + Urgency (8/15 切出, 是其余几层的地基)
 pub mod email_scheduler;  // BL-COMPANION-EMAIL-DIGEST-STEP2 (5/18)
+pub mod email_archive;    // 9/27: IMAP 后台归档 + 保留策略, 每 10 分钟一轮
 pub mod embed_cache_meta; // 8/14: 向量缓存的身份记账 (中央换模型 → 自动重建)
 pub mod embedding;        // P3.5.4.1 (6/16 鸿波): 公共 BGE-M3 ONNX, 给 advisor + wiki 共享同一 model session
 pub mod embedding_config; // P3.5.15 (6/16 鸿波): embedding provider yaml 配置 (本机/远程切换 + 参数可调)

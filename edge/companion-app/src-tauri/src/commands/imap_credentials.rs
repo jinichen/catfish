@@ -220,6 +220,11 @@ pub fn password_for(user: &str) -> Option<String> {
     }
 }
 
+/// 配了 IMAP 没有 —— 只看配置文件, 不读凭据库 (后台定时任务用, 见 email_archive)。
+pub fn is_configured() -> bool {
+    read_source().is_some()
+}
+
 /// 配好了的 IMAP 来源 (含密码)。给 email.rs 注入环境变量用, 同样不是 command。
 pub fn configured_source() -> Option<(ImapSource, String)> {
     let source = read_source()?;
