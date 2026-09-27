@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import logging
 
-from ..adapters.base import ListFilter, Message
-from . import imap_uidvalidity
+from ..adapters.base import DataNotFoundError, EmailAdapterError, ListFilter, Message
+from . import imap_archive_read, imap_uidvalidity
 from .imap_folders import folder_matches, folder_role
 from .imap_mail import _FLAGS_IN_FETCH, _UID_IN_FETCH, ImapAdapter
 
@@ -114,7 +114,11 @@ class ImapSyncAdapter(ImapAdapter):
 
         # ① 廉价地问一遍"现在有哪些, 各自什么状态"
         typ, data = conn.uid("search", None, "ALL")
-        uids = data[0].split() if typ == "OK" and data and data[0] else []
+        if typ != "OK":
+            # 9/27: 问失败 ≠ 文件夹空了。原来当成空处理, 整个文件夹在索引里被标成
+            # "服务器上没了"。抛出去, list_messages 会退回索引里的旧数据。
+            raise EmailAdapterError(f"列文件夹失败 ({role}): {typ}")
+        uids = data[0].split() if data and data[0] else []
         # 索引只留最近这批: 它服务的是"看收件箱", 不是全文归档。五年的邮箱
         # 全收进来, 首次同步的代价用户等不起。
         #
@@ -186,7 +190,15 @@ class ImapSyncAdapter(ImapAdapter):
             # 删索引行; 磁盘上已归档的 .eml 不动 (档案本体不因为列表清理而丢)。
             if deleted:
                 db.executemany("DELETE FROM messages WHERE source_key=?", [(k,) for k in deleted])
-                db.commit()
+            # 9/27: 服务器上没了、本地又从没归档过的行 —— 哪儿都没有内容了, 留着只会在
+            # 列表里显示一个打不开的标题, 还会在归档队列里每轮重试一次取不到的原文。
+            # 档案馆留的是"本地有档案"的那些 (archive_path 不为空), 不是这些。
+            db.execute(
+                "DELETE FROM messages WHERE account=? AND folder=? "
+                "AND on_server=0 AND archive_path IS NULL",
+                (self.config.user, role),
+            )
+            db.commit()
         finally:
             db.close()
         logger.info(
@@ -446,6 +458,25 @@ class ImapSyncAdapter(ImapAdapter):
         finally:
             db.close()
         return super()._current_id(message_id)
+
+    def read_message(self, message_id: str) -> Message:
+        """服务器上没了 (被清理 / 邮箱重建) 就读本地档案。见 imap_archive_read。"""
+        try:
+            return super().read_message(message_id)
+        except DataNotFoundError:
+            remote = imap_archive_read.from_archive(self, self._current_id(message_id))
+            if remote is None:
+                raise
+            return self._to_message(remote, full=True)
+
+    def _fetch_raw(self, message_id: str):
+        try:
+            return super()._fetch_raw(message_id)
+        except DataNotFoundError:
+            remote = imap_archive_read.from_archive(self, self._current_id(message_id))
+            if remote is None:
+                raise
+            return remote.message
 
     def check_new_mail(self, *, account: str | None = None) -> None:
         """界面上的「收信」: 立刻把所有文件夹对一遍账。

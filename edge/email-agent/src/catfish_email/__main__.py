@@ -98,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
         import json
 
         from .adapters.imap_config import config_from_env
-        from .archive_store import archive_root
+        from .archive_store import archive_root, read_cutoff
         from .index_store import archive_stats, open_index
 
         cfg = config_from_env()
@@ -108,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         db = open_index()
         try:
-            payload = archive_stats(db, account=account)
+            payload = archive_stats(db, account=account, marks=read_cutoff(archive_root(), account))
         finally:
             db.close()
         payload["account"] = account

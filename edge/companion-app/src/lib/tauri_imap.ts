@@ -73,6 +73,10 @@ export interface ArchiveStatus {
   only_local: number;
   /** 档案占了多少字节 */
   bytes: number;
+  /** 9/27: 该归档、还没归档的 (启用那天的水位线以上、服务器上还在)。老后端没有这个字段 */
+  pending?: number;
+  /** 9/27: 启用归档之前就在的, 不回填 */
+  before_cutoff?: number;
 }
 
 export async function getArchiveStatus(): Promise<ArchiveStatus> {

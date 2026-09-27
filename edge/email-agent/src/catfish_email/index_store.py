@@ -564,23 +564,50 @@ def clear_archive(conn: sqlite3.Connection, source_key: str) -> None:
     conn.commit()
 
 
-def archive_stats(conn: sqlite3.Connection, *, account: str) -> dict[str, int]:
-    """界面上要显示的进度。一次查询, 别在渲染时逐行算。"""
-    row = conn.execute(
-        "SELECT COUNT(*), "
-        "       SUM(CASE WHEN archive_path IS NOT NULL THEN 1 ELSE 0 END), "
-        "       SUM(CASE WHEN verified_at  IS NOT NULL THEN 1 ELSE 0 END), "
-        "       SUM(CASE WHEN on_server = 0 THEN 1 ELSE 0 END), "
-        "       COALESCE(SUM(archive_bytes), 0) "
-        "  FROM messages WHERE account=?",
-        (account,),
-    ).fetchone()
+def archive_stats(
+    conn: sqlite3.Connection, *, account: str, marks: dict[str, dict] | None = None,
+) -> dict[str, int]:
+    """界面上要显示的进度。
+
+    9/27 改了三个数, 原来的说法跟事实对不上:
+
+      only_local  原来是"on_server=0 的行数", 界面据此说「N 封只在本地档案里」——
+                  可那些行多数从没归档过, 本地什么都没有。现在只数**核对过的档案**。
+      pending     原来是 total - archived, 界面说「还有 N 封排队中」—— 可归档只从
+                  启用那天的水位线往后存, 水位线以下的永远不会进队列, 这个数永远
+                  降不下来。现在只数水位线以上、服务器上还在、还没落地的。
+      before_cutoff  启用归档之前就在的 (不回填), 单独给出, 界面照实说。
+
+    marks 是档案起点 (archive_store.read_cutoff); 不给就不区分水位线。
+    """
+    from .archive_store import above_cutoff  # noqa: PLC0415
+
+    total = archived = verified = only_local = size = pending = before = 0
+    for key, archive_path, verified_at, on_server, nbytes in conn.execute(
+        "SELECT source_key, archive_path, verified_at, on_server, archive_bytes "
+        "FROM messages WHERE account=?", (account,),
+    ):
+        total += 1
+        archived += archive_path is not None
+        verified += verified_at is not None
+        only_local += (not on_server) and verified_at is not None
+        size += nbytes or 0
+        if archive_path is not None or not on_server:
+            continue
+        if marks is None or not key.startswith("imap:"):
+            pending += 1
+            continue
+        body = key[len("imap:"):]
+        head, _, uid = body.rpartition(":")
+        folder_raw, _, uidvalidity = head.rpartition(":")
+        if above_cutoff(marks, folder_raw, uidvalidity, uid):
+            pending += 1
+        else:
+            before += 1
     return {
-        "total": row[0] or 0,
-        "archived": row[1] or 0,
-        "verified": row[2] or 0,
-        "only_local": row[3] or 0,
-        "bytes": row[4] or 0,
+        "total": total, "archived": archived, "verified": verified,
+        "only_local": only_local, "bytes": size,
+        "pending": pending, "before_cutoff": before,
     }
 
 

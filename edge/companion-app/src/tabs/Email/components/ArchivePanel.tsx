@@ -46,9 +46,14 @@ export default function ArchivePanel() {
   // 是先配 IMAP —— 那个入口就在上面。
   if (error || !stat || stat.total === 0) return null;
 
-  const pct = stat.total > 0 ? Math.round((stat.verified / stat.total) * 100) : 0;
-  const pending = Math.max(0, stat.total - stat.archived);
+  // 9/27: 进度的分母是"该归档的", 不是索引里全部。归档只从启用那天往后存,
+  // 之前就在的永远不会进队列 —— 原来拿 total 当分母, 进度条永远到不了头,
+  // 「还有 N 封排队」也永远降不下来。
+  const pending = stat.pending ?? Math.max(0, stat.total - stat.archived);
+  const beforeCutoff = stat.before_cutoff ?? 0;
   const unverified = Math.max(0, stat.archived - stat.verified);
+  const eligible = stat.archived + pending;
+  const pct = eligible > 0 ? Math.round((stat.verified / eligible) * 100) : 0;
 
   return (
     <div
@@ -85,7 +90,7 @@ export default function ArchivePanel() {
       </div>
 
       <div style={{ marginTop: 6, color: "var(--catfish-muted)" }}>
-        已校验 {stat.verified} / {stat.total} 封 · {formatBytes(stat.bytes)}
+        已归档并核对 {stat.verified} / {eligible} 封 · {formatBytes(stat.bytes)}
         {/* 待归档不为 0 是**正常**的, 要说清楚, 否则员工会当成卡住了。
             归档每轮只推进一批, 本来就要跑一阵子。 */}
         {pending > 0 && <> · 还有 {pending} 封排队中（每次收信推进一批）</>}
@@ -95,6 +100,12 @@ export default function ArchivePanel() {
           </span>
         )}
       </div>
+
+      {beforeCutoff > 0 && (
+        <div style={{ marginTop: 4, color: "var(--catfish-muted)" }}>
+          启用归档之前就在的 {beforeCutoff} 封不回填（仍在服务器上）
+        </div>
+      )}
 
       {/* 只在本地档案里的那些 —— 这正是整套东西的兑现点。
           有这个数就说明"服务器清理了本地还在"真的发生过。 */}

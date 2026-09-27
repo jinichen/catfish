@@ -9,6 +9,13 @@
  */
 export type MailFolder = "Inbox" | "Drafts" | "Sent";
 
+/** 列表为空时的说法。原来一律「收件箱为空」, 草稿箱空了也这么说 (9/27)。 */
+export const EMPTY_FOLDER_TEXT: Record<MailFolder, string> = {
+  Inbox: "📭 收件箱为空",
+  Drafts: "📝 草稿箱里没有草稿",
+  Sent: "📤 已发送里没有邮件",
+};
+
 const FOLDERS: Array<[MailFolder, string]> = [
   ["Inbox", "收件箱"],
   ["Drafts", "草稿箱"],

@@ -152,6 +152,8 @@ def migrate_folder(adapter: "ImapAdapter", conn, db: sqlite3.Connection,
         db.execute("INSERT OR REPLACE INTO id_migration (old_id, new_id) VALUES (?, ?)", (old_id, new_id))
         mapping[old_id] = new_id
     db.commit()
+    if unchanged:
+        _migrate_archive_cutoff(adapter.config.user, folder_raw, current)
     logger.info(
         "imap: %s 旧 id 迁移 → UIDVALIDITY %s: 核实对上 %d, 对不上 %d, 改名 %d (共 %d 行)",
         role, current, len(matched), len(mismatched), len(mapping), len(rows),
@@ -159,6 +161,23 @@ def migrate_folder(adapter: "ImapAdapter", conn, db: sqlite3.Connection,
     if mapping:
         export_mapping(db)
     return mapping
+
+
+def _migrate_archive_cutoff(account: str, folder_raw: str, current: str) -> None:
+    """档案起点 (水位线) 也是在版本号 0 下记的。核实版本没变 → 改成真值。
+
+    不改的话 archive_folder 看到版本对不上会**重设起点**到当前最大 UID ——
+    旧起点和现在之间收到、还没来得及归档的那些信就被永久跳过了。
+    """
+    from .. import archive_store  # noqa: PLC0415
+
+    root = archive_store.archive_root()
+    marks = archive_store.read_cutoff(root, account)
+    mark = marks.get(folder_raw)
+    if mark and mark.get("uidvalidity") == LEGACY:
+        mark["uidvalidity"] = current
+        archive_store.write_cutoff(root, account, marks)
+        logger.info("档案起点 %s: UIDVALIDITY %s → %s (UID 水位 %s 不变)", folder_raw, LEGACY, current, mark["uid"])
 
 
 def export_mapping(db: sqlite3.Connection) -> None:

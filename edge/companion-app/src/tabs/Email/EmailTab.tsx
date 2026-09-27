@@ -41,7 +41,7 @@ import { buildAskCatfishStarter } from "../../lib/emailHandoff";
 import { emailFailureHint } from "../../lib/emailPlatformHints";
 import { needsEmailSourceSetup, parseEmailSourceDiscovery } from "../../lib/emailSourceDiscovery";
 import ActionFilterChips from "./components/ActionFilterChips";
-import FolderTabs, { type MailFolder } from "./components/FolderTabs";
+import FolderTabs, { EMPTY_FOLDER_TEXT, type MailFolder } from "./components/FolderTabs";
 import { useDraftFocus } from "./useDraftFocus";
 import { useEmailStore } from "../../store/email";
 import { useUIStore } from "../../store/ui";
@@ -277,7 +277,7 @@ export default function EmailTab() {
   // 是"有没有拿到邮件"而不是"认得几个来源"。
   const needsSourceSetup = needsEmailSourceSetup({
     discovery: sourceDiscovery,
-    noMailAtAll: !loading && items.length === 0,
+    noMailAtAll: !loading && items.length === 0 && folder === "Inbox", // 草稿箱/已发送空着是正常的
     failed: Boolean(error),
   });
 
@@ -657,7 +657,7 @@ export default function EmailTab() {
               {search
                 ? `🔍 没匹配 "${search}"`
                 : actionFilter !== "全部" ? `✅ 没有「要${actionFilter === "办" ? "办事" : "回信"}」的邮件`
-                : unreadOnly ? "🌊 没有未读邮件, 都处理完了" : "📭 收件箱为空"}
+                : unreadOnly ? "🌊 没有未读邮件, 都处理完了" : EMPTY_FOLDER_TEXT[folder]}
             </li>
           )}
           {filteredItems.map((m) => (

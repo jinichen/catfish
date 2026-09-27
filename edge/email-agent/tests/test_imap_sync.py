@@ -216,37 +216,36 @@ def test_flag_change_refetches_only_that_one(isolated_index, monkeypatch):
 
 
 def test_message_gone_from_server_is_kept_as_archive(isolated_index, monkeypatch):
-    """服务器上没了 ≠ 索引里删掉。
+    """服务器上没了 ≠ 索引里删掉 —— **前提是本地有档案**。
 
-    9/20 这条**反过来了**。原来叫 ..._is_dropped_from_the_index, 断言的是
-    "服务器删了本地跟着删" —— 那是镜子的语义。
+    9/20 定位从镜子改成档案馆: 公司邮箱有容量上限、会自动清理, 越老的信越可能
+    已经被清掉, 偏偏越老的信越是要沉淀的那些。有档案的行留着, on_server 置 0。
 
-    定位改成档案馆之后那是错的: 公司邮箱有容量上限、会自动清理, 而越老的信
-    越可能已经被清掉, 偏偏越老的信越是要沉淀的那些。跟着删 = 这套东西白做。
-
-    现在的语义: 行留着, 只把 on_server 置 0。
+    9/27 补另一半: 没归档过的那些服务器上一没就什么内容都没有了 —— 留着只是
+    列表里一个打不开的标题 (「邮件不存在」), 外加归档队列里每轮重试一次取不到的
+    原文。删掉。
     """
     from catfish_email import index_store
 
     fake = CountingIMAP()
     adapter = make(fake, monkeypatch)
     adapter.sync_folder("INBOX", "Inbox")
+    db = index_store.open_index()
+    db.execute("UPDATE messages SET archive_path='a/17.eml', verified_at=1 WHERE source_key LIKE '%:8417'")
+    db.commit()
+    db.close()
 
-    fake.messages["INBOX"] = [m for m in fake.messages["INBOX"] if m[0] != b"8417"]
+    fake.messages["INBOX"] = []              # 两封都从服务器上消失
     stats = adapter.sync_folder("INBOX", "Inbox")
-    assert stats.removed == 1, "统计上仍然记'来源里没了 1 封'"
+    assert stats.removed == 2, "统计上仍然记'来源里没了 2 封'"
 
     db = index_store.open_index()
     try:
-        rows = list(db.execute(
-            "SELECT source_key, on_server FROM messages ORDER BY source_key"
-        ))
+        rows = list(db.execute("SELECT source_key, on_server FROM messages ORDER BY source_key"))
     finally:
         db.close()
-    assert len(rows) == 2, f"档案馆里两行都该在, 实际 {rows}"
     by_uid = {r[0].rsplit(":", 1)[1]: r[1] for r in rows}
-    assert by_uid["8417"] == 0, "服务器上没了的要标 on_server=0"
-    assert by_uid["8418"] == 1, "还在服务器上的不该被动"
+    assert by_uid == {"8417": 0}, f"有档案的留下 (on_server=0), 没档案的删掉; 实际 {rows}"
 
 
 def test_uidvalidity_reset_rebuilds_instead_of_mixing(isolated_index, monkeypatch):
