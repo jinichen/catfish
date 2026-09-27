@@ -221,6 +221,38 @@ if printf '%s\n' "$STAGED" | grep -q '^central/'; then
   fi
 fi
 
+# ── 被 .gitignore 吞掉的源码 (9/27 补) ─────────────────────────
+#
+# .gitignore 里的 `*_archive_*` 把 imap_archive_read.py 吞了: imap_sync.py 顶层
+# import 它, 本机文件在、测试全绿, 提交里却没有 —— CI 一 checkout 就
+# ImportError, Windows 安装包 (在 CI 的 checkout 上打) 邮件整个起不来。
+# git status 里连 "??" 都不显示, 肉眼根本看不到。
+#
+# 只看这次提交涉及的目录 (同一层, 不往下递归 —— 生成物如 vite.config.d.ts
+# 本来就该忽略): 被忽略的测试文件一律拦; 被忽略的源文件, 只在被本次提交的
+# 文件引用到时拦。
+IGNORED_HITS=""
+for d in $(printf '%s\n' "$STAGED" | xargs -r -n1 dirname | sort -u); do
+  while IFS= read -r ig; do
+    [ -n "$ig" ] && [ "$(dirname "$ig")" = "$d" ] || continue
+    base=$(basename "$ig"); stem="${base%.*}"
+    case "$base" in
+      test_*.py|*.test.ts|*.test.tsx)
+        IGNORED_HITS="${IGNORED_HITS}  ${ig}  (测试文件)"$'\n'; continue ;;
+    esac
+    if printf '%s\n' "$STAGED" | grep "^${d}/[^/]*$" | xargs -r grep -lw -- "$stem" >/dev/null 2>&1; then
+      IGNORED_HITS="${IGNORED_HITS}  ${ig}  (本次提交的文件引用了它)"$'\n'
+    fi
+  done < <(git ls-files --others --ignored --exclude-standard --directory -- "$d" 2>/dev/null \
+           | grep -E '\.(py|ts|tsx|rs|ps1|sh)$' || true)
+done
+if [ -n "$IGNORED_HITS" ]; then
+  echo "🔴 这些源码 / 测试被 .gitignore 吞了, 不会进提交 (本机能跑, CI 和安装包里没有):"
+  printf '%s' "$IGNORED_HITS"
+  echo "   查是哪条规则: git check-ignore -v <文件>; 改 .gitignore 后把文件加进来。"
+  FAIL=1
+fi
+
 if [ "$FAIL" -ne 0 ]; then
   echo
   echo "❌ pre-commit 拦下。确实要提交就加 --no-verify。"

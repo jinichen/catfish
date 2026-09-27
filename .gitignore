@@ -178,6 +178,11 @@ edge/companion-app/work/
 # P3.5.x sprint dev artifacts
 *.before-prune-*
 *_archive_*
+# 9/27: 上面这条把源码也吞了 —— imap_archive_read.py (1.0.43 起 imap_sync 顶层
+# import 它) 和 test_archive_store.py / test_imap_archive_view.py 从没进过仓库。
+# 本机测试全绿, CI 一 checkout 就 ImportError; Windows 安装包在 CI 的 checkout
+# 上打, 邮件组件整个起不来。源码不许被这条规则吞掉。
+!*_archive_*.py
 
 # P3.5.56 cargo test 副作用防御 — sync_plugin_files_* 测试如果有 bug 用了
 # 真实路径而非 TempDir, 会在源目录下创嵌套 catfish-xcatfish-user/, ignore 防 commit.
