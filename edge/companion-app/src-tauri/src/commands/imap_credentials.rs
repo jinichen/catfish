@@ -95,6 +95,18 @@ fn default_retention() -> String {
     "never".to_string()
 }
 
+/// 认不出来的一律 never。**这个方向不能反** —— 前端传了个拼错的值就开始删员工
+/// 服务器上的邮件, 是不可接受的。Python 那边同样兜一次: 两层都兜是因为这一步
+/// 不可逆, 而且没有任何后悔的余地。
+fn normalize_retention(value: Option<&str>) -> String {
+    match value.map(str::trim) {
+        Some("immediate") => "immediate".to_string(),
+        Some("1w") => "1w".to_string(),
+        Some("2w") => "2w".to_string(),
+        _ => default_retention(),
+    }
+}
+
 fn default_port() -> u16 {
     DEFAULT_PORT
 }
@@ -264,15 +276,7 @@ pub async fn imap_credential_save(
         // 这里不替它猜 —— 猜法只该有一处, 两处早晚会漂。
         smtp_host: smtp_host.unwrap_or_default().trim().to_string(),
         smtp_port: smtp_port.unwrap_or(0),
-        // 认不出来的一律 never。**这个方向不能反** —— 前端传了个拼错的值
-        // 就开始删员工服务器上的邮件, 是不可接受的。Python 那边同样兜一次:
-        // 两层都兜是因为这一步不可逆, 而且没有任何后悔的余地。
-        retention: match retention.as_deref().map(str::trim) {
-            Some("immediate") => "immediate".to_string(),
-            Some("1w") => "1w".to_string(),
-            Some("2w") => "2w".to_string(),
-            _ => default_retention(),
-        },
+        retention: normalize_retention(retention.as_deref()),
     };
 
     // 先验证再保存 —— 存一份连不上的配置没有意义
@@ -281,6 +285,19 @@ pub async fn imap_credential_save(
     keyring_set(&source.user, &password)?;
     write_source(&source)?;
     log::info!("[imap] 已保存凭据 {}", source.redacted());
+    Ok(status_of(Some(source)))
+}
+
+/// 只改保留策略 (归档后多久从服务器删) —— 不碰密码, 不重新登录。
+///
+/// 9/28: 以前改这一项只能点「重新配置」, 邮箱、服务器、密码全部重填一遍再真连
+/// 一次服务器。策略跟连不连得上毫无关系, 员工找不到、也不该为它重输密码。
+#[tauri::command]
+pub fn imap_retention_set(retention: String) -> Result<ImapStatus, String> {
+    let mut source = read_source().ok_or_else(|| "还没配置邮箱直连 (IMAP)".to_string())?;
+    source.retention = normalize_retention(Some(&retention));
+    write_source(&source)?;
+    log::info!("[imap] 保留策略改为 {}", source.retention);
     Ok(status_of(Some(source)))
 }
 
@@ -414,6 +431,17 @@ mod tests {
             object["password_present"].is_boolean(),
             "password_present 必须是布尔, 绝不能变成密码本身"
         );
+    }
+
+    #[test]
+    fn unrecognised_retention_never_deletes() {
+        // 改策略现在有两条路 (保存整套配置 / 只改策略), 共用这一个判定
+        for ok in ["immediate", "1w", "2w", "never"] {
+            assert_eq!(normalize_retention(Some(ok)), ok);
+        }
+        for bad in [None, Some(""), Some("3w"), Some("IMMEDIATE"), Some("forever")] {
+            assert_eq!(normalize_retention(bad), "never", "{bad:?} 被当成了会删的策略");
+        }
     }
 
     #[test]

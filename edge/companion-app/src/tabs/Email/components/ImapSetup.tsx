@@ -10,6 +10,7 @@ import {
   guessImapHost,
   guessSmtpHost,
   saveImapCredential,
+  setImapRetention,
   type ImapStatus,
 } from "../../../lib/tauri_imap";
 
@@ -95,6 +96,36 @@ export default function ImapSetup({ onConfigured }: { onConfigured?: () => void 
     }
   }
 
+  /** 只改保留策略, 不重填密码 (9/28)。 */
+  async function handleSaveRetention() {
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await setImapRetention(retention);
+      setStatus(next);
+      setRetention(normalizeRetention(next.retention));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** 「重新配置」: 表单带上已存的值, 一般只需要重填密码。
+   *  以前表单是空的, 邮箱、服务器、端口全得重新敲一遍。 */
+  function openWithSaved(saved: ImapStatus) {
+    setUser(saved.user);
+    setHost(saved.host);
+    setHostTouched(true);
+    setPort(String(saved.port || 993));
+    if (saved.smtp_host) {
+      setSmtpHost(saved.smtp_host);
+      setSmtpHostTouched(true);
+    }
+    if (saved.smtp_port) setSmtpPort(String(saved.smtp_port));
+    setOpen(true);
+  }
+
   async function handleClear() {
     setBusy(true);
     setError(null);
@@ -136,14 +167,34 @@ export default function ImapSetup({ onConfigured }: { onConfigured?: () => void 
             </span>
           )}
         </div>
-        {/* 保留策略**一直显示**, 包括 never。
-            只在"会删"的时候才显示, 等于让员工自己去记得他选没选过 ——
-            而这是这套配置里唯一不可逆的一项, 它的当前值应该是随时看得见的。 */}
-        <div style={{ marginTop: 4, color: "var(--catfish-muted)" }}>
-          归档后: {RETENTION_LABELS[normalizeRetention(status.retention)]}
+        {/* 保留策略**一直显示**, 包括 never —— 这是这套配置里唯一不可逆的一项,
+            当前值应该随时看得见。9/28 起就地可改: 以前只有「重新配置」一条路,
+            要把邮箱、服务器、密码全部重填, 员工找不到也不该为它重输密码。 */}
+        <div style={{ ...field, marginTop: 6 }}>
+          <span style={label}>服务器上保留</span>
+          <select
+            aria-label="服务器上的邮件保留多久"
+            style={input}
+            value={retention}
+            disabled={busy}
+            onChange={(e) => setRetention(normalizeRetention(e.target.value))}
+          >
+            {RETENTION_ORDER.map((key) => (
+              <option key={key} value={key}>{RETENTION_LABELS[key]}</option>
+            ))}
+          </select>
+          {retention !== normalizeRetention(status.retention) && (
+            <button type="button" disabled={busy} onClick={() => void handleSaveRetention()}>保存</button>
+          )}
         </div>
+        {retention !== "never" && (
+          <div style={{ marginTop: 4, color: "var(--status-danger)", fontSize: 11 }}>
+            ⚠ 服务器上那份会被删掉, 不可恢复。只有原文已存到本机、并重新读出来核对过的邮件才会删;
+            启用归档之前就在服务器上的旧邮件不会被删。
+          </div>
+        )}
         <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-          <button type="button" disabled={busy} onClick={() => setOpen(true)}>重新配置</button>
+          <button type="button" disabled={busy} onClick={() => openWithSaved(status)}>重新配置</button>
           <button type="button" disabled={busy} onClick={handleClear}>删除</button>
         </div>
         {error && <div style={{ color: "var(--status-danger)", marginTop: 6 }}>{error}</div>}
@@ -218,8 +269,8 @@ export default function ImapSetup({ onConfigured }: { onConfigured?: () => void 
           </select>
           {retention !== "never" && (
             <div style={{ marginTop: 4, color: "var(--status-danger)", fontSize: 11 }}>
-              ⚠ 服务器上那份会被删掉, **不可恢复**。只有原文已落到本地档案
-              并重新读出来核对过的邮件才会删。
+              ⚠ 服务器上那份会被删掉, 不可恢复。只有原文已存到本机、并重新读出来
+              核对过的邮件才会删; 启用归档之前就在服务器上的旧邮件不会被删。
             </div>
           )}
         </div>

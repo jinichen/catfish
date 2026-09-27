@@ -446,5 +446,7 @@ pub(crate) fn handler(
             crate::commands::imap_credentials::imap_credential_save,
             crate::commands::imap_credentials::imap_credential_clear,
             crate::commands::imap_credentials::imap_credential_status,
+            // 9/28: 只改保留策略, 不用重填密码
+            crate::commands::imap_credentials::imap_retention_set,
     ]
 }

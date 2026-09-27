@@ -49,6 +49,8 @@ import { useUIStore } from "../../store/ui";
 import { useAgentStore } from "../../store/agent";
 import ComposeCore from "./components/ComposeCore";
 import EmailSourceSetup from "./components/EmailSourceSetup";
+import ImapSetup from "./components/ImapSetup";
+import ArchivePanel from "./components/ArchivePanel";
 import FullDiskAccessHint from "./components/FullDiskAccessHint";
 
 // 5/20: ListItem / DetailPane / helpers 抽到 components/ (拆 1204 → <500)
@@ -118,6 +120,7 @@ export default function EmailTab() {
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [folder, setFolder] = useState<MailFolder>("Inbox"); // 9/26 见 FolderTabs
+  const [showMailSettings, setShowMailSettings] = useState(false); // 9/28 邮箱设置入口
   const [sourceDiscovery, setSourceDiscovery] = useState<EmailSourceDiscovery | null>(null);
   const [sourceDiscoveryError, setSourceDiscoveryError] = useState<string | null>(null);
   const [sourceBusy, setSourceBusy] = useState(false);
@@ -542,10 +545,23 @@ export default function EmailTab() {
               counts={actionCounts}
               onChange={setActionFilter}
             />
+            {/* 9/28: 邮箱设置 (IMAP / 服务器上保留多久 / 档案进度) 的常驻入口。
+                以前那张卡片只在「收件箱是空的 / 拉取失败」时才出现 —— 邮件正常
+                显示之后就再也找不到, 员工问"保存时间在哪设"而界面上没有路。 */}
+            <button
+              type="button"
+              onClick={() => setShowMailSettings((v) => !v)}
+              style={{ marginLeft: "auto", background: "none", border: "none", padding: 0, font: "inherit", color: "var(--catfish-text-muted)", cursor: "pointer", textDecoration: "underline", whiteSpace: "nowrap" }}
+            >
+              {showMailSettings ? "收起设置" : "邮箱设置"}
+            </button>
           </div>
 
           <FolderTabs value={folder} onChange={(f) => { setFolder(f); setItems([]); setSelectedId(null); }} />
           {mailDirBlocked && <FullDiskAccessHint />}
+          {showMailSettings && !needsSourceSetup && (
+            <><ImapSetup onConfigured={() => void loadList()} /><ArchivePanel /></>
+          )}
           {/* sourceDiscovery 再判一次是给 TS 收窄类型用的 —— needsSourceSetup
               为真时它一定不是 null (函数里第一句就是 `if (!discovery) return
               false`), 但那个事实跨不过函数边界。 */}

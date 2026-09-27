@@ -133,6 +133,12 @@ export async function getImapStatus(): Promise<ImapStatus> {
   return invoke<ImapStatus>("imap_credential_status");
 }
 
+/** 只改保留策略 (9/28) —— 不用重填密码, 后端也不重新登录。
+ *  以前只能「重新配置」: 邮箱、服务器、密码全部重填一遍。 */
+export async function setImapRetention(retention: RetentionPolicy): Promise<ImapStatus> {
+  return invoke<ImapStatus>("imap_retention_set", { retention: normalizeRetention(retention) });
+}
+
 /** 从邮箱地址猜 IMAP 服务器, 只是个默认值, 用户随时能改。
  *
  *  不做 DNS/autodiscover: 那要联网、要处理超时、还未必准。猜错的代价是用户
