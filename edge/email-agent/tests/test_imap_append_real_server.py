@@ -19,8 +19,8 @@ def test_uses_appenduid_from_the_append_response(adapter):  # noqa: F811
 
 
 def test_new_draft_id_matches_the_ids_in_the_list(adapter):  # noqa: F811
-    """9/27 真机: SELECT 不报 UIDVALIDITY (_select 给 "0"), APPENDUID 报 2。拿 2 拼的
-    新草稿 id 跟列表里其他邮件 (都是 |0|) 不是一个体系, 一打开就「邮箱已重建 2 → 0」。"""
+    """新草稿 id 跟列表里的 id 必须是一个体系。1.0.37 拿 APPENDUID 的 2 拼 id, 而
+    _select 当时读错一律给 "0", 新草稿一打开就「邮箱已重建 2 → 0」。"""
     from catfish_email.adapters.base import ListFilter
 
     draft_id = adapter.create_draft(to=["a@b.cn"], subject="s", body="b")

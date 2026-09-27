@@ -55,7 +55,7 @@ use crate::services::phishing_scan::{self, PhishingScanResult, Severity};
 use super::email_llm::call_rate_llm;
 use super::email_notify::{emit_urgent_event, send_notification};
 use super::email_state::{
-    action_cache, load_persisted_action_cache, load_persisted_state, now_epoch_secs,
+    action_cache, apply_id_migration, load_persisted_action_cache, load_persisted_state, now_epoch_secs,
     persist_action_cache, persist_push_history, persist_urgency_cache, push_history,
     urgency_cache, ActionEntry, APP_HANDLE, DEDUP_WINDOW_SECS,
 };
@@ -98,6 +98,7 @@ fn dedup_for_push<'a>(urgent: &[&'a EmailItem]) -> Vec<&'a EmailItem> {
 /// 返 id → "急" | "中" | "低" map, 卡 cache 上限 200, 重启 Companion 清空.
 #[tauri::command]
 pub fn email_urgency_map() -> HashMap<String, String> {
+    apply_id_migration();
     urgency_cache().lock()
         .map(|c| c.clone())
         .unwrap_or_default()
@@ -132,6 +133,8 @@ pub async fn email_classify_now(
     // 防永动机 (8/15 教训): action 侧有**哨兵** —— rate_emails 评过但模型
     // 没给 action 的 id 也写一条 action:"" 进缓存 (见 rate_emails), 所以
     // "补评"每封最多发生一次, 不会因为模型永远不给 action 而每次挂载重评。
+    // 9/27: 先照改名表改缓存键 —— 否则 id 迁移后整批邮件都成了"没评过", 重新调模型
+    apply_id_migration();
     let to_rate: Vec<EmailItem> = {
         let ucache = urgency_cache().lock().map_err(|e| e.to_string())?;
         let acache = action_cache().lock().map_err(|e| e.to_string())?;
@@ -305,6 +308,8 @@ pub fn schedule_email_scheduler(app: AppHandle) {
         loop {
             match fetch_unread().await {
                 Ok(items) => {
+                    // 9/27: 这次取列表可能刚触发了 id 迁移, 先改缓存键再比对/评级
+                    apply_id_migration();
                     let current_ids: HashSet<String> =
                         items.iter().map(|i| i.id.clone()).collect();
 

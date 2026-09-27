@@ -138,6 +138,12 @@ CREATE INDEX IF NOT EXISTS idx_messages_unarchived
 -- 服务器端清理的候选集: 已校验 且 服务器上还在
 CREATE INDEX IF NOT EXISTS idx_messages_purgeable
     ON messages (verified_at) WHERE verified_at IS NOT NULL AND on_server = 1;
+-- 9/27: UIDVALIDITY 读错期间发出去的旧 id (版本号 0) → 核实后的新 id。
+-- 新增表, 不动 schema_version —— 版本号一变 open_index 会整表重建, 档案指针全丢。
+CREATE TABLE IF NOT EXISTS id_migration (
+    old_id TEXT PRIMARY KEY,
+    new_id TEXT NOT NULL
+);
 """
 
 

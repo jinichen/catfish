@@ -222,3 +222,15 @@ def test_purged_mail_is_marked_off_server_not_deleted_locally(home, monkeypatch)
     assert row is not None, "索引行被删了 —— 档案指针没了"
     assert row[0] == 0, "没标成服务器上已无"
     assert row[1] == "x.eml" and row[2] is not None, "档案登记被清掉了"
+
+
+def test_mail_from_an_older_uidvalidity_is_never_purged(home, monkeypatch):
+    """9/27: 邮箱重建后旧 key 的 UID 指向另一封信。清理前必须核对 UIDVALIDITY ——
+    原来不核对, 而 UIDVALIDITY 又一直读成 0, 两层保护同时缺席。"""
+    fake = PurgingIMAP(capabilities=("UIDPLUS",))
+    adapter = make(fake, monkeypatch, retention="immediate")
+    seed(adapter, verified_ago=WEEK)
+    fake.uidvalidity = b"99"                 # 服务器重建了邮箱
+    got = adapter.purge_folder("INBOX", "Inbox")
+    assert got["purged"] == 0 and got["flagged"] == 0
+    assert fake.stores == [] and fake.expunges == [], "版本对不上还删了 —— 删的是别的信"

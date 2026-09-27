@@ -276,6 +276,7 @@ pub(crate) fn handler(
             crate::commands::email::email_send_message,
             // P3.3.58 (6/12 鸿波): 批量查邮件钓鱼扫描结果
             crate::commands::email::email_phishing_get,
+            crate::commands::email::email_id_migration_map,
             // P3.3.53 (6/13): 政治敏感扫描 — 给前端 detail pane 调
             crate::commands::email::email_political_scan_now,
             crate::commands::email::email_political_get,

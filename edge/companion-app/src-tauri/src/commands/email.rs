@@ -398,11 +398,19 @@ pub async fn email_list_fetch(
         });
     }
 
+    // 9/27: 这次取列表可能刚触发了 id 迁移 (见 email_state::apply_id_migration)
+    crate::services::email_state::apply_id_migration();
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     if stdout.trim().is_empty() {
         return Ok("[]".to_string());
     }
     Ok(stdout)
+}
+
+/// 9/27: 邮件 id 改名表 {旧 id: 新 id}, 给前端把 localStorage 里的已读记录等照着改名。
+#[tauri::command]
+pub fn email_id_migration_map() -> HashMap<String, String> {
+    crate::services::email_state::id_migration_map()
 }
 
 /// 读单封邮件全文 (含 body_text / body_html / 附件元数据).

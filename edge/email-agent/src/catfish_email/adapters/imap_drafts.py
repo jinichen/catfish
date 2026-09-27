@@ -159,11 +159,9 @@ def locate_appended(adapter: "ImapAdapter", append_data, drafts: str, msg_id: st
 
     所以: 先看 APPENDUID; 没有才断开重连, 在新连接上按 Message-ID / 新增 UID 找。
 
-    ⚠ 只取 APPENDUID 里的 UID, **不取它的 UIDVALIDITY**。同一台服务器的 SELECT
-    回应里根本不带 [UIDVALIDITY] (探测时 SELECT 后只有 EXISTS/RECENT/FLAGS/…),
-    _select 只能返回 "0", 于是这台服务器上所有邮件的 id 都是 `…|0|uid`。9/27 拿
-    APPENDUID 的 "2" 拼新草稿 id, 一打开就被当成「邮箱已重建 (2 → 0)」拒掉。
-    id 里的 UIDVALIDITY 必须跟 _select 同一个来源, 调用方用 _select 的值拼。
+    只取 APPENDUID 里的 UID; id 里的 UIDVALIDITY 由调用方用 _select 的值拼,
+    跟其他所有 id 同一个来源。(1.0.40 这里写过"SELECT 不报 UIDVALIDITY", 是错的 ——
+    是 _select 读错了, 见 imap_uidvalidity 文件头。)
     """
     _, uid = appenduid(append_data)
     if uid is not None:

@@ -103,7 +103,7 @@ def smtp_send(config: "ImapConfig", raw: bytes, recipients: list[str]) -> None:
 # 配置 9/21 搬到 imap_config.py (本文件越过 800 行红线)。这里 re-export ——
 # 全仓有一堆 `from .imap_mail import ImapConfig`, 改全部调用点的风险不如
 # 留一行别名。新代码请直接 from .imap_config import ...
-from . import imap_drafts  # noqa: E402
+from . import imap_drafts, imap_uidvalidity  # noqa: E402
 from .imap_config import (  # noqa: E402,F401
     DEFAULT_PORT,
     DEFAULT_RETENTION,
@@ -251,7 +251,7 @@ class ImapAdapter(EmailAdapter):
         return [self._to_message(r, full=False) for r in entries[: max(filt.limit, 0)]]
 
     def read_message(self, message_id: str) -> Message:
-        folder_raw, uidvalidity, uid = self._unpack_id(message_id)
+        folder_raw, uidvalidity, uid = self._unpack_id(self._current_id(message_id))
         conn = self._connect()
         current = self._select(conn, folder_raw)
         if current != uidvalidity:
@@ -402,7 +402,7 @@ class ImapAdapter(EmailAdapter):
             raise EmailAdapterError(
                 "草稿存进去了, 但找不回它的 UID —— 请去邮箱网页版确认"
             )
-        # UIDVALIDITY 用 _select 的值, 不用 APPENDUID 里的 —— 见 locate_appended
+        # id 里的 UIDVALIDITY 统一来自 _select (跟其他所有 id 同源)
         new_id = self._pack_id(drafts, self._select(self._connect(), drafts), uid)
         self.close()  # 这个连接看不到刚存的草稿 (见 locate_appended), 后续操作用新连接
         if replaces:
@@ -482,10 +482,7 @@ class ImapAdapter(EmailAdapter):
         typ, _ = conn.select(f'"{folder_raw}"', readonly=not writable)
         if typ != "OK":
             raise DataNotFoundError(f"打不开文件夹: {utf7_decode(folder_raw)}")
-        typ, data = conn.response("UIDVALIDITY")
-        if typ == "OK" and data and data[0]:
-            return data[0].decode("ascii", "replace").strip()
-        return "0"
+        return imap_uidvalidity.selected_uidvalidity(conn, folder_raw)
 
     def _locate(self, message_id: str, *, writable: bool = False) -> tuple[str, str]:
         """解开 id, 打开它所在的文件夹, 校验 UIDVALIDITY。返回 (folder_raw, uid)。
@@ -494,7 +491,7 @@ class ImapAdapter(EmailAdapter):
         去 STORE 就是**对另一封不相干的邮件动手**。读错了顶多显示错, 写错了
         是删错邮件。
         """
-        folder_raw, uidvalidity, uid = self._unpack_id(message_id)
+        folder_raw, uidvalidity, uid = self._unpack_id(self._current_id(message_id))
         conn = self._connect()
         current = self._select(conn, folder_raw, writable=writable)
         if current != uidvalidity:
@@ -503,6 +500,12 @@ class ImapAdapter(EmailAdapter):
                 "请重新拉取列表"
             )
         return folder_raw, uid
+
+    def _current_id(self, message_id: str) -> str:
+        """UIDVALIDITY 读错期间的旧 id (版本号 0) 换成迁移后的新 id; 见 imap_uidvalidity。"""
+        if message_id.split("|")[2:3] == [imap_uidvalidity.LEGACY]:
+            return imap_uidvalidity.resolve_legacy(message_id) or message_id
+        return message_id
 
     def _fetch_raw(self, message_id: str) -> EmailMessage:
         """把整封原始邮件取下来解析好。"""

@@ -104,6 +104,9 @@ export const emailCreateDraft = (args: CreateDraftArgs) =>
     replaces: args.replaces ?? null,
   });
 /** id → "急" | "中" | "低" map, scheduler 后台评级缓存. */
+/** 9/27: 邮件 id 改名表 {旧 id: 新 id} (IMAP id 里的 UIDVALIDITY 从 0 改成真值)。 */
+export const emailIdMigrationMap = () =>
+  rawInvoke<Record<string, string>>("email_id_migration_map");
 export const emailUrgencyMap = () =>
   rawInvoke<Record<string, string>>("email_urgency_map");
 

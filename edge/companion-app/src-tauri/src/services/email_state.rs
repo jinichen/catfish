@@ -45,6 +45,8 @@ pub(crate) fn push_history() -> &'static Mutex<HashMap<String, u64>> {
 /// 启动时调一次 — load urgency_cache + push_history 从 disk.
 /// 找不到文件 / 解析失败 → 静默, 当 empty (跟 5/18 老行为兼容).
 pub(crate) fn load_persisted_state() {
+    // 缓存重新从盘上装载 → 改名表要重新应用一次 (见 apply_id_migration)
+    forget_applied_id_migration();
     if let Some(path) = catfish_state_file(URGENCY_CACHE_FILE) {
         if let Ok(content) = std::fs::read_to_string(&path) {
             if let Ok(parsed) = serde_json::from_str::<HashMap<String, String>>(&content) {
@@ -159,6 +161,7 @@ pub(crate) fn persist_action_cache() {
 
 /// 启动时 load (跟 load_persisted_state 同款, 单独一个函数免得改老函数签名)。
 pub(crate) fn load_persisted_action_cache() {
+    forget_applied_id_migration();
     if let Some(path) = catfish_state_file(ACTION_CACHE_FILE) {
         if let Ok(content) = std::fs::read_to_string(&path) {
             if let Ok(parsed) = serde_json::from_str::<HashMap<String, ActionEntry>>(&content) {
@@ -172,5 +175,104 @@ pub(crate) fn load_persisted_action_cache() {
                 }
             }
         }
+    }
+}
+
+// ── 9/27: 邮件 id 迁移 (UIDVALIDITY 读错期间的旧 id → 核实后的新 id) ─────────
+//
+// catfish-email 以前把 IMAP 邮件 id 里的 UIDVALIDITY 一律写成 0 (读错了, 见
+// email-agent adapters/imap_uidvalidity.py)。修好之后 id 会变成真值, 而上面三份
+// 缓存 (急缓评级 / 行动分诊 / 推送去重) 都以 id 为键 —— 不跟着改名, 全部邮件在
+// 缓存里都"没评过", 分诊会整批重新调模型。
+//
+// catfish-email 逐封核实 (按 UID 取 Message-ID 比对) 后把改名表导出成
+// email_id_migration.json; 这里照表改键。只认这份表, 不自己猜: 表里没有的旧 id
+// 是核实没通过的 (邮箱真的重建过), 它的评级本来就不该挪给新 UID 下的另一封信。
+
+const ID_MIGRATION_FILE: &str = "email_id_migration.json";
+static ID_MIGRATION_APPLIED: OnceLock<Mutex<Option<SystemTime>>> = OnceLock::new();
+
+fn forget_applied_id_migration() {
+    if let Some(applied) = ID_MIGRATION_APPLIED.get() {
+        if let Ok(mut seen) = applied.lock() {
+            *seen = None;
+        }
+    }
+}
+
+/// 改名表 {旧 id: 新 id}。没有文件 / 读不了 = 空表。
+pub(crate) fn id_migration_map() -> HashMap<String, String> {
+    catfish_state_file(ID_MIGRATION_FILE)
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+/// 照表改键。新键已经有值时保留新键的值 (新 id 下评过的更可信)。返回是否改了。
+pub(crate) fn rename_keys<V>(map: &mut HashMap<String, V>, mapping: &HashMap<String, String>) -> bool {
+    let mut changed = false;
+    for (old, new) in mapping {
+        if let Some(value) = map.remove(old) {
+            map.entry(new.clone()).or_insert(value);
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// 改名表有更新就应用到三份缓存并落盘。调用点: 评级 / 读评级 / 取列表之前,
+/// 保证"拿新 id 去查缓存"之前缓存已经是新键。文件没变就什么都不做 (一次 stat)。
+pub(crate) fn apply_id_migration() {
+    let Some(path) = catfish_state_file(ID_MIGRATION_FILE) else { return };
+    let Ok(modified) = std::fs::metadata(&path).and_then(|m| m.modified()) else { return };
+    let applied = ID_MIGRATION_APPLIED.get_or_init(|| Mutex::new(None));
+    if applied.lock().map(|seen| *seen == Some(modified)).unwrap_or(true) {
+        return;
+    }
+    let mapping = id_migration_map();
+    let urgency = urgency_cache().lock().map(|mut c| rename_keys(&mut *c, &mapping)).unwrap_or(false);
+    let action = action_cache().lock().map(|mut c| rename_keys(&mut *c, &mapping)).unwrap_or(false);
+    let push = push_history().lock().map(|mut c| rename_keys(&mut *c, &mapping)).unwrap_or(false);
+    if urgency {
+        persist_urgency_cache();
+    }
+    if action {
+        persist_action_cache();
+    }
+    if push {
+        persist_push_history();
+    }
+    if let Ok(mut seen) = applied.lock() {
+        *seen = Some(modified);
+    }
+    log::info!(
+        "email id 迁移: 表 {} 条, 改了 urgency={urgency} action={action} push={push}",
+        mapping.len()
+    );
+}
+
+#[cfg(test)]
+mod tests_id_migration {
+    use super::rename_keys;
+    use std::collections::HashMap;
+
+    #[test]
+    fn renames_only_listed_ids_and_keeps_newer_value() {
+        let mapping: HashMap<String, String> = [
+            ("imap|INBOX|0|1".to_string(), "imap|INBOX|1|1".to_string()),
+            ("imap|INBOX|0|2".to_string(), "imap|INBOX|1|2".to_string()),
+        ].into_iter().collect();
+        let mut cache: HashMap<String, String> = [
+            ("imap|INBOX|0|1".to_string(), "急".to_string()),
+            ("imap|INBOX|0|2".to_string(), "低".to_string()),
+            ("imap|INBOX|1|2".to_string(), "中".to_string()),
+            ("imap|INBOX|0|9".to_string(), "低".to_string()),
+        ].into_iter().collect();
+        assert!(rename_keys(&mut cache, &mapping));
+        assert_eq!(cache.get("imap|INBOX|1|1").map(String::as_str), Some("急"));
+        assert_eq!(cache.get("imap|INBOX|1|2").map(String::as_str), Some("中"), "新键已有值时保留");
+        assert!(cache.contains_key("imap|INBOX|0|9"), "表里没有的旧 id 不动");
+        assert!(!cache.contains_key("imap|INBOX|0|1"));
+        assert!(!rename_keys(&mut cache, &mapping), "再跑一遍什么都不改");
     }
 }

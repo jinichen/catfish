@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 
 from ..adapters.base import ListFilter, Message
+from . import imap_uidvalidity
 from .imap_folders import folder_matches, folder_role
 from .imap_mail import _FLAGS_IN_FETCH, _UID_IN_FETCH, ImapAdapter
 
@@ -104,6 +105,12 @@ class ImapSyncAdapter(ImapAdapter):
 
         conn = self._connect()
         uidvalidity = self._select(conn, folder_raw)
+        # 9/27: UIDVALIDITY 读错期间入库的行 (版本号 0) 逐封核实后改名, 见 imap_uidvalidity
+        db = index_store.open_index()
+        try:
+            imap_uidvalidity.migrate_folder(self, conn, db, folder_raw, role, uidvalidity)
+        finally:
+            db.close()
 
         # ① 廉价地问一遍"现在有哪些, 各自什么状态"
         typ, data = conn.uid("search", None, "ALL")
@@ -340,7 +347,7 @@ class ImapSyncAdapter(ImapAdapter):
         import time  # noqa: PLC0415
 
         conn = self._connect()
-        self._select(conn, folder_raw, writable=True)
+        current = self._select(conn, folder_raw, writable=True)
         has_uidplus = self._has_capability("UIDPLUS")
 
         db = index_store.open_index()
@@ -350,7 +357,13 @@ class ImapSyncAdapter(ImapAdapter):
                 older_than=time.time() - window, limit=PURGE_BATCH,
             )
             for key in keys:
-                uid = _parse_sync_key(key)[2]
+                _, key_validity, uid = _parse_sync_key(key)
+                # 9/27: 删服务器上的邮件之前核对 UIDVALIDITY。版本对不上 = 邮箱重建过,
+                # 这个 UID 现在指向的是另一封信 —— 照删就是删错。原来这里不核对,
+                # 而 UIDVALIDITY 又一直读成 0, 两层保护同时缺席。
+                if key_validity != current:
+                    logger.warning("跳过清理 %s: UIDVALIDITY %s ≠ 当前 %s", key, key_validity, current)
+                    continue
                 typ, _ = conn.uid("store", uid, "+FLAGS", r"(\Deleted)")
                 if typ != "OK":
                     logger.warning("标记删除失败 uid=%s, 跳过", uid)
@@ -411,6 +424,28 @@ class ImapSyncAdapter(ImapAdapter):
                 # 后台慢慢补的 —— 前者的可用性优先级高得多。
                 logger.warning("imap_sync: 文件夹 %s 归档失败: %s", decoded, error)
         return out
+
+    def _current_id(self, message_id: str) -> str:
+        """旧 id 所在文件夹还没迁移过 (没被列过) 时, 先迁移这个文件夹再换。
+
+        对话历史里小鲶引用的可能是已发送 / 已删除里的旧 id, 员工这次启动还没点开
+        过那个文件夹 —— 不补这一步就会被当成「邮箱已重建」拒掉。
+        """
+        resolved = super()._current_id(message_id)
+        if resolved != message_id or message_id.split("|")[2:3] != [imap_uidvalidity.LEGACY]:
+            return resolved
+        from .. import index_store  # noqa: PLC0415
+
+        folder_raw, _, _ = self._unpack_id(message_id)
+        conn = self._connect()
+        current = self._select(conn, folder_raw)
+        db = index_store.open_index()
+        try:
+            role = next((folder_role(d) for r, d in self.folders() if r == folder_raw), folder_raw)
+            imap_uidvalidity.migrate_folder(self, conn, db, folder_raw, role, current)
+        finally:
+            db.close()
+        return super()._current_id(message_id)
 
     def check_new_mail(self, *, account: str | None = None) -> None:
         """界面上的「收信」: 立刻把所有文件夹对一遍账。

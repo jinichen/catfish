@@ -21,7 +21,17 @@
 
 import { create } from "zustand";
 
-import { emailUrgencyMap as rustUrgencyMap } from "../lib/tauri";
+import { emailIdMigrationMap, emailUrgencyMap as rustUrgencyMap } from "../lib/tauri";
+
+/** 9/27: 照改名表把以 id 为键的本地记录改名 (Rust 侧缓存由 Rust 自己改)。 */
+export function renameIds<T>(record: Record<string, T>, mapping: Record<string, string>): Record<string, T> {
+  const out: Record<string, T> = {};
+  for (const [id, value] of Object.entries(record)) {
+    const next = mapping[id] ?? id;
+    if (!(next in out) || next === id) out[next] = value;
+  }
+  return out;
+}
 
 const LS_URGENCY_KEY = "catfish.email.urgency.v1";
 const LS_READ_KEY = "catfish.email.read.v1";
@@ -154,6 +164,18 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   reconcileFromRust: async () => {
     try {
       const rust = await rustUrgencyMap();
+      // 9/27: 旧 id → 新 id。已读记录只存在前端, 不改名的话迁移后这些邮件会
+      // 重新触发主动提醒; 评级镜像顺手也改, 免得本地留一堆永远用不上的旧键。
+      const mapping = await emailIdMigrationMap().catch(() => ({} as Record<string, string>));
+      if (Object.keys(mapping).length > 0) {
+        const read = get().readIds;
+        const renamed = new Set(Array.from(read, (id) => mapping[id] ?? id));
+        if (Array.from(read).some((id) => id in mapping)) {
+          set({ readIds: renamed });
+          savePersistedRead(renamed);
+        }
+        set({ urgencyMap: renameIds(get().urgencyMap, mapping) });
+      }
       // Rust 是权威 — local 里有但 Rust 没的 id 可能已 archive, 也保留
       // (Companion 还在显这封邮件就还有用). 简单做法: union, Rust 值覆盖 local.
       const merged = { ...get().urgencyMap, ...rust };
