@@ -144,6 +144,19 @@ pub async fn email_archive_status() -> Result<String, String> {
     Ok(stdout)
 }
 
+/// 本机邮件客户端里各账号的收信服务器设置 (9/28), 配 IMAP 直连时带入表单。
+/// 目前只有 macOS「邮件」App 读得到; **不含密码** (Mail 只写不读)。
+#[tauri::command]
+pub async fn email_mail_account_settings() -> Result<String, String> {
+    let bin = catfish_paths::catfish_email_bin().ok_or_else(email_component_missing_error)?;
+    let output = email_command(&bin)
+        .args(["mail-accounts"])
+        .output()
+        .map_err(|e| format!("读邮件账号设置失败: {e}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(if stdout.is_empty() { "[]".to_string() } else { stdout })
+}
+
 /// 探测 Windows 邮件来源。返回 catfish-email 的结构化 JSON，避免 Rust 和 Python
 /// 各自维护一套发现规则。
 #[tauri::command]

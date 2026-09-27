@@ -11,7 +11,9 @@ import {
   guessSmtpHost,
   saveImapCredential,
   setImapRetention,
+  getMailAccountSettings,
   type ImapStatus,
+  type MailAccountSetting,
 } from "../../../lib/tauri_imap";
 
 /**
@@ -53,6 +55,26 @@ export default function ImapSetup({ onConfigured }: { onConfigured?: () => void 
       })
       .catch(() => setStatus(null));
   }, []);
+
+  // 9/28: 打开表单时读一次本机「邮件」App 里的账号设置, 可以一键带入服务器和
+  // 用户名 (只有 IMAP 的; 密码读不到, 也不该读)。
+  const [imports, setImports] = useState<MailAccountSetting[]>([]);
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    getMailAccountSettings().then((list) => {
+      if (!cancelled) setImports(list.filter((a) => a.protocol === "imap" && a.host));
+    });
+    return () => { cancelled = true; };
+  }, [open]);
+
+  function applyImport(a: MailAccountSetting | undefined) {
+    if (!a) return;
+    setUser(a.user || a.address);
+    setHost(a.host);
+    setHostTouched(true);
+    setPort(String(a.port || 993));
+  }
 
   // 邮箱地址填完自动猜服务器, 但**用户改过就不再覆盖** —— 猜测是省事,
   // 不是替用户做主。
@@ -206,8 +228,10 @@ export default function ImapSetup({ onConfigured }: { onConfigured?: () => void 
     return (
       <div style={box}>
         <strong>邮箱直连 (IMAP)</strong>
+        {/* 9/28: 原来写的是「新版 Outlook 和 Foxmail 读不到邮件时用这个」—— 那是
+            Windows 的处境, 在 Mac 上用「邮件」App 的人看了只会纳闷。说它能干什么。 */}
         <div style={{ marginTop: 4, color: "var(--catfish-muted)" }}>
-          不依赖任何邮件客户端, 直接连邮箱服务器。新版 Outlook 和 Foxmail 读不到邮件时用这个。
+          直接连邮箱服务器收发, 不经过邮件客户端。开启后这个邮箱的原文会在本机留一份, 也能设置服务器上保留多久。
         </div>
         <button type="button" style={{ marginTop: 8 }} onClick={() => setOpen(true)}>配置</button>
       </div>
@@ -217,6 +241,27 @@ export default function ImapSetup({ onConfigured }: { onConfigured?: () => void 
   return (
     <div style={box}>
       <strong>邮箱直连 (IMAP)</strong>
+      {imports.length > 0 && (
+        <>
+          <div style={field}>
+            <span style={label}>带入</span>
+            <select
+              aria-label="从邮件 App 带入账号设置"
+              style={input}
+              value=""
+              onChange={(e) => applyImport(imports[Number(e.target.value)])}
+            >
+              <option value="">从「邮件」App 里选一个账号…</option>
+              {imports.map((a, i) => (
+                <option key={`${a.name}-${i}`} value={i}>{a.name} · {a.address || a.user}</option>
+              ))}
+            </select>
+          </div>
+          <div style={{ marginTop: 2, marginLeft: 104, color: "var(--catfish-muted)", fontSize: 11 }}>
+            密码要自己填:「邮件」App 不把密码交给别的程序。Gmail / QQ / 163 等填授权码或应用专用密码。
+          </div>
+        </>
+      )}
       <div style={field}>
         <span style={label}>邮箱地址</span>
         <input

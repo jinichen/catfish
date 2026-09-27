@@ -34,6 +34,7 @@ from .inbox import get_adapter, get_all_adapters
 # 删了 test_cli_main.py 会 ImportError。__all__ 把这个意图写死。
 from .cli_action import (
     _cmd_archive,
+    _cmd_mail_accounts,
     _cmd_attachment,
     _cmd_check,
     _cmd_delete,
@@ -49,7 +50,7 @@ __all__ = [
     "main",
     "_cmd_accounts", "_cmd_list", "_cmd_read", "_cmd_search",
     "_cmd_draft", "_cmd_send", "_cmd_delete", "_cmd_mark_read",
-    "_cmd_check", "_cmd_attachment", "_cmd_archive",
+    "_cmd_check", "_cmd_attachment", "_cmd_archive", "_cmd_mail_accounts",
     "_msg_to_dict", "_err",
 ]
 
@@ -165,6 +166,9 @@ def main(argv: list[str] | None = None) -> int:
     # 9/27: 后台归档一轮 (Companion 每 10 分钟), 只动 IMAP
     if args.cmd == "archive":
         return _cmd_archive(adapters, args)
+    # 9/28: 本机客户端里的账号服务器设置, 给 IMAP 表单带入 (不含密码)
+    if args.cmd == "mail-accounts":
+        return _cmd_mail_accounts(adapters, args)
 
     parser.print_help()
     return 2
@@ -190,6 +194,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=False)
 
     # P3.5.204.c (7/9): check — 触发客户端立即从服务器 fetch new mail
+    sub.add_parser("mail-accounts", help="本机邮件客户端里各账号的收信服务器设置 (不含密码)")
     sub.add_parser("archive", help="后台归档一轮: IMAP 同步 + 归档一批 + 按保留策略清理服务器")
     pc = sub.add_parser("check", help="触发客户端立即从邮箱服务器 fetch 新邮件 (不等定时同步)")
     pc.add_argument("--account", help="账号地址 (默认全部账号一起同步)")

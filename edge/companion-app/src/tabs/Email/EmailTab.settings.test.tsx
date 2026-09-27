@@ -15,7 +15,10 @@ vi.mock("../../lib/tauri", () => ({
       { id: "id-0", subject: "一封信", sender: "a@example.cn", account: "me@example.cn",
         date: "2026-09-18T13:05:57", is_read: false },
     ])),
-  emailAccountsFetch: vi.fn(async () => "[]"),
+  emailAccountsFetch: vi.fn(async () => JSON.stringify([
+    { name: "Google", address: "me@gmail.com", is_default: true, client: "apple_mail" },
+    { name: "Chinatelecom", address: "me@example.cn", is_default: false, client: "apple_mail" },
+  ])),
   emailReadMessage: vi.fn(async () => "{}"),
   emailCheckNew: vi.fn(async () => undefined),
   emailMailDirStatus: vi.fn(async () => "ok"),
@@ -60,6 +63,9 @@ describe("EmailTab 邮箱设置入口", () => {
     fireEvent.click(screen.getByText("邮箱设置"));
     expect(screen.getByText("IMAP 卡片")).toBeTruthy();
     expect(screen.getByText("档案进度")).toBeTruthy();
+    // 9/28: 先说正在读哪些邮箱 —— Mac 上用「邮件」App 的人不该只看到一张 IMAP 卡片
+    expect(screen.getByText(/Google \(me@gmail.com\)、Chinatelecom \(me@example.cn\)/)).toBeTruthy();
+    expect(screen.getByText(/只对下面「邮箱直连 \(IMAP\)」的邮箱生效/)).toBeTruthy();
 
     fireEvent.click(screen.getByText("收起设置"));
     expect(screen.queryByText("IMAP 卡片")).toBeNull();

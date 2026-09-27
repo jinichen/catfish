@@ -133,6 +133,29 @@ export async function getImapStatus(): Promise<ImapStatus> {
   return invoke<ImapStatus>("imap_credential_status");
 }
 
+/** 本机邮件客户端里一个账号的收信服务器设置 (9/28)。**不含密码**。 */
+export interface MailAccountSetting {
+  name: string;
+  address: string;
+  host: string;
+  user: string;
+  port: number | null;
+  ssl: boolean;
+  protocol: "imap" | "pop" | "exchange";
+  client: string;
+}
+
+/** 配 IMAP 直连时从「邮件」App 带入服务器设置, 不用员工再敲一遍 (9/28)。
+ *  读不到 (Windows / 没开「邮件」/ 老后端) 就是空列表 —— 带入是省事, 不是必需。 */
+export async function getMailAccountSettings(): Promise<MailAccountSetting[]> {
+  try {
+    const list = JSON.parse(await invoke<string>("email_mail_account_settings"));
+    return Array.isArray(list) ? (list as MailAccountSetting[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 /** 只改保留策略 (9/28) —— 不用重填密码, 后端也不重新登录。
  *  以前只能「重新配置」: 邮箱、服务器、密码全部重填一遍。 */
 export async function setImapRetention(retention: RetentionPolicy): Promise<ImapStatus> {

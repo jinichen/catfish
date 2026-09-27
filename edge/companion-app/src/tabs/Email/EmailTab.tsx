@@ -49,8 +49,7 @@ import { useUIStore } from "../../store/ui";
 import { useAgentStore } from "../../store/agent";
 import ComposeCore from "./components/ComposeCore";
 import EmailSourceSetup from "./components/EmailSourceSetup";
-import ImapSetup from "./components/ImapSetup";
-import ArchivePanel from "./components/ArchivePanel";
+import MailSettingsPanel from "./components/MailSettingsPanel";
 import FullDiskAccessHint from "./components/FullDiskAccessHint";
 
 // 5/20: ListItem / DetailPane / helpers 抽到 components/ (拆 1204 → <500)
@@ -560,7 +559,7 @@ export default function EmailTab() {
           <FolderTabs value={folder} onChange={(f) => { setFolder(f); setItems([]); setSelectedId(null); }} />
           {mailDirBlocked && <FullDiskAccessHint />}
           {showMailSettings && !needsSourceSetup && (
-            <><ImapSetup onConfigured={() => void loadList()} /><ArchivePanel /></>
+            <MailSettingsPanel accounts={accounts} onChanged={() => void loadList()} />
           )}
           {/* sourceDiscovery 再判一次是给 TS 收窄类型用的 —— needsSourceSetup
               为真时它一定不是 null (函数里第一句就是 `if (!discovery) return

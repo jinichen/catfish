@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   setImapRetention: vi.fn(),
   saveImapCredential: vi.fn(),
   clearImapCredential: vi.fn(),
+  getMailAccountSettings: vi.fn(async () => []),
 }));
 vi.mock("../../../lib/tauri_imap", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../lib/tauri_imap")>()),
@@ -67,5 +68,24 @@ describe("ImapSetup · 服务器上保留多久", () => {
     expect(screen.getByDisplayValue("me@example.cn")).toBeTruthy();
     expect(screen.getByDisplayValue("imap.example.cn")).toBeTruthy();
     expect(screen.getByDisplayValue("993")).toBeTruthy();
+  });
+
+  it("能从「邮件」App 带入服务器和用户名, 密码不带", async () => {
+    mocks.getImapStatus.mockResolvedValue({ ...SAVED, configured: false });
+    mocks.getMailAccountSettings.mockResolvedValue([
+      { name: "Chinatelecom", address: "me@example.cn", host: "imap.example.cn", user: "me@example.cn",
+        port: 993, ssl: true, protocol: "imap", client: "apple_mail" },
+      { name: "Old", address: "old@example.cn", host: "pop.example.cn", user: "old",
+        port: 995, ssl: true, protocol: "pop", client: "apple_mail" },
+    ]);
+    render(<ImapSetup />);
+    await act(async () => {});
+    await act(async () => { fireEvent.click(screen.getByText("配置")); });
+
+    const pick = screen.getByLabelText("从邮件 App 带入账号设置") as HTMLSelectElement;
+    expect(pick.options.length).toBe(2); // 提示项 + 一个 IMAP 账号; POP 的不列
+    fireEvent.change(pick, { target: { value: "0" } });
+    expect(screen.getByDisplayValue("me@example.cn")).toBeTruthy();
+    expect(screen.getByDisplayValue("imap.example.cn")).toBeTruthy();
   });
 });

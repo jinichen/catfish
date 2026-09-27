@@ -89,6 +89,7 @@ from .apple_mail_osascript import (  # noqa: F401
 
 # 5/20 BL-AM-SPLIT: 8 个 _AS_* osascript templates 抽到 apple_mail_scripts.py
 from .apple_mail_scripts import (
+    _AS_ACCOUNT_SETTINGS,
     _AS_DELETE_MESSAGE,
     _AS_GET_MESSAGE,
     _AS_LIST_ACCOUNTS,
@@ -185,6 +186,25 @@ class AppleMailAdapter(EmlxFallbackMixin, EmailAdapter):
             for r in records
         ]
         return self._accounts_cache
+
+    def account_settings(self) -> list[dict[str, object]]:
+        """各账号的收信服务器设置 (9/28), 配 IMAP 直连时带入表单。**没有密码** ——
+        Mail 的 password 属性只写不读, 我们也不该读。Mail 没开就返回空, 不去拉起它。"""
+        if self._use_emlx_fallback or not _is_mail_running():
+            return []
+        result: list[dict[str, object]] = []
+        for name, addr, kind, host, user, port, ssl in _parse_records(
+            _run_osascript(_AS_ACCOUNT_SETTINGS), n_fields=7,
+        ):
+            k = kind.lower()
+            result.append({
+                "name": name, "address": addr, "host": host, "user": user or addr,
+                "port": int(port) if port.isdigit() else None, "ssl": ssl == "1",
+                # 枚举转字符串在不同系统上可能是 "imap" 也可能是原始码; 只认得出
+                # POP / Exchange 的排除, 其余 (IMAP / iCloud / Google) 都走 IMAP
+                "protocol": "pop" if "pop" in k else "exchange" if ("exchange" in k or "ews" in k) else "imap",
+            })
+        return result
 
     def list_messages(self, filt: ListFilter) -> list[Message]:
         # 9/27: 8/21 加的「读侧 emlx 索引优先」撤掉, 列表以 Mail 为准 (AppleScript)。

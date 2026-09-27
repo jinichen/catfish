@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import inspect
 import re
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -75,6 +76,7 @@ def _lint(script: str) -> tuple[list[str], set[str]]:
 
 
 _TEMPLATES = {
+    "account_settings": scripts._AS_ACCOUNT_SETTINGS,
     "list": scripts._AS_LIST_MESSAGES,
     "list_bulk": scripts._AS_LIST_MESSAGES_BULK,
     "get": scripts._AS_GET_MESSAGE,
@@ -96,6 +98,19 @@ def test_script_blocks_balance_and_handlers_resolve(name):
     assert not missing, f"{name}: 调用了没定义的 handler {missing}"
 
 
+@pytest.mark.parametrize("name", sorted(_TEMPLATES))
+def test_no_by_id_reference_written_as_message_id(name):
+    """9/28 真机: `set m to message id targetIdNum of mb` 编译报 -2741。
+
+    Mail 的词典里 `message id` 是属性 (RFC Message-ID), 编译器把它当属性读,
+    后面的变量就成了语法错 —— 整段读信 / 删信 / 标已读 / 存草稿 / 发送脚本
+    全部编译不过 (1.0.44–1.0.48)。按编号取信要写成 `«class mssg» id N`。
+    `message id of m` (取属性) 是对的, 不在此列。"""
+    for n, raw in enumerate(_TEMPLATES[name].splitlines(), 1):
+        code = _code(raw)
+        assert not re.search(r"\bmessage id (?!of\b)\w", code), f"{name} line {n}: {raw.strip()}"
+
+
 def test_lint_catches_what_it_should():
     """检查器自己得能抓到错, 否则上面全绿没意义。"""
     with pytest.raises(AssertionError):
@@ -112,7 +127,7 @@ def test_id_lookup_has_paths_that_do_not_depend_on_whose():
         assert "my findMessage(acc, targetIdStr)" in body, name
         assert "whose id is targetIdNum" in body  # 老路径仍在最前
     finder = scripts.AS_FIND_MESSAGE
-    assert "message id targetIdNum of mb" in finder
+    assert "«class mssg» id targetIdNum of mb" in finder
     assert "id of every message of mb" in finder
 
 
@@ -345,3 +360,47 @@ def test_list_no_longer_reads_the_emlx_index_while_mail_is_running(monkeypatch, 
     _, fake_run = _list_run(bulk_out=out)
     assert [m.id for m in _list(fake_run)] == ["apple_mail|Google|1"]
     assert not hasattr(AppleMailAdapter, "_list_messages_indexed")
+
+
+# ── 账号设置带入 (9/28: 配 IMAP 直连时不用再敲一遍服务器) ─────────
+
+
+def test_account_settings_are_read_without_passwords(capsys):
+    import json
+
+    from catfish_email.cli_action import _cmd_mail_accounts
+
+    rows = (
+        f"Chinatelecom{FS}me@example.cn{FS}imap{FS}imap.example.cn{FS}me@example.cn{FS}993{FS}1\x1e"
+        f"Google{FS}me@gmail.com{FS}imap{FS}imap.gmail.com{FS}{FS}993{FS}1\x1e"
+        f"Old{FS}old@example.cn{FS}pop{FS}pop.example.cn{FS}old{FS}995{FS}1\x1e"
+    )
+    with (
+        patch.object(am, "_is_mail_running", return_value=True),
+        patch.object(am, "_run_osascript", return_value=rows),
+    ):
+        assert _cmd_mail_accounts([AppleMailAdapter()], None) == 0
+    got = json.loads(capsys.readouterr().out)
+    assert [g["host"] for g in got] == ["imap.example.cn", "imap.gmail.com", "pop.example.cn"]
+    assert got[1]["user"] == "me@gmail.com", "用户名空着时用邮箱地址"
+    assert [g["protocol"] for g in got] == ["imap", "imap", "pop"]
+    assert got[0]["port"] == 993 and got[0]["client"] == "apple_mail"
+    assert not any("password" in g for g in got)
+
+
+def test_build_time_compile_check_covers_every_template():
+    """打 Mac 包时 scripts/check_applescript.py 用 osacompile 编译每一段 (9/28)。
+    这里 (Linux) 编译不了, 只核对它确实收齐了所有模板、占位符都有替换值 ——
+    漏一段, 那一段的语法错就又只能等员工机上暴露。"""
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "check_applescript.py"
+    spec = importlib.util.spec_from_file_location("check_applescript", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    rendered = module.templates()
+    names = {k.split(".", 1)[1] for k in rendered}
+    for expected in ("_AS_GET_MESSAGE", "_AS_LIST_MESSAGES_BULK", "_AS_CREATE_DRAFT",
+                     "_AS_SEND_MESSAGE", "_AS_DELETE_DRAFT", "_AS_ACCOUNT_SETTINGS"):
+        assert expected in names
+    assert all(not re.search(r"\{[A-Z_]+\}", v) for v in rendered.values())

@@ -18,8 +18,12 @@ osascript 每次跑一段独立脚本, handler 不能跨脚本共享, 以前只�
 移走 / 删掉, Companion 还显示着。这个由前端处理 (读到「邮件不存在」就把它
 从列表拿掉并刷新)。下面两条兜底仍然留着, 防的是 8/31 那种 whose 漏信:
 
-  1. `message id N of mb` —— Mail 自己给出的邮件引用就是这个形式
-     (报错信息里的 `message id 2292 of mailbox "Drafts" of account id ...`)
+  1. 按编号直接取 —— Mail 自己给出的邮件引用就是这个形式
+     (报错信息里的 `message id 2292 of mailbox "Drafts" of account id ...`)。
+     ⚠ 脚本里**不能**照着写成 `message id N`: Mail 的词典里 `message id` 是
+     一个属性 (RFC 的 Message-ID), 编译器把它当属性读, 后面的 N 就成了语法错
+     (9/28 真机 -2741, 1.0.44–1.0.48 整段读信脚本编译不过)。写成原始类码
+     `«class mssg» id N`, 编译结果跟 Mail 自己的引用一样, 但不经过词典里的词。
   2. 列表用什么方式枚举, 就用什么方式找: 取 `id of every message of mb`,
      在本地列表里找到位置 k, 再取 `message k of mb`, 取回来再核一次 id。
      列表正是这样拿到这个 id 的, 所以只要信还在列表那个文件夹里就一定找得到。
@@ -121,7 +125,7 @@ on findMessage(acc, targetIdStr)
         repeat with mb in boxes
             try
                 tell application "Mail"
-                    set m to message id targetIdNum of mb
+                    set m to «class mssg» id targetIdNum of mb
                     if (id of m) is targetIdNum then return m
                 end tell
             end try

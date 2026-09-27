@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import sys
 
 from .adapters.base import (
     DataNotFoundError,
@@ -485,3 +486,22 @@ def _cmd_archive(adapters: list[EmailAdapter], args) -> int:
         ensure_ascii=False,
     ))
     return 1 if errs and not ran else 0
+
+
+def _cmd_mail_accounts(adapters: list[EmailAdapter], args) -> int:
+    """本机邮件客户端里各账号的收信服务器设置 (9/28), 给 IMAP 直连表单带入。
+
+    只有能读到设置的来源 (目前是 macOS「邮件」App) 才出现; 永远不含密码。
+    """
+    found: list[dict] = []
+    for adapter in adapters:
+        read = getattr(adapter, "account_settings", None)
+        if read is None:
+            continue
+        try:
+            for item in read():
+                found.append({**item, "client": adapter.name})
+        except Exception as e:  # noqa: BLE001 — 带入是锦上添花, 读不到就不带
+            print(f"⚠ [{adapter.name}] 读账号设置失败: {e}", file=sys.stderr)
+    print(json.dumps(found, ensure_ascii=False))
+    return 0

@@ -67,6 +67,47 @@ tell application "Mail"
 end tell
 """
 
+# 9/28: 账号的收信服务器设置 —— 配 IMAP 直连时从「邮件」App 带入, 不用员工再敲一遍。
+# 每行: 名字 | 地址 | 账号类型 | 服务器 | 用户名 | 端口 | SSL(1/空)。
+# 密码拿不到 (Mail 的 password 属性只能写不能读), 这是对的 —— 我们本来也不该读。
+_AS_ACCOUNT_SETTINGS = """
+tell application "Mail"
+    set FS to (character id 31)
+    set RS to (character id 30)
+    set out to ""
+    repeat with acc in every account
+        set accName to (name of acc) as string
+        set addr to ""
+        try
+            set addrList to email addresses of acc
+            if (count of addrList) > 0 then set addr to (item 1 of addrList) as string
+        end try
+        set accKind to ""
+        try
+            set accKind to (account type of acc) as string
+        end try
+        set srv to ""
+        try
+            set srv to (server name of acc) as string
+        end try
+        set usr to ""
+        try
+            set usr to (user name of acc) as string
+        end try
+        set prt to ""
+        try
+            set prt to (port of acc) as string
+        end try
+        set useSsl to ""
+        try
+            if (uses ssl of acc) then set useSsl to "1"
+        end try
+        set out to out & accName & FS & addr & FS & accKind & FS & srv & FS & usr & FS & prt & FS & useSsl & RS
+    end repeat
+    return out
+end tell
+"""
+
 # list_messages: messageId | subject | sender | date | isRead | folder | rfcMsgId | rawHeaders
 # P3.5.58 (6/22 鸿波 catch): 加 rfcMsgId (RFC 822 Message-ID) + rawHeaders 让
 # Python 端 parse In-Reply-To / References, 供前端 isReplied() thread 算法用.

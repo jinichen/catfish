@@ -62,7 +62,7 @@ on draftById(mbx, targetIdStr)
     try
         set n to targetIdStr as integer
         tell application "Mail"
-            set m to message id n of mbx
+            set m to «class mssg» id n of mbx
             if (id of m) is n then return m
         end tell
     end try
