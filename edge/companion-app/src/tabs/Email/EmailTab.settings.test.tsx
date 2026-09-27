@@ -54,7 +54,7 @@ import EmailTab from "./EmailTab";
 describe("EmailTab 邮箱设置入口", () => {
   afterEach(() => { cleanup(); });
 
-  it("收件箱有信时也能打开 IMAP 设置和档案进度", async () => {
+  it("收件箱有信时也能打开邮箱设置; 靠客户端读信时不推荐 IMAP", async () => {
     render(<EmailTab />);
     await act(async () => {});
     expect(screen.getByText("一封信")).toBeTruthy();
@@ -64,13 +64,12 @@ describe("EmailTab 邮箱设置入口", () => {
     expect(screen.getByText("档案进度")).toBeTruthy();
     // 9/28: 先说正在读哪些邮箱 —— Mac 上用「邮件」App 的人不该只看到一张 IMAP 卡片
     expect(screen.getByText(/Google \(me@gmail.com\)、Chinatelecom \(me@example.cn\)/)).toBeTruthy();
-    expect(screen.getByText(/只对下面「邮箱直连 \(IMAP\)」的邮箱生效/)).toBeTruthy();
-    // 已经靠客户端读信、没配 IMAP: IMAP 卡片收成一行, 点了才展开
+    // 靠客户端读信、没配 IMAP: 不推荐 IMAP, 也不提保留时间 (鸿波: "是不是很奇怪?")
     expect(screen.queryByText("IMAP 卡片")).toBeNull();
-    fireEvent.click(screen.getByText(/开启邮箱直连 \(IMAP\)/));
-    expect(screen.getByText("IMAP 卡片")).toBeTruthy();
+    expect(screen.queryByText(/IMAP/)).toBeNull();
+    expect(screen.queryByText(/保留多久/)).toBeNull();
 
     fireEvent.click(screen.getByText("收起设置"));
-    expect(screen.queryByText("IMAP 卡片")).toBeNull();
+    expect(screen.queryByText("正在读的邮箱")).toBeNull();
   });
 });

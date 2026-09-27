@@ -9,8 +9,6 @@
  * 再说保留时间只管哪一类 (IMAP 直连; 客户端里的账号由客户端自己管), 最后才是
  * IMAP 卡片和档案进度。
  */
-import { useState } from "react";
-
 import type { EmailAccountItem } from "../../../lib/tauri";
 import ArchivePanel from "./ArchivePanel";
 import ImapSetup from "./ImapSetup";
@@ -42,10 +40,12 @@ export default function MailSettingsPanel({
   }
   const hasClientAccounts = accounts.some((a) => a.client && a.client !== "imap");
   const imapConfigured = accounts.some((a) => a.client === "imap");
-  // 鸿波 (9/28): "是不是原生和 IMAP 会很混乱?" —— 已经靠邮件客户端读着信、又没配
-  // IMAP 的人, 用不着一上来就看一张 IMAP 配置卡片。收成一行, 要用再展开。
-  const [showImap, setShowImap] = useState(false);
-  const imapVisible = imapConfigured || !hasClientAccounts || showImap;
+  // 鸿波 (9/28) 两次: "用原生客户端为什么还提示 IMAP?" / 收成一行之后 "为什么还要这个
+  // 提示, 是不是很奇怪?"。说得对: 靠邮件客户端读信的人, 设置里不该出现 IMAP 的推荐。
+  // IMAP 只在两种情况下出现: 已经配了 (要能看、能改保留时间), 或者根本没有客户端
+  // 账号 (Windows 上 IMAP 就是唯一的路)。客户端读不到信时, 收件箱为空的引导卡片
+  // (EmailSourceSetup) 里照样有 IMAP 入口, 不会无路可走。
+  const imapVisible = imapConfigured || !hasClientAccounts;
 
   return (
     <>
@@ -73,26 +73,12 @@ export default function MailSettingsPanel({
         )}
         {hasClientAccounts && (
           <div style={{ marginTop: 6, color: "var(--catfish-muted)", fontSize: 11 }}>
-            邮件客户端里的账号是自动读到的, 不用在这里再配; 增删账号在客户端里做。
-            「服务器上保留多久」只对下面「邮箱直连 (IMAP)」的邮箱生效 ——
-            客户端里的账号, 服务器上的邮件由客户端和邮箱服务商自己管。
+            从邮件客户端自动读到, 增删账号在客户端里做。
+            {imapConfigured && " 「服务器上保留多久」只对下面邮箱直连 (IMAP) 的邮箱生效。"}
           </div>
         )}
       </div>
-      {imapVisible ? (
-        <ImapSetup onConfigured={onChanged} />
-      ) : (
-        <button
-          type="button"
-          onClick={() => setShowImap(true)}
-          style={{
-            margin: "0 12px 8px", background: "none", border: "none", padding: 0, font: "inherit",
-            fontSize: 12, color: "var(--catfish-text-muted)", cursor: "pointer", textDecoration: "underline",
-          }}
-        >
-          要在本机留存邮件原文、设置服务器上保留多久? 开启邮箱直连 (IMAP)
-        </button>
-      )}
+      {imapVisible && <ImapSetup onConfigured={onChanged} />}
       <ArchivePanel />
     </>
   );
