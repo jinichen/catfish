@@ -63,6 +63,69 @@ fn resolve_optional_runtime_dir(resource_dir: &Path) -> Result<PathBuf> {
     resolve_runtime_dir(resource_dir)
 }
 
+/// 附加组件 (邮件 / 读聊天记录): 装着的不是这个安装包里的那一份就重装, 再建稳定入口。
+///
+/// 9/28 从 bootstrap_locked 的「已安装」分支里原样抽出来, 让开发构建也能走这一步
+/// (见 refresh_addons_for_dev)。唯一的顺序变化: 建邮件入口挪到了 jieba/playwright
+/// 补装之前 (两者互不依赖)。
+#[cfg(not(target_os = "windows"))]
+fn refresh_addons(resource_dir: &Path, paths: &BootstrapPaths) {
+    let addon_artifacts = resolve_optional_runtime_dir(resource_dir).map(RuntimeArtifacts::from_dir);
+    let email_tar = addon_artifacts.as_ref().ok().and_then(|a| a.email_tar.as_ref());
+    let reader_tar = addon_artifacts.as_ref().ok().and_then(|a| a.wechat_reader_tar.as_ref());
+    if !addon_current(paths, EMAIL_ADDON, email_tar) {
+        log::warn!("[catfish-email] 缺失或不是本安装包的版本 —— 只重装它, 不重装 hermes。");
+        match addon_artifacts
+            .as_ref()
+            .map_err(|e| anyhow::anyhow!("{e:#}"))
+            .and_then(|artifacts| install_catfish_email(artifacts, paths))
+        {
+            Ok(()) => log::info!("[catfish-email] 补装完成"),
+            // 补装失败不能挡住启动 —— 邮件不可用是局部功能缺失,
+            // 起不来是整个 Companion 没了。但必须出声: 这条静默了
+            // 一周多才被现场发现。
+            Err(e) => log::warn!("[catfish-email] 补装失败, 邮件 tab 仍不可用: {e:#}"),
+        }
+    }
+    if let Err(e) = link_catfish_email_bin(paths) {
+        // 原来是 `let _ =` —— 建软链失败 (权限 / ~/.local/bin 被占成普通
+        // 文件 / 磁盘满) 一个字都不会有, 员工只看到"CLI 没装"。
+        log::warn!("[catfish-email-link] 建软链失败: {e:#}");
+    }
+    if !addon_current(paths, WECHAT_READER_ADDON, reader_tar) {
+        log::warn!("[wechat-reader] 缺失或不是本安装包的版本 —— 只重装它。");
+        match addon_artifacts
+            .as_ref()
+            .map_err(|e| anyhow::anyhow!("{e:#}"))
+            .and_then(|artifacts| install_catfish_wechat_reader(artifacts, paths))
+        {
+            Ok(()) => log::info!("[wechat-reader] 补装完成"),
+            Err(e) => log::warn!("[wechat-reader] 补装失败，聊天导出分析不可用: {e:#}"),
+        }
+    }
+    if let Err(e) = link_catfish_wechat_reader_bin(paths) {
+        log::warn!("[wechat-reader] 稳定入口创建失败: {e:#}");
+    }
+}
+
+/// 调试构建 (tauri dev) 不跑 bootstrap (lib.rs:「调试构建跳过 packaged Hermes
+/// bootstrap」), 附加组件因此永远不更新 —— 9/28 实况: 界面已是 1.0.52, 邮件组件
+/// 还是 9/27 那份, 读信一直报早就修掉的语法错。开发构建启动时只补这一步 (不碰
+/// Hermes 本身), 安装包用源码树里的那份 (resolve_optional_runtime_dir 的 debug 分支),
+/// 它在 tauri dev 前刚被 refresh-email-resource.mjs 重建过。
+#[cfg(all(not(target_os = "windows"), debug_assertions))]
+pub fn refresh_addons_for_dev() {
+    let Ok(home) = crate::util::paths::home_env() else {
+        return;
+    };
+    let paths = BootstrapPaths::new(PathBuf::from(home));
+    if !hermes_venv_python(&paths.install_dir).exists() {
+        log::info!("[dev] 本机还没装 Hermes, 附加组件不补");
+        return;
+    }
+    refresh_addons(Path::new(env!("CARGO_MANIFEST_DIR")), &paths);
+}
+
 /// 严格安装判断。`pyproject.toml` 单独存在不再代表安装成功。
 pub fn hermes_agent_installed() -> bool {
     let Ok(home) = crate::util::paths::home_env() else {
@@ -173,23 +236,7 @@ fn bootstrap_locked(
         // 这里只补那一个, 不动 hermes。9/23 起判据从「文件在不在」改成「装的是不是
         // 这个安装包里的那一份」(安装指纹, 跟 Windows 同一套): 文件在但版本旧, 一样
         // 要重装 —— 否则升级 Companion 带来的新 wheel 永远到不了老机器。
-        let addon_artifacts = resolve_optional_runtime_dir(resource_dir).map(RuntimeArtifacts::from_dir);
-        let email_tar = addon_artifacts.as_ref().ok().and_then(|a| a.email_tar.as_ref());
-        let reader_tar = addon_artifacts.as_ref().ok().and_then(|a| a.wechat_reader_tar.as_ref());
-        if !addon_current(paths, EMAIL_ADDON, email_tar) {
-            log::warn!("[catfish-email] 缺失或不是本安装包的版本 —— 只重装它, 不重装 hermes。");
-            match addon_artifacts
-                .as_ref()
-                .map_err(|e| anyhow::anyhow!("{e:#}"))
-                .and_then(|artifacts| install_catfish_email(artifacts, paths))
-            {
-                Ok(()) => log::info!("[catfish-email] 补装完成"),
-                // 补装失败不能挡住启动 —— 邮件不可用是局部功能缺失,
-                // 起不来是整个 Companion 没了。但必须出声: 这条静默了
-                // 一周多才被现场发现。
-                Err(e) => log::warn!("[catfish-email] 补装失败, 邮件 tab 仍不可用: {e:#}"),
-            }
-        }
+        refresh_addons(resource_dir, paths);
         // 同上: hermes 健康 ≠ jieba/playwright 装了。判据用 import 而不是
         // 看目录 —— site-packages 里有目录但 import 不了的情况见过 (装了一半)。
         let deps_ok = crate::services::process::background_command(hermes_venv_python(&paths.install_dir))
@@ -209,25 +256,6 @@ fn bootstrap_locked(
                 Ok(()) => log::info!("[hermes-deps] 补装完成"),
                 Err(e) => log::warn!("[hermes-deps] 补装失败, 浏览器工具和分词仍不可用: {e:#}"),
             }
-        }
-        if let Err(e) = link_catfish_email_bin(paths) {
-            // 原来是 `let _ =` —— 建软链失败 (权限 / ~/.local/bin 被占成普通
-            // 文件 / 磁盘满) 一个字都不会有, 员工只看到"CLI 没装"。
-            log::warn!("[catfish-email-link] 建软链失败: {e:#}");
-        }
-        if !addon_current(paths, WECHAT_READER_ADDON, reader_tar) {
-            log::warn!("[wechat-reader] 缺失或不是本安装包的版本 —— 只重装它。");
-            match addon_artifacts
-                .as_ref()
-                .map_err(|e| anyhow::anyhow!("{e:#}"))
-                .and_then(|artifacts| install_catfish_wechat_reader(artifacts, paths))
-            {
-                Ok(()) => log::info!("[wechat-reader] 补装完成"),
-                Err(e) => log::warn!("[wechat-reader] 补装失败，聊天导出分析不可用: {e:#}"),
-            }
-        }
-        if let Err(e) = link_catfish_wechat_reader_bin(paths) {
-            log::warn!("[wechat-reader] 稳定入口创建失败: {e:#}");
         }
         report(
             reporter,

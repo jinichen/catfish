@@ -286,7 +286,13 @@ pub fn run() {
                 all(any(target_os = "macos", target_os = "linux"), debug_assertions),
                 all(target_os = "windows", debug_assertions)
             ))]
-            log::info!("调试构建跳过 packaged Hermes bootstrap，使用本机已安装的 Hermes");
+            {
+                log::info!("调试构建跳过 packaged Hermes bootstrap，使用本机已安装的 Hermes");
+                // 9/28: 跳过 bootstrap 也就跳过了附加组件的更新 —— tauri dev 下邮件组件
+                // 一直是上次正式安装的那份, 源码怎么改都装不上。只补这一步, 后台做。
+                #[cfg(not(target_os = "windows"))]
+                std::thread::spawn(commands::hermes_install::refresh_addons_for_dev);
+            }
 
             if qa_mode {
                 log::info!(
