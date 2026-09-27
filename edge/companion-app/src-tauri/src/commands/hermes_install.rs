@@ -46,6 +46,20 @@ use super::hermes_install_steps::{
 
 #[cfg(not(target_os = "windows"))]
 fn resolve_optional_runtime_dir(resource_dir: &Path) -> Result<PathBuf> {
+    // 9/28: `tauri dev` 的 resource_dir 里没有 mac 运行时 (那些只在
+    // tauri.<arch>.conf.json 打包时才带上), 附加组件 (邮件 / 读聊天记录) 在开发构建
+    // 下永远拿不到安装包 —— addon_current 只能退回"文件在就算", 源码改了, 装着的
+    // 还是上次正式安装的那一份 (9/28 实况: 界面 1.0.49, 邮件组件 9/27, 读信照样报
+    // 修过的那个语法错)。开发构建直接用源码树里的资源目录, 它在 tauri dev 之前刚被
+    // scripts/refresh-email-resource.mjs 重建过; 包一变, 指纹就变, 就会重装。
+    #[cfg(debug_assertions)]
+    {
+        let arch = if cfg!(target_arch = "aarch64") { "mac-aarch64" } else { "mac-x64" };
+        let source_tree = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources").join(arch);
+        if source_tree.join("catfish-email-dist.tar.gz").is_file() && source_tree.join("uv").is_file() {
+            return Ok(source_tree);
+        }
+    }
     resolve_runtime_dir(resource_dir)
 }
 

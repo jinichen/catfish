@@ -587,6 +587,9 @@ pub(crate) fn install_catfish_email(artifacts: &RuntimeArtifacts, paths: &Bootst
             .arg("--python")
             .arg(&venv_py)
             .arg("--no-deps")
+            // 9/28: 版本号一直是 0.1.0, 内容变了版本不变 —— 显式要求重装, 不让 uv
+            // 以"同名同版本已装"为由跳过 (走到这里本来就是指纹对不上, 必须换)
+            .arg("--reinstall")
             .arg(&wheel);
         command_status(pip, "uv pip install catfish-email")?;
 
