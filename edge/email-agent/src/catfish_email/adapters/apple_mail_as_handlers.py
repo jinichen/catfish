@@ -7,13 +7,16 @@ osascript 每次跑一段独立脚本, handler 不能跨脚本共享, 以前只�
 # 这次改了什么, 依据是什么
 
 **按 id 找信不再只信一种办法** (findMessage)。原来只有一条路: 在账号的每个邮箱里
-`first message of mb whose id is N`。9/27 macOS 上 Google 账号收件箱第一封点开
-报「Mail 里找不到这条消息」, 同一时刻 Chinatelecom 账号的信照常能读。
-这台机器上 Mail 的 `whose` 过滤有据可查地不可靠 —— 小鲶 8/31 实测:
-草稿箱里明明有两封主题以 "tst" 开头的信, `whose subject starts with "tst"`
+`first message of mb whose id is N`。这台机器上 whose 过滤漏过信 —— 小鲶 8/31
+实测: 草稿箱里明明有两封主题以 "tst" 开头的信, `whose subject starts with "tst"`
 仍然报 -1728; `[Gmail]/草稿` 里有 "Re: 公共日常费用滚动预计",
 `whose subject = "Re: 公共日常费用滚动预计"` 也报 -1728。
-所以 whose 找不到时再走两条不经过 whose 的路:
+
+更正 (9/27 诊断之后): 当初把 Google 收件箱那封点开报「找不到」归到 whose 头上,
+诊断不支持 —— 同一套老代码读 Google 的 2753 是好的 (whose 在「重要」里就命中了)。
+那封信诊断时已不在收件箱 (收件箱只剩 3 封), 更可能是列表过时: 信已在别处
+移走 / 删掉, Companion 还显示着。这个由前端处理 (读到「邮件不存在」就把它
+从列表拿掉并刷新)。下面两条兜底仍然留着, 防的是 8/31 那种 whose 漏信:
 
   1. `message id N of mb` —— Mail 自己给出的邮件引用就是这个形式
      (报错信息里的 `message id 2292 of mailbox "Drafts" of account id ...`)
@@ -29,8 +32,10 @@ osascript 每次跑一段独立脚本, handler 不能跨脚本共享, 以前只�
 
 **日期取不到不再让整个文件夹失败** (msgDate)。列表原来对每封信都直接取
 `date received`, 任何一封取不到, 整个账号这个文件夹就报错 —— 而 CLI 在别的
-来源成功时只把错误写进 stderr, Companion 看到的就是「草稿箱是空的」。
-草稿从没被"收到"过, 先取 date received, 取不到退到 date sent, 都没有就留空。
+来源成功时只把错误写进 stderr, 界面上看不出来。先取 date received, 取不到退到
+date sent, 都没有就留空。
+更正 (9/27 诊断之后): 当初以为「草稿箱为空」是这个原因, 诊断显示草稿箱确实是
+空的 (统一草稿箱 0 封)。草稿是否真的没有 date received 没有验证过, 这条是防御。
 """
 from __future__ import annotations
 

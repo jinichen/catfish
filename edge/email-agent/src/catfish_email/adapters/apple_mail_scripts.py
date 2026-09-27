@@ -109,8 +109,7 @@ tell application "Mail"
     set out to ""
     set i to 0
     -- newest last in Mail's order: walk backwards to get the newest limitN.
-    -- One unreadable message must not fail the whole folder (9/27: drafts
-    -- have no date received; the old code lost the entire Drafts list).
+    -- One unreadable message (e.g. no date received) must not fail the whole folder.
     repeat with idx from total to 1 by -1
         if i >= limitN then exit repeat
         try
@@ -147,6 +146,87 @@ tell application "Mail"
     end repeat
     return out
 end tell
+""" + AS_RESOLVE_INBOX + AS_DATES
+
+# 9/27: 列表成批取 —— 每个属性对整段邮件发一次 Apple Event (`subject of messages
+# lo thru total of mb`), 取代逐封 8 次。500 封从约 4000 次 IPC 降到 10 次。
+# 输出格式跟 _AS_LIST_MESSAGES 完全一样 (8 字段), Python 解析不分两套。
+# 取的过程中邮件增删会让各列表错位: 首尾各取一次 id 核对, 对不上就报错,
+# Python 那边回退逐封取的老脚本。取不到的可选字段 (Message-ID / 原始头)
+# 留空, 不拖垮整段。
+_AS_LIST_MESSAGES_BULK = """
+tell application "Mail"
+    set FS to (character id 31)
+    set RS to (character id 30)
+    set accName to "{ACCOUNT}"
+    set folderName to "{FOLDER}"
+    set limitN to {LIMIT}
+    set acc to first account whose name of it is accName
+    set mb to my resolveInbox(acc, folderName)
+    set total to count of messages of mb
+    if total is 0 then return ""
+    set lo to total - limitN + 1
+    if lo < 1 then set lo to 1
+    set idList to my asList(id of messages lo thru total of mb)
+    set readList to my asList(read status of messages lo thru total of mb)
+    set subjList to my asList(subject of messages lo thru total of mb)
+    set sndrList to my asList(sender of messages lo thru total of mb)
+    set recvList to my asList(date received of messages lo thru total of mb)
+    set sentList to {}
+    try
+        set sentList to my asList(date sent of messages lo thru total of mb)
+    end try
+    set midList to {}
+    try
+        set midList to my asList(message id of messages lo thru total of mb)
+    end try
+    set hdrList to {}
+    try
+        set hdrList to my asList(all headers of messages lo thru total of mb)
+    end try
+    set idCheck to my asList(id of messages lo thru total of mb)
+end tell
+
+set n to count of idList
+if idCheck is not idList then error "LIST_CHANGED" number 8101
+repeat with lst in {readList, subjList, sndrList, recvList}
+    if (count of (contents of lst)) is not n then error "LIST_CHANGED" number 8101
+end repeat
+set recs to {}
+repeat with j from n to 1 by -1
+    set d to item j of recvList
+    if d is missing value and (count of sentList) is n then set d to item j of sentList
+    set dt to ""
+    if d is not missing value then
+        try
+            set dt to my isoDate(d)
+        end try
+    end if
+    set readSt to "1"
+    if (item j of readList) is false then set readSt to "0"
+    set end of recs to (my txt(item j of idList)) & FS & (my txt(item j of subjList)) & FS & (my txt(item j of sndrList)) & FS & dt & FS & readSt & FS & folderName & FS & (my txtAt(midList, j, n)) & FS & (my txtAt(hdrList, j, n)) & RS
+end repeat
+set AppleScript's text item delimiters to ""
+return recs as text
+
+on asList(x)
+    if class of x is list then return x
+    return {x}
+end asList
+
+on txt(x)
+    if x is missing value then return ""
+    try
+        return x as string
+    on error
+        return ""
+    end try
+end txt
+
+on txtAt(lst, j, n)
+    if (count of lst) is not n then return ""
+    return my txt(item j of lst)
+end txtAt
 """ + AS_RESOLVE_INBOX + AS_DATES
 
 # read_message: AS 写 body (text) + source (完整 RFC822) 到 2 个 temp 文件,

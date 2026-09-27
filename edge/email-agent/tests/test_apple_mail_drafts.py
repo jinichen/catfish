@@ -76,6 +76,7 @@ def _lint(script: str) -> tuple[list[str], set[str]]:
 
 _TEMPLATES = {
     "list": scripts._AS_LIST_MESSAGES,
+    "list_bulk": scripts._AS_LIST_MESSAGES_BULK,
     "get": scripts._AS_GET_MESSAGE,
     "delete": scripts._AS_DELETE_MESSAGE,
     "mark_read": scripts._AS_MARK_READ,
@@ -116,7 +117,7 @@ def test_id_lookup_has_paths_that_do_not_depend_on_whose():
 
 
 def test_list_survives_messages_without_date_received():
-    """草稿没有 date received: 一封取不到不能让整个文件夹失败 (9/27 草稿箱显示为空)。"""
+    """一封取不到 date received 不能让整个文件夹失败 (防御; 9/27 草稿箱实际是空的)。"""
     body = scripts._AS_LIST_MESSAGES
     assert "isoDate(date received" not in body
     assert "my msgDate(m)" in body
@@ -280,3 +281,67 @@ def test_send_gives_up_after_three_not_found():
         with pytest.raises(DataNotFoundError):
             AppleMailAdapter().send_message("apple_mail|Chinatelecom|2801")
     assert len(attempts) == 3
+
+
+# ── 列表 (9/27: 撤掉 emlx 索引, AppleScript 成批取) ──────────
+
+
+def _list_run(bulk_out=None, bulk_error=None):
+    calls: list[str] = []
+
+    def fake_run(script, **_):
+        calls.append(script)
+        if "repeat with acc in every account" in script:
+            return f"Google{FS}me@gmail.com{FS}1\x1e"
+        if "messages lo thru total of mb" in script:
+            if bulk_error:
+                raise bulk_error
+            return bulk_out
+        return f"7{FS}逐封{FS}a@b.c{FS}2026-09-27T10:00:00{FS}1{FS}Inbox{FS}{FS}\x1e"
+
+    return calls, fake_run
+
+
+def _list(fake_run, **filt):
+    from catfish_email.adapters.base import ListFilter
+
+    with (
+        patch.object(am, "_is_mail_running", return_value=True),
+        patch.object(am, "_run_osascript", side_effect=fake_run),
+    ):
+        return AppleMailAdapter().list_messages(ListFilter(account="me@gmail.com", **filt))
+
+
+def test_list_fetches_in_bulk_and_asks_mail_for_accounts_once():
+    out = f"2753{FS}Thanks AI{FS}Reddit{FS}2026-09-27T09:00:00{FS}0{FS}Inbox{FS}<m@x>{FS}{FS}\x1e"
+    calls, fake_run = _list_run(bulk_out=out)
+    msgs = _list(fake_run)
+    assert [m.id for m in msgs] == ["apple_mail|Google|2753"]
+    assert not msgs[0].is_read
+    assert sum("repeat with acc in every account" in c for c in calls) == 1
+    assert not any("repeat with idx from total to 1" in c for c in calls)
+
+
+def test_list_falls_back_to_one_by_one_when_bulk_fails():
+    calls, fake_run = _list_run(bulk_error=EmailAdapterError("LIST_CHANGED (8101)"))
+    msgs = _list(fake_run)
+    assert [m.subject for m in msgs] == ["逐封"]
+    assert any("repeat with idx from total to 1" in c for c in calls)
+
+
+def test_unread_only_uses_the_one_by_one_script():
+    calls, fake_run = _list_run(bulk_out="")
+    _list(fake_run, unread_only=True)
+    assert not any("messages lo thru total of mb" in c for c in calls)
+
+
+def test_list_no_longer_reads_the_emlx_index_while_mail_is_running(monkeypatch, tmp_path):
+    """8/21 的索引读侧在真机上从没走通 (V10 账号目录是 UUID), 撤掉后不许再碰磁盘。"""
+    from catfish_email.adapters import apple_mail_emlx
+
+    monkeypatch.setattr(apple_mail_emlx, "_detect_mail_data_dir", lambda: tmp_path)
+    monkeypatch.setattr(am, "_detect_mail_data_dir", lambda: tmp_path)
+    out = f"1{FS}s{FS}f{FS}{FS}1{FS}Inbox{FS}{FS}\x1e"
+    _, fake_run = _list_run(bulk_out=out)
+    assert [m.id for m in _list(fake_run)] == ["apple_mail|Google|1"]
+    assert not hasattr(AppleMailAdapter, "_list_messages_indexed")

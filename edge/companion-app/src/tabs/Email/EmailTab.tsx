@@ -21,7 +21,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useEmailScanners } from "../../hooks/useEmailScanners";
 import {
   emailListFetch,
-  emailReadMessage,
   emailAccountsFetch,
   emailCheckNew,                  // P3.5.204.c (7/9 鸿波): 触发客户端 IMAP/POP fetch
   emailMailDirStatus,             // 8/8: 缺完全磁盘访问权限时提示"少账号"
@@ -43,6 +42,7 @@ import { needsEmailSourceSetup, parseEmailSourceDiscovery } from "../../lib/emai
 import ActionFilterChips from "./components/ActionFilterChips";
 import FolderTabs, { EMPTY_FOLDER_TEXT, type MailFolder } from "./components/FolderTabs";
 import { useDraftFocus } from "./useDraftFocus";
+import { MAIL_GONE_TEXT, useEmailDetail } from "./useEmailDetail";
 import { useEmailStore } from "../../store/email";
 import { useUIStore } from "../../store/ui";
 // P3.5.158 Phase 4 (7/2 鸿波): 新建邮件入口
@@ -118,9 +118,6 @@ export default function EmailTab() {
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [folder, setFolder] = useState<MailFolder>("Inbox"); // 9/26 见 FolderTabs
-  const [detail, setDetail] = useState<FullMessage | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState<string | null>(null);
   const [sourceDiscovery, setSourceDiscovery] = useState<EmailSourceDiscovery | null>(null);
   const [sourceDiscoveryError, setSourceDiscoveryError] = useState<string | null>(null);
   const [sourceBusy, setSourceBusy] = useState(false);
@@ -350,38 +347,18 @@ export default function EmailTab() {
     return m;
   }, [items, combined]);
 
-  // 选邮件 → 拉全文
-  useEffect(() => {
-    if (!selectedId) {
-      setDetail(null);
-      return;
-    }
-    setDetailLoading(true);
-    setDetailError(null);
-    setDetail(null);
-    emailReadMessage(selectedId)
-      .then((json) => {
-        const parsed = JSON.parse(json) as FullMessage;
-        setDetail(parsed);
-        // 5/18 BL-EMAIL-MARK-READ: CLI 已经在 Mail.app/Foxmail 那侧标已读了,
-        // 这里乐观更新本地 items 让列表立即反映 (无需重新拉 list_fetch).
-        // parsed.is_read 是 CLI 返回的最新状态; 若 CLI 标失败它会保持 false,
-        // 跟 stderr 警告对得上, UI 也不会乱标.
-        if (parsed.is_read) {
-          setItems((prev) =>
-            prev.map((it) => (it.id === selectedId ? { ...it, is_read: true } : it)),
-          );
-          // BL-COMPANION-EMAIL-DIGEST-STEP5 sub-task 2 (5/20): 同步告诉 store
-          // 这封被读了 → 主动闲聊 (BL-E13) 不再 push 这封, 即使 24h
-          // dedup window 还在. 写 localStorage 持久化跨 Companion 重启.
-          markEmailRead(selectedId);
-        }
-      })
-      .catch((e) => {
-        setDetailError(e instanceof Error ? e.message : String(e));
-      })
-      .finally(() => setDetailLoading(false));
-  }, [selectedId]);
+  // 选邮件 → 拉全文; 读到「邮件不存在」就从列表拿掉并刷新 (见 useEmailDetail)
+  const { detail, detailLoading, detailError } = useEmailDetail({
+    selectedId,
+    onRead: (id) => {
+      setItems((prev) => prev.map((it) => (it.id === id ? { ...it, is_read: true } : it)));
+      markEmailRead(id); // 主动闲聊不再 push 这封 (5/20 BL-COMPANION-EMAIL-DIGEST-STEP5)
+    },
+    onGone: (id) => {
+      setItems((prev) => prev.filter((it) => it.id !== id));
+      void loadList({ quiet: true });
+    },
+  });
 
   const handleAskCatfish = (m: FullMessage) => {
     // 8/21: 交接带句柄 (email_id) + 工具指引, starter 构造抽到
@@ -739,7 +716,13 @@ export default function EmailTab() {
           </div>
         )}
 
-        {selectedId && detailError && (
+        {selectedId && detailError === MAIL_GONE_TEXT && (
+          <div style={{ flex: 1, padding: "var(--space-4)", color: "var(--catfish-text-muted)", fontSize: 13, lineHeight: 1.6 }}>
+            {MAIL_GONE_TEXT}
+          </div>
+        )}
+
+        {selectedId && detailError && detailError !== MAIL_GONE_TEXT && (
           <div
             style={{
               flex: 1,

@@ -93,6 +93,7 @@ from .apple_mail_scripts import (
     _AS_GET_MESSAGE,
     _AS_LIST_ACCOUNTS,
     _AS_LIST_MESSAGES,
+    _AS_LIST_MESSAGES_BULK,
     _AS_MARK_READ,
     _AS_PING,
     _AS_CHECK_NEW_MAIL,
@@ -150,12 +151,16 @@ class AppleMailAdapter(EmlxFallbackMixin, EmailAdapter):
         # 就弹 Automation 权限窗.
         self._use_emlx_fallback = False
         self._emlx_mail_dir: Path | None = None  # lazy: 第一次 fallback 时探测
+        # 9/27: 一次 CLI 调用里账号表只问 Mail 一次 (list 每个账号原来都再问一遍)
+        self._accounts_cache: list[Account] | None = None
 
     # ── 公共接口 ──
 
     def list_accounts(self) -> list[Account]:
         if self._use_emlx_fallback:
             return self._list_accounts_emlx()
+        if self._accounts_cache is not None:
+            return self._accounts_cache
         if not _is_mail_running():
             # AS 不行 → 试 EMLX
             if self._enable_emlx_fallback_if_available():
@@ -175,30 +180,22 @@ class AppleMailAdapter(EmlxFallbackMixin, EmailAdapter):
             raise DataNotFoundError(
                 "Mail.app 里没配过任何邮箱账号. 员工先在 Mail 里加邮箱.",
             )
-        return [
+        self._accounts_cache = [
             Account(name=r[0], address=r[1], is_default=(r[2] == "1"))
             for r in records
         ]
+        return self._accounts_cache
 
     def list_messages(self, filt: ListFilter) -> list[Message]:
-        # 8/21 治本: 读侧 emlx-first。磁盘上有 Mail 数据目录就走索引
-        # (readdir+stat 对账 + SQLite), 不再每次用 AppleScript 逐封 8 字段抽
-        # (500 封 × 4 账号 ≈ 1.6 万次 Apple Event, 切一次 tab 全量重来 ——
-        # 这就是「切回邮件页要等很久」的真因)。
-        #
-        # AS 保留给写侧 (发送/草稿/标已读) 和 emlx 目录不存在时的读兜底。
-        # DESIGN.md 里 AS-first 的理由全是写侧的, 读列表没有非 AS 不可的理由。
-        #
-        # 逃生口: CATFISH_EMAIL_NO_INDEX=1 → 完全回老路。索引本身出怪事
-        # (权限/损坏) 也自动回老路, 不让新路径把 list 弄挂。
-        if not os.environ.get("CATFISH_EMAIL_NO_INDEX"):
-            if self._emlx_dir_for_reading() is not None:
-                try:
-                    return self._list_messages_indexed(filt)
-                except Exception as e:  # noqa: BLE001
-                    logger.warning(
-                        "email_index 读侧失败, 回退 AppleScript: %s", e
-                    )
+        # 9/27: 8/21 加的「读侧 emlx 索引优先」撤掉, 列表以 Mail 为准 (AppleScript)。
+        # 那条路在真机上从没走通过: 它按目录名认账号, 目录名要是
+        # "IMAP-user@host" 那种老格式; macOS 14+ 的 ~/Library/Mail/V10 下账号
+        # 目录是 UUID (= Mail 里的 account id), 而调用方按邮箱地址传账号 ——
+        # 每次都「账号 'x@y' 不在」然后回退 (9/27 诊断输出, 索引库停在 9/15)。
+        # 就算认上了也不对: Gmail 的收件箱是标签, 信在磁盘上只存一份在「所有邮件」
+        # 里 (诊断: 同一封 2753 同时出现在 INBOX / 重要 / 所有邮件, 它的 mailbox
+        # 是「所有邮件」), 扫 INBOX.mbox 目录看不到。
+        # 慢的问题改在 AppleScript 这头治: 按范围成批取属性 (_AS_LIST_MESSAGES_BULK)。
         if self._use_emlx_fallback:
             return self._list_messages_emlx(filt)
         try:
@@ -210,14 +207,29 @@ class AppleMailAdapter(EmlxFallbackMixin, EmailAdapter):
 
     def _list_messages_as(self, filt: ListFilter) -> list[Message]:
         account_name = self._resolve_account_name(filt.account)
-        script = (
-            _AS_LIST_MESSAGES
-            .replace("{ACCOUNT}", _escape_as_string(account_name))
-            .replace("{FOLDER}", _escape_as_string(filt.folder))
-            .replace("{LIMIT}", str(max(1, min(500, filt.limit))))
-            .replace("{UNREAD_ONLY}", "true" if filt.unread_only else "false")
-        )
-        out = _run_osascript(script)
+
+        def render(template: str) -> str:
+            return (
+                template
+                .replace("{ACCOUNT}", _escape_as_string(account_name))
+                .replace("{FOLDER}", _escape_as_string(filt.folder))
+                .replace("{LIMIT}", str(max(1, min(500, filt.limit))))
+                .replace("{UNREAD_ONLY}", "true" if filt.unread_only else "false")
+            )
+
+        # 成批取 (每个属性一次 Apple Event) 优先; 它出任何问题 (Mail 版本不认
+        # 范围取值、取的过程中邮件变了) 就回到逐封取的老脚本, 结果格式一样。
+        # 只看未读时未读通常很少, 逐封取本来就快, 直接走老脚本。
+        out = None
+        if not filt.unread_only:
+            try:
+                out = _run_osascript(render(_AS_LIST_MESSAGES_BULK))
+            except (ClientNotRunningError, DataNotFoundError):
+                raise
+            except EmailAdapterError as e:
+                logger.info("成批取列表失败, 改逐封取: %s", e)
+        if out is None:
+            out = _run_osascript(render(_AS_LIST_MESSAGES))
         # P3.5.58: AS list 升 6→8 字段 (加 rfcMsgId + rawHeaders) 给 thread 检测.
         # 老 Mail.app 版本不暴露 `all headers` 时 rawHdrs 为空, _parse_thread_headers
         # 返 None, 算法 fallback 用 rfcMsgId-only (能算 reply chain 但不能算 References).
