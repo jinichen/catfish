@@ -397,15 +397,16 @@ class ImapAdapter(EmailAdapter):
         typ, data = conn.append(f'"{drafts}"', r"(\Draft \Seen)", None, raw)
         if typ != "OK":
             raise EmailAdapterError(f"存草稿失败: {typ}")
-        uidvalidity, uid = imap_drafts.locate_appended(self, data, drafts, msg_id, before)
+        uid = imap_drafts.locate_appended(self, data, drafts, msg_id, before)
         if uid is None:
             raise EmailAdapterError(
                 "草稿存进去了, 但找不回它的 UID —— 请去邮箱网页版确认"
             )
-        new_id = self._pack_id(drafts, uidvalidity, uid)
-        if replaces:
-            imap_drafts.drop_old_draft(self, replaces)
+        # UIDVALIDITY 用 _select 的值, 不用 APPENDUID 里的 —— 见 locate_appended
+        new_id = self._pack_id(drafts, self._select(self._connect(), drafts), uid)
         self.close()  # 这个连接看不到刚存的草稿 (见 locate_appended), 后续操作用新连接
+        if replaces:
+            imap_drafts.drop_old_draft(self, replaces)  # 在新连接上去掉旧版本
         return new_id
 
     def send_message(self, message_id: str) -> None:

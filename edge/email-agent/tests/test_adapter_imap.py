@@ -101,6 +101,7 @@ class FakeIMAP:
         self, folders=None, messages=None, uidvalidity=b"1", login_ok=True,
         capabilities=("IMAP4REV1", "ID", "XLIST"),
         appenduid=True, stale_session_after_append=True,
+        select_reports_uidvalidity=False,
     ):
         #: 9/27 真机探测 (imap.chinatelecom.cn) 实测的两条, 默认照真机来:
         #:  · CAPABILITY 里没有 UIDPLUS, 但 APPEND 的 OK 里照样带 [APPENDUID v uid]
@@ -108,6 +109,11 @@ class FakeIMAP:
         #:    NOOP、等 10 秒都没用, 只有新连接 (重新登录) 才看得到
         #: 之前夹具两条都不像真机 (同连接立刻可见、没有 APPENDUID), 于是存草稿后
         #: "找回 UID" 的三种办法在测试里全绿, 在真机上全挂。
+        #:  · SELECT/EXAMINE 的回应里**没有** [UIDVALIDITY n] (探测时 APPEND 后
+        #:    的 untagged 里只有 EXISTS/RECENT/FLAGS/UNSEEN/PERMANENTFLAGS), 而
+        #:    APPENDUID 里带的是真值 2。9/27 存草稿拿 APPENDUID 的 2 拼 id, 其余
+        #:    邮件的 id 都是 "0", 新草稿一打开就报「邮箱已重建 (2 → 0)」。
+        self.select_reports_uidvalidity = select_reports_uidvalidity
         self.appenduid = appenduid
         self.stale_session_after_append = stale_session_after_append
         self.hidden: set[tuple[str, bytes]] = set()
@@ -161,7 +167,7 @@ class FakeIMAP:
 
     def response(self, key):
         if key == "UIDVALIDITY":
-            return "OK", [self.uidvalidity]
+            return "OK", [self.uidvalidity if self.select_reports_uidvalidity else None]
         return "OK", [None]
 
     @staticmethod
@@ -312,18 +318,21 @@ def test_folders_are_listed_and_decoded(adapter):
 
 def test_uid_comes_from_the_fetch_prefix_not_the_body(adapter):
     """UID 在响应前缀里。取错的话整条 id 指向的就是别的邮件。"""
+    adapter._fake.select_reports_uidvalidity = True  # 这条测的是会报 UIDVALIDITY 的服务器
     msgs = adapter.list_messages(ListFilter(folder="Inbox", limit=10))
     ids = {m.id for m in msgs}
     assert ids == {"imap|INBOX|1|8418", "imap|INBOX|1|8417"}
 
 
 def test_id_carries_uidvalidity(adapter):
+    adapter._fake.select_reports_uidvalidity = True  # 这条测的是会报 UIDVALIDITY 的服务器
     msg = adapter.list_messages(ListFilter(folder="Inbox", limit=1))[0]
     assert msg.id.split("|")[2] == "1"
 
 
 def test_stale_uidvalidity_is_refused_not_silently_wrong(adapter):
     """服务器重建邮箱后旧 UID 指向完全不相干的邮件 —— 必须拒, 不能照拉。"""
+    adapter._fake.select_reports_uidvalidity = True  # 这条测的是会报 UIDVALIDITY 的服务器
     adapter._fake.uidvalidity = b"999"
     with pytest.raises(DataNotFoundError, match="UIDVALIDITY"):
         adapter.read_message("imap|INBOX|1|8418")

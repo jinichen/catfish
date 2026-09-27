@@ -75,6 +75,7 @@ def test_stale_uidvalidity_refuses_to_write(adapter):
 
     读错了顶多显示错, 写错了是标错/删错邮件。所以写之前必须校 UIDVALIDITY。
     """
+    adapter._fake.select_reports_uidvalidity = True  # 这条测的是会报 UIDVALIDITY 的服务器
     msg = first(adapter)
     adapter._fake.uidvalidity = b"2"
     with pytest.raises(DataNotFoundError):

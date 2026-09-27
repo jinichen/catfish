@@ -263,7 +263,7 @@ def test_uidvalidity_reset_rebuilds_instead_of_mixing(isolated_index, monkeypatc
 
     解法是按 RFC822 Message-ID 去重: 它是这封信跨 UIDVALIDITY 唯一稳定的身份。
     """
-    fake = CountingIMAP()
+    fake = CountingIMAP(select_reports_uidvalidity=True)
     adapter = make(fake, monkeypatch)
     adapter.sync_folder("INBOX", "Inbox")
 

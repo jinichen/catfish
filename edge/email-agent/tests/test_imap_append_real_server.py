@@ -14,8 +14,18 @@ from tests.test_imap_writes import adapter  # noqa: F401  (pytest fixture)
 
 def test_uses_appenduid_from_the_append_response(adapter):  # noqa: F811
     draft_id = adapter.create_draft(to=["a@b.cn"], subject="单价-上海擎标", body="正文")
-    assert draft_id.endswith("|1|9000")
+    assert draft_id.endswith("|9000"), "UID 取自 APPENDUID"
     assert adapter.read_message(draft_id).subject == "单价-上海擎标"
+
+
+def test_new_draft_id_matches_the_ids_in_the_list(adapter):  # noqa: F811
+    """9/27 真机: SELECT 不报 UIDVALIDITY (_select 给 "0"), APPENDUID 报 2。拿 2 拼的
+    新草稿 id 跟列表里其他邮件 (都是 |0|) 不是一个体系, 一打开就「邮箱已重建 2 → 0」。"""
+    from catfish_email.adapters.base import ListFilter
+
+    draft_id = adapter.create_draft(to=["a@b.cn"], subject="s", body="b")
+    listed = [m.id for m in adapter.list_messages(ListFilter(folder="Drafts", limit=10))]
+    assert draft_id in listed
 
 
 def test_without_appenduid_it_looks_again_on_a_fresh_connection(adapter, monkeypatch):  # noqa: F811
