@@ -60,10 +60,11 @@ python3 "$EMAIL_SRC/scripts/check_applescript.py" || {
 }
 EMAIL_STAGE="/tmp/catfish-email-dist-$ARCH"
 rm -rf "$EMAIL_STAGE" && mkdir -p "$EMAIL_STAGE"
-# --no-deps: 它本来就零依赖, 显式写死免得哪天有人加了依赖却没人注意到
-python3 -m pip wheel --no-deps --wheel-dir "$EMAIL_STAGE" "$EMAIL_SRC" >/dev/null || {
-    echo "❌ 构建 catfish-email wheel 失败"
-    echo "   本机需要 python3 + pip (只在构建期用, 员工机不需要)"
+# 9/28: 不再用 pip wheel —— 它要联网下载 setuptools 当构建后端, 代理没开 / 内网 /
+# 离线时就打不出来 (鸿波 Mac 上实际发生)。零依赖纯 .py 的包, 用标准库直接打
+# (email-agent/scripts/build_wheel.py, 跟 wechat-reader 同一个办法)。
+python3 "$EMAIL_SRC/scripts/build_wheel.py" --output-dir "$EMAIL_STAGE" >/dev/null || {
+    echo "❌ 构建 catfish-email wheel 失败 (只需要 python3, 不联网)"
     exit 1
 }
 WHEEL_COUNT=$(find "$EMAIL_STAGE" -maxdepth 1 -name '*.whl' | wc -l | tr -d ' ')
