@@ -459,8 +459,9 @@ def test_factory_outlook_mac_alias_to_apple_mail():
 # ── bcc 字段透传 ────────────────────────────────────────
 
 
-def test_create_draft_bcc_passes_through_to_as():
+def test_create_draft_bcc_passes_through_to_as(monkeypatch, tmp_path):
     """bcc=[...] 应该出现在 AS 模板 BCC 参数里."""
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
     captured: list[str] = []
 
     def fake_run(script, **_):
@@ -468,9 +469,9 @@ def test_create_draft_bcc_passes_through_to_as():
         # list_accounts (走 _AS_LIST_ACCOUNTS) 返 1 个 default
         if "repeat with acc in every account" in script:
             return f"工作{FS}work@x.com{FS}1{RS}"
-        # create_draft 返新 id
+        # create_draft 返 账号 / 草稿箱里的编号 / 撰写窗口编号 (9/27)
         if "make new outgoing message" in script:
-            return "12345"
+            return f"工作{FS}12345{FS}3"
         return ""
 
     with (
@@ -491,15 +492,16 @@ def test_create_draft_bcc_passes_through_to_as():
     assert 'set ccList to "b@x.com"' in draft_script
 
 
-def test_create_draft_no_bcc_passes_empty_string():
+def test_create_draft_no_bcc_passes_empty_string(monkeypatch, tmp_path):
     """没传 bcc → AS 收到空字符串, splitText 返空 list, repeat 跳过."""
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
     captured: list[str] = []
 
     def fake_run(script, **_):
         captured.append(script)
         if "repeat with acc in every account" in script:
             return f"工作{FS}work@x.com{FS}1{RS}"
-        return "999"
+        return f"工作{FS}999{FS}0"
 
     with (
         patch.object(am, "_is_mail_running", return_value=True),
@@ -612,6 +614,9 @@ def test_no_raw_control_chars_in_as_templates():
         ("_AS_GET_MESSAGE", am._AS_GET_MESSAGE),
         ("_AS_SEARCH", am._AS_SEARCH),
         ("_AS_CREATE_DRAFT", am._AS_CREATE_DRAFT),
+        ("_AS_SEND_MESSAGE", am._AS_SEND_MESSAGE),
+        ("_AS_DELETE_MESSAGE", am._AS_DELETE_MESSAGE),
+        ("_AS_MARK_READ", am._AS_MARK_READ),
     ]:
         for ch_code in range(0x20):
             if ch_code in (0x09, 0x0A, 0x0D):
@@ -691,6 +696,7 @@ def test_split_files_stay_under_the_line():
     base = Path(am.__file__).parent
     for fname in ("apple_mail.py", "apple_mail_osascript.py",
                   "apple_mail_emlx_path.py", "apple_mail_scripts.py",
-                  "apple_mail_emlx.py"):
+                  "apple_mail_emlx.py", "apple_mail_drafts.py",
+                  "apple_mail_as_handlers.py"):
         n = len((base / fname).read_text(encoding="utf-8").splitlines())
         assert n < 800, f"{fname} {n} 行, 越过 800 红线"

@@ -41,7 +41,6 @@ import email.parser
 import email.policy
 import logging
 import os
-import time  # P3.5.57 Phase 3 (6/22 鸿波 catch send 失败): create→send race window 缓解
 import plistlib
 import re
 import subprocess
@@ -90,7 +89,6 @@ from .apple_mail_osascript import (  # noqa: F401
 
 # 5/20 BL-AM-SPLIT: 8 个 _AS_* osascript templates 抽到 apple_mail_scripts.py
 from .apple_mail_scripts import (
-    _AS_CREATE_DRAFT,
     _AS_DELETE_MESSAGE,
     _AS_GET_MESSAGE,
     _AS_LIST_ACCOUNTS,
@@ -99,8 +97,10 @@ from .apple_mail_scripts import (
     _AS_PING,
     _AS_CHECK_NEW_MAIL,
     _AS_SEARCH,
-    _AS_SEND_MESSAGE,
 )
+# 9/27: 起草 / 发送 (连同 AS 模板) 挪到 apple_mail_drafts.py
+from . import apple_mail_drafts
+from .apple_mail_drafts import _AS_CREATE_DRAFT, _AS_SEND_MESSAGE  # noqa: F401
 
 
 
@@ -429,64 +429,8 @@ class AppleMailAdapter(EmlxFallbackMixin, EmailAdapter):
 
 
     def send_message(self, message_id: str) -> None:
-        """5/18 BL-EMAIL-COMPOSE-SEND: AS `send <msg>` 真发草稿.
-
-        红线: caller (Companion compose panel) **必须人工 confirm 才调**,
-        adapter 不做"是不是人发的" 校验. EMLX fallback 模式拒.
-
-        P3.5.57 Phase 3 (6/22 鸿波 catch "草稿不存在" send 失败 race):
-        Mail.app 创草稿后 200-500ms 内可能 IMAP sync / Drafts 重新索引 / WAL
-        checkpoint 延迟, 让 rowid `whose id is` 暂时找不到. create_draft 已 sleep
-        200ms 等 sqlite flush, 这里再 retry 3 次 × 300ms 双保险. 仅在
-        DataNotFoundError (8001 MESSAGE_NOT_FOUND) 才 retry, 别的 error
-        (权限 / Mail 没开 / 账号错) 立即抛, 不浪费时间.
-        """
-        if self._use_emlx_fallback:
-            from .base import NotSupportedError
-            raise NotSupportedError(
-                "Apple Mail EMLX fallback 模式不支持 send_message — "
-                "Mail.app 必须开着才能发邮件"
-            )
-
-        account_name, msg_id = self._unpack_id(message_id)
-        script = (
-            _AS_SEND_MESSAGE
-            .replace("{ACCOUNT}", _escape_as_string(account_name))
-            .replace("{MSG_ID}", _escape_as_string(msg_id))
-        )
-
-        # P3.5.57 Phase 3: race retry — 仅 MESSAGE_NOT_FOUND 重试
-        max_retries = 3
-        retry_delay_s = 0.3
-        last_not_found: DataNotFoundError | None = None
-        for attempt in range(max_retries):
-            try:
-                out = _run_osascript(script)
-                if out.strip() != "OK":
-                    raise EmailAdapterError(
-                        f"send_message: AS 返非 OK ({out[:120]!r})"
-                    )
-                return  # 成功
-            except DataNotFoundError as e:
-                last_not_found = e
-                if attempt < max_retries - 1:
-                    logger.info(
-                        "send_message MESSAGE_NOT_FOUND, %dms 后重试 (%d/%d): %s",
-                        int(retry_delay_s * 1000), attempt + 1, max_retries, e,
-                    )
-                    time.sleep(retry_delay_s)
-                    continue
-                break
-            # 别的 error (ClientNotRunningError 权限 / EmailAdapterError 等) 不
-            # retry, 直接往上抛 — 那些不是 race, retry 也救不了
-        # 3 次都 MESSAGE_NOT_FOUND, 改善错误提示
-        assert last_not_found is not None
-        raise DataNotFoundError(
-            "草稿在 Mail.app 里找不到, 已重试 3 次仍失败. "
-            "可能原因: Mail.app 正在 IMAP 同步 / 草稿被你手动删了 / 该账号"
-            "突然离线. 重启 Mail.app 后再试; 或先点 💾 仅保存草稿, "
-            "去 Mail.app Drafts 文件夹自己发."
-        ) from last_not_found
+        """发草稿。红线: 调用方必须人工确认过。见 apple_mail_drafts.send_message。"""
+        apple_mail_drafts.send_message(self, _run_osascript, message_id)
 
     def delete_message(self, message_id: str) -> None:
         """5/18 BL-EMAIL-DELETE: AS `delete <msg>` = 移到 Trash (软删).
@@ -673,52 +617,16 @@ class AppleMailAdapter(EmlxFallbackMixin, EmailAdapter):
         bcc: Sequence[str] = (),
         in_reply_to: str | None = None,
         account: str | None = None,
+        replaces: str | None = None,
     ) -> str:
-        if not to:
-            raise ValueError("create_draft: to 不能空")
-        # EMLX fallback 模式只读 → 不支持起草
-        if self._use_emlx_fallback:
-            raise NotSupportedError(
-                "Apple Mail EMLX fallback 模式只读, 不能写草稿. "
-                "去 System Settings 给 catfish 'Mail' Automation 权限后重试.",
-            )
-        account_name = self._resolve_account_name(account)
-        # body 写 tmp 文件传给 AS
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".txt", delete=False, encoding="utf-8",
-        ) as tf:
-            tf.write(body)
-            body_path = tf.name
-        try:
-            to_str = ",".join(to)
-            cc_str = ",".join(cc)
-            bcc_str = ",".join(bcc)  # BL-EMAIL-APPLEMAIL-FULL (5/18): bcc 支持
-            script = (
-                _AS_CREATE_DRAFT
-                .replace("{ACCOUNT}", _escape_as_string(account_name))
-                .replace("{SUBJECT}", _escape_as_string(subject))
-                .replace("{BODY_PATH}", body_path)
-                .replace("{TO}", _escape_as_string(to_str))
-                .replace("{CC}", _escape_as_string(cc_str))
-                .replace("{BCC}", _escape_as_string(bcc_str))
-            )
-            out = _run_osascript(script)
-            draft_id = out.strip()
-            if not draft_id:
-                raise EmailAdapterError("create_draft: AS 没返新草稿 id")
-            # P3.5.57 Phase 3 (6/22 鸿波 catch "草稿不存在" send 失败):
-            # Mail.app `make new outgoing message` 返 rowid 是当前一刻的快照,
-            # 但内部 sqlite 走 WAL + IMAP sync 可能在 200-500ms 内重新分配 id.
-            # 直接 Companion send 失败 "MESSAGE_NOT_FOUND". 等 200ms 让 Mail.app
-            # sqlite checkpoint + Drafts 文件夹索引落定再返 id, 让 caller send 时
-            # `whose id is` 还能命中. 配合 send_message retry 双保险.
-            time.sleep(0.2)
-            return self._pack_id(account_name, draft_id)
-        finally:
-            try:
-                os.unlink(body_path)
-            except OSError:
-                pass
+        """存进该账号的草稿箱, 返回草稿箱里那封的 id。replaces: 改草稿时的旧稿 id。
+
+        见 apple_mail_drafts.create_draft (9/27 重写: 以前返回的是撰写窗口编号)。
+        """
+        return apple_mail_drafts.create_draft(
+            self, _run_osascript, to=to, subject=subject, body=body, cc=cc, bcc=bcc,
+            in_reply_to=in_reply_to, account=account, replaces=replaces,
+        )
 
     # ── EMLX fallback (只读) ────────────────────────────
     #

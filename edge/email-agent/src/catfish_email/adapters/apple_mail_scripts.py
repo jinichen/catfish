@@ -5,8 +5,14 @@
 (BL-EMAIL-APPLEMAIL-AS-CTRLCHAR 5/18).
 
 5/20: 1538 → ~1045 拆分, AS 模板抽这里方便单测 + 改一处不污染主文件.
+
+9/27: 几个模板共用的 handler (找文件夹 / 按 id 找信 / 取日期) 挪到
+apple_mail_as_handlers.py, 每段只写一次, 模板末尾拼上; 起草和发送两个模板
+挪到 apple_mail_drafts.py (连同它们的 Python 逻辑)。
 """
 from __future__ import annotations
+
+from .apple_mail_as_handlers import AS_DATES, AS_FIND_MESSAGE, AS_RESOLVE_INBOX
 
 _AS_PING = """
 tell application "System Events"
@@ -90,131 +96,58 @@ tell application "Mail"
     -- 才碰到第一封 unread, 但 limit 已经 0 → 返空. 改成 AS 端 `whose` 提前过
     -- 滤; 加 `(date received desc)` 排序拿最新.
     if unreadOnly then
-        set msgs to (messages of mb whose read status is false)
+        try
+            set msgs to (messages of mb whose read status is false)
+        on error
+            -- whose is unreliable on some Mail versions; filter below instead
+            set msgs to (messages of mb)
+        end try
     else
         set msgs to (messages of mb)
     end if
     set total to count of msgs
     set out to ""
     set i to 0
-    -- 从最后一封倒着遍历 (最新) — Mail.app 索引顺序通常是收到时间正序,
-    -- 倒序取就是按时间逆序拿最新的 limitN 封.
+    -- newest last in Mail's order: walk backwards to get the newest limitN.
+    -- One unreadable message must not fail the whole folder (9/27: drafts
+    -- have no date received; the old code lost the entire Drafts list).
     repeat with idx from total to 1 by -1
         if i >= limitN then exit repeat
-        set m to item idx of msgs
-        set msgId to (id of m) as string
-        set subj to (subject of m) as string
-        set sndr to (sender of m) as string
-        set dt to my isoDate(date received of m)
-        set readSt to "1"
-        if (read status of m) is false then set readSt to "0"
-        -- P3.5.58: 拿 RFC 822 Message-ID + raw headers 给 Python 端 parse
-        -- thread (In-Reply-To / References). try 兜底某些 Mail.app 版本
-        -- 不暴露 headers 字段. 老邮件 / 内部转发 message id 可能为空.
-        set rfcMsgId to ""
         try
-            set rfcMsgId to (message id of m) as string
+            set m to item idx of msgs
+            set msgId to (id of m) as string
+            set readSt to "1"
+            try
+                if (read status of m) is false then set readSt to "0"
+            end try
+            if unreadOnly and readSt is "1" then error "skip read message" number 8100
+            set subj to ""
+            try
+                set s to subject of m
+                if s is not missing value then set subj to s as string
+            end try
+            set sndr to ""
+            try
+                set s to sender of m
+                if s is not missing value then set sndr to s as string
+            end try
+            set dt to my msgDate(m)
+            -- P3.5.58: RFC 822 Message-ID + raw headers for thread detection
+            set rfcMsgId to ""
+            try
+                set rfcMsgId to (message id of m) as string
+            end try
+            set rawHdrs to ""
+            try
+                set rawHdrs to (all headers of m) as string
+            end try
+            set out to out & msgId & FS & subj & FS & sndr & FS & dt & FS & readSt & FS & folderName & FS & rfcMsgId & FS & rawHdrs & RS
+            set i to i + 1
         end try
-        set rawHdrs to ""
-        try
-            -- Mail.app 5.x+ all headers 字段返完整 RFC 822 header section.
-            -- 不慢 (只读 cached header, 不取 body).
-            set rawHdrs to (all headers of m) as string
-        end try
-        set out to out & msgId & FS & subj & FS & sndr & FS & dt & FS & readSt & FS & folderName & FS & rfcMsgId & FS & rawHdrs & RS
-        set i to i + 1
     end repeat
     return out
 end tell
-
--- BL-EMAIL-APPLEMAIL-INBOX-NAMES (5/18): resolve canonical inbox across providers.
--- iCloud/Gmail/Exchange/Outlook all name their inbox differently; try the common
--- candidates one by one, fall back to literal name if not "Inbox".
-on resolveInbox(acc, wantName)
-    -- P3.5.204.c (7/9 鸿波 catch "回复过的邮件还是没有已回复标志"): 补 Sent/Drafts/
-    -- Trash/Junk alias. 老 handler 只处理 Inbox alias, 中文账号 Sent 名字是 "已发送"
-    -- 或 "Sent Messages", "Sent" 直接 mailbox 查找失败 → AppleScript error → CLI 返
-    -- 空 → sentItems 空 → repliedMap 空 → replied badge 不显. Foxmail adapter 侧已
-    -- 有 SENT_TITLES alias (foxmail_db.py:68), Apple Mail 侧漏了.
-    if wantName is "Inbox" then
-        set candidates to {"INBOX", "Inbox", "收件箱", "受信箱"}
-        repeat with cand in candidates
-            tell application "Mail"
-                try
-                    return mailbox (cand as string) of acc
-                end try
-            end tell
-        end repeat
-    else if wantName is "Sent" then
-        set candidates to {"Sent", "Sent Messages", "已发送", "已发送邮件", "已发送信件", "送信済み"}
-        repeat with cand in candidates
-            tell application "Mail"
-                try
-                    return mailbox (cand as string) of acc
-                end try
-            end tell
-        end repeat
-    else if wantName is "Drafts" then
-        set candidates to {"Drafts", "草稿", "草稿箱", "下書き"}
-        repeat with cand in candidates
-            tell application "Mail"
-                try
-                    return mailbox (cand as string) of acc
-                end try
-            end tell
-        end repeat
-    else if wantName is "Trash" then
-        set candidates to {"Trash", "Deleted Messages", "已删除", "已删除邮件", "废纸篓", "ゴミ箱"}
-        repeat with cand in candidates
-            tell application "Mail"
-                try
-                    return mailbox (cand as string) of acc
-                end try
-            end tell
-        end repeat
-    else if wantName is "Junk" then
-        set candidates to {"Junk", "Junk Mail", "Spam", "垃圾邮件", "迷惑メール"}
-        repeat with cand in candidates
-            tell application "Mail"
-                try
-                    return mailbox (cand as string) of acc
-                end try
-            end tell
-        end repeat
-    end if
-    tell application "Mail"
-        return mailbox wantName of acc
-    end tell
-end resolveInbox
-
--- BL-EMAIL-DATE-ISO (5/18): coerce AS date to ISO-8601 ourselves.
--- `(date received of m) as string` is locale-dependent (zh-CN gives '2026年...' which
--- Python's strptime can't parse without explicit locale). We assemble year-mo-dyTh:mn:sc
--- manually, in local TZ (no offset suffix). Python side just parses as naive ISO.
-on isoDate(d)
-    set yr to year of d as integer
-    set mo to month of d as integer
-    set dy to day of d as integer
-    set hr to hours of d as integer
-    set mn to minutes of d as integer
-    set sc to seconds of d as integer
-    return _pad4(yr) & "-" & _pad2(mo) & "-" & _pad2(dy) & "T" & _pad2(hr) & ":" & _pad2(mn) & ":" & _pad2(sc)
-end isoDate
-
-on _pad2(n)
-    set s to n as string
-    if (count of s) < 2 then set s to "0" & s
-    return s
-end _pad2
-
-on _pad4(n)
-    set s to n as string
-    repeat while (count of s) < 4
-        set s to "0" & s
-    end repeat
-    return s
-end _pad4
-"""
+""" + AS_RESOLVE_INBOX + AS_DATES
 
 # read_message: AS 写 body (text) + source (完整 RFC822) 到 2 个 temp 文件,
 # Python 解析 source 提 HTML part. BL-EMAIL-APPLEMAIL-FULL (5/18).
@@ -227,38 +160,8 @@ tell application "Mail"
     set sourcePath to "{SOURCE_PATH}"
 
     set acc to first account whose name of it is accName
-    -- BL-EMAIL-APPLEMAIL-READ-ID-STR-V2 (5/18): id 总作字符串塞 AS 防解析挂 -2741,
-    -- 但 `whose` 子句里 `(id of it as string)` 不被 Mail.app 引擎认 (实盘"找不到").
-    -- 解法: 优先把字符串 coerce 回 integer 走整数比较 (大多数 id 是数字);
-    -- coerce 失败 (UUID / 字母) 才 fallback 字符串路径 (loop 比较).
-    try
-        set targetIdNum to (targetIdStr as integer)
-    on error
-        set targetIdNum to missing value
-    end try
-
-    set foundMsg to missing value
-    repeat with mb in mailboxes of acc
-        if targetIdNum is not missing value then
-            -- 整数路径 (常见)
-            try
-                set m to (first message of mb whose id is targetIdNum)
-                set foundMsg to m
-                exit repeat
-            end try
-        else
-            -- 字符串路径 (UUID 形 id), 逐封比较 (慢但兜底)
-            try
-                repeat with m in messages of mb
-                    if (id of m as string) is targetIdStr then
-                        set foundMsg to m
-                        exit repeat
-                    end if
-                end repeat
-                if foundMsg is not missing value then exit repeat
-            end try
-        end if
-    end repeat
+    -- 9/27: lookup lives in findMessage (whose -> by-id -> id-list scan)
+    set foundMsg to my findMessage(acc, targetIdStr)
     if foundMsg is missing value then
         error "MESSAGE_NOT_FOUND" number 8001
     end if
@@ -282,7 +185,7 @@ tell application "Mail"
 
     set subj to subject of foundMsg
     set sndr to sender of foundMsg
-    set dt to (date received of foundMsg) as string
+    set dt to my msgDate(foundMsg)
     set toStr to ""
     try
         repeat with r in to recipients of foundMsg
@@ -307,96 +210,7 @@ tell application "Mail"
 
     return subj & FS & sndr & FS & dt & FS & toStr & FS & ccStr & FS & folderName
 end tell
-"""
-
-# send_message: 5/18 BL-EMAIL-COMPOSE-SEND. AS `send <msg>` 真把草稿发出去.
-# 红线: 上层 UI 必须人工 confirm 之后才调到这, adapter 不做"是不是人发的" 校验.
-#
-# P3.5.57 Phase 4 (6/22 鸿波 catch retry 3 次仍失败): 找 send 真因 — 不是 race,
-# 是 AppleScript class 不匹配!
-#   - create_draft 用 `make new outgoing message` 创 **outgoing message** class
-#   - 老 send 在 `mailboxes of acc` 找 **message** class
-#   - 这俩是 Mail.app AS 里两个不同 class:
-#       * outgoing message — 撰写状态, 顶级在 Mail app 下, 不在 mailbox 里
-#       * message — mailbox (INBOX/Drafts/Sent) 里已落档的邮件
-#   - `make new outgoing message` 即使 visible:true 仍是 outgoing message,
-#     永远不在 mailboxes of acc → `whose id is` 必失败, retry 救不了
-#
-# 真修法: 先在 outgoing messages 找 (这是 create_draft 真正放的地方),
-# 找不到再 fallback mailboxes (兼容老路径或员工已手动从 Drafts 重发的场景).
-# Phase 3 的 sleep + retry 保留作二次防御, 但根本性不再依赖它.
-_AS_SEND_MESSAGE = """
-tell application "Mail"
-    set accName to "{ACCOUNT}"
-    set targetIdStr to "{MSG_ID}"
-
-    try
-        set targetIdNum to (targetIdStr as integer)
-    on error
-        set targetIdNum to missing value
-    end try
-
-    set foundMsg to missing value
-
-    -- P3.5.57 Phase 4: 优先找 outgoing messages (create_draft `make new outgoing
-    -- message` 真正放的地方; outgoing message 不在 mailbox 里)
-    try
-        if targetIdNum is not missing value then
-            repeat with om in outgoing messages
-                try
-                    if (id of om) is targetIdNum then
-                        set foundMsg to om
-                        exit repeat
-                    end if
-                end try
-            end repeat
-        else
-            repeat with om in outgoing messages
-                try
-                    if ((id of om) as string) is targetIdStr then
-                        set foundMsg to om
-                        exit repeat
-                    end if
-                end try
-            end repeat
-        end if
-    end try
-
-    -- fallback: mailboxes 里找 (员工可能从 Drafts 自己关掉撰写窗口让它落档,
-    -- 这时 outgoing message 没了, draft 进了 Drafts mailbox)
-    if foundMsg is missing value then
-        try
-            set acc to first account whose name of it is accName
-            repeat with mb in mailboxes of acc
-                if targetIdNum is not missing value then
-                    try
-                        set m to (first message of mb whose id is targetIdNum)
-                        set foundMsg to m
-                        exit repeat
-                    end try
-                else
-                    try
-                        repeat with m in messages of mb
-                            if (id of m as string) is targetIdStr then
-                                set foundMsg to m
-                                exit repeat
-                            end if
-                        end repeat
-                        if foundMsg is not missing value then exit repeat
-                    end try
-                end if
-            end repeat
-        end try
-    end if
-
-    if foundMsg is missing value then
-        error "MESSAGE_NOT_FOUND" number 8001
-    end if
-
-    send foundMsg
-    return "OK"
-end tell
-"""
+""" + AS_RESOLVE_INBOX + AS_FIND_MESSAGE + AS_DATES
 
 # delete_message: 5/18 BL-EMAIL-DELETE. 同 _AS_GET_MESSAGE id-lookup pattern.
 # AS `delete <msg>` 在 Mail.app 默认行为 = "移到 Trash 文件夹" (跟用户按 ⌫
@@ -407,32 +221,7 @@ tell application "Mail"
     set targetIdStr to "{MSG_ID}"
 
     set acc to first account whose name of it is accName
-    try
-        set targetIdNum to (targetIdStr as integer)
-    on error
-        set targetIdNum to missing value
-    end try
-
-    set foundMsg to missing value
-    repeat with mb in mailboxes of acc
-        if targetIdNum is not missing value then
-            try
-                set m to (first message of mb whose id is targetIdNum)
-                set foundMsg to m
-                exit repeat
-            end try
-        else
-            try
-                repeat with m in messages of mb
-                    if (id of m as string) is targetIdStr then
-                        set foundMsg to m
-                        exit repeat
-                    end if
-                end repeat
-                if foundMsg is not missing value then exit repeat
-            end try
-        end if
-    end repeat
+    set foundMsg to my findMessage(acc, targetIdStr)
     if foundMsg is missing value then
         error "MESSAGE_NOT_FOUND" number 8001
     end if
@@ -440,7 +229,7 @@ tell application "Mail"
     delete foundMsg
     return "OK"
 end tell
-"""
+""" + AS_RESOLVE_INBOX + AS_FIND_MESSAGE
 
 # mark_read: 5/18 BL-EMAIL-MARK-READ. 同 _AS_GET_MESSAGE 的 id-lookup pattern,
 # 找到 message 后 `set read status of m to READ_FLAG`. 不返字段, 只返 "OK" / 异常.
@@ -451,32 +240,7 @@ tell application "Mail"
     set readFlag to {READ_FLAG}
 
     set acc to first account whose name of it is accName
-    try
-        set targetIdNum to (targetIdStr as integer)
-    on error
-        set targetIdNum to missing value
-    end try
-
-    set foundMsg to missing value
-    repeat with mb in mailboxes of acc
-        if targetIdNum is not missing value then
-            try
-                set m to (first message of mb whose id is targetIdNum)
-                set foundMsg to m
-                exit repeat
-            end try
-        else
-            try
-                repeat with m in messages of mb
-                    if (id of m as string) is targetIdStr then
-                        set foundMsg to m
-                        exit repeat
-                    end if
-                end repeat
-                if foundMsg is not missing value then exit repeat
-            end try
-        end if
-    end repeat
+    set foundMsg to my findMessage(acc, targetIdStr)
     if foundMsg is missing value then
         error "MESSAGE_NOT_FOUND" number 8001
     end if
@@ -484,7 +248,7 @@ tell application "Mail"
     set read status of foundMsg to readFlag
     return "OK"
 end tell
-"""
+""" + AS_RESOLVE_INBOX + AS_FIND_MESSAGE
 
 # search: AS messages whose subject contains q OR sender contains q
 # BL-EMAIL-APPLEMAIL-INBOX-NAMES (5/18): 同样走 resolveInbox 兜底 cross-account inbox 名.
@@ -513,7 +277,7 @@ tell application "Mail"
                     set msgId to (id of m) as string
                     set subj to (subject of m) as string
                     set sndr to (sender of m) as string
-                    set dt to my isoDate(date received of m)
+                    set dt to my msgDate(m)
                     set readSt to "1"
                     if (read status of m) is false then set readSt to "0"
                     set mbName to (name of mb) as string
@@ -527,174 +291,21 @@ tell application "Mail"
         set msgs to (messages of mb whose subject contains q or sender contains q)
         repeat with m in msgs
             if i >= limitN then exit repeat
-            set msgId to (id of m) as string
-            set subj to (subject of m) as string
-            set sndr to (sender of m) as string
-            set dt to my isoDate(date received of m)
-            set readSt to "1"
-            if (read status of m) is false then set readSt to "0"
-            set out to out & msgId & FS & subj & FS & sndr & FS & dt & FS & readSt & FS & folderName & RS
-            set i to i + 1
+            try
+                set msgId to (id of m) as string
+                set subj to (subject of m) as string
+                set sndr to (sender of m) as string
+                set dt to my msgDate(m)
+                set readSt to "1"
+                if (read status of m) is false then set readSt to "0"
+                set out to out & msgId & FS & subj & FS & sndr & FS & dt & FS & readSt & FS & folderName & RS
+                set i to i + 1
+            end try
         end repeat
     end if
     return out
 end tell
-
--- BL-EMAIL-APPLEMAIL-INBOX-NAMES (5/18): same handler as _AS_LIST_MESSAGES; AS doesn't
--- share handlers across osascript invocations so we repeat it.
-on resolveInbox(acc, wantName)
-    -- P3.5.204.c (7/9 鸿波 catch "回复过的邮件还是没有已回复标志"): 补 Sent/Drafts/
-    -- Trash/Junk alias. 老 handler 只处理 Inbox alias, 中文账号 Sent 名字是 "已发送"
-    -- 或 "Sent Messages", "Sent" 直接 mailbox 查找失败 → AppleScript error → CLI 返
-    -- 空 → sentItems 空 → repliedMap 空 → replied badge 不显. Foxmail adapter 侧已
-    -- 有 SENT_TITLES alias (foxmail_db.py:68), Apple Mail 侧漏了.
-    if wantName is "Inbox" then
-        set candidates to {"INBOX", "Inbox", "收件箱", "受信箱"}
-        repeat with cand in candidates
-            tell application "Mail"
-                try
-                    return mailbox (cand as string) of acc
-                end try
-            end tell
-        end repeat
-    else if wantName is "Sent" then
-        set candidates to {"Sent", "Sent Messages", "已发送", "已发送邮件", "已发送信件", "送信済み"}
-        repeat with cand in candidates
-            tell application "Mail"
-                try
-                    return mailbox (cand as string) of acc
-                end try
-            end tell
-        end repeat
-    else if wantName is "Drafts" then
-        set candidates to {"Drafts", "草稿", "草稿箱", "下書き"}
-        repeat with cand in candidates
-            tell application "Mail"
-                try
-                    return mailbox (cand as string) of acc
-                end try
-            end tell
-        end repeat
-    else if wantName is "Trash" then
-        set candidates to {"Trash", "Deleted Messages", "已删除", "已删除邮件", "废纸篓", "ゴミ箱"}
-        repeat with cand in candidates
-            tell application "Mail"
-                try
-                    return mailbox (cand as string) of acc
-                end try
-            end tell
-        end repeat
-    else if wantName is "Junk" then
-        set candidates to {"Junk", "Junk Mail", "Spam", "垃圾邮件", "迷惑メール"}
-        repeat with cand in candidates
-            tell application "Mail"
-                try
-                    return mailbox (cand as string) of acc
-                end try
-            end tell
-        end repeat
-    end if
-    tell application "Mail"
-        return mailbox wantName of acc
-    end tell
-end resolveInbox
-
--- BL-EMAIL-DATE-ISO (5/18): same as _AS_LIST_MESSAGES, repeat handlers.
-on isoDate(d)
-    set yr to year of d as integer
-    set mo to month of d as integer
-    set dy to day of d as integer
-    set hr to hours of d as integer
-    set mn to minutes of d as integer
-    set sc to seconds of d as integer
-    return _pad4(yr) & "-" & _pad2(mo) & "-" & _pad2(dy) & "T" & _pad2(hr) & ":" & _pad2(mn) & ":" & _pad2(sc)
-end isoDate
-
-on _pad2(n)
-    set s to n as string
-    if (count of s) < 2 then set s to "0" & s
-    return s
-end _pad2
-
-on _pad4(n)
-    set s to n as string
-    repeat while (count of s) < 4
-        set s to "0" & s
-    end repeat
-    return s
-end _pad4
-"""
-
-# create_draft: body 从 temp 文件读; 支持 to/cc/bcc
-#
-# P3.3.63 (6/13 hb): 顶部加 activate. visible:true 让草稿窗口本来就弹,
-# 但 Mail.app 不在前台时窗口藏背景, 员工还得 cmd+tab 找. activate 把
-# Mail.app 切前台, 员工放完草稿直接看见草稿窗口, 审 / 改 / cmd+shift+D
-# 发送一步到位 (catfish 不替员工按 send, 红线还在)
-_AS_CREATE_DRAFT = """
-tell application "Mail"
-    activate
-    set accName to "{ACCOUNT}"
-    set subj to "{SUBJECT}"
-    set bodyPath to "{BODY_PATH}"
-    set toList to "{TO}"
-    set ccList to "{CC}"
-    set bccList to "{BCC}"
-
-    set fileRef to open for access POSIX file bodyPath
-    set bodyText to (read fileRef as «class utf8»)
-    close access fileRef
-
-    set newMsg to make new outgoing message with properties {visible:true, subject:subj, content:bodyText}
-    tell newMsg
-        -- to recipients
-        set toItems to my splitText(toList, ",")
-        repeat with addr in toItems
-            set cleanAddr to my trimText(addr as string)
-            if cleanAddr is not "" then
-                make new to recipient at end of to recipients with properties {address:cleanAddr}
-            end if
-        end repeat
-        -- cc recipients
-        set ccItems to my splitText(ccList, ",")
-        repeat with addr in ccItems
-            set cleanAddr to my trimText(addr as string)
-            if cleanAddr is not "" then
-                make new cc recipient at end of cc recipients with properties {address:cleanAddr}
-            end if
-        end repeat
-        -- bcc recipients (BL-EMAIL-APPLEMAIL-FULL 5/18)
-        set bccItems to my splitText(bccList, ",")
-        repeat with addr in bccItems
-            set cleanAddr to my trimText(addr as string)
-            if cleanAddr is not "" then
-                make new bcc recipient at end of bcc recipients with properties {address:cleanAddr}
-            end if
-        end repeat
-        -- DO NOT call send; stays in Drafts (red line)
-    end tell
-
-    return id of newMsg as string
-end tell
-
-on splitText(s, delim)
-    set AppleScript's text item delimiters to delim
-    set out to text items of s
-    set AppleScript's text item delimiters to ""
-    return out
-end splitText
-
-on trimText(s)
-    set t to s
-    repeat while t starts with " "
-        set t to text 2 thru -1 of t
-    end repeat
-    repeat while t ends with " "
-        set t to text 1 thru -2 of t
-    end repeat
-    return t
-end trimText
-"""
+""" + AS_RESOLVE_INBOX + AS_DATES
 
 
 # ── 工具函数 ────────────────────────────────────────────
