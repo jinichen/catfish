@@ -5,7 +5,7 @@
  *
  * 设计:
  *   - 全部纯函数 (无 side-effect, 易测试)
- *   - 输入: state snapshot (chat messages / journal text / 时间戳 / fired log)
+ *   - 输入: state snapshot (chat messages / 任务库活跃待办 / 时间戳 / fired log)
  *   - 输出: { kind: 'silence' | 'deadline' | 'focus' | null, message: string, why: string }
  *   - useProactiveTriggers 1 分钟 tick, 调这堆函数, 第一个非 null 信号触发气泡
  *
@@ -55,7 +55,7 @@ export const SILENCE_THRESHOLD_MS = 30 * 60_000;
 /** focus 切回 Companion 触发最低门槛 (距上次活跃) */
 export const FOCUS_RETURN_MIN_AWAY_MS = 30 * 60_000;
 /** 5/25 BL-PROACTIVE-RUNAWAY: 同一个 deadline (按 date_str 识别) 24h cooldown.
- *  防同一个"5/26 周一" deadline 在 journal 多处出现导致 regex 多次匹配 spam. */
+ *  防同一条待办每分钟 tick 反复 fire. */
 export const DEADLINE_CONTENT_COOLDOWN_MS = 24 * 3600_000;
 
 /** 工作时段 (本地小时) */
@@ -177,60 +177,70 @@ export function detectSilence(args: {
   };
 }
 
-// ── 信号 2: journal deadline ──────────────────────────────────
+// ── 信号 2: 任务库里快到期的待办 ──────────────────────────────
+//
+// 9/29 鸿波: 气泡说 "今天是 9/30 — 你 journal 里提过这个: ISO系列资质采购招投标
+// (一期增补/二期) | 9/30", 而那件事 9/7 早就中标、改名、截止改到 12/31 了。
+// 两个毛病都出在这段的老实现上:
+//   · 数据源错: 它拿 journal 原文 (append-only 的时间线) 用正则抓 "M/D", 8/31
+//     那张旧待办表里的 "9/30" 跟今天的待办长得一模一样, 早改掉的事照样冒出来。
+//     "现在什么状态" 只有任务库 (catfish_list_tasks, 待办事实源) 说了算。
+//   · 日期算错: 用 floor((目标零点 − 现在)/24h) 算"还有几天", 9/29 早上 7 点看
+//     9/30 得 0 天 → 说成"今天是 9/30"。按日历天算, 不按小时。
 
-/** 抽 journal 里 "5/15"/"5月15日"/"下周三"/"明天" 等日期关键词, 对照当前日期 */
+/** 任务库里的一条活跃待办 (remindersWeekFetch 的形状, 只取这里用得到的) */
+export interface DueTask {
+  text: string;
+  due_date_iso?: string | null;
+  body?: string;
+  priority?: number;
+}
+
+/** 本地日历天数差 (目标日 − 今天), 跟当天几点无关 */
+export function calendarDaysUntil(target: Date, now: Date): number {
+  const a = new Date(target.getFullYear(), target.getMonth(), target.getDate()).getTime();
+  const b = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  return Math.round((a - b) / 86400_000);
+}
+
+/** 3 天内到期的活跃待办里最急的那条 (同一天的按优先级) */
 export function detectDeadline(args: {
-  journalText: string;
+  tasks: DueTask[];
   now: Date;
 }): TriggerResult | null {
-  const { journalText, now } = args;
-  if (!journalText) return null;
-
-  // 取最近 30 天的 journal 内容 (太老的 deadline 没意义)
-  // 简单切: 拿后 50KB
-  const recent = journalText.length > 50_000
-    ? journalText.slice(-50_000)
-    : journalText;
-
-  // 模式 1: "5/15", "5/14", "5月15日" 等具体日期
-  const dateMatches = [...recent.matchAll(/(\d{1,2})[\/月](\d{1,2})日?/g)];
-  for (const m of dateMatches) {
-    const month = parseInt(m[1], 10);
-    const day = parseInt(m[2], 10);
-    if (month < 1 || month > 12 || day < 1 || day > 31) continue;
-    // 假设今年的这个日期. 若已过今年, 跳过 (太老)
-    const year = now.getFullYear();
-    const target = new Date(year, month - 1, day);
-    const daysUntil = Math.floor(
-      (target.getTime() - now.getTime()) / 86400_000,
-    );
-    // 触发: 3 天内的 deadline (含今天/明天/后天)
-    if (daysUntil >= 0 && daysUntil <= 3) {
-      // 拉出 deadline 周围的上下文 (前后 60 字)
-      const idx = m.index ?? 0;
-      const ctx = recent
-        .slice(Math.max(0, idx - 60), Math.min(recent.length, idx + 60))
-        .replace(/\s+/g, " ")
-        .trim();
-      const dayLabel =
-        daysUntil === 0 ? "今天" : daysUntil === 1 ? "明天" : `${daysUntil} 天后`;
-      return {
-        kind: "deadline",
-        message: `${dayLabel}是 ${month}/${day} — 你 journal 里提过这个: "${ctx.slice(0, 80)}". 还差啥, 我帮你?`,
-        why: `deadline ${month}/${day} in ${daysUntil}d`,
-        context: {
-          days_until: daysUntil,
-          date_str: `${month}/${day}`,
-          journal_excerpt: ctx.slice(0, 100),
-        },
-        // 5/25 BL-PROACTIVE-RUNAWAY: 内容级 dedupe — 同一个 deadline 24h 内只 fire 1 次
-        dedupe_key: `deadline:${month}/${day}`,
-      };
-    }
+  const { tasks, now } = args;
+  let best: { task: DueTask; due: Date; daysUntil: number } | null = null;
+  for (const task of tasks) {
+    if (!task.due_date_iso || !task.text) continue;
+    const due = new Date(task.due_date_iso);
+    if (Number.isNaN(due.getTime())) continue;
+    const daysUntil = calendarDaysUntil(due, now);
+    if (daysUntil < 0 || daysUntil > 3) continue;
+    const rank = (t: { daysUntil: number; task: DueTask }) =>
+      t.daysUntil * 10 + (t.task.priority && t.task.priority > 0 ? t.task.priority : 9);
+    if (!best || rank({ daysUntil, task }) < rank(best)) best = { task, due, daysUntil };
   }
+  if (!best) return null;
 
-  return null;
+  const { task, due, daysUntil } = best;
+  const month = due.getMonth() + 1;
+  const day = due.getDate();
+  const dayLabel = daysUntil === 0 ? "今天" : daysUntil === 1 ? "明天" : `${daysUntil} 天后`;
+  const body = (task.body || "").replace(/\s+/g, " ").trim();
+  const note = body ? `（备注: ${body.slice(0, 60)}）` : "";
+  return {
+    kind: "deadline",
+    message: `${dayLabel}是 ${month}/${day} — 待办「${task.text}」到期${note}. 还差啥, 我帮你?`,
+    why: `deadline ${month}/${day} in ${daysUntil}d: ${task.text}`,
+    context: {
+      days_until: daysUntil,
+      date_str: `${month}/${day}`,
+      task_title: task.text,
+      task_body: body.slice(0, 200),
+    },
+    // 5/25 BL-PROACTIVE-RUNAWAY: 内容级 dedupe — 同一条待办 24h 内只 fire 1 次
+    dedupe_key: `deadline:${month}/${day}:${task.text}`,
+  };
 }
 
 // ── 信号 3: focus 切回 Companion ───────────────────────────────
@@ -277,7 +287,8 @@ export function detectFocusReturn(args: {
 export function detectAnyTrigger(args: {
   now: Date;
   messages: ChatMessage[];
-  journalText: string;
+  /** 任务库里的活跃待办 (9/29 起 deadline 信号只看这个, 不再翻 journal) */
+  tasks: DueTask[];
   lastFocusLeftTs: number | null;
   lastFocusReturnTs: number | null;
   firedLog: FiredLogEntry[];
@@ -286,7 +297,7 @@ export function detectAnyTrigger(args: {
   // 优先级: deadline > silence > focus
   // (deadline 时效性最强, focus 偶发性最强但场景最具体)
   const candidates = [
-    detectDeadline({ journalText: args.journalText, now: args.now }),
+    detectDeadline({ tasks: args.tasks, now: args.now }),
     detectSilence({ messages: args.messages, now: args.now }),
     detectFocusReturn({
       lastFocusLeftTs: args.lastFocusLeftTs,

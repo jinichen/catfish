@@ -364,10 +364,12 @@ _SIGNAL_KIND_PROMPTS = {
         "(命中动词关键词 {action_hits}). 你想关心一下他卡哪没. "
         "1 句话, 引用他原话里的具体事 (不是泛问), 像同事走过去问."
     ),
+    # 9/29: 数据源从 journal 原文换成任务库 (待办事实源) —— journal 是时间线,
+    # 早改掉的旧待办也会被翻出来当今天的事。字段跟 triggers.ts detectDeadline 对齐。
     "deadline": (
-        "员工的 employee_journal 里提到的某个事 deadline 是 {days_until} 天后 "
-        "({date_str}). journal 上下文片段: \"{journal_excerpt}\". "
-        "你想提醒一下, 1 句话, 引用具体事项, 问还差啥."
+        "员工任务库里的待办「{task_title}」截止是 {days_until} 天后 ({date_str}). "
+        "待办备注: \"{task_body}\". "
+        "你想提醒一下, 1 句话, 引用这条待办, 问还差啥. 只说这条, 别提别的旧事."
     ),
     "focus": (
         "员工刚切回 Companion (离开 {minutes_away} 分钟). "

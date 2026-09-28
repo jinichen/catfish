@@ -5,7 +5,7 @@
  *
  * 流程:
  *   1. 1 分钟一次 tick
- *   2. 拉当前 chat messages + journal raw + focus 状态 + fired log
+ *   2. 拉当前 chat messages + 任务库活跃待办 + focus 状态 + fired log
  *   3. 调 detectAnyTrigger 看有没有信号命中 + 不打扰守卫
  *   4. 命中 → startProactiveChat (chat assistant 直接出) + 写 firedLog 给下次 tick 防重
  *
@@ -17,14 +17,30 @@
 
 import { useEffect, useRef } from "react";
 
-import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { useChatStore } from "../store/chat";
 import { useUIStore } from "../store/ui";
 import { isTauriRuntime } from "../lib/runtime";
 import { fetchContextualStarter } from "../lib/me";
-import { detectAnyTrigger, type TriggerKind, type TriggerResult } from "../lib/triggers";
+import { detectAnyTrigger, type DueTask, type TriggerKind, type TriggerResult } from "../lib/triggers";
+import { remindersWeekFetch } from "../lib/tauri";
+
+const TASKS_CACHE_MS = 10 * 60_000;
+let tasksCache: { at: number; tasks: DueTask[] } | null = null;
+
+/** 任务库活跃待办, 10 分钟缓存; 拉不到就当没有 (跳过 deadline 信号, 不报错) */
+async function loadActiveTasks(nowMs: number): Promise<DueTask[]> {
+  if (tasksCache && nowMs - tasksCache.at < TASKS_CACHE_MS) return tasksCache.tasks;
+  try {
+    const tasks = JSON.parse(await remindersWeekFetch()) as DueTask[];
+    tasksCache = { at: nowMs, tasks: Array.isArray(tasks) ? tasks : [] };
+  } catch (e) {
+    console.warn("[triggers] 任务库读不到 (跳过 deadline 信号):", e);
+    tasksCache = { at: nowMs, tasks: [] };
+  }
+  return tasksCache.tasks;
+}
 
 const TICK_MS = 60_000;
 const FIRED_LOG_KEY = "catfish:proactive_triggers_fired_log";
@@ -122,13 +138,10 @@ export function useProactiveTriggers(): void {
         const now = new Date();
         const messages = useChatStore.getState().messages;
 
-        // 拉 journal raw (Rust 命令)
-        let journalText = "";
-        try {
-          journalText = await invoke<string>("journal_read_raw");
-        } catch (e) {
-          console.warn("[triggers] journal_read_raw 失败 (跳过 deadline 信号):", e);
-        }
+        // 9/29: deadline 信号看任务库 (待办事实源), 不再翻 journal 原文 —— 那是
+        // append-only 时间线, 8/31 的旧待办表会被当成今天的事 (见 triggers.ts)。
+        // 任务库走 tool-bridge, 10 分钟拉一次够了 (截止日期不会分钟级变)。
+        const tasks = await loadActiveTasks(now.getTime());
 
         const firedLog = loadFiredLog();
         const lastDismissTs = loadDismissTs();
@@ -136,7 +149,7 @@ export function useProactiveTriggers(): void {
         const trigger: TriggerResult | null = detectAnyTrigger({
           now,
           messages,
-          journalText,
+          tasks,
           lastFocusLeftTs: lastFocusLeftTsRef.current,
           lastFocusReturnTs: lastFocusReturnTsRef.current,
           firedLog: firedLog.map((e) => ({ kind: e.kind, ts: e.ts })),

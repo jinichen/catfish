@@ -60,14 +60,12 @@ console.log("\n## detectSilence");
 console.log("\n## detectDeadline");
 {
   // 用 NOW=5/6, 内含 5/8 (3 天内)
-  const journal = "5/4 提到上会材料 5/8 前要交";
-  const r = detectDeadline({ journalText: journal, now: NOW });
-  check("journal 提 5/8 (2 天后) → 命中", r != null && r.kind === "deadline", JSON.stringify(r));
+  const r = detectDeadline({ tasks: [{ text: "上会材料", due_date_iso: "2026-05-08T00:00:00" }], now: NOW });
+  check("待办 5/8 到期 (2 天后) → 命中", r != null && r.kind === "deadline", JSON.stringify(r));
 
-  const journal2 = "4 月份的事 4/1 deadline";
-  check("已过的日期 → 不命中", detectDeadline({ journalText: journal2, now: NOW }) == null);
+  check("已过的截止 → 不命中", detectDeadline({ tasks: [{ text: "旧事", due_date_iso: "2026-04-01T00:00:00" }], now: NOW }) == null);
 
-  check("空 journal → 不命中", detectDeadline({ journalText: "", now: NOW }) == null);
+  check("没有待办 → 不命中", detectDeadline({ tasks: [], now: NOW }) == null);
 }
 
 console.log("\n## detectFocusReturn");
@@ -147,7 +145,7 @@ console.log("\n## detectAnyTrigger 优先级");
   const r = detectAnyTrigger({
     now: NOW,
     messages,
-    journalText: "上会材料 5/7 前完成",
+    tasks: [{ text: "上会材料", due_date_iso: "2026-05-07T00:00:00" }],
     lastFocusLeftTs: NOW.getTime() - 50 * 60_000,
     lastFocusReturnTs: NOW.getTime() - 30_000,
     firedLog: [],
@@ -161,11 +159,11 @@ console.log("\n## detectAnyTrigger 优先级");
 console.log("\n## BL-PROACTIVE-RUNAWAY: detectDeadline 返 dedupe_key");
 {
   const r = detectDeadline({
-    journalText: "周一 5/26 跟省厅确认中电注册地修改",
+    tasks: [{ text: "跟省厅确认注册地修改", due_date_iso: "2026-05-26T00:00:00" }],
     now: new Date(2026, 4, 25, 14, 0),  // 5/25 14:00, 距 5/26 = 1 天
   });
   check("命中 deadline", r != null && r.kind === "deadline", JSON.stringify(r));
-  check("含 dedupe_key 'deadline:5/26'", r != null && r.dedupe_key === "deadline:5/26", JSON.stringify(r));
+  check("含 dedupe_key", r != null && r.dedupe_key === "deadline:5/26:跟省厅确认注册地修改", JSON.stringify(r));
 }
 
 console.log("\n## BL-PROACTIVE-RUNAWAY: shouldStaySilent 看 dedupe_key 24h cooldown");
@@ -237,12 +235,12 @@ console.log("\n## BL-PROACTIVE-RUNAWAY: detectAnyTrigger 透传 dedupe_key 给 g
   const now = new Date(2026, 4, 25, 14, 0);
   // 12h 前同 deadline 已 fire
   const firedLog = [
-    { kind: "deadline" as const, ts: now.getTime() - 12 * 3600_000, dedupe_key: "deadline:5/26" },
+    { kind: "deadline" as const, ts: now.getTime() - 12 * 3600_000, dedupe_key: "deadline:5/26:跟省厅确认注册地修改" },
   ];
   const r = detectAnyTrigger({
     now,
     messages: [],
-    journalText: "周一 5/26 跟省厅确认中电注册地修改",  // 同样 deadline
+    tasks: [{ text: "跟省厅确认注册地修改", due_date_iso: "2026-05-26T00:00:00" }],  // 同样 deadline
     lastFocusLeftTs: null,
     lastFocusReturnTs: null,
     firedLog,

@@ -68,12 +68,13 @@ def test_build_contextual_user_prompt_deadline(proactive):
     now = datetime(2026, 5, 6, 14, 0)
     p = proactive._build_contextual_user_prompt(
         "deadline",
-        {"days_until": 2, "date_str": "5/8", "journal_excerpt": "上会材料 5/8 前要交"},
+        {"days_until": 2, "date_str": "5/8", "task_title": "上会材料", "task_body": "先过部门会"},
         now,
     )
     assert "2 天后" in p
     assert "5/8" in p
     assert "上会材料" in p
+    assert "先过部门会" in p
 
 
 def test_build_contextual_user_prompt_focus(proactive):
