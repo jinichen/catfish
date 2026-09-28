@@ -4,11 +4,23 @@ name = "catfish-companion-app"
 # Hermes 是独立发布物，由 .hermes-target-version / tag / commit 单独固定。
 # 改时记得同步 src-tauri/tauri.conf.json + ../package.json + package-lock.json。
 # CI lint: scripts/check_version_sync.sh
-version = "1.0.58"
+version = "1.0.59"
 description = "Catfish Companion App - desktop sidekick for the Catfish platform"
 authors = ["Catfish Team"]
 edition = "2021"
 rust-version = "1.77"
+
+# 9/28 鸿波「怎么硬盘又被吃了」: target/debug 涨到 24G。一半是这里的默认值:
+# macOS 上 dev 构建默认 split-debuginfo = "unpacked", 调试信息留在每个 .o 里,
+# rustc 不删这些 .o, Companion 每重编一次就在 target/debug/deps 多留 ~270MB
+# (当时 106 批, 12.8G)。packed = 链接后把调试信息收进 .dSYM, .o 随手删掉。
+# line-tables-only: panic 回溯照样有文件名和行号 (我们排查靠日志和回溯, 不单步
+# 调试), 调试信息小一个量级, 编译、链接、生成 .dSYM 都更快。
+# 另一半 (每改一次版本号留一整套旧产物) 由 scripts/prune-rust-target.mjs 在
+# tauri:dev / 打包前清。
+[profile.dev]
+split-debuginfo = "packed"
+debug = "line-tables-only"
 
 [lib]
 name = "catfish_companion_lib"

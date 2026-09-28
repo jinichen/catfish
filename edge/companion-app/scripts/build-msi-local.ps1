@@ -515,6 +515,9 @@ if ($SkipFrontendInstall -and (Test-Path "node_modules")) {
 # ─── Step 11 · tauri build msi ──────────────────────────────
 
 Write-Host "`n[Step 11/11] npx tauri build msi (15-20 min)..." -ForegroundColor Yellow
+# 9/28: 每次改版本号, 上一版的编译产物 (可执行文件 / 增量缓存) 就成了孤儿, cargo 不清;
+# 跟 mac 打包同一个脚本, 见 scripts/prune-rust-target.mjs 头部。失败只提示, 不拦打包。
+node (Join-Path $PSScriptRoot 'prune-rust-target.mjs') release x86_64-pc-windows-msvc
 Write-Host "  Rust MSVC compile · WiX msi pack · 增量 build 2-3 min" -ForegroundColor DarkGray
 npx tauri build --target x86_64-pc-windows-msvc --bundles msi --verbose
 if ($LASTEXITCODE -ne 0) { throw "tauri build msi failed" }
