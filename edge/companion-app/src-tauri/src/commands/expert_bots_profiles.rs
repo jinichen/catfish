@@ -120,7 +120,8 @@ pub fn run_hermes(hermes_home: &Path, args: &[&str]) -> Result<(), String> {
         return Err(format!("Hermes CLI 不存在: {}", hermes.display()));
     }
     // 9/23: 统一走 background_command (原来这里手写一份 CREATE_NO_WINDOW)
-    let mut command = crate::services::process::background_command(&hermes);
+    // 9/28: hermes CLI 是 Python, 走 python_command 固定 UTF-8 输出
+    let mut command = crate::services::process::python_command(&hermes);
     command.args(args).env("HERMES_HOME", hermes_home);
     let output = command
         .output()

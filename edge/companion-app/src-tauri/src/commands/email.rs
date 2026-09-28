@@ -38,14 +38,12 @@ pub(crate) const EMAIL_LIST_MAX: u32 = 500;
 /// 每一次 CLI 调用。配置了根目录时同时明确选 Foxmail，避免 Outlook COM
 /// 探测失败污染 Foxmail 结果。
 pub(crate) fn email_command(bin: &Path) -> Command {
-    let mut command = process::background_command(bin);
     // 9/17: 中文 Windows 上 Python 往管道写 stdout 用的是 locale 编码 (GBK), 而这边
     // 一律 from_utf8_lossy —— 于是 discover 结果里的 "Outlook COM 类未注册" 变成
     // "��'��§��" (截图实锤)。子进程 (discovery._discover_isolated) 早就传了
     // PYTHONIOENCODING, 唯独最外层这一跳漏了。对每次调用都钉死 UTF-8, 不只 discover。
-    command
-        .env("PYTHONIOENCODING", "utf-8")
-        .env("PYTHONUTF8", "1");
+    // 9/28: 同一件事在文件解析上又撞一次, 收成 process::python_command。
+    let mut command = process::python_command(bin);
 
     // 9/18: 配了 IMAP 就优先走它 —— **两个平台都适用**, 不在 windows 分支里。
     //

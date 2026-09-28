@@ -341,6 +341,22 @@ jobs:
         working-directory: edge/companion-app
         run: python3 scripts/test_packaging_lists.py
 
+      # 9/28: 上传文件的解析脚本随安装包发到员工机器 (edge-runtime/file-parse),
+      # 这几份单测原来 CI 一次没跑过 —— Windows 上 GBK 输出一崩, 上传文件就全挂。
+      # test_parse_file_encoding.py 用 PYTHONIOENCODING=gbk 在 Linux 上复现那台机器。
+      # Python 用安装包里的同一个小版本; 依赖跟 hermes-extra-packages.txt 解析那几个一致。
+      - name: Set up Python 3.11 (上传文件解析脚本)
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: 上传文件解析脚本单测
+        working-directory: edge/companion-app/src-tauri/scripts
+        run: |
+          python -m pip install --quiet pytest openpyxl pypdfium2 python-docx python-pptx 'xlrd<2'
+          python -m pytest -q -p no:cacheprovider test_parse_file.py test_parse_file_split.py \
+            test_parse_file_encoding.py test_attachment_bm25.py
+
   # ════════════════════════════════════════════════════════════
   # 3b. 中央门户前端 (central/web) — tsc + build + 路由自查
   # ════════════════════════════════════════════════════════════

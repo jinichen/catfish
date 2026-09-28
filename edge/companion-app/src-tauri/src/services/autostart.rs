@@ -116,8 +116,7 @@ pub async fn ensure_tool_bridge_running() {
         working_dir: dir,
         env: vec![
             ("PYTHONPATH".into(), pythonpath),
-            ("PYTHONUTF8".into(), "1".into()),
-            ("PYTHONIOENCODING".into(), "utf-8".into()),
+            // UTF-8 输出由 spawn_detached 统一设 (process::PYTHON_UTF8_ENV)
         ],
     };
 

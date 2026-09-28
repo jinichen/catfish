@@ -103,7 +103,7 @@ fn log_wiki_health() {
     if !script.exists() {
         return;
     }
-    match process::background_command(&python)
+    match process::python_command(&python)
         .arg(&script)
         .output()
     {

@@ -65,6 +65,9 @@ from parse_file_common import (  # noqa: F401
     PREVIEW_PARAS,
     PREVIEW_ROWS,
     _truncate,
+    detect_text_encoding,
+    encoding_label,
+    force_utf8_stdio,
 )
 
 # ── 各格式 parser (8/15 按依赖的第三方库分了两个模块) ──────────
@@ -148,12 +151,21 @@ def parse_json_preview(path: Path) -> tuple[str, dict[str, Any]]:
 
 def parse_csv_preview(path: Path) -> tuple[str, dict[str, Any]]:
     """CSV 列头 + 前 N 行 + 总行数."""
+    # 9/28: 不再假定 UTF-8 —— 中文 Windows 上 Excel 另存的 CSV 是 GBK
+    encoding = detect_text_encoding(path)
+    label = encoding_label(encoding)
     # 先 count rows (一次过, 不读 cell)
-    with path.open(encoding="utf-8-sig", newline="") as f:
+    with path.open(encoding=encoding, errors="replace", newline="") as f:
         total_rows = sum(1 for _ in f)
 
-    parts: list[str] = [f"## CSV · 共 {total_rows} 行"]
-    with path.open(encoding="utf-8-sig", newline="") as f:
+    header = f"## CSV · 共 {total_rows} 行"
+    if label:
+        header += f" · 编码 {label}"
+    parts: list[str] = [header]
+    if label:
+        # LLM 用 execute_code 读完整数据时要带上编码, 否则 pandas 按 UTF-8 读直接报错
+        parts.append(f"(读完整数据: pandas.read_csv(path, encoding={encoding!r}))")
+    with path.open(encoding=encoding, errors="replace", newline="") as f:
         reader = csv.reader(f)
         for i, row in enumerate(reader):
             if i >= PREVIEW_ROWS + 1:
@@ -170,6 +182,8 @@ def parse_csv_preview(path: Path) -> tuple[str, dict[str, Any]]:
     meta: dict[str, Any] = {
         "total_rows": total_rows,
     }
+    if label:
+        meta["encoding"] = encoding
     return text, meta
 
 
@@ -233,19 +247,27 @@ def parse_video_preview(path: Path) -> tuple[str, dict[str, Any]]:
 
 def parse_text_preview(path: Path) -> tuple[str, dict[str, Any]]:
     """纯文本前 N 字 + 总字数."""
-    full = path.read_text(encoding="utf-8", errors="replace")
+    # 9/28: GBK 的 txt (中文 Windows 老记事本) 原来按 UTF-8 + replace 读成一片 "�"
+    encoding = detect_text_encoding(path)
+    label = encoding_label(encoding)
+    full = path.read_text(encoding=encoding, errors="replace")
     total = len(full)
+    meta: dict[str, Any] = {"total_chars": total}
+    if label:
+        meta["encoding"] = encoding
     if total <= PREVIEW_MAX_CHARS:
-        return full, {"total_chars": total}
+        return full, meta
 
     head = full[:PREVIEW_MAX_CHARS]
+    how = f"open(path, encoding={encoding!r}) + read" if label else "open + read"
     text = (
-        f"## 文本 · 共 {total} 字 (显示前 {PREVIEW_MAX_CHARS} 字)\n\n"
-        f"{head}\n"
+        f"## 文本 · 共 {total} 字 (显示前 {PREVIEW_MAX_CHARS} 字)"
+        + (f" · 编码 {label}" if label else "")
+        + f"\n\n{head}\n"
         f"\n[... 还有 {total - PREVIEW_MAX_CHARS} 字未显示, "
-        "用 execute_code 读完整 (open + read)]"
+        f"用 execute_code 读完整 ({how})]"
     )
-    return text, {"total_chars": total}
+    return text, meta
 
 
 # ============================================================
@@ -297,8 +319,8 @@ def extract_full_text_docx(path: Path) -> str:
 
 
 def extract_full_text_plain(path: Path) -> str:
-    """txt / md / markdown / log: 全文读出."""
-    return path.read_text(encoding="utf-8", errors="replace")
+    """txt / md / markdown / log: 全文读出 (编码判断同 parse_text_preview)."""
+    return path.read_text(encoding=detect_text_encoding(path), errors="replace")
 
 
 def extract_full_text_audio(path: Path) -> str:
@@ -392,6 +414,7 @@ LEGACY_HINTS = {
 
 
 def main() -> int:
+    force_utf8_stdio()  # 9/28: 中文 Windows 默认 GBK 输出, 文件里有 "¥" 就崩在最后一行 print
     if len(sys.argv) < 2:
         print(json.dumps({"error": "Usage: parse_file.py <file>"}, ensure_ascii=False))
         return 2

@@ -68,7 +68,7 @@ fn pick_python(
 }
 
 fn has_parse_deps(py: &Path) -> bool {
-    let out = crate::services::process::background_command(py)
+    let out = crate::services::process::python_command(py)
         .arg("-c")
         .arg(PARSE_DEPS_IMPORT)
         .output();

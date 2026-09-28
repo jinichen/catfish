@@ -354,15 +354,13 @@ fn status_of(source: Option<ImapSource>) -> ImapStatus {
 async fn verify_login(source: &ImapSource, password: &str) -> Result<(), String> {
     let bin = crate::services::catfish_paths::catfish_email_bin()
         .ok_or_else(|| "邮件组件还没装好, 稍后再试".to_string())?;
-    let mut command = crate::services::process::background_command(&bin);
+    let mut command = crate::services::process::python_command(&bin);
     command
         .env("CATFISH_IMAP_HOST", &source.host)
         .env("CATFISH_IMAP_PORT", source.port.to_string())
         .env("CATFISH_IMAP_USER", &source.user)
         .env("CATFISH_IMAP_PASSWORD", password)
         .env("CATFISH_IMAP_RETENTION", &source.retention)
-        .env("PYTHONIOENCODING", "utf-8")
-        .env("PYTHONUTF8", "1")
         .args(["--client", "imap", "accounts"]);
     let output = command
         .output()

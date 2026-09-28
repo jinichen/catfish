@@ -384,7 +384,7 @@ pub(crate) fn restart_hermes_gateway() {
         );
         return;
     }
-    match crate::services::process::background_command(&cli)
+    match crate::services::process::python_command(&cli)
         .args(["gateway", "restart"])
         .env("HERMES_HOME", &home)
         .output()

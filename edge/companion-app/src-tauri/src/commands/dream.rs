@@ -163,7 +163,8 @@ pub(crate) async fn run_dream(
         );
     }
 
-    let mut cmd = process::background_tokio_command(&python);
+    // python_tokio_command: 事件 JSON 里全是中文, Windows 上默认 GBK 输出会乱码/崩
+    let mut cmd = process::python_tokio_command(&python);
     cmd.args(&args)
         .env("PYTHONUNBUFFERED", "1")
         .stdin(Stdio::null())

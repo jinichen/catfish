@@ -28,6 +28,8 @@
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
 
 #: preview 文本软上限 (字)
 PREVIEW_MAX_CHARS = int(os.environ.get("CATFISH_PREVIEW_MAX_CHARS") or 5000)
@@ -44,3 +46,54 @@ def _truncate(s: str, limit: int = PREVIEW_MAX_CHARS) -> str:
     if len(s) <= limit:
         return s
     return s[:limit] + f"\n[... preview 截到 {limit} 字, 完整数据用 execute_code 读]"
+
+
+# ── 字符集 (9/28) ──────────────────────────────────────────────
+#
+# 9/28 Windows 上传文件报:
+#     UnicodeEncodeError: 'gbk' codec can't encode character '\xa5'
+# 中文 Windows 上 Python 往管道写 stdout 默认用系统编码 GBK, 文件里有个 "¥" (或
+# emoji、生僻字) 就在最后一行 print 时崩 —— 解析其实已经做完了。Companion 那边
+# 已经对子进程设了 PYTHONIOENCODING=utf-8 (process::python_command); 这里是第二道,
+# 手工跑脚本或别的调用方忘了设时也不崩。邮件组件 (catfish_email/__main__.py) 同款。
+
+
+def force_utf8_stdio() -> None:
+    """stdout / stderr 固定 UTF-8 —— Rust 端一律按 UTF-8 读。"""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
+#: 文本类上传 (csv / txt / md / log) 的解码顺序。
+#: 中文 Windows 上 Excel「另存为 CSV」、老记事本存的 txt 都是 GBK (ANSI);
+#: GB18030 是 GBK 的超集, 用它解不会漏字。
+TEXT_ENCODINGS = ("utf-8-sig", "gb18030")
+
+
+def detect_text_encoding(path: Path) -> str:
+    """整份文件能按哪种编码解开就用哪种; UTF-16 看 BOM (记事本「Unicode」)。
+
+    都解不开返回 "utf-8" —— 调用方用 errors="replace" 读, 至少不崩。
+    """
+    with path.open("rb") as f:
+        head = f.read(2)
+    if head in (b"\xff\xfe", b"\xfe\xff"):
+        return "utf-16"
+    for encoding in TEXT_ENCODINGS:
+        try:
+            with path.open(encoding=encoding, newline="") as f:
+                while f.read(1 << 20):
+                    pass
+            return encoding
+        except UnicodeDecodeError:
+            continue
+    return "utf-8"
+
+
+def encoding_label(encoding: str) -> str | None:
+    """给 LLM 看的编码说明; UTF-8 不用说 (返回 None)。"""
+    if encoding in ("utf-8", "utf-8-sig"):
+        return None
+    return "GB18030 (GBK)" if encoding == "gb18030" else encoding.upper()

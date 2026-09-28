@@ -72,6 +72,32 @@ pub fn background_tokio_command<S: AsRef<OsStr>>(program: S) -> tokio::process::
     }
 }
 
+/// Python 子进程的 stdin/stdout/stderr 和默认文件编码一律 UTF-8。
+///
+/// 中文 Windows 上 Python 往管道 / 文件写 stdout 用的是系统 locale 编码 (GBK),
+/// 而 Companion 这边一律按 UTF-8 读。后果有两种, 都在现场见过:
+///   · 乱码: 9/17 邮件 discover 的中文原因变成 "��'��§��" (email.rs 当时单独修了)
+///   · 直接崩: 9/28 上传文件, parse_file.py 往 stdout 写 "¥" —— GBK 里没有这个字,
+///     `UnicodeEncodeError: 'gbk' codec can't encode character '\xa5'`, 整个解析失败
+/// 原来是每个调用点自己记得设 (email / imap / tool-bridge 记得, 文件解析、蒸馏、
+/// 知识库体检、本机搜索、hermes 命令没记得)。所以收成这一个入口。
+/// macOS / Linux 上本来就是 UTF-8, 设了也不改变行为。
+pub const PYTHON_UTF8_ENV: [(&str, &str); 2] = [("PYTHONUTF8", "1"), ("PYTHONIOENCODING", "utf-8")];
+
+/// 跑 Python (解释器、`python -m`、或 venv 里的 console script) 用这个, 不用 background_command。
+pub fn python_command<S: AsRef<OsStr>>(program: S) -> Command {
+    let mut command = background_command(program);
+    command.envs(PYTHON_UTF8_ENV);
+    command
+}
+
+/// python_command 的 tokio 版本 (要逐行读 stdout 的长任务, 如蒸馏)。
+pub fn python_tokio_command<S: AsRef<OsStr>>(program: S) -> tokio::process::Command {
+    let mut command = background_tokio_command(program);
+    command.envs(PYTHON_UTF8_ENV);
+    command
+}
+
 /// 获取指定路径的跨平台独占锁；已有 Companion 时返回 None，不等待也不重复启动。
 pub fn try_acquire_instance_lock(path: &std::path::Path) -> anyhow::Result<Option<InstanceGuard>> {
     if let Some(parent) = path.parent() {
@@ -173,6 +199,9 @@ pub fn spawn_detached(cfg: SpawnConfig) -> anyhow::Result<SpawnHandle> {
     // 这会让日志看上去"卡很久才出现"。强制 unbuffered 让每行立刻写盘。
     // 对非 Python 进程 (如 Chrome) 这个 env 变量被忽略,无副作用。
     cmd.env("PYTHONUNBUFFERED", "1");
+    // 同理: 常驻的 Python 服务 (tool-bridge / local-search) 日志里全是中文路径,
+    // 写到 GBK 编码不了的字 (生僻字、emoji 文件名) 就会崩。见 PYTHON_UTF8_ENV。
+    cmd.envs(PYTHON_UTF8_ENV);
 
     for (k, v) in &cfg.env {
         cmd.env(k, v);
@@ -492,5 +521,24 @@ mod rotate_tests {
             include_str!("email_scheduler.rs").contains("email_command(&bin)"),
             "后台扫描必须复用邮件页的 command builder，才能继承 mail_dir"
         );
+    }
+}
+
+#[cfg(test)]
+mod python_env_tests {
+    use super::*;
+
+    fn envs(command: &Command) -> Vec<(String, String)> {
+        command
+            .get_envs()
+            .filter_map(|(k, v)| Some((k.to_str()?.to_owned(), v?.to_str()?.to_owned())))
+            .collect()
+    }
+
+    #[test]
+    fn python_command_固定_utf8_输出() {
+        let got = envs(&python_command("python"));
+        assert!(got.contains(&("PYTHONUTF8".into(), "1".into())), "{got:?}");
+        assert!(got.contains(&("PYTHONIOENCODING".into(), "utf-8".into())), "{got:?}");
     }
 }

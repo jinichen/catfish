@@ -81,7 +81,8 @@ async fn parse_file_inner(tmp_path: &str) -> Result<ParseFileFromPython, String>
 
     log::info!("parse_file: {} {} {}", py.display(), script.display(), tmp_path);
 
-    let output = crate::services::process::background_command(&py)
+    // python_command: 固定 UTF-8 输出 (9/28 Windows 上写 "¥" 就 UnicodeEncodeError)
+    let output = crate::services::process::python_command(&py)
         .arg(&script)
         .arg(tmp_path)
         .output()
@@ -309,7 +310,8 @@ pub async fn attachment_bm25_search(
         parsed_text_path, query.chars().take(30).collect::<String>(), k,
     );
 
-    let output = crate::services::process::background_command(&py)
+    // python_command: 固定 UTF-8 输出 (9/28 Windows 上写 "¥" 就 UnicodeEncodeError)
+    let output = crate::services::process::python_command(&py)
         .arg(&script)
         .arg("--text-path").arg(&parsed_text_path)
         .arg("--query").arg(&query)

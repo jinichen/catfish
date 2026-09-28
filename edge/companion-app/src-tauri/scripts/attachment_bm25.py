@@ -236,6 +236,10 @@ def query_top_k(passages: list[str], query: str, top_k: int = DEFAULT_TOP_K) -> 
 # ============================================================
 
 def main() -> int:
+    # 9/28: 输出里是原文段落, 中文 Windows 默认 GBK 会崩 (见 parse_file_common)。
+    # 在 main 里才 import: 测试把本文件当模块单独加载时不依赖脚本目录在 sys.path 上。
+    from parse_file_common import force_utf8_stdio  # noqa: PLC0415
+    force_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--text-path", required=True, help="解析后的全文文件路径")
     parser.add_argument("--query", default="", help="员工的问题, 用作打分 query")

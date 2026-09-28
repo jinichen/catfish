@@ -93,7 +93,7 @@ pub(crate) fn restart_hermes_gateway() -> Result<(), String> {
     let python = hermes_python()?;
     let root = hermes_root()?;
     let agent_root = hermes_agent_root()?;
-    let mut command = crate::services::process::background_command(&python);
+    let mut command = crate::services::process::python_command(&python);
     command
         .args(["-m", "hermes_cli.main", "gateway", "restart"])
         .env("HERMES_HOME", &root)
