@@ -3149,6 +3149,20 @@ button {
   .wiki-graph__heading > span { display: none; }
 }
 
+/* 9/28: 图谱栏窄 (员工把中间栏拉宽后常见, ~230px) 时整个表头收紧成一行:
+   标题 14px、去掉标题前的图标、按钮 30px、「查看全图」字号 12px。
+   上一版只让按钮换到第二行, 标题是完整了, 表头却高出一倍 (鸿波: "太占空间了")。
+   算过: 230px 栏 = 标题 ~58 + 间距 8 + 按钮组 ~134, 放得下; 再窄才会换行兜底。 */
+@container (max-width: 320px) {
+  /* 放大后的图谱是全屏浮层, 但仍在这个窄容器里 —— 它不该跟着收紧 */
+  .wiki-graph:not(.wiki-graph--expanded) .wiki-graph__header { min-height: 44px; padding: 7px 10px; gap: 6px; }
+  .wiki-graph:not(.wiki-graph--expanded) .wiki-graph__heading > svg { display: none; }
+  .wiki-graph:not(.wiki-graph--expanded) .wiki-graph__header strong { font-size: 14px; }
+  .wiki-graph:not(.wiki-graph--expanded) .wiki-graph__controls { gap: 4px !important; }
+  .wiki-graph:not(.wiki-graph--expanded) .wiki-graph__controls button { width: 30px; min-height: 30px; flex: 0 0 30px; }
+  .wiki-graph:not(.wiki-graph--expanded) .wiki-graph__mode-toggle { min-width: 0; padding: 0 8px !important; font-size: 12px !important; }
+}
+
 @media (max-width: 720px) {
   .wiki-graph--expanded {
     inset: 8px;
