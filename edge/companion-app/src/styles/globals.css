@@ -3007,6 +3007,10 @@ button {
   justify-content: space-between;
   align-items: center;
   gap: 8px;
+  /* 9/28: 图谱栏窄的时候按钮换到第二行, 标题不再被挤掉 (原来「关联图谱」的「谱」
+     被「查看全图」盖住: 标题允许收缩 + overflow:hidden, 按钮不收缩) */
+  flex-wrap: wrap;
+  row-gap: 6px;
   background: var(--catfish-bg-elevated);
   /* subtle bottom shadow 替 1px border */
   box-shadow: inset 0 -1px 0 rgba(14, 95, 102, 0.06);
@@ -3017,9 +3021,8 @@ button {
 }
 .wiki-graph__header > div { display: flex; align-items: center; gap: 7px; }
 .wiki-graph__heading {
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
+  /* 不收缩: 放不下就让按钮换行, 而不是把标题裁掉 */
+  flex: 1 0 auto;
 }
 .wiki-graph__header strong { color: var(--catfish-text); font-size: 16px; }
 .wiki-graph__heading > strong { white-space: nowrap; }
