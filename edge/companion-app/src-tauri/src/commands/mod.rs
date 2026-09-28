@@ -31,6 +31,7 @@ pub mod cron; // P3.5.105 (6/25 鸿波 catch "定时任务跑没跑结果如何�
 pub mod curator;
 pub mod dream; // P3.5.1 (6/15 鸿波): Dream Engine — 员工主动触发 long-term 蒸馏, picker model
 pub mod email; // BL-COMPANION-EMAIL-DIGEST (5/18): 邮件简报卡的后端 shell-out
+pub mod email_last_draft; // 9/29: 最近存进草稿箱的那封 → 对话结束后跳到草稿箱
 pub mod endpoints;
 pub mod expert_bots; // Hermes Profile 专家 Bot 管理器（默认关闭）
 mod expert_bots_config;

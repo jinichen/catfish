@@ -1,48 +1,33 @@
-/** 小鲶在对话里存了草稿 → 回合结束后切到邮件页草稿箱, 选中那封 (9/27)。
+/** 小鲶在对话里存了草稿 → 回合结束后切到邮件页草稿箱, 选中那封 (9/27, 9/29 重做)。
  *
- * 邮件页里「存草稿就跳过去」早就做了, 但对话里小鲶调 catfish_email_create_draft
- * 存的草稿不跳 —— 员工只看到一句"草稿在草稿箱", 得自己去找。
+ * 9/27 第一版靠推断: 从 hermes 的流里认 `catfish_email_create_draft` 工具完成 →
+ * 回合结束再连一次服务器列草稿箱 → 按 Date 头找一封"刚存的"。9/29 鸿波:
+ * "Windows 版落草稿箱后依旧没有跳转到草稿箱, 还需要人工选择邮件 → 草稿箱"。
+ * 那条链上每一环都可能悄悄断, 断了只是不跳、不报错:
+ *   · 小鲶不一定走那个工具 —— 邮件 skill 教的是在终端里跑 catfish-email,
+ *     终端里直接 `catfish-email draft` 一样能存, 工具名认不出来
+ *   · 回合结束现连服务器列草稿箱, 慢 / 连不上就放弃
+ *   · 按 Date 头比时间, 时区或时钟一点偏差就判成"不是刚存的"
  *
- * 为什么不在收到工具事件时直接跳:
- *   · hermes 的 `hermes.tool.progress` completed 事件**不带结果**, 不知道成没成功、
- *     草稿 id 是什么。
- *   · 回合还没结束就切走, 小鲶最后那句话员工没看到。
- * 所以: 工具完成时只记一笔; 回合结束后去草稿箱里**实际查一次**, 有一封是这之后
- * 新存的才跳 —— 存失败了就不跳, 不靠猜。
+ * 现在不猜了: 邮件组件每次存草稿成功都记下是哪一封、什么时候
+ * (catfish_email/last_draft.py), 不管是谁调的。回合结束读这一笔 —— 存在这一
+ * 回合开始之后, 就跳过去选中它。存失败了就没有这一笔, 自然不跳。
  */
-import { emailListFetch, type EmailDigestItem } from "./tauri";
+import { emailLastDraft } from "./tauri";
 import { useUIStore } from "../store/ui";
 
-const DRAFT_TOOL = /catfish_email_create_draft$/;
-/** 草稿的 Date 头是存的那一刻; 留出本机时钟和服务器处理的余量 */
-const FRESH_WINDOW_MS = 3 * 60 * 1000;
-
-let pendingSince: number | null = null;
-
-/** chat.ts 收到 hermes.tool.progress 时调。 */
-export function noteToolProgress(tool: unknown, status: unknown): void {
-  if (status === "completed" && typeof tool === "string" && DRAFT_TOOL.test(tool)) {
-    pendingSince ??= Date.now();
-  }
-}
-
-export function pickFreshDraft(list: EmailDigestItem[], since: number): EmailDigestItem | null {
-  const fresh = list
-    .filter((d) => Date.parse(d.date) >= since - FRESH_WINDOW_MS)
-    .sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
-  return fresh[0] ?? null;
-}
+/** Python 的 time.time() 和 Date.now() 是同一台机器的钟; 留一点给浮点和换算 */
+const CLOCK_SLACK_MS = 1000;
 
 /** 回合结束时调 (sendMessage 的 finally)。员工不在对话页就不打扰。 */
-export async function jumpToFreshDraft(): Promise<void> {
-  const since = pendingSince;
-  pendingSince = null;
-  if (since === null || useUIStore.getState().activeTab !== "chat") return;
+export async function jumpToFreshDraft(roundStartedAt: number): Promise<void> {
+  if (useUIStore.getState().activeTab !== "chat") return;
   try {
-    const list = JSON.parse(await emailListFetch(false, 20, "Drafts"));
-    const draft = Array.isArray(list) ? pickFreshDraft(list as EmailDigestItem[], since) : null;
-    if (draft) useUIStore.getState().openEmailDraft(draft.id);
+    const last = await emailLastDraft();
+    if (last?.id && last.created_at * 1000 >= roundStartedAt - CLOCK_SLACK_MS) {
+      useUIStore.getState().openEmailDraft(last.id);
+    }
   } catch (e) {
-    console.warn("[draftJump] 查草稿箱失败, 不跳转:", e);
+    console.warn("[draftJump] 读不到最近存的草稿, 不跳转:", e);
   }
 }

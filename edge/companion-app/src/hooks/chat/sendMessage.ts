@@ -108,6 +108,8 @@ export async function sendMessage(
       if (isStreaming) return;
       // 8/3: 清上一次取消的残留 (上一轮若在 finally 之外的路径退出)
       useChatStore.getState().setIsCancelling(false);
+      // 9/29: 这一回合里存的草稿才跳过去 (见 lib/draftJump.ts)
+      const roundStartedAt = Date.now();
 
       // 0. 第一次 send 时 lazy create state.db session (持久化的开端).
       // 5/24 BL-MULTI-SESSION-STREAM: 捕获 id 到 closure, 整轮 persistMessage /
@@ -487,8 +489,8 @@ export async function sendMessage(
           setLifecycleStatus(null);
         }
         abortRef.current = null;
-        // 9/27: 这一回合小鲶存了草稿 → 核实后切到邮件页草稿箱 (见 lib/draftJump.ts)
-        if (currentStoreSession === sessionIdForStream) void jumpToFreshDraft();
+        // 9/27: 这一回合小鲶存了草稿 → 切到邮件页草稿箱并选中它 (见 lib/draftJump.ts)
+        if (currentStoreSession === sessionIdForStream) void jumpToFreshDraft(roundStartedAt);
         // 通知 registry stream 结束 (sidebar ⏳ 也跟着消失)
         if (sessionIdForStream) {
           streamRegistry.finish(sessionIdForStream);

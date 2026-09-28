@@ -693,6 +693,13 @@ def test_cmd_send_value_error_returns_2(capsys):
 # ============================================================
 
 
+@pytest.fixture(autouse=True)
+def _catfish_home(tmp_path, monkeypatch):
+    """_cmd_draft 成功后会写 ~/.catfish/email-last-draft.json —— 测试不许碰真家目录。"""
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path / "catfish-home"))
+    return tmp_path / "catfish-home"
+
+
 class _DraftingAdapter(_FakeAdapter):
     """会起草的 fake —— 用来占住"有能力"那一侧。"""
 
@@ -775,4 +782,3 @@ def test_cmd_draft_surfaces_not_supported_from_a_lying_flag(capsys):
     rc = _cmd_draft([_Liar(name="outlook_win")], _make_draft_args())
     assert rc == 1
     assert "不支持起草" in capsys.readouterr().err
-

@@ -221,6 +221,13 @@ export const emailListFetch = (unreadOnly: boolean, limit?: number, folder?: str
     limit: limit ?? null,
     folder: folder ?? null,
   });
+/** 最近一次存进草稿箱的那封 (9/29) —— catfish-email draft 成功时记的, 不管谁调的。
+ *  created_at 是 Unix 秒。没存过 → null。见 lib/draftJump.ts。 */
+export interface LastDraft {
+  id: string;
+  created_at: number;
+}
+export const emailLastDraft = () => rawInvoke<LastDraft | null>("email_last_draft");
 export const emailReadMessage = (id: string, options?: { markRead?: boolean }) =>
   rawInvoke<string>("email_read_message", {
     id,

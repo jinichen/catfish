@@ -1,7 +1,7 @@
 ---
 name: catfish-email
 description: 看邮件 / 列邮件 / 搜邮件 / 起草回复必选此 skill, 不走 himalaya / mutt / IMAP. 触发: 今天几封新邮件 / 未读 / 回复 X 那封 / 搜 X 邮件 / 起草回信 / 看老板邮件. 直读员工本地 Apple Mail / Foxmail / Outlook 客户端数据, 不需密码. 红线: 不自动发, 草稿写到 Drafts 员工自发. 当前 macOS Apple Mail + Foxmail (只读), 后续 Windows.
-version: 0.2.0
+version: 0.2.1
 author: 鲶鱼 Catfish Platform Team
 license: MIT
 metadata:
@@ -125,13 +125,14 @@ catfish-email search "<关键词>" [--limit=20]             # 全文搜索
 2. 自己用 LLM 生成回复正文 (中文工作邮件套路: 称谓 + 正文 + 祝好 + 名字)
 3. 把生成的内容 quote 给员工预览, 含: To / Cc / Subject (Re: ...) / Body
 4. **STOP 等员工 explicit yes**
-5. 拿到 yes → **不调 catfish-email 发送** (红线), 而是输出"复制以下到客户端
-   写邮件框" 让员工自己粘贴 + 自己点发送
+5. 拿到 yes → **存进草稿箱, 不发送** (红线): 调 catfish_email_create_draft 工具
+   (回复时带 in_reply_to = 原邮件 id; 改草稿箱里已有的那封时带 replaces)。
+   存好后鲶鱼会自动打开邮件页草稿箱并选中这封, 员工核对后自己点发送 ——
+   不用让员工自己去找草稿箱
 ```
 
-注: Foxmail Mac 不支持自动建草稿 (写入数据库 + 触发 rescan 不可靠), 必须走
-"复制粘贴让员工手动" 这条降级路径. Outlook 后续支持后会自动建 draft (但仍不
-自动发).
+注: 当前来源都不支持起草时 (比如只有 Foxmail Mac, 工具会明确报错), 才退回
+"复制以下到客户端写邮件框" 让员工自己粘贴 + 自己点发送。
 
 ---
 
@@ -210,7 +211,7 @@ catfish-email search "<关键词>" [--limit=20]             # 全文搜索
 ### 起草回复 (员工说"回复 Y" 时)
 
 ```markdown
-**起草草稿** (准备复制到 Foxmail / Outlook 撰写窗口):
+**起草草稿** (你确认后存进草稿箱, 不会发送):
 
 To: 张三 <zhang@x.com>
 Cc:
@@ -227,7 +228,7 @@ Subject: Re: 周报 4-26
 
 ---
 
-确认这版? (确认我就把它打印出来你复制粘贴; 想改告诉我哪里不对)
+确认这版? (确认我就存进草稿箱并打开给你核对, 发送由你自己点; 想改告诉我哪里不对)
 ```
 
 ---

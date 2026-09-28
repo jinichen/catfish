@@ -119,6 +119,11 @@ def _cmd_draft(adapters: list[EmailAdapter], args) -> int:
         _err(f"起草失败: {e}")
         return 1
 
+    # 9/29: 记下这一封 —— Companion 对话结束后据此跳到草稿箱并选中它 (见 last_draft.py)
+    if msg_id:
+        from . import last_draft  # noqa: PLC0415
+        last_draft.record(msg_id, target.name)
+
     if args.json:
         print(json.dumps(
             {"draft_id": msg_id, "adapter": target.name, "to": to_list, "subject": args.subject},

@@ -264,6 +264,7 @@ pub(crate) fn handler(
             crate::commands::email::email_source_select,
             // BL-COMPANION-EMAIL-TAB (5/18): 邮件 tab 用的扩展能力 (全列表 + 读全文 + 起草)
             crate::commands::email::email_list_fetch,
+            crate::commands::email_last_draft::email_last_draft,
             crate::commands::email::email_read_message,
             crate::commands::email::email_create_draft,
             // P3.5.204.c (7/9 鸿波): 客户端还没同步的邮件, 员工可点刷新触发 IMAP/POP 同步
