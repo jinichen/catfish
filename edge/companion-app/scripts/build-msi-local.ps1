@@ -471,20 +471,16 @@ if (Test-Path $emailTar) { Remove-Item -Force $emailTar }
 tar -czf $emailTar -C $emailStage .
 if ($LASTEXITCODE -ne 0) { throw 'catfish-email-dist.tar.gz build failed' }
 
-python -m pip download --only-binary=:all: --dest $depsStage `
-    --python-version 3.11 --platform win_amd64 --implementation cp --abi cp311 playwright watchdog
-if ($LASTEXITCODE -ne 0) { throw 'playwright dependency download failed' }
-python -m pip wheel --no-deps --wheel-dir $depsStage jieba
-if ($LASTEXITCODE -ne 0) { throw 'jieba wheel build failed' }
-$depWheels = @(Get-ChildItem $depsStage -Filter '*.whl')
-if (-not ($depWheels | Where-Object { $_.Name -like 'jieba-*' })) { throw 'deps archive missing jieba wheel' }
-if (-not ($depWheels | Where-Object { $_.Name -like 'playwright-*' })) { throw 'deps archive missing playwright wheel' }
-if (-not ($depWheels | Where-Object { $_.Name -like 'watchdog-*' })) { throw 'deps archive missing watchdog wheel (local-search 文件监听)' }
+# 清单: src-tauri/hermes-extra-packages.txt (Companion 装机/自检读同一份);
+# 取 wheel + 「每个包都是 .whl」的检查在 fetch_hermes_deps.py, CI 和 mac 打包也调它。
+python (Join-Path $PSScriptRoot 'fetch_hermes_deps.py') $depsStage `
+    --python-version 3.11 --platform win_amd64 --implementation cp --abi cp311
+if ($LASTEXITCODE -ne 0) { throw 'hermes extra dependencies (hermes-deps) download failed' }
 $depsTar = Join-Path $resourceDir 'hermes-deps-dist.tar.gz'
 if (Test-Path $depsTar) { Remove-Item -Force $depsTar }
 tar -czf $depsTar -C $depsStage .
 if ($LASTEXITCODE -ne 0) { throw 'hermes-deps-dist.tar.gz build failed' }
-# 9/23: tool-bridge / local-search 源码 —— 之前两个平台的包都没带, 客户机器上
+# 9/23: tool-bridge / local-search 源码 (9/28 加上传文件解析脚本) —— 之前两个平台的包都没带, 客户机器上
 # Companion 找不到它们 (见 src-tauri/src/services/edge_runtime.rs)。跟 mac 同一个脚本。
 $edgeTar = Join-Path $resourceDir 'catfish-edge-runtime.tar.gz'
 python (Join-Path $PSScriptRoot 'build_edge_runtime.py') $edgeTar

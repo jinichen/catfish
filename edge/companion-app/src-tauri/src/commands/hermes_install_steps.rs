@@ -463,7 +463,7 @@ pub(crate) fn rollback_install(paths: &BootstrapPaths, backup: Option<&PreviousI
 pub(crate) fn install_hermes_deps(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths) -> Result<()> {
     let Some(tar) = artifacts.deps_tar.as_ref() else {
         log::warn!(
-            "[hermes-deps] 资源里没有 {} —— 浏览器工具和中文分词会不可用。\
+            "[hermes-deps] 资源里没有 {} —— 浏览器工具、中文分词和上传文件解析会不可用。\
              这个包由 scripts/build-mac-resources.sh 产出, 检查打包流程。",
             HERMES_DEPS_ARCHIVE
         );
@@ -489,13 +489,13 @@ pub(crate) fn install_hermes_deps(artifacts: &RuntimeArtifacts, paths: &Bootstra
             .arg("--no-index")           // 离线现场必须 —— 否则会去连 PyPI 干等超时
             .arg("--find-links")
             .arg(&stage)
-            .args(super::hermes_install_artifacts::HERMES_EXTRA_PACKAGES);
+            .args(super::hermes_install_artifacts::hermes_extra_packages());
         command_status(pip, "uv pip install hermes 额外依赖")?;
 
         // 装了但 import 不了等于没装 —— 而下游只会 warn 一句, 现场查不出来。
         // 判据跟 autostart.rs 的自检一致 (playwright.sync_api, 不是 playwright)。
         let mut check = crate::services::process::background_command(&venv_py);
-        check.args(["-c", super::hermes_install_artifacts::HERMES_EXTRA_IMPORT_CHECK]);
+        check.arg("-c").arg(super::hermes_install_artifacts::hermes_extra_import_check());
         command_status(check, "验证 hermes 额外依赖可导入")
     });
 

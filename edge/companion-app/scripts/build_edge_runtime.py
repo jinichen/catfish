@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""打 catfish-edge-runtime.tar.gz —— tool-bridge / local-search 的 Python 源码 (9/23).
+"""打 catfish-edge-runtime.tar.gz —— tool-bridge / local-search / 文件解析的 Python 源码.
 
 Companion 在客户机器上把它解到 ~/.catfish/edge-runtime/ (services/edge_runtime.rs)。
 在这之前两个平台的安装包都没带这两个组件, Companion 按源码树去找, 客户机器
 上永远找不到 —— 见 edge_runtime.rs 文件头。
+
+9/28 加 file-parse/: 聊天里上传文件用的 parse_file*.py / attachment_bm25.py
+(原来在 src-tauri/scripts, 同样只有源码树里有)。Windows 上传文件报
+「Python 解释器找不到」, 修掉解释器之后下一步就会是「parse_file.py 脚本找不到」
+—— 装好的 mac 也一样, 只是开发机上有源码树, 一直没暴露。
 
 mac (build-mac-resources.sh) 和 Windows (build-msi-local.ps1 / CI workflow) 调的
 是**同一个脚本**, 所以两边包里的内容一字不差。
@@ -27,8 +32,17 @@ COMPONENTS = {
     "tool-bridge": EDGE / "tool-bridge" / "src",
     "local-search": EDGE / "local-search" / "src",
 }
-# Companion 解完会检查这两个路径在不在 —— 两边的清单要对得上
-MUST_EXIST = ["tool-bridge/src/catfish_tool_bridge/__main__.py", "local-search/src/catfish_search/cli.py"]
+# 文件解析脚本: 平铺在 file-parse/ 下 (parse_file.py 按同目录 import parse_file_*)。
+# 只挑这几类 —— 同目录里还有测试和打包脚本, 不该进员工机器。
+FILE_PARSE_SRC = EDGE / "companion-app" / "src-tauri" / "scripts"
+FILE_PARSE_PATTERNS = ("parse_file*.py", "attachment_bm25.py")
+# Companion 解完会检查 (services/edge_runtime.rs 的 must 列表) —— 两边的清单要对得上
+MUST_EXIST = [
+    "tool-bridge/src/catfish_tool_bridge/__main__.py",
+    "local-search/src/catfish_search/cli.py",
+    "file-parse/parse_file.py",
+    "file-parse/attachment_bm25.py",
+]
 SKIP_PARTS = {"__pycache__", "tests", ".pytest_cache"}
 
 
@@ -46,6 +60,8 @@ def collect() -> list[tuple[str, Path]]:
             if p.suffix in {".pyc", ".pyo"}:
                 continue
             out.append((f"{name}/src/{rel.as_posix()}", p))
+    parse_files = sorted({p for pattern in FILE_PARSE_PATTERNS for p in FILE_PARSE_SRC.glob(pattern)})
+    out.extend((f"file-parse/{p.name}", p) for p in parse_files if p.is_file())
     return out
 
 

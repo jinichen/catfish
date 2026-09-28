@@ -14,10 +14,14 @@
 //!
 //! - PDF/Excel/Word 解析库 Python 生态成熟 (pypdfium2/openpyxl/python-docx)
 //! - Rust 等价库要么少 (calamine for xlsx OK, 但 docx 几乎没维护好的)
-//! - 鲶鱼 hermes/gateway venv 已经装这几个库 (4-30 weekly-report skill 验过)
+//! - 开发机的 gateway venv 装了这几个库; 安装包里它们随 hermes-deps 装进 hermes venv
+//!   (9/28 起, 见 src-tauri/hermes-extra-packages.txt)
 //! - 走 subprocess 简单稳定, 不用 PyO3 内嵌 Python (开发期复杂度高)
 
 use std::path::{Path, PathBuf};
+
+// 解释器 / 脚本的查找见 file_parse_env.rs (9/28 拆出, 修 Windows 找不到 Python)。
+use super::file_parse_env::{find_python, find_script};
 
 use serde::{Deserialize, Serialize};
 
@@ -49,96 +53,6 @@ struct ParseError {
     error: String,
 }
 
-/// 探测 Python 解释器.
-///
-/// 5/6 鸿波报"在 gateway 装了 pypdfium2 还报错": Root cause = 之前 hermes venv
-/// 优先, 但 hermes venv 不一定装 catfish 解析依赖 (pypdfium2/openpyxl/python-docx).
-///
-/// 修: catfish gateway venv 优先 (我们文档明确要求装这里); 同时**检测每个候选
-/// 是否真有依赖** — pypdfium2 / openpyxl / docx 都齐, 才用; 缺任意一个就跳下一个.
-/// 这样不管员工装哪个 venv, 哪个真齐就用哪个.
-fn find_python() -> Option<PathBuf> {
-    if let Ok(custom) = std::env::var("CATFISH_PYTHON") {
-        let p = PathBuf::from(custom);
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    let home = crate::util::paths::home_env().ok()?;
-    let candidates = [
-        // catfish gateway venv (Python 3.12) - parse_file.py 依赖文档里明确装这里
-        format!("{home}/person_task/catfish/central/llm-gateway/venv/bin/python"),
-        // hermes venv (Python 3.11) - 兜底
-        format!("{home}/.hermes/hermes-agent/venv/bin/python"),
-        // 系统 brew Python (M4)
-        "/opt/homebrew/bin/python3".to_string(),
-        // 系统 python3
-        "/usr/bin/python3".to_string(),
-    ];
-
-    // 先找依赖齐的 (pypdfium2 + openpyxl + docx 全装)
-    for c in &candidates {
-        let p = PathBuf::from(c);
-        if p.exists() && _has_parse_deps(&p) {
-            log::info!("find_python: 依赖齐, 用 {}", p.display());
-            return Some(p);
-        }
-    }
-    // 都不齐 — 退而求其次, 用第一个存在的 (parse_file.py 跑时报具体缺啥)
-    for c in &candidates {
-        let p = PathBuf::from(c);
-        if p.exists() {
-            log::warn!(
-                "find_python: 没找到依赖齐的 venv, 退而用 {} (员工 PDF/Excel 上传可能报缺依赖)",
-                p.display(),
-            );
-            return Some(p);
-        }
-    }
-    None
-}
-
-/// 检测 Python 候选是否装了 parse_file.py 三大依赖 (pypdfium2 / openpyxl / docx).
-///
-/// 一次 subprocess 调用, ~100ms, 只在启动找 Python 时跑一次. 不影响每次 parse 性能.
-fn _has_parse_deps(py: &Path) -> bool {
-    let out = crate::services::process::background_command(py)
-        .arg("-c")
-        .arg("import pypdfium2, openpyxl, docx")
-        .output();
-    matches!(out, Ok(o) if o.status.success())
-}
-
-/// 找 parse_file.py 脚本. 跟 Tauri binary 同 bundle 里 (Resources 目录).
-/// dev 模式从源码 src-tauri/scripts/parse_file.py 找.
-fn find_parse_script() -> Option<PathBuf> {
-    find_script("parse_file.py")
-}
-
-/// 找 Python 脚本 (跟 parse_file 同目录).
-/// BL-L26 (5/7): 抽出共享 attachment_bm25.py 复用同一查找逻辑.
-fn find_script(name: &str) -> Option<PathBuf> {
-    if let Ok(cwd) = std::env::current_dir() {
-        let p = cwd.join("scripts").join(name);
-        if p.exists() {
-            return Some(p);
-        }
-        let p = cwd.join("src-tauri").join("scripts").join(name);
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    if let Ok(home) = crate::util::paths::home_env() {
-        let p = PathBuf::from(home)
-            .join("person_task/catfish/edge/companion-app/src-tauri/scripts")
-            .join(name);
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    None
-}
-
 /// Python 输出的 JSON (无 kept_path, 由 Rust 端填).
 #[derive(Debug, Deserialize)]
 struct ParseFileFromPython {
@@ -162,12 +76,8 @@ async fn parse_file_inner(tmp_path: &str) -> Result<ParseFileFromPython, String>
         return Err(format!("文件不存在: {tmp_path}"));
     }
 
-    let py = find_python().ok_or_else(|| {
-        "Python 解释器找不到. 设 env CATFISH_PYTHON=/path/to/python".to_string()
-    })?;
-    let script = find_parse_script().ok_or_else(|| {
-        "parse_file.py 脚本找不到 (dev 模式跑 npm run tauri dev 的目录得对)".to_string()
-    })?;
+    let py = find_python()?;
+    let script = find_script("parse_file.py")?;
 
     log::info!("parse_file: {} {} {}", py.display(), script.display(), tmp_path);
 
@@ -391,12 +301,8 @@ pub async fn attachment_bm25_search(
         });
     }
 
-    let py = find_python().ok_or_else(|| {
-        "Python 解释器找不到. 设 env CATFISH_PYTHON=/path/to/python".to_string()
-    })?;
-    let script = find_script("attachment_bm25.py").ok_or_else(|| {
-        "attachment_bm25.py 脚本找不到".to_string()
-    })?;
+    let py = find_python()?;
+    let script = find_script("attachment_bm25.py")?;
 
     log::info!(
         "BL-L26 bm25_search: kept={}, query={:?}, top_k={}",

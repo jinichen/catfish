@@ -197,12 +197,16 @@ for mac_conf in ("tauri.aarch64.conf.json", "tauri.x64.conf.json"):
     for name in sorted((mac - ONLY_MAC) - win):
         bad("R7", "tauri.windows.conf.json", f"{mac_conf} 里有 {name}, Windows 包里没有")
 
-# 打包脚本三处都得真的去生成 edge-runtime (清单里有、脚本没打 = 装机时静默缺)
+# 打包脚本三处都得真的去生成 edge-runtime 和 hermes-deps (清单里有、脚本没打 = 装机时静默缺)
 for script in (APP / "scripts" / "build-msi-local.ps1",
                APP / "scripts" / "build-mac-resources.sh",
                REPO / ".github" / "workflows" / "build-windows-msi.yml"):
-    if "build_edge_runtime.py" not in script.read_text(encoding="utf-8"):
-        bad("R7", script.relative_to(REPO).as_posix(), "没调 build_edge_runtime.py —— 包里不会有 tool-bridge / local-search")
+    text = script.read_text(encoding="utf-8")
+    if "build_edge_runtime.py" not in text:
+        bad("R7", script.relative_to(REPO).as_posix(), "没调 build_edge_runtime.py —— 包里不会有 tool-bridge / local-search / 文件解析脚本")
+    # 9/28: hermes 额外依赖三处都得走同一个脚本、读同一份清单 (src-tauri/hermes-extra-packages.txt)
+    if "fetch_hermes_deps.py" not in text:
+        bad("R7", script.relative_to(REPO).as_posix(), "没调 fetch_hermes_deps.py —— hermes-deps 包里的依赖会跟装机清单对不上")
 
 # ── 结果 ──────────────────────────────────────────────────────────
 

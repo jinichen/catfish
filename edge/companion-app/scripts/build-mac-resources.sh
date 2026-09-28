@@ -266,7 +266,7 @@ download_with_retry "$PY_URL" "$PY_TMP" || exit 1
 cp "$PY_TMP" "$RESOURCES/cpython-${PYTHON_VERSION}-embed.tar.gz"
 echo "  OK cpython-embed.tar.gz ($(ls -lh "$RESOURCES/cpython-${PYTHON_VERSION}-embed.tar.gz" | awk '{print $5}'))"
 
-# ─── 5.5 hermes venv 的额外 Python 依赖 (jieba / playwright) ──────────
+# ─── 5.5 hermes venv 的额外 Python 依赖 (jieba / playwright / 9/28 起加文件解析) ──
 #
 # 8/5 鸿波「MACOS 怎么安装了新包, 为什么会缺」。查下来: 装机流程里
 # jieba 和 playwright 的安装语句**是 0 处** —— 从来没打进过包。
@@ -289,10 +289,10 @@ echo "  OK cpython-embed.tar.gz ($(ls -lh "$RESOURCES/cpython-${PYTHON_VERSION}-
 #   用构建机 python 取到的 wheel 装不进 3.11 的 venv —— 而且是在**员工
 #   机器上**才失败, 正是这两天一直在修的那种"晚一步才炸"。
 #
-# 所以解压刚下好的 cpython, 用它自己的 pip download。版本和平台标签
-# 自然对, 不用猜 --platform 标签。
+# 所以解压刚下好的 cpython, 用它自己的 pip download。Python 版本标签
+# 自然对; 平台只再压一下最低系统版本 (见下面 9/28 那段)。
 echo ""
-echo "=== [5.5/6] 取 hermes venv 额外依赖 (jieba / playwright) ==="
+echo "=== [5.5/6] 取 hermes venv 额外依赖 (分词 / 浏览器 / 文件监听 / 上传文件解析) ==="
 DEPS_TAR="$RESOURCES/hermes-deps-dist.tar.gz"
 DEPS_STAGE="/tmp/catfish-hermes-deps-$ARCH"
 PY_UNPACK="/tmp/catfish-py-unpack-$ARCH"
@@ -321,28 +321,25 @@ echo "  → 复核内嵌 Python 的 SQLite..."
 #   · jieba: 纯 Python, 我们自己 pip wheel 现打一个 py3-none-any 的轮子。
 #     不能把 sdist 丢给员工机 —— 装的时候 uv --no-index 要构建 sdist, 得有
 #     setuptools 后端, 离线环境下拿不到, 又是一个"到现场才炸"。
-"$EMBED_PY" -m pip download --only-binary=:all: -d "$DEPS_STAGE" playwright watchdog >/dev/null || {
-    echo "❌ 取 playwright wheel 失败 (需要外网; 若已联网请看上面 pip 的原始报错)"
+#     (清单里 jieba 那行的 `sdist` 标记就是这个意思。)
+#
+# 9/28: 包清单收进 src-tauri/hermes-extra-packages.txt (Companion 装机/自检读同一份),
+# 取 wheel 和「每个包都得是 .whl」的检查都在 fetch_hermes_deps.py 里 —— Windows 两处
+# 打包调的是同一个脚本。--platform 按安装包支持的最低系统取 (tauri.conf.json 的
+# minimumSystemVersion 10.15; Apple 芯片最低就是 11): 不限的话新系统构建机会取到
+# 只支持 macOS 13+ 的 pypdfium2, 老系统员工机上一个装不上就全部装不上。
+case "$ARCH" in
+    aarch64) DEPS_PLATFORM="macosx_11_0_arm64" ;;
+    x64)     DEPS_PLATFORM="macosx_10_15_x86_64" ;;
+esac
+"$EMBED_PY" "$COMPANION/scripts/fetch_hermes_deps.py" "$DEPS_STAGE" --platform "$DEPS_PLATFORM" -q || {
+    echo "❌ 取 hermes 额外依赖失败 (需要外网; 原因见上面的报错)"
     exit 1
 }
-"$EMBED_PY" -m pip wheel --no-deps -w "$DEPS_STAGE" jieba >/dev/null || {
-    echo "❌ 打 jieba wheel 失败 (jieba 只有 sdist, 这一步是现打轮子, 需要外网)"
-    exit 1
-}
-# 正向断言: 这三个必须真的在, 而且必须是 .whl —— 光看 pip 退出码不够。
-# 限定 *.whl (不是 *-*) 是因为员工机上 uv 带 --no-index 装, sdist 装不了;
-# 混进一个 sdist 会一路绿到达华的机器上才炸。
-for pkg in jieba playwright greenlet watchdog; do
-    if ! find "$DEPS_STAGE" -maxdepth 1 -iname "${pkg}-*.whl" | grep -q .; then
-        echo "❌ $DEPS_STAGE 里没有 $pkg 的 **wheel** —— 装机时会静默缺功能"
-        find "$DEPS_STAGE" -maxdepth 1 -type f -exec basename {} \; | sed 's/^/     现有: /'
-        exit 1
-    fi
-done
 tar czf "$DEPS_TAR" -C "$DEPS_STAGE" .
 echo "  OK hermes-deps-dist.tar.gz ($(ls -lh "$DEPS_TAR" | awk '{print $5}')) · $(find "$DEPS_STAGE" -maxdepth 1 -name '*.whl' | wc -l | tr -d ' ') 个 wheel"
 rm -rf "$PY_UNPACK"
-python3 "$(dirname "$0")/build_edge_runtime.py" "$RESOURCES/catfish-edge-runtime.tar.gz" || { echo "❌ edge-runtime 打包失败 (tool-bridge/local-search 源码, 见 edge_runtime.rs)"; exit 1; }
+python3 "$(dirname "$0")/build_edge_runtime.py" "$RESOURCES/catfish-edge-runtime.tar.gz" || { echo "❌ edge-runtime 打包失败 (tool-bridge/local-search/文件解析脚本, 见 edge_runtime.rs)"; exit 1; }
 
 # ─── 6. hermes-agent bundle · npm ci · npx playwright install chromium · tar 打包 ─────
 

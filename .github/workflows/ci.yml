@@ -335,6 +335,12 @@ jobs:
         working-directory: edge/companion-app/src-tauri
         run: python3 scripts/test_hermes_helper.py
 
+      # 9/28: hermes 额外依赖清单 + edge-runtime 里的上传文件解析脚本。
+      # 打包只在出安装包时跑, 清单或归档内容写错要到员工机器上才发现。
+      - name: 打包清单自查 (hermes-deps / edge-runtime)
+        working-directory: edge/companion-app
+        run: python3 scripts/test_packaging_lists.py
+
   # ════════════════════════════════════════════════════════════
   # 3b. 中央门户前端 (central/web) — tsc + build + 路由自查
   # ════════════════════════════════════════════════════════════

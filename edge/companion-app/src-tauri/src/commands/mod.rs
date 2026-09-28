@@ -40,6 +40,7 @@ mod expert_bots_types;
 pub mod feedback;
 pub mod file;
 pub mod file_parse;
+mod file_parse_env; // 9/28: 解析用的 Python / 脚本在哪 (Windows 找不到 Python)
 pub mod gateway;
 pub mod health;
 pub mod hermes; // P3.5.125 (6/26 鸿波 catch): hermes hang 监控 + 自动重启

@@ -240,13 +240,14 @@ fn bootstrap_locked(
         // 同上: hermes 健康 ≠ jieba/playwright 装了。判据用 import 而不是
         // 看目录 —— site-packages 里有目录但 import 不了的情况见过 (装了一半)。
         let deps_ok = crate::services::process::background_command(hermes_venv_python(&paths.install_dir))
-            .args(["-c", super::hermes_install_artifacts::HERMES_EXTRA_IMPORT_CHECK])
+            .arg("-c")
+            .arg(super::hermes_install_artifacts::hermes_extra_import_check())
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false);
         if !deps_ok {
             log::warn!(
-                "[hermes-deps] hermes 健康但 jieba/playwright 缺失 —— \
+                "[hermes-deps] hermes 健康但额外依赖缺失 (分词/浏览器/文件监听/上传文件解析) —— \
                  只补装它们, 不重装 hermes。"
             );
             match resolve_optional_runtime_dir(resource_dir)
@@ -254,7 +255,7 @@ fn bootstrap_locked(
                 .and_then(|artifacts| install_hermes_deps(&artifacts, paths))
             {
                 Ok(()) => log::info!("[hermes-deps] 补装完成"),
-                Err(e) => log::warn!("[hermes-deps] 补装失败, 浏览器工具和分词仍不可用: {e:#}"),
+                Err(e) => log::warn!("[hermes-deps] 补装失败, 浏览器工具、分词和上传文件解析仍不可用: {e:#}"),
             }
         }
         report(
@@ -397,7 +398,7 @@ fn bootstrap_locked(
         }
         // 浏览器工具 / 中文分词也是附加功能, 同样不回滚, 但要出声。
         if let Err(e) = install_hermes_deps(&artifacts, paths) {
-            log::warn!("[hermes-deps] 装 jieba/playwright 失败, 浏览器工具和分词不可用: {e:#}");
+            log::warn!("[hermes-deps] 装额外依赖失败, 浏览器工具、分词和上传文件解析不可用: {e:#}");
         }
         // 邮件是附加功能 —— 装不上不回滚整个 hermes, 但要留下能查的日志。
         if let Err(e) = install_catfish_email(&artifacts, paths) {

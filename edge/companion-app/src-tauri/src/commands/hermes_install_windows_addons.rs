@@ -15,10 +15,11 @@ pub(super) fn install_optional_components(resource_dir: &Path, paths: &Bootstrap
     let artifacts = RuntimeArtifacts::from_dir(resources.clone());
     let mut failures = Vec::new();
 
+    let import_check = crate::commands::hermes_install_artifacts::hermes_extra_import_check();
     let deps_ready = run_hidden_status(
         &hermes_venv_python(&paths.install_dir),
-        &["-c", crate::commands::hermes_install_artifacts::HERMES_EXTRA_IMPORT_CHECK],
-        "hermes 额外依赖 (jieba/playwright/watchdog)",
+        &["-c", &import_check],
+        "hermes 额外依赖 (分词/浏览器/文件监听/上传文件解析)",
     );
     if !deps_ready {
         match artifacts.deps_tar.as_ref() {

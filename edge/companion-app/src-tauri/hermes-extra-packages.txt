@@ -1,0 +1,22 @@
+# hermes venv 里要额外装的包 —— 唯一清单 (9/28 从 4 处各写一遍收成这一份)。
+#
+# 谁读它:
+#   · Companion 装机 / 启动自检 (hermes_install_artifacts.rs, include_str!)
+#   · 打包取 wheel (scripts/fetch_hermes_deps.py —— mac 打包、Windows CI、Windows 本地打包三处共用)
+#
+# 每行: <pip 需求>  <装没装的判据: import 得了才算>  [sdist]
+#   sdist = PyPI 上只有源码包, 打包时现打成 wheel (员工机器离线装, 装不了源码包)
+#
+# 加包之前想清楚: 装机是一次 uv pip install, 一个包的 wheel 不适配就全部装不上。
+# 打包脚本会按安装包支持的最低系统版本取 wheel (fetch_hermes_deps.py 的 --platform)。
+
+jieba          jieba                 sdist
+playwright     playwright.sync_api
+watchdog       watchdog.observers
+
+# 9/28: 聊天上传文件的解析 (src-tauri/scripts/parse_file*.py)。原来只有开发机的网关 venv 里有。
+pypdfium2      pypdfium2
+openpyxl       openpyxl
+python-docx    docx
+python-pptx    pptx
+xlrd<2         xlrd

@@ -257,11 +257,11 @@ for _res in "$APP_ROOT/src-tauri/resources/mac-aarch64" "$APP_ROOT/src-tauri/res
             _stale=1
         fi
     done <<EOF
-catfish-edge-runtime.tar.gz|../tool-bridge/src ../local-search/src scripts/build_edge_runtime.py
+catfish-edge-runtime.tar.gz|../tool-bridge/src ../local-search/src scripts/build_edge_runtime.py src-tauri/scripts/parse_file*.py src-tauri/scripts/attachment_bm25.py
 catfish-wechat-reader-dist.tar.gz|../wechat-reader/src scripts/build-wechat-reader-resource.sh
 catfish-email-dist.tar.gz|../email-agent
 hermes-agent-bundle.tar.gz|../hermes-plugins/catfish-memory
-hermes-deps-dist.tar.gz|scripts/build-mac-resources.sh
+hermes-deps-dist.tar.gz|scripts/build-mac-resources.sh scripts/fetch_hermes_deps.py src-tauri/hermes-extra-packages.txt
 EOF
     if [ "$_stale" = 1 ]; then
         echo ""

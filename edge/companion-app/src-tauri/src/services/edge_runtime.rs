@@ -22,6 +22,11 @@
 //!
 //! 两个组件都是纯 Python, 跑在 hermes 的 venv 里 (tool-bridge 本来就这样;
 //! local-search 只依赖 pyyaml, hermes venv 里有), 所以只需要源码, 不需要 wheel。
+//!
+//! 9/28 加第三份: `file-parse/` —— 聊天上传文件的解析脚本 (commands/file_parse.rs
+//! 调)。原来同样只在源码树里, Windows 上传文件先报找不到 Python, 修好 Python
+//! 之后就会报找不到脚本。它要的 pypdfium2 / openpyxl / python-docx 等随
+//! hermes-deps 一起装进 hermes venv (src-tauri/hermes-extra-packages.txt)。
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -31,11 +36,26 @@ use sha2::{Digest, Sha256};
 
 pub const ARCHIVE: &str = "catfish-edge-runtime.tar.gz";
 const STAMP: &str = ".archive-sha256";
+/// 聊天上传文件用的解析脚本 (parse_file*.py / attachment_bm25.py) 在归档里的目录 (9/28)。
+/// 跟 scripts/build_edge_runtime.py 的 `file-parse/` 对应。
+pub const FILE_PARSE_DIR: &str = "file-parse";
+/// 解完必须在的路径 —— 跟 build_edge_runtime.py 的 MUST_EXIST 对应。
+const MUST_EXIST: [&str; 4] = [
+    "tool-bridge/src/catfish_tool_bridge",
+    "local-search/src",
+    "file-parse/parse_file.py",
+    "file-parse/attachment_bm25.py",
+];
 
 /// `~/.catfish/edge-runtime/` —— 注意不是 `~/.catfish/runtime/`, 那个是离线安装归档的目录。
 pub fn runtime_root() -> Option<PathBuf> {
     let home = crate::util::paths::home_env().ok()?;
     Some(PathBuf::from(home).join(".catfish").join("edge-runtime"))
+}
+
+/// 安装包解出来的文件解析脚本 `~/.catfish/edge-runtime/file-parse/<name>` (不管在不在)。
+pub fn file_parse_script(name: &str) -> Option<PathBuf> {
+    Some(runtime_root()?.join(FILE_PARSE_DIR).join(name))
 }
 
 fn archive_in(resource_dir: &Path) -> PathBuf {
@@ -48,13 +68,13 @@ fn sha256_file(p: &Path) -> Result<String> {
     Ok(hex::encode(Sha256::digest(&bytes)))
 }
 
-/// 启动时调一次。任何失败都只 warn —— 缺了这两个组件 Companion 照样能聊天。
+/// 启动时调一次。任何失败都只 warn —— 缺了这几个组件 Companion 照样能聊天。
 pub fn ensure_extracted(resource_dir: &Path) {
     match ensure_extracted_at(&archive_in(resource_dir), runtime_root().as_deref()) {
-        Ok(Some(dir)) => log::info!("[edge-runtime] 已解压新版 tool-bridge / local-search → {}", dir.display()),
+        Ok(Some(dir)) => log::info!("[edge-runtime] 已解压新版 tool-bridge / local-search / file-parse → {}", dir.display()),
         Ok(None) => log::debug!("[edge-runtime] 已是最新, 不动"),
         Err(e) => log::warn!(
-            "[edge-runtime] 解压失败, tool-bridge / local-search 在这台机器上不可用: {e:#}"
+            "[edge-runtime] 解压失败, tool-bridge / local-search / 上传文件解析在这台机器上不可用: {e:#}"
         ),
     }
 }
@@ -93,7 +113,7 @@ pub(crate) fn ensure_extracted_at(archive: &Path, root: Option<&Path>) -> Result
         let _ = fs::remove_dir_all(&tmp);
         anyhow::bail!("tar 解压失败: {}", String::from_utf8_lossy(&out.stderr).trim());
     }
-    for must in ["tool-bridge/src/catfish_tool_bridge", "local-search/src"] {
+    for must in MUST_EXIST {
         if !tmp.join(must).exists() {
             let _ = fs::remove_dir_all(&tmp);
             anyhow::bail!("归档里缺 {must} —— 打包脚本坏了?");
@@ -126,7 +146,10 @@ mod tests {
         let src = dir.join("src-tree");
         fs::create_dir_all(src.join("tool-bridge/src/catfish_tool_bridge")).unwrap();
         fs::create_dir_all(src.join("local-search/src/catfish_search")).unwrap();
+        fs::create_dir_all(src.join(FILE_PARSE_DIR)).unwrap();
         fs::write(src.join("tool-bridge/src/catfish_tool_bridge/__init__.py"), marker).unwrap();
+        fs::write(src.join("file-parse/parse_file.py"), marker).unwrap();
+        fs::write(src.join("file-parse/attachment_bm25.py"), marker).unwrap();
         let archive = dir.join(format!("a-{marker}.tar.gz"));
         let ok = std::process::Command::new("tar")
             .arg("-czf").arg(&archive).arg("-C").arg(&src).arg(".")
@@ -151,6 +174,25 @@ mod tests {
         assert!(ensure_extracted_at(&a2, Some(&root)).unwrap().is_some());
         assert_eq!(fs::read_to_string(&init).unwrap(), "v2", "装新包要换新代码");
         assert!(!tmp.path().join(".catfish/edge-runtime.old").exists());
+    }
+
+    #[test]
+    fn 缺文件解析脚本的包_不换掉老版本() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join(".catfish/edge-runtime");
+        let good = make_archive(tmp.path(), "v1");
+        ensure_extracted_at(&good, Some(&root)).unwrap();
+
+        let src = tmp.path().join("partial");
+        fs::create_dir_all(src.join("tool-bridge/src/catfish_tool_bridge")).unwrap();
+        fs::create_dir_all(src.join("local-search/src")).unwrap();
+        let bad = tmp.path().join("partial.tar.gz");
+        assert!(std::process::Command::new("tar")
+            .arg("-czf").arg(&bad).arg("-C").arg(&src).arg(".")
+            .status().unwrap().success());
+        let err = ensure_extracted_at(&bad, Some(&root)).unwrap_err().to_string();
+        assert!(err.contains("file-parse/parse_file.py"), "{err}");
+        assert!(root.join("file-parse/parse_file.py").exists(), "坏包不能把好的换掉");
     }
 
     #[test]

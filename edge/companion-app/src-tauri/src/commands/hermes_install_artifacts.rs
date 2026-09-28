@@ -29,16 +29,39 @@ pub(crate) const CATFISH_WECHAT_READER_ARCHIVE: &str = "catfish-wechat-reader-di
 /// 8/5: 装机流程里这两个的安装语句一直是 0 处 —— 见 install_hermes_deps。
 pub(crate) const HERMES_DEPS_ARCHIVE: &str = "hermes-deps-dist.tar.gz";
 
-/// hermes venv 里要装的额外包 —— **唯一**清单, 安装和自检都从这里读。
+/// hermes venv 里要装的额外包 —— **唯一**清单在 `src-tauri/hermes-extra-packages.txt`,
+/// 安装、自检和三处打包脚本 (scripts/fetch_hermes_deps.py) 都从那里读。
 ///
 /// 9/23 加 watchdog: local-search 的文件监听要它 (catfish_search/watcher.py),
 /// 客户机器上 local-search 跑在 hermes venv 里 (没有源码树, 也就没有它自己的
 /// venv), 不装就是"本机文件搜索"起来了但从不更新索引。
-/// 原来包名在 4 个地方各写一遍 (mac 安装 / Windows 自检 / 启动自检 / 打包脚本)。
-pub(crate) const HERMES_EXTRA_PACKAGES: &[&str] = &["jieba", "playwright", "watchdog"];
+/// 9/28 加文件解析那几个 (pypdfium2 / openpyxl / python-docx / python-pptx / xlrd):
+/// 聊天上传文件原来只在开发机的网关 venv 里解析得了。Rust 这边 9/23 收成了一处,
+/// 打包脚本那边还各写一遍 —— 这次连打包一起收进那个文件。
+const HERMES_EXTRA_LIST: &str = include_str!("../../hermes-extra-packages.txt");
+
+/// (pip 需求, import 判据) —— 跳过空行和 # 注释。
+fn hermes_extra_entries() -> impl Iterator<Item = (&'static str, &'static str)> {
+    HERMES_EXTRA_LIST
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| {
+            let mut cols = line.split_whitespace();
+            Some((cols.next()?, cols.next()?))
+        })
+}
+
+/// `uv pip install` 的需求列表 (如 `xlrd<2`)。
+pub(crate) fn hermes_extra_packages() -> Vec<&'static str> {
+    hermes_extra_entries().map(|(requirement, _)| requirement).collect()
+}
+
 /// 装没装的判据: import 得了才算。playwright 要 sync_api (装了一半时顶层能 import)。
-pub(crate) const HERMES_EXTRA_IMPORT_CHECK: &str =
-    "import jieba, playwright.sync_api, watchdog.observers";
+pub(crate) fn hermes_extra_import_check() -> String {
+    let modules: Vec<&str> = hermes_extra_entries().map(|(_, module)| module).collect();
+    format!("import {}", modules.join(", "))
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeArtifacts {
@@ -240,4 +263,35 @@ pub(crate) fn resolve_addon_runtime_dir(resource_dir: &Path) -> Result<PathBuf> 
         "找不到附加组件资源目录。已尝试:\n  {}",
         tried.join("\n  ")
     )
+}
+
+#[cfg(test)]
+mod extra_packages_tests {
+    use super::*;
+
+    #[test]
+    fn 清单每行都是_需求_判据_可选sdist() {
+        for line in HERMES_EXTRA_LIST.lines().map(str::trim) {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            assert!(
+                cols.len() == 2 || (cols.len() == 3 && cols[2] == "sdist"),
+                "格式不对: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn 原有的和文件解析要的都在() {
+        let packages = hermes_extra_packages();
+        for want in ["jieba", "playwright", "watchdog", "pypdfium2", "openpyxl", "python-docx"] {
+            assert!(packages.contains(&want), "{packages:?} 缺 {want}");
+        }
+        assert_eq!(
+            hermes_extra_import_check(),
+            "import jieba, playwright.sync_api, watchdog.observers, pypdfium2, openpyxl, docx, pptx, xlrd"
+        );
+    }
 }
