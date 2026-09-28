@@ -82,6 +82,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with: { fetch-depth: 0 }
+      # 9/29: 失效的豁免是静默的 —— 9/22 改目录名时把 .gitleaksignore 里的历史路径
+      # 也改了, 两条豁免从此匹配不上, 每晚全历史扫描天天红, push 扫描却一直绿
+      # (只看新提交)。先核对每条豁免都指得到当时的文件, push 时就能发现。
+      - name: .gitleaksignore 豁免没有失效
+        run: python3 scripts/check_gitleaksignore.py
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
