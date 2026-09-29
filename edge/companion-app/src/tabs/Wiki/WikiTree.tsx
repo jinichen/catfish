@@ -122,9 +122,9 @@ export default function WikiTree() {
   // && <WikiTab/>` 真 conditional render — 切走 unmount, 切回 mount 跑这 effect).
   // 不用 cache expiry — 鸿波要求即刻刷新, 防 LLM 外部 write_file 后 list 老.
   useEffect(() => {
-    if (!filesLoading) {
-      void loadFiles();
-    }
+    // 9/29: 不再看 filesLoading —— 上一次挂载时那次调用没回来的话, loading 就一直是
+    // true, 这里永远不重拉, 页面永远「加载中」(Windows 实撞)。loadFiles 自己有超时。
+    void loadFiles();
     let cancelled = false;
     void wikiGraphStatus()
       .then((status) => {

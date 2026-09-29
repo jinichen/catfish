@@ -77,6 +77,9 @@ interface WikiState {
 
 let selectRequest = 0;
 
+/** 本地列目录的上限; 超了当挂了处理 (见 loadFiles) */
+const LIST_TIMEOUT_MS = 30_000;
+
 export const useWikiStore = create<WikiState>((set) => ({
   files: [],
   filesLoading: false,
@@ -115,9 +118,15 @@ export const useWikiStore = create<WikiState>((set) => ({
     set({ filesLoading: true, filesError: null });
     try {
       // P3.3.18 Phase 4: 并发拉个人 wiki + 已装部门 wiki. 部门 wiki 失败不阻塞.
+      // 9/29 鸿波 (Windows): 页面一直「加载中」, 点刷新也没反应 —— 后端那次调用
+      // 没回来, 这里就永远 loading, 而 WikiTree 挂载时看到 loading 就不再拉。
+      // 本地列目录 30 秒还没回来就是挂了, 报出来让人能点刷新重来, 别陪着等。
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`列知识库超时 (${LIST_TIMEOUT_MS / 1000}s), 点刷新重试`)), LIST_TIMEOUT_MS),
+      );
       const [filesRes, sharedRes] = await Promise.allSettled([
-        wikiListFiles(),
-        listInstalledWikiShared(),
+        Promise.race([wikiListFiles(), timeout]),
+        Promise.race([listInstalledWikiShared(), timeout]),
       ]);
       const files =
         filesRes.status === "fulfilled" ? filesRes.value : [];
