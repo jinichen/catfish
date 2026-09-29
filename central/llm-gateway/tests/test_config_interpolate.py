@@ -160,3 +160,30 @@ models:
     monkeypatch.delenv("MAYBE_LLM_BASE", raising=False)
     cfg = load_config(yaml_path)
     assert cfg.models[0].upstream.api_base == "http://default-host:9000/v1"
+
+
+def test_hub_upstreams_default_to_loopback_and_follow_env(monkeypatch):
+    """9/29: 开发机上市场页 Skills / MCP 全 500。9/22 把 docker 服务名写死进了
+    baseline yaml, 开发机 (gateway 不在 docker 里) 解析不了 skills-hub 这种主机名。
+    正确形态: yaml 默认 127.0.0.1 (开发机), compose 通过环境变量注入服务名 (docker)。"""
+    import yaml
+    from pathlib import Path
+    from catfish_gateway.config import _interpolate_env
+
+    raw = yaml.safe_load((Path(__file__).resolve().parents[1] / "config" / "models.yaml").read_text())
+    for key in ("CATFISH_MCP_REGISTRY_URL", "CATFISH_SKILLS_HUB_URL", "CATFISH_WIKI_HUB_URL"):
+        monkeypatch.delenv(key, raising=False)
+    assert _interpolate_env(raw["mcp_registry"])["upstream_url"] == "http://127.0.0.1:8996"
+    assert _interpolate_env(raw["skills_hub"])["upstream_url"] == "http://127.0.0.1:8997"
+    assert _interpolate_env(raw["wiki_hub"])["upstream_url"] == "http://127.0.0.1:8994"
+
+    monkeypatch.setenv("CATFISH_SKILLS_HUB_URL", "http://skills-hub:8997")
+    assert _interpolate_env(raw["skills_hub"])["upstream_url"] == "http://skills-hub:8997"
+
+    # 两份 compose 都得给 gateway 注入这三个 (容器里 127.0.0.1 是 gateway 自己)
+    root = Path(__file__).resolve().parents[3]
+    for compose in ("central/docker-compose.yml", "delivery/catfish-poc/docker-compose.yml"):
+        env = yaml.safe_load((root / compose).read_text())["services"]["gateway"]["environment"]
+        assert env["CATFISH_MCP_REGISTRY_URL"].endswith("http://mcp-registry:8996}"), compose
+        assert env["CATFISH_SKILLS_HUB_URL"].endswith("http://skills-hub:8997}"), compose
+        assert env["CATFISH_WIKI_HUB_URL"].endswith("http://wiki-hub:8994}"), compose

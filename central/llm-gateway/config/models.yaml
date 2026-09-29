@@ -619,16 +619,20 @@ models:
 # 下一家客户的包只要没照抄那份 overlay, 就会原样复现 7/29 那个 502,
 # 而且症状同样只在「系统管理」页面上, 同样没人会第一时间点开。
 #
-# 这三个服务名在 central/docker-compose.yml 和交付包的 compose 里一致
-# (已核对), 所以两边都对。
+# ⚠ 9/29 改成环境变量 + 默认 127.0.0.1。9/22 那次把服务名直接写死在这里,
+# 结果开发机 (gateway 不在 docker 里跑, 门户 localhost:5173) 的市场页 Skills /
+# MCP 两个 tab 全部 HTTP 500 —— 开发机上没有叫 skills-hub 的主机。
+# 这份 yaml 两种形态都要能用: 开发机是 127.0.0.1, docker 里是服务名。服务名
+# 是 compose 的事, 由两份 docker-compose.yml 给 gateway 注入这三个变量
+# (跟 CATFISH_IDENTITY_URL 同一个写法), 这里只留跟代码默认值一致的兜底。
 mcp_registry:
-  upstream_url: http://mcp-registry:8996
+  upstream_url: ${CATFISH_MCP_REGISTRY_URL:-http://127.0.0.1:8996}
   enabled: true
 
 skills_hub:
-  upstream_url: http://skills-hub:8997
+  upstream_url: ${CATFISH_SKILLS_HUB_URL:-http://127.0.0.1:8997}
   enabled: true
 
 wiki_hub:
-  upstream_url: http://wiki-hub:8994
+  upstream_url: ${CATFISH_WIKI_HUB_URL:-http://127.0.0.1:8994}
   enabled: true
