@@ -38,7 +38,11 @@
 
 /** LLM 调用: 传输层超时。**这个数会真的掐断请求。**
  *
- * 覆盖 Companion → hermes(8642) / → gateway(8999) 的整个 HTTP 往返。
+ * 非流式: 覆盖 Companion → hermes(8642) / → gateway(8999) 的整个 HTTP 往返。
+ * 流式 (聊天): 9/30 起是"多久**一个字节都没收到**"的上限, 不是总时长 ——
+ * 之前也当总时长用, 任何超过 10 分钟的一轮都在第 600 秒被切断, 报
+ * "stream 读挂: error decoding response body" (见 http_proxy.rs build_stream_client)。
+ * hermes 在工具跑着没字可吐时每 30 秒发一次 SSE keepalive, 所以活着的流不会碰到它。
  * advisor Call 1 是 hermes agent loop, 实测每轮 10-13 秒 × 4~6 轮 = 40~70 秒;
  * profile 单次 LLM call 实测最高 116 秒。10 分钟是给"内网模型 + 多轮 agent"
  * 留的上限, 不是期望值。

@@ -53,7 +53,8 @@ pub struct HttpProxyRequest {
     /// body 是否 base64. 默认 false (即 UTF-8 字符串 body).
     #[serde(default)]
     pub body_base64: bool,
-    /// timeout 毫秒. 默认 30s (非 stream) / 600s (stream 单独默认).
+    /// timeout 毫秒. 非 stream = 整个请求的时限 (默认 30s);
+    /// stream = 多久没收到字节算挂 (默认 600s), 不限总时长 —— 见 build_stream_client.
     #[serde(default)]
     pub timeout_ms: Option<u64>,
 }
@@ -133,6 +134,31 @@ fn build_client(timeout_ms: u64) -> Result<reqwest::Client, String> {
     .build()
     .map_err(|e| format!("reqwest build 失败: {e}"))
 }
+
+/// 流式请求用的 client —— **没有总时长上限**, 只有"连不上"和"多久没收到字节" (9/30).
+///
+/// 原来流式也走 `build_client`, 那里的 `.timeout()` 在 reqwest 里是**整个请求**
+/// 的时限, 包括读 body。聊天流默认 600s, 于是任何超过 10 分钟的一轮 (小鲶跑
+/// 多步工具、处理大表格) 都会在第 600 秒被切断, 报
+///     stream 读挂: error decoding response body
+/// 看着像网络断了, 其实是自己掐的。9/30 日志里 6 次全是开始后整 600 秒整点断。
+///
+/// 流式的正确语义是"上游还在吐字就一直等, 长时间一个字节都没有才算挂":
+///   - connect_timeout: 连接本身建不起来 (hermes 没起 / 端口不通)
+///   - read_timeout:    每次读的空闲上限, 收到数据就重新计时 —— 用调用方给的
+///                      timeout_ms 当这个值, 只是兜底; 前端 chat.ts 还有按模型算的
+///                      90-180s idle 重试, 那个先触发
+fn build_stream_client(idle_timeout_ms: u64) -> Result<reqwest::Client, String> {
+    crate::util::http_client::trust_central(
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_millis(STREAM_CONNECT_TIMEOUT_MS))
+            .read_timeout(Duration::from_millis(idle_timeout_ms)),
+    )
+    .build()
+    .map_err(|e| format!("reqwest build 失败: {e}"))
+}
+
+const STREAM_CONNECT_TIMEOUT_MS: u64 = 30_000;
 
 /// 把错误的整条 source 链拼成一行 (P3.5.80 · 7/28 鸿波达华现场).
 ///
@@ -309,9 +335,9 @@ pub async fn http_proxy_stream(
     req: HttpProxyRequest,
     request_id: String,
 ) -> Result<HttpProxyStreamStart, String> {
-    // SSE 场景 default 10 分钟 — chat.ts 里再套 idle timer.
-    let timeout_ms = req.timeout_ms.unwrap_or(600_000);
-    let client = build_client(timeout_ms)?;
+    // 流式: timeout_ms 是"多久没收到字节"的上限, 不是总时长 (见 build_stream_client).
+    let idle_timeout_ms = req.timeout_ms.unwrap_or(600_000);
+    let client = build_stream_client(idle_timeout_ms)?;
     let method = parse_method(&req.method)?;
 
     // 只记录 Authorization 是否存在，绝不记录 token 内容。
@@ -391,7 +417,9 @@ pub async fn http_proxy_stream(
                         break;
                     }
                     Err(e) => {
-                        let msg = format!("stream 读挂: {e}");
+                        // error_chain: reqwest 的 Display 只有最外层 "error decoding
+                        // response body", 超时 / 连接被重置这些真原因在 source 链里
+                        let msg = format!("stream 读挂: {}", error_chain(&e));
                         log::warn!("[http_proxy] {}", msg);
                         let _ = app.emit(&err_event, msg);
                         break;
@@ -443,5 +471,72 @@ mod tests {
             "https://alice:secret@example.com/oauth/callback?code=private#token",
         );
         assert_eq!(safe, "https://example.com/oauth/callback");
+    }
+
+    // ── 9/30: 流式不能有总时长上限 ──────────────────────────────
+
+    /// 起一个本地 HTTP 服务: 发 `chunks` 块, 每块间隔 `gap_ms`, 之后再静默 `tail_silence_ms`.
+    async fn slow_stream_server(chunks: usize, gap_ms: u64, tail_silence_ms: u64) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = sock.read(&mut buf).await;
+            sock.write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n",
+            )
+            .await
+            .unwrap();
+            for i in 0..chunks {
+                let data = format!("data: {i}\n\n");
+                let frame = format!("{:x}\r\n{data}\r\n", data.len());
+                if sock.write_all(frame.as_bytes()).await.is_err() {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(gap_ms)).await;
+            }
+            tokio::time::sleep(Duration::from_millis(tail_silence_ms)).await;
+            let _ = sock.write_all(b"0\r\n\r\n").await;
+        });
+        format!("http://{addr}/")
+    }
+
+    async fn read_all(client: reqwest::Client, url: &str) -> Result<usize, String> {
+        let mut resp = client.get(url).send().await.map_err(|e| error_chain(&e))?;
+        let mut n = 0;
+        loop {
+            match resp.chunk().await {
+                Ok(Some(_)) => n += 1,
+                Ok(None) => return Ok(n),
+                Err(e) => return Err(error_chain(&e)),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn total_timeout_client_cuts_a_live_stream() {
+        // 复现 9/30 的现场: 流一直在吐字, 总时长一到照样被切, 报的就是这句
+        let url = slow_stream_server(12, 100, 0).await;
+        let err = read_all(build_client(500).unwrap(), &url).await.unwrap_err();
+        assert!(err.contains("error decoding response body"), "{err}");
+        assert!(err.contains("timed out"), "source 链里应带出真原因: {err}");
+    }
+
+    #[tokio::test]
+    async fn stream_client_survives_long_but_live_stream() {
+        // 总时长 ~1.2s 远超 500ms 的空闲上限, 但每 100ms 都有数据 → 必须读完
+        let url = slow_stream_server(12, 100, 0).await;
+        let n = read_all(build_stream_client(500).unwrap(), &url).await.unwrap();
+        assert!(n >= 12, "只读到 {n} 块");
+    }
+
+    #[tokio::test]
+    async fn stream_client_still_detects_silent_upstream() {
+        // 发 2 块后静默 2s, 超过 300ms 空闲上限 → 要报错, 不能无限等
+        let url = slow_stream_server(2, 10, 2_000).await;
+        let err = read_all(build_stream_client(300).unwrap(), &url).await.unwrap_err();
+        assert!(err.contains("timed out"), "{err}");
     }
 }

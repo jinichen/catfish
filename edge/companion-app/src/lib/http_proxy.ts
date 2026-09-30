@@ -273,7 +273,7 @@ export async function httpProxyStream(url: string, init?: RequestInit): Promise<
     }
   }
 
-  // SSE 走同一个 LLM 传输超时 (见 timeouts.ts); chat.ts 里再套 idle timer
+  // SSE 用同一个数, 但 Rust 那边当"空闲上限"用, 不限总时长 (见 timeouts.ts); chat.ts 里再套 idle timer
   const req = buildRequest(url, init, LLM_TRANSPORT_TIMEOUT_MS);
   let start: HttpProxyStreamStart;
   try {
