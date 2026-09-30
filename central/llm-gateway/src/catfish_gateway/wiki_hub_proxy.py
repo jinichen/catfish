@@ -1,6 +1,6 @@
 """wiki-hub 反向代理 (P3.3.18, 6/10).
 
-gateway 收 `/v1/wiki/*` → 透传到 catfish-wiki-hub upstream (默认 :8998),
+gateway 收 `/v1/wiki/*` → 透传到 catfish-wiki-hub upstream (默认 :8994),
 跟 skills_hub_proxy 同模式:
   - gateway 端 OIDC 验真员工身份
   - 注入 X-Catfish-User-Sub / -Dept / -Role 到上游
@@ -9,10 +9,10 @@ gateway 收 `/v1/wiki/*` → 透传到 catfish-wiki-hub upstream (默认 :8998),
 # 端点
 
   GET   /v1/wiki/healthz                                  健康
-  GET   /v1/wiki/documents                                列已发布
-  GET   /v1/wiki/documents/{ns}/{file_id}                 单条详情 + body
-  POST  /v1/wiki/documents/{ns}                           发布 / 重发
-  POST  /v1/wiki/documents/{ns}/{file_id}/unpublish       撤回 (员工 self / admin)
+  GET   /v1/wiki/documents                                列本部门已发布
+  GET   /v1/wiki/documents/dept/{部门}/{file_id}          单条详情 + body
+  POST  /v1/wiki/documents                                发布 / 重发到自己部门
+  POST  /v1/wiki/documents/dept/{部门}/{file_id}/unpublish  撤回 (员工 self / admin)
   GET   /v1/wiki/audit                                    admin 审计
 
 # Manifesto
@@ -155,43 +155,49 @@ async def list_documents(
     request: Request,
     user: User = Depends(get_current_user),
 ) -> Response:
+    """列本部门已发布 wiki (hub 按注入的部门过滤, admin 看全部)."""
     return await _proxy(request, "/wiki/documents", user)
 
 
-@router.get("/documents/{namespace}/{file_id}")
+def _doc_path(dept: str, file_id: str, suffix: str = "") -> str:
+    # 部门名多半是中文; path 参数到这里已经解码过, 转发前要重新编码
+    return (
+        f"/wiki/documents/dept/{urllib.parse.quote(dept, safe='')}"
+        f"/{urllib.parse.quote(file_id, safe='')}{suffix}"
+    )
+
+
+@router.get("/documents/dept/{dept}/{file_id}")
 async def get_document(
-    namespace: str,
+    dept: str,
     file_id: str,
     request: Request,
     user: User = Depends(get_current_user),
 ) -> Response:
-    return await _proxy(request, f"/wiki/documents/{namespace}/{file_id}", user)
+    return await _proxy(request, _doc_path(dept, file_id), user)
 
 
 # ── 写 endpoints ─────────────────────────────────────────────
 
 
-@router.post("/documents/{namespace}")
+@router.post("/documents")
 async def publish_document(
-    namespace: str,
     request: Request,
     user: User = Depends(get_current_user),
 ) -> Response:
-    """发布 wiki (JSON body). 上游用 X-Catfish-User-Sub 当 published_by."""
-    return await _proxy(request, f"/wiki/documents/{namespace}", user)
+    """发布 wiki 到发布者自己的部门 (JSON body). 上游用注入的 Sub / Dept 定 published_by 和 namespace."""
+    return await _proxy(request, "/wiki/documents", user)
 
 
-@router.post("/documents/{namespace}/{file_id}/unpublish")
+@router.post("/documents/dept/{dept}/{file_id}/unpublish")
 async def unpublish_document(
-    namespace: str,
+    dept: str,
     file_id: str,
     request: Request,
     user: User = Depends(get_current_user),
 ) -> Response:
     """撤回 wiki — 员工只能撤自己 publish 的, admin 例外."""
-    return await _proxy(
-        request, f"/wiki/documents/{namespace}/{file_id}/unpublish", user,
-    )
+    return await _proxy(request, _doc_path(dept, file_id, "/unpublish"), user)
 
 
 @router.get("/audit")

@@ -12,16 +12,20 @@
 4. **撤回不动员工本机**: manifesto 公理 3/4 禁止, 客户端自己显 stale 标决定怎么办.
 
 PG 字段见 alembic/versions/202606101200_init_wiki.py.
+
+9/30: FS 那一半挪到 storage_fs.py (带元数据 sidecar); namespace 统一是
+`dept/<部门>`, 校验走 namespaces.py; list 按可见 namespace 过滤 (部门隔离).
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+
+from . import storage_fs
+from .namespaces import dept_of
 
 logger = logging.getLogger("catfish.wiki_hub.storage")
 
@@ -30,14 +34,7 @@ logger = logging.getLogger("catfish.wiki_hub.storage")
 
 
 def _wiki_dir() -> Path:
-    """FS 根目录 — 默认 ~/.catfish-hub/wiki/, 客户内网部署改 CATFISH_HUB_ROOT.
-    跟 skills-hub 同一 hub root 下并列."""
-    root = os.environ.get("CATFISH_HUB_ROOT", "")
-    if not root:
-        root = str(Path.home() / ".catfish-hub")
-    d = Path(root).expanduser() / "wiki"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    return storage_fs.wiki_dir()
 
 
 def _audit_jsonl_path() -> Path:
@@ -57,13 +54,18 @@ def _pg_conn():
 
 
 def _validate_seg(seg: str, name: str) -> None:
-    """ns / file_id 不允许特殊字符, 防 path traversal."""
+    """file_id 不允许特殊字符, 防 path traversal."""
     if not seg:
         raise ValueError(f"{name} 不能空")
     if ".." in seg or "/" in seg or "\\" in seg:
         raise ValueError(f"{name} 不允许特殊字符: {seg!r}")
     if len(seg) > 200:
         raise ValueError(f"{name} 太长: {len(seg)}")
+
+
+def _validate_namespace(namespace: str) -> None:
+    if dept_of(namespace) is None:
+        raise ValueError(f"namespace 必须是 dept/<部门>: {namespace!r}")
 
 
 def _write_audit(event: dict) -> None:
@@ -119,7 +121,7 @@ def publish_document(
 
     返 {ok, namespace, file_id, published_at, error?}
     """
-    _validate_seg(namespace, "namespace")
+    _validate_namespace(namespace)
     _validate_seg(file_id, "file_id")
 
     if kind not in ("entity", "concept", "query"):
@@ -132,14 +134,16 @@ def publish_document(
     size_bytes = len(body_md.encode("utf-8")) + len(frontmatter_yaml.encode("utf-8"))
     now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-    # 1. FS 镜像 (备份)
-    target_path = _wiki_dir() / namespace / f"{file_id}.md"
+    # 1. FS (没 PG 时是主存储, 有 PG 时是镜像备份)
     try:
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        full_text = f"---\n{frontmatter_yaml.strip()}\n---\n\n{body_md}"
-        target_path.write_text(full_text, encoding="utf-8")
+        fs_meta = storage_fs.write_document(
+            namespace=namespace, file_id=file_id, filename=filename, title=title,
+            kind=kind, frontmatter_yaml=frontmatter_yaml, body_md=body_md,
+            published_by=published_by, size_bytes=size_bytes,
+        )
     except Exception as e:
         return {"ok": False, "error": f"FS 写失败: {e}"}
+    updated_at = fs_meta["updated_at"]
 
     # 2. PG upsert (元数据 + 全文)
     if _use_pg():
@@ -166,6 +170,7 @@ def publish_document(
                                stale_after_unpublish = false,
                                unpublished_at = NULL,
                                unpublished_reason = NULL
+                           RETURNING updated_at
                         """,
                         (
                             namespace, file_id, filename, title, kind,
@@ -173,6 +178,9 @@ def publish_document(
                             published_by, size_bytes,
                         ),
                     )
+                    row = cur.fetchone()
+                    if row and row[0]:
+                        updated_at = row[0].isoformat()
         except Exception as e:
             logger.warning("publish PG upsert 失败 (FS 已写): %s", e)
 
@@ -193,6 +201,7 @@ def publish_document(
         "namespace": namespace,
         "file_id": file_id,
         "published_at": now_iso,
+        "updated_at": updated_at,
         "size_bytes": size_bytes,
     }
 
@@ -201,11 +210,14 @@ def publish_document(
 
 
 def list_documents(
-    namespace_filter: str | None = None,
+    namespaces: list[str] | None = None,
     *,
     include_stale: bool = True,
 ) -> list[dict]:
     """列已发布 wiki. include_stale=true 时 stale 项也返 (UI 显灰色 + warning).
+
+    namespaces: None = 全部 (admin); 列表 = 只列这些 namespace (部门隔离).
+    空列表 → 直接返空.
 
     返 [{namespace, file_id, filename, title, kind, description_preview,
          published_by, published_at, updated_at, size_bytes,
@@ -217,9 +229,11 @@ def list_documents(
                 with conn.cursor() as cur:
                     where = []
                     params: list = []
-                    if namespace_filter:
-                        where.append("namespace = %s")
-                        params.append(namespace_filter)
+                    if namespaces is not None:
+                        if not namespaces:
+                            return []
+                        where.append("namespace = ANY(%s)")
+                        params.append(list(namespaces))
                     if not include_stale:
                         where.append("stale_after_unpublish = false")
                     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
@@ -257,44 +271,15 @@ def list_documents(
         except Exception as e:
             logger.warning("list PG 失败 (FS fallback): %s", e)
 
-    # FS fallback — 扫 hub root, frontmatter 解析浅
-    out: list[dict] = []
-    root = _wiki_dir()
-    if namespace_filter:
-        ns_dirs = [root / namespace_filter]
-    else:
-        ns_dirs = [d for d in root.iterdir() if d.is_dir()]
-    for ns_dir in ns_dirs:
-        if not ns_dir.exists():
-            continue
-        for md in ns_dir.glob("*.md"):
-            try:
-                text = md.read_text(encoding="utf-8")
-            except Exception:
-                continue
-            file_id = md.stem
-            out.append({
-                "namespace": ns_dir.name,
-                "file_id": file_id,
-                "filename": file_id,
-                "title": file_id,
-                "kind": "entity",  # fallback 不解析
-                "description_preview": text[:200],
-                "published_by": "",
-                "published_at": None,
-                "updated_at": None,
-                "size_bytes": len(text.encode("utf-8")),
-                "stale_after_unpublish": False,
-                "unpublished_at": None,
-                "unpublished_reason": None,
-            })
-    return out
+    if namespaces is not None and not namespaces:
+        return []
+    return storage_fs.list_documents(namespaces, include_stale=include_stale)
 
 
 def get_document(namespace: str, file_id: str) -> dict | None:
     """拉单条 wiki 元 + 完整 body. stale 也返, 但客户端按 stale_after_unpublish=true
     判断不要装."""
-    _validate_seg(namespace, "namespace")
+    _validate_namespace(namespace)
     _validate_seg(file_id, "file_id")
 
     if _use_pg():
@@ -333,41 +318,7 @@ def get_document(namespace: str, file_id: str) -> dict | None:
         except Exception as e:
             logger.warning("get PG 失败 (FS fallback): %s", e)
 
-    # FS fallback
-    path = _wiki_dir() / namespace / f"{file_id}.md"
-    if not path.exists():
-        return None
-    try:
-        text = path.read_text(encoding="utf-8")
-    except Exception:
-        return None
-
-    # 浅解 frontmatter
-    fm_yaml = ""
-    body = text
-    if text.startswith("---"):
-        end = text.find("\n---", 3)
-        if end > 0:
-            fm_yaml = text[3:end].strip()
-            body = text[end + 4:].lstrip("\n")
-
-    return {
-        "namespace": namespace,
-        "file_id": file_id,
-        "filename": file_id,
-        "title": file_id,
-        "kind": "entity",
-        "description_preview": body[:200],
-        "frontmatter_yaml": fm_yaml,
-        "body_md": body,
-        "published_by": "",
-        "published_at": None,
-        "updated_at": None,
-        "size_bytes": len(text.encode("utf-8")),
-        "stale_after_unpublish": False,
-        "unpublished_at": None,
-        "unpublished_reason": None,
-    }
+    return storage_fs.get_document(namespace, file_id)
 
 
 # ── unpublish (P3.3.18: manifesto 公理 4 兼容 — 标 stale, 留 audit row) ──
@@ -386,11 +337,11 @@ def unpublish_document(
       - 标 stale_after_unpublish=true
       - 清 body_md / frontmatter_yaml (隐私清零)
       - 标 unpublished_at / unpublished_reason
-    - FS 镜像物理删 (FS 是 backup, 没保留必要)
+    - FS 删正文, 元数据 sidecar 标 stale (没 PG 时 FS 是主存储, 也得让装了的人看到撤回)
     - 已 pull 员工本机副本: 不动 (manifesto 公理 3/4 禁止)
       客户端下次 list_documents 看到 stale=true, 自己决定怎么办.
     """
-    _validate_seg(namespace, "namespace")
+    _validate_namespace(namespace)
     _validate_seg(file_id, "file_id")
 
     now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -418,15 +369,14 @@ def unpublish_document(
         except Exception as e:
             logger.warning("unpublish PG 失败: %s", e)
 
-    # FS 删
-    path = _wiki_dir() / namespace / f"{file_id}.md"
-    if path.exists():
-        try:
-            path.unlink()
-        except Exception as e:
-            logger.warning("unpublish FS 删失败: %s", e)
+    # FS: 删正文, sidecar 标 stale (跟 PG 同语义)
+    fs_done = False
+    try:
+        fs_done = storage_fs.unpublish_document(namespace, file_id, reason=reason)
+    except Exception as e:
+        logger.warning("unpublish FS 失败: %s", e)
 
-    if affected == 0 and not path.exists():
+    if affected == 0 and not fs_done:
         return {"ok": False, "error": f"{namespace}/{file_id} 不存在或已撤回"}
 
     _write_audit({

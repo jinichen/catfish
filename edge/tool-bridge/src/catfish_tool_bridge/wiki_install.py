@@ -18,12 +18,13 @@ WikiTree (Phase 3) 单独显 "📥 部门 wiki" 分组, read-only.
     "kind": "entity",
     "published_by": "<原作者 sub>",
     "published_at": "2026-06-10T...",
+    "hub_updated_at": "2026-06-10T...",  # 装的是 hub 上哪个版本 (9/30 加)
     "installed_at": "2026-06-10T...",
     "size_bytes": 1234
   }
 
-stale 检查: Companion 周期 fetch hub list, 看 stale_after_unpublish=true 的, 在
-对应本机文件加 ".stale" sidecar 标记. (本工具不做 stale 检查, 留 Phase 4 polish.)
+stale / 更新检查在 Companion 知识库卡片里做: hub list 的 updated_at 比本机
+hub_updated_at 新 → 显"有更新", 点更新就是再调一次本工具覆盖安装.
 
 # unpublish
 
@@ -43,6 +44,7 @@ from pathlib import Path
 from typing import Any
 
 from . import skill_publish  # 复用 GATEWAY_URL / OAUTH_ID_TOKEN_PATH / _read_id_token
+from .wiki_publish import wiki_doc_url
 
 logger = logging.getLogger("catfish.tool_bridge.wiki_install")
 
@@ -58,7 +60,17 @@ def _read_id_token() -> str | None:
 
 def _validate_ns_and_id(namespace: str, file_id: str) -> str | None:
     """返 None 表 OK, 否则返 error msg."""
-    if not re.fullmatch(r"dept/[a-z][a-z0-9_-]{0,40}", namespace):
+    # 部门名来自身份里的 department, 可以是中文; 只挡路径 / URL 上会出事的字符
+    # (规则跟 central/wiki-hub/.../namespaces.py 的 validate_dept 一致)
+    dept = namespace[len("dept/"):] if namespace.startswith("dept/") else ""
+    if (
+        not dept
+        or dept != dept.strip()
+        or len(dept) > 64
+        or dept.startswith(".")
+        or ".." in dept
+        or any(c in '/\\<>:"|?*#%' or ord(c) < 32 for c in dept)
+    ):
         return f"namespace 不合法 (期望 dept/<部门>): {namespace!r}"
     if not re.fullmatch(r"[a-zA-Z0-9_\-]{6,64}", file_id):
         return f"file_id 不合法 (期望 6-64 char alphanumeric): {file_id!r}"
@@ -104,7 +116,7 @@ def wiki_install(args: dict[str, Any]) -> dict[str, Any]:
 
     import httpx  # 懒 import
 
-    url = f"{GATEWAY_URL}/v1/wiki/documents/{namespace}/{file_id}"
+    url = wiki_doc_url(namespace, file_id)
     try:
         with httpx.Client(timeout=20.0) as client:
             resp = client.get(url, headers={"Authorization": f"Bearer {token}"})
@@ -113,6 +125,8 @@ def wiki_install(args: dict[str, Any]) -> dict[str, Any]:
 
     if resp.status_code == 404:
         return {"ok": False, "error": f"wiki {namespace}/{file_id} 不存在"}
+    if resp.status_code == 403:
+        return {"ok": False, "error": f"{namespace} 不是你的部门, 不能安装"}
     if resp.status_code >= 400:
         try:
             detail = resp.json().get("detail", resp.text)
@@ -144,6 +158,7 @@ def wiki_install(args: dict[str, Any]) -> dict[str, Any]:
     body_md = doc.get("body_md") or ""
     published_by = doc.get("published_by") or "?"
     published_at = doc.get("published_at") or ""
+    hub_updated_at = doc.get("updated_at") or ""
 
     # 写本机 ~/.catfish/wiki-shared/<ns>/<file_id>.md
     target_dir = WIKI_SHARED_ROOT / namespace
@@ -166,6 +181,7 @@ def wiki_install(args: dict[str, Any]) -> dict[str, Any]:
         "kind": kind,
         "published_by": published_by,
         "published_at": published_at,
+        "hub_updated_at": hub_updated_at,
         "installed_at": now_iso,
         "size_bytes": len(full_text.encode("utf-8")),
     }
@@ -228,7 +244,7 @@ def wiki_unpublish(args: dict[str, Any]) -> dict[str, Any]:
 
     import httpx  # 懒 import
 
-    url = f"{GATEWAY_URL}/v1/wiki/documents/{namespace}/{file_id}/unpublish"
+    url = wiki_doc_url(namespace, file_id, "/unpublish")
     try:
         with httpx.Client(timeout=10.0) as client:
             resp = client.post(

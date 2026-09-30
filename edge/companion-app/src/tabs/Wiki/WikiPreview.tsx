@@ -27,7 +27,7 @@ import {
 import WikiLinkSuggestModal from "./WikiLinkSuggestModal";
 // P3.3.18 Phase 4 P2 (6/10): 检 hub 是否 stale
 import { config } from "../../lib/env";
-import { fetchWithAuth } from "../../lib/me";
+import { fetchMe, fetchWithAuth } from "../../lib/me";
 import WikiShareDialog from "./WikiShareDialog";
 import WikiActionPanel from "./WikiActionPanel";
 // 8/15: 下面三段是从本文件搬出去的 JSX section, 不是新组件。挑它们是因为
@@ -95,7 +95,9 @@ export default function WikiPreview() {
   // 强警告员工 "已 pull 副本撤不回" (manifesto 公理 4). 第一次失败若 warnings
   // (PII / 内网 / 敏感词), 显警告 + ack checkbox + 再 retry with acknowledge_warnings=true.
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
-  const [shareNamespace, setShareNamespace] = useState("");
+  // 9/30: 分享目标 = 身份里的部门 (hub 也按这个定), 打开 dialog 时查一次
+  const [shareDept, setShareDept] = useState<string | undefined>(undefined);
+  const [shareDeptError, setShareDeptError] = useState<string | null>(null);
   const [shareAck, setShareAck] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [shareWarnings, setShareWarnings] = useState<Array<{ category: string; hits: any[]; advice: string }>>([]);
@@ -172,7 +174,11 @@ export default function WikiPreview() {
     let cancelled = false;
     void (async () => {
       try {
-        const url = `${config.backendUrl}/v1/wiki/documents/${encodeURIComponent(ns)}/${encodeURIComponent(fileId)}`;
+        // 9/30: 原来走 backendUrl (hermes 8642 代理), /v1/wiki/* 在那边 500 (WikiHubCard
+        // 6/12 已改直连 gateway, 这里漏了); 路径也是把 "dept/x" 整个 encode 成一段,
+        // hub 路由匹配不上. 这个检查从来没成功过, 被 catch 吞掉了.
+        const dept = ns.slice("dept/".length);
+        const url = `${config.gatewayUrl}/v1/wiki/documents/dept/${encodeURIComponent(dept)}/${encodeURIComponent(fileId)}`;
         const res = await fetchWithAuth(url);
         if (!res.ok || cancelled) return;
         const data = await res.json();
@@ -327,7 +333,12 @@ export default function WikiPreview() {
     setShareError(null);
     setShareSuccess(null);
     setSensitiveTermsHint(null);
-    // 不预填 namespace, 让员工 explicit 填 — manifesto 公理 3 (不静默自决)
+    // 分享目标 dialog 里显式写出来, 员工看清楚再确认 (manifesto 公理 3, 不静默自决)
+    setShareDept(undefined);
+    setShareDeptError(null);
+    fetchMe()
+      .then((me) => setShareDept((me.department || "").trim()))
+      .catch((e) => setShareDeptError(e instanceof Error ? e.message : String(e)));
   };
 
   const handleEnsureSensitiveTerms = async () => {
@@ -345,13 +356,8 @@ export default function WikiPreview() {
 
   const handleShare = async (acknowledgeWarnings: boolean) => {
     if (!selectedFile) return;
-    const ns = shareNamespace.trim();
-    if (!ns) {
-      setShareError("namespace 必填 (例 dept/finance)");
-      return;
-    }
-    if (!/^dept\/[a-z][a-z0-9_-]{0,40}$/.test(ns)) {
-      setShareError("namespace 格式必须 'dept/<部门>' (小写字母数字 / - / _)");
+    if (!shareDept) {
+      setShareError("你的账号没有设置部门, 不能分享到部门知识库");
       return;
     }
     if (!shareAck) {
@@ -363,12 +369,15 @@ export default function WikiPreview() {
     try {
       const res = await toolBridgeCallTool("catfish_wiki_publish", {
         wiki_rel_path: selectedFile.info.rel_path,
-        namespace: ns,
         acknowledge_warnings: acknowledgeWarnings,
       });
       const result: any = res.result;
       if (res.ok && result?.ok) {
-        setShareSuccess(`已 publish 到 ${ns} · file_id=${result.file_id}`);
+        setShareSuccess(
+          result.republished
+            ? `已更新 ${result.namespace} 里的这一条, 装过的同事会看到"有更新"`
+            : `已分享到 ${result.namespace}`,
+        );
         setShareWarnings([]);
       } else {
         // 看是不是 warnings (默认拒)
@@ -617,8 +626,8 @@ export default function WikiPreview() {
       {shareDialogOpen && selectedFile && (
         <WikiShareDialog
           selectedFile={selectedFile}
-          shareNamespace={shareNamespace}
-          setShareNamespace={setShareNamespace}
+          shareDept={shareDept}
+          shareDeptError={shareDeptError}
           shareAck={shareAck}
           setShareAck={setShareAck}
           sharing={sharing}

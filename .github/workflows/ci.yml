@@ -406,7 +406,7 @@ jobs:
         run: npx vite build
 
   # ════════════════════════════════════════════════════════════
-  # 4. 中央服务 (skills-hub / mcp-registry / identity-server) — Python 3.12
+  # 4. 中央服务 (skills-hub / mcp-registry / identity-server / wiki-hub) — Python 3.12
   # ════════════════════════════════════════════════════════════
   # B3 (6/6 鸿波 audit): 之前 CI 只跑 tool-bridge + gateway 2 个模块, 剩 10 个全
   # 没跑. 按 TESTING-SPEC.md §4 扩 matrix. fail-fast: false 让一个 module 挂
@@ -422,6 +422,8 @@ jobs:
           - module: skills-hub
           - module: mcp-registry
           - module: identity-server
+          # 9/30: wiki-hub 之前一个测试都没有, 发布路由从来 405 也没人知道
+          - module: wiki-hub
     steps:
       - uses: actions/checkout@v5
 

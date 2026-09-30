@@ -23,16 +23,23 @@
  * 分享是**不可逆**的 —— 别人 pull 走的副本撤不回来 (manifesto 公理 4)。
  * 所以流程是: 第一次提交若返回 warnings (PII / 内网地址 / 敏感词), 不直接发,
  * 而是显警告 + 一个 ack checkbox, 员工勾了才 retry (acknowledge_warnings=true)。
- * namespace 也**不预填**, 必须员工自己写 (公理 3, 不静默自决)。
+ * 发到哪个部门要**明明白白摆在员工眼前**, 员工看清楚再点 (公理 3, 不静默自决)。
  *
  * 这两条是产品约束不是交互糖, 改之前先问。
+ *
+ * 9/30 改: 部门不再手填。原来是填 `dept/finance`, 但 (1) 这个格式到 hub 路由
+ * 永远 405, 分享一次都没成功过; (2) 手填的跟身份里的部门 ("研发部") 对不上,
+ * 没法做部门隔离, 打错一个字母就多一个部门。现在 hub 按身份里的部门定,
+ * dialog 里把"分享到 dept/<你的部门>"显式写出来, 员工照样是看清楚之后自己点确认,
+ * "不静默自决"这条没变, 变的只是这个值不再由员工打字。
  */
 import type { WikiFileFull } from "../../lib/tauri_wiki";
 
 interface WikiShareDialogProps {
   selectedFile: WikiFileFull;
-  shareNamespace: string;
-  setShareNamespace: (v: string) => void;
+  /** 身份里的部门. undefined = 还在查; "" = 账号没设部门 (不能分享) */
+  shareDept: string | undefined;
+  shareDeptError: string | null;
   shareAck: boolean;
   setShareAck: (v: boolean) => void;
   sharing: boolean;
@@ -47,8 +54,8 @@ interface WikiShareDialogProps {
 
 export default function WikiShareDialog({
   selectedFile,
-  shareNamespace,
-  setShareNamespace,
+  shareDept,
+  shareDeptError,
   shareAck,
   setShareAck,
   sharing,
@@ -168,37 +175,32 @@ export default function WikiShareDialog({
         </div>
       )}
 
-      <div style={{ marginBottom: 16 }}>
-        <label
-          style={{
-            display: "block",
-            fontSize: 12,
-            color: "var(--catfish-text-muted)",
-            marginBottom: 6,
-          }}
-        >
-          目标部门 namespace (格式 dept/&lt;部门&gt;)
-        </label>
-        <input
-          type="text"
-          value={shareNamespace}
-          onChange={(e) => setShareNamespace(e.target.value)}
-          placeholder="dept/finance"
-          style={{
-            width: "100%",
-            padding: "8px 12px",
-            fontSize: 13,
-            border: "1px solid var(--catfish-border)",
-            borderRadius: 4,
-            background: "var(--catfish-bg)",
-            color: "var(--catfish-text)",
-            fontFamily: "var(--font-mono)",
-          }}
-          disabled={sharing}
-        />
-        <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 4 }}>
-          例: dept/finance, dept/sales, dept/it. 当前只接受 dept/ 开头.
-        </div>
+      <div
+        style={{
+          marginBottom: 16,
+          fontSize: 13,
+          padding: "8px 12px",
+          border: "1px solid var(--catfish-border)",
+          borderRadius: 4,
+          background: "var(--catfish-bg)",
+        }}
+      >
+        {shareDeptError ? (
+          <span style={{ color: "#dc2626" }}>查不到你的部门: {shareDeptError}</span>
+        ) : shareDept === undefined ? (
+          <span style={{ color: "var(--catfish-text-muted)" }}>正在查你所在的部门…</span>
+        ) : shareDept === "" ? (
+          <span style={{ color: "#dc2626" }}>
+            你的账号没有设置部门, 不能分享到部门知识库. 请联系管理员在用户管理里补上部门.
+          </span>
+        ) : (
+          <>
+            分享到: <strong style={{ fontFamily: "var(--font-mono)" }}>dept/{shareDept}</strong>
+            <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 4 }}>
+              你账号里的部门. 只有这个部门的同事和管理员看得到, 别的部门看不到.
+            </div>
+          </>
+        )}
       </div>
 
       <div style={{ marginBottom: 16 }}>
@@ -286,7 +288,7 @@ export default function WikiShareDialog({
           <button
             className="approval-banner__btn-primary"
             onClick={() => void handleShare(shareWarnings.length > 0)}
-            disabled={sharing || !shareAck}
+            disabled={sharing || !shareAck || !shareDept}
           >
             {sharing
               ? "分享中…"

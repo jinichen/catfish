@@ -3,11 +3,17 @@
 # 端点
 
   GET  /healthz                                      健康
-  GET  /wiki/documents?namespace=&include_stale=     列已发布 wiki
-  GET  /wiki/documents/{namespace}/{file_id}         单条详情 + body
-  POST /wiki/documents/{namespace}                   发布 / 重发 wiki (员工)
-  POST /wiki/documents/{namespace}/{file_id}/unpublish  撤回 (员工 self only)
-  GET  /wiki/audit?limit=                            audit (admin)
+  GET  /wiki/documents?include_stale=                    列本部门已发布 wiki (admin 看全部)
+  GET  /wiki/documents/dept/{部门}/{file_id}             单条详情 + body
+  POST /wiki/documents                                   发布 / 重发到自己部门 (员工)
+  POST /wiki/documents/dept/{部门}/{file_id}/unpublish   撤回 (员工 self only)
+  GET  /wiki/audit?limit=                                audit (admin)
+
+# 部门隔离 (9/30)
+
+namespace 固定是 `dept/<部门>`, <部门> 取自身份里的 department (见 namespaces.py).
+9/30 之前 namespace 是 `{namespace}` 一个路径段, 而员工填的是 `dept/finance`
+—— 含 `/`, 路由永远匹配不上, 发布一直是 405, 这条链路从来没通过.
 
 # Auth
 
@@ -51,6 +57,7 @@ _ENV_FILE_LOADED = _load_dotenv()
 
 from . import __version__
 from . import storage
+from .namespaces import can_see, is_admin, namespace_for, validate_dept
 
 logger = logging.getLogger("catfish.wiki_hub")
 
@@ -107,7 +114,7 @@ def require_user(
 
 
 def require_admin(user: dict = Depends(require_user)) -> dict:
-    if user.get("role") not in ("admin", "sysadmin"):
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail=f"admin only (你是 {user.get('role')})")
     return user
 
@@ -122,17 +129,42 @@ async def healthz() -> dict:
 
 @app.get("/wiki/documents")
 async def list_documents_endpoint(
-    namespace: str | None = None,
     include_stale: bool = True,
+    user: dict = Depends(require_user),
 ) -> dict:
-    """列已发布 wiki. stale 项默认含 (UI 显灰 + warning), include_stale=false 则过滤."""
-    docs = storage.list_documents(namespace_filter=namespace, include_stale=include_stale)
+    """列已发布 wiki — 只列调用者看得见的部门 (admin 看全部).
+
+    stale 项默认含 (UI 显灰 + warning), include_stale=false 则过滤.
+    9/30 之前这个端点连身份都不要, 直连 hub 就能列全部.
+    """
+    if is_admin(user):
+        visible: list[str] | None = None
+    else:
+        dept = (user.get("dept") or "").strip()
+        visible = [namespace_for(dept)] if dept and validate_dept(dept) is None else []
+    docs = storage.list_documents(visible, include_stale=include_stale)
     return {"documents": docs, "count": len(docs)}
 
 
-@app.get("/wiki/documents/{namespace}/{file_id}")
-async def get_document_endpoint(namespace: str, file_id: str) -> dict:
+def _require_visible(user: dict, dept: str) -> str:
+    err = validate_dept(dept)
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+    namespace = namespace_for(dept)
+    if not can_see(user, namespace):
+        # 跟"不存在"区分开: 员工要知道是权限问题, 不是条目没了
+        raise HTTPException(status_code=403, detail=f"{namespace} 不是你的部门, 看不到")
+    return namespace
+
+
+@app.get("/wiki/documents/dept/{dept}/{file_id}")
+async def get_document_endpoint(
+    dept: str,
+    file_id: str,
+    user: dict = Depends(require_user),
+) -> dict:
     """单条 wiki — 含 frontmatter + body. stale 项也返, 客户端按 stale_after_unpublish 字段判断."""
+    namespace = _require_visible(user, dept)
     try:
         doc = storage.get_document(namespace, file_id)
     except ValueError as e:
@@ -142,20 +174,32 @@ async def get_document_endpoint(namespace: str, file_id: str) -> dict:
     return doc
 
 
-@app.post("/wiki/documents/{namespace}")
+@app.post("/wiki/documents")
 async def publish_document_endpoint(
-    namespace: str,
     payload: dict = Body(...),
     user: dict = Depends(require_user),
 ) -> dict:
-    """publish / re-publish wiki. payload 含:
-      - file_id (可选, 没传则服务器分配 UUID)
+    """publish / re-publish wiki 到**发布者自己的部门**. payload 含:
+      - file_id (可选, 没传则服务器分配 UUID; 重发传上次拿到的)
       - filename (本机原 rel_path, e.g. "wiki/entities/老李.md")
       - title (frontmatter title)
       - kind (entity | concept | query)
       - frontmatter_yaml (原 frontmatter 文本)
       - body_md (markdown body)
+
+    namespace 不从请求里拿, 由身份里的 department 推出 (见 namespaces.py).
     """
+    dept = (user.get("dept") or "").strip()
+    if not dept:
+        raise HTTPException(
+            status_code=400,
+            detail="你的账号没有设置部门, 不能分享到部门知识库. 请联系管理员在用户管理里补上部门.",
+        )
+    err = validate_dept(dept)
+    if err:
+        raise HTTPException(status_code=400, detail=f"账号里的部门名不能用作知识库分组: {err}")
+    namespace = namespace_for(dept)
+
     file_id = (payload.get("file_id") or "").strip() or uuid.uuid4().hex[:12]
     filename = (payload.get("filename") or "").strip()
     title = (payload.get("title") or "").strip()
@@ -167,6 +211,19 @@ async def publish_document_endpoint(
         raise HTTPException(status_code=400, detail="filename 必填")
     if not title:
         raise HTTPException(status_code=400, detail="title 必填 (frontmatter title)")
+
+    # 重发只能覆盖自己发的 (之前 upsert 不看是谁, 知道 file_id 就能改别人的)
+    try:
+        existing = storage.get_document(namespace, file_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if existing is not None:
+        owner = existing.get("published_by") or ""
+        if owner and owner != user["sub"] and not is_admin(user):
+            raise HTTPException(
+                status_code=403,
+                detail=f"{namespace}/{file_id} 是 {owner} 发的, 只有原作者能更新",
+            )
 
     result = storage.publish_document(
         namespace=namespace,
@@ -183,25 +240,24 @@ async def publish_document_endpoint(
     return result
 
 
-@app.post("/wiki/documents/{namespace}/{file_id}/unpublish")
+@app.post("/wiki/documents/dept/{dept}/{file_id}/unpublish")
 async def unpublish_document_endpoint(
-    namespace: str,
+    dept: str,
     file_id: str,
     payload: dict = Body(default={}),
     user: dict = Depends(require_user),
 ) -> dict:
     """撤回 — 员工只能撤自己 publish 的, admin 例外.
 
-    Manifesto 兼容设计: PG row 留 (audit), body 清零 + 标 stale. FS 镜像物理删.
+    Manifesto 兼容设计: PG row 留 (audit), body 清零 + 标 stale. FS 删正文留元数据.
     已 pull 副本不动 (公理 3/4 禁中央触及员工本机).
     """
-    # 看 publish_by 决定权限
+    namespace = _require_visible(user, dept)
     existing = storage.get_document(namespace, file_id)
     if existing is None:
         raise HTTPException(status_code=404, detail=f"{namespace}/{file_id} 不存在")
     is_owner = existing.get("published_by") == user["sub"]
-    is_admin = user.get("role") in ("admin", "sysadmin")
-    if not is_owner and not is_admin:
+    if not is_owner and not is_admin(user):
         raise HTTPException(
             status_code=403,
             detail=f"只能撤回自己 publish 的 wiki (这条是 {existing.get('published_by')} 发的)",

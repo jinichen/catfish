@@ -22,16 +22,41 @@ P3.3.18 (6/10): 中央部门 wiki publish 服务. 员工 push 单条 wiki entity
 
 ```
 GET  /healthz                                          健康
-GET  /wiki/documents?namespace=&include_stale=         列已发布 wiki
-GET  /wiki/documents/{namespace}/{file_id}             单条详情 + body
-POST /wiki/documents/{namespace}                       发布 / 重发 wiki (员工)
-POST /wiki/documents/{namespace}/{file_id}/unpublish   撤回 (员工 self / admin)
-GET  /wiki/audit?limit=                                audit (admin)
+GET  /wiki/documents?include_stale=                     列本部门已发布 wiki (admin 看全部)
+GET  /wiki/documents/dept/{部门}/{file_id}              单条详情 + body (别的部门 403)
+POST /wiki/documents                                    发布 / 重发到自己部门 (员工)
+POST /wiki/documents/dept/{部门}/{file_id}/unpublish    撤回 (员工 self / admin)
+GET  /wiki/audit?limit=                                 audit (admin)
 ```
 
-## Namespace 约定
+## Namespace 与部门隔离 (9/30)
 
-按部门分: `dept/finance`, `dept/sales`, `dept/it`, `dept/hr` 等. 员工 publish 时 caller (`catfish_wiki_publish` tool) 用 catfish_today_summary 拿当前员工 department 字段, 拼成 `dept/<department>`.
+namespace 固定是 `dept/<部门>`, `<部门>` 就是发布者身份里的 department 原文
+(gateway 注入的 `X-Catfish-User-Dept`, 可以是中文, 如 `dept/研发部`)。
+由 hub 推出来, 调用方不传; 员工只能发到自己部门。
+
+- 列表 / 详情 / 撤回只对本部门员工和 admin / sysadmin 开放
+- 身份里没设部门的账号: 列表为空, 发布返 400 (提示找管理员补部门)
+- 重发同一个 file_id 只有原作者 (或 admin) 可以, 其他人 403
+- 部门名里不能有 `/ \ < > : " | ? * # %`、控制字符、`..`, 不能以 `.` 开头, 最长 64
+  (见 `namespaces.py`)
+
+9/30 之前 namespace 是员工手填的 `dept/finance`, 路由只接一个路径段 ——
+发布一律 405, 这条链路上线后从来没通过。
+
+## 存储
+
+- 配了 `CATFISH_DB_URL`: PG (`wiki_documents` / `wiki_audit`) 为主, FS 做镜像
+- 没配: FS 为主, `~/.catfish-hub/wiki/dept/<部门>/<file_id>.md` + `.meta.json`
+  (元数据 sidecar: published_by / updated_at / stale, 撤回时只删 .md 留 sidecar)
+
+## 测试
+
+```bash
+PYTHONPATH=src python -m pytest tests
+# 连 PG 再跑一遍 (库要先 alembic upgrade head):
+CATFISH_TEST_PG_URL=postgresql://... PYTHONPATH=src python -m pytest tests
+```
 
 ## Auth
 

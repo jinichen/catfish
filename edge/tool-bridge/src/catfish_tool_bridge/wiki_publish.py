@@ -4,7 +4,7 @@
 
 跟 catfish_skill_publish 关键差异:
 1. **输入**: 单 markdown 文件路径 (~/.catfish/wiki/entities/老李.md), 不是 skill 目录
-2. **endpoint**: POST gateway `/v1/wiki/documents/{namespace}` (JSON body), 不是 multipart
+2. **endpoint**: POST gateway `/v1/wiki/documents` (JSON body), 不是 multipart
 3. **扫描行为**:
    - **凭据扫**: 命中**拒** (跟 skill 一致, wiki 写密码是 mistake)
    - **PII / 内网 URL / 敏感词**: 命中**只警告** (默认 ack_warnings=false), 员工
@@ -15,8 +15,14 @@
 4. **敏感词扫 (新)**: 从 ~/.catfish/wiki/sensitive_terms.txt 读员工自配 list,
    客户名 / 项目代号 / 关键人姓名等命中给警告.
 
-namespace 约定: 按部门分 (dept/finance / dept/sales / dept/it / dept/hr).
-caller 用 catfish_today_summary 拿员工 department 字段拼.
+namespace (9/30 起): 不再由调用方传. hub 按发布者身份里的 department 定成
+`dept/<部门>`, 员工只能发到自己部门. 原来手填 `dept/finance` 那条路从来没通过
+(路由只接一个路径段, 含 `/` 的 namespace 一律 405), 而且跟身份里的部门对不上,
+没法做部门隔离.
+
+重发 (9/30): 每条本机 wiki 第一次发出去拿到的 file_id 记在
+~/.catfish/wiki_publish_state.json, 之后再发同一个文件自动带上, hub 更新同一条,
+已安装的同事那边会看到"有更新". 之前每发一次都是新 file_id, 部门里就多一条重复的.
 
 Manifesto 公理 2 例外条款明示允许 (员工主动 push), 公理 4 (无反向触及员工本机).
 """
@@ -44,9 +50,44 @@ OAUTH_ID_TOKEN_PATH = skill_publish.OAUTH_ID_TOKEN_PATH
 #: 员工自配敏感词 list (一行一个, # 开头注释)
 SENSITIVE_TERMS_PATH = Path.home() / ".catfish" / "wiki" / "sensitive_terms.txt"
 
+#: 本机 wiki rel_path → 上次发布拿到的 {file_id, namespace, updated_at}
+PUBLISH_STATE_PATH = Path.home() / ".catfish" / "wiki_publish_state.json"
+
+
+def _load_publish_state() -> dict[str, dict[str, Any]]:
+    try:
+        data = json.loads(PUBLISH_STATE_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        logger.warning("读 %s 失败 (当作没发过): %s", PUBLISH_STATE_PATH, e)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_publish_state(rel_path: str, entry: dict[str, Any]) -> None:
+    state = _load_publish_state()
+    state[rel_path] = entry
+    try:
+        PUBLISH_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = PUBLISH_STATE_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(PUBLISH_STATE_PATH)
+    except Exception as e:
+        # 发布本身已成功; 记不下来的后果是下次重发变成新条目, 不值得让这次报错
+        logger.warning("写 %s 失败: %s", PUBLISH_STATE_PATH, e)
+
 
 def _read_id_token() -> str | None:
     return skill_publish._read_id_token()
+
+
+def wiki_doc_url(namespace: str, file_id: str, suffix: str = "") -> str:
+    """`dept/<部门>` + file_id → gateway 上这条的 URL. 部门名可能是中文, 逐段编码."""
+    from urllib.parse import quote  # noqa: PLC0415
+
+    segs = [quote(seg, safe="") for seg in namespace.split("/")]
+    return f"{GATEWAY_URL}/v1/wiki/documents/{'/'.join(segs)}/{quote(file_id, safe='')}{suffix}"
 
 
 def _load_sensitive_terms() -> list[str]:
@@ -125,17 +166,16 @@ def _infer_kind_from_path(rel_path: str) -> str:
 
 
 def wiki_publish(args: dict[str, Any]) -> dict[str, Any]:
-    """tool entry — 读 + 扫描 + POST JSON 到 gateway /v1/wiki/documents/{ns}.
+    """tool entry — 读 + 扫描 + POST JSON 到 gateway /v1/wiki/documents.
 
     参数:
       wiki_rel_path (必): 员工本机 wiki rel_path, 必须以 'wiki/' 开头
         (e.g. 'wiki/entities/老李.md', 'wiki/concepts/CSMM-4.md')
-      namespace (必): 部门 namespace ('dept/finance', 'dept/sales', ...)
       acknowledge_warnings (可选, 默认 false): true 时跳 PII / 内网 / 敏感词警告
         强 publish. 第一次调若拿到 warnings, LLM 必须**转告员工**, 员工
         confirm 后才能加这个参数 retry.
-      file_id (可选): 不传则服务器分配 UUID. 重发同一 wiki 时传上次拿到的 file_id
-        让中央 update 同 row.
+      file_id (可选): 一般不用传 —— 同一个文件上次发布的 file_id 会自动带上.
+      namespace: 已废弃, 传了也忽略 (hub 按身份里的部门定).
 
     成功返:
       {ok:true, file_id, namespace, hub_url, published_at, warnings?}
@@ -145,15 +185,12 @@ def wiki_publish(args: dict[str, Any]) -> dict[str, Any]:
       {ok:false, scan_phase:"credentials", leaks:[...]}
     """
     wiki_rel_path = (args.get("wiki_rel_path") or "").strip()
-    namespace = (args.get("namespace") or "").strip()
     ack_warnings = bool(args.get("acknowledge_warnings", False))
     file_id = (args.get("file_id") or "").strip()
 
     # 校验
     if not wiki_rel_path:
         return {"ok": False, "error": "wiki_rel_path 必填 (例: wiki/entities/老李.md)"}
-    if not namespace:
-        return {"ok": False, "error": "namespace 必填 (例: dept/finance)"}
     if ".." in wiki_rel_path or wiki_rel_path.startswith("/"):
         return {"ok": False, "error": f"wiki_rel_path 不合法: {wiki_rel_path}"}
     if not wiki_rel_path.startswith("wiki/"):
@@ -161,16 +198,6 @@ def wiki_publish(args: dict[str, Any]) -> dict[str, Any]:
             "ok": False,
             "error": f"wiki_rel_path 必须以 'wiki/' 开头 (拿到 {wiki_rel_path})",
         }
-    # namespace 必须 dept/<part>, dept-only 不允许公司级广播
-    if not re.fullmatch(r"dept/[a-z][a-z0-9_-]{0,40}", namespace):
-        return {
-            "ok": False,
-            "error": (
-                f"namespace 只允许 'dept/<部门>' 格式, 小写字母数字/-/_  "
-                f"(拿到 {namespace!r}). 公司级广播未开放."
-            ),
-        }
-
     # 读 wiki 文件
     catfish_home = Path.home() / ".catfish"
     abs_path = (catfish_home / wiki_rel_path).resolve()
@@ -285,12 +312,15 @@ def wiki_publish(args: dict[str, Any]) -> dict[str, Any]:
         "frontmatter_yaml": fm_yaml,
         "body_md": body_md,
     }
+    previous = _load_publish_state().get(wiki_rel_path) or {}
+    if not file_id:
+        file_id = str(previous.get("file_id") or "")
     if file_id:
         payload["file_id"] = file_id
 
     import httpx  # 懒 import
 
-    url = f"{GATEWAY_URL}/v1/wiki/documents/{namespace}"
+    url = f"{GATEWAY_URL}/v1/wiki/documents"
     try:
         with httpx.Client(timeout=20.0) as client:
             resp = client.post(
@@ -316,17 +346,30 @@ def wiki_publish(args: dict[str, Any]) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {"ok": False, "error": f"gateway 返非 json: {resp.text[:200]}"}
 
+    namespace = str(data.get("namespace") or "")
+    new_file_id = str(data.get("file_id") or "")
+    if namespace and new_file_id:
+        _save_publish_state(wiki_rel_path, {
+            "file_id": new_file_id,
+            "namespace": namespace,
+            "updated_at": data.get("updated_at"),
+        })
+    republished = bool(previous) and previous.get("file_id") == new_file_id \
+        and previous.get("namespace") == namespace
     result = {
         "ok": True,
-        "namespace": data.get("namespace", namespace),
-        "file_id": data.get("file_id"),
+        "namespace": namespace,
+        "file_id": new_file_id,
+        "republished": republished,
         "published_at": data.get("published_at"),
+        "updated_at": data.get("updated_at"),
         "size_bytes": data.get("size_bytes"),
-        "hub_url": f"{GATEWAY_URL}/v1/wiki/documents/{namespace}/{data.get('file_id')}",
+        "hub_url": wiki_doc_url(namespace, new_file_id),
     }
     # 显式说明发出去的是什么 (帮 LLM 转告员工)
     result["summary"] = (
-        f"已 publish wiki '{title}' 到 {namespace}. "
+        f"已{'更新' if republished else '发布'} wiki '{title}' 到 {namespace}. "
+        f"已安装的同事会看到有更新. "
         f"已 pull 副本不受未来 unpublish 影响 (manifesto 公理 4)."
     )
     if warnings:

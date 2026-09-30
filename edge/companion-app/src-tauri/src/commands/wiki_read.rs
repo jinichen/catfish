@@ -443,7 +443,7 @@ pub fn collect_all_wiki_md(home: &Path) -> Vec<PathBuf> {
 // ============================================================
 
 /// 已装部门 wiki 项. 跟 WikiFileInfo 不同:
-/// - 含 namespace (dept/finance / dept/sales) 跟 file_id (UUID)
+/// - 含 namespace (dept/<部门>, 部门名取自发布者身份, 可以是中文) 跟 file_id (UUID)
 /// - 含 published_by / published_at / installed_at (来自 .meta.json sidecar)
 /// - rel_path 是 `wiki-shared/<ns>/<file_id>.md` 相对 ~/.catfish/
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -463,6 +463,9 @@ pub struct InstalledWikiSharedInfo {
     pub published_by: String,
     /// 原 publish 时刻 (ISO-8601), 没 sidecar 时空字符串
     pub published_at: String,
+    /// 装的是 hub 上哪个版本 (hub 的 updated_at). 9/30 前装的没有这个字段, 空字符串.
+    /// 知识库卡片拿它跟 hub list 的 updated_at 比, 判断"有更新".
+    pub hub_updated_at: String,
     /// 本机装上时刻 (ISO-8601)
     pub installed_at: String,
     /// 文件 byte size
@@ -537,6 +540,7 @@ pub async fn list_installed_wiki_shared() -> Result<Vec<InstalledWikiSharedInfo>
                 let mut kind = String::from("entity");
                 let mut published_by = String::new();
                 let mut published_at = String::new();
+                let mut hub_updated_at = String::new();
                 let mut installed_at = String::new();
                 if let Ok(meta_text) = fs::read_to_string(&meta_path) {
                     if let Ok(meta_json) = serde_json::from_str::<serde_json::Value>(&meta_text) {
@@ -552,6 +556,9 @@ pub async fn list_installed_wiki_shared() -> Result<Vec<InstalledWikiSharedInfo>
                         if let Some(p) = meta_json.get("published_at").and_then(|v| v.as_str()) {
                             published_at = p.to_string();
                         }
+                        if let Some(p) = meta_json.get("hub_updated_at").and_then(|v| v.as_str()) {
+                            hub_updated_at = p.to_string();
+                        }
                         if let Some(p) = meta_json.get("installed_at").and_then(|v| v.as_str()) {
                             installed_at = p.to_string();
                         }
@@ -566,6 +573,7 @@ pub async fn list_installed_wiki_shared() -> Result<Vec<InstalledWikiSharedInfo>
                     kind,
                     published_by,
                     published_at,
+                    hub_updated_at,
                     installed_at,
                     size_bytes,
                 });

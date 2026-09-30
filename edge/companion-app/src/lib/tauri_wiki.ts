@@ -162,12 +162,13 @@ export const wikiSensitiveTermsEnsure = () =>
 // P3.3.18 Phase 4 (6/10): 扫 ~/.catfish/wiki-shared/ 已装部门 wiki
 export interface InstalledWikiSharedInfo {
   relPath: string;          // wiki-shared/dept/<name>/<file_id>.md (相对 ~/.catfish/)
-  namespace: string;        // dept/finance
+  namespace: string;        // dept/<部门> (部门名取自发布者身份, 可以是中文)
   fileId: string;           // hub 分配的 UUID
   title: string;
   kind: string;             // entity | concept | query
   publishedBy: string;
   publishedAt: string;      // ISO-8601 or ""
+  hubUpdatedAt: string;     // 装的是 hub 哪个版本 (hub updated_at); 9/30 前装的为 ""
   installedAt: string;      // ISO-8601 or ""
   sizeBytes: number;
 }

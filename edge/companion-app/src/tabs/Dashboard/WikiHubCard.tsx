@@ -1,12 +1,14 @@
 /** Wiki Hub 卡 — 中央部门 wiki publish 市场 (P3.3.18 Phase 3a, 6/10).
  *
- * 列出 hub 上所有已 publish wiki 笔记, 按 namespace (dept/finance / dept/sales) 分组.
+ * 列出 hub 上本部门已 publish 的 wiki 笔记 (hub 按身份里的部门过滤, 管理员看全部),
+ * 按 namespace (dept/<部门>) 分组.
  * 从 gateway /v1/wiki/documents 拉 (gateway 反代到 :8994, 注入 OIDC 身份).
  *
  * 跟 SkillsHubCard 同模式. 关键差异:
  *   - 端点 /v1/wiki/documents 不是 /v1/hub/skills
  *   - response 字段 {documents, count} 不是 {skills, count}
- *   - 没有 "升级 N 个" 概念 — wiki 没 version, 每次 publish 直接 upsert
+ *   - 没有 version 号, 但有 updated_at: 发布方重发后 hub 的 updated_at 比本机
+ *     装的那版新 → 显"有更新" + 更新按钮 (9/30, 见 wikiHubStatus.ts)
  *   - stale 项显灰 + 不让装 (原作者撤回了, body 已清零)
  *   - "安装" 按钮调 catfish_wiki_install (tool_bridge), 装到 ~/.catfish/wiki-shared/
  *
@@ -23,6 +25,7 @@ import {
   type InstalledWikiSharedInfo,
 } from "../../lib/tauri";
 import { useAgentStore } from "../../store/agent";
+import { hasHubUpdate, toolResultError } from "./wikiHubStatus";
 
 interface WikiDoc {
   namespace: string;
@@ -150,7 +153,7 @@ export default function WikiHubCard() {
     return () => window.clearTimeout(t);
   }, [toast]);
 
-  /** 点"安装" → catfish_wiki_install via tool_bridge. */
+  /** 点"安装" / "更新" → catfish_wiki_install via tool_bridge (再装一次就是覆盖成 hub 最新版). */
   const handleInstall = async (doc: WikiDoc) => {
     const key = `${doc.namespace}/${doc.file_id}`;
     if (installingKey) return;
@@ -164,13 +167,18 @@ export default function WikiHubCard() {
         hub_namespace: doc.namespace,
         hub_file_id: doc.file_id,
       });
-      if (res.ok) {
+      const errMsg = toolResultError(res);
+      if (errMsg === null) {
+        const updating = installedByKey.has(key);
         setToast({
           kind: "ok",
-          text: `已装 '${doc.title}' 到 ~/.catfish/wiki-shared/${doc.namespace}/`,
+          text: updating
+            ? `已更新 '${doc.title}' 到最新版`
+            : `已装 '${doc.title}' 到 ~/.catfish/wiki-shared/${doc.namespace}/`,
         });
+        // 之前装完不重扫本机, 按钮要等下一分钟轮询才变 "✓ 已装"
+        void refresh();
       } else {
-        const errMsg = typeof res.result === "string" ? res.result : JSON.stringify(res.result);
         setToast({ kind: "err", text: `安装失败: ${errMsg.slice(0, 120)}` });
       }
     } catch (e) {
@@ -190,6 +198,9 @@ export default function WikiHubCard() {
   // P3.3.18 Phase 4: 本机已装 + hub 已 stale 的 "需要员工注意" 计数
   const installedStaleCount = docs.filter(
     (d) => d.stale_after_unpublish && installedByKey.has(`${d.namespace}/${d.file_id}`),
+  ).length;
+  const updateCount = docs.filter(
+    (d) => !d.stale_after_unpublish && hasHubUpdate(d, installedByKey.get(`${d.namespace}/${d.file_id}`)),
   ).length;
 
   return (
@@ -254,6 +265,22 @@ export default function WikiHubCard() {
               ⚠ {installedStaleCount} 你装的已撤回
             </span>
           )}
+          {updateCount > 0 && (
+            <span
+              style={{
+                fontSize: 11,
+                color: "#2563eb",
+                background: "rgba(37,99,235,0.1)",
+                padding: "2px 6px",
+                borderRadius: 3,
+                marginLeft: "var(--space-2)",
+                fontWeight: 600,
+              }}
+              title={`${updateCount} 条你装的副本, 发布人后来又改过`}
+            >
+              ↻ {updateCount} 有更新
+            </span>
+          )}
         </h3>
         <span
           style={{
@@ -261,7 +288,7 @@ export default function WikiHubCard() {
             color: "var(--catfish-text-muted)",
           }}
         >
-          部门共享的知识文档 · 每分钟刷新
+          本部门共享的知识文档 · 每分钟刷新
         </span>
       </div>
 
@@ -308,7 +335,7 @@ export default function WikiHubCard() {
             textAlign: "center",
           }}
         >
-          部门里还没人 publish 过 wiki. 写完一条 entity / concept / query 后, 让 {agentName} 帮你发到这里, 部门同事能看到.
+          部门里还没人分享过 wiki. 在知识体系页打开一条笔记, 点「分享到部门」, 同部门同事就能在这里看到并安装.
         </div>
       )}
 
@@ -341,6 +368,7 @@ export default function WikiHubCard() {
                       key={key}
                       doc={doc}
                       installed={installed}
+                      updateAvailable={!doc.stale_after_unpublish && hasHubUpdate(doc, installed)}
                       installing={installingKey === key}
                       onInstall={() => void handleInstall(doc)}
                     />
@@ -358,11 +386,13 @@ export default function WikiHubCard() {
 function WikiRow({
   doc,
   installed,
+  updateAvailable,
   installing,
   onInstall,
 }: {
   doc: WikiDoc;
   installed: InstalledWikiSharedInfo | undefined;
+  updateAvailable: boolean;
   installing: boolean;
   onInstall: () => void;
 }) {
@@ -372,7 +402,7 @@ function WikiRow({
   // P3.3.18 Phase 4: 4 状态分支
   //   - stale + installed: 本机有副本但原作者撤回了 (manifesto 公理 4 — 员工自己决定)
   //   - stale + !installed: hub 已撤回 (灰显, 不让装)
-  //   - !stale + installed: 已装, 显 ✓ badge, 不显安装按钮
+  //   - !stale + installed: 已装, 显 ✓ badge; hub 比本机新 → 显"更新"按钮
   //   - !stale + !installed: 可装, 显安装按钮
   return (
     <div
@@ -464,7 +494,27 @@ function WikiRow({
         <span>
           👤 {doc.published_by || "?"} · {humanTime(doc.updated_at || doc.published_at)}
         </span>
-        {!stale && isInstalled && (
+        {!stale && isInstalled && updateAvailable && (
+          <button
+            type="button"
+            onClick={onInstall}
+            disabled={installing}
+            style={{
+              fontSize: 11,
+              padding: "3px 10px",
+              background: "transparent",
+              color: "#2563eb",
+              border: "1px solid #2563eb",
+              borderRadius: "var(--radius-sm)",
+              cursor: installing ? "wait" : "pointer",
+              opacity: installing ? 0.6 : 1,
+            }}
+            title={`发布人 ${humanTime(doc.updated_at)} 改过, 你装的是 ${humanTime(installed.hubUpdatedAt || installed.installedAt)} 的版本`}
+          >
+            {installing ? "更新中…" : "↻ 更新"}
+          </button>
+        )}
+        {!stale && isInstalled && !updateAvailable && (
           <span
             style={{
               fontSize: 11,

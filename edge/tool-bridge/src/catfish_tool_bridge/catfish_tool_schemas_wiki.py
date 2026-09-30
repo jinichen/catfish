@@ -21,7 +21,7 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
         "name": "catfish_wiki_publish",
         "description": (
             "★ 把员工本机一条 wiki 笔记 (~/.catfish/wiki/{entities,concepts,queries}/X.md) "
-            "发布到部门 wiki-hub (全部门可见).\n\n"
+            "发布到员工**自己所在部门**的 wiki-hub (只有同部门同事和管理员看得到).\n\n"
             "✅ 调用时机:\n"
             "  - 员工说'把这条 wiki 分享给部门' / '让 X 部门看下我这条笔记'\n"
             "  - **绝不**在没员工 explicit 确认时调用 (跟 skill_publish 同纪律)\n"
@@ -32,10 +32,10 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
             "  哪怕你后面撤回, 5 个同事本机各有副本, 信息已扩散. 你确定吗?'\n\n"
             "input:\n"
             "  - wiki_rel_path: 本机 rel_path, 以 'wiki/' 开头 (例 'wiki/entities/老李.md')\n"
-            "  - namespace: 部门 namespace, 必须 'dept/<部门>' 格式 (例 'dept/finance')\n"
-            "    用 catfish_today_summary 拿 department 字段拼\n"
             "  - acknowledge_warnings (可选): false 时撞 PII/内网/敏感词警告就拒. true 跳警告\n"
-            "  - file_id (可选): 重发同一 wiki 时传上次拿到的, 让中央 update 同 row\n\n"
+            "  部门不用传: hub 按员工身份里的部门定 (dept/<部门>), 不能发到别的部门.\n"
+            "  同一个文件再发一次就是更新 (上次的 file_id 本机记着, 自动带上),\n"
+            "  已安装的同事会看到'有更新'.\n\n"
             "扫描行为 (跟 skill_publish 不同):\n"
             "  - 凭据扫: 命中**永拒** (wiki 写密码是 mistake)\n"
             "  - PII / 内网 URL / 敏感词扫: 命中**只警告**, 返 warnings 字段, 默认拒\n"
@@ -44,12 +44,12 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
             "    (脱敏后笔记就没意义), 员工要自己拍.\n"
             "  - 敏感词扫从 ~/.catfish/wiki/sensitive_terms.txt 读员工自配 list\n\n"
             "成功返:\n"
-            "  {ok:true, namespace, file_id, hub_url, published_at, summary, acknowledged_warnings?}\n"
+            "  {ok:true, namespace, file_id, republished, hub_url, updated_at, summary, acknowledged_warnings?}\n"
             "警告 (默认拒):\n"
             "  {ok:false, scan_phase:'warnings', warnings:[...], acknowledge_warnings_available:true}\n"
             "凭据撞:\n"
             "  {ok:false, scan_phase:'credentials', error}\n\n"
-            "底层: POST gateway /v1/wiki/documents/{namespace} JSON body, 跟 mcp-registry "
+            "底层: POST gateway /v1/wiki/documents JSON body, 跟 mcp-registry "
             "同 OIDC 鉴权 (X-Catfish-User-Sub 注入)."
         ),
         "input_schema": {
@@ -58,10 +58,6 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
                 "wiki_rel_path": {
                     "type": "string",
                     "description": "本机 wiki rel_path, 'wiki/' 开头 (例 'wiki/entities/老李.md')",
-                },
-                "namespace": {
-                    "type": "string",
-                    "description": "部门 namespace, 必须 'dept/<部门>' (例 'dept/finance')",
                 },
                 "acknowledge_warnings": {
                     "type": "boolean",
@@ -74,12 +70,12 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
                 "file_id": {
                     "type": "string",
                     "description": (
-                        "可选. 重发同一 wiki (含修改) 时传上次拿到的 file_id, "
-                        "服务端 upsert 同 row. 不传则服务端分配新 UUID."
+                        "一般不传. 同一个文件上次发布的 file_id 本机记着, 会自动带上; "
+                        "只有要覆盖某条特定条目时才显式传."
                     ),
                 },
             },
-            "required": ["wiki_rel_path", "namespace"],
+            "required": ["wiki_rel_path"],
         },
         "emoji": "📤",
         "toolset": "catfish_native",
@@ -93,8 +89,9 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
             "  - 员工在 WikiHubCard 浏览部门 wiki 后说'把这条装到本机'\n"
             "  - 员工说'查下部门里关于 X 客户的笔记'时, 找到 hub 上的相关 wiki 后\n\n"
             "input:\n"
-            "  - hub_namespace: 'dept/<部门>'\n"
-            "  - hub_file_id: 服务端分配的 file_id (从 list_documents 拿)\n\n"
+            "  - hub_namespace: 'dept/<部门>' (部门名可能是中文, 原样传 list 里拿到的)\n"
+            "  - hub_file_id: 服务端分配的 file_id (从 list_documents 拿)\n"
+            "  只能装自己部门的 (管理员例外). 已装过的再装一次 = 更新到 hub 最新版.\n\n"
             "Stale 拒绝:\n"
             "  如果该 wiki 已被原作者撤回 (stale_after_unpublish=true), 中央 body 已清零, "
             "  本工具拒装并告诉员工.\n\n"
@@ -106,7 +103,7 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "hub_namespace": {"type": "string", "description": "部门 namespace ('dept/finance' 等)"},
+                "hub_namespace": {"type": "string", "description": "部门 namespace ('dept/<部门>', 原样用 list 里的)"},
                 "hub_file_id": {"type": "string", "description": "服务端 file_id (从 list_documents 拿)"},
             },
             "required": ["hub_namespace", "hub_file_id"],
@@ -131,7 +128,7 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
             "  - reason (可选): 撤回原因, 写 audit\n\n"
             "成功:\n"
             "  - 中央 PG row 保留 (audit 需要), body_md / frontmatter 清零\n"
-            "  - 中央 FS 镜像物理删\n"
+            "  - 中央 FS 删正文, 元数据留着标 stale\n"
             "  - 标 stale_after_unpublish=true. 客户端下次 list 看到 stale 标"
         ),
         "input_schema": {
