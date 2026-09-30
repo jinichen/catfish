@@ -716,7 +716,10 @@ echo "总大小: ${TOTAL_MB} MB"
 # 所以只报大小 + 给命令, 不替人删。其余是纯垃圾, 直接清。
 echo ""
 echo "── 收尾清理 /tmp ──"
-for d in "$HERMES_SRC" "$DEPS_STAGE" "$PY_UNPACK" "$EMAIL_STAGE"; do
+# EMAIL_STAGE 不在这里: 9/28 邮件那段拆到 build-email-resource.sh (子进程),
+# 变量跟着走了, 那边自己删自己的 stage。这里留着引用的话 set -u 直接退出 ——
+# 产物其实都已经打好, 但 /tmp 那 1G+ 没清、退出码是 1、"下一步"也不打印。
+for d in "$HERMES_SRC" "$DEPS_STAGE" "$PY_UNPACK"; do
     [ -d "$d" ] || continue
     sz=$(du -sh "$d" 2>/dev/null | cut -f1)
     rm -rf "$d" && echo "  ✓ 删 $d ($sz)"
