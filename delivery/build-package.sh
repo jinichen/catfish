@@ -221,8 +221,23 @@ for ARCH in $ARCHES; do
     printf '%s' "$PULL_LIST" | while read -r img; do
         [ -z "$img" ] && continue
         echo "  · $img"
-        docker pull --platform "$PLATFORM" -q "$img" >/dev/null || {
-            echo "    ❌ 拉取失败: $img"; exit 1; }
+        # 9/30: 重试 3 次。docker 拉镜像走的是 Docker Desktop 自己的代理链
+        # (http.docker.internal:3128 → 系统代理), 偶发一次 EOF 就让整个打包
+        # 白跑 —— 那次手动重拉一次就好了。重试解决不了的 (真断网 / 镜像名错)
+        # 三次后照样失败, 并把最后一次的报错打出来。
+        pulled=0
+        for attempt in 1 2 3; do
+            if pull_err=$(docker pull --platform "$PLATFORM" -q "$img" 2>&1 >/dev/null); then
+                pulled=1; break
+            fi
+            echo "    ↻ 第 $attempt 次失败: $(printf '%s' "$pull_err" | tail -1)"
+            [ "$attempt" -lt 3 ] && sleep $((attempt * 5))
+        done
+        [ "$pulled" = 1 ] || {
+            echo "    ❌ 拉取失败: $img (重试 3 次)"
+            echo "       docker 拉镜像不走终端里的 HTTPS_PROXY, 走 Docker Desktop 的代理设置;"
+            echo "       先单独试: docker pull --platform $PLATFORM $img"
+            exit 1; }
     done || exit 1
 
     # ── 验架构 ──────────────────────────────────────────────────────
