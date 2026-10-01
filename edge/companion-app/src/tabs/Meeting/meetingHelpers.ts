@@ -53,3 +53,25 @@ export function estimatePercent(elapsedSecs: number, audioSecs: number | null | 
   if (!audioSecs || audioSecs <= 0) return null;
   return Math.min(95, Math.floor((elapsedSecs / (audioSecs / 8)) * 100));
 }
+
+/** 知识库条目名的规则 (tool-bridge wiki_files._slugify / _validate_slug, 跟 Rust wiki_write.rs 对齐):
+ *  只能有字母数字 (含中文)、-、_ 和空格 (空格转成 -), 转完不超过 100 字节 (约 33 个汉字)。
+ *  「·」「/」「:」这类一律不行 —— 10/1 第一版用了「·」, 存知识库直接被拒。 */
+const SLUG_MAX_BYTES = 100;
+
+function slugBytes(title: string): number {
+  return new TextEncoder().encode(title.trim().replace(/\s+/g, "-")).length;
+}
+
+export function minutesWikiTitle(meetingTitle: string, date: string): string {
+  const clean = meetingTitle.replace(/[^\p{L}\p{N}_\- ]+/gu, " ").replace(/\s+/g, " ").trim();
+  const make = (t: string) => ["会议纪要", t, date].filter(Boolean).join(" ");
+  let t = clean;
+  while (t && slugBytes(make(t)) > SLUG_MAX_BYTES) t = [...t].slice(0, -1).join("").trim();
+  return make(t);
+}
+
+/** minutes.md 去掉首行 H1 (标题已经是条目名) 当条目正文。 */
+export function minutesWikiBody(markdown: string): string {
+  return markdown.replace(/^# .*\n+/, "");
+}

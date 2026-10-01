@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import type { WikiFileInfo } from "../../lib/tauri_wiki";
-import { actionItemToTask, estimatePercent, mergeHotwords, wikiHotwords } from "./meetingHelpers";
+import {
+  actionItemToTask, estimatePercent, mergeHotwords, minutesWikiBody, minutesWikiTitle, wikiHotwords,
+} from "./meetingHelpers";
 
 function entry(p: Partial<WikiFileInfo>): WikiFileInfo {
   return {
@@ -53,5 +55,31 @@ describe("estimatePercent", () => {
     expect(estimatePercent(15, 240)).toBe(50);
     expect(estimatePercent(999, 240)).toBe(95);
     expect(estimatePercent(10, null)).toBeNull();
+  });
+});
+
+describe("minutesWikiTitle", () => {
+  const ok = (t: string) => /^[\p{L}\p{N}_\- ]+$/u.test(t) && new TextEncoder().encode(t.replace(/\s+/g, "-")).length <= 100;
+
+  it("去掉条目名不允许的字符", () => {
+    const t = minutesWikiTitle("资质集采·二期/周会: 10-01", "2026-10-01");
+    expect(t).toBe("会议纪要 资质集采 二期 周会 10-01 2026-10-01");
+    expect(ok(t)).toBe(true);
+  });
+
+  it("太长截短到 100 字节以内, 日期保留", () => {
+    const t = minutesWikiTitle("很长".repeat(40), "2026-10-01");
+    expect(ok(t)).toBe(true);
+    expect(t.endsWith("2026-10-01")).toBe(true);
+  });
+
+  it("标题全是符号也能出一个合法名字", () => {
+    expect(minutesWikiTitle("···///", "2026-10-01")).toBe("会议纪要 2026-10-01");
+  });
+});
+
+describe("minutesWikiBody", () => {
+  it("去掉首行 H1", () => {
+    expect(minutesWikiBody("# 周会\n\n- 日期: x\n")).toBe("- 日期: x\n");
   });
 });

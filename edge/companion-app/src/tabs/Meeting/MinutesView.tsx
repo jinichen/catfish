@@ -2,15 +2,19 @@
  * 纪要: 生成 / 展示 / 写回 (10/1)。
  *
  * 写回都要员工点: 勾选的待办 → 任务库 (catfish_create_task, source=meeting, 按
- * 会议+序号去重, 重复点不会出两条); 纪要 → 知识库 (catfish_wiki_ingest, 后台再抽实体)。
- * 两个工具成功的返回形状不一样 (ok:true / type:"success"), 分别判, 不把失败当成功。
+ * 会议+序号去重, 重复点不会出两条); 纪要 → 知识库, 存成一条「文档」实体
+ * (catfish_wiki_create, entity_type=doc, 标签「会议纪要」), 知识体系里立刻能看到。
+ *
+ * 10/1 第一版用的是 catfish_wiki_ingest: 那只是把文件放进 wiki/raw/sources/ 这个原料
+ * 收件箱, 知识体系页不显示, 后台过很久才从里面抽人名 / 项目, 纪要本身永远不是一条条目 ——
+ * 鸿波点完「存进知识库」在知识体系里找不到, 等于没存。
  */
 import { useEffect, useState } from "react";
 
 import { toolBridgeCallTool } from "../../lib/tauri_services";
 import { meetingMinutes, meetingMinutesGenerate, type MeetingMeta, type Minutes } from "../../lib/tauri_meeting";
 import { Btn, ErrorLine, itemStyle } from "../Collab/roomLinkUi";
-import { actionItemToTask } from "./meetingHelpers";
+import { actionItemToTask, minutesWikiBody, minutesWikiTitle } from "./meetingHelpers";
 
 function toolError(res: { ok: boolean; result: unknown; error: string | null }, success: (r: Record<string, unknown>) => boolean) {
   if (!res.ok) return res.error || "工具调用失败";
@@ -69,14 +73,18 @@ export default function MinutesView({ meta }: { meta: MeetingMeta }) {
   async function saveWiki() {
     if (!minutes) return;
     setError(null);
-    const res = await toolBridgeCallTool("catfish_wiki_ingest", {
-      kept_path: minutes.path,
-      filename: `${meta.title}-会议纪要.md`,
-      reason: "会议纪要",
+    const title = minutesWikiTitle(meta.title, meta.created_at.slice(0, 10));
+    const res = await toolBridgeCallTool("catfish_wiki_create", {
+      kind: "entity",
+      subtype: "doc",
+      title,
+      body: minutesWikiBody(minutes.markdown),
+      tags: ["会议纪要"],
     });
-    const err = toolError(res, (r) => r.type === "success");
-    if (err) setError(`存知识库失败: ${err}`);
-    else setNote("已存进知识库 (后台会从里面抽人名 / 项目, 通常当天完成)");
+    const r = (res.result ?? {}) as { ok?: boolean; error?: string; rel_path?: string };
+    if (res.ok && r.ok) setNote(`已存进知识库: 知识体系里搜「${title}」`);
+    else if (res.ok && r.error?.includes("已存在")) setNote(`已经存过了: 知识体系里搜「${title}」`);
+    else setError(`存知识库失败: ${res.error || r.error || "未知错误"}`);
   }
 
   if (!minutes) {

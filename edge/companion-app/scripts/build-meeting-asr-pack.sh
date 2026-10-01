@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # 打会议纪要组件包 meeting-asr-<版本>-mac-arm64.tar.gz (10/1, docs/MEETING-MINUTES-PLAN.md §3-4)。
 #
-#   bash scripts/build-meeting-asr-pack.sh [版本号, 默认 1.0.0] [输出目录, 默认 dist/components]
+#   bash scripts/build-meeting-asr-pack.sh [版本号, 默认 1.0.0] [输出目录, 默认 ~/catfish-components]
+#
+# 输出默认放仓库外: 10/1 第一版放在 companion-app/dist/components/, 而 dist/ 是前端构建
+# 目录 —— 下一次 npm run dev / tauri build 时 vite 清空 dist/, 2.1GB 的包被连带删掉。
 #
 # 产物放到中央的组件目录 (delivery/catfish-poc/components/), 再跑
 # tools/build_component_manifest.py 生成清单, Companion 就能下载。
@@ -21,7 +24,7 @@ set -euo pipefail
 
 VERSION="${1:-1.0.0}"
 COMPANION="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT_DIR="${2:-$COMPANION/dist/components}"
+OUT_DIR="${2:-$HOME/catfish-components}"
 PLATFORM_TAG="macosx_12_0_arm64"
 REQS_FILE="$COMPANION/meeting-asr-requirements.txt"
 SCRIPT="$COMPANION/src-tauri/scripts/meeting_asr.py"
