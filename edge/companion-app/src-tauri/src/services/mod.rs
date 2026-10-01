@@ -9,6 +9,10 @@ pub mod windows_lifecycle;
 // 9/23: mac 也用它判断附加组件是不是本安装包的版本 (hermes_install_steps::addon_current)
 pub mod addon_fingerprint;
 pub mod autostart_deps; // 运行时依赖自检 (8/15 从 autostart 切出)
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub mod meeting_recorder; // 10/1: 进程内录音 (cpal), 取代 speech.rs 的 ffmpeg 录音
+pub mod meeting_store; // 10/1: ~/.catfish/meetings/<id>/ 的 meta / 目录
+pub mod meeting_audio; // 10/1: 会议录音纯逻辑 (分片 WAV / 防崩 / 设备挑选), 不依赖 cpal
 pub mod components; // 10/1: 可选大组件从中央 /components/ 按需下载 (docs/MEETING-MINUTES-PLAN.md §4)
 pub mod autostart_mcp;  // hermes config 自愈 + 其测试 (8/15 切出)
 pub mod autostart;

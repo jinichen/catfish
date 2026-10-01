@@ -4,7 +4,7 @@ name = "catfish-companion-app"
 # Hermes 是独立发布物，由 .hermes-target-version / tag / commit 单独固定。
 # 改时记得同步 src-tauri/tauri.conf.json + ../package.json + package-lock.json。
 # CI lint: scripts/check_version_sync.sh
-version = "1.0.65"
+version = "1.0.66"
 description = "Catfish Companion App - desktop sidekick for the Catfish platform"
 authors = ["Catfish Team"]
 edition = "2021"
@@ -113,6 +113,11 @@ rust_xlsxwriter = "0.79"
 # 本机聊天导出文件选择。只返回员工显式选择的路径，不扫描微信目录。
 rfd = "0.15"
 
+# 10/1 会议录音 (docs/MEETING-MINUTES-PLAN.md §3): 进程内录音, 不再靠 brew 的 ffmpeg。
+# hound 写 WAV (纯 Rust, 各平台都编)。按设备原生采样率录, 不在这里重采样 ——
+# 实测 FunASR 喂 48k 和 16k 出的文字一字不差, 它自己会重采样。
+hound = "3.5"
+
 [dev-dependencies]
 # tempfile: 给单测建临时 ~/.hermes 目录用 (session_write / learning / endpoints)
 tempfile = "3"
@@ -144,6 +149,11 @@ keyring = { version = "3", features = ["apple-native"] }
 # ~/.catfish/companion-secrets.sock 问我们要 (teaching_credentials/socket.rs)。
 #
 # 于是 5 个手写 extern 和这 4 个依赖一起删掉, keyring 一个就够。
+
+# cpal (CoreAudio / WASAPI) 只给 mac 和 Windows: Linux 上它要系统的 ALSA 开发库,
+# 而 CI 的 cargo test 跑在 ubuntu 上 —— 录音之外的纯逻辑放在不依赖 cpal 的模块里照常测。
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+cpal = "0.18"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }

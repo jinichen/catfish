@@ -12,7 +12,7 @@
 
     <!-- 麦克风权限 (五一 sprint Day 1 方案 C+: ffmpeg subprocess 录音, whisper.cpp 转文字) -->
     <key>NSMicrophoneUsageDescription</key>
-    <string>鲶鱼需要麦克风做语音输入, ffmpeg 录到本地后用 Whisper.cpp 转文字, 数据不上传.</string>
+    <string>鲶鱼用麦克风录会议和语音输入。录音只存在你这台电脑上，转文字也在本机完成，不上传。</string>
 
     <!-- 用户文档权限 (Phase 1 文件上传 Day 1 下午需要) -->
     <key>NSDocumentsFolderUsageDescription</key>

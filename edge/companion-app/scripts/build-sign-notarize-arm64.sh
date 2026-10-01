@@ -407,6 +407,31 @@ done < <(find "$MAC_RUNTIME_RESOURCES" -type f -name '*.tar.gz' -print0)
 echo "=== 签名 App ==="
 codesign --deep --force --options runtime --timestamp \
   --sign "$SIGNING_IDENTITY" "$APP_PATH"
+
+# 10/1: 主程序要录麦克风 (会议录音改成进程内 cpal 录, 不再起外部 ffmpeg)。
+# hardened runtime 下没有 audio-input entitlement, 录到的是静音而且不报错 ——
+# `tauri dev` 不签名所以一切正常, 只有正式包会坏。
+#
+# 只给外层 App 加, 不放进上面那条 --deep: --deep 会把同一组参数套到 Resources 里
+# 每个散装二进制 (uv / catfish-calendar) 上, 它们不该拿到麦克风权限。
+# 不带 --deep 重签外层 = 只换主程序的签名和 bundle 封条, 里面已签好的不动。
+cat >"$WORK_DIR/app.entitlements" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.device.audio-input</key><true/>
+</dict>
+</plist>
+PLIST
+codesign --force --options runtime --timestamp \
+  --entitlements "$WORK_DIR/app.entitlements" \
+  --sign "$SIGNING_IDENTITY" "$APP_PATH"
+if ! codesign -d --entitlements - "$APP_PATH" 2>/dev/null | grep -q "com.apple.security.device.audio-input"; then
+  echo "❌ 主程序没带上 audio-input entitlement, 正式包录音会是静音" >&2
+  exit 1
+fi
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 # --deep 会把 Resources 里的二进制重签一遍。它用的是同一组参数 (runtime +
 # timestamp), 理论上不会退化 —— 但"理论上"正是前两次栽跟头的地方, 再验一次。

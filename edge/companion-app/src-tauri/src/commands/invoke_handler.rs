@@ -188,6 +188,13 @@ pub(crate) fn handler(
             crate::commands::components::components_download,
             crate::commands::components::components_verify,
             crate::commands::components::components_cancel,
+            // 10/1: 会议录音 (docs/MEETING-MINUTES-PLAN.md §3)
+            crate::commands::meeting::meeting_list,
+            crate::commands::meeting::meeting_create,
+            crate::commands::meeting::meeting_audio_devices,
+            crate::commands::meeting::meeting_record_start,
+            crate::commands::meeting::meeting_record_status,
+            crate::commands::meeting::meeting_record_stop,
             // speech (五一 sprint Day 1 方案 C+: ffmpeg 录 + Whisper.cpp 转, 全本地)
             crate::commands::speech::speech_start_recording,
             crate::commands::speech::speech_stop_and_transcribe,
