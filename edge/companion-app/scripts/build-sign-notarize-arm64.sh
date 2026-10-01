@@ -90,6 +90,11 @@ ENTITLEMENTS="$WORK_DIR/runtime.entitlements"
 # "The timestamp service is not available." 就让前面几分钟的编译白跑 (那天连跑两次,
 # 分别断在 uv 和 catfish-calendar)。只对这一种错误重试, 别的签名错误照常直接失败,
 # 免得把真问题当网络问题吞掉。
+#
+# 同一天第二次跑: 断了 2.5 分钟, 6 次 (5→80 秒) 没扛住。查下来 timestamp.apple.com 解析到
+# 198.18.x.x —— Clash TUN 的 fake-ip, "直连"其实也走 Clash; 根治是 Clash 规则里让
+# apple.com 走 DIRECT。脚本这边放宽到 10 次、间隔封顶 60 秒, 能扛 ~7 分钟的断网。
+CODESIGN_TS_TRIES=10
 codesign_ts() {
   local attempt=1 delay=5 err
   while :; do
@@ -97,14 +102,17 @@ codesign_ts() {
       [[ -n "$err" ]] && printf '%s\n' "$err"
       return 0
     fi
-    if ! grep -q "timestamp service is not available" <<<"$err" || [[ $attempt -ge 6 ]]; then
+    if ! grep -q "timestamp service is not available" <<<"$err" || [[ $attempt -ge $CODESIGN_TS_TRIES ]]; then
       printf '%s\n' "$err" >&2
-      [[ $attempt -ge 6 ]] && echo "❌ 时间戳服务器连了 $attempt 次都不通 (timestamp.apple.com), 检查网络 / 代理后重跑" >&2
+      if [[ $attempt -ge $CODESIGN_TS_TRIES ]]; then
+        echo "❌ 时间戳服务器连了 $attempt 次都不通 (timestamp.apple.com)。" >&2
+        echo "   用 Clash TUN 的话: 规则里加 DOMAIN-SUFFIX,apple.com,DIRECT, 再重跑。" >&2
+      fi
       return 1
     fi
-    echo "   ↻ 时间戳服务器没响应, ${delay}s 后重试 ($attempt/5)" >&2
+    echo "   ↻ 时间戳服务器没响应, ${delay}s 后重试 ($attempt/$((CODESIGN_TS_TRIES - 1)))" >&2
     sleep "$delay"
-    attempt=$((attempt + 1)); delay=$((delay * 2))
+    attempt=$((attempt + 1)); delay=$((delay * 2)); [[ $delay -gt 60 ]] && delay=60
   done
 }
 
