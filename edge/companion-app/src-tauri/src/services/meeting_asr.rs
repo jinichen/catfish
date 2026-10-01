@@ -1,9 +1,11 @@
 //! 会议组件包的安装 + 调转写脚本 (10/1, docs/MEETING-MINUTES-PLAN.md §3)。
 //!
-//!     ~/.catfish/meeting-asr/
-//!         current.json          {version, python, models} —— 唯一的"装好了"判据
-//!         venv-<ver>/           独立 venv (不进 hermes venv, 见计划文档)
-//!         models-<ver>/{vad,asr,punc,spk}
+//! ```text
+//! ~/.catfish/meeting-asr/
+//!     current.json          {version, python, models} —— 唯一的"装好了"判据
+//!     venv-<ver>/           独立 venv (不进 hermes venv, 见计划文档)
+//!     models-<ver>/{vad,asr,punc,spk}
+//! ```
 //!
 //! 安装 = 解包 → 用 **hermes venv 的同一个基础解释器** 建 venv → pip 离线装
 //! (`--no-index`, 只认包里的 wheel) → import 自检 → 模型挪到位 → 原子写 current.json

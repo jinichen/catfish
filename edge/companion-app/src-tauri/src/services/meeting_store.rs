@@ -1,10 +1,12 @@
 //! 会议的本机存储 (10/1, docs/MEETING-MINUTES-PLAN.md §3)。
 //!
-//!     ~/.catfish/meetings/<id>/
-//!         meta.json        标题 / 参会人数 / 热词 / 状态 / 时长
-//!         audio/seg-NNNN.wav
-//!         transcript.json  转写结果 (meeting_asr.py 写)
-//!         (后续: minutes.md)
+//! ```text
+//! ~/.catfish/meetings/<id>/
+//!     meta.json        标题 / 参会人数 / 热词 / 状态 / 时长
+//!     audio/seg-NNNN.wav
+//!     transcript.json  转写结果 (meeting_asr.py 写)
+//!     (后续: minutes.md)
+//! ```
 //!
 //! 数据只在本机 (CENTRAL-EDGE-DATA-BOUNDARY): 音频和转写不出员工电脑, 只有转写
 //! 文字在生成纪要时经网关去大模型。
