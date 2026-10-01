@@ -347,14 +347,77 @@ def _patch_hermes_env_file(env_vars: dict[str, str]) -> int:
     return len(env_vars)
 
 
+def _hermes_agent_dirs() -> list:
+    """hermes-agent 源码目录的候选: config.yaml 旁边 (mac/linux), %LOCALAPPDATA%\\hermes (Windows)。"""
+    from pathlib import Path  # noqa: PLC0415
+    cands = [_hermes_config_path().parent / "hermes-agent"]
+    if local := os.environ.get("LOCALAPPDATA"):
+        cands.append(Path(local) / "hermes" / "hermes-agent")
+    return cands
+
+
+def _hermes_web_backends() -> Optional[set]:
+    """本机 hermes 现在注册得到的 web 后端名 (plugins/web/*/plugin.yaml 的 provides_web_providers)。
+
+    找不到 hermes-agent 目录 / 读不了 → None (判断不了, 调用方照旧写)。
+    """
+    try:
+        import yaml  # noqa: PLC0415
+    except ImportError:
+        return None
+    for root in _hermes_agent_dirs():
+        web = root / "plugins" / "web"
+        if not web.is_dir():
+            continue
+        names: set = set()
+        for manifest in web.glob("*/plugin.yaml"):
+            try:
+                data = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
+            except Exception:  # noqa: BLE001 — 坏一个插件清单不影响别的
+                continue
+            names.update(str(n).lower() for n in (data.get("provides_web_providers") or []))
+        return names
+    return None
+
+
+def _drop_unavailable_web_backend(block: dict) -> dict:
+    """block 里的 web.backend 本机 hermes 没有 → 去掉这一项 (10/2)。
+
+    hermes 对 web.backend 是 strict 的: 存什么名字就用什么, 不探可用性、不回退。
+    5/24 中央写死 tavily, hermes 后来把 web 后端迁成插件时 tavily 没了 —— 这里每
+    50 分钟把 tavily 刷回去, web_search / web_extract 全挂, 员工手改也活不过 50 分钟。
+    以后中央 (或老版本中央) 再发一个本机没有的名字, 宁可不写也不能把能用的配置覆盖掉。
+    """
+    web = block.get("web")
+    if not isinstance(web, dict) or "backend" not in web:
+        return block
+    want = str(web.get("backend") or "").lower().strip()
+    have = _hermes_web_backends()
+    if have is None or want in have:
+        return block
+    logger.warning(
+        "[edge-tool] 中央下发 web.backend=%r, 本机 hermes 没这个插件 (有: %s), 不写",
+        want, ", ".join(sorted(have)) or "无",
+    )
+    print(f"  edge-tool: ⚠ 中央下发的 web 后端 {want!r} 本机 hermes 没有, 跳过 (中央 gateway 要升级)")
+    rest = {k: v for k, v in web.items() if k != "backend"}
+    out = {k: v for k, v in block.items() if k != "web"}
+    if rest:
+        out["web"] = rest
+    return out
+
+
 def _patch_hermes_config_yaml_blocks(yaml_blocks: list[dict]) -> int:
     """合并写 ~/.hermes/config.yaml 的顶层段 (web/image/...), preserve sibling keys.
 
-    yaml_blocks: [{"web": {"backend": "tavily"}}, {"image": {...}}]
+    yaml_blocks: [{"web": {"backend": "parallel"}}, {"image": {...}}]
       → 把每个 dict 的顶层 key 合并进 config.yaml 顶层.
       已有的 sibling key (model / custom_providers / 等) 不动.
 
-    返 patched 的 top-level key 数. config.yaml 不存在则跳过 (返 0).
+    返**真改了**的 top-level key 数. config.yaml 不存在 / 内容没变 → 0, 不写盘。
+
+    10/2: 原来每次都整份 safe_dump 重写 (每 50 分钟一次), 员工文件里的注释全被
+    抹掉; 现在值没变就不碰文件。
     """
     if not yaml_blocks:
         return 0
@@ -367,8 +430,8 @@ def _patch_hermes_config_yaml_blocks(yaml_blocks: list[dict]) -> int:
 
     cfg_path = _hermes_config_path()
     if not cfg_path.exists():
-        # 没 config.yaml → 仅靠 .env 的 auto-detect 也能让 hermes web_search 跑
-        # (TAVILY_API_KEY 存在 → 自动选 Tavily). 跳过 yaml 不是错.
+        # 没 config.yaml → 仅靠 .env 的 auto-detect 也能让 hermes web_search 跑.
+        # 跳过 yaml 不是错.
         logger.info("hermes config (%s) 不存在, 跳过 yaml block 同步 (env 已写够用)", cfg_path)
         return 0
 
@@ -377,15 +440,16 @@ def _patch_hermes_config_yaml_blocks(yaml_blocks: list[dict]) -> int:
     for block in yaml_blocks:
         if not isinstance(block, dict):
             continue
-        for top_key, top_val in block.items():
+        for top_key, top_val in _drop_unavailable_web_backend(block).items():
             existing = cfg.get(top_key)
             if isinstance(existing, dict) and isinstance(top_val, dict):
                 # 浅合并 — sibling sub-key 保留, 同名 sub-key 覆盖
-                existing.update(top_val)
-                cfg[top_key] = existing
+                merged = {**existing, **top_val}
             else:
-                cfg[top_key] = top_val
-            patched_keys.append(top_key)
+                merged = top_val
+            if merged != existing:
+                cfg[top_key] = merged
+                patched_keys.append(top_key)
 
     if not patched_keys:
         return 0

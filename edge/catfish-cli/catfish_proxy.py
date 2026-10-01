@@ -58,6 +58,9 @@ def _check_proxy_alive(proxy_url: str, timeout: float = 2.0) -> bool:
     抄 gateway network.py:_check_tcp_port 同款. 不实际跑 HTTP, 只看 TCP 通不通
     (端口接受连接 = 代理至少在跑, 哪怕配错也算"活着", 不在我们 scope).
     """
+    # 全空白也算没配: 不 strip 的话 "   " 会拿去解析, Clash TUN 的 fake-ip
+    # 对什么名字都给个地址, 于是"连上了" (10/2 开发机上这条测试一直红)
+    proxy_url = (proxy_url or "").strip()
     if not proxy_url:
         return False
     from urllib.parse import urlparse  # noqa: PLC0415

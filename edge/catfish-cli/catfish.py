@@ -156,9 +156,12 @@ from catfish_proxy import (  # noqa: F401
 #
 # ⚠ 要 patch 这几个名字请打 catfish_hermes, 打 catfish 无效。
 from catfish_hermes import (  # noqa: F401
+    _drop_unavailable_web_backend,
     _fetch_edge_tool_config,
     _fetch_edge_tool_list,
+    _hermes_agent_dirs,
     _hermes_cli_client_secret,
+    _hermes_web_backends,
     _mint_hermes_service_token,
     _patch_hermes_config,
     _patch_hermes_config_yaml_blocks,

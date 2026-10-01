@@ -254,7 +254,7 @@ ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
     # 30 倍 + 贵 30 倍 token. 加进 always-on 让 _cap_tools_by_priority 永远前置.
     # 配合 BL-EDGE-TOOL-KEY 中央派发 Tavily key (5/24 DEPLOYMENT §15), 让模型真
     # emit web_search(query=...) tool_call.
-    "web_search",        # hermes 0.14 内置, 走配置的 backend (我们选 tavily)
+    "web_search",        # hermes 内置, 走中央派发的 web.backend (默认 parallel)
     "web_extract",       # 同上 (single backend mode)
     "web_crawl",         # 同上
     # ── Hermes 0.14 内置基础 (5/17 客户机实测对齐 hermes 0.14 tool name) ──

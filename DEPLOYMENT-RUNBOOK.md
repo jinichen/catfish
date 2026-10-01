@@ -547,7 +547,12 @@ PY
 ### 15.1 干啥用
 
 hermes 边缘工具 (`web_search` / `web_extract` / `web_crawl` / ...) 依赖第三方
-backend (Tavily / Firecrawl / ...) 的 API key. 这块 key 的派发哲学:
+backend (Parallel / Exa / ...) 的 API key. 这块 key 的派发哲学:
+
+> 10/2: 5/24 写死的 Tavily 已从 hermes 删除 (web 后端全迁成插件, Tavily 没迁)。
+> 现在 backend 由 gateway env `CATFISH_WEB_BACKEND` 定, 默认 `parallel` (有免费匿名
+> 通道, 不配 key 也能用); 可选值只能是 hermes 现有插件: parallel / exa / brave-free /
+> firecrawl / keenable / searxng。员工端也会核对: 本机 hermes 没有的名字不写。
 
 > "所有第三方 API key 中央 admin 管理, 50 台员工机器不直接持有 key 来源, 改 key 不用 ssh 全跑一遍."
 
@@ -560,7 +565,7 @@ backend (Tavily / Firecrawl / ...) 的 API key. 这块 key 的派发哲学:
 admin (改这里, 改完 reload gateway)
    │
    ▼
-central/llm-gateway/.env              ← admin 改 TAVILY_API_KEY=tvly-...
+central/llm-gateway/.env              ← admin 改 CATFISH_WEB_BACKEND (默认 parallel) + 可选该家 key
    │
    ▼
 gateway GET /v1/edge/tool-config/{tool_name}
@@ -572,8 +577,8 @@ gateway GET /v1/edge/tool-config/{tool_name}
 catfish login / catfish refresh-hermes  ← 员工跑 (或 launchd 月跑)
    │
    ▼
-~/.hermes/.env       ← per-key update (TAVILY_API_KEY=tvly-... + 旁边的行不动)
-~/.hermes/config.yaml ← 合并写 web.backend: tavily (旁边 sibling key 不动)
+~/.hermes/.env       ← per-key update (配了 key 才有, 如 PARALLEL_API_KEY=...; 旁边的行不动)
+~/.hermes/config.yaml ← 合并写 web.backend: parallel (旁边 sibling key 不动; 值没变不写盘)
    │
    ▼
 hermes gateway restart  ← hermes 重 load .env, web_search 真的能用了
@@ -583,15 +588,17 @@ hermes gateway restart  ← hermes 重 load .env, web_search 真的能用了
 
 **Step 1 — 申请 key**
 
-- Tavily (推荐, 国内通): https://app.tavily.com — 1000 搜索/月免费
-- Firecrawl: https://firecrawl.dev — 500 credits/月免费 (国内访问偶尔慢)
+- 不配也行: 默认 `parallel` 走免费匿名通道 (10/2 实测 search 5/5)
+- 要更稳 / 更大额度: Parallel (https://parallel.ai) 或 Exa (https://exa.ai) 申请 key
+- ~~Tavily~~: hermes 已删, 别再用 (配了 gateway 会返 503, 员工端也不写)
 - 其他备选见 https://hermes-agent.nousresearch.com/docs/user-guide/features/web-search
 
 **Step 2 — 写 gateway .env**
 
 ```bash
 # central/llm-gateway/.env (生产是 systemd EnvironmentFile / k8s Secret)
-TAVILY_API_KEY=tvly-生产真 key
+CATFISH_WEB_BACKEND=parallel     # 不写就是 parallel
+PARALLEL_API_KEY=生产真 key      # 可选; parallel / exa 不配走免费通道, 其它几家必须配
 ```
 
 **Step 3 — Reload gateway**
@@ -637,8 +644,8 @@ hermes gateway restart   # hermes 重 load .env, 不然进程内缓存还是旧�
 ### 15.5 验证 (端到端)
 
 ```bash
-# 1. 看 .env 真有 key
-cat ~/.hermes/.env | grep TAVILY
+# 1. (配了 key 时) 看 .env 真有 key
+cat ~/.hermes/.env | grep PARALLEL
 
 # 2. 看 yaml 真有 web.backend
 grep -A 2 "^web:" ~/.hermes/config.yaml
@@ -701,10 +708,11 @@ catfish refresh-hermes --restart-hermes
 
 | 症状 | 原因 | 修法 |
 |------|------|------|
-| `edge-tool: ⏭ web_search — gateway HTTP 503` | gateway `TAVILY_API_KEY` env 没配 | admin 在 gateway .env 加 + reload |
+| `edge-tool: ⏭ web_search — gateway HTTP 503` | `CATFISH_WEB_BACKEND` 写了 hermes 没有的名字, 或那家必须有 key 而 gateway 没配 | admin 改 gateway .env + reload |
+| `edge-tool: ⚠ 中央下发的 web 后端 'tavily' 本机 hermes 没有, 跳过` | 中央 gateway 还是 10/2 前的版本 | 升级中央 gateway |
 | `edge-tool: ⏭ web_search — 部门 RBAC 没批` | identity-server 部门 allowed_tools 不含 | 跑 008 migration 或 admin UI 加 |
 | `edge-tool: ⏭ web_search — gateway HTTP 401` | hermes-cli service token 没 mint / 已 revoke | `catfish refresh-hermes` 重 mint |
-| hermes 重启后还是说 "我没工具" | 重启前 .env 没改完 | 检查 `~/.hermes/.env` 真有 `TAVILY_API_KEY=tvly-...`, 然后 hermes gateway restart |
+| hermes 重启后还是说 "我没工具" | `web.backend` 是 hermes 没有的名字 (如老的 tavily) | `grep -A2 '^web:' ~/.hermes/config.yaml`, 再 `catfish refresh-hermes` 让中央重发 |
 | `~/.hermes/config.yaml` 文件不存在 → 跳过 yaml 同步 | 员工没跑 `hermes model` setup | 跑一次 `hermes model` 配 Custom endpoint, 然后再 `catfish refresh-hermes` |
 | **模型说"搜索断了" 退到 browser 抓页面** | hermes 进程继承死 HTTPS_PROXY | `catfish refresh-hermes --restart-hermes` (§15.7) |
 
@@ -737,8 +745,8 @@ catfish refresh-hermes --restart-hermes
 - [ ] **hermes service token 已 mint** (`catfish refresh-hermes` 验证 sub=client:hermes-cli)
 - [ ] **30 天续期机制配好** (launchd / cron / 员工手动复诊)
 - [ ] **生产 `CATFISH_HERMES_CLI_SECRET` env 已设**（非 demo secret）
-- [ ] **§15: gateway `TAVILY_API_KEY` env 已配** (admin 改这个 50 人同步) — 跑 `curl -H "Authorization: Bearer <token>" http://gw:8999/v1/edge/tool-config/web_search` 返 200 + env_vars 含 key
+- [ ] **§15: gateway web backend 可用** (`CATFISH_WEB_BACKEND` 不写 = parallel) — 跑 `curl -H "Authorization: Bearer <token>" http://gw:8999/v1/edge/tool-config/web_search` 返 200 + `yaml_block.web.backend` 是 hermes 现有插件
 - [ ] **§15: 008 migration 已跑** (`alembic upgrade head` → 部门 `allowed_tools` 包含 web_search/web_extract)
-- [ ] **§15: 一个测试员工** `catfish refresh-hermes` 后 `cat ~/.hermes/.env` 真有 TAVILY_API_KEY + web_search demo 返真实结果
+- [ ] **§15: 一个测试员工** `catfish refresh-hermes` 后 `grep -A2 '^web:' ~/.hermes/config.yaml` 是同一个 backend + web_search demo 返真实结果
 
 全过 → 上线给员工。

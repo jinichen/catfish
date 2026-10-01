@@ -66,10 +66,10 @@ def _group_metadata() -> dict[str, dict[str, Any]]:
 
     out: dict[str, dict[str, Any]] = {}
     for name, cfg in etc.EDGE_TOOL_REGISTRY.items():
-        g = out.setdefault(
-            cfg.tool_group,
-            {"provider": cfg.provider, "env_var_name": cfg.env_var_name, "tools": []},
-        )
+        if cfg.tool_group not in out:
+            provider, key_env = etc.group_provider(cfg.tool_group)
+            out[cfg.tool_group] = {"provider": provider, "env_var_name": key_env, "tools": []}
+        g = out[cfg.tool_group]
         g["tools"].append(name)
     for g in out.values():
         g["tools"].sort()

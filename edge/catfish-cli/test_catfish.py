@@ -599,15 +599,15 @@ def test_patch_yaml_blocks_creates_new_top_key(tmp_path, monkeypatch):
     }))
     monkeypatch.setenv("HERMES_CONFIG", str(cfg_path))
 
-    n = catfish_hermes._patch_hermes_config_yaml_blocks([{"web": {"backend": "tavily"}}])
+    n = catfish_hermes._patch_hermes_config_yaml_blocks([{"web": {"backend": "parallel"}}])
     assert n == 1
     new_cfg = yaml.safe_load(cfg_path.read_text())
-    assert new_cfg["web"] == {"backend": "tavily"}
+    assert new_cfg["web"] == {"backend": "parallel"}
     assert new_cfg["model"] == {"default": "deepseek-flash"}  # sibling 保留
 
 
 def test_patch_yaml_blocks_merges_existing_sub_keys(tmp_path, monkeypatch):
-    """已有 web: {search_backend: searxng} → 加 web: {backend: tavily} 应该 merge 不覆盖."""
+    """已有 web: {search_backend: searxng} → 加 web: {backend: parallel} 应该 merge 不覆盖."""
     yaml = pytest.importorskip("yaml")
     cfg_path = tmp_path / "config.yaml"
     cfg_path.write_text(yaml.safe_dump({
@@ -615,12 +615,12 @@ def test_patch_yaml_blocks_merges_existing_sub_keys(tmp_path, monkeypatch):
     }))
     monkeypatch.setenv("HERMES_CONFIG", str(cfg_path))
 
-    n = catfish_hermes._patch_hermes_config_yaml_blocks([{"web": {"backend": "tavily"}}])
+    n = catfish_hermes._patch_hermes_config_yaml_blocks([{"web": {"backend": "parallel"}}])
     assert n == 1
     new_cfg = yaml.safe_load(cfg_path.read_text())
     # 两个 sub-key 都在
     assert new_cfg["web"]["search_backend"] == "searxng"
-    assert new_cfg["web"]["backend"] == "tavily"
+    assert new_cfg["web"]["backend"] == "parallel"
 
 
 def test_patch_yaml_blocks_skips_when_no_config_file(tmp_path, monkeypatch):
@@ -629,7 +629,7 @@ def test_patch_yaml_blocks_skips_when_no_config_file(tmp_path, monkeypatch):
     assert not cfg_path.exists()
     monkeypatch.setenv("HERMES_CONFIG", str(cfg_path))
 
-    n = catfish_hermes._patch_hermes_config_yaml_blocks([{"web": {"backend": "tavily"}}])
+    n = catfish_hermes._patch_hermes_config_yaml_blocks([{"web": {"backend": "parallel"}}])
     assert n == 0
 
 
@@ -640,6 +640,64 @@ def test_patch_yaml_blocks_empty_input_no_op(tmp_path, monkeypatch):
 
     n = catfish_hermes._patch_hermes_config_yaml_blocks([])
     assert n == 0
+
+
+def _fake_hermes_web_plugins(tmp_path, *names):
+    """在 config.yaml 旁边造一个 hermes-agent/plugins/web, 只注册 names 这几家。"""
+    for n in names:
+        d = tmp_path / "hermes-agent" / "plugins" / "web" / n.replace("-", "_")
+        d.mkdir(parents=True)
+        (d / "plugin.yaml").write_text(f"name: web-{n}\nprovides_web_providers:\n  - {n}\n")
+
+
+def test_patch_yaml_blocks_skips_backend_hermes_does_not_have(tmp_path, monkeypatch):
+    """10/2: 老中央每 50 分钟发 tavily, 本机 hermes 早没这个插件 → 不写, 员工配的 parallel 留着。"""
+    pytest.importorskip("yaml")
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    _fake_hermes_web_plugins(tmp_path, "parallel", "exa")
+    cfg_path = tmp_path / "config.yaml"
+    original = "# 员工自己的注释\nweb:\n  backend: parallel\n"
+    cfg_path.write_text(original)
+    monkeypatch.setenv("HERMES_CONFIG", str(cfg_path))
+
+    n = catfish_hermes._patch_hermes_config_yaml_blocks([{"web": {"backend": "tavily"}}])
+    assert n == 0
+    assert cfg_path.read_text() == original
+    assert not (tmp_path / "config.yaml.bak").exists()
+
+
+def test_patch_yaml_blocks_writes_backend_hermes_has(tmp_path, monkeypatch):
+    yaml = pytest.importorskip("yaml")
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    _fake_hermes_web_plugins(tmp_path, "parallel", "exa")
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text("web:\n  backend: tavily\n  search_backend: exa\n")
+    monkeypatch.setenv("HERMES_CONFIG", str(cfg_path))
+
+    n = catfish_hermes._patch_hermes_config_yaml_blocks([{"web": {"backend": "parallel"}}])
+    assert n == 1
+    assert yaml.safe_load(cfg_path.read_text())["web"] == {"backend": "parallel", "search_backend": "exa"}
+
+
+def test_patch_yaml_blocks_unchanged_value_leaves_file_alone(tmp_path, monkeypatch):
+    """10/2: 原来值没变也整份 safe_dump 重写, 每 50 分钟抹一次员工文件里的注释。"""
+    pytest.importorskip("yaml")
+    cfg_path = tmp_path / "config.yaml"
+    original = "# 注释要留着\nweb:\n  backend: parallel  # 行尾注释\nmodel: {default: x}\n"
+    cfg_path.write_text(original)
+    monkeypatch.setenv("HERMES_CONFIG", str(cfg_path))
+
+    n = catfish_hermes._patch_hermes_config_yaml_blocks([{"web": {"backend": "parallel"}}])
+    assert n == 0
+    assert cfg_path.read_text() == original
+    assert not (tmp_path / "config.yaml.bak").exists()
+
+
+def test_hermes_web_backends_unknown_install_returns_none(tmp_path, monkeypatch):
+    """找不到 hermes-agent → 判断不了 → None (调用方照旧写, 不因为找不到目录就什么都不同步)。"""
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setenv("HERMES_CONFIG", str(tmp_path / "config.yaml"))
+    assert catfish_hermes._hermes_web_backends() is None
 
 
 # ─── _sync_hermes_edge_tool_configs (orchestrator, mock gateway) ───
@@ -670,9 +728,9 @@ def test_sync_edge_tool_dedupes_writes_by_group(tmp_path, monkeypatch):
         return {
             "tool_name": name,
             "tool_group": "web",
-            "provider": "tavily",
-            "env_vars": {"TAVILY_API_KEY": "tvly-mocked"},
-            "yaml_block": {"web": {"backend": "tavily"}},
+            "provider": "parallel",
+            "env_vars": {"PARALLEL_API_KEY": "par-mocked"},
+            "yaml_block": {"web": {"backend": "parallel"}},
         }
 
     monkeypatch.setattr(catfish_hermes, "_fetch_edge_tool_config", fake_fetch)
@@ -685,10 +743,10 @@ def test_sync_edge_tool_dedupes_writes_by_group(tmp_path, monkeypatch):
     assert env_n == 1
     assert yaml_n == 1
     body = env_path.read_text()
-    assert body.count("TAVILY_API_KEY=") == 1, ".env 只能有一行 TAVILY_API_KEY"
-    assert "TAVILY_API_KEY=tvly-mocked" in body
+    assert body.count("PARALLEL_API_KEY=") == 1, ".env 只能有一行 PARALLEL_API_KEY"
+    assert "PARALLEL_API_KEY=par-mocked" in body
     new_cfg = yaml.safe_load(cfg_path.read_text())
-    assert new_cfg["web"]["backend"] == "tavily"
+    assert new_cfg["web"]["backend"] == "parallel"
 
 
 def test_sync_edge_tool_handles_empty_tool_list(tmp_path, monkeypatch):
@@ -703,7 +761,9 @@ def test_sync_edge_tool_skips_failed_fetch(tmp_path, monkeypatch):
     yaml = pytest.importorskip("yaml")
     env_path = tmp_path / ".env"
     monkeypatch.setenv("HERMES_DOTENV", str(env_path))
-    # 不设 HERMES_CONFIG → yaml_blocks 那步 skip (返 0)
+    # config.yaml 指到不存在的临时路径 → yaml_blocks 那步 skip (返 0)。
+    # 10/2 前这里干脆不设 HERMES_CONFIG, 在开发机上跑会真去改 ~/.hermes/config.yaml。
+    monkeypatch.setenv("HERMES_CONFIG", str(tmp_path / "nope.yaml"))
 
     monkeypatch.setattr(
         catfish_hermes, "_fetch_edge_tool_list",
@@ -716,15 +776,15 @@ def test_sync_edge_tool_skips_failed_fetch(tmp_path, monkeypatch):
         return {
             "tool_name": "web_search",
             "tool_group": "web",
-            "provider": "tavily",
-            "env_vars": {"TAVILY_API_KEY": "tvly-x"},
-            "yaml_block": {"web": {"backend": "tavily"}},
+            "provider": "parallel",
+            "env_vars": {"PARALLEL_API_KEY": "par-x"},
+            "yaml_block": {"web": {"backend": "parallel"}},
         }
 
     monkeypatch.setattr(catfish_hermes, "_fetch_edge_tool_config", fake_fetch)
     env_n, _ = catfish_hermes._sync_hermes_edge_tool_configs("http://gw", "TOKEN")
     assert env_n == 1
-    assert "TAVILY_API_KEY=tvly-x" in env_path.read_text()
+    assert "PARALLEL_API_KEY=par-x" in env_path.read_text()
 
 
 # ─── BL-EDGE-TOOL-PROXY (5/25): 死代理检测 + auto restart ──────────
