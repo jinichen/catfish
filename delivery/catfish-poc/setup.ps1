@@ -354,6 +354,8 @@ if ((Invoke-Tool 'seedgen.py' @('--admin-password', $AdminPassword)) -ne 0) {
 # Docker 会自己造 certs 目录, 先建好省事。HTTP 模式下目录是空的,
 # web 容器的 entrypoint 检测不到证书会降级只跑 :80, 不会反复重启。
 New-Item -ItemType Directory -Force -Path (Join-Path $ScriptDir 'certs') | Out-Null
+# 10/1: 组件分发目录 (web 容器只读挂载到 /components/, 见 compose web.volumes)
+New-Item -ItemType Directory -Force -Path (Join-Path $ScriptDir 'components') | Out-Null
 if ($EnableHttps -eq '1') {
     Say "→ 证书 (SAN 含 $ServerIp)"
     $rc = & docker run --rm `

@@ -183,6 +183,11 @@ pub(crate) fn handler(
             crate::commands::tasks_history::tasks_history_read,
             // skill_audit (五一 sprint Day 2: skill 调用审计 + 30 天未用统计)
             crate::commands::skill_audit::skill_audit_summary,
+            // 10/1: 可选大组件从中央 /components/ 按需下载 (docs/MEETING-MINUTES-PLAN.md §4)
+            crate::commands::components::components_list,
+            crate::commands::components::components_download,
+            crate::commands::components::components_verify,
+            crate::commands::components::components_cancel,
             // speech (五一 sprint Day 1 方案 C+: ffmpeg 录 + Whisper.cpp 转, 全本地)
             crate::commands::speech::speech_start_recording,
             crate::commands::speech::speech_stop_and_transcribe,

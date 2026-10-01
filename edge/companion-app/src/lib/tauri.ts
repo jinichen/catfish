@@ -30,3 +30,4 @@ export * from "./tauri_compliance";
 export * from "./tauri_briefing";
 export * from "./tauri_cron";
 export * from "./tauri_app";
+export * from "./tauri_components";

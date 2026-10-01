@@ -290,6 +290,32 @@ Identity URL:    http://<服务器 IP>:8998
 
 ---
 
+## 组件分发 · Companion 可选大组件 (10/1 起)
+
+会议纪要组件包 (~2.7GB) 这类可选组件不进 Companion 安装包, 由中央 web 的
+`/components/` 托管, 员工在 Companion 里点"下载"按需拉取。
+
+1. 把组件包拷进部署目录下的 `components/` (setup 已建好; 也可用 `.env` 的
+   `CATFISH_COMPONENTS_DIR` 指到别处)。文件名必须是
+   `<名字>-<x.y.z>-<平台>.tar.gz`, 平台 ∈ `mac-arm64` / `mac-x64` / `windows-x64`。
+2. 生成清单 (需要 python3; 脚本随交付包在 `tools/` 下):
+
+   ```bash
+   python3 tools/build_component_manifest.py ./components
+   ```
+
+   名字不合约定会直接报错, 不会静默跳过。同一组件多个版本只发布最高版本。
+3. 不用重启: nginx 直接读宿主机目录。验证:
+
+   ```bash
+   curl -s http://<服务器IP>:<端口>/components/manifest.json
+   ```
+
+员工机器连不上中央时: 把同一个组件包直接放到员工的 `~/.catfish/runtime/`,
+Companion 会补算一次 sha256 再使用 (需要中央 manifest 可读, 用来比对)。
+
+---
+
 ## 后续 · 加员工 3 种方式 (v0.18.0 Phase 1)
 
 **方式 A · psql 直接 INSERT** (最快, 单个员工):

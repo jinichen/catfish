@@ -337,6 +337,7 @@ for ARCH in $ARCHES; do
                 "delivery/catfish-poc/tools/envgen.py" \
                 "delivery/catfish-poc/tools/seedgen.py" \
                 "delivery/catfish-poc/tools/certgen.py" \
+                "delivery/catfish-poc/tools/build_component_manifest.py" \
                 "delivery/catfish-poc/docker-compose.yml" \
                 "delivery/catfish-poc/llm-gateway/config/models.yaml" \
                 "delivery/catfish-poc/images/catfish-poc-central-$ARCH-$DATE.tar.gz"; do

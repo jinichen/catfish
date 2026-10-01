@@ -550,6 +550,9 @@ fi
 # Docker 会自己造 certs 目录 (Linux 上属主 root), 留下野目录. 先建好省事.
 # HTTP 模式下目录是空的, web 容器的 41-catfish-ssl.sh 检测不到证书会降级只跑 :80.
 mkdir -p certs
+# 10/1: 组件分发目录 (web 容器只读挂载到 /components/, 见 compose web.volumes)。
+# 同上, 让 Docker 自己造的话 Linux 上属主是 root, IT 往里拷组件包还得 sudo。
+mkdir -p components
 if [ "$ENABLE_HTTPS" = "1" ]; then
     echo "→ 证书 (SAN 含 $SERVER_IP)"
     # --user: 让产物属主是当前用户, 否则 Linux 上会变成镜像里的 uid 1000,

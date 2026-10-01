@@ -22,6 +22,7 @@ pub mod auth;
 pub mod briefing_context; // BL-BRIEFING-DECISION (5/21 Phase 5): distilled_facts + recent sessions
 pub mod calendar; // BL-CALENDAR-INTEGRATION (5/20): macOS Calendar.app via osascript JXA
 pub mod chrome;
+pub mod components;    // 10/1: 可选大组件 (会议纪要组件包等) 下载 / 校验, 见 services::components
 pub mod codex_gateway; // hermes 网关健康检查 + 重启 (8/15 从 codex_backend 切出)
 pub mod codex_helper;  // 内嵌 Python helper + JSON 解析 (8/15 从 codex_backend 切出)
 pub mod codex_probe;   // 路径解析 + codex 二进制探测 (8/15 从 codex_backend 切出)

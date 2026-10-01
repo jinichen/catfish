@@ -44,7 +44,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install pyflakes
-        run: pip install pyflakes
+        run: pip install pyflakes pytest
 
       # A 类 = 可执行语句里的未定义名字 (跑到就 NameError) → 必过
       # B 类 = 只在类型注解里 (运行时不查找) → 照常打印, 不拦
@@ -117,6 +117,11 @@ jobs:
       # 没有任何外部迹象, 只有人主动 ls 才看得见 —— 所以让 CI 去看。
       - name: 交付目录没有残留 image tar
         run: bash scripts/check_no_stale_image_tars.sh
+
+      # 10/1: 组件分发 manifest 生成器 (中央 /components/, docs/MEETING-MINUTES-PLAN.md §4)。
+      # 它生成的 sha256 / 文件名是客户端下载校验的唯一依据, 错了客户端只会报"校验失败"。
+      - name: 组件 manifest 生成器
+        run: python3 -m pytest -q -p no:cacheprovider scripts/tests/test_build_component_manifest.py
 
   # ════════════════════════════════════════════════════════════
   # 1. tool-bridge Python tests
