@@ -116,6 +116,11 @@ pub async fn ensure_tool_bridge_running() {
         working_dir: dir,
         env: vec![
             ("PYTHONPATH".into(), pythonpath),
+            // 10/1: tool-bridge 里调大模型的地方 (录屏学习 / 专家咨询 / role_resolver …)
+            // 都读 CATFISH_GATEWAY_URL, 没有就用 localhost:8999。原来这里不传, 客户机上
+            // 网关在中央服务器, 这些调用全连到本机空端口。改了 companion.yaml 的网关地址
+            // 要重启 Companion 才会带到 tool-bridge (跟其他端点配置一样)。
+            ("CATFISH_GATEWAY_URL".into(), crate::services::endpoints::endpoints().gateway_base()),
             // UTF-8 输出由 spawn_detached 统一设 (process::PYTHON_UTF8_ENV)
         ],
     };

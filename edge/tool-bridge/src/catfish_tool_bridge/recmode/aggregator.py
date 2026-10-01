@@ -314,6 +314,7 @@ async def call_llm(
     timeout_s: float = 300.0,
     temperature: float = 0.3,  # RecMode 综合要稳, 不要太创造
     max_tokens: int = 8000,
+    source: str = "plugin:toolbridge-recmode",
 ) -> str:
     """调主力 chat 综合录屏 → 输出 JSON 字符串 (caller 自己 parse_llm_output).
 
@@ -334,6 +335,7 @@ async def call_llm(
         timeout_s: 长 multipart messages 大约 60-180s, 给 300s
         temperature: 0.3 (综合理解要稳, 不要太创造)
         max_tokens: 8000 (SKILL.md JSON 一般 2-4K, 给 2x 余量)
+        source: 网关归属标记 (10/1 会议纪要复用这个函数, 传 plugin:toolbridge-meeting)
 
     Returns:
         LLM 输出文本 (含可能 markdown 围栏的 JSON), caller 用 parse_llm_output 抽
@@ -394,7 +396,7 @@ async def call_llm(
         try:
             # 8/15 晚: 打归属标记 (见 catfish_memory_gateway.with_source 的说明)。
             resp = await client.post(
-                f"{gw}/v1/chat/completions?catfish_source=plugin:toolbridge-recmode",
+                f"{gw}/v1/chat/completions?catfish_source={source}",
                 json=payload, headers=headers,
             )
         except httpx.HTTPError as e:

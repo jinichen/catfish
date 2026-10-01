@@ -30,7 +30,8 @@ import { isTauriRuntime } from "./lib/runtime";
 const DashboardTab = lazy(() => import("./tabs/Dashboard/DashboardTab"));
 const EmailTab = lazy(() => import("./tabs/Email/EmailTab"));
 const WikiTab = lazy(() => import("./tabs/Wiki/WikiTab"));
-const CollabTab = lazy(() => import("./tabs/Collab/CollabTab"));  // P50 (9/10): 横向协同
+const CollabTab = lazy(() => import("./tabs/Collab/CollabTab"));
+const MeetingTab = lazy(() => import("./tabs/Meeting/MeetingTab"));  // 10/1: 会议纪要  // P50 (9/10): 横向协同
 
 export default function App() {
   const activeTab = useUIStore((s) => s.activeTab);
@@ -232,6 +233,7 @@ function AppShell({ activeTab }: { activeTab: string }) {
             {activeTab === "email" && <EmailTab />}
             {activeTab === "wiki" && <WikiTab />}
             {activeTab === "collab" && <CollabTab />}
+            {activeTab === "meeting" && <MeetingTab />}
           </Suspense>
         </main>
       </div>

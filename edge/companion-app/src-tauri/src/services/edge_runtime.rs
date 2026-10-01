@@ -40,11 +40,13 @@ const STAMP: &str = ".archive-sha256";
 /// 跟 scripts/build_edge_runtime.py 的 `file-parse/` 对应。
 pub const FILE_PARSE_DIR: &str = "file-parse";
 /// 解完必须在的路径 —— 跟 build_edge_runtime.py 的 MUST_EXIST 对应。
-const MUST_EXIST: [&str; 4] = [
+const MUST_EXIST: [&str; 5] = [
     "tool-bridge/src/catfish_tool_bridge",
     "local-search/src",
     "file-parse/parse_file.py",
     "file-parse/attachment_bm25.py",
+    // 10/1: 会议转写脚本 (跑在会议组件包的 venv 里)
+    "file-parse/meeting_asr.py",
 ];
 
 /// `~/.catfish/edge-runtime/` —— 注意不是 `~/.catfish/runtime/`, 那个是离线安装归档的目录。
@@ -150,6 +152,7 @@ mod tests {
         fs::write(src.join("tool-bridge/src/catfish_tool_bridge/__init__.py"), marker).unwrap();
         fs::write(src.join("file-parse/parse_file.py"), marker).unwrap();
         fs::write(src.join("file-parse/attachment_bm25.py"), marker).unwrap();
+        fs::write(src.join("file-parse/meeting_asr.py"), marker).unwrap();
         let archive = dir.join(format!("a-{marker}.tar.gz"));
         let ok = std::process::Command::new("tar")
             .arg("-czf").arg(&archive).arg("-C").arg(&src).arg(".")
@@ -193,6 +196,17 @@ mod tests {
         let err = ensure_extracted_at(&bad, Some(&root)).unwrap_err().to_string();
         assert!(err.contains("file-parse/parse_file.py"), "{err}");
         assert!(root.join("file-parse/parse_file.py").exists(), "坏包不能把好的换掉");
+
+        // 10/1: 缺会议转写脚本的包同样不能换上去 (会议页会报"脚本没找到")
+        fs::create_dir_all(src.join(FILE_PARSE_DIR)).unwrap();
+        fs::write(src.join("file-parse/parse_file.py"), "x").unwrap();
+        fs::write(src.join("file-parse/attachment_bm25.py"), "x").unwrap();
+        let bad2 = tmp.path().join("partial2.tar.gz");
+        assert!(std::process::Command::new("tar")
+            .arg("-czf").arg(&bad2).arg("-C").arg(&src).arg(".")
+            .status().unwrap().success());
+        let err = ensure_extracted_at(&bad2, Some(&root)).unwrap_err().to_string();
+        assert!(err.contains("meeting_asr.py"), "{err}");
     }
 
     #[test]

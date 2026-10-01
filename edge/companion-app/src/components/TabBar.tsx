@@ -12,6 +12,7 @@ import {
   ChartBar,
   EnvelopeSimple,
   Handshake,
+  Microphone,
   SquaresFour,
   SunHorizon,
 } from "@phosphor-icons/react";
@@ -36,6 +37,8 @@ const TABS: { id: TabId; label: string; icon: Icon }[] = [
   { id: "email", label: "邮件", icon: EnvelopeSimple },
   // P50 (9/10): 横向协同 — 请同事的小鲶帮忙 / 等我点头. 有待点头的事时显红点数.
   { id: "collab", label: "协同", icon: Handshake },
+  // 10/1: 会议 —— 录会议 → 本机转写 → 纪要 → 写回 (docs/MEETING-MINUTES-PLAN.md)
+  { id: "meeting", label: "会议", icon: Microphone },
   // { id: "console", label: "控制台" },  // 5/16 砍
   // BL-CATFISH-WIKI-MODE P3.3 (6/4): 知识体系 tab — 跟其它 tab 纯文字对齐, 无 emoji
   // 6/9 鸿波: 知识体系 ↔ 仪表盘 互换. 知识体系日常翻看比仪表盘多, 放中段.

@@ -35,13 +35,17 @@ COMPONENTS = {
 # 文件解析脚本: 平铺在 file-parse/ 下 (parse_file.py 按同目录 import parse_file_*)。
 # 只挑这几类 —— 同目录里还有测试和打包脚本, 不该进员工机器。
 FILE_PARSE_SRC = EDGE / "companion-app" / "src-tauri" / "scripts"
-FILE_PARSE_PATTERNS = ("parse_file*.py", "attachment_bm25.py")
+# 10/1: meeting_asr.py (会议转写) 也平铺在这里 —— 跟解析脚本一样由 file_parse_env::find_script
+# 找, 开发机读源码树、客户机读 edge-runtime, 不用另开一条查找路径。它跑在会议组件包的
+# venv 里, 不是 hermes venv。
+FILE_PARSE_PATTERNS = ("parse_file*.py", "attachment_bm25.py", "meeting_asr.py")
 # Companion 解完会检查 (services/edge_runtime.rs 的 must 列表) —— 两边的清单要对得上
 MUST_EXIST = [
     "tool-bridge/src/catfish_tool_bridge/__main__.py",
     "local-search/src/catfish_search/cli.py",
     "file-parse/parse_file.py",
     "file-parse/attachment_bm25.py",
+    "file-parse/meeting_asr.py",
 ]
 SKIP_PARTS = {"__pycache__", "tests", ".pytest_cache"}
 

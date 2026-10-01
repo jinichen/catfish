@@ -102,6 +102,15 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
         return await _handle_recmode_skill_content(req_id, params)
     if method == "recmode/save_skill":
         return await _handle_recmode_save_skill(req_id, params)
+    # 10/1: 会议纪要 (docs/MEETING-MINUTES-PLAN.md §3), Rust 侧 meeting_rpc 白名单 "meeting/"
+    if method == "meeting/summarize":
+        from . import meeting_minutes  # noqa: PLC0415
+        try:
+            return _success(req_id, await meeting_minutes.handle_summarize(params))
+        except ValueError as e:
+            return _error(req_id, INVALID_PARAMS, str(e))
+        except RuntimeError as e:
+            return _error(req_id, INTERNAL_ERROR, str(e))
 
     return _error(req_id, METHOD_NOT_FOUND, f"unknown method: {method}")
 
