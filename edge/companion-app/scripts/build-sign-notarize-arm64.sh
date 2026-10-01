@@ -85,8 +85,31 @@ cat >"$WORK_DIR/runtime.entitlements" <<'PLIST'
 PLIST
 ENTITLEMENTS="$WORK_DIR/runtime.entitlements"
 
+# 10/1: codesign --timestamp 要连 Apple 的时间戳服务器 (timestamp.apple.com)。鸿波这台
+# 机器上实测直连 5 次断 2 次、走系统代理 (Clash 7897) 次次 502 —— 网络时好时坏, 一次
+# "The timestamp service is not available." 就让前面几分钟的编译白跑 (那天连跑两次,
+# 分别断在 uv 和 catfish-calendar)。只对这一种错误重试, 别的签名错误照常直接失败,
+# 免得把真问题当网络问题吞掉。
+codesign_ts() {
+  local attempt=1 delay=5 err
+  while :; do
+    if err="$(codesign "$@" 2>&1)"; then
+      [[ -n "$err" ]] && printf '%s\n' "$err"
+      return 0
+    fi
+    if ! grep -q "timestamp service is not available" <<<"$err" || [[ $attempt -ge 6 ]]; then
+      printf '%s\n' "$err" >&2
+      [[ $attempt -ge 6 ]] && echo "❌ 时间戳服务器连了 $attempt 次都不通 (timestamp.apple.com), 检查网络 / 代理后重跑" >&2
+      return 1
+    fi
+    echo "   ↻ 时间戳服务器没响应, ${delay}s 后重试 ($attempt/5)" >&2
+    sleep "$delay"
+    attempt=$((attempt + 1)); delay=$((delay * 2))
+  done
+}
+
 sign_one() {
-  codesign --force --options runtime --timestamp \
+  codesign_ts --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$1"
 }
 
@@ -405,7 +428,7 @@ while IFS= read -r -d '' archive; do
 done < <(find "$MAC_RUNTIME_RESOURCES" -type f -name '*.tar.gz' -print0)
 
 echo "=== 签名 App ==="
-codesign --deep --force --options runtime --timestamp \
+codesign_ts --deep --force --options runtime --timestamp \
   --sign "$SIGNING_IDENTITY" "$APP_PATH"
 
 # 10/1: 主程序要录麦克风 (会议录音改成进程内 cpal 录, 不再起外部 ffmpeg)。
@@ -425,7 +448,7 @@ cat >"$WORK_DIR/app.entitlements" <<'PLIST'
 </dict>
 </plist>
 PLIST
-codesign --force --options runtime --timestamp \
+codesign_ts --force --options runtime --timestamp \
   --entitlements "$WORK_DIR/app.entitlements" \
   --sign "$SIGNING_IDENTITY" "$APP_PATH"
 if ! codesign -d --entitlements - "$APP_PATH" 2>/dev/null | grep -q "com.apple.security.device.audio-input"; then
@@ -440,7 +463,7 @@ verify_tree "$MAC_RESOURCES"
 
 echo "=== 制作并签名 DMG ==="
 bash "$SCRIPT_DIR/make-dmg.sh"
-codesign --force --timestamp --sign "$SIGNING_IDENTITY" "$DMG_PATH"
+codesign_ts --force --timestamp --sign "$SIGNING_IDENTITY" "$DMG_PATH"
 codesign --verify --verbose=2 "$DMG_PATH"
 
 echo "=== 提交 Apple 公证 ==="
