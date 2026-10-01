@@ -167,3 +167,19 @@ fn it_dropped_offline_package_is_unverified_until_checked() {
 fn platform_string_matches_manifest_vocabulary() {
     assert!(["mac-arm64", "mac-x64", "windows-x64"].contains(&current_platform()));
 }
+
+/// 对着真的中央 (nginx 或开发机 vite) 跑一遍: 读 manifest → 下载 `test` 组件 → 校验。
+/// 默认跳过; 跑法:
+///   CATFISH_COMPONENTS_E2E_BASE=http://127.0.0.1:5173 cargo test --lib components -- --ignored
+/// 前提: 中央组件目录里有 test-<x.y.z>-<本机平台>.tar.gz 且生成过 manifest。
+#[tokio::test]
+#[ignore]
+async fn e2e_against_real_central() {
+    let base = std::env::var("CATFISH_COMPONENTS_E2E_BASE").expect("设 CATFISH_COMPONENTS_E2E_BASE");
+    let client = download_client().unwrap();
+    let m = fetch_manifest(&client, &base).await.unwrap();
+    let e = find_entry(&m, "test", current_platform()).expect("中央没有 test 组件").clone();
+    let dir = tempfile::tempdir().unwrap();
+    download(&client, &base, dir.path(), &e, Arc::new(AtomicBool::new(false)), |_, _| {}).await.unwrap();
+    assert_eq!(local_status(dir.path(), &e), LocalStatus::Ready);
+}

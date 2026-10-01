@@ -6,3 +6,11 @@ dist/
 *.log
 .DS_Store
 .vite/
+
+# 10/1: tsc -b 编译 vite 配置的产物。tsconfig.node.json 已把 outDir 指到 node_modules/.tmp,
+# 这里再挡一道: vite.config.js 一旦出现在源码旁边, vite 会优先加载它而不是 .ts ——
+# 9/10 的 /me/password 代理就是这样在开发机上一直没生效 (仓库里那份 .js 是旧的)。
+/vite.config.js
+/vite.config.d.ts
+/vite-components.js
+/vite-components.d.ts
