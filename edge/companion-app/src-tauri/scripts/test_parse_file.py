@@ -272,59 +272,59 @@ def test_audio_video_in_full_text_extractors() -> None:
     assert pf._FULL_TEXT_EXTRACTORS["video"] is pf.extract_full_text_audio
 
 
-# ⚠ 下面三条必须打桩 **parse_file_audio**, 不是 parse_file。
-#
-# 5/21 把 audio 解析抽到 parse_file_audio.py 之后, parse_file.py 只是
-# `from parse_file_audio import _find_executable, _transcribe_audio_to_text`。
-# `from X import name` 建的是**新绑定不是别名** —— _transcribe_audio_to_text
-# 跑在 parse_file_audio 里, 它查的是自己模块的全局, 打桩 parse_file 那份
-# 完全打不到。
-#
-# 后果不是"测试失败", 是**测试变成在测这台机器装了什么**:
-#     missing_ffmpeg  只在真没装 ffmpeg 的机器上过
-#     missing_whisper 只在装了 ffmpeg、没装 whisper 的机器上过
-#     missing_model   只在两个都装了、模型没下的机器上过
-# 三条互相排斥, 任何一台机器上至少两条是红的。而这个文件不在 CI 里,
-# 所以从 5/21 拆分那天起就没人看见过。(2026-08-15 修)
+# 10/1: 音频转写改走 afconvert + 会议组件包 (FunASR), 原来三条 "缺 ffmpeg / 缺 whisper-cli /
+# 缺模型" 的测试跟着换掉。打桩照旧打 parse_file_audio (它查自己模块的全局, 见 git 历史里
+# 8/15 那段说明), 这里改打 Path.home —— 两个模块用的是同一个 pathlib.Path 类。
 
 
-def test_transcribe_missing_ffmpeg_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ffmpeg 没装时报清楚错, 让员工知道装啥"""
+def _fake_install(home: Path, python: Path) -> None:
+    root = home / ".catfish" / "meeting-asr"
+    (root / "models-1.0.0" / "asr").mkdir(parents=True)
+    (root / "current.json").write_text(json.dumps({
+        "version": "1.0.0", "python": str(python), "models": str(root / "models-1.0.0"),
+    }), encoding="utf-8")
+
+
+def test_transcribe_without_meeting_pack_says_install_it(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     sys.path.insert(0, str(THIS.parent))
     import parse_file as pf
-    import parse_file_audio as pfa
-    monkeypatch.setattr(pfa, "_find_executable", lambda name: None)
-    with pytest.raises(RuntimeError, match=r"ffmpeg"):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    with pytest.raises(RuntimeError, match=r"会议组件包"):
         pf._transcribe_audio_to_text(Path("/tmp/fake.mp3"))
 
 
-def test_transcribe_missing_whisper_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ffmpeg 装了但 whisper-cli 没装"""
+def test_meeting_pack_with_deleted_venv_counts_as_not_installed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     sys.path.insert(0, str(THIS.parent))
-    import parse_file as pf
     import parse_file_audio as pfa
-
-    def fake_which(name: str) -> str | None:
-        return "/usr/bin/ffmpeg" if name == "ffmpeg" else None
-
-    monkeypatch.setattr(pfa, "_find_executable", fake_which)
-    with pytest.raises(RuntimeError, match=r"whisper-cli"):
-        pf._transcribe_audio_to_text(Path("/tmp/fake.mp3"))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    _fake_install(tmp_path, tmp_path / "gone" / "python")
+    assert pfa._meeting_asr_install() is None
 
 
-def test_transcribe_missing_model_raises_clear_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-) -> None:
-    """ffmpeg + whisper-cli 都装了, 但模型没下载"""
+@pytest.mark.skipif(not Path("/usr/bin/afconvert").exists(), reason="afconvert 只在 macOS")
+def test_transcribe_passes_args_and_reads_text(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """假的"组件包 python": 检查参数, 往 --out 写结果。真模型的端到端在 Rust 的 #[ignore] 测试里。"""
+    import wave
     sys.path.insert(0, str(THIS.parent))
-    import parse_file as pf
     import parse_file_audio as pfa
-
-    def fake_which(name: str) -> str | None:
-        return f"/usr/bin/{name}"
-
-    monkeypatch.setattr(pfa, "_find_executable", fake_which)
-    # 把 whisper 模型路径指到一个空 tmpdir
-    monkeypatch.setattr(pf.Path, "home", lambda: tmp_path)
-    with pytest.raises(RuntimeError, match=r"whisper.*模型"):
-        pf._transcribe_audio_to_text(Path("/tmp/fake.mp3"))
+    fake_py = tmp_path / "python"
+    fake_py.write_text(
+        "#!/bin/sh\n"
+        'while [ $# -gt 0 ]; do case "$1" in --out) out="$2";; --speakers) spk="$2";; esac; shift; done\n'
+        '[ "$spk" = "0" ] || exit 9\n'
+        'printf \'{"text": "会议纪要测试"}\' > "$out"\n',
+        encoding="utf-8",
+    )
+    fake_py.chmod(0o755)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    _fake_install(tmp_path, fake_py)
+    src = tmp_path / "in.wav"
+    with wave.open(str(src), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(44100)
+        w.writeframes(b"\x00\x00" * 44100 * 2)
+    text, meta = pfa._transcribe_audio_to_text(src)
+    assert text == "会议纪要测试"
+    assert abs(meta["duration_sec"] - 2.0) < 0.05
+    assert "funasr" in meta["model"]

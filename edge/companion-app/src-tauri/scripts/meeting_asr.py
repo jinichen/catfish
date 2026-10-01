@@ -6,6 +6,9 @@ FunASR: FSMN-VAD + SeACo-Paraformer (支持热词) + CT-Transformer 标点 + CAM
     python meeting_asr.py --audio-dir <meeting>/audio --models <models 目录> \
         --speakers 4 --hotwords "资质集采 达华" --out <meeting>/transcript.json
 
+    # 语音输入 / 上传的音频文件: 单个 16k wav, 不分说话人
+    python meeting_asr.py --audio-file x.wav --models <models 目录> --speakers 0 --out t.json
+
 stdout 每行一个 JSON 事件, Companion 逐行读:
     {"event":"phase","phase":"loading"|"preparing"|"recognizing"|"writing"}
     {"event":"done","out":..., "segments":N, "speakers":N, "duration_secs":X}
@@ -89,18 +92,22 @@ def main(argv: list[str] | None = None) -> int:
     _EVENTS = sys.stdout
     sys.stdout = sys.stderr
     ap = argparse.ArgumentParser()
-    ap.add_argument("--audio-dir", required=True, type=Path)
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--audio-dir", type=Path)
+    src.add_argument("--audio-file", type=Path)
     ap.add_argument("--models", required=True, type=Path)
+    # 0 = 不分说话人 (语音输入 / 上传音频): 不加载 CAM++, 也不传 preset_spk_num
     ap.add_argument("--speakers", required=True, type=int)
     ap.add_argument("--hotwords", default="")
     ap.add_argument("--out", required=True, type=Path)
     args = ap.parse_args(argv)
 
     try:
-        segments = list_segments(args.audio_dir)
-        if not segments:
-            raise RuntimeError(f"{args.audio_dir} 里没有录音分片")
-        for sub in ("vad", "asr", "punc", "spk"):
+        with_spk = args.speakers > 0
+        segments = list_segments(args.audio_dir) if args.audio_dir else [args.audio_file]
+        if not segments or not all(p.is_file() for p in segments):
+            raise RuntimeError(f"{args.audio_dir or args.audio_file} 里没有录音")
+        for sub in ("vad", "asr", "punc") + (("spk",) if with_spk else ()):
             if not (args.models / sub / "model.pt").is_file() and not any((args.models / sub).glob("*.bin")):
                 raise RuntimeError(f"模型不全: {args.models / sub} (会议组件包损坏? 重新安装)")
 
@@ -108,15 +115,16 @@ def main(argv: list[str] | None = None) -> int:
         t0 = time.time()
         from funasr import AutoModel
 
+        extra = {"spk_model": str(args.models / "spk")} if with_spk else {}
         model = AutoModel(
             model=str(args.models / "asr"),
             vad_model=str(args.models / "vad"),
             punc_model=str(args.models / "punc"),
-            spk_model=str(args.models / "spk"),
             device="cpu",
             disable_update=True,
             disable_pbar=True,
             log_level="ERROR",
+            **extra,
         )
 
         emit("phase", phase="preparing")
@@ -124,18 +132,22 @@ def main(argv: list[str] | None = None) -> int:
             merged = Path(td) / "merged-16k.wav"
             duration = concat_to_16k(segments, merged)
             emit("phase", phase="recognizing", duration_secs=round(duration, 1))
-            kw = {"preset_spk_num": max(1, args.speakers), "batch_size_s": 300}
+            kw = {"batch_size_s": 300}
+            if with_spk:
+                kw["preset_spk_num"] = args.speakers
             if args.hotwords.strip():
                 kw["hotword"] = args.hotwords.strip()
             result = model.generate(input=str(merged), **kw)[0]
 
         emit("phase", phase="writing")
         segs = to_segments(result)
+        text = (result.get("text") or "").strip() or "".join(s["text"] for s in segs)
         doc = {
+            "text": text,
             "version": 1,
             "engine": {"name": "funasr", "asr": "seaco-paraformer-large", "spk": "cam++"},
             "duration_secs": round(duration, 1),
-            "speakers": len({s["spk"] for s in segs}),
+            "speakers": len({s["spk"] for s in segs}) if with_spk else 0,
             "speakers_requested": args.speakers,
             "hotwords": args.hotwords.split() if args.hotwords.strip() else [],
             "elapsed_secs": round(time.time() - t0, 1),

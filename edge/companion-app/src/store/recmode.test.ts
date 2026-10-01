@@ -146,10 +146,14 @@ check("CDP/ws/9222/chrome → cdp_unavailable",
   classifyRecModeError("ws connection refused on 9222") === "cdp_unavailable");
 check("Catfish Chrome 没起 → cdp_unavailable",
   classifyRecModeError("CDP listener 连不上 Catfish Chrome") === "cdp_unavailable");
-check("whisper / ffmpeg → whisper_failed",
-  classifyRecModeError("whisper.cpp 跑挂") === "whisper_failed");
-check("speech_start_recording 失败 → whisper_failed",
-  classifyRecModeError("speech_start_recording 失败") === "whisper_failed");
+check("老的英文关键字仍归到 speech_failed",
+  classifyRecModeError("whisper.cpp 跑挂") === "speech_failed");
+check("speech_start_recording 失败 → speech_failed",
+  classifyRecModeError("speech_start_recording 失败") === "speech_failed");
+check("10/1 新文案: 没装会议组件包 → speech_failed (不是 llm_parse_failed)",
+  classifyRecModeError("语音转文字要先在「会议」页下载并安装会议组件包 (一次就好)") === "speech_failed");
+check("10/1 新文案: 找不到录音设备 → speech_failed",
+  classifyRecModeError("找不到录音设备「Jabra」(可能已断开)") === "speech_failed");
 check("timeout → aggregator_timeout",
   classifyRecModeError("LLM 综合超时 (300s)") === "aggregator_timeout");
 check("超时 → aggregator_timeout",

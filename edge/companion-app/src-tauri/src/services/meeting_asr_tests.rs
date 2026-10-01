@@ -64,7 +64,7 @@ fn fake_run(body: &str) -> (Result<AsrEvent, String>, Vec<AsrEvent>) {
     let script = d.path().join("fake_asr.py");
     std::fs::write(&script, body).unwrap();
     let inst = Installed { version: "t".into(), python: py, models: d.path().into() };
-    let args = TranscribeArgs { script: &script, audio_dir: d.path(), out: &d.path().join("t.json"), speakers: 2, hotwords: &[] };
+    let args = TranscribeArgs { script: &script, audio: AudioInput::Dir(d.path()), out: &d.path().join("t.json"), speakers: 2, hotwords: &[] };
     let mut seen = vec![];
     let r = transcribe(&inst, &args, &d.path().join("empty"), |e| seen.push(e.clone()));
     (r, seen)
@@ -115,7 +115,7 @@ fn e2e_install_real_pack_and_transcribe() {
 
     let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/meeting_asr.py");
     let out = home.path().join("transcript.json");
-    let args = TranscribeArgs { script: &script, audio_dir: &audio, out: &out, speakers: 3, hotwords: &["游戏平台".to_string()] };
+    let args = TranscribeArgs { script: &script, audio: AudioInput::Dir(&audio), out: &out, speakers: 3, hotwords: &["游戏平台".to_string()] };
     let t = std::time::Instant::now();
     let done = transcribe(&inst, &args, &home.path().join("empty"), |e| println!("  event {e:?}")).unwrap();
     println!("transcribe {:.0}s · {done:?}", t.elapsed().as_secs_f64());

@@ -1,7 +1,7 @@
 /** ChatInput attachment 处理 — 抽自 ChatInput.tsx (5/20 拆分).
  *
  * classifyFile / fileToAttachment + 大小限制 + ext 白名单 (image/file/audio).
- * 音频走 transcribe_audio_from_b64 → whisper.cpp; 文档走 parse_file_from_b64.
+ * 音频走 transcribe_audio_from_b64 → 本机转写 (会议组件包, FunASR); 文档走 parse_file_from_b64.
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -9,7 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Attachment } from "../../../types/chat";
 
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024; // 20MB
-// BL-VOICE3 (5/10): 音频走 whisper, 大会议录音常见 30+ MB, 100MB
+// BL-VOICE3 (5/10): 音频本机转写, 大会议录音常见 30+ MB, 100MB
 export const MAX_AUDIO_BYTES = 100 * 1024 * 1024;
 export const MAX_ATTACHMENTS = 6;
 
@@ -95,7 +95,7 @@ export async function fileToAttachment(file: File): Promise<Attachment> {
       meta: {
         duration_sec: result.duration_sec,
         transcript_chars: result.text.length,
-        model: "whisper.cpp",
+        model: "FunASR 本机转写",
       },
     };
   }
@@ -200,7 +200,7 @@ export async function fileToAttachment(file: File): Promise<Attachment> {
  *   - pdf / word / text: 全文 (大文件走 sidecar)
  *   - excel / csv: preview = Sheet 名 + 列头 + 前 N 行 markdown, 够 LLM 抽 entity
  *     (6/5 鸿波实测: xlsx 入库失败 → 改成入. LLM 也会另调 execute_code 取细节.)
- *   - audio / video: previewText 是 whisper 转录文字
+ *   - audio / video: previewText 是本机转写文字
  */
 export function ingestAttachmentSourceFireForget(att: {
   kind: "image" | "file";

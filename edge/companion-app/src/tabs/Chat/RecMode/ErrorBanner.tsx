@@ -21,9 +21,9 @@ function ErrorBanner() {
       hint: "去 Companion '控制台' 点'启动 Catfish Chrome', 起好后重试. 或确认 Chrome 用 --remote-debugging-port=9222 启动.",
       canRetry: true,
     },
-    whisper_failed: {
-      title: "录音失败",
-      hint: "ffmpeg 或 whisper.cpp 跑挂了. 看 Companion '控制台' 错日志. 没语音也能跑 RecMode (只是 main 综合时少一类信号), 重试吧.",
+    speech_failed: {
+      title: "录音 / 转写失败",
+      hint: "语音转文字要先在「会议」页下载并安装会议组件包; 也可能是麦克风没授权 (系统设置 → 隐私与安全性 → 麦克风)。没语音也能跑录屏学习 (只是少一类信号), 重试吧。",
       canRetry: true,
     },
     aggregator_timeout: {

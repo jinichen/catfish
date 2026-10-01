@@ -184,12 +184,49 @@ pub fn parse_event(line: &str) -> Option<AsrEvent> {
     serde_json::from_str(line.trim()).ok()
 }
 
+pub enum AudioInput<'a> {
+    /// 会议录音目录 (seg-*.wav, 原生采样率)
+    Dir(&'a Path),
+    /// 单个 16k wav (语音输入 / 上传的音频文件, 先 decode_to_wav16k)。
+    /// 目前只有 macOS 的语音输入用 (speech.rs), Windows 上没人构造。
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    File(&'a Path),
+}
+
 pub struct TranscribeArgs<'a> {
     pub script: &'a Path,
-    pub audio_dir: &'a Path,
+    pub audio: AudioInput<'a>,
     pub out: &'a Path,
+    /// 0 = 不分说话人 (语音输入 / 上传音频)
     pub speakers: u32,
     pub hotwords: &'a [String],
+}
+
+/// 任意音频 / 视频文件 → 16k 单声道 wav。macOS 用系统自带的 afconvert (CoreAudio):
+/// mp3 / m4a / aac / flac / opus / wav / aiff 以及 mp4 / mov 的音轨都实测能解 ——
+/// 不再要员工 brew 装 ffmpeg (那个从来不在安装包里, 客户机上没有)。
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn decode_to_wav16k(input: &Path, out: &Path) -> Result<(), String> {
+    if !cfg!(target_os = "macos") {
+        return Err("音频解码目前只支持 macOS".into());
+    }
+    run(
+        crate::services::process::background_command("/usr/bin/afconvert")
+            .args(["-f", "WAVE", "-d", "LEI16@16000", "-c", "1"])
+            .arg(input)
+            .arg(out),
+        "音频解码 (这个格式可能不支持, 换成 mp3 / m4a / wav 再试)",
+    )
+}
+
+/// 转写结果里的整段文字。
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn read_text(out: &Path) -> Result<String, String> {
+    let v: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out).map_err(|e| format!("读转写结果失败: {e}"))?,
+    )
+    .map_err(|e| format!("转写结果格式不对: {e}"))?;
+    Ok(v.get("text").and_then(|t| t.as_str()).unwrap_or("").trim().to_string())
 }
 
 /// 阻塞跑完一次转写 (在 spawn_blocking 里调)。返回 Done 事件。
@@ -203,9 +240,12 @@ pub fn transcribe(inst: &Installed, a: &TranscribeArgs, empty_cache: &Path, mut 
     } else {
         crate::services::process::python_command(&inst.python)
     };
-    cmd.arg(a.script)
-        .arg("--audio-dir").arg(a.audio_dir)
-        .arg("--models").arg(&inst.models)
+    cmd.arg(a.script);
+    match a.audio {
+        AudioInput::Dir(d) => cmd.arg("--audio-dir").arg(d),
+        AudioInput::File(f) => cmd.arg("--audio-file").arg(f),
+    };
+    cmd.arg("--models").arg(&inst.models)
         .arg("--speakers").arg(a.speakers.to_string())
         .arg("--hotwords").arg(a.hotwords.join(" "))
         .arg("--out").arg(a.out)

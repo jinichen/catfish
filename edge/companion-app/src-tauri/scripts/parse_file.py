@@ -189,10 +189,9 @@ def parse_csv_preview(path: Path) -> tuple[str, dict[str, Any]]:
 
 # ============================================================
 # Audio (mp3/wav/m4a/flac) — BL-I4 (5/8 ship)
-# 5/21 拆: audio 解析 (whisper.cpp) 抽到 parse_file_audio.py
+# 5/21 拆: audio 解析抽到 parse_file_audio.py; 10/1 起走 afconvert + 会议组件包 (FunASR)
 from parse_file_audio import (  # noqa: F401
-    _find_executable,
-    _whisper_model_path,
+    _meeting_asr_install,
     _transcribe_audio_to_text,
     parse_audio_preview,
 )
@@ -205,14 +204,14 @@ from parse_file_audio import (  # noqa: F401
 # 用例: 会议录像 → 抽音轨 → 转写 → 提取要点 / 待办 / 关键决议.
 # 央企痛点: 会议爆炸多 (周会 / 月度复盘 / 立项 / 评审 / 党建), 录了几乎不看回放.
 #
-# 实现: ffmpeg -vn 抽音轨 → 复用 _transcribe_audio_to_text.
+# 实现: afconvert 直接读 mp4 / mov 的音轨 (10/1 起, 原来是 ffmpeg -vn) → 复用 _transcribe_audio_to_text.
 # 不做 vision 帧抽取 (BL-I3.2 推后 — vision 调用费 + "全本地"故事冲突).
 
 
 def parse_video_preview(path: Path) -> tuple[str, dict[str, Any]]:
     """视频文件 (mp4/mov/m4v/mkv) 抽音轨转写 preview.
 
-    BL-I3.1 (5/8): 跟 BL-I4 共用 _transcribe_audio_to_text (内部已经有 -vn 跳视频流).
+    BL-I3.1 (5/8): 跟 BL-I4 共用 _transcribe_audio_to_text (afconvert 只取音轨).
     用例: 会议录像 → 关键决议 / 待办.
     """
     transcript, raw_meta = _transcribe_audio_to_text(path, lang="zh")

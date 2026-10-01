@@ -9,7 +9,7 @@
  * 流程 (用户视角):
  *   点 🎙 → setup 模态 (填名字 / namespace / 简述)
  *   点 "开始录屏 + 录音" → POST /api/learn/start_recording (CDP listener)
- *                       → speech_start_recording (ffmpeg 录音)
+ *                       → speech_start_recording (进程内录音, 10/1 前是 ffmpeg)
  *                       → recording 状态 (浮层 ⏱ + 提示)
  *   操作 Catfish Chrome 演示 + 顺嘴说意图
  *   点 "✅ 完成教学" → speech_stop_and_transcribe + stop_recording

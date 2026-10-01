@@ -145,7 +145,7 @@ fn run_transcribe(
 ) -> Result<(), String> {
     let audio = store::audio_dir(root, &meta.id)?;
     let out = store::transcript_path(root, &meta.id)?;
-    let args = TranscribeArgs { script, audio_dir: &audio, out: &out, speakers: meta.attendees, hotwords: &meta.hotwords };
+    let args = TranscribeArgs { script, audio: asr::AudioInput::Dir(&audio), out: &out, speakers: meta.attendees, hotwords: &meta.hotwords };
     let started = std::time::Instant::now();
     let done = asr::transcribe(inst, &args, &asr::root(home).join(".empty-cache"), |ev| {
         if let AsrEvent::Phase { phase, duration_secs } = ev {

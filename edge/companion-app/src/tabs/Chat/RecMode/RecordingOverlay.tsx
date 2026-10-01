@@ -67,7 +67,7 @@ function RecordingOverlay() {
     if (!sessionId || submitting) return;
     setSubmitting(true);
     try {
-      // V2 #70: 没开录音就跳过 whisper (start 时也没起 ffmpeg)
+      // V2 #70: 没开录音就跳过转写 (start 时也没开录音)
       if (isRecordingAudio) {
         try {
           const transcript = await invoke<string>("speech_stop_and_transcribe");

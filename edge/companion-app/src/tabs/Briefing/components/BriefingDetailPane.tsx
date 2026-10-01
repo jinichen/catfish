@@ -410,7 +410,7 @@ export function DetailPane({
   };
 
   // P3.3.20 (6/11): 文件接收 — 📎 picker / 粘贴 / 拖入 共用入口.
-  //   并行跑 fileToAttachment (图 base64 / 文档走 parse_file → preview / 音频走 whisper).
+  //   并行跑 fileToAttachment (图 base64 / 文档走 parse_file → preview / 音频本机转写).
   //   超过 MAX_ATTACHMENTS 截断 + 提示; 单文件挂不阻塞其他.
   const ingestFiles = useCallback(
     async (files: File[]) => {

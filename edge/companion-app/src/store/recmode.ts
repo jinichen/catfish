@@ -3,7 +3,7 @@
  * 录屏+语音教学引擎的客户端状态:
  *   idle       — 没在录, 默认状态
  *   setup      — 用户点 🎙 后填名字 / namespace / 简述
- *   recording  — gateway 启了 CDP listener + ffmpeg 在录音, 用户操作 Catfish Chrome
+ *   recording  — gateway 启了 CDP listener + 在录音, 用户操作 Catfish Chrome
  *   analyzing  — 用户点 ✅ 完成, gateway 跑 aggregator (调 main 综合)
  *   preview    — analyze done, 显 SKILL.md 草稿 + "跑一次试" / "保存" / "重录" 三按钮
  *   error      — 任何环节挂, 显友好错误 + "重试" / "放弃" 按钮
@@ -58,7 +58,7 @@ interface RecModeStateData {
   startedAt: number | null;
   /** keyframe 计数 — 录中实时更新 (5/26 加: SSE / poll /api/learn/active) */
   keyframesCount: number;
-  /** 录中是否同时开了 ffmpeg 录音 (跟 BL-VOICE3 复用) */
+  /** 录中是否同时开了录音 (跟聊天 🎤 共用 speech_* 命令) */
   isRecordingAudio: boolean;
   /** setup 表单内容 */
   setup: RecModeSetup;
@@ -69,7 +69,7 @@ interface RecModeStateData {
   /** 5/14 G: 错类型分类, 给 UI 显不同 hint + 修法引导 */
   errorCategory:
     | "cdp_unavailable"     // CDP ws 连不上 (Catfish Chrome 没起 / 端口错)
-    | "whisper_failed"       // ffmpeg / whisper.cpp 跑挂
+    | "speech_failed"        // 录音 / 本机转写出错 (10/1 前叫 whisper_failed)
     | "aggregator_timeout"   // LLM 综合超时
     | "llm_parse_failed"     // LLM 输出 JSON parse 错
     | "network"              // gateway / network 通用错
@@ -90,7 +90,7 @@ interface RecModeStateData {
 
 /** Helper: 按错误消息内容自动分类 errorCategory.
  *
- * RecMode 的几类典型错: CDP ws 连不上 / whisper 挂 / aggregator timeout /
+ * RecMode 的几类典型错: CDP ws 连不上 / 录音或转写出错 / aggregator timeout /
  * LLM JSON parse fail / 通用网络. UI 根据分类给不同修法引导.
  */
 export function classifyRecModeError(msg: string): RecModeStateData["errorCategory"] {
@@ -98,8 +98,10 @@ export function classifyRecModeError(msg: string): RecModeStateData["errorCatego
   if (m.includes("ws") || m.includes("cdp") || m.includes("9222") || m.includes("chrome")) {
     return "cdp_unavailable";
   }
-  if (m.includes("whisper") || m.includes("ffmpeg") || m.includes("speech_") || m.includes("audio")) {
-    return "whisper_failed";
+  // 10/1: 录音改进程内录、转写改会议组件包, 报错文案是中文的 "录音 / 转写 / 会议组件包";
+  // 老的英文关键字留着兜底 (旧版本 tool-bridge / 日志里还可能出现)
+  if (["录音", "转写", "会议组件包", "麦克风", "whisper", "ffmpeg", "speech_", "audio"].some((k) => m.includes(k))) {
+    return "speech_failed";
   }
   if (m.includes("timeout") || m.includes("超时")) {
     return "aggregator_timeout";
@@ -142,7 +144,7 @@ export const useRecModeStore = create<RecModeStateData>((set) => ({
       sessionId,
       startedAt: Math.floor(Date.now() / 1000),
       keyframesCount: 0,
-      // V2 #70: 跟 setup.recordAudio 一致 (没开录音 → isRecordingAudio=false → onFinish 跳过 whisper)
+      // V2 #70: 跟 setup.recordAudio 一致 (没开录音 → isRecordingAudio=false → onFinish 跳过转写)
       isRecordingAudio: cur.setup.recordAudio,
       errorMessage: null,
     })),

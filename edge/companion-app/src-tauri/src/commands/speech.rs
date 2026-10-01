@@ -1,305 +1,126 @@
-//! 本地 Whisper.cpp 语音识别 — 五一 sprint Day 1 (方案 C+: ffmpeg subprocess 录音).
+//! 语音输入 (聊天 🎤 / 录屏学习的旁白) + 上传音频转文字 —— 10/1 改版。
 //!
-//! # 设计 (5/1 鸿波拍板, 多次踩坑后定稿)
+//! 原来是"起 brew 装的 ffmpeg 录音 (avfoundation 写死设备 `:0`, 最长 5 分钟) +
+//! whisper.cpp small/medium 转文字"。ffmpeg / whisper-cli / 模型都不在安装包里, 客户机上
+//! 根本跑不起来; `:0` 在开发机上是 iPhone 连续互通麦克风; whisper small 中文会议集
+//! 字错率 ~25% (FunASR ~7%)。鸿波 10/1 拍板: 并入会议功能, 删掉 whisper。
 //!
-//! 之前两次走偏:
-//!   方案 A (SFSpeechRecognizer + objc): dev binary 不是 .app bundle, NSException 崩
-//!   方案 B (osascript 触发系统 dictation): WKWebView 内 textarea 不是 firstResponder, 文字进不来
-//!   方案 C (MediaRecorder + getUserMedia): WKWebView 默认禁用 navigator.mediaDevices, undefined
+//! 现在:
+//!   录音 = services::meeting_recorder (进程内 cpal, 系统默认麦克风, 10 分钟上限)
+//!   转写 = 会议组件包 (FunASR) 的 meeting_asr.py, `--speakers 0` 不分说话人
+//!   解码 = macOS 自带 afconvert (上传的 mp3 / m4a / 视频音轨 → 16k wav)
 //!
-//! 最终方案 C+:
-//!   - **录音在 Rust 端做** (ffmpeg avfoundation subprocess), 绕过 WKWebView 限制
-//!   - 转文字 whisper-cli 本地, 数据 100% 不出员工电脑
+//! 命令名和返回形状不变, 聊天输入框 / 录屏学习 (RecordingOverlay) 一行不用改。
 //!
-//! 数据流:
-//!   Companion 🎤 按下 → invoke('speech_start_recording')
-//!     → Rust 启 ffmpeg -f avfoundation -i ":0" → /tmp/catfish-rec-<uuid>.wav
-//!     → 全局 RECORDING 状态保存子进程 + wav 路径
-//!   Companion 🎤 再按 → invoke('speech_stop_and_transcribe')
-//!     → Rust kill ffmpeg (SIGINT, ffmpeg finalize wav 头)
-//!     → whisper-cli -m ggml-small.bin -l zh -f .wav -otxt
-//!     → 读 .wav.txt, 清理临时文件, 返文本
+//! 冷启动耗时: 实测 6 秒语音约 18 秒出字 (其中加载模型 ~17 秒) —— 跟原来 whisper
+//! medium 差不多 (9/29 日志: 停止到出字 16 秒)。常驻进程能降到 1 秒内, 另记。
 //!
-//! # 依赖 (员工首次部署)
-//!
-//! - `brew install whisper-cpp ffmpeg`
-//! - 下载 ggml-small.bin (~466MB) 到 ~/.catfish/whisper-models/
-//! - macOS 麦克风权限 (首次会弹系统对话框)
+//! ⚠ 录音器全局只有一个, 会议录音也用它: 停 / 取消前先确认在录的是**语音输入自己的
+//! 目录**, 绝不能把一场正在录的会议停掉。
 
-// BL-WIN1.3 (5/8): 这些 imports 只 macOS speech impl 用 (PathBuf / Child / Mutex /
-// OnceLock 都被 RecordingState + recording_slot 用), Windows stub 不用. cfg gate
-// 防 cross-build unused_imports warning.
-#[cfg(target_os = "macos")]
-use std::path::{Path, PathBuf};
-#[cfg(target_os = "macos")]
-use std::process::Child;
-#[cfg(target_os = "macos")]
-use std::sync::{Mutex, OnceLock};
 use tauri::Window;
 
-/// 全局录音状态. 一次只能录一段.
-/// BL-WIN1 (5/8): cfg(macos) — Windows 走 stub, 不用这个 state.
 #[cfg(target_os = "macos")]
-struct RecordingState {
-    /// ffmpeg 子进程 (kill 用)
-    child: Child,
-    /// 输出 wav 路径
-    wav_path: PathBuf,
-}
+mod imp {
+    use std::path::{Path, PathBuf};
 
-#[cfg(target_os = "macos")]
-fn recording_slot() -> &'static Mutex<Option<RecordingState>> {
-    static SLOT: OnceLock<Mutex<Option<RecordingState>>> = OnceLock::new();
-    SLOT.get_or_init(|| Mutex::new(None))
-}
+    use crate::services::meeting_asr::{self as asr, AudioInput, TranscribeArgs};
+    use crate::services::meeting_recorder as rec;
+    use crate::services::meeting_store;
 
-/// macOS GUI app 启动时的 PATH 不含 brew 路径. 探测可执行文件位置.
-/// 按顺序试: env override / Apple Silicon brew / Intel brew / 系统 / PATH.
-#[cfg(target_os = "macos")]
-fn find_executable(name: &str) -> Option<PathBuf> {
-    // 1. env override (例 CATFISH_FFMPEG=/path/to/ffmpeg)
-    let env_key = format!("CATFISH_{}", name.to_uppercase().replace('-', "_"));
-    if let Ok(custom) = std::env::var(&env_key) {
-        let p = PathBuf::from(custom);
-        if p.exists() {
-            return Some(p);
-        }
+    /// 语音输入最长 10 分钟 (说一段话, 不是开会)。
+    const DICTATE_MAX_SECS: u32 = 600;
+
+    pub(super) fn dictate_dir() -> PathBuf {
+        std::env::temp_dir().join("catfish-dictate")
     }
 
-    // 2. 几个常见路径
-    let candidates = [
-        format!("/opt/homebrew/bin/{name}"),  // Apple Silicon brew
-        format!("/usr/local/bin/{name}"),     // Intel Mac brew
-        format!("/usr/bin/{name}"),           // 系统
-        format!("/opt/local/bin/{name}"),     // MacPorts
-    ];
-    for c in &candidates {
-        let p = PathBuf::from(c);
-        if p.exists() {
-            return Some(p);
-        }
+    fn is_dictating() -> bool {
+        rec::status().dir.as_deref() == Some(dictate_dir().display().to_string().as_str())
     }
 
-    // 3. PATH 兜底 (如果 app 启动时被 LaunchServices 注入了完整 PATH)
-    if let Ok(path_env) = std::env::var("PATH") {
-        for dir in path_env.split(':') {
-            let p = PathBuf::from(dir).join(name);
-            if p.exists() {
-                return Some(p);
+    pub(super) fn need_asr() -> Result<asr::Installed, String> {
+        asr::installed(&meeting_store::home()?)
+            .ok_or_else(|| "语音转文字要先在「会议」页下载并安装会议组件包 (一次就好)".to_string())
+    }
+
+    pub(super) fn start() -> Result<(), String> {
+        need_asr()?;
+        let st = rec::status();
+        if st.recording {
+            return Err(if is_dictating() { "已经在录音中, 先停止".into() } else { "会议正在录音, 结束会议录音后再用语音输入".into() });
+        }
+        let dir = dictate_dir();
+        let _ = std::fs::remove_dir_all(&dir);
+        rec::start(&dir, None, DICTATE_MAX_SECS, DICTATE_MAX_SECS)?;
+        Ok(())
+    }
+
+    /// 停录音并转写; 阻塞 (调用方放 spawn_blocking)。
+    pub(super) fn stop_and_transcribe() -> Result<String, String> {
+        if !is_dictating() {
+            return Err("没在语音输入".into());
+        }
+        let sum = rec::stop()?.ok_or("没在录音")?;
+        let dir = dictate_dir();
+        let result = (|| {
+            if sum.seconds < 0.5 {
+                return Err("录音太短".to_string());
             }
+            transcribe(AudioInput::Dir(&dir))
+        })();
+        let _ = std::fs::remove_dir_all(&dir);
+        result
+    }
+
+    pub(super) fn cancel() -> Result<(), String> {
+        if is_dictating() {
+            rec::stop()?;
         }
+        let _ = std::fs::remove_dir_all(dictate_dir());
+        Ok(())
     }
 
-    None
-}
-
-/// 开始录音. 启 ffmpeg avfoundation 子进程录默认麦克风到 /tmp/catfish-rec-<uuid>.wav.
-///
-/// 限制录音时长 ≤ 5 分钟 (-t 300), 避免员工忘记停止录爆磁盘.
-#[cfg(target_os = "macos")]
-#[tauri::command]
-pub fn speech_start_recording(_window: Window) -> Result<(), String> {
-    let mut slot = recording_slot().lock().map_err(|e| format!("锁失败: {e}"))?;
-    if slot.is_some() {
-        return Err("已经在录音中, 先停止".to_string());
-    }
-
-    let uuid = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let wav_path = std::env::temp_dir().join(format!("catfish-rec-{uuid}.wav"));
-
-    let ffmpeg_bin = find_executable("ffmpeg").ok_or_else(|| {
-        "ffmpeg 找不到. 请装: brew install ffmpeg\n\
-        或设 env CATFISH_FFMPEG=/path/to/ffmpeg".to_string()
-    })?;
-    log::info!("speech_start_recording: 启 {} → {}", ffmpeg_bin.display(), wav_path.display());
-
-    let child = crate::services::process::background_command(&ffmpeg_bin)
-        .args([
-            "-y",
-            "-hide_banner",
-            "-loglevel", "error",
-            "-f", "avfoundation",  // macOS 音频输入框架
-            "-i", ":0",            // :0 = 默认音频设备 (麦克风); ":1" 是第二个等
-            "-ar", "16000",        // whisper 要 16 kHz
-            "-ac", "1",            // 单声道
-            "-c:a", "pcm_s16le",   // 16-bit PCM
-            "-t", "300",           // 最多 5 分钟, 防爆
-        ])
-        .arg(&wav_path)
-        .stdin(std::process::Stdio::piped())  // 留 stdin 让 SIGINT 能优雅退
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("ffmpeg 启动失败: {e}"))?;
-
-    *slot = Some(RecordingState { child, wav_path });
-    Ok(())
-}
-
-/// 停止录音 + 跑 whisper. 返回识别出的文本.
-#[cfg(target_os = "macos")]
-#[tauri::command]
-pub async fn speech_stop_and_transcribe(_window: Window) -> Result<String, String> {
-    // 先取出 state (尽快释放锁)
-    let mut state = {
-        let mut slot = recording_slot().lock().map_err(|e| format!("锁失败: {e}"))?;
-        slot.take().ok_or_else(|| "没有正在录音".to_string())?
-    };
-
-    log::info!("speech_stop_and_transcribe: 停 ffmpeg pid={}", state.child.id());
-
-    // 给 ffmpeg 发 SIGINT — 它会 finalize wav 头然后退出.
-    // (直接 kill SIGKILL 会让 wav 文件 header 残缺, whisper 读不了)
-    let pid = state.child.id();
-    let _ = std::process::Command::new("kill")
-        .args(["-INT", &pid.to_string()])
-        .output();
-
-    // 等 ffmpeg 优雅退 (最多 2s)
-    let _ = state.child.wait();
-
-    let wav_path = state.wav_path.clone();
-    if !wav_path.exists() || std::fs::metadata(&wav_path).map(|m| m.len()).unwrap_or(0) < 1000 {
-        let _ = std::fs::remove_file(&wav_path);
-        return Err("录音文件太小或不存在 (录音可能太短)".to_string());
-    }
-
-    let txt_out = wav_path.with_extension("wav.txt");
-
-    // 走 whisper.cpp + 本地 ggml 模型. 大模型 (large-v3) 中文准确率 OK, prompt 提升公文术语.
-    // (5/1 砍掉 macOS 原生 SFSpeechRecognizer 路径, 因 macOS 没装 on-device 模型, 不可控)
-    let model_path = whisper_model_path()?;
-    let text = run_whisper_cpp(&wav_path, &txt_out, &model_path)?;
-
-    // 清理临时文件
-    let _ = std::fs::remove_file(&wav_path);
-    let _ = std::fs::remove_file(&txt_out);
-
-    if text.is_empty() {
-        return Err("没识别出文字 (录音太短或没声?)".to_string());
-    }
-
-    log::info!("speech_stop_and_transcribe: ✅ 识别 {} 字", text.chars().count());
-    Ok(text)
-}
-
-/// 紧急取消录音 (不转写, 直接清理).
-#[cfg(target_os = "macos")]
-#[tauri::command]
-pub fn speech_cancel_recording(_window: Window) -> Result<(), String> {
-    let mut state = {
-        let mut slot = recording_slot().lock().map_err(|e| format!("锁失败: {e}"))?;
-        match slot.take() {
-            Some(s) => s,
-            None => return Ok(()),
+    /// 不分说话人的整段转写 → 文字。
+    pub(super) fn transcribe(audio: AudioInput) -> Result<String, String> {
+        let inst = need_asr()?;
+        let home = meeting_store::home()?;
+        let script = super::super::file_parse_env::find_script("meeting_asr.py")?;
+        let out = std::env::temp_dir().join(format!("catfish-stt-{}.json", std::process::id()));
+        let args = TranscribeArgs { script: &script, audio, out: &out, speakers: 0, hotwords: &[] };
+        let r = asr::transcribe(&inst, &args, &asr::root(&home).join(".empty-cache"), |_| {})
+            .and_then(|_| asr::read_text(&out));
+        let _ = std::fs::remove_file(&out);
+        let text = r?;
+        if text.is_empty() {
+            return Err("没识别出文字 (音频太短 / 没有人声?)".into());
         }
-    };
-    let pid = state.child.id();
-    let _ = std::process::Command::new("kill")
-        .args(["-9", &pid.to_string()])
-        .output();
-    let _ = state.child.wait();
-    let _ = std::fs::remove_file(&state.wav_path);
-    log::info!("speech_cancel_recording: 取消并清理");
-    Ok(())
-}
+        Ok(text)
+    }
 
-/// 走 whisper.cpp + ggml 模型. 跨平台 (Win/Linux 也装 whisper-cpp 即可).
-/// 中文准确率取决于模型: small (差) / medium (中) / large-v3 (较好).
-#[cfg(target_os = "macos")]
-fn run_whisper_cpp(
-    wav_path: &Path,
-    txt_out: &Path,
-    model_path: &Path,
-) -> Result<String, String> {
-    let whisper_bin = find_executable("whisper-cli")
-        .or_else(|| find_executable("main"))
-        .ok_or_else(|| {
-            "未装 catfish-transcribe (macOS 原生) 也未装 whisper-cli.\n\
-             推荐: 编译 native/transcribe-helper.swift 装 catfish-transcribe (准确率最佳)\n\
-             或: brew install whisper-cpp".to_string()
-        })?;
-
-    let context_prompt = "以下是中文工作对话, 涉及鲶鱼平台、Companion、catfish、\
-        公文汇报、月度总结、周报、资质管理、项目部署、团队、合规、安全、\
-        ISO27001、27000、客户、PoC、demo、SSO、skill、agent 等场景.";
-
-    let whisper_result = crate::services::process::background_command(&whisper_bin)
-        .args([
-            "-m", model_path.to_str().unwrap(),
-            "-l", "zh",
-            "-f", wav_path.to_str().unwrap(),
-            "-otxt",
-            "--no-prints",
-            "--prompt", context_prompt,
-        ])
-        .output();
-
-    match whisper_result {
-        Ok(output) if output.status.success() => {
-            let text = std::fs::read_to_string(txt_out)
-                .or_else(|_| Ok::<String, std::io::Error>(
-                    String::from_utf8_lossy(&output.stdout).to_string()
-                ))
-                .unwrap_or_default()
-                .trim()
-                .to_string();
-            Ok(text)
-        }
-        Ok(output) => Err(format!(
-            "whisper-cli 失败: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )),
-        Err(e) => Err(format!("whisper-cli 调用失败: {e}")),
+    /// 上传的音频: base64 → 原文件 → afconvert 16k wav → 转写。返回 (文字, 时长秒)。
+    pub(super) fn transcribe_bytes(bytes: &[u8], filename: &str) -> Result<(String, Option<f64>), String> {
+        need_asr()?;
+        let ext = Path::new(filename).extension().and_then(|e| e.to_str()).unwrap_or("bin").to_lowercase();
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let raw = std::env::temp_dir().join(format!("catfish-audio-raw-{stamp}.{ext}"));
+        let wav = std::env::temp_dir().join(format!("catfish-audio-{stamp}.wav"));
+        std::fs::write(&raw, bytes).map_err(|e| format!("写临时文件失败: {e}"))?;
+        let r = asr::decode_to_wav16k(&raw, &wav).and_then(|_| {
+            let secs = hound::WavReader::open(&wav)
+                .ok()
+                .map(|r| r.duration() as f64 / r.spec().sample_rate.max(1) as f64);
+            transcribe(AudioInput::File(&wav)).map(|t| (t, secs))
+        });
+        let _ = std::fs::remove_file(&raw);
+        let _ = std::fs::remove_file(&wav);
+        r
     }
 }
 
-#[cfg(target_os = "macos")]
-fn whisper_model_path() -> Result<PathBuf, String> {
-    if let Ok(custom) = std::env::var("CATFISH_WHISPER_MODEL") {
-        return Ok(PathBuf::from(custom));
-    }
-    let home = crate::util::paths::home_env().map_err(|_| "HOME env 未设")?;
-    let dir = PathBuf::from(home).join(".catfish").join("whisper-models");
-
-    // 按质量优先序: large-v3 > medium > small.
-    // 中文公文场景 large-v3 准确率最佳 (M4 上勉强 1x realtime), small 速度快但准确率差.
-    for name in &["ggml-large-v3.bin", "ggml-medium.bin", "ggml-small.bin"] {
-        let p = dir.join(name);
-        if p.exists() {
-            log::info!("whisper_model_path: 使用 {}", p.display());
-            return Ok(p);
-        }
-    }
-
-    Err(format!(
-        "whisper 模型不存在 ({}/ggml-*.bin)\n推荐下载 (中文公文 large-v3 准确率最佳):\n  \
-         curl -L -o {}/ggml-large-v3.bin \\\n    \
-         https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin\n\
-         (M4 8GB 内存改用 medium: 替换 large-v3 为 medium, 文件 1.5GB)",
-        dir.display(),
-        dir.display(),
-    ))
-}
-
-// ===== BL-VOICE3 (5/10): 拖音频文件转录 =====
-//
-// 跟 speech_stop_and_transcribe 逻辑共享 run_whisper_cpp + whisper_model_path,
-// 但输入源不同 — 这条是从员工拖进来的 base64 解码 + ffmpeg 转 16kHz mono wav,
-// 而 speech_stop 是 ffmpeg 实时录音.
-//
-// 流程:
-//   前端 base64(mp3/wav/m4a/...) + filename → invoke
-//     → 写 base64 到 tmp 原始文件
-//     → ffmpeg 转 → /tmp/catfish-audio-<uuid>.wav (16kHz mono PCM)
-//     → run_whisper_cpp → text
-//     → 清理 tmp
-//     → 返 { text, duration_sec, original_filename }
-
-#[cfg(target_os = "macos")]
 #[derive(Debug, serde::Serialize)]
 pub struct TranscribeResult {
     pub text: String,
@@ -307,155 +128,120 @@ pub struct TranscribeResult {
     pub original_filename: String,
 }
 
-/// BL-VOICE3 (5/10): 把员工拖进来的 audio 文件转文字.
-///
-/// 接受常见格式: mp3 / m4a / wav / aac / ogg / flac / opus 等 ffmpeg 都吃.
-/// 内部统一转 16 kHz mono PCM wav 喂 whisper.cpp.
-///
-/// 注意: 大文件 (> 30 分钟会议录音) 会跑很久, 鸿波要在前端给"转录中…" loading.
-#[cfg(target_os = "macos")]
+#[cfg(not(target_os = "macos"))]
+const UNSUPPORTED: &str = "语音转文字目前只支持 macOS";
+
+#[tauri::command]
+pub fn speech_start_recording(_window: Window) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        imp::start()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err(UNSUPPORTED.into())
+    }
+}
+
+#[tauri::command]
+pub async fn speech_stop_and_transcribe(_window: Window) -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let text = tauri::async_runtime::spawn_blocking(imp::stop_and_transcribe)
+            .await
+            .map_err(|e| format!("转写任务异常: {e}"))??;
+        log::info!("speech_stop_and_transcribe: ✅ 识别 {} 字", text.chars().count());
+        Ok(text)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err(UNSUPPORTED.into())
+    }
+}
+
+#[tauri::command]
+pub fn speech_cancel_recording(_window: Window) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        imp::cancel()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(())
+    }
+}
+
+/// 拖进聊天框的音频文件转文字。mp3 / m4a / aac / flac / opus / wav / aiff, 以及
+/// mp4 / mov 的音轨 (afconvert 实测都能解)。
 #[tauri::command]
 pub async fn transcribe_audio_from_b64(
     _window: Window,
     file_b64: String,
     filename: String,
 ) -> Result<TranscribeResult, String> {
-    use base64::Engine;
-
-    // 1. 解 base64 → 写 tmp 原始文件 (保留扩展名让 ffmpeg 自动识别)
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(file_b64.trim())
-        .map_err(|e| format!("base64 解码失败: {e}"))?;
-
-    if bytes.len() < 1024 {
-        return Err(format!("音频文件过小 ({} bytes), 不像有效音频", bytes.len()));
-    }
-
-    let uuid = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-
-    // 用原文件扩展名 (mp3 / m4a / wav 等), ffmpeg 自动识别
-    let ext = std::path::Path::new(&filename)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("bin")
-        .to_lowercase();
-    let raw_path = std::env::temp_dir().join(format!("catfish-audio-raw-{uuid}.{ext}"));
-    let wav_path = std::env::temp_dir().join(format!("catfish-audio-{uuid}.wav"));
-    let txt_out = wav_path.with_extension("wav.txt");
-
-    std::fs::write(&raw_path, &bytes).map_err(|e| format!("写 tmp 失败: {e}"))?;
-    log::info!(
-        "transcribe_audio_from_b64: {} ({} KB) → {} → {}",
-        filename, bytes.len() / 1024, raw_path.display(), wav_path.display()
-    );
-
-    // 2. ffmpeg 转 16kHz mono PCM wav (whisper.cpp 要求格式)
-    let ffmpeg_bin = find_executable("ffmpeg").ok_or_else(|| {
-        "ffmpeg 找不到. 请装: brew install ffmpeg".to_string()
-    })?;
-
-    let ffmpeg_result = crate::services::process::background_command(&ffmpeg_bin)
-        .args([
-            "-y",
-            "-hide_banner",
-            "-loglevel", "error",
-            "-i", raw_path.to_str().unwrap(),
-            "-ar", "16000",
-            "-ac", "1",
-            "-c:a", "pcm_s16le",
-        ])
-        .arg(&wav_path)
-        .output();
-
-    // 不论成败先清原始文件
-    let _ = std::fs::remove_file(&raw_path);
-
-    match ffmpeg_result {
-        Ok(out) if out.status.success() => {}
-        Ok(out) => {
-            let _ = std::fs::remove_file(&wav_path);
-            return Err(format!(
-                "ffmpeg 转码失败: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            ));
+    #[cfg(target_os = "macos")]
+    {
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(file_b64.trim())
+            .map_err(|e| format!("base64 解码失败: {e}"))?;
+        if bytes.len() < 1024 {
+            return Err(format!("音频文件过小 ({} bytes), 不像有效音频", bytes.len()));
         }
-        Err(e) => {
-            let _ = std::fs::remove_file(&wav_path);
-            return Err(format!("ffmpeg 调用失败: {e}"))
-        }
+        let name = filename.clone();
+        log::info!("transcribe_audio_from_b64: {name} ({} KB)", bytes.len() / 1024);
+        let (text, duration_sec) = tauri::async_runtime::spawn_blocking(move || imp::transcribe_bytes(&bytes, &name))
+            .await
+            .map_err(|e| format!("转写任务异常: {e}"))??;
+        Ok(TranscribeResult { text, duration_sec, original_filename: filename })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (file_b64, filename);
+        Err(UNSUPPORTED.into())
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::imp;
+    use std::path::PathBuf;
+
+    /// 真包: 装进临时 HOME → 上传一个 m4a (afconvert 解码) → 不分说话人转写。默认跳过。
+    ///   CATFISH_MEETING_PACK=<包> CATFISH_TEST_M4A=<m4a> CATFISH_BASE_PYTHON=<python3.11> \
+    ///   cargo test --lib commands::speech::tests -- --ignored --nocapture --test-threads=1
+    #[test]
+    #[ignore]
+    fn e2e_upload_m4a_transcribes_without_whisper() {
+        let pack = PathBuf::from(std::env::var("CATFISH_MEETING_PACK").unwrap());
+        let m4a = std::fs::read(std::env::var("CATFISH_TEST_M4A").unwrap()).unwrap();
+        let base = PathBuf::from(std::env::var("CATFISH_BASE_PYTHON").unwrap());
+        let home = tempfile::tempdir().unwrap();
+        crate::services::meeting_asr::install(&pack, home.path(), &base, |_| {}).unwrap();
+        std::env::set_var("HOME", home.path());
+
+        let t = std::time::Instant::now();
+        let (text, secs) = imp::transcribe_bytes(&m4a, "memo.m4a").unwrap();
+        println!("m4a {secs:?}s → {:.1}s · {text}", t.elapsed().as_secs_f64());
+        assert!(text.chars().count() > 5);
+        assert!(secs.unwrap() > 1.0);
+
+        // 不认识的格式要给人话, 不是一串 afconvert 报错
+        let err = imp::transcribe_bytes(&vec![7u8; 4096], "x.m4a").unwrap_err();
+        assert!(err.contains("音频解码"), "{err}");
     }
 
-    // 3. 拿 wav 时长 (PCM s16le 16kHz mono 公式: bytes / (16000 * 2))
-    let duration_sec = std::fs::metadata(&wav_path)
-        .ok()
-        .map(|m| (m.len().saturating_sub(44) as f64) / (16000.0 * 2.0));
-
-    // 4. whisper.cpp 转文字 (跟 speech_stop_and_transcribe 复用)
-    let model_path = whisper_model_path()?;
-    let text = run_whisper_cpp(&wav_path, &txt_out, &model_path)
-        .inspect_err(|_| {
-            let _ = std::fs::remove_file(&wav_path);
-            let _ = std::fs::remove_file(&txt_out);
-        })?;
-
-    // 5. 清理
-    let _ = std::fs::remove_file(&wav_path);
-    let _ = std::fs::remove_file(&txt_out);
-
-    if text.trim().is_empty() {
-        return Err("没识别出文字 (音频太短 / 没人声 / 模型跟不上?)".to_string());
+    /// 会议在录时, 语音输入不能开、更不能把会议停掉。默认跳过 (要真麦克风 + 装好的包)。
+    #[test]
+    #[ignore]
+    fn dictation_never_stops_a_meeting_recording() {
+        let meeting = tempfile::tempdir().unwrap();
+        crate::services::meeting_recorder::start(meeting.path(), None, 300, 3600).unwrap();
+        // 没装包的机器 start 会先报"要安装组件包", 装了的报"会议正在录音"; 两种都不能开录
+        assert!(imp::start().is_err());
+        assert!(imp::stop_and_transcribe().unwrap_err().contains("没在语音输入"));
+        imp::cancel().unwrap();
+        assert!(crate::services::meeting_recorder::status().recording, "会议录音被语音输入停掉了");
+        crate::services::meeting_recorder::stop().unwrap();
     }
-
-    log::info!(
-        "transcribe_audio_from_b64: ✅ {} 秒音频 → {} 字",
-        duration_sec.unwrap_or(0.0),
-        text.chars().count()
-    );
-
-    Ok(TranscribeResult {
-        text,
-        duration_sec,
-        original_filename: filename,
-    })
-}
-
-// ===== 非 macOS stub =====
-
-#[cfg(not(target_os = "macos"))]
-#[tauri::command]
-pub fn speech_start_recording(_window: Window) -> Result<(), String> {
-    Err("Whisper.cpp Phase 2 加 Win/Linux. 现在 macOS only.".to_string())
-}
-
-#[cfg(not(target_os = "macos"))]
-#[tauri::command]
-pub async fn speech_stop_and_transcribe(_window: Window) -> Result<String, String> {
-    Err("Whisper.cpp Phase 2 加 Win/Linux".to_string())
-}
-
-#[cfg(not(target_os = "macos"))]
-#[tauri::command]
-pub fn speech_cancel_recording(_window: Window) -> Result<(), String> {
-    Ok(())
-}
-
-#[cfg(not(target_os = "macos"))]
-#[derive(Debug, serde::Serialize)]
-pub struct TranscribeResult {
-    pub text: String,
-    pub duration_sec: Option<f64>,
-    pub original_filename: String,
-}
-
-#[cfg(not(target_os = "macos"))]
-#[tauri::command]
-pub async fn transcribe_audio_from_b64(
-    _window: Window,
-    _file_b64: String,
-    _filename: String,
-) -> Result<TranscribeResult, String> {
-    Err("音频转录 Phase 2 加 Win/Linux".to_string())
 }

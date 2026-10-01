@@ -1,6 +1,6 @@
 """Audio file parsing — 抽自 parse_file.py (5/21 拆分).
 
-走 ffmpeg + whisper.cpp 转录音频 (mp3/m4a/wav/aac/...). 跟 BL-VOICE3 (5/10) 联动.
+音频 / 视频转文字 —— 10/1 起走 afconvert 解码 + 会议组件包 (FunASR), 不再用 ffmpeg + whisper.cpp。
 """
 from __future__ import annotations
 
@@ -21,11 +21,9 @@ def _truncate(s: str, limit: int = PREVIEW_MAX_CHARS) -> str:
 
 # ============================================================
 #
-# 用 ffmpeg 转 16kHz mono wav → whisper-cli + ggml-small.bin → 转写文本.
-# 跟 src/commands/speech.rs (5/1 ship 的语音输入) 共用同一套 whisper 链路:
-#   - whisper-cli 已在: brew install whisper-cpp
-#   - 模型已下载: ~/.catfish/whisper-models/ggml-small.bin
-#   - ffmpeg 已装 (avfoundation 录音用)
+# 10/1: afconvert (macOS 自带) 解码成 16k 单声道 wav → 会议组件包的 meeting_asr.py 转写
+# (FunASR, 不分说话人)。跟 src/commands/speech.rs (聊天 🎤 / 上传音频) 同一套。
+# 组件包没装 → RuntimeError 提示去「会议」页装; 不再需要 brew 的 ffmpeg / whisper-cpp。
 #
 # preview 输出:
 #   - duration_sec / sample_rate / language='zh'
@@ -36,125 +34,74 @@ def _truncate(s: str, limit: int = PREVIEW_MAX_CHARS) -> str:
 # 5/14 demo 不演音频上传, 这是 5/22 PoC 起客户用的
 
 
-def _find_executable(name: str) -> str | None:
-    """跨平台找可执行 (homebrew / apt / 用户 PATH)."""
-    import shutil as _shutil
-    return _shutil.which(name)
-
-
-def _whisper_model_path() -> Path | None:
-    """跟 speech.rs 一样: ~/.catfish/whisper-models/ggml-small.bin (优先 small),
-    回退到 ggml-medium.bin (准确率高但慢) / ggml-large-v3.bin."""
-    base = Path.home() / ".catfish" / "whisper-models"
-    for model in ("ggml-small.bin", "ggml-medium.bin", "ggml-large-v3.bin"):
-        p = base / model
-        if p.exists():
-            return p
-    return None
+def _meeting_asr_install() -> dict | None:
+    """会议组件包装在哪 (~/.catfish/meeting-asr/current.json, Companion 装的)。没装返回 None。"""
+    cur = Path.home() / ".catfish" / "meeting-asr" / "current.json"
+    try:
+        inst = json.loads(cur.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not Path(inst.get("python", "")).is_file() or not (Path(inst.get("models", "")) / "asr").is_dir():
+        return None
+    return inst
 
 
 def _transcribe_audio_to_text(audio_path: Path, lang: str = "zh") -> tuple[str, dict[str, Any]]:
-    """跑 ffmpeg → 16kHz mono wav → whisper-cli → 转写文本.
+    """音频 / 视频 → 文字 (10/1 改版, 原来是 ffmpeg + whisper-cli)。
 
-    返回 (transcript, meta) — meta 含 duration_sec / sample_rate / model.
-    异常: 缺工具时抛 RuntimeError, parser 兜底返 error JSON.
+    解码用 macOS 自带的 afconvert (mp3 / m4a / aac / flac / opus / wav / aiff 和
+    mp4 / mov 的音轨都实测能解), 转写用会议组件包 (FunASR) 的 meeting_asr.py,
+    不分说话人。脚本跑在组件包自己的 venv 里 (本模块所在的 hermes venv 没装 FunASR)。
+    ffmpeg / whisper-cli / whisper 模型从来不在安装包里, 客户机上原来这条路是断的。
+
+    返回 (transcript, meta)。缺组件包 / 解不了的格式抛 RuntimeError, parser 兜底返 error JSON。
     """
+    import os as _os
     import subprocess as _sp
+    import tempfile as _tf
+    import wave as _wave
 
-    ffmpeg = _find_executable("ffmpeg")
-    if ffmpeg is None:
-        raise RuntimeError("ffmpeg 未装. macOS: brew install ffmpeg")
+    inst = _meeting_asr_install()
+    if inst is None:
+        raise RuntimeError("音频转文字要先在鲶鱼「会议」页下载并安装会议组件包 (一次就好)")
+    if not Path("/usr/bin/afconvert").exists():
+        raise RuntimeError("音频转文字目前只支持 macOS")
+    script = Path(__file__).with_name("meeting_asr.py")
 
-    whisper = _find_executable("whisper-cli") or _find_executable("main")
-    if whisper is None:
-        raise RuntimeError(
-            "whisper-cli 未装. macOS: brew install whisper-cpp\n"
-            "或编译 native/transcribe-helper.swift 装 catfish-transcribe (准确率最佳)"
-        )
-
-    model_path = _whisper_model_path()
-    if model_path is None:
-        raise RuntimeError(
-            "whisper 模型没下载. 跑: \n"
-            "  mkdir -p ~/.catfish/whisper-models\n"
-            "  curl -L -o ~/.catfish/whisper-models/ggml-small.bin "
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin"
-        )
-
-    # 1. ffmpeg 转 16kHz mono wav (whisper 输入要求)
-    wav_path = audio_path.with_suffix(audio_path.suffix + ".transcoded.wav")
-    duration_sec = 0.0
-    try:
-        # -loglevel error: 只输出错误, 别污染 stdout
-        # -y: 覆盖
-        # -ac 1: mono
-        # -ar 16000: 16kHz (whisper 要求)
-        ff = _sp.run(
-            [ffmpeg, "-loglevel", "error", "-y", "-i", str(audio_path),
-             "-vn",  # 不要视频流 (BL-I3.1 复用此函数处理视频时关键)
-             "-ac", "1", "-ar", "16000",
-             str(wav_path)],
-            capture_output=True, timeout=180,
-        )
-        if ff.returncode != 0:
-            raise RuntimeError(f"ffmpeg 失败: {ff.stderr.decode('utf-8', errors='replace')[:500]}")
-
-        # 拿 duration: ffprobe 优先, 没有用 ffmpeg -i 解析
-        ffprobe = _find_executable("ffprobe")
-        if ffprobe:
-            try:
-                pp = _sp.run(
-                    [ffprobe, "-v", "error", "-show_entries", "format=duration",
-                     "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path)],
-                    capture_output=True, timeout=30, text=True,
-                )
-                duration_sec = float(pp.stdout.strip() or "0")
-            except (ValueError, _sp.TimeoutExpired):
-                duration_sec = 0.0
-
-        # 2. whisper-cli 转写
-        # 跟 speech.rs 一样加 prompt 提升公文术语
-        prompt = (
-            "以下是中文工作对话, 涉及鲶鱼平台、Companion、催办、"
-            "公文汇报、月度总结、周报、资质管理、合规、ISO27001、客户、PoC、"
-            "立项、采购、招投标、技术方案、KPI、考核 等场景."
-        )
-        wp = _sp.run(
-            [whisper,
-             "-m", str(model_path),
-             "-l", lang,
-             "-f", str(wav_path),
-             "-otxt",
-             "--no-prints",
-             "--prompt", prompt],
+    with _tf.TemporaryDirectory(prefix="catfish-audio-") as td:
+        wav = Path(td) / "in.wav"
+        out = Path(td) / "t.json"
+        dec = _sp.run(
+            ["/usr/bin/afconvert", "-f", "WAVE", "-d", "LEI16@16000", "-c", "1", str(audio_path), str(wav)],
             capture_output=True, timeout=600,
         )
-
-        # whisper-cli 输出 <wav>.txt
-        txt_path = wav_path.with_suffix(".wav.txt")
-        if wp.returncode != 0:
+        if dec.returncode != 0:
             raise RuntimeError(
-                f"whisper-cli 失败 (rc={wp.returncode}): "
-                f"{wp.stderr.decode('utf-8', errors='replace')[:500]}"
+                f"这个格式解不了 (换成 mp3 / m4a / wav 再试): {dec.stderr.decode('utf-8', 'replace')[:200]}"
             )
-        if txt_path.exists():
-            transcript = txt_path.read_text(encoding="utf-8", errors="replace").strip()
-        else:
-            transcript = wp.stdout.decode("utf-8", errors="replace").strip()
-    finally:
-        # 清理 transcoded wav + .txt sidecar (留原文件)
-        for p in (wav_path, wav_path.with_suffix(".wav.txt")):
-            try:
-                if p.exists():
-                    p.unlink()
-            except OSError:
-                pass
+        with _wave.open(str(wav)) as w:
+            duration_sec = w.getnframes() / float(w.getframerate() or 16000)
+
+        empty_cache = Path.home() / ".catfish" / "meeting-asr" / ".empty-cache"
+        empty_cache.mkdir(parents=True, exist_ok=True)
+        env = dict(_os.environ, HTTPS_PROXY="http://127.0.0.1:9", HTTP_PROXY="http://127.0.0.1:9",
+                   NO_PROXY="", MODELSCOPE_CACHE=str(empty_cache), HF_HUB_OFFLINE="1",
+                   PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+        r = _sp.run(
+            [inst["python"], str(script), "--audio-file", str(wav), "--models", inst["models"],
+             "--speakers", "0", "--out", str(out)],
+            capture_output=True, env=env, timeout=max(600, int(duration_sec * 2)),
+        )
+        if r.returncode != 0 or not out.exists():
+            last = r.stdout.decode("utf-8", "replace").strip().splitlines()[-1:] or [""]
+            raise RuntimeError(f"转写失败: {last[0][:300]}")
+        transcript = (json.loads(out.read_text(encoding="utf-8")).get("text") or "").strip()
 
     meta: dict[str, Any] = {
         "duration_sec": round(duration_sec, 2),
         "sample_rate": 16000,
         "language": lang,
-        "model": model_path.name,
+        "model": f"funasr seaco-paraformer (会议组件包 {inst.get('version', '?')})",
         "transcript_chars": len(transcript),
     }
     return transcript, meta

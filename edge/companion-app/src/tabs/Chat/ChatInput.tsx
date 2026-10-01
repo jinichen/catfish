@@ -96,7 +96,7 @@ export default function ChatInput({
   // 用 parseLabel 区分 "正在解析文件" vs "正在转录音频".
   const [isParsingFile, setIsParsingFile] = useState(false);
   const [parseLabel, setParseLabel] = useState<string>("正在解析文件…");
-  // 🎤 语音录音状态 (方案 C+ 五一 sprint Day 1: Whisper.cpp 本地, ffmpeg subprocess 录)
+  // 🎤 语音录音状态 (10/1 起: 进程内录音 + 会议组件包本机转写, 见 speech.rs)
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [speechHint, setSpeechHint] = useState<string | null>(null);
@@ -131,9 +131,9 @@ export default function ChatInput({
     }
   }, [pendingPrefill, consumePrefill]);
 
-  // 🎤 录音逻辑 — ffmpeg 子进程录 + Whisper.cpp 转 (方案 C+ Day 1, 全本地)
-  // 按下 🎤: invoke speech_start_recording → Rust 启 ffmpeg avfoundation 录 wav
-  // 再按 🎤: invoke speech_stop_and_transcribe → kill ffmpeg + whisper-cli → 文字 append
+  // 🎤 录音逻辑 — 全本地 (10/1 起: 进程内录系统默认麦克风 + 会议组件包 FunASR 转写)
+  // 按下 🎤: invoke speech_start_recording
+  // 再按 🎤: invoke speech_stop_and_transcribe → 文字 append (冷启动约 15-20 秒, 跟原来 whisper medium 相当)
   // (绕过 WKWebView 不支持 navigator.mediaDevices.getUserMedia 的限制)
   async function startRecording() {
     if (isRecording || isTranscribing) return;
@@ -477,7 +477,7 @@ export default function ChatInput({
       <QueuedMessagesStrip />
 
       {/* 5/5 文件解析进行中 (Excel / 大 PDF 几秒级, 之前 0 反馈员工以为坏了)
-          BL-VOICE3 (5/10): 音频走 whisper, 几十秒级别, label 区分提示 */}
+          BL-VOICE3 (5/10): 音频本机转写, 几十秒级别, label 区分提示 */}
       {isParsingFile && (
         <div className="chat-composer__status">
           <Paperclip size={14} aria-hidden="true" />
@@ -540,7 +540,7 @@ export default function ChatInput({
             走 RecModeButton (state-driven 分层不动, P3.5.167 refactor 无破坏). */}
         <RecModeButton disabled={isStreaming} hideToolbarButton />
 
-        {/* 🎤 语音输入按钮 — 方案 C 五一 sprint Day 1: Whisper.cpp 本地
+        {/* 🎤 语音输入按钮 — 10/1 起本机 FunASR 转写 (会议组件包)
            按一下开始录音, 再按一下停止 → 自动转文字填到 textarea. 数据 100% 本地. */}
         <button
           type="button"
@@ -551,7 +551,7 @@ export default function ChatInput({
               ? "再按一下结束录音"
               : isTranscribing
               ? "识别中…"
-              : "语音输入 (Whisper.cpp 本地, 不上传)"
+              : "语音输入 (本机转写, 不上传)"
           }
           aria-label={isRecording ? "结束录音" : "语音输入"}
           data-active={isRecording || undefined}
