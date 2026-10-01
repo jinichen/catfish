@@ -133,8 +133,15 @@ mkdir -p "$HERMES_SRC/plugins/memory"
 for plugin in catfish-memory; do
     src="../hermes-plugins/$plugin"
     if [ -d "$src" ]; then
-        cp -R "$src" "$HERMES_SRC/plugins/memory/$plugin"
-        echo "  copied $plugin"
+        # 10/1: 只拷 git 跟踪的文件。原来 cp -R 整个目录, 把开发机上 .gitignore 掉的
+        # venv/ (21M · 1600+ 文件, 链到本机 python3.12, 客户机上用不了, 还带着开发机的
+        # 绝对路径和用户名)、__pycache__、.pytest_cache 一起打进了安装包, 签名时也多签一堆。
+        dest="$HERMES_SRC/plugins/memory/$plugin"
+        mkdir -p "$dest"
+        n="$(git -C "$src" ls-files | wc -l | tr -d ' ')"
+        [ "$n" -gt 0 ] || { echo "❌ $src 里没有 git 跟踪的文件 (不是在仓库里跑?)" >&2; exit 1; }
+        (cd "$src" && git ls-files -z | xargs -0 tar cf -) | (cd "$dest" && tar xf -)
+        echo "  copied $plugin ($n 个 git 跟踪的文件, 不含 venv / 缓存)"
     fi
 done
 
