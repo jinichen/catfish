@@ -50,7 +50,7 @@ export function formatFileAttachment(att: {
   // BL-L26 (5/7): 大文件 BM25 检索结果 (top-K 跟员工问题相关的段落).
   // 有这个就替代 previewText 注入 — 信息密度比"前 5 页"高很多.
   bm25Passages?: Array<{ text: string; score: number; ord: number }>;
-}): string {
+}, compact?: { previewChars: number }): string {
   const kind = att.fileKind || "file";
   const meta = att.meta || {};
 
@@ -181,6 +181,17 @@ export function formatFileAttachment(att: {
     );
   }
 
+  // 10/2: 一条消息附件很多 (一叠发票) 时每个只给短预览, 不重复代码提示 —— 见 toWire
+  if (compact) {
+    const text = att.previewText || "(空)";
+    const short = text.length > compact.previewChars ? `${text.slice(0, compact.previewChars)}…` : text;
+    return (
+      `\n\n=== 附件: ${att.name} (${metaLine}) ===\n` +
+      `[完整文件: ${att.keptPath}]\n` +
+      `${short}\n`
+    );
+  }
+
   return (
     `\n\n=== 附件: ${att.name} (${metaLine}) ===\n` +
     `[完整文件: ${att.keptPath}]\n\n` +
@@ -189,6 +200,23 @@ export function formatFileAttachment(att: {
     `--- /preview ---\n\n` +
     `🔧 **必须**用 execute_code 读完整数据再回答, 不要基于 preview 推测后面.` +
     `${codeHint}`
+  );
+}
+
+/** 10/2: 一条消息超过这么多文档附件 → 紧凑模式 (发票这种一次几十张的场景)。
+ *  原来上限 6, 每个附件 ~5000 字预览 + 一段代码提示; 30 张发票照这样拼是 15 万字。 */
+export const COMPACT_FROM = 6;
+/** 紧凑模式下所有文档预览加起来的上限 (字), 平均分给每个文件, 每个至少 PER_FILE_MIN */
+export const MANY_FILES_PREVIEW_BUDGET = 40_000;
+const PER_FILE_MIN = 600;
+
+export function formatManyFiles(files: Parameters<typeof formatFileAttachment>[0][]): string {
+  const previewChars = Math.max(PER_FILE_MIN, Math.floor(MANY_FILES_PREVIEW_BUDGET / files.length));
+  const blocks = files.map((a) => formatFileAttachment(a, { previewChars })).join("");
+  return (
+    `\n\n[共 ${files.length} 个文件。每个只给了前 ${previewChars} 字预览; ` +
+    `汇总 / 核对 / 填表要用 execute_code 逐个读上面的 [完整文件] 路径, 不要只凭预览。]` +
+    blocks
   );
 }
 
@@ -226,7 +254,9 @@ export function toWire(messages: ChatMessage[]): OpenAIWireMessage[] {
       // LLM 100% 用 execute_code 调 pandas/openpyxl/pypdfium2 读完整数据.
       // 不再有"截断"概念 — 任何大小文件都 scalable.
       let textContent = m.content || "";
-      if (fileAttachments.length > 0) {
+      if (fileAttachments.length > COMPACT_FROM) {
+        textContent = `${textContent}${formatManyFiles(fileAttachments)}`;
+      } else if (fileAttachments.length > 0) {
         const fileBlocks = fileAttachments
           .map((a) => formatFileAttachment(a))
           .join("");

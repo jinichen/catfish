@@ -180,7 +180,7 @@ export default function ChatInput({
       return;
     }
     if (attachments.length + all.length > MAX_ATTACHMENTS) {
-      setAttachError(`最多 ${MAX_ATTACHMENTS} 张图, 删几张再加`);
+      setAttachError(`一条消息最多 ${MAX_ATTACHMENTS} 个附件 (现有 ${attachments.length} 个), 删几个再加, 或分两条发`);
       return;
     }
     setIsParsingFile(true);
@@ -197,27 +197,31 @@ export default function ChatInput({
         }
       }
       const next: Attachment[] = [];
-      for (const f of arr) {
+      const failed: string[] = [];
+      for (const [i, f] of arr.entries()) {
+        // 10/2: 一次加十几个 (发票) 时显示进度, 不然"正在解析文件…"一挂半分钟像卡死
+        const progress = arr.length > 1 ? ` (${i + 1}/${arr.length})` : "";
         // BL-VOICE3 (5/10): 音频转录可能跑 30s+, 用专属 label 安抚员工
         try {
           const isAudio =
             f.type.startsWith("audio/") ||
             SUPPORTED_AUDIO_EXTS.some((ext) => (f.name || "").toLowerCase().endsWith(ext));
-          setParseLabel(isAudio ? "🎙 正在转录音频…(可能要几十秒, 取决于音频长度)" : "正在解析文件…");
+          setParseLabel(isAudio ? `🎙 正在转录音频${progress}…(可能要几十秒, 取决于音频长度)` : `正在解析文件${progress}…`);
         } catch {
           setParseLabel("正在解析文件…");
         }
         try {
           next.push(await fileToAttachment(f));
         } catch (e) {
-          // 5/5 鸿波报: 之前 throw 在 catch 里 setAttachError 后 return,
-          // setIsParsingFile(false) 没在 finally 里 → UI 卡在"解析中".
-          // 现在 try-finally 兜住, 必出 finally 关 spinner.
-          setAttachError((e as Error).message || String(e));
-          return;
+          // 10/2: 原来一个文件出错就 return, 一叠 30 张发票里一张格式不对, 另外 29 张也全丢。
+          // 现在跳过坏的, 其余照加, 最后统一说哪几个没加上。
+          failed.push(`${f.name}: ${(e as Error).message || String(e)}`);
         }
       }
       setAttachments((cur) => [...cur, ...next]);
+      if (failed.length) {
+        setAttachError(`${failed.length} 个没加上 —— ${failed.join("; ")}`);
+      }
     } finally {
       setIsParsingFile(false);
     }

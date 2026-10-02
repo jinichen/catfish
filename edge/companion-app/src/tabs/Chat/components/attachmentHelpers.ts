@@ -11,7 +11,45 @@ import type { Attachment } from "../../../types/chat";
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024; // 20MB
 // BL-VOICE3 (5/10): 音频本机转写, 大会议录音常见 30+ MB, 100MB
 export const MAX_AUDIO_BYTES = 100 * 1024 * 1024;
-export const MAX_ATTACHMENTS = 6;
+// 10/2: 6 → 30。一叠发票 (十几二十张 PDF / 照片) 原来要分好几条消息发。文档多了由
+// chatWire.formatManyFiles 压短预览, 大照片由 shrinkImage 缩到 2000px, 一条消息不会爆。
+export const MAX_ATTACHMENTS = 30;
+/** 照片超过这个大小才缩 (手机拍的发票 3-8MB; 截图一般 < 1MB, 不动) */
+export const IMAGE_SHRINK_ABOVE_BYTES = 1.5 * 1024 * 1024;
+/** 缩到长边这么多像素: 发票上的小字在 2000px 下仍清楚, 体积约原来的 1/10 */
+export const IMAGE_MAX_EDGE = 2000;
+
+/** 等比缩放后的尺寸, 长边不超过 maxEdge (本来就小就不变)。 */
+export function shrinkTarget(w: number, h: number, maxEdge = IMAGE_MAX_EDGE): { w: number; h: number } {
+  const long = Math.max(w, h);
+  if (long <= maxEdge) return { w, h };
+  const k = maxEdge / long;
+  return { w: Math.round(w * k), h: Math.round(h * k) };
+}
+
+/** 大照片 → 长边 2000px 的 JPEG (base64)。小图 / gif / svg / 缩完反而更大 → null (用原图)。 */
+async function shrinkImage(file: File): Promise<{ base64: string; mimeType: string } | null> {
+  if (file.size <= IMAGE_SHRINK_ABOVE_BYTES || /gif|svg/.test(file.type)) return null;
+  try {
+    const bmp = await createImageBitmap(file);
+    const { w, h } = shrinkTarget(bmp.width, bmp.height);
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    ctx.fillStyle = "#fff"; // 透明 PNG 转 JPEG 不要变黑底
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(bmp, 0, 0, w, h);
+    bmp.close();
+    const uri = canvas.toDataURL("image/jpeg", 0.85);
+    const base64 = uri.slice(uri.indexOf(",") + 1);
+    return base64.length * 0.75 < file.size ? { base64, mimeType: "image/jpeg" } : null;
+  } catch (e) {
+    console.warn("图片缩小失败, 用原图:", e);
+    return null;
+  }
+}
 
 // P3.3.21 (6/11): 加 .xlsm (macro 启用 xlsx, openpyxl 直接吃) / .pptx (python-pptx)
 //   / .json (内置嗅 dict / list). 老 .ppt / .doc / .rtf 在 parse_file.py 给友好
@@ -133,11 +171,14 @@ export async function fileToAttachment(file: File): Promise<Attachment> {
       );
     }
 
+    // 10/2: 发进对话的是缩过的 (一次几十张发票照片也不会让请求几百 MB);
+    // 落盘的 keptPath 仍是原图, 模型要看清某张细节可以用工具读原图。
+    const small = await shrinkImage(file);
     return {
       kind: "image",
-      mimeType: file.type,
+      mimeType: small?.mimeType ?? file.type,
       name: file.name || "pasted-image.png",
-      base64,
+      base64: small?.base64 ?? base64,
       sizeBytes: file.size,
       keptPath,
     };
