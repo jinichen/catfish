@@ -102,7 +102,11 @@ codesign_ts() {
       [[ -n "$err" ]] && printf '%s\n' "$err"
       return 0
     fi
-    if ! grep -q "timestamp service is not available" <<<"$err" || [[ $attempt -ge $CODESIGN_TS_TRIES ]]; then
+    # 10/3: 同一件事 codesign 有两种说法 —— 连不上是 "service is not available";
+    # 连上了但服务器没给回时间戳是 "A timestamp was expected but was not found"
+    # (签 lxml/etree.so 时撞到, 原来只认前一种, 直接退出没重试)
+    if ! grep -Eq "timestamp service is not available|A timestamp was expected but was not found" <<<"$err" \
+        || [[ $attempt -ge $CODESIGN_TS_TRIES ]]; then
       printf '%s\n' "$err" >&2
       if [[ $attempt -ge $CODESIGN_TS_TRIES ]]; then
         echo "❌ 时间戳服务器连了 $attempt 次都不通 (timestamp.apple.com)。" >&2
