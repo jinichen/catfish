@@ -63,6 +63,9 @@ PACK_NAME="meeting-asr-$VERSION-$PLATFORM.tar.gz"
 # Windows 的 Python 读不懂 /c/Users/...。这两个函数在 mac 上原样返回。
 winpath() { if command -v cygpath >/dev/null; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
 unixpath() { if command -v cygpath >/dev/null; then cygpath -u "$1"; else printf '%s' "$1"; fi; }
+# Git Bash 的 GNU tar 把 "D:\..." 当成"远程主机 D 上的路径", 去连一台叫 D 的机器
+# (10/2 windows-latest: 自检全过, 死在出包 "Cannot connect to D: resolve failed")。
+OUT_DIR="$(unixpath "$OUT_DIR")"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/meeting-asr-pack.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
