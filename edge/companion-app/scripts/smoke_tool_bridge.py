@@ -18,7 +18,9 @@ def main():
     parser.add_argument('--source', type=Path, required=True)
     parser.add_argument('--hermes', type=Path, required=True)
     args = parser.parse_args()
-    with tempfile.TemporaryDirectory(prefix='catfish-ipc-smoke-') as tmp:
+    # ignore_cleanup_errors: 这个冒烟验的是"真启动 + IPC 健康", 删临时目录失败不该让 MSI 挂
+    # (10/2 run 37025957104: health 已通过, 死在删 bridge.log —— 见 _stop 的说明)
+    with tempfile.TemporaryDirectory(prefix='catfish-ipc-smoke-', ignore_cleanup_errors=True) as tmp:
         endpoint = Path(tmp) / 'bridge.endpoint'
         log = Path(tmp) / 'bridge.log'
         env = dict(os.environ, PYTHONPATH=str(args.source),
@@ -57,13 +59,27 @@ def main():
                 print(log.read_text(encoding='utf-8', errors='replace'))
                 raise
             finally:
-                if proc.poll() is None:
-                    proc.terminate()
-                try:
-                    proc.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
+                _stop(proc)
+
+
+def _stop(proc):
+    """停 daemon 连同它的子进程。
+
+    Windows 上 --python 是 venv\\Scripts\\python.exe —— 一个启动器, 真解释器是它的子进程,
+    继承了 bridge.log 的句柄。只 terminate 启动器, 子进程可能还活着拿着日志, 删临时目录就
+    WinError 32。taskkill /T 连整棵进程树一起杀。
+    """
+    if proc.poll() is None:
+        if os.name == 'nt':
+            subprocess.run(['taskkill', '/PID', str(proc.pid), '/T', '/F'],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        else:
+            proc.terminate()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
 
 
 if __name__ == '__main__':
