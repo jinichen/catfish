@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
-# 打会议纪要组件包 meeting-asr-<版本>-mac-arm64.tar.gz (10/1, docs/MEETING-MINUTES-PLAN.md §3-4)。
+# 打会议纪要组件包 meeting-asr-<版本>-<平台>.tar.gz (10/1, docs/MEETING-MINUTES-PLAN.md §3-4)。
 #
 #   bash scripts/build-meeting-asr-pack.sh [版本号, 默认 1.0.0] [输出目录, 默认 ~/catfish-components]
+#
+# 平台 = 在哪台机器上跑就打哪个 (要在目标平台上跑自检):
+#   Apple Silicon Mac → mac-arm64
+#   Windows x64 (Git Bash) → windows-x64 —— 10/2 加; 平时由 .github/workflows/
+#     build-meeting-asr-pack.yml 在 windows-latest 上跑, 不用找 Windows 机器
 #
 # 输出默认放仓库外: 10/1 第一版放在 companion-app/dist/components/, 而 dist/ 是前端构建
 # 目录 —— 下一次 npm run dev / tauri build 时 vite 清空 dist/, 2.1GB 的包被连带删掉。
@@ -25,10 +30,8 @@ set -euo pipefail
 VERSION="${1:-1.0.0}"
 COMPANION="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="${2:-$HOME/catfish-components}"
-PLATFORM_TAG="macosx_12_0_arm64"
 REQS_FILE="$COMPANION/meeting-asr-requirements.txt"
 SCRIPT="$COMPANION/src-tauri/scripts/meeting_asr.py"
-PACK_NAME="meeting-asr-$VERSION-mac-arm64.tar.gz"
 MODEL_CACHE="${MEETING_PACK_MODEL_CACHE:-$HOME/.cache/modelscope}"
 
 # name=ModelScope 模型 id。改模型要同步改 meeting_asr.py 里的目录名。
@@ -40,9 +43,23 @@ MODELS=(
 )
 
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "❌ 版本号要 x.y.z: $VERSION" >&2; exit 1; }
-[[ "$(uname -s)-$(uname -m)" == "Darwin-arm64" ]] || { echo "❌ 只能在 Apple Silicon Mac 上打 (要跑自检)" >&2; exit 1; }
-PY311="$(command -v python3.11 || true)"
-[[ -n "$PY311" ]] || { echo "❌ 需要 python3.11 (uv python install 3.11)" >&2; exit 1; }
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64)
+    PLATFORM="mac-arm64"; PLATFORM_TAG="macosx_12_0_arm64"; VBIN="bin"; PYEXE="python"
+    PY311="${PY311:-$(command -v python3.11 || true)}" ;;
+  MINGW64*-x86_64|MSYS*-x86_64|CYGWIN*-x86_64)
+    # 内嵌 Python 也是 3.11 (build-windows-msi.yml 打的 cpython 3.11.15), 所以 cp311
+    PLATFORM="windows-x64"; PLATFORM_TAG="win_amd64"; VBIN="Scripts"; PYEXE="python.exe"
+    PY311="${PY311:-$(command -v python3.11 || command -v python || true)}" ;;
+  *) echo "❌ 只能在 Apple Silicon Mac 或 Windows x64 上打 (要在目标平台跑自检)" >&2; exit 1 ;;
+esac
+[[ -n "$PY311" ]] && "$PY311" -c 'import sys; sys.exit(sys.version_info[:2] != (3, 11))' \
+  || { echo "❌ 需要 python 3.11 (uv python install 3.11, 或设 PY311=...)" >&2; exit 1; }
+PACK_NAME="meeting-asr-$VERSION-$PLATFORM.tar.gz"
+# Git Bash 只自动转换"单独一个参数且以 / 开头"的路径; 嵌在 python -c 字符串里的不转,
+# Windows 的 Python 读不懂 /c/Users/...。这两个函数在 mac 上原样返回。
+winpath() { if command -v cygpath >/dev/null; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
+unixpath() { if command -v cygpath >/dev/null; then cygpath -u "$1"; else printf '%s' "$1"; fi; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/meeting-asr-pack.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
@@ -51,14 +68,15 @@ mkdir -p "$STAGE/wheels" "$STAGE/models" "$WORK/local" "$OUT_DIR"
 
 REQS=()
 while IFS= read -r line; do
-  line="${line%%#*}"; line="$(echo "$line" | xargs)"
+  # 去注释 + 去首尾空白。不用 xargs: 它会吃掉引号, `av; sys_platform == "win32"` 就坏了
+  line="${line%%#*}"; line="${line#"${line%%[![:space:]]*}"}"; line="${line%"${line##*[![:space:]]}"}"
   [[ -n "$line" ]] && REQS+=("$line")
 done <"$REQS_FILE"
-echo "=== meeting-asr $VERSION · 依赖: ${REQS[*]}"
+echo "=== meeting-asr $VERSION · $PLATFORM · 依赖: ${REQS[*]}"
 
 echo "=== [1/5] 打包环境"
 "$PY311" -m venv "$WORK/build-venv"
-BPY="$WORK/build-venv/bin/python"
+BPY="$WORK/build-venv/$VBIN/$PYEXE"
 "$BPY" -m pip install -q --upgrade pip wheel modelscope
 
 echo "=== [2/5] wheel (平台 $PLATFORM_TAG · cp311)"
@@ -84,8 +102,12 @@ for round in $(seq 1 20); do
 done
 cp "$WORK"/local/*.whl "$STAGE/wheels/" 2>/dev/null || true
 # 兜底核对: 不许混进比 macOS 12 新的 wheel
-if ls "$STAGE/wheels" | grep -E "macosx_(1[3-9]|[2-9][0-9])_" ; then
+if [[ "$PLATFORM" == mac-* ]] && ls "$STAGE/wheels" | grep -E "macosx_(1[3-9]|[2-9][0-9])_" ; then
   echo "❌ 上面这些 wheel 要求的 macOS 比 12 新" >&2; exit 1
+fi
+# 反过来也核对: 别的平台的 wheel 混进来 = 下载那步平台没钉住
+if ls "$STAGE/wheels" | grep -vE "(none-any|$PLATFORM_TAG|macosx_1[0-2]_[0-9]+_(arm64|universal2))\.whl$" | grep -E "\.whl$" ; then
+  echo "❌ 上面这些 wheel 不是 $PLATFORM 能装的" >&2; exit 1
 fi
 echo "  ✓ $(ls "$STAGE/wheels" | wc -l | xargs) 个 wheel · $(du -sh "$STAGE/wheels" | cut -f1)"
 
@@ -95,7 +117,9 @@ for pair in "${MODELS[@]}"; do
   name="${pair%%=*}"; id="${pair#*=}"
   # 模型放持久缓存 (默认 ModelScope 自己的 ~/.cache/modelscope): 2.1GB 每次重下要几十分钟,
   # 已有的 snapshot_download 只做校验。
-  dir="$("$BPY" -c "from modelscope import snapshot_download; print(snapshot_download('$id', cache_dir='$MODEL_CACHE'))" 2>/dev/null | tail -1)"
+  dir="$("$BPY" -c "import sys; from modelscope import snapshot_download; print(snapshot_download('$id', cache_dir=sys.argv[1]))" \
+        "$(winpath "$MODEL_CACHE")" 2>/dev/null | tail -1 | tr -d '\r')"
+  dir="$(unixpath "$dir")"
   [[ -d "$dir" ]] || { echo "❌ 模型下载失败: $id" >&2; exit 1; }
   cp -RL "$dir" "$STAGE/models/$name"
   rm -rf "$STAGE/models/$name/.git" "$STAGE/models/$name/.msc" "$STAGE/models/$name/.mv"
@@ -105,28 +129,64 @@ done
 
 echo "=== [4/5] 自检: 干净 venv 离线安装 + 真转写"
 "$PY311" -m venv "$WORK/check-venv"
-"$WORK/check-venv/bin/python" -m pip install -q --no-index --find-links "$STAGE/wheels" "${REQS[@]}"
+CPY="$WORK/check-venv/$VBIN/$PYEXE"
+"$CPY" -m pip install -q --no-index --find-links "$STAGE/wheels" "${REQS[@]}"
 mkdir -p "$WORK/check/audio"
 cp "$STAGE/models/asr/example/asr_example.wav" "$WORK/check/audio/seg-0001.wav" 2>/dev/null \
   || cp "$(find "$STAGE/models/asr" -name '*.wav' | head -1)" "$WORK/check/audio/seg-0001.wav"
 mkdir -p "$WORK/empty-cache"
-HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 MODELSCOPE_CACHE="$WORK/empty-cache" HF_HUB_OFFLINE=1 \
-  "$WORK/check-venv/bin/python" "$SCRIPT" --audio-dir "$WORK/check/audio" --models "$STAGE/models" \
+offline() {
+  HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 MODELSCOPE_CACHE="$(winpath "$WORK/empty-cache")" \
+    HF_HUB_OFFLINE=1 PYTHONUTF8=1 "$@"
+}
+offline "$CPY" "$SCRIPT" --audio-dir "$WORK/check/audio" --models "$STAGE/models" \
   --speakers 1 --out "$WORK/check/transcript.json" 2>"$WORK/check/stderr.txt" | tail -1
-n="$("$WORK/check-venv/bin/python" -c "import json;print(len(json.load(open('$WORK/check/transcript.json'))['segments']))")"
+n="$("$CPY" -c "import json, sys; print(len(json.load(open(sys.argv[1], encoding='utf-8'))['segments']))" \
+     "$WORK/check/transcript.json" | tr -d '\r')"
 [[ "$n" -gt 0 ]] || { cat "$WORK/check/stderr.txt" >&2; echo "❌ 自检转写结果为空" >&2; exit 1; }
+echo "  ✓ 离线转写出 $n 段 (分说话人)"
+
+if [[ "$PLATFORM" == windows-* ]]; then
+  # Windows 的语音输入 / 上传音频靠 PyAV 解码: 示例音频编成 m4a (AAC), 再走一遍
+  # --decode → 不分说话人转写, 文字要跟直接转 wav 一样
+  "$CPY" - "$WORK/check/audio/seg-0001.wav" "$WORK/check/upload.m4a" <<'PY'
+import sys, av, numpy as np, soundfile as sf
+data, sr = sf.read(sys.argv[1], dtype="int16")
+with av.open(sys.argv[2], "w", format="mp4") as c:
+    st = c.add_stream("aac", rate=sr)
+    st.layout = "mono"
+    fr = av.AudioFrame.from_ndarray(data.reshape(1, -1), format="s16", layout="mono")
+    fr.sample_rate = sr
+    for f in av.AudioResampler(format=st.format.name, layout="mono", rate=sr).resample(fr):
+        for p in st.encode(f):
+            c.mux(p)
+    for p in st.encode(None):
+        c.mux(p)
+PY
+  offline "$CPY" "$SCRIPT" --decode "$WORK/check/upload.m4a" --out "$WORK/check/upload.wav" | tail -1
+  offline "$CPY" "$SCRIPT" --audio-file "$WORK/check/upload.wav" --models "$STAGE/models" \
+    --speakers 0 --out "$WORK/check/upload.json" 2>>"$WORK/check/stderr.txt" | tail -1
+  "$CPY" - "$WORK/check/transcript.json" "$WORK/check/upload.json" <<'PY' || { cat "$WORK/check/stderr.txt" >&2; exit 1; }
+import json, sys
+a = json.load(open(sys.argv[1], encoding="utf-8"))["text"]
+b = json.load(open(sys.argv[2], encoding="utf-8"))["text"]
+print(f"  wav: {a}\n  m4a: {b}")
+sys.exit(0 if b and b == a else "❌ m4a 解码后转写结果跟原 wav 不一样")
+PY
+  echo "  ✓ PyAV 解码 m4a → 转写一致"
+fi
 [[ -z "$(find "$WORK/empty-cache" -type f | head -1)" ]] || { echo "❌ 自检时偷偷联网下载了东西" >&2; exit 1; }
-echo "  ✓ 离线转写出 $n 段"
 
 echo "=== [5/5] 出包"
-REQS_JSON="$(printf '"%s",' "${REQS[@]}")"
+REQS_JSON=""
+for r in "${REQS[@]}"; do REQS_JSON+="\"${r//\"/\\\"}\","; done  # 依赖里有引号 (环境标记), 要转义
 cat >"$STAGE/pack.json" <<JSON
 {
   "name": "meeting-asr",
   "version": "$VERSION",
-  "platform": "mac-arm64",
+  "platform": "$PLATFORM",
   "python": "3.11",
-  "min_macos": "12.0",
+  "min_os": "$([[ "$PLATFORM" == mac-* ]] && echo "macOS 12.0" || echo "Windows 10 x64")",
   "requirements": [${REQS_JSON%,}],
   "models": {${MODEL_JSON%,}},
   "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"

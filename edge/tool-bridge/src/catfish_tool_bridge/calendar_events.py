@@ -43,6 +43,11 @@ def _is_macos() -> bool:
     return platform.system() == "Darwin"
 
 
+def _is_windows() -> bool:
+    """10/2: Windows 走 Outlook 日历 (outlook_pim.py), 跟 Companion 界面 system_outlook.rs 同一处。"""
+    return platform.system() == "Windows"
+
+
 def _run_osascript(script: str, timeout_sec: float = 10.0) -> tuple[bool, str, str]:
     """跑一段 AppleScript, 返 (success, stdout, stderr).
 
@@ -204,10 +209,35 @@ def tool_create_calendar_event(args: dict[str, Any]) -> dict[str, Any]:
     calendar_name = (args.get("calendar_name") or "工作").strip()
     alarms_min = _normalize_alarms(args.get("alarm_minutes_before"))
 
+    if _is_windows():
+        from . import outlook_pim  # noqa: PLC0415
+        try:
+            used = outlook_pim.create_calendar_event(
+                title, start_iso, end_iso, location, description, calendar_name, alarms_min,
+            )
+        except outlook_pim.OutlookError as e:
+            return {"ok": False, "error": str(e), "needs_outlook": e.no_outlook}
+        logger.info("BL-CALENDAR: Outlook 事件 '%s' (cal=%s, start=%s)", title, used, start_iso)
+        # Outlook 一个事件只有一个提醒, 取最早的那个 (outlook_pim 同注释)
+        remind = max(alarms_min) if alarms_min else None
+        return {
+            "ok": True,
+            "event_summary": title,
+            "calendar_name": used or calendar_name,
+            "start_iso": start_iso,
+            "end_iso": end_iso,
+            "location": location or None,
+            "alarm_minutes_before": [remind] if remind is not None else None,
+            "summary": (
+                f"📅 已在 Outlook 日历「{used or calendar_name}」创建事件「{title}」 开始: {start_iso} 结束: {end_iso}"
+                + (f" 地点: {location}" if location else "")
+                + (f" 提醒: 开始前 {remind} 分钟 (Outlook 一个事件只能设一个提醒)" if remind is not None else " 无提醒")
+            ),
+        }
     if not _is_macos():
         return {
             "ok": False,
-            "error": "create_calendar_event 只 macOS 支持 (走 Calendar.app). 当前平台: "
+            "error": "create_calendar_event 只支持 macOS (Calendar.app) / Windows (Outlook). 当前平台: "
                      + platform.system(),
         }
 
@@ -312,10 +342,20 @@ end tell'''
 
 def tool_list_calendars(args: dict[str, Any]) -> dict[str, Any]:
     """catfish_list_calendars tool 入口."""
+    if _is_windows():
+        from . import outlook_pim  # noqa: PLC0415
+        try:
+            cals = outlook_pim.list_calendars()
+        except outlook_pim.OutlookError as e:
+            return {"ok": False, "error": str(e), "calendar_names": []}
+        return {
+            "ok": True, "calendar_names": cals, "count": len(cals),
+            "summary": f"📅 Outlook 有 {len(cals)} 个日历: {', '.join(cals) if cals else '(无)'}",
+        }
     if not _is_macos():
         return {
             "ok": False,
-            "error": "list_calendars 只 macOS 支持. 当前平台: " + platform.system(),
+            "error": "list_calendars 只支持 macOS / Windows (Outlook). 当前平台: " + platform.system(),
             "calendar_names": [],
         }
 

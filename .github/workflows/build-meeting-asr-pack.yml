@@ -1,0 +1,52 @@
+name: Build meeting-asr pack (Windows)
+
+# 会议纪要组件包的 Windows 版 (10/2)。mac 版在 Apple Silicon 打包机上手动打
+# (edge/companion-app/scripts/build-meeting-asr-pack.sh); Windows 版要在 Windows 上
+# 打 + 自检 (离线装进干净 venv, 真转写一次, 再用 PyAV 解 m4a 转一次), 所以放这里。
+#
+# 产物 meeting-asr-<版本>-windows-x64.tar.gz (~2.7GB) 作为 artifact 留 7 天:
+# 下载 → 放进中央 components/ → python3 delivery/catfish-poc/tools/build_component_manifest.py
+# 重新生成清单 → Windows 员工在「会议」页就能下载安装。
+#
+# 只手动触发: 模型 2.1GB + wheel 几百 MB, 跑一次 20-40 分钟。
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "组件包版本号 (x.y.z, 跟 mac 版对齐)"
+        required: true
+        default: "1.0.1"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: meeting-asr windows-x64
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      # 内嵌 Python 是 3.11 (build-windows-msi.yml), 包里的 wheel 必须是 cp311
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Build + self-test
+        shell: bash
+        env:
+          PY311: python
+          MEETING_PACK_MODEL_CACHE: ${{ runner.temp }}/modelscope
+        run: |
+          bash edge/companion-app/scripts/build-meeting-asr-pack.sh \
+            "${{ inputs.version }}" "$RUNNER_TEMP/meeting-asr-out"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: meeting-asr-${{ inputs.version }}-windows-x64
+          path: ${{ runner.temp }}/meeting-asr-out/meeting-asr-${{ inputs.version }}-windows-x64.tar.gz
+          # 已经是 .tar.gz, 再压只是白耗时间
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error

@@ -22,8 +22,10 @@
 //!
 //! # 依赖 (员工首次部署)
 //!
-//!   - mac: brew install piper-tts  或 download piper.tar.gz from GitHub release
-//!   - win: 内置 piper.exe 到 .exe bundle (BL-WIN9 同款 binary 探测)
+//!   - mac: bash scripts/install-piper-tts.sh → ~/.catfish/piper-venv/bin/piper
+//!   - win: powershell -File scripts/install-piper-tts.ps1 → ~/.catfish/piper-venv/Scripts/piper.exe
+//!     (10/2: 原来 Windows 是个"Phase 2"桩, 点 🔊 直接报错。piper-tts 有 win_amd64 wheel,
+//!     跟 mac 一样装进 venv 就行; 合成代码两边是同一份)
 //!   - 模型: ~/.catfish/piper-voices/zh_CN-huayan-medium.onnx + .json
 //!     首次启动检测到没装 → log warn + 返 Err 引导员工下载 (跟 whisper 同款)
 //!
@@ -40,11 +42,11 @@
 //!   模型文件没下 → 返清楚错误 + 下载命令
 //!   text 太长 (>5000 字) → 截到 5000 字, log warn (避免合成几分钟卡死)
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 use std::path::PathBuf;
 use tauri::Window;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 const MAX_TTS_TEXT_LEN: usize = 5000;
 // 默认中文女声 medium — 鸿波 5/10 踩坑确认: HuggingFace zh_CN 系列 quality
 // 上限就是 medium, 没有 high (英文 voice 才有完整四档). 不要改 high.
@@ -60,6 +62,25 @@ const DEFAULT_VOICE: &str = "zh_CN-huayan-medium";
 ///      → ~/.local/bin/piper
 ///   3. GitHub release tarball
 ///      → 解压到任意位置, 设 CATFISH_PIPER env 指
+/// Windows 版 (10/2)。install-piper-tts.ps1 跟 mac 脚本一样装进 ~/.catfish/piper-venv,
+/// 只是 venv 的可执行文件在 Scripts\piper.exe。PATH 用 `;` 分隔。
+#[cfg(windows)]
+fn find_piper_executable() -> Option<PathBuf> {
+    if let Ok(custom) = std::env::var("CATFISH_PIPER") {
+        let p = PathBuf::from(custom);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    if let Ok(home) = crate::util::paths::home_env() {
+        let p = PathBuf::from(&home).join(".catfish").join("piper-venv").join("Scripts").join("piper.exe");
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    std::env::var("PATH").ok()?.split(';').map(|d| PathBuf::from(d).join("piper.exe")).find(|p| p.exists())
+}
+
 #[cfg(target_os = "macos")]
 fn find_piper_executable() -> Option<PathBuf> {
     // 1. env override (员工自己装别处)
@@ -127,7 +148,7 @@ fn find_piper_executable() -> Option<PathBuf> {
     None
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn voice_dir() -> Result<PathBuf, String> {
     let home = crate::util::paths::home_env().map_err(|_| "HOME env 未设".to_string())?;
     Ok(PathBuf::from(home).join(".catfish").join("piper-voices"))
@@ -143,7 +164,7 @@ fn voice_dir() -> Result<PathBuf, String> {
 ///   4. DEFAULT_VOICE (zh_CN-huayan-medium)
 ///
 /// 失败 silent — yaml 不存在 / 解析错都返 None, 走下层 fallback.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn read_yaml_voice() -> Option<String> {
     use serde::Deserialize;
 
@@ -177,7 +198,7 @@ fn read_yaml_voice() -> Option<String> {
 /// high voice 时 curl 拿到 15 字节 pointer text (`version https://git-lfs.../`),
 /// piper 打开 .onnx.json 报 JSONDecodeError. 真文件 .onnx ~30-80MB / .onnx.json ~5KB,
 /// 任一 < 1KB 直接判定为 LFS pointer 假文件, 让员工重下而不是看 piper 一脸懵.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn voice_model_path(voice: &str) -> Result<PathBuf, String> {
     // env override 直接给完整路径
     if let Ok(custom) = std::env::var("CATFISH_PIPER_MODEL") {
@@ -187,6 +208,15 @@ fn voice_model_path(voice: &str) -> Result<PathBuf, String> {
     let dir = voice_dir()?;
     let onnx = dir.join(format!("{voice}.onnx"));
     let json = dir.join(format!("{voice}.onnx.json"));
+    // Windows 上下面那些 mkdir -p / rm / curl \ 续行的命令敲不了, 指到安装脚本
+    // (它会校验大小、坏了重下)。
+    let windows_hint = |what: &str| {
+        format!(
+            "piper 语音模型{what}: {}\n\n重新跑一遍安装脚本 (会删掉坏文件重下):\n  \
+             powershell -ExecutionPolicy Bypass -File edge\\companion-app\\scripts\\install-piper-tts.ps1",
+            onnx.display()
+        )
+    };
 
     if onnx.exists() && json.exists() {
         // BL-VOICE2 fix5: size 健全性检查
@@ -195,6 +225,9 @@ fn voice_model_path(voice: &str) -> Result<PathBuf, String> {
         // .onnx 真模型最少 5MB (x_low ~5MB), pointer 一般 < 200 字节
         // .onnx.json 真配置 1-10KB, pointer 一般 < 200 字节
         if onnx_size < 1_000_000 || json_size < 500 {
+            if cfg!(windows) {
+                return Err(windows_hint("文件大小异常 (像 HuggingFace LFS pointer, 不是真模型)"));
+            }
             return Err(format!(
                 "voice 模型文件 size 异常 (像 HuggingFace LFS pointer 不是真模型):\n  \
                  {} = {} 字节 (期望 >= 5MB)\n  \
@@ -215,6 +248,9 @@ fn voice_model_path(voice: &str) -> Result<PathBuf, String> {
         return Ok(onnx);
     }
 
+    if cfg!(windows) {
+        return Err(windows_hint("还没下载"));
+    }
     Err(format!(
         "piper voice 模型未下载: {}/\n\
          缺 {}.onnx 或 {}.onnx.json\n\n\
@@ -238,7 +274,7 @@ fn voice_model_path(voice: &str) -> Result<PathBuf, String> {
 /// 参数:
 ///   text: 待合成文本 (>5000 字会截断)
 ///   voice: 可选, 默认 yaml.tts.voice 或 "zh_CN-huayan-medium"
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 #[tauri::command]
 pub async fn tts_synthesize(
     _window: Window,
@@ -270,13 +306,21 @@ pub async fn tts_synthesize(
         .unwrap_or_else(|| DEFAULT_VOICE.to_string());
 
     let piper_bin = find_piper_executable().ok_or_else(|| {
-        "piper 二进制找不到. 一键装 (推荐, 走 venv 不依赖代理 / 不动系统 Python):\n  \
-         bash edge/companion-app/scripts/install-piper-tts.sh\n\n\
-         或手动:\n  \
-         python3 -m venv ~/.catfish/piper-venv\n  \
-         ~/.catfish/piper-venv/bin/pip install piper-tts\n\n\
-         安装别处时, 设 env CATFISH_PIPER=/path/to/piper 重启 Companion.\n\
-         注: brew install piper-tts formula 不存在 (5/10 鸿波踩过), 别试.".to_string()
+        if cfg!(windows) {
+            "piper 找不到. 一键装 (装进 %USERPROFILE%\\.catfish\\piper-venv, 顺带下中文语音模型):\n  \
+             powershell -ExecutionPolicy Bypass -File edge\\companion-app\\scripts\\install-piper-tts.ps1\n\n\
+             装在别处时, 设环境变量 CATFISH_PIPER=C:\\path\\to\\piper.exe 再重启 Companion."
+                .to_string()
+        } else {
+            "piper 二进制找不到. 一键装 (推荐, 走 venv 不依赖代理 / 不动系统 Python):\n  \
+             bash edge/companion-app/scripts/install-piper-tts.sh\n\n\
+             或手动:\n  \
+             python3 -m venv ~/.catfish/piper-venv\n  \
+             ~/.catfish/piper-venv/bin/pip install piper-tts\n\n\
+             安装别处时, 设 env CATFISH_PIPER=/path/to/piper 重启 Companion.\n\
+             注: brew install piper-tts formula 不存在 (5/10 鸿波踩过), 别试."
+                .to_string()
+        }
     })?;
 
     let model = voice_model_path(&voice_id)?;
@@ -321,6 +365,10 @@ pub async fn tts_synthesize(
                 "--length-scale",
                 "1.05",
             ])
+            // piper 是 Python 写的, 从 stdin 读文字。Windows 上 stdin 默认按系统代码页
+            // (中文系统 GBK) 解码, 我们写进去的是 UTF-8 → 中文全乱。两边都钉 UTF-8。
+            .env("PYTHONUTF8", "1")
+            .env("PYTHONIOENCODING", "utf-8")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
@@ -374,7 +422,7 @@ pub async fn tts_synthesize(
 
 /// 检测 piper / 默认 voice 模型是否就绪. 给前端 onboarding 显状态用.
 /// BL-VOICE2 fix4 (5/10): 跟 tts_synthesize 的 voice 解析逻辑一致, 走 env > yaml > 默认.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 #[tauri::command]
 pub fn tts_status() -> Result<TtsStatus, String> {
     let piper_bin = find_piper_executable();
@@ -398,7 +446,7 @@ pub fn tts_status() -> Result<TtsStatus, String> {
 // 版本 cfg 不匹配跳), 通; Windows build 两个都编 (无 gate default 编 + not-macos
 // 匹配) → E0428 duplicate struct + E0119 duplicate impl.
 // 军规违反 #22: struct 定义忘同款 gate, 但 fn tts_status 有 (line 376).
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 #[derive(Debug, serde::Serialize)]
 pub struct TtsStatus {
     pub piper_installed: bool,
@@ -408,22 +456,19 @@ pub struct TtsStatus {
     pub voice_dir: Option<String>,
 }
 
-// ===== 非 macOS stub =====
-//
-// BL-WIN1 后续: Win 端打包 piper.exe 到 bundle resource, find_executable 改读
-// resource path. Linux 同模板. 现在先 mac, 跟 STT 节奏一致.
+// ===== Linux stub (macOS / Windows 见上面) =====
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 #[tauri::command]
 pub async fn tts_synthesize(
     _window: Window,
     _text: String,
     _voice: Option<String>,
 ) -> Result<String, String> {
-    Err("Piper TTS Phase 2 加 Win/Linux, 现在 macOS only.".to_string())
+    Err("朗读 (Piper TTS) 目前支持 macOS / Windows".to_string())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 #[tauri::command]
 pub fn tts_status() -> Result<TtsStatus, String> {
     Ok(TtsStatus {
@@ -435,7 +480,7 @@ pub fn tts_status() -> Result<TtsStatus, String> {
     })
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 #[derive(Debug, serde::Serialize)]
 pub struct TtsStatus {
     pub piper_installed: bool,

@@ -11,3 +11,7 @@ torchaudio==2.11.0
 funasr==1.4.16
 transformers>=4.40
 soundfile
+# 10/2: Windows 没有 afconvert, 上传的 mp3 / m4a / 视频音轨靠 PyAV 解码 (自带 ffmpeg 解码库,
+# 不用员工另装)。只装在 Windows 包里: macOS 包继续用系统 afconvert, 也省掉 PyAV 对 macOS
+# 版本的要求 (mac 包要守 macOS 12 下限)。
+av; sys_platform == "win32"

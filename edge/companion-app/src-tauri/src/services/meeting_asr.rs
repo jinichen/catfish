@@ -136,10 +136,9 @@ fn install_inner(
     )?;
 
     on_step("checking");
-    run(
-        crate::services::process::python_command(&py).args(["-c", "import funasr, torch, torchaudio, soundfile"]),
-        "依赖自检",
-    )?;
+    // Windows 包多一个 PyAV (解码用, 见 decode_to_wav16k), 一起验
+    let check = if cfg!(windows) { "import funasr, torch, torchaudio, soundfile, av" } else { "import funasr, torch, torchaudio, soundfile" };
+    run(crate::services::process::python_command(&py).args(["-c", check]), "依赖自检")?;
 
     on_step("finishing");
     let models = root.join(format!("models-{}", pj.version));
@@ -190,8 +189,7 @@ pub enum AudioInput<'a> {
     /// 会议录音目录 (seg-*.wav, 原生采样率)
     Dir(&'a Path),
     /// 单个 16k wav (语音输入 / 上传的音频文件, 先 decode_to_wav16k)。
-    /// 目前只有 macOS 的语音输入用 (speech.rs), Windows 上没人构造。
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
     File(&'a Path),
 }
 
@@ -204,25 +202,42 @@ pub struct TranscribeArgs<'a> {
     pub hotwords: &'a [String],
 }
 
-/// 任意音频 / 视频文件 → 16k 单声道 wav。macOS 用系统自带的 afconvert (CoreAudio):
-/// mp3 / m4a / aac / flac / opus / wav / aiff 以及 mp4 / mov 的音轨都实测能解 ——
-/// 不再要员工 brew 装 ffmpeg (那个从来不在安装包里, 客户机上没有)。
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub fn decode_to_wav16k(input: &Path, out: &Path) -> Result<(), String> {
-    if !cfg!(target_os = "macos") {
-        return Err("音频解码目前只支持 macOS".into());
+/// 任意音频 / 视频文件 → 16k 单声道 wav。
+///
+/// macOS 用系统自带的 afconvert (CoreAudio): mp3 / m4a / aac / flac / opus / wav / aiff
+/// 以及 mp4 / mov 的音轨都实测能解 —— 不再要员工 brew 装 ffmpeg (那个从来不在安装包里)。
+///
+/// Windows 没有对应的系统工具 (10/2): 用组件包 venv 跑 meeting_asr.py --decode, 里面是
+/// PyAV (自带 ffmpeg 解码库, 只装在 Windows 包里)。
+#[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
+pub fn decode_to_wav16k(inst: &Installed, script: &Path, input: &Path, out: &Path) -> Result<(), String> {
+    const HINT: &str = "音频解码 (这个格式可能不支持, 换成 mp3 / m4a / wav 再试)";
+    if cfg!(target_os = "macos") {
+        return run(
+            crate::services::process::background_command("/usr/bin/afconvert")
+                .args(["-f", "WAVE", "-d", "LEI16@16000", "-c", "1"])
+                .arg(input)
+                .arg(out),
+            HINT,
+        );
+    }
+    if !cfg!(windows) {
+        return Err("音频解码目前只支持 macOS / Windows".into());
     }
     run(
-        crate::services::process::background_command("/usr/bin/afconvert")
-            .args(["-f", "WAVE", "-d", "LEI16@16000", "-c", "1"])
+        crate::services::process::python_command(&inst.python)
+            .arg(script)
+            .arg("--decode")
             .arg(input)
-            .arg(out),
-        "音频解码 (这个格式可能不支持, 换成 mp3 / m4a / wav 再试)",
+            .arg("--out")
+            .arg(out)
+            .env("PYTHONUTF8", "1"),
+        HINT,
     )
 }
 
 /// 转写结果里的整段文字。
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
 pub fn read_text(out: &Path) -> Result<String, String> {
     let v: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(out).map_err(|e| format!("读转写结果失败: {e}"))?,

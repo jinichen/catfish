@@ -1,6 +1,7 @@
 """Audio file parsing — 抽自 parse_file.py (5/21 拆分).
 
 音频 / 视频转文字 —— 10/1 起走 afconvert 解码 + 会议组件包 (FunASR), 不再用 ffmpeg + whisper.cpp。
+10/2 起 Windows 也能用: 解码改由组件包里的 PyAV (meeting_asr.py --decode)。
 """
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ def _truncate(s: str, limit: int = PREVIEW_MAX_CHARS) -> str:
 
 # ============================================================
 #
-# 10/1: afconvert (macOS 自带) 解码成 16k 单声道 wav → 会议组件包的 meeting_asr.py 转写
+# 10/1: afconvert (macOS 自带) / PyAV (Windows, 10/2) 解码成 16k 单声道 wav → 会议组件包的 meeting_asr.py 转写
 # (FunASR, 不分说话人)。跟 src/commands/speech.rs (聊天 🎤 / 上传音频) 同一套。
 # 组件包没装 → RuntimeError 提示去「会议」页装; 不再需要 brew 的 ffmpeg / whisper-cpp。
 #
@@ -46,6 +47,14 @@ def _meeting_asr_install() -> dict | None:
     return inst
 
 
+def _has_afconvert() -> bool:
+    return Path("/usr/bin/afconvert").exists()
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
 def _transcribe_audio_to_text(audio_path: Path, lang: str = "zh") -> tuple[str, dict[str, Any]]:
     """音频 / 视频 → 文字 (10/1 改版, 原来是 ffmpeg + whisper-cli)。
 
@@ -64,21 +73,25 @@ def _transcribe_audio_to_text(audio_path: Path, lang: str = "zh") -> tuple[str, 
     inst = _meeting_asr_install()
     if inst is None:
         raise RuntimeError("音频转文字要先在鲶鱼「会议」页下载并安装会议组件包 (一次就好)")
-    if not Path("/usr/bin/afconvert").exists():
-        raise RuntimeError("音频转文字目前只支持 macOS")
     script = Path(__file__).with_name("meeting_asr.py")
+    # Windows 上起 python.exe 不加这个会闪黑框
+    no_window = {"creationflags": getattr(_sp, "CREATE_NO_WINDOW", 0)} if _is_windows() else {}
 
     with _tf.TemporaryDirectory(prefix="catfish-audio-") as td:
         wav = Path(td) / "in.wav"
         out = Path(td) / "t.json"
-        dec = _sp.run(
-            ["/usr/bin/afconvert", "-f", "WAVE", "-d", "LEI16@16000", "-c", "1", str(audio_path), str(wav)],
-            capture_output=True, timeout=600,
-        )
-        if dec.returncode != 0:
-            raise RuntimeError(
-                f"这个格式解不了 (换成 mp3 / m4a / wav 再试): {dec.stderr.decode('utf-8', 'replace')[:200]}"
-            )
+        if _has_afconvert():
+            cmd = ["/usr/bin/afconvert", "-f", "WAVE", "-d", "LEI16@16000", "-c", "1", str(audio_path), str(wav)]
+        elif _is_windows():
+            # Windows 没有 afconvert: 组件包 venv 里的 PyAV 解 (Windows 包才装 PyAV)
+            cmd = [inst["python"], str(script), "--decode", str(audio_path), "--out", str(wav)]
+        else:
+            raise RuntimeError("音频转文字目前只支持 macOS / Windows")
+        dec = _sp.run(cmd, capture_output=True, timeout=600,
+                      env=dict(_os.environ, PYTHONUTF8="1"), **no_window)
+        if dec.returncode != 0 or not wav.exists():
+            why = (dec.stderr or dec.stdout).decode("utf-8", "replace").strip()[-200:]
+            raise RuntimeError(f"这个格式解不了 (换成 mp3 / m4a / wav 再试): {why}")
         with _wave.open(str(wav)) as w:
             duration_sec = w.getnframes() / float(w.getframerate() or 16000)
 
@@ -90,7 +103,7 @@ def _transcribe_audio_to_text(audio_path: Path, lang: str = "zh") -> tuple[str, 
         r = _sp.run(
             [inst["python"], str(script), "--audio-file", str(wav), "--models", inst["models"],
              "--speakers", "0", "--out", str(out)],
-            capture_output=True, env=env, timeout=max(600, int(duration_sec * 2)),
+            capture_output=True, env=env, timeout=max(600, int(duration_sec * 2)), **no_window,
         )
         if r.returncode != 0 or not out.exists():
             last = r.stdout.decode("utf-8", "replace").strip().splitlines()[-1:] or [""]

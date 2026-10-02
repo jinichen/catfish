@@ -8,7 +8,10 @@
 //! 现在:
 //!   录音 = services::meeting_recorder (进程内 cpal, 系统默认麦克风, 10 分钟上限)
 //!   转写 = 会议组件包 (FunASR) 的 meeting_asr.py, `--speakers 0` 不分说话人
-//!   解码 = macOS 自带 afconvert (上传的 mp3 / m4a / 视频音轨 → 16k wav)
+//!   解码 = macOS 自带 afconvert / Windows 组件包里的 PyAV (上传的 mp3 / m4a / 视频音轨 → 16k wav)
+//!
+//! 10/2: Windows 也开了 (原来非 macOS 一律"只支持 macOS")。录音本来就是 cpal 跨平台,
+//! 缺的只是 Windows 版会议组件包和解码 —— 见 scripts/build-meeting-asr-pack.sh。
 //!
 //! 命令名和返回形状不变, 聊天输入框 / 录屏学习 (RecordingOverlay) 一行不用改。
 //!
@@ -20,7 +23,7 @@
 
 use tauri::Window;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 mod imp {
     use std::path::{Path, PathBuf};
 
@@ -100,7 +103,6 @@ mod imp {
 
     /// 上传的音频: base64 → 原文件 → afconvert 16k wav → 转写。返回 (文字, 时长秒)。
     pub(super) fn transcribe_bytes(bytes: &[u8], filename: &str) -> Result<(String, Option<f64>), String> {
-        need_asr()?;
         let ext = Path::new(filename).extension().and_then(|e| e.to_str()).unwrap_or("bin").to_lowercase();
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -109,7 +111,9 @@ mod imp {
         let raw = std::env::temp_dir().join(format!("catfish-audio-raw-{stamp}.{ext}"));
         let wav = std::env::temp_dir().join(format!("catfish-audio-{stamp}.wav"));
         std::fs::write(&raw, bytes).map_err(|e| format!("写临时文件失败: {e}"))?;
-        let r = asr::decode_to_wav16k(&raw, &wav).and_then(|_| {
+        let inst = need_asr()?;
+        let script = super::super::file_parse_env::find_script("meeting_asr.py")?;
+        let r = asr::decode_to_wav16k(&inst, &script, &raw, &wav).and_then(|_| {
             let secs = hound::WavReader::open(&wav)
                 .ok()
                 .map(|r| r.duration() as f64 / r.spec().sample_rate.max(1) as f64);
@@ -128,16 +132,16 @@ pub struct TranscribeResult {
     pub original_filename: String,
 }
 
-#[cfg(not(target_os = "macos"))]
-const UNSUPPORTED: &str = "语音转文字目前只支持 macOS";
+#[cfg(not(any(target_os = "macos", windows)))]
+const UNSUPPORTED: &str = "语音转文字目前只支持 macOS / Windows";
 
 #[tauri::command]
 pub fn speech_start_recording(_window: Window) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     {
         imp::start()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         Err(UNSUPPORTED.into())
     }
@@ -145,7 +149,7 @@ pub fn speech_start_recording(_window: Window) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn speech_stop_and_transcribe(_window: Window) -> Result<String, String> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     {
         let text = tauri::async_runtime::spawn_blocking(imp::stop_and_transcribe)
             .await
@@ -153,7 +157,7 @@ pub async fn speech_stop_and_transcribe(_window: Window) -> Result<String, Strin
         log::info!("speech_stop_and_transcribe: ✅ 识别 {} 字", text.chars().count());
         Ok(text)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         Err(UNSUPPORTED.into())
     }
@@ -161,11 +165,11 @@ pub async fn speech_stop_and_transcribe(_window: Window) -> Result<String, Strin
 
 #[tauri::command]
 pub fn speech_cancel_recording(_window: Window) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     {
         imp::cancel()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         Ok(())
     }
@@ -179,7 +183,7 @@ pub async fn transcribe_audio_from_b64(
     file_b64: String,
     filename: String,
 ) -> Result<TranscribeResult, String> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     {
         use base64::Engine;
         let bytes = base64::engine::general_purpose::STANDARD
@@ -195,7 +199,7 @@ pub async fn transcribe_audio_from_b64(
             .map_err(|e| format!("转写任务异常: {e}"))??;
         Ok(TranscribeResult { text, duration_sec, original_filename: filename })
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         let _ = (file_b64, filename);
         Err(UNSUPPORTED.into())

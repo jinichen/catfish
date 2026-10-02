@@ -1,0 +1,45 @@
+name: Windows TTS smoke
+
+# 朗读 (Piper TTS) 的 Windows 安装脚本冒烟 (10/2)。
+#
+# edge/companion-app/scripts/install-piper-tts.ps1 是员工自己在 Windows 上跑的,
+# 开发机是 mac 没法验。这里在 windows-latest 上用 Windows PowerShell 5.1 (员工机器
+# 默认就是它) 真跑一遍: 建 venv → pip 装 piper-tts → 下中文语音 → 合成一句中文。
+#
+# 额外核对一件脚本自己不查的事: 合成出的音频时长。stdin 编码弄错时 piper 拿到的是
+# 一串 "????", 照样能出一个很短的 wav —— 只看"文件存在"会把乱码当成功。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  piper:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      # 员工机器上脚本用 Companion 自带的 python 3.11; runner 上没有, 给它一个同版本的
+      - uses: actions/setup-python@v6
+        id: py
+        with:
+          python-version: "3.11"
+
+      - name: install-piper-tts.ps1 (Windows PowerShell 5.1)
+        shell: powershell
+        env:
+          CATFISH_PYTHON: ${{ steps.py.outputs.python-path }}
+        run: |
+          $PSVersionTable.PSVersion
+          & edge\companion-app\scripts\install-piper-tts.ps1
+          if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Chinese text really got synthesized
+        shell: powershell
+        run: |
+          $wav = Join-Path $env:TEMP 'catfish-piper-test.wav'
+          & "${{ steps.py.outputs.python-path }}" -c "import wave,sys; w=wave.open(sys.argv[1]); d=w.getnframes()/w.getframerate(); print(f'duration {d:.2f}s'); sys.exit(0 if d >= 1.5 else 'too short: stdin encoding broken?')" $wav
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Test-Path (Join-Path $env:USERPROFILE '.catfish\piper-venv\Scripts\piper.exe')

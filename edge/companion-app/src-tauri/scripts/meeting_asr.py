@@ -9,6 +9,10 @@ FunASR: FSMN-VAD + SeACo-Paraformer (支持热词) + CT-Transformer 标点 + CAM
     # 语音输入 / 上传的音频文件: 单个 16k wav, 不分说话人
     python meeting_asr.py --audio-file x.wav --models <models 目录> --speakers 0 --out t.json
 
+    # Windows 解码 (10/2): 任意音频 / 视频 → 16k 单声道 wav。macOS 用系统 afconvert,
+    # Windows 没有对应的系统工具, 用组件包里的 PyAV (只在 Windows 包里装)
+    python meeting_asr.py --decode in.m4a --out in.wav
+
 stdout 每行一个 JSON 事件, Companion 逐行读:
     {"event":"phase","phase":"loading"|"preparing"|"recognizing"|"writing"}
     {"event":"done","out":..., "segments":N, "speakers":N, "duration_secs":X}
@@ -69,6 +73,48 @@ def concat_to_16k(segments: list[Path], out: Path) -> float:
     return len(audio) / TARGET_SR
 
 
+def decode_to_16k(src: Path, dst: Path) -> float:
+    """任意音频 / 视频 (mp3 / m4a / aac / flac / ogg / opus / wma / mp4 / mov ...) → 16k 单声道 wav。
+
+    返回时长 (秒)。PyAV 自带 ffmpeg 解码库, 不用员工另装 ffmpeg。
+    """
+    import av
+    import numpy as np
+    import soundfile as sf
+
+    chunks = []
+    with av.open(str(src)) as container:
+        stream = next((s for s in container.streams if s.type == "audio"), None)
+        if stream is None:
+            raise RuntimeError("这个文件里没有音轨")
+        resampler = av.AudioResampler(format="s16", layout="mono", rate=TARGET_SR)
+        for frame in container.decode(stream):
+            for out in resampler.resample(frame):
+                chunks.append(out.to_ndarray().reshape(-1))
+        for out in resampler.resample(None):  # 冲掉重采样器里剩的
+            chunks.append(out.to_ndarray().reshape(-1))
+    pcm = np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.int16)
+    sf.write(str(dst), pcm.astype(np.int16), TARGET_SR, subtype="PCM_16")
+    return len(pcm) / TARGET_SR
+
+
+def lower_priority() -> None:
+    """会后转写占满 CPU 好几分钟, 不该让员工手上的活卡顿。
+
+    macOS 由 Companion 用 nice 起; Windows 没有 nice, 进程自己降到"低于正常"。
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        below_normal = 0x00004000
+        k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        k32.SetPriorityClass(k32.GetCurrentProcess(), below_normal)
+    except Exception:  # noqa: BLE001 —— 降不了也照样转
+        pass
+
+
 def to_segments(result: dict) -> list[dict]:
     out = []
     for s in result.get("sentence_info") or []:
@@ -91,6 +137,21 @@ def main(argv: list[str] | None = None) -> int:
             stream.reconfigure(encoding="utf-8", errors="replace")
     _EVENTS = sys.stdout
     sys.stdout = sys.stderr
+    argv = sys.argv[1:] if argv is None else argv
+    if "--decode" in argv:
+        dp = argparse.ArgumentParser()
+        dp.add_argument("--decode", required=True, type=Path)
+        dp.add_argument("--out", required=True, type=Path)
+        d = dp.parse_args(argv)
+        try:
+            secs = decode_to_16k(d.decode, d.out)
+            emit("done", out=str(d.out), segments=0, speakers=0, duration_secs=round(secs, 2))
+            return 0
+        except Exception as e:  # noqa: BLE001
+            emit("error", message=f"音频解码失败 (这个格式可能不支持, 换成 mp3 / m4a / wav 再试): {type(e).__name__}: {e}")
+            return 1
+
+    lower_priority()
     ap = argparse.ArgumentParser()
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--audio-dir", type=Path)

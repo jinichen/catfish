@@ -328,3 +328,55 @@ def test_transcribe_passes_args_and_reads_text(monkeypatch: pytest.MonkeyPatch, 
     assert text == "会议纪要测试"
     assert abs(meta["duration_sec"] - 2.0) < 0.05
     assert "funasr" in meta["model"]
+
+
+def test_windows_decodes_with_pack_pyav_then_transcribes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """10/2: Windows 没有 afconvert → 用组件包 python 跑 meeting_asr.py --decode (PyAV), 再转写。
+
+    mac / Linux 上模拟: 没有 afconvert + 当成 Windows; 假"组件包 python"是个小 Python 脚本,
+    --decode 时写一个 1.5 秒的 16k wav, 转写时写结果。
+    """
+    sys.path.insert(0, str(THIS.parent))
+    import parse_file_audio as pfa
+    calls = tmp_path / "calls.txt"
+    fake_py = tmp_path / "python"
+    fake_py.write_text(
+        f"#!{sys.executable}\n"
+        "import sys, wave, json\n"
+        "a = sys.argv[1:]\n"
+        f"open({str(calls)!r}, 'a', encoding='utf-8').write(' '.join(a) + '\\n')\n"
+        "out = a[a.index('--out') + 1]\n"
+        "if '--decode' in a:\n"
+        "    w = wave.open(out, 'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)\n"
+        "    w.writeframes(b'\\x00\\x00' * 24000); w.close()\n"
+        "else:\n"
+        "    assert a[a.index('--speakers') + 1] == '0'\n"
+        "    open(out, 'w', encoding='utf-8').write(json.dumps({'text': 'Windows 会议'}))\n",
+        encoding="utf-8",
+    )
+    fake_py.chmod(0o755)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(pfa, "_has_afconvert", lambda: False)
+    monkeypatch.setattr(pfa, "_is_windows", lambda: True)
+    _fake_install(tmp_path, fake_py)
+    src = tmp_path / "memo.m4a"
+    src.write_bytes(b"not really m4a")
+
+    text, meta = pfa._transcribe_audio_to_text(src)
+
+    assert text == "Windows 会议"
+    assert abs(meta["duration_sec"] - 1.5) < 0.05
+    first, second = calls.read_text(encoding="utf-8").splitlines()
+    assert "--decode" in first and str(src) in first, "第一步是用组件包 PyAV 解码原文件"
+    assert "--audio-file" in second
+
+
+def test_unsupported_platform_says_so(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    sys.path.insert(0, str(THIS.parent))
+    import parse_file_audio as pfa
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(pfa, "_has_afconvert", lambda: False)
+    monkeypatch.setattr(pfa, "_is_windows", lambda: False)
+    _fake_install(tmp_path, Path(sys.executable))
+    with pytest.raises(RuntimeError, match="macOS / Windows"):
+        pfa._transcribe_audio_to_text(tmp_path / "x.mp3")

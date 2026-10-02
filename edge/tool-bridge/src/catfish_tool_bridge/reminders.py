@@ -36,6 +36,11 @@ def _is_macos() -> bool:
     return platform.system() == "Darwin"
 
 
+def _is_windows() -> bool:
+    """10/2: Windows 走 Outlook 任务 (outlook_pim.py), 跟 Companion 界面 system_outlook.rs 同一处。"""
+    return platform.system() == "Windows"
+
+
 def _run_osascript(script: str, timeout_sec: float = 10.0) -> tuple[bool, str, str]:
     """跑一段 AppleScript, 返 (success, stdout, stderr).
 
@@ -108,10 +113,12 @@ def tool_create_reminder(args: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             return {"ok": False, "error": f"priority 应是 0-9 整数, got: {priority_raw!r}"}
 
+    if _is_windows():
+        return _create_reminder_windows(title, body, due_date_iso, list_name, priority_int)
     if not _is_macos():
         return {
             "ok": False,
-            "error": "create_reminder 只 macOS 支持 (走 Reminders.app). 当前平台: "
+            "error": "create_reminder 只支持 macOS (Reminders.app) / Windows (Outlook). 当前平台: "
                      + platform.system(),
         }
 
@@ -182,10 +189,20 @@ end tell'''
 
 def tool_list_reminder_lists(args: dict[str, Any]) -> dict[str, Any]:
     """catfish_list_reminder_lists tool 入口."""
+    if _is_windows():
+        from . import outlook_pim  # noqa: PLC0415
+        try:
+            lists = outlook_pim.list_reminder_lists()
+        except outlook_pim.OutlookError as e:
+            return {"ok": False, "error": str(e), "list_names": []}
+        return {
+            "ok": True, "list_names": lists, "count": len(lists),
+            "summary": f"📋 Outlook 任务有 {len(lists)} 个文件夹: {', '.join(lists) if lists else '(无)'}",
+        }
     if not _is_macos():
         return {
             "ok": False,
-            "error": "list_reminder_lists 只 macOS 支持. 当前平台: " + platform.system(),
+            "error": "list_reminder_lists 只支持 macOS / Windows (Outlook). 当前平台: " + platform.system(),
             "list_names": [],
         }
 
@@ -483,16 +500,28 @@ def tool_list_reminders(
     except (TypeError, ValueError):
         return {"ok": False, "error": "limit 应是 1-500 整数", "reminders": []}
 
+    list_name = str(args.get("list_name") or "").strip()
+    include_completed = bool(args.get("include_completed", False))
+    if _is_windows():
+        from . import outlook_pim  # noqa: PLC0415
+        try:
+            items = outlook_pim.list_reminders(
+                include_completed=include_completed, list_name=list_name, timeout_sec=max(timeout_sec, 60.0),
+            )
+        except outlook_pim.OutlookError as e:
+            return {"ok": False, "error": str(e), "reminders": []}
+        return _list_result(
+            _filter_reminders(items, scope, now=_now_local(), include_completed=include_completed,
+                              list_name=list_name, limit=limit),
+            scope, list_name, include_completed, source="Outlook 任务",
+        )
     if not _is_macos():
         return {
             "ok": False,
-            "error": "list_reminders 只 macOS 支持 (读取 Reminders.app). 当前平台: "
-                     + platform.system(),
+            "error": "list_reminders 只支持 macOS / Windows (Outlook). 当前平台: " + platform.system(),
             "reminders": [],
         }
 
-    list_name = str(args.get("list_name") or "").strip()
-    include_completed = bool(args.get("include_completed", False))
     query_now = _now_local()
     query_script = _build_list_reminders_script(
         scope,
@@ -523,6 +552,12 @@ def tool_list_reminders(
         list_name=list_name,
         limit=limit,
     )
+    return _list_result(selected, scope, list_name, include_completed, source="Reminders.app")
+
+
+def _list_result(
+    selected: list[dict[str, Any]], scope: str, list_name: str, include_completed: bool, *, source: str,
+) -> dict[str, Any]:
     scope_names = {
         "today": "今天",
         "week": "本周",
@@ -530,8 +565,8 @@ def tool_list_reminders(
         "all": "全部",
     }
     logger.info(
-        "BL-REMINDER: 读取 %s 条提醒 (scope=%s, list=%s)",
-        len(selected), scope, list_name or "全部",
+        "BL-REMINDER: 读取 %s 条提醒 (scope=%s, list=%s, %s)",
+        len(selected), scope, list_name or "全部", source,
     )
     return {
         "ok": True,
@@ -540,7 +575,32 @@ def tool_list_reminders(
         "include_completed": include_completed,
         "reminders": selected,
         "count": len(selected),
-        "summary": f"📋 Reminders.app {scope_names[scope]}共有 {len(selected)} 条符合条件的待办.",
+        "summary": f"📋 {source} {scope_names[scope]}共有 {len(selected)} 条符合条件的待办.",
+    }
+
+
+def _create_reminder_windows(
+    title: str, body: str, due_date_iso: str, list_name: str, priority: int | None,
+) -> dict[str, Any]:
+    from . import outlook_pim  # noqa: PLC0415
+    if due_date_iso:
+        try:
+            datetime.fromisoformat(due_date_iso.replace("Z", "+00:00"))
+        except ValueError as e:
+            return {"ok": False, "error": f"due_date_iso 格式错 (期望 'YYYY-MM-DDTHH:MM:SS'): {e}"}
+    try:
+        folder = outlook_pim.create_reminder(title, body, due_date_iso, list_name, priority)
+    except outlook_pim.OutlookError as e:
+        return {"ok": False, "error": str(e), "needs_outlook": e.no_outlook}
+    logger.info("BL-REMINDER: Outlook 任务 '%s' (folder=%s, due=%s)", title, folder, due_date_iso or "无")
+    return {
+        "ok": True,
+        "reminder_name": title,
+        "list_name": folder or list_name,
+        "due_date_iso": due_date_iso or None,
+        "summary": f"⏰ 已在 Outlook 任务「{folder or list_name}」里创建「{title}」"
+                   + (f" — {due_date_iso}, 到时 Outlook 弹提醒" if due_date_iso else " (无截止)")
+                   + ". Exchange 账户会同步到手机 Outlook.",
     }
 
 

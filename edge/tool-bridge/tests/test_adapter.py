@@ -96,9 +96,9 @@ def test_list_tools_native_collision_skipped(
 def test_list_tools_marks_platform_specific_tools_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Windows 终端不能把 macOS Reminders/Calendar 宣称为可用。"""
+    """不支持的终端不能把系统提醒/日历宣称为可用 (10/2 起 Windows 走 Outlook, 改用 Linux 测)。"""
     _install_fake_registry(monkeypatch, [])
-    monkeypatch.setattr(tool_availability.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(tool_availability.platform, "system", lambda: "Linux")
 
     by_name = {tool["name"]: tool for tool in adapter.list_tools()}
 
@@ -130,7 +130,7 @@ def test_dispatch_rejects_platform_unsupported_native_tool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """即使调用方绕过工具列表直接点名，也不能执行不支持的平台工具。"""
-    monkeypatch.setattr(tool_availability.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(tool_availability.platform, "system", lambda: "Linux")
     monkeypatch.setattr(adapter, "_registry_module", None)
 
     result = asyncio.run(adapter.dispatch_tool("catfish_list_reminders", {}))

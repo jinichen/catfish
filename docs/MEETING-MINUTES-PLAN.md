@@ -84,7 +84,7 @@ FunASR: FSMN-VAD + SeACo-Paraformer (支持热词) + CT-Transformer 标点 + CAM
 | P0 | 组件分发: 中央 `/components/` + manifest 生成脚本; 客户端下载器 (续传 / 校验 / 进度) |
 | P1 | 录音模块 (cpal, 设备选择, 分片, 4 小时上限) + 修 🎤 设备问题; 会议组件包构建与安装; 转写脚本; 说话人改名; 纪要; 写回; 「会议」页; 删除 whisper 链路 |
 | P2 | 体积: 小标点模型 / ONNX 量化 (去 torch) 评估 |
-| P3 | 实时字幕 (流式 Paraformer)、线上会议录系统声音、Windows |
+| P3 | 实时字幕 (流式 Paraformer)、线上会议录系统声音 (Windows 会后转写 10/2 已提前做完) |
 
 每期带单测; P1 最后用一场真实会议做端到端验收。
 
@@ -102,10 +102,14 @@ FunASR: FSMN-VAD + SeACo-Paraformer (支持热词) + CT-Transformer 标点 + CAM
 | 3c09db7 / 02321ae | P0 组件分发 (中央 /components/ + 开发机 vite 同路径 + 客户端下载器) |
 | f370c5b | 进程内录音 (cpal, 选设备, 分片防崩, 4h 上限) + 签名加 audio-input |
 | 3efc6fb | 会议页: 组件包构建 / 安装、本机转写、说话人改名、纪要、写回任务库 / 知识库 |
-| (本提交) | 聊天 🎤 / 上传音频 / 录屏旁白 / 文件解析改走新录音 + 会议组件包; 删 whisper / ffmpeg 依赖 |
+| 99cdfa8 | 聊天 🎤 / 上传音频 / 录屏旁白 / 文件解析改走新录音 + 会议组件包; 删 whisper / ffmpeg 依赖 |
+| (10/2) | Windows: 组件包 (CI 打 + 自检)、PyAV 解码、🎤 / 上传音频 / 文件解析开放 |
 
 已知后续:
 - 🎤 冷启动 ~18 秒 (加载模型 ~17 秒, 跟原来 whisper medium 16 秒相当)。常驻转写进程可以降到 1 秒内,
   代价是常驻 ~2GB 内存 —— 要不要做、空闲多久释放, 待定。
 - ogg vorbis / wma 这类 afconvert 解不了的格式会提示换格式。
-- Windows: 录音 (cpal) 已能编译, 转写 / 解码还是 macOS only (P3)。
+- Windows (10/2 补上): 录音 (cpal) + 转写 (同一份 meeting_asr.py) + 解码 (组件包里的 PyAV,
+  `meeting_asr.py --decode`; mac 继续用系统 afconvert)。Windows 版组件包由
+  `.github/workflows/build-meeting-asr-pack.yml` 在 windows-latest 上打, 自检含"离线装 → 分说话人转写
+  → m4a 解码后不分说话人转写, 文字跟原 wav 一致"。聊天 🎤 / 上传音频 / 文件解析里的音频跟着可用。

@@ -386,7 +386,7 @@ TASK_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_sync_tasks_to_reminders",
         "description": (
-            "★ 将任务库中未完成的行动同步到 macOS Reminders，作为个人待办标识。"
+            "★ 将任务库中未完成的行动同步到系统提醒 (macOS Reminders / Windows 桌面版 Outlook 任务)，作为个人待办标识。"
             "同步使用 task_id 标记，重复执行不会重复创建；任务库仍是事实来源。\n\n"
             "不要从周报正文创建任务；先写入 catfish_create_task，再按需同步。"
         ),
@@ -406,14 +406,14 @@ TASK_TOOLS: List[Dict[str, Any]] = [
         },
         "emoji": "🔁",
         "toolset": "catfish_native",
-        "x_catfish_runtime": {"platforms": ["darwin"]},
+        "x_catfish_runtime": {"platforms": ["darwin", "windows"]},
         "available": True,
     },
     # ── BL-REMINDER (5/13 鸿波"macOS 提醒联动") ──────────────────────
     {
         "name": "catfish_create_reminder",
         "description": (
-            "★ 按用户明确要求在 macOS Reminders.app 创建系统提醒 (iCloud 同步到 iPhone/iPad)。"
+            "★ 按用户明确要求创建系统提醒 (macOS: Reminders.app, iCloud 同步到 iPhone/iPad; Windows: 桌面版 Outlook 的任务, 到时 Outlook 弹提醒)。"
             "普通用户行动请使用 catfish_create_task；本工具是直接 Reminders 操作和兼容入口。"
             "需要在系统提醒中显示任务时，优先先写任务库，再用 catfish_sync_tasks_to_reminders。\n\n"
             "**跟 notify (右上角横幅消息几秒消失) 互补** — Reminder 是用户能勾完成、跨设备的持久 to-do.\n\n"
@@ -467,13 +467,13 @@ TASK_TOOLS: List[Dict[str, Any]] = [
         },
         "emoji": "⏰",
         "toolset": "catfish_native",
-        "x_catfish_runtime": {"platforms": ["darwin"]},
+        "x_catfish_runtime": {"platforms": ["darwin", "windows"]},
         "available": True,
     },
     {
         "name": "catfish_list_reminders",
         "description": (
-            "读取用户 macOS Reminders.app 里的原始提醒条目，返回标题、清单、"
+            "读取用户系统提醒 (macOS Reminders.app / Windows Outlook 任务) 里的原始条目，返回标题、清单、"
             "截止时间、完成状态和优先级。用于‘本周待办是什么’、‘列出今天待办’、"
             "‘有哪些逾期待办’、‘列出所有提醒事项’等直接查询；普通任务查询请使用 catfish_list_tasks。\n\n"
             "**不要用 Hermes todo 读取 Reminders.app**：Hermes todo 只管理 Agent 当前"
@@ -514,13 +514,13 @@ TASK_TOOLS: List[Dict[str, Any]] = [
         },
         "emoji": "📋",
         "toolset": "catfish_native",
-        "x_catfish_runtime": {"platforms": ["darwin"]},
+        "x_catfish_runtime": {"platforms": ["darwin", "windows"]},
         "available": True,
     },
     {
         "name": "catfish_list_reminder_lists",
         "description": (
-            "列 macOS Reminders.app 所有 list 名 (用户分类如 '工作' / '家庭' / '购物'). "
+            "列提醒清单名 (macOS Reminders.app 的 list / Windows Outlook 的任务文件夹) (用户分类如 '工作' / '家庭' / '购物'). "
             "**第一次创建提醒前调** — 看员工有没自己分类的 list, 选合适的写. "
             "默认 list '提醒事项' 总是存在.\n\n"
             "✅ 调用场景:\n"
@@ -535,14 +535,14 @@ TASK_TOOLS: List[Dict[str, Any]] = [
         },
         "emoji": "📋",
         "toolset": "catfish_native",
-        "x_catfish_runtime": {"platforms": ["darwin"]},
+        "x_catfish_runtime": {"platforms": ["darwin", "windows"]},
         "available": True,
     },
     # ── BL-CALENDAR (5/14 0:30 鸿波"ISO 现场审核会议 LLM 写脚本踩坑") ──
     {
         "name": "catfish_create_calendar_event",
         "description": (
-            "★ 在 macOS Calendar.app 创建**时间锚定的事件** (会议 / 现场审核 / 行程, "
+            "★ 在系统日历 (macOS Calendar.app / Windows 桌面版 Outlook) 创建**时间锚定的事件** (会议 / 现场审核 / 行程, "
             "带 location + 时长). iCloud 同步 iPhone/iPad/Apple Watch.\n\n"
             "**跟 catfish_create_reminder 区别**:\n"
             "  - 有**明确开始结束时间** + 通常带 location → **calendar_event** (这个工具)\n"
@@ -606,13 +606,13 @@ TASK_TOOLS: List[Dict[str, Any]] = [
         },
         "emoji": "📅",
         "toolset": "catfish_native",
-        "x_catfish_runtime": {"platforms": ["darwin"]},
+        "x_catfish_runtime": {"platforms": ["darwin", "windows"]},
         "available": True,
     },
     {
         "name": "catfish_list_calendars",
         "description": (
-            "列 macOS Calendar.app 所有日历名 (用户分类如 '工作' / '家庭' / '我的日历'). "
+            "列系统日历名 (macOS Calendar.app / Windows Outlook) (用户分类如 '工作' / '家庭' / '我的日历'). "
             "**第一次创建事件前调** — 看员工有没自己分类的 calendar.\n\n"
             "返参: calendar_names (数组, e.g. ['工作', '家庭', '我的日历'])"
         ),
@@ -623,7 +623,7 @@ TASK_TOOLS: List[Dict[str, Any]] = [
         },
         "emoji": "📅",
         "toolset": "catfish_native",
-        "x_catfish_runtime": {"platforms": ["darwin"]},
+        "x_catfish_runtime": {"platforms": ["darwin", "windows"]},
         "available": True,
     },
 ]

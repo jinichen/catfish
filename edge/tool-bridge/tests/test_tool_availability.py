@@ -4,7 +4,9 @@ from __future__ import annotations
 from catfish_tool_bridge import catfish_tools, tool_availability
 
 
-MACOS_ONLY_TOOLS = {
+# 10/2: 这几个原来只有 macOS (Reminders.app / Calendar.app), 现在 Windows 走 Outlook
+# (outlook_pim.py)。Linux 仍不支持 —— 下面"不支持的平台"用例改用 Linux。
+SYSTEM_PIM_TOOLS = {
     "catfish_create_reminder",
     "catfish_list_reminders",
     "catfish_list_reminder_lists",
@@ -21,18 +23,18 @@ def _native_schema(name: str) -> dict:
     )
 
 
-def test_macos_tools_declare_runtime_platform() -> None:
-    for name in MACOS_ONLY_TOOLS:
+def test_pim_tools_declare_runtime_platform() -> None:
+    for name in SYSTEM_PIM_TOOLS:
         assert _native_schema(name)["x_catfish_runtime"] == {
-            "platforms": ["darwin"],
+            "platforms": ["darwin", "windows"],
         }
 
 
-def test_windows_marks_macos_tools_unavailable_without_mutating_schema() -> None:
+def test_linux_marks_pim_tools_unavailable_without_mutating_schema() -> None:
     original = _native_schema("catfish_list_reminders")
     resolved = tool_availability.with_runtime_availability(
         original,
-        system_name="Windows",
+        system_name="Linux",
     )
 
     assert resolved is not original
@@ -43,22 +45,23 @@ def test_windows_marks_macos_tools_unavailable_without_mutating_schema() -> None
     assert "supported" not in original
 
 
-def test_darwin_keeps_macos_tools_available() -> None:
-    for name in MACOS_ONLY_TOOLS:
-        resolved = tool_availability.with_runtime_availability(
-            _native_schema(name),
-            system_name="Darwin",
-        )
-        assert resolved["available"] is True
-        assert resolved["supported"] is True
-        assert resolved["reason_code"] is None
+def test_darwin_and_windows_keep_pim_tools_available() -> None:
+    for system in ("Darwin", "Windows"):
+        for name in SYSTEM_PIM_TOOLS:
+            resolved = tool_availability.with_runtime_availability(
+                _native_schema(name),
+                system_name=system,
+            )
+            assert resolved["available"] is True, (system, name)
+            assert resolved["supported"] is True
+            assert resolved["reason_code"] is None
 
 
 def test_dispatch_guard_returns_stable_unsupported_result() -> None:
     result = tool_availability.unavailable_result(
         "catfish_list_reminders",
         catfish_tools.CATFISH_NATIVE_TOOLS,
-        system_name="Windows",
+        system_name="Linux",
     )
 
     assert result == {
