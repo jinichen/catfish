@@ -365,31 +365,55 @@ def full_index_lock():
     yield True = 拿到锁；yield False = 别人正在跑，调用方应该跳过（不是等，
     等几分钟没意义，那个进程做完了活也就干了）。
 
-    用 fcntl.flock：进程崩了/被 kill 内核自动释放，不会留下需要人工清的死锁文件。
-    Windows 没有 flock —— 那边直接放行（Companion 目前只发 macOS，
-    daemon_windows.py 是给单进程 daemon 场景的，不存在这个并发）。
-    """
-    try:
-        import fcntl  # noqa: PLC0415
-    except ImportError:
-        yield True
-        return
+    unix 用 fcntl.flock、Windows 用 msvcrt.locking：进程崩了/被 kill 系统都会
+    自动释放，不会留下需要人工清的死锁文件。
 
+    10/2: 原来 Windows 没有 flock 就直接放行 (注释说"Companion 目前只发 macOS"
+    —— 早就不是了)，两个 watcher 一起全量扫、互相抢 SQLite 写锁。
+    """
     DB_FILE.parent.mkdir(exist_ok=True)
     lock_path = DB_FILE.with_suffix(".index.lock")
-    fh = open(lock_path, "w")  # noqa: SIM115
+    fh = open(lock_path, "a+")  # noqa: SIM115 —— a+: 不截断, 别的进程正锁着也能打开
     try:
-        try:
-            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
+        if not _try_lock(fh):
             yield False
             return
         try:
             yield True
         finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
+            _unlock(fh)
     finally:
         fh.close()
+
+
+def _try_lock(fh) -> bool:
+    """非阻塞拿排他锁。拿不到 (别人拿着) → False。"""
+    try:
+        import fcntl  # noqa: PLC0415
+    except ImportError:
+        import msvcrt  # noqa: PLC0415 —— Windows
+        fh.seek(0)
+        try:
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    return True
+
+
+def _unlock(fh) -> None:
+    try:
+        import fcntl  # noqa: PLC0415
+    except ImportError:
+        import msvcrt  # noqa: PLC0415
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+    fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 def roots_needing_full_index(cfg: SearchConfig) -> list[Path]:

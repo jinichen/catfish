@@ -1,4 +1,4 @@
-"""任务完成的 macOS 系统通知 —— 含去重。
+"""任务完成的系统通知 (macOS 通知中心 / Windows toast) —— 含去重。
 
 BL-TASKMGR-SPLIT 8/15: 从 task_manager.py 抽出来 (1133 行超限)。纯搬迁, 逻辑一行未改。
 
@@ -91,24 +91,63 @@ def _notify_task_done(task: Task) -> None:
     else:
         return  # other states 不通知
 
-    # macOS osascript 通知 (BL-E27.4 收紧)
+    # 系统通知 (BL-E27.4 收紧)。10/2: 原来只有 macOS, Windows 上长任务做完 / 失败都不吭声。
     if (
         os.environ.get("CATFISH_TASK_NOTIFY", "1") != "0"
-        and _platform_is_macos()
+        and (_platform_is_macos() or _platform_is_windows())
         and _should_send_macos_notify(task, elapsed)
     ):
         try:
-            import subprocess
-            safe_title = title.replace('"', "'")
-            safe_msg = msg.replace('"', "'")
-            script = f'display notification "{safe_msg}" with title "{safe_title}"'
-            subprocess.Popen(
-                ["osascript", "-e", script],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            _send_system_notify(title, msg)
         except Exception:
-            logger.warning("macOS osascript 通知失败", exc_info=True)
+            logger.warning("系统通知失败", exc_info=True)
+
+
+#: 跟 Companion services/desktop_notify.rs 一致: MSI 装的开始菜单快捷方式带这个 AUMID,
+#: 用别的字符串 Windows 会静默丢弃 toast。
+_WINDOWS_APP_ID = "com.catfish.companion"
+
+#: 同 desktop_notify.rs 的脚本: PowerShell + WinRT, Win10+ 自带, 不装模块。
+#: 标题正文走环境变量, 不拼进脚本 —— 省转义, 内容里有引号也不怕。
+_WINDOWS_TOAST_PS = (
+    "[void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime];"
+    "$x = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent("
+    "[Windows.UI.Notifications.ToastTemplateType]::ToastText02);"
+    "$t = $x.GetElementsByTagName('text');"
+    "[void]$t.Item(0).AppendChild($x.CreateTextNode($env:CATFISH_TOAST_TITLE));"
+    "[void]$t.Item(1).AppendChild($x.CreateTextNode($env:CATFISH_TOAST_BODY));"
+    "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($env:CATFISH_TOAST_APPID)"
+    ".Show([Windows.UI.Notifications.ToastNotification]::new($x))"
+)
+
+
+def _send_system_notify(title: str, msg: str) -> None:
+    if _platform_is_windows():
+        env = {**os.environ, "CATFISH_TOAST_TITLE": title, "CATFISH_TOAST_BODY": msg,
+               "CATFISH_TOAST_APPID": _WINDOWS_APP_ID}
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+             "-Command", _WINDOWS_TOAST_PS],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            # 不加这个, 从没控制台的 tool-bridge 起 powershell 会闪一个黑框
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return
+    safe_title = title.replace('"', "'")
+    safe_msg = msg.replace('"', "'")
+    script = f'display notification "{safe_msg}" with title "{safe_title}"'
+    subprocess.Popen(
+        ["osascript", "-e", script],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def _platform_is_windows() -> bool:
+    import platform as _p
+    return _p.system() == "Windows"
 
 
 def _platform_is_macos() -> bool:

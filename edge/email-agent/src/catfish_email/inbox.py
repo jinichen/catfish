@@ -82,8 +82,9 @@ def get_adapter(client: str | None = None) -> EmailAdapter:
     #
     # 9/18 最初写的是排第一, 理由"它是唯一不看客户端脸色的路径"。那个理由
     # 在 Windows 上成立 (新版 Outlook 无 COM、Foxmail 加密), 在 macOS 上不
-    # 成立 —— Apple Mail 好好的, 而且它能删能标已读, IMAP 只能看。让只读的
-    # 来源赢是拿功能换了个没必要的"独立性"。
+    # 成立 —— Apple Mail 好好的, 优先用员工天天在用的客户端。
+    # (10/2 订正: 这里原写"IMAP 只能看", 是 9/18 补写能力之前的说法; 同一天
+    # d7833dc 起 IMAP 已能标已读、删 (移到已删除), Windows 上能力不缺。)
     #
     # 本地客户端取不到时它们会抛异常, 自然落到 IMAP, 所以排最后不影响兜底。
     # (以上只说 macOS。Windows 配了 IMAP 就只用 IMAP, 见 _windows_candidates。)

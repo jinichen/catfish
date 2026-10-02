@@ -74,6 +74,23 @@ describe("INLINE_PATH_RE — 应匹配", () => {
   });
 });
 
+describe("INLINE_PATH_RE — Windows 路径 (10/2)", () => {
+  it("盘符路径, 带空格和中文", () => {
+    expect(matchAll("周报已生成: C:\\Users\\达华\\.catfish\\output\\周报 - 鸿波.xlsx 请查收")).toEqual([
+      "C:\\Users\\达华\\.catfish\\output\\周报 - 鸿波.xlsx",
+    ]);
+  });
+
+  it("小写盘符 / 别的盘", () => {
+    expect(matchAll("见 d:\\work\\a.pdf")).toEqual(["d:\\work\\a.pdf"]);
+  });
+
+  it("不吃 URL 和没扩展名的", () => {
+    expect(matchAll("https://x.com/C:\\a.pdf")).toEqual([]);
+    expect(matchAll("C:\\Windows\\System32")).toEqual([]);
+  });
+});
+
 describe("INLINE_PATH_RE — 不应匹配", () => {
   it("相对路径", () => {
     expect(matchAll("bar.xlsx 文件")).toEqual([]);

@@ -173,7 +173,7 @@ pub async fn ensure_local_search_running() {
     // (watcher.py:_bootstrap_if_empty). 员工加目录 / 手动重建走
     // commands::local_search::local_search_index.
     //
-    // pkill 仅 macOS/Linux 有, Windows 暂不支持 (Companion 当前只 macOS 发布).
+    // macOS/Linux 用 pkill, Windows 用 process::kill_by_cmdline (9/23), 见函数本体。
     pkill_local_search_watchers();
 
     let dir = match catfish_paths::local_search_dir() {

@@ -496,7 +496,7 @@ def collect_today_summary() -> Dict[str, Any]:
 #   1. 默认 interactive mode → 员工框选, 隐私优先
 #   2. 同时返回 base64 PNG + 临时文件路径, 调用方可二选一
 #   3. screencapture 退码 0 即使员工 ESC 取消 — 用 "文件不存在或为空" 判取消
-#   4. Win 没有原生交互式截图工具 → 退到 fullscreen 并在结果里说明
+#   4. Win 框选 / 选窗口用系统截图框 (ms-screenclip:), 图从剪贴板取 (10/2)
 #   5. 不主动 cleanup 临时文件 — 让员工自查 /tmp/catfish-shot-*.png
 
 # 锁住单次截图最大字节, 防员工框了一个 27" 5K 屏幕一截 50MB 卡死 socket
@@ -553,20 +553,61 @@ def _screencapture_macos(mode: str, out_path: Path) -> Tuple[bool, Optional[str]
     return True, None
 
 
+#: Windows 框选 / 选窗口: 员工可能磨蹭, 跟 macOS screencapture -i 一样给 2 分钟
+_WIN_SNIP_TIMEOUT_S = 120.0
+
+
+def _win_clipboard_seq() -> int:
+    import ctypes  # noqa: PLC0415
+    return int(ctypes.windll.user32.GetClipboardSequenceNumber())  # type: ignore[attr-defined]
+
+
+def _win_open_snip_overlay() -> None:
+    """系统自带的截图框 (= Win+Shift+S, Win10 1809+)。框完图进剪贴板。"""
+    os.startfile("ms-screenclip:")  # type: ignore[attr-defined]  # noqa: S606 —— 无控制台窗口
+
+
 def _screencapture_windows(mode: str, out_path: Path) -> Tuple[bool, Optional[str]]:
-    """Windows 用 PIL.ImageGrab.grab() — 只能全屏, interactive/window 不支持。"""
+    """Windows: 全屏用 PIL.ImageGrab.grab(); 框选 / 选窗口用系统截图框。
+
+    10/2: 原来 interactive / window 一律退成全屏 —— 员工本来想只给一块, 结果整个
+    屏幕 (可能有聊天、邮件) 都发出去了, 跟"默认 interactive 隐私优先"正好相反。
+    现在打开系统截图框 (ms-screenclip:), 员工框区域或在工具栏里点「窗口」, 图进
+    剪贴板, 这里等剪贴板序号变了再取图。按 Esc 取消 = 剪贴板不变, 等满 2 分钟算取消。
+    """
     try:
         from PIL import ImageGrab  # type: ignore
     except ImportError:
         return False, "Windows 截图需要 Pillow: pip install Pillow"
 
+    if mode == "fullscreen":
+        try:
+            ImageGrab.grab().save(str(out_path), "PNG")
+        except Exception as e:  # noqa: BLE001
+            return False, f"截图失败: {e}"
+        return True, None
+
     try:
-        # PIL 不区分 mode, 都拍全屏。caller 已经把 interactive/window 改成 fullscreen
-        img = ImageGrab.grab()
-        img.save(str(out_path), "PNG")
-    except Exception as e:
-        return False, f"截图失败: {e}"
-    return True, None
+        seq0 = _win_clipboard_seq()
+        _win_open_snip_overlay()
+    except Exception as e:  # noqa: BLE001
+        return False, f"打不开系统截图框 (要 Windows 10 1809 以上): {e}"
+
+    deadline = time.monotonic() + _WIN_SNIP_TIMEOUT_S
+    while time.monotonic() < deadline:
+        time.sleep(0.4)
+        if _win_clipboard_seq() == seq0:
+            continue
+        img = ImageGrab.grabclipboard()
+        if img is None or isinstance(img, list):  # 员工复制的是文字 / 文件, 不是截图 → 接着等
+            seq0 = _win_clipboard_seq()
+            continue
+        try:
+            img.save(str(out_path), "PNG")
+        except Exception as e:  # noqa: BLE001
+            return False, f"保存截图失败: {e}"
+        return True, None
+    return False, "员工取消了截图 (2 分钟内没框选)"
 
 
 def capture_screenshot(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -598,13 +639,8 @@ def capture_screenshot(args: Dict[str, Any]) -> Dict[str, Any]:
     if sysname == "Darwin":
         ok, err = _screencapture_macos(mode, out_path)
     elif sysname == "Windows":
-        # Win 没有原生交互式 / 窗口选择 / active window — 全退到 fullscreen
-        if mode in {"interactive", "window"}:
-            fallback_note = (
-                f"Windows 没有原生 {mode} 截图, 自动退到 fullscreen. "
-                "敏感窗口请提前关掉再让 catfish 拍."
-            )
-            mode = "fullscreen"
+        if mode == "window":
+            fallback_note = "Windows 截图框打开后, 在顶部工具栏选「窗口」模式再点要截的窗口。"
         ok, err = _screencapture_windows(mode, out_path)
     else:
         return {

@@ -14,8 +14,9 @@
  *
  * 设计:
  *   - 用更宽松的字符集 (允许空格 / 中文), 非贪婪到 `.ext` 收住.
- *   - 仅识别 macOS 常见根 (`/Users`, `/var`, `/tmp`, `/opt`, `/private`)
- *     + `~/` home 缩写. 不识别 Windows 路径 (Companion 仅 macOS).
+ *   - 识别 macOS 常见根 (`/Users`, `/var`, `/tmp`, `/opt`, `/private`)
+ *     + `~/` home 缩写, 以及 Windows 盘符路径 (`C:\Users\...`, 10/2 加 ——
+ *     Companion 早就发 Windows 了, 那边的路径原来点不了).
  *   - 扩展名白名单跟 path_detect.ts 对齐 (员工常用办公格式).
  *   - 路径不能跨行 — 换行符强制截断.
  *   - URL (http:// / https:// / file://) 不识别 — 前置字符黑名单防误伤.
@@ -47,7 +48,8 @@ const EXT_PATTERN = [
  *       2) `~/foo.docx` 里的 `/foo.docx` 被独立截
  *       3) `pkg/path/foo.go` import 路径误识别
  *   - 主体: 可选 `~`, 再 `/` 根, 根 segment 必须是
- *     Users/var/tmp/opt/private 之一 (其他位置不太可能是用户文件),
+ *     Users/var/tmp/opt/private 之一 (其他位置不太可能是用户文件);
+ *     或 Windows 盘符 `X:\` 开头,
  *     然后非贪婪吃直到 `.ext`. 中间允许空格 + 中文 + Unicode 字符.
  *   - 路径字符黑名单: 换行符 + 引号 + 反引号 + 尖括号 + 大括号 + 竖线 —
  *     这些是 markdown / JSON / log 里的明显边界字符, 不会出现在文件名里.
@@ -55,7 +57,7 @@ const EXT_PATTERN = [
  */
 const INLINE_PATH_RE = new RegExp(
   "(?<![A-Za-z0-9/~:])" +
-    "(~?/(?:Users|var|tmp|opt|private)/[^\\n\\r\"'`<>{}|]+?\\.(?:" +
+    "((?:~?/(?:Users|var|tmp|opt|private)/|[A-Za-z]:\\\\)[^\\n\\r\"'`<>{}|]+?\\.(?:" +
     EXT_PATTERN +
     "))" +
     "(?![A-Za-z0-9])",

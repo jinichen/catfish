@@ -24,8 +24,6 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "macos")]
-use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
@@ -225,8 +223,8 @@ pub async fn recordings_list() -> Result<Vec<RecordingMeta>, String> {
 
 /// 在 Finder 高亮选中 recordings/<sid>/ 目录.
 ///
-/// macOS: `open -R <path>` (在 Finder 选中文件, 不是打开)
-/// Linux / Windows: 不支持 (这是 macOS Companion 专用), 返 err
+/// 在 Finder / 资源管理器里选中文件 (不是打开)。先校验在 recordings 目录里,
+/// 再交给 file::reveal_in_finder (macOS `open -R` / Windows `explorer /select,`)。
 #[tauri::command]
 pub async fn recordings_show_in_finder(path: String) -> Result<(), String> {
     // 防员工传 path 出 recordings root (防误操作 open Finder 别处)
@@ -239,19 +237,9 @@ pub async fn recordings_show_in_finder(path: String) -> Result<(), String> {
         }
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        Command::new("open")
-            .args(["-R", &path])
-            .spawn()
-            .map_err(|e| format!("open -R 启动失败: {e}"))?;
-        Ok(())
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = path; // 避免 unused 警告
-        Err("recordings_show_in_finder 当前只支持 macOS".into())
-    }
+    // 10/2: 原来非 macOS 直接返错, Windows 上「在文件夹中显示」点了没反应。
+    // 跟 file::reveal_in_finder 一样分平台 (那边 9 月就有 Windows / Linux 分支)。
+    super::file::reveal_in_finder(path).await
 }
 
 /// 删 recordings/<sid>/. 返释放的字节数. 失败抛错误字符串.

@@ -48,7 +48,7 @@ fn resolve_path(raw: &str) -> Result<PathBuf, String> {
 
 /// 在 Finder 里选中文件 (`open -R <path>`).
 ///
-/// macOS only. Windows / Linux Phase 2 加.
+/// macOS `open -R` / Windows `explorer /select,` / Linux 打开父目录。
 #[tauri::command]
 pub async fn reveal_in_finder(path: String) -> Result<(), String> {
     let resolved = resolve_path(&path)?;
