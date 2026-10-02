@@ -168,7 +168,11 @@ def render_markdown(meta: dict, minutes: dict, names: dict[str, str]) -> str:
     return "\n".join(out) + "\n"
 
 
-async def summarize(meeting_dir: Path, *, gateway_url: str, auth_token: str, model: str | None = None) -> dict:
+async def summarize(
+    meeting_dir: Path, *, gateway_url: str, auth_token: str, model: str | None = None, template: dict | None = None,
+) -> dict:
+    """template = None 时跟原来一样; 给了 {id, name, body} 就多调一次大模型按模版写 minutes.md
+    (meeting_minutes_template.py)。结构化结果 (待办等) 两种情况都有, 「加入任务库」照常用。"""
     from .recmode.aggregator import call_llm  # noqa: PLC0415 — 复用同一个网关调用 (鉴权 / 选模型 / 不走代理)
 
     meta, transcript, names = load_inputs(meeting_dir)
@@ -187,9 +191,24 @@ async def summarize(meeting_dir: Path, *, gateway_url: str, auth_token: str, mod
         ]
         minutes = parse_minutes(await call_llm(build_reduce_messages(meta, partials), **kw))
 
-    doc = {"version": 1, "meeting_id": meta.get("id"), "chunks": len(chunks), **minutes}
+    doc: dict[str, Any] = {"version": 1, "meeting_id": meta.get("id"), "chunks": len(chunks), **minutes}
+    if template is None:
+        markdown = render_markdown(meta, minutes, names)
+    else:
+        from . import meeting_minutes_template as mt  # noqa: PLC0415
+        filled = mt.fill_placeholders(template["body"], meta, transcript, names, meeting_date(meta))
+        # 材料: 短会议给转写原文; 长会议给分段要点 (原文塞不下, 跟 reduce 那步同一个取舍)
+        material = "\n".join(chunks[0]) if len(chunks) == 1 else "\n\n".join(
+            f"### 第 {i + 1} 段要点\n{json.dumps(p, ensure_ascii=False)}" for i, p in enumerate(partials)
+        )
+        head = f"会议: {meta.get('title', '')}\n日期: {meeting_date(meta)}\n"
+        body = mt.clean_markdown(await call_llm(mt.build_template_messages(head, filled, material, minutes), **kw))
+        if not body:
+            raise ValueError("大模型按模版没写出内容, 换个模版或重试")
+        markdown = f"{body}\n\n---\n由小鲶按纪要模版「{template['name']}」根据会议录音自动生成, 转写可能有误, 请核对。\n"
+        doc["template"] = {"id": template["id"], "name": template["name"]}
     (meeting_dir / "minutes.json").write_text(json.dumps(doc, ensure_ascii=False, indent=1), encoding="utf-8")
-    (meeting_dir / "minutes.md").write_text(render_markdown(meta, minutes, names), encoding="utf-8")
+    (meeting_dir / "minutes.md").write_text(markdown, encoding="utf-8")
     return doc
 
 
@@ -219,4 +238,6 @@ async def handle_summarize(params: dict) -> dict:
     gw = str(params.get("gateway_url") or "").strip().rstrip("/")
     if not gw:
         raise ValueError("gateway_url 必填")
-    return await summarize(d, gateway_url=gw, auth_token=token, model=params.get("model") or None)
+    from .meeting_minutes_template import validate_template  # noqa: PLC0415
+    template = validate_template(params.get("template"))
+    return await summarize(d, gateway_url=gw, auth_token=token, model=params.get("model") or None, template=template)

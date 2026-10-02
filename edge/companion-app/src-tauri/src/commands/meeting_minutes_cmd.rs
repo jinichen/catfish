@@ -13,6 +13,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::services::meeting_store::{self as store, MeetingStatus};
+use crate::services::meeting_templates::{self as templates, Template};
 use crate::services::{endpoints, oauth, tool_bridge_rpc};
 
 /// 一小时会议分段总结要调几次大模型, 每次几十秒; 给足。
@@ -44,8 +45,9 @@ pub fn meeting_speakers(id: String) -> Result<BTreeMap<String, String>, String> 
     }
 }
 
+/// `template_id`: None / "default" = 原来那份固定格式; 否则用员工存的模版 (10/3)。
 #[tauri::command]
-pub async fn meeting_minutes_generate(id: String) -> Result<Value, String> {
+pub async fn meeting_minutes_generate(id: String, template_id: Option<String>) -> Result<Value, String> {
     let home = store::home()?;
     let meta = store::load(&store::meetings_root(&home), &id)?;
     if meta.status != MeetingStatus::Transcribed {
@@ -60,6 +62,12 @@ pub async fn meeting_minutes_generate(id: String) -> Result<Value, String> {
         "auth_token": token,
         "gateway_url": endpoints::endpoints().gateway_base(),
     });
+    let mut params = params;
+    if let Some(tid) = template_id.filter(|t| t != templates::DEFAULT_ID) {
+        // 模版正文在这里读好随 RPC 带过去, tool-bridge 那边不用知道文件在哪
+        let t = templates::load(&home, &tid)?;
+        params["template"] = json!({ "id": t.id, "name": t.name, "body": t.body });
+    }
     log::info!("[meeting] {id} 生成纪要 → {}", endpoints::endpoints().gateway_base());
     tool_bridge_rpc::call_with_timeout("meeting/summarize", params, SUMMARIZE_TIMEOUT).await
 }
@@ -72,4 +80,22 @@ pub fn meeting_minutes(id: String) -> Result<Value, String> {
     let doc: Value = serde_json::from_str(&text).map_err(|e| format!("minutes.json 格式不对: {e}"))?;
     let md = std::fs::read_to_string(dir.join("minutes.md")).unwrap_or_default();
     Ok(json!({ "json": doc, "markdown": md, "path": dir.join("minutes.md").display().to_string() }))
+}
+
+// ── 纪要模版 (10/3, services/meeting_templates.rs) ──
+
+#[tauri::command]
+pub fn meeting_templates_list() -> Result<Vec<Template>, String> {
+    Ok(templates::list(&store::home()?))
+}
+
+/// id 不传 = 新建。
+#[tauri::command]
+pub fn meeting_template_save(id: Option<String>, name: String, body: String) -> Result<Template, String> {
+    templates::save(&store::home()?, id.as_deref(), &name, &body)
+}
+
+#[tauri::command]
+pub fn meeting_template_delete(id: String) -> Result<(), String> {
+    templates::delete(&store::home()?, &id)
 }

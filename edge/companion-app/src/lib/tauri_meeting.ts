@@ -84,7 +84,20 @@ export interface MinutesJson {
   decisions: string[];
   action_items: ActionItem[];
   open_questions: string[];
+  /** 10/3: 按自定义模版生成的才有; 没有 = 缺省格式 */
+  template?: { id: string; name: string };
 }
+
+/** 会议纪要自定义模版 (10/3), 存在 ~/.catfish/meeting-templates/ */
+export interface MinutesTemplate {
+  id: string;
+  name: string;
+  body: string;
+  updated_at: string;
+}
+
+/** 缺省模版 = 原来那份固定格式, 不落盘、不能改 */
+export const DEFAULT_TEMPLATE_ID = "default";
 
 export interface Minutes {
   json: MinutesJson;
@@ -109,7 +122,12 @@ export const meetingTranscript = (id: string) => rawInvoke<Transcript>("meeting_
 export const meetingSpeakers = (id: string) => rawInvoke<Record<string, string>>("meeting_speakers", { id });
 export const meetingSetSpeakers = (id: string, names: Record<string, string>) =>
   rawInvoke<void>("meeting_set_speakers", { id, names });
-export const meetingMinutesGenerate = (id: string) => rawInvoke<MinutesJson>("meeting_minutes_generate", { id });
+export const meetingMinutesGenerate = (id: string, templateId: string = DEFAULT_TEMPLATE_ID) =>
+  rawInvoke<MinutesJson>("meeting_minutes_generate", { id, templateId });
+export const meetingTemplatesList = () => rawInvoke<MinutesTemplate[]>("meeting_templates_list");
+export const meetingTemplateSave = (id: string | null, name: string, body: string) =>
+  rawInvoke<MinutesTemplate>("meeting_template_save", { id, name, body });
+export const meetingTemplateDelete = (id: string) => rawInvoke<void>("meeting_template_delete", { id });
 export const meetingMinutes = (id: string) => rawInvoke<Minutes | null>("meeting_minutes", { id });
 
 export interface AsrInstallProgress {

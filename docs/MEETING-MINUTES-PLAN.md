@@ -104,6 +104,7 @@ FunASR: FSMN-VAD + SeACo-Paraformer (支持热词) + CT-Transformer 标点 + CAM
 | 3efc6fb | 会议页: 组件包构建 / 安装、本机转写、说话人改名、纪要、写回任务库 / 知识库 |
 | 99cdfa8 | 聊天 🎤 / 上传音频 / 录屏旁白 / 文件解析改走新录音 + 会议组件包; 删 whisper / ffmpeg 依赖 |
 | (10/2) | Windows: 组件包 (CI 打 + 自检)、PyAV 解码、🎤 / 上传音频 / 文件解析开放 |
+| (10/3) | 纪要自定义模版: 员工存 Markdown 模版 (~/.catfish/meeting-templates/), 生成时可选; 缺省仍是原格式。结构化抽取照旧 (待办加任务库不受影响), 多一次大模型调用按模版写 minutes.md |
 
 已知后续:
 - 🎤 冷启动 ~18 秒 (加载模型 ~17 秒, 跟原来 whisper medium 16 秒相当)。常驻转写进程可以降到 1 秒内,
