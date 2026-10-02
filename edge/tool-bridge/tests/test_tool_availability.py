@@ -4,8 +4,8 @@ from __future__ import annotations
 from catfish_tool_bridge import catfish_tools, tool_availability
 
 
-# 10/2: 这几个原来只有 macOS (Reminders.app / Calendar.app), 现在 Windows 走 Outlook
-# (outlook_pim.py)。Linux 仍不支持 —— 下面"不支持的平台"用例改用 Linux。
+# 10/2: 这几个原来只有 macOS (Reminders.app / Calendar.app), 现在 Windows
+# 上 Catfish 自己的提醒 / 日历 (local_pim.py)。Linux 仍不支持 —— 下面"不支持的平台"用例改用 Linux。
 SYSTEM_PIM_TOOLS = {
     "catfish_create_reminder",
     "catfish_list_reminders",
