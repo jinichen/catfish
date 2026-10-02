@@ -103,7 +103,8 @@ pub mod skills_mcp; // MCP servers 的读和写 (同一段 config.yaml)
 pub mod speech;
 pub mod system;
 #[cfg(windows)]
-mod system_outlook; // 9/23: Windows 提醒 / 日历走 Outlook COM
+mod system_local_pim; // 10/2: Windows 提醒 / 日历存在 Catfish 自己 (tool-bridge local_pim.py)
+mod system_outlook; // Windows 早安页读经典版 Outlook 的会议 (有就并进来, 10/2 起只读)
 pub mod task_chat; // P3.3.7 Phase 2 (6/10): ~/.catfish/task_chat/<key>.jsonl task-scoped chat 持久化
 pub mod task_chat_migration; // P3.3.19 C Phase 4 (6/11): jsonl → ~/.hermes/state.db 一次性 migration
 pub mod imap_credentials; // 9/18: IMAP 凭据 —— 密码进系统凭据库, 配置进不含密码的 JSON

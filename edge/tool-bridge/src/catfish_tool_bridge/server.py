@@ -112,6 +112,15 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
         except RuntimeError as e:
             return _error(req_id, INTERNAL_ERROR, str(e))
 
+    # 10/2: Windows 早安页"今日 / 本周日程"里 Catfish 自己记的日历事件 (local_pim.py)。
+    # Rust 侧 calendar.rs 调; 不挂 tools/dispatch, 不进模型的工具清单。
+    if method == "pim/calendar_events":
+        from . import local_pim  # noqa: PLC0415
+        rng = str(params.get("range") or "today")
+        if rng not in ("today", "natural-week"):
+            return _error(req_id, INVALID_PARAMS, "range 只支持 today / natural-week")
+        return _success(req_id, local_pim.events_for_range(rng))
+
     return _error(req_id, METHOD_NOT_FOUND, f"unknown method: {method}")
 
 
@@ -592,10 +601,19 @@ async def serve_forever(socket_path: Path) -> None:
     skill_watcher.start()    # 监 ~/.hermes/skills/  → 加载新 skill
     config_watcher.start()   # 监 ~/.hermes/config.yaml → 拿新 cdp_url / model 配置
 
+    # 10/2: Windows 上提醒存在 Catfish 自己 (local_pim.py), 到点由这里弹通知。
+    # mac 上提醒在 Reminders.app 里, 系统自己弹, 不起这个循环。
+    alarm_task = None
+    if is_windows:
+        from . import local_pim  # noqa: PLC0415
+        alarm_task = asyncio.create_task(local_pim.alarm_loop())
+
     try:
         async with server:
             await server.serve_forever()
     finally:
+        if alarm_task is not None:
+            alarm_task.cancel()
         # 优雅关闭 mcp servers (subprocess 资源)
         try:
             await mcp_client.shutdown_all()

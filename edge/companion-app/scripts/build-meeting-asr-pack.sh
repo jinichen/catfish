@@ -26,6 +26,9 @@
 # 最后一步自检: 用包里的东西在干净 venv 里**离线**装一遍, 跑一次真转写 (模型自带的示例
 # 音频), 过了才出包。需要联网 (下 wheel 和模型), 只在打包机上跑。
 set -euo pipefail
+# Windows 上 Python 默认按 cp1252 往控制台打印, 自检里一 print 中文转写就崩
+# (10/2 第一次在 windows-latest 上跑: 转写全对, 死在打印比对结果这一步)
+export PYTHONUTF8=1
 
 VERSION="${1:-1.0.0}"
 COMPANION="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

@@ -47,7 +47,7 @@ fn week_cache() -> &'static Mutex<Option<(Instant, String)>> {
 
 const CACHE_TTL: Duration = Duration::from_secs(300);  // 5 分钟
 
-#[cfg(not(windows))] // Windows 读 Outlook (system_outlook::read_events)
+#[cfg(not(windows))] // Windows 见 windows_events
 /// JXA 脚本 — 取今天 0:00-24:00 所有 calendar 的 events, 返 JSON array.
 /// 注意 Calendar.app object model 的 `.events.whose(...)` filter 比 JS 自己滤快 100x
 /// (osascript 跑 .events() 会全量加载, 几十秒).
@@ -140,7 +140,7 @@ out.sort((a, b) => a.start.localeCompare(b.start));
 JSON.stringify(out);
 "#;
 
-#[cfg(not(windows))] // Windows 读 Outlook (system_outlook::read_events)
+#[cfg(not(windows))] // Windows 见 windows_events
 /// BL-CALENDAR-WEEK (5/20): 本自然周（周一 0 点至下周一 0 点）events JXA 脚本.
 const JXA_WEEK_EVENTS: &str = r#"
 const Calendar = Application("Calendar");
@@ -237,17 +237,14 @@ pub async fn calendar_week_fetch(force_refresh: Option<bool>) -> Result<String, 
     }
 
     // BL-CALENDAR-EVENTKIT (5/21): 优先 EventKit binary, osascript fallback.
+    // Windows: Catfish 自己记的事件 + 经典版 Outlook 里的会议 (有就并), 见 windows_events
+    #[cfg(windows)]
+    let result = windows_events("natural-week").await;
+    #[cfg(not(windows))]
     let result = tokio::task::spawn_blocking(|| {
         // 用新子命令名防旧 helper 静默沿用“从今天滚动 7 天”的历史语义。
         // 旧 helper 会返回 unknown command，随后自动走下面的自然周 JXA fallback。
 
-        // 9/23: Windows 读 Outlook 默认日历 (原来走 EventKit / osascript, Windows 上两个都没有,
-        // 早安页"本周日程"在 Windows 上永远是空的或报错)。
-        #[cfg(windows)]
-        {
-            super::system_outlook::read_events("natural-week")
-        }
-        #[cfg(not(windows))]
         match run_eventkit("natural-week", Duration::from_secs(3)) {
             Ok(json) => Ok(json),
             Err(e) => {
@@ -291,15 +288,12 @@ pub async fn calendar_today_fetch(force_refresh: Option<bool>) -> Result<String,
     // BL-CALENDAR-EVENTKIT (5/21): 优先调 Swift binary (EventKit), osascript 兜底.
     // EventKit 直调 macOS 原生 API < 100ms 稳定, 不走 AppleScript subprocess 冷启动慢.
     // Swift binary 不存在 (未编译 / 跨平台) → fallback osascript 老路径.
+    // Windows: Catfish 自己记的事件 + 经典版 Outlook 里的会议 (有就并), 见 windows_events
+    #[cfg(windows)]
+    let result = windows_events("today").await;
+    #[cfg(not(windows))]
     let result = tokio::task::spawn_blocking(|| {
 
-        // 9/23: Windows 读 Outlook 默认日历 (原来走 EventKit / osascript, Windows 上两个都没有,
-        // 早安页"本周日程"在 Windows 上永远是空的或报错)。
-        #[cfg(windows)]
-        {
-            super::system_outlook::read_events("today")
-        }
-        #[cfg(not(windows))]
         match run_eventkit("today", Duration::from_secs(3)) {
             Ok(json) => Ok(json),
             Err(e) => {
@@ -322,7 +316,7 @@ pub async fn calendar_today_fetch(force_refresh: Option<bool>) -> Result<String,
     result
 }
 
-#[cfg(not(windows))] // Windows 读 Outlook (system_outlook::read_events)
+#[cfg(not(windows))] // Windows 见 windows_events
 /// BL-CALENDAR-EVENTKIT (5/21): spawn catfish-calendar Swift binary 调 EventKit.
 ///
 /// 路径查找顺序:
@@ -386,7 +380,7 @@ fn run_eventkit(subcmd: &str, timeout: Duration) -> Result<String, String> {
     }
 }
 
-#[cfg(not(windows))] // Windows 读 Outlook (system_outlook::read_events)
+#[cfg(not(windows))] // Windows 见 windows_events
 fn locate_eventkit_binary() -> Option<std::path::PathBuf> {
     use std::path::PathBuf;
 
@@ -430,7 +424,7 @@ fn locate_eventkit_binary() -> Option<std::path::PathBuf> {
     None
 }
 
-#[cfg(not(windows))] // Windows 读 Outlook (system_outlook::read_events)
+#[cfg(not(windows))] // Windows 见 windows_events
 fn run_osascript(script: &str, timeout: Duration) -> Result<String, String> {
     use std::io::Read;
 
@@ -496,6 +490,39 @@ fn run_osascript(script: &str, timeout: Duration) -> Result<String, String> {
             }
         }
     }
+}
+
+/// Windows 早安页日程 (10/2): Catfish 自己记的事件 (system_local_pim, tool-bridge 里) +
+/// 经典版 Outlook 里员工已有的会议 (system_outlook::read_events)。
+///
+/// 9/23 只读 Outlook —— 新版 Outlook 没有 COM, 新机器上这里永远报错 / 是空的。现在两个
+/// 来源有一个就够: Outlook 读不到 (没装 / 新版) 安静跳过; 两个都失败才报错。
+#[cfg(windows)]
+async fn windows_events(range: &'static str) -> Result<String, String> {
+    use serde_json::Value;
+    let mine = super::system_local_pim::calendar_events(range).await;
+    let outlook = tokio::task::spawn_blocking(move || super::system_outlook::read_events(range))
+        .await
+        .map_err(|e| format!("join error: {e}"))?;
+    let mut all: Vec<Value> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    match mine {
+        Ok(v) => all.extend(v),
+        Err(e) => errors.push(format!("Catfish 日历: {e}")),
+    }
+    match outlook.map(|json| serde_json::from_str::<Value>(&json)) {
+        Ok(Ok(Value::Array(v))) => all.extend(v),
+        Ok(_) => log::warn!("[calendar] Outlook 返回的不是 JSON 数组, 跳过"),
+        Err(e) => {
+            log::debug!("[calendar] Outlook 读不到 (没装 / 新版 Outlook), 跳过: {e}");
+            errors.push(e);
+        }
+    }
+    if all.is_empty() && errors.len() == 2 {
+        return Err(errors.join("; "));
+    }
+    all.sort_by(|a, b| a["start"].as_str().cmp(&b["start"].as_str()));
+    serde_json::to_string(&all).map_err(|e| e.to_string())
 }
 
 #[cfg(all(test, target_os = "macos"))]

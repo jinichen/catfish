@@ -108,15 +108,17 @@ end tell"#,
         Ok(stdout)
     }
 
-    // 9/23: Windows 写进 Outlook 任务 (原来这里是 Err("当前平台未实现"))
+    // 10/2: Windows 存进 Catfish 自己 (任务库 + 到点弹通知, system_local_pim.rs)。
+    // 9/23 走的是 Outlook COM, 新版 Outlook 没有 COM, 不再依赖客户端。
     #[cfg(windows)]
     {
         if title.trim().is_empty() {
             return Err("title 不能空".into());
         }
-        super::system_outlook::create_reminder(
+        super::system_local_pim::create_reminder(
             &title, body.as_deref(), due_date_iso.as_deref(), list_name.as_deref(), priority,
         )
+        .await
     }
 
     #[cfg(not(any(target_os = "macos", windows)))] // windows-parity: Linux 不发布, 没有对应的系统应用
@@ -165,7 +167,7 @@ end tell"#;
 
     #[cfg(windows)]
     {
-        super::system_outlook::list_reminder_lists()
+        super::system_local_pim::list_reminder_lists().await
     }
 
     #[cfg(not(any(target_os = "macos", windows)))] // windows-parity: Linux 不发布, 没有对应的系统应用
@@ -334,7 +336,7 @@ end tell"#,
         Ok(stdout)
     }
 
-    // 9/23: Windows 写进 Outlook 日历 (原来这里是 Err("当前平台未实现"))
+    // 10/2: Windows 存进 Catfish 日历 + 生成 .ics (system_local_pim.rs), 不再写 Outlook
     #[cfg(windows)]
     {
         if title.trim().is_empty() {
@@ -345,7 +347,7 @@ end tell"#,
         }
         // 跟 mac 分支同一个默认: 没传 = 提前 15 分钟; 显式传 [] = 不提醒
         let alarms = alarm_minutes_before.unwrap_or_else(|| vec![15]);
-        super::system_outlook::create_calendar_event(
+        super::system_local_pim::create_calendar_event(
             &title,
             &start_iso,
             end_iso.as_deref(),
@@ -354,6 +356,7 @@ end tell"#,
             calendar_name.as_deref(),
             &alarms,
         )
+        .await
     }
 
     #[cfg(not(any(target_os = "macos", windows)))] // windows-parity: Linux 不发布, 没有对应的系统应用
@@ -409,7 +412,7 @@ end tell"#;
 
     #[cfg(windows)]
     {
-        super::system_outlook::list_calendars()
+        super::system_local_pim::list_calendars().await
     }
 
     #[cfg(not(any(target_os = "macos", windows)))] // windows-parity: Linux 不发布, 没有对应的系统应用

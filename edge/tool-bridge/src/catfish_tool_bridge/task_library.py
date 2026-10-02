@@ -396,13 +396,22 @@ def _find_existing_by_title(title: str) -> tuple[str | None, list[dict[str, Any]
 
 
 def tool_sync_tasks_to_reminders(args: dict[str, Any]) -> dict[str, Any]:
-    """把本周任务库行动幂等投影到 macOS Reminders / Windows Outlook 任务 (10/2)。
-
-    tool_list_tasks 里那个"每次读任务库先导一遍"仍只在 macOS: Windows 上读 Outlook
-    要把 Outlook 拉起来, 不能每隔几分钟偷偷开一次; 这里是员工明确要求同步才走。
-    """
-    if platform.system() not in ("Darwin", "Windows"):
-        return {"ok": False, "error": "任务同步只支持 macOS (Reminders) / Windows (Outlook 任务)", "created": []}
+    """把本周任务库行动幂等投影到 macOS Reminders; Windows 上给这些任务挂 Catfish 闹钟 (10/2)。"""
+    if platform.system() == "Windows":
+        from . import local_pim  # noqa: PLC0415
+        listed = list_tasks(args)
+        tasks = listed["tasks"]
+        created = local_pim.alarm_tasks(
+            [str(t["task_id"]) for t in tasks],
+            {str(t["task_id"]): t["due_date_iso"] for t in tasks if t.get("due_date_iso")},
+        )
+        return {
+            "ok": True, "scope": listed["scope"], "created": created, "count": len(created),
+            "summary": f"✅ 已给 {len(created)} 条有截止时间的任务挂上提醒, 到点 Catfish 弹 Windows 通知"
+                       "（重复运行不会重复挂）",
+        }
+    if platform.system() != "Darwin":
+        return {"ok": False, "error": "任务同步只支持 macOS (Reminders) / Windows (Catfish 提醒)", "created": []}
     from . import reminders  # noqa: PLC0415
     snapshot = reminders.tool_list_reminders(
         {"scope": "all", "include_completed": True, "limit": _SNAPSHOT_LIMIT},

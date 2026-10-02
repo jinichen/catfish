@@ -37,7 +37,7 @@ def _is_macos() -> bool:
 
 
 def _is_windows() -> bool:
-    """10/2: Windows 走 Outlook 任务 (outlook_pim.py), 跟 Companion 界面 system_outlook.rs 同一处。"""
+    """10/2: Windows 上提醒存在 Catfish 自己 (local_pim.py: 任务库 + 到点弹通知), 不靠任何客户端。"""
     return platform.system() == "Windows"
 
 
@@ -118,7 +118,7 @@ def tool_create_reminder(args: dict[str, Any]) -> dict[str, Any]:
     if not _is_macos():
         return {
             "ok": False,
-            "error": "create_reminder 只支持 macOS (Reminders.app) / Windows (Outlook). 当前平台: "
+            "error": "create_reminder 只支持 macOS (Reminders.app) / Windows (Catfish 自己提醒). 当前平台: "
                      + platform.system(),
         }
 
@@ -190,19 +190,16 @@ end tell'''
 def tool_list_reminder_lists(args: dict[str, Any]) -> dict[str, Any]:
     """catfish_list_reminder_lists tool 入口."""
     if _is_windows():
-        from . import outlook_pim  # noqa: PLC0415
-        try:
-            lists = outlook_pim.list_reminder_lists()
-        except outlook_pim.OutlookError as e:
-            return {"ok": False, "error": str(e), "list_names": []}
+        from . import local_pim  # noqa: PLC0415
+        lists = local_pim.list_reminder_lists()
         return {
             "ok": True, "list_names": lists, "count": len(lists),
-            "summary": f"📋 Outlook 任务有 {len(lists)} 个文件夹: {', '.join(lists) if lists else '(无)'}",
+            "summary": f"📋 Catfish 提醒有 {len(lists)} 个清单: {', '.join(lists)}",
         }
     if not _is_macos():
         return {
             "ok": False,
-            "error": "list_reminder_lists 只支持 macOS / Windows (Outlook). 当前平台: " + platform.system(),
+            "error": "list_reminder_lists 只支持 macOS / Windows. 当前平台: " + platform.system(),
             "list_names": [],
         }
 
@@ -503,22 +500,17 @@ def tool_list_reminders(
     list_name = str(args.get("list_name") or "").strip()
     include_completed = bool(args.get("include_completed", False))
     if _is_windows():
-        from . import outlook_pim  # noqa: PLC0415
-        try:
-            items = outlook_pim.list_reminders(
-                include_completed=include_completed, list_name=list_name, timeout_sec=max(timeout_sec, 60.0),
-            )
-        except outlook_pim.OutlookError as e:
-            return {"ok": False, "error": str(e), "reminders": []}
+        from . import local_pim  # noqa: PLC0415
+        items = local_pim.list_reminders(include_completed=include_completed, list_name=list_name)
         return _list_result(
             _filter_reminders(items, scope, now=_now_local(), include_completed=include_completed,
                               list_name=list_name, limit=limit),
-            scope, list_name, include_completed, source="Outlook 任务",
+            scope, list_name, include_completed, source="Catfish 提醒",
         )
     if not _is_macos():
         return {
             "ok": False,
-            "error": "list_reminders 只支持 macOS / Windows (Outlook). 当前平台: " + platform.system(),
+            "error": "list_reminders 只支持 macOS / Windows. 当前平台: " + platform.system(),
             "reminders": [],
         }
 
@@ -582,25 +574,27 @@ def _list_result(
 def _create_reminder_windows(
     title: str, body: str, due_date_iso: str, list_name: str, priority: int | None,
 ) -> dict[str, Any]:
-    from . import outlook_pim  # noqa: PLC0415
+    """Windows: 写进本机任务库 + 挂闹钟, 到点 Catfish 弹 Windows 通知 (local_pim.py)。"""
+    from . import local_pim  # noqa: PLC0415
     if due_date_iso:
         try:
             datetime.fromisoformat(due_date_iso.replace("Z", "+00:00"))
         except ValueError as e:
             return {"ok": False, "error": f"due_date_iso 格式错 (期望 'YYYY-MM-DDTHH:MM:SS'): {e}"}
-    try:
-        folder = outlook_pim.create_reminder(title, body, due_date_iso, list_name, priority)
-    except outlook_pim.OutlookError as e:
-        return {"ok": False, "error": str(e), "needs_outlook": e.no_outlook}
-    logger.info("BL-REMINDER: Outlook 任务 '%s' (folder=%s, due=%s)", title, folder, due_date_iso or "无")
+    r = local_pim.create_reminder(title, body, due_date_iso, list_name, priority)
+    at = r["remind_at"]
+    logger.info("BL-REMINDER: Catfish 提醒 '%s' (remind_at=%s)", title, at)
     return {
         "ok": True,
         "reminder_name": title,
-        "list_name": folder or list_name,
+        "task_id": r["task"]["task_id"],
+        "list_name": r["task"]["list_name"],
         "due_date_iso": due_date_iso or None,
-        "summary": f"⏰ 已在 Outlook 任务「{folder or list_name}」里创建「{title}」"
-                   + (f" — {due_date_iso}, 到时 Outlook 弹提醒" if due_date_iso else " (无截止)")
-                   + ". Exchange 账户会同步到手机 Outlook.",
+        "remind_at": at.isoformat(timespec="minutes") if at else None,
+        "summary": f"⏰ 已记进 Catfish 任务库「{title}」"
+                   + (f", {at:%m-%d %H:%M} Catfish 会弹 Windows 通知 (Catfish 没开着时, 下次打开补弹)"
+                      if at else " (没给时间, 不弹通知)")
+                   + "。Windows 上不同步到手机。",
     }
 
 
