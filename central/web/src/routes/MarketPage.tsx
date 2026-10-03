@@ -6,6 +6,7 @@
  * 内部 2 个 sub-tab:
  *   /market/skills/* — 技能脚本市场 (原 /skills, 复用 SkillsHubPage)
  *   /market/mcp/*    — 连接器市场 (原 /mcp, 复用 McpMarketPage)
+ *   /market/components — 组件 · 模型与运行包 (10/3, 中央 /components/ 发布的大件, 只读)
  *
  * 未来扩展 (不在本 sprint): prompts / personas / 模板 也归 /market 下.
  */
@@ -14,10 +15,12 @@ import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { Card } from "../components/Card";
 import { SkillsHubPage } from "./SkillsHubPage";
 import { McpMarketPage } from "./McpMarketPage";
+import { ComponentsMarketPage } from "./ComponentsMarketPage";
 
 const TABS = [
   { to: "/market/skills", label: "🛠️ Skills", desc: "技能脚本" },
   { to: "/market/mcp", label: "🔌 MCP", desc: "连接器" },
+  { to: "/market/components", label: "🧩 组件", desc: "模型与运行包" },
 ];
 
 function MarketLayout({ children }: { children: React.ReactNode }) {
@@ -89,6 +92,14 @@ export function MarketPage() {
         element={
           <MarketLayout>
             <McpMarketPage />
+          </MarketLayout>
+        }
+      />
+      <Route
+        path="components"
+        element={
+          <MarketLayout>
+            <ComponentsMarketPage />
           </MarketLayout>
         }
       />
