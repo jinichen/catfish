@@ -54,7 +54,7 @@ function columns(onDelete: ((e: ComponentEntry) => void) | null): Array<Column<C
       header: "SHA-256",
       truncate: true,
       cell: (r) => (
-        <span title={r.sha256} style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 11 }}>{r.sha256}</span>
+        <span title={r.sha256} style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>{r.sha256}</span>
       ),
     },
     {
