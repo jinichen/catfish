@@ -46,3 +46,27 @@ export function rememberTemplateId(id: string): void {
     // 记不住不影响生成
   }
 }
+
+export const FILE_TEMPLATE_HELP =
+  "把单位现成的纪要表 (.docx / .xlsx) 原样传上来, 小鲶会认出要填的地方:\n" +
+  "· 标签格旁边 / 下面的空格 (「会议时间」| 空格)、以冒号结尾的「参会人员：」\n" +
+  "· 表头下面的空行 (序号 | 事项 | 负责人 | 时限), 待办多了自动加行\n" +
+  "认不准的话, 在要填的地方写占位符: {{会议名称}} {{参会人员}}; 待办表在一行里写 {{事项}} {{负责人}} {{完成时限}}, 每个待办复制一行。\n" +
+  "老的 .doc / .xls 先另存为 .docx / .xlsx。生成时只填空, 字体、边框、合并格、落款都不动。";
+
+export function isFileTemplate(t: Pick<MinutesTemplate, "kind">): boolean {
+  return t.kind === "docx" || t.kind === "xlsx";
+}
+
+/** File → base64 (不带 data: 前缀)。FileReader 是浏览器原生异步, 几 MB 也不卡界面。 */
+export function readFileBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const uri = String(r.result);
+      resolve(uri.slice(uri.indexOf(",") + 1));
+    };
+    r.onerror = () => reject(r.error ?? new Error("读文件失败"));
+    r.readAsDataURL(file);
+  });
+}

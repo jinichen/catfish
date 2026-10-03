@@ -11,13 +11,14 @@
  *
  * 10/3: 可以选纪要模版 (TemplateManager)。缺省 = 原来的固定格式; 选了自定义模版, 这里
  * 显示按模版写的那份 Markdown, 下面照样列待办给「加入任务库」用 —— 存知识库存的也是它。
+ * Word / Excel 模版: 顶上给「打开 Word / Excel」(填好的那张表), 下面显示缺省版过目。
  */
 import { useEffect, useState } from "react";
 
 import { Markdown } from "../../lib/markdown";
 import { toolBridgeCallTool } from "../../lib/tauri_services";
 import {
-  DEFAULT_TEMPLATE_ID, meetingMinutes, meetingMinutesGenerate, meetingTemplatesList,
+  DEFAULT_TEMPLATE_ID, meetingMinutes, meetingMinutesGenerate, meetingMinutesOpenFile, meetingTemplatesList,
   type MeetingMeta, type Minutes, type MinutesTemplate,
 } from "../../lib/tauri_meeting";
 import { Btn, ErrorLine, inputStyle, itemStyle } from "../Collab/roomLinkUi";
@@ -163,7 +164,19 @@ export default function MinutesView({ meta }: { meta: MeetingMeta }) {
   return (
     <div style={{ ...itemStyle, fontSize: 13 }}>
       <div style={{ fontWeight: 600 }}>纪要{m.template ? ` · ${m.template.name}` : ""}</div>
-      {m.template ? (
+      {m.output_file && (
+        // Word / Excel 模版: 填好的那张表就是交出去的纪要; 下面照常显示缺省版给员工过目
+        <div style={{ display: "flex", gap: "var(--space-2)", alignItems: "center", flexWrap: "wrap", fontSize: 12 }}>
+          <span>📄 {m.output_file.split(/[\\/]/).pop()}</span>
+          <Btn kind="primary" onClick={() => void meetingMinutesOpenFile(meta.id, false).catch((e) => setError(String(e)))}>
+            打开 {m.template?.kind === "xlsx" ? "Excel" : "Word"}
+          </Btn>
+          <Btn kind="ghost" onClick={() => void meetingMinutesOpenFile(meta.id, true).catch((e) => setError(String(e)))}>
+            在文件夹中显示
+          </Btn>
+        </div>
+      )}
+      {m.template && !m.output_file ? (
         <Markdown text={minutes.markdown} />
       ) : (
         <>
@@ -172,7 +185,7 @@ export default function MinutesView({ meta }: { meta: MeetingMeta }) {
         </>
       )}
       <div>
-        <div style={{ fontWeight: 600, marginBottom: 4 }}>{m.template ? "待办 (勾选加入任务库)" : "待办"}</div>
+        <div style={{ fontWeight: 600, marginBottom: 4 }}>{m.template && !m.output_file ? "待办 (勾选加入任务库)" : "待办"}</div>
         {m.action_items.length === 0 && <div style={{ color: "var(--catfish-text-muted)" }}>(无)</div>}
         {m.action_items.map((it, i) => (
           <label key={i} style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
@@ -186,7 +199,7 @@ export default function MinutesView({ meta }: { meta: MeetingMeta }) {
           </label>
         ))}
       </div>
-      {!m.template && section("待定问题", m.open_questions)}
+      {(!m.template || m.output_file) && section("待定问题", m.open_questions)}
       {picker}
       {manager}
       <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap" }}>

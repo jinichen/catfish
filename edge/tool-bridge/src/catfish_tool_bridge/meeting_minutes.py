@@ -192,16 +192,37 @@ async def summarize(
         minutes = parse_minutes(await call_llm(build_reduce_messages(meta, partials), **kw))
 
     doc: dict[str, Any] = {"version": 1, "meeting_id": meta.get("id"), "chunks": len(chunks), **minutes}
+    from . import meeting_minutes_template as mt  # noqa: PLC0415
+    # 材料: 短会议给转写原文; 长会议给分段要点 (原文塞不下, 跟 reduce 那步同一个取舍)
+    material = "\n".join(chunks[0]) if len(chunks) == 1 else "\n\n".join(
+        f"### 第 {i + 1} 段要点\n{json.dumps(p, ensure_ascii=False)}" for i, p in enumerate(partials)
+    )
+    head = f"会议: {meta.get('title', '')}\n日期: {meeting_date(meta)}\n"
     if template is None:
         markdown = render_markdown(meta, minutes, names)
-    else:
-        from . import meeting_minutes_template as mt  # noqa: PLC0415
-        filled = mt.fill_placeholders(template["body"], meta, transcript, names, meeting_date(meta))
-        # 材料: 短会议给转写原文; 长会议给分段要点 (原文塞不下, 跟 reduce 那步同一个取舍)
-        material = "\n".join(chunks[0]) if len(chunks) == 1 else "\n\n".join(
-            f"### 第 {i + 1} 段要点\n{json.dumps(p, ensure_ascii=False)}" for i, p in enumerate(partials)
+    elif template.get("kind", "markdown") in ("docx", "xlsx"):
+        # 单位定死的 Word / Excel: 认空 → 大模型给每个空出值 → 代码填进原文件另存 (格式不动)
+        from . import meeting_file_template as ft  # noqa: PLC0415
+        src = Path(template["path"])
+        slots = ft.inspect(src)
+        known = {
+            "会议名称": str(meta.get("title") or ""), "日期": meeting_date(meta),
+            "参会人员": "、".join(sorted(set(names.values()))), "参会人数": str(meta.get("attendees") or ""),
+            "时长": mt._duration(meta, transcript),
+        }
+        values = mt.parse_fill(
+            await call_llm(mt.build_fill_messages(head, known, ft.slots_for_prompt(slots), material, minutes), **kw),
+            slots,
         )
-        head = f"会议: {meta.get('title', '')}\n日期: {meeting_date(meta)}\n"
+        values = ft.apply_todos(slots, values, minutes["action_items"])
+        safe = re.sub(r'[\\/:*?"<>|\s]+', " ", str(meta.get("title") or "会议")).strip()[:40] or "会议"
+        out = meeting_dir / f"{safe} 会议纪要{src.suffix.lower()}"
+        ft.fill(src, out, slots, values)
+        markdown = render_markdown(meta, minutes, names)
+        doc["template"] = {"id": template["id"], "name": template["name"], "kind": template["kind"]}
+        doc["output_file"] = str(out)
+    else:
+        filled = mt.fill_placeholders(template["body"], meta, transcript, names, meeting_date(meta))
         body = mt.clean_markdown(await call_llm(mt.build_template_messages(head, filled, material, minutes), **kw))
         if not body:
             raise ValueError("大模型按模版没写出内容, 换个模版或重试")
@@ -241,3 +262,13 @@ async def handle_summarize(params: dict) -> dict:
     from .meeting_minutes_template import validate_template  # noqa: PLC0415
     template = validate_template(params.get("template"))
     return await summarize(d, gateway_url=gw, auth_token=token, model=params.get("model") or None, template=template)
+
+
+def handle_template_inspect(params: dict) -> dict:
+    """JSON-RPC `meeting/template_inspect`: 上传的 Word / Excel 模版里认出哪些要填的空,
+    给界面列出来让员工核对。认不出 → ValueError (带怎么加占位符的说明)。"""
+    from . import meeting_file_template as ft  # noqa: PLC0415
+    path = Path(str(params.get("path") or ""))
+    if not path.is_file():
+        raise ValueError(f"模版文件不存在: {path}")
+    return {"slots": ft.slots_for_prompt(ft.inspect(path))}

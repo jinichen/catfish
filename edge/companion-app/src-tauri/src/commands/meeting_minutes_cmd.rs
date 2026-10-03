@@ -66,7 +66,13 @@ pub async fn meeting_minutes_generate(id: String, template_id: Option<String>) -
     if let Some(tid) = template_id.filter(|t| t != templates::DEFAULT_ID) {
         // 模版正文在这里读好随 RPC 带过去, tool-bridge 那边不用知道文件在哪
         let t = templates::load(&home, &tid)?;
-        params["template"] = json!({ "id": t.id, "name": t.name, "body": t.body });
+        params["template"] = if t.is_file() {
+            // Word / Excel: 给原文件路径, tool-bridge 生成时重新认空、填好另存到会议目录
+            json!({ "id": t.id, "name": t.name, "kind": t.kind,
+                    "path": templates::file_path(&home, &t).display().to_string() })
+        } else {
+            json!({ "id": t.id, "name": t.name, "kind": "markdown", "body": t.body })
+        };
     }
     log::info!("[meeting] {id} 生成纪要 → {}", endpoints::endpoints().gateway_base());
     tool_bridge_rpc::call_with_timeout("meeting/summarize", params, SUMMARIZE_TIMEOUT).await
@@ -98,4 +104,58 @@ pub fn meeting_template_save(id: Option<String>, name: String, body: String) -> 
 #[tauri::command]
 pub fn meeting_template_delete(id: String) -> Result<(), String> {
     templates::delete(&store::home()?, &id)
+}
+
+/// 上传单位固定的 Word / Excel 纪要模版 (10/3)。id 给了 = 替换那个模版的文件。
+/// 先让 tool-bridge 认一遍要填的空, 认不出来就不收 (返回带"怎么加占位符"的说明)。
+#[tauri::command]
+pub async fn meeting_template_upload(
+    id: Option<String>,
+    name: String,
+    filename: String,
+    data_b64: String,
+) -> Result<Template, String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_b64.trim())
+        .map_err(|e| format!("文件读取失败: {e}"))?;
+    let home = store::home()?;
+    let (tid, kind, staged) = templates::stage_file(&home, id.as_deref(), &filename, &bytes)?;
+    let inspected = tool_bridge_rpc::call_with_timeout(
+        "meeting/template_inspect",
+        json!({ "path": staged.display().to_string() }),
+        Duration::from_secs(60),
+    )
+    .await;
+    let slots = match inspected {
+        Ok(v) => v.get("slots").cloned().unwrap_or(Value::Null),
+        Err(e) => {
+            templates::discard_file(&staged);
+            // "tool-bridge 错误 [-32602]: 没在模版里找到…" → 只留后半句给员工看
+            return Err(e.split_once("]: ").map(|(_, m)| m.to_string()).unwrap_or(e));
+        }
+    };
+    templates::commit_file(&home, &tid, &kind, &staged, &name, &filename, slots)
+}
+
+/// 生成好的 Word / Excel 纪要 (minutes.json 里的 output_file) 用系统默认程序打开。
+#[tauri::command]
+pub async fn meeting_minutes_open_file(id: String, reveal: bool) -> Result<(), String> {
+    let dir = store::meeting_dir(&root()?, &id)?;
+    let doc: Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.join("minutes.json")).map_err(|_| "还没生成纪要".to_string())?,
+    )
+    .map_err(|e| format!("minutes.json 格式不对: {e}"))?;
+    let file = doc.get("output_file").and_then(Value::as_str).ok_or("这份纪要没有 Word / Excel 文件")?;
+    // 只开会议目录里的文件 (minutes.json 是本机写的, 也不给它指到别处的机会)
+    let path = std::path::PathBuf::from(file);
+    if path.parent() != Some(dir.as_path()) || !path.is_file() {
+        return Err("纪要文件不见了, 重新生成一次".into());
+    }
+    let p = path.display().to_string();
+    if reveal {
+        super::file::reveal_in_finder(p).await
+    } else {
+        super::file::open_file(p).await
+    }
 }

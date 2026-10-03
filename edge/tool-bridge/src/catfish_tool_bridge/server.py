@@ -111,6 +111,13 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
             return _error(req_id, INVALID_PARAMS, str(e))
         except RuntimeError as e:
             return _error(req_id, INTERNAL_ERROR, str(e))
+    # 10/3: 上传的 Word / Excel 纪要模版认空 (meeting_file_template.py)
+    if method == "meeting/template_inspect":
+        from . import meeting_minutes  # noqa: PLC0415
+        try:
+            return _success(req_id, meeting_minutes.handle_template_inspect(params))
+        except ValueError as e:
+            return _error(req_id, INVALID_PARAMS, str(e))
 
     # 10/2: Windows 早安页"今日 / 本周日程"里 Catfish 自己记的日历事件 (local_pim.py)。
     # Rust 侧 calendar.rs 调; 不挂 tools/dispatch, 不进模型的工具清单。

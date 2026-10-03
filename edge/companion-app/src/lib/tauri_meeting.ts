@@ -85,7 +85,19 @@ export interface MinutesJson {
   action_items: ActionItem[];
   open_questions: string[];
   /** 10/3: 按自定义模版生成的才有; 没有 = 缺省格式 */
-  template?: { id: string; name: string };
+  template?: { id: string; name: string; kind?: TemplateKind };
+  /** 10/3: 按 Word / Excel 模版填好的文件 (在会议目录里) */
+  output_file?: string;
+}
+
+export type TemplateKind = "markdown" | "docx" | "xlsx";
+
+/** Word / Excel 模版里认出的一个要填的空 */
+export interface TemplateSlot {
+  id: string;
+  label: string;
+  kind: "text" | "table";
+  columns?: string[];
 }
 
 /** 会议纪要自定义模版 (10/3), 存在 ~/.catfish/meeting-templates/ */
@@ -94,6 +106,10 @@ export interface MinutesTemplate {
   name: string;
   body: string;
   updated_at: string;
+  /** 老数据没有这个字段 = markdown */
+  kind?: TemplateKind;
+  original_name?: string;
+  slots?: TemplateSlot[];
 }
 
 /** 缺省模版 = 原来那份固定格式, 不落盘、不能改 */
@@ -128,6 +144,12 @@ export const meetingTemplatesList = () => rawInvoke<MinutesTemplate[]>("meeting_
 export const meetingTemplateSave = (id: string | null, name: string, body: string) =>
   rawInvoke<MinutesTemplate>("meeting_template_save", { id, name, body });
 export const meetingTemplateDelete = (id: string) => rawInvoke<void>("meeting_template_delete", { id });
+/** 上传 / 替换 Word / Excel 模版 (id 给了 = 替换文件); 认不出要填的空会报错 */
+export const meetingTemplateUpload = (id: string | null, name: string, filename: string, dataB64: string) =>
+  rawInvoke<MinutesTemplate>("meeting_template_upload", { id, name, filename, dataB64 });
+/** 打开 (reveal=false) 或在文件夹里显示 (reveal=true) 按模版填好的 Word / Excel 纪要 */
+export const meetingMinutesOpenFile = (id: string, reveal: boolean) =>
+  rawInvoke<void>("meeting_minutes_open_file", { id, reveal });
 export const meetingMinutes = (id: string) => rawInvoke<Minutes | null>("meeting_minutes", { id });
 
 export interface AsrInstallProgress {
