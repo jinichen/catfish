@@ -255,12 +255,14 @@ from .admin_providers_router import (  # noqa: E402
 from .audit_router import register_audit_routes  # noqa: E402
 from .quota_router import register_quota_routes  # noqa: E402
 from .misc_routes import register_misc_routes  # noqa: E402
+from .components_admin import register_component_admin_routes  # noqa: E402
 
 register_model_admin_routes(app)
 register_provider_admin_routes(app)
 register_audit_routes(app)
 register_quota_routes(app)
 register_misc_routes(app)
+register_component_admin_routes(app)  # 10/3: 管理员在门户上传 / 下架组件包
 
 app.add_middleware(
     CORSMiddleware,

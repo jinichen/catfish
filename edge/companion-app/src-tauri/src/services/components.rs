@@ -99,9 +99,13 @@ pub fn parse_manifest(body: &str) -> Result<Manifest, String> {
     Ok(m)
 }
 
-/// manifest 里本平台的那一条。
+/// 跟平台无关的包 (纯模型文件之类) 在清单里的平台名 (10/3, 跟中央 build_component_manifest.py 一致)
+pub const ANY_PLATFORM: &str = "any";
+
+/// manifest 里本平台的那一条; 没有本平台专用的就用平台无关 (any) 的那条。
 pub fn find_entry<'a>(m: &'a Manifest, name: &str, platform: &str) -> Option<&'a ComponentEntry> {
-    m.components.iter().find(|c| c.name == name && c.platform == platform)
+    let of = |p: &str| m.components.iter().find(|c| c.name == name && c.platform == p);
+    of(platform).or_else(|| of(ANY_PLATFORM))
 }
 
 fn verified_path(dir: &Path, file: &str) -> PathBuf {

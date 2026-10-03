@@ -41,7 +41,8 @@ export function componentsPlugin(): Plugin {
           return res.end("bad path");
         }
         const file = path.resolve(root, rel);
-        if (!rel || !file.startsWith(root + path.sep)) {
+        // 点开头的 (.uploads/ 半截上传、.sha256-cache.json) 不对外, 跟 nginx 一致 (10/3)
+        if (!rel || rel.split("/").some((seg) => seg.startsWith(".")) || !file.startsWith(root + path.sep)) {
           res.statusCode = 404;
           return res.end("not found");
         }

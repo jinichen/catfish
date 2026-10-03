@@ -80,6 +80,21 @@ fn manifest_rejects_unknown_schema_and_path_in_filename() {
     assert!(find_entry(&m, "x", "windows-x64").is_none());
 }
 
+#[test]
+fn any_platform_is_fallback_not_override() {
+    let sha = "00000000000000000000000000000000000000000000000000000000000000aa";
+    let m = parse_manifest(&format!(
+        r#"{{"schema":1,"generated_at":"x","components":[
+        {{"name":"bge","version":"1.0.0","platform":"any","file":"bge-1.0.0-any.tar.gz","size":1,"sha256":"{sha}"}},
+        {{"name":"bge","version":"2.0.0","platform":"mac-arm64","file":"bge-2.0.0-mac-arm64.tar.gz","size":1,"sha256":"{sha}"}}]}}"#
+    ))
+    .unwrap();
+    // 有本平台专用的就用它; 没有才退到 any
+    assert_eq!(find_entry(&m, "bge", "mac-arm64").unwrap().platform, "mac-arm64");
+    assert_eq!(find_entry(&m, "bge", "windows-x64").unwrap().platform, "any");
+    assert!(find_entry(&m, "other", "windows-x64").is_none());
+}
+
 #[tokio::test]
 async fn download_verifies_and_marks_ready() {
     let d = data(3 << 20);

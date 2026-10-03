@@ -28,7 +28,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SCHEMA = 1
-PLATFORMS = ("mac-arm64", "mac-x64", "windows-x64")
+# any = 跟平台无关的包 (纯模型文件之类); Companion 找不到本平台的包时退而用它 (10/3)。
+# 中央门户上传接口 (llm-gateway components_admin.py) 用同一套规则, 改这里要一起改 ——
+# central/llm-gateway/tests/test_components_admin.py 会对两边的结果。
+PLATFORMS = ("mac-arm64", "mac-x64", "windows-x64", "any")
 _NAME_RE = re.compile(
     r"^(?P<name>[a-z0-9]+(?:-[a-z0-9]+)*?)"
     r"-(?P<version>\d+\.\d+\.\d+)"

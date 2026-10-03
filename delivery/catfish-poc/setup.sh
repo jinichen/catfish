@@ -553,6 +553,13 @@ mkdir -p certs
 # 10/1: 组件分发目录 (web 容器只读挂载到 /components/, 见 compose web.volumes)。
 # 同上, 让 Docker 自己造的话 Linux 上属主是 root, IT 往里拷组件包还得 sudo。
 mkdir -p components
+# 10/3: 门户上传组件包时 gateway 容器 (uid 1000) 要能写这个目录。root 跑 setup 时目录属主是 root,
+# 不改的话上传报"组件目录不可写"。
+if [ "$(id -u)" = "0" ]; then
+  chown 1000:1000 components
+elif [ "$(id -u)" != "1000" ]; then
+  echo "  ⚠ components/ 属主不是 uid 1000, 门户上传组件包会失败; 用 root 跑: chown 1000:1000 $(pwd)/components"
+fi
 if [ "$ENABLE_HTTPS" = "1" ]; then
     echo "→ 证书 (SAN 含 $SERVER_IP)"
     # --user: 让产物属主是当前用户, 否则 Linux 上会变成镜像里的 uid 1000,
