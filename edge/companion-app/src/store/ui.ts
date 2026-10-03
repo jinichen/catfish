@@ -40,6 +40,9 @@ interface UIState {
    *  跟 manifesto 公理 1 (员工主权): 员工**自己**决定何时给审计员看. 持久 localStorage. */
   auditViewEnabled: boolean;
   setAuditViewEnabled: (enabled: boolean) => void;
+  /** 10/3 鸿波: 左边栏能收起, 只剩图标。持久 localStorage, 下次打开还是收着。 */
+  railCollapsed: boolean;
+  toggleRail: () => void;
   setActiveTab: (tab: TabId) => void;
   toggleDarkMode: () => void;
   openAbout: () => void;
@@ -78,6 +81,22 @@ export const useUIStore = create<UIState>((set, get) => ({
     return id;
   },
   // P3.3.55: 从 localStorage 恢复, 默认 false
+  railCollapsed: (() => {
+    try {
+      return localStorage.getItem("catfish:railCollapsed") === "1";
+    } catch {
+      return false;
+    }
+  })(),
+  toggleRail: () => {
+    const next = !get().railCollapsed;
+    try {
+      localStorage.setItem("catfish:railCollapsed", next ? "1" : "0");
+    } catch {
+      // 记不住就只在这次生效
+    }
+    set({ railCollapsed: next });
+  },
   auditViewEnabled: (() => {
     try {
       return localStorage.getItem("catfish:auditViewEnabled") === "1";

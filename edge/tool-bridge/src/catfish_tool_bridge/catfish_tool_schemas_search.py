@@ -290,7 +290,7 @@ SEARCH_TOOLS: List[Dict[str, Any]] = [
             "      summary, short_terms?, latency_ms.\n"
             "      matched_by = filename / content / content+filename.\n"
             "      error='index_unavailable' 表示员工还没建过索引 —— 这时候要让他去\n"
-            "      Companion 仪表盘 → 服务/配额 → 搜索范围 加目录, 而不是说没找到.\n\n"
+            "      Companion 设置 → 服务/配额 → 搜索范围 加目录, 而不是说没找到.\n\n"
             "🔒 隐私: 直读员工 mac 本机 sqlite, 不出端, 不上传中央."
         ),
         "input_schema": {

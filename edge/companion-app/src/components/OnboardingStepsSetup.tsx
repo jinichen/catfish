@@ -95,7 +95,7 @@ export function StepModel({
         </div>
       )}
       <p style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: "var(--space-3)" }}>
-        默认模型在 仪表盘 → 身份卡 / 对话 tab 顶部下拉切.
+        默认模型在 设置 → 身份卡 / 对话 tab 顶部下拉切.
       </p>
       <Buttons onNext={onNext} onBack={onBack} onSkip={onSkip} />
     </>
@@ -194,7 +194,7 @@ export function StepCurator({
             · 60 天没用 → 标记"久未使用" (你能看到)
             <br />· 180 天没用 → 归档到不可见 (能恢复)
             <br />· 你 idle 4 小时才开始干, 一周最多跑一次
-            <br />· 仪表盘 "脚本整理" 卡随时关
+            <br />· 设置 "脚本整理" 卡随时关
           </div>
         </div>
       </label>
@@ -306,7 +306,7 @@ export function StepDocDirs({
         <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 8, lineHeight: 1.5 }}>
           常见路径: <code>~/Documents</code> · <code>~/work</code> · <code>~/项目</code> · <code>~/文稿</code>
           <br />
-          后面在仪表盘 "📂 搜索范围" 卡随时改 / 加多个.
+          后面在设置 "📂 搜索范围" 卡随时改 / 加多个.
         </div>
       </div>
 
@@ -380,7 +380,7 @@ export function StepTryChat({
         ))}
       </div>
       <p style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: "var(--space-3)" }}>
-        发完后仪表盘"鲶鱼对你的认识 → 我的记忆"卡能看到刚记的, 也能随时删.
+        发完后设置"鲶鱼对你的认识 → 我的记忆"卡能看到刚记的, 也能随时删.
       </p>
       <Buttons
         onNext={() => onFinish(picked)}

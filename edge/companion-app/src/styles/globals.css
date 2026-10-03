@@ -917,6 +917,7 @@ body {
 .app-shell {
   display: grid;
   grid-template-columns: 116px minmax(0, 1fr);
+  transition: grid-template-columns 160ms ease;
   height: 100vh;
   min-height: 0;
   overflow: hidden;
@@ -5366,4 +5367,54 @@ button {
   color: var(--catfish-text);
   font-size: 14px;
   line-height: 1.7;
+}
+
+
+/* ═══ 10/3: 左边栏收起 (只剩图标) ═══
+   放文件最后: 要压过上面 max-width 1020px 那条 (窄窗口时图标+小字竖排)。 */
+.app-shell[data-rail-collapsed="true"] {
+  grid-template-columns: 68px minmax(0, 1fr);
+}
+
+.app-rail[data-collapsed="true"] {
+  padding-inline: 8px;
+}
+
+.app-rail[data-collapsed="true"] .app-rail__brand img {
+  width: 36px;
+  height: 36px;
+}
+
+.app-rail[data-collapsed="true"] .app-rail__item {
+  min-height: 46px;
+  flex-direction: row;
+  justify-content: center;
+  padding: 9px 0;
+}
+
+.app-rail[data-collapsed="true"] .app-rail__label,
+.app-rail[data-collapsed="true"] .app-rail__identity span {
+  display: none;
+}
+
+.app-rail[data-collapsed="true"] .app-rail__badge {
+  top: 3px;
+  right: 3px;
+}
+
+.app-rail[data-collapsed="true"] .app-rail__identity {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+/* 收起 / 展开按钮: 比导航项轻一档, 不抢眼 */
+.app-rail__toggle {
+  min-height: 34px;
+  padding-block: 6px;
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+.app-rail__toggle:hover {
+  opacity: 1;
 }

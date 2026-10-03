@@ -232,7 +232,7 @@ MEMORY_TOOLS: List[Dict[str, Any]] = [
             "Jaccard 相似度 ≥ 0.6 判定. 返**建议列表**给你 (LLM), 你跟员工确认后才"
             "用 memory(action=remove) / memory(action=replace) 真改盘.\n\n"
             "**何时调**:\n"
-            "- 仪表盘 '我的 hermes memory' 卡显示 entries 数 ≥ 10 时主动调一次\n"
+            "- 设置 '我的 hermes memory' 卡显示 entries 数 ≥ 10 时主动调一次\n"
             "- 员工说 '我的 memory 看着乱' / '帮我整理一下记忆' 时调\n"
             "- audit 日志显示 chars 涨但实际信息没增多 (BL-MM1 narrate 嫌疑) 时\n\n"
             "**输入**:\n"

@@ -236,8 +236,8 @@ export default function ServerSetupCard({ state, onRetest, onSaved }: ServerSetu
           }}
         >
           {webUrl.trim()
-            ? "登录后仪表盘顶部的门户链接会跳这里。"
-            : "留空的话，仪表盘顶部的门户链接会指向 http://127.0.0.1:5173（你自己的机器），点了打不开。"}
+            ? "登录后设置顶部的门户链接会跳这里。"
+            : "留空的话，设置顶部的门户链接会指向 http://127.0.0.1:5173（你自己的机器），点了打不开。"}
         </div>
 
         {saveError && (

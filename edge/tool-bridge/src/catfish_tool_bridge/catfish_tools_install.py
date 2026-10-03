@@ -600,7 +600,7 @@ def skill_install(args: Dict[str, Any]) -> Dict[str, Any]:
         "summary": (
             f"已安装 skill {namespace}/{skill_name} (v{metadata['version']}) "
             f"从 {source_label}. dry-run 通过 ({dry_note}). "
-            f"仪表盘下次刷新会出现, gateway 重新扫到后 LLM 也能调."
+            f"设置下次刷新会出现, gateway 重新扫到后 LLM 也能调."
             + (f" 旧版备份: {audit_event.get('backup_path')}" if overwrite else "")
         ),
         "dry_run": audit_event.get("dry_run", {}),

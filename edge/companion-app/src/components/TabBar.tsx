@@ -9,8 +9,10 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Icon } from "@phosphor-icons/react";
 import {
   BookOpenText,
-  ChartBar,
+  CaretDoubleLeft,
+  CaretDoubleRight,
   EnvelopeSimple,
+  GearSix,
   Handshake,
   Microphone,
   SquaresFour,
@@ -44,12 +46,16 @@ const TABS: { id: TabId; label: string; icon: Icon }[] = [
   // 6/9 鸿波: 知识体系 ↔ 仪表盘 互换. 知识体系日常翻看比仪表盘多, 放中段.
   //          仪表盘 (本地服务 / 配额 / 隐私 / 技能) 是配置看不勤, 放最右当"设置".
   { id: "wiki", label: "知识体系", icon: BookOpenText },
-  { id: "dashboard", label: "仪表盘", icon: ChartBar },
+  // 10/3 鸿波: 最后一项叫「设置」不叫「仪表盘」—— 里面就是本地服务 / 搜索范围 / 配额 / 隐私 /
+  //   账号安全 / 技能这些配置。tab id 仍是 dashboard (路由、事件、测试都认这个名字)。
+  { id: "dashboard", label: "设置", icon: GearSix },
 ];
 
 export default function TabBar() {
   const activeTab = useUIStore((s) => s.activeTab);
   const setActiveTab = useUIStore((s) => s.setActiveTab);
+  const collapsed = useUIStore((s) => s.railCollapsed);
+  const toggleRail = useUIStore((s) => s.toggleRail);
   const agentName = useAgentStore((s) => s.name);
   // 订阅即开始轮询邮筒 + P49 探针 —— 导航常驻, 所以员工不进「协同」页也能看到红点。
   const collabPending = pendingCount(useRoomLink());
@@ -76,7 +82,7 @@ export default function TabBar() {
   }, [collabPending, taskUnseen]);
 
   return (
-    <nav className="app-rail" aria-label="主导航">
+    <nav className="app-rail" aria-label="主导航" data-collapsed={collapsed || undefined}>
       <div className="app-rail__brand" title="鲶鱼 Companion">
         <img src="/catfish-logo.svg" alt="" />
       </div>
@@ -93,9 +99,12 @@ export default function TabBar() {
               className="app-rail__item"
               data-active={active || undefined}
               aria-current={active ? "page" : undefined}
+              // 收起时只剩图标: 名字放 tooltip 和读屏
+              title={collapsed ? t.label : undefined}
+              aria-label={collapsed ? t.label : undefined}
             >
               <IconComponent size={21} weight={active ? "fill" : "regular"} aria-hidden="true" />
-              <span>{t.label}</span>
+              <span className="app-rail__label">{t.label}</span>
               {t.id === "collab" && collabPending > 0 && (
                 <span className="app-rail__badge" aria-label={`${collabPending} 条等你点头`}>
                   {collabPending > 9 ? "9+" : collabPending}
@@ -112,6 +121,17 @@ export default function TabBar() {
       </div>
 
       <div className="app-rail__footer">
+        <button
+          type="button"
+          className="app-rail__item app-rail__toggle"
+          onClick={toggleRail}
+          title={collapsed ? "展开侧栏" : "收起侧栏, 只留图标"}
+          aria-label={collapsed ? "展开侧栏" : "收起侧栏"}
+          aria-expanded={!collapsed}
+        >
+          {collapsed ? <CaretDoubleRight size={16} aria-hidden="true" /> : <CaretDoubleLeft size={16} aria-hidden="true" />}
+          <span className="app-rail__label">收起</span>
+        </button>
         <div className="app-rail__identity" title={`当前数字副手：${agentName}`}>
           <img src="/catfish-avatar.svg" alt="" />
           <span>{agentName}</span>

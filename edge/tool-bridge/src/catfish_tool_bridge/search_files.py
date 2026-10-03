@@ -139,7 +139,7 @@ def search_files(query: str, limit: int = DEFAULT_LIMIT,
             "matches": [], "count": 0, "error": "index_unavailable",
             "summary": (
                 "员工本机还没建过文件索引 (找不到 search.db)。别说'没找到这个文件' —— "
-                "要让他去 Companion 仪表盘 → 服务/配额 → 搜索范围, 加目录并建索引。"
+                "要让他去 Companion 设置 → 服务/配额 → 搜索范围, 加目录并建索引。"
             ),
         }
 
@@ -234,7 +234,7 @@ def search_files(query: str, limit: int = DEFAULT_LIMIT,
         else:
             res["summary"] = (
                 "索引里没有匹配的文件。可能是: (1) 关键词不对, 换个说法; "
-                "(2) 文件不在索引范围内 —— 员工可以在 Companion 仪表盘 → "
+                "(2) 文件不在索引范围内 —— 员工可以在 Companion 设置 → "
                 "服务/配额 → 搜索范围 里加目录。别直接断言文件不存在。"
             )
     else:

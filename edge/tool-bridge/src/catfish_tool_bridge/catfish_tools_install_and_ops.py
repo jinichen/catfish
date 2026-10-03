@@ -646,7 +646,7 @@ def skill_delete(args: Dict[str, Any]) -> Dict[str, Any]:
             "backup_path": str(backup_dir),
             "summary": (
                 f"已删除 skill {skill_path} (备份在 {backup_dir}, 30 天内可恢复). "
-                f"重启 Companion 后仪表盘也会移除. 原因: {reason}"
+                f"重启 Companion 后设置也会移除. 原因: {reason}"
             ),
         }
     except Exception as e:

@@ -125,7 +125,7 @@ export function DataDiagnosisCard({ statuses, onRetry, title = "今天没有素�
           },
           {
             keywords: ["tool-bridge", "socket", "连接", "不可达"],
-            fix: "本地工具服务尚未就绪。到仪表盘 → 服务状态重启 tool-bridge，再点刷新。",
+            fix: "本地工具服务尚未就绪。到设置 → 服务状态重启 tool-bridge，再点刷新。",
           },
         ]}
       />

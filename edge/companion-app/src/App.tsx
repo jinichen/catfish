@@ -195,6 +195,7 @@ export default function App() {
 }
 
 function AppShell({ activeTab }: { activeTab: string }) {
+  const railCollapsed = useUIStore((s) => s.railCollapsed);
   // "会话" tab 已并入 "对话" 左侧 sidebar (P0-3.1).
   // 对话 tab 自己管 padding/scroll, 不复用 .app-main padding
   // 品牌 (鲶鱼 Companion) 已在 macOS 原生标题栏显示, 应用内不再加 BrandHeader.
@@ -212,7 +213,7 @@ function AppShell({ activeTab }: { activeTab: string }) {
   const isBriefing = activeTab === "briefing";
   const isChatOrBriefing = activeTab === "chat" || isBriefing;
   return (
-    <div className="app-shell">
+    <div className="app-shell" data-rail-collapsed={railCollapsed || undefined}>
       <TabBar />
       <div className="app-workspace">
         <AuthBanner />

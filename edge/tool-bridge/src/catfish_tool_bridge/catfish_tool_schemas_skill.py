@@ -126,7 +126,7 @@ SKILL_TOOLS: List[Dict[str, Any]] = [
             "  1. SKILL.md 必须 (script.py 可选)\n"
             "  2. SKILL.md frontmatter 的 name 字段 → 决定安装路径 <namespace>/<name>/\n"
             "  3. 同名已存在 → 必须 overwrite=true 才覆盖\n"
-            "  4. 安装后自动 dry-run 验证 + audit log + 仪表盘出现\n\n"
+            "  4. 安装后自动 dry-run 验证 + audit log + 设置出现\n\n"
             "**返回**: {ok, installed_path, error, source: 'local'|'hub'}.\n"
             "**audit**: ~/.catfish/skill_audit.jsonl event_type=install."
         ),
@@ -196,7 +196,7 @@ SKILL_TOOLS: List[Dict[str, Any]] = [
             "**audit**: 调用记 ~/.catfish/skill_audit.jsonl event_type=delete, "
             "客户 IT 可审 skill 生命周期.\n\n"
             "**注意**: 删 skill 后, 现有 session 已加载的 module 仍可调 (sys.modules), "
-            "但新 session 看不到, 仪表盘自动消失. 想立即生效请重启 Companion."
+            "但新 session 看不到, 设置自动消失. 想立即生效请重启 Companion."
         ),
         "input_schema": {
             "type": "object",
