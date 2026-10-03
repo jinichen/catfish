@@ -116,58 +116,85 @@ export default function MinutesView({ meta }: { meta: MeetingMeta }) {
   }
 
   const templateName = templates.find((t) => t.id === templateId)?.name;
-  const picker = (
-    <div style={{ display: "flex", gap: "var(--space-2)", alignItems: "center", fontSize: 12 }}>
-      <span style={{ color: "var(--catfish-text-muted)" }}>纪要模版</span>
+  const generatingLabel = templateName ? `正在按「${templateName}」生成…` : "正在生成…";
+
+  // 10/3 UI 调整: 模版选择 / 生成 放卡片头上 (生成前的设置), 写回按钮放卡片底下 (生成后的动作);
+  // 模版管理是弹窗, 不再把卡片撑开把按钮和转写挤下去。
+  const header = (
+    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
+      <div style={{ fontWeight: 600, fontSize: 14, flex: 1, minWidth: 120 }}>
+        纪要
+        {minutes?.json.template && (
+          <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 400, color: "var(--catfish-text-muted)" }}>
+            按「{minutes.json.template.name}」
+          </span>
+        )}
+      </div>
       <select
-        style={{ ...inputStyle, width: "auto", minWidth: 160, padding: "4px 8px" }}
+        aria-label="纪要模版"
+        title="纪要模版"
+        style={{ ...inputStyle, width: "auto", maxWidth: 200, padding: "4px 8px", fontSize: 12 }}
         value={templateId}
         disabled={generating}
         onChange={(e) => setTemplateId(e.target.value)}
       >
-        <option value={DEFAULT_TEMPLATE_ID}>标准纪要 (缺省)</option>
+        <option value={DEFAULT_TEMPLATE_ID}>标准纪要</option>
         {templates.map((t) => (
-          <option key={t.id} value={t.id}>{t.name}</option>
+          <option key={t.id} value={t.id}>{t.kind === "docx" ? "Word · " : t.kind === "xlsx" ? "Excel · " : ""}{t.name}</option>
         ))}
       </select>
-      <Btn kind="ghost" onClick={() => setManaging((v) => !v)}>{managing ? "收起模版" : "管理模版"}</Btn>
+      <Btn kind={minutes ? "ghost" : "primary"} disabled={generating} onClick={() => void generate()}>
+        {generating ? generatingLabel : minutes ? "重新生成" : "生成纪要"}
+      </Btn>
+      <Btn kind="ghost" onClick={() => setManaging(true)}>管理模版</Btn>
     </div>
   );
   const manager = managing && (
     <TemplateManager templates={templates} onChanged={(id) => void loadTemplates(id)} onClose={() => setManaging(false)} />
   );
-  const generatingLabel = templateName ? `正在按「${templateName}」生成纪要…` : "正在生成纪要…";
+  const muted = { color: "var(--catfish-text-muted)" } as const;
 
   if (!minutes) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
-        {picker}
-        {manager}
-        <Btn kind="primary" disabled={generating} onClick={() => void generate()}>
-          {generating ? `${generatingLabel} (长会议要一两分钟)` : "生成纪要"}
-        </Btn>
-        <div style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
-          先把说话人改成真名再生成, 纪要里的负责人会更准。只有转写文字会发给大模型, 录音不出本机。
+      <div style={{ ...itemStyle, fontSize: 13, gap: "var(--space-2)" }}>
+        {header}
+        <div style={{ fontSize: 12, ...muted }}>
+          {generating
+            ? "长会议要一两分钟, 可以先去干别的。"
+            : "先把上面的说话人改成真名再生成, 纪要里的负责人会更准。只有转写文字会发给大模型, 录音不出本机。"}
         </div>
+        {manager}
         {error && <ErrorLine>{error}</ErrorLine>}
       </div>
     );
   }
 
   const m = minutes.json;
-  const section = (title: string, list: string[]) => (
+  const markdownView = !!m.template && !m.output_file; // 文字模版: 显示按模版写的那份
+  const list = (title: string, items: string[]) => (
     <div>
       <div style={{ fontWeight: 600, marginBottom: 4 }}>{title}</div>
-      {list.length ? list.map((x, i) => <div key={i}>· {x}</div>) : <div style={{ color: "var(--catfish-text-muted)" }}>(无)</div>}
+      {items.map((x, i) => <div key={i} style={{ lineHeight: 1.7 }}>· {x}</div>)}
     </div>
   );
+  // 空的几节并成一行灰字, 不再每节占两行写「(无)」
+  const empty = [
+    !markdownView && m.decisions.length === 0 && "无决议",
+    m.action_items.length === 0 && "无待办",
+    !markdownView && m.open_questions.length === 0 && "无待定问题",
+  ].filter(Boolean);
+  const checkedCount = m.action_items.filter((_, i) => checked[i]).length;
+
   return (
-    <div style={{ ...itemStyle, fontSize: 13 }}>
-      <div style={{ fontWeight: 600 }}>纪要{m.template ? ` · ${m.template.name}` : ""}</div>
+    <div style={{ ...itemStyle, fontSize: 13, gap: "var(--space-3)" }}>
+      {header}
       {m.output_file && (
         // Word / Excel 模版: 填好的那张表就是交出去的纪要; 下面照常显示缺省版给员工过目
-        <div style={{ display: "flex", gap: "var(--space-2)", alignItems: "center", flexWrap: "wrap", fontSize: 12 }}>
-          <span>📄 {m.output_file.split(/[\\/]/).pop()}</span>
+        <div style={{ display: "flex", gap: "var(--space-2)", alignItems: "center", flexWrap: "wrap", fontSize: 12,
+          padding: "8px 10px", borderRadius: "var(--radius-sm)", background: "var(--catfish-bg-cream)" }}>
+          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            📄 {m.output_file.split(/[\\/]/).pop()}
+          </span>
           <Btn kind="primary" onClick={() => void meetingMinutesOpenFile(meta.id, false).catch((e) => setError(String(e)))}>
             打开 {m.template?.kind === "xlsx" ? "Excel" : "Word"}
           </Btn>
@@ -176,38 +203,43 @@ export default function MinutesView({ meta }: { meta: MeetingMeta }) {
           </Btn>
         </div>
       )}
-      {m.template && !m.output_file ? (
+      {markdownView ? (
         <Markdown text={minutes.markdown} />
       ) : (
         <>
-          <div>{m.summary}</div>
-          {section("决议", m.decisions)}
+          <div style={{ lineHeight: 1.75 }}>{m.summary}</div>
+          {m.decisions.length > 0 && list("决议", m.decisions)}
         </>
       )}
-      <div>
-        <div style={{ fontWeight: 600, marginBottom: 4 }}>{m.template && !m.output_file ? "待办 (勾选加入任务库)" : "待办"}</div>
-        {m.action_items.length === 0 && <div style={{ color: "var(--catfish-text-muted)" }}>(无)</div>}
-        {m.action_items.map((it, i) => (
-          <label key={i} style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
-            <input type="checkbox" checked={!!checked[i]} onChange={(e) => setChecked({ ...checked, [i]: e.target.checked })} />
-            <span>
-              {it.task}
-              {(it.owner || it.due) && (
-                <span style={{ color: "var(--catfish-text-muted)" }}> ({[it.owner, it.due && `截止 ${it.due}`].filter(Boolean).join(" · ")})</span>
-              )}
-            </span>
-          </label>
-        ))}
-      </div>
-      {(!m.template || m.output_file) && section("待定问题", m.open_questions)}
-      {picker}
-      {manager}
-      <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap" }}>
-        <Btn kind="primary" disabled={!Object.values(checked).some(Boolean)} onClick={() => void addTasks()}>勾选的待办加入任务库</Btn>
+      {m.action_items.length > 0 && (
+        <div>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>待办</div>
+          {m.action_items.map((it, i) => (
+            <label key={i} style={{ display: "flex", gap: 6, alignItems: "baseline", lineHeight: 1.7 }}>
+              <input type="checkbox" checked={!!checked[i]} onChange={(e) => setChecked({ ...checked, [i]: e.target.checked })} />
+              <span>
+                {it.task}
+                {(it.owner || it.due) && (
+                  <span style={muted}> ({[it.owner, it.due && `截止 ${it.due}`].filter(Boolean).join(" · ")})</span>
+                )}
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+      {!markdownView && m.open_questions.length > 0 && list("待定问题", m.open_questions)}
+      {empty.length > 0 && <div style={{ fontSize: 12, ...muted }}>{empty.join(" · ")}</div>}
+      <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", alignItems: "center",
+        borderTop: "1px solid var(--catfish-border)", paddingTop: "var(--space-3)" }}>
+        {m.action_items.length > 0 && (
+          <Btn kind="primary" disabled={checkedCount === 0} onClick={() => void addTasks()}>
+            {checkedCount ? `勾选的 ${checkedCount} 项待办加入任务库` : "勾选待办加入任务库"}
+          </Btn>
+        )}
         <Btn kind="ghost" onClick={() => void saveWiki()}>存进知识库</Btn>
-        <Btn kind="ghost" disabled={generating} onClick={() => void generate()}>{generating ? generatingLabel : "重新生成"}</Btn>
+        {note && <span style={{ fontSize: 12, color: "var(--status-ok)" }}>✓ {note}</span>}
       </div>
-      {note && <div style={{ fontSize: 12, color: "var(--status-ok)" }}>✓ {note}</div>}
+      {manager}
       {error && <ErrorLine>{error}</ErrorLine>}
     </div>
   );
