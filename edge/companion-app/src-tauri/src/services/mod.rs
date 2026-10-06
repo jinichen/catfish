@@ -53,6 +53,7 @@ pub mod phishing_config;  // P3.3.65 (6/13 鸿波): 钓鱼规则可配置 yaml +
 pub mod political_scan;   // P3.3.53 (6/13 鸿波): 政治敏感规则引擎 + audit chain 留档 (默认关)
 pub mod political_config; // P3.3.53 (6/13 鸿波): 政治敏感规则配置 — yaml 段, 集团信安/党办下发
 pub mod hermes_api_config; // BL-COMPANION-HERMES-API-CONFIG (5/19, Phase 2-2A)
+pub mod hermes_compression; // BL-HERMES-CTX-CAP (10/6): 压缩绝对 token 上限, 防 400K 上下文把模型工具调用拖垮
 pub mod hermes_jwt_sync;   // BL-HERMES-JWT-SYNC (7/19 Task #15): JWT auto-sync hermes 3 处
 pub mod hermes_profile_sync; // 命名 Profile 同步 JWT/service token/gateway URL
 pub mod oauth_config; // OIDC 配置来源 (8/15 从 oauth 切出)

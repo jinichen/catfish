@@ -169,6 +169,16 @@ pub fn run() {
                 Err(e) => log::warn!("BL-CR: ensure_curator_default 失败 (不阻塞启动): {e}"),
             }
 
+            // BL-HERMES-CTX-CAP (10/6 鸿波「中间有三次任务停下来了」): hermes 压缩
+            // 阈值按窗口比例算, 1M 窗口的公网模型跑到 400K 都不压, 模型工具调用
+            // 退化到"说了要做不调工具". 补一个绝对上限 120K (hermes 再 clamp 到窗口),
+            // 已有 threshold_tokens → 不动. 详见 services/hermes_compression.rs.
+            match services::hermes_compression::ensure_default() {
+                Ok(true) => log::info!("BL-HERMES-CTX-CAP: 写入 compression.threshold_tokens={}", services::hermes_compression::DEFAULT_THRESHOLD_TOKENS),
+                Ok(false) => log::debug!("BL-HERMES-CTX-CAP: config.yaml 已有 threshold_tokens 或 hermes 未装, 不动"),
+                Err(e) => log::warn!("BL-HERMES-CTX-CAP: ensure 失败 (不阻塞启动): {e}"),
+            }
+
             // 8/6 鸿波「早安里说的项目进度, 工作台不知道」: catfish-memory 这个
             // memory provider **从来没被激活过** —— 打包只 cp -R 拷文件
             // (build-mac-resources.sh:185), 激活逻辑在 install-catfish-memory.sh:122,
