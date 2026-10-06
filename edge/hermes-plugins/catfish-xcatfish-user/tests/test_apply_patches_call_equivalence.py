@@ -54,7 +54,7 @@ REFACTOR_BASE = "cc4d71a"
 #: 一个 patch 悄悄多出来跟悄悄少一个同等危险 —— monkey-patch 是全进程生效的，
 #: 谁加的、为什么加、影响面多大，得有地方写。
 INTENTIONALLY_ADDED: dict[str, str] = {
-    "_patch_p48_auto_continue": (
+    "_patch_p50_auto_continue": (
         "10/6: 模型回一句动作意图 (「逐项目比对。」) 却不调工具, finish_reason=stop "
         "回合就结束 —— 10/5 重点软件企业会话一晚三次。替员工按最多两次「继续」, "
         "见 plugin_auto_continue.py 文件头。"

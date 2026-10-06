@@ -135,7 +135,7 @@ _verify_patch_targets = plugin_verify._verify_patch_targets  # noqa: F401
 
 plugin_approval = _import_sibling("plugin_approval")
 plugin_auto_continue = _import_sibling("plugin_auto_continue")
-_patch_p48_auto_continue = plugin_auto_continue._patch_p48_auto_continue  # noqa: F401  (re-export · 见 plugin_auto_continue.py)
+_patch_p50_auto_continue = plugin_auto_continue._patch_p50_auto_continue  # noqa: F401  (re-export · 见 plugin_auto_continue.py)
 _patch_p14_approve_chinese_alias = plugin_approval._patch_p14_approve_chinese_alias  # noqa: F401
 _patch_p15_chat_completions_approval = plugin_approval._patch_p15_chat_completions_approval  # noqa: F401
 _patch_p15_3_unattended_companion_approval = plugin_approval._patch_p15_3_unattended_companion_approval  # noqa: F401
@@ -375,11 +375,11 @@ def _apply_patches() -> None:
         "P15.4: Companion manual approval compatibility failed (skip): %s",
     )
     _patch_p15_2_chat_approval_route()
-    # P48 (10/6 鸿波"中间有三次任务停下来了"): 模型回了一句"逐项目比对。"这种
+    # P50 (10/6 鸿波"中间有三次任务停下来了"): 模型回了一句"逐项目比对。"这种
     # 打算、没调工具、finish_reason=stop, 回合就结束了 —— 10/5 一晚三次。hermes
     # 没有"承诺了动作却没动作"的续跑, 这里替员工按最多两次「继续」。必须在
     # P15 之后装: 续跑那一轮也要经过 P15 的审批桥。详见 plugin_auto_continue.py。
-    _try_patch(_patch_p48_auto_continue, "P48: _patch_p48_auto_continue 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
+    _try_patch(_patch_p50_auto_continue, "P50: _patch_p50_auto_continue 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P3.4.C 6/15 鸿波: hard replace session_search. 用 try/except 包住 — P16 挂也不
     #   阻塞 hermes 启动 (鸿波 6/15 21:35 撞 hermes 起不来 "Could not connect", 真因
     #   推测是 P16 抛异常导致 _apply_patches 整体挂). P3.4.C fail-safe 设计.

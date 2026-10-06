@@ -1,4 +1,4 @@
-"""P48 自动续跑 — 模型"说了要做却没调工具"时, 替员工按一次「继续」。
+"""P50 自动续跑 — 模型"说了要做却没调工具"时, 替员工按一次「继续」。
 
 # 症状 (10/5 重点软件企业那条会话, hermes session 20261005_222520_499a61)
 
@@ -149,10 +149,10 @@ def wrap_run_agent(orig):
                 break
             transcript = _full_transcript(history, user_message, result)
             if transcript is None:
-                logger.info("P48: 想续跑但 result 没有 messages, 放弃 (final=%r)", final[:60])
+                logger.info("P50: 想续跑但 result 没有 messages, 放弃 (final=%r)", final[:60])
                 break
 
-            logger.info("P48 auto-continue #%d: 模型只说了打算没调工具 (final=%r), 自动续跑", n, final[:60])
+            logger.info("P50 auto-continue #%d: 模型只说了打算没调工具 (final=%r), 自动续跑", n, final[:60])
             merged_final = (merged_final + "\n\n" + final) if merged_final else final
             if callable(cb):
                 try:
@@ -185,19 +185,19 @@ def wrap_run_agent(orig):
             return result, merged_usage
         return result, usage
 
-    patched_run_agent._p48_auto_continue = True  # type: ignore[attr-defined]
+    patched_run_agent._p50_auto_continue = True  # type: ignore[attr-defined]
     return patched_run_agent
 
 
-def _patch_p48_auto_continue() -> None:
+def _patch_p50_auto_continue() -> None:
     """装到 APIServerAdapter._run_agent 上 (在 P15 之后装, 续跑也经过 P15 的审批桥)。"""
     try:
         from gateway.platforms.api_server import APIServerAdapter
     except ImportError as e:
-        logger.warning("P48: api_server import 失败 (%s), skip patch", e)
+        logger.warning("P50: api_server import 失败 (%s), skip patch", e)
         return
     current = APIServerAdapter._run_agent
-    if getattr(current, "_p48_auto_continue", False):
+    if getattr(current, "_p50_auto_continue", False):
         return
     APIServerAdapter._run_agent = wrap_run_agent(current)
-    logger.info("P48 auto-continue patched (APIServerAdapter._run_agent wrapped, max %d nudges)", MAX_NUDGES)
+    logger.info("P50 auto-continue patched (APIServerAdapter._run_agent wrapped, max %d nudges)", MAX_NUDGES)
