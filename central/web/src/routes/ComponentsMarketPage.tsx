@@ -29,6 +29,11 @@ const KNOWN: Record<string, { title: string; purpose: string; platforms: string[
     purpose: "会议纪要、聊天 🎤 语音输入、上传音频转文字 —— 在员工电脑上离线转写 (FunASR), 录音不出本机",
     platforms: ["mac-arm64", "windows-x64"],
   },
+  "embed-model": {
+    title: "向量模型包 (BGE-M3)",
+    purpose: "知识体系「语义」检索在员工电脑上算向量 (BGE-M3 ONNX INT8 + tokenizer, ~560MB); 不装则只能靠中央网关的向量服务。Apple 芯片 Mac 可用; Intel Mac / Windows 没有本地运行时",
+    platforms: ["any"],
+  },
 };
 
 /** 按组件名分组; 每组里同平台只留最高版本 (manifest 生成时已经去过重, 这里再保险一次) */

@@ -42,6 +42,7 @@ pub mod embedding_config; // P3.5.15 (6/16 鸿波): embedding provider yaml 配�
 // 两个 provider 各自一个文件 (8/14: embedding.rs 到 890 行, 越过 800 红线)
 #[cfg(target_arch = "aarch64")] // ort 只在 aarch64 有 prebuilt, 见文件头
 pub mod embedding_local;
+pub mod embed_model;      // 10/6: 向量模型组件包 (BGE-M3) 从中央下载后的本机安装, 跟 meeting_asr 同链
 pub mod embedding_remote;
 pub mod desktop_notify;  // 9/23: 系统通知三平台一个入口 (原来只有 macOS)
 pub mod edge_runtime;  // 9/23: tool-bridge / local-search 从安装包解到 ~/.catfish/edge-runtime

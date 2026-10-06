@@ -5,7 +5,7 @@
  * 点击 file → store.selectFile(rel_path) → 中列 preview 加载.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowClockwise,
   MagnifyingGlass,
@@ -24,6 +24,8 @@ import {
 } from "../../lib/tauri";
 import { resolveWikiRef, resolveWikiRefOrNull } from "../../lib/wikiResolve";
 import WikiCreateModal from "./WikiCreateModal";
+import EmbedModelSetup from "./EmbedModelSetup";
+import { embedModelStatus, type EmbedModelStatus } from "../../lib/tauri_embed_model";
 
 // 8/15: WikiTree.tsx 原本 1215 行, 过了 CLAUDE.md §1 的 800 红线。下面三块是
 // 从本文件搬出去的**同一批组件**, 不是新东西:
@@ -66,6 +68,14 @@ export default function WikiTree() {
   const [searchHits, setSearchHits] = useState<WikiSearchHit[]>([]);
   const [searching, setSearching] = useState(false);
   const [semanticMessage, setSemanticMessage] = useState<string>("");
+  // 10/6: 语义 / 智能模式下向量 provider 没准备好 → 显示下载安装卡片 (仿会议组件包)
+  const [embedStatus, setEmbedStatus] = useState<EmbedModelStatus | null>(null);
+  const refreshEmbedStatus = useCallback(() => {
+    embedModelStatus().then(setEmbedStatus).catch((e) => console.warn("[wiki] embed_model_status 失败:", e));
+  }, []);
+  useEffect(() => {
+    if (searchMode === "semantic" || searchMode === "hybrid") refreshEmbedStatus();
+  }, [searchMode, refreshEmbedStatus]);
   const [graphStatus, setGraphStatus] = useState<WikiGraphStatus | null>(null);
 
   // P37/P38: body/semantic 真 debounce 300ms
@@ -92,6 +102,7 @@ export default function WikiTree() {
           if (!res.model_loaded) {
             setSearchHits([]);
             setSemanticMessage(res.message);
+            refreshEmbedStatus();
           } else {
             // 复用 WikiSearchHit shape: score / snippet / matched_in
             setSearchHits(
@@ -116,7 +127,7 @@ export default function WikiTree() {
       }
     }, searchMode === "semantic" || searchMode === "hybrid" ? 500 : 300);
     return () => clearTimeout(handle);
-  }, [search, searchMode]);
+  }, [search, searchMode, refreshEmbedStatus]);
 
   // P17 (6/5 鸿波): 切到知识体系 tab 立即 reload (App.tsx 真`activeTab === 'wiki'
   // && <WikiTab/>` 真 conditional render — 切走 unmount, 切回 mount 跑这 effect).
@@ -323,7 +334,11 @@ export default function WikiTree() {
         ))}
       </div>
 
-      {semanticMessage && (
+      {(searchMode === "semantic" || searchMode === "hybrid") && embedStatus && !embedStatus.provider_ready && (
+        <EmbedModelSetup status={embedStatus} onReady={refreshEmbedStatus} />
+      )}
+
+      {semanticMessage && !(embedStatus && !embedStatus.provider_ready) && (
         <div
           className={
             "wiki-semantic-msg " +

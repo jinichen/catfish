@@ -28,8 +28,11 @@ use crate::services::embedding_config::{LocalConfig, expand_home};
 #[cfg(target_arch = "aarch64")]
 pub(crate) struct LocalProvider {
     config: LocalConfig,
-    session: OnceLock<Option<Mutex<Session>>>,
-    tokenizer: OnceLock<Option<Tokenizer>>,
+    // 10/6: 只缓存**成功**。原来 OnceLock<Option<..>> 把"文件不在"也缓存成永久
+    // None, 员工在界面上装完模型还得重启 Companion 才能用。现在失败不占位,
+    // 下一次 embed_text 再试 (代价是缺文件时每次多一个 exists 检查, 可忽略)。
+    session: OnceLock<Mutex<Session>>,
+    tokenizer: OnceLock<Tokenizer>,
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -43,50 +46,50 @@ impl LocalProvider {
     }
 
     fn init_session(&self) -> Option<&Mutex<Session>> {
-        self.session
-            .get_or_init(|| {
-                let path = PathBuf::from(expand_home(&self.config.model_path));
-                if !path.exists() {
-                    log::warn!(
-                        "[embedding/local] ONNX 文件不存在 {:?}, embed_text 将返 None",
-                        path
-                    );
-                    return None;
-                }
-                log::info!(
-                    "[embedding/local] 加载 ONNX {:?} (threads={})",
-                    path,
-                    self.config.intra_threads
-                );
-                let session = Session::builder()
-                    .ok()?
-                    .with_optimization_level(GraphOptimizationLevel::Level3)
-                    .ok()?
-                    .with_intra_threads(self.config.intra_threads)
-                    .ok()?
-                    .commit_from_file(&path)
-                    .ok()?;
-                Some(Mutex::new(session))
-            })
-            .as_ref()
+        if let Some(s) = self.session.get() {
+            return Some(s);
+        }
+        let path = PathBuf::from(expand_home(&self.config.model_path));
+        if !path.exists() {
+            log::warn!(
+                "[embedding/local] ONNX 文件不存在 {:?}, embed_text 将返 None",
+                path
+            );
+            return None;
+        }
+        log::info!(
+            "[embedding/local] 加载 ONNX {:?} (threads={})",
+            path,
+            self.config.intra_threads
+        );
+        let session = Session::builder()
+            .ok()?
+            .with_optimization_level(GraphOptimizationLevel::Level3)
+            .ok()?
+            .with_intra_threads(self.config.intra_threads)
+            .ok()?
+            .commit_from_file(&path)
+            .ok()?;
+        // 并发时两个线程可能都加载了一份; set 失败的那份丢掉, 用先到的
+        let _ = self.session.set(Mutex::new(session));
+        self.session.get()
     }
-
     fn init_tokenizer(&self) -> Option<&Tokenizer> {
-        self.tokenizer
-            .get_or_init(|| {
-                let path = PathBuf::from(expand_home(&self.config.tokenizer_path));
-                if !path.exists() {
-                    log::warn!(
-                        "[embedding/local] tokenizer.json 缺 {:?}, embed_text 将返 None",
-                        path
-                    );
-                    return None;
-                }
-                Tokenizer::from_file(&path).ok()
-            })
-            .as_ref()
+        if let Some(t) = self.tokenizer.get() {
+            return Some(t);
+        }
+        let path = PathBuf::from(expand_home(&self.config.tokenizer_path));
+        if !path.exists() {
+            log::warn!(
+                "[embedding/local] tokenizer.json 缺 {:?}, embed_text 将返 None",
+                path
+            );
+            return None;
+        }
+        let tok = Tokenizer::from_file(&path).ok()?;
+        let _ = self.tokenizer.set(tok);
+        self.tokenizer.get()
     }
-
     pub(crate) fn is_ready(&self) -> bool {
         self.init_session().is_some() && self.init_tokenizer().is_some()
     }

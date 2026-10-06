@@ -197,6 +197,9 @@ pub(crate) fn handler(
             crate::commands::meeting::meeting_record_stop,
             crate::commands::meeting_asr_cmd::meeting_asr_status,
             crate::commands::meeting_asr_cmd::meeting_asr_install,
+            // 10/6: 向量模型组件包 (语义检索的 BGE-M3) 状态 + 安装
+            crate::commands::embed_model_cmd::embed_model_status,
+            crate::commands::embed_model_cmd::embed_model_install,
             crate::commands::meeting_asr_cmd::meeting_transcribe,
             crate::commands::meeting_asr_cmd::meeting_transcript,
             crate::commands::meeting_minutes_cmd::meeting_set_speakers,

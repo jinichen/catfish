@@ -365,6 +365,12 @@ pub fn provider_not_ready_reason() -> Option<String> {
     active_provider().not_ready_reason()
 }
 
+/// 当前在用的是远程 provider (含已降级到本地的情况 → false)。10/6 给知识体系的
+/// 向量模型安装卡片用: 远程在用时装本地模型只是备份, 界面措辞不同。
+pub fn active_is_remote() -> bool {
+    !demoted() && active_provider().is_remote()
+}
+
 /// L2-normalized vectors 点积 = cosine similarity. 长度不匹配返 0.
 pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() {
