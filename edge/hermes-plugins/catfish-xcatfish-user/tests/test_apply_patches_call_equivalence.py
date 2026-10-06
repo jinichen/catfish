@@ -54,6 +54,11 @@ REFACTOR_BASE = "cc4d71a"
 #: 一个 patch 悄悄多出来跟悄悄少一个同等危险 —— monkey-patch 是全进程生效的，
 #: 谁加的、为什么加、影响面多大，得有地方写。
 INTENTIONALLY_ADDED: dict[str, str] = {
+    "_patch_p48_auto_continue": (
+        "10/6: 模型回一句动作意图 (「逐项目比对。」) 却不调工具, finish_reason=stop "
+        "回合就结束 —— 10/5 重点软件企业会话一晚三次。替员工按最多两次「继续」, "
+        "见 plugin_auto_continue.py 文件头。"
+    ),
     "_patch_p15_4_companion_manual_approval": (
         "9/1 加。Hermes 0.21 将未配置的审批模式按 smart 处理；Companion 这条"
         "有实时 SSE 回调和审批 resolve endpoint，不能让 Auxiliary LLM 自动放行"

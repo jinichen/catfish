@@ -122,6 +122,9 @@ const BAKED_PLUGIN_ROOM_LINK: &str =
 // macOS 开发机的 plugin 是仓库软链, 看不出来; 只有从安装包铺文件的机器会炸。
 const BAKED_WINDOWS_CHAT_CREDENTIALS: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/windows_chat_credentials.py");
+// 10/6 P48: 自动续跑 (模型"说了要做没调工具"时替员工按「继续」, 见 plugin_auto_continue.py)
+const BAKED_PLUGIN_AUTO_CONTINUE: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_auto_continue.py");
 
 /// Plugin 的全部文件 (filename, baked content).
 ///
@@ -161,4 +164,5 @@ pub(crate) const BAKED_FILES: &[(&str, &str)] = &[
     ("private_auxiliary_guard.py", BAKED_PRIVATE_AUXILIARY_GUARD),
     ("plugin_room_link.py", BAKED_PLUGIN_ROOM_LINK),
     ("windows_chat_credentials.py", BAKED_WINDOWS_CHAT_CREDENTIALS),
+    ("plugin_auto_continue.py", BAKED_PLUGIN_AUTO_CONTINUE),
 ];
