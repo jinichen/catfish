@@ -207,8 +207,21 @@ for ARCH in $ARCHES; do
     printf '%s' "$BUILD_LIST" | while IFS='|' read -r svc img ctx; do
         [ -z "$svc" ] && continue
         echo "  · $img"
-        if ! docker buildx build --platform "$PLATFORM" --load \
-             -t "$img" "$CENTRAL/$ctx" >/tmp/.pkg-build-$$.log 2>&1; then
+        # 10/6: 输出全进日志, 没缓存时 (第一次打 arm64) 一个镜像能静默 20+ 分钟,
+        # 看着像卡死。后台跑 + 每 30 秒报一次"在做哪一步", 日志路径也打出来。
+        LOG=/tmp/.pkg-build-$$.log
+        echo "    (详细日志: tail -f $LOG)"
+        docker buildx build --platform "$PLATFORM" --load \
+             -t "$img" "$CENTRAL/$ctx" >"$LOG" 2>&1 &
+        BPID=$!
+        T0=$(date +%s)
+        while kill -0 "$BPID" 2>/dev/null; do
+            sleep 30
+            kill -0 "$BPID" 2>/dev/null || break
+            step=$(grep -E '^#[0-9]+ \[' "$LOG" 2>/dev/null | tail -1 | cut -c1-90)
+            echo "    … $(( $(date +%s) - T0 ))s  ${step:-准备中}"
+        done
+        if ! wait "$BPID"; then
             echo "    ❌ 构建失败, 末 20 行:"
             tail -20 /tmp/.pkg-build-$$.log | sed 's/^/      /'
             rm -f /tmp/.pkg-build-$$.log
