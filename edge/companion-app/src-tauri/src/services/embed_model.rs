@@ -9,7 +9,7 @@
 //!
 //! 两种包: `any` (纯模型, Apple 芯片 Mac 用) 和 `windows-x64` (模型 + 微软官方
 //! onnxruntime.dll, 因为 Windows 上 ort 走 load-dynamic, 见 Cargo.toml target 表)。
-//! **本机能不能用**取决于构建: cfg(local_embedding) = 除 Intel Mac 外都带 (build.rs),
+//! **本机能不能用**取决于构建: cfg(local_embedding) = aarch64 或 Windows x64 (build.rs),
 //! Intel Mac 没有本地向量 provider, 装了也没人加载。commands/embed_model_cmd.rs 的
 //! status 把这点报给界面, 界面据此不给 Intel Mac 用户看"下载"按钮。
 //!

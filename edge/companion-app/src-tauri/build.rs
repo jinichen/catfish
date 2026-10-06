@@ -55,7 +55,7 @@ fn emit_build_identity() {
 /// 7/16 起是 `cfg(target_arch = "aarch64")`: 当时 Intel Mac dmg 撞上 "ort 不发
 /// x86_64-apple-darwin 预编译包", 按架构一刀切, 把 Windows x64 也连带切掉了。
 /// 可 ort-sys 的分发清单 (build/download/dist.txt) 明明白白有 x86_64-pc-windows-msvc;
-/// 真没有的只有 Intel Mac。所以判据改成 "不是 Intel Mac" (TARGET != x86_64-apple-darwin)。
+/// 客户端里真没有的只有 Intel Mac。所以判据改成 "aarch64 或 Windows x64"。
 ///
 /// Windows 那边 ort 走 `load-dynamic` (Cargo.toml 的 target 表): 不链 pyke 的 /MD
 /// 静态库 (跟 .cargo/config.toml 的 +crt-static /MT 撞 LNK2038, 7/13 W2.14 翻过车),
@@ -64,7 +64,14 @@ fn emit_build_identity() {
 fn emit_local_embedding_cfg() {
     println!("cargo::rustc-check-cfg=cfg(local_embedding)");
     let target = std::env::var("TARGET").unwrap_or_default();
-    if target != "x86_64-apple-darwin" {
+    // 必须跟 Cargo.toml 里 ort 的两张 target 表**逐字对应**, 否则 cfg 开了却没有 ort
+    // 依赖 → E0433 (10/6 CI: Linux x86_64 跑 cargo test 撞的就是这个)。
+    //   aarch64-*           → ort 默认 (pyke 静态库)
+    //   x86_64-pc-windows-* → ort load-dynamic
+    //   x86_64-apple-darwin → 没有 (ort 不发预编译包)
+    //   x86_64-unknown-linux-* → CI 跑测试用, 没有客户端, 不带
+    let on = target.starts_with("aarch64-") || (target.starts_with("x86_64-") && target.contains("-windows-"));
+    if on {
         println!("cargo:rustc-cfg=local_embedding");
     }
 }

@@ -40,7 +40,7 @@ pub mod embed_cache_meta; // 8/14: 向量缓存的身份记账 (中央换模型 
 pub mod embedding;        // P3.5.4.1 (6/16 鸿波): 公共 BGE-M3 ONNX, 给 advisor + wiki 共享同一 model session
 pub mod embedding_config; // P3.5.15 (6/16 鸿波): embedding provider yaml 配置 (本机/远程切换 + 参数可调)
 // 两个 provider 各自一个文件 (8/14: embedding.rs 到 890 行, 越过 800 红线)
-#[cfg(local_embedding)] // 除 Intel Mac 外都编 (build.rs 发的 cfg; ort 只缺 x86_64-apple-darwin 预编译包)
+#[cfg(local_embedding)] // aarch64 或 Windows x64 (build.rs 发的 cfg, 跟 Cargo.toml 的 ort target 表一致)
 pub mod embedding_local;
 pub mod embed_model;      // 10/6: 向量模型组件包 (BGE-M3) 从中央下载后的本机安装, 跟 meeting_asr 同链
 pub mod embedding_remote;

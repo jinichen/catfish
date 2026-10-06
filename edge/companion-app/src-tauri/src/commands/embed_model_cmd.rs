@@ -17,7 +17,7 @@ static INSTALLING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Serialize)]
 pub struct EmbedModelStatus {
-    /// 本机构建带本地向量 (除 Intel Mac 外都带, 见 build.rs local_embedding) —— false 时只能靠中央网关
+    /// 本机构建带本地向量 (aarch64 / Windows x64, 见 build.rs local_embedding) —— false 时只能靠中央网关
     pub local_supported: bool,
     /// 当前实际在用的向量 provider 能不能产出向量 (本地 or 远程)
     pub provider_ready: bool,

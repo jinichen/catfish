@@ -6,7 +6,7 @@
 //! 按 provider 拆是自然的切法: embedding.rs 留"选谁 + 公共 API",
 //! 两个 provider 各自一个文件。
 //!
-//! ⚠ 整个模块只在 cfg(local_embedding) 下编 (build.rs 发, = 除 Intel Mac 外的目标)。
+//! ⚠ 整个模块只在 cfg(local_embedding) 下编 (build.rs 发, = aarch64 或 Windows x64)。
 //! ort 官方只缺 x86_64-apple-darwin 的预编译包, Intel Mac dmg 不参与编译 ——
 //! 那边**没有本地向量**, 远程挂了就是没有向量。
 //!
