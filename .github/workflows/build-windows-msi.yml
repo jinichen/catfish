@@ -748,7 +748,11 @@ jobs:
           # esaxx-rs /MT 跟 ort-sys /MD 撞 LNK2038)。**那个冲突已经不存在了**:
           # 7/16 起 ort + tokenizers 被限定成 cfg(target_arch = "aarch64"),
           # 而 Windows msi 是 x86_64-pc-windows-msvc —— 这两个 crate 在这条
-          # 构建线上根本不编。留着的 /MD 成了死代码, 而且反过来咬了一口:
+          # 构建线上根本不编。
+          # 10/6 起 Windows 又编这两个 crate 了 (本地向量回到 Windows), 但 ort 走
+          # load-dynamic: 不链接 pyke 的 /MD 静态库, 运行时加载 onnxruntime.dll,
+          # 所以 LNK2038 不会回来; tokenizers 的 onig/esaxx C++ 由 cc 跟着
+          # crt-static 走 /MT。留着的 /MD 成了死代码, 而且反过来咬了一口:
           # 9/19 给主程序加 +crt-static (静态链接 MSVC 运行库, 治干净装机上
           # 的 "找不到 VCRUNTIME140.dll") 之后, Rust 用 /MT 而 C 被这两行按
           # 在 /MD 上, 直接 LNK2038。

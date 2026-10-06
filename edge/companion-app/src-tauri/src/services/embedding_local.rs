@@ -6,9 +6,13 @@
 //! 按 provider 拆是自然的切法: embedding.rs 留"选谁 + 公共 API",
 //! 两个 provider 各自一个文件。
 //!
-//! ⚠ 整个模块只在 aarch64 编 (services/mod.rs 上有 cfg)。
-//! ort 官方不发 x86_64-apple-darwin prebuilt, Intel Mac dmg / Windows msi
-//! 连这个文件都不参与编译 —— 那边**没有本地向量**, 远程挂了就是没有向量。
+//! ⚠ 整个模块只在 cfg(local_embedding) 下编 (build.rs 发, = 除 Intel Mac 外的目标)。
+//! ort 官方只缺 x86_64-apple-darwin 的预编译包, Intel Mac dmg 不参与编译 ——
+//! 那边**没有本地向量**, 远程挂了就是没有向量。
+//!
+//! 10/6: Windows 回来了。Windows 上 ort 走 load-dynamic (理由见 Cargo.toml target 表),
+//! 第一次建 Session 前要 `ort::init_from(<models 目录>/onnxruntime.dll)` —— 那个
+//! DLL 跟模型一起在 embed-model 的 windows-x64 组件包里 (services/embed_model.rs)。
 
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -21,11 +25,11 @@ use crate::services::embed_cache_meta::{EmbedIdentity, record_identity};
 use crate::services::embedding_config::{LocalConfig, expand_home};
 
 // ─── Local ONNX provider — 老 P3.5.4 路径重构进来 ────────────
-// 7/16 BL-INTEL-DMG: LocalProvider 用 ort::Session + tokenizers::Tokenizer, 只 aarch64
-// 编. Intel Mac dmg / Windows msi 上整个 struct + impl 不存在, 前面 Provider enum 里
-// Local variant 也 cfg-guard, 保证 x86_64 build 通.
+// 7/16 BL-INTEL-DMG → 10/6: LocalProvider 用 ort::Session + tokenizers::Tokenizer,
+// 只在 cfg(local_embedding) 下编. Intel Mac dmg 上整个 struct + impl 不存在, 前面
+// Provider enum 里 Local variant 也 cfg-guard, 保证 x86_64-apple-darwin build 通.
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(local_embedding)]
 pub(crate) struct LocalProvider {
     config: LocalConfig,
     // 10/6: 只缓存**成功**。原来 OnceLock<Option<..>> 把"文件不在"也缓存成永久
@@ -35,7 +39,7 @@ pub(crate) struct LocalProvider {
     tokenizer: OnceLock<Tokenizer>,
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(local_embedding)]
 impl LocalProvider {
     pub(crate) fn new(config: LocalConfig) -> Self {
         Self {
@@ -57,6 +61,9 @@ impl LocalProvider {
             );
             return None;
         }
+        if !self.ensure_runtime() {
+            return None;
+        }
         log::info!(
             "[embedding/local] 加载 ONNX {:?} (threads={})",
             path,
@@ -74,6 +81,45 @@ impl LocalProvider {
         let _ = self.session.set(Mutex::new(session));
         self.session.get()
     }
+    /// Windows: load-dynamic 的 ort 要先指到 onnxruntime.dll (跟模型同目录)。
+    /// 失败不缓存 —— 装完组件包下一次再试, 跟 session 同一个道理。
+    #[cfg(windows)]
+    fn ensure_runtime(&self) -> bool {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static READY: AtomicBool = AtomicBool::new(false);
+        if READY.load(Ordering::Relaxed) {
+            return true;
+        }
+        let dll = self.runtime_dll_path();
+        if !dll.exists() {
+            log::warn!("[embedding/local] onnxruntime.dll 不在 {:?} (装 embed-model 组件包会带上)", dll);
+            return false;
+        }
+        match ort::init_from(&dll) {
+            Ok(builder) => {
+                builder.commit();
+                READY.store(true, Ordering::Relaxed);
+                log::info!("[embedding/local] ONNX Runtime 已从 {:?} 加载", dll);
+                true
+            }
+            Err(e) => {
+                log::warn!("[embedding/local] 加载 {:?} 失败: {e}", dll);
+                false
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn ensure_runtime(&self) -> bool {
+        true
+    }
+
+    #[cfg(windows)]
+    fn runtime_dll_path(&self) -> PathBuf {
+        PathBuf::from(expand_home(&self.config.model_path))
+            .with_file_name(crate::services::embed_model::RUNTIME_DLL)
+    }
+
     fn init_tokenizer(&self) -> Option<&Tokenizer> {
         if let Some(t) = self.tokenizer.get() {
             return Some(t);
@@ -98,7 +144,11 @@ impl LocalProvider {
     pub(crate) fn not_ready_reason(&self) -> String {
         let onnx = PathBuf::from(expand_home(&self.config.model_path));
         let tok = PathBuf::from(expand_home(&self.config.tokenizer_path));
-        let missing: Vec<String> = [(&onnx, "ONNX 模型"), (&tok, "tokenizer.json")]
+        #[cfg_attr(not(windows), allow(unused_mut))]
+        let mut wanted: Vec<(PathBuf, &str)> = vec![(onnx.clone(), "ONNX 模型"), (tok, "tokenizer.json")];
+        #[cfg(windows)]
+        wanted.push((self.runtime_dll_path(), "ONNX Runtime (onnxruntime.dll)"));
+        let missing: Vec<String> = wanted
             .iter()
             .filter(|(p, _)| !p.exists())
             .map(|(p, what)| format!("{what} 不在: {}", p.display()))

@@ -17,7 +17,7 @@ static INSTALLING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Serialize)]
 pub struct EmbedModelStatus {
-    /// 本机架构编了 ONNX 运行时 (aarch64) —— false 时装了也用不上, 只能靠中央网关
+    /// 本机构建带本地向量 (除 Intel Mac 外都带, 见 build.rs local_embedding) —— false 时只能靠中央网关
     pub local_supported: bool,
     /// 当前实际在用的向量 provider 能不能产出向量 (本地 or 远程)
     pub provider_ready: bool,
@@ -36,10 +36,12 @@ fn version_key(v: &str) -> Vec<u32> {
 /// runtime 目录里本组件最高版本的、校验过的包 (平台 any 或本平台都认)。
 pub fn ready_pack(runtime: &Path) -> Option<(PathBuf, String)> {
     let prefix = format!("{}-", em::COMPONENT_NAME);
-    let suffixes = [
-        format!("-{}.tar.gz", comp::ANY_PLATFORM),
-        format!("-{}.tar.gz", comp::current_platform()),
-    ];
+    // Windows 的包多带 onnxruntime.dll, 平台无关的 any 包装不上 → 只认 windows-x64
+    let suffixes: Vec<String> = if cfg!(windows) {
+        vec![format!("-{}.tar.gz", comp::current_platform())]
+    } else {
+        vec![format!("-{}.tar.gz", comp::ANY_PLATFORM), format!("-{}.tar.gz", comp::current_platform())]
+    };
     std::fs::read_dir(runtime)
         .ok()?
         .flatten()
@@ -66,7 +68,7 @@ pub fn embed_model_status() -> Result<EmbedModelStatus, String> {
         .map(|(p, _)| p.file_name().unwrap_or_default().to_string_lossy().to_string());
     let not_ready_reason = embedding::provider_not_ready_reason();
     Ok(EmbedModelStatus {
-        local_supported: cfg!(target_arch = "aarch64"),
+        local_supported: cfg!(local_embedding),
         provider_ready: not_ready_reason.is_none(),
         provider_remote: embedding::active_is_remote(),
         not_ready_reason,

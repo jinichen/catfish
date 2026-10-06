@@ -4,7 +4,7 @@ name = "catfish-companion-app"
 # Hermes 是独立发布物，由 .hermes-target-version / tag / commit 单独固定。
 # 改时记得同步 src-tauri/tauri.conf.json + ../package.json + package-lock.json。
 # CI lint: scripts/check_version_sync.sh
-version = "1.0.83"
+version = "1.0.84"
 description = "Catfish Companion App - desktop sidekick for the Catfish platform"
 authors = ["Catfish Team"]
 edition = "2021"
@@ -170,9 +170,26 @@ keyring = { version = "3", features = ["windows-native"] }
 #   - x86_64-pc-windows-msvc (Windows msi) — 同上, wiki 搜索走 gateway
 #   - aarch64-apple-darwin (Apple Silicon dmg) — Local ONNX 完全保留
 #   - aarch64-unknown-linux-* (若未来支持 Linux mac client) — Local ONNX 保留
-[target.'cfg(target_arch = "aarch64")'.dependencies]
-# ONNX Runtime Rust binding. 只 aarch64 有 prebuilt.
-ort = "2.0.0-rc.12"
-# tokenizers: BGE-M3 XLM-R BPE. 纯 Rust 也支持 x86_64, 但只 Local provider 用,
-# 跟 ort 一起 guard 免 x86_64 dmg 额外无用依赖.
+# 10/6 (鸿波「Windows 没有本地运行时, 什么意思?」): 判据从 "aarch64" 改成
+# "不是 Intel Mac" —— ort 真没有预编译包的只有 x86_64-apple-darwin (ort-sys
+# build/download/dist.txt 有 x86_64-pc-windows-msvc)。build.rs 发 cfg(local_embedding),
+# Rust 侧全部用它; 这里 Cargo 的 target cfg 不能用自定义 cfg, 所以写等价表达式。
+#
+# Windows 为什么是 load-dynamic 而不是默认的 download-binaries:
+#   pyke 的 Windows 静态库是 /MD, 而 .cargo/config.toml 给 msvc 目标开了 +crt-static
+#   (/MT, 9/19 治干净装机缺 VCRUNTIME140.dll) —— 两者一链接就是 LNK2038 (7/13 W2.14
+#   撞过)。load-dynamic 不链接任何 onnxruntime 库, 运行时 ort::init_from() 加载
+#   onnxruntime.dll (DLL 自带自己的 CRT, 跟主程序 /MT 无关)。DLL 随 embed-model 的
+#   windows-x64 组件包下发到 ~/.catfish/models/ (services/embed_model.rs)。
+[target.'cfg(not(all(target_arch = "x86_64", target_os = "macos")))'.dependencies]
+# tokenizers: BGE-M3 XLM-R BPE. 纯 Rust + 两个 C/C++ 小依赖 (onig / esaxx), 跟着
+# rustflags 的 crt-static 走, Windows 上没问题。
 tokenizers = "0.20"
+
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+# ONNX Runtime Rust binding, aarch64 (Apple Silicon / Linux arm) 用 pyke 预编译静态库。
+ort = "2.0.0-rc.12"
+
+[target.'cfg(all(target_arch = "x86_64", target_os = "windows"))'.dependencies]
+# 同一个 crate, Windows x64 走动态加载 (理由见上)。api-24 跟默认 feature 集一致。
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "tracing", "load-dynamic", "api-24"] }

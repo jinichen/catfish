@@ -7,10 +7,11 @@
 //! ~/.catfish/runtime/ → 这里解包, 把两个文件放到 embedding.yaml 配置的路径
 //! (默认 ~/.catfish/models/bge-m3.onnx + tokenizer.json)。
 //!
-//! 平台是 `any`: 纯模型文件, 哪个平台都一样。但**本机能不能用它**取决于架构 ——
-//! ort 只在 aarch64 编 (见 embedding_local.rs 文件头), Intel Mac / Windows 没有本地
-//! 向量 provider, 装了也没人加载。commands/embed_model_cmd.rs 的 status 把这点
-//! 报给界面, 界面据此不给 x86 用户看"下载"按钮。
+//! 两种包: `any` (纯模型, Apple 芯片 Mac 用) 和 `windows-x64` (模型 + 微软官方
+//! onnxruntime.dll, 因为 Windows 上 ort 走 load-dynamic, 见 Cargo.toml target 表)。
+//! **本机能不能用**取决于构建: cfg(local_embedding) = 除 Intel Mac 外都带 (build.rs),
+//! Intel Mac 没有本地向量 provider, 装了也没人加载。commands/embed_model_cmd.rs 的
+//! status 把这点报给界面, 界面据此不给 Intel Mac 用户看"下载"按钮。
 //!
 //! 包里:
 //!   bge-m3.onnx      Xenova/bge-m3 model_quantized.onnx (INT8)
@@ -29,6 +30,16 @@ pub const COMPONENT_NAME: &str = "embed-model";
 /// 包里两个文件的固定名 (打包脚本 scripts/build-embed-model-pack.sh 同名)。
 pub const ONNX_IN_PACK: &str = "bge-m3.onnx";
 pub const TOKENIZER_IN_PACK: &str = "tokenizer.json";
+/// Windows 包多带的 ONNX Runtime (微软官方 onnxruntime-win-x64-<ver>.zip 里的 lib/)。
+/// 主程序 ort 走 load-dynamic, 运行时从模型目录加载这个 (embedding_local.rs)。
+pub const RUNTIME_DLL: &str = "onnxruntime.dll";
+/// CPU 推理不需要它, 但 onnxruntime.dll 启动时会找它; 一起带上省得 Windows 报缺 DLL。
+pub const RUNTIME_PROVIDERS_DLL: &str = "onnxruntime_providers_shared.dll";
+
+/// 本平台的包里除模型外还必须有的文件 (Windows: 两个 DLL)。
+pub fn runtime_files() -> &'static [&'static str] {
+    if cfg!(windows) { &[RUNTIME_DLL, RUNTIME_PROVIDERS_DLL] } else { &[] }
+}
 const STAMP_FILE: &str = "embed-model.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +62,10 @@ pub fn installed(local: &LocalConfig) -> Option<Installed> {
     let tokenizer_path = PathBuf::from(expand_home(&local.tokenizer_path));
     let meta = std::fs::metadata(&model_path).ok()?;
     if !tokenizer_path.is_file() {
+        return None;
+    }
+    let dir = model_path.parent()?;
+    if runtime_files().iter().any(|f| !dir.join(f).is_file()) {
         return None;
     }
     let version = model_path
@@ -104,12 +119,15 @@ fn install_inner(
     if pj.version.is_empty() || !pj.version.chars().all(|c| c.is_ascii_digit() || c == '.') {
         return Err(format!("包版本号不合法: {}", pj.version));
     }
-    for f in [ONNX_IN_PACK, TOKENIZER_IN_PACK] {
+    for f in [ONNX_IN_PACK, TOKENIZER_IN_PACK].iter().chain(runtime_files()) {
         if !staging.join(f).is_file() {
-            return Err(format!("包里缺 {f}"));
+            return Err(format!("包里缺 {f} (Windows 要用 windows-x64 的包, 它多带 ONNX Runtime)"));
         }
     }
     on_step("placing");
+    for f in runtime_files() {
+        place(&staging.join(f), &dir.join(f))?;
+    }
     // 先放 tokenizer 再放 onnx: 两步都 rename (同一文件系统, 原子), 中途失败最多
     // 留下一个新 tokenizer + 老 onnx —— 两者都是 BGE-M3, 不会错配。
     place(&staging.join(TOKENIZER_IN_PACK), tokenizer_path)?;

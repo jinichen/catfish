@@ -54,7 +54,7 @@ use crate::services::embedding_config::{Backend, EmbeddingConfig, load_config};
 // 它跟"缓存该不该重建"是同一件事, 放一起才好写测试 (那边只依赖 std + rusqlite,
 // 不像这个文件拖着 ort / reqwest / tokenizers, 在没有 GTK 的机器上编不了)。
 // 两个 provider 各自一个文件 (8/14 拆的, 见各自文件头)
-#[cfg(target_arch = "aarch64")]
+#[cfg(local_embedding)]
 use crate::services::embedding_local::LocalProvider;
 use crate::services::embedding_remote::{RemoteProvider, probe_remote_usable};
 
@@ -68,7 +68,7 @@ static ACTIVE_PROVIDER: OnceLock<Provider> = OnceLock::new();
 /// RemoteProvider 只 72 bytes — 差 16x. Box LocalProvider 让 enum 变紧, 内存
 /// 只在 Local 场景多一次堆分配 (整个 process 只 init 一次, 无损).
 enum Provider {
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(local_embedding)]
     Local(Box<LocalProvider>),
     Remote(RemoteProvider),
 }
@@ -76,7 +76,7 @@ enum Provider {
 impl Provider {
     fn is_ready(&self) -> bool {
         match self {
-            #[cfg(target_arch = "aarch64")]
+            #[cfg(local_embedding)]
             Provider::Local(p) => p.is_ready(),
             Provider::Remote(p) => p.is_ready(),
         }
@@ -99,7 +99,7 @@ impl Provider {
             return None;
         }
         match self {
-            #[cfg(target_arch = "aarch64")]
+            #[cfg(local_embedding)]
             Provider::Local(p) => Some(p.not_ready_reason()),
             Provider::Remote(p) => Some(p.not_ready_reason()),
         }
@@ -107,7 +107,7 @@ impl Provider {
 
     async fn embed_text(&self, text: &str) -> Option<Vec<f32>> {
         match self {
-            #[cfg(target_arch = "aarch64")]
+            #[cfg(local_embedding)]
             Provider::Local(p) => p.embed_text(text).await,
             Provider::Remote(p) => p.embed_text(text).await,
         }
@@ -124,13 +124,13 @@ fn init_active_provider() -> Provider {
     let cfg: EmbeddingConfig = load_config();
     match cfg.backend {
         Backend::Local => {
-            #[cfg(target_arch = "aarch64")]
+            #[cfg(local_embedding)]
             {
                 log::info!("[embedding] backend=local (yaml 显式)");
                 Provider::Local(Box::new(LocalProvider::new(cfg.local)))
             }
             // 7/16 BL-INTEL-DMG: x86_64 (Intel Mac dmg / Windows msi) 无 ort → 强制 fallback Remote
-            #[cfg(not(target_arch = "aarch64"))]
+            #[cfg(not(local_embedding))]
             {
                 log::warn!(
                     "[embedding] backend=local 配置但当前架构无 ONNX ort → fallback remote {}",
@@ -177,7 +177,7 @@ fn init_active_provider() -> Provider {
                 log::info!("[embedding] auto → remote OK (token 有 + 真的取回了向量)");
                 Provider::Remote(remote)
             } else {
-                #[cfg(target_arch = "aarch64")]
+                #[cfg(local_embedding)]
                 {
                     log::info!("[embedding] auto → local ONNX (remote 不通或不可用)");
                     Provider::Local(Box::new(LocalProvider::new(cfg.local)))
@@ -186,7 +186,7 @@ fn init_active_provider() -> Provider {
                 // 连 LocalProvider 都没编进来 → 只能 Remote 兜底, is_ready() 返 false,
                 // caller 走 no-op fallback (不筛全量注入)。
                 // Windows 上这意味着**没有向量**, 不是"降级到本地"。
-                #[cfg(not(target_arch = "aarch64"))]
+                #[cfg(not(local_embedding))]
                 {
                     log::warn!(
                         "[embedding] auto → remote 不通或不可用, 且当前架构无本地 ONNX, embed 会返 None"
@@ -282,12 +282,12 @@ fn note_remote_success() {
 fn fallback_provider() -> Option<&'static Provider> {
     FALLBACK_PROVIDER
         .get_or_init(|| {
-            #[cfg(target_arch = "aarch64")]
+            #[cfg(local_embedding)]
             {
                 let cfg = load_config();
                 Some(Provider::Local(Box::new(LocalProvider::new(cfg.local))))
             }
-            #[cfg(not(target_arch = "aarch64"))]
+            #[cfg(not(local_embedding))]
             {
                 None
             }
@@ -429,6 +429,13 @@ mod demote_tests {
 
     use super::*;
 
+    // 10/6: 这组测试全靠两个全局 AtomicUsize/AtomicBool, cargo test 默认多线程跑,
+    // 四个用例互相踩 (哪个红是随机的, 本机 3 次跑 2 次红)。串行化, 不改被测逻辑。
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn reset() {
         CONSECUTIVE_REMOTE_FAILURES.store(0, Ordering::Relaxed);
         DEMOTED_TO_LOCAL.store(false, Ordering::Relaxed);
@@ -436,6 +443,7 @@ mod demote_tests {
 
     #[test]
     fn 连续失败到阈值才返回_true() {
+        let _serial = serial();
         reset();
         for i in 1..REMOTE_FAILURES_BEFORE_DEMOTE {
             assert!(!note_remote_failure(), "第 {i} 次就想切, 太敏感了");
@@ -447,6 +455,7 @@ mod demote_tests {
     fn 中间成功一次就清零() {
         // ★★★ 判据是"连续"不是"累计"。累计的话跑够久总会切到本地,
         // 而远程一直是好的 —— 那是纯粹的性能损失 + 一次无谓的缓存重建。
+        let _serial = serial();
         reset();
         note_remote_failure();
         note_remote_failure();
@@ -466,6 +475,7 @@ mod demote_tests {
 
     #[test]
     fn demoted_默认是假的() {
+        let _serial = serial();
         reset();
         assert!(!demoted(), "没失败过就不该是降级态");
     }

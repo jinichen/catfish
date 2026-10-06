@@ -129,7 +129,13 @@ fn check_name(home: &Path, id: Option<&str>, name: &str) -> Result<(), String> {
 }
 
 fn new_id() -> String {
-    format!("tpl_{}", chrono::Local::now().format("%Y%m%d%H%M%S%3f"))
+    // 10/6: 原来只有毫秒时间戳, 同一毫秒里连存两个模版 (测试里就是) 会拿到同一个
+    // id, 后者把前者盖掉 —— cargo test 全套跑时 3 次里红 1 次。加一个进程内递增
+    // 序号 (两位, 取模), 同一毫秒内 100 个以内不撞; valid_id 允许纯数字后缀。
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed) % 100;
+    format!("tpl_{}{seq:02}", chrono::Local::now().format("%Y%m%d%H%M%S%3f"))
 }
 
 fn write_json(home: &Path, tpl: &Template) -> Result<(), String> {

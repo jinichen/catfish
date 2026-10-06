@@ -6,8 +6,9 @@
  * → lib/tauri_components 下载 + sha256 校验 → embed_model_install 解包到
  * ~/.catfish/models/。装完不用重启 Companion, 下一次搜索自己加载。
  *
- * 只在 provider 没准备好时显示 (WikiTree 决定)。Intel Mac / Windows 没有本地
- * ONNX 运行时, 装了也没人用 —— 那种机器只说明"要靠中央网关", 不给下载按钮。
+ * 只在 provider 没准备好时显示 (WikiTree 决定)。Intel Mac 没有本地 ONNX 运行时
+ * (ort 不发那个目标的预编译包), 装了也没人用 —— 那种机器只说明"要靠中央网关",
+ * 不给下载按钮。Windows 用 windows-x64 包 (模型 + onnxruntime.dll)。
  */
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -93,7 +94,7 @@ export default function EmbedModelSetup({ status, onReady }: { status: EmbedMode
   if (!status.local_supported) {
     body = (
       <div>
-        这台电脑的架构没有本地向量运行时, 语义检索要靠中央网关的向量服务。现在网关不可用:
+        这台电脑 (Intel 芯片 Mac) 的安装包没有本地向量运行时, 语义检索要靠中央网关的向量服务。现在网关不可用:
         <ErrorLine>{status.not_ready_reason ?? "未知原因"}</ErrorLine>
       </div>
     );

@@ -31,8 +31,8 @@ const KNOWN: Record<string, { title: string; purpose: string; platforms: string[
   },
   "embed-model": {
     title: "向量模型包 (BGE-M3)",
-    purpose: "知识体系「语义」检索在员工电脑上算向量 (BGE-M3 ONNX INT8 + tokenizer, ~560MB); 不装则只能靠中央网关的向量服务。Apple 芯片 Mac 可用; Intel Mac / Windows 没有本地运行时",
-    platforms: ["any"],
+    purpose: "知识体系「语义」检索在员工电脑上算向量 (BGE-M3 ONNX INT8 + tokenizer, ~560MB); 不装则只能靠中央网关的向量服务。Apple 芯片 Mac 用 any 包; Windows 用 windows-x64 包 (多带微软 ONNX Runtime DLL); Intel Mac 没有本地运行时, 只能走网关",
+    platforms: ["any", "windows-x64"],
   },
 };
 
