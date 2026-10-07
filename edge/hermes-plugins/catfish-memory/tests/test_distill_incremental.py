@@ -256,3 +256,24 @@ async def test_reconcile_shrinks_input_until_it_succeeds(monkeypatch):
     out = await llm._call_distill_llm(_entry("2026-09-01", "z" * 400), "m", report=report)
     assert report["reconciled"] is True and "以此为准" in out.splitlines()[0]
     assert len(sizes) == 3 and sizes[0] > sizes[1] > sizes[2], sizes
+
+
+def test_reconcile_retry_is_throttled_and_keeps_cooldown(tmp_path: Path, monkeypatch):
+    from catfish_memory_distill_state import _should_retry_reconcile, _should_run_distill
+    import catfish_memory_distill_state as st
+    j = _entry("2026-09-01", "x")
+    (tmp_path / "employee_journal.md").write_text(j, encoding="utf-8")
+    assert not _should_retry_reconcile(tmp_path), "没有 distilled 文件 → 不重试"
+    (tmp_path / "distilled_facts.md").write_text(assemble([("2026-09-01", SEG_OLD)], None), encoding="utf-8")
+    _mark_distill_run(tmp_path, journal_consumed_chars=len(j), journal_text=j)
+    assert _should_retry_reconcile(tmp_path), "头部兜底、从没试过合并 → 该重试"
+    assert not _should_run_distill(tmp_path), "24h cooldown 仍然在"
+    before = json.loads((tmp_path / "memory_distill_state.json").read_text(encoding="utf-8"))["last_run_ts"]
+    _mark_distill_run(tmp_path, journal_consumed_chars=len(j), journal_text=j, reconcile_attempt_only=True)
+    after = json.loads((tmp_path / "memory_distill_state.json").read_text(encoding="utf-8"))
+    assert after["last_run_ts"] == before and after["journal_consumed_chars"] == len(j), "只记尝试, 不重置 cooldown, 游标不丢"
+    assert not _should_retry_reconcile(tmp_path), "1h 内不再试"
+    monkeypatch.setattr(st, "_RECONCILE_RETRY_SECONDS", 0)
+    assert _should_retry_reconcile(tmp_path)
+    (tmp_path / "distilled_facts.md").write_text(assemble([("2026-09-01", SEG_OLD)], "## 进行中\n(无)"), encoding="utf-8")
+    assert not _should_retry_reconcile(tmp_path), "头部已是 LLM 合并 → 不用再试"

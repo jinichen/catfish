@@ -139,6 +139,7 @@ try:
     from .catfish_memory_distill_state import (  # noqa: F401
         _distill_cursor,
         _mark_distill_run,
+        _should_retry_reconcile,
         _should_run_distill,
         _write_distilled,
     )
@@ -146,6 +147,7 @@ except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_distill_state import (  # noqa: F401
         _distill_cursor,
         _mark_distill_run,
+        _should_retry_reconcile,
         _should_run_distill,
         _write_distilled,
     )

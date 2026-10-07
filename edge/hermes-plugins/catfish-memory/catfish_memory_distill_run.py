@@ -133,7 +133,7 @@ async def distill_incremental(
     new_gaps = gaps if reconcile_only else _to_absolute(pieces, report.get("failed_ranges") or [])
     _mark_distill_run(
         home, journal_consumed_chars=len(journal_text), journal_text=journal_text,
-        journal_gaps=new_gaps,
+        journal_gaps=new_gaps, reconcile_attempt_only=reconcile_only,
     )
     if chunks_failed:
         logger.warning(

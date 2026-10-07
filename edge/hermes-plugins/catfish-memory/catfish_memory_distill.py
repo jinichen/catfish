@@ -48,6 +48,7 @@ try:
         _read_queries_concat,
         _read_sources_concat,
         _read_state,
+        _should_retry_reconcile,
         _should_run_distill,
         _wiki_enabled,
         _write_distilled,
@@ -84,6 +85,7 @@ except ImportError:  # 独立脚本模式 (无父包)
         _read_queries_concat,
         _read_sources_concat,
         _read_state,
+        _should_retry_reconcile,
         _should_run_distill,
         _wiki_enabled,
         _write_distilled,
@@ -144,8 +146,9 @@ async def run_distill_for_dream_engine(
 
     home = catfish_home_override or _catfish_home()
 
-    # cooldown check (force=True 时跳)
-    if not force and not _should_run_distill(home):
+    # cooldown check (force=True 时跳; 10/7 深夜: 头部是兜底且距上次合并尝试 ≥1h 也放行,
+    # 进去之后 distill_incremental 只会重跑合并, 不重蒸)
+    if not force and not _should_run_distill(home) and not _should_retry_reconcile(home):
         return {
             "ok": False, "reason": "cooldown",
             "chunks_total": 0, "chunks_failed": 0, "bytes_written": 0,
@@ -215,7 +218,7 @@ class _DistillMixin:
             # 3. 24h 间隔满 OR queries / sources 有未 ingest file → 跑 distill
             #    P1.2.3 (6/4): queries 触发也跑 — 绕 24h cooldown.
             #    P16 (6/5): sources 触发也跑 — 对话上传文件即时入库.
-            cooldown_passed = _should_run_distill(catfish_home)
+            cooldown_passed = _should_run_distill(catfish_home) or _should_retry_reconcile(catfish_home)
             # 8/3: sources 跟 queries 分家 —— 它们本来就是两件相反的事。
             #
             # 6/16 鸿波"对话自动入知识库会很乱" → 加 _wiki_enabled() 守门, 默认关。
