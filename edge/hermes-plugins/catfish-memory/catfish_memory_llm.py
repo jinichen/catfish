@@ -241,13 +241,21 @@ async def _call_distill_llm(
         segments = merge_segments_by_date(prior, results)
         current: Optional[str] = None
         if segments:
-            current = await _post_distill(client, headers, {
-                "model": model,
-                "messages": [{"role": "user", "content": _RECONCILE_PROMPT + "\n\n" + status_digest(segments)}],
-                "temperature": 0.1,
-                "max_tokens": 1500,
-                "stream": False,
-            }, "当前状态合并")
+            # 10/7 深夜: 12000 字的摘要照样撞网关 180s 超时 (qwen-flash 实测 6K token
+            # prompt + 1500 token 输出 > 180s)。合并失败就把输入砍半再试, 最多砍到 1/4:
+            # 摘要新在前, 砍掉的是最旧的段, "当前状态"要的本来就是最近的说法。
+            digest = status_digest(segments)
+            for frac in (1.0, 0.5, 0.25):
+                part = digest[: max(1, int(len(digest) * frac))]
+                current = await _post_distill(client, headers, {
+                    "model": model,
+                    "messages": [{"role": "user", "content": _RECONCILE_PROMPT + "\n\n" + part}],
+                    "temperature": 0.1,
+                    "max_tokens": 1500,
+                    "stream": False,
+                }, f"当前状态合并 (输入 {len(part)} 字)")
+                if current is not None:
+                    break
             if current is None:
                 logger.warning("catfish-memory 当前状态合并失败, 用确定性兜底 (头部会标明)")
             rep["reconciled"] = current is not None

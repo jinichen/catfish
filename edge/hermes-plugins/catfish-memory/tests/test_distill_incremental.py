@@ -184,7 +184,7 @@ async def test_failed_chunk_is_retried_in_second_pass_and_order_kept(monkeypatch
     attempts = {}
 
     async def fake_post(client, headers, body, what):
-        if what == "当前状态合并":
+        if what.startswith("当前状态合并"):
             return "## 进行中\n(无)"
         content = body["messages"][0]["content"]
         idx = int(what.split("第 ")[1].split("/")[0])
@@ -234,3 +234,25 @@ async def test_fallback_head_triggers_reconcile_only_next_run(tmp_path: Path):
     assert "合并成了" in text and "兜底生成" not in text
     r3 = await distill_incremental(tmp_path, "m", fake)
     assert r3["reason"] == "no_new_journal" and len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_reconcile_shrinks_input_until_it_succeeds(monkeypatch):
+    """10/7 深夜: 合并超时就把输入砍半再试 (1 → 1/2 → 1/4), 砍掉的是最旧的段。"""
+    import catfish_memory_llm as llm
+
+    monkeypatch.setattr(llm, "_gateway_dev_token", lambda: "t")
+    sizes = []
+
+    async def fake_post(client, headers, body, what):
+        if what.startswith("当前状态合并"):
+            n = len(body["messages"][0]["content"])
+            sizes.append(n)
+            return "## 进行中\n- ok" if len(sizes) == 3 else None
+        return "## 项目\n- p\n\n## 任务状态\n- x | resolved\n"
+
+    monkeypatch.setattr(llm, "_post_distill", fake_post)
+    report = {}
+    out = await llm._call_distill_llm(_entry("2026-09-01", "z" * 400), "m", report=report)
+    assert report["reconciled"] is True and "以此为准" in out.splitlines()[0]
+    assert len(sizes) == 3 and sizes[0] > sizes[1] > sizes[2], sizes
