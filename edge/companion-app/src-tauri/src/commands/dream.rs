@@ -80,6 +80,14 @@ pub(crate) fn describe(result: &Option<serde_json::Value>) -> String {
         if reason == "no_new_journal" {
             return "跳过: 上次蒸馏之后 journal 没有新增".to_string();
         }
+        if reason == "reconcile_only" {
+            // 10/7 晚: 上次"当前状态"合并超时走了兜底, 这次没新增, 只重跑了合并
+            return if v.get("reconciled").and_then(|x| x.as_bool()) == Some(true) {
+                "只重跑了当前状态合并: 成功, 兜底头已替换".to_string()
+            } else {
+                "只重跑了当前状态合并: 仍失败, 头部还是确定性兜底".to_string()
+            };
+        }
         let total = v.get("chunks_total").and_then(|x| x.as_u64()).unwrap_or(0);
         let failed = v.get("chunks_failed").and_then(|x| x.as_u64()).unwrap_or(0);
         let from = v.get("incremental_from").and_then(|x| x.as_u64()).unwrap_or(0);
@@ -406,6 +414,15 @@ mod describe_tests {
             "model": "m", "incremental_from": 0, "reconciled": true
         })));
         assert!(!clean.contains("⚠"), "{clean}");
+    }
+
+    #[test]
+    fn reconcile_only_reports_whether_the_merge_succeeded() {
+        let ok = describe(&Some(json!({"ok": true, "reason": "reconcile_only", "reconciled": true})));
+        let bad = describe(&Some(json!({"ok": true, "reason": "reconcile_only", "reconciled": false})));
+        assert!(ok.contains("合并") && ok.contains("成功"), "{ok}");
+        assert!(bad.contains("兜底"), "{bad}");
+        assert_ne!(ok, bad);
     }
 
     #[test]

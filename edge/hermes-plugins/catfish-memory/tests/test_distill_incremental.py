@@ -208,3 +208,29 @@ def test_merge_segments_by_date_inserts_gap_segment_in_place():
     prior = [("2026-07-01 ~ 2026-07-05", "a"), ("", "a2"), ("2026-09-01", "c")]
     out = merge_segments_by_date(prior, [("2026-08-01", "b")])
     assert [t for _, t in out] == ["a", "a2", "b", "c"], "无标签段跟着前一个走, 缺口段按日期插中间"
+
+
+@pytest.mark.asyncio
+async def test_fallback_head_triggers_reconcile_only_next_run(tmp_path: Path):
+    """10/7 晚: 合并超时 → 兜底头; 下次没新增也要只重跑一次合并 (空文本 + prior), 缺口保留。"""
+    e1 = _entry("2026-09-01", "a" * 10)
+    (tmp_path / "employee_journal.md").write_text(e1, encoding="utf-8")
+    calls = []
+
+    async def fake(text, model, *, progress_cb=None, prior_segments=None, report=None):
+        calls.append((text, list(prior_segments or [])))
+        if len(calls) == 1:
+            report.update({"chunks_total": 1, "chunks_failed": 0, "consumed_chars": len(text), "failed_ranges": [], "reconciled": False})
+            return assemble([("2026-09-01", SEG_OLD)], None)
+        report.update({"chunks_total": 0, "chunks_failed": 0, "consumed_chars": 0, "failed_ranges": [], "reconciled": True})
+        return assemble(list(prior_segments), "## 进行中\n- 合并成了")
+
+    r1 = await distill_incremental(tmp_path, "m", fake)
+    assert r1["ok"] and r1["reconciled"] is False
+    r2 = await distill_incremental(tmp_path, "m", fake)
+    assert r2["ok"] and r2["reason"] == "reconcile_only" and r2["chunks_total"] == 0
+    assert calls[1][0] == "" and [l for l, _ in calls[1][1]] == ["2026-09-01"], "只喂 prior, 不喂文本"
+    text = (tmp_path / "distilled_facts.md").read_text(encoding="utf-8")
+    assert "合并成了" in text and "兜底生成" not in text
+    r3 = await distill_incremental(tmp_path, "m", fake)
+    assert r3["reason"] == "no_new_journal" and len(calls) == 2

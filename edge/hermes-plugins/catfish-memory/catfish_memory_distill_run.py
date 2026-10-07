@@ -25,11 +25,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 try:
-    from .catfish_memory_distill_reconcile import parse_segments
+    from .catfish_memory_distill_reconcile import head_needs_reconcile, parse_segments
     from .catfish_memory_distill_state import _distill_cursor, _mark_distill_run, _write_distilled
     from .catfish_memory_helpers import _DISTILL_CHUNK_CHARS, _read_full_journal
 except ImportError:  # 独立脚本模式 (无父包)
-    from catfish_memory_distill_reconcile import parse_segments
+    from catfish_memory_distill_reconcile import head_needs_reconcile, parse_segments
     from catfish_memory_distill_state import _distill_cursor, _mark_distill_run, _write_distilled
     from catfish_memory_helpers import _DISTILL_CHUNK_CHARS, _read_full_journal
 
@@ -72,7 +72,7 @@ async def distill_incremental(
 
     返回 {ok, reason, chunks_total, chunks_failed, bytes_written, model, took_seconds,
           incremental_from, reconciled}。
-    reason: empty_journal / no_new_journal / llm_fail / "".
+    reason: empty_journal / no_new_journal / reconcile_only / llm_fail / "".
     """
     started = time.time()
     base: Dict[str, Any] = {
@@ -97,10 +97,16 @@ async def distill_incremental(
     new_text = "".join(journal_text[a:b] for a, b in pieces)
     base["incremental_from"] = cursor
 
+    reconcile_only = False
     if not new_text.strip():
-        # 没新增也没缺口: 不动文件、不调 LLM, 但 cooldown 照记, 免得每次 session_end 都进来
-        _mark_distill_run(home, journal_consumed_chars=cursor, journal_text=journal_text, journal_gaps=[])
-        return {**base, "ok": True, "reason": "no_new_journal", "took_seconds": time.time() - started}
+        if prior and head_needs_reconcile(_read_distilled(home)):
+            # 10/7 晚: 没新增也没缺口, 但上次"当前状态"合并没成 (头部是兜底) → 只重跑
+            # 合并这一次 LLM 调用, 不重蒸任何段。call_llm 拿到空文本 + prior 就只做合并。
+            reconcile_only = True
+        else:
+            # 没新增也没缺口: 不动文件、不调 LLM, 但 cooldown 照记, 免得每次 session_end 都进来
+            _mark_distill_run(home, journal_consumed_chars=cursor, journal_text=journal_text, journal_gaps=[])
+            return {**base, "ok": True, "reason": "no_new_journal", "took_seconds": time.time() - started}
 
     estimated = max(1, (len(new_text) + _DISTILL_CHUNK_CHARS - 1) // _DISTILL_CHUNK_CHARS)
     if progress_cb is not None:
@@ -113,7 +119,7 @@ async def distill_incremental(
     distilled = await call_llm(
         new_text, model, progress_cb=progress_cb, prior_segments=prior, report=report,
     )
-    chunks_total = int(report.get("chunks_total") or estimated)
+    chunks_total = int(report["chunks_total"]) if "chunks_total" in report else estimated
     chunks_failed = int(report.get("chunks_failed") or 0)
     out = {
         **base, "chunks_total": chunks_total, "chunks_failed": chunks_failed,
@@ -123,7 +129,8 @@ async def distill_incremental(
         return {**out, "reason": "llm_fail", "took_seconds": time.time() - started}
 
     _write_distilled(home, distilled)
-    new_gaps = _to_absolute(pieces, report.get("failed_ranges") or [])
+    # 只重跑合并时没喂任何 piece, 旧缺口原样保留
+    new_gaps = gaps if reconcile_only else _to_absolute(pieces, report.get("failed_ranges") or [])
     _mark_distill_run(
         home, journal_consumed_chars=len(journal_text), journal_text=journal_text,
         journal_gaps=new_gaps,
@@ -135,6 +142,7 @@ async def distill_incremental(
         )
     return {
         **out, "ok": True,
+        "reason": "reconcile_only" if reconcile_only else "",
         "bytes_written": len(distilled.encode("utf-8")),
         "took_seconds": time.time() - started,
     }

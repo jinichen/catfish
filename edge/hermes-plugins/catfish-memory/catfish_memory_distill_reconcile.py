@@ -32,7 +32,12 @@ _SECTION = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 #: 合并时带上的段 (人物/偏好跟"状态"无关, 不带, 省 token)
 _STATUS_SECTIONS = ("项目", "任务状态", "决策")
 #: 交给合并 LLM 的输入上限 (字符)。新段在前, 超出截掉的是最旧的。
-_RECONCILE_INPUT_CHARS = 24000
+#: 10/7 晚: 24000 → 12000。167 段的摘要顶满 24000 字 (≈10K token), qwen-flash 两次都
+#: 撞网关 180s 超时, 合并没成只能兜底。状态合并要的是"最近的说法", 12000 字仍覆盖
+#: 最近几十段。
+_RECONCILE_INPUT_CHARS = 12000
+#: 段 0 标题里的兜底标记 —— distill_run 据此判断"上次合并没成, 这次只重跑合并"
+FALLBACK_HEAD_MARK = "兜底生成"
 #: 确定性兜底各段最多列几条 (新的在前)
 _FALLBACK_DONE, _FALLBACK_PAUSED = 15, 6
 
@@ -188,7 +193,7 @@ def assemble(
         title = f"### 蒸馏段 0 · 当前状态（截至 {time.strftime('%Y-%m-%d')}，以此为准）"
         note = "> 下面各段是不同时期的记录, 新的在前; 旧段里的「进行中」可能早已结束, 以本段为准。"
     else:
-        title = f"### 蒸馏段 0 · 当前状态（兜底生成，仅基于 ≤ {latest_day} 的记录，未经 LLM 合并）"
+        title = f"### 蒸馏段 0 · 当前状态（{FALLBACK_HEAD_MARK}，仅基于 ≤ {latest_day} 的记录，未经 LLM 合并）"
         note = (
             "> 状态合并调用失败, 本段是从各段「任务状态」机械取最新得到的, 只有已完结/暂停两类, "
             "**不代表截至今天的进展**; 比它新的事以「近期流水」和下面最新的段为准。"
@@ -204,3 +209,12 @@ def assemble(
         for i, (label, text) in enumerate(segments)
     ]
     return "\n\n".join([head, *reversed(body)])
+
+
+def head_needs_reconcile(distilled: str) -> bool:
+    """上次写出的文件段 0 是兜底的 (LLM 合并没成) → 下次哪怕没新增也该只重跑一次合并。"""
+    first = distilled.find("### 蒸馏段 0")
+    if first < 0:
+        return False
+    line_end = distilled.find("\n", first)
+    return FALLBACK_HEAD_MARK in distilled[first: line_end if line_end > 0 else None]
