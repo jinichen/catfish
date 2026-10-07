@@ -157,6 +157,10 @@ _DISTILL_HTTP_TIMEOUT = 300.0
 #: 单段蒸馏 / 状态合并失败后再试几次 (超时 / 非 200 / 异常都算)。
 _DISTILL_RETRIES = 1
 
+#: 10/7 晚: 分段蒸馏并发数。串行 105 段 × ~90s ≈ 2.6h; 3 路并发 ≈ 1h。网关对
+#: 公网 upstream 本来就是多路转发, 3 路不会撞限流 (再高会让单段更慢, 反而更易 504)。
+_DISTILL_CONCURRENCY = 3
+
 #: P1.1.1 wiki Step 2 Generation 单独超时 — 生 ~4000 tokens 长 response,
 #: 60s 不够 (6/4 12:55 实测 ReadTimeout). 180s 给 LLM 慢慢生.
 _GENERATION_HTTP_TIMEOUT = 180.0
@@ -164,5 +168,7 @@ _GENERATION_HTTP_TIMEOUT = 180.0
 #: 每个 session 取最多 N 条消息进 prompt (防长 session 撑爆 LLM context).
 _MAX_MESSAGES_PER_SUMMARY = 60
 
-#: 蒸馏 chunk 大小 (字符), 跟 gateway memory_distill 原 DISTILL_CHUNK_CHARS 对齐.
-_DISTILL_CHUNK_CHARS = 8000
+#: 蒸馏 chunk 大小 (字符)。原 8000 跟老 gateway memory_distill 对齐; 10/7 晚降到 5000:
+#: 8000 字中文 ≈ 3300 token prompt, qwen-flash 实测 70–180s, 网关上游 180s 超时
+#: 一撞就 504。段短一点单次更快, 失败重跑的代价也小。
+_DISTILL_CHUNK_CHARS = 5000

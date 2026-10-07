@@ -143,3 +143,34 @@ def test_raw_fallback_entry_is_tagged():
     head = _format_journal_entry("sid-1", f"{RAW_FALLBACK_TAG} 原文", kind="session-raw").splitlines()[0]
     assert head.startswith("## [") and "] session-raw | sid-1" in head
     assert _format_journal_entry("sid-1", "摘要").splitlines()[0].endswith("] session | sid-1")
+
+
+# ── 并发 + 补跑: 第一轮失败的段补跑成功后不留缺口, 顺序不乱 ────────
+
+@pytest.mark.asyncio
+async def test_failed_chunk_is_retried_in_second_pass_and_order_kept(monkeypatch):
+    import catfish_memory_llm as llm
+
+    monkeypatch.setattr(llm, "_gateway_dev_token", lambda: "t")
+    monkeypatch.setattr(llm, "_DISTILL_CHUNK_CHARS", 80)
+    attempts = {}
+
+    async def fake_post(client, headers, body, what):
+        if what == "当前状态合并":
+            return "## 进行中\n(无)"
+        content = body["messages"][0]["content"]
+        idx = int(what.split("第 ")[1].split("/")[0])
+        attempts[idx] = attempts.get(idx, 0) + 1
+        if idx == 2 and attempts[idx] == 1:
+            return None  # 第 2 段第一轮失败 (模拟 504), 补跑成功
+        day = content.split("## [")[1][:10]
+        return f"## 项目\n- 段 {day}\n\n## 任务状态\n- x | resolved\n"
+
+    monkeypatch.setattr(llm, "_post_distill", fake_post)
+    journal = "".join(_entry(f"2026-09-0{i}", "z" * 30) for i in range(1, 5))
+    report = {}
+    out = await llm._call_distill_llm(journal, "m", report=report)
+    assert report == {"chunks_total": 4, "chunks_failed": 0, "consumed_chars": len(journal), "reconciled": True}, report
+    assert attempts[2] == 2 and all(attempts[i] == 1 for i in (1, 3, 4))
+    # 新在前: 段 4 (09-04) 排在段 1 (09-01) 前面, 且第 2 段补回来了
+    assert out.index("段 2026-09-04") < out.index("段 2026-09-02") < out.index("段 2026-09-01")

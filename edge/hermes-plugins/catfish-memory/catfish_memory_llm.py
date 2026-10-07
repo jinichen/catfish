@@ -7,8 +7,9 @@ httpx 是函数体内懒 import, 跟着函数一起搬过来了 —— plugin �
 """
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # 本模块有两种加载方式, import 形式必须两种都活:
 #   · hermes 进程内 —— plugins/memory/__init__.py 用 spec_from_file_location
@@ -18,9 +19,9 @@ from typing import List, Optional, Tuple
 #     相对 import 反过来会炸
 # 见 tests/test_loader_fidelity.py, 那里每种方式各起一个干净子进程验。
 try:
-    from .catfish_memory_helpers import _DISTILL_CHUNK_CHARS, _DISTILL_HTTP_TIMEOUT, _DISTILL_RETRIES, _GENERATION_HTTP_TIMEOUT, _LLM_HTTP_TIMEOUT, _gateway_dev_token, _gateway_url, _log_token_missing, logger  # noqa: F401
+    from .catfish_memory_helpers import _DISTILL_CHUNK_CHARS, _DISTILL_CONCURRENCY, _DISTILL_HTTP_TIMEOUT, _DISTILL_RETRIES, _GENERATION_HTTP_TIMEOUT, _LLM_HTTP_TIMEOUT, _gateway_dev_token, _gateway_url, _log_token_missing, logger  # noqa: F401
 except ImportError:  # 独立脚本模式 (无父包)
-    from catfish_memory_helpers import _DISTILL_CHUNK_CHARS, _DISTILL_HTTP_TIMEOUT, _DISTILL_RETRIES, _GENERATION_HTTP_TIMEOUT, _LLM_HTTP_TIMEOUT, _gateway_dev_token, _gateway_url, _log_token_missing, logger  # noqa: F401
+    from catfish_memory_helpers import _DISTILL_CHUNK_CHARS, _DISTILL_CONCURRENCY, _DISTILL_HTTP_TIMEOUT, _DISTILL_RETRIES, _GENERATION_HTTP_TIMEOUT, _LLM_HTTP_TIMEOUT, _gateway_dev_token, _gateway_url, _log_token_missing, logger  # noqa: F401
 
 # 8/15 晚: with_source 直接从 catfish_memory_gateway 拿, **不走 helpers**。
 #
@@ -187,18 +188,42 @@ async def _call_distill_llm(
         "X-Catfish-Internal": "true",
         "Content-Type": "application/json",
     }
-    consumed = 0
-    failed = 0
-    async with httpx.AsyncClient(timeout=_DISTILL_HTTP_TIMEOUT) as client:
-        for idx, chunk in enumerate(chunks):
-            _notify(idx)
+    # 10/7 晚实测: qwen-flash 单段 70–180s, 网关上游超时 180s → 前 8 段 3 段两次都 504。
+    # 串行 + "第一段失败后全丢"会让一整轮 2 小时只剩 1 段。改成:
+    #   · _DISTILL_CONCURRENCY 路并发 (结果按 idx 归位, 顺序不变)
+    #   · 第一轮跑完, 失败的段**再补一轮** (离散超时大多是上游抖动, 隔几分钟就过)
+    #   · 之后才按"连续成功前缀"推游标
+    outputs: Dict[int, Optional[str]] = {}
+    done_count = 0
+    sem = asyncio.Semaphore(_DISTILL_CONCURRENCY)
+
+    async def _one(client, idx: int, chunk: str, label: str) -> None:
+        nonlocal done_count
+        async with sem:
             text = await _post_distill(client, headers, {
                 "model": model,
                 "messages": [{"role": "user", "content": _DISTILL_PROMPT + "\n\n" + chunk}],
                 "temperature": 0.2,
                 "max_tokens": 1000,
                 "stream": False,
-            }, f"distill 第 {idx + 1}/{total} 段")
+            }, f"distill 第 {idx + 1}/{total} 段{label}")
+            outputs[idx] = text
+            done_count += 1
+            _notify(min(done_count, total))
+
+    async with httpx.AsyncClient(timeout=_DISTILL_HTTP_TIMEOUT) as client:
+        _notify(0)
+        await asyncio.gather(*(_one(client, i, c, "") for i, c in enumerate(chunks)))
+        retry_idx = [i for i in range(total) if outputs.get(i) is None]
+        if retry_idx:
+            logger.warning("catfish-memory distill 第一轮 %d/%d 段失败, 补跑一轮", len(retry_idx), total)
+            done_count = total - len(retry_idx)
+            await asyncio.gather(*(_one(client, i, chunks[i], " (补跑)") for i in retry_idx))
+
+        consumed = 0
+        failed = 0
+        for idx, chunk in enumerate(chunks):
+            text = outputs.get(idx)
             if text is None:
                 failed += 1
                 continue
