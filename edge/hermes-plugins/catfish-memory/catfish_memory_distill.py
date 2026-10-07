@@ -33,6 +33,7 @@ try:
         _call_summarize_llm,
         _catfish_home,
         _clear_buffer,
+        RAW_FALLBACK_TAG,
         _format_journal_entry,
         _list_pending_queries,
         _list_pending_sources,
@@ -68,6 +69,7 @@ except ImportError:  # 独立脚本模式 (无父包)
         _call_summarize_llm,
         _catfish_home,
         _clear_buffer,
+        RAW_FALLBACK_TAG,
         _format_journal_entry,
         _list_pending_queries,
         _list_pending_sources,
@@ -90,6 +92,11 @@ except ImportError:  # 独立脚本模式 (无父包)
         merge_files_with_llm,
         Provenance,
     )
+
+try:
+    from .catfish_memory_distill_run import distill_incremental
+except ImportError:  # 独立脚本模式 (无父包)
+    from catfish_memory_distill_run import distill_incremental
 
 # 跟 catfish_memory.py 同名 —— logging.getLogger 同名返回同一对象
 logger = logging.getLogger("catfish.memory.plugin")
@@ -120,6 +127,9 @@ async def run_distill_for_dream_engine(
           "bytes_written": int,     # 写了多少字节 distilled_facts.md
           "model": str,             # 实际用的 model
           "took_seconds": float,
+          "chunks_failed": int,     # 10/7: 超时/非 200 重试后仍失败的段数 (>0 = 有缺口)
+          "incremental_from": int,  # 10/7: 本次从 journal 第几个字符起蒸 (0 = 全量)
+          "reconciled": bool,       # 10/7: "当前状态"是 LLM 合并的 (False = 确定性兜底)
         }
     """
     started = time.time()
@@ -138,49 +148,15 @@ async def run_distill_for_dream_engine(
     if not force and not _should_run_distill(home):
         return {
             "ok": False, "reason": "cooldown",
-            "chunks_total": 0, "bytes_written": 0,
+            "chunks_total": 0, "chunks_failed": 0, "bytes_written": 0,
             "model": model, "took_seconds": time.time() - started,
+            "incremental_from": 0, "reconciled": False,
         }
 
-    # 读 journal 全文
-    journal_text = _read_full_journal(home)
-    if not journal_text.strip():
-        return {
-            "ok": False, "reason": "empty_journal",
-            "chunks_total": 0, "bytes_written": 0,
-            "model": model, "took_seconds": time.time() - started,
-        }
-
-    # 估 chunk 数, 给 progress_cb 早期反馈 (不调 _call_distill_llm 之前)
-    estimated_chunks = max(1, (len(journal_text) + _DISTILL_CHUNK_CHARS - 1) // _DISTILL_CHUNK_CHARS)
-    if progress_cb is not None:
-        try:
-            progress_cb(0, estimated_chunks)
-        except Exception:  # noqa: BLE001
-            pass
-
-    distilled = await _call_distill_llm(
-        journal_text, model, progress_cb=progress_cb,
+    # 10/7: 增量蒸馏 (journal 游标之后的新增 + 复用旧段), 见 catfish_memory_distill_run
+    return await distill_incremental(
+        home, model, _call_distill_llm, progress_cb=progress_cb,
     )
-
-    if not distilled:
-        return {
-            "ok": False, "reason": "llm_fail",
-            "chunks_total": estimated_chunks, "bytes_written": 0,
-            "model": model, "took_seconds": time.time() - started,
-        }
-
-    _write_distilled(home, distilled)
-    # 写 cooldown state — 让 plugin auto path 24h 内自然 skip (零冲突核心)
-    _mark_distill_run(home)
-
-    return {
-        "ok": True, "reason": "",
-        "chunks_total": estimated_chunks,
-        "bytes_written": len(distilled.encode("utf-8")),
-        "model": model,
-        "took_seconds": time.time() - started,
-    }
 
 
 class _DistillMixin:
@@ -206,7 +182,7 @@ class _DistillMixin:
                 summary = self._build_raw_journal_fallback(message_pairs)
                 _append_journal(
                     catfish_home,
-                    _format_journal_entry(session_id, summary),
+                    _format_journal_entry(session_id, summary, kind="session-raw"),
                 )
                 logger.warning(
                     "catfish-memory bg session=%s: 当前 picker 无模型 → "
@@ -214,12 +190,14 @@ class _DistillMixin:
                     session_id,
                 )
                 return
+            kind = "session"
             summary = await _call_summarize_llm(message_pairs, model)
             if not summary:
                 # BL-CATFISH-MEMORY-SUMMARIZE-UPSTREAM-502 (6/4 凌晨):
                 # 之前 silent drop → catfish gateway 100% 502 时 journal 全丢.
                 # 改 raw fallback: 保 data 不丢. LLM 总结异步补 (下次 distill 跑).
                 summary = self._build_raw_journal_fallback(message_pairs)
+                kind = "session-raw"
                 logger.info(
                     "catfish-memory bg session=%s: LLM 总结返空 → "
                     "改写 raw fallback (%d pairs 保留)",
@@ -227,7 +205,7 @@ class _DistillMixin:
                 )
 
             # 2. 写 journal
-            entry = _format_journal_entry(session_id, summary)
+            entry = _format_journal_entry(session_id, summary, kind=kind)
             _append_journal(catfish_home, entry)
             logger.info(
                 "catfish-memory bg session=%s: ✓ 写 journal %d 字节",
@@ -269,13 +247,20 @@ class _DistillMixin:
                 )
                 if not model:
                     return
-                distilled = await _call_distill_llm(journal_text, model)
-                if distilled:
-                    _write_distilled(catfish_home, distilled)
-                    _mark_distill_run(catfish_home)
+                # 10/7: 增量蒸馏 (只蒸游标之后的新增), 见 catfish_memory_distill_run
+                outcome = await distill_incremental(catfish_home, model, _call_distill_llm)
+                if outcome.get("ok"):
                     logger.info(
-                        "catfish-memory bg session=%s: ✓ 蒸馏 %d 字节 (distilled_facts.md)",
-                        session_id, len(distilled.encode("utf-8")),
+                        "catfish-memory bg session=%s: ✓ 蒸馏 %d 字节 (distilled_facts.md, "
+                        "从第 %d 字符起 %d 段, 失败 %d)",
+                        session_id, outcome.get("bytes_written", 0),
+                        outcome.get("incremental_from", 0), outcome.get("chunks_total", 0),
+                        outcome.get("chunks_failed", 0),
+                    )
+                else:
+                    logger.warning(
+                        "catfish-memory bg session=%s: 蒸馏没成 (%s), distilled_facts.md 不动",
+                        session_id, outcome.get("reason"),
                     )
 
             # 3b. BL-CATFISH-WIKI-MODE P1.1 (6/4): wiki two-step ingest
@@ -681,10 +666,14 @@ class _DistillMixin:
         """
         keep_last_n = min(5, len(pairs))
         if keep_last_n == 0:
-            return "[LLM 总结失败 (上游 502 等), 0 pairs 保留]"
+            return f"{RAW_FALLBACK_TAG} LLM 总结失败 (上游 502 等), 0 pairs 保留"
+        # 10/7: 开头打 [raw/未总结] 标签 + 条目 kind 写 session-raw (见
+        # _format_journal_entry)。这类条目是对话**原文**不是事实, 10/7 实测 journal
+        # 里有 440 条, 蒸馏/检索时跟摘要条目长得一样, LLM 把助手当时的推测当成
+        # 已发生的状态。标签让蒸馏 prompt 和读它的人都能认出来。
         lines = [
-            f"[LLM 总结失败 (上游 502 等), raw {keep_last_n} pairs 保留 — "
-            "可下次 sync_turn 重新蒸馏]",
+            f"{RAW_FALLBACK_TAG} LLM 总结失败 (上游 502 等), 以下是最近 {keep_last_n} 组"
+            "对话原文片段 (截断), 只作线索, 不是已确认的事实或状态",
             "",
         ]
         for u, a in pairs[-keep_last_n:]:

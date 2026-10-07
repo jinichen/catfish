@@ -108,7 +108,7 @@ def mock_llm(monkeypatch: pytest.MonkeyPatch):
         calls["summarize"].append({"pairs": list(pairs), "model": model})
         return "### 测试主题\n\n这是一段总结"
 
-    async def fake_distill(text, model):
+    async def fake_distill(text, model, **kw):
         calls["distill"].append({"text": text, "model": model})
         return None  # 默认不返蒸馏 (24h 内已跑过 / 没足够内容)
 
@@ -482,7 +482,7 @@ def test_sync_turn_distill_triggered_when_24h_passed(
 ):
     """触发 summarize 后, 满足 24h cooldown 也跑 distill"""
     # mock distill 这次返成功 (不是默认 None)
-    async def fake_distill_success(text, model):
+    async def fake_distill_success(text, model, **kw):
         mock_llm["distill"].append({"text": text, "model": model})
         return "## 长期事实\n\n- 鸿波偏好简短"
     monkeypatch.setattr(catfish_memory_distill, "_call_distill_llm", fake_distill_success)

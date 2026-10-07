@@ -89,7 +89,7 @@ def spy_llm(monkeypatch: pytest.MonkeyPatch):
         calls["summarize"].append(model)
         return "### 测试主题\n\n这是一段总结"
 
-    async def fake_distill(text, model):
+    async def fake_distill(text, model, **kw):
         calls["distill"].append(text)
         return None
 

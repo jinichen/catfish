@@ -169,8 +169,9 @@ def test_prefetch_both_layers_present(fake_catfish_home, provider):
     assert "员工长期记忆" in out, "缺长期段标题"
     assert "近期流水" in out, "缺近期段标题 —— 说明走了二选一那条路"
     assert "员工长期画像" in out and "ISO9001+45001" in out
-    # 顺序: 长期在前, 近期在后 (近期标注"比上面的长期记忆更新")
-    assert out.index("员工长期画像") < out.index("ISO9001+45001")
+    # 顺序 (10/7 翻转): 近期在前, 长期在后 —— 时效最新的先给 LLM 看, 蒸馏落后时
+    # 旧的"当前状态"不能排在今天的记录前面
+    assert out.index("ISO9001+45001") < out.index("员工长期画像")
 
 
 def test_prefetch_employee_journal_raw_fallback(fake_catfish_home, provider):
@@ -319,9 +320,9 @@ def test_read_text_safe_truncates_on_overflow(tmp_path):
     big = tmp_path / "big.txt"
     big.write_text("x" * 10000, encoding="utf-8")
     out = _read_text_safe(big, max_bytes=300)
-    # 截到 max_bytes // 3 + truncated 标记 (我们的简单 truncate 策略)
+    # 10/7: 按字节精确截断 (老写法 max_bytes // 3 只给预算的三分之一)
     assert "truncated" in out
-    assert len(out) < 500
+    assert out.startswith("x" * 300) and not out.startswith("x" * 301)
 
 
 def test_read_jsonl_tail_returns_recent(tmp_path):

@@ -316,7 +316,7 @@ def test_on_session_end_proceeds_when_journal_older_than_dedup(
         return "### 测试主题\n\n新一段总结"
 
     # mock 蒸馏 — 这次不该跑 (没满足 24h, journal 短)
-    async def fake_distill(text, model):
+    async def fake_distill(text, model, **kw):
         return None
 
     monkeypatch.setattr(catfish_memory_distill, "_call_summarize_llm", fake_summarize)
@@ -360,7 +360,7 @@ def test_on_session_end_distill_runs_when_24h_passed(
     async def fake_summarize(pairs, model):
         return "### 主题\n\n总结正文"
     distill_called = {"text": None, "model": None}
-    async def fake_distill(text, model):
+    async def fake_distill(text, model, **kw):
         distill_called["text"] = text
         distill_called["model"] = model
         return "## 长期事实\n\n- 鸿波偏好简短\n- 资质项目"
@@ -396,7 +396,7 @@ def test_on_session_end_distill_skipped_when_within_24h(
     async def fake_summarize(pairs, model):
         return "新总结"
     distill_called = {"n": 0}
-    async def fake_distill(text, model):
+    async def fake_distill(text, model, **kw):
         distill_called["n"] += 1
         return "should not be called"
 

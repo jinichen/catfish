@@ -67,7 +67,8 @@ from catfish_memory_gateway import with_source  # noqa: E402
 #: 改名字要来这里改 —— 改了账本里的历史数据就对不上了, 是个该有人点头的动作。
 EXPECTED = {
     ("catfish_memory_llm.py", "_call_summarize_llm"): "plugin:memory-summarize",
-    ("catfish_memory_llm.py", "_call_distill_llm"): "plugin:memory-distill",
+    # 10/7: 蒸馏的 HTTP 调用收进 _post_distill (分段 + 状态合并共用, 带重试), 名字没变
+    ("catfish_memory_llm.py", "_post_distill"): "plugin:memory-distill",
     ("catfish_memory_llm.py", "_call_analysis_llm"): "plugin:memory-wiki-analysis",
     ("catfish_memory_llm.py", "_call_generation_llm"): "plugin:memory-wiki-generation",
     ("catfish_memory_merge.py", "_call_merge_llm"): "plugin:memory-wiki-merge",

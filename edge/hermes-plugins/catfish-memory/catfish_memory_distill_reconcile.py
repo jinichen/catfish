@@ -100,13 +100,85 @@ def fallback_current_status(segments: List[Tuple[str, str]]) -> str:
     )
 
 
-def assemble(segments: List[Tuple[str, str]], current: Optional[str]) -> str:
-    """当前状态在最前, 其后各段新在前。段头保留「### 蒸馏段 N」(advisor_relevance 按它切)。"""
-    head = (
-        f"### 蒸馏段 0 · 当前状态（截至 {time.strftime('%Y-%m-%d')}，以此为准）\n\n"
-        "> 下面各段是不同时期的记录, 新的在前; 旧段里的「进行中」可能早已结束, 以本段为准。\n\n"
-        + (current or fallback_current_status(segments)).strip()
-    )
+_SEG_HEAD = re.compile(r"^### 蒸馏段 (\d+)(?:（(.*?)）)?\s*$", re.MULTILINE)
+#: journal 条目头 `## [YYYY-MM-DD HH:MM] kind | sid` —— 切段只在这上面切
+_ENTRY_HEAD = re.compile(r"^## \[", re.MULTILINE)
+
+
+def parse_segments(distilled: str) -> List[Tuple[str, str]]:
+    """把上一次写出的 distilled_facts.md 还原成 [(日期范围, 段文本)] **旧→新**。
+
+    10/7 增量蒸馏用: 没变的旧 journal 不重蒸, 直接复用上次的段。段 0 (当前状态)
+    是合并产物不是原材料, 跳过; 文件里新在前, 按段号升序排回旧→新。
+    """
+    marks = list(_SEG_HEAD.finditer(distilled))
+    out: List[Tuple[int, str, str]] = []
+    for i, m in enumerate(marks):
+        n = int(m.group(1))
+        if n == 0:
+            continue
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(distilled)
+        out.append((n, m.group(2) or "", distilled[m.end():end].strip()))
+    out.sort(key=lambda t: t[0])
+    return [(label, text) for _, label, text in out if text]
+
+
+def split_journal_entries(text: str, max_chars: int) -> List[str]:
+    """按 journal 条目边界切段, 每段 ≤ max_chars (单条超长的条目自成一段)。
+
+    老切法是按字符数硬切, 一条 session 摘要会被劈成两半落在两段里, 两段各自
+    蒸出半句话的状态 —— 那是"同一事件不同状态并存"的来源之一。单条超长时
+    (raw fallback 能到几 KB) 不再硬切, 整条给 LLM。
+    """
+    if not text.strip():
+        return []
+    starts = [m.start() for m in _ENTRY_HEAD.finditer(text)]
+    if not starts or starts[0] != 0:
+        starts.insert(0, 0)
+    entries = [text[a:b] for a, b in zip(starts, starts[1:] + [len(text)])]
+    chunks: List[str] = []
+    buf = ""
+    for e in entries:
+        if buf and len(buf) + len(e) > max_chars:
+            chunks.append(buf)
+            buf = ""
+        buf += e
+    if buf.strip():
+        chunks.append(buf)
+    return chunks
+
+
+def assemble(
+    segments: List[Tuple[str, str]],
+    current: Optional[str],
+    *,
+    chunks_total: int = 0,
+    chunks_failed: int = 0,
+) -> str:
+    """当前状态在最前, 其后各段新在前。段头保留「### 蒸馏段 N」(advisor_relevance 按它切)。
+
+    10/7: 头部只在 LLM 真合并过时才写「截至今天, 以此为准」。10/7 实测的事故是:
+    合并调用超时 → 走确定性兜底 → 兜底只会列 8 月的 resolved/paused, 头上却仍
+    盖着「截至 2026-10-07, 以此为准」—— 主聊天把两个月前的状态当成了现在。
+    现在兜底头写清楚"基于 ≤ 哪天的记录、未经 LLM 合并", 段失败也写进去。
+    """
+    latest = next((label for label, _ in reversed(segments) if label), "")
+    latest_day = latest.split("~")[-1].strip() if latest else "日期不明"
+    if current:
+        title = f"### 蒸馏段 0 · 当前状态（截至 {time.strftime('%Y-%m-%d')}，以此为准）"
+        note = "> 下面各段是不同时期的记录, 新的在前; 旧段里的「进行中」可能早已结束, 以本段为准。"
+    else:
+        title = f"### 蒸馏段 0 · 当前状态（兜底生成，仅基于 ≤ {latest_day} 的记录，未经 LLM 合并）"
+        note = (
+            "> 状态合并调用失败, 本段是从各段「任务状态」机械取最新得到的, 只有已完结/暂停两类, "
+            "**不代表截至今天的进展**; 比它新的事以「近期流水」和下面最新的段为准。"
+        )
+    if chunks_failed:
+        note += (
+            f"\n> 本次蒸馏 {chunks_failed}/{chunks_total} 段失败, 对应时期的记录缺失, "
+            "下次蒸馏会补。"
+        )
+    head = f"{title}\n\n{note}\n\n" + (current or fallback_current_status(segments)).strip()
     body = [
         f"### 蒸馏段 {i + 1}" + (f"（{label}）" if label else "") + f"\n\n{text}"
         for i, (label, text) in enumerate(segments)

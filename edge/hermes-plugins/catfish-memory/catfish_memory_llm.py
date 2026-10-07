@@ -18,9 +18,9 @@ from typing import List, Optional, Tuple
 #     相对 import 反过来会炸
 # 见 tests/test_loader_fidelity.py, 那里每种方式各起一个干净子进程验。
 try:
-    from .catfish_memory_helpers import _DISTILL_CHUNK_CHARS, _GENERATION_HTTP_TIMEOUT, _LLM_HTTP_TIMEOUT, _gateway_dev_token, _gateway_url, _log_token_missing, logger  # noqa: F401
+    from .catfish_memory_helpers import _DISTILL_CHUNK_CHARS, _DISTILL_HTTP_TIMEOUT, _DISTILL_RETRIES, _GENERATION_HTTP_TIMEOUT, _LLM_HTTP_TIMEOUT, _gateway_dev_token, _gateway_url, _log_token_missing, logger  # noqa: F401
 except ImportError:  # 独立脚本模式 (无父包)
-    from catfish_memory_helpers import _DISTILL_CHUNK_CHARS, _GENERATION_HTTP_TIMEOUT, _LLM_HTTP_TIMEOUT, _gateway_dev_token, _gateway_url, _log_token_missing, logger  # noqa: F401
+    from catfish_memory_helpers import _DISTILL_CHUNK_CHARS, _DISTILL_HTTP_TIMEOUT, _DISTILL_RETRIES, _GENERATION_HTTP_TIMEOUT, _LLM_HTTP_TIMEOUT, _gateway_dev_token, _gateway_url, _log_token_missing, logger  # noqa: F401
 
 # 8/15 晚: with_source 直接从 catfish_memory_gateway 拿, **不走 helpers**。
 #
@@ -39,9 +39,9 @@ try:
 except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_prompts import _ANALYSIS_PROMPT, _DISTILL_PROMPT, _RECONCILE_PROMPT, _SUMMARIZE_PROMPT, _build_generation_prompt  # noqa: F401
 try:
-    from .catfish_memory_distill_reconcile import assemble, chunk_date_range, status_digest
+    from .catfish_memory_distill_reconcile import assemble, chunk_date_range, split_journal_entries, status_digest
 except ImportError:  # 独立脚本模式 (无父包)
-    from catfish_memory_distill_reconcile import assemble, chunk_date_range, status_digest
+    from catfish_memory_distill_reconcile import assemble, chunk_date_range, split_journal_entries, status_digest
 
 
 async def _call_summarize_llm(
@@ -105,23 +105,57 @@ async def _call_summarize_llm(
         return None
 
 
-async def _call_distill_llm(
-    journal_text: str, model: str,
-    progress_cb=None,
-) -> Optional[str]:
-    """调 gateway 蒸馏老 journal. 失败返 None.
+async def _post_distill(client, headers: dict, body: dict, what: str) -> Optional[str]:
+    """一次蒸馏类请求, 失败 (超时 / 非 200 / 异常) 重试 _DISTILL_RETRIES 次, 全败返 None。
 
-    跟 memory_distill.maybe_run_llm_distillation 行为等价 (简化版):
-      - 切 _DISTILL_CHUNK_CHARS 大小 chunk
-      - 每 chunk 走 gateway 抽人/项目/偏好/决策
-      - 全部失败返 None, 部分成功合并返
-
-    P3.5.1.1 (6/15 鸿波 Dream Engine): 加可选 progress_cb(done_idx, total) —
-      Dream Engine UI 进度条用. 每 chunk 跑前调一次 (done_idx 从 0 开始 = "马上跑第 1 段"),
-      全部跑完再调一次 (done=total). 现有 sync_turn/on_session_end caller 不传 = None,
-      不影响行为. progress_cb 抛错被吞 (诊断 UI 挂不该拖累 distill).
+    10/7 之前失败只 logger.debug 一行就 continue —— 四分之三的段这样没了, 日志里
+    一个 warning 都没有。现在每次失败 warning, 最终放弃也 warning。
     """
-    if not journal_text.strip():
+    for attempt in range(1 + _DISTILL_RETRIES):
+        try:
+            resp = await client.post(
+                with_source(_gateway_url(), "plugin:memory-distill"),
+                headers=headers, json=body,
+            )
+            if resp.status_code == 200:
+                text = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+                return text.strip() or None
+            logger.warning("catfish-memory %s HTTP %d (第 %d 次)", what, resp.status_code, attempt + 1)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("catfish-memory %s 异常 [%s] (第 %d 次): %s", what, type(e).__name__, attempt + 1, e)
+    logger.warning("catfish-memory %s 放弃 (重试 %d 次仍失败)", what, _DISTILL_RETRIES)
+    return None
+
+
+async def _call_distill_llm(
+    journal_text: str,
+    model: str,
+    progress_cb=None,
+    *,
+    prior_segments: Optional[List[Tuple[str, str]]] = None,
+    report: Optional[dict] = None,
+) -> Optional[str]:
+    """调 gateway 蒸馏 journal. 失败返 None.
+
+      - 按 journal 条目边界切 ≤ _DISTILL_CHUNK_CHARS 的段 (10/7: 不再按字符硬切)
+      - 每段走 gateway 抽人/项目/偏好/决策/任务状态, 失败重试 _DISTILL_RETRIES 次
+      - 全部失败且无 prior_segments 返 None, 否则合并"当前状态"后 assemble 返
+
+    10/7 增量蒸馏:
+      prior_segments: 上次 distilled_facts.md 里还原出来的旧段 (旧→新), 本次只蒸
+        journal_text (= journal 里上次游标之后的新增), 两者拼起来再合并当前状态。
+      report: 调用方给个 dict, 回填 chunks_total / chunks_failed / consumed_chars /
+        reconciled。consumed_chars 是从 journal_text 开头起**连续成功**的字符数:
+        第一段失败之后的段即使成功也丢掉, 让游标停在失败段开头, 下次从那里重蒸,
+        否则下次重蒸会把它们蒸第二遍。
+
+    P3.5.1.1 (6/15 鸿波 Dream Engine): progress_cb(done_idx, total) — Dream Engine
+      UI 进度条用. 每 chunk 跑前调一次, 全部跑完再调一次 (done=total). 抛错被吞.
+    """
+    rep = report if report is not None else {}
+    rep.update({"chunks_total": 0, "chunks_failed": 0, "consumed_chars": 0, "reconciled": False})
+    prior = list(prior_segments or [])
+    if not journal_text.strip() and not prior:
         return None
     token = _gateway_dev_token()
     if not token:
@@ -132,16 +166,9 @@ async def _call_distill_llm(
     except ImportError:
         return None
 
-    # 简单切 chunk (按字符, 不按 ## 段边界 — POC 阶段够用; 老 gateway 切段边界更精细)
-    chunks: List[str] = []
-    remaining = journal_text
-    while remaining:
-        chunks.append(remaining[:_DISTILL_CHUNK_CHARS])
-        remaining = remaining[_DISTILL_CHUNK_CHARS:]
-    if not chunks:
-        return None
-
+    chunks = split_journal_entries(journal_text, _DISTILL_CHUNK_CHARS)
     total = len(chunks)
+    rep["chunks_total"] = total
 
     def _notify(done: int) -> None:
         if progress_cb is None:
@@ -160,62 +187,47 @@ async def _call_distill_llm(
         "X-Catfish-Internal": "true",
         "Content-Type": "application/json",
     }
-    async with httpx.AsyncClient(timeout=_LLM_HTTP_TIMEOUT) as client:
+    consumed = 0
+    failed = 0
+    async with httpx.AsyncClient(timeout=_DISTILL_HTTP_TIMEOUT) as client:
         for idx, chunk in enumerate(chunks):
             _notify(idx)
-            try:
-                resp = await client.post(
-                    with_source(_gateway_url(), "plugin:memory-distill"),
-                    headers=headers,
-                    json={
-                        "model": model,
-                        "messages": [{"role": "user", "content": _DISTILL_PROMPT + "\n\n" + chunk}],
-                        "temperature": 0.2,
-                        "max_tokens": 1000,
-                        "stream": False,
-                    },
-                )
-                if resp.status_code != 200:
-                    logger.debug(
-                        "catfish-memory distill chunk HTTP %d, skip 这段",
-                        resp.status_code,
-                    )
-                    continue
-                data = resp.json()
-                text = data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
-                text = text.strip()
-                if text:
-                    results.append((chunk_date_range(chunk), text))
-            except Exception as e:  # noqa: BLE001
-                logger.debug("catfish-memory distill chunk 异常 (跳过): %s", e)
+            text = await _post_distill(client, headers, {
+                "model": model,
+                "messages": [{"role": "user", "content": _DISTILL_PROMPT + "\n\n" + chunk}],
+                "temperature": 0.2,
+                "max_tokens": 1000,
+                "stream": False,
+            }, f"distill 第 {idx + 1}/{total} 段")
+            if text is None:
+                failed += 1
                 continue
+            if failed == 0:
+                results.append((chunk_date_range(chunk), text))
+                consumed += len(chunk)
+            # 失败段之后的成功结果丢弃: 游标停在失败段, 下次连同后面的一起重蒸
+        rep["chunks_failed"] = failed
+        rep["consumed_chars"] = consumed
 
+        segments = prior + results
         current: Optional[str] = None
-        if results:
-            try:
-                resp = await client.post(
-                    with_source(_gateway_url(), "plugin:memory-distill"),
-                    headers=headers,
-                    json={
-                        "model": model,
-                        "messages": [{"role": "user", "content": _RECONCILE_PROMPT + "\n\n" + status_digest(results)}],
-                        "temperature": 0.1,
-                        "max_tokens": 1500,
-                        "stream": False,
-                    },
-                )
-                if resp.status_code == 200:
-                    current = (resp.json().get("choices", [{}])[0].get("message", {}).get("content", "") or "").strip() or None
-                else:
-                    logger.warning("catfish-memory 当前状态合并 HTTP %d, 用确定性兜底", resp.status_code)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("catfish-memory 当前状态合并失败, 用确定性兜底: %s", e)
+        if segments:
+            current = await _post_distill(client, headers, {
+                "model": model,
+                "messages": [{"role": "user", "content": _RECONCILE_PROMPT + "\n\n" + status_digest(segments)}],
+                "temperature": 0.1,
+                "max_tokens": 1500,
+                "stream": False,
+            }, "当前状态合并")
+            if current is None:
+                logger.warning("catfish-memory 当前状态合并失败, 用确定性兜底 (头部会标明)")
+            rep["reconciled"] = current is not None
 
     _notify(total)  # 跑完通知一次
 
-    if not results:
+    if not segments:
         return None
-    return assemble(results, current)
+    return assemble(segments, current, chunks_total=total, chunks_failed=failed)
 
 
 # ── BL-CATFISH-WIKI-MODE P1.1 wiki two-step ─────────────────────

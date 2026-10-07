@@ -51,6 +51,8 @@ try:
         _DISTILL_CHUNK_CHARS,
         _DISTILL_COOLDOWN_SECONDS,
         _GENERATION_HTTP_TIMEOUT,
+        _DISTILL_HTTP_TIMEOUT,
+        _DISTILL_RETRIES,
         _LLM_HTTP_TIMEOUT,
         _MAX_MESSAGES_PER_SUMMARY,
         _SUMMARIZE_DEDUP_SECONDS,
@@ -69,6 +71,8 @@ except ImportError:  # 独立脚本模式 (无父包)
         _DISTILL_CHUNK_CHARS,
         _DISTILL_COOLDOWN_SECONDS,
         _GENERATION_HTTP_TIMEOUT,
+        _DISTILL_HTTP_TIMEOUT,
+        _DISTILL_RETRIES,
         _LLM_HTTP_TIMEOUT,
         _MAX_MESSAGES_PER_SUMMARY,
         _SUMMARIZE_DEDUP_SECONDS,
@@ -131,12 +135,14 @@ except ImportError:  # 独立脚本模式 (无父包)
 # 蒸馏 24h cooldown
 try:
     from .catfish_memory_distill_state import (  # noqa: F401
+        _distill_cursor,
         _mark_distill_run,
         _should_run_distill,
         _write_distilled,
     )
 except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_distill_state import (  # noqa: F401
+        _distill_cursor,
         _mark_distill_run,
         _should_run_distill,
         _write_distilled,
@@ -229,7 +235,11 @@ def _extract_message_pairs(messages: List[Dict[str, Any]]) -> List[Tuple[str, st
     return pairs
 
 
-def _format_journal_entry(session_id: str, summary: str) -> str:
+#: 10/7: raw fallback 条目正文第一行的标签, 蒸馏 prompt 按它认"这是原文不是事实"
+RAW_FALLBACK_TAG = "[raw/未总结]"
+
+
+def _format_journal_entry(session_id: str, summary: str, kind: str = "session") -> str:
     """格式 journal entry. BL-CATFISH-WIKI-MODE P0.3 (6/3): 改用 Karpathy LLM Wiki
     log.md 风格 `## [YYYY-MM-DD HH:MM] kind | title`, 一行可 grep 解析.
     grep '^## \\[' employee_journal.md | tail -5 拉最近 5 条."""
@@ -248,7 +258,9 @@ def _format_journal_entry(session_id: str, summary: str) -> str:
     # 存量条目靠后缀 LIKE 匹配仍能溯源 (session id 形如 20260803_195928_f39669,
     # 后 6 位同一天内基本唯一), 见 tool-bridge/wiki_trace.py。新条目从此精确。
     sid = session_id.strip() or "unknown"
-    return f"## [{date_str}] session | {sid}\n\n{summary.strip()}\n"
+    # 10/7: kind 可写 session-raw (LLM 总结失败留的原文片段), 头一行就能 grep 出来;
+    # wiki_trace._JOURNAL_HEAD 的 kind 是 \S+, 兼容。
+    return f"## [{date_str}] {kind} | {sid}\n\n{summary.strip()}\n"
 
 
 def _append_journal(catfish_home: Path, entry: str) -> None:

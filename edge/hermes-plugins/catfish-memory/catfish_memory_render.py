@@ -685,32 +685,37 @@ class _RenderMixin:
         journal 只取**尾部**: 它是 append-only 的, 8/6 实测已 533KB, 全量读进来
         既超预算也没意义 —— 早期内容早就蒸馏进 distilled 了。
         """
+        # 10/7: 三七开 → 五五开, 且**近期流水放前面**。10/7 实测 distilled 停在两个
+        # 月前 (蒸馏超时, 见 catfish_memory_distill_run), 这两个月里主聊天知道"现在"
+        # 的唯一来源就是 journal 尾部那 1500 字节, 还排在一段打着"截至今天"的旧状态
+        # 后面。时效最新的放最前, 预算对半。
         budget = _BUDGETS["employee_journal"]
-        long_budget = int(budget * 0.7)
-        recent_budget = budget - long_budget
+        recent_budget = budget // 2
+        long_budget = budget - recent_budget
 
         parts: list[str] = []
 
         distilled = _read_text_safe(catfish_home / "distilled_facts.md", long_budget)
-        if distilled.strip():
-            parts.append(f"## 📝 员工长期记忆 (catfish distilled)\n\n{distilled}")
+        has_distilled = bool(distilled.strip())
 
         # journal 尾部 = 尚未进入 distilled 的近期流水。_read_text_safe 从头截断,
-        # 这里要的是**末尾**, 所以自己读。
+        # 这里要的是**末尾**, 所以自己读。distilled 还不存在 (新装机器) 时
+        # journal 就是唯一的记忆, 给全额。
         recent = self._tail_journal(
-            catfish_home / "employee_journal.md", recent_budget
+            catfish_home / "employee_journal.md",
+            recent_budget if has_distilled else budget,
         )
         if recent.strip():
-            if parts:
+            if has_distilled:
                 parts.append(
-                    "## 🕒 近期流水 (尚未蒸馏, 比上面的长期记忆更新)\n\n" + recent
+                    "## 🕒 近期流水 (尚未蒸馏, 时效最新; 与下面长期记忆冲突时以这里为准)\n\n"
+                    + recent
                 )
             else:
-                # distilled 还不存在 (新装机器) —— journal 就是唯一的记忆, 给全额
-                recent = self._tail_journal(
-                    catfish_home / "employee_journal.md", budget
-                )
                 parts.append(f"## 📝 员工长期日记 (catfish)\n\n{recent}")
+
+        if has_distilled:
+            parts.append(f"## 📝 员工长期记忆 (catfish distilled)\n\n{distilled}")
 
         return "\n\n".join(parts)
 

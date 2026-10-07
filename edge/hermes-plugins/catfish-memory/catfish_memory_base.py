@@ -54,7 +54,10 @@ def _catfish_home() -> Path:
 #:   (manifesto / patent / moat 类). query 空走 8KB (cap 5 份 × ~1.5KB), query
 #:   触发 top-K 时 _render_strategic_docs 内部 cap 到 5KB.
 _BUDGETS: Dict[str, int] = {
-    "employee_journal": 5000,
+    # 10/7: 5000 → 6000, 且 _render_employee_journal 改五五开 (原三七开) —— 近期
+    #   流水是**唯一时效最新**的一层, 蒸馏一旦落后 (10/7 实测落后两个月) 它就是
+    #   主聊天知道"现在"的全部来源, 不能只给 1500 字节。
+    "employee_journal": 6000,
     # P3.5.5 (6/16 鸿波): skills_catalog 20K → 5K. 真因: 鸿波 advisor 流程 Qwen 内网
     #   prompt 44K 跑 100-200s. 真大头是 catfish-memory plugin prefetch 38.5KB 全量注入,
     #   单 skills_catalog 占 20K. 实测 chat 用 5K 够 (top-K 5 个 skill, 每 skill ~1K),
@@ -77,12 +80,15 @@ def _read_text_safe(path: Path, max_bytes: int) -> str:
     try:
         if not path.exists() or not path.is_file():
             return ""
-        text = path.read_text(encoding="utf-8", errors="replace")
-        if len(text.encode("utf-8")) <= max_bytes:
-            return text
-        # 字节 cap — 简单按字符 truncate (UTF-8 可能切半字符, 凑合; 真要严谨
-        # 用 incremental decoder, POC 不必).
-        return text[: max_bytes // 3] + "\n...[truncated]"
+        raw = path.read_bytes()
+        if len(raw) <= max_bytes:
+            return raw.decode("utf-8", errors="replace")
+        # 10/7: 按**字节**精确截断。老写法 `text[: max_bytes // 3]` 是按字符数
+        # 除以 3 —— 对纯中文勉强等于字节数, 对中英混排 / 数字 / markdown 标记
+        # (全是 1 字节) 只给了预算的三分之一: distilled_facts 3500 字节的预算
+        # 实际只注入 ~1166 字符, 刚好只剩「段 0」那几行, 后面的段一个都进不来。
+        # errors="ignore" 吞掉末尾被切半的那个 UTF-8 字符。
+        return raw[:max_bytes].decode("utf-8", errors="ignore") + "\n...[truncated]"
     except OSError as e:
         logger.debug("catfish-memory: 读 %s 失败 %s, 跳过", path, e)
         return ""
@@ -139,8 +145,17 @@ _DEFAULT_MIN_SUMMARY_INTERVAL_SECONDS = 1800
 #: gateway loopback URL (env 覆盖, 默认 8999).
 _DEFAULT_GATEWAY_URL = "http://127.0.0.1:8999/v1/chat/completions"
 
-#: HTTP 超时 (LLM 总结+蒸馏不应该超 60s; 真超就 cooldown 等下次).
+#: HTTP 超时 (LLM 总结不应该超 60s; 真超就 cooldown 等下次).
 _LLM_HTTP_TIMEOUT = 60.0
+
+#: 10/7: 蒸馏单独超时。蒸馏一段 8000 字的 journal 在网关实测 22.7–177.9s
+#: (10/7 88 次调用, 中位 87.6s, 67 次 > 60s) —— 跟总结共用 60s 的结果是
+#: 四分之三的段在客户端超时被静默跳过, 服务端其实全算完了。distilled_facts
+#: 因此停在 8 月, 9/10 月的记录一段都没蒸进去, 而"当前状态"头还写着今天的日期。
+_DISTILL_HTTP_TIMEOUT = 300.0
+
+#: 单段蒸馏 / 状态合并失败后再试几次 (超时 / 非 200 / 异常都算)。
+_DISTILL_RETRIES = 1
 
 #: P1.1.1 wiki Step 2 Generation 单独超时 — 生 ~4000 tokens 长 response,
 #: 60s 不够 (6/4 12:55 实测 ReadTimeout). 180s 给 LLM 慢慢生.

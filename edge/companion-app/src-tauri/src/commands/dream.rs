@@ -77,12 +77,28 @@ pub(crate) fn describe(result: &Option<serde_json::Value>) -> String {
     };
     let reason = v.get("reason").and_then(|x| x.as_str()).unwrap_or("");
     if v.get("ok").and_then(|x| x.as_bool()) == Some(true) {
-        format!(
-            "已重蒸: {} 段 → {} 字节 (model {})",
-            v.get("chunks_total").and_then(|x| x.as_u64()).unwrap_or(0),
+        if reason == "no_new_journal" {
+            return "跳过: 上次蒸馏之后 journal 没有新增".to_string();
+        }
+        let total = v.get("chunks_total").and_then(|x| x.as_u64()).unwrap_or(0);
+        let failed = v.get("chunks_failed").and_then(|x| x.as_u64()).unwrap_or(0);
+        let from = v.get("incremental_from").and_then(|x| x.as_u64()).unwrap_or(0);
+        let mut s = format!(
+            "已重蒸: {} 段 → {} 字节 (model {}{})",
+            total,
             v.get("bytes_written").and_then(|x| x.as_u64()).unwrap_or(0),
             v.get("model").and_then(|x| x.as_str()).unwrap_or("?"),
-        )
+            if from > 0 { format!(", 增量自第 {from} 字符") } else { String::new() },
+        );
+        // 10/7: 失败的段和没合并成的"当前状态"必须说出来 —— 10/7 之前 88 次调用
+        // 67 次超时被静默跳过, 终态照样 ok, 员工看到的是"蒸好了"。
+        if failed > 0 {
+            s.push_str(&format!("; ⚠ {failed}/{total} 段失败, 下次补"));
+        }
+        if v.get("reconciled").and_then(|x| x.as_bool()) == Some(false) {
+            s.push_str("; ⚠ 当前状态合并失败, 头部是确定性兜底");
+        }
+        s
     } else if reason == "cooldown" {
         "跳过: 24h 内已经蒸过".to_string()
     } else {
@@ -374,6 +390,28 @@ mod describe_tests {
         assert_ne!(ran, skipped, "两种终态说出来是一样的话, 等于没说");
         assert!(ran.contains("30") && ran.contains("54129"), "{ran}");
         assert!(skipped.contains("24h"), "{skipped}");
+    }
+
+    #[test]
+    fn partial_failure_is_not_reported_as_clean_success() {
+        let s = describe(&Some(json!({
+            "ok": true, "chunks_total": 10, "chunks_failed": 3, "bytes_written": 100,
+            "model": "m", "incremental_from": 5000, "reconciled": false
+        })));
+        assert!(s.contains("3/10 段失败"), "{s}");
+        assert!(s.contains("兜底"), "{s}");
+        assert!(s.contains("5000"), "{s}");
+        let clean = describe(&Some(json!({
+            "ok": true, "chunks_total": 2, "chunks_failed": 0, "bytes_written": 100,
+            "model": "m", "incremental_from": 0, "reconciled": true
+        })));
+        assert!(!clean.contains("⚠"), "{clean}");
+    }
+
+    #[test]
+    fn no_new_journal_is_a_skip_not_a_rerun() {
+        let s = describe(&Some(json!({"ok": true, "reason": "no_new_journal"})));
+        assert!(s.contains("没有新增"), "{s}");
     }
 
     #[test]

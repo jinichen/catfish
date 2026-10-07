@@ -12,10 +12,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 try:
     from .catfish_memory_base import _DISTILL_COOLDOWN_SECONDS, logger
@@ -37,15 +38,54 @@ def _should_run_distill(catfish_home: Path) -> bool:
         return True
 
 
-def _mark_distill_run(catfish_home: Path) -> None:
-    """写 memory_distill_state.json 记录这次跑过."""
+#: 游标校验只看 journal 开头这么多字符的 sha1 —— 文件被整个换掉 (迁移 / 手清)
+#: 时开头必变, 游标作废走全量; 正常 append 不动开头。
+_JOURNAL_HEAD_CHARS = 2000
+
+
+def _journal_head_sha(journal_text: str, consumed: int) -> str:
+    """只 hash 已消费前缀的开头 (≤ _JOURNAL_HEAD_CHARS) —— journal 还很短时 append
+    会改变"前 2000 字符", 按消费长度截才不会把正常追加误判成换文件。"""
+    n = min(_JOURNAL_HEAD_CHARS, max(0, consumed))
+    return hashlib.sha1(journal_text[:n].encode("utf-8")).hexdigest()
+
+
+def _distill_cursor(catfish_home: Path, journal_text: str) -> int:
+    """上次蒸馏消费到 journal 的第几个字符; 对不上 (没记过 / 文件换过 / 变短了) → 0 全量。
+
+    10/7 增量蒸馏: journal 820K 字 = 103 段, 每天全量重蒸要调 100+ 次 LLM
+    (10/7 实测 88 次、1h40m, 大半超时)。append-only 的文件只蒸新增那几段就够了。
+    """
+    state_path = catfish_home / "memory_distill_state.json"
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return 0
+    offset = int(state.get("journal_consumed_chars") or 0)
+    if offset <= 0 or offset > len(journal_text):
+        return 0
+    if state.get("journal_head_sha") != _journal_head_sha(journal_text, offset):
+        return 0
+    return offset
+
+
+def _mark_distill_run(
+    catfish_home: Path,
+    *,
+    journal_consumed_chars: Optional[int] = None,
+    journal_text: Optional[str] = None,
+) -> None:
+    """写 memory_distill_state.json 记录这次跑过 (+ 10/7 增量游标, 给了才写)."""
     state_path = catfish_home / "memory_distill_state.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
+    payload: Dict[str, Any] = {
         "last_run_ts": time.time(),
         "last_run_iso": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "source": "catfish-memory-plugin",
     }
+    if journal_consumed_chars is not None and journal_text is not None:
+        payload["journal_consumed_chars"] = int(journal_consumed_chars)
+        payload["journal_head_sha"] = _journal_head_sha(journal_text, int(journal_consumed_chars))
     try:
         state_path.write_text(json.dumps(payload), encoding="utf-8")
     except OSError as e:
