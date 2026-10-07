@@ -8,7 +8,9 @@
 
   1. 只蒸 journal 游标之后的新增 (catfish_memory_distill_state._distill_cursor),
      旧段从上次的 distilled_facts.md 还原 (parse_segments) 直接复用;
-  2. 游标只前进到**连续成功**的段末 (llm 侧 report.consumed_chars), 失败段下次重蒸;
+  2. 成功段全部保留, 失败段的字符区间记成缺口 (state journal_gaps), 下次只补缺口 +
+     新增, 补出来的段按日期插回原位 (10/7 晚: 第一版"失败段之后全丢"在补跑仍有
+     段失败时会把 157 段成果扔掉);
   3. 结果字典带 chunks_failed / reconciled / incremental_from, Dream UI 和日志
      能看见"蒸了但有缺口", 不再 exit 0 装没事。
 
@@ -20,7 +22,7 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Tuple
 
 try:
     from .catfish_memory_distill_reconcile import parse_segments
@@ -39,6 +41,24 @@ def _read_distilled(home: Path) -> str:
         return (home / "distilled_facts.md").read_text(encoding="utf-8")
     except OSError:
         return ""
+
+
+def _to_absolute(pieces: List[Tuple[int, int]], rel_ranges) -> List[Tuple[int, int]]:
+    """把相对拼接文本的失败区间映射回 journal 绝对偏移 (一个区间可能跨两个 piece)."""
+    out: List[Tuple[int, int]] = []
+    for r in rel_ranges:
+        try:
+            rs, re_ = int(r[0]), int(r[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        off = 0
+        for a, b in pieces:
+            n = b - a
+            lo, hi = max(rs, off), min(re_, off + n)
+            if lo < hi:
+                out.append((a + lo - off, a + hi - off))
+            off += n
+    return out
 
 
 async def distill_incremental(
@@ -65,17 +85,21 @@ async def distill_incremental(
     if not journal_text.strip():
         return {**base, "reason": "empty_journal", "took_seconds": time.time() - started}
 
-    cursor = _distill_cursor(home, journal_text)
+    cursor, gaps = _distill_cursor(home, journal_text)
     prior = parse_segments(_read_distilled(home)) if cursor > 0 else []
     if cursor > 0 and not prior:
         # 游标在、旧段却还原不出来 (文件被手改成别的格式) → 全量
-        cursor = 0
-    new_text = journal_text[cursor:]
+        cursor, gaps = 0, []
+    # 本次要蒸的 = 旧缺口 (按位置) + 游标之后的新增, 拼成一段文本交给 call_llm;
+    # 它报回的失败区间是相对这段文本的, 下面 _to_absolute 映射回 journal 绝对偏移
+    pieces = [(a, b) for a, b in gaps] + ([(cursor, len(journal_text))] if cursor < len(journal_text) else [])
+    pieces = [(a, b) for a, b in pieces if journal_text[a:b].strip()]
+    new_text = "".join(journal_text[a:b] for a, b in pieces)
     base["incremental_from"] = cursor
 
     if not new_text.strip():
-        # 没新增: 不动文件、不调 LLM, 但 cooldown 照记, 免得每次 session_end 都进来
-        _mark_distill_run(home, journal_consumed_chars=cursor, journal_text=journal_text)
+        # 没新增也没缺口: 不动文件、不调 LLM, 但 cooldown 照记, 免得每次 session_end 都进来
+        _mark_distill_run(home, journal_consumed_chars=cursor, journal_text=journal_text, journal_gaps=[])
         return {**base, "ok": True, "reason": "no_new_journal", "took_seconds": time.time() - started}
 
     estimated = max(1, (len(new_text) + _DISTILL_CHUNK_CHARS - 1) // _DISTILL_CHUNK_CHARS)
@@ -99,14 +123,15 @@ async def distill_incremental(
         return {**out, "reason": "llm_fail", "took_seconds": time.time() - started}
 
     _write_distilled(home, distilled)
-    # 游标: 没报 consumed_chars 的 call_llm (老签名 / 测试桩) 视为整段消费完
-    consumed = report.get("consumed_chars")
-    consumed = len(new_text) if consumed is None else int(consumed)
-    _mark_distill_run(home, journal_consumed_chars=cursor + consumed, journal_text=journal_text)
+    new_gaps = _to_absolute(pieces, report.get("failed_ranges") or [])
+    _mark_distill_run(
+        home, journal_consumed_chars=len(journal_text), journal_text=journal_text,
+        journal_gaps=new_gaps,
+    )
     if chunks_failed:
         logger.warning(
-            "catfish-memory 蒸馏完成但 %d/%d 段失败, 游标停在 %d/%d 字符, 下次补",
-            chunks_failed, chunks_total, cursor + consumed, len(journal_text),
+            "catfish-memory 蒸馏完成但 %d/%d 段失败, 记成 %d 个缺口 (%d 字符) 下次补",
+            chunks_failed, chunks_total, len(new_gaps), sum(b - a for a, b in new_gaps),
         )
     return {
         **out, "ok": True,

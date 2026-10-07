@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from catfish_memory_distill_reconcile import assemble, parse_segments, split_journal_entries
+from catfish_memory_distill_reconcile import assemble, merge_segments_by_date, parse_segments, split_journal_entries
 from catfish_memory_distill_run import distill_incremental
 from catfish_memory_distill_state import _distill_cursor, _mark_distill_run
 from catfish_memory_helpers import RAW_FALLBACK_TAG, _format_journal_entry
@@ -70,12 +70,13 @@ def test_split_keeps_oversized_entry_whole():
 
 def test_cursor_zero_without_state_or_when_journal_replaced(tmp_path: Path):
     j = "## [2026-09-01 10:00] session | s\n\nhello\n"
-    assert _distill_cursor(tmp_path, j) == 0
-    _mark_distill_run(tmp_path, journal_consumed_chars=len(j), journal_text=j)
-    assert _distill_cursor(tmp_path, j) == len(j)
-    assert _distill_cursor(tmp_path, j + "## [2026-09-02 10:00] session | t\n\nmore\n") == len(j)
-    assert _distill_cursor(tmp_path, "## [2026-01-01 10:00] session | z\n\nreplaced\n") == 0, "文件换掉 → 全量"
-    assert _distill_cursor(tmp_path, j[:5]) == 0, "变短 → 全量"
+    assert _distill_cursor(tmp_path, j) == (0, [])
+    _mark_distill_run(tmp_path, journal_consumed_chars=len(j), journal_text=j, journal_gaps=[(3, 9), (50, 60)])
+    # 缺口只认落在游标之内的; (50,60) 超出游标被丢
+    assert _distill_cursor(tmp_path, j) == (len(j), [(3, 9)])
+    assert _distill_cursor(tmp_path, j + "## [2026-09-02 10:00] session | t\n\nmore\n")[0] == len(j)
+    assert _distill_cursor(tmp_path, "## [2026-01-01 10:00] session | z\n\nreplaced\n") == (0, []), "文件换掉 → 全量"
+    assert _distill_cursor(tmp_path, j[:5]) == (0, []), "变短 → 全量"
 
 
 # ── driver: 增量只喂新增, 旧段复用, 失败段不推游标 ─────────────
@@ -108,20 +109,47 @@ async def test_incremental_feeds_only_new_text_and_reuses_prior(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_failed_chunk_holds_cursor_back(tmp_path: Path):
-    e1, e2 = _entry("2026-09-01", "a" * 10), _entry("2026-09-02", "b" * 10)
-    (tmp_path / "employee_journal.md").write_text(e1 + e2, encoding="utf-8")
+async def test_failed_chunk_becomes_gap_and_is_refilled_next_run(tmp_path: Path):
+    """10/7 晚: 失败段不拖累其它段 —— 成功的照常写, 失败区间记缺口, 下次只补缺口。"""
+    e1, e2, e3 = _entry("2026-09-01", "a" * 10), _entry("2026-09-02", "b" * 10), _entry("2026-09-03", "c" * 10)
+    (tmp_path / "employee_journal.md").write_text(e1 + e2 + e3, encoding="utf-8")
+    fed = []
 
     async def fake(text, model, *, progress_cb=None, prior_segments=None, report=None):
-        # 第 1 段成功、第 2 段失败: 只消费到 e1 末尾
-        report.update({"chunks_total": 2, "chunks_failed": 1, "consumed_chars": len(e1), "reconciled": False})
-        return assemble([("2026-09-01", SEG_OLD)], None, chunks_total=2, chunks_failed=1)
+        fed.append(text)
+        if len(fed) == 1:
+            # 三段: 中间 e2 失败
+            report.update({"chunks_total": 3, "chunks_failed": 1, "consumed_chars": len(text),
+                           "failed_ranges": [(len(e1), len(e1) + len(e2))], "reconciled": False})
+            return assemble([("2026-09-01", SEG_OLD), ("2026-09-03", SEG_NEW)], None, chunks_total=3, chunks_failed=1)
+        # 第二次: 只喂缺口 e2, 补出来的段要插回 09-01 和 09-03 之间
+        report.update({"chunks_total": 1, "chunks_failed": 0, "consumed_chars": len(text), "failed_ranges": [], "reconciled": True})
+        from catfish_memory_distill_reconcile import merge_segments_by_date
+        return assemble(merge_segments_by_date(list(prior_segments), [("2026-09-02", "## 项目\n- 中间段\n")]), "## 进行中\n(无)")
 
     r = await distill_incremental(tmp_path, "m", fake)
     assert r["ok"] and r["chunks_failed"] == 1 and r["reconciled"] is False
     state = json.loads((tmp_path / "memory_distill_state.json").read_text(encoding="utf-8"))
-    assert state["journal_consumed_chars"] == len(e1), "失败段开头就是下次的起点"
-    assert "1/2 段失败" in (tmp_path / "distilled_facts.md").read_text(encoding="utf-8")
+    assert state["journal_consumed_chars"] == len(e1 + e2 + e3), "游标推到末尾, 成功段不丢"
+    assert state["journal_gaps"] == [[len(e1), len(e1) + len(e2)]]
+    text = (tmp_path / "distilled_facts.md").read_text(encoding="utf-8")
+    assert "1/3 段失败" in text and "蒸馏段 2（2026-09-03）" in text
+
+    r2 = await distill_incremental(tmp_path, "m", fake)
+    assert r2["ok"] and fed[1] == e2, "第二次只喂缺口"
+    state = json.loads((tmp_path / "memory_distill_state.json").read_text(encoding="utf-8"))
+    assert state["journal_gaps"] == []
+    text = (tmp_path / "distilled_facts.md").read_text(encoding="utf-8")
+    assert text.index("蒸馏段 3（2026-09-03）") < text.index("蒸馏段 2（2026-09-02）") < text.index("蒸馏段 1（2026-09-01）")
+    r3 = await distill_incremental(tmp_path, "m", fake)
+    assert r3["reason"] == "no_new_journal"
+
+
+def test_to_absolute_maps_ranges_across_pieces():
+    from catfish_memory_distill_run import _to_absolute
+    # pieces: 缺口 [100,150) + 新增 [400,500); 拼接后相对 [40,70) 跨两个 piece
+    assert _to_absolute([(100, 150), (400, 500)], [(40, 70)]) == [(140, 150), (400, 420)]
+    assert _to_absolute([(100, 150)], [(0, 50)]) == [(100, 150)]
 
 
 @pytest.mark.asyncio
@@ -170,7 +198,13 @@ async def test_failed_chunk_is_retried_in_second_pass_and_order_kept(monkeypatch
     journal = "".join(_entry(f"2026-09-0{i}", "z" * 30) for i in range(1, 5))
     report = {}
     out = await llm._call_distill_llm(journal, "m", report=report)
-    assert report == {"chunks_total": 4, "chunks_failed": 0, "consumed_chars": len(journal), "reconciled": True}, report
+    assert report == {"chunks_total": 4, "chunks_failed": 0, "failed_ranges": [], "consumed_chars": len(journal), "reconciled": True}, report
     assert attempts[2] == 2 and all(attempts[i] == 1 for i in (1, 3, 4))
     # 新在前: 段 4 (09-04) 排在段 1 (09-01) 前面, 且第 2 段补回来了
     assert out.index("段 2026-09-04") < out.index("段 2026-09-02") < out.index("段 2026-09-01")
+
+
+def test_merge_segments_by_date_inserts_gap_segment_in_place():
+    prior = [("2026-07-01 ~ 2026-07-05", "a"), ("", "a2"), ("2026-09-01", "c")]
+    out = merge_segments_by_date(prior, [("2026-08-01", "b")])
+    assert [t for _, t in out] == ["a", "a2", "b", "c"], "无标签段跟着前一个走, 缺口段按日期插中间"

@@ -148,6 +148,26 @@ def split_journal_entries(text: str, max_chars: int) -> List[str]:
     return chunks
 
 
+def merge_segments_by_date(
+    prior: List[Tuple[str, str]], new: List[Tuple[str, str]],
+) -> List[Tuple[str, str]]:
+    """把本次蒸出的段按日期插进旧段序列 (旧→新), 稳定排序。
+
+    补缺口 (10/7 晚) 蒸出的段落在中间, 不能一律追加到最后。排序键 = 段标签的
+    起始日期; 没标签的段沿用它前面最近一个有标签段的日期 (保持相对位置)。
+    """
+    items: List[Tuple[str, Tuple[str, str]]] = []
+    for seq in (prior, new):
+        key = ""
+        for label, text in seq:
+            m = _DATE.search(label or "")
+            if m:
+                key = m.group(0)
+            items.append((key, (label, text)))
+    items.sort(key=lambda t: t[0])  # sort 是稳定的: 同日期保持 prior 在前、原序不变
+    return [seg for _, seg in items]
+
+
 def assemble(
     segments: List[Tuple[str, str]],
     current: Optional[str],

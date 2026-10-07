@@ -16,7 +16,7 @@ import hashlib
 import json
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     from .catfish_memory_base import _DISTILL_COOLDOWN_SECONDS, logger
@@ -50,23 +50,33 @@ def _journal_head_sha(journal_text: str, consumed: int) -> str:
     return hashlib.sha1(journal_text[:n].encode("utf-8")).hexdigest()
 
 
-def _distill_cursor(catfish_home: Path, journal_text: str) -> int:
-    """上次蒸馏消费到 journal 的第几个字符; 对不上 (没记过 / 文件换过 / 变短了) → 0 全量。
+def _distill_cursor(catfish_home: Path, journal_text: str) -> Tuple[int, List[Tuple[int, int]]]:
+    """(上次蒸馏消费到 journal 的第几个字符, 游标之前还没蒸成的缺口区间列表)。
+    对不上 (没记过 / 文件换过 / 变短了) → (0, []) 全量。
 
     10/7 增量蒸馏: journal 820K 字 = 103 段, 每天全量重蒸要调 100+ 次 LLM
     (10/7 实测 88 次、1h40m, 大半超时)。append-only 的文件只蒸新增那几段就够了。
+    缺口 (10/7 晚): 上游 504 两轮都没过的段, 成功段照常保留, 失败区间下次单独补。
     """
     state_path = catfish_home / "memory_distill_state.json"
     try:
         state = json.loads(state_path.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
-        return 0
+        return 0, []
     offset = int(state.get("journal_consumed_chars") or 0)
     if offset <= 0 or offset > len(journal_text):
-        return 0
+        return 0, []
     if state.get("journal_head_sha") != _journal_head_sha(journal_text, offset):
-        return 0
-    return offset
+        return 0, []
+    gaps: List[Tuple[int, int]] = []
+    for g in state.get("journal_gaps") or []:
+        try:
+            a, b = int(g[0]), int(g[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if 0 <= a < b <= offset:
+            gaps.append((a, b))
+    return offset, gaps
 
 
 def _mark_distill_run(
@@ -74,8 +84,9 @@ def _mark_distill_run(
     *,
     journal_consumed_chars: Optional[int] = None,
     journal_text: Optional[str] = None,
+    journal_gaps: Optional[List[Tuple[int, int]]] = None,
 ) -> None:
-    """写 memory_distill_state.json 记录这次跑过 (+ 10/7 增量游标, 给了才写)."""
+    """写 memory_distill_state.json 记录这次跑过 (+ 10/7 增量游标和缺口, 给了才写)."""
     state_path = catfish_home / "memory_distill_state.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
     payload: Dict[str, Any] = {
@@ -86,6 +97,7 @@ def _mark_distill_run(
     if journal_consumed_chars is not None and journal_text is not None:
         payload["journal_consumed_chars"] = int(journal_consumed_chars)
         payload["journal_head_sha"] = _journal_head_sha(journal_text, int(journal_consumed_chars))
+        payload["journal_gaps"] = [[int(a), int(b)] for a, b in (journal_gaps or [])]
     try:
         state_path.write_text(json.dumps(payload), encoding="utf-8")
     except OSError as e:

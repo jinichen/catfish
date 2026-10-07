@@ -40,9 +40,9 @@ try:
 except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_prompts import _ANALYSIS_PROMPT, _DISTILL_PROMPT, _RECONCILE_PROMPT, _SUMMARIZE_PROMPT, _build_generation_prompt  # noqa: F401
 try:
-    from .catfish_memory_distill_reconcile import assemble, chunk_date_range, split_journal_entries, status_digest
+    from .catfish_memory_distill_reconcile import assemble, chunk_date_range, merge_segments_by_date, split_journal_entries, status_digest
 except ImportError:  # 独立脚本模式 (无父包)
-    from catfish_memory_distill_reconcile import assemble, chunk_date_range, split_journal_entries, status_digest
+    from catfish_memory_distill_reconcile import assemble, chunk_date_range, merge_segments_by_date, split_journal_entries, status_digest
 
 
 async def _call_summarize_llm(
@@ -145,10 +145,9 @@ async def _call_distill_llm(
     10/7 增量蒸馏:
       prior_segments: 上次 distilled_facts.md 里还原出来的旧段 (旧→新), 本次只蒸
         journal_text (= journal 里上次游标之后的新增), 两者拼起来再合并当前状态。
-      report: 调用方给个 dict, 回填 chunks_total / chunks_failed / consumed_chars /
-        reconciled。consumed_chars 是从 journal_text 开头起**连续成功**的字符数:
-        第一段失败之后的段即使成功也丢掉, 让游标停在失败段开头, 下次从那里重蒸,
-        否则下次重蒸会把它们蒸第二遍。
+      report: 调用方给个 dict, 回填 chunks_total / chunks_failed / failed_ranges /
+        consumed_chars / reconciled。失败段不影响其它段: 它们在 journal_text 里的
+        字符区间记在 failed_ranges, distill_run 存成缺口下次单独补。
 
     P3.5.1.1 (6/15 鸿波 Dream Engine): progress_cb(done_idx, total) — Dream Engine
       UI 进度条用. 每 chunk 跑前调一次, 全部跑完再调一次 (done=total). 抛错被吞.
@@ -220,21 +219,26 @@ async def _call_distill_llm(
             done_count = total - len(retry_idx)
             await asyncio.gather(*(_one(client, i, chunks[i], " (补跑)") for i in retry_idx))
 
-        consumed = 0
+        # 10/7 晚第二版: 成功段**全部保留**, 失败段只记下它在 journal_text 里的字符区间
+        # (failed_ranges), 由 distill_run 存成"缺口"下次单独补。第一版"第一段失败后
+        # 全丢"在补跑后仍有段失败时会把 2.5 小时 157 段的成果扔掉, 只留 11 段。
         failed = 0
+        failed_ranges: List[Tuple[int, int]] = []
+        pos = 0
         for idx, chunk in enumerate(chunks):
             text = outputs.get(idx)
             if text is None:
                 failed += 1
-                continue
-            if failed == 0:
+                failed_ranges.append((pos, pos + len(chunk)))
+            else:
                 results.append((chunk_date_range(chunk), text))
-                consumed += len(chunk)
-            # 失败段之后的成功结果丢弃: 游标停在失败段, 下次连同后面的一起重蒸
+            pos += len(chunk)
         rep["chunks_failed"] = failed
-        rep["consumed_chars"] = consumed
+        rep["failed_ranges"] = failed_ranges
+        rep["consumed_chars"] = len(journal_text)
 
-        segments = prior + results
+        # 补缺口蒸出来的段要按日期插回原位 (prior 是旧→新, 缺口段可能落在中间)
+        segments = merge_segments_by_date(prior, results)
         current: Optional[str] = None
         if segments:
             current = await _post_distill(client, headers, {
