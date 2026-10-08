@@ -19,8 +19,16 @@ def test_verified_core_is_reused_before_reinstall():
 
 
 def test_reader_requires_bundle_fingerprint_not_just_exe():
-    source = (COMMANDS / "hermes_install_windows.rs").read_text()
-    assert ".catfish-wechat-reader-installed.sha256" in source
+    # 9/25 (705006a) 附加组件安装从 hermes_install_windows.rs 整段搬进了
+    # hermes_install_windows_addons.rs, 逻辑原样。主文件只剩 `mod addons` 引用。
+    main = (COMMANDS / "hermes_install_windows.rs").read_text()
+    assert '#[path = "hermes_install_windows_addons.rs"]' in main
+    source = (COMMANDS / "hermes_install_windows_addons.rs").read_text()
+    reader = source.split('"catfish-wechat-reader")', 1)[1].split("failures\n}", 1)[0]
+    assert ".catfish-wechat-reader-installed.sha256" in reader
+    # 跳过安装必须过指纹比对 (marker 内容 == 本次资源哈希), exe 在只是前提之一。
+    assert "addon_fingerprint::matches(&marker, hash, reader_exe.is_file())" in reader
+    assert "if !reader_current {" in reader
     assert "if !reader_exe.is_file()" not in source
 
 

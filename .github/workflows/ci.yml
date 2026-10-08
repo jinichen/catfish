@@ -362,6 +362,15 @@ jobs:
           python -m pytest -q -p no:cacheprovider test_parse_file.py test_parse_file_split.py \
             test_parse_file_encoding.py test_attachment_bm25.py
 
+      # 10/9: edge/hermes-fork 下的测试 (装机补丁 / 品牌补丁 / bundle 校验 / Windows
+      # 首启恢复) 从来没挂进 CI。9/25 把微信读取器安装从 hermes_install_windows.rs
+      # 搬进 hermes_install_windows_addons.rs 后, 守「指纹匹配才跳过」的那条测试
+      # 一直红到 10/9 才有人发现。只用标准库 + pytest (上一步已装);
+      # 依赖本机 ~/.hermes 上游源码的那批在 runner 上自动 skip。
+      - name: hermes-fork 装机/补丁测试
+        working-directory: edge/hermes-fork
+        run: python -m pytest -q -p no:cacheprovider .
+
   # ════════════════════════════════════════════════════════════
   # 3b. 中央门户前端 (central/web) — tsc + build + 路由自查
   # ════════════════════════════════════════════════════════════
