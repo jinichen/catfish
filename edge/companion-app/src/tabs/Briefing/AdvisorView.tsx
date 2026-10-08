@@ -55,6 +55,7 @@ import BriefingTwoColumnView from "./components/BriefingTwoColumnView";  // P3.3
 import { DataDiagnosisCard } from "./components/DataDiagnosisCard";  // P3.4.4 (6/15): 三件套全空诊断卡, 替换老 "LLM 返空" 红字
 import LoadingProgress from "./components/LoadingProgress";  // P3.5.32.7 (6/18): 细化进度展现
 import type { SourceStatus } from "./diagnosis_types";
+import { loadActiveClosures, matchClosed, type ActiveClosure } from "../../lib/advisor_closed";
 
 interface AdvisorViewProps {
   /** 父组件 (BriefingCard) 触发 refresh 时调本 props 后会 reload */
@@ -116,6 +117,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
    *  effectiveStatusByUid 把 done + ignored 都合并 "resolved", 无法在 filter
    *  层区分 "藏 ignored" vs "保留 done 让 sidebar 打勾". 加这个 selector 精准判. */
   const [manualStatusByUid, setManualStatusByUid] = useState<Map<string, TaskStatus>>(new Map());
+  const [closures, setClosures] = useState<ActiveClosure[]>([]);  // 10/8 已关闭台账
 
   // booting 只应存在一个 render tick. 如果主加载 effect 没有启动, 不能让页面
   // 永久显示“准备中…”而不留下任何线索。
@@ -189,6 +191,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
         setEffectiveStatusByUid(getEffectiveStatusByUid(cache));
         // P39: 派生 raw manualStatus map (filter 精细区分 ignored)
         setManualStatusByUid(getManualStatusByUid(cache));
+        setClosures(await loadActiveClosures());
       } catch (e) {
         console.warn("[P3.5.208-A] 派生 effectiveStatus 挂:", e);
         setEffectiveStatusByUid(new Map());
@@ -579,8 +582,12 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
         //   改动而不稳) 换成按 uid 查 manualStatus. getManualStatusByUid 精确到
         //   "done" / "snoozed" / "ignored", 只藏 ignored, done/snoozed 仍进
         //   sidebar 让 BriefingTwoColumnView 打 ✓ / ⏰.
+        // 10/8: 台账命中的也藏 —— 小鲶在聊天里关的、或换了 uid/标题的同一件事。
+        //   只有「按钮点的就是这张卡」(done/snoozed) 例外, 留在左栏打勾变灰。
         const visibleTasks = result.mainTasks.filter((t) => {
-          return manualStatusByUid.get(t.taskUid) !== "ignored";
+          if (manualStatusByUid.get(t.taskUid) === "ignored") return false;
+          const m = matchClosed(t, closures);
+          return !m || (m.by === "uid" && m.closure.by === "button" && m.closure.status !== "ignored");
         });
         return (
           <BriefingTwoColumnView

@@ -11,6 +11,7 @@
 pub mod advisor_cache; // BL-ADVISOR-CACHE (5/22 Phase 7): 缓存 advisor 结果
 pub mod advisor_config; // BL-ADVISOR-CONFIG (5/22 Phase 7): 读 yaml advisor section
 pub mod advisor_relevance; // P3.5.4.2 (6/16 鸿波): BGE-M3 advisor 注入相关性筛选 + sqlite cache
+pub mod advisor_closed;
 pub mod advisor_task_state;
 pub mod advisory; // 6/7 BL-MANIFESTO-ADVISORY-PHASE1: advisory local state (~/.catfish/advisory_state.db)
 pub mod agent;

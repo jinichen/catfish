@@ -32,7 +32,8 @@ CATFISH_BROWSER_PREFIX = "catfish_browser_"
 # 8/31: Reminders 读写都提升为核心后需要 41 个；写入口不可再被 cap 静默砍掉。
 # 9/2: browser_evaluate 直达后需要 42 个，仍低于 Qwen 50+ tools 的实测风险线。
 # 9/8: task library 查询直达后需要 43 个，仍保留 7 个工具的实测安全余量。
-DEFAULT_MAX_TOOLS = 43
+# 10/8: 关早安卡片 (catfish_advisor_close_task) 直达后需要 44 个, 余量 6。
+DEFAULT_MAX_TOOLS = 44
 ENV_MAX_TOOLS = "CATFISH_MAX_TOOLS"
 
 
@@ -244,6 +245,8 @@ ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
     # 同一份 prompt 里另外两个被 `→` 点名的 (合规 / 政治敏感), 同理。
     "catfish_check_compliance",
     "catfish_political_sensitivity_scan",
+    # 10/8: 关早安卡片 (P43 _PROMOTE 同步加了, 见 plugin_core_tools.py)。
+    "catfish_advisor_close_task",
     # BL-LLM-PLAN-WITHOUT-ACT (5/19): 内网 qwen 见到周报 / PPT 等关键词必须能立即
     # 找到对应 skill 并触发, 不能因 BL-TOOL-CAP 被砍. skill discovery + invocation
     # 这一族永不 drop. (catfish_run_skill 已在表里, 这里补 hermes 0.14 的 skill_*.)

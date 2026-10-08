@@ -200,6 +200,10 @@ _PROMOTE = (
     "catfish_draft_meeting_brief",
     "catfish_compose_followup_list",
     "catfish_recall_decision_history",
+    # 10/8: 关早安卡片。不可见时小鲶找不到正规入口, 就去手改 advisor_cache.json /
+    # distilled_facts (早安根本不读后者), 卡片照样复活 —— 跟上面同一个病。
+    # gateway tools_sanitizer_constants.py ALWAYS_ON 同步加了 (两处必须一起改)。
+    "catfish_advisor_close_task",
     # 同一份 SYSTEM_PROMPT 里还有两个被 `→` 点名的, 一起提升 —— 漏掉它们
     # 就是同一个病换个工具复发。这两个是 8/15 日志里 DeepSeek 调用次数最多的
     # (check_compliance 4 次、political_sensitivity_scan 2 次), 每次都得先

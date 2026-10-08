@@ -322,6 +322,40 @@ MEMORY_TOOLS: List[Dict[str, Any]] = [
         "available": True,
     },
     {
+        "name": "catfish_advisor_close_task",
+        "description": (
+            "把**早安卡片**上的一件事标记为已完成 / 不用管 / 今天先不看, 让它以后不再出现。"
+            "跟卡片底部「完成」按钮写的是同一份台账 (~/.catfish/advisor_closed.jsonl)。\n\n"
+            "**何时调**: 员工在聊天里说某张早安卡片的事「已经做完了 / 填好了 / 不用管 / "
+            "别再提醒」, 或问「这个不是已经完成了吗, 为什么又出来」并确认已完成时 —— "
+            "**直接调这个, 不要让员工自己去点按钮**。\n\n"
+            "**不要**为了关卡片去手改 advisor_cache.json、distilled_facts.md 或 journal: "
+            "早安生成卡片时**不读**长期记忆和 journal (只读本周邮件/日程/任务库 + 这份台账), "
+            "改那些地方卡片下次刷新还会出来; 删缓存里的卡反而会让系统忘记它关过。\n\n"
+            "匹配规则: 同 uid、标题去括号后相同或互相包含、或来源邮件主题 (去掉【提醒】/回复:/转发: "
+            "前缀) 相同, 都算同一件事 —— 同一封通知后续的催办、转发也不会再开卡。"
+            "done/ignored 保留 30 天, snoozed 到明天 0 点。返回 matched_card=null 时说明当前卡片里"
+            "没找到这条, 用 current_cards 里的准确标题再调一次。员工反悔用 reopen=true 撤销。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "卡片标题 (或员工说的那件事, 尽量用卡片原标题)"},
+                "task_uid": {"type": "string", "description": "卡片 taskUid, 知道就填, 比标题准"},
+                "status": {
+                    "type": "string", "enum": ["done", "ignored", "snoozed"], "default": "done",
+                    "description": "done=已完成; ignored=不用管/误报; snoozed=今天先不看, 明天照常",
+                },
+                "reopen": {"type": "boolean", "default": False, "description": "true=撤销之前的关闭"},
+                "note": {"type": "string", "description": "一句话依据, 如「员工确认已在腾讯文档J列填完」"},
+            },
+            "required": ["title"],
+        },
+        "emoji": "✅",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
         "name": "catfish_forget_about",
         "description": (
             "**跨源物理清除**特定关键词的记忆 (人/项目/客户/任何标识). 一次扫干净 5 类存储:\n"

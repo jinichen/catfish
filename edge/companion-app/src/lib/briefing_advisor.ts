@@ -30,6 +30,7 @@ import { wikiSearchSemantic } from "./tauri";
 import { warnIfUpstreamError } from "./upstreamErrorGuard";
 import { resolveExpertBotRequest } from "./expertBots";
 import { beginAdvisorRun } from "./advisorRunControl";
+import { filterClosedTasks, loadActiveClosures } from "./advisor_closed";
 
 // 8/15: 本文件原来 2281 行 —— 仓里最大的 TS 文件, 过了 CLAUDE.md §1 的 800 红线。
 // 拆成四块, 都是从这里搬出去的**同一批代码**, 不是新东西:
@@ -524,6 +525,9 @@ async function _fetchBriefingAdvisorImpl(
       );
     }
     result = evidenceFiltered;
+    // 10/8: 先过「已关闭」台账 (uid / 标题 / 来源邮件主题), 见 advisor_closed.ts。
+    // previousTasks 只覆盖上一轮还在的卡, 被关掉的卡上一轮就不在了, 只有台账记得。
+    result = filterClosedTasks(result, await loadActiveClosures());
     // P3.3.40 BL-ADVISOR-RESOLVED-HARDFILTER (6/12 鸿波): prompt 里加了 §4.2
     // (P3.3.39), 但 LLM 听话率 80-90%, 仍会漏. 这里加 deterministic 客户端
     // 后处理 — 拿 prev task chatSummary + 当前 title, 命中"已结案信号"关键字

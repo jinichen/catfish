@@ -9,6 +9,7 @@
 import { invoke as rawInvoke } from "@tauri-apps/api/core";
 import type { AdvisorResult } from "./briefing_advisor";
 import type { AdvisorInput } from "./briefing_advisor_common";
+import { advisorClosedAppend, nextLocalMidnight } from "./advisor_closed";
 
 /** 缓存格式版本。旧缓存没有来源指纹，不能再作为当前任务依据。 */
 export const ADVISOR_CACHE_SCHEMA_VERSION = 2;
@@ -317,6 +318,25 @@ export async function setTaskManualStatus(
   sums[taskUid] = entry;
   cache.taskChatSummaries = sums;
   await advisorCacheSave(cache);
+
+  // 10/8: 同时记进「已关闭」台账 —— 上面那份会在下一轮写缓存时随卡片一起被清掉,
+  // 台账不会 (见 advisor_closed.ts)。台账写失败不回滚按钮状态, 只告警。
+  const card = cache.result?.mainTasks?.find((t) => t.taskUid === taskUid);
+  const ts = new Date().toISOString();
+  await advisorClosedAppend(
+    status === null
+      ? { op: "reopen", taskUid, title: taskTitle, ts, by: "button" }
+      : {
+          op: "close",
+          status,
+          taskUid,
+          title: taskTitle,
+          refs: card?.contextRefs ?? [],
+          ts,
+          until: status === "snoozed" ? nextLocalMidnight() : undefined,
+          by: "button",
+        },
+  ).catch((e) => console.warn("[advisor closed-ledger] 写台账失败:", e));
 }
 
 export const advisorTaskStatePruneOld = () =>

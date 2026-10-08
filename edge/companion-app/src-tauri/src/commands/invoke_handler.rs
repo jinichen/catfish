@@ -406,6 +406,8 @@ pub(crate) fn handler(
             crate::commands::advisor_cache::advisor_cache_clear,
             crate::commands::advisor_config::advisor_config_get,
             // BL-ADVISOR-TASK-STATE (5/22 鸿波): 任务状态 done/snoozed/ignored
+            crate::commands::advisor_closed::advisor_closed_read,
+            crate::commands::advisor_closed::advisor_closed_append,
             crate::commands::advisor_task_state::advisor_task_state_get,
             crate::commands::advisor_task_state::advisor_task_state_set,
             crate::commands::advisor_task_state::advisor_task_state_clear,
