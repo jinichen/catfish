@@ -5,9 +5,17 @@
 #   1. install.sh            (patch offline mode · 7 处 marker)
 #   2. uv                    (下 astral.sh · macOS arm64 or x64)
 #   3. cpython-3.11.15-embed.tar.gz  (下 python-build-standalone · macOS arm64 or x64)
-#   4. hermes-agent-bundle.tar.gz    (clone + npm ci + tar 打包)
-#   5. node-embed.tar.gz     (下 nodejs.org · v26 darwin arm64 or x64) · 新增
-#   6. chromium-embed.tar.gz (npx playwright install chromium + tar 打包) · 新增
+#   4. hermes-agent-bundle.tar.gz    (clone + tar 打包 · 10/9 起不含 node_modules)
+#   5. chromium-embed.tar.gz (npx playwright install chromium + tar 打包)
+#
+# 10/9 瘦身: 不再打 node-embed.tar.gz, hermes 归档里也不再有 node_modules。
+# 员工机上 hermes 只跑 Python 网关 + 鲶鱼工具, 实测 (10/9, 去掉 node_modules 且 PATH
+# 里没有 node/npx/npm) 聊天 / 浏览器 / 知识库 / 邮件 / 文件 40 次工具调用全过。
+# 鲶鱼的浏览器是 catfish_browser_* (Python Playwright + 下面的 Chromium); hermes 自带
+# 的 browser_* 靠 agent-browser, 而包里的 agent-browser 从来没有 .bin 链接、hermes
+# 找不到它 (现网日志 check_browser_navigate_requirements 一直 False), 网关 BL-FIX4
+# 也会在 catfish_browser_* 在场时把那一族丢掉 —— 那 376MB node_modules + 58MB Node
+# 在员工机上是纯负担。Node 只在**构建机**上用一次: [6b] 的 npx playwright 下 Chromium。
 #
 # 用法:
 #   # 打 Apple Silicon (aarch64) 资源:
@@ -235,10 +243,11 @@ echo "=== [3/6] Download Node.js $NODE_VERSION darwin-$NODE_ARCH ==="
 NODE_TMP="/tmp/$NODE_FNAME"
 # 下载 (多源 + 低速超时 + sha256) 抽到隔壁; source 而不是子进程 —— 它用上面这些变量。
 . "$COMPANION/scripts/fetch-node-embed.sh"
-cp "$NODE_TMP" "$RESOURCES/node-embed.tar.gz"
-echo "  OK $RESOURCES/node-embed.tar.gz ($(ls -lh "$RESOURCES/node-embed.tar.gz" | awk '{print $5}'))"
+# 10/9: 不再打进包 (见文件头), 只在构建机上解开给 [6b] 的 npx playwright 用。
+# 上一次构建留下的 node-embed.tar.gz 必须删掉 —— 否则 tauri 照 resources 映射打进去。
+rm -f "$RESOURCES/node-embed.tar.gz"
 
-# 解一份出来给 [6a] 的 npm ci 用 —— **不能用本机的 node** (8/8)。
+# 解一份出来给 [6b] 的 npx playwright 用 —— **不能用本机的 node** (8/8)。
 #
 # 打进包的 node_modules 本来就该用打进包的那个 node 装: 员工机跑 26.8.1,
 # 用别的版本装出来的带原生插件的包 (node-pty 这类) ABI 可能对不上, 而那种错
@@ -378,47 +387,10 @@ python3 "$(dirname "$0")/build_edge_runtime.py" "$RESOURCES/catfish-edge-runtime
 # ─── 6. hermes-agent bundle · npm ci · npx playwright install chromium · tar 打包 ─────
 
 echo ""
-echo "=== [6a/6] npm ci in hermes-agent (装 node_modules) ==="
-export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1  # 分开跑 chromium
-
-# 用**嵌入的** node/npm, 不是本机的。理由见 [3] 里解包那段。
-# 放最前面, 后面 [6a.5] 瘦身和 [6b] playwright 也跟着用同一个 —— 整条链
-# 只认一个 node 版本, 跟员工机上跑的那个一致。
+echo "=== [6a/6] 不装 hermes 的 node_modules (10/9 起, 见文件头) ==="
+# [6b] 的 npx 用**嵌入的** node, 不是本机的 (理由见 [3])。
 export PATH="$EMBED_NODE_BIN:$PATH"
-echo "  用 node $(node --version) / npm $(npm --version)  (嵌入的, 非本机)"
-
-# 顶级 npm ci
-cd "$HERMES_SRC"
-if [ -f "package-lock.json" ]; then
-    npm ci --no-audit --no-fund --loglevel=error
-else
-    npm install --no-audit --no-fund --loglevel=error
-fi
-echo "  OK 顶级 node_modules 装完 ($(du -sh node_modules | cut -f1))"
-
-# Hermes 的上游 lockfile 不声明 agent-browser, 但 Companion 的 browser 工具
-# 运行时需要它；显式装入并在下面只保留当前 macOS 架构。
-if [ ! -f "node_modules/agent-browser/bin/agent-browser.js" ]; then
-    AGENT_BROWSER_STAGE="/tmp/catfish-agent-browser-$ARCH"
-    rm -rf "$AGENT_BROWSER_STAGE"
-    mkdir -p "$AGENT_BROWSER_STAGE" "node_modules/agent-browser"
-    npm pack agent-browser@0.26.0 --pack-destination "$AGENT_BROWSER_STAGE" --loglevel=error >/dev/null
-    tar xzf "$AGENT_BROWSER_STAGE"/agent-browser-*.tgz -C node_modules/agent-browser --strip-components=1
-    rm -rf "$AGENT_BROWSER_STAGE"
-fi
-
-# BL-HERMES-BUNDLE-SURGICAL (7/17): 运行时包只需要 Python gateway/tool 链路和
-# agent-browser。这里**只记录归档排除规则**, 不再 rm Hermes 源目录里的依赖。
-# Hermes 源目录通常是缓存, 直接删除会污染下一次构建, 也会让 npm/Playwright 的
-# 后续步骤在同一棵树上得到不可预测的结果。
-#
-# 这些依赖原本由 workspace 的前端/桌面/测试安装带入根 node_modules。它们不是
-# Companion 启动 gateway 所需的运行时文件, 但仍保留在构建树中供 [6b] 下载和
-# 构建 Chromium; 到 [6d] 打包时再排除。
-echo ""
-echo "=== [6a.5/6] 记录 Companion runtime 裁剪规则 (不修改 Hermes 源目录) ==="
-cd "$HERMES_SRC"
-echo "  Hermes source 保留: $(du -sh node_modules | cut -f1)"
+echo "  构建期 node $(node --version) / npm $(npm --version)  (只给 [6b] 下 Chromium 用, 不进包)"
 
 echo ""
 echo "=== [6b/6] npx playwright install chromium (arch=$NODE_ARCH) ==="
@@ -587,8 +559,7 @@ echo "=== [6d/6] tar pack hermes-agent bundle (Companion runtime profile) ==="
 # Companion 使用 Hermes 的 Python gateway/tool/plugin 运行链路, 不需要桌面
 # Electron、前端构建、测试依赖。排除规则作用于 tar 输入, 不改动 HERMES_SRC。
 #
-# agent-browser 是运行时依赖, 但 npm 包默认同时带多个 OS/架构二进制。这里只
-# 保留当前构建目标, 避免 macOS/Windows 包互相携带无用的浏览器启动器。
+# 10/9: node_modules 整个不进包 (见文件头), agent-browser 跟着一起不再打。
 # --exclude patterns 支持 shell glob, 无需 leading 路径.
 cd /tmp
 HERMES_TAR="$RESOURCES/hermes-agent-bundle.tar.gz"
@@ -614,44 +585,14 @@ BUNDLE_EXCLUDES=(
     "--exclude=hermes-agent-src-$ARCH/.venv"
     "--exclude=hermes-agent-src-$ARCH/target"
     "--exclude=hermes-agent-src-$ARCH/apps/desktop"
-    "--exclude=hermes-agent-src-$ARCH/node_modules/electron"
-    "--exclude=hermes-agent-src-$ARCH/node_modules/node-pty"
-    "--exclude=hermes-agent-src-$ARCH/node_modules/emojibase-data"
-    "--exclude=hermes-agent-src-$ARCH/node_modules/hermes"
-    "--exclude=hermes-agent-src-$ARCH/node_modules/mermaid"
-    "--exclude=hermes-agent-src-$ARCH/node_modules/@mermaid-js"
-    "--exclude=hermes-agent-src-$ARCH/node_modules/@tabler"
-    "--exclude=hermes-agent-src-$ARCH/node_modules/@icons-pack"
-    "--exclude=hermes-agent-src-$ARCH/node_modules/lucide-react"
-    "--exclude=hermes-agent-src-$ARCH/node_modules/three"
-    "--exclude=hermes-agent-src-$ARCH/node_modules/three-stdlib"
-    "--exclude=hermes-agent-src-$ARCH/node_modules/electron-winstaller"
-    "--exclude=hermes-agent-src-$ARCH/node_modules/typescript"
-    "--exclude=hermes-agent-src-$ARCH/node_modules/@rolldown"
-    "--exclude=hermes-agent-src-$ARCH/node_modules/@tauri-apps"
-    "--exclude=hermes-agent-src-$ARCH/node_modules/react-native-*"
-    "--exclude=hermes-agent-src-$ARCH/node_modules/@types"
+    # 10/9: 任何层级的 node_modules 都不进包 (见文件头)。[6a] 已经不装了, 这里再挡
+    # 一道: 源码缓存 / 手工调试留下的 node_modules 也不能混进来。
+    "--exclude=node_modules"
     "--exclude=hermes-agent-src-$ARCH/website"
     "--exclude=hermes-agent-src-$ARCH/tests"
     "--exclude=hermes-agent-src-$ARCH/tests-js"
     "--exclude=hermes-agent-src-$ARCH/.github"
 )
-
-case "$ARCH" in
-    aarch64) AGENT_BROWSER_KEEP="agent-browser-darwin-arm64" ;;
-    x64)     AGENT_BROWSER_KEEP="agent-browser-darwin-x64" ;;
-    *) echo "❌ 不支持的 macOS 架构: $ARCH" >&2; exit 1 ;;
-esac
-for _agent_bin in \
-    agent-browser-darwin-arm64 agent-browser-darwin-x64 \
-    agent-browser-linux-arm64 agent-browser-linux-musl-arm64 \
-    agent-browser-linux-musl-x64 agent-browser-linux-x64 \
-    agent-browser-win32-x64.exe; do
-    if [ "$_agent_bin" != "$AGENT_BROWSER_KEEP" ]; then
-        BUNDLE_EXCLUDES+=("--exclude=hermes-agent-src-$ARCH/node_modules/agent-browser/bin/$_agent_bin")
-    fi
-done
-
 tar czhf "$HERMES_TAR" \
     "${BUNDLE_EXCLUDES[@]}" \
     -s "|hermes-agent-src-$ARCH|hermes-agent-src|" \
@@ -681,52 +622,31 @@ _leak=0
 # node_modules/electron-builder/, 而 electron/ 本身已被 --exclude 正确排掉。
 # mac 这边一直没炸, 只是因为这棵树上恰好没有 electron-builder。
 for _pat in \
-    "\.git/" "venv/" "target/" "apps/desktop/" "node_modules/electron/" \
-    "node_modules/node-pty/" "node_modules/emojibase-data/" \
-    "node_modules/hermes/" "node_modules/mermaid/" \
-    "node_modules/@mermaid-js/" "node_modules/@tabler/" \
-    "node_modules/@icons-pack/" "node_modules/lucide-react/" \
-    "node_modules/three/" "node_modules/three-stdlib/" \
-    "node_modules/electron-winstaller/" "node_modules/typescript/" \
-    "node_modules/@rolldown/" "node_modules/@tauri-apps/" \
-    "node_modules/react-native-" "node_modules/@types/" \
+    "\.git/" "venv/" "target/" "apps/desktop/" \
     "website/" "tests/" "tests-js/" ".github/"; do
     if grep -qE "^hermes-agent-src/${_pat}" "$_HLIST"; then
         echo "  ❌ exclude 没生效: 归档里仍然有 hermes-agent-src/${_pat}" >&2
         _leak=1
     fi
 done
-for _agent_bin in \
-    agent-browser-darwin-arm64 agent-browser-darwin-x64 \
-    agent-browser-linux-arm64 agent-browser-linux-musl-arm64 \
-    agent-browser-linux-musl-x64 agent-browser-linux-x64 \
-    agent-browser-win32-x64.exe; do
-    if [ "$_agent_bin" != "$AGENT_BROWSER_KEEP" ] && \
-       grep -qF "hermes-agent-src/node_modules/agent-browser/bin/$_agent_bin" "$_HLIST"; then
-        echo "  ❌ 归档仍包含非目标 agent-browser 二进制: $_agent_bin" >&2
-        _leak=1
-    fi
-done
-for _required in \
-    "hermes-agent-src/node_modules/agent-browser/bin/agent-browser.js" \
-    "hermes-agent-src/node_modules/agent-browser/bin/$AGENT_BROWSER_KEEP"; do
-    if ! grep -qF "$_required" "$_HLIST"; then
-        echo "  ❌ 归档缺少运行时文件: $_required" >&2
-        _leak=1
-    fi
-done
+# 10/9: 任何层级的 node_modules 都不许出现 (见文件头) —— 混进来一份就是一百多 MB 白占
+if grep -q '/node_modules/' "$_HLIST"; then
+    echo "  ❌ 归档里出现了 node_modules (应为 0):" >&2
+    grep '/node_modules/' "$_HLIST" | cut -d/ -f1-4 | sort -u | head -5 >&2
+    _leak=1
+fi
 if [ "$_leak" = "1" ]; then
     echo "     多半是 --exclude 的 pattern 跟 -s 改名的先后顺序变了。" >&2
     echo "     pattern 要匹配改名**前**的 hermes-agent-src-$ARCH/..." >&2
     exit 1
 fi
-echo "  ✓ exclude 全部生效 (含 node_modules/electron) · 归档 $(wc -l < "$_HLIST" | tr -d ' ') 条"
+echo "  ✓ exclude 全部生效 (0 条 node_modules) · 归档 $(wc -l < "$_HLIST" | tr -d ' ') 条"
 
 # ─── DONE ──────────────────────────────────────────────
 
 echo ""
 echo "==============================================="
-echo "  DONE · $RESOURCES · 6 artifacts:"
+echo "  DONE · $RESOURCES · 5 runtime artifacts (10/9 起不含 node-embed):"
 echo "==============================================="
 ls -lh "$RESOURCES/"
 

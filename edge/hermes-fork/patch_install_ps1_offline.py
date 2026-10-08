@@ -189,6 +189,37 @@ function Catfish-StripLongPathPrefix {{
     if ($Path.StartsWith("\\\\?\\")) {{ return $Path.Substring(4) }}
     return $Path
 }}
+
+# Catfish offline — 10/9: 离线 Chromium 解压挪到这里, 跟 Node 脱钩。
+#
+# 原来只在 Install-NodeDeps 里解 (PATCH_7) —— 而那个函数开头是
+# "没有 npm 就 return"。Windows 包从来不带 Node, 断网现场装不上 Node, 于是
+# Chromium 永远解不出来, 鲶鱼的 catfish_browser_* (Python Playwright) 全废。
+# 现在在源码装好之后 (PATCH_4) 就解; PATCH_7 再调一次是幂等的 (看标记文件)。
+function Catfish-InstallOfflineChromium {{
+    if (-not ($OfflineChromiumTar -and (Test-Path $OfflineChromiumTar))) {{ return $false }}
+    $chromiumDest = Join-Path $env:LOCALAPPDATA "ms-playwright"
+    $stamp = Join-Path $chromiumDest ".catfish-offline-chromium"
+    $tarItem = Get-Item -LiteralPath $OfflineChromiumTar -ErrorAction SilentlyContinue
+    $want = if ($tarItem) {{ "$($tarItem.Length)" }} else {{ "" }}
+    if ((Test-Path $stamp) -and ((Get-Content $stamp -Raw -ErrorAction SilentlyContinue).Trim() -eq $want)) {{
+        Write-Info "Catfish offline: Playwright Chromium 已解压过 (同一份包), 跳过"
+        return $true
+    }}
+    Write-Info "Catfish offline: 解压 Playwright Chromium bundle 到 $chromiumDest"
+    New-Item -ItemType Directory -Force -Path $chromiumDest -ErrorAction SilentlyContinue | Out-Null
+    try {{
+        # 原生 tar 不认长路径前缀, 先剥 (见 Catfish-StripLongPathPrefix)
+        tar -xzf (Catfish-StripLongPathPrefix $OfflineChromiumTar) -C $chromiumDest
+        if ($LASTEXITCODE -ne 0) {{ throw "tar chromium exit=$LASTEXITCODE" }}
+        Set-Content -Path $stamp -Value $want -Encoding ASCII
+        Write-Success "Playwright Chromium installed from offline bundle"
+        return $true
+    }} catch {{
+        Write-Warn "Catfish offline: chromium tar 解压挂: $_"
+        return $false
+    }}
+}}
 """
 
 
@@ -440,6 +471,8 @@ PATCH_4_INSTALL_REPO = f"""    $didUpdate = $false
             Write-Info "Temporary source retained (cleanup deferred): $tempExtractRoot"
         }}
         Write-Success "hermes-agent installed from offline bundle"
+        # 10/9: Chromium 在这里就解 —— 不能等 Install-NodeDeps (没 Node 时它直接 return)
+        [void](Catfish-InstallOfflineChromium)
         # 跳过下面的 update / clone 3-tier fallback
         return
     }}
@@ -462,9 +495,11 @@ PATCH_5_NPM_GLOBAL = f"""    {MARKER}: Catfish offline — 装本地 .tgz (camof
             $tgzPaths = $tgzFiles | ForEach-Object {{ $_.FullName }}
             & $npm install -g --prefix $prefixDir --silent --ignore-scripts @tgzPaths 2>&1 | Tee-Object -FilePath $npmLog | Out-Null
         }} else {{
-            Write-Warn "Catfish offline: $offlineTgzDir 无 .tgz - fallback registry (员工无公网必挂)"
-            & $npm install -g --prefix $prefixDir --silent --ignore-scripts "@askjo/camofox-browser@^1.5.2" 2>&1 | Tee-Object -FilePath $npmLog | Out-Null
+            Write-Info "Catfish offline: $offlineTgzDir 无 .tgz, 跳过 npm 全局依赖 (10/9 起不随包分发, 运行时不需要)"
         }}
+    }} elseif ($OfflineSourceTar -or $OfflineSourceDir) {{
+        # 10/9: 离线安装不再去 npm registry 装全局包 —— 断网必挂、联网也白占空间
+        Write-Info "Catfish offline: 跳过 npm 全局依赖 (运行时不需要 Node)"
     }} else {{
         & $npm install -g --prefix $prefixDir --silent --ignore-scripts "@askjo/camofox-browser@^1.5.2" 2>&1 | Tee-Object -FilePath $npmLog | Out-Null
     }}
@@ -475,7 +510,11 @@ PATCH_5_NPM_GLOBAL = f"""    {MARKER}: Catfish offline — 装本地 .tgz (camof
 # CircleCI 上 pre-install 生成 node_modules 打进 hermes-agent-src, 装到 msi 里.
 # install.ps1 函数开头查 $installDir\node_modules\ 已存在直接 return $true, 跳过 npm install.
 PATCH_6_NPM_LOCAL = f"""    function _Run-NpmInstall([string]$label, [string]$installDir, [string]$logPath, [string]$npmPath) {{
-        {MARKER}: Catfish offline — node_modules 已在 (msi 打了 CircleCI pre-install), skip
+        {MARKER}: Catfish offline — 离线安装一律跳过本地 npm install (10/9 起包里不带 node_modules)
+        if ($OfflineSourceTar -or $OfflineSourceDir) {{
+            Write-Info "${{label}}: 离线安装跳过 npm install (运行时不需要 Node 依赖)"
+            return $true
+        }}
         if (Test-Path (Join-Path $installDir "node_modules")) {{
             # ⚠ 必须写 ${{label}} 不能写 $label —— PowerShell 里 `$label:` 会被当成
             # 驱动器/命名空间限定符 (就像 $env:PATH), 冒号后面跟空格直接是**解析错误**:
@@ -505,18 +544,8 @@ PATCH_7_PLAYWRIGHT_CHROMIUM = f"""        $browserNpmOk = _Run-NpmInstall "Brows
         {MARKER}: Catfish offline — 若 -OfflineChromiumTar 传, tar 解压到 %LOCALAPPDATA%\\ms-playwright\\ (Playwright 默认路径, 自动 detect)
         $catfishSkipChromium = $false
         if ($OfflineChromiumTar -and (Test-Path $OfflineChromiumTar)) {{
-            $chromiumDest = Join-Path $env:LOCALAPPDATA "ms-playwright"
-            Write-Info "Catfish offline: 解压 Playwright Chromium bundle 到 $chromiumDest"
-            New-Item -ItemType Directory -Force -Path $chromiumDest -ErrorAction SilentlyContinue | Out-Null
-            try {{
-                # 同上: 原生 exe 不认 \\?\\ 前缀
-                tar -xzf (Catfish-StripLongPathPrefix $OfflineChromiumTar) -C $chromiumDest
-                if ($LASTEXITCODE -ne 0) {{ throw "tar chromium exit=$LASTEXITCODE" }}
-                Write-Success "Playwright Chromium installed from offline bundle"
-                $catfishSkipChromium = $true
-            }} catch {{
-                Write-Warn "Catfish offline: chromium tar 解压挂: $_ - fallback npx playwright install (员工无公网必挂)"
-            }}
+            # 10/9: 通常 PATCH_4 已经解过, 这里幂等 (标记文件); 解压失败才会落回 npx
+            if (Catfish-InstallOfflineChromium) {{ $catfishSkipChromium = $true }}
         }} elseif ($OfflineSourceTar -or $OfflineSourceDir) {{
             Write-Info "Catfish offline: 无 -OfflineChromiumTar, skip Playwright Chromium 装 (browser_* tools 手动装 chromium 后可用)"
             $catfishSkipChromium = $true
@@ -756,8 +785,8 @@ def main() -> int:
         f"     Marker: {MARKER}\n"
         f"     Patches: 7 处 (param + Install-Uv + Test-Python + Install-Repository + npm-global + npm-local-helper + playwright-chromium-bundle)\n"
         f"     msi CustomAction 传 -OfflineSourceTar / -OfflineUvExe / -OfflinePythonZip / -OfflineChromiumTar (+ -OfflineSourceDir 保留 mac 兼容)\n"
-        f"     npm global .tgz 从 $HermesHome\\hermes-agent\\node-globals\\ 自动拾取\n"
-        f"     npm local 若 node_modules\\ 已在自动 skip\n"
+        f"     离线安装跳过 npm 全局 / 本地依赖 (10/9 起不随包分发)\n"
+        f"     Chromium 在源码装好后即解压 (不依赖 Node)\n"
         f"     Playwright chromium 若 -OfflineChromiumTar 传 · tar 解压到 %LOCALAPPDATA%\\ms-playwright\\ (100% offline)"
     )
     return 0

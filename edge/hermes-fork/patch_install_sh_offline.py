@@ -219,6 +219,14 @@ PATCH_5_INSTALL_REPO_CLOSE = f"""            fi
 # ~/.hermes/node/ · export PATH · HAS_NODE=true, return 0.
 PATCH_6_INSTALL_NODE = f"""install_node() {{
     {MARKER}: Catfish offline — 解压内嵌 Node.js tar (员工无公网必挂 nodejs.org 下载)
+    # 10/9: Companion 不再打包 Node (员工机运行时用不到, 见 build-mac-resources.sh 文件头)。
+    # 离线安装且没给 Node tar → 不装、不去 nodejs.org 干等, HAS_NODE=false 照常往下走。
+    if {{ [ -n "${{OFFLINE_SOURCE_DIR:-}}" ] || [ -n "${{OFFLINE_SOURCE_TAR:-}}" ]; }} \\
+        && {{ [ -z "${{OFFLINE_NODE_TAR:-}}" ] || [ ! -f "${{OFFLINE_NODE_TAR:-}}" ]; }}; then
+        log_info "Catfish offline: Node.js 不随包分发 (运行时不需要), 跳过安装"
+        HAS_NODE=false
+        return 0
+    fi
     if [ -n "${{OFFLINE_NODE_TAR:-}}" ] && [ -f "$OFFLINE_NODE_TAR" ]; then
         log_info "Catfish offline: 解压 Node.js from $OFFLINE_NODE_TAR"
         mkdir -p "$HERMES_HOME/node"
@@ -244,26 +252,16 @@ PATCH_6_INSTALL_NODE = f"""install_node() {{
 
 # 处 7 · install_node_deps (line ~2114): offline mode 短路整个 npm install + Playwright chromium 装.
 # BL-MAC-INSTALL-NPM-OFFLINE + CHROMIUM-BUNDLE (7/17):
-#   - node_modules 已在 dmg (build 时 npm ci 打的) · skip npm install
+#   - 10/9 起: 离线一律不装 npm 依赖 (包里不再带 node_modules / Node)
 #   - 若 --offline-chromium-tar 传 · tar 解压到 ~/Library/Caches/ms-playwright/ · Playwright auto-detect
 #   - 完全跳过原代码里的 npm install + case DISTRO ... npx playwright install ... esac
 # 单一 anchor 短路 · 无嵌套括号闭合地雷.
 PATCH_7_NPM_AND_CHROMIUM = f"""install_node_deps() {{
     {MARKER}: Catfish offline — 短路整个 npm + Playwright chromium 装 (dmg 已打 node_modules + chromium)
     if [ -n "${{OFFLINE_SOURCE_DIR:-}}" ] || [ -n "${{OFFLINE_SOURCE_TAR:-}}" ]; then
-        if [ "$HAS_NODE" = false ]; then
-            log_error "Catfish offline: bundled Node.js is unavailable"
-            return 1
-        fi
-
-        # A. npm install skip if node_modules 已在
-        if [ -d "$INSTALL_DIR/node_modules" ]; then
-            log_info "Catfish offline: node_modules already present, skip npm install"
-            log_success "Node.js dependencies already installed (Catfish offline bundle)"
-        else
-            log_error "Catfish offline: node_modules is missing from the Hermes bundle"
-            return 1
-        fi
+        # A. 10/9: 离线安装不装任何 npm 依赖 —— 包里不再带 node_modules / Node,
+        #    员工机运行时不需要 (鲶鱼浏览器走 Python Playwright + 下面的 Chromium)。
+        log_info "Catfish offline: 跳过 npm 依赖 (运行时不需要 Node)"
 
         # B. Playwright chromium 解压 to ~/Library/Caches/ms-playwright/
         if [ -n "${{OFFLINE_CHROMIUM_TAR:-}}" ] && [ -f "$OFFLINE_CHROMIUM_TAR" ]; then
@@ -567,9 +565,9 @@ def main() -> int:
     print(
         f"     Marker: {MARKER}\n"
         f"     Patches: 8 处 (param + install_uv + check_python + install_repo_open + install_repo_close + install_node + install_node_deps + venv_python)\n"
-        f"     dmg install handler 传 --offline-source-dir / --offline-uv / --offline-python-tar / --offline-node-tar / --offline-chromium-tar\n"
-        f"     Node.js darwin binary tar 解压到 $HERMES_HOME/node/\n"
-        f"     npm install skip if node_modules 已在 · Playwright chromium 解压到 ~/Library/Caches/ms-playwright/"
+        f"     dmg install handler 传 --offline-source-dir / --offline-uv / --offline-python-tar / --offline-chromium-tar\n"
+        f"     离线不装 Node / npm 依赖 (10/9 起不随包分发; 旧调用方仍可传 --offline-node-tar)\n"
+        f"     Playwright chromium 解压到 ~/Library/Caches/ms-playwright/"
     )
     return 0
 

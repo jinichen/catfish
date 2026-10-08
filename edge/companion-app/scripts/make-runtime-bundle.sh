@@ -7,7 +7,7 @@
 # (并列时取 .app):
 #     1. .app 内的 resources/mac/      ← 正常发版这里就是全的
 #     2. ~/.catfish/runtime/           ← 本脚本产出的东西解压到这里
-#     都不全 → install.sh 联网补 (clone + npm ci + 下 python/node/chromium)
+#     都不全 → install.sh 联网补 (clone + 下 python/chromium)
 #
 # ── 那还要这个包干嘛 ────────────────────────────────────────────────
 #
@@ -35,8 +35,8 @@ set -uo pipefail
 
 ARCH="${1:-}"
 case "$ARCH" in
-    aarch64) WANT="arm64"  ; NODE_WANT="darwin-arm64" ;;
-    x64)     WANT="x86_64" ; NODE_WANT="darwin-x64"   ;;
+    aarch64) WANT="arm64"  ;;
+    x64)     WANT="x86_64" ;;
     *)
         echo "❌ 用法: $0 <aarch64|x64>"
         exit 1
@@ -62,8 +62,9 @@ fi
 #
 # 七个都要有。缺了的话员工机会**静默退回联网安装** —— 而这个包存在的意义
 # 恰恰是那台机器上不了网, 于是表现成"装到一半卡住", 现场查不到原因。
+# 10/9: 不再有 node-embed.tar.gz (员工机运行时不需要 Node)。
 FILES=(install.sh uv cpython-3.11.15-embed.tar.gz
-       hermes-agent-bundle.tar.gz node-embed.tar.gz chromium-embed.tar.gz
+       hermes-agent-bundle.tar.gz chromium-embed.tar.gz
        catfish-email-dist.tar.gz catfish-wechat-reader-dist.tar.gz)
 MISS=0
 for f in "${FILES[@]}"; do
@@ -88,10 +89,6 @@ echo "$UV_ARCH" | grep -q "$WANT" \
     && echo "  ✓ uv       $WANT" \
     || { echo "  ❌ uv 架构不符: 期望 $WANT, 实际 → $UV_ARCH"; FAIL=1; }
 
-NODE_DIR="$(tar tzf "$SRC/node-embed.tar.gz" 2>/dev/null | head -1 || true)"
-echo "$NODE_DIR" | grep -q "$NODE_WANT" \
-    && echo "  ✓ node     $NODE_WANT" \
-    || { echo "  ❌ node 架构不符: 期望 $NODE_WANT, 实际 → ${NODE_DIR:-<读不出>}"; FAIL=1; }
 
 if [ "$FAIL" = "1" ]; then
     echo ""

@@ -8,10 +8,12 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 #[cfg(any(not(target_os = "windows"), test))]
-pub(crate) const RUNTIME_ARCHIVES: [&str; 4] = [
+/// 10/9: 去掉了 node-embed.tar.gz —— 员工机运行时不需要 Node (hermes 只跑 Python
+/// 网关; 鲶鱼浏览器走 Python Playwright + chromium-embed), 见
+/// scripts/build-mac-resources.sh 文件头的实测记录。
+pub(crate) const RUNTIME_ARCHIVES: [&str; 3] = [
     "cpython-3.11.15-embed.tar.gz",
     "hermes-agent-bundle.tar.gz",
-    "node-embed.tar.gz",
     "chromium-embed.tar.gz",
 ];
 
@@ -75,8 +77,6 @@ pub(crate) struct RuntimeArtifacts {
     #[cfg(any(not(target_os = "windows"), test))]
     pub(crate) hermes_tar: Option<PathBuf>,
     #[cfg(any(not(target_os = "windows"), test))]
-    pub(crate) node_tar: Option<PathBuf>,
-    #[cfg(any(not(target_os = "windows"), test))]
     pub(crate) chromium_tar: Option<PathBuf>,
     /// hermes venv 额外依赖包 (8/5)。
     pub(crate) deps_tar: Option<PathBuf>,
@@ -106,9 +106,7 @@ impl RuntimeArtifacts {
             #[cfg(any(not(target_os = "windows"), test))]
             hermes_tar: usable_artifact(&dir.join(RUNTIME_ARCHIVES[1])),
             #[cfg(any(not(target_os = "windows"), test))]
-            node_tar: usable_artifact(&dir.join(RUNTIME_ARCHIVES[2])),
-            #[cfg(any(not(target_os = "windows"), test))]
-            chromium_tar: usable_artifact(&dir.join(RUNTIME_ARCHIVES[3])),
+            chromium_tar: usable_artifact(&dir.join(RUNTIME_ARCHIVES[2])),
             email_tar: usable_artifact(&dir.join(CATFISH_EMAIL_ARCHIVE)),
             wechat_reader_tar: usable_artifact(&dir.join(CATFISH_WECHAT_READER_ARCHIVE)),
             deps_tar: usable_artifact(&dir.join(HERMES_DEPS_ARCHIVE)),
@@ -122,7 +120,6 @@ impl RuntimeArtifacts {
         [
             &self.python_tar,
             &self.hermes_tar,
-            &self.node_tar,
             &self.chromium_tar,
         ]
         .into_iter()
@@ -160,8 +157,8 @@ fn usable_artifact(path: &Path) -> Option<PathBuf> {
 
 /// 选择运行时时按“归档完整度”排序，而不是无条件偏爱 App bundle。
 ///
-/// 旧逻辑看到 bundle 内 `install.sh + uv` 就立即返回，即使它是 0/4；结果会
-/// 永远忽略 `~/.catfish/runtime` 中用户已经准备好的 4/4 离线包。
+/// 旧逻辑看到 bundle 内 `install.sh + uv` 就立即返回，即使它是 0/N；结果会
+/// 永远忽略 `~/.catfish/runtime` 中用户已经准备好的完整离线包。
 #[cfg(any(not(target_os = "windows"), test))]
 pub(crate) fn resolve_runtime_dir_for_home(
     resource_dir: &Path,
@@ -182,10 +179,11 @@ pub(crate) fn resolve_runtime_dir_for_home(
         let valid = usable_artifact(&artifacts.install_sh).is_some()
             && usable_artifact(&artifacts.uv).is_some();
         tried.push(format!(
-            "{} (tools={}, archives={}/4)",
+            "{} (tools={}, archives={}/{})",
             candidate.display(),
             if valid { "ok" } else { "missing" },
-            artifacts.archive_count()
+            artifacts.archive_count(),
+            RUNTIME_ARCHIVES.len()
         ));
         if valid {
             candidates.push((artifacts.archive_count(), bundle_preference, candidate));
@@ -195,8 +193,9 @@ pub(crate) fn resolve_runtime_dir_for_home(
     candidates.sort_by(|a, b| (b.0, b.1).cmp(&(a.0, a.1)));
     if let Some((archive_count, _, selected)) = candidates.into_iter().next() {
         log::info!(
-            "[runtime] 选择 {} · 离线归档 {archive_count}/4",
-            selected.display()
+            "[runtime] 选择 {} · 离线归档 {archive_count}/{}",
+            selected.display(),
+            RUNTIME_ARCHIVES.len()
         );
         return Ok(selected);
     }

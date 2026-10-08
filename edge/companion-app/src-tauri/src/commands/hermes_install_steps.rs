@@ -93,9 +93,6 @@ fn add_common_installer_args(
     if let Some(path) = &artifacts.python_tar {
         command.arg("--offline-python-tar").arg(path);
     }
-    if let Some(path) = &artifacts.node_tar {
-        command.arg("--offline-node-tar").arg(path);
-    }
     if let Some(path) = &artifacts.chromium_tar {
         command.arg("--offline-chromium-tar").arg(path);
     }

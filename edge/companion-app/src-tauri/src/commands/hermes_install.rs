@@ -278,13 +278,14 @@ fn bootstrap_locked(
     let artifacts = RuntimeArtifacts::from_dir(runtime_dir);
     artifacts.validate_bootstrap_tools()?;
     log::info!(
-        "[runtime] 使用 {}，离线归档 {}/4",
+        "[runtime] 使用 {}，离线归档 {}/{}",
         artifacts.dir.display(),
-        artifacts.archive_count()
+        artifacts.archive_count(),
+        crate::commands::hermes_install_artifacts::RUNTIME_ARCHIVES.len()
     );
 
     // A source archive by itself is not a complete offline runtime.  Only a
-    // verified 4/4 set may skip prerequisite/network fallbacks or enable the
+    // verified complete set may skip prerequisite/network fallbacks or enable the
     // installer's strict bundled Node/Chromium fast path.
     let complete_bundle = artifacts.is_complete_bundle();
     let total_steps = if complete_bundle { 7 } else { 8 };
@@ -627,7 +628,7 @@ mod tests {
         let resources = temp.path().join("app-resources");
         let home = temp.path().join("home");
         make_runtime(&resources.join("resources/mac"), 0);
-        make_runtime(&home.join(".catfish/runtime"), 4);
+        make_runtime(&home.join(".catfish/runtime"), RUNTIME_ARCHIVES.len());
 
         let selected = resolve_runtime_dir_for_home(&resources, Some(&home)).unwrap();
         assert_eq!(selected, home.join(".catfish/runtime"));
@@ -646,12 +647,12 @@ mod tests {
     }
 
     #[test]
-    fn only_four_archives_enable_the_complete_bundle_fast_path() {
+    fn only_all_archives_enable_the_complete_bundle_fast_path() {
         let temp = tempfile::tempdir().unwrap();
         let partial_dir = temp.path().join("partial");
         let complete_dir = temp.path().join("complete");
-        make_runtime(&partial_dir, 3);
-        make_runtime(&complete_dir, 4);
+        make_runtime(&partial_dir, RUNTIME_ARCHIVES.len() - 1);
+        make_runtime(&complete_dir, RUNTIME_ARCHIVES.len());
 
         assert!(!RuntimeArtifacts::from_dir(partial_dir).is_complete_bundle());
         assert!(RuntimeArtifacts::from_dir(complete_dir).is_complete_bundle());

@@ -19,7 +19,7 @@
 
 param(
     [switch]$SkipHermesClone,     # 若 %TEMP%\hermes-agent-src 已在 · 跳过 clone (加速)
-    [switch]$SkipNpmInstall,      # 若 node_modules 已在 · 跳过 npm install
+    [switch]$SkipNpmInstall,      # 10/9 起无作用 (不再装 hermes 的 npm 依赖), 保留只为兼容
     [switch]$SkipChromium,        # 若 %LOCALAPPDATA%\ms-playwright\chromium* 已在 · 跳过重装
     [switch]$SkipFrontendInstall  # 若 companion-app/node_modules 已在 · 跳过前端 npm install
 )
@@ -111,49 +111,13 @@ foreach ($plugin in @('catfish-memory')) {
     }
 }
 
-# ─── Step 4 · Pre-install npm deps + npm pack ──────────────
+# ─── Step 4 · (10/9 起不再装 hermes 的 npm 依赖) ──────────────
 
-if ($SkipNpmInstall -and (Test-Path "$hermesDir\node_modules")) {
-    Write-Host "`n[Step 4/11] SKIP npm install (node_modules 已在)" -ForegroundColor DarkYellow
-} else {
-    Write-Host "`n[Step 4/11] Pre-install npm deps + npm pack global .tgz..." -ForegroundColor Yellow
-    $env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = '1'
-
-    # A. local npm install
-    $pkgFiles = @(Get-ChildItem -Path $hermesDir -Recurse -Filter "package.json" -Depth 4 -ErrorAction SilentlyContinue |
-                  Where-Object { $_.FullName -notmatch '\\node_modules\\' })
-    if ($pkgFiles.Count -eq 0) {
-        Write-Host "  WARN 无 package.json, skip local npm install" -ForegroundColor DarkYellow
-    } else {
-        foreach ($pkg in $pkgFiles) {
-            $pkgDir = $pkg.DirectoryName
-            Write-Host "  ===== npm install in $pkgDir =====" -ForegroundColor DarkGray
-            Push-Location $pkgDir
-            try {
-                if (Test-Path "$pkgDir\package-lock.json") {
-                    npm ci --no-audit --no-fund --loglevel=error
-                } else {
-                    npm install --no-audit --no-fund --loglevel=error
-                }
-                if ($LASTEXITCODE -ne 0) { throw "npm install failed in $pkgDir" }
-            } finally { Pop-Location }
-        }
-        Write-Host "  OK $($pkgFiles.Count) package.json 都 install 完" -ForegroundColor Green
-    }
-
-    # B. npm pack agent-browser + camofox-browser 到 node-globals/
-    $globalsDir = "$hermesDir\node-globals"
-    New-Item -ItemType Directory -Force -Path $globalsDir | Out-Null
-    Push-Location $globalsDir
-    try {
-        Write-Host "  ===== npm pack agent-browser + camofox-browser =====" -ForegroundColor DarkGray
-        npm pack "agent-browser@^0.26.0" "@askjo/camofox-browser@^1.5.2" --loglevel=error
-        if ($LASTEXITCODE -ne 0) { throw "npm pack failed" }
-        $tgzList = Get-ChildItem -Filter "*.tgz"
-        Write-Host "  OK $($tgzList.Count) global .tgz packed" -ForegroundColor Green
-        $tgzList | ForEach-Object { Write-Host "    - $($_.Name) ($([math]::Round($_.Length/1KB,1)) KB)" -ForegroundColor DarkGray }
-    } finally { Pop-Location }
-}
+# 10/9: node_modules / node-globals 都不再进包 —— 员工机运行时不需要 Node
+# (实测与原因见 edge/companion-app/scripts/build-mac-resources.sh 文件头)。
+# Step 7 下 Chromium 用 npx 临时拉 playwright, 不依赖 hermes 的 node_modules。
+Write-Host "`n[Step 4/11] SKIP hermes npm install (10/9 起不随包分发 Node 依赖)" -ForegroundColor DarkYellow
+if ($SkipNpmInstall) { Write-Host "  (-SkipNpmInstall 已无作用, 保留参数只为兼容旧调用)" -ForegroundColor DarkGray }
 
 # ─── Step 5 · Patch install.ps1 ─────────────────────────────
 
@@ -233,7 +197,12 @@ if ($SkipChromium -and (Test-Path $chromiumOut) -and (Get-Item $chromiumOut).Len
     Push-Location $hermesDir
     try {
         Write-Host "  ===== 1/3 playwright dry-run: 解析下载地址和安装位置 =====" -ForegroundColor DarkGray
-        $dry = @(npx --yes playwright install chromium --dry-run)
+        # 10/9: hermes 的 node_modules 不再安装, 固定拉 hermes lockfile 里那个版本 ——
+        # 跟 CI (build-windows-msi.yml) 一致, Chromium 版本不随 npm 的 latest 漂。
+        $pwVersion = (node -p "require('./package-lock.json').packages['node_modules/playwright'].version").Trim()
+        if (-not $pwVersion -or $pwVersion -eq 'undefined') { throw "读不到 hermes lockfile 里的 playwright 版本" }
+        Write-Host "  playwright@$pwVersion (取自 hermes package-lock.json)" -ForegroundColor DarkGray
+        $dry = @(npx --yes "playwright@$pwVersion" install chromium --dry-run)
         if ($LASTEXITCODE -ne 0) { throw "playwright dry-run failed (exit=$LASTEXITCODE)" }
         $dry | ForEach-Object { Write-Host "    $_" }
 
@@ -319,7 +288,7 @@ Push-Location $env:TEMP
 try {
     # Companion 只需要 Hermes 的 Python gateway/tool/plugin 运行链路。
     # 裁剪只作用于 tar 输入, 不修改 $hermesDir, 避免污染下次构建缓存。
-    # agent-browser 是运行时依赖, 只保留 Windows x64 原生二进制。
+    # 10/9: 任何层级的 node_modules / node-globals 都不进包。
     $bundleExcludes = @(
         'hermes-agent-src/.git',
         'hermes-agent-src/venv',
@@ -327,29 +296,8 @@ try {
         'hermes-agent-src/.venv',
         'hermes-agent-src/target',
         'hermes-agent-src/apps/desktop',
-        'hermes-agent-src/node_modules/electron',
-        'hermes-agent-src/node_modules/node-pty',
-        'hermes-agent-src/node_modules/emojibase-data',
-        'hermes-agent-src/node_modules/hermes',
-        'hermes-agent-src/node_modules/mermaid',
-        'hermes-agent-src/node_modules/@mermaid-js',
-        'hermes-agent-src/node_modules/@tabler',
-        'hermes-agent-src/node_modules/@icons-pack',
-        'hermes-agent-src/node_modules/lucide-react',
-        'hermes-agent-src/node_modules/three',
-        'hermes-agent-src/node_modules/three-stdlib',
-        'hermes-agent-src/node_modules/electron-winstaller',
-        'hermes-agent-src/node_modules/typescript',
-        'hermes-agent-src/node_modules/@rolldown',
-        'hermes-agent-src/node_modules/@tauri-apps',
-        'hermes-agent-src/node_modules/react-native-*',
-        'hermes-agent-src/node_modules/@types',
-        'hermes-agent-src/node_modules/agent-browser/bin/agent-browser-darwin-arm64',
-        'hermes-agent-src/node_modules/agent-browser/bin/agent-browser-darwin-x64',
-        'hermes-agent-src/node_modules/agent-browser/bin/agent-browser-linux-arm64',
-        'hermes-agent-src/node_modules/agent-browser/bin/agent-browser-linux-musl-arm64',
-        'hermes-agent-src/node_modules/agent-browser/bin/agent-browser-linux-musl-x64',
-        'hermes-agent-src/node_modules/agent-browser/bin/agent-browser-linux-x64',
+        'node_modules',
+        'hermes-agent-src/node-globals',
         'hermes-agent-src/website',
         'hermes-agent-src/tests',
         'hermes-agent-src/tests-js',
@@ -380,22 +328,7 @@ $forbiddenArchivePaths = @(
     'hermes-agent-src/venv/',
     'hermes-agent-src/target/',
     'hermes-agent-src/apps/desktop/',
-    'hermes-agent-src/node_modules/electron/',
-    'hermes-agent-src/node_modules/node-pty/',
-    'hermes-agent-src/node_modules/emojibase-data/',
-    'hermes-agent-src/node_modules/hermes/',
-    'hermes-agent-src/node_modules/mermaid/',
-    'hermes-agent-src/node_modules/@mermaid-js/',
-    'hermes-agent-src/node_modules/@tabler/',
-    'hermes-agent-src/node_modules/@icons-pack/',
-    'hermes-agent-src/node_modules/lucide-react/',
-    'hermes-agent-src/node_modules/three/',
-    'hermes-agent-src/node_modules/three-stdlib/',
-    'hermes-agent-src/node_modules/electron-winstaller/',
-    'hermes-agent-src/node_modules/typescript/',
-    'hermes-agent-src/node_modules/@rolldown/',
-    'hermes-agent-src/node_modules/@tauri-apps/',
-    'hermes-agent-src/node_modules/@types/',
+    'hermes-agent-src/node-globals/',
     'hermes-agent-src/website/',
     'hermes-agent-src/tests/',
     'hermes-agent-src/tests-js/',
@@ -406,28 +339,10 @@ foreach ($forbidden in $forbiddenArchivePaths) {
         throw "Hermes 归档包含被排除路径: $forbidden"
     }
 }
-$requiredArchivePaths = @(
-    'hermes-agent-src/node_modules/agent-browser/bin/agent-browser.js',
-    'hermes-agent-src/node_modules/agent-browser/bin/agent-browser-win32-x64.exe'
-)
-foreach ($required in $requiredArchivePaths) {
-    if (-not ($archiveList | Where-Object { $_ -eq $required })) {
-        throw "Hermes 归档缺少运行时文件: $required"
-    }
-}
-$foreignAgentBins = @(
-    'agent-browser-darwin-arm64',
-    'agent-browser-darwin-x64',
-    'agent-browser-linux-arm64',
-    'agent-browser-linux-musl-arm64',
-    'agent-browser-linux-musl-x64',
-    'agent-browser-linux-x64'
-)
-foreach ($foreign in $foreignAgentBins) {
-    $foreignPath = "hermes-agent-src/node_modules/agent-browser/bin/$foreign"
-    if ($archiveList | Where-Object { $_ -eq $foreignPath }) {
-        throw "Hermes 归档包含非 Windows agent-browser 二进制: $foreign"
-    }
+# 10/9: node_modules 一条都不许有 (员工机运行时不需要)
+$nmEntries = @($archiveList | Where-Object { $_ -like '*/node_modules/*' })
+if ($nmEntries.Count -gt 0) {
+    throw "Hermes 归档包含 node_modules ($($nmEntries.Count) 条, 应为 0), 例: $($nmEntries[0])"
 }
 Write-Host "  OK Hermes runtime 裁剪校验通过 · $($archiveList.Count) 个归档条目" -ForegroundColor Green
 

@@ -175,7 +175,7 @@ for p in sorted(list(APP.rglob("*.ps1")) + list((REPO / "delivery").rglob("*.ps1
 # 只在一个平台有的资源 (安装器本身 / 平台专属运行时), 其余必须两边都有
 ONLY_WINDOWS = {"install.ps1", "uv.exe", "cpython-3.11.15-embed.zip",
                 "install-catfish-email.ps1", "install-wechat-reader.ps1"}
-ONLY_MAC = {"install.sh", "uv", "cpython-3.11.15-embed.tar.gz", "node-embed.tar.gz",
+ONLY_MAC = {"install.sh", "uv", "cpython-3.11.15-embed.tar.gz",
             # EventKit 读日历的 Swift 小程序。Windows 那边日历 / 提醒走 Outlook COM
             # (commands/system_outlook.rs), 不需要对应的二进制。
             "catfish-calendar"}

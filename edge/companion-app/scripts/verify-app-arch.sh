@@ -49,8 +49,9 @@ FAIL=0
 # 7/30 加 catfish-email-dist.tar.gz —— 之前它压根没被打包, 员工装完
 # 邮件 tab 直接挂, 界面还提示去跑一个他机器上不存在的 install.sh。
 # 现在缺它就不让发包。
+# 10/9: node-embed.tar.gz 不再打包 (员工机运行时不需要 Node, 见 build-mac-resources.sh 文件头)。
 for f in install.sh uv cpython-3.11.15-embed.tar.gz \
-         hermes-agent-bundle.tar.gz node-embed.tar.gz chromium-embed.tar.gz \
+         hermes-agent-bundle.tar.gz chromium-embed.tar.gz \
          catfish-email-dist.tar.gz catfish-wechat-reader-dist.tar.gz; do
     if [ ! -f "$RES/$f" ]; then
         echo "  ❌ 缺 $f"
@@ -58,8 +59,13 @@ for f in install.sh uv cpython-3.11.15-embed.tar.gz \
     fi
 done
 
+if [ -f "$RES/node-embed.tar.gz" ]; then
+    echo "  ❌ 包里还有 node-embed.tar.gz —— 10/9 起不该再打 (多 58MB)"
+    FAIL=1
+fi
+
 for f in cpython-3.11.15-embed.tar.gz hermes-agent-bundle.tar.gz \
-         node-embed.tar.gz chromium-embed.tar.gz; do
+         chromium-embed.tar.gz; do
     if [ -f "$RES/$f" ] && ! gzip -t "$RES/$f" 2>/dev/null; then
         echo "  ❌ $f gzip 校验失败"
         FAIL=1
@@ -118,11 +124,9 @@ check_tar_binary() {
 }
 
 PY_ENTRY="python/bin/python3.11"
-NODE_ENTRY="$(tar -tzf "$RES/node-embed.tar.gz" 2>/dev/null | awk '/\/bin\/node$/ {print; exit}')"
 CHROME_ENTRY="$(tar -tzf "$RES/chromium-embed.tar.gz" 2>/dev/null | awk '/Google Chrome for Testing\.app\/Contents\/MacOS\/Google Chrome for Testing$/ {print; exit}')"
 
 check_tar_binary "$RES/cpython-3.11.15-embed.tar.gz" "$PY_ENTRY" "Python"
-check_tar_binary "$RES/node-embed.tar.gz" "$NODE_ENTRY" "Node.js"
 check_tar_binary "$RES/chromium-embed.tar.gz" "$CHROME_ENTRY" "Chromium"
 
 # Hermes 归档是源码主包；至少确认真正的源码入口存在。

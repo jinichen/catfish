@@ -135,15 +135,11 @@ fn check_playwright_installed() {
 /// agent-browser 能不能真跑起来 (hermes 的 browser_* 全靠它)。
 fn check_agent_browser_runnable() {
     let Some(bin) = find_agent_browser() else {
-        log::warn!(
-            concat!(
-                "deps: ⚠ 找不到 agent-browser\n",
-                "     后果: hermes 的 browser_navigate / browser_click 等全部不可用 ——\n",
-                "     它会 fallback 到 `npx agent-browser`,npx 再去 npm registry 下载,\n",
-                "     受限网络下就是干等到超时 (实测 26s),错误信息还只说 timed out。\n",
-                "     修: npm i -g agent-browser\n",
-                "     (catfish 自己的 catfish_browser_* 走 Playwright 直连 CDP,不依赖它)"
-            )
+        // 10/9: 安装包不再带 Node / agent-browser —— 鲶鱼的浏览器是 catfish_browser_*
+        // (Python Playwright 直连 CDP), hermes 自带的 browser_* 网关也会在它们在场时
+        // 丢掉 (BL-FIX4)。找不到是**设计如此**, 不再按故障告警, 免得现场误以为装坏了。
+        log::debug!(
+            "deps: agent-browser 未安装 (预期; 鲶鱼浏览器走 catfish_browser_*, 不依赖它)"
         );
         return;
     };
