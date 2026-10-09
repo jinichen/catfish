@@ -58,6 +58,7 @@ pub mod hermes_compression; // BL-HERMES-CTX-CAP (10/6): 压缩绝对 token 上�
 pub mod hermes_jwt_sync;   // BL-HERMES-JWT-SYNC (7/19 Task #15): JWT auto-sync hermes 3 处
 pub mod hermes_profile_sync; // 命名 Profile 同步 JWT/service token/gateway URL
 pub mod oauth_config; // OIDC 配置来源 (8/15 从 oauth 切出)
+pub mod oauth_issuer; // 中央地址变更检测 (10/9)
 pub mod oauth_store;  // ⚠ 凭证落盘 —— 改这里前先看文件头 (8/15 切出)
 pub mod oauth_token;  // 换 token + id_token 解码 (8/15 切出)
 pub mod oauth;

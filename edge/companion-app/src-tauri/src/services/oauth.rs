@@ -187,6 +187,12 @@ pub async fn run_login_flow(cfg: &OidcConfig) -> Result<AuthSession> {
         let _ = delete_from_keyring(KEYRING_USERNAME_REFRESH);
         log::info!("OAuth login OK: user={} dept={} (server 未发 refresh_token, 走老 1h 模式)", session.email, session.department);
     }
+    // 10/9: 登录成功立刻同步给 hermes —— 原来要等 25 分钟一次的定时同步, 中央地址
+    // 变更后重新登录的这段时间里 hermes 还拿着旧令牌, 聊天照样 401。跟 refresh 路径一致。
+    if let Err(e) = crate::services::hermes_jwt_sync::sync_all(&token_resp.access_token) {
+        log::warn!("[oauth-login] hermes_jwt_sync 挂 (不阻塞登录成功): {e:#}");
+    }
+    super::oauth_issuer::clear_notice();
     Ok(session)
 }
 
@@ -423,6 +429,18 @@ pub async fn ensure_fresh_access_token() -> Option<String> {
         }
     }
 
+    // 10/9: 令牌没过期, 但可能是**旧中央**签的 (中央地址改过) —— 网关会一律 401。
+    // 先按身份服务现在声明的签发者核一遍, 见 oauth_issuer.rs。
+    if session.is_some() {
+        if let (Some(tok), Ok(cfg)) = (current_access_token(), OidcConfig::load()) {
+            if let super::oauth_issuer::IssuerDrift::Changed { token_iss, current } =
+                super::oauth_issuer::check(&cfg, &tok).await
+            {
+                return handle_issuer_change(&cfg, &token_iss, &current).await;
+            }
+        }
+    }
+
     // 还很新 → 直接返
     let now = chrono::Utc::now().timestamp();
     if let Some(ref s) = session {
@@ -463,6 +481,35 @@ pub async fn ensure_fresh_access_token() -> Option<String> {
             current_access_token()
         }
     }
+}
+
+/// 10/9: 令牌是旧中央签的。先用 refresh_token 找**现在的**身份服务换一对 (同一套
+/// 身份库只是改了地址时能成, 员工无感); 换不到或换来的还是旧签发者 → 登出, 留下
+/// 「中央地址已变更」提示给登录页, 返 None 让前端弹登录, 而不是一直拿旧令牌撞 401。
+async fn handle_issuer_change(cfg: &OidcConfig, token_iss: &str, current: &str) -> Option<String> {
+    use super::oauth_issuer::{set_notice, token_issuer};
+    log::warn!("[issuer] 令牌签发者 {token_iss} ≠ 身份服务现在的 {current} (中央地址变更), 尝试换新令牌");
+    let _guard = REFRESH_MUTEX.lock().await;
+    // 等锁期间可能别人已经换好了
+    if let Some(tok) = current_access_token() {
+        if token_issuer(&tok).as_deref() == Some(current) {
+            return Some(tok);
+        }
+    }
+    if try_refresh_session(cfg).await.is_ok() {
+        if let Some(tok) = current_access_token() {
+            if token_issuer(&tok).as_deref() == Some(current) {
+                log::info!("[issuer] 已从新中央 {current} 换到令牌, 员工无感");
+                return Some(tok);
+            }
+        }
+    }
+    log::warn!("[issuer] 换不到新中央的令牌, 登出并提示重新登录");
+    let _ = logout();
+    set_notice(format!(
+        "中央服务地址已变更（{token_iss} → {current}），原登录已失效，请重新登录。"
+    ));
+    None
 }
 
 /// 登出: 清 token 文件 (~/.catfish/oauth/). dev_token 模式下不动 env (那是员工 explicit 设的).

@@ -115,6 +115,24 @@ export default function LoginGate({ children }: LoginGateProps) {
           员工 AI 副手 · 用公司账号登录开始使用
         </p>
 
+        {state.notice && (
+          <div
+            role="status"
+            style={{
+              color: "var(--catfish-text)",
+              fontSize: 12,
+              padding: "8px 12px",
+              background: "var(--catfish-bg)",
+              border: "1px solid var(--catfish-border)",
+              borderRadius: "var(--radius-sm)",
+              marginBottom: "var(--space-3)",
+              textAlign: "left",
+            }}
+          >
+            {state.notice}
+          </div>
+        )}
+
         {error && (
           <div
             style={{

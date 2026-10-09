@@ -18,6 +18,10 @@ pub struct AuthState {
     /// 'oidc' / 'dev_token' / ''. UI 用来决定要不要显 warning banner.
     pub auth_method: String,
     pub expires_at: i64,
+    /// 10/9: 未登录时给登录页的提示 (目前只有「中央服务地址已变更」, 见
+    /// services/oauth_issuer.rs)。已登录时恒为 None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
 }
 
 impl From<AuthSession> for AuthState {
@@ -30,6 +34,7 @@ impl From<AuthSession> for AuthState {
             tier: s.tier,
             auth_method: s.auth_method,
             expires_at: s.expires_at,
+            notice: None,
         }
     }
 }
@@ -44,6 +49,7 @@ impl AuthState {
             tier: String::new(),
             auth_method: String::new(),
             expires_at: 0,
+            notice: crate::services::oauth_issuer::notice(),
         }
     }
 }
