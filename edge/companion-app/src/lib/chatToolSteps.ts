@@ -6,11 +6,14 @@
  *
  * 做法: 一轮回答里的工具调用并到同一个气泡, 渲染成一行 "后台动作 · N 步",
  * 默认收起。需要人看或动手的步骤 (等批准、要密码、出错、正在跑) 收起时也
- * 整张卡片露出 —— P27.2 踩过折叠后按钮看不到卡死的坑; 产出的文件只露入口。
+ * 整张卡片露出 —— P27.2 踩过折叠后按钮看不到卡死的坑。
+ *
+ * 收起时不露文件入口: 工具结果里的路径分不清是产出还是只是读过/列过
+ * (execute_code 跑 ls 能冒十几个), 真交付的文件回答正文会写出来,
+ * AssistantBubble 已经从正文里提了入口。展开后每张卡片照常有。
  */
 
 import type { ChatMessage, ToolCall } from "../types/chat";
-import { extractFilePaths } from "./path_detect";
 import { parseNeedsCredential } from "./needsCredential";
 
 /** hermes approval pending 的几种返回形状 (含 LLM 翻成中文的), 见 ChatToolCall P27 注释 */
@@ -35,21 +38,6 @@ export function toolCallNeedsCard(call: ToolCall): boolean {
     isApprovalPending(resultStr) ||
     parseNeedsCredential(resultStr, call.name) !== null
   );
-}
-
-/** 小鲶自己的草稿脚本、中间文件 —— 员工用不上, 不冒文件入口 */
-const SCRATCH_PATH_RE = /^(\/private)?\/tmp\/|^\/var\/folders\/|[\\/]Temp[\\/]/;
-
-/** 收起时只露文件入口, 不露卡片 (10/10: write_file 写 /tmp 脚本整张卡片撑开过) */
-export function collectStepFiles(calls: ToolCall[]): string[] {
-  const seen = new Set<string>();
-  for (const c of calls) {
-    if (c.status !== "done" || toolCallNeedsCard(c)) continue;
-    for (const p of extractFilePaths(toolResultString(c))) {
-      if (!SCRATCH_PATH_RE.test(p)) seen.add(p);
-    }
-  }
-  return [...seen];
 }
 
 function isToolOnly(m: ChatMessage): boolean {

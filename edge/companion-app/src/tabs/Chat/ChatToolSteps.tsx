@@ -1,15 +1,10 @@
 /** 一组后台动作 —— 默认收起成一行 "后台动作 · N 步", 点开看每一步。
- *  收起时仍露出需要人看/动手的步骤, 产出的文件只露入口 (见 lib/chatToolSteps.ts)。 */
+ *  收起时只露出需要人看/动手的步骤 (见 lib/chatToolSteps.ts)。 */
 
 import { useState } from "react";
 import type { ToolCall } from "../../types/chat";
 import ChatToolCall from "./ChatToolCall";
-import { FilePillList } from "../../components/FilePill";
-import {
-  collectStepFiles,
-  summarizeToolNames,
-  toolCallNeedsCard,
-} from "../../lib/chatToolSteps";
+import { summarizeToolNames, toolCallNeedsCard } from "../../lib/chatToolSteps";
 
 interface Props {
   calls: ToolCall[];
@@ -22,7 +17,6 @@ export default function ChatToolSteps({ calls, active = false }: Props) {
   const running = active || calls.some((c) => c.status === "running" || c.status === "pending");
   const errors = calls.filter((c) => c.status === "error").length;
   const visible = open ? calls : calls.filter(toolCallNeedsCard);
-  const files = open ? [] : collectStepFiles(calls);
 
   return (
     <div className={`toolsteps${open ? " toolsteps--open" : ""}`}>
@@ -39,7 +33,6 @@ export default function ChatToolSteps({ calls, active = false }: Props) {
         <span className="toolsteps__names">{summarizeToolNames(calls)}</span>
         {errors > 0 && <span className="toolsteps__err">{errors} 步出错</span>}
       </button>
-      {files.length > 0 && <FilePillList paths={files} />}
       {visible.length > 0 && (
         <div className="toolsteps__list">
           {visible.map((tc) => (

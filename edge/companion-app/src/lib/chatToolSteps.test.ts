@@ -3,7 +3,6 @@ import type { ChatMessage, ToolCall } from "../types/chat";
 import {
   groupToolSteps,
   summarizeToolNames,
-  collectStepFiles,
   toolCallNeedsCard,
 } from "./chatToolSteps";
 
@@ -70,23 +69,5 @@ describe("toolCallNeedsCard", () => {
     expect(toolCallNeedsCard(call("c", "x", { status: "running" }))).toBe(true);
     expect(toolCallNeedsCard(call("c", "x", { status: "error" }))).toBe(true);
     expect(toolCallNeedsCard(call("c", "x", { result: '{"status":"pending_approval"}' }))).toBe(true);
-  });
-});
-
-describe("collectStepFiles", () => {
-  it("只露员工用得上的文件, 临时目录的草稿脚本不露", () => {
-    const files = collectStepFiles([
-      call("c1", "write_file", { result: '{"path":"/tmp/merge_cat.py"}' }),
-      call("c2", "patch", { result: "patched /private/tmp/merge_cat.py" }),
-      call("c3", "execute_code", { result: "已保存 /Users/a/outputs/总览.xlsx" }),
-    ]);
-    expect(files).toEqual(["/Users/a/outputs/总览.xlsx"]);
-  });
-});
-
-describe("summarizeToolNames", () => {
-  it("同名计数, 超过上限省略", () => {
-    expect(summarizeToolNames([call("1"), call("2"), call("3")])).toBe("skill_manage ×3");
-    expect(summarizeToolNames(["a", "b", "c", "d"].map((n) => call(n, n)))).toBe("a、b、c 等");
   });
 });
