@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import ChatMessage from "./ChatMessage";
+import { groupToolSteps } from "../../lib/chatToolSteps";
 import ChatInput from "./ChatInput";
 import type { Attachment, ChatMessage as Msg } from "../../types/chat";
 import { useAgentStore } from "../../store/agent";
@@ -175,11 +176,12 @@ export default function ChatPanel({
       >
         <div className="chat-panel__content">
           {isEmpty && <EmptyState />}
-          {messages.map((m) => (
+          {/* 连续的纯工具调用消息合并成一组 "后台动作" (lib/chatToolSteps.ts) */}
+          {groupToolSteps(messages).map(({ msg: m, memberIds }) => (
             <ChatMessage
               key={m.id}
               msg={m}
-              showCaret={isStreaming && m.id === streamingId}
+              showCaret={isStreaming && !!streamingId && memberIds.includes(streamingId)}
               onResend={onResendFromUserMsg}
               onEditAndResend={onEditAndResendUserMsg}
               isStreaming={isStreaming}

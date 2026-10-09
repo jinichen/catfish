@@ -4,7 +4,7 @@ import { useState } from "react";
 import { ArrowClockwise, FastForward, PencilSimple } from "@phosphor-icons/react";
 import { Markdown } from "../../lib/markdown";
 import type { ChatMessage as Msg } from "../../types/chat";
-import ChatToolCall from "./ChatToolCall";
+import ChatToolSteps from "./ChatToolSteps";
 import { extractFilePaths } from "../../lib/path_detect";
 import { FilePillList } from "../../components/FilePill";
 import { useAgentStore } from "../../store/agent";
@@ -363,12 +363,10 @@ function AssistantBubble({
         {assistantFilePaths.length > 0 && (
           <FilePillList paths={assistantFilePaths} />
         )}
-        {/* tool calls 列表 —— 每个一行,折叠式 */}
+        {/* tool calls —— 收成一行 "后台动作 · N 步", 不跟回答抢视线 (10/10) */}
         {msg.tool_calls && msg.tool_calls.length > 0 && (
           <div style={{ marginTop: msg.content ? "var(--space-2)" : 0 }}>
-            {msg.tool_calls.map((tc) => (
-              <ChatToolCall key={tc.id} call={tc} />
-            ))}
+            <ChatToolSteps calls={msg.tool_calls} active={showCaret} />
           </div>
         )}
         {showCaret && (

@@ -1,0 +1,44 @@
+/* 后台动作折叠行 (ChatToolSteps) —— 比正文弱一档, 不抢回答的视线 */
+.toolsteps {
+  margin: var(--space-1) 0;
+}
+.toolsteps__summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  padding: 2px var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--catfish-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+  cursor: pointer;
+  text-align: left;
+}
+.toolsteps__summary:hover,
+.toolsteps__summary:focus-visible {
+  background: var(--catfish-bg);
+  color: var(--catfish-text);
+}
+.toolsteps__caret {
+  font-size: 9px;
+  transition: transform var(--transition-fast, 0.15s);
+}
+.toolsteps--open .toolsteps__caret {
+  transform: rotate(90deg);
+}
+.toolsteps__names {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  opacity: 0.8;
+}
+.toolsteps__err {
+  color: var(--status-err);
+}
+.toolsteps__list {
+  margin-top: var(--space-1);
+}

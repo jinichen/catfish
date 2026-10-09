@@ -6,6 +6,7 @@ import { extractFilePaths } from "../../lib/path_detect";
 import { FilePillList } from "../../components/FilePill";
 import { toolBridgeChatApproval } from "../../lib/tauri";
 import { parseNeedsCredential } from "../../lib/needsCredential";
+import { isApprovalPending as matchApprovalPending, toolResultString } from "../../lib/chatToolSteps";
 import InlineCredentialPrompt from "./components/InlineCredentialPrompt";
 
 // P44 (6/5 鸿波 marathon): chat completions approval — session_key 从 SSE event
@@ -38,12 +39,7 @@ export default function ChatToolCall({ call }: Props) {
   const [open, setOpen] = useState(false);
 
   const argsStr = JSON.stringify(call.args, null, 2);
-  const resultStr =
-    typeof call.result === "string"
-      ? call.result
-      : call.result !== undefined
-        ? JSON.stringify(call.result, null, 2)
-        : "";
+  const resultStr = toolResultString(call);
 
   // result 第一层尝试 parse 一下美化(hermes 返回是 JSON 字符串)
   let resultDisplay = resultStr;
@@ -81,11 +77,8 @@ export default function ChatToolCall({ call }: Props) {
   //   done/error 时 result 是执行结果不含此 pattern.
   // BL-P27-CN-PATTERN (7/19 鸿波 catch WeChat 微信 outbound 中文): 加中文 pattern
   //   `等审批` / `等待.*批准` / `等待你批准` · P28 中文化后 Bot 用这些词.
-  const isApprovalPending =
-    typeof resultStr === "string" &&
-    /pending_approval|approval_pending|Asking the user for approval|授权批准|请.{0,4}批准|等审批|等待.{0,4}批准|正在等待.{0,4}批准/i.test(
-      resultStr,
-    );
+  // 正则挪到 lib/chatToolSteps.ts, 折叠组判断"收起也要露出"共用同一份
+  const isApprovalPending = matchApprovalPending(resultStr);
 
   // 8/18: 「这个站点还没存过登录密码」→ 就地嵌一个密码框。
   //
