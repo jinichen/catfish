@@ -9,8 +9,16 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
-import type { ChatMessage } from "../types/chat";
+import type { Attachment, ChatMessage } from "../types/chat";
 import type { SessionDetail } from "../types/session";
+
+export interface QueuedMessage {
+  id: string;
+  text: string;
+  attachments: Attachment[];
+  ts: string;
+}
+
 // P3.3.19 C Phase 2b (6/11): db→chat 转换 + tool result join 抽到 lib/sessionMessages
 import {
   loadSessionMessagesAsChat,
@@ -115,9 +123,9 @@ interface ChatState {
   prevSentModel: string | null;
   /** BL-HERMES013-RED-1A (5/13 借鉴 Hermes 0.13 ACP /queue): streaming 中
    *  用户排队的下一条消息. 当前 stream [DONE] → useChat 自动从 queue 取第一条
-   *  send. 跟 BL-COMPANION-UX1 ⏹ 停下接着发 互补 (一个停一个排队).
-   *  attachments 暂不支持 (内存) — 排队消息只能纯文字. */
-  queue: Array<{ id: string; text: string; ts: string }>;
+   *  send. 10/10 鸿波: 运行中再发就是排队, 只有点停止才中断; 排队消息带附件
+   *  (附件本来就在输入框内存里, 挪进队列不多占)。 */
+  queue: QueuedMessage[];
   /** BL-FILE-SESSION-INDEX-V1 Phase 1 (5/30): 当前 session 的所有历史附件 list.
    *  loadSession 后由 loadSessionAttachments 异步拉. ChatTab UI 顶部显示
    *  ("📎 本会话历史附件: a.pdf, b.xlsx"). LLM 也能通过 catfish_search_attachments
@@ -152,8 +160,8 @@ interface ChatState {
    *  时如果 model 变了, X-Catfish-Prev-Model header 就带上这个旧值. */
   markModelSent: () => void;
   /** BL-HERMES013-RED-1A: queue 操作 */
-  enqueueMessage: (text: string) => void;
-  dequeueMessage: () => { id: string; text: string; ts: string } | undefined;
+  enqueueMessage: (text: string, attachments?: Attachment[]) => void;
+  dequeueMessage: () => QueuedMessage | undefined;
   removeQueuedMessage: (id: string) => void;
   clearQueue: () => void;
   /**
@@ -300,7 +308,7 @@ export const useChatStore = create<ChatState>((set) => ({
   setPersistedSessionId: (persistedSessionId) =>
     set({ persistedSessionId }),
   markModelSent: () => set((s) => ({ prevSentModel: s.model })),
-  enqueueMessage: (text) =>
+  enqueueMessage: (text, attachments = []) =>
     set((s) => ({
       queue: [
         ...s.queue,
@@ -309,12 +317,13 @@ export const useChatStore = create<ChatState>((set) => ({
             ? crypto.randomUUID()
             : `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           text,
+          attachments,
           ts: new Date().toISOString(),
         },
       ],
     })),
   dequeueMessage: () => {
-    let head: { id: string; text: string; ts: string } | undefined;
+    let head: QueuedMessage | undefined;
     set((s) => {
       if (s.queue.length === 0) return s;
       head = s.queue[0];

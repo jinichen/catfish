@@ -31,11 +31,10 @@ interface Props {
   isCancelling?: boolean;
   onSend: (text: string, attachments: Attachment[]) => void;
   onCancel: () => void;
-  /** BL-COMPANION-UX1 (5/12 鸿波"锁死"修): streaming 中一键 abort + 发新消息 */
-  onCancelAndSend: (text: string, attachments: Attachment[]) => void;
   /** BL-HERMES013-RED-1A (5/13 借鉴 Hermes 0.13 ACP /queue): streaming 中
-   *  排队下一条, 等当前 [DONE] 自动 send. 跟 onCancelAndSend 互补 (一个停一个排队). */
-  onEnqueue: (text: string) => void;
+   *  排队下一条, 等当前 [DONE] 自动 send. 10/10 起运行中发消息一律排队,
+   *  只有点停止才中断 (老 onCancelAndSend "停下并发送" 砍了)。 */
+  onEnqueue: (text: string, attachments: Attachment[]) => void;
   // P3.5.20.1 (6/17): onSteer prop 砍 — steer 整链退役.
   onReset: () => void;
 }
@@ -77,7 +76,6 @@ export default function ChatInput({
   isCancelling,
   onSend,
   onCancel,
-  onCancelAndSend,
   onEnqueue,
   onReset,
 }: Props) {
@@ -264,9 +262,9 @@ export default function ChatInput({
   function submit() {
     const t = text.trim();
     if (!t && attachments.length === 0) return;
-    // BL-COMPANION-UX1 (5/12): streaming 中也允许发 — 一键 abort 当前 + 发新.
+    // 10/10 鸿波: 运行中再发 = 排队, 不打断; 只有点停止才中断。
     if (isStreaming) {
-      onCancelAndSend(t, attachments);
+      onEnqueue(t, attachments);
     } else {
       onSend(t, attachments);
     }
@@ -303,28 +301,13 @@ export default function ChatInput({
    *  只负责透传给 onSend, 不改.
    */
   function handleStartLearn(fullText: string) {
-    // 类 submit() 逻辑 (line 191-206) 但简化: learn 场景无 attachments,
-    // 无排队 (isStreaming 时也直接 abort 当前 send)
+    // 类 submit() 逻辑但简化: learn 场景无 attachments; 运行中同样排队
     if (isStreaming) {
-      onCancelAndSend(fullText, []);
+      onEnqueue(fullText, []);
     } else {
       onSend(fullText, []);
     }
     // 学 skill 场景员工不希望 textarea 被污染 — 保空, 员工继续用 chat.
-  }
-
-  /** BL-HERMES013-RED-1A (5/13): streaming 中"排队下一条". 不打断当前 stream,
-   *  排队消息暂不支持 attachments (in-memory 太大), 只能纯文字. */
-  function enqueueSubmit() {
-    const t = text.trim();
-    if (!t) return;
-    if (attachments.length > 0) {
-      setAttachError("排队消息暂不支持附件 (内存限制). 等当前任务跑完再发带附件的消息.");
-      return;
-    }
-    onEnqueue(t);
-    setText("");
-    setAttachError(null);
   }
 
   // P3.5.20 / P3.5.20.1 (6/17 鸿波): steerSubmit + [🎯 改主意] button + onSteer
@@ -396,8 +379,7 @@ export default function ChatInput({
     if (e.target) e.target.value = "";
   }
 
-  // BL-COMPANION-UX1 (5/12): streaming 中也允许"发送" (实际走 cancelAndSend).
-  // canSend = 有内容. 是否 streaming 由按钮文案/颜色区分.
+  // streaming 中也允许"发送" (实际是排队). canSend = 有内容.
   const hasContent = text.trim().length > 0 || attachments.length > 0;
   const canSend = hasContent;
 
@@ -478,7 +460,7 @@ export default function ChatInput({
 
       {/* BL-HERMES013-RED-1A (5/13): queue 状态显示 — 排队中的消息列出 +
           支持点 X 撤回. 当前 stream [DONE] 时 useChat 自动 dequeue + send */}
-      <QueuedMessagesStrip />
+      <QueuedMessagesStrip isStreaming={isStreaming} onSend={onSend} />
 
       {/* 5/5 文件解析进行中 (Excel / 大 PDF 几秒级, 之前 0 反馈员工以为坏了)
           BL-VOICE3 (5/10): 音频本机转写, 几十秒级别, label 区分提示 */}
@@ -579,36 +561,31 @@ export default function ChatInput({
           className="chat-composer__textarea"
           disabled={false /* 仍允许写下一个，发送按钮在 streaming 时变停止 */}
         />
-        {/* BL-COMPANION-UX1 (5/12) + BL-HERMES013-RED-1A (5/13 ACP /queue) +
-            BL-HERMES013-RED-1B (5/13 ACP /steer):
-            按钮组 4 态:
-            - 非 streaming + 有内容       → "发送" (青)
-            - streaming + 有内容          → [⏳ 排队] [🎯 改主意] [⏹ 停下接着发] 三排
-              用户选:
-                ⏳ 排队     = 不打断当前等完再发 (next turn)
-                🎯 改主意   = 中途插话改方向, LLM 看到自己 partial 输出 + 新指令综合 (steer)
-                ⏹ 停下接着发 = 直接 abort 当前重新问, LLM 看不到自己刚说的部分 (cancelAndSend)
-            - streaming + 没内容          → "停止" (橙色, 单纯 abort)
-            Enter 默认 ⏹ 停下接着发 (跟 BL-COMPANION-UX1 一致), 排队 / 改主意要点专门按钮 */}
+        {/* 10/10 鸿波: 运行中有内容 → [停止] [排队发送], Enter = 排队发送。
+            只有点停止才中断当前任务; 老"停下并发送"(Enter 默认 abort) 砍了 ——
+            员工补一句话不该把正在跑的活掐掉。 */}
         {isStreaming && hasContent ? (
           <div className="chat-composer__send-group">
             <button
               type="button"
-              onClick={enqueueSubmit}
-              title="排队等当前任务跑完, 自动发 (借鉴 Hermes 0.13 ACP /queue). 排队消息暂不支持附件."
+              onClick={onCancel}
+              disabled={isCancelling}
+              title={
+                isCancelling
+                  ? "已经在停了 — 正在等当前这步工具返回, 它没法中途掐断"
+                  : "停止当前任务 (排队的消息不会自动发)"
+              }
               className="chat-composer__secondary-button"
             >
-              排队
+              {isCancelling ? "停止中…" : "停止"}
             </button>
-            {/* P3.5.20 (6/17 鸿波): [🎯 改主意] 按钮砍 — 设计意图 (LLM 看 partial
-                接力) 未实现, 跟 [⏹ 停下接着发] 实测行为一样, 砍掉减歧义. */}
             <button
               type="button"
               onClick={submit}
-              title="停止当前流, 立刻发送新消息 (Enter 同效, LLM 看不到自己刚说的, 完全重新回答)"
+              title="等当前任务跑完自动发 (Enter 同效)"
               className="chat-composer__primary-button"
             >
-              停下并发送
+              排队发送
             </button>
           </div>
         ) : isStreaming ? (

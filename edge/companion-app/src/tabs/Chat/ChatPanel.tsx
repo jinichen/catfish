@@ -25,10 +25,8 @@ interface Props {
   /** 8/3: 按了停止但流还没停 (等 tool 返回) — 让按钮如实说话 */
   isCancelling?: boolean;
   onCancel: () => void;
-  /** BL-COMPANION-UX1 (5/12): streaming 中一键 abort + 发新消息 */
-  onCancelAndSend: (text: string, attachments: Attachment[]) => void;
   /** BL-HERMES013-RED-1A (5/13 ACP /queue): streaming 中排队下一条 */
-  onEnqueue: (text: string) => void;
+  onEnqueue: (text: string, attachments: Attachment[]) => void;
   /** BL-COMPANION-RESEND (7/23 达华 POC 催): user msg hover → 🔄 重发 · 触发这个 */
   onResendFromUserMsg: (id: string) => void;
   /** BL-COMPANION-EDIT (7/23 P1): user msg hover → ✏️ 编辑 · confirm 后带 newContent 触发 */
@@ -44,7 +42,6 @@ export default function ChatPanel({
   onSend,
   isCancelling,
   onCancel,
-  onCancelAndSend,
   onEnqueue,
   onResendFromUserMsg,
   onEditAndResendUserMsg,
@@ -265,7 +262,6 @@ export default function ChatPanel({
         onSend={onSend}
         isCancelling={isCancelling}
         onCancel={onCancel}
-        onCancelAndSend={onCancelAndSend}
         onEnqueue={onEnqueue}
         onReset={onReset}
       />

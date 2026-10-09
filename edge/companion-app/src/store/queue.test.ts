@@ -168,6 +168,19 @@ check(
   useChatStore.getState().queue.length === 0,
 );
 
+// ─── 10/10: 排队消息带附件 ─────────────────────────────
+
+console.log("[attachments]");
+
+useChatStore.getState().clearQueue();
+const att = { id: "a1", kind: "file", name: "报价.xlsx", text: "..." } as unknown as import("../types/chat").Attachment;
+useChatStore.getState().enqueueMessage("", [att]);
+useChatStore.getState().enqueueMessage("只有文字");
+const headAtt = useChatStore.getState().dequeueMessage();
+check("只带附件的排队消息保留附件", headAtt?.attachments.length === 1 && headAtt?.attachments[0] === att);
+const headTxt = useChatStore.getState().dequeueMessage();
+check("不传附件默认空数组", Array.isArray(headTxt?.attachments) && headTxt?.attachments.length === 0);
+
 // ─── 收尾 ────────────────────────────────────────────
 
 console.log(`\n[result] ${pass} passed, ${fail} failed`);

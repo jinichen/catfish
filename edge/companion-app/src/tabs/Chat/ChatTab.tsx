@@ -45,7 +45,6 @@ export default function ChatTab() {
     setModel,
     send,
     cancel,
-    cancelAndSend,          // BL-COMPANION-UX1 (5/12): 一键停止+发新消息
     enqueue,                // BL-HERMES013-RED-1A (5/13 ACP /queue): 排队下一条
     resendFromUserMsg,      // BL-COMPANION-RESEND (7/23 达华 POC 催): user msg 🔄 重发
     editAndResendUserMsg,   // BL-COMPANION-EDIT (7/23 P1): user msg ✏️ 编辑后重发
@@ -193,16 +192,6 @@ export default function ChatTab() {
       setRefreshKey((k) => k + 1);
     },
     [send],
-  );
-
-  // BL-COMPANION-UX1 (5/12): streaming 中员工想发新消息, 一键 abort+发.
-  // 跟 handleSend 同款包装 (setRefreshKey 给 session 列表刷新).
-  const handleCancelAndSend = useCallback(
-    async (text: string, attachments: import("../../types/chat").Attachment[] = []) => {
-      await cancelAndSend(text, attachments);
-      setRefreshKey((k) => k + 1);
-    },
-    [cancelAndSend],
   );
 
   /** P3.5.29 Phase 6.3 (6/17 鸿波) — catalog.default → picker 联动.
@@ -413,7 +402,6 @@ export default function ChatTab() {
             onSend={handleSend}
             isCancelling={isCancelling}
             onCancel={cancel}
-            onCancelAndSend={handleCancelAndSend}
             onEnqueue={enqueue}
             onResendFromUserMsg={resendFromUserMsg}
             onEditAndResendUserMsg={editAndResendUserMsg}

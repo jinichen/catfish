@@ -220,34 +220,15 @@ export function useChat(_initialModel: string) {
     if (abortRef.current) abortRef.current.abort();
   }, []);
 
-  /** BL-COMPANION-UX1 (5/12 鸿波 "锁死" 抱怨): streaming 中员工想发新消息.
-   *
-   * 老行为: streaming 时按钮变"停止", 点了 abort 当前 stream 但 textarea 内容
-   * 没发送, 员工还得重打一次. UX 差.
-   *
-   * 新行为: 一键 abort + 发新消息. 内部:
-   *   1. abort 当前 stream (abortRef.current.abort())
-   *   2. 等 200ms 让 send() 的 finally cleanup 跑完 (isStreaming → false)
-   *   3. 调 send() 发新消息
-   */
-  const cancelAndSend = useCallback(
-    async (text: string, attachments: Attachment[]) => {
-      if (abortRef.current) abortRef.current.abort();
-      // 等 abort 把 state 清干净 (send 的 finally block, 设 isStreaming=false)
-      await new Promise((r) => setTimeout(r, 200));
-      await send(text, attachments);
-    },
-    [send],
-  );
-
   /** BL-HERMES013-RED-1A (5/13 借鉴 Hermes 0.13 ACP /queue): streaming 中
    *  排队下一条. 不打断当前 stream, 等 [DONE] 后 useChat send finally 自动
-   *  dequeue + send. attachments 暂不支持 (in-memory 太大), 排队只能纯文字. */
+   *  dequeue + send. 10/10 鸿波: 运行中发消息一律走这里 (老 cancelAndSend
+   *  "停下并发送" 砍了), 只有点停止才中断; 带附件。 */
   const enqueue = useCallback(
-    (text: string) => {
+    (text: string, attachments: Attachment[] = []) => {
       const t = text.trim();
-      if (!t) return;
-      useChatStore.getState().enqueueMessage(t);
+      if (!t && attachments.length === 0) return;
+      useChatStore.getState().enqueueMessage(t, attachments);
     },
     [],
   );
@@ -368,7 +349,6 @@ export function useChat(_initialModel: string) {
     setModel: setModelInStore,
     send,
     cancel,
-    cancelAndSend,          // BL-COMPANION-UX1 (5/12): 一键停止+发新消息, 解锁死感
     enqueue,                // BL-HERMES013-RED-1A (5/13): ACP /queue 等价, 排队下一条
     resendFromUserMsg,      // BL-COMPANION-RESEND (7/23): 从错的 user msg 起重发
     editAndResendUserMsg,   // BL-COMPANION-EDIT (7/23 P1): 编辑 user msg 后重发

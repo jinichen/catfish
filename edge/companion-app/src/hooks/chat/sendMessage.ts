@@ -513,7 +513,7 @@ export async function sendMessage(
           setTimeout(() => {
             const head = useChatStore.getState().dequeueMessage();
             if (head) {
-              void send(head.text);
+              void send(head.text, head.attachments);
             }
           }, 200);
         }
