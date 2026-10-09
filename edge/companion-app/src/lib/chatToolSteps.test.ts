@@ -3,7 +3,8 @@ import type { ChatMessage, ToolCall } from "../types/chat";
 import {
   groupToolSteps,
   summarizeToolNames,
-  toolCallNeedsAttention,
+  collectStepFiles,
+  toolCallNeedsCard,
 } from "./chatToolSteps";
 
 const call = (id: string, name = "skill_manage", extra: Partial<ToolCall> = {}): ToolCall => ({
@@ -29,14 +30,28 @@ describe("groupToolSteps", () => {
     expect(groups[1].msg.tool_calls?.map((c) => c.id)).toEqual(["c1", "c2", "c3"]);
   });
 
-  it("有正文或出错的 assistant 消息不并入", () => {
+  it("工具步骤并进紧挨着的上一条有正文的回答, 用户说话才断开", () => {
+    const groups = groupToolSteps([
+      msg("u1", "user", "分类栏应该同类合并?"),
+      msg("a1", "assistant", "", [call("c1", "write_file")]),
+      msg("a2", "assistant", "等一下, 改成只动数据区", [call("c2", "patch")]),
+      msg("a3", "assistant", "", [call("c3", "execute_code")]),
+      msg("u2", "user", "好"),
+      msg("a4", "assistant", "", [call("c4")]),
+    ]);
+    expect(groups.map((g) => g.memberIds)).toEqual([["u1"], ["a1"], ["a2", "a3"], ["u2"], ["a4"]]);
+    expect(groups[2].msg.content).toBe("等一下, 改成只动数据区");
+    expect(groups[2].msg.tool_calls?.map((c) => c.id)).toEqual(["c2", "c3"]);
+  });
+
+  it("出错的 assistant 消息不并入, 后面的也不并给它", () => {
     const err = { ...msg("a2", "assistant", "", [call("c2")]), status: "error" as const };
     const groups = groupToolSteps([
-      msg("a1", "assistant", "先查一下", [call("c1")]),
+      msg("u1", "user", "x"),
       err,
       msg("a3", "assistant", "", [call("c3")]),
     ]);
-    expect(groups.map((g) => g.memberIds)).toEqual([["a1"], ["a2"], ["a3"]]);
+    expect(groups.map((g) => g.memberIds)).toEqual([["u1"], ["a2"], ["a3"]]);
   });
 
   it("不修改传入的消息", () => {
@@ -46,15 +61,26 @@ describe("groupToolSteps", () => {
   });
 });
 
-describe("toolCallNeedsAttention", () => {
-  it("普通完成的步骤可以收起", () => {
-    expect(toolCallNeedsAttention(call("c1"))).toBe(false);
+describe("toolCallNeedsCard", () => {
+  it("普通完成、产出文件的步骤都收起", () => {
+    expect(toolCallNeedsCard(call("c1"))).toBe(false);
+    expect(toolCallNeedsCard(call("c", "x", { result: "已保存 /Users/a/outputs/汇总.xlsx" }))).toBe(false);
   });
-  it("运行中、出错、等批准、产出文件都要露出", () => {
-    expect(toolCallNeedsAttention(call("c", "x", { status: "running" }))).toBe(true);
-    expect(toolCallNeedsAttention(call("c", "x", { status: "error" }))).toBe(true);
-    expect(toolCallNeedsAttention(call("c", "x", { result: '{"status":"pending_approval"}' }))).toBe(true);
-    expect(toolCallNeedsAttention(call("c", "x", { result: "已保存 /Users/a/outputs/汇总.xlsx" }))).toBe(true);
+  it("运行中、出错、等批准要整张卡片露出", () => {
+    expect(toolCallNeedsCard(call("c", "x", { status: "running" }))).toBe(true);
+    expect(toolCallNeedsCard(call("c", "x", { status: "error" }))).toBe(true);
+    expect(toolCallNeedsCard(call("c", "x", { result: '{"status":"pending_approval"}' }))).toBe(true);
+  });
+});
+
+describe("collectStepFiles", () => {
+  it("只露员工用得上的文件, 临时目录的草稿脚本不露", () => {
+    const files = collectStepFiles([
+      call("c1", "write_file", { result: '{"path":"/tmp/merge_cat.py"}' }),
+      call("c2", "patch", { result: "patched /private/tmp/merge_cat.py" }),
+      call("c3", "execute_code", { result: "已保存 /Users/a/outputs/总览.xlsx" }),
+    ]);
+    expect(files).toEqual(["/Users/a/outputs/总览.xlsx"]);
   });
 });
 

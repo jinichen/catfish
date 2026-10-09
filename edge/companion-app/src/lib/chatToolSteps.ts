@@ -4,10 +4,9 @@
  * 没有正文的 assistant 消息, 每条都带头像独占一行, 三五个 skill_manage
  * 卡片把真正的回答挤到下面, 内容和背景动作混在一起。
  *
- * 做法: 连续的"只有工具调用"的 assistant 消息合并成一组, 渲染成一行
- * "后台动作 · N 步", 默认收起。需要人看或动手的步骤 (等批准、要密码、
- * 产出文件、出错、正在跑) 收起时也照常露出 —— P27.2 踩过折叠后按钮看不到
- * 卡死的坑。
+ * 做法: 一轮回答里的工具调用并到同一个气泡, 渲染成一行 "后台动作 · N 步",
+ * 默认收起。需要人看或动手的步骤 (等批准、要密码、出错、正在跑) 收起时也
+ * 整张卡片露出 —— P27.2 踩过折叠后按钮看不到卡死的坑; 产出的文件只露入口。
  */
 
 import type { ChatMessage, ToolCall } from "../types/chat";
@@ -28,15 +27,29 @@ export function isApprovalPending(resultStr: string): boolean {
   return APPROVAL_PENDING_RE.test(resultStr);
 }
 
-/** 收起状态下也必须露出的步骤: 员工得看见或得动手 */
-export function toolCallNeedsAttention(call: ToolCall): boolean {
+/** 收起状态下也要整张卡片露出的步骤: 员工得看见进度/错误, 或得动手 (批准、填密码) */
+export function toolCallNeedsCard(call: ToolCall): boolean {
   if (call.status !== "done") return true; // pending / running / error
   const resultStr = toolResultString(call);
   return (
     isApprovalPending(resultStr) ||
-    parseNeedsCredential(resultStr, call.name) !== null ||
-    extractFilePaths(resultStr).length > 0
+    parseNeedsCredential(resultStr, call.name) !== null
   );
+}
+
+/** 小鲶自己的草稿脚本、中间文件 —— 员工用不上, 不冒文件入口 */
+const SCRATCH_PATH_RE = /^(\/private)?\/tmp\/|^\/var\/folders\/|[\\/]Temp[\\/]/;
+
+/** 收起时只露文件入口, 不露卡片 (10/10: write_file 写 /tmp 脚本整张卡片撑开过) */
+export function collectStepFiles(calls: ToolCall[]): string[] {
+  const seen = new Set<string>();
+  for (const c of calls) {
+    if (c.status !== "done" || toolCallNeedsCard(c)) continue;
+    for (const p of extractFilePaths(toolResultString(c))) {
+      if (!SCRATCH_PATH_RE.test(p)) seen.add(p);
+    }
+  }
+  return [...seen];
 }
 
 function isToolOnly(m: ChatMessage): boolean {
@@ -55,34 +68,30 @@ export interface ToolStepGroup {
   memberIds: string[];
 }
 
-/** 把连续的纯工具调用 assistant 消息合并。tool / system 消息本来就不渲染,
- *  夹在中间不打断合并, 也不输出。 */
+/** 纯工具调用的 assistant 消息并进紧挨着的上一条 assistant 消息 (有没有正文都并),
+ *  一轮回答只占一个头像; 用户说话才断开。tool / system 消息本来就不渲染,
+ *  夹在中间不打断, 也不输出。 */
 export function groupToolSteps(messages: ChatMessage[]): ToolStepGroup[] {
   const out: ToolStepGroup[] = [];
   let open: ToolStepGroup | null = null;
   for (const m of messages) {
     if (m.role === "tool" || m.role === "system") continue;
-    if (isToolOnly(m)) {
-      if (open) {
-        open.msg = {
-          ...open.msg,
-          tool_calls: [...(open.msg.tool_calls ?? []), ...(m.tool_calls ?? [])],
-          status: m.status,
-        };
-        open.memberIds.push(m.id);
-      } else {
-        open = { msg: m, memberIds: [m.id] };
-        out.push(open);
-      }
+    if (isToolOnly(m) && open) {
+      open.msg = {
+        ...open.msg,
+        tool_calls: [...(open.msg.tool_calls ?? []), ...(m.tool_calls ?? [])],
+        status: m.status,
+      };
+      open.memberIds.push(m.id);
       continue;
     }
-    open = null;
-    out.push({ msg: m, memberIds: [m.id] });
+    const g: ToolStepGroup = { msg: m, memberIds: [m.id] };
+    out.push(g);
+    open = m.role === "assistant" && m.status !== "error" ? g : null;
   }
   return out;
 }
 
-/** 收起时的摘要: 工具名去重计数, 保持首次出现顺序 */
 export function summarizeToolNames(calls: ToolCall[], max = 3): string {
   const counts = new Map<string, number>();
   for (const c of calls) counts.set(c.name, (counts.get(c.name) ?? 0) + 1);
