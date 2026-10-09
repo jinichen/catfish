@@ -190,12 +190,16 @@ function Catfish-StripLongPathPrefix {{
     return $Path
 }}
 
-# Catfish offline — 10/9: 离线 Chromium 解压挪到这里, 跟 Node 脱钩。
-#
-# 原来只在 Install-NodeDeps 里解 (PATCH_7) —— 而那个函数开头是
-# "没有 npm 就 return"。Windows 包从来不带 Node, 断网现场装不上 Node, 于是
-# Chromium 永远解不出来, 鲶鱼的 catfish_browser_* (Python Playwright) 全废。
-# 现在在源码装好之后 (PATCH_4) 就解; PATCH_7 再调一次是幂等的 (看标记文件)。
+# Catfish offline — 10/9: 一律用 System32\\tar.exe。装完 PortableGit 后 PATH 里先撞上 GNU tar,
+# 它把 `C:\\...` 当"主机:路径" ("Cannot connect to C: resolve failed"), 源码解不出来。
+function Catfish-TarExe {{
+    $sys = Join-Path $env:SystemRoot "System32\\tar.exe"
+    if (Test-Path -LiteralPath $sys) {{ return $sys }}
+    return "tar"
+}}
+
+# Catfish offline — 10/9: Chromium 解压跟 Node 脱钩。原来只在 Install-NodeDeps 里解, 它开头
+# "没有 npm 就 return", 断网又没 Node 的机器永远解不出来。现在 PATCH_4 装完源码就解, 幂等。
 function Catfish-InstallOfflineChromium {{
     if (-not ($OfflineChromiumTar -and (Test-Path $OfflineChromiumTar))) {{ return $false }}
     $chromiumDest = Join-Path $env:LOCALAPPDATA "ms-playwright"
@@ -210,7 +214,7 @@ function Catfish-InstallOfflineChromium {{
     New-Item -ItemType Directory -Force -Path $chromiumDest -ErrorAction SilentlyContinue | Out-Null
     try {{
         # 原生 tar 不认长路径前缀, 先剥 (见 Catfish-StripLongPathPrefix)
-        tar -xzf (Catfish-StripLongPathPrefix $OfflineChromiumTar) -C $chromiumDest
+        & (Catfish-TarExe) -xzf (Catfish-StripLongPathPrefix $OfflineChromiumTar) -C $chromiumDest
         if ($LASTEXITCODE -ne 0) {{ throw "tar chromium exit=$LASTEXITCODE" }}
         Set-Content -Path $stamp -Value $want -Encoding ASCII
         Write-Success "Playwright Chromium installed from offline bundle"
@@ -328,7 +332,7 @@ PATCH_4_INSTALL_REPO = f"""    $didUpdate = $false
             # 今天在别处反复修的那种"降级了但不说话"。
             # tar 是原生 exe, 不认 \\?\\ 前缀 —— 见 Catfish-StripLongPathPrefix
             $tarSrc = Catfish-StripLongPathPrefix $OfflineSourceTar
-            $tarOutput = & tar -xzf $tarSrc -C $tempExtractRoot 2>&1 | Out-String
+            $tarOutput = & (Catfish-TarExe) -xzf $tarSrc -C $tempExtractRoot 2>&1 | Out-String
             if ($LASTEXITCODE -ne 0) {{
                 $detail = if ($tarOutput.Trim()) {{ $tarOutput.Trim() }} else {{ "(tar 没有输出任何错误文本)" }}
                 throw "tar 解压 exit=$LASTEXITCODE`n$detail"
@@ -498,7 +502,6 @@ PATCH_5_NPM_GLOBAL = f"""    {MARKER}: Catfish offline — 装本地 .tgz (camof
             Write-Info "Catfish offline: $offlineTgzDir 无 .tgz, 跳过 npm 全局依赖 (10/9 起不随包分发, 运行时不需要)"
         }}
     }} elseif ($OfflineSourceTar -or $OfflineSourceDir) {{
-        # 10/9: 离线安装不再去 npm registry 装全局包 —— 断网必挂、联网也白占空间
         Write-Info "Catfish offline: 跳过 npm 全局依赖 (运行时不需要 Node)"
     }} else {{
         & $npm install -g --prefix $prefixDir --silent --ignore-scripts "@askjo/camofox-browser@^1.5.2" 2>&1 | Tee-Object -FilePath $npmLog | Out-Null

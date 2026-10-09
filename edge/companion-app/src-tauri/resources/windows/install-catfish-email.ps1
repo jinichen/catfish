@@ -51,7 +51,11 @@ foreach ($path in @($DistributionPath, $PythonExe, $UvExe)) {
 
 try {
     New-Item -ItemType Directory -Force -Path $Stage | Out-Null
-    tar.exe -xzf $DistributionPath -C $Stage
+    # 10/9: absolute System32 tar.exe -- Git for Windows puts GNU tar on PATH, and GNU tar
+    # reads "C:\..." as host:path ("Cannot connect to C: resolve failed").
+    $systemTar = Join-Path $env:SystemRoot "System32\tar.exe"
+    if (-not (Test-Path -LiteralPath $systemTar)) { $systemTar = "tar.exe" }
+    & $systemTar -xzf $DistributionPath -C $Stage
     if ($LASTEXITCODE -ne 0) {
         throw "extract catfish-email distribution failed: $LASTEXITCODE"
     }

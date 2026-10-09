@@ -46,7 +46,11 @@ foreach ($path in @($DistributionPath, $UvExe, $PythonExe)) {
 }
 try {
     New-Item -ItemType Directory -Force -Path $Stage | Out-Null
-    tar -xzf $DistributionPath -C $Stage
+    # 10/9: absolute System32 tar.exe -- Git for Windows puts GNU tar on PATH, and GNU tar
+    # reads "C:\..." as host:path ("Cannot connect to C: resolve failed").
+    $systemTar = Join-Path $env:SystemRoot "System32\tar.exe"
+    if (-not (Test-Path -LiteralPath $systemTar)) { $systemTar = "tar.exe" }
+    & $systemTar -xzf $DistributionPath -C $Stage
     if ($LASTEXITCODE -ne 0) { throw "reader distribution extract failed: $LASTEXITCODE" }
     $Wheels = @(Get-ChildItem -LiteralPath $Stage -Filter '*.whl' -File)
     if ($Wheels.Count -ne 1) { throw "expected one reader wheel, got $($Wheels.Count)" }
