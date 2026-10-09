@@ -153,6 +153,52 @@ function showOverlay(title: string, detail: string) {
   document.body.appendChild(el);
 }
 
+/** #root 已经渲染出东西 = 界面已经起来了。 */
+function appMounted(): boolean {
+  if (typeof document === "undefined") return false;
+  const root = document.getElementById("root");
+  return !!root && root.childElementCount > 0;
+}
+
+/** 界面起来**之后**的未捕获异常: 右下角提示, 不盖住整个界面。
+ *
+ * 10/9 鸿波「为什么会经常出现"界面没能启动起来"」: 这两个全局钩子原本不分时机,
+ * 界面早就在用了, 某个后台操作 (例如服务卡片上点 Catfish Chrome 的 ↻,
+ * Chrome 30 秒没就绪) 抛一个没人接的 rejection, 就弹出全屏白板"界面没能启动起来",
+ * 把正常在用的界面整个盖掉, 也误导了排查方向 —— 界面明明启动了。
+ * 全屏面板只留给"还没渲染出来"那段时间; 之后降级成可关闭的提示, 12 秒自动消失。
+ */
+function showBackgroundError(detail: string) {
+  if (typeof document === "undefined" || !document.body) return;
+  const old = document.getElementById("catfish-bg-error");
+  if (old) old.remove();
+  const el = document.createElement("div");
+  el.id = "catfish-bg-error";
+  el.setAttribute("role", "alert");
+  Object.assign(el.style, {
+    position: "fixed", right: "16px", bottom: "16px", zIndex: "99999", maxWidth: "420px",
+    background: "#fff", color: "#1a1a1a", border: "1px solid #e0e0e0", borderRadius: "8px",
+    boxShadow: "0 6px 24px rgba(0,0,0,.15)", padding: "10px 14px", cursor: "pointer",
+    font: "12px/1.6 ui-sans-serif,-apple-system,sans-serif",
+  } as Partial<CSSStyleDeclaration>);
+  const h = document.createElement("div");
+  h.style.fontWeight = "600";
+  h.textContent = "后台操作没成功 (界面不受影响, 点此关闭)";
+  const body = document.createElement("div");
+  body.style.cssText = "white-space:pre-wrap;word-break:break-word;max-height:120px;overflow:auto;color:#555";
+  body.textContent = detail.slice(0, 600);
+  el.append(h, body);
+  el.onclick = () => el.remove();
+  document.body.appendChild(el);
+  window.setTimeout(() => el.remove(), 12000);
+}
+
+/** 未捕获异常的统一出口: 界面没起来 → 全屏面板; 起来了 → 右下角提示。 */
+function reportUnhandled(title: string, detail: string) {
+  if (appMounted()) showBackgroundError(detail);
+  else showOverlay(title, detail);
+}
+
 /** 把记下来的超大 invoke 拼成一段, 附在任何一块错误面板末尾。
  *
  * 真凶不一定是抛异常的那个 invoke —— 也可能是它前面某个把内存撑爆的。
@@ -279,7 +325,7 @@ export function installStartupDiagnostics(): void {
   window.addEventListener("error", (e) => {
     // eslint-disable-next-line no-console
     console.error("[startup] window.onerror:", e.message, e.filename, e.lineno);
-    showOverlay(
+    reportUnhandled(
       "界面没能启动起来",
       `${e.message}\n${e.filename}:${e.lineno}:${e.colno}\n\n${e.error?.stack || ""}`,
     );
@@ -289,7 +335,7 @@ export function installStartupDiagnostics(): void {
     // eslint-disable-next-line no-console
     console.error("[startup] unhandledrejection:", e.reason);
     const r = e.reason;
-    showOverlay(
+    reportUnhandled(
       "界面没能启动起来",
       typeof r === "string" ? r : `${r?.message || r}\n\n${r?.stack || ""}`,
     );

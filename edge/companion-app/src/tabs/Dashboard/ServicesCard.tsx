@@ -15,6 +15,7 @@
  *   红点 → 联系 ops 处理. 跟"信号塔在不在线"同性质.
  */
 
+import { useState } from "react";
 import { useServicesStore } from "../../store/services";
 import { useServiceStatus } from "../../hooks/useServiceStatus";
 import { useAgentStore } from "../../store/agent";
@@ -210,6 +211,10 @@ export default function ServicesCard() {
 }
 
 function ServiceRowItem({ row }: { row: ServiceRow }) {
+  // 10/9: 重启失败要显示在这一行上 —— 原来 `void restartService()` 的拒绝没人接,
+  // 落到全局 unhandledrejection, 弹全屏"界面没能启动起来"盖住整个界面。
+  const [restartError, setRestartError] = useState<string | null>(null);
+  const [restarting, setRestarting] = useState(false);
   // 触发该服务的轮询 (3s 一次), 同时订阅 store
   useServiceStatus(row.id);
   const status = useServicesStore((s) => s.statuses[row.id]);
@@ -262,14 +267,30 @@ function ServiceRowItem({ row }: { row: ServiceRow }) {
           </span>
         ) : (
           <button
-            onClick={() => void restartService(row.id)}
+            onClick={async () => {
+              setRestartError(null);
+              setRestarting(true);
+              try {
+                await restartService(row.id);
+              } catch (e) {
+                setRestartError(e instanceof Error ? e.message : String(e));
+              } finally {
+                setRestarting(false);
+              }
+            }}
+            disabled={restarting}
             title={`重启 ${row.name}`}
             style={rowBtnStyle}
           >
-            ↻
+            {restarting ? "…" : "↻"}
           </button>
         )}
       </div>
+      {restartError && (
+        <div role="alert" style={{ fontSize: 11, paddingLeft: 18, overflowWrap: "anywhere", color: "var(--status-err)" }}>
+          重启没成功: {restartError}
+        </div>
+      )}
       {status?.message && (!status.healthy || status.probeError) && (
         <div style={{ fontSize: 11, paddingLeft: 18, overflowWrap: "anywhere", color: "var(--catfish-text-muted)" }}>
           {status.message}

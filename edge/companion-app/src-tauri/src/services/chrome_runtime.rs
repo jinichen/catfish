@@ -156,21 +156,66 @@ pub async fn ensure_running() -> Result<String, String> {
         std::fs::write(&pid_file, handle.pid.to_string()).map_err(|e| e.to_string())?;
         handle.pid
     };
-    let ready = tokio::time::timeout(Duration::from_secs(30), async {
+    // 10/9: 原来只是死等 30 秒 —— Chrome 一启动就崩 (配置目录被锁 / 被安全软件拦 /
+    // 版本不兼容) 也要等满 30 秒, 最后只说"未就绪, 去看 chrome.log", 员工看不到原因。
+    // 现在: 进程没了且没有别的进程接管这个配置目录 → 立刻失败; 失败时把 chrome.log
+    // 里最近的真实报错带出来。慢机器首次启动 (Windows Defender 扫一遍 Chromium)
+    // 30 秒常不够, 放宽到 45 秒。
+    let log_path = catfish_paths::chrome_log_path();
+    let ready = tokio::time::timeout(Duration::from_secs(READY_TIMEOUT_SECS), async {
         loop {
-            if let Ok(ws) = cdp_url(&base).await { return ws; }
+            if let Ok(ws) = cdp_url(&base).await { return Ok(ws); }
+            if !process::is_alive(pid) && matches!(profile_owner(&profile).await, Ok(None)) {
+                return Err(format!(
+                    "Chrome (PID {pid}) 启动后马上退出了{}",
+                    log_hint(log_path.as_deref())
+                ));
+            }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
     }).await;
     match ready {
-        Ok(ws) => {
+        Ok(Err(early_exit)) => Err(early_exit),
+        Ok(Ok(ws)) => {
             // Chrome can hand off to an existing process; save the actual owner.
             let actual = profile_owner(&profile).await?.ok_or("Chrome 启动后无法确认配置目录所有者")?;
             std::fs::write(&pid_file, actual.pid.to_string()).map_err(|e| e.to_string())?;
             Ok(ws)
         }
-        Err(_) => Err(format!("Chrome (PID {pid}) 30 秒内未就绪；没有重复启动或删除配置目录。请查看 chrome.log")),
+        Err(_) => Err(format!(
+            "Chrome (PID {pid}) {READY_TIMEOUT_SECS} 秒内未就绪；没有重复启动或删除配置目录{}",
+            log_hint(log_path.as_deref())
+        )),
     }
+}
+
+const READY_TIMEOUT_SECS: u64 = 45;
+
+/// chrome.log 末尾最近几条**真正的**报错 —— Chrome 平时也往这里刷大量无害的
+/// ERROR (推送通道连不上、更新器、证书握手), 那些不是起不来的原因, 滤掉。
+fn log_hint(path: Option<&Path>) -> String {
+    let Some(path) = path else { return String::new() };
+    let lines = tail_errors(&std::fs::read(path).unwrap_or_default());
+    if lines.is_empty() {
+        format!("。详见 {}", path.display())
+    } else {
+        format!("。chrome.log 最近的报错:\n{}", lines.join("\n"))
+    }
+}
+
+fn tail_errors(bytes: &[u8]) -> Vec<String> {
+    const NOISE: [&str; 6] = ["gcm/engine", "ssl_client_socket", "chrome/updater", "connection_factory",
+        "google_apis", "registration_request"];
+    let start = bytes.len().saturating_sub(64 * 1024);
+    let text = String::from_utf8_lossy(&bytes[start..]);
+    let mut hits: Vec<String> = text.lines()
+        .filter(|l| l.contains("ERROR") || l.contains("FATAL") || l.contains("in use") || l.contains("Failed"))
+        .filter(|l| !NOISE.iter().any(|n| l.contains(n)))
+        .map(|l| l.chars().take(240).collect())
+        .collect();
+    let keep = hits.len().saturating_sub(3);
+    hits.drain(..keep);
+    hits
 }
 
 pub async fn stop() -> Result<(), String> {
@@ -191,6 +236,21 @@ pub async fn stop() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn log_tail_keeps_real_errors_and_drops_chrome_noise() {
+        let log = "\
+[1:2:1009/073752.3:ERROR:google_apis/gcm/engine/connection_factory_impl.cc:484] ConnectionHandler failed\n\
+[1:2:1009/081752.0:ERROR:net/socket/ssl_client_socket_impl.cc:949] handshake failed\n\
+[9:9:1009/090000.0:ERROR:chrome/browser/process_singleton_posix.cc:353] The profile appears to be in use by another Chromium process\n\
+plain info line\n";
+        let hits = tail_errors(log.as_bytes());
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert!(hits[0].contains("profile appears to be in use"));
+        assert!(tail_errors(b"").is_empty());
+        let many: String = (0..10).map(|i| format!("FATAL boom {i}\n")).collect();
+        assert_eq!(tail_errors(many.as_bytes()), vec!["FATAL boom 7", "FATAL boom 8", "FATAL boom 9"]);
+    }
+
     #[test]
     fn exact_profile_not_prefix_or_renderer() {
         let profile = Path::new("C:\\Users\\someone\\Catfish State\\chrome-profile");
