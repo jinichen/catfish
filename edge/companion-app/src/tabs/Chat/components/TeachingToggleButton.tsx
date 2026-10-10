@@ -23,7 +23,7 @@ function TeachingToggleButton({ isStreaming }: { isStreaming: boolean }) {
         padding: "6px 10px",
         border: "1px solid " + (on ? "var(--catfish-cyan)" : "var(--catfish-border)"),
         borderRadius: "var(--radius-sm)",
-        background: on ? "var(--catfish-cyan-dim)" : "transparent",
+        background: on ? "var(--catfish-cyan-tint)" : "transparent",
         color: on ? "var(--catfish-cyan)" : "var(--catfish-text-muted)",
         fontSize: 14,
         fontWeight: on ? 600 : 400,

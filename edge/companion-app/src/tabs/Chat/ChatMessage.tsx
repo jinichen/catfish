@@ -143,7 +143,7 @@ function UserBubble({
       <div
         style={{
           background: isAutoContinue
-            ? "var(--catfish-cyan-dim)"  // 淡色, 区别于真用户消息
+            ? "var(--catfish-cyan-tint)"  // 淡色, 区别于真用户消息
             : "var(--gradient-brand, var(--catfish-cyan))",  // 8/8 UI 二轮: 品牌渐变气泡
           color: isAutoContinue
             ? "var(--catfish-cyan)"

@@ -9,6 +9,9 @@
   /* —— 配色 主色系 (墨青) —— */
   --catfish-cyan: #0E6169;        /* 主色：墨青 (深青) */
   --catfish-cyan-dim: #0A4A51;    /* 主色暗 (按钮 hover / 边框) */
+  /* 10/10: 浅青底 (激活态 / 提示条 / 排队条), 上面放墨青或正文色字。
+   * cyan-dim 在"同步新版 UI"里改成了深青, 老代码拿它当浅底 → 深字压深底看不清。 */
+  --catfish-cyan-tint: color-mix(in srgb, var(--catfish-cyan) 10%, var(--catfish-bg-elevated));
   --catfish-cyan-bright: #168D99; /* 主色亮 (链接 / 高光) */
   --catfish-cyan-hover: #4FB8C2;  /* 编辑态描边等亮交互色 (老代码有 fallback 引用) */
 
@@ -100,6 +103,7 @@
      *   边框提亮一档让轮廓站得住. 企业克制 + 科技感锐度. */
     --catfish-cyan: #22A4B0;       /* 提到亮青, 暗底可读 */
     --catfish-cyan-dim: #10646C;
+    --catfish-cyan-tint: color-mix(in srgb, var(--catfish-cyan) 18%, var(--catfish-bg-elevated));
     --catfish-cyan-bright: #41BEC9;
     --catfish-cyan-hover: #63CDD5;
     --catfish-orange: #F89866;      /* 暖橙调柔, 不刺眼 */

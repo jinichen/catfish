@@ -29,7 +29,7 @@ function QueuedMessagesStrip({ isStreaming, onSend }: Props) {
       style={{
         marginBottom: "var(--space-2)",
         padding: "var(--space-1) var(--space-2)",
-        background: "var(--catfish-cyan-dim)",
+        background: "var(--catfish-cyan-tint)",
         border: "1px dashed var(--catfish-cyan)",
         borderRadius: "var(--radius-sm)",
         fontSize: 11,
@@ -103,7 +103,7 @@ function QueuedMessagesStrip({ isStreaming, onSend }: Props) {
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
-                opacity: 0.85,
+                color: "var(--catfish-text)",
               }}
               title={q.text}
             >

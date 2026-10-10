@@ -279,7 +279,7 @@ function EduOption({
         border: "none",
         borderRadius: "var(--radius-sm)",
         background: active
-          ? "var(--catfish-cyan-dim)"
+          ? "var(--catfish-cyan-tint)"
           : "transparent",
         color: active
           ? "var(--catfish-cyan)"

@@ -76,7 +76,7 @@ function RecModeToolbarButton({ disabled }: { disabled?: boolean }) {
         padding: "6px 10px",
         border: "1px solid " + (isActive ? "var(--catfish-cyan)" : "var(--catfish-border)"),
         borderRadius: "var(--radius-sm)",
-        background: isActive ? "var(--catfish-cyan-dim)" : "transparent",
+        background: isActive ? "var(--catfish-cyan-tint)" : "transparent",
         color: isActive ? "var(--catfish-cyan)" : "var(--catfish-text-muted)",
         fontSize: 14,
         fontWeight: isActive ? 600 : 400,

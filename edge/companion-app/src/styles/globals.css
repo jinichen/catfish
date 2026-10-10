@@ -3875,7 +3875,7 @@ button {
 
 .chat-composer__tool-button[data-active="true"] {
   color: var(--catfish-cyan);
-  background: var(--catfish-cyan-dim);
+  background: var(--catfish-cyan-tint);
   border-color: color-mix(in srgb, var(--catfish-cyan) 25%, transparent);
 }
 
@@ -3976,7 +3976,7 @@ button {
 
 .chat-composer__secondary-button {
   color: var(--catfish-cyan);
-  background: var(--catfish-cyan-dim);
+  background: var(--catfish-cyan-tint);
   border: 1px solid color-mix(in srgb, var(--catfish-cyan) 25%, transparent);
 }
 

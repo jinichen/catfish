@@ -435,7 +435,7 @@ export default function ChatInput({
             color: "var(--catfish-cyan)",
             fontSize: 12,
             marginBottom: "var(--space-2)",
-            background: "var(--catfish-cyan-dim)",
+            background: "var(--catfish-cyan-tint)",
             padding: "var(--space-1) var(--space-2)",
             borderRadius: "var(--radius-sm)",
             display: "inline-block",

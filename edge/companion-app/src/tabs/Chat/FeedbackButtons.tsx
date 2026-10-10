@@ -131,7 +131,7 @@ export default function FeedbackButtons({ messageId, preview, hidden }: Props) {
             padding: "4px 10px",
             border: "1px solid var(--catfish-border)",
             borderRadius: 4,
-            background: "var(--catfish-cyan-dim)",
+            background: "var(--catfish-cyan-tint)",
             color: "var(--catfish-text)",
             cursor: "pointer",
             fontSize: 12,

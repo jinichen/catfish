@@ -355,7 +355,7 @@ function KeyRow({
               fontSize: 10,
               flexShrink: 0,
               padding: "1px 6px",
-              background: "var(--catfish-cyan-dim)",
+              background: "var(--catfish-cyan-tint)",
               borderRadius: 8,
             }}
             title={`已修订 ${summary.revision_count} 次`}
