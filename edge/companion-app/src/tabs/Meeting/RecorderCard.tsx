@@ -185,13 +185,16 @@ export default function RecorderCard({ onChanged }: { onChanged: (selectId?: str
         value={hotwords}
         onChange={(e) => setHotwords(e.target.value)}
       />
-      <div style={{ display: "flex", gap: "var(--space-2)" }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)" }}>
         <Btn kind="ghost" onClick={() => void importHotwords()}>从知识库带入人名 / 项目</Btn>
+        <Btn kind="ghost" disabled={busy} onClick={() => void importFile()}>
+          {importing ? "导入中…" : "导入录音"}
+        </Btn>
         <Btn kind="primary" disabled={busy} onClick={() => void start()}>开始录音</Btn>
       </div>
-      <Btn kind="ghost" disabled={busy} onClick={() => void importFile()}>
-        {importing ? `正在导入 ${importing}…` : "导入录音文件 (录音笔 / 手机录音)"}
-      </Btn>
+      {importing && (
+        <div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>正在导入 {importing}, 长录音要解码几十秒…</div>
+      )}
       {error && <ErrorLine>{error}</ErrorLine>}
     </div>
   );

@@ -83,7 +83,7 @@ export default function MeetingTab() {
           <MeetingDetail meta={current} asr={asr} onChanged={() => void refresh()} />
         ) : (
           <div style={{ ...cardStyle, fontSize: 13, color: "var(--catfish-text-muted)" }}>
-            开一场会: 在左边填参会人数, 点「开始录音」; 录音笔 / 手机录好的会议点「导入录音文件」。之后在本机转写、区分说话人, 再由小鲶生成纪要和待办。
+            开一场会: 在左边填参会人数, 点「开始录音」; 录音笔 / 手机录好的会议点「导入录音」。之后在本机转写、区分说话人, 再由小鲶生成纪要和待办。
           </div>
         )}
       </div>
