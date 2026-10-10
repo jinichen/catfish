@@ -27,6 +27,7 @@ pub mod meeting_minutes_cmd; // 10/1: 说话人改名 + 纪要 (tool-bridge meet
 pub mod meeting_asr_cmd; // 10/1: 会议组件包安装 + 转写, 见 services::meeting_asr
 pub mod embed_model_cmd; // 10/6: 向量模型组件包状态 + 安装, 见 services::embed_model
 pub mod meeting;       // 10/1: 会议录音 (建会议 / 录 / 停 / 列表), 见 services::meeting_*
+pub mod meeting_import; // 10/11: 导入录音笔 / 手机录音 → 一场会议, 后面复用转写
 pub mod components;    // 10/1: 可选大组件 (会议纪要组件包等) 下载 / 校验, 见 services::components
 pub mod codex_gateway; // hermes 网关健康检查 + 重启 (8/15 从 codex_backend 切出)
 pub mod codex_helper;  // 内嵌 Python helper + JSON 解析 (8/15 从 codex_backend 切出)

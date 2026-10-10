@@ -195,6 +195,8 @@ pub(crate) fn handler(
             crate::commands::meeting::meeting_record_start,
             crate::commands::meeting::meeting_record_status,
             crate::commands::meeting::meeting_record_stop,
+            crate::commands::meeting_import::meeting_import_pick_file,
+            crate::commands::meeting_import::meeting_import_audio,
             crate::commands::meeting_asr_cmd::meeting_asr_status,
             crate::commands::meeting_asr_cmd::meeting_asr_install,
             // 10/6: 向量模型组件包 (语义检索的 BGE-M3) 状态 + 安装

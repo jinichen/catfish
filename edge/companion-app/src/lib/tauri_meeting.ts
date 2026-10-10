@@ -129,6 +129,10 @@ export const meetingRecordStart = (id: string, device: string | null) =>
   rawInvoke<RecorderStatus>("meeting_record_start", { id, device });
 export const meetingRecordStatus = () => rawInvoke<RecorderStatus>("meeting_record_status");
 export const meetingRecordStop = () => rawInvoke<MeetingMeta | null>("meeting_record_stop");
+/** 10/11 导入录音笔 / 手机录音: 原生选择器 (取消 = null) + 解码进一场新会议 (状态「已录」) */
+export const meetingImportPickFile = () => rawInvoke<string | null>("meeting_import_pick_file");
+export const meetingImportAudio = (path: string, title: string, attendees: number, hotwords: string[]) =>
+  rawInvoke<MeetingMeta>("meeting_import_audio", { path, title, attendees, hotwords });
 
 export const meetingAsrStatus = () => rawInvoke<AsrStatus>("meeting_asr_status");
 export const meetingAsrInstall = () => rawInvoke<void>("meeting_asr_install");

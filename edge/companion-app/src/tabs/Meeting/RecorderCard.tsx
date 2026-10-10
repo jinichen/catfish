@@ -3,6 +3,9 @@
  *
  * 录音设备默认用系统默认 (不再是写死的序号 0 —— 那会录到 iPhone 连续互通麦克风);
  * 录音时实时显示电平, 连续几秒都是 0 就提示"没收到声音", 不用等会后才发现录了一段空白。
+ *
+ * 10/11: 「导入录音文件」—— 录音笔 / 手机录的会议, 用同一份标题 / 人数 / 热词建会议,
+ * 解码进会议目录, 之后转写、区分说话人、纪要跟现场录音完全一样。
  */
 import { useEffect, useRef, useState } from "react";
 
@@ -10,6 +13,8 @@ import {
   formatClock,
   meetingAudioDevices,
   meetingCreate,
+  meetingImportAudio,
+  meetingImportPickFile,
   meetingRecordStart,
   meetingRecordStatus,
   meetingRecordStop,
@@ -31,6 +36,7 @@ export default function RecorderCard({ onChanged }: { onChanged: (selectId?: str
   const [rec, setRec] = useState<RecorderStatus | null>(null);
   const [silentFor, setSilentFor] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [importing, setImporting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const timer = useRef<number | null>(null);
 
@@ -53,12 +59,47 @@ export default function RecorderCard({ onChanged }: { onChanged: (selectId?: str
     };
   }, [rec?.recording, onChanged]);
 
-  async function start() {
+  function attendeeCount(): number | null {
     const n = Number(attendees);
     if (!Number.isInteger(n) || n < 1) {
       setError("先填参会人数 (用来区分说话人; 不填的话长会议会把几个人拆成几十个)");
-      return;
+      return null;
     }
+    return n;
+  }
+
+  function resetForm() {
+    setTitle("");
+    setAttendees("");
+    setHotwords("");
+  }
+
+  async function importFile() {
+    const n = attendeeCount();
+    if (n === null) return;
+    setError(null);
+    const path = await meetingImportPickFile().catch((e) => {
+      setError(String(e));
+      return null;
+    });
+    if (!path) return;
+    setBusy(true);
+    setImporting(path.split(/[\\/]/).pop() ?? path);
+    try {
+      const meta = await meetingImportAudio(path, title, n, hotwords.split(/[\s,，、]+/).filter(Boolean));
+      resetForm();
+      onChanged(meta.id);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+      setImporting(null);
+    }
+  }
+
+  async function start() {
+    const n = attendeeCount();
+    if (n === null) return;
     setBusy(true);
     setError(null);
     try {
@@ -79,9 +120,7 @@ export default function RecorderCard({ onChanged }: { onChanged: (selectId?: str
     try {
       const meta = await meetingRecordStop();
       setRec(null);
-      setTitle("");
-      setAttendees("");
-      setHotwords("");
+      resetForm();
       onChanged(meta?.id);
     } catch (e) {
       setError(String(e));
@@ -150,6 +189,9 @@ export default function RecorderCard({ onChanged }: { onChanged: (selectId?: str
         <Btn kind="ghost" onClick={() => void importHotwords()}>从知识库带入人名 / 项目</Btn>
         <Btn kind="primary" disabled={busy} onClick={() => void start()}>开始录音</Btn>
       </div>
+      <Btn kind="ghost" disabled={busy} onClick={() => void importFile()}>
+        {importing ? `正在导入 ${importing}…` : "导入录音文件 (录音笔 / 手机录音)"}
+      </Btn>
       {error && <ErrorLine>{error}</ErrorLine>}
     </div>
   );
