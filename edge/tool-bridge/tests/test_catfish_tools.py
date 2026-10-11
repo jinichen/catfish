@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -532,10 +533,40 @@ def test_audit_stats_today_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert result["tool_failures_today"] == 0
 
 
+@pytest.fixture(params=["07:30", "15:00"])
+def frozen_cst(request, monkeypatch: pytest.MonkeyPatch) -> datetime:
+    """冻结墙钟到 2026-10-12 <param> CST. 07:30 时 UTC 日期还是 10-11 (曾漏计的窗口)."""
+    if not hasattr(time, "tzset"):
+        pytest.skip("需要 time.tzset (POSIX)")
+    old_tz = os.environ.get("TZ")
+    monkeypatch.setenv("TZ", "Asia/Shanghai")
+    time.tzset()
+
+    def _restore_tz() -> None:  # 先于 monkeypatch 拆, 自己还原 TZ 再 tzset
+        if old_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = old_tz
+        time.tzset()
+    request.addfinalizer(_restore_tz)
+    hh, mm = map(int, request.param.split(":"))
+    frozen = datetime(2026, 10, 12, hh, mm, tzinfo=timezone(timedelta(hours=8)))
+
+    class _Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            return frozen.astimezone(tz) if tz else frozen.replace(tzinfo=None)
+
+    from catfish_tool_bridge import audit, catfish_tools_today
+    monkeypatch.setattr(audit, "datetime", _Frozen)
+    monkeypatch.setattr(catfish_tools_today, "datetime", _Frozen)
+    return frozen
+
+
 def test_audit_stats_today_counts_events(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, frozen_cst: datetime
 ) -> None:
-    """audit.jsonl 有今天的事件 → 计数 + 失败数对"""
+    """audit.jsonl 有今天的事件 → 计数 + 失败数对 (凌晨/下午都对)"""
     _set_home(monkeypatch, tmp_path)
     from catfish_tool_bridge import audit
 
@@ -551,30 +582,25 @@ def test_audit_stats_today_counts_events(
 
 
 def test_audit_stats_excludes_yesterday(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, frozen_cst: datetime
 ) -> None:
-    """昨天的事件不算今天 invocations"""
+    """本地昨天的事件不算今天; 边界按本地 00:00 (= UTC 前一天 16:00) 切"""
     _set_home(monkeypatch, tmp_path)
     from catfish_tool_bridge import audit
     import json
 
-    # 手动写一行昨天的 + 一行今天的
-    yesterday = "2025-01-01"
-    today_iso = catfish_tools.datetime.now().date().isoformat()
+    # ts 跟 audit.write_event 同格式 (UTC). 本地 10-11 23:59 / 10-12 00:01
+    lines = [
+        ("old", "2025-01-01T10:00:00.000+00:00"),
+        ("old", "2026-10-11T15:59:00.000+00:00"),
+        ("new", "2026-10-11T16:01:00.000+00:00"),
+    ]
     audit_path = audit.audit_path()
     audit_path.parent.mkdir(parents=True, exist_ok=True)
-    audit_path.write_text(
-        json.dumps({
-            "ts": f"{yesterday}T10:00:00.000+00:00",
-            "tool": "old", "ok": True, "error": None,
-            "latency_ms": 1.0, "args_preview": "",
-        }) + "\n" +
-        json.dumps({
-            "ts": f"{today_iso}T10:00:00.000+00:00",
-            "tool": "new", "ok": True, "error": None,
-            "latency_ms": 1.0, "args_preview": "",
-        }) + "\n"
-    )
+    audit_path.write_text("".join(json.dumps({
+        "ts": ts, "tool": tool, "ok": True, "error": None,
+        "latency_ms": 1.0, "args_preview": "",
+    }) + "\n" for tool, ts in lines))
     result = catfish_tools.collect_today_summary()
     assert result["tool_invocations_today"] == 1  # 只今天那条
 

@@ -22,7 +22,7 @@ import sqlite3
 import subprocess
 import tempfile
 import time
-from datetime import datetime, time as dtime, timedelta
+from datetime import datetime, time as dtime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -381,9 +381,13 @@ def _collect_audit_stats_today() -> Dict[str, Any]:
     except ImportError:
         return fallback
 
-    today_iso = datetime.now().date().isoformat()  # 例 "2026-04-28"
+    # audit ts 是 UTC ISO (见 audit.py), "今天"按员工本地时区算 → 本地 00:00 换成
+    # UTC 再做字符串比较. 以前直接拿本地日期 "2026-10-12" 比 UTC ts, UTC+8 凌晨
+    # 00:00-08:00 时 ts 还是 "2026-10-11T..." 全被滤掉, 计数恒为 0.
+    today_start_utc = datetime.fromtimestamp(_today_start_unix(), tz=timezone.utc)
+    since_iso = today_start_utc.isoformat(timespec="milliseconds")  # 跟 audit ts 同格式
     try:
-        events = audit.read_events(since_iso=today_iso, limit=10000)
+        events = audit.read_events(since_iso=since_iso, limit=10000)
     except Exception:  # noqa: BLE001
         return fallback
 
