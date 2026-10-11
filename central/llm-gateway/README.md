@@ -64,8 +64,8 @@ Hermes 的代理循环会把每一轮工具结果重新提交给网关。`config
 
 ```yaml
 tool_loop:
-  max_tool_messages: 64
-  max_tool_calls: 128
+  max_tool_messages: 120
+  max_tool_calls: 240
 ```
 
 模型 `upstream.param_overrides_scope` 有三种值：`all`（每次请求）、

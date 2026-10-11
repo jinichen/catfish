@@ -24,8 +24,8 @@ version: 1
 # Hermes 每轮会重新请求网关。超过任一上限时，网关返回结构化 409，不再继续
 # 调模型；这里是部署策略，不绑定具体模型。按任务复杂度调整，不能写进代码。
 tool_loop:
-  max_tool_messages: 64
-  max_tool_calls: 128
+  max_tool_messages: 120
+  max_tool_calls: 240
 
 # ── 失败切换总开关 (8/8 鸿波拍板: false → true) ──────────────────────────
 #

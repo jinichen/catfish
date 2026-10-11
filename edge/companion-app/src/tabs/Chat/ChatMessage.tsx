@@ -5,6 +5,8 @@ import { ArrowClockwise, FastForward, PencilSimple } from "@phosphor-icons/react
 import { Markdown } from "../../lib/markdown";
 import type { ChatMessage as Msg } from "../../types/chat";
 import ChatToolSteps from "./ChatToolSteps";
+import ChatLoopLimitNotice from "./ChatLoopLimitNotice";
+import { isAgentLoopLimit } from "../../lib/agentLoopLimit";
 import { extractFilePaths } from "../../lib/path_detect";
 import { FilePillList } from "../../components/FilePill";
 import { useAgentStore } from "../../store/agent";
@@ -27,6 +29,8 @@ interface Props {
   onEditAndResend?: (id: string, newContent: string) => void;
   /** streaming 中不显 resend/edit 按钮 · caller 传 isStreaming */
   isStreaming?: boolean;
+  /** 10/11: 是不是对话里最后一条 —— 工具上限暂停的「继续」只给最后一条 */
+  isLast?: boolean;
 }
 
 export default function ChatMessage({
@@ -35,6 +39,7 @@ export default function ChatMessage({
   onResend,
   onEditAndResend,
   isStreaming = false,
+  isLast = false,
 }: Props) {
   if (msg.role === "user") {
     return (
@@ -47,7 +52,7 @@ export default function ChatMessage({
     );
   }
   if (msg.role === "assistant") {
-    return <AssistantBubble msg={msg} showCaret={showCaret} />;
+    return <AssistantBubble msg={msg} showCaret={showCaret} canContinue={isLast && !isStreaming} />;
   }
   // system 不渲染(gateway 自动注入,前端看不到);
   // tool 角色消息也不直接渲染 —— 它的内容已通过 ChatToolCall 在
@@ -310,9 +315,11 @@ function UserBubble({
 function AssistantBubble({
   msg,
   showCaret,
+  canContinue = false,
 }: {
   msg: Msg;
   showCaret: boolean;
+  canContinue?: boolean;
 }) {
   // BL-E11 后续: 头像 alt 用员工自定义名 (默认 "小鲶")
   const agentName = useAgentStore((s) => s.name);
@@ -382,7 +389,10 @@ function AssistantBubble({
             }}
           />
         )}
-        {isError && (
+        {isError && isAgentLoopLimit(msg.error) && (
+          <ChatLoopLimitNotice error={msg.error!} canContinue={canContinue} />
+        )}
+        {isError && !isAgentLoopLimit(msg.error) && (
           <div
             style={{
               marginTop: "var(--space-2)",

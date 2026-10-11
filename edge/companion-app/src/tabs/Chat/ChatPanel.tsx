@@ -174,10 +174,11 @@ export default function ChatPanel({
         <div className="chat-panel__content">
           {isEmpty && <EmptyState />}
           {/* 连续的纯工具调用消息合并成一组 "后台动作" (lib/chatToolSteps.ts) */}
-          {groupToolSteps(messages).map(({ msg: m, memberIds }) => (
+          {groupToolSteps(messages).map(({ msg: m, memberIds }, i, all) => (
             <ChatMessage
               key={m.id}
               msg={m}
+              isLast={i === all.length - 1}
               showCaret={isStreaming && !!streamingId && memberIds.includes(streamingId)}
               onResend={onResendFromUserMsg}
               onEditAndResend={onEditAndResendUserMsg}

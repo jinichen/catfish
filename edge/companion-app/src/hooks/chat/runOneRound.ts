@@ -25,6 +25,7 @@
  */
 
 import { useChatStore } from "../../store/chat";
+import { isAgentLoopLimit } from "../../lib/agentLoopLimit";
 import { streamChat, type ChatTransport, type OpenAITool } from "../../lib/chat";
 import { detectToolBusinessError } from "../../lib/toolResult";
 import * as streamRegistry from "../../lib/streamRegistry";
@@ -61,6 +62,8 @@ export interface RoundDeps {
 export interface RoundResult {
   shouldContinue: boolean;
   updatedMessages: ChatMessage[];
+  /** 10/11: 这一轮被网关的每轮工具调用上限叫停 (409 agent_loop_limit_exceeded) */
+  loopLimit?: boolean;
 }
 
 export async function runOneRound(
@@ -308,6 +311,11 @@ export async function runOneRound(
           status: "done" as const,
         },
       ];
+
+      // 10/11: 网关每轮工具上限叫停 —— 交给 sendMessage 决定是否自动续 (新一条消息计数清零)
+      if (isError && isAgentLoopLimit(roundError)) {
+        return { shouldContinue: false, updatedMessages, loopLimit: true };
+      }
 
       // 没 tool_calls 就到此为止
       if (collectedToolCalls.length === 0) {

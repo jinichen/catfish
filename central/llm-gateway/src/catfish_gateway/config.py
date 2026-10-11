@@ -200,8 +200,8 @@ class ToolLoopConfig(BaseModel):
     positive values are configuration, not model-specific code paths.
     """
 
-    max_tool_messages: int | None = Field(default=64, ge=1)
-    max_tool_calls: int | None = Field(default=128, ge=1)
+    max_tool_messages: int | None = Field(default=120, ge=1)
+    max_tool_calls: int | None = Field(default=240, ge=1)
 
 
 class ModelConfig(BaseModel):

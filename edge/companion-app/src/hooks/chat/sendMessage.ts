@@ -434,9 +434,11 @@ export async function sendMessage(
             //   3. 自动续跑次数 < 上限 (防死循环)
             //   4. 没被用户 abort
             const autoOn = useAutoContinueStore.getState().on;
+            // 10/11: 被网关每轮工具上限叫停也算 mid-task (hermes 模式下工具在 hermes
+            // 里跑, Companion 这边未必看得到 tool_calls), 一样可以自动续。
             const shouldAutoContinue =
               autoOn
-              && hadToolCallThisSend
+              && (hadToolCallThisSend || result.loopLimit === true)
               && autoContinues < MAX_AUTO_CONTINUES
               && !ctrl.signal.aborted;
             if (shouldAutoContinue) {
