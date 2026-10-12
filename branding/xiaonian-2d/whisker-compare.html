@@ -1,0 +1,448 @@
+<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>小鲶胡须方案</title><style>
+:root{--bg:#f6f3ea;--ink:#0f3d44;--mut:#6b7b7d;--card:#fff;--bd:rgba(31,138,143,.22)}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#10191d;--ink:#e9e6dc;--mut:#9aa7a8;--card:#18242a;--bd:rgba(31,138,143,.35)}}
+*{box-sizing:border-box;margin:0}body{background:var(--bg);color:var(--ink);font-family:-apple-system,"PingFang SC","Noto Sans SC",sans-serif;padding:28px 16px}
+h1{font-size:24px;max-width:1200px;margin:0 auto 6px}p{max-width:1200px;margin:0 auto 16px;color:var(--mut);font-size:14px}
+.g{max-width:1200px;margin:0 auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
+figure{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:12px}.a{background:#f6f3ea;border-radius:10px;aspect-ratio:1;display:grid;place-items:center}.a svg{width:92%;height:auto}
+figcaption{margin-top:10px;display:flex;flex-direction:column;gap:4px}b{font-size:15px}span{font-size:12.5px;color:var(--mut);line-height:1.5}
+</style></head><body><h1>小鲶 · 胡须方案对比</h1><p>只改胡须, 身体 / 眼睛 / 配色不动。A–D 都修掉了上须颜色反了的问题 (统一为根部深青 → 尖端暖橙)。</p><div class="g"><figure><div class="a">
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 480" width="480" height="480">
+  <defs>
+    
+    <radialGradient id="bodyGrad" cx="50%" cy="40%" r="65%">
+      <stop offset="0%" stop-color="#1A8A95"/>
+      <stop offset="60%" stop-color="#0E5F66"/>
+      <stop offset="100%" stop-color="#0A464C"/>
+    </radialGradient>
+    
+    <linearGradient id="bellyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FAF1E4" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#FAF1E4" stop-opacity="0.85"/>
+    </linearGradient>
+    
+    <linearGradient id="whiskerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0E5F66"/>
+      <stop offset="100%" stop-color="#F47B3D"/>
+    </linearGradient>
+    <linearGradient id="whiskerGradRev" x1="100%" y1="0%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#0E5F66"/>
+      <stop offset="100%" stop-color="#F47B3D"/>
+    </linearGradient>
+    
+    <radialGradient id="eyeShine" cx="35%" cy="30%" r="20%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  
+  
+
+  
+  <path d="M 380 240 L 460 180 L 445 240 L 460 300 Z"
+        fill="#0A464C" opacity="0.9"/>
+  <path d="M 380 240 L 455 200 L 440 240 L 455 285 Z"
+        fill="#0E5F66"/>
+
+  
+  <ellipse cx="220" cy="240" rx="170" ry="135" fill="url(#bodyGrad)"/>
+
+  
+  <ellipse cx="220" cy="290" rx="140" ry="80" fill="url(#bellyGrad)" opacity="0.6"/>
+
+  
+  <path d="M 180 110 Q 220 70 270 105 Q 250 115 220 115 Q 195 115 180 110 Z"
+        fill="#0A464C"/>
+
+  
+  <path d="M 130 220 Q 145 240 130 260" stroke="#0A464C" stroke-width="3"
+        fill="none" opacity="0.5" stroke-linecap="round"/>
+
+  
+  <ellipse cx="155" cy="310" rx="35" ry="20" fill="#0A464C"
+           transform="rotate(-25 155 310)"/>
+
+  
+  
+  <path d="M 80 215 Q 30 180 15 130 Q 13 110 25 100"
+        stroke="url(#whiskerGrad)" stroke-width="7" fill="none"
+        stroke-linecap="round"/>
+  
+  <circle cx="25" cy="100" r="9" fill="#F47B3D"/>
+  <circle cx="22" cy="97" r="3" fill="#FAF1E4" opacity="0.6"/>
+
+  
+  <path d="M 80 245 Q 30 280 15 340 Q 13 360 28 372"
+        stroke="url(#whiskerGradRev)" stroke-width="7" fill="none"
+        stroke-linecap="round"/>
+  <circle cx="28" cy="372" r="9" fill="#F47B3D"/>
+  <circle cx="25" cy="369" r="3" fill="#FAF1E4" opacity="0.6"/>
+
+  
+  <circle cx="135" cy="200" r="32" fill="#FFFFFF"/>
+  <circle cx="135" cy="200" r="32" fill="url(#eyeShine)"/>
+  
+  <circle cx="142" cy="206" r="18" fill="#1A2E33"/>
+  
+  <circle cx="148" cy="200" r="6" fill="#FFFFFF"/>
+  <circle cx="138" cy="214" r="3" fill="#FFFFFF" opacity="0.7"/>
+
+  
+  <ellipse cx="115" cy="255" rx="18" ry="10" fill="#F47B3D" opacity="0.45"/>
+
+  
+  <path d="M 95 235 Q 105 248 120 244" stroke="#0A464C" stroke-width="3.5"
+        fill="none" stroke-linecap="round"/>
+
+  
+  <circle cx="190" cy="80" r="6" fill="#1A8A95" opacity="0.5"/>
+  <circle cx="170" cy="55" r="4" fill="#1A8A95" opacity="0.4"/>
+  <circle cx="155" cy="35" r="2.5" fill="#1A8A95" opacity="0.3"/>
+</svg>
+</div><figcaption><b>现状 (母版)</b><span>向上向下张开像触角, 上须根部橙、尖端青 (渐变反了)</span></figcaption></figure><figure><div class="a">
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 480" width="480" height="480">
+  <defs>
+    
+    <radialGradient id="bodyGrad" cx="50%" cy="40%" r="65%">
+      <stop offset="0%" stop-color="#1A8A95"/>
+      <stop offset="60%" stop-color="#0E5F66"/>
+      <stop offset="100%" stop-color="#0A464C"/>
+    </radialGradient>
+    
+    <linearGradient id="bellyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FAF1E4" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#FAF1E4" stop-opacity="0.85"/>
+    </linearGradient>
+    
+    <linearGradient id="whiskerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0E5F66"/>
+      <stop offset="100%" stop-color="#F47B3D"/>
+    </linearGradient>
+    <linearGradient id="whiskerGradRev" x1="100%" y1="0%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#0E5F66"/>
+      <stop offset="100%" stop-color="#F47B3D"/>
+    </linearGradient>
+    
+    <radialGradient id="eyeShine" cx="35%" cy="30%" r="20%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  
+  
+
+  
+  <path d="M 380 240 L 460 180 L 445 240 L 460 300 Z"
+        fill="#0A464C" opacity="0.9"/>
+  <path d="M 380 240 L 455 200 L 440 240 L 455 285 Z"
+        fill="#0E5F66"/>
+
+  
+  <ellipse cx="220" cy="240" rx="170" ry="135" fill="url(#bodyGrad)"/>
+
+  
+  <ellipse cx="220" cy="290" rx="140" ry="80" fill="url(#bellyGrad)" opacity="0.6"/>
+
+  
+  <path d="M 180 110 Q 220 70 270 105 Q 250 115 220 115 Q 195 115 180 110 Z"
+        fill="#0A464C"/>
+
+  
+  <path d="M 130 220 Q 145 240 130 260" stroke="#0A464C" stroke-width="3"
+        fill="none" opacity="0.5" stroke-linecap="round"/>
+
+  
+  <ellipse cx="155" cy="310" rx="35" ry="20" fill="#0A464C"
+           transform="rotate(-25 155 310)"/>
+
+  
+  
+  
+
+  
+  
+
+  
+  <defs><linearGradient id="g56642615" gradientUnits="userSpaceOnUse" x1="80" y1="215" x2="25" y2="100"><stop offset="0%" stop-color="#0E5F66"/><stop offset="100%" stop-color="#F47B3D"/></linearGradient></defs><path d="M 80 215 Q 30 180 15 130 Q 13 110 25 100" stroke="url(#g56642615)" stroke-width="7" fill="none" stroke-linecap="round"/><circle cx="25" cy="100" r="9" fill="#F47B3D"/><circle cx="22" cy="97" r="3" fill="#FAF1E4" opacity="0.6"/><defs><linearGradient id="g1404992" gradientUnits="userSpaceOnUse" x1="80" y1="245" x2="28" y2="372"><stop offset="0%" stop-color="#0E5F66"/><stop offset="100%" stop-color="#F47B3D"/></linearGradient></defs><path d="M 80 245 Q 30 280 15 340 Q 13 360 28 372" stroke="url(#g1404992)" stroke-width="7" fill="none" stroke-linecap="round"/><circle cx="28" cy="372" r="9" fill="#F47B3D"/><circle cx="25" cy="369" r="3" fill="#FAF1E4" opacity="0.6"/><circle cx="135" cy="200" r="32" fill="#FFFFFF"/>
+  <circle cx="135" cy="200" r="32" fill="url(#eyeShine)"/>
+  
+  <circle cx="142" cy="206" r="18" fill="#1A2E33"/>
+  
+  <circle cx="148" cy="200" r="6" fill="#FFFFFF"/>
+  <circle cx="138" cy="214" r="3" fill="#FFFFFF" opacity="0.7"/>
+
+  
+  <ellipse cx="115" cy="255" rx="18" ry="10" fill="#F47B3D" opacity="0.45"/>
+
+  
+  <path d="M 95 235 Q 105 248 120 244" stroke="#0A464C" stroke-width="3.5"
+        fill="none" stroke-linecap="round"/>
+
+  
+  <circle cx="190" cy="80" r="6" fill="#1A8A95" opacity="0.5"/>
+  <circle cx="170" cy="55" r="4" fill="#1A8A95" opacity="0.4"/>
+  <circle cx="155" cy="35" r="2.5" fill="#1A8A95" opacity="0.3"/>
+
+</svg></div><figcaption><b>A · 只修颜色</b><span>角度不动, 只把上须渐变改成根青尖橙, 跟下须一致</span></figcaption></figure><figure><div class="a">
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 480" width="480" height="480">
+  <defs>
+    
+    <radialGradient id="bodyGrad" cx="50%" cy="40%" r="65%">
+      <stop offset="0%" stop-color="#1A8A95"/>
+      <stop offset="60%" stop-color="#0E5F66"/>
+      <stop offset="100%" stop-color="#0A464C"/>
+    </radialGradient>
+    
+    <linearGradient id="bellyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FAF1E4" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#FAF1E4" stop-opacity="0.85"/>
+    </linearGradient>
+    
+    <linearGradient id="whiskerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0E5F66"/>
+      <stop offset="100%" stop-color="#F47B3D"/>
+    </linearGradient>
+    <linearGradient id="whiskerGradRev" x1="100%" y1="0%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#0E5F66"/>
+      <stop offset="100%" stop-color="#F47B3D"/>
+    </linearGradient>
+    
+    <radialGradient id="eyeShine" cx="35%" cy="30%" r="20%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  
+  
+
+  
+  <path d="M 380 240 L 460 180 L 445 240 L 460 300 Z"
+        fill="#0A464C" opacity="0.9"/>
+  <path d="M 380 240 L 455 200 L 440 240 L 455 285 Z"
+        fill="#0E5F66"/>
+
+  
+  <ellipse cx="220" cy="240" rx="170" ry="135" fill="url(#bodyGrad)"/>
+
+  
+  <ellipse cx="220" cy="290" rx="140" ry="80" fill="url(#bellyGrad)" opacity="0.6"/>
+
+  
+  <path d="M 180 110 Q 220 70 270 105 Q 250 115 220 115 Q 195 115 180 110 Z"
+        fill="#0A464C"/>
+
+  
+  <path d="M 130 220 Q 145 240 130 260" stroke="#0A464C" stroke-width="3"
+        fill="none" opacity="0.5" stroke-linecap="round"/>
+
+  
+  <ellipse cx="155" cy="310" rx="35" ry="20" fill="#0A464C"
+           transform="rotate(-25 155 310)"/>
+
+  
+  
+  
+
+  
+  
+
+  
+  <defs><linearGradient id="g16306507" gradientUnits="userSpaceOnUse" x1="92" y1="236" x2="16" y2="300"><stop offset="0%" stop-color="#0E5F66"/><stop offset="100%" stop-color="#F47B3D"/></linearGradient></defs><path d="M 92 236 Q 45 222 22 246 Q 6 266 16 300" stroke="url(#g16306507)" stroke-width="7" fill="none" stroke-linecap="round"/><circle cx="16" cy="300" r="9" fill="#F47B3D"/><circle cx="13" cy="297" r="3" fill="#FAF1E4" opacity="0.6"/><defs><linearGradient id="g14311452" gradientUnits="userSpaceOnUse" x1="96" y1="248" x2="62" y2="346"><stop offset="0%" stop-color="#0E5F66"/><stop offset="100%" stop-color="#F47B3D"/></linearGradient></defs><path d="M 96 248 Q 66 268 56 300 Q 50 326 62 346" stroke="url(#g14311452)" stroke-width="7" fill="none" stroke-linecap="round"/><circle cx="62" cy="346" r="9" fill="#F47B3D"/><circle cx="59" cy="343" r="3" fill="#FAF1E4" opacity="0.6"/><circle cx="135" cy="200" r="32" fill="#FFFFFF"/>
+  <circle cx="135" cy="200" r="32" fill="url(#eyeShine)"/>
+  
+  <circle cx="142" cy="206" r="18" fill="#1A2E33"/>
+  
+  <circle cx="148" cy="200" r="6" fill="#FFFFFF"/>
+  <circle cx="138" cy="214" r="3" fill="#FFFFFF" opacity="0.7"/>
+
+  
+  <ellipse cx="115" cy="255" rx="18" ry="10" fill="#F47B3D" opacity="0.45"/>
+
+  
+  <path d="M 95 235 Q 105 248 120 244" stroke="#0A464C" stroke-width="3.5"
+        fill="none" stroke-linecap="round"/>
+
+  
+  <circle cx="190" cy="80" r="6" fill="#1A8A95" opacity="0.5"/>
+  <circle cx="170" cy="55" r="4" fill="#1A8A95" opacity="0.4"/>
+  <circle cx="155" cy="35" r="2.5" fill="#1A8A95" opacity="0.3"/>
+
+</svg></div><figcaption><b>B · 嘴角前伸后下垂</b><span>从嘴角长出, 先向前再自然下垂, 上长下短 —— 最像真鲶鱼</span></figcaption></figure><figure><div class="a">
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 480" width="480" height="480">
+  <defs>
+    
+    <radialGradient id="bodyGrad" cx="50%" cy="40%" r="65%">
+      <stop offset="0%" stop-color="#1A8A95"/>
+      <stop offset="60%" stop-color="#0E5F66"/>
+      <stop offset="100%" stop-color="#0A464C"/>
+    </radialGradient>
+    
+    <linearGradient id="bellyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FAF1E4" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#FAF1E4" stop-opacity="0.85"/>
+    </linearGradient>
+    
+    <linearGradient id="whiskerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0E5F66"/>
+      <stop offset="100%" stop-color="#F47B3D"/>
+    </linearGradient>
+    <linearGradient id="whiskerGradRev" x1="100%" y1="0%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#0E5F66"/>
+      <stop offset="100%" stop-color="#F47B3D"/>
+    </linearGradient>
+    
+    <radialGradient id="eyeShine" cx="35%" cy="30%" r="20%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  
+  
+
+  
+  <path d="M 380 240 L 460 180 L 445 240 L 460 300 Z"
+        fill="#0A464C" opacity="0.9"/>
+  <path d="M 380 240 L 455 200 L 440 240 L 455 285 Z"
+        fill="#0E5F66"/>
+
+  
+  <ellipse cx="220" cy="240" rx="170" ry="135" fill="url(#bodyGrad)"/>
+
+  
+  <ellipse cx="220" cy="290" rx="140" ry="80" fill="url(#bellyGrad)" opacity="0.6"/>
+
+  
+  <path d="M 180 110 Q 220 70 270 105 Q 250 115 220 115 Q 195 115 180 110 Z"
+        fill="#0A464C"/>
+
+  
+  <path d="M 130 220 Q 145 240 130 260" stroke="#0A464C" stroke-width="3"
+        fill="none" opacity="0.5" stroke-linecap="round"/>
+
+  
+  <ellipse cx="155" cy="310" rx="35" ry="20" fill="#0A464C"
+           transform="rotate(-25 155 310)"/>
+
+  
+  
+  
+
+  
+  
+
+  
+  <defs><linearGradient id="g10442825" gradientUnits="userSpaceOnUse" x1="92" y1="236" x2="54" y2="316"><stop offset="0%" stop-color="#0E5F66"/><stop offset="100%" stop-color="#F47B3D"/></linearGradient></defs><path d="M 92 236 Q 38 236 30 272 Q 26 300 54 316" stroke="url(#g10442825)" stroke-width="7" fill="none" stroke-linecap="round"/><circle cx="54" cy="316" r="9" fill="#F47B3D"/><circle cx="51" cy="313" r="3" fill="#FAF1E4" opacity="0.6"/><defs><linearGradient id="g44458875" gradientUnits="userSpaceOnUse" x1="96" y1="248" x2="150" y2="352"><stop offset="0%" stop-color="#0E5F66"/><stop offset="100%" stop-color="#F47B3D"/></linearGradient></defs><path d="M 96 248 Q 76 292 98 326 Q 116 350 150 352" stroke="url(#g44458875)" stroke-width="7" fill="none" stroke-linecap="round"/><circle cx="150" cy="352" r="9" fill="#F47B3D"/><circle cx="147" cy="349" r="3" fill="#FAF1E4" opacity="0.6"/><circle cx="135" cy="200" r="32" fill="#FFFFFF"/>
+  <circle cx="135" cy="200" r="32" fill="url(#eyeShine)"/>
+  
+  <circle cx="142" cy="206" r="18" fill="#1A2E33"/>
+  
+  <circle cx="148" cy="200" r="6" fill="#FFFFFF"/>
+  <circle cx="138" cy="214" r="3" fill="#FFFFFF" opacity="0.7"/>
+
+  
+  <ellipse cx="115" cy="255" rx="18" ry="10" fill="#F47B3D" opacity="0.45"/>
+
+  
+  <path d="M 95 235 Q 105 248 120 244" stroke="#0A464C" stroke-width="3.5"
+        fill="none" stroke-linecap="round"/>
+
+  
+  <circle cx="190" cy="80" r="6" fill="#1A8A95" opacity="0.5"/>
+  <circle cx="170" cy="55" r="4" fill="#1A8A95" opacity="0.4"/>
+  <circle cx="155" cy="35" r="2.5" fill="#1A8A95" opacity="0.3"/>
+
+</svg></div><figcaption><b>C · 游动时向后飘</b><span>从嘴角长出, 弧线往身下后方飘, 有"在游"的动感</span></figcaption></figure><figure><div class="a">
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 480" width="480" height="480">
+  <defs>
+    
+    <radialGradient id="bodyGrad" cx="50%" cy="40%" r="65%">
+      <stop offset="0%" stop-color="#1A8A95"/>
+      <stop offset="60%" stop-color="#0E5F66"/>
+      <stop offset="100%" stop-color="#0A464C"/>
+    </radialGradient>
+    
+    <linearGradient id="bellyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FAF1E4" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#FAF1E4" stop-opacity="0.85"/>
+    </linearGradient>
+    
+    <linearGradient id="whiskerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0E5F66"/>
+      <stop offset="100%" stop-color="#F47B3D"/>
+    </linearGradient>
+    <linearGradient id="whiskerGradRev" x1="100%" y1="0%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#0E5F66"/>
+      <stop offset="100%" stop-color="#F47B3D"/>
+    </linearGradient>
+    
+    <radialGradient id="eyeShine" cx="35%" cy="30%" r="20%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  
+  
+
+  
+  <path d="M 380 240 L 460 180 L 445 240 L 460 300 Z"
+        fill="#0A464C" opacity="0.9"/>
+  <path d="M 380 240 L 455 200 L 440 240 L 455 285 Z"
+        fill="#0E5F66"/>
+
+  
+  <ellipse cx="220" cy="240" rx="170" ry="135" fill="url(#bodyGrad)"/>
+
+  
+  <ellipse cx="220" cy="290" rx="140" ry="80" fill="url(#bellyGrad)" opacity="0.6"/>
+
+  
+  <path d="M 180 110 Q 220 70 270 105 Q 250 115 220 115 Q 195 115 180 110 Z"
+        fill="#0A464C"/>
+
+  
+  <path d="M 130 220 Q 145 240 130 260" stroke="#0A464C" stroke-width="3"
+        fill="none" opacity="0.5" stroke-linecap="round"/>
+
+  
+  <ellipse cx="155" cy="310" rx="35" ry="20" fill="#0A464C"
+           transform="rotate(-25 155 310)"/>
+
+  
+  
+  
+
+  
+  
+
+  
+  <defs><linearGradient id="g29169641" gradientUnits="userSpaceOnUse" x1="92" y1="236" x2="12" y2="212"><stop offset="0%" stop-color="#0E5F66"/><stop offset="100%" stop-color="#F47B3D"/></linearGradient></defs><path d="M 92 236 Q 50 214 26 222 Q 10 228 12 212" stroke="url(#g29169641)" stroke-width="7" fill="none" stroke-linecap="round"/><circle cx="12" cy="212" r="9" fill="#F47B3D"/><circle cx="9" cy="209" r="3" fill="#FAF1E4" opacity="0.6"/><defs><linearGradient id="g28477748" gradientUnits="userSpaceOnUse" x1="96" y1="248" x2="30" y2="312"><stop offset="0%" stop-color="#0E5F66"/><stop offset="100%" stop-color="#F47B3D"/></linearGradient></defs><path d="M 96 248 Q 56 262 34 284 Q 20 300 30 312" stroke="url(#g28477748)" stroke-width="7" fill="none" stroke-linecap="round"/><circle cx="30" cy="312" r="9" fill="#F47B3D"/><circle cx="27" cy="309" r="3" fill="#FAF1E4" opacity="0.6"/><circle cx="135" cy="200" r="32" fill="#FFFFFF"/>
+  <circle cx="135" cy="200" r="32" fill="url(#eyeShine)"/>
+  
+  <circle cx="142" cy="206" r="18" fill="#1A2E33"/>
+  
+  <circle cx="148" cy="200" r="6" fill="#FFFFFF"/>
+  <circle cx="138" cy="214" r="3" fill="#FFFFFF" opacity="0.7"/>
+
+  
+  <ellipse cx="115" cy="255" rx="18" ry="10" fill="#F47B3D" opacity="0.45"/>
+
+  
+  <path d="M 95 235 Q 105 248 120 244" stroke="#0A464C" stroke-width="3.5"
+        fill="none" stroke-linecap="round"/>
+
+  
+  <circle cx="190" cy="80" r="6" fill="#1A8A95" opacity="0.5"/>
+  <circle cx="170" cy="55" r="4" fill="#1A8A95" opacity="0.4"/>
+  <circle cx="155" cy="35" r="2.5" fill="#1A8A95" opacity="0.3"/>
+
+</svg></div><figcaption><b>D · 嘴角两侧微翘</b><span>从嘴角向前左右张开, 尖端微翘, 更"萌"更有表情</span></figcaption></figure></div></body></html>

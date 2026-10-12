@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-10 0 500 470"><defs>
+<radialGradient id="grad-alert-body" cx="50%" cy="40%" r="65%"><stop offset="0%" stop-color="#1A8A95"/><stop offset="60%" stop-color="#0E5F66"/><stop offset="100%" stop-color="#0A464C"/></radialGradient>
+<linearGradient id="grad-alert-belly" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#FAF1E4" stop-opacity="0"/><stop offset="100%" stop-color="#FAF1E4" stop-opacity="0.85"/></linearGradient>
+<clipPath id="grad-alert-clip"><ellipse cx="220" cy="240" rx="170" ry="135"/></clipPath>
+</defs>
+<path d="M 380 240 L 460 180 L 445 240 L 460 300 Z" fill="#0A464C" opacity="0.9"/><path d="M 380 240 L 455 200 L 440 240 L 455 285 Z" fill="#0E5F66"/>
+<ellipse cx="220" cy="240" rx="170" ry="135" fill="url(#grad-alert-body)"/><ellipse cx="220" cy="290" rx="140" ry="80" fill="url(#grad-alert-belly)" opacity="0.6"/>
+<path d="M 180 110 Q 220 70 270 105 Q 250 115 220 115 Q 195 115 180 110 Z" fill="#0A464C"/>
+<path d="M 130 220 Q 145 240 130 260" stroke="#0A464C" stroke-width="3" fill="none" opacity="0.5" stroke-linecap="round"/>
+<ellipse cx="155" cy="310" rx="35" ry="20" fill="#0A464C" transform="rotate(-25 155 310)"/>
+<defs><linearGradient id="grad-alert-wh" gradientUnits="userSpaceOnUse" x1="92" y1="236" x2="20" y2="176"><stop offset="0%" stop-color="#0E5F66"/><stop offset="100%" stop-color="#F47B3D"/></linearGradient><linearGradient id="grad-alert-whr" gradientUnits="userSpaceOnUse" x1="96" y1="248" x2="30" y2="312"><stop offset="0%" stop-color="#0E5F66"/><stop offset="100%" stop-color="#F47B3D"/></linearGradient></defs>
+<path d="M 92 236 Q 52 200 34 196 Q 18 194 20 176" stroke="url(#grad-alert-wh)" stroke-width="7" fill="none" stroke-linecap="round"/><circle cx="20" cy="176" r="9" fill="#F47B3D"/>
+<path d="M 96 248 Q 56 262 34 284 Q 20 300 30 312" stroke="url(#grad-alert-whr)" stroke-width="7" fill="none" stroke-linecap="round"/><circle cx="30" cy="312" r="9" fill="#F47B3D"/>
+<circle cx="135" cy="200" r="34" fill="#fff"/><circle cx="138" cy="202" r="13" fill="#1A2E33"/><circle cx="142" cy="197" r="4.5" fill="#fff"/><path d="M 104 156 Q 132 140 162 152" stroke="#0A464C" stroke-width="7" fill="none" stroke-linecap="round"/><ellipse cx="115" cy="255" rx="18" ry="10" fill="#F47B3D" opacity="0.45"/><ellipse cx="104" cy="244" rx="8" ry="10" fill="#0A464C"/><rect x="300" y="40" width="64" height="64" rx="32" fill="#e8864a"/><rect x="328" y="52" width="8" height="26" rx="4" fill="#fff"/><circle cx="332" cy="89" r="5" fill="#fff"/></svg>

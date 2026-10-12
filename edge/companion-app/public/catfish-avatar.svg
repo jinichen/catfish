@@ -26,15 +26,14 @@
   <!-- 腹部高光 -->
   <ellipse cx="138" cy="170" rx="75" ry="40" fill="#FAF1E4" opacity="0.4"/>
 
-  <!-- 上须 (从左侧伸出) -->
-  <path d="M 60 130 Q 25 110 15 75" stroke="#0E5F66" stroke-width="6"
+  <!-- 须 (10/12 改: 从嘴角向前左右张开, 尖端微翘; 跟 logo-mascot 一致. 原来上下竖起像触角) -->
+  <path d="M 62.4 139.8 Q 37.9 126.9 23.9 131.6 Q 14.5 135.0 15.6 125.7" stroke="#0E5F66" stroke-width="6"
         fill="none" stroke-linecap="round"/>
-  <circle cx="15" cy="75" r="8" fill="#F47B3D"/>
+  <circle cx="15.6" cy="125.7" r="8" fill="#F47B3D"/>
 
-  <!-- 下须 -->
-  <path d="M 60 155 Q 25 175 15 210" stroke="#0E5F66" stroke-width="6"
+  <path d="M 65.2 148.0 Q 41.8 156.2 29.0 169.1 Q 20.7 178.4 26.6 185.4" stroke="#0E5F66" stroke-width="6"
         fill="none" stroke-linecap="round"/>
-  <circle cx="15" cy="210" r="8" fill="#F47B3D"/>
+  <circle cx="26.6" cy="185.4" r="8" fill="#F47B3D"/>
 
   <!-- 眼睛 -->
   <circle cx="92" cy="115" r="22" fill="#FFFFFF"/>

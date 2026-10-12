@@ -4,9 +4,9 @@
   用途: Onboarding 引导 / Companion 启动闪屏 / 对外宣传 banner / 名片
   设计: 圆润亲和的鲶鱼身体 + 两根标志性长须 (鲶鱼物种特征 + 隐喻"敏感的触角探听员工需求")
   色调: 深青基调 (墨青 #0E5F66 → 深青 #1A8A95 渐变) + 暖橙高光 (须尖 + 腮红)
-  作者注: 须的弯曲方向暗示"探询", 嘴角微笑, 眼睛大且圆 (信任感)
+  作者注: 须从嘴角向前张开 (10/12 改, 原为上下竖起), 暗示"探询", 嘴角微笑, 眼睛大且圆 (信任感)
 -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 480" width="480" height="480">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-12 -6 492 492" width="480" height="480">
   <defs>
     <!-- 身体渐变: 顶部深, 腹部浅, 体积感 -->
     <radialGradient id="bodyGrad" cx="50%" cy="40%" r="65%">
@@ -20,11 +20,12 @@
       <stop offset="100%" stop-color="#FAF1E4" stop-opacity="0.85"/>
     </linearGradient>
     <!-- 须的渐变: 根部深青, 尖端暖橙 -->
-    <linearGradient id="whiskerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+    <!-- 10/12: 改用 userSpaceOnUse 按"根→尖"取向 (原来上须用左→右渐变, 根部成了橙、尖端成了青, 反了) -->
+    <linearGradient id="whiskerGrad" gradientUnits="userSpaceOnUse" x1="92" y1="236" x2="12" y2="212">
       <stop offset="0%" stop-color="#0E5F66"/>
       <stop offset="100%" stop-color="#F47B3D"/>
     </linearGradient>
-    <linearGradient id="whiskerGradRev" x1="100%" y1="0%" x2="0%" y2="0%">
+    <linearGradient id="whiskerGradRev" gradientUnits="userSpaceOnUse" x1="96" y1="248" x2="30" y2="312">
       <stop offset="0%" stop-color="#0E5F66"/>
       <stop offset="100%" stop-color="#F47B3D"/>
     </linearGradient>
@@ -62,21 +63,21 @@
   <ellipse cx="155" cy="310" rx="35" ry="20" fill="#0A464C"
            transform="rotate(-25 155 310)"/>
 
-  <!-- ─── 两根标志性长须 (从嘴边伸出, 优雅弯曲) ─── -->
-  <!-- 上须: 向左上飘 -->
-  <path d="M 80 215 Q 30 180 15 130 Q 13 110 25 100"
+  <!-- ─── 两根标志性长须 (10/12 改: 从嘴角长出, 向前左右张开, 尖端微翘 —— 原来上下竖起像触角) ─── -->
+  <!-- 上须: 嘴角向前, 尖端上翘 -->
+  <path d="M 92 236 Q 50 214 26 222 Q 10 228 12 212"
         stroke="url(#whiskerGrad)" stroke-width="7" fill="none"
         stroke-linecap="round"/>
   <!-- 须尖小球 (暖橙) -->
-  <circle cx="25" cy="100" r="9" fill="#F47B3D"/>
-  <circle cx="22" cy="97" r="3" fill="#FAF1E4" opacity="0.6"/>
+  <circle cx="12" cy="212" r="9" fill="#F47B3D"/>
+  <circle cx="9" cy="209" r="3" fill="#FAF1E4" opacity="0.6"/>
 
-  <!-- 下须: 向左下飘 -->
-  <path d="M 80 245 Q 30 280 15 340 Q 13 360 28 372"
+  <!-- 下须: 嘴角向前下, 尖端回勾 -->
+  <path d="M 96 248 Q 56 262 34 284 Q 20 300 30 312"
         stroke="url(#whiskerGradRev)" stroke-width="7" fill="none"
         stroke-linecap="round"/>
-  <circle cx="28" cy="372" r="9" fill="#F47B3D"/>
-  <circle cx="25" cy="369" r="3" fill="#FAF1E4" opacity="0.6"/>
+  <circle cx="30" cy="312" r="9" fill="#F47B3D"/>
+  <circle cx="27" cy="309" r="3" fill="#FAF1E4" opacity="0.6"/>
 
   <!-- ─── 眼睛 (大, 圆, 友好) ─── -->
   <circle cx="135" cy="200" r="32" fill="#FFFFFF"/>

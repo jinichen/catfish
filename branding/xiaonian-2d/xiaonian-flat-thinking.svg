@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-10 0 500 470"><defs>
+<radialGradient id="flat-thinking-body" cx="50%" cy="40%" r="65%"><stop offset="0%" stop-color="#1A8A95"/><stop offset="60%" stop-color="#0E5F66"/><stop offset="100%" stop-color="#0A464C"/></radialGradient>
+<linearGradient id="flat-thinking-belly" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#FAF1E4" stop-opacity="0"/><stop offset="100%" stop-color="#FAF1E4" stop-opacity="0.85"/></linearGradient>
+<clipPath id="flat-thinking-clip"><ellipse cx="220" cy="240" rx="170" ry="135"/></clipPath>
+</defs>
+<path d="M 380 240 L 460 180 L 445 240 L 460 300 Z" fill="#0f3d44" opacity="0.9"/><path d="M 380 240 L 455 200 L 440 240 L 455 285 Z" fill="#16565f"/>
+<ellipse cx="220" cy="240" rx="170" ry="135" fill="#1f8a8f"/><ellipse cx="225" cy="330" rx="160" ry="80" fill="#f6f3ea" opacity="0.92" clip-path="url(#flat-thinking-clip)"/>
+<path d="M 180 110 Q 220 70 270 105 Q 250 115 220 115 Q 195 115 180 110 Z" fill="#0f3d44"/>
+<path d="M 130 220 Q 145 240 130 260" stroke="#0f3d44" stroke-width="3" fill="none" opacity="0.5" stroke-linecap="round"/>
+<path d="M 150 268 Q 196 262 214 296 Q 178 306 150 268 Z" fill="#16565f"/>
+<defs><linearGradient id="flat-thinking-wh" gradientUnits="userSpaceOnUse" x1="92" y1="236" x2="12" y2="212"><stop offset="0%" stop-color="#0E5F66"/><stop offset="100%" stop-color="#F47B3D"/></linearGradient><linearGradient id="flat-thinking-whr" gradientUnits="userSpaceOnUse" x1="96" y1="248" x2="30" y2="312"><stop offset="0%" stop-color="#0E5F66"/><stop offset="100%" stop-color="#F47B3D"/></linearGradient></defs>
+<path d="M 92 236 Q 50 214 26 222 Q 10 228 12 212" stroke="#0f3d44" stroke-width="7" fill="none" stroke-linecap="round"/><circle cx="12" cy="212" r="9" fill="#e8864a"/>
+<path d="M 96 248 Q 56 262 34 284 Q 20 300 30 312" stroke="#0f3d44" stroke-width="7" fill="none" stroke-linecap="round"/><circle cx="30" cy="312" r="9" fill="#e8864a"/>
+<circle cx="135" cy="200" r="32" fill="#fff"/><circle cx="146" cy="188" r="17" fill="#0f3d44"/><circle cx="151" cy="183" r="5.5" fill="#fff"/><ellipse cx="115" cy="255" rx="18" ry="10" fill="#e8864a" opacity="0.8"/><ellipse cx="104" cy="244" rx="8" ry="10" fill="#0f3d44"/><circle cx="250" cy="70" r="10" fill="#1f8a8f" opacity="0.55"/><circle cx="285" cy="42" r="14" fill="#1f8a8f" opacity="0.45"/><circle cx="328" cy="22" r="18" fill="#1f8a8f" opacity="0.35"/></svg>
