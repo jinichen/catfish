@@ -38,6 +38,8 @@ dependencies = [
     # (fallback 分支保留 — 别的部署形态可能装不上, 那时 had_jieba=False
     #  会在 Dashboard 上明示"退 char fallback", 不静默.)
     "jieba >= 0.42",
+    # 10/12 销售跟进: 价格表导入 / 报价单 / 销售周报都是 .xlsx (sales_*.py), 是功能本身不是 skill 附带
+    "openpyxl >= 3.0",
 ]
 
 [project.scripts]
