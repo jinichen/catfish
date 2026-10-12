@@ -128,6 +128,12 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
             return _error(req_id, INVALID_PARAMS, "range 只支持 today / natural-week")
         return _success(req_id, local_pim.events_for_range(rng))
 
+    # 10/12: 「提醒同步到微信」的「发一条测试」(wechat_push.py), Rust 侧 notify_prefs.rs 调; 不进模型工具清单
+    if method == "pim/wechat_push_test":
+        from . import wechat_push  # noqa: PLC0415
+        ok = await asyncio.to_thread(wechat_push.push, "🔔 小鲶提醒测试: 以后 Windows 上的提醒会同步推到这里。")
+        return _success(req_id, {"ok": ok, **wechat_push.last_status()})
+
     return _error(req_id, METHOD_NOT_FOUND, f"unknown method: {method}")
 
 

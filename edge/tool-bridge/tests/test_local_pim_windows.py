@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from catfish_tool_bridge import calendar_events, local_pim, reminders, task_library
+from catfish_tool_bridge import calendar_events, local_pim, reminders, task_library, wechat_push
 
 
 @pytest.fixture(autouse=True)
@@ -18,6 +18,8 @@ def tmp_db(tmp_path, monkeypatch):
     monkeypatch.setenv("CATFISH_TASK_LIBRARY_PATH", str(tmp_path / "task_library.db"))
     monkeypatch.setattr(local_pim, "_ics_dir", lambda: tmp_path / "calendar")
     monkeypatch.setattr("platform.system", lambda: "Windows")
+    # 10/12: 闹钟到点会顺带推微信 —— 测试里绝不能读真机的开关 / 真发出去
+    monkeypatch.setattr(wechat_push, "_catfish_dir", lambda: tmp_path / ".catfish")
     return tmp_path
 
 

@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import task_library
+from . import wechat_push
 
 logger = logging.getLogger("catfish.tool_bridge.local_pim")
 
@@ -305,10 +306,16 @@ def fire_due_alarms(now: datetime | None = None, notify: Callable[[str, str], No
         when = task_library._parse_due(r["due_date_iso"] or r["due_iso"])
         detail = f"{when:%m-%d %H:%M}" if when and when.time() != dtime(0, 0) else ""
         title = "⏰ 小鲶提醒 (错过的)" if late else "⏰ 小鲶提醒"
+        line = " · ".join(x for x in (r["title"], detail) if x)
         try:
-            notify(title, " · ".join(x for x in (r["title"], detail) if x))
+            notify(title, line)
         except Exception:  # noqa: BLE001 —— 弹不出来也别死循环重试同一条
             logger.warning("提醒通知失败: %s", tid, exc_info=True)
+        # 10/12: 员工开了「提醒同步到微信」就再推一条到他绑定的微信 (手机上也能收到)
+        try:
+            wechat_push.push_reminder(title, line)
+        except Exception:  # noqa: BLE001
+            logger.warning("提醒推送到微信异常: %s", tid, exc_info=True)
         _mark_fired(tid)
         fired.append(tid)
     return fired

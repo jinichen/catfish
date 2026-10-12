@@ -132,6 +132,7 @@ import AccountSecurityCard from "./AccountSecurityCard";
 // 跟隐私同 section — IM 平台用户 ↔ 真员工 隔离也是隐私红线 (防 100 个 WeChat
 // 用户记忆串到一个虚拟员工身上).
 import WeChatBindingCard from "./WeChatBindingCard";
+import WeChatReminderPushCard from "./WeChatReminderPushCard";
 // 6/8 BL-EMPLOYEE-SELF-SERVE A4 Phase 2: 数据外发记录独立卡 (filter / paginate /
 // 导出 CSV). 跟 PrivacyCard 同 section, 因为它是"员工自查中央实际收到什么"的核心
 // 落地, 是公理 2 (数据零出端) 的**可证明 enforcement** 层.
@@ -252,6 +253,7 @@ export default function DashboardTab() {
             { key: "wechat", label: "💬 微信接入", render: () => (
               <div style={{ display: "grid", gap: 24, minWidth: 0 }}>
                 <WeChatBindingCard />
+                <WeChatReminderPushCard />
                 <WeChatImportsCard />
               </div>
             ) },
