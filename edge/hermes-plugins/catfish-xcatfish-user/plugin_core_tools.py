@@ -204,6 +204,9 @@ _PROMOTE = (
     # distilled_facts (早安根本不读后者), 卡片照样复活 —— 跟上面同一个病。
     # gateway tools_sanitizer_constants.py ALWAYS_ON 同步加了 (两处必须一起改)。
     "catfish_advisor_close_task",
+    # 10/12: 客户档案 + 跟进雷达。处理完客户邮件 / 微信 / 会议要**马上**记时间线, 模型不会先去
+    # tool_search; 藏起来雷达就没有数据。gateway ALWAYS_ON 同步加了 (两处必须一起改)。
+    "catfish_customer",
     # 同一份 SYSTEM_PROMPT 里还有两个被 `→` 点名的, 一起提升 —— 漏掉它们
     # 就是同一个病换个工具复发。这两个是 8/15 日志里 DeepSeek 调用次数最多的
     # (check_compliance 4 次、political_sensitivity_scan 2 次), 每次都得先

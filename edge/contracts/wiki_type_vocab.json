@@ -40,7 +40,9 @@
     "统计规则": "rule",
     "分类框架": "framework",
     "框架": "framework",
-    "分类标准": "standard"
+    "分类标准": "standard",
+    "客户": "customer",
+    "客户公司": "customer"
   },
   "entity_types": [
     "cert",
@@ -52,7 +54,8 @@
     "person",
     "project",
     "standard",
-    "system"
+    "system",
+    "customer"
   ],
   "concept_types": [
     "method",

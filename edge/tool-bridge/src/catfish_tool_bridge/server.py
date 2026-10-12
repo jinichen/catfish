@@ -128,6 +128,17 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
             return _error(req_id, INVALID_PARAMS, "range 只支持 today / natural-week")
         return _success(req_id, local_pim.events_for_range(rng))
 
+    # 10/12: 销售跟进 (customers.py / customer_radar.py): 早安「客户跟进」+ 设置「销售模板」, 不进模型工具清单
+    if method in ("pim/customer_radar", "pim/sales_template_get", "pim/sales_template_set"):
+        from . import customer_radar, customers  # noqa: PLC0415
+        if method == "pim/customer_radar":
+            return _success(req_id, await asyncio.to_thread(customer_radar.scan))
+        if method == "pim/sales_template_get":
+            return _success(req_id, customers.load_template())
+        try:
+            return _success(req_id, customers.save_template(params.get("template") or {}))
+        except (ValueError, TypeError) as e:
+            return _error(req_id, INVALID_PARAMS, str(e))
     # 10/12: 「提醒同步到微信」的「发一条测试」(wechat_push.py), Rust 侧 notify_prefs.rs 调; 不进模型工具清单
     if method == "pim/wechat_push_test":
         from . import wechat_push  # noqa: PLC0415

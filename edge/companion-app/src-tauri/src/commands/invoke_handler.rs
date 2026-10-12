@@ -200,6 +200,10 @@ pub(crate) fn handler(
             crate::commands::notify_prefs::notify_prefs_get,
             crate::commands::notify_prefs::notify_prefs_set,
             crate::commands::notify_prefs::notify_wechat_test,
+            crate::commands::sales::sales_customer_radar,
+            crate::commands::sales::sales_template_get,
+            crate::commands::sales::sales_template_set,
+            crate::commands::sales::sales_promise_done,
             crate::commands::meeting_asr_cmd::meeting_asr_status,
             crate::commands::meeting_asr_cmd::meeting_asr_install,
             // 10/6: 向量模型组件包 (语义检索的 BGE-M3) 状态 + 安装

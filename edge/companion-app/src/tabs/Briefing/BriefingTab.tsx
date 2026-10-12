@@ -8,6 +8,7 @@
  */
 
 import BriefingCard from "../Dashboard/BriefingCard";
+import CustomerFollowupStrip from "./CustomerFollowupStrip";
 
 export default function BriefingTab() {
   return (
@@ -43,6 +44,8 @@ export default function BriefingTab() {
         flexDirection: "column",
       }}
     >
+      {/* 10/12: 销售跟进雷达; 没有客户档案时不渲染 */}
+      <CustomerFollowupStrip />
       <BriefingCard />
     </div>
   );

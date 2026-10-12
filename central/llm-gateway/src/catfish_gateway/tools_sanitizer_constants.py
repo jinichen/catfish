@@ -33,7 +33,8 @@ CATFISH_BROWSER_PREFIX = "catfish_browser_"
 # 9/2: browser_evaluate 直达后需要 42 个，仍低于 Qwen 50+ tools 的实测风险线。
 # 9/8: task library 查询直达后需要 43 个，仍保留 7 个工具的实测安全余量。
 # 10/8: 关早安卡片 (catfish_advisor_close_task) 直达后需要 44 个, 余量 6。
-DEFAULT_MAX_TOOLS = 44
+# 10/12: 客户档案 + 跟进雷达 (catfish_customer, 七个 action 合成一个工具) 直达后 45, 余量 5。
+DEFAULT_MAX_TOOLS = 45
 ENV_MAX_TOOLS = "CATFISH_MAX_TOOLS"
 
 
@@ -247,6 +248,8 @@ ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
     "catfish_political_sensitivity_scan",
     # 10/8: 关早安卡片 (P43 _PROMOTE 同步加了, 见 plugin_core_tools.py)。
     "catfish_advisor_close_task",
+    # 10/12: 客户档案 + 跟进雷达 (P43 _PROMOTE 同步加了)。
+    "catfish_customer",
     # BL-LLM-PLAN-WITHOUT-ACT (5/19): 内网 qwen 见到周报 / PPT 等关键词必须能立即
     # 找到对应 skill 并触发, 不能因 BL-TOOL-CAP 被砍. skill discovery + invocation
     # 这一族永不 drop. (catfish_run_skill 已在表里, 这里补 hermes 0.14 的 skill_*.)

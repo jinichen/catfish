@@ -133,6 +133,7 @@ import AccountSecurityCard from "./AccountSecurityCard";
 // 用户记忆串到一个虚拟员工身上).
 import WeChatBindingCard from "./WeChatBindingCard";
 import WeChatReminderPushCard from "./WeChatReminderPushCard";
+import SalesTemplateCard from "./SalesTemplateCard";
 // 6/8 BL-EMPLOYEE-SELF-SERVE A4 Phase 2: 数据外发记录独立卡 (filter / paginate /
 // 导出 CSV). 跟 PrivacyCard 同 section, 因为它是"员工自查中央实际收到什么"的核心
 // 落地, 是公理 2 (数据零出端) 的**可证明 enforcement** 层.
@@ -257,6 +258,8 @@ export default function DashboardTab() {
                 <WeChatImportsCard />
               </div>
             ) },
+            // 10/12: 销售跟进 —— 阶段名 / 几天算冷 (docs/SALES-FOLLOWUP-PLAN.md)
+            { key: "sales", label: "🤝 销售跟进", render: () => <SalesTemplateCard /> },
             // BL-SELF-CHANGE-PASSWORD (7/20): 员工自主改密码
             { key: "account", label: "🔐 账号安全", render: () => <AccountSecurityCard /> },
           ]}
