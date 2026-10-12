@@ -4,7 +4,7 @@
 
   reply    客户在等我回: 最新一条是客户的问题, 之后我方没回, 超过 reply_wait_days 个工作日
   promise  我答应的事:   我方承诺到了截止日还没标 ✓; 或档案 next_action_due 过了
-  cold     客户冷了:     last_contact 超过该阶段的 cold_days (0 = 这个阶段不追)
+  cold     客户冷了:     last_contact (没有就用建档日 created) 超过该阶段的 cold_days (0 = 这个阶段不追)
   quote    报价没回音:   阶段 = quoted_stage, 最近一次我方报价之后客户没来过消息, 超过 quote_followup_days 天
 
 判断"是不是问题 / 承诺"是模型记时间线时做的 (kind 字段); 这里是确定性规则, 同样的
@@ -54,7 +54,7 @@ def _card(c: dict[str, Any], rule: str, anchor: str, quote: str, age: int, extra
 
 def customer_cards(c: dict[str, Any], tpl: dict[str, Any], today: date) -> list[dict[str, Any]]:
     cards: list[dict[str, Any]] = []
-    tl = c["timeline"]
+    tl = [e for e in c["timeline"] if e["channel"] != customers.SYSTEM_CHANNEL]  # 改阶段 / 生成报价单不算回过客户
     stage = c.get("stage")
     cold_days = next((s["cold_days"] for s in tpl["stages"] if s["name"] == stage), 0)
     active = cold_days > 0  # 成交 / 输单 / 暂停 这类阶段不追
@@ -84,11 +84,13 @@ def customer_cards(c: dict[str, Any], tpl: dict[str, Any], today: date) -> list[
                     cards.append(_card(c, "quote", e["date"], e["text"], (today - sent).days))
                 break
 
-    # cold: 客户最后一次来消息太久 (已经出了 reply / quote 的不重复报冷)
-    last = _d(c.get("last_contact"))
+    # cold: 客户最后一次来消息太久 (已经出了 reply / quote 的不重复报冷);
+    # 建档后客户一次没来过消息的, 从建档日算 —— 否则这种客户永远不会被提醒
+    anchor = c.get("last_contact") or c.get("created")
+    last = _d(anchor)
     if active and last and (today - last).days >= cold_days and not any(x["rule"] in ("reply", "quote") for x in cards):
-        latest = next((e["text"] for e in tl if e["who"] == "客户"), "")
-        cards.append(_card(c, "cold", c["last_contact"], latest, (today - last).days, {"cold_days": cold_days}))
+        latest = next((e["text"] for e in tl if e["who"] == "客户"), "") or "建档后客户还没来过消息"
+        cards.append(_card(c, "cold", str(anchor)[:10], latest, (today - last).days, {"cold_days": cold_days}))
     return cards
 
 

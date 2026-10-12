@@ -172,3 +172,66 @@ def test_validate_dept(dept, ok):
     from catfish_wiki_hub.namespaces import validate_dept
 
     assert (validate_dept(dept) is None) is ok
+
+
+# ── 销售漏斗摘要 (10/12, 销售跟进阶段 3) ──
+
+def _mgr(sub: str, dept: str, managed: list[str]) -> dict:
+    h = _h(sub, dept, "manager")
+    h["X-Catfish-User-Managed-Depts"] = ",".join(urllib.parse.quote(d, safe="") for d in managed)
+    return h
+
+
+SALES_A = _h("sales-a@x", "销售部")
+SALES_B = _h("sales-b@x", "销售部")
+SALES_MGR = _mgr("boss@x", "总经办", ["销售部"])
+OTHER_MGR = _mgr("rd-boss@x", "研发部", ["研发部"])
+
+
+def _publish_summary(client, headers, funnel, customers, file_id=None):
+    import json as _json
+
+    summary = {"owner": headers["X-Catfish-User-Sub"], "funnel": funnel, "customers": customers}
+    payload = {
+        "filename": "catfish/sales-summary.md", "title": "销售漏斗", "kind": "query",
+        "frontmatter_yaml": "title: 销售漏斗\ncatfish_doc: sales_summary\nsales_summary: "
+                            + _json.dumps(summary, ensure_ascii=False),
+        "body_md": "| 客户 | 阶段 |",
+    }
+    if file_id:
+        payload["file_id"] = file_id
+    r = client.post("/wiki/documents", json=payload, headers=headers)
+    assert r.status_code == 200, r.text
+    return r.json()["file_id"]
+
+
+def test_sales_summary_hidden_from_colleagues(client):
+    fid = _publish_summary(client, SALES_A, [{"stage": "线索", "count": 2, "deal_total": 0}], [{"name": "南岭建设"}])
+    _publish(client, SALES_B)  # 普通 wiki 照常互相可见
+    seen_by_b = [d["file_id"] for d in client.get("/wiki/documents", headers=SALES_B).json()["documents"]]
+    assert fid not in seen_by_b and len(seen_by_b) == 1
+    assert client.get(_doc_url("销售部", fid), headers=SALES_B).status_code == 403
+    assert client.get(_doc_url("销售部", fid), headers=SALES_A).status_code == 200  # 本人
+    assert client.get(_doc_url("销售部", fid), headers=ADMIN).status_code == 200
+
+
+def test_sales_funnel_for_managers_only(client):
+    fid = _publish_summary(client, SALES_A, [{"stage": "线索", "count": 2, "deal_total": 0},
+                                             {"stage": "已报价", "count": 1, "deal_total": 120000}], [{"name": "南岭建设"}])
+    _publish_summary(client, SALES_A, [{"stage": "线索", "count": 3, "deal_total": 0},
+                                       {"stage": "已报价", "count": 1, "deal_total": 120000}], [{"name": "南岭建设"}], file_id=fid)
+    _publish_summary(client, SALES_B, [{"stage": "已报价", "count": 2, "deal_total": 80000},
+                                       {"stage": "成交", "count": 1, "deal_total": 50000}], [{"name": "恒远检测"}])
+    url = f"/wiki/sales/dept/{urllib.parse.quote('销售部')}"
+    r = client.get(url, headers=SALES_MGR)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert sorted(m["published_by"] for m in data["members"]) == ["sales-a@x", "sales-b@x"]
+    funnel = {f["stage"]: f for f in data["funnel"]}
+    assert [f["stage"] for f in data["funnel"]] == ["线索", "已报价", "成交"]
+    assert funnel["线索"]["count"] == 3 and funnel["已报价"]["count"] == 3 and funnel["已报价"]["deal_total"] == 200000
+    assert client.get(url, headers=ADMIN).status_code == 200
+    for who in (SALES_A, OTHER_MGR):
+        assert client.get(url, headers=who).status_code == 403
+    # 主管能在部门知识库列表里看到摘要 (管的部门), 也能打开
+    assert client.get(_doc_url("销售部", fid), headers=SALES_MGR).status_code == 200

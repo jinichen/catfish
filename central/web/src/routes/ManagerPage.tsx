@@ -27,6 +27,7 @@ import { Link, Navigate, Route, Routes, useNavigate, useParams } from "react-rou
 import { BTN_PRIMARY, DataTable, Section, Tabs, Toolbar } from "../components/DataTable";
 import { PageShell } from "../components/PageShell";
 import { RoleGate } from "../components/RoleGate";
+import { DepartmentSalesView } from "./DepartmentSales";
 import { Stat, StatBand } from "../components/StatBand";
 import { adminApi } from "../lib/admin";
 import {
@@ -210,7 +211,7 @@ function DepartmentDetail({ dept }: { dept: string }) {
    *  跟整站风格完全不搭。就地反馈就够了。 */
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
   /** 明细按哪个维度看。跟概览页 / 性能页 / 审计页同一套。 */
-  const [detailTab, setDetailTab] = useState<"model" | "user">("model");
+  const [detailTab, setDetailTab] = useState<"model" | "user" | "sales">("model");
 
   useEffect(() => {
     // 切部门是原地换数据, 所以这里必须有 alive: 连着点两个部门时, 先发的
@@ -397,11 +398,15 @@ function DepartmentDetail({ dept }: { dept: string }) {
                     : audit.by_user.length
                 }`,
               },
+              // 10/12: 销售跟进阶段 3 —— 销售主动发布的漏斗摘要 (没人发布时提示怎么发)
+              { key: "sales", label: "销售漏斗" },
             ]}
           />
         </div>
 
-        {detailTab === "model" ? (
+        {detailTab === "sales" ? (
+          <DepartmentSalesView dept={dept} />
+        ) : detailTab === "model" ? (
           <DataTable
             fill
             rows={audit.by_model}

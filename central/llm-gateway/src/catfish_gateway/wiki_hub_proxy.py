@@ -74,6 +74,8 @@ def _filter_request_headers(headers: Any) -> dict[str, str]:
             continue
         if kl == "authorization":
             continue
+        if kl.startswith("x-catfish-user-"):
+            continue  # 身份头只能由 gateway 注入; 客户端自带的 (大小写不同也算) 一律丢, 防冒充 role / 部门
         if kl in _FORWARD_HEADERS or kl.startswith("x-"):
             out[k] = v
     return out
@@ -105,6 +107,10 @@ async def _proxy(
     headers["X-Catfish-User-Sub"] = _safe_header_value(user.sub or "")
     headers["X-Catfish-User-Dept"] = _safe_header_value(user.department or "")
     headers["X-Catfish-User-Role"] = _safe_header_value(user.role or "employee")
+    # manager 管的部门 (销售漏斗权限); 部门名里可能有逗号, 每个单独全量编码
+    headers["X-Catfish-User-Managed-Depts"] = ",".join(
+        urllib.parse.quote(d, safe="") for d in (user.managed_departments or []) if d
+    )
 
     body = await request.body()
     client: httpx.AsyncClient = request.app.state.wiki_hub_client
@@ -198,6 +204,18 @@ async def unpublish_document(
 ) -> Response:
     """撤回 wiki — 员工只能撤自己 publish 的, admin 例外."""
     return await _proxy(request, _doc_path(dept, file_id, "/unpublish"), user)
+
+
+@router.get("/sales/dept/{dept}")
+async def sales_funnel(
+    dept: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+) -> Response:
+    """部门销售漏斗 (销售跟进阶段 3) —— 中央 web 部门页用。admin / 管这个部门的 manager 才能看, hub 再查一遍。"""
+    if not user.can_manage_department(dept):
+        raise HTTPException(status_code=403, detail=f"只有 {dept} 的主管或管理员能看全组销售漏斗")
+    return await _proxy(request, f"/wiki/sales/dept/{urllib.parse.quote(dept, safe='')}", user)
 
 
 @router.get("/audit")

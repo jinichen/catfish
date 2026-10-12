@@ -222,6 +222,10 @@ def wiki_publish(args: dict[str, Any]) -> dict[str, Any]:
 
     # 解 frontmatter
     fm_yaml, body_md = _parse_frontmatter(text)
+    # 10/12: 客户页 (时间线里是客户原话) 只在本机; 给主管看走「发布给主管」的结构化摘要 (sales_publish.py)
+    if _extract_field(fm_yaml, "entity_type") == "customer":
+        return {"ok": False, "error": "客户档案只存在你本机, 不能整页分享到部门 (里面有客户原话)。"
+                                      "要让主管看到进展, 用 设置 →「🤝 销售跟进」→「发布给主管」, 只发阶段 / 金额 / 下一步。"}
     title = _extract_field(fm_yaml, "title")
     if not title:
         # title fallback: 用文件 stem

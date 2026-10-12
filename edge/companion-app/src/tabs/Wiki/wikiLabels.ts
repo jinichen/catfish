@@ -20,6 +20,7 @@ const SUBTYPE_LABELS: Record<string, string> = {
   standard: "标准",
   product: "产品",
   vendor: "供应商",
+  customer: "客户",
   doc: "文档",
   data: "数据",
   notification: "通知",
@@ -30,7 +31,7 @@ const SUBTYPE_LABELS: Record<string, string> = {
 };
 
 /** 左侧目录的类型分组顺序 (9/24)。不在表里的类型排在这些之后, 「未分类」最后。 */
-export const ENTITY_TYPE_ORDER = ["org", "department", "person", "project", "cert", "standard", "doc", "data", "notification", "system"];
+export const ENTITY_TYPE_ORDER = ["org", "department", "person", "customer", "project", "cert", "standard", "doc", "data", "notification", "system"];
 export const CONCEPT_TYPE_ORDER = ["system", "process", "rule", "principle", "standard", "scope", "method", "category", "framework"];
 
 export function groupByType<T extends { subtype: string | null; kind: string; title: string }>(

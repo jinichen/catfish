@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -156,6 +156,15 @@ def test_radar_cold_per_stage_and_closed_stages_ignored(home):
     assert cards[0]["quote"] == "好的我们再看看" and cards[0]["age_days"] == 4
 
 
+def test_radar_cold_counts_from_created_when_never_contacted(home):
+    make(stage="商务谈判")  # 建档后客户一次没来过消息
+    created = date.fromisoformat(c(action="get", customer="南岭建设")["customer"]["created"][:10])
+    assert scan(created.isoformat()) == []
+    cards = scan((created + timedelta(days=3)).isoformat())
+    assert [x["rule"] for x in cards] == ["cold"] and cards[0]["quote"] == "建档后客户还没来过消息"
+    assert cards[0]["uid"] == f"cust:南岭建设:cold:{created.isoformat()}"
+
+
 def test_radar_uses_template_days(home):
     customers.save_template({"stages": [{"name": "询价", "cold_days": 30}], "quoted_stage": "询价"})
     make(stage="询价")
@@ -193,3 +202,26 @@ def test_rpc_radar_and_template_roundtrip(home):
            "reply_wait_days": 2, "quote_followup_days": 4}
     assert rpc("pim/sales_template_set", {"template": tpl})["result"]["stages"] == [{"name": "询价", "cold_days": 9}]
     assert "error" in rpc("pim/sales_template_set", {"template": {"stages": [], "quoted_stage": "x"}})
+
+
+# ── 模型绕开 catfish_customer, 用通用知识库工具建了客户页 (10/12 实测出现过) ──
+
+def test_wiki_create_customer_page_is_adopted(home):
+    r = wiki_files.tool_wiki_create({"kind": "entity", "title": "达远智能", "subtype": "客户", "tags": ["客户", "需求确认"],
+                                     "body": "# 达远智能\n\n## 跟进记录\n\n- 电话里问能不能先试用"})
+    assert r["ok"] and "catfish_customer" in r["customer_note"]
+    got = c(action="get", customer="达远智能")["customer"]
+    assert got["stage"] == "需求确认"  # 从标签认出阶段
+    text = (home / r["rel_path"]).read_text(encoding="utf-8")
+    assert "stage: 需求确认" in text and "## 时间线" in text and "电话里问能不能先试用" in text  # 原内容不动
+    assert c(action="log", customer="达远智能", channel="电话", who="客户", kind="问题", text="能先试用吗")["ok"]
+    # 普通条目不受影响
+    assert "customer_note" not in wiki_files.tool_wiki_create({"kind": "entity", "title": "某标准", "subtype": "standard", "body": "x"})
+
+
+def test_page_without_stage_field_still_on_radar(home):
+    r = wiki_files.create_wiki_entry("entity", "达近科技", "# 达近科技\n", subtype="customer", tags=["客户"])
+    assert c(action="get", customer="达近科技")["customer"]["stage"] == "线索"  # 没写阶段算第一个
+    created = date.fromisoformat(c(action="get", customer="达近科技")["customer"]["created"][:10])
+    assert [x["rule"] for x in scan((created + timedelta(days=14)).isoformat())] == ["cold"]
+    assert r["ok"]

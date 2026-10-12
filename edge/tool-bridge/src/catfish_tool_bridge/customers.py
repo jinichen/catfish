@@ -33,6 +33,8 @@ from . import wiki_files
 SUBTYPE = "customer"
 TIMELINE_HEADER = "## 时间线"
 CHANNELS = ("邮件", "微信", "会议", "电话", "其他")
+# 小鲶自己记的事 (改阶段、生成报价单), 不是跟客户的往来: 模型 log 不能用, 雷达判「等回复」时跳过
+SYSTEM_CHANNEL = "系统"
 WHO = ("客户", "我方")
 KINDS = ("问题", "承诺", "报价", "信息")
 DONE_MARK = "✓"
@@ -159,7 +161,11 @@ def _read(path: Path) -> dict[str, Any]:
     }
     for key in FIELDS:
         rec[key] = _field(fm, key)
+    if not rec["stage"]:  # 通用知识库工具建的客户页没有 stage: 先看标签里有没有阶段名, 没有算第一个阶段
+        tags = str(wiki_files._parse_field(fm, "tags") or "")
+        rec["stage"] = next((n for n in stage_names() if n in tags), stage_names()[0])
     rec["contacts"] = rec["contacts"] if isinstance(rec["contacts"], list) else []
+    rec["created"] = _field(fm, "created")
     rec["timeline"] = parse_timeline(body)
     return rec
 
@@ -284,7 +290,7 @@ def _write(rec: dict[str, Any], content: str) -> dict[str, Any]:
 
 
 def _summary(c: dict[str, Any], timeline: int = 0) -> dict[str, Any]:
-    out = {k: c.get(k) for k in ("name", "rel_path", *FIELDS)}
+    out = {k: c.get(k) for k in ("name", "rel_path", *FIELDS, "created")}
     if timeline:
         out["timeline"] = c["timeline"][:timeline]
     return out
@@ -328,12 +334,49 @@ def action_upsert(args: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "needs_confirmation": True,
                 "proposal": {"name": rec["name"], "stage_from": rec.get("stage"), "stage_to": stage},
                 "message": "改阶段要员工确认 (阶段是业务判断): 说明依据, 员工同意后带 confirmed=true 再调"}
+    stage_changed = bool(stage) and stage != rec.get("stage")
     if stage:
         fields["stage"] = stage
     if not fields:
         return {"ok": True, "unchanged": True, "customer": _summary(rec)}
-    _write(rec, _set_fields(rec["content"], fields))
+    content = _set_fields(rec["content"], fields)
+    if stage_changed:  # 周报靠这一行知道本周谁变了阶段
+        content = _with_system_entry(content, rec["timeline"], f"阶段 {rec.get('stage') or '无'} → {stage}")
+    _write(rec, content)
     return {"ok": True, "customer": _summary(_read(_entities_dir() / Path(rec["rel_path"]).name))}
+
+
+def _with_system_entry(content: str, timeline: list[dict[str, Any]], text: str) -> str:
+    entry = {"date": _today(), "channel": SYSTEM_CHANNEL, "who": "我方", "kind": "信息",
+             "text": text.replace(" · ", " ")[:160], "due": None, "done": False}
+    return _replace_timeline(content, [entry, *timeline])
+
+
+def append_system(rec: dict[str, Any], text: str) -> None:
+    """往客户时间线顶上记一条「系统」行 (生成报价单这类)。"""
+    _write(rec, _with_system_entry(rec["content"], rec["timeline"], text))
+
+
+def adopt_page(rel_path: str) -> dict[str, Any]:
+    """通用 catfish_wiki_create 建出来的客户页: 写上 stage、补「## 时间线」, 并提醒模型以后走 catfish_customer。
+    不是客户页返回 {}。"""
+    path = _entities_dir() / Path(rel_path).name
+    if not rel_path.startswith("wiki/entities/") or not path.is_file():
+        return {}
+    content = path.read_text(encoding="utf-8")
+    fm, body = wiki_files._split_frontmatter(content)
+    if not _is_customer(fm):
+        return {}
+    rec = _read(path)
+    new = content
+    if not _field(fm, "stage"):
+        new = _set_fields(new, {"stage": rec["stage"]})
+    if TIMELINE_HEADER not in body.splitlines():
+        new = _replace_timeline(new, [])
+    if new != content:
+        _write(rec, new)
+    return {"customer_note": f"这是客户页 (阶段: {rec['stage']})。之后跟进记录用 catfish_customer action=log 记进「时间线」, "
+                             "改阶段用 action=upsert (要员工确认); 不要用 catfish_wiki_update 改这一页, 否则跟进雷达读不到。"}
 
 
 def _resolve(args: dict[str, Any]) -> dict[str, Any]:
@@ -409,10 +452,21 @@ def dispatch(name: str, args: dict[str, Any]) -> dict[str, Any]:
             return {"ok": True, **customer_radar.scan()}
         if action == "template":
             return {"ok": True, "template": load_template()}
+        if action in ("price", "quote", "quotes"):  # 阶段 2: 价格表 / 报价单
+            from . import sales_pricebook, sales_quote  # noqa: PLC0415
+            if action == "price":
+                book = sales_pricebook.load_pricebook()
+                if not book["items"]:
+                    return {"ok": False, "error": "还没导入价格表: 请员工在 设置 →「🤝 销售跟进」导入 Excel 价格表"}
+                return {"ok": True, "source": book["source"], "items": sales_pricebook.search(str(args.get("text") or ""))}
+            return (sales_quote.action_quote if action == "quote" else sales_quote.action_quotes)(args)
+        if action == "weekly":
+            from . import sales_weekly  # noqa: PLC0415
+            return sales_weekly.action_weekly(args)
         handler = {"upsert": action_upsert, "log": action_log, "done": action_done,
                    "get": action_get, "list": action_list}.get(action)
         if handler is None:
-            raise ValueError("action 只能是 upsert / log / done / get / list / radar / template")
+            raise ValueError("action 只能是 upsert / log / done / get / list / radar / template / price / quote / quotes / weekly")
         return handler(args)
     except (ValueError, LookupError, RuntimeError) as e:
         return {"ok": False, "error": str(e)}

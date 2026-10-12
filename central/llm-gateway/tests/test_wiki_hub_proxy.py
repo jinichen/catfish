@@ -76,3 +76,23 @@ def test_old_single_segment_namespace_route_gone(client, seen):
     r = client.post("/v1/wiki/documents/dept/finance", content=b"{}")
     assert r.status_code in (404, 405)
     assert seen == []
+
+
+def test_client_cannot_spoof_identity_headers(client, seen):
+    client.get("/v1/wiki/documents", headers={"x-catfish-user-role": "admin", "X-Catfish-User-Managed-Depts": "sales"})
+    sent = seen[-1].headers
+    assert sent.get_list("x-catfish-user-role") == ["employee"]
+    assert sent.get_list("x-catfish-user-managed-depts") == [""]
+
+
+def test_sales_funnel_requires_manager_of_dept(client, seen):
+    assert client.get(f"/v1/wiki/sales/dept/{urllib.parse.quote('销售部')}").status_code == 403
+    client.app.dependency_overrides[get_current_user] = lambda: User(
+        sub="boss@x", department="总经办", role="manager", managed_departments=["销售部", "a,b"],
+    )
+    r = client.get(f"/v1/wiki/sales/dept/{urllib.parse.quote('销售部')}")
+    assert r.status_code == 200
+    assert seen[-1].url.raw_path.decode() == f"/wiki/sales/dept/{urllib.parse.quote('销售部')}"
+    managed = [urllib.parse.unquote(x) for x in seen[-1].headers["X-Catfish-User-Managed-Depts"].split(",")]
+    assert managed == ["销售部", "a,b"]
+    assert client.get(f"/v1/wiki/sales/dept/{urllib.parse.quote('研发部')}").status_code == 403

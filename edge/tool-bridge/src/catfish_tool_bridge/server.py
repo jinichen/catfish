@@ -139,6 +139,27 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
             return _success(req_id, customers.save_template(params.get("template") or {}))
         except (ValueError, TypeError) as e:
             return _error(req_id, INVALID_PARAMS, str(e))
+    # 10/12: 销售跟进阶段 2 (sales_pricebook.py): 设置「🤝 销售跟进」里导价格表 / 报价单设置 / 公司模板;
+    # 阶段 3 (sales_publish.py): 「发布给主管」—— 员工点了才发, 先看 preview
+    if method.startswith(("pim/sales_pricebook_", "pim/sales_quote_", "pim/sales_publish")):
+        from . import sales_pricebook as sp  # noqa: PLC0415
+        from . import sales_publish  # noqa: PLC0415
+        handlers = {
+            "pim/sales_publish_preview": sales_publish.preview,
+            "pim/sales_publish": sales_publish.publish,
+            "pim/sales_publish_withdraw": sales_publish.unpublish,
+            "pim/sales_pricebook_import": lambda: sp.import_pricebook(str(params.get("path") or "")),
+            "pim/sales_pricebook_get": sp.load_pricebook,
+            "pim/sales_quote_settings_get": sp.load_quote_settings,
+            "pim/sales_quote_settings_set": lambda: sp.save_quote_settings(params.get("settings") or {}),
+            "pim/sales_quote_template_import": lambda: sp.import_quote_template(str(params.get("path") or "")),
+            "pim/sales_quote_template_clear": sp.clear_quote_template,
+        }
+        if method in handlers:
+            try:
+                return _success(req_id, await asyncio.to_thread(handlers[method]))
+            except (ValueError, OSError) as e:
+                return _error(req_id, INVALID_PARAMS, str(e))
     # 10/12: 「提醒同步到微信」的「发一条测试」(wechat_push.py), Rust 侧 notify_prefs.rs 调; 不进模型工具清单
     if method == "pim/wechat_push_test":
         from . import wechat_push  # noqa: PLC0415

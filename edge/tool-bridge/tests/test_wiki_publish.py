@@ -210,3 +210,14 @@ def test_publish_ack_warnings_passes_scan(monkeypatch, tmp_path):
     assert result["ok"] is False
     assert result.get("scan_phase") != "warnings"
     assert "OAuth" in result.get("error", "")
+
+
+def test_publish_refuses_customer_pages(monkeypatch, tmp_path):
+    """10/12: 客户页时间线里是客户原话, 不能整页分享到部门; 给主管看走 sales_publish 结构化摘要。"""
+    fake_home = tmp_path / "home"
+    page = fake_home / ".catfish" / "wiki" / "entities" / "南岭建设.md"
+    page.parent.mkdir(parents=True)
+    page.write_text("---\ntitle: 南岭建设\ntype: entity\nentity_type: customer\n---\n## 时间线\n- 客户原话\n", encoding="utf-8")
+    monkeypatch.setattr("pathlib.Path.home", lambda: fake_home)
+    r = wiki_publish.wiki_publish({"wiki_rel_path": "wiki/entities/南岭建设.md"})
+    assert not r["ok"] and "发布给主管" in r["error"]

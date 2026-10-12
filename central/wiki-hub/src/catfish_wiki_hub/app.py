@@ -56,7 +56,7 @@ def _load_dotenv() -> Path | None:
 _ENV_FILE_LOADED = _load_dotenv()
 
 from . import __version__
-from . import storage
+from . import sales, storage
 from .namespaces import can_see, is_admin, namespace_for, validate_dept
 
 logger = logging.getLogger("catfish.wiki_hub")
@@ -93,14 +93,19 @@ def require_user(
     x_catfish_user_sub: str | None = Header(default=None, alias="X-Catfish-User-Sub"),
     x_catfish_user_dept: str | None = Header(default=None, alias="X-Catfish-User-Dept"),
     x_catfish_user_role: str | None = Header(default=None, alias="X-Catfish-User-Role"),
+    x_catfish_user_managed: str | None = Header(default=None, alias="X-Catfish-User-Managed-Depts"),
     authorization: str | None = Header(default=None),
 ) -> dict:
-    """信 gateway 注入 (主路径). dev token fallback (可选)."""
+    """信 gateway 注入 (主路径). dev token fallback (可选).
+
+    Managed-Depts: manager 管的部门, 逗号分隔, 每个各自 percent-encode (10/12, 销售漏斗用)。
+    """
     if x_catfish_user_sub:
         return {
             "sub": _decode_header(x_catfish_user_sub),
             "dept": _decode_header(x_catfish_user_dept or ""),
             "role": _decode_header(x_catfish_user_role or "employee"),
+            "managed": [_decode_header(x) for x in (x_catfish_user_managed or "").split(",") if x],
         }
     expected = os.environ.get("CATFISH_WIKI_HUB_DEV_TOKEN", "").strip()
     if expected and authorization and authorization.lower().startswith("bearer "):
@@ -142,7 +147,7 @@ async def list_documents_endpoint(
     else:
         dept = (user.get("dept") or "").strip()
         visible = [namespace_for(dept)] if dept and validate_dept(dept) is None else []
-    docs = storage.list_documents(visible, include_stale=include_stale)
+    docs = [d for d in storage.list_documents(visible, include_stale=include_stale) if not sales.hidden_from(user, d)]
     return {"documents": docs, "count": len(docs)}
 
 
@@ -163,15 +168,34 @@ async def get_document_endpoint(
     file_id: str,
     user: dict = Depends(require_user),
 ) -> dict:
-    """单条 wiki — 含 frontmatter + body. stale 项也返, 客户端按 stale_after_unpublish 字段判断."""
-    namespace = _require_visible(user, dept)
+    """单条 wiki — 含 frontmatter + body. stale 项也返, 客户端按 stale_after_unpublish 字段判断.
+
+    manager 能按 id 打开所管部门的条目 (中央 web 部门页看销售摘要原文用)。"""
+    namespace = namespace_for(dept) if validate_dept(dept) is None and sales.can_manage(user, dept) \
+        else _require_visible(user, dept)
     try:
         doc = storage.get_document(namespace, file_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if doc is None:
         raise HTTPException(status_code=404, detail=f"{namespace}/{file_id} 不存在")
+    if sales.hidden_from(user, doc):
+        raise HTTPException(status_code=403, detail="这是同事的销售漏斗摘要, 只有本人和部门主管能看")
     return doc
+
+
+@app.get("/wiki/sales/dept/{dept}")
+async def sales_funnel_endpoint(dept: str, user: dict = Depends(require_user)) -> dict:
+    """部门销售漏斗 (阶段 3): 每个销售最新一份摘要 + 全组按阶段合计。只给 admin / 管这个部门的 manager。"""
+    err = validate_dept(dept)
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+    if not sales.can_manage(user, dept):
+        raise HTTPException(status_code=403, detail=f"只有 {dept} 的主管或管理员能看全组销售漏斗")
+    namespace = namespace_for(dept)
+    metas = [m for m in storage.list_documents([namespace], include_stale=False) if sales.is_sales_summary(m)]
+    docs = [d for d in (storage.get_document(namespace, m["file_id"]) for m in metas) if d]
+    return {"department": dept, **sales.department_funnel(docs)}
 
 
 @app.post("/wiki/documents")

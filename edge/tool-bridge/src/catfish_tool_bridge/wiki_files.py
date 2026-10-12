@@ -744,7 +744,7 @@ def tool_wiki_list(args: dict) -> dict[str, Any]:
 
 
 def tool_wiki_create(args: dict) -> dict[str, Any]:
-    return create_wiki_entry(
+    r = create_wiki_entry(
         kind=str(args.get("kind", "entity")),
         title=str(args.get("title", "")),
         body=str(args.get("body", "")),
@@ -752,6 +752,11 @@ def tool_wiki_create(args: dict) -> dict[str, Any]:
         tags=list(args.get("tags") or []),
         related=list(args.get("related") or []),
     )
+    # 10/12: 模型绕开 catfish_customer 直接建了客户页 → 补上阶段 + 时间线, 雷达 / 周报才认得
+    if r.get("ok") and r.get("rel_path"):
+        from . import customers  # noqa: PLC0415
+        r.update(customers.adopt_page(r["rel_path"]))
+    return r
 
 
 def tool_wiki_read(args: dict) -> dict[str, Any]:

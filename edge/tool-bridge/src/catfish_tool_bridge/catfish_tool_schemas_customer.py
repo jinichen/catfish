@@ -26,12 +26,17 @@ CUSTOMER_TOOLS: List[Dict[str, Any]] = [
             "**不要记到别的客户上**。③ 不在个人微信里替销售发消息, 只起草。\n\n"
             "action: upsert=建/改客户字段 · log=记时间线 · done=承诺标已办 · get=看一个客户 · "
             "list=按阶段列客户 · radar=跟进雷达 (客户在等回复 / 我答应的到期 / 客户冷了 / 报价没回音) · "
-            "template=看销售模板 (阶段名、天数)。阶段名以 template 为准, 不同商品的团队阶段不同。"
+            "template=看销售模板 (阶段名、天数)。阶段名以 template 为准, 不同商品的团队阶段不同。\n\n"
+            "**报价 / 周报**: price=查价格表 (text=商品关键词) · quote=给客户出 Excel 报价单 (items 明细; 单价不给就按价格表, "
+            "价格表里没有的商品先问员工单价, **不要编价**; 折后低于最低价会返回 needs_confirmation, 员工确认才带 confirmed=true) · "
+            "quotes=这个客户出过的报价版本 · weekly=生成销售周报 Excel (员工说「写销售周报 / 本周销售情况」时调, 数字照返回念)。"
+            "报价单只生成文件, **不替员工发**; 员工说已发给客户后再 log kind=报价。"
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["upsert", "log", "done", "get", "list", "radar", "template"]},
+                "action": {"type": "string", "enum": ["upsert", "log", "done", "get", "list", "radar", "template",
+                                                      "price", "quote", "quotes", "weekly"]},
                 "name": {"type": "string", "description": "upsert: 客户公司全名"},
                 "customer": {"type": "string", "description": "log/done/get: 客户名 (或用 email / wechat 定位)"},
                 "email": {"type": "string", "description": "按联系人邮箱 (同公司域名也算) 定位客户"},
@@ -49,14 +54,28 @@ CUSTOMER_TOOLS: List[Dict[str, Any]] = [
                 "next_action": {"type": "string", "description": "upsert: 下一步一句话"},
                 "next_action_due": {"type": "string", "description": "upsert: 下一步截止 YYYY-MM-DD"},
                 "deal_size": {"type": "string", "description": "upsert: 预计金额, 如「12万/年」"},
-                "confirmed": {"type": "boolean", "description": "新建客户 / 改阶段: 员工已明确同意才 true"},
-                "date": {"type": "string", "description": "log: 这件事发生的日期 YYYY-MM-DD, 默认今天"},
+                "confirmed": {"type": "boolean", "description": "新建客户 / 改阶段 / 报价低于最低价: 员工已明确同意才 true"},
+                "date": {"type": "string", "description": "log: 这件事发生的日期 YYYY-MM-DD, 默认今天; weekly: 统计哪一周 (含这天的那周), 默认本周"},
                 "channel": {"type": "string", "enum": ["邮件", "微信", "会议", "电话", "其他"]},
                 "who": {"type": "string", "enum": ["客户", "我方"]},
                 "kind": {"type": "string", "enum": ["问题", "承诺", "报价", "信息"]},
-                "text": {"type": "string", "description": "log: 原话要点; done: 要标完成那条承诺的原文片段"},
+                "text": {"type": "string", "description": "log: 原话要点; done: 要标完成那条承诺的原文片段; price: 商品关键词"},
                 "due": {"type": "string", "description": "log 承诺: 截止日 YYYY-MM-DD"},
                 "limit": {"type": "integer", "description": "get: 时间线返回条数, 默认 30"},
+                "items": {
+                    "type": "array",
+                    "items": {"type": "object", "properties": {
+                        "name": {"type": "string", "description": "商品名 (用价格表里的准确名字)"},
+                        "spec": {"type": "string"}, "unit": {"type": "string"},
+                        "qty": {"type": "number"},
+                        "price": {"type": "number", "description": "单价; 不给 = 价格表标价"},
+                        "discount": {"type": "number", "description": "0.9 = 九折; 不给 = 不打折"},
+                        "note": {"type": "string"},
+                    }, "required": ["name", "qty"]},
+                    "description": "quote: 报价明细",
+                },
+                "valid_days": {"type": "integer", "description": "quote: 有效期天数, 默认按设置"},
+                "note": {"type": "string", "description": "quote: 报价单备注 (交付周期、付款方式等)"},
             },
             "required": ["action"],
         },
