@@ -81,9 +81,13 @@ def _enqueue_stream_event(stream_q, event) -> None:
 #
 # 别名设计 (鸿波语义习惯, 6/5 拍):
 #   "批准"/"同意"/"通过"/"确认"/"审批" → /approve  (单次)
-#   "总是批准"/"始终批准"           → /approve always (永久)
-#   "本会话批准"/"会话批准"        → /approve session (本 session)
 #   "拒绝"/"驳回"/"不同意"/"取消"   → /deny
+#
+# 10/13 (鸿波定 A): 文字审批渠道**只给单次批准**。微信会话是长寿的 (7/31 开的会话 10/13
+# 还在用), 「本会话批准」实际等于长期放行。原来映射成 /approve session · /approve always
+# 的口语、中文斜杠、以及英文 `/approve session` `/approve always` 一律降成 /approve。
+# 带意思的回答 (数字 / 口语) 在审批等待时由 P52 (plugin_approval_ux.py) 处理, 这里是
+# 斜杠命令走 _handle_message 的那条路, 两边口径一致。
 
 _APPROVE_ALIASES = {
     # ── 无 / 版本 (员工口语) ─────────────────────────
@@ -95,13 +99,13 @@ _APPROVE_ALIASES = {
     "ok": "/approve",
     "好的": "/approve",
     "可以": "/approve",
-    "总是批准": "/approve always",
-    "始终批准": "/approve always",
-    "总是允许": "/approve always",
-    "本会话批准": "/approve session",
-    "会话批准": "/approve session",
-    "本次会话": "/approve session",
-    "本次会话批准": "/approve session",
+    "总是批准": "/approve",
+    "始终批准": "/approve",
+    "总是允许": "/approve",
+    "本会话批准": "/approve",
+    "会话批准": "/approve",
+    "本次会话": "/approve",
+    "本次会话批准": "/approve",
     "拒绝": "/deny",
     "驳回": "/deny",
     "不同意": "/deny",
@@ -112,10 +116,13 @@ _APPROVE_ALIASES = {
     # `if not raw.startswith("/")` 直接跳过 · 员工按提示发 · plugin 认不出 · 又弹审批.
     # 且 · 老死代码 _P28_CMD_ALIASES 定义未使用 · 应 dedupe 到这里.
     "/批准": "/approve",
-    "/批准 本次会话": "/approve session",
-    "/批准本次会话": "/approve session",
+    "/批准 本次会话": "/approve",
+    "/批准本次会话": "/approve",
     "/批准 执行": "/approve",  # Bot 提示词里"回复 /批准 执行 (单次)"
     "/拒绝": "/deny",
+    # 英文原生的会话级 / 永久批准也降成单次 (见上面 10/13 说明)
+    "/approve session": "/approve",
+    "/approve always": "/approve",
 }
 
 
@@ -156,30 +163,8 @@ def _patch_p14_approve_chinese_alias() -> None:
                             "P14 slash alias (unconditional): '%s' → '%s'", raw, alias
                         )
                         event.text = alias
-
-                        # BL-P25-SESSION-SCOPE-SUPPLEMENT (7/19 Task #25 深追):
-                        # `/approve session` hermes 内部 _handle_approve_command 只
-                        # resolve 当前 pending · **可能**没调 approve_session(session_key,
-                        # pattern_key). 补 · WeChat 场景 /批准 本次会话 · 我们**主动**
-                        # 调 approve_session · 把 "execute_code" pattern_key 加进
-                        # _session_approved · 后续同 pattern execute_code auto-approve ·
-                        # 不再弹.
-                        if alias == "/approve session":
-                            try:
-                                from tools.approval import approve_session
-                                sess = self._session_key_for_source(event.source)
-                                if sess:
-                                    approve_session(sess, "execute_code")
-                                    logger.info(
-                                        "P25 supplement: approve_session(%s, 'execute_code') "
-                                        "手工加进 _session_approved · 后续同 pattern 免批",
-                                        sess[:12],
-                                    )
-                            except Exception as e:  # noqa: BLE001
-                                logger.warning(
-                                    "P25 supplement: approve_session 手工调挂 (%s) · "
-                                    "hermes 内部 _handle_approve_command 应仍生效", e
-                                )
+                        # (原 P25 supplement 手工 approve_session(execute_code) 已删: 10/13 起
+                        #  文字渠道只给单次批准, 不再有 /approve session 这条路。)
                     else:
                         # 不带 / 中文口语 · 走原 pending gate 避免误吞 chat
                         try:

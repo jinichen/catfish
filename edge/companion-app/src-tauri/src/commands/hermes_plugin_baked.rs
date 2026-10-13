@@ -125,6 +125,12 @@ const BAKED_WINDOWS_CHAT_CREDENTIALS: &str =
 // 10/6 P50: 自动续跑 (模型"说了要做没调工具"时替员工按「继续」, 见 plugin_auto_continue.py)
 const BAKED_PLUGIN_AUTO_CONTINUE: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_auto_continue.py");
+// 10/13 P51/P52: 微信审批大白话 + 回 1/2/3, 回复按意思认 (见 plugin_approval_ux.py)
+const BAKED_PLUGIN_APPROVAL_UX: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_approval_ux.py");
+// 10/13 P53: tool_call 转发已提升的 catfish 工具 (见 plugin_bridge_promoted.py)
+const BAKED_PLUGIN_BRIDGE_PROMOTED: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_bridge_promoted.py");
 
 /// Plugin 的全部文件 (filename, baked content).
 ///
@@ -165,4 +171,6 @@ pub(crate) const BAKED_FILES: &[(&str, &str)] = &[
     ("plugin_room_link.py", BAKED_PLUGIN_ROOM_LINK),
     ("windows_chat_credentials.py", BAKED_WINDOWS_CHAT_CREDENTIALS),
     ("plugin_auto_continue.py", BAKED_PLUGIN_AUTO_CONTINUE),
+    ("plugin_approval_ux.py", BAKED_PLUGIN_APPROVAL_UX),
+    ("plugin_bridge_promoted.py", BAKED_PLUGIN_BRIDGE_PROMOTED),
 ];

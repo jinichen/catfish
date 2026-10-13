@@ -54,6 +54,33 @@ REFACTOR_BASE = "cc4d71a"
 #: 一个 patch 悄悄多出来跟悄悄少一个同等危险 —— monkey-patch 是全进程生效的，
 #: 谁加的、为什么加、影响面多大，得有地方写。
 INTENTIONALLY_ADDED: dict[str, str] = {
+    "_patch_p53_bridge_promoted_catfish_tools": (
+        "10/13 加。模型用 tool_call 调被 P43 提升的 catfish_wiki_search, 上游报"
+        "「not a deferrable tool」, qwen-flash 没改直接调, 绕去写 Python 读 .md → "
+        "微信里两次 execute_code 审批。\n"
+        "  改: tools.tool_search.resolve_underlying_call / scoped_deferrable_names —— "
+        "只对 mcp__catfish_tools__ 开头、已注册、且在本会话工具列表里的名字放行。\n"
+        "  影响面: 能调到的工具集合不变 (被 defer 的本来走 tool_call, 被提升的本来直接调); "
+        "别的工具原逻辑; 工具自身审批 / 参数校验照常。"
+    ),
+    "_patch_p51_approval_prompt": (
+        "10/13 加。微信等文字审批提示: 英文模板 / 「回复 `/批准 本次会话`」→ 大白话 (代码"
+        "第一行注释) + 回 1 执行 / 2 不要, 代码放最后。**只给单次批准** (鸿波定 A: 微信会话"
+        "长寿, 「本会话都允许」实际等于长期放行)。\n"
+        "  影响面: 只改 gateway.run._format_exec_approval_fallback 的返回文字; smart_denied"
+        "      (管理员单次放行) 照旧走原文; 生成出错也退回原文, 审批一定发得出去。\n"
+        "  跟已有闸的关系: 收紧不放松 —— 不再提供会话级 / 永久批准。"
+        "P28 的英文→中文替换对新文字是空操作。"
+    ),
+    "_patch_p52_busy_approval_reply": (
+        "10/13 加。审批在等时员工回复先进 busy handler, hermes 只认几个英文词; "
+        "「/审批本次会话」这类回复被当新消息打断任务、再弹审批。\n"
+        "  改: has_blocking_approval 时按意思认 (数字 / 中文口语 / 带不带斜杠, 先判否定), "
+        "改写成 approve (单次) / deny 交回原 handler; 「都允许」「session」也只算单次; "
+        "认不出的短回复 (≤16 字) 只回提示不打断。\n"
+        "  影响面: 只在有审批在等且文本非空时生效; 其余原样。\n"
+        "  跟已有闸的关系: P14 挂 _handle_message (斜杠命令那条路), 同样降成单次, 口径一致。"
+    ),
     "_patch_p50_auto_continue": (
         "10/6: 模型回一句动作意图 (「逐项目比对。」) 却不调工具, finish_reason=stop "
         "回合就结束 —— 10/5 重点软件企业会话一晚三次。替员工按最多两次「继续」, "

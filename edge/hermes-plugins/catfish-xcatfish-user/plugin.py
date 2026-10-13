@@ -141,6 +141,11 @@ _patch_p15_chat_completions_approval = plugin_approval._patch_p15_chat_completio
 _patch_p15_3_unattended_companion_approval = plugin_approval._patch_p15_3_unattended_companion_approval  # noqa: F401
 _patch_p15_4_companion_manual_approval = plugin_approval._patch_p15_4_companion_manual_approval  # noqa: F401
 _patch_p15_2_chat_approval_route = plugin_approval._patch_p15_2_chat_approval_route  # noqa: F401
+plugin_approval_ux = _import_sibling("plugin_approval_ux")
+_patch_p51_approval_prompt = plugin_approval_ux._patch_p51_approval_prompt  # noqa: F401  (re-export · 见 plugin_approval_ux.py)
+_patch_p52_busy_approval_reply = plugin_approval_ux._patch_p52_busy_approval_reply  # noqa: F401  (re-export · 见 plugin_approval_ux.py)
+plugin_bridge_promoted = _import_sibling("plugin_bridge_promoted")
+_patch_p53_bridge_promoted_catfish_tools = plugin_bridge_promoted._patch_p53_bridge_promoted_catfish_tools  # noqa: F401  (re-export · 见 plugin_bridge_promoted.py)
 
 plugin_cors = _import_sibling("plugin_cors")
 
@@ -375,6 +380,15 @@ def _apply_patches() -> None:
         "P15.4: Companion manual approval compatibility failed (skip): %s",
     )
     _patch_p15_2_chat_approval_route()
+    # P51/P52 (10/13 鸿波"这种方式是不是很违反人性"): 微信审批改成大白话 + 回 1/2/3;
+    # 审批在等时回复按意思认 (中文 / 数字 / 带不带斜杠), 认不出的短回复不打断任务。
+    # 不放松任何审批, 只改怎么问、怎么听懂。详见 plugin_approval_ux.py。
+    _try_patch(_patch_p51_approval_prompt, "P51: _patch_p51_approval_prompt 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
+    _try_patch(_patch_p52_busy_approval_reply, "P52: _patch_p52_busy_approval_reply 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
+    # P53 (10/13 微信「福富的资质列表」): 模型用 tool_call 调已被 P43 提升的 catfish_wiki_search
+    # 被拒 → 绕去写 Python 读 .md → 两次 execute_code 审批。让 tool_call 照转本会话里已有的
+    # catfish 工具 (能调到的集合不变)。详见 plugin_bridge_promoted.py。
+    _try_patch(_patch_p53_bridge_promoted_catfish_tools, "P53: _patch_p53_bridge_promoted_catfish_tools 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P50 (10/6 鸿波"中间有三次任务停下来了"): 模型回了一句"逐项目比对。"这种
     # 打算、没调工具、finish_reason=stop, 回合就结束了 —— 10/5 一晚三次。hermes
     # 没有"承诺了动作却没动作"的续跑, 这里替员工按最多两次「继续」。必须在

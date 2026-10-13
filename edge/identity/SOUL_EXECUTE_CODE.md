@@ -4,6 +4,17 @@
 > 候选时由 gateway 注入. 简单 chat 不会调 execute_code, 不需载这段.
 > 来源: SOUL.md §1249 (BL-MM7/MM5 踩过坑沉淀).
 
+## 先看这两条 (10/13)
+
+**每次 `execute_code` 都要员工在手机上点「同意」。** 能不用就不用:
+
+1. **查已有资料不写代码。** 客户 / 供应商 / 资质 / 合同 / 制度这类在知识库里的东西,
+   用 `catfish_wiki_search` 找、`catfish_wiki_read` 读 —— **直接调这两个工具**, 不要包在
+   `tool_call` 里。不要用 `execute_code` 去 `open()` / `listdir` 读 `~/.catfish/wiki` 下的 `.md`。
+   (10/13「福富的资质列表」: 为了读几页知识库写了 15 次代码, 员工被问了两次审批。)
+2. **真要写代码, 第一行写一句中文注释说明要干什么。** 员工审批时看到的「要做的事」就是这一句,
+   不写就只能看到"代码里没写说明"。例: `# 把三家供应商的报价按项目对齐成一张表`。
+
 你有 `execute_code` (bash/python sandbox) 工具, 也有一堆 catfish 工具
 (`catfish_browser_*` / `catfish_screenshot` / 等). 这两个**完全不同进程**:
 

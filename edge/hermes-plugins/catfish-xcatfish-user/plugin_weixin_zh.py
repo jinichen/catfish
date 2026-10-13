@@ -102,6 +102,20 @@ _P28_REPLACEMENTS = [
     (". I'll respond to your message shortly.", ", 马上回复你."),
     (". I'll respond once the current task finishes.", ", 当前任务完成后回复你."),
     ("⏳ Queued for the next turn", "⏳ 已排队下个回合"),
+    # 10/13 审批回执 (hermes locales/en.yaml approve./deny.*): 员工回 1/2/3 后看到的那句。
+    # 原来漏翻, 微信里回一句「✅ Command approved. The agent is resuming...」。
+    ("(pattern approved for this session)", "(同类的这次对话里都允许了)"),
+    ("(pattern approved permanently)", "(同类的以后都允许了)"),
+    ("✅ Commands approved", "✅ 好的, 已同意"),
+    ("✅ Command approved", "✅ 好的, 已同意"),
+    (". The agent is resuming...", ", 小鲶继续干活…"),
+    (" commands)", " 条)"),
+    ("❌ Commands denied", "❌ 好的, 不执行了"),
+    ("❌ Command denied", "❌ 好的, 不执行了"),
+    (" (approval was stale)", " (这条审批已经过期)"),
+    (". Reason relayed to the agent:", ", 已把原因转告小鲶:"),
+    ("No pending command to approve.", "现在没有在等你同意的操作。"),
+    ("No pending command to deny.", "现在没有在等你同意的操作。"),
     ("Reason: ", "原因: "),
 ]
 
