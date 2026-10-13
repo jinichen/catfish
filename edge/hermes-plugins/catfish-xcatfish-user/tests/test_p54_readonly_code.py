@@ -227,9 +227,9 @@ def test_prompt_shows_no_code_and_explains_why():
     cmd = "execute_code <<'PY'\nimport openpyxl\nwb = openpyxl.Workbook()\nwb.save('资质台账.xlsx')\nPY"
     msg = ux.format_approval_prompt(cmd, "x")
     assert "要做的事: 处理 资质台账.xlsx" in msg
-    assert "需要你同意, 因为它会: 写入 / 删除 / 改动文件" in msg
+    assert "原因: 它会写入 / 删除 / 改动文件" in msg
     assert "openpyxl" not in msg and "```" not in msg and "wb.save" not in msg
-    assert "1 · 执行" in msg and "2 · 不要执行" in msg
+    assert "回复 1 执行 · 2 不要执行" in msg
 
 
 # ── guard 包装 ────────────────────────────────────────────────────────

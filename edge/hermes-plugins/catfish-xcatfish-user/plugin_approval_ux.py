@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 import unicodedata
 from typing import Optional
 
@@ -99,23 +100,43 @@ def _code_of(command: str) -> Optional[str]:
 def format_approval_prompt(command: str, description: str) -> str:
     """中文审批提示: 要做什么 → 为什么要你同意 → 回 1 执行 / 2 不要。不展示代码 (10/13 鸿波:
     "非程序员对代码不感兴趣")。只给单次批准。"""
+    # 第一行以「：」结尾 —— hermes 微信适配器 (weixin.py _should_split_short_chat_block_for_weixin)
+    # 会把 2~6 行的"聊天式"短消息拆成一串气泡; 首行像标题就不拆。10/13 实测拆开后第二次审批
+    # 被埋在「2 条新消息」下面, 员工以为卡住了。
+    global _LAST_SUMMARY
     code = _code_of(command)
     if code is not None:
         rc = _load_readonly()
         v = rc.analyze(code)
-        lines = ["🔐 小鲶要在你电脑上执行一个操作", "", f"要做的事: {rc.describe(v)}"]
+        what = rc.describe(v).replace("*", "").replace("`", "")   # 微信会渲染 markdown
+        _LAST_SUMMARY = what
+        lines = ["🔐 小鲶要执行一个操作，需要你同意：", f"要做的事: {what}"]
         if v.effects:
-            lines.append("需要你同意, 因为它会: " + "、".join(v.effects[:3]))
+            lines.append("原因: 它会" + "、".join(v.effects[:3]))
     else:
         cmd = command.strip()
         if len(cmd) > 80:
             cmd = cmd[:80] + "…"
-        lines = ["🔐 小鲶要运行一条可能有风险的命令", "", f"原因: {description}", f"命令: {cmd}"]
-    lines += ["", "回复数字就行:", "1 · 执行", "2 · 不要执行"]
+        _LAST_SUMMARY = f"运行命令 {cmd}"
+        lines = ["🔐 小鲶要运行一条命令，需要你同意：", f"命令: {cmd}", f"原因: {description}"]
+    lines += ["", "回复 1 执行 · 2 不要执行"]
     return "\n".join(lines)
 
 
-_HINT = "没看懂这句 🙂 现在有一段操作在等你同意, 回复数字就行: 1 执行 · 2 不要"
+_LAST_SUMMARY: Optional[str] = None          # 最近一次审批提示的「要做的事」, 提示语用
+_RESOLVED_AT: dict = {}                      # session_key → 上次回答审批的时间 (monotonic)
+_RECENT_S = 15 * 60
+
+
+def build_hint(summary: Optional[str], recently_resolved: bool) -> str:
+    """员工在审批等待时说了别的 (「卡住了吗」「我不是回了 1」) —— 告诉他现在在等什么。"""
+    head = "你刚才回的已经收到并执行了 ✅ 现在是新的一个操作在等你同意" if recently_resolved \
+        else "现在有一个操作在等你同意"
+    what = f"：{summary}" if summary else ""
+    return f"{head}{what}。回复 1 执行 · 2 不要"
+
+
+_HINT = build_hint(None, False)
 
 
 def wrap_format(orig):
@@ -169,14 +190,18 @@ def wrap_busy_handler(orig, has_blocking_approval):
                 # 改写成 hermes 原版认得的 approve / deny, 交回原 handler: 它负责 resolve + 回执。
                 # 只有单次 approve —— 不改写成 session / always (见文件头「只给单次批准」)。
                 event.text = intent
+                _RESOLVED_AT[session_key] = time.monotonic()
             elif len(_STRIP.sub("", raw.strip())) <= _MAX_REPLY_LEN:
                 logger.info("P52 审批在等, 回复认不出 %r → 提示 1 / 2, 不打断任务", raw[:20])
+                last = _RESOLVED_AT.get(session_key)
+                hint = build_hint(_LAST_SUMMARY,
+                                  last is not None and time.monotonic() - last < _RECENT_S)
                 try:
                     adapter = self._adapter_for_source(event.source)
                     if adapter:
                         anchor = self._reply_anchor_for_event(event)
                         await adapter._send_with_retry(
-                            chat_id=event.source.chat_id, content=_HINT, reply_to=anchor,
+                            chat_id=event.source.chat_id, content=hint, reply_to=anchor,
                             metadata=self._thread_metadata_for_source(event.source, anchor),
                         )
                 except Exception as e:  # noqa: BLE001

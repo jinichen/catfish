@@ -102,6 +102,18 @@ _P28_REPLACEMENTS = [
     (". I'll respond to your message shortly.", ", 马上回复你."),
     (". I'll respond once the current task finishes.", ", 当前任务完成后回复你."),
     ("⏳ Queued for the next turn", "⏳ 已排队下个回合"),
+    # 10/13 重启 / 改道提示 (gateway/run.py:11522-11528, 11243-11250), 微信实测漏翻。
+    # 长的在前: 带结尾空格的那句先替, 免得被短的截断。
+    ("Send any message after restart and I'll try to resume where you left off.",
+     "重启好后随便发句话, 我接着做。"),
+    ("Your current task will be interrupted. ", "手上的事会先中断, "),
+    ("Your current task will be interrupted.", "手上的事会先中断, 稍后接着做。"),
+    ("⚠️ Gateway shutting down — ", "⚠️ 小鲶要重启一下 — "),
+    ("⚠️ Gateway restarting — ", "⚠️ 小鲶正在重启 — "),
+    ("↪ Redirected current run", "↪ 收到, 按你说的改"),
+    ("⏩ Steered into current run", "⏩ 收到, 插进当前任务"),
+    (". I'll adjust using your correction.", "。"),
+    (". Your message arrives after the next tool call.", ", 下一步就用上你这句。"),
     # 10/13 审批回执 (hermes locales/en.yaml approve./deny.*): 员工回 1/2/3 后看到的那句。
     # 原来漏翻, 微信里回一句「✅ Command approved. The agent is resuming...」。
     ("(pattern approved for this session)", "(同类的这次对话里都允许了)"),

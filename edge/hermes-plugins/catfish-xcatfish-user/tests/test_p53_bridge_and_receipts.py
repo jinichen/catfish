@@ -74,3 +74,14 @@ def test_approval_receipts_are_chinese():
     for s in ("✅ Command approved. The agent is resuming...", "❌ Commands denied (2 commands)."):
         out = t(s)
         assert "Command" not in out and "agent" not in out, out
+
+
+def test_restart_and_redirect_notices_are_chinese():
+    # 10/13 微信实测漏翻的两句 (gateway/run.py:11522-11528, 11248-11250)
+    t = p28._translate_hermes_zh
+    assert t("⚠️ Gateway shutting down — Your current task will be interrupted.") == \
+        "⚠️ 小鲶要重启一下 — 手上的事会先中断, 稍后接着做。"
+    assert t("⚠️ Gateway restarting — Your current task will be interrupted. "
+             "Send any message after restart and I'll try to resume where you left off.") == \
+        "⚠️ 小鲶正在重启 — 手上的事会先中断, 重启好后随便发句话, 我接着做。"
+    assert t("↪ Redirected current run. I'll adjust using your correction.") == "↪ 收到, 按你说的改。"

@@ -135,12 +135,16 @@ class CodeVerdict:
         self.read_only = False
 
 
+# 不是说明的注释: 编码声明 / lint / 类型标注 (10/13 实测「要做的事: -*- coding: utf-8 -*-」)
+_PRAGMA = re.compile(r"-\*-|^(coding|vim?|noqa|type:|pylint|fmt:|pragma|flake8|mypy)\b", re.I)
+
+
 def _first_comment(code: str) -> Optional[str]:
     for line in code.splitlines():
         s = line.strip()
         if s.startswith("#") and not s.startswith("#!"):
             text = s.lstrip("#").strip()
-            if len(text) >= 2:
+            if len(text) >= 2 and not _PRAGMA.search(text):
                 return text[:80]
     return None
 
