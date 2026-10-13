@@ -122,14 +122,172 @@ _P28_REPLACEMENTS = [
     ("✅ Command approved", "✅ 好的, 已同意"),
     (". The agent is resuming...", ", 小鲶继续干活…"),
     (" commands)", " 条)"),
+    ("❌ Command denied.", "❌ 好的, 不执行了。"),
     ("❌ Commands denied", "❌ 好的, 不执行了"),
     ("❌ Command denied", "❌ 好的, 不执行了"),
     (" (approval was stale)", " (这条审批已经过期)"),
     (". Reason relayed to the agent:", ", 已把原因转告小鲶:"),
     ("No pending command to approve.", "现在没有在等你同意的操作。"),
     ("No pending command to deny.", "现在没有在等你同意的操作。"),
+    ("⚠️ Approval expired (agent is no longer waiting). Ask the agent to try again.",
+     "⚠️ 这条审批已经过期了, 需要的话让小鲶重新做一次。"),
+    # ── 10/13 全量盘点 (gateway/run.py / agent/onboarding.py / base.py) ──────────────
+    # 忙碌 / 排队 / 第一次提示
+    ("⏳ Subagent working", "⏳ 子任务还在跑"),
+    ("⏳ Compressing context", "⏳ 正在整理对话记录"),
+    (" — your message is queued for when it finishes (use /stop to cancel everything).",
+     " — 你的消息排上了, 这步做完就处理 (发 /stop 可以全部取消)。"),
+    ("💡 First-time tip — I queued your message instead of interrupting. "
+     "Send `/busy interrupt` to make new messages stop the current task "
+     "immediately, or `/busy status` to check. This notice won't appear again.",
+     "💡 小提示: 你的消息排在当前任务后面了, 不会打断它。这条提示只出现一次。"),
+    ("💡 First-time tip — I steered your message into the current run; "
+     "it will arrive after the next tool call instead of interrupting. "
+     "Send `/busy interrupt` or `/busy queue` to change this, or "
+     "`/busy status` to check. This notice won't appear again.",
+     "💡 小提示: 你的消息插进了当前任务, 下一步就会用上。这条提示只出现一次。"),
+    ("💡 First-time tip — I redirected the current run using your message. "
+     "Completed work stays in context, and `/stop` still cancels the task. "
+     "Send `/busy queue` to wait for a separate turn, or `/busy status` "
+     "to check. This notice won't appear again.",
+     "💡 小提示: 我按你的新消息调整了正在做的事, 已做完的部分还在; 发 /stop 可以取消。这条提示只出现一次。"),
+    ("💡 First-time tip — I just interrupted my current task to answer you. "
+     "Send `/busy queue` to queue follow-ups for after the current task instead, "
+     "`/busy steer` to inject them mid-run without interrupting, or "
+     "`/busy status` to check. This notice won't appear again.",
+     "💡 小提示: 我先停下手上的事来回你。这条提示只出现一次。"),
+    # 重启 / 维护
+    ("⏳ Gateway restarting — queued for the next turn after it comes back.",
+     "⏳ 小鲶正在重启 — 你的消息排上了, 回来就处理。"),
+    ("⏳ Gateway shutting down — queued for the next turn after it comes back.",
+     "⏳ 小鲶正在关闭 — 你的消息排上了, 回来就处理。"),
+    ("⏳ Gateway is restarting and is not accepting another turn right now.",
+     "⏳ 小鲶正在重启, 暂时接不了新消息, 过一会儿再发。"),
+    ("⏳ Gateway is shutting down and is not accepting another turn right now.",
+     "⏳ 小鲶正在关闭, 暂时接不了新消息, 过一会儿再发。"),
+    ("⏳ Gateway is restarting and is not accepting new work right now.",
+     "⏳ 小鲶正在重启, 暂时接不了新消息, 过一会儿再发。"),
+    ("⏳ Gateway is shutting down and is not accepting new work right now.",
+     "⏳ 小鲶正在关闭, 暂时接不了新消息, 过一会儿再发。"),
+    ("⏳ This agent is draining for a maintenance action and isn't accepting new turns right now. "
+     "It'll be back in a moment — please resend shortly.",
+     "⏳ 小鲶在做维护, 马上回来, 请过一会儿再发一次。"),
+    ("⏳ Another turn is still running on this session. To protect the transcript, this message "
+     "was not processed. Wait for the active turn to finish, then resend it.",
+     "⏳ 上一件事还没做完, 这条消息没处理。等它做完再发一次。"),
+    ("⏳ Gateway restart already in progress...", "⏳ 已经在重启了…"),
+    ("♻ Restarting gateway. If you aren't notified within 60 seconds, restart from the console "
+     "with `hermes gateway restart`.", "♻ 小鲶正在重启, 一分钟后还没回音的话, 请在电脑上重启鲶鱼。"),
+    ("♻ Gateway restarted successfully. Your session continues.", "♻ 小鲶重启好了, 接着聊。"),
+    ("♻️ Gateway online — Hermes is back and ready.", "♻️ 小鲶回来了, 随时可以用。"),
+    # /stop /queue /steer /pause
+    ("⚡ Stopped. The agent hadn't started yet — you can continue this session.",
+     "⚡ 停了 (还没开始做), 可以接着聊。"),
+    ("⚡ Stopped. You can continue this session.", "⚡ 停了, 可以接着聊。"),
+    ("⚡ Force-stopped. The agent was still starting — session unlocked.", "⚡ 强制停了, 可以接着聊。"),
+    ("No active task to stop.", "现在没有在做的事。"),
+    ("Agent still starting — /steer queued for the next turn.", "小鲶还没开始做, 你这句排到下一轮。"),
+    ("No active agent — /steer queued for the next turn.", "现在没有在做的事, 你这句排到下一轮。"),
+    ("Steer rejected (empty payload).", "内容是空的, 没插进去。"),
+    ("Agent is running — wait or /stop first, then switch models.", "小鲶正在做事, 等做完或发 /stop 后再换模型。"),
+    ("▶️ Resumed — new work is accepted again.", "▶️ 恢复了, 可以接新消息了。"),
+    ("Hermes wasn't paused.", "小鲶没有暂停。"),
+    # /new 确认 (destructive_slash_confirm 默认开)
+    ("⚠️ **Confirm /new**", "⚠️ **确认开新对话**"),
+    ("This starts a fresh session and discards the current conversation history.",
+     "会开一个新对话, 现在这段对话的记录不再带着。"),
+    ("Choose:", "选一个:"),
+    ("• **Approve Once** — proceed this time only", "• **确认** — 就这一次"),
+    ("• **Always Approve** — proceed and silence this prompt permanently", "• **总是确认** — 以后不再问"),
+    ("• **Cancel** — keep current conversation", "• **取消** — 保留现在的对话"),
+    ("_Text fallback: reply `/approve`, `/always`, or `/cancel`._",
+     "_回复 `/approve` 确认, `/always` 以后不问, `/cancel` 取消。_"),
+    ("✨ Session reset! Starting fresh.", "✨ 已开新对话。"),
+    ("✨ New session started!", "✨ 新对话开始了。"),
+    # 出错
+    ("⚠️ Provider authentication failed. Check the configured credentials; raw provider details "
+     "are in the gateway logs.", "⚠️ 模型服务登录失败, 请联系管理员检查模型配置。"),
+    ("⚠️ The model provider rejected the request. I kept the raw provider error out of chat; "
+     "check gateway logs for details or try rephrasing.", "⚠️ 模型服务拒绝了这次请求, 换个说法再试一次。"),
+    ("⏱️ The model provider is rate-limiting requests. Please wait a moment and try again.",
+     "⏱️ 模型服务现在太忙, 稍等一会儿再试。"),
+    ("⚠️ The model server is not responding — it looks like the configured model endpoint is not "
+     "running or is unreachable.", "⚠️ 模型服务没有响应, 请联系管理员检查。"),
+    ("⚠️ The model provider failed after retries. I kept raw provider details out of chat; check "
+     "gateway logs for diagnostics.", "⚠️ 模型服务重试几次都失败了, 稍后再试。"),
+    ("⚠️ Session storage was temporarily unavailable, so this turn was stopped to protect your "
+     "conversation history. Please check available disk space, then send your message again.",
+     "⚠️ 对话记录暂时存不了 (可能磁盘满了), 这次先停下。清理一下磁盘后再发一次。"),
+    ("⚠️ Session storage was temporarily unavailable, so this turn was stopped to protect your "
+     "conversation history. Your message should already be saved — please send it again in a moment.",
+     "⚠️ 对话记录暂时存不了, 这次先停下, 过一会儿再发一次。"),
+    ("⚠️ Session too large for the model's context window.\nUse /compact to compress the "
+     "conversation, or /reset to start fresh.", "⚠️ 对话太长了。发 /compact 整理一下, 或发 /reset 开新对话。"),
+    ("⚠️ Your message was interrupted before processing started (likely by a recent /stop). "
+     "Please send it again.", "⚠️ 你的消息还没开始处理就被中断了, 再发一次。"),
+    ("⚠️ Processing completed but no response was generated. This may be a transient error — "
+     "try sending your message again.", "⚠️ 处理完了但没生成回复, 再发一次试试。"),
+    ("⚠️ Your message wasn't processed (the previous turn was still being cleaned up). "
+     "Please send it again.", "⚠️ 上一轮还在收尾, 你的消息没处理, 再发一次。"),
+    ("⚠️ The model returned no response after processing tool results. This can happen with some "
+     "models — try again or rephrase your question.", "⚠️ 模型这次没给出回复, 再试一次或换个说法。"),
+    ("⚠️ The model declined to respond to this request (safety refusal).", "⚠️ 模型拒绝回答这个请求。"),
+    ("\nTry again or use /reset to start a fresh session.", "\n再试一次, 或发 /reset 开新对话。"),
+    ("Sorry, I encountered an unexpected error.", "抱歉, 出了个意外的错误。"),
+    ("The request failed: ", "请求失败: "),
+    ("⏳ Another Hermes process is using this session; waiting…", "⏳ 这段对话正被另一处使用, 稍等…"),
+    ("↻ Stream interrupted — using delivered content as final response", "↻ 连接中断, 先用已收到的内容作答"),
+    ("💾 Self-improvement review: ", "💾 小鲶自我复盘: "),
+    ("Reply with the number, the option text, or your own answer.", "回复序号、选项内容, 或者直接说你的答案。"),
+    ("Multiple selections allowed — reply with the numbers separated by commas or spaces "
+     "(e.g. \"1, 3\"), the option text, or your own answer.",
+     "可以多选 — 回复序号 (用逗号或空格隔开, 比如 \"1, 3\")、选项内容, 或者直接说你的答案。"),
     ("Reason: ", "原因: "),
 ]
+
+# 带变量的句子 (f-string) 用正则; 在 _P28_REPLACEMENTS 之后跑。
+import re as _re  # noqa: E402
+
+_P28_REGEX = [
+    (_re.compile(r"\(([0-9]+) queued\)"), r"(排了 \1 条)"),
+    (_re.compile(r"Queued for the next turn\."), "排上了, 下一轮处理。"),
+    (_re.compile(r"⏳ Draining ([0-9]+) active agent\(s\) before restart\.\.\."),
+     r"⏳ 先等 \1 个进行中的任务做完再重启…"),
+    (_re.compile(r"⚠️ Cron job '([^']*)' was interrupted — the gateway is (?:restarting|shutting down) and "
+                 r"killed the run before it finished\. No result was produced for this run\."),
+     r"⚠️ 定时任务「\1」被中断了 (小鲶在重启), 这次没有结果。"),
+    (_re.compile(r"⏳ Agent is running — `/([^`]+)` can't run mid-turn\. Wait for the current response "
+                 r"or `/stop` first\."), r"⏳ 小鲶正在做事, /\1 要等做完或发 /stop 后再用。"),
+    (_re.compile(r"⚠️ Steer failed: "), "⚠️ 没插进去: "),
+    (_re.compile(r"⏩ Steer queued — arrives after the next tool call: "), "⏩ 收到, 下一步就用上: "),
+    (_re.compile(r"🟡 /(\S+) cancelled\. Conversation unchanged\."), r"🟡 已取消 /\1, 对话没动。"),
+    (_re.compile(r"\n✦ Tip: [^\n]*"), ""),       # 英文小贴士, 对员工没用, 去掉
+    (_re.compile(r"◐ Session automatically reset \([^)]*\)\. Conversation history cleared\.\n"
+                 r"Use /resume to browse and restore a previous session\.\n"
+                 r"Adjust reset timing in config\.yaml under session_reset\."),
+     "◐ 对话已自动重开, 之前的记录可以发 /resume 找回。"),
+    (_re.compile(r"Unknown command `/([^`]+)`\. Type /commands to see what's available, or resend "
+                 r"without the leading slash to send as a regular message\."),
+     r"没有 /\1 这个命令。发 /commands 看看有哪些, 或者去掉开头的 / 当普通消息发。"),
+    (_re.compile(r"⚠️ No activity for ([0-9]+) min\. If the agent does not respond soon, it will be "
+                 r"timed out in ([0-9]+) min\. You can continue waiting or use /reset\."),
+     r"⚠️ 已经 \1 分钟没动静了, 再过 \2 分钟还没反应就会停下。可以继续等, 或发 /reset 重来。"),
+    (_re.compile(r"⏱️ Agent inactive for ([0-9]+) min — no tool calls or API responses\.[\s\S]*?"
+                 r"Try again, or use /reset to start fresh\."),
+     r"⏱️ 小鲶 \1 分钟没有任何进展, 这次先停下了。再试一次, 或发 /reset 开新对话。"),
+    (_re.compile(r"⚠️ Context compression aborted \([^)]*\)\. No messages were dropped — conversation "
+                 r"is unchanged\. Run /compress to retry, /reset for a clean session, or check your "
+                 r"auxiliary\.compression model configuration\."),
+     "⚠️ 整理对话记录没成功, 对话没有丢。可以发 /compress 再试, 或 /reset 开新对话。"),
+    (_re.compile(r"⚠️ Processing stopped: (.*?)\. Try again\."), r"⚠️ 处理中断了: \1。再试一次。"),
+    (_re.compile(r"✅ Primary model restored: "), "✅ 主模型恢复了: "),
+    (_re.compile(r"⚠️ Iteration budget exhausted \(([^)]*)\) — asking model to summarise"),
+     r"⚠️ 步数用完了 (\1), 让模型先总结"),
+]
+
+# 兜底: 翻完还像整句英文 (连续 6 个以上英文单词、没有中文) → 打 log, 下次补表。
+_ENGLISH_RUN = _re.compile(r"(?:[A-Za-z][A-Za-z'’-]*[ ,.;:—-]+){6,}")
+_CJK = _re.compile(r"[一-鿿]")
 
 # BL-P14-P28-DEDUPE (7/19 鸿波 catch): _P28_CMD_ALIASES 老死代码 — **定义但从未使用**.
 # grep 全项目 zero use. 老 P28 只做 outbound (WeixinAdapter.send 英文→中文), inbound
@@ -158,9 +316,15 @@ def _translate_hermes_zh(text):
     try:
         for en, zh in _P28_REPLACEMENTS:
             text = text.replace(en, zh)
+        for pat, zh in _P28_REGEX:
+            text = pat.sub(zh, text)
     except Exception as e:  # noqa: BLE001
         logger.warning("P28 translate fail (return original): %s", e)
         return text
+
+    # 兜底 (10/13): 整条没有中文、却有一长串英文 → 多半是 hermes 新加 / 改了的提示没进表
+    if not _CJK.search(text) and _ENGLISH_RUN.search(text):
+        logger.warning("P28 miss: 微信外发仍是英文, 补进 _P28_REPLACEMENTS / _P28_REGEX: %r", text[:200])
 
     # fail-loud 检测: 只在明显 approval prompt (含 `/approve`) 场景下检查 · 且
     # 中文替换未生效 (没 "回复" / "批准" 关键字). 防误报 (员工正常聊到 /approve).

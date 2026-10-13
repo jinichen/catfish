@@ -118,9 +118,115 @@ def format_approval_prompt(command: str, description: str) -> str:
         if len(cmd) > 80:
             cmd = cmd[:80] + "…"
         _LAST_SUMMARY = f"运行命令 {cmd}"
-        lines = ["🔐 小鲶要运行一条命令，需要你同意：", f"命令: {cmd}", f"原因: {description}"]
+        lines = ["🔐 小鲶要运行一条命令，需要你同意：", f"命令: {cmd}",
+                 f"原因: {translate_reason(description)}"]
     lines += ["", "回复 1 执行 · 2 不要执行"]
     return "\n".join(lines)
+
+
+# ── 危险命令原因 (hermes tools/approval.py DANGEROUS_PATTERNS 等) → 中文 ──────────
+# 10/13 盘点: 审批「原因」全是 hermes 的英文描述。逐条译; 不认识的 (hermes 升级新加的)
+# 不再露英文, 给一句通用说明 + 打 log, 下次补表。
+DANGER_ZH = {
+    "delete in root path": "删除系统根目录下的东西",
+    "recursive delete": "成批删除文件", "recursive delete (long flag)": "成批删除文件",
+    "recursive delete (flags after operands)": "成批删除文件",
+    "Windows cmd destructive delete": "成批删除文件", "Windows PowerShell destructive delete": "成批删除文件",
+    "PowerShell encoded command execution": "运行一段被编码隐藏的命令",
+    "PowerShell destructive delete (Remove-Item)": "成批删除文件",
+    "Windows destructive delete (recursive/quiet switch)": "不提示地成批删除文件",
+    "pipe remote content to PowerShell (iwr | iex)": "下载网上的脚本并直接运行",
+    "execute remote content via Invoke-Expression": "下载网上的脚本并直接运行",
+    "force kill processes (taskkill /F)": "强制结束程序", "force kill processes (Stop-Process -Force)": "强制结束程序",
+    "format filesystem (Format-Volume)": "格式化磁盘", "wipe disk (Clear-Disk)": "清空整块磁盘",
+    "disk partitioning (diskpart)": "改磁盘分区", "format drive (format.com)": "格式化磁盘",
+    "wipe free space (cipher /w)": "擦除磁盘空闲空间", "grant Everyone access (icacls)": "把文件权限开放给所有人",
+    "reset ACLs recursively (icacls /reset)": "成批重置文件权限",
+    "delete volume shadow copies (vssadmin)": "删除系统还原备份", "delete backups (wbadmin)": "删除备份",
+    "modify boot configuration (bcdedit /set)": "改开机启动设置", "registry delete (reg delete)": "删除注册表项",
+    "registry value delete (Remove-ItemProperty -Force)": "删除注册表项",
+    "force stop service (Stop-Service -Force)": "强制停止系统服务", "stop/delete service (sc)": "停止或删除系统服务",
+    "access to SSH keys (Windows path)": "读取登录密钥", "access to Hermes secrets (Windows path)": "读取小鲶的密钥文件",
+    "world/other-writable permissions": "把文件改成谁都能改", "recursive world/other-writable (long flag)": "把文件改成谁都能改",
+    "recursive chown to root": "成批改文件归属", "recursive chown to root (long flag)": "成批改文件归属",
+    "format filesystem": "格式化磁盘", "disk copy": "整盘复制 / 覆盖磁盘", "write to block device": "直接写磁盘",
+    "SQL DROP": "删除数据库表", "SQL DELETE without WHERE": "清空数据库表里的数据", "SQL TRUNCATE": "清空数据库表",
+    "overwrite system config": "覆盖系统配置", "stop/restart system service": "停止或重启系统服务",
+    "kill all processes": "结束所有程序", "force kill processes": "强制结束程序",
+    "force kill processes (killall -KILL)": "强制结束程序", "force kill processes (killall -s KILL)": "强制结束程序",
+    "kill processes by regex (killall -r)": "按名字成批结束程序", "fork bomb": "让电脑卡死的命令",
+    "pipe remote content to shell": "下载网上的脚本并直接运行",
+    "execute remote script via process substitution": "下载网上的脚本并直接运行",
+    "execute remote content via command substitution": "下载网上的脚本并直接运行",
+    "pipe decoded content to shell (possible command obfuscation)": "运行一段被编码隐藏的命令",
+    "pipe xxd-decoded content to shell (possible command obfuscation)": "运行一段被编码隐藏的命令",
+    "pipe tr-transformed output to shell (possible command obfuscation)": "运行一段被编码隐藏的命令",
+    "pipe openssl-decoded content to shell (possible command obfuscation)": "运行一段被编码隐藏的命令",
+    "overwrite system file via tee": "覆盖系统文件", "overwrite system file via redirection": "覆盖系统文件",
+    "overwrite project env/config via tee": "覆盖项目配置文件", "overwrite project env/config via redirection": "覆盖项目配置文件",
+    "xargs with rm": "成批删除文件", "find -exec/-execdir rm": "成批删除文件", "find -delete": "成批删除文件",
+    "stop/restart hermes gateway (kills running agents)": "重启小鲶 (正在做的事会中断)",
+    "hermes update (restarts gateway, kills running agents)": "升级并重启小鲶 (正在做的事会中断)",
+    "docker with remote daemon redirect (-H/--host)": "操作别的机器上的容器",
+    "docker with daemon redirect (--context: alternate daemon)": "操作别的机器上的容器",
+    "docker context use (switches default daemon for future commands)": "切换容器的默认目标机器",
+    "podman with remote daemon redirect (--url/--connection/--identity)": "操作别的机器上的容器",
+    "podman remote mode (-r/--remote: remote daemon)": "操作别的机器上的容器",
+    "docker/podman daemon redirect via environment (DOCKER_HOST/CONTAINER_HOST)": "操作别的机器上的容器",
+    "docker compose restart/stop/kill/down (container lifecycle)": "停止或重启容器服务",
+    "docker restart/stop/kill (container lifecycle)": "停止或重启容器",
+    "start gateway outside systemd (use 'systemctl --user restart hermes-gateway')": "绕开系统管理启动小鲶",
+    "kill hermes/gateway process (self-termination)": "结束小鲶自己 (正在做的事会中断)",
+    "kill process via pgrep/pidof expansion (self-termination)": "按名字结束程序 (可能结束小鲶自己)",
+    "kill process via backtick pgrep/pidof expansion (self-termination)": "按名字结束程序 (可能结束小鲶自己)",
+    "stop/restart hermes launchd service (kills running agents)": "重启小鲶的后台服务 (正在做的事会中断)",
+    "copy/move file into system config path": "往系统配置目录放文件", "overwrite project env/config file": "覆盖项目配置文件",
+    "copy/move file into sensitive credential/SSH/shell-rc path": "往存放密钥 / 登录配置的地方放文件",
+    "in-place edit of sensitive credential/SSH/shell-rc path": "直接改密钥 / 登录配置文件",
+    "in-place edit of sensitive credential/SSH/shell-rc path (long flag)": "直接改密钥 / 登录配置文件",
+    "in-place edit of sensitive credential/SSH/shell-rc path (perl/ruby)": "直接改密钥 / 登录配置文件",
+    "in-place edit of system config": "直接改系统配置", "in-place edit of system config (long flag)": "直接改系统配置",
+    "in-place edit of Hermes config/env": "直接改小鲶的配置", "in-place edit of Hermes config/env (long flag)": "直接改小鲶的配置",
+    "in-place edit of Hermes config/env (perl/ruby)": "直接改小鲶的配置",
+    "shell execution via heredoc": "运行一段内嵌脚本", "script execution via heredoc": "运行一段内嵌脚本",
+    "git reset --hard (destroys uncommitted changes)": "丢掉代码里还没保存的改动",
+    "git force push (rewrites remote history)": "强制覆盖远端代码历史",
+    "git force push short flag (rewrites remote history)": "强制覆盖远端代码历史",
+    "git clean with force (deletes untracked files)": "删除代码目录里没登记的文件",
+    "git branch force delete": "强制删除代码分支", "git branch force delete (long flags)": "强制删除代码分支",
+    "git branch force delete (long flags, force-first)": "强制删除代码分支",
+    "chmod +x followed by immediate execution": "把文件改成可执行并马上运行",
+    "sudo with privilege flag (stdin/askpass/shell/list)": "用管理员权限运行",
+    "sudo with combined-flag privilege escalation": "用管理员权限运行",
+    "command parser limit exceeded": "命令太复杂, 看不清会做什么",
+    "command parser limit or malformed executable payload": "命令太复杂, 看不清会做什么",
+    "script execution via -e/-c flag": "运行一段内嵌脚本", "shell command via -c/-lc flag": "运行一段内嵌命令",
+    "stop/restart hermes gateway via shell-spliced verb (kills running agents)": "重启小鲶 (正在做的事会中断)",
+    "dangerous command": "可能有风险的命令",
+}
+_REASON_PREFIXES = (
+    ("arbitrary program execution via ", "通过别的程序运行任意命令"),
+    ("Security scan", "安全扫描发现了风险"),
+    ("Plugin requires approval for ", "插件要求先确认"),
+    ("MCP server '", "外部工具服务要求先确认"),
+    ("MCP tool '", "一个不受信任的外部工具要运行"),
+    ("Server '", "一个不受信任的外部工具要运行"),
+)
+
+
+def translate_reason(description: str) -> str:
+    """hermes 的英文原因 → 中文。多条用 "; " 连接的逐条译、去重; 不认识的不露英文。"""
+    out = []
+    for part in [p.strip() for p in str(description or "").split("; ") if p.strip()]:
+        zh = DANGER_ZH.get(part)
+        if zh is None:
+            zh = next((z for pre, z in _REASON_PREFIXES if part.startswith(pre)), None)
+        if zh is None:
+            logger.warning("P51: 危险命令原因没有中文 (hermes 新加的?), 补进 DANGER_ZH: %r", part[:120])
+            zh = "可能删改重要数据或影响系统"
+        if zh not in out:
+            out.append(zh)
+    return "、".join(out) or "可能有风险的命令"
 
 
 _LAST_SUMMARY: Optional[str] = None          # 最近一次审批提示的「要做的事」, 提示语用
@@ -264,3 +370,55 @@ def _patch_p54_readonly_execute_code() -> None:
         return
     _approval.check_execute_code_guard = wrap_execute_code_guard(orig, _load_readonly())
     logger.info("P54 只读 execute_code 免审批 patched")
+
+
+# ── P55 · 审批超时要让员工知道 ────────────────────────────────────────────
+#
+# 10/13 14:38: 第二个审批没人回, 5 分钟后 hermes 返回 "BLOCKED: … timed out without user
+# response" 给模型, 微信里**什么都不发**; 模型最后回「台账已落盘」, 只字不提那一步没做。
+# hermes 超时时没有往聊天里发消息的通道 (guard 跑在工具线程), 所以在给模型的结果里加一句
+# 必须照做的中文要求, 由模型的回复带给员工。
+
+TIMEOUT_NOTE = (
+    "\n\n[必须告诉员工] 刚才这一步等了几分钟员工没回复, 已经取消, 没有执行。"
+    "回复员工时要明确说这一步没做 (例: 「刚才要你同意的那一步你没回复, 我没执行; 需要的话说一声我重做」), "
+    "不要说已经全部完成。"
+)
+
+
+def add_timeout_note(result):
+    if isinstance(result, dict) and not result.get("approved") \
+            and "timed out without user response" in str(result.get("message") or ""):
+        result = dict(result)
+        result["message"] = str(result["message"]) + TIMEOUT_NOTE
+    return result
+
+
+def wrap_guard_with_timeout_note(orig):
+    def patched(*args, **kwargs):
+        return add_timeout_note(orig(*args, **kwargs))
+
+    # 保留里层的 _catfish_p54 等标记: 插件重载时 P54 的"已装过"判断才不会再包一层
+    patched.__dict__.update(getattr(orig, "__dict__", {}))
+    patched._catfish_p55 = True
+    return patched
+
+
+def _patch_p55_approval_timeout_note() -> None:
+    try:
+        import tools.approval as _approval
+        import tools.terminal_tool as _terminal
+    except ImportError as e:
+        logger.warning("P55: tools.approval / terminal_tool import 失败 (%s), skip", e)
+        return
+    # execute_code: 包在 P54 外面 (P54 先装); 终端命令: terminal_tool 用别名 _check_all_guards_impl
+    targets = ((_approval, "check_execute_code_guard"), (_approval, "check_all_command_guards"),
+               (_terminal, "_check_all_guards_impl"))
+    for mod, attr in targets:
+        orig = getattr(mod, attr, None)
+        if orig is None:
+            logger.warning("P55: %s.%s 不在 (hermes 改了?), skip 这一处", mod.__name__, attr)
+            continue
+        if not getattr(orig, "_catfish_p55", False):
+            setattr(mod, attr, wrap_guard_with_timeout_note(orig))
+    logger.info("P55 审批超时告诉员工 patched")

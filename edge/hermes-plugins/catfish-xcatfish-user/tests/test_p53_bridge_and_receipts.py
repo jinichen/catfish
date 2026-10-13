@@ -69,7 +69,7 @@ def test_approval_receipts_are_chinese():
         "✅ 好的, 已同意 (同类的这次对话里都允许了), 小鲶继续干活…"
     assert t("✅ Commands approved (3 commands). The agent is resuming...") == \
         "✅ 好的, 已同意 (3 条), 小鲶继续干活…"
-    assert t("❌ Command denied.") == "❌ 好的, 不执行了."
+    assert t("❌ Command denied.") == "❌ 好的, 不执行了。"
     assert t("No pending command to approve.") == "现在没有在等你同意的操作。"
     for s in ("✅ Command approved. The agent is resuming...", "❌ Commands denied (2 commands)."):
         out = t(s)

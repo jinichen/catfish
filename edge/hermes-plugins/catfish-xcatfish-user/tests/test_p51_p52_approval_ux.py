@@ -85,7 +85,7 @@ def test_prompt_without_comment_and_for_terminal_commands():
     msg = ux.format_approval_prompt("execute_code <<'PY'\nprint(1)\nPY", "x")
     assert "代码里没写说明" in msg
     msg = ux.format_approval_prompt("rm -rf /tmp/x", "recursive delete")
-    assert "运行一条命令" in msg and "原因: recursive delete" in msg and "命令: rm -rf /tmp/x" in msg
+    assert "运行一条命令" in msg and "原因: 成批删除文件" in msg and "命令: rm -rf /tmp/x" in msg
 
 
 def test_coding_pragma_is_not_taken_as_the_description():

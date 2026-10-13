@@ -54,6 +54,14 @@ REFACTOR_BASE = "cc4d71a"
 #: 一个 patch 悄悄多出来跟悄悄少一个同等危险 —— monkey-patch 是全进程生效的，
 #: 谁加的、为什么加、影响面多大，得有地方写。
 INTENTIONALLY_ADDED: dict[str, str] = {
+    "_patch_p55_approval_timeout_note": (
+        "10/13 加。审批超时 hermes 只把 BLOCKED 返给模型, 聊天里不发任何消息; 实测模型最后回"
+        "「台账已落盘」, 没提那一步没做。\n"
+        "  改: 包 check_execute_code_guard / check_all_command_guards / terminal_tool."
+        "_check_all_guards_impl, 结果是「timed out without user response」时在给模型的 message "
+        "末尾加一句必须告诉员工这一步没执行。\n"
+        "  影响面: 只改超时那一种结果的文字; 批准 / 拒绝 / 放行路径原样。"
+    ),
     "_patch_p54_readonly_execute_code": (
         "10/13 加 (鸿波「只读代码免批」)。微信查一份资质列表弹五六次 execute_code 审批, 全是读 .md。\n"
         "  改: 包 tools.approval.check_execute_code_guard —— readonly_code.analyze 判只读 → 直接放行; "
