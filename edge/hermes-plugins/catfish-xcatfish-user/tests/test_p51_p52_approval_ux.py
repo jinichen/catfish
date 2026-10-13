@@ -69,20 +69,22 @@ def test_prompt_is_plain_language_with_two_choices():
     assert "1 · 执行" in msg and "2 · 不要执行" in msg
     assert "都允许" not in msg and "会话" not in msg and "3 ·" not in msg   # 不提供会话级批准
     assert "/批准" not in msg and "/approve" not in msg                      # 不再要人背斜杠口令
-    assert "print(glob.glob('*'))" in msg                                     # 代码还在, 给想看的人
-    assert not msg.rstrip("`\n").endswith("PY")                               # heredoc 尾巴去掉了
+    # 10/13 鸿波「非程序员对代码不感兴趣」: 不展示代码
+    assert "glob" not in msg and "```" not in msg and "PY" not in msg
 
 
 def test_prompt_without_comment_and_for_terminal_commands():
     msg = ux.format_approval_prompt("execute_code <<'PY'\nprint(1)\nPY", "x")
     assert "代码里没写说明" in msg
     msg = ux.format_approval_prompt("rm -rf /tmp/x", "recursive delete")
-    assert "可能有风险的命令" in msg and "原因: recursive delete" in msg and "rm -rf /tmp/x" in msg
+    assert "可能有风险的命令" in msg and "原因: recursive delete" in msg and "命令: rm -rf /tmp/x" in msg
 
 
-def test_long_code_is_truncated():
+def test_long_code_never_bloats_the_message():
     msg = ux.format_approval_prompt("execute_code <<'PY'\n" + "x = 1\n" * 200 + "PY", "x")
-    assert len(msg) < 700 and "…" in msg
+    assert len(msg) < 200 and "x = 1" not in msg
+    msg = ux.format_approval_prompt("echo " + "a" * 500, "x")
+    assert len(msg) < 300 and "…" in msg
 
 
 def test_wrap_format_keeps_smart_denied_and_falls_back_on_error(monkeypatch):

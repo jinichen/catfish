@@ -66,35 +66,52 @@ def parse_approval_reply(text: Optional[str]) -> Optional[str]:
 _EXEC_PREFIX = "execute_code <<'PY'\n"
 
 
-def _first_comment(code: str) -> Optional[str]:
-    for line in code.splitlines():
-        s = line.strip()
-        if s.startswith("#") and not s.startswith("#!"):
-            text = s.lstrip("#").strip()
-            if len(text) >= 2:
-                return text[:80]
-    return None
+def _load_readonly():
+    """同目录的 readonly_code.py。插件包名带 dash, 相对导入不稳 —— 跟 plugin._import_sibling 同套路。"""
+    try:
+        from . import readonly_code  # type: ignore
+        return readonly_code
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import readonly_code  # type: ignore
+        return readonly_code
+    except ImportError:
+        pass
+    import importlib.util
+    import sys
+    from pathlib import Path
+    path = Path(__file__).with_name("readonly_code.py")
+    spec = importlib.util.spec_from_file_location("catfish_readonly_code", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["catfish_readonly_code"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _code_of(command: str) -> Optional[str]:
+    if not command.startswith(_EXEC_PREFIX):
+        return None
+    body = command[len(_EXEC_PREFIX):]
+    return body[:-3] if body.endswith("\nPY") else body
 
 
 def format_approval_prompt(command: str, description: str) -> str:
-    """中文审批提示: 一句话说要干什么 → 回 1 执行 / 2 不要 → 代码 (给想看的人)。只给单次批准。"""
-    is_code = command.startswith(_EXEC_PREFIX)
-    if is_code:
-        body = command[len(_EXEC_PREFIX):]
-        if body.endswith("\nPY"):
-            body = body[:-3]
-        what = _first_comment(body)
-        head = "🔐 小鲶想在你电脑上运行一段代码"
-        line_what = f"要做的事: {what}" if what else "要做的事: (代码里没写说明, 可以看下面的代码)"
-        preview = body.strip()
-        lines = [head, "", line_what]
+    """中文审批提示: 要做什么 → 为什么要你同意 → 回 1 执行 / 2 不要。不展示代码 (10/13 鸿波:
+    "非程序员对代码不感兴趣")。只给单次批准。"""
+    code = _code_of(command)
+    if code is not None:
+        rc = _load_readonly()
+        v = rc.analyze(code)
+        lines = ["🔐 小鲶要在你电脑上执行一个操作", "", f"要做的事: {rc.describe(v)}"]
+        if v.effects:
+            lines.append("需要你同意, 因为它会: " + "、".join(v.effects[:3]))
     else:
-        preview = command.strip()
-        lines = ["🔐 小鲶想运行一条可能有风险的命令", "", f"原因: {description}"]
-    if len(preview) > 300:
-        preview = preview[:300] + "\n…"
+        cmd = command.strip()
+        if len(cmd) > 80:
+            cmd = cmd[:80] + "…"
+        lines = ["🔐 小鲶要运行一条可能有风险的命令", "", f"原因: {description}", f"命令: {cmd}"]
     lines += ["", "回复数字就行:", "1 · 执行", "2 · 不要执行"]
-    lines += ["", "(代码如下, 不看也行)" if is_code else "(命令如下)", "```", preview, "```"]
     return "\n".join(lines)
 
 
@@ -183,3 +200,42 @@ def _patch_p52_busy_approval_reply() -> None:
         return
     GatewayRunner._handle_active_session_busy_message = wrap_busy_handler(orig, has_blocking_approval)
     logger.info("P52 审批回复按意思认 / 认不出不打断 patched")
+
+
+# ── P54 · 只读代码免批 ──────────────────────────────────────────────────
+#
+# 10/13 鸿波微信实测: 查一份资质列表弹五六次审批, 每次都是读几个 .md。员工原话「只读代码免批」。
+# readonly_code.analyze 判定只读 (白名单, 拿不准一律算有副作用) → 直接放行, 不弹审批;
+# 其余照走 hermes 原 check_execute_code_guard (单次审批, P51 的大白话提示)。
+# 分析本身出错 → 走原 guard (宁可多问一次, 不能漏)。
+
+def wrap_execute_code_guard(orig, analyzer):
+    def patched(code, env_type, has_host_access=False, *args, **kwargs):
+        try:
+            verdict = analyzer.analyze(code or "")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("P54: 只读分析出错, 照常审批 (%s)", e)
+            verdict = None
+        if verdict is not None and verdict.read_only:
+            logger.info("P54 只读代码免批: %s", analyzer.describe(verdict)[:60])
+            return {"approved": True, "message": None, "readonly_auto": True}
+        return orig(code, env_type, has_host_access, *args, **kwargs)
+
+    patched._catfish_p54 = True
+    return patched
+
+
+def _patch_p54_readonly_execute_code() -> None:
+    try:
+        import tools.approval as _approval
+    except ImportError as e:
+        logger.warning("P54: tools.approval import 失败 (%s), skip", e)
+        return
+    orig = getattr(_approval, "check_execute_code_guard", None)
+    if orig is None:
+        logger.warning("P54: tools.approval.check_execute_code_guard 不在 (hermes 改了?), skip")
+        return
+    if getattr(orig, "_catfish_p54", False):
+        return
+    _approval.check_execute_code_guard = wrap_execute_code_guard(orig, _load_readonly())
+    logger.info("P54 只读 execute_code 免审批 patched")

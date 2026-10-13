@@ -54,6 +54,16 @@ REFACTOR_BASE = "cc4d71a"
 #: 一个 patch 悄悄多出来跟悄悄少一个同等危险 —— monkey-patch 是全进程生效的，
 #: 谁加的、为什么加、影响面多大，得有地方写。
 INTENTIONALLY_ADDED: dict[str, str] = {
+    "_patch_p54_readonly_execute_code": (
+        "10/13 加 (鸿波「只读代码免批」)。微信查一份资质列表弹五六次 execute_code 审批, 全是读 .md。\n"
+        "  改: 包 tools.approval.check_execute_code_guard —— readonly_code.analyze 判只读 → 直接放行; "
+        "其余照走原 guard。\n"
+        "  判据: AST 白名单 (模块 / os 函数 / 外部命令及其参数), 危险对象只许在已知调用位置直接调用, "
+        "被引用 / 动态取 (getattr / sys.modules / 双下划线 / import *) 一律算有副作用; "
+        "分析出错走原 guard。有专门的绕过测试 (test_p54_readonly_code.py)。\n"
+        "  影响面: 只放松「静态可证只读」的脚本; 写 / 删 / 联网 / 跑非白名单命令照常单次审批。"
+        "跟 P20 (禁止永久放行 execute_code) 不冲突: P54 不碰批准记录, 每次按代码内容现判。"
+    ),
     "_patch_p53_bridge_promoted_catfish_tools": (
         "10/13 加。模型用 tool_call 调被 P43 提升的 catfish_wiki_search, 上游报"
         "「not a deferrable tool」, qwen-flash 没改直接调, 绕去写 Python 读 .md → "

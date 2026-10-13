@@ -131,6 +131,9 @@ const BAKED_PLUGIN_APPROVAL_UX: &str =
 // 10/13 P53: tool_call 转发已提升的 catfish 工具 (见 plugin_bridge_promoted.py)
 const BAKED_PLUGIN_BRIDGE_PROMOTED: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_bridge_promoted.py");
+// 10/13 P54: 只读 execute_code 免审批的静态分析 (见 readonly_code.py)
+const BAKED_READONLY_CODE: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/readonly_code.py");
 
 /// Plugin 的全部文件 (filename, baked content).
 ///
@@ -173,4 +176,5 @@ pub(crate) const BAKED_FILES: &[(&str, &str)] = &[
     ("plugin_auto_continue.py", BAKED_PLUGIN_AUTO_CONTINUE),
     ("plugin_approval_ux.py", BAKED_PLUGIN_APPROVAL_UX),
     ("plugin_bridge_promoted.py", BAKED_PLUGIN_BRIDGE_PROMOTED),
+    ("readonly_code.py", BAKED_READONLY_CODE),
 ];

@@ -144,6 +144,7 @@ _patch_p15_2_chat_approval_route = plugin_approval._patch_p15_2_chat_approval_ro
 plugin_approval_ux = _import_sibling("plugin_approval_ux")
 _patch_p51_approval_prompt = plugin_approval_ux._patch_p51_approval_prompt  # noqa: F401  (re-export · 见 plugin_approval_ux.py)
 _patch_p52_busy_approval_reply = plugin_approval_ux._patch_p52_busy_approval_reply  # noqa: F401  (re-export · 见 plugin_approval_ux.py)
+_patch_p54_readonly_execute_code = plugin_approval_ux._patch_p54_readonly_execute_code  # noqa: F401  (re-export · 见 plugin_approval_ux.py / readonly_code.py)
 plugin_bridge_promoted = _import_sibling("plugin_bridge_promoted")
 _patch_p53_bridge_promoted_catfish_tools = plugin_bridge_promoted._patch_p53_bridge_promoted_catfish_tools  # noqa: F401  (re-export · 见 plugin_bridge_promoted.py)
 
@@ -389,6 +390,9 @@ def _apply_patches() -> None:
     # 被拒 → 绕去写 Python 读 .md → 两次 execute_code 审批。让 tool_call 照转本会话里已有的
     # catfish 工具 (能调到的集合不变)。详见 plugin_bridge_promoted.py。
     _try_patch(_patch_p53_bridge_promoted_catfish_tools, "P53: _patch_p53_bridge_promoted_catfish_tools 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
+    # P54 (10/13 鸿波「只读代码免批」): 查资料的只读脚本 (读文件 / 列目录 / ps) 不再弹审批;
+    # 静态分析白名单, 拿不准一律照常审批。见 readonly_code.py。
+    _try_patch(_patch_p54_readonly_execute_code, "P54: _patch_p54_readonly_execute_code 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P50 (10/6 鸿波"中间有三次任务停下来了"): 模型回了一句"逐项目比对。"这种
     # 打算、没调工具、finish_reason=stop, 回合就结束了 —— 10/5 一晚三次。hermes
     # 没有"承诺了动作却没动作"的续跑, 这里替员工按最多两次「继续」。必须在
