@@ -131,6 +131,29 @@ _P28_REPLACEMENTS = [
     ("No pending command to deny.", "现在没有在等你同意的操作。"),
     ("⚠️ Approval expired (agent is no longer waiting). Ask the agent to try again.",
      "⚠️ 这条审批已经过期了, 需要的话让小鲶重新做一次。"),
+    # ── 10/13 hermes 切中文 (display.language: zh) 后它自带的说法 → 我们的说法 ─────────────
+    # locales/zh.yaml 的审批回执 / 重置 / 停止等写的是「代理」「命令已批准」, 对员工生硬。
+    ("✅ 命令已批准（本次会话内允许该模式）", "✅ 好的, 已同意 (同类的这次对话里都允许了)"),
+    ("✅ 命令已批准（永久允许该模式）", "✅ 好的, 已同意 (同类的以后都允许了)"),
+    ("✅ 命令已批准", "✅ 好的, 已同意"),
+    ("。代理正在恢复…", ", 小鲶继续干活…"),
+    ("❌ 命令已拒绝（批准已过期）。", "❌ 这条审批已经过期了。"),
+    ("❌ 命令已拒绝。 已将原因转达给代理: ", "❌ 好的, 不执行了, 已把原因转告小鲶: "),
+    ("❌ 命令已拒绝。", "❌ 好的, 不执行了。"),
+    ("❌ 命令已拒绝", "❌ 好的, 不执行了"),
+    ("。 已将原因转达给代理: ", ", 已把原因转告小鲶: "),
+    ("没有待批准的命令。", "现在没有在等你同意的操作。"),
+    ("没有待拒绝的命令。", "现在没有在等你同意的操作。"),
+    ("⚠️ 批准已过期（代理不再等待）。请让代理重试。", "⚠️ 这条审批已经过期了, 需要的话让小鲶重新做一次。"),
+    ("⚡ 已停止。代理尚未启动 — 你可以继续此会话。", "⚡ 停了 (还没开始做), 可以接着聊。"),
+    ("⚡ 已停止。你可以继续此会话。", "⚡ 停了, 可以接着聊。"),
+    ("没有可停止的活跃任务。", "现在没有在做的事。"),
+    ("✨ 会话已重置！重新开始。", "✨ 已开新对话。"),
+    ("✨ 新会话已启动！", "✨ 新对话开始了。"),
+    ("✨ 新会话已启动：", "✨ 新对话开始了: "),
+    ("⏳ 网关重启已在进行中……", "⏳ 已经在重启了…"),
+    ("♻ 正在重启网关。如果 60 秒内没有收到通知，请在控制台运行 `hermes gateway restart` 重启。",
+     "♻ 小鲶正在重启, 一分钟后还没回音的话, 请在电脑上重启鲶鱼。"),
     # ── 10/13 全量盘点 (gateway/run.py / agent/onboarding.py / base.py) ──────────────
     # 忙碌 / 排队 / 第一次提示
     ("⏳ Subagent working", "⏳ 子任务还在跑"),
@@ -261,7 +284,24 @@ _P28_REGEX = [
     (_re.compile(r"⚠️ Steer failed: "), "⚠️ 没插进去: "),
     (_re.compile(r"⏩ Steer queued — arrives after the next tool call: "), "⏩ 收到, 下一步就用上: "),
     (_re.compile(r"🟡 /(\S+) cancelled\. Conversation unchanged\."), r"🟡 已取消 /\1, 对话没动。"),
-    (_re.compile(r"\n✦ Tip: [^\n]*"), ""),       # 英文小贴士, 对员工没用, 去掉
+    (_re.compile(r"\n✦ (?:Tip: |提示：)[^\n]*"), ""),   # 小贴士内容是英文的 hermes 用法, 对员工没用, 去掉
+    (_re.compile(r"（([0-9]+) 条命令）"), r"(\1 条)"),
+    (_re.compile(r"⏳ 正在等待 ([0-9]+) 个活跃代理结束后重启\.\.\."), r"⏳ 先等 \1 个进行中的任务做完再重启…"),
+    # zh.yaml 里没翻的 /status /context 行
+    (_re.compile(r"\*\*Model:\*\*"), "**模型:**"),
+    (_re.compile(r"\*\*Context:\*\*"), "**对话长度:**"),
+    (_re.compile(r"\*\*Lifetime tokens billed:\*\* ([^\n]*?) _\(not your current context size; use `/context`\)_"),
+     r"**累计用量:** \1"),
+    (_re.compile(r"🧠 \*\*Context Window\*\*"), "🧠 **对话长度**"),
+    (_re.compile(r"(?m)^Model: "), "模型: "),
+    (_re.compile(r"(?m)^Window: ([0-9,]+) tokens"), r"上限: \1 tokens"),
+    (_re.compile(r"(?m)^In use: "), "已用: "),
+    (_re.compile(r"(?m)^Headroom to limit: "), "剩余: "),
+    (_re.compile(r"(?m)^Auto-compresses at: ([^\n]*?) — ([^\n]*?) to go"), r"到 \1 自动整理 (还差 \2)"),
+    (_re.compile(r"(?m)^Compressions this session: "), "本对话整理次数: "),
+    (_re.compile(r"(?m)^Last compression freed: ([0-9.]+)% of context"), r"上次整理腾出 \1%"),
+    (_re.compile(r"No context data available yet\. Send a message to start a session\."),
+     "还没有对话记录, 先发条消息。"),
     (_re.compile(r"◐ Session automatically reset \([^)]*\)\. Conversation history cleared\.\n"
                  r"Use /resume to browse and restore a previous session\.\n"
                  r"Adjust reset timing in config\.yaml under session_reset\."),

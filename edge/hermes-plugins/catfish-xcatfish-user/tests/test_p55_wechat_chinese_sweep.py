@@ -137,3 +137,47 @@ def test_safety_net_logs_untranslated_english_but_not_chinese(caplog):
     with caplog.at_level(logging.WARNING):
         p28._translate_hermes_zh("福富的资质列表已经出好了, 文件在 Downloads 里, 一共 79 条 entries listed here ok.")
     assert "P28 miss" not in caplog.text
+
+
+# ── hermes 切中文 (display.language: zh) 后它自带的说法 → 我们的说法 ─────────────
+
+ZH_SAMPLES = {
+    "✅ 命令已批准。代理正在恢复…": "✅ 好的, 已同意, 小鲶继续干活…",
+    "✅ 命令已批准（2 条命令）。代理正在恢复…": "✅ 好的, 已同意(2 条), 小鲶继续干活…",
+    "✅ 命令已批准（本次会话内允许该模式）。代理正在恢复…": "✅ 好的, 已同意 (同类的这次对话里都允许了), 小鲶继续干活…",
+    "❌ 命令已拒绝。": "❌ 好的, 不执行了。",
+    "❌ 命令已拒绝（批准已过期）。": "❌ 这条审批已经过期了。",
+    "❌ 命令已拒绝。 已将原因转达给代理: \"太危险\"": "❌ 好的, 不执行了, 已把原因转告小鲶: \"太危险\"",
+    "没有待批准的命令。": "现在没有在等你同意的操作。",
+    "⚡ 已停止。你可以继续此会话。": "⚡ 停了, 可以接着聊。",
+    "✨ 会话已重置！重新开始。\n✦ 提示：Use /compact to shrink context": "✨ 已开新对话。",
+    "⏳ 正在等待 3 个活跃代理结束后重启...": "⏳ 先等 3 个进行中的任务做完再重启…",
+}
+
+
+@pytest.mark.parametrize("zh", list(ZH_SAMPLES))
+def test_hermes_zh_catalog_is_rewritten_to_our_wording(zh):
+    assert p28._translate_hermes_zh(zh) == ZH_SAMPLES[zh]
+
+
+def test_every_zh_receipt_from_hermes_catalog_loses_the_word_daili():
+    # 读本机 hermes 的 zh.yaml, 审批 / 拒绝 / 停止 / 重置这几段里员工能看到的都不再出现「代理」
+    import yaml
+    src = HERMES / "locales" / "zh.yaml"
+    if not src.exists():
+        pytest.skip("本机没装 hermes")
+    gw = yaml.safe_load(src.read_text(encoding="utf-8"))["gateway"]
+    texts = [v for sec in ("approve", "deny", "stop", "reset") for v in gw[sec].values()]
+    texts += [gw["approval_expired"], gw["draining"]]
+    for t in texts:
+        out = p28._translate_hermes_zh(t.replace("{count}", "2").replace("{reason}", "x")
+                                        .replace("{title}", "t").replace("{tip}", "tip")
+                                        .replace("{error}", "e"))
+        assert "代理" not in out, (t, out)
+
+
+def test_untranslated_status_and_context_lines():
+    t = p28._translate_hermes_zh
+    assert t("**Model:** `catfish-public-qwen-flash`") == "**模型:** `catfish-public-qwen-flash`"
+    assert t("**Context:** 87,000 / 1,000,000 (8%)") == "**对话长度:** 87,000 / 1,000,000 (8%)"
+    assert t("🧠 **Context Window**\nModel: `x`\nIn use: 1 / 2 (50%)") == "🧠 **对话长度**\n模型: `x`\n已用: 1 / 2 (50%)"

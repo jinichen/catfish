@@ -179,6 +179,15 @@ pub fn run() {
                 Err(e) => log::warn!("BL-HERMES-CTX-CAP: ensure 失败 (不阻塞启动): {e}"),
             }
 
+            // 10/13 鸿波: hermes 自带翻译表的提示 (/status /reset /stop 回复、审批回执 ...) 只认
+            // display.language, 不设就是英文, 微信里会冒出来。没配 → 写 zh; 已配 → 不动。
+            // 只影响 hermes 给人看的固定提示, 不影响模型。详见 services/hermes_language.rs。
+            match services::hermes_language::ensure_default() {
+                Ok(true) => log::info!("hermes display.language 写入 {}", services::hermes_language::DEFAULT_LANGUAGE),
+                Ok(false) => log::debug!("hermes display.language 已配置或 hermes 未装, 不动"),
+                Err(e) => log::warn!("hermes display.language ensure 失败 (不阻塞启动): {e}"),
+            }
+
             // 8/6 鸿波「早安里说的项目进度, 工作台不知道」: catfish-memory 这个
             // memory provider **从来没被激活过** —— 打包只 cp -R 拷文件
             // (build-mac-resources.sh:185), 激活逻辑在 install-catfish-memory.sh:122,
