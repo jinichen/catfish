@@ -1,7 +1,8 @@
 /** 单条消息渲染 —— user / assistant / 错误状态 */
 
-import { useState } from "react";
-import { ArrowClockwise, FastForward, PencilSimple } from "@phosphor-icons/react";
+import { useMemo, useState } from "react";
+import { ArrowClockwise, FastForward, Paperclip, PencilSimple } from "@phosphor-icons/react";
+import { splitUserBubbleText } from "../../lib/userBubbleText";
 import { Markdown } from "../../lib/markdown";
 import type { ChatMessage as Msg } from "../../types/chat";
 import ChatToolSteps from "./ChatToolSteps";
@@ -72,6 +73,15 @@ function UserBubble({
   isStreaming?: boolean;
 }) {
   const hasAttachments = msg.attachments && msg.attachments.length > 0;
+  // 10/13 鸿波「这些内容会干扰视觉」: 切回老会话时 content 里带着发给模型的附件材料
+  // (=== 附件: … / 完整文件路径 / 预览正文)。气泡只显示员工的话, 附件变成小标签。
+  // content 本身不动 —— 每次发送会把整段历史再发给模型, 模型还要看附件。
+  const shown = useMemo(() => splitUserBubbleText(msg.content), [msg.content]);
+  const fileNames = useMemo(() => {
+    const names = (msg.attachments ?? []).filter((a) => a.kind !== "image").map((a) => a.name);
+    for (const n of shown.fileNames) if (!names.includes(n)) names.push(n);
+    return names;
+  }, [msg.attachments, shown.fileNames]);
   // BL-AUTO-CONTINUE (5/13): Companion 自动续跑发的 user msg, UI 标记淡色 +
   // 角标 "🔄 自动续 N/M", 让员工看见这是机器发的不是他自己发的.
   const isAutoContinue = msg._autoContinue !== undefined;
@@ -83,13 +93,13 @@ function UserBubble({
   // BL-COMPANION-EDIT (7/23 P1): 编辑态 · click ✏️ → editing=true · 气泡变 textarea.
   // draft = 编辑中的草稿 · 确认前老 msg.content 保留 · 取消 (Esc) 时 draft 丢弃.
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(msg.content);
+  const [draft, setDraft] = useState(shown.text);
   const canResend = !!onResend && !isAutoContinue && !isStreaming;
   const canEdit = !!onEditAndResend && !isAutoContinue && !isStreaming;
 
   function startEdit() {
-    // 每次进入编辑态 · 从当前 msg.content 初始化 draft (防上次取消后残留)
-    setDraft(msg.content);
+    // 每次进入编辑态 · 从当前显示的话初始化 draft (防上次取消后残留); 附件材料不进编辑框
+    setDraft(shown.text);
     setEditing(true);
   }
   function cancelEdit() {
@@ -100,8 +110,11 @@ function UserBubble({
     const trimmed = draft.trim();
     // UI 层 gate · 跟 send() 早退语义一致: trimmed 空 + 无附件不发.
     // useChat.editAndResendUserMsg 也有 fail-loud 兜底 (throw) · 双层保护.
-    if (!trimmed && !hasAttachments) return;
-    onEditAndResend!(msg.id, trimmed);
+    if (!trimmed && !hasAttachments && !shown.hidden) return;
+    // 老会话读回来的消息附件材料在 content 里 (msg.attachments 里没有文件): 改完把它接回去,
+    // 不然重发后模型就看不到那个附件了
+    const keepHidden = shown.hidden && !(msg.attachments ?? []).some((a) => a.kind !== "image");
+    onEditAndResend!(msg.id, keepHidden ? trimmed + shown.hidden : trimmed);
     setEditing(false);
   }
   function onEditorKey(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -167,7 +180,7 @@ function UserBubble({
           wordBreak: "break-word",
           display: "flex",
           flexDirection: "column",
-          gap: hasAttachments && (msg.content || editing) ? "var(--space-2)" : 0,
+          gap: (hasAttachments || fileNames.length > 0) && (shown.text || editing) ? "var(--space-2)" : 0,
           border: isAutoContinue
             ? "1px dashed var(--catfish-cyan)"
             : editing
@@ -222,6 +235,34 @@ function UserBubble({
             )}
           </div>
         )}
+        {/* 文件附件: 小标签, 只显示文件名 (完整路径 / 预览正文是给模型的, 不在气泡里) */}
+        {fileNames.length > 0 && (
+          <div style={{ display: "flex", gap: "var(--space-1)", flexWrap: "wrap" }}>
+            {fileNames.map((name) => (
+              <span
+                key={name}
+                title={name}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  maxWidth: "100%",
+                  padding: "2px 8px",
+                  borderRadius: "var(--radius-sm)",
+                  background: isAutoContinue ? "var(--catfish-cyan-tint)" : "rgba(255,255,255,0.18)",
+                  fontSize: 12,
+                  lineHeight: 1.6,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                <Paperclip size={12} aria-hidden="true" style={{ flexShrink: 0 }} />
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
+              </span>
+            ))}
+          </div>
+        )}
         {/* BL-COMPANION-EDIT (7/23 P1): 编辑态 · content 变 textarea + 键盘 tip
             非编辑态 · 老 span 显示 (行为不变). */}
         {editing ? (
@@ -263,7 +304,7 @@ function UserBubble({
             </div>
           </>
         ) : (
-          msg.content && <span>{msg.content}</span>
+          shown.text && <span>{shown.text}</span>
         )}
       </div>
       {/* BL-COMPANION-EDIT-RESEND-OVERLAY (7/24 鸿波 catch "按钮太占空间"):
