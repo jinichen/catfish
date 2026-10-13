@@ -103,7 +103,8 @@ def format_approval_prompt(command: str, description: str) -> str:
     # 第一行以「：」结尾 —— hermes 微信适配器 (weixin.py _should_split_short_chat_block_for_weixin)
     # 会把 2~6 行的"聊天式"短消息拆成一串气泡; 首行像标题就不拆。10/13 实测拆开后第二次审批
     # 被埋在「2 条新消息」下面, 员工以为卡住了。
-    global _LAST_SUMMARY
+    global _LAST_SUMMARY, _PROMPT_SENT_AT
+    _PROMPT_SENT_AT = time.time()          # P56 用: 判断重复的「1」是不是在回答这条新审批
     code = _code_of(command)
     if code is not None:
         rc = _load_readonly()
@@ -422,3 +423,81 @@ def _patch_p55_approval_timeout_note() -> None:
         if not getattr(orig, "_catfish_p55", False):
             setattr(mod, attr, wrap_guard_with_timeout_note(orig))
     logger.info("P55 审批超时告诉员工 patched")
+
+
+# ── P56 · 连着两次回「1」, 第二次别被当成重复消息吞掉 ─────────────────────────
+#
+# 10/13 15:08: 第一个审批回「1」批了; 18 秒后第二个审批, 员工再回「1」—— hermes 日志里**没有
+# 这条入站**。weixin.py:1481-1488 有"内容去重": 同一个人 5 分钟内发同样的文字, 当成通道重投
+# 直接丢掉 (iLink 偶尔会换个 message_id 把同一条消息再投一次)。审批回答恰恰总是同一个「1」。
+#
+# 不能简单放行「1」: 通道晚到的重投如果落在新审批之后, 就成了员工没看见就批准。所以三条都满足
+# 才放行: ① 是审批回答; ② 上一次同样的回答之后又发过新的审批提示; ③ 这条消息自己的发送时间
+# (create_time_ms) 在新提示之后 —— 重投的旧消息带的是旧时间。拿不到发送时间就不放行 (宁可多问)。
+
+_PROMPT_SENT_AT = 0.0        # 最近一次审批提示生成的时间 (time.time), format_approval_prompt 里记
+_CLOCK_SLACK_S = 2.0         # 手机 / 服务器 / 本机时钟的误差余量
+_LOGGED_FIELDS = False
+
+
+def should_bypass_content_dedup(prev_seen: Optional[float], created_s: Optional[float],
+                                prompt_at: float) -> bool:
+    if prev_seen is None or created_s is None:
+        return False
+    return prompt_at > prev_seen and created_s >= prompt_at - _CLOCK_SLACK_S
+
+
+def _created_seconds(message) -> Optional[float]:
+    v = message.get("create_time_ms") if isinstance(message, dict) else None
+    try:
+        return float(v) / 1000.0 if v not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def wrap_process_message(orig, extract_text):
+    """包 WeixinAdapter._process_message(self, message)。只在放行条件全满足时从去重缓存里删掉那一条。"""
+    import hashlib
+
+    async def patched(self, message):
+        global _LOGGED_FIELDS
+        try:
+            if not _LOGGED_FIELDS and isinstance(message, dict):
+                _LOGGED_FIELDS = True
+                logger.info("P56 微信入站消息字段 (只记字段名, 核对有没有发送时间): %s", sorted(message.keys()))
+            text = extract_text(message.get("item_list") or []) if isinstance(message, dict) else ""
+            if text and parse_approval_reply(text):
+                sender = str(message.get("from_user_id") or "").strip()
+                key = f"content:{sender}:{hashlib.md5(text.encode()).hexdigest()}"   # 跟 weixin.py:1485 同式
+                seen = getattr(getattr(self, "_dedup", None), "_seen", None)
+                prev = seen.get(key) if isinstance(seen, dict) else None
+                created = _created_seconds(message)
+                if should_bypass_content_dedup(prev, created, _PROMPT_SENT_AT):
+                    seen.pop(key, None)
+                    logger.info("P56 放行重复的审批回答 %r (上一次 %.0fs 前, 之后有新审批)", text, time.time() - prev)
+                elif prev is not None and created is None:
+                    logger.warning("P56 重复的审批回答 %r 没有 create_time_ms, 按重复丢弃 (宁可多问)", text)
+        except Exception as e:  # noqa: BLE001 — 判断出错就走原逻辑
+            logger.debug("P56 判断异常 (走原逻辑): %s", e)
+        return await orig(self, message)
+
+    patched._catfish_p56 = True
+    return patched
+
+
+def _patch_p56_weixin_repeat_answer() -> None:
+    try:
+        from gateway.platforms import weixin as _wx
+    except ImportError as e:
+        logger.warning("P56: gateway.platforms.weixin import 失败 (%s), skip", e)
+        return
+    cls = getattr(_wx, "WeixinAdapter", None)
+    orig = getattr(cls, "_process_message", None) if cls else None
+    extract = getattr(_wx, "_extract_text", None)
+    if orig is None or extract is None:
+        logger.warning("P56: WeixinAdapter._process_message / _extract_text 不在 (hermes 改了?), skip")
+        return
+    if getattr(orig, "_catfish_p56", False):
+        return
+    cls._process_message = wrap_process_message(orig, extract)
+    logger.info("P56 微信连着回「1」不被去重吞掉 patched")

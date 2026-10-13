@@ -54,6 +54,14 @@ REFACTOR_BASE = "cc4d71a"
 #: 一个 patch 悄悄多出来跟悄悄少一个同等危险 —— monkey-patch 是全进程生效的，
 #: 谁加的、为什么加、影响面多大，得有地方写。
 INTENTIONALLY_ADDED: dict[str, str] = {
+    "_patch_p56_weixin_repeat_answer": (
+        "10/13 加。15:08 员工连着两个审批都回「1」, 第二个「1」被 weixin.py 内容去重 (同人同文字 "
+        "5 分钟内) 丢掉, 日志里没有入站, 审批 5 分钟后超时。\n"
+        "  改: 包 WeixinAdapter._process_message —— 审批回答 + 上次同样回答之后发过新审批提示 + "
+        "这条的 create_time_ms 在新提示之后 (留 2 秒时钟余量), 三条都满足才从去重缓存删掉那一条。\n"
+        "  影响面: 只碰审批回答这类短文字; message_id 去重不动; 拿不到发送时间就不放行。"
+        "防的是通道晚到的重投在新审批之后落地、替员工批准。"
+    ),
     "_patch_p55_approval_timeout_note": (
         "10/13 加。审批超时 hermes 只把 BLOCKED 返给模型, 聊天里不发任何消息; 实测模型最后回"
         "「台账已落盘」, 没提那一步没做。\n"
