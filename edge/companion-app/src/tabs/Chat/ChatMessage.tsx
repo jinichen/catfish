@@ -43,6 +43,9 @@ export default function ChatMessage({
   isLast = false,
 }: Props) {
   if (msg.role === "user") {
+    // 整条是 hermes 以"用户"身份存的系统消息 (压缩摘要 / 定时任务 / 子任务完成 …): 不当员工的话显示
+    const system = splitUserBubbleText(msg.content).system;
+    if (system) return <SystemNote label={system} raw={msg.content} />;
     return (
       <UserBubble
         msg={msg}
@@ -59,6 +62,51 @@ export default function ChatMessage({
   // tool 角色消息也不直接渲染 —— 它的内容已通过 ChatToolCall 在
   // 上一条 assistant 消息里展示了
   return null;
+}
+
+/** 系统消息: 一行灰字居中, 点「展开」看原文 (排查用)。10/13 鸿波截图里的英文压缩摘要就是这类。 */
+function SystemNote({ label, raw }: { label: string; raw: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ margin: "var(--space-2) 0 var(--space-3)", textAlign: "center" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          background: "none",
+          border: "none",
+          padding: "2px 8px",
+          color: "var(--catfish-text-muted)",
+          fontSize: 12,
+          cursor: "pointer",
+        }}
+        title="这条是系统自动生成的, 不是你发的"
+      >
+        ⚙ {label} · {open ? "收起" : "展开"}
+      </button>
+      {open && (
+        <pre
+          style={{
+            textAlign: "left",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            maxHeight: 240,
+            overflow: "auto",
+            margin: "var(--space-1) auto 0",
+            maxWidth: "85%",
+            padding: "var(--space-2) var(--space-3)",
+            borderRadius: "var(--radius-sm)",
+            background: "var(--catfish-bg-cream)",
+            color: "var(--catfish-text-muted)",
+            fontSize: 12,
+            lineHeight: 1.5,
+          }}
+        >
+          {raw}
+        </pre>
+      )}
+    </div>
+  );
 }
 
 function UserBubble({
