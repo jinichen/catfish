@@ -15,6 +15,42 @@
 
 catfish 受影响的三块: 鲶鱼插件 (36 个补丁)、离线安装链路、Companion 界面与 hermes 的接口。
 
+## 实施进度 (10/14, 分支 hermes-v022, Companion 1.0.122 → 1.0.129)
+
+A/B/C/D 四块都已改完并提交; 每块都在 v0.22 测试网关 (proto 安装 + 两个鲶鱼插件 + 本机鲶鱼网关) 上真跑过。
+
+| 块 | 状态 | 验证 |
+|---|---|---|
+| A 安装链路 | Companion 自己装 (Python 3.14 + 离线 wheelhouse + 安装戳 external), mac / Windows 同一套 | mac 离线装机 e2e; Windows MSI CI (含打包后 Windows 运行时启动冒烟) 全绿 |
+| B 规定配置 | `services/hermes_policy_config.rs`: 启动时 + 装机建好 config 当场写 | 单测 + 测试网关按该配置启动、对话 |
+| C 插件 | 自检认 mixin; 补丁全部装上 (`_PATCH_FAILURES=[]`); 退役 P15 / P15.4 / P19 / P27; 新增 P58 语言包 | 插件测试 565 过; 测试网关真加载 |
+| D 界面 | 原生 `approval.request` + `/v1/runs/{id}/approval`、`hermes.status`、思考内容不进正文 | 端到端: 删目录请求 → smart 转人工 → 新接口拒绝 → 未执行 |
+| 专家 Bot | 白名单作废 → 用 profile 的 `gateway.parked` 停放标记 | 单测 |
+| 会议转写包 | 包里自带 Python 3.11.15 (1.1.0) | mac 版打包自检 + Companion 安装代码 e2e 通过; Windows 版待 CI 打 |
+| 审批留痕 | `~/.catfish/approval_audit.jsonl` (smart / 员工 / 超时 / P54 免批) | 测试网关实测写入 |
+
+### 实施时新发现、评估里没有的 (都已处理)
+
+| 问题 | 不处理会怎样 | 处理 |
+|---|---|---|
+| `provider: openai-api` 在 v0.22 变成"只连官方 OpenAI、只读环境变量" | **员工机一条都聊不了** (No usable credentials) | 改 `provider: custom` + `key_env: OPENAI_API_KEY`; 员工 1 小时令牌移出 `model.api_key` (custom 下它会压过 key_env, Companion 关一小时后全 401), 另存 `catfish-companion-token` 给 Windows 聊天用。只在有 v0.22 安装戳时切 (v0.21 不认 key_env) |
+| 插件替换内置 `memory` 工具要授权 | 两个插件的记忆路由整个失效 | 规定配置写 `plugins.entries.<插件>.granted_capabilities: [tools.override]` (+ 旧键); 插件清单声明能力 |
+| v0.22 不再装 PyYAML | 插件 / 记忆网关 / 工具桥 `import yaml` 直接报错 | 加进 `hermes-extra-packages.txt` |
+| `agent.max_turns` 不设 = 不限轮数 | 卡住的任务无限跑 | 规定配置没配时补 90 |
+| pre_tool_call 钩子 30 秒超时就拦, 之后 60 秒内该钩子一律跳过 = 拦 | 记忆检查里的模型调用一慢, **一分钟内所有工具调用都被拦** | 记忆检查模型调用按阶段限时, 最坏 20 秒 |
+| 异步辅助调用不收 `extra_headers` | P3 照原写法会让异步辅助调用 TypeError | P3 改包 `_plan_aux_call` (同步异步都经过) |
+| 审批"无人值守"判断有两份 (approval / approval_context) | Companion 的写文件保护、Codex 审批被当成"没人能回答"直接拒 | P15.3 两份都换, 且只认 api_server (webhook 每轮都注册回调但没界面) |
+| 克隆 profile 时 `API_SERVER_*` 被当渠道配置去掉 | 专家 Bot 鉴权失败 | Companion 建 profile 后本来就从主 .env 补写, 已核; profile 同步时连 provider / key_env 一起抄 (Codex 不带) |
+| 源码品牌补丁在 v0.22 几乎全对不上, 整函数替换欢迎横幅会把命令行弄崩 | 开发机 `catfish` 启动自愈把 CLI 弄坏 | v0.22+ 停用, 品牌由 P58 语言包负责 |
+| `lib-download.sh` 的 `GH_PROXY=""` 从没生效 (`:-` 把空当没设) | CI 直连不了 | 改 `-` |
+
+### 还剩的
+
+- Windows 会议转写包 1.1.0: 推送后跑 `build-meeting-asr-pack.yml`; mac 1.1.0 已在 `~/catfish-components/`, 两个都要放进中央组件目录重出清单。
+- 全新 Companion 包在真机上装一遍 (mac / Windows), 再从 0.21 原地升级一遍; 灰度顺序不变。
+- **开发机注意**: `~/.hermes/plugins/` 下两个插件是软链到仓库工作区的。工作区在 `hermes-v022` 分支、本机 hermes 还是 0.21 时,
+  0.21 网关一重启就会加载新插件 → 自检不过 → 插件不加载 (身份头 / 微信中文 / 审批界面都没了)。本机要么切回 main, 要么用这个分支的 Companion 把本机升到 0.22。
+
 ## 不改就升会发生什么 (按严重程度)
 
 | # | 后果 | 原因 | 级别 |

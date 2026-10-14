@@ -18,7 +18,7 @@ catfish 5/13 早上加了 /api/sessions/me/search (gateway sessions_browse), 真
 # 安全
 - read-only 连接 (mode=ro)
 - 1.5s timeout
-- LIKE 转义防 % _ \ wildcard 串味
+- LIKE 转义防 % _ 反斜杠 wildcard 串味
 - 永不抛异常 (失败返空, LLM 看到友好结果)
 - 只搜当前员工 mac 的 hermes db, 不跨员工 (state.db 物理隔离)
 """
