@@ -49,6 +49,26 @@ pub fn meeting_list() -> Result<Vec<MeetingMeta>, String> {
     Ok(store::list(&root).into_iter().map(|m| heal_if_stale(&root, m, active.as_deref())).collect())
 }
 
+/// 删除一场会议 (10/15)。正在录的、正在转写的不让删 —— 删了录音线程 / 转写进程还在往这个目录写。
+/// meta 写着"录音中 / 转写中"但实际没在跑 (App 被强退留下的) 照常删。
+#[tauri::command]
+pub fn meeting_delete(id: String) -> Result<(), String> {
+    let root = root()?;
+    let meta = store::load(&root, &id)?;
+    if meta.status == MeetingStatus::Recording {
+        let audio = store::audio_dir(&root, &id)?;
+        if active_dir().as_deref() == Some(audio.display().to_string().as_str()) {
+            return Err("这场会议正在录音, 先结束录音再删".into());
+        }
+    }
+    if meta.status == MeetingStatus::Transcribing && super::meeting_asr_cmd::transcribing() {
+        return Err("这场会议正在转写, 等转写完再删".into());
+    }
+    store::remove(&root, &id)?;
+    log::info!("[meeting] 已删除 {id}");
+    Ok(())
+}
+
 #[tauri::command]
 pub fn meeting_create(title: String, attendees: u32, hotwords: Vec<String>) -> Result<MeetingMeta, String> {
     store::create(&root()?, &title, attendees, &hotwords)

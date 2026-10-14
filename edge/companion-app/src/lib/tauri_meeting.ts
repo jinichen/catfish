@@ -124,6 +124,7 @@ export interface Minutes {
 }
 
 export const meetingList = () => rawInvoke<MeetingMeta[]>("meeting_list");
+export const meetingDelete = (id: string) => rawInvoke<void>("meeting_delete", { id });
 export const meetingCreate = (title: string, attendees: number, hotwords: string[]) =>
   rawInvoke<MeetingMeta>("meeting_create", { title, attendees, hotwords });
 export const meetingAudioDevices = () => rawInvoke<InputDevice[]>("meeting_audio_devices");

@@ -198,6 +198,7 @@ pub(crate) fn handler(
             // 10/1: 会议录音 (docs/MEETING-MINUTES-PLAN.md §3)
             crate::commands::meeting::meeting_list,
             crate::commands::meeting::meeting_create,
+            crate::commands::meeting::meeting_delete,
             crate::commands::meeting::meeting_audio_devices,
             crate::commands::meeting::meeting_record_start,
             crate::commands::meeting::meeting_record_status,

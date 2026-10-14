@@ -59,3 +59,19 @@ fn hotwords_are_deduped_trimmed_and_capped() {
     assert_eq!(normalize_hotwords(&["a、b\nc,a".into()]), vec!["a", "b", "c"]);
     assert!(normalize_hotwords(&["这是一个特别特别特别特别特别特别长的不像热词的句子".into()]).is_empty());
 }
+
+#[test]
+fn remove_deletes_the_whole_meeting_dir_and_nothing_else() {
+    let d = tempfile::tempdir().unwrap();
+    let a = create(d.path(), "a", 2, &[]).unwrap();
+    let b = create(d.path(), "b", 2, &[]).unwrap();
+    std::fs::create_dir_all(audio_dir(d.path(), &a.id).unwrap()).unwrap();
+    std::fs::write(audio_dir(d.path(), &a.id).unwrap().join("seg-0001.wav"), b"x").unwrap();
+    remove(d.path(), &a.id).unwrap();
+    assert!(!d.path().join(&a.id).exists());
+    let ids: Vec<String> = list(d.path()).into_iter().map(|m| m.id).collect();
+    assert_eq!(ids, vec![b.id]);
+    // 不存在的 / 不合法的 id 报错, 不会乱删
+    assert!(remove(d.path(), &a.id).is_err());
+    assert!(remove(d.path(), "../x").is_err());
+}

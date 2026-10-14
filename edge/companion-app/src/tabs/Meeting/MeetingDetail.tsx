@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   formatClock,
+  meetingDelete,
   meetingSetSpeakers,
   meetingSpeakers,
   meetingTranscribe,
@@ -28,19 +29,33 @@ const PHASE_LABEL: Record<string, string> = {
 };
 const SPK_COLORS = ["#0E6169", "#F0703A", "#6B5BD2", "#2F8F4E", "#B5476B", "#8A6D1F"];
 
-export default function MeetingDetail({ meta, asr, onChanged }: { meta: MeetingMeta; asr: AsrStatus; onChanged: () => void }) {
+export default function MeetingDetail({
+  meta,
+  asr,
+  onChanged,
+  onDeleted,
+}: {
+  meta: MeetingMeta;
+  asr: AsrStatus;
+  onChanged: () => void;
+  onDeleted: () => void;
+}) {
   const [transcript, setTranscript] = useState<Transcript | null>(null);
   const [names, setNames] = useState<Record<string, string>>({});
   const [phase, setPhase] = useState<{ phase: string; audio?: number | null } | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  // 删除点两下: Tauri WebView 里 window.confirm() 静默返回 null (CronJobsCard 7/6 记过), 跟模板删除同一个做法
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const started = useRef<number>(0);
 
   useEffect(() => {
     setTranscript(null);
     setError(null);
     setSaved(false);
+    setConfirmDelete(false);
     if (meta.status === "transcribed") {
       meetingTranscript(meta.id).then(setTranscript).catch((e) => setError(String(e)));
       meetingSpeakers(meta.id).then(setNames).catch(() => setNames({}));
@@ -79,6 +94,25 @@ export default function MeetingDetail({ meta, asr, onChanged }: { meta: MeetingM
     }
   }
 
+  async function remove() {
+    if (!confirmDelete) {
+      setConfirmDelete(true);
+      window.setTimeout(() => setConfirmDelete(false), 4000);
+      return;
+    }
+    setConfirmDelete(false);
+    setDeleting(true);
+    setError(null);
+    try {
+      await meetingDelete(meta.id);
+      onDeleted();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   async function saveNames() {
     try {
       await meetingSetSpeakers(meta.id, names);
@@ -88,12 +122,25 @@ export default function MeetingDetail({ meta, asr, onChanged }: { meta: MeetingM
     }
   }
 
+  const busyNow = meta.status === "recording" || meta.status === "transcribing";
   const head = (
-    <div>
-      <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>{meta.title}</h3>
-      <div style={{ fontSize: 12, color: "var(--catfish-text-muted)", marginTop: 4 }}>
-        {meta.created_at.slice(0, 16).replace("T", " ")} · {formatClock(meta.duration_secs)} · {meta.attendees} 人 · {STATUS_LABEL[meta.status]}
+    <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>{meta.title}</h3>
+        <div style={{ fontSize: 12, color: "var(--catfish-text-muted)", marginTop: 4 }}>
+          {meta.created_at.slice(0, 16).replace("T", " ")} · {formatClock(meta.duration_secs)} · {meta.attendees} 人 · {STATUS_LABEL[meta.status]}
+        </div>
+        {confirmDelete && (
+          <div style={{ fontSize: 12, color: "var(--catfish-danger, #d9534f)", marginTop: 4 }}>
+            录音、转写、纪要都会删掉, 找不回来; 已「存进知识库」的那份不受影响。确定的话再点一次。
+          </div>
+        )}
       </div>
+      <span title={busyNow ? "录音 / 转写中不能删" : "删除这场会议"}>
+        <Btn kind="ghost" disabled={deleting || busyNow} onClick={() => void remove()}>
+          {deleting ? "删除中…" : confirmDelete ? "再点一次确认删除" : "删除"}
+        </Btn>
+      </span>
     </div>
   );
 

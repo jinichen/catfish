@@ -158,6 +158,15 @@ pub fn list(root: &Path) -> Vec<MeetingMeta> {
     v
 }
 
+/// 删掉一场会议 (录音 / 转写 / 纪要整个目录)。"正在录 / 正在转写" 的判断由调用方做。
+pub fn remove(root: &Path, id: &str) -> Result<(), String> {
+    let dir = meeting_dir(root, id)?;
+    if !dir.join("meta.json").is_file() {
+        return Err(format!("找不到会议 {id}"));
+    }
+    std::fs::remove_dir_all(&dir).map_err(|e| format!("删除会议失败: {e}"))
+}
+
 #[cfg(test)]
 #[path = "meeting_store_tests.rs"]
 mod tests;

@@ -19,6 +19,11 @@ use crate::services::meeting_store::{self as store, MeetingStatus};
 static INSTALLING: AtomicBool = AtomicBool::new(false);
 static TRANSCRIBING: AtomicBool = AtomicBool::new(false);
 
+/// 现在有没有会议在转写 (删除会议时要挡住正在转写的那条)。
+pub(crate) fn transcribing() -> bool {
+    TRANSCRIBING.load(Ordering::SeqCst)
+}
+
 #[derive(Debug, Serialize)]
 pub struct AsrStatus {
     pub installed: Option<Installed>,
