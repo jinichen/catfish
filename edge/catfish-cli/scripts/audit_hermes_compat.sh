@@ -45,6 +45,19 @@ check_file() {
     fi
 }
 
+# hermes v0.22 把大文件拆成了 mixin / 子文件 (run_agent.py → agent/*.py 的 mixin, gateway/run.py →
+# gateway/run_*.py + *_mixin.py, api_server.py → api_server_*.py, tools/approval.py → approval_*.py)。
+# 原文件里找不到时, 连同这些拆出来的兄弟文件一起数 —— 方法搬家不算漂移 (MRO 照样解析得到)。
+split_siblings() {
+    case "$1" in
+        run_agent.py)                    ls "$HERMES_ROOT"/agent/*.py 2>/dev/null ;;
+        gateway/run.py)                  ls "$HERMES_ROOT"/gateway/run_*.py "$HERMES_ROOT"/gateway/*_mixin.py 2>/dev/null ;;
+        gateway/platforms/api_server.py) ls "$HERMES_ROOT"/gateway/platforms/api_server_*.py 2>/dev/null ;;
+        tools/approval.py)               ls "$HERMES_ROOT"/tools/approval_*.py 2>/dev/null ;;
+        tools/tool_search.py)            ls "$HERMES_ROOT"/tools/tool_search_*.py 2>/dev/null ;;
+    esac
+}
+
 check_grep() {
     local f="$1" pat="$2" desc="$3" min="${4:-1}"
     # P3.5.47 bugfix: 老写 `|| echo 0` 在 grep no-match (return 1) 时拼"0\n0",
@@ -52,8 +65,19 @@ check_grep() {
     # 数字 (0 或更大) 到 stdout, 这层 fallback 只为 file 不存在 grep stderr.
     local hits=$(grep -cE "$pat" "$HERMES_ROOT/$f" 2>/dev/null)
     hits=${hits:-0}
+    local where="$f"
+    if [ "$hits" -lt "$min" ]; then
+        local sib n
+        for sib in $(split_siblings "$f"); do
+            n=$(grep -cE "$pat" "$sib" 2>/dev/null)
+            if [ "${n:-0}" -gt 0 ]; then
+                hits=$((hits + n))
+                where="$where (+${sib#"$HERMES_ROOT"/})"
+            fi
+        done
+    fi
     if [ "$hits" -ge "$min" ]; then
-        echo "  ✓ $desc ($hits 处): $f"
+        echo "  ✓ $desc ($hits 处): $where"
         ((pass++))
     else
         echo "  ✗ $desc ($hits 处, 期望 $min+): $f → 模式 '$pat'"
@@ -147,17 +171,13 @@ echo ""
 # 等 in edge/hermes-plugins/catfish-xcatfish-user/plugin.py).
 # ═══════════════════════════════════════════════════════════════════════
 
-echo "── 10. P15 _run_agent + chat_completions 闭包反射依赖 ──"
-# catfish plugin.py:1614 patched_run_agent wrap APIServerAdapter._run_agent,
-# 反射 stream_delta_callback.__closure__ 拿 _stream_q. v0.17 _run_agent 仍
-# 存 (api_server.py:3571), _handle_chat_completions 内仍创 _stream_q +
-# _on_delta 闭包. 任一漂移都 break P15 approval flow.
+echo "── 10. _run_agent (P29/P44/P50 包) + 原生审批事件 (P15 10/14 退役) ──"
+# P15 原来反射 _handle_chat_completions 的 _stream_q 闭包自己发审批事件, v0.22 起 hermes
+# 原生发 `event: approval.request` + `POST /v1/runs/{id}/approval`, Companion 改接原生 (chat.ts)。
 check_grep "gateway/platforms/api_server.py" "async def _run_agent\b" "APIServerAdapter._run_agent method"
-check_grep "gateway/platforms/api_server.py" "async def _handle_chat_completions\b" "APIServerAdapter._handle_chat_completions"
-check_grep "gateway/platforms/api_server.py" "_stream_q\s*[:=]" "_stream_q 闭包 freevar (P15 反射) " 1
-check_grep "gateway/platforms/api_server.py" "def _on_delta\b" "_on_delta 闭包 (P15 反射)"
-check_grep "gateway/platforms/api_server.py" "_stream_q\.(put|put_threadsafe)\b" "_stream_q 投递 API (P15 SSE 桥)" 1
-check_grep "gateway/platforms/api_server.py" "stream_delta_callback" "stream_delta_callback kwarg (P15 cb 入口)" 2
+check_grep "gateway/platforms/api_server.py" "def _register_stream_approval\b" "流式对话注册原生审批 (Companion 审批卡)"
+check_grep "gateway/platforms/api_server.py" "approval\.request" "event: approval.request (Companion 审批卡)"
+check_grep "gateway/platforms/api_server.py" "def _handle_run_approval\b" "POST /v1/runs/{id}/approval (Companion 点按钮)"
 echo ""
 
 echo "── 11. P11 connect (catfish-xcatfish-user middleware 注入入口) ──"
@@ -184,13 +204,10 @@ echo "── 13. P14/P15/P15.2 approval module 6 fn ──"
 check_grep "tools/approval.py" "^def has_blocking_approval\b" "approval.has_blocking_approval (P14)"
 check_grep "tools/approval.py" "^def register_gateway_notify\b" "approval.register_gateway_notify (P15)"
 check_grep "tools/approval.py" "^def unregister_gateway_notify\b" "approval.unregister_gateway_notify (P15)"
-check_grep "tools/approval.py" "^def set_current_session_key\b" "approval.set_current_session_key (P15)"
-check_grep "tools/approval.py" "^def reset_current_session_key\b" "approval.reset_current_session_key (P15)"
 check_grep "tools/approval.py" "^def resolve_gateway_approval\b" "approval.resolve_gateway_approval (P15.2)"
 # _gateway_notify_cbs dict + _approval_session_key contextvar 是 P15 桥的真
 # 内部数据结构, 漂了 register/notify 不工作.
 check_grep "tools/approval.py" "_gateway_notify_cbs\s*[:=]" "_gateway_notify_cbs dict (P15 桥)" 1
-check_grep "tools/approval.py" "_approval_session_key\s*[:=]" "_approval_session_key contextvar (P15)" 1
 echo ""
 
 echo "── 13.1 P15.3 unattended approval compatibility (Hermes 2026.8.31+) ──"
@@ -208,18 +225,7 @@ else
 fi
 echo ""
 
-echo "── 13.2 P15.4 Companion manual approval mode ──"
-# Hermes 0.21 的 `approvals.smart: false` 仍可能由缺省 mode 解析成 smart。
-# Companion 有 SSE approval callback 时必须收窄为 manual，防止 Auxiliary LLM
-# 自动放行 execute_code；没有 callback 的后台会话不受影响。
-if grep -qE "^def _get_approval_mode\b" "$HERMES_ROOT/tools/approval.py" 2>/dev/null; then
-    check_grep "tools/approval.py" "^def _get_approval_mode\b" "Hermes approval mode resolver"
-    check_repo_grep "edge/hermes-plugins/catfish-xcatfish-user/plugin_approval.py" "def _patch_p15_4_companion_manual_approval\b" "Catfish P15.4 manual approval hook"
-    check_repo_grep "edge/hermes-plugins/catfish-xcatfish-user/plugin_approval.py" "_catfish_p15_4" "P15.4 idempotent marker"
-else
-    echo "  · Hermes 没有 approval mode resolver (旧版), P15.4 不需要"
-fi
-echo ""
+# 13.2 P15.4 (Companion 强制人工审批) 10/14 随 hermes v0.22 退役: 审批改用 smart 模式。
 
 echo "── 14. P16 session_search_tool 存在 (catfish 主入口加速) ──"
 # catfish plugin.py:413 import. 仅 file 存在就够 (catfish P16 monkey-patch
@@ -321,9 +327,13 @@ check_grep "tools/tool_search.py" "^TOOL_CALL_NAME" \
     "P45 错误消息引用的 TOOL_CALL_NAME 还在"
 
 # 晚绑定检查: repair_tool_call 必须在函数体内 import (缩进的 from)
+# v0.22 起是 `_repair_tool_call = _forward("agent.agent_runtime_helpers", "repair_tool_call")`,
+# agent/lazy_forward.py 每次调用时才按模块属性查 —— 同样是晚绑定
 if grep -qE "^[[:space:]]+from agent\.agent_runtime_helpers import repair_tool_call" \
-        "$HERMES_ROOT/run_agent.py" 2>/dev/null; then
-    echo "  ✓ run_agent.py 仍在方法内 import repair_tool_call (晚绑定, P45 拦得住)"
+        "$HERMES_ROOT/run_agent.py" 2>/dev/null \
+   || { grep -qE "_forward\(\"agent\.agent_runtime_helpers\", \"repair_tool_call\"\)" "$HERMES_ROOT/run_agent.py" 2>/dev/null \
+        && grep -q "Resolve \`\`module.name\`\` at call time" "$HERMES_ROOT/agent/lazy_forward.py" 2>/dev/null; }; then
+    echo "  ✓ run_agent.py 仍是调用时才取 repair_tool_call (晚绑定, P45 拦得住)"
     ((pass++))
 else
     echo "  ✗ run_agent.py 的 repair_tool_call import 不再是方法内晚绑定"
@@ -333,7 +343,8 @@ else
 fi
 
 # valid_tool_names 仍然是从"装配后"的 tools 派生 —— P45 的前提
-if grep -q "agent.valid_tool_names = new_names" "$HERMES_ROOT/tools/mcp_tool.py" 2>/dev/null; then
+# v0.22 起这段搬到 tools/mcp_tool_agent.py
+if grep -q "agent.valid_tool_names = new_names" "$HERMES_ROOT/tools/mcp_tool.py" "$HERMES_ROOT/tools/mcp_tool_agent.py" 2>/dev/null; then
     echo "  ✓ valid_tool_names 仍由 tools 快照派生 (P45 判据前提成立)"
     ((pass++))
 else
@@ -379,7 +390,7 @@ check_grep "cron/scheduler.py" "_VAR_MAP\[.HERMES_CRON_SESSION.\]" \
     "cron session 标记仍是 ContextVar"
 check_grep "cron/scheduler.py" "_cron_session_(var|token)" \
     "cron session token 还原机制还在"
-check_grep "tools/approval.py" "cron job cannot taint unrelated" \
+check_grep "tools/approval.py" "cron(/-q)? job cannot taint" \
     "上游仍承诺「一个 cron job 不污染无关 turn」"
 
 # 直接判据: 不该有人往全局 env 写这个变量
