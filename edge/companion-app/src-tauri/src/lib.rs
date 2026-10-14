@@ -219,6 +219,12 @@ pub fn run() {
                 Ok(_) => log::debug!("hermes 规定配置已是最新或 hermes 未装, 不动"),
                 Err(e) => log::warn!("hermes 规定配置 ensure 失败 (不阻塞启动): {e}"),
             }
+            // 10/14 hermes v0.22: 专家 Bot 的开关改成停放标记, 白名单被配置迁移删了 —— 启动时对一遍
+            match commands::expert_bots::reconcile_parked_on_startup() {
+                Ok(true) => log::info!("专家 Bot 停放标记已按注册表校正 (hermes 网关下次启动生效)"),
+                Ok(false) => {}
+                Err(e) => log::warn!("专家 Bot 停放标记校正失败 (不阻塞启动): {e}"),
+            }
 
             // 8/6 鸿波「早安里说的项目进度, 工作台不知道」: catfish-memory 这个
             // memory provider **从来没被激活过** —— 打包只 cp -R 拷文件

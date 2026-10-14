@@ -412,6 +412,13 @@ def main() -> int:
         print(f"错误：找不到 {HERMES_ROOT}")
         return 1
 
+    # 10/14 hermes v0.22 起提示文字全走语言包 (agent/i18n_layers.py), 这里的字面量规则几乎全部
+    # 对不上, "整函数替换 build_welcome_banner" 还会因签名变了把命令行弄崩。品牌改由插件
+    # catfish-xcatfish-user 的 P58 中文语言包负责 (plugin_locale_zh.py), 源码补丁在 v0.22+ 停用。
+    if (HERMES_ROOT / "agent" / "i18n_layers.py").exists() and not args.revert:
+        print(f"{HERMES_ROOT} 是 hermes v0.22+: 品牌由插件语言包 (P58) 负责, 源码补丁停用, 不做任何改动。")
+        return 0
+
     if args.revert:
         rc = revert()
         # 同时反向重打代码 patch (CORS 等). 即使 RULES revert 失败也跑, 否则 hermes 半干净.

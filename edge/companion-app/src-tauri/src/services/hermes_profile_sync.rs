@@ -138,7 +138,16 @@ pub fn sync_profile_from_default(hermes: &Path, profile: &Path) {
     let parsed = serde_yaml::from_str::<Value>(&root_config).unwrap_or(Value::Null);
     let profile_config_path = profile.join("config.yaml");
     if let Ok(mut profile_config) = fs::read_to_string(&profile_config_path) {
-        for field in ["api_key", "base_url", "api_mode"] {
+        // provider / key_env: hermes v0.22 起网关连接是 provider: custom + key_env (见 hermes_gateway_route.rs)。
+        // 只抄网关那条路的 —— 员工自己切到 Codex (openai-codex) 不该带给专家 Bot。
+        let gateway_route = matches!(
+            parsed.get("model").and_then(|m| m.get("provider")).and_then(Value::as_str),
+            Some("custom") | Some("openai-api")
+        );
+        for field in ["api_key", "base_url", "api_mode", "provider", "key_env"] {
+            if matches!(field, "provider" | "key_env") && !gateway_route {
+                continue;
+            }
             if let Some(value) = parsed
                 .get("model")
                 .and_then(|model| model.get(field))
@@ -146,6 +155,10 @@ pub fn sync_profile_from_default(hermes: &Path, profile: &Path) {
             {
                 profile_config = replace_model_field(&profile_config, field, value);
             }
+        }
+        if super::hermes_gateway_route::installed_hermes_is_v022() {
+            // 0.21 时代建的 / 克隆来的 profile 还留着 model.api_key, v0.22 上它会压过 key_env
+            profile_config = super::hermes_gateway_route::apply_v022_route(&profile_config);
         }
         if let Err(error) = fs::write(&profile_config_path, profile_config) {
             log::warn!(

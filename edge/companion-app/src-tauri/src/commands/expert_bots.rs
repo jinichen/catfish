@@ -12,7 +12,11 @@ use crate::services::catfish_paths::hermes_home;
 use super::expert_bots_config::{
     atomic_write, companion_yaml_path, load_config, parse_yaml_root, read_optional, save_config,
 };
-use super::expert_bots_gateway::{profile_is_served, reconcile_gateway_config};
+use super::expert_bots_gateway::{
+    parked_snapshot, profile_is_served, profile_is_served_v022, reconcile_gateway_config,
+    reconcile_gateway_config_v022, reconcile_parked_markers, restore_parked,
+};
+use crate::services::hermes_gateway_route::installed_hermes_is_v022;
 use super::expert_bots_profiles::{
     create_profile, delete_managed_profile, list_profiles, profile_dir, run_hermes,
     update_profile_metadata, update_profile_soul, DEFAULT_EXPERT_SOUL,
@@ -40,13 +44,18 @@ fn build_snapshot(home: &Path, cfg: &ExpertBotsConfig) -> Result<ExpertBotsSnaps
     let by_id: BTreeMap<_, _> = profiles.iter().map(|item| (item.id.as_str(), item)).collect();
     let gateway_raw = read_optional(&gateway_config_path(home))?;
     let gateway = parse_yaml_root(&gateway_raw, "Hermes config.yaml")?;
+    let v022 = installed_hermes_is_v022();
 
     let bots = cfg
         .registrations
         .iter()
         .map(|(id, registration)| {
             let profile = by_id.get(id.as_str()).copied();
-            let served = profile_is_served(&gateway, id);
+            let served = if v022 {
+                profile_is_served_v022(&home.join("profiles"), id)
+            } else {
+                profile_is_served(&gateway, id)
+            };
             let (ready, reason) = if !cfg.enabled {
                 (false, "专家 Bot 总开关未开启".to_string())
             } else if !registration.enabled {
@@ -121,19 +130,31 @@ fn persist_and_reconcile(
 ) -> Result<ExpertBotsConfig, String> {
     let hermes_path = gateway_config_path(home);
     let old_hermes = read_optional(&hermes_path)?;
-    let (new_hermes, gateway_changed) = reconcile_gateway_config(&old_hermes, &mut new_cfg)?;
+    // hermes v0.22: 白名单 / multiplex false 作废, 改用停放标记 (见 expert_bots_gateway.rs)
+    let v022 = installed_hermes_is_v022();
+    let (new_hermes, mut gateway_changed) = if v022 {
+        reconcile_gateway_config_v022(&old_hermes, &new_cfg)?
+    } else {
+        reconcile_gateway_config(&old_hermes, &mut new_cfg)?
+    };
     if gateway_changed {
         atomic_write(&hermes_path, &new_hermes)?;
+    }
+    let parked_before = parked_snapshot(&home.join("profiles"), old_cfg);
+    if v022 {
+        gateway_changed |= reconcile_parked_markers(&home.join("profiles"), &new_cfg)?;
     }
     if let Err(error) = save_config(companion_path, &new_cfg) {
         if gateway_changed {
             let _ = atomic_write(&hermes_path, &old_hermes);
+            restore_parked(&parked_before);
         }
         return Err(error);
     }
     if gateway_changed {
         if let Err(error) = run_hermes(home, &["gateway", "restart"]) {
             let _ = atomic_write(&hermes_path, &old_hermes);
+            restore_parked(&parked_before);
             let _ = save_config(companion_path, old_cfg);
             let _ = run_hermes(home, &["gateway", "restart"]);
             return Err(format!("Hermes gateway 重启失败，配置已回滚: {error}"));
@@ -176,6 +197,19 @@ fn ensure_default_advisor(home: &Path, cfg: &mut ExpertBotsConfig) -> Result<(),
         .entry("briefing.advisor".to_string())
         .or_insert_with(|| id.to_string());
     Ok(())
+}
+
+/// 启动时: hermes v0.22 上按注册表放 / 删停放标记。老机器升到 v0.22 时配置迁移会删掉白名单,
+/// 不调和的话停用的专家 Bot 会被网关全部托管起来。返回是否有变化。v0.21 / 没装什么都不做。
+pub fn reconcile_parked_on_startup() -> Result<bool, String> {
+    if !installed_hermes_is_v022() {
+        return Ok(false);
+    }
+    let _guard = CONFIG_WRITE_LOCK
+        .lock()
+        .map_err(|_| "expert_bots 配置锁已损坏".to_string())?;
+    let cfg = load_config(&companion_yaml_path()?)?;
+    reconcile_parked_markers(&get_home()?.join("profiles"), &cfg)
 }
 
 fn list_blocking() -> Result<ExpertBotsSnapshot, String> {

@@ -112,6 +112,85 @@ pub fn profile_is_served(root: &Value, id: &str) -> bool {
         .unwrap_or(true)
 }
 
+// ── hermes v0.22: 一个网关托管全部 profile, 关某个专家 Bot = 停放它 ─────────────────────
+//
+// v0.22 起 `gateway.multiplex_profiles: false` 作废 (照样多路复用), `multiplex_profile_allowlist`
+// 被配置迁移删掉 —— 网关托管 profiles/ 下所有 profile, 唯一的"别托管这个"是 profile 目录里的
+// `gateway.parked` 标记 (`hermes -p X gateway stop` 打的就是它, hermes_cli/profiles.py
+// profile_is_parked)。所以 v0.22 上:
+//   · Companion 注册过、且当前要用的 → 删标记
+//   · Companion 注册过、但停用 / 没绑场景 / 总开关关 → 放标记
+//   · 员工自己建、Companion 没注册的 → 不碰
+//   · 主配置只在要用时写 multiplex_profiles: true (显式 true 网关不再二次判断), 不写 false / 白名单
+
+/// v0.22 停放标记文件名 (hermes_cli/profiles.py parked_marker_path)。
+pub const PARKED_MARKER: &str = "gateway.parked";
+
+/// 按注册表放 / 删停放标记。返回是否有变化 (要重启网关)。
+pub fn reconcile_parked_markers(
+    profiles_root: &std::path::Path,
+    cfg: &ExpertBotsConfig,
+) -> Result<bool, String> {
+    let desired = desired_profiles(cfg);
+    let mut changed = false;
+    for id in cfg.registrations.keys() {
+        let dir = profiles_root.join(id);
+        if !dir.is_dir() {
+            continue;
+        }
+        let marker = dir.join(PARKED_MARKER);
+        let want_parked = !desired.contains(id);
+        if want_parked && !marker.exists() {
+            std::fs::write(&marker, "catfish-companion\n")
+                .map_err(|e| format!("停放专家 Bot {id} 失败: {e}"))?;
+            changed = true;
+        } else if !want_parked && marker.exists() {
+            std::fs::remove_file(&marker).map_err(|e| format!("启用专家 Bot {id} 失败: {e}"))?;
+            changed = true;
+        }
+    }
+    Ok(changed)
+}
+
+/// 注册过的 profile 当前是否停放 —— 网关重启失败回滚用。
+pub fn parked_snapshot(profiles_root: &std::path::Path, cfg: &ExpertBotsConfig) -> Vec<(std::path::PathBuf, bool)> {
+    cfg.registrations
+        .keys()
+        .map(|id| profiles_root.join(id).join(PARKED_MARKER))
+        .map(|marker| {
+            let parked = marker.exists();
+            (marker, parked)
+        })
+        .collect()
+}
+
+pub fn restore_parked(snapshot: &[(std::path::PathBuf, bool)]) {
+    for (marker, parked) in snapshot {
+        if *parked && !marker.exists() && marker.parent().is_some_and(|d| d.is_dir()) {
+            let _ = std::fs::write(marker, "catfish-companion\n");
+        } else if !*parked && marker.exists() {
+            let _ = std::fs::remove_file(marker);
+        }
+    }
+}
+
+/// v0.22: 只在有专家 Bot 要用时写显式 `multiplex_profiles: true`; 别的都不动。
+pub fn reconcile_gateway_config_v022(raw: &str, cfg: &ExpertBotsConfig) -> Result<(String, bool), String> {
+    let mut root = parse_yaml_root(raw, "Hermes config.yaml")?;
+    let before = serde_yaml::to_string(&root).map_err(|e| e.to_string())?;
+    if !desired_profiles(cfg).is_empty() && !multiplex_enabled(&root) {
+        set_gateway_value(&mut root, "multiplex_profiles", Value::Bool(true))?;
+    }
+    let after = serde_yaml::to_string(&root).map_err(|e| format!("序列化 Hermes config.yaml 失败: {e}"))?;
+    Ok((after.clone(), before != after))
+}
+
+/// v0.22: profile 目录在、没被停放 → 网关会托管它。
+pub fn profile_is_served_v022(profiles_root: &std::path::Path, id: &str) -> bool {
+    let dir = profiles_root.join(id);
+    dir.is_dir() && !dir.join(PARKED_MARKER).exists()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,6 +215,50 @@ mod tests {
         let mut cfg = ExpertBotsConfig { enabled: true, ..ExpertBotsConfig::default() };
         cfg.registrations.insert("bot".into(), BotRegistration::default());
         assert!(desired_profiles(&cfg).is_empty());
+    }
+
+    #[test]
+    fn v022_parks_only_companion_bots_that_are_not_in_use() {
+        let tmp = tempfile::tempdir().unwrap();
+        for id in ["in-use", "disabled", "unbound", "employee-own"] {
+            std::fs::create_dir_all(tmp.path().join(id)).unwrap();
+        }
+        // 之前停放过, 现在要用 → 标记要删
+        std::fs::write(tmp.path().join("in-use").join(PARKED_MARKER), "x").unwrap();
+        let mut cfg = ExpertBotsConfig { enabled: true, ..ExpertBotsConfig::default() };
+        cfg.registrations.insert("in-use".into(), BotRegistration::default());
+        cfg.registrations.insert("disabled".into(), BotRegistration { enabled: false, ..BotRegistration::default() });
+        cfg.registrations.insert("unbound".into(), BotRegistration::default());
+        cfg.bindings.insert("briefing.advisor".into(), "in-use".into());
+        cfg.bindings.insert("other".into(), "disabled".into());
+
+        assert!(reconcile_parked_markers(tmp.path(), &cfg).unwrap());
+        assert!(profile_is_served_v022(tmp.path(), "in-use"));
+        assert!(!profile_is_served_v022(tmp.path(), "disabled"));
+        assert!(!profile_is_served_v022(tmp.path(), "unbound"));
+        assert!(profile_is_served_v022(tmp.path(), "employee-own"), "Companion 没注册的不碰");
+        assert!(!reconcile_parked_markers(tmp.path(), &cfg).unwrap(), "第二次 no-op");
+
+        // 总开关关 → 注册过的全停放
+        cfg.enabled = false;
+        assert!(reconcile_parked_markers(tmp.path(), &cfg).unwrap());
+        assert!(!profile_is_served_v022(tmp.path(), "in-use"));
+    }
+
+    #[test]
+    fn v022_gateway_config_only_turns_multiplex_on_never_off_or_allowlist() {
+        let mut cfg = ExpertBotsConfig { enabled: true, ..ExpertBotsConfig::default() };
+        cfg.registrations.insert("bot".into(), BotRegistration::default());
+        cfg.bindings.insert("briefing.advisor".into(), "bot".into());
+        let (out, changed) = reconcile_gateway_config_v022("model:\n  default: x\n", &cfg).unwrap();
+        assert!(changed);
+        let root: Value = serde_yaml::from_str(&out).unwrap();
+        assert!(multiplex_enabled(&root));
+        assert!(configured_allowlist(&root).is_none());
+        cfg.enabled = false;
+        let (out2, changed2) = reconcile_gateway_config_v022(&out, &cfg).unwrap();
+        assert!(!changed2, "不写 false (v0.22 作废)");
+        assert_eq!(out2, out);
     }
 
     #[test]
