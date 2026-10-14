@@ -248,9 +248,15 @@ pub(super) fn sync_config_yaml(hermes: &Path, jwt: &str) -> Result<()> {
     }
     let text = fs::read_to_string(&config_path)
         .with_context(|| format!("读 {}", config_path.display()))?;
-    let new = replace_model_api_key(&text, jwt);
+    // 10/14 hermes v0.22: provider custom + key_env, 员工令牌另存文件 (见 hermes_gateway_route.rs)
+    let v022 = super::hermes_gateway_route::installed_hermes_is_v022();
+    let new = if v022 { text.clone() } else { replace_model_api_key(&text, jwt) };
     let new = ensure_model_api_mode(&new);
     let new = ensure_gateway_model_route(&new);
+    let new = if v022 { super::hermes_gateway_route::apply_v022_route(&new) } else { new };
+    if v022 {
+        super::hermes_gateway_route::write_companion_token(hermes, jwt)?;
+    }
     fs::write(&config_path, new)
         .with_context(|| format!("写 {}", config_path.display()))?;
     log::info!("[hermes-jwt-sync] ✓ config.yaml model.api_key / api_mode / provider / default 更新");

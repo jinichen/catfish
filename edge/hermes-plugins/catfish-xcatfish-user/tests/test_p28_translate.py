@@ -57,7 +57,8 @@ def _assert_fully_translated(rendered: str, label: str, *, need_zh_entry: bool =
         # 翻掉了就必须真出现中文入口, 否则等于翻了个寂寞
         assert "批准" in out or "拒绝" in out, f"{label}: 没有中文命令入口: {out!r}"
     else:
-        assert "运行一次" in out and "取消" in out, f"{label}: 不像中文审批提示: {out!r}"
+        # 语言包那版 (回复 /approve 运行一次 / /deny 取消), 或者 P51 已装上时它自己的那版 (回复 1 执行 · 2 不要)
+        assert ("运行一次" in out and "取消" in out) or "回复 1" in out, f"{label}: 不像中文审批提示: {out!r}"
 
 
 # ── 第一层: 拿 hermes 真函数穷举 (本机装了 hermes 才跑) ────────────────

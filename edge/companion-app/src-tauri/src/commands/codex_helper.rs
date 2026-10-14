@@ -290,6 +290,13 @@ pub(crate) fn run_hermes_helper(
             format!("Hermes 配置器失败 ({}): {details}", output.status)
         });
     }
+    if action != "status" {
+        // 10/14 hermes v0.22: 从 Codex 切回来时 helper 按备份恢复 provider (可能是老的 openai-api),
+        // 当场改成 v0.22 的网关写法, 不等下一次令牌同步 (见 services/hermes_gateway_route.rs)
+        if let Err(error) = crate::services::hermes_gateway_route::reapply_main_route() {
+            log::warn!("Codex 切换后校正 hermes 网关配置失败 (下次令牌同步再补): {error:#}");
+        }
+    }
     parse_last_json_line(&output.stdout)
 }
 

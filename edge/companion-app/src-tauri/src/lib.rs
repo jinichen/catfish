@@ -212,6 +212,14 @@ pub fn run() {
                 Err(e) => log::warn!("hermes display.language ensure 失败 (不阻塞启动): {e}"),
             }
 
+            // 10/14 hermes v0.22 换了一批默认值 (自动删 90 天前会话、接管别的工具登录、现场装包、
+            // 轮数不限 ...), 插件替换内置 memory 工具也要授权。详见 services/hermes_policy_config.rs。
+            match services::hermes_policy_config::ensure() {
+                Ok(changed) if !changed.is_empty() => log::info!("hermes 规定配置已写入: {}", changed.join(", ")),
+                Ok(_) => log::debug!("hermes 规定配置已是最新或 hermes 未装, 不动"),
+                Err(e) => log::warn!("hermes 规定配置 ensure 失败 (不阻塞启动): {e}"),
+            }
+
             // 8/6 鸿波「早安里说的项目进度, 工作台不知道」: catfish-memory 这个
             // memory provider **从来没被激活过** —— 打包只 cp -R 拷文件
             // (build-mac-resources.sh:185), 激活逻辑在 install-catfish-memory.sh:122,

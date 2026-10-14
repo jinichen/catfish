@@ -66,3 +66,14 @@ def test_hook_passes_key_before_client_creation(configured, monkeypatch):
     assert module.init_agent(SimpleNamespace(), **configured) == "initialized"
     assert captured["api_key"] == "fresh-employee"
     assert captured["credential_pool"] is None
+
+
+def test_v022_custom_provider_reads_companion_token_file(configured, tmp_path):
+    """hermes v0.22: provider custom + key_env, 员工令牌在 catfish-companion-token (不在 model.api_key)。"""
+    (tmp_path / "config.yaml").write_text(
+        "model:\n  provider: custom\n  base_url: http://127.0.0.1:8999/v1\n  key_env: OPENAI_API_KEY\n"
+    )
+    (tmp_path / "catfish-companion-token").write_text("employee-v022\n")
+    result = credentials.select_chat_credentials(configured, "companion-chat")
+    assert result["api_key"] == "employee-v022"
+    assert result["credential_pool"] is None

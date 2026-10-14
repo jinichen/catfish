@@ -265,6 +265,15 @@ pub(crate) fn prepare_config(paths: &BootstrapPaths) -> Result<()> {
     if !config.exists() && template.is_file() {
         std::fs::copy(&template, &config).with_context(|| format!("写 {}", config.display()))?;
     }
+    // 启动时的 ensure 在装机之前就跑过了 (那会儿还没有 config.yaml), 这里当场补上,
+    // 免得新装的机器第一次起 hermes 用的是 v0.22 出厂默认 (自动删会话、轮数不限、插件没授权 ...)
+    if let Err(e) = crate::services::hermes_language::ensure_default_at(&config) {
+        log::warn!("装机写 display.language 失败 (不阻塞): {e}");
+    }
+    match crate::services::hermes_policy_config::ensure_at(&config) {
+        Ok(changed) => log::info!("装机写入 hermes 规定配置: {}", changed.join(", ")),
+        Err(e) => log::warn!("装机写 hermes 规定配置失败 (不阻塞, 下次启动再补): {e}"),
+    }
     Ok(())
 }
 

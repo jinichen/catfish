@@ -35,7 +35,8 @@ def select_chat_credentials(kwargs, source):
     except (OSError, ValueError, yaml.YAMLError):
         return kwargs
     model = config.get("model") if isinstance(config, dict) else None
-    if not isinstance(model, dict) or model.get("provider") != "openai-api":
+    # hermes v0.22 起 Companion 写 provider: custom (+ key_env), v0.21 是 openai-api
+    if not isinstance(model, dict) or model.get("provider") not in ("openai-api", "custom"):
         return kwargs
     endpoint = _endpoint(model.get("base_url"))
     gateway = os.environ.get("CATFISH_GATEWAY_URL", "http://127.0.0.1:8999").rstrip("/")
@@ -43,7 +44,11 @@ def select_chat_credentials(kwargs, source):
         gateway += "/v1"
     if endpoint is None or endpoint != _endpoint(gateway) or endpoint != _endpoint(kwargs.get("base_url")):
         return kwargs
-    key = model.get("api_key")
+    # v0.22 起员工令牌不放 model.api_key (会压过 key_env 的 30 天服务令牌), 另存这个文件
+    try:
+        key = (Path(root) / "catfish-companion-token").read_text(encoding="utf-8").strip()
+    except OSError:
+        key = model.get("api_key")
     if not isinstance(key, str) or not key.strip():
         return kwargs
     # The gateway still validates signature, expiry, audience and permissions.
