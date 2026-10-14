@@ -482,11 +482,28 @@ pub fn get_build_info() -> BuildInfo {
 pub async fn get_hermes_version() -> Result<Option<String>, String> {
     // 9/23: 原来是 $HOME/.hermes —— Windows 没有 HOME, 且 hermes 装在 %LOCALAPPDATA%\hermes。
     let Some(hermes) = crate::services::catfish_paths::hermes_home() else { return Ok(None); };
-    let path = hermes.join("hermes-agent").join("pyproject.toml");
-    let content = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(_) => return Ok(None), // 没装 hermes / 路径不对 — 静默
-    };
+    Ok(hermes_version_at(&hermes.join("hermes-agent")))
+}
+
+/// 10/14 hermes v0.22: pyproject 里的 version 固定写 "0.0.0" (版本号改由发布流程写进安装戳),
+/// 关于页因此显示 v0.0.0。先读安装戳 install-stamp.json 的 displayVersion / baseVersion,
+/// 没有安装戳 (v0.21 及以前) 再读 pyproject; "0.0.0" 当作不知道。
+fn hermes_version_at(install_dir: &std::path::Path) -> Option<String> {
+    let stamp = install_dir.join(super::hermes_install_health::INSTALL_STAMP);
+    if let Some(v) = std::fs::read(&stamp)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|j| {
+            ["displayVersion", "baseVersion"]
+                .iter()
+                .find_map(|k| j.get(*k).and_then(|v| v.as_str()).map(str::to_string))
+        })
+        .filter(|v| !v.is_empty() && v != "0.0.0")
+    {
+        return Some(v);
+    }
+    let path = install_dir.join("pyproject.toml");
+    let content = std::fs::read_to_string(&path).ok()?; // 没装 hermes / 路径不对 — 静默
     // 找第一个 `version = "X.Y.Z"` 行 (pyproject.toml [project] 段第一项一般是 name 然后 version)
     for line in content.lines() {
         let trimmed = line.trim();
@@ -498,12 +515,33 @@ pub async fn get_hermes_version() -> Result<Option<String>, String> {
             if let Some(start) = rest.find('"') {
                 if let Some(end) = rest[start + 1..].find('"') {
                     let v = &rest[start + 1..start + 1 + end];
-                    if !v.is_empty() {
-                        return Ok(Some(v.to_string()));
+                    if !v.is_empty() && v != "0.0.0" {
+                        return Some(v.to_string());
                     }
                 }
             }
         }
     }
-    Ok(None)
+    None
+}
+
+#[cfg(test)]
+mod hermes_version_tests {
+    use super::hermes_version_at;
+
+    #[test]
+    fn v022_reads_install_stamp_not_placeholder_pyproject() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("pyproject.toml"), "[project]\nname = \"hermes-agent\"\nversion = \"0.0.0\"\n").unwrap();
+        assert_eq!(hermes_version_at(d.path()), None, "0.0.0 不显示");
+        std::fs::write(d.path().join("install-stamp.json"), r#"{"baseVersion":"0.22.0","displayVersion":"0.22.0"}"#).unwrap();
+        assert_eq!(hermes_version_at(d.path()).as_deref(), Some("0.22.0"));
+    }
+
+    #[test]
+    fn v021_still_reads_pyproject() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("pyproject.toml"), "[project]\nname = \"hermes-agent\"\nversion = \"0.21.0\"\n").unwrap();
+        assert_eq!(hermes_version_at(d.path()).as_deref(), Some("0.21.0"));
+    }
 }
