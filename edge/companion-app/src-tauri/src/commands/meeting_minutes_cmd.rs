@@ -113,12 +113,10 @@ pub async fn meeting_template_upload(
     id: Option<String>,
     name: String,
     filename: String,
-    data_b64: String,
+    upload_id: String,
 ) -> Result<Template, String> {
-    use base64::Engine;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(data_b64.trim())
-        .map_err(|e| format!("文件读取失败: {e}"))?;
+    // 10/14: 文件先分块传到临时文件 (upload_stage.rs), 上限 200MB
+    let bytes = super::upload_stage::take_bytes(&upload_id)?;
     let home = store::home()?;
     let (tid, kind, staged) = templates::stage_file(&home, id.as_deref(), &filename, &bytes)?;
     let inspected = tool_bridge_rpc::call_with_timeout(

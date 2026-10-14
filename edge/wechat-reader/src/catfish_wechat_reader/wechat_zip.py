@@ -56,7 +56,7 @@ DOCUMENT_EXTS = {
     ".pdf", ".docx", ".xlsx", ".xlsm", ".xls", ".pptx",
     ".csv", ".json", ".txt", ".md", ".markdown", ".log",
 }
-MAX_DOCUMENT_BYTES = 20 * 1024 * 1024  # 跟聊天框单个附件上限一致
+MAX_DOCUMENT_BYTES = 200 * 1024 * 1024  # 跟聊天框单个附件上限一致 (10/14 统一 200MB)
 
 _RECORD_HEAD = re.compile(
     r"^·([^\n]+)\n(\d{4})年(\d{1,2})月(\d{1,2})日 (\d{2}):(\d{2})\n", re.MULTILINE
@@ -294,7 +294,7 @@ def extract_documents(source, dest, limit: int, max_bytes: int = MAX_DOCUMENT_BY
                     skipped.append({"name": name, "reason": "包里找不到"})
                     continue
                 if info.file_size > max_bytes:
-                    skipped.append({"name": name, "reason": "超过 20 MB"})
+                    skipped.append({"name": name, "reason": "超过 200 MB"})
                     continue
                 data = archive.read(info)
                 path = target_dir / name

@@ -1,6 +1,6 @@
 /** 管理员上传 / 下架组件包 (10/3) —— 后端 llm-gateway components_admin.py。
  *
- * 一个包两个多 G: 分 8MB 一块 PUT (web nginx client_max_body_size 20M), 每块带 sha256
+ * 一个包两个多 G: 分 8MB 一块 PUT (web nginx client_max_body_size 200M), 每块带 sha256
  * (浏览器给算的话; 纯 HTTP 访问非 localhost 时 crypto.subtle 不可用, 就不带, 服务端照收)。
  * 断了重选同一个文件, 服务端告诉从哪接着传。
  */

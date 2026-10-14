@@ -1,55 +1,30 @@
 /** ChatInput attachment 处理 — 抽自 ChatInput.tsx (5/20 拆分).
  *
  * classifyFile / fileToAttachment + 大小限制 + ext 白名单 (image/file/audio).
- * 音频走 transcribe_audio_from_b64 → 本机转写 (会议组件包, FunASR); 文档走 parse_file_from_b64.
+ * 音频走 transcribe_audio_from_staged → 本机转写 (会议组件包, FunASR); 文档走 parse_file_from_staged。
+ * 10/14: 上限统一 200MB, 文件都先分块传到本机临时文件 (lib/uploadStage.ts), 不再整份 base64 过 IPC。
  */
 
 import { invoke } from "@tauri-apps/api/core";
 
+import { IMAGE_WIRE_MAX_BYTES, shrinkImage } from "../../../lib/imageShrink";
+import { blobToBase64, MAX_UPLOAD_BYTES, stageFile, tooLargeMessage } from "../../../lib/uploadStage";
+
 import type { Attachment } from "../../../types/chat";
 
-export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024; // 20MB
-// BL-VOICE3 (5/10): 音频本机转写, 大会议录音常见 30+ MB, 100MB
-export const MAX_AUDIO_BYTES = 100 * 1024 * 1024;
+// 10/14: 文档 / 图片 / 音频统一 200MB (原来文档图片 20MB、音频 100MB)
+export const MAX_ATTACHMENT_BYTES = MAX_UPLOAD_BYTES;
 // 10/2: 6 → 30。一叠发票 (十几二十张 PDF / 照片) 原来要分好几条消息发。文档多了由
 // chatWire.formatManyFiles 压短预览, 大照片由 shrinkImage 缩到 2000px, 一条消息不会爆。
 export const MAX_ATTACHMENTS = 30;
-/** 照片超过这个大小才缩 (手机拍的发票 3-8MB; 截图一般 < 1MB, 不动) */
-export const IMAGE_SHRINK_ABOVE_BYTES = 1.5 * 1024 * 1024;
-/** 缩到长边这么多像素: 发票上的小字在 2000px 下仍清楚, 体积约原来的 1/10 */
-export const IMAGE_MAX_EDGE = 2000;
-
-/** 等比缩放后的尺寸, 长边不超过 maxEdge (本来就小就不变)。 */
-export function shrinkTarget(w: number, h: number, maxEdge = IMAGE_MAX_EDGE): { w: number; h: number } {
-  const long = Math.max(w, h);
-  if (long <= maxEdge) return { w, h };
-  const k = maxEdge / long;
-  return { w: Math.round(w * k), h: Math.round(h * k) };
-}
-
-/** 大照片 → 长边 2000px 的 JPEG (base64)。小图 / gif / svg / 缩完反而更大 → null (用原图)。 */
-async function shrinkImage(file: File): Promise<{ base64: string; mimeType: string } | null> {
-  if (file.size <= IMAGE_SHRINK_ABOVE_BYTES || /gif|svg/.test(file.type)) return null;
-  try {
-    const bmp = await createImageBitmap(file);
-    const { w, h } = shrinkTarget(bmp.width, bmp.height);
-    const canvas = document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return null;
-    ctx.fillStyle = "#fff"; // 透明 PNG 转 JPEG 不要变黑底
-    ctx.fillRect(0, 0, w, h);
-    ctx.drawImage(bmp, 0, 0, w, h);
-    bmp.close();
-    const uri = canvas.toDataURL("image/jpeg", 0.85);
-    const base64 = uri.slice(uri.indexOf(",") + 1);
-    return base64.length * 0.75 < file.size ? { base64, mimeType: "image/jpeg" } : null;
-  } catch (e) {
-    console.warn("图片缩小失败, 用原图:", e);
-    return null;
-  }
-}
+// 图片缩小搬到 lib/imageShrink.ts (10/14: 会话恢复时也要缩, lib 不该反过来 import tabs)
+export {
+  IMAGE_MAX_EDGE,
+  IMAGE_SHRINK_ABOVE_BYTES,
+  IMAGE_WIRE_MAX_BYTES,
+  shrinkImage,
+  shrinkTarget,
+} from "../../../lib/imageShrink";
 
 // P3.3.21 (6/11): 加 .xlsm (macro 启用 xlsx, openpyxl 直接吃) / .pptx (python-pptx)
 //   / .json (内置嗅 dict / list). 老 .ppt / .doc / .rtf 在 parse_file.py 给友好
@@ -89,34 +64,18 @@ export function classifyFile(file: File): "image" | "file" | "audio" {
 export async function fileToAttachment(file: File): Promise<Attachment> {
   const kind = classifyFile(file);
 
-  // 大小限制: 音频放宽到 100MB (会议录音常见 30+ MB), 其他 20MB
-  const maxBytes = kind === "audio" ? MAX_AUDIO_BYTES : MAX_ATTACHMENT_BYTES;
-  if (file.size > maxBytes) {
-    const mb = (file.size / 1024 / 1024).toFixed(1);
-    const limitMb = (maxBytes / 1024 / 1024).toFixed(0);
-    throw new Error(`文件太大 (${mb}MB > ${limitMb}MB)`);
-  }
+  // 大小限制: 10/14 统一 200MB
+  if (file.size > MAX_ATTACHMENT_BYTES) throw new Error(tooLargeMessage(file.size));
 
   // BL-VOICE3 (5/10): 音频路径
   if (kind === "audio") {
-    // 读 base64 (跟 file 分支同模板, FileReader.readAsDataURL 异步, V8 优化)
-    const fileB64 = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const dataUri = reader.result as string;
-        const comma = dataUri.indexOf(",");
-        resolve(comma >= 0 ? dataUri.slice(comma + 1) : dataUri);
-      };
-      reader.onerror = () => reject(reader.error || new Error("FileReader 失败"));
-      reader.readAsDataURL(file);
-    });
-
+    const uploadId = await stageFile(file);
     const result = await invoke<{
       text: string;
       duration_sec: number | null;
       original_filename: string;
-    }>("transcribe_audio_from_b64", {
-      fileB64,
+    }>("transcribe_audio_from_staged", {
+      uploadId,
       filename: file.name || "audio",
     });
 
@@ -139,15 +98,14 @@ export async function fileToAttachment(file: File): Promise<Attachment> {
   }
 
   if (kind === "image") {
-    // 图片: FileReader → base64 (in-memory, 当轮 send wire 用)
-    const dataUri = await new Promise<string>((resolve, reject) => {
-      const r = new FileReader();
-      r.onload = () => resolve(r.result as string);
-      r.onerror = () => reject(r.error);
-      r.readAsDataURL(file);
-    });
-    const comma = dataUri.indexOf(",");
-    const base64 = comma >= 0 ? dataUri.slice(comma + 1) : dataUri;
+    // 10/2: 发进对话的是缩过的 (一次几十张发票照片也不会让请求几百 MB);
+    // 落盘的 keptPath 仍是原图, 模型要看清某张细节可以用工具读原图。
+    // 10/14: 缩不了又超过 20MB 的 (比如超大 svg) 不往对话里塞, 请员工转格式。
+    const small = await shrinkImage(file);
+    if (!small && file.size > IMAGE_WIRE_MAX_BYTES) {
+      throw new Error(`图片 ${(file.size / 1024 / 1024).toFixed(1)}MB 太大又没法缩小, 请转成 JPG / PNG 再发`);
+    }
+    const base64 = small ? "" : await blobToBase64(file);
 
     // P3.5.8 BL-FILE-SESSION-INDEX-V1 Phase 2 (6/16 鸿波): 落盘到
     // ~/.catfish/uploads/, 拿 keptPath. 让 attachment_record 把 keptPath 也存到
@@ -158,9 +116,10 @@ export async function fileToAttachment(file: File): Promise<Attachment> {
     // 但下次 resume 这张图就丢. console.warn 让员工 / 开发者知道.
     let keptPath: string | undefined;
     try {
+      const uploadId = await stageFile(file);
       const r = await invoke<{ keptPath: string; sizeBytes: number }>(
-        "attachment_save_image",
-        { base64Data: base64, filename: file.name || "pasted-image.png" },
+        "attachment_save_image_staged",
+        { uploadId, filename: file.name || "pasted-image.png" },
       );
       keptPath = r.keptPath;
     } catch (e) {
@@ -171,9 +130,6 @@ export async function fileToAttachment(file: File): Promise<Attachment> {
       );
     }
 
-    // 10/2: 发进对话的是缩过的 (一次几十张发票照片也不会让请求几百 MB);
-    // 落盘的 keptPath 仍是原图, 模型要看清某张细节可以用工具读原图。
-    const small = await shrinkImage(file);
     return {
       kind: "image",
       mimeType: small?.mimeType ?? file.type,
@@ -184,21 +140,9 @@ export async function fileToAttachment(file: File): Promise<Attachment> {
     };
   }
 
-  // 文档: base64 → Rust command 'parse_file_from_b64' 内部写 tmp + 解析 + 删 tmp
-  // 5/5 鸿波报"上传 Excel 没反应" 修: 之前用 String.fromCharCode + 循环 + btoa,
-  // 几 MB 文件会卡死主线程 30+ 秒, UI 看起来"没反应". 改用 FileReader.readAsDataURL
-  // (浏览器原生异步, V8 优化), 抠 data URI 后面的 base64 部分.
-  const fileB64 = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUri = reader.result as string;
-      // dataUri = "data:<mime>;base64,<b64-content>"
-      const comma = dataUri.indexOf(",");
-      resolve(comma >= 0 ? dataUri.slice(comma + 1) : dataUri);
-    };
-    reader.onerror = () => reject(reader.error || new Error("FileReader 失败"));
-    reader.readAsDataURL(file);
-  });
+  // 文档: 分块传到临时文件 → Rust 'parse_file_from_staged' 解析 + 原文件搬进 ~/.catfish/uploads/
+  // (10/14 之前是整份 base64 一次 invoke, 上限 20MB; 放到 200MB 后那样会把内存冲爆)
+  const uploadId = await stageFile(file);
 
   // 5/5 重构: parse_file 改 preview-only, 返 preview_text + kept_path + meta
   // 5/7 BL-L26: 大文件 (≥50KB 全文) 多返一个 parsed_text_path (BM25 sidecar)
@@ -211,8 +155,8 @@ export async function fileToAttachment(file: File): Promise<Attachment> {
     meta: Record<string, unknown>;
     kept_path: string;
     parsed_text_path?: string;
-  }>("parse_file_from_b64", {
-    fileB64,
+  }>("parse_file_from_staged", {
+    uploadId,
     filename: file.name || "upload",
   });
 

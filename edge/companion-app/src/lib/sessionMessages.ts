@@ -19,6 +19,8 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+
+import { IMAGE_SHRINK_ABOVE_BYTES, IMAGE_WIRE_MAX_BYTES, shrinkImage } from "./imageShrink";
 import type { SessionDetail, SessionMessage } from "../types/session";
 import type { Attachment, ChatMessage, ToolCall } from "../types/chat";
 
@@ -159,7 +161,8 @@ function indexAttachmentsByMessageId(
  *  file kind 不拉 base64 (file 走 preview-only mode, base64 没意义). 仅恢复
  *  metadata 让 UI chip 显示. file 真要给 LLM 看走 catfish_read_attachment.
  *
- *  失败 (文件不存在 / 路径不在白名单 / size 超 20MB) → 返 null, caller 跳过.
+ *  失败 (文件不存在 / 路径不在白名单 / size 超 200MB) → 返 null, caller 跳过.
+ *  10/14: 大图跟上传时一样先缩再进对话 (原来恢复时塞的是原图, 上限放到 200MB 后会把请求撑爆)。
  */
 async function rowToAttachment(
   row: SessionAttachmentRow,
@@ -205,6 +208,16 @@ async function rowToAttachment(
       { keptPath: row.keptPath },
     );
     att.base64 = result.base64;
+    if (result.sizeBytes > IMAGE_SHRINK_ABOVE_BYTES) {
+      const blob = await (await fetch(`data:${att.mimeType};base64,${result.base64}`)).blob();
+      const small = await shrinkImage(blob);
+      if (small) {
+        att.base64 = small.base64;
+        att.mimeType = small.mimeType;
+      } else if (result.sizeBytes > IMAGE_WIRE_MAX_BYTES) {
+        delete att.base64; // 缩不了又太大: 只留文件名, 不往对话里塞
+      }
+    }
     if (!att.sizeBytes && result.sizeBytes) {
       att.sizeBytes = result.sizeBytes;
     }

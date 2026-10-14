@@ -163,6 +163,18 @@ pub async fn parse_file_from_b64(
     keep_parsed_upload(tmp, filename).await
 }
 
+/// 10/14: 分块传上来的文件 (见 upload_stage.rs) —— 聊天框文档附件现在走这个,
+/// 不再整份 base64 过 IPC (上限放到 200MB 后那样会把内存冲爆)。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn parse_file_from_staged(
+    upload_id: String,
+    filename: String,
+) -> Result<ParseFileResult, String> {
+    let tmp = super::upload_stage::take_path(&upload_id, &filename)?;
+    log::info!("parse_file_from_staged: {}", tmp.display());
+    keep_parsed_upload(tmp, filename).await
+}
+
 /// 解析一个已经落在临时位置的文件, 再把原文件 (和 BM25 sidecar) 搬进
 /// `~/.catfish/uploads/`。成功或失败, `tmp` 都归这里处理 (搬走或删掉)。
 ///

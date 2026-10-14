@@ -165,6 +165,9 @@ pub(crate) fn handler(
             // file_parse (五一 sprint Day 1: 文件上传解析 PDF/Excel/Word/CSV/TXT/MD)
             crate::commands::file_parse::parse_file,
             crate::commands::file_parse::parse_file_from_b64,
+            crate::commands::file_parse::parse_file_from_staged, // 10/14 分块上传 (200MB)
+            crate::commands::upload_stage::upload_stage_chunk,
+            crate::commands::upload_stage::upload_stage_discard,
             // BL-L26 (5/7): 大文件 (≥50KB) BM25 段落检索
             crate::commands::file_parse::attachment_bm25_search,
             // BL-FILE-SESSION-INDEX-V1 Phase 1 (5/30): 附件 metadata 持久化 ~/.catfish/attachments.db
@@ -178,6 +181,7 @@ pub(crate) fn handler(
             //   - attachment_save_image: 上传时调一次, 写到 ~/.catfish/uploads/, 返 keptPath
             //   - attachment_load_base64: resume 时调一次, 读回 base64 填 attachments
             crate::commands::attachments::attachment_save_image,
+            crate::commands::attachments::attachment_save_image_staged,
             crate::commands::attachments::attachment_load_base64,
             // BL-LONG-RUNNING-V1 (5/30): 读 ~/.catfish/tasks.jsonl 历史任务
             crate::commands::tasks_history::tasks_history_read,
@@ -236,6 +240,7 @@ pub(crate) fn handler(
             crate::commands::speech::speech_cancel_recording,
             // BL-VOICE3 (5/10): 拖音频文件转文字 (mp3/m4a/wav/...) → ffmpeg + whisper
             crate::commands::speech::transcribe_audio_from_b64,
+            crate::commands::speech::transcribe_audio_from_staged,
             // BL-VOICE2 (5/10): Piper local TTS — 跟 STT 对称, 100% 本地数据不出公司
             crate::commands::tts::tts_synthesize,
             crate::commands::tts::tts_status,

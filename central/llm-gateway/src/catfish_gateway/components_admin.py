@@ -12,7 +12,7 @@
     DELETE /api/admin/components/uploads/{file}        放弃没传完的
     DELETE /api/admin/components/{file}                下架已发布的包
 
-为什么分块: web 前面的 nginx client_max_body_size 是 20M; 而且两个多 G 走浏览器, 断一次
+为什么分块: web 前面的 nginx client_max_body_size 是 200M (10/14 前 20M); 而且两个多 G 走浏览器, 断一次
 从头再来不现实 —— 分块 + 按 offset 续传, 页面关了重选同一个文件就接着传。
 
 没传完的放 <目录>/.uploads/ (点开头, 清单生成会跳过; nginx 也不会把它当组件)。
@@ -52,7 +52,7 @@ _NAME_RE = re.compile(
     r"-(?P<platform>" + "|".join(re.escape(p) for p in PLATFORMS) + r")"
     r"\.tar\.gz$"
 )
-#: 单块上限: 比 web nginx 的 client_max_body_size 20M 小
+#: 单块上限: 比 web nginx 的 client_max_body_size (200M) 小
 MAX_CHUNK = 16 * 1024 * 1024
 #: 单个包上限 (现在最大的会议转写包 2.3G)
 MAX_FILE = 20 * 1024 * 1024 * 1024

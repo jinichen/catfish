@@ -15,7 +15,7 @@ import {
   meetingTemplateDelete, meetingTemplateSave, meetingTemplateUpload, type MinutesTemplate, type TemplateSlot,
 } from "../../lib/tauri_meeting";
 import { Btn, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
-import { EXAMPLE_TEMPLATE, FILE_TEMPLATE_HELP, isFileTemplate, PLACEHOLDER_HELP, readFileBase64 } from "./minutesTemplates";
+import { EXAMPLE_TEMPLATE, FILE_TEMPLATE_HELP, isFileTemplate, PLACEHOLDER_HELP } from "./minutesTemplates";
 
 interface Props {
   templates: MinutesTemplate[];
@@ -80,7 +80,7 @@ export default function TemplateManager({ templates, onChanged, onClose }: Props
     setBusy(true);
     setError(null);
     try {
-      const saved = await meetingTemplateUpload(editing?.id ?? null, finalName, file.name, await readFileBase64(file));
+      const saved = await meetingTemplateUpload(editing?.id ?? null, finalName, file);
       onChanged(saved.id);
       open(saved, "file");
     } catch (e) {

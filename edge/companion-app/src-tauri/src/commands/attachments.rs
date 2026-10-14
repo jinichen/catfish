@@ -483,7 +483,7 @@ pub struct AttachmentSaveImageOutput {
 ///
 /// 文件名: `<unix-ts>-<safe-name>`. ts 防同名覆盖, safe-name 砍 / \ \0 防注入.
 ///
-/// size 上限 20MB (跟 attachment_load_base64 一致).
+/// size 上限 200MB (10/14 统一, 见 upload_stage::MAX_UPLOAD_BYTES; 跟 attachment_load_base64 一致).
 #[tauri::command(rename_all = "camelCase")]
 pub async fn attachment_save_image(
     base64_data: String,
@@ -493,49 +493,62 @@ pub async fn attachment_save_image(
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(base64_data.trim())
             .map_err(|e| format!("base64 解码失败: {e}"))?;
-        let size_bytes = bytes.len() as u64;
-        const MAX_BYTES: u64 = 20 * 1024 * 1024;
-        if size_bytes > MAX_BYTES {
-            return Err(format!(
-                "图片 {} bytes 超过 20MB 上限, 拒收",
-                size_bytes
-            ));
-        }
-        if bytes.is_empty() {
-            return Err("空图片".to_string());
-        }
-
-        let home = home_dir().ok_or_else(|| "找不到 home 目录".to_string())?;
-        let uploads_dir = home.join(".catfish").join("uploads");
-        std::fs::create_dir_all(&uploads_dir)
-            .map_err(|e| format!("建 uploads dir 失败: {e}"))?;
-
-        let safe = filename
-            .replace(['/', '\\', '\0'], "_")
-            .chars()
-            .take(120)  // 防超长 filename 撞 ext4 / apfs 上限
-            .collect::<String>();
-        let safe = if safe.is_empty() { "pasted-image.png".to_string() } else { safe };
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        // 加 nanos 防同秒多次粘贴撞名
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(0);
-        let kept = uploads_dir.join(format!("{ts}-{nanos}-{safe}"));
-
-        std::fs::write(&kept, &bytes).map_err(|e| format!("写 image 失败: {e}"))?;
-
-        Ok::<AttachmentSaveImageOutput, String>(AttachmentSaveImageOutput {
-            kept_path: kept.to_string_lossy().to_string(),
-            size_bytes,
-        })
+        save_image_bytes(bytes, filename)
     })
     .await
     .map_err(|e| format!("内部错误: {e}"))?
+}
+
+/// 10/14: 分块传上来的图片 (见 upload_stage.rs) —— 大图不再整份 base64 过 IPC。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn attachment_save_image_staged(
+    upload_id: String,
+    filename: String,
+) -> Result<AttachmentSaveImageOutput, String> {
+    tokio::task::spawn_blocking(move || {
+        save_image_bytes(super::upload_stage::take_bytes(&upload_id)?, filename)
+    })
+    .await
+    .map_err(|e| format!("内部错误: {e}"))?
+}
+
+fn save_image_bytes(bytes: Vec<u8>, filename: String) -> Result<AttachmentSaveImageOutput, String> {
+    let size_bytes = bytes.len() as u64;
+    if size_bytes > super::upload_stage::MAX_UPLOAD_BYTES {
+        return Err(format!("图片{}, 拒收", super::upload_stage::too_large_message(size_bytes)));
+    }
+    if bytes.is_empty() {
+        return Err("空图片".to_string());
+    }
+
+    let home = home_dir().ok_or_else(|| "找不到 home 目录".to_string())?;
+    let uploads_dir = home.join(".catfish").join("uploads");
+    std::fs::create_dir_all(&uploads_dir)
+        .map_err(|e| format!("建 uploads dir 失败: {e}"))?;
+
+    let safe = filename
+        .replace(['/', '\\', '\0'], "_")
+        .chars()
+        .take(120)  // 防超长 filename 撞 ext4 / apfs 上限
+        .collect::<String>();
+    let safe = if safe.is_empty() { "pasted-image.png".to_string() } else { safe };
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // 加 nanos 防同秒多次粘贴撞名
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let kept = uploads_dir.join(format!("{ts}-{nanos}-{safe}"));
+
+    std::fs::write(&kept, &bytes).map_err(|e| format!("写 image 失败: {e}"))?;
+
+    Ok::<AttachmentSaveImageOutput, String>(AttachmentSaveImageOutput {
+        kept_path: kept.to_string_lossy().to_string(),
+        size_bytes,
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -555,7 +568,7 @@ pub struct AttachmentLoadBase64Output {
 ///
 /// 安全:
 ///   - 路径必须在 ~/.catfish/uploads/ 下 (防员工传任意路径让 Companion 读敏感文件)
-///   - 文件 size 上限 20MB (image 一般 < 5MB, 给宽裕; 防误读巨大 file 内存爆)
+///   - 文件 size 上限 200MB (10/14 跟上传上限统一; 前端拿到大图会再缩, 见 sessionMessages.ts)
 #[tauri::command(rename_all = "camelCase")]
 pub async fn attachment_load_base64(
     kept_path: String,
@@ -578,16 +591,12 @@ pub async fn attachment_load_base64(
             ));
         }
 
-        // size 上限 20MB
+        // size 上限 200MB (跟上传一致)
         let meta = std::fs::metadata(&canonical)
             .map_err(|e| format!("读 metadata 失败: {e}"))?;
         let size_bytes = meta.len();
-        const MAX_BYTES: u64 = 20 * 1024 * 1024;
-        if size_bytes > MAX_BYTES {
-            return Err(format!(
-                "文件 {} bytes 超过 20MB 上限, 拒载",
-                size_bytes
-            ));
+        if size_bytes > super::upload_stage::MAX_UPLOAD_BYTES {
+            return Err(format!("文件 {} bytes 超过 200MB 上限, 拒载", size_bytes));
         }
 
         // 读 + base64

@@ -81,14 +81,18 @@ pub async fn install_skill_from_url(url: String) -> Result<InstallResult, String
 }
 
 /// P3.3.23 (6/11): 装外部 skill zip (ClawHub / Anthropic .skill 文件).
-/// zipBytes 走 Vec<u8> (前端 FileReader.readAsArrayBuffer → Array.from(Uint8Array) → Rust).
+/// 文件先由前端分块传到临时文件 (stageFile → upload_stage_chunk), 这里按 uploadId 取。
 /// namespace 默认 "external", 装到 ~/.catfish/skills/<ns>/<slug>/.
 #[tauri::command]
 pub async fn install_skill_from_zip(
-    zip_bytes: Vec<u8>,
+    upload_id: String,
     namespace: Option<String>,
 ) -> Result<InstallSkillFromZipResult, String> {
-    tokio::task::spawn_blocking(move || install_skill_from_zip_blocking(zip_bytes, namespace))
+    // 10/14: 原来 zipBytes 是 JSON 数字数组 (200MB 的 zip 会变成近 1GB 的 JSON),
+    // 改成先分块传到临时文件 (upload_stage.rs)
+    tokio::task::spawn_blocking(move || {
+        install_skill_from_zip_blocking(super::upload_stage::take_bytes(&upload_id)?, namespace)
+    })
         .await
         .map_err(|e| format!("内部错误: {e}"))?
 }

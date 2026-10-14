@@ -57,16 +57,3 @@ export const FILE_TEMPLATE_HELP =
 export function isFileTemplate(t: Pick<MinutesTemplate, "kind">): boolean {
   return t.kind === "docx" || t.kind === "xlsx";
 }
-
-/** File → base64 (不带 data: 前缀)。FileReader 是浏览器原生异步, 几 MB 也不卡界面。 */
-export function readFileBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => {
-      const uri = String(r.result);
-      resolve(uri.slice(uri.indexOf(",") + 1));
-    };
-    r.onerror = () => reject(r.error ?? new Error("读文件失败"));
-    r.readAsDataURL(file);
-  });
-}

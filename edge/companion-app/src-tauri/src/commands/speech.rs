@@ -109,9 +109,24 @@ mod imp {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let raw = std::env::temp_dir().join(format!("catfish-audio-raw-{stamp}.{ext}"));
-        let wav = std::env::temp_dir().join(format!("catfish-audio-{stamp}.wav"));
         std::fs::write(&raw, bytes).map_err(|e| format!("写临时文件失败: {e}"))?;
-        let inst = need_asr()?;
+        transcribe_file(raw)
+    }
+
+    /// 已经在磁盘上的原音频 (10/14 分块上传) → 16k wav → 转写。`raw` 用完删掉。
+    pub(super) fn transcribe_file(raw: PathBuf) -> Result<(String, Option<f64>), String> {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let wav = std::env::temp_dir().join(format!("catfish-audio-{stamp}.wav"));
+        let inst = match need_asr() {
+            Ok(i) => i,
+            Err(e) => {
+                let _ = std::fs::remove_file(&raw);
+                return Err(e);
+            }
+        };
         let script = super::super::file_parse_env::find_script("meeting_asr.py")?;
         let r = asr::decode_to_wav16k(&inst, &script, &raw, &wav).and_then(|_| {
             let secs = hound::WavReader::open(&wav)
@@ -202,6 +217,34 @@ pub async fn transcribe_audio_from_b64(
     #[cfg(not(any(target_os = "macos", windows)))]
     {
         let _ = (file_b64, filename);
+        Err(UNSUPPORTED.into())
+    }
+}
+
+/// 10/14: 分块传上来的音频 (见 upload_stage.rs), 上限 200MB, 不再整份 base64 过 IPC。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn transcribe_audio_from_staged(
+    _window: Window,
+    upload_id: String,
+    filename: String,
+) -> Result<TranscribeResult, String> {
+    #[cfg(any(target_os = "macos", windows))]
+    {
+        let raw = super::upload_stage::take_path(&upload_id, &filename)?;
+        let size = std::fs::metadata(&raw).map(|m| m.len()).unwrap_or(0);
+        if size < 1024 {
+            let _ = std::fs::remove_file(&raw);
+            return Err(format!("音频文件过小 ({size} bytes), 不像有效音频"));
+        }
+        log::info!("transcribe_audio_from_staged: {filename} ({} KB)", size / 1024);
+        let (text, duration_sec) = tauri::async_runtime::spawn_blocking(move || imp::transcribe_file(raw))
+            .await
+            .map_err(|e| format!("转写任务异常: {e}"))??;
+        Ok(TranscribeResult { text, duration_sec, original_filename: filename })
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        let _ = (upload_id, filename);
         Err(UNSUPPORTED.into())
     }
 }

@@ -107,9 +107,7 @@ export default function SkillsMcpCard() {
     }
     setInstallZip({ phase: "installing", filename: file.name });
     try {
-      const buf = await file.arrayBuffer();
-      const bytes = Array.from(new Uint8Array(buf));
-      const result = await installSkillFromZip(bytes, namespace);
+      const result = await installSkillFromZip(file, namespace);
       if (!result.success) {
         setInstallZip({ phase: "error", message: "Rust 返 success=false (上下文不明)" });
         return;
@@ -262,7 +260,7 @@ export default function SkillsMcpCard() {
             className="approval-banner__btn-link"
             onClick={() => fileInputRef.current?.click()}
             disabled={installZip.phase === "installing"}
-            title="选 zip / .skill 文件 (ClawHub 下载的 / 同事发的 / 自己导出的). 解到 ~/.catfish/skills/external/. 文件白名单 .md/.json/.txt/.yaml, 最大 50MB."
+            title="选 zip / .skill 文件 (ClawHub 下载的 / 同事发的 / 自己导出的). 解到 ~/.catfish/skills/external/. 文件白名单 .md/.json/.txt/.yaml, 最大 200MB."
           >
             + 装 zip
           </button>

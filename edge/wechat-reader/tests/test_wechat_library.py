@@ -258,4 +258,4 @@ def test_extract_documents_refuses_non_empty_dest_and_oversized(tmp_path: Path, 
     monkeypatch.setattr(wechat_zip, "MAX_DOCUMENT_BYTES", 4)
     result = wechat_zip.extract_documents(source, dest, 5, max_bytes=4)
     assert result["extracted"] == []
-    assert result["skipped"] == [{"name": "年审材料-盖章版.pdf", "reason": "超过 20 MB"}]
+    assert result["skipped"] == [{"name": "年审材料-盖章版.pdf", "reason": "超过 200 MB"}]

@@ -70,7 +70,7 @@ if not os.environ.get("CATFISH_FACTS_DIR"):
     )
 
 # ── 文件大小 / 类型限制 ─────────────────────────
-MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB (政策文件一般几页 PDF, 远不到)
+MAX_UPLOAD_BYTES = 200 * 1024 * 1024  # 10/14 统一 200 MB (原 20 MB; 鸿波: 有的文件超过 100M)
 ALLOWED_EXTS = {".pdf", ".docx", ".doc", ".md", ".markdown", ".txt"}
 
 

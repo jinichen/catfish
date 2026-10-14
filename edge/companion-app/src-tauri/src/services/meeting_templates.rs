@@ -22,8 +22,9 @@ pub const MAX_NAME_CHARS: usize = 40;
 /// 跟 meeting_minutes_template.MAX_TEMPLATE_CHARS 一致
 pub const MAX_BODY_CHARS: usize = 8000;
 
-/// 上传的 Word / Excel 模版上限 (一般几十 KB, 带公章图片的也就一两 MB)
-pub const MAX_FILE_BYTES: usize = 10 * 1024 * 1024;
+/// 上传的 Word / Excel 模版上限 (一般几十 KB, 带公章图片的也就一两 MB)。
+/// 10/14 跟所有上传口子统一成 200MB (鸿波「就是把现在的上限都调整到200M」)。
+pub const MAX_FILE_BYTES: usize = crate::commands::upload_stage::MAX_UPLOAD_BYTES as usize;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Template {
@@ -152,7 +153,7 @@ fn write_json(home: &Path, tpl: &Template) -> Result<(), String> {
 pub fn stage_file(home: &Path, id: Option<&str>, filename: &str, bytes: &[u8]) -> Result<(String, String, PathBuf), String> {
     let kind = file_kind(filename)?;
     if bytes.is_empty() || bytes.len() > MAX_FILE_BYTES {
-        return Err(format!("模版文件大小不对 ({} 字节, 上限 10MB)", bytes.len()));
+        return Err(format!("模版文件大小不对 ({} 字节, 上限 200MB)", bytes.len()));
     }
     let id = match id {
         Some(id) if valid_id(id) => id.to_string(),

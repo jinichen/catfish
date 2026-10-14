@@ -11,6 +11,8 @@
 
 import { invoke as rawInvoke } from "@tauri-apps/api/core";
 
+import { stageFile } from "./uploadStage";
+
 // ── E7 phase 2 (6/6): skill 安装/卸载, MCP 接入/移除 ───────────
 //
 // 流程:
@@ -38,7 +40,7 @@ export const installSkillFromUrl = (url: string) =>
   rawInvoke<InstallResult>("install_skill_from_url", { url });
 
 // P3.3.23 (6/11): 装外部 skill zip (ClawHub / Anthropic .skill / 任何 SKILL.md zip).
-//   zipBytes 走 Vec<u8> (从 File.arrayBuffer() → Array.from(new Uint8Array(buf))).
+//   文件先分块传到本机临时文件 (lib/uploadStage.ts, 上限 200MB), 再按 uploadId 安装.
 //   namespace 默认 "external", 装到 ~/.catfish/skills/<ns>/<slug>/.
 //   warnings 含跳过的非白名单文件名 (.exe / .py 等被滤).
 export interface InstallSkillFromZipResult {
@@ -48,9 +50,10 @@ export interface InstallSkillFromZipResult {
   warnings: string[];
 }
 
-export const installSkillFromZip = (zipBytes: number[], namespace?: string) =>
+/** 10/14: 原来 zipBytes 是数字数组 (200MB 的 zip 会变成近 1GB 的 JSON), 改成先分块传到临时文件 */
+export const installSkillFromZip = async (file: Blob, namespace?: string) =>
   rawInvoke<InstallSkillFromZipResult>("install_skill_from_zip", {
-    zipBytes,
+    uploadId: await stageFile(file),
     namespace: namespace ?? null,
   });
 

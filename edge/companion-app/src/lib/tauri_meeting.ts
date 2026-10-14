@@ -8,6 +8,8 @@
 import { invoke as rawInvoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+import { stageFile } from "./uploadStage";
+
 export type MeetingStatus =
   | "created"
   | "recording"
@@ -148,9 +150,12 @@ export const meetingTemplatesList = () => rawInvoke<MinutesTemplate[]>("meeting_
 export const meetingTemplateSave = (id: string | null, name: string, body: string) =>
   rawInvoke<MinutesTemplate>("meeting_template_save", { id, name, body });
 export const meetingTemplateDelete = (id: string) => rawInvoke<void>("meeting_template_delete", { id });
-/** 上传 / 替换 Word / Excel 模版 (id 给了 = 替换文件); 认不出要填的空会报错 */
-export const meetingTemplateUpload = (id: string | null, name: string, filename: string, dataB64: string) =>
-  rawInvoke<MinutesTemplate>("meeting_template_upload", { id, name, filename, dataB64 });
+/** 上传 / 替换 Word / Excel 模版 (id 给了 = 替换文件); 认不出要填的空会报错。
+ *  10/14: 文件先分块传到本机临时文件 (lib/uploadStage.ts), 上限 200MB */
+export const meetingTemplateUpload = async (id: string | null, name: string, file: File) =>
+  rawInvoke<MinutesTemplate>("meeting_template_upload", {
+    id, name, filename: file.name, uploadId: await stageFile(file),
+  });
 /** 打开 (reveal=false) 或在文件夹里显示 (reveal=true) 按模版填好的 Word / Excel 纪要 */
 export const meetingMinutesOpenFile = (id: string, reveal: boolean) =>
   rawInvoke<void>("meeting_minutes_open_file", { id, reveal });

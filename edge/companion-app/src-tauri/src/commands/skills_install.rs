@@ -176,7 +176,7 @@ pub(crate) fn uninstall_skill_blocking(skill_path: String) -> Result<UninstallRe
 //
 // 安全 (基础, 严谨 scan 留 P3.3.24):
 //   - 文件白名单: .md / .markdown / .json / .txt / .yaml / .yml (拒可执行 / 二进制)
-//   - 总解压大小 ≤ 100 MB (防 zip bomb)
+//   - 总解压大小 ≤ 1 GB (防 zip bomb; 10/14 随上传上限 200MB 放宽)
 //   - mangled_name() 解 zip slip (../escape)
 //   - SKILL.md 必须存在 (zip 根 或 第一级子目录)
 // ─────────────────────────────────────────────────────────────────
@@ -192,8 +192,9 @@ pub struct InstallSkillFromZipResult {
     pub warnings: Vec<String>,
 }
 
-const SKILL_ZIP_MAX_UNPACKED: u64 = 100 * 1024 * 1024; // 100 MB 防 bomb
-const SKILL_ZIP_MAX_INPUT: usize = 50 * 1024 * 1024; // 50 MB 输入上限
+// 10/14: 输入上限跟所有上传口子统一 200MB; 解压上限跟着放 (技能包全是文本, 压缩比高), 仍防 bomb
+const SKILL_ZIP_MAX_UNPACKED: u64 = 1024 * 1024 * 1024; // 1 GB 防 bomb
+const SKILL_ZIP_MAX_INPUT: usize = crate::commands::upload_stage::MAX_UPLOAD_BYTES as usize; // 200 MB 输入上限
 
 /// 把 SKILL.md frontmatter 的 name 转 ascii slug (中文 / emoji 滤掉, 空格 -> -).
 fn slug_from_name(name: &str) -> String {
