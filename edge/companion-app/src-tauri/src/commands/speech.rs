@@ -262,9 +262,10 @@ mod tests {
     fn e2e_upload_m4a_transcribes_without_whisper() {
         let pack = PathBuf::from(std::env::var("CATFISH_MEETING_PACK").unwrap());
         let m4a = std::fs::read(std::env::var("CATFISH_TEST_M4A").unwrap()).unwrap();
-        let base = PathBuf::from(std::env::var("CATFISH_BASE_PYTHON").unwrap());
+        // 新包自带 Python 3.11; 只有老包才要 CATFISH_BASE_PYTHON
+        let base = std::env::var("CATFISH_BASE_PYTHON").ok().map(PathBuf::from);
         let home = tempfile::tempdir().unwrap();
-        crate::services::meeting_asr::install(&pack, home.path(), &base, |_| {}).unwrap();
+        crate::services::meeting_asr::install(&pack, home.path(), base.as_deref(), |_| {}).unwrap();
         std::env::set_var("HOME", home.path());
 
         let t = std::time::Instant::now();

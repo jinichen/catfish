@@ -99,17 +99,18 @@ fn transcribe_crash_reports_stderr_tail() {
 
 /// 真包端到端: Rust install() 装进临时 HOME → 真脚本转写。默认跳过 (要 2.3GB 的包)。
 ///   CATFISH_MEETING_PACK=<包路径> CATFISH_MEETING_AUDIO=<放 seg-*.wav 的目录> \
-///   CATFISH_BASE_PYTHON=<python3.11> cargo test --lib meeting_asr::tests::e2e -- --ignored --nocapture
+///   [CATFISH_BASE_PYTHON=<python3.11>, 只有老包 (没自带 Python) 才要] \
+///   cargo test --lib meeting_asr::tests::e2e -- --ignored --nocapture
 #[test]
 #[ignore]
 fn e2e_install_real_pack_and_transcribe() {
     let pack = PathBuf::from(std::env::var("CATFISH_MEETING_PACK").expect("CATFISH_MEETING_PACK"));
     let audio = PathBuf::from(std::env::var("CATFISH_MEETING_AUDIO").expect("CATFISH_MEETING_AUDIO"));
-    let base = PathBuf::from(std::env::var("CATFISH_BASE_PYTHON").expect("CATFISH_BASE_PYTHON"));
+    let base = std::env::var("CATFISH_BASE_PYTHON").ok().map(PathBuf::from);
     let home = tempfile::tempdir().unwrap();
     let t = std::time::Instant::now();
     let mut steps = vec![];
-    let inst = install(&pack, home.path(), &base, |s| steps.push(s)).unwrap();
+    let inst = install(&pack, home.path(), base.as_deref(), |s| steps.push(s)).unwrap();
     println!("install {:.0}s · steps {steps:?} · {inst:?}", t.elapsed().as_secs_f64());
     assert_eq!(installed(home.path()), Some(inst.clone()));
 
@@ -121,4 +122,37 @@ fn e2e_install_real_pack_and_transcribe() {
     println!("transcribe {:.0}s · {done:?}", t.elapsed().as_secs_f64());
     assert!(matches!(done, AsrEvent::Done { segments, .. } if segments > 0));
     assert!(std::fs::read_dir(home.path().join("empty")).unwrap().next().is_none(), "不许联网下载");
+}
+
+
+#[test]
+fn bundled_python_is_moved_into_place_and_used() {
+    let staging = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let interp = bundled_interpreter(&staging.path().join("python"));
+    std::fs::create_dir_all(interp.parent().unwrap()).unwrap();
+    std::fs::write(&interp, b"").unwrap();
+    let base = base_python_for(staging.path(), root.path(), "1.1.0", None).unwrap();
+    assert_eq!(base, bundled_interpreter(&root.path().join("python-1.1.0")));
+    assert!(base.is_file());
+    assert!(!staging.path().join("python").exists());
+}
+
+#[test]
+fn old_pack_without_python_needs_a_311_fallback() {
+    let staging = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let e = base_python_for(staging.path(), root.path(), "1.0.1", None).unwrap_err();
+    assert!(e.contains("新版组件包"), "{e}");
+    // 3.14 之类不是 3.11 的也不行 (hermes v0.22 的基础解释器)
+    if let Some(py) = python3() {
+        let out = std::process::Command::new(&py)
+            .args(["-c", "import sys; print('%d.%d' % sys.version_info[:2])"])
+            .output()
+            .unwrap();
+        if String::from_utf8_lossy(&out.stdout).trim() != "3.11" {
+            let e = base_python_for(staging.path(), root.path(), "1.0.1", Some(&py)).unwrap_err();
+            assert!(e.contains("新版组件包"), "{e}");
+        }
+    }
 }

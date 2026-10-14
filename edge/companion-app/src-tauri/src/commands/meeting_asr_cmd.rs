@@ -74,14 +74,15 @@ pub fn meeting_asr_install(app: tauri::AppHandle) -> Result<(), String> {
     let home = store::home()?;
     let (pack, version) = ready_pack(&comp::runtime_dir()?)
         .ok_or("会议组件包还没下载 (或没校验), 先下载")?;
-    let base = asr::base_python_of(&hermes_venv()?)?;
+    // 新包自带 Python 3.11, 用不到这个; 老包 (没带) 才退回 hermes venv 的基础解释器
+    let fallback = hermes_venv().ok().and_then(|venv| asr::base_python_of(&venv).ok());
     if INSTALLING.swap(true, Ordering::SeqCst) {
         return Err("正在安装中".into());
     }
-    log::info!("[meeting-asr] 安装 {version} · 基础解释器 {}", base.display());
+    log::info!("[meeting-asr] 安装 {version} · 备用基础解释器 {:?}", fallback);
     tauri::async_runtime::spawn_blocking(move || {
         let emit_app = app.clone();
-        let r = asr::install(&pack, &home, &base, |step| {
+        let r = asr::install(&pack, &home, fallback.as_deref(), |step| {
             let _ = emit_app.emit("meeting_asr_progress", json!({ "step": step, "done": false }));
         });
         match &r {

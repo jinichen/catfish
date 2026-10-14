@@ -15,7 +15,9 @@
 # tools/build_component_manifest.py 生成清单, Companion 就能下载。
 #
 # 包里:
-#   wheels/   离线安装用的 wheel (平台钉 macosx_12_0_arm64 + cp311, 跟内嵌 Python 3.11 对齐)
+#   python/   自带的 CPython 3.11 (python-build-standalone install_only) —— 10/14 hermes v0.22 起
+#             hermes 换成 Python 3.14, 不能再借它的解释器建环境; Companion 装包时用这一份
+#   wheels/   离线安装用的 wheel (平台钉 macosx_12_0_arm64 + cp311, 跟自带的 Python 3.11 对齐)
 #   models/   vad / asr / punc / spk 四个模型目录 (FunASR 直接按本地路径加载)
 #   pack.json 版本 / 依赖清单 / 模型来源 / 最低 macOS
 #
@@ -46,18 +48,19 @@ MODELS=(
 )
 
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "❌ 版本号要 x.y.z: $VERSION" >&2; exit 1; }
+# 自带的 Python: 版本钉死 (跟 hermes v0.21 时代内嵌的同一版, cp311 wheel 都按它测过)
+PY_VERSION="3.11.15"
+PY_BUILD_TAG="20260807"
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)
     PLATFORM="mac-arm64"; PLATFORM_TAG="macosx_12_0_arm64"; VBIN="bin"; PYEXE="python"
-    PY311="${PY311:-$(command -v python3.11 || true)}" ;;
+    PBS_TRIPLE="aarch64-apple-darwin"; BUNDLED_REL="python/bin/python3.11" ;;
   MINGW64*-x86_64|MSYS*-x86_64|CYGWIN*-x86_64)
-    # 内嵌 Python 也是 3.11 (build-windows-msi.yml 打的 cpython 3.11.15), 所以 cp311
     PLATFORM="windows-x64"; PLATFORM_TAG="win_amd64"; VBIN="Scripts"; PYEXE="python.exe"
-    PY311="${PY311:-$(command -v python3.11 || command -v python || true)}" ;;
+    PBS_TRIPLE="x86_64-pc-windows-msvc"; BUNDLED_REL="python/python.exe" ;;
   *) echo "❌ 只能在 Apple Silicon Mac 或 Windows x64 上打 (要在目标平台跑自检)" >&2; exit 1 ;;
 esac
-[[ -n "$PY311" ]] && "$PY311" -c 'import sys; sys.exit(sys.version_info[:2] != (3, 11))' \
-  || { echo "❌ 需要 python 3.11 (uv python install 3.11, 或设 PY311=...)" >&2; exit 1; }
+. "$COMPANION/scripts/lib-download.sh"
 PACK_NAME="meeting-asr-$VERSION-$PLATFORM.tar.gz"
 # Git Bash 只自动转换"单独一个参数且以 / 开头"的路径; 嵌在 python -c 字符串里的不转,
 # Windows 的 Python 读不懂 /c/Users/...。这两个函数在 mac 上原样返回。
@@ -80,7 +83,14 @@ while IFS= read -r line; do
 done <"$REQS_FILE"
 echo "=== meeting-asr $VERSION · $PLATFORM · 依赖: ${REQS[*]}"
 
-echo "=== [1/5] 打包环境"
+echo "=== [1/5] 自带的 Python $PY_VERSION + 打包环境"
+download_with_retry \
+  "https://github.com/astral-sh/python-build-standalone/releases/download/${PY_BUILD_TAG}/cpython-${PY_VERSION}+${PY_BUILD_TAG}-${PBS_TRIPLE}-install_only.tar.gz" \
+  "$WORK/python.tar.gz"
+tar xzf "$WORK/python.tar.gz" -C "$STAGE"
+PY311="$STAGE/$BUNDLED_REL"
+"$PY311" -c 'import sys; sys.exit(sys.version_info[:2] != (3, 11))' \
+  || { echo "❌ 自带的 Python 不是 3.11: $PY311" >&2; exit 1; }
 "$PY311" -m venv "$WORK/build-venv"
 BPY="$WORK/build-venv/$VBIN/$PYEXE"
 "$BPY" -m pip install -q --upgrade pip wheel modelscope
@@ -133,7 +143,7 @@ for pair in "${MODELS[@]}"; do
   MODEL_JSON+="\"$name\": \"$id\","
 done
 
-echo "=== [4/5] 自检: 干净 venv 离线安装 + 真转写"
+echo "=== [4/5] 自检: 用包里自带的 Python 建干净 venv, 离线安装 + 真转写 (跟员工机同一条路)"
 "$PY311" -m venv "$WORK/check-venv"
 CPY="$WORK/check-venv/$VBIN/$PYEXE"
 "$CPY" -m pip install -q --no-index --find-links "$STAGE/wheels" "${REQS[@]}"
@@ -191,13 +201,16 @@ cat >"$STAGE/pack.json" <<JSON
   "name": "meeting-asr",
   "version": "$VERSION",
   "platform": "$PLATFORM",
-  "python": "3.11",
+  "python": "$PY_VERSION",
+  "bundled_python": "$BUNDLED_REL",
   "min_os": "$([[ "$PLATFORM" == mac-* ]] && echo "macOS 12.0" || echo "Windows 10 x64")",
   "requirements": [${REQS_JSON%,}],
   "models": {${MODEL_JSON%,}},
   "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 JSON
-tar czf "$OUT_DIR/$PACK_NAME" -C "$STAGE" pack.json wheels models
+# 自带的 Python 只留运行要的: 头文件 / 测试套件对员工没用 (编源码包时用过头文件, 所以放到最后删)
+rm -rf "$STAGE/python/include" "$STAGE/python/lib/python3.11/test" "$STAGE/python/Lib/test" 2>/dev/null || true
+tar czf "$OUT_DIR/$PACK_NAME" -C "$STAGE" pack.json python wheels models
 echo "✓ $OUT_DIR/$PACK_NAME · $(du -h "$OUT_DIR/$PACK_NAME" | cut -f1)"
 echo "  下一步: 拷到中央组件目录, 再跑 python3 tools/build_component_manifest.py ./components"

@@ -3,11 +3,14 @@
 //! ```text
 //! ~/.catfish/meeting-asr/
 //!     current.json          {version, python, models} —— 唯一的"装好了"判据
+//!     python-<ver>/         组件包自带的 Python 3.11 (10/14 起; 老包没有)
 //!     venv-<ver>/           独立 venv (不进 hermes venv, 见计划文档)
 //!     models-<ver>/{vad,asr,punc,spk}
 //! ```
 //!
-//! 安装 = 解包 → 用 **hermes venv 的同一个基础解释器** 建 venv → pip 离线装
+//! 安装 = 解包 → 用**组件包自带的 Python 3.11** 建 venv (10/14 hermes v0.22 起 hermes 换成
+//! Python 3.14, 包里那批 cp311 的 wheel 装不进去; 老包没带 Python 时才退回 hermes 的基础解释器,
+//! 且必须是 3.11) → pip 离线装
 //! (`--no-index`, 只认包里的 wheel) → import 自检 → 模型挪到位 → 原子写 current.json
 //! → 删旧版本。任何一步失败都不碰 current.json, 旧版本照常能用。
 //!
@@ -77,6 +80,40 @@ pub fn base_python_of(venv: &Path) -> Result<PathBuf, String> {
         .ok_or_else(|| format!("{} 下找不到 python", home.display()))
 }
 
+/// 包里自带的 Python (`python/`, python-build-standalone 的 install_only 布局) 里的解释器。
+pub fn bundled_interpreter(python_dir: &Path) -> PathBuf {
+    if cfg!(windows) {
+        python_dir.join("python.exe")
+    } else {
+        python_dir.join("bin").join("python3.11")
+    }
+}
+
+/// 建 venv 用的基础解释器: 包里带了 `python/` 就挪到 `python-<ver>/` 用它; 没带 (老包) 用
+/// fallback, 但必须是 3.11 —— 包里的 wheel 全是 cp311, 拿 hermes v0.22 的 3.14 去装只会一堆报错。
+fn base_python_for(staging: &Path, root: &Path, version: &str, fallback: Option<&Path>) -> Result<PathBuf, String> {
+    let bundled = staging.join("python");
+    if bundled.is_dir() {
+        let dest = root.join(format!("python-{version}"));
+        let _ = std::fs::remove_dir_all(&dest);
+        std::fs::rename(&bundled, &dest).map_err(|e| format!("放 Python 失败: {e}"))?;
+        let py = bundled_interpreter(&dest);
+        return py.is_file().then_some(py).ok_or_else(|| "组件包里的 Python 不完整".to_string());
+    }
+    let base = fallback.ok_or("这个会议组件包是旧版 (没带 Python), 本机也找不到可用的 Python 3.11; 请到中央下载新版组件包")?;
+    let out = crate::services::process::python_command(base)
+        .args(["-c", "import sys; print('%d.%d' % sys.version_info[:2])"])
+        .output()
+        .map_err(|e| format!("检查 Python 版本失败: {e}"))?;
+    let ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if ver != "3.11" {
+        return Err(format!(
+            "这个会议组件包是旧版 (要 Python 3.11, 本机 hermes 的是 {ver}); 请到中央下载新版组件包"
+        ));
+    }
+    Ok(base.to_path_buf())
+}
+
 fn run(cmd: &mut std::process::Command, what: &str) -> Result<(), String> {
     let out = cmd.output().map_err(|e| format!("{what} 起不来: {e}"))?;
     if out.status.success() {
@@ -88,13 +125,19 @@ fn run(cmd: &mut std::process::Command, what: &str) -> Result<(), String> {
 }
 
 /// 装一个已校验过的组件包。`on_step` 报给界面看 ("解包" / "建环境" / ...)。
-pub fn install(pack: &Path, home: &Path, base_python: &Path, mut on_step: impl FnMut(&'static str)) -> Result<Installed, String> {
+/// `fallback_python`: 组件包没自带 Python (老包) 时用的基础解释器 (hermes venv 的); 新包用不到。
+pub fn install(
+    pack: &Path,
+    home: &Path,
+    fallback_python: Option<&Path>,
+    mut on_step: impl FnMut(&'static str),
+) -> Result<Installed, String> {
     let root = root(home);
     std::fs::create_dir_all(&root).map_err(|e| format!("建 {} 失败: {e}", root.display()))?;
     let staging = root.join(format!(".staging-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|e| format!("建临时目录失败: {e}"))?;
-    let result = install_inner(pack, &root, &staging, base_python, &mut on_step);
+    let result = install_inner(pack, &root, &staging, fallback_python, &mut on_step);
     let _ = std::fs::remove_dir_all(&staging);
     result
 }
@@ -103,7 +146,7 @@ fn install_inner(
     pack: &Path,
     root: &Path,
     staging: &Path,
-    base_python: &Path,
+    fallback_python: Option<&Path>,
     on_step: &mut impl FnMut(&'static str),
 ) -> Result<Installed, String> {
     on_step("unpacking");
@@ -120,9 +163,10 @@ fn install_inner(
     }
 
     on_step("creating_venv");
+    let base_python = base_python_for(staging, root, &pj.version, fallback_python)?;
     let venv = root.join(format!("venv-{}", pj.version));
     let _ = std::fs::remove_dir_all(&venv);
-    run(crate::services::process::python_command(base_python).arg("-m").arg("venv").arg(&venv), "建 Python 环境")?;
+    run(crate::services::process::python_command(&base_python).arg("-m").arg("venv").arg(&venv), "建 Python 环境")?;
     let py = venv_python(&venv);
 
     on_step("installing");
@@ -153,8 +197,10 @@ fn install_inner(
     // 旧版本 (venv-x / models-x) 清掉; 失败不要紧, 下次再清
     for e in std::fs::read_dir(root).into_iter().flatten().flatten() {
         let name = e.file_name().to_string_lossy().to_string();
-        let keep = name == format!("venv-{}", pj.version) || name == format!("models-{}", pj.version);
-        if (name.starts_with("venv-") || name.starts_with("models-")) && !keep {
+        let keep = name == format!("venv-{}", pj.version)
+            || name == format!("models-{}", pj.version)
+            || name == format!("python-{}", pj.version);
+        if (name.starts_with("venv-") || name.starts_with("models-") || name.starts_with("python-")) && !keep {
             let _ = std::fs::remove_dir_all(e.path());
         }
     }

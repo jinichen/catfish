@@ -4,7 +4,8 @@
 # ─── 下载 helper · retry + gzip verify + ghfast.top 代理 ─────
 # 镜像 build-intel-dmg.sh 里的 download_with_retry (7/16), 修 uv 下载 truncated 挂.
 # 国内下 GitHub Release 慢/易断 · ghfast.top 加速. 国外可 GH_PROXY="" 直连.
-GH_PROXY="${GH_PROXY:-https://ghfast.top/}"
+# `-` 不是 `:-`: 显式设成空 (GH_PROXY="") 才能直连 —— 原来 `:-` 把空当没设, 注释说的直连从没生效过
+GH_PROXY="${GH_PROXY-https://ghfast.top/}"
 
 # 10/1: 代理环境变量指向本机一个没人监听的端口 (鸿波 ~/.zshrc 里写的是 7890, Clash 实际
 # 在 7897) 时, curl 每次都 "Failed to connect to 127.0.0.1 port 7890" 秒挂, 10 次全白试。

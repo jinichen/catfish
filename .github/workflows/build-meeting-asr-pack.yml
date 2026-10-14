@@ -28,15 +28,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # 内嵌 Python 是 3.11 (build-windows-msi.yml), 包里的 wheel 必须是 cp311
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
+      # 10/14 起组件包自带 Python 3.11.15 (脚本自己下 python-build-standalone), 构建机不用装 Python;
+      # hermes v0.22 换成 3.14 后, 员工机上已经没有能装 cp311 wheel 的解释器可借了
       - name: Build + self-test
         shell: bash
         env:
-          PY311: python
+          # GitHub 机房直连 GitHub Release, 不走国内加速代理
+          GH_PROXY: ""
           MEETING_PACK_MODEL_CACHE: ${{ runner.temp }}/modelscope
         run: |
           bash edge/companion-app/scripts/build-meeting-asr-pack.sh \
