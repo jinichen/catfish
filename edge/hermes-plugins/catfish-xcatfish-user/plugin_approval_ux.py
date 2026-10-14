@@ -356,6 +356,10 @@ def _patch_p52_busy_approval_reply() -> None:
 # 其余照走 hermes 原 check_execute_code_guard (单次审批, P51 的大白话提示)。
 # 分析本身出错 → 走原 guard (宁可多问一次, 不能漏)。
 
+#: 审批留痕 (approval_audit 模块), plugin.py 注入; 没注入 (单测) 就不记
+audit = None
+
+
 def wrap_execute_code_guard(orig, analyzer):
     def patched(code, env_type, has_host_access=False, *args, **kwargs):
         try:
@@ -365,6 +369,10 @@ def wrap_execute_code_guard(orig, analyzer):
             verdict = None
         if verdict is not None and verdict.read_only:
             logger.info("P54 只读代码免批: %s", analyzer.describe(verdict)[:60])
+            if audit is not None:
+                audit.record("readonly_auto", decided_by="readonly_rule", command=code,
+                             description=analyzer.describe(verdict), pattern_key="execute_code",
+                             surface="p54")
             return {"approved": True, "message": None, "readonly_auto": True}
         return orig(code, env_type, has_host_access, *args, **kwargs)
 

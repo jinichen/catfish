@@ -153,6 +153,9 @@ def _patch_p57_slash_confirm() -> None:
     plugin_slash_confirm_ux.patch(plugin_approval_ux)
 
 
+approval_audit = _import_sibling("approval_audit")  # __init__.py 注册它的 post_approval_response 钩子
+approval_audit.ctx_module = plugin_ctx
+plugin_approval_ux.audit = approval_audit  # P54 只读免批不经过 hermes 审批流程, 自己记一笔
 plugin_locale_zh = _import_sibling("plugin_locale_zh")
 _patch_p58_locale_zh = plugin_locale_zh._patch_p58_locale_zh  # noqa: F401  (re-export · 见 plugin_locale_zh.py)
 plugin_bridge_promoted = _import_sibling("plugin_bridge_promoted")

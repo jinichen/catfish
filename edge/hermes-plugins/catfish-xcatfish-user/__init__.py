@@ -105,6 +105,14 @@ def register(ctx) -> None:
                 "catfish-xcatfish-user register_hook fail: %s (fail-loud 降级)", e
             )
 
+        # 10/14 hermes v0.22 审批默认 smart (AI 先判断): 每次审批结果记到 ~/.catfish/approval_audit.jsonl,
+        # 管理员能查"AI 自动批了哪些"。见 approval_audit.py。
+        try:
+            ctx.register_hook("post_approval_response", _mod.approval_audit.post_approval_response_hook)
+            logger.info("catfish-xcatfish-user: approval audit hook registered ✓")
+        except Exception as e:
+            logger.warning("catfish-xcatfish-user approval audit register fail: %s (不影响审批)", e)
+
         # P3.5.42 (6/18 鸿波 catch '怎么彻底解决 memory 误写' + '所有遵循 picker'):
         # 加 memory_enforce_hook — pre_tool_call 拦 memory(target=memory|user) 误写.
         # 走 LLM 二次校验 (复用 catfish-memory 5 kind router schema), 0 硬编码词表.
