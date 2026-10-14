@@ -2,16 +2,16 @@
 #
 # 谁读它:
 #   · Companion 装机 / 启动自检 (hermes_install_artifacts.rs, include_str!)
-#   · 打包取 wheel (scripts/fetch_hermes_deps.py —— mac 打包、Windows CI、Windows 本地打包三处共用)
+#   · 打包取 wheel (scripts/build_hermes_wheelhouse.py —— 10/14 起跟 hermes 依赖一起按目标平台锁版本)
 #
 # 每行: <pip 需求>  <装没装的判据: import 得了才算>  [sdist]
 #   sdist = PyPI 上只有源码包, 打包时现打成 wheel (员工机器离线装, 装不了源码包)
 #
 # 加包之前想清楚: 装机是一次 uv pip install, 一个包的 wheel 不适配就全部装不上。
-# 打包脚本会按安装包支持的最低系统版本取 wheel (fetch_hermes_deps.py 的 --platform)。
+# 打包脚本会按安装包支持的最低系统版本取 wheel。playwright 钉版本: 它决定打进包的 Chromium 版本 (10/14)。
 
 jieba          jieba                 sdist
-playwright     playwright.sync_api
+playwright==1.64.0 playwright.sync_api
 watchdog       watchdog.observers
 
 # 9/28: 聊天上传文件的解析 (src-tauri/scripts/parse_file*.py)。原来只有开发机的网关 venv 里有。

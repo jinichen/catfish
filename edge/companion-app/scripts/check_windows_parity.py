@@ -174,8 +174,10 @@ for p in sorted(list(APP.rglob("*.ps1")) + list((REPO / "delivery").rglob("*.ps1
 
 # 只在一个平台有的资源 (安装器本身 / 平台专属运行时), 其余必须两边都有
 ONLY_WINDOWS = {"install.ps1", "uv.exe", "cpython-3.11.15-embed.zip",
-                "install-catfish-email.ps1", "install-wechat-reader.ps1"}
-ONLY_MAC = {"install.sh", "uv", "cpython-3.11.15-embed.tar.gz",
+                "install-catfish-email.ps1", "install-wechat-reader.ps1",
+                # 10/14: mac 已把额外包并进 hermes 归档的 wheelhouse; Windows 改造完成前还单独带
+                "hermes-deps-dist.tar.gz"}
+ONLY_MAC = {"uv", "cpython-3.14.7-embed.tar.gz",
             # EventKit 读日历的 Swift 小程序。Windows 那边日历 / 提醒走 Outlook COM
             # (commands/system_outlook.rs), 不需要对应的二进制。
             "catfish-calendar"}
@@ -204,9 +206,12 @@ for script in (APP / "scripts" / "build-msi-local.ps1",
     text = script.read_text(encoding="utf-8")
     if "build_edge_runtime.py" not in text:
         bad("R7", script.relative_to(REPO).as_posix(), "没调 build_edge_runtime.py —— 包里不会有 tool-bridge / local-search / 文件解析脚本")
-    # 9/28: hermes 额外依赖三处都得走同一个脚本、读同一份清单 (src-tauri/hermes-extra-packages.txt)
-    if "fetch_hermes_deps.py" not in text:
-        bad("R7", script.relative_to(REPO).as_posix(), "没调 fetch_hermes_deps.py —— hermes-deps 包里的依赖会跟装机清单对不上")
+    # 9/28: hermes 额外依赖三处都得走同一个脚本、读同一份清单 (src-tauri/hermes-extra-packages.txt)。
+    # 10/14: mac 换成 build_hermes_wheelhouse.py (额外包跟 hermes 依赖一起锁版本), Windows 改造中;
+    # 两个脚本读的是同一份清单, 任一个都算。
+    if "fetch_hermes_deps.py" not in text and "build_hermes_wheelhouse.py" not in text:
+        bad("R7", script.relative_to(REPO).as_posix(),
+            "没调 build_hermes_wheelhouse.py / fetch_hermes_deps.py —— 额外依赖会跟装机清单对不上")
 
 # ── 结果 ──────────────────────────────────────────────────────────
 

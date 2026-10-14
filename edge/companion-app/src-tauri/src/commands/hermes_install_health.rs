@@ -15,6 +15,24 @@ use super::hermes_install_base::{
 };
 use super::hermes_install_state::{BootstrapPaths, CompletionRecord};
 
+/// hermes v0.22 的安装戳 (打包时由上游 scripts/write_install_stamp.py 写进源码树)。
+pub(crate) const INSTALL_STAMP: &str = "install-stamp.json";
+
+/// 安装戳是不是 "external" (更新归 Companion 管)。不是的话 hermes v0.22 会认领成自更新安装,
+/// 每次启动去联网下 Python 3.14 另建环境 —— 健康检查要把它当成"坏了"。
+pub(crate) fn stamp_problem(install_dir: &Path) -> Option<String> {
+    if install_dir.join(".git").exists() {
+        return Some("安装目录里有 .git (hermes v0.22 会把它当成自更新安装)".to_owned());
+    }
+    let stamp = install_dir.join(INSTALL_STAMP);
+    let value: serde_json::Value = match std::fs::read(&stamp).ok().and_then(|b| serde_json::from_slice(&b).ok()) {
+        Some(v) => v,
+        None => return Some(format!("缺或损坏的 {INSTALL_STAMP}")),
+    };
+    (value.get("updateMechanism").and_then(|v| v.as_str()) != Some("external"))
+        .then(|| format!("{INSTALL_STAMP} 的 updateMechanism 不是 external"))
+}
+
 pub(crate) fn parse_version_file(s: &str) -> Option<String> {
     s.lines()
         .map(str::trim)
@@ -84,6 +102,11 @@ pub(crate) fn core_health_problems(paths: &BootstrapPaths, require_completion_ma
             ));
         }
     }
+    // 10/14 (hermes v0.22): 安装戳必须是 external、不许有 .git —— 否则 hermes 会把这里认领成
+    // 自更新安装, 每次启动联网下 Python 3.14 另建环境 (Companion 装进去的额外包随之失效)。
+    if let Some(problem) = stamp_problem(dir) {
+        problems.push(problem);
+    }
     match std::fs::read_to_string(dir.join(INSTALL_METHOD_MARKER)) {
         Ok(value) if !value.trim().is_empty() => {}
         _ => problems.push(format!("缺或空的 {INSTALL_METHOD_MARKER}")),
@@ -121,4 +144,21 @@ pub(crate) fn source_stage_ready(stage: &Path) -> bool {
     stage.join(STAGE_READY_MARKER).is_file()
         && stage.join("pyproject.toml").is_file()
         && installed_hermes_commit_at(stage).as_deref() == Some(hermes_pinned_commit())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stamp_must_be_external_and_no_git() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(stamp_problem(dir.path()).unwrap().contains(INSTALL_STAMP));
+        std::fs::write(dir.path().join(INSTALL_STAMP), br#"{"updateMechanism":"self"}"#).unwrap();
+        assert!(stamp_problem(dir.path()).unwrap().contains("external"));
+        std::fs::write(dir.path().join(INSTALL_STAMP), br#"{"schemaVersion":2,"updateMechanism":"external"}"#).unwrap();
+        assert_eq!(stamp_problem(dir.path()), None);
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        assert!(stamp_problem(dir.path()).unwrap().contains(".git"));
+    }
 }

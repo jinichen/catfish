@@ -63,7 +63,8 @@ fi
 # 七个都要有。缺了的话员工机会**静默退回联网安装** —— 而这个包存在的意义
 # 恰恰是那台机器上不了网, 于是表现成"装到一半卡住", 现场查不到原因。
 # 10/9: 不再有 node-embed.tar.gz (员工机运行时不需要 Node)。
-FILES=(install.sh uv cpython-3.11.15-embed.tar.gz
+# 10/14 (hermes v0.22.0): 不再有 install.sh (Companion 自己装)。
+FILES=(uv cpython-3.14.7-embed.tar.gz
        hermes-agent-bundle.tar.gz chromium-embed.tar.gz
        catfish-email-dist.tar.gz catfish-wechat-reader-dist.tar.gz)
 MISS=0

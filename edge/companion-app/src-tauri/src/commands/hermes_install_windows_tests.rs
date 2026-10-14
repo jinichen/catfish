@@ -15,6 +15,8 @@ fn fixture() -> (tempfile::TempDir, BootstrapPaths) {
     std::fs::create_dir_all(&paths.install_dir).unwrap();
     std::fs::write(paths.install_dir.join("pyproject.toml"), "[project]\n").unwrap();
     std::fs::write(paths.install_dir.join(".catfish-hermes-version"), hermes_pinned_commit()).unwrap();
+    // 10/14 hermes v0.22: 健康安装必须带 updateMechanism=external 的安装戳
+    std::fs::write(paths.install_dir.join("install-stamp.json"), r#"{"schemaVersion":2,"updateMechanism":"external"}"#).unwrap();
     (dir, paths)
 }
 

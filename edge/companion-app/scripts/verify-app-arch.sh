@@ -50,7 +50,8 @@ FAIL=0
 # 邮件 tab 直接挂, 界面还提示去跑一个他机器上不存在的 install.sh。
 # 现在缺它就不让发包。
 # 10/9: node-embed.tar.gz 不再打包 (员工机运行时不需要 Node, 见 build-mac-resources.sh 文件头)。
-for f in install.sh uv cpython-3.11.15-embed.tar.gz \
+# 10/14 (hermes v0.22.0): 不再有 install.sh / hermes-deps-dist (Companion 自己装, 额外包并进 hermes 归档的 wheelhouse)。
+for f in uv cpython-3.14.7-embed.tar.gz \
          hermes-agent-bundle.tar.gz chromium-embed.tar.gz \
          catfish-email-dist.tar.gz catfish-wechat-reader-dist.tar.gz; do
     if [ ! -f "$RES/$f" ]; then
@@ -64,7 +65,14 @@ if [ -f "$RES/node-embed.tar.gz" ]; then
     FAIL=1
 fi
 
-for f in cpython-3.11.15-embed.tar.gz hermes-agent-bundle.tar.gz \
+for f in install.sh hermes-deps-dist.tar.gz node-embed.tar.gz; do
+    if [ -f "$RES/$f" ]; then
+        echo "  ❌ 包里还有 $f —— 10/14 起不该再打 (旧构建残留, 重跑 build-mac-resources.sh)"
+        FAIL=1
+    fi
+done
+
+for f in cpython-3.14.7-embed.tar.gz hermes-agent-bundle.tar.gz \
          chromium-embed.tar.gz; do
     if [ -f "$RES/$f" ] && ! gzip -t "$RES/$f" 2>/dev/null; then
         echo "  ❌ $f gzip 校验失败"
@@ -123,10 +131,10 @@ check_tar_binary() {
     fi
 }
 
-PY_ENTRY="python/bin/python3.11"
+PY_ENTRY="python/bin/python3.14"
 CHROME_ENTRY="$(tar -tzf "$RES/chromium-embed.tar.gz" 2>/dev/null | awk '/Google Chrome for Testing\.app\/Contents\/MacOS\/Google Chrome for Testing$/ {print; exit}')"
 
-check_tar_binary "$RES/cpython-3.11.15-embed.tar.gz" "$PY_ENTRY" "Python"
+check_tar_binary "$RES/cpython-3.14.7-embed.tar.gz" "$PY_ENTRY" "Python"
 check_tar_binary "$RES/chromium-embed.tar.gz" "$CHROME_ENTRY" "Chromium"
 
 # Hermes 归档是源码主包；至少确认真正的源码入口存在。

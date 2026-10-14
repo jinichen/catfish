@@ -41,8 +41,35 @@ use crate::services::catfish_paths::hermes_venv_tool;
 use super::hermes_install_steps::{
     activate_stage, addon_current, install_catfish_email, EMAIL_ADDON, WECHAT_READER_ADDON, install_catfish_wechat_reader, install_hermes_deps,
     link_catfish_email_bin, link_catfish_wechat_reader_bin, prepare_source_stage,
-    rollback_install, run_install_stage,
+    rollback_install,
 };
+#[cfg(not(target_os = "windows"))]
+use super::hermes_install_native;
+
+/// 一步装机: 报"进行中" → 做 → 报"完成"。失败原样往上抛, 由 bootstrap_locked 回滚。
+#[cfg(not(target_os = "windows"))]
+fn native_step<T>(
+    stage: &str,
+    title: &str,
+    completed_steps: &mut u8,
+    total_steps: u8,
+    reporter: &ProgressReporter<'_>,
+    work: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    report(reporter, stage, BootstrapProgressState::Running, *completed_steps, total_steps, title, None);
+    let value = work().with_context(|| format!("Hermes 安装阶段 {stage}"))?;
+    *completed_steps += 1;
+    report(
+        reporter,
+        stage,
+        BootstrapProgressState::Completed,
+        *completed_steps,
+        total_steps,
+        format!("{title}完成"),
+        None,
+    );
+    Ok(value)
+}
 
 #[cfg(not(target_os = "windows"))]
 fn resolve_optional_runtime_dir(resource_dir: &Path) -> Result<PathBuf> {
@@ -208,7 +235,7 @@ fn bootstrap_locked(
 }
 
 #[cfg(not(target_os = "windows"))]
-fn bootstrap_locked(
+pub(crate) fn bootstrap_locked(
     resource_dir: &Path,
     paths: &BootstrapPaths,
     reporter: &ProgressReporter<'_>,
@@ -284,27 +311,17 @@ fn bootstrap_locked(
         crate::commands::hermes_install_artifacts::RUNTIME_ARCHIVES.len()
     );
 
-    // A source archive by itself is not a complete offline runtime.  Only a
-    // verified complete set may skip prerequisite/network fallbacks or enable the
-    // installer's strict bundled Node/Chromium fast path.
-    let complete_bundle = artifacts.is_complete_bundle();
-    let total_steps = if complete_bundle { 7 } else { 8 };
-    let mut completed_steps = 0;
-
-    // 在线 clone 需要 git/network；完整离线包则跳过这个最多 16 秒的网络探测。
-    if !complete_bundle {
-        run_install_stage(
-            "prerequisites",
-            "正在检查基础运行环境",
-            &artifacts,
-            paths,
-            &paths.install_dir,
-            false,
-            &mut completed_steps,
-            total_steps,
-            reporter,
-        )?;
+    // 10/14 (hermes v0.22.0): 每一步都由 Companion 自己做 (hermes_install_native.rs), 只用安装包
+    // 里带的东西, 不调上游 install.sh、不联网。归档缺了直接报错, 不再退到联网安装。
+    if !artifacts.is_complete_bundle() {
+        anyhow::bail!(
+            "安装包里的 Hermes 运行时不完整 ({}/{}), 请重新安装 Companion",
+            artifacts.archive_count(),
+            crate::commands::hermes_install_artifacts::RUNTIME_ARCHIVES.len()
+        );
     }
+    let total_steps: u8 = 7;
+    let mut completed_steps = 0;
 
     let stage = prepare_source_stage(
         reusable_stage,
@@ -317,73 +334,24 @@ fn bootstrap_locked(
     let backup = activate_stage(paths, &stage, reporter, completed_steps, total_steps)?;
 
     let install_result = (|| -> Result<()> {
-        // 不传 --no-venv。健康契约明确要求 venv/bin/python + venv/bin/hermes。
-        run_install_stage(
-            "venv",
-            "正在准备 Python 环境",
-            &artifacts,
-            paths,
-            &paths.install_dir,
-            false,
-            &mut completed_steps,
-            total_steps,
-            reporter,
-        )?;
-        run_install_stage(
-            "python-deps",
-            "正在安装 Hermes 核心组件",
-            &artifacts,
-            paths,
-            &paths.install_dir,
-            false,
-            &mut completed_steps,
-            total_steps,
-            reporter,
-        )?;
-        run_install_stage(
-            "node-deps",
-            "正在准备浏览器自动化组件",
-            &artifacts,
-            paths,
-            &paths.install_dir,
-            complete_bundle,
-            &mut completed_steps,
-            total_steps,
-            reporter,
-        )?;
-        run_install_stage(
-            "config",
-            "正在准备本机配置",
-            &artifacts,
-            paths,
-            &paths.install_dir,
-            false,
-            &mut completed_steps,
-            total_steps,
-            reporter,
-        )?;
-        run_install_stage(
-            "path",
-            "正在创建 Hermes 启动入口",
-            &artifacts,
-            paths,
-            &paths.install_dir,
-            false,
-            &mut completed_steps,
-            total_steps,
-            reporter,
-        )?;
-        run_install_stage(
-            "complete",
-            "正在验证安装结果",
-            &artifacts,
-            paths,
-            &paths.install_dir,
-            false,
-            &mut completed_steps,
-            total_steps,
-            reporter,
-        )?;
+        let python = native_step("python", "正在准备 Python 3.14", &mut completed_steps, total_steps, reporter, || {
+            hermes_install_native::ensure_embedded_python(&artifacts, paths)
+        })?;
+        native_step("venv", "正在准备 Python 环境", &mut completed_steps, total_steps, reporter, || {
+            hermes_install_native::create_venv(&artifacts, paths, &python)
+        })?;
+        native_step("python-deps", "正在安装 Hermes 核心组件", &mut completed_steps, total_steps, reporter, || {
+            hermes_install_native::install_python_deps(&artifacts, paths)
+        })?;
+        native_step("browser", "正在准备浏览器自动化组件", &mut completed_steps, total_steps, reporter, || {
+            hermes_install_native::install_chromium(&artifacts, paths);
+            Ok(())
+        })?;
+        native_step("config", "正在准备本机配置", &mut completed_steps, total_steps, reporter, || {
+            hermes_install_native::prepare_config(paths)?;
+            hermes_install_native::link_cli(paths)?;
+            hermes_install_native::finish(paths)
+        })?;
 
         let pre_marker_problems = core_health_problems(paths, false);
         if !pre_marker_problems.is_empty() {
@@ -397,10 +365,7 @@ fn bootstrap_locked(
         if !final_problems.is_empty() {
             anyhow::bail!("完成标记写入后健康检查失败: {}", final_problems.join("; "));
         }
-        // 浏览器工具 / 中文分词也是附加功能, 同样不回滚, 但要出声。
-        if let Err(e) = install_hermes_deps(&artifacts, paths) {
-            log::warn!("[hermes-deps] 装额外依赖失败, 浏览器工具、分词和上传文件解析不可用: {e:#}");
-        }
+        // 10/14: 浏览器工具 / 中文分词这些额外包已经在 python-deps 那一步跟 hermes 一起装好了。
         // 邮件是附加功能 —— 装不上不回滚整个 hermes, 但要留下能查的日志。
         if let Err(e) = install_catfish_email(&artifacts, paths) {
             log::warn!("[catfish-email] 装失败, 邮件 tab 会不可用: {e:#}");
@@ -617,7 +582,8 @@ mod tests {
             format!("{}\n{}\n", hermes_pinned_tag(), hermes_pinned_commit()),
         )
         .unwrap();
-        fs::write(dir.join(INSTALL_METHOD_MARKER), b"git\n").unwrap();
+        fs::write(dir.join(INSTALL_METHOD_MARKER), b"catfish\n").unwrap();
+        fs::write(dir.join("install-stamp.json"), br#"{"schemaVersion":2,"updateMechanism":"external"}"#).unwrap();
         make_executable(&hermes_venv_python(dir));
         make_executable(&hermes_venv_tool(dir, "hermes"));
     }

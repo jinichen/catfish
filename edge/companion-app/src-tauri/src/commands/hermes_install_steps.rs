@@ -15,7 +15,9 @@ use crate::services::catfish_paths::hermes_venv_python;
 #[cfg(not(target_os = "windows"))]
 use crate::services::catfish_paths::hermes_venv_tool;
 
-use super::hermes_install_artifacts::{RuntimeArtifacts, HERMES_DEPS_ARCHIVE};
+use super::hermes_install_artifacts::RuntimeArtifacts;
+#[cfg(target_os = "windows")]
+use super::hermes_install_artifacts::HERMES_DEPS_ARCHIVE;
 #[cfg(not(target_os = "windows"))]
 use super::hermes_install_artifacts::{CATFISH_EMAIL_ARCHIVE, CATFISH_WECHAT_READER_ARCHIVE};
 #[cfg(not(target_os = "windows"))]
@@ -68,118 +70,6 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "windows"))]
-fn add_common_installer_args(
-    command: &mut Command,
-    artifacts: &RuntimeArtifacts,
-    paths: &BootstrapPaths,
-    install_dir: &Path,
-    mark_offline_source: bool,
-) {
-    command
-        .arg("--skip-setup")
-        .arg("--non-interactive")
-        .arg("--dir")
-        .arg(install_dir)
-        .arg("--hermes-home")
-        .arg(&paths.hermes_home)
-        .arg("--offline-uv")
-        .arg(&artifacts.uv)
-        .env("HOME", &paths.home);
-    if mark_offline_source {
-        // stage protocol 不跑 clone_repo；这个参数只让 node-deps 走 bundle 快路径。
-        command.arg("--offline-source-dir").arg(install_dir);
-    }
-    if let Some(path) = &artifacts.python_tar {
-        command.arg("--offline-python-tar").arg(path);
-    }
-    if let Some(path) = &artifacts.chromium_tar {
-        command.arg("--offline-chromium-tar").arg(path);
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-pub(crate) fn run_install_stage(
-    stage: &str,
-    title: &str,
-    artifacts: &RuntimeArtifacts,
-    paths: &BootstrapPaths,
-    install_dir: &Path,
-    mark_offline_source: bool,
-    completed_steps: &mut u8,
-    total_steps: u8,
-    reporter: &ProgressReporter<'_>,
-) -> Result<()> {
-    report(
-        reporter,
-        stage,
-        BootstrapProgressState::Running,
-        *completed_steps,
-        total_steps,
-        title,
-        None,
-    );
-    let mut command = crate::services::process::background_command("bash");
-    command.arg(&artifacts.install_sh);
-    add_common_installer_args(
-        &mut command,
-        artifacts,
-        paths,
-        install_dir,
-        mark_offline_source,
-    );
-    command.arg("--stage").arg(stage).arg("--json");
-    command_status(command, &format!("Hermes 安装阶段 {stage}"))?;
-    *completed_steps += 1;
-    report(
-        reporter,
-        stage,
-        BootstrapProgressState::Completed,
-        *completed_steps,
-        total_steps,
-        format!("{title}完成"),
-        None,
-    );
-    Ok(())
-}
-
-#[cfg(not(target_os = "windows"))]
-fn initialize_offline_git(stage: &Path) -> Result<()> {
-    // 干净 macOS 可能尚未安装 Xcode Command Line Tools；离线包有自己的版本
-    // 文件，运行并不依赖 git，因此这里只做 future-update 的 best effort。
-    let initialized = crate::services::process::background_command("git")
-        .arg("init")
-        .arg(stage)
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false);
-    if !initialized {
-        log::warn!("无法初始化离线 Hermes git 元数据；不影响当前运行，未来更新需先安装 git");
-        return Ok(());
-    }
-    let _ = crate::services::process::background_command("git")
-        .arg("-C")
-        .arg(stage)
-        .arg("config")
-        .arg("core.autocrlf")
-        .arg("false")
-        .status();
-    let _ = crate::services::process::background_command("git")
-        .arg("-C")
-        .arg(stage)
-        .arg("remote")
-        .arg("add")
-        .arg("origin")
-        .arg("https://github.com/NousResearch/hermes-agent.git")
-        .status();
-    Ok(())
-}
-
-/// 将离线包中的源码目录展平到 staging 根目录。
-///
-/// 历史包有两种布局：`pyproject.toml` 在归档根目录，或位于
-/// `hermes-agent-src/pyproject.toml`。不能固定 `--strip-components`，否则
-/// 两种包中必有一种会被解压到错误层级。
 #[cfg(not(target_os = "windows"))]
 fn flatten_hermes_source_stage(stage: &Path) -> Result<()> {
     if stage.join("pyproject.toml").is_file() {
@@ -241,43 +131,34 @@ pub(crate) fn prepare_source_stage(
         BootstrapProgressState::Running,
         *completed_steps,
         total_steps,
-        if artifacts.hermes_tar.is_some() {
-            "正在同盘解压 Hermes 运行环境"
-        } else {
-            "正在下载固定版本的 Hermes 源码"
-        },
+        "正在同盘解压 Hermes 运行环境",
         None,
     );
 
-    if let Some(archive) = &artifacts.hermes_tar {
-        std::fs::create_dir(&stage).with_context(|| format!("创建 staging {}", stage.display()))?;
-        let mut command = crate::services::process::background_command("tar");
-        command
-            .arg("-xzf")
-            .arg(archive)
-            .arg("-C")
-            .arg(&stage);
-        command_status(command, "解压 hermes-agent-bundle.tar.gz")?;
-        flatten_hermes_source_stage(&stage)?;
-        // 发布归档在构建/签名流水线中已校验，但部分历史包没有携带版本文件，
-        // 也没有 .git。解压成功并确认源码骨架后，由本客户端原子落同源 pin，
-        // 后续健康检查和升级判断不再把它误判成“版本未知”。
-        let version = format!("{}\n{}\n", hermes_pinned_tag(), hermes_pinned_commit());
-        write_bytes_atomic(&stage.join(".catfish-hermes-version"), version.as_bytes())
-            .context("写离线 Hermes 版本标记")?;
-        initialize_offline_git(&stage)?;
-    } else {
-        // 在线路径也先 clone 到同盘 staging，依赖尚未写入；失败不会碰旧版本。
-        let mut command = crate::services::process::background_command("bash");
-        command.arg(&artifacts.install_sh);
-        add_common_installer_args(&mut command, artifacts, paths, &stage, false);
-        command
-            .arg("--commit")
-            .arg(hermes_pinned_commit())
-            .arg("--stage")
-            .arg("repository")
-            .arg("--json");
-        command_status(command, "下载固定版本 Hermes 源码")?;
+    // 10/14 (hermes v0.22.0): 只认安装包里带的源码归档。原来缺归档时走上游 install.sh 联网 clone,
+    // 上游安装器整个换了 (见 hermes_install_native.rs), 那条路已经不存在; 也不再 `git init` ——
+    // v0.22 看到 .git 会把安装目录认领成自更新安装 (启动时联网下 Python 3.14 另建环境)。
+    let archive = artifacts
+        .hermes_tar
+        .as_ref()
+        .context("安装包里没有 hermes-agent-bundle.tar.gz (Companion 安装包不完整)")?;
+    std::fs::create_dir(&stage).with_context(|| format!("创建 staging {}", stage.display()))?;
+    let mut command = crate::services::process::background_command("tar");
+    command
+        .arg("-xzf")
+        .arg(archive)
+        .arg("-C")
+        .arg(&stage);
+    command_status(command, "解压 hermes-agent-bundle.tar.gz")?;
+    flatten_hermes_source_stage(&stage)?;
+    // 发布归档在构建/签名流水线中已校验，但部分历史包没有携带版本文件。
+    // 解压成功并确认源码骨架后，由本客户端原子落同源 pin，
+    // 后续健康检查和升级判断不再把它误判成“版本未知”。
+    let version = format!("{}\n{}\n", hermes_pinned_tag(), hermes_pinned_commit());
+    write_bytes_atomic(&stage.join(".catfish-hermes-version"), version.as_bytes())
+        .context("写离线 Hermes 版本标记")?;
+    if let Some(problem) = super::hermes_install_health::stamp_problem(&stage) {
+        anyhow::bail!("Hermes 源码归档不对: {problem}");
     }
 
     if installed_hermes_commit_at(&stage).as_deref() != Some(hermes_pinned_commit()) {
@@ -289,12 +170,7 @@ pub(crate) fn prepare_source_stage(
     if !stage.join("pyproject.toml").is_file() {
         anyhow::bail!("staging 缺 pyproject.toml: {}", stage.display());
     }
-    let source_kind = if artifacts.hermes_tar.is_some() {
-        b"offline\n".as_slice()
-    } else {
-        b"online\n".as_slice()
-    };
-    std::fs::write(stage.join(STAGE_READY_MARKER), source_kind).context("写 staging 完成标记")?;
+    std::fs::write(stage.join(STAGE_READY_MARKER), b"offline\n").context("写 staging 完成标记")?;
     write_transaction(paths, "staged", Some(&stage), None, false)?;
 
     *completed_steps += 1;
@@ -457,6 +333,14 @@ pub(crate) fn rollback_install(paths: &BootstrapPaths, backup: Option<&PreviousI
 ///
 /// catfish_tools_browser.py:46 写明「不装 chromium binary (Playwright 默认会
 /// 装 ~150MB), 用 connect_over_cdp 复用员工 Chrome」。只要 Python 包。
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn install_hermes_deps(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths) -> Result<()> {
+    // 10/14: 额外包并进了 hermes 源码里的 wheelhouse, 跟 hermes 依赖同一份钉版本清单。
+    // 修复 (hermes 健康但额外包缺) 就是把整份清单再装一遍 —— 装过的 uv 秒过。
+    super::hermes_install_native::install_python_deps(artifacts, paths)
+}
+
+#[cfg(target_os = "windows")]
 pub(crate) fn install_hermes_deps(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths) -> Result<()> {
     let Some(tar) = artifacts.deps_tar.as_ref() else {
         log::warn!(

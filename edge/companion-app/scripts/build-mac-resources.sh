@@ -1,12 +1,13 @@
 #!/bin/bash
 # build-mac-resources.sh · BL-MAC-INSTALL-NODE+CHROMIUM-BUNDLE (7/17)
 #
-# 一键打全 mac dmg 用的 resources/mac/ 6 artifacts:
-#   1. install.sh            (patch offline mode · 7 处 marker)
-#   2. uv                    (下 astral.sh · macOS arm64 or x64)
-#   3. cpython-3.11.15-embed.tar.gz  (下 python-build-standalone · macOS arm64 or x64)
-#   4. hermes-agent-bundle.tar.gz    (clone + tar 打包 · 10/9 起不含 node_modules)
-#   5. chromium-embed.tar.gz (npx playwright install chromium + tar 打包)
+# 一键打全 mac dmg 用的 resources/mac-<arch>/ 运行时 (10/14 起, hermes v0.22.0):
+#   1. uv                            (钉 .uv-version, 跟上游 pm/lock.json 一致)
+#   2. cpython-3.14.7-embed.tar.gz   (python-build-standalone 20260901 · macOS arm64 or x64)
+#   3. hermes-agent-bundle.tar.gz    (源码 + catfish 插件 + wheelhouse/ + catfish-requirements.txt
+#                                     + install-stamp.json; 不含 node_modules)
+#   4. chromium-embed.tar.gz         (wheelhouse 里那版 Python playwright 下的 Chromium)
+# 不再有 install.sh (上游安装器整个换了, Companion 自己装) 和 hermes-deps-dist (额外包并进 wheelhouse)。
 #
 # 10/9 瘦身: 不再打 node-embed.tar.gz, hermes 归档里也不再有 node_modules。
 # 员工机上 hermes 只跑 Python 网关 + 鲶鱼工具, 实测 (10/9, 去掉 node_modules 且 PATH
@@ -15,7 +16,7 @@
 # 的 browser_* 靠 agent-browser, 而包里的 agent-browser 从来没有 .bin 链接、hermes
 # 找不到它 (现网日志 check_browser_navigate_requirements 一直 False), 网关 BL-FIX4
 # 也会在 catfish_browser_* 在场时把那一族丢掉 —— 那 376MB node_modules + 58MB Node
-# 在员工机上是纯负担。Node 只在**构建机**上用一次: [6b] 的 npx playwright 下 Chromium。
+# 在员工机上是纯负担。10/14 起构建机上也不再需要 Node。
 #
 # 用法:
 #   # 打 Apple Silicon (aarch64) 资源:
@@ -38,18 +39,16 @@ fi
 
 # arch mapping
 if [ "$ARCH" = "aarch64" ]; then
-    NODE_ARCH="arm64"
     UV_ARCH="aarch64-apple-darwin"
     PY_ARCH="aarch64-apple-darwin"
 else
-    NODE_ARCH="x64"
     UV_ARCH="x86_64-apple-darwin"
     PY_ARCH="x86_64-apple-darwin"
 fi
 
 echo "==============================================="
 echo "  build-mac-resources.sh · arch=$ARCH"
-echo "  Node arch=$NODE_ARCH · uv=$UV_ARCH · py=$PY_ARCH"
+echo "  uv=$UV_ARCH · py=$PY_ARCH"
 echo "==============================================="
 
 # ─── 下载 helper · retry + gzip verify + ghfast.top 代理 ─────
@@ -153,7 +152,7 @@ HERMES_COMMIT=$(cat "$COMPANION/.hermes-git-commit" | tr -d '[:space:]')
 mkdir -p "$RESOURCES"
 cd "$COMPANION"
 
-# ─── 1. patch install.sh · offline mode ─────────────────
+# ─── 1. 取 hermes 源码 + 拷 catfish 插件 ─────────────────
 
 HERMES_SRC="/tmp/hermes-agent-src-$ARCH"
 
@@ -187,84 +186,14 @@ bash "$COMPANION/scripts/build-email-resource.sh" "$ARCH" "$RESOURCES" || exit 1
 # 安全导出文件读取器：独立零依赖 wheel，避免员工机依赖系统 Python。
 bash "$COMPANION/scripts/build-wechat-reader-resource.sh" "$ARCH" "$RESOURCES"
 
-echo ""
-echo "=== [2/6] Patch install.sh offline mode ==="
-python3 ../hermes-fork/patch_install_sh_offline.py \
-    --input "$HERMES_SRC/scripts/install.sh" \
-    --output "$RESOURCES/install.sh"
-chmod +x "$RESOURCES/install.sh"
-
-# ─── 3. Node.js darwin binary ────────────────────────────
-
-# Hermes v2026.8.31 的 engines.node 是
-# `^22.22.0 || ^24.11.0 || >=26.0.0`, 且上游 .npmrc 开启了 engine-strict。
-# 不能继续沿用 v22.23.2: npm ci 会直接以 EBADENGINE 失败。
-#
-# 选 Node v26.8.1: 它满足 Hermes 的 >=26.0.0 分支, Node 官方提供
-# darwin-arm64 / darwin-x64 二进制, 且不会依赖员工机器预装 Node。
-NODE_VERSION="26.8.1"
-NODE_FNAME="node-v${NODE_VERSION}-darwin-${NODE_ARCH}.tar.gz"
-NODE_URL="https://nodejs.org/dist/v${NODE_VERSION}/${NODE_FNAME}"
-
-# 上面那个版本号是手写的, 而 hermes 每次升级都可能再抬 engines。与其指望下次
-# 有人记得改, 不如**当场跟打包用的这份 hermes 源码对一遍** —— 源码就在
-# $HERMES_SRC, 零成本, 一秒。
-#
-# 不实现完整 semver range 解析 (那要拉依赖), 只解 `>=X.Y.Z` 这一种最常见的形式;
-# 解不出来就跳过并说一声, 不拦构建。
-if [ -f "$HERMES_SRC/package.json" ]; then
-    NODE_FLOOR="$(python3 -c '
-import json, re, sys
-try:
-    eng = json.load(open(sys.argv[1])).get("engines", {}).get("node", "")
-except Exception:
-    sys.exit(0)
-m = re.search(r">=\s*(\d+)\.(\d+)\.(\d+)", eng or "")
-if m: print(".".join(m.groups()))
-' "$HERMES_SRC/package.json")"
-    if [ -n "$NODE_FLOOR" ]; then
-        # sort -V: 版本号排序。最小的那个若不是 floor, 说明 NODE_VERSION < floor
-        if [ "$(printf '%s\n%s\n' "$NODE_FLOOR" "$NODE_VERSION" | sort -V | head -1)" != "$NODE_FLOOR" ]; then
-            echo "❌ 内嵌的 Node $NODE_VERSION 低于 hermes 要求的 >=$NODE_FLOOR"
-            echo "   ($HERMES_SRC/package.json 的 engines.node)"
-            echo "   上游 .npmrc 有 engine-strict=true —— 这是硬失败, npm ci 会报 EBADENGINE。"
-            echo "   修: 把本脚本的 NODE_VERSION 抬到 >=$NODE_FLOOR 的一个真实发布版本。"
-            exit 1
-        fi
-        echo "  ✓ Node $NODE_VERSION 满足 hermes 要求的 >=$NODE_FLOOR"
-    else
-        echo "  ⚠ 解不出 engines.node (非 '>=X.Y.Z' 形式?), 跳过 Node 版本下限校验"
-    fi
-fi
-
-echo ""
-echo "=== [3/6] Download Node.js $NODE_VERSION darwin-$NODE_ARCH ==="
-# Node.js 官方源 nodejs.org 不走 GH proxy (nodejs.org 直接 CDN 快)
-NODE_TMP="/tmp/$NODE_FNAME"
-# 下载 (多源 + 低速超时 + sha256) 抽到隔壁; source 而不是子进程 —— 它用上面这些变量。
-. "$COMPANION/scripts/fetch-node-embed.sh"
-# 10/9: 不再打进包 (见文件头), 只在构建机上解开给 [6b] 的 npx playwright 用。
-# 上一次构建留下的 node-embed.tar.gz 必须删掉 —— 否则 tauri 照 resources 映射打进去。
-rm -f "$RESOURCES/node-embed.tar.gz"
-
-# 解一份出来给 [6b] 的 npx playwright 用 —— **不能用本机的 node** (8/8)。
-#
-# 打进包的 node_modules 本来就该用打进包的那个 node 装: 员工机跑 26.8.1,
-# 用别的版本装出来的带原生插件的包 (node-pty 这类) ABI 可能对不上, 而那种错
-# 要到员工那头才炸。[5.5] 取 Python wheel 早就是这个做法, Node 这边没跟上。
-#
-# 8/8 当场撞到的表象: 本机 node v25.5.0 (奇数线), npm ci 报
-#     notsup nanoid@6.0.0  Required: ^22 || ^24 || >=26
-NODE_UNPACK="/tmp/catfish-node-unpack-$ARCH"
-rm -rf "$NODE_UNPACK" && mkdir -p "$NODE_UNPACK"
-tar xzf "$NODE_TMP" -C "$NODE_UNPACK" --strip-components=1
-EMBED_NODE_BIN="$NODE_UNPACK/bin"
-[ -x "$EMBED_NODE_BIN/node" ] && [ -x "$EMBED_NODE_BIN/npm" ] || {
-    echo "❌ 解出来的 node 里没有 bin/node 或 bin/npm: $EMBED_NODE_BIN"
-    exit 1
-}
-echo "  ✓ 嵌入 node 解到 $EMBED_NODE_BIN"
-echo "    node $("$EMBED_NODE_BIN/node" --version) · npm $(PATH="$EMBED_NODE_BIN:$PATH" npm --version)"
+# 10/14 (hermes v0.22.0): 不再打 install.sh, 也不再下 Node。
+#   · 上游 install.sh 整个重写成"拿 uv + Python → 交给 hermes pm 联网装", 离线补丁的锚点全部对不上;
+#     Companion 自己装 (src-tauri/src/commands/hermes_install_native.rs), 用下面 [5.5] 打进源码树的 wheelhouse。
+#   · Node 原来只给 [6b] 的 npx playwright 下 Chromium 用; 现在用 wheelhouse 里那个 Python playwright 自己下,
+#     浏览器版本跟员工机上装的 playwright 天然一致 (原来 npm 1.60.0 / Python 1.62.0 两个版本对不上)。
+# 上一次构建留下的旧产物必须删掉 —— 否则 tauri 照 resources 映射打进去。
+rm -f "$RESOURCES/install.sh" "$RESOURCES/node-embed.tar.gz" "$RESOURCES/hermes-deps-dist.tar.gz" \
+      "$RESOURCES"/cpython-3.11.*-embed.tar.gz
 
 # ─── 4. uv binary ───────────────────────────────────────
 
@@ -283,9 +212,12 @@ cp "$UV_EXTRACT/uv-$UV_ARCH/uv" "$RESOURCES/uv"
 chmod +x "$RESOURCES/uv"
 echo "  OK $RESOURCES/uv ($(ls -lh "$RESOURCES/uv" | awk '{print $5}'))"
 
-# ─── 5. cpython 3.11.15 ─────────────────────────────────
+# ─── 5. cpython 3.14.7 ─────────────────────────────────
 
-PYTHON_VERSION="3.11.15"
+# 10/14: 3.11.15 → 3.14.7。hermes v0.22.0 的核心依赖全部带 `python_version >= '3.14'` 标记,
+# 3.11 上 pip install 一个依赖都不装 (实测)。3.14.7+20260901 跟上游 pm/lock.json 钉的是同一份,
+# 自带 SQLite 3.53.1 (不在 WAL-reset 漏洞范围内, 下面 [5.5] 的闸照样复核)。
+PYTHON_VERSION="3.14.7"
 # 8/8: 20260623 → 20260807, 为的是 **SQLite**, 不是 Python 本身。
 # 同一个 CPython 3.11.15, 不同的 pbs 发布链的 SQLite 不一样: 前者 3.50.4
 # (在 WAL-reset 损坏漏洞范围内), 后者 3.53.1。
@@ -297,7 +229,7 @@ PYTHON_VERSION="3.11.15"
 # 20260807 是从实际修好的 runtime 的 BUILD 文件读出来的, 不是查文档猜的:
 #   ~/.hermes/hermes-agent/.hermes-runtime/python/generation-*/cpython-3.11.15-*/BUILD
 # 换 tag 换出有洞的版本, 下面 [5.5] 的闸会当场红。
-PYTHON_BUILD_TAG="20260807"
+PYTHON_BUILD_TAG="20260901"
 PY_FNAME="cpython-${PYTHON_VERSION}+${PYTHON_BUILD_TAG}-${PY_ARCH}-install_only.tar.gz"
 PY_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_BUILD_TAG}/${PY_FNAME}"
 
@@ -335,151 +267,58 @@ echo "  OK cpython-embed.tar.gz ($(ls -lh "$RESOURCES/cpython-${PYTHON_VERSION}-
 # 所以解压刚下好的 cpython, 用它自己的 pip download。Python 版本标签
 # 自然对; 平台只再压一下最低系统版本 (见下面 9/28 那段)。
 echo ""
-echo "=== [5.5/6] 取 hermes venv 额外依赖 (分词 / 浏览器 / 文件监听 / 上传文件解析) ==="
-DEPS_TAR="$RESOURCES/hermes-deps-dist.tar.gz"
-DEPS_STAGE="/tmp/catfish-hermes-deps-$ARCH"
+echo "=== [5.5/6] hermes 离线 wheelhouse + 安装戳 (打进源码树, 跟 hermes-agent-bundle 一起走) ==="
 PY_UNPACK="/tmp/catfish-py-unpack-$ARCH"
-rm -rf "$DEPS_STAGE" "$PY_UNPACK" && mkdir -p "$DEPS_STAGE" "$PY_UNPACK"
+rm -rf "$PY_UNPACK" && mkdir -p "$PY_UNPACK"
 tar xzf "$PY_TMP" -C "$PY_UNPACK" || { echo "❌ 解压 cpython 失败"; exit 1; }
 EMBED_PY="$PY_UNPACK/python/bin/python3"
 [ -x "$EMBED_PY" ] || { echo "❌ 找不到嵌入解释器: $EMBED_PY"; exit 1; }
-echo "  用嵌入解释器取 wheel: $("$EMBED_PY" -V)"
+echo "  嵌入解释器: $("$EMBED_PY" -V)"
 
 # 包里这个解释器的 SQLite 不许有 WAL-reset 漏洞 (8/8)。理由和判据见那个脚本。
 echo "  → 复核内嵌 Python 的 SQLite..."
 "$EMBED_PY" "$COMPANION/scripts/check-embedded-sqlite.py" || exit 1
 
-# jieba 和 playwright 必须分开取 —— 8/5 实测:
-#
-#     ERROR: Could not find a version that satisfies the requirement jieba
-#            (from versions: none)
-#
-# 原因不是没网 (同一次运行里 node / uv / cpython 三个 curl 全部成功)。
-# **jieba 在 PyPI 上只发 sdist, 一个 wheel 都没有** (0.42.1 只有
-# jieba-0.42.1.tar.gz)。加了 --only-binary=:all: 就等于告诉 pip "只要 wheel",
-# 候选自然是空集。原来那句 "构建机需要外网" 的报错把人往完全错的方向带。
-#
-#   · playwright + greenlet: 编译产物, 必须是**跟内嵌 3.11.15 对齐**的 wheel
-#     → --only-binary=:all:, 用嵌入解释器取
-#   · jieba: 纯 Python, 我们自己 pip wheel 现打一个 py3-none-any 的轮子。
-#     不能把 sdist 丢给员工机 —— 装的时候 uv --no-index 要构建 sdist, 得有
-#     setuptools 后端, 离线环境下拿不到, 又是一个"到现场才炸"。
-#     (清单里 jieba 那行的 `sdist` 标记就是这个意思。)
-#
-# 9/28: 包清单收进 src-tauri/hermes-extra-packages.txt (Companion 装机/自检读同一份),
-# 取 wheel 和「每个包都得是 .whl」的检查都在 fetch_hermes_deps.py 里 —— Windows 两处
-# 打包调的是同一个脚本。--platform 按安装包支持的最低系统取 (tauri.conf.json 的
-# minimumSystemVersion 10.15; Apple 芯片最低就是 11): 不限的话新系统构建机会取到
-# 只支持 macOS 13+ 的 pypdfium2, 老系统员工机上一个装不上就全部装不上。
-case "$ARCH" in
-    aarch64) DEPS_PLATFORM="macosx_11_0_arm64" ;;
-    x64)     DEPS_PLATFORM="macosx_10_15_x86_64" ;;
-esac
-"$EMBED_PY" "$COMPANION/scripts/fetch_hermes_deps.py" "$DEPS_STAGE" --platform "$DEPS_PLATFORM" -q || {
-    echo "❌ 取 hermes 额外依赖失败 (需要外网; 原因见上面的报错)"
+# hermes 依赖 (上游 uv.lock, --extra all) + catfish 额外包 (src-tauri/hermes-extra-packages.txt)
+# 按目标平台一起钉死版本 + sha256, 取 wheel; C 扩展没有 3.14 轮子的 (watchdog) 用嵌入解释器现编,
+# 所以一定要用**目标架构**的 EMBED_PY 跑 (x64 在 Apple 芯片上走 Rosetta)。原理见脚本文件头。
+"$EMBED_PY" "$COMPANION/scripts/build_hermes_wheelhouse.py" \
+    --src "$HERMES_SRC" --uv "$RESOURCES/uv" --target "$UV_ARCH" --python "$EMBED_PY" || {
+    echo "❌ 打 wheelhouse 失败 (需要外网; 原因见上面的报错)"
     exit 1
 }
-tar czf "$DEPS_TAR" -C "$DEPS_STAGE" .
-echo "  OK hermes-deps-dist.tar.gz ($(ls -lh "$DEPS_TAR" | awk '{print $5}')) · $(find "$DEPS_STAGE" -maxdepth 1 -name '*.whl' | wc -l | tr -d ' ') 个 wheel"
-rm -rf "$PY_UNPACK"
+# 安装戳: updateMechanism=external —— 告诉 hermes"更新归 Companion 管"。没有它 (或者有个空 .git)
+# hermes v0.22 会把 ~/.hermes/hermes-agent 认领成自更新安装, 每次启动去联网下 Python 3.14 另建环境。
+"$EMBED_PY" "$HERMES_SRC/scripts/write_install_stamp.py" --output "$HERMES_SRC/install-stamp.json" \
+    --commit "$HERMES_COMMIT" --branch main --base-version "${HERMES_TAG#v}" --distance 0 \
+    --source catfish --update-mechanism external || { echo "❌ 写安装戳失败"; exit 1; }
 python3 "$(dirname "$0")/build_edge_runtime.py" "$RESOURCES/catfish-edge-runtime.tar.gz" || { echo "❌ edge-runtime 打包失败 (tool-bridge/local-search/文件解析脚本, 见 edge_runtime.rs)"; exit 1; }
 
-# ─── 6. hermes-agent bundle · npm ci · npx playwright install chromium · tar 打包 ─────
+# ─── 6. Chromium (Python playwright 自己下) · tar 打包 ─────
 
 echo ""
-echo "=== [6a/6] 不装 hermes 的 node_modules (10/9 起, 见文件头) ==="
-# [6b] 的 npx 用**嵌入的** node, 不是本机的 (理由见 [3])。
-export PATH="$EMBED_NODE_BIN:$PATH"
-echo "  构建期 node $(node --version) / npm $(npm --version)  (只给 [6b] 下 Chromium 用, 不进包)"
-
-echo ""
-echo "=== [6b/6] npx playwright install chromium (arch=$NODE_ARCH) ==="
+echo "=== [6b/6] playwright install chromium (arch=$ARCH) ==="
+# 10/14: 用 wheelhouse 里那一版 Python playwright 下, 不再用 npx (见 [2] 那段)。
+# 版本由 hermes-extra-packages.txt 里钉的 playwright 决定 —— 换浏览器版本 = 改那一行, 是有意识的动作。
+PW_VENV="/tmp/catfish-pw-venv-$ARCH"
+rm -rf "$PW_VENV"
+"$RESOURCES/uv" venv -q "$PW_VENV" --python "$EMBED_PY"
+VIRTUAL_ENV="$PW_VENV" "$RESOURCES/uv" pip install -q --offline --no-index \
+    --find-links "$HERMES_SRC/wheelhouse" --require-hashes -r "$HERMES_SRC/catfish-requirements.txt"
+PW_VERSION="$("$PW_VENV/bin/python" -c 'import importlib.metadata as m; print(m.version("playwright"))')"
+echo "  playwright $PW_VERSION (跟员工机上装的同一版)"
 unset PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD  # 允许下载 chromium
-#
-# ⚠ 7/30: 必须用**每架构独立的下载目录**, 不能用默认的
-#   ~/Library/Caches/ms-playwright/。
-#
-# 原因: Playwright 的目录名是 chromium-<revision>, **不带架构**。两个架构的
-# 构建共用那一个缓存, 于是:
-#     打 aarch64 → 下载 arm64 到 chromium-1234
-#     打 x64     → playwright 看到 chromium-1234 已在 → 直接跳过下载
-#                  → 6c 把 arm64 的 chromium 打进了 x64 的包
-#
-# 这个错法跟 7/16 那次 uv 装错架构是同一类, 但更隐蔽: 连"忘了还原"这种人为
-# 动作都不需要, **只要两个架构先后各打一次就必然发生**。而且方向不固定 ——
-# 谁后打谁中招, 先打的那个反而是对的。
-#
-# 7/30 打 x64 时被 verify-app-arch.sh 拦下才发现。它拦住了, 但那是在
-# cargo build 跑完之后, 白等一分多钟; 而且**同一次污染 aarch64 包时它拦不住**
-# (缓存恰好就是 arm64)。所以根因要在这里修, 不能只靠下游校验。
-#
-# 代价: 每个架构各下一次 chromium (~150MB), 不再复用缓存。换来的是
-# "打哪个架构就下哪个架构", 与本机装没装过 playwright 无关。
-PW_CACHE="/tmp/catfish-pw-$ARCH"
-echo "  下载目录: $PW_CACHE (每架构独立, 不碰 ~/Library/Caches/ms-playwright)"
+PW_CACHE="/tmp/catfish-pw-$ARCH-$PW_VERSION"
+echo "  下载目录: $PW_CACHE (每架构 / 每版本独立, 不碰 ~/Library/Caches/ms-playwright)"
 mkdir -p "$PW_CACHE"
-#
-# ⚠ 为什么不用 `arch -x86_64 npx` (7/30 查实, 别改回去)
-#
-# 在 Apple Silicon 上打 x64 包时, 老写法是 `arch -x86_64 npx playwright install`,
-# 指望让 node 以 Intel 身份跑、于是 playwright 下 x64 的 chromium。**这条路
-# 根本不通。** 看 playwright 判定平台的源码 (playwright-core, 1.49 到 1.60
-# 逐字未变, packages/utils/hostPlatform.ts):
-#
-#     function calculatePlatform() {
-#       if (process.env.PLAYWRIGHT_HOST_PLATFORM_OVERRIDE) { ...直接返回... }
-#       ...
-#       if (os.cpus().some((cpu) => cpu.model.includes("Apple")))
-#         macVersion += "-arm64";
-#
-# 它在 macOS 上是靠 **CPU 型号字符串** 判架构的, 不是 process.arch。
-# 即使 node 被 Rosetta 翻译成 x86_64 在跑, os.cpus() 依然报 "Apple M2" ——
-# 因为机器本身就是 Apple Silicon。所以 `-arm64` 后缀**必然**被加上,
-# 在 M 系列机器上永远下不到 x64 chromium。
-#
-# 这就是 7/30 那次的现象: 换了全新的空目录, 下下来的还是 arm64。
-#
-# 正解是 playwright 官方的覆盖开关, 也就是上面那个函数的第一条语句。
-# 取值必须是它下载表里存在的键 —— 表里 mac 只有 mac10.13/10.14/10.15、
-# mac11..mac15、mac26, **中间 mac16~mac25 不存在**, 写错会直接 404。
-# mac15 / mac15-arm64 在新老版本里都在, 且 mac15 与 mac26 指向的是同一个
-# chrome-mac-x64.zip, 所以选 mac15 最稳。
-#
-# 注意: calculatePlatform() 只在模块初始化时跑一次, 所以必须在进程启动前
-# 就把环境变量给上 (下面这种前缀写法可以)。
-#
-# 两个架构都显式指定, 不留"靠自动探测"的那一半 —— 探测对不对不该是运气。
 case "$ARCH" in
     aarch64) PW_PLATFORM="mac15-arm64" ;;
     x64)     PW_PLATFORM="mac15" ;;
 esac
 echo "  PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=$PW_PLATFORM"
-echo "  (playwright 会打一句 'your OS is not officially supported ... downloading"
-echo "   fallback build for $PW_PLATFORM' · 用 override 时必然出现, 正常)"
-# ⚠ playwright 版本必须钉死, 不能用 latest (7/30)
-#
-# 原本是 `npx --yes playwright install chromium` —— 不带版本号, npx 每次拉
-# latest。而**装进包的 chromium 版本是由 playwright 版本决定的**:
-#     playwright 1.60.0 → Chrome for Testing 151.0.7922.34 (chromium v1234)
-# 换个 playwright 版本就换个 chromium, 而脚本不会有任何提示。
-#
-# 后果有三层:
-#   1. 同一份代码不同时间打出的包内容不同 —— 出问题时没法复现"上个月那个包"
-#   2. 员工拿到的浏览器版本静默变化, 没人测过也没人知道换了
-#   3. 本脚本有两处依赖 playwright 的内部约定, 会跟着漂:
-#        · 下面 [6c] 的目录名校验依赖 chrome-mac-x64 / chrome-mac-arm64 布局
-#        · 上面的 mac15 依赖它下载表里有这个键
-#      查过 1.49.1 与 1.60.0 这两处一致, 但 1.60 已经把 lib 打成 bundle 了
-#      (老的 lib/utils/hostPlatform.js 路径没了), 说明它内部结构会动。
-#
-# 钉在这个版本 = 今天行为不变 (latest 现在就是 1.60.0), 变的是三个月后
-# 再打还是同一个包。要升 chromium 就改这个数字 —— 让它成为一个**有意识的
-# 动作**, 而不是每次打包随机发生。
-PW_VERSION="1.60.0"
-echo "  playwright@$PW_VERSION (钉死 · 决定 chromium 版本)"
 PLAYWRIGHT_BROWSERS_PATH="$PW_CACHE" \
 PLAYWRIGHT_HOST_PLATFORM_OVERRIDE="$PW_PLATFORM" \
-    npx --yes "playwright@$PW_VERSION" install chromium
+    "$PW_VENV/bin/python" -m playwright install chromium || { echo "❌ 下 Chromium 失败"; exit 1; }
 
 echo ""
 echo "=== [6c/6] tar pack chromium-embed · from $PW_CACHE ==="
@@ -646,7 +485,7 @@ echo "  ✓ exclude 全部生效 (0 条 node_modules) · 归档 $(wc -l < "$_HLI
 
 echo ""
 echo "==============================================="
-echo "  DONE · $RESOURCES · 5 runtime artifacts (10/9 起不含 node-embed):"
+echo "  DONE · $RESOURCES · runtime artifacts (10/14 起: uv / cpython-3.14.7 / hermes bundle 含 wheelhouse / chromium):"
 echo "==============================================="
 ls -lh "$RESOURCES/"
 
@@ -673,7 +512,7 @@ echo "── 收尾清理 /tmp ──"
 # EMAIL_STAGE 不在这里: 9/28 邮件那段拆到 build-email-resource.sh (子进程),
 # 变量跟着走了, 那边自己删自己的 stage。这里留着引用的话 set -u 直接退出 ——
 # 产物其实都已经打好, 但 /tmp 那 1G+ 没清、退出码是 1、"下一步"也不打印。
-for d in "$HERMES_SRC" "$DEPS_STAGE" "$PY_UNPACK"; do
+for d in "$HERMES_SRC" "$PY_UNPACK" "$PW_VENV"; do
     [ -d "$d" ] || continue
     sz=$(du -sh "$d" 2>/dev/null | cut -f1)
     rm -rf "$d" && echo "  ✓ 删 $d ($sz)"

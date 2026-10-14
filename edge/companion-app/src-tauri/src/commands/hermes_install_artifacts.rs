@@ -11,8 +11,11 @@ use std::path::{Path, PathBuf};
 /// 10/9: 去掉了 node-embed.tar.gz —— 员工机运行时不需要 Node (hermes 只跑 Python
 /// 网关; 鲶鱼浏览器走 Python Playwright + chromium-embed), 见
 /// scripts/build-mac-resources.sh 文件头的实测记录。
+/// 10/14 (hermes v0.22.0): Python 3.11.15 → 3.14.7 (上游依赖只在 3.14 上装); hermes 归档里
+/// 带 wheelhouse/ + catfish-requirements.txt + install-stamp.json, Companion 自己装
+/// (hermes_install_native.rs), 不再有 install.sh。
 pub(crate) const RUNTIME_ARCHIVES: [&str; 3] = [
-    "cpython-3.11.15-embed.tar.gz",
+    "cpython-3.14.7-embed.tar.gz",
     "hermes-agent-bundle.tar.gz",
     "chromium-embed.tar.gz",
 ];
@@ -29,6 +32,8 @@ pub(crate) const CATFISH_EMAIL_ARCHIVE: &str = "catfish-email-dist.tar.gz";
 pub(crate) const CATFISH_WECHAT_READER_ARCHIVE: &str = "catfish-wechat-reader-dist.tar.gz";
 /// hermes venv 的额外 Python 依赖 (jieba / playwright + 它们的依赖)。
 /// 8/5: 装机流程里这两个的安装语句一直是 0 处 —— 见 install_hermes_deps。
+/// 10/14 起 macOS 不再用它 (额外包并进 hermes 归档的 wheelhouse); Windows 改造前还在用。
+#[cfg(any(target_os = "windows", test))]
 pub(crate) const HERMES_DEPS_ARCHIVE: &str = "hermes-deps-dist.tar.gz";
 
 /// hermes venv 里要装的额外包 —— **唯一**清单在 `src-tauri/hermes-extra-packages.txt`,
@@ -54,7 +59,8 @@ fn hermes_extra_entries() -> impl Iterator<Item = (&'static str, &'static str)> 
         })
 }
 
-/// `uv pip install` 的需求列表 (如 `xlrd<2`)。
+/// `uv pip install` 的需求列表 (如 `xlrd<2`)。10/14 起只有 Windows 装机还在用 (mac 走 wheelhouse 清单)。
+#[cfg(any(target_os = "windows", test))]
 pub(crate) fn hermes_extra_packages() -> Vec<&'static str> {
     hermes_extra_entries().map(|(requirement, _)| requirement).collect()
 }
@@ -69,8 +75,6 @@ pub(crate) fn hermes_extra_import_check() -> String {
 pub(crate) struct RuntimeArtifacts {
     #[cfg(not(target_os = "windows"))]
     pub(crate) dir: PathBuf,
-    #[cfg(any(not(target_os = "windows"), test))]
-    pub(crate) install_sh: PathBuf,
     pub(crate) uv: PathBuf,
     #[cfg(any(not(target_os = "windows"), test))]
     pub(crate) python_tar: Option<PathBuf>,
@@ -78,7 +82,8 @@ pub(crate) struct RuntimeArtifacts {
     pub(crate) hermes_tar: Option<PathBuf>,
     #[cfg(any(not(target_os = "windows"), test))]
     pub(crate) chromium_tar: Option<PathBuf>,
-    /// hermes venv 额外依赖包 (8/5)。
+    /// hermes venv 额外依赖包 (8/5)。10/14 起只有 Windows 用。
+    #[cfg(any(target_os = "windows", test))]
     pub(crate) deps_tar: Option<PathBuf>,
     /// catfish-email 源码包 (7/30)。
     ///
@@ -98,8 +103,6 @@ impl RuntimeArtifacts {
             "uv"
         };
         Self {
-            #[cfg(any(not(target_os = "windows"), test))]
-            install_sh: dir.join("install.sh"),
             uv: dir.join(uv_name),
             #[cfg(any(not(target_os = "windows"), test))]
             python_tar: usable_artifact(&dir.join(RUNTIME_ARCHIVES[0])),
@@ -109,6 +112,7 @@ impl RuntimeArtifacts {
             chromium_tar: usable_artifact(&dir.join(RUNTIME_ARCHIVES[2])),
             email_tar: usable_artifact(&dir.join(CATFISH_EMAIL_ARCHIVE)),
             wechat_reader_tar: usable_artifact(&dir.join(CATFISH_WECHAT_READER_ARCHIVE)),
+            #[cfg(any(target_os = "windows", test))]
             deps_tar: usable_artifact(&dir.join(HERMES_DEPS_ARCHIVE)),
             #[cfg(not(target_os = "windows"))]
             dir,
@@ -134,7 +138,7 @@ impl RuntimeArtifacts {
 
     #[cfg(not(target_os = "windows"))]
     pub(crate) fn validate_bootstrap_tools(&self) -> Result<()> {
-        for path in [&self.install_sh, &self.uv] {
+        for path in [&self.uv] {
             let meta = std::fs::metadata(path)
                 .with_context(|| format!("运行时缺文件: {}", path.display()))?;
             if meta.len() <= 1024 {
@@ -176,8 +180,7 @@ pub(crate) fn resolve_runtime_dir_for_home(
             continue;
         };
         let artifacts = RuntimeArtifacts::from_dir(candidate.clone());
-        let valid = usable_artifact(&artifacts.install_sh).is_some()
-            && usable_artifact(&artifacts.uv).is_some();
+        let valid = usable_artifact(&artifacts.uv).is_some();
         tried.push(format!(
             "{} (tools={}, archives={}/{})",
             candidate.display(),
@@ -201,7 +204,7 @@ pub(crate) fn resolve_runtime_dir_for_home(
     }
 
     anyhow::bail!(
-        "找不到有效运行时目录 (需要 install.sh + uv > 1KB)。已尝试:\n  {}",
+        "找不到有效运行时目录 (需要 uv > 1KB)。已尝试:\n  {}",
         tried.join("\n  ")
     )
 }
@@ -284,7 +287,10 @@ mod extra_packages_tests {
 
     #[test]
     fn 原有的和文件解析要的都在() {
-        let packages = hermes_extra_packages();
+        let packages: Vec<&str> = hermes_extra_packages()
+            .into_iter()
+            .map(|r| r.split(['=', '<', '>']).next().unwrap_or(r))
+            .collect();
         for want in ["jieba", "playwright", "watchdog", "pypdfium2", "openpyxl", "python-docx"] {
             assert!(packages.contains(&want), "{packages:?} 缺 {want}");
         }

@@ -131,7 +131,10 @@ fi
 #
 # 所以这里 fail-loud: 落点跟 pin 对不上就停, 不许打出一个"不知道装的是什么"
 # 的包。同时把实际 commit 记进 bundle, 出问题时能回溯。
-ACTUAL_DESC="$(cd "$HERMES_SRC" && git describe --tags --always 2>/dev/null || echo '<未知>')"
+# 10/14 (v0.22.0): 同一个 commit 上还挂着 rc.2-v0.22.0 / rc.3-v0.22.0 / abandoned-rc.2-v0.22.0,
+# 不加 --match 时 describe 可能挑到其中一个 → 跟 pin 对不上误报。只认正式发布的 vX.Y.Z。
+ACTUAL_DESC="$(cd "$HERMES_SRC" && git describe --tags --exact-match --match 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null \
+    || git describe --tags --always 2>/dev/null || echo '<未知>')"
 ACTUAL_SHA="$(cd "$HERMES_SRC" && git rev-parse HEAD 2>/dev/null || echo '<未知>')"
 if [ "$ACTUAL_DESC" != "$HERMES_TAG" ]; then
     echo ""
