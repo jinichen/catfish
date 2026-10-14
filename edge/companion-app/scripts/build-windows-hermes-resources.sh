@@ -89,7 +89,8 @@ download_with_retry "$(uv_url "$TARGET")" "$WORK/uv-win.zip"
 "$HOST_PY" -m zipfile -e "$WORK/uv-win.zip" "$WORK/uv-win"
 cp "$(find "$WORK/uv-win" -name uv.exe | head -1)" "$RESOURCES/uv.exe"
 download_with_retry "$(pbs_url "$TARGET")" "$RESOURCES/cpython-${PYTHON_VERSION}-embed.tar.gz"
-tar tzf "$RESOURCES/cpython-${PYTHON_VERSION}-embed.tar.gz" | grep -qx "python/python.exe" \
+# Windows 上 tar 列表行尾带 \r (Git Bash / bsdtar), 比对前去掉
+tar tzf "$RESOURCES/cpython-${PYTHON_VERSION}-embed.tar.gz" | tr -d '\r' | grep -qx "python/python.exe" \
     || { echo "❌ Windows Python 包里没有 python/python.exe (pbs 布局变了?)"; exit 1; }
 echo "  OK uv.exe · cpython-${PYTHON_VERSION}-embed.tar.gz"
 
@@ -152,7 +153,7 @@ tar czhf "$BUNDLE" -C "$WORK" \
     hermes-agent-src
 "$HOST_PY" "$REPO/edge/hermes-fork/verify_hermes_bundle.py" --input "$BUNDLE"
 LIST="$WORK/bundle-list.txt"
-tar tzf "$BUNDLE" > "$LIST"
+tar tzf "$BUNDLE" | tr -d '\r' > "$LIST"
 for must in install-stamp.json catfish-requirements.txt pyproject.toml uv.lock pm/lock.json \
             plugins/memory/catfish-memory/__init__.py; do
     grep -qx "hermes-agent-src/$must" "$LIST" || { echo "❌ 归档里缺 $must"; exit 1; }
