@@ -1,0 +1,69 @@
+<!doctype html>
+<!-- 员工接入落地页 (10/14)。微信里 catfish:// 链接点不开, 所以管理员发的是这一页的 http 链接,
+     参数原样带着; 这里拼出 catfish://connect?... 让员工点「打开鲶鱼」。纯静态, 不登录、不请求任何接口。
+     Companion 会弹确认框, 并用接入码核对证书, 这一页本身不做信任决定。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>连接鲶鱼 Companion</title>
+<style>
+  :root { --bg: #f7f5ef; --card: #fff; --text: #1f2a2e; --muted: #6b7478; --accent: #0d9488; --border: #e2ded3; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #151a1c; --card: #1f2629; --text: #e8ecec; --muted: #9aa5a8; --border: #2e383b; } }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  main { max-width: 520px; margin: 48px auto; padding: 0 16px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  p { color: var(--muted); margin: 8px 0; }
+  dl { display: grid; grid-template-columns: 72px 1fr; gap: 4px 12px; margin: 16px 0; }
+  dt { color: var(--muted); } dd { margin: 0; font-family: ui-monospace, Menlo, Consolas, monospace; word-break: break-all; }
+  a.btn, button { display: inline-block; background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 10px 18px; font-size: 15px; text-decoration: none; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .err { color: #c0392b; }
+</style>
+</head>
+<body>
+<main><div class="card" id="card">
+  <h1>连接公司的鲶鱼服务器</h1>
+  <p>先装好鲶鱼 Companion, 再点下面的按钮。Companion 会弹出确认框, 地址和接入码都已填好。</p>
+  <dl id="info"></dl>
+  <div class="row">
+    <a class="btn" id="open" href="#">打开鲶鱼 Companion</a>
+    <button class="ghost" id="copy" type="button">复制接入链接</button>
+  </div>
+  <p id="tip">点了没反应? 复制接入链接, 粘到 Companion「服务器配置」的「接入链接」框里。</p>
+</div></main>
+<script>
+(function () {
+  var q = new URLSearchParams(location.search);
+  var web = q.get("web") || location.origin.replace(/^http:/, "https:").replace(/:\d+$/, "");
+  var code = q.get("code") || "";
+  var card = document.getElementById("card");
+  if (!/^https?:\/\/[^/]+/.test(web)) {
+    card.innerHTML = '<h1>链接不完整</h1><p class="err">缺门户地址, 请向 IT 要完整的接入链接。</p>';
+    return;
+  }
+  var params = new URLSearchParams({ web: web });
+  if (code) params.set("code", code);
+  ["gw", "id"].forEach(function (k) { if (q.get(k)) params.set(k, q.get(k)); });
+  var link = "catfish://connect?" + params.toString();
+  var info = document.getElementById("info");
+  function row(k, v) {
+    var dt = document.createElement("dt"); dt.textContent = k;
+    var dd = document.createElement("dd"); dd.textContent = v;
+    info.appendChild(dt); info.appendChild(dd);
+  }
+  row("门户地址", web);
+  if (code) row("接入码", code);
+  document.getElementById("open").href = link;
+  document.getElementById("copy").onclick = function () {
+    var done = function () { document.getElementById("copy").textContent = "已复制"; };
+    if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(link).then(done); return; }
+    var t = document.createElement("textarea"); t.value = link; document.body.appendChild(t); t.select();
+    document.execCommand("copy"); document.body.removeChild(t); done();
+  };
+})();
+</script>
+</body>
+</html>

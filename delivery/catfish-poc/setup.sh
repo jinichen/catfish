@@ -793,11 +793,17 @@ if [ "$ENABLE_HTTPS" = "1" ]; then
     # 桌面端走 Rust reqwest, 不认浏览器那次「继续前往」—— 不装证书的现场表现是
     # 「浏览器打得开、面板说连不上」, 极易误判成网络问题。
     PAIRING_CODE="$(cat certs/pairing-code.txt 2>/dev/null || echo '(没生成, 看上面证书那步的输出)')"
-    echo "     ★ 员工接入 (Companion 桌面端): 把下面两样发给员工 (群消息即可, 不用传文件):"
+    # 接入链接: 落地页走 http (微信里点得开, 不撞自签证书警告), 页面上一点就拉起 Companion
+    HTTP_PORT="$(grep -E '^CATFISH_HTTP_PORT=' .env 2>/dev/null | tail -1 | cut -d= -f2)"
+    HTTP_PORT="${HTTP_PORT:-5173}"
+    WEB_ENC="$(printf '%s' "$WEB_URL" | sed 's#:#%3A#g; s#/#%2F#g')"
+    echo "     ★ 员工接入 (Companion 桌面端): 把下面这段发给员工 (群消息即可, 不用传文件):"
+    echo "         接入链接  http://$SERVER_IP:$HTTP_PORT/connect.html?web=$WEB_ENC&code=$PAIRING_CODE"
     echo "         门户地址  $WEB_URL"
     echo "         接入码    $PAIRING_CODE"
-    echo "       员工在 Companion「服务器配置」填上, 会自动取证书并核对接入码, 对上才信任."
-    echo "       接入码是内部 CA 的指纹, CA 十年不变, 接入码也不变; 门户「用户」页也能看到."
+    echo "       员工装好 Companion 后点接入链接 →「打开鲶鱼 Companion」→ 确认, 自动取证书并核对接入码."
+    echo "       也可以在 Companion「服务器配置」手填门户地址 + 接入码. 门户「用户」页能一键复制这段."
+    echo "       接入码是内部 CA 的指纹, CA 十年不变, 接入码也不变."
     echo ""
     echo "       浏览器: 把 certs/ca.pem (内部 CA, **不是** cert.pem) 推进系统信任库"
     echo "               (域控组策略 / Jamf / Intune), 一次导入永久免警告;"

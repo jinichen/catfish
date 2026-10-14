@@ -40,7 +40,7 @@ services:
     build:
       context: ./identity-server
       dockerfile: Dockerfile
-    image: catfish-identity:20261014-9f8617b1
+    image: catfish-identity:20261014-d1b4fc4f
     container_name: catfish-identity
     restart: unless-stopped
     depends_on:
@@ -97,7 +97,7 @@ services:
     # 及 pyproject.toml orjson>=3.10 依赖. rebuild + docker save 分发客户 IT.
     # 9/12 0.1.2: P50 横向协同邮筒 (/api/room-link/mailbox + room_link_mailbox 表迁移);
     #   六个自造镜像版本从此一起走, 升版本只改 compose (setup.sh / build-package.sh 都从这读)。
-    image: catfish-gateway:20261014-9f8617b1
+    image: catfish-gateway:20261014-d1b4fc4f
     container_name: catfish-gateway
     restart: unless-stopped
     depends_on:
@@ -178,7 +178,7 @@ services:
     build:
       context: ./skills-hub
       dockerfile: Dockerfile
-    image: catfish-skills-hub:20261014-9f8617b1
+    image: catfish-skills-hub:20261014-d1b4fc4f
     container_name: catfish-skills-hub
     restart: unless-stopped
     environment:
@@ -203,7 +203,7 @@ services:
     build:
       context: ./web
       dockerfile: Dockerfile
-    image: catfish-web:20261014-9f8617b1
+    image: catfish-web:20261014-d1b4fc4f
     container_name: catfish-web
     restart: unless-stopped
     # P3.5.79+ (7/22 POC 现场血案 · runtime config 重构):
@@ -215,6 +215,8 @@ services:
       CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://127.0.0.1:8998}
       CATFISH_OIDC_CLIENT_ID: ${CATFISH_OIDC_CLIENT_ID:-catfish-companion}
       CATFISH_OIDC_SCOPE: ${CATFISH_OIDC_SCOPE:-openid email profile}
+      # 10/14: 员工接入落地页的 http 链接要知道宿主机端口 (见 docker-entrypoint-catfish-config.sh)
+      CATFISH_PUBLIC_HTTP_PORT: ${CATFISH_HTTP_PORT:-5173}
     ports:
       - "${CATFISH_HTTP_PORT:-5173}:80"
     # 10/1: 组件分发 (Companion 可选大组件, 见 catfish-locations.conf /components/)。
@@ -236,7 +238,7 @@ services:
     build:
       context: ./mcp-registry
       dockerfile: Dockerfile
-    image: catfish-mcp-registry:20261014-9f8617b1
+    image: catfish-mcp-registry:20261014-d1b4fc4f
     container_name: catfish-mcp-registry
     restart: unless-stopped
     depends_on:
@@ -269,7 +271,7 @@ services:
     build:
       context: ./wiki-hub
       dockerfile: Dockerfile
-    image: catfish-wiki-hub:20261014-9f8617b1
+    image: catfish-wiki-hub:20261014-d1b4fc4f
     container_name: catfish-wiki-hub
     restart: unless-stopped
     depends_on:

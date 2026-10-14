@@ -16,3 +16,16 @@ export function pairServerCertificate(webUrl: string, code: string): Promise<str
 }
 
 export const PAIRING_CODE_PLACEHOLDER = "形如 3F9A-1C2B-77D0-9E41, 找 IT 要";
+
+/** catfish://connect 接入链接解析结果 (Rust: commands/connect_link.rs) */
+export interface ConnectLink {
+  webUrl: string;
+  gatewayUrl: string;
+  identityUrl: string;
+  code: string | null;
+}
+
+export const CONNECT_LINK_EVENT = "catfish-connect-link";
+
+export const takeConnectLink = () => invoke<ConnectLink | null>("connect_link_take");
+export const parseConnectLink = (link: string) => invoke<ConnectLink>("connect_link_parse", { link: link.trim() });

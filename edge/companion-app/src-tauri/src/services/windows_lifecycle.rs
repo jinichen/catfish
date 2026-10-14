@@ -19,7 +19,9 @@ pub fn initialize() -> anyhow::Result<Option<File>> {
         .ok_or_else(|| anyhow::anyhow!("缺少 LOCALAPPDATA"))?).join("CatfishMaintenance");
     std::fs::create_dir_all(&root)?;
     let Some(guard) = lock(&root.join("companion.lock"))? else {
-        std::fs::write(root.join("activate"), b"show")?;
+        // 10/14: 点 catfish://connect 链接拉起的第二个进程 —— 把链接交给开着的那个 (见 connect_link.rs)
+        let payload = crate::commands::connect_link::from_args(std::env::args()).unwrap_or_else(|| "show".into());
+        std::fs::write(root.join("activate"), payload.as_bytes())?;
         return Ok(None);
     };
     let executable = std::env::current_exe()?;
@@ -59,7 +61,14 @@ pub fn listen_for_activation(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            if path.is_file() && std::fs::remove_file(&path).is_ok() {
+            if !path.is_file() {
+                continue;
+            }
+            let payload = std::fs::read_to_string(&path).unwrap_or_default();
+            if std::fs::remove_file(&path).is_ok() {
+                if payload.starts_with("catfish://") {
+                    crate::commands::connect_link::handle(&app, payload.trim());
+                }
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.unminimize();
                     let _ = window.show();

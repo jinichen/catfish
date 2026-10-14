@@ -63,6 +63,8 @@ pub fn run() {
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        // 10/14: catfish://connect 接入链接 (见 commands/connect_link.rs)
+        .plugin(tauri_plugin_deep_link::init())
         // 7/15 BL-COMPANION-LOG-FILE: log::info!/warn!/error! → 文件 + stderr
         // 文件路径: macOS = ~/Library/Logs/com.catfish.companion/Catfish Companion.log
         //           Windows = %LOCALAPPDATA%/com.catfish.companion/logs/Catfish Companion.log
@@ -125,6 +127,28 @@ pub fn run() {
         .setup(move |app| {
             #[cfg(windows)]
             services::windows_lifecycle::listen_for_activation(app.handle().clone());
+            {
+                // 10/14 接入链接: 启动时带进来的 (Windows 在命令行参数里) + 开着时收到的 (macOS)
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        commands::connect_link::handle(&handle, url.as_str());
+                    }
+                });
+                let at_start = app.deep_link().get_current().ok().flatten()
+                    .and_then(|urls| urls.first().map(|u| u.to_string()))
+                    .or_else(|| commands::connect_link::from_args(std::env::args()));
+                if let Some(link) = at_start {
+                    commands::connect_link::handle(app.handle(), &link);
+                }
+                // Windows 安装包已在 HKCU 注册 catfish:// (wix/main.wxs deep_link_protocols);
+                // 再按当前 exe 路径补一次, 免得绿色版 / 改过安装目录的机器点链接没反应
+                #[cfg(windows)]
+                if let Err(e) = app.deep_link().register_all() {
+                    log::warn!("[connect-link] 注册 catfish:// 失败: {e}");
+                }
+            }
             // Release QA can launch against an isolated HOME without touching
             // the user's real launch agents, global shortcuts or background
             // services. Hermes bootstrap still runs so first-launch timing and

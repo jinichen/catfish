@@ -27,6 +27,8 @@ pub(crate) fn handler(
             crate::commands::http_proxy::http_proxy,
             crate::util::http_client::import_server_certificate,
             crate::commands::server_pairing::pair_server_certificate, // 10/14 接入码导入 CA
+            crate::commands::connect_link::connect_link_take,
+            crate::commands::connect_link::connect_link_parse,
             crate::commands::http_proxy::http_proxy_abortable,
             crate::commands::http_proxy::http_proxy_stream,
             crate::commands::http_proxy::http_proxy_abort,

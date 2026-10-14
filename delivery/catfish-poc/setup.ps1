@@ -553,11 +553,17 @@ if ($EnableHttps -eq '1') {
     # 10/14: 桌面端改成「门户地址 + 接入码」, 不用再一台台发 ca.pem 文件 (同 setup.sh)
     $PairingFile = Join-Path $ScriptDir 'certs\pairing-code.txt'
     $PairingCode = if (Test-Path $PairingFile) { (Get-Content $PairingFile -Raw).Trim() } else { '(没生成, 看上面证书那步的输出)' }
-    Say "  ★ 员工接入 (Companion 桌面端): 把下面两样发给员工 (群消息即可, 不用传文件):"
+    # 接入链接: 落地页走 http (微信里点得开, 不撞自签证书警告), 页面上一点就拉起 Companion (同 setup.sh)
+    $HttpPortLine = Get-Content (Join-Path $ScriptDir '.env') -ErrorAction SilentlyContinue | Where-Object { $_ -match '^CATFISH_HTTP_PORT=' } | Select-Object -Last 1
+    $HttpPort = if ($HttpPortLine) { ($HttpPortLine -split '=', 2)[1].Trim() } else { '5173' }
+    $WebEnc = [uri]::EscapeDataString($WebUrl)
+    Say "  ★ 员工接入 (Companion 桌面端): 把下面这段发给员工 (群消息即可, 不用传文件):"
+    Say "      接入链接  http://${ServerIp}:$HttpPort/connect.html?web=$WebEnc&code=$PairingCode"
     Say "      门户地址  $WebUrl"
     Say "      接入码    $PairingCode"
-    Say "    员工在 Companion「服务器配置」填上, 会自动取证书并核对接入码, 对上才信任。"
-    Say "    接入码是内部 CA 的指纹, CA 十年不变, 接入码也不变; 门户「用户」页也能看到。"
+    Say "    员工装好 Companion 后点接入链接 →「打开鲶鱼 Companion」→ 确认, 自动取证书并核对接入码。"
+    Say "    也可以在 Companion「服务器配置」手填门户地址 + 接入码。门户「用户」页能一键复制这段。"
+    Say "    接入码是内部 CA 的指纹, CA 十年不变, 接入码也不变。"
     Say "    浏览器: 把 certs\ca.pem (内部 CA, **不是** cert.pem) 推进系统信任库 (域控组策略 / Intune)。"
     Say ""
     Say "  ⚠ 服务器证书 397 天到期, 到期前在服务器上重跑 .\setup.ps1 自动重签。"

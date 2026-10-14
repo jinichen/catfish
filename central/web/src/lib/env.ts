@@ -35,6 +35,8 @@ declare global {
       oidcIssuer?: string;
       oidcClientId?: string;
       oidcScope?: string;
+      /** 10/14: 宿主机上映射给 web 的 http 端口 (CATFISH_HTTP_PORT), 拼员工接入落地页的 http 链接用 */
+      publicHttpPort?: string;
     };
   }
 }
@@ -56,3 +58,6 @@ export const config: RuntimeConfig = {
 };
 
 export const isDev = import.meta.env.DEV;
+
+/** 10/14: 员工接入落地页走 http (微信里点开不会撞自签证书警告); 端口由 config.js 注入, 没有就退回当前地址 */
+export const publicHttpPort: string | undefined = runtimeCfg.publicHttpPort || undefined;

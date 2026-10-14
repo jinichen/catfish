@@ -8,6 +8,7 @@ import AuthBanner from "./components/AuthBanner";
 import HermesReconnectBanner from "./components/HermesReconnectBanner";  // P3.3.5 (6/9): hermes 重连 banner
 import HermesBootstrapStatus from "./components/HermesBootstrapStatus";
 import DevUserSwitcher from "./components/DevUserSwitcher";
+import ConnectLinkDialog from "./components/ConnectLinkDialog";
 import LoginGate from "./components/LoginGate";
 import OnboardingWizard from "./components/OnboardingWizard";
 import TabBar from "./components/TabBar";
@@ -188,6 +189,8 @@ export default function App() {
       {/* 必须在 LoginGate 外：检测服务器、登录加载或未登录时，
           LoginGate 都不渲染 children，否则 macOS“关于鲶鱼”会点击无反应。 */}
       <AboutModal />
+      {/* 10/14: 点了 IT 发的 catfish://connect 接入链接 —— 没登录时也要能弹 */}
+      <ConnectLinkDialog />
       {/* 首启安装与登录互不阻塞；服务器不可达时也能看见安装状态。 */}
       <HermesBootstrapStatus />
     </>

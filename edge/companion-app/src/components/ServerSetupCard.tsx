@@ -13,7 +13,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { ServerReachableState } from "../hooks/useServerReachable";
-import { needsPairing, pairServerCertificate, PAIRING_CODE_PLACEHOLDER } from "../lib/serverPairing";
+import { needsPairing, pairServerCertificate, parseConnectLink, PAIRING_CODE_PLACEHOLDER } from "../lib/serverPairing";
 
 interface ServerSetupCardProps {
   state: ServerReachableState;
@@ -164,6 +164,39 @@ export default function ServerSetupCard({ state, onRetest, onSaved }: ServerSetu
             </div>
           )}
         </div>
+
+        {/* 10/14: IT 发的 catfish://connect 接入链接 —— 点不开 (比如微信里) 就整段粘这里, 四项自动填好 */}
+        <label style={{ display: "block", fontSize: 13, marginBottom: 6 }}>
+          粘贴 IT 发的接入链接 (有的话, 下面会自动填好)
+        </label>
+        <input
+          placeholder="catfish://connect?web=…"
+          onChange={async (e) => {
+            const v = e.target.value.trim();
+            if (!v.toLowerCase().startsWith("catfish://")) return;
+            try {
+              const l = await parseConnectLink(v);
+              setGatewayUrl(l.gatewayUrl);
+              setIdentityUrl(l.identityUrl);
+              setWebUrl(l.webUrl);
+              setPairingCode(l.code ?? "");
+              setSaveError(null);
+            } catch (err) {
+              setSaveError(String(err));
+            }
+          }}
+          style={{
+            width: "100%",
+            padding: "8px 12px",
+            border: "1px solid var(--catfish-border)",
+            borderRadius: "var(--radius-sm)",
+            fontSize: 13,
+            marginBottom: 16,
+            background: "var(--catfish-bg)",
+            color: "var(--catfish-text)",
+            boxSizing: "border-box",
+          }}
+        />
 
         {/* Gateway URL */}
         <label style={{ display: "block", fontSize: 13, marginBottom: 6 }}>

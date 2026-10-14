@@ -4,7 +4,7 @@ name = "catfish-companion-app"
 # Hermes 是独立发布物，由 .hermes-target-version / tag / commit 单独固定。
 # 改时记得同步 src-tauri/tauri.conf.json + ../package.json + package-lock.json。
 # CI lint: scripts/check_version_sync.sh
-version = "1.0.119"
+version = "1.0.120"
 description = "Catfish Companion App - desktop sidekick for the Catfish platform"
 authors = ["Catfish Team"]
 edition = "2021"
@@ -117,6 +117,10 @@ rfd = "0.15"
 # hound 写 WAV (纯 Rust, 各平台都编)。按设备原生采样率录, 不在这里重采样 ——
 # 实测 FunASR 喂 48k 和 16k 出的文字一字不差, 它自己会重采样。
 hound = "3.5"
+# 10/14 员工接入链接 catfish://connect?... (门户地址 + 接入码一点即填, 见 commands/connect_link.rs)。
+# Windows 点链接会再起一个进程 —— 不用 single-instance 插件, 复用 windows_lifecycle 已有的
+# 单实例锁, 第二个进程把链接写进 activate 文件转交给开着的那个。
+tauri-plugin-deep-link = "2"
 
 [dev-dependencies]
 # tempfile: 给单测建临时 ~/.hermes 目录用 (session_write / learning / endpoints)

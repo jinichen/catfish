@@ -24,7 +24,7 @@
 
 import { useEffect, useState } from "react";
 import { readServerConfig, writeServerConfig, type ServerConfig } from "../../lib/tauri";
-import { needsPairing, pairServerCertificate, PAIRING_CODE_PLACEHOLDER } from "../../lib/serverPairing";
+import { needsPairing, pairServerCertificate, parseConnectLink, PAIRING_CODE_PLACEHOLDER } from "../../lib/serverPairing";
 
 export default function ServerConfigCard() {
   const [cfg, setCfg] = useState<ServerConfig | null>(null);
@@ -213,6 +213,29 @@ export default function ServerConfigCard() {
           </span>
         )}
       </Row>
+
+      {editing && (
+        <Row label="接入链接">
+          <input
+            placeholder="粘贴 IT 发的 catfish://connect?… 自动填好上面几项"
+            onChange={async (e) => {
+              const v = e.target.value.trim();
+              if (!v.toLowerCase().startsWith("catfish://")) return;
+              try {
+                const l = await parseConnectLink(v);
+                setDraftUrl(l.gatewayUrl);
+                setDraftIdentity(l.identityUrl);
+                setDraftWeb(l.webUrl);
+                setDraftCode(l.code ?? "");
+                setErr(null);
+              } catch (err) {
+                setErr(String(err));
+              }
+            }}
+            style={inputStyle}
+          />
+        </Row>
+      )}
 
       {editing && needsPairing(draftWeb) && (
         <Row label="接入码">

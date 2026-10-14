@@ -16,6 +16,8 @@ OUT=/usr/share/nginx/html/config.js
 ISSUER="${CATFISH_OIDC_ISSUER:-http://127.0.0.1:8998}"
 CLIENT_ID="${CATFISH_OIDC_CLIENT_ID:-catfish-companion}"
 SCOPE="${CATFISH_OIDC_SCOPE:-openid email profile}"
+# 10/14: 员工接入落地页 (/connect.html) 的 http 端口 —— compose 把 CATFISH_HTTP_PORT 传进来
+HTTP_PORT="${CATFISH_PUBLIC_HTTP_PORT:-}"
 
 cat > "$OUT" <<EOF
 // runtime config · docker-entrypoint 从容器 env 生成 · 换 env 需 restart 容器.
@@ -24,6 +26,7 @@ window.__CATFISH_CONFIG__ = {
   oidcIssuer: "$ISSUER",
   oidcClientId: "$CLIENT_ID",
   oidcScope: "$SCOPE",
+  publicHttpPort: "$HTTP_PORT",
 };
 EOF
 
