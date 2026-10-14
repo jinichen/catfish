@@ -176,12 +176,28 @@ pub fn download_client() -> Result<reqwest::Client, String> {
     .map_err(|e| format!("建 http client 失败: {e}"))
 }
 
+/// reqwest 的 Display 只有一句 "error sending request for url" —— 真正原因 (连接被拒 /
+/// 证书不受信任 / 超时) 在 source 链里。10/14 Windows 截图就只看到这一句, 没法判断。
+pub fn error_chain(e: &dyn std::error::Error) -> String {
+    let mut out = e.to_string();
+    let mut cur = e.source();
+    while let Some(s) = cur {
+        let msg = s.to_string();
+        if !out.contains(&msg) {
+            out.push_str(" · ");
+            out.push_str(&msg);
+        }
+        cur = s.source();
+    }
+    out
+}
+
 pub async fn fetch_manifest(client: &reqwest::Client, web_base: &str) -> Result<Manifest, String> {
     let url = format!("{}{MANIFEST_PATH}", web_base.trim_end_matches('/'));
     let resp = tokio::time::timeout(Duration::from_secs(30), client.get(&url).send())
         .await
         .map_err(|_| format!("连中央超时: {url}"))?
-        .map_err(|e| format!("连中央失败 ({url}): {e}"))?;
+        .map_err(|e| format!("连中央失败 ({url}): {}", error_chain(&e)))?;
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Err("中央还没有发布任何组件 (manifest.json 不存在), 请联系 IT".into());
     }
@@ -226,7 +242,7 @@ pub async fn download(
         if have > 0 {
             req = req.header(reqwest::header::RANGE, format!("bytes={have}-"));
         }
-        let mut resp = req.send().await.map_err(|e| format!("下载 {url} 失败: {e}"))?;
+        let mut resp = req.send().await.map_err(|e| format!("下载 {url} 失败: {}", error_chain(&e)))?;
         let status = resp.status();
         let append = if status == reqwest::StatusCode::PARTIAL_CONTENT {
             true
@@ -295,3 +311,15 @@ pub fn active() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
 #[cfg(test)]
 #[path = "components_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod error_chain_tests {
+    #[tokio::test]
+    async fn connection_refused_cause_is_shown() {
+        // 本机一个没人监听的端口: reqwest 的 Display 只有 "error sending request", 原因在 source 链里
+        let e = reqwest::Client::new().get("http://127.0.0.1:9/x").send().await.unwrap_err();
+        let msg = super::error_chain(&e);
+        assert!(msg.starts_with("error sending request"), "{msg}");
+        assert!(msg.len() > e.to_string().len(), "要带上底层原因: {msg}");
+    }
+}

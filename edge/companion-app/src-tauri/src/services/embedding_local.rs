@@ -154,8 +154,17 @@ impl LocalProvider {
             .map(|(p, what)| format!("{what} 不在: {}", p.display()))
             .collect();
         if !missing.is_empty() {
+            // 10/14: 首选中央组件包 (跟自动下载同一份)。Windows 上 mkdir -p / curl \ 敲不了,
+            // HuggingFace 上也没有 onnxruntime.dll, 只给组件包这条路 (Win10 起自带 tar)。
+            let pack = "从中央「组件市场」下载 embed-model-<版本>-<平台>.tar.gz, \
+                        把里面的文件解压到 ~/.catfish/models/ \
+                        (Windows: tar -xzf <包> -C %USERPROFILE%\\.catfish\\models), \
+                        再回到「知识体系」页。";
+            #[cfg(windows)]
+            return format!("本机向量模型没装齐 —— {}\n\n手动安装: {pack}", missing.join("; "));
+            #[cfg(not(windows))]
             return format!(
-                "本机向量模型没装齐 —— {}\n\n下载:\n  \
+                "本机向量模型没装齐 —— {}\n\n手动安装: {pack}\n\n或直接从 HuggingFace 下载:\n  \
                  mkdir -p ~/.catfish/models\n  \
                  curl -L -o ~/.catfish/models/bge-m3.onnx \
                  https://huggingface.co/Xenova/bge-m3/resolve/main/onnx/model_quantized.onnx\n  \

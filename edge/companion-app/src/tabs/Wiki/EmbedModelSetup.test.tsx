@@ -62,7 +62,18 @@ describe("EmbedModelSetup", () => {
   it("shows the manual hint when central has not published the pack", async () => {
     componentsList.mockResolvedValue({ platform: "mac-arm64", components: [] });
     await act(async () => { render(<EmbedModelSetup status={base} onReady={() => {}} />); });
-    expect(screen.getByText(/还没有发布向量模型包/)).toBeTruthy();
-    expect(screen.getByText(/bge-m3\.onnx/)).toBeTruthy();
+    expect(screen.getByText(/还没有发布本机平台的向量模型包/)).toBeTruthy();
+    expect(screen.getByText(/bge-m3\.onnx/)).toBeTruthy();   // 给 IT 的说明收在折叠里, 仍在
+  });
+
+  it("连不上中央时不说「没发布」, 说连不上哪个地址 + 去服务器配置核对 + 重试 (10/14 Windows 截图)", async () => {
+    componentsList.mockRejectedValueOnce("连中央失败 (https://127.0.0.1/components/manifest.json): error sending request");
+    await act(async () => { render(<EmbedModelSetup status={base} onReady={() => {}} />); });
+    expect(screen.queryByText(/还没有发布/)).toBeNull();
+    expect(screen.getByText(/连不上中央服务器/)).toBeTruthy();
+    expect(screen.getByText(/服务器配置/)).toBeTruthy();
+    componentsList.mockResolvedValue({ platform: "windows-x64", components: [] });
+    await act(async () => { screen.getByText("重试").click(); });
+    expect(componentsList).toHaveBeenCalledTimes(2);
   });
 });

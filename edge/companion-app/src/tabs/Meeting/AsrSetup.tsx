@@ -17,6 +17,7 @@ import {
   type ComponentProgress,
 } from "../../lib/tauri_components";
 import { meetingAsrInstall, onAsrInstallProgress, type AsrStatus } from "../../lib/tauri_meeting";
+import CentralComponentMissing from "../../components/CentralComponentMissing";
 import { Btn, ErrorLine } from "../Collab/roomLinkUi";
 
 const COMPONENT = "meeting-asr";
@@ -127,12 +128,7 @@ export default function AsrSetup({ status, onReady }: { status: AsrStatus; onRea
       </>
     );
   } else {
-    body = (
-      <div>
-        中央服务器还没有发布会议组件包{listError ? "" : ` (本机平台)`}, 请联系 IT。
-        {listError && <ErrorLine>{listError}</ErrorLine>}
-      </div>
-    );
+    body = <CentralComponentMissing what="会议组件包" listError={listError} onRetry={() => void refresh()} />;
   }
 
   return (

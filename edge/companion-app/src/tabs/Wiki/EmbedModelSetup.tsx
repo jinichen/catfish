@@ -26,6 +26,7 @@ import {
   onEmbedModelInstallProgress,
   type EmbedModelStatus,
 } from "../../lib/tauri_embed_model";
+import CentralComponentMissing from "../../components/CentralComponentMissing";
 import { Btn, ErrorLine } from "../Collab/roomLinkUi";
 
 const INSTALL_STEP: Record<string, string> = {
@@ -141,15 +142,16 @@ export default function EmbedModelSetup({ status, onReady }: { status: EmbedMode
     );
   } else {
     body = (
-      <div>
-        本机向量模型没装, 中央服务器也还没有发布向量模型包, 请联系 IT (或按下面的提示手动放文件)。
-        {listError && <ErrorLine>{listError}</ErrorLine>}
-        {status.not_ready_reason && (
+      <CentralComponentMissing
+        what="向量模型包"
+        listError={listError}
+        onRetry={() => void refresh()}
+        manual={status.not_ready_reason && (
           <pre className="wiki-semantic-msg--mono" style={{ whiteSpace: "pre-wrap", marginTop: "var(--space-2)" }}>
             {status.not_ready_reason}
           </pre>
         )}
-      </div>
+      />
     );
   }
 
