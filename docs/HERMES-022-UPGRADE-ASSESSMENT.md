@@ -1,0 +1,151 @@
+# hermes v0.21.0 → v0.22.0 升级评估 (2026-10-14)
+
+> 当前: v0.21.0 · tag v2026.8.31 · commit 29112bef。目标: v0.22.0「The Threshold Release」· commit e06df9c2 (2026-10-14 发布)。
+> 中间隔 0.21.1–0.21.7 七个小版本, **25,544 个提交**。上游已有 rc.1-v0.22.1, 0.22.1 很快会发。
+> 方法: 两个版本源码逐个对照 catfish 依赖的每个挂载点; 能实测的都在副本上实测 (没碰 ~/.hermes)。
+> 证据 (file:line) 见四份分报告 (审批 / 运行时与接口 / 定时任务·微信·记忆 / 安装与集成), 复现脚本在评估用的 scratchpad。
+
+## 一句话结论
+
+**不能直接升, 也不是"更新补丁锚点"就能升。** 这一版上游做了三件结构性的事:
+
+1. **大拆分**: `gateway/run.py` 33,539 → 6,082 行, `run_agent.py` 9,413 → 1,555, `tools/approval.py` 5,971 → 1,251, `hermes_state.py` 拆成几十个模块。
+2. **运行时换成 Python 3.14 + 自带包管理器 (`hermes pm`)**: 核心依赖全部只在 3.14 上装; install.sh / install.ps1 整个重写。
+3. **提示语全部多语言化**: 3,433 个 key 都有官方中文。
+
+catfish 受影响的三块: 鲶鱼插件 (36 个补丁)、离线安装链路、Companion 界面与 hermes 的接口。
+
+## 不改就升会发生什么 (按严重程度)
+
+| # | 后果 | 原因 | 级别 |
+|---|---|---|---|
+| 1 | 装不上 / 起不来 | Companion 内嵌 Python 3.11, 在 v0.22 上依赖一个都装不进去; 离线安装补丁的锚点 sh 8 条里 7 条、ps1 7 条全部对不上, Companion 传的 `--offline-*` 参数直接报错 | P0 |
+| 2 | 鲶鱼插件整个不加载 | 插件启动自检要找的 4 个挂点搬家或被删 (`_resolve_auto`、`_apply_client_headers_for_base_url`、`run_conversation`、P15 的 `_stream_q`) → 36 个补丁全部不生效, 包括"员工身份不串"那道防线 | P0 |
+| 3 | Companion 里执行代码由 AI 先判断, 低风险自动放行 | 新版默认 `approvals.mode: smart`; 原来强制 Companion 人工审批的 P15.4 因 `_get_approval_mode` 搬家静默失效。**10/14 已定: 采用 smart**, 这一条从"漏洞"变成预期行为, P15.4 退役 (见下文"审批模式") | 已决策 |
+| 4 | "执行代码"清不出永久免审名单 | `save_permanent_allowlist` 变成"磁盘 ∪ 内存", P20 日志写已移除实际没删 | P0 安全 |
+| 5 | 有网时 hermes 自己换掉运行环境 | Companion 装机时建的空 `.git` 让 v0.22 把它当成"自更新安装", 联网下载 Python 3.14 另建环境, Companion 装进去的 jieba / playwright / 邮件 / 微信读取器全部失效; 离线时每次启动卡约 14 秒 | P0 |
+| 6 | 员工 90 天前的老会话被删 | `sessions.auto_prune` 默认从 false 改成 true, 不认 Companion 的软删标记和任务关联表 (实测删了, 留下孤儿行) | P0 数据 |
+| 7 | 回复气泡里出现模型的思考过程 | 8642 流新增 `delta.reasoning_content`, Companion `chat.ts:646` 当正文渲染 | P1 |
+| 8 | 审批按钮不弹, 只能等超时 | 新版原生发 `event: approval.request` / 回执 `POST /v1/runs/{id}/approval`, Companion 只认旧的 `approval_pending` | P1 |
+| 9 | 微信里冒出"代理/网关/Hermes", "小鲶"措辞消失 | 提示语多语言化后, P28 的英文原句替换大部分对不上; zh.yaml 有 126 处 Hermes/☤ (网关和平台 57 处会推到微信); 还有 8 处新增英文硬编码会发到微信 | P1 |
+| 10 | 构建 / CI 变红 | 5 处用 `pyproject version` 校验, 新版 pyproject 是 `0.0.0`; Windows watchdog 补丁上游已原生修复, 补丁脚本报错 | P1 |
+| 11 | 专家 Bot 关不掉 | `multiplex_profiles: false` 失效, allowlist key 被迁移删掉; clone profile 默认去掉渠道配置 | P1 |
+| 12 | 会议转写包装不上 | 用 cp311 的包做的, base python 变 3.14 后装不进去 | P1 |
+
+## 现在的 0.21.0 上就已经坏着的 (并入升级一起修, 不单独在 0.21 上发)
+
+| 问题 | 现象 | 证据 |
+|---|---|---|
+| P16 会话搜索 | 包装函数不收 `detail` 参数, **每次调用都报错**; 生产日志 10/10、10/12 共 38 次 → 小鲶"搜以前的对话"一直失败 | 运行时报告 |
+| P10 请求头 | 不收 `apply_user_headers`, 凭证池轮换到下一个 key 时 TypeError | `run_agent.py:6544` |
+| P3a 辅助模型运行时 | 每轮 KeyError, 被上游吞掉, 从未生效 | `auxiliary_client` 3099/3118/2783 |
+| P27 定时任务失败重试 | 调度模块启动时就绑定了本地名字, 包装从未被调用 | `scheduler.py:713-723` |
+| P29 `/learn` 中文 | 读 `kwargs["message"]`, 实际传的是 `user_message=`, 死代码 | `api_server.py` |
+| P39 Codex | `_codex_note_to_tool_progress` 新旧都不存在 | — |
+| 品牌 banner 整函数替换 | 签名不收新参数 + 缺 import, TypeError / NameError | `brand_rules.py` |
+| 升级脚本写的 `approvals.smart` / `session.auto_reset` | 没有代码读, 无效 key; 真正的开关是 `approvals.mode` | — |
+| Windows 内嵌 Python 20260623 | 带 SQLite 3.50.4, 在 WAL-reset 漏洞范围内 (mac 已换) | `check-embedded-sqlite.py:14` |
+
+## 不受影响 / 新版带来的好处
+
+- **记忆插件 catfish-memory 不用改**; 新版同会话复用 MemoryManager (对节流缓冲是好事), 同步内容先脱敏。
+- **state.db 26 → 31 不阻塞**: Companion 的所有 SQL 在新 schema 和"Companion 改过的老库迁移后"都实测跑通, `deleted_at`、自建索引、sidecar 表都保留。
+- **8642 接口没删任何路由**; `X-Hermes-Session-Id`、Bearer 鉴权语义不变。
+- **插件加载机制基本不变** (plugin.yaml / enabled / register_hook / register_tool override)。新增: 加载 10 秒超时; `plugins.isolation` 不能设 `host`。
+- 仍然需要也照样生效的补丁 (只是搬家, 调用时查找): P14、P15.3、P51、P54、P55、P56、P57、P43、P45、P47、P1、P2、P4–P9、P12、P13、P17、P21、P23、P30、P40、P42、P44、P49 (只改自检)、P50。
+- **新版原生已有, 我们的可以退役**: P15 (原生流式审批)、P19 (原生 `hermes.status` 进度)、P26 (原生 `/api/jobs/{id}/pause|resume`、DELETE)。
+- **上游认中文审批词, 但不能替代我们的**: 它把「始终批准」「本会话」当永久/会话级批准, 也不认 1/2 → P52、P57 必须保留。
+- **原生自动续跑只认英文和泰文** → P50 保留 (续跑那一轮设 `resume_unanswered_turn=False`, 防止和原生叠加续 2+2 次)。
+- 微信适配器 51 个提交: iLink `ret=-2` 按会话错误处理不再算限流, 媒体发送遵守 ret, 无 token 重发不耗重试预算, long-poll 游标写盘移出事件循环。
+- state.db "第二写者"一类问题上游专门修过, 对 Companion (本身就是第二写者) 有利。
+- 新增按 key 覆盖语言包 (`ctx.register_locale` / `$HERMES_HOME/locales/zh.yaml`), 比 P28 逐句 str.replace 稳得多。
+
+## 要改的清单
+
+### A. 安装链路 (重新设计, 最大的一块)
+1. Companion 不再调上游 install.sh / install.ps1, 自己完成: 解包源码 (必须带 `pm/`) → `uv venv` (内嵌 CPython **3.14.7**, pbs 20260901, 自带 SQLite 3.53.1) → `uv sync --locked --offline --no-dev --extra all` (不能 `--all-extras`, 会带上 torch) → 写 `install-stamp.json` (`updateMechanism: external`) → 自建 `hermes` 入口。uv 必须 0.12.3。
+2. 删掉 `initialize_offline_git`; 已装机器启动时清掉空 `.git`, 写 stamp (实测: 之后命令 0.6 秒返回、不联网)。
+3. Python 3.11.15 → 3.14.7 全仓库一起改 (约 20 处: tauri conf、wxs、artifacts.rs、构建脚本、CI); 额外 wheel 换 cp314; **会议转写包重做**。
+4. 退役 `patch_install_sh_offline.py`、`patch_install_ps1_offline.py`、`patch_windows_watchdog.py`、`verify_windows_watchdog.py`、`hermes_windows_watchdog.rs`、CI 对应步骤。
+5. 5 处 pyproject 版本校验改成 tag / sha / install-stamp。
+6. 版本 pin: `.hermes-git-commit` = e06df9c2…, `.hermes-git-tag` = v0.22.0, `.hermes-target-version` = 0.22.0; fetch-hermes-src.sh 改成 `--exact-match` (同一 commit 上还有 rc / abandoned-rc 标签)。
+7. 新写 `scripts/upgrade-hermes-v022.sh` (重建 3.14 venv、写 stamp、去 `.git`), v020 脚本的 `pip install -e .` 在新版上什么都不装。
+
+### B. config 加固 (Companion 启动时 ensure + 升级脚本)
+`sessions.auto_prune: false`、`nous.guest: false`、`tools.connectors.enabled: false` + `agent.disabled_toolsets` 加 `connections`、`auth.adopt_external_logins: false`、`security.allow_lazy_installs: false`、`agent.max_turns: 90` (不再放 .env)。`approvals.mode` 取值单独决策 (见文末)。
+
+### C. 鲶鱼插件
+1. `plugin_verify`: 认 mixin (`client_lifecycle` / `turn_facade`)、`_resolve_auto` → `_resolve_auto_route` (3 个返回值)、P15 检查改新文件或随 P15 退役、加 `_load_gateway_config`。
+2. 安全: P15.4 退役 (采用 smart, 不再强制人工); P20 改成直接改 config.yaml 再重载 + 过滤 `_read_permanent_allowlist` (永久免审名单跟 smart 无关, 仍要清)。
+3. 修参数透传: P16 (`detail`/`after`/`before`/`exclude_session_ids`)、P10 (`*args, **kwargs`)、P39 (换 `_load_gateway_config()`)。
+4. P52: `_adapter_for_source` → `_delivery_adapter_for`; P53: 认新报错文案和 `{"calls":[…]}` 参数。
+5. 删 P3a/P3b; 退役 P15、P19、P26; P27 退役或重写; P29 改读 `user_message`。
+6. P28 改走中文语言包按 key 覆盖 (小鲶措辞 + 去掉 Hermes/☤ + 删 `text_choice_always`), str.replace 只留硬编码英文 (含新增 8 处); P57 的英文正则在中文下要复核。
+7. 新版 pre_tool_call 钩子抛异常 = 拦截 (`plugins_dispatch.py:51,241-244`, 已核): 插件自检通过但后台安装失败时, 安全钩子会让**所有工具被拦**。要把这个行为当成设计前提重新看 `pre_tool_call_safety_check`。
+8. 工具改名 `todo`→`todo_list`、`cronjob`→`cronjob_manage`、`process`→`process_manage`: `todo_collision_guard.py:77`、tool-bridge `adapter.py:659/699`、Companion `agentActivityI18n.ts:64` 都按旧名判断。
+9. 兼容检查脚本 `audit_hermes_compat.sh` 改成同时搜拆出来的新文件 (现在 15 个 ✗ 里有一半是搬家误报)。
+
+### D. Companion 界面
+1. `reasoning_content` 不当正文 (折叠区或丢弃)。
+2. 审批改接原生 `event: approval.request` + `POST /v1/runs/{completion_id}/approval` (RoomLink 仍用 P15.2, 先保留)。
+3. 压缩 / 等待进度接 `hermes.status`。
+4. 专家 Bot: 关闭改成归档 profile; 确认 clone 去掉渠道配置后能否上线。
+5. 读消息考虑按 `active=1` 过滤 (老问题, 低优先)。
+
+## 建议的升级步骤
+
+1. **建 v0.22 分支**: 先做 A (安装链路) + C1 (插件能加载) — 这两件不做什么都测不了。
+2. 再做 C2–C9、B、D, 每项带测试。"现在就坏着的"那几项本来就在 C3/C5 里 (v0.22 上同样要改), 一起修, 不在 0.21 上单独发版 (10/14 鸿波: 都要升了, 单独修是浪费)。
+3. 唯一例外: 如果升级排期拖长, 再考虑把 P16 会话搜索那一处单独补到 0.21 (改动几行, 新旧版同一个修法)。
+4. **回归** (按 HERMES-UPGRADE-CHECKLIST 加本次新增项):
+   - 全新装机 mac / Windows, 断网装机; 老机器从 0.21 原地升级 (state.db 迁移、`.git` 清理、config 加固)。
+   - 审批: Companion 执行代码必须弹卡; 微信回 1/2、合并消息、重复「1」、超时提示只出现一次。
+   - 微信全部提示语抽查无 Hermes/☤/英文; "小鲶"措辞。
+   - 会话搜索、记忆写入、定时任务、协同 RoomLink、扫码登录、会议转写、邮件、专家 Bot。
+   - 老会话 90 天以上不被删。
+5. 灰度: 先自己这台, 再一台 Windows, 再推员工。
+6. 回滚: 保留 0.21 安装包和 `restore-hermes-v020.sh` 同款的 v021 回滚脚本 (state.db 31 → 26 不能降级, 回滚前先备份 state.db)。
+
+## 工作量粗估
+
+| 块 | 估计 |
+|---|---|
+| A 安装链路 (mac + Windows + CI + 会议包) | 3–4 天, 最大不确定性: 完全离线 `uv sync`、Windows 上 cp314 依赖 (pywin32 / winrt / greenlet / lxml) |
+| B config 加固 | 0.5 天 |
+| C 插件 | 2–3 天 |
+| D Companion 界面 | 1–1.5 天 |
+| 回归 + 灰度 | 2 天 |
+| **合计** | **约 9–10 个工作日** |
+
+## 还没验证的 (要上真机或 CI)
+
+- 完全离线的 `uv sync --locked --offline` (这次只验证了联网); Windows 3.14 上的 pywin32 / winrt。
+- cp314 wheel 是否齐全: greenlet、lxml、watchdog、pypdfium2; tool-bridge / 邮件 / 微信读取器在 3.14 下能否运行。
+- 1GB 级 state.db 从 26 迁到 31 要多久, 首次启动时 Companion 并发打开会不会 busy。
+- 微信在中文界面下实际推出来的全部文案。
+
+## 审批模式: 采用 v0.22 的 smart (10/14 鸿波定)
+
+新版流程 (`tools/approval_smart.py`): 危险命令 / 执行代码先交给辅助模型 (task=`approval`) 判 APPROVE / DENY / ESCALATE;
+ESCALATE 或模型调用失败、返回空 → 交给员工人工审批 (失败时偏安全)。配合我们的补丁后, 一次审批的顺序是:
+
+1. **P54 只读代码免批** (静态分析, 不调模型, 零延迟) —— 保留, 能省掉大部分查资料脚本的模型调用;
+2. **smart 判断** —— 批准就直接执行, 拒绝就告诉员工"AI 判断风险高, 没执行" (P51 已保留 smart_denied 这条路);
+3. **拿不准才问员工** —— 微信回 1/2 (P51/P52/P56/P57)、Companion 弹卡 (改接原生 `approval.request`)。
+
+要跟着做的:
+- **P15.4 退役** (原本强制 Companion 人工审批)。P15.3 保留 (无人值守平台不能直接拒)。
+- **写公司规则** `approvals.smart_policy` (系统提示里的可信规则, 中文即可), Companion 启动时 ensure。建议初稿:
+  「读取本机文件、查询数据、生成报表的脚本可以批准; 删除或覆盖文件、向外部地址发送数据、安装软件、修改系统配置、
+  操作邮件 / 微信发送的, 一律 ESCALATE」—— 10/14 鸿波确认可以。
+- **判断用的模型 = 员工当前用的模型, 不另外限制** (10/14 鸿波定)。`auxiliary.approval` 默认 `provider: auto`,
+  `_resolve_auto_route` 第一优先就是"本轮主模型" (`agent/auxiliary_client.py:4671-4686`), 在 Companion / 微信里就是员工选的那个。
+  已知后果, 都偏安全, 不用处理: ① 上游限 `max_tokens=16`, 员工若选了先"思考"的模型, 可能答不出 → 转人工, 只是人工审批多一些;
+  ② 员工的模型调不通时 auto 会走备用链, 私有模型由 P47 挡住不降级到公网。回归时用默认模型确认能正常回出 APPROVE / DENY 即可。
+- **留痕**: 上游会触发 `post_approval_response` 钩子 (`decided_by=aux_llm`)。接到 catfish 审计, 管理员能查"AI 自动批了哪些"。
+- 回归加三条: 只读脚本免批; 明显无害的命令被 AI 批准且员工无感; 删除 / 外发类被转人工或拒绝。
+
+## 需要你拍板的
+
+1. **要不要跟 0.22.0, 还是等 0.22.1** (rc 已出, 大版本首个补丁通常修一批回归)。建议: 改造现在就开始 (基于 0.22.0 做), 正式切版本时换成 0.22.1 再回归一遍。
+2. ~~`approvals.mode` 用什么~~ → 已定 smart, `smart_policy` 措辞已确认 (见上一节)。
