@@ -4,7 +4,10 @@ name: Build meeting-asr pack (Windows)
 # (edge/companion-app/scripts/build-meeting-asr-pack.sh); Windows 版要在 Windows 上
 # 打 + 自检 (离线装进干净 venv, 真转写一次, 再用 PyAV 解 m4a 转一次), 所以放这里。
 #
-# 产物 meeting-asr-<版本>-windows-x64.tar.gz (~2.7GB) 作为 artifact 留 7 天:
+# 产物 meeting-asr-<版本>-windows-x64.tar.gz (~2.3GB) 作为 artifact 留 7 天, 同时切成 1900MB 一段
+# 发到 Release `meeting-asr-<版本>` (单个文件上限 2GB) —— 国内用
+#   bash edge/companion-app/scripts/fetch-meeting-asr-release.sh <版本> <输出目录>
+# 走加速代理下载、拼接、核对 sha256, 比 gh run download (只能直连, 实测 ~0.3MB/s) 快得多。
 # 下载 → 放进中央 components/ → python3 delivery/catfish-poc/tools/build_component_manifest.py
 # 重新生成清单 → Windows 员工在「会议」页就能下载安装。
 #
@@ -18,7 +21,8 @@ on:
         default: "1.0.1"
 
 permissions:
-  contents: read
+  # 10/14: 要把包发到 Release (国内走 ghfast.top 加速下载, CI 构建产物要登录、走不了代理)
+  contents: write
 
 jobs:
   build:
@@ -48,3 +52,25 @@ jobs:
           compression-level: 0
           retention-days: 7
           if-no-files-found: error
+
+      # 10/14: 切段 + sha256, 发 Release (tag meeting-asr-<版本>, 预发布, 不影响正式版本页)
+      - name: Split for Release
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/meeting-asr-out"
+          F="meeting-asr-${{ inputs.version }}-windows-x64.tar.gz"
+          sha256sum "$F" | awk '{print $1"  "$2}' > "$F.sha256"
+          split -b 1900m -d -a 2 "$F" "$F.part"
+          ls -1 "$F".part* > "$F.parts"
+          ls -la
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v3.0.3
+        with:
+          tag_name: meeting-asr-${{ inputs.version }}
+          name: 会议转写组件包 ${{ inputs.version }}
+          prerelease: true
+          files: |
+            ${{ runner.temp }}/meeting-asr-out/meeting-asr-${{ inputs.version }}-windows-x64.tar.gz.part*
+            ${{ runner.temp }}/meeting-asr-out/meeting-asr-${{ inputs.version }}-windows-x64.tar.gz.sha256
+            ${{ runner.temp }}/meeting-asr-out/meeting-asr-${{ inputs.version }}-windows-x64.tar.gz.parts
