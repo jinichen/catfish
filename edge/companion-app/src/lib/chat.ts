@@ -24,6 +24,7 @@ import { hermesApiConfigGet, hermesApiAuthHeader, authWhoami } from "./tauri";
 import { fetchViaProxy } from "./http_proxy";
 import { prepareChatRequest } from "./chatRequest";
 import { chatStreamError } from "./chatStreamError";
+import { pendingFromNativeEvent } from "./nativeApprovals";
 
 // 8/15: 5 个类型声明搬去 chat_types.ts。
 //
@@ -427,6 +428,8 @@ export async function streamChat(params: SendChatParams): Promise<void> {
   let buf = "";
   let usage: ChatUsage | undefined;
   let finishReason: string | undefined;
+  /** 正在显示"正在思考…" (收到 reasoning_content 还没收到正文) */
+  let thinkingShown = false;
   // index → ToolCallAcc
   const toolCallsAcc: Record<number, ToolCallAcc> = {};
 
@@ -564,6 +567,29 @@ export async function streamChat(params: SendChatParams): Promise<void> {
         // 桥 agent.status_callback → tool_progress_callback 的 marker. 这是 preflight
         // 压缩 / context warning 等 lifecycle event, 不是真tool call**. 走 onLifecycle
         // 让 useChat 设 inline status, 不进 tool_calls 列表 (avoid pollution).
+        // 10/14 hermes v0.22: 原生审批事件 (插件 P15 那套 approval_pending 已退役), 转成卡片认的格式
+        if (sseEventType === "approval.request") {
+          try {
+            const detail = pendingFromNativeEvent(JSON.parse(sseData));
+            if (detail) {
+              window.dispatchEvent(new CustomEvent("catfish:approval-pending", { detail }));
+            }
+          } catch {
+            // ignore parse error
+          }
+          continue;
+        }
+        // 10/14 hermes v0.22: 等模型 / 自动重试 / 压缩上下文这类进度, 原生 `hermes.status` {kind, text}
+        if (sseEventType === "hermes.status") {
+          try {
+            const ev = JSON.parse(sseData) as { text?: unknown };
+            const text = String(ev?.text ?? "").trim();
+            if (text && params.onLifecycle) params.onLifecycle("running", text);
+          } catch {
+            // ignore parse error
+          }
+          continue;
+        }
         if (sseEventType === "hermes.tool.progress") {
           try {
             const ev = JSON.parse(sseData);
@@ -638,12 +664,20 @@ export async function streamChat(params: SendChatParams): Promise<void> {
           if (choice.finish_reason) finishReason = choice.finish_reason;
 
           const delta = choice.delta;
-          if (delta?.content) onDelta(delta.content);
-          // BL-FIX23 L2 (5/9): reasoning_content 也渲染, 防"半截就停"的核心修法.
-          // 鸿波 5/9 抱怨 Qwen3.5 122B 长 context 推理时输出 reasoning_content 不是
-          // content, Companion 只读 content 导致看着像"嘴说完话停了". 先让员工看到
-          // 思考过程, 不丢内容. demo 后 BL-FE3 加折叠 UI 把思考分开展示.
-          if (delta?.reasoning_content) onDelta(delta.reasoning_content);
+          if (delta?.content) {
+            if (thinkingShown) {
+              thinkingShown = false;
+              params.onLifecycle?.("completed", "");
+            }
+            onDelta(delta.content);
+          }
+          // BL-FIX23 L2 (5/9) 当时把 reasoning_content 当正文渲染, 防推理阶段看着像"停了"。
+          // 10/14 hermes v0.22 起每个会思考的模型都在流里发 delta.reasoning_content, 当正文的话
+          // 回复气泡里会混进一大段思考过程。改成只亮一个"正在思考…"状态, 正文开始就收起。
+          if (delta?.reasoning_content && !thinkingShown) {
+            thinkingShown = true;
+            params.onLifecycle?.("running", "🤔 正在思考…");
+          }
 
           // 累积 tool_calls 块
           if (delta?.tool_calls) {

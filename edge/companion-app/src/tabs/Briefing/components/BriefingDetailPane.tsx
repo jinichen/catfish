@@ -69,6 +69,7 @@ interface PendingApproval {
   command: string;
   description: string;
   pattern_key: string;
+  timeout_s?: number;
 }
 
 // P3.3.19 C Phase 3 (6/11): buildTaskSystemPrompt 抽到 lib/taskSystemPrompt.ts.
@@ -344,7 +345,8 @@ export function DetailPane({
       const ev = e as CustomEvent<PendingApproval>;
       if (ev.detail?.approval_session_key) {
         setPending(ev.detail);
-        setSecondsLeft(60); // 重置倒计时
+        // 10/14 hermes v0.22 原生审批默认等 300 秒 (事件里带 timeout_s); 老插件那套是 60
+        setSecondsLeft(ev.detail.timeout_s ?? 60);  // 重置倒计时
       }
     };
     window.addEventListener("catfish:approval-pending", handler as EventListener);

@@ -12,6 +12,7 @@ import { invoke as rawInvoke } from "@tauri-apps/api/core";
 import type { HermesBootstrapProgress } from "./hermesBootstrap";
 import { config } from "./env";
 import { fetchViaProxy } from "./http_proxy";
+import { forgetNativeApproval, nativeApprovalFor } from "./nativeApprovals";
 import type { ServiceStatus } from "../types/service";
 import type { CatalogResponse } from "../types/catalog";
 
@@ -168,7 +169,11 @@ export const toolBridgeChatApproval = async (
   sessionKey: string,
   choice: "once" | "session" | "always" | "deny",
 ): Promise<{ resolved?: number; choice?: string }> => {
-  const url = `${config.backendUrl}/v1/sessions/${encodeURIComponent(sessionKey)}/approval`;
+  // 10/14 hermes v0.22: 原生审批 (chat.ts 登记过的 run_id) 走 POST /v1/runs/{run_id}/approval
+  const native = nativeApprovalFor(sessionKey);
+  const url = native
+    ? `${config.backendUrl}/v1/runs/${encodeURIComponent(sessionKey)}/approval`
+    : `${config.backendUrl}/v1/sessions/${encodeURIComponent(sessionKey)}/approval`;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -179,8 +184,9 @@ export const toolBridgeChatApproval = async (
   const resp = await fetchViaProxy(url, {
     method: "POST",
     headers,
-    body: JSON.stringify({ choice }),
+    body: JSON.stringify(native?.requestId ? { choice, request_id: native.requestId } : { choice }),
   });
+  if (native) forgetNativeApproval(sessionKey);
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
     throw new Error(`chat_approval HTTP ${resp.status}: ${text.slice(0, 200)}`);
