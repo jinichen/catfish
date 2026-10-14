@@ -24,6 +24,7 @@
 
 import { useEffect, useState } from "react";
 import { readServerConfig, writeServerConfig, type ServerConfig } from "../../lib/tauri";
+import { needsPairing, pairServerCertificate, PAIRING_CODE_PLACEHOLDER } from "../../lib/serverPairing";
 
 export default function ServerConfigCard() {
   const [cfg, setCfg] = useState<ServerConfig | null>(null);
@@ -33,6 +34,8 @@ export default function ServerConfigCard() {
   const [draftIdentity, setDraftIdentity] = useState("");
   // P3.5.80 (7/28): 门户 URL — 见文件头说明, 这是第三个独立配置
   const [draftWeb, setDraftWeb] = useState("");
+  // 10/14: 换到 HTTPS 中央时的接入码 (自动取证书并核对, 见 lib/serverPairing.ts)
+  const [draftCode, setDraftCode] = useState("");
   // P3.4.1: secret-broker 服务删, 不再让员工配 broker URL
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -95,6 +98,11 @@ export default function ServerConfigCard() {
       const webUrl = draftWeb.trim().replace(/\/+$/, "");
       if (webUrl && !/^https?:\/\//.test(webUrl)) {
         throw new Error("门户 URL 必须 http:// 或 https:// 开头");
+      }
+      if (draftCode.trim()) {
+        if (!needsPairing(webUrl)) throw new Error("接入码只用于 https:// 的门户 URL");
+        await pairServerCertificate(webUrl, draftCode);
+        setDraftCode("");
       }
       const keepToken = cfg?.gateway_token || "";
       const reloginRequired = await writeServerConfig(url, keepToken, idUrl || undefined, webUrl || undefined);
@@ -205,6 +213,17 @@ export default function ServerConfigCard() {
           </span>
         )}
       </Row>
+
+      {editing && needsPairing(draftWeb) && (
+        <Row label="接入码">
+          <input
+            value={draftCode}
+            onChange={(e) => setDraftCode(e.target.value)}
+            placeholder={`${PAIRING_CODE_PLACEHOLDER} · 已装过证书可不填`}
+            style={inputStyle}
+          />
+        </Row>
+      )}
 
       {/* P3.4.1 (6/13 hb): 砍 Secret Broker URL 行 — 中央服务已删, OAuth token
           改 Companion 本机存 (~/.catfish/mcp/oauth-tokens/). 员工不再需要配

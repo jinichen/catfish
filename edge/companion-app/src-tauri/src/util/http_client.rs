@@ -44,7 +44,7 @@ use std::time::Duration;
 /// 本来就认, 这里再加一次也不冲突.
 const CERT_FILE: &str = "server-ca.pem";
 
-fn cert_path() -> Option<PathBuf> {
+pub(crate) fn cert_path() -> Option<PathBuf> {
     let home = crate::util::paths::home_env()
         .or_else(|_| std::env::var("USERPROFILE"))
         .ok()?;
@@ -106,6 +106,8 @@ fn load_root_cert(path: &std::path::Path) -> Option<reqwest::Certificate> {
 }
 
 /// Explicitly supplied by the user/IT; never download and silently trust an unknown peer.
+/// (10/14 起另有「接入码」导入: 证书是下载的, 但必须跟 IT 另外发的接入码 (指纹) 对上才保存,
+/// 见 commands/server_pairing.rs —— 仍然不是"静默信任"。)
 #[tauri::command]
 pub fn import_server_certificate(pem: String) -> Result<String, String> {
     let path = cert_path().ok_or("无法确定用户证书目录")?;
@@ -113,7 +115,7 @@ pub fn import_server_certificate(pem: String) -> Result<String, String> {
     Ok(path.display().to_string())
 }
 
-fn save_root_cert(path: &std::path::Path, pem: &str) -> Result<(), String> {
+pub(crate) fn save_root_cert(path: &std::path::Path, pem: &str) -> Result<(), String> {
     if pem.len() > 64 * 1024 || pem.contains("PRIVATE KEY") {
         return Err("只接受不含私钥的 PEM 公共证书（最大 64KB）".into());
     }

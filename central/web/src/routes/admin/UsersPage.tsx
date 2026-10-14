@@ -54,6 +54,7 @@ import { ConfirmDialog } from "../../components/Dialog";
 import { PageShell, Stale } from "../../components/PageShell";
 import { adminApi, type Role, type UserBrief } from "../../lib/admin";
 import { useAuthStore } from "../../store/auth";
+import { CompanionPairing } from "./CompanionPairing";
 import { UserCreate, UserEditDialog } from "./UserForms";
 import { RoleBadge, copyText, genTempPassword } from "./usersShared";
 
@@ -326,6 +327,8 @@ function UsersList() {
           + 创建用户
         </Link>
       </Toolbar>
+
+      <CompanionPairing />
 
       {/* 筛选条留在滚动区外面 —— 滚到第 40 行才想起要改条件时, 不该先滚回顶部。 */}
       <Section>

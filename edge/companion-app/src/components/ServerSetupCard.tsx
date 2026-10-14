@@ -13,6 +13,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { ServerReachableState } from "../hooks/useServerReachable";
+import { needsPairing, pairServerCertificate, PAIRING_CODE_PLACEHOLDER } from "../lib/serverPairing";
 
 interface ServerSetupCardProps {
   state: ServerReachableState;
@@ -32,6 +33,8 @@ export default function ServerSetupCard({ state, onRetest, onSaved }: ServerSetu
   // 不从 useServerReachable 的 state 拿 (那个 hook 只关心"通不通",
   // 门户地址跟连通性检测无关), 自己读一次 read_server_config 即可.
   const [webUrl, setWebUrl] = useState("");
+  // 10/14: HTTPS 部署的接入码 —— 填了就自动取中央证书并核对, 不用 IT 发 ca.pem 文件
+  const [pairingCode, setPairingCode] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -67,6 +70,10 @@ export default function ServerSetupCard({ state, onRetest, onSaved }: ServerSetu
       const web = webUrl.trim().replace(/\/+$/, "");
       if (web && !isValidUrl(web)) {
         throw new Error("门户地址必须 http:// 或 https:// 开头");
+      }
+      if (pairingCode.trim()) {
+        if (!needsPairing(web)) throw new Error("接入码只用于 https:// 的门户地址, 先填门户地址");
+        await pairServerCertificate(web, pairingCode);
       }
       await invoke("write_server_config", {
         gatewayUrl: gatewayUrl.trim(),
@@ -125,7 +132,7 @@ export default function ServerSetupCard({ state, onRetest, onSaved }: ServerSetu
             margin: "0 0 24px 0",
           }}
         >
-          鲶鱼 Companion 需要先连上公司的中央服务器才能登录. 找 IT 部门要下面 2 个地址.
+          鲶鱼 Companion 需要先连上公司的中央服务器才能登录. 找 IT 部门要下面的地址 (HTTPS 部署还有一个接入码).
         </p>
 
         {/* 服务状态提示 */}
@@ -239,6 +246,34 @@ export default function ServerSetupCard({ state, onRetest, onSaved }: ServerSetu
             ? "登录后设置顶部的门户链接会跳这里。"
             : "留空的话，设置顶部的门户链接会指向 http://127.0.0.1:5173（你自己的机器），点了打不开。"}
         </div>
+
+        {needsPairing(webUrl) && (
+          <>
+            <label style={{ display: "block", fontSize: 13, marginBottom: 6 }}>
+              接入码 (HTTPS 部署)
+            </label>
+            <input
+              value={pairingCode}
+              onChange={(e) => setPairingCode(e.target.value)}
+              placeholder={PAIRING_CODE_PLACEHOLDER}
+              style={{
+                width: "100%",
+                padding: "8px 12px",
+                border: "1px solid var(--catfish-border)",
+                borderRadius: "var(--radius-sm)",
+                fontSize: 13,
+                marginBottom: 6,
+                background: "var(--catfish-bg)",
+                color: "var(--catfish-text)",
+                boxSizing: "border-box",
+                fontFamily: "var(--font-mono, monospace)",
+              }}
+            />
+            <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginBottom: 20 }}>
+              保存时自动从门户取公司证书, 跟接入码对上才信任 (对不上不会导入)。已经装过证书可以不填。
+            </div>
+          </>
+        )}
 
         {saveError && (
           <div

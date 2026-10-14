@@ -550,15 +550,18 @@ Say "  默认 sysadmin: admin@catfish.com / $AdminPassword"
 Say "  ⚠ 首次登进立即改密"
 if ($EnableHttps -eq '1') {
     Say ""
-    Say "  ★ 要发给员工的是 certs\ca.pem (内部 CA), **不是** cert.pem。"
-    Say "    cert.pem 是服务器证书, 每年会换; ca.pem 十年有效, 只装一次。"
-    Say "    浏览器: 把 ca.pem 推进系统信任库 (域控组策略 / Intune)。"
-    Say "    Companion 桌面端: 复制到员工机器的 ~\.catfish\server-ca.pem 即可"
-    Say "      (不需要管理员权限)。不处理的话仪表盘显示「中央门户连不上」,"
-    Say "      而同一地址浏览器打得开 —— 极易误判成网络问题。"
+    # 10/14: 桌面端改成「门户地址 + 接入码」, 不用再一台台发 ca.pem 文件 (同 setup.sh)
+    $PairingFile = Join-Path $ScriptDir 'certs\pairing-code.txt'
+    $PairingCode = if (Test-Path $PairingFile) { (Get-Content $PairingFile -Raw).Trim() } else { '(没生成, 看上面证书那步的输出)' }
+    Say "  ★ 员工接入 (Companion 桌面端): 把下面两样发给员工 (群消息即可, 不用传文件):"
+    Say "      门户地址  $WebUrl"
+    Say "      接入码    $PairingCode"
+    Say "    员工在 Companion「服务器配置」填上, 会自动取证书并核对接入码, 对上才信任。"
+    Say "    接入码是内部 CA 的指纹, CA 十年不变, 接入码也不变; 门户「用户」页也能看到。"
+    Say "    浏览器: 把 certs\ca.pem (内部 CA, **不是** cert.pem) 推进系统信任库 (域控组策略 / Intune)。"
     Say ""
     Say "  ⚠ 服务器证书 397 天到期, 到期前在服务器上重跑 .\setup.ps1 自动重签。"
-    Say "    CA 不变, 员工机器上的 ca.pem 不用动。"
+    Say "    CA 不变, 接入码不变, 员工那边什么都不用动。"
 } else {
     Say ""
     SayWarn "走 HTTP · 员工用**裸 IP**访问时前端会卡在「加载中…」且不报错"

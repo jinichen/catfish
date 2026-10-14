@@ -155,6 +155,17 @@ def ensure_ca(out: Path) -> tuple[x509.Certificate, rsa.RSAPrivateKey, bool]:
     return cert, key, True
 
 
+def pairing_code(ca_cert: x509.Certificate) -> str:
+    """员工接入码 (10/14): SHA-256(CA 证书 DER) 前 8 字节, 大写十六进制, 4 位一组。
+
+    管理员把「门户地址 + 接入码」发给员工; Companion 去 /catfish-ca.pem 取证书, 指纹跟接入码
+    对上才导入 —— 不用再把 ca.pem 文件一台台发。同一算法在 Companion
+    (commands/server_pairing.rs) 和中央门户「用户」页各有一份, 改这里三处一起改。
+    """
+    raw = ca_cert.fingerprint(hashes.SHA256())[:8].hex().upper()
+    return "-".join(raw[i:i + 4] for i in range(0, 16, 4))
+
+
 def server_cert_is_fine(out: Path, ip: str) -> tuple[bool, str]:
     """现有服务器证书还能不能用。返回 (能用, 原因)。"""
     server_pem, key_pem = out / "server.pem", out / "key.pem"
@@ -296,6 +307,10 @@ def main() -> int:
         print(f"  ✓ cert.pem (fullchain) / key.pem / server.pem · {CERT_DAYS} 天")
 
     verify(out, args.ip)
+    code = pairing_code(ca_cert)
+    # setup.sh / setup.ps1 收尾时读这个文件打印给管理员 (不是机密: 它是公开证书的指纹)
+    _write(out / "pairing-code.txt", (code + "\n").encode(), secret=False)
+    print(f"  ✓ 员工接入码: {code}")
     return 0
 
 

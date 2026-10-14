@@ -15,6 +15,7 @@ pub mod advisor_closed;
 pub mod advisor_task_state;
 pub mod advisory; // 6/7 BL-MANIFESTO-ADVISORY-PHASE1: advisory local state (~/.catfish/advisory_state.db)
 pub mod agent;
+pub mod server_pairing; // 10/14: 门户地址 + 接入码自动导入中央 CA
 pub mod upload_stage; // 10/14: 上传分块写临时文件 (上限统一 200MB)
 pub mod attachments; // BL-FILE-SESSION-INDEX-V1 Phase 1 (5/30): 附件 metadata 持久化到 ~/.catfish/attachments.db, 跨会话恢复 + 列表
 pub mod audit;

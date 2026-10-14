@@ -26,6 +26,7 @@ pub(crate) fn handler(
             // CSP connect-src 保持严格 (无外网白名单). 达华 POC 员工输达华 IP 才能通 chat.
             crate::commands::http_proxy::http_proxy,
             crate::util::http_client::import_server_certificate,
+            crate::commands::server_pairing::pair_server_certificate, // 10/14 接入码导入 CA
             crate::commands::http_proxy::http_proxy_abortable,
             crate::commands::http_proxy::http_proxy_stream,
             crate::commands::http_proxy::http_proxy_abort,

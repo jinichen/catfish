@@ -789,23 +789,22 @@ if [ "$ENABLE_HTTPS" = "1" ]; then
     echo "     首次访问浏览器会提示证书不受信 · 点「高级 → 继续前往」即可."
     echo "     点过之后就是安全上下文, crypto.subtle 可用, 登录正常."
     echo ""
-    echo "     ★ 要发给员工的是 certs/ca.pem (内部 CA), **不是** cert.pem."
-    echo "       cert.pem 是服务器证书, 每年会换; ca.pem 十年有效, 只装一次."
+    # 10/14: 桌面端改成「门户地址 + 接入码」, 不用再一台台发 ca.pem 文件。
+    # 桌面端走 Rust reqwest, 不认浏览器那次「继续前往」—— 不装证书的现场表现是
+    # 「浏览器打得开、面板说连不上」, 极易误判成网络问题。
+    PAIRING_CODE="$(cat certs/pairing-code.txt 2>/dev/null || echo '(没生成, 看上面证书那步的输出)')"
+    echo "     ★ 员工接入 (Companion 桌面端): 把下面两样发给员工 (群消息即可, 不用传文件):"
+    echo "         门户地址  $WEB_URL"
+    echo "         接入码    $PAIRING_CODE"
+    echo "       员工在 Companion「服务器配置」填上, 会自动取证书并核对接入码, 对上才信任."
+    echo "       接入码是内部 CA 的指纹, CA 十年不变, 接入码也不变; 门户「用户」页也能看到."
     echo ""
-    echo "       浏览器: 把 ca.pem 推进系统信任库 (域控组策略 / Jamf / Intune),"
-    echo "               一次导入永久免警告; 不推的话每台每个浏览器都要手点一次."
-    echo ""
-    # 桌面端必须单独说 —— 它走 Rust reqwest, 不认浏览器那次
-    # 「继续前往」. 不提这条的话现场表现是「浏览器打得开、面板说连不上」,
-    # 会被误判成网络问题查半天.
-    echo "       桌面端 (Companion): 用 Rust 发请求, 不认浏览器点过的「继续前往」."
-    echo "               不处理的话仪表盘显示「中央门户连不上」, 而同一地址"
-    echo "               浏览器打得开 —— 极易误判成网络问题."
-    echo "               把 ca.pem 复制到员工机器的 ~/.catfish/server-ca.pem 即可"
-    echo "               (不需要管理员权限; 装进系统信任库也行, Rust 也读它)."
+    echo "       浏览器: 把 certs/ca.pem (内部 CA, **不是** cert.pem) 推进系统信任库"
+    echo "               (域控组策略 / Jamf / Intune), 一次导入永久免警告;"
+    echo "               不推的话每台每个浏览器都要手点一次「继续前往」."
     echo ""
     echo "     ⚠ 服务器证书 397 天到期. 到期前在**服务器上**重跑 bash setup.sh"
-    echo "       即可自动重签 —— CA 不变, 员工机器上的 ca.pem 不用动."
+    echo "       即可自动重签 —— CA 不变, 接入码不变, 员工那边什么都不用动."
     echo "       (为什么不签 10 年: macOS/iOS 对 TLS 服务器证书有 398 天上限,"
     echo "        超了直接拒连, 且跟证书受不受信任无关.)"
 else
