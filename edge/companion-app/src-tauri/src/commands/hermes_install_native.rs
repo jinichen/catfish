@@ -345,6 +345,27 @@ mod e2e {
         let text = String::from_utf8_lossy(&out.stdout);
         println!("{text}");
         assert!(text.contains("v0.22.0"), "{text}");
+        // 工具桥 (catfish-tools MCP) 在员工机上就是用这个 venv + PYTHONPATH 跑的: 全部模块都要导得进
+        let tool_bridge = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tool-bridge/src");
+        let probe = r#"
+import pkgutil, importlib, catfish_tool_bridge as t
+bad = []
+for m in pkgutil.walk_packages(t.__path__, "catfish_tool_bridge."):
+    try:
+        importlib.import_module(m.name)
+    except Exception as e:
+        bad.append(f"{m.name}: {e!r}")
+print("\n".join(bad))
+raise SystemExit(1 if bad else 0)
+"#;
+        let out = crate::services::process::background_command(paths.install_dir.join("venv/bin/python"))
+            .args(["-c", probe])
+            .env("PYTHONPATH", &tool_bridge)
+            .env("HOME", &paths.home)
+            .env("HERMES_HOME", &paths.hermes_home)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "工具桥导入失败:\n{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
         // 第二遍: 快路径
         let started = std::time::Instant::now();
         super::super::hermes_install::bootstrap_locked(resource.path(), &paths, &reporter).unwrap();
