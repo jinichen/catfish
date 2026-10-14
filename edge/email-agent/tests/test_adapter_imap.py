@@ -30,6 +30,7 @@ IMAP 是唯一不依赖客户端的路径。真机 (imap.chinatelecom.cn) 实测
 from __future__ import annotations
 
 import logging
+import re
 
 import pytest
 
@@ -205,12 +206,23 @@ class FakeIMAP:
             return "OK", [b" ".join(uid for uid, _, _ in box)]
         if command == "fetch":
             wanted = set(self._as_bytes(args[0]).split(b","))
+            spec = str(args[1]) if len(args) > 1 else ""
+            # 10/14 大邮件分段取: 先问大小 (RFC822.SIZE, 真机回的是不带字面量的一行),
+            # 再按 BODY.PEEK[]<起点.长度> 一段段取。照 imaplib 的真实返回形态造。
+            part = re.search(r"BODY\.PEEK\[\]<(\d+)\.(\d+)>", spec)
             out = []
             for uid, flags, raw in box:
                 if uid not in wanted:
                     continue
-                prefix = b"1 (UID " + uid + b" FLAGS (" + flags + b") BODY[HEADER] {%d}" % len(raw)
-                out.append((prefix, raw))
+                if "RFC822.SIZE" in spec and "BODY" not in spec:
+                    out.append(b"1 (UID " + uid + b" FLAGS (" + flags + b") RFC822.SIZE %d)" % len(raw))
+                    continue
+                body = raw
+                if part:
+                    start, length = int(part.group(1)), int(part.group(2))
+                    body = raw[start:start + length]
+                prefix = b"1 (UID " + uid + b" FLAGS (" + flags + b") BODY[HEADER] {%d}" % len(body)
+                out.append((prefix, body))
                 out.append(b")")
             return "OK", out
         if command == "store":

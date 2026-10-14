@@ -103,7 +103,7 @@ def smtp_send(config: "ImapConfig", raw: bytes, recipients: list[str]) -> None:
 # 配置 9/21 搬到 imap_config.py (本文件越过 800 行红线)。这里 re-export ——
 # 全仓有一堆 `from .imap_mail import ImapConfig`, 改全部调用点的风险不如
 # 留一行别名。新代码请直接 from .imap_config import ...
-from . import imap_drafts, imap_uidvalidity  # noqa: E402
+from . import imap_chunked, imap_drafts, imap_uidvalidity  # noqa: E402
 from .imap_reconnect import drop_conn, reconnect_once as _reconnect_once  # noqa: E402
 from .imap_config import (  # noqa: E402,F401
     DEFAULT_PORT,
@@ -266,8 +266,8 @@ class ImapAdapter(EmailAdapter):
                 f"邮箱已重建 (UIDVALIDITY {uidvalidity} → {current}), 这条 id 失效了, "
                 "请重新拉取列表"
             )
-        typ, data = conn.uid("fetch", uid, "(UID FLAGS BODY.PEEK[])")
-        if typ != "OK":
+        data = imap_chunked.fetch_whole(conn, uid)  # 10/14: 大信分段取, 见 imap_chunked.py
+        if not data:
             raise DataNotFoundError(f"取邮件失败: uid={uid}")
         parsed = self._parse_fetch(data, folder_raw, folder_role(utf7_decode(folder_raw)), current)
         if not parsed:
@@ -521,8 +521,8 @@ class ImapAdapter(EmailAdapter):
         """把整封原始邮件取下来解析好。"""
         folder_raw, uid = self._locate(message_id)
         conn = self._connect()
-        typ, data = conn.uid("fetch", uid, "(UID FLAGS BODY.PEEK[])")
-        if typ != "OK":
+        data = imap_chunked.fetch_whole(conn, uid)  # 10/14: 大信分段取
+        if not data:
             raise DataNotFoundError(f"取邮件失败: uid={uid}")
         parsed = self._parse_fetch(
             data, folder_raw, folder_role(utf7_decode(folder_raw)), "0"
@@ -663,27 +663,11 @@ class ImapAdapter(EmailAdapter):
 
         # BODY.PEEK[] 不是 BODY[]
 
-        PEEK 不会给邮件打 \Seen。归档是后台行为, **绝不能把员工没读过的
+        PEEK 不会给邮件打 \\Seen。归档是后台行为, **绝不能把员工没读过的
         邮件标成已读** —— 那是直接改员工邮箱的状态, 而且他看不出是谁干的。
         """
-        if not uids:
-            return {}
-        typ, data = conn.uid("fetch", b",".join(uids), "(UID BODY.PEEK[])")
-        if typ != "OK":
-            logger.warning("归档取原文失败, 这批跳过 (下一轮会重试)")
-            return {}
-        out: dict[str, bytes] = {}
-        for item in data or []:
-            if not isinstance(item, tuple) or len(item) < 2:
-                continue
-            prefix, raw = item[0], item[1]
-            if not isinstance(prefix, bytes) or not isinstance(raw, (bytes, bytearray)):
-                continue
-            uid_match = _UID_IN_FETCH.search(prefix)
-            if uid_match is None:
-                continue
-            out[uid_match.group(1).decode("ascii")] = bytes(raw)
-        return out
+        # 10/14: 大小信分开取 —— 一批里夹一封大附件的信, 原来整批被服务器断开 (见 imap_chunked.py)
+        return imap_chunked.fetch_raw_many(conn, uids)
 
     @staticmethod
     def _parse_fetch(data, folder_raw: str, role: str, uidvalidity: str) -> list[_Remote]:
