@@ -51,14 +51,21 @@ fn failed_runtime_probe_or_wrong_pin_never_creates_completion_marker() {
     assert!(!paths.install_dir.join(super::super::hermes_install_base::COMPLETION_MARKER).exists());
 }
 
+// 10/14: 新装机流程 (不再跑 install.ps1) 解压源码失败时, 旧安装必须原样换回来。
 #[test]
-fn latest_known_stage_is_reported_without_arbitrary_log_content() {
-    let (_dir, paths) = fixture();
-    let mut log = open_bootstrap_log(&paths).unwrap();
-    writeln!(log, "-> Installing dependencies...\nDownloading pillow\nprivate arbitrary output").unwrap();
-    assert_eq!(current_stage(&paths), "正在下载 Python 依赖");
-    writeln!(log, "-> TUI dependencies...").unwrap();
-    assert_eq!(current_stage(&paths), "正在检查终端界面组件");
+fn failed_source_extract_restores_previous_install() {
+    let (dir, paths) = fixture();
+    std::fs::write(paths.install_dir.join("keep-me"), "old").unwrap();
+    let runtime = dir.path().join("runtime");
+    std::fs::create_dir_all(&runtime).unwrap();
+    // 不是 gzip 的"归档" (>1KB 才算可用资源)
+    std::fs::write(runtime.join("hermes-agent-bundle.tar.gz"), vec![b'x'; 4096]).unwrap();
+    let artifacts = RuntimeArtifacts::from_dir(runtime);
+    assert!(replace_source(&artifacts, &paths).is_err());
+    assert_eq!(std::fs::read_to_string(paths.install_dir.join("keep-me")).unwrap(), "old");
+    let leftovers: Vec<_> = std::fs::read_dir(&paths.hermes_home).unwrap().flatten()
+        .filter(|e| e.file_name().to_string_lossy().contains(".replaced-")).collect();
+    assert!(leftovers.is_empty(), "失败时不该留下 .replaced-*");
 }
 
 // ─── 9/18: .replaced-* 无限堆积 ──────────────────────────────

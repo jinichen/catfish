@@ -71,77 +71,26 @@ if [ "$PKG_VER" = "$CARGO_VER" ] && [ "$CARGO_VER" = "$TAURI_VER" ]; then
     fi
     echo "✓ Hermes target pin: ${TARGET_VER}（与 Companion ${PKG_VER} 独立）"
 
-    # ── Windows offline 补丁的上游 pin (8/1) ──────────────────────────
-    #
-    # 升级 hermes 时要一起动的东西不止版本号, 还有
-    # edge/hermes-fork/patch_install_ps1_offline.py 里钉死的上游 install.ps1
-    # SHA256 —— 上游装机脚本变了, 我们那 7 处 offline 注入的锚点就未必还贴得上。
-    #
-    # 7/29 那次 release (1c5ca28) 就漏了它: .hermes-target-version / .hermes-git-tag /
-    # 3 处版本号全改了, 唯独没改这个脚本。后果是从那天起每一次 Windows MSI 构建
-    # 都在 "Patch install.ps1 offline mode" 那步红掉, 而那要 clone 完上游、跑到
-    # 第 5 步才报 —— 一分钟起步, 且没人天天盯 Actions, 于是一直红着没人知道。
-    #
-    # 版本号那条链当场就被这个脚本拦住了, 这条却要等 40 分钟的 Windows 构建。
-    # 同样是"升级 hermes 忘了同步", 两种反馈速度差了三个数量级。
-    #
-    # 这里不去算上游文件的 SHA (CI runner 上没有上游源码, 算不了), 而是校验
-    # "那个 SHA 是从哪个 commit 算的" 跟 .hermes-git-commit 一致 —— 纯本地、
-    # 离线、一秒。pin 挪了而补丁脚本没跟着改, 立刻报。
-    # 8/8: 从只查 .ps1 扩到**两个都查**。
-    #
-    # 8/1 加这段时只盖了 Windows 的 patch_install_ps1_offline.py。而
-    # patch_install_sh_offline.py (mac / Linux) 当时根本没有 UPSTREAM_COMMIT ——
-    # 也就是说我们自己天天在走的 mac 这条路, "升级 hermes 忘了同步 patch 脚本"
-    # 一直没有任何护栏, 只能等 build-mac-resources.sh 跑到第 2 步 SHA drift 才炸。
-    # 8/8 给 sh 脚本补了 UPSTREAM_COMMIT, 这里跟着一起查。
-    GIT_COMMIT_FILE="$COMPANION_DIR/.hermes-git-commit"
-    if [ -f "$GIT_COMMIT_FILE" ]; then
-        PINNED_COMMIT="$(head -1 "$GIT_COMMIT_FILE" | tr -d '[:space:]')"
-        for _spec in "Windows MSI:install.ps1:7:patch_install_ps1_offline.py" \
-                     "mac/Linux:install.sh:8:patch_install_sh_offline.py"; do
-            PLAT="${_spec%%:*}";      _rest="${_spec#*:}"
-            UPSTREAM_FILE="${_rest%%:*}"; _rest="${_rest#*:}"
-            N_ANCHOR="${_rest%%:*}"
-            PATCH_NAME="${_rest#*:}"
-            PATCH_SCRIPT="$COMPANION_DIR/../hermes-fork/$PATCH_NAME"
-            [ -f "$PATCH_SCRIPT" ] || continue
-            PATCH_COMMIT="$(grep -E '^UPSTREAM_COMMIT[[:space:]]*=' "$PATCH_SCRIPT" \
-                            | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
-            if [ -z "$PATCH_COMMIT" ]; then
-                echo "⚠ $PATCH_NAME 里没有 UPSTREAM_COMMIT, 跳过 $PLAT 的 pin 校验"
-            elif [ "$PATCH_COMMIT" = "$PINNED_COMMIT" ]; then
-                echo "✓ $PLAT offline 补丁的上游 pin 一致: ${PINNED_COMMIT:0:12}"
-            else
-                echo "❌ $PLAT offline 补丁没跟上 hermes 的 pin:"
-                echo "   .hermes-git-commit : $PINNED_COMMIT"
-                echo "   $PATCH_NAME : $PATCH_COMMIT"
-                echo ""
-                echo "   上游 $UPSTREAM_FILE 换了一版, 我们那 $N_ANCHOR 处 offline 注入的锚点"
-                echo "   未必还贴得上。**不能只改 SHA 了事**, 按顺序做:"
-                echo "     1. clone 上游到 pin 的 commit, 逐处确认 $N_ANCHOR 个 anchor 各命中 1 次"
-                echo "        (0 次 = 上游改了那段; >1 次 = anchor 不再 unique, 都要重 audit)"
-                echo "     2. 更新 UPSTREAM_SHA256 = 新 $UPSTREAM_FILE 的 sha256"
-                echo "     3. 更新 UPSTREAM_COMMIT = $PINNED_COMMIT"
-                echo "     4. 本地跑一遍 patch 脚本 --check, 确认 $N_ANCHOR 处注入都在"
-                echo ""
-                echo "   不修的话表现是: 该平台的构建每次都红, 而且要等一分钟"
-                echo "   clone 完才报错。"
-                exit 1
-            fi
-        done
-    fi
+    # ── offline 补丁的上游 pin (8/1 → 10/14 退役) ─────────────────────
+    # 原来这里核对 patch_install_{ps1,sh}_offline.py 钉的上游 commit。hermes v0.22.0 起不再给上游
+    # install.ps1 / install.sh 打离线补丁 (上游安装器整个换成 hermes pm), Companion 自己装
+    # (src-tauri/src/commands/hermes_install_native.rs), 两个补丁脚本已删, 这道闸随之退役。
 
     # 本机有 Hermes 时，跟 Hermes target 比较，不跟 Companion 版本比较。
     # 不 fail：开发机可能刻意装旧 Hermes 做兼容测试。
+    # 10/14: hermes v0.22 起 pyproject 的 version 固定是 0.0.0, 真实版本在安装戳 (install-stamp.json) 里。
+    HERMES_STAMP="${HOME}/.hermes/hermes-agent/install-stamp.json"
     HERMES_PYPROJECT="${HOME}/.hermes/hermes-agent/pyproject.toml"
-    if [ -f "$HERMES_PYPROJECT" ]; then
+    HERMES_VER=""
+    if [ -f "$HERMES_STAMP" ]; then
+        HERMES_VER="$(sed -nE 's/.*"baseVersion"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$HERMES_STAMP" | head -1)"
+    elif [ -f "$HERMES_PYPROJECT" ]; then
         HERMES_VER="$(awk -F'"' '/^version[[:space:]]*=/ {print $2; exit}' "$HERMES_PYPROJECT" 2>/dev/null)"
-        if [ -n "$HERMES_VER" ] && [ "$HERMES_VER" != "$TARGET_VER" ]; then
-            echo "⚠ 本机装的 Hermes 跟 target pin 不一致 (不 fail, 仅提醒):"
-            echo "  target : $TARGET_VER"
-            echo "  local  : $HERMES_VER  ($HERMES_PYPROJECT)"
-        fi
+    fi
+    if [ -n "$HERMES_VER" ] && [ "$HERMES_VER" != "$TARGET_VER" ]; then
+        echo "⚠ 本机装的 Hermes 跟 target pin 不一致 (不 fail, 仅提醒):"
+        echo "  target : $TARGET_VER"
+        echo "  local  : $HERMES_VER"
     fi
 
     # ── 版本号必须跟着代码一起动 (9/20) ──────────────────────────

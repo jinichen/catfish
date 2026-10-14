@@ -1,4 +1,4 @@
-//! hermes v0.22 起 Companion 自己装 hermes 的各步 (macOS / Linux; 10/14)。
+//! hermes v0.22 起 Companion 自己装 hermes 的各步 (macOS / Windows 共用; 10/14)。
 //!
 //! 原来是调上游 install.sh 的 `--stage xxx` + 我们打的离线补丁。v0.22.0 上游安装器整个重写成
 //! "拿 uv + Python → 交给 hermes pm 联网按 uv.lock 装", 只认 Python 3.14, 补丁锚点全部对不上
@@ -11,7 +11,7 @@
 //! | `install_python_deps` | wheelhouse 离线装 (钉版本 + sha256), 再 editable 装 hermes | install_deps |
 //! | `install_chromium` | 解 chromium-embed 到 Playwright 默认目录 | node-deps 的离线补丁 |
 //! | `prepare_config` | ~/.hermes 目录骨架 + .env / config.yaml 模板 | stage_config |
-//! | `link_cli` | `~/.local/bin/hermes` 启动脚本 | setup_path |
+//! | `link_cli` | `~/.local/bin/hermes` 启动脚本 (仅 macOS / Linux; Windows 用 venv\Scripts\hermes.exe) | setup_path |
 //! | `finish` | `.install_method` | complete |
 //!
 //! wheelhouse / catfish-requirements.txt / install-stamp.json (hermes_install_health::INSTALL_STAMP) 在打包时写进源码树
@@ -24,6 +24,7 @@ use std::process::Command;
 use crate::services::catfish_paths::hermes_venv_python;
 
 use super::hermes_install_artifacts::RuntimeArtifacts;
+#[cfg(not(target_os = "windows"))]
 use super::hermes_install_base::INSTALL_METHOD_MARKER;
 use super::hermes_install_state::{remove_any, BootstrapPaths};
 
@@ -54,8 +55,16 @@ fn run(mut command: Command, description: &str) -> Result<()> {
 /// uv 只看我们给的东西: 不读用户的 uv 配置, 不下 Python, 不联网。
 fn uv(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths) -> Command {
     let mut command = crate::services::process::background_command(&artifacts.uv);
+    #[cfg(not(target_os = "windows"))]
+    command.env("HOME", &paths.home);
+    #[cfg(target_os = "windows")]
+    {
+        // 9/26 现场: uv 缓存撞过 Windows error 4390 (硬链接 / 重解析点) —— 一律复制, 缓存放自己的目录
+        command
+            .env("UV_LINK_MODE", "copy")
+            .env("UV_CACHE_DIR", paths.hermes_home.join(".catfish-uv-cache"));
+    }
     command
-        .env("HOME", &paths.home)
         .env("UV_NO_CONFIG", "1")
         .env("UV_PYTHON_DOWNLOADS", "never")
         .env("UV_OFFLINE", "1")
@@ -73,7 +82,16 @@ pub(crate) fn embedded_python_root(paths: &BootstrapPaths) -> PathBuf {
 }
 
 pub(crate) fn embedded_python(paths: &BootstrapPaths) -> PathBuf {
-    embedded_python_root(paths).join("bin").join("python3")
+    python_in(&embedded_python_root(paths))
+}
+
+/// python-build-standalone 的布局: Windows 是根目录下 python.exe, 其它是 bin/python3
+fn python_in(root: &Path) -> PathBuf {
+    if cfg!(target_os = "windows") {
+        root.join("python.exe")
+    } else {
+        root.join("bin").join("python3")
+    }
 }
 
 fn python_is_wanted(python: &Path) -> bool {
@@ -109,7 +127,7 @@ pub(crate) fn ensure_embedded_python(artifacts: &RuntimeArtifacts, paths: &Boots
         let _ = remove_any(&stage);
         return Err(e);
     }
-    if !python_is_wanted(&stage.join("bin").join("python3")) {
+    if !python_is_wanted(&python_in(&stage)) {
         let _ = remove_any(&stage);
         anyhow::bail!("内嵌 Python 不是 {}.{}: {}", PYTHON_MINOR.0, PYTHON_MINOR.1, tar.display());
     }
@@ -179,12 +197,21 @@ pub(crate) fn install_python_deps(artifacts: &RuntimeArtifacts, paths: &Bootstra
     run(check, "验证 Hermes 和额外依赖可导入")
 }
 
-/// Playwright 默认找浏览器的地方。跟 Python playwright 的 registry 一致 (macOS: ~/Library/Caches)。
-fn playwright_browsers_dir(paths: &BootstrapPaths) -> PathBuf {
-    if cfg!(target_os = "macos") {
-        paths.home.join("Library").join("Caches").join("ms-playwright")
-    } else {
-        paths.home.join(".cache").join("ms-playwright")
+/// Playwright 默认找浏览器的地方。跟 Python playwright 的 registry 一致
+/// (macOS: ~/Library/Caches, Windows: %LOCALAPPDATA%, Linux: ~/.cache)。
+fn playwright_browsers_dir(paths: &BootstrapPaths) -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = paths;
+        std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("ms-playwright"))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Some(paths.home.join("Library").join("Caches").join("ms-playwright"))
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        Some(paths.home.join(".cache").join("ms-playwright"))
     }
 }
 
@@ -194,7 +221,10 @@ pub(crate) fn install_chromium(artifacts: &RuntimeArtifacts, paths: &BootstrapPa
         log::warn!("[hermes-install] 安装包里没有 chromium-embed.tar.gz, 鲶鱼浏览器工具不可用");
         return;
     };
-    let dest = playwright_browsers_dir(paths);
+    let Some(dest) = playwright_browsers_dir(paths) else {
+        log::warn!("[hermes-install] 找不到 Playwright 浏览器目录 (LOCALAPPDATA 未设), 鲶鱼浏览器工具不可用");
+        return;
+    };
     let result = std::fs::create_dir_all(&dest)
         .with_context(|| format!("创建 {}", dest.display()))
         .and_then(|()| {
@@ -239,6 +269,7 @@ pub(crate) fn prepare_config(paths: &BootstrapPaths) -> Result<()> {
 }
 
 /// `~/.local/bin/hermes` —— 员工 / IT 在终端里敲 hermes 用 (Companion 自己直接调 venv)。
+#[cfg(not(target_os = "windows"))]
 pub(crate) fn link_cli(paths: &BootstrapPaths) -> Result<()> {
     let bin_dir = paths.home.join(".local").join("bin");
     std::fs::create_dir_all(&bin_dir).with_context(|| format!("创建 {}", bin_dir.display()))?;
@@ -259,11 +290,13 @@ pub(crate) fn link_cli(paths: &BootstrapPaths) -> Result<()> {
     Ok(())
 }
 
+/// Windows 用 hermes_install_windows::write_windows_install_markers (同时写版本标记)。
+#[cfg(not(target_os = "windows"))]
 pub(crate) fn finish(paths: &BootstrapPaths) -> Result<()> {
     std::fs::write(paths.install_dir.join(INSTALL_METHOD_MARKER), b"catfish\n").context("写 .install_method")
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "windows")))]
 mod e2e {
     use super::*;
 

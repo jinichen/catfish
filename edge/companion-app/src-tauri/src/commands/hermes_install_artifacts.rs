@@ -2,12 +2,10 @@
 //!
 //! 2026-08-15 从 hermes_install.rs 切出来。纯搬迁, 逻辑一行未改。
 
-#[cfg(not(target_os = "windows"))] // 只有 validate_bootstrap_tools 用 (Unix 装机)
 use anyhow::Context;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
-#[cfg(any(not(target_os = "windows"), test))]
 /// 10/9: 去掉了 node-embed.tar.gz —— 员工机运行时不需要 Node (hermes 只跑 Python
 /// 网关; 鲶鱼浏览器走 Python Playwright + chromium-embed), 见
 /// scripts/build-mac-resources.sh 文件头的实测记录。
@@ -30,14 +28,9 @@ pub(crate) const RUNTIME_ARCHIVES: [&str; 3] = [
 pub(crate) const CATFISH_EMAIL_ARCHIVE: &str = "catfish-email-dist.tar.gz";
 /// 员工选择的聊天导出文件读取器，零依赖 wheel，不含微信解密能力。
 pub(crate) const CATFISH_WECHAT_READER_ARCHIVE: &str = "catfish-wechat-reader-dist.tar.gz";
-/// hermes venv 的额外 Python 依赖 (jieba / playwright + 它们的依赖)。
-/// 8/5: 装机流程里这两个的安装语句一直是 0 处 —— 见 install_hermes_deps。
-/// 10/14 起 macOS 不再用它 (额外包并进 hermes 归档的 wheelhouse); Windows 改造前还在用。
-#[cfg(any(target_os = "windows", test))]
-pub(crate) const HERMES_DEPS_ARCHIVE: &str = "hermes-deps-dist.tar.gz";
 
 /// hermes venv 里要装的额外包 —— **唯一**清单在 `src-tauri/hermes-extra-packages.txt`,
-/// 安装、自检和三处打包脚本 (scripts/fetch_hermes_deps.py) 都从那里读。
+/// 安装自检和打包脚本 (scripts/build_hermes_wheelhouse.py, mac / Windows 共用) 都从那里读。
 ///
 /// 9/23 加 watchdog: local-search 的文件监听要它 (catfish_search/watcher.py),
 /// 客户机器上 local-search 跑在 hermes venv 里 (没有源码树, 也就没有它自己的
@@ -59,12 +52,6 @@ fn hermes_extra_entries() -> impl Iterator<Item = (&'static str, &'static str)> 
         })
 }
 
-/// `uv pip install` 的需求列表 (如 `xlrd<2`)。10/14 起只有 Windows 装机还在用 (mac 走 wheelhouse 清单)。
-#[cfg(any(target_os = "windows", test))]
-pub(crate) fn hermes_extra_packages() -> Vec<&'static str> {
-    hermes_extra_entries().map(|(requirement, _)| requirement).collect()
-}
-
 /// 装没装的判据: import 得了才算。playwright 要 sync_api (装了一半时顶层能 import)。
 pub(crate) fn hermes_extra_import_check() -> String {
     let modules: Vec<&str> = hermes_extra_entries().map(|(_, module)| module).collect();
@@ -73,18 +60,11 @@ pub(crate) fn hermes_extra_import_check() -> String {
 
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeArtifacts {
-    #[cfg(not(target_os = "windows"))]
     pub(crate) dir: PathBuf,
     pub(crate) uv: PathBuf,
-    #[cfg(any(not(target_os = "windows"), test))]
     pub(crate) python_tar: Option<PathBuf>,
-    #[cfg(any(not(target_os = "windows"), test))]
     pub(crate) hermes_tar: Option<PathBuf>,
-    #[cfg(any(not(target_os = "windows"), test))]
     pub(crate) chromium_tar: Option<PathBuf>,
-    /// hermes venv 额外依赖包 (8/5)。10/14 起只有 Windows 用。
-    #[cfg(any(target_os = "windows", test))]
-    pub(crate) deps_tar: Option<PathBuf>,
     /// catfish-email 源码包 (7/30)。
     ///
     /// **不计入 archive_count / is_complete_bundle** —— 那两个判的是
@@ -104,22 +84,15 @@ impl RuntimeArtifacts {
         };
         Self {
             uv: dir.join(uv_name),
-            #[cfg(any(not(target_os = "windows"), test))]
             python_tar: usable_artifact(&dir.join(RUNTIME_ARCHIVES[0])),
-            #[cfg(any(not(target_os = "windows"), test))]
             hermes_tar: usable_artifact(&dir.join(RUNTIME_ARCHIVES[1])),
-            #[cfg(any(not(target_os = "windows"), test))]
             chromium_tar: usable_artifact(&dir.join(RUNTIME_ARCHIVES[2])),
             email_tar: usable_artifact(&dir.join(CATFISH_EMAIL_ARCHIVE)),
             wechat_reader_tar: usable_artifact(&dir.join(CATFISH_WECHAT_READER_ARCHIVE)),
-            #[cfg(any(target_os = "windows", test))]
-            deps_tar: usable_artifact(&dir.join(HERMES_DEPS_ARCHIVE)),
-            #[cfg(not(target_os = "windows"))]
             dir,
         }
     }
 
-    #[cfg(any(not(target_os = "windows"), test))]
     pub(crate) fn archive_count(&self) -> usize {
         [
             &self.python_tar,
@@ -131,12 +104,10 @@ impl RuntimeArtifacts {
         .count()
     }
 
-    #[cfg(any(not(target_os = "windows"), test))]
     pub(crate) fn is_complete_bundle(&self) -> bool {
         self.archive_count() == RUNTIME_ARCHIVES.len()
     }
 
-    #[cfg(not(target_os = "windows"))]
     pub(crate) fn validate_bootstrap_tools(&self) -> Result<()> {
         for path in [&self.uv] {
             let meta = std::fs::metadata(path)
@@ -163,7 +134,6 @@ fn usable_artifact(path: &Path) -> Option<PathBuf> {
 ///
 /// 旧逻辑看到 bundle 内 `install.sh + uv` 就立即返回，即使它是 0/N；结果会
 /// 永远忽略 `~/.catfish/runtime` 中用户已经准备好的完整离线包。
-#[cfg(any(not(target_os = "windows"), test))]
 pub(crate) fn resolve_runtime_dir_for_home(
     resource_dir: &Path,
     home: Option<&Path>,
@@ -209,7 +179,6 @@ pub(crate) fn resolve_runtime_dir_for_home(
     )
 }
 
-#[cfg(not(target_os = "windows"))]
 pub(crate) fn resolve_runtime_dir(resource_dir: &Path) -> Result<PathBuf> {
     let home = crate::util::paths::home_env().ok().map(PathBuf::from);
     resolve_runtime_dir_for_home(resource_dir, home.as_deref())
@@ -240,13 +209,12 @@ pub(crate) fn resolve_addon_runtime_dir(resource_dir: &Path) -> Result<PathBuf> 
         let artifacts = RuntimeArtifacts::from_dir(candidate.clone());
         let addon_count = [
             &artifacts.email_tar,
-            &artifacts.deps_tar,
             &artifacts.wechat_reader_tar,
         ]
         .into_iter()
         .filter(|path| path.is_some())
         .count();
-        tried.push(format!("{} (附加归档={addon_count}/3)", candidate.display()));
+        tried.push(format!("{} (附加归档={addon_count}/2)", candidate.display()));
         if addon_count > 0 {
             candidates.push((addon_count, bundle_preference, candidate));
         }
@@ -255,7 +223,7 @@ pub(crate) fn resolve_addon_runtime_dir(resource_dir: &Path) -> Result<PathBuf> 
     candidates.sort_by(|a, b| (b.0, b.1).cmp(&(a.0, a.1)));
     if let Some((addon_count, _, selected)) = candidates.into_iter().next() {
         log::info!(
-            "[runtime] 选择 {} · 附加归档 {addon_count}/3",
+            "[runtime] 选择 {} · 附加归档 {addon_count}/2",
             selected.display()
         );
         return Ok(selected);
@@ -287,9 +255,8 @@ mod extra_packages_tests {
 
     #[test]
     fn 原有的和文件解析要的都在() {
-        let packages: Vec<&str> = hermes_extra_packages()
-            .into_iter()
-            .map(|r| r.split(['=', '<', '>']).next().unwrap_or(r))
+        let packages: Vec<&str> = hermes_extra_entries()
+            .map(|(r, _)| r.split(['=', '<', '>']).next().unwrap_or(r))
             .collect();
         for want in ["jieba", "playwright", "watchdog", "pypdfium2", "openpyxl", "python-docx"] {
             assert!(packages.contains(&want), "{packages:?} 缺 {want}");

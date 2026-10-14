@@ -43,7 +43,7 @@ jobs:
         shell: powershell
         run: '& "edge/companion-app/scripts/test-windows-maintenance.ps1"'
 
-      - name: Setup Node.js 26.8.1 (Hermes v2026.8.31)
+      - name: Setup Node.js 26.8.1 (Companion 前端构建)
         uses: actions/setup-node@v6
         with:
           node-version: '26.8.1'
@@ -73,153 +73,24 @@ jobs:
         working-directory: edge/companion-app
         run: npm run build
 
-      # ─── Windows resources: install.ps1 patched + uv.exe + cpython zip + hermes tar ───
-
-      - name: Clone hermes-agent 上游 pinned to .hermes-git-tag
-        shell: bash
-        run: |
-          set -euo pipefail
-          # 版本映射 audit 铁证 (7/13):
-          # .hermes-target-version = 0.18.0 (pyproject 内部版本)
-          # GitHub tag = v2026.7.1 (date 格式, 独立 numbering)
-          # 独立记 GitHub tag 到 .hermes-git-tag, 避免混淆.
-          HERMES_TAG=$(cat edge/companion-app/.hermes-git-tag | tr -d '[:space:]')
-          HERMES_VER=$(cat edge/companion-app/.hermes-target-version | tr -d '[:space:]')
-          echo "Cloning hermes-agent GitHub tag=${HERMES_TAG} (pyproject version=${HERMES_VER})"
-          git clone --depth 1 --branch "${HERMES_TAG}" \
-              https://github.com/NousResearch/hermes-agent.git \
-              /tmp/hermes-agent-src
-          # verify pyproject version 匹配 (defense in depth)
-          ACTUAL_VER=$(grep -E '^version' /tmp/hermes-agent-src/pyproject.toml | head -1 | sed -E 's/version *= *"([^"]+)"/\1/' | tr -d '[:space:]')
-          if [[ "${ACTUAL_VER}" != "${HERMES_VER}" ]]; then
-            echo "ERROR: cloned hermes-agent pyproject version=${ACTUAL_VER}, expected ${HERMES_VER}"
-            echo "  .hermes-git-tag (${HERMES_TAG}) 跟 .hermes-target-version (${HERMES_VER}) 映射错. audit + update."
-            exit 1
-          fi
-          echo "OK version match: ${HERMES_VER}"
-          ls /tmp/hermes-agent-src | head
-
-      - name: Copy catfish plugins into hermes-agent-src
-        shell: bash
-        run: |
-          set -euo pipefail
-          # catfish repo edge/hermes-plugins/catfish-memory
-          # 需要拷进 hermes-agent-src/plugins/memory/, hermes 启动时加载.
-          # (dev 机是软链, CI clean clone 是空; 拷源码 = 展开等价)
-          mkdir -p /tmp/hermes-agent-src/plugins/memory
-          for plugin in catfish-memory; do
-            if [[ -d "edge/hermes-plugins/${plugin}" ]]; then
-              cp -R "edge/hermes-plugins/${plugin}" \
-                    "/tmp/hermes-agent-src/plugins/memory/${plugin}"
-              echo "OK copied ${plugin}"
-            fi
-          done
-          ls /tmp/hermes-agent-src/plugins/memory/
-
-      - name: Patch install.ps1 offline mode
+      # ─── Windows hermes 运行时 (10/14, hermes v0.22.0 起) ───
+      # 原来这里是一串: clone 上游 → 拷插件 → 给 install.ps1 打离线补丁 → 下 cpython 3.11 zip → npx 下
+      # Chromium → 取额外依赖 → 打 hermes 归档 → 测离线 uv 缓存。v0.22 上游安装器整个换成 hermes pm
+      # (只认 Python 3.14、联网装), 补丁锚点全部对不上。现在 Companion 自己装 (hermes_install_native.rs),
+      # 资源统一由下面这个脚本出 (mac 上也能交叉打, 跟本地打包同一份): uv.exe / cpython-3.14.7 /
+      # hermes 归档 (含 win_amd64 wheelhouse + 安装戳) / Chromium (wheelhouse 里同版 playwright 下的)。
+      - name: Build Windows Hermes runtime resources
         shell: bash
         env:
-          # W2.10 Windows Python 3.12 cp1252 stdout 挂 unicode. 双保险:
-          # env var + script 内 sys.stdout.reconfigure.
           PYTHONIOENCODING: utf-8
           PYTHONUTF8: '1'
-        run: |
-          set -euo pipefail
-          python3 edge/hermes-fork/patch_install_ps1_offline.py \
-              --input /tmp/hermes-agent-src/scripts/install.ps1 \
-              --output edge/companion-app/src-tauri/resources/windows/install.ps1
-          python3 edge/hermes-fork/patch_windows_watchdog.py /tmp/hermes-agent-src
-          python3 edge/hermes-fork/verify_windows_watchdog.py /tmp/hermes-agent-src
-          # verify marker
-          grep -q 'CATFISH-OFFLINE-PATCH-v1' \
-              edge/companion-app/src-tauri/resources/windows/install.ps1
+        run: bash edge/companion-app/scripts/build-windows-hermes-resources.sh
 
-      # ⚠ 这一步是 8/3 补的, 补它的原因值得写下来:
-      #
-      # 7/17 (79cbab9) 往补丁里写了一行 `Write-Info "$label: ..."`。PowerShell 里
-      # `$label:` 是驱动器/命名空间限定符 (同 $env:PATH), 冒号跟空格 = **解析错误**。
-      # 于是打出来的 install.ps1 在 parse 阶段就挂, 一行都执行不了。
-      #
-      # 而 CI 一路绿: 上面那步只 grep marker (在), tauri 只是把文件塞进 msi (成功),
-      # 产物照常上传。**只有员工双击安装时才炸**, 表现是 msi 弹
-      # "Windows Installer 程序包有问题" —— 一句什么都没说的话。
-      # 就这样装不上装了两周多没人发现。
-      #
-      # marker 检查只能证明"补丁打上了", 证明不了"打出来的东西是合法 PowerShell"。
-      # 这一步用 PowerShell 自己的解析器验语法, 不执行 —— 有语法错就当场红。
-      - name: Verify patched install.ps1 parses as valid PowerShell
-        shell: pwsh
-        run: |
-          $path = "edge/companion-app/src-tauri/resources/windows/install.ps1"
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-              (Resolve-Path $path), [ref]$null, [ref]$errors) | Out-Null
-          if ($errors -and $errors.Count -gt 0) {
-              Write-Host "::error::打补丁后的 install.ps1 语法不合法 ($($errors.Count) 处):"
-              foreach ($e in $errors) {
-                  Write-Host "::error file=$path,line=$($e.Extent.StartLineNumber)::$($e.Message)"
-                  Write-Host "  行 $($e.Extent.StartLineNumber): $($e.Extent.Text)"
-              }
-              Write-Host ""
-              Write-Host "最常踩的一种: 字符串里写了 `"`$var:`" —— PowerShell 会把它当"
-              Write-Host "驱动器限定符 (同 `$env:PATH)。改成 `"`${var}:`"。"
-              exit 1
-          }
-          Write-Host "✓ install.ps1 语法合法 ($(Get-Content $path | Measure-Object -Line | % Lines) 行)"
 
-      - name: Download uv Windows x86_64
-        shell: bash
-        run: |
-          set -euo pipefail
-          UV_VERSION=$(tr -d '[:space:]' < edge/companion-app/.uv-version)
-          test -n "${UV_VERSION}"
-          curl -fSL -o /tmp/uv.zip \
-              "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-pc-windows-msvc.zip"
-          unzip -o /tmp/uv.zip -d /tmp/uv-extract
-          cp /tmp/uv-extract/uv.exe edge/companion-app/src-tauri/resources/windows/uv.exe
-          ls -lh edge/companion-app/src-tauri/resources/windows/uv.exe
 
-      - name: Download + repack cpython 3.11.15 Windows x86_64
-        # W2.12 (7/13 CI run #7): 用 pwsh 全 native Windows 环境.
-        # 之前 shell:bash + /tmp path 挂: PowerShell 是 native Windows 不认
-        # unix /tmp (Git Bash 内部映射), 也无 unix zip. 换 pwsh 后 $env:RUNNER_TEMP
-        # 走 Windows path, tar / Compress-Archive 都 native.
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $PYTHON_VER = '3.11.15'
-          $BUILD_TAG = '20260623'
-          $FNAME = "cpython-${PYTHON_VER}+${BUILD_TAG}-x86_64-pc-windows-msvc-install_only.tar.gz"
-          $URL = "https://github.com/astral-sh/python-build-standalone/releases/download/${BUILD_TAG}/${FNAME}"
 
-          $TMP = $env:RUNNER_TEMP
-          $tarPath = "$TMP\cpython.tar.gz"
-          $extractDir = "$TMP\cpython-extract"
 
-          # 下 tar.gz
-          Write-Host "Downloading cpython 3.11.15 Windows x86_64 ..."
-          Invoke-WebRequest -Uri $URL -OutFile $tarPath
 
-          # 展开 tar (Windows 10 build 17063+ 内置 bsd tar)
-          if (Test-Path $extractDir) { Remove-Item -Recurse -Force $extractDir }
-          New-Item -ItemType Directory -Path $extractDir | Out-Null
-          tar -xzf $tarPath -C $extractDir
-          if ($LASTEXITCODE -ne 0) { throw "tar extract failed: $LASTEXITCODE" }
-
-          # rename 顶层 python\ → cpython-3.11.15-windows-x86_64-none\
-          # audit uv installation.rs fmt::Display InstallationKey format:
-          #   {impl}-{maj}.{min}.{patch}-{os}-{arch}-{libc} = cpython-3.11.15-windows-x86_64-none
-          $expectedName = "cpython-${PYTHON_VER}-windows-x86_64-none"
-          Rename-Item -Path "$extractDir\python" -NewName $expectedName
-
-          # 重打 zip (Windows native Compress-Archive)
-          $outZip = "$env:GITHUB_WORKSPACE\edge\companion-app\src-tauri\resources\windows\cpython-${PYTHON_VER}-embed.zip"
-          if (Test-Path $outZip) { Remove-Item -Force $outZip }
-          Compress-Archive -Path "$extractDir\$expectedName" -DestinationPath $outZip -Force
-
-          # verify
-          Get-ChildItem "$env:GITHUB_WORKSPACE\edge\companion-app\src-tauri\resources\windows\" |
-              Format-Table Name, Length
 
       # 10/9: 删掉了 "npm ci in hermes-agent-src" 这一步 —— node_modules 不再进包。
       # 员工机上 hermes 只跑 Python 网关 + 鲶鱼工具, 不需要 Node: 10/9 在 mac 上用
@@ -238,39 +109,8 @@ jobs:
           if (-not (Test-Path $archive)) { throw "reader resource was not generated: $archive" }
           Write-Host "✓ $archive"
 
-      - name: Build offline Chromium resource
-        shell: bash
-        run: |
-          set -euo pipefail
-          # 显式下载一次，确保 Chromium 真正进入 MSI，而不是留下 0 字节占位文件。
-          export PLAYWRIGHT_BROWSERS_PATH="/tmp/catfish-windows-playwright"
-          rm -rf "$PLAYWRIGHT_BROWSERS_PATH"
-          mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
-          # 10/9: hermes 的 node_modules 不再安装 (见上面), 改用 npx 拉**跟 hermes
-          # lockfile 同一个版本**的 playwright —— 原来 `npx --no-install playwright`
-          # 用的就是 lockfile 里那份, 版本不变, 下下来的 Chromium 也就跟以前一样。
-          cd /tmp/hermes-agent-src
-          PW_VERSION="$(node -p "require('./package-lock.json').packages['node_modules/playwright'].version")"
-          [ -n "$PW_VERSION" ] && [ "$PW_VERSION" != "undefined" ] || { echo "::error::读不到 hermes lockfile 里的 playwright 版本" >&2; exit 1; }
-          echo "playwright@$PW_VERSION (取自 hermes package-lock.json)"
-          npx --yes "playwright@$PW_VERSION" install chromium
-          mapfile -t chromium_dirs < <(find "${PLAYWRIGHT_BROWSERS_PATH}" \
-              -maxdepth 1 -mindepth 1 -type d -name 'chromium*' -printf '%f\n' | sort)
-          if [ "${#chromium_dirs[@]}" -eq 0 ]; then
-              echo "没有找到 Playwright chromium 目录: ${PLAYWRIGHT_BROWSERS_PATH}" >&2
-              exit 1
-          fi
-          # Git Bash 下 GITHUB_WORKSPACE 仍可能是 D:\\a\\...；直接传给
-          # tar 会把 `D:` 误判成远程主机名。先转换成 POSIX 路径。
-          workspace_dir="$(cygpath -u "${GITHUB_WORKSPACE}")"
-          archive="${workspace_dir}/edge/companion-app/src-tauri/resources/windows/chromium-embed.tar.gz"
-          rm -f "$archive"
-          tar czf "$archive" -C "$PLAYWRIGHT_BROWSERS_PATH" "${chromium_dirs[@]}"
-          [ "$(stat -c '%s' "$archive")" -gt 52428800 ]
-          tar tzf "$archive" >/dev/null
-          echo "✓ chromium-embed.tar.gz · $(du -h "$archive" | cut -f1)"
 
-      - name: Build offline email and Hermes dependency resources
+      - name: Build offline email and edge runtime resources
         shell: pwsh
         env:
           # Windows 上 Python stdout 默认 cp1252, 脚本里的中文输出会直接崩
@@ -281,8 +121,7 @@ jobs:
           $resourceDir = "${{ github.workspace }}\edge\companion-app\src-tauri\resources\windows"
           $emailSource = "${{ github.workspace }}\edge\email-agent"
           $emailStage = Join-Path $env:RUNNER_TEMP 'catfish-email-dist'
-          $depsStage = Join-Path $env:RUNNER_TEMP 'catfish-hermes-deps-dist'
-          foreach ($dir in @($emailStage, $depsStage)) {
+          foreach ($dir in @($emailStage)) {
               if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
               New-Item -ItemType Directory -Force -Path $dir | Out-Null
           }
@@ -293,8 +132,9 @@ jobs:
           python edge/companion-app/scripts/verify-email-wheel.py $emailStage $emailSource
           if ($LASTEXITCODE -ne 0) { throw 'email wheel source verification failed' }
           # Outlook COM 适配器需要 pywin32；一起放入 Windows 离线归档。
+          # 10/14: 邮件环境用 hermes venv 的解释器建 (install-catfish-email.ps1), hermes v0.22 起是 3.14。
           python -m pip download --only-binary=:all: --dest $emailStage `
-              --python-version 3.11 --platform win_amd64 --implementation cp --abi cp311 pywin32
+              --python-version 3.14 --platform win_amd64 --implementation cp --abi cp314 pywin32
           if ($LASTEXITCODE -ne 0) { throw 'pywin32 wheel 下载失败' }
           $wheels = @(Get-ChildItem $emailStage -Filter '*.whl')
           if (-not ($wheels | Where-Object { $_.Name -like 'catfish_email-*.whl' })) {
@@ -311,120 +151,18 @@ jobs:
           tar -czf $emailTar -C $emailStage .
           if ($LASTEXITCODE -ne 0) { throw 'catfish-email-dist.tar.gz 构建失败' }
 
-          # 这些 wheel 必须与 MSI 内置的 CPython 3.11 / Windows x64 匹配。
-          # 清单: src-tauri/hermes-extra-packages.txt (Companion 装机/自检读同一份);
-          # 取 wheel + 「每个包都是 .whl」的检查在 fetch_hermes_deps.py, mac 打包也调它。
-          python edge/companion-app/scripts/fetch_hermes_deps.py $depsStage `
-              --python-version 3.11 --platform win_amd64 --implementation cp --abi cp311
-          if ($LASTEXITCODE -ne 0) { throw 'hermes 额外依赖 (hermes-deps) 取 wheel 失败' }
-          $depsTar = Join-Path $resourceDir 'hermes-deps-dist.tar.gz'
-          if (Test-Path $depsTar) { Remove-Item -Force $depsTar }
-          tar -czf $depsTar -C $depsStage .
-          if ($LASTEXITCODE -ne 0) { throw 'hermes-deps-dist.tar.gz 构建失败' }
+          # 10/14: hermes 额外依赖 (hermes-deps-dist) 已并进 hermes 归档的 wheelhouse, 见上一步。
 
           # 9/23: tool-bridge / local-search 源码; 9/28 加上传文件解析脚本 (见 src-tauri/src/services/edge_runtime.rs)
           $edgeTar = Join-Path $resourceDir 'catfish-edge-runtime.tar.gz'
           python edge/companion-app/scripts/build_edge_runtime.py $edgeTar
           if ($LASTEXITCODE -ne 0) { throw 'catfish-edge-runtime.tar.gz 构建失败' }
-          foreach ($archive in @($emailTar, $depsTar, $edgeTar)) {
+          foreach ($archive in @($emailTar, $edgeTar)) {
               $file = Get-Item $archive
               if ($file.Length -le 1024) { throw "资源文件过小: $archive" }
               Write-Host "✓ $($file.Name) · $([math]::Round($file.Length/1KB,1)) KB"
           }
 
-      - name: Pack hermes-agent bundle (follow symlink, exclude venv/cache)
-        shell: bash
-        run: |
-          set -euo pipefail
-          # -h dereference symlinks: catfish repo 里 hermes-fork 的 plugin 软链展开
-          # ⚠ exclude 的前缀必须是 hermes-agent-src —— 打的就是这个目录。
-          #   8/3 之前全写成 hermes-agent/ , **十一条一条都匹配不上**, 全是死规则。
-          #
-          #   后果不是"包大了点": .git 跟着进包, 而它带着上游的 origin remote。
-          #   install.ps1 的 offline 分支把源码拷到 InstallDir 后 git init +
-          #   git remote add origin, 撞上已存在的 origin 直接报
-          #     error: remote origin already exists.
-          #   → 整个装机失败。8/3 Windows 现场就是这么挂的, 而且删掉
-          #   %LOCALAPPDATA%\hermes\hermes-agent 重装**也没用** —— .git 是从包里
-          #   重新带出来的。
-          #
-          #   为什么一直没暴露: CI 上 /tmp/hermes-agent-src 是 git clone --depth 1
-          #   的干净树, 没有 venv/node_modules 可排, 那几条死规则看不出来;
-          #   唯独 .git 是 clone 必然产生的, 于是只有它露了馅。
-          tar czhf edge/companion-app/src-tauri/resources/windows/hermes-agent-bundle.tar.gz \
-              -C /tmp \
-              --exclude='hermes-agent-src/.git' \
-              --exclude='hermes-agent-src/**/__pycache__' \
-              --exclude='hermes-agent-src/venv' \
-              --exclude='hermes-agent-src/venv.bak*' \
-              --exclude='hermes-agent-src/.venv' \
-              --exclude='hermes-agent-src/**/.venv' \
-              --exclude='hermes-agent-src/target' \
-              --exclude='hermes-agent-src/**/target' \
-              --exclude='hermes-agent-src/**/*.pyc' \
-              --exclude='hermes-agent-src/apps/desktop' \
-              --exclude='node_modules' \
-              hermes-agent-src
-
-          # 9/18: 不再改归档, 只校验 pyproject 与 uv.lock 的 exclude-newer 一致。
-          # 老代码删掉 pyproject 的 exclude-newer, 反而让 uv.lock 失效 ——
-          # uv 0.12.3 实测原样 `uv lock --check` exit 0, 删掉后 exit 1。
-          # 后果: install.ps1 的 Tier-0 `uv sync --locked` 必然失败, 退到不校验
-          # 哈希的 PyPI 重解析, 断网现场装不上。
-          BUNDLE=edge/companion-app/src-tauri/resources/windows/hermes-agent-bundle.tar.gz
-          python3 edge/hermes-fork/verify_hermes_bundle.py --input "$BUNDLE"
-          #
-          # 10/9: node_modules 又整个排掉了 (下面 ② 反过来断言 0 条) —— 下面这段
-          #       8/3 的说明是当时"员工机要靠 node_modules 跑 browser tools"的前提,
-          #       留作历史, 前提已被 10/9 实测推翻。
-          # 8/3: 删掉了原本的 node_modules / **/node_modules 两条 exclude。
-          # 那两条不是"顺手排一下缓存", 它们**正是**离线安装做不成的原因:
-          # 上一步 npm ci 刚装好的东西, 到这里被原样扔掉。
-          #
-          # 换成 mac 同款的两条 (apps/desktop + node_modules/electron): 前者是
-          # 我们用 Tauri Companion 替代掉的 Electron 桌面版, 后者是它被 npm
-          # workspaces 提升到根的 790MB 运行时 —— 排掉 app 却留着运行时是
-          # 8/1 在 mac 包上发现的漏排。
-          #
-          # 归档现在有十几万条, 只 tar tzf **一次**存下来再反复 grep。
-          # 每个 pattern 单独解一遍 gzip 是几分钟起步。
-          HLIST="$(mktemp)"
-          trap 'rm -f "$HLIST"' EXIT
-          tar tzf "$BUNDLE" > "$HLIST"
-          leak=0
-
-          # ① 不该在包里的 —— 原有检查, 保留
-          #
-          # ⚠ 每条 pattern 必须以 / 收尾, 否则是**前缀匹配不是目录匹配**。
-          # 8/3 run #71 实测: 'node_modules/electron' 匹配上了
-          # node_modules/electron-builder/ , 构建被拦下 —— 而 electron/ 本身
-          # 其实已经被 --exclude 正确排掉了。也就是说 exclude 是对的, 报错的是
-          # 检查自己。
-          #
-          # 这条 pattern 是从 build-mac-resources.sh 577 行抄过来的, 那边同样
-          # 少了斜杠。mac 一直没炸只是因为它那棵树上恰好没有 electron-builder
-          # —— 同一个错在两条产线上, 一条炸一条不炸, 靠的是运气不是正确性。
-          for pat in '\.git/' 'venv/' 'target/' 'apps/desktop/'; do
-              if grep -qE "^hermes-agent-src/${pat}" "$HLIST"; then
-                  echo "::error::exclude 没生效, 包里仍有 hermes-agent-src/${pat}"
-                  grep -E "^hermes-agent-src/${pat}" "$HLIST" | head -3
-                  leak=1
-              fi
-          done
-
-          # ② 10/9 起反过来: 任何层级的 node_modules 都不许进包 (见上面删掉
-          # npm ci 那段注释)。8/3 那版断言的是 "node_modules 必须在 (>5000 条)",
-          # 前提是员工机要靠它跑 browser tools —— 10/9 实测这个前提不成立。
-          NM=$(grep -c '/node_modules/' "$HLIST" || true)
-          if [ "${NM:-0}" -ne 0 ]; then
-              echo "::error::包里出现了 node_modules (${NM} 条, 应为 0)"
-              grep '/node_modules/' "$HLIST" | cut -d/ -f1-4 | sort -u | head -5
-              leak=1
-          fi
-
-          [ "$leak" = "0" ] || exit 1
-          echo "✓ exclude 生效 · 0 条 node_modules · 归档共 $(wc -l < "$HLIST" | tr -d ' ') 条"
-          ls -lh edge/companion-app/src-tauri/resources/windows/
 
       # 9/18: 量"随包分发 uv 缓存"到底多大, 并在 Windows 上证明离线重放可行。
       #
@@ -451,100 +189,6 @@ jobs:
           & edge/companion-app/scripts/smoke-windows-runtime.ps1 -Resources edge/companion-app/src-tauri/resources/windows
           if ($LASTEXITCODE -ne 0) { throw 'Windows runtime smoke failed' }
 
-      - name: Measure offline uv cache (measurement only, non-blocking)
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          $ErrorActionPreference = 'Continue'
-          $res    = "${{ github.workspace }}\edge\companion-app\src-tauri\resources\windows"
-          $uv     = Join-Path $res 'uv.exe'
-          $bundle = Join-Path $res 'hermes-agent-bundle.tar.gz'
-          $work   = Join-Path $env:RUNNER_TEMP 'uvcache-probe'
-          if (Test-Path $work) { Remove-Item -Recurse -Force $work }
-          New-Item -ItemType Directory -Force -Path $work | Out-Null
-
-          tar -xzf $bundle -C $work
-          $src = Join-Path $work 'hermes-agent-src'
-          if (-not (Test-Path $src)) { throw "解包后没有 hermes-agent-src" }
-
-          $env:UV_CACHE_DIR          = Join-Path $work 'cache'
-          $env:UV_PROJECT_ENVIRONMENT = Join-Path $work 'venv'
-          $env:UV_PYTHON             = '3.11'
-          $env:UV_LINK_MODE          = 'copy'
-
-          & $uv python install 3.11
-          Push-Location $src
-          $warm = Measure-Command { & $uv sync --extra all --locked }
-          $warmExit = $LASTEXITCODE
-          Pop-Location
-          if ($warmExit -ne 0) {
-              Write-Host "::warning::预热失败 exit=$warmExit —— 这本身就是个结论: Tier-0 在 CI 上都装不成"
-              exit 0
-          }
-
-          $raw = (Get-ChildItem $env:UV_CACHE_DIR -Recurse -File | Measure-Object Length -Sum).Sum
-          $tgz = Join-Path $work 'uv-cache.tar.gz'
-          tar -czf $tgz -C $env:UV_CACHE_DIR .
-          $packed = (Get-Item $tgz).Length
-          $msi = (Get-ChildItem $res -File | Measure-Object Length -Sum).Sum
-
-          # 装了多少个包 —— 没有这个数, "断网重放成功"可能是假绿:
-          # 什么都不装当然也会 exit 0。预热只花了十几秒, 更得把这个数亮出来。
-          $warmPkgs = @(Get-ChildItem (Join-Path $env:UV_PROJECT_ENVIRONMENT 'Lib\site-packages') `
-                        -Filter '*.dist-info' -Directory -ErrorAction SilentlyContinue).Count
-
-          # 验证一: 原路径断网重放
-          Remove-Item -Recurse -Force $env:UV_PROJECT_ENVIRONMENT -ErrorAction SilentlyContinue
-          Push-Location $src
-          & $uv sync --extra all --locked --offline
-          $offlineExit = $LASTEXITCODE
-          Pop-Location
-          $offlinePkgs = @(Get-ChildItem (Join-Path $env:UV_PROJECT_ENVIRONMENT 'Lib\site-packages') `
-                           -Filter '*.dist-info' -Directory -ErrorAction SilentlyContinue).Count
-
-          # 验证二: 解压到**另一个路径**再重放。
-          # 现场拿到的是 tar.gz, 解到哪儿由安装器定, 跟 CI 上这个路径必然不同。
-          # uv 缓存里要是嵌了绝对路径, 这一步就会暴露 —— 上面那次是从原路径放的,
-          # 证明不了可搬运。
-          $moved = Join-Path $work 'cache-relocated'
-          New-Item -ItemType Directory -Force -Path $moved | Out-Null
-          tar -xzf $tgz -C $moved
-          Remove-Item -Recurse -Force $env:UV_PROJECT_ENVIRONMENT -ErrorAction SilentlyContinue
-          Remove-Item -Recurse -Force $env:UV_CACHE_DIR -ErrorAction SilentlyContinue
-          $env:UV_CACHE_DIR = $moved
-          Push-Location $src
-          & $uv sync --extra all --locked --offline
-          $movedExit = $LASTEXITCODE
-          Pop-Location
-          $movedPkgs = @(Get-ChildItem (Join-Path $env:UV_PROJECT_ENVIRONMENT 'Lib\site-packages') `
-                         -Filter '*.dist-info' -Directory -ErrorAction SilentlyContinue).Count
-
-          $lines = @(
-            "## 离线 uv 缓存实测 (Windows / cp311)",
-            "",
-            "| 项 | 值 |",
-            "| --- | --- |",
-            ("| 预热耗时 | {0:n1} 分钟 |" -f $warm.TotalMinutes),
-            ("| 缓存原始体积 | {0:n0} MB |" -f ($raw/1MB)),
-            ("| 打包后 (tar.gz) | {0:n0} MB |" -f ($packed/1MB)),
-            ("| 现有 windows 资源合计 | {0:n0} MB |" -f ($msi/1MB)),
-            ("| 加上缓存后 | {0:n0} MB |" -f (($msi+$packed)/1MB)),
-            ("| 预热装了几个包 | {0} |" -f $warmPkgs),
-            ("| **断网重放 (原路径)** | {0} · {1} 个包 |" -f $(if ($offlineExit -eq 0) { "✅" } else { "❌ exit=$offlineExit" }), $offlinePkgs),
-            ("| **断网重放 (换路径)** | {0} · {1} 个包 |" -f $(if ($movedExit -eq 0) { "✅ 缓存可搬运" } else { "❌ exit=$movedExit 缓存嵌了绝对路径" }), $movedPkgs),
-            "",
-            "> 三个包数必须一致且远大于 0。只要有一个是 0, 上面的 ✅ 就是假绿 —— 什么都不装也会 exit 0。"
-          )
-          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          $lines | ForEach-Object { Write-Host $_ }
-          # 也落一份到产物里。国内 api.github.com 经常 EOF (gh run view 取不到日志),
-          # 而 MSI 包本来就要下载 —— 报告跟着它走, 不依赖 API 和日志权限。
-          $lines | Out-File -FilePath (Join-Path $env:RUNNER_TEMP 'offline-uv-cache-report.txt') -Encoding utf8
-          if ($offlineExit -ne 0) { Write-Host "::warning::断网重放失败 —— 随包发缓存这条路要重新评估" }
-          if ($movedExit -ne 0) { Write-Host "::warning::换路径后失败 —— 缓存不可搬运, 现场解压到别处就用不了" }
-          if ($warmPkgs -lt 50 -or $offlinePkgs -ne $warmPkgs -or $movedPkgs -ne $warmPkgs) {
-              Write-Host "::warning::包数对不上 (预热 $warmPkgs / 原路径 $offlinePkgs / 换路径 $movedPkgs) —— 重放可能是假绿"
-          }
 
       # 必须放在所有 Tauri resources 生成之后：tauri.conf.json 会在 build
       # script 阶段校验每个 resources 路径。此前预编译放在资源生成之前，
@@ -690,10 +334,10 @@ jobs:
           $releaseDir = 'edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release'
           $msiDir = Join-Path $releaseDir 'bundle/msi'
           $exe = Join-Path $releaseDir 'catfish-companion-app.exe'
-          $script = 'edge/companion-app/src-tauri/resources/windows/install.ps1'
+          $bundle = 'edge/companion-app/src-tauri/resources/windows/hermes-agent-bundle.tar.gz'
           $packages = @(Get-ChildItem -LiteralPath $msiDir -Filter '*.msi')
           if ($packages.Count -eq 0) { throw 'No MSI produced' }
-          $files = @($exe, $script) + @($packages | ForEach-Object { $_.FullName })
+          $files = @($exe, $bundle) + @($packages | ForEach-Object { $_.FullName })
           $manifest = [ordered]@{
             commit = $env:GITHUB_SHA
             run_id = $env:GITHUB_RUN_ID
@@ -716,19 +360,6 @@ jobs:
           set -euo pipefail
           ls -lh edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/ || true
 
-      # 测量报告跟着 MSI 走 —— 见上面 "Measure offline uv cache" 里的理由。
-      - name: Attach offline uv cache report to artifact
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          $report = Join-Path $env:RUNNER_TEMP 'offline-uv-cache-report.txt'
-          $msiDir = "${{ github.workspace }}\edge\companion-app\src-tauri\target\x86_64-pc-windows-msvc\release\bundle\msi"
-          if ((Test-Path $report) -and (Test-Path $msiDir)) {
-              Copy-Item $report $msiDir -Force
-              Write-Host "报告已放入产物: $msiDir\offline-uv-cache-report.txt"
-          } else {
-              Write-Host "::notice::没有测量报告可附加 (测量步骤可能被跳过或失败)"
-          }
 
       - name: Upload msi artifact
       # v7 使用 Node 24，避免 GitHub Actions 的 Node 20 弃用提示。
@@ -738,7 +369,6 @@ jobs:
           path: |
             edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
             edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/build-identity.json
-            edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/offline-uv-cache-report.txt
           if-no-files-found: error
           retention-days: 30
 
@@ -754,11 +384,6 @@ jobs:
           files: |
             edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
             edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/build-identity.json
-            edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/offline-uv-cache-report.txt
-          # 报告也挂 Release: 上面那条"跟着 MSI 走"只做了一半 —— 报告进了
-          # Artifact, 可 Artifact 是 640 MB 的整包, 而且走 api.github.com。
-          # 为一个文本文件下 640 MB 没道理, 国内还经常下不动。Release asset
-          # 走 CDN, 单个文件可直取, 登出也能拿。
           fail_on_unmatched_files: true
           draft: false
           prerelease: true

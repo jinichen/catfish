@@ -6,10 +6,15 @@ COMMANDS = ROOT / "edge/companion-app/src-tauri/src/commands"
 RESOURCES = ROOT / "edge/companion-app/src-tauri/resources/windows"
 
 
-def test_core_skips_optional_and_interactive_setup():
+def test_core_installs_natively_without_upstream_installer():
+    # 10/14 hermes v0.22.0: 不再跑上游 install.ps1 (改成 hermes pm 联网装), 跟 mac 同一套
+    # hermes_install_native 步骤, 只用 MSI 带的资源。
     source = (COMMANDS / "hermes_install_windows.rs").read_text()
-    for flag in ("-SkipComputerUse", "-SkipSetup", "-NonInteractive", "-Json"):
-        assert f'OsString::from("{flag}")' in source
+    body = source.split("pub(crate) fn bootstrap(", 1)[1]
+    assert 'join("install.ps1")' not in body and "-OfflineSourceTar" not in body
+    for step in ("ensure_embedded_python", "create_venv", "install_python_deps", "install_chromium", "prepare_config"):
+        assert f"hermes_install_native::{step}" in source, step
+    assert "publish_uv(&artifacts, paths)" in source  # 邮件 / 读取器安装脚本用 %HERMES_HOME%\\bin\\uv.exe
 
 
 def test_verified_core_is_reused_before_reinstall():

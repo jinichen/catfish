@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    本地 Windows 一键打 catfish Companion msi (Step 2-11 全自动跑).
+    本地 Windows 一键打 catfish Companion msi (Step 2-6 全自动跑).
 
 .DESCRIPTION
     复现 CircleCI build-msi job 全部步骤到本地 Windows.
@@ -35,7 +35,7 @@ Write-Host "===============================================" -ForegroundColor Cy
 # ─── 前置检查 ───────────────────────────────────────────────
 
 Write-Host "`n[Pre-check] 验证工具就位..." -ForegroundColor Yellow
-foreach ($tool in @('rustc', 'cargo', 'node', 'npm', 'npx', 'git', 'python', 'tar')) {
+foreach ($tool in @('rustc', 'cargo', 'node', 'npm', 'npx', 'git', 'python', 'tar', 'bash')) {
     $found = Get-Command $tool -ErrorAction SilentlyContinue
     if (-not $found) {
         Write-Host "  X $tool NOT FOUND" -ForegroundColor Red
@@ -70,294 +70,27 @@ Write-Host "  OK catfish root: $catfishRoot" -ForegroundColor Green
 
 # ─── Step 1 · git pull ───────────────────────────────────────
 
-Write-Host "`n[Step 1/11] git pull origin main..." -ForegroundColor Yellow
+Write-Host "`n[Step 1/6] git pull origin main..." -ForegroundColor Yellow
 git pull origin main
 if ($LASTEXITCODE -ne 0) { throw "git pull failed" }
 
-# ─── Step 2 · clone hermes-agent ────────────────────────────
+# ─── Step 2 · Hermes 运行时资源 (10/14, hermes v0.22.0 起) ───────────
+# 原来 Step 2-8 是: clone 上游 → 拷插件 → 给 install.ps1 打离线补丁 → 下 uv + cpython 3.11 → npx 下
+# Chromium → 打 hermes 归档。v0.22 上游安装器整个换成 hermes pm (只认 Python 3.14、联网装), 补丁锚点
+# 全部对不上; Companion 改成自己装 (hermes_install_native.rs)。资源跟 CI 同一个脚本出 (需要 Git Bash):
+#   uv.exe / cpython-3.14.7-embed.tar.gz / hermes-agent-bundle.tar.gz (含 wheelhouse + 安装戳) / chromium-embed.tar.gz
 
-$hermesDir = "$env:TEMP\hermes-agent-src"
-if ($SkipHermesClone -and (Test-Path $hermesDir)) {
-    Write-Host "`n[Step 2/11] SKIP hermes-agent clone (已在 $hermesDir)" -ForegroundColor DarkYellow
-} else {
-    Write-Host "`n[Step 2/11] Clone hermes-agent pinned tag..." -ForegroundColor Yellow
-    $HERMES_TAG = (Get-Content .\edge\companion-app\.hermes-git-tag -Raw).Trim()
-    $HERMES_VER = (Get-Content .\edge\companion-app\.hermes-target-version -Raw).Trim()
-    Write-Host "  hermes tag=$HERMES_TAG · expected pyproject version=$HERMES_VER"
+Write-Host "`n[Step 2/6] Build Windows Hermes runtime resources (bash)..." -ForegroundColor Yellow
+bash edge/companion-app/scripts/build-windows-hermes-resources.sh
+if ($LASTEXITCODE -ne 0) { throw "build-windows-hermes-resources.sh failed" }
 
-    if (Test-Path $hermesDir) { Remove-Item -Recurse -Force $hermesDir }
-    git clone --depth 1 --branch $HERMES_TAG https://github.com/NousResearch/hermes-agent.git $hermesDir
-    if ($LASTEXITCODE -ne 0) { throw "hermes-agent clone failed" }
+# ─── Step 3 · Offline email + edge runtime resources ───────
 
-    $verLine = Select-String -Path "$hermesDir\pyproject.toml" -Pattern '^version'
-    $actualVer = ($verLine.Line -replace '^version\s*=\s*"([^"]+)".*', '$1').Trim()
-    if ($actualVer -ne $HERMES_VER) {
-        throw ".hermes-git-tag ($HERMES_TAG) => pyproject $actualVer, expected $HERMES_VER"
-    }
-    Write-Host "  OK version match: $HERMES_VER" -ForegroundColor Green
-}
-
-# ─── Step 3 · Copy catfish plugins ──────────────────────────
-
-Write-Host "`n[Step 3/11] Copy catfish plugins into hermes-agent-src..." -ForegroundColor Yellow
-New-Item -ItemType Directory -Force -Path "$hermesDir\plugins\memory" | Out-Null
-foreach ($plugin in @('catfish-memory')) {
-    $src = "edge\hermes-plugins\$plugin"
-    if (Test-Path $src) {
-        Copy-Item -Recurse -Force $src "$hermesDir\plugins\memory\$plugin"
-        Write-Host "  OK copied $plugin" -ForegroundColor Green
-    } else {
-        Write-Host "  WARN $src missing" -ForegroundColor DarkYellow
-    }
-}
-
-# ─── Step 4 · (10/9 起不再装 hermes 的 npm 依赖) ──────────────
-
-# 10/9: node_modules / node-globals 都不再进包 —— 员工机运行时不需要 Node
-# (实测与原因见 edge/companion-app/scripts/build-mac-resources.sh 文件头)。
-# Step 7 下 Chromium 用 npx 临时拉 playwright, 不依赖 hermes 的 node_modules。
-Write-Host "`n[Step 4/11] SKIP hermes npm install (10/9 起不随包分发 Node 依赖)" -ForegroundColor DarkYellow
-if ($SkipNpmInstall) { Write-Host "  (-SkipNpmInstall 已无作用, 保留参数只为兼容旧调用)" -ForegroundColor DarkGray }
-
-# ─── Step 5 · Patch install.ps1 ─────────────────────────────
-
-Write-Host "`n[Step 5/11] Patch install.ps1 offline mode..." -ForegroundColor Yellow
-python edge\hermes-fork\patch_install_ps1_offline.py `
-    --input "$hermesDir\scripts\install.ps1" `
-    --output edge\companion-app\src-tauri\resources\windows\install.ps1
-if ($LASTEXITCODE -ne 0) { throw "patch install.ps1 failed" }
-Write-Host "  OK install.ps1 patched" -ForegroundColor Green
-
-# ─── Step 6 · Download uv + cpython ────────────────────────
-
-Write-Host "`n[Step 6/11] Download uv + repack cpython..." -ForegroundColor Yellow
-
-# uv.exe
-# Hermes uses duration syntax in [tool.uv]. The shared pin prevents the local
-# Windows build from drifting from the offline resource builders and CI.
-$UV_VERSION = (Get-Content .\edge\companion-app\.uv-version -Raw).Trim()
-if ([string]::IsNullOrWhiteSpace($UV_VERSION)) { throw '.uv-version is empty' }
-$uvOut = "edge\companion-app\src-tauri\resources\windows\uv.exe"
-$uvInstalledVersion = ''
-if (Test-Path $uvOut) {
-    try {
-        $uvInstalledVersion = (& (Resolve-Path $uvOut).Path --version 2>$null | Out-String).Trim()
-    } catch {
-        $uvInstalledVersion = ''
-    }
-    if ($uvInstalledVersion -match "^uv $([regex]::Escape($UV_VERSION))(\s|$)") {
-        Write-Host "  SKIP uv.exe ($uvInstalledVersion)" -ForegroundColor DarkYellow
-    } else {
-        Write-Host "  REFRESH uv.exe (found: '$uvInstalledVersion'; need: uv $UV_VERSION)" -ForegroundColor Yellow
-    }
-}
-if (-not (Test-Path $uvOut) -or $uvInstalledVersion -notmatch "^uv $([regex]::Escape($UV_VERSION))(\s|$)") {
-    $uvUrl = "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-x86_64-pc-windows-msvc.zip"
-    $uvZip = "$env:TEMP\uv-$UV_VERSION.zip"
-    Invoke-WebRequest -Uri $uvUrl -OutFile $uvZip
-    $uvExtract = "$env:TEMP\uv-extract-$UV_VERSION"
-    if (Test-Path $uvExtract) { Remove-Item -Recurse -Force $uvExtract }
-    Expand-Archive -Path $uvZip -DestinationPath $uvExtract -Force
-    Copy-Item "$uvExtract\uv.exe" $uvOut -Force
-    Write-Host "  OK uv.exe (uv $UV_VERSION)" -ForegroundColor Green
-}
-
-# cpython 3.11.15
-$PYTHON_VER = '3.11.15'
-$pyOut = "edge\companion-app\src-tauri\resources\windows\cpython-${PYTHON_VER}-embed.zip"
-if ((Test-Path $pyOut) -and (Get-Item $pyOut).Length -gt 10MB) {
-    Write-Host "  SKIP cpython zip (已在 · $([math]::Round((Get-Item $pyOut).Length/1MB,1)) MB)" -ForegroundColor DarkYellow
-} else {
-    $BUILD_TAG = '20260623'
-    $FNAME = "cpython-${PYTHON_VER}+${BUILD_TAG}-x86_64-pc-windows-msvc-install_only.tar.gz"
-    $URL = "https://github.com/astral-sh/python-build-standalone/releases/download/${BUILD_TAG}/${FNAME}"
-    $tarPath = "$env:TEMP\cpython.tar.gz"
-    $extractDir = "$env:TEMP\cpython-extract"
-    Invoke-WebRequest -Uri $URL -OutFile $tarPath
-    if (Test-Path $extractDir) { Remove-Item -Recurse -Force $extractDir }
-    New-Item -ItemType Directory -Path $extractDir | Out-Null
-    tar -xzf $tarPath -C $extractDir
-    if ($LASTEXITCODE -ne 0) { throw "cpython tar extract failed" }
-    $expectedName = "cpython-${PYTHON_VER}-windows-x86_64-none"
-    Rename-Item -Path "$extractDir\python" -NewName $expectedName
-    if (Test-Path $pyOut) { Remove-Item -Force $pyOut }
-    Compress-Archive -Path "$extractDir\$expectedName" -DestinationPath $pyOut -Force
-    Write-Host "  OK cpython embed zip" -ForegroundColor Green
-}
-
-# ─── Step 7 · Playwright Chromium ──────────────────────────
-
-$chromiumOut = "$PWD\edge\companion-app\src-tauri\resources\windows\chromium-embed.tar.gz"
-$pwCacheDir = "$env:LOCALAPPDATA\ms-playwright"
-
-if ($SkipChromium -and (Test-Path $chromiumOut) -and (Get-Item $chromiumOut).Length -gt 50MB) {
-    Write-Host "`n[Step 7/11] SKIP Playwright chromium (chromium-embed.tar.gz 已在 · $([math]::Round((Get-Item $chromiumOut).Length/1MB,1)) MB)" -ForegroundColor DarkYellow
-} else {
-    Write-Host "`n[Step 7/11] Install Playwright Chromium + pack..." -ForegroundColor Yellow
-    Push-Location $hermesDir
-    try {
-        Write-Host "  ===== 1/3 playwright dry-run: 解析下载地址和安装位置 =====" -ForegroundColor DarkGray
-        # 10/9: hermes 的 node_modules 不再安装, 固定拉 hermes lockfile 里那个版本 ——
-        # 跟 CI (build-windows-msi.yml) 一致, Chromium 版本不随 npm 的 latest 漂。
-        $pwVersion = (node -p "require('./package-lock.json').packages['node_modules/playwright'].version").Trim()
-        if (-not $pwVersion -or $pwVersion -eq 'undefined') { throw "读不到 hermes lockfile 里的 playwright 版本" }
-        Write-Host "  playwright@$pwVersion (取自 hermes package-lock.json)" -ForegroundColor DarkGray
-        $dry = @(npx --yes "playwright@$pwVersion" install chromium --dry-run)
-        if ($LASTEXITCODE -ne 0) { throw "playwright dry-run failed (exit=$LASTEXITCODE)" }
-        $dry | ForEach-Object { Write-Host "    $_" }
-
-        $targets = @()
-        $loc = $null
-        foreach ($line in $dry) {
-            if ($line -match '^\s*Install location:\s*(.+?)\s*$') { $loc = $Matches[1]; continue }
-            if ($line -match '^\s*Download url:\s*(\S+)\s*$' -and $loc) {
-                $targets += [pscustomobject]@{ Dir = $loc; Url = $Matches[1] }
-                $loc = $null
-            }
-        }
-        $targets = @($targets | Where-Object { (Split-Path $_.Dir -Leaf) -like 'chromium*' })
-        if ($targets.Count -eq 0) { throw "dry-run 没有解析出 chromium* 下载目标" }
-    } finally { Pop-Location }
-
-    $pwRoot = "$env:LOCALAPPDATA\ms-playwright"
-    foreach ($t in $targets) {
-        if (-not $t.Dir.StartsWith($pwRoot, [StringComparison]::OrdinalIgnoreCase)) {
-            throw "Playwright 安装位置不在 $pwRoot 下: $($t.Dir)"
-        }
-    }
-
-    Write-Host "  ===== 2/3 下载 + 解压 $($targets.Count) 个 Chromium 包 =====" -ForegroundColor DarkGray
-    foreach ($t in $targets) {
-        $name = Split-Path $t.Dir -Leaf
-        $marker = Join-Path $t.Dir 'INSTALLATION_COMPLETE'
-        if (Test-Path $marker) { Write-Host "    [$name] 已存在, 跳过"; continue }
-
-        $zip = Join-Path $env:TEMP "$name.zip"
-        if (Test-Path $zip) { Remove-Item -Force $zip }
-        Write-Host "    [$name] 下载中..."
-        curl.exe -L --fail --retry 3 --retry-delay 5 --connect-timeout 30 --max-time 1200 -o $zip $t.Url
-        if ($LASTEXITCODE -ne 0) { throw "[$name] download failed (curl exit=$LASTEXITCODE)" }
-
-        if (Test-Path $t.Dir) { Remove-Item -Recurse -Force $t.Dir }
-        New-Item -ItemType Directory -Force -Path $t.Dir | Out-Null
-        $unpacked = $false
-        try {
-            tar.exe -xf $zip -C $t.Dir
-            $unpacked = ($LASTEXITCODE -eq 0)
-        } catch { $unpacked = $false }
-        if (-not $unpacked) { Expand-Archive -Path $zip -DestinationPath $t.Dir -Force }
-
-        $files = @(Get-ChildItem -Recurse -File $t.Dir)
-        $exes = @($files | Where-Object { $_.Extension -eq '.exe' })
-        if ($exes.Count -eq 0) { throw "[$name] 解压后没有 exe, zip 或目录层级异常" }
-        New-Item -ItemType File -Force -Path $marker | Out-Null
-        Remove-Item -Force $zip
-        Write-Host "    [$name] 完成 · $($exes.Count) 个 exe" -ForegroundColor Green
-    }
-    Write-Host "  ===== 3/3 打包 Chromium 资源 =====" -ForegroundColor DarkGray
-
-    if (-not (Test-Path $pwCacheDir)) { throw "Playwright cache 目录不存在: $pwCacheDir" }
-    $chromiumDirs = Get-ChildItem $pwCacheDir -Directory -Filter "chromium*"
-    Write-Host "  OK Playwright chromium: $($chromiumDirs.FullName -join ', ')" -ForegroundColor Green
-
-    Push-Location $pwCacheDir
-    try {
-        $chromiumNames = @(Get-ChildItem -Directory -Filter "chromium*" | ForEach-Object { $_.Name })
-        if ($chromiumNames.Count -eq 0) { throw "无 chromium* 目录" }
-        tar czf $chromiumOut @chromiumNames
-        if ($LASTEXITCODE -ne 0) { throw "tar chromium failed" }
-    } finally { Pop-Location }
-    Write-Host "  OK chromium-embed.tar.gz: $([math]::Round((Get-Item $chromiumOut).Length/1MB,1)) MB" -ForegroundColor Green
-}
-
-# 这个文件是 Hermes 核心离线安装的必需资源。不能只检查文件存在：历史上
-# 0 字节 placeholder 也会被 Tauri 带进 MSI，结果员工首启才发现核心安装失败，
-# 并且连带跳过 catfish-email 自动补装。
-if (-not (Test-Path $chromiumOut) -or (Get-Item $chromiumOut).Length -le 50MB) {
-    throw "chromium-embed.tar.gz 无效或过小，禁止继续打 MSI: $chromiumOut"
-}
-tar.exe -tzf $chromiumOut *> $null
-if ($LASTEXITCODE -ne 0) { throw "chromium-embed.tar.gz 无法读取: $chromiumOut" }
-Write-Host "  OK Chromium archive integrity verified" -ForegroundColor Green
-
-# ─── Step 8 · Pack hermes-agent bundle ──────────────────────
-
-Write-Host "`n[Step 8/11] Pack hermes-agent bundle..." -ForegroundColor Yellow
-$hermesTarOut = "$PWD\edge\companion-app\src-tauri\resources\windows\hermes-agent-bundle.tar.gz"
-Push-Location $env:TEMP
-try {
-    # Companion 只需要 Hermes 的 Python gateway/tool/plugin 运行链路。
-    # 裁剪只作用于 tar 输入, 不修改 $hermesDir, 避免污染下次构建缓存。
-    # 10/9: 任何层级的 node_modules / node-globals 都不进包。
-    $bundleExcludes = @(
-        'hermes-agent-src/.git',
-        'hermes-agent-src/venv',
-        'hermes-agent-src/venv.bak',
-        'hermes-agent-src/.venv',
-        'hermes-agent-src/target',
-        'hermes-agent-src/apps/desktop',
-        'node_modules',
-        'hermes-agent-src/node-globals',
-        'hermes-agent-src/website',
-        'hermes-agent-src/tests',
-        'hermes-agent-src/tests-js',
-        'hermes-agent-src/.github'
-    )
-    $tarArgs = @('czhf', $hermesTarOut)
-    $tarArgs += @($bundleExcludes | ForEach-Object { "--exclude=$($_)" })
-    $tarArgs += 'hermes-agent-src'
-    & tar.exe @tarArgs
-    if ($LASTEXITCODE -ne 0) { throw "hermes-agent tar failed" }
-} finally { Pop-Location }
-Write-Host "  OK hermes-agent-bundle.tar.gz: $([math]::Round((Get-Item $hermesTarOut).Length/1MB,1)) MB" -ForegroundColor Green
-
-# 9/18: 不再改归档，只校验 pyproject 与 uv.lock 的 exclude-newer 是否一致。
-# 老代码在这里删掉 pyproject 的 exclude-newer，理由是"uv 只收绝对日期"。
-# 那个前提早不成立，而删除动作本身让 uv.lock 失效：uv 0.12.3 实测原样
-# `uv lock --check` exit 0，删掉后 exit 1。后果是 install.ps1 的 Tier-0
-# `uv sync --locked` 必然失败，退到不校验哈希的 PyPI 重解析，断网装不上。
-$bundleVerify = Join-Path $catfishRoot 'edge\hermes-fork\verify_hermes_bundle.py'
-python $bundleVerify --input $hermesTarOut
-if ($LASTEXITCODE -ne 0) { throw "Hermes archive uv config validation failed" }
-
-# 归档校验：防止 exclude 写错后悄悄把开发/跨平台文件重新打进去。
-$archiveList = @(tar.exe tzf $hermesTarOut)
-if ($LASTEXITCODE -ne 0) { throw "无法读取 hermes-agent-bundle.tar.gz" }
-$forbiddenArchivePaths = @(
-    'hermes-agent-src/.git/',
-    'hermes-agent-src/venv/',
-    'hermes-agent-src/target/',
-    'hermes-agent-src/apps/desktop/',
-    'hermes-agent-src/node-globals/',
-    'hermes-agent-src/website/',
-    'hermes-agent-src/tests/',
-    'hermes-agent-src/tests-js/',
-    'hermes-agent-src/.github/'
-)
-foreach ($forbidden in $forbiddenArchivePaths) {
-    if ($archiveList | Where-Object { $_ -like "$forbidden*" }) {
-        throw "Hermes 归档包含被排除路径: $forbidden"
-    }
-}
-# 10/9: node_modules 一条都不许有 (员工机运行时不需要)
-$nmEntries = @($archiveList | Where-Object { $_ -like '*/node_modules/*' })
-if ($nmEntries.Count -gt 0) {
-    throw "Hermes 归档包含 node_modules ($($nmEntries.Count) 条, 应为 0), 例: $($nmEntries[0])"
-}
-Write-Host "  OK Hermes runtime 裁剪校验通过 · $($archiveList.Count) 个归档条目" -ForegroundColor Green
-
-# Build the safe chat export reader wheel that Companion installs offline on first launch.
-& "$scriptDir\build-wechat-reader-resource.ps1"
-if ($LASTEXITCODE -ne 0) { throw "catfish-wechat-reader resource build failed" }
-
-# ─── Step 8.5 · Offline email + Hermes dependency resources ───────
-
-Write-Host "`n[Step 8.5/11] Build offline email + Hermes dependency resources..." -ForegroundColor Yellow
+Write-Host "`n[Step 3/6] Build offline email + edge runtime resources..." -ForegroundColor Yellow
 $emailSource = Join-Path $catfishRoot 'edge\email-agent'
 $resourceDir = Join-Path $catfishRoot 'edge\companion-app\src-tauri\resources\windows'
 $emailStage = Join-Path $env:TEMP 'catfish-email-dist'
-$depsStage = Join-Path $env:TEMP 'catfish-hermes-deps-dist'
-foreach ($dir in @($emailStage, $depsStage)) {
+foreach ($dir in @($emailStage)) {
     if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
 }
@@ -366,10 +99,11 @@ python -m pip wheel --no-deps --wheel-dir $emailStage $emailSource
 if ($LASTEXITCODE -ne 0) { throw 'catfish-email wheel build failed' }
 python (Join-Path $PSScriptRoot 'verify-email-wheel.py') $emailStage $emailSource
 if ($LASTEXITCODE -ne 0) { throw 'email wheel source verification failed' }
-# Outlook COM 适配器依赖 pywin32；把 Windows x64 / CPython 3.11 wheel 一并放进
+# Outlook COM 适配器依赖 pywin32；把 Windows x64 / CPython 3.14 wheel 一并放进
 # 同一个离线归档，安装器用 uv --no-index 一次装完，现场不会偷偷访问 PyPI。
+# (10/14: 邮件环境用 hermes venv 的解释器建, hermes v0.22 起是 3.14)
 python -m pip download --only-binary=:all: --dest $emailStage `
-    --python-version 3.11 --platform win_amd64 --implementation cp --abi cp311 pywin32
+    --python-version 3.14 --platform win_amd64 --implementation cp --abi cp314 pywin32
 if ($LASTEXITCODE -ne 0) { throw 'pywin32 wheel download failed' }
 $emailWheels = @(Get-ChildItem $emailStage -Filter '*.whl')
 if (-not ($emailWheels | Where-Object { $_.Name -like 'catfish_email-*.whl' })) {
@@ -386,50 +120,42 @@ if (Test-Path $emailTar) { Remove-Item -Force $emailTar }
 tar -czf $emailTar -C $emailStage .
 if ($LASTEXITCODE -ne 0) { throw 'catfish-email-dist.tar.gz build failed' }
 
-# 清单: src-tauri/hermes-extra-packages.txt (Companion 装机/自检读同一份);
-# 取 wheel + 「每个包都是 .whl」的检查在 fetch_hermes_deps.py, CI 和 mac 打包也调它。
-python (Join-Path $PSScriptRoot 'fetch_hermes_deps.py') $depsStage `
-    --python-version 3.11 --platform win_amd64 --implementation cp --abi cp311
-if ($LASTEXITCODE -ne 0) { throw 'hermes extra dependencies (hermes-deps) download failed' }
-$depsTar = Join-Path $resourceDir 'hermes-deps-dist.tar.gz'
-if (Test-Path $depsTar) { Remove-Item -Force $depsTar }
-tar -czf $depsTar -C $depsStage .
-if ($LASTEXITCODE -ne 0) { throw 'hermes-deps-dist.tar.gz build failed' }
+# 10/14: hermes 额外依赖 (hermes-deps-dist) 已并进 hermes 归档的 wheelhouse (Step 2)。
 # 9/23: tool-bridge / local-search 源码 (9/28 加上传文件解析脚本) —— 之前两个平台的包都没带, 客户机器上
 # Companion 找不到它们 (见 src-tauri/src/services/edge_runtime.rs)。跟 mac 同一个脚本。
 $edgeTar = Join-Path $resourceDir 'catfish-edge-runtime.tar.gz'
 python (Join-Path $PSScriptRoot 'build_edge_runtime.py') $edgeTar
 if ($LASTEXITCODE -ne 0) { throw 'catfish-edge-runtime.tar.gz build failed' }
-foreach ($archive in @($emailTar, $depsTar, $edgeTar)) {
+foreach ($archive in @($emailTar, $edgeTar)) {
     $file = Get-Item $archive
     if ($file.Length -le 1KB) { throw "resource archive too small: $archive" }
     Write-Host "  OK $($file.Name) ($([math]::Round($file.Length/1KB,1)) KB)" -ForegroundColor Green
 }
 
-# ─── Step 9 · Mac placeholder ──────────────────────────────
+# ─── Step 4 · Mac placeholder ──────────────────────────────
 
-Write-Host "`n[Step 9/11] Create mac resources placeholders (tauri validate)..." -ForegroundColor Yellow
+Write-Host "`n[Step 4/6] Create mac resources placeholders (tauri validate)..." -ForegroundColor Yellow
 $macDir = "edge\companion-app\src-tauri\resources\mac"
 New-Item -ItemType Directory -Force -Path $macDir | Out-Null
-foreach ($f in @('install.sh', 'uv', 'cpython-3.11.15-embed.tar.gz', 'hermes-agent-bundle.tar.gz')) {
+foreach ($f in @('uv', 'cpython-3.14.7-embed.tar.gz', 'hermes-agent-bundle.tar.gz')) {
     $p = "$macDir\$f"
     if (-not (Test-Path $p)) { New-Item -ItemType File -Force -Path $p | Out-Null }
 }
 
-# ─── Step 10 · Frontend npm install ─────────────────────────
+# ─── Step 5 · Frontend npm install ─────────────────────────
 
 Set-Location $companionApp
 if ($SkipFrontendInstall -and (Test-Path "node_modules")) {
-    Write-Host "`n[Step 10/11] SKIP 前端 npm install (node_modules 已在)" -ForegroundColor DarkYellow
+    Write-Host "`n[Step 5/6] SKIP 前端 npm install (node_modules 已在)" -ForegroundColor DarkYellow
 } else {
-    Write-Host "`n[Step 10/11] 前端 npm install..." -ForegroundColor Yellow
+    Write-Host "`n[Step 5/6] 前端 npm install..." -ForegroundColor Yellow
     npm install --no-audit --no-fund --loglevel=error
     if ($LASTEXITCODE -ne 0) { throw "前端 npm install failed" }
 }
 
-# ─── Step 11 · tauri build msi ──────────────────────────────
+# ─── Step 6 · tauri build msi ──────────────────────────────
 
-Write-Host "`n[Step 11/11] npx tauri build msi (15-20 min)..." -ForegroundColor Yellow
+Write-Host "`n[Step 6/6] npx tauri build msi (15-20 min)..." -ForegroundColor Yellow
 # 9/28: 每次改版本号, 上一版的编译产物 (可执行文件 / 增量缓存) 就成了孤儿, cargo 不清;
 # 跟 mac 打包同一个脚本, 见 scripts/prune-rust-target.mjs 头部。失败只提示, 不拦打包。
 node (Join-Path $PSScriptRoot 'prune-rust-target.mjs') release x86_64-pc-windows-msvc

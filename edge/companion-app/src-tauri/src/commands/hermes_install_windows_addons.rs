@@ -2,9 +2,8 @@
 use anyhow::{Context, Result};
 use std::{ffi::OsString, io::Write, path::Path};
 use super::{run_hidden_powershell, run_hidden_status, open_bootstrap_log};
-use crate::commands::hermes_install_artifacts::{resolve_addon_runtime_dir, RuntimeArtifacts, HERMES_DEPS_ARCHIVE};
+use crate::commands::hermes_install_artifacts::{resolve_addon_runtime_dir, RuntimeArtifacts};
 use crate::commands::hermes_install_state::{BootstrapPaths, write_bytes_atomic};
-use crate::commands::hermes_install_steps::install_hermes_deps;
 use crate::services::catfish_paths::{hermes_venv_python, hermes_venv_tool};
 
 pub(super) fn install_optional_components(resource_dir: &Path, paths: &BootstrapPaths) -> Vec<String> {
@@ -15,22 +14,8 @@ pub(super) fn install_optional_components(resource_dir: &Path, paths: &Bootstrap
     let artifacts = RuntimeArtifacts::from_dir(resources.clone());
     let mut failures = Vec::new();
 
-    let import_check = crate::commands::hermes_install_artifacts::hermes_extra_import_check();
-    let deps_ready = run_hidden_status(
-        &hermes_venv_python(&paths.install_dir),
-        &["-c", &import_check],
-        "hermes 额外依赖 (分词/浏览器/文件监听/上传文件解析)",
-    );
-    if !deps_ready {
-        match artifacts.deps_tar.as_ref() {
-            Some(_) => {
-                if let Err(error) = install_hermes_deps(&artifacts, paths) {
-                    failures.push(format!("{}: {error:#}", HERMES_DEPS_ARCHIVE));
-                }
-            }
-            None => failures.push(format!("缺少 {HERMES_DEPS_ARCHIVE}")),
-        }
-    }
+    // 10/14: 分词 / 浏览器 / 文件监听 / 上传文件解析这些额外包已经在核心安装那一步 (wheelhouse)
+    // 跟 hermes 一起装好了, 这里不再单独补装 (hermes-deps-dist 已退役)。
 
     let email_ready = optional_components_ready(paths);
     let script = resources.join("install-catfish-email.ps1");
@@ -48,7 +33,7 @@ pub(super) fn install_optional_components(resource_dir: &Path, paths: &Bootstrap
                     OsString::from("-DistributionPath"),
                     archive.clone().into_os_string(),
                 ];
-                let installed = run_hidden_powershell(&script, &args, paths, "安装/更新 catfish-email", None)
+                let installed = run_hidden_powershell(&script, &args, paths, "安装/更新 catfish-email")
                     .and_then(|()| {
                         anyhow::ensure!(optional_components_ready(paths), "邮件组件更新后自检失败");
                         let hash = expected.as_ref().context("无法读取邮件安装资源指纹")?;
@@ -91,7 +76,7 @@ assert r.get('modifies_wechat_app') is False
                     archive.clone().into_os_string(),
                 ];
                 let installed = run_hidden_powershell(
-                    &script, &args, paths, "安装/校验 catfish-wechat-reader", None,
+                    &script, &args, paths, "安装/校验 catfish-wechat-reader",
                 ).and_then(|()| {
                     let hash = expected.as_ref().context("无法读取微信读取器资源指纹")?;
                     write_bytes_atomic(&marker, hash.as_bytes())

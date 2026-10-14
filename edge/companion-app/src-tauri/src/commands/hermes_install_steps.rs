@@ -7,17 +7,19 @@
 //! 这里只放"每一步具体怎么做"。
 
 use anyhow::{Context, Result};
+use std::path::Path;
 #[cfg(not(target_os = "windows"))]
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+#[cfg(not(target_os = "windows"))]
 use std::process::Command;
 
+#[cfg(not(target_os = "windows"))]
 use crate::services::catfish_paths::hermes_venv_python;
 #[cfg(not(target_os = "windows"))]
 use crate::services::catfish_paths::hermes_venv_tool;
 
+#[cfg(not(target_os = "windows"))]
 use super::hermes_install_artifacts::RuntimeArtifacts;
-#[cfg(target_os = "windows")]
-use super::hermes_install_artifacts::HERMES_DEPS_ARCHIVE;
 #[cfg(not(target_os = "windows"))]
 use super::hermes_install_artifacts::{CATFISH_EMAIL_ARCHIVE, CATFISH_WECHAT_READER_ARCHIVE};
 #[cfg(not(target_os = "windows"))]
@@ -27,10 +29,13 @@ use super::hermes_install_base::{
 };
 #[cfg(not(target_os = "windows"))]
 use super::hermes_install_health::{core_health_problems, installed_hermes_commit_at};
-use super::hermes_install_state::{remove_any, BootstrapPaths};
+use super::hermes_install_state::remove_any;
+#[cfg(not(target_os = "windows"))]
+use super::hermes_install_state::BootstrapPaths;
 #[cfg(not(target_os = "windows"))]
 use super::hermes_install_state::{write_bytes_atomic, write_transaction};
 
+#[cfg(not(target_os = "windows"))]
 fn command_status(mut command: Command, description: &str) -> Result<()> {
     // Companion 是 Windows GUI 子系统；没有这个 flag，tar/uv/python 这类
     // console 子进程可能各自创建黑色控制台窗口。所有安装步骤统一从这里过，
@@ -70,8 +75,8 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "windows"))]
-fn flatten_hermes_source_stage(stage: &Path) -> Result<()> {
+/// 10/14: Windows 装机也用 (hermes_install_windows::bootstrap)。
+pub(crate) fn flatten_hermes_source_stage(stage: &Path) -> Result<()> {
     if stage.join("pyproject.toml").is_file() {
         return Ok(());
     }
@@ -338,50 +343,6 @@ pub(crate) fn install_hermes_deps(artifacts: &RuntimeArtifacts, paths: &Bootstra
     // 10/14: 额外包并进了 hermes 源码里的 wheelhouse, 跟 hermes 依赖同一份钉版本清单。
     // 修复 (hermes 健康但额外包缺) 就是把整份清单再装一遍 —— 装过的 uv 秒过。
     super::hermes_install_native::install_python_deps(artifacts, paths)
-}
-
-#[cfg(target_os = "windows")]
-pub(crate) fn install_hermes_deps(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths) -> Result<()> {
-    let Some(tar) = artifacts.deps_tar.as_ref() else {
-        log::warn!(
-            "[hermes-deps] 资源里没有 {} —— 浏览器工具、中文分词和上传文件解析会不可用。\
-             这个包由 scripts/build-mac-resources.sh 产出, 检查打包流程。",
-            HERMES_DEPS_ARCHIVE
-        );
-        return Ok(());
-    };
-    let venv_py = hermes_venv_python(&paths.install_dir);
-    if !venv_py.exists() {
-        anyhow::bail!("hermes venv 的 python 不存在: {}", venv_py.display());
-    }
-
-    let stage = paths.unique_sibling("hermes-deps");
-    remove_any(&stage)?;
-    std::fs::create_dir_all(&stage).with_context(|| format!("创建 {}", stage.display()))?;
-
-    let mut untar = crate::services::process::background_command("tar");
-    untar.arg("-xzf").arg(tar).arg("-C").arg(&stage);
-    let result = command_status(untar, "解压 hermes-deps-dist.tar.gz").and_then(|()| {
-        let mut pip = crate::services::process::background_command(&artifacts.uv);
-        pip.arg("pip")
-            .arg("install")
-            .arg("--python")
-            .arg(&venv_py)
-            .arg("--no-index")           // 离线现场必须 —— 否则会去连 PyPI 干等超时
-            .arg("--find-links")
-            .arg(&stage)
-            .args(super::hermes_install_artifacts::hermes_extra_packages());
-        command_status(pip, "uv pip install hermes 额外依赖")?;
-
-        // 装了但 import 不了等于没装 —— 而下游只会 warn 一句, 现场查不出来。
-        // 判据跟 autostart.rs 的自检一致 (playwright.sync_api, 不是 playwright)。
-        let mut check = crate::services::process::background_command(&venv_py);
-        check.arg("-c").arg(super::hermes_install_artifacts::hermes_extra_import_check());
-        command_status(check, "验证 hermes 额外依赖可导入")
-    });
-
-    let _ = remove_any(&stage);
-    result
 }
 
 /// 附加组件 (catfish-email / catfish-wechat-reader) 的安装指纹 —— 跟 Windows

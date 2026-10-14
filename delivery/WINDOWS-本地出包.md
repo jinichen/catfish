@@ -1,5 +1,10 @@
 # 在一台 Windows 机器上本地打出 msi
 
+> ⚠ **10/14 起这份手工步骤里的第 4、5 步已过时** (hermes v0.22.0): 不再给 install.ps1 打补丁、不再用
+> Python 3.11。Hermes 运行时资源统一用 `bash edge/companion-app/scripts/build-windows-hermes-resources.sh`
+> 生成 (Git Bash 里跑, mac 上也能交叉打), 或者直接跑 `scripts/build-msi-local.ps1` (已改成调它)。
+
+
 > 8/5。写这份是因为两条 CI 同时断了：GitHub Actions 扣款失败（job 起不来），
 > CircleCI 额度用尽（8/13 才刷新）。这份是把 `.circleci/config.yml` 那 17 步
 > 翻译成人手能跑的版本。

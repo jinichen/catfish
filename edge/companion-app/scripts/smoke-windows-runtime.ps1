@@ -17,18 +17,25 @@ try {
     $Uv = Join-Path $Resources 'uv.exe'
     New-Item -ItemType Directory -Force -Path (Join-Path $env:HERMES_HOME 'bin') | Out-Null
     Copy-Item -LiteralPath $Uv -Destination (Join-Path $env:HERMES_HOME 'bin\uv.exe')
-    Expand-Archive -LiteralPath (Join-Path $Resources 'cpython-3.11.15-embed.zip') -DestinationPath (Join-Path $Work 'python')
-    $BasePython = Get-ChildItem (Join-Path $Work 'python') -Recurse -Filter python.exe |
-        Where-Object { $_.FullName -notmatch '\\Scripts\\' } | Select-Object -First 1
-    if (-not $BasePython) { throw 'Bundled Python missing' }
+    # hermes v0.22.0 (10/14): Python 3.14 tar.gz + the wheelhouse inside the Hermes archive,
+    # the same offline install as Companion's hermes_install_native.rs (no more uv sync --locked).
+    tar -xzf (Join-Path $Resources 'cpython-3.14.7-embed.tar.gz') -C $Work
+    if ($LASTEXITCODE -ne 0) { throw 'Bundled Python extraction failed' }
+    $BasePython = Join-Path $Work 'python\python.exe'
+    if (-not (Test-Path -LiteralPath $BasePython)) { throw 'Bundled Python missing' }
     tar -xzf (Join-Path $Resources 'hermes-agent-bundle.tar.gz') -C $env:HERMES_HOME
     if ($LASTEXITCODE -ne 0) { throw 'Hermes archive extraction failed' }
     Rename-Item (Join-Path $env:HERMES_HOME 'hermes-agent-src') 'hermes-agent'
     $Agent = Join-Path $env:HERMES_HOME 'hermes-agent'
-    $env:UV_PROJECT_ENVIRONMENT = Join-Path $Agent 'venv'
-    $env:UV_PYTHON = $BasePython.FullName
-    & $Uv sync --project $Agent --extra all --locked
+    $Wheelhouse = Join-Path $Agent 'wheelhouse'
+    & $Uv venv (Join-Path $Agent 'venv') --python $BasePython --no-python-downloads
+    if ($LASTEXITCODE -ne 0) { throw 'Hermes venv creation failed' }
+    $VenvPython = Join-Path $Agent 'venv\Scripts\python.exe'
+    & $Uv pip install --offline --no-index --find-links $Wheelhouse --require-hashes --python $VenvPython `
+        -r (Join-Path $Agent 'catfish-requirements.txt')
     if ($LASTEXITCODE -ne 0) { throw 'Bundled Hermes dependencies failed' }
+    & $Uv pip install --offline --no-index --find-links $Wheelhouse --no-deps --python $VenvPython -e $Agent
+    if ($LASTEXITCODE -ne 0) { throw 'Hermes editable install failed' }
     $Python = Join-Path $Agent 'venv\Scripts\python.exe'
     $Edge = Join-Path $Work 'edge'
     New-Item -ItemType Directory -Force -Path $Edge | Out-Null

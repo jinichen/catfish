@@ -26,6 +26,7 @@ hermes-agent/
 /install.ps1
 /uv.exe
 /cpython-3.11.15-embed.zip
+/cpython-*-embed.tar.gz
 /hermes-agent-bundle.tar.gz
 /chromium-embed.tar.gz
 /catfish-email-dist.tar.gz

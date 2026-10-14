@@ -6,14 +6,16 @@
 
 | 文件 | 用途 | 生成入口 |
 |---|---|---|
-| `install.ps1` | Hermes 离线安装脚本 | `edge/hermes-fork/patch_install_ps1_offline.py` |
-| `uv.exe` | Python/运行时管理 | `scripts/build-msi-local.ps1` |
-| `cpython-3.11.15-embed.zip` | Windows Python embed | `scripts/build-msi-local.ps1` |
-| `hermes-agent-bundle.tar.gz` | Hermes 源码和离线 Node 依赖 | `scripts/build-msi-local.ps1` |
-| `chromium-embed.tar.gz` | Playwright Chromium 离线资源 | `scripts/build-msi-local.ps1` |
-| `catfish-email-dist.tar.gz` | catfish-email wheel 和 Hermes 邮件 skill | `scripts/build-msi-local.ps1` / GitHub Actions |
-| `install-catfish-email.ps1` | 首次启动后台任务把邮件 wheel 和 skill 装进 Hermes venv | Companion Windows bootstrap |
-| `hermes-deps-dist.tar.gz` | jieba、Playwright 及其依赖 wheel | `scripts/build-msi-local.ps1` / GitHub Actions |
+| `uv.exe` | 离线装 Python 依赖 | `scripts/build-windows-hermes-resources.sh` |
+| `cpython-3.14.7-embed.tar.gz` | Windows Python (python-build-standalone 20260901) | `scripts/build-windows-hermes-resources.sh` |
+| `hermes-agent-bundle.tar.gz` | Hermes 源码 + catfish 插件 + `wheelhouse/` + `catfish-requirements.txt` + `install-stamp.json` | `scripts/build-windows-hermes-resources.sh` |
+| `chromium-embed.tar.gz` | Playwright Chromium (跟 wheelhouse 里的 playwright 同版) | `scripts/build-windows-hermes-resources.sh` |
+| `catfish-email-dist.tar.gz` | catfish-email wheel + pywin32 (cp314) + Hermes 邮件 skill | `scripts/build-msi-local.ps1` / GitHub Actions |
+| `install-catfish-email.ps1` | 首次启动后台任务把邮件 wheel 和 skill 装进独立邮件环境 | Companion Windows bootstrap |
+
+10/14 (hermes v0.22.0) 起不再有 `install.ps1` (上游安装器换成 hermes pm, 离线补丁全部失效) 和
+`hermes-deps-dist.tar.gz` (额外包并进 hermes 归档的 wheelhouse)。Companion 首次启动时自己装:
+`src-tauri/src/commands/hermes_install_native.rs` (mac / Windows 共用)。
 
 ## 构建规则
 

@@ -16,7 +16,7 @@
 use anyhow::{Context, Result};
 use std::ffi::OsString;
 use std::fs::OpenOptions;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -25,12 +25,14 @@ use super::hermes_install_base::{
     hermes_pinned_commit, hermes_pinned_tag, report, BootstrapProgressState, ProgressReporter,
     INSTALL_METHOD_MARKER,
 };
+use super::hermes_install_artifacts::{resolve_runtime_dir, RuntimeArtifacts};
 use super::hermes_install_health::{core_health_problems, installed_hermes_commit_at};
+use super::hermes_install_native;
 use super::hermes_install_state::{write_bytes_atomic, write_completion_marker, BootstrapPaths};
 use crate::services::catfish_paths::{hermes_venv_python, hermes_venv_tool};
 use crate::services::process;
 
-const TOTAL_STEPS: u8 = 5;
+const TOTAL_STEPS: u8 = 7;
 
 #[path = "hermes_install_windows_addons.rs"]
 mod addons;
@@ -41,10 +43,6 @@ use addons::install_optional_components;
 #[cfg(all(test, unix))]
 #[path = "hermes_install_windows_tests.rs"]
 mod tests;
-
-fn windows_resources(resource_dir: &Path) -> PathBuf {
-    resource_dir.join("resources").join("windows")
-}
 
 fn require_file(path: &Path, label: &str) -> Result<()> {
     let metadata = std::fs::metadata(path)
@@ -67,43 +65,11 @@ fn open_bootstrap_log(paths: &BootstrapPaths) -> Result<std::fs::File> {
         .with_context(|| format!("打开 Windows Hermes 安装日志 {}", log_path.display()))
 }
 
-fn current_stage(paths: &BootstrapPaths) -> &'static str {
-    let Ok(mut file) = std::fs::File::open(paths.hermes_home.join("logs/catfish-companion-bootstrap.log")) else {
-        return "正在准备 Windows Hermes";
-    };
-    let length = file.metadata().map(|m| m.len()).unwrap_or(0);
-    let _ = file.seek(SeekFrom::Start(length.saturating_sub(16384)));
-    let mut bytes = Vec::new();
-    let _ = file.take(16384).read_to_end(&mut bytes);
-    // Only emit fixed descriptions, never forward arbitrary child-process output.
-    for line in String::from_utf8_lossy(&bytes).lines().rev() {
-        for (needle, label) in [
-            ("Installation Complete", "Hermes 安装脚本已完成，正在检查结果"),
-            ("configuration files", "正在保存 Hermes 配置"),
-            ("TUI dependencies", "正在检查终端界面组件"),
-            ("Chromium", "正在准备离线浏览器"),
-            ("Node.js dependencies", "正在检查浏览器工具"),
-            ("Downloaded ", "正在下载和安装 Python 依赖"),
-            ("Downloading ", "正在下载 Python 依赖"),
-            ("Trying tier:", "正在解析 Python 依赖"),
-            ("Installing dependencies", "正在安装 Python 依赖"),
-            ("virtual environment", "正在准备 Python 虚拟环境"),
-            ("Preparing offline Git", "正在准备离线版本信息"),
-            ("copying hermes-agent", "正在复制 Hermes 离线源码"),
-            ("extracting hermes-agent", "正在解压 Hermes 离线源码"),
-        ] {
-            if line.contains(needle) { return label; }
-        }
-    }
-    "正在准备 Windows Hermes"
-}
-
 fn run_hidden_powershell(
     script: &Path,
     args: &[OsString],
     paths: &BootstrapPaths,
     description: &str,
-    reporter: Option<&ProgressReporter<'_>>,
 ) -> Result<()> {
     require_file(script, "PowerShell 安装脚本")?;
     let mut log = open_bootstrap_log(paths)?;
@@ -136,7 +102,6 @@ fn run_hidden_powershell(
         .spawn()
         .with_context(|| format!("启动 {description}"))?;
     let started = Instant::now();
-    let mut last_update = Instant::now();
     let status = loop {
         if let Some(status) = child.try_wait().context("检查 Windows 安装进程")? {
             break status;
@@ -150,13 +115,6 @@ fn run_hidden_powershell(
             anyhow::ensure!(status.success(), "安装超时，停止安装进程失败: {status}");
             child.wait().context("等待超时安装进程退出")?;
             anyhow::bail!("{description}超过 30 分钟，已停止。请查看 logs/catfish-companion-bootstrap.log");
-        }
-        if last_update.elapsed() >= Duration::from_secs(10) {
-            if let Some(reporter) = reporter {
-                report(reporter, "core", BootstrapProgressState::Running, 0, TOTAL_STEPS,
-                    format!("{}，本轮已运行 {} 秒", current_stage(paths), started.elapsed().as_secs()), None);
-            }
-            last_update = Instant::now();
         }
         std::thread::sleep(Duration::from_millis(250));
     };
@@ -298,165 +256,139 @@ pub(crate) fn reuse_verified_core(paths: &BootstrapPaths) -> Result<bool> {
     Ok(true)
 }
 
-/// 某些旧资源包会把源码和 venv 解压成功，但没有生成 Hermes 入口 exe。
-/// 在健康检查前用现有 uv/venv 做一次无网络 editable 安装，修复入口而不引入联网 fallback。
-fn repair_missing_hermes_cli(paths: &BootstrapPaths) -> Result<()> {
-    let cli = hermes_venv_tool(&paths.install_dir, "hermes");
-    if cli.is_file() {
-        return Ok(());
-    }
-    let python = hermes_venv_python(&paths.install_dir);
-    if !python.is_file() {
-        return Ok(());
-    }
-
-    let uv = paths.hermes_home.join("bin/uv.exe");
-    if uv.is_file() {
-        let mut command = process::background_command(&uv);
-        command
-            .current_dir(&paths.install_dir)
-            .args([
-                OsString::from("pip"),
-                OsString::from("install"),
-                OsString::from("--offline"),
-                OsString::from("--python"),
-                python.clone().into_os_string(),
-                OsString::from("--reinstall"),
-                OsString::from("--no-deps"),
-                OsString::from("--no-build-isolation"),
-                OsString::from("--editable"),
-            ])
-            .arg(&paths.install_dir)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        if command
-            .status()
-            .context("修复 Windows Hermes CLI 入口")?
-            .success()
-            && cli.is_file()
-        {
-            return Ok(());
-        }
-    }
-
-    // 兼容已经安装 pip 的旧 venv；仍通过 --no-index 保证不联网。
-    let mut command = process::background_command(&python);
-    command
-        .current_dir(&paths.install_dir)
-        .args([
-            OsString::from("-m"),
-            OsString::from("pip"),
-            OsString::from("install"),
-            OsString::from("--no-index"),
-            OsString::from("--no-deps"),
-            OsString::from("--no-build-isolation"),
-            OsString::from("--force-reinstall"),
-            OsString::from("--editable"),
-        ])
-        .arg(&paths.install_dir)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    if command
-        .status()
-        .context("修复 Windows Hermes CLI 入口")?
-        .success()
-        && cli.is_file()
-    {
-        return Ok(());
-    }
-    anyhow::bail!(
-        "Hermes CLI 入口修复失败: {}",
-        cli.display()
-    );
+fn timestamp() -> String {
+    chrono::Local::now().format("%Y%m%d-%H%M%S").to_string()
 }
 
+/// 一步: 报"进行中" → 做 → 报"完成"。
+fn step<T>(
+    reporter: &ProgressReporter<'_>,
+    stage: &str,
+    title: &str,
+    done: &mut u8,
+    work: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    report(reporter, stage, BootstrapProgressState::Running, *done, TOTAL_STEPS, title, None);
+    let value = work().with_context(|| format!("Windows Hermes 安装阶段 {stage}"))?;
+    *done += 1;
+    report(reporter, stage, BootstrapProgressState::Completed, *done, TOTAL_STEPS, format!("{title}完成"), None);
+    Ok(value)
+}
+
+/// 邮件 / 微信读取器的安装脚本 (install-catfish-email.ps1 / install-wechat-reader.ps1) 用
+/// `%HERMES_HOME%\bin\uv.exe` —— 原来是上游 install.ps1 放的, 现在由我们放。
+fn publish_uv(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths) -> Result<()> {
+    let bin = paths.hermes_home.join("bin");
+    std::fs::create_dir_all(&bin).with_context(|| format!("创建 {}", bin.display()))?;
+    let dest = bin.join("uv.exe");
+    let tmp = bin.join(format!("uv.exe.{}.tmp", std::process::id()));
+    std::fs::copy(&artifacts.uv, &tmp).with_context(|| format!("复制 uv 到 {}", tmp.display()))?;
+    let _ = std::fs::remove_file(&dest);
+    std::fs::rename(&tmp, &dest).with_context(|| format!("放置 {}", dest.display()))
+}
+
+/// 旧安装挪成 `hermes-agent.replaced-<时间>` (跟原来 install.ps1 同一个约定, 成功后由
+/// prune_replaced_backups 只留最近一份), 再把 MSI 里的源码归档解到安装目录。返回备份路径。
+fn replace_source(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths) -> Result<Option<PathBuf>> {
+    let archive = artifacts.hermes_tar.as_ref().context("MSI 里没有 hermes-agent-bundle.tar.gz")?;
+    let backup = if paths.install_dir.exists() {
+        let backup = paths.hermes_home.join(format!("hermes-agent.replaced-{}", timestamp()));
+        std::fs::rename(&paths.install_dir, &backup)
+            .with_context(|| format!("挪开旧安装 {} (有程序占着它? 先退出 Companion 和 hermes)", paths.install_dir.display()))?;
+        Some(backup)
+    } else {
+        None
+    };
+    let extract = (|| -> Result<()> {
+        std::fs::create_dir_all(&paths.install_dir)
+            .with_context(|| format!("创建 {}", paths.install_dir.display()))?;
+        let mut untar = process::background_command("tar");
+        untar.arg("-xzf").arg(archive).arg("-C").arg(&paths.install_dir);
+        let status = untar.status().context("启动 tar")?;
+        anyhow::ensure!(status.success(), "解压 hermes-agent-bundle.tar.gz 失败: {status}");
+        super::hermes_install_steps::flatten_hermes_source_stage(&paths.install_dir)?;
+        if let Some(problem) = super::hermes_install_health::stamp_problem(&paths.install_dir) {
+            anyhow::bail!("Hermes 源码归档不对: {problem}");
+        }
+        Ok(())
+    })();
+    if let Err(error) = extract {
+        let _ = std::fs::remove_dir_all(&paths.install_dir);
+        if let Some(backup) = &backup {
+            let _ = std::fs::rename(backup, &paths.install_dir);
+        }
+        return Err(error);
+    }
+    Ok(backup)
+}
 
 pub(crate) fn bootstrap(
     resource_dir: &Path,
     paths: &BootstrapPaths,
     reporter: &ProgressReporter<'_>,
 ) -> Result<()> {
-    let resources = windows_resources(resource_dir);
-    let install_script = resources.join("install.ps1");
-    let uv = resources.join("uv.exe");
-    let python_zip = resources.join("cpython-3.11.15-embed.zip");
-    let hermes_tar = resources.join("hermes-agent-bundle.tar.gz");
-    let chromium_tar = resources.join("chromium-embed.tar.gz");
-    for (path, label) in [
-        (&install_script, "Windows Hermes 安装脚本"),
-        (&uv, "Windows uv"),
-        (&python_zip, "Windows Python 离线包"),
-        (&hermes_tar, "Hermes 源码离线包"),
-        (&chromium_tar, "Chromium 离线包"),
-    ] {
-        require_file(path, label)?;
-    }
-
-    report(
-        reporter,
-        "core",
-        BootstrapProgressState::Running,
-        0,
-        TOTAL_STEPS,
-        "正在准备 Windows Hermes 核心环境（首次安装可能需要几分钟）",
-        None,
-    );
-    let core_args = vec![
-        OsString::from("-NonInteractive"),
-        // Upstream's full-install catch exits nonzero only in JSON/stage mode.
-        OsString::from("-Json"),
-        OsString::from("-SkipSetup"),
-        // Optional GUI automation is installed on demand, never in first-use setup.
-        OsString::from("-SkipComputerUse"),
-        OsString::from("-Commit"),
-        OsString::from(hermes_pinned_commit()),
-        OsString::from("-OfflineSourceTar"),
-        hermes_tar.into_os_string(),
-        OsString::from("-OfflineUvExe"),
-        uv.into_os_string(),
-        OsString::from("-OfflinePythonZip"),
-        python_zip.into_os_string(),
-        OsString::from("-OfflineChromiumTar"),
-        chromium_tar.into_os_string(),
-    ];
-    run_hidden_powershell(
-        &install_script,
-        &core_args,
-        paths,
-        "安装 Windows Hermes 核心环境",
-        Some(reporter),
-    )?;
-
-    if let Err(error) = repair_missing_hermes_cli(paths) {
-        log::warn!("[windows-bootstrap] {error:#}");
-    }
-    write_windows_install_markers(paths)?;
-
-    let core_problems = core_health_problems(paths, false);
-    if !core_problems.is_empty() {
+    // 10/14 (hermes v0.22.0): 不再跑上游 install.ps1 (整个重写成 hermes pm 联网装, 离线补丁全部失效),
+    // 跟 macOS 同一套 hermes_install_native 步骤, 只用 MSI 带的资源, 不联网。
+    let artifacts = RuntimeArtifacts::from_dir(resolve_runtime_dir(resource_dir)?);
+    artifacts.validate_bootstrap_tools()?;
+    if !artifacts.is_complete_bundle() {
         anyhow::bail!(
-            "Windows Hermes 安装器已退出，但健康检查失败: {}",
-            core_problems.join("; ")
+            "MSI 里的 Hermes 运行时不完整 ({}/{}), 请重新安装 Companion",
+            artifacts.archive_count(),
+            super::hermes_install_artifacts::RUNTIME_ARCHIVES.len()
         );
     }
-    write_completion_marker(&paths.install_dir)?;
+    let mut log = open_bootstrap_log(paths)?;
+    writeln!(log, "\n=== 安装 Windows Hermes 核心环境 ===")?;
+    writeln!(log, "companion: {}", crate::commands::system::build_identity())?;
+    writeln!(log, "runtime: {}", artifacts.dir.display())?;
+
+    let mut done = 0u8;
+    let backup = step(reporter, "source", "正在解压 Hermes 运行环境", &mut done, || replace_source(&artifacts, paths))?;
+    let result = (|| -> Result<()> {
+        let python = step(reporter, "python", "正在准备 Python 3.14", &mut done, || {
+            hermes_install_native::ensure_embedded_python(&artifacts, paths)
+        })?;
+        step(reporter, "venv", "正在准备 Python 环境", &mut done, || {
+            hermes_install_native::create_venv(&artifacts, paths, &python)
+        })?;
+        step(reporter, "python-deps", "正在安装 Hermes 核心组件", &mut done, || {
+            hermes_install_native::install_python_deps(&artifacts, paths)
+        })?;
+        step(reporter, "browser", "正在准备浏览器自动化组件", &mut done, || {
+            hermes_install_native::install_chromium(&artifacts, paths);
+            Ok(())
+        })?;
+        step(reporter, "config", "正在准备本机配置", &mut done, || {
+            hermes_install_native::prepare_config(paths)?;
+            publish_uv(&artifacts, paths)?;
+            write_windows_install_markers(paths)
+        })?;
+        let core_problems = core_health_problems(paths, false);
+        anyhow::ensure!(core_problems.is_empty(), "Windows Hermes 装完但健康检查失败: {}", core_problems.join("; "));
+        write_completion_marker(&paths.install_dir)
+    })();
+    if let Err(error) = result {
+        writeln!(log, "核心安装失败: {error:#}")?;
+        if let Some(backup) = backup {
+            // 新的装坏了 → 换回原来那份 (旧版本至少还能用), 新的留成 .failed-* 给排查
+            let failed = paths.hermes_home.join(format!("hermes-agent.failed-{}", timestamp()));
+            let _ = std::fs::rename(&paths.install_dir, &failed);
+            if let Err(restore) = std::fs::rename(&backup, &paths.install_dir) {
+                return Err(error).context(format!("且恢复旧安装失败: {restore}"));
+            }
+        }
+        return Err(error);
+    }
     // 装成功了才清 —— 失败时那些备份可能是现场唯一能翻回去的东西
     prune_replaced_backups(paths, 1);
-    report(
-        reporter,
-        "core",
-        BootstrapProgressState::Completed,
-        1,
-        TOTAL_STEPS,
-        "Windows Hermes 核心环境已准备完成",
-        None,
-    );
+    writeln!(log, "核心安装完成")?;
 
     report(
         reporter,
         "addons",
         BootstrapProgressState::Running,
-        1,
+        done,
         TOTAL_STEPS,
         "正在准备浏览器、分词和邮件组件",
         None,

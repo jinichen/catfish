@@ -63,15 +63,13 @@ pub mod hermes_install_health;    // 版本解析 + 健康检查 (8/15 切出)
 pub mod hermes_install_recover;   // 中断事务恢复 + 装机锁 (8/15 切出)
 pub mod hermes_install_state;     // 落盘状态 + 原子写 (8/15 切出)
 pub mod hermes_install_steps;     // Unix 装机步骤 + Windows 共用的附加依赖安装
-#[cfg(not(target_os = "windows"))]
-pub mod hermes_install_native;    // 10/14 hermes v0.22: Companion 自己装 (Python 3.14 + wheelhouse), 不再调 install.sh
+pub mod hermes_install_native;    // 10/14 hermes v0.22: Companion 自己装 (Python 3.14 + wheelhouse), mac / Windows 共用, 不再调上游安装器
 pub mod hermes_install; // 7/15 BL-CATFISH-MAC-OFFLINE-INSTALL: mac dmg 首启装 hermes-agent 本体 (offline install.sh + 4 artifacts)
 #[cfg(any(target_os = "windows", test))]
 pub mod hermes_install_windows; // Windows 首启后台安装，避免 MSI CustomAction 弹黑窗
 pub mod hermes_memory; // BL-DASHBOARD-HERMES-MEMORY-CARD (5/16)
 pub mod hermes_plugin_env; // 8/9: 从 hermes_plugin 抽出 —— ~/.hermes/.env 的 API_SERVER_KEY 维护
 pub mod hermes_plugin_baked; // 8/21: BAKED_* 常量表, 从 hermes_plugin 抽出 (800 行红线)
-pub mod hermes_windows_watchdog; // 9/26: 已装 Windows 机器补打 hermes 心跳补丁
 pub mod hermes_plugin; // P3.5.56 (6/21 鸿波): Companion boot 自动装 catfish-xcatfish-user plugin (baked + ensure config.yaml enabled)
 pub mod http_proxy; // BL-CSP-PROXY (7/18 鸿波): Rust reqwest HTTP 代理, CSP connect-src 保持严格
 pub mod identity;

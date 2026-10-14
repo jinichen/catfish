@@ -26,7 +26,8 @@ uv.lock 装, 原来打在 install.sh / install.ps1 上的离线补丁锚点全�
 3. ``--generate-hashes``: 员工机 ``--require-hashes`` 装, 传递依赖被换包也装不进去 (lock 原来的保护不丢);
 4. ``pip download --only-binary=:all:`` 按目标平台取 wheel; 只有源码包的 (jieba) 现打 py3-none-any。
 
-macOS 按安装包支持的最低系统取 (aarch64: 11.0, x64: 10.15), 理由见 fetch_hermes_deps.py (9/28 pypdfium2)。
+macOS 按安装包支持的最低系统取 (aarch64: 11.0, x64: 10.15) —— 9/28 实测不限的话新系统构建机会取到
+只支持 macOS 13+ 的 pypdfium2, 老系统员工机上一个装不上就全部装不上。
 """
 from __future__ import annotations
 
