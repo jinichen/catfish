@@ -104,6 +104,7 @@ def smtp_send(config: "ImapConfig", raw: bytes, recipients: list[str]) -> None:
 # 全仓有一堆 `from .imap_mail import ImapConfig`, 改全部调用点的风险不如
 # 留一行别名。新代码请直接 from .imap_config import ...
 from . import imap_drafts, imap_uidvalidity  # noqa: E402
+from .imap_reconnect import drop_conn, reconnect_once as _reconnect_once  # noqa: E402
 from .imap_config import (  # noqa: E402,F401
     DEFAULT_PORT,
     DEFAULT_RETENTION,
@@ -205,6 +206,9 @@ class ImapAdapter(EmailAdapter):
         self._conn = conn
         return conn
 
+    def _drop_conn(self) -> None:
+        drop_conn(self)
+
     def close(self) -> None:
         if self._conn is None:
             return
@@ -221,6 +225,7 @@ class ImapAdapter(EmailAdapter):
         self._connect()  # 连不上就抛, 让上层如实报
         return [Account(name=self.config.user, address=self.config.user, is_default=True)]
 
+    @_reconnect_once
     def folders(self) -> list[tuple[str, str]]:
         """``[(服务器原名, 解码后的名字), ...]``。"""
         conn = self._connect()
@@ -239,6 +244,7 @@ class ImapAdapter(EmailAdapter):
             out.append((raw, utf7_decode(raw)))
         return out
 
+    @_reconnect_once
     def list_messages(self, filt: ListFilter) -> list[Message]:
         remotes: list[_Remote] = []
         for raw, decoded in self.folders():
@@ -250,6 +256,7 @@ class ImapAdapter(EmailAdapter):
         entries.sort(key=lambda r: rfc822.date_iso(r.message), reverse=True)
         return [self._to_message(r, full=False) for r in entries[: max(filt.limit, 0)]]
 
+    @_reconnect_once
     def read_message(self, message_id: str) -> Message:
         folder_raw, uidvalidity, uid = self._unpack_id(self._current_id(message_id))
         conn = self._connect()
@@ -267,6 +274,7 @@ class ImapAdapter(EmailAdapter):
             raise DataNotFoundError(f"邮件不存在或已删除: uid={uid}")
         return self._to_message(parsed[0], full=True)
 
+    @_reconnect_once
     def search(
         self, query: str, *, account: str | None = None,
         folder: str = "Inbox", limit: int = 30,
@@ -297,6 +305,7 @@ class ImapAdapter(EmailAdapter):
     # 机器上 IMAP 是唯一的路, 员工打开邮件页会发现: 看得见, 什么都做不了,
     # 按钮都在, 一点就报错。
 
+    @_reconnect_once
     def export_attachment(self, message_id: str, filename: str) -> Path:
         """把附件解到本地临时文件。
 
@@ -507,6 +516,7 @@ class ImapAdapter(EmailAdapter):
             return imap_uidvalidity.resolve_legacy(message_id) or message_id
         return message_id
 
+    @_reconnect_once
     def _fetch_raw(self, message_id: str) -> EmailMessage:
         """把整封原始邮件取下来解析好。"""
         folder_raw, uid = self._locate(message_id)

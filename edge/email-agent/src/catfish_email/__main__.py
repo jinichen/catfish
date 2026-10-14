@@ -73,6 +73,27 @@ def _force_utf8_stdio() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """最外层兜底 (10/14 Windows 邮件页整屏 Python traceback): 没料到的异常给界面一句话,
+    完整 traceback 写进 ~/.catfish/email-cli-error.log 留给排查。"""
+    try:
+        return _main(argv)
+    except Exception as error:  # noqa: BLE001
+        import traceback
+        from pathlib import Path
+
+        home = Path(os.environ.get("CATFISH_HOME", "").strip() or Path.home() / ".catfish")
+        log = home / "email-cli-error.log"
+        try:
+            home.mkdir(parents=True, exist_ok=True)
+            with log.open("a", encoding="utf-8") as f:
+                f.write(f"--- {' '.join(sys.argv[1:2])}\n{traceback.format_exc()}\n")
+        except OSError:
+            pass
+        _err(f"邮件程序出错了 ({type(error).__name__}: {str(error)[:200]})。详细记录在 {log}")
+        return 1
+
+
+def _main(argv: list[str] | None = None) -> int:
     _force_utf8_stdio()
     parser = _build_parser()
     args = parser.parse_args(argv)

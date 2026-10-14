@@ -6,9 +6,10 @@
 """
 from __future__ import annotations
 
+import imaplib
 import logging
 
-from ..adapters.base import DataNotFoundError, EmailAdapterError, ListFilter, Message
+from ..adapters.base import ClientNotRunningError, DataNotFoundError, EmailAdapterError, ListFilter, Message
 from . import imap_archive_read, imap_uidvalidity
 from .imap_folders import folder_matches, folder_role
 from .imap_mail import _FLAGS_IN_FETCH, _UID_IN_FETCH, ImapAdapter
@@ -420,6 +421,7 @@ class ImapSyncAdapter(ImapAdapter):
                 out[role] = self.sync_folder(raw, role)
             except Exception as error:  # noqa: BLE001 — 一个文件夹坏不拖垮其余
                 logger.warning("imap_sync: 文件夹 %s 同步失败: %s", decoded, error)
+                self._drop_if_dead(error)
                 continue
             if not archive:
                 continue
@@ -429,6 +431,7 @@ class ImapSyncAdapter(ImapAdapter):
                 # 归档挂了**不能拖垮同步**。索引是员工马上要用的, 档案是
                 # 后台慢慢补的 —— 前者的可用性优先级高得多。
                 logger.warning("imap_sync: 文件夹 %s 归档失败: %s", decoded, error)
+                self._drop_if_dead(error)
             # 9/27: 保留策略到期清理接上 (写好后一直没人调用)。草稿箱不清 ——
             # 草稿是还没写完的东西, 不是归档对象。策略是 never 时 purge 直接返回。
             if role == "Drafts":
@@ -437,7 +440,13 @@ class ImapSyncAdapter(ImapAdapter):
                 self.purge_folder(raw, role)
             except Exception as error:  # noqa: BLE001
                 logger.warning("imap_sync: 文件夹 %s 到期清理失败: %s", decoded, error)
+                self._drop_if_dead(error)
         return out
+
+    def _drop_if_dead(self, error: Exception) -> None:
+        """连接被服务器断了就丢掉, 下一个文件夹重连 —— 不然一个断开拖垮后面所有文件夹。"""
+        if isinstance(error, (imaplib.IMAP4.abort, OSError)):
+            self._drop_conn()
 
     def _current_id(self, message_id: str) -> str:
         """旧 id 所在文件夹还没迁移过 (没被列过) 时, 先迁移这个文件夹再换。
@@ -462,13 +471,23 @@ class ImapSyncAdapter(ImapAdapter):
         return super()._current_id(message_id)
 
     def read_message(self, message_id: str) -> Message:
-        """服务器上没了 (被清理 / 邮箱重建) 就读本地档案。见 imap_archive_read。"""
+        """服务器上没了 (被清理 / 邮箱重建) 就读本地档案。见 imap_archive_read。
+
+        服务器连不上 / 中途断开 (10/14 Windows「socket error: EOF」) 也先给本地档案里的那份 ——
+        归档时校验过, 内容一样; 档案里没有才如实报错。
+        """
         try:
             return super().read_message(message_id)
         except DataNotFoundError:
             remote = imap_archive_read.from_archive(self, self._current_id(message_id))
             if remote is None:
                 raise
+            return self._to_message(remote, full=True)
+        except ClientNotRunningError:
+            remote = imap_archive_read.from_archive(self, message_id)
+            if remote is None:
+                raise
+            logger.warning("IMAP 服务器读不到, 用本地档案: %s", message_id)
             return self._to_message(remote, full=True)
 
     def _fetch_raw(self, message_id: str):
