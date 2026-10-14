@@ -165,6 +165,15 @@ def test_understood_reply_is_rewritten_for_hermes_and_never_as_session():
         assert _drive(s)[1] == ["approve"], s
 
 
+def test_1014_wechat_merged_question_and_answer_counts_as_answer(monkeypatch):
+    # 10/14 09:57: 微信把挨着发的两条合成一条, 最后一行才是回答
+    monkeypatch.setattr(ux, "_LAST_RESOLVED_AT", 0.0)
+    assert _drive("为什么一种重复 ？\n1") == ("ORIG", ["approve"], [])
+    assert ux._LAST_RESOLVED_AT > 0                          # P56 据此知道当前审批已答
+    assert _drive("这个先别跑\n2")[1] == ["deny"]
+    assert _drive("1\n为什么一种重复 ？")[1] == []             # 最后一行不是回答 → 不猜
+
+
 def test_short_unclear_reply_gets_hint_and_does_not_interrupt(monkeypatch):
     monkeypatch.setattr(ux, "_LAST_SUMMARY", None)
     monkeypatch.setattr(ux, "_RESOLVED_AT", {})

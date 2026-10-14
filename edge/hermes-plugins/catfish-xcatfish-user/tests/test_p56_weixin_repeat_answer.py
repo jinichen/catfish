@@ -95,6 +95,7 @@ def test_no_new_prompt_means_true_duplicate(monkeypatch):
     a = _Adapter()
     monkeypatch.setattr(ux, "_PROMPT_SENT_AT", time.time() - 60)    # 最近的审批在第一个「1」之前
     _send(a, _msg("m1", "1", time.time()))
+    monkeypatch.setattr(ux, "_LAST_RESOLVED_AT", time.time())       # 第一个「1」已经答了这条审批 (P52 记)
     _send(a, _msg("m2", "1", time.time()))
     assert a.processed == ["1"]
 
@@ -114,9 +115,23 @@ def test_decision_function():
     assert f(prev_seen=100.0, created_s=120.0, prompt_at=119.0)
     assert f(prev_seen=100.0, created_s=118.5, prompt_at=119.0)      # 时钟余量 2 秒内
     assert not f(prev_seen=100.0, created_s=110.0, prompt_at=119.0)  # 发送时间早于新提示 = 重投
-    assert not f(prev_seen=120.0, created_s=130.0, prompt_at=119.0)  # 新提示早于上次回答 = 真重复
+    assert not f(prev_seen=120.0, created_s=130.0, prompt_at=119.0, resolved_at=121.0)  # 已答过 = 真重复
+    assert f(prev_seen=120.0, created_s=130.0, prompt_at=119.0, resolved_at=50.0)   # 10/14: 上个「1」没答上
+    assert not f(prev_seen=120.0, created_s=110.0, prompt_at=119.0, resolved_at=50.0)  # 没答上, 但是旧消息重投
     assert not f(prev_seen=None, created_s=130.0, prompt_at=119.0)
     assert not f(prev_seen=100.0, created_s=None, prompt_at=119.0)
+
+
+def test_1014_one_swallowed_by_merge_then_repeated_one_gets_through(monkeypatch):
+    """10/14 09:57: 「1」先进了去重缓存, 又被微信合并进「为什么一种重复 ？\n1」, 审批没答上;
+    之后再回的「1」都被当重复丢掉, 审批超时。当前审批没被回答过 → 新发的「1」放行。"""
+    a = _Adapter()
+    monkeypatch.setattr(ux, "_LAST_RESOLVED_AT", time.time() - 300)   # 上一个审批早就答了
+    monkeypatch.setattr(ux, "_PROMPT_SENT_AT", time.time() - 20)      # 当前审批
+    a._dedup.is_duplicate(f"content:u1:{hashlib.md5(b'1').hexdigest()}")   # 那个被合并掉的「1」
+    _send(a, _msg("m2", "1", time.time()))
+    _send(a, _msg("m0-redelivered", "1", time.time() - 60))             # 审批之前的旧「1」重投: 照样拦
+    assert a.processed == ["1"]
 
 
 def test_prompt_records_send_time():

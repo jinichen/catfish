@@ -292,12 +292,17 @@ def wrap_busy_handler(orig, has_blocking_approval):
             pending = False
         if pending:
             intent = parse_approval_reply(raw)
+            if not intent and "\n" in raw.strip():
+                # 10/14 09:57: 微信把挨着发的两条合成一条「为什么一种重复 ？\n1」—— 最后一行是回答就按回答
+                intent = parse_approval_reply(raw.strip().splitlines()[-1])
             if intent:
+                global _LAST_RESOLVED_AT
                 logger.info("P52 审批回复: %r → %s (session=%s)", raw[:20], intent, str(session_key)[:12])
                 # 改写成 hermes 原版认得的 approve / deny, 交回原 handler: 它负责 resolve + 回执。
                 # 只有单次 approve —— 不改写成 session / always (见文件头「只给单次批准」)。
                 event.text = intent
                 _RESOLVED_AT[session_key] = time.monotonic()
+                _LAST_RESOLVED_AT = time.time()
             elif len(_STRIP.sub("", raw.strip())) <= _MAX_REPLY_LEN:
                 logger.info("P52 审批在等, 回复认不出 %r → 提示 1 / 2, 不打断任务", raw[:20])
                 last = _RESOLVED_AT.get(session_key)
@@ -432,19 +437,27 @@ def _patch_p55_approval_timeout_note() -> None:
 # 直接丢掉 (iLink 偶尔会换个 message_id 把同一条消息再投一次)。审批回答恰恰总是同一个「1」。
 #
 # 不能简单放行「1」: 通道晚到的重投如果落在新审批之后, 就成了员工没看见就批准。所以三条都满足
-# 才放行: ① 是审批回答; ② 上一次同样的回答之后又发过新的审批提示; ③ 这条消息自己的发送时间
-# (create_time_ms) 在新提示之后 —— 重投的旧消息带的是旧时间。拿不到发送时间就不放行 (宁可多问)。
+# 才放行: ① 是审批回答; ② 上一次同样的回答之后又发过新的审批提示, 或者当前审批还没被回答过
+# (上一个「1」被微信合并进别的话里了); ③ 这条消息自己的发送时间 (create_time_ms) 在新提示之后
+# —— 重投的旧消息带的是旧时间。拿不到发送时间就不放行 (宁可多问)。
 
 _PROMPT_SENT_AT = 0.0        # 最近一次审批提示生成的时间 (time.time), format_approval_prompt 里记
 _CLOCK_SLACK_S = 2.0         # 手机 / 服务器 / 本机时钟的误差余量
 _LOGGED_FIELDS = False
+_LAST_RESOLVED_AT = 0.0      # 最近一次审批真被回答 (P52 认出 1/2) 的时间 (time.time)
 
 
 def should_bypass_content_dedup(prev_seen: Optional[float], created_s: Optional[float],
-                                prompt_at: float) -> bool:
+                                prompt_at: float, resolved_at: float = 0.0) -> bool:
+    """放行条件: 这条发在当前审批提示之后 (重投的旧消息带旧时间, 拦住), 并且满足其一:
+      · 上一次同样的回答之后又来了新审批 (10/13 15:08 连着两个审批);
+      · 当前这个审批还没被回答过 —— 10/14 09:57 上一个「1」被微信合并进别的话里没起作用,
+        之后再回的「1」都被当重复吞了, 审批超时。"""
     if prev_seen is None or created_s is None:
         return False
-    return prompt_at > prev_seen and created_s >= prompt_at - _CLOCK_SLACK_S
+    if created_s < prompt_at - _CLOCK_SLACK_S:
+        return False
+    return prompt_at > prev_seen or prompt_at > resolved_at
 
 
 def _created_seconds(message) -> Optional[float]:
@@ -472,9 +485,9 @@ def wrap_process_message(orig, extract_text):
                 seen = getattr(getattr(self, "_dedup", None), "_seen", None)
                 prev = seen.get(key) if isinstance(seen, dict) else None
                 created = _created_seconds(message)
-                if should_bypass_content_dedup(prev, created, _PROMPT_SENT_AT):
+                if should_bypass_content_dedup(prev, created, _PROMPT_SENT_AT, _LAST_RESOLVED_AT):
                     seen.pop(key, None)
-                    logger.info("P56 放行重复的审批回答 %r (上一次 %.0fs 前, 之后有新审批)", text, time.time() - prev)
+                    logger.info("P56 放行重复的审批回答 %r (上一次 %.0fs 前; 之后有新审批或当前审批还没回答)", text, time.time() - prev)
                 elif prev is not None and created is None:
                     logger.warning("P56 重复的审批回答 %r 没有 create_time_ms, 按重复丢弃 (宁可多问)", text)
         except Exception as e:  # noqa: BLE001 — 判断出错就走原逻辑
