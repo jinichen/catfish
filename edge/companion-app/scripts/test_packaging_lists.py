@@ -49,6 +49,33 @@ def test_edge_runtime_carries_file_parse_scripts() -> None:
     assert set(build.MUST_EXIST) <= set(names)
 
 
+def test_intel_mac_source_builds_are_dropped_and_rerecorded() -> None:
+    """10/14: Intel Mac 缺 cryptography / greenlet 的 3.14 轮子, 要从锁定清单里摘出来现编。"""
+    wh = _load("build_hermes_wheelhouse")
+    assert {"cryptography", "greenlet", "watchdog"} <= wh.SOURCE_BUILD["x86_64-apple-darwin"]
+    assert "cryptography" in wh.RUST_BUILD and "x86_64-apple-darwin" in wh.RUST_TARGET
+    with tempfile.TemporaryDirectory() as tmp:
+        req = Path(tmp) / "req.txt"
+        req.write_text(
+            "anyio==4.12.0 \\\n    --hash=sha256:aa\n"
+            "cryptography==50.0.1 \\\n    --hash=sha256:bb \\\n    --hash=sha256:cc\n"
+            "greenlet==3.5.6 \\\n    --hash=sha256:dd\n"
+            "zipp==3.23.0 \\\n    --hash=sha256:ee\n", encoding="utf-8")
+        wh.drop_pins(req, {"cryptography", "greenlet"})
+        text = req.read_text(encoding="utf-8")
+        assert "cryptography" not in text and "greenlet" not in text and ":bb" not in text and ":dd" not in text, text
+        assert wh.pinned(req) == {"anyio": "4.12.0", "zipp": "3.23.0"}, text
+
+
+def test_macho_align_refuses_what_it_does_not_understand() -> None:
+    fixer = _load("macho_align_strtab")
+    with tempfile.TemporaryDirectory() as tmp:
+        bogus = Path(tmp) / "x.so"
+        bogus.write_bytes(b"not a mach-o at all")
+        assert fixer.fix(str(bogus)) == 2
+        assert bogus.read_bytes() == b"not a mach-o at all", "拒绝时不许动文件"
+
+
 if __name__ == "__main__":
     tests = [value for key, value in sorted(globals().items()) if key.startswith("test_")]
     for test in tests:

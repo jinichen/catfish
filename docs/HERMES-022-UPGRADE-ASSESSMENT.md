@@ -42,6 +42,7 @@ A/B/C/D 四块都已改完并提交; 每块都在 v0.22 测试网关 (proto 安�
 | 审批"无人值守"判断有两份 (approval / approval_context) | Companion 的写文件保护、Codex 审批被当成"没人能回答"直接拒 | P15.3 两份都换, 且只认 api_server (webhook 每轮都注册回调但没界面) |
 | 克隆 profile 时 `API_SERVER_*` 被当渠道配置去掉 | 专家 Bot 鉴权失败 | Companion 建 profile 后本来就从主 .env 补写, 已核; profile 同步时连 provider / key_env 一起抄 (Codex 不带) |
 | 源码品牌补丁在 v0.22 几乎全对不上, 整函数替换欢迎横幅会把命令行弄崩 | 开发机 `catfish` 启动自愈把 CLI 弄坏 | v0.22+ 停用, 品牌由 P58 语言包负责 |
+| `cryptography` 49 起不发 Intel Mac 轮子 (v0.22 锁 50.0.1, 安全修复), `greenlet` 没有 Intel Mac 的 3.14 轮子 | **Intel Mac 装不上** | 打包机现编: greenlet 用原生 clang 交叉编; cryptography 用 maturin 交叉编 + 静态 OpenSSL 3.5.9; Xcode 27 链接器把 x86_64 字符串表放在 4 字节对齐处 (dyld 拒载), 用 `scripts/macho_align_strtab.py` 补齐。Intel 资源离线装机 e2e + 真加载通过 (Rosetta)。打 Intel 包要 `rustup target add x86_64-apple-darwin` |
 | `lib-download.sh` 的 `GH_PROXY=""` 从没生效 (`:-` 把空当没设) | CI 直连不了 | 改 `-` |
 
 ### 还剩的

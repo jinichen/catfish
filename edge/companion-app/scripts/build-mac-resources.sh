@@ -212,8 +212,40 @@ echo "  → 复核内嵌 Python 的 SQLite..."
 # hermes 依赖 (上游 uv.lock, --extra all) + catfish 额外包 (src-tauri/hermes-extra-packages.txt)
 # 按目标平台一起钉死版本 + sha256, 取 wheel; C 扩展没有 3.14 轮子的 (watchdog) 用嵌入解释器现编,
 # 所以一定要用**目标架构**的 EMBED_PY 跑 (x64 在 Apple 芯片上走 Rosetta)。原理见脚本文件头。
+HOST_ARGS=()
+if [ "$ARCH" = "x64" ]; then
+    # 10/14: Intel Mac 缺 cryptography (49 起不发 Intel 轮子) / greenlet 的 3.14 轮子, 要现编。
+    # cryptography 是 Rust (maturin): 用构建机原生 Python 交叉编到 x86_64, 静态链 OpenSSL。
+    # 详见 scripts/build_hermes_wheelhouse.py 的 SOURCE_BUILD / RUST_BUILD。
+    command -v rustup >/dev/null && rustup target list --installed | grep -qx x86_64-apple-darwin || {
+        echo "❌ 打 Intel 包要 Rust 的 x86_64-apple-darwin 目标: rustup target add x86_64-apple-darwin"; exit 1; }
+    OSSL_VERSION="3.5.9"   # 3.5 LTS; 换版本就会重编
+    OSSL_DIR="/tmp/catfish-openssl-x64-$OSSL_VERSION"
+    if [ ! -f "$OSSL_DIR/lib/libcrypto.a" ]; then
+        echo "  → 编 Intel 版静态 OpenSSL $OSSL_VERSION (一次, 之后用缓存 $OSSL_DIR)..."
+        OSSL_SRC="/tmp/catfish-openssl-src-$OSSL_VERSION"
+        rm -rf "$OSSL_SRC" && mkdir -p "$OSSL_SRC"
+        download_with_retry "https://github.com/openssl/openssl/releases/download/openssl-$OSSL_VERSION/openssl-$OSSL_VERSION.tar.gz" \
+            "$OSSL_SRC/openssl.tar.gz"
+        tar xzf "$OSSL_SRC/openssl.tar.gz" -C "$OSSL_SRC"
+        ( cd "$OSSL_SRC/openssl-$OSSL_VERSION" && MACOSX_DEPLOYMENT_TARGET=10.15 \
+            ./Configure darwin64-x86_64-cc no-shared no-tests --prefix="$OSSL_DIR" --libdir=lib >/dev/null \
+            && make -j8 >/dev/null 2>&1 && make install_sw >/dev/null ) || { echo "❌ 编 OpenSSL 失败"; exit 1; }
+        rm -rf "$OSSL_SRC"
+    fi
+    export OPENSSL_DIR="$OSSL_DIR"
+    # 构建机原生 (arm64) Python, 只给 maturin 交叉编用
+    HOST_PY_DIR="/tmp/catfish-host-py-$PYTHON_VERSION"
+    if [ ! -x "$HOST_PY_DIR/python/bin/python3" ]; then
+        mkdir -p "$HOST_PY_DIR"
+        download_with_retry "https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_BUILD_TAG}/cpython-${PYTHON_VERSION}+${PYTHON_BUILD_TAG}-aarch64-apple-darwin-install_only.tar.gz" \
+            "$HOST_PY_DIR/py.tar.gz"
+        tar xzf "$HOST_PY_DIR/py.tar.gz" -C "$HOST_PY_DIR" && rm -f "$HOST_PY_DIR/py.tar.gz"
+    fi
+    HOST_ARGS=(--host-python "$HOST_PY_DIR/python/bin/python3")
+fi
 "$EMBED_PY" "$COMPANION/scripts/build_hermes_wheelhouse.py" \
-    --src "$HERMES_SRC" --uv "$RESOURCES/uv" --target "$UV_ARCH" --python "$EMBED_PY" || {
+    --src "$HERMES_SRC" --uv "$RESOURCES/uv" --target "$UV_ARCH" --python "$EMBED_PY" ${HOST_ARGS[@]+"${HOST_ARGS[@]}"} || {
     echo "❌ 打 wheelhouse 失败 (需要外网; 原因见上面的报错)"
     exit 1
 }

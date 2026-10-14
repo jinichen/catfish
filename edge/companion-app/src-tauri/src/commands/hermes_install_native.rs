@@ -350,6 +350,12 @@ mod e2e {
         let probe = r#"
 import pkgutil, importlib, catfish_tool_bridge as t
 bad = []
+# Intel Mac 上这几个是打包时现编的 (cryptography 带 Rust 二进制), 真加载一次
+for m in ("cryptography.hazmat.bindings._rust", "greenlet", "watchdog.observers", "yaml"):
+    try:
+        importlib.import_module(m)
+    except Exception as e:
+        bad.append(f"{m}: {e!r}")
 for m in pkgutil.walk_packages(t.__path__, "catfish_tool_bridge."):
     try:
         importlib.import_module(m.name)

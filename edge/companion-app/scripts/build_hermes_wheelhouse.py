@@ -60,13 +60,19 @@ UV_PLATFORMS = {
     "x86_64-pc-windows-msvc": "x86_64-pc-windows-msvc",
 }
 MACOS_FLOOR = {"aarch64-apple-darwin": "11.0", "x86_64-apple-darwin": "10.15"}
-# 目标平台上没有现成 3.14 wheel、要在构建机上用 --python (内嵌解释器, 目标架构) 现编的包。
+# 目标平台上没有现成 3.14 wheel、要在构建机上现编的包。
 # watchdog 6.0.0 只发到 cp313 的 macOS 轮子 (Windows 是 py3-none-win_amd64, 不用编)。
+# 10/14 Intel Mac 还缺两个 (上游锁定的依赖): greenlet 3.5.6 没有 x86_64 macOS 的 cp314 轮子;
+# cryptography 49 起干脆不发 Intel Mac 轮子 (只剩 arm64), 而 hermes v0.22 锁 50.0.1 (安全修复)。
 SOURCE_BUILD = {
     "aarch64-apple-darwin": {"watchdog"},
-    "x86_64-apple-darwin": {"watchdog"},
+    "x86_64-apple-darwin": {"watchdog", "greenlet", "cryptography"},
     "x86_64-pc-windows-msvc": set(),
 }
+# Rust 写的 (maturin): 不能在 Rosetta 里编 (构建脚本要链接本机 arm64 的东西), 用 --host-python
+# (构建机原生解释器) 交叉编到目标。cryptography 是 abi3 轮子, 不需要目标解释器。
+RUST_BUILD = {"cryptography"}
+RUST_TARGET = {"x86_64-apple-darwin": "x86_64-apple-darwin"}
 
 
 def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
@@ -101,6 +107,85 @@ def pinned(requirements: Path) -> dict[str, str]:
     return out
 
 
+def drop_pins(requirements: Path, names: set[str]) -> None:
+    """从 compile 出来的清单里删掉这些包 (连同它们 sdist 的 --hash 续行), 现编后按 wheel 的 sha256 重记。"""
+    out: list[str] = []
+    skipping = False
+    for line in requirements.read_text(encoding="utf-8").splitlines():
+        m = re.match(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==", line)
+        if m:
+            skipping = norm(m.group(1)) in names
+        elif not line.startswith((" ", "\t")):
+            skipping = False
+        if not skipping:
+            out.append(line)
+    requirements.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+def on_apple_silicon() -> bool:
+    """构建机是不是 Apple 芯片 —— 本脚本给 Intel 包跑时自己就在 Rosetta 里, uname 报 x86_64, 要问内核。"""
+    if sys.platform != "darwin":
+        return False
+    if os.uname().machine == "arm64":
+        return True
+    out = subprocess.run(["sysctl", "-n", "sysctl.proc_translated"], capture_output=True, text=True)
+    return out.stdout.strip() == "1"
+
+
+def native(cmd: list[str]) -> list[str]:
+    """在 Apple 芯片上强制按 arm64 起 (Rosetta 里起的子进程会继承 x86_64 偏好, 连带 cc / cargo 都变 x86_64)。"""
+    return ["arch", "-arm64", *cmd] if on_apple_silicon() else cmd
+
+
+def macos_cross_cc_env(target: str) -> dict[str, str]:
+    """在 Apple 芯片构建机上给 Intel Mac 编 C 扩展: Python 跑在 Rosetta 里, 但 Command Line Tools
+    的 xcrun 只有 arm64 —— Rosetta 里调 cc 直接 "unable to load libxcrun"。编译器换成原生 clang 交叉编。"""
+    if target != "x86_64-apple-darwin" or not on_apple_silicon():
+        return {}
+    cc = "arch -arm64 /usr/bin/clang -arch x86_64"
+    cxx = "arch -arm64 /usr/bin/clang++ -arch x86_64"
+    return {"CC": cc, "CXX": cxx, "LDSHARED": f"{cc} -bundle -undefined dynamic_lookup",
+            "LDCXXSHARED": f"{cxx} -bundle -undefined dynamic_lookup"}
+
+
+def fix_wheel_macho(wheel: Path) -> None:
+    """把轮子里 x86_64 .so 的字符串表挪到 8 字节对齐 (macho_align_strtab.py), 再重写 RECORD。"""
+    import base64
+    import zipfile
+
+    sys.path.insert(0, str(HERE))
+    from macho_align_strtab import fix  # noqa: PLC0415
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        with zipfile.ZipFile(wheel) as zf:
+            zf.extractall(root)
+        changed = False
+        for so in root.rglob("*.so"):
+            before = so.read_bytes()
+            if fix(str(so)) != 0:
+                sys.exit(f"❌ {so.name}: 字符串表对齐修不了 (布局不是预期的), 见 macho_align_strtab.py")
+            changed |= so.read_bytes() != before
+        if not changed:
+            return
+        record = next(root.glob("*.dist-info/RECORD"))
+        rows = []
+        for line in record.read_text(encoding="utf-8").splitlines():
+            path = line.split(",", 1)[0]
+            f = root / path
+            if f.is_file() and f != record:
+                data = f.read_bytes()
+                digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
+                rows.append(f"{path},sha256={digest},{len(data)}")
+            else:
+                rows.append(line)
+        record.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        wheel.unlink()
+        with zipfile.ZipFile(wheel, "w", zipfile.ZIP_DEFLATED) as zf:
+            for f in sorted(p for p in root.rglob("*") if p.is_file()):
+                zf.write(f, f.relative_to(root).as_posix())
+
+
 def check_backend(src: Path) -> None:
     text = (src / "pyproject.toml").read_text(encoding="utf-8")
     if 'requires = ["setuptools==83.0.0", "wheel"]' not in text:
@@ -114,6 +199,8 @@ def main() -> int:
     ap.add_argument("--target", choices=sorted(PIP_PLATFORMS), required=True)
     ap.add_argument("--python", default=sys.executable,
                     help="跑 pip download 的解释器 (要能联网; 取的是目标平台的 wheel, 版本不必跟目标一致)")
+    ap.add_argument("--host-python", default=None,
+                    help="构建机原生解释器 (Intel Mac 交叉编 Rust 包用); 要求环境变量 OPENSSL_DIR 指向目标架构的静态 OpenSSL")
     args = ap.parse_args()
     src: Path = args.src.resolve()
     check_backend(src)
@@ -127,6 +214,10 @@ def main() -> int:
     build_here = SOURCE_BUILD[args.target]
     source_only += [r for r in binary if norm(re.split(r"[<>=!~;\[\s]", r, maxsplit=1)[0]) in build_here]
     binary = [r for r in binary if r not in source_only]
+    # 上游锁定的依赖里要现编的 (不在额外包清单里): compile 时放行源码包, 出来后摘掉, 现编再记账
+    core_build = {norm(n) for n in build_here} - {norm(re.split(r"[<>=!~;\[\s]", r, maxsplit=1)[0]) for r in source_only}
+    if core_build & {norm(n) for n in RUST_BUILD} and not args.host_python:
+        sys.exit(f"❌ {args.target} 要现编 {sorted(core_build & RUST_BUILD)} (Rust), 需要 --host-python")
 
     env = dict(os.environ)
     if args.target in MACOS_FLOOR:
@@ -143,9 +234,12 @@ def main() -> int:
         #    sys_platform == 'android' 那行 git 源 (psutil) 按目标平台被丢掉。
         wanted = Path(tmp) / "wanted.txt"
         wanted.write_text(core.read_text(encoding="utf-8") + "\n" + "\n".join(binary) + "\n", encoding="utf-8")
+        no_binary: list[str] = []
+        for n in sorted(core_build):
+            no_binary += ["--no-binary", n]
         run([args.uv, "pip", "compile", str(wanted), "--python-platform", UV_PLATFORMS[args.target],
-             "-p", PYTHON_VERSION, "--only-binary", ":all:", "--generate-hashes", "--no-header", "--no-annotate",
-             "-o", str(req_out), "-q"], env=env)
+             "-p", PYTHON_VERSION, "--only-binary", ":all:", *no_binary, "--generate-hashes", "--no-header",
+             "--no-annotate", "-o", str(req_out), "-q"], env=env)
         # 只有源码包的 (jieba) / 本平台要现编的 (watchdog@mac) 单独解析出版本 —— 它们都没有依赖
         src_pins: dict[str, str] = {}
         for req in source_only:
@@ -159,6 +253,10 @@ def main() -> int:
                     src_pins[norm(m.group(1))] = m.group(2)
 
     pins = pinned(req_out)
+    for n in core_build:
+        if n in pins:
+            src_pins[n] = pins.pop(n)
+    drop_pins(req_out, core_build)
     # ③ 取 wheel。--require-hashes 用 compile 出来的 sha256 逐个校验
     plat: list[str] = []
     for p in PIP_PLATFORMS[args.target]:
@@ -176,11 +274,24 @@ def main() -> int:
     extra_lines: list[str] = []
     for name, version in sorted(src_pins.items()):
         before = set(wheelhouse.glob("*.whl"))
-        run([*pip, "wheel", "-q", "--no-deps", "--no-binary", ":all:", "--wheel-dir", str(wheelhouse),
-             f"{name}=={version}"])
+        # --no-binary 只给这一个包: 构建依赖 (maturin / cffi / setuptools) 照常用现成轮子, 不全从源码编
+        if name in {norm(n) for n in RUST_BUILD} and args.target in RUST_TARGET and args.host_python:
+            if not os.environ.get("OPENSSL_DIR"):
+                sys.exit(f"❌ 交叉编 {name} 需要 OPENSSL_DIR (目标架构的静态 OpenSSL)")
+            rust_env = dict(env, OPENSSL_STATIC="1",
+                            MATURIN_PEP517_ARGS=f"--target {RUST_TARGET[args.target]}")
+            run(native([args.host_python, "-m", "pip", "--disable-pip-version-check", "wheel", "-q", "--no-cache-dir",
+                        "--no-deps", "--no-binary", name, "--wheel-dir", str(wheelhouse), f"{name}=={version}"]),
+                env=rust_env)
+        else:
+            run([*pip, "wheel", "-q", "--no-cache-dir", "--no-deps", "--no-binary", name,
+                 "--wheel-dir", str(wheelhouse), f"{name}=={version}"],
+                env=dict(env, **macos_cross_cc_env(args.target)))
         built = sorted(set(wheelhouse.glob("*.whl")) - before)
         if len(built) != 1:
             sys.exit(f"❌ {name} 打 wheel 结果不对: {built}")
+        if args.target == "x86_64-apple-darwin":
+            fix_wheel_macho(built[0])
         digest = hashlib.sha256(built[0].read_bytes()).hexdigest()
         extra_lines.append(f"{name}=={version} \\\n    --hash=sha256:{digest}")
         pins[name] = version
