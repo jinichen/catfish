@@ -27,7 +27,8 @@ import time
 
 logger = logging.getLogger("catfish.xcatfish_user.plugin")
 
-_UNDO_N = re.compile(r"removes the last (\d+) user turns")
+# 英文原文 / v0.22 中文语言包 (员工机 display.language=zh) 两种都认
+_UNDO_N = re.compile(r"removes the last (\d+) user turns|(?:移除|删除)(?:最后|最近) (\d+) 个用户回合")
 
 # 整条消息 (去掉开头的 / 和结尾标点) 等于这些 → 对应命令
 ZH_COMMANDS = {
@@ -50,7 +51,7 @@ def confirm_prompt(command: str, detail: str = "") -> str:
         yes = "开新对话"
     elif command == "undo":
         m = _UNDO_N.search(detail or "")
-        what = f"↩️ 要撤回吗？\n会把最近 {m.group(1)} 轮对话从记录里删掉。" if m else \
+        what = f"↩️ 要撤回吗？\n会把最近 {m.group(1) or m.group(2)} 轮对话从记录里删掉。" if m else \
             "↩️ 要撤回吗？\n会把最近一轮问答从记录里删掉。"
         yes = "撤回"
     else:

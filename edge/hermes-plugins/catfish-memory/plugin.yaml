@@ -4,3 +4,7 @@ description: "Catfish 扩展 memory provider — 聚合 employee_journal / skill
 hooks:
   - sync_turn        # 每轮 user+assistant 完成调一次, plugin 内部节流 (每 N 轮 / 时间窗口)
   - on_session_end   # session 真结束时 force-flush buffer 兜底 (CLI atexit / /reset / /new)
+# hermes v0.22: 替换内置工具要声明 + 配置里授权 (plugins.entries.<名>.granted_capabilities,
+# Companion 写)。替换内置 memory 工具 (5 kind 路由)
+capabilities:
+  - tools.override

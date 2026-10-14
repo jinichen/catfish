@@ -391,7 +391,12 @@ def test_上游check_auth的契约没变():
         "_check_auth 不再返 None 表示通过 —— 契约变了, "
         "plugin_approval._require_api_auth 的 `is not None` 判据要跟着改。"
     )
-    assert "status=401" in body, (
+    # v0.22 起拒绝统一走 self._auth_failed_response() (同文件里一个返 status=401 的 helper)
+    helper = re.search(r"def _auth_failed_response\(.*?\n(.*?)(?=\n    @|\n    def )", src, re.S)
+    rejects_401 = "status=401" in body or (
+        "_auth_failed_response()" in body and helper is not None and "status=401" in helper.group(1)
+    )
+    assert rejects_401, (
         "_check_auth 不再返 401 Response 表示拒绝 —— 契约变了, 去读实现。"
     )
     assert "Authorization" in body and "Bearer" in body, (

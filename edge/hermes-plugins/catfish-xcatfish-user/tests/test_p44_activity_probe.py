@@ -310,9 +310,9 @@ def test_agent_ref_位置传时不动它(monkeypatch):
     activity_probe.patch_run_agent_registry()
 
     caller_ref: list = [None]
-    # self 之后 9 个位置参数, 第 9 个就是 agent_ref
+    # self 之后 12 个位置参数, 第 12 个就是 agent_ref (hermes v0.22)
     asyncio.run(adapter_cls()._run_agent(
-        "msg", [], None, None, None, None, None, None, caller_ref,
+        "msg", [], None, None, None, None, None, None, None, None, None, caller_ref,
     ))
     assert record["agent_ref"] is None, "位置传的时候不该往 kwargs 里塞"
 

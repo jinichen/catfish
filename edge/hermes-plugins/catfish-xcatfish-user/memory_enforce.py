@@ -53,7 +53,10 @@ logger = logging.getLogger(__name__)
 # ── 配置 ──────────────────────────────────────────────────────────
 
 _AUDIT_LOG_FILENAME = "memory_audit.jsonl"
-_LLM_HTTP_TIMEOUT_SECS = 30.0
+# 10/14 hermes v0.22: pre_tool_call 钩子有 30 秒总时限 (plugins.hook_callback_timeout), 超时
+# **拦下工具调用**, 并在 60 秒内跳过本钩子 = 期间所有工具调用都被拦。整个钩子 (查角色 3 秒 +
+# 这次分类) 必须远小于 30 秒: 分类按阶段限时, 最坏 3+5+12 = 20 秒; 超时按 fail-silent 放行。
+_LLM_HTTP_TIMEOUT_SECS = 12.0
 # 鸿波拍 (6/18 '所有遵循 picker, 不乱改'): model 选 chain 严格走 picker, 不读 role_resolver
 # 的 rate_fast / summarize (yaml 默认配公网 catfish-public-qwen-flash / catfish-public-
 # gemini-pro, 走公网 = 员工真实数据出端 = 破 P3.5.27 红线). 用 chat_default 是**员工桌面
@@ -297,7 +300,8 @@ def _classify_memory_route_diag(content: str, model: str) -> tuple[Optional[dict
         "response_format": {"type": "json_object"},
     }
     try:
-        with httpx.Client(timeout=_LLM_HTTP_TIMEOUT_SECS) as client:
+        timeout = httpx.Timeout(_LLM_HTTP_TIMEOUT_SECS, connect=3.0, write=5.0, pool=3.0)
+        with httpx.Client(timeout=timeout) as client:
             # 8/15 晚: 打归属标记。这条 classify 每轮对话都可能跑, 之前落在账本的
             # 「(无标记)」栏里 (占 40%)。名字用 plugin: 前缀 —— 网关
             # metrics.py:274 的注释 5/17 就定了这个约定, 只是没人实现。

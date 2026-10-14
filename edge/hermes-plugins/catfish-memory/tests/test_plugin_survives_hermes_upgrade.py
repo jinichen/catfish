@@ -147,7 +147,12 @@ def test_上游仍然扫user目录找记忆provider():
     m = re.search(
         r"user_dir\s*=\s*_get_user_plugins_dir\(\)(.{0,600})", src, re.S
     )
-    assert m and "iterdir" in m.group(1), (
+    # v0.22: 挪进 _external_source_dirs() (返回 user / project 两个目录), _iter_provider_dirs 遍历它
+    ext = re.search(r"def _external_source_dirs\(.*?\n(.*?)(?=\ndef )", src, re.S)
+    it = re.search(r"def _iter_provider_dirs\(.*?\n(.*?)(?=\ndef )", src, re.S)
+    v022 = bool(ext and "_get_user_plugins_dir()" in ext.group(1)
+                and it and "_external_source_dirs()" in it.group(1) and "iterdir" in it.group(1))
+    assert (m and "iterdir" in m.group(1)) or v022, (
         "拿了 user plugins 目录却不再遍历它 —— 树外 provider 不会被发现。"
     )
 

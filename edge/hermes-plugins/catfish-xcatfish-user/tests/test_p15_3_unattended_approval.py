@@ -13,6 +13,7 @@ def _fake_approval_module(
     unattended: bool,
     callback=None,
     session_key: str = "companion-session",
+    platform: str = "api_server",
 ):
     """构造只包含 P15.3 所需契约的 Hermes approval 模块。"""
     approval = types.ModuleType("tools.approval")
@@ -24,10 +25,17 @@ def _fake_approval_module(
         {session_key: callback} if callback is not None else {}
     )
 
+    # v0.22: 判断本体在 tools.approval_context, approval.py 是 from-import 的一份; 两份都要换
+    approval_context = types.ModuleType("tools.approval_context")
+    approval_context._is_unattended_platform_approval_context = original
+    approval_context._get_session_platform = lambda: platform
+
     tools_package = types.ModuleType("tools")
     tools_package.__path__ = []
     monkeypatch.setitem(sys.modules, "tools", tools_package)
     monkeypatch.setitem(sys.modules, "tools.approval", approval)
+    monkeypatch.setitem(sys.modules, "tools.approval_context", approval_context)
+    approval._fake_context = approval_context
     return approval, original
 
 
@@ -44,6 +52,22 @@ def test_companion_session_reaches_interactive_approval(monkeypatch):
     assert approval._is_unattended_platform_approval_context() is False
     assert approval._is_unattended_platform_approval_context._catfish_p15_3 is True
     assert approval._is_unattended_platform_approval_context._catfish_p15_3_original is original
+    # approval_context 那份 (写文件保护 / Codex / _is_gateway_approval_context 用的) 也换了
+    assert approval._fake_context._is_unattended_platform_approval_context() is False
+
+
+def test_webhook_callback_does_not_open_gate(monkeypatch):
+    """webhook 每轮都注册回调, 但没有能回答审批的界面 —— 不能因为有回调就放开。"""
+    approval, _original = _fake_approval_module(
+        monkeypatch,
+        unattended=True,
+        callback=lambda _event: None,
+        platform="webhook",
+    )
+
+    plugin_approval._patch_p15_3_unattended_companion_approval()
+
+    assert approval._is_unattended_platform_approval_context() is True
 
 
 def test_unattended_session_without_companion_callback_stays_denied(monkeypatch):
@@ -114,27 +138,5 @@ def test_patch_is_idempotent(monkeypatch):
     assert approval._is_unattended_platform_approval_context is patched
 
 
-def test_companion_session_forces_manual_mode(monkeypatch):
-    callback = lambda _event: None
-    approval, _original = _fake_approval_module(
-        monkeypatch,
-        unattended=False,
-        callback=callback,
-    )
-
-    plugin_approval._patch_p15_4_companion_manual_approval()
-
-    assert approval._get_approval_mode() == "manual"
-    assert approval._get_approval_mode._catfish_p15_4 is True
-
-
-def test_non_companion_session_keeps_configured_mode(monkeypatch):
-    approval, _original = _fake_approval_module(
-        monkeypatch,
-        unattended=False,
-        callback=None,
-    )
-
-    plugin_approval._patch_p15_4_companion_manual_approval()
-
-    assert approval._get_approval_mode() == "smart"
+# P15.4 (Companion 会话强制 manual) 10/14 随 hermes v0.22 升级退役: 审批改用 v0.22 的 smart 模式
+# (AI 先判断, 拿不准再问员工), 见 docs/HERMES-022-UPGRADE-ASSESSMENT.md「审批模式」。

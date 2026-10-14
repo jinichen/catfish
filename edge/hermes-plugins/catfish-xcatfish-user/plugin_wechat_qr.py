@@ -298,7 +298,7 @@ async def _handle_wechat_qr_poll(self, request):
         try:
             import signal as _signal, asyncio as _asyncio
             if hasattr(_signal, "SIGUSR1"):
-                _loop = _asyncio.get_event_loop()
+                _loop = _asyncio.get_running_loop()
                 _hermes_pid = os.getpid()
                 def _fire_sigusr1() -> None:
                     try:

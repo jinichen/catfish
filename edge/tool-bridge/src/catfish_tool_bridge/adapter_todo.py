@@ -28,6 +28,16 @@ logger = logging.getLogger("catfish.adapter")
 
 # ============================================================
 
+#: hermes v0.22 改了名的内置工具 {旧名: 新名} (旧名只在模型那一层有别名, registry 里没有)
+_HERMES_RENAMED_TOOLS = {"todo": "todo_list", "cronjob": "cronjob_manage", "process": "process_manage"}
+_TODO_TOOL_NAMES = ("todo", "todo_list")
+
+
+def canonical_hermes_tool(name: str, all_names) -> str:
+    """旧名 → v0.22 新名, 只在 registry 里没有旧名、有新名时换。"""
+    new = _HERMES_RENAMED_TOOLS.get(name)
+    return new if new and name not in all_names and new in all_names else name
+
 _TODO_STORE_DEFAULT_KEY = "__default__"
 _TODO_STORE_MAX_SESSIONS = 50
 _todo_store_cache: Dict[str, Any] = {}

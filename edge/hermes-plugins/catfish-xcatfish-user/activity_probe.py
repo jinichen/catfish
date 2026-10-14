@@ -228,15 +228,17 @@ def _is_real_agent(agent: Any) -> bool:
     return hasattr(agent, "get_activity_summary")
 
 
-#: `agent_ref` 在 `_run_agent` 里是 self 之后的**第 9 个**位置参数:
+#: `agent_ref` 在 `_run_agent` 里是 self 之后的**第 12 个**位置参数 (hermes v0.22):
 #:   user_message, conversation_history, ephemeral_system_prompt, session_id,
 #:   stream_delta_callback, tool_progress_callback, tool_start_callback,
-#:   tool_complete_callback, agent_ref
-#: 所以 `len(args) >= 9` 就说明调用方已经位置传了它, 我们不能再塞 kwargs
+#:   tool_complete_callback, interim_assistant_callback, reasoning_callback,
+#:   status_callback, agent_ref
+#: 所以 `len(args) >= 12` 就说明调用方已经位置传了它, 我们不能再塞 kwargs
 #: (会撞 "got multiple values for argument")。
-#: 观察到的 6 个调用点全用关键字传, 这条只是防万一。
-#: (8/9: 第一版写成 `<= 9` 差一位, 被 test_agent_ref_位置传时不动它 抓出来。)
-_AGENT_REF_POSITION = 9
+#: 观察到的调用点全用关键字传, 这条只是防万一。
+#: (8/9: 第一版写成 `<= 9` 差一位, 被 test_agent_ref_位置传时不动它 抓出来。
+#:  10/14: v0.22 在前面插了 interim / reasoning / status 三个回调, 9 → 12。)
+_AGENT_REF_POSITION = 12
 
 
 def patch_run_agent_registry() -> bool:

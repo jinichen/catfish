@@ -54,6 +54,12 @@ REFACTOR_BASE = "cc4d71a"
 #: 一个 patch 悄悄多出来跟悄悄少一个同等危险 —— monkey-patch 是全进程生效的，
 #: 谁加的、为什么加、影响面多大，得有地方写。
 INTENTIONALLY_ADDED: dict[str, str] = {
+    "_patch_p58_locale_zh": (
+        "10/14 加 (hermes v0.22 升级)。v0.22 网关固定提示全走 t() 语言包, P28 的字面量替换一次漏了 8 条。\n"
+        "  改: 用 agent.i18n_layers.register_pack 注册 zh 包 (插件语言包那一层), 从 hermes 自带 zh 目录派生 —— "
+        "去 Hermes/☤、聊天可见段的「代理」换成小鲶 (gateway.proxy / slash.egress 的网络代理不动), 审批几句改说法。\n"
+        "  影响面: 只有 zh; 只改展示文字, 不碰任何判断逻辑。P28 留作兜底。"
+    ),
     "_patch_p57_slash_confirm": (
         "10/14 加。员工在微信发 /new, 回来的是「确认 · 总是确认 · 取消 / 回复 /approve /always /cancel」"
         "三选一加斜杠口令 (鸿波: 怎么还是这么麻烦的回复？)。\n"
@@ -118,12 +124,6 @@ INTENTIONALLY_ADDED: dict[str, str] = {
         "10/6: 模型回一句动作意图 (「逐项目比对。」) 却不调工具, finish_reason=stop "
         "回合就结束 —— 10/5 重点软件企业会话一晚三次。替员工按最多两次「继续」, "
         "见 plugin_auto_continue.py 文件头。"
-    ),
-    "_patch_p15_4_companion_manual_approval": (
-        "9/1 加。Hermes 0.21 将未配置的审批模式按 smart 处理；Companion 这条"
-        "有实时 SSE 回调和审批 resolve endpoint，不能让 Auxiliary LLM 自动放行"
-        "execute_code。只在当前会话存在 Companion callback 时把有效模式收窄为"
-        "manual；无 UI 的 API / cron / webhook 仍沿用 Hermes 原配置。"
     ),
     "_patch_p44_service_call_lean": (
         "8/15 加。后台分类调用不背 agent 上下文。\n"
@@ -260,6 +260,24 @@ INTENTIONALLY_REMOVED: dict[str, str] = {
         "  audit_hermes_compat.sh Section 19 (升级前验锚点)\n"
         "墓碑在 plugin_wechat_qr.py 尾部。判定过程见\n"
         "docs/HERMES-PATCH-AUDIT-2026-08-19.md。"
+    ),
+    "_patch_p19_status_callback_bridge": (
+        "10/14 删 (hermes v0.22 升级)。P19 把 agent.status_callback 的压缩 / 等待提示桥成 "
+        "hermes.tool.progress 推给 Companion。\n"
+        "  · 在 Companion 主路径 (流式 /v1/chat/completions) 上从没生效过: 那条路不传 "
+        "tool_progress_callback, 桥接不到\n"
+        "  · v0.22 原生在流里发 `event: hermes.status`; 在 /v1/responses、/v1/runs 上 P19 "
+        "反而会盖掉原生的状态回调\n"
+        "Companion 改接原生 hermes.status。墓碑在 plugin_misc.py。"
+    ),
+    "_patch_p27_cron_auto_retry": (
+        "10/14 删 (hermes v0.22 升级)。P27 包 cron.jobs.mark_job_run 做失败 5/10/15 分钟三档重试, "
+        "审计发现**从来没生效过**:\n"
+        "  · cron/scheduler.py 启动时 `from cron.jobs import mark_job_run` 绑成本地名字, "
+        "替换模块属性碰不到\n"
+        "  · v0.22 又给 mark_job_run 加了 expected_fire_owner / status 关键字参数, 包装函数接不住\n"
+        "v0.22 自带模型连不上那类失败的 5/15/30 分钟重试 (cron/unreachable_retry.py)。"
+        "墓碑在 plugin_cron.py。"
     ),
     "_patch_p18_compress_endpoint": (
         "8/13 删。P18 (6/17) 做的是「Companion 在 80% 上下文时主动触发 hermes 压缩」，"

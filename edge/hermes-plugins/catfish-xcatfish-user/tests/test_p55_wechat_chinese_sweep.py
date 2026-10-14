@@ -18,10 +18,14 @@ HERMES = Path(os.environ.get("HERMES_ROOT") or os.path.expanduser("~/.hermes/her
 
 
 def _dangerous_descriptions():
-    src = HERMES / "tools" / "approval.py"
-    if not src.exists():
+    # v0.22 起清单搬到 tools/approval_detection.py
+    candidates = [HERMES / "tools" / "approval_detection.py", HERMES / "tools" / "approval.py"]
+    if not any(p.exists() for p in candidates):
         pytest.skip("本机没装 hermes")
-    tree = ast.parse(src.read_text(encoding="utf-8"))
+    tree = ast.Module(body=[], type_ignores=[])
+    for p in candidates:
+        if p.exists():
+            tree.body += ast.parse(p.read_text(encoding="utf-8")).body
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign) and any(
                 isinstance(t, ast.Name) and t.id == "DANGEROUS_PATTERNS" for t in node.targets):
@@ -169,6 +173,18 @@ def test_every_zh_receipt_from_hermes_catalog_loses_the_word_daili():
     gw = yaml.safe_load(src.read_text(encoding="utf-8"))["gateway"]
     texts = [v for sec in ("approve", "deny", "stop", "reset") for v in gw[sec].values()]
     texts += [gw["approval_expired"], gw["draining"]]
+    # v0.22: 员工看到的是 自带 zh → P58 小鲶包 → P28 出站兜底, 按这条链路验
+    import plugin_locale_zh
+    flat = {}
+    def _flatten(node, prefix):
+        for k, v in node.items():
+            if isinstance(v, dict):
+                _flatten(v, f"{prefix}{k}.")
+            else:
+                flat[f"{prefix}{k}"] = v
+    _flatten(yaml.safe_load(src.read_text(encoding="utf-8")), "")
+    pack = plugin_locale_zh.build_pack(flat)
+    texts = [pack.get(k, v) for k, v in flat.items() if v in texts]
     for t in texts:
         out = p28._translate_hermes_zh(t.replace("{count}", "2").replace("{reason}", "x")
                                         .replace("{title}", "t").replace("{tip}", "tip")

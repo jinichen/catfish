@@ -308,7 +308,7 @@ def test_classifier_accepts_wiki_route(monkeypatch):
         def __exit__(self, *a): return False
         def post(self, *a, **k): return _Resp()
     import types
-    fake_httpx = types.SimpleNamespace(Client=_Client)
+    fake_httpx = types.SimpleNamespace(Client=_Client, Timeout=lambda *a, **k: None)
     monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
     monkeypatch.setattr(memory_enforce, "_gateway_auth_token", lambda: "t")
     result, error = memory_enforce._classify_memory_route_diag("证书编号 X", "m")

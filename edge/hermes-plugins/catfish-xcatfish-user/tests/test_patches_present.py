@@ -98,14 +98,6 @@ def test_p2_aiagent_current_main_runtime():
     assert callable(getattr(AIAgent, "_current_main_runtime", None))
 
 
-def test_p3a_main_runtime_fields_tuple():
-    """P3a: _MAIN_RUNTIME_FIELDS 是 tuple of str."""
-    from agent.auxiliary_client import _MAIN_RUNTIME_FIELDS
-    assert isinstance(_MAIN_RUNTIME_FIELDS, tuple)
-    assert all(isinstance(f, str) for f in _MAIN_RUNTIME_FIELDS)
-    assert "base_url" in _MAIN_RUNTIME_FIELDS  # 确认是同一个 tuple, 不是同名巧合
-
-
 def test_p3a_normalize_main_runtime():
     """P3a: _normalize_main_runtime 接受 dict 返回 dict."""
     from agent.auxiliary_client import _normalize_main_runtime
@@ -115,15 +107,15 @@ def test_p3a_normalize_main_runtime():
     assert out.get("base_url") == "http://x"
 
 
-def test_p3b_resolve_auto_signature():
-    """P3b: _resolve_auto 接受 main_runtime kwarg.
+def test_p3_plan_aux_call_takes_extra_headers():
+    """P3 (v0.22 起): 包 _plan_aux_call 往 extra_headers 补 X-Catfish-User。
 
-    读源码不读运行时对象 —— P3b 自己就 wrap 了这个函数, 见文件头。
+    _plan_aux_call 不再收 extra_headers → P3 传的 kwarg 会 TypeError, 所有辅助调用
+    (压缩 / 起标题 / smart 审批判断) 全挂。读源码不读运行时对象 —— P3 自己就 wrap 了它。
     """
-    params = _source_param_names("agent.auxiliary_client", "_resolve_auto")
-    assert "main_runtime" in params, (
-        f"hermes 的 _resolve_auto 不再收 main_runtime (现有: {params}) —— "
-        "P3b 传的 kwarg 会 TypeError"
+    params = _source_param_names("agent.auxiliary_client", "_plan_aux_call")
+    assert "extra_headers" in params, (
+        f"hermes 的 _plan_aux_call 不再收 extra_headers (现有: {params}) —— P3 要改"
     )
 
 

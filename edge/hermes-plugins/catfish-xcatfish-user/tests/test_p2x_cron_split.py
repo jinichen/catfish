@@ -24,8 +24,8 @@ _PLUGIN_SRC = (_DIR / "plugin.py").read_text(encoding="utf-8")
 CRON_SYMBOLS = [
     "_handle_cron_pause", "_handle_cron_resume", "_handle_cron_delete",
     "_patch_p26_cron_rest_endpoints", "_patch_p21_cron_picker_integration",
-    "_patch_p27_cron_auto_retry",
 ]
+# 10/14: P27 (cron 失败自动重试) 随 hermes v0.22 退役, 见 plugin_cron.py 墓碑。
 
 
 # ── 搬运完整性 ──────────────────────────────────────────────────

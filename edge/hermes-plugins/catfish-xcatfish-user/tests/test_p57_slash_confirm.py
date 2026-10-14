@@ -27,6 +27,9 @@ def test_prompt_is_one_sentence_and_1_2():
         for bad in ("/approve", "/always", "/cancel", "总是", "_", "**"):
             assert bad not in s, (bad, s)
     assert "最近 3 轮" in p57.confirm_prompt("undo", "This removes the last 3 user turns from history.")
+    # v0.22 员工机是中文语言包, 原文换成中文
+    assert "最近 4 轮" in p57.confirm_prompt("undo", "这将从历史中移除最后 4 个用户回合。")
+    assert "最近 5 轮" in p57.confirm_prompt("undo", "这将从历史中删除最近 5 个用户回合。")
     assert "长期记忆还在" in p57.confirm_prompt("new")
 
 

@@ -74,7 +74,8 @@ def todo_collision_guard_hook(
     **_: Any,
 ) -> dict[str, str] | None:
     """Hermes ``pre_tool_call`` hook；只阻断有明确语义证据的误调用。"""
-    if tool_name != "todo":
+    # hermes v0.22 把 todo 改名 todo_list (旧名仍作别名), 两个都认
+    if tool_name not in ("todo", "todo_list"):
         return None
     for text in _todo_texts(args):
         if not _is_external_reminders_query(text):
@@ -86,7 +87,7 @@ def todo_collision_guard_hook(
                 "Hermes todo 只管理当前会话的 Agent 执行计划，不能读取 macOS "
                 "Reminders.app。请立即调用 "
                 f"{_REMINDERS_TOOL}，参数 {{\"scope\":\"{scope}\"}}；"
-                "不要重复调用 todo。"
+                f"不要重复调用 {tool_name}。"
             ),
         }
     return None

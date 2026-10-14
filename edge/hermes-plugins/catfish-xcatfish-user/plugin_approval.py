@@ -1,7 +1,7 @@
 """工具审批 —— 从 plugin.py 拆出 (8/15)。
 
-P14 (中文别名 "同意"/"批准" 等) · P15 (chat/completions 审批) ·
-P15.2 (审批路由 + 中间件)。
+P14 (中文别名 "同意"/"批准" 等) · P15.3 (Companion 会话不当无人值守) ·
+P15.2 (审批路由 + 中间件)。P15 / P15.4 已于 10/14 退役 (见下)。
 
 `_chat_approval_middleware` 是本模块的模块级可变全局: P15.2 装好后用
 `global` 写进来, plugin_cors 挂中间件链时读。见 plugin_cors 的模块 docstring。
@@ -15,55 +15,13 @@ logger = logging.getLogger("catfish.xcatfish_user.plugin")
 
 
 
-# ── P15 ──────────────────────────────────────────────────────────────────
+# ── P15 / P15.4 (10/14 退役) ───────────────────────────────────────────
 #
-# P15 (6/5 鸿波 marathon audit) — Companion chat/completions 真 approval 闭环.
-#
-# 背景 (audit api_server.py:1892-1987 + tools/approval.py:1454-1574):
-#   1. Companion 走 /v1/chat/completions (chat.ts:190). 这条 path 不 register
-#      _gateway_notify_cbs (跟 /v1/runs path 不同, 后者 line 3802 注册).
-#   2. execute_code 触发 check_execute_code_guard → 走 approval.py:1554 fallback
-#      (notify_cb is None) → 立即 return pending dict, agent 不阻塞继续下一轮.
-#   3. 用户点 button 发 "/approve" user message → chat completions 没 slash command
-#      hook → LLM 直接看 "/approve" 编释义. 永远不解 block.
-#   4. _gateway_queues vs _pending 是两个独立 dict — fallback 写 _pending,
-#      resolve_gateway_approval 操作 _gateway_queues. 没人 resolve fallback.
-#
-# 修法 (不 fork _handle_chat_completions, 用 Python 闭包反射):
-#   - hermes 闭包 _on_delta 持有 local 变量 _stream_q (api_server.py:1896).
-#   - patched _run_agent 通过 stream_delta_callback.__closure__ 拿 _stream_q ref.
-#   - 注册 _approval_notify 到 _gateway_notify_cbs[session_key], notify 时把
-#     approval data 走现有 ("__tool_progress__", dict) tuple pattern push 进
-#     _stream_q. _write_sse_chat_completion._emit (line 2156) 自动写出
-#     `event: hermes.tool.progress` SSE event 给 Companion (复用现有协议, 不动
-#     hermes 一行代码).
-#   - Companion 端 chat.ts 解析 SSE event 行 (新增), 检测 status==approval_pending
-#     时 ChatToolCall 弹 button, onClick → tool-bridge RPC `chat_approval`
-#     (plugin 加的 RPC method) → resolve_gateway_approval(sid, choice) 解 block.
-#
-# 风险评估:
-#   - 闭包反射 _on_delta.__closure__ 依赖 hermes 内部变量名 `_stream_q`. hermes
-#     0.16+ 改名 / 改实现 → patch 失效 (silent fail, 只是 button 不工作,
-#     不会 crash). 加 verify_target check 用 grep 检测变量名仍存.
-#   - patch _run_agent (公开 method) 比 fork streaming branch 风险低 1 个数量级.
-
-_APPROVE_REQUEST_TOOL_MARKER = "_approval_request"  # Companion 检测这字符串
-
-
-def _enqueue_stream_event(stream_q, event) -> None:
-    """向 Hermes SSE 队列投递事件，兼容新旧队列实现。
-
-    Hermes <= 0.20.0 使用 ``queue.Queue.put``；0.20.6 改为
-    ``ThreadSafeAsyncQueue.put_threadsafe``，因为 approval callback 在 agent
-    worker thread 中执行。新队列上直接调 ``asyncio.Queue.put`` 会返回
-    未 await 的 coroutine，事件实际不会进 SSE 通道。
-    """
-    put_threadsafe = getattr(stream_q, "put_threadsafe", None)
-    if callable(put_threadsafe):
-        put_threadsafe(event)
-        return
-    stream_q.put(event)
-
+# P15 原来用闭包反射拿 hermes 流式回复里的 `_stream_q`, 把审批请求塞进 SSE 给 Companion 弹卡。
+# hermes v0.22.0 原生支持了: chat/completions 流里直接发 `event: approval.request`,
+# 回执走 `POST /v1/runs/{completion_id}/approval` (api_server_openai_routes.py), Companion 改接它。
+# P15.4 原来把 Companion 会话强制成人工审批; 10/14 鸿波定采用 v0.22 的 smart 模式 (AI 先判断,
+# 拿不准才问人), 一起退役。见 docs/HERMES-022-UPGRADE-ASSESSMENT.md「审批模式」。
 
 # ── P14 ──────────────────────────────────────────────────────────────────
 #
@@ -191,168 +149,16 @@ def _patch_p14_approve_chinese_alias() -> None:
     logger.info("P14 chinese approval alias patched (GatewayRunner._handle_message)")
 
 
-def _patch_p15_chat_completions_approval() -> None:
-    """patch APIServerAdapter._run_agent — chat/completions 注入 _approval_notify."""
-    try:
-        from gateway.platforms.api_server import APIServerAdapter
-        from gateway.session_context import (
-            clear_session_vars,
-            set_session_vars,
-        )
-        from tools.approval import (
-            register_gateway_notify,
-            reset_current_session_key,
-            set_current_session_key,
-            unregister_gateway_notify,
-        )
-    except ImportError as e:
-        logger.warning("P15: api_server / approval import 失败 (%s), skip patch", e)
-        return
-
-    _orig = APIServerAdapter._run_agent
-
-    async def patched_run_agent(self, *args, **kwargs):
-        cb = kwargs.get("stream_delta_callback")
-        sid = (
-            kwargs.get("gateway_session_key")
-            or kwargs.get("session_id")
-        )
-
-        # P15.2 (6/22 鸿波 catch "按钮还没弹"): 用户报 P15.1 ship 后按钮仍没弹.
-        # patched_run_agent 真跑没跑 / sid 拿到没 / stream_q 反射成功没 — 加
-        # INFO log 让 hermes daemon 日志说话. 一次性确定真因, 不瞎猜.
-        logger.info(
-            "P15 patched_run_agent: 入口 sid=%r has_cb=%s kwargs_keys=%s",
-            sid, cb is not None, sorted(list(kwargs.keys())),
-        )
-
-        # 反射拿 _stream_q (api_server.py:1896 _on_delta 闭包持有这个 local 变量)
-        stream_q = None
-        if cb is not None and getattr(cb, "__closure__", None) is not None:
-            try:
-                freevars = cb.__code__.co_freevars
-                for i, name in enumerate(freevars):
-                    if name == "_stream_q":
-                        stream_q = cb.__closure__[i].cell_contents
-                        break
-            except Exception as e:  # noqa: BLE001
-                logger.debug("P15: closure 反射失败 (%s), 跳过 approval 注入", e)
-        logger.info(
-            "P15 patched_run_agent: stream_q 反射结果 = %s (cb.freevars=%s)",
-            "GOT" if stream_q is not None else "NONE",
-            (cb.__code__.co_freevars if cb is not None and hasattr(cb, "__code__") else None),
-        )
-
-        notify_cb = None
-        if stream_q is not None and sid:
-            def _approval_notify(approval_data):
-                """Push approval event 到 chat completion SSE stream.
-
-                复用 hermes 现有 ("__tool_progress__", dict) tuple pattern —
-                _write_sse_chat_completion._emit (api_server.py:2156) 把这种
-                tuple 写为 `event: hermes.tool.progress\\ndata: {...}` SSE event,
-                Companion chat.ts 解析检测 status==approval_pending.
-                """
-                event = {
-                    "tool": _APPROVE_REQUEST_TOOL_MARKER,
-                    "status": "approval_pending",
-                    "approval_session_key": sid,
-                    "command": approval_data.get("command", ""),
-                    "pattern_key": approval_data.get("pattern_key", ""),
-                    "description": approval_data.get("description", ""),
-                    "choices": ["once", "session", "always", "deny"],
-                }
-                try:
-                    _enqueue_stream_event(stream_q, ("__tool_progress__", event))
-                except Exception as e:  # noqa: BLE001
-                    logger.debug("P15: stream event enqueue 失败 (%s)", e)
-
-            notify_cb = _approval_notify
-            try:
-                register_gateway_notify(sid, notify_cb)
-                logger.info("P15 patched_run_agent: register_gateway_notify(%r) ✓", sid)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("P15: register_gateway_notify 失败 (%s)", e)
-                notify_cb = None
-        else:
-            logger.info(
-                "P15 patched_run_agent: 不注册 notify_cb (stream_q=%s sid=%r) — "
-                "按钮不会弹, approval 走 hermes fallback (auto-approve 或 pending)",
-                stream_q is not None, sid,
-            )
-
-        # P15 真根因 fix (00:30 audit): approval.py:1521 `session_key =
-        # get_current_session_key()` 拿 _approval_session_key contextvar. chat
-        # completions path 没 set 这个 contextvar, 默认 fallback "default" 字符串.
-        # plugin register_gateway_notify 用的 sid (e.g. session_id) ≠ "default",
-        # 所以 _gateway_notify_cbs.get("default") = None, notify_cb 没调 → 走 fallback.
-        # set_current_session_key(sid) 跟 /v1/runs path (api_server.py:3797) 一样,
-        # 让 approval.py 内 get 拿到匹配的 sid → notify_cb 命中. P0 patch_asyncio
-        # _executor_for_contextvars 保证 contextvar 跨 run_in_executor 透传.
-        approval_token = None
-        if sid:
-            try:
-                approval_token = set_current_session_key(sid)
-            except Exception as e:  # noqa: BLE001
-                logger.debug("P15: set_current_session_key 失败 (%s)", e)
-
-        # P15.1 (6/22 鸿波 catch "审批按钮没了"): hermes v0.17 升级新加
-        # _is_gateway_approval_context() gate (approval.py:134-152) 检查
-        # HERMES_SESSION_PLATFORM contextvar. check_execute_code_guard:1710
-        # 拿 is_gateway, line 1738 `if not is_gateway: return {"approved": True}`
-        # — 没 set platform → silent auto-approve, **按钮永远不弹**.
-        #
-        # hermes /v1/runs path (api_server.py:3870) 走 set_session_vars(
-        #   platform="api_server", session_key=...). 这步是把 _SESSION_PLATFORM
-        # contextvar set 成 "api_server" → _is_gateway_approval_context() 返 True.
-        #
-        # P15 当初写时 hermes 没这检查, v0.17 升级 silent break. 跟 /v1/runs 对齐.
-        session_tokens: list = []
-        if sid:
-            try:
-                session_tokens = set_session_vars(
-                    platform="api_server",
-                    session_key=sid,
-                )
-                logger.info("P15.1 patched_run_agent: set_session_vars(platform=api_server, session_key=%r) ✓", sid)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("P15.1: set_session_vars 失败 (%s)", e)
-
-        try:
-            return await _orig(self, *args, **kwargs)
-        finally:
-            if session_tokens:
-                try:
-                    clear_session_vars(session_tokens)
-                except Exception:  # noqa: BLE001
-                    pass
-            if approval_token is not None:
-                try:
-                    reset_current_session_key(approval_token)
-                except Exception:  # noqa: BLE001
-                    pass
-            if notify_cb is not None:
-                try:
-                    unregister_gateway_notify(sid)
-                except Exception:  # noqa: BLE001
-                    pass
-
-    APIServerAdapter._run_agent = patched_run_agent
-    logger.info(
-        "P15 chat/completions approval patched (_run_agent wrapped, "
-        "approval flows through hermes.tool.progress SSE event)"
-    )
-
-
 # ── P15.3 ──────────────────────────────────────────────────────────────
 #
 # Hermes v2026.8.31 introduced a fail-closed unattended gate for api_server.
 # That is correct for ordinary programmatic requests, but Companion's
-# chat/completions path is different: P15 registers a per-session SSE callback
-# and P15.2 exposes the authenticated approval route that resolves the same
-# in-process approval queue.  When that callback exists, a human is present in
-# the Companion UI and the request must reach Hermes' normal pending-approval
-# path instead of being rejected before the button can be shown.
+# chat/completions path is different: the streaming request registers a
+# per-session approval callback (v0.22: Hermes' native approval_notify_callback
+# that emits `event: approval.request`; before that our P15).  When that
+# callback exists, a human is present in the Companion UI and the request must
+# reach Hermes' normal pending-approval path instead of being rejected before
+# the button can be shown.
 #
 # Do not set approvals.unattended_mode=approve.  That would silently approve
 # every api_server execute_code request, including callers that have no UI.
@@ -382,12 +188,25 @@ def _patch_p15_3_unattended_companion_approval() -> None:
 
     get_session_key = getattr(approval, "get_current_session_key", None)
     callbacks = getattr(approval, "_gateway_notify_cbs", None)
+    # v0.22 (10/14): 判断搬进了 tools/approval_context.py; approval.py 是 from-import 的一份,
+    # execute_code / 终端命令的 _unattended_contexts 用 approval.py 那份, 而
+    # _is_gateway_approval_context / _no_user_can_answer (写文件保护、Codex 审批) 用
+    # approval_context 自己那份 —— 两份都得换, 不然 Companion 上一半审批会被当成"没人能回答"直接拒。
+    try:
+        import tools.approval_context as approval_context
+    except ImportError:
+        approval_context = None
+    get_platform = getattr(approval_context, "_get_session_platform", None)
 
     def _companion_callback_is_registered() -> bool:
         """Return true only for the current session's live SSE callback."""
         if not callable(get_session_key) or not hasattr(callbacks, "get"):
             return False
         try:
+            # 只认 api_server (Companion)。webhook / msgraph_webhook 的通用回合每轮都会注册回调,
+            # 但那边根本没有能回答审批的界面 (上游 _NOTIFIER_BLIND_APPROVAL_PLATFORMS)
+            if callable(get_platform) and get_platform() != "api_server":
+                return False
             session_key = get_session_key()
             return bool(session_key and callable(callbacks.get(session_key)))
         except Exception:  # noqa: BLE001
@@ -407,67 +226,12 @@ def _patch_p15_3_unattended_companion_approval() -> None:
     patched_unattended_context._catfish_p15_3 = True
     patched_unattended_context._catfish_p15_3_original = original
     approval._is_unattended_platform_approval_context = patched_unattended_context
+    if approval_context is not None and callable(
+            getattr(approval_context, "_is_unattended_platform_approval_context", None)):
+        approval_context._is_unattended_platform_approval_context = patched_unattended_context
     logger.info(
         "P15.3 Companion approval compatibility patched: "
         "only sessions with a live SSE callback use interactive approval"
-    )
-
-
-# ── P15.4 ──────────────────────────────────────────────────────────────
-#
-# Hermes 的配置兼容性陷阱: `approvals.smart: false` 不是审批模式开关。
-# v0.21 的有效模式仍会从缺省值解析成 `smart`，于是 Companion 的
-# execute_code 先交给 Auxiliary LLM 判断，低风险脚本直接放行，员工看不到
-# 审批卡。P15.3 只解决 unattended gate，解决不了 smart auto-approve。
-#
-# Companion 有真实的 SSE 回调和审批 resolve endpoint，因此这个会话应当走
-# 人工确认；没有 UI 的 API / cron / webhook 会话继续使用 Hermes 原有配置。
-# 这样不把 `approvals.mode` 全局写死，也不会让后台调用意外等待人工。
-
-def _patch_p15_4_companion_manual_approval() -> None:
-    """Use manual approval for Companion sessions with a live approval UI."""
-    try:
-        import tools.approval as approval
-    except ImportError as e:
-        logger.info("P15.4: Hermes approval module absent (%s), skip", e)
-        return
-
-    original = getattr(approval, "_get_approval_mode", None)
-    if not callable(original):
-        logger.info("P15.4: Hermes approval mode resolver absent, skip")
-        return
-    if getattr(original, "_catfish_p15_4", False):
-        return
-
-    get_session_key = getattr(approval, "get_current_session_key", None)
-    callbacks = getattr(approval, "_gateway_notify_cbs", None)
-
-    def _companion_callback_is_registered() -> bool:
-        if not callable(get_session_key) or not hasattr(callbacks, "get"):
-            return False
-        try:
-            session_key = get_session_key()
-            return bool(session_key and callable(callbacks.get(session_key)))
-        except Exception:  # noqa: BLE001
-            logger.debug("P15.4: 无法检查 Companion approval callback", exc_info=True)
-            return False
-
-    def patched_approval_mode() -> str:
-        configured = original()
-        if _companion_callback_is_registered():
-            if configured != "manual":
-                logger.info(
-                    "P15.4: Companion session approval mode %r → manual",
-                    configured,
-                )
-            return "manual"
-        return configured
-
-    patched_approval_mode._catfish_p15_4 = True
-    patched_approval_mode._catfish_p15_4_original = original
-    approval._get_approval_mode = patched_approval_mode
-    logger.info(
-        "P15.4 Companion approval mode patched: live Companion sessions use manual"
     )
 
 

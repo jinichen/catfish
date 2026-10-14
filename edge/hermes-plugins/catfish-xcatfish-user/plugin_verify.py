@@ -50,8 +50,10 @@ _PATCH_TARGETS = [
     # (module, attribute, kind) — kind ∈ {"func", "method", "attr"}
     ("agent.agent_init", "init_agent", "func"),
     ("run_agent", "AIAgent", "attr"),
-    ("agent.auxiliary_client", "_MAIN_RUNTIME_FIELDS", "attr"),
-    ("agent.auxiliary_client", "_resolve_auto", "func"),
+    # P3 (v0.22 起): 辅助调用的身份头 —— 包 _plan_aux_call (同步 / 异步都经过它),
+    # 用 _normalize_main_runtime 判断这次是不是走 catfish 网关 (见 plugin_runtime.py)。
+    ("agent.auxiliary_client", "_plan_aux_call", "func"),
+    # 原来的 _MAIN_RUNTIME_FIELDS / _resolve_auto 两个目标 v0.22 已删。
     ("agent.auxiliary_client", "_normalize_main_runtime", "func"),
     # P47: private-model auxiliary calls must fail closed. If Hermes renames
     # a fallback hook, the guard could silently stop blocking public spend.
@@ -96,7 +98,10 @@ _PATCH_TARGETS = [
     # 不该先要求 Hermes auth store 里另存一份 OAuth token。Hermes 0.18
     # 的 gateway resolver 顺序相反，导致有效 Codex 登录仍报 credentials missing。
     ("gateway.run", "_resolve_runtime_agent_kwargs", "func"),
+    ("gateway.run", "_load_gateway_config", "func"),
     ("agent.codex_runtime", "run_codex_app_server_turn", "func"),
+    # v0.22 起 Codex 的流式输出 / 工具进度由上游这个事件桥负责, P39 会话池复用时要换绑
+    ("agent.codex_runtime", "make_codex_app_server_event_bridge", "func"),
     # P25 (P3.5.104, 6/24): hermes tools/approval.py check_execute_code_guard —
     # cron env 污染防御. hermes cron/scheduler.py:1558 在 run_job 内 set
     # HERMES_CRON_SESSION env 但永不清, 整 daemon 进程污染, 后续 chat 调
@@ -142,6 +147,14 @@ _PATCH_TARGETS = [
     ("gateway.hosted_room_peer", "issue_room_grant", "func"),
     ("gateway.hosted_room_execution_policy", "current_room_execution_policy", "func"),
     ("tools.approval", "register_gateway_notify", "func"),
+    # P20: execute_code 不许进永久白名单 —— v0.22 起按 profile 懒加载直接读 _read_permanent_allowlist
+    ("tools.approval", "_read_permanent_allowlist", "func"),
+    ("tools.approval", "save_permanent_allowlist", "func"),
+    ("tools.approval", "_permanent_set", "func"),
+    # P53: tool_call 桥参数解析 (v0.22 起支持 {"calls": [...]})
+    ("tools.tool_search", "resolve_underlying_call", "func"),
+    ("tools.tool_search", "scoped_deferrable_names", "func"),
+    ("tools.tool_search_validation", "normalize_tool_call_entries", "func"),
 ]
 
 
@@ -163,6 +176,8 @@ _APISERVER_METHOD_TARGETS = [
     # 上游改名 → 运行时 fail-closed = 审批按钮直接失效. 钉在这里, 让它在**插件
     # 装载期**就炸, 而不是等员工点不动按钮再来查。
     "_check_auth",
+    # P29 /learn 中文化: 改写 user_message 关键字参数
+    "_run_agent",
     # _extract_catfish_outgoing_user 是我们新加的, 不要求 hermes 上游有
     # _handle_companion_proxy 同理
 ]
@@ -192,64 +207,58 @@ def _check_attr_in_source(module_path: str, attr: str) -> bool:
         return False
 
 
-def _check_p15_stream_q_in_source() -> bool:
-    """P15 fragile patch verify: 检测 hermes _handle_chat_completions 内部
-    streaming branch 仍含可从 worker thread 投递的 ``_stream_q`` 用法.
+# P52 微信审批回复: 包 _handle_active_session_busy_message, 发提示要找回收消息的那个 adapter
+_GATEWAYRUNNER_METHOD_TARGETS = [
+    "_handle_active_session_busy_message",
+    "_delivery_adapter_for",
+    "_reply_anchor_for_event",
+    "_thread_metadata_for_source",
+]
 
-    P15 通过 ``_on_delta.__closure__`` 闭包反射拿 ``_stream_q`` 引用,
-    推 approval event 给 SSE writer. Hermes <= 0.20.0 用 ``queue.Queue.put``;
-    0.20.6 起用 ``ThreadSafeAsyncQueue.put_threadsafe``. 这条**硬依赖
-    hermes 内部 local 变量名**:
-    hermes 重构改名 `_stream_q` → `_stream_queue` / `_q` / 不用 queue, P15
-    silent break (闭包反射拿不到, _approval_notify 不注册, fallback path 跑,
-    button 不弹, 用户看不出来).
 
-    本检查在 install 时静态 grep, 一旦变量名变了 → fail-loud, 不让 plugin 半加载.
+def _check_class_method_in_source(module_path: str, class_name: str, method: str,
+                                  _depth: int = 0) -> bool:
+    """静态文件检查 class (连同它的父类 / mixin) 是否含某 method (不 import)。
+
+    v0.22 起 AIAgent / APIServerAdapter / GatewayRunner 的方法大量挪进了 mixin
+    (agent/client_lifecycle.py、gateway/run_busy.py …), 只看 class 本体会误报缺失。
+    这里用 ast 解析: 本体没有就顺着 ``from x import Base`` 找到父类所在文件接着查。
     """
+    import ast
     import os
-    import re
-    hermes_root = os.environ.get("HERMES_ROOT") or str(_hermes_home() / "hermes-agent")
-    file_path = os.path.join(hermes_root, "gateway/platforms/api_server.py")
-    if not os.path.exists(file_path):
-        return False
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            src = f.read()
-        # 必须见: `_stream_q` 变量 + 新旧任一投递 API
-        # (证明 _on_delta 真正捕获了 P15 要反射的 free var).
-        has_stream_q_put = bool(
-            re.search(r"\b_stream_q\.(?:put|put_threadsafe)\b", src)
-        )
-        has_on_delta = bool(
-            re.search(r"def\s+_on_delta\s*\(", src)
-        )
-        return has_stream_q_put and has_on_delta
-    except Exception:
-        return False
-
-
-def _check_class_method_in_source(module_path: str, class_name: str, method: str) -> bool:
-    """静态文件检查 class 是否含某 method (不 import). 同 _check_attr_in_source."""
-    import os
-    import re
     hermes_root = os.environ.get("HERMES_ROOT") or str(_hermes_home() / "hermes-agent")
     file_path = os.path.join(hermes_root, module_path.replace(".", "/") + ".py")
-    if not os.path.exists(file_path):
+    if _depth > 6 or not os.path.exists(file_path):
         return False
     try:
         with open(file_path, "r", encoding="utf-8") as f:
-            src = f.read()
-        # 找 class XXX 后任意位置 def method(
-        class_pattern = rf"class\s+{re.escape(class_name)}\b[^:]*:"
-        class_match = re.search(class_pattern, src)
-        if not class_match:
-            return False
-        # class 之后的代码里找 def method (允许 indent)
-        rest = src[class_match.end():]
-        method_pattern = rf"^\s+(?:def|async def)\s+{re.escape(method)}\b"
-        return bool(re.search(method_pattern, rest, re.MULTILINE))
+            tree = ast.parse(f.read(), filename=file_path)
     except Exception:
         return False
+    imported: dict[str, tuple[str, str]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            for alias in node.names:
+                imported[alias.asname or alias.name] = (node.module, alias.name)
+    for node in tree.body:
+        if not (isinstance(node, ast.ClassDef) and node.name == class_name):
+            continue
+        for item in node.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == method:
+                return True
+            if isinstance(item, ast.Assign) and any(
+                    isinstance(t, ast.Name) and t.id == method for t in item.targets):
+                return True
+        for base in node.bases:
+            name = base.id if isinstance(base, ast.Name) else (
+                base.attr if isinstance(base, ast.Attribute) else None)
+            if not name:
+                continue
+            src_mod, src_name = imported.get(name, (module_path, name))
+            if _check_class_method_in_source(src_mod, src_name, method, _depth + 1):
+                return True
+        return False
+    return False
 
 
 def _verify_patch_targets() -> None:
@@ -278,16 +287,9 @@ def _verify_patch_targets() -> None:
                 f"gateway.platforms.api_server.APIServerAdapter.{method}"
             )
 
-    # P15 fragile verify: 闭包反射 _stream_q 强依赖 hermes 内部变量名 (silent
-    # break 风险). hermes 升级改 _on_delta 闭包 / streaming impl 时, 这里 fail-loud.
-    if not _check_p15_stream_q_in_source():
-        missing.append(
-            "gateway.platforms.api_server._handle_chat_completions 内 "
-            "_stream_q / _on_delta 闭包结构 (P15 闭包反射依赖此变量名). "
-            "hermes 重构改了 streaming impl, P15 会 silent break. "
-            "audit api_server.py:1892+ streaming branch, 同步更新 P15 反射目标 "
-            "(plugin.py:_patch_p15_chat_completions_approval _stream_q name)."
-        )
+    for method in _GATEWAYRUNNER_METHOD_TARGETS:
+        if not _check_class_method_in_source("gateway.run", "GatewayRunner", method):
+            missing.append(f"gateway.run.GatewayRunner.{method}")
 
     if missing:
         raise ImportError(
@@ -298,7 +300,8 @@ def _verify_patch_targets() -> None:
 
     logger.info(
         "catfish-xcatfish-user: patch target verify ✓ "
-        "(静态文件检查 %d module + %d method + P15 _stream_q 闭包)",
+        "(静态文件检查 %d module + %d method)",
         len(_PATCH_TARGETS),
-        len(_AIAGENT_METHOD_TARGETS) + len(_APISERVER_METHOD_TARGETS),
+        len(_AIAGENT_METHOD_TARGETS) + len(_APISERVER_METHOD_TARGETS)
+        + len(_GATEWAYRUNNER_METHOD_TARGETS),
     )

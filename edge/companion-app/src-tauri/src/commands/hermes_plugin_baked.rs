@@ -131,6 +131,9 @@ const BAKED_PLUGIN_APPROVAL_UX: &str =
 // 10/14 P57: /new /undo 的确认回 1/2 (见 plugin_slash_confirm_ux.py)
 const BAKED_PLUGIN_SLASH_CONFIRM_UX: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_slash_confirm_ux.py");
+// 10/14 P58: hermes v0.22 小鲶中文语言包 (见 plugin_locale_zh.py)
+const BAKED_PLUGIN_LOCALE_ZH: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_locale_zh.py");
 // 10/13 P53: tool_call 转发已提升的 catfish 工具 (见 plugin_bridge_promoted.py)
 const BAKED_PLUGIN_BRIDGE_PROMOTED: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_bridge_promoted.py");
@@ -180,5 +183,6 @@ pub(crate) const BAKED_FILES: &[(&str, &str)] = &[
     ("plugin_approval_ux.py", BAKED_PLUGIN_APPROVAL_UX),
     ("plugin_bridge_promoted.py", BAKED_PLUGIN_BRIDGE_PROMOTED),
     ("plugin_slash_confirm_ux.py", BAKED_PLUGIN_SLASH_CONFIRM_UX),
+    ("plugin_locale_zh.py", BAKED_PLUGIN_LOCALE_ZH),
     ("readonly_code.py", BAKED_READONLY_CODE),
 ];

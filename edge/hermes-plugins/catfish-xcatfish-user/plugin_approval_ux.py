@@ -129,6 +129,14 @@ def format_approval_prompt(command: str, description: str) -> str:
 # 10/13 盘点: 审批「原因」全是 hermes 的英文描述。逐条译; 不认识的 (hermes 升级新加的)
 # 不再露英文, 给一句通用说明 + 打 log, 下次补表。
 DANGER_ZH = {
+    # 10/14 hermes v0.22 新加的
+    "cloud metadata endpoint access (instance credentials)": "读取云服务器的登录凭据",
+    "dynamic shell word may expand to arbitrary program execution flag": "命令里有动态拼出来的参数, 可能变成运行任意程序",
+    "find dynamic shell word may expand to destructive flag": "查找命令里有动态拼出来的参数, 可能变成删除",
+    "invisible or bidirectional Unicode control character (possible obfuscation)": "命令里藏了看不见的字符, 可能在伪装",
+    "package manager uninstall": "卸载软件",
+    "pipe a credential file into a curl/wget upload (possible exfiltration)": "把密码 / 凭据文件上传到外部",
+    "upload a secret or credential file via curl/wget (possible exfiltration)": "把密码 / 凭据文件上传到外部",
     "delete in root path": "删除系统根目录下的东西",
     "recursive delete": "成批删除文件", "recursive delete (long flag)": "成批删除文件",
     "recursive delete (flags after operands)": "成批删除文件",
@@ -309,7 +317,9 @@ def wrap_busy_handler(orig, has_blocking_approval):
                 hint = build_hint(_LAST_SUMMARY,
                                   last is not None and time.monotonic() - last < _RECENT_S)
                 try:
-                    adapter = self._adapter_for_source(event.source)
+                    # v0.22 (10/14): _adapter_for_source 改名 _delivery_adapter_for (多 bot 时找回收消息的那个)
+                    pick = getattr(self, "_delivery_adapter_for", None) or self._adapter_for_source
+                    adapter = pick(event.source)
                     if adapter:
                         anchor = self._reply_anchor_for_event(event)
                         await adapter._send_with_retry(

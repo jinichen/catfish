@@ -163,6 +163,9 @@ def wrap_run_agent(orig):
             kw = dict(kwargs)
             kw["user_message"] = NUDGE_TEXT
             kw["conversation_history"] = transcript
+            if "resume_unanswered_turn" in kw:
+                # v0.22: 这一轮如果是「接着回答上次没答完的那条」, 续跑那一轮已经有新的用户消息了, 不能再当续答
+                kw["resume_unanswered_turn"] = False
             eff_sid = result.get("session_id")
             if isinstance(eff_sid, str) and eff_sid and "session_id" in kw:
                 kw["session_id"] = eff_sid

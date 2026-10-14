@@ -13,6 +13,9 @@
 jieba          jieba                 sdist
 playwright==1.64.0 playwright.sync_api
 watchdog       watchdog.observers
+# 10/14 hermes v0.22: 上游把 PyYAML 换成 ruamel.yaml, 不再装 —— 鲶鱼插件 (windows_chat_credentials /
+# catfish-memory 网关) 和工具桥 (skill_register / adapter_todo / search_skills) 都 import yaml
+PyYAML         yaml
 
 # 9/28: 聊天上传文件的解析 (src-tauri/scripts/parse_file*.py)。原来只有开发机的网关 venv 里有。
 pypdfium2      pypdfium2

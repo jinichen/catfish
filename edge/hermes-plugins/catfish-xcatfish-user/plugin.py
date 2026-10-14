@@ -137,9 +137,7 @@ plugin_approval = _import_sibling("plugin_approval")
 plugin_auto_continue = _import_sibling("plugin_auto_continue")
 _patch_p50_auto_continue = plugin_auto_continue._patch_p50_auto_continue  # noqa: F401  (re-export · 见 plugin_auto_continue.py)
 _patch_p14_approve_chinese_alias = plugin_approval._patch_p14_approve_chinese_alias  # noqa: F401
-_patch_p15_chat_completions_approval = plugin_approval._patch_p15_chat_completions_approval  # noqa: F401
 _patch_p15_3_unattended_companion_approval = plugin_approval._patch_p15_3_unattended_companion_approval  # noqa: F401
-_patch_p15_4_companion_manual_approval = plugin_approval._patch_p15_4_companion_manual_approval  # noqa: F401
 _patch_p15_2_chat_approval_route = plugin_approval._patch_p15_2_chat_approval_route  # noqa: F401
 plugin_approval_ux = _import_sibling("plugin_approval_ux")
 _patch_p51_approval_prompt = plugin_approval_ux._patch_p51_approval_prompt  # noqa: F401  (re-export · 见 plugin_approval_ux.py)
@@ -155,6 +153,8 @@ def _patch_p57_slash_confirm() -> None:
     plugin_slash_confirm_ux.patch(plugin_approval_ux)
 
 
+plugin_locale_zh = _import_sibling("plugin_locale_zh")
+_patch_p58_locale_zh = plugin_locale_zh._patch_p58_locale_zh  # noqa: F401  (re-export · 见 plugin_locale_zh.py)
 plugin_bridge_promoted = _import_sibling("plugin_bridge_promoted")
 _patch_p53_bridge_promoted_catfish_tools = plugin_bridge_promoted._patch_p53_bridge_promoted_catfish_tools  # noqa: F401  (re-export · 见 plugin_bridge_promoted.py)
 
@@ -182,7 +182,6 @@ plugin_misc = _import_sibling("plugin_misc")
 _EXEC_CODE_PATTERN_KEYS_BLOCKED = plugin_misc._EXEC_CODE_PATTERN_KEYS_BLOCKED  # noqa: F401
 _patch_p12_update_system_prompt_safe = plugin_misc._patch_p12_update_system_prompt_safe  # noqa: F401
 _patch_p13_dump_naming_type_tag = plugin_misc._patch_p13_dump_naming_type_tag  # noqa: F401
-_patch_p19_status_callback_bridge = plugin_misc._patch_p19_status_callback_bridge  # noqa: F401
 _patch_p20_block_execute_code_permanent = plugin_misc._patch_p20_block_execute_code_permanent  # noqa: F401
 _patch_p29_learn_slash_translate = plugin_misc._patch_p29_learn_slash_translate  # noqa: F401
 _patch_p7_companion_proxy_route = plugin_cors._patch_p7_companion_proxy_route  # noqa: F401
@@ -223,7 +222,7 @@ _p39_prune_codex_cache = plugin_codex_session._p39_prune_codex_cache  # noqa: F4
 _P39_CODEX_CACHE = plugin_codex_session._P39_CODEX_CACHE  # noqa: F401  (re-export · 注意是同一个 dict 对象)
 
 
-# cron 一族 (8/13 拆出): P21 picker / P26 REST / P27 重试。
+# cron 一族 (8/13 拆出): P21 picker / P26 REST (P27 重试 10/14 退役)。
 # (P25 线程隔离 8/19 退役 —— 上游 cron 改 ContextVar 了, 见 plugin_cron.py 墓碑。)
 # 跟 plugin_codex_session 同一套注入协议 —— 只要一个 model_authority。
 plugin_cron = _import_sibling("plugin_cron")
@@ -234,7 +233,6 @@ _handle_cron_resume = plugin_cron._handle_cron_resume  # noqa: F401  (re-export)
 _handle_cron_delete = plugin_cron._handle_cron_delete  # noqa: F401  (re-export)
 _patch_p21_cron_picker_integration = plugin_cron._patch_p21_cron_picker_integration  # noqa: F401  (re-export)
 _patch_p26_cron_rest_endpoints = plugin_cron._patch_p26_cron_rest_endpoints  # noqa: F401  (re-export)
-_patch_p27_cron_auto_retry = plugin_cron._patch_p27_cron_auto_retry  # noqa: F401  (re-export)
 
 
 
@@ -384,12 +382,9 @@ def _apply_patches() -> None:
     _patch_p12_update_system_prompt_safe()
     _patch_p13_dump_naming_type_tag()
     _patch_p14_approve_chinese_alias()
-    _patch_p15_chat_completions_approval()
+    # P15 / P15.4 / P19 / P27 于 10/14 退役 (hermes v0.22.0 原生审批流 + smart 审批 / 原生 hermes.status /
+    # P27 从没生效过), 理由各写在 plugin_approval.py / plugin_misc.py / plugin_cron.py 的墓碑里。
     _patch_p15_3_unattended_companion_approval()
-    _try_patch(
-        _patch_p15_4_companion_manual_approval,
-        "P15.4: Companion manual approval compatibility failed (skip): %s",
-    )
     _patch_p15_2_chat_approval_route()
     # P51/P52 (10/13 鸿波"这种方式是不是很违反人性"): 微信审批改成大白话 + 回 1/2/3;
     # 审批在等时回复按意思认 (中文 / 数字 / 带不带斜杠), 认不出的短回复不打断任务。
@@ -411,10 +406,13 @@ def _apply_patches() -> None:
     # P57 (10/14 鸿波「怎么还是这么麻烦的回复？」): /new /undo 的确认也是一句话 + 回 1/2,
     # 不再要背 /approve /always /cancel。必须在 P14 之后装 (都包 _handle_message, 互不干扰)。
     _try_patch(_patch_p57_slash_confirm, "P57: _patch_p57_slash_confirm 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
+    # P58 (10/14 hermes v0.22): 网关固定提示全走语言包了, 注册小鲶中文包 (去 Hermes/☤、「代理」→小鲶),
+    # 从自带 zh 目录派生, 上游新加的提示自动覆盖。P28 的字面量替换留作兜底。
+    _try_patch(_patch_p58_locale_zh, "P58: _patch_p58_locale_zh 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P50 (10/6 鸿波"中间有三次任务停下来了"): 模型回了一句"逐项目比对。"这种
     # 打算、没调工具、finish_reason=stop, 回合就结束了 —— 10/5 一晚三次。hermes
-    # 没有"承诺了动作却没动作"的续跑, 这里替员工按最多两次「继续」。必须在
-    # P15 之后装: 续跑那一轮也要经过 P15 的审批桥。详见 plugin_auto_continue.py。
+    # 没有"承诺了动作却没动作"的续跑 (v0.22 原生续跑只认英文 / 泰文), 这里替员工按最多两次「继续」。
+    # 详见 plugin_auto_continue.py。
     _try_patch(_patch_p50_auto_continue, "P50: _patch_p50_auto_continue 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P3.4.C 6/15 鸿波: hard replace session_search. 用 try/except 包住 — P16 挂也不
     #   阻塞 hermes 启动 (鸿波 6/15 21:35 撞 hermes 起不来 "Could not connect", 真因
@@ -423,12 +421,6 @@ def _apply_patches() -> None:
     # P3.4.D 6/15 鸿波: bg-review HTTP 400 X-Catfish-User missing — patch AIAgent.__init__
     #   post-init, bg-review review_agent 从 session_registry 拿 parent cf_user 注入.
     _try_patch(_patch_p17_bg_review_inject, "P17: _patch_p17_bg_review_inject 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
-    # P3.5.18 Phase 2 (6/17 鸿波"自动进行压缩, 提示这个不是觉得奇怪"): hermes preflight
-    # 自动压缩时**Companion 0 反馈** — chat 卡 30 秒不知道发生啥. 修法:
-    # _create_agent post-init 注入 status_callback 桥 tool_progress_callback,
-    # preflight `_emit_status('📦 Preflight compression...')` 经 catfish-lifecycle
-    # tool name 走 SSE hermes.tool.progress channel → Companion 接 + 显 inline.
-    _try_patch(_patch_p19_status_callback_bridge, "P19: _patch_p19_status_callback_bridge 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P3.5.65 P20 (6/22 鸿波 catch "审批按钮一直不弹"): wrap approve_permanent /
     # load_permanent, 拦截 execute_code 进 _permanent_approved.
     # 真因 (read-only diagnostic 实证): 用户某次 audit UI 点 "always", 把
@@ -491,12 +483,6 @@ def _apply_patches() -> None:
     # add_post 同时机.
     _try_patch(_patch_p26_cron_rest_endpoints, "P26: _patch_p26_cron_rest_endpoints 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
 
-    # P27 (P3.5.106 6/25 鸿波 catch "失败不重试"): cron 任务失败 5/10/15 分钟 三档
-    # 自动重试. wrap cron.jobs.mark_job_run, success=False 时改 next_run_at = now +
-    # backoff, 累计 3 次后让 hermes 真按 schedule 跑下次 (退出 retry). delivery_error
-    # 不触发 retry (agent 跑出来了, 发不出去是渠道问题). 跟 P21/P25 真独立 — 它们
-    # wrap run_job, P27 wrap mark_job_run, 0 嵌套冲突.
-    _try_patch(_patch_p27_cron_auto_retry, "P27: _patch_p27_cron_auto_retry 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
 
     # P28 (P3.5.123 6/25 鸿波 catch "微信里 ClawBot 英文不合适"): :
     # wrap WeixinAdapter.send 真str.replace 英文 → 中文** (approval / 中断提示 /
@@ -510,7 +496,7 @@ def _apply_patches() -> None:
     # 处理 (gateway/run.py:9263-9289), /v1/chat/completions (APIServerAdapter) 严格
     # 不过 slash command dispatcher. Companion 员工输 "/learn xxx" → LLM 只当 prompt
     # 释义. P29 wrap _run_agent 前置检测 → 调 hermes agent.learn_prompt.build_learn_prompt
-    # 翻译 → 替换 message → P15 approval 闭包 → hermes original _run_agent.
+    # 翻译 → 替换 message → hermes original _run_agent。
     _try_patch(_patch_p29_learn_slash_translate, "P29: _patch_p29_learn_slash_translate 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
 
     # P30 (P3.5.198 7/8 鸿波 catch "微信扫码绑定 Error: start 失败 404"):
@@ -631,9 +617,12 @@ def pre_tool_call_safety_check(*args, **kwargs):
 
     Hermes protocol (hermes_cli/plugins.py:1666 get_pre_tool_call_block_message):
       - 返 dict {"action": "block", "message": "..."} → hermes 真 block tool call, message 真给 LLM
-      - raise / 真返其它 → silently ignored, tool call 真继续
+      - raise → v0.22 起按「检查没做出决定」处理, **拦下这次工具调用** (fail-closed,
+        plugins_dispatch.py _policy_error_block_directive); v0.21 及以前是忽略、照常执行
+      - 返 None → tool call 继续
 
     本 hook 真职责: plugin 装载 invariant — 没装 raise (跨员工 P0 风险).
+    v0.22 起这个 raise 真的会拦住工具 (以前只是记日志), 正是这里要的「拒服务」。
 
     BL-LLM-NO-TERMINAL-BYPASS-V2 (2026-06-03) 历史:
       v1 在这里 block terminal 真 LLM 直调路径, 撤回真因 hermes hook 真无

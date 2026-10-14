@@ -107,3 +107,15 @@ def test_empty_todo_read_is_not_blocked_without_semantic_evidence():
         args={},
         task_id="task-plan-read",
     ) is None
+
+
+def test_v022_renamed_todo_list_is_guarded_too():
+    """hermes v0.22 把 todo 改名 todo_list —— 新名字也要拦。"""
+    result = todo_collision_guard.todo_collision_guard_hook(
+        tool_name="todo_list",
+        args={"todos": [{"id": "r", "content": "查询 Reminders 中本周的待办", "status": "in_progress"}]},
+        task_id="task-v022",
+    )
+    assert result is not None and result["action"] == "block"
+    assert '"scope":"week"' in result["message"]
+    assert "不要重复调用 todo_list" in result["message"]

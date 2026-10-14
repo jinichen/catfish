@@ -255,106 +255,11 @@ def _patch_p13_dump_naming_type_tag() -> None:
 
 
 
-# ── P19 (P3.5.18 Phase 2, 6/17 鸿波 audit miss revert 后 正确路径) ─
-#
-# # 鸿波诉求 verbatim 链 (P3.5.17.c.1 commit + P3.5.18 design doc)
-#
-# > "自动进行压缩, 提示这个不是觉得奇怪" (P3.5.17.c.1 commit verbatim)
-# > "为什么还是提示, 直接压缩, 压缩过程可以弹窗显示压缩进度" (P3.5.18 design)
-#
-# P3.5.17.b 已修 hermes 自带 ContextCompressor (catfish-gateway auth fallback
-# 让 hermes-cli auxiliary 缺 X-Catfish-User 不再 400 paused). hermes preflight
-# 真自动 trigger compress_context**, 但 真Companion 0 反馈** — chat 卡 30s
-# 不知道发生啥, 鸿波感知 "怎么还没回?".
-#
-# # 真audit 真因** (6/17 22:50)
-#
-# hermes `_create_agent` (api_server.py:1068) 真0 status_callback 参数**:
-#   def _create_agent(self, ..., stream_delta_callback, tool_progress_callback,
-#                     tool_start_callback, tool_complete_callback, ...):
-#
-# `_run_agent` (line 3584) 真call _create_agent 也没传 status_callback.
-# `AIAgent(model=, ..., status_callback=status_callback)` 真永 None**.
-#
-# preflight `agent._emit_status("📦 Preflight compression: ...")` (run_agent.py:761)
-# → `self._vprint(...)` 真 CLI 显 + `self.status_callback(...)` 真 None skip.
-# → API server (Companion) 0 收, telegram/discord/slack 真 wire callback 真 收.
-#
-# # 修法
-#
-# P19 wrap `APIServerAdapter._create_agent` post-init:
-#   1. 捕获 kwargs.tool_progress_callback (hermes `_run_agent` 真传)
-#   2. create `catfish_status_callback(kind, message)` 桥 tool_progress_callback:
-#      tool_progress_callback(
-#          event_type=f"catfish.lifecycle.{kind}",
-#          tool_name="catfish-lifecycle",
-#          preview=message,
-#      )
-#   3. `agent.status_callback = catfish_status_callback` (instance attr set)
-#
-# `tool_progress_callback` 真stream_q.put(("__tool_progress__", payload))**
-# → SSE 真`event: hermes.tool.progress` (api_server.py:2207) Companion 接 显.
-#
-# Companion 真配套改 lib/chat.ts**: handle `tool === "catfish-lifecycle"`
-# → onLifecycle callback → useChat → ChatPanel inline 显 "📦 Compacting...".
-#
-# # 和 P11 model_override 真叠加 wrap**
-#
-# P5/P6/P11 已 wrap `_create_agent` (line 930). P19 叠加同样 pattern —
-# `_orig_create_agent = APIServerAdapter._create_agent` 这时拿到 真P5/P6/P11-wrapped
-# 版本**, call 完后 真post-init inject status_callback**. 不破 P5/P6/P11.
-
-def _patch_p19_status_callback_bridge() -> None:
-    """P19: post-init 注入 agent.status_callback 桥 tool_progress_callback.
-
-    让 hermes preflight 自动压缩 真SSE 推 progress 给 Companion**, 用户
-    看 chat 真不再卡 30s 不知道发生啥**.
-    """
-    from gateway.platforms.api_server import APIServerAdapter
-
-    _orig_create_agent_p19 = APIServerAdapter._create_agent
-
-    def patched_create_agent_p19(self, *args, **kwargs):
-        agent = _orig_create_agent_p19(self, *args, **kwargs)
-        # 捕获 tool_progress_callback (hermes _run_agent line 3617 真传)
-        tpc = kwargs.get("tool_progress_callback")
-        if tpc is None or not callable(tpc):
-            # caller 真没传 callback** (e.g. non-stream path) — skip wire.
-            return agent
-
-        def catfish_status_callback(kind, message=""):  # noqa: ANN001
-            """桥 `agent._emit_status(msg)` → SSE hermes.tool.progress.
-
-            kind 真hermes 'lifecycle' / 'warn' (run_agent.py:777/794).
-            Companion 真tool="catfish-lifecycle" marker 分发 inline
-            进度 UI 真不污染 tool_calls list**.
-            """
-            try:
-                tpc(
-                    event_type=f"catfish.lifecycle.{kind}",
-                    tool_name="catfish-lifecycle",
-                    preview=str(message)[:500],
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.debug("P19 catfish_status_callback push 失败 (静默): %s", e)
-
-        try:
-            agent.status_callback = catfish_status_callback
-            logger.debug(
-                "P19 agent.status_callback 已注入 (桥 tool_progress_callback)"
-            )
-        except Exception as e:  # noqa: BLE001
-            logger.warning("P19 agent.status_callback set 失败: %s", e)
-        return agent
-
-    APIServerAdapter._create_agent = patched_create_agent_p19
-    logger.info(
-        "P19 APIServerAdapter._create_agent post-init wraps status_callback "
-        "→ SSE catfish-lifecycle ✓"
-    )
-
-
-
+# ── P19 (10/14 退役) ─────────────────────────────────────────────────
+# 原来把 hermes 的压缩 / 等待提示 (agent.status_callback) 桥成 hermes.tool.progress 推给 Companion。
+# 实测它在 Companion 的主路径 (流式 chat/completions) 上从没生效过 (那条路不传 tool_progress_callback);
+# hermes v0.22.0 原生在流里发 `event: hermes.status`, 在 /v1/responses、/v1/runs 上 P19 反而会盖掉原生的。
+# Companion 改接 hermes.status (src/lib/chat.ts)。
 
 # ── P20 (P3.5.65, 6/22 鸿波 catch "审批按钮一直不弹") ──────────────────
 #
@@ -400,6 +305,8 @@ def _patch_p20_block_execute_code_permanent() -> None:
 
     _orig_approve_permanent = _approval_mod.approve_permanent
     _orig_load_permanent = _approval_mod.load_permanent
+    _orig_read_allowlist = _approval_mod._read_permanent_allowlist
+    _orig_save_allowlist = _approval_mod.save_permanent_allowlist
 
     def _wrapped_approve_permanent(pattern_key: str):
         if pattern_key in _EXEC_CODE_PATTERN_KEYS_BLOCKED:
@@ -411,41 +318,66 @@ def _patch_p20_block_execute_code_permanent() -> None:
             return  # 静默丢弃, 不抛 (Hermes UI 仍正常 close)
         return _orig_approve_permanent(pattern_key)
 
-    def _wrapped_load_permanent(patterns: set):
-        # 从 config 加载时过滤掉禁止条目 (洗白用户老 config)
+    def _drop_blocked(patterns, where: str) -> set:
         cleaned = {p for p in patterns if p not in _EXEC_CODE_PATTERN_KEYS_BLOCKED}
-        dropped = patterns - cleaned
+        dropped = set(patterns) - cleaned
         if dropped:
+            logger.warning("P20 红线: %s 过滤掉 %d 条危险 pattern: %r", where, len(dropped), sorted(dropped))
+        return cleaned
+
+    def _wrapped_load_permanent(patterns: set):
+        return _orig_load_permanent(_drop_blocked(patterns, "load_permanent"))
+
+    def _wrapped_read_allowlist() -> set:
+        # v0.22 (10/14): 按员工 profile 懒加载 (_permanent_set) 直接读这里, 不经过 load_permanent,
+        # 只包 load_permanent 拦不住 —— 读取入口一并过滤
+        return _drop_blocked(_orig_read_allowlist(), "_read_permanent_allowlist")
+
+    def _sweep() -> None:
+        """config.yaml 的 command_allowlist 里有 execute_code 就删掉, 内存里同步去掉。
+
+        v0.22 的 save_permanent_allowlist 只增不删 (磁盘上的一律保留), 不能再靠它写回 ——
+        直接改 config。"""
+        from hermes_cli.config import load_config, save_config  # noqa: PLC0415
+
+        config = load_config()
+        raw = config.get("command_allowlist")
+        if isinstance(raw, list) and any(p in _EXEC_CODE_PATTERN_KEYS_BLOCKED for p in raw):
+            config["command_allowlist"] = [p for p in raw if p not in _EXEC_CODE_PATTERN_KEYS_BLOCKED]
+            save_config(config)
             logger.warning(
-                "P20 红线: load_permanent 过滤掉 %d 条危险 pattern: %r",
-                len(dropped), sorted(dropped),
+                "P20 sweep: 从 config.yaml command_allowlist 移除 %r", sorted(_EXEC_CODE_PATTERN_KEYS_BLOCKED)
             )
-        return _orig_load_permanent(cleaned)
+        with _approval_mod._lock:
+            _approval_mod._permanent_set().difference_update(_EXEC_CODE_PATTERN_KEYS_BLOCKED)
+            _approval_mod._permanent_approved.difference_update(_EXEC_CODE_PATTERN_KEYS_BLOCKED)
+            for approved in _approval_mod._permanent_approved_by_home.values():
+                approved.difference_update(_EXEC_CODE_PATTERN_KEYS_BLOCKED)
+            for baseline in _approval_mod._permanent_baseline_by_home.values():
+                baseline.difference_update(_EXEC_CODE_PATTERN_KEYS_BLOCKED)
+
+    def _wrapped_save_allowlist(patterns: set):
+        # 存盘时会把磁盘上的整份并回内存 —— 员工手工加进 config 的 execute_code 也会被并进来
+        result = _orig_save_allowlist(_drop_blocked(patterns, "save_permanent_allowlist"))
+        try:
+            _sweep()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("P20 save 后清理失败 (%s)", e)
+        return result
 
     _approval_mod.approve_permanent = _wrapped_approve_permanent
     _approval_mod.load_permanent = _wrapped_load_permanent
+    _approval_mod._read_permanent_allowlist = _wrapped_read_allowlist
+    _approval_mod.save_permanent_allowlist = _wrapped_save_allowlist
 
-    # 一次性 sweep: 老 install _permanent_approved 已含 execute_code → 移除 + 持久化
+    # 一次性 sweep: 老 install command_allowlist 已含 execute_code → 移除 + 持久化
     try:
-        with _approval_mod._lock:
-            to_drop = _approval_mod._permanent_approved & _EXEC_CODE_PATTERN_KEYS_BLOCKED
-            if to_drop:
-                _approval_mod._permanent_approved -= to_drop
-        if to_drop:
-            try:
-                _approval_mod.save_permanent_allowlist(_approval_mod._permanent_approved)
-                logger.warning(
-                    "P20 一次性 sweep: 从 _permanent_approved 移除 %r, 写回 config.yaml. "
-                    "审批按钮恢复正常.",
-                    sorted(to_drop),
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.warning("P20 sweep: save_permanent_allowlist 失败 (%s)", e)
+        _sweep()
     except Exception as e:  # noqa: BLE001
-        logger.warning("P20 sweep: 读 _permanent_approved 失败 (%s)", e)
+        logger.warning("P20 sweep 失败 (%s)", e)
 
     logger.info(
-        "P20 approve_permanent / load_permanent wrapped — execute_code 永久 "
+        "P20 approve_permanent / load_permanent / allowlist 读写 wrapped — execute_code 永久 "
         "approve 已封死, 每次审批必须员工 explicit 确认 ✓"
     )
 
@@ -567,15 +499,16 @@ def _patch_p29_learn_slash_translate() -> None:
     _orig = APIServerAdapter._run_agent
 
     async def patched_learn_translate(self, *args, **kwargs):
-        # 严格拿 message (第 1 位置参 or kwargs["message"])
+        # 10/14: hermes 一直用关键字 user_message= 传消息 (api_server.py / api_server_openai_routes.py
+        # 的所有调用点), 原来读 args[0] / kwargs["message"] —— 新旧两版都没生效过, 是死代码。
         message: Any = None
         message_source: Optional[str] = None
-        if args:
+        if "user_message" in kwargs:
+            message = kwargs["user_message"]
+            message_source = "user_message"
+        elif args:
             message = args[0]
             message_source = "args"
-        elif "message" in kwargs:
-            message = kwargs["message"]
-            message_source = "kwargs"
 
         # 前置检测 /learn slash command (仅 str, 空白 tolerant)
         if isinstance(message, str):
@@ -595,7 +528,7 @@ def _patch_p29_learn_slash_translate() -> None:
                     if message_source == "args":
                         args = (translated,) + args[1:]
                     else:
-                        kwargs["message"] = translated
+                        kwargs["user_message"] = translated
                 except Exception as e:  # noqa: BLE001
                     logger.warning(
                         "P29 /learn translate 失败 (%s), fall through as normal message. "

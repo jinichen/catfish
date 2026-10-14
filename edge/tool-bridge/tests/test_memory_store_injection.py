@@ -383,3 +383,24 @@ def test_get_memory_store_caches_on_success(monkeypatch: pytest.MonkeyPatch) -> 
     assert s1 is not None
     assert s1 is s2, "cache 失效, 拿到不同实例"
     assert load_call_count[0] == 1, f"load_from_disk 调用了 {load_call_count[0]} 次 (应 1 次)"
+
+
+def test_dispatch_legacy_todo_name_routes_to_v022_todo_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    """hermes v0.22 把 todo 改名 todo_list: 旧名过来要转成新名, 照样注入 store。"""
+    _reset_todo_store_cache(monkeypatch)
+    fake = _StoreInjectionFakeRegistry()
+    fake.get_all_tool_names = lambda: ["memory", "todo_list"]
+    _install_fake_registry(monkeypatch, fake)
+
+    class _FakeTodoStore:
+        def __init__(self):
+            self._items = []
+
+    monkeypatch.setitem(__import__("sys").modules, "tools.todo_tool",
+                        types.SimpleNamespace(TodoStore=_FakeTodoStore))
+
+    result = asyncio.run(adapter.dispatch_tool("todo", {"todos": []}))
+    assert result["ok"] is True
+    call = fake.dispatch_calls[0]
+    assert call["name"] == "todo_list"
+    assert isinstance(call["kwargs"]["store"], _FakeTodoStore)

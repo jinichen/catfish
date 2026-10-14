@@ -62,11 +62,13 @@ export const TOOL_ZH: Readonly<Record<string, string>> = {
   browser_type: "网页输入",
   browser_vision: "看网页截图",
   cronjob: "定时任务",
+  cronjob_manage: "定时任务", // hermes v0.22 改名
   delegate_task: "派子任务",
   execute_code: "跑代码",
   memory: "记忆",
   patch: "改文件",
   process: "管进程",
+  process_manage: "管进程", // hermes v0.22 改名
   read_file: "读文件",
   search_files: "搜文件",
   session_search: "搜历史会话",
@@ -75,6 +77,7 @@ export const TOOL_ZH: Readonly<Record<string, string>> = {
   skills_list: "列技能",
   terminal: "终端命令",
   todo: "待办",
+  todo_list: "待办", // hermes v0.22 改名
   tool_call: "调工具",
   tool_describe: "查工具说明",
   tool_search: "搜工具",

@@ -29,7 +29,7 @@ def test_hermes_deps_list() -> None:
     wh = _load("build_hermes_wheelhouse")
     binary, source_only = wh.extras()
     names = {wh.norm(r.split("=")[0].split("<")[0]) for r in binary + source_only}
-    for want in ("jieba", "playwright", "watchdog", "pypdfium2", "openpyxl", "python_docx",
+    for want in ("jieba", "playwright", "watchdog", "pyyaml", "pypdfium2", "openpyxl", "python_docx",
                  "python_pptx", "xlrd"):
         assert want in names, f"清单缺 {want}: {sorted(names)}"
     assert "jieba" in source_only, "jieba 只有源码包, 要标 sdist"

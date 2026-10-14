@@ -157,7 +157,11 @@ def _patch_p39_codex_app_server_auth_bypass() -> None:
     @functools.wraps(original)
     def patched_runtime_agent_kwargs():
         try:
-            config = _gateway_run._load_gateway_runtime_config()
+            # v0.22 (10/14): _load_gateway_runtime_config 并进了 _load_gateway_config
+            # (它现在自己就展开 ${VAR}); 新旧两版都认
+            _load = getattr(_gateway_run, "_load_gateway_runtime_config", None) \
+                or _gateway_run._load_gateway_config
+            config = _load()
         except Exception as e:  # noqa: BLE001
             logger.warning("P39 读取 runtime 配置失败, fallback Hermes 原路径: %s", e)
             return original()
@@ -253,13 +257,15 @@ def _patch_p39_codex_app_server_auth_bypass() -> None:
 
     # Hermes API server 每个 HTTP 回合都会新建 AIAgent，而上游把 Codex session
     # 挂在临时 agent 上。这会让每条消息都重启 codex app-server、重载 MCP，且
-    # 临时 agent 销毁后子进程没有被 close。这里按聊天 + 模型 + cwd 复用 session，
-    # 同时把 Codex 的 final_answer delta 接回 Hermes SSE。
+    # 临时 agent 销毁后子进程没有被 close。这里按聊天 + 模型 + cwd 复用 session
+    # (v0.22 起流式输出由上游事件桥负责, 见 patched_codex_turn)。
     from agent import codex_runtime as _codex_runtime  # noqa: PLC0415
 
     original_turn = getattr(_codex_runtime, "run_codex_app_server_turn", None)
     if original_turn is None:
         raise RuntimeError("agent.codex_runtime.run_codex_app_server_turn 不存在")
+    if not hasattr(_codex_runtime, "make_codex_app_server_event_bridge"):
+        raise RuntimeError("agent.codex_runtime.make_codex_app_server_event_bridge 不存在 (v0.22 起靠它出流式)")
     if not getattr(original_turn, "_catfish_p39_stream_patched", False):
         atexit.register(_p39_close_all_codex_sessions)
 
@@ -287,42 +293,6 @@ def _patch_p39_codex_app_server_auth_bypass() -> None:
                 session_id = f"anonymous-{id(agent)}"
             model = str(getattr(agent, "model", "") or "").strip()
             return f"{tenant}\x1f{session_id}\x1f{model}\x1f{cwd}"
-
-        def _new_codex_session(agent, cwd: str):
-            from agent.transports.codex_app_server_session import (  # noqa: PLC0415
-                CodexAppServerSession,
-                _ServerRequestRouting,
-            )
-
-            try:
-                from tools.terminal_tool import _get_approval_callback  # noqa: PLC0415
-
-                approval_callback = _get_approval_callback()
-            except Exception:
-                approval_callback = None
-
-            auto_approve_requests = False
-            try:
-                from tools.approval import is_approval_bypass_active  # noqa: PLC0415
-
-                auto_approve_requests = is_approval_bypass_active()
-            except Exception:
-                logger.debug(
-                    "P39 Codex approval-bypass lookup failed; keeping fail-closed",
-                    exc_info=True,
-                )
-
-            return CodexAppServerSession(
-                cwd=cwd,
-                approval_callback=approval_callback,
-                request_routing=_ServerRequestRouting(
-                    auto_approve_exec=auto_approve_requests,
-                    auto_approve_apply_patch=auto_approve_requests,
-                ),
-                # Refreshed for every checked-out turn below. Keeping it empty
-                # here avoids retaining the first temporary AIAgent forever.
-                on_event=None,
-            )
 
         def _checkout_cache_entry(key: str, factory):
             """Return an entry with its per-session turn lock held."""
@@ -354,9 +324,16 @@ def _patch_p39_codex_app_server_auth_bypass() -> None:
 
         @functools.wraps(original_turn)
         def patched_codex_turn(agent, *args, **kwargs):
+            # v0.22 (10/14): 上游自己建 session (带 developer_instructions / 模型 / codex 路径 /
+            # 线程续接), 自己用 make_codex_app_server_event_bridge 把 delta、思考、工具进度
+            # 接到 agent 回调。我们原来那套自建 session + 自己映射 delta 全部退役, 只留
+            # "跨 AIAgent 复用同一个 codex 子进程" 这一层:
+            #   命中 → 把池里的 session 和它的 prompt/provider 记录挂到这个新 agent 上,
+            #          事件桥换成绑这个 agent 的; 上游 _ensure_codex_session 发现 prompt
+            #          变了会自己退役重建
+            #   没命中 → 上游照常建, 回合结束收进池子
             callback = getattr(agent, "stream_delta_callback", None)
             seen_delta = False
-            final_answer_items: set[str] = set()
 
             def tracking_callback(delta):
                 nonlocal seen_delta
@@ -366,55 +343,6 @@ def _patch_p39_codex_app_server_auth_bypass() -> None:
                     return callback(delta)
                 return None
 
-            def on_codex_event(note):
-                if not isinstance(note, dict):
-                    return
-                method = str(note.get("method") or "")
-                params = note.get("params") or {}
-                if not isinstance(params, dict):
-                    params = {}
-
-                if method == "item/started":
-                    item = params.get("item") or {}
-                    if isinstance(item, dict):
-                        item_id = str(item.get("id") or "")
-                        phase = str(item.get("phase") or "")
-                        if (
-                            item_id
-                            and item.get("type") == "agentMessage"
-                            and phase == "final_answer"
-                        ):
-                            final_answer_items.add(item_id)
-
-                elif method == "item/agentMessage/delta":
-                    item_id = str(params.get("itemId") or "")
-                    delta = params.get("delta")
-                    # Only surface final-answer text. Commentary/reasoning also
-                    # arrives as agentMessage deltas and must stay out of the
-                    # visible assistant bubble.
-                    if item_id in final_answer_items and delta:
-                        tracking_callback(delta)
-
-                elif method == "item/completed":
-                    item = params.get("item") or {}
-                    if isinstance(item, dict):
-                        final_answer_items.discard(str(item.get("id") or ""))
-
-                progress_callback = getattr(agent, "tool_progress_callback", None)
-                if progress_callback is not None:
-                    mapped = _codex_runtime._codex_note_to_tool_progress(note)
-                    if mapped is not None:
-                        tool_name, preview, tool_args = mapped
-                        try:
-                            progress_callback(
-                                "tool.started", tool_name, preview, tool_args
-                            )
-                        except Exception:
-                            logger.debug(
-                                "P39 Codex tool-progress callback raised",
-                                exc_info=True,
-                            )
-
             _p39_start_codex_janitor()
             _p39_prune_codex_cache()
 
@@ -422,10 +350,9 @@ def _patch_p39_codex_app_server_auth_bypass() -> None:
 
             cwd = str(getattr(agent, "session_cwd", None) or resolve_agent_cwd())
             key = _cache_key_for(agent, cwd)
-            entry, cache_hit = _checkout_cache_entry(
-                key, lambda: _new_codex_session(agent, cwd)
-            )
-            session = entry["session"]
+            entry, _existed = _checkout_cache_entry(key, lambda: None)
+            pooled = entry.get("session")
+            cache_hit = pooled is not None and not getattr(pooled, "_closed", False)
             logger.info(
                 "P39 Codex session cache %s: session=%s model=%s",
                 "hit" if cache_hit else "miss",
@@ -433,29 +360,41 @@ def _patch_p39_codex_app_server_auth_bypass() -> None:
                 or getattr(agent, "_gateway_session_key", ""),
                 getattr(agent, "model", ""),
             )
+            if cache_hit:
+                agent._codex_session = pooled
+                agent._codex_session_prompt = entry.get("prompt")
+                agent._codex_session_model_provider = entry.get("provider")
+                pooled._on_event = _codex_runtime.make_codex_app_server_event_bridge(agent)
 
             if callback is not None:
                 agent.stream_delta_callback = tracking_callback
-            session._on_event = on_codex_event
-            agent._codex_session = session
             result = None
             keep_cached = False
             try:
                 result = original_turn(agent, *args, **kwargs)
             finally:
-                # Upstream sets agent._codex_session=None after a crash, timeout,
-                # auth failure, or explicit retirement. Never put that dead
-                # subprocess back in the pool.
-                keep_cached = (
-                    getattr(agent, "_codex_session", None) is session
-                    and not getattr(session, "_closed", False)
-                )
-                session._on_event = None
+                # 上游在崩溃 / 超时 / 认证失败 / 主动退役时把 agent._codex_session 置 None
+                # 并 close —— 死掉的子进程绝不能放回池子。
+                session = getattr(agent, "_codex_session", None)
+                keep_cached = session is not None and not getattr(session, "_closed", False)
+                if pooled is not None and pooled is not session:
+                    # 上游因 prompt / provider 变了退役了池里那个, 它已经 close 过; 再关一次无害
+                    try:
+                        pooled.close()
+                    except Exception:  # noqa: BLE001
+                        logger.debug("P39 关闭被退役的 Codex session 失败", exc_info=True)
+                if keep_cached:
+                    session._on_event = None  # 不攥住这个临时 AIAgent
+                    entry["session"] = session
+                    entry["prompt"] = getattr(agent, "_codex_session_prompt", None)
+                    entry["provider"] = getattr(agent, "_codex_session_model_provider", None)
+                # agent 的 _cleanup 会关它挂着的 session; 摘下来, 池子才是唯一的主人
                 agent._codex_session = None
                 if callback is not None:
                     agent.stream_delta_callback = callback
                 entry["last_used"] = time.monotonic()
                 if not keep_cached:
+                    entry["session"] = None
                     with _P39_CODEX_CACHE_LOCK:
                         if _P39_CODEX_CACHE.get(key) is entry:
                             _P39_CODEX_CACHE.pop(key, None)
@@ -465,8 +404,6 @@ def _patch_p39_codex_app_server_auth_bypass() -> None:
             if callback is not None and not seen_delta and final_text:
                 callback(final_text)
                 logger.info("P39 Codex final_response bridged to SSE delta")
-            elif callback is not None and seen_delta:
-                logger.info("P39 Codex final_answer streamed incrementally to SSE")
 
             # Enforce LRU after a miss; the active entry was locked during the
             # pre-turn prune and therefore could not be selected as a victim.

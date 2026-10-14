@@ -56,27 +56,59 @@ def canonical_catfish_name(name: str, registered=_registered):
     return None
 
 
+#: 原函数说"不是 deferred 工具"的几种说法 —— v0.21 一句; v0.22 (10/14) 拆成两句:
+#: 已直接列出的 ("is a directly-listed tool") / 名字不认识 (漏前缀时, "is not a known tool name")
+NOT_DEFERRABLE_MARKERS = (
+    "is not a deferrable tool",
+    "is a directly-listed tool",
+    "is not a known tool name",
+)
+
+
+def _single_entry(args):
+    """tool_call 参数里的唯一一条 (name, arguments); 解析不了 / 不止一条 → (None, err)。
+
+    v0.22 起参数可以是 {"name", "arguments"} 也可以是 {"calls": [...]}, 交给原生的
+    normalize_tool_call_entries 统一解析 (arguments 是 JSON 字符串也由它处理)。"""
+    try:
+        from tools.tool_search import normalize_tool_call_entries
+    except ImportError:
+        normalize_tool_call_entries = None
+    if normalize_tool_call_entries is not None:
+        entries, err = normalize_tool_call_entries(args or {})
+        if err:
+            return None, err
+        if len(entries) != 1:
+            return None, "multi"
+        return (entries[0]["name"], entries[0]["arguments"]), None
+    # 老版本: 只有 name / arguments
+    raw = (args or {}).get("arguments")
+    if raw is None:
+        raw = {}
+    if isinstance(raw, str):
+        import json
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError as e:
+            return None, f"tool_call 'arguments' is not valid JSON: {e}"
+    if not isinstance(raw, dict):
+        return None, "tool_call 'arguments' must be an object"
+    return (str((args or {}).get("name") or ""), raw), None
+
+
 def wrap_resolve(orig, registered=_registered):
     def patched(args):
         name, raw_args, err = orig(args)
-        if err and "is not a deferrable tool" in err:
-            canon = canonical_catfish_name(str((args or {}).get("name") or ""), registered)
+        if err and any(m in err for m in NOT_DEFERRABLE_MARKERS):
+            entry, perr = _single_entry(args)
+            canon = canonical_catfish_name(str(entry[0] or ""), registered) if entry else None
             if canon:
-                # 原函数在报错前已把 arguments 解析好了? 没有 —— 报错分支返回的是 {}。
-                # 重新按原函数的规则解析一遍 (字符串 JSON / dict)。
-                raw = (args or {}).get("arguments")
-                if raw is None:
-                    raw = {}
-                if isinstance(raw, str):
-                    import json
-                    try:
-                        raw = json.loads(raw)
-                    except json.JSONDecodeError as e:
-                        return None, {}, f"tool_call 'arguments' is not valid JSON: {e}"
-                if not isinstance(raw, dict):
-                    return None, {}, "tool_call 'arguments' must be an object"
                 logger.info("P53 tool_call → 已提升的 catfish 工具 %s, 直接转发", canon)
-                return canon, raw, None
+                return canon, entry[1], None
+            if entry is None and perr != "multi" and canonical_catfish_name(
+                    str((args or {}).get("name") or ""), registered):
+                # 是 catfish 工具但参数坏了: 报参数的错 (模型能照着改), 别报"不是 deferred 工具"
+                return None, {}, perr
         return name, raw_args, err
 
     patched._catfish_p53 = True

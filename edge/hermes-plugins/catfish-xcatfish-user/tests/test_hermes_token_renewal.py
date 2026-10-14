@@ -169,7 +169,7 @@ def event_loop():
 
 def _run(coro):
     """方便老 sync test 调 async helper."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 def test_get_fresh_returns_none_when_no_token(reset_env):

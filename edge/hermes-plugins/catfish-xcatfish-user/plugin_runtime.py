@@ -200,60 +200,51 @@ def _patch_p1_agent_init() -> None:
 
 # ── P3 ───────────────────────────────────────────────────────────────────
 
-def _patch_p3_auxiliary_client() -> None:
-    """
-    P3a: _MAIN_RUNTIME_FIELDS 加 catfish_outgoing_user — _normalize_main_runtime
-         和 _client_cache_key 都是 runtime lookup, module 属性赋新 tuple 即生效.
+def _aux_identity_headers(aux, extra_headers):
+    """辅助模型请求要带的员工身份头 —— 只发给 catfish 网关, 不发给第三方。"""
+    cf_user = (_ctx().CV_CF_USER.get() or "").strip()
+    if not cf_user:
+        return extra_headers
+    try:
+        base_url = str(aux._normalize_main_runtime(None).get("base_url") or "")
+    except Exception:  # noqa: BLE001
+        return extra_headers
+    if not _is_catfish_gateway_base_url(base_url):
+        return extra_headers
+    merged = dict(extra_headers or {})
+    merged.setdefault("X-Catfish-User", cf_user)
+    return merged
 
-    P3b: _resolve_auto wrap — return 前 rebuild OpenAI/AsyncOpenAI client
-         带 default_headers={"X-Catfish-User": cf_user}.
+
+def _patch_p3_auxiliary_client() -> None:
+    """P3: 辅助模型调用 (压缩摘要 / 起标题 / smart 审批判断 ...) 带上员工身份 X-Catfish-User。
+
+    10/14 (hermes v0.22.0) 重写。原来的两段都已失效:
+      · P3a 往 _MAIN_RUNTIME_FIELDS 塞 catfish_outgoing_user —— v0.21 起 set_runtime_main 按固定字段
+        建 dict, 每轮 KeyError (被 turn_context 吞掉), 从没生效;
+      · P3b 包 _resolve_auto 重建带头的 client —— v0.21 里已没人调它, v0.22 直接删了 (改名 _resolve_auto_route)。
+    现在包 _plan_aux_call —— 同步 / 异步两条路 (_call_llm_impl / _async_call_llm_impl) 都按模块属性调它,
+    它收 extra_headers 并带进请求 (异步那条在 v0.22 自己不收 extra_headers, 只能在这一层补)。
+    员工从请求上下文 CV_CF_USER 取; 只在本轮主模型走 catfish 网关时补, 第三方端点不发员工标识。
     """
     from agent import auxiliary_client as aux
 
     # P47: 私有模型的 auxiliary 失败后只报错，不允许 Hermes 自己降级到公网。
     _sib("private_auxiliary_guard").patch(aux)
 
-    # P3a
-    if "catfish_outgoing_user" not in aux._MAIN_RUNTIME_FIELDS:
-        aux._MAIN_RUNTIME_FIELDS = aux._MAIN_RUNTIME_FIELDS + ("catfish_outgoing_user",)
+    if getattr(aux._plan_aux_call, "_catfish_p3", False):
+        return
+    orig_plan = aux._plan_aux_call
 
-    # P3b
-    _orig_resolve = aux._resolve_auto
+    def plan_aux_call(*args, **kwargs):
+        explicit = str(kwargs.get("base_url") or "")
+        # 调用方点名了别的端点 → 不是发给 catfish 网关的, 不带员工标识
+        if not explicit or _is_catfish_gateway_base_url(explicit):
+            kwargs["extra_headers"] = _aux_identity_headers(aux, kwargs.get("extra_headers"))
+        return orig_plan(*args, **kwargs)
 
-    def patched_resolve_auto(main_runtime=None, task=None):
-        # P3.5.88 (6/23 鸿波 catch context_compressor TypeError): hermes upstream
-        # _resolve_auto 升级签名加 task=None 参数 (用于 task-specific aux routing).
-        # P3 老 signature 单 main_runtime 撞 TypeError → context compression fail →
-        # Companion 报 Load failed. 补 task=None + forward 给 _orig.
-        client, model = _orig_resolve(main_runtime=main_runtime, task=task)
-        try:
-            if client is None:
-                return client, model
-            runtime = aux._normalize_main_runtime(main_runtime)
-            cf_user = (runtime.get("catfish_outgoing_user") or "").strip()
-            if not cf_user:
-                return client, model
-            base_url = str(getattr(client, "base_url", "") or "")
-            # P29 (6/5): 走 _is_catfish_gateway_base_url 真 env-aware 检测,
-            # 不再硬编码 localhost:8999 字符串 (中央部署 IP 会变)真.
-            if not _is_catfish_gateway_base_url(base_url):
-                return client, model
-            cls = type(client)
-            if cls.__name__ not in ("OpenAI", "AsyncOpenAI"):
-                return client, model
-            api_key = getattr(client, "api_key", "") or runtime.get("api_key", "") or ""
-            client = cls(
-                api_key=api_key,
-                base_url=str(getattr(client, "base_url", "") or ""),
-                default_headers={"X-Catfish-User": cf_user},
-            )
-        except Exception as e:
-            logger.debug("P3b _resolve_auto rebuild failed: %s", e)
-        return client, model
-
-    aux._resolve_auto = patched_resolve_auto
-
-
+    plan_aux_call._catfish_p3 = True
+    aux._plan_aux_call = plan_aux_call
 
 
 def _patch_p5_p6_p11_api_server_create_agent_and_picker() -> None:
@@ -394,40 +385,44 @@ def _patch_p5_p6_p11_api_server_create_agent_and_picker() -> None:
 def _patch_p10_apply_client_headers_localhost() -> None:
     """AIAgent._apply_client_headers_for_base_url 加 localhost:8999 分支.
 
-    wrap: 先 check 是不是 catfish-gateway, 是就跑我们 5 步链 set X-Catfish-User,
-    return. 不是就调 orig (其它 provider OpenRouter/NIM/Codex etc.).
+    wrap: 先跑 orig (URL / profile / 用户 / provider 的头), 是 catfish-gateway 再把
+    X-Catfish-User / X-Catfish-Source 盖上去。
     """
     from run_agent import AIAgent
 
     _orig = AIAgent._apply_client_headers_for_base_url
 
-    def patched(self, base_url: str) -> None:
+    def patched(self, base_url: str, *args, **kwargs) -> None:
+        # v0.22 (10/14): 先跑原生 —— 它现在还要合并 config model.default_headers 和
+        # custom provider 的 extra_headers (还多了 keyword-only 的 apply_user_headers),
+        # 我们不能再整个替换掉, 只在它算完之后把 catfish 两个头盖上去。
+        _orig(self, base_url, *args, **kwargs)
         # P29 (6/5): env-aware gateway 检测, 不再硬编码 localhost:8999.
-        if _is_catfish_gateway_base_url(base_url or ""):
-            cf_user = _resolver().resolve_for_agent(self)
-            headers: dict[str, str] = {}
-            if cf_user:
-                headers["X-Catfish-User"] = cf_user
-            # P41 (8/8): 来源标记跟着走。中间件在 inbound 请求上 set 的 CV,
-            # 经 _patch_asyncio_executor_for_contextvars 的 copy_context 一路
-            # 带到 executor 线程, 这里读得到。
-            #
-            # **跟 X-Catfish-User 解耦**: 有 source 没 user 的场景 (CLI / cron
-            # 调 hermes 时不带 user) 也要标得住, 所以不写在 if cf_user 里面。
-            try:
-                cf_source = (_ctx().CV_CF_SOURCE.get() or "").strip()
-            except Exception:  # noqa: BLE001  CV 不该抛, 抛了也不能拖垮发请求
-                cf_source = ""
-            if cf_source:
-                headers["X-Catfish-Source"] = cf_source
-
-            if headers:
-                self._client_kwargs["default_headers"] = headers
-            else:
-                # 两个都没有时 explicit clear (防别地方继承上一轮)
-                self._client_kwargs.pop("default_headers", None)
+        if not _is_catfish_gateway_base_url(base_url or ""):
             return
-        return _orig(self, base_url)
+        headers = dict(self._client_kwargs.get("default_headers") or {})
+        # 上一轮的值不能继承 (这一轮没有 user / source 就该不带)
+        headers.pop("X-Catfish-User", None)
+        headers.pop("X-Catfish-Source", None)
+        cf_user = _resolver().resolve_for_agent(self)
+        if cf_user:
+            headers["X-Catfish-User"] = cf_user
+        # P41 (8/8): 来源标记跟着走。中间件在 inbound 请求上 set 的 CV,
+        # 经 _patch_asyncio_executor_for_contextvars 的 copy_context 一路
+        # 带到 executor 线程, 这里读得到。
+        #
+        # **跟 X-Catfish-User 解耦**: 有 source 没 user 的场景 (CLI / cron
+        # 调 hermes 时不带 user) 也要标得住, 所以不写在 if cf_user 里面。
+        try:
+            cf_source = (_ctx().CV_CF_SOURCE.get() or "").strip()
+        except Exception:  # noqa: BLE001  CV 不该抛, 抛了也不能拖垮发请求
+            cf_source = ""
+        if cf_source:
+            headers["X-Catfish-Source"] = cf_source
+        if headers:
+            self._client_kwargs["default_headers"] = headers
+        else:
+            self._client_kwargs.pop("default_headers", None)
 
     AIAgent._apply_client_headers_for_base_url = patched
 

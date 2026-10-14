@@ -225,22 +225,28 @@ def _patch_p16_session_search() -> None:
         window: int = 5,
         sort: Optional[str] = None,
         profile: Optional[str] = None,
+        *args: Any,
+        **kwargs: Any,
     ) -> str:
-        """P3.4.C (6/15 鸿波): discovery 走 catfish 快版, 其他透传原生."""
+        """P3.4.C (6/15 鸿波): discovery 走 catfish 快版, 其他透传原生.
+
+        v0.22 (10/14) 原生多了 detail / after / before / exclude_session_ids (以后还可能再加),
+        一律 *args/**kwargs 原样透传; 带了时间范围或排除列表的搜索快版不支持, 走原生。"""
         # patched 函数内部的所有异常都 try/except 包住, 退化到原生.
         try:
             # 非 discovery (scroll / read / browse / cross-profile) → 透传原生
             if session_id or around_message_id is not None or profile:
                 return _orig_session_search(
-                    query=query, role_filter=role_filter, limit=limit, db=db,
-                    current_session_id=current_session_id, session_id=session_id,
-                    around_message_id=around_message_id, window=window, sort=sort,
-                    profile=profile,
+                    query, role_filter, limit, db, current_session_id, session_id,
+                    around_message_id, window, sort, profile, *args, **kwargs,
                 )
-            if not query or not isinstance(query, str) or not query.strip():
+            filtered = args or any(
+                kwargs.get(k) for k in ("after", "before", "exclude_session_ids")
+            )
+            if filtered or not query or not isinstance(query, str) or not query.strip():
                 return _orig_session_search(
-                    query=query, role_filter=role_filter, limit=limit, db=db,
-                    current_session_id=current_session_id,
+                    query, role_filter, limit, db, current_session_id, session_id,
+                    around_message_id, window, sort, profile, *args, **kwargs,
                 )
 
             # Discovery → catfish 快版
@@ -251,8 +257,8 @@ def _patch_p16_session_search() -> None:
                     "P16 catfish 快版异常, fallback hermes 原生: %s", e, exc_info=True
                 )
                 return _orig_session_search(
-                    query=query, role_filter=role_filter, limit=limit, db=db,
-                    current_session_id=current_session_id,
+                    query, role_filter, limit, db, current_session_id, session_id,
+                    around_message_id, window, sort, profile, *args, **kwargs,
                 )
         except Exception as e:  # noqa: BLE001
             # 兜底: patched 函数本身挂 (e.g. _orig_session_search 不接受某个 kwarg) →

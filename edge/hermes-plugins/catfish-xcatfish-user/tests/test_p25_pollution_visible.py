@@ -89,12 +89,17 @@ def test_cron_跑完会还原那个标记():
 
 def test_审批判定优先读_session_作用域():
     """approval 仍然优先走 session 作用域, 而不是直接读进程 env。"""
+    # v0.22 起判定拆进了 tools/approval_context.py
     src = _read("tools/approval.py")
+    try:
+        src += _read("tools/approval_context.py")
+    except FileNotFoundError:
+        pass
     assert "get_session_env" in src, (
         "tools/approval.py 不再用 get_session_env —— 审批判定可能回到进程级 env。"
     )
     # 上游 docstring 里那句承诺也钉一下: 它是这条依赖的来源
-    assert re.search(r"cron job cannot taint unrelated", src), (
+    assert re.search(r"cron(/-q)? job cannot\s+(#\s*)?taint", src), (
         "上游不再承诺「一个 cron job 不会污染无关的 turn」—— 契约变了, "
         "去读实现确认 P25 要不要复活。"
     )

@@ -43,7 +43,7 @@ _ENGLISH_LEAKS = (
 )
 
 
-def _assert_fully_translated(rendered: str, label: str) -> None:
+def _assert_fully_translated(rendered: str, label: str, *, need_zh_entry: bool = True) -> None:
     out = _translate_hermes_zh(rendered)
     leaked = [m for m in _ENGLISH_LEAKS if m in out]
     assert not leaked, (
@@ -52,8 +52,12 @@ def _assert_fully_translated(rendered: str, label: str) -> None:
         f"翻译结果  : {out!r}\n"
         f"→ 去 plugin.py 的 _P28_REPLACEMENTS 补 pattern。"
     )
-    # 翻掉了就必须真出现中文入口, 否则等于翻了个寂寞
-    assert "批准" in out or "拒绝" in out, f"{label}: 没有中文命令入口: {out!r}"
+    assert "Hermes" not in out and "☤" not in out, f"{label}: 品牌没换掉: {out!r}"
+    if need_zh_entry:
+        # 翻掉了就必须真出现中文入口, 否则等于翻了个寂寞
+        assert "批准" in out or "拒绝" in out, f"{label}: 没有中文命令入口: {out!r}"
+    else:
+        assert "运行一次" in out and "取消" in out, f"{label}: 不像中文审批提示: {out!r}"
 
 
 # ── 第一层: 拿 hermes 真函数穷举 (本机装了 hermes 才跑) ────────────────
@@ -75,7 +79,15 @@ def _load_hermes_renderer():
     "allow_permanent,allow_session,smart_denied",
     list(itertools.product([True, False], repeat=3)),
 )
-def test_审批提示的每种变体都能翻成中文(allow_permanent, allow_session, smart_denied):
+def test_审批提示的每种变体都能翻成中文(allow_permanent, allow_session, smart_denied, monkeypatch):
+    # v0.22 起这段全走 t(): 员工机 display.language=zh (Companion 写的) + P58 小鲶包。
+    # 按员工机的真实链路渲染, 再过 P28 兜底。
+    from agent import i18n
+    import plugin_locale_zh
+
+    monkeypatch.setenv("HERMES_LANGUAGE", "zh")
+    i18n.reset_language_cache()
+    plugin_locale_zh._patch_p58_locale_zh()
     render = _load_hermes_renderer()
     rendered = render(
         "rm -rf /tmp/x",
@@ -85,11 +97,16 @@ def test_审批提示的每种变体都能翻成中文(allow_permanent, allow_se
         allow_session=allow_session,
         smart_denied=smart_denied,
     )
-    _assert_fully_translated(
-        rendered,
-        f"allow_permanent={allow_permanent} allow_session={allow_session} "
-        f"smart_denied={smart_denied}",
-    )
+    try:
+        _assert_fully_translated(
+            rendered,
+            f"allow_permanent={allow_permanent} allow_session={allow_session} "
+            f"smart_denied={smart_denied}",
+            need_zh_entry=False,
+        )
+    finally:
+        monkeypatch.delenv("HERMES_LANGUAGE")
+        i18n.reset_language_cache()
 
 
 # ── 第二层: 字面量固化, CI 没装 hermes 也有覆盖 ──────────────────────

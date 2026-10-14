@@ -71,6 +71,7 @@ from .adapter_todo import (  # noqa: F401
     _read_hermes_memory_config,
     _TODO_STORE_DEFAULT_KEY,
     _TODO_STORE_MAX_SESSIONS,
+    _TODO_TOOL_NAMES, canonical_hermes_tool,
     _todo_persist_dir,
     _todo_persist_path,
     _todo_store_cache,
@@ -656,7 +657,7 @@ def _build_extra_kwargs_for_hermes(
             extra_kw["store"] = mem_store
         # store 拿不到也照常 dispatch — hermes memory_tool 会自己返
         # "Memory is not available", 比我们这层拦截更对齐 hermes 错误格式.
-    elif name == "todo":
+    elif name in _TODO_TOOL_NAMES:
         todo_store = _get_todo_store(session_id)
         if todo_store is not None:
             extra_kw["store"] = todo_store
@@ -696,7 +697,7 @@ async def _dispatch_via_hermes_registry(
                 name, type(raw).__name__, raw_repr,
             )
         # BL-TODO-STORE-PERSIST (5/16): todo dispatch 后写盘, 跨进程不丢. 失败 silent.
-        if name == "todo" and "store" in extra_kw:
+        if name in _TODO_TOOL_NAMES and "store" in extra_kw:
             _persist_todo_store(
                 session_id or _TODO_STORE_DEFAULT_KEY, extra_kw["store"],
             )
@@ -746,7 +747,7 @@ async def _do_dispatch(
     # 4 + 5: 需要 registry. 先解析 tool name (含 mcp 短名 fallback).
     r = _r()
     all_names = r.get_all_tool_names()
-    resolved_name, err = _resolve_tool_name_or_error(name, all_names)
+    resolved_name, err = _resolve_tool_name_or_error(canonical_hermes_tool(name, all_names), all_names)
     if err is not None:
         return err
     assert resolved_name is not None  # for type checker
