@@ -285,6 +285,8 @@ _P28_REGEX = [
     (_re.compile(r"⏩ Steer queued — arrives after the next tool call: "), "⏩ 收到, 下一步就用上: "),
     (_re.compile(r"🟡 /(\S+) cancelled\. Conversation unchanged\."), r"🟡 已取消 /\1, 对话没动。"),
     (_re.compile(r"\n✦ (?:Tip: |提示：)[^\n]*"), ""),   # 小贴士内容是英文的 hermes 用法, 对员工没用, 去掉
+    # 开新对话的回执后面跟着 ◆ Model / Provider / Context / Endpoint —— 给运维看的, 员工不用看 (10/14)
+    (_re.compile(r"\n*(?:\n?◆ (?:Model|Provider|Context|Endpoint): [^\n]*)+"), ""),
     (_re.compile(r"（([0-9]+) 条命令）"), r"(\1 条)"),
     (_re.compile(r"⏳ 正在等待 ([0-9]+) 个活跃代理结束后重启\.\.\."), r"⏳ 先等 \1 个进行中的任务做完再重启…"),
     # zh.yaml 里没翻的 /status /context 行

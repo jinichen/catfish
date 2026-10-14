@@ -54,6 +54,13 @@ REFACTOR_BASE = "cc4d71a"
 #: 一个 patch 悄悄多出来跟悄悄少一个同等危险 —— monkey-patch 是全进程生效的，
 #: 谁加的、为什么加、影响面多大，得有地方写。
 INTENTIONALLY_ADDED: dict[str, str] = {
+    "_patch_p57_slash_confirm": (
+        "10/14 加。员工在微信发 /new, 回来的是「确认 · 总是确认 · 取消 / 回复 /approve /always /cancel」"
+        "三选一加斜杠口令 (鸿波: 怎么还是这么麻烦的回复？)。\n"
+        "  改: 包 GatewayRunner._request_slash_confirm 换成一句话 + 回 1/2; 包 _handle_message, "
+        "有确认在等且没有执行审批在等时把 1/2 改写成 /approve /cancel 交给 hermes 原逻辑。\n"
+        "  影响面: 只在 /new /reset /undo 确认等待时碰入站文字; 认不出的照旧当普通消息。"
+    ),
     "_patch_p56_weixin_repeat_answer": (
         "10/13 加。15:08 员工连着两个审批都回「1」, 第二个「1」被 weixin.py 内容去重 (同人同文字 "
         "5 分钟内) 丢掉, 日志里没有入站, 审批 5 分钟后超时。\n"

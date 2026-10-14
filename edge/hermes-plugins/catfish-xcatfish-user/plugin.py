@@ -147,6 +147,14 @@ _patch_p52_busy_approval_reply = plugin_approval_ux._patch_p52_busy_approval_rep
 _patch_p54_readonly_execute_code = plugin_approval_ux._patch_p54_readonly_execute_code  # noqa: F401  (re-export · 见 plugin_approval_ux.py / readonly_code.py)
 _patch_p55_approval_timeout_note = plugin_approval_ux._patch_p55_approval_timeout_note  # noqa: F401  (re-export · 见 plugin_approval_ux.py)
 _patch_p56_weixin_repeat_answer = plugin_approval_ux._patch_p56_weixin_repeat_answer  # noqa: F401  (re-export · 见 plugin_approval_ux.py)
+plugin_slash_confirm_ux = _import_sibling("plugin_slash_confirm_ux")
+
+
+def _patch_p57_slash_confirm() -> None:
+    """P57: /new /undo 的确认回 1/2 (见 plugin_slash_confirm_ux.py)。传 plugin_approval_ux 进去, 跟 P56 共用状态。"""
+    plugin_slash_confirm_ux.patch(plugin_approval_ux)
+
+
 plugin_bridge_promoted = _import_sibling("plugin_bridge_promoted")
 _patch_p53_bridge_promoted_catfish_tools = plugin_bridge_promoted._patch_p53_bridge_promoted_catfish_tools  # noqa: F401  (re-export · 见 plugin_bridge_promoted.py)
 
@@ -400,6 +408,9 @@ def _apply_patches() -> None:
     # P56 (10/13 15:08 第二次回「1」没进来): 微信内容去重把 5 分钟内同样的「1」当重投丢了。
     # 有新审批 + 消息发送时间在新审批之后才放行, 防通道重投替员工批准。
     _try_patch(_patch_p56_weixin_repeat_answer, "P56: _patch_p56_weixin_repeat_answer 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
+    # P57 (10/14 鸿波「怎么还是这么麻烦的回复？」): /new /undo 的确认也是一句话 + 回 1/2,
+    # 不再要背 /approve /always /cancel。必须在 P14 之后装 (都包 _handle_message, 互不干扰)。
+    _try_patch(_patch_p57_slash_confirm, "P57: _patch_p57_slash_confirm 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P50 (10/6 鸿波"中间有三次任务停下来了"): 模型回了一句"逐项目比对。"这种
     # 打算、没调工具、finish_reason=stop, 回合就结束了 —— 10/5 一晚三次。hermes
     # 没有"承诺了动作却没动作"的续跑, 这里替员工按最多两次「继续」。必须在
