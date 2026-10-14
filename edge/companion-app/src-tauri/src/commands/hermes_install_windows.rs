@@ -344,7 +344,15 @@ pub(crate) fn bootstrap(
     writeln!(log, "runtime: {}", artifacts.dir.display())?;
 
     let mut done = 0u8;
-    let backup = step(reporter, "source", "正在解压 Hermes 运行环境", &mut done, || replace_source(&artifacts, paths))?;
+    // 10/14: 网关占着旧目录的文件, 不停的话挪旧目录直接失败; 装完 / 换回旧版后再起
+    let stopped_gateway = super::hermes_install_gateway::stop_for_install(paths);
+    let backup = match step(reporter, "source", "正在解压 Hermes 运行环境", &mut done, || replace_source(&artifacts, paths)) {
+        Ok(backup) => backup,
+        Err(error) => {
+            super::hermes_install_gateway::resume_after_install(paths, stopped_gateway);
+            return Err(error);
+        }
+    };
     let result = (|| -> Result<()> {
         let python = step(reporter, "python", "正在准备 Python 3.14", &mut done, || {
             hermes_install_native::ensure_embedded_python(&artifacts, paths)
@@ -378,8 +386,10 @@ pub(crate) fn bootstrap(
                 return Err(error).context(format!("且恢复旧安装失败: {restore}"));
             }
         }
+        super::hermes_install_gateway::resume_after_install(paths, stopped_gateway);
         return Err(error);
     }
+    super::hermes_install_gateway::resume_after_install(paths, stopped_gateway);
     // 装成功了才清 —— 失败时那些备份可能是现场唯一能翻回去的东西
     prune_replaced_backups(paths, 1);
     writeln!(log, "核心安装完成")?;

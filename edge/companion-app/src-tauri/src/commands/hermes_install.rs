@@ -331,7 +331,15 @@ pub(crate) fn bootstrap_locked(
         total_steps,
         reporter,
     )?;
-    let backup = activate_stage(paths, &stage, reporter, completed_steps, total_steps)?;
+    // 10/14: 换目录前停网关 (否则旧进程读到一半被挪走的文件, 进来的对话失败), 装完 / 回滚后再起
+    let stopped_gateway = super::hermes_install_gateway::stop_for_install(paths);
+    let backup = match activate_stage(paths, &stage, reporter, completed_steps, total_steps) {
+        Ok(backup) => backup,
+        Err(error) => {
+            super::hermes_install_gateway::resume_after_install(paths, stopped_gateway);
+            return Err(error);
+        }
+    };
 
     let install_result = (|| -> Result<()> {
         let python = native_step("python", "正在准备 Python 3.14", &mut completed_steps, total_steps, reporter, || {
@@ -382,11 +390,13 @@ pub(crate) fn bootstrap_locked(
 
     if let Err(error) = install_result {
         let rollback_error = rollback_install(paths, backup.as_ref()).err();
+        super::hermes_install_gateway::resume_after_install(paths, stopped_gateway);
         if let Some(rollback_error) = rollback_error {
             return Err(error).context(format!("且回滚失败: {rollback_error:#}"));
         }
         return Err(error);
     }
+    super::hermes_install_gateway::resume_after_install(paths, stopped_gateway);
 
     if let Some(backup) = backup {
         if backup.preserve {

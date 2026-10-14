@@ -63,6 +63,7 @@ pub mod hermes_install_health;    // 版本解析 + 健康检查 (8/15 切出)
 pub mod hermes_install_recover;   // 中断事务恢复 + 装机锁 (8/15 切出)
 pub mod hermes_install_state;     // 落盘状态 + 原子写 (8/15 切出)
 pub mod hermes_install_steps;     // Unix 装机步骤 + Windows 共用的附加依赖安装
+pub mod hermes_install_gateway;   // 10/14: 换 hermes 目录前停网关, 装完再起
 pub mod hermes_install_native;    // 10/14 hermes v0.22: Companion 自己装 (Python 3.14 + wheelhouse), mac / Windows 共用, 不再调上游安装器
 pub mod hermes_install; // 7/15 BL-CATFISH-MAC-OFFLINE-INSTALL: mac dmg 首启装 hermes-agent 本体 (offline install.sh + 4 artifacts)
 #[cfg(any(target_os = "windows", test))]
