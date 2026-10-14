@@ -245,7 +245,7 @@ _P28_REPLACEMENTS = [
      "conversation history. Your message should already be saved — please send it again in a moment.",
      "⚠️ 对话记录暂时存不了, 这次先停下, 过一会儿再发一次。"),
     ("⚠️ Session too large for the model's context window.\nUse /compact to compress the "
-     "conversation, or /reset to start fresh.", "⚠️ 对话太长了。发 /compact 整理一下, 或发 /reset 开新对话。"),
+     "conversation, or /reset to start fresh.", "⚠️ 对话太长了。发 /compact 整理一下, 或发「开新对话」。"),
     ("⚠️ Your message was interrupted before processing started (likely by a recent /stop). "
      "Please send it again.", "⚠️ 你的消息还没开始处理就被中断了, 再发一次。"),
     ("⚠️ Processing completed but no response was generated. This may be a transient error — "
@@ -255,7 +255,7 @@ _P28_REPLACEMENTS = [
     ("⚠️ The model returned no response after processing tool results. This can happen with some "
      "models — try again or rephrase your question.", "⚠️ 模型这次没给出回复, 再试一次或换个说法。"),
     ("⚠️ The model declined to respond to this request (safety refusal).", "⚠️ 模型拒绝回答这个请求。"),
-    ("\nTry again or use /reset to start a fresh session.", "\n再试一次, 或发 /reset 开新对话。"),
+    ("\nTry again or use /reset to start a fresh session.", "\n再试一次, 或发「开新对话」。"),
     ("Sorry, I encountered an unexpected error.", "抱歉, 出了个意外的错误。"),
     ("The request failed: ", "请求失败: "),
     ("⏳ Another Hermes process is using this session; waiting…", "⏳ 这段对话正被另一处使用, 稍等…"),
@@ -313,14 +313,14 @@ _P28_REGEX = [
      r"没有 /\1 这个命令。发 /commands 看看有哪些, 或者去掉开头的 / 当普通消息发。"),
     (_re.compile(r"⚠️ No activity for ([0-9]+) min\. If the agent does not respond soon, it will be "
                  r"timed out in ([0-9]+) min\. You can continue waiting or use /reset\."),
-     r"⚠️ 已经 \1 分钟没动静了, 再过 \2 分钟还没反应就会停下。可以继续等, 或发 /reset 重来。"),
+     r"⚠️ 已经 \1 分钟没动静了, 再过 \2 分钟还没反应就会停下。可以继续等, 或发「开新对话」重来。"),
     (_re.compile(r"⏱️ Agent inactive for ([0-9]+) min — no tool calls or API responses\.[\s\S]*?"
                  r"Try again, or use /reset to start fresh\."),
-     r"⏱️ 小鲶 \1 分钟没有任何进展, 这次先停下了。再试一次, 或发 /reset 开新对话。"),
+     r"⏱️ 小鲶 \1 分钟没有任何进展, 这次先停下了。再试一次, 或发「开新对话」。"),
     (_re.compile(r"⚠️ Context compression aborted \([^)]*\)\. No messages were dropped — conversation "
                  r"is unchanged\. Run /compress to retry, /reset for a clean session, or check your "
                  r"auxiliary\.compression model configuration\."),
-     "⚠️ 整理对话记录没成功, 对话没有丢。可以发 /compress 再试, 或 /reset 开新对话。"),
+     "⚠️ 整理对话记录没成功, 对话没有丢。可以发 /compress 再试, 或发「开新对话」。"),
     (_re.compile(r"⚠️ Processing stopped: (.*?)\. Try again\."), r"⚠️ 处理中断了: \1。再试一次。"),
     (_re.compile(r"✅ Primary model restored: "), "✅ 主模型恢复了: "),
     (_re.compile(r"⚠️ Iteration budget exhausted \(([^)]*)\) — asking model to summarise"),

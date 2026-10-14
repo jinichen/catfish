@@ -103,3 +103,12 @@ def test_wechat_reset_notice_drops_model_block():
     notice = ("✨ 新会话已启动！\n\n◆ Model: `catfish-public-qwen-flash`\n◆ Provider: custom\n"
               "◆ Context: 128K tokens (detected)\n◆ Endpoint: http://127.0.0.1:8999\n✦ 提示：/debug uploads a bundle")
     assert zh._translate_hermes_zh(notice) == "✨ 新对话开始了。"
+
+
+def test_chinese_commands_whole_message_only():
+    assert _drive("开新对话", pending=False) == "/new"
+    assert _drive("/新对话", pending=False) == "/new"
+    assert _drive("重新开始。", pending=False) == "/new"
+    assert _drive("撤回", pending=False) == "/undo"
+    assert _drive("帮我开新对话的时候记得总结一下", pending=False) == "帮我开新对话的时候记得总结一下"
+    assert _drive("新对话里怎么用", pending=False) == "新对话里怎么用"

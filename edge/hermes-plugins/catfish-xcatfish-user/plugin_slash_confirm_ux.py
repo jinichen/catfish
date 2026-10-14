@@ -11,6 +11,9 @@ hermes 的 destructive_slash_confirm (默认开) 在 /new /reset /undo 之前问
   parse_approval_reply 认出的 1 / 2 / 好 / 不 … 改写成 /approve 或 /cancel, 交给 hermes 原逻辑
   (run.py「Intercept messages that are responses to a pending … slash-confirm prompt」那段)。
   认不出的照旧当普通消息 —— hermes 自己会清掉过期的确认。
+· 中文说法 (10/14 鸿波「现在接受中文的开新对话指令吗」): 整条消息就是「开新对话」「新对话」
+  「重新开始」(带不带 / 都行) → /new; 「撤回」「撤回上一条」→ /undo。只认整条, 句子里提到不算;
+  而且后面还有一步确认, 误触发也不会直接清掉。
 · 跟 P56 配合: 记下提示时间 / 回答时间。不然 5 分钟内刚给执行审批回过「1」, 这次的「1」
   会被微信内容去重当重投吞掉。
 
@@ -25,6 +28,19 @@ import time
 logger = logging.getLogger("catfish.xcatfish_user.plugin")
 
 _UNDO_N = re.compile(r"removes the last (\d+) user turns")
+
+# 整条消息 (去掉开头的 / 和结尾标点) 等于这些 → 对应命令
+ZH_COMMANDS = {
+    "开新对话": "/new", "新对话": "/new", "开个新对话": "/new", "新开对话": "/new",
+    "重新开始": "/new", "开新会话": "/new", "新会话": "/new", "清空对话": "/new",
+    "撤回": "/undo", "撤回上一条": "/undo", "撤回上一轮": "/undo",
+}
+_TRAIL = re.compile(r"[。.!！~～\s]+$")
+
+
+def zh_command(raw: str):
+    t = _TRAIL.sub("", (raw or "").strip().lstrip("/／").strip())
+    return ZH_COMMANDS.get(t)
 
 
 def confirm_prompt(command: str, detail: str = "") -> str:
@@ -82,7 +98,11 @@ def wrap_handle_message(orig, ux, get_pending, has_blocking_approval):
     async def patched(self, event):
         try:
             raw = (event.text or "").strip()
-            if raw and not raw.startswith("/"):
+            cmd = zh_command(raw)
+            if cmd:
+                event.text = cmd
+                logger.info("P57 中文命令: %r → %s", raw[:20], cmd)
+            elif raw and not raw.startswith("/"):
                 key = self._session_key_for_source(event.source)
                 if get_pending(key) and not has_blocking_approval(key):
                     intent = ux.parse_approval_reply(raw)

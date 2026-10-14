@@ -97,7 +97,7 @@ SAMPLES = {
     "slash to send as a regular message.": "没有 /foo 这个命令。发 /commands 看看有哪些, 或者去掉开头的 / 当普通消息发。",
     "⚠️ No activity for 15 min. If the agent does not respond soon, it will be timed out in 15 min. "
     "You can continue waiting or use /reset.":
-        "⚠️ 已经 15 分钟没动静了, 再过 15 分钟还没反应就会停下。可以继续等, 或发 /reset 重来。",
+        "⚠️ 已经 15 分钟没动静了, 再过 15 分钟还没反应就会停下。可以继续等, 或发「开新对话」重来。",
     "⏱️ Model provider is rate-limiting": None,   # 占位: 下面单独测
     "✨ Session reset! Starting fresh.\n✦ Tip: use /compact to shrink context": "✨ 已开新对话。",
     "⚠️ Cron job 'daily' was interrupted — the gateway is restarting and killed the run before it "
@@ -126,7 +126,7 @@ def test_inactivity_timeout_multiline_is_collapsed():
           "The agent appears stuck on tool `execute_code` (900s since last activity, iteration 3/90).\n"
           "To increase the limit, set agent.gateway_timeout in config.yaml (value in seconds, 0 = no limit) "
           "and restart the gateway.\nTry again, or use /reset to start fresh.")
-    assert p28._translate_hermes_zh(en) == "⏱️ 小鲶 30 分钟没有任何进展, 这次先停下了。再试一次, 或发 /reset 开新对话。"
+    assert p28._translate_hermes_zh(en) == "⏱️ 小鲶 30 分钟没有任何进展, 这次先停下了。再试一次, 或发「开新对话」。"
 
 
 def test_safety_net_logs_untranslated_english_but_not_chinese(caplog):
