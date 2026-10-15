@@ -207,7 +207,7 @@ def _hermes_home() -> Path:
         pass
     if _sys.platform == "win32" and os.environ.get("LOCALAPPDATA"):
         return Path(os.environ["LOCALAPPDATA"]) / "hermes"
-    return Path.home() / ".hermes"
+    return Path.home() / ".hermes"  # windows-parity: Windows 上面那行已经返回了, 这里只是非 Windows 的默认
 
 
 def _read_hermes_env_key(key: str) -> str:
