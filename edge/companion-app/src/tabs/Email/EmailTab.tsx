@@ -44,6 +44,7 @@ import FolderTabs, { EMPTY_FOLDER_TEXT, type MailFolder } from "./components/Fol
 import { useDraftFocus } from "./useDraftFocus";
 import { MAIL_GONE_TEXT, useEmailDetail } from "./useEmailDetail";
 import { useEmailStore } from "../../store/email";
+import { hideDeleted } from "../../lib/emailDeleted";
 import { useUIStore } from "../../store/ui";
 // P3.5.158 Phase 4 (7/2 鸿波): 新建邮件入口
 import { useAgentStore } from "../../store/agent";
@@ -77,8 +78,9 @@ export default function EmailTab() {
   // 显示上次的列表, loadList 在后台静默刷新 (loading 只在 items 为空时显示,
   // 见下面 headerSummary 的 `loading && items.length === 0`)。
   const listCache = useEmailStore.getState().listCache;
+  // 10/15: 缓存里也可能有刚删掉的 (删之前存的), 进界面前过一遍墓碑 (lib/emailDeleted.ts)
   const [items, setItems] = useState<EmailDigestItem[]>(
-    () => (listCache?.items as EmailDigestItem[]) ?? [],
+    () => hideDeleted((listCache?.items as EmailDigestItem[]) ?? [], useEmailStore.getState().deleted),
   );
   // P3.5.204.b (7/9): Sent (已发送) 邮件独立存. 只用于 isReplied 判定 (员工回
   // 复过的邮件 in_reply_to 指向 Inbox 里被回复邮件的 message_id, R.in_reply_to
@@ -187,14 +189,16 @@ export default function EmailTab() {
       const list = JSON.parse(listJson);
       const sent = JSON.parse(sentJson);
       const accs = JSON.parse(accountsJson);
-      if (Array.isArray(list)) setItems(list as EmailDigestItem[]);
+      // 10/15: 可能是删除前就发出的那轮旧列表 —— 过墓碑 (store.acceptList, lib/emailDeleted.ts)
+      const complete = folder === "Inbox" && !unreadOnly && Array.isArray(list) && list.length < MAX_EMAIL_LIST_LIMIT;
+      if (Array.isArray(list)) setItems(useEmailStore.getState().acceptList?.(list, complete) ?? list);
       if (Array.isArray(sent)) setSentItems(sent as EmailDigestItem[]);
       if (Array.isArray(accs)) setAccounts(accs as EmailAccountItem[]);
       // 8/21: 回写跨挂载缓存 — 下次切回瞬间有列表 (见 useState 初值那段注释)。
       // 只在拉成功后写: 失败不覆盖上一份好的。
       if (Array.isArray(list) && folder === "Inbox") {
         useEmailStore.getState().setListCache({
-          items: list,
+          items: hideDeleted(list as EmailDigestItem[], useEmailStore.getState().deleted),
           sentItems: Array.isArray(sent) ? sent : [],
           accounts: Array.isArray(accs) ? accs : [],
         });
@@ -780,6 +784,8 @@ export default function EmailTab() {
               // list_fetch (avoid 网络 + 抖动), Mail.app 那边已经移到 Trash, 列表
               // 反映即可.
               if (selectedId) {
+                // 10/15: 记墓碑 + 清缓存, 在途的旧列表 / 切回时的缓存都不会再带回来
+                useEmailStore.getState().markDeleted(items.find((it) => it.id === selectedId) ?? { id: selectedId });
                 setItems((prev) => prev.filter((it) => it.id !== selectedId));
                 setSelectedId(null);
                 if (folder === "Drafts") void loadList({ quiet: true }); // 改草稿后新版本要出现

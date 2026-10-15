@@ -22,6 +22,7 @@
 import { create } from "zustand";
 
 import { emailIdMigrationMap, emailUrgencyMap as rustUrgencyMap } from "../lib/tauri";
+import { hideDeleted, pruneTombstones, tombstoneKeys, type DeletedTombstones } from "../lib/emailDeleted";
 
 /** 9/27: 照改名表把以 id 为键的本地记录改名 (Rust 侧缓存由 Rust 自己改)。 */
 export function renameIds<T>(record: Record<string, T>, mapping: Record<string, string>): Record<string, T> {
@@ -35,6 +36,26 @@ export function renameIds<T>(record: Record<string, T>, mapping: Record<string, 
 
 const LS_URGENCY_KEY = "catfish.email.urgency.v1";
 const LS_READ_KEY = "catfish.email.read.v1";
+const LS_DELETED_KEY = "catfish.email.deleted.v1";   // 10/15 删掉的邮件墓碑 (lib/emailDeleted.ts)
+
+function loadPersistedDeleted(): DeletedTombstones {
+  try {
+    const raw = localStorage.getItem(LS_DELETED_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as DeletedTombstones;
+  } catch {
+    /* ignore corrupt */
+  }
+  return {};
+}
+
+function savePersistedDeleted(t: DeletedTombstones): void {
+  try {
+    localStorage.setItem(LS_DELETED_KEY, JSON.stringify(t));
+  } catch {
+    /* ignore */
+  }
+}
 
 /** localStorage 镜像 schema — {map: {id: "急"|"中"|"低"}, savedAt: epoch_ms} */
 interface PersistedUrgency {
@@ -150,6 +171,13 @@ interface EmailState {
   // classify_now 全 cache 命中会把完整 actions 返回来。
   actionMap: Record<string, { action: string; deadline?: string }>;
   mergeActionMap: (m: Record<string, { action: string; deadline?: string }>) => void;
+
+  // ── 10/15 删掉的邮件墓碑 (见 lib/emailDeleted.ts) ──────────────────────
+  deleted: DeletedTombstones;
+  /** 删除成功后调: 记墓碑 + 同步从跨挂载缓存里拿掉 */
+  markDeleted: (item: { id: string; message_id?: string }) => void;
+  /** 一份刚拉回的列表来了: 撤掉服务器已确认没了的墓碑 (complete 时), 返回藏掉墓碑后的列表 */
+  acceptList: <T extends { id: string; message_id?: string }>(fresh: T[], complete: boolean) => T[];
 }
 
 export const useEmailStore = create<EmailState>((set, get) => ({
@@ -157,6 +185,30 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   setListCache: (c) => set({ listCache: { ...c, savedAt: Date.now() } }),
   actionMap: {},
   mergeActionMap: (m) => set({ actionMap: { ...get().actionMap, ...m } }),
+  deleted: loadPersistedDeleted(),
+  markDeleted: (item) => {
+    const now = Date.now();
+    const next = { ...get().deleted };
+    for (const k of tombstoneKeys(item)) next[k] = now;
+    const cache = get().listCache;
+    set({
+      deleted: next,
+      listCache: cache
+        ? { ...cache, items: cache.items.filter((it) => (it as { id?: string }).id !== item.id) }
+        : cache,
+    });
+    savePersistedDeleted(next);
+  },
+  acceptList: (fresh, complete) => {
+    const cur = get().deleted;
+    if (Object.keys(cur).length === 0) return fresh;
+    const next = pruneTombstones(cur, fresh, complete);
+    if (Object.keys(next).length !== Object.keys(cur).length) {
+      set({ deleted: next });
+      savePersistedDeleted(next);
+    }
+    return hideDeleted(fresh, next);
+  },
   urgencyMap: loadPersistedUrgency(),
   readIds: loadPersistedRead(),
   lastSyncedAt: null,
