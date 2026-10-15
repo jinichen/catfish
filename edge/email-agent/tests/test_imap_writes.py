@@ -12,7 +12,7 @@ NotSupportedError。
 
 # 这个文件里最要紧的一条
 
-`test_delete_never_expunges_blindly`。真机 CAPABILITY 没有 UIDPLUS, 只有
+`test_delete_never_takes_other_clients_pending_deletes_with_it`。真机 CAPABILITY 没有 UIDPLUS, 只有
 裸 EXPUNGE, 而**裸 EXPUNGE 会清掉当前文件夹里所有打了 \\Deleted 的邮件**,
 包括员工在 Foxmail / Outlook 上标了删除、还没压缩的那些。员工在鲶鱼里删
 一封, 另一个客户端里攒了半年的待删邮件一起没了, 不可恢复。
@@ -88,28 +88,62 @@ def test_stale_uidvalidity_refuses_to_write(adapter):
 
 
 def test_delete_copies_to_trash_first(adapter):
-    """先留副本再打标记。顺序反了的话中间失败就没有后悔药。"""
+    """先留副本再动原件。顺序反了的话中间失败就没有后悔药。"""
     adapter.delete_message(first(adapter).id)
     assert adapter._fake.copies, "没往已删除里留副本"
     assert adapter._fake.copies[0][1] == "&XfJSIJZk-"  # 已删除
 
 
-def test_delete_marks_the_original_deleted(adapter):
-    adapter.delete_message(first(adapter).id)
-    assert adapter._fake.stores[-1][1] == "+FLAGS"
-    assert r"\Deleted" in adapter._fake.stores[-1][2]
+@pytest.fixture
+def stateful(monkeypatch, tmp_path):
+    """会真改标记、真删信的服务器 (test_imap_purge 的夹具), 没有 UIDPLUS —— 照真机。"""
+    from tests.test_imap_purge import PurgingIMAP
+
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
+    fake = PurgingIMAP()
+    monkeypatch.setattr(
+        "catfish_email.adapters.imap_mail.imaplib.IMAP4_SSL",
+        lambda host, port, timeout=None: fake,
+    )
+    a = ImapAdapter(ImapConfig(host="imap.example.cn", user="me@example.cn", password="s3cret"))
+    a._fake = fake
+    return a
 
 
-def test_delete_never_expunges_blindly(adapter):
-    """**整个改动里最要紧的一条。**
+def test_delete_removes_the_original_from_the_inbox(stateful):
+    """10/15 鸿波 Windows「邮件删掉后又回跑出来」: 原件只打 \\Deleted 不清的话, 归档清理
+    (保留两周) 每轮会把它的标记摘下来再挂回去, 中间那一下它就回到了列表里。"""
+    msg = first(stateful)
+    uid = msg.id.split("|")[-1].encode()
+    stateful.delete_message(msg.id)
+    assert uid not in [u for u, _, _ in stateful._fake.messages["INBOX"]], "原件还在收件箱"
+    assert msg.id not in [m.id for m in stateful.list_messages(ListFilter(folder="Inbox", limit=9))]
 
-    服务器没有 UIDPLUS (真机实测), 没有 `UID EXPUNGE`, 只有裸 `EXPUNGE`。
-    裸 EXPUNGE 会连带清掉员工在别的客户端标了删除、还没压缩的所有邮件,
-    而且不可恢复。宁可原件多在服务器上留几天。
-    """
-    assert "UIDPLUS" not in adapter._fake.capabilities  # 夹具照真机
-    adapter.delete_message(first(adapter).id)
-    assert adapter._fake.expunges == [], "在没有 UIDPLUS 的服务器上执行了 EXPUNGE"
+
+def test_delete_never_takes_other_clients_pending_deletes_with_it(stateful):
+    """**整个改动里最要紧的一条。** 没有 UIDPLUS 只有裸 EXPUNGE, 它会清掉文件夹里所有
+    带 \\Deleted 的。别的客户端标了待删、还没压缩的邮件必须原样留着, 标记也原样挂回。"""
+    box = stateful._fake.messages["INBOX"]
+    assert len(box) >= 2 and "UIDPLUS" not in stateful._fake.capabilities
+    other_uid, _, other_raw = box[-1]
+    box[-1] = (other_uid, rb"(\Deleted)", other_raw)        # Foxmail 那边标了删除
+    msg = first(stateful)
+    assert msg.id.split("|")[-1].encode() != other_uid
+    stateful.delete_message(msg.id)
+    left = {u: f for u, f, _ in stateful._fake.messages["INBOX"]}
+    assert other_uid in left, "把别的客户端待删的邮件一起清掉了"
+    assert rb"\Deleted" in left[other_uid], "别人的删除标记没挂回去"
+
+
+def test_delete_falls_back_to_flag_when_expunge_fails(stateful):
+    """清不掉 (服务器拒绝) 就退回只打标记 —— 列表照样过滤掉, 不会回来。"""
+    stateful._fake.expunge_ok = False
+    msg = first(stateful)
+    uid = msg.id.split("|")[-1].encode()
+    stateful.delete_message(msg.id)
+    flags = {u: f for u, f, _ in stateful._fake.messages["INBOX"]}[uid]
+    assert rb"\Deleted" in flags
+    assert msg.id not in [m.id for m in stateful.list_messages(ListFilter(folder="Inbox", limit=9))]
 
 
 def test_delete_expunges_precisely_when_uidplus_is_available(adapter):
@@ -118,14 +152,6 @@ def test_delete_expunges_precisely_when_uidplus_is_available(adapter):
     msg = first(adapter)
     adapter.delete_message(msg.id)
     assert adapter._fake.expunges == [msg.id.split("|")[-1]]
-
-
-def test_deleted_mail_disappears_from_the_listing(adapter):
-    """因为不 EXPUNGE, 原件还躺在收件箱里 —— 列表不过滤的话, 员工删完一刷新
-    它又回来了。"""
-    msg = first(adapter)
-    adapter.delete_message(msg.id)
-    assert msg.id not in [m.id for m in adapter.list_messages(ListFilter(folder="Inbox", limit=9))]
 
 
 def test_delete_without_a_trash_folder_still_marks_but_warns(adapter, caplog):

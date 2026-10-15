@@ -334,46 +334,60 @@ class ImapAdapter(EmailAdapter):
         # 在这里手工改索引 (手工改就有了第二个真相来源)。
 
     def delete_message(self, message_id: str) -> None:
-        r"""移到「已删除」, 而不是物理清除。
+        r"""移到「已删除」: COPY 一份过去, 再把收件箱里的原件清掉。
 
-        # 为什么这里格外小心
+        9/18 起因为服务器没有 UIDPLUS (裸 EXPUNGE 会连带清掉别的客户端标记待删的邮件),
+        原件只打 \Deleted 不清, 靠列表过滤。9/27 保留策略清理 (imap_purge.expunge_only)
+        上线后, 它在清之前要先摘掉文件夹里**别的** \Deleted 标记、清完再挂回去 —— 鲶鱼删掉
+        的原件正是"别的"; 摘下到挂回之间拉列表, 或挂回那步断网, 删掉的信就回到收件箱
+        (10/15 鸿波 Windows「删掉后又回跑出来」, 设了归档两周后删除)。
 
-        真机 CAPABILITY 里**没有 UIDPLUS, 也没有 MOVE** (9/18 实测
-        imap.chinatelecom.cn)。于是:
-
-          · 没有 MOVE       → 只能 COPY 到已删除, 再给原件打 \Deleted
-          · 没有 UIDPLUS    → 没有 `UID EXPUNGE`, 只有裸 `EXPUNGE`
-
-        **裸 EXPUNGE 会清掉当前文件夹里所有打了 \Deleted 的邮件** —— 包括
-        员工在 Foxmail / Outlook 上标了删除、还没执行压缩的那些。员工在鲶鱼
-        里删一封, 结果另一个客户端里攒了半年的待删邮件一起没了, 而且不可恢复。
-        这个代价换来的只是"邮件从服务器上早几天消失", 完全不值。
-
-        所以: 有 UIDPLUS 就用 `UID EXPUNGE` 只清这一封; 没有就**不 expunge**,
-        留着 \Deleted 标记 —— 邮件已经在已删除里了, 而我们自己的列表会把
-        \Deleted 的过滤掉, 员工看到的效果就是删掉了。原件最终由服务器或别的
-        客户端压缩时清理。
+        现在原件也走 expunge_only 真清掉: 只清这一封, 别人的待删标记原样挂回。已删除里有
+        副本, 能找回。找不到已删除 / 清失败 → 退回只打标记 (没副本不做不可逆的那步)。
         """
+        from . import imap_purge  # noqa: PLC0415
+
         folder_raw, uid = self._locate(message_id, writable=True)
         conn = self._connect()
         trash = self._folder_by_role("Trash")
-        if trash and trash != folder_raw:
-            typ, _ = conn.uid("copy", uid, f'"{trash}"')
-            if typ != "OK":
-                raise EmailAdapterError(f"复制到已删除失败: uid={uid} {typ}")
-        else:
+        if not trash or trash == folder_raw:
             logger.warning("找不到「已删除」文件夹, 只打删除标记不留副本")
+            self._flag_deleted(conn, uid)
+            return
+        typ, _ = conn.uid("copy", uid, f'"{trash}"')
+        if typ != "OK":
+            raise EmailAdapterError(f"复制到已删除失败: uid={uid} {typ}")
+        try:
+            gone = imap_purge.expunge_only(conn, [uid], has_uidplus=self._has_capability("UIDPLUS"))
+        except Exception as e:  # noqa: BLE001 — 清不掉就退回只打标记, 列表照样过滤
+            logger.warning("清除原件失败, 退回只打删除标记: uid=%s %s", uid, e)
+            gone = set()
+        if uid not in gone:
+            # expunge_only 会把没清掉的标记撤回 —— 对删除来说要的是反过来
+            self._flag_deleted(conn, uid)
+            return
+        self._forget_in_index(message_id)
+
+    def _flag_deleted(self, conn, uid: str) -> None:
         typ, _ = conn.uid("store", uid, "+FLAGS", r"(\Deleted)")
         if typ != "OK":
             raise EmailAdapterError(f"打删除标记失败: uid={uid} {typ}")
-        if self._has_capability("UIDPLUS"):
-            # 只清这一封 —— 别人标的 \Deleted 一根汗毛都不动
-            conn.uid("expunge", uid)
-        else:
-            logger.info(
-                "服务器没有 UIDPLUS, 不执行 EXPUNGE (裸 EXPUNGE 会连带清掉"
-                "别处标记的邮件)。邮件已在已删除里, 列表会过滤掉原件。"
-            )
+
+    def _forget_in_index(self, message_id: str) -> None:
+        """员工删的不算档案馆的「服务器上已无」(那是容量清理), 索引行直接删; .eml 不动 (同 9/26)。"""
+        try:
+            from .. import index_store  # noqa: PLC0415
+            from .imap_sync import sync_key  # noqa: PLC0415
+
+            folder_raw, uidvalidity, uid = self._unpack_id(self._current_id(message_id))
+            db = index_store.open_index()
+            try:
+                db.execute("DELETE FROM messages WHERE source_key=?", (sync_key(folder_raw, uidvalidity, uid),))
+                db.commit()
+            finally:
+                db.close()
+        except Exception as e:  # noqa: BLE001 — 索引是缓存, 下一轮同步会自己对上
+            logger.info("删除后清索引行失败 (下一轮同步会对上): %s", e)
 
     def create_draft(
         self, *, to: Sequence[str], subject: str, body: str,
