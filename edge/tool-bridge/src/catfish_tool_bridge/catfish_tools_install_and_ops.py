@@ -45,6 +45,7 @@ from .catfish_tools_skill_ops import (  # noqa: E402, F401
     _append_revision_event,
     _catfish_skills_root,
     _extract_file_paths,
+    _find_skill_dir,
     _find_render_function,
     _function_signature_help,
     _is_redline_skill_name,
@@ -606,12 +607,8 @@ def skill_delete(args: Dict[str, Any]) -> Dict[str, Any]:
             ),
         }
 
-    root = _catfish_skills_root()
-    if root is None:
-        return {"ok": False, "error": "找不到 catfish skills 目录"}
-
-    skill_dir = root / skill_path
-    if not skill_dir.is_dir():
+    skill_dir = _find_skill_dir(skill_path)  # 10/15: 本机 ~/.catfish/skills/ 里员工自己装的也能删
+    if skill_dir is None:
         return {"ok": False, "error": f"skill 不存在: {skill_path}"}
 
     # 备份到 ~/.catfish/skill-trash/<unix-ts>-<basename>/

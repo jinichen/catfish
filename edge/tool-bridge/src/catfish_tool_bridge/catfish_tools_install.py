@@ -26,6 +26,8 @@ from .catfish_tools_today import _hermes_dir, _home, _is_today, _unix_to_iso
 from .catfish_tools_skill_ops import (  # noqa: F401
     _catfish_skills_root,
     _read_skill_metadata,
+    _skill_install_root,
+    _skill_search_roots,
     _skill_audit_path,
     _write_skill_audit,
 )
@@ -42,12 +44,11 @@ def _list_existing_skills() -> List[Dict[str, Any]]:
 
     给 dedup 检查 (BL-C13) 用. path 形如 "department/leadership-briefing".
     """
-    root = _catfish_skills_root()
-    if root is None or not root.exists():
-        return []
     out: List[Dict[str, Any]] = []
     try:
-        for ns_dir in root.iterdir():
+        # 10/15: 仓库 skills/ 和本机 ~/.catfish/skills/ 都算已装; 同一 path 先到先得
+        ns_dirs = [ns for root in _skill_search_roots() for ns in sorted(root.iterdir())]
+        for ns_dir in ns_dirs:
             if not ns_dir.is_dir() or ns_dir.name.startswith("."):
                 continue
             for skill_dir in ns_dir.iterdir():
@@ -81,6 +82,8 @@ def _list_existing_skills() -> List[Dict[str, Any]]:
                                     break
                 except Exception:
                     pass
+                if any(x["path"] == f"{ns_dir.name}/{skill_dir.name}" for x in out):
+                    continue
                 out.append({
                     "path": f"{ns_dir.name}/{skill_dir.name}",
                     "name": name,
@@ -487,10 +490,8 @@ def skill_install(args: Dict[str, Any]) -> Dict[str, Any]:
     if ".." in namespace or "/" in namespace:
         return {"ok": False, "error": f"namespace 不允许 '..' 或 '/' ({namespace})"}
 
-    # 目标路径: catfish/skills/<namespace>/<skill_name>/
-    root = _catfish_skills_root()
-    if root is None:
-        return {"ok": False, "error": "找不到 catfish skills 目录"}
+    # 目标路径: <skills 根>/<namespace>/<skill_name>/ —— 开发机是仓库 skills/, 客户机 (没仓库) 是 ~/.catfish/skills/
+    root = _skill_install_root()
 
     target_dir = root / namespace / skill_name
     audit_event: Dict[str, Any] = {

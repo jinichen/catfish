@@ -3,7 +3,7 @@
 工具:
   catfish_propose_skill: agent 自动抽 skill (员工 confirm 门槛)
   catfish_propose_skill_revision: skill 改版 propose (SemVer + 红线字段冻)
-  catfish_run_skill: 跑 ~/.catfish/skills/<ns>/<skill>/script.py
+  catfish_run_skill: 跑 <skills 根>/<ns>/<skill>/script.py (根见 _skill_search_roots)
 
 主文件 import 这些 + helpers 给 dispatch 用.
 5/20: 805 行从 catfish_tools.py 抽出.
@@ -74,6 +74,38 @@ def _catfish_skills_root() -> Optional[Path]:
         if cand.is_dir() and (cand / "department").is_dir():
             return cand
     return None
+
+
+def _local_skills_root() -> Path:
+    """员工本机 skill: 教学凝固 (skill_freeze target=local) / catfish_install_proposal 都落这里。"""
+    return Path.home() / ".catfish" / "skills"
+
+
+def _skill_search_roots() -> List[Path]:
+    """catfish_run_skill / 删除 / 查重 要找的所有 skill 根, 先找到的优先。
+
+    10/15: 原来只认 _catfish_skills_root() (仓库 skills/ 或 CATFISH_SKILLS_DIR), 员工自己
+    教会 / 装的 skill 落在 ~/.catfish/skills/, run_skill 永远报「skill 不存在」;
+    客户机装包里没有仓库 skills/, 连部门 skill 都找不到。
+    顺序: 工程审定的 (仓库 / CATFISH_SKILLS_DIR) 在前, 同名时不被本机副本顶掉。
+    """
+    roots: List[Path] = []
+    for cand in (_catfish_skills_root(), _local_skills_root()):
+        if cand is not None and cand.is_dir() and cand.resolve() not in [r.resolve() for r in roots]:
+            roots.append(cand)
+    return roots
+
+
+def _find_skill_dir(skill_path: str) -> Optional[Path]:
+    for root in _skill_search_roots():
+        if (root / skill_path).is_dir():
+            return root / skill_path
+    return None
+
+
+def _skill_install_root() -> Path:
+    """装 skill 落哪: 有仓库 / CATFISH_SKILLS_DIR (开发机) 照旧, 没有 (客户机) 落本机根。"""
+    return _catfish_skills_root() or _local_skills_root()
 
 
 def _read_skill_metadata(skill_md: Path) -> Dict[str, Any]:
@@ -274,8 +306,8 @@ def run_skill(args: Dict[str, Any]) -> Dict[str, Any]:
             "summary": "",
         }
 
-    root = _catfish_skills_root()
-    if root is None:
+    roots = _skill_search_roots()
+    if not roots:
         return {
             "ok": False,
             "error": (
@@ -286,11 +318,11 @@ def run_skill(args: Dict[str, Any]) -> Dict[str, Any]:
             "summary": "",
         }
 
-    skill_dir = root / skill_path
-    if not skill_dir.is_dir():
+    skill_dir = _find_skill_dir(skill_path)
+    if skill_dir is None:
         return {
             "ok": False,
-            "error": f"skill 不存在: {skill_path}",
+            "error": f"skill 不存在: {skill_path} (找过: {', '.join(str(r) for r in roots)})",
             "files": [],
             "summary": "",
         }
