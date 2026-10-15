@@ -1,27 +1,27 @@
-use std::path::PathBuf;
-#[cfg(any(windows, test))]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-/// 找 Chrome 二进制 (mac / Windows / Linux 全平台).
+/// 本机能用的浏览器 (mac / Windows / Linux 全平台), 按优先级 (10/16): 首次启动时 chrome_runtime 依次试, 起不来 (比如被安全软件
+/// 拦了, 一启动就退) 就换下一个, 试成功的记下来下次直接用。
+/// 设了 `CATFISH_CHROME_BIN` 就只用它 —— 显式指定的不替员工换。
 ///
-/// BL-WIN3 (5/8): Windows 候选扩到 7 条 — Per-user 安装 (%LOCALAPPDATA%\Google),
-/// 标准 Program Files (双架构), Edge 作为最后备选 (Win11 自带, Chromium 内核
-/// 兼容 Playwright). mac 候选不变. 通过环境变量动态查 (LOCALAPPDATA / ProgramFiles
-/// / ProgramFiles(x86)) 免硬编盘符. 用 ``CATFISH_CHROME_BIN`` env 强制覆盖.
-pub fn find_chrome() -> Option<PathBuf> {
+/// BL-WIN3 (5/8): Windows 候选 —— Per-user 安装 (%LOCALAPPDATA%\Google), 标准 Program Files
+/// (双架构), Edge 最后 (Win11 自带, Chromium 内核)。通过环境变量查 (LOCALAPPDATA / ProgramFiles
+/// / ProgramFiles(x86)) 免硬编盘符。
+pub fn browser_candidates() -> Vec<PathBuf> {
     // 1. env 强制覆盖 (员工 / 开发者用)
     if let Ok(custom) = std::env::var("CATFISH_CHROME_BIN") {
         let p = PathBuf::from(custom);
         if p.is_file() {
-            return Some(p);
+            return vec![p];
         }
     }
+    let mut found: Vec<PathBuf> = Vec::new();
 
     // Prefer the shipped browser on Windows: it is tested with this release.
     #[cfg(windows)]
     if let Some(root) = std::env::var_os("LOCALAPPDATA") {
         if let Some(browser) = bundled_chromium(&PathBuf::from(root).join("ms-playwright")) {
-            return Some(browser);
+            found.push(browser);
         }
     }
 
@@ -63,7 +63,23 @@ pub fn find_chrome() -> Option<PathBuf> {
     candidates.push("/usr/bin/chromium".into());
     candidates.push("/usr/bin/chromium-browser".into());
 
-    candidates.into_iter().find(|p| p.is_file())
+    // macOS 上 Edge 也是 Chromium 内核, 放最后兜底
+    candidates.push("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge".into());
+
+    for c in candidates.into_iter().filter(|p| p.is_file()) {
+        if !found.contains(&c) {
+            found.push(c);
+        }
+    }
+    found
+}
+
+/// Edge 跟 Chromium / Chrome 不能共用配置目录 (版本对不上会拒开或写坏), 启动方据此分开放。
+pub fn is_edge(binary: &Path) -> bool {
+    // 按 / 和 \ 都切: Windows 路径在单测 (跑在 mac / Linux) 里也得认得出
+    let full = binary.to_string_lossy().to_lowercase();
+    let name = full.rsplit(['/', '\\']).next().unwrap_or_default();
+    name.starts_with("msedge") || name == "microsoft edge"
 }
 
 
@@ -93,5 +109,13 @@ mod tests {
         std::fs::create_dir_all(root.path().join("chromium-1300")).unwrap();
         std::fs::create_dir_all(root.path().join("chromium_headless_shell-9999")).unwrap();
         assert_eq!(bundled_chromium(root.path()), Some(browser));
+    }
+
+    #[test]
+    fn edge_is_recognized_on_both_platforms() {
+        assert!(is_edge(Path::new(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe")));
+        assert!(is_edge(Path::new("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge")));
+        assert!(!is_edge(Path::new(r"C:\x\ms-playwright\chromium-1248\chrome-win64\chrome.exe")));
+        assert!(!is_edge(Path::new("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")));
     }
 }

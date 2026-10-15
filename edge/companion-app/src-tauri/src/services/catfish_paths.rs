@@ -462,7 +462,6 @@ pub fn catfish_email_bin() -> Option<PathBuf> {
     find_on_path(NAME)
 }
 
-pub use super::browser_paths::find_chrome;
 
 #[cfg(test)]
 #[path = "catfish_paths_tests.rs"]

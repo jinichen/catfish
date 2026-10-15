@@ -123,39 +123,45 @@ pub(crate) async fn cdp_url(base: &str) -> Result<String, String> {
     Ok(ws.to_owned())
 }
 
-pub async fn ensure_running() -> Result<String, String> {
-    let _guard = LIFECYCLE.lock().await;
-    let profile = catfish_paths::chrome_user_data_dir().ok_or("找不到 Chrome 配置目录")?;
-    let pid_file = catfish_paths::chrome_pid_file().ok_or("找不到 Chrome PID 路径")?;
-    let base = endpoints::endpoints().chrome_base();
-    if !matches!(endpoints::endpoints().chrome_host.as_str(), "127.0.0.1" | "localhost" | "::1") {
-        return Err("远程 CDP 端点不由本机 Chrome 启停管理".into());
+/// Chromium / Chrome 用 chrome-profile, Edge 单独一份 (两者不能共用配置目录)。
+fn profile_for(binary: &Path) -> Option<std::path::PathBuf> {
+    let chrome = catfish_paths::chrome_user_data_dir()?;
+    if super::browser_paths::is_edge(binary) {
+        Some(chrome.with_file_name("edge-profile"))
+    } else {
+        Some(chrome)
     }
-    let owner = profile_owner(&profile).await?;
-    if let Some(ref existing) = owner {
-        let port_flag = format!("--remote-debugging-port={}", endpoints::endpoints().chrome_port);
-        if !existing.command.as_ref().is_some_and(|c| command_arguments(c).contains(&port_flag)) {
-            return Err("鲶鱼浏览器已占用配置目录，但调试端口不同；请先停止该浏览器再启动".into());
+}
+
+fn known_profiles() -> Vec<std::path::PathBuf> {
+    let Some(chrome) = catfish_paths::chrome_user_data_dir() else { return vec![] };
+    vec![chrome.with_file_name("edge-profile"), chrome]
+}
+
+/// 上次真正起来的浏览器 (10/16)。下次先试它, 不用每次从头试。
+fn chosen_browser_file() -> Option<std::path::PathBuf> {
+    catfish_paths::companion_state_dir().map(|d| d.join("chrome-browser.txt"))
+}
+
+fn ordered_candidates(candidates: Vec<std::path::PathBuf>, chosen: Option<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
+    match chosen {
+        Some(c) if candidates.contains(&c) => {
+            let mut out = vec![c.clone()];
+            out.extend(candidates.into_iter().filter(|x| *x != c));
+            out
         }
+        _ => candidates,
     }
-    if let Ok(ws) = cdp_url(&base).await {
-        let pid = owner.ok_or("调试端口被非鲶鱼浏览器占用；未接管该浏览器")?;
-        std::fs::write(&pid_file, pid.pid.to_string()).map_err(|e| e.to_string())?;
-        return Ok(ws);
-    }
-    // An existing profile owner may still be starting. Never launch over its lock.
-    let pid = if let Some(owner) = owner { owner.pid } else {
-        let binary = catfish_paths::find_chrome().ok_or("找不到 Chrome / Chromium / Edge")?;
-        let log_path = catfish_paths::chrome_log_path().ok_or("找不到 Chrome 日志路径")?;
-        let handle = process::spawn_detached(process::SpawnConfig {
-            program: binary,
-            args: launch_arguments(&profile, endpoints::endpoints().chrome_port),
-            working_dir: profile.parent().ok_or("无效 Chrome 配置目录")?.to_path_buf(),
-            log_path, env: vec![],
-        }).map_err(|e| format!("启动 Chrome 失败: {e}"))?;
-        std::fs::write(&pid_file, handle.pid.to_string()).map_err(|e| e.to_string())?;
-        handle.pid
-    };
+}
+
+enum NotReady {
+    /// 进程一启动就没了 (被安全软件拦 / 跟这台机器不兼容) —— 换下一个浏览器试
+    Exited(String),
+    /// 进程还活着但没就绪 (慢机器首次启动) —— 不再另起一个, 免得两个抢端口
+    Timeout(String),
+}
+
+async fn wait_ready(pid: u32, profile: &Path, base: &str) -> Result<String, NotReady> {
     // 10/9: 原来只是死等 30 秒 —— Chrome 一启动就崩 (配置目录被锁 / 被安全软件拦 /
     // 版本不兼容) 也要等满 30 秒, 最后只说"未就绪, 去看 chrome.log", 员工看不到原因。
     // 现在: 进程没了且没有别的进程接管这个配置目录 → 立刻失败; 失败时把 chrome.log
@@ -164,29 +170,106 @@ pub async fn ensure_running() -> Result<String, String> {
     let log_path = catfish_paths::chrome_log_path();
     let ready = tokio::time::timeout(Duration::from_secs(READY_TIMEOUT_SECS), async {
         loop {
-            if let Ok(ws) = cdp_url(&base).await { return Ok(ws); }
-            if !process::is_alive(pid) && matches!(profile_owner(&profile).await, Ok(None)) {
-                return Err(format!(
-                    "Chrome (PID {pid}) 启动后马上退出了{}",
-                    log_hint(log_path.as_deref())
-                ));
+            if let Ok(ws) = cdp_url(base).await { return Ok(ws); }
+            if !process::is_alive(pid) && matches!(profile_owner(profile).await, Ok(None)) {
+                return Err(NotReady::Exited(format!(
+                    "PID {pid} 启动后马上退出了{}", log_hint(log_path.as_deref())
+                )));
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
     }).await;
     match ready {
-        Ok(Err(early_exit)) => Err(early_exit),
         Ok(Ok(ws)) => {
             // Chrome can hand off to an existing process; save the actual owner.
-            let actual = profile_owner(&profile).await?.ok_or("Chrome 启动后无法确认配置目录所有者")?;
-            std::fs::write(&pid_file, actual.pid.to_string()).map_err(|e| e.to_string())?;
+            let actual = profile_owner(profile).await.map_err(NotReady::Timeout)?
+                .ok_or_else(|| NotReady::Timeout("浏览器启动后无法确认配置目录所有者".into()))?;
+            if let Some(pid_file) = catfish_paths::chrome_pid_file() {
+                std::fs::write(&pid_file, actual.pid.to_string()).map_err(|e| NotReady::Timeout(e.to_string()))?;
+            }
             Ok(ws)
         }
-        Err(_) => Err(format!(
-            "Chrome (PID {pid}) {READY_TIMEOUT_SECS} 秒内未就绪；没有重复启动或删除配置目录{}",
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(NotReady::Timeout(format!(
+            "浏览器 (PID {pid}) {READY_TIMEOUT_SECS} 秒内未就绪；没有重复启动或删除配置目录{}",
             log_hint(log_path.as_deref())
-        )),
+        ))),
     }
+}
+
+pub async fn ensure_running() -> Result<String, String> {
+    let _guard = LIFECYCLE.lock().await;
+    let pid_file = catfish_paths::chrome_pid_file().ok_or("找不到 Chrome PID 路径")?;
+    let base = endpoints::endpoints().chrome_base();
+    if !matches!(endpoints::endpoints().chrome_host.as_str(), "127.0.0.1" | "localhost" | "::1") {
+        return Err("远程 CDP 端点不由本机 Chrome 启停管理".into());
+    }
+    let mut owner = None;
+    for profile in known_profiles() {
+        if let Some(found) = profile_owner(&profile).await? {
+            owner = Some((profile, found));
+            break;
+        }
+    }
+    if let Some((_, ref existing)) = owner {
+        let port_flag = format!("--remote-debugging-port={}", endpoints::endpoints().chrome_port);
+        if !existing.command.as_ref().is_some_and(|c| command_arguments(c).contains(&port_flag)) {
+            return Err("鲶鱼浏览器已占用配置目录，但调试端口不同；请先停止该浏览器再启动".into());
+        }
+    }
+    if let Ok(ws) = cdp_url(&base).await {
+        let (_, pid) = owner.ok_or("调试端口被非鲶鱼浏览器占用；未接管该浏览器")?;
+        std::fs::write(&pid_file, pid.pid.to_string()).map_err(|e| e.to_string())?;
+        return Ok(ws);
+    }
+    // An existing profile owner may still be starting. Never launch over its lock.
+    if let Some((profile, existing)) = owner {
+        return wait_ready(existing.pid, &profile, &base).await.map_err(|e| match e {
+            NotReady::Exited(m) | NotReady::Timeout(m) => m,
+        });
+    }
+
+    // 10/16: 依次试本机的浏览器 (自带 Chromium → Chrome → Edge)。一台 Windows 上自带 Chromium
+    // 一启动就退 (被安全软件拦), Edge 却能正常起 —— 原来只认第一个, 浏览器功能整个用不了。
+    let chosen = chosen_browser_file().and_then(|f| std::fs::read_to_string(f).ok())
+        .map(|s| std::path::PathBuf::from(s.trim()));
+    let candidates = ordered_candidates(super::browser_paths::browser_candidates(), chosen);
+    if candidates.is_empty() {
+        return Err("找不到 Chrome / Chromium / Edge".into());
+    }
+    let log_path = catfish_paths::chrome_log_path().ok_or("找不到 Chrome 日志路径")?;
+    let mut failures = Vec::new();
+    for binary in candidates {
+        let profile = profile_for(&binary).ok_or("找不到 Chrome 配置目录")?;
+        let name = binary.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let handle = match process::spawn_detached(process::SpawnConfig {
+            program: binary.clone(),
+            args: launch_arguments(&profile, endpoints::endpoints().chrome_port),
+            working_dir: profile.parent().ok_or("无效 Chrome 配置目录")?.to_path_buf(),
+            log_path: log_path.clone(), env: vec![],
+        }) {
+            Ok(handle) => handle,
+            Err(e) => { failures.push(format!("{name}: 启动失败 {e}")); continue; }
+        };
+        std::fs::write(&pid_file, handle.pid.to_string()).map_err(|e| e.to_string())?;
+        match wait_ready(handle.pid, &profile, &base).await {
+            Ok(ws) => {
+                if let Some(f) = chosen_browser_file() {
+                    let _ = std::fs::write(f, binary.to_string_lossy().as_bytes());
+                }
+                if !failures.is_empty() {
+                    log::warn!("鲶鱼浏览器改用 {}: 前面的起不来 ({})", binary.display(), failures.join("; "));
+                }
+                return Ok(ws);
+            }
+            Err(NotReady::Exited(m)) => failures.push(format!("{name}: {m}")),
+            Err(NotReady::Timeout(m)) => return Err(m),
+        }
+    }
+    Err(format!(
+        "本机的浏览器都启动后马上退出了 (常见原因: 被安全软件拦截):\n{}",
+        failures.join("\n")
+    ))
 }
 
 const READY_TIMEOUT_SECS: u64 = 45;
@@ -220,14 +303,15 @@ fn tail_errors(bytes: &[u8]) -> Vec<String> {
 
 pub async fn stop() -> Result<(), String> {
     let _guard = LIFECYCLE.lock().await;
-    let profile = catfish_paths::chrome_user_data_dir().ok_or("找不到 Chrome 配置目录")?;
-    if let Some(owner) = profile_owner(&profile).await? {
-        let pid = owner.pid;
-        process::kill(pid).map_err(|e| e.to_string())?;
-        // Keep the lifecycle lock until the profile owner exits.
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while process::is_alive(pid) { tokio::time::sleep(Duration::from_millis(100)).await; }
-        }).await.map_err(|_| "Chrome 仍在退出，暂不重新启动".to_string())?;
+    for profile in known_profiles() {
+        if let Some(owner) = profile_owner(&profile).await? {
+            let pid = owner.pid;
+            process::kill(pid).map_err(|e| e.to_string())?;
+            // Keep the lifecycle lock until the profile owner exits.
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while process::is_alive(pid) { tokio::time::sleep(Duration::from_millis(100)).await; }
+            }).await.map_err(|_| "Chrome 仍在退出，暂不重新启动".to_string())?;
+        }
     }
     if let Some(path) = catfish_paths::chrome_pid_file() { let _ = std::fs::remove_file(path); }
     Ok(())
@@ -262,6 +346,25 @@ plain info line\n";
         #[cfg(not(windows))]
         assert!(owns_profile(&format!("Chrome --user-data-dir={} --no-first-run", profile.display()), profile));
     }
+    #[test]
+    fn remembered_browser_is_tried_first_and_stale_choice_ignored() {
+        use std::path::PathBuf;
+        let all = vec![PathBuf::from("chromium"), PathBuf::from("chrome"), PathBuf::from("msedge")];
+        assert_eq!(ordered_candidates(all.clone(), Some("msedge".into())),
+                   vec![PathBuf::from("msedge"), PathBuf::from("chromium"), PathBuf::from("chrome")]);
+        assert_eq!(ordered_candidates(all.clone(), Some("uninstalled".into())), all);
+        assert_eq!(ordered_candidates(all.clone(), None), all);
+    }
+
+    #[test]
+    fn edge_gets_its_own_profile() {
+        let edge = profile_for(Path::new("msedge.exe")).unwrap();
+        let chromium = profile_for(Path::new("chrome.exe")).unwrap();
+        assert_ne!(edge, chromium);
+        assert_eq!(edge.parent(), chromium.parent());
+        assert!(known_profiles().contains(&edge) && known_profiles().contains(&chromium));
+    }
+
     #[tokio::test]
     async fn lifecycle_serializes_launch_and_stop() {
         let guard = LIFECYCLE.lock().await;
