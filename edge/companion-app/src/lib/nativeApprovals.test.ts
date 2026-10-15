@@ -25,7 +25,7 @@ describe("hermes v0.22 原生审批 (approval.request)", () => {
       approval_session_key: "chatcmpl-1", command: "rm -rf /tmp/x",
       description: "recursive delete", pattern_key: "rm_rf", timeout_s: NATIVE_APPROVAL_TIMEOUT_S,
     });
-    expect(nativeApprovalFor("chatcmpl-1")).toEqual({ requestId: "r1" });
+    expect(nativeApprovalFor("chatcmpl-1")).toEqual({ requestId: "r1", generation: undefined });
   });
 
   it("没有 run_id 的不认", () => {
@@ -41,6 +41,20 @@ describe("hermes v0.22 原生审批 (approval.request)", () => {
     expect(JSON.parse(init.body)).toEqual({ choice: "once", request_id: "r2" });
     expect(init.headers.Authorization).toBe("Bearer k");
     expect(nativeApprovalFor("chatcmpl-2")).toBeNull();
+  });
+
+  it("v0.22.1: 事件带 execution_generation 就原样带回, 回执恰好三个字段", async () => {
+    pendingFromNativeEvent({ run_id: "chatcmpl-3", request_id: "r3", execution_generation: 2 });
+    await toolBridgeChatApproval("chatcmpl-3", "always");
+    const [, init] = fetchViaProxy.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({ choice: "always", request_id: "r3", execution_generation: 2 });
+  });
+
+  it("generation 不是整数就不带 (v0.22.0 老格式)", async () => {
+    pendingFromNativeEvent({ run_id: "chatcmpl-4", request_id: "r4", execution_generation: "2" });
+    await toolBridgeChatApproval("chatcmpl-4", "deny");
+    const [, init] = fetchViaProxy.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({ choice: "deny", request_id: "r4" });
   });
 
   it("没登记过的 (RoomLink / 老版本插件那套) 仍走 /v1/sessions/{key}/approval", async () => {

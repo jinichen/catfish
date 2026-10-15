@@ -10,19 +10,34 @@
  * 决定走新接口还是老接口 (RoomLink / 老版本 hermes 仍是老接口)。
  */
 
-const nativeRuns = new Map<string, string | undefined>();
+/** 10/15 hermes v0.22.1: 回执必须**恰好**是 {choice, request_id, execution_generation} 三个字段
+ *  (api_server_authority_runs.respond_run: 多一个少一个都 invalid_params), generation 取事件里的。
+ *  v0.22.0 只按名字读 choice / request_id, 多带 generation 不影响 —— 所以现在就带上, 升级不用再改。 */
+interface NativeRun {
+  requestId?: string;
+  generation?: number;
+}
+
+const nativeRuns = new Map<string, NativeRun>();
 
 /** 默认审批等待时长 (秒) —— hermes v0.22 `approvals.timeout` 出厂 300。卡片倒计时用。 */
 export const NATIVE_APPROVAL_TIMEOUT_S = 300;
 
-export function registerNativeApproval(runId: string, requestId?: string): void {
-  nativeRuns.set(runId, requestId);
+export function registerNativeApproval(runId: string, requestId?: string, generation?: number): void {
+  nativeRuns.set(runId, { requestId, generation });
 }
 
-/** 是原生审批就返回 { requestId } (requestId 可能为空), 不是返回 null。 */
-export function nativeApprovalFor(key: string): { requestId?: string } | null {
-  if (!nativeRuns.has(key)) return null;
-  return { requestId: nativeRuns.get(key) };
+/** 是原生审批就返回 { requestId, generation } (都可能为空), 不是返回 null。 */
+export function nativeApprovalFor(key: string): NativeRun | null {
+  return nativeRuns.get(key) ?? null;
+}
+
+/** POST /v1/runs/{run_id}/approval 的 body。有 generation 时三个字段一个不多 (v0.22.1 严格校验)。 */
+export function nativeApprovalBody(native: NativeRun, choice: string): Record<string, unknown> {
+  if (native.requestId && typeof native.generation === "number") {
+    return { choice, request_id: native.requestId, execution_generation: native.generation };
+  }
+  return native.requestId ? { choice, request_id: native.requestId } : { choice };
 }
 
 export function forgetNativeApproval(key: string): void {
@@ -45,7 +60,8 @@ export function pendingFromNativeEvent(ev: unknown): PendingApprovalDetail | nul
   const runId = typeof e.run_id === "string" ? e.run_id : "";
   if (!runId) return null;
   const requestId = typeof e.request_id === "string" && e.request_id ? e.request_id : undefined;
-  registerNativeApproval(runId, requestId);
+  const generation = Number.isInteger(e.execution_generation) ? (e.execution_generation as number) : undefined;
+  registerNativeApproval(runId, requestId, generation);
   return {
     approval_session_key: runId,
     command: String(e.command ?? ""),

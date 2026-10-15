@@ -12,7 +12,7 @@ import { invoke as rawInvoke } from "@tauri-apps/api/core";
 import type { HermesBootstrapProgress } from "./hermesBootstrap";
 import { config } from "./env";
 import { fetchViaProxy } from "./http_proxy";
-import { forgetNativeApproval, nativeApprovalFor } from "./nativeApprovals";
+import { forgetNativeApproval, nativeApprovalBody, nativeApprovalFor } from "./nativeApprovals";
 import type { ServiceStatus } from "../types/service";
 import type { CatalogResponse } from "../types/catalog";
 
@@ -184,7 +184,7 @@ export const toolBridgeChatApproval = async (
   const resp = await fetchViaProxy(url, {
     method: "POST",
     headers,
-    body: JSON.stringify(native?.requestId ? { choice, request_id: native.requestId } : { choice }),
+    body: JSON.stringify(native ? nativeApprovalBody(native, choice) : { choice }),
   });
   if (native) forgetNativeApproval(sessionKey);
   if (!resp.ok) {
