@@ -248,3 +248,16 @@ def test_wechat_reason_passes_through_marked_description():
     assert ux.EVERY_TIME_MARK == p59.EVERY_TIME_MARK
     d = p59.every_time_description(["删除文件"])
     assert ux.translate_reason(d).startswith("这段代码会删除文件")
+
+
+@pytest.mark.parametrize("label", sorted(DESTRUCTIVE))
+def test_destructive_is_caught_without_hermes(label, monkeypatch):
+    """CI 没装 hermes: 本地兜底表也得认出来 (10/15 CI 红过一次)。"""
+    monkeypatch.setattr(dc, "_hermes_detect", lambda: None)
+    assert dc.find_destructive(textwrap.dedent(DESTRUCTIVE[label])), label
+
+
+@pytest.mark.parametrize("label", sorted(EVERYDAY))
+def test_everyday_not_destructive_without_hermes(label, monkeypatch):
+    monkeypatch.setattr(dc, "_hermes_detect", lambda: None)
+    assert dc.find_destructive(textwrap.dedent(EVERYDAY[label])) == [], label

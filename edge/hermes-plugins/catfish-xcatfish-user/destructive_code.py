@@ -51,6 +51,20 @@ _EXTRA_PATTERNS = [
     # 先把带删除的代码写进文件再跑 (写的时候它只是个字符串)
     (re.compile(r"\b(shutil\.rmtree|os\.(remove|unlink|rmdir|removedirs|kill))\s*\(|\.(unlink|rmdir)\s*\("), "删除文件"),
 ]
+# 字符串里的 shell 命令 —— 本地兜底表, 不靠 hermes (CI / hermes 改名时 detect_dangerous_command 拿不到,
+# 安全判断不能整个押在别人的表上)。hermes 的表在时两份都查。
+_SHELL_PATTERNS = [(re.compile(p, re.I), zh) for p, zh in (
+    (r"(?:^|[\s;&|`(])rm\s+\S", "删除文件"),
+    (r"(?:^|[\s;&|`(])(?:del|erase|rd|rmdir)\s+(?:/[a-z]\s+)*\S", "删除文件"),
+    (r"\bremove-item\b", "删除文件"),
+    (r"\bfind\b.*(?:-delete\b|-exec(?:dir)?\s+\S*rm\b)", "删除文件"),
+    (r"\bgit\s+clean\s+-\S*f", "删除文件"),
+    (r"\bgit\s+reset\s+--hard\b", "丢弃还没保存的改动"),
+    (r"\b(?:taskkill|pkill|killall|stop-process)\b|\bkill\s+-\S+", "结束其他程序或服务"),
+    (r"\b(?:mkfs|diskpart|format-volume|clear-disk)\b|\bformat\s+[a-z]:", "格式化 / 清空磁盘"),
+    (r"\b(?:curl|wget|iwr|invoke-webrequest)\b[^|\n]*\|\s*(?:sudo\s+)?(?:ba|z|k)?sh\b|\|\s*iex\b", "从网上下载并直接运行程序"),
+)]
+
 # 代码里点名的脚本文件 (exec(open('x.py').read()) / subprocess 跑 python x.py / skill 的脚本):
 # 文件在就把它也查一遍 —— 跑 skill 脚本是常态, 不能一律当「看不懂」
 _SCRIPT_EXT = re.compile(r"\.(py|sh|bat|cmd|ps1)$", re.I)
@@ -141,6 +155,9 @@ def _script_findings(path_str: str, depth: int) -> List[str]:
     detect = _hermes_detect()
     out: List[str] = []
     for line in text.splitlines():
+        for pat, z in _SHELL_PATTERNS:
+            if pat.search(line) and z not in out:
+                out.append(z)
         why = None
         if detect is not None:
             try:
@@ -194,7 +211,7 @@ def find_destructive(code: str, _depth: int = 0) -> List[str]:
             why = _zh(desc) if hit else None
             if why:
                 add(why)
-        for pat, why in _EXTRA_PATTERNS:
+        for pat, why in _EXTRA_PATTERNS + _SHELL_PATTERNS:
             if pat.search(s):
                 add(why)
         if _depth < 2 and _SCRIPT_EXT.search(s.strip()):
