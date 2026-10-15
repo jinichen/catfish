@@ -225,6 +225,8 @@ _REASON_PREFIXES = (
 
 def translate_reason(description: str) -> str:
     """hermes 的英文原因 → 中文。多条用 "; " 连接的逐条译、去重; 不认识的不露英文。"""
+    if str(description or "").startswith(EVERY_TIME_MARK):     # P59 已经换成中文说明了
+        return str(description).split(": ", 1)[-1]
     out = []
     for part in [p.strip() for p in str(description or "").split("; ") if p.strip()]:
         zh = DANGER_ZH.get(part)
@@ -238,6 +240,7 @@ def translate_reason(description: str) -> str:
     return "、".join(out) or "可能有风险的命令"
 
 
+EVERY_TIME_MARK = "⚠️ 每次都要确认"          # 跟 plugin_approval_always.EVERY_TIME_MARK 同一串 (测试核对)
 _LAST_SUMMARY: Optional[str] = None          # 最近一次审批提示的「要做的事」, 提示语用
 _RESOLVED_AT: dict = {}                      # session_key → 上次回答审批的时间 (monotonic)
 _RECENT_S = 15 * 60
@@ -353,7 +356,7 @@ def _patch_p52_busy_approval_reply() -> None:
 #
 # 10/13 鸿波微信实测: 查一份资质列表弹五六次审批, 每次都是读几个 .md。员工原话「只读代码免批」。
 # readonly_code.analyze 判定只读 (白名单, 拿不准一律算有副作用) → 直接放行, 不弹审批;
-# 其余照走 hermes 原 check_execute_code_guard (单次审批, P51 的大白话提示)。
+# 其余交给里层 P59 (点过始终允许就放行, 删除类每次问) → hermes 原 check_execute_code_guard。
 # 分析本身出错 → 走原 guard (宁可多问一次, 不能漏)。
 
 #: 审批留痕 (approval_audit 模块), plugin.py 注入; 没注入 (单测) 就不记
@@ -376,6 +379,7 @@ def wrap_execute_code_guard(orig, analyzer):
             return {"approved": True, "message": None, "readonly_auto": True}
         return orig(code, env_type, has_host_access, *args, **kwargs)
 
+    patched.__dict__.update(getattr(orig, "__dict__", {}))   # 里层 P59 的标记, 插件重载时不重复包
     patched._catfish_p54 = True
     return patched
 

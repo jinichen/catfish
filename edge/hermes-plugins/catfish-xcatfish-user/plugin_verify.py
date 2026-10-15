@@ -147,10 +147,16 @@ _PATCH_TARGETS = [
     ("gateway.hosted_room_peer", "issue_room_grant", "func"),
     ("gateway.hosted_room_execution_policy", "current_room_execution_policy", "func"),
     ("tools.approval", "register_gateway_notify", "func"),
-    # P20: execute_code 不许进永久白名单 —— v0.22 起按 profile 懒加载直接读 _read_permanent_allowlist
+    # P20: 删除类命令不许进永久白名单 —— v0.22 起按 profile 懒加载直接读 _read_permanent_allowlist
     ("tools.approval", "_read_permanent_allowlist", "func"),
     ("tools.approval", "save_permanent_allowlist", "func"),
     ("tools.approval", "_permanent_set", "func"),
+    # P59: 始终允许放行 / 删除类强制问人 / 定时任务判定 (plugin_approval_always.py)
+    ("tools.approval", "is_approved", "func"),
+    ("tools.approval", "_human_decision", "func"),
+    ("tools.approval", "_is_permanently_approved", "func"),
+    ("tools.approval", "_unattended_contexts", "func"),
+    ("tools.approval_detection", "detect_dangerous_command", "func"),
     # P53: tool_call 桥参数解析 (v0.22 起支持 {"calls": [...]})
     ("tools.tool_search", "resolve_underlying_call", "func"),
     ("tools.tool_search", "scoped_deferrable_names", "func"),

@@ -143,6 +143,11 @@ const BAKED_PLUGIN_BRIDGE_PROMOTED: &str =
 // 10/13 P54: 只读 execute_code 免审批的静态分析 (见 readonly_code.py)
 const BAKED_READONLY_CODE: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/readonly_code.py");
+// 10/15 P59: 点过始终允许就放行 execute_code, 删除类每次问 (见 plugin_approval_always.py / destructive_code.py)
+const BAKED_PLUGIN_APPROVAL_ALWAYS: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_approval_always.py");
+const BAKED_DESTRUCTIVE_CODE: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/destructive_code.py");
 
 /// Plugin 的全部文件 (filename, baked content).
 ///
@@ -189,4 +194,6 @@ pub(crate) const BAKED_FILES: &[(&str, &str)] = &[
     ("plugin_locale_zh.py", BAKED_PLUGIN_LOCALE_ZH),
     ("approval_audit.py", BAKED_APPROVAL_AUDIT),
     ("readonly_code.py", BAKED_READONLY_CODE),
+    ("plugin_approval_always.py", BAKED_PLUGIN_APPROVAL_ALWAYS),
+    ("destructive_code.py", BAKED_DESTRUCTIVE_CODE),
 ];

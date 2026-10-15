@@ -9,6 +9,7 @@ import { useAgentStore } from "../../store/agent";
 import { useChatStore } from "../../store/chat";
 import { toolBridgeChatApproval } from "../../lib/tauri";
 import LifecycleStatus from "./LifecycleStatus";
+import { asksEveryTime, everyTimeReason } from "../../lib/approvalScope";
 
 interface PendingApproval {
   approval_session_key: string;
@@ -219,7 +220,12 @@ export default function ChatPanel({
               {secondsLeft}s
             </span>
           </div>
+          {asksEveryTime(pending.description) && (
+            <div className="approval-banner__note">{everyTimeReason(pending.description)}</div>
+          )}
           <div className="approval-banner__code">{pending.command}</div>
+          {/* 10/15: 「本会话允许」去掉 (hermes 只管这一条消息, 跟字面意思不符);
+              删除类每次都问, 不给「始终允许」—— 见 lib/approvalScope.ts */}
           <div className="approval-banner__actions">
             <button
               className="approval-banner__btn-primary"
@@ -230,22 +236,17 @@ export default function ChatPanel({
               {submittingChoice === "once" && <span className="approval-banner__spinner" />}
               批准
             </button>
-            <button
-              className="approval-banner__btn-link"
-              onClick={() => void handleApproval("session")}
-              disabled={submittingChoice !== null}
-            >
-              {submittingChoice === "session" && <span className="approval-banner__spinner" />}
-              本会话允许
-            </button>
-            <button
-              className="approval-banner__btn-link"
-              onClick={() => void handleApproval("always")}
-              disabled={submittingChoice !== null}
-            >
-              {submittingChoice === "always" && <span className="approval-banner__spinner" />}
-              始终允许
-            </button>
+            {!asksEveryTime(pending.description) && (
+              <button
+                className="approval-banner__btn-link"
+                onClick={() => void handleApproval("always")}
+                disabled={submittingChoice !== null}
+                title="以后这类操作不再问 (删除等破坏性操作除外)"
+              >
+                {submittingChoice === "always" && <span className="approval-banner__spinner" />}
+                始终允许
+              </button>
+            )}
             <button
               className="approval-banner__btn-deny"
               onClick={() => void handleApproval("deny")}

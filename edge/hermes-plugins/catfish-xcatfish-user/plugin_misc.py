@@ -1,7 +1,7 @@
 """零散 patch —— 从 plugin.py 拆出 (8/15 第 2 趟)。
 
 P12 (update_system_prompt 静默失败) · P13 (dump 命名 type tag) ·
-P19 (status_callback 桥) · P20 (禁 execute_code 永久模式) ·
+P19 (status_callback 桥) · P20 (删除类命令不许永久批准) ·
 P29 (/learn 中文翻译)。(P36 terminal cwd 8/19 退役 —— 上游
 gateway/run.py:2207 的 home_fallback 做了同一件事, 墓碑在 plugin_wechat_qr.py 尾。)
 
@@ -261,42 +261,34 @@ def _patch_p13_dump_naming_type_tag() -> None:
 # hermes v0.22.0 原生在流里发 `event: hermes.status`, 在 /v1/responses、/v1/runs 上 P19 反而会盖掉原生的。
 # Companion 改接 hermes.status (src/lib/chat.ts)。
 
-# ── P20 (P3.5.65, 6/22 鸿波 catch "审批按钮一直不弹") ──────────────────
+# ── P20 · 删除等破坏性命令不许「永久批准」 ─────────────────────────────
 #
-# 真因 (read-only diagnostic 实证 14:58):
-#   user mac _permanent_approved set 含 "execute_code" 字面字符串 →
-#   check_execute_code_guard:1749 is_approved("execute_code") → True →
-#   line 1750 silent auto-approve → 按钮永远不弹.
+# 6/22 起 P20 拦的是 execute_code 的永久批准 (怕「始终允许」等于把 shell 交给模型)。
+# 10/15 鸿波改口径: 「只要点过始终允许, 下一次就不要再审批了, 除非那种删除等严重破坏
+# 内容的指令」—— 当时拦掉之后按钮还在, 员工点了 9 次全白点, 而 skill 跑一轮弹好几次审批。
 #
-# 由来: 用户某次 chat 收到 execute_code approval 弹窗, 点了 "always".
-#   approve_permanent("execute_code") 把字符串加进 _permanent_approved +
-#   save_permanent_allowlist 写进 ~/.hermes/config.yaml command_allowlist.
-#   永久生效 (跨 hermes 重启).
+# 现在:
+#   · execute_code 可以永久批准了。删除类脚本照样每次问, 那道闸在 P59
+#     (plugin_approval_always.py) 里按代码内容现判, 不靠批准记录。
+#   · 终端危险命令里删除 / 结束进程 / 格式化 / 改安全设置这几类 (destructive_code._zh 认得出的)
+#     不许永久批准 —— 点了「始终允许」也只算这一次。其余危险命令 (python -c 等) 照 hermes 原样。
 #
-# 治本红线: execute_code = 给 LLM 任意 Python 沙箱权限. 一旦 always-approved
-#   = 给 LLM 完全 shell 权限. **永远不允许永久 approve**, 每次必须员工
-#   explicit 选 once / session (session 也只是当前对话). 是 catfish 安全
-#   红线, 不该向员工开放这个选项.
-#
-# 修法:
-#   1. wrap approve_permanent(pattern_key) — 如果 pattern_key == "execute_code",
-#      丢弃 + warning log, **不**加进 _permanent_approved
-#   2. wrap load_permanent(patterns: set) — 从 config 加载时也过滤掉
-#      "execute_code" (用户老 config 自动洗白)
-#   3. 启动时一次性 sweep: 如果 _permanent_approved 已含 "execute_code",
-#      remove + save_permanent_allowlist (auto-fix 用户老安装)
-#
-# 不 wrap check_execute_code_guard 本身 (上次 P15.3 wrap 不稳教训), 改
-# wrap **加入点** (approve_permanent / load_permanent) — 入口阻断比 wrap
-# 关键 guard 函数安全得多.
+# 拦在加入点 (approve_permanent / 读写 command_allowlist), 不碰 check_all_command_guards
+# (6/22 那次 wrap 关键 guard 不稳的教训)。老 config 里已有的删除类条目启动时清掉。
 
-_EXEC_CODE_PATTERN_KEYS_BLOCKED = {"execute_code"}
+
+def _blocked_permanent(pattern_key: str) -> bool:
+    try:
+        return _sib("plugin_approval_always").is_destructive_pattern_key(pattern_key)
+    except Exception as e:  # noqa: BLE001 — 判不了不拦 (sweep 会删 config 条目, 不能误删员工已有的)
+        logger.warning("P20: 破坏性判断不可用 (%s), 本次不拦 %r", e, pattern_key)
+        return False
 
 
 
 
 def _patch_p20_block_execute_code_permanent() -> None:
-    """禁止 execute_code 进 _permanent_approved set / config command_allowlist."""
+    """删除类终端命令不许进 _permanent_approved / config command_allowlist (10/15 起 execute_code 放开)。"""
     try:
         from tools import approval as _approval_mod
     except ImportError as e:
@@ -309,17 +301,13 @@ def _patch_p20_block_execute_code_permanent() -> None:
     _orig_save_allowlist = _approval_mod.save_permanent_allowlist
 
     def _wrapped_approve_permanent(pattern_key: str):
-        if pattern_key in _EXEC_CODE_PATTERN_KEYS_BLOCKED:
-            logger.warning(
-                "P20 红线: 拒绝 approve_permanent(%r) — execute_code 永久 approve "
-                "等于给 LLM 完全 shell 权限, 每次必须员工 explicit 确认.",
-                pattern_key,
-            )
+        if _blocked_permanent(pattern_key):
+            logger.warning("P20: 拒绝 approve_permanent(%r) — 删除等破坏性命令每次都要员工同意", pattern_key)
             return  # 静默丢弃, 不抛 (Hermes UI 仍正常 close)
         return _orig_approve_permanent(pattern_key)
 
     def _drop_blocked(patterns, where: str) -> set:
-        cleaned = {p for p in patterns if p not in _EXEC_CODE_PATTERN_KEYS_BLOCKED}
+        cleaned = {p for p in patterns if not _blocked_permanent(p)}
         dropped = set(patterns) - cleaned
         if dropped:
             logger.warning("P20 红线: %s 过滤掉 %d 条危险 pattern: %r", where, len(dropped), sorted(dropped))
@@ -334,7 +322,7 @@ def _patch_p20_block_execute_code_permanent() -> None:
         return _drop_blocked(_orig_read_allowlist(), "_read_permanent_allowlist")
 
     def _sweep() -> None:
-        """config.yaml 的 command_allowlist 里有 execute_code 就删掉, 内存里同步去掉。
+        """config.yaml 的 command_allowlist 里有删除类条目就删掉, 内存里同步去掉。
 
         v0.22 的 save_permanent_allowlist 只增不删 (磁盘上的一律保留), 不能再靠它写回 ——
         直接改 config。"""
@@ -342,19 +330,23 @@ def _patch_p20_block_execute_code_permanent() -> None:
 
         config = load_config()
         raw = config.get("command_allowlist")
-        if isinstance(raw, list) and any(p in _EXEC_CODE_PATTERN_KEYS_BLOCKED for p in raw):
-            config["command_allowlist"] = [p for p in raw if p not in _EXEC_CODE_PATTERN_KEYS_BLOCKED]
+        bad = sorted(p for p in raw if isinstance(p, str) and _blocked_permanent(p)) \
+            if isinstance(raw, list) else []
+        if bad:
+            config["command_allowlist"] = [p for p in raw if p not in bad]
             save_config(config)
-            logger.warning(
-                "P20 sweep: 从 config.yaml command_allowlist 移除 %r", sorted(_EXEC_CODE_PATTERN_KEYS_BLOCKED)
-            )
+            logger.warning("P20 sweep: 从 config.yaml command_allowlist 移除 %r", bad)
+
+        def _clean(s: set) -> None:
+            s.difference_update({p for p in s if _blocked_permanent(p)})
+
         with _approval_mod._lock:
-            _approval_mod._permanent_set().difference_update(_EXEC_CODE_PATTERN_KEYS_BLOCKED)
-            _approval_mod._permanent_approved.difference_update(_EXEC_CODE_PATTERN_KEYS_BLOCKED)
+            _clean(_approval_mod._permanent_set())
+            _clean(_approval_mod._permanent_approved)
             for approved in _approval_mod._permanent_approved_by_home.values():
-                approved.difference_update(_EXEC_CODE_PATTERN_KEYS_BLOCKED)
+                _clean(approved)
             for baseline in _approval_mod._permanent_baseline_by_home.values():
-                baseline.difference_update(_EXEC_CODE_PATTERN_KEYS_BLOCKED)
+                _clean(baseline)
 
     def _wrapped_save_allowlist(patterns: set):
         # 存盘时会把磁盘上的整份并回内存 —— 员工手工加进 config 的 execute_code 也会被并进来
@@ -370,16 +362,13 @@ def _patch_p20_block_execute_code_permanent() -> None:
     _approval_mod._read_permanent_allowlist = _wrapped_read_allowlist
     _approval_mod.save_permanent_allowlist = _wrapped_save_allowlist
 
-    # 一次性 sweep: 老 install command_allowlist 已含 execute_code → 移除 + 持久化
+    # 一次性 sweep: 老 config 里已有删除类条目 → 移除 + 持久化
     try:
         _sweep()
     except Exception as e:  # noqa: BLE001
         logger.warning("P20 sweep 失败 (%s)", e)
 
-    logger.info(
-        "P20 approve_permanent / load_permanent / allowlist 读写 wrapped — execute_code 永久 "
-        "approve 已封死, 每次审批必须员工 explicit 确认 ✓"
-    )
+    logger.info("P20 删除类命令不许永久批准 (approve_permanent / allowlist 读写) wrapped")
 
 
 

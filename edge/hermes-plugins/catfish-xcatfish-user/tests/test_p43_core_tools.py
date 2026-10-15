@@ -76,10 +76,12 @@ def test_prefix_matches_hermes_convention_if_hermes_present():
 
     hermes 没装就跳过 —— 这条是"能验就验", 不是硬依赖。
     """
-    mcp_tool = Path.home() / ".hermes/hermes-agent/tools/mcp_tool.py"
-    if not mcp_tool.exists():
+    tools_dir = Path.home() / ".hermes/hermes-agent/tools"
+    if not (tools_dir / "mcp_tool.py").exists():
         pytest.skip("本机没有 hermes-agent 源码")
-    src = mcp_tool.read_text(encoding="utf-8", errors="replace")
+    # v0.22 把 mcp_tool.py 拆成了 mcp_tool_*.py (前缀在 mcp_tool_schema.py), 一起读
+    src = "\n".join(f.read_text(encoding="utf-8", errors="replace")
+                    for f in sorted(tools_dir.glob("mcp_tool*.py")))
     m = re.search(r'MCP_TOOL_NAME_PREFIX\s*=\s*"([^"]+)"', src)
     assert m, "hermes 里找不到 MCP_TOOL_NAME_PREFIX —— 上游可能改了命名机制"
     assert pct._MCP_PREFIX.startswith(m.group(1)), (

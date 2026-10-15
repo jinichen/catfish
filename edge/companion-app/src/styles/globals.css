@@ -1545,6 +1545,16 @@ button {
   word-break: break-all;
 }
 
+/* 10/15: 删除类审批 (插件标「每次都要确认」) —— 原因写在代码上面, 不给「始终允许」 */
+.approval-banner__note {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--status-err);
+  background: color-mix(in srgb, var(--status-err) 9%, transparent);
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+
 .approval-banner__actions {
   display: flex;
   align-items: center;

@@ -54,6 +54,15 @@ REFACTOR_BASE = "cc4d71a"
 #: 一个 patch 悄悄多出来跟悄悄少一个同等危险 —— monkey-patch 是全进程生效的，
 #: 谁加的、为什么加、影响面多大，得有地方写。
 INTENTIONALLY_ADDED: dict[str, str] = {
+    "_patch_p59_always_means_always": (
+        "10/15 加 (鸿波「只要点过始终允许, 下一次就不要再审批了, 除非那种删除等严重破坏内容的指令」)。"
+        "EIS 资质 skill 一轮弹好几次 execute_code 审批, 「始终允许」被 P20 吞掉白点 9 次; 定时任务 execute_code 一律被拒。\n"
+        "  改: 包 tools.approval.check_execute_code_guard (在 P54 里层) / is_approved / _human_decision。"
+        "点过始终允许 → execute_code 直接放行 (聊天 / 定时任务); destructive_code 判出删除 / 结束进程 / 格式化 / "
+        "改安全设置 → 有人在就每次问 (不走 smart、不记会话 / 永久批准), 没人在 (定时任务) 直接不执行。\n"
+        "  影响面: 只放松「员工点过始终允许 + 静态看不出破坏」的 execute_code; P20 同时改成删除类终端命令不许永久批准。"
+        "有绕过测试 (test_p59_always_means_always.py)。"
+    ),
     "_patch_p58_locale_zh": (
         "10/14 加 (hermes v0.22 升级)。v0.22 网关固定提示全走 t() 语言包, P28 的字面量替换一次漏了 8 条。\n"
         "  改: 用 agent.i18n_layers.register_pack 注册 zh 包 (插件语言包那一层), 从 hermes 自带 zh 目录派生 —— "
@@ -91,7 +100,7 @@ INTENTIONALLY_ADDED: dict[str, str] = {
         "被引用 / 动态取 (getattr / sys.modules / 双下划线 / import *) 一律算有副作用; "
         "分析出错走原 guard。有专门的绕过测试 (test_p54_readonly_code.py)。\n"
         "  影响面: 只放松「静态可证只读」的脚本; 写 / 删 / 联网 / 跑非白名单命令照常单次审批。"
-        "跟 P20 (禁止永久放行 execute_code) 不冲突: P54 不碰批准记录, 每次按代码内容现判。"
+        "P54 不碰批准记录, 每次按代码内容现判; 里层是 P59 (始终允许 / 删除类每次问)。"
     ),
     "_patch_p53_bridge_promoted_catfish_tools": (
         "10/13 加。模型用 tool_call 调被 P43 提升的 catfish_wiki_search, 上游报"

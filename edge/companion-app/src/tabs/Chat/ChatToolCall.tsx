@@ -8,16 +8,20 @@ import { toolBridgeChatApproval } from "../../lib/tauri";
 import { parseNeedsCredential } from "../../lib/needsCredential";
 import { isApprovalPending as matchApprovalPending, toolResultString } from "../../lib/chatToolSteps";
 import InlineCredentialPrompt from "./components/InlineCredentialPrompt";
+import { asksEveryTime } from "../../lib/approvalScope";
 
 // P44 (6/5 鸿波 marathon): chat completions approval — session_key 从 SSE event
 // `hermes.tool.progress` (status=approval_pending) 拿. plugin P15 注的
 // _approval_notify push 这个 event. 全局 mutable 一个 latest session_key (chat
 // 一次只可能有 1 个 pending block, 不会并发), ApprovalButton onClick 用.
 let _latestApprovalSessionKey: string | null = null;
+// 10/15: 删除类审批 (插件标「每次都要确认」) 不给「始终批准」—— lib/approvalScope.ts
+let _latestApprovalEveryTime = false;
 if (typeof window !== "undefined") {
   window.addEventListener("catfish:approval-pending", (e: Event) => {
-    const ev = e as CustomEvent<{ approval_session_key?: string }>;
+    const ev = e as CustomEvent<{ approval_session_key?: string; description?: string }>;
     _latestApprovalSessionKey = ev.detail?.approval_session_key ?? null;
+    _latestApprovalEveryTime = asksEveryTime(ev.detail?.description);
   });
 }
 
@@ -226,11 +230,13 @@ function ApprovalButtons() {
         variant="primary"
         onClick={() => void handleChoice("once")}
       />
-      <ApprovalBtn
-        label="始终批准"
-        variant="always"
-        onClick={() => void handleChoice("always")}
-      />
+      {!_latestApprovalEveryTime && (
+        <ApprovalBtn
+          label="始终批准"
+          variant="always"
+          onClick={() => void handleChoice("always")}
+        />
+      )}
       <ApprovalBtn
         label="拒绝"
         variant="deny"

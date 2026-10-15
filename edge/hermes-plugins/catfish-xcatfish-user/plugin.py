@@ -156,6 +156,9 @@ def _patch_p57_slash_confirm() -> None:
 approval_audit = _import_sibling("approval_audit")  # __init__.py 注册它的 post_approval_response 钩子
 approval_audit.ctx_module = plugin_ctx
 plugin_approval_ux.audit = approval_audit  # P54 只读免批不经过 hermes 审批流程, 自己记一笔
+plugin_approval_always = _import_sibling("plugin_approval_always")
+plugin_approval_always.audit = approval_audit  # P59 始终允许放行 / 定时任务拦删除, 同样自己记
+_patch_p59_always_means_always = plugin_approval_always._patch_p59_always_means_always  # noqa: F401  (re-export · 见 plugin_approval_always.py)
 plugin_locale_zh = _import_sibling("plugin_locale_zh")
 _patch_p58_locale_zh = plugin_locale_zh._patch_p58_locale_zh  # noqa: F401  (re-export · 见 plugin_locale_zh.py)
 plugin_bridge_promoted = _import_sibling("plugin_bridge_promoted")
@@ -182,7 +185,6 @@ _patch_p10_apply_client_headers_localhost = plugin_runtime._patch_p10_apply_clie
 _patch_p23_inbound_picker_integration = plugin_runtime._patch_p23_inbound_picker_integration  # noqa: F401
 
 plugin_misc = _import_sibling("plugin_misc")
-_EXEC_CODE_PATTERN_KEYS_BLOCKED = plugin_misc._EXEC_CODE_PATTERN_KEYS_BLOCKED  # noqa: F401
 _patch_p12_update_system_prompt_safe = plugin_misc._patch_p12_update_system_prompt_safe  # noqa: F401
 _patch_p13_dump_naming_type_tag = plugin_misc._patch_p13_dump_naming_type_tag  # noqa: F401
 _patch_p20_block_execute_code_permanent = plugin_misc._patch_p20_block_execute_code_permanent  # noqa: F401
@@ -398,6 +400,9 @@ def _apply_patches() -> None:
     # 被拒 → 绕去写 Python 读 .md → 两次 execute_code 审批。让 tool_call 照转本会话里已有的
     # catfish 工具 (能调到的集合不变)。详见 plugin_bridge_promoted.py。
     _try_patch(_patch_p53_bridge_promoted_catfish_tools, "P53: _patch_p53_bridge_promoted_catfish_tools 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
+    # P59 (10/15 鸿波「点过始终允许就别再问, 删除等严重破坏的除外」): execute_code 点过始终允许 →
+    # 放行 (聊天 / 定时任务都是); 删除类脚本每次问人, 定时任务里不执行。必须在 P54 之前装 (P54 包在外面)。
+    _try_patch(_patch_p59_always_means_always, "P59: _patch_p59_always_means_always 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P54 (10/13 鸿波「只读代码免批」): 查资料的只读脚本 (读文件 / 列目录 / ps) 不再弹审批;
     # 静态分析白名单, 拿不准一律照常审批。见 readonly_code.py。
     _try_patch(_patch_p54_readonly_execute_code, "P54: _patch_p54_readonly_execute_code 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
@@ -424,14 +429,8 @@ def _apply_patches() -> None:
     # P3.4.D 6/15 鸿波: bg-review HTTP 400 X-Catfish-User missing — patch AIAgent.__init__
     #   post-init, bg-review review_agent 从 session_registry 拿 parent cf_user 注入.
     _try_patch(_patch_p17_bg_review_inject, "P17: _patch_p17_bg_review_inject 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
-    # P3.5.65 P20 (6/22 鸿波 catch "审批按钮一直不弹"): wrap approve_permanent /
-    # load_permanent, 拦截 execute_code 进 _permanent_approved.
-    # 真因 (read-only diagnostic 实证): 用户某次 audit UI 点 "always", 把
-    # "execute_code" 字面字符串加进 _permanent_approved + config.yaml
-    # command_allowlist. 之后每次 execute_code 调走 check_execute_code_guard:1749
-    # is_approved("execute_code") → True → silent auto-approve 永远不弹按钮.
-    # execute_code 是给 LLM **任意 Python 沙箱权限**的危险 pattern, 一旦 always-
-    # approved = 给 LLM 完全 shell 权限. 红线: 永远不允许永久 approve.
+    # P20 (6/22 起拦 execute_code 永久批准; 10/15 改): 删除 / 结束进程 / 格式化等破坏性终端命令
+    # 不许永久批准, execute_code 放开 (删除类脚本由 P59 每次问)。见 plugin_misc.py。
     _try_patch(_patch_p20_block_execute_code_permanent, "P20: _patch_p20_block_execute_code_permanent 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P3.5.74 P21 (6/22 鸿波 catch "cron 不是用 picker 吗"): hermes cron/scheduler.py
     # run_job 读 config.yaml model.default 跟 picker_state.json 解耦, 员工切 picker

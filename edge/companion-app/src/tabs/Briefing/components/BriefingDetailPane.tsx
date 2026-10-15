@@ -60,6 +60,7 @@ import { useChatStore } from "../../../store/chat";
 import { useTaskChat } from "../../../hooks/useTaskChat";
 import { ChatMsg } from "./BriefingChatMsg";
 import TaskChatProgress from "./TaskChatProgress";
+import { asksEveryTime, everyTimeReason } from "../../../lib/approvalScope";
 
 /** P3.3.10: hermes approval pending event 数据 (跟 ChatPanel PendingApproval 同款).
  *
@@ -599,7 +600,11 @@ export function DetailPane({
             <code className="pattern">{pending.pattern_key}</code>
             <span className="countdown" aria-live="polite">{secondsLeft}s</span>
           </div>
+          {asksEveryTime(pending.description) && (
+            <div className="approval-banner__note">{everyTimeReason(pending.description)}</div>
+          )}
           <div className="approval-banner__code">{pending.command}</div>
+          {/* 10/15: 跟 ChatPanel 同款 —— 去掉「本会话」, 删除类不给「始终允许」(lib/approvalScope.ts) */}
           <div className="approval-banner__actions">
             <button
               className="approval-banner__btn-primary"
@@ -610,20 +615,16 @@ export function DetailPane({
               {submittingChoice === "once" && <span className="approval-banner__spinner" />}
               批准
             </button>
-            <button
-              className="approval-banner__btn-secondary"
-              onClick={() => void handleApproval("session")}
-              disabled={submittingChoice !== null}
-            >
-              本会话始终
-            </button>
-            <button
-              className="approval-banner__btn-secondary"
-              onClick={() => void handleApproval("always")}
-              disabled={submittingChoice !== null}
-            >
-              永久
-            </button>
+            {!asksEveryTime(pending.description) && (
+              <button
+                className="approval-banner__btn-secondary"
+                onClick={() => void handleApproval("always")}
+                disabled={submittingChoice !== null}
+                title="以后这类操作不再问 (删除等破坏性操作除外)"
+              >
+                始终允许
+              </button>
+            )}
             <button
               className="approval-banner__btn-danger"
               onClick={() => void handleApproval("deny")}
