@@ -4991,8 +4991,32 @@ button {
   background: #f6f8f8;
   border: 1px solid var(--catfish-border);
   border-radius: 9px;
+  font-size: 12px;
+}
+/* 10/15: 中文状态 + 已等多久 + 说明, 加个转圈, 让人知道还在动 */
+.chat-panel__lifecycle-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.chat-panel__lifecycle-elapsed {
+  font-variant-numeric: tabular-nums;
+}
+.chat-panel__lifecycle-hint {
   font-size: 11px;
-  font-style: italic;
+  opacity: 0.8;
+}
+.chat-panel__lifecycle-spinner {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--catfish-border);
+  border-top-color: var(--catfish-text-muted);
+  border-radius: 50%;
+  animation: chat-lifecycle-spin 0.9s linear infinite;
+}
+@keyframes chat-lifecycle-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* 降级提示 (8/13). 跟 lifecycle 同结构, 但用警示色 —— 它不是进度, 是"你现在
@@ -5161,6 +5185,12 @@ button {
 
   .chat-workspace__header {
     background: rgba(28, 42, 46, 0.94);
+  }
+
+  /* 10/15: 状态条原来硬编码 #f6f8f8, 深色主题下是一块亮斑 */
+  .chat-panel__lifecycle {
+    background: #1f2f33;
+    border-color: #355057;
   }
 
   /* 8/13: 降级提示的深色配色。浅色那份是 #fff8e6 底 —— 深色主题下会变成一块

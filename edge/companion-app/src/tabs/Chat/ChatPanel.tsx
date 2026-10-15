@@ -8,6 +8,7 @@ import type { Attachment, ChatMessage as Msg } from "../../types/chat";
 import { useAgentStore } from "../../store/agent";
 import { useChatStore } from "../../store/chat";
 import { toolBridgeChatApproval } from "../../lib/tauri";
+import LifecycleStatus from "./LifecycleStatus";
 
 interface PendingApproval {
   approval_session_key: string;
@@ -190,11 +191,7 @@ export default function ChatPanel({
         {/* P3.5.18 Phase 2 (6/17 鸿波): hermes preflight 自动压缩 inline 状态.
             stream done 后 useChat 清 lifecycleStatus = null → 自动消失.
             只 streaming 中 + lifecycleStatus 非 null 才显. 不打扰 message 流. */}
-          {isStreaming && lifecycleStatus && (
-            <div className="chat-panel__lifecycle" aria-live="polite">
-              <span>{lifecycleStatus}</span>
-            </div>
-          )}
+          {isStreaming && lifecycleStatus && <LifecycleStatus raw={lifecycleStatus} />}
           {/* 8/13: 降级提示。hermes 不可达时 chat.ts 会自动回落直连网关 ——
               能聊天, 但没有 agent loop / 工具 / 记忆。以前这一切是**静默**的,
               员工只会觉得"小鲶今天变笨了"。降级本身没问题, 不告诉人才有问题。
