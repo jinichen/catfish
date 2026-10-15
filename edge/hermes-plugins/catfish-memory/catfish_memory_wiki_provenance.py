@@ -36,7 +36,12 @@ except ImportError:  # 独立脚本模式 (无父包)
 
 def _load_relation_vocab() -> tuple[frozenset, dict, str]:
     import json as _json
-    p = Path(__file__).resolve().parents[2] / "contracts" / "wiki_relation_vocab.json"
+    # 10/15: 安装包里插件在 hermes-agent/plugins/memory/catfish-memory/, 词表随包放在
+    # 插件自己的 contracts/ 下 (build-*-resources.sh 拷); 源码目录里是 edge/contracts/。
+    here = Path(__file__).resolve()
+    p = next((c for c in (here.parent / "contracts" / "wiki_relation_vocab.json",
+                          here.parents[2] / "contracts" / "wiki_relation_vocab.json") if c.is_file()),
+             here.parents[2] / "contracts" / "wiki_relation_vocab.json")
     try:
         d = _json.loads(p.read_text(encoding="utf-8"))
         return frozenset(d["relations"].keys()), dict(d["aliases"]), str(d["fallback"])

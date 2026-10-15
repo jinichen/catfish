@@ -106,6 +106,9 @@ for plugin in catfish-memory; do
     n="$(git -C "$src" ls-files | wc -l | tr -d ' ')"
     [ "$n" -gt 0 ] || { echo "❌ $src 里没有 git 跟踪的文件"; exit 1; }
     (cd "$src" && git ls-files -z | xargs -0 tar cf -) | (cd "$dest" && tar xf -)
+    # 10/15: 插件读的两份受控词表在 edge/contracts/, 装好后插件旁边没有它 —— 随包放进插件目录
+    mkdir -p "$dest/contracts"
+    cp "$REPO/edge/contracts"/wiki_relation_vocab.json "$REPO/edge/contracts"/wiki_type_vocab.json "$dest/contracts/" || exit 1
     echo "  copied $plugin ($n 个文件)"
 done
 

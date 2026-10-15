@@ -129,7 +129,12 @@ except ImportError:  # 独立脚本模式 (无父包)
 # 产线两个结果。抽成共享文件, 不给它分叉的机会 (跟名字解析那套 contract 同因)。
 def _load_type_vocab() -> tuple[dict, frozenset, frozenset]:
     import json as _json
-    p = Path(__file__).resolve().parents[2] / "contracts" / "wiki_type_vocab.json"
+    # 10/15: 安装包里插件在 hermes-agent/plugins/memory/catfish-memory/, 词表随包放在
+    # 插件自己的 contracts/ 下 (build-*-resources.sh 拷); 源码目录里是 edge/contracts/。
+    here = Path(__file__).resolve()
+    p = next((c for c in (here.parent / "contracts" / "wiki_type_vocab.json",
+                          here.parents[2] / "contracts" / "wiki_type_vocab.json") if c.is_file()),
+             here.parents[2] / "contracts" / "wiki_type_vocab.json")
     try:
         d = _json.loads(p.read_text(encoding="utf-8"))
         return d["aliases"], frozenset(d["entity_types"]), frozenset(d["concept_types"])

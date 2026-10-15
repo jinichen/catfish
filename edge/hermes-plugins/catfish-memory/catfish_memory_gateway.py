@@ -191,6 +191,25 @@ def _load_plugin_config(home: Optional[Path] = None) -> Dict[str, Any]:
         return {}
 
 
+def _hermes_home() -> Path:
+    """hermes 的数据目录, 优先级跟 hermes 自己一致: HERMES_HOME > hermes_constants >
+    平台默认 (Windows %LOCALAPPDATA%\\hermes, 其余 ~/.hermes)。同 catfish_memory_render._hermes_home。"""
+    import sys as _sys
+
+    env = os.environ.get("HERMES_HOME", "").strip()
+    if env:
+        return Path(env).expanduser()
+    try:
+        from hermes_constants import get_hermes_home  # noqa: PLC0415
+
+        return Path(get_hermes_home())
+    except Exception:  # noqa: BLE001 — dream_cli 子进程里 hermes_constants 不一定在 sys.path
+        pass
+    if _sys.platform == "win32" and os.environ.get("LOCALAPPDATA"):
+        return Path(os.environ["LOCALAPPDATA"]) / "hermes"
+    return Path.home() / ".hermes"
+
+
 def _read_hermes_env_key(key: str) -> str:
     """读 hermes 管理的 env key. 双查 os.environ + ~/.hermes/.env 文件.
 
@@ -210,7 +229,9 @@ def _read_hermes_env_key(key: str) -> str:
     if val:
         return val
     try:
-        env_path = Path(os.path.expanduser("~")) / ".hermes" / ".env"
+        # 10/15: 原来写死 ~/.hermes/.env —— Windows 上 hermes 在 %LOCALAPPDATA%\hermes,
+        # 永远读不到, Dream Engine「现在重蒸」报 llm_fail (鸿波 Windows 截图)。
+        env_path = _hermes_home() / ".env"
         if not env_path.exists():
             return ""
         for line in env_path.read_text(encoding="utf-8").splitlines():
@@ -231,7 +252,7 @@ def _read_hermes_env_key(key: str) -> str:
 
 _TOKEN_MISSING_MSG = (
     "catfish-memory: 拿不到 gateway 鉴权 token, %s skip. "
-    "查顺序 ① ~/.hermes/.env OPENAI_API_KEY (hermes→gateway service token, "
+    "查顺序 ① hermes 目录下 .env 的 OPENAI_API_KEY (hermes→gateway service token, "
     "跑 central/llm-gateway/refresh-jwt-hermes-env.sh 刷新) "
     "② env/. env CATFISH_INTERNAL_DEV_TOKEN ③ ~/.catfish/memory_plugin.yaml gateway.token"
 )

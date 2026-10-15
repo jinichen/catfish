@@ -179,12 +179,12 @@ pub(crate) async fn run_dream(
     //   真因: dream_cli subprocess 不继承 hermes/gateway 进程的 .env. catfish-memory
     //   plugin 在 hermes 进程内时, hermes 启动 source ~/.hermes/.env, env 就有 token;
     //   Rust spawn 不走 source 路径, 必须显式传.
-    let (hermes_token, hermes_gateway_url) = read_hermes_dev_env();
-    if hermes_token.is_none() {
-        log::warn!(
-            "[dream] CATFISH_INTERNAL_DEV_TOKEN 未在 ~/.hermes/.env 找到, dream_cli 会撞 llm_fail. \
-             检查 ~/.hermes/.env 是否含此行."
-        );
+    // 10/15: 生产上 .env 里是 OPENAI_API_KEY (hermes→gateway 服务令牌), 没有 dev token ——
+    //   原来只传 dev token, 子进程里的插件只好自己去读 ~/.hermes/.env, Windows 上那个目录
+    //   不存在 (hermes 在 %LOCALAPPDATA%\hermes) → llm_fail。两个都传, 再把 hermes 目录传下去。
+    let env = read_hermes_dev_env();
+    if env.dev_token.is_none() && env.service_token.is_none() {
+        log::warn!("[dream] hermes .env 里没有 OPENAI_API_KEY / CATFISH_INTERNAL_DEV_TOKEN, dream_cli 会撞 llm_fail");
     }
 
     // python_tokio_command: 事件 JSON 里全是中文, Windows 上默认 GBK 输出会乱码/崩
@@ -194,12 +194,16 @@ pub(crate) async fn run_dream(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if let Some(token) = &hermes_token {
+    if let Some(token) = &env.dev_token {
         cmd.env("CATFISH_INTERNAL_DEV_TOKEN", token);
     }
-    if let Some(url) = &hermes_gateway_url {
+    if let Some(token) = &env.service_token {
+        cmd.env("OPENAI_API_KEY", token);
+    }
+    if let Some(url) = &env.gateway_url {
         cmd.env("CATFISH_GATEWAY_URL", url);
     }
+    cmd.env("HERMES_HOME", &env.hermes_home);
 
     let mut child = cmd
         .spawn()
@@ -327,40 +331,46 @@ pub async fn dream_distill_status() -> Result<DreamStatus, String> {
 /// 没拿到就返空 → `_call_distill_llm` 返 None → UI llm_fail.
 ///
 /// 简单解析 KEY=VALUE 行 (忽略注释 / 空行). 不依赖 dotenv crate (新增依赖太重).
-fn read_hermes_dev_env() -> (Option<String>, Option<String>) {
-    let home = match std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-        Some(h) => PathBuf::from(h),
-        None => return (None, None),
-    };
-    let env_path = crate::services::catfish_paths::hermes_home_for(&home).join(".env");
-    let text = match std::fs::read_to_string(&env_path) {
-        Ok(s) => s,
-        Err(e) => {
-            log::debug!("[dream] 读 {} 失败: {} (token 不传 subprocess)", env_path.display(), e);
-            return (None, None);
-        }
-    };
+struct HermesDevEnv {
+    hermes_home: PathBuf,
+    dev_token: Option<String>,
+    service_token: Option<String>,
+    gateway_url: Option<String>,
+}
 
-    let mut token: Option<String> = None;
-    let mut url: Option<String> = None;
+fn read_hermes_dev_env() -> HermesDevEnv {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let hermes_home = crate::services::catfish_paths::hermes_home_for(&home);
+    let text = std::fs::read_to_string(hermes_home.join(".env")).unwrap_or_else(|e| {
+        log::debug!("[dream] 读 {}/.env 失败: {} (token 不传 subprocess)", hermes_home.display(), e);
+        String::new()
+    });
+    parse_hermes_dev_env(hermes_home, &text)
+}
+
+fn parse_hermes_dev_env(hermes_home: PathBuf, text: &str) -> HermesDevEnv {
+    let mut out = HermesDevEnv { hermes_home, dev_token: None, service_token: None, gateway_url: None };
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        if let Some(rest) = line.strip_prefix("CATFISH_INTERNAL_DEV_TOKEN=") {
-            let val = strip_env_quotes(rest);
-            if !val.is_empty() {
-                token = Some(val);
-            }
-        } else if let Some(rest) = line.strip_prefix("CATFISH_GATEWAY_URL=") {
-            let val = strip_env_quotes(rest);
-            if !val.is_empty() {
-                url = Some(val);
-            }
+        let Some((key, rest)) = line.split_once('=') else { continue };
+        let val = strip_env_quotes(rest);
+        if val.is_empty() {
+            continue;
+        }
+        match key.trim() {
+            "CATFISH_INTERNAL_DEV_TOKEN" => out.dev_token = Some(val),
+            "OPENAI_API_KEY" => out.service_token = Some(val),
+            "CATFISH_GATEWAY_URL" => out.gateway_url = Some(val),
+            _ => {}
         }
     }
-    (token, url)
+    out
 }
 
 /// 剥 .env 值的引号 + 行末注释. KEY="value" 和 KEY=value # comment 都处理.
@@ -442,5 +452,17 @@ mod describe_tests {
         // 没终态时不能装作成功 —— 那正是这次要修的毛病
         let s = describe(&None);
         assert!(s.contains("没报终态"), "{s}");
+    }
+
+    #[test]
+    fn production_env_service_token_is_picked_up() {
+        // 10/15 Windows llm_fail: 生产 .env 只有 OPENAI_API_KEY, 没有 dev token
+        let e = parse_hermes_dev_env(
+            PathBuf::from(r"C:\Users\x\AppData\Local\hermes"),
+            "# c\nOPENAI_API_KEY=\"eyJabc\"\nAPI_SERVER_KEY=k\nCATFISH_GATEWAY_URL=http://127.0.0.1:8999 # gw\n",
+        );
+        assert_eq!(e.service_token.as_deref(), Some("eyJabc"));
+        assert_eq!(e.dev_token, None);
+        assert_eq!(e.gateway_url.as_deref(), Some("http://127.0.0.1:8999"));
     }
 }
