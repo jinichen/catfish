@@ -15,6 +15,7 @@ import { useCatalog } from "../../hooks/useCatalog";
 import { getSession, sessionGetTaskUid } from "../../lib/tauri";
 import * as streamRegistry from "../../lib/streamRegistry";
 import ChatPanel from "./ChatPanel";
+import SessionAttachmentsBar from "./SessionAttachmentsBar";
 import ChatModelPicker from "./ChatModelPicker";
 import ChatSidebar from "./ChatSidebar";
 // P3.5.17.c.2 (6/17): ContextCounter 砍 — cumulative cost ≠ ctx 占用, 同款数学错.
@@ -410,80 +411,6 @@ export default function ChatTab() {
           )}
         </div>
       </div>
-    </div>
-  );
-}
-
-/** BL-FILE-SESSION-INDEX-V1 Phase 1 (5/30): session 顶部历史附件 chip bar.
- *  切回老会话时显示该会话所有上传过的附件 (从 ~/.catfish/attachments.db 读).
- *  无附件不渲染. 点击 chip 展开 (后续做), 当前先列名字.
- *
- *  跟 LLM 那边的 catfish_search_attachments 工具数据源是同一张表 —
- *  UI 看到的就是 LLM 能搜的. 双向一致.
- */
-function SessionAttachmentsBar() {
-  const sessionAttachments = useChatStore((s) => s.sessionAttachments);
-  if (sessionAttachments.length === 0) return null;
-  // 去重按 name (同一文件可能被 record 多次 — 比如同一附件在多轮提及)
-  const byName = new Map<string, typeof sessionAttachments[number]>();
-  for (const a of sessionAttachments) {
-    if (!byName.has(a.name)) byName.set(a.name, a);
-  }
-  const unique = Array.from(byName.values()).slice(0, 12);
-  const more = byName.size > unique.length ? byName.size - unique.length : 0;
-  return (
-    <div
-      title="本会话历史附件 — 切回会话时从本机 db 恢复, LLM 也能通过工具查到"
-      style={{
-        display: "flex",
-        flexWrap: "wrap",
-        alignItems: "center",
-        gap: 6,
-        padding: "6px 12px",
-        fontSize: 11,
-        background: "var(--catfish-bg-elevated)",
-        borderBottom: "1px solid var(--catfish-border)",
-        color: "var(--catfish-text-muted)",
-      }}
-    >
-      <span style={{ marginRight: 4 }}>📎 本会话历史附件:</span>
-      {unique.map((a) => {
-        const iconByKind: Record<string, string> = {
-          image: "🖼",
-          file: "📄",
-          audio: "🎙",
-        };
-        const icon = iconByKind[a.kind] ?? "📎";
-        return (
-          <span
-            key={a.id}
-            title={`${a.name}${a.sizeBytes ? ` · ${(a.sizeBytes / 1024).toFixed(1)} KB` : ""}${a.keptPath ? `\n${a.keptPath}` : ""}`}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 4,
-              padding: "2px 8px",
-              borderRadius: 10,
-              background: "rgba(14, 158, 140, 0.12)",
-              color: "var(--catfish-accent, #0e9e8c)",
-              maxWidth: 220,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            <span>{icon}</span>
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-              {a.name}
-            </span>
-          </span>
-        );
-      })}
-      {more > 0 && (
-        <span style={{ marginLeft: 4, fontStyle: "italic" }}>
-          +{more} 更多
-        </span>
-      )}
     </div>
   );
 }
