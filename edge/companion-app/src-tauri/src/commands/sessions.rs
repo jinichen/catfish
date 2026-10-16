@@ -115,6 +115,44 @@ fn unix_to_iso(unix_secs: f64) -> String {
         .unwrap_or_default()
 }
 
+/// hermes 把带图 / 带附件的消息 (OpenAI multimodal parts 数组) 存成一个字符串:
+/// `"\0json:" + json.dumps(parts)` (hermes_state.py `_CONTENT_JSON_PREFIX`, NUL 开头保证跟
+/// 正文不撞)。SQLite 的 length() / substr() / LIKE 到 NUL 就停, 所以这种行用 sqlite3 查看
+/// 像是空的; rusqlite 读到的是完整 4.7 MB (10/16 鸿波那条: 1 段文字 + 4 张 base64 图 +
+/// 召回的记忆), 原样给界面就显示成 `json:[{"type": "text", "text": "\u4f9d…` 一大坨。
+///
+/// 这里按 hermes 自己的口径解回去: text 部分原样, 图片换成 `[screenshot]` 占位
+/// (前端 userBubbleText 已经把它显示成「🖼 截图」), 其它类型丢掉。**必须在 truncate 之前**
+/// —— 截到 4000 字时 JSON 还在第一张图的 base64 里, 解不出来。
+const HERMES_JSON_SENTINEL: &str = "\u{0}json:";
+
+fn decode_hermes_content(s: String) -> String {
+    let Some(body) = s.strip_prefix(HERMES_JSON_SENTINEL) else { return s };
+    match serde_json::from_str::<serde_json::Value>(body) {
+        Ok(serde_json::Value::Array(parts)) => {
+            let mut out: Vec<String> = Vec::new();
+            for part in parts {
+                match part.get("type").and_then(serde_json::Value::as_str) {
+                    Some("text") | Some("input_text") => {
+                        if let Some(t) = part.get("text").and_then(serde_json::Value::as_str) {
+                            if !t.is_empty() {
+                                out.push(t.to_string());
+                            }
+                        }
+                    }
+                    Some("image_url") | Some("input_image") | Some("image") => out.push("[screenshot]".to_string()),
+                    _ => {}
+                }
+            }
+            out.join("\n")
+        }
+        Ok(serde_json::Value::String(t)) => t,
+        // 解析不了 (hermes 也会遇到: "A body that no longer parses stays a sentinel string"):
+        // 去掉哨兵原样给, 至少不带 NUL
+        _ => body.to_string(),
+    }
+}
+
 /// 截断超长消息，避免 IPC 数据爆炸
 fn truncate(s: String) -> String {
     if s.chars().count() <= MAX_MESSAGE_CHARS {
@@ -292,7 +330,7 @@ fn row_to_meta(row: &rusqlite::Row) -> rusqlite::Result<SessionMeta> {
         // BL-SESSION-MGMT A (5/15): SQL col 9 是首条 user message (可能 None),
         // 截前 80 字防超长 (e.g. 用户粘大段文档). 这只给 sidebar 显示用,
         // 完整消息走 sessions_get.
-        first_user_message: row.get::<_, Option<String>>(9)?.map(|s| {
+        first_user_message: row.get::<_, Option<String>>(9)?.map(decode_hermes_content).map(|s| {
             let t = s.trim();
             if t.chars().count() > 80 {
                 t.chars().take(80).collect::<String>() + "…"
@@ -325,7 +363,7 @@ fn messages_blocking(conn: &Connection, id: &str) -> Result<Vec<SessionMessage>,
             Ok(SessionMessage {
                 id: row.get(0)?,
                 role: row.get(1)?,
-                content: truncate(row.get::<_, String>(2)?),
+                content: truncate(decode_hermes_content(row.get::<_, String>(2)?)),
                 tool_calls: row.get(3)?,
                 tool_call_id: row.get(4)?,
                 tool_name: row.get(5)?,
@@ -510,4 +548,50 @@ fn bulk_delete_short_blocking(
         max_messages,
         max_age_hours,
     })
+}
+
+#[cfg(test)]
+mod hermes_content_tests {
+    use super::*;
+
+    #[test]
+    fn multimodal_sentinel_decodes_to_text_and_screenshot_markers() {
+        // 10/16 鸿波那条的形状: 文字 → 4 张图 → 召回的记忆 (作为尾部 text part)
+        let parts = serde_json::json!([
+            {"type": "text", "text": "依据视频的内容写一个学习简报"},
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ"}},
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ"}},
+            {"type": "text", "text": "<memory-context>\n[System note: recalled]\n</memory-context>"}
+        ]);
+        let raw = format!("{HERMES_JSON_SENTINEL}{parts}");
+        assert_eq!(
+            decode_hermes_content(raw),
+            "依据视频的内容写一个学习简报\n[screenshot]\n[screenshot]\n<memory-context>\n[System note: recalled]\n</memory-context>"
+        );
+    }
+
+    #[test]
+    fn plain_text_and_unparseable_bodies_pass_through() {
+        assert_eq!(decode_hermes_content("普通文字".into()), "普通文字");
+        // 坏 JSON: 去哨兵原样给, 不带 NUL
+        assert_eq!(decode_hermes_content(format!("{HERMES_JSON_SENTINEL}[{{broken")), "[{broken");
+        // JSON 字符串形态也认
+        assert_eq!(decode_hermes_content(format!("{HERMES_JSON_SENTINEL}\"只有字\"")), "只有字");
+        // 没有 text 的纯图消息 → 只剩占位
+        assert_eq!(
+            decode_hermes_content(format!("{HERMES_JSON_SENTINEL}[{{\"type\":\"image_url\",\"image_url\":{{\"url\":\"x\"}}}}]")),
+            "[screenshot]"
+        );
+    }
+
+    #[test]
+    fn decode_runs_before_truncate_so_base64_never_eats_the_budget() {
+        let big = "A".repeat(MAX_MESSAGE_CHARS * 3);
+        let raw = format!(
+            "{HERMES_JSON_SENTINEL}[{{\"type\":\"text\",\"text\":\"问题\"}},{{\"type\":\"image_url\",\"image_url\":{{\"url\":\"data:image/png;base64,{big}\"}}}}]"
+        );
+        let shown = truncate(decode_hermes_content(raw));
+        assert_eq!(shown, "问题\n[screenshot]");
+        assert!(!shown.contains("已截断"));
+    }
 }

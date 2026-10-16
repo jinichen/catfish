@@ -120,5 +120,56 @@ describe("splitUserBubbleText", () => {
     const typed = "帮我看下这行日志 [System: boom] 是什么意思";
     expect(splitUserBubbleText(typed).text).toBe(typed);
   });
+
+  it("10/16 下午: <memory-context> 召回记忆 (带 4 张图那条), 气泡里只剩员工的话", () => {
+    // state.db 里的真实形状: 员工的话 → [screenshot] ×4 → 注入块
+    const content = [
+      "依据视频的内容写一个学习简报, 要把四张图片纳入, 文字不超过800字",
+      "[screenshot]\n[screenshot]\n[screenshot]\n[screenshot]",
+      "<memory-context>\n[System note: The following is recalled memory context, NOT new user input.]\n\n" +
+        "## 员工身份与目的\n你服务的员工: 陈鸿波\n</memory-context>",
+    ].join("\n\n");
+    const r = splitUserBubbleText(content);
+    expect(r.text).toBe("依据视频的内容写一个学习简报, 要把四张图片纳入, 文字不超过800字\n\n🖼 截图\n🖼 截图\n🖼 截图\n🖼 截图");
+    for (const w of ["memory-context", "System note", "陈鸿波"]) expect(r.text).not.toContain(w);
+  });
+
+  it("通用判据: 没见过的注入物也能扔 (不用再加名字)", () => {
+    // 这三种今天都还不存在, 靠形状认: XML 围栏 / [Word 方括号 / 多块叠加
+    const future = "帮我看下这个\n\n<tool-budget>\n剩余 3 次\n</tool-budget>";
+    expect(splitUserBubbleText(future).text).toBe("帮我看下这个");
+    const bracket = "帮我看下这个\n\n[Workspace changed: 3 files]";
+    expect(splitUserBubbleText(bracket).text).toBe("帮我看下这个");
+    const stacked = "帮我看下这个\n\n<memory-context>\nx\n</memory-context>\n\n[System: skills changed]\n\n[Surface: 微信]";
+    expect(splitUserBubbleText(stacked).text).toBe("帮我看下这个");
+  });
+
+  it("通用判据不能误伤员工写的东西", () => {
+    // 中文方括号 / 编号 / 行内英文方括号 —— 都不是机器块
+    for (const t of [
+      "[图片] 这是什么意思",
+      "两点:\n\n[1] 先报价\n\n[2] 再谈判",
+      "帮我看下这行日志 [System: boom] 是什么意思",
+      "报价单模板里写 {{客户}}\n\n<br> 要不要去掉",  // <br> 后面还有话, 不是整块
+    ]) {
+      expect(splitUserBubbleText(t).text).toBe(t);
+    }
+  });
+
+  it("整条都是注入物 (这轮只发了图, 一个字没写) → 系统提示", () => {
+    expect(splitUserBubbleText("<memory-context>\nx\n</memory-context>").system).toBe("系统提示");
+  });
+
+  it("10/16 第二次踩: 消息超 4000 字被截断, 注入块没有收尾标签也要切掉", () => {
+    // sessions.rs::truncate 把长消息截断再给界面 —— 这条真实消息 9873 字, 界面只拿到前 4000 字,
+    // </memory-context> 根本没进来。按开头切才不依赖收尾。
+    const injected = "<memory-context>\n[System note: recalled memory context]\n\n## 员工身份\n" + "细节 ".repeat(500);
+    const content = `依据视频的内容写一个学习简报\n[screenshot]\n${injected}`;
+    const truncated = `${[...content].slice(0, 4000).join("")}\n\n…（已截断，原长度 ${[...content].length} 字符）`;
+    expect(truncated).not.toContain("</memory-context>");  // 前提: 收尾标签确实不在
+    const r = splitUserBubbleText(truncated);
+    expect(r.text).toBe("依据视频的内容写一个学习简报\n🖼 截图");
+    expect(r.text).not.toContain("已截断");
+  });
 });
 

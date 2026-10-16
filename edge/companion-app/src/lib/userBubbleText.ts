@@ -1,24 +1,32 @@
 /** 用户气泡里只显示员工自己写的话 (10/13 鸿波「显示还有这些内容会干扰视觉」「为什么还是有」)。
  *
- * hermes 的 state.db 里 role=user 的消息不全是员工写的。10/13 盘点本机 state.db, 有这几类:
- *   1. 发给模型的附件材料: chatWire.toWire 拼进去的「=== 附件: x.pdf (PDF · 4 页) ===」+ 完整路径 +
- *      预览正文 (以及 [共 N 个文件。] / === 微信聊天记录: )。接在员工的话后面。
- *   2. 整条都是系统消息, 以"用户"身份存的:
- *      [CONTEXT COMPACTION — REFERENCE ONLY] 压缩摘要 (210 条) · [IMPORTANT: You are running as a
- *      scheduled cron job 定时任务 (183) · [IMPORTANT: The user has invoked the "x" skill 技能 (83) ·
- *      [ASYNC DELEGATION … COMPLETE 后台子任务 (72) · [System: … truncated / cut off / too large
- *      续写 (75) · [Your active task list was preserved 任务清单 (5) · 早安顾问的「# 时间锚点」
- *      (约 800) · 「# 长期记忆 distilled_facts」记忆整理 (92)。
- *   3. 员工的话前面粘了一段系统说明: 「[System note: …]\n\n你再试一次」, 以及
- *      「[Image attached at: /Users/…/img.jpg]」这种图片路径行。
- *   4. 员工的话**后面**粘的每轮一次性通知 (hermes turn_context._merge_gateway_notes 走
- *      user 消息这条通道送给模型): 技能清单变了 / 换了界面 / 插件上线, 一律
- *      「[System: …]」开头顶到结尾。10/16 鸿波撞到的就是这个 —— 技能变更通知整段
- *      显示在自己那条消息里。
+ * # 为什么 role=user 的 content 里会有不是员工写的东西
  *
- * 这里只管**显示**: 1 藏起来、附件名做成标签; 2 整条显示成一行灰色系统说明 (可展开看原文);
- * 3 去掉前缀 / 路径行只留员工的话。msg.content 本身不动 —— chatRequest 每次把整段历史
- * toWire 发给模型, 改了模型就看不到附件 / 摘要了。
+ * hermes 本来分得很清楚: `content` 给人看, `api_content` 给模型看, 每轮注进去的东西
+ * (召回的记忆、技能清单变更、换界面通知、插件上线) 都放 api_content, content 保持干净。
+ * **但这条只对纯文字消息成立** —— 消息带了图片 / 附件时 content 是 parts 数组, 没有字符串
+ * sidecar 可用, hermes 就把注入物当成一个 text part 接在 content 后面 (upstream #71998),
+ * 存进 state.db 时 parts 拍平成一段文字, 于是全进了气泡。
+ *
+ * 所以这事只在**带图 / 带附件**的消息上出现, 而且每次注入物不一样: 10/13 是附件材料和
+ * [System note:], 10/16 上午是 [System: 技能清单变了], 10/16 下午是 <memory-context>。
+ * 按名字一个个认, 下次换一种注入物就又漏 (鸿波: "出现一个问题处理一个问题, 没有通用方案?")。
+ *
+ * # 通用判据: 按位置和形状, 不按名字
+ *
+ * 注入物有共同的形状, 跟它叫什么无关:
+ *   · **一律接在员工的话后面** (hermes 和 chatWire 都是 append), 员工写的永远在最前面
+ *   · **整块**, 块之间空行分隔
+ *   · 块的开头是机器标记: `<tag>` 围栏 / `[Word …]` 方括号 / `=== 附件: …` 标题行
+ * 于是从**末尾**往前扔掉长这样的块, 剩下的就是员工写的 —— 以后再多几种注入物也不用改这里。
+ * 员工自己打的「[System: boom] 是什么意思」后面还有话, 不是尾块, 不会被扔。
+ *
+ * 另外两类单独处理 (位置不同, 不是尾块):
+ *   · 整条都是系统消息 (压缩摘要 / 定时任务 / 早安顾问材料…) → 显示成一行灰色说明
+ *   · 粘在员工话**前面**的 [System note: …] → 去掉前缀
+ *
+ * 这里只管**显示**: msg.content 本身不动 —— chatRequest 每次把整段历史 toWire 发给模型,
+ * 改了模型就看不到附件 / 记忆了。
  */
 
 // 附件材料: 认完整的标题行, 不要求前面有空行 —— 压缩摘要里换行会被吃掉 (10/13 第二张截图)
@@ -50,11 +58,27 @@ const SYSTEM_WHOLE: Array<[RegExp, string]> = [
 ];
 // 粘在员工话前面的系统说明 (到 "]" + 空行为止)
 const SYSTEM_PREFIX = /^\[System note: [\s\S]*?\]\s*\n\s*\n/;
-// 粘在员工话后面的每轮通知: 行首 [System: 一直到结尾。认行首 + 到结尾两个条件,
-// 员工自己打的「[System: ...]」后面还有话时不会被吞掉。
-const SYSTEM_SUFFIX = /\n\s*\[System: [\s\S]*$/;
+
 // 图片路径行 —— 路径对员工没用, 图片本身另有显示
 const IMAGE_PATH_LINE = /^\[Image attached at: [^\]\n]*\]\s*$/gm;
+
+/** 注入块的开头长相 (见文件头「通用判据」):
+ *   · XML 围栏独占一行: `<memory-context>`
+ *   · 方括号英文标记行: `[System: …]` `[IMPORTANT: …]` —— 要求大写开头 + 英文词 + 冒号/收尾方括号,
+ *     员工写的「[图片] 这是什么」「[1] 先报价」不算; 行中间出现的 (「这行日志 [System: boom] 什么意思」) 也不算
+ */
+const INJECTION_HEAD = /^(?:<[A-Za-z][\w-]*>\s*$|\[[A-Z][A-Za-z][A-Za-z ]{0,30}[:\]])/;
+
+/** 注入块一开始, 后面到结尾就全是注入物 —— 从第一个注入块开头切掉, 剩下的是员工写的。
+ *
+ *  10/16 第二次踩: 原来按**结尾**找配对的 `</tag>` / `]`。但 sessions.rs::truncate 把超过
+ *  4000 字的消息截断再给界面 (这条 9873 字), 收尾标签根本没进来, 配不上对就什么都没切。
+ *  按开头切不依赖结尾, 截断与否都成立。 */
+function stripInjectedTail(text: string): string {
+  const lines = text.split("\n");
+  const cut = lines.findIndex((line) => INJECTION_HEAD.test(line.trimStart()));
+  return cut < 0 ? text : lines.slice(0, cut).join("\n");
+}
 
 export interface UserBubbleText {
   /** 员工自己写的话 */
@@ -73,18 +97,20 @@ export function splitUserBubbleText(content: string | null | undefined): UserBub
     const m = re.exec(raw);
     if (m) return { text: "", hidden: "", fileNames: [], system: label.replace("{skill}", m[1] ?? "") };
   }
-  let s = raw.replace(SYSTEM_PREFIX, "").replace(SYSTEM_SUFFIX, "");
+  let s = raw.replace(SYSTEM_PREFIX, "");
   s = s.replace(IMAGE_PATH_LINE, "").replace(/^\[screenshot\]$/gm, "🖼 截图");
+  // 附件材料要留着 (hidden + 文件名标签), 所以先切它, 再在前半段里扔尾部的机器块
   let cut = -1;
   for (const re of [ATTACH_HEADER, MANY_FILES]) {
     const m = re.exec(s);
     if (m && (cut < 0 || m.index < cut)) cut = m.index;
   }
-  const visible = (cut < 0 ? s : s.slice(0, cut)).replace(/\n{3,}/g, "\n\n").trim();
+  const human = stripInjectedTail(cut < 0 ? s : s.slice(0, cut));
+  const visible = human.replace(/\n{3,}/g, "\n\n").trim();
   if (cut < 0) {
-    // 只剩前缀说明、没有员工的话 → 当系统消息显示
+    // 只剩前缀说明 / 注入物、没有员工的话 → 当系统消息显示
     if (!visible && raw.trim()) return { text: "", hidden: "", fileNames: [], system: "系统提示" };
-    return { text: s === raw ? raw : visible, hidden: "", fileNames: [], system: null };
+    return { text: visible, hidden: "", fileNames: [], system: null };
   }
   const hidden = s.slice(cut);
   const fileNames: string[] = [];
