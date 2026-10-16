@@ -97,6 +97,7 @@ export function dbMessageToChat(m: SessionMessage): ChatMessage {
     content: m.content,
     tool_calls: toolCalls,
     tool_call_id: m.toolCallId,
+    displayKind: m.displayKind,
     ts: m.timestamp,
     status: "done",
   };

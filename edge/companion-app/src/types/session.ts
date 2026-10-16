@@ -38,6 +38,9 @@ export interface SessionMessage {
   toolCalls?: string;
   toolCallId?: string;
   toolName?: string;
+  /** hermes 自己打的显示标记 (Rust sessions.rs SessionMessage.display_kind):
+   *  "compaction" | "hidden" | "internal_notification" | "failed_turn"; 老库 / 没标 → undefined */
+  displayKind?: string;
   /** ISO-8601 UTC */
   timestamp: string;
 }

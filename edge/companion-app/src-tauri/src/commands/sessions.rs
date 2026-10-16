@@ -77,6 +77,14 @@ pub struct SessionMessage {
     /// 给 tool 角色的工具名 (有些场景需要按工具分组渲染)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
+    /// hermes 自己给这条打的显示标记 (10/16): 界面按它决定怎么显示, 不再靠认正文开头。
+    ///   "compaction"            —— 压缩摘要 (state.db `_compressed_summary = 1`, user / assistant 都有)
+    ///   "hidden"                —— hermes 要求不显示 (中断占位等)
+    ///   "internal_notification" —— 系统说明 (网关重启后恢复会话之类)
+    ///   "failed_turn"           —— 这轮没处理成, hermes 替员工写的一句话
+    /// 老库没这两列 / 没标 → None, 界面退回按正文认 (userBubbleText)。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_kind: Option<String>,
     /// ISO-8601 UTC
     pub timestamp: String,
 }
@@ -343,40 +351,131 @@ fn row_to_meta(row: &rusqlite::Row) -> rusqlite::Result<SessionMeta> {
     })
 }
 
+/// messages 表有没有某列 —— hermes 升级时 ALTER 加的列 (display_kind / _compressed_summary),
+/// 客户机上的老库可能没有, SELECT 写死会整张表读不出来。
+fn has_column(conn: &Connection, column: &str) -> bool {
+    conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name = ?1",
+        params![column],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|n| n > 0)
+    .unwrap_or(false)
+}
+
+/// hermes 的两个标记合成一个给界面用的 display_kind (见 SessionMessage.display_kind)。
+fn display_kind_of(compressed_summary: bool, display_kind: Option<String>) -> Option<String> {
+    if compressed_summary {
+        return Some("compaction".to_string());
+    }
+    display_kind.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
 /// 拉某 session 的全部 messages, 给 resume 用。按 timestamp asc + rowid asc 稳定排序。
 fn messages_blocking(conn: &Connection, id: &str) -> Result<Vec<SessionMessage>, String> {
-    let mut stmt = conn
-        .prepare(
-            r#"
+    // 10/16: 带上 hermes 自己的显示标记 (没这列的老库给常量, 列序不变)
+    let compressed_col = if has_column(conn, "_compressed_summary") { "COALESCE(_compressed_summary, 0)" } else { "0" };
+    let kind_col = if has_column(conn, "display_kind") { "display_kind" } else { "NULL" };
+    // 10/16 去重用的三列 (见 dedupe_rows); 老库没有 → 当作全是活的、没 uid
+    let uid_col = if has_column(conn, "message_uid") { "message_uid" } else { "NULL" };
+    let active_col = if has_column(conn, "active") { "COALESCE(active, 1)" } else { "1" };
+    let compacted_col = if has_column(conn, "compacted") { "COALESCE(compacted, 0)" } else { "0" };
+    let sql = format!(
+        r#"
             SELECT
                 rowid, role, COALESCE(content, ''),
-                tool_calls, tool_call_id, tool_name, timestamp
+                tool_calls, tool_call_id, tool_name, timestamp,
+                {compressed_col}, {kind_col}, {uid_col}, {active_col}, {compacted_col}
             FROM messages
             WHERE session_id = ?1
             ORDER BY timestamp ASC, rowid ASC
-        "#,
-        )
-        .map_err(|e| format!("SQL 准备失败: {e}"))?;
+        "#
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| format!("SQL 准备失败: {e}"))?;
 
     let rows = stmt
         .query_map(params![id], |row| {
-            Ok(SessionMessage {
-                id: row.get(0)?,
-                role: row.get(1)?,
-                content: truncate(decode_hermes_content(row.get::<_, String>(2)?)),
-                tool_calls: row.get(3)?,
-                tool_call_id: row.get(4)?,
-                tool_name: row.get(5)?,
-                timestamp: unix_to_iso(row.get(6)?),
+            let raw_content: String = row.get(2)?;
+            let ts: f64 = row.get(6)?;
+            Ok(RawRow {
+                identity: RowIdentity::new(row.get::<_, Option<String>>(9)?, &row.get::<_, String>(1)?, ts, &raw_content),
+                active: row.get::<_, i64>(10)? != 0,
+                compacted: row.get::<_, i64>(11)? != 0,
+                msg: SessionMessage {
+                    id: row.get(0)?,
+                    role: row.get(1)?,
+                    content: truncate(decode_hermes_content(raw_content)),
+                    tool_calls: row.get(3)?,
+                    tool_call_id: row.get(4)?,
+                    tool_name: row.get(5)?,
+                    display_kind: display_kind_of(row.get::<_, i64>(7)? != 0, row.get::<_, Option<String>>(8)?),
+                    timestamp: unix_to_iso(ts),
+                },
             })
         })
         .map_err(|e| format!("SQL 查询失败: {e}"))?;
 
-    let mut out = Vec::new();
+    let mut raw = Vec::new();
     for r in rows {
-        out.push(r.map_err(|e| format!("行解析失败: {e}"))?);
+        raw.push(r.map_err(|e| format!("行解析失败: {e}"))?);
     }
-    Ok(out)
+    Ok(dedupe_rows(raw))
+}
+
+/// 一条消息在 state.db 里的身份: hermes 给的 message_uid; 没有 (Companion 自己写的行, 以及它们
+/// 被 hermes 克隆出来的副本 —— 克隆照抄 uid 列, 所以也没有) 就用 角色 + 时间戳 + 正文 兜底,
+/// 克隆保留原时间戳, 这三样全等的就是同一条。
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum RowIdentity {
+    Uid(String),
+    Shape(String, i64, u64),
+}
+
+impl RowIdentity {
+    fn new(uid: Option<String>, role: &str, ts: f64, content: &str) -> Self {
+        match uid.map(|u| u.trim().to_string()).filter(|u| !u.is_empty()) {
+            Some(u) => RowIdentity::Uid(u),
+            None => {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                content.hash(&mut h);
+                RowIdentity::Shape(role.to_string(), (ts * 1000.0).round() as i64, h.finish())
+            }
+        }
+    }
+}
+
+struct RawRow {
+    identity: RowIdentity,
+    active: bool,
+    compacted: bool,
+    msg: SessionMessage,
+}
+
+/// 同一条消息只显示一次 (10/16 鸿波「出现重复了」: 一句话出现两遍、回答出现三遍)。
+///
+/// hermes 每次压缩上下文都把带着走的尾巴**克隆成新行** (hermes_state_messages.py compact_session_in_place),
+/// 原行标 `active=0, compacted=0`; 被摘要掉的标 `active=0, compacted=1`; 当前活着的 `active=1`。
+/// 它自己的界面只看 active 行, 我们原来把所有行都显示 —— 每压缩一次, 尾巴就多一份。
+///
+/// 规则 (本机 134288 行实测: 去掉 24792 行重复 + 1446 行撤回, 没有误伤):
+///   1. 同一身份 (RowIdentity) 只留最早的一行 (id 最小 = 原件)。不是留 active 的那份: Companion 的
+///      附件索引 (attachments.db message_id) 记的是原件 rowid (本机 30/30 都是), 留克隆会丢图; 正文一样, 位置也不变
+///   2. 没有任何副本、又是 `active=0, compacted=0` 的孤行 = 员工撤回 / 重新生成时被替掉的那轮
+///      (rewind_to_message 的标法), hermes 自己也不显示, 这里一并不显示
+///   3. 被摘要掉的 (compacted=1) 照常显示 —— 员工还要能往上翻老对话, 摘要行只是多一条「整理成了摘要」
+fn dedupe_rows(rows: Vec<RawRow>) -> Vec<SessionMessage> {
+    use std::collections::HashMap;
+    let mut group_size: HashMap<RowIdentity, usize> = HashMap::new();
+    for r in &rows {
+        *group_size.entry(r.identity.clone()).or_insert(0) += 1;
+    }
+    let mut seen: std::collections::HashSet<RowIdentity> = std::collections::HashSet::new();
+    rows.into_iter().filter_map(|r| {
+        if !seen.insert(r.identity.clone()) { return None; }           // 同一条的后来副本 (克隆)
+        if group_size[&r.identity] == 1 && !r.active && !r.compacted { return None; } // 撤回的孤行
+        Some(r.msg)
+    }).collect()
 }
 
 // ============================================================
@@ -593,5 +692,104 @@ mod hermes_content_tests {
         let shown = truncate(decode_hermes_content(raw));
         assert_eq!(shown, "问题\n[screenshot]");
         assert!(!shown.contains("已截断"));
+    }
+}
+
+#[cfg(test)]
+mod display_kind_tests {
+    use super::*;
+
+    fn db(with_marks: bool) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        let extra = if with_marks { ", display_kind TEXT, _compressed_summary INTEGER NOT NULL DEFAULT 0" } else { "" };
+        conn.execute_batch(&format!(
+            "CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, \
+             tool_call_id TEXT, tool_calls TEXT, tool_name TEXT, timestamp REAL{extra});"
+        )).unwrap();
+        conn
+    }
+
+    #[test]
+    fn hermes_marks_become_display_kind_for_both_roles() {
+        let conn = db(true);
+        conn.execute_batch(
+            "INSERT INTO messages (session_id, role, content, timestamp, _compressed_summary, display_kind) VALUES \
+             ('s', 'user', '[CONTEXT COMPACTION — REFERENCE ONLY] …', 1.0, 1, NULL), \
+             ('s', 'assistant', '[PRIOR CONTEXT — for reference only] …', 2.0, 1, NULL), \
+             ('s', 'assistant', '', 3.0, 0, 'hidden'), \
+             ('s', 'user', '[System note: gateway restarted]', 4.0, 0, 'internal_notification'), \
+             ('s', 'assistant', '正常回答', 5.0, 0, '  ');",
+        ).unwrap();
+        let kinds: Vec<Option<String>> = messages_blocking(&conn, "s").unwrap().into_iter().map(|m| m.display_kind).collect();
+        assert_eq!(kinds, vec![
+            Some("compaction".into()), Some("compaction".into()), Some("hidden".into()),
+            Some("internal_notification".into()), None,
+        ]);
+    }
+
+    fn insert(conn: &Connection, sql: &str) { conn.execute_batch(sql).unwrap(); }
+
+    fn full_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, \
+             tool_call_id TEXT, tool_calls TEXT, tool_name TEXT, timestamp REAL, display_kind TEXT, \
+             _compressed_summary INTEGER NOT NULL DEFAULT 0, message_uid TEXT, \
+             active INTEGER NOT NULL DEFAULT 1, compacted INTEGER NOT NULL DEFAULT 0);",
+        ).unwrap();
+        conn
+    }
+
+    #[test]
+    fn compaction_clones_show_once_and_keep_their_place() {
+        // 10/16 截图那条的形状: 原行 (0,0) → 克隆 (0,1) → 再克隆 (1,0), 同 uid 同时间戳
+        let conn = full_db();
+        insert(&conn, "INSERT INTO messages (session_id, role, content, timestamp, message_uid, active, compacted) VALUES \
+            ('s', 'assistant', '今天是 10/15 — 待办到期', 10.0, 'a1', 1, 0), \
+            ('s', 'user', '银行卡转钱已经完成', 11.0, 'u1', 0, 0), \
+            ('s', 'assistant', '已勾掉。', 12.0, 'a2', 0, 0), \
+            ('s', 'user', '[CONTEXT COMPACTION — REFERENCE ONLY] …', 12.5, 'sum', 1, 0), \
+            ('s', 'user', '银行卡转钱已经完成', 11.0, 'u1', 0, 1), \
+            ('s', 'assistant', '已勾掉。', 12.0, 'a2', 0, 0), \
+            ('s', 'assistant', '已勾掉。', 12.0, 'a2', 1, 0), \
+            ('s', 'user', '下一个问题', 13.0, 'u2', 1, 0);");
+        let shown: Vec<String> = messages_blocking(&conn, "s").unwrap().into_iter().map(|m| m.content).collect();
+        assert_eq!(shown, vec![
+            "今天是 10/15 — 待办到期", "银行卡转钱已经完成", "已勾掉。",
+            "[CONTEXT COMPACTION — REFERENCE ONLY] …", "下一个问题",
+        ]);
+    }
+
+    #[test]
+    fn retracted_turns_hide_but_summarized_history_stays() {
+        let conn = full_db();
+        insert(&conn, "INSERT INTO messages (session_id, role, content, timestamp, message_uid, active, compacted) VALUES \
+            ('s', 'user', '老问题 (已被摘要掉)', 1.0, 'old', 0, 1), \
+            ('s', 'user', '打错了, 重来', 2.0, 'retracted', 0, 0), \
+            ('s', 'user', '正确的问题', 3.0, 'ok', 1, 0);");
+        let shown: Vec<String> = messages_blocking(&conn, "s").unwrap().into_iter().map(|m| m.content).collect();
+        assert_eq!(shown, vec!["老问题 (已被摘要掉)", "正确的问题"]);
+    }
+
+    #[test]
+    fn companion_written_rows_without_uid_dedupe_by_shape() {
+        // Companion 自己 append 的行没有 uid, hermes 克隆它们时 uid 列照抄 (还是空) → 角色+时间戳+正文 认
+        let conn = full_db();
+        insert(&conn, "INSERT INTO messages (session_id, role, content, timestamp, message_uid, active, compacted) VALUES \
+            ('s', 'user', '你好', 5.0, NULL, 0, 0), \
+            ('s', 'user', '你好', 5.0, NULL, 1, 0), \
+            ('s', 'user', '你好', 6.0, NULL, 1, 0);");   // 另一次真的又说了「你好」: 时间戳不同, 不是重复
+        let shown: Vec<(i64, String)> = messages_blocking(&conn, "s").unwrap().into_iter().map(|m| (m.id, m.content)).collect();
+        assert_eq!(shown, vec![(1, "你好".into()), (3, "你好".into())]);  // 留原件 (id 1), 附件索引指的是它
+    }
+
+    #[test]
+    fn old_db_without_mark_columns_still_loads() {
+        let conn = db(false);
+        conn.execute_batch("INSERT INTO messages (session_id, role, content, timestamp) VALUES ('s', 'user', '你好', 1.0);").unwrap();
+        let rows = messages_blocking(&conn, "s").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].display_kind, None);
+        assert_eq!(rows[0].content, "你好");
     }
 }

@@ -90,6 +90,10 @@ export interface ChatMessage {
   /** BL-AUTO-CONTINUE (5/13 鸿波"长程任务咋办"): 这条 user msg 是 Companion
    *  自动续跑发的, UI 渲染要标记 (淡色 + "🔄 自动续 N/M" 角标). 用户原发的没这字段. */
   _autoContinue?: { round: number; max: number };
+  /** 10/16: hermes 给这条打的显示标记, 从 state.db 带出来 (types/session.ts SessionMessage.displayKind)。
+   *  ChatMessage 组件先看它再看 role: "compaction" → 一行「整理成了摘要」, "hidden" → 不显示,
+   *  "internal_notification" → 一行系统说明。没标的照旧按正文认 (lib/userBubbleText)。 */
+  displayKind?: string;
   // P3.5.20.1 (6/17 鸿波): _steered 字段砍 — BL-HERMES013-RED-1B (5/13) 设计
   // 意图 (LLM 看 partial 接力) 未实现, 跟 cancelAndSend 实测同效. 砍整链.
   // 8/13 砍 _promise_check —— BL-TASK-ASSESS (5/15) 嘴炮 badge 整套。
