@@ -12,14 +12,14 @@
 # 8/9 之前有两条出包路径, 而快的那条不签名:
 #
 #   npm run tauri:build:arm64          → ad-hoc → 装上权限就掉
-#   scripts/build-sign-notarize-arm64  → Developer ID + 公证 → 权限保住
+#   scripts/build-sign-notarize-mac  → Developer ID + 公证 → 权限保住
 #
 # 日常迭代跑的都是快路径, 于是"每次重装都要重授一次完全磁盘访问"成了常态,
 # 而且**没有任何提示** —— 员工只会发现邮件账号数又少了。这跟今天修的那批问题
 # 是同一个形状: 有两条路, 走错的那条静默降级。
 #
 # 所以把签名焊进快路径。公证 (notarize + staple) 仍然只在
-# build-sign-notarize-arm64.sh 里做 —— 它要上传 612MB 给 Apple 等好几分钟,
+# build-sign-notarize-mac.sh 里做 —— 它要上传 612MB 给 Apple 等好几分钟,
 # 不该进日常循环。**签名保权限, 公证保分发**, 两件事分开。
 #
 # ── 找身份的顺序 ────────────────────────────────────────────────────────
@@ -114,7 +114,7 @@ if codesign --deep --force --options runtime --timestamp \
   :
 else
   echo "⚠️  带时间戳签名失败 (多半是断网), 降级成无时间戳重签" >&2
-  echo "    → 这个包**不能拿去公证**; 要公证请联网后跑 build-sign-notarize-arm64.sh" >&2
+  echo "    → 这个包**不能拿去公证**; 要公证请联网后跑 build-sign-notarize-mac.sh" >&2
   codesign --deep --force --options runtime --timestamp=none \
     --sign "$IDENTITY" "$APP_PATH"
 fi

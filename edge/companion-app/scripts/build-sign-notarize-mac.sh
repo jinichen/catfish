@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# Build, sign, notarize, and staple the complete offline ARM64 macOS package.
+# Build, sign, notarize, and staple the complete offline macOS package.
+#
+# 10/16: 原名 build-sign-notarize-arm64.sh, 只能打 ARM64。x64 那条走的是
+# `npm run tauri:build:x64` —— 它只用 sign-app-local.sh 一把 `--deep` 签整个
+# .app, 既不给 entitlements 也不公证。结果是 Intel 包从来没公证过 (1.1.8-x64 实测
+# `spctl` rejected / 没票据), 员工机上会被 Gatekeeper 拦。现在两个架构共用这一套。
 #
 # Required environment (本机实际值, 8/5 填实 —— 占位符每次都要重查一遍):
 #   SIGNING_IDENTITY="Developer ID Application: dan takaragi (LNCT7279Z6)"
@@ -20,13 +25,21 @@
 # Usage:
 #   SIGNING_IDENTITY="Developer ID Application: dan takaragi (LNCT7279Z6)" \
 #   NOTARY_PROFILE="catfish-notary" \
-#   bash scripts/build-sign-notarize-arm64.sh
+#   bash scripts/build-sign-notarize-mac.sh [aarch64|x64]   # 不给架构 = aarch64
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-TARGET_DIR="$APP_ROOT/src-tauri/target/release/bundle/macos"
+
+# 目标架构。交叉编译的产物在 target/<rust-triple>/release/, 本机架构的在 target/release/
+# —— 跟 make-dmg.sh 同一套判断。本机是 arm64, 所以 x64 一定是交叉编译。
+ARCH="${1:-aarch64}"
+case "$ARCH" in
+  aarch64) TARGET_DIR="$APP_ROOT/src-tauri/target/release/bundle/macos"; DMG_TAG="aarch64" ;;
+  x64)     TARGET_DIR="$APP_ROOT/src-tauri/target/x86_64-apple-darwin/release/bundle/macos"; DMG_TAG="x64" ;;
+  *) echo "✗ 架构只能是 aarch64 或 x64, 收到: $ARCH" >&2; exit 1 ;;
+esac
 APP_PATH="$TARGET_DIR/Catfish Companion.app"
 # 8/8: 版本号从 package.json 读, 不再硬编码。
 #
@@ -37,7 +50,7 @@ APP_PATH="$TARGET_DIR/Catfish Companion.app"
 APP_VERSION="$(grep -E '^[[:space:]]*"version"[[:space:]]*:' "$APP_ROOT/package.json" \
                | head -1 | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
 [ -n "$APP_VERSION" ] || { echo "✗ 从 package.json 读不出版本号" >&2; exit 1; }
-DMG_PATH="$HOME/Downloads/Catfish-Companion-${APP_VERSION}-aarch64.dmg"
+DMG_PATH="$HOME/Downloads/Catfish-Companion-${APP_VERSION}-${DMG_TAG}.dmg"
 WORK_DIR="$(mktemp -d /tmp/catfish-sign.XXXXXX)"
 
 cleanup() {
@@ -384,19 +397,32 @@ sign_archive() {
   rm -rf "$unpack" "$repacked"   # chromium 解开近 1G, 三个归档同时留着会撑爆 /tmp
 }
 
-echo "=== 构建完整 ARM64 App ==="
+echo "=== 构建完整 $DMG_TAG App ==="
 cd "$APP_ROOT"
 npm run tauri:build:clean
-node scripts/prune-rust-target.mjs release   # 9/28: 清掉旧版本留下的编译产物 (见脚本头)
+# 9/28: 清掉旧版本留下的编译产物 (见脚本头)
+if [[ "$ARCH" == x64 ]]; then
+  node scripts/prune-rust-target.mjs release x86_64-apple-darwin
+else
+  node scripts/prune-rust-target.mjs release
+fi
 # 9/28: 邮件组件资源包每次打包都重建 —— 它不跟前端一起编译, 手动漏跑一次就会
 # 打出"前端是新的、邮件组件是旧的"包 (见 scripts/refresh-email-resource.mjs)
-node scripts/refresh-email-resource.mjs aarch64
-npx tauri build --bundles app --config src-tauri/tauri.aarch64.conf.json
+node scripts/refresh-email-resource.mjs "$DMG_TAG"
+if [[ "$ARCH" == x64 ]]; then
+  npx tauri build --bundles app --target x86_64-apple-darwin --config src-tauri/tauri.x64.conf.json
+else
+  npx tauri build --bundles app --config src-tauri/tauri.aarch64.conf.json
+fi
 
 if [[ ! -d "$APP_PATH" ]]; then
   echo "❌ 找不到构建产物：$APP_PATH" >&2
   exit 1
 fi
+
+# 打错架构的包签名公证照样会过 (Rosetta 2 透明转译, 没有任何报错), 员工只觉得"慢";
+# 企业禁装 Rosetta 则 hermes 直接起不来。所以在签名前先钉死架构 (P3.5.83 的教训)。
+bash "$SCRIPT_DIR/verify-app-arch.sh" "$DMG_TAG" "$APP_PATH"
 
 # 8/5: 直接遍历 Contents/Resources 里的 Mach-O。
 #
@@ -474,7 +500,7 @@ codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 verify_tree "$MAC_RESOURCES"
 
 echo "=== 制作并签名 DMG ==="
-bash "$SCRIPT_DIR/make-dmg.sh"
+bash "$SCRIPT_DIR/make-dmg.sh" "$DMG_TAG"
 codesign_ts --force --timestamp --sign "$SIGNING_IDENTITY" "$DMG_PATH"
 codesign --verify --verbose=2 "$DMG_PATH"
 

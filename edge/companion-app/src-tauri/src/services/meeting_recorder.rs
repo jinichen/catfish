@@ -10,7 +10,7 @@
 //! 当场报给界面, 而不是界面显示"录音中"其实什么都没录。
 //!
 //! ⚠ 打包签名: 进程内录音受 hardened runtime 管, 主 App 必须带
-//! `com.apple.security.device.audio-input` entitlement (build-sign-notarize-arm64.sh),
+//! `com.apple.security.device.audio-input` entitlement (build-sign-notarize-mac.sh),
 //! 否则签名后的正式包录到的是静音, 而 `tauri dev` 一切正常。
 
 use std::path::{Path, PathBuf};
