@@ -34,7 +34,6 @@ import {
 import type { MainTask } from "../../../lib/briefing_advisor";
 import { taskChatClear, taskChatGet } from "../../../lib/task_chat";
 import {
-  toolBridgeChatApproval,
   getSession,
   sessionCreate,
   sessionGetByTaskUid,
@@ -60,18 +59,8 @@ import { useChatStore } from "../../../store/chat";
 import { useTaskChat } from "../../../hooks/useTaskChat";
 import { ChatMsg } from "./BriefingChatMsg";
 import TaskChatProgress from "./TaskChatProgress";
-import { asksEveryTime, everyTimeReason } from "../../../lib/approvalScope";
+import { ApprovalBanner, useApprovalBanner } from "../../../components/ApprovalBanner";
 
-/** P3.3.10: hermes approval pending event 数据 (跟 ChatPanel PendingApproval 同款).
- *
- * 8/15: 定义跟着 DetailPane 一起搬过来了 —— 左栏那边一处都不用。 */
-interface PendingApproval {
-  approval_session_key: string;
-  command: string;
-  description: string;
-  pattern_key: string;
-  timeout_s?: number;
-}
 
 // P3.3.19 C Phase 3 (6/11): buildTaskSystemPrompt 抽到 lib/taskSystemPrompt.ts.
 // DetailPane + ChatTab task picker 共享同一份. 改 system prompt 必须改 lib 那份.
@@ -208,13 +197,8 @@ export function DetailPane({
   // P3.3.43 (6/12 鸿波 "全部删掉"): revert P3.3.41 加的 selectedOptLabel /
   // selectedOpenError / selectedOpenedPath / handleOptionSelect — chat 才是 main UI.
 
-  // P3.3.10 floating approval banner state (跟 ChatPanel 同款逻辑).
-  //   hermes _gateway_approval 阻塞期间 chat completions 不 finalize → 立即弹 banner.
-  const [pending, setPending] = useState<PendingApproval | null>(null);
-  const [submittingChoice, setSubmittingChoice] = useState<
-    "once" | "session" | "always" | "deny" | null
-  >(null);
-  const [secondsLeft, setSecondsLeft] = useState(60);
+  // 等批准横幅 (10/16 抽成 components/ApprovalBanner, 跟工作台共用)
+  const approval = useApprovalBanner();
 
   // P3.3.19 C Phase 2d (6/11) + P3.5.10 (6/16 鸿波 lazy create):
   //   mount 只拿已有 sid + 历史, **不 mount 即建 session**.
@@ -338,63 +322,6 @@ export function DetailPane({
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages]);
-
-  // P3.3.10: 监听 catfish:approval-pending event → 弹 banner.
-  //   chat.ts streamChat 在解 hermes SSE 看到 status=approval_pending 时 dispatch.
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const ev = e as CustomEvent<PendingApproval>;
-      if (ev.detail?.approval_session_key) {
-        setPending(ev.detail);
-        // 10/14 hermes v0.22 原生审批默认等 300 秒 (事件里带 timeout_s); 老插件那套是 60
-        setSecondsLeft(ev.detail.timeout_s ?? 60);  // 重置倒计时
-      }
-    };
-    window.addEventListener("catfish:approval-pending", handler as EventListener);
-    return () => window.removeEventListener("catfish:approval-pending", handler as EventListener);
-  }, []);
-
-  // 60s countdown — hermes _gateway_approval 默认 timeout 60s, 自动消失
-  useEffect(() => {
-    if (!pending) return;
-    const tick = setInterval(() => {
-      setSecondsLeft((s) => {
-        if (s <= 1) {
-          clearInterval(tick);
-          setPending(null);
-          return 0;
-        }
-        return s - 1;
-      });
-    }, 1000);
-    return () => clearInterval(tick);
-  }, [pending]);
-
-  // P3.3.10: 监听 ChatToolCall approval inline button 触发的 send event.
-  //   ChatToolCall → dispatch catfish:approval-send → 这里走 send (跟员工同款 path).
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const ev = e as CustomEvent<{ text: string }>;
-      const text = ev.detail?.text;
-      if (text && typeof text === "string") {
-        void send(text);
-      }
-    };
-    window.addEventListener("catfish:approval-send", handler as EventListener);
-    return () => window.removeEventListener("catfish:approval-send", handler as EventListener);
-  }, [send]);
-
-  const handleApproval = async (choice: "once" | "session" | "always" | "deny") => {
-    if (!pending || submittingChoice) return;
-    setSubmittingChoice(choice);
-    try {
-      await toolBridgeChatApproval(pending.approval_session_key, choice);
-    } catch (err) {
-      console.warn("[BriefingTwoColumn] chat_approval RPC 失败:", err);
-    }
-    setSubmittingChoice(null);
-    setPending(null);
-  };
 
   const handleSend = async () => {
     const text = input.trim();
@@ -590,51 +517,7 @@ export function DetailPane({
       </div>
 
       {/* P3.3.10: floating approval banner (跟工作台 ChatPanel 同款 UI) */}
-      {pending && (
-        <div className="approval-banner">
-          <div className="approval-banner__header">
-            {/* P3.5.73 (6/22 鸿波 catch): "hermes 等批准" → "等批准". SOUL.md
-                L5 品牌红线 "对外永不说: 我是 Hermes". 后面 pattern chip 自带
-                tool 名 (execute_code / write_file / etc), 不需要前缀做归属说明. */}
-            <span>等批准</span>
-            <code className="pattern">{pending.pattern_key}</code>
-            <span className="countdown" aria-live="polite">{secondsLeft}s</span>
-          </div>
-          {asksEveryTime(pending.description) && (
-            <div className="approval-banner__note">{everyTimeReason(pending.description)}</div>
-          )}
-          <div className="approval-banner__code">{pending.command}</div>
-          {/* 10/15: 跟 ChatPanel 同款 —— 去掉「本会话」, 删除类不给「始终允许」(lib/approvalScope.ts) */}
-          <div className="approval-banner__actions">
-            <button
-              className="approval-banner__btn-primary"
-              onClick={() => void handleApproval("once")}
-              disabled={submittingChoice !== null}
-              autoFocus
-            >
-              {submittingChoice === "once" && <span className="approval-banner__spinner" />}
-              批准
-            </button>
-            {!asksEveryTime(pending.description) && (
-              <button
-                className="approval-banner__btn-secondary"
-                onClick={() => void handleApproval("always")}
-                disabled={submittingChoice !== null}
-                title="以后这类操作不再问 (删除等破坏性操作除外)"
-              >
-                始终允许
-              </button>
-            )}
-            <button
-              className="approval-banner__btn-danger"
-              onClick={() => void handleApproval("deny")}
-              disabled={submittingChoice !== null}
-            >
-              拒绝
-            </button>
-          </div>
-        </div>
-      )}
+      <ApprovalBanner {...approval} />
 
       {messages.length > 0 && (
         <div className="briefing-2col__chat-toolbar">

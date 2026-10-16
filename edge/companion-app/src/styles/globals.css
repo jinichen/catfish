@@ -1546,6 +1546,13 @@ button {
 }
 
 /* 10/15: 删除类审批 (插件标「每次都要确认」) —— 原因写在代码上面, 不给「始终允许」 */
+/* 10/16: 批准失败 / 等超时留下的那条, 不是"等批准"本身 —— 没有倒计时和按钮组,
+   底色也从告警红退到中性, 它说的是已经发生的事, 不要求员工马上做什么。 */
+.approval-banner--note .approval-banner__note {
+  color: var(--catfish-text);
+  background: color-mix(in srgb, var(--catfish-text) 6%, transparent);
+}
+
 .approval-banner__note {
   font-size: 12px;
   line-height: 1.5;

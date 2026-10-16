@@ -1,23 +1,16 @@
 /** 聊天主面板 —— 消息流 + 输入框,自动滚到底部 */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import ChatMessage from "./ChatMessage";
 import { groupToolSteps } from "../../lib/chatToolSteps";
 import ChatInput from "./ChatInput";
 import type { Attachment, ChatMessage as Msg } from "../../types/chat";
 import { useAgentStore } from "../../store/agent";
 import { useChatStore } from "../../store/chat";
-import { toolBridgeChatApproval } from "../../lib/tauri";
-import LifecycleStatus from "./LifecycleStatus";
-import { asksEveryTime, everyTimeReason } from "../../lib/approvalScope";
 
-interface PendingApproval {
-  approval_session_key: string;
-  command: string;
-  description: string;
-  pattern_key: string;
-  timeout_s?: number;
-}
+import LifecycleStatus from "./LifecycleStatus";
+import { ApprovalBanner, useApprovalBanner } from "../../components/ApprovalBanner";
+
 
 interface Props {
   messages: Msg[];
@@ -91,65 +84,8 @@ export default function ChatPanel({
     }
   }, [persistedSessionId, messages]);
 
-  // P44.3 (6/6 鸿波 marathon): floating approval banner — 在 LLM stream 期间立即弹.
-  // 背景: hermes _gateway_approval 阻塞等 decision 时, chat completions stream
-  // 没 finalize → ChatToolCall 卡片不渲染 → P27 inline button 不出. hermes 60s
-  // 后 timeout 解 block 太晚, button 失效. 这里 listen catfish:approval-pending
-  // event (P15 _approval_notify 发的 SSE event), 立即弹 banner 给员工点.
-  //
-  // E2 (6/6 taste-skill 改造): UI 按 redesign-existing-projects skill 重写.
-  // 5 大类全过 (typography / color / layout / interactivity / content), 7 步
-  // fix priority 走了 1-5 步. CSS class 走 globals.css `.approval-banner*`
-  // (内联 style 没法加 :hover :active :focus). 新增 loading state +
-  // 60s 倒计时 (hermes config approvals.timeout 是 60).
-  const [pending, setPending] = useState<PendingApproval | null>(null);
-  const [submittingChoice, setSubmittingChoice] = useState<
-    "once" | "session" | "always" | "deny" | null
-  >(null);
-  const [secondsLeft, setSecondsLeft] = useState(60);
-
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const ev = e as CustomEvent<PendingApproval>;
-      if (ev.detail?.approval_session_key) {
-        setPending(ev.detail);
-        // 10/14 hermes v0.22 原生审批默认等 300 秒 (事件里带 timeout_s); 老插件那套是 60
-        setSecondsLeft(ev.detail.timeout_s ?? 60);  // 重置倒计时
-      }
-    };
-    window.addEventListener("catfish:approval-pending", handler as EventListener);
-    return () => window.removeEventListener("catfish:approval-pending", handler as EventListener);
-  }, []);
-
-  // 60s countdown — hermes _gateway_approval 默认 timeout 60s,
-  // 超时 hermes 自己 fallback 返回 "BLOCKED: timed out", banner 没意义自动消失.
-  useEffect(() => {
-    if (!pending) return;
-    const tick = setInterval(() => {
-      setSecondsLeft((s) => {
-        if (s <= 1) {
-          clearInterval(tick);
-          setPending(null);  // timeout 自动清, 防 stale banner
-          return 0;
-        }
-        return s - 1;
-      });
-    }, 1000);
-    return () => clearInterval(tick);
-  }, [pending]);
-
-  const handleApproval = async (choice: "once" | "session" | "always" | "deny") => {
-    if (!pending || submittingChoice) return;
-    setSubmittingChoice(choice);
-    try {
-      await toolBridgeChatApproval(pending.approval_session_key, choice);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn("[P44.3] chat_approval RPC 失败:", err);
-    }
-    setSubmittingChoice(null);
-    setPending(null);
-  };
+  // 等批准横幅 (10/16 抽成 components/ApprovalBanner, 跟早安卡片共用)
+  const approval = useApprovalBanner();
 
   // P27 (6/5 鸿波): 监听 ChatToolCall approval inline button 触发的 send event.
   // ChatToolCall → window.dispatchEvent('catfish:approval-send', detail.text)
@@ -208,56 +144,7 @@ export default function ChatPanel({
           )}
         </div>
       </div>
-      {pending && (
-        <div className="approval-banner">
-          <div className="approval-banner__header">
-            {/* P3.5.73 (6/22 鸿波 catch): "hermes 等批准" → "等批准". SOUL.md
-                L5 品牌红线 "对外永不说: 我是 Hermes". 后面 pattern chip 自带
-                tool 名, 不需要 "hermes" 前缀做归属说明. */}
-            <span>等批准</span>
-            <code className="pattern">{pending.pattern_key}</code>
-            <span className="countdown" aria-live="polite">
-              {secondsLeft}s
-            </span>
-          </div>
-          {asksEveryTime(pending.description) && (
-            <div className="approval-banner__note">{everyTimeReason(pending.description)}</div>
-          )}
-          <div className="approval-banner__code">{pending.command}</div>
-          {/* 10/15: 「本会话允许」去掉 (hermes 只管这一条消息, 跟字面意思不符);
-              删除类每次都问, 不给「始终允许」—— 见 lib/approvalScope.ts */}
-          <div className="approval-banner__actions">
-            <button
-              className="approval-banner__btn-primary"
-              onClick={() => void handleApproval("once")}
-              disabled={submittingChoice !== null}
-              autoFocus
-            >
-              {submittingChoice === "once" && <span className="approval-banner__spinner" />}
-              批准
-            </button>
-            {!asksEveryTime(pending.description) && (
-              <button
-                className="approval-banner__btn-link"
-                onClick={() => void handleApproval("always")}
-                disabled={submittingChoice !== null}
-                title="以后这类操作不再问 (删除等破坏性操作除外)"
-              >
-                {submittingChoice === "always" && <span className="approval-banner__spinner" />}
-                始终允许
-              </button>
-            )}
-            <button
-              className="approval-banner__btn-deny"
-              onClick={() => void handleApproval("deny")}
-              disabled={submittingChoice !== null}
-            >
-              {submittingChoice === "deny" && <span className="approval-banner__spinner" />}
-              拒绝
-            </button>
-          </div>
-        </div>
-      )}
+      <ApprovalBanner {...approval} />
       <ChatInput
         isStreaming={isStreaming}
         onSend={onSend}
