@@ -335,7 +335,7 @@ mod e2e {
         let problems = super::super::hermes_install_health::core_health_problems(&paths, true);
         assert!(problems.is_empty(), "{problems:?}");
         assert!(!paths.install_dir.join(".git").exists());
-        // hermes 本身能跑, 而且是 0.22.0 + external
+        // hermes 本身能跑, 而且就是 pin 的那个版本 + external (10/17: 不再写死版本号, 升 pin 不用改这里)
         let out = crate::services::process::background_command(paths.install_dir.join("venv/bin/hermes"))
             .arg("--version")
             .env("HOME", &paths.home)
@@ -344,7 +344,7 @@ mod e2e {
             .unwrap();
         let text = String::from_utf8_lossy(&out.stdout);
         println!("{text}");
-        assert!(text.contains("v0.22.0"), "{text}");
+        assert!(text.contains(super::super::hermes_install_base::hermes_pinned_tag()), "{text}");
         // 工具桥 (catfish-tools MCP) 在员工机上就是用这个 venv + PYTHONPATH 跑的: 全部模块都要导得进
         let tool_bridge = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tool-bridge/src");
         let probe = r#"

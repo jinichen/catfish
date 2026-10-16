@@ -197,3 +197,16 @@ Companion 审批卡去掉「本会话允许」, 删除类不显示「始终允�
 
 1. **要不要跟 0.22.0, 还是等 0.22.1** (rc 已出, 大版本首个补丁通常修一批回归)。建议: 改造现在就开始 (基于 0.22.0 做), 正式切版本时换成 0.22.1 再回归一遍。
 2. ~~`approvals.mode` 用什么~~ → 已定 smart, `smart_policy` 措辞已确认 (见上一节)。
+
+### 10/17 切到 v0.22.2 (Companion 1.1.17)
+
+pin: tag v0.22.2 · commit d923a5eb (`.hermes-git-commit` / `.hermes-git-tag` / `.hermes-target-version`)。上面第 1 条的回答:
+**跳过 0.22.1, 直接 0.22.0 → 0.22.2** —— 0.22.1 建的会话在 0.22.2 里删不掉 (上游已知问题), 所以 0.22.1 一版都不发。
+装了新包的机器启动时比对 commit 不一致 → 从包里带的归档重装 (和 10/14 一样的路径), 不联网。
+
+核过的:
+- `audit_hermes_compat.sh` 68 ✓ / 0 ✗; `plugin_verify._verify_patch_targets` 48 个补丁锚点在 0.22.2 全在 (反向对照照常报 ImportError)。
+- 审批接口: 0.22.2 仍按名字读 `choice` / `request_id`, 多余字段忽略; 409 细分成 approval_not_active / approval_not_pending, 我们原来就按 409 处理。
+- 依赖只多了 httpx2 2.12.0, 已进离线 wheelhouse; mac 两个架构的 hermes 归档跟 0.22.2 源码逐字节一致 (抽查 run_agent.py / uv.lock)。
+- state.db 列 (`display_kind` / `_compressed_summary` / `active` / `compacted` / `message_uid`) 没变, 1.1.16 的历史显示规则照用。
+- Windows: MSI 工作流按 pin 文件现打 hermes 归档, 不用另改。

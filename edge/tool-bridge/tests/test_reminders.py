@@ -266,10 +266,13 @@ def test_week_query_pushes_scope_and_completion_filter_into_applescript():
     assert "set end of outputRows to rowText" in script
 
 
-def test_task_library_import_uses_bounded_timeout():
+def test_task_library_import_uses_bounded_timeout(tmp_path, monkeypatch):
     """task_library 每次读都先导 Reminders; 上限必须短于 Companion 30s RPC,
     否则导入慢 = 早安页「RPC tools/dispatch 超时」(9/10 实盘)。"""
     from catfish_tool_bridge import task_library
+
+    # 隔离真实 ~/.catfish/task_library.db: 里面的 reminders_imported_at 在节流窗口内会跳过导入
+    monkeypatch.setenv("CATFISH_TASK_LIBRARY_PATH", str(tmp_path / "tasks.db"))
 
     assert task_library.REMINDERS_IMPORT_TIMEOUT_SEC < 15
     with patch.object(task_library.platform, "system", return_value="Darwin"), \

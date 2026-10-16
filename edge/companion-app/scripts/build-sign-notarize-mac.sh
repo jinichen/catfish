@@ -347,8 +347,46 @@ update_wheel_record() {
   ' "$wdir" "$rec"
 }
 
+# 10/17: 重签过的 wheel 字节变了, 但 hermes 归档里的 catfish-requirements.txt 还记着
+# 原来的 sha256, Companion 用 --require-hashes 离线装 → 「python-deps 失败」(1.1.17 本机
+# 升级实况: frozenlist 等带 .so 的 wheel 全对不上; 1.1.16 的 dmg 一样, 只是本机 commit
+# 没变不重装, 一直没触发)。把旧哈希原地换成新的; 旧哈希本来就不在清单里, 说明清单和
+# wheelhouse 对不上, 就地停。
+rehash_requirements() {
+  local whl="$1" old="$2" new="$3" req
+  req="$(dirname "$(dirname "$whl")")/catfish-requirements.txt"
+  [[ -f "$req" ]] || return 0
+  if ! grep -q "sha256:$old" "$req"; then
+    echo "❌ $(basename "$whl") 原哈希不在 $(basename "$req") 里 —— 清单和 wheelhouse 对不上" >&2
+    exit 1
+  fi
+  sed -i '' "s/sha256:$old/sha256:$new/" "$req"
+}
+
+# 签完全量再核一遍: 清单里钉了的包, wheelhouse 里那个 wheel 的哈希都得在清单里,
+# 否则装 hermes 必败。setuptools / wheel 不在清单里 (只给 editable 安装当构建后端,
+# 那一步不校哈希, 见 build_hermes_wheelhouse.py BUILD_BACKEND), 跳过。
+verify_requirements_hashes() {
+  local root="$1" req wh whl h name bad=0
+  while IFS= read -r req; do
+    wh="$(dirname "$req")/wheelhouse"
+    [[ -d "$wh" ]] || continue
+    for whl in "$wh"/*.whl; do
+      name="$(basename "$whl" | cut -d- -f1 | tr 'A-Z_.' 'a-z--')"
+      tr 'A-Z_.' 'a-z--' <"$req" | grep -q "^$name==" || continue
+      h="$(shasum -a 256 "$whl" | cut -c1-64)"
+      grep -q "sha256:$h" "$req" || { echo "❌ $(basename "$whl") 的哈希不在 $req" >&2; bad=$((bad + 1)); }
+    done
+  done < <(find "$root" -maxdepth 3 -name catfish-requirements.txt)
+  if [[ $bad -gt 0 ]]; then
+    echo "❌ $bad 个 wheel 和离线安装清单对不上 —— 装 hermes 必败, 就地停" >&2
+    exit 1
+  fi
+  return 0
+}
+
 sign_wheels() {
-  local root="$1" total=0 n whl wdir
+  local root="$1" total=0 n whl wdir old_sha new_sha
   local list="$WORK_DIR/whl.macho"
   while IFS= read -r whl; do
     wdir="$WORK_DIR/whl-unpack"
@@ -365,9 +403,12 @@ sign_wheels() {
     while IFS= read -r f; do sign_one "$f"; done <"$list"
     verify_tree "$wdir"
     update_wheel_record "$wdir"
+    old_sha="$(shasum -a 256 "$whl" | cut -c1-64)"
     rm -f "$whl"
     ( cd "$wdir" && zip -qq -r "$whl" . )   # 不加 -X, 要保住可执行位
+    new_sha="$(shasum -a 256 "$whl" | cut -c1-64)"
     rm -rf "$wdir"
+    rehash_requirements "$whl" "$old_sha" "$new_sha"
     total=$((total + n))
   done < <(find "$root" -type f -name '*.whl')
   [[ "$total" -gt 0 ]] && echo "   wheel 内共签 $total 个"
@@ -386,6 +427,7 @@ sign_archive() {
   sign_wheels "$unpack"          # 先处理嵌套的 zip, 再签外层散文件
   sign_tree "$unpack" quiet
   verify_tree "$unpack"
+  verify_requirements_hashes "$unpack"
 
   # 8/5: 原来先 find 出顶层条目再 `tar czf ... "${entries[@]}"`。两个毛病:
   #   1. macOS 自带 bash 3.2 下, 空数组展开 "${entries[@]}" 在 `set -u` 里直接
