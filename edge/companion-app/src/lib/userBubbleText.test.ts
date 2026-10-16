@@ -100,4 +100,25 @@ describe("splitUserBubbleText", () => {
     const s = "附件: 我昨天发的那个报价单, 你再看看 === 附件 这几个字";
     expect(splitUserBubbleText(s).text).toBe(s);
   });
+
+  it("10/16: 每轮通知粘在员工的话后面 (技能清单变了), 气泡里不显示", () => {
+    const note = "[System: The skills available in this conversation changed after its system prompt was built.\n" +
+      "Now available (load with skill_view(name) when relevant, like the skills listed in the system prompt):\n" +
+      "    - procurement-doc-review: 复核代理回稿的采购方案与评审表\n" +
+      "    - video-audio-summary: 员工丢来本机视频/音频文件要摘要]";
+    const r = splitUserBubbleText("把这段描述改下, 改成对应部门名称:\n🖼 截图\n\n" + note);
+    expect(r.text).toBe("把这段描述改下, 改成对应部门名称:\n🖼 截图");
+    expect(r.system).toBeNull();
+    for (const w of ["[System:", "skill_view", "procurement-doc-review"]) expect(r.text).not.toContain(w);
+  });
+
+  it("10/16: 换界面 / 插件上线这类通知同样剥掉; 整条都是通知时显示成系统提示", () => {
+    const switched = splitUserBubbleText("继续\n\n[System: This conversation is now being answered on a different interface: 微信]");
+    expect(switched.text).toBe("继续");
+    expect(splitUserBubbleText("[System: The skills available in this conversation changed.]").system).toBe("系统提示");
+    // 员工自己打的 [System: ...] 后面还有话 → 不动
+    const typed = "帮我看下这行日志 [System: boom] 是什么意思";
+    expect(splitUserBubbleText(typed).text).toBe(typed);
+  });
 });
+

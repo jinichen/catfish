@@ -11,6 +11,10 @@
  *      (约 800) · 「# 长期记忆 distilled_facts」记忆整理 (92)。
  *   3. 员工的话前面粘了一段系统说明: 「[System note: …]\n\n你再试一次」, 以及
  *      「[Image attached at: /Users/…/img.jpg]」这种图片路径行。
+ *   4. 员工的话**后面**粘的每轮一次性通知 (hermes turn_context._merge_gateway_notes 走
+ *      user 消息这条通道送给模型): 技能清单变了 / 换了界面 / 插件上线, 一律
+ *      「[System: …]」开头顶到结尾。10/16 鸿波撞到的就是这个 —— 技能变更通知整段
+ *      显示在自己那条消息里。
  *
  * 这里只管**显示**: 1 藏起来、附件名做成标签; 2 整条显示成一行灰色系统说明 (可展开看原文);
  * 3 去掉前缀 / 路径行只留员工的话。msg.content 本身不动 —— chatRequest 每次把整段历史
@@ -41,9 +45,14 @@ const SYSTEM_WHOLE: Array<[RegExp, string]> = [
   // 只认单独一段 (不跨换行), 员工的话以 "]" 结尾时 (「看 [[wiki]]」) 不会被整条吞掉
   [/^\[System note: [^\n]*gateway shutdown[^\n]*\]\s*$/, "小鲶重启后接着之前的对话"],
   [/^\[System note: [^\n]*\]\s*$/, "系统提示"],
+  // 整条只有每轮通知 (员工这轮没写字, 只发了附件 / 图片)
+  [/^\[System: /, "系统提示"],
 ];
 // 粘在员工话前面的系统说明 (到 "]" + 空行为止)
 const SYSTEM_PREFIX = /^\[System note: [\s\S]*?\]\s*\n\s*\n/;
+// 粘在员工话后面的每轮通知: 行首 [System: 一直到结尾。认行首 + 到结尾两个条件,
+// 员工自己打的「[System: ...]」后面还有话时不会被吞掉。
+const SYSTEM_SUFFIX = /\n\s*\[System: [\s\S]*$/;
 // 图片路径行 —— 路径对员工没用, 图片本身另有显示
 const IMAGE_PATH_LINE = /^\[Image attached at: [^\]\n]*\]\s*$/gm;
 
@@ -64,7 +73,7 @@ export function splitUserBubbleText(content: string | null | undefined): UserBub
     const m = re.exec(raw);
     if (m) return { text: "", hidden: "", fileNames: [], system: label.replace("{skill}", m[1] ?? "") };
   }
-  let s = raw.replace(SYSTEM_PREFIX, "");
+  let s = raw.replace(SYSTEM_PREFIX, "").replace(SYSTEM_SUFFIX, "");
   s = s.replace(IMAGE_PATH_LINE, "").replace(/^\[screenshot\]$/gm, "🖼 截图");
   let cut = -1;
   for (const re of [ATTACH_HEADER, MANY_FILES]) {
