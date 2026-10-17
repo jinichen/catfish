@@ -20,6 +20,7 @@ import {
 } from "@phosphor-icons/react";
 import { useUIStore, type TabId } from "../store/ui";
 import { useAgentStore } from "../store/agent";
+import { pendingFormCount, useForms } from "../lib/formsStore";
 import { pendingCount, useRoomLink } from "../lib/roomLinkStore";
 import { markSeen, unseenCount, useTaskDone } from "../lib/taskDoneStore";
 import { isTauriRuntime } from "../lib/runtime";
@@ -58,7 +59,8 @@ export default function TabBar() {
   const toggleRail = useUIStore((s) => s.toggleRail);
   const agentName = useAgentStore((s) => s.name);
   // 订阅即开始轮询邮筒 + P49 探针 —— 导航常驻, 所以员工不进「协同」页也能看到红点。
-  const collabPending = pendingCount(useRoomLink());
+  // 10/17: 收到还没填的表也算 (formsStore 订阅即轮询填表邮筒)。
+  const collabPending = pendingCount(useRoomLink()) + pendingFormCount(useForms());
   // 9/12: 后台任务做完/没做成、员工还没看 —— 桌宠删了, 信号改挂在「工作台」项上。
   const taskUnseen = unseenCount(useTaskDone());
 

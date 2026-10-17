@@ -180,3 +180,14 @@ async def get_department(name: str, request: Request, user: User = Depends(get_c
 @router.put("/departments/{name}")
 async def update_department(name: str, request: Request, user: User = Depends(get_current_user)) -> Response:
     return await _proxy(request, f"/admin/departments/{name}", user)
+
+
+# ── 同事通讯录 (一起填表选人, docs/FORM-COLLECT-PLAN.md §5) ──────────
+# 任何登录员工可查; 上游 identity /admin/directory 只出 邮箱 / 姓名 / 部门。
+# 挂在 /api/directory 而不是 /api/admin/*: 它不是管理功能, 不该跟管理端点一个前缀。
+directory_router = APIRouter(prefix="/api", tags=["directory"])
+
+
+@directory_router.get("/directory")
+async def directory(request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, "/admin/directory", user)

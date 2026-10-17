@@ -294,9 +294,10 @@ except Exception as e:
     logger.warning("wiki_hub_proxy 挂载失败 (P3.3.18 反代不可用): %s", e)
 
 try:
-    from .admin_proxy import router as admin_router  # noqa: PLC0415
+    from .admin_proxy import directory_router, router as admin_router  # noqa: PLC0415
     app.include_router(admin_router)
-    logger.info("admin_proxy: /api/admin/* 反代已挂载")
+    app.include_router(directory_router)
+    logger.info("admin_proxy: /api/admin/* + /api/directory 反代已挂载")
 except Exception as e:
     logger.warning("admin_proxy 挂载失败: %s", e)
 

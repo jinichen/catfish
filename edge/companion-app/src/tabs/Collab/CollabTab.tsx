@@ -7,8 +7,11 @@
  * 左栏 = 我主动做的事 (请同事帮忙 + 我发出的进度);
  * 右栏 = 等我点头的事 (同事的请求 / 对方小鲶要跑的工具 / 要发回去的回复)。
  * 右栏有货时导航项上有红点 (TabBar 读 roomLinkStore.pendingCount)。
+ *
+ * 10/17: 下面一整行 = 一起填表 (FormsPanel, docs/FORM-COLLECT-PLAN.md); 收到要填的表也算红点。
  */
 import AskColleaguePanel from "./AskColleaguePanel";
+import FormsPanel from "./FormsPanel";
 import PendingPanel from "./PendingPanel";
 
 export default function CollabTab() {
@@ -24,6 +27,9 @@ export default function CollabTab() {
       >
         <AskColleaguePanel />
         <PendingPanel />
+      </div>
+      <div style={{ marginTop: "var(--space-4)" }}>
+        <FormsPanel />
       </div>
     </div>
   );

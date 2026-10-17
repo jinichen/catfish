@@ -22,12 +22,13 @@ def client(monkeypatch):
     box: list[dict] = []
     monkeypatch.setattr(DB, "use_pg", lambda: True)
 
-    def _deliver(*, from_sub, to_sub, kind, payload):
-        box.append({"from": from_sub, "to": to_sub, "kind": kind, "payload": payload})
+    def _deliver(*, from_sub, to_sub, kind, payload, ttl_seconds=None):
+        box.append({"from": from_sub, "to": to_sub, "kind": kind, "payload": payload,
+                    "ttl": DB.ttl_for(kind, ttl_seconds)})
         return len(box)
 
-    def _take(to_sub):
-        mine = [m for m in box if m["to"] == to_sub]
+    def _take(to_sub, kinds=DB.ROOM_LINK_KINDS):
+        mine = [m for m in box if m["to"] == to_sub and m["kind"] in kinds]
         for m in mine:
             box.remove(m)
         return [
@@ -142,14 +143,49 @@ def test_库炸了_503_不是500(client, monkeypatch):
         raise RuntimeError("connection refused")
 
     monkeypatch.setattr(DB, "deliver", _boom)
-    monkeypatch.setattr(DB, "take_inbox", lambda to_sub: _boom())
+    monkeypatch.setattr(DB, "take_inbox", lambda to_sub, kinds=None: _boom())
     assert _post(c, to="bob@x.com", kind="request", payload="p").status_code == 503
     assert c.get("/api/room-link/mailbox").status_code == 503
 
 
 def test_存储层常量(client):
-    """判据独立于实现: 10 分钟取件窗口, 两种 kind."""
+    """判据独立于实现: 请求 / 授权 10 分钟取件窗口; 填表 4 种, 最长 30 天."""
     from catfish_gateway import room_link_db as DB
 
     assert DB.MAILBOX_TTL_SECONDS == 600
-    assert DB.MAILBOX_KINDS == {"request", "grant"}
+    assert DB.ROOM_LINK_KINDS == {"request", "grant"}
+    assert DB.FORM_KINDS == {"form_invite", "form_response", "form_remind", "form_close"}
+    assert DB.MAILBOX_KINDS == DB.ROOM_LINK_KINDS | DB.FORM_KINDS
+    assert DB.FORM_MAX_TTL_SECONDS == 30 * 24 * 3600
+
+
+def test_填表期限_按kind夹(client):
+    """表单类按发件端给的期限, 夹到 [10 分钟, 30 天]; 请求 / 授权给了也还是 10 分钟."""
+    c, box, _ = client
+    day = 24 * 3600
+    _post(c, to="bob@x.com", kind="form_invite", payload="p", ttl_seconds=10 * day)
+    _post(c, to="bob@x.com", kind="form_invite", payload="p", ttl_seconds=90 * day)
+    _post(c, to="bob@x.com", kind="form_response", payload="p", ttl_seconds=5)
+    _post(c, to="bob@x.com", kind="form_remind", payload="p")
+    _post(c, to="bob@x.com", kind="request", payload="p", ttl_seconds=10 * day)
+    assert [m["ttl"] for m in box] == [10 * day, 30 * day, 600, 30 * day, 600]
+
+
+def test_不带kinds_老客户端拿不到填表邮件(client):
+    """老版 Companion 不带 kinds: 只给请求 / 授权, 填表邀请留在中央等新版来取 (不被取走丢掉)."""
+    c, box, as_user = client
+    _post(c, to="bob@x.com", kind="form_invite", payload="invite")
+    _post(c, to="bob@x.com", kind="request", payload="req")
+    as_user("bob@x.com")
+    assert [m["payload"] for m in c.get("/api/room-link/mailbox").json()["messages"]] == ["req"]
+    assert [m["kind"] for m in box] == ["form_invite"]
+    got = c.get("/api/room-link/mailbox", params={"kinds": "form_invite,form_close"}).json()["messages"]
+    assert [m["payload"] for m in got] == ["invite"]
+    assert box == []
+
+
+def test_kinds_有不认识的_400(client):
+    c, _, as_user = client
+    as_user("bob@x.com")
+    assert c.get("/api/room-link/mailbox", params={"kinds": "form_invite,chat"}).status_code == 400
+    assert c.get("/api/room-link/mailbox", params={"kinds": " , "}).status_code == 400

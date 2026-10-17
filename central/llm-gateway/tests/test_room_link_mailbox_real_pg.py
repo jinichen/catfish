@@ -85,3 +85,26 @@ def test_投递顺序(db):
     for i in range(3):
         DB.deliver(from_sub="a@x", to_sub="b@x", kind="request", payload=f"m{i}")
     assert [m["payload"] for m in DB.take_inbox("b@x")] == ["m0", "m1", "m2"]
+
+
+def test_只取要的种类_别的留着(db):
+    DB = db
+    DB.deliver(from_sub="a@x", to_sub="b@x", kind="form_invite", payload="invite")
+    DB.deliver(from_sub="a@x", to_sub="b@x", kind="request", payload="req")
+    assert [m["payload"] for m in DB.take_inbox("b@x")] == ["req"]
+    assert [m["payload"] for m in DB.take_inbox("b@x", DB.FORM_KINDS)] == ["invite"]
+    assert DB.take_inbox("b@x", DB.MAILBOX_KINDS) == []
+
+
+def test_填表期限_写进expires_at(db):
+    DB = db
+    mid = DB.deliver(from_sub="a@x", to_sub="b@x", kind="form_invite", payload="p",
+                     ttl_seconds=3 * 24 * 3600)
+    rid = DB.deliver(from_sub="a@x", to_sub="b@x", kind="request", payload="p",
+                     ttl_seconds=3 * 24 * 3600)
+    with DB._pg_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT id, expires_at - created_at FROM room_link_mailbox WHERE id IN (%s, %s)",
+                    (mid, rid))
+        span = {r[0]: r[1].total_seconds() for r in cur.fetchall()}
+    assert abs(span[mid] - 3 * 24 * 3600) < 5
+    assert abs(span[rid] - 600) < 5

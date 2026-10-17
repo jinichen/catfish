@@ -49,6 +49,18 @@
 > 真要重启 A2A: 元数据就是元数据 (ts / direction / from_sub / to_sub /
 > allow_match), question 一个字都不留。要排查内容去边缘端看。
 
+### 中央只转交、不留存的例外: 同事邮筒 (`room_link_mailbox`)
+
+员工**主动**发给某个同事的东西 (请同事帮忙 P50 的请求 / 授权, 一起填表的邀请 / 回答 / 催填 / 结束,
+`docs/FORM-COLLECT-PLAN.md`) 经中央邮筒转交。它不算"中央存员工数据", 条件缺一不可:
+
+1. payload 是不透明字符串: 中央不解析、不校验结构、不写日志 (`tests/test_central_log_no_content.py` 静态拦)。
+2. 收件人取走的同一事务里 `payload = NULL`; 没人取, 到期也清空 (请求 / 授权 10 分钟; 填表类截止后 7 天, 最长 30 天)。
+3. 中央留下的只有元数据 (from / to / kind / 投取时间), 30 天后删。
+4. 每一封都是员工自己点了才发, 没有任何自动上传; 汇总、分析全在收件人本机。
+
+新功能要走邮筒, 照这四条; 要在中央**留着**内容 (哪怕几天) 给 web 看, 不行。
+
 **违规示例 (不允许)**:
 - gateway 把 chat messages 写文件
 - gateway 把 LLM response 完整写 PG (即使为了 reproduce bug)

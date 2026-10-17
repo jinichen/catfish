@@ -200,6 +200,37 @@ def make_admin_router(registry: UserRegistry) -> APIRouter:
             "caller_role": caller.role,
         }
 
+    @router.get("/directory")
+    async def directory(
+        q: str | None = None,
+        limit: int = 50,
+        caller: CallerContext = Depends(require_caller),
+    ) -> dict[str, Any]:
+        """同事通讯录 (一起填表选人用, docs/FORM-COLLECT-PLAN.md §5)。
+
+        任何登录员工都能查, 全公司范围 (10/17 鸿波: 按需要填表的人, 不限本部门)。
+        只出 邮箱 / 姓名 / 部门 —— 通讯录元数据, 不出角色、权限、登录时间等管理字段。
+        不列: 已删除、已锁定、sysadmin 运维账号、调用者自己。
+        q: 邮箱 / 姓名 / 部门里含这段字 (不分大小写); limit 夹在 [1, 200]。
+        """
+        users = await registry.list_users(include_deleted=False)
+        needle = (q or "").strip().lower()
+        me = caller.sub.strip().lower()
+        people = []
+        for u in users:
+            if u.locked or u.deleted_at or u.effective_role() == "sysadmin":
+                continue
+            if u.email.strip().lower() == me:
+                continue
+            if needle and not any(
+                needle in (v or "").lower() for v in (u.email, u.name, u.department)
+            ):
+                continue
+            people.append({"email": u.email, "name": u.name, "department": u.department})
+        people.sort(key=lambda p: (p["department"], p["name"], p["email"]))
+        cap = max(1, min(int(limit), 200))
+        return {"people": people[:cap], "total": len(people)}
+
     @router.post("/users", status_code=201)
     async def create_user(
         req: CreateUserReq,

@@ -13,8 +13,13 @@ import os
 MAILBOX_TTL_SECONDS = 10 * 60
 AUDIT_RETENTION_DAYS = 30
 
-# 邮件种类: A→B 的请求, B→A 的授权
-MAILBOX_KINDS = frozenset({"request", "grant"})
+# 邮件种类: A→B 的请求, B→A 的授权 (请求同事帮忙, 在线握手, 10 分钟)
+ROOM_LINK_KINDS = frozenset({"request", "grant"})
+# 一起填表 (docs/FORM-COLLECT-PLAN.md): 邀请 / 回填 / 催填 / 结束。要跨好几天、对方可能关机,
+# 所以期限由发件端按截止日给 (截止后 7 天), 这里只夹在 [10 分钟, 30 天]。
+FORM_KINDS = frozenset({"form_invite", "form_response", "form_remind", "form_close"})
+FORM_MAX_TTL_SECONDS = 30 * 24 * 3600
+MAILBOX_KINDS = ROOM_LINK_KINDS | FORM_KINDS
 
 # payload 上限: grant token + catalog 实测 ~3KB, 给 64KB 余量, 防人拿邮筒传文件
 MAX_PAYLOAD_BYTES = 64 * 1024
@@ -30,7 +35,17 @@ def _pg_conn():
     return psycopg.connect(os.environ["CATFISH_DB_URL"])
 
 
-def deliver(*, from_sub: str, to_sub: str, kind: str, payload: str) -> int:
+def ttl_for(kind: str, ttl_seconds: int | None) -> int:
+    """请求 / 授权固定 10 分钟; 表单类按发件端给的期限, 夹在 [10 分钟, 30 天], 没给就 30 天。"""
+    if kind not in FORM_KINDS:
+        return MAILBOX_TTL_SECONDS
+    if ttl_seconds is None:
+        return FORM_MAX_TTL_SECONDS
+    return max(MAILBOX_TTL_SECONDS, min(int(ttl_seconds), FORM_MAX_TTL_SECONDS))
+
+
+def deliver(*, from_sub: str, to_sub: str, kind: str, payload: str,
+            ttl_seconds: int | None = None) -> int:
     """投递一封. 返 id. 顺手把过期件的 payload 清掉、把老审计行删掉.
 
     raise: psycopg.Error — 邮筒没库就是没法用, 不能静默吞 (投递者会以为送到了)
@@ -52,7 +67,7 @@ def deliver(*, from_sub: str, to_sub: str, kind: str, payload: str) -> int:
             VALUES (%s, %s, %s, %s, now() + make_interval(secs => %s))
             RETURNING id
             """,
-            (from_sub, to_sub, kind, payload, MAILBOX_TTL_SECONDS),
+            (from_sub, to_sub, kind, payload, ttl_for(kind, ttl_seconds)),
         )
         row = cur.fetchone()
         conn.commit()
@@ -67,6 +82,7 @@ WITH picked AS (
     SELECT id, from_sub, kind, payload, created_at
       FROM room_link_mailbox
      WHERE to_sub = %s AND payload IS NOT NULL AND expires_at >= now()
+       AND kind = ANY(%s)
      FOR UPDATE SKIP LOCKED
 ), done AS (
     UPDATE room_link_mailbox m
@@ -78,13 +94,15 @@ SELECT id, from_sub, kind, payload, created_at FROM picked ORDER BY id
 """
 
 
-def take_inbox(to_sub: str) -> list[dict]:
-    """取走 to_sub 的全部未过期邮件, 同一事务里清空 payload (中央不留副本).
+def take_inbox(to_sub: str, kinds: frozenset[str] = ROOM_LINK_KINDS) -> list[dict]:
+    """取走 to_sub 的指定种类未过期邮件, 同一事务里清空 payload (中央不留副本).
 
+    只取调用方认得的种类: 老版 Companion 不带 kinds, 只拿请求 / 授权 —— 不然它会把
+    认不出的填表邀请取走、解析失败丢掉, 中央又已清空, 邀请就没了。
     返 [{id, from, kind, payload, created_at}], 按投递顺序.
     """
     with _pg_conn() as conn, conn.cursor() as cur:
-        cur.execute(_TAKE_SQL, (to_sub,))
+        cur.execute(_TAKE_SQL, (to_sub, sorted(kinds)))
         rows = cur.fetchall()
         conn.commit()
     return [

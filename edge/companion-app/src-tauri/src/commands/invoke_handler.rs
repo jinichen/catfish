@@ -213,6 +213,7 @@ pub(crate) fn handler(
             crate::commands::sales::sales_template_set,
             crate::commands::sales::sales_promise_done,
             crate::commands::sales::sales_pick_xlsx,
+            crate::commands::forms::form_call,
             crate::commands::sales::sales_pricebook_import,
             crate::commands::sales::sales_pricebook_get,
             crate::commands::sales::sales_quote_settings_get,
