@@ -578,4 +578,22 @@ BROWSER_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    {
+        "name": "catfish_browser_download",
+        "description": (
+            "**点一下「下载」, 等文件下完, 交回本机路径** (10/17)。网页上要下载文件 (报表 / 附件 / 导出) 时用它, "
+            "不要用 catfish_browser_click 点下载按钮 —— click 不等文件, 也拿不到路径。\n"
+            "文件存到 ~/.catfish/downloads/<日期>/<原文件名> (重名加序号), 返回 {path, filename, size}。\n"
+            "selector 或 coordinates 二选一 (要点的是真正触发下载的按钮 / 链接; 点了先弹窗的, 先 click 到弹窗里那个下载链接再用这个)。\n"
+            "教学时用它, 凝固出的 skill 会把下载的文件路径交给后面的步骤 / 工作流。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string", "description": "下载按钮 / 链接的 selector"},
+                "coordinates": {"type": "array", "items": {"type": "integer"}, "description": "[x, y] 像素坐标"},
+                "timeout_seconds": {"type": "number", "description": "等下载开始并完成的最长秒数, 默认 60"},
+            },
+        },
+    },
 ]

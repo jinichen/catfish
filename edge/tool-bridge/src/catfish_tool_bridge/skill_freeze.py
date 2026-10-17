@@ -243,6 +243,23 @@ def freeze_skill(args: dict[str, Any]) -> dict[str, Any]:
     # 排序
     trace.sort(key=lambda x: x.get("seq", 0))
 
+    # v2.4 (10/17, docs/WORKFLOW-SKILL-PLAN.md §4.2): 没有浏览器动作的教学 → 工作流草稿 (员工确认才保存);
+    # 浏览器 + 会改东西的能力混着 → 不凝固, 请员工拆开教; 浏览器教学里顺手查的只读能力跳过。
+    from . import workflow_freeze  # noqa: PLC0415
+    shape = workflow_freeze.classify(trace)
+    if shape == "workflow":
+        _mark_duplicate_run_skills(trace)
+        return workflow_freeze.freeze_to_draft(trace, name, namespace, description)
+    if shape == "mixed":
+        return {
+            "ok": False,
+            "error": (
+                "这次教学里既有网页操作, 又有建任务 / 存草稿 / 发布这类会改东西的步骤, 没法凝固成一个脚本。"
+                "请把网页那段单独教成一个 skill, 再用工作流 (catfish_workflow) 把它和其它步骤串起来。"
+            ),
+        }
+    trace = workflow_freeze.drop_read_actions(trace)
+
     # 2) 解析 + 模板化
     #
     # v2.3 (8/15): 发代码之前先做两遍 pre-pass 给 trace 打标。放在这里而不是
@@ -250,6 +267,9 @@ def freeze_skill(args: dict[str, Any]) -> dict[str, Any]:
     # 而 _emit_step 一次只看一步。
     _n_anchor = _pair_text_anchors(trace)
     _n_dup = _mark_duplicate_run_skills(trace)
+    _n_flow = workflow_freeze.link_script_dataflow(trace)
+    if _n_flow:
+        logger.info("freeze pre-pass: %d 处嵌套 skill 参数改成运行时从前面步骤取值", _n_flow)
     if _n_anchor or _n_dup:
         logger.info(
             "freeze pre-pass: %d 处 find_by_text→click 改成运行时定位, %d 处重复 run_skill 去重",

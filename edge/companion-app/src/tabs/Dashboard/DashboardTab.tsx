@@ -47,6 +47,7 @@ import PerfCard from "./components/PerfCard";
 // import { SessionCleanupCard } from "./SessionCleanupCard";
 import CatalogCard from "./CatalogCard";
 import SkillsMcpCard from "./SkillsMcpCard";
+import WorkflowsCard from "./WorkflowsCard";
 // P3.3.18 (6/10): 部门 wiki publish 市场, 跟 SkillsMcpCard 并列 (manifesto 公理 2 例外)
 import WikiHubCard from "./WikiHubCard";
 // 6/2 BL-SKILLS-CARD-SPLIT (鸿波 6/2 凌晨拍 方案 C): MySkillsCard 显员工自己 RecMode
@@ -328,6 +329,8 @@ export default function DashboardTab() {
             //   跟"我的技能" 对仗 ("我的" vs "库"=系统的)
             { key: "my-skills", label: "🧰 我的技能", render: () => <MySkillsCard /> },
             { key: "installed", label: "📦 技能库", render: () => <SkillsMcpCard /> },
+            // 10/17: 工作流 —— 把教过的技能和鲶鱼会的能力串成一条 (docs/WORKFLOW-SKILL-PLAN.md)
+            { key: "workflows", label: "🔗 工作流", render: () => <WorkflowsCard /> },
             // P3.3.31 (6/12): 加回 SkillsHubCard — "别人分享的 skill" 在心智里
             //   就该在仪表盘技能 section 找, 不是顶部 banner 跳出去 catfish-web.
             //   原 5/10 BL-ARCH2 砍错了 (当时跟 manager 管理类一起挪走), 现在补.

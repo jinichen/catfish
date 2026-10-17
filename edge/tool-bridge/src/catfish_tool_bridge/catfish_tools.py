@@ -714,8 +714,8 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_forget_about":
         from . import forget_about  # noqa: PLC0415
         return forget_about.forget_about(args)
-    for prefix, mod in (("catfish_wechat_", "wechat_archive"), ("catfish_customer", "customers"),
-                        ("catfish_form", "forms_tool")):  # 子模块自带 dispatch
+    from .native_submodules import PREFIX_MODULES  # noqa: PLC0415  子模块自带 dispatch, 表在那边
+    for prefix, mod in PREFIX_MODULES:
         if name.startswith(prefix):
             return __import__(f"{__package__}.{mod}", fromlist=["dispatch"]).dispatch(name, args)
     raise ValueError(f"unknown native tool: {name}")

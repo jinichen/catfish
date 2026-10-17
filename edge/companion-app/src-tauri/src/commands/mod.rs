@@ -32,6 +32,7 @@ pub mod embed_model_cmd; // 10/6: 向量模型组件包状态 + 安装, 见 serv
 pub mod meeting;       // 10/1: 会议录音 (建会议 / 录 / 停 / 列表), 见 services::meeting_*
 pub mod meeting_import; // 10/11: 导入录音笔 / 手机录音 → 一场会议, 后面复用转写
 pub mod notify_prefs; // 10/12: 「提醒同步到微信」开关 + 测试推送 (tool-bridge wechat_push.py)
+pub mod workflows; // 10/17: 工作流 skill —— 技能页编辑 / 试跑 / 运行记录 + 全局对外步骤确认
 pub mod forms; // 10/17: 一起填表 —— 「协同」页发起 / 填写 / 进度 (tool-bridge forms.py)
 pub mod sales; // 10/12: 销售跟进 —— 早安「客户跟进」雷达 + 销售模板 (tool-bridge customers.py)
 pub mod components;    // 10/1: 可选大组件 (会议纪要组件包等) 下载 / 校验, 见 services::components

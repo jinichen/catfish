@@ -326,6 +326,11 @@ def run_skill(args: Dict[str, Any]) -> Dict[str, Any]:
             "files": [],
             "summary": "",
         }
+    # 10/17 工作流 skill (docs/WORKFLOW-SKILL-PLAN.md): 目录里是 workflow.yaml → 交给工作流运行器
+    if (skill_dir / "workflow.yaml").exists():
+        from . import workflow_tool  # noqa: PLC0415
+        return workflow_tool.run_installed(skill_dir, skill_path, params)
+
     script_py = skill_dir / "script.py"
     if not script_py.exists():
         return {

@@ -6,6 +6,7 @@ import AboutModal from "./components/AboutModal";
 import AdvisoryBanner from "./components/AdvisoryBanner";  // 6/7 BL-MANIFESTO-ADVISORY-PHASE1
 import AuthBanner from "./components/AuthBanner";
 import HermesReconnectBanner from "./components/HermesReconnectBanner";  // P3.3.5 (6/9): hermes 重连 banner
+import WorkflowConfirmBanner from "./components/WorkflowConfirmBanner";
 import HermesBootstrapStatus from "./components/HermesBootstrapStatus";
 import DevUserSwitcher from "./components/DevUserSwitcher";
 import ConnectLinkDialog from "./components/ConnectLinkDialog";
@@ -222,6 +223,8 @@ function AppShell({ activeTab }: { activeTab: string }) {
         <AuthBanner />
         {isChatOrBriefing && <AdvisoryBanner />}
         <HermesReconnectBanner />
+        {/* 10/17: 工作流停在对外步骤前等确认 —— 每个页面都看得到 (定时跑的时候员工多半不在那个页面) */}
+        <WorkflowConfirmBanner />
         <DevUserSwitcher />
         <main className={isChatOrBriefing ? "app-workspace__main app-workspace__main--locked" : "app-main"}>
           {/* BL-CONSOLE-TAB-KILL (5/16): {activeTab === "console" && <ConsoleTab />} */}

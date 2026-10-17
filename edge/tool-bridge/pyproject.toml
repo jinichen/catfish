@@ -40,6 +40,8 @@ dependencies = [
     "jieba >= 0.42",
     # 10/12 销售跟进: 价格表导入 / 报价单 / 销售周报都是 .xlsx (sales_*.py), 是功能本身不是 skill 附带
     "openpyxl >= 3.0",
+    # 10/17 工作流 skill: workflow.yaml (员工看得懂、改得动的步骤文件)。search_skills 早就在用, 这里补上声明
+    "pyyaml >= 6.0",
 ]
 
 [project.scripts]

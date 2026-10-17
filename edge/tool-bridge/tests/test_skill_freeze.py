@@ -517,14 +517,28 @@ def test_nested_skill_failure_propagates():
     """嵌套 skill 失败时, 外层 skill 也按铁律 raise _SkillStepFailure 报错."""
     from catfish_tool_bridge import skill_freeze, trace_recorder
     skill_freeze.teach_start({"name": "nested-fail"})
+    # 10/17: 只有嵌套 skill、没有网页动作的教学现在凝固成工作流草稿 (test_workflow_freeze.py);
+    # 这里要验的是脚本里的嵌套失败传播, 所以带一步网页动作, 走 script.py 那条路。
     trace_recorder.record(
         "catfish_run_skill",
         {"skill_path": "department/eis-login", "params": {}},
         {"ok": True}, True, 100,
     )
+    trace_recorder.record("catfish_browser_click", {"selector": "#checkin"}, {"type": "ok"}, True, 50)
     skill_freeze.teach_end({})
     r = skill_freeze.freeze_skill({"name": "nested-fail", "run_install": False})
     src = Path(r["files"][0]).read_text(encoding="utf-8")
     # 模板必须 raise _SkillStepFailure (跟普通 step 一致)
     assert 'raise _SkillStepFailure("run_skill:department/eis-login"' in src
     assert "嵌套 skill 失败" in src
+
+
+def test_只有嵌套skill的教学_出工作流草稿():
+    """10/17: 没有网页动作 → 工作流草稿 (员工确认才保存), 不再生成只包一层的 script.py。"""
+    from catfish_tool_bridge import skill_freeze, trace_recorder
+    skill_freeze.teach_start({"name": "only-nested"})
+    trace_recorder.record("catfish_run_skill", {"skill_path": "department/eis-login", "params": {}},
+                          {"ok": True}, True, 100)
+    skill_freeze.teach_end({})
+    r = skill_freeze.freeze_skill({"name": "only-nested", "namespace": "personal"})
+    assert r.get("kind") == "workflow" and r.get("draft") == "only-nested"

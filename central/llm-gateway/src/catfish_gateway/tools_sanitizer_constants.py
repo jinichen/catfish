@@ -35,7 +35,8 @@ CATFISH_BROWSER_PREFIX = "catfish_browser_"
 # 10/8: 关早安卡片 (catfish_advisor_close_task) 直达后需要 44 个, 余量 6。
 # 10/12: 客户档案 + 跟进雷达 (catfish_customer, 七个 action 合成一个工具) 直达后 45, 余量 5。
 # 10/17: 一起填表 (catfish_form, 十几个 action 合成一个工具) 直达后 46, 余量 4。
-DEFAULT_MAX_TOOLS = 46
+# 10/17: 工作流 (catfish_workflow, 八个 action 合成一个工具) 直达后 47, 余量 3 (离 Qwen 50+ 实测红线还有空)。
+DEFAULT_MAX_TOOLS = 47
 ENV_MAX_TOOLS = "CATFISH_MAX_TOOLS"
 
 
@@ -253,6 +254,8 @@ ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
     "catfish_customer",
     # 10/17: 一起填表 (P43 _PROMOTE 同步加了)。
     "catfish_form",
+    # 10/17: 工作流 (P43 _PROMOTE 同步加了)。
+    "catfish_workflow",
     # BL-LLM-PLAN-WITHOUT-ACT (5/19): 内网 qwen 见到周报 / PPT 等关键词必须能立即
     # 找到对应 skill 并触发, 不能因 BL-TOOL-CAP 被砍. skill discovery + invocation
     # 这一族永不 drop. (catfish_run_skill 已在表里, 这里补 hermes 0.14 的 skill_*.)

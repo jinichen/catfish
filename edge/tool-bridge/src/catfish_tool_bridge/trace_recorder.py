@@ -95,6 +95,17 @@ ARCHIVE_DIR = TRACE_DIR  #  归档文件直接放 TRACE_DIR (前缀 session_ 区
 
 # ─── 录制白名单 ────────────────────────────────────────────────────────
 
+# v2.4 (10/17): 能力积木 (workflow_catalog) 也录 —— 没有浏览器动作的教学凝固成工作流草稿 (workflow_freeze)。
+# 只录目录里的; 写死名单而不是 import catalog, 免得录制器 import 一串业务模块 (test_workflow_catalog 钉住两边一致)。
+_WORKFLOW_ACTION_TOOLS = (
+    "catfish_email_search", "catfish_email_read", "catfish_email_attachment", "catfish_wiki_search",
+    "catfish_wiki_read", "catfish_search_files", "catfish_search_docs", "catfish_list_tasks",
+    "catfish_list_reminders", "catfish_list_calendars", "catfish_wechat_search", "catfish_wechat_history",
+    "catfish_today_summary", "catfish_list_my_outputs", "catfish_create_task", "catfish_create_reminder",
+    "catfish_create_calendar_event", "catfish_email_create_draft", "catfish_wiki_create", "catfish_wiki_update",
+    "catfish_wiki_publish",
+)
+
 RECORDED_TOOLS = frozenset({
     "catfish_browser_goto",
     "catfish_browser_click",
@@ -108,7 +119,9 @@ RECORDED_TOOLS = frozenset({
     # 不重复教 7 步登录). 嵌套 depth_guard 保证 script.py 内部 dispatch 不再录,
     # 不会循环污染.
     "catfish_run_skill",
-})
+    # v2.4 (10/17): 网页下载 (点一下等文件落盘, 凝固后路径进 files)
+    "catfish_browser_download",
+}) | frozenset(_WORKFLOW_ACTION_TOOLS)
 
 _MAX_FIELD_BYTES = 8000
 _SEQ = 0

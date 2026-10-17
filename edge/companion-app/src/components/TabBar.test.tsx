@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../lib/roomLinkStore", () => ({ pendingCount: () => 0, useRoomLink: () => ({}) }));
 vi.mock("../lib/formsStore", () => ({ pendingFormCount: () => 0, useForms: () => ({}) }));
+vi.mock("../lib/workflowStore", () => ({ useWorkflowPending: () => [] }));
 vi.mock("../lib/taskDoneStore", () => ({ markSeen: vi.fn(), unseenCount: () => 0, useTaskDone: () => ({}) }));
 vi.mock("../lib/runtime", () => ({ isTauriRuntime: () => false }));
 

@@ -102,11 +102,44 @@ def _emit_step(
                 f'        #   教学 trace 里连着记了两次 — 凝固时去重. 真要跑两遍的话,',
                 f'        #   中间插一步别的 (例 goto), 或者走"再教一次"把意图录清楚.',
             ], prev_captcha_result
-        return [
+        # v2.4 (10/17): 参数不再原样焊死 —— 等于前面某步结果的, 运行时取 (workflow_freeze.link_script_dataflow);
+        # 其余的字符串提成本 skill 的参数, 教学那天的值当默认 (_infer_params)。
+        refs = step.get("_param_refs") or {}
+        pvars = step.get("_param_vars") or {}
+        parts = []
+        for k, v in skill_params.items():
+            if k in refs:
+                parts.append(f"{k!r}: _dig(_outs[{refs[k][0]!r}], {list(refs[k][1])!r})")
+            elif k in pvars:
+                parts.append(f"{k!r}: {pvars[k]}")
+            else:
+                parts.append(f"{k!r}: {v!r}")
+        lines = [
             f'        last_step = "run_skill:{skill_path}"',
-            f'        _r = _call("catfish_run_skill", {{"skill_path": {_quote_str(skill_path)}, "params": {skill_params!r}}})',
+            f'        _r = _call("catfish_run_skill", {{"skill_path": {_quote_str(skill_path)}, "params": {{{", ".join(parts)}}}}})',
             f'        if not _r.get("ok"): raise _SkillStepFailure("run_skill:{skill_path}", _r.get("error", "嵌套 skill 失败"))',
-        ], prev_captcha_result
+            '        _files.extend(f for f in (_r.get("files") or []) if f not in _files)',
+        ]
+        if step.get("_keep_output"):
+            lines.append(f'        _outs[{step.get("seq")!r}] = _r')
+        return lines, prev_captcha_result
+
+    # v2.4 (10/17): 下载 —— 点一下等文件落盘, 路径进 files, 后面的步骤 / 工作流能取到
+    if tool == "catfish_browser_download":
+        dl: dict[str, Any] = {"timeout_seconds": args.get("timeout_seconds") or 60}
+        if args.get("selector"):
+            dl["selector"] = args["selector"]
+        else:
+            dl["coordinates"] = args.get("coordinates")
+        lines = [
+            '        last_step = "download"',
+            f'        _r = _call("catfish_browser_download", {dl!r})',
+            '        if not _r.get("ok"): raise _SkillStepFailure("download", _r.get("error", "下载失败"))',
+            '        _files.append(_r.get("path"))',
+        ]
+        if step.get("_keep_output"):
+            lines.append(f'        _outs[{step.get("seq")!r}] = _r')
+        return lines, prev_captcha_result
 
     # 跳过类: 输出只给 LLM 看, 不改变页面状态 → 不发代码.
     # find_by_text / locate 被下一步 click 当定位用时, _pair_text_anchors 会给
@@ -385,6 +418,21 @@ def _infer_params(trace: list[dict]) -> list[tuple[str, str, str]]:
                 # 当 username 参数
                 params.append(("username", "str", _quote_str(text)))
                 has_username = True
+    # v2.4 (10/17): 嵌套 skill 里没连上数据流的字符串参数 → 本 skill 的参数 (默认 = 教学那天的值)
+    names = {p[0] for p in params}
+    for step in trace:
+        if step.get("tool") != "catfish_run_skill" or step.get("_dup_of_prev"):
+            continue
+        refs = step.get("_param_refs") or {}
+        for k, v in ((step.get("args") or {}).get("params") or {}).items():
+            if k in refs or not isinstance(v, str) or not re.fullmatch(r"[a-z_][a-z0-9_]*", k):
+                continue
+            var, n = k, 2
+            while var in names or var in ("max_captcha_retry",):
+                var, n = f"{k}_{n}", n + 1
+            names.add(var)
+            step.setdefault("_param_vars", {})[k] = var
+            params.append((var, "str", _quote_str(v)))
     if has_captcha:
         params.append(("max_captcha_retry", "int", "3"))
     return params
@@ -659,6 +707,17 @@ def _click_element(el: dict[str, Any], fallback_selector: str = "") -> dict[str,
     return _call("catfish_browser_click", {{"selector": sel}})
 
 
+def _dig(obj: Any, path: list) -> Any:
+    """按凝固时认出来的路径从前面某步的结果里取值 (v2.4 数据流)。取不到 → 这一步失败, 不传空值下去。"""
+    cur = obj
+    for p in path:
+        try:
+            cur = cur[p]
+        except (KeyError, IndexError, TypeError):
+            raise _SkillStepFailure("dataflow", f"前面步骤的结果里取不到 {{path}}")
+    return cur
+
+
 def render_{fn_name}(
 {params_block}    **_kwargs: Any,
 ) -> dict[str, Any]:
@@ -670,12 +729,16 @@ def render_{fn_name}(
     captcha_attempts = 0
     captcha_text = None
     last_step = None
+    _files: list = []
+    _outs: dict = {{}}
     try:
 '''
 
 _SCRIPT_FOOTER = '''
         return {
             "ok": True,
+            "files": [f for f in _files if f],
+            "path": next((f for f in reversed(_files) if f), None),
             "captcha_attempts": captcha_attempts,
             "duration_ms": int((_time.time() - _started) * 1000),
         }

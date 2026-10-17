@@ -99,6 +99,15 @@
 
 ---
 
+### 10/17 新 kind: workflow (工作流 skill)
+
+`~/.catfish/skills/<ns>/<name>/` 里放 `workflow.yaml` (步骤, 不是代码) + `SKILL.md` (kind: workflow)。
+步骤是三种积木: 教过的技能 (script.py) / 鲶鱼能力 (workflow_catalog.py 目录里的) / 小鲶判断 (只看给它的数据, 交回声明的字段)。
+建: 跟小鲶描述 (catfish_workflow draft → trial → 员工同意 save) 或教学凝固 (没有网页操作的 trace)。
+审: 保存前过静态校验 (积木在不在、引用只能指前面步骤声明过的输出); 对外积木运行时停下, 只有员工在界面上能确认。
+用: catfish_run_skill 照常调; 运行记录在 ~/.catfish/workflow_runs/ (本机), 失败从那一步接着跑。
+设计和取舍见 docs/WORKFLOW-SKILL-PLAN.md。
+
 ## 阶段 3 · Review (建后审) 🚧 部分空白
 
 ### 应该做的

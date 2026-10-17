@@ -21,6 +21,7 @@ import {
 import { useUIStore, type TabId } from "../store/ui";
 import { useAgentStore } from "../store/agent";
 import { pendingFormCount, useForms } from "../lib/formsStore";
+import { useWorkflowPending } from "../lib/workflowStore";
 import { pendingCount, useRoomLink } from "../lib/roomLinkStore";
 import { markSeen, unseenCount, useTaskDone } from "../lib/taskDoneStore";
 import { isTauriRuntime } from "../lib/runtime";
@@ -63,6 +64,8 @@ export default function TabBar() {
   const collabPending = pendingCount(useRoomLink()) + pendingFormCount(useForms());
   // 9/12: 后台任务做完/没做成、员工还没看 —— 桌宠删了, 信号改挂在「工作台」项上。
   const taskUnseen = unseenCount(useTaskDone());
+  // 10/17: 工作流停在对外步骤前等确认的, 也算进 Dock 角标 (员工不在鲶鱼里也知道有事)
+  const workflowWaiting = useWorkflowPending().length;
 
   // 员工在工作台 tab 且窗口有焦点 = 看到了。窗口重新获焦时也再判一次
   // (Cmd+Tab 回来的那一下, activeTab 没变但人回来了)。
@@ -79,9 +82,9 @@ export default function TabBar() {
   // Dock 角标 = 等我点头的 + 没看的任务结果。员工不在 Companion 里也知道有事。
   useEffect(() => {
     if (!isTauriRuntime()) return;
-    const n = collabPending + taskUnseen;
+    const n = collabPending + taskUnseen + workflowWaiting;
     void getCurrentWindow().setBadgeCount(n > 0 ? n : undefined).catch(() => {});
-  }, [collabPending, taskUnseen]);
+  }, [collabPending, taskUnseen, workflowWaiting]);
 
   return (
     <nav className="app-rail" aria-label="主导航" data-collapsed={collapsed || undefined}>
