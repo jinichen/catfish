@@ -1,6 +1,7 @@
 # BL-SEC-CARGO (5/8): cargo audit ignore — 上游 Tauri 2.x 传染的 unmaintained / unsound 警告.
-# 位置约束: 必须在 working-directory 根 (src-tauri/audit.toml). rustsec/audit-check@v2
-#           读这一处, 不读 .cargo/audit.toml (那是 cargo-audit CLI 默认, 不是 GH Action).
+# 位置: src-tauri/.cargo/audit.toml。10/17 实测: 原来放在 src-tauri/audit.toml, cargo audit 根本不读
+#       (CI 输出 settings.ignore 是 [], 下面这些 warning 照样列出来 —— 只是 warning 不拦, 一直没人发现);
+#       rustsec/audit-check@v2 在 working-directory 里跑 cargo audit, 读的就是 .cargo/audit.toml。
 #
 # 19 条全是供应链卫生问题 (上游 crate 已停维护或有 unsound 边角 case),
 # 0 条是 exploitable CVE / RCE / 网络漏洞.
@@ -58,4 +59,17 @@ ignore = [
     "RUSTSEC-2025-0057",  # fxhash: hash 函数 unmaintained, 算法本身没漏洞 — selectors → kuchikiki → tauri-utils
     "RUSTSEC-2026-0097",  # rand 0.7.3: phf_codegen 构建期 only, runtime 不触发
     "RUSTSEC-2024-0429",  # glib::VariantStrIter Iterator unsound: Tauri 不实现 GLib Iter, 触发不到
+
+    # ============================================================
+    # zip 8.6.0 (rust_xlsxwriter 0.99.1 带进来的) — 10/17
+    # ============================================================
+    # 三条都是**解压**时的问题: ZipArchive::extract / ZipStreamReader::extract 跟着符号链接设权限、
+    # 保留 SUID/SGID、建出指向目录外的符号链接。修在 zip >= 9.0.0。
+    # 我们直接依赖的 zip 已升到 9 (skills_install.rs 解 skill zip, 而且是逐个 entry + enclosed_name +
+    # 扩展名白名单, 没用 extract)。剩下这份 8.6.0 只在 rust_xlsxwriter 里**写** xlsx (xlsx 就是 zip),
+    # 不解压任何东西, 三条都触发不到。0.99.1 已是最新版; rust_xlsxwriter 换到 zip 9 后删掉这三行
+    # (cargo tree -i zip 只剩 9.x 就可以删)。
+    "RUSTSEC-2026-0367",  # zip 解压保留 SUID/SGID
+    "RUSTSEC-2026-0368",  # zip extract 建出目录外的符号链接
+    "RUSTSEC-2026-0369",  # zip extract 跟着符号链接设权限
 ]

@@ -282,7 +282,8 @@ pub(crate) fn install_skill_from_zip_blocking(
             None => {
                 warnings.push(format!(
                     "跳过不安全路径: {}",
-                    entry.name()
+                    // zip 9: 文件名不是合法 UTF-8 时返回 Err
+                    entry.name().map(|n| n.into_owned()).unwrap_or_else(|_| "<文件名乱码>".into())
                 ));
                 continue;
             }
