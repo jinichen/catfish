@@ -115,3 +115,10 @@ def test_主小鲶的推荐工具_只推荐(env):
 def test_专家自己看不到推荐工具():
     assert "catfish_expert" not in expert_local.BASE_TOOLS
     assert all("catfish_expert" not in g["tools"] for g in expert_local.TOOL_GROUPS.values())
+
+
+def test_新建不用填id_自动生成_再存用同一个(env):
+    d = expert_local.save({**DEF, "id": ""})
+    assert d["id"].startswith("e") and len(d["id"]) == 7
+    again = expert_local.save({**d, "description": "改了"})
+    assert again["id"] == d["id"] and len(expert_local.list_all()) == 1

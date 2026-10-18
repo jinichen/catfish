@@ -146,7 +146,18 @@ def normalize(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _new_id() -> str:
+    """新建时自动给 id (内部用的目录名 / profile 名, 员工不用管): 字母开头 + 6 位随机。"""
+    import secrets  # noqa: PLC0415
+    while True:
+        eid = "e" + secrets.token_hex(3)
+        if not (experts_dir() / eid).exists():
+            return eid
+
+
 def save(raw: dict[str, Any]) -> dict[str, Any]:
+    if not str(raw.get("id") or "").strip():
+        raw = {**raw, "id": _new_id()}
     d = normalize(raw)
     old = load(d["id"]) if (_dir(d["id"]) / "expert.yaml").exists() else {}
     d["created_at"] = old.get("created_at") or workflow_store.now()

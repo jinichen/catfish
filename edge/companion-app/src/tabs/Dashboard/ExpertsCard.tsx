@@ -47,6 +47,7 @@ function Editor({ initial, isNew, cat, onClose, onSaved }: {
     setMsg("保存中…");
     try {
       const { expert } = await expertSave(d);
+      setD(expert); // 新建时 id 是保存那一刻生成的; 记回来, 生效失败再点一次不会又建一个
       setMsg("让它生效 (会重启一次小鲶本机服务, 正在进行的对话会中断)…");
       await expertApply(expert.id);
       await refreshExperts();
@@ -62,11 +63,8 @@ function Editor({ initial, isNew, cat, onClose, onSaved }: {
 
   return (
     <Overlay title={isNew ? "新建专家" : `编辑 · ${initial.name}`} onClose={onClose} width={820}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-        <input value={d.name} onChange={(e) => set({ name: e.target.value })} placeholder="名字, 例「资质专员」" style={inputStyle} />
-        <input value={d.id} disabled={!isNew} onChange={(e) => set({ id: e.target.value.trim().toLowerCase() })}
-               placeholder="id: 小写字母数字横线, 例 qual-specialist" style={inputStyle} />
-      </div>
+      {/* 10/18: id 不让员工填 —— 新建时保存那一刻自动生成 (内部目录名), 只填名字 */}
+      <input value={d.name} onChange={(e) => set({ name: e.target.value })} placeholder="名字, 例「资质专员」" style={inputStyle} />
       <input value={d.description} onChange={(e) => set({ description: e.target.value })}
              placeholder="一句话: 它管什么 (小鲶靠这句话决定什么时候推荐它)" style={inputStyle} />
       <textarea rows={4} value={d.persona} onChange={(e) => set({ persona: e.target.value })} style={{ ...inputStyle, resize: "vertical" }}
@@ -146,7 +144,7 @@ function Editor({ initial, isNew, cat, onClose, onSaved }: {
       {msg && <span style={muted}>{msg}</span>}
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
         <Btn kind="ghost" disabled={busy} onClick={onClose}>取消</Btn>
-        <Btn kind="primary" disabled={busy || !d.name.trim() || !d.id.trim()} onClick={() => void saveApply()}>{busy ? "处理中…" : "保存并生效"}</Btn>
+        <Btn kind="primary" disabled={busy || !d.name.trim()} onClick={() => void saveApply()}>{busy ? "处理中…" : "保存并生效"}</Btn>
       </div>
     </Overlay>
   );
