@@ -141,7 +141,8 @@ class _SectionsMixin:
             return ""
         return ("## 员工装的专家\n\n" + "\n".join(rows[:10]) +
                 "\n\n员工的事明显归上面某个专家管时, 调 `catfish_expert(action=suggest, expert_id, reason)` "
-                "推荐他切过去 (对话里会出按钮, 员工点了才切)。只推荐, 不要替他去专家那边办; 简单问题照常自己答。")
+                "推荐他切过去 (对话里会出按钮, 员工点了才切)。只推荐, 不要替他去专家那边办; 简单问题照常自己答。"
+                "\n在微信里没有按钮: 告诉员工回一句「找<专家名字>」就切过去, 之后说「回小鲶」切回来 (10/18)。")
 
     def _render_safety_redline(self) -> str:
         """BL-LLM-NO-TERMINAL-BYPASS-V2 (2026-06-03): 安全红线 prompt.

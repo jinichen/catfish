@@ -160,6 +160,10 @@ def save(raw: dict[str, Any]) -> dict[str, Any]:
         raw = {**raw, "id": _new_id()}
     d = normalize(raw)
     old = load(d["id"]) if (_dir(d["id"]) / "expert.yaml").exists() else {}
+    if (old.get("source") or {}).get("kind") == "pack":
+        raise ValueError("这是从专家包装来的专家, 不能直接改 (要改请找原作者发新版本)")
+    if old.get("pack"):
+        d["pack"] = old["pack"]
     d["created_at"] = old.get("created_at") or workflow_store.now()
     d["updated_at"] = workflow_store.now()
     path = _dir(d["id"]) / "expert.yaml"
@@ -182,14 +186,28 @@ def list_all() -> list[dict[str, Any]]:
             d = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
         except (OSError, yaml.YAMLError):
             continue
+        src = d.get("source") or {}
         out.append({k: d.get(k) for k in ("id", "name", "description", "quick_prompts", "enabled", "updated_at")}
                    | {"profile_id": profile_id(d.get("id") or ""), "routes": len(d.get("routes") or []),
-                      "workflows": len(d.get("workflows") or []), "skills": len(d.get("skills") or [])})
+                      "workflows": len(d.get("workflows") or []), "skills": len(d.get("skills") or []),
+                      "pack": {"version": src.get("version"), "origin": src.get("origin"),
+                               "signed": (src.get("signature") or {}).get("status") == "signed",
+                               "reviewed_by": (src.get("signature") or {}).get("reviewed_by")}
+                      if src.get("kind") == "pack" else None,
+                      "packed_version": (d.get("pack") or {}).get("version")})
     return out
 
 
 def delete(expert_id: str) -> None:
+    """删定义; 从专家包装的连包里的技能 / 工作流一起删 (运行记录留着)。"""
     d = _dir(expert_id)
+    try:
+        is_pack = (load(expert_id).get("source") or {}).get("kind") == "pack"
+    except (LookupError, OSError, yaml.YAMLError):
+        is_pack = False
+    if is_pack:
+        from .expert_pack import pack_ns, packs_root  # noqa: PLC0415
+        shutil.rmtree(packs_root() / pack_ns(expert_id), ignore_errors=True)
     if d.exists():
         shutil.rmtree(d)
 
@@ -279,6 +297,7 @@ def catalog() -> dict[str, Any]:
 
 
 def pim_handlers(params: dict[str, Any]) -> dict[str, Any]:
+    from . import expert_pack  # noqa: PLC0415
     eid = str(params.get("id") or "")
     return {
         "pim/expert_catalog": catalog,
@@ -287,4 +306,5 @@ def pim_handlers(params: dict[str, Any]) -> dict[str, Any]:
         "pim/expert_save": lambda: {"ok": True, "expert": save(params.get("expert") or {})},
         "pim/expert_compile": lambda: compile(eid),
         "pim/expert_delete": lambda: (delete(eid), {"ok": True})[1],
+        **expert_pack.pim_handlers(params),
     }

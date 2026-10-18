@@ -31,7 +31,7 @@ EXPECT_KEYS = ("ok", "count_min", "files_min", "text_contains", "page_contains")
 PARAM_TYPES = ("text", "number", "date", "bool", "list")
 _ID = re.compile(r"^[a-z][a-z0-9_]{0,30}$")
 _REF = re.compile(r"\$\{([^}]+)\}")
-_SKILL = re.compile(r"^(personal|department|external)/[a-z0-9][a-z0-9-]*(@\^\d+)?$")
+_SKILL = re.compile(r"^(personal|department|external|pack-[a-z][a-z0-9-]{1,30})/[a-z0-9][a-z0-9-]*(@\^\d+)?$")
 _SEG = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)((?:\[\d+\])*)$")
 
 

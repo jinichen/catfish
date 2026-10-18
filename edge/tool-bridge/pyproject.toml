@@ -42,6 +42,8 @@ dependencies = [
     "openpyxl >= 3.0",
     # 10/17 工作流 skill: workflow.yaml (员工看得懂、改得动的步骤文件)。search_skills 早就在用, 这里补上声明
     "pyyaml >= 6.0",
+    # 10/18 专家包: 装市场上的包前验中央的 Ed25519 签名 (hermes 运行环境本来就有, 这里补声明)
+    "cryptography >= 42",
 ]
 
 [project.scripts]

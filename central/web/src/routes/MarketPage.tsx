@@ -7,6 +7,7 @@
  *   /market/skills/* — 技能脚本市场 (原 /skills, 复用 SkillsHubPage)
  *   /market/mcp/*    — 连接器市场 (原 /mcp, 复用 McpMarketPage)
  *   /market/components — 组件 · 模型与运行包 (10/3, 中央 /components/ 发布的大件, 只读)
+ *   /market/experts    — 专家包 (10/18): 已上架 / 主管的待审核 / 我提交的
  *
  * 未来扩展 (不在本 sprint): prompts / personas / 模板 也归 /market 下.
  */
@@ -16,10 +17,12 @@ import { Card } from "../components/Card";
 import { SkillsHubPage } from "./SkillsHubPage";
 import { McpMarketPage } from "./McpMarketPage";
 import { ComponentsMarketPage } from "./ComponentsMarketPage";
+import { ExpertsMarketPage } from "./ExpertsMarketPage";
 
 const TABS = [
   { to: "/market/skills", label: "🛠️ Skills", desc: "技能脚本" },
   { to: "/market/mcp", label: "🔌 MCP", desc: "连接器" },
+  { to: "/market/experts", label: "🧑‍💼 专家", desc: "专家包 · 审核" },
   { to: "/market/components", label: "🧩 组件", desc: "模型与运行包" },
 ];
 
@@ -92,6 +95,14 @@ export function MarketPage() {
         element={
           <MarketLayout>
             <McpMarketPage />
+          </MarketLayout>
+        }
+      />
+      <Route
+        path="experts"
+        element={
+          <MarketLayout>
+            <ExpertsMarketPage />
           </MarketLayout>
         }
       />

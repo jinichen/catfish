@@ -146,6 +146,9 @@ const BAKED_READONLY_CODE: &str =
 // 10/15 P59: 点过始终允许就放行 execute_code, 删除类每次问 (见 plugin_approval_always.py / destructive_code.py)
 const BAKED_PLUGIN_APPROVAL_ALWAYS: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_approval_always.py");
+// 10/18 P60: 微信里找专家 (找X / 回小鲶 / 找谁, 见 plugin_wechat_expert.py)
+const BAKED_PLUGIN_WECHAT_EXPERT: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_wechat_expert.py");
 const BAKED_DESTRUCTIVE_CODE: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/destructive_code.py");
 
@@ -196,4 +199,5 @@ pub(crate) const BAKED_FILES: &[(&str, &str)] = &[
     ("readonly_code.py", BAKED_READONLY_CODE),
     ("plugin_approval_always.py", BAKED_PLUGIN_APPROVAL_ALWAYS),
     ("destructive_code.py", BAKED_DESTRUCTIVE_CODE),
+    ("plugin_wechat_expert.py", BAKED_PLUGIN_WECHAT_EXPERT),
 ];

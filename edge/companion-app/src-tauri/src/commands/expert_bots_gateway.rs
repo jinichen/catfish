@@ -178,13 +178,46 @@ pub fn restore_parked(snapshot: &[(std::path::PathBuf, bool)]) {
     }
 }
 
-/// v0.22: 只在有专家 Bot 要用时写显式 `multiplex_profiles: true`; 别的都不动。
+/// 10/18 微信找专家 (docs/EXPERT-PACK-PLAN.md 第三阶段): 我们写的占位路由都用这个名字前缀。
+pub const WECHAT_ROUTE_PREFIX: &str = "catfish-wechat-expert:";
+
+/// 每个「找谁」专家一条**永远匹配不上**的微信静态路由 (bot_profile 不写 = 主 Bot)。
+///
+/// 为什么要占位: 员工在微信里说「找资质专员」后, 是插件按聊天把消息改派给专家 profile 的 (路由文件, 不用重启网关);
+/// 但 hermes 只让「有静态路由经主 Bot 指向它」的 profile 借主 Bot 发回复 (`_is_shared_bot_satellite`),
+/// 没有这条, 专家想好的回复发不出去。chat_id 用一个不可能的值, 所以它本身不改派任何消息。
+/// 员工自己写的路由原样保留; 我们的按名字前缀认, 专家删了 / 停了就撤掉。
+fn reconcile_wechat_expert_routes(root: &mut Value, cfg: &ExpertBotsConfig) -> Result<(), String> {
+    let wanted: BTreeSet<String> =
+        cfg.registrations.iter().filter(|(_, r)| r.enabled && r.chat).map(|(id, _)| id.clone()).collect();
+    let existing: Vec<Value> = gateway_setting(root, "profile_routes").and_then(Value::as_sequence).cloned().unwrap_or_default();
+    let ours = |v: &Value| v.get("name").and_then(Value::as_str).map(|n| n.starts_with(WECHAT_ROUTE_PREFIX)).unwrap_or(false);
+    if wanted.is_empty() && !existing.iter().any(ours) {
+        return Ok(());
+    }
+    let mut routes: Vec<Value> = existing.iter().filter(|v| !ours(v)).cloned().collect();
+    for id in &wanted {
+        let mut m = Mapping::new();
+        m.insert("name".into(), Value::String(format!("{WECHAT_ROUTE_PREFIX}{id}")));
+        m.insert("platform".into(), "weixin".into());
+        m.insert("profile".into(), Value::String(id.clone()));
+        m.insert("chat_id".into(), Value::String(format!("catfish-placeholder-never-matches-{id}")));
+        routes.push(Value::Mapping(m));
+    }
+    if routes == existing {
+        return Ok(());
+    }
+    set_gateway_value(root, "profile_routes", Value::Sequence(routes))
+}
+
+/// v0.22: 只在有专家 Bot 要用时写显式 `multiplex_profiles: true`; 再把微信找专家的占位路由对齐。别的都不动。
 pub fn reconcile_gateway_config_v022(raw: &str, cfg: &ExpertBotsConfig) -> Result<(String, bool), String> {
     let mut root = parse_yaml_root(raw, "Hermes config.yaml")?;
     let before = serde_yaml::to_string(&root).map_err(|e| e.to_string())?;
     if !desired_profiles(cfg).is_empty() && !multiplex_enabled(&root) {
         set_gateway_value(&mut root, "multiplex_profiles", Value::Bool(true))?;
     }
+    reconcile_wechat_expert_routes(&mut root, cfg)?;
     let after = serde_yaml::to_string(&root).map_err(|e| format!("序列化 Hermes config.yaml 失败: {e}"))?;
     Ok((after.clone(), before != after))
 }
@@ -275,5 +308,35 @@ mod tests {
         let root: Value = serde_yaml::from_str(&updated).unwrap();
         assert!(configured_allowlist(&root).is_none());
         assert!(cfg.gateway_ownership.allowlist_entries.is_empty());
+    }
+
+    #[test]
+    fn 微信找专家_每个找谁专家一条占位路由_员工的路由不动_专家删了就撤() {
+        let raw = "gateway:\n  profile_routes:\n  - name: mine\n    platform: weixin\n    profile: finance\n    chat_id: g1\n";
+        let mut cfg = ExpertBotsConfig::default();
+        cfg.registrations.insert("expert-qual".into(), BotRegistration { chat: true, ..BotRegistration::default() });
+        cfg.registrations.insert("briefing-bot".into(), BotRegistration::default());
+        let (out, changed) = reconcile_gateway_config_v022(raw, &cfg).unwrap();
+        assert!(changed);
+        let root: Value = serde_yaml::from_str(&out).unwrap();
+        let routes = root["gateway"]["profile_routes"].as_sequence().unwrap();
+        assert_eq!(routes.len(), 2, "员工的 + 一条占位; 不是「找谁」的专家 Bot 不加");
+        assert_eq!(routes[0]["name"], Value::String("mine".into()));
+        assert_eq!(routes[1]["name"], Value::String(format!("{WECHAT_ROUTE_PREFIX}expert-qual")));
+        assert_eq!(routes[1]["platform"], Value::String("weixin".into()));
+        assert!(routes[1].get("bot_profile").is_none(), "走主 Bot");
+        let (_, again) = reconcile_gateway_config_v022(&out, &cfg).unwrap();
+        assert!(!again, "再对一遍没变化, 不会无谓重启网关");
+
+        cfg.registrations.remove("expert-qual");
+        let (out2, _) = reconcile_gateway_config_v022(&out, &cfg).unwrap();
+        let root2: Value = serde_yaml::from_str(&out2).unwrap();
+        assert_eq!(root2["gateway"]["profile_routes"].as_sequence().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn 没有找谁专家就不写路由() {
+        let (out, changed) = reconcile_gateway_config_v022("model:\n  default: x\n", &ExpertBotsConfig::default()).unwrap();
+        assert!(!changed && !out.contains("profile_routes"));
     }
 }

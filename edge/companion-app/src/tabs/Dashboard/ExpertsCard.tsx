@@ -3,17 +3,22 @@
  *
  * 专家 = 只管某类事的小鲶分身: 自己的人设、只看得到选中的工作流 / 技能和几组能力、知道什么事走哪条路、交付前会核对。
  * 这里搭 / 改 / 删; 「保存并生效」会建 (或更新) 它的 profile 并重启一次小鲶本机服务。搭好了在工作台「找谁」里找它。
+ * 第二阶段 (10/18): 导出 / 发布到资源市场 / 从文件或市场安装 / 升级 / 卸载 (零件在 ExpertPackUi.tsx)。
  */
 import { useEffect, useState } from "react";
 
 import { refreshExperts, selectExpert } from "../../lib/expertChat";
 import {
-  expertApply, expertCatalog, expertGet, expertList, expertRemove, expertSave,
-  type ExpertCatalog, type ExpertDef, type ExpertRoute, type ExpertSummary,
+  expertApply, expertCatalog, expertGet, expertList, expertPackExport, expertPackInspect, expertPackInstall, expertPackPickFile,
+  expertRemove, expertSave,
+  type ExpertCatalog, type ExpertDef, type ExpertRoute, type ExpertSummary, type HubExpert, type PackInspect,
 } from "../../lib/tauri_experts";
 import { useUIStore } from "../../store/ui";
 import { Overlay, muted } from "../Collab/formsUi";
 import { Btn, ErrorLine, cardStyle, inputStyle, itemStyle } from "../Collab/roomLinkUi";
+import { InstallDialog, MarketSection, MineSection, PublishDialog } from "./ExpertPackUi";
+
+type InstallSource = { path: string } | { from: "hub"; id: string; version: string };
 
 const blank = (): ExpertDef => ({
   id: "", name: "", description: "", persona: "", quick_prompts: [], workflows: [], skills: [],
@@ -156,7 +161,59 @@ export default function ExpertsCard() {
   const [editing, setEditing] = useState<{ def: ExpertDef; isNew: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [installing, setInstalling] = useState<{ info: PackInspect; source: InstallSource } | null>(null);
+  const [publishing, setPublishing] = useState<ExpertSummary | null>(null);
+  const [panel, setPanel] = useState<"market" | "mine" | null>(null);
+  const [marketKey, setMarketKey] = useState(0);
   const setTab = useUIStore((s) => s.setActiveTab);
+  const fail = (e: unknown) => setError(e instanceof Error ? e.message : String(e));
+
+  async function installFromFile() {
+    const path = await expertPackPickFile();
+    if (!path) return;
+    try {
+      setInstalling({ info: await expertPackInspect(path), source: { path } });
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  async function installFromHub(m: HubExpert) {
+    setBusy(m.id);
+    setError(null);
+    try {
+      const source = { from: "hub" as const, id: m.id, version: m.version };
+      const r = await expertPackInstall(source);
+      if (r.ok) {
+        await refreshExperts();
+        setNotice(`${m.name} ${r.version} 已升级`);
+        await load();
+        setMarketKey((k) => k + 1);
+      } else if ("need_confirm" in r) {
+        setInstalling({ info: r.inspect, source });
+      } else {
+        setError(r.error);
+      }
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function exportPack(e: ExpertSummary) {
+    setError(null);
+    try {
+      const r = await expertPackExport(e.id);
+      if (r) {
+        setNotice(`已导出 ${r.path} (版本 ${r.version})`);
+        await load();
+      }
+    } catch (err) {
+      fail(err);
+    }
+  }
 
   const load = async () => {
     try {
@@ -180,9 +237,13 @@ export default function ExpertsCard() {
             搭好了在工作台对话框上方「找谁」里找它; 小鲶遇到归它管的事也会推荐你切过去。
           </div>
         </div>
-        <Btn kind="primary" disabled={!cat} onClick={() => setEditing({ def: blank(), isNew: true })}>新建专家</Btn>
+        <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+          <Btn kind="ghost" onClick={() => void installFromFile()}>从文件安装</Btn>
+          <Btn kind="primary" disabled={!cat} onClick={() => setEditing({ def: blank(), isNew: true })}>新建专家</Btn>
+        </div>
       </div>
       {error && <ErrorLine>{error}</ErrorLine>}
+      {notice && <span style={{ fontSize: 12, color: "var(--status-ok, #16a34a)" }}>{notice}</span>}
       {list.length === 0 && <span style={muted}>还没有专家。</span>}
       {list.map((e) => (
         <div key={e.id} style={itemStyle}>
@@ -191,34 +252,59 @@ export default function ExpertsCard() {
             <span style={muted}>{e.workflows} 个工作流 · {e.skills} 个技能 · {e.routes} 条选路</span>
           </div>
           <span style={muted}>{e.description}</span>
-          <div style={{ display: "flex", gap: 8 }}>
-            <Btn kind="ghost" disabled={!!busy} onClick={() => void (async () => {
-              try {
-                setEditing({ def: await expertGet(e.id), isNew: false });
-              } catch (err) {
-                setError(String(err));
-              }
-            })()}>编辑</Btn>
+          {e.pack && (
+            <span style={{ fontSize: 11, color: e.pack.signed ? "var(--status-ok, #16a34a)" : "var(--status-warn, #d97706)" }}>
+              📦 专家包 {e.pack.version} · {e.pack.signed ? `✅ 中央已签名${e.pack.reviewed_by ? ` (${e.pack.reviewed_by} 审核)` : ""}` : "⚠️ 未签名 (从文件装的)"}
+            </span>
+          )}
+          {!e.pack && e.packed_version && <span style={muted}>上次打包 {e.packed_version}</span>}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {!e.pack && (
+              <Btn kind="ghost" disabled={!!busy} onClick={() => void (async () => {
+                try {
+                  setEditing({ def: await expertGet(e.id), isNew: false });
+                } catch (err) {
+                  setError(String(err));
+                }
+              })()}>编辑</Btn>
+            )}
             <Btn kind="ghost" disabled={!!busy || !e.enabled} onClick={() => {
               selectExpert(e.profile_id);
               setTab("chat");
               window.dispatchEvent(new CustomEvent("catfish:new-chat"));
             }}>去工作台找它</Btn>
+            {!e.pack && <Btn kind="ghost" disabled={!!busy} onClick={() => void exportPack(e)}>导出</Btn>}
+            {!e.pack && <Btn kind="ghost" disabled={!!busy} onClick={() => setPublishing(e)}>发布到资源市场</Btn>}
             <Btn kind="ghost" disabled={!!busy} onClick={() => void (async () => {
               setBusy(e.id);
               try {
                 await expertRemove(e.id);
                 await refreshExperts();
                 await load();
+                setMarketKey((k) => k + 1);
               } catch (err) {
                 setError(err instanceof Error ? err.message : String(err));
               } finally {
                 setBusy(null);
               }
-            })()}>{busy === e.id ? "删除中…" : "删除"}</Btn>
+            })()}>{busy === e.id ? "处理中…" : e.pack ? "卸载" : "删除"}</Btn>
           </div>
         </div>
       ))}
+      <div style={{ display: "flex", gap: 8 }}>
+        <Btn kind={panel === "market" ? "primary" : "ghost"} onClick={() => setPanel(panel === "market" ? null : "market")}>资源市场</Btn>
+        <Btn kind={panel === "mine" ? "primary" : "ghost"} onClick={() => setPanel(panel === "mine" ? null : "mine")}>我提交的</Btn>
+      </div>
+      {panel === "market" && <MarketSection key={marketKey} onInstall={(m) => void installFromHub(m)} />}
+      {panel === "mine" && <MineSection />}
+      {installing && (
+        <InstallDialog info={installing.info} source={installing.source} onClose={() => setInstalling(null)}
+                       onDone={(msg) => { setInstalling(null); setNotice(msg); void load(); setMarketKey((k) => k + 1); }} />
+      )}
+      {publishing && (
+        <PublishDialog id={publishing.id} name={publishing.name} onClose={() => setPublishing(null)}
+                       onDone={(msg) => { setPublishing(null); setNotice(msg); void load(); }} />
+      )}
       {editing && cat && (
         <Editor initial={editing.def} isNew={editing.isNew} cat={cat} onClose={() => setEditing(null)}
                 onSaved={() => { void load(); }} />

@@ -24,13 +24,18 @@ use super::expert_bots_types::{BotRegistration, ModelPolicy, ModelPolicyMode};
 use crate::services::tool_bridge_rpc;
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(60);
-const PASSTHROUGH: &[&str] = &["catalog", "list", "get", "save"];
+/// 设置页直接转给 tool-bridge 的动作。安装 / 导出走下面单独的命令 (要弹文件框、装完要落 profile)。
+const PASSTHROUGH: &[&str] = &[
+    "catalog", "list", "get", "save",
+    // 10/18 专家包 (第二阶段): 打包预览 / 看包 / 发布到中央 / 市场 / 我提交的 / 撤回
+    "pack_preview", "pack_inspect", "pack_publish", "pack_market", "pack_mine", "pack_withdraw",
+];
 
 async fn rpc(method: &str, params: Json) -> Result<Json, String> {
     tool_bridge_rpc::call_with_timeout(method, params, RPC_TIMEOUT).await
 }
 
-/// 设置页读写定义 (catalog / list / get / save), 只放行这几个。
+/// 设置页读写定义 / 专家包的只读和发布动作, 只放行 PASSTHROUGH 里的。
 #[tauri::command]
 pub async fn expert_local_call(action: String, params: Option<Json>) -> Result<Json, String> {
     if !PASSTHROUGH.contains(&action.as_str()) {
@@ -194,6 +199,55 @@ pub async fn expert_local_remove(id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// 「从文件安装」: 原生文件框, 只列 .catfish-expert。取消返回 None。
+#[tauri::command]
+pub fn expert_pack_pick_file() -> Option<String> {
+    rfd::FileDialog::new()
+        .set_title("选择专家包")
+        .add_filter("专家包", &["catfish-expert"])
+        .pick_file()
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// 「导出」: 弹保存框选位置, 再让 tool-bridge 打包写过去。取消返回 None。
+#[tauri::command]
+pub async fn expert_pack_export(id: String, version: Option<String>) -> Result<Option<Json>, String> {
+    let preview = rpc("pim/expert_pack_preview", json!({ "id": id, "version": version })).await?;
+    let filename = preview.get("filename").and_then(Json::as_str).unwrap_or("expert.catfish-expert").to_string();
+    let dest = tokio::task::spawn_blocking(move || {
+        rfd::FileDialog::new()
+            .set_title("导出专家包")
+            .set_file_name(&filename)
+            .add_filter("专家包", &["catfish-expert"])
+            .save_file()
+    })
+    .await
+    .map_err(|e| format!("保存框异常: {e}"))?;
+    let Some(dest) = dest else { return Ok(None) };
+    let out = rpc(
+        "pim/expert_pack_export",
+        json!({ "id": id, "version": preview.get("version"), "dest": dest.to_string_lossy() }),
+    )
+    .await?;
+    Ok(Some(out))
+}
+
+/// 装 / 升级专家包 (从文件: `{path}`; 从市场: `{from: "hub", id, version}`), 都带 `confirmed`。
+/// 没确认过 → 原样返回 `need_confirm` + 权限摘要给界面; 装好了 → 立刻落 profile (同「保存并生效」)。
+#[tauri::command]
+pub async fn expert_pack_install(params: Json) -> Result<Json, String> {
+    let r = rpc("pim/expert_pack_install", params).await?;
+    if r.get("ok").and_then(Json::as_bool) != Some(true) {
+        return Ok(r);
+    }
+    let id = r.get("id").and_then(Json::as_str).ok_or("安装结果缺 id")?.to_string();
+    if let Err(e) = expert_local_apply(id.clone()).await {
+        return Ok(json!({ "ok": false, "installed": true, "id": id,
+                           "error": format!("包装好了, 但落到 profile 失败: {e} (在专家列表里点「保存并生效」重试)") }));
+    }
+    Ok(r)
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatExpert {
@@ -284,6 +338,9 @@ mod tests {
     #[test]
     fn 只放行设置页那几个动作() {
         assert!(PASSTHROUGH.contains(&"save"));
+        assert!(PASSTHROUGH.contains(&"pack_market"));
         assert!(!PASSTHROUGH.contains(&"compile"));
+        assert!(!PASSTHROUGH.contains(&"pack_install"), "安装要走 expert_pack_install, 装完落 profile");
+        assert!(!PASSTHROUGH.contains(&"pack_export"), "导出要走保存框");
     }
 }

@@ -157,6 +157,9 @@ _PATCH_TARGETS = [
     ("tools.approval", "_is_permanently_approved", "func"),
     ("tools.approval", "_unattended_contexts", "func"),
     ("tools.approval_detection", "detect_dangerous_command", "func"),
+    # P60: 微信里找专家 —— 按聊天改派 profile + 主 Bot 收「找X / 回小鲶」命令 (plugin_wechat_expert.py)
+    ("gateway.run", "_multiplex_profile_homes", "func"),
+    ("gateway.platforms.base", "BasePlatformAdapter", "attr"),
     # P53: tool_call 桥参数解析 (v0.22 起支持 {"calls": [...]})
     ("tools.tool_search", "resolve_underlying_call", "func"),
     ("tools.tool_search", "scoped_deferrable_names", "func"),
@@ -215,6 +218,9 @@ def _check_attr_in_source(module_path: str, attr: str) -> bool:
 
 # P52 微信审批回复: 包 _handle_active_session_busy_message, 发提示要找回收消息的那个 adapter
 _GATEWAYRUNNER_METHOD_TARGETS = [
+    # P60: 微信里找专家 —— 包这个按聊天改派 profile; _transport_owner 用来认出是不是主 Bot 收的
+    "_profile_name_for_source",
+    "_transport_owner",
     "_handle_active_session_busy_message",
     "_delivery_adapter_for",
     "_reply_anchor_for_event",

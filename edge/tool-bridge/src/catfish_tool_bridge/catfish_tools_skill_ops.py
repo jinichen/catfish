@@ -90,7 +90,9 @@ def _skill_search_roots() -> List[Path]:
     顺序: 工程审定的 (仓库 / CATFISH_SKILLS_DIR) 在前, 同名时不被本机副本顶掉。
     """
     roots: List[Path] = []
-    for cand in (_catfish_skills_root(), _local_skills_root()):
+    # 10/18 专家包里的技能 / 工作流装在 ~/.catfish/expert-packs/pack-<id>/ (不进 skills/, 主小鲶看不到), 引用写 pack-<id>/<名字>
+    from .expert_pack import packs_root  # noqa: PLC0415
+    for cand in (_catfish_skills_root(), _local_skills_root(), packs_root()):
         if cand is not None and cand.is_dir() and cand.resolve() not in [r.resolve() for r in roots]:
             roots.append(cand)
     return roots

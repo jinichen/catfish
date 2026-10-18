@@ -104,6 +104,7 @@ def require_user(
     x_catfish_user_sub: str | None = Header(default=None, alias="X-Catfish-User-Sub"),
     x_catfish_user_dept: str | None = Header(default=None, alias="X-Catfish-User-Dept"),
     x_catfish_user_role: str | None = Header(default=None, alias="X-Catfish-User-Role"),
+    x_catfish_user_managed: str | None = Header(default=None, alias="X-Catfish-User-Managed-Depts"),
     authorization: str | None = Header(default=None),
 ) -> dict:
     """信 gateway 注入身份, 或 dev_token fallback (向后兼容).
@@ -115,6 +116,8 @@ def require_user(
             "sub": _decode_header(x_catfish_user_sub),
             "dept": _decode_header(x_catfish_user_dept or ""),
             "role": _decode_header(x_catfish_user_role or "employee"),
+            # 10/18 专家包审核: manager 管哪些部门 (gateway 注入, 逗号分隔, 各段 percent-encoded)
+            "managed": [d for d in (_decode_header(x) for x in (x_catfish_user_managed or "").split(",")) if d],
         }
     # 向后兼容: 直 curl 测试时还能用 CATFISH_HUB_DEV_TOKEN 走老路
     expected = os.environ.get("CATFISH_HUB_DEV_TOKEN", "").strip()
@@ -264,6 +267,87 @@ async def audit_endpoint(
 ) -> dict:
     """admin 看发布 / 删除审计 (倒序最近 N 条)."""
     return {"events": storage.read_audit(limit=limit), "limit": limit}
+
+
+# ── 专家包 (10/18, experts.py, docs/EXPERT-PACK-PLAN.md §5) ───────────
+
+from fastapi import File, Form  # noqa: E402
+
+from . import experts  # noqa: E402
+
+
+def _expert_call(fn, *args):
+    try:
+        return fn(*args)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from None
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from None
+    except (ValueError, FileExistsError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+
+
+@app.get("/experts")
+async def experts_market(user: dict = Depends(require_user)) -> dict:
+    """市场: 每个专家包已上架的最新版 (只列你部门能用的)。"""
+    return {"experts": experts.market(user)}
+
+
+@app.get("/experts/mine")
+async def experts_mine(user: dict = Depends(require_user)) -> dict:
+    return {"experts": experts.mine(user)}
+
+
+@app.get("/experts/review")
+async def experts_review_list(user: dict = Depends(require_user)) -> dict:
+    """待我审核的 (部门 manager: 管的部门; admin: 全部)。"""
+    return {"experts": experts.pending_for(user)}
+
+
+@app.get("/experts/signing-key")
+async def experts_signing_key(user: dict = Depends(require_user)) -> dict:  # noqa: ARG001
+    return {"alg": "ed25519", "public_key": experts.public_key_b64()}
+
+
+@app.post("/experts")
+async def experts_submit(
+    pack: UploadFile = File(...),
+    scope: str = Form("department"),
+    departments: str = Form("[]"),
+    note: str = Form(""),
+    user: dict = Depends(require_user),
+) -> dict:
+    import json as _json  # noqa: PLC0415
+    data = await pack.read()
+    try:
+        depts = _json.loads(departments or "[]")
+    except ValueError:
+        depts = [d.strip() for d in departments.split(",")]
+    return _expert_call(experts.submit, user, data, scope, depts if isinstance(depts, list) else [], note)
+
+
+@app.get("/experts/{pack_id}/{version}")
+async def experts_detail(pack_id: str, version: str, user: dict = Depends(require_user)) -> dict:
+    return _expert_call(experts.detail, user, pack_id, version)
+
+
+@app.post("/experts/{pack_id}/{version}/review")
+async def experts_review(pack_id: str, version: str, body: dict, user: dict = Depends(require_user)) -> dict:
+    return _expert_call(experts.review, user, pack_id, version, str(body.get("decision") or ""), str(body.get("note") or ""))
+
+
+@app.post("/experts/{pack_id}/{version}/withdraw")
+async def experts_withdraw(pack_id: str, version: str, user: dict = Depends(require_user)) -> dict:
+    return _expert_call(experts.withdraw, user, pack_id, version)
+
+
+@app.get("/experts/{pack_id}/{version}/download")
+async def experts_download(pack_id: str, version: str, user: dict = Depends(require_user)) -> Response:
+    data, meta = _expert_call(experts.download, user, pack_id, version)
+    return Response(content=data, media_type="application/gzip", headers={
+        "X-Catfish-Sha256": meta.get("sha256") or "",
+        "Content-Disposition": f'attachment; filename="{pack_id}-{version}.catfish-expert"',
+    })
 
 
 def run() -> None:

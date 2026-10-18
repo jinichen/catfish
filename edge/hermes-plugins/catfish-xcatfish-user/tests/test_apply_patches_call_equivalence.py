@@ -54,6 +54,14 @@ REFACTOR_BASE = "cc4d71a"
 #: 一个 patch 悄悄多出来跟悄悄少一个同等危险 —— monkey-patch 是全进程生效的，
 #: 谁加的、为什么加、影响面多大，得有地方写。
 INTENTIONALLY_ADDED: dict[str, str] = {
+    "_patch_p60_wechat_expert_routing": (
+        "10/18 加 (专家包第三阶段, docs/EXPERT-PACK-PLAN.md)。微信里说「找资质专员」→ 这个聊天之后交给专家 profile,\n"
+        "  「回小鲶」切回, 「找谁」列出能找的专家。\n"
+        "  改: 包 GatewayRunner._profile_name_for_source (静态路由没结果 + 主 Bot 的微信 → 查\n"
+        "      ~/.catfish/wechat_expert_routes.json, 目标必须在托管集合里) / WeixinAdapter.handle_message\n"
+        "      (只在主 Bot、只认整句命令、名字必须是在跑的专家, 否则原样交给 agent)。\n"
+        "  影响面: 只有微信主 Bot; 出错一律回到主小鲶, 不丢消息。"
+    ),
     "_patch_p59_always_means_always": (
         "10/15 加 (鸿波「只要点过始终允许, 下一次就不要再审批了, 除非那种删除等严重破坏内容的指令」)。"
         "EIS 资质 skill 一轮弹好几次 execute_code 审批, 「始终允许」被 P20 吞掉白点 9 次; 定时任务 execute_code 一律被拒。\n"

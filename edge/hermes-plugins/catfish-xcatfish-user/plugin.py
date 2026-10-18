@@ -159,6 +159,8 @@ plugin_approval_ux.audit = approval_audit  # P54 只读免批不经过 hermes �
 plugin_approval_always = _import_sibling("plugin_approval_always")
 plugin_approval_always.audit = approval_audit  # P59 始终允许放行 / 定时任务拦删除, 同样自己记
 _patch_p59_always_means_always = plugin_approval_always._patch_p59_always_means_always  # noqa: F401  (re-export · 见 plugin_approval_always.py)
+plugin_wechat_expert = _import_sibling("plugin_wechat_expert")
+_patch_p60_wechat_expert_routing = plugin_wechat_expert._patch_p60_wechat_expert_routing  # noqa: F401  (re-export · 见 plugin_wechat_expert.py)
 plugin_locale_zh = _import_sibling("plugin_locale_zh")
 _patch_p58_locale_zh = plugin_locale_zh._patch_p58_locale_zh  # noqa: F401  (re-export · 见 plugin_locale_zh.py)
 plugin_bridge_promoted = _import_sibling("plugin_bridge_promoted")
@@ -406,6 +408,9 @@ def _apply_patches() -> None:
     # P54 (10/13 鸿波「只读代码免批」): 查资料的只读脚本 (读文件 / 列目录 / ps) 不再弹审批;
     # 静态分析白名单, 拿不准一律照常审批。见 readonly_code.py。
     _try_patch(_patch_p54_readonly_execute_code, "P54: _patch_p54_readonly_execute_code 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
+    # P60 (10/18 专家包第三阶段): 微信里说「找资质专员」→ 这个聊天交给专家 profile, 「回小鲶」切回; 只认整句命令、
+    # 名字必须是在跑的专家。按聊天的路由存 ~/.catfish/wechat_expert_routes.json。见 plugin_wechat_expert.py。
+    _try_patch(_patch_p60_wechat_expert_routing, "P60: _patch_p60_wechat_expert_routing 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P55 (10/13 审批超时无声无息): 超时结果里加一句必须告诉员工"这一步没做"。必须在 P54 之后装。
     _try_patch(_patch_p55_approval_timeout_note, "P55: _patch_p55_approval_timeout_note 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P56 (10/13 15:08 第二次回「1」没进来): 微信内容去重把 5 分钟内同样的「1」当重投丢了。

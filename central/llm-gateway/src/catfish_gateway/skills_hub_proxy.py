@@ -107,6 +107,10 @@ async def _proxy(
     headers["X-Catfish-User-Sub"] = _safe_header_value(user.sub or "")
     headers["X-Catfish-User-Dept"] = _safe_header_value(user.department or "")
     headers["X-Catfish-User-Role"] = _safe_header_value(user.role or "employee")
+    # 10/18 专家包审核要知道 manager 管哪些部门 (跟 wiki_hub_proxy 同写法)
+    headers["X-Catfish-User-Managed-Depts"] = ",".join(
+        urllib.parse.quote(d, safe="") for d in (user.managed_departments or []) if d
+    )
 
     body = await request.body()
     client: httpx.AsyncClient = request.app.state.skills_hub_client
@@ -228,3 +232,55 @@ async def audit(
 ) -> Response:
     """admin 看 audit (上游拦)."""
     return await _proxy(request, "/audit", user)
+
+
+# ── 专家包 (10/18, docs/EXPERT-PACK-PLAN.md §5): 提交 / 市场 / 审核 / 下载 ─────────
+# 谁能看、谁能审由 hub 按部门判; 下载这里再加一道: identity 的 allowed_skills 对 `expert/<id>` 生效
+# (5/17 存了这个字段一直没人执行; 专家包是第一个按它拦的)。
+
+
+@router.get("/experts")
+async def experts_market(request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, "/experts", user)
+
+
+@router.get("/experts/mine")
+async def experts_mine(request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, "/experts/mine", user)
+
+
+@router.get("/experts/review")
+async def experts_review_list(request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, "/experts/review", user)
+
+
+@router.get("/experts/signing-key")
+async def experts_signing_key(request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, "/experts/signing-key", user)
+
+
+@router.post("/experts")
+async def experts_submit(request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, "/experts", user)
+
+
+@router.get("/experts/{pack_id}/{version}")
+async def experts_detail(pack_id: str, version: str, request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, f"/experts/{pack_id}/{version}", user)
+
+
+@router.post("/experts/{pack_id}/{version}/review")
+async def experts_review(pack_id: str, version: str, request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, f"/experts/{pack_id}/{version}/review", user)
+
+
+@router.post("/experts/{pack_id}/{version}/withdraw")
+async def experts_withdraw(pack_id: str, version: str, request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, f"/experts/{pack_id}/{version}/withdraw", user)
+
+
+@router.get("/experts/{pack_id}/{version}/download")
+async def experts_download(pack_id: str, version: str, request: Request, user: User = Depends(get_current_user)) -> Response:
+    if not user.can_use_skill(f"expert/{pack_id}"):
+        raise HTTPException(status_code=403, detail=f"你的账号没有开通专家包 {pack_id} (allowed_skills 不含 expert/{pack_id})")
+    return await _proxy(request, f"/experts/{pack_id}/{version}/download", user)
