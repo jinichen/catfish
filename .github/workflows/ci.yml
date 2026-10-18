@@ -150,8 +150,10 @@ jobs:
           # BL-CI-TOOLBRIDGE-DOCX (6/3): test_run_skill (5 个) 真调
           # leadership-briefing skill script.py, script.py import docx (python-docx).
           # 10/12: 销售跟进的报价单 / 价格表导入 / 销售周报 (sales_*.py) 读写 .xlsx
+          # 10/18: 专家包验中央签名 (expert_pack.py, Ed25519) 用 cryptography —— 客户机上 hermes 本身就锁了
+          # cryptography==50.0.1 (tool-bridge 跑在 hermes venv 里), 这里只是测试环境要补上
           pip install pytest pytest-asyncio pyyaml httpx jieba pydantic python-dotenv \
-            python-docx Pillow openpyxl
+            python-docx Pillow openpyxl cryptography
 
       - name: Run tool-bridge tests
         working-directory: edge/tool-bridge
