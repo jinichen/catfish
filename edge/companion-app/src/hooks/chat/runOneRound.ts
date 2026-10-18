@@ -24,6 +24,7 @@
  * diff 只有头尾, 中间 371 行可以肉眼确认没被改过。
  */
 
+import { currentExpertRoute } from "../../lib/expertChat";
 import { useChatStore } from "../../store/chat";
 import { isAgentLoopLimit } from "../../lib/agentLoopLimit";
 import { streamChat, type ChatTransport, type OpenAITool } from "../../lib/chat";
@@ -154,8 +155,11 @@ export async function runOneRound(
       // picker UI 跟 send 拿到的 store 不一致, picker 显 Gemini 但 send 真发 deepseek.
       // ctx.sendModel 在 send 入口锁定 picker 当前值, 整个 send 流程稳定一致.
       // (Vision switch 改 store 仍然 work — send 会 update ctx.sendModel 跟着切.)
+      // 10/18 本机专家: 选了专家就走它的 profile; 专家固定了模型就用它的, 否则跟着 picker
+      const expert = currentExpertRoute();
       await streamChat({
-        model: ctx.sendModel,
+        model: expert?.fixedModel || ctx.sendModel,
+        profile: expert?.profile,
         messages: ctx.currentMessages,
         tools: ctx.tools,
         // 5/23 BL-COMPANION-HERMES-SESSION-REUSE (鸿波): send() 开头已 ensureSessionId()

@@ -213,6 +213,8 @@ _PROMOTE = (
     # 10/17: 员工自己搭工作流。员工说「串起来 / 以后自动做」时直接用, 不先 tool_search。
     # gateway ALWAYS_ON 同步加了 (两处必须一起改)。
     "catfish_workflow",
+    # 10/18: 推荐员工切到对口的本机专家 (只推荐不转交)。gateway ALWAYS_ON 同步加了 (两处必须一起改)。
+    "catfish_expert",
     # 同一份 SYSTEM_PROMPT 里还有两个被 `→` 点名的, 一起提升 —— 漏掉它们
     # 就是同一个病换个工具复发。这两个是 8/15 日志里 DeepSeek 调用次数最多的
     # (check_compliance 4 次、political_sensitivity_scan 2 次), 每次都得先

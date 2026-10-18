@@ -117,6 +117,32 @@ class _SectionsMixin:
             "7. 拿不准 → 先看是不是 expense (金额数字+动词), 再 fallback journal\n"
         )
 
+    def _render_installed_experts(self, catfish_home) -> str:
+        """10/18: 已装本机专家的一句话简介 (~/.catfish/experts/<id>/expert.yaml, 只列启用的)。
+
+        当前进程本身就是专家 profile (HERMES_HOME 在 profiles/expert-*) 时不出 —— 专家不推荐别的专家。
+        读不到 / 没有专家 → 空串, 调用方不加这一段。
+        """
+        import os  # noqa: PLC0415
+        from pathlib import Path  # noqa: PLC0415
+
+        if "/profiles/expert-" in os.environ.get("HERMES_HOME", "").replace("\\", "/"):
+            return ""
+        try:
+            import yaml  # noqa: PLC0415
+            rows = []
+            for p in sorted(Path(catfish_home, "experts").glob("*/expert.yaml")):
+                d = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+                if d.get("enabled", True) is not False and d.get("id") and d.get("name"):
+                    rows.append(f"- {d['name']} (id: {d['id']}): {str(d.get('description') or '')[:80]}")
+        except Exception:  # noqa: BLE001 —— 这段是锦上添花, 坏了不影响别的段
+            return ""
+        if not rows:
+            return ""
+        return ("## 员工装的专家\n\n" + "\n".join(rows[:10]) +
+                "\n\n员工的事明显归上面某个专家管时, 调 `catfish_expert(action=suggest, expert_id, reason)` "
+                "推荐他切过去 (对话里会出按钮, 员工点了才切)。只推荐, 不要替他去专家那边办; 简单问题照常自己答。")
+
     def _render_safety_redline(self) -> str:
         """BL-LLM-NO-TERMINAL-BYPASS-V2 (2026-06-03): 安全红线 prompt.
 

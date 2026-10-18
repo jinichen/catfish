@@ -180,6 +180,16 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
                 return _success(req_id, await asyncio.to_thread(handlers[method]))
             except (ValueError, LookupError, OSError) as e:
                 return _error(req_id, INVALID_PARAMS, str(e))
+    # 10/18: 本机专家 (expert_local.py, docs/EXPERT-PACK-PLAN.md 第一阶段): 设置 → 技能 →「专家」的定义 / 编译。
+    # 真正建 profile、写 SOUL / config 的是 Companion (Rust commands/experts_local.rs)。
+    if method.startswith("pim/expert_"):
+        from . import expert_local  # noqa: PLC0415
+        handlers = expert_local.pim_handlers(params)
+        if method in handlers:
+            try:
+                return _success(req_id, await asyncio.to_thread(handlers[method]))
+            except (ValueError, LookupError, OSError) as e:
+                return _error(req_id, INVALID_PARAMS, str(e))
     # 10/12: 「提醒同步到微信」的「发一条测试」(wechat_push.py), Rust 侧 notify_prefs.rs 调; 不进模型工具清单
     if method == "pim/wechat_push_test":
         from . import wechat_push  # noqa: PLC0415

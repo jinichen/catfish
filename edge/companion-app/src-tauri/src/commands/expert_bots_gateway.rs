@@ -46,14 +46,18 @@ fn set_gateway_value(root: &mut Value, key: &str, value: Value) -> Result<(), St
 }
 
 pub fn desired_profiles(cfg: &ExpertBotsConfig) -> BTreeSet<String> {
-    if !cfg.enabled {
-        return BTreeSet::new();
-    }
-    cfg.bindings
-        .values()
-        .filter(|id| cfg.registrations.get(*id).map(|item| item.enabled).unwrap_or(false))
-        .cloned()
-        .collect()
+    let mut out: BTreeSet<String> = if cfg.enabled {
+        cfg.bindings
+            .values()
+            .filter(|id| cfg.registrations.get(*id).map(|item| item.enabled).unwrap_or(false))
+            .cloned()
+            .collect()
+    } else {
+        BTreeSet::new()
+    };
+    // 10/18 本机专家: 员工在工作台「找谁」里直接找它, 不绑场景、不受早安 / 邮件那个总开关管
+    out.extend(cfg.registrations.iter().filter(|(_, r)| r.enabled && r.chat).map(|(id, _)| id.clone()));
+    out
 }
 
 pub fn reconcile_gateway_config(raw: &str, cfg: &mut ExpertBotsConfig) -> Result<(String, bool), String> {

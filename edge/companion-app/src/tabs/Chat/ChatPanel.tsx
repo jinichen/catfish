@@ -1,5 +1,7 @@
 /** 聊天主面板 —— 消息流 + 输入框,自动滚到底部 */
 
+import { currentExpertRoute, useExpertChat } from "../../lib/expertChat";
+import { ExpertQuickPrompts } from "./ExpertPicker";
 import { useEffect, useRef } from "react";
 import ChatMessage from "./ChatMessage";
 import { groupToolSteps } from "../../lib/chatToolSteps";
@@ -104,6 +106,7 @@ export default function ChatPanel({
   }, [onSend]);
 
   const isEmpty = messages.length === 0;
+  useExpertChat(); // 10/18: 订阅「找谁」, 切专家时空态 (快捷问法) 跟着换
 
   return (
     <div className="chat-panel">
@@ -112,7 +115,8 @@ export default function ChatPanel({
         className="chat-panel__thread"
       >
         <div className="chat-panel__content">
-          {isEmpty && <EmptyState />}
+          {/* 10/18: 跟专家的新会话先给它擅长的几句问法; 跟小鲶的照旧 */}
+          {isEmpty && (currentExpertRoute() ? <ExpertQuickPrompts /> : <EmptyState />)}
           {/* 连续的纯工具调用消息合并成一组 "后台动作" (lib/chatToolSteps.ts) */}
           {groupToolSteps(messages).map(({ msg: m, memberIds }, i, all) => (
             <ChatMessage

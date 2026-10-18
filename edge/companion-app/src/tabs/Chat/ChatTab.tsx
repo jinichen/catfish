@@ -7,6 +7,7 @@
  *   - 流式输出中, sidebar 切换 / 新建按钮禁用 (避免条件竞争)
  */
 
+import { ExpertPicker } from "./ExpertPicker";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useChat } from "../../hooks/useChat";
 import { useChatStore } from "../../store/chat";
@@ -186,6 +187,13 @@ export default function ChatTab() {
     setLoadError(null);
   }, [messages.length, persistedSessionId, reset]);
 
+  // 10/18: 对话里「切到 X」按钮 → 新开一个跟专家的会话
+  useEffect(() => {
+    const h = () => void handleNew();
+    window.addEventListener("catfish:new-chat", h);
+    return () => window.removeEventListener("catfish:new-chat", h);
+  }, [handleNew]);
+
   /** 包一层 send: 完成后 bump refreshKey 让 sidebar 看到新会话 / 新 message_count */
   const handleSend = useCallback(
     async (text: string, attachments: import("../../types/chat").Attachment[] = []) => {
@@ -356,6 +364,8 @@ export default function ChatTab() {
             />
             {/* P3.5.17.c.2 (6/17): ContextCounter 砍 — cumulative cost / ctx_window
                 数学错, 误导. hermes 自带 ContextCompressor 处理 ctx, 不需 Companion 算. */}
+            {/* 10/18: 找谁 —— 小鲶 / 本机专家; 换人就开新对话 */}
+            <ExpertPicker disabled={isStreaming} onSwitch={() => void handleNew()} />
             <ChatModelPicker current={model} onChange={setModel} onNewChat={() => void handleNew()} />
           </div>
         </header>

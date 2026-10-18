@@ -31,7 +31,7 @@ use super::expert_bots_types::{is_supported_scenario, is_valid_profile_name};
 
 static CONFIG_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
-fn get_home() -> Result<PathBuf, String> {
+pub(super) fn get_home() -> Result<PathBuf, String> {
     hermes_home().ok_or_else(|| "无法定位 Hermes home".to_string())
 }
 
@@ -163,7 +163,7 @@ fn persist_and_reconcile(
     Ok(new_cfg)
 }
 
-fn with_config_transaction<F, T>(mutate: F) -> Result<T, String>
+pub(super) fn with_config_transaction<F, T>(mutate: F) -> Result<T, String>
 where
     F: FnOnce(&Path, &Path, &ExpertBotsConfig) -> Result<(ExpertBotsConfig, T), String>,
 {
@@ -318,6 +318,7 @@ pub async fn expert_bot_create(input: ExpertBotCreateInput) -> Result<ExpertBots
                 BotRegistration {
                     enabled: true,
                     model_policy: policy.clone(),
+                    ..Default::default()
                 },
             );
             Ok((cfg, ()))

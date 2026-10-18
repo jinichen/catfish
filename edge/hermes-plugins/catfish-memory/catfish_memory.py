@@ -437,6 +437,13 @@ class CatfishMemoryProvider(
         # 自查 — 禁绕 sandbox.
         sections.append(self._render_safety_redline())
 
+        # 10/18 本机专家 (docs/EXPERT-PACK-PLAN.md §3.3): 主小鲶知道装了哪些专家, 归它管的事推荐员工切过去
+        # (catfish_expert suggest, 只推荐不转交)。专家自己的 profile 里不出这段; advisor sparse 也不要。
+        if not is_advisor_sparse:
+            experts = self._render_installed_experts(catfish_home)
+            if experts:
+                sections.append(experts)
+
         # P3.5.211 (7/10 鸿波 catch, 通过 hermes request dump 铁证):
         # Companion 塞的 buildTaskSystemPrompt (含 P3.5.209/210 事实为准段) 100%
         # 被 hermes API server 丢弃, LLM 从没看到. 军规必须放在 hermes 内部

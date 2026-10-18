@@ -32,6 +32,8 @@ export interface SendChatParams {
    *  hermes 端已支持 (api_server.py:1188 provided_session_id).
    */
   sessionId?: string;
+  /** 10/18 本机专家: 选了专家时是它的 hermes profile, 请求走 `/p/<profile>/` (只有 hermes 通道能走) */
+  profile?: string;
   /** 每个 token 来一次 */
   onDelta: (text: string) => void;
   /** LLM 决定调工具(stream 中 tool_calls 累积完毕)时触发 */

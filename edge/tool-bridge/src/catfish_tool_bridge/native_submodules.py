@@ -10,4 +10,5 @@ PREFIX_MODULES: tuple[tuple[str, str], ...] = (
     ("catfish_form", "forms_tool"),
     ("catfish_workflow", "workflow_tool"),
     ("catfish_browser_download", "catfish_tools_browser_download"),
+    ("catfish_expert", "expert_tool"),
 )

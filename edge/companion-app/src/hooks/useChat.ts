@@ -11,6 +11,7 @@
  *   7. 直到 finish_reason !== "tool_calls" 或者达到 MAX_ROUNDS
  */
 
+import { noteSessionCreated } from "../lib/expertChat";
 import { useCallback, useRef } from "react";
 import { useChatStore } from "../store/chat";
 import * as streamRegistry from "../lib/streamRegistry";
@@ -63,6 +64,7 @@ export function useChat(_initialModel: string) {
         model: useChatStore.getState().model,
       });
       setPersistedSessionId(out.id);
+      noteSessionCreated(out.id); // 10/18: 记下这个会话是跟哪个专家聊的 (没选专家就不记)
       console.info(`[catfish chat] persisted session ${out.id} (source=companion)`);
       return out.id;
     } catch (e) {

@@ -7,6 +7,7 @@
  * Week 3 持久化 (state.db 持久 + sidebar 切换 + resume 历史) 钩这个 store。
  */
 
+import { noteSessionLoaded } from "../lib/expertChat";
 import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import type { Attachment, ChatMessage } from "../types/chat";
@@ -334,8 +335,9 @@ export const useChatStore = create<ChatState>((set) => ({
   removeQueuedMessage: (id) =>
     set((s) => ({ queue: s.queue.filter((q) => q.id !== id) })),
   clearQueue: () => set({ queue: [] }),
-  loadSession: (detail) =>
-    set({
+  loadSession: (detail) => {
+    noteSessionLoaded(detail.meta.id); // 10/18: 打开旧会话 = 切回当时聊的那个人 (专家 / 小鲶)
+    return set({
       // P27.3 真根因 fix (6/5 鸿波 audit 后): dbMessageToChat 1-to-1 map 丢了
       // tool_calls[i].result. state.db 里 tool result 存在另一行 role:"tool" +
       // tool_call_id 的 message content. 历史加载时必须 join 回 tool_calls[i].result,
@@ -361,7 +363,8 @@ export const useChatStore = create<ChatState>((set) => ({
       // 注: 即使现在不覆盖 model, prevSentModel 仍然必须按 session 自身的 model 走 —
       // 这样 picker 当前 model ≠ session 上次 model 时, gateway 才知道要做转译.
       prevSentModel: detail.meta.model,
-    }),
+    });
+  },
   loadSessionAttachments: async (sessionId: string) => {
     if (!sessionId) return;
     try {

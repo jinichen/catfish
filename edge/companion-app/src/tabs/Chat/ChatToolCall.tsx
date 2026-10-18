@@ -1,5 +1,6 @@
 /** 单个 tool 调用展示 —— 折叠式,默认收起,点开看 args / result */
 
+import { ExpertSuggestButton } from "./ExpertPicker";
 import { useState } from "react";
 import type { ToolCall } from "../../types/chat";
 import { extractFilePaths } from "../../lib/path_detect";
@@ -178,6 +179,8 @@ export default function ChatToolCall({ call }: Props) {
       {/* 折叠状态也要显 —— 跟 approval / file pill 一致。员工不展开 toolcall
           就看不到密码框的话, 这一步就卡死了 (P27.2 踩过同一个坑)。 */}
       {credentialReq && <InlineCredentialPrompt req={credentialReq} />}
+      {/* 10/18: 小鲶推荐找专家 (catfish_expert suggest) → 「切到 X」按钮, 员工点了才切。折叠状态也显示。 */}
+      {call.status === "done" && call.name?.endsWith("catfish_expert") && <ExpertSuggestButton resultText={resultStr} />}
     </div>
   );
 }

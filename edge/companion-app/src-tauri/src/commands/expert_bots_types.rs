@@ -54,6 +54,9 @@ impl ModelPolicy {
 pub struct BotRegistration {
     pub enabled: bool,
     pub model_policy: ModelPolicy,
+    /// 10/18 本机专家 (docs/EXPERT-PACK-PLAN.md): 出现在工作台「找谁」里, 不绑场景也要被网关托管。
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub chat: bool,
 }
 
 impl Default for BotRegistration {
@@ -61,6 +64,7 @@ impl Default for BotRegistration {
         Self {
             enabled: true,
             model_policy: ModelPolicy::default(),
+            chat: false,
         }
     }
 }

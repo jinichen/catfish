@@ -33,6 +33,7 @@
  * 挪到 fetch 之后就会变成"发失败的那次不算用过", 下一次的对比基准就错了。
  * 所以位置不能动, 只能把副作用写在文档里。
  */
+import { buildHermesProfileUrl } from "./expertBots";
 import { config } from "./env";
 import { fetchIdentityBundle } from "./tauri";
 // 5/20 拆 805 → ~550: wire format (toWire + formatFileAttachment) 抽到 chatWire.ts
@@ -60,8 +61,10 @@ export async function prepareChatRequest(opts: {
   model: string;
   messages: ChatMessage[];
   tools?: OpenAITool[];
+  /** 10/18 本机专家: 它的 hermes profile, 走 `/p/<profile>/` */
+  profile?: string;
 }): Promise<PreparedChatRequest> {
-  const { useHermes, hermesCfg, model, messages, tools } = opts;
+  const { useHermes, hermesCfg, model, messages, tools, profile } = opts;
 
   // 8/15: 给员工聊天也打来源标记。
   //
@@ -91,7 +94,9 @@ export async function prepareChatRequest(opts: {
   //   · P44 服务式瘦身 —— 白名单只有 email-scheduler / phishing-scan 两项
   const CHAT_SOURCE_QUERY = "?catfish_source=companion-chat";
   const url = useHermes
-    ? `${hermesCfg!.url}/v1/chat/completions${CHAT_SOURCE_QUERY}`
+    ? profile
+      ? buildHermesProfileUrl(hermesCfg!.url, profile, "/v1/chat/completions", CHAT_SOURCE_QUERY)
+      : `${hermesCfg!.url}/v1/chat/completions${CHAT_SOURCE_QUERY}`
     : `${config.gatewayUrl}/v1/chat/completions${CHAT_SOURCE_QUERY}`;
 
   // BL-COMPANION-MODEL-SELECTOR-HERMES-SYNC (5/19): 两边都传真 model 名.

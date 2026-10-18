@@ -111,6 +111,7 @@ export async function streamChat(params: SendChatParams): Promise<void> {
     onError,
     onTransportResolved,
     signal,
+    profile,
   } = params;
 
   // 5/19 BL-COMPANION-CHAT-SWITCH-TO-HERMES Phase 2-2B: 切 hermes API server
@@ -147,6 +148,11 @@ export async function streamChat(params: SendChatParams): Promise<void> {
     // Tauri 命令挂 — 走老 gateway 路径 (灰度安全降级)
   }
   const useHermes = hermesCfg !== null && hermesCfg.enabled && hermesAuth !== null;
+  // 10/18: 专家只能走 hermes (它是一个 hermes profile)。通道不在就明说, 不悄悄换成小鲶回答。
+  if (profile && !useHermes) {
+    onError("找专家要小鲶的本机服务 (hermes) 在跑; 现在连不上, 先切回小鲶或稍后再试");
+    return;
+  }
   onTransportResolved?.(useHermes ? "hermes" : "gateway");
 
   // 8/15: 拼请求 (URL / body / agentHeaders) 搬去 chatRequest.ts。
@@ -165,6 +171,7 @@ export async function streamChat(params: SendChatParams): Promise<void> {
     model,
     messages,
     tools,
+    profile,
   });
 
   const IDLE_TIMEOUT_MS = computeIdleTimeoutMs(effectiveModel);
