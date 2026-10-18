@@ -272,7 +272,7 @@ export default function ExpertsCard() {
               selectExpert(e.profile_id);
               setTab("chat");
               window.dispatchEvent(new CustomEvent("catfish:new-chat"));
-            }}>去工作台找它</Btn>
+            }}>💬 跟它对话</Btn>
             {!e.pack && <Btn kind="ghost" disabled={!!busy} onClick={() => void exportPack(e)}>导出</Btn>}
             {!e.pack && <Btn kind="ghost" disabled={!!busy} onClick={() => setPublishing(e)}>发布到资源市场</Btn>}
             <Btn kind="ghost" disabled={!!busy} onClick={() => void (async () => {
