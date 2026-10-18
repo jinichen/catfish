@@ -54,6 +54,15 @@ COMPOSE="$TEMPLATE/docker-compose.yml"
 OUT_DIR="${OUT_DIR:-$HOME/Downloads}"
 DATE="$(date +%Y%m%d)"
 
+# ── 版本戳 (10/17 补回来) ────────────────────────────────────────────
+# 包里的 BUILD-INFO.txt 是「客户装的到底是哪一版」的唯一凭据。7/20 的老脚本会写它, 换成这个脚本后
+# 没人再写, 每次打包都把仓库里 9/23 那份旧文件原样带进去 (arch=arm64 / git_sha=146cac6) —— amd64 包也写着 arm64。
+# 启动时就抓, 对得上 docker 读构建上下文的时间点。delivery_hash 只看 central/ + delivery/ 两棵树 (edge/ 改了不影响这个包)。
+_git() { git -C "$REPO" "$@" 2>/dev/null; }
+GIT_SHA=$(_git rev-parse --short HEAD || echo unknown)
+DELIVERY_HASH="$(_git rev-parse HEAD:central | cut -c1-8)-$(_git rev-parse HEAD:delivery | cut -c1-8)"
+GIT_DIRTY=$(_git status --porcelain -- central delivery || true)
+
 echo "═══════════════════════════════════════════════════════"
 echo "  catfish POC 交付包 · $DATE · 架构: $ARCHES"
 echo "═══════════════════════════════════════════════════════"
@@ -323,6 +332,18 @@ for ARCH in $ARCHES; do
     rm -rf "$STAGE/delivery/catfish-poc/docs"
     find "$STAGE/delivery/catfish-poc" -name "*.md" -delete
     find "$STAGE" -name ".DS_Store" -delete 2>/dev/null || true
+
+    {
+        echo "arch=$ARCH"
+        echo "date=$DATE"
+        echo "git_sha=$GIT_SHA"
+        echo "central_version=$(cat "$CENTRAL/VERSION" 2>/dev/null || echo 未知)"
+        echo "delivery_hash=$DELIVERY_HASH"
+        echo "git_dirty=$([ -n "$GIT_DIRTY" ] && echo yes || echo no)"
+        echo "built_at=$(date '+%Y-%m-%d %H:%M:%S %Z')"
+        echo "built_on=$(uname -sm)"
+    } > "$STAGE/delivery/catfish-poc/BUILD-INFO.txt"
+    [ -n "$GIT_DIRTY" ] && echo "  ⚠ central/ 或 delivery/ 有未提交改动, git_sha=$GIT_SHA 描述不全这个包"
 
     IMG_TAR="$STAGE/delivery/catfish-poc/images/catfish-poc-central-$ARCH-$DATE.tar.gz"
     echo "→ docker save → $(basename "$IMG_TAR")"
