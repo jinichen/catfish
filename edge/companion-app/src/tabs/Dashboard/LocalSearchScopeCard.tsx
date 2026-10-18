@@ -25,6 +25,8 @@ interface ScopeResult {
   include: string[];
   exclude: string[];
   yamlPath: string;
+  /** add 才有: 实际记下的路径 (后端规整过, 例 ~/文稿/资料 → ~/Documents/资料) */
+  added?: string;
 }
 
 // P3.5.127 (6/26 鸿波 catch "怎么知道文件被没被索引?"): 索引状态查询.
@@ -134,8 +136,8 @@ export default function LocalSearchScopeCard() {
     [reload],
   );
 
-  const onAdd = async () => {
-    const p = input.trim();
+  const onAdd = async (picked?: string) => {
+    const p = (picked ?? input).trim();
     if (!p) return;
     setBusy(true);
     setErr(null);
@@ -146,7 +148,8 @@ export default function LocalSearchScopeCard() {
       // BL-SEARCH-NO-BOOTSTRAP (7/27): 加进 yaml 只是让 watcher 以后监听它,
       // 目录里**已有**的文件还是搜不到 —— 必须主动索引一次。只索引新加的这个,
       // 不整库重扫。
-      await doIndex(p, `正在索引 ${p}...`);
+      const added = r.added ?? p;
+      await doIndex(added, `正在索引 ${added}...`);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -453,7 +456,7 @@ export default function LocalSearchScopeCard() {
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder="~/work 或 /Users/your-name/Documents/项目"
+                placeholder="点「选择文件夹…」, 或手输 ~/Documents/项目"
                 disabled={busy}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
@@ -492,6 +495,26 @@ export default function LocalSearchScopeCard() {
                 }}
               >
                 + 添加
+              </button>
+              {/* 10/18: 手打路径容易错 (中文显示名、没权限), 选一个最稳; macOS 上选过系统就给访问权限 */}
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void (async () => {
+                  const picked = await invoke<string | null>("local_search_pick_dir");
+                  if (picked) await onAdd(picked);
+                })()}
+                style={{
+                  fontSize: 11,
+                  padding: "3px 10px",
+                  background: "transparent",
+                  border: "1px solid var(--catfish-border)",
+                  borderRadius: 3,
+                  cursor: busy ? "default" : "pointer",
+                  color: "var(--catfish-text)",
+                }}
+              >
+                选择文件夹…
               </button>
             </div>
           </div>

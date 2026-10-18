@@ -228,6 +228,8 @@ interface ScopeResult {
   include: string[];
   exclude: string[];
   yamlPath: string;
+  /** 后端实际记下的路径 (规整过) */
+  added?: string;
 }
 
 export function StepDocDirs({
@@ -243,8 +245,8 @@ export function StepDocDirs({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSave = async () => {
-    const trimmed = path.trim();
+  const handleSave = async (picked?: string) => {
+    const trimmed = (picked ?? path).trim();
     if (!trimmed) {
       setError("请输入目录路径, 或点跳过");
       return;
@@ -252,9 +254,12 @@ export function StepDocDirs({
     setSaving(true);
     setError(null);
     try {
-      await invoke<ScopeResult>("local_search_scope_add", {
+      const r = await invoke<ScopeResult>("local_search_scope_add", {
         path: trimmed,
       });
+      // 10/18: 加进范围只让 watcher 以后盯新文件, 文件夹里**已有**的要主动索引一次 (同设置页搜索范围卡的 onAdd)。
+      // 原来这步不索引, 初始化选的目录里现有文档一直搜不到、文风也学不到。后台跑, 不卡初始化; 失败不影响往下走。
+      void invoke("local_search_index", { only: r?.added ?? trimmed }).catch(() => {});
       onNext();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -285,11 +290,38 @@ export function StepDocDirs({
           marginTop: "var(--space-3)",
         }}
       >
+        {/* 10/18 (鸿波「输入文件存放目录会出错, 除非是缺省目录」): 手打路径在中文 macOS 上几乎必错 ——
+            访达里的「文稿 / 桌面」只是显示名, 文稿 / 桌面 / 下载里的子目录没授权时还读不到。主路改成选。 */}
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => void (async () => {
+            setError(null);
+            const picked = await invoke<string | null>("local_search_pick_dir");
+            if (picked) {
+              setPath(picked);
+              await handleSave(picked);
+            }
+          })()}
+          style={{
+            width: "100%",
+            padding: "10px",
+            marginBottom: 8,
+            fontSize: 13,
+            background: "var(--catfish-cyan, #0E5F66)",
+            color: "white",
+            border: "none",
+            borderRadius: 4,
+            cursor: saving ? "default" : "pointer",
+          }}
+        >
+          📂 选择文件夹…
+        </button>
         <input
           type="text"
           value={path}
           onChange={(e) => setPath(e.target.value)}
-          placeholder="~/Documents · ~/work · ~/项目 · ~/桌面/资料 ..."
+          placeholder="或者手输: ~/Documents/资料 · ~/Desktop/项目 · D:\\工作 ..."
           style={{
             width: "100%",
             padding: "8px 10px",
@@ -304,7 +336,7 @@ export function StepDocDirs({
           autoFocus
         />
         <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 8, lineHeight: 1.5 }}>
-          常见路径: <code>~/Documents</code> · <code>~/work</code> · <code>~/项目</code> · <code>~/文稿</code>
+          访达里的「文稿 / 桌面 / 下载」磁盘上叫 <code>~/Documents</code> · <code>~/Desktop</code> · <code>~/Downloads</code> (写中文也认)
           <br />
           后面在设置 "📂 搜索范围" 卡随时改 / 加多个.
         </div>
@@ -317,7 +349,7 @@ export function StepDocDirs({
       )}
 
       <Buttons
-        onNext={handleSave}
+        onNext={() => void handleSave()}
         nextLabel={saving ? "保存中…" : "保存 →"}
         onBack={onBack}
         onSkip={onSkip}

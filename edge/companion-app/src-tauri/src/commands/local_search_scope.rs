@@ -59,7 +59,7 @@ fn expand_home(s: &str) -> Result<PathBuf, String> {
     if s.is_empty() {
         return Err("路径不能空".into());
     }
-    if let Some(rest) = s.strip_prefix("~/") {
+    if let Some(rest) = s.strip_prefix("~/").or_else(|| s.strip_prefix("~\\")) {
         let home = crate::util::paths::home_env().map_err(|e| format!("HOME 未设: {e}"))?;
         Ok(PathBuf::from(home).join(rest))
     } else if s == "~" {
@@ -68,6 +68,128 @@ fn expand_home(s: &str) -> Result<PathBuf, String> {
     } else {
         Ok(PathBuf::from(s))
     }
+}
+
+/// 10/18 (鸿波「初始化时输入文件存放目录会出错, 除非是缺省目录」): 员工手输的目录先规整一遍。
+///
+/// 原来只认 `~/` 开头的写法, 下面这些都直接报「路径不存在」:
+///   · 带引号: Windows 资源管理器「复制为路径」出来是 `"D:\工作\资料"`; 也有人顺手加引号
+///   · `~\Documents` (Windows 写法)、`$HOME/...`、`%USERPROFILE%\...`
+///   · **macOS 中文系统的显示名**: 访达里看到的「文稿 / 桌面 / 下载」只是显示名, 磁盘上叫 Documents / Desktop / Downloads,
+///     而界面提示里写的就是 `~/文稿`、`~/桌面/资料` —— 照着提示填反而必错。只在字面路径不存在时才换, 真有个叫「文稿」的目录照用。
+fn normalize_input(raw: &str) -> String {
+    let mut s = raw.trim().trim_matches(|c| c == '"' || c == '\'' || c == '“' || c == '”').trim().to_string();
+    if let Ok(home) = crate::util::paths::home_env() {
+        for var in ["$HOME", "${HOME}", "%USERPROFILE%", "%HOMEPATH%"] {
+            if let Some(rest) = s.strip_prefix(var) {
+                s = format!("{home}{rest}");
+            }
+        }
+    }
+    s
+}
+
+/// 中文显示名 → 磁盘上可能的真名 (只换 home 下第一段; 按顺序试, 第一个存在的算)。
+/// macOS 访达: 文稿 / 桌面 / 下载 / 影片; Windows 资源管理器: 文档 / 桌面 / 下载 / 视频 —— 磁盘上都是英文名。
+const LOCALIZED_HOME_DIRS: &[(&str, &[&str])] = &[
+    ("文稿", &["Documents"]), ("文档", &["Documents"]), ("我的文档", &["Documents"]),
+    ("桌面", &["Desktop"]), ("下载", &["Downloads"]), ("图片", &["Pictures"]),
+    ("影片", &["Movies", "Videos"]), ("视频", &["Videos", "Movies"]), ("音乐", &["Music"]),
+];
+
+/// 字面路径不存在时, 换成真名再试的候选 (写成 `~/...`)。认这几种开头:
+///   `~/文稿/资料`、`~\文档\资料` · `C:\Users\张三\文档\资料` (home 的绝对路径, Windows 上不分大小写) · `桌面\资料` (没写开头)
+/// Windows 上「文档 / 桌面」常被 OneDrive 接管, 实际在 `~\OneDrive\Documents` 或 `~\OneDrive\文档`, 也一并试。
+fn localized_candidates(raw: &str) -> Vec<String> {
+    localized_candidates_for(raw, &crate::util::paths::home_env().unwrap_or_default(), cfg!(windows))
+}
+
+/// 平台当参数传进来, Windows 那几支 (OneDrive、不分大小写) 在 mac / Linux CI 上也测得到。
+fn localized_candidates_for(raw: &str, home: &str, windows: bool) -> Vec<String> {
+    let rest = if let Some(r) = raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\")) {
+        r.to_string()
+    } else if !home.is_empty() && raw.len() > home.len() && raw.is_char_boundary(home.len())
+        && (if windows { raw[..home.len()].eq_ignore_ascii_case(home) } else { &raw[..home.len()] == home })
+        && raw[home.len()..].starts_with(['/', '\\'])
+    {
+        raw[home.len() + 1..].to_string()
+    } else if !raw.starts_with(['/', '\\', '~']) && !raw.contains(':') {
+        raw.to_string() // 「桌面/资料」这种没写开头的
+    } else {
+        return Vec::new();
+    };
+    let (first, tail) = match rest.split_once(['/', '\\']) {
+        Some((a, b)) => (a.to_string(), b.trim_matches(['/', '\\']).to_string()),
+        None => (rest.clone(), String::new()),
+    };
+    let Some((_, reals)) = LOCALIZED_HOME_DIRS.iter().find(|(zh, _)| *zh == first) else { return Vec::new() };
+    let join = |base: String| if tail.is_empty() { base } else { format!("{base}/{}", tail.replace('\\', "/")) };
+    let mut out: Vec<String> = reals.iter().map(|r| join(format!("~/{r}"))).collect();
+    if windows {
+        for r in *reals {
+            out.push(join(format!("~/OneDrive/{r}")));
+        }
+        out.push(join(format!("~/OneDrive/{first}")));
+    }
+    out
+}
+
+/// 存在且是目录 → Ok; 否则给一句员工看得懂、知道下一步怎么办的话。
+/// 区分「没有」和「没权限」: macOS 的 文稿 / 桌面 / 下载 受隐私保护, 没授权时 Rust 的 `exists()` 直接返回 false,
+/// 原来一律报「路径不存在」—— 目录明明在, 员工只能怀疑自己打错了。
+fn check_dir(p: &std::path::Path) -> Result<(), String> {
+    match std::fs::metadata(p) {
+        Ok(m) if m.is_dir() => match std::fs::read_dir(p) {
+            Ok(_) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => Err(no_permission(p)),
+            Err(e) => Err(format!("打不开这个目录: {} ({e})", p.display())),
+        },
+        Ok(_) => Err(format!("这是文件不是文件夹: {}", p.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => Err(no_permission(p)),
+        Err(_) => Err(format!("找不到这个文件夹: {} —— 点「选择文件夹…」直接选, 不用手打", p.display())),
+    }
+}
+
+fn no_permission(p: &std::path::Path) -> String {
+    if cfg!(target_os = "macos") {
+        format!(
+            "鲶鱼还没有权限读这个文件夹: {} —— 点「选择文件夹…」选一次就有了; \
+             或者在 系统设置 → 隐私与安全性 → 文件与文件夹 里给鲶鱼打开",
+            p.display()
+        )
+    } else {
+        format!("没有权限读这个文件夹: {} —— 换一个, 或者点「选择文件夹…」", p.display())
+    }
+}
+
+/// 规整 + 校验, 返回 (要写进 yaml 的写法, 展开后的路径)。
+fn resolve_input(raw: &str) -> Result<(String, PathBuf), String> {
+    let s = normalize_input(raw);
+    if s.is_empty() {
+        return Err("路径不能空".into());
+    }
+    let expanded = expand_home(&s)?;
+    if std::fs::metadata(&expanded).is_err() {
+        for alt in localized_candidates(&s) {
+            let alt_path = expand_home(&alt)?;
+            if check_dir(&alt_path).is_ok() {
+                return Ok((alt, alt_path));
+            }
+        }
+    }
+    check_dir(&expanded)?;
+    Ok((s, expanded))
+}
+
+/// 「选择文件夹…」: 原生选择框 (macOS 上员工自己选的文件夹, 系统会给鲶鱼访问权限)。取消返回 None。
+#[tauri::command]
+pub fn local_search_pick_dir() -> Option<String> {
+    let start = crate::util::paths::home_env().ok().map(PathBuf::from);
+    let mut dlg = rfd::FileDialog::new().set_title("选择你的工作文档所在的文件夹");
+    if let Some(d) = start {
+        dlg = dlg.set_directory(d);
+    }
+    dlg.pick_folder().map(|p| p.to_string_lossy().into_owned())
 }
 
 fn get_string_list(root: &YamlValue, key: &str) -> Vec<String> {
@@ -106,6 +228,9 @@ pub struct ScopeResult {
     pub exclude: Vec<String>,
     /// yaml 文件路径 (员工想 vim 改 file_types / max_file_size_mb 自己去)
     pub yaml_path: String,
+    /// 只有 add 返回: 实际记下的那条 (规整过, 例 `~/文稿/资料` → `~/Documents/资料`), 前端拿它去索引
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub added: Option<String>,
 }
 
 /// 改完 include 之后重启 watcher。
@@ -157,26 +282,20 @@ pub async fn local_search_scope_get() -> Result<ScopeResult, String> {
         include: get_string_list(&root, "include"),
         exclude: get_string_list(&root, "exclude"),
         yaml_path: search_scope_yaml_path()?.to_string_lossy().into_owned(),
+        added: None,
     })
 }
 
 #[tauri::command]
 pub async fn local_search_scope_add(path: String) -> Result<ScopeResult, String> {
-    let raw = path.trim().to_string();
-    if raw.is_empty() {
+    if path.trim().is_empty() {
         return Err("路径不能空".into());
     }
-    if raw.len() > 500 {
+    if path.len() > 500 {
         return Err("路径太长 (>500)".into());
     }
-    // 校验: 展开 ~ 后必须存在 + 是 dir
-    let expanded = expand_home(&raw)?;
-    if !expanded.exists() {
-        return Err(format!("路径不存在: {}", expanded.display()));
-    }
-    if !expanded.is_dir() {
-        return Err(format!("不是目录: {}", expanded.display()));
-    }
+    // 规整 (引号 / ~\ / $HOME / 中文显示名) + 校验 (在、是文件夹、读得了)
+    let (raw, expanded) = resolve_input(&path)?;
     let mut root = read_root()?;
     let mut dirs = get_string_list(&root, "include");
     // 去重 — 同 raw 或 同 expanded path 都算重复
@@ -188,13 +307,13 @@ pub async fn local_search_scope_add(path: String) -> Result<ScopeResult, String>
                 .unwrap_or(false)
     }) {
         // 已存在不报错, 静默返回当前列表
-        return local_search_scope_get().await;
+        return Ok(ScopeResult { added: Some(raw), ..local_search_scope_get().await? });
     }
-    dirs.push(raw);
+    dirs.push(raw.clone());
     set_string_list(&mut root, "include", dirs);
     write_root(&root)?;
     restart_watcher_after_scope_change("加了目录").await;
-    local_search_scope_get().await
+    Ok(ScopeResult { added: Some(raw), ..local_search_scope_get().await? })
 }
 
 #[tauri::command]
@@ -234,6 +353,66 @@ mod tests {
         );
         assert!(expand_home("").is_err());
         assert!(expand_home("   ").is_err());
+    }
+
+    #[test]
+    fn 手输的目录先规整_引号_环境变量_中文显示名() {
+        let _guard = env_lock();
+        let home = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", home.path());
+        std::fs::create_dir_all(home.path().join("Documents/资料")).unwrap();
+        std::fs::create_dir_all(home.path().join("工作")).unwrap();
+        let docs = home.path().join("Documents/资料");
+        assert_eq!(resolve_input("~/文稿/资料").unwrap(), ("~/Documents/资料".to_string(), docs.clone()));
+        assert_eq!(resolve_input("\"~/Documents/资料\"").unwrap().1, docs);
+        assert_eq!(resolve_input("$HOME/工作").unwrap().1, home.path().join("工作"));
+        assert_eq!(resolve_input("  ~/工作 ").unwrap().0, "~/工作");
+        assert_eq!(resolve_input(&docs.to_string_lossy()).unwrap().1, docs, "绝对路径照用");
+        // 真有个叫「文稿」的目录就用它, 不换
+        std::fs::create_dir_all(home.path().join("文稿")).unwrap();
+        assert_eq!(resolve_input("~/文稿").unwrap().0, "~/文稿");
+        // home 的绝对路径 + 中文名、没写开头的、Windows 反斜杠
+        let abs = format!("{}/文稿/资料", home.path().display());
+        assert_eq!(resolve_input(&abs).unwrap(), ("~/Documents/资料".to_string(), docs.clone()));
+        std::fs::create_dir_all(home.path().join("Desktop/项目")).unwrap();
+        assert_eq!(resolve_input("桌面/项目").unwrap().1, home.path().join("Desktop/项目"));
+        assert_eq!(resolve_input("~\\桌面\\项目").unwrap().0, "~/Desktop/项目");
+        let e = resolve_input("~/没有这个").unwrap_err();
+        assert!(e.contains("找不到这个文件夹") && e.contains("选择文件夹"), "{e}");
+        std::fs::write(home.path().join("a.txt"), "x").unwrap();
+        assert!(resolve_input("~/a.txt").unwrap_err().contains("文件不是文件夹"));
+    }
+
+    #[test]
+    fn windows_中文名_onedrive_不分大小写() {
+        let home = r"C:\Users\张三";
+        let c = localized_candidates_for(r"c:\users\张三\文档\资料", home, true);
+        assert_eq!(c, vec!["~/Documents/资料", "~/OneDrive/Documents/资料", "~/OneDrive/文档/资料"]);
+        assert_eq!(localized_candidates_for(r"桌面\项目\", home, true)[0], "~/Desktop/项目");
+        assert_eq!(localized_candidates_for(r"~\视频", home, true)[..2], ["~/Videos".to_string(), "~/Movies".to_string()]);
+        assert!(localized_candidates_for(r"D:\工作\文档", home, true).is_empty(), "别的盘不猜");
+        assert!(localized_candidates_for(r"c:\users\张三\文档", home, false).is_empty(), "mac 上区分大小写");
+        assert_eq!(localized_candidates_for("~/文稿", "/Users/z", false), vec!["~/Documents"], "mac 不试 OneDrive");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn 没权限要说没权限_不说不存在() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = env_lock();
+        let home = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", home.path());
+        let locked = home.path().join("locked");
+        std::fs::create_dir_all(locked.join("inner")).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let enforced = std::fs::read_dir(&locked).is_err(); // root 跑测试时权限不生效, 那就不断言
+        let r = resolve_input("~/locked/inner");
+        let r2 = resolve_input("~/locked");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if enforced {
+            assert!(r.unwrap_err().contains("权限"), "子目录被挡");
+            assert!(r2.unwrap_err().contains("权限"), "目录本身读不了");
+        }
     }
 
     #[test]
