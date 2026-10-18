@@ -121,12 +121,13 @@ export default function TaskPicker({
     /* P3.3.22 (6/11): flex-shrink: 0 + nowrap — 防工作台 header 一行挤撞时
        这块自己内部换行 ("🎯 task:" 跟 select 之间撕开). */
     <div className="chat-task-picker">
+      {/* 10/18: 只留图标 (顶栏加了「找谁」后放不下「任务」两个字), 悬停看说明 */}
       <span
         className="chat-task-picker__label"
-        title="进任一早安主菜的 task 上下文 — 跟早安 DetailPane 共享同一 session"
+        title="任务: 进任一早安主菜的 task 上下文 — 跟早安 DetailPane 共享同一 session"
+        aria-label="任务"
       >
         <Target size={15} aria-hidden="true" />
-        任务
       </span>
       <select
         value={currentTaskUid ?? ""}

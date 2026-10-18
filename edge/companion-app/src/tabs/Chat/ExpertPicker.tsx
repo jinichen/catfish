@@ -14,7 +14,7 @@ export function ExpertPicker({ disabled, onSwitch }: { disabled?: boolean; onSwi
   if (experts.length === 0 && !selected) return null;
   return (
     <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }} title="跟小鲶聊, 还是找某个专家">
-      <span style={{ color: "var(--catfish-text-muted)" }}>找谁</span>
+      <span style={{ color: "var(--catfish-text-muted)", whiteSpace: "nowrap", flexShrink: 0 }}>找谁</span>
       <select
         value={selected ?? ""}
         disabled={disabled}
@@ -23,8 +23,7 @@ export function ExpertPicker({ disabled, onSwitch }: { disabled?: boolean; onSwi
           selectExpert(e.target.value || null);
           onSwitch();
         }}
-        style={{ fontSize: 12, padding: "3px 6px", borderRadius: "var(--radius-sm)", border: "1px solid var(--catfish-border)",
-                 background: "var(--catfish-bg)", color: "var(--catfish-text)" }}
+        className="chat-expert-picker__select"
       >
         <option value="">小鲶</option>
         {experts.map((e) => (

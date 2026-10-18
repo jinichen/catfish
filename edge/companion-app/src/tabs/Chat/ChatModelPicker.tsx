@@ -124,6 +124,8 @@ export default function ChatModelPicker({ current, onChange, onNewChat }: Props)
         value={current}
         disabled={switching}
         aria-label="选择聊天模型"
+        // 10/18: 选择器最宽 200px, 长名字会被截断 —— 悬停看全名
+        title={(() => { const m = models.find((x) => x.id === current); return m ? modelLabel(m) : current; })()}
         onChange={(e) => void handleChange(e.target.value)}
         className="chat-model-picker__select"
         data-error={!!error || undefined}

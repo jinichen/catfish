@@ -4334,6 +4334,10 @@ button {
 
 .chat-workspace__header {
   display: flex;
+  /* 10/18: 右边加了「找谁」后, 窄一点的窗口三个选择器加起来比头部宽 —— 右组原来不收缩, 把左边「对话 / 任务」
+     压到选择器底下 (互相盖住)。现在一行放: 先缩左边 (会话 id / 条数裁掉, 只留「头像 + 对话」),
+     再缩选择器 (各有最小宽度, 名字截断)。不折行 —— 折成两行太占地方 (鸿波 10/18)。 */
+  flex-wrap: nowrap;
   min-height: 58px;
   align-items: center;
   justify-content: space-between;
@@ -4351,7 +4355,11 @@ button {
 }
 
 .chat-workspace__context {
-  min-width: 0;
+  /* 至少留出「头像 + 对话」的宽度; 会话 id / 条数放不下就裁掉, 不往右边选择器底下钻。
+     flex-shrink 10: 空间不够时先缩这里, 选择器后缩 */
+  flex: 0 10 auto;
+  min-width: min-content;
+  overflow: hidden;
   gap: 8px;
   font-size: 13px;
 }
@@ -4377,6 +4385,25 @@ button {
   white-space: nowrap;
 }
 
+/* 10/18: 聊天区窄时 (例 窗口不大又开着会话侧栏) 会话 id 只剩一个「·」, 干脆不显示 (条数留着)。
+   顶栏左边最少占「头像 + 对话 (+ 条数)」, 不会被裁成半截 */
+.chat-workspace__main {
+  container-type: inline-size;
+}
+
+@container (max-width: 760px) {
+  .chat-workspace__session-id {
+    display: none;
+  }
+}
+
+/* 再窄 (< 700) 条数也不显示, 把地方让给模型名 */
+@container (max-width: 700px) {
+  .chat-workspace__message-count {
+    display: none;
+  }
+}
+
 .chat-workspace__session-id {
   max-width: 180px;
   overflow: hidden;
@@ -4385,7 +4412,10 @@ button {
 }
 
 .chat-workspace__controls {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  justify-content: flex-end;
+  margin-left: auto;
   gap: 10px;
 }
 
@@ -4393,7 +4423,22 @@ button {
 .chat-task-picker {
   display: flex;
   align-items: center;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+}
+
+/* 外框最小宽度写死 = 里面下拉的最小宽度 (+ 图标): 设成 0 外框会缩得比下拉还窄, 下拉溢出去压到「找谁」上;
+   留 auto 又会按下拉的 width 算, 根本不缩, 窄窗口整组往左压到「对话」上。
+   挤的时候任务下拉先让到最小 (flex-shrink 1000), 模型名后缩。 */
+.chat-task-picker {
+  flex-shrink: 1000;
+  min-width: 106px; /* 图标 15 + 间距 7 + 下拉最窄 84 */
+}
+
+.chat-model-picker {
+  min-width: 120px;
+  /* flex-shrink 1 (任务那边 1000): 按比例分摊时哪怕分到 1px 模型名也出省略号, 所以让任务下拉几乎全包;
+     不能把这里设成 < 1 —— 剩下的项 shrink 之和 < 1 时 flex 只消化那个比例的溢出, 窄窗口整组往左压到「对话」上 */
+  flex-shrink: 1;
 }
 
 .chat-model-picker {
@@ -4404,7 +4449,8 @@ button {
 }
 
 .chat-model-picker__select,
-.chat-task-picker__select {
+.chat-task-picker__select,
+.chat-expert-picker__select {
   height: 34px;
   color: var(--catfish-text);
   background: var(--catfish-bg-elevated);
@@ -4418,17 +4464,24 @@ button {
 }
 
 .chat-model-picker__select {
-  min-width: 212px;
+  /* 10/18: 原来 min-width 212 —— 加了「找谁」后窄窗口一行放不下。长模型名放不下时截断 (悬停 / 展开看全名) */
+  /* 宽度跟着当前模型名走 (最宽 280), 有空间就显示全名; 顶栏挤了才缩, 最窄 120 */
+  width: auto;
+  min-width: 120px;
+  max-width: min(280px, 100%);
   padding: 5px 30px 5px 10px;
+  text-overflow: ellipsis;
 }
 
 .chat-model-picker__select:hover,
-.chat-task-picker__select:hover {
+.chat-task-picker__select:hover,
+.chat-expert-picker__select:hover {
   border-color: #c6d3d5;
 }
 
 .chat-model-picker__select:focus,
-.chat-task-picker__select:focus {
+.chat-task-picker__select:focus,
+.chat-expert-picker__select:focus {
   border-color: color-mix(in srgb, var(--catfish-cyan) 42%, var(--catfish-border));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--catfish-cyan) 7%, transparent);
 }
@@ -4522,9 +4575,21 @@ button {
 }
 
 .chat-task-picker__select {
-  max-width: 172px;
+  width: 136px;
+  min-width: 84px;
+  /* 挤的时候任务下拉先让 (平时只显示「— 普通对话 —」), 模型名尽量完整 */
+  flex: 0 1000 auto;
+  text-overflow: ellipsis;
   padding: 4px 26px 4px 8px;
   font-family: var(--font-sans);
+}
+
+/* 10/18: 「找谁」跟任务 / 模型同高同样式 (原来是内联的小框, 三个不齐) */
+.chat-expert-picker__select {
+  max-width: 160px;
+  padding: 4px 26px 4px 8px;
+  font-family: var(--font-sans);
+  text-overflow: ellipsis;
 }
 
 .chat-task-picker__select[data-active="true"] {
