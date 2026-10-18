@@ -307,6 +307,9 @@ fn replace_source(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths) -> Resul
         let status = untar.status().context("启动 tar")?;
         anyhow::ensure!(status.success(), "解压 hermes-agent-bundle.tar.gz 失败: {status}");
         super::hermes_install_steps::flatten_hermes_source_stage(&paths.install_dir)?;
+        for name in super::hermes_install_steps::drop_bundled_plugins_shadowing_user(&paths.install_dir, &paths.hermes_home)? {
+            log::info!("hermes 安装: {name} 用 plugins\\ 里自己装的那份, 不放树内副本 (树内优先会挡住它)");
+        }
         if let Some(problem) = super::hermes_install_health::stamp_problem(&paths.install_dir) {
             anyhow::bail!("Hermes 源码归档不对: {problem}");
         }

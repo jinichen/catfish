@@ -39,15 +39,17 @@ BL-MEMORY-OWNERSHIP-FIX 重构.
 ```bash
 # 从 catfish repo 装
 cd ~/person_task/catfish/edge/hermes-plugins
-bash install-catfish-memory.sh        # TODO: 写这个安装脚本
+bash ../install-catfish-memory.sh
 ```
 
 ### 手动
 
 ```bash
-# 软链到 hermes plugins/memory/
+# 软链到 ~/.hermes/plugins/ (hermes 树外, 升级不会丢)
 ln -s ~/person_task/catfish/edge/hermes-plugins/catfish-memory \
-      ~/.hermes/hermes-agent/plugins/memory/catfish-memory
+      ~/.hermes/plugins/catfish-memory
+# hermes-agent/plugins/memory/ 里不能再有一份 catfish-memory: hermes 树内优先, 有就挡住上面这条链
+# (装过安装包的开发机会有, 10/18 起安装器会自己删; tests/test_plugin_survives_hermes_upgrade.py 盯着)
 
 # 激活 (改 hermes config.yaml)
 # memory:

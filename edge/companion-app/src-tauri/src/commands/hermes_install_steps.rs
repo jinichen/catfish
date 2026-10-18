@@ -75,6 +75,30 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
+/// 10/18: 安装包把 catfish 记忆插件放在 hermes 树里 (`plugins/memory/catfish-*`, 跟 hermes 一起装、一起升级)。
+/// 但 hermes 找记忆插件是**树内优先** (plugins/memory/__init__.py find_provider_dir: bundled → `$HERMES_HOME/plugins/`),
+/// 开发机上 `~/.hermes/plugins/<名字>` 是指向仓库的软链 —— 装过一次安装包, 树内那份旧副本就把它挡住了,
+/// 改了仓库里的插件 hermes 照样跑旧的, 而且没有任何提示 (10/18 在开发机上撞到: 10/17 的副本挡了一整天)。
+/// 所以: `$HERMES_HOME/plugins/` 里有同名插件时, 删掉刚解出来的树内副本, 让员工 / 开发者自己装的那份生效。
+/// 客户机上没有那个目录, 什么都不做。返回删掉的插件名。
+pub(crate) fn drop_bundled_plugins_shadowing_user(source_root: &Path, hermes_home: &Path) -> Result<Vec<String>> {
+    let bundled = source_root.join("plugins").join("memory");
+    let Ok(entries) = std::fs::read_dir(&bundled) else { return Ok(Vec::new()) };
+    let mut dropped = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("catfish") || !entry.path().is_dir() {
+            continue;
+        }
+        let user = hermes_home.join("plugins").join(&name);
+        if user.join("__init__.py").is_file() {
+            remove_any(&entry.path()).with_context(|| format!("删掉被 {} 取代的树内副本", user.display()))?;
+            dropped.push(name);
+        }
+    }
+    Ok(dropped)
+}
+
 /// 10/14: Windows 装机也用 (hermes_install_windows::bootstrap)。
 pub(crate) fn flatten_hermes_source_stage(stage: &Path) -> Result<()> {
     if stage.join("pyproject.toml").is_file() {
@@ -156,6 +180,9 @@ pub(crate) fn prepare_source_stage(
         .arg(&stage);
     command_status(command, "解压 hermes-agent-bundle.tar.gz")?;
     flatten_hermes_source_stage(&stage)?;
+    for name in drop_bundled_plugins_shadowing_user(&stage, &paths.hermes_home)? {
+        log::info!("hermes 安装: {name} 用 ~/.hermes/plugins/ 里自己装的那份, 不放树内副本 (树内优先会挡住它)");
+    }
     // 发布归档在构建/签名流水线中已校验，但部分历史包没有携带版本文件。
     // 解压成功并确认源码骨架后，由本客户端原子落同源 pin，
     // 后续健康检查和升级判断不再把它误判成“版本未知”。
@@ -600,5 +627,31 @@ mod addon_marker_tests {
         assert!(addon_current(&paths, WECHAT_READER_ADDON, None));
         std::fs::remove_file(&tool).unwrap();
         assert!(!addon_current(&paths, WECHAT_READER_ADDON, None));
+    }
+}
+
+#[cfg(test)]
+mod shadow_tests {
+    use super::drop_bundled_plugins_shadowing_user;
+
+    #[test]
+    fn 自己装了同名插件就删树内副本_没装就保留() {
+        let d = tempfile::tempdir().unwrap();
+        let (src, home) = (d.path().join("src"), d.path().join("home"));
+        for name in ["catfish-memory", "holographic"] {
+            std::fs::create_dir_all(src.join("plugins/memory").join(name)).unwrap();
+            std::fs::write(src.join("plugins/memory").join(name).join("__init__.py"), "").unwrap();
+        }
+        // 客户机: 没有 ~/.hermes/plugins/catfish-memory → 树内副本留着
+        assert!(drop_bundled_plugins_shadowing_user(&src, &home).unwrap().is_empty());
+        assert!(src.join("plugins/memory/catfish-memory").is_dir());
+        // 开发机: 有自己装的 → 树内副本删掉, hermes 自带的别的插件不动
+        std::fs::create_dir_all(home.join("plugins/catfish-memory")).unwrap();
+        std::fs::write(home.join("plugins/catfish-memory/__init__.py"), "").unwrap();
+        std::fs::create_dir_all(home.join("plugins/holographic")).unwrap();
+        std::fs::write(home.join("plugins/holographic/__init__.py"), "").unwrap();
+        assert_eq!(drop_bundled_plugins_shadowing_user(&src, &home).unwrap(), vec!["catfish-memory".to_string()]);
+        assert!(!src.join("plugins/memory/catfish-memory").exists());
+        assert!(src.join("plugins/memory/holographic").is_dir(), "不是 catfish 的不管");
     }
 }

@@ -67,23 +67,28 @@ _needs_hermes = pytest.mark.skipif(
 # 1. 我们这侧: 软链的位置
 # ─────────────────────────────────────────────────────────────────────
 @_needs_hermes
-def test_软链不许待在hermes树内():
-    """`hermes-agent/plugins/memory/` 底下不许再有 catfish 的东西。
+def test_树外装了就不许有树内副本挡着():
+    """`~/.hermes/plugins/<catfish 插件>` 在 (开发机: 指向仓库的软链) 时, `hermes-agent/plugins/memory/` 底下不许有同名副本。
 
-    这条是**病因的直接判据** —— 有人把链建回树里, 病就回来了, 而且要等到
-    下次升级才发作。
+    hermes 找记忆插件是**树内优先** (plugins/memory/__init__.py find_provider_dir: bundled → `$HERMES_HOME/plugins/`)。
+    树内有一份, 树外那份就永远不会被加载 —— 改了仓库里的插件, hermes 照样跑旧副本, 没有任何提示。
+
+    10/18 改了这条的判据: 原来是「树内一律不许有 catfish 的东西」(8/20, 防升级把树内软链换没)。但 9/23 起安装包
+    **有意**把插件放在树内 (build-mac-resources.sh / build-windows-hermes-resources.sh), 跟 hermes 一起装、一起升级,
+    客户机上树内就是正确位置, 升级也不会丢 (换 hermes 的正是我们自己的安装器, 新树里带着插件)。真正的病是两份并存:
+    开发机装过一次安装包, 10/17 的树内副本把仓库软链挡了一整天 (10/18 发现)。安装器现在会在解出 hermes 后删掉
+    被树外同名插件取代的树内副本 (companion hermes_install_steps.rs drop_bundled_plugins_shadowing_user)。
     """
     memory_dir = _HERMES_ROOT / "plugins" / "memory"
-    offenders = [
+    user_dir = _HERMES_HOME / "plugins"
+    shadowed = [
         str(c.relative_to(_HERMES_ROOT))
         for c in memory_dir.iterdir()
-        if "catfish" in c.name.lower()
+        if "catfish" in c.name.lower() and (user_dir / c.name / "__init__.py").exists()
     ]
-    assert not offenders, (
-        "catfish 插件又被装进 hermes 树里了: " + ", ".join(offenders) + "\n"
-        "大版本升级会把整棵 hermes-agent/ 换掉, 这条链跟着没 —— 而且是静默的:\n"
-        "  provider 加载失败只打一条 warning 然后返 None, 记忆停摆但 agent 照常回答。\n"
-        "改用 ~/.hermes/plugins/ (树外). 见 install-catfish-memory.sh。"
+    assert not shadowed, (
+        "树内副本挡住了 ~/.hermes/plugins/ 里自己装的那份 (hermes 树内优先): " + ", ".join(shadowed) + "\n"
+        "hermes 现在跑的是树内那份旧的。把树内副本挪走; 以后装包时安装器会自己删。"
     )
 
 
