@@ -12,6 +12,15 @@ pub async fn hermes_status() -> Result<ServiceStatus, String> {
     ).await
 }
 
+/// 10/19: 服务状态里 Hermes 那一行的「重启」(鸿波「hermes 也是本地服务, 为什么只读」)。
+/// 跟切模型同一条路: `hermes gateway restart`, 等新进程稳定就绪才返回 (mac 走 launchd, Windows 走 CLI)。
+#[tauri::command]
+pub async fn hermes_restart() -> Result<(), String> {
+    tokio::task::spawn_blocking(crate::commands::codex_gateway::restart_hermes_gateway)
+        .await
+        .map_err(|e| format!("重启 Hermes 失败: {e}"))?
+}
+
 /// Legacy explicit recovery entrypoint. Health polling never calls this.
 /// Windows has no launchd restart guarantee; do not run Unix pgrep/kill there.
 #[tauri::command]

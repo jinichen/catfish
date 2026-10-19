@@ -15,6 +15,7 @@ pub(crate) fn handler(
             // hermes hang detection + auto restart (kill -9 触发 launchd 拉)
             crate::commands::hermes::hermes_status,
             crate::commands::hermes::hermes_kill,
+            crate::commands::hermes::hermes_restart,
             // P50 (9/10): 横向协同握手要报的本机身份
             crate::commands::room_link::room_link_local_identity,
             // Hermes 0.18 原生 Codex app-server runtime：检测 / 登录 / 一键切换.

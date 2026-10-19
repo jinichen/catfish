@@ -24,6 +24,7 @@ import type { ServiceId, ServiceStatus } from "../../types/service";
 import {
   chromeLaunch,
   chromeKill,
+  hermesRestart,
   localSearchStart,
   localSearchStop,
   toolBridgeStart,
@@ -45,9 +46,11 @@ const SERVICE_ACTIONS: Record<
 };
 
 async function restartService(id: ServiceId): Promise<void> {
-  // BL-COMPANION-SERVICES-DEMOTE (5/17): gateway 不可重启, 这里直接 return.
-  // Hermes 生命周期由服务管理器负责，健康探测不进行强杀。
-  if (id === "gateway" || id === "hermes") return;
+  // BL-COMPANION-SERVICES-DEMOTE (5/17): gateway 是中央服务, 不可重启.
+  if (id === "gateway") return;
+  // 10/19 (鸿波「hermes 也是本地服务, 为什么只读」): 员工点了才重启, 走 `hermes gateway restart`
+  // 等新进程就绪 (跟切模型同一条路)。健康探测失败仍然不自动强杀。
+  if (id === "hermes") return hermesRestart();
   const a = SERVICE_ACTIONS[id as LocalServiceId];
   if (!a) return;
   try {
@@ -252,7 +255,7 @@ function ServiceRowItem({ row }: { row: ServiceRow }) {
             员工 90% 撞 bug 时想做的就是"重启这个服务", 直接前置.
             BL-COMPANION-SERVICES-DEMOTE (5/17): Gateway 不显示重启按钮 —
             中央服务边缘不该有启停权. 留个占位灰字"只读"提示员工知道. */}
-        {row.id === "gateway" || row.id === "hermes" ? (
+        {row.id === "gateway" ? (
           <span
             style={{
               fontSize: 10,
@@ -261,7 +264,7 @@ function ServiceRowItem({ row }: { row: ServiceRow }) {
               border: "1px dashed var(--catfish-border)",
               borderRadius: "var(--radius-sm)",
             }}
-            title="由服务管理器负责生命周期，此处只读检测"
+            title="中央服务, 这里只看状态"
           >
             只读
           </span>
@@ -279,7 +282,7 @@ function ServiceRowItem({ row }: { row: ServiceRow }) {
               }
             }}
             disabled={restarting}
-            title={`重启 ${row.name}`}
+            title={row.id === "hermes" ? "重启小鲶 (正在进行的对话和定时任务会中断, 约半分钟)" : `重启 ${row.name}`}
             style={rowBtnStyle}
           >
             {restarting ? "…" : "↻"}

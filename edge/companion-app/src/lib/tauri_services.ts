@@ -25,6 +25,8 @@ export const gatewayStatus = () => rawInvoke<ServiceStatus>("gateway_status");
 // hermesKill : kill -9 后等 launchd 自动重启.
 export const hermesStatus = () => rawInvoke<ServiceStatus>("hermes_status");
 export const hermesKill = () => rawInvoke<void>("hermes_kill");
+// 10/19: 正常重启 (hermes gateway restart, 等新进程就绪才返回)
+export const hermesRestart = () => rawInvoke<void>("hermes_restart");
 export const reinstallHermesAgent = () =>
   rawInvoke<void>("reinstall_hermes_agent");
 export const getHermesBootstrapStatus = () =>
