@@ -521,8 +521,15 @@ async def _stream_chat_completion(
         # 新形状跟 OpenAI 一致: {"error": {"message": ..., "type": ...}}。
         # Companion 那边 chat.ts 老代码只认字符串, 已同步改成两种都认 ——
         # 新旧网关 / 新旧 Companion 交叉组合都不会瞎。
+        # 10/19: context_preflight 拦下的 413 (对话太长) 标成 context_length_exceeded,
+        # hermes 据此压缩后重发, 不再白重试 3 次再把报错给员工 (见 _sse_error_payload)。
+        _code = (
+            "context_length_exceeded"
+            if isinstance(e, HTTPException) and e.status_code == 413
+            else None
+        )
         yield "data: {}\n\n".format(
-            json.dumps(_app_mod()._sse_error_payload(friendly), ensure_ascii=False)
+            json.dumps(_app_mod()._sse_error_payload(friendly, _code), ensure_ascii=False)
         )
     finally:
         # BL-ABORT-PROPAGATE (7/23 达华 POC): 显式关 upstream iterator · 停 token.

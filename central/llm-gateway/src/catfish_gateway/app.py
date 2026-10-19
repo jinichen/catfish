@@ -411,9 +411,18 @@ def _looks_like_upstream_error_as_content(response_dict: dict) -> bool:
         return False
     return any(pat in content for pat in _UPSTREAM_ERROR_AS_CONTENT_PATTERNS)
 
-def _sse_error_payload(friendly: str) -> dict[str, dict[str, str]]:
-    """Build the OpenAI-compatible object shape used by streaming errors."""
-    return {"error": {"message": friendly, "type": "upstream_error"}}
+def _sse_error_payload(friendly: str, code: str | None = None) -> dict[str, dict[str, str]]:
+    """Build the OpenAI-compatible object shape used by streaming errors.
+
+    10/19: 流式错误的 HTTP 状态已经是 200 了, 客户端只能看 body 认是什么错。
+    「对话太长」要带上 OpenAI 标准的 `code: context_length_exceeded`, hermes 才会
+    当成上下文溢出 —— 压缩历史后重发; 不带的话它只看到一句中文, 当普通错误白重试
+    3 次 (每次同样被拦), 最后把报错甩给员工。
+    """
+    err = {"message": friendly, "type": "upstream_error"}
+    if code:
+        err["code"] = code
+    return {"error": err}
 
 # _KEEPALIVE_INTERVAL_SECS 的定义挪到了 chat_runtime (那儿才是唯一用它的地方),
 # 这里 re-export 回来保住 `app._KEEPALIVE_INTERVAL_SECS` 这个对外名字。
