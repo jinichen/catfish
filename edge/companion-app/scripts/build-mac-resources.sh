@@ -293,7 +293,14 @@ esac
 echo "  PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=$PW_PLATFORM"
 PLAYWRIGHT_BROWSERS_PATH="$PW_CACHE" \
 PLAYWRIGHT_HOST_PLATFORM_OVERRIDE="$PW_PLATFORM" \
-    "$PW_VENV/bin/python" -m playwright install chromium || { echo "❌ 下 Chromium 失败"; exit 1; }
+    # 10/19: 网络抖一下 (TLS 握手被断) 整个打包就失败 —— 跟别的下载一样重试 3 次
+    pw_ok=""
+    for pw_try in 1 2 3; do
+        "$PW_VENV/bin/python" -m playwright install chromium && { pw_ok=1; break; }
+        echo "  ⚠ 下 Chromium 第 $pw_try 次失败, 30 秒后重试"
+        sleep 30
+    done
+    [ -n "$pw_ok" ] || { echo "❌ 下 Chromium 失败 (重试 3 次)"; exit 1; }
 
 echo ""
 echo "=== [6c/6] tar pack chromium-embed · from $PW_CACHE ==="
