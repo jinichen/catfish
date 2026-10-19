@@ -224,6 +224,10 @@ if [ "$ARCH" = "x64" ]; then
         echo "❌ 打 Intel 包要 Rust 的 x86_64-apple-darwin 目标: rustup target add x86_64-apple-darwin"; exit 1; }
     OSSL_VERSION="3.5.9"   # 3.5 LTS; 换版本就会重编
     OSSL_DIR="/tmp/catfish-openssl-x64-$OSSL_VERSION"
+    # 10/19: 同上, 系统清 /tmp 可能只删掉一部分 (比如头文件) —— 库和关键头文件都在才算缓存可用, 不全就重编
+    for f in lib/libcrypto.a lib/libssl.a include/openssl/ssl.h include/openssl/opensslv.h; do
+        [ -f "$OSSL_DIR/$f" ] || { [ -d "$OSSL_DIR" ] && echo "  ⚠ OpenSSL 缓存缺 $f, 重编"; rm -rf "$OSSL_DIR"; break; }
+    done
     if [ ! -f "$OSSL_DIR/lib/libcrypto.a" ]; then
         echo "  → 编 Intel 版静态 OpenSSL $OSSL_VERSION (一次, 之后用缓存 $OSSL_DIR)..."
         OSSL_SRC="/tmp/catfish-openssl-src-$OSSL_VERSION"
@@ -239,6 +243,12 @@ if [ "$ARCH" = "x64" ]; then
     export OPENSSL_DIR="$OSSL_DIR"
     # 构建机原生 (arm64) Python, 只给 maturin 交叉编用
     HOST_PY_DIR="/tmp/catfish-host-py-$PYTHON_VERSION"
+    # 10/19: 只看 bin/python3 在不在不够 —— macOS 定期清 /tmp 里久没碰的文件, 会把标准库删掉一半、留下可执行文件,
+    # 之后每次打包都拿这个坏解释器编 cryptography, 报 "No module named 'encodings'"。真跑一下, 坏了就整个重下。
+    if [ -x "$HOST_PY_DIR/python/bin/python3" ] && ! "$HOST_PY_DIR/python/bin/python3" -c "import encodings, ssl, sqlite3" >/dev/null 2>&1; then
+        echo "  ⚠ $HOST_PY_DIR 里的 Python 不完整 (多半被系统清 /tmp 删了文件), 重新下载"
+        rm -rf "$HOST_PY_DIR"
+    fi
     if [ ! -x "$HOST_PY_DIR/python/bin/python3" ]; then
         mkdir -p "$HOST_PY_DIR"
         download_with_retry "https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_BUILD_TAG}/cpython-${PYTHON_VERSION}+${PYTHON_BUILD_TAG}-aarch64-apple-darwin-install_only.tar.gz" \
