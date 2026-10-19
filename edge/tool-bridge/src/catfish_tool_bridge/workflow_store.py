@@ -87,7 +87,8 @@ def list_runs(limit: int = 30, status: str | None = None) -> list[dict[str, Any]
         if not r or (status and r.get("status") != status):
             continue
         out.append({k: r.get(k) for k in ("run_id", "skill_path", "title", "status", "created_at", "updated_at",
-                                          "failed_step", "error")} | {"pending": r.get("pending")})
+                                          "failed_step", "failed_index", "error", "error_human", "error_fix",
+                                          "outcome", "trigger")} | {"pending": r.get("pending")})
         if len(out) >= limit:
             break
     return out
@@ -151,7 +152,7 @@ def list_drafts() -> list[dict[str, Any]]:
     for p in sorted(drafts_dir().glob("*.json")):
         d = _read(p)
         if d:
-            out.append({k: d.get(k) for k in ("name", "namespace", "description", "saved_at")}
+            out.append({k: d.get(k) for k in ("name", "title", "namespace", "description", "saved_at")}
                        | {"steps": len((d.get("workflow") or {}).get("steps") or [])})
     return out
 
@@ -161,14 +162,16 @@ def delete_draft(name: str) -> None:
     (drafts_dir() / f"{name}.json").unlink(missing_ok=True)
 
 
-def skill_md(name: str, ns: str, description: str, triggers: list[str], wf: dict[str, Any]) -> str:
-    """工作流的 SKILL.md: 小鲶靠 description / triggers 知道什么时候用, 正文告诉它怎么调。"""
+def skill_md(name: str, ns: str, description: str, triggers: list[str], wf: dict[str, Any], title: str = "") -> str:
+    """工作流的 SKILL.md: 小鲶靠 description / triggers 知道什么时候用, 正文告诉它怎么调。
+    title: 给员工看的中文名 (10/19), 界面上显示它而不是 ns/name。"""
     params = wf.get("params") or {}
-    fm = {"name": name, "version": wf.get("version") or "1.0.0", "kind": "workflow", "deprecated": False,
+    fm = {"name": name, **({"title": title} if title else {}),
+          "version": wf.get("version") or "1.0.0", "kind": "workflow", "deprecated": False,
           "namespace": ns, "author": "鲶鱼 工作流", "created": now()[:10], "updated": now()[:10],
           "description": description, "triggers": triggers}
     lines = ["---", yaml.safe_dump(fm, allow_unicode=True, sort_keys=False).strip(), "---", "",
-             f"# {name}", "", description, "",
+             f"# {name}" + (f" — {title}" if title else ""), "", description, "",
              "这是一个**工作流**: 步骤在同目录 workflow.yaml 里, 由运行器按顺序跑, 不要自己一步步去做。", "",
              "## 怎么调", "",
              f"`catfish_run_skill(skill_path=\"{ns}/{name}\", params={{...}})`", ""]
@@ -192,7 +195,8 @@ def skill_md(name: str, ns: str, description: str, triggers: list[str], wf: dict
     return "\n".join(lines)
 
 
-def install(name: str, ns: str, description: str, triggers: list[str], wf: dict[str, Any], root: Path) -> Path:
+def install(name: str, ns: str, description: str, triggers: list[str], wf: dict[str, Any], root: Path,
+            title: str = "") -> Path:
     """写进 skills 目录 (~/.catfish/skills/<ns>/<name>/), hermes 通过 external_dirs 看得到。"""
     d = root / ns / name
     if (d / "script.py").exists():
@@ -200,5 +204,5 @@ def install(name: str, ns: str, description: str, triggers: list[str], wf: dict[
     d.mkdir(parents=True, exist_ok=True)
     marked = {**wf, "steps": [{k: v for k, v in s.items() if not k.startswith("_")} for s in wf.get("steps") or []]}
     (d / "workflow.yaml").write_text(yaml.safe_dump(marked, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    (d / "SKILL.md").write_text(skill_md(name, ns, description, triggers, wf), encoding="utf-8")
+    (d / "SKILL.md").write_text(skill_md(name, ns, description, triggers, wf, title), encoding="utf-8")
     return d

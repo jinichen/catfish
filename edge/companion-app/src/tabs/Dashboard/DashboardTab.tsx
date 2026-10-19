@@ -46,7 +46,7 @@ import PerfCard from "./components/PerfCard";
 // 未来根治: sidebar 加 FTS5 搜索框替代 (P2).
 // import { SessionCleanupCard } from "./SessionCleanupCard";
 import CatalogCard from "./CatalogCard";
-import SkillsMcpCard from "./SkillsMcpCard";
+import SkillsLibraryCard from "./SkillsLibraryCard";
 import WorkflowsCard from "./WorkflowsCard";
 import ExpertsCard from "./ExpertsCard";
 // P3.3.18 (6/10): 部门 wiki publish 市场, 跟 SkillsMcpCard 并列 (manifesto 公理 2 例外)
@@ -329,7 +329,7 @@ export default function DashboardTab() {
             // P3.3.35 (6/12): "已装技能库" → "技能库" — "已装" 字眼跟"技能库"重复,
             //   跟"我的技能" 对仗 ("我的" vs "库"=系统的)
             { key: "my-skills", label: "🧰 我的技能", render: () => <MySkillsCard /> },
-            { key: "installed", label: "📦 技能库", render: () => <SkillsMcpCard /> },
+            { key: "installed", label: "📦 技能库", render: () => <SkillsLibraryCard /> },
             // 10/17: 工作流 —— 把教过的技能和鲶鱼会的能力串成一条 (docs/WORKFLOW-SKILL-PLAN.md)
             { key: "workflows", label: "🔗 工作流", render: () => <WorkflowsCard /> },
             // 10/18: 本机专家 —— 把工作流 / 技能交给一个只管这类事的小鲶分身 (docs/EXPERT-PACK-PLAN.md)

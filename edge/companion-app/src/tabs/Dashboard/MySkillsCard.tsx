@@ -32,10 +32,11 @@
  * 3 层安全扫描完全在 server 端 (skill_publish.py:205-244), 客户端 0 重做.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { useMySkills } from "../../hooks/useIdentity";
 import { toolBridgeCallTool } from "../../lib/tauri";
+import { backfillNamesOnce, skillNameSet } from "../../lib/tauri_skill_names";
 import type { SkillEntry, SkillNamespace } from "../../types/identity";
 
 // P3.3.24 (6/11): namespace 中文 label — 给员工看. unknown ns 走原名.
@@ -107,7 +108,9 @@ interface ShareState {
 
 export default function MySkillsCard() {
   // P3.3.34 (6/12): reload 删 — 装入口挪走后无 caller. publish 流程不动本机 file.
-  const { skills, error } = useMySkills();
+  const { skills, error, reload } = useMySkills();
+  // 10/19: 第一次打开时让小鲶给还没像样中文名的技能起个名 (每次启动最多一次), 起了就刷新
+  useEffect(() => { void backfillNamesOnce().then((changed) => { if (changed) reload(); }); }, [reload]);
   const totalSkills = skills?.reduce((sum, ns) => sum + ns.skills.length, 0) ?? 0;
   const totalNamespaces = skills?.length ?? 0;
   const hasAny = totalSkills > 0;
@@ -270,6 +273,7 @@ export default function MySkillsCard() {
                 ns={ns}
                 share={share}
                 onShare={startConfirm}
+                onRenamed={reload}
                 hideHeader={skills.length === 1}
               />
             ))}
@@ -428,19 +432,47 @@ function ShareStatusBar({
   );
 }
 
+/** 10/19: 改名 (写进 SKILL.md 的 title; Tauri 里 window.prompt 不能用, 就地一个输入框) */
+function RenameInline({ skill, onDone }: { skill: SkillEntry; onDone: (changed: boolean) => void }) {
+  const [v, setV] = useState(skill.title || "");
+  const [err, setErr] = useState<string | null>(null);
+  const save = async () => {
+    try {
+      await skillNameSet(skill.path, v);
+      onDone(true);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+  return (
+    <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+      <input autoFocus value={v} onChange={(e) => setV(e.target.value)} maxLength={30}
+             onKeyDown={(e) => { if (e.key === "Enter") void save(); if (e.key === "Escape") onDone(false); }}
+             style={{ fontSize: 12, padding: "1px 6px", border: "1px solid var(--catfish-border)", borderRadius: 4,
+                      background: "var(--catfish-bg)", color: "var(--catfish-text)", width: 180 }} />
+      <button type="button" onClick={() => void save()} style={{ fontSize: 11 }}>好</button>
+      <button type="button" onClick={() => onDone(false)} style={{ fontSize: 11 }}>取消</button>
+      {err && <span style={{ fontSize: 11, color: "var(--status-error, #dc2626)" }}>{err}</span>}
+    </span>
+  );
+}
+
 function NamespaceBlock({
   ns,
   share,
   onShare,
+  onRenamed,
   hideHeader = false,
 }: {
   ns: SkillNamespace;
   share: ShareState;
   onShare: (ns: string, skill: SkillEntry) => void;
+  onRenamed: () => void;
   // P3.3.35 (6/12): 只有 1 个 ns 时父调上 true, 这层不再显技术 ns 名 — 员工看
   //   "部门共享 department/" 是噪音, 跳过这行只显 skill list.
   hideHeader?: boolean;
 }) {
+  const [renaming, setRenaming] = useState<string | null>(null);
   return (
     <li
       style={{
@@ -508,13 +540,20 @@ function NamespaceBlock({
                 gap: "var(--space-2)",
               }}
             >
-              <span style={{ fontFamily: "var(--font-mono)", color: "var(--catfish-text)" }}>
-                {s.name}
-              </span>
-              {s.version && (
-                <span style={{ opacity: 0.6, fontSize: 11 }}>v{s.version}</span>
+              {/* 10/19: 中文名在前 (没有才显示目录名), 目录名小字; 点 ✏️ 改名 */}
+              {renaming === s.path ? (
+                <RenameInline skill={s} onDone={(changed) => { setRenaming(null); if (changed) onRenamed(); }} />
+              ) : (
+                <>
+                  <span style={{ color: "var(--catfish-text)", fontWeight: 600 }}>{s.title || s.name}</span>
+                  <button type="button" title="改个好认的名字" onClick={() => setRenaming(s.path)}
+                          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontSize: 11, opacity: 0.6 }}>✏️</button>
+                  {s.title && s.title !== s.name && (
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, opacity: 0.55 }}>{s.name}</span>
+                  )}
+                </>
               )}
-              {friendlyDesc && friendlyDesc !== "(no description)" && (
+              {(s.summary || (friendlyDesc && friendlyDesc !== "(no description)")) && (
                 <span
                   style={{
                     fontSize: 11,
@@ -525,7 +564,7 @@ function NamespaceBlock({
                     whiteSpace: "nowrap",
                   }}
                 >
-                  · {friendlyDesc.length > 60 ? friendlyDesc.slice(0, 60) + "…" : friendlyDesc}
+                  · {(() => { const t = s.summary || friendlyDesc; return t.length > 60 ? t.slice(0, 60) + "…" : t; })()}
                 </span>
               )}
               <button

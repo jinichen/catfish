@@ -223,6 +223,8 @@ pub(crate) fn handler(
             crate::commands::experts_local::expert_pack_export,
             crate::commands::experts_local::expert_pack_install,
             crate::commands::local_search_scope::local_search_pick_dir,
+            crate::commands::skill_names::skill_name_call,
+            crate::commands::workflows::workflow_schedule_set,
             crate::commands::sales::sales_pricebook_import,
             crate::commands::sales::sales_pricebook_get,
             crate::commands::sales::sales_quote_settings_get,

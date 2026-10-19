@@ -48,8 +48,30 @@ export interface Workflow {
   steps: WorkflowStep[];
 }
 
+/** 步骤链上的一环 (10/19): 中文名 + 会不会停下等确认 */
+export interface ChainStep {
+  id: string;
+  label: string;
+  block: "skill" | "action" | "xiaonian" | "";
+  outward: boolean;
+  each: boolean;
+}
+
+export interface ParamSpec {
+  key: string;
+  label: string;
+  type: string;
+  default: unknown;
+  required: boolean;
+}
+
 export interface WorkflowSummary {
   skill_path: string;
+  /** 给人看的中文名 / 一句话说明 (10/19) */
+  title: string;
+  summary: string;
+  chain: ChainStep[];
+  params: ParamSpec[];
   description: string;
   version: string;
   steps: number;
@@ -59,6 +81,7 @@ export interface WorkflowSummary {
 
 export interface DraftSummary {
   name: string;
+  title?: string;
   namespace: string;
   description: string;
   saved_at: string;
@@ -83,7 +106,15 @@ export interface RunSummary {
   created_at: string;
   updated_at: string;
   failed_step: string | null;
+  failed_index?: number | null;
+  /** 原始报错 (给 IT) / 员工看得懂的说法 / 怎么办 (10/19) */
   error: string | null;
+  error_human?: string | null;
+  error_fix?: "conditions" | "workflow" | "retry" | "login" | null;
+  /** 跑完了做成了什么 */
+  outcome?: string | null;
+  /** trial 试跑 / ui 界面上点的 / chat 小鲶跑的 (对话里或定时) */
+  trigger?: "trial" | "ui" | "chat" | null;
   pending: Pending | null;
 }
 
@@ -126,5 +157,8 @@ export const workflowRunGet = (runId: string) => call<RunDetail>("run_get", { ru
 export const workflowPending = () => call<{ runs: RunSummary[] }>("pending");
 export const workflowConfirm = (runId: string, approve: boolean) => call<RunResult>("confirm", { run_id: runId, approve });
 export const workflowResume = (runId: string) => call<RunResult>("resume", { run_id: runId });
+/** 定时: 建一个 hermes 定时任务, 到点让小鲶跑这个工作流 (schedule = 5 段 cron) */
+export const workflowScheduleSet = (skillPath: string, title: string, schedule: string) =>
+  invoke<void>("workflow_schedule_set", { skillPath, title, schedule });
 export const workflowSetAutoConfirm = (skillPath: string, on: boolean) =>
   call<{ auto_confirm_outward: boolean }>("set_auto_confirm", { skill_path: skillPath, on });

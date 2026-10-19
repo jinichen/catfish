@@ -23,10 +23,13 @@ use super::expert_bots_profiles::{
 use super::expert_bots_types::{BotRegistration, ModelPolicy, ModelPolicyMode};
 use crate::services::tool_bridge_rpc;
 
-const RPC_TIMEOUT: Duration = Duration::from_secs(60);
+/// 「让小鲶帮我填」要调一次模型 (tool-bridge 那边最多 120s), 留点余量
+const RPC_TIMEOUT: Duration = Duration::from_secs(150);
 /// 设置页直接转给 tool-bridge 的动作。安装 / 导出走下面单独的命令 (要弹文件框、装完要落 profile)。
 const PASSTHROUGH: &[&str] = &[
     "catalog", "list", "get", "save",
+    // 10/19 让小鲶帮我填: 按名字 + 简介起草 (不保存)
+    "suggest",
     // 10/18 专家包 (第二阶段): 打包预览 / 看包 / 发布到中央 / 市场 / 我提交的 / 撤回
     "pack_preview", "pack_inspect", "pack_publish", "pack_market", "pack_mine", "pack_withdraw",
 ];

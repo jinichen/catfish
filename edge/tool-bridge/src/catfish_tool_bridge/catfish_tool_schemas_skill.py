@@ -667,6 +667,10 @@ SKILL_TOOLS: List[Dict[str, Any]] = [
                     "type": "string",
                     "description": "skill 名, 小写字母数字横线 (例 'eis-login'). 字母开头.",
                 },
+                "title": {
+                    "type": "string",
+                    "description": "给员工看的中文名, 4-12 字, 说清做什么 (例「登录 EIS 门户」). 界面上显示它.",
+                },
                 "namespace": {
                     "type": "string",
                     "enum": ["department", "personal", "team"],

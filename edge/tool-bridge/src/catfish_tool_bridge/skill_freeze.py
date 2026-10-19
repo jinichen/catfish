@@ -403,6 +403,13 @@ def freeze_skill(args: dict[str, Any]) -> dict[str, Any]:
         params=params,
     )
     (skill_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
+    # 10/19: 给员工看的中文名 (界面显示它, 不显示 eis-login 这种目录名)
+    if str(args.get("title") or "").strip():
+        from . import skill_names  # noqa: PLC0415
+        try:
+            skill_names.set_title(skill_dir, str(args["title"]))
+        except ValueError:
+            pass
 
     # 4) install_to_hermes — 仅 target='workspace' + run_install=True 时跑
     # 5/21 方案 1: target='local' 已经通过 external_dirs 让 hermes 看到了, 不需要

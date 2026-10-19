@@ -9,7 +9,7 @@
  * list_skills tauri command 死 · list_skills_blocking 死) 整条删除.
  */
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   fetchIdentity,
   fetchInstalledSkills,
@@ -61,7 +61,8 @@ export function useMySkills() {
     };
   }, [tick]);
 
-  const reload = () => setTick((t) => t + 1);
+  // 10/19: 稳定引用 —— 组件里 useEffect(..., [reload]) 不会每次渲染都重跑 (技能页「一次性补名」靠它)
+  const reload = useCallback(() => setTick((t) => t + 1), []);
 
   return { skills, error, reload };
 }
@@ -92,7 +93,8 @@ export function useInstalledSkillsAndMcp() {
     };
   }, [tick]);
 
-  const reload = () => setTick((t) => t + 1);
+  // 10/19: 稳定引用 —— 组件里 useEffect(..., [reload]) 不会每次渲染都重跑 (技能页「一次性补名」靠它)
+  const reload = useCallback(() => setTick((t) => t + 1), []);
 
   return { skills, mcps, error, reload };
 }

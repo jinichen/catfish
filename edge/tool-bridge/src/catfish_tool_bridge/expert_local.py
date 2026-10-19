@@ -287,13 +287,97 @@ def catalog() -> dict[str, Any]:
                 continue
             seen.add(path)
             fm = _frontmatter(md)
-            item = {"skill_path": path, "description": str(fm.get("description") or "")[:160]}
+            from . import skill_names  # noqa: PLC0415
+            item = {"skill_path": path, "description": str(fm.get("description") or "")[:160],
+                    **skill_names.skill_display(d), "source": d.parent.name}
             if (d / "workflow.yaml").exists():
                 workflows.append(item)
             else:
                 skills.append({**item, "runnable": (d / "script.py").exists()})
     return {"ok": True, "workflows": workflows, "skills": skills,
             "tool_groups": [{"id": k, "label": v["label"]} for k, v in TOOL_GROUPS.items()]}
+
+
+# ── 让小鲶帮我填 (10/19) ─────────────────────────────────────────
+
+_SUGGEST_PROMPT = """员工要在鲶鱼里搭一个「专家」—— 只管某一类事的小鲶分身。根据名字和一句话简介, 从下面员工已有的工作流 / 技能里挑它该用的, 写好选路。
+
+名字: {name}
+简介: {description}
+
+员工已有的 (编号 · 中文名 · 说明):
+{items}
+
+能力组 (可多选): {groups}
+
+规则:
+- 只能从上面的编号里挑; 跟简介无关的不要选
+- routes 是「它接哪些活」: 每条 when 写员工会怎么说 (一句), use 写 "w<编号>" (工作流) / "s<编号>" (技能) / "knowledge" (查知识库回答) / "decline" (不归它管, 请回小鲶)
+- 至少一条走工作流或技能的; 最后可以加一条 decline 写明哪些相近的事不归它管
+- ask 是「开始前先确认什么」, 没有就空列表
+- persona: 两三句人设 (我是谁、说话风格、不碰什么)
+- quick_prompts: 员工打开它时的 2-3 句快捷问法
+只交回 JSON:
+{{"workflows": ["w1"], "skills": ["s2"], "routes": [{{"when": "...", "use": "w1", "ask": []}}], "tool_groups": ["knowledge"],
+  "persona": "...", "quick_prompts": ["..."]}}
+"""
+
+
+def suggest(name: str, description: str, *, llm=None) -> dict[str, Any]:
+    """按名字 + 简介起草一份专家定义 (不保存, 界面上员工看 / 改 / 存)。只会用员工已有的工作流 / 技能。"""
+    from . import workflow_xiaonian  # noqa: PLC0415
+
+    name, description = str(name or "").strip(), str(description or "").strip()
+    if not name or not description:
+        raise ValueError("先填名字和一句话简介, 小鲶照着起草")
+    cat = catalog()
+    wf, sk = cat["workflows"][:40], cat["skills"][:60]
+    lines = [f"w{i} · {w['title']} · {w['summary'] or w['description']}"[:160] for i, w in enumerate(wf, 1)]
+    lines += [f"s{i} · {s['title']} · {s['summary'] or s['description']}"[:160] for i, s in enumerate(sk, 1)]
+    if not lines:
+        raise ValueError("你还没有工作流或技能 —— 先教小鲶做一件事或建一个工作流, 再来搭专家")
+    groups = ", ".join(f"{g['id']} ({g['label']})" for g in cat["tool_groups"])
+    raw = (llm or workflow_xiaonian._call_llm)(_SUGGEST_PROMPT.format(name=name, description=description,
+                                                                        items="\n".join(lines), groups=groups))
+    got = workflow_xiaonian.parse_json(raw)
+
+    def pick(ref: str) -> str | None:
+        ref = str(ref or "").strip()
+        try:
+            if ref.startswith("w") and 1 <= int(ref[1:]) <= len(wf):
+                return "workflow:" + wf[int(ref[1:]) - 1]["skill_path"]
+            if ref.startswith("s") and 1 <= int(ref[1:]) <= len(sk):
+                return "skill:" + sk[int(ref[1:]) - 1]["skill_path"]
+        except ValueError:
+            return None
+        return ref if ref in ("knowledge", "decline") else None
+
+    picked_wf = [p.split(":", 1)[1] for p in (pick(r) for r in got.get("workflows") or []) if p and p.startswith("workflow:")]
+    picked_sk = [p.split(":", 1)[1] for p in (pick(r) for r in got.get("skills") or []) if p and p.startswith("skill:")]
+    routes = []
+    for r in got.get("routes") or []:
+        if not isinstance(r, dict):
+            continue
+        use = pick(r.get("use"))
+        when = str(r.get("when") or "").strip()[:120]
+        if not use or not when:
+            continue
+        kind, _, path = use.partition(":")
+        if kind == "workflow" and path not in picked_wf:
+            picked_wf.append(path)
+        if kind == "skill" and path not in picked_sk:
+            picked_sk.append(path)
+        routes.append({"when": when, "use": use,
+                       "ask": [str(a).strip()[:80] for a in r.get("ask") or [] if str(a).strip()][:5]})
+    if not any(r["use"].startswith(("workflow:", "skill:")) for r in routes):
+        raise ValueError("小鲶没在你已有的工作流 / 技能里找到合适的 —— 简介写具体些再试, 或者先教会它这件事")
+    groups_ok = [g for g in dict.fromkeys(got.get("tool_groups") or []) if g in TOOL_GROUPS]
+    if any(r["use"] == "knowledge" for r in routes) and "knowledge" not in groups_ok:
+        groups_ok.append("knowledge")
+    return {"ok": True, "suggestion": {
+        "workflows": list(dict.fromkeys(picked_wf)), "skills": list(dict.fromkeys(picked_sk)), "routes": routes[:MAX_ROUTES],
+        "tool_groups": groups_ok, "persona": str(got.get("persona") or "").strip()[:2000],
+        "quick_prompts": [str(q).strip()[:80] for q in got.get("quick_prompts") or [] if str(q).strip()][:4]}}
 
 
 def pim_handlers(params: dict[str, Any]) -> dict[str, Any]:
@@ -306,5 +390,6 @@ def pim_handlers(params: dict[str, Any]) -> dict[str, Any]:
         "pim/expert_save": lambda: {"ok": True, "expert": save(params.get("expert") or {})},
         "pim/expert_compile": lambda: compile(eid),
         "pim/expert_delete": lambda: (delete(eid), {"ok": True})[1],
+        "pim/expert_suggest": lambda: suggest(str(params.get("name") or ""), str(params.get("description") or "")),
         **expert_pack.pim_handlers(params),
     }

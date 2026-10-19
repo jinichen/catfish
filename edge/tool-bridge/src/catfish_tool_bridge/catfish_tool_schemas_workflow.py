@@ -33,6 +33,7 @@ WORKFLOW_TOOLS: List[Dict[str, Any]] = [
                 "action": {"type": "string", "enum": ["catalog", "list", "draft", "trial", "save", "runs", "status", "resume"]},
                 "name": {"type": "string", "description": "draft / trial / save: 工作流名字, 小写字母数字横线 (例 weekly-qual-mail)"},
                 "namespace": {"type": "string", "enum": ["personal", "department"], "description": "draft: 默认 personal"},
+                "title": {"type": "string", "description": "draft: 给员工看的中文名, 4-12 字 (例「每周资质邮件摘要」), 界面上显示它"},
                 "description": {"type": "string", "description": "draft: 一句话 —— 什么时候用这个工作流"},
                 "triggers": {"type": "array", "items": {"type": "string"}, "description": "draft: 员工可能怎么说 (例「理一下资质邮件」)"},
                 "workflow": {

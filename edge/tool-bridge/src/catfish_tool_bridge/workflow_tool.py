@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 from typing import Any
 
@@ -77,7 +78,24 @@ def runnable_skills() -> list[dict[str, Any]]:
     return out
 
 
+def chain(wf: dict[str, Any]) -> list[dict[str, Any]]:
+    """步骤链 (界面画成「搜邮件 → 读正文 → … → 🔔推送微信」): 每步中文名 + 是不是对外 (会停下等确认)。"""
+    return [{"id": s.get("id"), "label": engine.step_label(s), "block": engine.block_of(s),
+             "outward": engine.is_outward(s) or bool(s.get("confirm")), "each": "for_each" in s}
+            for s in wf.get("steps") or [] if isinstance(s, dict)]
+
+
+def param_specs(wf: dict[str, Any]) -> list[dict[str, Any]]:
+    out = []
+    for k, spec in (wf.get("params") or {}).items():
+        spec = spec if isinstance(spec, dict) else {}
+        out.append({"key": k, "label": spec.get("label") or k, "type": spec.get("type", "text"),
+                    "default": spec.get("default"), "required": bool(spec.get("required"))})
+    return out
+
+
 def workflows() -> list[dict[str, Any]]:
+    from . import skill_names  # noqa: PLC0415
     out = []
     for root in _roots():
         for y in sorted(root.glob("*/*/workflow.yaml")):
@@ -88,8 +106,10 @@ def workflows() -> list[dict[str, Any]]:
             except (OSError, ValueError):
                 continue
             path = f"{d.parent.name}/{d.name}"
-            out.append({"skill_path": path, "description": fm.get("description") or "", "version": wf.get("version"),
-                        "steps": len(wf.get("steps") or []), "auto_confirm_outward": store.auto_confirm_outward(path),
+            out.append({"skill_path": path, **skill_names.skill_display(d),
+                        "description": fm.get("description") or "", "version": wf.get("version"),
+                        "steps": len(wf.get("steps") or []), "chain": chain(wf), "params": param_specs(wf),
+                        "auto_confirm_outward": store.auto_confirm_outward(path),
                         "has_outward": any(engine.is_outward(s) or s.get("confirm") for s in wf.get("steps") or [])})
     return out
 
@@ -106,8 +126,9 @@ def _draft_from(args: dict[str, Any]) -> dict[str, Any]:
     desc = str(args.get("description") or "").strip()
     if not desc:
         raise ValueError("要写一句描述: 什么时候用这个工作流")
-    return {"name": args.get("name"), "namespace": args.get("namespace") or "personal", "description": desc[:300],
-            "triggers": triggers, "workflow": wf}
+    title = re.sub(r"\s+", " ", str(args.get("title") or "")).strip()[:30]
+    return {"name": args.get("name"), "title": title, "namespace": args.get("namespace") or "personal",
+            "description": desc[:300], "triggers": triggers, "workflow": wf}
 
 
 def _with_outward_marks(wf: dict[str, Any]) -> dict[str, Any]:
@@ -127,8 +148,8 @@ def save_draft(args: dict[str, Any]) -> dict[str, Any]:
 
 def trial(name: str, params: dict[str, Any]) -> dict[str, Any]:
     d = store.load_draft(name)
-    return engine.start(f"draft:{d['name']}", d["workflow"], params or {}, title=f"{d['name']} (试跑)",
-                        skill_lookup=skill_lookup)
+    return engine.start(f"draft:{d['name']}", d["workflow"], params or {},
+                        title=f"{d.get('title') or d['name']} (试跑)", skill_lookup=skill_lookup, trigger="trial")
 
 
 def save(name: str) -> dict[str, Any]:
@@ -137,7 +158,7 @@ def save(name: str) -> dict[str, Any]:
     if problems:
         return {"ok": False, "error": "还有问题, 不能保存: " + "; ".join(problems[:6]), "problems": problems}
     path = store.install(d["name"], d["namespace"], d["description"], d["triggers"],
-                         _with_outward_marks(d["workflow"]), _install_root())
+                         _with_outward_marks(d["workflow"]), _install_root(), title=d.get("title") or "")
     store.delete_draft(d["name"])
     return {"ok": True, "skill_path": f"{d['namespace']}/{d['name']}", "path": str(path),
             "summary": f"工作流 {d['namespace']}/{d['name']} 保存好了, 以后说一句就能跑 (catfish_run_skill)。"}
@@ -154,17 +175,19 @@ def update_installed(skill_path: str, wf: Any) -> dict[str, Any]:
         return {"ok": False, "problems": problems}
     fm = _frontmatter(d / "SKILL.md")
     store.install(d.name, d.parent.name, str(fm.get("description") or ""), list(fm.get("triggers") or []),
-                  _with_outward_marks(wf), d.parent.parent)
+                  _with_outward_marks(wf), d.parent.parent, title=str(fm.get("title") or ""))
     return {"ok": True}
 
 
-def run_installed(skill_dir: Path, skill_path: str, params: dict[str, Any]) -> dict[str, Any]:
-    """catfish_run_skill 遇到 workflow.yaml 交到这里。"""
+def run_installed(skill_dir: Path, skill_path: str, params: dict[str, Any], trigger: str = "chat") -> dict[str, Any]:
+    """catfish_run_skill 遇到 workflow.yaml 交到这里 (界面「现在跑一次」也走这里, trigger=ui)。"""
+    from . import skill_names  # noqa: PLC0415
     try:
         wf = engine.load(skill_dir)
     except (OSError, ValueError) as e:
         return {"ok": False, "error": str(e), "files": [], "summary": ""}
-    return engine.start(skill_path, wf, params or {}, skill_lookup=skill_lookup)
+    return engine.start(skill_path, wf, params or {}, title=skill_names.skill_title(skill_dir),
+                        skill_lookup=skill_lookup, trigger=trigger)
 
 
 def dispatch(name: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -216,7 +239,7 @@ def pim_handlers(params: dict[str, Any]) -> dict[str, Any]:
         "pim/workflow_trial": lambda: trial(str(params.get("name") or ""), params.get("params") or {}),
         "pim/workflow_save": lambda: save(str(params.get("name") or "")),
         "pim/workflow_run": lambda: _run(sp, params.get("params") or {}),
-        "pim/workflow_runs": lambda: {"ok": True, "runs": store.list_runs(int(params.get("limit") or 30), params.get("status"))},
+        "pim/workflow_runs": lambda: {"ok": True, "runs": runs_for_ui(int(params.get("limit") or 30), params.get("status"))},
         "pim/workflow_run_get": lambda: store.load_run(rid),
         "pim/workflow_pending": lambda: {"ok": True, "runs": store.list_runs(50, "waiting_confirm")},
         "pim/workflow_confirm": lambda: engine.confirm(rid, bool(params.get("approve"))),
@@ -225,12 +248,39 @@ def pim_handlers(params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def runs_for_ui(limit: int, status: str | None) -> list[dict[str, Any]]:
+    """运行记录给界面: 10/19 之前失败的没存人话, 按原始报错补一句 (只在内存里补, 不改记录文件)。"""
+    out = store.list_runs(limit, status)
+    # 运行记录里存的是当时的名字 (老记录是目录名 weekly-xxx); 显示现在的中文名
+    names = {w["skill_path"].split("/", 1)[1]: w["title"] for w in workflows() if w.get("title")}
+    names.update({f"{w['skill_path']}": w["title"] for w in workflows() if w.get("title")})
+    for r in out:
+        sp = str(r.get("skill_path") or "")
+        cur = names.get(sp) or names.get(sp.removeprefix("draft:"))
+        if cur:
+            r["title"] = cur + (" (试跑)" if sp.startswith("draft:") or str(r.get("title") or "").endswith("(试跑)") else "")
+        if r.get("status") == "failed" and not r.get("error_human"):
+            try:
+                got = engine.humanize_legacy(store.load_run(r["run_id"]))
+            except (OSError, ValueError, LookupError):
+                got = None
+            if got:
+                r["error_human"], r["error_fix"] = got
+        if r.get("status") == "done" and not r.get("outcome"):
+            try:
+                r["outcome"] = engine.outcome(store.load_run(r["run_id"]))
+            except (OSError, ValueError, LookupError):
+                pass
+    return out
+
+
 def _get(skill_path: str) -> dict[str, Any]:
     d = skill_lookup(skill_path)
     if d is None or not (d / "workflow.yaml").exists():
         raise LookupError(f"没有这个工作流: {skill_path}")
     fm = _frontmatter(d / "SKILL.md")
-    return {"ok": True, "skill_path": skill_path, "description": fm.get("description") or "",
+    from . import skill_names  # noqa: PLC0415
+    return {"ok": True, "skill_path": skill_path, **skill_names.skill_display(d), "description": fm.get("description") or "",
             "triggers": fm.get("triggers") or [], "workflow": engine.load(d),
             "auto_confirm_outward": store.auto_confirm_outward(skill_path)}
 
@@ -239,4 +289,4 @@ def _run(skill_path: str, params: dict[str, Any]) -> dict[str, Any]:
     d = skill_lookup(skill_path)
     if d is None or not (d / "workflow.yaml").exists():
         raise LookupError(f"没有这个工作流: {skill_path}")
-    return run_installed(d, skill_path, params)
+    return run_installed(d, skill_path, params, trigger="ui")

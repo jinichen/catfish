@@ -10,7 +10,7 @@ import { useEffect, useState } from "react";
 import { refreshExperts, selectExpert } from "../../lib/expertChat";
 import {
   expertApply, expertCatalog, expertGet, expertList, expertPackExport, expertPackInspect, expertPackInstall, expertPackPickFile,
-  expertRemove, expertSave,
+  expertRemove, expertSave, expertSuggest,
   type ExpertCatalog, type ExpertDef, type ExpertRoute, type ExpertSummary, type HubExpert, type PackInspect,
 } from "../../lib/tauri_experts";
 import { useUIStore } from "../../store/ui";
@@ -27,17 +27,54 @@ const blank = (): ExpertDef => ({
 
 const small = { ...inputStyle, padding: "4px 8px", fontSize: 12 };
 
-function routeLabel(use: string): string {
-  if (use === "knowledge") return "查知识库回答";
-  if (use === "decline") return "不接 (请回小鲶)";
-  return use.replace(/^workflow:/, "工作流 · ").replace(/^skill:/, "技能 · ");
+/** 10/19: 下拉 / 列表里显示中文名, 不显示 department/eis-login 这种路径 */
+function nameOf(cat: ExpertCatalog | null, path: string): string {
+  const it = cat?.workflows.find((w) => w.skill_path === path) ?? cat?.skills.find((x) => x.skill_path === path);
+  return it?.title || path;
 }
 
-function Editor({ initial, isNew, cat, onClose, onSaved }: {
+function routeLabel(use: string, cat: ExpertCatalog | null): string {
+  if (use === "knowledge") return "查知识库回答";
+  if (use === "decline") return "不接 (请回小鲶)";
+  if (use.startsWith("workflow:")) return `工作流 · ${nameOf(cat, use.slice(9))}`;
+  if (use.startsWith("skill:")) return `技能 · ${nameOf(cat, use.slice(6))}`;
+  return use;
+}
+
+const SOURCE: Record<string, string> = { personal: "我的", department: "部门", external: "外部" };
+
+function Tag({ children, tone }: { children: string; tone?: string }) {
+  return (
+    <span style={{ fontSize: 10, padding: "0 6px", borderRadius: 999, border: "1px solid var(--catfish-border)",
+                   color: tone ?? "var(--catfish-text-muted)", whiteSpace: "nowrap" }}>{children}</span>
+  );
+}
+
+function PickRow({ checked, onToggle, title, summary, tags, path }: {
+  checked: boolean; onToggle: () => void; title: string; summary: string; tags: string[]; path: string;
+}) {
+  return (
+    <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 12, padding: "4px 0", cursor: "pointer" }} title={path}>
+      <input type="checkbox" checked={checked} onChange={onToggle} style={{ marginTop: 2 }} />
+      <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+        <span style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontWeight: 600 }}>{title}</span>
+          {tags.map((t) => <Tag key={t}>{t}</Tag>)}
+        </span>
+        {summary && <span style={{ color: "var(--catfish-text-muted)" }}>{summary}</span>}
+      </span>
+    </label>
+  );
+}
+
+export function Editor({ initial, isNew, cat, onClose, onSaved }: {
   initial: ExpertDef; isNew: boolean; cat: ExpertCatalog; onClose: () => void; onSaved: () => void;
 }) {
   const [d, setD] = useState<ExpertDef>(initial);
   const [busy, setBusy] = useState(false);
+  const [q, setQ] = useState("");
+  const [drafting, setDrafting] = useState(false);
+  const setTab = useUIStore((s) => s.setActiveTab);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const set = (p: Partial<ExpertDef>) => setD({ ...d, ...p });
@@ -46,7 +83,7 @@ function Editor({ initial, isNew, cat, onClose, onSaved }: {
   const uses = [...d.workflows.map((w) => `workflow:${w}`), ...d.skills.map((s) => `skill:${s}`), "knowledge", "decline"];
   const setRoute = (i: number, p: Partial<ExpertRoute>) => set({ routes: d.routes.map((r, j) => (j === i ? { ...r, ...p } : r)) });
 
-  async function saveApply() {
+  async function saveApply(thenTry = false) {
     setBusy(true);
     setError(null);
     setMsg("保存中…");
@@ -58,6 +95,13 @@ function Editor({ initial, isNew, cat, onClose, onSaved }: {
       await refreshExperts();
       setMsg("好了, 在工作台「找谁」里能找到它");
       onSaved();
+      if (thenTry) {
+        // 10/19 试一下: 保存生效后直接去工作台跟它聊
+        selectExpert(`expert-${expert.id}`);
+        setTab("chat");
+        window.dispatchEvent(new CustomEvent("catfish:new-chat"));
+        onClose();
+      }
     } catch (e) {
       setMsg(null);
       setError(e instanceof Error ? e.message : String(e));
@@ -66,42 +110,72 @@ function Editor({ initial, isNew, cat, onClose, onSaved }: {
     }
   }
 
+  async function draftWithXiaonian() {
+    setDrafting(true);
+    setError(null);
+    setMsg("小鲶在看你有哪些工作流和技能, 起草中 (十几秒)…");
+    try {
+      const { suggestion } = await expertSuggest(d.name, d.description);
+      setD({ ...d, ...suggestion, persona: d.persona.trim() ? d.persona : suggestion.persona,
+             quick_prompts: d.quick_prompts.length ? d.quick_prompts : suggestion.quick_prompts });
+      setMsg("起草好了: 看看勾的对不对、它接的活写得准不准, 改好再保存");
+    } catch (e) {
+      setMsg(null);
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDrafting(false);
+    }
+  }
+
+  const match = (it: { title: string; summary: string; skill_path: string }) =>
+    !q.trim() || `${it.title} ${it.summary} ${it.skill_path}`.toLowerCase().includes(q.trim().toLowerCase());
+
   return (
     <Overlay title={isNew ? "新建专家" : `编辑 · ${initial.name}`} onClose={onClose} width={820}>
       {/* 10/18: id 不让员工填 —— 新建时保存那一刻自动生成 (内部目录名), 只填名字 */}
       <input value={d.name} onChange={(e) => set({ name: e.target.value })} placeholder="名字, 例「资质专员」" style={inputStyle} />
       <input value={d.description} onChange={(e) => set({ description: e.target.value })}
              placeholder="一句话: 它管什么 (小鲶靠这句话决定什么时候推荐它)" style={inputStyle} />
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <Btn kind="ghost" disabled={busy || drafting || !d.name.trim() || !d.description.trim()} onClick={() => void draftWithXiaonian()}>
+          {drafting ? "起草中…" : "✨ 让小鲶帮我填"}
+        </Btn>
+        <span style={muted}>填好名字和一句话, 小鲶按它挑工作流 / 技能、写好它接哪些活, 你再改</span>
+      </div>
       <textarea rows={4} value={d.persona} onChange={(e) => set({ persona: e.target.value })} style={{ ...inputStyle, resize: "vertical" }}
                 placeholder="人设 (可不填): 我是谁、说话风格、不碰什么。不填就用名字 + 一句话生成。选路和核对会自动接在后面。" />
 
-      <strong style={{ fontSize: 13 }}>它用哪些工作流 / 技能</strong>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, maxHeight: 200, overflowY: "auto" }}>
-        {cat.workflows.map((w) => (
-          <label key={w.skill_path} style={{ fontSize: 12, display: "flex", gap: 6 }} title={w.description}>
-            <input type="checkbox" checked={d.workflows.includes(w.skill_path)} onChange={() => toggle("workflows", w.skill_path)} />
-            🔗 {w.skill_path}
-          </label>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <strong style={{ fontSize: 13 }}>它用哪些工作流 / 技能</strong>
+        {cat.workflows.length + cat.skills.length > 8 && (
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜一下…" style={{ ...small, width: 180 }} />
+        )}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px", maxHeight: 260, overflowY: "auto" }}>
+        {cat.workflows.filter(match).length > 0 && <span style={{ ...muted, gridColumn: "1 / -1" }}>工作流 (一句话整条跑完)</span>}
+        {cat.workflows.filter(match).map((w) => (
+          <PickRow key={w.skill_path} path={w.skill_path} checked={d.workflows.includes(w.skill_path)} onToggle={() => toggle("workflows", w.skill_path)}
+                   title={w.title || w.skill_path} summary={w.summary} tags={[SOURCE[w.source] ?? w.source]} />
         ))}
-        {cat.skills.map((s) => (
-          <label key={s.skill_path} style={{ fontSize: 12, display: "flex", gap: 6 }} title={s.description}>
-            <input type="checkbox" checked={d.skills.includes(s.skill_path)} onChange={() => toggle("skills", s.skill_path)} />
-            {s.runnable ? "⚙️" : "📄"} {s.skill_path}{s.runnable ? "" : " (说明型)"}
-          </label>
+        {cat.skills.filter(match).length > 0 && <span style={{ ...muted, gridColumn: "1 / -1", marginTop: 6 }}>技能</span>}
+        {cat.skills.filter(match).map((s) => (
+          <PickRow key={s.skill_path} path={s.skill_path} checked={d.skills.includes(s.skill_path)} onToggle={() => toggle("skills", s.skill_path)}
+                   title={s.title || s.skill_path} summary={s.summary}
+                   tags={[SOURCE[s.source] ?? s.source, s.runnable ? "能自动跑" : "照说明一步步做"]} />
         ))}
         {cat.workflows.length + cat.skills.length === 0 && <span style={muted}>还没有工作流或技能。先去「工作流」tab 或跟小鲶教一个。</span>}
       </div>
 
-      <strong style={{ fontSize: 13 }}>选路: 什么事走哪条路</strong>
+      <strong style={{ fontSize: 13 }}>它接哪些活 (员工这么说 → 它这么做)</strong>
       {d.routes.map((r, i) => (
         <div key={i} style={{ display: "grid", gridTemplateColumns: "2fr 1.5fr 1.5fr auto", gap: 6 }}>
           <input value={r.when} onChange={(e) => setRoute(i, { when: e.target.value })} placeholder="员工要…, 例「审资质待办」" style={small} />
           <select value={r.use} onChange={(e) => setRoute(i, { use: e.target.value })} style={small}>
             <option value="">走哪条路…</option>
-            {uses.map((u) => <option key={u} value={u}>{routeLabel(u)}</option>)}
+            {uses.map((u) => <option key={u} value={u}>{routeLabel(u, cat)}</option>)}
           </select>
           <input value={(r.ask ?? []).join("、")} onChange={(e) => setRoute(i, { ask: e.target.value.split(/[、,，]/).map((x) => x.trim()).filter(Boolean) })}
-                 placeholder="缺了先问 (可不填), 顿号隔开" style={small} />
+                 placeholder="开始前先确认什么 (可不填) 例: 处理全部还是某个项目" style={small} />
           <Btn kind="ghost" onClick={() => set({ routes: d.routes.filter((_, j) => j !== i) })}>删</Btn>
         </div>
       ))}
@@ -112,7 +186,7 @@ function Editor({ initial, isNew, cat, onClose, onSaved }: {
         <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 2fr auto", gap: 6 }}>
           <select value={c.after} onChange={(e) => set({ checks: d.checks.map((x, j) => (j === i ? { ...x, after: e.target.value } : x)) })} style={small}>
             <option value="">每次交付前</option>
-            {d.workflows.map((w) => <option key={w} value={w}>跑完 {w} 后</option>)}
+            {d.workflows.map((w) => <option key={w} value={w}>跑完「{nameOf(cat, w)}」后</option>)}
           </select>
           <input value={c.verify} onChange={(e) => set({ checks: d.checks.map((x, j) => (j === i ? { ...x, verify: e.target.value } : x)) })}
                  placeholder="要核对什么, 例「每条都写明通过 / 退回和原因」" style={small} />
@@ -149,7 +223,8 @@ function Editor({ initial, isNew, cat, onClose, onSaved }: {
       {msg && <span style={muted}>{msg}</span>}
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
         <Btn kind="ghost" disabled={busy} onClick={onClose}>取消</Btn>
-        <Btn kind="primary" disabled={busy || !d.name.trim()} onClick={() => void saveApply()}>{busy ? "处理中…" : "保存并生效"}</Btn>
+        <Btn kind="ghost" disabled={busy || drafting || !d.name.trim()} onClick={() => void saveApply(true)}>保存并去试一下</Btn>
+        <Btn kind="primary" disabled={busy || drafting || !d.name.trim()} onClick={() => void saveApply()}>{busy ? "处理中…" : "保存并生效"}</Btn>
       </div>
     </Overlay>
   );

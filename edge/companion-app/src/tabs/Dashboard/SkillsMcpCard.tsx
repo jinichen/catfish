@@ -244,7 +244,7 @@ export default function SkillsMcpCard() {
             style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}
             title="装好可直接用的 skill — 团队审定 / 内置 / marketplaces 装的 / 装的 zip + URL / 部门 publish. 鲶鱼对话时自动可调."
           >
-            📦 技能库
+            🛠 全部技能和工具服务
           </h3>
         </div>
         <div className="dashboard-skills__top-actions">
@@ -389,7 +389,7 @@ export default function SkillsMcpCard() {
           </div>
 
           {(protectedMcps.length > 0 || openMcps.length > 0) && (
-            <Section title="MCP servers">
+            <Section title="连接的工具服务 (MCP)">
               {protectedMcps.length > 0 && (
                 <SubGroup label="核心 · 主链路依赖" locked>
                   <ul className="dashboard-skills__mcp-list">
@@ -424,7 +424,7 @@ export default function SkillsMcpCard() {
           )}
 
           {(protectedNs.length > 0 || openNs.length > 0) && (
-            <Section title="Skills (按 namespace)">
+            <Section title="全部技能 (按分类, 含 hermes 自带的)">
               {protectedNs.length > 0 && (
                 <SubGroup
                   label={`团队审定 · ${protectedNs.reduce(

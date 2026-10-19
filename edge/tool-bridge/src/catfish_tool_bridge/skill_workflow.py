@@ -36,7 +36,12 @@ _SEG = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)((?:\[\d+\])*)$")
 
 
 class StepFailure(Exception):
-    pass
+    """一步没做成。kind / data 给 humanize() 翻成员工看得懂的话 (10/19)。"""
+
+    def __init__(self, msg: str, kind: str = "other", **data: Any):
+        super().__init__(msg)
+        self.kind = kind
+        self.data = data
 
 
 def parse(text: str) -> dict[str, Any]:
@@ -179,11 +184,11 @@ def _lookup(path: str, ctx: dict[str, Any]) -> Any:
             raise StepFailure(f"看不懂 ${{{path}}}")
         key, idx = m.group(1), m.group(2)
         if not isinstance(cur, dict) or key not in cur:
-            raise StepFailure(f"${{{path}}} 取不到: 没有「{key}」")
+            raise StepFailure(f"${{{path}}} 取不到: 没有「{key}」", "missing_ref", path=path, key=key)
         cur = cur[key]
         for n in re.findall(r"\[(\d+)\]", idx):
             if not isinstance(cur, list) or int(n) >= len(cur):
-                raise StepFailure(f"${{{path}}} 取不到: 第 {n} 项不存在")
+                raise StepFailure(f"${{{path}}} 取不到: 第 {n} 项不存在", "missing_ref", path=path, key=f"第 {n} 项")
             cur = cur[int(n)]
     return cur
 
@@ -239,7 +244,7 @@ def run_block(st: dict[str, Any], args: dict[str, Any], ctx: dict[str, Any]) -> 
         from .catfish_tools_skill_ops import run_skill  # noqa: PLC0415
         r = run_skill({"skill_path": str(st["skill"]).split("@")[0], "params": args})
         if not r.get("ok"):
-            raise StepFailure(r.get("error") or "skill 没跑成")
+            raise StepFailure(r.get("error") or "skill 没跑成", "block")
         res = r.get("result")
         out = dict(res) if isinstance(res, dict) else {"value": res}
         out["files"] = r.get("files") or []
@@ -249,7 +254,7 @@ def run_block(st: dict[str, Any], args: dict[str, Any], ctx: dict[str, Any]) -> 
         res = a.run(args) if a and a.run else {"ok": False, "error": "积木不可用"}
         err = _failed(res)
         if err:
-            raise StepFailure(err)
+            raise StepFailure(err, "block")
         out = dict(res) if isinstance(res, dict) else {"value": res}
         out.setdefault("files", _files_of(res))
         return out
@@ -258,7 +263,7 @@ def run_block(st: dict[str, Any], args: dict[str, Any], ctx: dict[str, Any]) -> 
     try:
         return workflow_xiaonian.run(str(instruction), data, st["returns"])
     except (ValueError, RuntimeError) as e:
-        raise StepFailure(str(e)) from None
+        raise StepFailure(str(e), "xiaonian") from None
 
 
 def _count(out: dict[str, Any]) -> int:
@@ -276,18 +281,20 @@ def check_expect(exp: dict[str, Any], out: dict[str, Any]) -> None:
     if exp.get("ok") and out.get("ok") is not True:
         raise StepFailure("结果里没有明确说成功 (ok)")
     if "count_min" in exp and _count(out) < int(exp["count_min"]):
-        raise StepFailure(f"结果只有 {_count(out)} 项, 要求至少 {exp['count_min']} 项")
+        raise StepFailure(f"结果只有 {_count(out)} 项, 要求至少 {exp['count_min']} 项", "count_min",
+                          got=_count(out), need=int(exp["count_min"]))
     if "files_min" in exp:
         real = [f for f in out.get("files") or [] if Path(str(f)).expanduser().is_file()]
         if len(real) < int(exp["files_min"]):
-            raise StepFailure(f"只拿到 {len(real)} 个文件 (磁盘上找得到的), 要求至少 {exp['files_min']} 个")
+            raise StepFailure(f"只拿到 {len(real)} 个文件 (磁盘上找得到的), 要求至少 {exp['files_min']} 个", "files_min",
+                              got=len(real), need=int(exp["files_min"]))
     if "text_contains" in exp and str(exp["text_contains"]) not in json.dumps(out, ensure_ascii=False, default=str):
-        raise StepFailure(f"结果里没有「{exp['text_contains']}」")
+        raise StepFailure(f"结果里没有「{exp['text_contains']}」", "text", want=str(exp["text_contains"]))
     if "page_contains" in exp:
         from .catfish_tools import dispatch_native  # noqa: PLC0415
         page = dispatch_native("catfish_browser_evaluate", {"expression": "document.body.innerText"})
         if str(exp["page_contains"]) not in json.dumps(page, ensure_ascii=False, default=str):
-            raise StepFailure(f"页面上没有「{exp['page_contains']}」")
+            raise StepFailure(f"页面上没有「{exp['page_contains']}」", "text", want=str(exp["page_contains"]))
 
 
 def _audit(run: dict[str, Any]) -> None:
@@ -299,6 +306,110 @@ def _audit(run: dict[str, Any]) -> None:
                                    "ms": s.get("ms")} for s in run["steps"]]})
 
 
+# ── 给员工看的说法 (10/19, 鸿波「失败原因员工看不懂」) ─────────────────
+
+def step_label(st: dict[str, Any]) -> str:
+    """一步的中文名: 积木用目录里的名字, 技能用它的中文名, 小鲶那步用说明的开头。"""
+    kind = block_of(st)
+    if kind == "action":
+        a = catalog.get(str(st.get("action") or ""))
+        return a.label if a else str(st.get("action"))
+    if kind == "skill":
+        from . import skill_names  # noqa: PLC0415
+        from .catfish_tools_skill_ops import _find_skill_dir  # noqa: PLC0415
+        d = _find_skill_dir(str(st["skill"]).split("@")[0])
+        return skill_names.skill_title(d) if d else str(st["skill"])
+    text = re.split(r"[，,。；;：:\n]", str(st.get("xiaonian") or ""), maxsplit=1)[0].strip()
+    text = _REF.sub("", text)
+    return "小鲶：" + (text[:12] + ("…" if len(text) > 12 else "") if text else "整理判断")
+
+
+def _step_by_id(wf: dict[str, Any], sid: str) -> tuple[int, dict[str, Any] | None]:
+    for j, s in enumerate(wf.get("steps") or []):
+        if s.get("id") == sid:
+            return j, s
+    return -1, None
+
+
+def humanize(wf: dict[str, Any], i: int, st: dict[str, Any], e: Exception) -> tuple[str, str]:
+    """(一句员工看得懂的话, 怎么办的类型)。类型: conditions 放宽条件 / workflow 要改工作流 / retry 再跑 / login 先登录。"""
+    n, label = i + 1, step_label(st)
+    kind = getattr(e, "kind", "other")
+    data = getattr(e, "data", {})
+    msg = str(e)
+    if kind == "count_min":
+        return (f"第 {n} 步「{label}」只拿到 {data.get('got')} 条，要求至少 {data.get('need')} 条。"
+                "可能这次确实没有符合条件的内容 —— 可以放宽条件 (关键词、天数) 再跑。", "conditions")
+    if kind == "missing_ref":
+        ref = str(data.get("path") or "").split(".")
+        j, ref_st = _step_by_id(wf, ref[1]) if len(ref) > 2 and ref[0] == "steps" else (-1, None)
+        src = f"第 {j + 1} 步「{step_label(ref_st)}」" if ref_st else "前面那一步"
+        return (f"第 {n} 步要用{src}的「{data.get('key')}」，但那一步的结果里没有它。"
+                "这是工作流本身写得跟实际结果对不上，需要改一下工作流 (可以让小鲶改)。", "workflow")
+    if kind == "files_min":
+        return (f"第 {n} 步「{label}」应该产出至少 {data.get('need')} 个文件，实际只找到 {data.get('got')} 个。"
+                "从这一步重跑试试。", "retry")
+    if kind == "text":
+        return f"第 {n} 步「{label}」做完了，但结果里没看到「{data.get('want')}」，没达到预期。从这一步重跑试试。", "retry"
+    if kind == "for_each":
+        return f"第 {n} 步要逐条处理前面给出的列表，但拿到的不是列表。需要改一下工作流。", "workflow"
+    if kind == "too_many":
+        return f"第 {n} 步要逐条处理 {data.get('got')} 条，一次最多 {MAX_FOR_EACH} 条。缩小范围 (比如少看几天) 再跑。", "conditions"
+    if re.search(r"登录|token|401|未授权|unauthor", msg, re.I):
+        return f"第 {n} 步「{label}」没做成：需要先登录 ({msg[:80]})。登录后从这一步重跑。", "login"
+    if kind == "xiaonian":
+        if "连不上模型" in msg or "模型返回" in msg:
+            return f"第 {n} 步「{label}」连不上模型，可能是网络问题。稍后从这一步重跑。", "retry"
+        return (f"第 {n} 步「{label}」小鲶交回的结果不符合要求 ({msg[:80]})。"
+                "再跑一次通常就好；反复出现就把这一步的说明写清楚些。", "retry")
+    if kind == "block":
+        return f"第 {n} 步「{label}」没做成：{msg[:150]}。从这一步重跑试试。", "retry"
+    return f"第 {n} 步「{label}」出了程序错误 ({msg[:100]})。从这一步重跑试试；反复出现请发给 IT。", "retry"
+
+
+_LEGACY = [
+    (re.compile(r"结果只有 (\d+) 项, 要求至少 (\d+) 项"), lambda m: ("count_min", {"got": int(m[1]), "need": int(m[2])})),
+    (re.compile(r"\$\{([^}]+)\} 取不到: 没有「([^」]+)」"), lambda m: ("missing_ref", {"path": m[1], "key": m[2]})),
+    (re.compile(r"只拿到 (\d+) 个文件.*至少 (\d+) 个"), lambda m: ("files_min", {"got": int(m[1]), "need": int(m[2])})),
+]
+
+
+def humanize_legacy(run: dict[str, Any]) -> tuple[str, str] | None:
+    """10/19 之前的失败记录没存人话: 按原始报错认出是哪种, 补一句 (界面列运行记录时用, 不改文件)。"""
+    wf, i = run.get("workflow") or {}, run.get("failed_index")
+    steps = wf.get("steps") or []
+    if run.get("status") != "failed" or not isinstance(i, int) or not 0 <= i < len(steps):
+        return None
+    err = str(run.get("error") or "")
+    kind, data = "block", {}
+    for pat, conv in _LEGACY:
+        m = pat.search(err)
+        if m:
+            kind, data = conv(m)
+            break
+    return humanize(wf, i, steps[i], StepFailure(err, kind, **data))
+
+
+def outcome(run: dict[str, Any]) -> str:
+    """跑完了做成了什么 (一句话): 对外 / 写本机的积木各说一句, 再加产出文件数。"""
+    wf = run.get("workflow") or {}
+    bits: list[str] = []
+    for rec in run.get("steps") or []:
+        if rec.get("status") != "done" or rec.get("block") != "action":
+            continue
+        _j, st = _step_by_id(wf, rec["id"])
+        a = catalog.get(str((st or {}).get("action") or ""))
+        if not a or a.level == catalog.READ:
+            continue
+        res = rec.get("result") or {}
+        name = (res.get("title") or res.get("name") or res.get("subject")) if isinstance(res, dict) else None
+        bits.append(f"{a.label}《{str(name)[:30]}》" if name else a.label)
+    files = {f for rec in run.get("steps") or [] for f in (rec.get("result") or {}).get("files") or [] if isinstance(f, str)}
+    if files:
+        bits.append(f"产出 {len(files)} 个文件")
+    return "、".join(dict.fromkeys(bits)) or f"{len(run.get('steps') or [])} 步都做完了"
+
+
 # ── 运行 ─────────────────────────────────────────────────────────
 
 def _summary(run: dict[str, Any]) -> dict[str, Any]:
@@ -307,8 +418,7 @@ def _summary(run: dict[str, Any]) -> dict[str, Any]:
     files = [f for s in run["steps"] for f in (s.get("result") or {}).get("files") or [] if isinstance(f, str)]
     out["files"] = list(dict.fromkeys(files))
     if run["status"] == "done":
-        out["summary"] = f"工作流 {run['skill_path']} 跑完了 ({len(run['steps'])} 步)" + (
-            f", 产出 {len(out['files'])} 个文件" if out["files"] else "")
+        out["summary"] = f"工作流「{run.get('title') or run['skill_path']}」跑完了: {run.get('outcome') or outcome(run)}"
     elif run["status"] == "waiting_confirm":
         p = run["pending"]
         out["pending"] = p
@@ -317,13 +427,16 @@ def _summary(run: dict[str, Any]) -> dict[str, Any]:
     else:
         out["ok"] = False
         out["error"] = run.get("error")
-        out["summary"] = (f"第 {run.get('failed_index', 0) + 1} 步 ({run.get('failed_step')}) 没做成: {run.get('error')}。"
-                          "修好后可以从这一步接着跑。")
+        out["error_human"] = run.get("error_human")
+        out["summary"] = ((run.get("error_human") or
+                           f"第 {run.get('failed_index', 0) + 1} 步 ({run.get('failed_step')}) 没做成: {run.get('error')}。")
+                          + " 修好后可以从这一步接着跑。")
     return out
 
 
 def start(skill_path: str, wf: dict[str, Any], params: dict[str, Any], *, title: str | None = None,
-          skill_lookup: Callable[[str], Path | None]) -> dict[str, Any]:
+          skill_lookup: Callable[[str], Path | None], trigger: str = "chat") -> dict[str, Any]:
+    """trigger: trial 试跑 / ui 界面上点的 / chat 小鲶跑的 (对话里或定时任务)。"""
     errs = validate(wf, skill_lookup=skill_lookup)
     if errs:
         return {"ok": False, "status": "invalid", "error": "开跑前检查没过: " + "; ".join(errs[:8]), "problems": errs}
@@ -333,7 +446,7 @@ def start(skill_path: str, wf: dict[str, Any], params: dict[str, Any], *, title:
         return {"ok": False, "status": "invalid", "error": str(e)}
     run = {"run_id": store.new_run_id(), "skill_path": skill_path, "title": title or skill_path,
            "version": wf.get("version"), "workflow": wf, "params": p, "status": "running",
-           "created_at": store.now(), "steps": [], "approved": []}
+           "created_at": store.now(), "steps": [], "approved": [], "trigger": trigger}
     return _advance(run, 0)
 
 
@@ -341,6 +454,7 @@ def _advance(run: dict[str, Any], start_index: int) -> dict[str, Any]:
     wf = run["workflow"]
     steps = wf["steps"]
     run["status"], run["pending"], run["error"] = "running", None, None
+    run["error_human"] = run["error_fix"] = run["outcome"] = None
     run["steps"] = run["steps"][:start_index]
     ctx: dict[str, Any] = {"params": run["params"], "steps": {s["id"]: s.get("result") or {} for s in run["steps"]}}
     auto = store.auto_confirm_outward(run["skill_path"])
@@ -354,16 +468,16 @@ def _advance(run: dict[str, Any], start_index: int) -> dict[str, Any]:
                 each = resolve(st["for_each"], ctx) if "for_each" in st else None
                 a = catalog.get(st.get("action") or "")
                 run["status"] = "waiting_confirm"
-                run["pending"] = {"index": i, "step": sid, "label": a.label if a else (st.get("skill") or sid),
+                run["pending"] = {"index": i, "step": sid, "label": step_label(st) if (a or "skill" in st) else sid,
                                   "preview": store.trim(preview), "for_each_count": len(each) if isinstance(each, list) else None}
                 break
             t0 = time.time()
             if "for_each" in st:
                 items = resolve(st["for_each"], ctx)
                 if not isinstance(items, list):
-                    raise StepFailure("for_each 取到的不是列表")
+                    raise StepFailure("for_each 取到的不是列表", "for_each")
                 if len(items) > MAX_FOR_EACH:
-                    raise StepFailure(f"列表有 {len(items)} 项, 一次最多处理 {MAX_FOR_EACH} 项")
+                    raise StepFailure(f"列表有 {len(items)} 项, 一次最多处理 {MAX_FOR_EACH} 项", "too_many", got=len(items))
                 outs = []
                 for item in items:
                     c = {**ctx, "item": item}
@@ -377,15 +491,19 @@ def _advance(run: dict[str, Any], start_index: int) -> dict[str, Any]:
                                  "result": store.trim(out)})
             ctx["steps"][sid] = out
         except StepFailure as e:
+            human, fix = humanize(wf, i, st, e)
             run["steps"].append({"id": sid, "block": block_of(st), "status": "failed", "error": str(e)})
-            run.update(status="failed", failed_step=sid, failed_index=i, error=str(e))
+            run.update(status="failed", failed_step=sid, failed_index=i, error=str(e), error_human=human, error_fix=fix)
             break
         except Exception as e:  # noqa: BLE001 —— 积木内部炸了也要停在这一步、记下来, 不让整个运行器崩
+            human, fix = humanize(wf, i, st, e)
             run["steps"].append({"id": sid, "block": block_of(st), "status": "failed", "error": f"{type(e).__name__}: {e}"})
-            run.update(status="failed", failed_step=sid, failed_index=i, error=f"{type(e).__name__}: {e}"[:300])
+            run.update(status="failed", failed_step=sid, failed_index=i, error=f"{type(e).__name__}: {e}"[:300],
+                       error_human=human, error_fix=fix)
             break
     else:
         run["status"] = "done"
+        run["outcome"] = outcome(run)
     store.save_run(run)
     if run["status"] != "waiting_confirm":
         _audit(run)

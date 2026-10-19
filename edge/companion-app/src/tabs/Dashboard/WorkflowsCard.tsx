@@ -3,43 +3,31 @@
  *
  * 主路是跟小鲶说 (「每周一帮我把…理一下」), 小鲶出草稿; 这里看 / 改 / 试跑 / 保存, 看运行记录, 失败的从那一步重跑。
  * 「对外步骤不用每次确认」开关只在这里 —— 小鲶不能替员工开。
+ * 10/19: 卡片显示中文名 / 步骤链 / 参数 / 定时, 直接能「运行 / 编辑 / 定时」; 失败说人话 +「让小鲶看看」(零件在 WorkflowParts.tsx)。
  */
 import { useCallback, useEffect, useState } from "react";
 
+import { selectExpert } from "../../lib/expertChat";
+import { backfillNamesOnce } from "../../lib/tauri_skill_names";
+import { cronJobDelete, cronJobsList, type CronJob } from "../../lib/tauri_cron";
 import {
   workflowCatalog, workflowDraftDelete, workflowDraftGet, workflowDraftSave, workflowGet, workflowList, workflowResume,
-  workflowRun, workflowRuns, workflowSave, workflowSetAutoConfirm, workflowTrial, workflowUpdate,
+  workflowRun, workflowRuns, workflowSave, workflowScheduleSet, workflowSetAutoConfirm, workflowTrial, workflowUpdate,
   type DraftSummary, type RunResult, type RunSummary, type Workflow, type WorkflowSummary,
 } from "../../lib/tauri_workflows";
+import { useUIStore } from "../../store/ui";
 import { refreshPending } from "../../lib/workflowStore";
 import { Overlay, muted } from "../Collab/formsUi";
 import { Btn, ErrorLine, cardStyle, inputStyle, itemStyle } from "../Collab/roomLinkUi";
 import WorkflowEditor, { type Catalog } from "./WorkflowEditor";
+import { ParamsLine, RunLine, ScheduleDialog, StepChain, askXiaonianPrompt, cronText, localTime } from "./WorkflowParts";
 
-const STATUS_COLOR: Record<string, string> = {
-  done: "var(--status-ok, #16a34a)", failed: "var(--status-error, #dc2626)", invalid: "var(--status-error, #dc2626)",
-  waiting_confirm: "var(--status-warn, #d97706)", declined: "var(--catfish-text-muted)", running: "var(--catfish-cyan)",
-};
-const STATUS_TEXT: Record<string, string> = {
-  done: "跑完了", failed: "没做成", waiting_confirm: "等你确认", declined: "没发", running: "进行中", invalid: "没开跑",
-};
-
-function RunLine({ r, onResume }: { r: RunSummary; onResume: () => void }) {
-  return (
-    <div style={{ ...itemStyle, gap: 2 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-        <span style={{ fontSize: 13 }}>{r.title}</span>
-        <span style={{ fontSize: 11, color: STATUS_COLOR[r.status] ?? "var(--catfish-text-muted)" }}>{STATUS_TEXT[r.status] ?? r.status}</span>
-      </div>
-      <span style={muted}>
-        {r.created_at?.slice(0, 16).replace("T", " ")}
-        {r.status === "failed" && r.failed_step ? ` · 停在 ${r.failed_step}: ${r.error ?? ""}` : ""}
-        {r.status === "waiting_confirm" && r.pending ? ` · 停在「${r.pending.label}」, 页面顶上点确认` : ""}
-      </span>
-      {r.status === "failed" && <div><Btn kind="ghost" onClick={onResume}>从这一步重跑</Btn></div>}
-    </div>
-  );
+/** 这个工作流的定时任务 (我们建的任务提示里写着 skill_path="…") */
+function schedulesOf(jobs: CronJob[], skillPath: string): CronJob[] {
+  return jobs.filter((j) => (j.prompt ?? "").includes(`skill_path="${skillPath}"`));
 }
+
+const RECENT = 5;
 
 function resultText(r: RunResult): string {
   if (r.status === "invalid") return r.error ?? "没开跑";
@@ -47,7 +35,7 @@ function resultText(r: RunResult): string {
 }
 
 function Detail({ target, onClose, onChanged }: {
-  target: { kind: "workflow"; skillPath: string } | { kind: "draft"; name: string };
+  target: { kind: "workflow"; skillPath: string; title?: string } | { kind: "draft"; name: string; title?: string };
   onClose: () => void;
   onChanged: () => void;
 }) {
@@ -104,7 +92,7 @@ function Detail({ target, onClose, onChanged }: {
   };
   const params = Object.fromEntries(Object.entries(runParams).filter(([, v]) => v !== ""));
   const hasOutward = !!wf && !!cat && wf.steps.some((s) => s.confirm || cat.actions.find((a) => a.name === s.action)?.level === "outward");
-  const title = target.kind === "workflow" ? target.skillPath : `草稿 · ${target.name}`;
+  const title = target.kind === "workflow" ? (target.title || target.skillPath) : `草稿 · ${target.title || target.name}`;
 
   return (
     <Overlay title={title} onClose={onClose} width={820}>
@@ -178,69 +166,138 @@ function Detail({ target, onClose, onChanged }: {
 export default function WorkflowsCard() {
   const [list, setList] = useState<{ workflows: WorkflowSummary[]; drafts: DraftSummary[] }>({ workflows: [], drafts: [] });
   const [runs, setRuns] = useState<RunSummary[]>([]);
-  const [open, setOpen] = useState<{ kind: "workflow"; skillPath: string } | { kind: "draft"; name: string } | null>(null);
+  const [jobs, setJobs] = useState<CronJob[]>([]);
+  const [open, setOpen] = useState<{ kind: "workflow"; skillPath: string; title?: string } | { kind: "draft"; name: string; title?: string } | null>(null);
+  const [scheduling, setScheduling] = useState<WorkflowSummary | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const startChat = useUIStore((s) => s.startEmailChat);
 
   const load = useCallback(async () => {
     try {
-      const [l, r] = await Promise.all([workflowList(), workflowRuns(20)]);
+      const [l, r] = await Promise.all([workflowList(), workflowRuns(30)]);
       setList(l);
       setRuns(r.runs);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
+    // 定时任务读不到 (hermes 没起来) 不影响别的
+    cronJobsList().then(setJobs).catch(() => setJobs([]));
   }, []);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    void backfillNamesOnce().then((changed) => { if (changed) void load(); });
+  }, [load]);
+
+  const fail = (e: unknown) => setNote(e instanceof Error ? e.message : String(e));
+  const askXiaonian = (r: RunSummary) => {
+    selectExpert(null); // 让主小鲶看, 不是某个专家
+    startChat(`wf-${r.run_id}`, askXiaonianPrompt(r));
+  };
+  const shownRuns = showAll ? runs : runs.slice(0, RECENT);
 
   return (
     <div style={{ ...cardStyle, height: "auto" }}>
       <div>
         <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>🔗 工作流</h3>
         <div style={{ ...muted, marginTop: 4 }}>
-          把反复做的事串成一条: 跟小鲶说「每周一帮我把带"资质"的邮件附件理一下, 建个任务」, 它会用鲶鱼会的能力和你教过的技能搭好草稿,
-          你在这里看、改、试跑、保存。对外的步骤 (发收集表、推送到微信、发布知识库) 跑到时会停下, 在页面顶上点确认才发。
+          把反复做的事串成一条, 以后一句话或定时整条跑完。跟小鲶说「每周一帮我把带"资质"的邮件理一下, 建个任务」它就搭好草稿。
+          带 🔔 的步骤是对外的 (发收集表、推送微信…), 跑到时会停下, 在页面顶上点确认才发。
         </div>
       </div>
       {error && <ErrorLine>{error}</ErrorLine>}
-      {note && <span style={muted}>{note}</span>}
+      {note && <span style={{ fontSize: 12, whiteSpace: "pre-wrap" }}>{note}</span>}
 
       <strong style={{ fontSize: 13 }}>我的工作流</strong>
       {list.workflows.length === 0 && <span style={muted}>还没有。跟小鲶说说你反复在做的事。</span>}
-      {list.workflows.map((w) => (
-        <button key={w.skill_path} type="button" onClick={() => setOpen({ kind: "workflow", skillPath: w.skill_path })}
-                style={{ ...itemStyle, textAlign: "left", cursor: "pointer", background: "transparent", color: "inherit", font: "inherit" }}>
-          <span style={{ fontSize: 13, fontWeight: 600 }}>{w.skill_path}</span>
-          <span style={muted}>{w.description} · {w.steps} 步{w.has_outward ? (w.auto_confirm_outward ? " · 对外步骤直接发" : " · 对外步骤会停下等确认") : ""}</span>
-        </button>
-      ))}
+      {list.workflows.map((w) => {
+        const sched = schedulesOf(jobs, w.skill_path);
+        return (
+          <div key={w.skill_path} style={{ ...itemStyle, gap: 6 }}>
+            <div>
+              <span style={{ fontSize: 14, fontWeight: 600 }}>{w.title || w.skill_path}</span>
+              <span style={{ ...muted, marginLeft: 8 }}>{w.skill_path}</span>
+            </div>
+            {w.summary && <span style={{ fontSize: 12 }}>{w.summary}</span>}
+            {w.chain?.length > 0 && <StepChain chain={w.chain} />}
+            <ParamsLine params={w.params ?? []} />
+            <span style={muted}>
+              {sched.length > 0 ? `⏰ ${sched.map((j) => cronText(j.schedule?.expr) || j.schedule_display || "已定时").join("、")}` : "没有定时"}
+              {w.has_outward ? (w.auto_confirm_outward ? " · 🔔 对外步骤直接发" : " · 🔔 对外步骤会停下等你确认") : ""}
+            </span>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <Btn kind="primary" disabled={!!busy} onClick={() => void (async () => {
+                setBusy(w.skill_path);
+                setNote(`正在跑「${w.title}」…`);
+                try {
+                  const r = await workflowRun(w.skill_path, {});
+                  setNote(resultText(r));
+                  void refreshPending();
+                } catch (e) {
+                  fail(e);
+                } finally {
+                  setBusy(null);
+                  void load();
+                }
+              })()}>{busy === w.skill_path ? "跑着…" : "▶ 运行"}</Btn>
+              <Btn kind="ghost" disabled={!!busy} onClick={() => setOpen({ kind: "workflow", skillPath: w.skill_path, title: w.title })}>编辑</Btn>
+              {sched.length === 0 ? (
+                <Btn kind="ghost" disabled={!!busy} onClick={() => setScheduling(w)}>⏰ 定时</Btn>
+              ) : (
+                <Btn kind="ghost" disabled={!!busy} onClick={() => void (async () => {
+                  try {
+                    for (const j of sched) await cronJobDelete(j.id);
+                    setNote(`「${w.title}」的定时取消了`);
+                  } catch (e) {
+                    fail(e);
+                  }
+                  void load();
+                })()}>取消定时</Btn>
+              )}
+            </div>
+          </div>
+        );
+      })}
 
       {list.drafts.length > 0 && <strong style={{ fontSize: 13 }}>草稿 (还没保存)</strong>}
       {list.drafts.map((d) => (
-        <button key={d.name} type="button" onClick={() => setOpen({ kind: "draft", name: d.name })}
+        <button key={d.name} type="button" onClick={() => setOpen({ kind: "draft", name: d.name, title: d.title })}
                 style={{ ...itemStyle, textAlign: "left", cursor: "pointer", background: "transparent", color: "inherit", font: "inherit" }}>
-          <span style={{ fontSize: 13, fontWeight: 600 }}>{d.name}</span>
-          <span style={muted}>{d.description} · {d.steps} 步 · {d.saved_at?.slice(0, 16).replace("T", " ")}</span>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>{d.title || d.name}</span>
+          <span style={muted}>{d.description} · {d.steps} 步 · {localTime(d.saved_at)}</span>
         </button>
       ))}
 
       <strong style={{ fontSize: 13 }}>最近运行</strong>
       {runs.length === 0 && <span style={muted}>还没跑过。</span>}
-      {runs.map((r) => (
-        <RunLine key={r.run_id} r={r} onResume={() => void (async () => {
+      {shownRuns.map((r) => (
+        <RunLine key={r.run_id} r={r} onAsk={() => askXiaonian(r)} onResume={() => void (async () => {
           try {
             const res = await workflowResume(r.run_id);
             setNote(resultText(res));
             void refreshPending();
           } catch (e) {
-            setNote(e instanceof Error ? e.message : String(e));
+            fail(e);
           }
           void load();
         })()} />
       ))}
+      {runs.length > RECENT && (
+        <div><Btn kind="ghost" onClick={() => setShowAll(!showAll)}>{showAll ? "收起" : `看更早的 (${runs.length - RECENT} 条)`}</Btn></div>
+      )}
 
       {open && <Detail target={open} onClose={() => { setOpen(null); void load(); }} onChanged={() => void load()} />}
+      {scheduling && (
+        <ScheduleDialog title={scheduling.title || scheduling.skill_path} onClose={() => setScheduling(null)}
+                        onSave={async (cron) => {
+                          await workflowScheduleSet(scheduling.skill_path, scheduling.title || scheduling.skill_path, cron);
+                          setNote(`「${scheduling.title}」定好了: ${cronText(cron)}`);
+                          void load();
+                        }} />
+      )}
     </div>
   );
 }

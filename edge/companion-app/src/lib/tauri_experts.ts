@@ -42,9 +42,18 @@ export interface ExpertSummary {
   packed_version: string | null;
 }
 
+/** 搭专家时能选的一项: 中文名 / 一句话说明 / 来源 (personal 我的 · department 部门 · external 外部) */
+export interface CatalogItem {
+  skill_path: string;
+  description: string;
+  title: string;
+  summary: string;
+  source: string;
+}
+
 export interface ExpertCatalog {
-  workflows: { skill_path: string; description: string }[];
-  skills: { skill_path: string; description: string; runnable: boolean }[];
+  workflows: CatalogItem[];
+  skills: (CatalogItem & { runnable: boolean })[];
   tool_groups: { id: string; label: string }[];
 }
 
@@ -64,6 +73,10 @@ export const expertCatalog = () => call<ExpertCatalog>("catalog");
 export const expertList = () => call<{ experts: ExpertSummary[] }>("list");
 export const expertGet = (id: string) => call<ExpertDef>("get", { id });
 export const expertSave = (expert: ExpertDef) => call<{ expert: ExpertDef }>("save", { expert });
+/** 让小鲶帮我填: 按名字 + 简介起草 (只会用你已有的工作流 / 技能; 不保存) */
+export const expertSuggest = (name: string, description: string) =>
+  call<{ suggestion: Pick<ExpertDef, "workflows" | "skills" | "routes" | "tool_groups" | "persona" | "quick_prompts"> }>(
+    "suggest", { name, description });
 /** 存好之后让它生效: 建 / 更新专家 profile、写人设和范围、网关托管 (会重启一次小鲶本机服务)。 */
 export const expertApply = (id: string) => invoke<{ ok: boolean; profile_id: string }>("expert_local_apply", { id });
 export const expertRemove = (id: string) => invoke<void>("expert_local_remove", { id });

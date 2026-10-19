@@ -110,6 +110,7 @@ pub mod skill_feedback;
 pub mod skill_revision;
 pub mod skills; // 8/14 拆分: 只剩 tauri command 层, 实现在下面三个
 pub mod skills_install; // 安装 / 卸载 / zip 导入 / 还原
+pub mod skill_names;
 pub mod skills_list; // 扫描 / 解析 / 列举
 pub mod skills_mcp; // MCP servers 的读和写 (同一段 config.yaml)
 pub mod speech;

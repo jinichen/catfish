@@ -180,6 +180,15 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
                 return _success(req_id, await asyncio.to_thread(handlers[method]))
             except (ValueError, LookupError, OSError) as e:
                 return _error(req_id, INVALID_PARAMS, str(e))
+    # 10/19: 技能 / 工作流给人看的中文名 (skill_names.py): 改名、一次性让小鲶给没名字的起名
+    if method.startswith("pim/skillname_"):
+        from . import skill_names  # noqa: PLC0415
+        handlers = skill_names.pim_handlers(params)
+        if method in handlers:
+            try:
+                return _success(req_id, await asyncio.to_thread(handlers[method]))
+            except (ValueError, LookupError, OSError) as e:
+                return _error(req_id, INVALID_PARAMS, str(e))
     # 10/18: 本机专家 (expert_local.py, docs/EXPERT-PACK-PLAN.md 第一阶段): 设置 → 技能 →「专家」的定义 / 编译。
     # 真正建 profile、写 SOUL / config 的是 Companion (Rust commands/experts_local.rs)。
     if method.startswith("pim/expert_"):

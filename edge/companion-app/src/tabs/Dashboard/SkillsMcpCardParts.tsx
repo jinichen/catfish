@@ -123,6 +123,14 @@ export function McpRow({
   );
 }
 
+/** 10/19: hermes 自带技能的英文分类, 旁边注个中文 (给 IT 看的高级区里用) */
+export const CATEGORY_ZH: Record<string, string> = {
+  apple: "苹果设备", "autonomous-ai-agents": "AI 代理", creative: "创作", "data-science": "数据分析", devops: "运维",
+  email: "邮件", github: "GitHub", media: "音视频", mlops: "机器学习运维", "note-taking": "笔记", productivity: "效率工具",
+  research: "调研", "smart-home": "智能家居", "social-media": "社交媒体", "software-development": "软件开发", web: "网页",
+  department: "部门", external: "外部", personal: "我的", "catfish:creative": "鲶鱼 · 创作", "catfish:department": "鲶鱼 · 部门",
+};
+
 export function NamespaceRow({
   ns,
   locked,
@@ -154,7 +162,10 @@ export function NamespaceRow({
         aria-expanded={open}
       >
         <span className="dashboard-skills__ns-caret">▶</span>
-        <span className="dashboard-skills__ns-name">{ns.namespace}</span>
+        <span className="dashboard-skills__ns-name">{ns.namespace.replace(/^🐟 /, "")}</span>
+        {CATEGORY_ZH[ns.namespace.replace(/^🐟 /, "")] && (
+          <span className="dashboard-skills__ns-count">{CATEGORY_ZH[ns.namespace.replace(/^🐟 /, "")]}</span>
+        )}
         <span className="dashboard-skills__ns-count">{ns.skills.length} 个</span>
       </div>
       {open && (
@@ -165,7 +176,7 @@ export function NamespaceRow({
               className="dashboard-skills__skill-item"
               title={s.description}
             >
-              <span className="dashboard-skills__skill-name">{s.name}</span>
+              <span className="dashboard-skills__skill-name">{s.title && s.title !== s.name ? `${s.title} · ${s.name}` : s.name}</span>
               {s.version && (
                 <span className="dashboard-skills__skill-version">
                   v{s.version}

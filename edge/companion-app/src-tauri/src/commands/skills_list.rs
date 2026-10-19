@@ -44,6 +44,9 @@ pub struct SkillEntry {
     /// 加 `~/.claude/skills/`), 或员工自己录的 (~/.catfish/skills/), 可删可改.
     /// 由 scan_skills_root_filtered 按 root 路径决定, 后端逻辑唯一来源 (前端只读).
     pub is_protected: bool,
+    /// 10/19: 给人看的中文名 / 一句话说明 (规则见 skill_names.rs, 跟 tool-bridge 同一套)
+    pub title: String,
+    pub summary: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -84,12 +87,16 @@ fn parse_skill_md_with_protected(manifest_path: &Path, is_protected: bool) -> Op
             .and_then(|p| p.file_name())
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
+        let title = super::skill_names::title_from(None, None, &text, &name);
+        let summary = super::skill_names::summary_from(None, &text);
         return Some(SkillEntry {
             name,
             description: "(无 SKILL.md frontmatter)".into(),
             version: None,
             path: skill_dir_path,
             is_protected,
+            title,
+            summary,
         });
     }
     // 找 frontmatter 边界：---\n....---\n
@@ -97,7 +104,9 @@ fn parse_skill_md_with_protected(manifest_path: &Path, is_protected: bool) -> Op
     let end_idx = after_first.find("\n---")?;
     let frontmatter = &after_first[..end_idx];
 
-    let value: serde_yaml::Value = serde_yaml::from_str(frontmatter).ok()?;
+    // 10/19: 不是合法 YAML 的 frontmatter (常见: description 里写了「触发词: 做原型」这种冒号加空格)
+    // 原来整个 skill 直接从列表里消失; 现在逐行捞顶层 key: value 兜底
+    let value: serde_yaml::Value = serde_yaml::from_str(frontmatter).unwrap_or_else(|_| lenient_frontmatter(frontmatter));
     let name = value
         .get("name")
         .and_then(|v| v.as_str())
@@ -112,13 +121,42 @@ fn parse_skill_md_with_protected(manifest_path: &Path, is_protected: bool) -> Op
         .get("version")
         .and_then(|v| v.as_str())
         .map(String::from);
+    let body = &after_first[end_idx + 4..];
+    let dir_name = manifest_path
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| name.clone());
+    let fm_title = value.get("title").and_then(|v| v.as_str());
+    let fm_desc = value.get("description").and_then(|v| v.as_str());
+    let title = super::skill_names::title_from(fm_title, fm_desc, body, &dir_name);
+    let summary = super::skill_names::summary_from(fm_desc, body);
     Some(SkillEntry {
         name,
         description,
         version,
         path: skill_dir_path,
         is_protected,
+        title,
+        summary,
     })
+}
+
+fn lenient_frontmatter(head: &str) -> serde_yaml::Value {
+    let mut m = serde_yaml::Mapping::new();
+    for line in head.lines() {
+        if line.starts_with(' ') || line.starts_with('\t') || line.starts_with('-') {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            let (k, v) = (k.trim(), v.trim().trim_matches(|c| c == '"' || c == '\''));
+            let key = serde_yaml::Value::String(k.to_string());
+            if !k.is_empty() && !v.is_empty() && !v.starts_with('|') && !v.starts_with('>') && !m.contains_key(&key) {
+                m.insert(key, serde_yaml::Value::String(v.to_string()));
+            }
+        }
+    }
+    serde_yaml::Value::Mapping(m)
 }
 
 /// 6/2 BL-SKILLS-CARD-CLASSIFY-FROZEN (鸿波 6/2 下午抓的真问题):
@@ -557,5 +595,22 @@ description: 登录 EIS"#,
         assert_eq!(entry.name, "eis-login");
         // path 应该是 skill_dir 真绝对路径, MySkillsCard 直接传给 publish tool
         assert_eq!(entry.path, skill_dir.to_string_lossy().to_string());
+    }
+}
+
+#[cfg(test)]
+mod lenient_tests {
+    use super::parse_skill_md;
+
+    #[test]
+    fn frontmatter不是合法yaml也不从列表里消失() {
+        let d = tempfile::tempdir().unwrap();
+        let md = d.path().join("huashu").join("SKILL.md");
+        std::fs::create_dir_all(md.parent().unwrap()).unwrap();
+        std::fs::write(&md, "---\nname: huashu\ndescription: 花叔 Design — HTML 原生设计. 触发词: 做原型 / 设计评审\ntriggers:\n  - 花叔\n---\n\n# 花叔Design · Huashu\n").unwrap();
+        let e = parse_skill_md(&md).expect("要列出来");
+        assert_eq!(e.name, "huashu");
+        assert_eq!(e.title, "花叔Design");
+        assert!(e.summary.starts_with("花叔 Design"));
     }
 }

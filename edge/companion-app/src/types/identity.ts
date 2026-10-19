@@ -23,6 +23,9 @@ export interface SkillEntry {
    *  false = 员工自录 (~/.catfish/skills/) 或自装 (~/.hermes/, ~/.claude/), 可删
    *  (E7 phase 2 接卸载按钮). */
   isProtected: boolean;
+  /** 10/19: 给人看的中文名 / 一句话说明 (Rust skill_names.rs, 跟 tool-bridge 同一套规则) */
+  title: string;
+  summary: string;
 }
 
 export interface SkillNamespace {
