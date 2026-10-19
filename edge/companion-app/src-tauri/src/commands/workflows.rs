@@ -15,7 +15,7 @@ const RPC_TIMEOUT: Duration = Duration::from_secs(600);
 
 const ALLOWED: &[&str] = &[
     "catalog", "list", "get", "update", "draft_get", "draft_save", "draft_delete", "trial", "save", "run", "runs",
-    "run_get", "pending", "confirm", "resume", "set_auto_confirm",
+    "run_get", "run_delete", "pending", "confirm", "resume", "set_auto_confirm",
 ];
 
 fn method_for(action: &str) -> Result<String, String> {
@@ -82,6 +82,7 @@ mod tests {
     #[test]
     fn 只放行工作流这一组() {
         assert_eq!(method_for("confirm").unwrap(), "pim/workflow_confirm");
+        assert_eq!(method_for("run_delete").unwrap(), "pim/workflow_run_delete");
         assert!(method_for("form_send").is_err());
         assert!(method_for("../tools/dispatch").is_err());
     }

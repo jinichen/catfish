@@ -94,6 +94,29 @@ def list_runs(limit: int = 30, status: str | None = None) -> list[dict[str, Any]
     return out
 
 
+#: 还在跑 / 停着等确认的不让删 (删了确认条就找不到运行记录)
+_LIVE = {"running", "waiting_confirm"}
+
+
+def delete_runs(run_ids: list[str] | None = None, *, all_finished: bool = False) -> dict[str, Any]:
+    """界面「删除」/「清空已结束的」: 删运行记录文件。还在跑、等确认的留着。"""
+    if all_finished:
+        paths = sorted(runs_dir().glob("r_*.json"))
+    else:
+        paths = [_run_path(str(r)) for r in (run_ids or [])]
+    deleted, kept = [], []
+    for p in paths:
+        r = _read(p)
+        if r is None:
+            continue
+        if r.get("status") in _LIVE:
+            kept.append(p.stem)
+            continue
+        p.unlink(missing_ok=True)
+        deleted.append(p.stem)
+    return {"ok": True, "deleted": deleted, "kept": kept}
+
+
 # ── 员工设置 (只有界面写) ─────────────────────────────────────────
 
 def _prefs_path() -> Path:

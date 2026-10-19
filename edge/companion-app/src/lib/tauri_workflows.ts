@@ -157,6 +157,9 @@ export const workflowRunGet = (runId: string) => call<RunDetail>("run_get", { ru
 export const workflowPending = () => call<{ runs: RunSummary[] }>("pending");
 export const workflowConfirm = (runId: string, approve: boolean) => call<RunResult>("confirm", { run_id: runId, approve });
 export const workflowResume = (runId: string) => call<RunResult>("resume", { run_id: runId });
+/** 删运行记录 (还在跑 / 等确认的不删, 在 kept 里) */
+export const workflowRunDelete = (runIds: string[], allFinished = false) =>
+  call<{ deleted: string[]; kept: string[] }>("run_delete", { run_ids: runIds, all_finished: allFinished });
 /** 定时: 建一个 hermes 定时任务, 到点让小鲶跑这个工作流 (schedule = 5 段 cron) */
 export const workflowScheduleSet = (skillPath: string, title: string, schedule: string) =>
   invoke<void>("workflow_schedule_set", { skillPath, title, schedule });

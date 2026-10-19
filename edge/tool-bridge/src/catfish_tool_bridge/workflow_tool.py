@@ -244,6 +244,8 @@ def pim_handlers(params: dict[str, Any]) -> dict[str, Any]:
         "pim/workflow_pending": lambda: {"ok": True, "runs": store.list_runs(50, "waiting_confirm")},
         "pim/workflow_confirm": lambda: engine.confirm(rid, bool(params.get("approve"))),
         "pim/workflow_resume": lambda: engine.resume(rid),
+        "pim/workflow_run_delete": lambda: store.delete_runs(params.get("run_ids") or [],
+                                                             all_finished=bool(params.get("all_finished"))),
         "pim/workflow_set_auto_confirm": lambda: store.set_auto_confirm_outward(sp, bool(params.get("on"))),
     }
 

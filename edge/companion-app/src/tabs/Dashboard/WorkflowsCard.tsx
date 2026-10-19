@@ -12,7 +12,7 @@ import { backfillNamesOnce } from "../../lib/tauri_skill_names";
 import { cronJobDelete, cronJobsList, type CronJob } from "../../lib/tauri_cron";
 import {
   workflowCatalog, workflowDraftDelete, workflowDraftGet, workflowDraftSave, workflowGet, workflowList, workflowResume,
-  workflowRun, workflowRuns, workflowSave, workflowScheduleSet, workflowSetAutoConfirm, workflowTrial, workflowUpdate,
+  workflowRun, workflowRunDelete, workflowRuns, workflowSave, workflowScheduleSet, workflowSetAutoConfirm, workflowTrial, workflowUpdate,
   type DraftSummary, type RunResult, type RunSummary, type Workflow, type WorkflowSummary,
 } from "../../lib/tauri_workflows";
 import { useUIStore } from "../../store/ui";
@@ -20,7 +20,7 @@ import { refreshPending } from "../../lib/workflowStore";
 import { Overlay, muted } from "../Collab/formsUi";
 import { Btn, ErrorLine, cardStyle, inputStyle, itemStyle } from "../Collab/roomLinkUi";
 import WorkflowEditor, { type Catalog } from "./WorkflowEditor";
-import { ParamsLine, RunLine, ScheduleDialog, StepChain, askXiaonianPrompt, cronText, localTime } from "./WorkflowParts";
+import { ParamsLine, RunLine, ScheduleDialog, StepChain, askXiaonianPrompt, cronText, localTime, useTwoClick } from "./WorkflowParts";
 
 /** 这个工作流的定时任务 (我们建的任务提示里写着 skill_path="…") */
 function schedulesOf(jobs: CronJob[], skillPath: string): CronJob[] {
@@ -28,6 +28,14 @@ function schedulesOf(jobs: CronJob[], skillPath: string): CronJob[] {
 }
 
 const RECENT = 5;
+/** 「最近运行」收起 / 展开记在本机 (读写不了就默认收起) */
+const RUNS_OPEN_KEY = "catfish.workflows.runsOpen";
+function readRunsOpen(): boolean {
+  try { return localStorage.getItem(RUNS_OPEN_KEY) === "1"; } catch { return false; }
+}
+function writeRunsOpen(v: boolean) {
+  try { localStorage.setItem(RUNS_OPEN_KEY, v ? "1" : "0"); } catch { /* 记不住就下次再点 */ }
+}
 
 function resultText(r: RunResult): string {
   if (r.status === "invalid") return r.error ?? "没开跑";
@@ -170,6 +178,8 @@ export default function WorkflowsCard() {
   const [open, setOpen] = useState<{ kind: "workflow"; skillPath: string; title?: string } | { kind: "draft"; name: string; title?: string } | null>(null);
   const [scheduling, setScheduling] = useState<WorkflowSummary | null>(null);
   const [showAll, setShowAll] = useState(false);
+  const [runsOpen, setRunsOpen] = useState(readRunsOpen);
+  const [clearArmed, clickClear] = useTwoClick();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -198,6 +208,18 @@ export default function WorkflowsCard() {
     startChat(`wf-${r.run_id}`, askXiaonianPrompt(r));
   };
   const shownRuns = showAll ? runs : runs.slice(0, RECENT);
+  const failedCount = runs.filter((r) => r.status === "failed").length;
+  const waitingCount = runs.filter((r) => r.status === "waiting_confirm").length;
+  const toggleRuns = () => { setRunsOpen(!runsOpen); writeRunsOpen(!runsOpen); };
+  const deleteRuns = (ids: string[], allFinished = false) => void (async () => {
+    try {
+      const res = await workflowRunDelete(ids, allFinished);
+      setNote(res.kept.length ? `删了 ${res.deleted.length} 条; ${res.kept.length} 条还在跑或等你确认, 留着` : null);
+    } catch (e) {
+      fail(e);
+    }
+    void load();
+  })();
 
   return (
     <div style={{ ...cardStyle, height: "auto" }}>
@@ -271,10 +293,18 @@ export default function WorkflowsCard() {
         </button>
       ))}
 
-      <strong style={{ fontSize: 13 }}>最近运行</strong>
-      {runs.length === 0 && <span style={muted}>还没跑过。</span>}
-      {shownRuns.map((r) => (
-        <RunLine key={r.run_id} r={r} onAsk={() => askXiaonian(r)} onResume={() => void (async () => {
+      <button type="button" onClick={toggleRuns} aria-expanded={runsOpen}
+              style={{ display: "flex", gap: 8, alignItems: "baseline", background: "none", border: "none", padding: 0,
+                       cursor: "pointer", color: "inherit", font: "inherit", textAlign: "left" }}>
+        <strong style={{ fontSize: 13 }}>{runsOpen ? "▾" : "▸"} 最近运行</strong>
+        <span style={muted}>
+          {runs.length === 0 ? "还没跑过" : `${runs.length} 条`}
+          {failedCount > 0 && ` · ${failedCount} 条没做成`}
+          {waitingCount > 0 && ` · ${waitingCount} 条等你确认`}
+        </span>
+      </button>
+      {runsOpen && shownRuns.map((r) => (
+        <RunLine key={r.run_id} r={r} onAsk={() => askXiaonian(r)} onDelete={() => deleteRuns([r.run_id])} onResume={() => void (async () => {
           try {
             const res = await workflowResume(r.run_id);
             setNote(resultText(res));
@@ -285,8 +315,15 @@ export default function WorkflowsCard() {
           void load();
         })()} />
       ))}
-      {runs.length > RECENT && (
-        <div><Btn kind="ghost" onClick={() => setShowAll(!showAll)}>{showAll ? "收起" : `看更早的 (${runs.length - RECENT} 条)`}</Btn></div>
+      {runsOpen && runs.length > 0 && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {runs.length > RECENT && (
+            <Btn kind="ghost" onClick={() => setShowAll(!showAll)}>{showAll ? "只看最近的" : `看更早的 (${runs.length - RECENT} 条)`}</Btn>
+          )}
+          <Btn kind="ghost" onClick={() => clickClear(() => deleteRuns([], true))}>
+            {clearArmed ? "再点一次, 全部清掉" : "清空记录"}
+          </Btn>
+        </div>
       )}
 
       {open && <Detail target={open} onClose={() => { setOpen(null); void load(); }} onChanged={() => void load()} />}

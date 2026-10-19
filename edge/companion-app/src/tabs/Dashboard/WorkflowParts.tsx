@@ -5,7 +5,7 @@
  *   ScheduleDialog / cronText   定时 (每天 / 工作日 / 每周几 / 每月几号 + 几点), 跟 cron 互转
  *   RunLine     运行记录: 中文名 + 怎么跑的 + 失败说人话 (原始报错收起来) + 做成了什么 + 「让小鲶看看」
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { ChainStep, ParamSpec, RunSummary } from "../../lib/tauri_workflows";
 import { Overlay, muted } from "../Collab/formsUi";
@@ -143,7 +143,7 @@ export function ScheduleDialog({ title, onClose, onSave }: {
 // ── 运行记录 ─────────────────────────────────────────────────────
 
 const STATUS_COLOR: Record<string, string> = {
-  done: "var(--status-ok, #16a34a)", failed: "var(--status-error, #dc2626)", invalid: "var(--status-error, #dc2626)",
+  done: "var(--status-ok, #16a34a)", failed: "var(--status-err, #D9534F)", invalid: "var(--status-error, #dc2626)",
   waiting_confirm: "var(--status-warn, #d97706)", declined: "var(--catfish-text-muted)", running: "var(--catfish-cyan)",
 };
 const STATUS_TEXT: Record<string, string> = {
@@ -172,8 +172,24 @@ export function askXiaonianPrompt(r: RunSummary): string {
   ].filter(Boolean).join("\n");
 }
 
-export function RunLine({ r, onResume, onAsk }: { r: RunSummary; onResume: () => void; onAsk: () => void }) {
+/** 删除要点两次 (Tauri 里 window.confirm 不弹), 3 秒没点第二下就复原 */
+export function useTwoClick(): [boolean, (act: () => void) => void] {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 3000);
+    return () => clearTimeout(t);
+  }, [armed]);
+  return [armed, (act) => { if (armed) { setArmed(false); act(); } else setArmed(true); }];
+}
+
+const LIVE = new Set(["running", "waiting_confirm"]);
+
+export function RunLine({ r, onResume, onAsk, onDelete }: {
+  r: RunSummary; onResume: () => void; onAsk: () => void; onDelete?: () => void;
+}) {
   const [raw, setRaw] = useState(false);
+  const [armed, click] = useTwoClick();
   const trig = r.trigger ? TRIGGER_TEXT[r.trigger] : r.title.endsWith("(试跑)") ? "试跑" : null;
   const name = r.title.replace(/ \(试跑\)$/, "");
   return (
@@ -183,8 +199,17 @@ export function RunLine({ r, onResume, onAsk }: { r: RunSummary; onResume: () =>
           {name}
           {trig && <span style={{ ...muted, marginLeft: 6, padding: "0 6px", border: "1px solid var(--catfish-border)", borderRadius: 999 }}>{trig}</span>}
         </span>
-        <span style={{ fontSize: 11, color: STATUS_COLOR[r.status] ?? "var(--catfish-text-muted)", whiteSpace: "nowrap" }}>
-          {STATUS_TEXT[r.status] ?? r.status}
+        <span style={{ display: "flex", gap: 10, alignItems: "baseline", whiteSpace: "nowrap" }}>
+          <span style={{ fontSize: 11, color: STATUS_COLOR[r.status] ?? "var(--catfish-text-muted)" }}>
+            {STATUS_TEXT[r.status] ?? r.status}
+          </span>
+          {onDelete && !LIVE.has(r.status) && (
+            <button type="button" title={armed ? "再点一次删掉这条记录" : "删除这条运行记录"} onClick={() => click(onDelete)}
+                    style={{ ...muted, background: "none", border: "none", padding: 0, cursor: "pointer",
+                             color: armed ? "var(--status-err, #D9534F)" : undefined }}>
+              {armed ? "再点一次删掉" : "删除"}
+            </button>
+          )}
         </span>
       </div>
       <span style={muted}>{localTime(r.created_at)}</span>

@@ -245,3 +245,20 @@ def test_小鲶说明里的引用也会填上_也会校验(env, monkeypatch):
     assert "挑出跟「资质」有关的" in seen[0]
     bad = {"kind": "workflow", "steps": [{"id": "j", "xiaonian": "看 ${params.nope}", "returns": {"n": "number"}}]}
     assert any("没声明的参数" in e for e in engine.validate(bad, skill_lookup=_lookup))
+
+
+def test_删运行记录_还在跑和等确认的留着(env):
+    def mk(status):
+        rid = store.new_run_id()
+        store.save_run({"run_id": rid, "skill_path": "personal/x", "title": "x", "status": status})
+        return rid
+
+    done, failed, waiting, running = mk("done"), mk("failed"), mk("waiting_confirm"), mk("running")
+    h = workflow_tool.pim_handlers({"run_ids": [done, waiting]})["pim/workflow_run_delete"]()
+    assert h["deleted"] == [done] and h["kept"] == [waiting]
+    left = {r["run_id"] for r in store.list_runs()}
+    assert left == {failed, waiting, running}
+    res = store.delete_runs(all_finished=True)
+    assert res["deleted"] == [failed] and set(res["kept"]) == {waiting, running}
+    with pytest.raises(ValueError):
+        store.delete_runs(["../../etc/passwd"])
