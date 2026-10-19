@@ -291,12 +291,12 @@ case "$ARCH" in
     x64)     PW_PLATFORM="mac15" ;;
 esac
 echo "  PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=$PW_PLATFORM"
-PLAYWRIGHT_BROWSERS_PATH="$PW_CACHE" \
-PLAYWRIGHT_HOST_PLATFORM_OVERRIDE="$PW_PLATFORM" \
-    # 10/19: 网络抖一下 (TLS 握手被断) 整个打包就失败 —— 跟别的下载一样重试 3 次
+# 10/19: 网络抖一下 (TLS 握手被断) 整个打包就失败 —— 跟别的下载一样重试 3 次。
+# 两个环境变量必须跟着 install 命令走 (下到哪 / 下哪个平台的), 别拆开。
     pw_ok=""
     for pw_try in 1 2 3; do
-        "$PW_VENV/bin/python" -m playwright install chromium && { pw_ok=1; break; }
+        PLAYWRIGHT_BROWSERS_PATH="$PW_CACHE" PLAYWRIGHT_HOST_PLATFORM_OVERRIDE="$PW_PLATFORM" \
+            "$PW_VENV/bin/python" -m playwright install chromium && { pw_ok=1; break; }
         echo "  ⚠ 下 Chromium 第 $pw_try 次失败, 30 秒后重试"
         sleep 30
     done
