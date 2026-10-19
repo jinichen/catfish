@@ -499,7 +499,12 @@ pub fn spawn_hermes_bootstrap(app: tauri::AppHandle, resource_dir: PathBuf) {
             };
             if let Err(error) = ensure_hermes_installed_with_reporter(&resource_dir, &reporter) {
                 log::warn!("Hermes 后台 bootstrap 失败: {error:#}");
+                return;
             }
+            // 10/19: 老 hermes 写的开机自启脚本写死了旧解释器 (3.11), 升级后登录就拉起一个
+            // 加载不了新环境的网关。每次启动按当前 hermes 重写, 有改动才重启网关。
+            #[cfg(windows)]
+            super::hermes_gateway_launcher::reconcile_windows_launcher();
         })
     {
         log::warn!("创建 Hermes bootstrap 后台线程失败: {error}");
