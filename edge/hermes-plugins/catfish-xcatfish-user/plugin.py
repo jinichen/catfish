@@ -161,6 +161,9 @@ plugin_approval_always.audit = approval_audit  # P59 始终允许放行 / 定时
 _patch_p59_always_means_always = plugin_approval_always._patch_p59_always_means_always  # noqa: F401  (re-export · 见 plugin_approval_always.py)
 plugin_wechat_expert = _import_sibling("plugin_wechat_expert")
 _patch_p60_wechat_expert_routing = plugin_wechat_expert._patch_p60_wechat_expert_routing  # noqa: F401  (re-export · 见 plugin_wechat_expert.py)
+plugin_idle_compact = _import_sibling("plugin_idle_compact")
+_patch_p61_idle_background_compaction = plugin_idle_compact._patch_p61_idle_background_compaction  # noqa: F401  (re-export · 见 plugin_idle_compact.py)
+_patch_p61b_summary_length = plugin_idle_compact._patch_p61b_summary_length  # noqa: F401  (re-export · 见 plugin_idle_compact.py)
 plugin_locale_zh = _import_sibling("plugin_locale_zh")
 _patch_p58_locale_zh = plugin_locale_zh._patch_p58_locale_zh  # noqa: F401  (re-export · 见 plugin_locale_zh.py)
 plugin_bridge_promoted = _import_sibling("plugin_bridge_promoted")
@@ -411,6 +414,12 @@ def _apply_patches() -> None:
     # P60 (10/18 专家包第三阶段): 微信里说「找资质专员」→ 这个聊天交给专家 profile, 「回小鲶」切回; 只认整句命令、
     # 名字必须是在跑的专家。按聊天的路由存 ~/.catfish/wechat_expert_routes.json。见 plugin_wechat_expert.py。
     _try_patch(_patch_p60_wechat_expert_routing, "P60: _patch_p60_wechat_expert_routing 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
+    # P61 (10/19 鸿波「不太提示, 直接压缩, 压缩后的内容往后新增」): 每轮答完上下文超过 80K 就在后台压缩,
+    # 员工下次发消息时已经压完, 不用等。照 hermes 会话卫生的 detached 压缩做法。见 plugin_idle_compact.py。
+    _try_patch(_patch_p61_idle_background_compaction, "P61: _patch_p61_idle_background_compaction 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
+    # P61b: 摘要篇幅上限 —— qwen-flash 不管 hermes 的篇幅目标, 一份摘要写 3 万 token / 9 分钟; 旧摘要截到 1.6 万字带进下一轮,
+    # 请求末尾加写死数字的上限。10/19 副本实测 539s → 186s、摘要 6 万 → 1.8 万字, 目标 / 文件 / 进度都在。
+    _try_patch(_patch_p61b_summary_length, "P61b: _patch_p61b_summary_length 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P55 (10/13 审批超时无声无息): 超时结果里加一句必须告诉员工"这一步没做"。必须在 P54 之后装。
     _try_patch(_patch_p55_approval_timeout_note, "P55: _patch_p55_approval_timeout_note 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P56 (10/13 15:08 第二次回「1」没进来): 微信内容去重把 5 分钟内同样的「1」当重投丢了。

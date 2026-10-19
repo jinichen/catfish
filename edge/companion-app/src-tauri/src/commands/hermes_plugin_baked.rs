@@ -149,6 +149,9 @@ const BAKED_PLUGIN_APPROVAL_ALWAYS: &str =
 // 10/18 P60: 微信里找专家 (找X / 回小鲶 / 找谁, 见 plugin_wechat_expert.py)
 const BAKED_PLUGIN_WECHAT_EXPERT: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_wechat_expert.py");
+// 10/19 P61: 空闲后台压缩 (回复完上下文超 80K 就在后台压, 见 plugin_idle_compact.py)
+const BAKED_PLUGIN_IDLE_COMPACT: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_idle_compact.py");
 const BAKED_DESTRUCTIVE_CODE: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/destructive_code.py");
 
@@ -200,4 +203,5 @@ pub(crate) const BAKED_FILES: &[(&str, &str)] = &[
     ("plugin_approval_always.py", BAKED_PLUGIN_APPROVAL_ALWAYS),
     ("destructive_code.py", BAKED_DESTRUCTIVE_CODE),
     ("plugin_wechat_expert.py", BAKED_PLUGIN_WECHAT_EXPERT),
+    ("plugin_idle_compact.py", BAKED_PLUGIN_IDLE_COMPACT),
 ];

@@ -159,6 +159,15 @@ _PATCH_TARGETS = [
     ("tools.approval_detection", "detect_dangerous_command", "func"),
     # P60: 微信里找专家 —— 按聊天改派 profile + 主 Bot 收「找X / 回小鲶」命令 (plugin_wechat_expert.py)
     ("gateway.run", "_multiplex_profile_homes", "func"),
+    # P61: 空闲后台压缩 —— 包 API server 的 _run_agent / 网关的 _handle_message, 照会话卫生建临时 agent 压
+    ("gateway.platforms.api_server", "APIServerAdapter", "attr"),
+    ("gateway.run", "_seed_hygiene_system_prompt", "func"),
+    ("gateway.run", "_resolve_runtime_agent_kwargs", "func"),
+    ("gateway.run", "_resolve_gateway_model", "func"),
+    ("gateway.run", "_profile_runtime_scope", "func"),
+    ("agent.conversation_compression", "CompressionCommitFence", "attr"),
+    # P61b: 摘要篇幅上限 —— 包 ContextCompressor._build_summary_prompt
+    ("agent.context_compressor", "ContextCompressor", "attr"),
     ("gateway.platforms.base", "BasePlatformAdapter", "attr"),
     # P53: tool_call 桥参数解析 (v0.22 起支持 {"calls": [...]})
     ("tools.tool_search", "resolve_underlying_call", "func"),
@@ -221,6 +230,9 @@ _GATEWAYRUNNER_METHOD_TARGETS = [
     # P60: 微信里找专家 —— 包这个按聊天改派 profile; _transport_owner 用来认出是不是主 Bot 收的
     "_profile_name_for_source",
     "_transport_owner",
+    # P61
+    "_handle_message", "_session_key_for_source", "_is_session_running", "_resolve_session_agent_runtime",
+    "_evict_cached_agent", "_resolve_profile_home_for_source",
     "_handle_active_session_busy_message",
     "_delivery_adapter_for",
     "_reply_anchor_for_event",

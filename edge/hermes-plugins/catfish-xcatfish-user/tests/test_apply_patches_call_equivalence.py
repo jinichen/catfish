@@ -54,6 +54,19 @@ REFACTOR_BASE = "cc4d71a"
 #: 一个 patch 悄悄多出来跟悄悄少一个同等危险 —— monkey-patch 是全进程生效的，
 #: 谁加的、为什么加、影响面多大，得有地方写。
 INTENTIONALLY_ADDED: dict[str, str] = {
+    "_patch_p61b_summary_length": (
+        "10/19 加: 压缩摘要篇幅上限。qwen-flash 无视 hermes 的篇幅目标, 一份摘要 3 万 token / 7.7 万字 / 9 分钟\n"
+        "  (会话日志把每次工具调用都列一遍; 上一轮摘要原样带进下一轮越滚越长)。\n"
+        "  改: 包 ContextCompressor._build_summary_prompt —— 旧摘要截到 16000 字 (留头尾), 请求末尾加写死数字的上限。\n"
+        "  副本实测: 539s → 186s, 摘要 60406 → 18346 字, 目标 / 文件 / 进度保留。影响面: 所有压缩 (空闲后台和撞线的)。"
+    ),
+    "_patch_p61_idle_background_compaction": (
+        "10/19 加 (鸿波「才一句对话就激活压缩, 时间都非常长」→「不太提示, 直接压缩, 压缩后的内容往后新增」)。\n"
+        "  hermes 的压缩在员工发下一句之后撞线才开始, 员工干等 3-6 分钟。\n"
+        "  改: 包 APIServerAdapter._run_agent (工作台) / GatewayRunner._handle_message (微信): 回复完上下文 >= 80K\n"
+        "      就照会话卫生的 detached 压缩建临时 agent 在后台 _compress_context(in-place, commit_fence)。\n"
+        "  影响面: 只在回复之后后台跑; 期间新消息照常 (hermes 水位线把新记录接在压缩结果后); 出错只记日志。"
+    ),
     "_patch_p60_wechat_expert_routing": (
         "10/18 加 (专家包第三阶段, docs/EXPERT-PACK-PLAN.md)。微信里说「找资质专员」→ 这个聊天之后交给专家 profile,\n"
         "  「回小鲶」切回, 「找谁」列出能找的专家。\n"

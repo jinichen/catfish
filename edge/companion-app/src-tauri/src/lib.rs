@@ -198,7 +198,8 @@ pub fn run() {
             // 退化到"说了要做不调工具". 补一个绝对上限 120K (hermes 再 clamp 到窗口),
             // 已有 threshold_tokens → 不动. 详见 services/hermes_compression.rs.
             match services::hermes_compression::ensure_default() {
-                Ok(true) => log::info!("BL-HERMES-CTX-CAP: 写入 compression.threshold_tokens={}", services::hermes_compression::DEFAULT_THRESHOLD_TOKENS),
+                Ok(true) => log::info!("BL-HERMES-CTX-CAP: 补 compression 默认值 (threshold_tokens={} / proactive_prune_tokens={}, 已有的不动)",
+                    services::hermes_compression::DEFAULT_THRESHOLD_TOKENS, services::hermes_compression::DEFAULT_PROACTIVE_PRUNE_TOKENS),
                 Ok(false) => log::debug!("BL-HERMES-CTX-CAP: config.yaml 已有 threshold_tokens 或 hermes 未装, 不动"),
                 Err(e) => log::warn!("BL-HERMES-CTX-CAP: ensure 失败 (不阻塞启动): {e}"),
             }

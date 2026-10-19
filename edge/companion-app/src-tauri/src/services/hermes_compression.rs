@@ -32,6 +32,21 @@ use std::path::{Path, PathBuf};
 /// 压缩触发的绝对 token 上限 (hermes 会再 clamp 到模型窗口)。
 pub const DEFAULT_THRESHOLD_TOKENS: u64 = 120_000;
 
+/// 10/19 (鸿波「才一句对话就激活压缩, 而且时间都非常长」): 提前修剪的触发线。
+///
+/// 那次是「股票日报」在对话里做了 47 次搜索 + 61 次读网页, 上下文 12 分钟三次撞到 120K 压缩线,
+/// 每次让模型写摘要 3-6 分钟。`compression.proactive_prune_tokens` 是 hermes 自带的旋钮 (默认关):
+/// 到这个数就先把**最近 20 条之外、超过 8000 字**的旧工具结果换成一行说明 (原文留在会话记录里, 可以
+/// session_search 找回), 不调模型、几乎不花时间。比到 120K 再让模型写摘要丢得少 (只丢旧的大块原文,
+/// 员工的话 / 推理 / 最近 20 条不动), 也不会被转述错。设 80K (比 hermes 例子里的 48K 保守) —— 准确性优先。
+pub const DEFAULT_PROACTIVE_PRUNE_TOKENS: u64 = 80_000;
+
+/// 启动时补的 compression 默认值: (key, 值)。已有的 key 一律不动。
+const DEFAULTS: &[(&str, u64)] = &[
+    ("threshold_tokens", DEFAULT_THRESHOLD_TOKENS),
+    ("proactive_prune_tokens", DEFAULT_PROACTIVE_PRUNE_TOKENS),
+];
+
 fn yaml_path() -> Result<PathBuf> {
     if let Ok(home) = std::env::var("HERMES_HOME") {
         return Ok(PathBuf::from(home).join("config.yaml"));
@@ -56,16 +71,17 @@ pub fn current_threshold_tokens_at(path: &Path) -> Option<u64> {
         .as_u64()
 }
 
-/// 没配 threshold_tokens → 写入默认值; 已配 → 不动。返 Ok(true) = 这次写了。
+/// DEFAULTS 里没配的 key → 写入默认值; 已配的 → 不动。返 Ok(true) = 这次写了。
 pub fn ensure_default_at(path: &Path) -> Result<bool> {
     let mut root = read_root(path);
     let exists = path.exists();
     // 看 key 在不在, 不看值合不合法 —— 运维写了个奇怪的值也是他的决定, 不覆盖
-    let already = root
-        .get("compression")
-        .and_then(|c| c.get("threshold_tokens"))
-        .is_some();
-    if already {
+    let missing: Vec<(&str, u64)> = DEFAULTS
+        .iter()
+        .copied()
+        .filter(|(k, _)| root.get("compression").and_then(|c| c.get(*k)).is_none())
+        .collect();
+    if missing.is_empty() {
         return Ok(false);
     }
     // hermes 没装 (config.yaml 不存在) → 不凭空造文件, 等装好再说
@@ -91,10 +107,9 @@ pub fn ensure_default_at(path: &Path) -> Result<bool> {
             }
         }
     };
-    section_map.insert(
-        YamlValue::from("threshold_tokens"),
-        YamlValue::from(DEFAULT_THRESHOLD_TOKENS),
-    );
+    for (k, v) in &missing {
+        section_map.insert(YamlValue::from(*k), YamlValue::from(*v));
+    }
     let out = serde_yaml::to_string(&root).context("序列化 config.yaml 失败")?;
     let tmp = path.with_extension("yaml.tmp");
     fs::write(&tmp, out).with_context(|| format!("写 {}", tmp.display()))?;
@@ -127,6 +142,19 @@ mod tests {
     }
 
     #[test]
+    fn 已有压缩线的也补上提前修剪_值都不覆盖() {
+        let tmp = TempDir::new().unwrap();
+        let p = cfg(&tmp, "compression:\n  threshold_tokens: 90000\n");
+        assert!(ensure_default_at(&p).unwrap());
+        let root = read_root(&p);
+        assert_eq!(root["compression"]["threshold_tokens"].as_u64(), Some(90000), "员工 / 运维调过的不动");
+        assert_eq!(root["compression"]["proactive_prune_tokens"].as_u64(), Some(DEFAULT_PROACTIVE_PRUNE_TOKENS));
+        assert!(!ensure_default_at(&p).unwrap(), "第二次 no-op");
+        let p2 = cfg(&tmp, "compression:\n  threshold_tokens: 120000\n  proactive_prune_tokens: 0\n");
+        assert!(!ensure_default_at(&p2).unwrap(), "员工明确关掉 (0) 也不动");
+    }
+
+    #[test]
     fn adds_threshold_without_touching_other_sections() {
         let tmp = TempDir::new().unwrap();
         let p = cfg(&tmp, "model:\n  default: catfish-auto\ncurator:\n  enabled: true\n");
@@ -155,7 +183,8 @@ mod tests {
     fn operator_value_is_respected() {
         let tmp = TempDir::new().unwrap();
         let p = cfg(&tmp, "compression:\n  threshold_tokens: 50000\n");
-        assert!(!ensure_default_at(&p).unwrap());
+        // 10/19 起会补上缺的 proactive_prune_tokens (所以这次有写), 但运维设的 50000 原样保留
+        assert!(ensure_default_at(&p).unwrap());
         assert_eq!(current_threshold_tokens_at(&p), Some(50_000));
     }
 }
