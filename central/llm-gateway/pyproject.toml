@@ -24,6 +24,12 @@ dependencies = [
     # lazy import orjson (litellm 未显式 declare · 缺就 502 APIConnectionError).
     # 强制显式 pull · 达华 POC image force-recreate 后 chat 走 mcp code path 也稳.
     "orjson>=3.10",
+    # 10/20 (鸿波 Windows 现场, 小鲶每句「网络层连接失败」): litellm 1.106 起 chat 带 tools 就走
+    # responses.mcp.chat_completions_handler → proxy/_experimental/mcp_server/catalog → `mcp.types`,
+    # 而 mcp 只在 litellm 的 proxy / mcp extra 里声明, 裸装没有。镜像没锁版本, 10/19 的包拉到
+    # 1.106.0 后每个请求都 ModuleNotFoundError, 被 errors.py 翻译成网络错误。跟 orjson 一样显式声明。
+    # 同一个坑 7/18 踩过一次 (上面 orjson), 根因都是 litellm 的 lazy import 不声明依赖。
+    "mcp>=1.26.0,<3",
     "pyyaml>=6.0.2",
     # P3.5.93 (6/23 鸿波): quota.yaml 编辑 UI 写回需保留 yaml comments.
     # pyyaml.safe_dump 会吹掉所有 comments (BL-FIX38 / BL-CHENHONGBO-DEV-QUOTA 等
