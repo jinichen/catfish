@@ -62,6 +62,7 @@ def _seed_and_migrate_models() -> None:
         raw_models = load_raw_models()
         n = model_store.seed_from_yaml(raw_models)
         if n:
+            # 只在全新的库上发生一次 (seeded_at, 10/21); 之后升级不再补出厂模型, 删掉的不会回来
             logger.info("模型配置首次播种: %d 个 (来源 models.yaml)", n)
             invalidate_config()  # 让本 worker 立刻读到库里那份
 

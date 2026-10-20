@@ -54,6 +54,8 @@ def db(monkeypatch):
         # gateway_models 先删 —— 它引用 provider。
         cur.execute("DELETE FROM gateway_models")
         cur.execute("DELETE FROM gateway_providers")
+        # 10/21: 「播种过了」的标记也要清, 否则只有第一个用例播得进去 (见迁移 20261021_012)
+        cur.execute("UPDATE gateway_config_meta SET seeded_at = NULL WHERE id = 1")
         conn.commit()
 
     # 配置缓存必须清, 否则读到的是上一个用例装配好的那份
@@ -370,3 +372,41 @@ def test_保存到不存在的供应商会被拒(client):
     r = client.put(f"/api/admin/models/{name}", json=body)
     assert r.status_code == 400
     assert "供应商" in r.text
+
+
+def test_删掉的模型和供应商_升级重启后不回来(db):
+    """10/21 鸿波: 每次升级中央端, 已经删掉的供应商和模型又回来了.
+
+    真 SQL 走一遍升级时 gateway 启动做的两件事: 播种 + 拆供应商。原来播种每次都按
+    "库里没有同名就插" 补齐, 删掉的模型带着端点回来, 拆供应商再把删掉的供应商建回来。
+    """
+    from catfish_gateway import model_store, provider_store
+
+    raw = _seed_from_yaml()
+    provider_store.migrate_models_to_providers()
+    victim = raw[0]["name"]
+
+    with model_store._conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT payload->'upstream'->>'provider' FROM gateway_models WHERE name = %s", (victim,))
+        pid = cur.fetchone()[0]
+        # 员工在界面上删: 先删用这家供应商的模型, 再删供应商
+        cur.execute(
+            "SELECT name FROM gateway_models WHERE payload->'upstream'->>'provider' = %s", (pid,)
+        )
+        gone = [r[0] for r in cur.fetchall()]
+        cur.execute("DELETE FROM gateway_models WHERE payload->'upstream'->>'provider' = %s", (pid,))
+        cur.execute("DELETE FROM gateway_providers WHERE id = %s", (pid,))
+        conn.commit()
+
+    # 模拟升级后 gateway 重启: 同一份 models.yaml 再播一次 + 再拆一次
+    assert model_store.seed_from_yaml(raw) == 0, "播种过的库又补了出厂模型"
+    provider_store.migrate_models_to_providers()
+
+    with model_store._conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT name FROM gateway_models WHERE name = ANY(%s)", (gone,))
+        back = [r[0] for r in cur.fetchall()]
+        cur.execute("SELECT id FROM gateway_providers")
+        providers = {r[0] for r in cur.fetchall()}
+    assert not back, f"删掉的模型升级后又回来了: {back}"
+    assert pid not in providers, f"删掉的供应商 {pid} 升级后又被建回来了"
+

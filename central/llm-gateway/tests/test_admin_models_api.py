@@ -487,7 +487,9 @@ def test_播种不会带进来第二个默认(monkeypatch):
             self._r = None
 
         def execute(self, sql, args=None):
-            if "DISTINCT" in sql:
+            if "SELECT seeded_at" in sql:
+                self._r = (None,)  # 10/21: 还没播种过
+            elif "DISTINCT" in sql:
                 # 9/23: 播种按 mode 看"哪些 mode 已有默认"
                 self._rows = sorted(
                     {(v.get("mode") or "chat",) for v in store.values() if v.get("default")}

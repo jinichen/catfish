@@ -10,8 +10,12 @@
     models.yaml   出厂默认 / 种子。交付包里带的那份, 决定客户装完开箱有哪些模型。
     库            运行时事实源。一旦播种过, 读配置只看库。
 
-首次启动时若库里没有任何模型, 用 yaml 里的播种一次 (幂等, 见 seed_from_yaml)。
-之后 yaml 不再参与模型列表 —— 否则升级包换了 yaml 会把客户现场的改动冲掉。
+首次启动时用 yaml 里的播种一次 (见 seed_from_yaml)。之后 yaml 不再参与模型列表 ——
+否则升级包换了 yaml 会把客户现场的改动冲掉。
+
+10/21: 「只播一次」原来没做到 —— 每次启动都按 ON CONFLICT DO NOTHING 补齐, 删掉的模型
+(和跟着它被重建的供应商) 每次升级都回来。现在靠 gateway_config_meta.seeded_at 记
+「播种过了」(迁移 20261021_012), 播过就不再碰。
 
 **顶层字段 (auto_fallback / max_fallback_prompt_tokens / 三个 hub 的地址)
 仍然只从 yaml 读**, 不进库。它们是部署形态而不是业务配置, 改它们本来就该
@@ -99,10 +103,21 @@ def read_models() -> list[dict[str, Any]] | None:
 
 
 def seed_from_yaml(models: list[dict[str, Any]]) -> int:
-    """把 yaml 里的模型播种进库. 已有同名的**不覆盖**.
+    """把 yaml 里的出厂模型播种进库 —— **整个库的生命周期里只播一次**.
 
-    幂等, 而且并发安全 —— 4 个 worker 启动时会同时跑这个, 靠
-    ON CONFLICT DO NOTHING 让重复播种变成空操作。
+    ## 只播一次 (10/21)
+
+    原来每次启动都跑, 规则是"库里没有同名的就插"。删掉的模型库里没有了, 于是每次
+    重启 / 升级都被当成"缺失的出厂模型"插回来 (插回来的是自带端点的老形态, 随后
+    migrate_models_to_providers 又把删掉的供应商建回来)。鸿波 10/21: 每次升级中央端,
+    删掉的供应商和模型又回来了。
+
+    现在看 gateway_config_meta.seeded_at: 有值 = 播过了, 直接返 0; 为空才播, 播完写上。
+    不用"表是空的"判断 —— 客户把模型全删了也是空的, 那时灌回去是同一个 bug。
+    已在跑的现场由迁移 20261021_012 补标 (库里有任何模型或供应商就算播过)。
+
+    并发安全 —— 4 个 worker 启动时会同时跑这个: 先 `SELECT … FOR UPDATE` 锁住那一行,
+    第一个播完写上 seeded_at 并提交, 后面的拿到锁时已经看得见, 直接返回。
 
     ## 播种不能带进来第二个 default
 
@@ -123,6 +138,12 @@ def seed_from_yaml(models: list[dict[str, Any]]) -> int:
         return 0
     try:
         with _conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT seeded_at FROM gateway_config_meta WHERE id = 1 FOR UPDATE")
+            marker = cur.fetchone()
+            if marker is None or marker[0] is not None:
+                # 播过了 (或者 meta 行不在 —— 007 迁移会插它, 不在说明库不对, 更不该往里灌)
+                conn.commit()
+                return 0
             # 9/23: default 是**按 mode** 唯一的 (对话一个、向量一个), 所以查的
             # 是"库里哪些 mode 已经有默认了", 只把那些 mode 的种子去掉 default。
             cur.execute(
@@ -147,6 +168,7 @@ def seed_from_yaml(models: list[dict[str, Any]]) -> int:
                     (m["name"], json.dumps(m, ensure_ascii=False), i),
                 )
                 n += cur.rowcount
+            cur.execute("UPDATE gateway_config_meta SET seeded_at = now() WHERE id = 1")
             if n:
                 _bump_revision(cur)
             conn.commit()
