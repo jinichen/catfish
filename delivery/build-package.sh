@@ -353,6 +353,7 @@ for ARCH in $ARCHES; do
     # 两个架构都带, 二进制按包的架构取 (amd64 = x86_64 服务器, arm64 = 鲲鹏 / 飞腾 等)。
     bash "$SCRIPT_DIR/linux-docker/fetch-docker.sh" "$ARCH" "$STAGE/delivery/catfish-poc/linux" \
         || { echo "❌ Linux 离线 Docker 获取失败"; exit 1; }
+    rm -f "$STAGE/delivery/catfish-poc/linux/.gitignore"   # 仓库用的, 不给客户
     # Windows PowerShell 5.1 (Win10/11/Server 2022 默认) 读不带 BOM 的 UTF-8 脚本会按 GBK 解码, 中文全乱、脚本跑不起来
     for ps in $(find "$STAGE/delivery/catfish-poc" -name '*.ps1'); do
         if [ "$(head -c3 "$ps" | xxd -p)" != "efbbbf" ]; then
