@@ -193,7 +193,7 @@ def test_不在表里的source一个工具都不少():
 
     这条是本次改动的**爆炸半径上限**: 只要它绿, 改动就碰不到员工日常聊天。
     """
-    for src in ("companion-chat", "unknown", "plugin:toolbridge-recmode", ""):
+    for src in ("companion-chat", "unknown", "plugin:toolbridge-meeting", ""):
         kept, dropped = _filter_by_source_profile(REAL_WORLD_TOOLS, src)
         assert kept == REAL_WORLD_TOOLS, f"source={src!r} 被动了"
         assert dropped == []

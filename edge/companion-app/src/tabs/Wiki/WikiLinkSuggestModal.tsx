@@ -6,8 +6,8 @@
  *   wiki title list → 弹本 modal 显匹配建议 → 员工 checkbox 确认 → body 末尾加
  *   "## 关联概念" 段落 (严格员工主权, 不动老 body).
  *
- * UX 一致性: 复用 RecMode ModalShell + T theme tokens (跟 SetupModal / LearnModal
- * 同 macOS Sonoma 风). 严格员工 muscle memory 不破坏.
+ * UX 一致性: 复用 components/ModalShell 的 ModalShell + T theme tokens
+ * (macOS Sonoma 风). 严格员工 muscle memory 不破坏.
  *
  * 状态机 (自管, 无独立 zustand store):
  *   - idle       : 加载前 (刚 open)
@@ -19,7 +19,7 @@
  */
 
 import { useState, useEffect } from "react";
-import { ModalShell, T } from "../Chat/RecMode/shared";
+import { ModalShell, T } from "../../components/ModalShell";
 import { wikiUpdateFile } from "../../lib/tauri";
 import {
   suggestWikilinks,
@@ -149,7 +149,7 @@ export default function WikiLinkSuggestModal({
 
   return (
     <ModalShell onClose={onClose}>
-      {/* 关闭按钮 (类 SetupModal / LearnModal) */}
+      {/* 关闭按钮 */}
       <button
         onClick={onClose}
         onMouseEnter={() => setCloseHover(true)}

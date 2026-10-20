@@ -24,7 +24,7 @@ fallback (hardcoded DEFAULT). 不阻塞 background task.
 
 # 为啥 不用 ``async``?
 
-3 个 caller 调用频率低 (RecMode 录制结束 1 次, dedupe 每条 entry 1 次,
+3 个 caller 调用频率低 (会议纪要每场几次, dedupe 每条 entry 1 次,
 expertise 每邮件 1 次). 5 分钟 cache 首次 ~3s, 后续 0 ms. sync
 httpx.Client 简单, 不必 async pollute 调用方.
 """

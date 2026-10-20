@@ -193,7 +193,6 @@ plugin_misc = _import_sibling("plugin_misc")
 _patch_p12_update_system_prompt_safe = plugin_misc._patch_p12_update_system_prompt_safe  # noqa: F401
 _patch_p13_dump_naming_type_tag = plugin_misc._patch_p13_dump_naming_type_tag  # noqa: F401
 _patch_p20_block_execute_code_permanent = plugin_misc._patch_p20_block_execute_code_permanent  # noqa: F401
-_patch_p29_learn_slash_translate = plugin_misc._patch_p29_learn_slash_translate  # noqa: F401
 _patch_p7_companion_proxy_route = plugin_cors._patch_p7_companion_proxy_route  # noqa: F401
 _patch_p8_p9_cors = plugin_cors._patch_p8_p9_cors  # noqa: F401
 _patch_p24_cors_allowlist = plugin_cors._patch_p24_cors_allowlist  # noqa: F401
@@ -506,14 +505,8 @@ def _apply_patches() -> None:
     # 鸿波铁律: 中文 reply 段砍 /approve always (永久免批) :.
     _try_patch(_patch_p28_weixin_zh, "P28: _patch_p28_weixin_zh 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
 
-    # P29 (P3.5.168 7/3 鸿波 catch v0.18 upgrade backlog):
-    # Companion 走 hermes 8642 /v1/chat/completions 时 /learn slash command 前置翻译.
-    # 真因 (P3.5.164 严格 audit): hermes v0.18 /learn 只在 GatewayRunner._handle_message
-    # 处理 (gateway/run.py:9263-9289), /v1/chat/completions (APIServerAdapter) 严格
-    # 不过 slash command dispatcher. Companion 员工输 "/learn xxx" → LLM 只当 prompt
-    # 释义. P29 wrap _run_agent 前置检测 → 调 hermes agent.learn_prompt.build_learn_prompt
-    # 翻译 → 替换 message → hermes original _run_agent。
-    _try_patch(_patch_p29_learn_slash_translate, "P29: _patch_p29_learn_slash_translate 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
+    # P29 (/learn 前置翻译) 10/20 退役: Companion 的「让 AI 学」入口拿掉了, 只有它会发 /learn。
+    # 墓碑在 plugin_misc.py 尾部。
 
     # P30 (P3.5.198 7/8 鸿波 catch "微信扫码绑定 Error: start 失败 404"):
     # 前端 wechat_qr.ts v3 (5/26) 契约缺 backend impl — hermes v0.17→v0.18

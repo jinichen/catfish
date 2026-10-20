@@ -156,3 +156,18 @@ def test_multiple_calls_no_module_leak(tmp_path):
             }
         )
         assert r["ok"] is True, f"第 {i+1} 次调用失败: {r}"
+
+
+# ── 10/20: Windows 路径 ──────────────────────────────────────────
+
+def test_extract_file_paths_windows_and_posix():
+    """原来只认 "/", Windows 的 C:\\...\\x.docx 被丢掉 → 产出文件的 skill files 恒空。"""
+    from catfish_tool_bridge.catfish_tools_skill_ops import _extract_file_paths
+
+    win = r"C:\Users\a\.catfish\downloads\2026-10-20\x.docx"
+    assert _extract_file_paths({"path": win, "files": [r"C:\Users\a\y.xlsx"]}) == [win, r"C:\Users\a\y.xlsx"]
+    assert _extract_file_paths(win) == [win]
+    assert _extract_file_paths([win]) == [win]
+    assert _extract_file_paths({"docx": "/Users/a/x.docx"}) == ["/Users/a/x.docx"]
+    # 不是路径的字符串照旧不收
+    assert _extract_file_paths({"summary": "已完成 3.5 项", "title": "周报"}) == []

@@ -1,5 +1,7 @@
 # BL-RECMODE-DASHBOARD-UI 实施 plan (#75)
 
+> **⚠ 10/20 已下线**: 录屏学习 (RecMode) 和「让 AI 学」整体拿掉 (鸿波: mac / Windows 都从没用过)。本文是历史记录, 代码已删; 见 `_knowledge_base/teach-mode-windows-audit-20261020.md`。
+
 > **5/25 22:30 ship 状态**: 代码全写完 (Rust + TS + React + 集成), tsc 全过.
 > sandbox 没 cargo → `cargo check` + `npm run tauri dev` 真测留给 Mac 一气做.
 >

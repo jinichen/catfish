@@ -1,5 +1,7 @@
 # 鲶鱼 · RecMode 演进路径 v0.1
 
+> **⚠ 10/20 已下线**: 录屏学习 (RecMode) 和「让 AI 学」整体拿掉 (鸿波: mac / Windows 都从没用过)。本文是历史记录, 代码已删; 见 `_knowledge_base/teach-mode-windows-audit-20261020.md`。
+
 > **版本**: v0.1, 2026-05-15 凌晨 2:15 起草
 > **背景**: 5/14 凌晨 ship V2 (selector 漂移 + DOM mutation + 14 天清), 5/15 凌晨鸿波连问 4 个真核心问题暴露 V2 的边界:
 >   1. "页面大改 skill 还是要重录, 麻烦"

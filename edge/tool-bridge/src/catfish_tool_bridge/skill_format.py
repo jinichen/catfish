@@ -2,7 +2,8 @@
 
 # 干啥
 
-集中 SKILL.md + script.py 渲染逻辑, RecMode 和 propose_skill 都调它, 保证
+集中 SKILL.md + script.py 渲染逻辑, propose_skill 落地 (catfish_install_proposal) 调它, 保证
+(10/20: 原来还有录屏学习 RecMode 一路, 已整体拿掉; 文件从 recmode/ 挪出来),
 **生成的 skill 真能被 hermes 加载 + catfish_run_skill 调用**.
 
 # 解决的 3 个 BLOCKER (P3.5.43 audit 发现, 不是猜)
@@ -64,7 +65,7 @@ VALID_NAMESPACES = ("personal", "department", "public", "creative")
 
 @dataclass
 class SkillManifest:
-    """统一 skill 数据载体 — RecMode SkillOutput / propose_skill 入参都转成它.
+    """统一 skill 数据载体 — propose_skill 入参转成它.
 
     frontmatter 字段 (必填, hermes plugin loader 强制):
       - name: kebab-case slug (kebab 跟 hermes 仓库现有 SKILL 对齐, e.g. weekly-report)
@@ -91,7 +92,7 @@ class SkillManifest:
     # ── frontmatter 可选 ─────────────────────────────────────────
     version: str = "1.0.0"
     deprecated: bool = False
-    author: str = "鲶鱼 RecMode"  # 自动生成的 skill 标 RecMode, propose 改成 propose_skill
+    author: str = "鲶鱼"  # skill_sync 认 author 含「鲶鱼」= 自动生成, 可覆盖; propose 传 "鲶鱼 propose_skill"
 
     # ── body 段落 ────────────────────────────────────────────────
     intent_summary: str = ""
@@ -219,14 +220,9 @@ def render_frontmatter(manifest: SkillManifest, today: Optional[str] = None) -> 
 
 def render_skill_md(
     manifest: SkillManifest,
-    recording_meta: Optional[dict] = None,
     today: Optional[str] = None,
 ) -> str:
-    """渲染完整 SKILL.md (含 hermes-兼容 frontmatter + body 段).
-
-    recording_meta: RecMode 自动生成时塞录制元数据 (session_id / 时长 / events 数).
-                    propose_skill / 手写 skill 不传.
-    """
+    """渲染完整 SKILL.md (含 hermes-兼容 frontmatter + body 段)."""
     parts: list[str] = []
 
     # ── 1. frontmatter ──────────────────────────────
@@ -283,18 +279,6 @@ def render_skill_md(
         parts.append("")
         for q in manifest.questions_for_user:
             parts.append(f"- {q}")
-        parts.append("")
-
-    # ── 7. 录制元数据 (RecMode 自动生成时塞) ───────
-    if recording_meta:
-        parts.append("---")
-        parts.append("")
-        parts.append("## 自动生成元数据 (不要手改, 重录或 propose 再生)")
-        parts.append("")
-        parts.append(f"- session_id: `{recording_meta.get('session_id', '?')}`")
-        parts.append(f"- 录制时长: {recording_meta.get('duration_s', '?')}s")
-        parts.append(f"- events: {recording_meta.get('events_count', '?')}")
-        parts.append(f"- keyframes: {recording_meta.get('keyframes_count', '?')}")
         parts.append("")
 
     return "\n".join(parts)
@@ -389,7 +373,7 @@ def render_script_py(manifest: SkillManifest) -> str:
         '',
         '',
         'if __name__ == "__main__":',
-        '    # 直接跑 — 给 RecMode preview / 手动调试用',
+        '    # 直接跑 — 手动调试用',
         '    import json, sys',
         '    p = json.loads(sys.argv[1]) if len(sys.argv) > 1 else {}',
         f'    result = {fn_name}(p)',

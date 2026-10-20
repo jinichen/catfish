@@ -19,10 +19,8 @@ import type { Attachment } from "../../types/chat";
 import { useUIStore } from "../../store/ui";  // BL-E13 主动闲聊 prefill
 import { useAgentStore } from "../../store/agent";  // BL-E11 后续: 员工自定义名
 // 5/20 拆: useTeachingStore / useAutoContinueStore / useChatStore 移到子组件
-import RecModeButton from "./RecModeButton";  // BL-LEARN-RECMODE Day 2 (5/14 #64)
-// P3.5.167 (7/3 鸿波拍板 B): 3 教学 icon (🎓 教学 / 🎬 录屏 / 💡 让 AI 学) 叠成
-// 📚 EduPopover 省空间. RecMode 4 modals 仍在 RecModeButton 里 render (state-driven).
-// EduPopover 只用 RecModeToolbarButton 的 openSetup handler.
+// P3.5.167 (7/3 鸿波拍板 B): 教学入口叠成 📚 EduPopover 省空间。
+// 10/20: 里面的 🎬 录屏演示 / 💡 让 AI 学 两边都没用过, 拿掉了, 剩教学模式 + 登录密码。
 import EduPopover from "./components/EduPopover";
 
 interface Props {
@@ -288,28 +286,6 @@ export default function ChatInput({
     setAttachError(null);
   }
 
-  /** P3.5.170 (7/3 鸿波 catch P3.5.167 UX 错): 老 handlePrefillLearn 已删.
-   *
-   *  老实现: 点 💡 → setText("/learn ") + focus, 员工继续输. 违反员工主权军规:
-   *  暴露 hermes slash 语法, 员工可能疑惑"为什么要写 /learn?".
-   *
-   *  新实现: 点 💡 弹 LearnModal → 员工输**纯描述** → modal 内部拼
-   *  "/learn <描述>" → 走此 callback → 直接调 onSend (类 submit) → hermes 8642
-   *  → P29 patch translate → agent turn.
-   *
-   *  参数是完整 fullText (已含 "/learn " 前缀, 由 LearnModal 拼好). ChatInput
-   *  只负责透传给 onSend, 不改.
-   */
-  function handleStartLearn(fullText: string) {
-    // 类 submit() 逻辑但简化: learn 场景无 attachments; 运行中同样排队
-    if (isStreaming) {
-      onEnqueue(fullText, []);
-    } else {
-      onSend(fullText, []);
-    }
-    // 学 skill 场景员工不希望 textarea 被污染 — 保空, 员工继续用 chat.
-  }
-
   // P3.5.20 / P3.5.20.1 (6/17 鸿波): steerSubmit + [🎯 改主意] button + onSteer
   // prop + useChat.steer + lib/steer.ts + chatWire.applySteerPrefix + _steered
   // field + ChatMessage isSteered render 整链砍 — 设计意图未实现, 实测同效.
@@ -495,19 +471,10 @@ export default function ChatInput({
         </button>
 
         {/* 📚 教学入口 popover (P3.5.167, 7/3 鸿波拍板 B 方案 "叠起来省空间"):
-            3 教学场景语义 unified 叠成 1 popover:
               🎓 教学模式  (老 TeachingToggle, BL-LEAN-SESSION 5/13)
-              🎬 录屏演示  (老 RecModeToolbarButton, BL-LEARN-RECMODE 5/14 #64)
-              💡 让 AI 学  (hermes v0.18 /learn, P29 patch P3.5.168 7/3)
-
-            RecMode 4 modals (SetupModal / RecordingOverlay / ErrorBanner /
-            PreviewBanner) 保留在 <RecModeButton> 里, state-driven 触发, popover
-            close 后 modal 仍能 render (老架构未破坏). EduPopover 只用 openSetup
-            handler 触发 setup state. */}
-        <EduPopover
-          isStreaming={isStreaming}
-          onStartLearn={handleStartLearn}
-        />
+              登录密码     (8/18, 教学用的站点密码)
+            10/20: 🎬 录屏演示 / 💡 让 AI 学 拿掉 (两边都没用过)。 */}
+        <EduPopover isStreaming={isStreaming} />
 
         {/* ⏭ 自动接力 toggle (BL-AUTO-CONTINUE 5/13 鸿波"长程任务咋办").
             P3.5.46 (6/20 鸿波 catch '🔄 跟长程啥关系'): emoji 🔄 → ⏭ 跟系统自带 retry
@@ -518,13 +485,6 @@ export default function ChatInput({
             适合长任务 (合并多个 Excel / 资质材料整理 / 长流程 skill 串联).
             关闭回常态: LLM stop 就 stop, 自己打"继续". 跨 session 隔离. */}
         <AutoContinueToggleButton isStreaming={isStreaming} />
-
-        {/* 🎬 RecMode modals 层 (state-driven from useRecModeStore). Setup/
-            Recording/Error/Preview 4 modals 保留在这里, click "🎬 录屏演示" (在
-            📚 EduPopover 里) → openSetup() → state="setup" → SetupModal 弹.
-            按钮部分被 EduPopover 替代 (hideToolbarButton), 但 modal render 仍
-            走 RecModeButton (state-driven 分层不动, P3.5.167 refactor 无破坏). */}
-        <RecModeButton disabled={isStreaming} hideToolbarButton />
 
         {/* 🎤 语音输入按钮 — 10/1 起本机 FunASR 转写 (会议组件包)
            按一下开始录音, 再按一下停止 → 自动转文字填到 textarea. 数据 100% 本地. */}

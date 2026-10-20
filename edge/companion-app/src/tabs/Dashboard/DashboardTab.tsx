@@ -51,8 +51,8 @@ import WorkflowsCard from "./WorkflowsCard";
 import ExpertsCard from "./ExpertsCard";
 // P3.3.18 (6/10): 部门 wiki publish 市场, 跟 SkillsMcpCard 并列 (manifesto 公理 2 例外)
 import WikiHubCard from "./WikiHubCard";
-// 6/2 BL-SKILLS-CARD-SPLIT (鸿波 6/2 凌晨拍 方案 C): MySkillsCard 显员工自己 RecMode
-// 录的 + propose_skill 落地的 skill (~/.catfish/skills/), 含共享按钮占位. 主卡, 上.
+// 6/2 BL-SKILLS-CARD-SPLIT (鸿波 6/2 凌晨拍 方案 C): MySkillsCard 显员工自己教会
+// (教学凝固) + propose_skill 落地的 skill (~/.catfish/skills/), 含共享按钮占位. 主卡, 上.
 // SkillsMcpCard 改成只显内置+装的, 次卡, 下. 配套 catfish 5 大卖点之 "员工自助生成
 // + 共享" 真兑现 UI.
 import MySkillsCard from "./MySkillsCard";
@@ -125,11 +125,8 @@ import PrivacyCard from "./PrivacyCard";
 // BL-SELF-CHANGE-PASSWORD (7/20 鸿波 catch 达华 POC 员工无自主改密入口):
 // 员工首次登录用 admin 临时密码 · 需自主改. 加卡到隐私 section.
 import AccountSecurityCard from "./AccountSecurityCard";
-// 6/2 BL-DASHBOARD-DROP-RECORDINGS-CARD (鸿波 6/2 凌晨): RecordingsCard 整卡删.
-// 前提是 #17 BL-RECMODE-AUTO-CLEAN-RAW 默认 skill 生成完自动清原料 → 录屏目录
-// 99% 时间空 / 只剩 KB 级 meta + skill_draft, 卡 99% 空着 = UI noise. PrivacyCard
-// 🟢 本机存储区加 1 行说明 (路径仍指向 ~/.catfish/recordings/, Finder/CLI 还能用).
-// import RecordingsCard from "./RecordingsCard";  // 删 ← 历史: 5/25 #75 ship
+// 6/2 BL-DASHBOARD-DROP-RECORDINGS-CARD: RecordingsCard 整卡删; 10/20 录屏学习整体拿掉,
+// 文件和 recordings_* Tauri 命令一起删了。
 // BL-WECHAT-CATFISH-BIND v1 (5/26 鸿波): WeChat ↔ catfish 员工 email 绑定状态卡.
 // 跟隐私同 section — IM 平台用户 ↔ 真员工 隔离也是隐私红线 (防 100 个 WeChat
 // 用户记忆串到一个虚拟员工身上).
@@ -231,9 +228,8 @@ export default function DashboardTab() {
 
       {/* BL-EMPLOYEE-PRIVACY-VERIFICATION (#77, 5/25):
           隐私 + 本机数据主权一组. 默认开 — 透明性卖点要让员工立刻看到, 不藏折叠下.
-          PrivacyCard: 中央存了啥 metadata + 本机数据归属表 (含录屏路径) + quota 进度.
-          6/2 BL-DASHBOARD-DROP-RECORDINGS-CARD (鸿波): 删 RecordingsCard, 录屏说明
-          1 行挪进 PrivacyCard. count 3→2. */}
+          PrivacyCard: 中央存了啥 metadata + 本机数据归属表 + quota 进度.
+          6/2 BL-DASHBOARD-DROP-RECORDINGS-CARD (鸿波): 删 RecordingsCard. count 3→2. */}
       <CollapsibleSection
         id="privacy"
         title="🔒 隐私 / 本机数据"
@@ -322,7 +318,7 @@ export default function DashboardTab() {
           storageKey="skills"
           defaultKey="my-skills"
           tabs={[
-            // P3.3.24 (6/11): "我录的技能" 已名实不副 — 4 条 skill 里 RecMode 录 0,
+            // P3.3.24 (6/11): "我录的技能" 已名实不副 — 4 条 skill 里录屏录的 0,
             //   3 个部门 publish + 1 个 zip 装. 改"我的技能" — 表"个人本机管", 不绑生成方式.
             // P3.3.32 (6/12): 删 "(本机)" / "(可直接用)" — 两边都装本机都可用,
             //   括号误导. 区别只是"谁装的", 副文案在卡内说.

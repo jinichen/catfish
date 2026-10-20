@@ -40,10 +40,9 @@ const LOCAL_DATA_ITEMS: { what: string; path: string; uploaded: boolean }[] = [
   { what: "你的第三方服务密钥 (Tavily 搜索等, 我在你本机上用)", path: "~/.hermes/.env", uploaded: false },
   { what: "你的登录凭证 (跟密码同等级, 我们也不上传)", path: "~/.catfish/auth/token.json", uploaded: false },
   { what: "我跑过的调用记录 (本机历史归档, 公司服务器单独存自己一份)", path: "~/.catfish/gateway_audit.jsonl", uploaded: false },
-  // 6/2 BL-DASHBOARD-DROP-RECORDINGS-CARD: RecordingsCard 整卡删后 (录屏 99% 时间空,
-  // 卡是 UI noise), 录屏说明 1 行挪进来. 路径仍可在 Finder/CLI 进, 但默认 skill
-  // 生成完自动清原料 (#17), 员工大多数情况下进去看就是空的.
-  { what: "你录过的屏 (skill 生成完自动清原料, 没生成的留着等你保存)", path: "~/.catfish/recordings/", uploaded: false },
+  // 10/20: 录屏学习拿掉了, 不会再有新录屏; 老机器上可能还留着以前的原料, 这行留着
+  // 让员工知道在哪 (「重置」也照样会清它, 见 self_serve.rs)。
+  { what: "以前录屏学习留下的原料 (功能已下线, 不会再新增)", path: "~/.catfish/recordings/", uploaded: false },
   // 6/2 BL-MEMORY-AUDIT-TRAIL: 替 hermes 原生 memory_tool 的"replace/remove 直接覆盖
   // 无 history" 兜底. 每次 add/replace/remove 落 jsonl, prev_value 全保留. 周一拍
   // 专卡 + Tauri 命令前, 员工/IT 想查直接 cat / jq 这文件.

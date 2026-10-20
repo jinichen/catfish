@@ -173,7 +173,7 @@ async def summarize(
 ) -> dict:
     """template = None 时跟原来一样; 给了 {id, name, body} 就多调一次大模型按模版写 minutes.md
     (meeting_minutes_template.py)。结构化结果 (待办等) 两种情况都有, 「加入任务库」照常用。"""
-    from .recmode.aggregator import call_llm  # noqa: PLC0415 — 复用同一个网关调用 (鉴权 / 选模型 / 不走代理)
+    from .gateway_llm import call_llm  # noqa: PLC0415 — 网关调用 (鉴权 / 选模型 / 不走代理)
 
     meta, transcript, names = load_inputs(meeting_dir)
     lines = transcript_lines(transcript, names)

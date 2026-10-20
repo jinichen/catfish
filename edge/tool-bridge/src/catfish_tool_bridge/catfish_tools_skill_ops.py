@@ -245,29 +245,35 @@ def _function_signature_help(fn) -> Dict[str, Any]:
     }
 
 
+def _has_sep(s: str) -> bool:
+    """10/20: 原来只认 "/", Windows 的 C:\\...\\x.docx 一个都收不到 —— 产出文件的 skill
+    在 Windows 上 files 恒空, 工作流 files_min 校验必失败。两种分隔符都认。"""
+    return "/" in s or "\\" in s
+
+
 def _extract_file_paths(result: Any) -> List[str]:
     """从 skill render 返回值里挖文件路径 (.docx / .xlsx / .pptx 等).
 
     支持几种返回形态:
-      - {"docx": "/path/to/x.docx", ...}
+      - {"docx": "/path/to/x.docx", ...}  (Windows: "C:\\path\\x.docx")
       - {"files": [...]}
       - 字符串路径
     """
     paths: List[str] = []
     if isinstance(result, str):
-        if "/" in result and "." in result:
+        if _has_sep(result) and "." in result:
             paths.append(result)
     elif isinstance(result, dict):
         for k, v in result.items():
-            if isinstance(v, str) and "/" in v and "." in v:
+            if isinstance(v, str) and _has_sep(v) and "." in v:
                 paths.append(v)
             elif isinstance(v, list):
                 for item in v:
-                    if isinstance(item, str) and "/" in item:
+                    if isinstance(item, str) and _has_sep(item):
                         paths.append(item)
     elif isinstance(result, list):
         for item in result:
-            if isinstance(item, str) and "/" in item:
+            if isinstance(item, str) and _has_sep(item):
                 paths.append(item)
     # 去重保持顺序
     seen = set()

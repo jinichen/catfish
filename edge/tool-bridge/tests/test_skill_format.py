@@ -1,7 +1,7 @@
 """P3.5.43 — skill_format 单测.
 
 跑法 (从 edge/tool-bridge):
-  python3 -m pytest tests/recmode/test_skill_format.py -q
+  python3 -m pytest tests/test_skill_format.py -q
 """
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import re
 
 import pytest
 
-from catfish_tool_bridge.recmode.skill_format import (
+from catfish_tool_bridge.skill_format import (
     DESCRIPTION_TOKEN_BUDGET,
     SkillManifest,
     TRIGGERS_MAX,
@@ -163,14 +163,8 @@ def test_render_skill_md_has_frontmatter_block():
     assert "\n---\n\n# weekly-report" in md
 
 
-def test_render_skill_md_includes_recording_meta_when_provided():
-    meta = {"session_id": "abc123", "duration_s": 45, "events_count": 12, "keyframes_count": 5}
-    md = render_skill_md(_valid_manifest(), recording_meta=meta)
-    assert "session_id: `abc123`" in md
-    assert "录制时长: 45s" in md
-
-
-def test_render_skill_md_skips_recording_meta_when_absent():
+def test_render_skill_md_has_no_recording_meta():
+    # 10/20 录屏学习拿掉后不再有录制元数据段
     md = render_skill_md(_valid_manifest())
     assert "自动生成元数据" not in md
     assert "session_id" not in md

@@ -1,12 +1,12 @@
 /** 6/2 BL-SKILLS-CARD-SPLIT (鸿波 6/2 凌晨拍 方案 C): "🐟 我录的 skill" 主卡.
  *
- * 真物理位置: ~/.catfish/skills/ — RecMode 真生成 + LLM propose_skill 落地处.
+ * 真物理位置: ~/.catfish/skills/ — 教学凝固 (catfish_freeze_skill) + LLM propose_skill 落地处.
  * 跟"已装的 skill / MCP" 次卡 (SkillsMcpCard) 拆开, 主卡上, 次卡下.
  *
  * # 为啥拆 (鸿波 6/2 凌晨洞察)
  *
  * - catfish 5 大差异化卖点之一: "员工自助生成 skill" + "跨员工共享"
- * - 共享对象本应清晰: 员工自己录的 skill (RecMode + propose_skill), 不是 Anthropic
+ * - 共享对象本应清晰: 员工自己教会的 skill (教学凝固 + propose_skill), 不是 Anthropic
  *   内置的 docx skill, 也不是 marketplaces 装的 apple-mail plugin
  * - 老 SkillsMcpCard 混在一起 (catfish 仓库 8 个 + ~/.hermes/skills/ 96 个), 共享
  *   按钮放哪都没意义 — "共享 Anthropic skill 给同事" 0 价值
@@ -14,8 +14,9 @@
  *
  * # 空状态友好
  *
- * 多数员工第一次开 Companion 还没录任何 skill, 卡显空状态 + 引导去录: 工作台 →
- * 🎬 录屏 → 操作演示 → catfish 自动生成 skill. 跟 OnboardingWizard 第 7 步串联.
+ * 多数员工第一次开 Companion 还没教过任何 skill, 卡显空状态 + 引导去教: 聊天框
+ * 📚 → 教学模式 (或直接说"我教你") → 一步步带鲶鱼做一遍 → 凝固成 skill.
+ * (10/20 前引导的是 🎬 录屏, 录屏学习已拿掉。)
  *
  * # 共享按钮真接 (6/2 BL-SKILLS-PUBLISH-WIRE 鸿波下午 audit)
  *
@@ -42,7 +43,7 @@ import type { SkillEntry, SkillNamespace } from "../../types/identity";
 // P3.3.24 (6/11): namespace 中文 label — 给员工看. unknown ns 走原名.
 //   department / external 是当前两个固定 namespace, 其他 (员工自起) 显原名.
 // P3.3.33 (6/12): department / external 现在归"已装技能库"了 (后端 list_my_skills
-//   过滤掉了), 这里 NAMESPACE_LABEL 用不上了, 但留着备用 (RecMode freeze 可能用
+//   过滤掉了), 这里 NAMESPACE_LABEL 用不上了, 但留着备用 (教学凝固可能用
 //   自定义 ns, 未来加 source marker 时仍可用).
 const NAMESPACE_LABEL: Record<string, string> = {
   department: "部门共享",
@@ -206,8 +207,8 @@ export default function MySkillsCard() {
         {/* P3.3.32 (6/12): 删 "(本机)" — 已装技能库也是本机, 括号误导 */}
         {/* P3.3.34 (6/12): 删 📥 装 zip 按钮 + 3 态 banner — 挪去 SkillsMcpCard
             ("已装技能库" tab) 跟"+ 装 URL"并列, 集中所有装入口防割裂.
-            这里"我的技能"只显 RecMode 录的, 是展示中心, 没装入口. */}
-        <h3 style={{ margin: 0 }} title="RecMode 录屏后 freeze 落地处 — 数据 100% 你本机, 公司服务器看不到. 想装 zip 外部 skill 切到 '已装技能库' tab.">
+            这里"我的技能"只显员工自己教会的, 是展示中心, 没装入口. */}
+        <h3 style={{ margin: 0 }} title="你教会鲶鱼的技能 — 数据 100% 你本机, 公司服务器看不到. 想装 zip 外部 skill 切到 '已装技能库' tab.">
           🧰 我的技能
         </h3>
         {hasAny && (
@@ -244,13 +245,14 @@ export default function MySkillsCard() {
             borderRadius: 4,
           }}
         >
-          {/* P3.3.34 (6/12): 空状态只引导 RecMode 录屏 — 装入口挪去"已装技能库"了.
-              员工自己录的 skill 才显这卡; 装的 (zip / URL / 部门 publish) 全归"已装". */}
-          还没录过 skill. 工作台 <code style={{ fontSize: 11 }}>🎬</code> 录一遍,
-          catfish 自动学会 → 下次说"帮我跑一次"就行.
+          {/* P3.3.34 (6/12): 空状态只引导教学 — 装入口挪去"已装技能库"了.
+              员工自己教会的 skill 才显这卡; 装的 (zip / URL / 部门 publish) 全归"已装".
+              10/20: 原来引导 🎬 录屏, 录屏学习拿掉后改指教学模式. */}
+          还没教过 skill. 聊天框点 <code style={{ fontSize: 11 }}>📚</code> 开教学模式
+          (或直接说"我教你"), 带鲶鱼做一遍 → 下次说"帮我跑一次"就行.
           <br />
           <span style={{ fontSize: 11, opacity: 0.7 }}>
-            (录的存你本机 <code>~/.catfish/skills/</code>, 公司服务器看不到.
+            (教会的存你本机 <code>~/.catfish/skills/</code>, 公司服务器看不到.
             想装外部 skill (zip / URL / 部门共享) 切上方 <strong>📦 已装技能库</strong> tab.)
           </span>
         </div>

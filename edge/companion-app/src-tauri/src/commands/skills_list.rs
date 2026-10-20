@@ -160,7 +160,7 @@ fn lenient_frontmatter(head: &str) -> serde_yaml::Value {
 }
 
 /// 6/2 BL-SKILLS-CARD-CLASSIFY-FROZEN (鸿波 6/2 下午抓的真问题):
-/// SKILL.md 是不是"教学产物" (RecMode 录屏 + LLM propose_skill → catfish_freeze_skill).
+/// SKILL.md 是不是"教学产物" (教学模式 → catfish_freeze_skill 凝固出来的).
 ///
 /// 区分逻辑: 跟 catfish_tool_bridge/skill_freeze_template.py:239-247 真模板锚定.
 /// 模板 frontmatter 默认 `version: "0.1.0-frozen"`, description 含
@@ -175,7 +175,7 @@ fn lenient_frontmatter(head: &str) -> serde_yaml::Value {
 ///
 /// 教学产物归 "我录的" (MySkillsCard), 工程审定 (leadership-briefing/weekly-report)
 /// 归 "已装的" (SkillsMcpCard).
-fn is_recmode_frozen_skill(manifest_path: &Path) -> bool {
+fn is_frozen_skill(manifest_path: &Path) -> bool {
     let Ok(text) = std::fs::read_to_string(manifest_path) else {
         return false;
     };
@@ -213,10 +213,10 @@ fn is_recmode_frozen_skill(manifest_path: &Path) -> bool {
 ///   - "department" — P3.3.18 部门 wiki publish 装的部门 share skill
 ///   - "external"   — P3.3.23 zip 装的外部 skill (ClawHub / Anthropic .skill 等)
 ///
-/// "我录的" RecMode freeze 走 namespace=<skill 名> 或员工自起 ns, 不会用 'department'
+/// "我录的" 教学凝固走 namespace=<skill 名> 或员工自起 ns, 不会用 'department'
 /// 或 'external' 这种系统约定名 (即便起了, 视为"装的"也合理).
 ///
-/// 长期更稳: RecMode freeze 时给 SKILL.md frontmatter 写 source: recorded 字段, 用
+/// 长期更稳: 凝固时给 SKILL.md frontmatter 写 source: recorded 字段, 用
 /// source marker 而不是 namespace 黑名单. 留 P3.3.34 做.
 fn is_installed_namespace(name: &str) -> bool {
     matches!(name, "department" | "external")
@@ -307,7 +307,7 @@ fn scan_skills_root(root: &Path, ns_prefix: &str) -> Vec<SkillNamespace> {
 // skill 来源不同, Dashboard 拆成 2 张卡 — "🐟 我录的" (主, 含共享按钮) + "已装的"
 // (次, 排错 / power-user 查). 真物理位置 3 套, 路由表:
 //
-//   ~/.catfish/skills/              → "我录的" (RecMode 真生成 + propose_skill 落地)
+//   ~/.catfish/skills/              → "我录的" (教学凝固 + propose_skill 落地)
 //   <catfish_root>/skills/          → "已装的" - 团队审定 (catfish 仓库公文/合规模板)
 //   ~/.hermes/skills/               → "已装的" - 内置 + marketplaces + LLM 自学
 //
@@ -319,7 +319,7 @@ fn scan_skills_root(root: &Path, ns_prefix: &str) -> Vec<SkillNamespace> {
 /// 6/2 BL-SKILLS-CARD-CLASSIFY-FROZEN: 5/21 前 freeze 默认 target=workspace 落
 /// <catfish_root>/skills/ (e.g. eis-login v0.1.0-frozen 5/12), 5/21 后 default
 /// 改 local 落 ~/.catfish/skills/. 老教学产物**留在 git workspace**, 不搬, 但
-/// 列表分类要正确. 用 SKILL.md frontmatter marker 区分 (is_recmode_frozen_skill).
+/// 列表分类要正确. 用 SKILL.md frontmatter marker 区分 (is_frozen_skill).
 ///
 /// 共享按钮 (BL-SKILLS-SHARE 5/27 backlog) 的真对象就是这套.
 pub(crate) fn list_my_skills_blocking() -> Result<Vec<SkillNamespace>, String> {
@@ -336,7 +336,7 @@ pub(crate) fn list_my_skills_blocking() -> Result<Vec<SkillNamespace>, String> {
     //   仍带 frozen marker, 不是"我自己录的". 改 namespace 黑名单 (convention):
     //     - department / external → 装的 (归 list_installed)
     //     - 其他 ns → 我录的 (归 list_my, freeze target=local 默认走 namespace=<skill 名>)
-    //   长期更稳应该 RecMode freeze 时写 source marker, 留 P3.3.34 做.
+    //   长期更稳应该凝固时写 source marker, 留 P3.3.34 做.
     let local_skills_root = if let Some(home_env) = std::env::var_os("CATFISH_HOME") {
         PathBuf::from(home_env).join("skills")
     } else if let Some(home) = home_dir() {
@@ -349,11 +349,11 @@ pub(crate) fn list_my_skills_blocking() -> Result<Vec<SkillNamespace>, String> {
     local_namespaces.retain(|ns| !is_installed_namespace(&ns.namespace));
 
     // 源 2: <catfish_root>/skills/ 里**含 frozen marker 的教学产物** — 5/21 前
-    // freeze target=workspace 老历史. 用 is_recmode_frozen_skill 过滤, 工程审定的
+    // freeze target=workspace 老历史. 用 is_frozen_skill 过滤, 工程审定的
     // (leadership-briefing/weekly-report) 留给 list_installed_skills_blocking.
     if let Some(catfish_root) = catfish_paths::catfish_root() {
         let workspace_skills_root = catfish_root.join("skills");
-        let frozen_filter: &dyn Fn(&Path) -> bool = &is_recmode_frozen_skill;
+        let frozen_filter: &dyn Fn(&Path) -> bool = &is_frozen_skill;
         let mut workspace_frozen = scan_skills_root_filtered(
             &workspace_skills_root,
             "",  // 不加 🐟 前缀, 跟 ~/.catfish/skills/ 同视觉等级 (都是员工产出)
@@ -381,7 +381,7 @@ pub(crate) fn list_my_skills_blocking() -> Result<Vec<SkillNamespace>, String> {
 ///
 /// 6/2 BL-SKILLS-CARD-CLASSIFY-FROZEN: <catfish_root>/skills/ 里 frozen 教学产物
 /// 归 "我录的" (list_my_skills_blocking), 这里**跳过它们**避免重复. 用 NOT
-/// is_recmode_frozen_skill filter.
+/// is_frozen_skill filter.
 pub(crate) fn list_installed_skills_blocking() -> Result<Vec<SkillNamespace>, String> {
     let mut result = Vec::new();
 
@@ -389,7 +389,7 @@ pub(crate) fn list_installed_skills_blocking() -> Result<Vec<SkillNamespace>, St
     // E7.P1 (6/6): is_protected=true — 不能让员工删 (git 仓库管控, 删了下次 pull 还回来).
     if let Some(catfish_root) = catfish_paths::catfish_root() {
         let catfish_skills_root = catfish_root.join("skills");
-        let not_frozen_filter: &dyn Fn(&Path) -> bool = &|p| !is_recmode_frozen_skill(p);
+        let not_frozen_filter: &dyn Fn(&Path) -> bool = &|p| !is_frozen_skill(p);
         let mut catfish_namespaces = scan_skills_root_filtered_full(
             &catfish_skills_root,
             "🐟 catfish:",
@@ -448,18 +448,18 @@ mod tests {
     }
 
     #[test]
-    fn test_recmode_frozen_marker_version_frozen() {
+    fn test_frozen_marker_version_frozen() {
         let tmp = tempfile::tempdir().unwrap();
         // 5/12 ship 的 eis-login 真 frontmatter 模式 — version 含 "frozen"
         let frontmatter = r#"name: eis-login
 version: "0.1.0-frozen"
 description: 登录 EIS"#;
         let path = _write_skill_md(tmp.path(), frontmatter);
-        assert!(is_recmode_frozen_skill(&path));
+        assert!(is_frozen_skill(&path));
     }
 
     #[test]
-    fn test_recmode_frozen_marker_description_freeze_phrase() {
+    fn test_frozen_marker_description_freeze_phrase() {
         let tmp = tempfile::tempdir().unwrap();
         // version 没 frozen 字串但 description 含 "由 catfish_freeze_skill 自动凝固"
         // → 员工手改 version 升级 (e.g. "0.2.0"), 仍归"教学产物"
@@ -470,32 +470,32 @@ description: |
 
   ⚙️ 由 catfish_freeze_skill 自动凝固 (2026-05-12 13:26:39, BL-MM9-FREEZE)."#;
         let path = _write_skill_md(tmp.path(), frontmatter);
-        assert!(is_recmode_frozen_skill(&path));
+        assert!(is_frozen_skill(&path));
     }
 
     #[test]
-    fn test_recmode_frozen_marker_engineering_skill_not_marked() {
+    fn test_frozen_marker_engineering_skill_not_marked() {
         let tmp = tempfile::tempdir().unwrap();
         // leadership-briefing 真 frontmatter 模式 — 工程审定, 不该被认成教学产物
         let frontmatter = r#"name: leadership-briefing
 version: "1.1.0"
 description: 生成公司领导汇报 docx, 严格按真实公文样式 (鸿波 PDF 样板复刻)"#;
         let path = _write_skill_md(tmp.path(), frontmatter);
-        assert!(!is_recmode_frozen_skill(&path));
+        assert!(!is_frozen_skill(&path));
     }
 
     #[test]
-    fn test_recmode_frozen_marker_no_frontmatter() {
+    fn test_frozen_marker_no_frontmatter() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("SKILL.md");
         std::fs::write(&path, "# Just body, no frontmatter\n").unwrap();
-        assert!(!is_recmode_frozen_skill(&path));
+        assert!(!is_frozen_skill(&path));
     }
 
     #[test]
-    fn test_recmode_frozen_marker_missing_file() {
+    fn test_frozen_marker_missing_file() {
         let path = PathBuf::from("/nonexistent/path/SKILL.md");
-        assert!(!is_recmode_frozen_skill(&path));
+        assert!(!is_frozen_skill(&path));
     }
 
     #[test]
@@ -515,7 +515,7 @@ description: 登录 EIS"#,
 version: "1.1.0"
 description: 工程审定"#,
         );
-        let frozen_filter: &dyn Fn(&Path) -> bool = &is_recmode_frozen_skill;
+        let frozen_filter: &dyn Fn(&Path) -> bool = &is_frozen_skill;
         let only_frozen = scan_skills_root_filtered(
             tmp.path(),
             "",
@@ -545,7 +545,7 @@ version: "1.1.0"
 description: 工程审定"#,
         );
         // 非 frozen filter — list_installed 用
-        let not_frozen_filter: &dyn Fn(&Path) -> bool = &|p| !is_recmode_frozen_skill(p);
+        let not_frozen_filter: &dyn Fn(&Path) -> bool = &|p| !is_frozen_skill(p);
         let only_engineering = scan_skills_root_filtered(
             tmp.path(),
             "🐟 catfish:",

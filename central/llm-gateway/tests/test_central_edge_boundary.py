@@ -130,6 +130,8 @@ KNOWN_VIOLATIONS_ALLOWLIST: set[str] = {
     # "recmode/cdp_listener.py" — 5/26 移除
     # "recmode/cleanup.py" — 5/26 移除
     # docs/CENTRAL-EDGE-DATA-BOUNDARY.md E 类全清 ✅
+    # 10/20: 录屏学习功能整体拿掉 —— central recmode/ 里这几个墓碑 stub + dom_summary.py
+    #   + tool_bridge_rpc.py (只给 /api/learn/* 转发用, 那批 endpoint 早删了) 一起删。
     # F 类 — Facts 上传 · ✅ 5/26 晚 全清 (0 剩, was 1)
     # 5/26 晚: facts_router.py 真违规就 1 行 (FACTS_DIR Path.home fallback) + 6 行
     # docstring. 加 noqa: BOUNDARY 标. 真代码改成 env-required pattern (CATFISH_FACTS_DIR

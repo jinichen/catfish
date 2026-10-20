@@ -194,7 +194,7 @@ _APISERVER_METHOD_TARGETS = [
     # 上游改名 → 运行时 fail-closed = 审批按钮直接失效. 钉在这里, 让它在**插件
     # 装载期**就炸, 而不是等员工点不动按钮再来查。
     "_check_auth",
-    # P29 /learn 中文化: 改写 user_message 关键字参数
+    # _run_agent: P61 闲时压缩包它 (P29 /learn 翻译 10/20 退役)
     "_run_agent",
     # _extract_catfish_outgoing_user 是我们新加的, 不要求 hermes 上游有
     # _handle_companion_proxy 同理

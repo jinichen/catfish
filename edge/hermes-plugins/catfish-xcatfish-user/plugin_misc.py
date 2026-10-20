@@ -1,8 +1,8 @@
 """零散 patch —— 从 plugin.py 拆出 (8/15 第 2 趟)。
 
 P12 (update_system_prompt 静默失败) · P13 (dump 命名 type tag) ·
-P19 (status_callback 桥) · P20 (删除类命令不许永久批准) ·
-P29 (/learn 中文翻译)。(P36 terminal cwd 8/19 退役 —— 上游
+P19 (status_callback 桥) · P20 (删除类命令不许永久批准)。
+(P29 /learn 翻译 10/20 退役, 墓碑在文件尾。P36 terminal cwd 8/19 退役 —— 上游
 gateway/run.py:2207 的 home_fallback 做了同一件事, 墓碑在 plugin_wechat_qr.py 尾。)
 
 放一起不是因为它们有关系, 恰恰是因为**没关系** —— 每个都独立 wrap 一个
@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Any, Optional
 import os
 
 # 跟 plugin.py 同名 —— logging.getLogger 同名返回同一对象
@@ -463,78 +462,18 @@ def _patch_p20_block_execute_code_permanent() -> None:
 #
 # fail-safe: import 失败 / wrap 失败 → silent skip 老英文路径 (不阻塞 hermes 启动).
 
-# : 真:** : : : : : : 长 first — : : : : : :
-def _patch_p29_learn_slash_translate() -> None:
-    """wrap APIServerAdapter._run_agent — /learn 前置翻译到 build_learn_prompt."""
-    try:
-        from gateway.platforms.api_server import APIServerAdapter
-    except ImportError as e:
-        logger.warning(
-            "P29: gateway.platforms.api_server import 失败 (%s), skip patch. "
-            "员工 Companion 输 /learn 将不会被翻译, LLM 会当纯文本 prompt.", e,
-        )
-        return
-
-    try:
-        from agent.learn_prompt import build_learn_prompt
-    except ImportError as e:
-        logger.warning(
-            "P29: hermes agent.learn_prompt import 失败 (%s), skip patch. "
-            "hermes v0.19+ 可能改路径, verify 后调整 import. 员工 Companion 输 "
-            "/learn 将不会被翻译.", e,
-        )
-        return
-
-    _orig = APIServerAdapter._run_agent
-
-    async def patched_learn_translate(self, *args, **kwargs):
-        # 10/14: hermes 一直用关键字 user_message= 传消息 (api_server.py / api_server_openai_routes.py
-        # 的所有调用点), 原来读 args[0] / kwargs["message"] —— 新旧两版都没生效过, 是死代码。
-        message: Any = None
-        message_source: Optional[str] = None
-        if "user_message" in kwargs:
-            message = kwargs["user_message"]
-            message_source = "user_message"
-        elif args:
-            message = args[0]
-            message_source = "args"
-
-        # 前置检测 /learn slash command (仅 str, 空白 tolerant)
-        if isinstance(message, str):
-            stripped = message.strip()
-            if stripped.startswith("/learn"):
-                # 严格拿 arg: "/learn xxx" → "xxx", 光 "/learn" (无 arg) → ""
-                # build_learn_prompt 内部对空 arg 有 fallback: "the workflow we just
-                # went through in this conversation" (learn_prompt.py:112-115).
-                _learn_arg = stripped[len("/learn"):].strip()
-                try:
-                    translated = build_learn_prompt(_learn_arg)
-                    logger.info(
-                        "P29 /learn translate: arg=%r (len=%d) → build_learn_prompt (len=%d)",
-                        _learn_arg[:60], len(_learn_arg), len(translated),
-                    )
-                    # 替换 message
-                    if message_source == "args":
-                        args = (translated,) + args[1:]
-                    else:
-                        kwargs["user_message"] = translated
-                except Exception as e:  # noqa: BLE001
-                    logger.warning(
-                        "P29 /learn translate 失败 (%s), fall through as normal message. "
-                        "LLM 会当 '/learn %s' 纯文本 prompt (原行为, 无副作用).",
-                        e, _learn_arg[:40], exc_info=True,
-                    )
-
-        return await _orig(self, *args, **kwargs)
-
-    APIServerAdapter._run_agent = patched_learn_translate
-    logger.info(
-        "P29 patch applied: APIServerAdapter._run_agent /learn slash translate. "
-        "Companion 员工输 /learn <描述> 会翻译成 hermes build_learn_prompt 走完整 "
-        "agent turn 拉 skill (通过 skill_manage tool 存 ~/.hermes/skills/)."
-    )
-
-
+# ── P29 已退役 (10/20) ── 墓碑 ────────────────────────────────────────
+#
+# P29 (7/3) wrap APIServerAdapter._run_agent: 消息以 "/learn" 开头就换成
+# hermes agent.learn_prompt.build_learn_prompt(arg) 的结果再跑。原因是 hermes 的
+# /learn 只在 GatewayRunner._handle_message (微信那条路) 过 slash 分发,
+# /v1/chat/completions 不过, Companion 发 "/learn xxx" 模型只会当普通文字。
+#
+# 唯一发 /learn 的是 Companion 聊天框「📚 → 💡 让 AI 学」(LearnModal)。10/20 鸿波定:
+# 录屏演示和让 AI 学两边都从没用过, 拿掉。入口没了, 这个 patch 就没有调用方。
+# 微信里打 /learn 走 GatewayRunner, hermes 原生处理, 不受影响。
+#
+# 要加回来: 先把 Companion 入口加回来, 再从 git 历史 (10/20 之前) 取这段。
 
 
 # ── P30 (P3.5.198 7/8 鸿波: 微信扫码绑定 404 补 endpoint) ─────────────

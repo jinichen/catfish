@@ -114,7 +114,7 @@ def test_catfish_home_env_var_override(tmp_path, monkeypatch):
 def test_caller_chain_pattern(fake_catfish_home, monkeypatch):
     """真 caller 真标准 chain pattern**: picker > role > 兜底.
 
-    真ship 真 catfish_tools/install_and_ops/recmode aggregator 真用法.
+    真ship 真 catfish_tools/install_and_ops/gateway_llm 真用法.
     """
     from catfish_tool_bridge import role_resolver
 

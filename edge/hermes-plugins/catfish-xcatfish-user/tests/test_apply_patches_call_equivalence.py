@@ -300,6 +300,13 @@ INTENTIONALLY_REMOVED: dict[str, str] = {
         "反而会盖掉原生的状态回调\n"
         "Companion 改接原生 hermes.status。墓碑在 plugin_misc.py。"
     ),
+    "_patch_p29_learn_slash_translate": (
+        "10/20 删。P29 (7/3) 把 Companion 发来的 \"/learn xxx\" 换成 hermes build_learn_prompt 的结果 —— "
+        "/v1/chat/completions 不过 slash 分发, 不换的话模型只当普通文字。\n"
+        "唯一发 /learn 的是 Companion「📚 → 💡 让 AI 学」(LearnModal)。鸿波 10/20 定: 录屏演示和让 AI 学 "
+        "mac / Windows 都从没用过, 一起拿掉。入口没了, patch 无调用方。\n"
+        "微信里 /learn 走 GatewayRunner, hermes 原生处理, 不受影响。墓碑在 plugin_misc.py。"
+    ),
     "_patch_p27_cron_auto_retry": (
         "10/14 删 (hermes v0.22 升级)。P27 包 cron.jobs.mark_job_run 做失败 5/10/15 分钟三档重试, "
         "审计发现**从来没生效过**:\n"

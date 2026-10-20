@@ -171,7 +171,7 @@ echo ""
 # 等 in edge/hermes-plugins/catfish-xcatfish-user/plugin.py).
 # ═══════════════════════════════════════════════════════════════════════
 
-echo "── 10. _run_agent (P29/P44/P50 包) + 原生审批事件 (P15 10/14 退役) ──"
+echo "── 10. _run_agent (P44/P50/P61 包; P29 10/20 退役) + 原生审批事件 (P15 10/14 退役) ──"
 # P15 原来反射 _handle_chat_completions 的 _stream_q 闭包自己发审批事件, v0.22 起 hermes
 # 原生发 `event: approval.request` + `POST /v1/runs/{id}/approval`, Companion 改接原生 (chat.ts)。
 check_grep "gateway/platforms/api_server.py" "async def _run_agent\b" "APIServerAdapter._run_agent method"

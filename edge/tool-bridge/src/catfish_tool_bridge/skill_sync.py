@@ -2,20 +2,21 @@
 
 # 为啥要这个
 
-hermes plugin loader 启动时扫 ~/.hermes/skills/ 装载 SKILL. 老 RecMode 落
-~/.catfish/skills/<ns>/<name>/, 这个目录 hermes **不扫** (P3.5.43 audit 4 个
-BLOCKER 之一). 录好的 skill 永远进不了 hermes 视野 = 等于没录.
+hermes plugin loader 启动时扫 ~/.hermes/skills/ 装载 SKILL. 自动生成的 skill 落
+~/.catfish/skills/<ns>/<name>/, 当年这个目录 hermes **不扫** (P3.5.43 audit 4 个
+BLOCKER 之一). 现在用户是 catfish_install_proposal (员工同意小鲶的提议后落地)。
+10/20: 原来还有录屏学习 (RecMode) 一路, 已整体拿掉; 文件从 recmode/ 挪出来。
 
 # 修法
 
-write_skill_files 落档后自动调 sync_to_hermes: rsync 模式拷过去, 覆盖旧文件,
+落档后调 sync_to_hermes: rsync 模式拷过去, 覆盖旧文件,
 保留 hermes 仓库内手写 skill (按 slug 区分).
 
 冲突处理 — slug 同名时:
   - hermes 仓库内有同名 skill (e.g. weekly-report 是仓库内手写的) → **拒绝覆盖**
     返错让 caller 知道, 让员工改名或手动 review
-  - hermes 仓库内同名但 metadata 显示是 RecMode 生成的 (frontmatter author: 鲶鱼 RecMode)
-    → 覆盖 (重录的迭代)
+  - hermes 仓库内同名但 metadata 显示是鲶鱼自动生成的 (frontmatter author 含「鲶鱼」;
+    老的录屏产物是「鲶鱼 RecMode」) → 覆盖 (重新生成的迭代)
 
 不用 symlink — symlink 在某些 hermes 加载路径里 mtime 算错可能 cache 老内容,
 直接 copy 简单可控.
@@ -26,18 +27,19 @@ import logging
 import re
 import shutil
 from pathlib import Path
-from ..hermes_paths import hermes_home as _hermes_home
+from .hermes_paths import hermes_home as _hermes_home
 
-logger = logging.getLogger("catfish.recmode.skill_sync")
+logger = logging.getLogger("catfish.tool_bridge.skill_sync")
 
 
 HERMES_SKILLS_ROOT = _hermes_home() / "skills"
 
 
-def _is_recmode_generated(skill_md_path: Path) -> bool:
-    """看 SKILL.md frontmatter 的 author 字段是不是 RecMode 自动生成的.
+def _is_auto_generated(skill_md_path: Path) -> bool:
+    """看 SKILL.md frontmatter 的 author 字段是不是鲶鱼自动生成的.
 
-    跟 skill_format.SkillManifest 默认 author='鲶鱼 RecMode' 对齐.
+    跟 skill_format.SkillManifest 默认 author='鲶鱼' 对齐; 老录屏产物写的是
+    '鲶鱼 RecMode', 员工机器上还有, 照样认。
     """
     if not skill_md_path.is_file():
         return False
@@ -50,7 +52,7 @@ def _is_recmode_generated(skill_md_path: Path) -> bool:
     if not m:
         return False
     fm = m.group(1)
-    # author 含 RecMode 字样
+    # author 含「鲶鱼」(老录屏产物还有「RecMode」)
     for line in fm.splitlines():
         line = line.strip()
         if line.startswith("author:"):
@@ -59,7 +61,7 @@ def _is_recmode_generated(skill_md_path: Path) -> bool:
 
 
 class SkillSlugCollision(Exception):
-    """hermes 仓库内有非 RecMode 的同名 skill, 拒绝覆盖."""
+    """hermes 仓库内有非自动生成的同名 skill, 拒绝覆盖."""
 
 
 def sync_to_hermes(src_skill_dir: Path, slug: str,
@@ -77,7 +79,7 @@ def sync_to_hermes(src_skill_dir: Path, slug: str,
 
     Raises:
       FileNotFoundError: 源目录 / SKILL.md 不存在
-      SkillSlugCollision: hermes 仓库内有同名 skill 但**不是** RecMode 生成的
+      SkillSlugCollision: hermes 仓库内有同名 skill 但**不是**鲶鱼自动生成的
         (避免覆盖员工手写 skill / hermes 自带 skill)
     """
     if not src_skill_dir.is_dir():
@@ -94,13 +96,13 @@ def sync_to_hermes(src_skill_dir: Path, slug: str,
     # 冲突检测
     if target.exists():
         target_skill_md = target / "SKILL.md"
-        if not _is_recmode_generated(target_skill_md):
+        if not _is_auto_generated(target_skill_md):
             raise SkillSlugCollision(
-                f"~/.hermes/skills/{slug}/ 已存在且不是 RecMode 生成的 "
-                f"(手写 skill / hermes 自带). 拒绝覆盖. 请改 skill_name 重录."
+                f"~/.hermes/skills/{slug}/ 已存在且不是鲶鱼自动生成的 "
+                f"(手写 skill / hermes 自带). 拒绝覆盖. 请换个 skill 名字."
             )
-        # 是 RecMode 生成的 → 安全覆盖 (员工重录的迭代)
-        logger.info("覆盖 hermes 内同 slug 的 RecMode skill: %s", target)
+        # 是自动生成的 → 安全覆盖 (重新生成的迭代)
+        logger.info("覆盖 hermes 内同 slug 的自动生成 skill: %s", target)
         shutil.rmtree(target)
 
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -109,29 +111,8 @@ def sync_to_hermes(src_skill_dir: Path, slug: str,
     return target
 
 
-def unsync_from_hermes(slug: str, hermes_root: Path | None = None) -> bool:
-    """从 hermes 移除 slug (仅当它是 RecMode 生成的). 返删了 True 没删 False.
-
-    给 review 期员工"撤销刚录的 skill" 用. 不动手写 skill.
-    """
-    if hermes_root is None:
-        hermes_root = HERMES_SKILLS_ROOT
-    target = hermes_root / slug
-    if not target.is_dir():
-        return False
-    if not _is_recmode_generated(target / "SKILL.md"):
-        logger.warning(
-            "unsync_from_hermes 拒绝: %s 不是 RecMode 生成 (可能员工手写)", target,
-        )
-        return False
-    shutil.rmtree(target)
-    logger.info("unsync_from_hermes: 删 %s", target)
-    return True
-
-
 __all__ = [
     "HERMES_SKILLS_ROOT",
     "SkillSlugCollision",
     "sync_to_hermes",
-    "unsync_from_hermes",
 ]

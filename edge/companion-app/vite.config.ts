@@ -83,7 +83,6 @@ export default defineConfig(async () => ({
       "**/dist/**",
       "src/store/auto_continue.test.ts",
       "src/store/queue.test.ts",
-      "src/store/recmode.test.ts",
     ],
   },
 

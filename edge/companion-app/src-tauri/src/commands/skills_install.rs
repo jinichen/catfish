@@ -168,11 +168,11 @@ pub(crate) fn uninstall_skill_blocking(skill_path: String) -> Result<UninstallRe
 // P3.3.23 (6/11): 装外部 skill zip (ClawHub / Anthropic .skill / 任何 SKILL.md zip)
 //
 // 既有 install_skill_from_url 走 `npx -y skills add <url>` 装到 ~/.hermes/skills/,
-// 这条新路装 ~/.catfish/skills/<ns>/<slug>/ — 跟 RecMode 教学产物同路径, manifesto
+// 这条新路装 ~/.catfish/skills/<ns>/<slug>/ — 跟教学凝固产物同路径, manifesto
 // 公理 1 (员工主权): 外部 skill 装本机, 员工可删可改; 不污染 hermes 上游.
 //
 // 三层路径必须: scan_skills_root_filtered_full 扫的是 <root>/<ns>/<skill>/SKILL.md.
-// 默认 ns="external" 区分 RecMode 教学产物 (落 ~/.catfish/skills/department 等).
+// 默认 ns="external" 区分教学凝固产物 (落 ~/.catfish/skills/department 等).
 //
 // 安全 (基础, 严谨 scan 留 P3.3.24):
 //   - 文件白名单: .md / .markdown / .json / .txt / .yaml / .yml (拒可执行 / 二进制)

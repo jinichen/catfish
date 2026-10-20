@@ -1,7 +1,7 @@
 """P3.5.29 Phase 8 (6/17 鸿波) — tool-bridge 真 picker_state 读 helper.
 
 为啥: 3 个 tool-bridge LLM 调 (catfish_tools._expertise_llm_call,
-install_and_ops._llm_dedupe_judge, recmode/aggregator.call_llm) 也是 为员工
+install_and_ops._llm_dedupe_judge, gateway_llm.call_llm) 也是 为员工
 服务 真 LLM 调, 应跟 chat picker. 模型默认 真 中央 roles.yaml 真
 chat_default 控制 (P3.5.29 框架), picker 员工临时切覆盖, 合理 chain:
 

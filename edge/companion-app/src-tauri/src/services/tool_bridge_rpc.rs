@@ -1,7 +1,7 @@
 //! P3.5.45 — tool-bridge JSON-RPC over Unix socket (本机).
 //!
 //! 抽自 commands/tool_bridge.rs:247-325 (老 private fn call_rpc), 让 commands
-//! 跨 module 复用 (e.g. commands/recmode.rs 接录屏 11 个 endpoint).
+//! 跨 module 复用 (e.g. commands/meeting_minutes_cmd.rs 会议纪要).
 //!
 //! # 为啥抽
 //!
@@ -130,7 +130,7 @@ async fn call_at_path(
             .get("message")
             .and_then(|m| m.as_str())
             .unwrap_or("unknown");
-        // 保留 tool-bridge 端 error code 给 caller decide (e.g. recmode 404 / 409)
+        // 保留 tool-bridge 端 error code 给 caller decide (e.g. 404 / 409)
         let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(-32000);
         return Err(format!("tool-bridge 错误 [{code}]: {msg}"));
     }

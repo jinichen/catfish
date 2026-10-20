@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from catfish_tool_bridge import catfish_tools, catfish_tools_propose
-from catfish_tool_bridge.recmode import skill_sync
+from catfish_tool_bridge import skill_sync
 
 
 @pytest.fixture

@@ -10,8 +10,7 @@
 
 import * as React from "react";
 
-import { auditExportXlsx, type AuditExportResult } from "../../lib/tauri";
-import { invoke } from "@tauri-apps/api/core";
+import { auditExportXlsx, revealInFinder, type AuditExportResult } from "../../lib/tauri";
 import { fileManagerName } from "../../lib/platformLabels";
 
 // P3.3.54 polish (6/12): 本地时区, 不走 toISOString UTC 漂移
@@ -66,14 +65,10 @@ export default function AuditExportCard() {
   const handleRevealInFinder = async () => {
     if (!result) return;
     try {
-      // Tauri 2 — shell open. Rust 端的 commands::recordings::recordings_show_in_finder
-      // 已经有 "show file in Finder" 模式, 这里复用一个简单 invoke.
-      await invoke("open_in_finder", { path: result.outputPath }).catch(async () => {
-        // fallback: 用 tauri-plugin-shell 直接 open 父目录
-        const { open } = await import("@tauri-apps/plugin-shell");
-        const dir = result.outputPath.replace(/\/[^/]+$/, "");
-        await open(dir);
-      });
+      // 10/20: 原来 invoke("open_in_finder") —— 没有这个命令, 每次都掉进兜底; 兜底按 "/"
+      // 切父目录, Windows 的 C:\...\x.xlsx 切不动, 打开的是文件本身。改用 file.rs 的
+      // reveal_in_finder (macOS open -R / Windows explorer /select,), 两边都选中文件。
+      await revealInFinder(result.outputPath);
     } catch (e) {
       console.warn("[AuditExportCard] reveal in Finder 失败:", e);
     }

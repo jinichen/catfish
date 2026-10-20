@@ -420,34 +420,4 @@ def _patch_p28_weixin_zh() -> None:
     )
 
 
-# ── P29 (P3.5.168, 7/3 鸿波): /learn slash command 前置翻译 ────────────────
-#
-# 真因 (P3.5.164 严格 audit):
-#   hermes v0.18 /learn 只在 GatewayRunner._handle_message 处理
-#   (gateway/run.py:9263-9289): 检测 canonical == "learn" → 调
-#   agent.learn_prompt.build_learn_prompt → 替换 event.text → fall through.
-#   /v1/chat/completions (APIServerAdapter._handle_chat_completions api_server.py:1833+)
-#   严格不过 slash command dispatcher — 提取 messages → 直接 _run_agent, 无 canonical
-#   command 检测. Companion 员工输 "/learn xxx" → LLM 只当 prompt 释义.
-#   catfish P15 patch comment 明确 confirm (plugin.py:1807-1808):
-#     "chat completions 没 slash command hook → LLM 直接看 '/approve' 编释义"
-#
-# 修法 (不 fork hermes, 不改 Companion 前端):
-#   wrap APIServerAdapter._run_agent (跟 P15 同挂点, 但 P29 wrap 是外层).
-#   前置检测 message.startswith("/learn") → 调 hermes agent/learn_prompt.
-#   build_learn_prompt(arg) 翻译 → 替换 args[0] 或 kwargs["message"] →
-#   继续 P15 approval 闭包 → hermes original _run_agent.
-#
-# wrap 顺序: 注册顺序 P1..P15..P28..P29, runtime call chain: P29 (外, 先跑翻译)
-# → P15 (中, approval 闭包) → hermes original. P29 前置翻译不影响 P15 approval.
-#
-# 风险评估:
-#   - hermes v0.18 _run_agent signature 第 1 位置参 = message (P3.5.159 Phase A audit
-#     confirm): _run_agent(self, message, context_prompt, history, source, session_id, ...).
-#     P29 拿 args[0] 或 kwargs["message"], 兼容 caller.
-#   - build_learn_prompt 抛异常 → fall through as normal message (原行为), warn log.
-#   - hermes v0.19 若改 _run_agent 参数顺序或 build_learn_prompt module 位置 →
-#     P29 fail-safe: import 失败 skip patch, runtime 反射失败 warn + fall through.
-#   - 只处理 /learn, 其他 slash (/goal /journey /steer /fast /verbose /memory /skills)
-#     未来员工反馈驱动再加 P30+.
-#
+# (P29 /learn 前置翻译的说明原来在这里, 10/20 随 patch 一起退役, 墓碑见 plugin_misc.py。)

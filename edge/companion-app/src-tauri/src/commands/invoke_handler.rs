@@ -143,10 +143,6 @@ pub(crate) fn handler(
             // P3.3.55 (6/12 鸿波): 审计视图 Tab 表格化呈现 jsonl raw read
             crate::commands::audit_export::audit_decisions_raw_read,
             crate::commands::audit_export::audit_hermes_jsonl_read,
-            // BL-RECMODE-DASHBOARD-UI (#75, 5/25): 我的录屏 inventory + Finder + delete
-            crate::commands::recordings::recordings_list,
-            crate::commands::recordings::recordings_show_in_finder,
-            crate::commands::recordings::recordings_delete,
             // SSO Phase 1C: OAuth flow + Keychain
             crate::commands::auth::auth_whoami,
             crate::commands::auth::auth_login,
@@ -281,8 +277,6 @@ pub(crate) fn handler(
             crate::commands::journal::journal_read_recent,
             // BL-PROACTIVE-DECOUPLE (5/26): journal_tail + last_model 一次拿, 给 /api/proactive/* header 透传
             crate::commands::proactive::proactive_context,
-            // P3.5.45 (6/20 鸿波): 录屏 RPC 直调 tool-bridge sock, 砍 gateway HTTP path
-            crate::commands::recmode::recmode_rpc,
             // BL-WECHAT-CATFISH-BIND v1 + v2 (5/26): WeChat openid ↔ catfish 员工 email 绑定
             // v1 read-only 状态; v2 写命令给 Dashboard UI 一键审批/改绑/解绑/拒绝.
             crate::commands::wechat_binding::wechat_binding_status,

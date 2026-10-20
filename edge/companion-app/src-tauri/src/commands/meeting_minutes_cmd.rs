@@ -1,7 +1,7 @@
 //! 会议说话人改名 + 纪要生成 / 读取 —— 前端入口 (10/1, docs/MEETING-MINUTES-PLAN.md §3)。
 //!
 //! 纪要在 tool-bridge 里生成 (meeting_minutes.py, JSON-RPC `meeting/summarize`),
-//! 跟 recmode_rpc 一样走专门的命令, 不进小鲶的工具列表。这里注入三样东西:
+//! 走专门的命令 (原来跟录屏学习的 recmode_rpc 一个模式), 不进小鲶的工具列表。这里注入三样东西:
 //!   - auth_token: 员工自己的登录令牌 (oauth 静默刷新), 纪要用员工身份调大模型
 //!   - gateway_url: Companion 配置里的网关地址。**显式传**, 不靠 tool-bridge 进程的
 //!     环境变量 —— tool-bridge 启动时原来不带这个变量, 客户机上会连到 localhost

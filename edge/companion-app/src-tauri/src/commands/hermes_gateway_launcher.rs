@@ -26,7 +26,7 @@
 use serde::Deserialize;
 
 /// 在 hermes 的 venv 里跑。只用 hermes 自己的函数, 规则跟它 `gateway install` 写出来的一致。
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(any(not(windows), debug_assertions), allow(dead_code))]
 const RECONCILE_PY: &str = r#"
 import json
 from hermes_cli import gateway_windows as w
@@ -57,7 +57,7 @@ print("CATFISH_RECONCILE " + json.dumps(out, ensure_ascii=False))
 "#;
 
 #[derive(Debug, Deserialize, PartialEq)]
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(any(not(windows), debug_assertions), allow(dead_code))]
 pub(crate) struct ReconcileReport {
     pub rewritten: bool,
     pub legacy: Vec<String>,
@@ -65,14 +65,14 @@ pub(crate) struct ReconcileReport {
 }
 
 impl ReconcileReport {
-    #[cfg_attr(not(windows), allow(dead_code))]
+    #[cfg_attr(any(not(windows), debug_assertions), allow(dead_code))]
     pub(crate) fn changed(&self) -> bool {
         self.rewritten || !self.legacy.is_empty()
     }
 }
 
 /// 从脚本输出里认出那一行 (hermes 自己 print 的 ✓/⚠ 行混在前面)。
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(any(not(windows), debug_assertions), allow(dead_code))]
 pub(crate) fn parse_report(stdout: &str) -> Option<ReconcileReport> {
     stdout
         .lines()
@@ -82,7 +82,11 @@ pub(crate) fn parse_report(stdout: &str) -> Option<ReconcileReport> {
 }
 
 /// Companion 启动、hermes 装好之后调。失败只记日志。
-#[cfg(windows)]
+///
+/// 唯一调用方 hermes_install::spawn_hermes_bootstrap 只在 release 构建里有
+/// (`not(debug_assertions)`), 这里用同样的条件 —— 原来只写 `cfg(windows)`, Windows 的
+/// debug / 测试构建里它和上面三样都没人用, cargo_check_windows.sh 报 4 条 dead_code。
+#[cfg(all(windows, not(debug_assertions)))]
 pub(crate) fn reconcile_windows_launcher() {
     let Some(home) = crate::services::catfish_paths::hermes_home() else { return };
     let install_dir = home.join("hermes-agent");

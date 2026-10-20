@@ -503,7 +503,7 @@ pub fn spawn_hermes_bootstrap(app: tauri::AppHandle, resource_dir: PathBuf) {
             }
             // 10/19: 老 hermes 写的开机自启脚本写死了旧解释器 (3.11), 升级后登录就拉起一个
             // 加载不了新环境的网关。每次启动按当前 hermes 重写, 有改动才重启网关。
-            #[cfg(windows)]
+            #[cfg(all(windows, not(debug_assertions)))]
             super::hermes_gateway_launcher::reconcile_windows_launcher();
         })
     {

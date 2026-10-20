@@ -2,7 +2,7 @@
  *
  * 6/2 BL-SKILLS-CARD-SPLIT (鸿波 6/2 凌晨拍 方案 C): "我录的 skill" 跟 "已装的 skill/MCP"
  * 拆 2 张卡, 配套 2 个 hook:
- *   - useMySkills: 扫 ~/.catfish/skills/ — 员工自己生成 (RecMode / propose_skill)
+ *   - useMySkills: 扫 ~/.catfish/skills/ — 员工自己生成 (教学凝固 / propose_skill)
  *   - useInstalledSkillsAndMcp: 扫 catfish 仓库 skills/ + ~/.hermes/skills/ — 内置 + 装的
  *
  * 7/17 BL-DEADCODE-SWEEP: 老 useSkillsAndMcp 死链 (前端无 caller · fetchSkills 死 ·

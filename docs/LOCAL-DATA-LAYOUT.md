@@ -203,7 +203,11 @@ Bob 答完 → 回到 Alice 的 ~/.catfish/a2a_audit.jsonl 标 'answered'
 
 ---
 
-## 7. RecMode 录屏数据 (BL-LEARN-RECMODE, 5/14 ship)
+## 7. RecMode 录屏数据 (BL-LEARN-RECMODE, 5/14 ship) —— ⚠ 10/20 已下线
+
+> 10/20 鸿波定: 录屏学习 (RecMode) 和「让 AI 学」mac / Windows 都没用过, 整体拿掉。
+> 不再产生 `~/.catfish/recordings/`; 老机器上残留的目录「重置我的数据」照样会清 (self_serve.rs)。
+> 下表是历史记录。`~/.catfish/skills/` 现在由教学凝固 (catfish_freeze_skill) 和 propose_skill 写。
 
 | 文件 | 谁写 | 隐私策略 |
 |---|---|---|
@@ -232,8 +236,8 @@ cleanup daemon: `central/llm-gateway/.../recmode/cleanup.py` 每 24h 跑一次, 
 ~/.catfish/style_fingerprint.json               # 文书风格
 ~/.catfish/feedback.jsonl                       # 👍/👎/改
 ~/.catfish/session_meta.json                    # 距上次 / 今天第 N 次
-~/.catfish/recordings/<sid>/                    # RecMode 录屏 (14 天 TTL)
-~/.catfish/skills/                              # 员工录屏后保存的 skill
+~/.catfish/recordings/<sid>/                    # (10/20 下线) 老 RecMode 录屏残留
+~/.catfish/skills/                              # 教学凝固 / propose_skill 落地的 skill
 ~/.catfish/a2a_audit.jsonl                      # 本地 a2a 审计 (我问了谁)
 ~/.catfish/a2a_notify.jsonl                     # 我收到的 a2a 请求
 

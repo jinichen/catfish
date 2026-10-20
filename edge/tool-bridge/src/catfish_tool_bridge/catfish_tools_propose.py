@@ -119,7 +119,7 @@ def propose_skill(args: Dict[str, Any]) -> Dict[str, Any]:
     except (TypeError, ValueError):
         evidence_count = 0
 
-    # P3.5.43 (鸿波 6/20 拍 'SKILL 三路径统一'): 字段对齐 RecMode SkillOutput,
+    # P3.5.43 (鸿波 6/20 拍 'SKILL 三路径统一'): 字段对齐 skill_format.SkillManifest,
     # accept 后 catfish_skill_install 拿到现成的 triggers/kind/namespace 不用 LLM
     # 重新猜. 跟 skill_format.SkillManifest 同 schema, 跟 hermes frontmatter 直接装.
     triggers_raw = args.get("triggers") or []
@@ -215,7 +215,7 @@ def propose_skill(args: Dict[str, Any]) -> Dict[str, Any]:
     # 写 jsonl
     proposal_id = f"prop_{int(now_ts)}_{name}"
     # BL-MM9-fix (5/9): 字段对齐 learning.rs 期待的 schema (namespace/name 拆开)
-    # P3.5.43 (6/20): 加 triggers/kind 跟 RecMode SkillOutput / skill_format
+    # P3.5.43 (6/20): 加 triggers/kind 跟 skill_format
     # SkillManifest 同 schema. accept 后 catfish_skill_install 直接拿这些字段
     # 生成 hermes 兼容 SKILL.md 不用 LLM 重新猜.
     event = {
@@ -306,7 +306,7 @@ def install_proposal(args: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     # 2. 转 SkillManifest
-    from .recmode.skill_format import (  # noqa: PLC0415
+    from .skill_format import (  # noqa: PLC0415
         SkillManifest, render_skill_md, render_script_py, validate_manifest,
     )
     skill_name = proposal.get("skill_name") or proposal.get("name") or ""
@@ -370,7 +370,7 @@ def install_proposal(args: Dict[str, Any]) -> Dict[str, Any]:
     sync = bool(args.get("sync_to_hermes", True))
     if sync:
         try:
-            from .recmode import skill_sync  # noqa: PLC0415
+            from . import skill_sync  # noqa: PLC0415
             hermes_dir = str(skill_sync.sync_to_hermes(skill_dir, slug=skill_name))
         except Exception as e:  # noqa: BLE001
             # fail-silent: 同步挂不阻塞装机, 员工本机 ~/.catfish/skills/ 仍有

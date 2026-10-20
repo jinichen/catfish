@@ -1,5 +1,7 @@
 # BL-LEARN-RECMODE: 录屏+语音教学引擎设计 (v1, 5/14 2:15 起草)
 
+> **⚠ 10/20 已下线**: 录屏学习 (RecMode) 和「让 AI 学」整体拿掉 (鸿波: mac / Windows 都从没用过)。本文是历史记录, 代码已删; 见 `_knowledge_base/teach-mode-windows-audit-20261020.md`。
+
 > **维护人**: 鸿波 / Catfish 项目
 > **状态**: ⬜ 待评估 / 待 5/19 关键假设验证
 > **关联 task**: #59 BL-LEARN-RECMODE

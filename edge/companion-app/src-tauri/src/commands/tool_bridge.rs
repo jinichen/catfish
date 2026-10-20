@@ -15,7 +15,7 @@ use crate::services::{catfish_paths, process, tool_bridge_rpc};
 
 /// 老 callers (list_tools / call_tool / chat_approval) 沿用 30s timeout 保持行为.
 /// P3.5.45: call_rpc 私有 fn 砍, 改 thin-wrap 调 services::tool_bridge_rpc 公共
-/// helper (跟 commands/recmode.rs 复用同一条 unix sock RPC 实现).
+/// helper (跟 meeting_minutes_cmd.rs 等复用同一条 unix sock RPC 实现).
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 跟 Python tool-bridge 协议对齐 —— 字段都是 snake_case,
@@ -223,4 +223,4 @@ pub async fn tool_bridge_chat_approval(
 //   - tool_bridge_list_tools (tools/list)
 //   - tool_bridge_call_tool (tools/dispatch)
 //   - tool_bridge_chat_approval (tools/chat_approval)
-// 公共 helper 跟 commands/recmode.rs 复用同一份 unix sock NDJSON RPC 实现.
+// 公共 helper 跟 meeting_minutes_cmd.rs 等复用同一份 unix sock NDJSON RPC 实现.

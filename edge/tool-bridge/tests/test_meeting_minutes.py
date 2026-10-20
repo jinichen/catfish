@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from catfish_tool_bridge import meeting_minutes as mm
-from catfish_tool_bridge.recmode import aggregator
+from catfish_tool_bridge import gateway_llm
 
 
 def _meeting(tmp_path: Path, segments: list[dict], names: dict | None = None, mid: str = "mtg_20261001-100000_ab12") -> Path:
@@ -83,7 +83,7 @@ def _fake_llm(monkeypatch, replies: list[str]):
         assert kw["gateway_url"] == "http://gw.test"
         return replies[len(calls) - 1]
 
-    monkeypatch.setattr(aggregator, "call_llm", fake)
+    monkeypatch.setattr(gateway_llm, "call_llm", fake)
     return calls
 
 
