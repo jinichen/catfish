@@ -27,8 +27,9 @@
 #     SERVER_IP=192.168.100.50 ENABLE_HTTPS=1 bash setup.sh
 #
 # 前置:
-#   - Ubuntu 22.04+ / CentOS 8+ · x86_64
-#   - Docker 24+ + docker compose plugin
+#   - Ubuntu 22.04+ / CentOS 8+ / 麒麟 / 统信 · x86_64 或 arm64 (包要对上架构)
+#   - Docker 24+ + docker compose plugin —— 没有的话用 root 跑本脚本会先离线装好
+#     (包里 linux/install-docker.sh, 10/21); 不用 root 跑会提示 sudo bash linux/install-docker.sh
 #   - 4 vCPU / 8GB RAM / 100GB disk (推荐)
 #   - 内网可访问 (不需公网)
 #
@@ -92,6 +93,51 @@ for _arg in "$@"; do
 done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ── Linux 上没有 Docker: 用包里带的离线安装 (10/21) ─────────────────
+#
+# 国央企服务器多半不通外网, 内网软件源里不一定有 docker-ce (麒麟 / 统信可能只有 podman)。
+# 交付包的 linux/ 里带了 Docker 官方静态包 + compose 插件, 见 linux/install-docker.sh。
+# Windows 那边对应的是 setup.ps1 自动转 windows/setup-wsl.ps1。
+#
+# REGEN_ENV_ONLY=1 不碰 docker (CI / 开发机跑 .env 回归测试用), macOS 是开发机试跑 (Docker Desktop),
+# 都不走这段。
+if [ "$REGEN_ENV_ONLY" != "1" ] && [ "$(uname -s)" = "Linux" ]; then
+    _need_docker=""
+    command -v docker >/dev/null 2>&1 || _need_docker="Docker"
+    if [ -z "$_need_docker" ] && ! docker compose version >/dev/null 2>&1; then
+        _need_docker="docker compose 插件"
+    fi
+    if [ -n "$_need_docker" ]; then
+        _linux_docker="$SCRIPT_DIR/linux/install-docker.sh"
+        if [ ! -f "$_linux_docker" ]; then
+            echo "❌ 这台机器没有 $_need_docker, 交付包里也没有 linux/install-docker.sh"
+            echo "   用完整的交付包 (catfish-poc-FULL-<arch>-*.tar.gz), 或者先自己装好 Docker 24+ 和 compose 插件。"
+            exit 1
+        fi
+        if [ "$(id -u)" = "0" ]; then
+            echo "→ 这台机器没有 $_need_docker, 用交付包里带的离线安装 (linux/install-docker.sh)"
+            bash "$_linux_docker" || exit 1
+        else
+            echo "❌ 这台机器没有 $_need_docker。交付包里带了离线安装, 要 root 权限:"
+            echo ""
+            echo "       sudo bash linux/install-docker.sh"
+            echo ""
+            echo "   装完再重跑 setup.sh (或者直接用 sudo 跑 setup.sh, 会自动先装 Docker)。"
+            exit 1
+        fi
+    fi
+    if ! docker info >/dev/null 2>&1; then
+        if [ -S /run/docker.sock ] && [ "$(id -u)" != "0" ] && ! id -nG | grep -qw docker; then
+            echo "❌ 当前用户 $(id -un) 没有权限用 Docker (不在 docker 组里)"
+            echo "   二选一: 用 sudo 跑 setup.sh; 或 sudo usermod -aG docker $(id -un) 后重新登录再跑。"
+        else
+            echo "❌ Docker 引擎没在跑"
+            echo "   sudo systemctl enable --now docker   然后重跑。起不来的话看: journalctl -u docker --no-pager | tail -50"
+        fi
+        exit 1
+    fi
+fi
 
 # ── 镜像 tag 的唯一来源 = docker-compose.yml ──────────────────────
 # 9/12: 以前 tag 在这个脚本里写死两处 (identity 生成 admin hash / 关键镜像清单),

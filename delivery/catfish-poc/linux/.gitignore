@@ -1,0 +1,4 @@
+# 打包时由 delivery/linux-docker/fetch-docker.sh 放进包里, 不进仓库 (100MB 二进制)
+docker.tgz
+docker-compose
+docker-version.txt

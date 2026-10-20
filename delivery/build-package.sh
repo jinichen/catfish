@@ -349,6 +349,10 @@ for ARCH in $ARCHES; do
     else
         rm -rf "$WINDIR"
     fi
+    # 10/21: Linux 服务器离线装 Docker (setup.sh 发现没有 Docker 时调 linux/install-docker.sh)。
+    # 两个架构都带, 二进制按包的架构取 (amd64 = x86_64 服务器, arm64 = 鲲鹏 / 飞腾 等)。
+    bash "$SCRIPT_DIR/linux-docker/fetch-docker.sh" "$ARCH" "$STAGE/delivery/catfish-poc/linux" \
+        || { echo "❌ Linux 离线 Docker 获取失败"; exit 1; }
     # Windows PowerShell 5.1 (Win10/11/Server 2022 默认) 读不带 BOM 的 UTF-8 脚本会按 GBK 解码, 中文全乱、脚本跑不起来
     for ps in $(find "$STAGE/delivery/catfish-poc" -name '*.ps1'); do
         if [ "$(head -c3 "$ps" | xxd -p)" != "efbbbf" ]; then
@@ -390,7 +394,12 @@ for ARCH in $ARCHES; do
     OUT="$OUT_DIR/catfish-poc-FULL-$ARCH-$DATE.tar.gz"
     mkdir -p "$OUT_DIR"
     echo "→ 打包 → $OUT"
-    tar czf "$OUT" -C "$STAGE" delivery || { echo "❌ tar 失败"; exit 1; }
+    # 10/21: macOS 的 bsdtar 会把扩展属性 (com.apple.provenance / quarantine) 写进包, 客户 Linux 上
+    # GNU tar 解包时每个文件刷一行 "Ignoring unknown extended header keyword" —— 不影响解包, 但 IT 看着像包坏了。
+    TAR_FLAGS=""
+    tar --version 2>/dev/null | grep -q bsdtar && TAR_FLAGS="--no-xattrs --no-mac-metadata"
+    # shellcheck disable=SC2086
+    COPYFILE_DISABLE=1 tar $TAR_FLAGS -czf "$OUT" -C "$STAGE" delivery || { echo "❌ tar 失败"; exit 1; }
 
     # ── 验产物 ──────────────────────────────────────────────────────
     #
@@ -411,6 +420,10 @@ for ARCH in $ARCHES; do
                 "delivery/catfish-poc/docker-compose.yml" \
                 "delivery/catfish-poc/llm-gateway/config/models.yaml" \
                 "delivery/catfish-poc/images/catfish-poc-central-$ARCH-$DATE.tar.gz" \
+                "delivery/catfish-poc/linux/install-docker.sh" \
+                "delivery/catfish-poc/linux/docker.tgz" \
+                "delivery/catfish-poc/linux/docker-compose" \
+                "delivery/catfish-poc/linux/docker-version.txt" \
                 $( [ "$ARCH" = "amd64" ] && echo "delivery/catfish-poc/windows/setup-wsl.ps1 delivery/catfish-poc/windows/catfish-wsl-boot.ps1 delivery/catfish-poc/windows/catfish-wsl-rootfs-amd64.tar.gz delivery/catfish-poc/windows/wsl.x64.msi" ); do
         if ! tar tzf "$OUT" | grep -qx "$must"; then
             echo "  ❌ 包里缺 $must"
