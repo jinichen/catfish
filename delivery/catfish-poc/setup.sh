@@ -851,7 +851,10 @@ if [ "$ENABLE_HTTPS" = "1" ]; then
     # 「浏览器打得开、面板说连不上」, 极易误判成网络问题。
     PAIRING_CODE="$(cat certs/pairing-code.txt 2>/dev/null || echo '(没生成, 看上面证书那步的输出)')"
     # 接入链接: 落地页走 http (微信里点得开, 不撞自签证书警告), 页面上一点就拉起 Companion
-    HTTP_PORT="$(grep -E '^CATFISH_HTTP_PORT=' .env 2>/dev/null | tail -1 | cut -d= -f2)"
+    # 10/21: 必须带 || true。.env.example 里没有 CATFISH_HTTP_PORT, 新装的 .env 里也就没有 →
+    # grep 返 1, 脚本开着 set -e + pipefail, 在这里静默退出: 接入码没打出来、INSTALLED-BUILD.txt
+    # 没写, setup.sh 退出码 1 (Windows 的 setup-wsl.ps1 据此报「setup.sh 失败」)。10/14 起就这样。
+    HTTP_PORT="$(grep -E '^CATFISH_HTTP_PORT=' .env 2>/dev/null | tail -1 | cut -d= -f2 || true)"
     HTTP_PORT="${HTTP_PORT:-5173}"
     WEB_ENC="$(printf '%s' "$WEB_URL" | sed 's#:#%3A#g; s#/#%2F#g')"
     echo "     ★ 员工接入 (Companion 桌面端): 把下面这段发给员工 (群消息即可, 不用传文件):"

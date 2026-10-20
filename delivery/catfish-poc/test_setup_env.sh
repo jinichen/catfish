@@ -185,6 +185,20 @@ else
         && ok "升级 · 拒绝时没有动 .env" || bad "升级 · 拒绝了却改了 .env"
 fi
 
+# ── setup.sh 开着 set -e + pipefail: 取值用的 $(grep …) 必须兜底 (10/21) ──
+# grep 没匹配返 1 → 整个脚本在那一行静默退出, 不报错。10/14 加的 CATFISH_HTTP_PORT 那行就是这样:
+# 新装 .env 里没这个字段, 脚本停在接入码之前, 退出码 1。上面几项都用 REGEN_ENV_ONLY=1, 跑不到那儿,
+# 所以这里静态查: 每个 $(grep …) 要么带 || true / || echo, 要么在 if / && 判断里。
+echo ""
+echo "── setup.sh 的 \$(grep …) 都有兜底 ──"
+UNGUARDED=$(grep -n '\$(grep' setup.sh | grep -v -E '\|\| *(true|echo)|^[0-9]+: *(if|elif|while) |&&' || true)
+if [ -n "$UNGUARDED" ]; then
+    bad "这些 \$(grep …) 没匹配时会让 setup.sh 静默退出 (加 || true):"
+    echo "$UNGUARDED" | sed 's/^/        setup.sh:/'
+else
+    ok "没有会让 set -e 静默退出的 \$(grep …)"
+fi
+
 echo ""
 echo "通过 $PASS · 失败 $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
