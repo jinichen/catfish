@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     鲶鱼中央服务 · Windows 一键部署
 

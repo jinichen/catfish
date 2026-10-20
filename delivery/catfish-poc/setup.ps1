@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Catfish 中央服务一键装机 —— Windows 原生
 
@@ -104,19 +104,35 @@ Say "═════════════════════════
 # ── 0. 宿主机体检 ─────────────────────────────────────────
 # 装了 Docker Desktop ≠ 引擎在跑。分开报, 否则后面每条 docker 命令都会以
 # 一种看不懂的方式失败。
+# 10/20: 没装 Docker 就走 WSL2 路径 (windows\setup-wsl.ps1): 用 Windows 自带的 WSL2 + 包里带的
+# Linux/Docker 引擎, 不用装 Docker Desktop (大公司要买订阅)。跟 Linux 服务器跑同一个 setup.sh。
+$WslSetup = Join-Path $ScriptDir 'windows\setup-wsl.ps1'
+function Use-WslPath {
+    $fw = @{ EnableHttps = $(if ($EnableHttps) { $EnableHttps } else { '1' }); Upgrade = $Upgrade; AdminPassword = $AdminPassword }
+    if ($ServerIp) { $fw.ServerIp = $ServerIp }
+    & $WslSetup @fw
+    exit $LASTEXITCODE
+}
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-    Die "找不到 docker 命令" @(
-        "装 Docker Desktop for Windows (需要 WSL2 后端):",
-        "  https://www.docker.com/products/docker-desktop/",
-        "装完重开一个 PowerShell 窗口再跑 (PATH 要刷新)。"
+    if (Test-Path $WslSetup) {
+        Say "→ 这台机器没有 Docker, 改用 Windows 自带的 WSL2 安装 (不需要 Docker Desktop)"
+        Use-WslPath
+    }
+    Die "找不到 docker 命令, 包里也没有 windows\setup-wsl.ps1" @(
+        "要么用完整的 amd64 交付包 (带 WSL2 安装), 要么装 Docker Desktop for Windows:",
+        "  https://www.docker.com/products/docker-desktop/"
     )
 }
 docker info 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
-    Die "Docker 引擎没在跑" @(
+    $hints = @(
         "开始菜单启动 Docker Desktop, 等托盘图标变成稳定状态 (不再转) 再重跑。",
-        "装了但没启动是最常见的一种 —— docker 命令在, 但连不上引擎。"
-    )
+        "装了但没启动是最常见的一种 —— docker 命令在, 但连不上引擎。")
+    if (Test-Path $WslSetup) {
+        $hints += @("", "或者不用 Docker Desktop, 走 Windows 自带的 WSL2 安装:",
+                    "  powershell -ExecutionPolicy Bypass -File .\windows\setup-wsl.ps1")
+    }
+    Die "Docker 引擎没在跑" $hints
 }
 docker compose version 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {

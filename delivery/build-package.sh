@@ -81,6 +81,9 @@ if [ ! -f "$COMPOSE" ]; then
     echo "❌ 找不到 $COMPOSE"
     exit 1
 fi
+# 10/20: 包里的 setup.ps1 / deploy.ps1 带中文, 没 BOM 的话客户机 (Windows PowerShell 5.1,
+# 按 GBK 读) 上会乱码甚至吞行。打包机上的 pwsh / bash 看不出来, 在这里拦。
+bash "$REPO/scripts/check_ps1_bom.sh" || exit 1
 
 # ── 1. 从 docker-compose.yml 读服务清单 ─────────────────────────────
 #
@@ -325,6 +328,33 @@ for ARCH in $ARCHES; do
           "$STAGE/delivery/catfish-poc/.env.bak."* \
           "$STAGE/delivery/catfish-poc/users.yaml" \
           "$STAGE/delivery/catfish-poc/clients.yaml"
+
+    # 10/20: Windows 一键装机 (不需要 Docker Desktop): windows/ 里放装机脚本 + WSL 发行版根文件系统 + WSL 离线 MSI。
+    # 只进 amd64 包 —— Windows 客户机都是 x64; arm64 包是给 Linux ARM 服务器的。
+    # 根文件系统按 delivery/wsl/rootfs/ 的内容哈希缓存, 没改就不重建 (amd64 在 Apple Silicon 上走 QEMU, 要几分钟)。
+    WINDIR="$STAGE/delivery/catfish-poc/windows"
+    if [ "$ARCH" = "amd64" ]; then
+        WSL_SRC="$SCRIPT_DIR/wsl"
+        RF_HASH=$(cd "$WSL_SRC/rootfs" && find . -type f -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-12)
+        RF_CACHE="${CATFISH_WSL_CACHE:-$HOME/.cache/catfish-wsl}/rootfs-$RF_HASH"
+        if [ ! -s "$RF_CACHE/catfish-wsl-rootfs-amd64.tar.gz" ]; then
+            echo "→ 构建 WSL 发行版根文件系统 (rootfs $RF_HASH, 首次要几分钟)"
+            bash "$WSL_SRC/build-rootfs.sh" amd64 "$RF_CACHE" || { echo "❌ WSL 根文件系统构建失败"; exit 1; }
+        else
+            echo "→ WSL 根文件系统用缓存 (rootfs $RF_HASH)"
+        fi
+        cp "$RF_CACHE/catfish-wsl-rootfs-amd64.tar.gz" "$WINDIR/"
+        bash "$WSL_SRC/fetch-wsl-msi.sh" "$WINDIR" || { echo "❌ WSL MSI 获取失败"; exit 1; }
+        echo "rootfs=$RF_HASH" > "$WINDIR/wsl-rootfs-version.txt"
+    else
+        rm -rf "$WINDIR"
+    fi
+    # Windows PowerShell 5.1 (Win10/11/Server 2022 默认) 读不带 BOM 的 UTF-8 脚本会按 GBK 解码, 中文全乱、脚本跑不起来
+    for ps in $(find "$STAGE/delivery/catfish-poc" -name '*.ps1'); do
+        if [ "$(head -c3 "$ps" | xxd -p)" != "efbbbf" ]; then
+            echo "  ❌ $(basename "$ps") 不是带 BOM 的 UTF-8 (Windows PowerShell 5.1 会读乱)"; exit 1
+        fi
+    done
     rm -rf "$STAGE/delivery/catfish-poc/certs"
     # 9/12 鸿波: 文档不进包。docs/ 整个目录 + 各级 *.md (README / INSTALL / SOP /
     # config 说明) 全去掉; 装机手册在仓库 delivery/catfish-poc/ 里, 给客户 IT 单独发。
@@ -351,6 +381,12 @@ for ARCH in $ARCHES; do
     docker save $ALL_IMGS | gzip -1 > "$IMG_TAR" || { echo "❌ save 失败"; exit 1; }
     echo "  ✓ $(du -h "$IMG_TAR" | cut -f1)"
 
+    # 10/20: 包里文件一律人人可读 (目录可进)。构建机 umask 077 / 本地文件是 600 时 (例 llm-gateway/config/models.yaml),
+    # 客户用 root 解包会原样保留 600 + 构建机的 uid, 挂进容器后 catfish (uid 1000) 读不了, gateway 起不来。
+    # Docker Desktop (Windows/macOS) 不管挂载文件的权限, 所以一直没暴露; Linux / WSL2 上必现。
+    # 包里没有密钥 (.env / 证书 / 密码都在装机时现场生成), 放开读权限没有泄露问题。
+    chmod -R a+rX "$STAGE/delivery"
+
     OUT="$OUT_DIR/catfish-poc-FULL-$ARCH-$DATE.tar.gz"
     mkdir -p "$OUT_DIR"
     echo "→ 打包 → $OUT"
@@ -374,7 +410,8 @@ for ARCH in $ARCHES; do
                 "delivery/catfish-poc/tools/build_component_manifest.py" \
                 "delivery/catfish-poc/docker-compose.yml" \
                 "delivery/catfish-poc/llm-gateway/config/models.yaml" \
-                "delivery/catfish-poc/images/catfish-poc-central-$ARCH-$DATE.tar.gz"; do
+                "delivery/catfish-poc/images/catfish-poc-central-$ARCH-$DATE.tar.gz" \
+                $( [ "$ARCH" = "amd64" ] && echo "delivery/catfish-poc/windows/setup-wsl.ps1 delivery/catfish-poc/windows/catfish-wsl-boot.ps1 delivery/catfish-poc/windows/catfish-wsl-rootfs-amd64.tar.gz delivery/catfish-poc/windows/wsl.x64.msi" ); do
         if ! tar tzf "$OUT" | grep -qx "$must"; then
             echo "  ❌ 包里缺 $must"
             exit 1
@@ -385,6 +422,11 @@ for ARCH in $ARCHES; do
         echo "  ❌ 包里混进了文档:"
         tar tzf "$OUT" | grep -E '\.md$|/docs/' | sed 's/^/      /'
         exit 1
+    fi
+    # 10/20: 不许有「只有属主能读」的文件进包 (见上面 chmod 的说明)
+    unreadable=$(tar tvzf "$OUT" | awk '$1 !~ /^l/ && substr($1,8,1) != "r" {print $NF}' | head -5)
+    if [ -n "$unreadable" ]; then
+        echo "  ❌ 包里有别人读不了的文件 (容器用户会读不了):"; echo "$unreadable" | sed 's/^/      /'; exit 1
     fi
     echo "  ✓ 结构核对通过 · $(du -h "$OUT" | cut -f1)"
     rm -rf "$STAGE"

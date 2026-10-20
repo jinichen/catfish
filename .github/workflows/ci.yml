@@ -118,6 +118,12 @@ jobs:
       - name: 交付目录没有残留 image tar
         run: bash scripts/check_no_stale_image_tars.sh
 
+      # 10/20: 含中文的 .ps1 必须带 UTF-8 BOM。Windows PowerShell 5.1 读无 BOM 文件按
+      # GBK 解码, 中文乱码 / 整行被吞 (那天一个诊断脚本丢了第一行, $HERMES_HOME 为空)。
+      # pwsh 7 按 UTF-8 读, 开发机和 CI 上永远复现不出来, 只能静态查。
+      - name: 含中文的 .ps1 带 BOM
+        run: bash scripts/check_ps1_bom.sh
+
       # 10/1: 组件分发 manifest 生成器 (中央 /components/, docs/MEETING-MINUTES-PLAN.md §4)。
       # 它生成的 sha256 / 文件名是客户端下载校验的唯一依据, 错了客户端只会报"校验失败"。
       - name: 组件 manifest 生成器

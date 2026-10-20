@@ -528,6 +528,17 @@ if ! docker run --rm \
     exit 1
 fi
 
+# 10/20: root 跑 setup 时, 上面生成的 users.yaml 等属主是 root、权限 600 (含密码 hash, 故意不放开读),
+# 而 identity / gateway 容器以 catfish (uid 1000) 读挂载进去的 config —— 读不了就起不来。
+# 普通 Ubuntu 上第一个用户恰好是 uid 1000, 所以非 root 装一直正常; root 装 (含 Windows 的 WSL2 路径) 必现。
+# 跟下面 components/ 同一个处理: root 跑就把容器要读的两个 config 目录交给 uid 1000。
+if [ "$(id -u)" = "0" ]; then
+  chown -R 1000:1000 identity-server/config llm-gateway/config
+elif [ "$(id -u)" != "1000" ]; then
+  echo "  ⚠ 当前用户 uid=$(id -u) 不是 1000: identity / gateway 容器 (uid 1000) 可能读不了 config 里 600 的文件;"
+  echo "    用 root 跑一次: chown -R 1000:1000 $(pwd)/identity-server/config $(pwd)/llm-gateway/config"
+fi
+
 # ── 3. HTTPS 自签 cert (若 ENABLE_HTTPS=1) ────────────────
 #
 # 9/22: 原来这里是 130 行 openssl 命令 (建 CA、签 CSR、拼 fullchain、再用
