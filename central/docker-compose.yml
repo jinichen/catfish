@@ -206,6 +206,16 @@ services:
     image: catfish-web:20261020-6f3aec15
     container_name: catfish-web
     restart: unless-stopped
+    # 10/21: nginx 只在启动时解析一次上游名字 (catfish-locations.conf 里字面写的 identity / gateway)。
+    # web 原来没有依赖, 会跟它们同时起; 先起的话 Docker 内部 DNS 还不认识这两个名字, 查询转给宿主机的
+    # 上游 DNS —— 内网 DNS 对不存在的名字也回一个地址 (劫持 / fake-ip) 时, nginx 就一直记着错的,
+    # 登录页 502 且不会自己好 (10/21 在带 Clash 的机器上复现过)。等它俩**启动**就够 (容器一启动名字就能解析),
+    # 不等 healthy: gateway 不健康时 web 照样该起来, 门户才能把错报出来。
+    depends_on:
+      identity:
+        condition: service_started
+      gateway:
+        condition: service_started
     # P3.5.79+ (7/22 达华 POC 血案 · runtime config 重构):
     # 一份 image 到处部署 · docker-entrypoint-catfish-config.sh 从容器 env 生成
     # /config.js · 前端 lib/env.ts 优先读 window.__CATFISH_CONFIG__. 客户换 IP
