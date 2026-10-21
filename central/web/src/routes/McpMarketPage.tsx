@@ -146,18 +146,46 @@ function McpDetail() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  // 10/22: 撤下的 (filesystem) / 还没开放的 (jira、gitlab 是 preview) 从老书签或没刷新的列表点进来,
+  // 原来只有一行红字「连接器 filesystem 不存在」, 没说为什么, 也没路回去。
+  const [unavailable, setUnavailable] = useState<"gone" | "preview" | null>(null);
 
   useEffect(() => {
     listConnectors()
       .then((cs) => {
         const c = cs.find((x) => x.id === id);
-        if (!c) setError(`连接器 ${id} 不存在`);
+        if (!c) setUnavailable("gone");
+        else if (c.status !== "active") setUnavailable("preview");
         else setConnector(c);
       })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
   }, [id]);
 
-  if (error) return <div style={{ color: "var(--status-err)" }}>{error}</div>;
+  const back = (
+    <Link to="/market/mcp" style={{ color: "var(--accent)", fontSize: 13 }}>
+      ← 回到连接器列表
+    </Link>
+  );
+  if (unavailable) {
+    return (
+      <Card title={unavailable === "gone" ? "这个连接器已经下架" : "这个连接器还没开放订阅"}>
+        <div style={{ color: "var(--text-muted)", fontSize: 13, lineHeight: 1.7, marginBottom: "var(--space-3)" }}>
+          {unavailable === "gone"
+            ? `「${id}」不在市场里了（可能是旧链接，或列表页打开得早、还没刷新）。已经订过的不用处理，员工电脑不会再启动它。`
+            : `「${id}」要先授权登录，员工电脑这一步还没做好，暂时不能订阅。`}
+        </div>
+        {back}
+      </Card>
+    );
+  }
+  if (error) {
+    return (
+      <div>
+        <div style={{ color: "var(--status-err)", marginBottom: "var(--space-2)" }}>加载失败：{error}</div>
+        {back}
+      </div>
+    );
+  }
   if (!connector) return <div>加载中…</div>;
 
   const handleSubscribe = async () => {
