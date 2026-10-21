@@ -576,6 +576,8 @@ mod addon_marker_tests {
     #[test]
     fn existing_addon_from_an_older_package_is_not_current() {
         let home = tempfile::tempdir().unwrap();
+        // BootstrapPaths::new 读 HERMES_HOME (进程全局), 别的测试会临时改它 —— 排队。
+        let _env = crate::util::test_env::env_lock();
         let paths = BootstrapPaths::new(home.path().to_path_buf());
         // HERMES_HOME / LOCALAPPDATA 会把路径指回真实安装目录 —— 那种环境下绝不能往里写
         if !paths.install_dir.starts_with(home.path()) {

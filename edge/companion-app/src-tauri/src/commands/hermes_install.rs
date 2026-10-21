@@ -631,6 +631,8 @@ mod tests {
     #[test]
     fn pyproject_alone_is_not_a_healthy_install() {
         let temp = tempfile::tempdir().unwrap();
+        // BootstrapPaths::new 读 HERMES_HOME (进程全局), 别的测试会临时改它 —— 排队。
+        let _env = crate::util::test_env::env_lock();
         let paths = BootstrapPaths::new(temp.path().to_path_buf());
         fs::create_dir_all(&paths.install_dir).unwrap();
         fs::write(paths.install_dir.join("pyproject.toml"), b"[project]\n").unwrap();
@@ -643,6 +645,8 @@ mod tests {
     #[test]
     fn completion_marker_is_required_and_validated() {
         let temp = tempfile::tempdir().unwrap();
+        // BootstrapPaths::new 读 HERMES_HOME (进程全局), 别的测试会临时改它 —— 排队。
+        let _env = crate::util::test_env::env_lock();
         let paths = BootstrapPaths::new(temp.path().to_path_buf());
         make_core_install(&paths);
         assert!(core_health_problems(&paths, false).is_empty());
@@ -664,6 +668,8 @@ mod tests {
     #[test]
     fn interrupted_activation_restores_previous_install() {
         let temp = tempfile::tempdir().unwrap();
+        // BootstrapPaths::new 读 HERMES_HOME (进程全局), 别的测试会临时改它 —— 排队。
+        let _env = crate::util::test_env::env_lock();
         let paths = BootstrapPaths::new(temp.path().to_path_buf());
         fs::create_dir_all(&paths.hermes_home).unwrap();
         fs::create_dir_all(&paths.install_dir).unwrap();
@@ -682,6 +688,8 @@ mod tests {
     #[test]
     fn ready_staging_is_reused_after_interruption() {
         let temp = tempfile::tempdir().unwrap();
+        // BootstrapPaths::new 读 HERMES_HOME (进程全局), 别的测试会临时改它 —— 排队。
+        let _env = crate::util::test_env::env_lock();
         let paths = BootstrapPaths::new(temp.path().to_path_buf());
         fs::create_dir_all(&paths.hermes_home).unwrap();
         let stage = paths.unique_sibling("stage-test");
@@ -704,6 +712,8 @@ mod tests {
     #[test]
     fn interrupted_atomic_switch_restores_old_install_and_reuses_stage() {
         let temp = tempfile::tempdir().unwrap();
+        // BootstrapPaths::new 读 HERMES_HOME (进程全局), 别的测试会临时改它 —— 排队。
+        let _env = crate::util::test_env::env_lock();
         let paths = BootstrapPaths::new(temp.path().to_path_buf());
         fs::create_dir_all(&paths.hermes_home).unwrap();
 

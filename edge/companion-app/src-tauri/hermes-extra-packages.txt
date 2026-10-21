@@ -23,3 +23,7 @@ openpyxl       openpyxl
 python-docx    docx
 python-pptx    pptx
 xlrd<2         xlrd
+
+# 10/22: MCP「时间 / 时区」连接器 (tool-bridge connectors/time_server.py) 用 zoneinfo ——
+# Windows 没有系统时区库, 不装 tzdata 所有 IANA 时区名都查不到。纯 Python wheel。
+tzdata         tzdata

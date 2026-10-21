@@ -359,6 +359,8 @@ mod e2e {
         std::fs::create_dir_all(resource.path().join("resources")).unwrap();
         std::os::unix::fs::symlink(&runtime, resource.path().join("resources").join("mac")).unwrap();
         let home = tempfile::tempdir().unwrap();
+        // BootstrapPaths::new 读 HERMES_HOME (进程全局), 别的测试会临时改它 —— 排队。
+        let _env = crate::util::test_env::env_lock();
         let paths = BootstrapPaths::new(home.path().to_path_buf());
         let steps = std::sync::Mutex::new(Vec::new());
         let reporter = |p: super::super::hermes_install_base::HermesBootstrapProgress| {

@@ -103,6 +103,10 @@ def _init_catfish_tool_bridge() -> None:
     logger.info("catfish-tool-bridge MCP server bootstrapped")
 
 
+# 隔多久对一次员工的 MCP 订阅 (订阅/退订后最多这么久生效)
+MCP_RESYNC_SECONDS = 120
+
+
 async def amain() -> None:
     _init_catfish_tool_bridge()
 
@@ -230,10 +234,22 @@ async def amain() -> None:
     # MCP Python SDK 2.0 删除了低层 Server 上的 ``@list_tools`` /
     # ``@call_tool`` 装饰器，改成构造函数 handler。Hermes 0.20.6 首次带入
     # 这个版本；旧 Hermes 仍需保留装饰器路径，方便 Companion 跨版本升级。
+    # 10/22: 订阅的 MCP 连接器变了要告诉 hermes (tools/list_changed), 得拿到会话 ——
+    # 在 hermes 第一次 list_tools 时记下来。
+    sessions: dict[str, Any] = {}
+
     probe = Server("catfish-tool-bridge")
     if hasattr(probe, "list_tools"):
         app: Server = probe
-        app.list_tools()(list_tools)
+
+        async def list_tools_v1() -> list[Tool]:
+            try:
+                sessions["hermes"] = app.request_context.session
+            except Exception:  # noqa: BLE001
+                pass
+            return await list_tools()
+
+        app.list_tools()(list_tools_v1)
         app.call_tool()(call_tool)
     else:
         from mcp.types import (
@@ -247,6 +263,7 @@ async def amain() -> None:
             _ctx: Any,
             _params: PaginatedRequestParams | None,
         ) -> ListToolsResult:
+            sessions["hermes"] = getattr(_ctx, "session", None) or sessions.get("hermes")
             return ListToolsResult(tools=await list_tools())
 
         async def call_tool_v2(
@@ -263,10 +280,45 @@ async def amain() -> None:
             on_call_tool=call_tool_v2,
         )
 
+    # 10/22: 按员工订阅接 MCP 连接器 (原来只有 Companion 的守护进程拉, 而小鲶的工具来自这个
+    # 进程, 订阅了也看不到)。先同步一次再开始服务, 之后定时再同步, 订阅/退订不用重启。
+    from . import mcp_client  # noqa: PLC0415
+    try:
+        await asyncio.wait_for(mcp_client.autostart_default_servers(), timeout=30)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("启动时同步 MCP 订阅失败 (%s), 稍后定时再试", e)
+
+    async def resync_loop() -> None:
+        while True:
+            await asyncio.sleep(MCP_RESYNC_SECONDS)
+            try:
+                changed = await mcp_client.sync_subscriptions()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("同步 MCP 订阅失败: %s", e)
+                continue
+            session = sessions.get("hermes")
+            if changed and session is not None:
+                try:
+                    await session.send_tool_list_changed()
+                    logger.info("MCP 连接器有变化, 已通知 hermes 刷新工具列表")
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("通知 hermes 工具列表变化失败: %s", e)
+
+    try:
+        from mcp.server.lowlevel.server import NotificationOptions
+        notification_options = NotificationOptions(tools_changed=True)
+    except ImportError:  # 老 SDK
+        notification_options = None
+
     # 跑 stdio server
-    async with stdio_server() as (read_stream, write_stream):
-        init_opts = app.create_initialization_options()
-        await app.run(read_stream, write_stream, init_opts)
+    resync = asyncio.create_task(resync_loop())
+    try:
+        async with stdio_server() as (read_stream, write_stream):
+            init_opts = app.create_initialization_options(notification_options)
+            await app.run(read_stream, write_stream, init_opts)
+    finally:
+        resync.cancel()
+        await mcp_client.shutdown_all()
 
 
 def main() -> int:

@@ -162,6 +162,8 @@ mod tests {
     #[test]
     fn 没有_installs_目录时只查自己的_venv() {
         let tmp = TempDir::new().unwrap();
+        // BootstrapPaths::new 读 HERMES_HOME (进程全局), 别的测试会临时改它 —— 排队。
+        let _env = crate::util::test_env::env_lock();
         let paths = BootstrapPaths::new(tmp.path().to_path_buf());
         assert_eq!(runtime_pythons(&paths), vec![hermes_venv_python(&paths.install_dir)]);
     }

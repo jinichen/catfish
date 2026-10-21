@@ -263,7 +263,7 @@ mod extra_packages_tests {
         }
         assert_eq!(
             hermes_extra_import_check(),
-            "import jieba, playwright.sync_api, watchdog.observers, yaml, pypdfium2, openpyxl, docx, pptx, xlrd"
+            "import jieba, playwright.sync_api, watchdog.observers, yaml, pypdfium2, openpyxl, docx, pptx, xlrd, tzdata"
         );
     }
 }
