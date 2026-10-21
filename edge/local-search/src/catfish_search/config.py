@@ -24,7 +24,8 @@ DB_FILE = CATFISH_HOME / "search.db"
 # (行级插入，保留原注释)，之后它就是一条普通条目，面板能看能删。
 # marker 记在 yaml 的 _applied_migrations 里，员工删掉后不会被塞回来。
 #
-# 加新条目的规矩：往列表尾部加，永远不改已有条目的 id。
+# 加新条目的规矩：往列表尾部加，永远不改已有条目的 id；**同时把这条路径写进 DEFAULT_CONFIG**
+# —— 新员工的 yaml 一生成就把现有迁移全标成已执行 (ensure_config_exists, 10/21)。
 MIGRATIONS: list[tuple[str, str, str]] = [
     # (marker id, 要加的路径, 写进 yaml 的说明注释)
     (
@@ -69,7 +70,7 @@ include:
 
   # 鲶鱼替你生成的文档（周报 / 汇报 / 报告）—— 文书风格就是从这里学的
   # 8/14: 统一用 outputs (复数)。老员工的 yaml 里可能还有 output/ (单数),
-  # 那是 catfish-output-2026-07 迁移加的, 留着让历史文件仍可搜。
+  # 那是 catfish-output-2026-07 迁移加的; 里面有历史文件就留着能搜, 空的会自动摘掉。
   - ~/.catfish/outputs
 
   # 按需打开下面这些（取消前面的 #）：
@@ -205,10 +206,18 @@ class SearchConfig:
 
 
 def ensure_config_exists() -> Path:
-    """如果配置文件不存在就用默认值创建，返回路径。"""
+    """如果配置文件不存在就用默认值创建，返回路径。
+
+    10/21: 新建时把 MIGRATIONS 全标成已执行。DEFAULT_CONFIG 本身就是"迁移都做完"
+    的样子; 不标的话, 给 8 月前老员工补 output/ (单数) 的那条迁移会在新员工身上
+    也跑一遍, 面板里平白多一个永远空着、跟 outputs 只差一个字母的目录。
+    """
     CATFISH_HOME.mkdir(exist_ok=True)
     if not CONFIG_FILE.exists():
-        CONFIG_FILE.write_text(DEFAULT_CONFIG, encoding="utf-8")
+        lines = DEFAULT_CONFIG.rstrip("\n").splitlines()
+        lines += ["", _MIGRATION_BANNER, f"{_MIGRATION_KEY}:"]
+        lines += [f"  - {marker}" for marker, _, _ in MIGRATIONS]
+        CONFIG_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return CONFIG_FILE
 
 
@@ -360,10 +369,65 @@ def _apply_migrations() -> None:
         return
 
 
+#: 8 月前的老产出目录 (单数)。只为老员工的历史文件留着, 见 _prune_empty_legacy_output。
+_LEGACY_OUTPUT = "~/.catfish/output"
+
+
+def _has_any_file(root: Path) -> bool:
+    """目录里 (递归) 有没有至少一个文件。找到第一个就返回, 不把整棵树走完。"""
+    try:
+        return any(p.is_file() for p in root.rglob("*"))
+    except OSError:
+        return True  # 读不了就当有, 宁可留着也不误删条目
+
+
+def _prune_empty_legacy_output() -> None:
+    """单数 ~/.catfish/output 不存在或是空的 → 从 include 摘掉 (10/21)。
+
+    它是 catfish-output-2026-07 迁移给 8 月前老员工加的 (那时产出还写在单数目录),
+    8/14 统一成 outputs 之后只剩"让历史文件能搜到"这一个用处。里面一个文件都没有时,
+    留着只会让员工在面板上看见两个几乎同名的目录 (鸿波 10/21 问「为什么这么设置」)。
+    有文件就不动 —— 摘了历史文档就搜不到了。
+
+    行级删除, 跟 _ensure_in_include 一样不整体重写 (保住注释); 迁移当初插的那行
+    说明注释一起摘。每次加载都检查一次: 员工后来把老文件清空了, 下次也会摘掉。
+    任何一步出错都静默返回。
+    """
+    try:
+        legacy = Path(_LEGACY_OUTPUT).expanduser()
+        if legacy.is_dir() and _has_any_file(legacy):
+            return
+        raw = CONFIG_FILE.read_text(encoding="utf-8")
+        lines = raw.splitlines()
+        comment = next(c for m, _, c in MIGRATIONS if m == "catfish-output-2026-07")
+        out: list[str] = []
+        removed = False
+        for ln in lines:
+            item = ln.strip()
+            if item.startswith("- ") and _same_path(item[2:].strip().strip("'\""), _LEGACY_OUTPUT):
+                removed = True
+                if out and out[-1].strip() == f"# {comment}":
+                    out.pop()
+                    if out and not out[-1].strip():
+                        out.pop()
+                continue
+            out.append(ln)
+        if not removed:
+            return
+        new = "\n".join(out) + "\n"
+        data = yaml.safe_load(new) or {}
+        if not isinstance(data, dict):
+            return  # 摘完不像个配置了 —— 不写
+        CONFIG_FILE.write_text(new, encoding="utf-8")
+    except (OSError, yaml.YAMLError, StopIteration):
+        return
+
+
 def load_config() -> SearchConfig:
     """读 ~/.catfish/search-scope.yaml，首次自动创建默认配置。"""
     ensure_config_exists()
     _apply_migrations()
+    _prune_empty_legacy_output()
     data = yaml.safe_load(CONFIG_FILE.read_text(encoding="utf-8")) or {}
 
     include_paths = [

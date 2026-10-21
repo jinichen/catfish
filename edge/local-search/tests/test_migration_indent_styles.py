@@ -74,6 +74,9 @@ def home(monkeypatch):
         (Path(d) / ".catfish").mkdir(parents=True, exist_ok=True)
         for sub in ("uploads", "output", "outputs"):
             (Path(d) / ".catfish" / sub).mkdir(parents=True, exist_ok=True)
+        # 10/21: 单数 output/ 空的会被自动摘掉 (config._prune_empty_legacy_output)。
+        # 这个文件测的是缩进, 按「有历史文件的老员工」来, 让它留着。
+        (Path(d) / ".catfish" / "output" / "2026-07-30-周报.docx").write_text("x", encoding="utf-8")
         yield Path(d)
     importlib.reload(cfgmod)
 

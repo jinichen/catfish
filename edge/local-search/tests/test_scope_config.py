@@ -94,6 +94,9 @@ def scope(monkeypatch):
         importlib.reload(scope_config)
         for d in _HOME_DIRS:
             (Path(home) / d).mkdir(parents=True, exist_ok=True)
+        # 10/21: 单数 output/ 没文件会被自动摘掉 (config._prune_empty_legacy_output)。
+        # 这个文件的迁移用例模拟的是 8 月前、output/ 里有历史产出的老员工。
+        (Path(home) / ".catfish" / "output" / "2026-07-30-周报.docx").write_text("x", encoding="utf-8")
         yield Path(home), scope_config
     # 还原真实 HOME 下的模块状态，免得污染同进程后续测试
     importlib.reload(scope_config)
@@ -205,13 +208,18 @@ def test_migration_not_marked_done_when_no_include_section(scope):
     assert "_applied_migrations" not in cfgmod.CONFIG_FILE.read_text(encoding="utf-8")
 
 
-def test_fresh_install_gets_output_from_default_config(scope):
-    """全新员工走 DEFAULT_CONFIG，不该因为迁移又插一条重复的。"""
-    home, cfgmod = scope
-    cfg = cfgmod.load_config()
+def test_fresh_install_gets_outputs_not_legacy_output(scope):
+    """全新员工走 DEFAULT_CONFIG: 有 outputs (复数) 一条, 没有 8 月前的单数 output。
 
-    assert any(str(p) == str(home / ".catfish" / "output") for p in cfg.include)
-    assert _count_include_line(cfgmod.CONFIG_FILE.read_text(encoding="utf-8"), "~/.catfish/output") == 1
+    10/21 改: 原来这条断言新员工也有单数 output —— 那是给老员工补的迁移在新员工
+    身上也跑了一遍, 面板里多一个永远空着、跟 outputs 只差一个字母的目录。
+    """
+    _, cfgmod = scope
+    cfgmod.load_config()
+
+    txt = cfgmod.CONFIG_FILE.read_text(encoding="utf-8")
+    assert _count_include_line(txt, "~/.catfish/output") == 0
+    assert _count_include_line(txt, "~/.catfish/outputs") == 1
 
 
 def test_load_config_dedupes_include(scope):
