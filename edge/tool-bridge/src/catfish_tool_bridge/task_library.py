@@ -159,10 +159,16 @@ def upsert_task(task: dict[str, Any]) -> dict[str, Any]:
     return _row_to_dict(row)
 
 
+# 挂在某条提醒上的行。除了 source='reminders', 也认 source_id 是 Reminders ID 的:
+# 10/21 前 catfish_create_task 带 task_id 更新时会把 source 冲成 conversation
+# (source_id 还在), 导入认不出它, 又按提醒新建一行 —— 早安页同一件事两张卡。
+_REMINDER_ROW = "source_id IS NOT NULL AND (source = 'reminders' OR source_id LIKE 'x-apple-reminder://%')"
+
+
 def _rows_by_reminder_id(conn: sqlite3.Connection) -> dict[str, list[sqlite3.Row]]:
     rows: dict[str, list[sqlite3.Row]] = {}
     for row in conn.execute(
-        "SELECT * FROM tasks WHERE source = 'reminders' AND source_id IS NOT NULL "
+        f"SELECT * FROM tasks WHERE {_REMINDER_ROW} "
         "ORDER BY updated_at DESC"
     ):
         rows.setdefault(row["source_id"], []).append(row)
@@ -248,7 +254,7 @@ def close_deleted_reminders(snapshot: list[dict[str, Any]], *, limit: int) -> li
     with _connect() as conn:
         open_rows = [
             row for row in conn.execute(
-                "SELECT * FROM tasks WHERE source = 'reminders' AND source_id IS NOT NULL "
+                f"SELECT * FROM tasks WHERE {_REMINDER_ROW} "
                 "AND status IN ('pending', 'in_progress')"
             )
         ]

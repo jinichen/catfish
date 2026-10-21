@@ -412,3 +412,17 @@ def test_create_task_with_task_id_keeps_unspecified_fields(tmp_path, monkeypatch
         "清单在 outputs", 5, "in_progress", "2026-10-23T18:00:00")
     cleared = task_library.tool_create_task({"task_id": tid, "title": "交材料", "due_date_iso": None})["task"]
     assert cleared["due_date_iso"] is None, "显式传 null 才清掉截止时间"
+
+
+def test_import_merges_row_whose_source_was_reset_to_conversation(tmp_path, monkeypatch):
+    """10/21「资质集中采购三期」两张卡: 老行 source 被冲成 conversation 但 source_id 还是提醒 ID,
+    导入认不出又建一行。导入要认出它, 同一条提醒只留一行未完成。"""
+    monkeypatch.setenv("CATFISH_TASK_LIBRARY_PATH", str(tmp_path / "tasks.db"))
+    rid = "x-apple-reminder://0507701C"
+    task_library.upsert_task({"task_id": "conversation:generated-old", "title": "资质集中采购三期",
+                              "source": "conversation", "source_id": rid, "body": "【当前状态】已定稿"})
+    task_library.upsert_reminders([{"id": rid, "title": "资质集中采购三期", "body": "【当前状态】已定稿"}])
+    task_library.upsert_reminders([{"id": rid, "title": "资质集中采购三期", "body": "【当前状态】已定稿"}])
+    active = task_library.list_tasks({"scope": "active"})["tasks"]
+    assert [t["title"] for t in active] == ["资质集中采购三期"], active
+    assert active[0]["source"] == "reminders"

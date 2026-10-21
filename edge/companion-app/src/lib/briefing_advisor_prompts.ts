@@ -390,6 +390,14 @@ Now I have a comprehensive picture. Let me synthesize:
 
 // ─── 拼 user prompt ──────────────────────────────────────────────
 
+const PROGRESS_MAX_CHARS = 300;
+
+/** 任务正文开头一段 (最新进展), 去掉同步标记、压成一行。 */
+export function latestProgress(body: string | undefined): string {
+  const text = (body ?? "").replace(/\[catfish-task:[^\]]*\]/g, "").replace(/\s+/g, " ").trim();
+  return text.length > PROGRESS_MAX_CHARS ? `${text.slice(0, PROGRESS_MAX_CHARS)}…` : text;
+}
+
 export function buildUserPrompt(input: AdvisorInput): string {
   // 5/26: sessionGoal 字段删 — hermes 0.14 原生 /goal 替代, advisor 不再读 catfish 这套
   const { profile, emails, events, todos, ctx, urgencyMap, previousTasks } = input;
@@ -473,10 +481,15 @@ ${input.wikiRelevant.trim()}`);
   }
 
   // TODO
+  // 10/21: 带上任务正文开头 (最新进展)。以前只给标题 + 截止时间, 卡片只能写
+  // 「责任: 推进 X; 时间: 截止 Y」—— 小鲶在对话里记下的进展 (邮件已发 / 等谁回数 /
+  // 下一步) 早安页一个字都看不到。正文约定最新状态写在最前面, 截一段就够。
   if (todos.length > 0) {
     const lines = todos.map((t) => {
       const star = t.is_priority ? "⭐ " : "";
-      return `${star}${t.text} (${t.source}; 任务 ID: ${t.reminder_id || "未知"}; 截止时间: ${t.due_date_iso || "未知"})`;
+      const head = `${star}${t.text} (${t.source}; 任务 ID: ${t.reminder_id || "未知"}; 截止时间: ${t.due_date_iso || "未知"})`;
+      const progress = latestProgress(t.body);
+      return progress ? `${head}\n  └ 最新进展: ${progress}` : head;
     });
     parts.push(`# 当前未完成任务（${todos.length} 件；截止时间仅用于排序）\n${lines.join("\n")}`);
   }
