@@ -6,9 +6,10 @@
 import { useEffect, useState } from "react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 
-import { Card, Row } from "../components/Card";
+import { Card } from "../components/Card";
 import { ConfirmDialog } from "../components/Dialog";
 import { roleAllows } from "../components/RoleGate";
+import { SimpleMarkdown } from "../components/SimpleMarkdown";
 import {
   deleteSkillVersion,
   getSkill,
@@ -16,6 +17,7 @@ import {
   publishSkill,
   type SkillSummary,
 } from "../lib/hub";
+import { metaList, metaText, namespaceLabel, parseSkillMd } from "../lib/skillMd";
 import { useAuthStore } from "../store/auth";
 
 export function SkillsHubPage() {
@@ -127,7 +129,7 @@ function SkillList() {
               fontFamily: "var(--font-mono)",
             }}
           >
-            {ns}/ · {grouped[ns].length} skill
+            {namespaceLabel(ns)} ({ns}) · {grouped[ns].length} 个
           </div>
           <div
             style={{
@@ -248,31 +250,130 @@ function SkillDetail() {
     }
   };
 
+  const { meta, body } = parseSkillMd(detail.skill_md);
+  const title = metaText(meta, "title") ?? detail.name;
+  const triggers = metaList(meta, "triggers");
+  const author = metaText(meta, "author");
+  const updated = metaText(meta, "updated") ?? metaText(meta, "created");
+  const muted = { fontSize: 12, color: "var(--text-muted)" } as const;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+      {/* 10/22 鸿波: 原来标题是 slug、正文是整份 SKILL.md 原文 (含 YAML 头), 而且页面上
+          没说怎么装 —— 「自己上传的就不能安装?」。安装本来就在 Companion 里 (网页装不到员工
+          电脑上), 这里把它说清楚; 头部字段拆成人话, 正文按 Markdown 排版, 原文收进折叠区。 */}
       <Card
-        title={`${detail.namespace} / ${detail.name}`}
+        title={title}
         action={
-          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+          <span style={muted}>
             v{detail.version}
             {detail.deprecated && (
-              <span style={{ color: "var(--status-warn)", marginLeft: 8 }}>
-                (deprecated)
-              </span>
+              <span style={{ color: "var(--status-warn)", marginLeft: 8 }}>（已停用）</span>
             )}
           </span>
         }
       >
-        <div style={{ marginBottom: "var(--space-3)" }}>{detail.description}</div>
-        <Row label="文件数" value={detail.files.length} />
-        {/* ⚠ 权限判断用 roleAllows, 不能写 `role === "admin"`。
-            后端 skills-hub 的 require_admin 明确接受 admin **和 sysadmin**
-            (它自己的注释: "BL-ARCH1 P2 (5/10): sysadmin 继承 admin 权限"),
-            而这里原来写死了 === "admin" —— 于是全公司最高权限的账号
-            **看不到删除按钮**, 尽管它有权限。前端比后端严, 表现是
-            "这个功能不见了", 没人会想到是前端判断写窄了。 */}
-        {me && roleAllows(me.role, "admin") && (
+        <div style={{ ...muted, marginTop: -8, marginBottom: "var(--space-3)", fontFamily: "var(--font-mono)" }}>
+          {namespaceLabel(detail.namespace)} · {detail.namespace}/{detail.name}
+        </div>
+        <div style={{ marginBottom: "var(--space-3)", lineHeight: 1.7 }}>{detail.description}</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-4)", ...muted }}>
+          {author && <span>作者：{author}</span>}
+          {updated && <span>更新：{updated}</span>}
+          <span>文件：{detail.files.length} 个</span>
+        </div>
+        {triggers.length > 0 && (
           <div style={{ marginTop: "var(--space-3)" }}>
+            <div style={{ ...muted, marginBottom: 6 }}>员工这样说时，小鲶会用上它：</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {triggers.map((t) => (
+                <span
+                  key={t}
+                  style={{
+                    fontSize: 12,
+                    padding: "2px 8px",
+                    borderRadius: 999,
+                    background: "var(--bg-secondary)",
+                    border: "1px solid var(--border-soft)",
+                  }}
+                >
+                  {t}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+        <div
+          style={{
+            marginTop: "var(--space-4)",
+            padding: "var(--space-3)",
+            borderRadius: "var(--radius-sm)",
+            background: "var(--bg-secondary)",
+            fontSize: 13,
+            lineHeight: 1.7,
+          }}
+        >
+          <b>怎么装到自己电脑上：</b>打开鲶鱼 Companion →「设置」→「技能」→「🌐 内部技能分享」，
+          找到它点「安装」。网页上装不了 —— 技能要装进员工自己的电脑。
+          <div style={muted}>
+            从哪台电脑上传的，那台本来就装着（Companion 里显示「✓ 已装」）；换电脑或同事要用，就在
+            Companion 里装。
+          </div>
+        </div>
+      </Card>
+
+      <Card title="使用说明">
+        {body.trim() ? <SimpleMarkdown source={body} /> : <div style={muted}>（SKILL.md 没有正文）</div>}
+      </Card>
+
+      <Card title={`文件 (${detail.files.length})`}>
+        <ul style={{ margin: 0, paddingLeft: 20, fontFamily: "var(--font-mono)", fontSize: 12 }}>
+          {detail.files.map((f) => (
+            <li key={f}>
+              {f}
+              {detail.files_sha256[f] && (
+                <span
+                  style={{
+                    marginLeft: 8,
+                    color: "var(--text-muted)",
+                    fontSize: 10,
+                  }}
+                >
+                  sha256:{detail.files_sha256[f].slice(0, 12)}…
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+        <details style={{ marginTop: "var(--space-3)" }}>
+          <summary style={{ cursor: "pointer", ...muted }}>查看原始 SKILL.md</summary>
+          <pre
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 12,
+              background: "var(--bg-secondary)",
+              padding: "var(--space-3)",
+              borderRadius: "var(--radius-sm)",
+              overflow: "auto",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+            }}
+          >
+            {detail.skill_md}
+          </pre>
+        </details>
+      </Card>
+
+      {/* ⚠ 权限判断用 roleAllows, 不能写 `role === "admin"`。
+          后端 skills-hub 的 require_admin 明确接受 admin **和 sysadmin**
+          (它自己的注释: "BL-ARCH1 P2 (5/10): sysadmin 继承 admin 权限"),
+          而这里原来写死了 === "admin" —— 于是全公司最高权限的账号
+          **看不到删除按钮**, 尽管它有权限。前端比后端严, 表现是
+          "这个功能不见了", 没人会想到是前端判断写窄了。
+          10/22: 从摘要卡挪到页面最下面 —— 不可恢复的操作不该是看技能时第一眼的按钮。 */}
+      {me && roleAllows(me.role, "admin") && (
+        <Card title="管理">
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
             <button
               onClick={() => setConfirming(true)}
               style={{
@@ -287,9 +388,8 @@ function SkillDetail() {
             >
               删除这个版本
             </button>
+            <span style={muted}>只删 v{detail.version}；已经装到员工电脑上的不受影响。</span>
           </div>
-        )}
-
         {confirming && (
           <ConfirmDialog
             danger
@@ -329,45 +429,8 @@ function SkillDetail() {
             )}
           </ConfirmDialog>
         )}
-      </Card>
-
-      <Card title="SKILL.md">
-        <pre
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: 12,
-            background: "var(--bg-secondary)",
-            padding: "var(--space-3)",
-            borderRadius: "var(--radius-sm)",
-            overflow: "auto",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-          }}
-        >
-          {detail.skill_md}
-        </pre>
-      </Card>
-
-      <Card title={`文件 (${detail.files.length})`}>
-        <ul style={{ margin: 0, paddingLeft: 20, fontFamily: "var(--font-mono)", fontSize: 12 }}>
-          {detail.files.map((f) => (
-            <li key={f}>
-              {f}
-              {detail.files_sha256[f] && (
-                <span
-                  style={{
-                    marginLeft: 8,
-                    color: "var(--text-muted)",
-                    fontSize: 10,
-                  }}
-                >
-                  sha256:{detail.files_sha256[f].slice(0, 12)}…
-                </span>
-              )}
-            </li>
-          ))}
-        </ul>
-      </Card>
+        </Card>
+      )}
     </div>
   );
 }
