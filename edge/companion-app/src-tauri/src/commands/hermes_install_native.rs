@@ -123,7 +123,7 @@ pub(crate) fn ensure_embedded_python(artifacts: &RuntimeArtifacts, paths: &Boots
     std::fs::create_dir_all(&stage).with_context(|| format!("创建 {}", stage.display()))?;
     let mut untar = crate::services::process::background_command("tar");
     untar.arg("-xzf").arg(tar).arg("-C").arg(&stage).arg("--strip-components=1");
-    if let Err(e) = run(untar, "解压内嵌 Python") {
+    if let Err(e) = untar_python(untar, &stage, paths) {
         let _ = remove_any(&stage);
         return Err(e);
     }
@@ -139,6 +139,35 @@ pub(crate) fn ensure_embedded_python(artifacts: &RuntimeArtifacts, paths: &Boots
     }
     std::fs::rename(&stage, &root).with_context(|| format!("放置内嵌 Python {}", root.display()))?;
     Ok(python)
+}
+
+/// 解内嵌 Python。Windows 上安全软件只拦了 VC 运行库两个 DLL、而 System32 里有它们时继续 (10/21,
+/// 见 hermes_python_dlls); System32 也没有就报一句说得清的; 别的失败原样报。
+fn untar_python(mut untar: Command, stage: &Path, paths: &BootstrapPaths) -> Result<()> {
+    let output = untar.output().context("启动 解压内嵌 Python")?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if cfg!(target_os = "windows") {
+        if let Some(dlls) = super::hermes_python_dlls::blocked_runtime_dlls(&stderr) {
+            let system32 = super::hermes_python_dlls::system32();
+            if python_in(stage).is_file() && super::hermes_python_dlls::all_present_in(&system32, &dlls) {
+                log::warn!(
+                    "[hermes-install] {} 没写进内嵌 Python 目录 (多半被安全软件拦了), System32 里有, 用系统那份继续",
+                    dlls.join(", ")
+                );
+                return Ok(());
+            }
+            anyhow::bail!(super::hermes_python_dlls::blocked_message(&dlls, &paths.hermes_home, &stderr));
+        }
+    }
+    let tail: Vec<&str> = stderr.lines().collect();
+    anyhow::bail!(
+        "解压内嵌 Python 失败 ({})\n{}",
+        output.status,
+        tail[tail.len().saturating_sub(15)..].join("\n")
+    )
 }
 
 pub(crate) fn create_venv(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths, python: &Path) -> Result<()> {

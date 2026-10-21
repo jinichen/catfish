@@ -69,6 +69,7 @@ pub mod hermes_install_steps;     // Unix 装机步骤 + Windows 共用的附加
 pub mod hermes_gateway_launcher; // 10/19 Windows: hermes 升级后重写开机自启脚本 (老脚本写死 3.11)
 pub mod hermes_install_gateway;   // 10/14: 换 hermes 目录前停网关, 装完再起
 pub mod hermes_install_native;    // 10/14 hermes v0.22: Companion 自己装 (Python 3.14 + wheelhouse), mac / Windows 共用, 不再调上游安装器
+pub(crate) mod hermes_python_dlls; // 10/21 Windows: 安全软件拦了 vcruntime DLL 时用 System32 那份继续, 都没有就说清楚
 pub mod hermes_install; // 7/15 BL-CATFISH-MAC-OFFLINE-INSTALL: mac dmg 首启装 hermes-agent 本体 (offline install.sh + 4 artifacts)
 #[cfg(any(target_os = "windows", test))]
 pub mod hermes_install_windows; // Windows 首启后台安装，避免 MSI CustomAction 弹黑窗
