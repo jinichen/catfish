@@ -89,7 +89,6 @@ export default function LocalSearchScopeCard() {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [excludeExpanded, setExcludeExpanded] = useState(false);
   const [typesExpanded, setTypesExpanded] = useState(false);
   /** 正在跑索引时显的那行字 (加完目录自动补建 / 手点重建) */
   const [indexing, setIndexing] = useState<string | null>(null);
@@ -519,51 +518,17 @@ export default function LocalSearchScopeCard() {
             </div>
           </div>
 
-          {/* exclude 列表 — 只读, 默认折叠 */}
+          {/* 10/21 鸿波: 「排除规则 (36) · 只读, 改要 vim …」和「写到 ~/.catfish/search-scope.yaml」
+              是给开发看的 —— 员工改不了, 也不需要知道配置文件在哪。只留一句人话。
+              排除规则本身照旧生效 (yaml 的 exclude 段, catfish_search/config.py)。 */}
           <div
             style={{
-              fontSize: 12,
-              cursor: "pointer",
+              fontSize: 11,
               color: "var(--catfish-text-muted)",
-              userSelect: "none",
-            }}
-            onClick={() => setExcludeExpanded((e) => !e)}
-          >
-            {excludeExpanded ? "▼" : "▶"} 排除规则 ({data.exclude.length})
-            <span style={{ fontSize: 10, marginLeft: 6, opacity: 0.7 }}>
-              (只读, 改要 vim {data.yamlPath})
-            </span>
-          </div>
-          {excludeExpanded && (
-            <div
-              style={{
-                marginTop: 4,
-                paddingLeft: 12,
-                display: "flex",
-                flexDirection: "column",
-                gap: 2,
-              }}
-            >
-              {data.exclude.map((e) => (
-                <code
-                  key={`exc-${e}`}
-                  style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}
-                >
-                  {e}
-                </code>
-              ))}
-            </div>
-          )}
-
-          <div
-            style={{
-              fontSize: 10,
-              color: "var(--catfish-text-muted)",
-              marginTop: "var(--space-3)",
-              opacity: 0.7,
+              marginTop: "var(--space-2)",
             }}
           >
-            写到 <code>{data.yamlPath}</code>
+            系统文件夹、程序缓存、安装包和压缩包会自动跳过，不用管。
           </div>
         </>
       )}
