@@ -380,6 +380,15 @@ jobs:
         working-directory: edge/hermes-fork
         run: python -m pytest -q -p no:cacheprovider .
 
+      # 10/21: 红线策略插件 catfish-policy 随 Companion 装到员工机。测试 4/25 就有,
+      # 但从没进过 CI —— rules.yaml 里 R6 写法匹配器不认 (装上会拦掉全部 skill_manage)、
+      # R9 的 file_write 匹配器没实现, 都是这么漏的。test_shipped_rules.py 测发出去的那份 rules.yaml。
+      - name: 红线策略插件 catfish-policy 测试
+        working-directory: plugins/catfish-policy
+        run: |
+          python -m pip install --quiet pyyaml
+          python -m pytest -q -p no:cacheprovider test_matchers.py test_shipped_rules.py
+
   # ════════════════════════════════════════════════════════════
   # 3b. 中央门户前端 (central/web) — tsc + build + 路由自查
   # ════════════════════════════════════════════════════════════

@@ -12,15 +12,16 @@ version: 1
 rules:
 
   # ---------- R1: 系统级破坏命令 ----------
+  # 用正则, 不用子串: 子串 "rm -rf /" 会把 "rm -rf /tmp/xxx"、"rm -rf ~/Downloads/x"
+  # 这种正常清理也拦掉。只拦目标恰好是根 / 家目录本身的。
   - id: no-recursive-root-delete
     kind: shell_command
     match:
-      - "rm -rf /"
-      - "rm -rf /*"
-      - "rm -rf ~"
       - ":(){ :|:& };:"        # fork bomb
       - "dd if=/dev/zero of=/dev/"
-      - "mkfs."                # 格式化
+    match_regex:
+      - '(?:^|[;&|(`\s"\x27])rm\s+-[a-zA-Z]*[rR][a-zA-Z]*\s+(?:--no-preserve-root\s+)?(?:/|/\*|~|~/|~/\*|\$HOME|\$HOME/|\$HOME/\*)(?=$|[\s;&|)`"\x27])'
+      - '(?:^|[;&|(`\s])mkfs\.'                # 格式化
     reason: |
       系统级破坏命令被策略拦截。如果你需要清理文件，请限定具体目录
       （例如 rm -rf ./some-specific-dir）。
@@ -78,74 +79,55 @@ rules:
   # 自作主张调 skill_manage(action=delete, name=catfish-email) "试图 reinstall",
   # 把员工的 catfish skill 软链给 rm 了, 导致后续工具一直找不到。
   # 红线: 任何 catfish-* skill 由员工 / install.sh 管理, LLM 不准动。
+  #
+  # 10/21: 原来写成 kind: tool_name + deny_args_pattern, 但匹配器忽略了
+  # deny_args_pattern —— 真装上会把**所有** skill_manage 调用都拦掉 (近 30 天回放
+  # 141/141 次误拦)。改成按单个技能操作匹配, v0.22 的批量 operations 格式也认。
   - id: no-delete-catfish-skill
-    kind: tool_name
-    match:
-      - "skill_manage"
-    deny_args_pattern:
-      - 'action.*delete.*catfish-'
-      - 'name.*catfish-.*action.*delete'
+    kind: skill_op
+    actions: [delete]
+    name_regex: '^catfish-'
     reason: |
       绝不允许 LLM 删除 catfish 自家 skill (catfish-email / catfish-browser-* 等)。
       如果 skill 命令跑不通, 让员工重新跑 install.sh, 不是删 skill。
 
-  # ---------- R7: skill 创建必须员工 explicit 同意 ----------
-  # 配套 SOUL.md "Skill 生成纪律" 章. 防 LLM 自作主张瞎建 skill / 把敏感数据
-  # 存进 skill 内容. SOUL 已经规定"必须 quote 步骤给员工 review", 这里加一条
-  # 硬保险: skill 内容里出现已知敏感模式 (密码 / token / 邮箱地址 / 等) 就 deny.
+  # ---------- R7: 技能正文里不准存明文凭据 ----------
+  # 配套 SOUL.md "Skill 生成纪律" 章: 只存"步骤模板", 真实凭据让员工每次输入。
+  # 只看写进去的正文 (create/patch 的 content、patch 的 new_string、write_file 的
+  # file_content), 不看 old_string。
+  #
+  # 只拦"后面跟着真值"的写法: `password: xxx` / `api_key=sk-...` / `Bearer eyJ...`。
+  # 占位符 (<password> / ${TOKEN} / xxx / ***) 和"密码由员工输入"这种说明不拦。
+  # 邮箱地址不拦: 技能里写收件人 / 示例地址是正常的 (原规则看到 @ 就拦, 误杀面太大)。
   - id: skill-create-no-secrets
-    kind: tool_name
-    match:
-      - "skill_manage"
-    deny_args_pattern:
-      # 创建/更新 skill 时, 内容含明文密码 / API key / token 等敏感模式
-      - 'action.*(?:create|update).*password\s*[:=]'
-      - 'action.*(?:create|update).*api[_-]?key\s*[:=]'
-      - 'action.*(?:create|update).*token\s*[:=]'
-      - 'action.*(?:create|update).*Authorization:\s*Bearer'
-      # 邮箱地址 (粗粒度, 看到 @ 字符就警惕) — 可能是员工真邮箱不能存
-      - 'action.*(?:create|update).*[\w.+-]+@[\w-]+\.[\w.-]+'
+    kind: skill_op
+    actions: [create, patch, edit, write_file]
+    content_regex:
+      - '(?i)\b(?:password|passwd|pwd|密码)\s*[:=：]\s*["\x27]?(?![<{$*（(]|x{3}|\.{3}|…|无|空|员工|用户|your|待)[^\s"\x27<>{}`]{6,}'
+      - '(?i)\b(?:api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token)\s*[:=：]\s*["\x27]?(?![<{$*（(]|x{3}|\.{3}|…|your)[A-Za-z0-9_\-]{16,}'
+      - '(?i)Authorization:\s*Bearer\s+(?![<{$*]|x{3}|\.{3}|…|your|TOKEN)[A-Za-z0-9._\-]{20,}'
+      - '\b(?:sk-(?![xX*.]{6})[A-Za-z0-9_\-]{20,}|ghp_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9\-]{10,})'
     reason: |
-      skill 内容里检测到敏感模式 (密码 / API key / token / 邮箱地址等)。
+      skill 内容里检测到明文凭据 (密码 / API key / token)。
       这些不能存进 skill 文件 (skill 会被读 + 共享, 凭据会泄漏)。
-      只存"步骤模板", 真实凭据 / 数据让员工每次输入或从 secret broker 拿。
+      只存"步骤模板", 真实凭据让员工每次输入或从系统钥匙串拿。
       详见 SOUL.md 'Skill 生成纪律' 章。
+
+  # ---------- R10: (已删除) skill_manage update/delete 必须带 review 关键词 ----------
+  # 10/21 删除。原规则要求参数里出现"已 backup / 员工已确认"之类关键词, 但:
+  #   - v0.22 的动作叫 patch/edit, 不叫 update, 规则其实拦不到改动;
+  #     回放里命中的 13 次全是正文里恰好出现 "update" 这个词的正常 patch
+  #   - 关键词是模型自己写的, 拦不住真想偷偷改的模型, 只会逼它学会念咒
+  # 改动可回滚这件事 hermes v0.22 自己已经做了: 每次技能改动 (含后台 review /
+  # curator) 都写进 ~/.hermes/skills/.curator_ledger.jsonl, 改前内容按 sha256 存
+  # ~/.hermes/.curator_backups/blobs/, `hermes curator ledger` 看、
+  # `hermes curator rollback <id>` 回滚单次改动; 后台删除走可恢复的 .archive/。
+  # 编号保留作为踩坑标记, 不要复用。
 
   # ---------- R8: (已删除) screenshot active_window 模式约束 ----------
   # 历史: 2026-04-27 因 macOS Automation 权限对 hermes venv unsigned python3.11
   # 不持久化, active_window 模式被彻底从 catfish_screenshot 删除. 代码层面已没
   # 这个分支, policy 不再需要此规则. 编号保留作为踩坑标记, 不要复用.
-
-  # ---------- R10: skill_manage update/delete 必须先 backup + reason 含 review 关键词 ----------
-  # 配套 docs/SKILL-LIFECYCLE.md 阶段 5 (Evolve/Retire) + catfish_skill_backup tool +
-  # SOUL "Skill 生成纪律" 章扩展.
-  #
-  # 历史风险: skill 写好后, LLM 自作主张 update 把好用的步骤改坏, 没 diff 给员工
-  # review, 也没回滚机制. 一坏全坏.
-  #
-  # 防御: update/delete 调用前, args (或对应消息上下文) 必须含两类关键词之一:
-  #   1. "已 backup" / "backed up" / "backup 已做" — 表示模型已调过 catfish_skill_backup
-  #   2. "diff 已 review" / "员工已确认" / "员工 yes" — 表示已 quote 给员工看过
-  # 没这些关键词 = 模型在偷偷改, deny.
-  - id: skill-update-needs-review
-    kind: tool_name
-    match:
-      - "skill_manage"
-    deny_args_pattern:
-      # action=update 时必须提及 backup 或 diff review
-      - 'action.*update(?!.*(?:已\s*backup|backed\s*up|backup\s*已|diff\s*已|员工\s*(?:已|yes|确认)))'
-      # action=delete 时同样要求 (员工同意才删)
-      - 'action.*delete(?!.*(?:已\s*backup|backed\s*up|员工\s*(?:已|yes|同意|确认)))'
-    reason: |
-      你在调 skill_manage(update/delete) 但 args 里没体现"已 backup + 员工 review 过 diff"。
-
-      正确流程 (详见 docs/SKILL-LIFECYCLE.md 阶段 5):
-        1. 先调 catfish_skill_backup(skill_name="<ns>/<name>", reason="为啥改") 备份老版
-        2. quote 完整 diff 给员工 review (改了哪几行)
-        3. 员工 yes 后, args.reason 写明"已 backup + diff 已 review", 再调 skill_manage
-        4. update 失败 / 员工说"回退" → 从 .versions/<ts>.md 拿最近一版替换
-
-      用 skill_manage 直接覆盖现有 skill 是非常危险的操作 — 改坏了没法回滚.
 
   # ---------- R9: 禁止 LLM 自作主张改员工的 hermes config / SOUL ----------
   # 历史踩坑 (2026-04-27): LLM 调了不存在的 memory tool 拿到 "tool 不可用" 错误,

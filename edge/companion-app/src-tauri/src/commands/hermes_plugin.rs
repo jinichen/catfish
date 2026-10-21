@@ -65,7 +65,7 @@ const HERMES_LAUNCHD_LABEL: &str = "ai.hermes.gateway";
 // 路径 helpers
 // ─────────────────────────────────────────────
 
-fn hermes_home() -> Option<PathBuf> {
+pub(super) fn hermes_home() -> Option<PathBuf> {
     // 跟 identity_bundle.rs / curator_config.rs 同源
     if let Ok(env) = std::env::var("HERMES_HOME") {
         return Some(PathBuf::from(env));
@@ -78,7 +78,7 @@ fn plugin_dir() -> Option<PathBuf> {
     hermes_home().map(|h| h.join("plugins").join(PLUGIN_NAME))
 }
 
-fn config_yaml_path() -> Option<PathBuf> {
+pub(super) fn config_yaml_path() -> Option<PathBuf> {
     hermes_home().map(|h| h.join("config.yaml"))
 }
 
@@ -161,13 +161,16 @@ pub fn bootstrap_hermes_plugin() {
     };
 
     // 1) 同步 plugin 文件
-    let plugin_changed = match sync_plugin_files(&plugin_path) {
+    let mut plugin_changed = match sync_plugin_files(&plugin_path) {
         Ok(changed) => changed,
         Err(e) => {
             log::warn!("[P3.5.56] sync plugin 文件失败 ({}), 跳", e);
             return;
         }
     };
+
+    // 1b) 红线策略插件 catfish-policy (10/21): 同一套同步 + 启用, 变了一起重启
+    plugin_changed |= super::hermes_policy_plugin::bootstrap_policy_plugin();
 
     // 2) ensure config.yaml plugins.enabled 含 catfish-xcatfish-user
     match ensure_plugin_enabled_in_config() {
@@ -209,6 +212,12 @@ pub fn bootstrap_hermes_plugin() {
 /// (见 `restart_hermes_gateway`)。健康软链那条路直接返 `false`: 开发者
 /// deploy.sh 软链的目录我们不动, 也就谈不上"变了"。
 fn sync_plugin_files(plugin_path: &Path) -> Result<bool> {
+    sync_baked_files(plugin_path, BAKED_FILES)
+}
+
+/// `sync_plugin_files` 的通用版: 按给定的烘焙文件表同步一个插件目录。
+/// catfish-policy 也走这条 (见 hermes_policy_plugin.rs)。
+pub(super) fn sync_baked_files(plugin_path: &Path, files: &[(&str, &str)]) -> Result<bool> {
     let kind = classify_existing(plugin_path);
     match kind {
         ExistingKind::HealthySymlink => {
@@ -251,7 +260,7 @@ fn sync_plugin_files(plugin_path: &Path) -> Result<bool> {
     // 逐个比对内容再写, 顺带少写没变的文件 (每次启动全量重写 15 个文件也没必要)。
     let mut changed: Vec<&str> = Vec::new();
     let mut total_bytes = 0usize;
-    for (name, content) in BAKED_FILES {
+    for (name, content) in files {
         let dst = plugin_path.join(name);
         total_bytes += content.len();
         // 已存在且内容一致 → 不动。读失败 (不存在/权限) 一律当"要写"。
@@ -271,7 +280,7 @@ fn sync_plugin_files(plugin_path: &Path) -> Result<bool> {
     if changed.is_empty() {
         log::debug!(
             "[P3.5.56] plugin 文件跟 baked 一致, 没动 ({} 个文件, {} bytes)",
-            BAKED_FILES.len(),
+            files.len(),
             total_bytes
         );
     } else {
@@ -279,7 +288,7 @@ fn sync_plugin_files(plugin_path: &Path) -> Result<bool> {
             "[P3.5.56] sync baked → {} · 改了 {}/{} 个: {:?}",
             plugin_path.display(),
             changed.len(),
-            BAKED_FILES.len(),
+            files.len(),
             changed
         );
     }
@@ -420,6 +429,11 @@ pub(crate) fn restart_hermes_gateway() {
 ///
 /// 返 Ok(true) = 改了, Ok(false) = 已 OK / 员工 disabled.
 fn ensure_plugin_enabled_in_config_at(path: &Path) -> Result<bool> {
+    ensure_named_plugin_enabled_at(path, PLUGIN_NAME)
+}
+
+/// 通用版: 确保 config.yaml plugins.enabled 含 `name` (catfish-policy 也走这条)。
+pub(super) fn ensure_named_plugin_enabled_at(path: &Path, name: &str) -> Result<bool> {
     // 读 / parse / 默认空 root
     let mut root: YamlValue = if path.exists() {
         let raw = fs::read_to_string(path)
@@ -430,13 +444,13 @@ fn ensure_plugin_enabled_in_config_at(path: &Path) -> Result<bool> {
     };
 
     // 防御: 员工显式 disabled 就尊重, 不强 enable
-    let plugin_yaml = YamlValue::from(PLUGIN_NAME);
+    let plugin_yaml = YamlValue::from(name);
     if let Some(disabled) = root.get("plugins").and_then(|p| p.get("disabled")) {
         if let Some(list) = disabled.as_sequence() {
             if list.contains(&plugin_yaml) {
                 log::warn!(
                     "[P3.5.56] config.yaml plugins.disabled 含 {}, 尊重员工配置, 不强 enable",
-                    PLUGIN_NAME
+                    name
                 );
                 return Ok(false);
             }

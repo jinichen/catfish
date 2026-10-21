@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -35,6 +36,16 @@ _FILE_READ_TOOL_NAMES = {
 # Arg keys for file paths
 _FILE_ARG_KEYS = ("path", "file", "filepath", "file_path", "filename")
 
+# Tools that write files (hermes v0.22: write_file / patch)
+_FILE_WRITE_TOOL_NAMES = {"write_file", "patch"}
+
+# patch 工具 mode=patch 时路径写在补丁正文里: "*** Update File: <path>"
+_PATCH_FILE_RE = re.compile(r"^\*\*\* (?:Update|Add|Delete) File:\s*(.+?)\s*$", re.MULTILINE)
+
+# skill_manage 每个操作里放正文的字段 (create/patch 的 content, patch 的 new_string,
+# write_file 的 file_content)。old_string 是"被替换掉的旧内容", 不算写进去的东西。
+_SKILL_TEXT_KEYS = ("content", "new_string", "file_content")
+
 # Tools that make network requests
 _NETWORK_TOOL_NAMES = {
     "fetch_url", "web_fetch", "http_get", "http_post", "curl",
@@ -58,6 +69,57 @@ def _extract_filepath(tool_name: str, args: dict[str, Any]) -> Optional[str]:
         if k in args and isinstance(args[k], str):
             return args[k]
     return None
+
+
+def _extract_write_paths(tool_name: str, args: dict[str, Any]) -> list[str]:
+    if tool_name not in _FILE_WRITE_TOOL_NAMES:
+        return []
+    paths = [args[k] for k in _FILE_ARG_KEYS if isinstance(args.get(k), str)]
+    patch_text = args.get("patch")
+    if isinstance(patch_text, str):
+        paths.extend(_PATCH_FILE_RE.findall(patch_text))
+    return paths
+
+
+def _skill_ops(args: dict[str, Any]) -> list[dict[str, Any]]:
+    """skill_manage 的操作列表。
+
+    v0.22 只对外公布批量形式 ``{"operations": [{name, action, ...}, ...]}``;
+    老的平铺形式 ``{action, name, content, ...}`` 仍然被接受 (老 transcript /
+    审批后重放), 当成只有一个操作。
+    """
+    ops = args.get("operations")
+    if isinstance(ops, list):
+        default_name = args.get("name")
+        out = []
+        for op in ops:
+            if isinstance(op, dict):
+                if not op.get("name") and isinstance(default_name, str):
+                    op = {**op, "name": default_name}
+                out.append(op)
+        return out
+    if isinstance(args.get("action"), str):
+        return [args]
+    return []
+
+
+def _skill_op_matches(rule: dict[str, Any], op: dict[str, Any]) -> bool:
+    actions = rule.get("actions")
+    if actions and op.get("action") not in actions:
+        return False
+    name_re = rule.get("name_regex")
+    if name_re:
+        name = op.get("name")
+        # 允许 "productivity/catfish-email" 这种带分类的写法: 只看最后一段
+        base = name.replace("\\", "/").rsplit("/", 1)[-1] if isinstance(name, str) else ""
+        if not re.search(name_re, base):
+            return False
+    patterns = rule.get("content_regex")
+    if patterns:
+        text = "\n".join(op[k] for k in _SKILL_TEXT_KEYS if isinstance(op.get(k), str))
+        if not any(re.search(p, text) for p in patterns):
+            return False
+    return True
 
 
 def _extract_candidate_hosts(tool_name: str, args: dict[str, Any]) -> list[str]:
@@ -135,7 +197,24 @@ def _rule_matches(rule: dict[str, Any], tool_name: str, args: dict[str, Any]) ->
         for pattern in rule.get("match", []):
             if pattern in cmd:
                 return True
+        for pattern in rule.get("match_regex", []):
+            if re.search(pattern, cmd):
+                return True
         return False
+
+    # ---- file_write ----
+    if kind == "file_write":
+        for path in _extract_write_paths(tool_name, args):
+            for glob_pat in rule.get("paths", []):
+                if _path_matches(path, glob_pat):
+                    return True
+        return False
+
+    # ---- skill_op (skill_manage 的单个操作) ----
+    if kind == "skill_op":
+        if tool_name != "skill_manage":
+            return False
+        return any(_skill_op_matches(rule, op) for op in _skill_ops(args))
 
     # ---- file_read ----
     if kind == "file_read":
@@ -160,7 +239,15 @@ def _rule_matches(rule: dict[str, Any], tool_name: str, args: dict[str, Any]) ->
         return False
 
     # ---- tool_name (generic tool block) ----
+    # 有 deny_args_pattern 时只在参数也命中时拦; 没有才是整个工具都拦。
+    # (原来忽略了 deny_args_pattern, 一条只想拦删除的规则会把 skill_manage 全拦掉。)
     if kind == "tool_name":
-        return tool_name in rule.get("match", [])
+        if tool_name not in rule.get("match", []):
+            return False
+        patterns = rule.get("deny_args_pattern")
+        if not patterns:
+            return True
+        blob = json.dumps(args, ensure_ascii=False, sort_keys=True)
+        return any(re.search(p, blob) for p in patterns)
 
     return False

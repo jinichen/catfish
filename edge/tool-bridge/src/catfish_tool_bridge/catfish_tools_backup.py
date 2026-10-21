@@ -28,7 +28,7 @@ from .catfish_tools_today import _hermes_dir
 # Skill backup (catfish_skill_backup)
 # ============================================================
 #
-# 配套 catfish-policy R10 + SOUL "Skill 生成纪律"扩展 + docs/SKILL-LIFECYCLE.md.
+# 配套 SOUL "Skill 生成纪律"扩展 + docs/SKILL-LIFECYCLE.md.
 # 防御 skill 退化: skill_manage(action=update/delete) 之前必须先调本 tool 备份,
 # 老版会留在 ~/.hermes/skills/<ns>/<skill>/.versions/<unix-ts>.md, 员工说"回退"
 # 时模型从这里拿最近一版替换.

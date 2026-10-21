@@ -26,7 +26,11 @@ try:
 except ImportError:
     yaml = None  # type: ignore
 
-from .matchers import match_rules
+try:
+    from .matchers import match_rules
+except ImportError:
+    # pytest 收集本目录时会把 __init__.py 当顶层模块导入 (目录名带横杠, 当不了包名)
+    from matchers import match_rules  # type: ignore[no-redef]
 
 logger = logging.getLogger("catfish.policy")
 

@@ -378,3 +378,37 @@ def test_list_tasks_import_closes_deleted_reminders(tmp_path, monkeypatch):
     _fake_reminders(monkeypatch, ok=True)
     titles = [t["title"] for t in task_library.tool_list_tasks({"scope": "active", "force_sync": True})["tasks"]]
     assert titles == ["来自提醒事项"]
+
+
+def test_create_task_with_task_id_keeps_reminder_link(tmp_path, monkeypatch):
+    """10/21 ISO 50001 那条: 带 task_id 只改正文, 不能把任务和它的提醒断开。
+
+    以前没传的 source/source_id 被填成 conversation/空, 下次导入找不到活的那行,
+    把提醒正文写进了同一提醒的旧 cancelled 行, 新进展从早安页消失。
+    """
+    monkeypatch.setenv("CATFISH_TASK_LIBRARY_PATH", str(tmp_path / "tasks.db"))
+    task_library.upsert_task({"task_id": "conversation:generated-old", "title": "确认能源数据怎么取",
+                              "status": "cancelled", "source": "reminders", "source_id": "E500"})
+    live_id = "reminders:E500"
+    task_library.upsert_task({"task_id": live_id, "title": "确认能源数据怎么取",
+                              "source": "reminders", "source_id": "E500", "body": "旧备注"})
+    live = task_library.tool_create_task({"task_id": live_id, "title": "确认能源数据怎么取",
+                                          "status": "in_progress", "body": "【进展 10/21】邮件已发"})["task"]
+    assert (live["source"], live["source_id"], live["reminder_id"]) == ("reminders", "E500", "E500")
+
+    task_library.upsert_reminders([{"id": "E500", "title": "确认能源数据怎么取", "body": "【进展 10/21】邮件已发"}])
+    rows = {t["task_id"]: t for t in task_library.list_tasks({"scope": "all", "include_completed": True})["tasks"]}
+    assert rows[live_id]["status"] == "pending" and "进展 10/21" in rows[live_id]["body"]
+    assert "进展 10/21" not in rows["conversation:generated-old"]["body"], "提醒正文又写进了旧的 cancelled 行"
+
+
+def test_create_task_with_task_id_keeps_unspecified_fields(tmp_path, monkeypatch):
+    monkeypatch.setenv("CATFISH_TASK_LIBRARY_PATH", str(tmp_path / "tasks.db"))
+    first = task_library.tool_create_task({"title": "交材料", "body": "清单在 outputs", "priority": 5,
+                                           "status": "in_progress", "due_date_iso": "2026-10-23T18:00:00"})
+    tid = first["task"]["task_id"]
+    after = task_library.tool_create_task({"task_id": tid, "title": "交材料"})["task"]
+    assert (after["body"], after["priority"], after["status"], after["due_date_iso"]) == (
+        "清单在 outputs", 5, "in_progress", "2026-10-23T18:00:00")
+    cleared = task_library.tool_create_task({"task_id": tid, "title": "交材料", "due_date_iso": None})["task"]
+    assert cleared["due_date_iso"] is None, "显式传 null 才清掉截止时间"

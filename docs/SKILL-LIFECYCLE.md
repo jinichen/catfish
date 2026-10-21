@@ -91,7 +91,7 @@
 ### 防御
 
 - ✅ SOUL "Skill 生成纪律" § 内容里绝不存的东西
-- ✅ catfish-policy R7 (skill-create-no-secrets — 拦明文密码 / API key / token / 邮箱地址等敏感模式)
+- ✅ catfish-policy R7 (skill-create-no-secrets — 拦明文密码 / API key / token; 10/21 起不再拦邮箱地址, 占位符放行)
 
 ### 已知坑
 
@@ -162,8 +162,9 @@
 
 #### Evolve (改)
 
-1. **必须 quote diff 给员工 review** (catfish-policy R10)
-2. **自动 backup 老版** 到 `~/.hermes/skills/<ns>/<skill>/.versions/<unix-ts>.md`
+1. **必须 quote diff 给员工 review** (SOUL 纪律; 原 catfish-policy R10 关键词检查 10/21 删了, 见 rules.yaml)
+2. **改前内容 hermes 自动留底**: v0.22 每次技能改动 (含后台 review) 记进 `~/.hermes/skills/.curator_ledger.jsonl`,
+   `hermes curator rollback <id>` 回滚单次改动。`catfish_skill_backup` 存 `.versions/<unix-ts>.md` 仍可用
 3. **版本号 bump**: SKILL.md frontmatter 加 `version: 0.3.2` 字段, 每次 update 自动 +0.0.1
 4. **回滚机制**: 员工说 "回退" → 模型从 .versions/ 拿最近一版替换
 
@@ -211,7 +212,7 @@
 | 命名约定 | 2 | SOUL § 命名约定 | ✅ |
 | R6 防误删 catfish-* skill | 2/5 | catfish-policy | ✅ |
 | R7 防敏感数据进 skill | 2 | catfish-policy | ✅ |
-| **R10 update 必须 diff** | 5 | catfish-policy | ✅ **今天加** |
+| ~~R10 update 必须 diff~~ | 5 | catfish-policy | ❌ 10/21 删 (v0.22 动作叫 patch 拦不到, 只误拦; 回滚靠 hermes curator ledger) |
 | **catfish_skill_backup tool** | 5 | tool-bridge native tool | ✅ **今天加** |
 | dry-run 验证 | 3 | (待) BACKLOG | 🚧 P1 |
 | 重复检查 | 3 | (待) | 🚧 P1 |
@@ -240,7 +241,7 @@
 ```
 STRATEGY.md             ─→  开闭分界 (Skills Hub 闭源, 设计在 STRATEGY)
 SOUL.md "Skill 生成纪律" ─→  阶段 1-2 + 阶段 5 部分纪律 (实施层)
-catfish-policy rules    ─→  R6 (防删) / R7 (防敏感) / R10 (强制 diff) 红线
+catfish-policy rules    ─→  R6 (防删) / R7 (防敏感) 红线 (10/21 起随 Companion 自动装)
 catfish_skill_backup    ─→  阶段 5 backup 工具 (今天加)
 SKILL-LIFECYCLE.md (本)  ─→  5 阶段框架, 元文档, 前面三个改动都引用本文
 BACKLOG.md              ─→  P1/P2 待补的防御项追踪

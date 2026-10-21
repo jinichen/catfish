@@ -333,18 +333,21 @@ def tool_create_task(args: dict[str, Any]) -> dict[str, Any]:
     if task_id is None and not str(args.get("source_id") or "").strip():
         same, similar = _find_existing_by_title(title)
         task_id = same
+    fields = {
+        "status": "pending", "due_date_iso": None, "body": None, "priority": None,
+        "source": "conversation", "source_id": None, "list_name": None,
+    }
+    # 改已有任务时, 没传的字段沿用原值 (10/21)。以前一律填默认: 小鲶带 task_id 只改
+    # 正文, source/source_id 就被冲成 conversation/空 —— 任务和它的提醒断开, 下次
+    # Reminders 导入把提醒正文写进了同一提醒的旧 cancelled 行, 早安页读不到新进展。
+    if task_id is not None:
+        with _connect() as conn:
+            prev = conn.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+        if prev is not None:
+            fields = {k: prev[k] for k in fields}
+    fields.update({k: args[k] for k in fields if k in args})
     try:
-        task = upsert_task({
-            "task_id": task_id,
-            "title": title,
-            "status": args.get("status", "pending"),
-            "due_date_iso": due,
-            "body": args.get("body"),
-            "priority": args.get("priority"),
-            "source": args.get("source", "conversation"),
-            "source_id": args.get("source_id"),
-            "list_name": args.get("list_name"),
-        })
+        task = upsert_task({"task_id": task_id, "title": title, **fields})
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
     result: dict[str, Any] = {
