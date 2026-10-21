@@ -156,7 +156,7 @@ pub fn sync_profile_from_default(hermes: &Path, profile: &Path) {
                 profile_config = replace_model_field(&profile_config, field, value);
             }
         }
-        if super::hermes_gateway_route::installed_hermes_is_v022() {
+        if super::hermes_gateway_route::hermes_home_is_v022(hermes) {
             // 0.21 时代建的 / 克隆来的 profile 还留着 model.api_key, v0.22 上它会压过 key_env
             profile_config = super::hermes_gateway_route::apply_v022_route(&profile_config);
         }
@@ -288,5 +288,36 @@ mod tests {
         assert!(config.contains("api_key: employee-token"));
         assert!(config.contains("base_url: http://10.0.0.8:8999/v1"));
         assert!(config.contains("api_mode: chat_completions"));
+    }
+
+    /// v0.22 装机上, 同步过去的 profile 走 custom + key_env, 不留明文 api_key
+    /// (否则 v0.22 上 api_key 会压过 key_env)。
+    #[test]
+    fn new_profile_on_v022_uses_key_env_not_api_key() {
+        let dir = tempdir().unwrap();
+        let profile = dir.path().join("profiles/finance");
+        fs::create_dir_all(&profile).unwrap();
+        fs::create_dir_all(dir.path().join("hermes-agent")).unwrap();
+        fs::write(
+            dir.path()
+                .join("hermes-agent")
+                .join(crate::commands::hermes_install_health::INSTALL_STAMP),
+            "{}",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            "model:\n  provider: custom\n  key_env: OPENAI_API_KEY\n  base_url: http://10.0.0.8:8999/v1\n",
+        )
+        .unwrap();
+        fs::write(profile.join("config.yaml"), "model:\n  api_key: old\n").unwrap();
+
+        sync_profile_from_default(dir.path(), &profile);
+
+        let config = fs::read_to_string(profile.join("config.yaml")).unwrap();
+        assert!(!config.contains("api_key:"), "{config}");
+        assert!(config.contains("provider: custom"), "{config}");
+        assert!(config.contains("key_env: OPENAI_API_KEY"), "{config}");
+        assert!(config.contains("base_url: http://10.0.0.8:8999/v1"), "{config}");
     }
 }

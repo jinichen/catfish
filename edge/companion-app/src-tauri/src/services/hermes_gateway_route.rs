@@ -58,12 +58,17 @@ pub const KEY_ENV: &str = "OPENAI_API_KEY";
 /// 装的 hermes 是不是 v0.22+ (有安装戳)。看主 hermes home —— profile 目录共用同一份安装。
 pub fn installed_hermes_is_v022() -> bool {
     crate::services::catfish_paths::hermes_home()
-        .map(|home| {
-            home.join("hermes-agent")
-                .join(crate::commands::hermes_install_health::INSTALL_STAMP)
-                .is_file()
-        })
+        .map(|home| hermes_home_is_v022(&home))
         .unwrap_or(false)
+}
+
+/// 指定的 hermes home 下装的是不是 v0.22+。调用方手里已经有 home 路径时用这个,
+/// 别再去读全局那个 (10/21: profile 同步拿着传进来的 home 却查全局, 测试在装了
+/// v0.22 的开发机上红、在 CI 上绿)。
+pub fn hermes_home_is_v022(home: &Path) -> bool {
+    home.join("hermes-agent")
+        .join(crate::commands::hermes_install_health::INSTALL_STAMP)
+        .is_file()
 }
 
 /// 删掉顶层 `model:` 段下的某个字段 (整行)。没有就原样返回。
