@@ -507,6 +507,47 @@ while IFS= read -r -d '' archive; do
   sign_archive "$archive"
 done < <(find "$MAC_RUNTIME_RESOURCES" -type f -name '*.tar.gz' -print0)
 
+# ── 公证 / 钉票据 (10/21 抽出来, App 和 dmg 共用) ─────────────────────
+
+# 提交公证并等结果。notarytool --wait 在审核**不通过** (Invalid) 时退出码也可能是 0,
+# 所以看输出里的 status, 不是 Accepted 就把 Apple 的日志打出来并退出。
+notarize_or_die() {
+  local target="$1" out sub_id
+  out=$(xcrun notarytool submit "$target" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1) || true
+  echo "$out"
+  if ! echo "$out" | grep -q "status: Accepted"; then
+    sub_id=$(echo "$out" | awk '/^ *id:/{print $2; exit}')
+    echo "❌ 公证没通过: $target" >&2
+    [ -n "$sub_id" ] && xcrun notarytool log "$sub_id" --keychain-profile "$NOTARY_PROFILE" >&2 || true
+    exit 1
+  fi
+}
+
+# 钉票据, 带重试 (原来 dmg 那段的逻辑, 说明见下)。
+staple_with_retry() {
+  local target="$1"
+  STAPLE_TRIES=20        # 20 × 60s = 最多等 20 分钟
+  STAPLE_OK=0
+  for i in $(seq 1 "$STAPLE_TRIES"); do
+    if xcrun stapler staple "$target"; then
+      STAPLE_OK=1
+      break
+    fi
+    if [[ "$i" -lt "$STAPLE_TRIES" ]]; then
+      echo "   票据还没上架 (第 $i/$STAPLE_TRIES 次), 60 秒后重试 ——"
+      echo "   审核已经 Accepted, 这只是 Apple 那边 CDN 的时间差, 包没问题"
+      sleep 60
+    fi
+  done
+  if [[ "$STAPLE_OK" -ne 1 ]]; then
+    echo "❌ 等了 $STAPLE_TRIES 分钟票据仍未上架。$target 本身是好的 (审核 Accepted),"
+    echo "   过一会儿单独跑这条即可, **不用重新编译公证**:"
+    echo "     xcrun stapler staple \"$target\" && xcrun stapler validate \"$target\"" >&2
+    exit 1
+  fi
+  xcrun stapler validate "$target"
+}
+
 echo "=== 签名 App ==="
 codesign_ts --deep --force --options runtime --timestamp \
   --sign "$SIGNING_IDENTITY" "$APP_PATH"
@@ -541,15 +582,30 @@ codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 # 这次只剩 uv / catfish-calendar 两个, 几秒钟的事。
 verify_tree "$MAC_RESOURCES"
 
+# 10/21: App 本身也要公证 + 钉票据。
+#
+# 原来只公证、钉 dmg —— dmg 是钉了, 里面的 App 没有。员工把 App 拖进「应用程序」
+# 之后, Gatekeeper 检查的是 **App**: 联网时向 Apple 在线查得到公证记录, 照常放行;
+# 断网 / 内网够不着 Apple 时查不到, 就报「无法验证开发者」。客户现场多半是后一种。
+# (spctl 对 App 报 accepted 也看不出来 —— 它在线查到了; stapler validate 才说没票据。)
+#
+# 顺序必须是 App 先公证钉好 → 再做 dmg: 钉票据会往 App 里写东西, dmg 要装钉好的那份。
+echo "=== App 提交公证 ==="
+APP_ZIP="$WORK_DIR/app-notarize.zip"
+rm -f "$APP_ZIP"
+ditto -c -k --keepParent "$APP_PATH" "$APP_ZIP"
+notarize_or_die "$APP_ZIP"
+rm -f "$APP_ZIP"
+echo "=== App 钉公证票据 ==="
+staple_with_retry "$APP_PATH"
+
 echo "=== 制作并签名 DMG ==="
 bash "$SCRIPT_DIR/make-dmg.sh" "$DMG_TAG"
 codesign_ts --force --timestamp --sign "$SIGNING_IDENTITY" "$DMG_PATH"
 codesign --verify --verbose=2 "$DMG_PATH"
 
-echo "=== 提交 Apple 公证 ==="
-xcrun notarytool submit "$DMG_PATH" \
-  --keychain-profile "$NOTARY_PROFILE" \
-  --wait
+echo "=== DMG 提交公证 ==="
+notarize_or_die "$DMG_PATH"
 
 # 8/5: 审核 Accepted 之后立刻 staple 会扑空。
 #
@@ -564,26 +620,21 @@ xcrun notarytool submit "$DMG_PATH" \
 #
 # 达华现场无外网, 这一步**不能跳**: 没装订的话 Gatekeeper 要联网向 Apple
 # 查公证记录才放行, 离线机器直接被拦。装订就是把票据钉进 dmg, 让它自己能验。
-echo "=== 装订公证票据 ==="
-STAPLE_TRIES=20        # 20 × 60s = 最多等 20 分钟
-STAPLE_OK=0
-for i in $(seq 1 "$STAPLE_TRIES"); do
-  if xcrun stapler staple "$DMG_PATH"; then
-    STAPLE_OK=1
-    break
-  fi
-  if [[ "$i" -lt "$STAPLE_TRIES" ]]; then
-    echo "   票据还没上架 (第 $i/$STAPLE_TRIES 次), 60 秒后重试 ——"
-    echo "   审核已经 Accepted, 这只是 Apple 那边 CDN 的时间差, 包没问题"
-    sleep 60
-  fi
-done
-if [[ "$STAPLE_OK" -ne 1 ]]; then
-  echo "❌ 等了 $STAPLE_TRIES 分钟票据仍未上架。dmg 本身是好的 (审核 Accepted),"
-  echo "   过一会儿单独跑这条即可, **不用重新编译公证**:"
-  echo "     xcrun stapler staple \"$DMG_PATH\" && xcrun stapler validate \"$DMG_PATH\"" >&2
+echo "=== DMG 钉公证票据 ==="
+staple_with_retry "$DMG_PATH"
+
+# 10/21: 最后从**成品 dmg 里**验一遍 App 带着票据 —— 不信前面的步骤, 只信交出去的东西。
+# 以后谁把 App 公证那段删了 / 顺序弄反了, 这里直接红, 不会再悄悄发出一个 App 没票据的包。
+echo "=== 验成品: dmg 里的 App 带票据 ==="
+CHECK_MNT="$WORK_DIR/dmg-check"
+mkdir -p "$CHECK_MNT"
+hdiutil attach -nobrowse -readonly -mountpoint "$CHECK_MNT" "$DMG_PATH" >/dev/null
+if ! xcrun stapler validate "$CHECK_MNT/Catfish Companion.app" >/dev/null 2>&1; then
+  hdiutil detach "$CHECK_MNT" >/dev/null 2>&1 || true
+  echo "❌ dmg 里的 App 没有公证票据 —— 离线 / 内网的 Mac 打开会报「无法验证开发者」" >&2
   exit 1
 fi
-xcrun stapler validate "$DMG_PATH"
+hdiutil detach "$CHECK_MNT" >/dev/null 2>&1 || true
+echo "   ✓ dmg 和里面的 App 都钉着票据"
 
 echo "✅ 完成：$DMG_PATH"
