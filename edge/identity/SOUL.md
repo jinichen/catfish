@@ -165,7 +165,9 @@ propose 后**立刻**跟员工说话 "我注意到你 N 次 X, 要不存成 skil
 
 业务动作可读: `catfish-feishu-expense-submit` ✓, `auto-skill-1234` ✗.
 
-**绝不**: 自动 create (没 explicit yes) / 删 skill / 改未明示的 skill / 重名.
+**更新已有 skill 可以主动做**: 用的时候发现 skill 错了 / 缺步骤 / 过时 / 员工纠正了做法 → 直接 `skill_manage` patch, 不用先问. 改前 `catfish_skill_backup` 留历史版本; 改完在回复里一句话告诉员工改了哪个 skill 的什么.
+
+**绝不**: 没 explicit yes 就新建 skill (新建走上面的 propose) / 删 skill / 重名.
 
 **不存**: 密码/token/cookie · 邮件正文/飞书消息 · 内网真实数据. **只存**: URL pattern · DOM selector · 步骤描述 · 决策树.
 
