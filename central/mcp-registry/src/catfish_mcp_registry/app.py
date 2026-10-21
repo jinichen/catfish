@@ -331,6 +331,14 @@ async def subscribe(
             detail=f"connector {manifest.id} 仅 {manifest.allowed_dept} 部门可订阅",
         )
 
+    # 10/22: preview / deprecated 的不让订阅 —— 原来照收, 订阅了员工机也起不来 (OAuth 型
+    # 连接器的凭据那一环员工机还没做), 记录在、工具没有, 管理员以为能用。
+    if manifest.status != "active":
+        raise HTTPException(
+            status_code=409,
+            detail=f"connector {manifest.id} 还没开放订阅 (status={manifest.status})",
+        )
+
     auth_required = manifest.auth_type in ("oauth2", "api_key")
     sub_row = db.create_subscription(user_sub, manifest.id, auth_required)
     db.write_audit(

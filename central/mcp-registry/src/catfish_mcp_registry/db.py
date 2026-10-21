@@ -296,12 +296,21 @@ class SubscriptionDB:
         auth_required: bool,
     ) -> dict[str, Any]:
         existing = self.get_subscription(user_sub, connector_id)
+        oauth_state = secrets.token_urlsafe(24) if auth_required else None
+        status = "pending_oauth" if auth_required else "active"
+        if existing and existing["status"] == "revoked":
+            # 10/22: 退订过再订 —— 原来直接把那条 revoked 原样返回, 员工退订一次就再也订不回来
+            # (页面显示订阅成功, 状态却还是 revoked, 员工机永远不起)。复用同一行重新激活。
+            self._exec(
+                "UPDATE mcp_subscriptions SET status=?, oauth_token_ref=NULL, oauth_state=? WHERE id=?",
+                None,
+                (status, oauth_state, existing["id"]),
+            )
+            return self.get_subscription_by_id(existing["id"])  # type: ignore[return-value]
         if existing:
             return existing
 
         sub_id = "sub_" + secrets.token_hex(8)
-        oauth_state = secrets.token_urlsafe(24) if auth_required else None
-        status = "pending_oauth" if auth_required else "active"
         now = datetime.now(timezone.utc).isoformat()
         if self.backend == "sqlite":
             self._exec(

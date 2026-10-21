@@ -4,7 +4,7 @@ name: GitLab
 version: "0.6.1"
 description: GitLab — 看 MR / 评论 / pipeline / issue / 仓库文件
 provider: gitlab
-status: active
+status: preview   # 10/22: 要 OAuth 凭据, 员工机这一环还没做 (secret-broker 6/13 已删) —— 市场里显示「即将开放」, 不能订阅
 
 allowed_dept:
   - engineering

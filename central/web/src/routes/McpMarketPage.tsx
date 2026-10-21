@@ -1,6 +1,11 @@
 /** /mcp — MCP 连接器市场 (BL-ARCH1 5/10).
  *
- * 列出所有可订阅的 MCP 连接器, 按部门权限过滤. 订阅后跳 Companion (本机装).
+ * 列出所有可订阅的 MCP 连接器, 按部门权限过滤。
+ *
+ * 10/22: 订阅后员工自己电脑上的工具桥 (hermes 起的 catfish_tool_bridge.mcp_server) 每 2 分钟
+ * 对一次订阅, 自动接上 / 停掉连接器并通知小鲶刷新工具 —— 不用装、不用重启。在这之前订阅只在
+ * 中央留一条记录, 员工机从没拉过, 而且这页本身也跟 registry 的返回对不上 (见 lib/mcp.ts)。
+ * 只列 status=active 的; 要 OAuth 的 (jira / gitlab) 员工机还接不了, 是 preview, 不列。
  */
 
 import { useEffect, useState } from "react";
@@ -9,9 +14,21 @@ import { Link, Route, Routes, useParams } from "react-router-dom";
 import { Card } from "../components/Card";
 import {
   listConnectors,
+  listMySubscriptions,
   subscribe,
+  unsubscribe,
   type McpConnector,
 } from "../lib/mcp";
+
+const AUTH_LABEL: Record<string, string> = {
+  none: "免授权",
+  path_allowlist: "限定目录",
+  oauth2: "要授权登录",
+  api_key: "要 API Key",
+};
+
+const EFFECT_NOTE =
+  "订阅只对你自己生效：你电脑上的 Companion 开着并已登录时，约 2 分钟内小鲶就会多出这些工具，不用安装、不用重启；退订同样。";
 
 export function McpMarketPage() {
   return (
@@ -42,10 +59,8 @@ function McpList() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
       <Card title={`MCP 连接器市场 · ${allowed.length} 个可用`}>
-        <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
-          MCP (Model Context Protocol) 是 Anthropic 开放标准. 每个连接器接通一类
-          外部工具 (Jira / GitLab / 飞书 / 文件系统 / 时间). 订阅后桌面 Companion
-          自动装, 小鲶就能调那些工具帮你查 / 操作.
+        <div style={{ color: "var(--text-muted)", fontSize: 13, lineHeight: 1.7 }}>
+          每个连接器给小鲶接上一类工具。点开卡片，在详情里订阅。{EFFECT_NOTE}
         </div>
       </Card>
 
@@ -110,12 +125,12 @@ function McpList() {
               }}
             >
               <span>
-                {c.tools.length} 个工具 · {c.auth_type}
+                {c.tools.length} 个工具 · {AUTH_LABEL[c.auth_type] ?? c.auth_type}
               </span>
-              {c.is_subscribed ? (
+              {c.subscribed ? (
                 <span style={{ color: "var(--status-ok)" }}>✓ 已订阅</span>
               ) : (
-                <span>未订阅</span>
+                <span style={{ color: "var(--accent)" }}>点开订阅 →</span>
               )}
             </div>
           </Link>
@@ -150,14 +165,34 @@ function McpDetail() {
     const r = await subscribe(connector.id);
     setBusy(false);
     if (!r.ok) {
-      setMsg(`订阅失败: ${r.error}`);
+      setMsg(`订阅失败：${r.error ?? "未知错误"}`);
       return;
     }
-    if (r.next_step === "ready") {
-      setMsg("✓ 已订阅. 打开桌面 Companion 重启对话即可使用.");
-    } else if (r.next_step === "oauth_required" && r.authorize_url) {
-      window.open(r.authorize_url, "_blank");
-      setMsg("→ 已开 OAuth 授权页, 完成后回来刷新");
+    setConnector({ ...connector, subscribed: true, subscriber_count: (connector.subscriber_count ?? 0) + 1 });
+    setMsg(
+      r.next_step === "ready"
+        ? "✓ 已订阅。约 2 分钟内小鲶就能用上。"
+        : "已登记，但这个连接器还要授权登录，员工电脑这一步暂不支持。",
+    );
+  };
+
+  const handleUnsubscribe = async () => {
+    setBusy(true);
+    try {
+      const mine = (await listMySubscriptions()).subscriptions.find(
+        (s) => s.connector_id === connector.id && s.status !== "revoked",
+      );
+      const r = mine ? await unsubscribe(mine.id) : { ok: false, error: "没找到你的这条订阅" };
+      if (!r.ok) {
+        setMsg(`退订失败：${r.error ?? "未知错误"}`);
+        return;
+      }
+      setConnector({ ...connector, subscribed: false, subscriber_count: Math.max(0, (connector.subscriber_count ?? 1) - 1) });
+      setMsg("已退订。约 2 分钟内小鲶就不再用它。");
+    } catch (e) {
+      setMsg(`退订失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -182,7 +217,7 @@ function McpDetail() {
             fontSize: 12,
           }}
         >
-          <Tag label={`auth: ${connector.auth_type}`} />
+          <Tag label={AUTH_LABEL[connector.auth_type] ?? connector.auth_type} />
           <Tag
             label={
               connector.allowed_dept.length > 0
@@ -196,8 +231,11 @@ function McpDetail() {
           )}
         </div>
 
+        <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: "var(--space-3)", lineHeight: 1.7 }}>
+          {EFFECT_NOTE}
+        </div>
         <div>
-          {!connector.is_subscribed ? (
+          {!connector.subscribed ? (
             <button
               onClick={handleSubscribe}
               disabled={busy}
@@ -214,7 +252,25 @@ function McpDetail() {
               {busy ? "订阅中…" : "订阅"}
             </button>
           ) : (
-            <span style={{ color: "var(--status-ok)" }}>✓ 已订阅</span>
+            <>
+              <span style={{ color: "var(--status-ok)" }}>✓ 已订阅</span>
+              <button
+                onClick={() => void handleUnsubscribe()}
+                disabled={busy}
+                style={{
+                  marginLeft: "var(--space-3)",
+                  background: "transparent",
+                  border: "1px solid var(--border)",
+                  color: "var(--text-muted)",
+                  padding: "4px 12px",
+                  borderRadius: "var(--radius-sm)",
+                  cursor: "pointer",
+                  fontSize: 12,
+                }}
+              >
+                {busy ? "处理中…" : "退订"}
+              </button>
+            </>
           )}
           {msg && (
             <span

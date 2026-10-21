@@ -6,11 +6,11 @@ from pathlib import Path
 from catfish_mcp_registry.loader import ManifestRegistry
 
 
-def test_load_all_4_manifests(registry: ManifestRegistry):
-    """load_all 应该扫到 4 个 manifest (jira/gitlab/filesystem/time)."""
-    assert registry.count == 4
+def test_load_all_manifests(registry: ManifestRegistry):
+    """load_all 扫到 3 个 manifest (jira/gitlab/time; filesystem 10/22 撤下)."""
+    assert registry.count == 3
     ids = sorted(m.id for m in registry.list_all())
-    assert ids == ["filesystem", "gitlab", "jira", "time"]
+    assert ids == ["gitlab", "jira", "time"]
 
 
 def test_get_by_id(registry: ManifestRegistry):
@@ -26,34 +26,34 @@ def test_get_unknown_returns_none(registry: ManifestRegistry):
 
 
 def test_list_for_dept_engineering(registry: ManifestRegistry):
-    """engineering 部门可见所有 4 个 (jira/gitlab 限工程, filesystem/time 全员)."""
+    """engineering 部门全见 (jira/gitlab 限工程, time 全员)."""
     matched = registry.list_for_dept("engineering")
     ids = sorted(m.id for m in matched)
-    assert ids == ["filesystem", "gitlab", "jira", "time"]
+    assert ids == ["gitlab", "jira", "time"]
 
 
 def test_list_for_dept_finance_only_open(registry: ManifestRegistry):
-    """finance 部门只见 allowed_dept 空 (= 全员) 的 (filesystem / time).
+    """finance 部门只见 allowed_dept 空 (= 全员) 的 (time).
 
     jira/gitlab allowed_dept 是工程类, finance 看不见.
     """
     matched = registry.list_for_dept("finance")
     ids = sorted(m.id for m in matched)
-    assert ids == ["filesystem", "time"]
+    assert ids == ["time"]
 
 
 def test_list_for_dept_none_only_open(registry: ManifestRegistry):
     """没传 dept (None) → 只看全员开放的, 防 dev 漏 dept 时露管控连接器."""
     matched = registry.list_for_dept(None)
     ids = sorted(m.id for m in matched)
-    assert ids == ["filesystem", "time"]
+    assert ids == ["time"]
 
 
 def test_list_for_dept_empty_string(registry: ManifestRegistry):
     """空字符串 dept 等价 None — 跟上面一致."""
     matched = registry.list_for_dept("")
     ids = sorted(m.id for m in matched)
-    assert ids == ["filesystem", "time"]
+    assert ids == ["time"]
 
 
 def test_load_missing_dir(tmp_path: Path):

@@ -9,38 +9,38 @@ def test_health(client: TestClient):
     assert r.status_code == 200
     data = r.json()
     assert data["status"] == "ok"
-    assert data["manifests_loaded"] == 4
+    assert data["manifests_loaded"] == 3
     assert "version" in data
 
 
 def test_registry_no_dept_only_open(client: TestClient):
-    """不传 dept header → 只见 filesystem / time (全员开放)."""
+    """不传 dept header → 只见 time (全员开放)."""
     r = client.get("/v1/mcp/registry")
     assert r.status_code == 200
     data = r.json()
-    assert data["total"] == 2
+    assert data["total"] == 1
     ids = sorted(c["id"] for c in data["connectors"])
-    assert ids == ["filesystem", "time"]
+    assert ids == ["time"]
     assert data["filtered_by_dept"] is False
 
 
-def test_registry_engineering_sees_all_4(client: TestClient):
-    """engineering 部门 → 4 个全见 (jira/gitlab 工程类 + filesystem/time 全员)."""
+def test_registry_engineering_sees_all(client: TestClient):
+    """engineering 部门 → 全见 (jira/gitlab 工程类 + time 全员)."""
     r = client.get(
         "/v1/mcp/registry",
         headers={"X-Catfish-User-Dept": "engineering"},
     )
     assert r.status_code == 200
     data = r.json()
-    assert data["total"] == 4
+    assert data["total"] == 3
     ids = sorted(c["id"] for c in data["connectors"])
-    assert ids == ["filesystem", "gitlab", "jira", "time"]
+    assert ids == ["gitlab", "jira", "time"]
     assert data["user_dept"] == "engineering"
     assert data["filtered_by_dept"] is True
 
 
 def test_registry_finance_only_open(client: TestClient):
-    """finance 部门 → 只见 filesystem/time, 工程类不见."""
+    """finance 部门 → 只见 time, 工程类不见."""
     r = client.get(
         "/v1/mcp/registry",
         headers={"X-Catfish-User-Dept": "finance"},
@@ -48,7 +48,7 @@ def test_registry_finance_only_open(client: TestClient):
     assert r.status_code == 200
     data = r.json()
     ids = sorted(c["id"] for c in data["connectors"])
-    assert ids == ["filesystem", "time"]
+    assert ids == ["time"]
     assert data["filtered_by_dept"] is True
 
 
@@ -84,7 +84,7 @@ def test_registry_response_shape(client: TestClient):
     assert item["name"] == "Jira"
     assert item["version"] == "0.5.2"
     assert item["auth_type"] == "oauth2"
-    assert item["status"] == "active"
+    assert item["status"] == "preview"  # 10/22: OAuth 型员工机还不支持, 市场里「即将开放」
     assert len(item["tools"]) >= 5
     assert item["ui"]["category"] == "项目管理"
     assert item["subscribed"] is False  # Phase 1 永远 False
@@ -122,23 +122,23 @@ def test_manifest_403_wrong_dept(client: TestClient):
     assert "finance" in r.text.lower() or "engineering" in r.text.lower() or "权限" in r.text or "部门" in r.text
 
 
-def test_manifest_filesystem_no_oauth(client: TestClient):
-    """filesystem 连接器走 path_allowlist 不是 OAuth, oauth 字段应为 None."""
-    r = client.get("/v1/mcp/manifest/filesystem")
+def test_manifest_time_offline_python_module(client: TestClient):
+    """time 不要 OAuth, 用随安装包带的 python 模块起 (离线可用, 10/22)。"""
+    r = client.get("/v1/mcp/manifest/time")
     assert r.status_code == 200
     manifest = r.json()["manifest"]
-    assert manifest["auth_type"] == "path_allowlist"
+    assert manifest["auth_type"] == "none"
     assert manifest["oauth"] is None
-    assert manifest["path_config"] is not None
-    assert "~/.ssh" in manifest["path_config"]["forbidden_paths"]
+    assert manifest["mcp_command"]["type"] == "python"
+    assert manifest["mcp_command"]["module"] == "catfish_tool_bridge.connectors.time_server"
 
 
-def test_manifest_filesystem_no_dept_required(client: TestClient):
-    """filesystem allowed_dept 空 → 任何部门 (含没传) 都能访问."""
-    r = client.get("/v1/mcp/manifest/filesystem")
+def test_manifest_time_no_dept_required(client: TestClient):
+    """time allowed_dept 空 → 任何部门 (含没传) 都能访问."""
+    r = client.get("/v1/mcp/manifest/time")
     assert r.status_code == 200
     r2 = client.get(
-        "/v1/mcp/manifest/filesystem",
+        "/v1/mcp/manifest/time",
         headers={"X-Catfish-User-Dept": "finance"},
     )
     assert r2.status_code == 200

@@ -1,7 +1,7 @@
 """Phase 2 订阅 endpoints e2e 单测 (BL-D3, 5/9).
 
 mock secret-broker httpx, 验证整套 flow:
-  POST /v1/mcp/subscribe → status pending_oauth (jira) / active (filesystem)
+  POST /v1/mcp/subscribe → status pending_oauth (jira) / active (time)
   POST /v1/mcp/oauth/start → 返 mock authorize_url + state
   POST /v1/mcp/oauth/callback → 写 secret-broker + mark active
   GET  /v1/mcp/subscribed → 返 active 列表
@@ -10,22 +10,38 @@ mock secret-broker httpx, 验证整套 flow:
 from __future__ import annotations
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 
-def test_subscribe_filesystem_active_immediately(client: TestClient, auth_headers):
-    """filesystem auth_type=path_allowlist → 直接 active, next_step=ready."""
+@pytest.fixture(autouse=True)
+def jira_active(registry):
+    """jira 10/22 起是 preview (市场里「即将开放」, 不能订阅)。OAuth 那套流程本身还在,
+    这里临时当它 active 测流程; preview 被拒见 test_subscribe_preview_rejected。"""
+    registry.get("jira").status = "active"
+
+
+def test_subscribe_preview_rejected(client: TestClient, auth_headers, registry):
+    """preview 的连接器不让订阅 —— 订了员工机也起不来。"""
+    registry.get("jira").status = "preview"
+    r = client.post("/v1/mcp/subscribe", json={"connector_id": "jira"}, headers=auth_headers)
+    assert r.status_code == 409
+    assert "还没开放订阅" in r.json()["detail"]
+
+
+def test_subscribe_time_active_immediately(client: TestClient, auth_headers):
+    """time auth_type=none → 直接 active, next_step=ready."""
     r = client.post(
         "/v1/mcp/subscribe",
-        json={"connector_id": "filesystem"},
+        json={"connector_id": "time"},
         headers=auth_headers,
     )
     assert r.status_code == 200
     data = r.json()
     assert data["next_step"] == "ready"
     assert data["subscription"]["status"] == "active"
-    assert data["subscription"]["connector_id"] == "filesystem"
-    assert data["subscription"]["connector_name"] == "本地文件"
+    assert data["subscription"]["connector_id"] == "time"
+    assert data["subscription"]["connector_name"] == "时间 / 时区"
     assert data["oauth_start_url"] is None
 
 
@@ -47,12 +63,12 @@ def test_subscribe_idempotent(client: TestClient, auth_headers):
     """重复订阅 → 返同 id, 不创建第二行."""
     r1 = client.post(
         "/v1/mcp/subscribe",
-        json={"connector_id": "filesystem"},
+        json={"connector_id": "time"},
         headers=auth_headers,
     )
     r2 = client.post(
         "/v1/mcp/subscribe",
-        json={"connector_id": "filesystem"},
+        json={"connector_id": "time"},
         headers=auth_headers,
     )
     assert r1.json()["subscription"]["id"] == r2.json()["subscription"]["id"]
@@ -84,7 +100,7 @@ def test_subscribe_401_no_user(client: TestClient):
     """没传 X-Catfish-User-Sub → 401."""
     r = client.post(
         "/v1/mcp/subscribe",
-        json={"connector_id": "filesystem"},
+        json={"connector_id": "time"},
     )
     assert r.status_code == 401
 
@@ -189,7 +205,7 @@ def test_oauth_callback_wrong_user_403(client: TestClient, auth_headers):
 def test_subscribed_list(client: TestClient, auth_headers):
     """订阅 2 个 → GET /v1/mcp/subscribed 返 2."""
     client.post(
-        "/v1/mcp/subscribe", json={"connector_id": "filesystem"}, headers=auth_headers,
+        "/v1/mcp/subscribe", json={"connector_id": "jira"}, headers=auth_headers,
     )
     client.post(
         "/v1/mcp/subscribe", json={"connector_id": "time"}, headers=auth_headers,
@@ -200,21 +216,21 @@ def test_subscribed_list(client: TestClient, auth_headers):
     data = r.json()
     assert data["total"] == 2
     ids = sorted(s["connector_id"] for s in data["subscriptions"])
-    assert ids == ["filesystem", "time"]
+    assert ids == ["jira", "time"]
 
 
 def test_subscribed_filter_active(client: TestClient, auth_headers):
     """?status_filter=active → 只返 active."""
     r1 = client.post(
-        "/v1/mcp/subscribe", json={"connector_id": "filesystem"}, headers=auth_headers,
+        "/v1/mcp/subscribe", json={"connector_id": "time"}, headers=auth_headers,
     )
     r2 = client.post(
         "/v1/mcp/subscribe", json={"connector_id": "jira"}, headers=auth_headers,
     )
-    # filesystem 直接 active, jira pending_oauth
+    # time 直接 active, jira pending_oauth
     r = client.get("/v1/mcp/subscribed?status_filter=active", headers=auth_headers)
     assert r.json()["total"] == 1
-    assert r.json()["subscriptions"][0]["connector_id"] == "filesystem"
+    assert r.json()["subscriptions"][0]["connector_id"] == "time"
 
 
 def test_unsubscribe(client: TestClient, auth_headers):
@@ -249,7 +265,7 @@ def test_unsubscribe(client: TestClient, auth_headers):
 def test_unsubscribe_other_user_403(client: TestClient, auth_headers):
     """alice 的 sub, bob 来 unsubscribe → 403."""
     r = client.post(
-        "/v1/mcp/subscribe", json={"connector_id": "filesystem"}, headers=auth_headers,
+        "/v1/mcp/subscribe", json={"connector_id": "time"}, headers=auth_headers,
     )
     sub_id = r.json()["subscription"]["id"]
 
@@ -269,11 +285,23 @@ def test_unsubscribe_404_unknown(client: TestClient, auth_headers):
 
 
 def test_registry_shows_subscribed_status(client: TestClient, auth_headers):
-    """订阅 filesystem 后 GET /v1/mcp/registry filesystem.subscribed=True."""
+    """订阅 time 后 GET /v1/mcp/registry time.subscribed=True."""
     client.post(
-        "/v1/mcp/subscribe", json={"connector_id": "filesystem"}, headers=auth_headers,
+        "/v1/mcp/subscribe", json={"connector_id": "time"}, headers=auth_headers,
     )
     r = client.get("/v1/mcp/registry", headers=auth_headers)
-    fs = next(c for c in r.json()["connectors"] if c["id"] == "filesystem")
+    fs = next(c for c in r.json()["connectors"] if c["id"] == "time")
     assert fs["subscribed"] is True
     assert fs["subscriber_count"] == 1
+
+
+def test_resubscribe_after_unsubscribe_reactivates(client: TestClient, auth_headers):
+    """退订再订 → 重新 active (10/22: 原来返回那条 revoked, 员工退订一次就再也订不回来)。"""
+    r = client.post("/v1/mcp/subscribe", json={"connector_id": "time"}, headers=auth_headers)
+    sub_id = r.json()["subscription"]["id"]
+    client.delete(f"/v1/mcp/subscribe/{sub_id}", headers=auth_headers)
+    r = client.post("/v1/mcp/subscribe", json={"connector_id": "time"}, headers=auth_headers)
+    assert r.json()["subscription"]["status"] == "active"
+    assert r.json()["next_step"] == "ready"
+    active = client.get("/v1/mcp/subscribed?status_filter=active", headers=auth_headers).json()
+    assert [s["connector_id"] for s in active["subscriptions"]] == ["time"]

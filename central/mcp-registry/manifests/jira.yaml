@@ -6,7 +6,7 @@ name: Jira
 version: "0.5.2"
 description: Atlassian Jira issue tracking — 看任务 / 创建 issue / 更新状态 / 评论
 provider: atlassian
-status: active   # active / preview / deprecated
+status: preview   # 10/22: 要 OAuth 凭据, 员工机这一环还没做 (secret-broker 6/13 已删) —— 市场里显示「即将开放」, 不能订阅
 
 # 哪些部门可订阅 (catfish-identity 部门权限). 空列表 = 全员可订阅.
 allowed_dept:

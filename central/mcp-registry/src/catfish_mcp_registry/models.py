@@ -12,8 +12,11 @@ from pydantic import BaseModel, Field
 class McpCommand(BaseModel):
     """MCP server 启动命令 (Phase 3 用)."""
 
-    type: Literal["uvx", "npx", "docker", "exec"] = "uvx"
-    package: str
+    # 10/22: python = `python -m <module>`, 用员工机 hermes venv 里随安装包带的模块, 离线可用。
+    #        uvx 要员工机现场联网从 PyPI 下, 内网用不了。
+    type: Literal["python", "uvx", "npx", "docker", "exec"] = "uvx"
+    package: str = ""
+    module: str = ""
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
 

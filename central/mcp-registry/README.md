@@ -23,10 +23,15 @@ catfish-mcp-registry FastAPI :8996
       └─ POST   /v1/mcp/oauth/callback         code 换 token + 写 secret-broker
 
 manifests/                                     yaml 硬编码 (Phase 4 加管理员 CRUD)
-  ├─ jira.yaml         (mcp-server-jira, oauth2, 工程类)
-  ├─ gitlab.yaml       (mcp-server-gitlab, oauth2, 工程类)
-  ├─ filesystem.yaml   (mcp-server-filesystem, path_allowlist, 全员)
-  └─ time.yaml         (mcp-server-time, none, 全员)
+  ├─ jira.yaml         (mcp-server-jira, oauth2, 工程类, preview —— 员工机 OAuth 还没做, 不能订阅)
+  ├─ gitlab.yaml       (mcp-server-gitlab, oauth2, 工程类, preview —— 同上)
+  └─ time.yaml         (type: python, 随 tool-bridge 发的 connectors/time_server, none, 全员)
+
+  10/22: filesystem.yaml 撤下 (PyPI 上没有 mcp-server-filesystem, 而且小鲶本来就能读写本机文件)。
+  员工机怎么接: hermes 起的 catfish_tool_bridge.mcp_server 每 2 分钟按员工 active 订阅同步连接器,
+  变了发 tools/list_changed 让小鲶刷新 (edge/tool-bridge/.../mcp_client.py sync_subscriptions)。
+  新连接器优先 `type: python` (模块随安装包, 离线可用); `uvx` 要员工机现场联网下载。
+  status 不是 active 的不让订阅 (409), 市场页也不列。
 
 数据库 (Phase 2 改 PG 主存储, 5/9 鸿波质疑后改的):
   - PG (CATFISH_DB_URL 设时, 跟 catfish-gateway/identity 同实例)
@@ -56,7 +61,7 @@ curl http://127.0.0.1:8996/health
 # {"status":"ok","backend":"sqlite",...}
 
 curl http://127.0.0.1:8996/v1/mcp/registry
-# 全员可见: filesystem + time
+# 全员可见: time
 
 curl -H "X-Catfish-User-Dept: engineering" \
      -H "X-Catfish-User-Sub: alice@catfish.dev" \

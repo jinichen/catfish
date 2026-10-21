@@ -3,16 +3,18 @@
 # 极轻量, 验证 stack — 启 pod 拉 list_tools 跑通就行, 演示 mcp 链路
 id: time
 name: 时间 / 时区
-version: "0.3.0"
-description: 时间 / 时区转换 / 当前时刻 — 极轻量演示连接器
-provider: anthropic-official
+version: "1.0.0"
+description: 查任意时区的当前时间、把一个时刻换算到另一个时区 —— 跟海外同事约会议时用
+provider: catfish
 status: active
 
 allowed_dept: []   # 全员
 
 mcp_command:
-  type: uvx
-  package: mcp-server-time
+  # 10/22: 原来 `uvx mcp-server-time` 让员工机现场从 PyPI 下 —— 内网装不了, 而且它各版本
+  # 跟 hermes 钉的 mcp 2.0.0 都不兼容。改用随 tool-bridge 一起发的同名工具实现, 离线可用。
+  type: python
+  module: catfish_tool_bridge.connectors.time_server
   args: []
   env: {}
 

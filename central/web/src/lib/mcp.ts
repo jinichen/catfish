@@ -22,8 +22,8 @@ export interface McpConnector {
   tools: McpTool[];
   ui?: Record<string, unknown>;
   subscriber_count?: number;
-  is_subscribed?: boolean;
-  subscription_id?: string;
+  /** 当前员工订了没 (registry 的字段名就叫 subscribed; 10/22 前这里写成 is_subscribed, 永远读不到)。 */
+  subscribed?: boolean;
 }
 
 export interface ConnectorListResponse {
@@ -37,29 +37,37 @@ export async function listConnectors(): Promise<McpConnector[]> {
 
 export interface SubscribeResponse {
   ok: boolean;
-  next_step?: "ready" | "oauth_required";
-  authorize_url?: string;
+  next_step?: "ready" | "oauth";
   subscription_id?: string;
   error?: string;
 }
 
+/** registry 实际返回的形状 (POST /v1/mcp/subscribe)。 */
+interface RegistrySubscribeResponse {
+  subscription: { id: string; status: string };
+  next_step: "ready" | "oauth";
+}
+
 export async function subscribe(connectorId: string): Promise<SubscribeResponse> {
   try {
-    return await api.post<SubscribeResponse>("/v1/mcp/subscribe", {
+    // 10/22: registry 返 {subscription, next_step}, 没有 ok 字段 —— 原来直接当 SubscribeResponse
+    // 用, `!r.ok` 恒真, 订阅成功了页面也报「订阅失败: undefined」。
+    const r = await api.post<RegistrySubscribeResponse>("/v1/mcp/subscribe", {
       connector_id: connectorId,
     });
+    return { ok: true, next_step: r.next_step, subscription_id: r.subscription.id };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
 
-export async function unsubscribe(subscriptionId: string): Promise<{ ok: boolean }> {
+export async function unsubscribe(subscriptionId: string): Promise<{ ok: boolean; error?: string }> {
   try {
-    return await api.delete<{ ok: boolean }>(
-      `/v1/mcp/subscribe/${subscriptionId}`,
-    );
-  } catch {
-    return { ok: false };
+    // registry 返被撤销的那条订阅 (status=revoked), 不是 {ok}
+    await api.delete(`/v1/mcp/subscribe/${subscriptionId}`);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
 
