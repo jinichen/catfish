@@ -512,12 +512,28 @@ done < <(find "$MAC_RUNTIME_RESOURCES" -type f -name '*.tar.gz' -print0)
 # 提交公证并等结果。notarytool --wait 在审核**不通过** (Invalid) 时退出码也可能是 0,
 # 所以看输出里的 status, 不是 Accepted 就把 Apple 的日志打出来并退出。
 notarize_or_die() {
-  local target="$1" out sub_id
+  local target="$1" out sub_id status i
   out=$(xcrun notarytool submit "$target" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1) || true
   echo "$out"
-  if ! echo "$out" | grep -q "status: Accepted"; then
-    sub_id=$(echo "$out" | awk '/^ *id:/{print $2; exit}')
-    echo "❌ 公证没通过: $target" >&2
+  sub_id=$(echo "$out" | awk '/^ *id:/{print $2; exit}')
+  status=$(echo "$out" | awk -F': ' '/^ *status:/{s=$2} END{print s}')
+  # 10/21: --wait 等结果时网络断一下 (HTTPClientError.connectTimeout) 就退出, 而 Apple
+  # 那边其实还在审 (notarytool info 查是 In Progress)。已经拿到提交 ID 的, 按 ID 接着查,
+  # 不重新提交。只有 Apple 明确给了结论 (Invalid / Rejected) 才算没通过。
+  if [ -n "$sub_id" ] && [ "$status" != "Accepted" ] && [ "$status" != "Invalid" ] && [ "$status" != "Rejected" ]; then
+    echo "   等公证结果时连接断了, 按提交 ID $sub_id 接着查 (最多 60 分钟) ——"
+    for i in $(seq 1 120); do
+      status=$(xcrun notarytool info "$sub_id" --keychain-profile "$NOTARY_PROFILE" 2>/dev/null \
+        | awk -F': ' '/^ *status:/{print $2; exit}')
+      case "$status" in
+        Accepted|Invalid|Rejected) break ;;
+      esac
+      sleep 30
+    done
+    echo "  status: ${status:-查不到}"
+  fi
+  if [ "$status" != "Accepted" ]; then
+    echo "❌ 公证没通过: $target (status: ${status:-未知})" >&2
     [ -n "$sub_id" ] && xcrun notarytool log "$sub_id" --keychain-profile "$NOTARY_PROFILE" >&2 || true
     exit 1
   fi
