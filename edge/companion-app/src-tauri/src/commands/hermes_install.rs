@@ -39,7 +39,7 @@ use crate::services::catfish_paths::hermes_venv_python;
 use crate::services::catfish_paths::hermes_venv_tool;
 #[cfg(not(target_os = "windows"))]
 use super::hermes_install_steps::{
-    activate_stage, addon_current, install_catfish_email, EMAIL_ADDON, WECHAT_READER_ADDON, install_catfish_wechat_reader, install_hermes_deps,
+    activate_stage, addon_current, install_catfish_email, EMAIL_ADDON, WECHAT_READER_ADDON, install_catfish_wechat_reader,
     link_catfish_email_bin, link_catfish_wechat_reader_bin, prepare_source_stage,
     rollback_install,
 };
@@ -201,6 +201,10 @@ fn bootstrap_locked(
         report(reporter, "addons", BootstrapProgressState::Running, 1, 2,
             "Hermes 核心已验证并保留，正在检查/修复附加组件", None);
         super::hermes_install_windows::ensure_optional_components(resource_dir, paths)?;
+        // 10/21: hermes 实际在用的环境 (含它自己另建的) 缺鲶鱼的包就补, 跟 macOS 同一套
+        if super::hermes_runtime_deps::ensure_runtime_deps(resource_dir, paths) > 0 {
+            super::hermes_plugin::restart_hermes_gateway();
+        }
         report(
             reporter,
             "complete",
@@ -264,26 +268,11 @@ pub(crate) fn bootstrap_locked(
         // 这个安装包里的那一份」(安装指纹, 跟 Windows 同一套): 文件在但版本旧, 一样
         // 要重装 —— 否则升级 Companion 带来的新 wheel 永远到不了老机器。
         refresh_addons(resource_dir, paths);
-        // 同上: hermes 健康 ≠ jieba/playwright 装了。判据用 import 而不是
-        // 看目录 —— site-packages 里有目录但 import 不了的情况见过 (装了一半)。
-        let deps_ok = crate::services::process::background_command(hermes_venv_python(&paths.install_dir))
-            .arg("-c")
-            .arg(super::hermes_install_artifacts::hermes_extra_import_check())
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        if !deps_ok {
-            log::warn!(
-                "[hermes-deps] hermes 健康但额外依赖缺失 (分词/浏览器/文件监听/上传文件解析) —— \
-                 只补装它们, 不重装 hermes。"
-            );
-            match resolve_optional_runtime_dir(resource_dir)
-                .map(RuntimeArtifacts::from_dir)
-                .and_then(|artifacts| install_hermes_deps(&artifacts, paths))
-            {
-                Ok(()) => log::info!("[hermes-deps] 补装完成"),
-                Err(e) => log::warn!("[hermes-deps] 补装失败, 浏览器工具、分词和上传文件解析仍不可用: {e:#}"),
-            }
+        // 同上: hermes 健康 ≠ jieba/playwright 装了。判据用 import 而不是看目录 ——
+        // site-packages 里有目录但 import 不了的情况见过 (装了一半)。10/21 起连 hermes
+        // 自己另建的运行环境一起查 (见 hermes_runtime_deps.rs)。
+        if super::hermes_runtime_deps::ensure_runtime_deps(resource_dir, paths) > 0 {
+            super::hermes_plugin::restart_hermes_gateway();
         }
         report(
             reporter,

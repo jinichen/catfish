@@ -191,20 +191,7 @@ pub(crate) fn install_python_deps(artifacts: &RuntimeArtifacts, paths: &Bootstra
         );
     }
     let venv_python = hermes_venv_python(dir);
-    let mut deps = uv(artifacts, paths);
-    deps.arg("pip")
-        .arg("install")
-        .arg("--quiet")
-        .arg("--python")
-        .arg(&venv_python)
-        .arg("--no-index")
-        .arg("--find-links")
-        .arg(&wheelhouse)
-        .arg("--require-hashes")
-        .arg("--compile-bytecode") // 首次启动不用现编; jieba 那几句 SyntaxWarning 也只出现在这里
-        .arg("-r")
-        .arg(&requirements);
-    run(deps, "安装 Hermes 依赖 (离线)")?;
+    install_requirements(artifacts, paths, &venv_python)?;
     let mut project = uv(artifacts, paths);
     project
         .arg("pip")
@@ -224,6 +211,26 @@ pub(crate) fn install_python_deps(artifacts: &RuntimeArtifacts, paths: &Bootstra
         .arg("-c")
         .arg(format!("import hermes_cli.main; {}", super::hermes_install_artifacts::hermes_extra_import_check()));
     run(check, "验证 Hermes 和额外依赖可导入")
+}
+
+/// 把源码树里那份钉版本 + sha256 的依赖清单离线装进指定 Python 环境。
+/// hermes 自己的 venv 和 hermes 另建的运行环境 (hermes_runtime_deps.rs) 共用。
+pub(crate) fn install_requirements(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths, python: &Path) -> Result<()> {
+    let dir = &paths.install_dir;
+    let mut deps = uv(artifacts, paths);
+    deps.arg("pip")
+        .arg("install")
+        .arg("--quiet")
+        .arg("--python")
+        .arg(python)
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(dir.join(WHEELHOUSE_DIR))
+        .arg("--require-hashes")
+        .arg("--compile-bytecode") // 首次启动不用现编; jieba 那几句 SyntaxWarning 也只出现在这里
+        .arg("-r")
+        .arg(dir.join(REQUIREMENTS_FILE));
+    run(deps, "安装 Hermes 依赖 (离线)")
 }
 
 /// Playwright 默认找浏览器的地方。跟 Python playwright 的 registry 一致

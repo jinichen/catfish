@@ -342,35 +342,8 @@ pub(crate) fn rollback_install(paths: &BootstrapPaths, backup: Option<&PreviousI
 /// 邮件是附加功能, 缺了 hermes 和聊天都正常。装机在这一步失败就整体回滚,
 /// 代价远大于收益。所以这里 warn + 继续, 但**warn 里必须写清楚后果**
 /// (邮件 tab 会挂), 不能只写一句"失败了"。
-/// 把 jieba / playwright 装进 hermes 的 venv (8/5 达华现场)。
-///
-/// # 为什么需要
-///
-/// autostart.rs 的 check_jieba_installed / check_playwright_installed 早就
-/// 会报警了, 但**只报不装** —— 而装机流程里这两个包的安装语句是 0 处。
-/// 于是每台新机器都缺, 员工那边表现为:
-///   · 让鲶鱼开网页 → 「缺 playwright 包, 导航没走成」
-///   · 文书风格 → 分词退化成字符二元组, top_words 全是碎片
-///
-/// 达华现场无外网, 员工机不可能 pip install, 只能随包带。
-///
-/// # 跟 install_catfish_email 的不同
-///
-/// email 是**单个** wheel, 零依赖, 所以 `--no-deps` 直接装。
-/// 这里是一组 wheel (jieba / playwright / greenlet / pyee), 有依赖关系,
-/// 所以用 `--find-links <dir> --no-index` 让 uv 在本地目录里解析 ——
-/// `--no-index` 是关键: 少了它 uv 会去连 PyPI, 离线现场直接卡死超时。
-///
-/// # 不跑 `playwright install`
-///
-/// catfish_tools_browser.py:46 写明「不装 chromium binary (Playwright 默认会
-/// 装 ~150MB), 用 connect_over_cdp 复用员工 Chrome」。只要 Python 包。
-#[cfg(not(target_os = "windows"))]
-pub(crate) fn install_hermes_deps(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths) -> Result<()> {
-    // 10/14: 额外包并进了 hermes 源码里的 wheelhouse, 跟 hermes 依赖同一份钉版本清单。
-    // 修复 (hermes 健康但额外包缺) 就是把整份清单再装一遍 —— 装过的 uv 秒过。
-    super::hermes_install_native::install_python_deps(artifacts, paths)
-}
+// (原 install_hermes_deps: 8/5 达华现场补 jieba / playwright 的修复路径。10/21 并进
+// hermes_runtime_deps::ensure_runtime_deps —— 连 hermes 另建的运行环境一起查。)
 
 /// 附加组件 (catfish-email / catfish-wechat-reader) 的安装指纹 —— 跟 Windows
 /// (`hermes_install_windows::ensure_optional_components`) 同一套判据, 同名 marker。

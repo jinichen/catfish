@@ -77,13 +77,15 @@ fn yaml_path() -> Option<std::path::PathBuf> {
 /// 直连绕过 hermes P15 approval SSE · 按钮永远不弹.
 ///
 /// 此函数 line-based 读 dotenv · 找 `API_SERVER_KEY=<value>` 返 value. 找不到返 None.
-fn read_hermes_env_api_key() -> Option<String> {
+fn default_hermes_env_path() -> Option<std::path::PathBuf> {
     let home = crate::util::paths::home_env()
         .or_else(|_| std::env::var("USERPROFILE"))
         .ok()?;
-    let env_path = crate::services::catfish_paths::hermes_home_for(&std::path::PathBuf::from(home))
-        .join(".env");
-    let content = std::fs::read_to_string(&env_path).ok()?;
+    Some(crate::services::catfish_paths::hermes_home_for(&std::path::PathBuf::from(home)).join(".env"))
+}
+
+fn read_hermes_env_api_key(env_path: &std::path::Path) -> Option<String> {
+    let content = std::fs::read_to_string(env_path).ok()?;
     for line in content.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("API_SERVER_KEY=") {
@@ -117,6 +119,12 @@ fn read_yaml_from(path: &std::path::Path) -> Option<HermesApiYaml> {
 /// 生产 `hermes_api_config()` 调 `build_with_yaml(None)` 走默认 `~/.catfish/companion.yaml`.
 /// 测试调 `build_with_yaml(Some(&tempdir/不存在.yaml))` 让 yaml 永远 None, 走 env 测试.
 fn build_with_yaml(yaml_path_override: Option<&std::path::Path>) -> HermesApiConfig {
+    build_with(yaml_path_override, default_hermes_env_path().as_deref())
+}
+
+/// 10/21: hermes .env 的位置也由调用方给 —— 测试原来读的是跑测试那台机器真实的
+/// ~/.hermes/.env, 开发机上有 key, 「没 key 就强制关」那条单独跑必红。
+fn build_with(yaml_path_override: Option<&std::path::Path>, hermes_env: Option<&std::path::Path>) -> HermesApiConfig {
     let yaml = match yaml_path_override {
         Some(p) => read_yaml_from(p),
         None => yaml_path().and_then(|p| read_yaml_from(&p)),
@@ -136,7 +144,7 @@ fn build_with_yaml(yaml_path_override: Option<&std::path::Path>) -> HermesApiCon
     let key = yaml.as_ref()
         .and_then(|y| y.key.clone())
         .or_else(|| std::env::var("CATFISH_HERMES_API_KEY").ok())
-        .or_else(|| read_hermes_env_api_key());
+        .or_else(|| hermes_env.and_then(read_hermes_env_api_key));
 
     // BL-HERMES-DEFAULT-ENABLED (7/19 Task #21 根因修): 默认 enabled=false 让
     // Chat 走 gateway 直连 · P15 approval SSE 只在 hermes daemon 装 · gateway
@@ -241,6 +249,12 @@ mod tests {
         env::remove_var("CATFISH_HERMES_API_URL");
         env::remove_var("CATFISH_HERMES_API_KEY");
         env::remove_var("CATFISH_HERMES_API_ENABLED");
+    }
+
+    /// 测试不读本机真实的 ~/.hermes/.env (开发机上有 key)。
+    fn build_with_yaml(yaml: Option<&std::path::Path>) -> HermesApiConfig {
+        let env = yaml.map(|y| y.with_file_name("hermes.env"));
+        super::build_with(yaml, env.as_deref())
     }
 
     /// 测试用 helper: 返一个不存在的 yaml 路径 (在 tempdir 内, 文件没 create).
