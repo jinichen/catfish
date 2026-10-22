@@ -36,14 +36,31 @@ def check(path: Path) -> list[str]:
     return bad
 
 
+def check_swallowed_output(path: Path) -> list[str]:
+    """`& 外部命令` 后紧跟 `return $LASTEXITCODE` 的函数, 外部命令输出必须 | Out-Host / Out-Null。
+
+    10/22: setup-wsl.ps1 的 InDistro 没接走 wsl.exe 的输出 —— PowerShell 把它们全算成函数返回值:
+    setup.sh 的报错说明 (连同只显示一次的加密主密钥) 屏幕上看不到, 返回值成了一串行,
+    `$rc -ne 0` 恒真, setup.sh 成功了也报「setup.sh 失败」。
+    """
+    lines = path.read_text(encoding="utf-8-sig").splitlines()
+    bad = []
+    for i, line in enumerate(lines[:-1]):
+        code = line.split("#", 1)[0].strip()
+        nxt = lines[i + 1].split("#", 1)[0].strip()
+        if code.startswith("& ") and nxt == "return $LASTEXITCODE" and "| Out-" not in code:
+            bad.append(f"{path.relative_to(HERE)}:{i + 1}: {line.strip()}  ← 输出会变成返回值, 加 | Out-Host")
+    return bad
+
+
 def main() -> int:
     files = [HERE / "setup.ps1", *sorted((HERE / "windows").glob("*.ps1"))]
-    bad = [b for f in files for b in check(f)]
+    bad = [b for f in files for b in check(f) + check_swallowed_output(f)]
     if bad:
-        print("❌ 这些外部命令重定向了 stderr 但没包 Invoke-Native (Windows PowerShell 5.1 上会直接崩):")
+        print("❌ 装机 .ps1 里有会在 Windows PowerShell 5.1 上出错的外部命令写法:")
         print("\n".join("   " + b for b in bad))
         return 1
-    print(f"✓ {len(files)} 个装机 .ps1: 重定向 stderr 的外部命令都包在 Invoke-Native 里")
+    print(f"✓ {len(files)} 个装机 .ps1: 重定向 stderr 的外部命令都包在 Invoke-Native 里, 函数里的外部命令输出都接走了")
     return 0
 
 

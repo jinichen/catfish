@@ -313,7 +313,9 @@ function Invoke-Tool {
         $IdentityImage,
         'python3', "/tools/$Script", '--dir', '/work'
     ) + $Args
-    & docker @full
+    # 10/22: | Out-Host —— 不接走的话 envgen.py 打的说明 (含只显示一次的 CATFISH_SECRET_KEY) 全成了
+    # 函数返回值, 屏幕上看不到; 而且返回值成了一串行, 调用方 `-ne 0` 恒真, 成功了也报失败。
+    & docker @full | Out-Host
     return $LASTEXITCODE
 }
 

@@ -212,7 +212,11 @@ SayOk "发行版 $Distro 就绪"
 function InDistro {
     param([string]$cmd)
     # -e: 参数原样交给 bash, 不经发行版默认 shell 再展开一遍 (用 -- 的话 $ 会被多展开一次)
-    & wsl.exe -d $Distro -u root -e bash -c $cmd
+    #
+    # 10/22: 输出必须 | Out-Host。PowerShell 函数里没被接走的输出全算返回值 —— 原来 setup.sh 的
+    # stdout (含它自己的报错说明) 全进了 $rc, 屏幕上只剩 docker 打在 stderr 的进度, 看不到错在哪;
+    # 而且 $rc 成了一串行, `$rc -ne 0` 对数组是「有不等于 0 的元素」恒真, setup.sh 成功也报失败。
+    & wsl.exe -d $Distro -u root -e bash -c $cmd | Out-Host
     return $LASTEXITCODE
 }
 
