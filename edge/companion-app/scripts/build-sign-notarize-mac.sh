@@ -558,35 +558,32 @@ notarize_or_die() {
   # 10/22: 连接断在**上传过程中** (拿到 ID 之后 connectTimeout) 时, Apple 那边这个提交永远停在
   # In Progress —— 两次实测 1 小时都不出结果, 重新提交同一个文件 7–12 分钟就过。所以按 ID 查
   # 25 分钟还没结论, 就重提一次 (最多重提 2 次), 新提交照样按 ID 接着查。
-  local resubmits=0
-  # 拿到了 ID 但没有「Successfully uploaded file」= 上传本身断了, Apple 那边永远不会出结论
-  # (10/22 两次实测), 别等 25 分钟, 直接重提。
-  if [ -n "$sub_id" ] && ! echo "$out" | grep -q "Successfully uploaded file"; then
-    echo "   提交 $sub_id 上传没传完 (没有 Successfully uploaded file), 立即重新提交 ——"
-    resubmits=$((resubmits + 1))
-    wait_notary_credentials
-    out=$(xcrun notarytool submit "$target" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1) || true
-    echo "$out"
-    sub_id=$(echo "$out" | awk '/^ *id:/{print $2; exit}')
-    status=$(echo "$out" | awk -F': ' '/^ *status:/{s=$2} END{print s}')
-  fi
+  # 10/23: 每次提交 (含重提) 后都看一眼: 拿到 ID 却没有「Successfully uploaded file」= 上传本身断了,
+  # Apple 那边永远不会出结论 —— 立即重提。上传完整的才按 ID 查结论 (最多 25 分钟), 还没结论再重提。
+  # (10/22 版只检查第一次提交, 重提的那次又断在上传时, 照样空等 25 分钟。)
+  local resubmits=0 max_resubmits=4 why
   while [ -n "$sub_id" ] && [ "$status" != "Accepted" ] && [ "$status" != "Invalid" ] && [ "$status" != "Rejected" ]; do
-    echo "   等公证结果时连接断了, 按提交 ID $sub_id 接着查 (最多 25 分钟) ——"
-    for i in $(seq 1 50); do
-      status=$(xcrun notarytool info "$sub_id" --keychain-profile "$NOTARY_PROFILE" 2>/dev/null \
-        | awk -F': ' '/^ *status:/{print $2; exit}')
-      case "$status" in
-        Accepted|Invalid|Rejected) break ;;
-      esac
-      sleep 30
-    done
-    echo "  status: ${status:-查不到}"
-    case "$status" in Accepted|Invalid|Rejected) break ;; esac
-    if [ "$resubmits" -ge 2 ]; then
+    if ! echo "$out" | grep -q "Successfully uploaded file"; then
+      why="上传没传完 (没有 Successfully uploaded file)"
+    else
+      echo "   等公证结果时连接断了, 按提交 ID $sub_id 接着查 (最多 25 分钟) ——"
+      for i in $(seq 1 50); do
+        status=$(xcrun notarytool info "$sub_id" --keychain-profile "$NOTARY_PROFILE" 2>/dev/null \
+          | awk -F': ' '/^ *status:/{print $2; exit}')
+        case "$status" in
+          Accepted|Invalid|Rejected) break ;;
+        esac
+        sleep 30
+      done
+      echo "  status: ${status:-查不到}"
+      case "$status" in Accepted|Invalid|Rejected) break ;; esac
+      why="25 分钟没结论"
+    fi
+    if [ "$resubmits" -ge "$max_resubmits" ]; then
       break
     fi
     resubmits=$((resubmits + 1))
-    echo "   提交 $sub_id 25 分钟没结论 (多半上传没传完), 重新提交 (第 $resubmits/2 次) ——"
+    echo "   提交 $sub_id $why, 重新提交 (第 $resubmits/$max_resubmits 次) ——"
     wait_notary_credentials
     out=$(xcrun notarytool submit "$target" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1) || true
     echo "$out"
