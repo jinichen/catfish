@@ -539,6 +539,16 @@ notarize_or_die() {
     wait_notary_credentials
     out=$(xcrun notarytool submit "$target" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1) || true
   fi
+  # 10/22: 连 Apple 时 TLS 握手失败 (NSURLErrorDomain -1200) 发生在上传之前, 没拿到提交 ID,
+  # Apple 那边什么都没收到 —— 隔一分钟重新提交, 最多再试 3 次。拿到 ID 的不重提 (见下)。
+  for i in 1 2 3; do
+    echo "$out" | grep -qE '^ *id:' && break
+    echo "$out" | grep -qE 'TLS error|NSURLErrorDomain|connectTimeout|network connection was lost' || break
+    echo "   连 Apple 公证服务失败 (还没上传), 60 秒后重新提交 (第 $i/3 次) ——"
+    sleep 60
+    wait_notary_credentials
+    out=$(xcrun notarytool submit "$target" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1) || true
+  done
   echo "$out"
   sub_id=$(echo "$out" | awk '/^ *id:/{print $2; exit}')
   status=$(echo "$out" | awk -F': ' '/^ *status:/{s=$2} END{print s}')
@@ -586,7 +596,13 @@ staple_with_retry() {
     echo "     xcrun stapler staple \"$target\" && xcrun stapler validate \"$target\"" >&2
     exit 1
   fi
-  xcrun stapler validate "$target"
+  # staple 自己已经验过一次; 这里再验是去 Apple 查一遍, 网络抖 (TLS -1200, Error 68) 会误报 —— 重试
+  for i in 1 2 3; do
+    xcrun stapler validate "$target" && return 0
+    sleep 20
+  done
+  echo "❌ $target 钉好了票据, 但复核连续 3 次失败 (多半是连 Apple 的网络问题), 稍后手动: xcrun stapler validate \"$target\"" >&2
+  exit 1
 }
 
 echo "=== 签名 App ==="
