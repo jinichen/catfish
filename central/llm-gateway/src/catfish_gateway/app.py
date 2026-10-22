@@ -386,6 +386,10 @@ _UPSTREAM_ERROR_AS_CONTENT_PATTERNS = (
     "retries exhausted",
     "An error occurred during streaming",
     "Max retries (3) exhausted",
+    # 10/22: hermes v0.22 的重试用尽模板是 "<label> didn't answer after 3 attempts … Provider said:",
+    # 上面几条一条都对不上; 员工机上 P62 (plugin_failure_copy_zh.py) 又把它换成了中文开头。两种都认。
+    "didn't answer after",
+    "这次没能从模型拿到回复",
 )
 
 def _extract_content_text(response_dict: dict) -> str:

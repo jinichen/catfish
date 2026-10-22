@@ -515,7 +515,7 @@ def _raise_upstream_error(
             "error": "upstream error",
             "error_type": err_type,
             "message": err_msg[:300],
-            "friendly": _friendly_upstream_error(err_msg),
+            "friendly": _friendly_upstream_error(err_msg, model=model_name),
             "model": model_name,
             "latency_ms": round(latency_ms, 1),
         },

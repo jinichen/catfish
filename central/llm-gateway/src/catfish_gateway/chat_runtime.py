@@ -476,7 +476,7 @@ async def _stream_chat_completion(
                 f" · {_reset}" if _reset else "",
             )
         # 给客户端一个 friendly 错误 —— 把内部 trace 简化成人话
-        friendly = _friendly_upstream_error(err)
+        friendly = _friendly_upstream_error(err, model=getattr(model, "name", None))
         # BL-FIX-TIMEOUT-OUTPUTS (5/13 鸿波"做不出文档"): 上游 LLM 卡 / timeout
         # 时, 副手实际可能已经写过文件 (execute_code 早跑了), 列最近 ~/.catfish/output/  # noqa: BOUNDARY
         # 文件给员工看, 别让他以为"做不出来"实际"已经做了".

@@ -94,7 +94,38 @@ def localize_reset_hint(raw: str, now: _dt.datetime | None = None) -> str | None
     return f"配额 {local:%m-%d %H:%M} 应已恢复 (本地时间) —— 若仍报错就是别的原因"
 
 
-def friendly_upstream_error(raw: str) -> str:
+# 上游拒绝 key 的各种说法。10/22 现场: 内网 vLLM 回的是中文「Authorization 无效」, 外面还套着
+# litellm 的 BadGatewayError —— 原来哪条都没命中, 员工看到的是原样英文 + 中文乱码。
+_AUTH_REJECT_WORDS = ("鉴权失败", "认证失败", "令牌无效", "无效的令牌", "密钥无效", "无效的密钥",
+                      "key 无效", "key无效", "apikey 无效", "无权访问")
+_AUTH_HEADER_BAD = ("无效", "失败", "过期", "invalid", "failed", "expired", "denied", "missing")
+
+
+def _is_upstream_auth_reject(raw: str, low: str) -> bool:
+    if " 401" in f" {low} " or "unauthorized" in low or "invalid api key" in low or "incorrect api key" in low:
+        return True
+    if "invalid_api_key" in low or "authenticationerror" in low:
+        return True
+    if "provider authentication failed" in low or "check the configured credentials" in low:
+        return True
+    if "authorization" in low and any(w in low for w in _AUTH_HEADER_BAD):
+        return True
+    return any(w in low for w in _AUTH_REJECT_WORDS)
+
+
+def _auth_reject_message(model: str | None) -> str:
+    """⚠ 不能出现 hermes 认作「鉴权失败」的英文词 (invalid api key / unauthorized / authentication
+    / forbidden / invalid token ...; agent/error_classifier.py _AUTH_PATTERNS)。那样 hermes 会以为是
+    **员工自己到网关的令牌**坏了, 去刷新 / 轮换它、或叫员工重新登录 —— 而真正错的是中央配的
+    供应商 key。8/1 起 key 在门户界面上填, 不再改 .env。"""
+    which = f" (模型 {model})" if model else ""
+    return (
+        f"模型服务拒绝了中央配置的 API key{which} —— 不是员工这边的问题。"
+        "管理员到门户「控制台 → 接入 → 供应商」, 核对这个模型所用供应商的 key (填错 / 过期 / 没填), 保存后立即生效"
+    )
+
+
+def friendly_upstream_error(raw: str, model: str | None = None) -> str:
     """把 LiteLLM / OpenAI / Google 的 trace 转人话, 截断在 200 字符以内.
 
     覆盖 catfish 真实撞过的全部错误类别 (2026-04-27/28 调试时积累):
@@ -161,13 +192,10 @@ def friendly_upstream_error(raw: str) -> str:
         return f"{base}\n{hint}" if hint else base
     if " 429" in f" {low} " or "rate limit" in low or "ratelimit" in low or "too many requests" in low:
         return "调用频率超限 (429) — 等几秒再试 / 换个模型"
-    if " 401" in f" {low} " or "unauthorized" in low or "invalid api key" in low or "incorrect api key" in low:
-        return "API Key 无效 (401) — 检查 .env 的 key 是否过期 / 写错"
-    # BL-PROVIDER-AUTH-CN (7/18 鸿波 catch WeChat 显英文): litellm 新版返
-    # "Provider authentication failed. Check the configured credentials; raw provider
-    # details are in the gateway logs." 兜底路径直接返英文, 员工看不懂. 加中文匹配.
-    if "provider authentication failed" in low or "check the configured credentials" in low:
-        return "上游 LLM Provider 鉴权挂了 — 检查 .env 里 DEEPSEEK_API_KEY / DASHSCOPE_API_KEY / GEMINI_API_KEY 是否配 / 过期. 查 gateway log 详情."
+    # 401 / litellm "Provider authentication failed" (BL-PROVIDER-AUTH-CN 7/18) / 中文「Authorization 无效」
+    # (10/22) 都归这一条。要排在 5xx 前面: 现场那条外面套的是 BadGatewayError。
+    if _is_upstream_auth_reject(raw, low):
+        return _auth_reject_message(model)
     # BL-PROVIDER-RETRIES-CN (7/19 鸿波 catch WeChat 显英文 · LiteLLM 兜底串):
     # "The model provider failed after retries. I kept raw provider details out of chat;
     # check gateway logs for diagnostics." 触发场景 · gateway 用 LiteLLM 调上游 · 连
@@ -194,7 +222,7 @@ def friendly_upstream_error(raw: str) -> str:
         return "请求格式错 (400) — 模型名 / 参数 / 工具 schema 有一个不对"
 
     # ===== 5xx 上游服务器错误 =====
-    if " 502" in f" {low} " or "bad gateway" in low:
+    if " 502" in f" {low} " or "bad gateway" in low or "badgatewayerror" in low:
         return "上游网关异常 (502) — 内网 LLM endpoint 可能 UUID 失效, 联系平台管理员或切换模型"
     if " 504" in f" {low} " or "gateway timeout" in low:
         return "上游网关超时 (504) — 上游慢, 稍后再试 / 换模型"

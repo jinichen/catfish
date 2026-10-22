@@ -50,8 +50,7 @@ class TestHttp4xx:
     def test_401_unauthorized(self) -> None:
         raw = "openai.AuthenticationError: Error code: 401 - Incorrect API key provided"
         msg = _friendly_upstream_error(raw)
-        assert "401" in msg
-        assert "Key" in msg or "key" in msg
+        assert "API key" in msg and "供应商" in msg
 
     def test_401_invalid_api_key_phrasing(self) -> None:
         raw = "Invalid API Key for upstream"
@@ -312,3 +311,50 @@ def test_不误伤其它_400():
 def test_只取上界_不被下界带偏():
     out = _friendly_upstream_error("Range of max_tokens should be [1, 4096]")
     assert "4096" in out and "≤ 4096" in out
+
+
+class TestUpstreamAuthReject:
+    """10/22 Win11 现场: 中央新装后供应商 key 填错, 员工聊天框只有英文 + 乱码, 翻日志才看到
+    「Authorization 无效」。这条要直接说清: 是中央配的 key 被拒了、哪个模型、去哪改。"""
+
+    RAW_1022 = "litellm.BadGatewayError: BadGatewayError: OpenAIException - Authorization 无效"
+
+    def test_1022_sample_is_auth_not_502(self) -> None:
+        msg = _friendly_upstream_error(self.RAW_1022, model="catfish-private-vision")
+        assert "API key" in msg and "catfish-private-vision" in msg
+        assert "控制台 → 接入 → 供应商" in msg
+        assert "502" not in msg and ".env" not in msg
+
+    @pytest.mark.parametrize("raw", [
+        "Error code: 401 - {'error': 'unauthorized'}",
+        "litellm.AuthenticationError: invalid_api_key",
+        "Provider authentication failed. Check the configured credentials",
+        "上游返回: 鉴权失败, 请检查 apikey",
+        "OpenAIException - 认证失败",
+        "Authorization header missing",
+    ])
+    def test_other_phrasings(self, raw: str) -> None:
+        assert "控制台 → 接入 → 供应商" in _friendly_upstream_error(raw)
+
+    def test_no_model_still_reads(self) -> None:
+        assert "模型 " not in _friendly_upstream_error(self.RAW_1022)
+
+    def test_bad_gateway_without_auth_words_stays_502(self) -> None:
+        assert "502" in _friendly_upstream_error("litellm.BadGatewayError: BadGatewayError: upstream unreachable")
+
+    def test_hermes_does_not_read_it_as_employee_auth_failure(self) -> None:
+        """hermes 看到 invalid api key / unauthorized / authentication 这类词会当成员工自己的令牌坏了,
+        去刷新/轮换或叫员工重登。这句话必须躲开 hermes 的鉴权判据。"""
+        import sys
+        from pathlib import Path
+        hermes = Path.home() / ".hermes" / "hermes-agent"
+        if not (hermes / "agent" / "error_classifier.py").is_file():
+            pytest.skip("本机没有 hermes 源码")
+        sys.path.insert(0, str(hermes))
+        try:
+            from agent.error_classifier import _AUTH_PATTERNS  # type: ignore[import-not-found]
+        except Exception as e:  # noqa: BLE001
+            pytest.skip(f"hermes 判据导入失败: {e}")
+        msg = _friendly_upstream_error(self.RAW_1022, model="catfish-private-vision").lower()
+        hits = [p for p in _AUTH_PATTERNS if p in msg]
+        assert not hits, f"员工会被当成自己令牌失效: {hits}"
