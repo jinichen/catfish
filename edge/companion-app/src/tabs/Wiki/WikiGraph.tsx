@@ -36,6 +36,7 @@ import {
   GRAPH_NEIGHBOR_STEP,
   limitWikiGraphPaths,
   type WikiGraphModel,
+  WIKI_BODY_MENTION,
 } from "./wikiGraphModel";
 
 // E5: brand 一致 3 色 (tokens.css 没暴露 hex 给 JS, 这里 mirror).
@@ -268,18 +269,19 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
       const edgeKey = `${relation.sourcePath}→${relation.targetPath}`;
       if (g.hasEdge(edgeKey)) continue;
       const isFocusEdge = relation.sourcePath === focusPath || relation.targetPath === focusPath;
+      // 10/23: 正文提及 (不是关系) 画得又细又淡, 真关系才是实线
+      const isMention = relation.relation === WIKI_BODY_MENTION;
+      const edgeColor = isMention
+        ? isFocusEdge ? "rgba(26, 138, 149, 0.28)" : "rgba(150, 160, 162, 0.08)"
+        : isFocusEdge
+          ? "rgba(26, 138, 149, 0.78)"
+          : effectiveMode === "full"
+            ? "rgba(150, 160, 162, 0.16)"
+            : "rgba(120, 120, 120, 0.44)";
       g.addEdgeWithKey(edgeKey, relation.sourcePath, relation.targetPath, {
-        size: isFocusEdge ? 1.8 : effectiveMode === "full" ? 0.7 : 1,
-        color: isFocusEdge
-          ? "rgba(26, 138, 149, 0.78)"
-          : effectiveMode === "full"
-            ? "rgba(150, 160, 162, 0.16)"
-            : "rgba(120, 120, 120, 0.44)",
-        baseColor: isFocusEdge
-          ? "rgba(26, 138, 149, 0.78)"
-          : effectiveMode === "full"
-            ? "rgba(150, 160, 162, 0.16)"
-            : "rgba(120, 120, 120, 0.44)",
+        size: isMention ? 0.5 : isFocusEdge ? 1.8 : effectiveMode === "full" ? 0.7 : 1,
+        color: edgeColor,
+        baseColor: edgeColor,
         rel: relation.relation,
       });
     }

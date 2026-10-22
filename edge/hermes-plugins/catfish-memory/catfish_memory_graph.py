@@ -24,6 +24,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 _UNTYPED = "关联"
+#: 10/23: Companion 把正文 [[链接]] 记成「提及」(commands/wiki_graph.rs BODY_MENTION), 不是关系
+_MENTION = "提及"
 _MAX_NODES = 3
 _MAX_EDGES_PER_NODE = 10
 _MAX_NAMES = 8
@@ -94,12 +96,16 @@ class _Graph:
             groups.setdefault(("sym" if r in _SYMMETRIC else "in", r), []).append(self.title.get(other, other))
         lines: List[str] = []
         untyped = None
+        mentioned = None
         for (direction, r), names in groups.items():
             names = list(dict.fromkeys(n for n in names if n != me))  # 去重 (对称关系两头都记了)
             if not names:
                 continue
             shown = "、".join(names[:_MAX_NAMES]) + (f" 等 {len(names)} 个" if len(names) > _MAX_NAMES else "")
-            if r == _UNTYPED:
+            if r == _MENTION:
+                # 正文 [[链接]]: 不是关系, 只说明正文里提到了 (两个方向合在一起)
+                mentioned = (mentioned or []) + names
+            elif r == _UNTYPED:
                 untyped = f"  - 相关 (未标关系类型): {shown}"
             elif direction == "in":
                 lines.append(f"  - {r} {me} 的: {shown}")
@@ -107,6 +113,10 @@ class _Graph:
                 lines.append(f"  - {me} {r}: {shown}")
         if untyped and len(lines) < _MAX_EDGES_PER_NODE:
             lines.append(untyped)
+        if mentioned and len(lines) < _MAX_EDGES_PER_NODE:
+            names = list(dict.fromkeys(mentioned))
+            shown = "、".join(names[:_MAX_NAMES]) + (f" 等 {len(names)} 个" if len(names) > _MAX_NAMES else "")
+            lines.append(f"  - 正文里提到 (不是关系): {shown}")
         return lines[:_MAX_EDGES_PER_NODE]
 
 

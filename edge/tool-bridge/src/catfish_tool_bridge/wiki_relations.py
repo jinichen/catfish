@@ -48,7 +48,7 @@ def relations_of(home: Path, rel_path: str) -> Optional[dict[str, Any]]:
     finally:
         con.close()
     return {
-        "reading": "out: 本条目 rel target; in: source rel 本条目。rel=关联 表示还没标类型",
+        "reading": "out: 本条目 rel target; in: source rel 本条目。rel=关联 表示还没标类型; rel=提及 只是正文里提到, 不是关系",
         "out": [{"rel": r, "target": t, "rel_path": p} for r, t, p in out],
         "in": [{"rel": r, "source": t, "rel_path": p} for r, t, p in inc],
         "untyped": sum(1 for r, *_ in out + inc if r == _UNTYPED),

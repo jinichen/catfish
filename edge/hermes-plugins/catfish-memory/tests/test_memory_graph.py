@@ -49,3 +49,12 @@ def test_没点名_没图库_都不出(tmp_path):
     _setup(tmp_path)
     assert render_graph(tmp_path, "今天先做什么") == ""
     assert render_graph(tmp_path, "") == ""
+
+
+def test_正文提及单独一行_不算关系(tmp_path):
+    _db(tmp_path, [(CO, "中电福富信息科技有限公司", ["中电福富"]), (CMMI, "CMMI-5", []), (ZD, "金智达", [])],
+        [(CO, CMMI, "持有"), (CMMI, CO, "提及"), (ZD, CO, "提及")])
+    out = render_graph(tmp_path, "中电福富")
+    assert "中电福富信息科技有限公司 持有: CMMI-5" in out
+    assert "正文里提到 (不是关系): CMMI-5、金智达" in out
+    assert "未标关系类型" not in out

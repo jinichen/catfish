@@ -5,6 +5,9 @@ import { resolveWikiRefOrNull } from "../../lib/wikiResolve";
 export const DEFAULT_GRAPH_NEIGHBOR_LIMIT = 8;
 export const GRAPH_NEIGHBOR_STEP = 6;
 
+/** 正文 [[链接]] 在图里的关系名 —— 画得更淡, 不算真关系 */
+export const WIKI_BODY_MENTION = "提及";
+
 export interface WikiGraphRelation {
   sourcePath: string;
   targetPath: string;
@@ -40,7 +43,8 @@ export function buildWikiGraphModel(files: WikiFileInfo[]): WikiGraphModel {
       const relation: WikiGraphRelation = {
         sourcePath: file.rel_path,
         targetPath: target.rel_path,
-        relation: related.rel?.trim() || "关联",
+        // 10/23: 正文里的 [[链接]] 是「提及」(跳转用), 不是关系; 跟 Rust wiki_graph.rs BODY_MENTION 一致
+        relation: related.source === "body" ? WIKI_BODY_MENTION : related.rel?.trim() || "关联",
       };
       relations.push(relation);
       appendRelation(outgoingByPath, relation.sourcePath, relation);

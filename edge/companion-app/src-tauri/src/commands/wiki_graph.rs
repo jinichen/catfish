@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::wiki_read::{build_file_info, catfish_home, collect_all_wiki_md, WikiFileInfo};
+use super::wiki_read::{build_file_info, catfish_home, collect_all_wiki_md, RelatedRef, WikiFileInfo};
 
 const GRAPH_DB_NAME: &str = "wiki_graph.db";
 const GRAPH_SCORE_WEIGHT: f64 = 0.75;
@@ -89,7 +89,7 @@ fn load_graph_files(home: &Path) -> Result<Vec<GraphFile>, String> {
         }
         let aliases_json = serde_json::to_string(&info.aliases).map_err(|error| error.to_string())?;
         files.push(GraphFile {
-            relation_hash: digest_json(&info.related),
+            relation_hash: relation_hash_of(&info.related),
             content_hash: digest_bytes(&bytes),
             info,
             aliases_json,
@@ -258,6 +258,17 @@ fn node_relation_changed(file: &GraphFile, stored: Option<&StoredNode>) -> bool 
     stored.is_none_or(|node| node.relation_hash != file.relation_hash)
 }
 
+/// 边的生成规则版本。10/23: 正文里的 [[链接]] 记成「提及」, 不再记成「关联」——
+/// 知识库页本来就写着正文引用「只用于跳转，不算关系」, 图库却把 278 条正文链接当成没标类型的关系,
+/// 关系图一片灰线, 主聊天也拿到一堆「相关」。frontmatter 里真写了「关联」的照旧是「关联」。
+/// 规则版本算进 relation_hash: 规则一改, 升级后第一次同步把全部边重建一遍 (增量同步只重建 hash 变了的)。
+const EDGE_RULES: &str = "v2-body-link-is-mention";
+pub(crate) const BODY_MENTION: &str = "提及";
+
+fn relation_hash_of(related: &[RelatedRef]) -> String {
+    digest_json(&(EDGE_RULES, related))
+}
+
 fn sync_source_edges(
     transaction: &rusqlite::Transaction<'_>,
     file: &GraphFile,
@@ -299,7 +310,11 @@ fn sync_source_edges(
                 params![
                     file.info.rel_path,
                     target_path,
-                    related.rel.as_deref().unwrap_or("关联"),
+                    if related.source.as_deref() == Some("body") {
+                        BODY_MENTION
+                    } else {
+                        related.rel.as_deref().unwrap_or("关联")
+                    },
                     related.name
                 ],
             )
@@ -634,9 +649,28 @@ mod tests {
         GraphFile {
             aliases_json: serde_json::to_string(&info.aliases).unwrap(),
             content_hash: digest_bytes(title.as_bytes()),
-            relation_hash: digest_json(&info.related),
+            relation_hash: relation_hash_of(&info.related),
             info,
         }
+    }
+
+    #[test]
+    fn 规则升级后旧的正文链接边重建成提及() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        let home = tempdir().unwrap();
+        fs::create_dir_all(home.path().join("wiki/entities")).unwrap();
+        fs::write(home.path().join("wiki/entities/a.md"), "# A\n\nRelated: [[B]]").unwrap();
+        fs::write(home.path().join("wiki/entities/b.md"), "# B").unwrap();
+        sync_graph_in(&mut conn, home.path()).unwrap();
+        // 模拟老版本留下的库: 边是「关联」, hash 是旧算法算的
+        conn.execute("UPDATE wiki_graph_edge SET relation_type = '关联'", []).unwrap();
+        conn.execute("UPDATE wiki_graph_node SET relation_hash = 'old'", []).unwrap();
+        sync_graph_in(&mut conn, home.path()).unwrap();
+        let relation: String = conn
+            .query_row("SELECT relation_type FROM wiki_graph_edge", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(relation, BODY_MENTION);
     }
 
     #[test]
@@ -657,7 +691,8 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(relation, "关联");
+        // 10/23: 正文里的 [[B]] 是「提及」, 不是关系
+        assert_eq!(relation, BODY_MENTION);
         let status = read_status(&conn).unwrap();
         assert_eq!(status.node_count, 2);
         assert_eq!(status.edge_count, 1);
