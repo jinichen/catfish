@@ -2293,6 +2293,24 @@ button {
 }
 .wiki-relations__suggest button:disabled { opacity: 0.5; cursor: default; }
 .wiki-relations__suggest-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+/* 10/23: 「没标类型」批量整理表 */
+.wiki-untyped__bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.wiki-untyped__notice { margin: 0 0 8px; color: var(--catfish-cyan); font-size: 13px; }
+.wiki-untyped__table { display: grid; gap: 2px; max-height: 60vh; overflow-y: auto; }
+.wiki-untyped__row {
+  display: grid; grid-template-columns: 20px minmax(0, 1.3fr) minmax(0, 1.6fr) auto; gap: 10px;
+  align-items: start; padding: 8px 4px; border-bottom: 1px solid color-mix(in srgb, var(--catfish-text-muted) 18%, transparent); font-size: 13px;
+}
+.wiki-untyped__pair { overflow-wrap: anywhere; }
+.wiki-untyped__suggest { display: grid; gap: 2px; }
+.wiki-untyped__suggest b { color: var(--catfish-cyan); font-weight: 600; }
+.wiki-untyped__suggest small { color: var(--catfish-text-muted); font-size: 12px; line-height: 1.4; }
+.wiki-untyped__actions { display: flex; gap: 6px; }
+.wiki-untyped__actions button {
+  padding: 2px 8px; border: 1px solid color-mix(in srgb, var(--catfish-text-muted) 40%, transparent); border-radius: 6px;
+  background: transparent; color: inherit; font-size: 12px; cursor: pointer;
+}
+.wiki-untyped__actions button:disabled { opacity: 0.5; cursor: default; }
 .wiki-relations__add {
   display: grid;
   grid-template-columns: 120px minmax(0, 1fr) auto auto;

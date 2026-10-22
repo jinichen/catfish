@@ -15,6 +15,8 @@ import { buildWikiRelationshipTasks, conflictFieldLabel, markReviewedContent, st
 import WikiActionPanel from "./WikiActionPanel";
 import WikiAmbiguousPanel from "./WikiAmbiguousPanel";
 import WikiRelationsEditor from "./WikiRelationsEditor";
+import WikiUntypedBatch from "./WikiUntypedBatch";
+import { useKeptUntyped } from "../../lib/wikiUntypedKept";
 
 function evidenceExcerpt(body: string): string {
   return body
@@ -29,7 +31,7 @@ const HEADER_HINT: Record<string, string> = {
   conflict: "小鲶后来读到的跟现在记的不一样，选一个。",
   pending: "小鲶新建的条目。看一眼关系对不对，对就确认；关系可以没有。",
   broken: "有一条关系要改：改类型或删掉。",
-  untyped: "这些关系只写了「关联」，说不清是什么关系。可以让小鲶先建议类型，你看过采纳才写入。",
+  untyped: "这些关系只写了「关联」，说不清是什么关系。让小鲶一次建议，看过再采纳；拿不准的点「保持关联」，以后不再列。不点就不写入。",
   stale: "这条记着进度，但很久没更新了。核对正文里的进度还对不对。",
   duplicate: "名称相近的条目需要人工核对，避免错误合并。",
 };
@@ -51,11 +53,12 @@ export default function WikiRelationshipWorkbench({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  const tasks = useMemo(() => buildWikiRelationshipTasks(files), [files]);
+  const keptUntyped = useKeptUntyped();
+  const tasks = useMemo(() => buildWikiRelationshipTasks(files, new Date(), keptUntyped), [files, keptUntyped]);
   const selectedTask = useMemo(
     () => tasks.find((task) => task.id === taskId)
       ?? tasks.find((task) =>
-        task.kind !== "ambiguous" &&
+        task.kind !== "ambiguous" && task.kind !== "untyped" &&
         (task.file.rel_path === selectedFile?.info.rel_path ||
           task.duplicatePaths?.includes(selectedFile?.info.rel_path ?? ""))),
     [selectedFile?.info.rel_path, taskId, tasks],
@@ -71,6 +74,17 @@ export default function WikiRelationshipWorkbench({
           <p>同一个名字被几个条目占着，写了这个名字的关系都连不上。</p>
         </header>
         <WikiAmbiguousPanel key={selectedTask.id} task={selectedTask} onLater={onLater} />
+      </div>
+    );
+  }
+  if (selectedTask?.kind === "untyped") {
+    return (
+      <div className="wiki-workbench">
+        <header className="wiki-workbench__header">
+          <h2>{selectedTask.title}</h2>
+          <p>{HEADER_HINT.untyped}</p>
+        </header>
+        <WikiUntypedBatch task={selectedTask} />
       </div>
     );
   }

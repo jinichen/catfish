@@ -19,6 +19,7 @@ import {
   type WikiRelationMigrationResult,
 } from "../../lib/tauri_wiki";
 import WikiTree from "./WikiTree";
+import { useKeptUntyped } from "../../lib/wikiUntypedKept";
 import {
   buildConfirmedWikiContent,
   buildWikiRelationshipTasks,
@@ -68,7 +69,8 @@ export default function WikiOrganizer({
     if (files.length === 0 && !filesLoading) void loadFiles();
   }, [files.length, filesLoading, loadFiles]);
 
-  const tasks = useMemo(() => buildWikiRelationshipTasks(files), [files]);
+  const keptUntyped = useKeptUntyped();
+  const tasks = useMemo(() => buildWikiRelationshipTasks(files, new Date(), keptUntyped), [files, keptUntyped]);
   const hasLegacyRelations = useMemo(() => hasLegacyWikiRelations(files), [files]);
   const counts = useMemo(() => {
     const out: Record<WikiRelationshipTaskKind, number> = { conflict: 0, ambiguous: 0, pending: 0, broken: 0, untyped: 0, stale: 0, duplicate: 0 };
