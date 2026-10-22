@@ -14,43 +14,27 @@ from typing import Any, Dict, List
 
 
 MEMORY_TOOLS: List[Dict[str, Any]] = [
+    # 5/16 V3 (BL-MEMORY-FULL-HERMES): 默认记忆走 hermes memory tool, 本工具降为 edge case。
+    # 经验比例: 100 个 chat 里 catfish_remember < 10 次, memory.add > 30 次; 反过来就是判断错了。
     {
         "name": "catfish_remember",
         "description": (
-            "⚠️ **edge case 工具**, 跨 session **必失忆**. 绝大多数情况用 `memory(action='add', ...)`, "
-            "**不**用本工具.\n\n"
-            "5/16 V3 (鸿波拍板 BL-MEMORY-FULL-HERMES): **默认用 memory**. catfish_remember 是 "
-            "**罕见 edge case**, 只在 3 种场景:\n"
-            "  1. 员工**明说**'只本 session 内' → catfish_remember\n"
-            "  2. 当下操作凭据 (本 session 5 轮内反复用, 不该跨 session 持久):\n"
-            "     - 'EIS 密码 ref 是 keychain://eis_x' (操作完不该长期记)\n"
-            "     - '本次教学 step 3 暂停' (教学完不该长期记)\n"
-            "  3. 员工纠正你的 in-session 误解: 'tool-bridge 死了不是我请求错'\n\n"
-            "**任何**其它'记下 / 记一下 / 帮我记' → memory(action='add', ...), **不**用本工具:\n"
-            "  - 员工说 '记下要给徐舒淇单页' → memory (task 跨 session)\n"
-            "  - 员工说 '我领导张总很严' → memory (人物长期)\n"
-            "  - 员工说 '我老婆叫小芳' → memory\n"
-            "  - 员工说 '我习惯列表型公文' → memory\n"
-            "  - 员工说 '我们 4/29 拍板投资策略' → memory\n"
-            "  - 你不确定 → **memory** (永久不丢比临时丢强, 保险)\n\n"
-            "❌ 任何工具都不该记的:\n"
-            "  - 情绪/客套 ('好烦' / '辛苦') → 不是事实\n"
-            "  - 推测的 → 必须是员工**明确**说的硬事实\n"
-            "  - 红线 (健康 / 财务 / 感情 / 政治) → 永不记\n\n"
-            "key: snake_case 1-100 字符. value: 1-1000 字符.\n"
-            "**比例自检**: 你 100 个 chat 应该 catfish_remember < 10, memory.add > 30. "
-            "反过来你判断错了."
+            "仅本次对话内有效的临时记事, 跨 session 会丢。"
+            "员工让你记东西时默认用 memory(action='add', ...), 拿不准也用 memory。"
+            "只在三种情况用本工具: 员工明说只在本次对话内记; 本次操作中反复要用的临时凭据引用或进度; "
+            "纠正你在本次对话里的误解。"
+            "情绪客套、你的推测、健康/财务/感情/政治等红线信息一律不记。"
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "key": {
                     "type": "string",
-                    "description": "事实的 key, snake_case, 1-100 字符",
+                    "description": "snake_case, 1-100 字符",
                 },
                 "value": {
                     "type": "string",
-                    "description": "事实的 value, 1-1000 字符",
+                    "description": "1-1000 字符",
                 },
             },
             "required": ["key", "value"],
@@ -63,15 +47,10 @@ MEMORY_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_user_profile_get",
         "description": (
-            "★ 读员工长期画像 (writing_style / work_pattern / personality 等). "
-            "**跨 session 持久**, 跟 catfish_remember 不同 — 那个是 session 内硬事实.\n\n"
-            "✅ 调用时机: chat 开始时调一次 (拿当前画像注入对话风格), 或员工问 "
-            "'你怎么看我' / '你了解我吗' 时.\n\n"
-            "返回字段含 evidence_count / locked / proposed_value, 帮你判断:\n"
-            "  - locked=true: 员工锁了, 不能 propose 改\n"
-            "  - proposed_value 非空: 员工还没 confirm, 别拿这个值当真\n"
-            "  - evidence_count: 越大越可信\n\n"
-            "❌ 别在每次回复都调 — chat 开始 1 次就够, 后续从 system prompt 拿."
+            "读员工跨 session 的长期画像 (writing_style / work_pattern / personality)。"
+            "对话开始时调一次, 或员工问'你了解我吗'时调; 别每轮都调。"
+            "locked=true 表示员工锁定, 不能再 propose; proposed_value 非空表示员工还没确认, 别当真; "
+            "evidence_count 越大越可信。"
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
         "emoji": "👤",
@@ -81,36 +60,24 @@ MEMORY_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_user_profile_propose",
         "description": (
-            "★ 看到员工言行能推断出 trait 时, 调这个累积 evidence (不立即写)\n"
-            "**累积 ≥ 3 次同 value 的独立 evidence** 后, 工具会返 'should_confirm', "
-            "你才该跟员工自然语言确认 ('我感觉你写汇报偏直接, 对吗?'); 员工说同意, "
-            "你才调 catfish_user_profile_confirm 落盘.\n\n"
-            "✅ 允许的 field (枚举 value):\n"
-            "  - writing_style.tone: formal / casual / 直接 / 委婉 / 幽默\n"
-            "  - writing_style.length_pref: 短 / 中 / 长\n"
-            "  - writing_style.bullet_pref: 列表 / 段落 / 混合\n"
-            "  - work_pattern.peak_hours: 自由文本 (例 '9-12 / 14-18')\n"
-            "  - work_pattern.task_pref: 列清单 / 看图表 / 纯文字 / 对照表\n"
-            "  - work_pattern.review_pref: 先看摘要 / 全量看 / 只看异常\n"
-            "  - personality.pace: 急 / 缓\n"
-            "  - personality.feedback_style: 大点拨 / 细节确认 / 结果导向\n"
-            "  - personality.deference: 平等 / 尊重正式 / 随意\n\n"
-            "❌ 红线字段 (严禁 propose, 员工自己 confirm 才能存):\n"
-            "  - personal.health / .financial / .relationship / .political / .religious / .family\n\n"
-            "❌ 不该调用:\n"
-            "  - 员工一次行为就推断 ('员工今天打字快 → personality.pace=急') — 太武断, 累 3 次再说\n"
-            "  - 编造 evidence — 必须 quote 真实对话片段\n"
-            "  - 评论员工生活 — 红线\n\n"
-            "频率: 每 session ≤ 1 次主动 propose (满阈值后), 防 spam."
+            "从员工言行推断出画像 trait 时累积一条 evidence, 不立即写入。"
+            "同值独立 evidence 满 3 次会返回 should_confirm, 你再用自然语言问员工, "
+            "员工同意后才调 catfish_user_profile_confirm。"
+            "单次行为别推断; evidence 须引用真实对话; 每 session 最多主动确认 1 次。\n"
+            "field=取值: writing_style.tone=formal/casual/直接/委婉/幽默, .length_pref=短/中/长, "
+            ".bullet_pref=列表/段落/混合; work_pattern.peak_hours=自由文本, "
+            ".task_pref=列清单/看图表/纯文字/对照表, .review_pref=先看摘要/全量看/只看异常; "
+            "personality.pace=急/缓, .feedback_style=大点拨/细节确认/结果导向, .deference=平等/尊重正式/随意。"
+            "严禁 propose personal.* (健康/财务/感情等)。"
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "field": {"type": "string", "description": "字段名, 例 'writing_style.tone'"},
-                "value": {"type": "string", "description": "推断的值"},
+                "field": {"type": "string", "description": "字段名, 如 'writing_style.tone'"},
+                "value": {"type": "string"},
                 "evidence": {
                     "type": "string",
-                    "description": "本次 evidence — quote 员工原话或具体对话上下文 (1-500 字)",
+                    "description": "员工原话或具体对话上下文, 1-500 字",
                 },
             },
             "required": ["field", "value", "evidence"],
@@ -122,21 +89,17 @@ MEMORY_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_user_profile_confirm",
         "description": (
-            "★ 把员工确认过的画像 trait 落盘. 两种触发:\n"
-            "  1. propose 后员工自然语言说同意 ('对', '是', '说得对'), 你调这个落盘\n"
-            "  2. 员工 Dashboard UserProfileCard 直接编辑 (UI 触发)\n\n"
-            "locked=true: 员工要求'锁住别再改' — 之后 propose 此字段会被拒\n"
-            "覆盖语义: 同 field 再 confirm 会覆盖, 旧值返在 previous_value\n\n"
-            "❌ 不该调用:\n"
-            "  - 员工没明确说同意 — 别假定 (silence ≠ consent)\n"
-            "  - 红线字段员工没显式说 — 别帮员工 confirm 健康/感情/政治/宗教等"
+            "把员工明确同意的画像 trait 落盘。触发: propose 后员工说'对/是的'; "
+            "或员工在 Dashboard 画像卡里直接编辑。"
+            "员工没明确同意不调 (沉默≠同意); 红线字段员工没亲口说, 不替他确认。"
+            "同 field 再确认会覆盖, 旧值返回在 previous_value。"
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "field": {"type": "string"},
                 "value": {"type": "string"},
-                "locked": {"type": "boolean", "description": "默认 false, true=锁住不再 propose"},
+                "locked": {"type": "boolean", "description": "默认 false; true=锁住, 之后拒绝 propose"},
             },
             "required": ["field", "value"],
         },
@@ -147,12 +110,8 @@ MEMORY_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_user_profile_clear",
         "description": (
-            "★ 清除画像. field 给值 = 清那一个; field 为空 = 清全部.\n\n"
-            "✅ 调用场景:\n"
-            "  - 员工说 '清掉你对我的所有印象' → clear({}) 全部清\n"
-            "  - 员工说 '别记我急性子那条' → clear({field: 'personality.pace'})\n\n"
-            "❌ 不该调用:\n"
-            "  - 自作主张 — 必须员工显式说"
+            "按员工明确要求清除画像: 给 field 只清该字段 (如 'personality.pace'), 不给则清全部。"
+            "员工没明说绝不自己清。"
         ),
         "input_schema": {
             "type": "object",
@@ -172,38 +131,25 @@ MEMORY_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_style_fingerprint_get",
         "description": (
-            "★ 读员工文书风格指纹 — 写汇报/周报/立项前调一次, 拿到风格描述\n"
-            "(平均句长 / 高频词 / 标点偏好 / 列表 vs 散文 / 样本句) 注入 system prompt,\n"
-            "让 LLM 模仿员工历史文档语气. 跟 user_profile 互补 (前者显式 trait, 这个隐式特征).\n\n"
-            "✅ 调用时机:\n"
-            "  - leadership-briefing / weekly-report / project-approval skill render 前\n"
-            "  - 员工说 '帮我按我习惯的风格写一份...' 时\n\n"
-            "❌ 别在 chat 普通问答时调 — 风格指纹是给写正式文档用的, 闲聊不需要.\n\n"
-            "返回 exists=false 表示员工还没生成过 fingerprint, 调 refresh 触发一次扫描."
+            "读员工文书风格指纹 (句长/高频词/标点/列表偏好/样本句), 用来模仿员工语气写正式文档。"
+            "写汇报/周报/立项材料前, 或员工说'按我的风格写'时调; 普通闲聊不调。"
+            "返回 exists=false 表示还没生成, 调 catfish_style_fingerprint_refresh。"
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
         "emoji": "✍️",
         "toolset": "catfish_native",
         "available": True,
     },
+    # 实现细节: 数据源是 local_search 索引 (~/.catfish/search.db), 范围 = Companion 「搜索范围」卡;
+    # 收 .md/.txt/.docx/.pdf/.pptx 中文占比够高的, 跳过 <200 字, 取 mtime 最新 500 篇;
+    # 时间衰减 30 天 1.0 / 90 天 0.5 / 180 天 0.25 / 更老 0.1。返回带 funnel 和 total_docs=0 时的 hint。
     {
         "name": "catfish_style_fingerprint_refresh",
         "description": (
-            "★ 从本地搜索索引重建文书风格指纹. 无参数.\n\n"
-            "数据源: local_search 索引 (~/.catfish/search.db) — 目录范围就是员工在\n"
-            "Companion '📂 搜索范围' 卡里配的那些, 不用也不能在这里另指目录.\n"
-            "收: .md/.txt/.docx/.pdf/.pptx 里中文占比够高的 (挡代码和英文技术文档).\n"
-            "约束: 跳过 < 200 字; 取 mtime 最新的 500 篇.\n"
-            "时间衰减: 30 天内权重 1.0, 90 天 0.5, 180 天 0.25, 更老 0.1.\n\n"
-            "✅ 调用时机:\n"
-            "  - 员工说 '更新一下你对我写作风格的认识'\n"
-            "  - 员工写完一份新汇报后, 主动 refresh (10-20 个文档变化时)\n"
-            "  - 第一次启动 (员工 onboarding 时)\n\n"
-            "❌ 频率: 不要每次写文档前都 refresh — 文档没变前指纹一样, 白跑一趟.\n"
-            "    一周一次或员工显式要求时再调.\n\n"
-            "返回里带 funnel (索引里的文书类 → 太短 → 中文占比不足 → 最终留下) 和\n"
-            "total_docs=0 时的 hint. error='index_unavailable' 表示员工还没建过\n"
-            "本地索引 — 这时候别说'没找到文档', 要让他先去建索引."
+            "从本地搜索索引 (员工在 Companion 配的搜索范围) 重建文书风格指纹, 无参数。"
+            "员工要求更新对其写作风格的认识、首次 onboarding、或新增较多文档后调; "
+            "别每次写文档前都调。"
+            "返回 error='index_unavailable' 表示还没建本地索引, 要引导员工先建索引, 别说'没找到文档'。"
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
         "emoji": "🔄",
@@ -213,9 +159,7 @@ MEMORY_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_style_fingerprint_clear",
         "description": (
-            "★ 清掉文书风格指纹 (员工 reset 用).\n\n"
-            "✅ 员工说 '别用我的历史风格了' / '从零开始重新认识我的写作'.\n"
-            "❌ 自作主张别清."
+            "清除文书风格指纹。仅在员工明说'别用我的历史风格了/重新认识我的写作'时调, 别自作主张。"
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
         "emoji": "🗑️",
@@ -224,22 +168,16 @@ MEMORY_TOOLS: List[Dict[str, Any]] = [
     },
     # ============================================================
     # BL-MEMORY-DEDUPE-COMPRESS (5/17 凌晨, P2 #1+#2 lite 版)
+    # dedupe: jieba 分词 + Jaccard 相似度 (默认 ≥0.6) 判重, 返回 [{entries, suggested_merge, similarity}]。
+    # compress: limit 为 USER 1375 / MEMORY 2200 chars, >80% 时提议;
+    #   返回 {usage_pct, oldest_n_entries, suggested_summary, would_save_chars}。
     # ============================================================
     {
         "name": "catfish_memory_dedupe",
         "description": (
-            "扫描 hermes USER.md / MEMORY.md 找语义重复的 entry, 用 jieba 分词 + "
-            "Jaccard 相似度 ≥ 0.6 判定. 返**建议列表**给你 (LLM), 你跟员工确认后才"
-            "用 memory(action=remove) / memory(action=replace) 真改盘.\n\n"
-            "**何时调**:\n"
-            "- 设置 '我的 hermes memory' 卡显示 entries 数 ≥ 10 时主动调一次\n"
-            "- 员工说 '我的 memory 看着乱' / '帮我整理一下记忆' 时调\n"
-            "- audit 日志显示 chars 涨但实际信息没增多 (BL-MM1 narrate 嫌疑) 时\n\n"
-            "**输入**:\n"
-            "  target: 'user' | 'memory' (扫哪个文件, 不传扫两个)\n"
-            "  threshold: 0.0-1.0 (默认 0.6, 越高越严)\n\n"
-            "**输出**: list of {entries: [...], suggested_merge: '...', similarity: 0.x}\n\n"
-            "**绝不**: 自己删 / 自己 replace. 必须先回员工 review."
+            "扫描 hermes 记忆 (USER.md / MEMORY.md) 找语义重复条目, 返回合并建议, 本身不改盘。"
+            "员工说'帮我整理记忆/记忆看着乱', 或条目较多时调。"
+            "建议须先给员工确认, 再用 memory(action='remove'/'replace') 修改, 绝不自己删改。"
         ),
         "input_schema": {
             "type": "object",
@@ -247,12 +185,12 @@ MEMORY_TOOLS: List[Dict[str, Any]] = [
                 "target": {
                     "type": "string",
                     "enum": ["user", "memory", "both"],
-                    "description": "扫哪个 hermes memory 文件",
+                    "description": "扫哪个 hermes 记忆文件",
                     "default": "both",
                 },
                 "threshold": {
                     "type": "number",
-                    "description": "Jaccard 相似度阈值 (0.0-1.0). 默认 0.6.",
+                    "description": "相似度阈值 0.0-1.0, 越高越严",
                     "default": 0.6,
                 },
             },
@@ -265,17 +203,9 @@ MEMORY_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_memory_compress",
         "description": (
-            "扫描 hermes USER.md / MEMORY.md 看 chars 使用率, 如果 > 80% limit "
-            "(USER 1100/1375 或 MEMORY 1760/2200), 提议把**最老的 N 条**合并成"
-            "一条摘要 entry. 返建议给你 (LLM), 跟员工确认后才真改盘.\n\n"
-            "**何时调**:\n"
-            "- audit script 报警 chars 接近 limit 时\n"
-            "- 员工说 '记忆满了 / 记忆要爆 / 我的画像太多了' 时\n\n"
-            "**输入**:\n"
-            "  target: 'user' | 'memory' (压哪个文件)\n"
-            "  oldest_n: 最老的 N 条作为压缩候选 (默认 5)\n\n"
-            "**输出**: {usage_pct, oldest_n_entries, suggested_summary, would_save_chars}\n\n"
-            "**绝不**: 自己执行 add+remove 压缩, 必须先回员工 review summary 文本."
+            "检查 hermes 记忆文件用量, 超过上限 80% 时提议把最老的 N 条合并成一条摘要, "
+            "只返回建议, 本身不改盘。员工说'记忆满了/画像太多了'或用量告警时调。"
+            "摘要须先给员工确认, 绝不自己执行压缩。"
         ),
         "input_schema": {
             "type": "object",
@@ -283,11 +213,11 @@ MEMORY_TOOLS: List[Dict[str, Any]] = [
                 "target": {
                     "type": "string",
                     "enum": ["user", "memory"],
-                    "description": "压哪个 hermes memory 文件",
+                    "description": "压哪个 hermes 记忆文件",
                 },
                 "oldest_n": {
                     "type": "integer",
-                    "description": "选最老的 N 条压缩 (默认 5)",
+                    "description": "取最老的 N 条作压缩候选",
                     "default": 5,
                 },
             },
@@ -297,21 +227,23 @@ MEMORY_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # 数据源 ~/.catfish/decisions.jsonl, 第一版 substring 匹配。
     {
         "name": "catfish_recall_decision_history",
         "description": (
-            "按 topic + 可选 person/project 检索 ~/.catfish/decisions.jsonl 过往决策口径. "
-            "让现在的建议跟历史一致 (不背离). substring 匹配, 第一版."
+            "按主题 (可加相关人/项目) 检索员工过往拍板的决策口径。"
+            "员工问'之前怎么定的/上次对 X 的口径是什么', 或你给建议、起草回复涉及已有决定时先调, "
+            "让新建议跟历史决定一致、不自相矛盾。"
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "topic": {"type": "string", "description": "主题关键词 (必填)"},
-                "person": {"type": "string", "description": "(可选) 相关人"},
-                "project": {"type": "string", "description": "(可选) 相关项目"},
+                "topic": {"type": "string", "description": "主题关键词, 子串匹配"},
+                "person": {"type": "string"},
+                "project": {"type": "string"},
                 "limit": {
                     "type": "integer",
-                    "description": "最多返几条 (默认 5, 上限 50)",
+                    "description": "默认 5, 上限 50",
                     "default": 5,
                 },
             },
@@ -321,33 +253,29 @@ MEMORY_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # 台账 ~/.catfish/advisor_closed.jsonl, 跟卡片「完成」按钮共用。早安生成卡片时不读长期记忆和
+    # journal (只读本周邮件/日程/任务库 + 台账), 所以改 advisor_cache.json / distilled_facts.md /
+    # journal 关不掉卡, 删缓存反而让系统忘记关过。匹配: 同 uid、标题去括号后相同或互相包含、
+    # 或来源邮件主题 (去【提醒】/回复:/转发: 前缀) 相同。done/ignored 保留 30 天, snoozed 到明天 0 点。
     {
         "name": "catfish_advisor_close_task",
         "description": (
-            "把**早安卡片**上的一件事标记为已完成 / 不用管 / 今天先不看, 让它以后不再出现。"
-            "跟卡片底部「完成」按钮写的是同一份台账 (~/.catfish/advisor_closed.jsonl)。\n\n"
-            "**何时调**: 员工在聊天里说某张早安卡片的事「已经做完了 / 填好了 / 不用管 / "
-            "别再提醒」, 或问「这个不是已经完成了吗, 为什么又出来」并确认已完成时 —— "
-            "**直接调这个, 不要让员工自己去点按钮**。\n\n"
-            "**不要**为了关卡片去手改 advisor_cache.json、distilled_facts.md 或 journal: "
-            "早安生成卡片时**不读**长期记忆和 journal (只读本周邮件/日程/任务库 + 这份台账), "
-            "改那些地方卡片下次刷新还会出来; 删缓存里的卡反而会让系统忘记它关过。\n\n"
-            "匹配规则: 同 uid、标题去括号后相同或互相包含、或来源邮件主题 (去掉【提醒】/回复:/转发: "
-            "前缀) 相同, 都算同一件事 —— 同一封通知后续的催办、转发也不会再开卡。"
-            "done/ignored 保留 30 天, snoozed 到明天 0 点。返回 matched_card=null 时说明当前卡片里"
-            "没找到这条, 用 current_cards 里的准确标题再调一次。员工反悔用 reopen=true 撤销。"
+            "把早安卡片上的一件事标记为完成/不用管/今天先不看, 以后不再出现 (与卡片「完成」按钮同一份台账)。"
+            "员工在聊天里说某张卡片的事已做完/已填好/办完了/不用管/别再提醒时直接调, 别让员工自己去点按钮。"
+            "别为了关卡片去改记忆、journal 或缓存文件, 那样无效。"
+            "返回 matched_card=null 时, 用 current_cards 里的准确标题重试; 员工反悔用 reopen=true。"
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "title": {"type": "string", "description": "卡片标题 (或员工说的那件事, 尽量用卡片原标题)"},
+                "title": {"type": "string", "description": "卡片原标题 (或员工说的那件事)"},
                 "task_uid": {"type": "string", "description": "卡片 taskUid, 知道就填, 比标题准"},
                 "status": {
                     "type": "string", "enum": ["done", "ignored", "snoozed"], "default": "done",
-                    "description": "done=已完成; ignored=不用管/误报; snoozed=今天先不看, 明天照常",
+                    "description": "done=已完成; ignored=不用管/误报; snoozed=今天先不看",
                 },
                 "reopen": {"type": "boolean", "default": False, "description": "true=撤销之前的关闭"},
-                "note": {"type": "string", "description": "一句话依据, 如「员工确认已在腾讯文档J列填完」"},
+                "note": {"type": "string", "description": "一句话依据"},
             },
             "required": ["title"],
         },
@@ -355,49 +283,30 @@ MEMORY_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # 清理范围: ~/.catfish/distilled_facts.md (按行), employee_journal.md (按 `## ` 段),
+    # ~/.hermes/memories/*.md (按行), decisions.jsonl (按行), profile.json 的 keyPeople/keyProjects,
+    # advisor_cache.json (unlink 触发重算)。永不动 profile_hints.md / session_goal.txt / ~/.hermes/state.db。
+    # 真删前备份到 .forget_backup/<ts>/, 误删 24h 内可手工恢复。不留排除清单, 同名新人会从邮件/日历重新学。
     {
         "name": "catfish_forget_about",
         "description": (
-            "**跨源物理清除**特定关键词的记忆 (人/项目/客户/任何标识). 一次扫干净 5 类存储:\n"
-            "  - ~/.catfish/distilled_facts.md (按行删)\n"
-            "  - ~/.catfish/employee_journal.md (按 `## ` 段删整段)\n"
-            "  - ~/.hermes/memories/*.md (按行删)\n"
-            "  - ~/.catfish/decisions.jsonl (按行删 JSON)\n"
-            "  - ~/.catfish/profile.json 的 keyPeople / keyProjects (按字段删项)\n"
-            "  - ~/.catfish/advisor_cache.json (unlink, 触发 advisor 下次重算)\n\n"
-            "**何时调**:\n"
-            "  - 员工明说 '忘了老李' / '老李是测试数据, 清干净' / '把张三相关全删掉'\n"
-            "  - 员工纠正 '这条信息进错了, 别再蒸馏' 且涉及具体人/项目\n"
-            "  - 员工换岗后说 '之前 XX 项目的全清掉'\n\n"
-            "**何时不要调**:\n"
-            "  - 员工没明说 → 永远不主动清\n"
-            "  - 模糊请求 ('删点东西' / '清一下') → 反问到具体关键词\n"
-            "  - keyword < 2 字 → 拒 (误伤面太大)\n\n"
-            "**安全协议** (强制 2 步):\n"
-            "  1. **第一次**调一定 confirm=False (dry_run), 拿回 removed 计数报员工: "
-            "'扫到 distilled_facts 3 行, journal 12 段, decisions 0 条. 确认删?'\n"
-            "  2. 员工**明确**点头 ('确认' / '删' / '是的') → 再调一次 confirm=True 真删\n\n"
-            "**永远不动**: profile_hints.md (员工显式标的), session_goal.txt (太短), "
-            "~/.hermes/state.db (内容已抽到 journal, 清 journal 够).\n\n"
-            "**所有真删都带 .forget_backup/<ts>/ 备份**, 误删 24h 内可手工恢复.\n\n"
-            "**未来反弹**: 真清干净, 不留排除清单. 如果未来真有同名人 (新同事老李), "
-            "从邮件/日历重新学习, 自然进系统."
+            "跨所有记忆存储物理删除某关键词 (人/项目/客户) 的相关内容: 蒸馏事实、journal、hermes 记忆、"
+            "决策记录、画像里的关键人/项目, 并让早安缓存重算。"
+            "只在员工明说'忘了X/把X相关的全删掉'时调; 没明说绝不主动清, 请求模糊先追问具体关键词。"
+            "必须两步: 先 confirm=false 预演, 把各处命中数报给员工; 员工明确同意后再 confirm=true 真删 (自动备份)。"
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "keyword": {
                     "type": "string",
-                    "description": "要清的关键词 (人名/项目名/客户名/标识). 至少 2 字, 不超 100 字.",
+                    "description": "要清的人名/项目名/客户名, 2-100 字",
                     "minLength": 2,
                     "maxLength": 100,
                 },
                 "confirm": {
                     "type": "boolean",
-                    "description": (
-                        "True = 真删并备份. False (默认) = dry-run, 只统计不动文件. "
-                        "**默认先 False 报员工**, 员工点头后再 True."
-                    ),
+                    "description": "false(默认)=只统计; true=真删, 须员工先同意",
                     "default": False,
                 },
             },
@@ -410,12 +319,8 @@ MEMORY_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_today_summary",
         "description": (
-            "看小鲶今天学到了什么:今天的对话数、工具调用次数、新增/更新的 "
-            "memory 条目、新增的 skill、token 消耗总量。当员工问"
-            "「今天学了什么」「今天做了啥」「今日活动」「今天有什么新进展」"
-            "「小鲶今天怎么样」之类的问题时调用这个 tool, 而不是 "
-            "session_search 或 memory_recall —— 那两个是给你自己翻历史的, "
-            "回答员工的「今日」相关问题就用 catfish_today_summary。"
+            "汇总小鲶今天的活动: 对话数、工具调用数、新增/更新的 memory、新增 skill、token 消耗。"
+            "员工问'今天学了什么/今天做了啥/今日活动'时调这个, 不要用 session_search 或 memory_recall。"
         ),
         "input_schema": {
             "type": "object",

@@ -6,16 +6,17 @@ from typing import Any, Dict, List
 
 _TIME_PROPERTY = {
     "type": "string",
-    "description": "ISO 8601 时间，必须带日期；单次查询跨度最多 31 天。",
+    "description": "ISO 8601, 必须带日期; 单次跨度 ≤31 天",
 }
 
+# 全部只读, 结果不上传中央, 由当前聊天 Picker 模型分析; Picker 变化后授权失效
+# (wechat_archive 会返回 picker 相关错误, 请员工在 Companion 重新确认)。
 WECHAT_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_wechat_sessions",
         "description": (
-            "列出员工已导入并授权的微信聊天会话 (群 / 私聊) 摘要, 含 first_message_at / "
-            "last_message_at, 用来确定 history / search 的时间范围。只读，不上传中央；"
-            "返回结果由当前聊天 Picker 模型继续分析。"
+            "列出员工已授权的微信会话 (群 / 私聊) 及首末消息时间, 用于确定 "
+            "catfish_wechat_history / catfish_wechat_search 的时间范围。只读。"
         ),
         "input_schema": {
             "type": "object",
@@ -35,9 +36,8 @@ WECHAT_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_wechat_history",
         "description": (
-            "读取一个聊天会话在明确时间范围内的微信导出文本记录。只在员工授权的当前 Picker"
-            "未改变时可用；不返回附件二进制。附件消息带 attachment_name, "
-            "attachment_present=false 表示微信没有随导出带出该文件 (如压缩包)。"
+            "读取一个微信会话在指定时间范围内的文本记录, 不含附件文件; "
+            "attachment_present=false 表示该附件未随导出带出。"
         ),
         "input_schema": {
             "type": "object",
@@ -61,8 +61,7 @@ WECHAT_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_wechat_search",
         "description": (
-            "在员工授权的微信聊天记录中按关键词和明确时间范围搜索。可限定单个会话；"
-            "结果由当前聊天 Picker 模型继续分析。"
+            "在已授权的微信聊天记录中按关键词 + 时间范围搜索, 可用 session_id 限定单个会话。"
         ),
         "input_schema": {
             "type": "object",
