@@ -760,10 +760,28 @@ def tool_wiki_create(args: dict) -> dict[str, Any]:
 
 
 def tool_wiki_read(args: dict) -> dict[str, Any]:
+    # 10/23 P2: 可以按名字 (标题 / 别名) 读; 结果带上全部关系 (含别的条目指向它的入边)
+    from . import wiki_relations  # noqa: PLC0415
+
     rel = str(args.get("rel_path", "")).strip()
+    name = str(args.get("name", "")).strip()
+    if not rel and name:
+        hits = wiki_relations.find_by_name(_catfish_home(), name)
+        if len(hits) != 1:
+            return {
+                "ok": False,
+                "error": f"按名字「{name}」找到 {len(hits)} 个条目" + ("" if hits else ", 用 catfish_wiki_search 搜"),
+                "candidates": hits,
+            }
+        rel = hits[0]["rel_path"]
     if not rel:
-        return {"ok": False, "error": "rel_path 不能空 (先用 catfish_wiki_list 拿路径)"}
-    return read_wiki_file(rel)
+        return {"ok": False, "error": "rel_path / name 至少给一个 (先用 catfish_wiki_list 拿路径)"}
+    result = read_wiki_file(rel)
+    if result.get("ok"):
+        relations = wiki_relations.relations_of(_catfish_home(), rel)
+        if relations is not None:
+            result["relations"] = relations
+    return result
 
 
 def tool_wiki_update(args: dict) -> dict[str, Any]:

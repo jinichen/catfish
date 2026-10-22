@@ -41,8 +41,26 @@ describe("buildWikiRelationshipTasks", () => {
       file({ rel_path: "wiki/entities/orphan.md", title: "孤立项" }),
       file({ rel_path: "wiki/entities/linked.md", title: "已关联", related: [{ name: "孤立项", rel: "关联" }] }),
     ]);
-    expect(tasks.map((task) => task.kind)).toEqual(["pending"]);
+    // 10/23 P2: 只写了「关联」的关系算一条「没标类型」任务 (可让小鲶建议); 没有关系的条目仍然不算
+    expect(tasks.map((task) => task.kind)).toEqual(["pending", "untyped"]);
     expect(tasks[0].detail).toContain("关系可选");
+    expect(tasks[1].file.title).toBe("已关联");
+    expect(tasks[1].untypedNames).toEqual(["孤立项"]);
+  });
+
+  it("10/23: 没标类型的任务一个条目一条, 关联多的排前; 待确认 / 关系要改的条目不重复列", () => {
+    const a = file({ rel_path: "wiki/entities/a.md", title: "甲" });
+    const b = file({ rel_path: "wiki/entities/b.md", title: "乙" });
+    const tasks = buildWikiRelationshipTasks([
+      a, b,
+      file({ rel_path: "wiki/entities/one.md", title: "一条", related: [{ name: "甲", rel: "关联" }, { name: "乙", rel: "隶属" }] }),
+      file({ rel_path: "wiki/entities/two.md", title: "两条", related: [{ name: "甲", rel: "关联" }, { name: "乙", rel: "关联" }] }),
+      file({ rel_path: "wiki/entities/p.md", title: "待确认的", ontology_status: "pending", related: [{ name: "甲", rel: "关联" }] }),
+      file({ rel_path: "wiki/entities/x.md", title: "有断链的", related: [{ name: "甲", rel: "关联" }, { name: "不存在", rel: "隶属" }] }),
+    ]);
+    const untyped = tasks.filter((task) => task.kind === "untyped");
+    expect(untyped.map((task) => task.file.title)).toEqual(["两条", "一条"]);
+    expect(untyped[0].untypedNames).toEqual(["甲", "乙"]);
   });
 
   it("9/24: 同一个名字指向不明, 不管多少处引用只算一条任务", () => {

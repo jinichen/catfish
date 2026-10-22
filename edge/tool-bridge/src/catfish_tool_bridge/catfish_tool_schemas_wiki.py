@@ -233,9 +233,9 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_wiki_read",
         "description": (
-            "读个人知识库某条目全文. 用于看 catfish_wiki_search 命中条目的完整内容、"
-            "改条目前取原文、自检刚写入的结果. rel_path 从 catfish_wiki_search / catfish_wiki_list 拿. "
-            "返参 visible_in_tab 说明它是否在 TAB 里可见."
+            "读个人知识库某条目全文 + 它的全部关系 (relations: out 本条目→对方, in 别的条目→本条目, "
+            "如「谁隶属于这个部门」看 in). rel_path 从 catfish_wiki_search / catfish_wiki_list 拿, "
+            "或直接给 name (标题/别名). 返参 visible_in_tab 说明它是否在 TAB 里可见."
         ),
         "input_schema": {
             "type": "object",
@@ -244,8 +244,11 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
                     "type": "string",
                     "description": "必须 wiki/ 开头, 例 wiki/entities/X.md",
                 },
+                "name": {
+                    "type": "string",
+                    "description": "不知道路径时给条目标题或别名 (完全一致)",
+                },
             },
-            "required": ["rel_path"],
         },
         "emoji": "📖",
         "toolset": "catfish_native",

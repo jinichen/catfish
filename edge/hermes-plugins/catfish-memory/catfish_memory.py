@@ -227,9 +227,11 @@ try:
     from .catfish_memory_tools import _ToolsMixin
     from .catfish_memory_recall import prewarm as _recall_prewarm
     from .catfish_memory_situation import render_situation
+    from .catfish_memory_graph import render_graph
 except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_recall import prewarm as _recall_prewarm
     from catfish_memory_situation import render_situation
+    from catfish_memory_graph import render_graph
     from catfish_memory_render import _RenderMixin
     from catfish_memory_sections import _SectionsMixin
     from catfish_memory_expense import (  # noqa: F401
@@ -502,6 +504,15 @@ class CatfishMemoryProvider(
             journal = self._render_employee_journal(catfish_home, query=query)
             if journal:
                 sections.append(journal)
+
+            # 2a. 10/23 P2: 问题里点名的实体 → 它在知识库里的类型化关系 (wiki_graph.db)
+            try:
+                graph = render_graph(catfish_home, query)
+            except Exception as e:  # noqa: BLE001 —— 图库坏了不能拖垮 prefetch
+                logger.warning("catfish-memory 实体关系块渲染失败 (跳过): %s", e)
+                graph = ""
+            if graph:
+                sections.append(graph)
 
             # 2b. BL-CATFISH-WIKI-MODE P3.3.11 (6/4): wiki summary —
             # 列 wiki/entities + concepts top hub 让 LLM chat 时知道

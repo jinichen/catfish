@@ -6,6 +6,7 @@
 
   旧 (10/22 之前): distilled_facts.md 前 3KB (按文件位置截)
   新 (10/22 P1):   「当前状态」段 + 按问题检索 (catfish_memory_recall)
+                   + 问题里点名的实体在知识库里的关系 (10/23 P2, catfish_memory_graph)
 
 题目放在员工本机 ~/.catfish/eval/memory_questions.json —— **含员工工作内容, 不进仓库**:
 
@@ -27,6 +28,7 @@ from pathlib import Path
 PLUGIN = Path(__file__).resolve().parents[1] / "edge" / "hermes-plugins" / "catfish-memory"
 sys.path.insert(0, str(PLUGIN))
 
+import catfish_memory_graph as graph  # noqa: E402
 import catfish_memory_recall as recall  # noqa: E402
 
 #: 跟 catfish_memory_render 的预算一致
@@ -40,7 +42,11 @@ def old_context(distilled: str) -> str:
 
 def new_context(path: Path, distilled: str, q: str) -> str:
     status = recall.current_status_block(distilled) or old_context(distilled)
-    return status + "\n\n" + recall.recall_block(path, distilled, q, _RECALL_BUDGET)
+    return "\n\n".join((
+        status,
+        recall.recall_block(path, distilled, q, _RECALL_BUDGET),
+        graph.render_graph(path.parent, q),
+    ))
 
 
 def main() -> int:

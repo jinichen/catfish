@@ -33,6 +33,14 @@ prompt hack 修不动**. 这个 doc 是防再次走错的规则书.
 | 🕒 近期流水 | `employee_journal.md` 尾部 | 3KB |
 | 📝 当前状态 | `distilled_facts.md` 段 0 整段 | ≤2.4KB |
 | 🔎 相关长期记忆 (`catfish_memory_recall.py`) | 其余各段拆成「日期 · 小节 · 一行」, jieba + BM25 按员工这句话检索, 新段略加权, 同句只留最新 | ≤1.8KB, 没有够格的就不出 |
+| 🕸 问题里点名的实体的关系 (`catfish_memory_graph.py`, 10/23 P2) | `wiki_graph.db` (Companion 同步): 问题里原样出现的实体名 / 别名 (长的优先, 最多 3 个) → 出边 + 入边按关系分组, 读作「A 关系 B」;「关联」放最后标「未标关系类型」 | ≤1.2KB, 没点名就不出 |
+
+工具侧: `catfish_wiki_read` 可以按 `name` (标题 / 别名) 读, 结果带 `relations` (out + in)。
+知识库页「关系整理」: 只写了「关联」的关系单列一类「没标类型」, 可让小鲶建议类型 (`lib/wikiRelationSuggest.ts`,
+强制 tool_choice 结构化输出), **员工逐条或一键采纳才写入**。
+
+评测 (`scripts/eval_memory_recall.py`, 题目在 `~/.catfish/eval/`, 不进仓库): 10/23 鸿波本机 41 题
+旧取法 13 → 新取法 37 (32% → 90%), 其中关系题 1/6 → 6/6; 剩下 4 题是同义改写, 词面检索管不到。
 
 10/22 实测 (鸿波本机): 问「CMMI-5 现在什么状态」prefetch 16.3K → 11.6K 字, 其中跟员工有关的
 从 ~1.3K 变成 当前状态 + 12 条按问题检出的历史; 问「林启铵是谁」能捞出两个月前的人物条目。

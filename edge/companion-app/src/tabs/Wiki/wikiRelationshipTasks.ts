@@ -8,7 +8,7 @@ import { resolveWikiRef } from "../../lib/wikiResolve";
  *     报成 24 条"关系异常", 其实只要选一次它指谁
  *   · 待确认条目自己的关系问题在工作台里逐条标出, 不再另开 broken 任务重复列
  */
-export type WikiRelationshipTaskKind = "conflict" | "pending" | "ambiguous" | "broken" | "stale" | "duplicate";
+export type WikiRelationshipTaskKind = "conflict" | "pending" | "ambiguous" | "broken" | "untyped" | "stale" | "duplicate";
 
 export interface WikiRelationshipTask {
   id: string;
@@ -25,6 +25,8 @@ export interface WikiRelationshipTask {
   candidates?: WikiFileInfo[];
   /** kind === "stale" 时: 距上次更新多少天 */
   staleDays?: number;
+  /** kind === "untyped" 时: 只写了「关联」的对方名字 */
+  untypedNames?: string[];
 }
 
 /** 9/24: 带进度的项目/证书, 超过这么多天没更新就列出来核对 */
@@ -270,7 +272,30 @@ export function buildWikiRelationshipTasks(files: WikiFileInfo[], today: Date = 
       staleDays: days,
     }));
 
-  return [...conflicts, ...ambiguous, ...pending, ...broken, ...stale, ...duplicates];
+  // 10/23 P2: 只写了「关联」的关系 —— 说明有关系、不说明是什么关系。原来不算问题, 工作台
+  // 里看不到; 知识库 645 条关系里有 442 条是它。一个条目一条任务, 工作台里可以让小鲶建议类型。
+  // 待确认 / 已有「关系要改」任务的条目不重复列 (它们的编辑器里同样能改)。
+  const brokenPaths = new Set(broken.map((task) => task.file.rel_path));
+  const untyped = files
+    .filter((file) => !isPending(file) && !brokenPaths.has(file.rel_path) && file.kind !== "query")
+    .flatMap((file): WikiRelationshipTask[] => {
+      const names = file.related
+        .filter((relation) => relation.source !== "body" && relation.rel?.trim() === RELATION_FALLBACK)
+        .map((relation) => relation.name.trim())
+        .filter(Boolean);
+      if (names.length === 0) return [];
+      return [{
+        id: `untyped:${file.rel_path}`,
+        kind: "untyped",
+        title: `「${file.title}」有 ${names.length} 条关系没标类型`,
+        detail: `只写了「关联」：${names.slice(0, 3).join("、")}${names.length > 3 ? " 等" : ""}`,
+        file,
+        untypedNames: names,
+      }];
+    })
+    .sort((a, b) => (b.untypedNames?.length ?? 0) - (a.untypedNames?.length ?? 0));
+
+  return [...conflicts, ...ambiguous, ...pending, ...broken, ...untyped, ...stale, ...duplicates];
 }
 
 /** 待确认里「没有要改的关系」的那些 —— 可以一次全部确认。 */

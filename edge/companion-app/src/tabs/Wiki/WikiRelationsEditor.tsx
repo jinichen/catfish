@@ -9,12 +9,15 @@
  * 改类型 / 删 / 加 只改关系, 不改待确认状态; 只有「确认」才算员工核对过。
  */
 import { useMemo, useState } from "react";
-import { Check, CheckCircle, Plus, SpinnerGap, Trash, WarningCircle } from "@phosphor-icons/react";
+import { Check, CheckCircle, Plus, Sparkle, SpinnerGap, Trash, WarningCircle } from "@phosphor-icons/react";
 import { wikiUpdateFile, type RelatedRef } from "../../lib/tauri";
 import type { WikiFileFull } from "../../lib/tauri_wiki";
 import { useWikiStore } from "../../store/wiki";
+import { useChatStore } from "../../store/chat";
+import { suggestRelationTypes, type RelationSuggestion } from "../../lib/wikiRelationSuggest";
 import {
   buildConfirmedWikiContent,
+  RELATION_FALLBACK,
   relationIssue,
   relationTypeOptions,
 } from "./wikiRelationshipTasks";
@@ -35,6 +38,10 @@ export default function WikiRelationsEditor({
   const [adding, setAdding] = useState(false);
   const [newRel, setNewRel] = useState("");
   const [newTarget, setNewTarget] = useState("");
+  // 10/23 P2: 小鲶对「关联」关系的类型建议 —— 只显示, 员工点「采纳」才写入
+  const chatModel = useChatStore((state) => state.model);
+  const [suggestions, setSuggestions] = useState<Record<string, RelationSuggestion>>({});
+  const [suggesting, setSuggesting] = useState(false);
 
   const info = selectedFile.info;
   const typed = info.related.filter((relation) => relation.source !== "body");
@@ -75,6 +82,35 @@ export default function WikiRelationsEditor({
     }
   };
 
+  const untypedNames = typed
+    .filter((relation) => relation.rel?.trim() === RELATION_FALLBACK)
+    .map((relation) => relation.name.trim());
+  const adoptable = typed
+    .map((relation, index) => ({ index, s: suggestions[relation.name.trim()] }))
+    .filter(({ index, s }) => s && s.rel !== RELATION_FALLBACK && typed[index].rel?.trim() === RELATION_FALLBACK);
+  const askSuggestions = async () => {
+    setSuggesting(true);
+    setError(null);
+    setNotice(null);
+    const result = await suggestRelationTypes(info, selectedFile.body, untypedNames, files, chatModel);
+    setSuggesting(false);
+    if (!result.ok) {
+      setError(result.error ?? "小鲶没给出建议");
+      return;
+    }
+    setSuggestions(Object.fromEntries(result.suggestions.map((s) => [s.name, s])));
+    const n = result.suggestions.filter((s) => s.rel !== RELATION_FALLBACK).length;
+    setNotice(n > 0 ? `小鲶建议了 ${n} 条，看过再采纳` : "小鲶也判断不了，建议保持「关联」");
+  };
+  const adoptAll = () =>
+    void save(
+      typed.map((relation, i) => {
+        const hit = adoptable.find((a) => a.index === i);
+        return hit ? { ...relation, rel: hit.s.rel } : relation;
+      }),
+      false,
+      `已采纳 ${adoptable.length} 条建议`,
+    );
   const changeType = (index: number, rel: string) =>
     void save(typed.map((relation, i) => (i === index ? { ...relation, rel } : relation)), false, "已改关系类型");
   const remove = (index: number) =>
@@ -125,6 +161,18 @@ export default function WikiRelationsEditor({
                 <span className="wiki-relations__name">
                   <strong>{relation.name}</strong>
                   {issues[index] && <small><WarningCircle size={14} aria-hidden="true" />{issues[index]}</small>}
+                  {(() => {
+                    const sug = suggestions[relation.name.trim()];
+                    if (!sug || rel !== RELATION_FALLBACK) return null;
+                    return sug.rel === RELATION_FALLBACK ? (
+                      <small className="wiki-relations__suggest">建议保持「关联」{sug.reason && `：${sug.reason}`}</small>
+                    ) : (
+                      <small className="wiki-relations__suggest">
+                        <Sparkle size={14} aria-hidden="true" />建议「{sug.rel}」{sug.reason && `：${sug.reason}`}
+                        <button type="button" disabled={saving} onClick={() => changeType(index, sug.rel)}>采纳</button>
+                      </small>
+                    );
+                  })()}
                 </span>
                 <button
                   type="button"
@@ -142,6 +190,19 @@ export default function WikiRelationsEditor({
         </div>
       )}
 
+      {untypedNames.length > 0 && (
+        <div className="wiki-relations__suggest-bar">
+          <button type="button" className="wiki-workbench__secondary" disabled={suggesting || saving} onClick={() => void askSuggestions()}>
+            {suggesting ? <SpinnerGap className="wiki-spin" size={16} /> : <Sparkle size={16} />}
+            让小鲶建议这 {untypedNames.length} 条的类型
+          </button>
+          {adoptable.length > 1 && (
+            <button type="button" className="wiki-workbench__primary" disabled={saving} onClick={adoptAll}>
+              全部采纳 ({adoptable.length})
+            </button>
+          )}
+        </div>
+      )}
       {bodyRefs.length > 0 && (
         <p className="wiki-relations__body-refs">
           正文里还提到：{bodyRefs.map((relation) => relation.name).join("、")}（只用于跳转，不算关系）

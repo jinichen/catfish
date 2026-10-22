@@ -2285,6 +2285,14 @@ button {
 .wiki-relations__remove:hover:not(:disabled) { color: var(--status-err); background: color-mix(in srgb, var(--status-err) 8%, transparent); }
 .wiki-relations__remove:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .wiki-relations__body-refs { margin: 10px 0 0; color: var(--catfish-text-muted); font-size: 12px; line-height: 1.5; }
+/* 10/23 P2: 小鲶对「关联」关系的类型建议 —— 不是报错, 用主题色不用红 */
+.wiki-relations__name small.wiki-relations__suggest { color: var(--catfish-cyan); flex-wrap: wrap; }
+.wiki-relations__suggest button {
+  margin-left: 6px; padding: 1px 8px; border: 1px solid var(--catfish-cyan); border-radius: 999px;
+  background: transparent; color: var(--catfish-cyan); font-size: 12px; cursor: pointer;
+}
+.wiki-relations__suggest button:disabled { opacity: 0.5; cursor: default; }
+.wiki-relations__suggest-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .wiki-relations__add {
   display: grid;
   grid-template-columns: 120px minmax(0, 1fr) auto auto;
