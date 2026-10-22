@@ -670,7 +670,16 @@ echo "=== 验成品: dmg 里的 App 带票据 ==="
 CHECK_MNT="$WORK_DIR/dmg-check"
 mkdir -p "$CHECK_MNT"
 hdiutil attach -nobrowse -readonly -mountpoint "$CHECK_MNT" "$DMG_PATH" >/dev/null
-if ! xcrun stapler validate "$CHECK_MNT/Catfish Companion.app" >/dev/null 2>&1; then
+# 10/22: 刚挂载就验偶尔误报「没票据」(同一个 dmg 手动重挂再验是好的) —— 隔几秒再验, 三次都不过才算
+app_ticket_ok=0
+for _ in 1 2 3; do
+  if xcrun stapler validate "$CHECK_MNT/Catfish Companion.app" >/dev/null 2>&1; then
+    app_ticket_ok=1
+    break
+  fi
+  sleep 5
+done
+if [ "$app_ticket_ok" != 1 ]; then
   hdiutil detach "$CHECK_MNT" >/dev/null 2>&1 || true
   echo "❌ dmg 里的 App 没有公证票据 —— 离线 / 内网的 Mac 打开会报「无法验证开发者」" >&2
   exit 1
