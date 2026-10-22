@@ -35,8 +35,10 @@
  *
  *  实测来源: ~/.hermes/logs/gateway.log 与 8/8 的拟稿框。
  *  跟网关 app.py:2086 的清单保持同源 —— 那边加了新词, 这边也该跟。 */
+// 10/22: hermes v0.22 重试用尽的模板是 "<label> didn't answer after 3 attempts …", 原来几个词对不上;
+//        员工机上 P62 (hermes-plugins/.../plugin_failure_copy_zh.py) 又换成了中文开头。两种都认。
 const UPSTREAM_ERROR_PATTERN =
-  /API call failed|after \d+ retries|during streaming|retries exhausted/i;
+  /API call failed|after \d+ retries|during streaming|retries exhausted|didn't answer after \d+ attempts|这次没能从模型拿到回复/i;
 
 /** 超过这个长度就不当错误看 —— 真错误都很短, 长文本更可能是 LLM 正常复读。 */
 const MAX_ERROR_LEN = 500;

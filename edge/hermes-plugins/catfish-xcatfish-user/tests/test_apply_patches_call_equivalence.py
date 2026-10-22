@@ -54,6 +54,13 @@ REFACTOR_BASE = "cc4d71a"
 #: 一个 patch 悄悄多出来跟悄悄少一个同等危险 —— monkey-patch 是全进程生效的，
 #: 谁加的、为什么加、影响面多大，得有地方写。
 INTENTIONALLY_ADDED: dict[str, str] = {
+    "_patch_p62_failure_copy_zh": (
+        "10/22 加 (Windows 现场供应商 key 填错, 聊天框只有 hermes 英文模板 + 乱码, 翻日志才找到原因)。\n"
+        "改了什么: agent.turn_recovery.exhausted_copy 在 display.language=zh 时换成中文, 原因原样附后。\n"
+        "影响面: 只有「重试用尽」那一句提示的措辞; 重试 / 退避 / 分类逻辑都不碰。非 zh 走原函数, 出错也退回原函数。\n"
+        "跟已有的闸: 开头那句是 Companion upstreamErrorGuard.ts / 网关 app.py 的识别词, 已同步加上 "
+        "(tests/test_failure_copy_zh.py 钉住三处一致)。"
+    ),
     "_patch_p61b_summary_length": (
         "10/19 加: 压缩摘要篇幅上限。qwen-flash 无视 hermes 的篇幅目标, 一份摘要 3 万 token / 7.7 万字 / 9 分钟\n"
         "  (会话日志把每次工具调用都列一遍; 上一轮摘要原样带进下一轮越滚越长)。\n"

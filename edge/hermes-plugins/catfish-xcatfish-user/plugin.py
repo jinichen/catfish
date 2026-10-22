@@ -166,6 +166,8 @@ _patch_p61_idle_background_compaction = plugin_idle_compact._patch_p61_idle_back
 _patch_p61b_summary_length = plugin_idle_compact._patch_p61b_summary_length  # noqa: F401  (re-export · 见 plugin_idle_compact.py)
 plugin_locale_zh = _import_sibling("plugin_locale_zh")
 _patch_p58_locale_zh = plugin_locale_zh._patch_p58_locale_zh  # noqa: F401  (re-export · 见 plugin_locale_zh.py)
+plugin_failure_copy_zh = _import_sibling("plugin_failure_copy_zh")
+_patch_p62_failure_copy_zh = plugin_failure_copy_zh._patch_p62_failure_copy_zh  # noqa: F401  (re-export · 见 plugin_failure_copy_zh.py)
 plugin_bridge_promoted = _import_sibling("plugin_bridge_promoted")
 _patch_p53_bridge_promoted_catfish_tools = plugin_bridge_promoted._patch_p53_bridge_promoted_catfish_tools  # noqa: F401  (re-export · 见 plugin_bridge_promoted.py)
 
@@ -430,6 +432,9 @@ def _apply_patches() -> None:
     # P58 (10/14 hermes v0.22): 网关固定提示全走语言包了, 注册小鲶中文包 (去 Hermes/☤、「代理」→小鲶),
     # 从自带 zh 目录派生, 上游新加的提示自动覆盖。P28 的字面量替换留作兜底。
     _try_patch(_patch_p58_locale_zh, "P58: _patch_p58_locale_zh 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
+    # P62 (10/22 Windows 现场供应商 key 填错, 聊天框只有英文模板 + 乱码): 重试用尽那句话换中文,
+    # 原因 (网关已翻成中文、指明去门户哪一页改) 原样附后。
+    _try_patch(_patch_p62_failure_copy_zh, "P62: _patch_p62_failure_copy_zh 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P50 (10/6 鸿波"中间有三次任务停下来了"): 模型回了一句"逐项目比对。"这种
     # 打算、没调工具、finish_reason=stop, 回合就结束了 —— 10/5 一晚三次。hermes
     # 没有"承诺了动作却没动作"的续跑 (v0.22 原生续跑只认英文 / 泰文), 这里替员工按最多两次「继续」。
