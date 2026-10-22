@@ -141,7 +141,14 @@ export function AdminQuotaEvents() {
       header: "来源",
       cell: (e) => {
         const label = auditSourceLabel(e.source, e.user);
-        return <span title={e.source || "(没标来源)"}>{label}</span>;
+        return (
+          <span
+            title={e.source || "这条请求没带来源标记 (10/22 之前 hermes 的对话、微信、定时任务都不带; 之后的会标上)"}
+            style={e.source ? undefined : { color: "var(--text-muted)" }}
+          >
+            {label}
+          </span>
+        );
       },
       truncate: true,
       width: 128,

@@ -51,5 +51,6 @@ export function auditSourceLabel(source: string | undefined, user: string): stri
   }
   // 没标来源: 服务账号 = hermes 内部辅助调用 (会话标题 / 上下文压缩等, 不经过插件打标)
   if (user.startsWith("client:")) return "后台 · hermes 辅助";
-  return "—";
+  // 员工账号没标来源: 10/22 之前 hermes 主对话 / 微信 / 定时任务都不带来源, 分不出是哪个
+  return "未标来源";
 }

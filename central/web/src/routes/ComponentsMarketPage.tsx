@@ -146,7 +146,7 @@ export function ComponentsMarketPage() {
               {g.missing.length > 0 && (
                 <div style={{ fontSize: 12, color: "var(--status-warn)" }}>
                   ⚠ 缺 {g.missing.map(platformLabel).join("、")} 的包 —— 这些电脑上的员工装不了
-                  {isAdmin ? " (打包方法见页底, 打好在下面上传)" : ", 请联系管理员"}。
+                  {isAdmin ? ", 拿到对应平台的安装包后在下面「上传组件包」传上来" : ", 请联系管理员"}。
                 </div>
               )}
               <DataTable columns={columns(isAdmin ? setDeleting : null)} rows={g.items} rowKey={(r) => r.file} />
@@ -156,26 +156,6 @@ export function ComponentsMarketPage() {
       })}
 
       {isAdmin && <ComponentUploadCard onPublished={load} />}
-
-      {isAdmin && (
-        <details style={{ fontSize: 13, color: "var(--text-muted)" }}>
-          <summary style={{ cursor: "pointer" }}>怎么打安装包 · 不走浏览器怎么发布</summary>
-          <ol style={{ margin: "8px 0 0", paddingLeft: 20, lineHeight: 1.9 }}>
-            <li>
-              会议转写组件包: Mac 版在 Apple 芯片 Mac 上跑 <code>edge/companion-app/scripts/build-meeting-asr-pack.sh</code>;
-              Windows 版在 GitHub Actions 跑「Build meeting-asr pack (Windows)」, 从 Artifacts 下载。
-            </li>
-            <li>
-              文件名 <code>&lt;名字&gt;-&lt;x.y.z&gt;-&lt;平台&gt;.tar.gz</code>, 平台 mac-arm64 / mac-x64 / windows-x64 /
-              any (跟平台无关的模型)。同名同平台多个版本, 清单只列最高的。
-            </li>
-            <li>
-              不想走浏览器: 拷进服务器的 <code>components/</code> 目录, 再跑
-              <code> python3 delivery/catfish-poc/tools/build_component_manifest.py ./components</code>。
-            </li>
-          </ol>
-        </details>
-      )}
 
       {deleting && (
         <ConfirmDialog
