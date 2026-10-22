@@ -57,6 +57,7 @@ from .identity_inject import (  # noqa: E402
     inject_identity_if_needed,
 )
 from .multimodal_guard import route_to_vision_if_needed  # noqa: E402
+from .thinking_guard import THINKING_OFF_KEY  # noqa: E402
 from .llm_params import (  # noqa: E402,F401
     AUTO_MODEL_SENTINEL,
     _apply_max_tokens,
@@ -515,6 +516,13 @@ async def chat_completions(
         logger.info("BL-LEAN-CHAT: service token (sub=%s) auto-skip identity", user.sub)
     agent_name, agent_personality = header_agent_prefs(request.headers)
     identity_bundle = body.pop("_catfish_identity_bundle", None)
+    # 10/22: 客户端声明「单次调用, 不要深度思考」(X-Catfish-Thinking: off)。记忆蒸馏的
+    # 「当前状态合并」开着思考时 9080 token 输出里 8482 是 reasoning, max_tokens 管不住,
+    # 次次撞 180s 超时; 关掉后 13s。各家写法由 thinking_guard.disable_thinking 翻译。
+    # 带 tools 的不认 —— agent loop 关掉思考不收尾 (见 thinking_guard 模块头 8/10)。
+    body.pop(THINKING_OFF_KEY, None)
+    if request.headers.get("x-catfish-thinking", "").strip().lower() == "off" and not body.get("tools"):
+        body[THINKING_OFF_KEY] = True
     if identity_bundle is not None and not isinstance(identity_bundle, dict):
         identity_bundle = None  # 防御: 客户端格式错就当没传
     body["messages"] = inject_identity_if_needed(

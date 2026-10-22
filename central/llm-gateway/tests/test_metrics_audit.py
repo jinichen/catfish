@@ -267,3 +267,20 @@ def test_concurrent_writes_no_partial_lines() -> None:
     counts = Counter(e["user"] for e in parsed)
     for i in range(5):
         assert counts[f"u{i}"] == 100
+
+
+def test_上游失败的审计也带来源(monkeypatch):
+    """10/22: 失败路径原来不传 source, 门户上一串 504 只看得到 client:hermes-cli。"""
+    import pytest
+    from fastapi import HTTPException
+
+    from catfish_gateway import llm_params
+
+    seen = {}
+    monkeypatch.setattr(llm_params, "log_request_metadata", lambda **kw: seen.update(kw))
+    with pytest.raises(HTTPException):
+        llm_params._raise_upstream_error(
+            RuntimeError("504 Gateway Timeout"), user_sub="client:hermes-cli", model_name="m",
+            latency_ms=180000, log_context="t", source="plugin:memory-distill",
+        )
+    assert seen["source"] == "plugin:memory-distill"

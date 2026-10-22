@@ -162,7 +162,20 @@ async def test_llm_fail_leaves_file_and_cursor_alone(tmp_path: Path):
     r = await distill_incremental(tmp_path, "m", fake)
     assert not r["ok"] and r["reason"] == "llm_fail"
     assert not (tmp_path / "distilled_facts.md").exists()
-    assert not (tmp_path / "memory_distill_state.json").exists()
+    state = json.loads((tmp_path / "memory_distill_state.json").read_text(encoding="utf-8"))
+    assert set(state) == {"last_failed_attempt_ts"}, "只记失败时间: 游标 / last_run_ts 都不动, 下次照样全补"
+
+
+def test_llm_fail_is_retried_after_an_hour_not_every_tick(tmp_path: Path, monkeypatch):
+    """10/22: 整轮全失败原来什么都不记 → 每 15 分钟的定时 tick 都重跑一整轮。"""
+    import catfish_memory_distill_state as st
+    from catfish_memory_distill_state import _mark_distill_failed, _should_run_distill
+
+    assert _should_run_distill(tmp_path)
+    _mark_distill_failed(tmp_path)
+    assert not _should_run_distill(tmp_path), "刚失败过 → 1h 内不重来"
+    monkeypatch.setattr(st, "_RECONCILE_RETRY_SECONDS", 0)
+    assert _should_run_distill(tmp_path)
 
 
 # ── raw fallback 条目可辨认 ────────────────────────────────────
@@ -277,3 +290,48 @@ def test_reconcile_retry_is_throttled_and_keeps_cooldown(tmp_path: Path, monkeyp
     assert _should_retry_reconcile(tmp_path)
     (tmp_path / "distilled_facts.md").write_text(assemble([("2026-09-01", SEG_OLD)], "## 进行中\n(无)"), encoding="utf-8")
     assert not _should_retry_reconcile(tmp_path), "头部已是 LLM 合并 → 不用再试"
+
+
+@pytest.mark.asyncio
+async def test_full_run_with_fallback_head_records_reconcile_attempt(tmp_path: Path):
+    """10/22: 整轮蒸馏的合并落兜底后, 下一个 tick 不能立刻「只重跑合并」(原来整轮不记尝试时间)。"""
+    from catfish_memory_distill_state import _should_retry_reconcile
+
+    (tmp_path / "employee_journal.md").write_text(_entry("2026-09-01", "a" * 10), encoding="utf-8")
+
+    async def fake(text, model, *, progress_cb=None, prior_segments=None, report=None):
+        report.update({"chunks_total": 1, "chunks_failed": 0, "consumed_chars": len(text), "failed_ranges": [], "reconciled": False})
+        return assemble([("2026-09-01", SEG_OLD)], None)
+
+    r = await distill_incremental(tmp_path, "m", fake)
+    assert r["ok"] and r["reconciled"] is False
+    state = json.loads((tmp_path / "memory_distill_state.json").read_text(encoding="utf-8"))
+    assert state.get("last_reconcile_attempt_ts"), state
+    assert not _should_retry_reconcile(tmp_path), "刚试过合并 → 1h 内不再试"
+
+
+def test_reconcile_attempt_ts_survives_a_no_new_journal_mark(tmp_path: Path):
+    j = _entry("2026-09-01", "x")
+    _mark_distill_run(tmp_path, journal_consumed_chars=len(j), journal_text=j, reconcile_attempted=True)
+    ts = json.loads((tmp_path / "memory_distill_state.json").read_text(encoding="utf-8"))["last_reconcile_attempt_ts"]
+    _mark_distill_run(tmp_path, journal_consumed_chars=len(j), journal_text=j, journal_gaps=[])
+    assert json.loads((tmp_path / "memory_distill_state.json").read_text(encoding="utf-8"))["last_reconcile_attempt_ts"] == ts
+
+
+@pytest.mark.asyncio
+async def test_distill_requests_ask_gateway_to_turn_thinking_off(monkeypatch):
+    """10/22: qwen-flash 开着思考时合并输出 9080 token 里 8482 是 reasoning, 次次 180s 超时。"""
+    import catfish_memory_llm as llm
+
+    monkeypatch.setattr(llm, "_gateway_dev_token", lambda: "t")
+    seen = []
+
+    async def fake_post(client, headers, body, what):
+        seen.append(headers.get("X-Catfish-Thinking"))
+        if what.startswith("当前状态合并"):
+            return "## 进行中\n- ok"
+        return "## 项目\n- p\n\n## 任务状态\n- x | resolved\n"
+
+    monkeypatch.setattr(llm, "_post_distill", fake_post)
+    await llm._call_distill_llm(_entry("2026-09-01", "z" * 400), "m", report={})
+    assert seen and set(seen) == {"off"}, seen

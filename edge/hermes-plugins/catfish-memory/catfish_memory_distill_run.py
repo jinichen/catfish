@@ -26,11 +26,11 @@ from typing import Any, Dict, List, Tuple
 
 try:
     from .catfish_memory_distill_reconcile import head_needs_reconcile, parse_segments
-    from .catfish_memory_distill_state import _distill_cursor, _mark_distill_run, _write_distilled
+    from .catfish_memory_distill_state import _distill_cursor, _mark_distill_failed, _mark_distill_run, _write_distilled
     from .catfish_memory_helpers import _DISTILL_CHUNK_CHARS, _read_full_journal
 except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_distill_reconcile import head_needs_reconcile, parse_segments
-    from catfish_memory_distill_state import _distill_cursor, _mark_distill_run, _write_distilled
+    from catfish_memory_distill_state import _distill_cursor, _mark_distill_failed, _mark_distill_run, _write_distilled
     from catfish_memory_helpers import _DISTILL_CHUNK_CHARS, _read_full_journal
 
 logger = logging.getLogger("catfish.memory.plugin")
@@ -126,6 +126,7 @@ async def distill_incremental(
         "reconciled": bool(report.get("reconciled")),
     }
     if not distilled:
+        _mark_distill_failed(home)
         return {**out, "reason": "llm_fail", "took_seconds": time.time() - started}
 
     _write_distilled(home, distilled)
@@ -133,7 +134,7 @@ async def distill_incremental(
     new_gaps = gaps if reconcile_only else _to_absolute(pieces, report.get("failed_ranges") or [])
     _mark_distill_run(
         home, journal_consumed_chars=len(journal_text), journal_text=journal_text,
-        journal_gaps=new_gaps, reconcile_attempt_only=reconcile_only,
+        journal_gaps=new_gaps, reconcile_attempt_only=reconcile_only, reconcile_attempted=True,
     )
     if chunks_failed:
         logger.warning(

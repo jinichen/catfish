@@ -309,3 +309,51 @@ def test_八八原始场景没回归():
     """dashscope / deepseek 强制 tool_choice → 仍要关 (不关直接 400)。"""
     for cfg in (_QWEN, _DS):
         assert apply({"tool_choice": "required"}, _model(**cfg))
+
+
+# ── 10/22: 客户端 X-Catfish-Thinking: off (单次调用, 如记忆蒸馏) ─────────────
+
+def _full_model(**kw):
+    m = _model(**kw)
+    m.context_window = 0
+    m.max_output_tokens = 0
+    m.upstream.api_key = "k"
+    m.upstream.timeout = 180
+    m.upstream.param_overrides = {}
+    return m
+
+
+def test_客户端声明不思考_百炼按百炼的写法关_私有标记不外泄():
+    from catfish_gateway.app import _build_litellm_params
+    from catfish_gateway.thinking_guard import THINKING_OFF_KEY
+
+    body = {"model": "x", "messages": [{"role": "user", "content": "hi"}], THINKING_OFF_KEY: True}
+    p = _build_litellm_params(body, _full_model(**_QWEN))
+    assert p["enable_thinking"] is False
+    assert THINKING_OFF_KEY not in p
+
+
+def test_客户端声明不思考_自建qwen用_chat_template_kwargs():
+    from catfish_gateway.app import _build_litellm_params
+    from catfish_gateway.thinking_guard import THINKING_OFF_KEY
+
+    body = {"model": "x", "messages": [{"role": "user", "content": "hi"}], THINKING_OFF_KEY: True}
+    p = _build_litellm_params(body, _full_model(upstream_model="openai/qwen_v3_6", api_base="http://10.0.0.1/v1"))
+    assert p["extra_body"]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert "enable_thinking" not in p
+
+
+def test_客户端声明不思考_不认识的provider不动():
+    from catfish_gateway.app import _build_litellm_params
+    from catfish_gateway.thinking_guard import THINKING_OFF_KEY
+
+    body = {"model": "x", "messages": [{"role": "user", "content": "hi"}], THINKING_OFF_KEY: True}
+    p = _build_litellm_params(body, _full_model(upstream_model="gemini/gemini-3.5-flash"))
+    assert "enable_thinking" not in p and "extra_body" not in p and THINKING_OFF_KEY not in p
+
+
+def test_没声明就不动():
+    from catfish_gateway.app import _build_litellm_params
+
+    p = _build_litellm_params({"model": "x", "messages": [{"role": "user", "content": "hi"}]}, _full_model(**_QWEN))
+    assert "enable_thinking" not in p

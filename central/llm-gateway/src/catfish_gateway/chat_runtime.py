@@ -636,6 +636,7 @@ async def _invoke_chat_completion(
             model_name=model_name,
             latency_ms=(time.time() - start) * 1000,
             log_context="chat completion failed",
+            source=source_hint,
         )
         raise  # unreachable; satisfies type checker
 

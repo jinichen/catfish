@@ -112,6 +112,9 @@ from typing import Any
 
 logger = logging.getLogger("catfish.gateway.thinking_guard")
 
+#: app.py 认出 `X-Catfish-Thinking: off` 后在 body 里打的私有标记, _build_litellm_params 摘掉并关思考
+THINKING_OFF_KEY = "_catfish_thinking_off"
+
 
 def is_forced_tool_choice(tool_choice: Any) -> bool:
     """这次请求是不是"必须调工具"。

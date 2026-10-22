@@ -185,6 +185,11 @@ async def _call_distill_llm(
         "Authorization": f"Bearer {token}",
         "X-Catfish-Skip-Identity": "true",
         "X-Catfish-Internal": "true",
+        # 10/22: 蒸馏 / 合并是单次抽取, 不需要深度思考。qwen-flash 默认开着思考时「当前状态合并」
+        # 9080 token 输出里 8482 是 reasoning (max_tokens 管不住), 3000 字输入也撞 180s 网关超时,
+        # 每轮 18 分钟后落到兜底; 关掉后 12000 字 13 秒。网关按供应商翻译成各家的开关
+        # (thinking_guard.disable_thinking), 不认识的供应商不动; 老网关不认这个头, 照旧。
+        "X-Catfish-Thinking": "off",
         "Content-Type": "application/json",
     }
     # 10/7 晚实测: qwen-flash 单段 70–180s, 网关上游超时 180s → 前 8 段 3 段两次都 504。

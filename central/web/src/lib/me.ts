@@ -270,6 +270,7 @@ export interface AuditEvent {
   status: string;      // ok / error / interrupted_resumed (BL-HERMES013-4)
   error?: string;
   security_concern?: string;
+  source?: string;     // X-Catfish-Source (网关审计 extra 里带出来), 没标的没有
 }
 
 export interface AuditEventsResponse {

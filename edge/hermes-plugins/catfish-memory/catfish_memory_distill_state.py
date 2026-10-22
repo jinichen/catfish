@@ -35,7 +35,12 @@ def _should_run_distill(catfish_home: Path) -> bool:
     try:
         state = json.loads(state_path.read_text(encoding="utf-8"))
         last = state.get("last_run_ts", 0)
-        return (time.time() - last) >= _DISTILL_COOLDOWN_SECONDS
+        if (time.time() - last) < _DISTILL_COOLDOWN_SECONDS:
+            return False
+        # 10/22: 上次整轮全失败 (llm_fail, 不记 last_run_ts) → 隔 _RECONCILE_RETRY_SECONDS 再试,
+        # 不是每 15 分钟的定时 tick 都重来一轮
+        failed = float(state.get("last_failed_attempt_ts") or 0)
+        return (time.time() - failed) >= _RECONCILE_RETRY_SECONDS
     except (OSError, ValueError, json.JSONDecodeError):
         return True
 
@@ -113,11 +118,16 @@ def _mark_distill_run(
     journal_text: Optional[str] = None,
     journal_gaps: Optional[List[Tuple[int, int]]] = None,
     reconcile_attempt_only: bool = False,
+    reconcile_attempted: bool = False,
 ) -> None:
     """写 memory_distill_state.json 记录这次跑过 (+ 10/7 增量游标和缺口, 给了才写).
 
     reconcile_attempt_only: 只重跑了合并 —— 不动 last_run_ts (24h cooldown 照旧),
     只记 last_reconcile_attempt_ts 给 _should_retry_reconcile 节流。
+    reconcile_attempted: 整轮蒸馏也做了一次合并 —— 同样记 last_reconcile_attempt_ts。
+      10/22 之前整轮不记, 文件里的值被整个覆盖掉 → 合并一落兜底, 下一个 15 分钟 tick
+      _should_retry_reconcile 就判「从没试过」立刻再跑 (每次 6 × 180s 超时)。
+    都没有时沿用上次的值。
     """
     state_path = catfish_home / "memory_distill_state.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -128,14 +138,27 @@ def _mark_distill_run(
         "last_run_iso": prev.get("last_run_iso", time.strftime("%Y-%m-%dT%H:%M:%S")) if reconcile_attempt_only else time.strftime("%Y-%m-%dT%H:%M:%S"),
         "source": "catfish-memory-plugin",
     }
-    if reconcile_attempt_only:
+    if reconcile_attempt_only or reconcile_attempted:
         payload["last_reconcile_attempt_ts"] = now
+    elif prev.get("last_reconcile_attempt_ts"):
+        payload["last_reconcile_attempt_ts"] = prev["last_reconcile_attempt_ts"]
     if journal_consumed_chars is not None and journal_text is not None:
         payload["journal_consumed_chars"] = int(journal_consumed_chars)
         payload["journal_head_sha"] = _journal_head_sha(journal_text, int(journal_consumed_chars))
         payload["journal_gaps"] = [[int(a), int(b)] for a, b in (journal_gaps or [])]
     try:
         state_path.write_text(json.dumps(payload), encoding="utf-8")
+    except OSError as e:
+        logger.warning("写 memory_distill_state.json 失败: %s", e)
+
+
+def _mark_distill_failed(catfish_home: Path) -> None:
+    """整轮全失败 (一段都没蒸出来): 不推游标、不记 last_run_ts (下次照样全补), 只记失败时间,
+    _should_run_distill 据此隔 _RECONCILE_RETRY_SECONDS 再试 (10/22)。"""
+    state = _read_state_json(catfish_home)
+    state["last_failed_attempt_ts"] = time.time()
+    try:
+        (catfish_home / "memory_distill_state.json").write_text(json.dumps(state), encoding="utf-8")
     except OSError as e:
         logger.warning("写 memory_distill_state.json 失败: %s", e)
 

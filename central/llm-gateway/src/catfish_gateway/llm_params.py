@@ -36,6 +36,7 @@ from fastapi import HTTPException
 
 from .errors import friendly_upstream_error as _friendly_upstream_error
 from .metrics import log_request_metadata
+from .thinking_guard import THINKING_OFF_KEY
 
 # 跟 app.py 同名 —— logging.getLogger 同名返回同一对象
 logger = logging.getLogger("catfish.gateway")
@@ -299,7 +300,7 @@ def _build_litellm_params(body: dict, model) -> dict:
     `model.upstream.model` must already contain the LiteLLM provider prefix,
     e.g. 'openai/qwen_v3_5_122b_a10b' or 'gemini/gemini-2.5-pro'.
     """
-    params = {k: v for k, v in body.items() if k != "model"}
+    params = {k: v for k, v in body.items() if k not in ("model", THINKING_OFF_KEY)}
     params.update(
         {
             "model": model.upstream.model,
@@ -384,6 +385,14 @@ def _build_litellm_params(body: dict, model) -> dict:
             "这个模型在 agent loop 里不会收尾, finish_reason 一直是 tool_calls。",
             model.name, _tg,
         )
+    elif body.get(THINKING_OFF_KEY):
+        from .thinking_guard import disable_thinking  # noqa: PLC0415
+
+        _off = disable_thinking(params, model)
+        logger.info(
+            "thinking off (X-Catfish-Thinking: off, 单次调用) model=%s: %s",
+            model.name, _off or "这家没有验证过的关法 / 管理员已显式配置, 不动",
+        )
 
     return params
 
@@ -459,6 +468,7 @@ def _raise_upstream_error(
     model_name: str,
     latency_ms: float,
     log_context: str,
+    source: str = "unknown",
 ) -> None:
     """Log metrics + logger.exception + raise HTTPException for upstream errors.
 
@@ -481,6 +491,7 @@ def _raise_upstream_error(
             latency_ms=latency_ms,
             status="fallback_capped",  # 区别于 'error' 让 audit 看清是 cap 拦的
             error=f"LargePromptFallbackBlocked: prompt={exc.prompt_estimate} cap={exc.cap}",
+            source=source,
         )
         logger.warning(
             "BL-FALLBACK-PROMPT-CAP triggered: %s prompt=%d cap=%d primary_err=%s",
@@ -507,6 +518,7 @@ def _raise_upstream_error(
         latency_ms=latency_ms,
         status="error",
         error=f"{err_type}: {err_msg[:200]}",
+        source=source,  # 10/22: 失败的也要看得出是哪个后台任务发的
     )
     logger.exception("%s [%s @ %.0fms]", log_context, model_name, latency_ms)
     raise HTTPException(

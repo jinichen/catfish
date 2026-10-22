@@ -138,6 +138,8 @@ pub fn schedule_watchdog() {
         let tool_bridge_health = ServiceHealth::default();
         let local_search_health = ServiceHealth::default();
         let mut interval = time::interval(Duration::from_secs(TICK_INTERVAL_SECS));
+        // 体检 / respawn 慢于周期时不连着补打 (tokio 默认 Burst)
+        interval.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
         // 第一 tick 立即返回, autostart 应该已经处理过了, 跳过
         interval.tick().await;
         log::info!(

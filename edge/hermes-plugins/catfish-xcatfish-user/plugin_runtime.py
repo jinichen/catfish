@@ -417,6 +417,13 @@ def _patch_p10_apply_client_headers_localhost() -> None:
             cf_source = (_ctx().CV_CF_SOURCE.get() or "").strip()
         except Exception:  # noqa: BLE001  CV 不该抛, 抛了也不能拖垮发请求
             cf_source = ""
+        if not cf_source:
+            # 10/22: 没有 inbound 请求带来源时 (hermes 自己的定时任务 / 技能整理 / 子代理),
+            # 用 hermes 的 platform 标上。门户「配额日志」原来对这些只显示 client:hermes-cli,
+            # 管理员看不出是什么在跑。
+            platform = str(getattr(self, "platform", "") or "").strip()
+            if platform:
+                cf_source = f"hermes:{platform}"
         if cf_source:
             headers["X-Catfish-Source"] = cf_source
         if headers:

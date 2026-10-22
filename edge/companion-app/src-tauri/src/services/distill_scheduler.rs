@@ -52,6 +52,9 @@ pub fn schedule_distill(app: AppHandle) {
             TICK_SECS / 60
         );
         let mut interval = time::interval(Duration::from_secs(TICK_SECS));
+        // 10/22: tokio 默认 Burst —— 一轮蒸馏跑了 23 分钟, 漏掉的 tick 回来立刻补打,
+        // 上一轮刚落兜底下一轮就又开始。Delay = 跑完之后再等一整个周期。
+        interval.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
         loop {
             interval.tick().await;
             tick_once(&app).await;

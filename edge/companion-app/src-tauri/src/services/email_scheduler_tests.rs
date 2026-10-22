@@ -83,29 +83,67 @@ fn safe_llm_does_not_clear_high_risk_rule() {
 ///
 /// 一条用来防"判据写错"的测试, 第一版自己就栽在判据上。留着这段是提醒:
 /// 凡是拿源码当输入的检查, 先问一句"它会不会把自己算进去"。
+///
+/// 10/22: 定时蒸馏 (distill_scheduler.rs) 漏了这一行 —— 一轮 23 分钟跑完, 补打的 tick
+/// 立刻又开一轮。这条检查原来只看本文件, 现在把 services 里所有定时循环都算上。
 #[test]
 fn 每个_interval_都设了_missed_tick_behavior() {
-    let full = include_str!("email_scheduler.rs");
-    let prod = full.split("#[cfg(test)]").next().unwrap_or(full);
-    let code: String = prod
-        .lines()
-        .filter(|l| !l.trim_start().starts_with("//"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let files: [(&str, &str); 4] = [
+        ("email_scheduler.rs", include_str!("email_scheduler.rs")),
+        ("distill_scheduler.rs", include_str!("distill_scheduler.rs")),
+        ("watchdog.rs", include_str!("watchdog.rs")),
+        ("email_archive.rs", include_str!("email_archive.rs")),
+    ];
+    for (name, full) in files {
+        let prod = full.split("#[cfg(test)]").next().unwrap_or(full);
+        let code: String = prod
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
 
-    let n_interval = code.matches("time::interval(").count();
-    let n_behavior = code.matches("set_missed_tick_behavior").count();
-    assert!(
-        n_interval > 0,
-        "产品代码里没找到 time::interval( —— 判据过期了, 去看看 scheduler 改成什么了"
-    );
-    assert!(
-        n_behavior >= n_interval,
-        "产品代码里有 {} 个 time::interval( 但只有 {} 处 set_missed_tick_behavior \
-         —— 漏掉的那个会用 tokio 默认的 Burst, 慢的时候连着补打",
-        n_interval,
-        n_behavior,
-    );
+        let n_interval = code.matches("time::interval(").count() + code.matches("time::interval_at(").count();
+        let n_behavior = code.matches("set_missed_tick_behavior").count();
+        assert!(
+            n_interval > 0,
+            "{name}: 产品代码里没找到 time::interval( —— 判据过期了, 去看看 scheduler 改成什么了"
+        );
+        assert!(
+            n_behavior >= n_interval,
+            "{name}: 产品代码里有 {} 个 time::interval( 但只有 {} 处 set_missed_tick_behavior \
+             —— 漏掉的那个会用 tokio 默认的 Burst, 慢的时候连着补打",
+            n_interval,
+            n_behavior,
+        );
+    }
+}
+
+/// 上面那张表要跟 services 目录里真有定时循环的文件对得上 —— 新加一个 scheduler 忘了登记,
+/// 这里红。
+#[test]
+fn 定时循环文件都登记了() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut found = Vec::new();
+    let mut stack = vec![dir];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x == "rs") && !p.to_string_lossy().ends_with("_tests.rs") {
+                let text = std::fs::read_to_string(&p).unwrap();
+                let prod = text.split("#[cfg(test)]").next().unwrap_or(&text);
+                let ticks = |l: &str| l.contains("time::interval(") || l.contains("time::interval_at(");
+                if prod.lines().any(|l| !l.trim_start().starts_with("//") && ticks(l)) {
+                    found.push(p.file_name().unwrap().to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+    found.sort();
+    let mut expected = vec!["distill_scheduler.rs", "email_archive.rs", "email_scheduler.rs", "watchdog.rs"];
+    expected.sort();
+    assert_eq!(found, expected, "有新的 time::interval( / interval_at( —— 加进上面的检查表");
 }
 
 fn mk(id: &str) -> EmailItem {

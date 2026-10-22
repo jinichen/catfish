@@ -35,6 +35,7 @@ import {
   type AuditEvent,
   type AuditEventsResponse,
 } from "../../lib/me";
+import { auditSourceLabel } from "../../lib/auditSource";
 
 // BL-ADMIN-AUDIT (5/12 鸿波): /admin/quota/events — 逐条 audit 历史 + 筛选 + 分页 + CSV.
 //
@@ -90,7 +91,7 @@ export function AdminQuotaEvents() {
     if (!data || data.events.length === 0) return;
     const header = [
       "ts", "user", "department", "model", "tokens_in", "tokens_out",
-      "tokens_total", "latency_ms", "ttft_ms", "status", "error",
+      "tokens_total", "latency_ms", "ttft_ms", "status", "error", "source",
     ].join(",");
     const rows = data.events.map((e) => [
       new Date(e.ts * 1000).toISOString(),
@@ -104,6 +105,7 @@ export function AdminQuotaEvents() {
       e.ttft_ms ?? "",
       csvEscape(e.status),
       csvEscape(e.error ?? ""),
+      csvEscape(e.source ?? ""),
     ].join(","));
     const blob = new Blob([header + "\n" + rows.join("\n")], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -133,6 +135,16 @@ export function AdminQuotaEvents() {
       cell: (e) => <span title={e.user}>{e.user}</span>,
       truncate: true,
       width: 200,
+    },
+    {
+      // 10/22: 后台任务都用 hermes 服务账号 (client:hermes-cli), 光看「员工」列分不出是什么在跑
+      header: "来源",
+      cell: (e) => {
+        const label = auditSourceLabel(e.source, e.user);
+        return <span title={e.source || "(没标来源)"}>{label}</span>;
+      },
+      truncate: true,
+      width: 128,
     },
     {
       header: "部门",
