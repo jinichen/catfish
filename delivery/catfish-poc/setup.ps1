@@ -76,6 +76,12 @@ param(
 $ErrorActionPreference = 'Stop'
 # PowerShell 默认把 stderr 当错误。docker 往 stderr 打进度是正常的, 不拦。
 $PSNativeCommandUseErrorActionPreference = $false
+# PowerShell 7.3+ 才认 $PSNativeCommandUseErrorActionPreference; Windows 自带的 powershell 是 5.1,
+# 那里只要外部命令往 stderr 写了字、而 stderr 又被重定向 (2>$null / 2>&1 / *>), 在 'Stop' 下就直接
+# 抛错退出 —— 10/22 Win11 现场: 收件箱版 wsl.exe --version 打了一句「需要更新」, 装机脚本当场崩在
+# 第一个检测上。外部命令一律包在这里跑: 只在这一条命令期间不把 stderr 当错误, $LASTEXITCODE 照常。
+function Invoke-Native { param([scriptblock]$Cmd) $ErrorActionPreference = 'Continue'; & $Cmd }
+
 
 function Say     { param($m) Write-Host $m }
 function SayOk   { param($m) Write-Host "  ✓ $m" -ForegroundColor Green }
@@ -123,7 +129,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
         "  https://www.docker.com/products/docker-desktop/"
     )
 }
-docker info 2>&1 | Out-Null
+Invoke-Native { docker info 2>&1 } | Out-Null
 if ($LASTEXITCODE -ne 0) {
     $hints = @(
         "开始菜单启动 Docker Desktop, 等托盘图标变成稳定状态 (不再转) 再重跑。",
@@ -134,7 +140,7 @@ if ($LASTEXITCODE -ne 0) {
     }
     Die "Docker 引擎没在跑" $hints
 }
-docker compose version 2>&1 | Out-Null
+Invoke-Native { docker compose version 2>&1 } | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Die "docker compose v2 不可用" @(
         "必须是 plugin 形式的 compose v2 (Docker Desktop 4.x 自带),",
@@ -216,6 +222,12 @@ if (-not $ServerIp) {
 } else {
     Say "→ 使用指定 IP: $ServerIp"
 }
+# 10/22: 填 127.0.0.1 证书和登录地址都签给它, 员工电脑上 127.0.0.1 是员工自己的电脑, 全连不上
+if ($ServerIp -match '^(127\.|0\.0\.0\.0$|169\.254\.)|^localhost$') {
+    Die "-ServerIp $ServerIp 只有这台电脑自己能访问, 员工电脑连不上" @(
+        "填这台电脑的局域网 IP (命令行跑 ipconfig, 看「IPv4 地址」), 例: -ServerIp 192.168.1.20",
+        "或者不写 -ServerIp, 脚本会自动探测并让你确认")
+}
 
 # ── 2.pre · 先装 image, 再写任何配置 ──────────────────────
 #
@@ -248,7 +260,7 @@ if ($RegenEnvOnly -eq '1') {
             # 三小时前那批一模一样, 新构建的修复一个都没进去, verify 全绿。
             # load 本身幂等 (层已存在就秒过), 多等几分钟换"包里是什么就跑什么"。
             Say "→ load image tar (~5-15 min): $ImageTar"
-            $before = docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' 2>$null |
+            $before = Invoke-Native { docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' 2>$null } |
                 Where-Object { $_ -like 'catfish*' } | Sort-Object
 
             # gzip 解压交给 docker load 自己做 —— 它认 gzip。
@@ -258,7 +270,7 @@ if ($RegenEnvOnly -eq '1') {
             if ($LASTEXITCODE -ne 0) { Die "docker load 失败 (详情见上)" }
             SayOk "装完"
 
-            $after = docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' 2>$null |
+            $after = Invoke-Native { docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' 2>$null } |
                 Where-Object { $_ -like 'catfish*' } | Sort-Object
             if (($before -join "`n") -eq ($after -join "`n")) {
                 Say "  · image ID 无变化 (本地原本就是包里这份)"
@@ -272,7 +284,7 @@ if ($RegenEnvOnly -eq '1') {
     # 而那时的报错会指向网络, 不指向"tar 没放对地方"。
     $missing = @()
     foreach ($img in $ComposeImages) {
-        docker image inspect $img 2>&1 | Out-Null
+        Invoke-Native { docker image inspect $img 2>&1 } | Out-Null
         if ($LASTEXITCODE -ne 0) { $missing += $img }
     }
     if ($missing.Count -gt 0) {
@@ -322,7 +334,7 @@ if ($env:CATFISH_IDENTITY_URL) { $envArgs += @('--identity-url', $env:CATFISH_ID
 
 # 正在跑的 catfish 容器属于哪个 compose 项目 —— 升级时新容器必须接上它的卷
 # (9/23 现场: 包目录改名后 compose 当成新项目, 新建了 5 个空卷; 见 envgen)。
-$existingProject = (docker inspect catfish-postgres --format '{{ index .Config.Labels "com.docker.compose.project" }}' 2>$null)
+$existingProject = (Invoke-Native { docker inspect catfish-postgres --format '{{ index .Config.Labels "com.docker.compose.project" }}' 2>$null })
 if ($LASTEXITCODE -ne 0) { $existingProject = '' }
 $existingProject = "$existingProject".Trim()
 $envArgs += @('--project-name', $existingProject)
@@ -330,15 +342,15 @@ $envArgs += @('--project-name', $existingProject)
 # 既有 pgdata 卷 —— 查卷要 docker, 所以在这边查; 判断在 envgen 里, 免得
 # 两个平台各写一遍"有卷但没密码该怎么办"。有现成项目名就只认它的卷。
 if ($existingProject) {
-    $pgVol = docker volume ls -q 2>$null | Where-Object { $_ -eq "${existingProject}_pgdata" } | Select-Object -First 1
+    $pgVol = Invoke-Native { docker volume ls -q 2>$null } | Where-Object { $_ -eq "${existingProject}_pgdata" } | Select-Object -First 1
 } else {
-    $pgVol = docker volume ls -q 2>$null | Where-Object { $_ -match '_pgdata$' } | Select-Object -First 1
+    $pgVol = Invoke-Native { docker volume ls -q 2>$null } | Where-Object { $_ -match '_pgdata$' } | Select-Object -First 1
 }
 if ($pgVol) { $envArgs += @('--pg-volume', $pgVol) }
 
 if ($RegenEnvOnly -eq '1') {
     # 用退出码判断, 不靠 stdout 有没有输出 —— docker 的输出格式会变, 退出码不会。
-    docker image inspect $IdentityImage 2>&1 | Out-Null
+    Invoke-Native { docker image inspect $IdentityImage 2>&1 } | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Die "RegenEnvOnly 需要 catfish-identity 镜像在本地" @(
             "先跑一次完整装机 (会 load 镜像), 之后才能只重生成 .env。"
@@ -396,7 +408,7 @@ if ($EnableHttps -eq '1') {
     # force-recreate 会先释放旧容器的端口再重绑, 那种情况不该拦。
     $inUse = Get-NetTCPConnection -State Listen -LocalPort ([int]$HttpsPort) -ErrorAction SilentlyContinue
     if ($inUse) {
-        $ours = docker ps --filter 'name=catfish-web' --format '{{.Ports}}' 2>$null |
+        $ours = Invoke-Native { docker ps --filter 'name=catfish-web' --format '{{.Ports}}' 2>$null } |
             Where-Object { $_ -match ":$HttpsPort->" }
         if ($ours) {
             Say "→ $HttpsPort 由现有 catfish-web 容器占用 · force-recreate 会自动接管"
@@ -526,8 +538,8 @@ if (Test-Path (Join-Path $ScriptDir 'BUILD-INFO.txt')) {
 }
 $lines += "# ↓ 每个服务实际跑的镜像 (tag 可能重名, image_id 不会)"
 foreach ($img in $ComposeImages) {
-    $id = docker image inspect $img --format '{{.Id}}' 2>$null
-    $created = docker image inspect $img --format '{{.Created}}' 2>$null
+    $id = Invoke-Native { docker image inspect $img --format '{{.Id}}' 2>$null }
+    $created = Invoke-Native { docker image inspect $img --format '{{.Created}}' 2>$null }
     if (-not $id) { $id = '<查不到>' }
     $lines += "image=$img id=$($id -replace '^sha256:', '') created=$created"
 }
@@ -537,7 +549,7 @@ Say ""
 Say "── 这次装的是哪一版 ──"
 Say "  已写入 INSTALLED-BUILD.txt (报障时把这个文件发给我们)"
 foreach ($img in $ComposeImages) {
-    $id = docker image inspect $img --format '{{.Id}}' 2>$null
+    $id = Invoke-Native { docker image inspect $img --format '{{.Id}}' 2>$null }
     $short = if ($id) { $id.Substring(7, 12) } else { '??' }
     Say ("    {0,-34} {1}" -f $img, $short)
 }
@@ -549,15 +561,15 @@ Say ""
 Say "── 清理旧镜像 ──"
 $keep = $ComposeImages | Where-Object { $_ -like 'catfish-*' }
 $removed = 0
-$all = docker images --format '{{.Repository}}:{{.Tag}}' 2>$null | Where-Object { $_ -like 'catfish-*' } | Sort-Object
+$all = Invoke-Native { docker images --format '{{.Repository}}:{{.Tag}}' 2>$null } | Where-Object { $_ -like 'catfish-*' } | Sort-Object
 foreach ($img in $all) {
     if ($keep -contains $img) { continue }
-    docker rmi $img 2>&1 | Out-Null
+    Invoke-Native { docker rmi $img 2>&1 } | Out-Null
     if ($LASTEXITCODE -eq 0) { Say "  已删 $img"; $removed++ }
     else { SayWarn "删不掉 $img (还有容器引着它? docker ps -a 看看)" }
 }
 if ($removed -eq 0) { Say "  没有旧镜像要删" }
-docker image prune -f 2>&1 | Out-Null
+Invoke-Native { docker image prune -f 2>&1 } | Out-Null
 
 Say ""
 Say "═══════════════════════════════════════════════════════"

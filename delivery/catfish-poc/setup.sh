@@ -357,6 +357,14 @@ if [ -z "$SERVER_IP" ]; then
 else
     echo "→ 使用指定 IP: $SERVER_IP"
 fi
+# 10/22: 填 127.0.0.1 证书和登录地址都签给它, 员工电脑上 127.0.0.1 是员工自己的电脑, 全连不上
+case "$SERVER_IP" in
+    127.*|0.0.0.0|169.254.*|localhost)
+        echo "❌ SERVER_IP=$SERVER_IP 只有这台机器自己能访问, 员工电脑连不上"
+        echo "   填服务器的局域网 IP (ip -4 addr / hostname -I 能看到), 例: SERVER_IP=192.168.1.20"
+        echo "   或者不写 SERVER_IP, 脚本会自动探测并让你确认"
+        exit 1 ;;
+esac
 
 # ── 2.pre · 先装 image, 再写任何配置 ───────────────────────
 #

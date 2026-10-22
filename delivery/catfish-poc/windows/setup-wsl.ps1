@@ -44,6 +44,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
+# PowerShell 7.3+ 才认 $PSNativeCommandUseErrorActionPreference; Windows 自带的 powershell 是 5.1,
+# 那里只要外部命令往 stderr 写了字、而 stderr 又被重定向 (2>$null / 2>&1 / *>), 在 'Stop' 下就直接
+# 抛错退出 —— 10/22 Win11 现场: 收件箱版 wsl.exe --version 打了一句「需要更新」, 装机脚本当场崩在
+# 第一个检测上。外部命令一律包在这里跑: 只在这一条命令期间不把 stderr 当错误, $LASTEXITCODE 照常。
+function Invoke-Native { param([scriptblock]$Cmd) $ErrorActionPreference = 'Continue'; & $Cmd }
+
 # wsl.exe 默认输出 UTF-16, PowerShell 当 ANSI 读会变成每个字之间夹空字符 (发行版名对不上)。新版 WSL 认这个变量
 $env:WSL_UTF8 = '1'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -148,12 +154,12 @@ SayOk "Windows 功能已开 (WSL + 虚拟机平台)"
 
 # ── 3. 新版 WSL ─────────────────────────────────────────────
 # 收件箱版 WSL 没有 `wsl --version`, 跑了返回非 0
-& wsl.exe --version *> $null
+Invoke-Native { & wsl.exe --version *> $null }
 if ($LASTEXITCODE -ne 0) {
     Say "→ 安装 WSL $(Get-Content (Join-Path $WinDir 'wsl-msi-version.txt') -ErrorAction SilentlyContinue) (离线)…"
     $p = Start-Process msiexec.exe -ArgumentList @('/i', "`"$WslMsi`"", '/qn', '/norestart') -Wait -PassThru
     if ($p.ExitCode -notin @(0, 3010)) { Die "WSL 安装失败 (msiexec 退出码 $($p.ExitCode))" }
-    & wsl.exe --version *> $null
+    Invoke-Native { & wsl.exe --version *> $null }
     if ($LASTEXITCODE -ne 0) { Die "WSL 装上了但还不能用" @("重启一次 Windows 后再跑本脚本") }
 }
 SayOk "WSL: $((& wsl.exe --version | Select-Object -First 1) -replace '\x00','')"
@@ -184,11 +190,17 @@ if (-not $ServerIp) {
     }
 }
 if ($ServerIp -notmatch '^(\d{1,3}\.){3}\d{1,3}$') { Die "IP 格式不对: $ServerIp" }
+# 10/22 现场有人填了 -ServerIp 127.0.0.1: 证书和登录地址都签给 127.0.0.1, 员工电脑上 127.0.0.1 是它自己, 全连不上
+if ($ServerIp -match '^(127\.|0\.0\.0\.0$|169\.254\.)') {
+    Die "-ServerIp $ServerIp 只有这台电脑自己能访问, 员工电脑连不上" @(
+        "填这台电脑的局域网 IP (命令行跑 ipconfig, 看「IPv4 地址」), 例: -ServerIp 192.168.1.20",
+        "或者不写 -ServerIp, 脚本会自动探测并让你确认")
+}
 SayOk "服务器 IP: $ServerIp"
 
 # ── 5. 导入发行版 ───────────────────────────────────────────
 New-Item -ItemType Directory -Force -Path $InstallDir, (Join-Path $InstallDir 'logs') | Out-Null
-$have = @(& wsl.exe -l -q 2>$null | ForEach-Object { ($_ -replace '\x00', '').Trim() }) -contains $Distro
+$have = @(Invoke-Native { & wsl.exe -l -q 2>$null } | ForEach-Object { ($_ -replace '\x00', '').Trim() }) -contains $Distro
 if (-not $have) {
     if ($Upgrade -eq '1') { Die "升级模式, 但没找到发行版 $Distro" @("首次安装别加 -Upgrade 1") }
     Say "→ 导入 Linux (Debian 12 + Docker 引擎) 到 $InstallDir\wsl …"
@@ -307,7 +319,7 @@ $checks = @(@{ n = 'gateway'; u = "http://${ServerIp}:8999/healthz" })
 if ($EnableHttps -eq '1') { $checks += @{ n = '门户 (HTTPS)'; u = "https://$ServerIp/" } } else { $checks += @{ n = '门户'; u = "http://${ServerIp}:5173/" } }
 $bad = 0
 foreach ($c in $checks) {
-    $code = (& curl.exe -sk -m 10 -o NUL -w '%{http_code}' $c.u) 2>$null
+    $code = Invoke-Native { & curl.exe -sk -m 10 -o NUL -w '%{http_code}' $c.u 2>$null }
     if ($code -eq '200') { SayOk "$($c.n): $($c.u) → 200" } else { SayWarn "$($c.n): $($c.u) → $code"; $bad++ }
 }
 if ($bad -gt 0) {

@@ -101,6 +101,11 @@ jobs:
       - name: 装机脚本两平台参数一致
         run: python3 delivery/catfish-poc/test_wrapper_parity.py
 
+      # 10/22: Windows 自带 PowerShell 5.1 上, 重定向了 stderr 的外部命令在 'Stop' 下一写 stderr
+      # 就抛错 —— Win11 现场装机崩在 `wsl.exe --version *> $null`。必须包 Invoke-Native。
+      - name: 装机 .ps1 外部命令 stderr 不炸 (PowerShell 5.1)
+        run: python3 delivery/catfish-poc/test_ps1_native_stderr.py
+
       # 9/22: 交付包里的 gateway 配置不能是空的。
       #
       # 那天真实发生过: overlay 的空模板把整份 baseline 冲掉, 打出来的包里
