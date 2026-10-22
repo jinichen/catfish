@@ -388,11 +388,12 @@ New-Item -ItemType Directory -Force -Path (Join-Path $ScriptDir 'certs') | Out-N
 New-Item -ItemType Directory -Force -Path (Join-Path $ScriptDir 'components') | Out-Null
 if ($EnableHttps -eq '1') {
     Say "→ 证书 (SAN 含 $ServerIp)"
-    $rc = & docker run --rm `
+    # 10/22: | Out-Host —— 原来 `$rc = & docker run ...` 把 certgen 的说明 (签没签、几天后到期) 吞进没人用的变量
+    & docker run --rm `
         -v "${MountDir}/certs:/certs" `
         -v "${MountDir}/tools:/tools:ro" `
         $IdentityImage `
-        python3 /tools/certgen.py --ip $ServerIp --out /certs
+        python3 /tools/certgen.py --ip $ServerIp --out /certs | Out-Host
     if ($LASTEXITCODE -ne 0) { Die "证书生成失败 (详情见上)" }
 }
 
@@ -573,6 +574,24 @@ foreach ($img in $all) {
 if ($removed -eq 0) { Say "  没有旧镜像要删" }
 Invoke-Native { docker image prune -f 2>&1 } | Out-Null
 
+# ── 服务器证书自动续期 (10/22) ─────────────────────────────
+# 证书 397 天到期, 原来靠人记得重跑 setup.ps1。renew-cert.ps1 每天检查, 剩不到 30 天自动重签 + 让 nginx
+# 换上 (CA 不变, 员工电脑不用动)。按当前用户注册 (Docker Desktop 本来就要用户登录才在跑), 不用存密码;
+# StartWhenAvailable: 03:17 关机错过了, 开机后补跑。重跑 setup.ps1 用 -Force 覆盖同名任务。
+$CertAutoRenew = $false
+if ($EnableHttps -eq '1') {
+    try {
+        $act = New-ScheduledTaskAction -Execute 'powershell.exe' `
+            -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$(Join-Path $ScriptDir 'renew-cert.ps1')`""
+        $trg = New-ScheduledTaskTrigger -Daily -At '03:17'
+        $set = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+        Register-ScheduledTask -TaskName 'CatfishCertRenew' -Action $act -Trigger $trg -Settings $set -Force | Out-Null
+        $CertAutoRenew = $true
+    } catch {
+        SayWarn "证书自动续期的计划任务没注册上: $($_.Exception.Message)"
+    }
+}
+
 Say ""
 Say "═══════════════════════════════════════════════════════"
 Say "  装完了。员工访问: $WebUrl"
@@ -596,8 +615,13 @@ if ($EnableHttps -eq '1') {
     Say "    接入码是内部 CA 的指纹, CA 十年不变, 接入码也不变。"
     Say "    浏览器: 把 certs\ca.pem (内部 CA, **不是** cert.pem) 推进系统信任库 (域控组策略 / Intune)。"
     Say ""
-    Say "  ⚠ 服务器证书 397 天到期, 到期前在服务器上重跑 .\setup.ps1 自动重签。"
-    Say "    CA 不变, 接入码不变, 员工那边什么都不用动。"
+    if ($CertAutoRenew) {
+        Say "  ✓ 服务器证书 397 天到期, 已设自动续期 (计划任务 CatfishCertRenew, 每天检查, 剩不到 30 天自动重签并换上)。"
+        Say "    CA 不变, 接入码不变, 员工那边什么都不用动。记录: logs\cert-renew.log"
+    } else {
+        Say "  ⚠ 服务器证书 397 天到期, 自动续期没设上。到期前在服务器上重跑 .\setup.ps1 (或 .\renew-cert.ps1) 自动重签。"
+        Say "    CA 不变, 接入码不变, 员工那边什么都不用动。"
+    }
 } else {
     Say ""
     SayWarn "走 HTTP · 员工用**裸 IP**访问时前端会卡在「加载中…」且不报错"

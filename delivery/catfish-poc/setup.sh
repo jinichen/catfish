@@ -841,6 +841,28 @@ if ! grep -qE '^DASHSCOPE_API_KEY=[^[:space:]]+' .env 2>/dev/null; then
     echo "     docker compose up -d --force-recreate gateway"
 fi
 
+# ── 服务器证书自动续期 (10/22) ─────────────────────
+# 证书 397 天到期, 原来靠人记得重跑 setup.sh。renew-cert.sh 每天检查, 剩不到 30 天自动重签 + 让
+# nginx 重新加载 (CA 不变, 员工电脑不用动)。Linux 写进当前用户的 crontab; WSL 里没有 cron,
+# 由 Windows 端开机任务 (catfish-wsl-boot.ps1) 每天调。重跑 setup.sh 只会替换我们那两行。
+CERT_AUTO_RENEW=""
+if [ "$ENABLE_HTTPS" = "1" ]; then
+    mkdir -p logs
+    if grep -qiE 'microsoft|wsl' /proc/sys/kernel/osrelease 2>/dev/null; then
+        CERT_AUTO_RENEW="wsl"
+    elif command -v crontab >/dev/null 2>&1; then
+        _renew="cd \"$SCRIPT_DIR\" && bash renew-cert.sh >> \"$SCRIPT_DIR/logs/cert-renew.log\" 2>&1"
+        # 先把现有的读出来 (去掉我们自己那两行) 再整份装回 —— 别人的定时任务原样保留
+        _cron_keep="$(crontab -l 2>/dev/null | grep -v '# catfish-cert-renew' || true)"
+        if { [ -n "$_cron_keep" ] && printf '%s\n' "$_cron_keep"
+             echo "17 3 * * * $_renew # catfish-cert-renew"
+             echo "@reboot sleep 180 && $_renew # catfish-cert-renew"
+           } | crontab - 2>/dev/null; then
+            CERT_AUTO_RENEW="cron"
+        fi
+    fi
+fi
+
 echo ""
 echo "═══════════════════════════════════════════════════════"
 echo "  装机完毕 · 员工浏览器打:"
@@ -877,8 +899,14 @@ if [ "$ENABLE_HTTPS" = "1" ]; then
     echo "               (域控组策略 / Jamf / Intune), 一次导入永久免警告;"
     echo "               不推的话每台每个浏览器都要手点一次「继续前往」."
     echo ""
-    echo "     ⚠ 服务器证书 397 天到期. 到期前在**服务器上**重跑 bash setup.sh"
-    echo "       即可自动重签 —— CA 不变, 接入码不变, 员工那边什么都不用动."
+    if [ -n "$CERT_AUTO_RENEW" ]; then
+        echo "     ✓ 服务器证书 397 天到期, 已设自动续期: 每天检查, 剩不到 30 天自动重签并换上"
+        echo "       (CA 不变, 接入码不变, 员工那边什么都不用动)。记录: logs/cert-renew.log"
+    else
+        echo "     ⚠ 服务器证书 397 天到期, 自动续期没设上 (这台机器没有 crontab)."
+        echo "       到期前在**服务器上**重跑 bash setup.sh (或 bash renew-cert.sh) 即可自动重签 ——"
+        echo "       CA 不变, 接入码不变, 员工那边什么都不用动."
+    fi
     echo "       (为什么不签 10 年: macOS/iOS 对 TLS 服务器证书有 398 天上限,"
     echo "        超了直接拒连, 且跟证书受不受信任无关.)"
 else

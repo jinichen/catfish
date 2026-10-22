@@ -106,6 +106,11 @@ jobs:
       - name: 装机 .ps1 外部命令 stderr 不炸 (PowerShell 5.1)
         run: python3 delivery/catfish-poc/test_ps1_native_stderr.py
 
+      # 10/22: 服务器证书自动续期 (renew-cert.sh) —— 假 docker 跑: HTTP 跳过 / 没到期不动 /
+      # 重签后 reload nginx / reload 失败报错 / certgen 失败 / 没证书跳过。
+      - name: 证书自动续期脚本
+        run: bash delivery/catfish-poc/test_renew_cert.sh
+
       # 9/22: 交付包里的 gateway 配置不能是空的。
       #
       # 那天真实发生过: overlay 的空模板把整份 baseline 冲掉, 打出来的包里

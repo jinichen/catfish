@@ -5,6 +5,7 @@
     1. 发行版里拉起 Docker 引擎 (catfish-start.sh), 容器自己按 restart 策略起来
     2. 刷新端口转发: WSL2 是 NAT, 发行版的 IP 每次启动都会变, 局域网访问 Windows IP 的这几个端口要转进去
     3. 常驻: 保持一个 wsl.exe 连着发行版。WSL 在没有 wsl.exe 连着时几秒后就把发行版停掉 (连同 dockerd)
+       常驻的那个 wsl.exe 每天跑一次 renew-cert.sh (服务器证书自动续期, 10/22)
 #>
 $ErrorActionPreference = 'Continue'
 $env:WSL_UTF8 = '1'
@@ -38,8 +39,11 @@ while ($true) {
         Log "拿不到发行版 IP ('$wslIp'), 端口转发没刷新"
     }
 
-    # 常驻; 正常情况下不会返回。返回了 (发行版被停 / WSL 更新) 就 10 秒后从头再来
-    & wsl.exe -d $cfg.Distro -u root -e sleep infinity
+    # 常驻; 正常情况下不会返回。返回了 (发行版被停 / WSL 更新) 就 10 秒后从头再来。
+    # 10/22: 常驻顺便每天检查一次服务器证书 —— 剩不到 30 天自动重签并让 nginx 换上 (renew-cert.sh,
+    # 内部 CA 不动, 员工电脑不用管)。原来 397 天到期要人记得重跑装机脚本; WSL 里没有 cron。
+    # 记录在发行版里的 /opt/catfish/catfish-poc/logs/cert-renew.log。
+    & wsl.exe -d $cfg.Distro -u root -e bash -c 'cd /opt/catfish/catfish-poc 2>/dev/null; mkdir -p logs; while true; do [ -f renew-cert.sh ] && bash renew-cert.sh >> logs/cert-renew.log 2>&1; sleep 86400; done'
     Log "发行版连接断了 (exit=$LASTEXITCODE), 10 秒后重新拉起"
     Start-Sleep -Seconds 10
 }
