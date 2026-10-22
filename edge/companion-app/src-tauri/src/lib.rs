@@ -220,6 +220,13 @@ pub fn run() {
                 Ok(_) => log::debug!("hermes 规定配置已是最新或 hermes 未装, 不动"),
                 Err(e) => log::warn!("hermes 规定配置 ensure 失败 (不阻塞启动): {e}"),
             }
+            // 10/22: hermes 自带的办公无关技能 (机器学习 / GitHub / 写代码 / 智能家居 ...) 默认停用 ——
+            // 技能清单每次请求都发, 白占几千字。每台只停一次, 员工 / IT 启用过的不再关。
+            match services::hermes_skills_default::apply_once() {
+                Ok(added) if !added.is_empty() => log::info!("默认停用 {} 个办公无关的 hermes 技能", added.len()),
+                Ok(_) => {}
+                Err(e) => log::warn!("默认停用技能失败 (不阻塞启动): {e:#}"),
+            }
             // 10/14 hermes v0.22: 专家 Bot 的开关改成停放标记, 白名单被配置迁移删了 —— 启动时对一遍
             match commands::expert_bots::reconcile_parked_on_startup() {
                 Ok(true) => log::info!("专家 Bot 停放标记已按注册表校正 (hermes 网关下次启动生效)"),

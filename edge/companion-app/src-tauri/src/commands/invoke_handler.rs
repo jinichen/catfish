@@ -16,6 +16,9 @@ pub(crate) fn handler(
             crate::commands::hermes::hermes_status,
             crate::commands::hermes::hermes_kill,
             crate::commands::hermes::hermes_restart,
+            // 10/22: 技能库「高级」里的已停用技能 (启用 / 全部启用)
+            crate::services::hermes_skills_default::hermes_skills_disabled,
+            crate::services::hermes_skills_default::hermes_skills_set_enabled,
             // P50 (9/10): 横向协同握手要报的本机身份
             crate::commands::room_link::room_link_local_identity,
             // Hermes 0.18 原生 Codex app-server runtime：检测 / 登录 / 一键切换.

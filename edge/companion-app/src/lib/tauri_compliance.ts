@@ -236,3 +236,9 @@ export interface IdentityBundle {
 
 export const fetchIdentityBundle = () =>
   rawInvoke<IdentityBundle>("identity_bundle");
+
+// 10/22: 默认停用的 hermes 自带技能 (services/hermes_skills_default.rs), 技能库「高级」里能启用
+export const fetchDisabledSkills = () => rawInvoke<string[]>("hermes_skills_disabled");
+/** names 为空 = 全部启用。返回实际改了几个。新对话生效。 */
+export const setSkillsEnabled = (names: string[], enabled: boolean) =>
+  rawInvoke<number>("hermes_skills_set_enabled", { names, enabled });

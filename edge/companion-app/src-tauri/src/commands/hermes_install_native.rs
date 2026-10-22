@@ -310,6 +310,12 @@ pub(crate) fn prepare_config(paths: &BootstrapPaths) -> Result<()> {
         Ok(changed) => log::info!("装机写入 hermes 规定配置: {}", changed.join(", ")),
         Err(e) => log::warn!("装机写 hermes 规定配置失败 (不阻塞, 下次启动再补): {e}"),
     }
+    if let Some(home) = config.parent() {
+        let marker = home.join(crate::services::hermes_skills_default::MARKER);
+        if let Err(e) = crate::services::hermes_skills_default::apply_once_at(&config, &marker) {
+            log::warn!("装机默认停用技能失败 (不阻塞, 下次启动再补): {e:#}");
+        }
+    }
     Ok(())
 }
 

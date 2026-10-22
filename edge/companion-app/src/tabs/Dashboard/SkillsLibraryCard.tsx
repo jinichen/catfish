@@ -18,6 +18,7 @@ import { useUIStore } from "../../store/ui";
 import type { SkillEntry } from "../../types/identity";
 import { muted } from "../Collab/formsUi";
 import { cardStyle, itemStyle } from "../Collab/roomLinkUi";
+import DisabledSkillsPanel from "./DisabledSkillsPanel";
 import SkillsMcpCard from "./SkillsMcpCard";
 
 interface Scene {
@@ -128,8 +129,9 @@ export default function SkillsLibraryCard() {
 
       <button type="button" onClick={() => setAdvanced(!advanced)}
               style={{ ...muted, background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left", fontSize: 12 }}>
-        {advanced ? "▾" : "▸"} 高级 · 给 IT 看 (hermes 自带的全部技能、连接的工具服务、安装 / 卸载)
+        {advanced ? "▾" : "▸"} 高级 · 给 IT 看 (已停用的技能、hermes 自带的全部技能、连接的工具服务、安装 / 卸载)
       </button>
+      {advanced && <DisabledSkillsPanel />}
       {advanced && <SkillsMcpCard />}
     </div>
   );
