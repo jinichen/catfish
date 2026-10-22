@@ -559,6 +559,17 @@ notarize_or_die() {
   # In Progress —— 两次实测 1 小时都不出结果, 重新提交同一个文件 7–12 分钟就过。所以按 ID 查
   # 25 分钟还没结论, 就重提一次 (最多重提 2 次), 新提交照样按 ID 接着查。
   local resubmits=0
+  # 拿到了 ID 但没有「Successfully uploaded file」= 上传本身断了, Apple 那边永远不会出结论
+  # (10/22 两次实测), 别等 25 分钟, 直接重提。
+  if [ -n "$sub_id" ] && ! echo "$out" | grep -q "Successfully uploaded file"; then
+    echo "   提交 $sub_id 上传没传完 (没有 Successfully uploaded file), 立即重新提交 ——"
+    resubmits=$((resubmits + 1))
+    wait_notary_credentials
+    out=$(xcrun notarytool submit "$target" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1) || true
+    echo "$out"
+    sub_id=$(echo "$out" | awk '/^ *id:/{print $2; exit}')
+    status=$(echo "$out" | awk -F': ' '/^ *status:/{s=$2} END{print s}')
+  fi
   while [ -n "$sub_id" ] && [ "$status" != "Accepted" ] && [ "$status" != "Invalid" ] && [ "$status" != "Rejected" ]; do
     echo "   等公证结果时连接断了, 按提交 ID $sub_id 接着查 (最多 25 分钟) ——"
     for i in $(seq 1 50); do
