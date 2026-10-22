@@ -52,6 +52,8 @@ fn resolve_path(raw: &str) -> Result<PathBuf, String> {
 #[tauri::command]
 pub async fn reveal_in_finder(path: String) -> Result<(), String> {
     let resolved = resolve_path(&path)?;
+    // Linux 分支用的是父目录, 不用它
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     let path_str = resolved.to_string_lossy().to_string();
 
     #[cfg(target_os = "macos")]

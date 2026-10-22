@@ -1,7 +1,7 @@
 //! 会议录音 —— 前端入口 (10/1, docs/MEETING-MINUTES-PLAN.md §3)。
 //! 存储在 services::meeting_store, 录音在 services::meeting_recorder (mac / Windows)。
 
-use crate::services::meeting_audio::{list_segments, DEFAULT_MAX_SECS, DEFAULT_SEGMENT_SECS};
+use crate::services::meeting_audio::list_segments;
 use crate::services::meeting_store::{self as store, MeetingMeta, MeetingStatus};
 
 fn root() -> Result<std::path::PathBuf, String> {
@@ -77,6 +77,7 @@ pub fn meeting_create(title: String, attendees: u32, hotwords: Vec<String>) -> R
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod recording {
     use super::*;
+    use crate::services::meeting_audio::{DEFAULT_MAX_SECS, DEFAULT_SEGMENT_SECS};
     use crate::services::meeting_recorder::{self as rec, InputDevice, RecorderStatus};
 
     #[tauri::command]

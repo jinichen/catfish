@@ -8,6 +8,10 @@
 //! - 上限: 写满 `max_secs` 自动停, 防止忘了关录一整夜。
 //! - 电平: 每块数据算峰值, 界面拿它判断"麦克风到底有没有收到声音"(选错设备时
 //!   第一眼就能看出来, 不用等会后转写出一片空白)。
+//!
+//! Linux 没有录音 (meeting_recorder 只在 mac / Windows 编), 这里的函数只有测试在用 ——
+//! 照样编译是为了让 ubuntu CI 能测它, 所以 Linux 上不报「没用到」(10/22: CI 一堆警告)。
+#![cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
