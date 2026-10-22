@@ -511,9 +511,34 @@ done < <(find "$MAC_RUNTIME_RESOURCES" -type f -name '*.tar.gz' -print0)
 
 # 提交公证并等结果。notarytool --wait 在审核**不通过** (Invalid) 时退出码也可能是 0,
 # 所以看输出里的 status, 不是 Accepted 就把 Apple 的日志打出来并退出。
+# 10/22: 公证凭据存在钥匙串里, **屏幕锁着时读不到** (notarytool 报 "No Keychain password item found")。
+# 打包要几十分钟, 人一走开屏幕就锁 —— 10/21 23:18、10/22 11:47 两次都是 App 刚公证完、轮到 DMG 时
+# 屏幕关了, 整包白打。凭据没丢, 解锁就又能读。所以读不到就等 (最多 2 小时), 不直接判失败。
+wait_notary_credentials() {
+  local i
+  xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 && return 0
+  echo "   ⏸ 钥匙串里的公证凭据 ($NOTARY_PROFILE) 读不到 —— 多半是屏幕锁了。解锁这台 Mac 后自动继续 (最多等 2 小时)…"
+  for i in $(seq 1 240); do
+    sleep 30
+    if xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
+      echo "   ▶ 凭据能读了, 继续公证"
+      return 0
+    fi
+  done
+  echo "❌ 等了 2 小时公证凭据仍读不到。解锁后确认: xcrun notarytool history --keychain-profile $NOTARY_PROFILE" >&2
+  echo "   真丢了就重存: xcrun notarytool store-credentials $NOTARY_PROFILE --team-id <团队 ID>" >&2
+  exit 1
+}
+
 notarize_or_die() {
   local target="$1" out sub_id status i
+  wait_notary_credentials
   out=$(xcrun notarytool submit "$target" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1) || true
+  if echo "$out" | grep -q "No Keychain password item found"; then
+    # 提交那一刻刚好锁屏: 还没提交上去, 等解锁后重提一次
+    wait_notary_credentials
+    out=$(xcrun notarytool submit "$target" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1) || true
+  fi
   echo "$out"
   sub_id=$(echo "$out" | awk '/^ *id:/{print $2; exit}')
   status=$(echo "$out" | awk -F': ' '/^ *status:/{s=$2} END{print s}')
