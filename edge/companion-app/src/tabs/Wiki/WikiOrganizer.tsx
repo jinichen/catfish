@@ -20,6 +20,8 @@ import {
 } from "../../lib/tauri_wiki";
 import WikiTree from "./WikiTree";
 import { useKeptUntyped } from "../../lib/wikiUntypedKept";
+import { useRelationVocab } from "../../lib/wikiRelationVocab";
+import WikiRelationTypesModal from "./WikiRelationTypesModal";
 import {
   buildConfirmedWikiContent,
   buildWikiRelationshipTasks,
@@ -70,6 +72,13 @@ export default function WikiOrganizer({
   }, [files.length, filesLoading, loadFiles]);
 
   const keptUntyped = useKeptUntyped();
+  // 10/23: 关系类型 (内置 + 自定义); 打开知识体系就加载一次, 下拉 / 建议都从 store 拿
+  const customRelations = useRelationVocab((state) => state.custom);
+  const loadRelationVocab = useRelationVocab((state) => state.load);
+  const [showRelationTypes, setShowRelationTypes] = useState(false);
+  useEffect(() => {
+    void loadRelationVocab();
+  }, [loadRelationVocab]);
   const tasks = useMemo(() => buildWikiRelationshipTasks(files, new Date(), keptUntyped), [files, keptUntyped]);
   const hasLegacyRelations = useMemo(() => hasLegacyWikiRelations(files), [files]);
   const counts = useMemo(() => {
@@ -174,6 +183,11 @@ export default function WikiOrganizer({
         <div className="wiki-organizer__browse"><WikiTree /></div>
       ) : (
         <>
+          <button type="button" className="wiki-organizer__vocab" onClick={() => setShowRelationTypes(true)}>
+            <Tag size={16} aria-hidden="true" />
+            关系类型{customRelations.length > 0 ? `（含 ${customRelations.length} 个自定义）` : ""}
+          </button>
+          {showRelationTypes && <WikiRelationTypesModal onClose={() => setShowRelationTypes(false)} />}
           <label className="wiki-organizer__search">
             <MagnifyingGlass size={20} aria-hidden="true" />
             <span className="sr-only">搜索整理任务</span>

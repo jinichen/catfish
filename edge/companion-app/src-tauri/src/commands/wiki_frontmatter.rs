@@ -19,7 +19,7 @@ const TYPE_VOCAB_JSON: &str = include_str!("../../../../contracts/wiki_type_voca
 
 /// 9/17: related[].rel 的受控词表 —— edge/contracts/wiki_relation_vocab.json。
 /// 蒸馏侧 (catfish_memory_wiki._normalize_relations) 运行时读同一份。
-const RELATION_VOCAB_JSON: &str = include_str!("../../../../contracts/wiki_relation_vocab.json");
+pub(crate) const RELATION_VOCAB_JSON: &str = include_str!("../../../../contracts/wiki_relation_vocab.json");
 
 /// 词表兜底词。UI 里员工选了它 = "有关系但说不清", 跟蒸馏侧一样按 untyped 处理
 /// → 新建条目落 pending。
@@ -49,6 +49,10 @@ pub(crate) fn canon_relation(raw: &str) -> String {
             log::info!("关系归一化: {v} → {canon}");
         }
         return canon;
+    }
+    // 10/23: 员工在「关系类型」里登记过的自定义词 (wiki_relation_vocab.rs) 也认
+    if super::wiki_relation_vocab::load_custom().contains_key(v) {
+        return v.to_string();
     }
     if canon != RELATION_FALLBACK {
         log::warn!("关系「{v}」不在词表内, 归到「{RELATION_FALLBACK}」等员工确认 (contracts/wiki_relation_vocab.json)");

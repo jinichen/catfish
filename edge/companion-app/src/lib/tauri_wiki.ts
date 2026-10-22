@@ -207,6 +207,15 @@ export interface WikiRelationMigrationResult {
 export const wikiMigrateLegacyRelations = (dryRun = true) =>
   rawInvoke<WikiRelationMigrationResult>("wiki_migrate_legacy_relations", { dryRun });
 
+/** 10/23: 关系类型 = 内置词表 + 员工登记的自定义词 (commands/wiki_relation_vocab.rs) */
+export interface RelationTypeInfo { name: string; meaning: string }
+export interface RelationVocab { builtin: RelationTypeInfo[]; custom: RelationTypeInfo[]; fallback: string }
+export const wikiRelationVocabList = () => rawInvoke<RelationVocab>("wiki_relation_vocab_list");
+export const wikiRelationVocabAdd = (name: string, meaning: string) =>
+  rawInvoke<RelationVocab>("wiki_relation_vocab_add", { name, meaning });
+export const wikiRelationVocabRemove = (name: string) =>
+  rawInvoke<RelationVocab>("wiki_relation_vocab_remove", { name });
+
 /** 9/17: 员工对一条冲突做决定。takeProposed=true 把值改成蒸馏提的新值, false 保留现值; 两种都清掉这条冲突。 */
 export const wikiResolveConflict = (relPath: string, field: string, takeProposed: boolean) =>
   rawInvoke<{ rel_path: string; remaining: number }>("wiki_resolve_conflict", { relPath, field, takeProposed });

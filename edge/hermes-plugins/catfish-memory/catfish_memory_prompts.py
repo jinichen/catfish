@@ -12,6 +12,16 @@ from __future__ import annotations
 import time
 
 
+#: 10/23: 关系词表的位置 (哨兵, 跟 __TODAY__ 一样用 replace 不用 format)
+_RELATION_LIST_PLACEHOLDER = "__RELATION_LIST__"
+#: 没传词表时的默认 (内置 19 个; 自定义的由调用方拼进来, 见 catfish_memory_wiki_provenance.relation_prompt_list)
+_DEFAULT_RELATION_LIST = (
+    "隶属 (本条目属于对方) / 包含 (本条目包含对方) / 负责 / 参与 / 协作 / "
+    "依据 (本条目以对方为依据) / 遵循 / 使用 / 持有 (公司→已取得的证书) / 认证 (公司→评估机构或标准) / "
+    "对标 / 配套 / 替代 (新→旧) / 前置 (本条目是对方的前置条件) / 同类 / "
+    "在办 (公司→还没拿到、正在办的证书) / 维护 (人→证书, 资质维护人) / 申报 (申报项目→目标证书) / 分析 (报告→被分析对象)"
+)
+
 _SUMMARIZE_PROMPT = (
     "你是企业员工的工作日志助手. 下面是员工跟 AI 副手的一次对话. "
     "用 1-2 个简短段落 (中文, ≤200 字) 总结这次对话的**关键决策、偏好、做出的事**. "
@@ -163,7 +173,7 @@ _GENERATION_PROMPT_TEMPLATE = (
     # 8/4: 加上 typed 形式。读侧 6/29 (P3.5.132 #5) 就支持 {name, rel} 了, 但
     # **prompt 从头到尾没提过 rel** —— 实测 408 条边 0 条带类型, 不是 LLM 不配合,
     # 是根本没人要求过它。功能建在读侧、写侧不知道, 等于没建。
-    "related: [{name: \"<名字>\", rel: \"<下面 15 个关系词之一>\"}, {name: \"<名字>\", rel: \"关联\"}]\n"
+    "related: [{name: \"<名字>\", rel: \"<下面列的关系词之一>\"}, {name: \"<名字>\", rel: \"关联\"}]\n"
     # P3.5.205 (7/9 鸿波 catch): sources 从常量 `[employee_journal]` 改**日志日期列表**,
     # 让员工能反查每 wiki 页来自哪几天日志. 格式: `[journal:YYYY-MM-DD, ...]` (取自
     # Analysis Decisions 段的 YYYY-MM-DD 字段, 或员工日志里 heading `## [ts] journal`
@@ -208,7 +218,7 @@ _GENERATION_PROMPT_TEMPLATE = (
     # 8/4: 加上 typed 形式。读侧 6/29 (P3.5.132 #5) 就支持 {name, rel} 了, 但
     # **prompt 从头到尾没提过 rel** —— 实测 408 条边 0 条带类型, 不是 LLM 不配合,
     # 是根本没人要求过它。功能建在读侧、写侧不知道, 等于没建。
-    "related: [{name: \"<名字>\", rel: \"<下面 15 个关系词之一>\"}, {name: \"<名字>\", rel: \"关联\"}]\n"
+    "related: [{name: \"<名字>\", rel: \"<下面列的关系词之一>\"}, {name: \"<名字>\", rel: \"关联\"}]\n"
     # P3.5.205 (7/9 鸿波 catch): sources 从常量 `[employee_journal]` 改**日志日期列表**,
     # 让员工能反查每 wiki 页来自哪几天日志. 格式: `[journal:YYYY-MM-DD, ...]` (取自
     # Analysis Decisions 段的 YYYY-MM-DD 字段, 或员工日志里 heading `## [ts] journal`
@@ -256,11 +266,10 @@ _GENERATION_PROMPT_TEMPLATE = (
     # 写入侧现在会把表外值归成「关联」→ pending。词表直接印在 prompt 里, 让它
     # 有得选; 方向也说清 —— rel 是 <本条目> → <对方>。
     "- `related:` **必须带关系类型**: `{name: \"中电福富\", rel: \"隶属\"}`. "
-    "rel **只能从这 15 个里选** (方向: 本条目 → 对方): "
-    "隶属 (本条目属于对方) / 包含 (本条目包含对方) / 负责 / 参与 / 协作 / "
-    "依据 (本条目以对方为依据) / 遵循 / 使用 / 持有 (公司→证书) / 认证 (公司→评估机构或标准) / "
-    "对标 / 配套 / 替代 (新→旧) / 前置 (本条目是对方的前置条件) / 同类. "
-    "15 个都不贴切才写 `rel: \"关联\"` —— 它会进待确认队列由员工定, "
+    # 10/23: 词表改成运行时拼进来 (_build_generation_prompt), 员工在知识体系登记的自定义关系也在里面
+    "rel **只能从下面这些里选** (方向: 本条目 → 对方): "
+    + _RELATION_LIST_PLACEHOLDER +
+    ". 都不贴切才写 `rel: \"关联\"` —— 它会进待确认队列由员工定, "
     "**不要自造别的词** (写了也会被归成「关联」).\n"
     "- `related:` 必须真双引号 string list — 正确: "
     "`related: [\"[[陈鸿波]]\", \"[[FFCS]]\"]`. "
@@ -284,7 +293,7 @@ _GENERATION_PROMPT_TEMPLATE = (
 _TODAY_PLACEHOLDER = "__TODAY__"
 
 
-def _build_generation_prompt() -> str:
+def _build_generation_prompt(relation_list: str = "") -> str:
     """把 __TODAY__ 换成今天的日期, 生成 Step 2 的 prompt。
 
     # ⚠ 为什么不用 str.format —— 它让 wiki 生成整天零产出 (8/15 晚查出来)
@@ -320,7 +329,7 @@ def _build_generation_prompt() -> str:
     """
     return _GENERATION_PROMPT_TEMPLATE.replace(
         _TODAY_PLACEHOLDER, time.strftime("%Y-%m-%d")
-    )
+    ).replace(_RELATION_LIST_PLACEHOLDER, relation_list or _DEFAULT_RELATION_LIST)
 
 
 #: 9/24: 蒸馏收尾的"当前状态"合并。背景见 catfish_memory_distill_reconcile.py ——

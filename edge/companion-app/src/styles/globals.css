@@ -2293,6 +2293,13 @@ button {
 }
 .wiki-relations__suggest button:disabled { opacity: 0.5; cursor: default; }
 .wiki-relations__suggest-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+/* 10/23: 知识体系「关系类型」入口 */
+.wiki-organizer__vocab {
+  display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; margin-bottom: 8px;
+  padding: 5px 10px; border: 1px solid color-mix(in srgb, var(--catfish-text-muted) 35%, transparent);
+  border-radius: 8px; background: transparent; color: inherit; font-size: 13px; cursor: pointer;
+}
+.wiki-organizer__vocab:hover { border-color: var(--catfish-cyan); color: var(--catfish-cyan); }
 /* 10/23: 「没标类型」批量整理表 */
 .wiki-untyped__bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 .wiki-untyped__notice { margin: 0 0 8px; color: var(--catfish-cyan); font-size: 13px; }

@@ -13,7 +13,7 @@
  */
 import { config } from "./env";
 import { fetchWithAuth } from "./me";
-import type { WikiFileInfo } from "./tauri";
+import type { RelationTypeInfo, WikiFileInfo } from "./tauri_wiki";
 import { RELATION_FALLBACK, RELATION_VOCAB } from "../tabs/Wiki/wikiRelationshipTasks";
 
 export interface RelationSuggestion {
@@ -49,12 +49,22 @@ const RELATION_MEANINGS: Record<string, string> = {
   替代: "本条目替代对方 (新版→旧版)",
   前置: "本条目是对方的前置条件 (资质→投标)",
   同类: "本条目与对方同类 (同期项目, 同级证书)",
+  在办: "本条目正在申请/办理对方 (公司→还没拿到的证书)",
+  维护: "本条目维护对方 (人→证书, 资质维护人)",
+  申报: "本条目申报对方 (申报项目→目标证书)",
+  分析: "本条目分析对方 (报告→被分析的对象)",
 };
 
-const SYSTEM_PROMPT = `你给个人知识库里只写了「关联」的关系判断具体类型。
+function systemPrompt(custom: readonly RelationTypeInfo[]): string {
+  const lines = [
+    ...RELATION_VOCAB.map((r) => `- ${r}: ${RELATION_MEANINGS[r] ?? ""}`),
+    // 10/23: 员工在「关系类型」里登记的自定义词
+    ...custom.map((c) => `- ${c.name}: ${c.meaning} (员工自定义)`),
+  ];
+  return `你给个人知识库里只写了「关联」的关系判断具体类型。
 
 读法固定: 「本条目 <关系> 对方」。每种关系的意思:
-${RELATION_VOCAB.map((r) => `- ${r}: ${RELATION_MEANINGS[r] ?? ""}`).join("\n")}
+${lines.join("\n")}
 
 规则:
 1. 只能从上面的词里选; 拿不准就返回「${RELATION_FALLBACK}」, 不硬凑。
@@ -64,6 +74,7 @@ ${RELATION_VOCAB.map((r) => `- ${r}: ${RELATION_MEANINGS[r] ?? ""}`).join("\n")}
 4. 每个给出的对方名字都要返回一条, name 原样照抄。
 
 必须调 suggest_relation_types 返回。`;
+}
 
 const TOOL_SCHEMA = {
   type: "object",
@@ -105,10 +116,10 @@ export function buildUserPrompt(entry: WikiFileInfo, body: string, names: string
 }
 
 /** 模型输出 → 只留词表里的类型、只留问到的名字; 每个名字最多一条。 */
-export function sanitizeSuggestions(raw: unknown, names: string[]): RelationSuggestion[] {
+export function sanitizeSuggestions(raw: unknown, names: string[], custom: readonly string[] = []): RelationSuggestion[] {
   const list = (raw as { suggestions?: unknown })?.suggestions;
   if (!Array.isArray(list)) return [];
-  const allowed = new Set<string>([...RELATION_VOCAB, RELATION_FALLBACK]);
+  const allowed = new Set<string>([...RELATION_VOCAB, ...custom, RELATION_FALLBACK]);
   const wanted = new Set(names);
   const out = new Map<string, RelationSuggestion>();
   for (const item of list) {
@@ -128,6 +139,7 @@ export async function suggestRelationTypes(
   names: string[],
   files: WikiFileInfo[],
   model: string,
+  custom: readonly RelationTypeInfo[] = [],
 ): Promise<RelationSuggestResult> {
   if (names.length === 0) return { ok: true, suggestions: [] };
   try {
@@ -137,7 +149,7 @@ export async function suggestRelationTypes(
       body: JSON.stringify({
         model,
         messages: [
-          { role: "system", content: SYSTEM_PROMPT },
+          { role: "system", content: systemPrompt(custom) },
           { role: "user", content: buildUserPrompt(entry, body, names, files) },
         ],
         max_tokens: 1500,
@@ -166,7 +178,7 @@ export async function suggestRelationTypes(
     } catch {
       parsed = null;
     }
-    const suggestions = sanitizeSuggestions(parsed, names);
+    const suggestions = sanitizeSuggestions(parsed, names, custom.map((c) => c.name));
     if (suggestions.length === 0) {
       return { ok: false, suggestions, error: "小鲶没给出可用的建议, 稍后再试或手动选" };
     }

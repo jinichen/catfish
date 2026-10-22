@@ -15,6 +15,7 @@ import type { WikiFileFull } from "../../lib/tauri_wiki";
 import { useWikiStore } from "../../store/wiki";
 import { useChatStore } from "../../store/chat";
 import { suggestRelationTypes, type RelationSuggestion } from "../../lib/wikiRelationSuggest";
+import { useRelationVocab } from "../../lib/wikiRelationVocab";
 import {
   buildConfirmedWikiContent,
   RELATION_FALLBACK,
@@ -46,7 +47,11 @@ export default function WikiRelationsEditor({
   const info = selectedFile.info;
   const typed = info.related.filter((relation) => relation.source !== "body");
   const bodyRefs = info.related.filter((relation) => relation.source === "body");
-  const relationTypes = useMemo(() => relationTypeOptions(files), [files]);
+  const customRelations = useRelationVocab((state) => state.custom);
+  const relationTypes = useMemo(
+    () => relationTypeOptions(files, customRelations.map((c) => c.name)),
+    [files, customRelations],
+  );
   const targets = useMemo(
     () => [...new Set(files
       .filter((file) =>
@@ -92,7 +97,7 @@ export default function WikiRelationsEditor({
     setSuggesting(true);
     setError(null);
     setNotice(null);
-    const result = await suggestRelationTypes(info, selectedFile.body, untypedNames, files, chatModel);
+    const result = await suggestRelationTypes(info, selectedFile.body, untypedNames, files, chatModel, customRelations);
     setSuggesting(false);
     if (!result.ok) {
       setError(result.error ?? "小鲶没给出建议");

@@ -37,8 +37,10 @@ except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_gateway import with_source
 try:
     from .catfish_memory_prompts import _ANALYSIS_PROMPT, _DISTILL_PROMPT, _RECONCILE_PROMPT, _SUMMARIZE_PROMPT, _build_generation_prompt  # noqa: F401
+    from .catfish_memory_wiki_provenance import relation_prompt_list as _relation_prompt_list
 except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_prompts import _ANALYSIS_PROMPT, _DISTILL_PROMPT, _RECONCILE_PROMPT, _SUMMARIZE_PROMPT, _build_generation_prompt  # noqa: F401
+    from catfish_memory_wiki_provenance import relation_prompt_list as _relation_prompt_list
 try:
     from .catfish_memory_distill_reconcile import assemble, chunk_date_range, merge_segments_by_date, split_journal_entries, status_digest
 except ImportError:  # 独立脚本模式 (无父包)
@@ -418,7 +420,7 @@ async def _call_generation_llm(
                     "model": model,
                     "messages": [
                         {"role": "user",
-                         "content": _build_generation_prompt()
+                         "content": _build_generation_prompt(_relation_prompt_list())
                          + (("\n\n" + _existing_wiki_index(catfish_home)) if catfish_home else "")
                          + "\n\n## Analysis\n\n" + analysis}
                     ],

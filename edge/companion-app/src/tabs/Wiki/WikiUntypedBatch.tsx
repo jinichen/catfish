@@ -11,6 +11,7 @@ import { Check, Sparkle, SpinnerGap, Trash } from "@phosphor-icons/react";
 import { wikiReadFile, wikiUpdateFile, type WikiFileInfo } from "../../lib/tauri_wiki";
 import { suggestRelationTypes, type RelationSuggestion } from "../../lib/wikiRelationSuggest";
 import { addKeptUntyped, keptKey } from "../../lib/wikiUntypedKept";
+import { useRelationVocab } from "../../lib/wikiRelationVocab";
 import { useChatStore } from "../../store/chat";
 import { useWikiStore } from "../../store/wiki";
 import { buildConfirmedWikiContent, RELATION_FALLBACK, type WikiRelationshipTask } from "./wikiRelationshipTasks";
@@ -24,6 +25,7 @@ export default function WikiUntypedBatch({ task }: { task: WikiRelationshipTask 
   const files = useWikiStore((state) => state.files);
   const loadFiles = useWikiStore((state) => state.loadFiles);
   const model = useChatStore((state) => state.model);
+  const customRelations = useRelationVocab((state) => state.custom);
   const [, bump] = useState(0);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [unchecked, setUnchecked] = useState<Set<string>>(new Set());
@@ -54,7 +56,7 @@ export default function WikiUntypedBatch({ task }: { task: WikiRelationshipTask 
       for (let item = queue.shift(); item; item = queue.shift()) {
         try {
           const full = await wikiReadFile(item.file.rel_path);
-          const result = await suggestRelationTypes(full.info, full.body, item.names, files, model);
+          const result = await suggestRelationTypes(full.info, full.body, item.names, files, model, customRelations);
           if (result.ok) {
             for (const s of result.suggestions) suggestionCache.set(keptKey(item.file.rel_path, s.name), s);
           } else {

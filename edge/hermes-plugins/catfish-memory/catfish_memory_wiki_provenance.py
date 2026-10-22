@@ -51,6 +51,38 @@ def _load_relation_vocab() -> tuple[frozenset, dict, str]:
 
 
 _RELATIONS, _RELATION_ALIASES, _RELATION_FALLBACK = _load_relation_vocab()
+_RELATION_MEANINGS: dict = {}
+try:
+    import json as _json_m
+    _p = next((c for c in (Path(__file__).resolve().parent / "contracts" / "wiki_relation_vocab.json",
+                           Path(__file__).resolve().parents[2] / "contracts" / "wiki_relation_vocab.json") if c.is_file()), None)
+    if _p is not None:
+        _RELATION_MEANINGS = dict(_json_m.loads(_p.read_text(encoding="utf-8"))["relations"])
+except (OSError, ValueError, KeyError):
+    pass
+
+#: 10/23: 员工在知识体系「关系类型」里登记的自定义关系 (Companion commands/wiki_relation_vocab.rs 写)
+_CUSTOM_FILE = "wiki_relation_vocab.custom.json"
+
+
+def _custom_relations() -> dict:
+    """{词: 一句话意思}; 没有 / 坏了 → 空。每次读 (文件很小, 员工可能刚登记)。"""
+    import json as _json
+    import os as _os
+    home = Path(_os.environ.get("CATFISH_HOME") or Path.home() / ".catfish").expanduser()
+    try:
+        data = _json.loads((home / _CUSTOM_FILE).read_text(encoding="utf-8"))
+        rel = data.get("relations") or {}
+        return {str(k): str(v) for k, v in rel.items()} if isinstance(rel, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def relation_prompt_list() -> str:
+    """给 wiki 生成提示词用的关系词清单: 内置 (带意思) + 自定义 (带意思)。"""
+    parts = [f"{k} ({v.split(' (')[0] if v else ''})".replace(" ()", "") for k, v in _RELATION_MEANINGS.items()]
+    parts += [f"{k} ({v})" for k, v in _custom_relations().items()]
+    return " / ".join(parts)
 
 
 def _canon_relation(raw: str) -> tuple[str, bool]:
@@ -67,6 +99,8 @@ def _canon_relation(raw: str) -> tuple[str, bool]:
     canon = _RELATION_ALIASES.get(v, v)
     if canon in _RELATIONS:
         return canon, True
+    if v in _custom_relations():  # 10/23: 员工登记过的自定义关系
+        return v, True
     return _RELATION_FALLBACK, False
 
 

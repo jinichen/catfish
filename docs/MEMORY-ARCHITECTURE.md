@@ -39,6 +39,12 @@ prompt hack 修不动**. 这个 doc 是防再次走错的规则书.
 知识库页「关系整理」: 只写了「关联」的关系单列一类「没标类型」, 可让小鲶建议类型 (`lib/wikiRelationSuggest.ts`,
 强制 tool_choice 结构化输出), **员工逐条或一键采纳才写入**。
 
+关系类型 (10/23): 内置 19 个 (`edge/contracts/wiki_relation_vocab.json`, 新增 在办 / 维护 / 申报 / 分析) + 员工在知识体系「关系类型」里
+登记的自定义词 (`~/.catfish/wiki_relation_vocab.custom.json`, 词 + 一句话意思)。四个读取方都合并自定义词: Companion 写入归一
+(`wiki_relation_vocab.rs`)、蒸馏插件 (`catfish_memory_wiki_provenance.py`, 生成提示词里的词表也是拼出来的)、tool-bridge
+(`wiki_files._load_relation_vocab`, wiki 工具的 rel enum 同源)、前端下拉和小鲶建议。没登记的词照旧归「关联」。
+正文里的 `[[链接]]` 在图库里是「提及」, 不是关系。
+
 评测 (`scripts/eval_memory_recall.py`, 题目在 `~/.catfish/eval/`, 不进仓库): 10/23 鸿波本机 41 题
 旧取法 13 → 新取法 37 (32% → 90%), 其中关系题 1/6 → 6/6; 剩下 4 题是同义改写, 词面检索管不到。
 

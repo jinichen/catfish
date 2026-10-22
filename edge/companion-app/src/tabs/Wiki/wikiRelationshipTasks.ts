@@ -121,6 +121,11 @@ export const RELATION_VOCAB = [
   "替代",
   "前置",
   "同类",
+  // 10/23: 在办 (公司→还没拿到的证书) / 维护 (人→证书) / 申报 (申报项目→目标证书) / 分析 (报告→分析对象)
+  "在办",
+  "维护",
+  "申报",
+  "分析",
 ] as const;
 export const RELATION_FALLBACK = "关联";
 const DEFAULT_RELATION_TYPES: string[] = [...RELATION_VOCAB, RELATION_FALLBACK];
@@ -326,8 +331,10 @@ export function renameRelationTarget(relations: RelatedRef[], from: string, to: 
  * 自造词 (持有主体/采用口径/不同条目) 越滚越多的入口; 现在写入侧会把表外值归成
  * 「关联」, 再列出来只会让员工选一个存不进去的词。
  */
-export function relationTypeOptions(_files: WikiFileInfo[]): string[] {
-  return [...DEFAULT_RELATION_TYPES];
+export function relationTypeOptions(_files: WikiFileInfo[], custom: readonly string[] = []): string[] {
+  // 10/23: 员工在「关系类型」里登记的词排在内置词后面、「关联」前面
+  const extra = custom.filter((name) => !DEFAULT_RELATION_TYPES.includes(name));
+  return [...RELATION_VOCAB, ...extra, RELATION_FALLBACK];
 }
 
 function quoteYaml(value: string): string {

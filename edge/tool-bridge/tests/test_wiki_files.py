@@ -325,3 +325,15 @@ def test_update_drops_alias_claimed_by_another_entry(tmp_path, monkeypatch):
     assert r["ok"] and "中电福富" in r["warning"], r
     text = (ents / "group.md").read_text(encoding="utf-8")
     assert 'aliases: ["某集团公司"]' in text, text
+
+
+def test_员工登记的自定义关系不被归成关联(tmp_path, monkeypatch):
+    """10/23: 知识体系「关系类型」里登记过的词, 写入时照原样保留; 没登记的照旧归「关联」。"""
+    import json as _json
+    from catfish_tool_bridge import wiki_files as wf
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
+    assert wf._canonical_relation("挂靠") == "关联"
+    (tmp_path / "wiki_relation_vocab.custom.json").write_text(
+        _json.dumps({"relations": {"挂靠": "本条目挂靠在对方名下"}}, ensure_ascii=False), encoding="utf-8")
+    assert wf._canonical_relation("挂靠") == "挂靠"
+    assert wf._canonical_relation("办理中") == "在办"

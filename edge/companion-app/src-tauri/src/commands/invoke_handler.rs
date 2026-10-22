@@ -486,6 +486,9 @@ pub(crate) fn handler(
             // BL-CATFISH-WIKI-MODE P3.3.7 (6/4): wiki write API
             crate::commands::wiki_write::wiki_create_entity_or_concept,
             crate::commands::wiki_write::wiki_update_file,
+            crate::commands::wiki_relation_vocab::wiki_relation_vocab_list,
+            crate::commands::wiki_relation_vocab::wiki_relation_vocab_add,
+            crate::commands::wiki_relation_vocab::wiki_relation_vocab_remove,
             crate::commands::wiki_ontology::wiki_migrate_legacy_relations,
             crate::commands::wiki_conflicts::wiki_resolve_conflict,
             // P3.3.4 (6/9): wiki 软删 (mv 到 .trash)

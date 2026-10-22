@@ -17,6 +17,50 @@ from typing import Any, Optional
 _UNTYPED = "关联"
 
 
+def _home() -> Path:
+    """~/.catfish (env CATFISH_HOME 覆盖, 跟 wiki_files._catfish_home 同口径)。"""
+    import os  # noqa: PLC0415
+    override = os.environ.get("CATFISH_HOME")
+    return Path(override) if override else Path.home() / ".catfish"
+
+
+# 9/17: related[].rel 受控词表 —— 跟蒸馏侧 / Companion UI 同一份
+# (edge/contracts/wiki_relation_vocab.json)。表外 → 兜底「关联」, 而「关联」不算
+# 有类型 → pending。三条写入产线一个口径, 见 catfish_memory_wiki._normalize_relations。
+_RELATION_FALLBACK = "关联"
+
+
+def _custom_relations() -> frozenset[str]:
+    """10/23: 员工在知识体系「关系类型」里登记的自定义关系 (Companion 写 ~/.catfish/wiki_relation_vocab.custom.json)。"""
+    try:
+        data = json.loads((_home() / "wiki_relation_vocab.custom.json").read_text(encoding="utf-8"))
+        rel = data.get("relations") or {}
+        return frozenset(str(k) for k in rel) if isinstance(rel, dict) else frozenset()
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return frozenset()
+
+
+def _load_relation_vocab() -> tuple[frozenset[str], dict[str, str], str]:
+    contract = Path(__file__).resolve().parents[3] / "contracts" / "wiki_relation_vocab.json"
+    try:
+        data = json.loads(contract.read_text(encoding="utf-8"))
+        return frozenset(data["relations"]) | _custom_relations(), dict(data["aliases"]), str(data["fallback"])
+    except (OSError, json.JSONDecodeError, KeyError):
+        return frozenset(), {}, _RELATION_FALLBACK
+
+
+def _canonical_relation(rel: str) -> str:
+    value = rel.strip().strip('"').strip("'")
+    relations, aliases, fallback = _load_relation_vocab()
+    if not value:
+        return fallback
+    if not relations:
+        return value
+    candidate = aliases.get(value, value)
+    return candidate if candidate in relations else fallback
+
+
+
 def _db(home: Path) -> Optional[sqlite3.Connection]:
     db = home / "wiki_graph.db"
     if not db.exists():

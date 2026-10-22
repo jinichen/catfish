@@ -10,6 +10,20 @@ dispatch 加 catfish_tools._dispatch_native_inner —— **dispatch 不重组**
 """
 from __future__ import annotations
 
+
+def _relation_enum() -> list[str]:
+    """wiki 关系词: contracts 内置 + 员工自定义 + 兜底「关联」(跟写入侧 wiki_files._load_relation_vocab 同源)。"""
+    from .wiki_files import _load_relation_vocab  # noqa: PLC0415
+    relations, _aliases, fallback = _load_relation_vocab()
+    words = sorted(relations, key=lambda w: (w not in _BUILTIN_ORDER, _BUILTIN_ORDER.index(w) if w in _BUILTIN_ORDER else 0, w))
+    return (words or list(_BUILTIN_ORDER)) + [fallback]
+
+
+_BUILTIN_ORDER = [
+    "隶属", "包含", "负责", "参与", "协作", "依据", "遵循", "使用", "持有", "认证",
+    "对标", "配套", "替代", "前置", "同类", "在办", "维护", "申报", "分析",
+]
+
 from typing import Any, Dict, List
 
 
@@ -204,15 +218,11 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
                                     "name": {"type": "string"},
                                     "rel": {
                                         "type": "string",
-                                        "enum": [
-                                            "隶属", "包含", "负责", "参与", "协作",
-                                            "依据", "遵循", "使用", "持有", "认证",
-                                            "对标", "配套", "替代", "前置", "同类",
-                                            "关联",
-                                        ],
+                                        # 10/23: 内置词表 + 员工登记的自定义关系, 启动时从 contracts 读
+                                        "enum": _relation_enum(),
                                         "description": (
-                                            "本条目→对方. 隶属=本条目属于对方, 持有=公司→证书, "
-                                            "替代=新→旧. 都不贴切才用'关联'"
+                                            "本条目→对方. 隶属=本条目属于对方, 持有=公司→已取得的证书, "
+                                            "在办=公司→正在办的证书, 维护=人→证书, 替代=新→旧. 都不贴切才用'关联'"
                                         ),
                                     },
                                 },

@@ -319,30 +319,13 @@ def _relation_name(value: str | dict[str, Any]) -> str:
     return str(value).strip().strip('"').strip("'").replace("[[", "").replace("]]", "")
 
 
-# 9/17: related[].rel 受控词表 —— 跟蒸馏侧 / Companion UI 同一份
-# (edge/contracts/wiki_relation_vocab.json)。表外 → 兜底「关联」, 而「关联」不算
-# 有类型 → pending。三条写入产线一个口径, 见 catfish_memory_wiki._normalize_relations。
-_RELATION_FALLBACK = "关联"
-
-
-def _load_relation_vocab() -> tuple[frozenset[str], dict[str, str], str]:
-    contract = Path(__file__).resolve().parents[3] / "contracts" / "wiki_relation_vocab.json"
-    try:
-        data = json.loads(contract.read_text(encoding="utf-8"))
-        return frozenset(data["relations"]), dict(data["aliases"]), str(data["fallback"])
-    except (OSError, json.JSONDecodeError, KeyError):
-        return frozenset(), {}, _RELATION_FALLBACK
-
-
-def _canonical_relation(rel: str) -> str:
-    value = rel.strip().strip('"').strip("'")
-    relations, aliases, fallback = _load_relation_vocab()
-    if not value:
-        return fallback
-    if not relations:
-        return value
-    candidate = aliases.get(value, value)
-    return candidate if candidate in relations else fallback
+# 9/17 受控词表 / 10/23 自定义关系: 搬到 wiki_relations.py (这个文件贴着 800 行), 这里 re-export
+from .wiki_relations import (  # noqa: E402,F401
+    _RELATION_FALLBACK,
+    _canonical_relation,
+    _custom_relations,
+    _load_relation_vocab,
+)
 
 
 def _relation_is_untyped(value: str | dict[str, Any]) -> bool:
