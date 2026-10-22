@@ -3,7 +3,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../store/agent", () => ({ useAgentStore: () => ({}) }));
-vi.mock("../../components/TTSButton", () => ({ default: () => null }));
 import ChatMessage from "./ChatMessage";
 import { formatFileAttachment } from "../../lib/chatWire";
 import type { ChatMessage as Msg } from "../../types/chat";

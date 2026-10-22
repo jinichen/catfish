@@ -257,9 +257,6 @@ pub(crate) fn handler(
             // BL-VOICE3 (5/10): 拖音频文件转文字 (mp3/m4a/wav/...) → ffmpeg + whisper
             crate::commands::speech::transcribe_audio_from_b64,
             crate::commands::speech::transcribe_audio_from_staged,
-            // BL-VOICE2 (5/10): Piper local TTS — 跟 STT 对称, 100% 本地数据不出公司
-            crate::commands::tts::tts_synthesize,
-            crate::commands::tts::tts_status,
             // BL-E11 命名权 (五一 sprint 5/3 晚): 员工自定义鲶鱼名 + 人设
             crate::commands::agent::get_agent_prefs,
             crate::commands::agent::set_agent_prefs,

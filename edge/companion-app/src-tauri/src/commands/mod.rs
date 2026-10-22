@@ -127,10 +127,8 @@ pub mod teaching_credentials;
 pub mod tasks_history; // BL-LONG-RUNNING-V1 (5/30): 读 ~/.catfish/tasks.jsonl 历史任务
 pub mod tool_bridge;
 pub mod weather; // P3.3.8 (6/10): 早安天气 (wttr.in + IP 定位 + 多城市 + 6h cache)
-                 // BL-VOICE2 (5/10): Piper local TTS, 跟 speech.rs (whisper STT) 对称
 pub mod mcp_oauth;
 pub mod server_config; // P28 (6/5 鸿波): Companion Dashboard 改 gateway URL/token, 不 vim yaml
-pub mod tts;
 pub mod types;
 pub mod wechat_binding; // BL-WECHAT-CATFISH-BIND v1 (5/26): WeChat ↔ catfish 员工绑定状态
 pub mod wechat_archive; // 8/28: 微信导出文件只读授权，分析沿用当前 Picker

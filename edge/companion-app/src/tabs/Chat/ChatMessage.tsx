@@ -14,7 +14,6 @@ import { useAgentStore } from "../../store/agent";
 import FeedbackButtons from "./FeedbackButtons";
 import SkillFeedbackButtons from "./SkillFeedbackButtons";
 // BL-VOICE2 (5/10): TTS 喇叭按钮, 鸿波 "这么好玩的东西没理由不现在做"
-import TTSButton from "../../components/TTSButton";
 // BL-TASK-ASSESS-3-UI (5/15): assistant 嘴炮 ⚠ badge + 催继续按钮
 
 interface Props {
@@ -512,9 +511,6 @@ function AssistantBubble({
               messageId={msg.id}
               preview={msg.content || (msg.tool_calls?.[0]?.name ?? "(空)")}
             />
-            {msg.content && msg.content.trim().length > 0 && (
-              <TTSButton text={msg.content} size={16} />
-            )}
           </div>
         )}
         {/* BL-MM11 (5/8) skill 级 feedback: 一条消息含 catfish_run_skill 时,
