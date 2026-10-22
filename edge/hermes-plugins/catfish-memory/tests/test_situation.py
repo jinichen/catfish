@@ -73,3 +73,11 @@ def test_待办只列过期和三天内到期的(tmp_path):
     assert "待办 3 项未完成, 其中 2 项已过期或 3 天内到期" in out
     assert "[已过期] 报能源数据" in out and "[10-23 到期] 提供测试版本" in out
     assert "高新跟进" not in out and "已办完的" not in out
+
+
+def test_起止相同的日程只写一个时间(tmp_path):
+    """EventKit 回来的是 UTC (Z), 要换成本地时间; 截止点式的日程起止相同。"""
+    _sit(tmp_path, "calendar_today.json", {"date": "2026-10-22", "events": [
+        {"summary": "回数确认", "start": "2026-10-22T07:00:00.000Z", "end": "2026-10-22T07:00:00.000Z"}]})
+    out = render_situation(tmp_path, NOW)
+    assert "  - 15:00 回数确认" in out, out

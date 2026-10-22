@@ -77,7 +77,8 @@ def calendar_lines(catfish_home: Path, now: datetime) -> List[str]:
     timed.sort(key=lambda t: t[0])
     lines: List[str] = []
     for start, end, e in timed[:_MAX_EVENTS]:
-        when = f"{start:%H:%M}" + (f"–{end:%H:%M}" if end else "")
+        # 起止相同的是「截止点」式日程 (EventKit 常见), 只写一个时间
+        when = f"{start:%H:%M}" + (f"–{end:%H:%M}" if end and end != start else "")
         if start <= now:
             when += " (进行中)"
         where = f" @{e['location']}" if e.get("location") else ""

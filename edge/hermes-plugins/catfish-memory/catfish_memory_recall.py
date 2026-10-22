@@ -197,7 +197,12 @@ def _index_for(path: Path, distilled: str) -> _Index:
     return idx
 
 
-def recall_block(path: Path, distilled: str, query: str, budget: int, top_k: int = 12) -> str:
+#: 10/23 评测 (scripts/eval_memory_recall.py, 35 题): 12 条 → 29/35, 20 条 → 31/35 (检索段平均
+#: 644 → 1006 字), 再往上 30 条才多 1 题、字数翻倍。剩下没命中的是同义改写 (起草/草稿), 词面检索管不到。
+_TOP_K = 20
+
+
+def recall_block(path: Path, distilled: str, query: str, budget: int, top_k: int = _TOP_K) -> str:
     """跟 query 最相关的几条长期记忆 (带段日期)。query 空 / 没有够格的 → 空串。"""
     if not query or not query.strip() or not distilled.strip():
         return ""
