@@ -208,11 +208,11 @@ export const wikiMigrateLegacyRelations = (dryRun = true) =>
   rawInvoke<WikiRelationMigrationResult>("wiki_migrate_legacy_relations", { dryRun });
 
 /** 10/23: 关系类型 = 内置词表 + 员工登记的自定义词 (commands/wiki_relation_vocab.rs) */
-export interface RelationTypeInfo { name: string; meaning: string }
+export interface RelationTypeInfo { name: string; meaning: string; hierarchy?: "child" | "parent" }
 export interface RelationVocab { builtin: RelationTypeInfo[]; custom: RelationTypeInfo[]; fallback: string }
 export const wikiRelationVocabList = () => rawInvoke<RelationVocab>("wiki_relation_vocab_list");
-export const wikiRelationVocabAdd = (name: string, meaning: string) =>
-  rawInvoke<RelationVocab>("wiki_relation_vocab_add", { name, meaning });
+export const wikiRelationVocabAdd = (name: string, meaning: string, hierarchy?: "child" | "parent") =>
+  rawInvoke<RelationVocab>("wiki_relation_vocab_add", { name, meaning, hierarchy: hierarchy ?? null });
 export const wikiRelationVocabRemove = (name: string) =>
   rawInvoke<RelationVocab>("wiki_relation_vocab_remove", { name });
 

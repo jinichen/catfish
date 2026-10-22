@@ -16,11 +16,20 @@ import WikiPreview from "./WikiPreview";
 import WikiGraph from "./WikiGraph";
 import WikiOrganizer, { type WikiWorkspaceMode } from "./WikiOrganizer";
 import WikiRelationshipWorkbench from "./WikiRelationshipWorkbench";
+import WikiHierarchyView from "./WikiHierarchyView";
+import { useWikiStore } from "../../store/wiki";
 
 export default function WikiTab() {
   const [mode, setMode] = useState<WikiWorkspaceMode>("organize");
   // 9/24: 关系整理按任务 id 选中 (一个名字指向不明是一条任务, 不属于某个文件)
   const [taskId, setTaskId] = useState<string | null>(null);
+  // 10/23「层级」: 选中的顶层; 点树上的节点 → 切到「全部知识」打开那个条目
+  const [hierarchyRoot, setHierarchyRoot] = useState<string | null>(null);
+  const selectFile = useWikiStore((state) => state.selectFile);
+  const openFromHierarchy = (path: string) => {
+    setMode("browse");
+    void selectFile(path);
+  };
   // 阅读优先：进入知识库先把正文铺开，图谱按需打开，不抢占首屏空间。
   const [graphVisible, setGraphVisible] = useState(false);
   // E4 (6/6 taste-skill 改造): 走 className `.wikitab*` (见 globals.css).
@@ -29,7 +38,14 @@ export default function WikiTab() {
   return (
     <div className={`wikitab${graphVisible ? "" : " wikitab--graph-hidden"}`}>
       <aside className="wikitab__pane-tree">
-        <WikiOrganizer mode={mode} onModeChange={setMode} taskId={taskId} onSelectTask={setTaskId} />
+        <WikiOrganizer
+          mode={mode}
+          onModeChange={setMode}
+          taskId={taskId}
+          onSelectTask={setTaskId}
+          hierarchyRoot={hierarchyRoot}
+          onHierarchyRoot={setHierarchyRoot}
+        />
       </aside>
       <main className="wikitab__pane-preview">
         {!graphVisible && (
@@ -41,7 +57,13 @@ export default function WikiTab() {
             <ShareNetwork size={18} aria-hidden="true" />查看关联图谱
           </button>
         )}
-        {mode === "organize" ? <WikiRelationshipWorkbench taskId={taskId} onSelectTask={setTaskId} /> : <WikiPreview />}
+        {mode === "organize" ? (
+          <WikiRelationshipWorkbench taskId={taskId} onSelectTask={setTaskId} />
+        ) : mode === "hierarchy" ? (
+          <WikiHierarchyView root={hierarchyRoot} onOpen={openFromHierarchy} />
+        ) : (
+          <WikiPreview />
+        )}
       </main>
       {graphVisible && (
         <aside className="wikitab__pane-graph">

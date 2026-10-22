@@ -9,6 +9,7 @@ import {
   ListChecks,
   MagnifyingGlass,
   Tag,
+  TreeStructure,
   WarningCircle,
 } from "@phosphor-icons/react";
 import { useWikiStore } from "../../store/wiki";
@@ -20,8 +21,9 @@ import {
 } from "../../lib/tauri_wiki";
 import WikiTree from "./WikiTree";
 import { useKeptUntyped } from "../../lib/wikiUntypedKept";
-import { useRelationVocab } from "../../lib/wikiRelationVocab";
+import { customHierarchy, useRelationVocab } from "../../lib/wikiRelationVocab";
 import WikiRelationTypesModal from "./WikiRelationTypesModal";
+import { useHierarchyModel } from "./WikiHierarchyView";
 import {
   buildConfirmedWikiContent,
   buildWikiRelationshipTasks,
@@ -30,7 +32,7 @@ import {
   type WikiRelationshipTaskKind,
 } from "./wikiRelationshipTasks";
 
-export type WikiWorkspaceMode = "organize" | "browse";
+export type WikiWorkspaceMode = "organize" | "browse" | "hierarchy";
 
 const TASK_META: Record<
   WikiRelationshipTaskKind,
@@ -41,6 +43,8 @@ const TASK_META: Record<
   pending: { label: "待确认", icon: CheckCircle },
   broken: { label: "关系要改", icon: WarningCircle },
   untyped: { label: "没标类型", icon: Tag },
+  skiplevel: { label: "跨级重复", icon: TreeStructure },
+  multiparent: { label: "多个上级", icon: TreeStructure },
   stale: { label: "进度待核对", icon: ClockCounterClockwise },
   duplicate: { label: "可能重复", icon: Copy },
 };
@@ -50,11 +54,16 @@ export default function WikiOrganizer({
   onModeChange,
   taskId,
   onSelectTask,
+  hierarchyRoot = null,
+  onHierarchyRoot,
 }: {
   mode: WikiWorkspaceMode;
   onModeChange: (mode: WikiWorkspaceMode) => void;
   taskId: string | null;
   onSelectTask: (taskId: string | null) => void;
+  /** 10/23「层级」: 选中的顶层 */
+  hierarchyRoot?: string | null;
+  onHierarchyRoot?: (path: string) => void;
 }) {
   const files = useWikiStore((state) => state.files);
   const filesLoading = useWikiStore((state) => state.filesLoading);
@@ -72,6 +81,7 @@ export default function WikiOrganizer({
   }, [files.length, filesLoading, loadFiles]);
 
   const keptUntyped = useKeptUntyped();
+  const hierarchy = useHierarchyModel();
   // 10/23: 关系类型 (内置 + 自定义); 打开知识体系就加载一次, 下拉 / 建议都从 store 拿
   const customRelations = useRelationVocab((state) => state.custom);
   const loadRelationVocab = useRelationVocab((state) => state.load);
@@ -79,10 +89,13 @@ export default function WikiOrganizer({
   useEffect(() => {
     void loadRelationVocab();
   }, [loadRelationVocab]);
-  const tasks = useMemo(() => buildWikiRelationshipTasks(files, new Date(), keptUntyped), [files, keptUntyped]);
+  const tasks = useMemo(
+    () => buildWikiRelationshipTasks(files, new Date(), keptUntyped, customHierarchy(customRelations)),
+    [files, keptUntyped, customRelations],
+  );
   const hasLegacyRelations = useMemo(() => hasLegacyWikiRelations(files), [files]);
   const counts = useMemo(() => {
-    const out: Record<WikiRelationshipTaskKind, number> = { conflict: 0, ambiguous: 0, pending: 0, broken: 0, untyped: 0, stale: 0, duplicate: 0 };
+    const out: Record<WikiRelationshipTaskKind, number> = { conflict: 0, ambiguous: 0, pending: 0, broken: 0, untyped: 0, skiplevel: 0, multiparent: 0, stale: 0, duplicate: 0 };
     for (const task of tasks) out[task.kind] += 1;
     return out;
   }, [tasks]);
@@ -177,10 +190,35 @@ export default function WikiOrganizer({
           <Books size={18} aria-hidden="true" />
           全部知识
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === "hierarchy"}
+          data-active={mode === "hierarchy"}
+          onClick={() => onModeChange("hierarchy")}
+        >
+          <TreeStructure size={18} aria-hidden="true" />
+          层级
+        </button>
       </div>
 
       {mode === "browse" ? (
         <div className="wiki-organizer__browse"><WikiTree /></div>
+      ) : mode === "hierarchy" ? (
+        <div className="wiki-organizer__roots" aria-label="层级的顶层">
+          {hierarchy.roots.length === 0 && <p className="wiki-organizer__roots-empty">还没有上下级关系</p>}
+          {hierarchy.roots.map((r) => (
+            <button
+              type="button"
+              key={r.path}
+              data-active={(hierarchyRoot ?? hierarchy.roots[0]?.path) === r.path}
+              onClick={() => onHierarchyRoot?.(r.path)}
+            >
+              <span>{hierarchy.byPath.get(r.path)?.title ?? r.path}</span>
+              <small>{r.size}</small>
+            </button>
+          ))}
+        </div>
       ) : (
         <>
           <button type="button" className="wiki-organizer__vocab" onClick={() => setShowRelationTypes(true)}>

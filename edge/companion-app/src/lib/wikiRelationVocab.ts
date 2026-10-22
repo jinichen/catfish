@@ -12,7 +12,7 @@ interface RelationVocabState {
   custom: RelationTypeInfo[];
   loaded: boolean;
   load: () => Promise<void>;
-  add: (name: string, meaning: string) => Promise<void>;
+  add: (name: string, meaning: string, hierarchy?: "child" | "parent") => Promise<void>;
   remove: (name: string) => Promise<void>;
 }
 
@@ -28,8 +28,8 @@ export const useRelationVocab = create<RelationVocabState>((set) => ({
       set({ loaded: true });
     }
   },
-  add: async (name, meaning) => {
-    const v = await wikiRelationVocabAdd(name, meaning);
+  add: async (name, meaning, hierarchy) => {
+    const v = await wikiRelationVocabAdd(name, meaning, hierarchy);
     set({ builtin: v.builtin, custom: v.custom });
   },
   remove: async (name) => {
@@ -37,3 +37,8 @@ export const useRelationVocab = create<RelationVocabState>((set) => ({
     set({ builtin: v.builtin, custom: v.custom });
   },
 }));
+
+/** 自定义关系里的上下级关系 (词 → child/parent), 给「层级」视图用 */
+export function customHierarchy(custom: readonly RelationTypeInfo[]): Record<string, "child" | "parent"> {
+  return Object.fromEntries(custom.filter((c) => c.hierarchy).map((c) => [c.name, c.hierarchy!]));
+}

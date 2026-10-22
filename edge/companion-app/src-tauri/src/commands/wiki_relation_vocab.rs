@@ -9,7 +9,10 @@
 //!   · 前端下拉 / 小鲶建议 / 蒸馏插件 / tool-bridge / 主聊天都读同一个文件
 //! 没登记的词照旧归「关联」—— 自造词不会回来。
 //!
-//! 文件: ~/.catfish/wiki_relation_vocab.custom.json  `{"relations": {"词": "一句话意思"}}`
+//! 文件: ~/.catfish/wiki_relation_vocab.custom.json
+//!   `{"relations": {"词": "一句话意思"}, "hierarchy": {"词": "child" | "parent"}}`
+//! hierarchy (10/23, 可选): 这个关系是不是上下级 —— child = 本条目是对方的下级 (像「隶属」),
+//! parent = 本条目是对方的上级 (像「包含」); 知识体系「层级」视图按它拼树。
 
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -42,12 +45,35 @@ pub(crate) fn load_custom() -> BTreeMap<String, String> {
     catfish_home().map(|home| load_custom_at(&home)).unwrap_or_default()
 }
 
-fn save_custom_at(home: &Path, map: &BTreeMap<String, String>) -> Result<(), String> {
+/// 自定义关系里哪些是上下级 (词 → "child" | "parent")
+pub(crate) fn load_custom_hierarchy_at(home: &Path) -> BTreeMap<String, String> {
+    let Ok(text) = fs::read_to_string(custom_path(home)) else {
+        return BTreeMap::new();
+    };
+    serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|v| v.get("hierarchy").cloned())
+        .and_then(|v| serde_json::from_value::<BTreeMap<String, String>>(v).ok())
+        .unwrap_or_default()
+}
+
+fn save_custom_at(
+    home: &Path,
+    map: &BTreeMap<String, String>,
+    hierarchy: &BTreeMap<String, String>,
+) -> Result<(), String> {
     fs::create_dir_all(home).map_err(|e| e.to_string())?;
-    let text = serde_json::to_string_pretty(&serde_json::json!({ "relations": map })).map_err(|e| e.to_string())?;
+    let text = serde_json::to_string_pretty(&serde_json::json!({ "relations": map, "hierarchy": hierarchy }))
+        .map_err(|e| e.to_string())?;
     let tmp = custom_path(home).with_extension("json.tmp");
     fs::write(&tmp, text).map_err(|e| e.to_string())?;
     fs::rename(&tmp, custom_path(home)).map_err(|e| e.to_string())
+}
+
+fn builtin_hierarchy() -> BTreeMap<String, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(super::wiki_frontmatter::RELATION_VOCAB_JSON).unwrap_or_default();
+    serde_json::from_value(v["hierarchy"].clone()).unwrap_or_default()
 }
 
 fn builtin() -> (BTreeMap<String, String>, BTreeMap<String, String>) {
@@ -89,6 +115,9 @@ pub(crate) fn validate_new(name: &str, meaning: &str, custom: &BTreeMap<String, 
 pub struct RelationTypeInfo {
     pub name: String,
     pub meaning: String,
+    /// "child" | "parent" = 上下级关系; 不是层级为 None
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hierarchy: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -101,6 +130,9 @@ pub struct RelationVocab {
 #[tauri::command]
 pub fn wiki_relation_vocab_list() -> RelationVocab {
     let (rel, _) = builtin();
+    let bh = builtin_hierarchy();
+    let home = catfish_home().ok();
+    let ch = home.as_deref().map(load_custom_hierarchy_at).unwrap_or_default();
     let order: Vec<String> = serde_json::from_str::<serde_json::Value>(super::wiki_frontmatter::RELATION_VOCAB_JSON)
         .ok()
         .and_then(|v| v["relations"].as_object().map(|o| o.keys().cloned().collect()))
@@ -109,20 +141,35 @@ pub fn wiki_relation_vocab_list() -> RelationVocab {
         // 按词表文件里的顺序 (BTreeMap 会按字典序打乱)
         builtin: order
             .into_iter()
-            .map(|name| RelationTypeInfo { meaning: rel.get(&name).cloned().unwrap_or_default(), name })
+            .map(|name| RelationTypeInfo {
+                meaning: rel.get(&name).cloned().unwrap_or_default(),
+                hierarchy: bh.get(&name).cloned(),
+                name,
+            })
             .collect(),
-        custom: load_custom().into_iter().map(|(name, meaning)| RelationTypeInfo { name, meaning }).collect(),
+        custom: load_custom()
+            .into_iter()
+            .map(|(name, meaning)| RelationTypeInfo { hierarchy: ch.get(&name).cloned(), name, meaning })
+            .collect(),
         fallback: super::wiki_frontmatter::RELATION_FALLBACK.to_string(),
     }
 }
 
 #[tauri::command]
-pub fn wiki_relation_vocab_add(name: String, meaning: String) -> Result<RelationVocab, String> {
+pub fn wiki_relation_vocab_add(name: String, meaning: String, hierarchy: Option<String>) -> Result<RelationVocab, String> {
     let home = catfish_home()?;
     let mut custom = load_custom_at(&home);
     validate_new(&name, &meaning, &custom)?;
+    let mut ch = load_custom_hierarchy_at(&home);
+    match hierarchy.as_deref() {
+        None | Some("") => {}
+        Some(dir @ ("child" | "parent")) => {
+            ch.insert(name.trim().to_string(), dir.to_string());
+        }
+        Some(other) => return Err(format!("层级方向只能是 child / parent, 收到 {other}")),
+    }
     custom.insert(name.trim().to_string(), meaning.trim().to_string());
-    save_custom_at(&home, &custom)?;
+    save_custom_at(&home, &custom, &ch)?;
     Ok(wiki_relation_vocab_list())
 }
 
@@ -134,7 +181,9 @@ pub fn wiki_relation_vocab_remove(name: String) -> Result<RelationVocab, String>
     if custom.remove(name.trim()).is_none() {
         return Err(format!("「{name}」不是自定义关系"));
     }
-    save_custom_at(&home, &custom)?;
+    let mut ch = load_custom_hierarchy_at(&home);
+    ch.remove(name.trim());
+    save_custom_at(&home, &custom, &ch)?;
     Ok(wiki_relation_vocab_list())
 }
 
@@ -161,8 +210,10 @@ mod tests {
         let home = TempDir::new().unwrap();
         assert!(load_custom_at(home.path()).is_empty());
         let map = BTreeMap::from([("挂靠".to_string(), "本条目挂靠在对方名下".to_string())]);
-        save_custom_at(home.path(), &map).unwrap();
+        let hier = BTreeMap::from([("挂靠".to_string(), "child".to_string())]);
+        save_custom_at(home.path(), &map, &hier).unwrap();
         assert_eq!(load_custom_at(home.path()), map);
+        assert_eq!(load_custom_hierarchy_at(home.path()), hier);
         fs::write(custom_path(home.path()), "{not json").unwrap();
         assert!(load_custom_at(home.path()).is_empty());
     }

@@ -308,3 +308,22 @@ describe("进度待核对 (9/24)", () => {
     ]);
   });
 });
+
+describe("10/23 层级质量任务", () => {
+  it("跨级重复 / 多个上级 各出一条任务, 带上涉及的关系", () => {
+    const tasks = buildWikiRelationshipTasks([
+      file({ rel_path: "wiki/entities/co.md", title: "公司" }),
+      file({ rel_path: "wiki/entities/dept.md", title: "部门", related: [{ name: "公司", rel: "隶属" }] }),
+      file({ rel_path: "wiki/entities/p.md", title: "张三", related: [{ name: "部门", rel: "隶属" }, { name: "公司", rel: "隶属" }] }),
+      file({ rel_path: "wiki/concepts/a.md", title: "体系", related: [{ name: "分类", rel: "包含" }] }),
+      file({ rel_path: "wiki/concepts/b.md", title: "口径", related: [{ name: "分类", rel: "包含" }] }),
+      file({ rel_path: "wiki/concepts/c.md", title: "分类" }),
+    ]);
+    const skip = tasks.find((t) => t.kind === "skiplevel")!;
+    expect(skip.title).toBe("「张三」跨级挂了「公司」");
+    expect(skip.hierarchyLinks).toHaveLength(1);
+    const multi = tasks.find((t) => t.kind === "multiparent")!;
+    expect(multi.title).toBe("「分类」挂在 2 个上级下");
+    expect(multi.hierarchyLinks?.map((l) => l.declaredOn).sort()).toEqual(["wiki/concepts/a.md", "wiki/concepts/b.md"]);
+  });
+});

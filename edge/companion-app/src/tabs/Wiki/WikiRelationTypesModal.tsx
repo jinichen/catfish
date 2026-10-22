@@ -14,6 +14,7 @@ export default function WikiRelationTypesModal({ onClose }: { onClose: () => voi
   const files = useWikiStore((state) => state.files);
   const [name, setName] = useState("");
   const [meaning, setMeaning] = useState("");
+  const [hierarchy, setHierarchy] = useState<"" | "child" | "parent">("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -28,9 +29,10 @@ export default function WikiRelationTypesModal({ onClose }: { onClose: () => voi
     setBusy(true);
     setError(null);
     try {
-      await add(name.trim(), meaning.trim());
+      await add(name.trim(), meaning.trim(), hierarchy || undefined);
       setName("");
       setMeaning("");
+      setHierarchy("");
     } catch (err) {
       setError(String(err));
     } finally {
@@ -71,7 +73,7 @@ export default function WikiRelationTypesModal({ onClose }: { onClose: () => voi
               {custom.map((c) => (
                 <div key={c.name} style={row}>
                   <strong style={{ color: T.cyanHover }}>{c.name}</strong>
-                  <span>{c.meaning}<small style={{ color: T.textTertiary }}>{usage(c.name) > 0 ? ` · 用了 ${usage(c.name)} 条` : ""}</small></span>
+                  <span>{c.meaning}<small style={{ color: T.textTertiary }}>{c.hierarchy ? ` · 上下级 (${c.hierarchy === "child" ? "本条目是下级" : "本条目是上级"})` : ""}{usage(c.name) > 0 ? ` · 用了 ${usage(c.name)} 条` : ""}</small></span>
                   <button type="button" disabled={busy} onClick={() => void drop(c.name)} aria-label={`删除关系类型「${c.name}」`}
                     style={{ border: 0, background: "transparent", cursor: "pointer", color: T.textSecondary }}>
                     <Trash size={15} />
@@ -84,16 +86,22 @@ export default function WikiRelationTypesModal({ onClose }: { onClose: () => voi
           {builtin.map((b) => (
             <div key={b.name} style={row}>
               <strong>{b.name}</strong>
-              <span style={{ color: T.textSecondary }}>{b.meaning}</span>
+              <span style={{ color: T.textSecondary }}>{b.meaning}{b.hierarchy ? " · 上下级" : ""}</span>
               <span />
             </div>
           ))}
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "96px 1fr auto", gap: 8 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "96px 1fr 150px auto", gap: 8 }}>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="新关系，如 挂靠" maxLength={6}
             aria-label="新关系类型" style={{ padding: "7px 9px", border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 13 }} />
           <input value={meaning} onChange={(e) => setMeaning(e.target.value)} placeholder="一句话意思，如 本条目挂靠在对方名下 (人→公司)"
             maxLength={60} aria-label="这个关系的意思" style={{ padding: "7px 9px", border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 13 }} />
+          <select value={hierarchy} onChange={(e) => setHierarchy(e.target.value as "" | "child" | "parent")} aria-label="是不是上下级"
+            style={{ padding: "7px 6px", border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 13 }}>
+            <option value="">不是上下级</option>
+            <option value="child">本条目是对方的下级</option>
+            <option value="parent">本条目是对方的上级</option>
+          </select>
           <button type="button" disabled={busy || !name.trim() || !meaning.trim()} onClick={() => void submit()}
             style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "7px 12px", border: 0, borderRadius: 8, background: T.cyan, color: "#fff", cursor: "pointer", fontSize: 13 }}>
             <Plus size={14} />登记

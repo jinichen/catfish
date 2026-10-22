@@ -2293,6 +2293,31 @@ button {
 }
 .wiki-relations__suggest button:disabled { opacity: 0.5; cursor: default; }
 .wiki-relations__suggest-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+/* 10/23: 知识体系「层级」—— 左边顶层列表, 中间折叠树 */
+.wiki-organizer__roots { display: grid; gap: 4px; overflow-y: auto; padding-top: 8px; }
+.wiki-organizer__roots button {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px; text-align: left;
+  padding: 8px 10px; border: 0; border-radius: 8px; background: transparent; color: inherit; font-size: 13px; cursor: pointer;
+}
+.wiki-organizer__roots button:hover { background: color-mix(in srgb, var(--catfish-cyan) 8%, transparent); }
+.wiki-organizer__roots button[data-active="true"] { background: color-mix(in srgb, var(--catfish-cyan) 16%, transparent); color: var(--catfish-cyan); }
+.wiki-organizer__roots small { color: var(--catfish-text-muted); }
+.wiki-organizer__roots-empty { color: var(--catfish-text-muted); font-size: 13px; }
+.wiki-hier__tree, .wiki-hier__tree ul { list-style: none; margin: 0; padding: 0; }
+.wiki-hier__tree { padding: 4px 0 24px; overflow-y: auto; }
+.wiki-hier__row { display: flex; align-items: center; gap: 6px; min-height: 30px; }
+.wiki-hier__toggle {
+  width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center;
+  border: 0; background: transparent; color: var(--catfish-text-muted); cursor: pointer; flex: none;
+}
+.wiki-hier__name { border: 0; background: transparent; color: inherit; font-size: 14px; cursor: pointer; padding: 2px 4px; border-radius: 6px; text-align: left; }
+.wiki-hier__name:hover { color: var(--catfish-cyan); background: color-mix(in srgb, var(--catfish-cyan) 8%, transparent); }
+.wiki-hier__type { color: var(--catfish-text-muted); font-size: 11px; }
+.wiki-hier__count {
+  font-size: 11px; color: var(--catfish-cyan); padding: 0 6px; border-radius: 999px;
+  background: color-mix(in srgb, var(--catfish-cyan) 12%, transparent);
+}
+
 /* 10/23: 知识体系「关系类型」入口 */
 .wiki-organizer__vocab {
   display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; margin-bottom: 8px;

@@ -1,4 +1,5 @@
 import type { RelatedRef, WikiConflict, WikiFileInfo } from "../../lib/tauri_wiki";
+import { buildHierarchy, hierarchyIssues, type HierarchyDirection, type HierarchyLink } from "./wikiHierarchy";
 import { resolveWikiRef } from "../../lib/wikiResolve";
 
 /**
@@ -8,7 +9,8 @@ import { resolveWikiRef } from "../../lib/wikiResolve";
  *     报成 24 条"关系异常", 其实只要选一次它指谁
  *   · 待确认条目自己的关系问题在工作台里逐条标出, 不再另开 broken 任务重复列
  */
-export type WikiRelationshipTaskKind = "conflict" | "pending" | "ambiguous" | "broken" | "untyped" | "stale" | "duplicate";
+export type WikiRelationshipTaskKind =
+  | "conflict" | "pending" | "ambiguous" | "broken" | "untyped" | "skiplevel" | "multiparent" | "stale" | "duplicate";
 
 export interface WikiRelationshipTask {
   id: string;
@@ -27,6 +29,8 @@ export interface WikiRelationshipTask {
   staleDays?: number;
   /** kind === "untyped" 时: 每个条目只写了「关联」的对方名字 (一条任务管全部, 批量整理) */
   untypedItems?: { file: WikiFileInfo; names: string[] }[];
+  /** kind === "skiplevel" / "multiparent" 时: 涉及的上下级关系 (skiplevel 只有多余的那条) */
+  hierarchyLinks?: HierarchyLink[];
 }
 
 /** 9/24: 带进度的项目/证书, 超过这么多天没更新就列出来核对 */
@@ -126,6 +130,7 @@ export const RELATION_VOCAB = [
   "维护",
   "申报",
   "分析",
+  "记录", // 台账/对照表/数据 → 所记的人或公司 (不是上下级)
 ] as const;
 export const RELATION_FALLBACK = "关联";
 const DEFAULT_RELATION_TYPES: string[] = [...RELATION_VOCAB, RELATION_FALLBACK];
@@ -189,6 +194,7 @@ export function buildWikiRelationshipTasks(
   files: WikiFileInfo[],
   today: Date = new Date(),
   keptUntyped: ReadonlySet<string> = new Set(),
+  customHierarchy: Readonly<Record<string, HierarchyDirection>> = {},
 ): WikiRelationshipTask[] {
   const isPending = (file: WikiFileInfo) => (file.ontology_status ?? "active") === "pending";
 
@@ -306,7 +312,30 @@ export function buildWikiRelationshipTasks(
     untypedItems,
   }];
 
-  return [...conflicts, ...ambiguous, ...pending, ...broken, ...untyped, ...stale, ...duplicates];
+  // 10/23: 层级质量 (wikiHierarchy.ts) —— 跨级重复 (已在部门下, 又直挂公司) / 多个上级
+  const byPath = new Map(files.map((file) => [file.rel_path, file]));
+  const titleOf = (path: string | undefined) => (path && byPath.get(path)?.title) || path || "";
+  const hierarchy = hierarchyIssues(buildHierarchy(files.filter((file) => !isPending(file)), customHierarchy))
+    .filter((issue) => byPath.has(issue.child))
+    .map((issue): WikiRelationshipTask => issue.kind === "skiplevel"
+      ? {
+        id: `skiplevel:${issue.child}:${issue.links[0].parent}`,
+        kind: "skiplevel",
+        title: `「${titleOf(issue.child)}」跨级挂了「${titleOf(issue.links[0].parent)}」`,
+        detail: `已经在「${titleOf(issue.via)}」下面，「${titleOf(issue.via)}」又在「${titleOf(issue.links[0].parent)}」下面；直挂的这条多余`,
+        file: byPath.get(issue.child)!,
+        hierarchyLinks: issue.links,
+      }
+      : {
+        id: `multiparent:${issue.child}`,
+        kind: "multiparent",
+        title: `「${titleOf(issue.child)}」挂在 ${issue.links.length} 个上级下`,
+        detail: `上级：${issue.links.map((l) => titleOf(l.parent)).join("、")}；确认哪个才是，其余去掉或改成别的关系`,
+        file: byPath.get(issue.child)!,
+        hierarchyLinks: issue.links,
+      });
+
+  return [...conflicts, ...ambiguous, ...pending, ...broken, ...hierarchy, ...untyped, ...stale, ...duplicates];
 }
 
 /** 待确认里「没有要改的关系」的那些 —— 可以一次全部确认。 */

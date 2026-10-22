@@ -17,6 +17,8 @@ import WikiAmbiguousPanel from "./WikiAmbiguousPanel";
 import WikiRelationsEditor from "./WikiRelationsEditor";
 import WikiUntypedBatch from "./WikiUntypedBatch";
 import { useKeptUntyped } from "../../lib/wikiUntypedKept";
+import { customHierarchy, useRelationVocab } from "../../lib/wikiRelationVocab";
+import WikiHierarchyIssuePanel from "./WikiHierarchyIssuePanel";
 
 function evidenceExcerpt(body: string): string {
   return body
@@ -31,6 +33,8 @@ const HEADER_HINT: Record<string, string> = {
   conflict: "小鲶后来读到的跟现在记的不一样，选一个。",
   pending: "小鲶新建的条目。看一眼关系对不对，对就确认；关系可以没有。",
   broken: "有一条关系要改：改类型或删掉。",
+  skiplevel: "已经挂在中间一级下面，又直挂了更上一级 —— 直挂的那条多余，层级图上会多出一条斜线。",
+  multiparent: "挂在好几个上级下面。确认哪个才是它的上级，其余去掉（或者到条目里改成别的关系）。",
   untyped: "这些关系只写了「关联」，说不清是什么关系。让小鲶一次建议，看过再采纳；拿不准的点「保持关联」，以后不再列。不点就不写入。",
   stale: "这条记着进度，但很久没更新了。核对正文里的进度还对不对。",
   duplicate: "名称相近的条目需要人工核对，避免错误合并。",
@@ -54,7 +58,11 @@ export default function WikiRelationshipWorkbench({
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const keptUntyped = useKeptUntyped();
-  const tasks = useMemo(() => buildWikiRelationshipTasks(files, new Date(), keptUntyped), [files, keptUntyped]);
+  const customRelations = useRelationVocab((state) => state.custom);
+  const tasks = useMemo(
+    () => buildWikiRelationshipTasks(files, new Date(), keptUntyped, customHierarchy(customRelations)),
+    [files, keptUntyped, customRelations],
+  );
   const selectedTask = useMemo(
     () => tasks.find((task) => task.id === taskId)
       ?? tasks.find((task) =>
@@ -211,7 +219,9 @@ export default function WikiRelationshipWorkbench({
         </section>
       )}
 
-      {selectedTask?.kind === "duplicate" ? (
+      {selectedTask && (selectedTask.kind === "skiplevel" || selectedTask.kind === "multiparent") ? (
+        <WikiHierarchyIssuePanel key={selectedTask.id} task={selectedTask} onLater={onLater} />
+      ) : selectedTask?.kind === "duplicate" ? (
         <section className="wiki-workbench__section">
           <div className="wiki-workbench__section-title">
             <WarningCircle size={22} aria-hidden="true" />
