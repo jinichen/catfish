@@ -312,6 +312,7 @@ pub fn schedule_email_scheduler(app: AppHandle) {
                 Ok(items) => {
                     // 9/27: 这次取列表可能刚触发了 id 迁移, 先改缓存键再比对/评级
                     apply_id_migration();
+                    let snapshot_items = items.clone();
                     let current_ids: HashSet<String> =
                         items.iter().map(|i| i.id.clone()).collect();
 
@@ -392,6 +393,9 @@ pub fn schedule_email_scheduler(app: AppHandle) {
                         // 更新 baseline (含已读消除 + 新增)
                         seen = current_ids;
                     }
+                    // 10/22 P1: 未读 (主题 + 发件人 + 急/中/低) 落盘给主聊天的「此刻」块。放在评级之后,
+                    // 新邮件的急/中/低这一轮就带上。
+                    crate::services::situation_snapshot::write_unread(&snapshot_items);
                 }
                 Err(e) => {
                     log::debug!("email_scheduler: 拉未读失败 (不通知): {e}");

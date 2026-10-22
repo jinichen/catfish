@@ -11,6 +11,34 @@ prompt hack 修不动**. 这个 doc 是防再次走错的规则书.
 
 ---
 
+## 0. 2026-10-22 更新: 谁管什么 + prefetch 改成「此刻 + 按问题检索」
+
+下面第 1 节是 6/23 的审计, 保留作历史。10/22 以后以本节为准。
+
+### 0.1 跟 hermes 自带机制的分工 (不重复、不打架)
+
+| 事 | 归谁 | 说明 |
+|---|---|---|
+| 技能清单进 prompt | **hermes** skills index (系统提示, 认 `skills.disabled`) | `~/.catfish/skills` 在 `skills.external_dirs` 里。prefetch 不再注入 `skills_catalog` —— 原来它还扫 `~/.hermes/skills` 且不看 disabled, 10/22 实测一轮 4.7KB 全是已停用技能 |
+| `USER.md` / `MEMORY.md` (确认过的偏好 / 事实) | **hermes** memory 工具 + 后台 review | review 10 轮一次, 写的是精炼条目, 跟我们的蒸馏不是同一个文件 |
+| journal → 「当前状态」/ 历史段 (`distilled_facts.md`) | **catfish-memory** 蒸馏 | 24h 一次 + 合并「当前状态」(10/22 起关深度思考, 9 秒出) |
+| `memory` 工具 (5 kind 路由) | **catfish-memory** 一份实现 | hermes 建 agent 时先算工具清单后加载 memory provider, 所以 catfish-xcatfish-user 在启动时就把 catfish-memory 那份注册上 (覆盖重启后第一个对话); catfish-memory 没配成 provider 时才退回 memory_router |
+| 👍/👎/改 反馈 | Companion 写 `feedback.jsonl` `{kind, preview, comment}` | prefetch 按这个格式读 (10/22 之前读 verdict/note, 一条都对不上) |
+
+### 0.2 prefetch 里跟「这个员工」有关的部分
+
+| 段 | 来源 | 大小 |
+|---|---|---|
+| 📍 此刻 (`catfish_memory_situation.py`) | 现在几点; Companion 写的 `~/.catfish/situation/calendar_today.json` (每 15 分钟) / `unread_email.json` (邮件扫描每轮, 只主题 + 发件人 + 急中低); `task_library.db` 过期 / 3 天内到期的待办 | ~200–900c。快照过期 (日程不是今天 / 邮件超 90 分钟) 就不出那一类, 不说「没有」 |
+| 🕒 近期流水 | `employee_journal.md` 尾部 | 3KB |
+| 📝 当前状态 | `distilled_facts.md` 段 0 整段 | ≤2.4KB |
+| 🔎 相关长期记忆 (`catfish_memory_recall.py`) | 其余各段拆成「日期 · 小节 · 一行」, jieba + BM25 按员工这句话检索, 新段略加权, 同句只留最新 | ≤1.8KB, 没有够格的就不出 |
+
+10/22 实测 (鸿波本机): 问「CMMI-5 现在什么状态」prefetch 16.3K → 11.6K 字, 其中跟员工有关的
+从 ~1.3K 变成 当前状态 + 12 条按问题检出的历史; 问「林启铵是谁」能捞出两个月前的人物条目。
+
+---
+
 ## 1. 现状 audit (2026-06-23 实证, 不瞎猜)
 
 ### 1.1 memory 6 kind 完整路由
@@ -36,7 +64,7 @@ prompt hack 修不动**. 这个 doc 是防再次走错的规则书.
 | 6 | `_render_expense_summary` (新) | ~200c | 强制 | jsonl 非空 |
 | 7 | `_render_employee_journal` | **5000c (cap)** | sparse 跳 | 非 advisor |
 | 8 | `_render_wiki_summary` | ~1KB | sparse 跳 | 非 advisor |
-| 9 | `_render_skills_catalog` | **5000c (cap, top-K)** | sparse 跳 | 非 advisor |
+| 9 | ~~`_render_skills_catalog`~~ (10/22 删, 见 0.1) | ~~5000c~~ | — | — |
 | 10 | `_render_strategic_docs` | **3000c (cap, top-K)** | sparse 跳 | 非 advisor |
 | 11 | `_render_feedback` | **2000c (cap)** | sparse 跳 | 非 advisor |
 | 12 | `_render_skill_guard` | **3000c (cap)** | sparse 跳 | 条件 (query 提 skill) |

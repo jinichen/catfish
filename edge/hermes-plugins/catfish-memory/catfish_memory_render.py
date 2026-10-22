@@ -87,7 +87,11 @@ except ImportError:  # 独立脚本模式 (无父包)
 #   _STOPCHARS 留在了原处 —— 3 处 NameError, check_undefined_names.sh 抓到的。
 #   这次搬之前做了跨度自检 (116 + 675 = 791, 0 重叠 0 遗漏) 并确认搬走那段
 #   引用的外部名字为空。
+#: 10/22 P1: 按问题检索出的长期记忆条目, 最多这么多字
+_RECALL_BUDGET = 1800
+
 try:
+    from .catfish_memory_recall import current_status_block, recall_block
     from .catfish_memory_relevance import (  # noqa: F401
         _RELEVANCE_MIN_HITS,
         _RELEVANCE_MIN_OVERLAP,
@@ -99,6 +103,7 @@ try:
         _query_token_set,
     )
 except ImportError:  # 独立脚本模式 (无父包)
+    from catfish_memory_recall import current_status_block, recall_block
     from catfish_memory_relevance import (  # noqa: F401
         _RELEVANCE_MIN_HITS,
         _RELEVANCE_MIN_OVERLAP,
@@ -123,147 +128,6 @@ _WIKI_CAP_QUERY = 20
 class _RenderMixin:
     """prefetch 的各段渲染。不持有任何状态 —— 见模块 docstring。"""
 
-
-    def _render_skills_catalog(
-        self, catfish_home: Path, query: str = "",
-    ) -> str:
-        """BL-MEMORY-P2-4 (2026-06-03): dual-path fallback.
-        BL-MEMORY-P2-2 (2026-06-03): query 相关性 top-K 真筛.
-
-        真问题: 老版只扫 ~/.catfish/skills/, 真生产员工 mac 真无目录, 真返空.
-        6/3 真生产 dump 真验 5 数据源里 skills_catalog 真缺位 (鸿波 BL-TOKEN-AUDIT
-        '5 数据源痕迹没看见' 真因之一).
-
-        真新逻辑 (按优先级扫, 真合并 budget):
-        1. ~/.catfish/skills/ (员工录的 RecMode + propose_skill 真生成的, 真用户首选)
-        2. ~/.hermes/skills/ (hermes 自带 29 skill + catfish 真 symlink 装的)
-
-        真 dedupe by skill 真名 (优先 catfish 自家版本, 真覆盖 hermes 默认).
-
-        真 query 筛 (P2-2):
-        - query 真空 (initial / no message) → 全注入按字母序 (旧行为)
-        - query 真有 → 算每 skill name+desc head 的 jieba/字符级 Jaccard, top-K 留
-          (按 budget 截断, 真不漏高分 skill)
-        """
-        candidates: List[Path] = []
-        catfish_skills = catfish_home / "skills"
-        if catfish_skills.is_dir():
-            candidates.append(catfish_skills)
-        # 真 fallback: hermes skills (真常用真路径)
-        hermes_skills = _hermes_home() / "skills"
-        if hermes_skills.is_dir():
-            candidates.append(hermes_skills)
-
-        if not candidates:
-            return ""
-
-        # 真先收集 (skill_name, skill_head) 真候选 list, 真不截 budget
-        candidates_list: List[tuple] = []
-        seen_names: set = set()
-        try:
-            for skills_root in candidates:
-                # 真两层: skills_root 直接含 skill 目录 (catfish_home/skills),
-                # 或 skills_root 含 category/skill 二层 (hermes 真 productivity/, devops/ 等)
-                skill_dirs: List[Path] = []
-                for child in sorted(skills_root.iterdir()):
-                    if not child.is_dir():
-                        continue
-                    # 真 child 自身有 SKILL.md? → 它就是 skill 真目录
-                    if (child / "SKILL.md").exists():
-                        skill_dirs.append(child)
-                    else:
-                        # 真 category 层, 真扫一级子目录
-                        try:
-                            for grandchild in sorted(child.iterdir()):
-                                if (grandchild.is_dir() and
-                                        (grandchild / "SKILL.md").exists()):
-                                    skill_dirs.append(grandchild)
-                        except OSError:
-                            continue
-
-                for skill_dir in skill_dirs:
-                    name = skill_dir.name
-                    if name in seen_names:
-                        continue  # 真 dedupe (优先 catfish 自家版本)
-                    head = _read_text_safe(skill_dir / "SKILL.md", 800)
-                    if not head:
-                        continue
-                    candidates_list.append((name, head.strip()[:600]))
-                    seen_names.add(name)
-        except OSError:
-            pass
-
-        if not candidates_list:
-            return ""
-
-        # 真 P2-2: query 真打分排序
-        #
-        # 8/17: 加闸门 + 相对下限, 跟 _render_strategic_docs 同一套判据。
-        #
-        # 改之前实测: 不管问什么, 这一段恒定 4,85x~4,91x 字符 (16 个 skill) ——
-        # 排序是有效的 (问 cron 就把 cron-job-editing 排第一), 但排完之后
-        # **预算没花完就继续塞**, 于是第 5~16 名照样进 prompt。
-        #
-        # 折叠掉是安全的, 因为**技能名单并没有消失**: hermes 自己的
-        # <available_skills> 已经把全部 83 个 skill 连同一行描述放进 system
-        # prompt 的 stable 层 (被缓存), 而 skills_list / skill_view /
-        # search_skills 三个工具在聊天路径上都在手里。这一段的职责只是
-        # "给当下最相关的那两三个补上细节", 不是"告诉模型有哪些技能"。
-        #
-        # 相对下限用 0.5 不用 strategic 那边的 0.25: 91 个 skill 的描述共用
-        # 大量业务词汇, 分布压得很紧 —— 实测 "帮我改一下 cron 定时任务" 在
-        # 0.25 下留全部 91 个 (27,533 字符), 比不筛还糟。
-        query_clean = (query or "").strip()
-        if query_clean:
-            # 真用 char-level set 真简单 Jaccard (无 jieba 依赖, plugin 真 light)
-            q_chars = _query_token_set(query_clean)
-            scored: List[tuple] = []
-            for name, head in candidates_list:
-                n_tok, h_tok = _query_token_set(name), _query_token_set(head)
-                # 真 name 真权重更高 (skill 真定位作用)
-                total = (_jaccard_similarity(q_chars, n_tok) * 3.0
-                         + _jaccard_similarity(q_chars, h_tok))
-                d_tok = n_tok | h_tok
-                scored.append((total, name, head,
-                               _overlap_coefficient(q_chars, d_tok),
-                               len(q_chars & d_tok)))
-            scored.sort(key=lambda t: -t[0])
-
-            top_overlap, top_hits = max(((t[3], t[4]) for t in scored), default=(0.0, 0))
-            if top_overlap < _RELEVANCE_MIN_OVERLAP or top_hits < _RELEVANCE_MIN_HITS:
-                return (
-                    "## 🛠 可用技能 (catfish skills)\n\n"
-                    f"_跟当前话题都不沾边, 细节已折叠 — 全部 {len(candidates_list)} 个技能的"
-                    "名字和简介在 `<available_skills>` 里都列着, 要看某个的完整说明用 "
-                    "`skill_view`._"
-                )
-            scored = [t for t in scored if t[3] >= top_overlap * _SKILLS_FLOOR_RATIO]
-            ordered = [(name, head) for _s, name, head, _ov, _h in scored]
-        else:
-            # 真 query 空 → 按字母序 (老行为)
-            ordered = candidates_list
-
-        # 真按 budget 真截
-        entries: List[str] = []
-        budget = _BUDGETS["skills_catalog"]
-        # 真 P2-2: query 真有 → 真 cap 砍到 5000 chars (top-K 真够, 减 system prompt)
-        if query_clean:
-            budget = min(budget, 5000)
-        for name, head in ordered:
-            entry = f"### {name}\n\n{head}\n"
-            if len(entry) > budget:
-                break
-            entries.append(entry)
-            budget -= len(entry)
-            if budget <= 0:
-                break
-
-        if not entries:
-            return ""
-        title = "## 🛠 可用技能 (catfish skills)"
-        if query_clean and len(entries) < len(candidates_list):
-            title += f" — 按当前话题筛 top {len(entries)}/{len(candidates_list)}"
-        return f"{title}\n\n" + "\n".join(entries)
 
     def _render_strategic_docs(
         self, catfish_home: Path, query: str = "",
@@ -654,7 +518,7 @@ class _RenderMixin:
         lines.append("\n_chat 时引用员工 wiki 用 `[[标题]]` 精确链接._")
         return "\n".join(lines)
 
-    def _render_employee_journal(self, catfish_home: Path) -> str:
+    def _render_employee_journal(self, catfish_home: Path, query: str = "") -> str:
         """长期记忆 (distilled) + 近期未蒸馏增量 (journal 尾部), 两段都注入。
 
         # 8/6 鸿波 catch「早安里说的项目进度, 工作台不知道」
@@ -685,21 +549,22 @@ class _RenderMixin:
         journal 只取**尾部**: 它是 append-only 的, 8/6 实测已 533KB, 全量读进来
         既超预算也没意义 —— 早期内容早就蒸馏进 distilled 了。
         """
-        # 10/7: 三七开 → 五五开, 且**近期流水放前面**。10/7 实测 distilled 停在两个
-        # 月前 (蒸馏超时, 见 catfish_memory_distill_run), 这两个月里主聊天知道"现在"
-        # 的唯一来源就是 journal 尾部那 1500 字节, 还排在一段打着"截至今天"的旧状态
-        # 后面。时效最新的放最前, 预算对半。
+        # 10/7: 近期流水放前面 (distilled 停更时它是「现在」的唯一来源)。
+        # 10/22 P1: 长期记忆不再取 distilled 文件的前 3KB (按位置截, 跟问题无关), 改成:
+        #   「当前状态」段整段 (蒸馏时合并的进行中 / 已完结 / 暂停) + 按问题检索出的相关条目
+        #   (catfish_memory_recall)。两个月前定的偏好 / 某人是谁 / 当时怎么决定的, 问到才会出现。
         budget = _BUDGETS["employee_journal"]
         recent_budget = budget // 2
-        long_budget = budget - recent_budget
 
         parts: list[str] = []
-
-        distilled = _read_text_safe(catfish_home / "distilled_facts.md", long_budget)
+        distilled_path = catfish_home / "distilled_facts.md"
+        try:
+            distilled = distilled_path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            distilled = ""
         has_distilled = bool(distilled.strip())
 
-        # journal 尾部 = 尚未进入 distilled 的近期流水。_read_text_safe 从头截断,
-        # 这里要的是**末尾**, 所以自己读。distilled 还不存在 (新装机器) 时
+        # journal 尾部 = 尚未进入 distilled 的近期流水。distilled 还不存在 (新装机器) 时
         # journal 就是唯一的记忆, 给全额。
         recent = self._tail_journal(
             catfish_home / "employee_journal.md",
@@ -715,7 +580,14 @@ class _RenderMixin:
                 parts.append(f"## 📝 员工长期日记 (catfish)\n\n{recent}")
 
         if has_distilled:
-            parts.append(f"## 📝 员工长期记忆 (catfish distilled)\n\n{distilled}")
+            status = current_status_block(distilled)
+            if not status:
+                # 老格式 / 合并从没成过 (没有段 0): 退回原来的取法, 至少有点东西
+                status = distilled[: budget - recent_budget]
+            parts.append(f"## 📝 员工长期记忆 (catfish distilled)\n\n{status}")
+            recalled = recall_block(distilled_path, distilled, query, _RECALL_BUDGET)
+            if recalled:
+                parts.append(recalled)
 
         return "\n\n".join(parts)
 
@@ -754,13 +626,26 @@ class _RenderMixin:
         )
         if not records:
             return ""
+        # 10/22: 写的一方是 Companion commands/feedback.rs —— {kind: thumb_up|thumb_down|edit,
+        # preview: 被评的那条回答前 200 字, comment: 可空}。原来这里读 verdict / note, 一个都对不上:
+        # 图标永远是「·」, 没写评语的 👎 整条丢掉, 模型从来不知道员工不满意哪条回答。
         lines = []
         for r in records:
-            verdict = r.get("verdict") or r.get("rating") or ""
-            note = r.get("note") or r.get("comment") or ""
-            icon = "👍" if verdict in ("up", "good", "👍") else "👎" if verdict in ("down", "bad", "👎") else "·"
-            if note:
-                lines.append(f"- {icon} {note}")
+            kind = r.get("kind") or r.get("verdict") or r.get("rating") or ""
+            comment = (r.get("comment") or r.get("note") or "").strip()
+            preview = " ".join((r.get("preview") or "").split())[:60]
+            if kind in ("thumb_down", "down", "bad", "👎"):
+                line = f"- 👎 员工不满意这条回答「{preview}…」"
+                lines.append(line + (f": {comment}" if comment else ""))
+            elif kind == "edit":
+                line = f"- ✏️ 员工改过这条回答「{preview}…」"
+                lines.append(line + (f", 改成/意见: {comment}" if comment else ""))
+            elif comment:
+                # 👍 本身信息量低, 带了评语才说明好在哪
+                lines.append(f"- 👍 「{preview}…」: {comment}")
         if not lines:
             return ""
-        return "## 💬 员工最近反馈 (catfish feedback)\n\n" + "\n".join(lines)
+        return (
+            "## 💬 员工最近反馈 (catfish feedback)\n\n"
+            "下面是员工对你最近回答的评价, 同类问题照这个改进, 不用复述:\n" + "\n".join(lines)
+        )

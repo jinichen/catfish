@@ -88,11 +88,12 @@ fn safe_llm_does_not_clear_high_risk_rule() {
 /// 立刻又开一轮。这条检查原来只看本文件, 现在把 services 里所有定时循环都算上。
 #[test]
 fn 每个_interval_都设了_missed_tick_behavior() {
-    let files: [(&str, &str); 4] = [
+    let files: [(&str, &str); 5] = [
         ("email_scheduler.rs", include_str!("email_scheduler.rs")),
         ("distill_scheduler.rs", include_str!("distill_scheduler.rs")),
         ("watchdog.rs", include_str!("watchdog.rs")),
         ("email_archive.rs", include_str!("email_archive.rs")),
+        ("situation_snapshot.rs", include_str!("situation_snapshot.rs")),
     ];
     for (name, full) in files {
         let prod = full.split("#[cfg(test)]").next().unwrap_or(full);
@@ -141,7 +142,9 @@ fn 定时循环文件都登记了() {
         }
     }
     found.sort();
-    let mut expected = vec!["distill_scheduler.rs", "email_archive.rs", "email_scheduler.rs", "watchdog.rs"];
+    let mut expected = vec![
+        "distill_scheduler.rs", "email_archive.rs", "email_scheduler.rs", "situation_snapshot.rs", "watchdog.rs",
+    ];
     expected.sort();
     assert_eq!(found, expected, "有新的 time::interval( / interval_at( —— 加进上面的检查表");
 }

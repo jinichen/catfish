@@ -166,7 +166,53 @@ def register(ctx) -> None:
     # mode 不 load, 真 enforce 位置在这里 (catfish-xcatfish-user plugin 真装载).
     # 5 kind 路由 (identity/project_fact/workflow/journal/todo), LLM 自己填 kind,
     # 0 后端 LLM 调用, 0 性能损失.
-    if hasattr(ctx, "register_tool"):
+    # 10/22: memory 工具只留一份实现 —— catfish-memory 的 (它多 expense 一类, 是现行版本)。
+    #
+    # 但不能只靠 catfish-memory 自己注册: hermes 建 agent 时**先算工具清单** (agent_init.py
+    # ~1117 get_tool_definitions) **后加载 memory provider** (~1348, catfish-memory 的 register
+    # 在这时才跑)。hermes 重启后的第一个对话, 工具清单里会是 hermes 自带的 memory 工具 schema。
+    # 原来靠这里在启动时注册 memory_router (另一份实现, 已经落后) 垫这一下。
+    #
+    # 现在启动时就把 catfish-memory 的 provider 拿来注册 (同一个类、同一份 schema / handler);
+    # catfish-memory 没配成 provider、或者找不到 / 加载失败, 才退回 memory_router。
+    def _register_catfish_memory_tool_early() -> bool:
+        try:
+            from hermes_cli.config import load_config_readonly
+            if ((load_config_readonly().get("memory") or {}).get("provider") or "") != "catfish-memory":
+                return False
+            from plugins.memory import find_provider_dir  # 纯路径查找, 不加载
+            import importlib.util as _iu_cm
+            _dir = find_provider_dir("catfish-memory")
+            if _dir is None:
+                return False
+            _spec_cm = _iu_cm.spec_from_file_location(
+                "_catfish_xcatfish_user_catfish_memory_early", _dir / "__init__.py",
+                submodule_search_locations=[str(_dir)],
+            )
+            _mod_cm = _iu_cm.module_from_spec(_spec_cm)
+            # 先挂进 sys.modules, 包里的相对 import 才找得到父包
+            import sys as _sys_cm
+            _sys_cm.modules[_spec_cm.name] = _mod_cm
+            _spec_cm.loader.exec_module(_mod_cm)
+            _provider = _mod_cm._load_provider_class()()
+            ctx.register_tool(
+                name="memory",
+                toolset="memory",
+                schema=_provider.get_catfish_memory_schema(),
+                handler=lambda args, **kw: _provider.handle_memory_tool(args, **kw),
+                check_fn=lambda: _provider.is_available(),
+                override=True,
+                emoji="🧠",
+                description="catfish 智能 memory 路由器 (替换 hermes builtin). 按 kind 路由 5 仓库.",
+            )
+            return True
+        except Exception as _e:  # noqa: BLE001 —— 退回 memory_router, 不能让 memory 工具缺位
+            logger.warning("catfish-xcatfish-user: 启动时注册 catfish-memory 的 memory 工具失败, 退回 memory_router: %s", _e)
+            return False
+
+    if hasattr(ctx, "register_tool") and _register_catfish_memory_tool_early():
+        logger.info("catfish-xcatfish-user: memory 工具 = catfish-memory 那份 (启动时先注册, 覆盖第一个对话)")
+    elif hasattr(ctx, "register_tool"):
         try:
             # 懒加载 memory_router (跟 plugin.py / pre_tool_call_safety_check 同 pattern)
             from pathlib import Path as _Path

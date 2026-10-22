@@ -195,29 +195,18 @@ def test_prefetch_employee_journal_raw_fallback(fake_catfish_home, provider):
 # 换成真能命中的 query, 扫描逻辑照测, 还顺带不跟闸门打架。
 
 
-def test_prefetch_skills_catalog(fake_catfish_home, provider):
-    """skills/<name>/SKILL.md 被发现 + 渲染"""
+def test_prefetch_no_longer_lists_skills(fake_catfish_home, provider):
+    """10/22: 技能清单交给 hermes (系统提示里的 skills index, 认 skills.disabled), prefetch 不再重复列。
+
+    原来这里扫 ~/.catfish/skills + ~/.hermes/skills 且不看 disabled —— 实测问 CMMI 状态时
+    注入了 4.7KB 已停用的 p5js / ascii-art / github-auth。
+    """
     skill_dir = fake_catfish_home / "skills" / "ppt-magazine"
     skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text(
-        "# ppt-magazine\n\n生成杂志式 PowerPoint", encoding="utf-8",
-    )
+    (skill_dir / "SKILL.md").write_text("# ppt-magazine\n\n生成杂志式 PowerPoint", encoding="utf-8")
     provider.initialize(session_id="s1")
     out = provider.prefetch("生成杂志式 PowerPoint")
-    assert "可用技能" in out
-    assert "ppt-magazine" in out
-
-
-def test_prefetch_skills_catalog_skips_dirs_without_skill_md(fake_catfish_home, provider):
-    """skills/<name>/ 没 SKILL.md → 跳过"""
-    (fake_catfish_home / "skills" / "no-manifest").mkdir(parents=True)
-    valid = fake_catfish_home / "skills" / "valid"
-    valid.mkdir()
-    (valid / "SKILL.md").write_text("valid skill", encoding="utf-8")
-    provider.initialize(session_id="s1")
-    out = provider.prefetch("valid skill")
-    assert "valid" in out
-    assert "no-manifest" not in out
+    assert "可用技能" not in out and "ppt-magazine" not in out
 
 
 def test_prefetch_feedback(fake_catfish_home, provider):
@@ -274,7 +263,7 @@ def test_prefetch_skill_guard_not_triggered_on_normal_query(fake_catfish_home, p
 
 
 def test_prefetch_aggregates_all_available_sources(fake_catfish_home, provider):
-    """5 个数据源都有 → 5 个 section 都出现, 顺序固定"""
+    """各数据源都有 → 各 section 都出现, 顺序固定"""
     # 1. session_meta
     (fake_catfish_home / "session_meta.json").write_text(
         '{"last_chat_iso": "2026-05-18T10:00:00"}', encoding="utf-8",
@@ -283,10 +272,6 @@ def test_prefetch_aggregates_all_available_sources(fake_catfish_home, provider):
     (fake_catfish_home / "distilled_facts.md").write_text(
         "员工是金融行业产品经理", encoding="utf-8",
     )
-    # 3. skills_catalog
-    skill = fake_catfish_home / "skills" / "demo"
-    skill.mkdir(parents=True)
-    (skill / "SKILL.md").write_text("# demo", encoding="utf-8")
     # 4. feedback
     (fake_catfish_home / "feedback.jsonl").write_text(
         '{"verdict": "up", "note": "go on"}\n', encoding="utf-8",
@@ -296,17 +281,17 @@ def test_prefetch_aggregates_all_available_sources(fake_catfish_home, provider):
     out = provider.prefetch("跑技能 demo")
 
     assert "时间感" in out
+    assert "此刻" in out
     assert "员工长期记忆" in out
-    assert "可用技能" in out
     assert "最近反馈" in out
     assert "Skill Guard" in out
-    # 顺序 (session_meta → journal → skills → feedback → guard)
+    # 顺序 (session_meta → 此刻 → journal → feedback → guard)
     idx_meta = out.find("时间感")
+    idx_now = out.find("此刻")
     idx_journal = out.find("员工长期记忆")
-    idx_skills = out.find("可用技能")
     idx_feedback = out.find("最近反馈")
     idx_guard = out.find("Skill Guard")
-    assert idx_meta < idx_journal < idx_skills < idx_feedback < idx_guard
+    assert idx_meta < idx_now < idx_journal < idx_feedback < idx_guard
 
 
 # ── helper 函数 ──────────────────────────────────────
@@ -355,3 +340,19 @@ def test_initialize_idempotent(fake_catfish_home, provider):
 def test_shutdown_no_op_does_not_raise(fake_catfish_home, provider):
     provider.initialize(session_id="s1")
     provider.shutdown()  # 不应该挂
+
+
+def test_prefetch_feedback_读_companion_真实写入格式(fake_catfish_home, provider):
+    """10/22: Companion commands/feedback.rs 写 {kind, preview, comment}; 原来这里读 verdict/note,
+    图标永远是「·」, 没写评语的 👎 整条丢掉。"""
+    (fake_catfish_home / "feedback.jsonl").write_text(
+        '{"kind": "thumb_down", "preview": "无人机 17 项被标成 16, 26-16=10 项", "comment": null}\n'
+        '{"kind": "edit", "preview": "下周例会议程", "comment": "议程按部门分组"}\n'
+        '{"kind": "thumb_up", "preview": "好的", "comment": null}\n',
+        encoding="utf-8",
+    )
+    provider.initialize(session_id="s1")
+    out = provider.prefetch("你好")
+    assert "👎 员工不满意这条回答「无人机 17 项被标成 16" in out
+    assert "✏️ 员工改过这条回答「下周例会议程…」, 改成/意见: 议程按部门分组" in out
+    assert "「好的…」" not in out, "没评语的 👍 信息量太低, 不占 prompt"

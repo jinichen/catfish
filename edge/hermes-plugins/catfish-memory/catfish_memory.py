@@ -225,7 +225,11 @@ try:
         run_distill_for_dream_engine,
     )
     from .catfish_memory_tools import _ToolsMixin
+    from .catfish_memory_recall import prewarm as _recall_prewarm
+    from .catfish_memory_situation import render_situation
 except ImportError:  # 独立脚本模式 (无父包)
+    from catfish_memory_recall import prewarm as _recall_prewarm
+    from catfish_memory_situation import render_situation
     from catfish_memory_render import _RenderMixin
     from catfish_memory_sections import _SectionsMixin
     from catfish_memory_expense import (  # noqa: F401
@@ -302,6 +306,14 @@ class CatfishMemoryProvider(
         self._catfish_home_cached = _catfish_home()
         self._last_summary_ts = time.time()  # baseline, 防 trivially trigger
         self._initialized = True
+        # 10/22 P1: 后台先加载 jieba 词典 + 建长期记忆检索索引, 第一轮对话不用多等
+        if self._catfish_home_cached is not None:
+            distilled_path = Path(self._catfish_home_cached) / "distilled_facts.md"
+            threading.Thread(
+                target=lambda: _recall_prewarm(distilled_path),
+                name="catfish-recall-prewarm",
+                daemon=True,
+            ).start()
         logger.info(
             "catfish-memory initialize: session=%s catfish_home=%s hermes_home=%s",
             session_id, self._catfish_home_cached, self._hermes_home,
@@ -474,12 +486,20 @@ class CatfishMemoryProvider(
         if task_status:
             sections.append(task_status)
 
+        # 1d. 10/22 P1: 「此刻」—— 现在几点、今天还剩哪些会、急邮件、快到期的待办。
+        # advisor sparse 不要: 早安自己的 prompt 里日程 / 邮件 / 待办是全量的。
+        if not is_advisor_sparse:
+            try:
+                sections.append(render_situation(catfish_home))
+            except Exception as e:  # noqa: BLE001 —— 快照坏了不能拖垮 prefetch
+                logger.warning("catfish-memory 此刻块渲染失败 (跳过): %s", e)
+
         # P3.5.5 sparse: 下面 7 段是 advisor 不需要的 (employee_journal / wiki /
         #   skills_catalog / strategic_docs / feedback / skill_guard / schema 已上面跳过).
         #   advisor 自己 user prompt 已注入 distilled + memory + todos + emails 完整上下文.
         if not is_advisor_sparse:
             # 2. employee_journal — 员工长期记忆
-            journal = self._render_employee_journal(catfish_home)
+            journal = self._render_employee_journal(catfish_home, query=query)
             if journal:
                 sections.append(journal)
 
@@ -492,10 +512,10 @@ class CatfishMemoryProvider(
             if wiki:
                 sections.append(wiki)
 
-            # 3. skills_catalog — 可用 catfish 技能 (BL-MEMORY-P2-2: query top-K 筛)
-            skills = self._render_skills_catalog(catfish_home, query=query)
-            if skills:
-                sections.append(skills)
+            # 3. skills_catalog: 10/22 不再注入。~/.catfish/skills 在 config.yaml skills.external_dirs
+            # 里, hermes 自己的技能清单 (系统提示里, 按 skills.disabled 过滤过) 已经列了它们;
+            # 这里再列一遍是重复, 而且它还扫 ~/.hermes/skills 且不看 disabled —— 10/22 实测
+            # 问「CMMI-5 现在什么状态」注入了 4.7KB 的 p5js / ascii-art / github-auth 等已停用技能。
 
             # 3b. BL-STRATEGIC-DOC-SYNC (6/7): 战略 / 设计 doc 注入 (manifesto /
             # patent landscape / moat assessment / capability gaps 等). 跟

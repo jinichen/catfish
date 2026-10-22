@@ -406,51 +406,8 @@ def test_overlap_不随文档词汇量变化():
 # token) 随便命中一个 skill 的英文描述就是 1.00。
 
 
-def _skill(home: Path, name: str, body: str) -> None:
-    d = home / "skills" / name
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "SKILL.md").write_text(body, encoding="utf-8")
-
-
-def test_skills_短噪音query要折叠(tmp_path, provider):
-    """★★★ "hi" 对某些 skill 的 overlap 是 1.00 —— 光看比例挡不住。"""
-    _skill(tmp_path, "hi-there-helper", "hi there, this helper does things")
-    _skill(tmp_path, "zizhi-duibiao", "资质对标分析：读对标矩阵Excel→按分类统计")
-
-    q = _query_token_set("hi")
-    d = _query_token_set("hi-there-helper") | _query_token_set(
-        "hi there, this helper does things")
-    assert _overlap_coefficient(q, d) >= _RELEVANCE_MIN_OVERLAP, (
-        "前置不成立: 'hi' 对这个 skill 的 overlap 应该够高, 这条才在考 |∩|"
-    )
-    assert len(q & d) < 4, "前置不成立: |∩| 应该 <4"
-
-    out = provider._render_skills_catalog(tmp_path, query="hi")
-    assert "###" not in out, f"短噪音 query 把技能细节倒出来了:\n{out[:200]}"
-    assert "available_skills" in out and "skill_view" in out, (
-        "折叠了就得告诉模型技能名单在哪、怎么看细节 —— 否则等于把技能藏了"
-    )
-
-
-def test_skills_真命中只留少数几个(tmp_path, provider):
-    """相对下限 0.5: 榜首之外只留真的接近的。"""
-    _skill(tmp_path, "zizhi-duibiao-fenxi", "资质对标分析：读对标矩阵Excel→按分类统计→找缺失风险")
-    _skill(tmp_path, "zizhi-tongbao", "资质通报生成：按模版更新月度通报")
-    _skill(tmp_path, "apple-notes", "Manage Apple Notes via memo CLI: create, search, edit.")
-    _skill(tmp_path, "findmy", "Track Apple devices/AirTags via FindMy.app on macOS.")
-
-    out = provider._render_skills_catalog(tmp_path, query="资质对标分析")
-    assert "### zizhi-duibiao-fenxi" in out, f"榜首没进去:\n{out[:200]}"
-    assert "### apple-notes" not in out, "英文无关 skill 不该占位"
-    assert "### findmy" not in out
-
-
-def test_skills_没有query时行为不变(tmp_path, provider):
-    """★ advisor / cron 这些没有 query 的调用方, 老行为一个字都不能动。"""
-    for i in range(4):
-        _skill(tmp_path, f"skill-{i}", f"技能 {i} 的说明文字")
-    out = provider._render_skills_catalog(tmp_path, query="")
-    assert out.count("### skill-") == 4, "没 query 时该全列, 不走闸门"
+# 10/22: prefetch 不再注入 skills_catalog (技能清单交给 hermes 的 skills index), 那三条
+# 针对 _render_skills_catalog 的测试随它删掉; 共用的闸门常量 strategic_docs 还在用, 下面这条留着。
 
 
 def test_skills_闸门跟strategic用同一组常量():

@@ -641,6 +641,8 @@ pub fn run() {
             // 里没有它), 蒸馏只在员工点按钮时以 dream_cli.py 子进程形态跑过。
             // 详见 services/distill_scheduler.rs 顶部。
             services::distill_scheduler::schedule_distill(app.handle().clone());
+            // 10/22 P1: 今天日程落盘给 hermes 插件 (主聊天的「此刻」块), 见 services/situation_snapshot.rs
+            services::situation_snapshot::schedule_calendar_snapshot();
 
             Ok(())
         })
