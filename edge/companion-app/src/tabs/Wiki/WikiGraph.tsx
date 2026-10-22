@@ -283,6 +283,8 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
         color: edgeColor,
         baseColor: edgeColor,
         rel: relation.relation,
+        // 10/23: 真关系画箭头 (方向 = 「A 关系 B」的 A→B), 正文提及只是线
+        type: isMention ? "line" : "arrow",
       });
     }
 
@@ -360,7 +362,11 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
         : "rgba(120, 120, 120, 0.44)";
 
     const sigma = new Sigma(graph, containerRef.current, {
-      renderEdgeLabels: false,
+      // 10/23: 边上写关系类型 (「隶属」「持有」…), 只写选中条目 / 悬停节点连着的边 —— 见 edgeReducer
+      renderEdgeLabels: true,
+      edgeLabelSize: 11,
+      edgeLabelFont: "ui-sans-serif, -apple-system, sans-serif",
+      edgeLabelColor: { color: labelColor },
       // 标签由 nodeReducer 按“重点节点 / 悬停邻居”决定，避免全图变成文字毛球。
       labelRenderedSizeThreshold: effectiveMode === "full" ? 4.5 : 3.2,
       labelFont: "ui-sans-serif, -apple-system, sans-serif",
@@ -410,17 +416,21 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
       sigma.setSetting("edgeReducer", (edge, data) => {
         const [src, dst] = g.extremities(edge);
         const isFocusEdge = focusNode && (src === focusNode || dst === focusNode);
+        const isMention = data.rel === WIKI_BODY_MENTION;
+        // 关系类型只写在跟选中条目 / 悬停节点相连的真关系上, 全图不写 (否则满屏文字)
+        const relLabel = (show: boolean) => (show && !isMention ? String(data.rel ?? "") : "");
         if (!hoveredNode) {
           return {
             ...data,
             color: isFocusEdge ? "rgba(26, 138, 149, 0.78)" : data.baseColor,
             size: isFocusEdge ? 1.8 : data.size,
+            label: relLabel(Boolean(isFocusEdge)),
           };
         }
         if (src === hoveredNode || dst === hoveredNode) {
-          return { ...data, color: COLOR_SELECTED, size: 2 };
+          return { ...data, color: COLOR_SELECTED, size: 2, label: relLabel(true) };
         }
-        return { ...data, color: isFocusEdge ? "rgba(26, 138, 149, 0.35)" : "rgba(150, 160, 162, 0.08)" };
+        return { ...data, label: "", color: isFocusEdge ? "rgba(26, 138, 149, 0.35)" : "rgba(150, 160, 162, 0.08)" };
       });
     };
 
