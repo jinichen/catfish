@@ -3,6 +3,7 @@
 import { currentExpertRoute, useExpertChat } from "../../lib/expertChat";
 import { ExpertQuickPrompts } from "./ExpertPicker";
 import { useEffect, useRef } from "react";
+import { useStickToBottom } from "../../hooks/useStickToBottom";
 import ChatMessage from "./ChatMessage";
 import { groupToolSteps } from "../../lib/chatToolSteps";
 import ChatInput from "./ChatInput";
@@ -50,41 +51,10 @@ export default function ChatPanel({
   // status_callback → SSE. lib/chat.ts onLifecycle → useChat setLifecycleStatus.
   const lifecycleStatus = useChatStore((s) => s.lifecycleStatus);
   const transport = useChatStore((s) => s.transport);
-  // P3.5.79+ (7/22 鸿波 catch "切会话滚位置错"): 追踪 session 首次渲染, 只 force-scroll 1
-  // 次到底. 跟下面 messages 智能滚 effect 分工:
-  //   - session 首次渲染 (切进) → 强制到底 (无论用户上一 session 在哪个位置)
-  //   - 同 session 后续 messages (streaming / 新发送) → 走智能 logic (near bottom 才跟随)
-  // 注: ChatState 里字段叫 persistedSessionId (老 session=真 uid / 新 session=null),
-  //     不是 sessionId (那是 SessionAttachment 上的). 军规: 拿字段前先 read 全 interface.
+  // 切会话 / 发消息 / 内容长高 → 贴底 (hooks/useStickToBottom.ts)
   const persistedSessionId = useChatStore((s) => s.persistedSessionId);
-  const scrolledSessionRef = useRef<string | null>(null);
 
-  // 新消息或 streaming token 来 · 自动滚到底 (2 分支)
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-
-    // 分支 1 · session 切换 · 首次消息 render 后强制滚到底 (P3.5.79+ 7/22)
-    // 老 bug: 只有 [messages] deps · 切 session 时 scrollTop 保留上一 session 的位置 ·
-    // scrollHeight 是新 session 内容 · atBottom 十有八九 false · 且新 session 最后条通常
-    // 是 assistant 不是 user · 两条件都不满足 → 不 scroll → 用户看到会话中间/顶部.
-    // 修法: 追 scrolledSessionRef · 只在 persistedSessionId 变 + messages 已 populate
-    // 时 force 一次. empty session 不设 ref · 等 messages 加载完后再 force.
-    if (scrolledSessionRef.current !== persistedSessionId && messages.length > 0) {
-      scrolledSessionRef.current = persistedSessionId;
-      el.scrollTop = el.scrollHeight;
-      return;
-    }
-
-    // 分支 2 · 同 session 内新消息/streaming · 智能滚 (原逻辑, 保阅读历史体验)
-    // 用户手动往上滚后不强制拉回, 只在底部附近时跟随
-    const threshold = 60;
-    const atBottom =
-      el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
-    if (atBottom || messages[messages.length - 1]?.role === "user") {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [persistedSessionId, messages]);
+  const onThreadScroll = useStickToBottom(scrollRef, persistedSessionId, messages);
 
   // 等批准横幅 (10/16 抽成 components/ApprovalBanner, 跟早安卡片共用)
   const approval = useApprovalBanner();
@@ -113,6 +83,7 @@ export default function ChatPanel({
       <div
         ref={scrollRef}
         className="chat-panel__thread"
+        onScroll={onThreadScroll}
       >
         <div className="chat-panel__content">
           {/* 10/18: 跟专家的新会话先给它擅长的几句问法; 跟小鲶的照旧 */}
