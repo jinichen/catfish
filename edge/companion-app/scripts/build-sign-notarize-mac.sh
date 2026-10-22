@@ -555,9 +555,13 @@ notarize_or_die() {
   # 10/21: --wait 等结果时网络断一下 (HTTPClientError.connectTimeout) 就退出, 而 Apple
   # 那边其实还在审 (notarytool info 查是 In Progress)。已经拿到提交 ID 的, 按 ID 接着查,
   # 不重新提交。只有 Apple 明确给了结论 (Invalid / Rejected) 才算没通过。
-  if [ -n "$sub_id" ] && [ "$status" != "Accepted" ] && [ "$status" != "Invalid" ] && [ "$status" != "Rejected" ]; then
-    echo "   等公证结果时连接断了, 按提交 ID $sub_id 接着查 (最多 60 分钟) ——"
-    for i in $(seq 1 120); do
+  # 10/22: 连接断在**上传过程中** (拿到 ID 之后 connectTimeout) 时, Apple 那边这个提交永远停在
+  # In Progress —— 两次实测 1 小时都不出结果, 重新提交同一个文件 7–12 分钟就过。所以按 ID 查
+  # 25 分钟还没结论, 就重提一次 (最多重提 2 次), 新提交照样按 ID 接着查。
+  local resubmits=0
+  while [ -n "$sub_id" ] && [ "$status" != "Accepted" ] && [ "$status" != "Invalid" ] && [ "$status" != "Rejected" ]; do
+    echo "   等公证结果时连接断了, 按提交 ID $sub_id 接着查 (最多 25 分钟) ——"
+    for i in $(seq 1 50); do
       status=$(xcrun notarytool info "$sub_id" --keychain-profile "$NOTARY_PROFILE" 2>/dev/null \
         | awk -F': ' '/^ *status:/{print $2; exit}')
       case "$status" in
@@ -566,7 +570,18 @@ notarize_or_die() {
       sleep 30
     done
     echo "  status: ${status:-查不到}"
-  fi
+    case "$status" in Accepted|Invalid|Rejected) break ;; esac
+    if [ "$resubmits" -ge 2 ]; then
+      break
+    fi
+    resubmits=$((resubmits + 1))
+    echo "   提交 $sub_id 25 分钟没结论 (多半上传没传完), 重新提交 (第 $resubmits/2 次) ——"
+    wait_notary_credentials
+    out=$(xcrun notarytool submit "$target" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1) || true
+    echo "$out"
+    sub_id=$(echo "$out" | awk '/^ *id:/{print $2; exit}')
+    status=$(echo "$out" | awk -F': ' '/^ *status:/{s=$2} END{print s}')
+  done
   if [ "$status" != "Accepted" ]; then
     echo "❌ 公证没通过: $target (status: ${status:-未知})" >&2
     [ -n "$sub_id" ] && xcrun notarytool log "$sub_id" --keychain-profile "$NOTARY_PROFILE" >&2 || true
