@@ -23,6 +23,7 @@ def test_payload_带_code_时客户端能认出():
 
 def test_装不下时_流里那条_error_带_context_length_exceeded(monkeypatch):
     monkeypatch.setattr("catfish_gateway.fallback.estimate_prompt_tokens", lambda *a, **kw: 133_461)
+    monkeypatch.setattr("catfish_gateway.fallback.estimate_prompt_tokens_raw", lambda *a, **kw: 133_461)
     called, audited = [], []
     monkeypatch.setattr(chat_runtime.litellm, "acompletion", lambda **kw: called.append(kw))
     # 收尾的 audit / 配额链不跑真的 (不碰本机 gateway 的库), 只记下来

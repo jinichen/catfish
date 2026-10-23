@@ -197,7 +197,14 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
                 },
                 "body": {
                     "type": "string",
-                    "description": "正文 markdown, 不含 frontmatter 和一级标题",
+                    "description": "正文 markdown, 不含 frontmatter 和一级标题。长内容别写在这里, 用 body_file",
+                },
+                "body_file": {
+                    "type": "string",
+                    "description": (
+                        "正文已经存成本机文本文件 (如全文转录 .md) 时给它的路径, 工具自己读, "
+                        "不要把几千字再抄进 body。同时给 body 时 body 在前当导语"
+                    ),
                 },
                 "subtype": {
                     "type": "string",
@@ -234,7 +241,7 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
                     "description": "传 {name, rel}; 只传标题或 rel=关联 会进待确认",
                 },
             },
-            "required": ["kind", "title", "body", "subtype"],
+            "required": ["kind", "title", "subtype"],
         },
         "emoji": "📝",
         "toolset": "catfish_native",
@@ -282,8 +289,12 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
                     "type": "string",
                     "description": "完整新内容 (含 frontmatter), 覆写",
                 },
+                "content_file": {
+                    "type": "string",
+                    "description": "完整新内容已存成本机文本文件时给路径 (代替 content, 长内容用这个)",
+                },
             },
-            "required": ["rel_path", "content"],
+            "required": ["rel_path"],
         },
         "emoji": "✏️",
         "toolset": "catfish_native",

@@ -182,7 +182,22 @@ def estimate_prompt_tokens(
     model: str | None = None,
     tools: list[dict] | None = None,
 ) -> int:
-    """估 prompt tokens. 给 fallback cap + dynamic max_tokens 用.
+    """估 prompt tokens, 再乘上按上游真实用量学到的系数 (10/23, token_calibration)。
+
+    通用分词器对内网 Qwen 的中文高估 1.6 倍 —— 不校准的话「装不下」误报、回复额度被砍。
+    要回填真实用量的地方 (chat_runtime) 用 estimate_prompt_tokens_raw 拿未校准的数。
+    """
+    from .token_calibration import apply  # noqa: PLC0415
+
+    return apply(model, estimate_prompt_tokens_raw(messages, model=model, tools=tools))
+
+
+def estimate_prompt_tokens_raw(
+    messages: list[dict] | None,
+    model: str | None = None,
+    tools: list[dict] | None = None,
+) -> int:
+    """估 prompt tokens (未校准). 给 fallback cap + dynamic max_tokens 用.
 
     历史演进:
       char/2 (5/14): Llama 中文低估 76% (39K 估 / 69K 真)

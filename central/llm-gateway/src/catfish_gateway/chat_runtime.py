@@ -148,6 +148,7 @@ async def _stream_chat_completion(
     ttft_ms: float | None = None  # 首 token / 首 chunk 延迟, fallback 后会被覆盖成实际值
     prompt_tokens = 0
     completion_tokens = 0
+    prompt_estimate_raw = 0  # 10/23: 请求前没走到估算就失败时, 收尾也不回填
     # BL-CACHE-AUDIT (5/17): streaming Anthropic prompt cache 字段, 末尾 chunk
     # 的 usage 里抓. 不存在或非 Anthropic 时永远 0.
     _stream_cache_creation = 0
@@ -205,12 +206,15 @@ async def _stream_chat_completion(
         # 失败时跳过公网 candidate (公网更慢更贵, 不该兜底).
         # BL-TOKEN-COUNTER-LITELLM (5/15): 传 model 名让 estimate 用真 tokenizer.
         # BL-TOOLS-IN-ESTIMATE (5/15 22:00): 加 tools schema 估算, 上游也算 tools.
-        from .fallback import estimate_prompt_tokens  # noqa: PLC0415
-        prompt_estimate = estimate_prompt_tokens(
+        from .fallback import estimate_prompt_tokens_raw  # noqa: PLC0415
+        from . import token_calibration  # noqa: PLC0415
+        prompt_estimate_raw = estimate_prompt_tokens_raw(
             body.get("messages") or [],
             model=model.upstream.model,
             tools=body.get("tools"),
         )
+        # 10/23: 按上游真实用量校准过的估算 (见 token_calibration); 收尾时回填真实值
+        prompt_estimate = token_calibration.apply(model.upstream.model, prompt_estimate_raw)
         # 6/7 BL-GROQ-TPM-PREFLIGHT: 检查上游 rate_limits.tpm, 超就 raise 413 +
         # 友好中文 + 替代 model. 拦下来不让员工看 stack trace.
         from .rate_limit_preflight import preflight_check_rate_limits  # noqa: PLC0415
@@ -550,6 +554,9 @@ async def _stream_chat_completion(
         # 默认 chain: ContextUsageTransform → AuditTransform → QuotaTransform.
         # 后续加新 hook (in-flight 持久化 / 客户定制脱敏) 只改 build_default_chain.
         from . import output_transforms  # noqa: PLC0415
+        from . import token_calibration  # noqa: PLC0415
+        if used_model is None or used_model is model:  # 走了 fallback 的话分词器不是同一个, 不学
+            token_calibration.record(model.upstream.model, prompt_estimate_raw, prompt_tokens)
         actual_model_name = used_model.name if used_model is not None else model_name
         ctx = output_transforms.OutputCtx(
             user=user_sub,
@@ -598,6 +605,7 @@ async def _invoke_chat_completion(
 
     # 给 with_fallback 用的 inner caller — 一次 LLM 调用 (含 fallback chain)
     used_model_holder: list = [model]  # 用 list 当 mutable 容器, 让闭包能写
+    raw_estimate_holder: list = [0]  # 10/23: 未校准估算, 回包后回填真实用量 (token_calibration)
 
     async def _invoker_with_fallback(call_body: dict):
         async def _call(candidate_model):
@@ -606,12 +614,15 @@ async def _invoke_chat_completion(
         # BL-FALLBACK-PROMPT-CAP (5/14): 大 prompt 失败时跳过公网
         # BL-TOKEN-COUNTER-LITELLM (5/15): 真 tokenizer 估算
         # BL-TOOLS-IN-ESTIMATE (5/15 22:00): tools schema 也算
-        from .fallback import estimate_prompt_tokens  # noqa: PLC0415
-        pe = estimate_prompt_tokens(
+        from .fallback import estimate_prompt_tokens_raw  # noqa: PLC0415
+        from . import token_calibration  # noqa: PLC0415
+        raw = estimate_prompt_tokens_raw(
             call_body.get("messages") or [],
             model=model.upstream.model,
             tools=call_body.get("tools"),
         )
+        raw_estimate_holder[0] = raw
+        pe = token_calibration.apply(model.upstream.model, raw)
         # 6/7 BL-GROQ-TPM-PREFLIGHT: 拦超 TPM 请求 (友好 413 替 stack trace)
         from .rate_limit_preflight import preflight_check_rate_limits  # noqa: PLC0415
         preflight_check_rate_limits(model, pe, config=config)
@@ -694,6 +705,10 @@ async def _invoke_chat_completion(
             (cache_read / prompt_tokens * 100) if prompt_tokens else 0,
             user_sub,
         )
+    if used_model is model:
+        from . import token_calibration  # noqa: PLC0415
+
+        token_calibration.record(model.upstream.model, raw_estimate_holder[0], prompt_tokens)
     _check_context_usage(used_model, prompt_tokens, user_sub)
     _write_metadata(
         user=user_sub,

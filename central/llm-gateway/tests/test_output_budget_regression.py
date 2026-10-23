@@ -12,6 +12,7 @@ from catfish_gateway.llm_params import _apply_max_tokens
 def test_long_prompt_retry_budget(monkeypatch, requested, expected):
     monkeypatch.setenv("CATFISH_MAX_TOKENS_SAFETY", "2048")
     monkeypatch.setattr("catfish_gateway.fallback.estimate_prompt_tokens", lambda *a, **kw: 100000)
+    monkeypatch.setattr("catfish_gateway.fallback.estimate_prompt_tokens_raw", lambda *a, **kw: 100000)
     model = NS(name="test", context_window=128000, max_output_tokens=32768,
                upstream=NS(model="openai/test"))
     params = {"messages": [], "tools": [{"type": "function"}], "max_tokens": requested}
@@ -23,6 +24,7 @@ def test_long_prompt_retry_budget(monkeypatch, requested, expected):
 def test_exhausted_capacity_is_not_manufactured(monkeypatch):
     monkeypatch.setenv("CATFISH_MAX_TOKENS_SAFETY", "2048")
     monkeypatch.setattr("catfish_gateway.fallback.estimate_prompt_tokens", lambda *a, **kw: 127000)
+    monkeypatch.setattr("catfish_gateway.fallback.estimate_prompt_tokens_raw", lambda *a, **kw: 127000)
     model = NS(name="test", context_window=128000, upstream=NS(model="openai/test"))
     assert check_context_fits(127000, model) is not None
     with pytest.raises(HTTPException) as exc:
@@ -39,6 +41,7 @@ def test_shared_budget_boundary(monkeypatch, reserve):
     model = NS(name="test", context_window=128000, upstream=NS(model="openai/test"))
     estimate = 128000 - safety - 512
     monkeypatch.setattr("catfish_gateway.fallback.estimate_prompt_tokens", lambda *a, **kw: estimate)
+    monkeypatch.setattr("catfish_gateway.fallback.estimate_prompt_tokens_raw", lambda *a, **kw: estimate)
     assert check_context_fits(estimate, model) is None
     assert remaining_output_tokens(estimate, model) == 512
     params = {"messages": [], "max_tokens": 8192}
@@ -56,6 +59,8 @@ def test_tool_estimation_and_small_output_cap(monkeypatch):
         return 100000
 
     monkeypatch.setattr("catfish_gateway.fallback.estimate_prompt_tokens", estimate)
+
+    monkeypatch.setattr("catfish_gateway.fallback.estimate_prompt_tokens_raw", estimate)
     monkeypatch.setenv("CATFISH_PROMPT_BUFFER_FACTOR", "1.3")
     model = NS(name="test", context_window=128000, max_output_tokens=256,
                upstream=NS(model="openai/test"))

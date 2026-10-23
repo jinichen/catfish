@@ -727,10 +727,20 @@ def tool_wiki_list(args: dict) -> dict[str, Any]:
 
 
 def tool_wiki_create(args: dict) -> dict[str, Any]:
+    body = str(args.get("body", "") or "")
+    if args.get("body_file"):  # 10/23: 长正文从文件读, 见 wiki_body_file
+        from .wiki_body_file import read_body_file  # noqa: PLC0415
+
+        text, err = read_body_file(str(args["body_file"]))
+        if err:
+            return {"ok": False, "error": err}
+        body = f"{body.rstrip()}\n\n{text}" if body.strip() else str(text)
+    if not body.strip():
+        return {"ok": False, "error": "body 和 body_file 至少给一个"}
     r = create_wiki_entry(
         kind=str(args.get("kind", "entity")),
         title=str(args.get("title", "")),
-        body=str(args.get("body", "")),
+        body=body,
         subtype=str(args.get("subtype", "") or ""),
         tags=list(args.get("tags") or []),
         related=list(args.get("related") or []),
@@ -771,6 +781,11 @@ def tool_wiki_update(args: dict) -> dict[str, Any]:
     rel = str(args.get("rel_path", "")).strip()
     if not rel:
         return {"ok": False, "error": "rel_path 不能空 (先用 catfish_wiki_list 拿路径)"}
+    if args.get("content_file"):  # 10/23: 整篇从文件读, 见 wiki_body_file
+        from .wiki_body_file import read_body_file  # noqa: PLC0415
+
+        text, err = read_body_file(str(args["content_file"]))
+        return {"ok": False, "error": err} if err else update_wiki_file(rel, str(text))
     if "content" not in args:
-        return {"ok": False, "error": "content 不能缺 —— 这是整文件覆写, 要传完整内容"}
+        return {"ok": False, "error": "content 不能缺 —— 这是整文件覆写, 要传完整内容 (或 content_file 给文件路径)"}
     return update_wiki_file(rel, str(args.get("content", "")))
