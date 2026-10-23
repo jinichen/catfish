@@ -14,7 +14,8 @@ import { wikiUpdateFile, type RelatedRef } from "../../lib/tauri";
 import type { WikiFileFull } from "../../lib/tauri_wiki";
 import { useWikiStore } from "../../store/wiki";
 import { useChatStore } from "../../store/chat";
-import { suggestRelationTypes, type RelationSuggestion } from "../../lib/wikiRelationSuggest";
+import { findEntryByName, suggestRelationTypes, type RelationSuggestion } from "../../lib/wikiRelationSuggest";
+import { applyReverseMoves } from "../../lib/wikiRelationReverse";
 import { useRelationVocab } from "../../lib/wikiRelationVocab";
 import {
   buildConfirmedWikiContent,
@@ -92,7 +93,8 @@ export default function WikiRelationsEditor({
     .map((relation) => relation.name.trim());
   const adoptable = typed
     .map((relation, index) => ({ index, s: suggestions[relation.name.trim()] }))
-    .filter(({ index, s }) => s && s.rel !== RELATION_FALLBACK && typed[index].rel?.trim() === RELATION_FALLBACK);
+    .filter(({ index, s }) => s && s.rel !== RELATION_FALLBACK && typed[index].rel?.trim() === RELATION_FALLBACK &&
+      (!s.reverse || !!findEntryByName(files, typed[index].name.trim())));
   const askSuggestions = async () => {
     setSuggesting(true);
     setError(null);
@@ -107,15 +109,41 @@ export default function WikiRelationsEditor({
     const n = result.suggestions.filter((s) => s.rel !== RELATION_FALLBACK).length;
     setNotice(n > 0 ? `小鲶建议了 ${n} 条，看过再采纳` : "小鲶也判断不了，建议保持「关联」");
   };
-  const adoptAll = () =>
-    void save(
-      typed.map((relation, i) => {
-        const hit = adoptable.find((a) => a.index === i);
-        return hit ? { ...relation, rel: hit.s.rel } : relation;
-      }),
+  // 10/23: 反过来才成立的 → 本条目删掉, 记到对方条目上
+  const adoptReversed = async (list: { index: number; s: RelationSuggestion }[]) => {
+    if (list.length === 0) return { moved: [], failed: [] };
+    return applyReverseMoves(list.map(({ index, s }) => ({ source: info, name: typed[index].name.trim(), rel: s.rel })), files);
+  };
+  const adoptAll = async () => {
+    const reversed = adoptable.filter((a) => a.s.reverse);
+    const { moved, failed } = await adoptReversed(reversed);
+    const gone = new Set(moved.map((m) => m.name));
+    // 反向的已从文件里删掉; save 写回的是本条目剩下的关系
+    await save(
+      typed
+        .filter((relation) => !gone.has(relation.name.trim()))
+        .map((relation) => {
+          const hit = adoptable.find((a) => !a.s.reverse && typed[a.index] === relation);
+          // 没记过去的反向建议: 原样留着
+          return hit ? { ...relation, rel: hit.s.rel } : relation;
+        }),
       false,
-      `已采纳 ${adoptable.length} 条建议`,
+      moved.length > 0
+        ? `已采纳 ${adoptable.length - reversed.length + moved.length} 条建议（其中 ${moved.length} 条记到了对方条目上）`
+        : `已采纳 ${adoptable.length - reversed.length} 条建议`,
     );
+    if (failed.length > 0) setError(failed.join("\n"));
+  };
+  const adoptOneReversed = async (index: number, s: RelationSuggestion) => {
+    setSaving(true);
+    setError(null);
+    const { failed } = await adoptReversed([{ index, s }]);
+    await loadFiles();
+    await selectFile(info.rel_path);
+    setSaving(false);
+    if (failed.length > 0) setError(failed.join("\n"));
+    else setNotice(`已改记到「${typed[index].name}」条目上：${typed[index].name} ${s.rel} ${info.title}`);
+  };
   const changeType = (index: number, rel: string) =>
     void save(typed.map((relation, i) => (i === index ? { ...relation, rel } : relation)), false, "已改关系类型");
   const remove = (index: number) =>
@@ -169,9 +197,21 @@ export default function WikiRelationsEditor({
                   {(() => {
                     const sug = suggestions[relation.name.trim()];
                     if (!sug || rel !== RELATION_FALLBACK) return null;
-                    return sug.rel === RELATION_FALLBACK ? (
-                      <small className="wiki-relations__suggest">建议保持「关联」{sug.reason && `：${sug.reason}`}</small>
-                    ) : (
+                    if (sug.rel === RELATION_FALLBACK) {
+                      return <small className="wiki-relations__suggest">建议保持「关联」{sug.reason && `：${sug.reason}`}</small>;
+                    }
+                    if (sug.reverse) {
+                      const found = !!findEntryByName(files, relation.name.trim());
+                      return (
+                        <small className="wiki-relations__suggest">
+                          <Sparkle size={14} aria-hidden="true" />建议反过来记：{relation.name}「{sug.rel}」{info.title}{sug.reason && `：${sug.reason}`}
+                          {found
+                            ? <button type="button" disabled={saving} onClick={() => void adoptOneReversed(index, sug)}>采纳</button>
+                            : <> (知识库里没有「{relation.name}」条目, 记不过去)</>}
+                        </small>
+                      );
+                    }
+                    return (
                       <small className="wiki-relations__suggest">
                         <Sparkle size={14} aria-hidden="true" />建议「{sug.rel}」{sug.reason && `：${sug.reason}`}
                         <button type="button" disabled={saving} onClick={() => changeType(index, sug.rel)}>采纳</button>
@@ -202,7 +242,7 @@ export default function WikiRelationsEditor({
             让小鲶建议这 {untypedNames.length} 条的类型
           </button>
           {adoptable.length > 1 && (
-            <button type="button" className="wiki-workbench__primary" disabled={saving} onClick={adoptAll}>
+            <button type="button" className="wiki-workbench__primary" disabled={saving} onClick={() => void adoptAll()}>
               全部采纳 ({adoptable.length})
             </button>
           )}

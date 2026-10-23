@@ -6,8 +6,8 @@
  * **员工在关系整理工作台里逐条或一键采纳才写入** (工作台「不自动猜测、人确认」的规矩不变)。
  *
  * 读法跟词表一致: 「本条目 rel 对方」(edge/contracts/wiki_relation_vocab.json)。
- * 只有反过来说才成立、词表里又没有反义词时 (如「中电福富 持有 本条目」), 保持「关联」,
- * 原因里写清楚 —— 那条关系应该记在对方条目上, 由员工决定。
+ * 只有反过来说才成立时 (如「中电福富 持有 本条目」): 有反义词就用反义词 (隶属↔包含);
+ * 没有就给 reverse: true —— 采纳时这条从本条目删掉, 改记到对方条目上 (lib/wikiRelationReverse.ts)。
  *
  * 走跟 wikiLinkSuggest 同一条路: 强制 tool_choice 的结构化输出 (网关对这类请求自动关深度思考)。
  */
@@ -22,6 +22,8 @@ export interface RelationSuggestion {
   /** 词表里的一个; RELATION_FALLBACK = 建议保持「关联」 */
   rel: string;
   reason: string;
+  /** 10/23: true = 反过来才成立, 采纳时记到对方条目上: 「对方 rel 本条目」 */
+  reverse?: boolean;
 }
 
 export interface RelationSuggestResult {
@@ -69,8 +71,9 @@ ${lines.join("\n")}
 
 规则:
 1. 只能从上面的词里选; 拿不准就返回「${RELATION_FALLBACK}」, 不硬凑。
-2. 方向要对: 「本条目 <关系> 对方」读出来必须成立。只有反过来才成立时 (比如对方持有本条目),
-   用反义词 (隶属↔包含); 没有反义词就返回「${RELATION_FALLBACK}」, 在 reason 里写「应在对方条目记: 对方 X 本条目」。
+2. 方向要对: 「本条目 <关系> 对方」读出来必须成立。只有反过来才成立时 (比如对方持有本条目):
+   有反义词就用反义词 (隶属↔包含), reverse 填 false; 没有反义词就填那个关系词并把 reverse 填 true,
+   意思是「对方 <关系> 本条目」, 这条会改记到对方条目上。对方在知识库里没找到时不要用 reverse。
 3. reason 一句话, 说依据 (类型 / 正文里哪句话), 给员工审阅用。
 4. 每个给出的对方名字都要返回一条, name 原样照抄。
 
@@ -88,6 +91,7 @@ const TOOL_SCHEMA = {
           name: { type: "string", description: "对方条目名, 原样照抄" },
           rel: { type: "string", description: "关系词, 只能从词表里选" },
           reason: { type: "string", description: "一句话依据" },
+          reverse: { type: "boolean", description: "true = 反过来才成立: 对方 <关系> 本条目" },
         },
         required: ["name", "rel", "reason"],
       },
@@ -103,9 +107,13 @@ function describe(file: WikiFileInfo | undefined, name: string): string {
   return `- ${name} (${kind}${file.subtype ? `·${file.subtype}` : ""})${tags}`;
 }
 
+/** 关系里写的名字 → 知识库条目 (标题或别名) */
+export function findEntryByName(files: readonly WikiFileInfo[], name: string): WikiFileInfo | undefined {
+  return files.find((f) => f.title === name || f.aliases.includes(name));
+}
+
 export function buildUserPrompt(entry: WikiFileInfo, body: string, names: string[], files: WikiFileInfo[]): string {
-  const byName = (name: string) =>
-    files.find((f) => f.title === name || f.aliases.includes(name));
+  const byName = (name: string) => findEntryByName(files, name);
   return [
     `# 本条目: ${entry.title} (${entry.kind === "entity" ? "实体" : "概念"}${entry.subtype ? `·${entry.subtype}` : ""})`,
     "",
@@ -129,7 +137,9 @@ export function sanitizeSuggestions(raw: unknown, names: string[], custom: reado
     const name = s.name.trim();
     const rel = s.rel.trim();
     if (!wanted.has(name) || !allowed.has(rel) || out.has(name)) continue;
-    out.set(name, { name, rel, reason: typeof s.reason === "string" ? s.reason.trim().slice(0, 120) : "" });
+    const suggestion: RelationSuggestion = { name, rel, reason: typeof s.reason === "string" ? s.reason.trim().slice(0, 120) : "" };
+    if (s.reverse === true && rel !== RELATION_FALLBACK) suggestion.reverse = true;
+    out.set(name, suggestion);
   }
   return [...out.values()];
 }

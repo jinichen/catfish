@@ -24,6 +24,21 @@ describe("sanitizeSuggestions", () => {
     ]);
   });
 
+  it("reverse 只在真 true 且不是「关联」时留下", () => {
+    const out = sanitizeSuggestions({
+      suggestions: [
+        { name: "中电福富", rel: "持有", reason: "公司持有本证书", reverse: true },
+        { name: "CMMI", rel: "关联", reason: "拿不准", reverse: true },
+        { name: "市场部", rel: "包含", reason: "x", reverse: "yes" },
+      ],
+    }, ["中电福富", "CMMI", "市场部"]);
+    expect(out).toEqual([
+      { name: "中电福富", rel: "持有", reason: "公司持有本证书", reverse: true },
+      { name: "CMMI", rel: "关联", reason: "拿不准" },
+      { name: "市场部", rel: "包含", reason: "x" },
+    ]);
+  });
+
   it("结构不对就空", () => {
     expect(sanitizeSuggestions(null, ["a"])).toEqual([]);
     expect(sanitizeSuggestions({ suggestions: "x" }, ["a"])).toEqual([]);

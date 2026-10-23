@@ -5,11 +5,13 @@
  * 员工看过: 勾选的一键采纳, 或逐行「保持关联」「删掉」。**不点就不写**。
  *
  * 建议结果存在模块级缓存里 —— 切到别的任务再回来不用重跑。
+ * 反过来才成立的建议 (「对方 持有 本条目」) 采纳时改记到对方条目上 (lib/wikiRelationReverse.ts)。
  */
 import { useMemo, useState } from "react";
 import { Check, Sparkle, SpinnerGap, Trash } from "@phosphor-icons/react";
 import { wikiReadFile, wikiUpdateFile, type WikiFileInfo } from "../../lib/tauri_wiki";
-import { suggestRelationTypes, type RelationSuggestion } from "../../lib/wikiRelationSuggest";
+import { findEntryByName, suggestRelationTypes, type RelationSuggestion } from "../../lib/wikiRelationSuggest";
+import { applyReverseMoves } from "../../lib/wikiRelationReverse";
 import { addKeptUntyped, keptKey } from "../../lib/wikiUntypedKept";
 import { useRelationVocab } from "../../lib/wikiRelationVocab";
 import { useChatStore } from "../../store/chat";
@@ -39,8 +41,12 @@ export default function WikiUntypedBatch({ task }: { task: WikiRelationshipTask 
     [task.untypedItems],
   );
   const suggested = rows.filter((row) => suggestionCache.has(row.key));
-  const adoptable = suggested.filter((row) =>
-    suggestionCache.get(row.key)!.rel !== RELATION_FALLBACK && !unchecked.has(row.key));
+  // 反向建议要对方条目在知识库里才能记过去
+  const canAdopt = (row: Row) => {
+    const s = suggestionCache.get(row.key);
+    return !!s && s.rel !== RELATION_FALLBACK && (!s.reverse || !!findEntryByName(files, row.name));
+  };
+  const adoptable = suggested.filter((row) => canAdopt(row) && !unchecked.has(row.key));
   const keepSuggested = suggested.filter((row) => suggestionCache.get(row.key)!.rel === RELATION_FALLBACK);
 
   const suggestAll = async () => {
@@ -76,10 +82,13 @@ export default function WikiUntypedBatch({ task }: { task: WikiRelationshipTask 
   };
 
   /** 按条目分组改写: 每个文件只读写一次 */
-  const rewrite = async (changes: Map<string, Map<string, string | null>>, message: string) => {
+  const rewrite = async (changes: Map<string, Map<string, string | null>>, message: string, reversed: Row[] = []) => {
     setBusy(true);
     setError(null);
-    const failed: string[] = [];
+    const { failed } = await applyReverseMoves(
+      reversed.map((row) => ({ source: row.file, name: row.name, rel: suggestionCache.get(row.key)!.rel })),
+      files,
+    );
     for (const [relPath, byName] of changes) {
       try {
         const full = await wikiReadFile(relPath);
@@ -105,8 +114,17 @@ export default function WikiUntypedBatch({ task }: { task: WikiRelationshipTask 
     }
     return changes;
   };
-  const adoptChecked = () =>
-    void rewrite(group(adoptable, (row) => suggestionCache.get(row.key)!.rel), `已采纳 ${adoptable.length} 条建议`);
+  const adoptChecked = () => {
+    const reversed = adoptable.filter((row) => suggestionCache.get(row.key)!.reverse);
+    const direct = adoptable.filter((row) => !suggestionCache.get(row.key)!.reverse);
+    void rewrite(
+      group(direct, (row) => suggestionCache.get(row.key)!.rel),
+      reversed.length > 0
+        ? `已采纳 ${adoptable.length} 条建议（其中 ${reversed.length} 条改记到对方条目上）`
+        : `已采纳 ${adoptable.length} 条建议`,
+      reversed,
+    );
+  };
   const removeRow = (row: Row) =>
     void rewrite(group([row], () => null), `已删掉「${row.file.title}」与「${row.name}」的关系`);
   const keep = (list: Row[]) => {
@@ -146,7 +164,7 @@ export default function WikiUntypedBatch({ task }: { task: WikiRelationshipTask 
       <div className="wiki-untyped__table" role="table">
         {rows.map((row) => {
           const s = suggestionCache.get(row.key);
-          const typed = s && s.rel !== RELATION_FALLBACK;
+          const typed = canAdopt(row);
           return (
             <div className="wiki-untyped__row" role="row" key={row.key}>
               <input
@@ -158,7 +176,12 @@ export default function WikiUntypedBatch({ task }: { task: WikiRelationshipTask 
               />
               <span className="wiki-untyped__pair"><strong>{row.file.title}</strong> → {row.name}</span>
               <span className="wiki-untyped__suggest">
-                {s ? <><b>{typed ? s.rel : "保持关联"}</b>{s.reason && <small>{s.reason}</small>}</> : <small>还没建议</small>}
+                {!s ? <small>还没建议</small> : s.reverse && s.rel !== RELATION_FALLBACK ? (
+                  <>
+                    <b>反过来：{row.name} {s.rel} {row.file.title}</b>
+                    <small>{typed ? "采纳后记到「" + row.name + "」条目上。" : "知识库里没有「" + row.name + "」条目, 记不过去。"}{s.reason}</small>
+                  </>
+                ) : <><b>{s.rel !== RELATION_FALLBACK ? s.rel : "保持关联"}</b>{s.reason && <small>{s.reason}</small>}</>}
               </span>
               <span className="wiki-untyped__actions">
                 <button type="button" disabled={busy} onClick={() => keep([row])} title="以后不再列这条">保持关联</button>
