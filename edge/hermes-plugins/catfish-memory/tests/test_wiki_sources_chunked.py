@@ -136,3 +136,21 @@ def test_超大文件只读前若干段(tmp_path, monkeypatch):
 
     _, done = _run(tmp_path, [big], run_pass)
     assert n["c"] == 2 and done == ["表格导出.md"]
+
+
+def test_资料要点卡_把分析出的事实一条不落():
+    analysis = (
+        "## Entities\n- 福建省 | org | 省\n\n"
+        "## Facts\n"
+        "- 福建十五五规划 | 2030年战新产业占比约35% | 「工业战略性新兴产业产值占规模以上工业产值比重达35%左右」\n"
+        "- 福建十五五规划 | 培育小巨人企业426家 | “培育国家级专精特新小巨人企业426家”\n"
+        "- 坏行没有摘录 | 只有两段\n\n"
+        "## Decisions\n- (无)\n"
+    )
+    path, content = ws.digest_card(analysis, "福建十五五规划", "raw/sources/1792700000-福建十五五规划")
+    assert path == "wiki/concepts/福建十五五规划（资料要点）.md"
+    assert "- 培育小巨人企业426家 〔原文:「培育国家级专精特新小巨人企业426家」〕" in content
+    assert content.count("〔原文") == 2
+    assert 'sources: ["raw/sources/1792700000-福建十五五规划"]' in content
+    assert ws.digest_card("## Entities\n- x | org | y\n", "a", "b") is None
+    assert ws.source_title_of(Path("/x/1792700000-福建十五五规划.md")) == "福建十五五规划"

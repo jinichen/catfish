@@ -175,6 +175,8 @@ async def wiki_two_step(
     resolve_model: Callable[[str], str],
     max_chars: int = 0,
     deps=None,
+    source_title: str = "",
+    source_ref: str = "",
 ) -> Optional[Tuple[int, int]]:
     """分析 → 生成 → 同名合并 → 写盘, 一遍。返回 (新增实体, 新增概念); 模型没给出结果返 None。
 
@@ -225,6 +227,14 @@ async def wiki_two_step(
             "catfish-memory bg session=%s: 核对原文: %d 条对上, %d 条对不上 (进 unverified 待人看)",
             session_id, vstat["kept"], vstat["dropped"],
         )
+    # 10/23 评测: 分析抽出来的事实, 写卡那步常常没挂到任何条目上 (数字、指标最容易丢, 召回 4 成)。
+    # 资料这一路额外按 Facts 段原样生成一张「资料要点」卡, 一条不丢, 同样逐条对原文。
+    if source_title:
+        digest = digest_card(analysis, source_title, source_ref)
+        if digest:
+            digest_path, digest_content = digest
+            checked, dstat = verify.verify_files({digest_path: digest_content}, source)
+            files.update(checked)
     pre_merge = dict(files)
     # P19 (6/5): 同名 entity/concept 让 LLM 合并叙述; 失败的落 P18 regex 安全网, 不丢数据
     llm_merged_paths: set = set()
@@ -261,3 +271,51 @@ async def wiki_two_step(
         )
         logger.info("catfish-memory bg session=%s: ✓ wiki ship %d entities + %d concepts", session_id, n_e, n_c)
     return (n_e, n_c)
+
+
+def source_title_of(path: Path) -> str:
+    """raw/sources 文件名 → 资料名: 去掉入库时加的时间戳前缀 (1792700000-福建十五五规划.md → 福建十五五规划)。"""
+    import re  # noqa: PLC0415
+
+    return re.sub(r"^\d{6,}-", "", path.stem) or path.stem
+
+
+def digest_card(analysis: str, source_title: str, source_ref: str) -> Optional[Tuple[str, str]]:
+    """从分析结果的 Facts 段生成「<资料名>（资料要点）」概念卡: 每条事实一行, 带原文摘录。
+
+    不走模型 —— 分析那步已经把事实和摘录抽好了, 原样落下来, 写卡那步漏掉的也在这里。
+    返回 (路径, 内容); Facts 段为空返回 None。
+    """
+    import re  # noqa: PLC0415
+    from datetime import date  # noqa: PLC0415
+
+    m = re.search(r"^##\s*Facts\s*$(.*?)(?=^##\s|\Z)", analysis, re.MULTILINE | re.DOTALL)
+    if not m:
+        return None
+    lines = []
+    for raw in m.group(1).splitlines():
+        raw = raw.strip().lstrip("-*• ").strip()
+        parts = [p.strip() for p in raw.split("|")]
+        if len(parts) < 3:
+            continue
+        fact, quote = parts[1], "|".join(parts[2:]).strip()
+        quote = quote.strip("「」“”\"' ")
+        if fact and quote:
+            lines.append(f"- {fact} 〔原文:「{quote}」〕")
+    if not lines:
+        return None
+    title = f"{source_title}（资料要点）"
+    today = date.today().isoformat()
+    content = (
+        "---\n"
+        "type: concept\n"
+        f"title: {title}\n"
+        "concept_type: 资料要点\n"
+        f"created: {today}\n"
+        f"updated: {today}\n"
+        f"sources: [\"{source_ref}\"]\n"
+        "---\n\n"
+        f"# {title}\n\n" + "\n".join(lines) + "\n"
+    )
+    safe = re.sub(r"[\\/:*?\"<>|]", "-", title)
+    return f"wiki/concepts/{safe}.md", content

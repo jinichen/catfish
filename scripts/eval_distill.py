@@ -58,7 +58,8 @@ def run_case(case: dict, src_dir: Path, model: str) -> dict:
 
         async def one(text, path):
             return await ws.wiki_two_step("eval", home, text, h.Provenance.from_run("", [path]),
-                                          lambda stage: model, max_chars=len(text))
+                                          lambda stage: model, max_chars=len(text),
+                                          source_title=ws.source_title_of(path), source_ref=f"raw/sources/{path.stem}")
 
         stats = asyncio.run(ws.drain_sources(home, [f], one, h._mark_wiki_sources_ingested, time_budget=900))
         bodies, evidence, unverified, cards = [], [], [], 0
@@ -93,6 +94,7 @@ def main() -> int:
     ap.add_argument("--home", default=str(Path.home() / ".catfish"))
     ap.add_argument("--model", default="")
     ap.add_argument("--compare", action="store_true", help="关掉核对再跑一遍做对照")
+    ap.add_argument("--repeat", type=int, default=1, help="每份资料跑几遍取平均 (同一份资料两次跑出来能差 3 倍卡数)")
     args = ap.parse_args()
     home = Path(args.home)
     cases_file = home / "eval" / "distill_cases.json"
@@ -103,11 +105,19 @@ def main() -> int:
     model = args.model or h._read_picker_state_model(home) or "catfish-private-vision"
     src_dir = home / "eval" / "distill_sources"
     print(f"模型: {model}")
+    def runs():
+        rows = []
+        for c in cases:
+            rs = [run_case(c, src_dir, model) for _ in range(max(1, args.repeat))]
+            avg = {k: (round(sum(r[k] for r in rs) / len(rs), 1) if isinstance(rs[0][k], (int, float)) else rs[0][k]) for k in rs[0]}
+            rows.append(avg)
+        return rows
+
     os.environ["CATFISH_WIKI_VERIFY"] = "1"
-    report("核对开", [run_case(c, src_dir, model) for c in cases])
+    report(f"核对开 (每份 {args.repeat} 遍取平均)", runs())
     if args.compare:
         os.environ["CATFISH_WIKI_VERIFY"] = "0"
-        report("核对关 (对照)", [run_case(c, src_dir, model) for c in cases])
+        report("核对关 (对照)", runs())
     return 0
 
 

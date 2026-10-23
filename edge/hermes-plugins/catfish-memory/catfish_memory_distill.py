@@ -101,9 +101,9 @@ try:
 except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_distill_run import distill_incremental
 try:
-    from .catfish_memory_wiki_sources import drain_sources, wiki_two_step
+    from .catfish_memory_wiki_sources import drain_sources, source_title_of, wiki_two_step
 except ImportError:  # 独立脚本模式 (无父包)
-    from catfish_memory_wiki_sources import drain_sources, wiki_two_step
+    from catfish_memory_wiki_sources import drain_sources, source_title_of, wiki_two_step
 
 # 跟 catfish_memory.py 同名 —— logging.getLogger 同名返回同一对象
 logger = logging.getLogger("catfish.memory.plugin")
@@ -319,6 +319,7 @@ class _DistillMixin:
                             session_id, catfish_home, text,
                             Provenance.from_run("", [path]), _resolve, max_chars=len(text),
                             deps=sys.modules[__name__],
+                            source_title=source_title_of(path), source_ref=f"raw/sources/{path.stem}",
                         )
 
                     stats = await drain_sources(
