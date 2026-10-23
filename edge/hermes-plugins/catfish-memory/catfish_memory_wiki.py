@@ -305,6 +305,10 @@ def _classify_ontology_status(catfish_home: Path, rel_path: str, content: str) -
     reasons: list[str] = []
     if not subtype:
         reasons.append("missing_type")
+    # 10/23: 一条事实都没对上原文 (全进了 unverified) → 待确认, 见 catfish_memory_wiki_verify
+    fm_lists = _parse_frontmatter_lists(fm)
+    if fm_lists.get("unverified") and not fm_lists.get("evidence"):
+        reasons.append("unverified_facts")
     # 9/24 鸿波「没有关系的还要强制确定关系, 不是很乱吗」: 关系是可选的。没写关系
     # 的条目直接 active —— 以前判 pending (missing_relation), 员工只能硬配一条。
     if not names:

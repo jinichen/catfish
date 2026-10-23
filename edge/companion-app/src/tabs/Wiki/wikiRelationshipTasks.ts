@@ -10,7 +10,7 @@ import { resolveWikiRef } from "../../lib/wikiResolve";
  *   · 待确认条目自己的关系问题在工作台里逐条标出, 不再另开 broken 任务重复列
  */
 export type WikiRelationshipTaskKind =
-  | "conflict" | "pending" | "ambiguous" | "broken" | "untyped" | "skiplevel" | "multiparent" | "stale" | "duplicate";
+  | "conflict" | "unverified" | "pending" | "ambiguous" | "broken" | "untyped" | "skiplevel" | "multiparent" | "stale" | "duplicate";
 
 export interface WikiRelationshipTask {
   id: string;
@@ -335,7 +335,17 @@ export function buildWikiRelationshipTasks(
         hierarchyLinks: issue.links,
       });
 
-  return [...conflicts, ...ambiguous, ...pending, ...broken, ...hierarchy, ...untyped, ...stale, ...duplicates];
+  // 10/23: 蒸馏出来但对不上原文的事实 (catfish_memory_wiki_verify), 员工决定加回还是丢掉
+  const unverified = files
+    .filter((file) => (file.unverified?.length ?? 0) > 0)
+    .map((file): WikiRelationshipTask => ({
+      id: `unverified:${file.rel_path}`,
+      kind: "unverified",
+      title: `「${file.title}」有 ${file.unverified!.length} 条事实没对上原文`,
+      detail: "蒸馏时这几条在原文里找不到出处, 没写进正文。确实对的加回去, 不对的丢掉。",
+      file,
+    }));
+  return [...conflicts, ...unverified, ...ambiguous, ...pending, ...broken, ...hierarchy, ...untyped, ...stale, ...duplicates];
 }
 
 /** 待确认里「没有要改的关系」的那些 —— 可以一次全部确认。 */

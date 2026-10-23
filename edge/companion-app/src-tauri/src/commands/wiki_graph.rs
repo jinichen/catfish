@@ -651,6 +651,8 @@ mod tests {
             conflicts: Vec::new(),
             updated: None,
             tracks_status: false,
+            evidence: Vec::new(),
+            unverified: Vec::new(),
         };
         GraphFile {
             aliases_json: serde_json::to_string(&info.aliases).unwrap(),

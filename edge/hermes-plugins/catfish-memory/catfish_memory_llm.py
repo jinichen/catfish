@@ -303,20 +303,21 @@ async def _call_analysis_llm(
     chunk = journal_text[-cap:] if len(journal_text) > cap else journal_text
 
     try:
-        async with httpx.AsyncClient(timeout=_LLM_HTTP_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=_DISTILL_HTTP_TIMEOUT) as client:  # 10/23: 整段资料 + 原文摘录, 60s 不够
             resp = await client.post(
                 with_source(_gateway_url(), "plugin:memory-wiki-analysis"),
                 headers={
                     "Authorization": f"Bearer {token}",
                     "X-Catfish-Skip-Identity": "true",
                     "X-Catfish-Internal": "true",
+                    "X-Catfish-Thinking": "off",  # 10/23: 结构化抽取, 思考模式只会吃掉输出额度和时间
                     "Content-Type": "application/json",
                 },
                 json={
                     "model": model,
                     "messages": [{"role": "user", "content": _ANALYSIS_PROMPT + "\n\n" + chunk}],
                     "temperature": 0.2,
-                    "max_tokens": 2500,
+                    "max_tokens": 4000,  # 10/23: 每条事实带原文摘录, 输出变长
                     "stream": False,
                 },
             )
@@ -416,6 +417,7 @@ async def _call_generation_llm(
                     "Authorization": f"Bearer {token}",
                     "X-Catfish-Skip-Identity": "true",
                     "X-Catfish-Internal": "true",
+                    "X-Catfish-Thinking": "off",  # 10/23: 结构化抽取, 思考模式只会吃掉输出额度和时间
                     "Content-Type": "application/json",
                 },
                 json={
@@ -430,7 +432,7 @@ async def _call_generation_llm(
                     # P1.1.1 fix (6/4): 7000 → 4096 兼容 deepseek-flash /
                     # catfish-private-main 真 output cap. Generation 真
                     # ~3 concept + ~5 entity 估 3500 tokens 够.
-                    "max_tokens": 4096,
+                    "max_tokens": 6000,  # 10/23: 每条事实带原文摘录
                     "stream": False,
                 },
             )

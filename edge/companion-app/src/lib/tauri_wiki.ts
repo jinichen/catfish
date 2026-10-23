@@ -65,6 +65,10 @@ export interface WikiFileInfo {
   ontology_status?: string | null;
   /** 9/17: 蒸馏想改、但跟已有值不一样的字段 —— 盘上保留旧值, 这里列给员工二选一。 */
   conflicts?: WikiConflict[];
+  /** 10/23: 蒸馏时核对过原文的摘录 (frontmatter `evidence:`) */
+  evidence?: string[];
+  /** 10/23: 对不上原文、被拿出正文的事实「事实 —— 原因」(frontmatter `unverified:`), 等员工决定 */
+  unverified?: string[];
   /** 9/24: frontmatter updated (YYYY-MM-DD) —— 内容上次被核对/更新的日期 */
   updated?: string | null;
   /** 9/24: 正文带"进度/状态"段落 (Rust body_tracks_status) */

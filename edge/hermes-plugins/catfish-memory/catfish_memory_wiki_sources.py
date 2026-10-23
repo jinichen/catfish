@@ -213,6 +213,19 @@ async def wiki_two_step(
     if not files:
         logger.info("catfish-memory bg session=%s: wiki parse 0 file (LLM 输出不符 sentinel)", session_id)
         return (0, 0)
+    # 10/23: 每条事实对一遍原文 (分析那步实际看到的那段), 对不上的拿出正文进 unverified
+    try:
+        from . import catfish_memory_wiki_verify as verify  # noqa: PLC0415
+    except ImportError:  # 独立脚本模式 (无父包)
+        import catfish_memory_wiki_verify as verify  # noqa: PLC0415
+    source = analysis_input[-max_chars:] if max_chars else analysis_input
+    files, vstat = verify.verify_files(files, source)
+    if vstat["dropped"]:
+        logger.info(
+            "catfish-memory bg session=%s: 核对原文: %d 条对上, %d 条对不上 (进 unverified 待人看)",
+            session_id, vstat["kept"], vstat["dropped"],
+        )
+    pre_merge = dict(files)
     # P19 (6/5): 同名 entity/concept 让 LLM 合并叙述; 失败的落 P18 regex 安全网, 不丢数据
     llm_merged_paths: set = set()
     model = resolve_model("wiki-merge")
@@ -227,6 +240,16 @@ async def wiki_two_step(
             )
     except Exception as e:  # noqa: BLE001
         logger.warning("catfish-memory P19 merge_files_with_llm 异常 (fallback P18): %s", e)
+    # 10/23: 合并只许重新组织, 不许多出数字; evidence / unverified 也别在合并里丢了
+    for path in llm_merged_paths:
+        if path not in files:
+            continue
+        before = [pre_merge.get(path, "")]
+        try:
+            before.append((catfish_home / path).read_text(encoding="utf-8"))
+        except OSError:
+            pass
+        files[path] = verify.carry_lists(verify.check_merged_numbers(files[path], before, source), before)
     n_e, n_c = _write_wiki_files(catfish_home, files, skip_merge_paths=llm_merged_paths, provenance=provenance)
     if n_e + n_c > 0:
         # journal 加 distill entry — Karpathy log.md 风格

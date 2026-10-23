@@ -4,6 +4,7 @@ import {
   Books,
   CheckCircle,
   ClockCounterClockwise,
+  SealWarning,
   Copy,
   LinkSimple,
   ListChecks,
@@ -39,6 +40,7 @@ const TASK_META: Record<
   { label: string; icon: typeof CheckCircle }
 > = {
   conflict: { label: "两个说法", icon: ArrowsLeftRight },
+  unverified: { label: "没对上原文", icon: SealWarning },
   ambiguous: { label: "指向不明", icon: LinkSimple },
   pending: { label: "待确认", icon: CheckCircle },
   broken: { label: "关系要改", icon: WarningCircle },
@@ -95,7 +97,7 @@ export default function WikiOrganizer({
   );
   const hasLegacyRelations = useMemo(() => hasLegacyWikiRelations(files), [files]);
   const counts = useMemo(() => {
-    const out: Record<WikiRelationshipTaskKind, number> = { conflict: 0, ambiguous: 0, pending: 0, broken: 0, untyped: 0, skiplevel: 0, multiparent: 0, stale: 0, duplicate: 0 };
+    const out: Record<WikiRelationshipTaskKind, number> = { conflict: 0, unverified: 0, ambiguous: 0, pending: 0, broken: 0, untyped: 0, skiplevel: 0, multiparent: 0, stale: 0, duplicate: 0 };
     for (const task of tasks) out[task.kind] += 1;
     return out;
   }, [tasks]);

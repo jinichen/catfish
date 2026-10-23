@@ -2983,6 +2983,9 @@ button {
 .wiki-preview__technical > summary:hover { color: var(--catfish-cyan); }
 .wiki-preview__technical[open] > summary { margin-bottom: 7px; }
 .wiki-preview__technical-sources { margin-top: 8px; overflow-wrap: anywhere; }
+/* 10/23: 蒸馏核对过的原文摘录 */
+.wiki-preview__evidence { margin: 4px 0 8px; padding-left: 18px; color: var(--catfish-text-muted); font-size: 13px; line-height: 1.6; }
+.wiki-preview__evidence li { overflow-wrap: anywhere; }
 
 /* WikiPreview 变更历史 — 复用 .wiki-group caret rotate pattern */
 .wiki-preview__history {

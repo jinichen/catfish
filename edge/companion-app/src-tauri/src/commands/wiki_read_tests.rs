@@ -198,3 +198,15 @@ fn split_top_level_respects_braces() {
         vec!["a".to_string(), " {b, c}".to_string(), " d".to_string()]
     );
 }
+
+#[test]
+fn evidence_and_unverified_keep_commas_inside_quotes() {
+    // 10/23: 蒸馏核对原文留下的两个字段, 摘录里常有逗号, 不能按逗号硬切
+    let fm = "title: 规划\nevidence: [\"到2030年, 比重达到35%左右\", \"闽政〔2026〕12号\"]\nunverified: [\"新材料破万亿 —— 摘录原文里找不到「突破1万亿, 元」\"]";
+    assert_eq!(
+        parse_quoted_list(fm, "evidence"),
+        vec!["到2030年, 比重达到35%左右".to_string(), "闽政〔2026〕12号".to_string()]
+    );
+    assert_eq!(parse_quoted_list(fm, "unverified").len(), 1);
+    assert!(parse_quoted_list(fm, "missing").is_empty());
+}

@@ -19,6 +19,7 @@ import WikiUntypedBatch from "./WikiUntypedBatch";
 import { useKeptUntyped } from "../../lib/wikiUntypedKept";
 import { customHierarchy, useRelationVocab } from "../../lib/wikiRelationVocab";
 import WikiHierarchyIssuePanel from "./WikiHierarchyIssuePanel";
+import WikiUnverifiedPanel from "./WikiUnverifiedPanel";
 
 function evidenceExcerpt(body: string): string {
   return body
@@ -221,6 +222,8 @@ export default function WikiRelationshipWorkbench({
 
       {selectedTask && (selectedTask.kind === "skiplevel" || selectedTask.kind === "multiparent") ? (
         <WikiHierarchyIssuePanel key={selectedTask.id} task={selectedTask} onLater={onLater} />
+      ) : selectedTask?.kind === "unverified" ? (
+        <WikiUnverifiedPanel key={selectedTask.id} task={selectedTask} onLater={onLater} />
       ) : selectedTask?.kind === "duplicate" ? (
         <section className="wiki-workbench__section">
           <div className="wiki-workbench__section-title">

@@ -72,7 +72,8 @@ def _parse_generation_output(text: str) -> Dict[str, str]:
     return files
 
 
-_FM_LIST_FIELDS_UNION = ("tags", "related", "sources", "aliases")
+# 10/23: evidence (核过的原文摘录) / unverified (没核过、等人看的) 合并时也取并集
+_FM_LIST_FIELDS_UNION = ("tags", "related", "sources", "aliases", "evidence", "unverified")
 _FM_LIST_RE = re.compile(r"^([a-z_]+):\s*\[(.*?)\]\s*$", re.MULTILINE)
 _FM_SCALAR_RE = re.compile(r"^([a-z_]+):\s*(.+?)\s*$", re.MULTILINE)
 

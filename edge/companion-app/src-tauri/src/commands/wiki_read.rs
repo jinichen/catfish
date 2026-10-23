@@ -84,6 +84,13 @@ pub struct WikiFileInfo {
     pub ontology_status: Option<String>,
     /// 9/17: 蒸馏跟已有内容打架的字段 (frontmatter `conflicts:`), 工作台列成冲突任务
     pub conflicts: Vec<super::wiki_conflicts::WikiConflict>,
+    /// 10/23: 蒸馏时核对过原文的摘录 (frontmatter `evidence:`), 条目页给员工看依据
+    #[serde(default)]
+    pub evidence: Vec<String>,
+    /// 10/23: 蒸馏出来、但对不上原文被拿出正文的事实 (frontmatter `unverified:`,
+    /// 每条「事实 —— 原因」), 工作台列成「没对上原文」任务, 员工决定加回还是丢掉
+    #[serde(default)]
+    pub unverified: Vec<String>,
     /// 9/24: frontmatter `updated` (YYYY-MM-DD)。mtime 不能用 —— 批量整理/格式迁移
     /// 会碰到每个文件, mtime 反映不了内容上次被核对是哪天。
     #[serde(default)]
@@ -153,6 +160,20 @@ fn parse_list_field(fm: &str, key: &str) -> Vec<String> {
     let inner = raw.trim().trim_start_matches('[').trim_end_matches(']');
     inner
         .split(',')
+        .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// 带引号的 list (`evidence: ["摘录, 里面可能有逗号", ...]`) —— 不能像 parse_list_field
+/// 那样按逗号硬切, 走跟 related 一样的引号感知切分。
+fn parse_quoted_list(fm: &str, key: &str) -> Vec<String> {
+    let Some(raw) = parse_frontmatter_field(fm, key) else {
+        return Vec::new();
+    };
+    let inner = raw.trim().trim_start_matches('[').trim_end_matches(']');
+    split_top_level(inner)
+        .into_iter()
         .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
         .filter(|s| !s.is_empty())
         .collect()
@@ -384,6 +405,8 @@ fn build_file_info_inner(
         authored_by: parse_frontmatter_field(&fm, "authored_by"),
         ontology_status: parse_frontmatter_field(&fm, "ontology_status"),
         conflicts: super::wiki_conflicts::parse_conflicts(&fm),
+        evidence: parse_quoted_list(&fm, "evidence"),
+        unverified: parse_quoted_list(&fm, "unverified"),
         updated: parse_frontmatter_field(&fm, "updated"),
         tracks_status: super::wiki_status::body_tracks_status(&body),
     })

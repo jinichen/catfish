@@ -196,6 +196,15 @@ export function WikiMetaHeader({
         </div>
       </details>
     )}
+    {(info.evidence?.length ?? 0) > 0 && (
+      // 10/23: 蒸馏时逐条对过原文的摘录 —— 正文里的事实各有出处
+      <details className="wiki-preview__relation-details">
+        <summary>原文依据 ({info.evidence!.length})</summary>
+        <ul className="wiki-preview__evidence">
+          {info.evidence!.map((q) => <li key={q}>「{q}」</li>)}
+        </ul>
+      </details>
+    )}
     <details className="wiki-preview__technical">
       <summary>文件信息</summary>
       <div className="wiki-preview__meta-row">
