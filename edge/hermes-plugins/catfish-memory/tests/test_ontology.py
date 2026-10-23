@@ -185,6 +185,27 @@ def test_new_entry_with_unresolved_relation_is_pending(tmp_path):
     assert "unresolved_relation" in reasons
 
 
+def test_已确认的条目读到新资料不打回待确认(tmp_path):
+    """10/23: 中电福富 (已确认) 读证书清单后带上了对方还没条目的关系, 被打回 pending ——
+    Companion 关系图不收 pending, 别的条目指向它的关系全断了。已确认的留 active, 新问题在关系整理里逐条列。"""
+    (tmp_path / "wiki" / "entities").mkdir(parents=True)
+    path = tmp_path / "wiki/entities/x.md"
+    path.write_text('---\ntype: entity\ntitle: X\nentity_type: org\nontology_status: active\n---\n\n正文。\n', encoding="utf-8")
+    _write_wiki_files(tmp_path, {"wiki/entities/x.md": (
+        '---\ntype: entity\ntitle: X\nentity_type: org\n'
+        'related: [{name: "还没有的条目", rel: "包含"}]\n---\n\n正文。\n')})
+    text = path.read_text(encoding="utf-8")
+    assert "ontology_status: active" in text and "还没有的条目" in text
+
+
+def test_新条目带不明关系照旧待确认(tmp_path):
+    (tmp_path / "wiki" / "entities").mkdir(parents=True)
+    _write_wiki_files(tmp_path, {"wiki/entities/y.md": (
+        '---\ntype: entity\ntitle: Y\nentity_type: org\n'
+        'related: [{name: "还没有的条目", rel: "包含"}]\n---\n\n正文。\n')})
+    assert "ontology_status: pending" in (tmp_path / "wiki/entities/y.md").read_text(encoding="utf-8")
+
+
 def test_entry_without_relation_is_active(tmp_path):
     """9/24: 关系可选 —— 没写关系直接 active, 不再逼员工硬配一条。"""
     content = "---\ntype: concept\ntitle: 独立流程\nconcept_type: process\n---\n\n正文。\n"

@@ -247,6 +247,11 @@ def _validate_new_ontology(rel_path: str, content: str) -> str | None:
     return None
 
 
+def _is_pending(content: str) -> bool:
+    fm, _ = _split_frontmatter_body(content)
+    return bool(fm) and re.search(r"^ontology_status:\s*[\"']?pending", fm, re.MULTILINE) is not None
+
+
 def _upsert_ontology_status(content: str, status: str) -> str:
     """写入本体状态；状态是机器可读的，不混进正文。"""
     fm, body = _split_frontmatter_body(content)
@@ -592,6 +597,16 @@ def _write_wiki_files(
             status, status_reasons = _classify_ontology_status(
                 catfish_home, rel_path, final_content
             )
+            if status == _ONTOLOGY_PENDING and old_on_disk is not None and not _is_pending(old_on_disk):
+                # 10/23: 员工确认过的条目 (中电福富) 读到新资料时被打回 pending —— Companion 的关系图
+                # 不收 pending, 它一消失, 别的条目指向它的关系全成了「指向不存在」, 聊天里问
+                # 「市场部归谁」也查不到了。已确认的不降级: 新关系里的问题照样在关系整理里逐条列出
+                # (指向不明 / 对方没有条目 / 没标类型), 条目本身留在图里
+                logger.info(
+                    "catfish-memory wiki: %s 已确认过, 新内容有待处理的关系 (%s) —— 不改回待确认, 去关系整理逐条看",
+                    rel_path, ",".join(status_reasons),
+                )
+                status = _ONTOLOGY_ACTIVE
             final_content = _upsert_ontology_status(final_content, status)
             if status == _ONTOLOGY_PENDING:
                 logger.warning(
