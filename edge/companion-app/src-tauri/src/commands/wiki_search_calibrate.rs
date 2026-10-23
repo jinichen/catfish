@@ -28,7 +28,7 @@ mod tests {
     #[ignore]
     async fn wiki_search_calibrate() {
         let provider = LocalProvider::new(LocalConfig::default());
-        let home = std::env::var("HOME").unwrap();
+        let home = crate::util::paths::home_env().unwrap();
         let conn = rusqlite::Connection::open(format!("{home}/.catfish/wiki_embeddings.db")).unwrap();
         let mut stmt = conn.prepare("SELECT title, vector FROM wiki_embed_chunk").unwrap();
         let rows: Vec<(String, Vec<f32>)> = stmt
