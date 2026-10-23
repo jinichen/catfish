@@ -10,8 +10,12 @@ parent package alias, 让 relative import 找到 parent.
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
+
+# 10/23: 测试默认不走记忆向量 (否则会拿本机 token 真去调网关); 测向量的用例自己打开并换掉 embed
+os.environ.setdefault("CATFISH_MEMORY_VECTORS", "0")
 
 _PLUGIN_DIR = Path(__file__).parent.parent
 

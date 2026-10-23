@@ -17,14 +17,21 @@ prefetch 原来给主聊天的长期记忆是 distilled_facts.md 的**前 3KB** 
     退回中文双字 + 英文词。索引按文件 mtime 缓存在进程里 —— distilled 一天才变一次,
     每轮只算一次问题的分词。
 
+# 10/23 加向量
+
+词面检索管不到同义改写 (起草 / 草稿)。现在两路一起排: 词面 BM25 + 网关算的向量
+(catfish_memory_vectors), 加权 RRF 合并 —— 向量权重 2, 词面 1。10/23 评测 51 题
+(含 10 道靠编号 / 证书号才答得准的): 只词面 46, 只向量 50, 合并 50, 精确题 10/10。
+向量用不了 (网关不通 / 索引没建好 / CATFISH_MEMORY_VECTORS=0) 就只用词面, 跟以前一样。
+
 # 不做
 
-  · 不调 LLM、不算向量: prefetch 每轮都跑, hermes 给它 8 秒超时。向量检索在
-    Companion 侧 (BGE-M3) 有, 但 Intel Mac 没有本地运行时, 这里要处处能用。
+  · 不调 LLM: prefetch 每轮都跑, hermes 给它 8 秒超时。
 """
 from __future__ import annotations
 
 import math
+import os
 import re
 import threading
 from collections import Counter
@@ -33,8 +40,10 @@ from typing import Dict, List, Optional, Tuple
 
 try:
     from .catfish_memory_distill_reconcile import parse_segments
+    from . import catfish_memory_vectors as vectors
 except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_distill_reconcile import parse_segments
+    import catfish_memory_vectors as vectors
 
 #: 段 0 的标题 (见 catfish_memory_distill_reconcile.assemble)
 _HEAD_RE = re.compile(r"^### 蒸馏段 0\b.*$", re.MULTILINE)
@@ -143,9 +152,15 @@ def split_items(distilled: str) -> List[Item]:
     return items
 
 
+def item_text(item: Item) -> str:
+    """一条记忆拿去算向量的文本 (小节 + 那一行)。"""
+    return f"{item[1]} {item[2]}"
+
+
 class _Index:
     def __init__(self, items: List[Item]):
         self.items = items
+        self.texts = [item_text(it) for it in items]
         self.docs = [Counter(tokenize(f"{sec} {line}")) for _, sec, line in items]
         self.lens = [sum(d.values()) for d in self.docs]
         self.avg = (sum(self.lens) / len(self.lens)) if self.lens else 1.0
@@ -156,6 +171,9 @@ class _Index:
         self.idf = {t: math.log(1 + (n - c + 0.5) / (c + 0.5)) for t, c in df.items()}
 
     def search(self, query: str, top_k: int) -> List[Tuple[float, Item]]:
+        return [(s, self.items[i]) for s, i in self.search_ids(query, top_k)]
+
+    def search_ids(self, query: str, top_k: int) -> List[Tuple[float, int]]:
         q = [t for t in set(tokenize(query)) if t in self.idf and t not in _QUERY_STOP]
         if not q:
             return []
@@ -173,7 +191,7 @@ class _Index:
                 # items 新段在前: 同样相关时新的排前面 (最新的那条最高 +25%)
                 scored.append((s * (1 + 0.25 * (1 - i / n)), i))
         scored.sort(key=lambda x: -x[0])
-        return [(s, self.items[i]) for s, i in scored[:top_k]]
+        return scored[:top_k]
 
 
 _cache: Dict[str, Tuple[Tuple[float, int], _Index]] = {}
@@ -194,7 +212,38 @@ def _index_for(path: Path, distilled: str) -> _Index:
     idx = _Index(split_items(distilled))
     with _cache_lock:
         _cache[key] = (stamp, idx)
+    # 蒸馏出了新段 → 后台给新的那几条补向量 (已有的按文本 sha1 复用, 不重算)
+    if _vectors_on():
+        vectors.build_in_background(_vector_db(path), idx.texts)
     return idx
+
+
+def _vectors_on() -> bool:
+    return os.environ.get("CATFISH_MEMORY_VECTORS", "1") != "0"
+
+
+def _vector_db(path: Path) -> Path:
+    return path.parent / "memory_vectors.db"
+
+
+#: 两路各取前多少条去合并; 向量那路的权重 (10/23 评测: 1.5 / 2 / 5 都是 50/51, 取中间)
+_FUSE_DEPTH = 60
+_RRF_K = 60
+_VECTOR_WEIGHT = 2.0
+
+
+def _ranked(path: Path, idx: "_Index", query: str, top_k: int) -> List[Item]:
+    """词面 + 向量加权 RRF。向量用不了就是纯词面。"""
+    lexical = idx.search_ids(query, _FUSE_DEPTH)
+    semantic = vectors.search(_vector_db(path), idx.texts, query, _FUSE_DEPTH) if _vectors_on() else None
+    if not semantic:
+        return [idx.items[i] for _, i in lexical[:top_k]]
+    score: Dict[int, float] = {}
+    for rank, (_, i) in enumerate(lexical):
+        score[i] = score.get(i, 0.0) + 1.0 / (_RRF_K + rank)
+    for rank, (_, i) in enumerate(semantic):
+        score[i] = score.get(i, 0.0) + _VECTOR_WEIGHT / (_RRF_K + rank)
+    return [idx.items[i] for i, _ in sorted(score.items(), key=lambda x: -x[1])[:top_k]]
 
 
 #: 10/23 评测 (scripts/eval_memory_recall.py, 35 题): 12 条 → 29/35, 20 条 → 31/35 (检索段平均
@@ -206,12 +255,12 @@ def recall_block(path: Path, distilled: str, query: str, budget: int, top_k: int
     """跟 query 最相关的几条长期记忆 (带段日期)。query 空 / 没有够格的 → 空串。"""
     if not query or not query.strip() or not distilled.strip():
         return ""
-    hits = _index_for(path, distilled).search(query, top_k)
+    hits = _ranked(path, _index_for(path, distilled), query, top_k)
     if not hits:
         return ""
     lines: List[str] = []
     used = 0
-    for _, (label, section, line) in hits:
+    for label, section, line in hits:
         row = f"- [{label}{' · ' + section if section else ''}] {line}"
         if used + len(row) > budget:
             break
