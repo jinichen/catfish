@@ -135,6 +135,38 @@ fn has_catfish_memory_provider(raw: &str) -> bool {
     false
 }
 
+/// memory 段里 `provider:` 的值 (去引号)。没有这个 key 返 None。
+fn memory_provider_value(raw: &str) -> Option<String> {
+    let lines: Vec<String> = raw.lines().map(str::to_owned).collect();
+    let (start, end) = memory_section_range(&lines)?;
+    lines[start + 1..end].iter().find_map(|l| {
+        let t = l.trim_start();
+        // 只认段内第一层 (两格缩进) 的 provider
+        (l.starts_with("  provider:") && !l.starts_with("   ")).then(|| {
+            t["provider:".len()..].trim().trim_matches(|c| c == '\'' || c == '"').to_string()
+        })
+    })
+}
+
+/// memory 段已在、但没选 provider (缺这个 key, 或 hermes 默认的 `provider: ""`) → 填上 catfish-memory。
+///
+/// 10/23 鸿波 catch Windows 不蒸馏: hermes v0.22 新装时自己写一份带 `memory:` 段的默认配置
+/// (memory_enabled / 字数上限 …, provider 为空)。原来的判断是「有 memory 段就不动, 员工可能配了
+/// mem0」—— 于是新装的 Windows 机器上 catfish-memory 从没激活, 蒸馏、长期记忆全没有。
+/// Mac 那台是老配置, 根本没有 memory 段, 走的「整段追加」, 所以一直是好的。
+fn fill_empty_provider(raw: &str) -> String {
+    let mut lines: Vec<String> = raw.lines().map(str::to_owned).collect();
+    let Some((start, end)) = memory_section_range(&lines) else {
+        return raw.to_owned();
+    };
+    let line = format!("  provider: {PROVIDER}");
+    match (start + 1..end).find(|&i| lines[i].starts_with("  provider:") && !lines[i].starts_with("   ")) {
+        Some(i) => lines[i] = line,
+        None => lines.insert(start + 1, line),
+    }
+    lines.join("\n") + "\n"
+}
+
 /// 判断 plugins.entries.catfish-memory 是否允许覆盖 builtin memory 工具。
 fn has_catfish_memory_override(raw: &str) -> bool {
     raw.contains("    catfish-memory:\n      allow_tool_override: true")
@@ -241,10 +273,14 @@ pub fn ensure_at(path: &Path) -> Result<bool> {
     };
 
     let mut out = if has_memory_section(&raw) {
-        if !has_catfish_memory_provider(&raw) {
+        if has_catfish_memory_provider(&raw) {
+            raw.clone()
+        } else if memory_provider_value(&raw).is_some_and(|v| !v.is_empty()) {
+            // 员工明确选了别的 (mem0 / honcho …), 不动
             return Ok(false);
+        } else {
+            fill_empty_provider(&raw)
         }
-        raw.clone()
     } else {
         let mut appended = raw.clone();
         if !appended.is_empty() && !appended.ends_with('\n') {
@@ -283,6 +319,36 @@ mod tests {
         let p = dir.path().join("config.yaml");
         fs::write(&p, body).unwrap();
         p
+    }
+
+    #[test]
+    fn fills_provider_into_hermes_default_memory_section() {
+        // hermes v0.22 新装的默认配置: 有 memory 段, 没有 provider (10/23 Windows 现场)
+        let d = TempDir::new().unwrap();
+        let p = write(&d, "model:\n  default: x\nmemory:\n  memory_enabled: true\n  user_profile_enabled: true\n  nudge_interval: 10\nskills:\n  disabled: []\n");
+        assert!(ensure_at(&p).unwrap());
+        let out = fs::read_to_string(&p).unwrap();
+        assert!(has_catfish_memory_provider(&out), "{out}");
+        assert!(out.contains("  memory_enabled: true"), "原有键不动");
+        assert!(out.contains("skills:\n  disabled: []"), "别的段不动");
+    }
+
+    #[test]
+    fn fills_empty_quoted_provider() {
+        let d = TempDir::new().unwrap();
+        let p = write(&d, "memory:\n  memory_enabled: true\n  provider: ''\n");
+        assert!(ensure_at(&p).unwrap());
+        let out = fs::read_to_string(&p).unwrap();
+        assert!(out.contains("  provider: catfish-memory") && !out.contains("provider: ''"), "{out}");
+    }
+
+    #[test]
+    fn keeps_other_chosen_provider() {
+        let d = TempDir::new().unwrap();
+        let body = "memory:\n  memory_enabled: true\n  provider: mem0\n";
+        let p = write(&d, body);
+        assert!(!ensure_at(&p).unwrap());
+        assert_eq!(fs::read_to_string(&p).unwrap(), body);
     }
 
     #[test]

@@ -310,6 +310,16 @@ pub(crate) fn prepare_config(paths: &BootstrapPaths) -> Result<()> {
         Ok(changed) => log::info!("装机写入 hermes 规定配置: {}", changed.join(", ")),
         Err(e) => log::warn!("装机写 hermes 规定配置失败 (不阻塞, 下次启动再补): {e}"),
     }
+    // 10/23: 长期记忆 / 蒸馏的开关 (memory.provider: catfish-memory) 原来只在启动时补 ——
+    // 新装机器启动那会儿还没有 config.yaml, 要等下次重启 Companion 才生效。这里当场补。
+    match crate::services::memory_provider_config::ensure_at(&config) {
+        Ok(true) => log::info!("装机写入 memory.provider: catfish-memory"),
+        Ok(false) => {}
+        Err(e) => log::warn!("装机写 memory.provider 失败 (不阻塞, 下次启动再补): {e}"),
+    }
+    if let Err(e) = crate::services::tool_loop_config::ensure_at(&config) {
+        log::warn!("装机写工具循环硬停止失败 (不阻塞, 下次启动再补): {e}");
+    }
     if let Some(home) = config.parent() {
         let marker = home.join(crate::services::hermes_skills_default::MARKER);
         if let Err(e) = crate::services::hermes_skills_default::apply_once_at(&config, &marker) {
