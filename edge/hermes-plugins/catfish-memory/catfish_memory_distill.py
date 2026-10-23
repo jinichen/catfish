@@ -13,6 +13,7 @@ import logging
 from datetime import datetime, timezone
 import asyncio
 import os
+import sys
 import threading
 import time
 from datetime import datetime
@@ -99,6 +100,10 @@ try:
     from .catfish_memory_distill_run import distill_incremental
 except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_distill_run import distill_incremental
+try:
+    from .catfish_memory_wiki_sources import drain_sources, wiki_two_step
+except ImportError:  # 独立脚本模式 (无父包)
+    from catfish_memory_wiki_sources import drain_sources, wiki_two_step
 
 # 跟 catfish_memory.py 同名 —— logging.getLogger 同名返回同一对象
 logger = logging.getLogger("catfish.memory.plugin")
@@ -266,139 +271,69 @@ class _DistillMixin:
                         session_id, outcome.get("reason"),
                     )
 
-            # 3b. BL-CATFISH-WIKI-MODE P1.1 (6/4): wiki two-step ingest
-            #     CATFISH_WIKI_ENABLE=1 默认 off (LLM 调用贵, 24h 1 次).
-            #     Step 1 Analysis → Step 2 Generation → parse + 写文件 + journal
-            #     P1.2.3 (6/4): queries 真有未 ingest file → 合并真 Analysis input
-            # 8/3: auto_ingest 关着, 但有员工显式入库的 source → 也要跑。
-            explicit_only = not _wiki_enabled()
-            if _wiki_enabled() or pending_sources:
+            # 3b. BL-CATFISH-WIKI-MODE P1.1 (6/4): wiki two-step ingest (分析 → 生成 → 合并 → 写盘)
+            #   · 聊天派生 (journal + queries): 受 auto_ingest 管, 一批走一遍 (6/16 默认关)
+            #   · 员工入库的资料 (raw/sources): 不受 auto_ingest 管 (8/3), 10/23 起一份一份、
+            #     一段一段读, 读完才标已摄取 —— 见 catfish_memory_wiki_sources
+            def _resolve(stage: str) -> str:
+                return self._resolve_background_model(session_id, trigger_model, stage)
+
+            if _wiki_enabled() and (journal_text or pending_queries):
                 try:
-                    # P1.2.3 / P16 (6/5): 合并 journal + queries + sources 真 Analysis input
-                    #
-                    # 8/3 explicit_only: auto_ingest 关着时**只喂 sources**, 不喂
-                    # journal 也不喂 queries。这一条是拆开两个开关的前提 —— 如果
-                    # 顺手把 journal 一起喂进去, 聊天内容照样会被蒸出 entity,
-                    # 等于绕过 6/16 的决定, 那才是真的坏事。
-                    combined_input = "" if explicit_only else journal_text
+                    combined_input = journal_text
+                    extra = 0
                     if pending_queries:
                         queries_text = _read_queries_concat(pending_queries)
                         if queries_text:
-                            combined_input += (
-                                "\n\n## Recent chat queries (P1.2)\n\n" + queries_text
-                            )
+                            combined_input += "\n\n## Recent chat queries (P1.2)\n\n" + queries_text
+                            extra = len(queries_text)
                             logger.info(
                                 "catfish-memory bg session=%s: P1.2.3 queries 触发, "
                                 "%d files merged into Analysis input",
                                 session_id, len(pending_queries),
                             )
-                    if pending_sources:
-                        sources_text = _read_sources_concat(pending_sources)
-                        if sources_text:
-                            combined_input += (
-                                "\n\n## Uploaded raw sources (P16)\n\n" + sources_text
-                            )
-                            logger.info(
-                                "catfish-memory bg session=%s: P16 sources 触发, "
-                                "%d files merged into Analysis input",
-                                session_id, len(pending_sources),
-                            )
-                    model = self._resolve_background_model(
-                        session_id, trigger_model, "wiki-analysis",
+                    # 9/17: 本轮实际读过的日志日期 → sources 校验/回填
+                    result = await wiki_two_step(
+                        session_id, catfish_home, combined_input,
+                        Provenance.from_run(journal_text, []), _resolve,
+                        max_chars=_DISTILL_CHUNK_CHARS + extra, deps=sys.modules[__name__],
                     )
-                    if not model:
-                        return
-                    analysis = await _call_analysis_llm(combined_input, model)
-                    if not analysis:
+                    # P1.2.3: mark queries 已 ingest, 下次不重复
+                    if result and sum(result) > 0 and pending_queries:
+                        _mark_wiki_queries_ingested(catfish_home, [p.name for p in pending_queries])
                         logger.info(
-                            "catfish-memory bg session=%s: wiki Step 1 analysis 返空 (skip)",
-                            session_id,
+                            "catfish-memory bg session=%s: ✓ marked %d queries ingested",
+                            session_id, len(pending_queries),
                         )
-                    else:
-                        model = self._resolve_background_model(
-                            session_id, trigger_model, "wiki-generation",
-                        )
-                        if not model:
-                            return
-                        generation = await _call_generation_llm(analysis, model, catfish_home)
-                        if not generation:
-                            logger.info(
-                                "catfish-memory bg session=%s: wiki Step 2 generation 返空 (skip)",
-                                session_id,
-                            )
-                        else:
-                            files = _parse_generation_output(generation)
-                            # P19 (6/5 鸿波): 同名 entity/concept 让 LLM 合并叙述
-                            # (不是 P18 regex 留底). LLM merge 失败的 path 落 P18
-                            # regex 安全网, 不丢数据.
-                            llm_merged_paths: set = set()
-                            if files:
-                                try:
-                                    model = self._resolve_background_model(
-                                        session_id, trigger_model, "wiki-merge",
-                                    )
-                                    if not model:
-                                        return
-                                    merged_files, llm_merged_paths, n_llm_fail = await merge_files_with_llm(
-                                        catfish_home, files, model,
-                                    )
-                                    files = merged_files
-                                    if llm_merged_paths or n_llm_fail:
-                                        logger.info(
-                                            "catfish-memory bg session=%s: P19 LLM merge "
-                                            "%d ok / %d fail (fail → P18 regex 安全网)",
-                                            session_id, len(llm_merged_paths), n_llm_fail,
-                                        )
-                                except Exception as e:  # noqa: BLE001
-                                    logger.warning(
-                                        "catfish-memory P19 merge_files_with_llm 异常 (fallback P18): %s",
-                                        e,
-                                    )
-                            # 9/17: 本轮实际读过的日志日期 + 上传资料 → sources 校验/回填
-                            provenance = Provenance.from_run("" if explicit_only else journal_text, pending_sources)
-                            n_e, n_c = _write_wiki_files(catfish_home, files, skip_merge_paths=llm_merged_paths, provenance=provenance)
-                            if n_e + n_c > 0:
-                                # journal 加 distill entry — Karpathy log.md 风格
-                                ts_short = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
-                                distill_entry = (
-                                    f"\n## [{ts_short}] distill | "
-                                    f"{n_e} entities, {n_c} concepts\n\n"
-                                    f"wiki/entities/ + wiki/concepts/ 已更新 "
-                                    f"({len(files)} pages, ~{len(generation)//1024}KB).\n"
-                                )
-                                _append_journal(catfish_home, distill_entry)
-                                logger.info(
-                                    "catfish-memory bg session=%s: ✓ wiki ship %d entities + %d concepts",
-                                    session_id, n_e, n_c,
-                                )
-                                # P1.2.3: mark queries 已 ingest, 下次不重复
-                                if pending_queries:
-                                    _mark_wiki_queries_ingested(
-                                        catfish_home,
-                                        [p.name for p in pending_queries],
-                                    )
-                                    logger.info(
-                                        "catfish-memory bg session=%s: ✓ marked %d queries ingested",
-                                        session_id, len(pending_queries),
-                                    )
-                                # P16 (6/5): mark sources 已 ingest, 下次不重复
-                                if pending_sources:
-                                    _mark_wiki_sources_ingested(
-                                        catfish_home,
-                                        [p.name for p in pending_sources],
-                                    )
-                                    logger.info(
-                                        "catfish-memory bg session=%s: ✓ marked %d sources ingested",
-                                        session_id, len(pending_sources),
-                                    )
-                            else:
-                                logger.info(
-                                    "catfish-memory bg session=%s: wiki parse 0 file (LLM 输出不符 sentinel)",
-                                    session_id,
-                                )
                 except Exception as e:  # noqa: BLE001
                     logger.warning(
                         "catfish-memory bg session=%s: wiki two-step 异常 (静默): %s",
+                        session_id, e,
+                    )
+
+            if pending_sources:
+                try:
+                    async def _one_chunk(text: str, path: Path):
+                        # 来源只记这一份 (不是本轮全部待处理的), 也不给聊天日期
+                        return await wiki_two_step(
+                            session_id, catfish_home, text,
+                            Provenance.from_run("", [path]), _resolve, max_chars=len(text),
+                            deps=sys.modules[__name__],
+                        )
+
+                    stats = await drain_sources(
+                        catfish_home, pending_sources, _one_chunk,
+                        _mark_wiki_sources_ingested, session_id=session_id,
+                    )
+                    if stats["chunks"]:
+                        logger.info(
+                            "catfish-memory bg session=%s: 资料 %d 段 / 读完 %d 份 → +%d 实体 +%d 概念",
+                            session_id, stats["chunks"], stats["files_done"],
+                            stats["entities"], stats["concepts"],
+                        )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "catfish-memory bg session=%s: 资料入库异常 (静默, 下次接着读): %s",
                         session_id, e,
                     )
         except Exception as e:  # noqa: BLE001

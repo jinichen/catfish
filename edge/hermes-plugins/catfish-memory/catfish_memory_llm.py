@@ -277,7 +277,7 @@ async def _call_distill_llm(
 # ── BL-CATFISH-WIKI-MODE P1.1 wiki two-step ─────────────────────
 
 async def _call_analysis_llm(
-    journal_text: str, model: str,
+    journal_text: str, model: str, max_chars: int = 0,
 ) -> Optional[str]:
     """Step 1 Analysis: 结构化抽 entities/concepts/decisions/contradictions.
 
@@ -298,7 +298,9 @@ async def _call_analysis_llm(
         return None
 
     # 单 chunk 走 (journal 真大时切前 _DISTILL_CHUNK_CHARS — 最新优先 tail).
-    chunk = journal_text[-_DISTILL_CHUNK_CHARS:] if len(journal_text) > _DISTILL_CHUNK_CHARS else journal_text
+    # 10/23: 员工资料按段传进来 (catfish_memory_wiki_sources), 给 max_chars 整段读, 不再只看尾巴
+    cap = max_chars or _DISTILL_CHUNK_CHARS
+    chunk = journal_text[-cap:] if len(journal_text) > cap else journal_text
 
     try:
         async with httpx.AsyncClient(timeout=_LLM_HTTP_TIMEOUT) as client:

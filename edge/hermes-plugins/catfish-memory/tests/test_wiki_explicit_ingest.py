@@ -93,11 +93,11 @@ def spy_llm(monkeypatch: pytest.MonkeyPatch):
         calls["distill"].append(text)
         return None
 
-    async def fake_analysis(text, model):
+    async def fake_analysis(text, model, **kw):
         calls["analysis"].append(text)
         return "ANALYSIS-OUT"
 
-    async def fake_generation(analysis, model):
+    async def fake_generation(analysis, model, *a, **kw):
         calls["generation"].append(analysis)
         return "GENERATION-OUT"
 
@@ -205,6 +205,8 @@ def test_auto_ingest_on_still_feeds_journal(
     _drive(p)
 
     assert spy_llm["analysis"], "开着 auto_ingest 当然要跑"
-    fed = spy_llm["analysis"][0]
+    fed = "\n".join(spy_llm["analysis"])
     assert "SOURCE-正文标记" in fed
     assert "这是一段总结" in fed, "开着 auto_ingest 时 journal 本来就该进 Analysis"
+    # 10/23: 资料单独一遍, 不跟聊天日志混在一起 (卡片来源才分得清)
+    assert not any("SOURCE-正文标记" in t and "这是一段总结" in t for t in spy_llm["analysis"])

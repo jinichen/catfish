@@ -237,7 +237,9 @@ def _normalize_sources(rel_path: str, content: str, provenance: "Provenance | No
             dropped.append(item)
             continue
         if provenance is not None and canon.startswith("journal:"):
-            if provenance.journal_dates and canon[len("journal:"):] not in provenance.journal_dates:
+            # 10/23: 本轮没读聊天日志 (只读了员工资料) 时, 任何 journal: 日期都是模型编的 ——
+            # 原来 journal_dates 为空就整个不查, Windows 上资料卡全挂成「journal:当天」, 点不回原件
+            if canon[len("journal:"):] not in provenance.journal_dates:
                 dropped.append(item)
                 continue
         if canon not in kept:

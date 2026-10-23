@@ -39,35 +39,38 @@ def wiki_ingest(args: Dict[str, Any]) -> Dict[str, Any]:
     if not filename:
         return {"type": "error", "error": "filename 必填 (从 chat attachment.name 拿)"}
 
+    from .doc_text import extract_text, looks_binary  # noqa: PLC0415
+
     # 严格 sidecar 优先 (binary file: xlsx/pdf/word 严格拿不到原文)
     full_text = ""
-    src_for_read = ""
     if parsed_text_path:
         try:
-            p = Path(parsed_text_path)
+            p = Path(parsed_text_path).expanduser()
             if p.is_file():
                 full_text = p.read_text(encoding="utf-8", errors="replace")
-                src_for_read = str(p)
         except OSError:
             pass
+        if looks_binary(full_text):
+            full_text = ""
 
-    # 严格 fallback: 读 kept_path (小 text file: csv/txt/md)
+    # 没有解析好的文字 → 自己从原文件抽 (pdf / docx / pptx / xlsx / 文本类)。
+    # 10/23: 原来是把原文件直接当文本读 (errors="replace"), 扫描版 pdf 的 JPEG 字节
+    # 原样写进知识库, 一份 2700 万字乱码, 蒸馏什么都抽不出 —— 见 doc_text.py
+    why = None
     if not full_text.strip():
-        try:
-            p = Path(kept_path)
-            if p.is_file():
-                full_text = p.read_text(encoding="utf-8", errors="replace")
-                src_for_read = str(p)
-        except (OSError, UnicodeDecodeError):
-            pass
+        p = Path(kept_path).expanduser()
+        if not p.is_file():
+            why = "原文件不在了"
+        else:
+            full_text, why = extract_text(p)
 
     if not full_text.strip():
         return {
             "type": "error",
             "error": (
-                f"严格拿不到文本内容 — kept_path={kept_path} parsed_text_path={parsed_text_path} "
-                "严格都读不出. 员工可能上传 binary file 但 parse_file_from_b64 严格失败, "
-                "或严格文件已被清理. 员工重新上传附件, 再让我入库."
+                f"「{filename}」没入库: {why or '读不出文字'}。"
+                "扫描件 / 图片: 先逐页识别成文字 (vision_analyze), 存成一个 .md, 再调本工具时把 "
+                "parsed_text_path 指向那个 .md (kept_path 仍填原文件)。不要把原文件当文字硬塞进来。"
             ),
         }
 
@@ -92,6 +95,7 @@ def wiki_ingest(args: Dict[str, Any]) -> Dict[str, Any]:
     slug = "".join(slug_chars).strip("-").strip("_") or "upload"
     target_name = f"{ts}-{slug}.md"
     target_path = sources_dir / target_name
+    replaced = _drop_previous_copies(catfish_home, sources_dir, kept_path)
 
     # 严格 frontmatter + body (镜像 wiki_write.rs:648-661 严格 Rust format)
     today = time.strftime("%Y-%m-%d")
@@ -136,11 +140,51 @@ def wiki_ingest(args: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "type": "success",
+        "replaced": replaced,
         "message": (
-            f"✓ 已入库 wiki 知识库 pipeline: wiki/raw/sources/{target_name}.\n"
+            (f"(替换了这份文件之前入库的 {len(replaced)} 个旧副本, 会按新内容重新读)\n" if replaced else "")
+            + f"✓ 已入库 wiki 知识库 pipeline: wiki/raw/sources/{target_name}.\n"
             "sync_turn 3b 严格后台会扫这个文件 → LLM 严格抽 entity/concept → "
             "wiki/entities/ + wiki/concepts/ (通常 24h 内, 或员工继续 chat 立即触发)."
         ),
         "rel_path": f"wiki/raw/sources/{target_name}",
         "bytes": bytes_n,
     }
+
+
+def _drop_previous_copies(catfish_home: Path, sources_dir: Path, kept_path: str) -> list:
+    """同一个原文件之前入过库 → 删掉旧副本和它的「已读」记号, 新内容从头读 (10/23)。
+
+    重新入库的典型场景就是旧副本坏了 (乱码 / 只读了一截), 留着它只会多一份垃圾。
+    """
+    import json  # noqa: PLC0415
+
+    key_line = f"kept_path: {kept_path.replace(chr(10), ' ').replace(chr(13), ' ')}"
+    removed = []
+    for f in sources_dir.glob("*.md"):
+        try:
+            with f.open(encoding="utf-8", errors="ignore") as fh:
+                head = fh.read(4096)
+        except OSError:
+            continue
+        if key_line in head.split("\n---", 1)[0].splitlines():
+            try:
+                f.unlink()
+                removed.append(f.name)
+            except OSError:
+                pass
+    for state_name, prefix in (("wiki_ingested_state.json", "source:"), ("wiki_source_progress.json", "")):
+        p = catfish_home / state_name
+        try:
+            state = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        changed = False
+        for name in removed:
+            for k in (f"{prefix}{name}", f"{name}#fails"):
+                if k in state:
+                    state.pop(k)
+                    changed = True
+        if changed:
+            p.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    return removed

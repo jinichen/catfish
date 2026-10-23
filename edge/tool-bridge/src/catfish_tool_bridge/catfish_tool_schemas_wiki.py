@@ -344,22 +344,24 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_wiki_ingest",
         "description": (
-            "把员工 chat 里的附件原件归档进个人知识库 (raw/sources), 后台 24h 内蒸馏成条目.\n"
+            "把员工的文档 (chat 附件或本机文件) 归档进个人知识库 (raw/sources), 后台逐份读完蒸馏成条目.\n"
             "只在员工明确说要存时调: '存到知识库 / 存 wiki / 入库 / 记住这个文档'. "
             "只是让你看、分析、总结附件时不调; 拿不准就先问'要存到知识库吗?'.\n"
             "蒸馏前 TAB 看不到它, 不要说'已入库去 TAB 看', 应说'原件已归档, 条目待后台生成'. "
-            "要马上可见 → 改用/同时调 catfish_wiki_create."
+            "要马上可见 → 改用/同时调 catfish_wiki_create.\n"
+            "pdf / docx / pptx / xlsx 工具自己抽文字; 扫描件和图片抽不出 → 先 vision 逐页识别成文字存成 .md, "
+            "再调本工具 (parsed_text_path 指向那个 .md). 同一个原文件再入一次 = 替换旧副本重新读."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "kept_path": {
                     "type": "string",
-                    "description": "附件原文件路径 (attachment.keptPath)",
+                    "description": "原文件路径 (chat 附件填 attachment.keptPath; 本机文件填它的完整路径)",
                 },
                 "parsed_text_path": {
                     "type": "string",
-                    "description": "解析文本 sidecar (attachment.parsedTextPath), 有就传, 优先用",
+                    "description": "已经抽好的文字 (attachment.parsedTextPath, 或你识别扫描件后存的 .md), 有就传, 优先用",
                 },
                 "filename": {
                     "type": "string",

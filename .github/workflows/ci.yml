@@ -168,8 +168,9 @@ jobs:
           # 10/12: 销售跟进的报价单 / 价格表导入 / 销售周报 (sales_*.py) 读写 .xlsx
           # 10/18: 专家包验中央签名 (expert_pack.py, Ed25519) 用 cryptography —— 客户机上 hermes 本身就锁了
           # cryptography==50.0.1 (tool-bridge 跑在 hermes venv 里), 这里只是测试环境要补上
+          # 10/23: 入知识库前抽文字 (doc_text.py) 用 pypdfium2 / python-pptx —— 客户机上 hermes-deps 本来就装
           pip install pytest pytest-asyncio pyyaml httpx jieba pydantic python-dotenv \
-            python-docx Pillow openpyxl cryptography
+            python-docx Pillow openpyxl cryptography pypdfium2 python-pptx
 
       - name: Run tool-bridge tests
         working-directory: edge/tool-bridge
