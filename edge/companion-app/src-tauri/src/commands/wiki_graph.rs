@@ -12,6 +12,9 @@ const GRAPH_DB_NAME: &str = "wiki_graph.db";
 const GRAPH_SCORE_WEIGHT: f64 = 0.75;
 const GRAPH_RRF_K: f64 = 60.0;
 const GRAPH_MAX_NEIGHBORS_PER_SEED: usize = 24;
+/// 10/23: 连着这么多条关系的条目 (公司本身 192 条) 不往外扩 —— 「跟公司有关」等于什么都没说,
+/// 搜什么都会顺着它拉进几十张证书。下一档的条目只有 38 条, 不受影响。
+const GRAPH_HUB_DEGREE: i64 = 60;
 const GRAPH_STATUS_SAMPLE_LIMIT: i64 = 10;
 
 #[derive(Debug, Clone)]
@@ -544,6 +547,9 @@ fn graph_neighbors(
                 |row| row.get(0),
             )
             .map_err(|error| error.to_string())?;
+        if seed_degree > GRAPH_HUB_DEGREE {
+            continue;
+        }
         let hub_penalty = 1.0
             / (1.0
                 + ((seed_degree as f64 / 12.0).ln().max(0.0) * 0.25));
@@ -741,6 +747,26 @@ mod tests {
         let values = graph_neighbors(&conn, &[("b".to_string(), 0)]).unwrap();
         assert_eq!(values[0].rel_path, "a");
         assert!(values[0].score > 0.0 && values[0].score < 0.02);
+    }
+
+    #[test]
+    fn hub_seed_is_not_expanded() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        conn.execute("INSERT INTO wiki_graph_node(rel_path,title,slug,kind,aliases) VALUES ('hub','公司','hub','实体','[]')", []).unwrap();
+        for i in 0..=GRAPH_HUB_DEGREE {
+            conn.execute(
+                "INSERT INTO wiki_graph_node(rel_path,title,slug,kind,aliases) VALUES (?1,?1,?1,'实体','[]')",
+                params![format!("n{i}")],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO wiki_graph_edge(source_path,target_path,relation_type,source_name) VALUES ('hub',?1,'持有',?1)",
+                params![format!("n{i}")],
+            ).unwrap();
+        }
+        assert!(graph_neighbors(&conn, &[("hub".to_string(), 0)]).unwrap().is_empty());
+        // 普通条目照样扩 (n0 只连着公司这一条)
+        assert_eq!(graph_neighbors(&conn, &[("n0".to_string(), 0)]).unwrap().len(), 1);
     }
 
     #[test]

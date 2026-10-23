@@ -141,6 +141,7 @@ pub mod wiki_conflicts; // 9/17: frontmatter conflicts 解析 + 员工二选一 
 pub mod wiki_read; // BL-CATFISH-WIKI-MODE P3.3.2 (6/4): wiki read API (list_files + read_file)
 pub(crate) mod wiki_status; // 9/24: 正文是否记着进度 (工作台「进度待核对」)
 pub mod wiki_search;
+mod wiki_search_calibrate;
 pub mod wiki_save; // BL-CATFISH-WIKI-MODE P1.2.2 (6/4): chat 真 💾 button → wiki/queries/ 写盘
 pub mod wiki_relation_vocab; // 10/23: 关系类型 = 内置词表 + 员工登记的自定义词
 pub mod wiki_frontmatter; // 受控词表归一化 + authored_by 标记 (8/15 从 wiki_write 切出)

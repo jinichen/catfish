@@ -129,6 +129,35 @@ fn bounded_chunks(text: &str, max_chars: usize, overlap: usize) -> Vec<String> {
     out
 }
 
+/// 字母和数字连写的词 (「iso27001」) 再拆出字母段和数字段, 跟写成「ISO 27001」的对得上。
+/// 文档这边连写的整词和拆开的段都留; 问题这边只留拆开的段 (见 `query_terms`), 否则
+/// 一个「ISO27001」算成三个必须含的词, 写成「ISO 27001」的条目反而不够数。
+fn push_ascii(word: String, tokens: &mut Vec<String>) {
+    push_ascii_parts(word, tokens, true);
+}
+
+fn push_ascii_parts(word: String, tokens: &mut Vec<String>, keep_whole: bool) {
+    let has_alpha = word.chars().any(|c| c.is_ascii_alphabetic());
+    let has_digit = word.chars().any(|c| c.is_ascii_digit());
+    if has_alpha && has_digit && word.chars().all(|c| c.is_ascii_alphanumeric()) {
+        let mut part = String::new();
+        let mut parts = Vec::new();
+        for c in word.chars() {
+            if !part.is_empty() && part.chars().last().unwrap().is_ascii_digit() != c.is_ascii_digit() {
+                parts.push(std::mem::take(&mut part));
+            }
+            part.push(c);
+        }
+        parts.push(part);
+        if keep_whole {
+            tokens.push(word);
+        }
+        tokens.extend(parts);
+    } else {
+        tokens.push(word);
+    }
+}
+
 /// 中文按 unigram/bigram，英文、数字和下划线按连续词处理。
 pub(crate) fn tokenize(text: &str) -> Vec<String> {
     let chars: Vec<char> = text.to_lowercase().chars().collect();
@@ -136,7 +165,7 @@ pub(crate) fn tokenize(text: &str) -> Vec<String> {
     let mut ascii = String::new();
     let flush_ascii = |ascii: &mut String, tokens: &mut Vec<String>| {
         if !ascii.is_empty() {
-            tokens.push(std::mem::take(ascii));
+            push_ascii(std::mem::take(ascii), tokens);
         }
     };
     let mut cjk_run: Vec<char> = Vec::new();
@@ -171,6 +200,78 @@ pub(crate) fn tokenize(text: &str) -> Vec<String> {
     flush_ascii(&mut ascii, &mut tokens);
     flush_cjk(&mut cjk_run, &mut tokens);
     tokens
+}
+
+/// 问题这边的检索词 (10/23): 中文只取相邻两字, 不取单字和三字。
+///
+/// 文档那边照旧切单字 / 两字 / 三字 (`tokenize`)。问题也切单字的话, 「未来产业发展规划」
+/// 里的「发 / 业 / 展」几乎篇篇都有 —— 10/23 实测 231 篇里 227 篇「命中」, 结果全是噪音。
+/// 问句里的功能词 (「哪些 / 需要 / 什么时候」) 先切掉 —— 条目是陈述句, 这些词在里面少见,
+/// 留着就成了「必须含」的词, 「招投标需要哪些资质」一条都搜不到。跟鲶鱼记忆检索的
+/// `_QUERY_STOP` 同一个道理。整个问题只剩一个字时才留单字。
+const QUERY_STOP: &[&str] = &[
+    "什么时候", "为什么", "是不是", "能不能", "有没有", "怎么样", "什么", "怎么", "怎样", "如何", "哪些", "哪个",
+    "哪里", "多少", "是谁", "需要", "应该", "可以", "一下", "帮我", "看看", "现在", "请问",
+];
+
+pub(crate) fn query_terms(text: &str) -> Vec<String> {
+    let mut text = text.to_lowercase();
+    for stop in QUERY_STOP {
+        text = text.replace(stop, " ");
+    }
+    let terms = cjk_and_ascii_terms(&text, false);
+    if terms.is_empty() {
+        return cjk_and_ascii_terms(&text, true);
+    }
+    terms
+}
+
+fn cjk_and_ascii_terms(text: &str, single_chars: bool) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut ascii = String::new();
+    let mut run: Vec<char> = Vec::new();
+    let flush_run = |run: &mut Vec<char>, out: &mut Vec<String>| {
+        if single_chars && run.len() == 1 {
+            out.push(run[0].to_string());
+        }
+        for pair in run.windows(2) {
+            out.push(pair.iter().collect());
+        }
+        run.clear();
+    };
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+            flush_run(&mut run, &mut out);
+            ascii.push(ch);
+        } else {
+            if !ascii.is_empty() {
+                push_ascii_parts(std::mem::take(&mut ascii), &mut out, false);
+            }
+            if is_cjk(ch) {
+                run.push(ch);
+            } else {
+                flush_run(&mut run, &mut out);
+            }
+        }
+    }
+    if !ascii.is_empty() {
+        push_ascii_parts(ascii, &mut out, false);
+    }
+    flush_run(&mut run, &mut out);
+    let mut seen = HashSet::new();
+    out.retain(|t| seen.insert(t.clone()));
+    out
+}
+
+/// 一篇条目要含问题里多少检索词才算命中: 按词的稀有程度 (IDF) 加权, 至少占 60%。
+///
+/// 只数知识库里出现过的词 —— 跨词的两字 (「未来产业」里的「来产」) 知识库里没有, 不进分母。
+/// 加权是因为「公司年会节目安排」里「公司 / 安排」篇篇都有, 不加权的话含这两个就够数了;
+/// 真正说明问的是什么的「年会」很少见, 权重大, 没有它就不够。
+const MIN_COVERAGE: f64 = 0.6;
+
+pub(crate) fn covers(matched_weight: f64, total_weight: f64) -> bool {
+    total_weight > 0.0 && matched_weight >= total_weight * MIN_COVERAGE - 1e-9
 }
 
 fn is_cjk(ch: char) -> bool {
@@ -227,7 +328,7 @@ fn field_score(tokens: &[String], query: &[String], df: &HashMap<String, usize>,
 
 pub(crate) fn lexical_candidates(query: &str, limit: usize) -> Vec<WikiSearchHit> {
     let q = query.trim().to_lowercase();
-    let query_tokens = tokenize(&q);
+    let query_tokens = query_terms(&q);
     if query_tokens.is_empty() {
         return Vec::new();
     }
@@ -249,8 +350,37 @@ pub(crate) fn lexical_candidates(query: &str, limit: usize) -> Vec<WikiSearchHit
         }
     }
 
+    // 每篇条目 (跨所有分块 + 标题 / 小标题 / 标签) 含哪些检索词
+    let mut file_terms: HashMap<&str, HashSet<&String>> = HashMap::new();
+    for doc in &docs {
+        let set = file_terms.entry(doc.info.rel_path.as_str()).or_default();
+        for t in doc.tokens.iter().chain(&doc.title_tokens).chain(&doc.heading_tokens).chain(&doc.tag_tokens) {
+            if query_tokens.contains(t) {
+                set.insert(t);
+            }
+        }
+    }
+    let present: HashSet<&String> = file_terms.values().flatten().copied().collect();
+    let files = file_terms.len().max(1) as f64;
+    let mut file_df: HashMap<&String, usize> = HashMap::new();
+    for set in file_terms.values() {
+        for t in set {
+            *file_df.entry(*t).or_default() += 1;
+        }
+    }
+    let idf = |t: &String| ((files + 1.0) / (*file_df.get(t).unwrap_or(&0) as f64 + 0.5)).ln();
+    let total_weight: f64 = present.iter().map(|t| idf(t)).sum();
+
     let mut ranked: Vec<(f64, &LexicalChunk)> = docs
         .iter()
+        .filter(|doc| {
+            // 整句原样出现在标题 / 正文里的照样算; 否则要含够检索词
+            doc.info.title.to_lowercase().contains(&q)
+                || doc.chunk.text.to_lowercase().contains(&q)
+                || file_terms
+                    .get(doc.info.rel_path.as_str())
+                    .is_some_and(|set| covers(set.iter().map(|t| idf(t)).sum(), total_weight))
+        })
         .filter_map(|doc| {
             let body = field_score(&doc.tokens, &query_tokens, &df, n, avg_len);
             let title = field_score(&doc.title_tokens, &query_tokens, &df, n, avg_len);
@@ -353,12 +483,13 @@ fn merge_sources(target: &mut Vec<String>, values: &[String]) {
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn wiki_search_text(query: String) -> Result<Vec<WikiSearchHit>, String> {
-    Ok(apply_graph_expansion(lexical_candidates(&query, 50), 50))
+    Ok(apply_graph_expansion(lexical_candidates(&query, 50), 50, |_| true))
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn wiki_search_hybrid(query: String, top_k: Option<usize>) -> Result<Vec<WikiSearchHit>, String> {
     let lexical = lexical_candidates(&query, 50);
+    let mut semantic_ok = true;
     let semantic = match crate::commands::wiki_embed::wiki_search_semantic(query.clone(), Some(50)).await {
         Ok(result) => result
             .hits
@@ -374,22 +505,39 @@ pub async fn wiki_search_hybrid(query: String, top_k: Option<usize>) -> Result<V
             .collect(),
         Err(error) => {
             log::warn!("[wiki_search] semantic search failed, lexical fallback: {error}");
+            semantic_ok = false;
             Vec::new()
         }
     };
     let limit = top_k.unwrap_or(20).min(50);
-    Ok(apply_graph_expansion(rrf_fuse(lexical, semantic, 50), limit))
+    // 10/23: 只从「按意思也相关」的结果往外扩关联条目。只有几个字面巧合的弱结果时
+    // (「未来产业发展规划」撞上「企业发展与风控部」), 不再顺着关系图再拉进一串。
+    // 向量用不了时没得比, 照旧从全部结果扩。
+    let seed_filter: fn(&WikiSearchHit) -> bool = if semantic_ok {
+        |hit| hit.matched_in.iter().any(|m| m == "semantic")
+    } else {
+        |_| true
+    };
+    Ok(apply_graph_expansion(rrf_fuse(lexical, semantic, 50), limit, seed_filter))
 }
 
-fn apply_graph_expansion(mut hits: Vec<WikiSearchHit>, top_k: usize) -> Vec<WikiSearchHit> {
-    if hits.is_empty() {
-        return hits;
-    }
+const GRAPH_BONUS_FOR_DIRECT_HITS: f64 = 0.25;
+
+fn apply_graph_expansion(
+    mut hits: Vec<WikiSearchHit>,
+    top_k: usize,
+    is_seed: fn(&WikiSearchHit) -> bool,
+) -> Vec<WikiSearchHit> {
     let seeds: Vec<(String, usize)> = hits
         .iter()
         .enumerate()
+        .filter(|(_, hit)| is_seed(hit))
         .map(|(rank, hit)| (hit.rel_path.clone(), rank))
         .collect();
+    if seeds.is_empty() {
+        hits.truncate(top_k);
+        return hits;
+    }
     let candidates = match super::wiki_graph::expand_one_hop(&seeds) {
         Ok(candidates) => candidates,
         Err(error) => {
@@ -400,7 +548,9 @@ fn apply_graph_expansion(mut hits: Vec<WikiSearchHit>, top_k: usize) -> Vec<Wiki
     };
     for candidate in candidates {
         if let Some(existing) = hits.iter_mut().find(|hit| hit.rel_path == candidate.rel_path) {
-            existing.score += candidate.score;
+            // 10/23: 已经直接命中的, 关联只当加分项, 不能盖过直接命中 —— 原来全额加,
+            // 「ISO 27001」搜出来张颖 (维护着好几张 ISO 证书, 每张都给她加一份) 排在 ISO 27001 前面。
+            existing.score += candidate.score * GRAPH_BONUS_FOR_DIRECT_HITS;
             merge_sources(&mut existing.matched_in, &["graph-1hop".into()]);
             continue;
         }
@@ -492,6 +642,30 @@ mod tests {
             3,
         );
         assert_eq!(out.len(), 3);
+    }
+
+    #[test]
+    fn query_terms_drop_single_chinese_chars() {
+        let t = query_terms("未来产业发展规划");
+        assert!(t.contains(&"产业".to_string()) && t.contains(&"规划".to_string()));
+        assert!(!t.contains(&"发".to_string()), "单字不当检索词: {t:?}");
+        assert_eq!(query_terms("颖"), vec!["颖".to_string()], "单字查询留单字");
+        assert_eq!(query_terms("CMMI-5 证书"), vec!["cmmi-5".to_string(), "证书".to_string()]);
+    }
+
+    #[test]
+    fn question_words_are_not_required_terms() {
+        assert_eq!(query_terms("招投标需要哪些资质"), vec!["招投", "投标", "资质"]);
+        assert_eq!(query_terms("ISO27001 什么时候到期"), vec!["iso", "27001", "到期"]);
+        // 切掉「怎么」后剩下的单字「样」不当检索词
+        assert_eq!(query_terms("今天天气怎么样"), vec!["今天", "天天", "天气"]);
+    }
+
+    #[test]
+    fn coverage_is_weighted() {
+        assert!(covers(3.0, 5.0));
+        assert!(!covers(2.9, 5.0));
+        assert!(!covers(0.0, 0.0));
     }
 
     #[test]

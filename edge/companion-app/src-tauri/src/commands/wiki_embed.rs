@@ -60,6 +60,25 @@ pub struct WikiSemanticResult {
     pub message: String,
 }
 
+/// 语义命中的门槛: 比这个问题跟全部条目的平均相似度高出 `SEMANTIC_MARGIN`。
+///
+/// 10/23 鸿波 catch: 搜「未来产业发展规划」(知识库里根本没有) 也出 20 条。向量检索总能排出
+/// 「最像的」, 原来不设门槛, 前 50 条全收。不能用固定分数线: 本机 ONNX 和网关的 bge_m3
+/// 分数尺度不一样 (同一个无关问题本机 0.69、网关 0.46)。实测两边都成立的是「高出平均多少」:
+///
+///   无关 (未来产业 / 天气 / 火星 / 年会)  本机 ≤ 0.087  网关 ≤ 0.100
+///   相关 (高新条件 / CMMI-5 / 维护人 …)    本机 ≥ 0.101  网关 ≥ 0.125
+///
+/// 取 0.11。校准方法见 wiki_search_calibrate.rs。
+const SEMANTIC_MARGIN: f64 = 0.11;
+
+pub(crate) fn semantic_relevant(scores: &[f64]) -> f64 {
+    if scores.is_empty() {
+        return f64::INFINITY;
+    }
+    scores.iter().sum::<f64>() / scores.len() as f64 + SEMANTIC_MARGIN
+}
+
 /// wiki_search_semantic — embed query, cosine vs cached entity/concept embeddings, top-K.
 /// 首次 call 自动同步 index 全 wiki/. 后续增量逻辑留 P38.3.
 #[tauri::command(rename_all = "camelCase")]
@@ -170,6 +189,9 @@ pub async fn wiki_search_semantic(
     hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     let mut unique_paths = std::collections::HashSet::new();
     hits.retain(|hit| unique_paths.insert(hit.rel_path.clone()));
+    // 10/23: 只留明显比一般条目更相近的 (见 semantic_relevant)
+    let floor = semantic_relevant(&hits.iter().map(|h| h.score).collect::<Vec<_>>());
+    hits.retain(|hit| hit.score >= floor);
     let k = top_k.unwrap_or(20).min(50);
     let seeds: Vec<(String, usize)> = hits
         .iter()
@@ -393,6 +415,21 @@ fn parse_for_embed(content: &str) -> (String, String, String) {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn semantic_floor_is_relative_to_the_average() {
+        // 本机 ONNX 尺度: 无关问题最高 0.69 (平均 0.62) 不过线, 相关问题 0.85 (平均 0.66) 过线
+        let unrelated = [0.69, 0.68, 0.62, 0.61, 0.60, 0.60, 0.59, 0.59];
+        let floor = semantic_relevant(&unrelated);
+        assert!(unrelated.iter().all(|s| *s < floor));
+        let related = [0.85, 0.80, 0.68, 0.64, 0.63, 0.62, 0.62, 0.61];
+        let floor = semantic_relevant(&related);
+        assert!(related[0] >= floor && related[1] >= floor && related[2] < floor);
+        // 网关尺度整体低一截, 同一条规则照样分得开
+        let gw = [0.60, 0.55, 0.40, 0.38, 0.37, 0.36, 0.36, 0.35];
+        assert!(gw[0] >= semantic_relevant(&gw));
+        assert!(semantic_relevant(&[]).is_infinite());
+    }
 
     fn setup_test_db() -> rusqlite::Connection {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
