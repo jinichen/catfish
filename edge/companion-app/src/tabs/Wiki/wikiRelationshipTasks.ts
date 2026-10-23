@@ -79,6 +79,26 @@ export function markReviewedContent(content: string, today: Date = new Date()): 
   return content.slice(0, m.index) + m[1] + fm + content.slice(m.index + m[1].length + m[2].length);
 }
 
+/** 10/23: 关系没错、只是对方还没有条目 (董青 隶属 江苏徐州分公司) —— 以前写「找不到这个条目」,
+ *  界面只给改类型 / 删掉, 两个都不对路; 现在关系那行给「新建这个条目」。 */
+export const RELATION_MISSING = "知识库里还没有这个条目：可以新建，或删掉这条关系";
+
+/** 给缺的关系对方建条目: 类型按名字猜 (单位 / 部门, 猜不出算单位, 新建后能改),
+ *  正文 = 本条目里提到它的那几行 (都是核对过原文的事实), 再注明从哪来。 */
+export function stubEntryFor(name: string, fromTitle: string, fromBody: string): { subtype: string; body: string } {
+  const subtype = /(部|中心|办公室|办公厅|小组|处|科|室|事业部)$/.test(name) ? "department"
+    : /^[\u4e00-\u9fff]{2,3}$/.test(name) && !/(公司|集团|政府|局|院|委|厅|行|所|会)$/.test(name) ? "person"
+    : "org";
+  const mentions = fromBody
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#") && line.includes(name))
+    .slice(0, 5)
+    .map((line) => (line.startsWith("- ") ? line : `- ${line}`));
+  const body = [`# ${name}`, "", ...mentions, ...(mentions.length ? [""] : []), `（从「${fromTitle}」条目的关系建出来的，内容待补充）`, ""].join("\n");
+  return { subtype, body };
+}
+
 /** 一条 frontmatter 关系的问题; 正文引用和没问题的返回 null。 */
 export function relationIssue(relation: RelatedRef, files: WikiFileInfo[]): string | null {
   if (relation.source === "body") return null;
@@ -86,7 +106,7 @@ export function relationIssue(relation: RelatedRef, files: WikiFileInfo[]): stri
   if (!name) return null;
   if (!relation.rel?.trim()) return "没写关系类型";
   const resolution = resolveWikiRef(name, files);
-  if (resolution.kind === "miss") return "找不到这个条目";
+  if (resolution.kind === "miss") return RELATION_MISSING;
   if (resolution.kind === "ambiguous") return `有 ${resolution.candidates.length} 个条目都叫这个名字`;
   return null;
 }
@@ -131,6 +151,7 @@ export const RELATION_VOCAB = [
   "申报",
   "分析",
   "记录", // 台账/对照表/数据 → 所记的人或公司 (不是上下级)
+  "印发", // 10/23: 文件 → 发文机关 (十五五规划被写成「隶属 省政府」, 词表里没有合适的词)
 ] as const;
 export const RELATION_FALLBACK = "关联";
 const DEFAULT_RELATION_TYPES: string[] = [...RELATION_VOCAB, RELATION_FALLBACK];
@@ -201,14 +222,18 @@ export function buildWikiRelationshipTasks(
   const pending = files.filter(isPending).map((file): WikiRelationshipTask => {
     const typed = file.related.filter((relation) => relation.source !== "body");
     const issues = typed.filter((relation) => relationIssue(relation, files)).length;
+    // 10/23: 一条事实都没对上原文的也会待确认 (catfish_memory_wiki_ground), 说清楚
+    const noFacts = (file.unverified?.length ?? 0) > 0 && (file.evidence?.length ?? 0) === 0;
     return {
       id: `pending:${file.rel_path}`,
       kind: "pending",
       title: `确认「${file.title}」`,
-      detail: typed.length === 0
+      detail: noFacts
+        ? `小鲶写的 ${file.unverified!.length} 条事实都没对上原文 (见「没对上原文」), 处理完再确认`
+        : typed.length === 0
         ? "小鲶新建的条目，没有写关系（关系可选），看一眼就能确认"
         : issues > 0
-          ? `小鲶写了 ${typed.length} 条关系，其中 ${issues} 条要改`
+          ? `小鲶写了 ${typed.length} 条关系，其中 ${issues} 条要处理`
           : `小鲶写了 ${typed.length} 条关系，没问题就确认`,
       file,
     };

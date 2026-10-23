@@ -14,6 +14,7 @@ import {
   hasLegacyWikiRelations,
   relationTypeOptions,
   renameRelationTarget,
+  stubEntryFor,
 } from "./wikiRelationshipTasks";
 
 function file(overrides: Partial<WikiFileInfo>): WikiFileInfo {
@@ -88,7 +89,7 @@ describe("buildWikiRelationshipTasks", () => {
       file({ rel_path: "wiki/concepts/p.md", title: "新流程", ontology_status: "pending", related: [{ name: "不存在", rel: "依据" }] }),
     ]);
     expect(tasks.map((task) => task.kind)).toEqual(["pending"]);
-    expect(tasks[0].detail).toContain("1 条要改");
+    expect(tasks[0].detail).toContain("1 条要处理");
   });
 
   it("9/24: 目标是待确认条目也算连得上 (同一批互相引用)", () => {
@@ -126,7 +127,7 @@ describe("buildWikiRelationshipTasks", () => {
     const broken = tasks.filter((task) => task.kind === "broken");
     expect(broken).toHaveLength(2);
     expect(broken.map((task) => task.relationName)).toEqual(["不存在的目标", "示例"]);
-    expect(broken[0].detail).toContain("找不到这个条目");
+    expect(broken[0].detail).toContain("还没有这个条目");
     expect(broken[1].detail).toContain("没写关系类型");
   });
 
@@ -325,5 +326,23 @@ describe("10/23 层级质量任务", () => {
     const multi = tasks.find((t) => t.kind === "multiparent")!;
     expect(multi.title).toBe("「分类」挂在 2 个上级下");
     expect(multi.hierarchyLinks?.map((l) => l.declaredOn).sort()).toEqual(["wiki/concepts/a.md", "wiki/concepts/b.md"]);
+  });
+});
+
+describe("stubEntryFor (10/23: 关系对方还没有条目 → 新建)", () => {
+  it("单位 / 部门 / 人名按名字猜类型", () => {
+    expect(stubEntryFor("江苏徐州分公司", "董青", "").subtype).toBe("org");
+    expect(stubEntryFor("法律合规与审计部", "x", "").subtype).toBe("department");
+    expect(stubEntryFor("王某某", "x", "").subtype).toBe("person");
+    expect(stubEntryFor("省政府", "x", "").subtype).toBe("org");
+  });
+
+  it("正文带上本条目里提到它的那几行, 注明从哪来", () => {
+    const { body } = stubEntryFor("江苏徐州分公司", "董青",
+      "# 董青\n\n- 江苏徐州分公司董青同志被授予全国优秀党务工作者。\n- 扎根一线33年。\n");
+    expect(body).toContain("# 江苏徐州分公司");
+    expect(body).toContain("- 江苏徐州分公司董青同志被授予全国优秀党务工作者。");
+    expect(body).not.toContain("扎根一线");
+    expect(body).toContain("从「董青」条目的关系建出来的");
   });
 });

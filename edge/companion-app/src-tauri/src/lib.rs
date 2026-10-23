@@ -277,6 +277,10 @@ pub fn run() {
             // 而 tool-bridge 那边会明说"连不上 Companion"。
             #[cfg(target_os = "macos")]
             commands::teaching_credentials::socket::spawn();
+            // 10/23: 本机向量通道 —— 鲶鱼的长期记忆检索 / 事实核对用 Companion 同一套向量
+            // (Apple 芯片 Mac / 装了组件包的 Windows 是本机 BGE-M3), 不再去够内网网关;
+            // 在家断内网也能用。三个平台都起 (Intel Mac 上 Companion 自己就是走网关)。
+            services::embed_socket::spawn();
 
             // 7/17 BL-SESSIONS-INDEX: 后台 build state.db 索引, 员工点侧栏"对话"不卡.
             // 鸿波 2761 sessions 时 catch: 无 index 时 sessions_list 子查询 O(N×M)

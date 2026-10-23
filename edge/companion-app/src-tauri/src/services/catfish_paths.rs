@@ -186,6 +186,11 @@ pub fn companion_secrets_socket() -> Option<PathBuf> {
     home_dir().map(|h| h.join(".catfish").join("companion-secrets.sock"))
 }
 
+/// 10/23: 本机向量通道 (services/embed_socket.rs) 的端口号, 鲶鱼的记忆插件读它连过来
+pub fn companion_embed_port_file() -> Option<PathBuf> {
+    home_dir().map(|h| h.join(".catfish").join("companion-embed.port"))
+}
+
 /// tool-bridge 必须复用 hermes-agent 的 venv（tool 依赖都在那）
 ///
 /// 9/22: 走 hermes_home()。原来写死 `~/.hermes/hermes-agent/venv/...`, 而 Windows

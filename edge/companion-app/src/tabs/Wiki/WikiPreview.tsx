@@ -8,6 +8,7 @@
  * 7 类 anti-pattern 修法见 globals.css 顶 `.wiki-preview` block 注释.
  */
 
+import WikiEntryIssues from "./WikiEntryIssues";
 import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -69,7 +70,7 @@ function removeLegacyRelatedSection(body: string): string {
   return [before, after].filter(Boolean).join("\n\n");
 }
 
-export default function WikiPreview() {
+export default function WikiPreview({ onOpenTask }: { onOpenTask?: (taskId: string) => void } = {}) {
   const selectedFile = useWikiStore((s) => s.selectedFile);
   const selectedLoading = useWikiStore((s) => s.selectedLoading);
   const selectedError = useWikiStore((s) => s.selectedError);
@@ -486,6 +487,9 @@ export default function WikiPreview() {
         isDangling={isDangling}
         handleWikilinkClick={handleWikilinkClick}
       />
+
+      {/* 10/23: 这一条待确认 / 没对上原文 / 关系要改 —— 就地处理, 不用换到关系整理 */}
+      <WikiEntryIssues selectedFile={selectedFile} onOpenTask={onOpenTask} />
 
       <WikiHubStaleBanner hubStaleInfo={hubStaleInfo} />
 

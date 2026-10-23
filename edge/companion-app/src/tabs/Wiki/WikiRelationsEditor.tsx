@@ -3,14 +3,14 @@
  * 以前是一个带默认值的「编辑关系」表单 + 下面一张只读列表: 目标下拉在找不到
  * 候选目标时默认选中列表第一项 (中国电信海南公司), 醒目的「确认关系」一点就写进
  * 一条瞎配的关系。现在:
- *   · 现有关系一行一条, 有问题的标红, 就地改类型或删掉
+ *   · 现有关系一行一条, 有问题的标红, 就地改类型或删掉; 对方还没有条目的给「新建这个条目」(10/23)
  *   · 加关系收起来, 类型和目标都不预选, 两个都选了才能加
  *   · 待确认条目的主按钮是「确认」—— 关系可以一条都没有
  * 改类型 / 删 / 加 只改关系, 不改待确认状态; 只有「确认」才算员工核对过。
  */
 import { useMemo, useState } from "react";
 import { Check, CheckCircle, Plus, Sparkle, SpinnerGap, Trash, WarningCircle } from "@phosphor-icons/react";
-import { wikiUpdateFile, type RelatedRef } from "../../lib/tauri";
+import { wikiCreateEntityOrConcept, wikiUpdateFile, type RelatedRef } from "../../lib/tauri";
 import type { WikiFileFull } from "../../lib/tauri_wiki";
 import { useWikiStore } from "../../store/wiki";
 import { useChatStore } from "../../store/chat";
@@ -20,7 +20,9 @@ import { useRelationVocab } from "../../lib/wikiRelationVocab";
 import {
   buildConfirmedWikiContent,
   RELATION_FALLBACK,
+  RELATION_MISSING,
   relationIssue,
+  stubEntryFor,
   relationTypeOptions,
 } from "./wikiRelationshipTasks";
 
@@ -144,6 +146,22 @@ export default function WikiRelationsEditor({
     if (failed.length > 0) setError(failed.join("\n"));
     else setNotice(`已改记到「${typed[index].name}」条目上：${typed[index].name} ${s.rel} ${info.title}`);
   };
+  const createTarget = async (name: string) => {
+    setSaving(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const { subtype, body } = stubEntryFor(name, info.title, selectedFile.body);
+      await wikiCreateEntityOrConcept({ kind: "entity", title: name, subtype, tags: [], related: [], body });
+      await loadFiles();
+      await selectFile(info.rel_path);
+      setNotice(`已新建「${name}」条目，这条关系不再标红`);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
   const changeType = (index: number, rel: string) =>
     void save(typed.map((relation, i) => (i === index ? { ...relation, rel } : relation)), false, "已改关系类型");
   const remove = (index: number) =>
@@ -169,7 +187,7 @@ export default function WikiRelationsEditor({
             {typed.length === 0
               ? "没有写关系。关系是可选的，没有也可以。"
               : issueCount > 0
-                ? `${typed.length} 条，其中 ${issueCount} 条要改（标红的）：改类型或删掉。`
+                ? `${typed.length} 条，其中 ${issueCount} 条要处理（标红的）。`
                 : `${typed.length} 条。`}
           </p>
         </div>
@@ -181,7 +199,7 @@ export default function WikiRelationsEditor({
             const rel = relation.rel?.trim() ?? "";
             const options = rel && !relationTypes.includes(rel) ? [rel, ...relationTypes] : relationTypes;
             return (
-              <div className="wiki-relations__row" data-issue={Boolean(issues[index])} key={`${relation.name}:${index}`}>
+              <div className="wiki-relations__row" data-issue={issues[index] === "没写关系类型"} key={`${relation.name}:${index}`}>
                 <select
                   value={rel}
                   disabled={saving}
@@ -193,7 +211,9 @@ export default function WikiRelationsEditor({
                 </select>
                 <span className="wiki-relations__name">
                   <strong>{relation.name}</strong>
-                  {issues[index] && <small><WarningCircle size={14} aria-hidden="true" />{issues[index]}</small>}
+                  {issues[index] && issues[index] !== RELATION_MISSING && (
+                    <small><WarningCircle size={14} aria-hidden="true" />{issues[index]}</small>
+                  )}
                   {(() => {
                     const sug = suggestions[relation.name.trim()];
                     if (!sug || rel !== RELATION_FALLBACK) return null;
@@ -229,6 +249,21 @@ export default function WikiRelationsEditor({
                 >
                   <Trash size={16} />
                 </button>
+                {issues[index] === RELATION_MISSING && (
+                  <div className="wiki-relations__fix">
+                    <span>
+                      <WarningCircle size={16} aria-hidden="true" />
+                      知识库里还没有「{relation.name.trim()}」这个条目
+                    </span>
+                    <button type="button" className="wiki-workbench__secondary" disabled={saving} onClick={() => remove(index)}>
+                      删掉这条关系
+                    </button>
+                    <button type="button" className="wiki-workbench__secondary wiki-relations__fix-main" disabled={saving}
+                      onClick={() => void createTarget(relation.name.trim())}>
+                      <Plus size={16} aria-hidden="true" />新建这个条目
+                    </button>
+                  </div>
+                )}
               </div>
             );
           })}
@@ -284,7 +319,7 @@ export default function WikiRelationsEditor({
       <div className="wiki-relation-editor__actions">
         {error && <span className="wiki-workbench__error">{error}</span>}
         {notice && <span className="wiki-workbench__success"><CheckCircle size={18} />{notice}</span>}
-        {isPending && issueCount > 0 && <span className="wiki-workbench__hint">先改掉标红的关系再确认</span>}
+        {isPending && issueCount > 0 && <span className="wiki-workbench__hint">先处理标红的关系再确认</span>}
         {onLater && (
           <button type="button" className="wiki-workbench__secondary" onClick={onLater}>稍后处理</button>
         )}

@@ -2218,6 +2218,7 @@ button {
 .wiki-workbench__conflict-field { align-self: center; font-size: 13px; color: var(--catfish-text-muted); }
 .wiki-workbench__conflict > button { justify-content: flex-start; gap: 6px; flex-wrap: wrap; text-align: left; }
 .wiki-workbench__conflict > button small { width: 100%; font-size: 11px; opacity: 0.7; }
+.wiki-workbench__conflict > button small.wiki-workbench__conflict-tip { color: var(--status-ok); opacity: 1; }
 
 .wiki-workbench__danger {
   min-height: 44px;
@@ -2292,6 +2293,20 @@ button {
   background: transparent; color: var(--catfish-cyan); font-size: 12px; cursor: pointer;
 }
 .wiki-relations__suggest button:disabled { opacity: 0.5; cursor: default; }
+/* 10/23: 关系对方还没有条目 —— 关系本身没错, 不标红; 下面一条提示 + 两个正常大小的按钮 */
+.wiki-relations__fix {
+  grid-column: 1 / -1;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin: 0 0 10px; padding: 8px 8px 8px 12px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--catfish-cyan) 7%, transparent);
+}
+.wiki-relations__fix > span {
+  flex: 1 1 220px; display: inline-flex; align-items: center; gap: 6px;
+  color: var(--catfish-text-muted); font-size: 13px;
+}
+.wiki-relations__fix .wiki-workbench__secondary { min-height: 34px; display: inline-flex; align-items: center; gap: 4px; }
+.wiki-relations__fix .wiki-relations__fix-main { border-color: var(--catfish-cyan); color: var(--catfish-cyan); }
 .wiki-relations__suggest-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 /* 10/23: 知识体系「层级」—— 左边顶层列表, 中间折叠树 */
 .wiki-organizer__roots { display: grid; gap: 4px; overflow-y: auto; padding-top: 8px; }
@@ -2422,6 +2437,26 @@ button {
   font-size: 14px;
   line-height: 1.7;
 }
+/* 10/23: 可能重复 —— 每条一张卡, 保留 / 改名 */
+.wiki-dup { display: grid; gap: 10px; }
+.wiki-dup__loading { display: flex; align-items: center; gap: 6px; color: var(--catfish-text-muted); }
+.wiki-dup__card {
+  display: grid; gap: 6px; padding: 12px 14px;
+  border: 1px solid var(--catfish-border); border-radius: var(--radius-md); background: var(--catfish-bg);
+}
+.wiki-dup__card header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
+.wiki-dup__card header strong { font-size: 15px; }
+.wiki-dup__type { padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, var(--catfish-cyan) 12%, transparent); color: var(--catfish-cyan); font-size: 12px; }
+.wiki-dup__source { color: var(--catfish-text-muted); font-size: 12px; overflow-wrap: anywhere; }
+.wiki-dup__card ul { margin: 2px 0 0; padding-left: 18px; color: var(--catfish-text-muted); font-size: 13px; line-height: 1.6; }
+.wiki-dup__card footer, .wiki-dup__rename { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 4px; }
+.wiki-dup__card footer > span { flex: 1; }
+.wiki-dup__card footer .wiki-workbench__secondary, .wiki-dup__card footer .wiki-workbench__primary,
+.wiki-dup__rename .wiki-workbench__secondary, .wiki-dup__rename .wiki-workbench__primary { min-height: 34px; display: inline-flex; align-items: center; gap: 4px; }
+.wiki-dup__rename input {
+  flex: 1 1 200px; height: 34px; padding: 0 10px; border: 1px solid var(--catfish-border);
+  border-radius: var(--radius-md); background: var(--catfish-bg); color: var(--catfish-text); font: 14px var(--font-sans);
+}
 .wiki-workbench__duplicate-list { display: grid; gap: 8px; }
 .wiki-workbench__duplicate-list button {
   min-height: 56px;
@@ -2438,6 +2473,10 @@ button {
 }
 .wiki-workbench__duplicate-list button span { display: grid; gap: 4px; }
 .wiki-workbench__duplicate-list button small { color: var(--catfish-text-muted); font-size: 12px; }
+.wiki-workbench__link {
+  display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none;
+  color: var(--catfish-cyan); font-size: 13px; cursor: pointer;
+}
 .wiki-workbench__empty {
   min-height: 420px;
   display: flex;
@@ -2983,6 +3022,14 @@ button {
 .wiki-preview__technical > summary:hover { color: var(--catfish-cyan); }
 .wiki-preview__technical[open] > summary { margin-bottom: 7px; }
 .wiki-preview__technical-sources { margin-top: 8px; overflow-wrap: anywhere; }
+/* 10/23: 条目页上「这一条还有几件事要处理」*/
+.wiki-entry-issues { margin: 12px 0 16px; padding: 12px 16px; border: 1px solid var(--catfish-warning, #d9a441); border-radius: 10px; background: color-mix(in srgb, var(--catfish-warning, #d9a441) 8%, transparent); }
+.wiki-entry-issues__head { display: flex; align-items: center; gap: 8px; color: var(--catfish-warning, #d9a441); }
+.wiki-entry-issues__why { margin: 6px 0 0; font-size: 13px; color: var(--catfish-text-muted); }
+.wiki-entry-issues__other { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; }
+.wiki-entry-issues__other span { display: flex; flex-direction: column; gap: 2px; }
+.wiki-entry-issues__other small { color: var(--catfish-text-muted); }
+.wiki-entry-issues .wiki-workbench__section { margin-top: 10px; }
 /* 10/23: 蒸馏核对过的原文摘录 */
 .wiki-preview__evidence { margin: 4px 0 8px; padding-left: 18px; color: var(--catfish-text-muted); font-size: 13px; line-height: 1.6; }
 .wiki-preview__evidence li { overflow-wrap: anywhere; }

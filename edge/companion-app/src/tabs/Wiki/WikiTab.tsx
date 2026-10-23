@@ -10,7 +10,7 @@
  *         filter (搜索 / tag / type) / graph (build from wikilink edges)
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ShareNetwork } from "@phosphor-icons/react";
 import WikiPreview from "./WikiPreview";
 import WikiGraph from "./WikiGraph";
@@ -26,6 +26,19 @@ export default function WikiTab() {
   // 10/23「层级」: 选中的顶层; 点树上的节点 → 切到「全部知识」打开那个条目
   const [hierarchyRoot, setHierarchyRoot] = useState<string | null>(null);
   const selectFile = useWikiStore((state) => state.selectFile);
+  const refreshQuiet = useWikiStore((state) => state.refreshQuiet);
+  // 10/23: 盘上的知识库会被插件后台改 (蒸馏新卡、核对、清冲突) —— 窗口回到前台、每分钟静默重读一次
+  useEffect(() => {
+    const refresh = () => { if (document.visibilityState === "visible") void refreshQuiet(); };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    const timer = window.setInterval(refresh, 60_000);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+      window.clearInterval(timer);
+    };
+  }, [refreshQuiet]);
   const openFromHierarchy = (path: string) => {
     setMode("browse");
     void selectFile(path);
@@ -62,7 +75,7 @@ export default function WikiTab() {
         ) : mode === "hierarchy" ? (
           <WikiHierarchyView root={hierarchyRoot} onOpen={openFromHierarchy} />
         ) : (
-          <WikiPreview />
+          <WikiPreview onOpenTask={(id) => { setTaskId(id); setMode("organize"); }} />
         )}
       </main>
       {graphVisible && (

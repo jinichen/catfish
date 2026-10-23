@@ -56,6 +56,7 @@ const RELATION_MEANINGS: Record<string, string> = {
   申报: "本条目申报对方 (申报项目→目标证书)",
   分析: "本条目分析对方 (报告→被分析的对象)",
   记录: "本条目记录了对方 (台账/对照表/数据→所记的人、公司; 不是上下级)",
+  印发: "本条目由对方印发 / 发布 (文件→发文机关; 不是上下级)",
 };
 
 function systemPrompt(custom: readonly RelationTypeInfo[]): string {

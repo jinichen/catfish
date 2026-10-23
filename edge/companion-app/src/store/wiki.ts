@@ -58,6 +58,9 @@ interface WikiState {
   virtualSystemName: string | null;
 
   loadFiles: () => Promise<void>;
+  /** 10/23: 静默重读 (不出「加载中」): 列表 + 当前打开的条目。插件后台蒸馏、别处改了文件,
+   *  界面以前要重启才看得到 (鸿波: 清掉的冲突还挂着)。窗口回到前台 / 每分钟调一次。 */
+  refreshQuiet: () => Promise<void>;
   selectFile: (relPath: string | null) => Promise<void>;
   setSearch: (s: string) => void;
   setKindFilter: (k: "all" | "entity" | "concept" | "query") => void;
@@ -80,7 +83,7 @@ let selectRequest = 0;
 /** 本地列目录的上限; 超了当挂了处理 (见 loadFiles) */
 const LIST_TIMEOUT_MS = 30_000;
 
-export const useWikiStore = create<WikiState>((set) => ({
+export const useWikiStore = create<WikiState>((set, get) => ({
   files: [],
   filesLoading: false,
   filesError: null,
@@ -148,6 +151,23 @@ export const useWikiStore = create<WikiState>((set) => ({
       });
     } catch (e) {
       set({ filesLoading: false, filesError: String(e) });
+    }
+  },
+
+  refreshQuiet: async () => {
+    if (get().filesLoading) return;
+    try {
+      const files = await wikiListFiles();
+      set({ files, lastLoadTs: Date.now() });
+      const { selectedPath, selectedFile, selectedLoading } = get();
+      if (!selectedPath || selectedLoading) return;
+      const request = selectRequest;
+      const full = await wikiReadFile(selectedPath);
+      // 期间员工点了别的条目, 或内容没变 → 不动 (不打断正在看 / 正在改的)
+      if (request !== selectRequest || full.content === selectedFile?.content) return;
+      set({ selectedFile: full });
+    } catch {
+      // 静默刷新失败无所谓, 下次再来; 显式刷新走 loadFiles 会报错
     }
   },
 

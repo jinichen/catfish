@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import {
-  ArrowRight,
   CheckCircle,
   ArrowsLeftRight,
   ClockCounterClockwise,
@@ -20,6 +19,9 @@ import { useKeptUntyped } from "../../lib/wikiUntypedKept";
 import { customHierarchy, useRelationVocab } from "../../lib/wikiRelationVocab";
 import WikiHierarchyIssuePanel from "./WikiHierarchyIssuePanel";
 import WikiUnverifiedPanel from "./WikiUnverifiedPanel";
+import WikiDuplicatePanel from "./WikiDuplicatePanel";
+import { BUILTIN_HIERARCHY } from "./wikiHierarchy";
+import { wikiSourceLabel } from "./wikiLabels";
 
 function evidenceExcerpt(body: string): string {
   return body
@@ -33,12 +35,12 @@ function evidenceExcerpt(body: string): string {
 const HEADER_HINT: Record<string, string> = {
   conflict: "小鲶后来读到的跟现在记的不一样，选一个。",
   pending: "小鲶新建的条目。看一眼关系对不对，对就确认；关系可以没有。",
-  broken: "有一条关系要改：改类型或删掉。",
+  broken: "有一条关系要处理：改类型、删掉，或给对方新建条目。",
   skiplevel: "已经挂在中间一级下面，又直挂了更上一级 —— 直挂的那条多余，层级图上会多出一条斜线。",
   multiparent: "挂在好几个上级下面。确认哪个才是它的上级，其余去掉（或者到条目里改成别的关系）。",
   untyped: "这些关系只写了「关联」，说不清是什么关系。让小鲶一次建议，看过再采纳；拿不准的点「保持关联」，以后不再列。不点就不写入。",
   stale: "这条记着进度，但很久没更新了。核对正文里的进度还对不对。",
-  duplicate: "名称相近的条目需要人工核对，避免错误合并。",
+  duplicate: "几条条目名字（或别名）一样，看一眼是不是同一个东西：是就合并，不是就改名。",
 };
 
 /** 9/24 重做: 任务按 id 选中 (一个名字指向不明 = 一条任务, 不再跟着某个文件走)。 */
@@ -114,9 +116,6 @@ export default function WikiRelationshipWorkbench({
   }
 
   const info = selectedFile.info;
-  const duplicateFiles = selectedTask?.duplicatePaths
-    ?.map((path) => files.find((file) => file.rel_path === path))
-    .filter(Boolean) ?? [];
 
   // 9/17 (semantica 第 2 条): 蒸馏想改类型/关系, 但跟盘上已有的不一样 —— 写入侧
   // 保留了旧值、把新值记进 conflicts。这里员工二选一, 后端改文件 + 清掉那条冲突。
@@ -167,7 +166,13 @@ export default function WikiRelationshipWorkbench({
             <div><h3>两个说法</h3><p>小鲶后来读到的跟现在记的不一样。文件里保留的是现在的值，选一个。</p></div>
           </div>
           <div className="wiki-workbench__conflicts">
-            {info.conflicts!.map((conflict) => (
+            {info.conflicts!.map((conflict) => {
+              // 10/23: 包含 ↔ 隶属 这种上下级方向正好反过来的, 多半是小鲶把对方卡上的关系写到了这张卡上
+              const kinds = { ...BUILTIN_HIERARCHY, ...customHierarchy(customRelations) };
+              const reversed = conflict.field.startsWith("rel:") &&
+                new Set([kinds[conflict.current], kinds[conflict.proposed]]).size === 2 &&
+                [kinds[conflict.current], kinds[conflict.proposed]].every(Boolean);
+              return (
               <div className="wiki-workbench__conflict" key={conflict.field}>
                 <div className="wiki-workbench__conflict-field">{conflictFieldLabel(conflict.field)}</div>
                 <button
@@ -178,6 +183,7 @@ export default function WikiRelationshipWorkbench({
                   title="保留现在的值"
                 >
                   现在：<strong>{conflict.current}</strong>
+                  {reversed && <small className="wiki-workbench__conflict-tip">推荐：新说法上下级写反了</small>}
                 </button>
                 <button
                   type="button"
@@ -187,10 +193,11 @@ export default function WikiRelationshipWorkbench({
                   title={conflict.seen ? `来自 ${conflict.seen}` : "小鲶提出的新值"}
                 >
                   改成：<strong>{conflict.proposed}</strong>
-                  {conflict.seen && <small>{conflict.seen}</small>}
+                  {conflict.seen && <small>来自{wikiSourceLabel(conflict.seen)}</small>}
                 </button>
               </div>
-            ))}
+              );
+            })}
           </div>
         </section>
       )}
@@ -225,20 +232,7 @@ export default function WikiRelationshipWorkbench({
       ) : selectedTask?.kind === "unverified" ? (
         <WikiUnverifiedPanel key={selectedTask.id} task={selectedTask} onLater={onLater} />
       ) : selectedTask?.kind === "duplicate" ? (
-        <section className="wiki-workbench__section">
-          <div className="wiki-workbench__section-title">
-            <WarningCircle size={22} aria-hidden="true" />
-            <div><h3>可能重复的条目</h3><p>本轮不会自动合并，请逐条查看内容后再决定。</p></div>
-          </div>
-          <div className="wiki-workbench__duplicate-list">
-            {duplicateFiles.map((file) => file && (
-              <button type="button" key={file.rel_path} onClick={() => void selectFile(file.rel_path)}>
-                <span><strong>{file.title}</strong><small>{file.subtype || "未标注类型"}</small></span>
-                <ArrowRight size={18} aria-hidden="true" />
-              </button>
-            ))}
-          </div>
-        </section>
+        <WikiDuplicatePanel key={selectedTask.id} task={selectedTask} onLater={onLater} />
       ) : (
         <WikiRelationsEditor key={info.rel_path} selectedFile={selectedFile} onLater={onLater} />
       )}
