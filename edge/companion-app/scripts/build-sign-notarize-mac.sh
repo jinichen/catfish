@@ -726,4 +726,10 @@ fi
 hdiutil detach "$CHECK_MNT" >/dev/null 2>&1 || true
 echo "   ✓ dmg 和里面的 App 都钉着票据"
 
+# 10/23: Downloads 里的旧安装包被不明程序删过好几次 (1.1.46 起, 查不到是谁) ——
+# 每个成品再存一份到 ~/catfish-builds/<版本>/, 分发从这里拿。
+KEEP_DIR="$HOME/catfish-builds/$APP_VERSION"
+mkdir -p "$KEEP_DIR"
+cp -p "$DMG_PATH" "$KEEP_DIR/"
 echo "✅ 完成：$DMG_PATH"
+echo "   另存一份：$KEEP_DIR/$(basename "$DMG_PATH")"
