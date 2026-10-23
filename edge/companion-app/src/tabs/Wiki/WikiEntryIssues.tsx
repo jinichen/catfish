@@ -14,12 +14,29 @@ import type { WikiFileFull } from "../../lib/tauri_wiki";
 import { useWikiStore } from "../../store/wiki";
 import WikiRelationsEditor from "./WikiRelationsEditor";
 import WikiUnverifiedPanel from "./WikiUnverifiedPanel";
-import { buildWikiRelationshipTasks, type WikiRelationshipTask } from "./wikiRelationshipTasks";
+import { buildWikiRelationshipTasks, RELATION_MISSING, type WikiRelationshipTask } from "./wikiRelationshipTasks";
 
 /** 这些任务在条目页上就地处理; 其余的给「去关系整理」按钮 */
 const RELATION_KINDS = new Set(["pending", "broken"]);
 /** 一条任务管很多条目 (批量整理), 不在单个条目页上列 */
 const BATCH_KINDS = new Set(["untyped", "duplicate"]);
+
+/** 10/23: 关系问题合成一句 —— 中电福富一张卡 47 条「…的一条关系要改」逐条列出来是一面字墙,
+ *  下面的关系编辑器本来就把有问题的那几行标出来了。待确认的那条说明照旧单列。 */
+export function relationSummary(tasks: WikiRelationshipTask[]): string[] {
+  const out = tasks.filter((t) => t.kind === "pending").map((t) => `${t.title}：${t.detail}`);
+  const broken = tasks.filter((t) => t.kind === "broken");
+  if (broken.length === 0) return out;
+  const missing = broken.filter((t) => t.detail.includes(RELATION_MISSING)).length;
+  const untyped = broken.filter((t) => t.detail.includes("没写关系类型")).length;
+  const parts = [
+    missing && `${missing} 条对方还没有条目`,
+    untyped && `${untyped} 条没写关系类型`,
+    broken.length - missing - untyped && `${broken.length - missing - untyped} 条指向不明`,
+  ].filter(Boolean);
+  out.push(`有 ${broken.length} 条关系要处理（${parts.join("、")}）：在下面「关系」里标出来的那几行逐条处理`);
+  return out;
+}
 
 export function entryTasks(tasks: WikiRelationshipTask[], relPath: string): WikiRelationshipTask[] {
   return tasks.filter((t) => !BATCH_KINDS.has(t.kind) && t.file.rel_path === relPath);
@@ -52,10 +69,10 @@ export default function WikiEntryIssues({
     <section className="wiki-entry-issues" aria-label="这一条待处理的事">
       <div className="wiki-entry-issues__head">
         <WarningCircle size={20} aria-hidden="true" />
-        <strong>这一条还有 {mine.length} 件事要处理</strong>
+        <strong>这一条还有 {(relation.length > 0 ? 1 : 0) + (unverified ? 1 : 0) + others.length} 件事要处理</strong>
       </div>
-      {relation.map((t) => (
-        <p key={t.id} className="wiki-entry-issues__why">{t.title}：{t.detail}</p>
+      {relationSummary(relation).map((line) => (
+        <p key={line} className="wiki-entry-issues__why">{line}</p>
       ))}
       {relation.length > 0 && (
         <WikiRelationsEditor key={selectedFile.info.rel_path} selectedFile={selectedFile} onLater={null} />

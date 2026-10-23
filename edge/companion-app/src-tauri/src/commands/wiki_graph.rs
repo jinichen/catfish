@@ -441,7 +441,8 @@ fn open_graph_db(home: &Path) -> Result<Connection, String> {
     Ok(conn)
 }
 
-fn sync_graph() -> Result<usize, String> {
+/// 10/23: lib.rs 起的后台线程每 2 分钟调一次 (聊天查关系直接读 wiki_graph.db)
+pub(crate) fn sync_graph() -> Result<usize, String> {
     let home = catfish_home()?;
     let mut conn = open_graph_db(&home)?;
     sync_graph_in(&mut conn, &home)

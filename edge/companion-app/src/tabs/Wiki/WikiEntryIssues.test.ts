@@ -29,3 +29,21 @@ describe("条目页的待处理事项", () => {
     expect(pending.detail).toContain("2 条事实都没对上原文");
   });
 });
+
+describe("relationSummary (10/23: 47 条关系问题合成一句)", () => {
+  it("按原因分组计数, 待确认的说明照旧单列", async () => {
+    const { relationSummary } = await import("./WikiEntryIssues");
+    const { RELATION_MISSING } = await import("./wikiRelationshipTasks");
+    const t = (kind: string, detail: string, id: string) => ({ id, kind, title: "x", detail, file: {} }) as never;
+    const lines = relationSummary([
+      t("pending", "小鲶写了 3 条关系，其中 3 条要处理", "p"),
+      t("broken", `“A”：${RELATION_MISSING}`, "a"),
+      t("broken", `“B”：${RELATION_MISSING}`, "b"),
+      t("broken", "“C”：有 2 个条目都叫这个名字", "c"),
+    ]);
+    expect(lines).toEqual([
+      "x：小鲶写了 3 条关系，其中 3 条要处理",
+      "有 3 条关系要处理（2 条对方还没有条目、1 条指向不明）：在下面「关系」里标出来的那几行逐条处理",
+    ]);
+  });
+});

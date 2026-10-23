@@ -281,6 +281,15 @@ pub fn run() {
             // (Apple 芯片 Mac / 装了组件包的 Windows 是本机 BGE-M3), 不再去够内网网关;
             // 在家断内网也能用。三个平台都起 (Intel Mac 上 Companion 自己就是走网关)。
             services::embed_socket::spawn();
+            // 10/23: 知识库关系图后台每 2 分钟增量同步 (按文件哈希, 没变的不动) —— 以前只在打开
+            // 「全部知识」/ 搜索时同步, 鲶鱼聊天查关系直接读 wiki_graph.db, 插件后台改了条目
+            // (中电福富被打回待确认又改回来) 聊天里一直拿旧图
+            let _ = std::thread::Builder::new().name("wiki-graph-sync".into()).spawn(|| loop {
+                std::thread::sleep(std::time::Duration::from_secs(120));
+                if let Err(error) = commands::wiki_graph::sync_graph() {
+                    log::debug!("[wiki_graph] 后台同步失败 (下次再试): {error}");
+                }
+            });
 
             // 7/17 BL-SESSIONS-INDEX: 后台 build state.db 索引, 员工点侧栏"对话"不卡.
             // 鸿波 2761 sessions 时 catch: 无 index 时 sessions_list 子查询 O(N×M)
