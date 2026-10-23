@@ -8,16 +8,16 @@ catfish_memory_recall 的 BM25 只认字面: 员工问「你帮我起草的邮�
 
 # 做法
 
-  · 向量由网关 /v1/embeddings 算 (不带 model = 中央配的默认向量模型, 跟 Companion 远程模式
-    同一个)。Intel Mac / Windows 没有本机向量运行时, 走网关处处能用。记忆本来就经网关蒸馏,
-    没有多发到新的地方。
+  · 向量优先借 Companion 的 (127.0.0.1 端口, 见 embed())。Apple 芯片 Mac / 装了向量组件包的
+    Windows 上是本机 BGE-M3 —— 不联网也能用, 跟知识库搜索同一个模型。没有本机模型 (Intel Mac /
+    没装组件包的 Windows) 才走网关 /v1/embeddings (不带 model = 中央配的默认向量模型)。
   · 每条记忆的向量按文本 sha1 存在 ~/.catfish/memory_vectors.db。第一次全量 ~30 秒 (3300 条),
     后台线程跑; 之后蒸馏每天只新增几十条, 也只算这几十条。
   · 每轮对话: 问题算一次向量 (~0.1 秒, 超时 2 秒), 跟内存里的向量逐条点积 (纯 Python,
     3300 条 0.05 秒 —— hermes 环境没有 numpy)。
-  · 任何一步不行 (网关不通 / 没配向量模型 / 索引还没建好) → 返 None, recall 照旧只用词面。
+  · 任何一步不行 (Companion 没开 / 网关不通 / 没配向量模型 / 索引还没建好) → 返 None, recall 照旧只用词面。
     网关失败后 5 分钟内不再试, 不给每轮对话加 2 秒。
-  · 中央换了向量模型 (返回的 model 名变了) → 旧向量全部作废, 重建。不同模型的向量不能比。
+  · 换了向量模型 (返回的 model 名变了, 比如从网关换成本机) → 旧向量全部作废, 重建。不同模型的向量不能比。
 """
 from __future__ import annotations
 
@@ -66,11 +66,67 @@ def _normalize(v: Sequence[float]) -> array:
     return array("f", (x / n for x in v))
 
 
+def _home() -> Path:
+    import os  # noqa: PLC0415
+
+    env = os.environ.get("CATFISH_HOME")
+    return Path(env).expanduser() if env else Path.home() / ".catfish"
+
+
+def _companion_port() -> Optional[int]:
+    try:
+        return int((_home() / "companion-embed.port").read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _embed_via_companion(port: int, texts: List[str], timeout: float) -> Tuple[str, List[array]]:
+    """10/23: 借 Companion 的向量 (services/embed_socket.rs) —— 跟知识库搜索同一个模型,
+    Apple 芯片 Mac / 装了组件包的 Windows 上是本机 BGE-M3, 不用够内网网关。"""
+    import json  # noqa: PLC0415
+    import socket  # noqa: PLC0415
+
+    with socket.create_connection(("127.0.0.1", port), timeout=timeout) as sock:
+        sock.settimeout(timeout)
+        sock.sendall((json.dumps({"texts": texts}, ensure_ascii=False) + "\n").encode("utf-8"))
+        buf = b""
+        while not buf.endswith(b"\n"):
+            chunk = sock.recv(1 << 20)
+            if not chunk:
+                break
+            buf += chunk
+    data = json.loads(buf.decode("utf-8") or "{}")
+    if data.get("error") or len(data.get("vectors") or []) != len(texts):
+        raise RuntimeError(data.get("error") or "Companion 返回的条数不对")
+    return str(data.get("model") or "companion"), [_normalize(v) for v in data["vectors"]]
+
+
 def embed(texts: List[str], timeout: float) -> Optional[Tuple[str, List[array]]]:
-    """网关算向量 → (模型名, 归一化向量)。失败返 None 并进入冷却。"""
+    """算向量 → (模型名, 归一化向量)。失败返 None 并进入冷却。
+
+    10/23 起优先借 Companion 的 (本机模型); 原来只走网关, 网关的 bge-m3 在公司内网 ——
+    鸿波在家时长期记忆的向量一路悄悄退回只用词面。
+
+    这台机器有本机模型 (~/.catfish/models/bge-m3.onnx) 时**只**走 Companion:
+    Companion 没开就这一轮不用向量, 不改走网关 —— 两个模型算的向量比不了, 来回切
+    每次都要整库重算。没有本机模型 (Intel Mac / 没装组件包的 Windows / 老 Companion)
+    才走网关, 跟以前一样。
+    """
     global _down_until
     if time.time() < _down_until:
         return None
+    port = _companion_port()
+    has_local_model = (_home() / "models" / "bge-m3.onnx").exists()
+    if port is not None:
+        try:
+            return _embed_via_companion(port, texts, timeout)
+        except Exception as e:  # noqa: BLE001
+            if has_local_model:
+                _down_until = time.time() + _COOLDOWN
+                logger.info("记忆向量: Companion 那边算不了 (%s), %d 秒内只用词面检索", e, int(_COOLDOWN))
+                return None
+    elif has_local_model:
+        return None  # 有本机模型但 Companion 没起来 (没有端口文件): 不改走网关
     token = _gateway_dev_token()
     if not token:
         return None

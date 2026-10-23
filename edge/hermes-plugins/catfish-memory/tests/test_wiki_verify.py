@@ -107,3 +107,34 @@ def test_模型的旁白_直接丢_不进待审():
     lists, body = _lists(out)
     assert st == {"kept": 1, "dropped": 0}
     assert "注" not in body and not lists.get("unverified")
+
+
+def test_数字是标题的一部分_离摘录远也认():
+    src = "党组书记、董事长柯瑞文在庆祝中国共产党成立 105 周年暨表彰大会上的讲话。" + "正文内容" * 100 + "2026 年 7 月 3 日印发"
+    out, st = v.verify_page(_card("- 《庆祝中国共产党成立105周年暨表彰大会上的讲话》于2026年7月3日印发 〔原文:「2026 年 7 月 3 日印发」〕"), src)
+    assert st == {"kept": 1, "dropped": 0}
+
+
+def test_一个标记里两段摘录_分别核对():
+    out, st = v.verify_page(_card("- 2030 占比 35%, 研发增长 10% 〔原文:「比重达到35%左右」「研发经费投入年均增长10%」〕"), SOURCE)
+    assert st == {"kept": 1, "dropped": 0}
+    assert len(_lists(out)[0]["evidence"]) == 2
+
+
+def test_摘录比原文少了几个字_算对上_依据存原话():
+    src = "2020年5月至7月，中电福富公司时任信息安全BG高级总监陈耿生为完成个人业绩任务。"
+    out, st = v.verify_page(_card("- 时任信息安全BG高级总监 〔原文:「中电福富信息安全BG高级总监」〕"), src)
+    assert st == {"kept": 1, "dropped": 0}
+    assert _lists(out)[0]["evidence"] == ["中电福富公司时任信息安全BG高级总监"]
+
+
+def test_摘录多了字或改了字_不算():
+    src = "某省某市分公司后勤服务中心时任主任王某某，未经集体决策擅自。"
+    out, st = v.verify_page(_card("- 时任副主任 〔原文:「某市分公司后勤服务中心时任副主任」〕"), src)
+    assert st["dropped"] == 1
+
+
+def test_跳过太多字_不算凑出来的():
+    src = "中" + "无关" * 40 + "电福富信息安全"
+    out, st = v.verify_page(_card("- x 〔原文:「中电福富信息安全」〕"), src)
+    assert st["dropped"] == 1

@@ -215,26 +215,27 @@ async def wiki_two_step(
     if not files:
         logger.info("catfish-memory bg session=%s: wiki parse 0 file (LLM 输出不符 sentinel)", session_id)
         return (0, 0)
-    # 10/23: 每条事实对一遍原文 (分析那步实际看到的那段), 对不上的拿出正文进 unverified
+    # 10/23 评测: 分析抽出来的事实, 写卡那步常常没挂到任何条目上 (数字、指标最容易丢, 召回 4 成)。
+    # 资料这一路额外按 Facts 段原样生成一张「资料要点」卡, 一条不丢, 跟别的卡一起对原文。
+    if source_title:
+        digest = digest_card(analysis, source_title, source_ref)
+        if digest:
+            files[digest[0]] = digest[1]
+    # 10/23: 每条事实对一遍原文 (分析那步实际看到的那段), 对不上的拿出正文进 unverified。
+    # v2 检索原文 + 模型判断 (catfish_memory_wiki_ground), 调不通退回 v1 摘录比对
     try:
+        from . import catfish_memory_wiki_ground as ground  # noqa: PLC0415
         from . import catfish_memory_wiki_verify as verify  # noqa: PLC0415
     except ImportError:  # 独立脚本模式 (无父包)
+        import catfish_memory_wiki_ground as ground  # noqa: PLC0415
         import catfish_memory_wiki_verify as verify  # noqa: PLC0415
     source = analysis_input[-max_chars:] if max_chars else analysis_input
-    files, vstat = verify.verify_files(files, source)
+    files, vstat = await ground.ground_files(files, source, resolve_model("wiki-verify"))
     if vstat["dropped"]:
         logger.info(
             "catfish-memory bg session=%s: 核对原文: %d 条对上, %d 条对不上 (进 unverified 待人看)",
             session_id, vstat["kept"], vstat["dropped"],
         )
-    # 10/23 评测: 分析抽出来的事实, 写卡那步常常没挂到任何条目上 (数字、指标最容易丢, 召回 4 成)。
-    # 资料这一路额外按 Facts 段原样生成一张「资料要点」卡, 一条不丢, 同样逐条对原文。
-    if source_title:
-        digest = digest_card(analysis, source_title, source_ref)
-        if digest:
-            digest_path, digest_content = digest
-            checked, dstat = verify.verify_files({digest_path: digest_content}, source)
-            files.update(checked)
     pre_merge = dict(files)
     # P19 (6/5): 同名 entity/concept 让 LLM 合并叙述; 失败的落 P18 regex 安全网, 不丢数据
     llm_merged_paths: set = set()

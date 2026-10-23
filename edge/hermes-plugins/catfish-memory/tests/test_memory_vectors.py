@@ -131,3 +131,35 @@ def test_失败后冷却_不每轮都等(monkeypatch):
     assert v.embed(["b"], 1.0) is None
     assert len(tried) == 1, "冷却期内不再发请求"
     v._reset_for_tests()
+
+
+def test_优先借Companion的本机模型_连不上也不改走网关(tmp_path, monkeypatch):
+    import socket
+    import threading
+    import json as _json
+    v._reset_for_tests()
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
+    (tmp_path / "models").mkdir()
+    (tmp_path / "models" / "bge-m3.onnx").write_bytes(b"x")
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    (tmp_path / "companion-embed.port").write_text(str(port))
+
+    def serve():
+        conn, _ = srv.accept()
+        req = _json.loads(conn.makefile().readline())
+        conn.sendall((_json.dumps({"model": "local:bge-m3", "dim": 2, "vectors": [[3.0, 4.0] for _ in req["texts"]]}) + "\n").encode())
+        conn.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    gateway_called = []
+    monkeypatch.setattr(v, "_gateway_dev_token", lambda: gateway_called.append(1) or "t")
+    model, vecs = v.embed(["一", "二"], 2.0)
+    assert model == "local:bge-m3" and len(vecs) == 2 and abs(vecs[0][0] - 0.6) < 1e-6
+    srv.close()
+    # Companion 关了: 有本机模型 → 不走网关, 这一轮没向量
+    assert v.embed(["三"], 1.0) is None
+    assert gateway_called == []
+    v._reset_for_tests()

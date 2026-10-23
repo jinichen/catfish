@@ -311,3 +311,24 @@ def test_write_path_old_chinese_type_is_not_a_false_conflict(tmp_path):
     )
     _write_wiki_files(tmp_path, {"wiki/concepts/x.md": "---\ntype: concept\ntitle: X\nconcept_type: rule\n---\n\n新正文。\n"})
     assert "conflicts:" not in (tmp_path / "wiki/concepts/x.md").read_text(encoding="utf-8")
+
+
+def test_上下级方向正好反过来_不算两个说法_保留现在的(tmp_path, monkeypatch):
+    """10/23: 「中电福富 包含 业软BG」, 证书清单又提出「中电福富 隶属 业软BG」—— 是写反了, 不让员工二选一。"""
+    from catfish_memory_wiki_provenance import detect_conflicts
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
+    old = '---\ntype: entity\ntitle: 中电福富\nentity_type: org\nrelated: [{name: "业软BG", rel: "包含"}, {name: "福建电信", rel: "隶属"}]\n---\n# 中电福富\n'
+    new = '---\ntype: entity\ntitle: 中电福富\nentity_type: org\nrelated: [{name: "业软BG", rel: "隶属"}, {name: "福建电信", rel: "协作"}]\n---\n# 中电福富\n'
+    found = detect_conflicts(old, new, "raw/sources/1-证书清单")
+    assert [c["field"] for c in found] == ["rel:福建电信"]  # 隶属 → 协作 是真两个说法, 照旧列
+
+
+def test_自定义的上下级关系也认方向(tmp_path, monkeypatch):
+    import json
+    from catfish_memory_wiki_provenance import detect_conflicts
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
+    (tmp_path / "wiki_relation_vocab.custom.json").write_text(
+        json.dumps({"relations": {"下设": "x"}, "hierarchy": {"下设": "parent"}}, ensure_ascii=False), encoding="utf-8")
+    old = '---\ntype: entity\ntitle: A\nrelated: [{name: "B", rel: "下设"}]\n---\n'
+    new = '---\ntype: entity\ntitle: A\nrelated: [{name: "B", rel: "隶属"}]\n---\n'
+    assert detect_conflicts(old, new) == []

@@ -20,6 +20,10 @@
     要么在原文里 —— 合并那步不许凭空多出数字。
 
 CATFISH_WIKI_VERIFY=0 关掉 (只给评测脚本做对照用)。
+
+10/23 晚: 写卡后的逐条核对换成 v2 (catfish_memory_wiki_ground: 检索原文段 + 模型判断)。这里的
+摘录比对只在模型调不通时兜底; 合并后的数字检查 (check_merged_numbers) 和 carry_lists 照旧用。
+scripts/eval_verify.py 同一批题: v1 错杀 5% / 漏放 50%, v2 见那个模块的说明。
 """
 from __future__ import annotations
 
@@ -47,7 +51,45 @@ _ELLIPSIS_RE = re.compile(r"\.{2,}|…+|⋯+")
 #: 省略号连起来的几段摘录, 相邻两段在原文里最多隔这么远 (规范化后的字数)
 _ELLIPSIS_GAP = 300
 #: 模型把自己的说明写进了正文 (「(注: …)」「修正思考: …」) —— 不是事实, 直接丢, 不进待审
-_COMMENTARY_RE = re.compile(r"^[\s*_>(（\[]*(注|备注|说明|修正|思考|提示|note)[^\s:：]{0,4}[\s:：]", re.IGNORECASE)
+_COMMENTARY_RE = re.compile(r"^[\s*_>(（\[]*(注|备注|说明|修正|思考|提示|note|self-correction|correction)[^\s:：]{0,4}[\s:：]", re.IGNORECASE)
+
+
+_MULTI_QUOTE_RE = re.compile(r"[」”\"]\s*[「“\"]")
+
+
+def split_quotes(raw: List[str]) -> List[str]:
+    """一个标记里塞了两段摘录 (〔原文:「A」「B」〕) —— 拆开分别核对, 不能当成一整句去找。"""
+    return [p for q in raw for p in _MULTI_QUOTE_RE.split(q) if p.strip()]
+
+
+#: 摘录比原文少字时, 原文那一段最长可以是摘录的几倍 (跳过的字不能太多, 不然什么都能"凑"出来)
+_SKIP_RATIO = 1.8
+
+
+def _subsequence_span(src_norm: str, nq: str) -> Tuple[int, int]:
+    """摘录只是比原文**少了几个字** (中间跳过), 没有多字、没有改字 → 原文那一段的 (起, 止); 否则 (-1, -1)。
+
+    10/23 鸿波 catch: 原文「中电福富公司时任信息安全BG高级总监」, 模型摘成
+    「中电福富信息安全BG高级总监」(省了「公司时任」) —— 一字不差的规矩判它找不到。
+    放宽成「摘录的每个字按顺序都在原文里」: 省字可以, 加字改字不行 ——
+    「时任副主任」(原文「时任主任」) 多一个「副」, 照样拦。
+    """
+    if len(nq) < _MIN_QUOTE:
+        return -1, -1
+    limit = int(len(nq) * _SKIP_RATIO)
+    head = nq[:2]
+    start = src_norm.find(head)
+    while start >= 0:
+        i, j = 0, start
+        end_cap = min(len(src_norm), start + limit)
+        while i < len(nq) and j < end_cap:
+            if src_norm[j] == nq[i]:
+                i += 1
+            j += 1
+        if i == len(nq):
+            return start, j
+        start = src_norm.find(head, start + 1)
+    return -1, -1
 
 
 def find_quote(src_norm: str, quote: str) -> int:
@@ -60,7 +102,8 @@ def find_quote(src_norm: str, quote: str) -> int:
     if not parts or sum(len(p) for p in parts) < _MIN_QUOTE:
         return -1
     if len(parts) == 1:
-        return src_norm.find(parts[0])
+        exact = src_norm.find(parts[0])
+        return exact if exact >= 0 else _subsequence_span(src_norm, parts[0])[0]
     if any(len(p) < 4 for p in parts):
         return -1
     start = src_norm.find(parts[0])
@@ -78,6 +121,30 @@ def find_quote(src_norm: str, quote: str) -> int:
     return -1
 
 
+def numbers_in_context(text: str, src_norm: str, missing: set) -> set:
+    """不在摘录附近的数字, 再看它在事实里的上下文 (前后各 3 个字) 原文里有没有原样出现。
+
+    10/23 鸿波 catch:「《…成立105周年…讲话》于2026年7月3日印发」—— 摘录是文末的落款日期,
+    105 在文首标题里, 离得远就被判「数字原文里没有」。数字是名称 / 标题的一部分时, 连着
+    上下文一起能在原文里找到; 「增长 12%」(原文 10%) 的上下文「增长12」找不到, 照样拦。
+    返回仍然找不到的那些。
+    """
+    t = norm(text)
+    still = set()
+    for n in missing:
+        ok = False
+        start = t.find(n)
+        while start >= 0:
+            ctx = t[max(0, start - 3): start + len(n) + 3]
+            if len(ctx) > len(n) and ctx in src_norm:
+                ok = True
+                break
+            start = t.find(n, start + 1)
+        if not ok:
+            still.add(n)
+    return still
+
+
 def _norm_with_map(text: str) -> Tuple[str, List[int]]:
     """norm() 之后每个字符对应原文第几个字符 —— 找到摘录后回原文取附近那段。
 
@@ -91,6 +158,19 @@ def _norm_with_map(text: str) -> Tuple[str, List[int]]:
                 chars.append(c)
                 pos.append(i)
     return "".join(chars), pos
+
+
+def source_span(source: str, src_norm: str, src_pos: List[int], quote: str) -> str:
+    """摘录在原文里对应的那一段原话 (证据存原话, 不存模型的转述; 模型省了哪些字一眼看得出)。"""
+    nq = norm(quote)
+    i = src_norm.find(nq)
+    if i >= 0:
+        a, b = i, i + len(nq)
+    else:
+        a, b = _subsequence_span(src_norm, nq)
+        if a < 0:
+            return ""
+    return source[src_pos[a]: src_pos[b - 1] + 1].replace("\n", " ")
 
 
 def _nearby_ints(source: str, src_norm: str, src_pos: List[int], quotes: List[str]) -> set:
@@ -168,7 +248,7 @@ def verify_page(content: str, source: str) -> Tuple[str, Dict[str, int]]:
         if not _is_fact_line(s):
             kept_lines.append(line)
             continue
-        quotes = MARK_RE.findall(line)
+        quotes = split_quotes(MARK_RE.findall(line))
         text = MARK_RE.sub("", line).rstrip()
         if not quotes and _COMMENTARY_RE.match(s):
             continue  # 模型的旁白, 不是事实
@@ -181,13 +261,14 @@ def verify_page(content: str, source: str) -> Tuple[str, Dict[str, int]]:
                 reason = f"摘录原文里找不到「{bad[0][:60]}」"
         if reason is None:
             missing = ints(_strip_today(text)) - _nearby_ints(source, src_norm, src_pos, quotes)
+            missing = numbers_in_context(_strip_today(text), src_norm, missing)
             if missing:
                 reason = "数字原文里没有: " + "、".join(sorted(missing)[:3])
         if reason:
             dropped.append(f"{_clean_item(text)} —— {reason}")
         else:
             kept_lines.append(text)
-            evidence.extend(_clean_item(q, 80) for q in quotes)
+            evidence.extend(_clean_item(source_span(source, src_norm, src_pos, q) or q, 80) for q in quotes)
             n_kept += 1
     lists = _parse_frontmatter_lists(fm)
     fm = _set_list(fm, "evidence", lists.get("evidence", []) + evidence)

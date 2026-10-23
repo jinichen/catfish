@@ -52,12 +52,16 @@ def _load_relation_vocab() -> tuple[frozenset, dict, str]:
 
 _RELATIONS, _RELATION_ALIASES, _RELATION_FALLBACK = _load_relation_vocab()
 _RELATION_MEANINGS: dict = {}
+#: 上下级关系的方向 (词表 hierarchy): 隶属 = 本条目是下级, 包含 = 本条目是上级
+_RELATION_HIERARCHY: dict = {"隶属": "child", "包含": "parent"}
 try:
     import json as _json_m
     _p = next((c for c in (Path(__file__).resolve().parent / "contracts" / "wiki_relation_vocab.json",
                            Path(__file__).resolve().parents[2] / "contracts" / "wiki_relation_vocab.json") if c.is_file()), None)
     if _p is not None:
-        _RELATION_MEANINGS = dict(_json_m.loads(_p.read_text(encoding="utf-8"))["relations"])
+        _vocab_json = _json_m.loads(_p.read_text(encoding="utf-8"))
+        _RELATION_MEANINGS = dict(_vocab_json["relations"])
+        _RELATION_HIERARCHY.update(_vocab_json.get("hierarchy") or {})
 except (OSError, ValueError, KeyError):
     pass
 
@@ -348,9 +352,34 @@ def detect_conflicts(old_text: str, new_text: str, seen: str = "") -> list[dict[
     old_rels, new_rels = _typed_rels(old_fm), _typed_rels(new_fm)
     for name, rel in new_rels.items():
         cur = old_rels.get(name)
+        if cur and cur != rel and _opposite_hierarchy(cur, rel):
+            # 10/23: 「中电福富 包含 业软BG」读到证书清单又提出「中电福富 隶属 业软BG」——
+            # 上下级方向正好反过来, 不是新说法, 是模型把「业软BG 隶属 中电福富」写到了公司卡上。
+            # 两个都留会成环; 保留现在的, 不让员工二选一
+            logger.info("catfish-memory wiki: 与「%s」的关系 %s → %s 上下级方向反了, 保留现在的", name, cur, rel)
+            continue
         if cur and cur != rel:
             found.append({"field": f"rel:{name}", "current": cur, "proposed": rel, "seen": seen})
     return found
+
+
+def _hierarchy_kinds() -> dict[str, str]:
+    """关系词 → child / parent: 词表的 hierarchy + 员工自定义关系登记时选的。"""
+    import json as _json
+    import os as _os
+    kinds = dict(_RELATION_HIERARCHY)
+    home = Path(_os.environ.get("CATFISH_HOME") or Path.home() / ".catfish").expanduser()
+    try:
+        custom = _json.loads((home / _CUSTOM_FILE).read_text(encoding="utf-8")).get("hierarchy") or {}
+        kinds.update({str(k): str(v) for k, v in custom.items()} if isinstance(custom, dict) else {})
+    except (OSError, ValueError, AttributeError):
+        pass
+    return kinds
+
+
+def _opposite_hierarchy(a: str, b: str) -> bool:
+    kinds = _hierarchy_kinds()
+    return {kinds.get(a), kinds.get(b)} == {"child", "parent"}
 
 
 def _restore_old_value(fm: str, conflict: dict[str, str]) -> str:
