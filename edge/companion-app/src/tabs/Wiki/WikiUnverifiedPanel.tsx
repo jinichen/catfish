@@ -82,7 +82,7 @@ export default function WikiUnverifiedPanel({ task, onLater }: { task: WikiRelat
         {items.map((item) => {
           const { fact, reason } = splitUnverified(item);
           return (
-            <div className="wiki-relations__row" key={item}>
+            <div className="wiki-relations__row wiki-unverified__row" key={item}>
               <span className="wiki-relations__name">
                 <strong>{fact}</strong>
                 {reason && <small style={{ color: "var(--catfish-text-muted)" }}>{reason}</small>}

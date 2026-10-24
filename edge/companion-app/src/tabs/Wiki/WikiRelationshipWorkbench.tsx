@@ -246,7 +246,7 @@ export default function WikiRelationshipWorkbench({
         </div>
         <div className="wiki-workbench__evidence">
           <div>
-            <strong>{info.sources[0] || info.title}</strong>
+            <strong>{info.sources[0] ? wikiSourceLabel(info.sources[0]) : info.title}</strong>
             <span>{info.authored_by === "employee" ? "已经人工核对" : "建议人工核对"}</span>
           </div>
           <blockquote>{evidenceExcerpt(selectedFile.body) || "该条目暂无正文证据。"}</blockquote>

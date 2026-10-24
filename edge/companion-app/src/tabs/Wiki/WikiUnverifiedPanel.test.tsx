@@ -35,7 +35,7 @@ describe("WikiUnverifiedPanel", () => {
   it("有 unverified 的条目列成任务", () => {
     const tasks = buildWikiRelationshipTasks([current]);
     const t = tasks.find((x) => x.kind === "unverified");
-    expect(t?.title).toContain("2 条事实或关系没对上原文");
+    expect(t?.title).toContain("2 条没对上原文");
   });
 
   it("加回 = 正文追加这条, 列表删掉它; 状态不动", async () => {

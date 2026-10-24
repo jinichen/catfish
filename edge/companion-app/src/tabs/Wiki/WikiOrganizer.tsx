@@ -223,20 +223,28 @@ export default function WikiOrganizer({
         </div>
       ) : (
         <>
-          <button type="button" className="wiki-organizer__vocab" onClick={() => setShowRelationTypes(true)}>
-            <Tag size={16} aria-hidden="true" />
-            关系类型{customRelations.length > 0 ? `（含 ${customRelations.length} 个自定义）` : ""}
-          </button>
+          {/* 10/24: 搜索框和「关系类型」放一行 (原来各占一行) */}
+          <div className="wiki-organizer__searchrow">
+            <label className="wiki-organizer__search">
+              <MagnifyingGlass size={18} aria-hidden="true" />
+              <span className="sr-only">搜索整理任务</span>
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="搜索关系任务"
+              />
+            </label>
+            <button
+              type="button"
+              className="wiki-organizer__vocab"
+              onClick={() => setShowRelationTypes(true)}
+              title={`关系类型${customRelations.length > 0 ? `（含 ${customRelations.length} 个自定义）` : ""}`}
+            >
+              <Tag size={16} aria-hidden="true" />
+              类型
+            </button>
+          </div>
           {showRelationTypes && <WikiRelationTypesModal onClose={() => setShowRelationTypes(false)} />}
-          <label className="wiki-organizer__search">
-            <MagnifyingGlass size={20} aria-hidden="true" />
-            <span className="sr-only">搜索整理任务</span>
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="搜索关系任务"
-            />
-          </label>
 
           <div className="wiki-organizer__summary" aria-label="关系健康概览">
             {visibleKinds.map((kind) => {
@@ -250,7 +258,7 @@ export default function WikiOrganizer({
                   onClick={() => setKindFilter(kindFilter === kind ? "all" : kind)}
                   aria-pressed={kindFilter === kind}
                 >
-                  <Icon size={20} aria-hidden="true" />
+                  <Icon size={15} aria-hidden="true" />
                   <span>{TASK_META[kind].label}</span>
                   <strong>{counts[kind]}</strong>
                 </button>

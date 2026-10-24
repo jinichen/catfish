@@ -1882,7 +1882,7 @@ button {
   overflow: hidden;
 }
 .wikitab--graph-hidden {
-  grid-template-columns: minmax(220px, 24%) minmax(0, 1fr);
+  grid-template-columns: minmax(280px, 26%) minmax(0, 1fr);
 }
 .wikitab__pane-tree {
   min-width: 0;
@@ -1943,18 +1943,22 @@ button {
   box-sizing: border-box;
   color: var(--catfish-text);
 }
+/* 10/24: 三个视图放一行 (原来两列, 「层级」单独掉到第二行, 白占一行) */
 .wiki-organizer__switch {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, auto);
+  justify-content: space-between;
   margin-bottom: 6px;
   box-shadow: inset 0 -1px 0 var(--catfish-border);
 }
 .wiki-organizer__switch > button {
   min-height: 44px;
+  padding: 0 4px;
+  white-space: nowrap;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 5px;
   border: 0;
   border-bottom: 3px solid transparent;
   background: transparent;
@@ -2002,29 +2006,30 @@ button {
 }
 .wiki-organizer__search input::placeholder { color: var(--catfish-text-muted); }
 /* 9/24: 只显示有数的类别, 一行排开; 标签不换行 (以前 2 列卡片把「两个说法」截成两行) */
+/* 10/24: 问题类别按钮收小 (原来一行只放两个, 占五六行) */
 .wiki-organizer__summary {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin: 8px 0 12px;
+  gap: 5px;
+  margin: 8px 0 10px;
 }
 .wiki-organizer__summary > button {
-  min-height: 34px;
-  padding: 4px 10px;
+  min-height: 28px;
+  padding: 2px 8px;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   border: 1px solid var(--catfish-border);
   border-radius: 999px;
   background: var(--catfish-bg-elevated);
   color: var(--catfish-text-muted);
-  font: 13px/1 var(--font-sans);
+  font: 12px/1 var(--font-sans);
   white-space: nowrap;
   cursor: pointer;
 }
 .wiki-organizer__summary > button strong {
   color: var(--catfish-text);
-  font-size: 15px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 .wiki-organizer__summary > button[data-kind="pending"] svg { color: var(--catfish-orange); }
@@ -2092,11 +2097,15 @@ button {
   cursor: pointer;
 }
 .wiki-organizer__tasks { display: grid; gap: 7px; }
+/* 10/24: 按钮当 flex 容器时 WKWebView 不一定随多行内容长高 —— 标题折到第四行, 下面那行灰字掉到卡片框外。
+   改成两列 grid (图标 + 文字), 标题最多两行, 多了省略号 */
 .wiki-organizer__tasks > button {
   width: 100%;
-  min-height: 68px;
-  display: flex;
-  align-items: flex-start;
+  height: auto;
+  min-height: 64px;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: start;
   gap: 10px;
   padding: 12px;
   border: 1px solid transparent;
@@ -2129,7 +2138,15 @@ button {
   color: var(--catfish-orange);
 }
 .wiki-organizer__task-copy { min-width: 0; display: grid; gap: 5px; }
-.wiki-organizer__task-copy strong { font-size: 14px; line-height: 1.35; }
+.wiki-organizer__task-copy strong {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  line-height: 1.4;
+}
 .wiki-organizer__task-copy small {
   overflow: hidden;
   color: var(--catfish-text-muted);
@@ -2253,6 +2270,9 @@ button {
   box-shadow: inset 0 -1px 0 var(--catfish-border);
 }
 .wiki-relations__row:last-child { box-shadow: none; }
+/* 10/24: 「没对上原文」一行 = 事实 (占满) + 两个按钮; 原来套用关系行的 120px 第一列, 事实挤成一窄条, 按钮横跨半屏 */
+.wiki-relations__row.wiki-unverified__row { grid-template-columns: minmax(0, 1fr) auto auto; padding: 10px 0; }
+.wiki-unverified__row .wiki-workbench__secondary { min-height: 36px; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .wiki-relations__row select,
 .wiki-relations__add select,
 .wiki-relations__add input {
@@ -2334,8 +2354,10 @@ button {
 }
 
 /* 10/23: 知识体系「关系类型」入口 */
+.wiki-organizer__searchrow { display: flex; align-items: stretch; gap: 6px; }
+.wiki-organizer__searchrow .wiki-organizer__search { flex: 1; min-width: 0; min-height: 38px; }
 .wiki-organizer__vocab {
-  display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; margin-bottom: 8px;
+  display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; white-space: nowrap;
   padding: 5px 10px; border: 1px solid color-mix(in srgb, var(--catfish-text-muted) 35%, transparent);
   border-radius: 8px; background: transparent; color: inherit; font-size: 13px; cursor: pointer;
 }
@@ -2496,17 +2518,18 @@ button {
 @keyframes wiki-spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 1380px) {
-  .wikitab { grid-template-columns: 220px minmax(0, 1fr) 260px; }
-  .wikitab--graph-hidden { grid-template-columns: 220px minmax(0, 1fr); }
+  /* 10/24: 220px 一张任务卡一行只放五六个字, 鸿波「整个页面很局促」; 图谱收起时左栏给 280 */
+  .wikitab { grid-template-columns: 240px minmax(0, 1fr) 260px; }
+  .wikitab--graph-hidden { grid-template-columns: 280px minmax(0, 1fr); }
   .wiki-relations__add { grid-template-columns: 1fr 1fr; }
 }
 @media (max-width: 1000px) {
   .wikitab:not(.wikitab--graph-hidden) .wikitab__pane-graph {
     position: absolute;
-    inset: 0 0 0 220px;
+    inset: 0 0 0 250px;
     z-index: 10;
   }
-  .wikitab { grid-template-columns: 220px minmax(0, 1fr); }
+  .wikitab { grid-template-columns: 250px minmax(0, 1fr); }
 }
 
 /* WikiTree search input */
