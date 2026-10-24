@@ -335,13 +335,18 @@ export default function WikiOrganizer({
           <div className="wiki-organizer__tasks">
             {visibleTasks.map((task) => {
               const Icon = TASK_META[task.kind].icon;
+              const open = () => { onSelectTask(task.id); void selectFile(task.file.rel_path); };
+              // 10/24: 不用 <button> —— WKWebView 里按钮装多行文字 (两行截断的标题 + 一行灰字) 时
+              // 高度算短, 灰字掉到卡片框外 (换 grid 也没用); 普通块元素一定随内容长高
               return (
-                <button
-                  type="button"
+                <div
+                  role="button"
+                  tabIndex={0}
                   key={task.id}
                   data-active={taskId === task.id}
                   data-kind={task.kind}
-                  onClick={() => { onSelectTask(task.id); void selectFile(task.file.rel_path); }}
+                  onClick={open}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } }}
                 >
                   <span className="wiki-organizer__task-icon">
                     <Icon size={20} aria-hidden="true" />
@@ -350,7 +355,7 @@ export default function WikiOrganizer({
                     <strong>{task.title}</strong>
                     <small>{task.detail}</small>
                   </span>
-                </button>
+                </div>
               );
             })}
           </div>

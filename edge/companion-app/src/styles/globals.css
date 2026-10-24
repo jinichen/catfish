@@ -1971,7 +1971,7 @@ button {
   border-bottom-color: var(--catfish-cyan);
 }
 .wiki-organizer__switch > button:focus-visible,
-.wiki-organizer__tasks > button:focus-visible,
+.wiki-organizer__tasks > [role="button"]:focus-visible,
 .wiki-organizer__summary > button:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
@@ -2099,7 +2099,7 @@ button {
 .wiki-organizer__tasks { display: grid; gap: 7px; }
 /* 10/24: 按钮当 flex 容器时 WKWebView 不一定随多行内容长高 —— 标题折到第四行, 下面那行灰字掉到卡片框外。
    改成两列 grid (图标 + 文字), 标题最多两行, 多了省略号 */
-.wiki-organizer__tasks > button {
+.wiki-organizer__tasks > [role="button"] {
   width: 100%;
   height: auto;
   min-height: 64px;
@@ -2115,8 +2115,8 @@ button {
   text-align: left;
   cursor: pointer;
 }
-.wiki-organizer__tasks > button:hover { background: var(--catfish-bg-cream); }
-.wiki-organizer__tasks > button[data-active="true"] {
+.wiki-organizer__tasks > [role="button"]:hover { background: var(--catfish-bg-cream); }
+.wiki-organizer__tasks > [role="button"][data-active="true"] {
   border-color: rgba(14, 97, 105, 0.24);
   background: var(--catfish-bg-cream);
 }
@@ -2130,10 +2130,10 @@ button {
   background: rgba(14, 97, 105, 0.09);
   color: var(--catfish-cyan);
 }
-.wiki-organizer__tasks > button[data-kind="pending"] .wiki-organizer__task-icon,
-.wiki-organizer__tasks > button[data-kind="ambiguous"] .wiki-organizer__task-icon,
-.wiki-organizer__tasks > button[data-kind="broken"] .wiki-organizer__task-icon,
-.wiki-organizer__tasks > button[data-kind="conflict"] .wiki-organizer__task-icon {
+.wiki-organizer__tasks > [role="button"][data-kind="pending"] .wiki-organizer__task-icon,
+.wiki-organizer__tasks > [role="button"][data-kind="ambiguous"] .wiki-organizer__task-icon,
+.wiki-organizer__tasks > [role="button"][data-kind="broken"] .wiki-organizer__task-icon,
+.wiki-organizer__tasks > [role="button"][data-kind="conflict"] .wiki-organizer__task-icon {
   background: rgba(240, 112, 58, 0.11);
   color: var(--catfish-orange);
 }

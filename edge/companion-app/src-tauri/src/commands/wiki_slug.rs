@@ -89,6 +89,22 @@ pub(crate) fn find_normalized_collision(
     None
 }
 
+/// 10/24: 新建条目的文件名 —— 标题里 validate_slug 不收的字 (+ （ ） 、 & …) 一律换成 `-`, 连续的并一个。
+/// 原来 slugify 只换路径危险的那十几个字, 「AI+政务产品包」「IDC（算力）专业化直营团队」生成的 slug 被
+/// validate_slug 拦下, 员工在条目页点「新建这个条目」只看到「slug 含非法字符 '+'」。
+/// 标题原样写进 frontmatter, 只有文件名换字; 资料入库 (raw/sources 文件名) 仍用 slugify, 不受影响。
+pub(crate) fn entry_slug(title: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for c in slugify(title, max_chars).chars() {
+        let c = if c.is_alphanumeric() || c == '_' { c } else { '-' };
+        if !(c == '-' && out.ends_with('-')) {
+            out.push(c);
+        }
+    }
+    let trimmed = out.trim_matches('-');
+    if trimmed.is_empty() { "untitled".to_string() } else { trimmed.to_string() }
+}
+
 /// title slugify — 简单 replace 非 word char 为 `-` (跟 P1.2.2 wiki_save slugify 一致).
 pub(crate) fn slugify(title: &str, max_chars: usize) -> String {
     let bad: &[char] = &[
@@ -104,5 +120,22 @@ pub(crate) fn slugify(title: &str, max_chars: usize) -> String {
         "untitled".to_string()
     } else {
         trimmed.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn entry_slug_带加号括号顿号的标题也能建条目() {
+        for title in ["AI+政务产品包", "IDC（算力）专业化直营团队", "3+5+1专项团队", "福州、厦门、漳州公共智算中心", "A & B"] {
+            let slug = entry_slug(title, 50);
+            assert!(validate_slug(&slug).is_ok(), "{title} → {slug}");
+        }
+        assert_eq!(entry_slug("AI+政务产品包", 50), "AI-政务产品包");
+        assert_eq!(entry_slug("IDC（算力）专业化直营团队", 50), "IDC-算力-专业化直营团队");
+        assert_eq!(entry_slug("3+5+1专项团队", 50), "3-5-1专项团队");
+        assert_eq!(entry_slug("+++", 50), "untitled");
     }
 }

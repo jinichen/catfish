@@ -24,7 +24,7 @@ use super::wiki_frontmatter::{
     canon_relation, mark_authored_by_employee, normalize_type_line, RELATION_FALLBACK,
 };
 use super::wiki_read::{name_owner, ontology_target_resolves};
-use super::wiki_slug::{catfish_home, find_normalized_collision, slugify, validate_slug};
+use super::wiki_slug::{catfish_home, entry_slug, find_normalized_collision, slugify, validate_slug};
 
 fn reserved_ontology_title(title: &str) -> bool {
     let normalized = title.trim().to_lowercase();
@@ -84,7 +84,7 @@ pub async fn wiki_create_entity_or_concept(
         return Err("subtype 不能空，请选择 entity/concept 的细分类型".to_string());
     }
 
-    let slug = slugify(title_trimmed, 50);
+    let slug = entry_slug(title_trimmed, 50);
     validate_slug(&slug)?;
 
     let home = catfish_home()?;
