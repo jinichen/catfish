@@ -54,7 +54,7 @@ export default function ChatPanel({
   // 切会话 / 发消息 / 内容长高 → 贴底 (hooks/useStickToBottom.ts)
   const persistedSessionId = useChatStore((s) => s.persistedSessionId);
 
-  const onThreadScroll = useStickToBottom(scrollRef, persistedSessionId, messages);
+  const onThreadScroll = useStickToBottom(scrollRef, persistedSessionId, messages, isStreaming);
 
   // 等批准横幅 (10/16 抽成 components/ApprovalBanner, 跟早安卡片共用)
   const approval = useApprovalBanner();
