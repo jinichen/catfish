@@ -55,6 +55,10 @@ dependencies = [
     # 安全审计要求 >=50.0.0 (修复 PYSEC-2026-3552/3553/3554)。Fernet API
     # 保持兼容；上界留在当前主版本内，避免未来 breaking release 静默进入。
     "cryptography>=50.0.0,<51.0.0",
+    # 10/24 安全审计 (pip-audit): filelock 3.32.7 有 CVE-2026-112907/112913/112940, 4.2.1 修。
+    # 不是直接依赖 —— litellm → tokenizers → huggingface_hub 带进来的, 解析时取到 3.x 最新版;
+    # 显式给下限把它推到 4.x (Python 3.12 下 pip 解析到 4.2.4, 无冲突)。
+    "filelock>=4.2.1",
     # alembic migration (替代 idempotent CREATE TABLE)
     "alembic>=1.13",
     "sqlalchemy>=2.0",
