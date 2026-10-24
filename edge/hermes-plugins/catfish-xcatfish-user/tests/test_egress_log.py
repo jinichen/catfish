@@ -47,6 +47,10 @@ def test_用途和去密钥():
     assert e.purpose("http://x/v1/chat/completions?catfish_source=plugin:memory-wiki-ground") == "知识卡核对"
     assert e.purpose("http://x/v1/chat/completions?catfish_source=plugin:memory-wiki-analysis") == "资料蒸馏"
     assert e.purpose("http://x/v1/chat/completions") == "模型调用"
+    assert e.purpose("http://x/v1/chat/completions", "hermes:aux:vision") == "对话 · 看图"
+    assert e.purpose("http://x/v1/chat/completions", "hermes:aux:compression") == "对话 · 上下文压缩"
+    assert e.purpose("http://x/v1/chat/completions", "hermes:aux:web_extract") == "hermes 辅助"
+    assert e.purpose("http://x/v1/chat/completions", "hermes:api_server") == "对话"
     assert e.purpose("https://ilinkai.weixin.qq.com/ilink/bot/getupdates") == "微信"
     assert e.purpose("https://api.tavily.com/search") == "网页搜索"
     assert "abc" not in e.clean_url("https://api.parallel.ai/v1/search?api_key=abc&q=福州")
@@ -97,6 +101,12 @@ def test_挂钩后真写进库_只记该记的(_home):
         text = zlib.decompress(blob).decode()
         assert "原文……" in text and e._sha(text.encode()) == body_sha
         assert prev == e.GENESIS and len(rh) == 64
+        # 请求头带的来源 (hermes 辅助调用) 也认得出做什么
+        httpx.post(f"http://127.0.0.1:{port}/v1/chat/completions", headers={"X-Catfish-Source": "hermes:aux:vision"},
+                   json={"messages": [{"role": "user", "content": "看图"}]})
+        e.flush()
+        (p2, prev2), = conn.execute("SELECT purpose, prev_hash FROM outbound_log ORDER BY id DESC LIMIT 1")
+        assert p2 == "对话 · 看图" and prev2 == rh
     finally:
         srv.shutdown()
         e._CENTRAL = None

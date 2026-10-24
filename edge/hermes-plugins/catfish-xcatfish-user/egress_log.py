@@ -63,6 +63,20 @@ _SOURCE_PURPOSE = {
     "plugin:memory-reconcile": "长期记忆整理",
     "plugin:memory": "长期记忆",
     "companion-chat": "对话",
+    # 10/25: hermes 自己的辅助调用 (请求头 X-Catfish-Source, 鲶鱼插件 P3 打的)
+    "hermes:aux:compression": "对话 · 上下文压缩",
+    "hermes:aux:vision": "对话 · 看图",
+    "hermes:aux:title_generation": "对话 · 起标题",
+    "hermes:aux:approval": "对话 · 审批判断",
+    "hermes:aux:background_review": "后台 · 技能 / 记忆复盘",
+    "hermes:aux:mcp": "MCP 工具",
+    "hermes:aux": "hermes 辅助",
+    "hermes:api_server": "对话",
+    "hermes:webui": "对话",
+    "hermes:weixin": "微信对话",
+    "hermes:cron": "定时任务",
+    "hermes:curator": "后台 · 技能整理",
+    "hermes:subagent": "子任务",
     "companion": "Companion",
 }
 _PATH_PURPOSE = (
@@ -180,12 +194,13 @@ def classify(method: str, url: str, body_len: int) -> Optional[str]:
     return "third_party"
 
 
-def purpose(url: str) -> str:
+def purpose(url: str, source: Optional[str] = None) -> str:
+    """「做什么」: 来源标签 (URL 的 catfish_source, 或请求头 X-Catfish-Source) 优先, 再按主机 / 路径。"""
     try:
         p = urlsplit(url)
     except ValueError:
         return url[:60]
-    src = dict(parse_qsl(p.query)).get("catfish_source", "")
+    src = dict(parse_qsl(p.query)).get("catfish_source", "") or (source or "").strip()
     if src:
         for key in sorted(_SOURCE_PURPOSE, key=len, reverse=True):
             if src.startswith(key):
@@ -391,11 +406,14 @@ def _run() -> None:
             _write(rows)
         except Exception:  # noqa: BLE001 —— 记录是辅助, 写不进就丢这一批
             pass
+        finally:
+            for _ in rows:
+                _queue.task_done()
 
 
 def record(method: str, url: str, body_len: int, status: Optional[int] = None,
            response_bytes: int = 0, error: Optional[str] = None, started: Optional[float] = None,
-           body: Optional[bytes] = None) -> bool:
+           body: Optional[bytes] = None, source: Optional[str] = None) -> bool:
     """按规则判断, 该记就排进写队列。返回是否记了 (测试用)。"""
     kind = classify(method, url, body_len)
     if kind is None:
@@ -413,7 +431,7 @@ def record(method: str, url: str, body_len: int, status: Optional[int] = None,
             "request_bytes": int(body_len or 0), "response_bytes": int(response_bytes or 0),
             "status": status, "response_summary": None, "error": (error or None) and str(error)[:200],
             "category": kind, "origin": _ORIGIN, "dest_kind": "central" if kind == "content" else "third_party",
-            "dest_host": hp[0] if hp else "", "purpose": purpose(url),
+            "dest_host": hp[0] if hp else "", "purpose": purpose(url, source),
             "_body": body if body is None or len(body) <= _MAX_QUEUED_BODY
             else f"[请求体 {len(body)} 字节, sha256={_sha(body)}; 太大未保存]".encode("utf-8"),
         })
@@ -423,11 +441,11 @@ def record(method: str, url: str, body_len: int, status: Optional[int] = None,
 
 
 def flush(timeout: float = 5.0) -> None:
-    """等写队列清空 (测试 / 退出前用)。"""
+    """等排进队列的都写进库 (测试 / 退出前用)。看 unfinished_tasks 而不是队列空不空 ——
+    后台线程取走一批后队列就空了, 但那一批可能还没写完。"""
     end = time.time() + timeout
-    while not _queue.empty() and time.time() < end:
+    while _queue.unfinished_tasks and time.time() < end:
         time.sleep(0.02)
-    time.sleep(0.05)
 
 
 # ---------------------------------------------------------------- 挂钩
@@ -490,10 +508,10 @@ def _patch_httpx() -> None:
             resp = orig_sync(self, request, *a, **kw)
         except Exception as e:
             record(request.method, str(request.url), body_len(request), error=repr(e), started=t0,
-                   body=body_of(request))
+                   body=body_of(request), source=request.headers.get("x-catfish-source"))
             raise
         record(request.method, str(request.url), body_len(request), resp.status_code,
-               int(resp.headers.get("content-length") or 0), started=t0, body=body_of(request))
+               int(resp.headers.get("content-length") or 0), started=t0, body=body_of(request), source=request.headers.get("x-catfish-source"))
         return resp
 
     async def asend(self, request, *a, **kw):
@@ -502,10 +520,10 @@ def _patch_httpx() -> None:
             resp = await orig_async(self, request, *a, **kw)
         except Exception as e:
             record(request.method, str(request.url), body_len(request), error=repr(e), started=t0,
-                   body=body_of(request))
+                   body=body_of(request), source=request.headers.get("x-catfish-source"))
             raise
         record(request.method, str(request.url), body_len(request), resp.status_code,
-               int(resp.headers.get("content-length") or 0), started=t0, body=body_of(request))
+               int(resp.headers.get("content-length") or 0), started=t0, body=body_of(request), source=request.headers.get("x-catfish-source"))
         return resp
 
     send._catfish_egress = asend._catfish_egress = True  # type: ignore[attr-defined]
@@ -528,10 +546,12 @@ def _patch_requests() -> None:
             resp = orig(self, request, **kw)
         except Exception as e:
             record(request.method or "GET", request.url or "", _len_of(request.body), error=repr(e), started=t0,
-                   body=_bytes_of(request.body))
+                   body=_bytes_of(request.body),
+                   source=(request.headers or {}).get("X-Catfish-Source"))
             raise
         record(request.method or "GET", request.url or "", _len_of(request.body), resp.status_code,
-               int(resp.headers.get("content-length") or 0), started=t0, body=_bytes_of(request.body))
+               int(resp.headers.get("content-length") or 0), started=t0, body=_bytes_of(request.body),
+                   source=(request.headers or {}).get("X-Catfish-Source"))
         return resp
 
     send._catfish_egress = True  # type: ignore[attr-defined]
@@ -555,12 +575,13 @@ def _patch_aiohttp() -> None:
             url = str(self._base_url.join(aiohttp.client.URL(url)))
         n = _len_of(kw.get("data")) or _len_of(kw.get("json"))
         raw = _bytes_of(kw.get("data")) if kw.get("data") is not None else _bytes_of(kw.get("json"))
+        src = next((str(v) for k, v in dict(kw.get("headers") or {}).items() if str(k).lower() == "x-catfish-source"), None)
         try:
             resp = await orig(self, method, str_or_url, **kw)
         except Exception as e:
-            record(method, url, n, error=repr(e), started=t0, body=raw)
+            record(method, url, n, error=repr(e), started=t0, body=raw, source=src)
             raise
-        record(method, url, n, resp.status, int(resp.content_length or 0), started=t0, body=raw)
+        record(method, url, n, resp.status, int(resp.content_length or 0), started=t0, body=raw, source=src)
         return resp
 
     _request._catfish_egress = True  # type: ignore[attr-defined]

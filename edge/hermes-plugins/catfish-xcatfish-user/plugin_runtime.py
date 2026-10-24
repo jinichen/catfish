@@ -200,11 +200,13 @@ def _patch_p1_agent_init() -> None:
 
 # ── P3 ───────────────────────────────────────────────────────────────────
 
-def _aux_identity_headers(aux, extra_headers):
-    """辅助模型请求要带的员工身份头 —— 只发给 catfish 网关, 不发给第三方。"""
-    cf_user = (_ctx().CV_CF_USER.get() or "").strip()
-    if not cf_user:
-        return extra_headers
+def _aux_identity_headers(aux, extra_headers, task=None):
+    """辅助模型请求要带的头 —— 只发给 catfish 网关, 不发给第三方。
+
+    · X-Catfish-User: 员工身份 (请求上下文里有才带)
+    · X-Catfish-Source: hermes:aux:<task> (10/25 鸿波: 门户配额日志里看图 / 上下文压缩 / 起标题这些
+      hermes 自己的辅助调用原来没来源, 显示成「未标来源」, 看不出是什么)
+    """
     try:
         base_url = str(aux._normalize_main_runtime(None).get("base_url") or "")
     except Exception:  # noqa: BLE001
@@ -212,12 +214,16 @@ def _aux_identity_headers(aux, extra_headers):
     if not _is_catfish_gateway_base_url(base_url):
         return extra_headers
     merged = dict(extra_headers or {})
-    merged.setdefault("X-Catfish-User", cf_user)
+    cf_user = (_ctx().CV_CF_USER.get() or "").strip()
+    if cf_user:
+        merged.setdefault("X-Catfish-User", cf_user)
+    task_name = str(task or "").strip()
+    merged.setdefault("X-Catfish-Source", f"hermes:aux:{task_name}" if task_name else "hermes:aux")
     return merged
 
 
 def _patch_p3_auxiliary_client() -> None:
-    """P3: 辅助模型调用 (压缩摘要 / 起标题 / smart 审批判断 ...) 带上员工身份 X-Catfish-User。
+    """P3: 辅助模型调用 (压缩摘要 / 起标题 / smart 审批判断 ...) 带上员工身份 X-Catfish-User + 来源 X-Catfish-Source。
 
     10/14 (hermes v0.22.0) 重写。原来的两段都已失效:
       · P3a 往 _MAIN_RUNTIME_FIELDS 塞 catfish_outgoing_user —— v0.21 起 set_runtime_main 按固定字段
@@ -240,7 +246,8 @@ def _patch_p3_auxiliary_client() -> None:
         explicit = str(kwargs.get("base_url") or "")
         # 调用方点名了别的端点 → 不是发给 catfish 网关的, 不带员工标识
         if not explicit or _is_catfish_gateway_base_url(explicit):
-            kwargs["extra_headers"] = _aux_identity_headers(aux, kwargs.get("extra_headers"))
+            task = args[0] if args else kwargs.get("task")
+            kwargs["extra_headers"] = _aux_identity_headers(aux, kwargs.get("extra_headers"), task)
         return orig_plan(*args, **kwargs)
 
     plan_aux_call._catfish_p3 = True

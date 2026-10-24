@@ -38,6 +38,19 @@ const HERMES_PLATFORMS: Record<string, string> = {
   wechat: "微信",
 };
 
+// 10/25: hermes 自己的辅助调用 (看图 / 上下文压缩 / 起标题 …), 鲶鱼插件标 `hermes:aux:<task>`。
+// 原来不带来源, 员工账号下显示成「未标来源」(10/24 那串输入小、输出大的就是看图和压缩)。
+const HERMES_AUX: Record<string, string> = {
+  compression: "对话 · 上下文压缩",
+  vision: "对话 · 看图",
+  title_generation: "对话 · 起标题",
+  approval: "对话 · 审批判断",
+  background_review: "后台 · 技能 / 记忆复盘",
+  mcp: "MCP 工具",
+  moa_reference: "对话 · 多模型参考",
+  moa_aggregator: "对话 · 多模型汇总",
+};
+
 /** 审计一行的来源说明。`user` 用来区分没标来源的服务账号调用 (client:xxx) 和员工自己的。 */
 export function auditSourceLabel(source: string | undefined, user: string): string {
   const s = (source ?? "").trim();
@@ -45,12 +58,18 @@ export function auditSourceLabel(source: string | undefined, user: string): stri
     if (LABELS[s]) return LABELS[s];
     if (s.startsWith("hermes:")) {
       const p = s.slice("hermes:".length);
+      if (p === "aux") return "hermes 辅助";
+      if (p.startsWith("aux:")) {
+        const task = p.slice("aux:".length);
+        return HERMES_AUX[task] ?? `hermes 辅助 · ${task}`;
+      }
       return HERMES_PLATFORMS[p] ?? `hermes · ${p}`;
     }
     return s;
   }
   // 没标来源: 服务账号 = hermes 内部辅助调用 (会话标题 / 上下文压缩等, 不经过插件打标)
   if (user.startsWith("client:")) return "后台 · hermes 辅助";
-  // 员工账号没标来源: 10/22 之前 hermes 主对话 / 微信 / 定时任务都不带来源, 分不出是哪个
+  // 员工账号没标来源: 10/22 之前 hermes 主对话 / 微信 / 定时任务都不带来源; 10/25 之前 hermes 的看图 /
+  // 上下文压缩 / 起标题也不带 (1.1.72 起标 hermes:aux:<task>)。老记录分不出是哪个
   return "未标来源";
 }
