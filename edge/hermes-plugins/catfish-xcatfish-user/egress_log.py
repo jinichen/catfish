@@ -37,6 +37,7 @@ import os
 import queue
 import re
 import sqlite3
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -142,12 +143,22 @@ def _yaml_urls(path: Path, keys: set) -> list:
     return out
 
 
+def _hermes_home() -> Path:
+    """hermes 的数据目录: HERMES_HOME > Windows 的 %LOCALAPPDATA%\\hermes > ~/.hermes (同 hermes_token_renewal)。"""
+    env = os.environ.get("HERMES_HOME", "").strip()
+    if env:
+        return Path(env).expanduser()
+    if sys.platform == "win32" and os.environ.get("LOCALAPPDATA"):
+        return Path(os.environ["LOCALAPPDATA"]) / "hermes"
+    return Path.home().joinpath(".hermes")
+
+
 def _config_urls() -> list:
     urls = [os.environ.get(k, "") for k in (
         "CATFISH_GATEWAY_URL", "CATFISH_GATEWAY_INTERNAL_URL", "CATFISH_IDENTITY_URL",
         "CATFISH_REGISTRY_URL", "OPENAI_BASE_URL",
     )]
-    hermes_home = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+    hermes_home = _hermes_home()
     urls += _yaml_urls(_home() / "companion.yaml", _CENTRAL_KEYS)        # oidc.issuer / endpoints.*
     urls += _yaml_urls(_home() / "memory_plugin.yaml", {"url"})          # gateway.url
     try:  # hermes 只认 model.base_url —— 别的 base_url 可能是第三方模型商, 不算中央

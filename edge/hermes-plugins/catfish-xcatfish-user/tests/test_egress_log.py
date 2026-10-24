@@ -154,3 +154,12 @@ def test_指纹算法_跟Rust同一个测试向量():
 
 
 ROW_HASH_VECTOR = "1a5e312e9f1f07a8ad5bbf86ac8aa5de5dd594987343375a23bdb33e34fe8fe7"
+
+
+def test_hermes目录_Windows在LOCALAPPDATA(monkeypatch, tmp_path):
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.setattr(e.sys, "platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    assert e._hermes_home() == tmp_path / "hermes"
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "h"))
+    assert e._hermes_home() == tmp_path / "h"
