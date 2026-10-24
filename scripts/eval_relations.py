@@ -24,6 +24,11 @@
   ~/.hermes/hermes-agent/venv/bin/python scripts/eval_relations.py report
   ~/.hermes/hermes-agent/venv/bin/python scripts/eval_relations.py check [--set pipeline|kb]
       (拿标好的题跑关系核对: 方向纠正 + 对原文判, 看留下来的对多少)
+
+10/24 试过「关系用词自动纠正」(核对时让模型按原文给最贴切的关系词, 跟现在的不一样就改), 没上线:
+两批标好的题 (pipeline / pipeline2) 里类型不对的 25 条只改对 1 条, 本来对的反被改词 5-7 条。
+模型给的词常把方向弄反 (「天卫 关联 卫星及应用」该是隶属, 它给「包含」), 又会把讲话里提到改成「负责」;
+而类型不对的里 8 条该用的就是「关联」(词表里没有贴切的词), 本来就改不了。要再试得先解决方向。
 """
 from __future__ import annotations
 
