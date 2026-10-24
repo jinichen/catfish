@@ -19,6 +19,7 @@ const _store = new Map<string, string>();
 };
 
 import {
+  loadFromStorage,
   useAutoContinueStore,
   MAX_AUTO_CONTINUES,
   AUTO_CONTINUE_PROMPT,
@@ -63,14 +64,15 @@ check(
 
 console.log("[store default]");
 
-// 重置 store 到默认
-useAutoContinueStore.setState({ on: false });
+// 10/24: 默认开 (任务基本都是长时任务); 员工关过才记成关
 _store.clear();
-
-check(
-  "默认 on=false (不打扰用户, 用户主动开)",
-  useAutoContinueStore.getState().on === false,
-);
+check("没存过 → 默认开", loadFromStorage() === true);
+_store.set("catfish.auto_continue", "0");
+check("明确关过 ('0') → 关", loadFromStorage() === false);
+_store.set("catfish.auto_continue", "1");
+check("开着 ('1') → 开", loadFromStorage() === true);
+_store.clear();
+useAutoContinueStore.setState({ on: false });
 
 // ─── toggle ─────────────────────────────────────────
 
@@ -92,8 +94,8 @@ check(
   useAutoContinueStore.getState().on === false,
 );
 check(
-  "toggle off → 删 localStorage",
-  _store.has("catfish.auto_continue") === false,
+  "toggle off → localStorage 记 '0' (重启后仍是关)",
+  _store.get("catfish.auto_continue") === "0",
 );
 
 // ─── setOn ──────────────────────────────────────────

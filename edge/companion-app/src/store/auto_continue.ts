@@ -10,7 +10,7 @@
  *     → 自动 append 一条 user "继续", 续到下一轮
  *   - 上限 MAX_AUTO_CONTINUES (3) 防死循环 — 跑到上限就停
  *
- * 关闭时 (默认):
+ * 关闭时 (10/24 起默认开, 关了才是这样):
  *   - 跟 ChatGPT 一样: LLM stop 就 stop, 用户自己打"继续" 续跑
  *
  * 跟 gateway BL-FIX23 retry 的关键区别:
@@ -30,18 +30,19 @@ export const MAX_AUTO_CONTINUES = 3;
 /** 自动续跑发的消息 — 保持短, 不灌 hint, 让 LLM 接前文继续. */
 export const AUTO_CONTINUE_PROMPT = "继续";
 
-function loadFromStorage(): boolean {
+/** 10/24 鸿波「现在的任务基本都是长时任务, 缺省就是长时任务」: 默认开。
+ *  存 "0" = 员工明确关过 (记住); 没存 / "1" = 开。原来没存 = 关, 关掉是删键 —— 所以老用户也一并变成开。 */
+export function loadFromStorage(): boolean {
   try {
-    return localStorage.getItem(STORAGE_KEY) === "1";
+    return localStorage.getItem(STORAGE_KEY) !== "0";
   } catch {
-    return false;
+    return true;
   }
 }
 
 function saveToStorage(on: boolean): void {
   try {
-    if (on) localStorage.setItem(STORAGE_KEY, "1");
-    else localStorage.removeItem(STORAGE_KEY);
+    localStorage.setItem(STORAGE_KEY, on ? "1" : "0");
   } catch {
     // localStorage 满 / 禁用 — 静默, 当前 session 内 zustand 仍工作
   }
