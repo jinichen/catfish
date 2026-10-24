@@ -52,6 +52,9 @@ const BAKED_MEMORY_ENFORCE: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/memory_enforce.py");
 const BAKED_TODO_COLLISION_GUARD: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/todo_collision_guard.py");
+// 10/24 数据外发记录: hermes 出口挂钩, 带内容 / 发第三方的请求记进 outbound_log.db
+const BAKED_EGRESS_LOG: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/egress_log.py");
 const BAKED_HERMES_TOKEN_RENEWAL: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/hermes_token_renewal.py");
 // ── 8/9 补: plugin.py 拆出来的 sibling, 之前漏了 (见上面 P0 说明) ──
@@ -172,6 +175,7 @@ pub(crate) const BAKED_FILES: &[(&str, &str)] = &[
     ("memory_router.py", BAKED_MEMORY_ROUTER),
     ("memory_enforce.py", BAKED_MEMORY_ENFORCE),
     ("todo_collision_guard.py", BAKED_TODO_COLLISION_GUARD),
+    ("egress_log.py", BAKED_EGRESS_LOG),
     ("hermes_token_renewal.py", BAKED_HERMES_TOKEN_RENEWAL),
     ("plugin_weixin_zh.py", BAKED_PLUGIN_WEIXIN_ZH),
     ("plugin_wechat_qr.py", BAKED_PLUGIN_WECHAT_QR),

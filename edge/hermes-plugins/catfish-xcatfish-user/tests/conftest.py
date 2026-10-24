@@ -12,6 +12,11 @@ hermes 已装, 跑这条仍 work. CI / 没 hermes 的环境跳过.
 from __future__ import annotations
 
 import os
+import os as _os_egress
+
+# 10/24: 测试里别处调 register() 会给整个测试进程挂上数据外发记录的钩子 —— 默认关, 只在
+# test_egress_log.py 里显式打开
+_os_egress.environ.setdefault("CATFISH_EGRESS_LOG", "0")
 import sys
 from pathlib import Path
 

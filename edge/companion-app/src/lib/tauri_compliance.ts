@@ -121,6 +121,12 @@ export interface TransparentLogRecord {
   method: string;
   url: string;
   requestBody?: string;
+  /** 10/24: 只传大小不传内容; 谁发的 / 发给中央还是第三方 / 对方主机 / 做什么 */
+  requestBytes?: number;
+  origin?: string;
+  destKind?: "central" | "third_party";
+  destHost?: string;
+  purpose?: string;
   status?: number;
   responseBytes?: number;
   responseSummary?: string;
@@ -142,6 +148,10 @@ export interface TransparentLogEntry {
   responseSummary?: string;
   error?: string;
   category?: string;
+  origin?: string;
+  destKind?: "central" | "third_party";
+  destHost?: string;
+  purpose?: string;
 }
 
 export interface TransparentLogQueryResult {
@@ -190,8 +200,63 @@ export const transparentLogExportCsv = (
     urlFilter,
   });
 
+/** 10/24: 「发给谁、为什么」汇总 (按 去向 / 用途 / 对方主机 分组) */
+export interface TransparentLogSummaryRow {
+  destKind: "central" | "third_party" | "";
+  purpose: string;
+  destHost: string;
+  count: number;
+  bytesUp: number;
+  bytesDown: number;
+  lastTs: string;
+}
+export const transparentLogSummary = (since?: string) =>
+  rawInvoke<TransparentLogSummaryRow[]>("transparent_log_summary", { since });
+
 /** A4: GC 过期 (9 天前). 启动时跑一次. */
 export const transparentLogGc = () => rawInvoke<number>("transparent_log_gc");
+
+/** 10/25: 一条记录的请求内容 (JSON 已还原、排版); verified = 跟指纹对得上 */
+export interface TransparentLogPayload {
+  text: string | null;
+  isJson: boolean;
+  verified: boolean;
+}
+export const transparentLogPayload = (id: number) =>
+  rawInvoke<TransparentLogPayload>("transparent_log_payload", { id });
+
+/** 中央存的每日指纹 (锚点) */
+export interface EgressAnchor {
+  lastId: number;
+  lastHash: string;
+  receivedAt: string;
+}
+export interface TransparentLogVerifyReport {
+  ok: boolean;
+  checked: number;
+  unchained: number;
+  firstBadId: number | null;
+  problems: string[];
+  anchorsChecked: number;
+  anchorsBad: number;
+}
+export const transparentLogVerify = (anchors?: EgressAnchor[]) =>
+  rawInvoke<TransparentLogVerifyReport>("transparent_log_verify", { anchors });
+
+export interface TransparentLogInfo {
+  retentionDays: number;
+  dbBytes: number;
+  rows: number;
+  lastId: number;
+  lastHash: string;
+  anchorLastSent: string | null;
+}
+export const transparentLogInfo = () => rawInvoke<TransparentLogInfo>("transparent_log_info");
+/** 设保留期 (天, 1–3650), 返回按新期限清掉的条数 */
+export const transparentLogSetRetention = (days: number) =>
+  rawInvoke<number>("transparent_log_set_retention", { days });
+export const transparentLogAnchorSent = (at: string) =>
+  rawInvoke<void>("transparent_log_anchor_sent", { at });
 
 
 // ── self-evolution ──────────────────────────────────────

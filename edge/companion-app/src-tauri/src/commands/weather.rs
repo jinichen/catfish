@@ -151,6 +151,10 @@ async fn fetch_one_city(city: &str) -> Result<WeatherEntry, String> {
         .send()
         .await
         .map_err(|e| format!("拉 {url} 失败: {e}"))?;
+    // 10/24 数据外发记录: 城市名发给第三方 (wttr.in), 记一笔
+    crate::commands::transparent_log::record_internal(
+        "GET", &url, None, Some(resp.status().as_u16()), "third_party", "天气",
+    );
 
     if !resp.status().is_success() {
         return Err(format!("wttr.in HTTP {}", resp.status()));

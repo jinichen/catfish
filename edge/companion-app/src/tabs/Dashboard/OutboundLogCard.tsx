@@ -5,6 +5,8 @@
  * - 表格 50 行 / 页 + 分页
  * - export CSV 按钮 (跟员工 sqlite3 命令行配套, 但更 UI-友好)
  * - 累计 stat 顶部 (上下行 KB / 总条数 / 9 天 GC 倒计时)
+ * - 10/24: 只记带内容出本机的 + 发给第三方的; 顶部按「发给谁、为什么」汇总
+ * - 10/25: 存请求内容 (点一行看) + 指纹链防篡改 + 保留期本机设 (OutboundLogDetail.tsx)
  *
  * 跟 manifesto 公理 2 (数据零出端) + 公理 1 (员工主权) 联动:
  * - 100% 员工本机 (~/.catfish/outbound_log.db)
@@ -14,11 +16,15 @@
 
 import * as React from "react";
 
+import { IntegrityPanel, PayloadPanel } from "./OutboundLogDetail";
+
 import {
   transparentLogQuery,
   transparentLogExportCsv,
+  transparentLogSummary,
   type TransparentLogEntry,
   type TransparentLogQueryResult,
+  type TransparentLogSummaryRow,
 } from "../../lib/tauri";
 
 const PAGE_SIZE = 50;
@@ -26,15 +32,19 @@ const PAGE_SIZE = 50;
 // "show / hide" 由 tab 选中接管, 这里**砍内部 collapsed**. tab 切到外发记录
 // = 展开, 切走 = 不渲染. 双层 collapse 体验差.
 
+// 10/24: 只剩两类 —— 带内容去中央 / 发给第三方 (本机、拉取、心跳不再记)
 const CATEGORY_OPTIONS: { value: string; label: string }[] = [
-  { value: "", label: "全部分类" },
-  { value: "metering", label: "metering (额度/审计)" },
-  { value: "advisory", label: "advisory (公司公告)" },
-  { value: "identity", label: "identity (身份)" },
-  { value: "chat", label: "chat (LLM 调用 ⚠ 含 prompt)" },
-  { value: "health", label: "health (心跳/目录)" },
-  { value: "other", label: "其它" },
+  { value: "", label: "全部" },
+  { value: "content", label: "带你的内容发给中央" },
+  { value: "third_party", label: "发给第三方" },
 ];
+
+const ORIGIN_LABEL: Record<string, string> = {
+  hermes: "小鲶 (hermes)",
+  "tool-bridge": "小鲶的工具",
+  companion: "Companion 界面",
+  "companion-bg": "Companion 后台",
+};
 
 const TIME_RANGE_OPTIONS: { value: string; label: string }[] = [
   { value: "", label: "全部时间" },
@@ -187,9 +197,13 @@ export default function OutboundLogCard() {
       </div>
 
       <div style={{ fontSize: 12, color: "var(--catfish-text-muted)", marginBottom: "var(--space-3)" }}>
-        catfish 客户端跟中央服务的每个 HTTP 请求都自动记到本机 SQLite. 跟 manifesto
-        公理 2 (数据零出端) 验证 — 员工**自己**审计中央实际收到什么, 不是"我们承诺".
+        记下所有<b>带着你的内容离开本机</b>的请求 (小鲶调模型、资料蒸馏和核对、工具、Companion 自己发的),
+        和所有<b>发给第三方</b>的请求 (网页搜索、微信、天气…)。发往本机的、只拉数据的、心跳不记。
+        连请求内容一起存在本机 (密钥类字段打码), 点一行就能看到当时发了什么; 回复不存。
       </div>
+
+      <OutboundSummary since={timeRangeToIsoSince(timeRange)} />
+      <IntegrityPanel />
 
       {/* 累计 stat */}
       <div
@@ -200,7 +214,7 @@ export default function OutboundLogCard() {
           marginBottom: "var(--space-3)",
         }}
       >
-        <Stat label="共计请求" value={data ? String(data.total) : "—"} />
+        <Stat label="共计记录" value={data ? String(data.total) : "—"} />
         <Stat label="累计上行" value={`${upKB} KB`} />
         <Stat label="累计下行" value={`${downKB} KB`} />
       </div>
@@ -285,8 +299,8 @@ export default function OutboundLogCard() {
           />
           <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginBottom: 8 }}>
             导出当前 filter 下的全部 {data?.total ?? "?"} 条. 列: id / ts / method /
-            url / status / 上下行 bytes / category / summary / error. payload 不入
-            CSV (隐私 + 大, 想看用 sqlite3).
+            url / status / 上下行 bytes / category / summary / error / 谁发的 / 去向 / 对方主机 / 用途.
+            请求内容本来就不存, 只有大小.
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={() => void onExportRun()} disabled={busy} style={btnPrimary}>
@@ -355,9 +369,9 @@ export default function OutboundLogCard() {
           >
             <tr>
               <th style={thStyle}>时间</th>
-              <th style={thStyle}>方法</th>
-              <th style={thStyle}>URL</th>
-              <th style={thStyle}>类</th>
+              <th style={thStyle}>谁发的</th>
+              <th style={thStyle}>做什么</th>
+              <th style={thStyle}>发给</th>
               <th style={thStyle}>状态</th>
               <th style={{ ...thStyle, textAlign: "right" }}>上↑</th>
               <th style={{ ...thStyle, textAlign: "right" }}>下↓</th>
@@ -430,29 +444,45 @@ function Row({ entry: e }: { entry: TransparentLogEntry }) {
         : e.status >= 400
           ? "var(--status-err, #d9534f)"
           : "var(--catfish-text)";
+  const [open, setOpen] = React.useState(false);
   return (
-    <tr style={{ borderTop: "1px solid var(--catfish-border)" }}>
-      <td style={tdStyle}>{e.tsRequest.slice(11, 19)}</td>
-      <td style={tdStyle}>{e.method}</td>
+    <>
+    <tr
+      style={{ borderTop: "1px solid var(--catfish-border)", cursor: "pointer",
+               background: open ? "var(--catfish-bg)" : undefined }}
+      onClick={() => setOpen((v) => !v)}
+      title="点一下看这条发了什么"
+    >
+      <td style={tdStyle} title={e.tsRequest}>{open ? "▾ " : "▸ "}{localTime(e.tsRequest)}</td>
+      <td style={tdStyle}>{ORIGIN_LABEL[e.origin ?? ""] ?? e.origin ?? "-"}</td>
+      <td style={tdStyle} title={`${e.method} ${path}`}>{e.purpose || path}</td>
       <td
         style={{
           ...tdStyle,
-          maxWidth: 360,
+          maxWidth: 260,
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
+          color: e.destKind === "third_party" ? "var(--catfish-orange)" : undefined,
         }}
         title={e.url}
       >
-        {path}
+        {e.destKind === "third_party" ? "第三方 · " : "中央 · "}{e.destHost || path}
       </td>
-      <td style={tdStyle}>{e.category ?? "-"}</td>
       <td style={{ ...tdStyle, color: statusColor }}>
         {e.status ?? (e.error ? "ERR" : "?")}
       </td>
       <td style={{ ...tdStyle, textAlign: "right" }}>{e.requestBytes}</td>
       <td style={{ ...tdStyle, textAlign: "right" }}>{e.responseBytes}</td>
     </tr>
+    {open && (
+      <tr>
+        <td colSpan={7} style={{ padding: "0 6px 8px" }}>
+          <PayloadPanel id={e.id} />
+        </td>
+      </tr>
+    )}
+    </>
   );
 }
 
@@ -514,3 +544,61 @@ const tdStyle: React.CSSProperties = {
   fontSize: 11,
   color: "var(--catfish-text)",
 };
+
+/** 时间显示成本机时区 (记录里是 UTC ISO) */
+function localTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.slice(11, 19);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+/** 10/24: 「发给谁、为什么」—— 按去向分两组, 每个用途一行: 次数 / 上行 / 最近一次 */
+export function OutboundSummary({ since }: { since?: string }) {
+  const [rows, setRows] = React.useState<TransparentLogSummaryRow[] | null>(null);
+  React.useEffect(() => {
+    let alive = true;
+    transparentLogSummary(since)
+      .then((r) => { if (alive) setRows(r); })
+      .catch(() => { if (alive) setRows([]); });
+    return () => { alive = false; };
+  }, [since]);
+  if (!rows) return null;
+  const groups: { kind: string; title: string; hint: string }[] = [
+    { kind: "central", title: "带你的内容发给中央", hint: "对话、资料、记忆等发到公司中央服务 (模型网关等)" },
+    { kind: "third_party", title: "发给第三方", hint: "公司以外的网站和服务" },
+  ];
+  const kb = (n: number) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${(n / 1024).toFixed(1)} KB`);
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 12, marginBottom: "var(--space-3)" }}>
+      {groups.map((g) => {
+        const mine = rows.filter((r) => r.destKind === g.kind);
+        return (
+          <section key={g.kind} style={{ border: "1px solid var(--catfish-border)", borderRadius: 6, padding: 10, background: "var(--catfish-bg)" }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: g.kind === "third_party" ? "var(--catfish-orange)" : "var(--catfish-text)" }}>
+              {g.title}
+            </div>
+            <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginBottom: 6 }}>{g.hint}</div>
+            {mine.length === 0 ? (
+              <div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>没有记录</div>
+            ) : (
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <tbody>
+                  {mine.map((r) => (
+                    <tr key={`${r.purpose}|${r.destHost}`} style={{ borderTop: "1px solid var(--catfish-border)" }}>
+                      <td style={{ padding: "4px 2px" }}>{r.purpose || "(未标注)"}</td>
+                      <td style={{ padding: "4px 2px", color: "var(--catfish-text-muted)" }}>{r.destHost}</td>
+                      <td style={{ padding: "4px 2px", textAlign: "right" }}>{r.count} 次</td>
+                      <td style={{ padding: "4px 2px", textAlign: "right" }}>{kb(r.bytesUp)}</td>
+                      <td style={{ padding: "4px 2px", textAlign: "right", color: "var(--catfish-text-muted)" }}>{localTime(r.lastTs)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+        );
+      })}
+    </div>
+  );
+}

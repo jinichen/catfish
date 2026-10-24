@@ -614,6 +614,16 @@ pub fn run() {
                 }
             });
 
+            // 10/25 数据外发记录: 按本机设的保留期清 (以前从没调过, 攒了 42 万条)。启动一次, 之后每 6 小时
+            std::thread::spawn(|| loop {
+                match commands::transparent_log_store::gc_blocking() {
+                    Ok(n) if n > 0 => log::info!("[transparent_log] 过了保留期, 清掉 {n} 条"),
+                    Ok(_) => {}
+                    Err(e) => log::warn!("[transparent_log] 清理失败: {e}"),
+                }
+                std::thread::sleep(std::time::Duration::from_secs(6 * 3600));
+            });
+
             // P3.3.52 (6/12 鸿波): decisions.jsonl pre-chain 迁移. 一次性, 不阻塞启动.
             // 鸿波 6/12 拍板 A 方案: 历史数据不参与 hash chain, 整体 rename .pre-chain.bak.
             // 判定条件: ~/.catfish/decisions.jsonl 存在 + decisions.jsonl.chain.json 不存在.

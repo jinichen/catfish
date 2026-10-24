@@ -20,6 +20,7 @@ import {
   fetchProactiveContext,
 } from "./tauri";
 import { config } from "./env";
+import { centralSet, classifyEgress, describeBody, egressHost, egressPurpose } from "./egressRule";
 // BL-CSP-PROXY (7/18 鸿波): Rust reqwest HTTP 代理 · CSP connect-src 保持严格.
 // 前端所有 fetch (fetchWithHermes / fetchWithOAuth doRequest) 走这个, 不直接 fetch().
 import { fetchViaProxy } from "./http_proxy";
@@ -237,10 +238,10 @@ export async function fetchWithAuth(
   });
 }
 
-/** 6/8 A4: transparent log middleware. 调真 fetch + 把 metadata 写本机 SQLite.
+/** 6/8 A4: transparent log middleware. 调真 fetch + 把元数据和请求内容写本机 SQLite.
  *
- * 失败 silent (Tauri command 挂了不该阻塞 chat). 只记 metadata + body preview (4KB
- * cap, Rust 端再 cap), 不记 response body (隐私 + 大). 9 天 GC.
+ * 失败 silent (Tauri command 挂了不该阻塞 chat). 不记 response body (隐私 + 大).
+ * 保留期员工在本机设 (默认 90 天, transparent_log_store.rs).
  *
  * 走 dynamic import 防 storybook / dev mode 没 Tauri 时崩 (跟 env.ts 同 pattern).
  */
@@ -250,12 +251,6 @@ async function logOutbound(
   realFetch: () => Promise<Response>,
 ): Promise<Response> {
   const method = (init?.method || "GET").toUpperCase();
-  const bodyStr =
-    typeof init?.body === "string"
-      ? init.body
-      : init?.body != null
-        ? "[binary or non-string body]"
-        : undefined;
 
   let resp: Response | null = null;
   let networkErr: unknown = null;
@@ -265,6 +260,17 @@ async function logOutbound(
     networkErr = e;
   }
 
+  // 10/24: 只记「带内容出本机」「发给第三方」的 (lib/egressRule.ts); 本机 / 拉取 / 心跳不记。
+  // 10/25: 连请求内容一起存 (有争议时要说得清发了什么), 防篡改见 transparent_log_store.rs
+  const bodyBytes = typeof init?.body === "string" ? new TextEncoder().encode(init.body).length
+    : init?.body instanceof Blob ? init.body.size
+    : init?.body instanceof ArrayBuffer ? init.body.byteLength
+    : init?.body != null ? 1 : 0;
+  const kind = classifyEgress(method, url, bodyBytes, centralSet([config.gatewayUrl, config.webUrl]));
+  if (kind === null) {
+    if (networkErr) throw networkErr;
+    return resp!;
+  }
   // 后台 record (不 await 不阻塞主 fetch)
   void (async () => {
     try {
@@ -277,11 +283,18 @@ async function logOutbound(
         const clen = resp.headers.get("content-length");
         if (clen) respBytes = Number(clen);
       }
+      const requestBody = await describeBody(init?.body);
       await invoke("transparent_log_record", {
         req: {
           method,
           url,
-          requestBody: bodyStr,
+          requestBody,
+          requestBytes: bodyBytes,
+          category: kind,
+          origin: "companion",
+          destKind: kind === "content" ? "central" : "third_party",
+          destHost: egressHost(url),
+          purpose: egressPurpose(url),
           status: resp?.status,
           responseBytes: respBytes,
           responseSummary: respSummary,

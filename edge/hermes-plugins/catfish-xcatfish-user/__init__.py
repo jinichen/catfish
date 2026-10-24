@@ -86,6 +86,21 @@ def register(ctx) -> None:
 
     _mod = _load_plugin_module()
 
+    # 10/24 数据外发记录: hermes 出口挂钩 httpx / requests / aiohttp, 「带内容出本机」「发给第三方」
+    # 的请求记进 ~/.catfish/outbound_log.db (见 egress_log.py)。挂不上只是不记, 不影响 hermes 起来。
+    try:
+        from pathlib import Path as _PathE
+        import importlib.util as _iuE
+        _specE = _iuE.spec_from_file_location(
+            "_catfish_xcatfish_user_egress_log", _PathE(__file__).parent / "egress_log.py",
+        )
+        _egress = _iuE.module_from_spec(_specE)
+        _specE.loader.exec_module(_egress)
+        _egress.install("hermes")
+        logger.info("catfish-xcatfish-user: 数据外发记录挂钩 ✓")
+    except Exception as e:
+        logger.warning("catfish-xcatfish-user 数据外发记录挂钩失败: %s (不影响对话)", e)
+
     # Step 1: 静态文件检查 patch target 存在 (不 import 真模块, 避开 partial)
     try:
         _mod._verify_patch_targets()

@@ -37,6 +37,18 @@
 //! );
 //! ```
 //!
+//! # 10/24 改: 只记「带内容出本机」「发给第三方」的, 只记元数据
+//!
+//! 鸿波: 42 万条几乎全是界面每 3 秒问本机 hermes 的轮询, 真正把对话 / 资料带出去的 (hermes 调模型、
+//! 鲶鱼插件、tool-bridge、网页搜索、微信) 一条没记。现在:
+//!   · 记录方: hermes 出口 / tool-bridge (egress_log.py, 直接写本表) + Companion 界面 (fetchWithAuth)
+//!     + Companion 后台 (record_internal: 远程向量、天气)
+//!   · 标准: 发往本机不记; 发往中央只记带内容的 (POST/PUT/PATCH 有 body, 登录 / 健康检查除外);
+//!     发往第三方都记
+//!   · 多四列 origin (谁发的) / dest_kind (central | third_party) / dest_host / purpose (做什么)
+//!   · ~~不再存请求内容~~ → 10/25 又存了, 而且防篡改: 见 transparent_log_store.rs
+//!   · 老格式 (没有 origin) 的行一次清掉: 基本都是本机轮询
+//!
 //! # 跟 manifesto 公理一致
 //!
 //! - 数据 100% 员工本机 (~/.catfish/outbound_log.db)
@@ -45,13 +57,12 @@
 //!
 //! # 关键设计
 //!
-//! - request payload preview (4KB) 入 SQLite, 全 payload 走 fs (~/.catfish/outbound_log_payloads/)
+//! - 请求内容 / 指纹链 / 保留期: transparent_log_store.rs (10/25; 老的 4KB preview + payload 文件不用了)
 //! - **response body 不存** (隐私 + 大). 只存 status + length + 简短 summary.
-//! - 9 天 GC (跟员工 chat history 默认保留期一致)
 
 use std::path::PathBuf;
 
-use rusqlite::{params, Connection};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 fn home_dir() -> Option<PathBuf> {
@@ -67,16 +78,11 @@ fn db_path() -> Result<PathBuf, String> {
     Ok(dir.join("outbound_log.db"))
 }
 
-fn payloads_dir() -> Result<PathBuf, String> {
-    let home = home_dir().ok_or("找不到 HOME")?;
-    let dir = home.join(".catfish").join("outbound_log_payloads");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("创建 payloads dir 失败: {e}"))?;
-    Ok(dir)
-}
-
-fn open_db() -> Result<Connection, String> {
+pub(crate) fn open_db() -> Result<Connection, String> {
     let path = db_path()?;
     let conn = Connection::open(&path).map_err(|e| format!("SQLite open: {e}"))?;
+    // hermes / tool-bridge 也写这个库 (接链要排队)
+    let _ = conn.busy_timeout(std::time::Duration::from_secs(15));
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS outbound_log (
@@ -99,13 +105,28 @@ fn open_db() -> Result<Connection, String> {
         ",
     )
     .map_err(|e| format!("init table: {e}"))?;
+    // 10/24: 新四列 (hermes 那边 egress_log.py 也会加, 谁先到谁加)
+    let have: Vec<String> = conn
+        .prepare("PRAGMA table_info(outbound_log)")
+        .and_then(|mut st| st.query_map([], |r| r.get::<_, String>(1))?.collect())
+        .map_err(|e| format!("table_info: {e}"))?;
+    for col in ["origin", "dest_kind", "dest_host", "purpose"] {
+        if !have.iter().any(|c| c == col) {
+            let _ = conn.execute(&format!("ALTER TABLE outbound_log ADD COLUMN {col} TEXT"), []);
+        }
+    }
+    // 老格式的行 (origin 为空) 基本都是本机轮询 (界面每 3 秒问 hermes), 不是外发 —— 清掉;
+    // 老的请求内容文件 (~/.catfish/outbound_log_payloads/) 也不用了
+    let _ = conn.execute("DELETE FROM outbound_log WHERE origin IS NULL", []);
+    if let Some(home) = home_dir() {
+        let old = home.join(".catfish").join("outbound_log_payloads");
+        if old.exists() {
+            let _ = std::fs::remove_dir_all(&old);
+        }
+    }
+    super::transparent_log_store::ensure(&conn)?;
     Ok(conn)
 }
-
-// preview 字节上限 (写 SQLite). 超过的全文存 fs.
-const PREVIEW_BYTES: usize = 4096;
-// 9 天 GC (跟 chat history 默认保留一致)
-const GC_DAYS: i64 = 9;
 
 // ── 数据模型 ──────────────────────────────────────────────────
 
@@ -120,6 +141,13 @@ pub struct RecordReq {
     pub response_summary: Option<String>,
     pub error: Option<String>,
     pub category: Option<String>,
+    /// 10/24: 谁发的 (companion / companion-bg)、发给中央还是第三方、对方主机、做什么
+    pub origin: Option<String>,
+    pub dest_kind: Option<String>,
+    pub dest_host: Option<String>,
+    pub purpose: Option<String>,
+    /// 请求体字节数 (request_body 是表单 / 文件说明时, 这里是原始大小)
+    pub request_bytes: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -138,6 +166,10 @@ pub struct LogEntry {
     pub response_summary: Option<String>,
     pub error: Option<String>,
     pub category: Option<String>,
+    pub origin: Option<String>,
+    pub dest_kind: Option<String>,
+    pub dest_host: Option<String>,
+    pub purpose: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -172,85 +204,67 @@ fn classify_category(url: &str) -> &'static str {
 // ── 公开 API ───────────────────────────────────────────────────
 
 fn record_blocking(req: RecordReq) -> Result<i64, String> {
-    let conn = open_db()?;
+    let mut conn = open_db()?;
     let now = chrono::Utc::now().to_rfc3339();
-
-    // 处理 body — preview 短的进 SQLite, 长的全文存 fs
-    let body = req.request_body.unwrap_or_default();
-    let body_bytes = body.len() as u64;
-    let (preview, fs_path) = if body.len() <= PREVIEW_BYTES {
-        (Some(body), None::<String>)
-    } else {
-        let p = preview_bytes(&body, PREVIEW_BYTES);
-        let payloads = payloads_dir()?;
-        // path: <id>.bin — 但 id 还没分配, 先用 hash + ts
-        let hash = simple_hash(&body);
-        let filename = format!("{}-{hash:x}.bin", now.replace(":", "-"));
-        let full = payloads.join(&filename);
-        std::fs::write(&full, body.as_bytes()).map_err(|e| format!("写 payload fs: {e}"))?;
-        (Some(p), Some(full.to_string_lossy().into_owned()))
-    };
-
+    let body_bytes = req
+        .request_bytes
+        .unwrap_or_else(|| req.request_body.as_ref().map(|b| b.len() as u64).unwrap_or(0));
     let category = req
         .category
         .unwrap_or_else(|| classify_category(&req.url).to_string());
-
-    let response_bytes = req.response_bytes.unwrap_or(0) as i64;
     let ts_response = if req.status.is_some() || req.error.is_some() {
         Some(now.clone())
     } else {
         None
     };
-
-    let mut stmt = conn
-        .prepare(
-            "INSERT INTO outbound_log
-             (ts_request, ts_response, method, url, request_bytes, response_bytes,
-              status, request_payload_preview, request_payload_path,
-              response_summary, error, category)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-        )
-        .map_err(|e| format!("prepare insert: {e}"))?;
-    stmt.execute(params![
-        now,
+    let row = super::transparent_log_store::ChainRow {
+        ts_request: now,
         ts_response,
-        req.method,
-        req.url,
-        body_bytes as i64,
-        response_bytes,
-        req.status.map(|s| s as i64),
-        preview,
-        fs_path,
+        method: req.method,
+        url: req.url,
+        request_bytes: body_bytes as i64,
+        response_bytes: req.response_bytes.unwrap_or(0) as i64,
+        status: req.status.map(|s| s as i64),
+        error: req.error,
+        origin: Some(req.origin.unwrap_or_else(|| "companion".into())),
+        dest_kind: req.dest_kind,
+        dest_host: req.dest_host,
+        purpose: req.purpose,
+        body_sha256: String::new(),
+    };
+    super::transparent_log_store::insert(
+        &mut conn,
+        row,
+        req.request_body.as_deref().map(str::as_bytes),
         req.response_summary,
-        req.error,
-        category,
-    ])
-    .map_err(|e| format!("insert: {e}"))?;
-
-    Ok(conn.last_insert_rowid())
+        Some(category),
+    )
 }
 
-fn preview_bytes(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        return s.to_string();
-    }
-    // P3.3.5 (6/9): byte slice 必须落在 UTF-8 char boundary, 不然 panic.
-    // 中文 prompt 含 3-byte char (e.g. '情' 在 bytes 4095..4098), max=4096
-    // 切到字符中间. 往前找最近 char boundary.
-    let mut cut = max.min(s.len());
-    while cut > 0 && !s.is_char_boundary(cut) {
-        cut -= 1;
-    }
-    format!("{}\n...[truncated, full payload in fs]", &s[..cut])
-}
-
-fn simple_hash(s: &str) -> u64 {
-    let mut h: u64 = 14695981039346656037;
-    for b in s.bytes() {
-        h ^= b as u64;
-        h = h.wrapping_mul(1099511628211);
-    }
-    h
+/// 10/24: Companion 后台自己发出去的 (远程向量、天气) 也记一笔, 连内容; 失败不影响调用方。
+pub(crate) fn record_internal(method: &str, url: &str, body: Option<String>, status: Option<u16>,
+                              dest_kind: &str, purpose: &str) {
+    let host = url.split("://").nth(1).and_then(|r| r.split(['/', ':', '?']).next()).unwrap_or("").to_string();
+    let req = RecordReq {
+        method: method.to_string(),
+        url: url.split('?').next().unwrap_or(url).to_string(),
+        request_bytes: body.as_ref().map(|b| b.len() as u64),
+        request_body: body,
+        status,
+        response_bytes: None,
+        response_summary: None,
+        error: None,
+        category: Some(if dest_kind == "third_party" { "third_party" } else { "content" }.to_string()),
+        origin: Some("companion-bg".into()),
+        dest_kind: Some(dest_kind.to_string()),
+        dest_host: Some(host),
+        purpose: Some(purpose.to_string()),
+    };
+    std::thread::spawn(move || {
+        if let Err(e) = record_blocking(req) {
+            log::debug!("[transparent_log] 后台记录失败: {e}");
+        }
+    });
 }
 
 fn query_blocking(
@@ -289,7 +303,7 @@ fn query_blocking(
     let sql = format!(
         "SELECT id, ts_request, ts_response, method, url, request_bytes,
                 response_bytes, status, request_payload_preview, request_payload_path,
-                response_summary, error, category
+                response_summary, error, category, origin, dest_kind, dest_host, purpose
          FROM outbound_log {where_clause}
          ORDER BY ts_request DESC LIMIT ? OFFSET ?"
     );
@@ -317,6 +331,10 @@ fn query_blocking(
                     response_summary: row.get(10)?,
                     error: row.get(11)?,
                     category: row.get(12)?,
+                    origin: row.get(13)?,
+                    dest_kind: row.get(14)?,
+                    dest_host: row.get(15)?,
+                    purpose: row.get(16)?,
                 })
             },
         )
@@ -390,7 +408,8 @@ fn export_csv_blocking(
 
     let sql = format!(
         "SELECT id, ts_request, ts_response, method, url, request_bytes,
-                response_bytes, status, category, response_summary, error
+                response_bytes, status, category, response_summary, error,
+                origin, dest_kind, dest_host, purpose
          FROM outbound_log {where_clause}
          ORDER BY ts_request DESC"
     );
@@ -414,13 +433,17 @@ fn export_csv_blocking(
                     row.get::<_, Option<String>>(8)?.unwrap_or_default(),
                     row.get::<_, Option<String>>(9)?.unwrap_or_default(),
                     row.get::<_, Option<String>>(10)?.unwrap_or_default(),
+                    row.get::<_, Option<String>>(11)?.unwrap_or_default(),
+                    row.get::<_, Option<String>>(12)?.unwrap_or_default(),
+                    row.get::<_, Option<String>>(13)?.unwrap_or_default(),
+                    row.get::<_, Option<String>>(14)?.unwrap_or_default(),
                 ])
             },
         )
         .map_err(|e| format!("csv query: {e}"))?;
 
     // 写 CSV — 不依赖 csv crate, RFC 4180 简实现 ("" escape, 含逗号/引号/换行就裹引号)
-    let header = "id,ts_request,ts_response,method,url,request_bytes,response_bytes,status,category,response_summary,error\n";
+    let header = "id,ts_request,ts_response,method,url,request_bytes,response_bytes,status,category,response_summary,error,origin,dest_kind,dest_host,purpose\n";
     let mut buf = String::with_capacity(4096);
     buf.push_str(header);
     let mut count: u64 = 0;
@@ -449,31 +472,50 @@ fn csv_quote(s: &str) -> String {
     }
 }
 
-fn gc_blocking() -> Result<u64, String> {
+/// 10/24: 页面上「发给谁、为什么」的汇总 —— 按 (dest_kind, purpose, dest_host) 分组。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SummaryRow {
+    pub dest_kind: String,
+    pub purpose: String,
+    pub dest_host: String,
+    pub count: u64,
+    pub bytes_up: u64,
+    pub bytes_down: u64,
+    pub last_ts: String,
+}
+
+fn summary_blocking(since: Option<String>) -> Result<Vec<SummaryRow>, String> {
     let conn = open_db()?;
-    let cutoff = chrono::Utc::now() - chrono::Duration::days(GC_DAYS);
-    let cutoff_str = cutoff.to_rfc3339();
-
-    // 先拿要删的 fs payload path
     let mut stmt = conn
-        .prepare("SELECT request_payload_path FROM outbound_log WHERE ts_request < ? AND request_payload_path IS NOT NULL")
-        .map_err(|e| format!("prepare gc select: {e}"))?;
-    let paths: Vec<String> = stmt
-        .query_map([&cutoff_str], |row| row.get::<_, String>(0))
-        .map_err(|e| format!("gc query: {e}"))?
-        .filter_map(|r| r.ok())
-        .collect();
-    drop(stmt);  // 释放 stmt 锁让 execute 能跑
+        .prepare(
+            "SELECT COALESCE(dest_kind, ''), COALESCE(purpose, ''), COALESCE(dest_host, ''),
+                    COUNT(*), COALESCE(SUM(request_bytes), 0), COALESCE(SUM(response_bytes), 0), MAX(ts_request)
+             FROM outbound_log WHERE (?1 IS NULL OR ts_request >= ?1)
+             GROUP BY 1, 2, 3 ORDER BY 1 DESC, 4 DESC",
+        )
+        .map_err(|e| format!("prepare summary: {e}"))?;
+    let rows = stmt
+        .query_map([since], |r| {
+            Ok(SummaryRow {
+                dest_kind: r.get(0)?,
+                purpose: r.get(1)?,
+                dest_host: r.get(2)?,
+                count: r.get::<_, i64>(3)? as u64,
+                bytes_up: r.get::<_, i64>(4)? as u64,
+                bytes_down: r.get::<_, i64>(5)? as u64,
+                last_ts: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
+            })
+        })
+        .map_err(|e| format!("summary: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("summary row: {e}"))
+}
 
-    for p in &paths {
-        let _ = std::fs::remove_file(p);
-    }
-
-    let deleted = conn
-        .execute("DELETE FROM outbound_log WHERE ts_request < ?", [&cutoff_str])
-        .map_err(|e| format!("gc delete: {e}"))?;
-
-    Ok(deleted as u64)
+#[tauri::command]
+pub async fn transparent_log_summary(since: Option<String>) -> Result<Vec<SummaryRow>, String> {
+    tokio::task::spawn_blocking(move || summary_blocking(since))
+        .await
+        .map_err(|e| format!("内部错误: {e}"))?
 }
 
 #[tauri::command]
@@ -520,7 +562,67 @@ pub async fn transparent_log_export_csv(
 
 #[tauri::command]
 pub async fn transparent_log_gc() -> Result<u64, String> {
-    tokio::task::spawn_blocking(gc_blocking)
+    tokio::task::spawn_blocking(super::transparent_log_store::gc_blocking)
         .await
         .map_err(|e| format!("内部错误: {e}"))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 新列_存内容_老格式清掉_汇总() {
+        let _g = crate::util::test_env::env_lock();
+        let prev = std::env::var_os("HOME");
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", dir.path());
+        // 老格式库: 没有 origin 列, 一条本机轮询
+        std::fs::create_dir_all(dir.path().join(".catfish")).unwrap();
+        let old = Connection::open(dir.path().join(".catfish/outbound_log.db")).unwrap();
+        old.execute_batch(
+            "CREATE TABLE outbound_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts_request TEXT NOT NULL,
+             ts_response TEXT, method TEXT NOT NULL, url TEXT NOT NULL, request_bytes INTEGER NOT NULL DEFAULT 0,
+             response_bytes INTEGER NOT NULL DEFAULT 0, status INTEGER, request_payload_preview TEXT,
+             request_payload_path TEXT, response_summary TEXT, error TEXT, category TEXT);
+             INSERT INTO outbound_log (ts_request, method, url) VALUES ('2026-10-24T00:00:00Z', 'GET',
+               'http://localhost:8642/api/catfish/room-link/pending');",
+        )
+        .unwrap();
+        drop(old);
+
+        record_blocking(RecordReq {
+            method: "POST".into(),
+            url: "http://10.0.0.5:8999/api/proactive/contextual".into(),
+            request_body: Some("员工的上下文".into()),
+            status: Some(200),
+            response_bytes: Some(10),
+            response_summary: None,
+            error: None,
+            category: Some("content".into()),
+            origin: None,
+            dest_kind: Some("central".into()),
+            dest_host: Some("10.0.0.5".into()),
+            purpose: Some("主动提醒".into()),
+            request_bytes: None,
+        })
+        .unwrap();
+        let q = query_blocking(None, None, None, 100, 0).unwrap();
+        assert_eq!(q.entries.len(), 1, "老格式的本机轮询被清掉");
+        let e = &q.entries[0];
+        assert_eq!(e.origin.as_deref(), Some("companion"));
+        assert_eq!(e.purpose.as_deref(), Some("主动提醒"));
+        assert!(e.request_payload_preview.is_none(), "内容不在老的 preview 列");
+        assert_eq!(e.request_bytes, "员工的上下文".len() as u64);
+        let p = crate::commands::transparent_log_store::payload_blocking(e.id).unwrap();
+        assert_eq!(p.text.as_deref(), Some("员工的上下文"));
+        assert!(p.verified);
+        let sum = summary_blocking(None).unwrap();
+        assert_eq!(sum.len(), 1);
+        assert_eq!((sum[0].dest_kind.as_str(), sum[0].purpose.as_str(), sum[0].count), ("central", "主动提醒", 1));
+        match prev {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+    }
 }

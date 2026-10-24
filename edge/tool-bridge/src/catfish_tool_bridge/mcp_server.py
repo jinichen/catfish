@@ -322,6 +322,9 @@ async def amain() -> None:
 
 
 def main() -> int:
+    # 10/24 数据外发记录: 本进程带内容 / 发第三方的请求记进 outbound_log.db (egress_log.py)
+    from .egress_log import install as _egress_install
+    _egress_install("tool-bridge")
     # 日志走 stderr (stdout 是 MCP 协议数据, 不能污染)
     log_level = os.environ.get("LOG_LEVEL", "INFO")
     logging.basicConfig(

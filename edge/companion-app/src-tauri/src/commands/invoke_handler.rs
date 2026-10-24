@@ -129,6 +129,12 @@ pub(crate) fn handler(
             crate::commands::transparent_log::transparent_log_query,
             crate::commands::transparent_log::transparent_log_export_csv,
             crate::commands::transparent_log::transparent_log_gc,
+            crate::commands::transparent_log::transparent_log_summary,
+            crate::commands::transparent_log_store::transparent_log_payload,
+            crate::commands::transparent_log_store::transparent_log_verify,
+            crate::commands::transparent_log_store::transparent_log_info,
+            crate::commands::transparent_log_store::transparent_log_set_retention,
+            crate::commands::transparent_log_store::transparent_log_anchor_sent,
             // self-evolution: 鲶鱼今天学了什么
             crate::commands::learning::learning_today_stats,
             // BL-MM9-accept (5/9): skill proposal accept/reject 按钮

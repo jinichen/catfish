@@ -251,6 +251,10 @@ impl RemoteProvider {
                 )
             })
             .ok()?;
+        // 10/24 数据外发记录: 原文发去中央算向量 —— 带内容出本机, 记一笔 (连内容)
+        crate::commands::transparent_log::record_internal(
+            "POST", &url, Some(body.to_string()), Some(resp.status().as_u16()), "central", "向量计算",
+        );
 
         if !resp.status().is_success() {
             log::warn!(

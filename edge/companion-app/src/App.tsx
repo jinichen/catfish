@@ -26,6 +26,7 @@ import { useProactiveTriggers } from "./hooks/useProactiveTriggers";
 import { getPickerModel } from "./lib/tauri";  // P3.5.139 Phase 4
 import { fetchUrgentEmailStarter } from "./lib/briefing";
 import { isTauriRuntime } from "./lib/runtime";
+import { startEgressAnchorLoop } from "./lib/egressAnchor";
 
 // 非默认工作区按需加载，避免所有邮件/知识图谱/仪表盘代码挤进主包。
 // React.lazy 会缓存已加载模块，TAB 往返不会重复下载或重新初始化模块。
@@ -67,6 +68,12 @@ export default function App() {
         console.warn("[P3.5.139 Phase 4] getPickerModel 失败 (静默, 走 catalog 兜底):", e);
       }
     })();
+  }, []);
+
+  // 10/25 数据外发记录: 每天把指纹链头报给中央 (只有指纹, 证明记录事后没被改)
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    return startEgressAnchorLoop();
   }, []);
 
   // BL-E13 主动闲聊 (死时间兜底): 9:30 / 14:00 / 17:30

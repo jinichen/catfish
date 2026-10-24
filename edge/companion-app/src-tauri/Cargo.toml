@@ -4,7 +4,7 @@ name = "catfish-companion-app"
 # Hermes 是独立发布物，由 .hermes-target-version / tag / commit 单独固定。
 # 改时记得同步 src-tauri/tauri.conf.json + ../package.json + package-lock.json。
 # CI lint: scripts/check_version_sync.sh
-version = "1.1.70"
+version = "1.1.71"
 description = "Catfish Companion App - desktop sidekick for the Catfish platform"
 authors = ["Catfish Team"]
 edition = "2021"
@@ -107,6 +107,8 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 #   能现场 detect 被篡改的行. 跟 ~/.catfish/<file>.chain.json 配对.
 sha2 = "0.10"
 hex = "0.4"
+# 10/25 数据外发记录: 请求内容 zlib 压缩存 (hermes 那边 Python zlib 写, 两边互读)
+flate2 = "1"
 # P3.3.54 (6/12): 审计员看的 xlsx 多 sheet 导出 (decisions + tool_call + outbound +
 #   校验报告). pure Rust write-only, MIT, <2MB. 写本机 ~/.catfish/exports/.
 rust_xlsxwriter = "0.99"
