@@ -366,7 +366,7 @@ export function buildWikiRelationshipTasks(
     .map((file): WikiRelationshipTask => ({
       id: `unverified:${file.rel_path}`,
       kind: "unverified",
-      title: `「${file.title}」有 ${file.unverified!.length} 条事实没对上原文`,
+      title: `「${file.title}」有 ${file.unverified!.length} 条事实或关系没对上原文`,
       detail: "蒸馏时这几条在原文里找不到出处, 没写进正文。确实对的加回去, 不对的丢掉。",
       file,
     }));

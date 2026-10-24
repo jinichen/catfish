@@ -35,7 +35,7 @@ describe("WikiUnverifiedPanel", () => {
   it("有 unverified 的条目列成任务", () => {
     const tasks = buildWikiRelationshipTasks([current]);
     const t = tasks.find((x) => x.kind === "unverified");
-    expect(t?.title).toContain("2 条事实没对上原文");
+    expect(t?.title).toContain("2 条事实或关系没对上原文");
   });
 
   it("加回 = 正文追加这条, 列表删掉它; 状态不动", async () => {
@@ -60,9 +60,35 @@ describe("WikiUnverifiedPanel", () => {
     expect(out).toContain("新材料破万亿 —— ");
   });
 
+  it("核对不过的关系: 加回 = 放回 related, 正文不动", async () => {
+    const rel = "关系：「规划」隶属「福建省人民政府」 —— 原文对不上 (不支持: 原文是印发)";
+    current = info([rel]);
+    content = `---\ntitle: 规划\nontology_status: active\nrelated: [{name: "省发改委", rel: "关联"}]\nunverified: ["${rel}"]\n---\n\n# 规划\n\n- 已有事实\n`;
+    current.related = [{ name: "省发改委", rel: "关联" }];
+    const task = buildWikiRelationshipTasks([current]).find((x) => x.kind === "unverified")!;
+    render(<WikiUnverifiedPanel task={task} onLater={null} />);
+    fireEvent.click(screen.getByText("确实对，加回关系"));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    const out = writes[0][1];
+    expect(out).toContain('{name: "福建省人民政府", rel: "隶属"}');
+    expect(out).toContain('{name: "省发改委", rel: "关联"}');
+    expect(out).not.toContain("unverified");
+    expect(out).toMatch(/- 已有事实\n$/);
+    expect(out).toContain("ontology_status: active");
+  });
+
   it("helpers", () => {
     expect(splitUnverified("a —— b —— 原因")).toEqual({ fact: "a —— b", reason: "原因" });
     expect(setFrontmatterList("---\ntitle: x\nunverified: [\"a\"]\n---\nbody", "unverified", [])).toBe("---\ntitle: x\n---\nbody");
     expect(appendFact("---\n---\n\n正文\n\n", "新")).toBe("---\n---\n\n正文\n- 新\n");
+  });
+});
+
+describe("parseUnverifiedRelation (10/23: 核对不过的关系加回到 related)", () => {
+  it("认得插件写的「关系：「A」rel「B」」, 普通事实返回 null", async () => {
+    const { parseUnverifiedRelation } = await import("./WikiUnverifiedPanel");
+    expect(parseUnverifiedRelation("关系：「省工信厅」负责「新兴产业规划」")).toEqual({ rel: "负责", name: "新兴产业规划" });
+    expect(parseUnverifiedRelation("关系：「陈耿生」隶属「中电福富（福州）」")).toEqual({ rel: "隶属", name: "中电福富（福州）" });
+    expect(parseUnverifiedRelation("2030 年占比 35%")).toBeNull();
   });
 });

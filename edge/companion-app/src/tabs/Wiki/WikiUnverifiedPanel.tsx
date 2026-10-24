@@ -10,7 +10,7 @@ import { useState } from "react";
 import { Check, SealWarning, SpinnerGap, Trash } from "@phosphor-icons/react";
 import { wikiReadFile, wikiUpdateFile } from "../../lib/tauri_wiki";
 import { useWikiStore } from "../../store/wiki";
-import type { WikiRelationshipTask } from "./wikiRelationshipTasks";
+import { buildConfirmedWikiContent, type WikiRelationshipTask } from "./wikiRelationshipTasks";
 
 const REASON_SEP = " —— ";
 
@@ -26,6 +26,13 @@ export function setFrontmatterList(content: string, field: string, items: string
   const lines = m[1].split(/\r?\n/).filter((l) => !l.startsWith(`${field}:`));
   if (items.length > 0) lines.push(`${field}: [${items.map((i) => `"${i.replace(/"/g, "”")}"`).join(", ")}]`);
   return `---\n${lines.join("\n")}\n---${content.slice(m[0].length)}`;
+}
+
+/** 10/23: 插件核对关系时对不上原文的, 写成「关系：「A」隶属「B」 —— 原因」(catfish_memory_wiki_relcheck)。
+ *  加回 = 放回 frontmatter related, 不是追加到正文。 */
+export function parseUnverifiedRelation(fact: string): { name: string; rel: string } | null {
+  const m = /^关系：「(.+?)」(.+?)「(.+)」$/.exec(fact.trim());
+  return m ? { rel: m[2], name: m[3] } : null;
 }
 
 /** 加回正文: 追加成一行事实。 */
@@ -46,7 +53,13 @@ export default function WikiUnverifiedPanel({ task, onLater }: { task: WikiRelat
       const full = await wikiReadFile(task.file.rel_path);
       const rest = (full.info.unverified ?? []).filter((x) => x !== item);
       let next = setFrontmatterList(full.content, "unverified", rest);
-      if (keep) next = appendFact(next, splitUnverified(item).fact);
+      const relation = parseUnverifiedRelation(splitUnverified(item).fact);
+      if (keep && relation) {
+        const others = full.info.related.filter((r) => r.name !== relation.name);
+        next = buildConfirmedWikiContent(next, [...others, relation], full.info, { keepStatus: true });
+      } else if (keep) {
+        next = appendFact(next, splitUnverified(item).fact);
+      }
       await wikiUpdateFile(task.file.rel_path, next);
       await loadFiles();
     } catch (err) {
@@ -61,7 +74,7 @@ export default function WikiUnverifiedPanel({ task, onLater }: { task: WikiRelat
       <div className="wiki-workbench__section-title">
         <SealWarning size={22} aria-hidden="true" />
         <div>
-          <h3>没对上原文的事实</h3>
+          <h3>没对上原文的事实和关系</h3>
           <p>{task.detail}</p>
         </div>
       </div>
@@ -76,7 +89,7 @@ export default function WikiUnverifiedPanel({ task, onLater }: { task: WikiRelat
               </span>
               <button type="button" className="wiki-workbench__secondary" disabled={!!busy} onClick={() => void resolve(item, true)}>
                 {busy === item ? <SpinnerGap className="wiki-spin" size={16} /> : <Check size={16} />}
-                确实对，加回正文
+                {parseUnverifiedRelation(fact) ? "确实对，加回关系" : "确实对，加回正文"}
               </button>
               <button type="button" className="wiki-workbench__secondary" disabled={!!busy} onClick={() => void resolve(item, false)}>
                 <Trash size={16} />
