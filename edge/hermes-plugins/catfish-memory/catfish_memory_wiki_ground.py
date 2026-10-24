@@ -46,11 +46,13 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 try:
+    from . import catfish_memory_wiki_relcheck as relcheck
     from . import catfish_memory_wiki_verify as verify
     from .catfish_memory_fm import _parse_frontmatter_lists, _split_frontmatter_body
     from .catfish_memory_helpers import _DISTILL_HTTP_TIMEOUT, _gateway_dev_token, _gateway_url, logger
     from .catfish_memory_gateway import with_source
 except ImportError:  # 独立脚本模式 (无父包)
+    import catfish_memory_wiki_relcheck as relcheck
     import catfish_memory_wiki_verify as verify
     from catfish_memory_fm import _parse_frontmatter_lists, _split_frontmatter_body
     from catfish_memory_helpers import _DISTILL_HTTP_TIMEOUT, _gateway_dev_token, _gateway_url, logger
@@ -196,6 +198,25 @@ class Retriever:
             out.append(ranked[:TOP_K])
         return out
 
+    def anchored(self, names: List[str]) -> List[int]:
+        """关系的候选段: 两个名字都出现的段 (最多 3) → 各自出现的段 → 文件开头 (标题 / 发文单位)。
+
+        10/23: 关系翻成的句子大半是模板字 (「隶属于…上级或所属单位」), 按整句检索名字被淹掉 ——
+        「宁德 隶属 福建省人民政府」检出来的段里一个「宁德」都没有, 模型只能判不支持。
+        名字原文里一处都没有就用这个名字单独检索补两段。"""
+        keys = [verify.norm(n) for n in names if verify.norm(n)]
+        hits = [[i for i, p in enumerate(self.norm) if k in p] for k in keys]
+        if not any(hits):
+            return []  # 两个名字原文里一处都没有 —— 不问模型, 直接判对不上
+        both = sorted(set(hits[0]).intersection(*hits[1:])) if hits else []
+        out = both[:3]
+        for k, h in zip(keys, hits):
+            extra = [i for i in h if i not in out][:1] or [i for i in self.bm25.rank(k)[:2] if i not in out]
+            out += extra
+        if self.passages and 0 not in out:
+            out.append(0)
+        return list(dict.fromkeys(out))[:TOP_K + 1]
+
     def number_check(self, fact: str, cand: List[int]) -> Tuple[Optional[str], List[int]]:
         """硬约束: (编造的数字说明 or None, 补齐后的候选)。"""
         nums = verify.ints(verify._strip_today(fact))
@@ -228,6 +249,12 @@ _JUDGE_PROMPT = """你是事实核对员。下面每条「说法」后面附了�
 - 不支持: 原文段里没有这件事, 或者跟原文矛盾。
 
 说法本身是「X 是一份规划 / 一个单位」这类原文标题就能看出来的, 算支持。
+
+说法讲的是两样东西之间的关系 (隶属、负责、参与、配套、协作 …) 时另外注意:
+- 同一段并列出现、同一份文件里都提到, 不等于它们之间有这层关系 —— 原文要直接说了才算;
+- 讲话、报告里提到某项成果, 不等于讲话人「负责」它;
+- 匿名的「某某」按原文写的单位算, 不要算到别的单位 (「某省地市公司的郑某某」不隶属本公司);
+- 谁属于谁、谁参与谁的方向要跟原文一致, 反过来就是不支持。
 
 只输出 JSON 数组, 不要别的字:
 [{"i": 说法编号, "v": "支持" | "部分" | "不支持", "e": [依据的段号], "why": "部分 / 不支持时一句话说哪里对不上"}]
@@ -306,13 +333,19 @@ Verdict = Tuple[bool, str, List[str]]
 
 
 async def judge_facts(facts: List[str], quotes: List[List[str]], source: str, model: str,
-                      retriever: Optional[Retriever] = None, post=None) -> List[Optional[Verdict]]:
-    """一批事实对一份原文。重试过还判不了的那几条给 None (调用方对它们退回 v1)。"""
+                      retriever: Optional[Retriever] = None, post=None,
+                      anchors: Optional[List[Optional[List[str]]]] = None) -> List[Optional[Verdict]]:
+    """一批事实对一份原文。重试过还判不了的那几条给 None (调用方对它们退回 v1)。
+
+    anchors[i] 给了 (关系的两头名字) → 那条按名字找候选段 (Retriever.anchored), 不走整句检索。"""
     if not facts:
         return []
     post = post or _post_judge
     r = retriever or Retriever(source)
     cands = r.candidates(facts, quotes)
+    for i, names in enumerate(anchors or []):
+        if names:
+            cands[i] = r.anchored(names)
     results: List[Optional[Verdict]] = [None] * len(facts)
     todo: List[Tuple[int, str, List[int]]] = []
     for n, fact in enumerate(facts):
@@ -384,13 +417,58 @@ def _fact_lines(body: str) -> List[Tuple[int, str, List[str]]]:
     return out
 
 
-async def ground_files(files: Dict[str, str], source: str, model: str, post=None) -> Tuple[Dict[str, str], Dict[str, int]]:
-    """一批卡一起核对 (一份原文只切段 / 算一次向量)。签名同 verify.verify_files, 多一个模型。"""
+_REL_ITEM_RE = re.compile(r'^\{\s*name\s*:\s*"?([^",}]+?)"?\s*,\s*rel\s*:\s*"?([^",}]+?)"?\s*\}$')
+
+
+def _fm_scalar(fm: str, key: str) -> str:
+    m = re.search(rf"^{key}:\s*(.*?)\s*$", fm, re.MULTILINE)
+    return m.group(1).strip().strip('"').strip("'") if m else ""
+
+
+def _known_types(home: Optional[Path]) -> Dict[str, str]:
+    """知识库已有条目: 名字 (标题 + 别名) → 粗类型。读不到就空。"""
+    out: Dict[str, str] = {}
+    if home is None:
+        return out
+    for sub in ("wiki/entities", "wiki/concepts"):
+        for f in (home / sub).glob("*.md") if (home / sub).is_dir() else []:
+            try:
+                fm, _ = _split_frontmatter_body(f.read_text(encoding="utf-8", errors="ignore")[:3000])
+            except OSError:
+                continue
+            if not fm:
+                continue
+            title = _fm_scalar(fm, "title")
+            cls = relcheck.classify(_fm_scalar(fm, "entity_type"), _fm_scalar(fm, "concept_type"), title)
+            for name in [title, *_parse_frontmatter_lists(fm).get("aliases", [])]:
+                name = name.strip().strip('"')
+                if name and cls:
+                    out.setdefault(name, cls)
+    return out
+
+
+def _set_related(fm: str, typed: List[Tuple[str, str]], bare: List[str]) -> str:
+    quoted = [b if b.startswith(("{", '"')) else '"%s"' % b.replace('"', "”") for b in bare]
+    items = quoted + ['{name: "%s", rel: "%s"}' % (n.replace('"', "”"), r) for n, r in typed]
+    line = "related: [" + ", ".join(items) + "]"
+    pat = re.compile(r"^related:\s*\[.*\]\s*$", re.MULTILINE)
+    return pat.sub(lambda _m: line, fm) if pat.search(fm) else (fm.rstrip("\n") + "\n" + line if items else fm)
+
+
+async def ground_files(files: Dict[str, str], source: str, model: str, post=None,
+                       home: Optional[Path] = None) -> Tuple[Dict[str, str], Dict[str, int]]:
+    """一批卡一起核对 (一份原文只切段 / 算一次向量)。签名同 verify.verify_files, 多一个模型。
+
+    10/23: 关系也核对 —— 先按两头的类型纠方向 (catfish_memory_wiki_relcheck), 再把每条关系翻成
+    一句话跟正文事实一起判; 不支持的从 related 拿掉、进 unverified。home = 知识库根目录
+    (对方是已有条目时用它的类型判方向), 不给就只看这一批卡。
+    """
     if not verify.enabled():
         return files, {"kept": 0, "dropped": 0}
     if not enabled() or not model:
         return verify.verify_files(files, source)
     parsed = {}
+    cards: Dict[str, dict] = {}
     facts: List[str] = []
     quotes: List[List[str]] = []
     owner: List[Tuple[str, int]] = []
@@ -405,12 +483,47 @@ async def ground_files(files: Dict[str, str], source: str, model: str, post=None
                 facts.append(text.strip().lstrip("-*• ").strip())
                 quotes.append(qs)
                 owner.append((path, n))
-    verdicts = await judge_facts(facts, quotes, source, model, post=post) if facts else []
+        typed, bare = [], []
+        for item in _parse_frontmatter_lists(fm).get("related", []):
+            m = _REL_ITEM_RE.match(item.strip())
+            if m:
+                typed.append((m.group(1).strip(), m.group(2).strip()))
+            else:
+                bare.append(item)
+        title = _fm_scalar(fm, "title")
+        cards[path] = {"title": title, "related": typed, "bare": bare, "orig": list(typed),
+                       "class": relcheck.classify(_fm_scalar(fm, "entity_type"), _fm_scalar(fm, "concept_type"), title)}
+    relcheck_on = os.environ.get("CATFISH_WIKI_RELCHECK", "1") != "0"  # =0 只给评测用: 量提示词本身的效果
+    known = _known_types(home) if relcheck_on else {}
+    known.update({c["title"]: c["class"] for c in cards.values() if c["title"] and c["class"]})
+    fixes = relcheck.fix_directions(cards, known) if relcheck_on else []
+    if fixes:
+        logger.info("catfish-memory 核对关系: 方向反了自动改 %d 条 (%s)", len(fixes), "; ".join(fixes[:3]))
+    rel_owner: List[Tuple[str, str, str]] = []
+    anchors: List[Optional[List[str]]] = [None] * len(facts)
+    for path, name, rel in (relcheck.iter_relations(cards) if relcheck_on else []):
+        facts.append(relcheck.sentence(cards[path]["title"], rel, name, _relation_meanings()))
+        quotes.append([])
+        anchors.append([cards[path]["title"], name])
+        rel_owner.append((path, name, rel))
+    verdicts = await judge_facts(facts, quotes, source, model, post=post, anchors=anchors) if facts else []
+    n_fact = len(owner)
     by_line = {owner[i]: verdicts[i] or _fallback(parsed[owner[i][0]][1].splitlines()[owner[i][1]], source)
-               for i in range(len(owner))}
+               for i in range(n_fact)}
+    rel_dropped: Dict[str, List[str]] = {}
+    total = {"kept": 0, "dropped": 0, "rel_kept": 0, "rel_dropped": 0, "rel_fixed": len(fixes)}
+    for (path, name, rel), v in zip(rel_owner, verdicts[n_fact:]):
+        if v is None or v[0]:  # 判不了的关系照旧留着 (以前关系一条都不核对)
+            total["rel_kept"] += 1
+            continue
+        cards[path]["related"] = [(n, r) for n, r in cards[path]["related"] if (n, r) != (name, rel)]
+        rel_dropped.setdefault(path, []).append(relcheck.unverified_item(cards[path]["title"], rel, name, v[1]))
+        total["rel_dropped"] += 1
     out = dict(files)
-    total = {"kept": 0, "dropped": 0}
     for path, (fm, body, lines) in parsed.items():
+        card = cards[path]
+        if card["related"] != card["orig"]:
+            fm = _set_related(fm, card["related"], card["bare"])
         drop_rows = {-n - 1 for n, _, _ in lines if n < 0}
         verdict_of = {n: by_line[(path, n)] for n, _, _ in lines if n >= 0}
         text_of = {n: t for n, t, _ in lines if n >= 0}
@@ -433,7 +546,16 @@ async def ground_files(files: Dict[str, str], source: str, model: str, post=None
                 total["dropped"] += 1
         lists = _parse_frontmatter_lists(fm)
         fm = verify._set_list(fm, "evidence", lists.get("evidence", []) + evidence)
-        fm = verify._set_list(fm, "unverified", lists.get("unverified", []) + dropped)
+        fm = verify._set_list(fm, "unverified", lists.get("unverified", []) + dropped + rel_dropped.get(path, []))
         new_body = "\n".join(kept_lines) + ("\n" if body.endswith("\n") else "")
         out[path] = f"---\n{fm}\n---\n{new_body}"
     return out, total
+
+
+def _relation_meanings() -> Dict[str, str]:
+    """词表 + 员工自定义关系的一句话意思 (翻句子时自定义关系用)。"""
+    try:
+        from . import catfish_memory_wiki_provenance as prov  # noqa: PLC0415
+    except ImportError:
+        import catfish_memory_wiki_provenance as prov  # noqa: PLC0415
+    return {**prov._RELATION_MEANINGS, **prov._custom_relations()}

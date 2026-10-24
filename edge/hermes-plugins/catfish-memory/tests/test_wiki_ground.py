@@ -71,7 +71,7 @@ def test_摘录对不上也不要紧_模型说支持就收_依据存原文那段
         {"concepts/x.md": _card("- 战新产业占比 35% 左右 〔原文:「战略性新兴产业…35%」〕")}, SOURCE, "m", post=post))
     fm, body = _split_frontmatter_body(out["concepts/x.md"])
     lists = _parse_frontmatter_lists(fm)
-    assert st == {"kept": 1, "dropped": 0}
+    assert (st["kept"], st["dropped"]) == (1, 0)
     assert "〔原文" not in body and "35%" in body
     assert any("规上工业比重达到35%左右" in e for e in lists["evidence"])
 
@@ -80,7 +80,7 @@ def test_张冠李戴_模型判不支持_进unverified():
     post = _fake_post(lambda p: [{"i": 1, "v": "不支持", "e": [], "why": "牵头的是省发改委"}])
     out, st = asyncio.run(g.ground_files({"c.md": _card("- 省工信厅牵头落实规划")}, SOURCE, "m", post=post))
     fm, body = _split_frontmatter_body(out["c.md"])
-    assert st == {"kept": 0, "dropped": 1}
+    assert (st["kept"], st["dropped"]) == (0, 1)
     assert "牵头" not in body
     assert "牵头的是省发改委" in _parse_frontmatter_lists(fm)["unverified"][0]
 
@@ -89,7 +89,7 @@ def test_一批卡一次调用():
     post = _fake_post(lambda p: [{"i": i, "v": "支持", "e": []} for i in range(1, p.count("### 说法") + 1)])
     files = {f"c{i}.md": _card(f"- 省发改委牵头 ({i})\n- 新材料产业集群规模突破 9000 亿元") for i in range(3)}
     _, st = asyncio.run(g.ground_files(files, SOURCE, "m", post=post))
-    assert st == {"kept": 6, "dropped": 0}
+    assert (st["kept"], st["dropped"]) == (6, 0)
     assert len(post.calls) == 1
 
 
@@ -103,7 +103,7 @@ def test_模型调不通_重试后那批退回摘录比对():
     out, st = asyncio.run(g.ground_files(
         {"c.md": _card("- 占比 35% 〔原文:「工业战略性新兴产业占规上工业比重达到35%左右」〕\n- 省发改委牵头")},
         SOURCE, "m", post=post))
-    assert st == {"kept": 1, "dropped": 1}  # v1: 没摘录的那条拿出正文
+    assert (st["kept"], st["dropped"]) == (1, 1)  # v1: 没摘录的那条拿出正文
     assert len(calls) == 1 + g.RETRIES
     fm, _ = _split_frontmatter_body(out["c.md"])
     assert any("没给原文摘录" in u for u in _parse_frontmatter_lists(fm)["unverified"])
@@ -116,7 +116,7 @@ def test_偶尔一次失败_重试成功就不退回():
         return answers.pop(0)
 
     _, st = asyncio.run(g.ground_files({"c.md": _card("- 省发改委牵头")}, SOURCE, "m", post=post))
-    assert st == {"kept": 1, "dropped": 0}
+    assert (st["kept"], st["dropped"]) == (1, 0)
 
 
 def test_模型漏判的那几条是None_只重试那几条():
@@ -144,14 +144,14 @@ def test_旁白和生成残渣丢掉_标题行保留():
     out, st = asyncio.run(g.ground_files({"c.md": _card(body_in)}, SOURCE, "m", post=post))
     _, body = _split_frontmatter_body(out["c.md"])
     assert "## 要点" in body and "注:" not in body and "```" not in body and "Self-Correction" not in body
-    assert st == {"kept": 1, "dropped": 0} and post.calls[0].count("### 说法") == 1
+    assert (st["kept"], st["dropped"]) == (1, 0) and post.calls[0].count("### 说法") == 1
 
 
 def test_关掉开关只用摘录比对(monkeypatch):
     monkeypatch.setenv("CATFISH_WIKI_GROUND", "0")
     post = _fake_post(lambda p: [])
     _, st = asyncio.run(g.ground_files({"c.md": _card("- 省发改委牵头")}, SOURCE, "m", post=post))
-    assert post.calls == [] and st == {"kept": 0, "dropped": 1}
+    assert post.calls == [] and (st["kept"], st["dropped"]) == (0, 1)
 
 
 def test_蒸馏一遍_核对走v2_合并后的卡也查数字(tmp_path, monkeypatch):
@@ -204,3 +204,80 @@ def test_蒸馏一遍_核对走v2_合并后的卡也查数字(tmp_path, monkeypa
     assert "省工信厅牵头" not in body and any("省工信厅牵头" in u for u in unverified)
     assert "88" not in body and any("合并时多出的数字" in u for u in unverified)
     assert any("研发经费" in _split_frontmatter_body(c)[1] for p, c in written.items() if "资料要点" in p)
+
+
+
+# ---------------------------------------------------------------- 10/23 关系核对
+
+def test_关系方向反了_有反义词就地换():
+    import catfish_memory_wiki_relcheck as rc
+    cards = {"a.md": {"title": "中电福富", "class": "org", "related": [("陈耿生", "隶属"), ("业软BG", "包含")]}}
+    log = rc.fix_directions(cards, {"陈耿生": "person", "业软BG": "dept"})
+    assert cards["a.md"]["related"] == [("陈耿生", "包含"), ("业软BG", "包含")] and len(log) == 1
+
+
+def test_关系方向反了_没反义词_挪到同批的对方卡上():
+    import catfish_memory_wiki_relcheck as rc
+    cards = {
+        "a.md": {"title": "审计整改机制", "class": "rule", "related": [("审计部", "参与")]},
+        "b.md": {"title": "审计部", "class": "dept", "related": []},
+    }
+    rc.fix_directions(cards, {"审计整改机制": "rule", "审计部": "dept"})
+    assert cards["a.md"]["related"] == [] and cards["b.md"]["related"] == [("审计整改机制", "参与")]
+
+
+def test_类型按名字猜():
+    import catfish_memory_wiki_relcheck as rc
+    assert rc.classify(name="证书清单-著作权202609") == "doc"
+    assert rc.classify(name="福建省人民政府") == "org"
+    assert rc.classify(name="信息安全BG") == "dept"
+    assert rc.classify(entity_type="汇报材料") == "doc"
+    assert rc.direction("记录", "system", "doc") == "reversed"
+    assert rc.direction("印发", "org", "doc") == "reversed"
+    assert rc.direction("隶属", "person", "org") == "ok"
+    assert rc.direction("协作", "org", "org") == "unknown"
+
+
+def test_关系跟事实一起判_不支持的拿出related进unverified():
+    def verdicts(p):
+        out = []
+        for i in range(1, p.count("### 说法") + 1):
+            claim = p.split(f"### 说法 {i}\n")[1].split("\n")[0]
+            out.append({"i": i, "v": "不支持" if "省工信厅" in claim and "负责" in claim else "支持", "e": [], "why": "原文是省发改委牵头"})
+        return out
+
+    post = _fake_post(verdicts)
+    card = ('---\ntype: entity\ntitle: 省工信厅\nentity_type: department\n'
+            'related: [{name: "福建省人民政府", rel: "隶属"}, {name: "新兴产业规划", rel: "负责"}, "[[老张]]"]\n---\n\n- 省工信厅配合落实规划\n')
+    out, st = asyncio.run(g.ground_files({"e.md": card}, SOURCE, "m", post=post))
+    fm, _ = _split_frontmatter_body(out["e.md"])
+    lists = _parse_frontmatter_lists(fm)
+    assert (st["rel_kept"], st["rel_dropped"]) == (1, 1)
+    assert 'rel: "隶属"' in fm and "负责" not in fm.split("unverified")[0] and '"[[老张]]"' in fm
+    assert any(u.startswith("关系：「省工信厅」负责「新兴产业规划」 —— ") for u in lists["unverified"])
+    assert len(post.calls) == 1  # 关系和事实同一次调用
+
+
+def test_关系判不了照旧留着():
+    async def post(prompt, model):
+        return None
+
+    card = '---\ntype: entity\ntitle: 省发改委\nrelated: [{name: "省工信厅", rel: "协作"}]\n---\n\n'
+    out, st = asyncio.run(g.ground_files({"e.md": card}, SOURCE, "m", post=post))
+    assert 'rel: "协作"' in out["e.md"] and st["rel_kept"] == 1
+
+
+def test_两头名字原文里都没有的关系_不问模型直接拿出():
+    post = _fake_post(lambda p: [])
+    card = '---\ntype: entity\ntitle: 甲乙丙\nrelated: [{name: "丁戊己", rel: "协作"}]\n---\n\n'
+    out, st = asyncio.run(g.ground_files({"e.md": card}, SOURCE, "m", post=post))
+    assert st["rel_dropped"] == 1 and post.calls == []
+
+
+def test_关系核对开关关掉_关系原样(monkeypatch):
+    monkeypatch.setenv("CATFISH_WIKI_RELCHECK", "0")
+    post = _fake_post(lambda p: [{"i": i, "v": "支持", "e": []} for i in range(1, p.count("### 说法") + 1)])
+    card = '---\ntype: entity\ntitle: 省发改委\nrelated: [{name: "省工信厅", rel: "协作"}]\n---\n\n- 省发改委牵头\n'
+    out, st = asyncio.run(g.ground_files({"e.md": card}, SOURCE, "m", post=post))
+    assert 'related: [{name: "省工信厅", rel: "协作"}]' in out["e.md"] and st["rel_kept"] == 0
+    assert post.calls[0].count("### 说法") == 1

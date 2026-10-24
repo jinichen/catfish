@@ -198,8 +198,14 @@ def name_of(source: str) -> str:
     return source.strip().splitlines()[0][:20] if source.strip() else "?"
 
 
+NO_VECTORS = False
+
+
 def accept_ground(cases: list, source: str, model: str) -> list:
     import catfish_memory_wiki_ground as ground  # noqa: PLC0415
+
+    if NO_VECTORS:
+        ground._embed_all = lambda texts: None  # 只用字面检索
 
     facts = [verify.MARK_RE.sub("", c["line"]).strip().lstrip("-*• ").strip() for c in cases]
     quotes = [verify.split_quotes(verify.MARK_RE.findall(c["line"])) for c in cases]
@@ -262,12 +268,15 @@ def main() -> int:
     p.add_argument("--show", action="store_true")
     p.add_argument("--model", default="")
     p.add_argument("--source", default="", help="只跑资料名含这几个字的")
+    p.add_argument("--no-vectors", action="store_true", help="ground 只用字面检索找候选段, 不算向量")
     args = ap.parse_args()
     if args.cmd == "collect":
         collect(args.model or h._read_picker_state_model(EVAL.parent) or "catfish-public-qwen-flash")
     elif args.cmd == "perturb":
         perturb(args.seed)
     else:
+        global NO_VECTORS
+        NO_VECTORS = args.no_vectors
         run(args.method, args.show, args.model or h._read_picker_state_model(EVAL.parent) or "catfish-public-qwen-flash", args.source)
     return 0
 

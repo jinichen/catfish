@@ -230,11 +230,13 @@ async def wiki_two_step(
         import catfish_memory_wiki_ground as ground  # noqa: PLC0415
         import catfish_memory_wiki_verify as verify  # noqa: PLC0415
     source = analysis_input[-max_chars:] if max_chars else analysis_input
-    files, vstat = await ground.ground_files(files, source, resolve_model("wiki-verify"))
-    if vstat["dropped"]:
+    files, vstat = await ground.ground_files(files, source, resolve_model("wiki-verify"), home=catfish_home)
+    if vstat["dropped"] or vstat.get("rel_dropped") or vstat.get("rel_fixed"):
         logger.info(
-            "catfish-memory bg session=%s: 核对原文: %d 条对上, %d 条对不上 (进 unverified 待人看)",
+            "catfish-memory bg session=%s: 核对原文: 事实 %d 对上 / %d 对不上; 关系 %d 对上 / %d 对不上 / %d 条方向改正"
+            " (对不上的进 unverified 待人看)",
             session_id, vstat["kept"], vstat["dropped"],
+            vstat.get("rel_kept", 0), vstat.get("rel_dropped", 0), vstat.get("rel_fixed", 0),
         )
     pre_merge = dict(files)
     # P19 (6/5): 同名 entity/concept 让 LLM 合并叙述; 失败的落 P18 regex 安全网, 不丢数据
