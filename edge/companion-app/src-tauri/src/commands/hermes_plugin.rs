@@ -309,13 +309,20 @@ pub(super) fn sync_baked_files(plugin_path: &Path, files: &[(&str, &str)]) -> Re
 /// Companion 不该乱动。但**只在文件真的变了时重启一次**跟"乱动"是两回事:
 /// 那一刻新旧代码已经不一致了, 不重启才是坏状态。
 ///
-/// ── 为什么用 launchctl 而不是 `hermes gateway restart` ──────────────
+/// ── 先请 hermes 自己重启, launchctl 只做退路 (10/25) ─────────────────
 ///
-/// GUI app 继承的 PATH 极简 (通常只有 /usr/bin:/bin:/usr/sbin:/sbin), `hermes`
-/// 大概率不在里面 —— shell 里跑得通不代表 Companion 里跑得通。launchctl 是
-/// /bin/launchctl, 一定在。
+/// 原来直接 `launchctl kickstart -k`。launchd 管的是包着网关的 osascript 外壳, -k 杀掉外壳后
+/// 立刻拉起新的, 而旧网关还在收尾 (约 1 秒) —— 新网关看到它还活着, 报「A gateway already owns
+/// this host」退出, launchd 按 ThrottleInterval (30s) 才再拉: 每次重启网关断 25~70 秒
+/// (gateway.log 10/22 起 14 次)。员工那边就是升级 / 插件更新后一阵子发消息、微信都没反应。
 ///
-/// label 来自实测: 员工跑 `hermes gateway stop` 时 launchd 报的是
+/// `hermes gateway restart` 会给网关发 SIGUSR1: 网关等进行中的对话收尾, 自己干净退出, launchd 再拉起
+/// —— 10/25 本机实测断 9 秒, 没有撞上。命令发出请求就返回 (不等新网关起来): 收尾可能要很久, 等不得,
+/// 更不能等超时了再 kickstart -k —— 那会把正在收尾的对话杀掉。所以只有命令本身跑不起来才退回 launchctl。
+///
+/// 老顾虑「GUI app 的 PATH 里没有 hermes」: 这里用 venv 里 hermes 的绝对路径, 不靠 PATH。
+///
+/// launchctl 的 label 来自实测: 员工跑 `hermes gateway stop` 时 launchd 报的是
 /// `Could not find service "ai.hermes.gateway" in domain for user gui: 501`。
 /// CHANGELOG:1875 也记着同一条命令。
 ///
@@ -326,6 +333,14 @@ pub(super) fn sync_baked_files(plugin_path: &Path, files: &[(&str, &str)]) -> Re
 #[cfg(target_os = "macos")]
 pub(crate) fn restart_hermes_gateway() {
     use std::process::Command;
+
+    match request_hermes_restart() {
+        Ok(cli) => {
+            log::info!("[P3.5.56] plugin 变了 → 已请 hermes 重启网关 (等进行中的对话收尾后重启; {cli})");
+            return;
+        }
+        Err(e) => log::warn!("[P3.5.56] `hermes gateway restart` 不可用, 退回 launchctl kickstart: {e}"),
+    }
 
     // 拿 uid 走 `id -u` 而不是加一个 libc 依赖 —— 为一个整数引 crate 不值,
     // 而且 unsafe { libc::getuid() } 在这条路径上没有任何收益。
@@ -373,39 +388,38 @@ pub(crate) fn restart_hermes_gateway() {
     }
 }
 
-/// 非 macOS: 没有 launchd, 走 hermes 自己的 CLI `hermes gateway restart`。
+/// 请 hermes 自己重启网关: venv 里 hermes 的 `gateway restart`。网关等进行中的对话收尾后干净重启,
+/// 命令发出请求就返回, 不等新网关起来。Ok 带 hermes 的路径 (写日志用)。mac / Windows 共用。
+fn request_hermes_restart() -> Result<String, String> {
+    let home = hermes_home().ok_or("找不到 hermes 目录")?;
+    let cli = crate::services::catfish_paths::hermes_venv_tool(&home.join("hermes-agent"), "hermes");
+    if !cli.exists() {
+        return Err(format!("hermes 还没装好 ({} 不在)", cli.display()));
+    }
+    let out = crate::services::process::python_command(&cli)
+        .args(["gateway", "restart"])
+        .env("HERMES_HOME", &home)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("起不了 {} ({e})", cli.display()))?;
+    if !out.status.success() {
+        return Err(format!("{} 失败: {}", out.status, String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    Ok(cli.display().to_string())
+}
+
+/// 非 macOS: 没有 launchd, 只走 hermes 自己的 CLI `hermes gateway restart`。
 ///
 /// 9/23: 原来这里只打一行 "请手动重启"。Windows 上插件文件同步过去了、但 hermes
 /// 不重启就不加载 —— 8/9 在 mac 上修掉的"新端点 404 且完全静默"在 Windows 上
 /// 原样存在 (鸿波机器 /api/catfish/room-link/pending 一直 404)。
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn restart_hermes_gateway() {
-    let Some(home) = hermes_home() else { return };
-    let cli = crate::services::catfish_paths::hermes_venv_tool(&home.join("hermes-agent"), "hermes");
-    if !cli.exists() {
-        log::info!(
-            "[P3.5.56] plugin 变了, 但 hermes 还没装好 ({} 不在) —— 装完启动时会加载新 plugin",
-            cli.display()
-        );
-        return;
-    }
-    match crate::services::process::python_command(&cli)
-        .args(["gateway", "restart"])
-        .env("HERMES_HOME", &home)
-        .output()
-    {
-        Ok(out) if out.status.success() => {
-            log::info!("[P3.5.56] plugin 变了 → 已重启 hermes gateway ({})", cli.display());
-        }
-        Ok(out) => log::warn!(
-            "[P3.5.56] plugin 变了但 `hermes gateway restart` 失败 ({}): {}\n\
-             → 新 plugin 代码**还没生效**。手动跑: hermes gateway restart",
-            out.status,
-            String::from_utf8_lossy(&out.stderr).trim()
-        ),
+    match request_hermes_restart() {
+        Ok(cli) => log::info!("[P3.5.56] plugin 变了 → 已请 hermes 重启网关 ({cli})"),
         Err(e) => log::warn!(
-            "[P3.5.56] plugin 变了但起不了 {} ({e}) → 手动跑: hermes gateway restart",
-            cli.display()
+            "[P3.5.56] plugin 变了但 `hermes gateway restart` 没成: {e}\n\
+             → 新 plugin 代码**还没生效** (hermes 还没装好的话, 装完启动时会加载)。手动跑: hermes gateway restart"
         ),
     }
 }
