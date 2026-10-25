@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { formatFileAttachment, formatManyFiles } from "./chatWire";
-import { splitUserBubbleText } from "./userBubbleText";
+import { employeeWords, internalMessage, splitUserBubbleText } from "./userBubbleText";
 
 const pdf = {
   kind: "file" as const,
@@ -173,3 +173,69 @@ describe("splitUserBubbleText", () => {
   });
 });
 
+
+/** 10/25 鸿波截图: hermes 压缩上下文后自己写进历史的标记漏进了对话。
+ *  文字照抄 hermes-agent agent/context_compressor.py (不是真聊天记录)。 */
+describe("internalMessage · hermes 压缩标记", () => {
+  const SUMMARY = "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted into the summary below. 员工在弄高新申报材料";
+  const MERGED =
+    "[PRIOR CONTEXT — for reference only; not a new message]\n好的，先结束教学 session 然后直接凝固。\n\n" +
+    "[END OF PRIOR CONTEXT — COMPACTION SUMMARY BELOW]\n\n" + SUMMARY;
+  const PLACEHOLDER =
+    "Continue from the compressed conversation context above. This marker exists because no human user turn was available.";
+  const LEGACY_PLACEHOLDER =
+    "Continue from the compressed conversation context above. This marker exists because the compacted " +
+    "transcript contained no preserved user turn.";
+
+  it("压缩占位「用户消息」整条不显示 (新老两版文字), 不管有没有打标记", () => {
+    for (const content of [PLACEHOLDER, LEGACY_PLACEHOLDER]) {
+      expect(internalMessage({ role: "user", content })).toEqual({ hidden: true });
+      expect(internalMessage({ role: "assistant", content })).toEqual({ hidden: true });
+    }
+  });
+
+  it("没打 _compressed_summary 的摘要: user / assistant 两边都显示成一行说明", () => {
+    const note = { hidden: false, label: "小鲶把前面的对话整理成了摘要" };
+    expect(internalMessage({ role: "user", content: SUMMARY })).toEqual(note);
+    expect(internalMessage({ role: "assistant", content: SUMMARY })).toEqual(note);
+    expect(internalMessage({ role: "assistant", content: MERGED })).toEqual(note);
+    expect(internalMessage({ role: "user", content: MERGED })).toEqual(note);
+    expect(internalMessage({ role: "assistant", content: "[CONTEXT SUMMARY]: 老版摘要" })).toEqual(note);
+  });
+
+  it("hermes 打的标记优先", () => {
+    expect(internalMessage({ role: "assistant", content: "随便", displayKind: "hidden" })).toEqual({ hidden: true });
+    expect(internalMessage({ role: "assistant", content: MERGED, displayKind: "compaction" })?.hidden).toBe(false);
+  });
+
+  it("工具轮数到上限时 hermes 替员工发的「请小结」不当员工的话", () => {
+    const r = internalMessage({
+      role: "user",
+      content: "You've reached the maximum number of tool-calling iterations allowed. Please provide a final response",
+    });
+    expect(r).toEqual({ hidden: false, label: "工具调用次数到上限了, 小鲶先做个小结" });
+  });
+
+  it("正常对话不误伤: 员工 / 小鲶话里提到这些词照常显示", () => {
+    expect(internalMessage({ role: "user", content: "[CONTEXT COMPACTION 是什么意思?" })?.hidden).toBe(false); // 开头一样就认, 跟老规则一致
+    expect(internalMessage({ role: "user", content: "日志里有 [CONTEXT COMPACTION — REFERENCE ONLY] 是啥" })).toBeNull();
+    expect(internalMessage({ role: "assistant", content: "你看到的「Continue from the compressed…」是 hermes 的占位" })).toBeNull();
+    expect(internalMessage({ role: "assistant", content: "[1] 先报价" })).toBeNull();
+    expect(internalMessage({ role: "user", content: "帮我改一下方案" })).toBeNull();
+  });
+
+  it("员工话后面接的压缩保留任务清单切掉 (标记头超过 30 字, 单独认)", () => {
+    const content =
+      "继续\n\n[Your active task list was preserved across context compression]\n- [>] 5. 新建概念 (in_progress)\n- [ ] 6. 验证 (pending)";
+    expect(splitUserBubbleText(content).text).toBe("继续");
+    expect(employeeWords({ role: "user", content })).toBe("继续");
+    expect(splitUserBubbleText("[Skills pruned during compression — reload before acting on these tasks]\n- x").system).toBe("系统提示");
+  });
+
+  it("employeeWords: 只有员工的消息给出气泡里那段话, 其余 null", () => {
+    expect(employeeWords({ role: "user", content: "就是这个会议纪要" + formatFileAttachment(pdf as never) })).toBe("就是这个会议纪要");
+    expect(employeeWords({ role: "user", content: SUMMARY })).toBeNull();
+    expect(employeeWords({ role: "user", content: PLACEHOLDER })).toBeNull();
+    expect(employeeWords({ role: "assistant", content: "好的" })).toBeNull();
+  });
+});

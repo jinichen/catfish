@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { ArrowClockwise, FastForward, Paperclip, PencilSimple } from "@phosphor-icons/react";
-import { splitUserBubbleText } from "../../lib/userBubbleText";
+import { internalMessage, splitUserBubbleText } from "../../lib/userBubbleText";
 import { Markdown } from "../../lib/markdown";
 import type { ChatMessage as Msg } from "../../types/chat";
 import ChatToolSteps from "./ChatToolSteps";
@@ -41,16 +41,11 @@ export default function ChatMessage({
   isStreaming = false,
   isLast = false,
 }: Props) {
-  // 10/16: hermes 自己打的标记优先 —— 它比认正文开头可靠, 而且 user / assistant 两边一视同仁
-  // (压缩摘要有时以 assistant 身份存, 开头是 [PRIOR CONTEXT …], 之前只有 user 那边在认)
-  if (msg.displayKind === "hidden") return null;
-  if (msg.displayKind === "compaction") return <SystemNote label="小鲶把前面的对话整理成了摘要" raw={msg.content} />;
-  if (msg.displayKind === "internal_notification") return <SystemNote label="系统提示" raw={msg.content} />;
+  // hermes 的内部消息 (压缩摘要 / 压缩占位 / 定时任务 / 子任务完成 …): 不当员工或小鲶的话显示。
+  // 先看 hermes 打的 displayKind, 没打的按正文认, user / assistant 两边都认 (lib/userBubbleText)
+  const internal = internalMessage(msg);
+  if (internal) return internal.hidden ? null : <SystemNote label={internal.label} raw={msg.content} />;
   if (msg.role === "user") {
-    // 整条是 hermes 以"用户"身份存的系统消息 (压缩摘要 / 定时任务 / 子任务完成 …): 不当员工的话显示
-    // (老库没有 displayKind 时的退路)
-    const system = splitUserBubbleText(msg.content).system;
-    if (system) return <SystemNote label={system} raw={msg.content} />;
     return (
       <UserBubble
         msg={msg}

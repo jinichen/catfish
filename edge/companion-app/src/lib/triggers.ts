@@ -17,6 +17,7 @@
  */
 
 import type { ChatMessage } from "../types/chat";
+import { employeeWords, internalMessage } from "./userBubbleText";
 
 export type TriggerKind = "silence" | "deadline" | "focus";
 
@@ -143,7 +144,10 @@ export function detectSilence(args: {
   messages: ChatMessage[];
   now: Date;
 }): TriggerResult | null {
-  const { messages, now } = args;
+  const { now } = args;
+  // 10/25: hermes 的内部消息 (压缩摘要 / 压缩占位) 也是 role=user, 不算员工说的话 —— 之前取到了
+  // 摘要, 气泡里说「你刚说"[CONTEXT COMPACTION — REFERENCE ONLY] Ea..."」
+  const messages = args.messages.filter((m) => !internalMessage(m));
   if (messages.length === 0) return null;
   const last = messages[messages.length - 1];
   if (last.role !== "user") return null;
@@ -157,7 +161,7 @@ export function detectSilence(args: {
   const elapsed = now.getTime() - lastUserTs;
   if (elapsed < SILENCE_THRESHOLD_MS) return null;
 
-  const text = lastUser.content || "";
+  const text = employeeWords(lastUser) ?? "";
   const hits = ACTION_KEYWORDS.filter((kw) => text.includes(kw));
   if (hits.length === 0) return null;
 
@@ -263,13 +267,13 @@ export function detectFocusReturn(args: {
   // return 必须刚刚发生 (过去 90 秒内)
   if (now.getTime() - lastFocusReturnTs > 90_000) return null;
 
-  // 拿走前最后一条 user msg
-  const lastUser = [...messages].reverse().find((m) => m.role === "user");
+  // 拿走前员工最后说的一句话 (跳过压缩摘要 / 占位这类 hermes 内部消息, 见 detectSilence)
+  const lastUser = [...messages].reverse().find((m) => employeeWords(m));
   if (!lastUser) return null;
   const lastUserTs = Date.parse(lastUser.ts);
   if (Number.isNaN(lastUserTs) || lastUserTs > lastFocusLeftTs) return null;
 
-  const snippet = (lastUser.content || "").slice(0, 40);
+  const snippet = (employeeWords(lastUser) ?? "").slice(0, 40);
   const minsAway = Math.round(awayMs / 60000);
   return {
     kind: "focus",

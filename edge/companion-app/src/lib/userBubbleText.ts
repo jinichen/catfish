@@ -29,14 +29,27 @@
  * 改了模型就看不到附件 / 记忆了。
  */
 
+import type { ChatMessage } from "../types/chat";
+
 // 附件材料: 认完整的标题行, 不要求前面有空行 —— 压缩摘要里换行会被吃掉 (10/13 第二张截图)
 const ATTACH_HEADER = /\s*=== (?:附件|微信聊天记录): .+? \(.*?\) ===/;
 const MANY_FILES = /\s*\[共 \d+ 个文件。/;
 const NAME_RE = /=== (?:附件|微信聊天记录): (.+?) \(.*?\) ===/g;
 
+// hermes 压缩上下文后写进历史的摘要 (hermes-agent agent/context_compressor.py): SUMMARY_PREFIX、
+// 合并进尾巴的 _MERGED_PRIOR_CONTEXT_HEADER、老版 LEGACY_SUMMARY_PREFIX。user / assistant 身份都有,
+// 而且不一定打了 _compressed_summary —— 10/25 本机 state.db: 115 条 user + 78 条 assistant 没打标记
+const COMPACTION_HEAD = /^\[(?:CONTEXT COMPACTION|PRIOR CONTEXT — for reference only|CONTEXT SUMMARY\]:)/;
+const COMPACTION_LABEL = "小鲶把前面的对话整理成了摘要";
+// 压缩后没有员工的话可接时, hermes 自己补的一条「用户消息」(COMPRESSION_CONTINUATION_USER_CONTENT
+// 和它的老版本)。一个字的信息都没有, 整条不显示 (10/25 鸿波截图: 被当成员工的气泡显示了)
+const COMPACTION_PLACEHOLDER = /^Continue from the compressed conversation context above\. This marker exists because /;
+
 // 整条是系统消息: [开头, 给员工看的一句话]。label 里的 {skill} 用技能名替换。
 const SYSTEM_WHOLE: Array<[RegExp, string]> = [
-  [/^\[CONTEXT COMPACTION/, "小鲶把前面的对话整理成了摘要"],
+  [COMPACTION_HEAD, COMPACTION_LABEL],
+  // hermes 工具调用轮数到上限时替员工发的「请先小结」(run_agent MAX_ITERATIONS_SUMMARY_REQUEST)
+  [/^You've reached the maximum number of tool-calling iterations allowed\./, "工具调用次数到上限了, 小鲶先做个小结"],
   [/^\[IMPORTANT: You are running as a scheduled cron job/, "定时任务触发"],
   [/^\[IMPORTANT: The user has invoked the "([^"]+)" skill/, "按技能「{skill}」执行"],
   [/^\[IMPORTANT: The following skill\(s\) were listed for this job/, "定时任务提示"],
@@ -66,8 +79,11 @@ const IMAGE_PATH_LINE = /^\[Image attached at: [^\]\n]*\]\s*$/gm;
  *   · XML 围栏独占一行: `<memory-context>`
  *   · 方括号英文标记行: `[System: …]` `[IMPORTANT: …]` —— 要求大写开头 + 英文词 + 冒号/收尾方括号,
  *     员工写的「[图片] 这是什么」「[1] 先报价」不算; 行中间出现的 (「这行日志 [System: boom] 什么意思」) 也不算
+ *   · hermes 压缩时接在员工话后面的长标记, 超过上面 30 字的限制, 单独认 (10/25 本机: 员工说「继续」,
+ *     后面跟着 `[Your active task list was preserved across context compression]` + 任务清单)
  */
-const INJECTION_HEAD = /^(?:<[A-Za-z][\w-]*>\s*$|\[[A-Z][A-Za-z][A-Za-z ]{0,30}[:\]])/;
+const INJECTION_HEAD =
+  /^(?:<[A-Za-z][\w-]*>\s*$|\[[A-Z][A-Za-z][A-Za-z ]{0,30}[:\]]|\[(?:Your active task list was preserved|Planning state preserved|Skills pruned during compression|STILL IN PROGRESS —))/;
 
 /** 注入块一开始, 后面到结尾就全是注入物 —— 从第一个注入块开头切掉, 剩下的是员工写的。
  *
@@ -118,4 +134,33 @@ export function splitUserBubbleText(content: string | null | undefined): UserBub
     if (!fileNames.includes(m[1])) fileNames.push(m[1]);
   }
   return { text: visible, hidden, fileNames, system: null };
+}
+
+/** 这条是 hermes 的内部消息 (压缩摘要 / 占位 / 系统说明…), 不是员工说的话、也不是小鲶的回答。
+ *  `{ hidden: true }` 整条不显示; `{ label }` 显示成一行灰字说明; null 是正常对话。
+ *  气泡 (ChatMessage) 和主动提醒取「员工最后一句话」(triggers) 都走这里, 判据只有这一套。 */
+export type InternalMessage = { hidden: true } | { hidden: false; label: string };
+
+export function internalMessage(
+  msg: Pick<ChatMessage, "role" | "content" | "displayKind">,
+): InternalMessage | null {
+  // 10/16: hermes 自己打的标记优先 —— 它比认正文开头可靠, 而且 user / assistant 两边一视同仁
+  if (msg.displayKind === "hidden") return { hidden: true };
+  if (msg.displayKind === "compaction") return { hidden: false, label: COMPACTION_LABEL };
+  if (msg.displayKind === "internal_notification") return { hidden: false, label: "系统提示" };
+  // 没打标记的 (老库 / hermes 漏标): 按正文认
+  const content = msg.content ?? "";
+  if (COMPACTION_PLACEHOLDER.test(content)) return { hidden: true };
+  if (msg.role === "assistant" && COMPACTION_HEAD.test(content)) return { hidden: false, label: COMPACTION_LABEL };
+  if (msg.role === "user") {
+    const system = splitUserBubbleText(content).system;
+    if (system) return { hidden: false, label: system };
+  }
+  return null;
+}
+
+/** 员工自己写的话 (气泡里显示的那段); 不是员工的消息 (小鲶回的 / hermes 内部消息) 返 null */
+export function employeeWords(msg: Pick<ChatMessage, "role" | "content" | "displayKind">): string | null {
+  if (msg.role !== "user" || internalMessage(msg)) return null;
+  return splitUserBubbleText(msg.content).text;
 }
