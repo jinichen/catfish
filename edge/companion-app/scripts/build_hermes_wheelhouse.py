@@ -43,6 +43,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 EXTRA_LIST = HERE.parent / "src-tauri" / "hermes-extra-packages.txt"
+# 盖过上游 uv.lock 的依赖版本 (安全修复), 见文件开头说明; Companion 启动自检读同一份
+OVERRIDES = HERE.parent / "src-tauri" / "hermes-dep-overrides.txt"
 PYTHON_VERSION = "3.14"
 # editable 安装 hermes 自己要的构建后端 —— 版本跟上游 pyproject [build-system] 一致, 下面会核对
 BUILD_BACKEND = ["setuptools==83.0.0", "wheel"]
@@ -186,6 +188,25 @@ def fix_wheel_macho(wheel: Path) -> None:
                 zf.write(f, f.relative_to(root).as_posix())
 
 
+def overrides() -> dict[str, str]:
+    """hermes-dep-overrides.txt 里的 {规范化包名: 版本}。"""
+    out: dict[str, str] = {}
+    for raw in OVERRIDES.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if line:
+            name, _, version = line.partition("==")
+            out[norm(name)] = version.strip()
+    return out
+
+
+def check_overrides(requirements: Path) -> None:
+    """解析结果里, 装进来的被覆盖包必须正好是覆盖的版本 —— 没生效就别打出一个以为修了其实没修的包。"""
+    pins = pinned(requirements)
+    wrong = [f"{n}=={pins[n]} (要 {v})" for n, v in overrides().items() if n in pins and pins[n] != v]
+    if wrong:
+        sys.exit("❌ 安全覆盖没生效: " + ", ".join(wrong))
+
+
 def check_backend(src: Path) -> None:
     text = (src / "pyproject.toml").read_text(encoding="utf-8")
     if 'requires = ["setuptools==83.0.0", "wheel"]' not in text:
@@ -239,7 +260,8 @@ def main() -> int:
             no_binary += ["--no-binary", n]
         run([args.uv, "pip", "compile", str(wanted), "--python-platform", UV_PLATFORMS[args.target],
              "-p", PYTHON_VERSION, "--only-binary", ":all:", *no_binary, "--generate-hashes", "--no-header",
-             "--no-annotate", "-o", str(req_out), "-q"], env=env)
+             "--no-annotate", "--override", str(OVERRIDES), "-o", str(req_out), "-q"], env=env)
+        check_overrides(req_out)
         # 只有源码包的 (jieba) / 本平台要现编的 (watchdog@mac) 单独解析出版本 —— 它们都没有依赖
         src_pins: dict[str, str] = {}
         for req in source_only:

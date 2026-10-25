@@ -210,3 +210,35 @@ pin: tag v0.22.2 · commit d923a5eb (`.hermes-git-commit` / `.hermes-git-tag` / 
 - 依赖只多了 httpx2 2.12.0, 已进离线 wheelhouse; mac 两个架构的 hermes 归档跟 0.22.2 源码逐字节一致 (抽查 run_agent.py / uv.lock)。
 - state.db 列 (`display_kind` / `_compressed_summary` / `active` / `compacted` / `message_uid`) 没变, 1.1.16 的历史显示规则照用。
 - Windows: MSI 工作流按 pin 文件现打 hermes 归档, 不用另改。
+
+### 10/25 评估 0.22.3 / 0.22.4 / 0.22.5: 暂不升, 只把有漏洞的依赖单独换新 (Companion 1.1.77)
+
+结论: 三个补丁版本都先不跟。拿各版源码跑了上面同一套检查 (源码静态检查, 不执行):
+
+- `audit_hermes_compat.sh` 三版都是 67 ✓ / 0 ✗; 但 `plugin_verify._verify_patch_targets` **三版都失败** ——
+  0.22.3 起微信 (连同 Signal / QQ Bot / 元宝等) 挪成内置插件 (上游 #139843), `gateway/platforms/weixin.py`
+  变成 `plugins/platforms/weixin/adapter.py`。我们打补丁的 `WeixinAdapter` / `_api_get` / `save_weixin_account`
+  都还在, 只是换了位置; 鲶鱼插件里引用旧路径的有 13 处, 升级时要一起改, 再真机跑通微信。
+  不改就升, 插件按设计拒绝加载 (防串员工数据), 员工隔离 / 审批 / 微信全部失效。
+- 上游还开着两个回归, 正好是我们老会话的形状 (`source` 是自定义标签、`user_id/session_key/chat_id/origin_json`
+  全空; 本机 1149 个 `companion` + 7 个 `companion-migrated`): #143831 (0.22.4 起恢复报 not_found)、
+  #143839 (0.22.5 删除 / 归档报 permission_denied)。等这两个修了再升。
+- 不受影响的: Companion 调的 hermes 接口 (含 `/v1/runs/{run_id}/approval`, 仍按 `request_id` 读) 全在;
+  state.db SCHEMA_VERSION 31 → 32 但上游注明不做数据迁移, Companion 读的列没变; 压缩标记文字没变 (1.1.73 的过滤照用)。
+
+依赖换新 (不动 hermes 代码): 上游 #139963 清了一批依赖告警, 跟着员工机装的有 pyjwt 2.13.0 (严重) / urllib3 2.7.0 /
+multidict 6.7.1 / mcp + mcp-types 2.0.0。版本取 0.22.5 锁定的那个, 清单在 `src-tauri/hermes-dep-overrides.txt`:
+
+- 打包: `build_hermes_wheelhouse.py` 用 `uv pip compile --override` 盖过 0.22.2 的 uv.lock, 解析完核对覆盖确实生效。
+  mcp 必须和 mcp-types 同版本一起换。只变了这 6 个包 (另外 xlsxwriter / tzdata 的变化不带覆盖也一样, 跟这次无关)。
+- 老机器: hermes 提交号没变不会整个重装, 已装目录里还是旧清单和旧 wheel。Companion 启动时
+  (`hermes_dep_overrides.rs`) 发现已装清单低于覆盖版本, 就从安装包的 hermes 归档里只解出新清单 + wheel 换进去;
+  运行环境里装的版本低于覆盖版本, 按缺包离线补装 (`hermes_runtime_deps.rs`), 然后重启网关。
+- 验证 (隔离环境, hermes 0.22.2 源码 + 新依赖, 对照组是旧依赖):
+  · hermes 里 mcp / jwt / 控制台登录 / OAuth 相关测试 184 个文件 ~1900 条: 只多出 2 条失败, 都在
+    `test_mcp_oauth_manager.py`, 是测试假对象跟不上新版 mcp (上游 0.22.5 只给测试补了 `resp.next_request = None`,
+    `tools/mcp_oauth_manager.py` 一字没改); 换上上游那份测试, 新旧依赖都 27/27 过。
+  · 工具桥 1468 条测试新旧结果一致; 起真的 MCP 服务用新版 mcp 客户端握手, 83 个工具都列得出来。
+  · `uv pip check` 会报 hermes 要求 `pyjwt==2.13.0` —— hermes 只在自己新建环境的那一刻跑这个检查
+    (`pm/environment.py` 的 `check()`), 不回头查在用的环境, 不会因此拒绝或回滚。
+- 以后升 hermes 本体: 新版锁定的版本 >= 覆盖清单里的, 就把那一行删掉。

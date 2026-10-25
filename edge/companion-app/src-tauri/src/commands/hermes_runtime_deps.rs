@@ -16,10 +16,14 @@
 //! 每次启动 (hermes 判定健康之后) 把 hermes 可能在用的环境都查一遍: 自己的 venv + facts.json
 //! 里登记的每个环境。import 不全的, 用安装包里同一份钉版本清单离线补装 (装过的 uv 秒过)。
 //! 不删 hermes 建的环境、不改 facts.json —— 那是 hermes 自己的状态, 只保证里面东西够用。
+//!
+//! 10/25 起「够用」还包括版本: hermes-dep-overrides.txt 里那几个有漏洞的依赖, 装着的低于覆盖版本
+//! 也按缺包补装 (先从安装包把已装目录里的旧依赖清单换新, 见 hermes_dep_overrides.rs)。
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::hermes_dep_overrides;
 use super::hermes_install_artifacts::{hermes_extra_import_check, resolve_runtime_dir, RuntimeArtifacts};
 use super::hermes_install_native;
 use super::hermes_install_state::BootstrapPaths;
@@ -28,6 +32,11 @@ use crate::services::catfish_paths::hermes_venv_python;
 /// 额外包 + 网关本身要的两个 (API Server / 微信适配器靠它们; hermes 基础依赖不带)。
 fn runtime_import_check() -> String {
     format!("{}, aiohttp, cryptography", hermes_extra_import_check())
+}
+
+/// import 得了, 而且安全覆盖的那几个包不低于覆盖版本, 才算够用。
+fn runtime_check() -> String {
+    format!("{}\n{}", runtime_import_check(), hermes_dep_overrides::version_floor_check())
 }
 
 fn env_python(env: &Path) -> PathBuf {
@@ -80,7 +89,7 @@ fn runtime_pythons(paths: &BootstrapPaths) -> Vec<PathBuf> {
 fn imports_ok(python: &Path) -> bool {
     crate::services::process::background_command(python)
         .arg("-c")
-        .arg(runtime_import_check())
+        .arg(runtime_check())
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -88,11 +97,18 @@ fn imports_ok(python: &Path) -> bool {
 
 /// 查一遍, 缺了就补。返回补装过的环境数 (调用方据此决定要不要重启网关)。失败只 warn。
 pub(crate) fn ensure_runtime_deps(resource_dir: &Path, paths: &BootstrapPaths) -> usize {
+    let artifacts = resolve_runtime_dir(resource_dir).map(RuntimeArtifacts::from_dir);
+    // 先把已装目录里的离线依赖换成安装包里的 —— 下面的补装读的是已装目录那份
+    if let Ok(a) = &artifacts {
+        if let Err(e) = hermes_dep_overrides::refresh_offline_deps_if_stale(a, paths) {
+            log::error!("[hermes-deps] 离线依赖换新失败, 有漏洞的旧版本还在用: {e:#}");
+        }
+    }
     let missing: Vec<PathBuf> = runtime_pythons(paths).into_iter().filter(|p| !imports_ok(p)).collect();
     if missing.is_empty() {
         return 0;
     }
-    let artifacts = match resolve_runtime_dir(resource_dir).map(RuntimeArtifacts::from_dir) {
+    let artifacts = match artifacts {
         Ok(a) => a,
         Err(e) => {
             log::warn!("[hermes-deps] {} 个环境缺包, 但找不到安装包里的离线依赖: {e:#}", missing.len());
@@ -103,7 +119,7 @@ pub(crate) fn ensure_runtime_deps(resource_dir: &Path, paths: &BootstrapPaths) -
     let mut fixed = 0;
     for python in missing {
         log::warn!(
-            "[hermes-deps] {} 缺鲶鱼要的包 (分词/浏览器/文件解析/网关) —— 离线补装, 不重装 hermes",
+            "[hermes-deps] {} 缺鲶鱼要的包 (分词/浏览器/文件解析/网关) 或依赖版本低于安全要求 —— 离线补装, 不重装 hermes",
             python.display()
         );
         let result = if python == primary {
@@ -117,7 +133,7 @@ pub(crate) fn ensure_runtime_deps(resource_dir: &Path, paths: &BootstrapPaths) -
                 log::info!("[hermes-deps] 补装完成: {}", python.display());
                 fixed += 1;
             }
-            Ok(()) => log::warn!("[hermes-deps] 补装后仍有包 import 不了: {}", python.display()),
+            Ok(()) => log::warn!("[hermes-deps] 补装后仍有包 import 不了或版本不够: {}", python.display()),
             Err(e) => log::warn!("[hermes-deps] 补装失败 {}: {e:#}", python.display()),
         }
     }
@@ -166,6 +182,13 @@ mod tests {
         let _env = crate::util::test_env::env_lock();
         let paths = BootstrapPaths::new(tmp.path().to_path_buf());
         assert_eq!(runtime_pythons(&paths), vec![hermes_venv_python(&paths.install_dir)]);
+    }
+
+    #[test]
+    fn 检查含安全覆盖的版本下限() {
+        let check = runtime_check();
+        assert!(check.starts_with(&runtime_import_check()), "{check}");
+        assert!(check.contains("\"pyjwt\""), "{check}");
     }
 
     #[test]

@@ -1,0 +1,22 @@
+# hermes 上游锁定版本里有已知安全漏洞、但我们还不升 hermes 本体时, 在这里单独把依赖换新 (10/25)。
+#
+# 为什么: hermes 0.22.3~0.22.5 修了一批依赖漏洞 (上游 #139963, PyJWT 标「严重」), 但这几版
+# 把微信挪出了核心 (鲶鱼插件的补丁锚点对不上), 还有会话恢复的回归没修 (#143831 / #143839),
+# 暂时不升 (docs/HERMES-022-UPGRADE-ASSESSMENT.md)。依赖单独换新, hermes 代码不动。
+#
+# 谁读它:
+#   · 打包 (scripts/build_hermes_wheelhouse.py): `uv pip compile --override`, 盖过上游 uv.lock 的版本
+#   · Companion 启动自检 (hermes_runtime_deps.rs, include_str!): 已装环境里这些包低于这里的版本
+#     → 用安装包里的离线 wheel 补装。老机器 hermes 提交号没变, 不会整个重装, 全靠这一步换新
+#
+# 每行一个 `包名==版本`。版本取上游后续补丁版本锁定的那个 (经过它们的测试)。
+# 升 hermes 本体时: 新版锁定的版本已经 >= 这里的, 就把这一行删掉。
+
+pyjwt==2.15.1
+urllib3==2.8.0
+multidict==6.9.1
+mcp==2.3.0
+# mcp 要求配套的 mcp-types 同版本 (上游锁文件里两个一起变)
+mcp-types==2.3.0
+# 上游锁文件里有, 我们装的那套依赖里没有 (覆盖不会生效); 留着是为了将来真装进来时也是修过的版本
+tornado==6.5.10
