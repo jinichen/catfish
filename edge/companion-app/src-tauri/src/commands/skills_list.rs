@@ -252,6 +252,10 @@ fn scan_skills_root_filtered_full(
     let Ok(entries) = std::fs::read_dir(root) else {
         return result;
     };
+    // 10/25: 直接放在根目录下、没有分类目录的技能 (<root>/<skill>/SKILL.md)。hermes 认
+    // (skills_list 递归找 SKILL.md), 这里原来只认 <root>/<分类>/<skill>/SKILL.md 两层,
+    // 于是 huashu-motion、hyperframes 全家、员工自己的 zizhi-* 等 30 来个技能在技能库里看不到。
+    let mut top_level = Vec::new();
 
     for ns_entry in entries.flatten() {
         let ns_path = ns_entry.path();
@@ -262,6 +266,15 @@ fn scan_skills_root_filtered_full(
             Some(n) if !n.starts_with('.') => n.to_string(),
             _ => continue,
         };
+        let own_manifest = ns_path.join("SKILL.md");
+        if own_manifest.exists() {
+            if filter.map(|f| f(&own_manifest)).unwrap_or(true) {
+                if let Some(entry) = parse_skill_md_with_protected(&own_manifest, is_protected) {
+                    top_level.push(entry);
+                }
+            }
+            continue; // 技能自己的目录 (bin / references …) 不是分类, 别往下找
+        }
 
         let mut skills = Vec::new();
         if let Ok(skill_iter) = std::fs::read_dir(&ns_path) {
@@ -295,8 +308,19 @@ fn scan_skills_root_filtered_full(
         }
     }
 
+    if !top_level.is_empty() {
+        top_level.sort_by(|a, b| a.name.cmp(&b.name));
+        result.push(SkillNamespace {
+            namespace: format!("{ns_prefix}{UNCATEGORIZED}"),
+            skills: top_level,
+        });
+    }
+
     result
 }
+
+/// 没有分类目录的技能归到这一组
+pub(crate) const UNCATEGORIZED: &str = "未分类";
 
 /// 兼容老 caller — 等价 scan_skills_root_filtered(root, ns_prefix, None).
 fn scan_skills_root(root: &Path, ns_prefix: &str) -> Vec<SkillNamespace> {
@@ -554,6 +578,30 @@ description: 工程审定"#,
         assert_eq!(only_engineering.len(), 1);
         assert_eq!(only_engineering[0].namespace, "🐟 catfish:department");
         assert_eq!(only_engineering[0].skills[0].name, "leadership-briefing");
+    }
+
+    #[test]
+    fn 没有分类目录的技能归未分类_软链也认() {
+        let tmp = tempfile::tempdir().unwrap();
+        _write_skill_md(&tmp.path().join("productivity").join("ocr"), "name: ocr\ndescription: 识字");
+        // 直接放在根目录 (hermes 也认), 自带的 bin / references 子目录不能被当成分类
+        let src = tempfile::tempdir().unwrap();
+        let real = src.path().join("huashu-motion");
+        _write_skill_md(&real, "name: huashu-motion\ndescription: 动画");
+        std::fs::create_dir_all(real.join("references").join("x")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, tmp.path().join("huashu-motion")).unwrap();
+        #[cfg(not(unix))]
+        _write_skill_md(&tmp.path().join("huashu-motion"), "name: huashu-motion\ndescription: 动画");
+        _write_skill_md(&tmp.path().join("zizhi"), "name: zizhi\ndescription: 资质");
+
+        let all = scan_skills_root(tmp.path(), "");
+        let names = |ns: &str| -> Vec<String> {
+            all.iter().find(|n| n.namespace == ns).map(|n| n.skills.iter().map(|s| s.name.clone()).collect()).unwrap_or_default()
+        };
+        assert_eq!(names("productivity"), vec!["ocr"]);
+        assert_eq!(names(UNCATEGORIZED), vec!["huashu-motion", "zizhi"]);
+        assert_eq!(all.len(), 2, "huashu-motion 自己的目录不算分类");
     }
 
     #[test]

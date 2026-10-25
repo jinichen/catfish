@@ -230,14 +230,17 @@ fn collect_new_skills(home: &Path) -> Vec<NewSkill> {
             Some(n) if !n.starts_with('.') => n.to_string(),
             _ => continue,
         };
-        let Ok(skill_iter) = std::fs::read_dir(&ns_path) else {
-            continue;
-        };
-        for skill_entry in skill_iter.flatten() {
-            let skill_path = skill_entry.path();
-            if !skill_path.is_dir() {
+        // 10/25: 技能也可以直接放在 skills/ 下、没有分类目录 (hermes 认; skills_list.rs 同改)
+        let skill_paths: Vec<std::path::PathBuf> = if ns_path.join("SKILL.md").is_file() {
+            vec![ns_path.clone()]
+        } else {
+            let Ok(skill_iter) = std::fs::read_dir(&ns_path) else {
                 continue;
-            }
+            };
+            skill_iter.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect()
+        };
+        let top_level = skill_paths.len() == 1 && skill_paths[0] == ns_path;
+        for skill_path in skill_paths {
             let manifest = skill_path.join("SKILL.md");
             let Ok(meta) = std::fs::metadata(&manifest) else {
                 continue;
@@ -262,7 +265,7 @@ fn collect_new_skills(home: &Path) -> Vec<NewSkill> {
                 .and_then(|text| extract_description(&text))
                 .unwrap_or_else(|| "(无 description)".into());
             out.push(NewSkill {
-                full_name: format!("{ns_name}/{skill_name}"),
+                full_name: if top_level { skill_name } else { format!("{ns_name}/{skill_name}") },
                 description,
                 modified_at: unix_to_iso(mtime),
             });
@@ -617,6 +620,29 @@ fn build_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 今天新技能_没有分类目录的也算() {
+        let _g = crate::util::test_env::env_lock();
+        let (hh, la) = (std::env::var_os("HERMES_HOME"), std::env::var_os("LOCALAPPDATA"));
+        let home = tempfile::tempdir().unwrap();
+        let skills = home.path().join("hermes-home").join("skills");
+        std::env::set_var("HERMES_HOME", home.path().join("hermes-home"));
+        std::env::remove_var("LOCALAPPDATA");
+        for d in [skills.join("productivity").join("ocr"), skills.join("huashu-motion")] {
+            std::fs::create_dir_all(d.join("references")).unwrap();
+            std::fs::write(d.join("SKILL.md"), "---\nname: x\ndescription: 新学的\n---\n").unwrap();
+        }
+        let mut names: Vec<String> = collect_new_skills(home.path()).into_iter().map(|s| s.full_name).collect();
+        names.sort();
+        for (k, v) in [("HERMES_HOME", hh), ("LOCALAPPDATA", la)] {
+            match v {
+                Some(v) => std::env::set_var(k, v),
+                None => std::env::remove_var(k),
+            }
+        }
+        assert_eq!(names, vec!["huashu-motion", "productivity/ocr"]);
+    }
 
     // ---------- extract_description ----------
 
