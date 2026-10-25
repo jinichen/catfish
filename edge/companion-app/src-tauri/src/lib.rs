@@ -614,14 +614,24 @@ pub fn run() {
                 }
             });
 
-            // 10/25 数据外发记录: 按本机设的保留期清 (以前从没调过, 攒了 42 万条)。启动一次, 之后每 6 小时
-            std::thread::spawn(|| loop {
-                match commands::transparent_log_store::gc_blocking() {
-                    Ok(n) if n > 0 => log::info!("[transparent_log] 过了保留期, 清掉 {n} 条"),
-                    Ok(_) => {}
-                    Err(e) => log::warn!("[transparent_log] 清理失败: {e}"),
+            // 10/25 数据外发记录: 按本机设的保留期清 (以前从没调过, 攒了 42 万条), 再看有没有要按新打码规则
+            // 统一脱敏的旧记录 (transparent_log_redact.rs)。启动一次、10 分钟后一次 (补上 hermes 重启前旧插件
+            // 写的), 之后每 6 小时
+            std::thread::spawn(|| {
+                for round in 0u64.. {
+                    match commands::transparent_log_store::gc_blocking() {
+                        Ok(n) if n > 0 => log::info!("[transparent_log] 过了保留期, 清掉 {n} 条"),
+                        Ok(_) => {}
+                        Err(e) => log::warn!("[transparent_log] 清理失败: {e}"),
+                    }
+                    match commands::transparent_log_redact::redact_existing_blocking() {
+                        Ok(Some(msg)) => log::warn!("[transparent_log] {msg}"),
+                        Ok(None) => {}
+                        Err(e) => log::error!("[transparent_log] 统一脱敏没做: {e}"),
+                    }
+                    let wait = if round == 0 { 600 } else { 6 * 3600 };
+                    std::thread::sleep(std::time::Duration::from_secs(wait));
                 }
-                std::thread::sleep(std::time::Duration::from_secs(6 * 3600));
             });
 
             // P3.3.52 (6/12 鸿波): decisions.jsonl pre-chain 迁移. 一次性, 不阻塞启动.

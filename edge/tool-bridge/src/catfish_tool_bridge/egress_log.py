@@ -13,7 +13,7 @@ Companion「数据外发记录」原来只记界面 fetchWithAuth 发的请求: 
     健康检查不记; GET 拉目录、配额这类不带你的内容, 不记
   · 发往第三方 (网页搜索、微信 iLink、天气 …) —— 都记
   10/25 起**存请求内容** (鸿波: 不存内容, 有争议时说不清到底发了什么), 并且做成防篡改的:
-    · 内容: 去掉密钥类字段后 zlib 压缩存 outbound_payload; 对话里超过 1KB 的单条消息 / 工具定义
+    · 内容: 去掉密钥类字段、遮住用户标识后 zlib 压缩存 outbound_payload (规则见 _redact); 对话里超过 1KB 的单条消息 / 工具定义
       按内容哈希存 outbound_blob 去重 (模型调用每次都带整段历史, 不去重一天就几百 MB)
     · 指纹链: 每行 row_hash = sha256(上一行 row_hash + 本行字段 + 内容哈希), 改 / 删中间任何一行,
       后面全对不上; Companion 每天把链头指纹报给中央 (只报指纹不报内容), 截掉末尾也查得出
@@ -51,7 +51,7 @@ _CONTENT_METHODS = {"POST", "PUT", "PATCH"}
 #: 中央端带内容但不算「你的内容」的: 登录、续 token、健康检查
 _SKIP_PATHS = ("/token", "/oauth", "/authorize", "/userinfo", "/healthz", "/health", "/.well-known/")
 # 第三方的纯拉取轮询 (不带员工内容, 微信长轮询每 ~18 秒一次, 一天近 5000 条) —— 跟「拉取/心跳不记」同一条
-_THIRD_PARTY_POLL_PATHS = ("/getupdates",)
+_THIRD_PARTY_POLL_PATHS = ("/getupdates", "/sendtyping")
 #: catfish_source 标签 → 页面上看到的用途 (前缀匹配, 长的优先)
 _SOURCE_PURPOSE = {
     "plugin:memory-wiki-ground": "知识卡核对",
@@ -100,7 +100,7 @@ _HOST_PURPOSE = (
     ("npmjs.org", "安装依赖"),
     ("github.com", "下载"),
 )
-_SECRET_KEY_RE = re.compile(r"(key|token|secret|password|auth|sig)", re.IGNORECASE)
+_SECRET_KEY_RE = re.compile(r"(key|token|ticket|session|secret|password|auth|sig)", re.IGNORECASE)
 
 
 def _home() -> Path:
@@ -264,10 +264,13 @@ CREATE TABLE IF NOT EXISTS outbound_meta (key TEXT PRIMARY KEY, value TEXT NOT N
 """
 GENESIS = "GENESIS"
 #: JSON 里这些键的字符串值存之前换成 *** (跟 Companion transparent_log_store.rs 同一份)
-_SECRET_JSON_KEYS = frozenset({
-    "api_key", "apikey", "api-key", "access_key", "secret", "secret_key", "client_secret", "password",
-    "passwd", "token", "access_token", "refresh_token", "id_token", "authorization", "private_key",
-})
+# 字段名里带这些就整个值打码 (10/25 第二次: 原来只认 15 个固定字段名, 微信 iLink 的 typing_ticket /
+# context_token 这类会话票据原样存了下来)。原来那 15 个都含在里面。
+_SECRET_KEY_PARTS = ("token", "ticket", "session", "secret", "password", "passwd", "api_key", "apikey",
+                     "api-key", "access_key", "private_key", "authorization")
+# 字段名以 user_id 结尾 (ilink_user_id / from_user_id / to_user_id …) 是能对应到具体某个人的标识:
+# 留前后各 4 位 (审计时分得清发给了哪个联系人, 看不到完整标识), @ 后面的域名留着。
+_ID_KEEP = 4
 _BLOB_MIN = 1024              # 对话里超过这么大的单条消息 / 工具定义单独存、去重
 _MAX_TEXT = 5 * 1024 * 1024   # 非 JSON 的文本请求体最多存这么多
 _MAX_QUEUED_BODY = 64 * 1024 * 1024  # 比这还大的请求体不进队列, 只记大小和哈希
@@ -281,10 +284,27 @@ def _canon(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
+def mask_id(v: str) -> str:
+    """o9cq807yh8QQuk8jp4IEWb_900RE@im.wechat → o9cq…00RE@im.wechat。再遮一次结果不变。"""
+    local, at, domain = v.partition("@")
+    if "…" in local or local == "***":
+        return v  # 已经遮过
+    masked = f"{local[:_ID_KEEP]}…{local[-_ID_KEEP:]}" if len(local) > 3 * _ID_KEEP else "***"
+    return masked + at + domain
+
+
 def _redact(obj):
     if isinstance(obj, dict):
-        return {k: ("***" if isinstance(v, str) and str(k).lower() in _SECRET_JSON_KEYS else _redact(v))
-                for k, v in obj.items()}
+        out = {}
+        for k, v in obj.items():
+            key = str(k).lower()
+            if isinstance(v, str) and any(p in key for p in _SECRET_KEY_PARTS):
+                out[k] = "***"
+            elif isinstance(v, str) and key.endswith("user_id"):
+                out[k] = mask_id(v)
+            else:
+                out[k] = _redact(v)
+        return out
     if isinstance(obj, list):
         return [_redact(v) for v in obj]
     return obj

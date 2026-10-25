@@ -239,6 +239,8 @@ export interface TransparentLogVerifyReport {
   problems: string[];
   anchorsChecked: number;
   anchorsBad: number;
+  /** 做过的统一脱敏 (打码规则变严后旧记录重新打码、重算指纹), 一条一句 */
+  rechains: string[];
 }
 export const transparentLogVerify = (anchors?: EgressAnchor[]) =>
   rawInvoke<TransparentLogVerifyReport>("transparent_log_verify", { anchors });

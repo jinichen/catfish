@@ -10,7 +10,8 @@
 //! 写这张表的有三方: hermes / tool-bridge 的出口钩子 (egress_log.py), Companion 界面 (me.ts →
 //! transparent_log_record), Companion 后台 (record_internal)。三方必须一字不差:
 //!
-//! - 内容 `stored_body`: JSON 去掉密钥类字段 (SECRET_JSON_KEYS) → messages 里超 1KB 的单条消息、
+//! - 内容 `stored_body`: JSON 去掉密钥类字段、遮住用户标识 (`redact`, 10/25 第二次加了会话票据和
+//!   user_id 类字段; 旧记录由 transparent_log_redact 统一脱敏重算) → messages 里超 1KB 的单条消息、
 //!   tools 换成 `{"$blob": 哈希}` 单独存 outbound_blob (模型调用每次带整段历史, 不去重一天几百 MB)
 //!   → 排序键紧凑序列化; 文本原样; 二进制只记大小 + sha256。zlib 压缩存 outbound_payload。
 //! - 指纹 `row_hash` = sha256(上一行 row_hash + "\n" + 13 个字段用 \x1f 连), 首行接 "GENESIS",
@@ -45,10 +46,13 @@ pub(crate) const GENESIS: &str = "GENESIS";
 pub(crate) const DEFAULT_RETENTION_DAYS: i64 = 90;
 const BLOB_MIN: usize = 1024;
 const MAX_TEXT: usize = 5 * 1024 * 1024;
-const SECRET_JSON_KEYS: &[&str] = &[
-    "api_key", "apikey", "api-key", "access_key", "secret", "secret_key", "client_secret", "password",
-    "passwd", "token", "access_token", "refresh_token", "id_token", "authorization", "private_key",
+/// 字段名里带这些就整个值打码 (跟 egress_log.py `_SECRET_KEY_PARTS` 一字不差)。
+const SECRET_KEY_PARTS: &[&str] = &[
+    "token", "ticket", "session", "secret", "password", "passwd", "api_key", "apikey", "api-key", "access_key",
+    "private_key", "authorization",
 ];
+/// 用户标识留前后几位 (egress_log.py `_ID_KEEP`)
+const ID_KEEP: usize = 4;
 
 pub(crate) fn ensure(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
@@ -66,26 +70,26 @@ pub(crate) fn ensure(conn: &Connection) -> Result<(), String> {
             let _ = conn.execute(&format!("ALTER TABLE outbound_log ADD COLUMN {col} TEXT"), []);
         }
     }
-    Ok(())
+    super::transparent_log_redact::ensure_tables(conn)
 }
 
-fn sha_hex(b: &[u8]) -> String {
+pub(crate) fn sha_hex(b: &[u8]) -> String {
     hex::encode(Sha256::digest(b))
 }
 
-fn zip(s: &str) -> Vec<u8> {
+pub(crate) fn zip(s: &str) -> Vec<u8> {
     let mut enc = ZlibEncoder::new(Vec::new(), Compression::default());
     let _ = enc.write_all(s.as_bytes());
     enc.finish().unwrap_or_default()
 }
 
-fn unzip(b: &[u8]) -> Option<String> {
+pub(crate) fn unzip(b: &[u8]) -> Option<String> {
     let mut out = String::new();
     ZlibDecoder::new(b).read_to_string(&mut out).ok()?;
     Some(out)
 }
 
-fn sort_keys(v: &mut Value) {
+pub(crate) fn sort_keys(v: &mut Value) {
     match v {
         Value::Object(m) => {
             m.sort_keys();
@@ -96,14 +100,38 @@ fn sort_keys(v: &mut Value) {
     }
 }
 
-fn redact(v: &mut Value) {
+/// o9cq807yh8QQuk8jp4IEWb_900RE@im.wechat → o9cq…00RE@im.wechat (egress_log.py `mask_id`)。再遮一次不变。
+pub(crate) fn mask_id(v: &str) -> String {
+    let (local, domain) = match v.find('@') {
+        Some(i) => (&v[..i], &v[i..]),
+        None => (v, ""),
+    };
+    if local.contains('…') || local == "***" {
+        return v.to_string();
+    }
+    let chars: Vec<char> = local.chars().collect();
+    let masked = if chars.len() > 3 * ID_KEEP {
+        let head: String = chars[..ID_KEEP].iter().collect();
+        let tail: String = chars[chars.len() - ID_KEEP..].iter().collect();
+        format!("{head}…{tail}")
+    } else {
+        "***".to_string()
+    };
+    format!("{masked}{domain}")
+}
+
+/// 字段名带密钥 / 票据字样的打码, 以 user_id 结尾的遮成前后几位 (egress_log.py `_redact`)。
+pub(crate) fn redact(v: &mut Value) {
     match v {
         Value::Object(m) => {
             for (k, val) in m.iter_mut() {
-                if val.is_string() && SECRET_JSON_KEYS.contains(&k.to_lowercase().as_str()) {
-                    *val = Value::String("***".into());
-                } else {
-                    redact(val);
+                let key = k.to_lowercase();
+                match val {
+                    Value::String(_) if SECRET_KEY_PARTS.iter().any(|p| key.contains(p)) => {
+                        *val = Value::String("***".into());
+                    }
+                    Value::String(s) if key.ends_with("user_id") => *s = mask_id(s),
+                    _ => redact(val),
                 }
             }
         }
@@ -187,14 +215,14 @@ pub(crate) fn row_hash(prev: &str, r: &ChainRow) -> String {
     sha_hex(format!("{prev}\n{}", parts.join("\x1f")).as_bytes())
 }
 
-fn meta_get(conn: &Connection, key: &str) -> Option<String> {
+pub(crate) fn meta_get(conn: &Connection, key: &str) -> Option<String> {
     conn.query_row("SELECT value FROM outbound_meta WHERE key = ?1", [key], |r| r.get(0))
         .optional()
         .ok()
         .flatten()
 }
 
-fn meta_set(conn: &Connection, key: &str, value: &str) -> Result<(), String> {
+pub(crate) fn meta_set(conn: &Connection, key: &str, value: &str) -> Result<(), String> {
     conn.execute(
         "INSERT INTO outbound_meta (key, value) VALUES (?1, ?2)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -335,7 +363,7 @@ pub(crate) fn payload_blocking(id: i64) -> Result<PayloadView, String> {
 
 // ── 校验 ───────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Anchor {
     pub last_id: i64,
@@ -355,6 +383,8 @@ pub struct VerifyReport {
     pub problems: Vec<String>,
     pub anchors_checked: u64,
     pub anchors_bad: u64,
+    /// 做过的统一脱敏 (哪天、为什么、重算了几条) —— 指纹重算过要说出来, 不悄悄抹掉
+    pub rechains: Vec<String>,
 }
 
 fn problem(rep: &mut VerifyReport, id: Option<i64>, msg: String) {
@@ -379,7 +409,7 @@ fn blob_refs(v: &Value, out: &mut Vec<String>) {
 }
 
 pub(crate) fn verify_with(conn: &Connection, anchors: &[Anchor]) -> Result<VerifyReport, String> {
-    let mut rep = VerifyReport { ok: true, ..Default::default() };
+    let mut rep = VerifyReport { ok: true, rechains: super::transparent_log_redact::rechain_notes(conn), ..Default::default() };
     // blob 先各验一遍
     let mut good_blobs: HashSet<String> = HashSet::new();
     {
@@ -468,8 +498,12 @@ pub(crate) fn verify_with(conn: &Connection, anchors: &[Anchor]) -> Result<Verif
             .map(|t| t.with_timezone(&chrono::Utc) < cutoff)
             .unwrap_or(false);
         rep.anchors_checked += 1;
-        let bad = match hashes.get(&a.last_id) {
-            Some(h) => (*h != a.last_hash).then(|| format!("{} 报给中央的第 {} 条, 本机的指纹不一样了", day(&a.received_at), a.last_id)),
+        // 统一脱敏之前报的锚点, 跟当时的指纹 (重算前留存的那份) 比
+        let at_report = hashes
+            .get(&a.last_id)
+            .map(|h| super::transparent_log_redact::hash_when_anchored(conn, a.last_id, &a.received_at).unwrap_or_else(|| h.clone()));
+        let bad = match at_report {
+            Some(h) => (h != a.last_hash).then(|| format!("{} 报给中央的第 {} 条, 本机的指纹不一样了", day(&a.received_at), a.last_id)),
             None if a.last_id > max_id => Some(format!("{} 时已经有 {} 条, 现在本机只剩到第 {} 条 —— 末尾被删过", day(&a.received_at), a.last_id, max_id)),
             None if a.last_id < min_id && past_retention => None, // 过了保留期, 正常清理
             None => Some(format!("{} 报给中央的第 {} 条, 还没到保留期就不见了", day(&a.received_at), a.last_id)),

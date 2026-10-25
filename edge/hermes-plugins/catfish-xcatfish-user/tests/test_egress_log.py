@@ -40,6 +40,7 @@ def test_记录标准():
     assert e.classify("GET", "https://wttr.in/Fuzhou", 0) == "third_party"             # 第三方都记
     assert e.classify("POST", "https://api.parallel.ai/v1/search", 50) == "third_party"
     assert e.classify("POST", "https://ilinkai.weixin.qq.com/ilink/bot/getupdates", 166) is None  # 轮询拉取不记
+    assert e.classify("POST", "https://ilinkai.weixin.qq.com/ilink/bot/sendtyping", 600) is None  # 「正在输入」状态, 不带员工内容
     assert e.classify("POST", "https://ilinkai.weixin.qq.com/ilink/bot/sendmessage", 300) == "third_party"
 
 
@@ -154,6 +155,20 @@ def test_指纹算法_跟Rust同一个测试向量():
 
 
 ROW_HASH_VECTOR = "1a5e312e9f1f07a8ad5bbf86ac8aa5de5dd594987343375a23bdb33e34fe8fe7"
+
+
+def test_打码规则_跟Rust同一个测试向量():
+    """10/25 第二次: 会话票据 (typing_ticket / context_token / session_id …) 打码, user_id 类只留前后几位。
+    transparent_log_redact_tests.rs 钉的是同一份输入、同一个输出。"""
+    body = ('{"ilink_user_id":"o9cq807yh8QQuk8jp4IEWb_900RE@im.wechat","typing_ticket":"AAR=","msg":{"context_token":"c1",'
+            '"to_user_id":"wxid_abcdefghijkl1234","text":"你好"},"session_id":"s","max_tokens":5,"user_id":"short",'
+            '"Authorization":"Bearer x"}')
+    stored, _ = e.stored_body(body.encode())
+    assert stored == ('{"Authorization":"***","ilink_user_id":"o9cq…00RE@im.wechat","max_tokens":5,"msg":{"context_token":"***",'
+                      '"text":"你好","to_user_id":"wxid…1234"},"session_id":"***","typing_ticket":"***","user_id":"***"}')
+    assert e.mask_id("o9cq…00RE@im.wechat") == "o9cq…00RE@im.wechat", "再遮一次不变"
+    url = e.clean_url("https://x.example/a?ticket=t1&session=s1&q=1")
+    assert "t1" not in url and "s1" not in url and "q=1" in url
 
 
 def test_hermes目录_Windows在LOCALAPPDATA(monkeypatch, tmp_path):

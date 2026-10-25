@@ -198,6 +198,9 @@ export function IntegrityPanel() {
             <div key={i}>· {p}</div>
           ))}
           {report.unchained > 0 && <div style={muted}>另有 {report.unchained} 条是升级前记的, 没有指纹</div>}
+          {report.rechains?.map((r, i) => (
+            <div key={`rechain-${i}`} style={muted}>· {r}</div>
+          ))}
           {report.anchorNote && <div style={muted}>{report.anchorNote}</div>}
         </div>
       )}
