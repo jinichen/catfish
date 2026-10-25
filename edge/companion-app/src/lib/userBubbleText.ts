@@ -43,7 +43,14 @@ const COMPACTION_HEAD = /^\[(?:CONTEXT COMPACTION|PRIOR CONTEXT — for referenc
 const COMPACTION_LABEL = "小鲶把前面的对话整理成了摘要";
 // 压缩后没有员工的话可接时, hermes 自己补的一条「用户消息」(COMPRESSION_CONTINUATION_USER_CONTENT
 // 和它的老版本)。一个字的信息都没有, 整条不显示 (10/25 鸿波截图: 被当成员工的气泡显示了)
+const COMPACTION_PLACEHOLDER_HEAD = "Continue from the compressed conversation context above.";
 const COMPACTION_PLACEHOLDER = /^Continue from the compressed conversation context above\. This marker exists because /;
+
+// 1.1.73 之前的主动提醒 (lib/triggers.ts 本地模板) 把压缩摘要 / 占位当成员工的话引用了出来:
+// 「640 分钟没动静了。你刚说"[CONTEXT COMPACTION — REFERENCE ONLY] Ea...", 现在还在弄吗?」。
+// 这些已经作为小鲶的消息存进了历史, 新代码不会再生成, 但老的还在 (10/25 本机 3 条)。
+// 整条是被误触发的 —— 员工根本没在弄什么 —— 所以整条不显示。只认模板原样 + 引号里是内部标记。
+const STALE_NUDGE = /^(?:\d+ 分钟没动静了。你刚说|回来啦, \d+ 分钟没见。刚才你说)"([\s\S]*?)", (?:现在还在弄吗|还在等我跟进吗)/;
 
 // 整条是系统消息: [开头, 给员工看的一句话]。label 里的 {skill} 用技能名替换。
 const SYSTEM_WHOLE: Array<[RegExp, string]> = [
@@ -152,11 +159,22 @@ export function internalMessage(
   const content = msg.content ?? "";
   if (COMPACTION_PLACEHOLDER.test(content)) return { hidden: true };
   if (msg.role === "assistant" && COMPACTION_HEAD.test(content)) return { hidden: false, label: COMPACTION_LABEL };
+  if (msg.role === "assistant" && quotesInternalMessage(content)) return { hidden: true };
   if (msg.role === "user") {
     const system = splitUserBubbleText(content).system;
     if (system) return { hidden: false, label: system };
   }
   return null;
+}
+
+/** 主动提醒引用的「员工的话」其实是内部消息 (见 STALE_NUDGE)。引用被截到 40 字, 只能按开头认 */
+function quotesInternalMessage(content: string): boolean {
+  const m = STALE_NUDGE.exec(content);
+  if (!m) return false;
+  const quoted = m[1].replace(/\.\.\.$/, "");
+  const head = COMPACTION_PLACEHOLDER_HEAD;
+  const placeholder = quoted.length >= 20 && (head.startsWith(quoted) || quoted.startsWith(head));
+  return placeholder || internalMessage({ role: "user", content: quoted }) !== null;
 }
 
 /** 员工自己写的话 (气泡里显示的那段); 不是员工的消息 (小鲶回的 / hermes 内部消息) 返 null */

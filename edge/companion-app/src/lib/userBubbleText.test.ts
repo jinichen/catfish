@@ -239,3 +239,28 @@ describe("internalMessage · hermes 压缩标记", () => {
     expect(employeeWords({ role: "assistant", content: "好的" })).toBeNull();
   });
 });
+
+/** 10/25 鸿波装了 1.1.73 「还是一样的」: 1.1.73 之前生成、已经存进历史的催问还在显示 */
+describe("internalMessage · 引用了内部标记的老催问", () => {
+  it("沉默 / 切回两种模板, 引号里是压缩摘要或占位 → 整条不显示", () => {
+    for (const content of [
+      '640 分钟没动静了。你刚说"[CONTEXT COMPACTION — REFERENCE ONLY] Ea...", 现在还在弄吗? 卡哪我帮看看.',
+      '回来啦, 129 分钟没见。刚才你说"[CONTEXT COMPACTION — REFERENCE ONLY] Ea", 还在等我跟进吗?',
+      '30 分钟没动静了。你刚说"Continue from the compressed conversati...", 现在还在弄吗? 卡哪我帮看看.',
+      '回来啦, 45 分钟没见。刚才你说"[PRIOR CONTEXT — for reference only; not", 还在等我跟进吗?',
+    ]) {
+      expect(internalMessage({ role: "assistant", content })).toEqual({ hidden: true });
+    }
+  });
+
+  it("引用员工真话的催问照常显示; 不是模板的不认", () => {
+    expect(
+      internalMessage({ role: "assistant", content: '640 分钟没动静了。你刚说"我去弄一下申报材料", 现在还在弄吗? 卡哪我帮看看.' }),
+    ).toBeNull();
+    expect(internalMessage({ role: "assistant", content: '你刚说"[CONTEXT COMPACTION — REFERENCE ONLY]" 是 hermes 的压缩标记' })).toBeNull();
+    // 员工的消息长这样不归这条管
+    expect(
+      internalMessage({ role: "user", content: '回来啦, 129 分钟没见。刚才你说"[CONTEXT COMPACTION — REFERENCE ONLY] Ea", 还在等我跟进吗?' }),
+    ).toBeNull();
+  });
+});
