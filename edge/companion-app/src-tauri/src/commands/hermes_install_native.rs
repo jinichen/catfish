@@ -207,9 +207,12 @@ pub(crate) fn install_python_deps(artifacts: &RuntimeArtifacts, paths: &Bootstra
         .arg(dir);
     run(project, "安装 Hermes 本体")?;
     let mut check = crate::services::process::background_command(&venv_python);
+    // 额外包要先查、hermes 最后 import (10/25): hermes 有另建的运行环境时, `import hermes_cli.main`
+    // 会把 sys.path 换到那个环境 (installs/<id>/environments/…), 之后的 import 查的就不是这里了
+    // —— 那个环境还没补装时, 这里明明装好了也报缺 (10/25 本机: 刚装好的 tzdata 报 ModuleNotFound)。
     check
         .arg("-c")
-        .arg(format!("import hermes_cli.main; {}", super::hermes_install_artifacts::hermes_extra_import_check()));
+        .arg(format!("{}; import hermes_cli.main", super::hermes_install_artifacts::hermes_extra_import_check()));
     run(check, "验证 Hermes 和额外依赖可导入")
 }
 

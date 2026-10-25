@@ -52,6 +52,16 @@ fn hermes_extra_entries() -> impl Iterator<Item = (&'static str, &'static str)> 
         })
 }
 
+/// 额外包的 pip 包名 (去掉版本条件), 小写、`_` `.` 换成 `-` —— 跟依赖清单里的写法对得上。
+pub(crate) fn hermes_extra_package_names() -> Vec<String> {
+    hermes_extra_entries()
+        .map(|(req, _)| {
+            let name = req.split(|c: char| "<>=!~;[ ".contains(c)).next().unwrap_or(req);
+            name.to_ascii_lowercase().replace(['_', '.'], "-")
+        })
+        .collect()
+}
+
 /// 装没装的判据: import 得了才算。playwright 要 sync_api (装了一半时顶层能 import)。
 pub(crate) fn hermes_extra_import_check() -> String {
     let modules: Vec<&str> = hermes_extra_entries().map(|(_, module)| module).collect();

@@ -18,7 +18,8 @@
 //! 不删 hermes 建的环境、不改 facts.json —— 那是 hermes 自己的状态, 只保证里面东西够用。
 //!
 //! 10/25 起「够用」还包括版本: hermes-dep-overrides.txt 里那几个有漏洞的依赖, 装着的低于覆盖版本
-//! 也按缺包补装 (先从安装包把已装目录里的旧依赖清单换新, 见 hermes_dep_overrides.rs)。
+//! 也按缺包补装 (先从安装包把已装目录里的旧依赖清单换新, 见 hermes_dep_overrides.rs; 额外包清单后加的包
+//! 也是这一步才到得了老机器)。
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -100,7 +101,7 @@ pub(crate) fn ensure_runtime_deps(resource_dir: &Path, paths: &BootstrapPaths) -
     let artifacts = resolve_runtime_dir(resource_dir).map(RuntimeArtifacts::from_dir);
     // 先把已装目录里的离线依赖换成安装包里的 —— 下面的补装读的是已装目录那份
     if let Ok(a) = &artifacts {
-        if let Err(e) = hermes_dep_overrides::refresh_offline_deps_if_stale(a, paths) {
+        if let Err(e) = hermes_dep_overrides::refresh_offline_deps_if_outdated(a, paths) {
             log::error!("[hermes-deps] 离线依赖换新失败, 有漏洞的旧版本还在用: {e:#}");
         }
     }
