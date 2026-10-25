@@ -48,6 +48,7 @@ import type { Attachment, ChatMessage } from "../../../types/chat";
 // P3.3.20 (6/11): 复用工作台 chat input 附件三件套 — helpers / chip / thumb
 //   都独立于 useChat / useChatStore, 不耦合 ChatInput.tsx ~600 行那套.
 import {
+  attachErrorText,
   fileToAttachment,
   MAX_ATTACHMENTS,
   SUPPORTED_AUDIO_EXTS,
@@ -360,7 +361,7 @@ export function DetailPane({
       const errs: string[] = [];
       results.forEach((r, i) => {
         if (r.status === "fulfilled") ok.push(r.value);
-        else errs.push(`${accept[i].name}: ${String(r.reason).slice(0, 80)}`);
+        else errs.push(`${accept[i].name}: ${(r.reason as { name?: string })?.name === "NotReadableError" ? attachErrorText(r.reason) : String(r.reason).slice(0, 80)}`);
       });
       if (ok.length > 0) setAttachments((prev) => [...prev, ...ok]);
       if (errs.length > 0) setAttachError(errs.join(" · "));

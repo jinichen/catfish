@@ -42,6 +42,7 @@ interface Props {
 // P3.5.177 (7/6): ingestAttachmentSourceFireForget 严格 kill (员工 send 时不自动
 // 入库). helper 严格保留在 attachmentHelpers.ts 备用 (若 future 需 fallback).
 import {
+  attachErrorText,
   fileToAttachment,
   MAX_ATTACHMENTS,
   SUPPORTED_AUDIO_EXTS,
@@ -211,7 +212,7 @@ export default function ChatInput({
         } catch (e) {
           // 10/2: 原来一个文件出错就 return, 一叠 30 张发票里一张格式不对, 另外 29 张也全丢。
           // 现在跳过坏的, 其余照加, 最后统一说哪几个没加上。
-          failed.push(`${f.name}: ${(e as Error).message || String(e)}`);
+          failed.push(`${f.name}: ${attachErrorText(e)}`);
         }
       }
       setAttachments((cur) => [...cur, ...next]);

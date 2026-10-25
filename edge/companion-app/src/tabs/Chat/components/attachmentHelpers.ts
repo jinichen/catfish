@@ -6,6 +6,8 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { currentEmailPlatform, type EmailPlatform } from "../../../lib/emailPlatformHints";
+import { isMacPlatform } from "../../../lib/platformLabels";
 
 import { IMAGE_WIRE_MAX_BYTES, shrinkImage } from "../../../lib/imageShrink";
 import { blobToBase64, MAX_UPLOAD_BYTES, stageFile, tooLargeMessage } from "../../../lib/uploadStage";
@@ -61,6 +63,23 @@ export function classifyFile(file: File): "image" | "file" | "audio" {
 
 /** File → Attachment. 图片走 base64; 文档走 Tauri parse_file → text;
  *  音频走 transcribe_audio_from_b64 → 转录文字当 previewText (BL-VOICE3 5/10). */
+/** 加附件失败时给员工看的那句话 (10/25)。
+ *
+ *  浏览器读不到文件内容时报 NotReadableError「The I/O read operation failed.」—— 员工看不懂。
+ *  10/25 鸿波撞到的: 从微信直接拖进来的 PDF 放在微信自己的沙盒 (~/Library/Containers/com.tencent.xinWeChat/…),
+ *  macOS 的 App 数据保护不让 Companion 读 (界面和后台都读不到, 也不弹授权框); 给 Companion 开了
+ *  「完全磁盘访问权限」后就能读。所以 mac 上直接告诉员工这两个办法; 别的系统多半是文件被占用或已删除。 */
+export function attachErrorText(e: unknown, platform: EmailPlatform = currentEmailPlatform()): string {
+  const name = (e as { name?: string } | null)?.name;
+  if (name === "NotReadableError") {
+    return isMacPlatform(platform)
+      ? "读不到文件内容 —— 多半是从微信等 App 里直接拖进来的, macOS 不让 Companion 读别的 App 里的文件。" +
+          "先在那个 App 里「另存为」到下载文件夹再拖; 或者在 系统设置 › 隐私与安全性 › 完全磁盘访问权限 里打开 Catfish Companion, 重启 Companion 后再拖"
+      : "读不到文件内容 —— 文件可能正被别的程序占用, 或已被移走 / 删除。先另存到本地文件夹再拖";
+  }
+  return (e as Error)?.message || String(e);
+}
+
 export async function fileToAttachment(file: File): Promise<Attachment> {
   const kind = classifyFile(file);
 
