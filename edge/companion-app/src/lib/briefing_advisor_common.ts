@@ -236,3 +236,41 @@ export type AdvisorFetchResult = AdvisorResult | null | typeof ADVISOR_TIMEOUT;
 // 8/10: 数值搬 timeouts.ts (单一来源)。上面那段演变史留着 —— 60→180→300→600
 // 每一步都有实测依据, 是这个数为什么这么大的全部理由。
 export const CLIENT_TIMEOUT_MS = LLM_RACE_TIMEOUT_MS;
+
+// ─── 10/27: 每个级别早安页先列几件 ────────────────────────────────
+//
+// 原来上限只写在给模型的话里, 超出的事模型直接不返回 —— 员工今天有 12 件事, 早安页
+// 只列 8 件, 剩下 4 件哪儿都看不到; 排第 7-10 名的几件每次刷新还可能换。
+// 现在模型把超出的也交回来 (moreTasks, 跟在 mainTasks 后面), 界面先列这么多件,
+// 其余折叠成「另外还有 N 件」。
+export const TIER_TASK_LIMIT: Record<AdvisorResult["tier"], number> = {
+  frontline: 8,
+  mid: 4,
+  senior: 2,
+};
+
+/** 超出上限的事最多再交回几件 (模型输出长度有限, 再多就该员工自己去看邮件了) */
+export const MORE_TASKS_MAX = 12;
+
+/** 按优先顺序先列 limit 件**还没办的**, 其余折叠。
+ *  已办 / 推迟的卡 (左栏打勾变灰那种) 不占名额, 留在原位。 */
+export function splitByTaskLimit<T>(
+  tasks: T[],
+  limit: number,
+  isOpen: (task: T) => boolean,
+): { shown: T[]; more: T[] } {
+  const shown: T[] = [];
+  const more: T[] = [];
+  let open = 0;
+  for (const t of tasks) {
+    if (!isOpen(t)) {
+      shown.push(t);
+    } else if (open < limit) {
+      shown.push(t);
+      open += 1;
+    } else {
+      more.push(t);
+    }
+  }
+  return { shown, more };
+}

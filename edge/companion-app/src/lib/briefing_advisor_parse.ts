@@ -37,7 +37,7 @@ import type {
   PoliticalFlag,
   SubconsciousItem,
 } from "./briefing_advisor_common";
-import { VALID_TONES } from "./briefing_advisor_common";
+import { MORE_TASKS_MAX, VALID_TONES } from "./briefing_advisor_common";
 
 
 // ─── P3.5.202 BL-ADVISOR-RESOLVED-HARDFILTER (LLM status 语义驱动) ─────
@@ -269,6 +269,29 @@ export function parseAdvisorResult(raw: unknown, mode: "strict" | "lenient" = "s
       }
     }
   }
+
+  // 10/27: 超出 tier 名额的其余事项 (moreTasks) 接在后面 —— 不要求 options, 所以在上面
+  //   的 options 校验之后再并进来。后面的来源校验 / 已关闭过滤一视同仁; 界面按 tier
+  //   先列几件, 其余折叠 (TIER_TASK_LIMIT)。同 uid / 同标题的跳过, id 统一重排 (界面按 id 选中)。
+  const rawMore = obj.more_tasks ?? obj.moreTasks;
+  if (Array.isArray(rawMore)) {
+    const seenUid = new Set(mainTasks.map((t) => t.taskUid));
+    const seenTitle = new Set(mainTasks.map((t) => t.title.trim().toLowerCase()));
+    let added = 0;
+    for (const t of rawMore) {
+      if (added >= MORE_TASKS_MAX) break;
+      if (!t || typeof t !== "object") continue;
+      const task = parseMainTask(t as Record<string, unknown>);
+      if (!task) continue;
+      const titleKey = task.title.trim().toLowerCase();
+      if (seenUid.has(task.taskUid) || seenTitle.has(titleKey)) continue;
+      seenUid.add(task.taskUid);
+      seenTitle.add(titleKey);
+      mainTasks.push(task);
+      added += 1;
+    }
+  }
+  mainTasks.forEach((t, i) => { t.id = i + 1; });
 
   // P3.5.32 Phase 10 (6/18 鸿波 OpenWiki 借鉴) — 3 维 self-aware reflection parse.
   // optional — LLM 没返 / 返空 / parse 错 → 0 item, UI 自动不渲染 (length 0 早返).

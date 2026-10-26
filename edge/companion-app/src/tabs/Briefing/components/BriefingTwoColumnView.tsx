@@ -27,6 +27,7 @@ import { useEffect, useMemo, useState } from "react";
 // effectiveStatusByUid 这个派生 map (P3.5.208-A 定的 SSOT 约定, 见下面 props
 // 上的注释)。这条依赖关系在拆分前是看不出来的。
 import { DetailPane } from "./BriefingDetailPane";
+import { splitByTaskLimit } from "../../../lib/briefing_advisor_common";
 
 import {
   type EffectiveTaskStatus,
@@ -50,6 +51,8 @@ import { useUIStore } from "../../../store/ui";
 
 interface BriefingTwoColumnViewProps {
   tasks: MainTask[];                                  // 已 filter ignored
+  /** 10/27: 先列几件还没办的 (按 tier), 其余折叠成「另外还有 N 件」。不传 = 全列 */
+  limit?: number;
   handledItems: HandledSilentlyItem[];
   // P3.5.32 Phase 10 (6/18 鸿波 OpenWiki 借鉴) — 3 维 self-aware reflection.
   // optional 默认空 array — LLM 没返时 cards 0 渲染 (length 0 早返).
@@ -80,6 +83,7 @@ const URGENCY_META: Record<UrgencyGroup, { label: string; color: string; bg: str
 
 export default function BriefingTwoColumnView({
   tasks,
+  limit,
   handledItems,
   subconscious,
   graveyard,
@@ -89,15 +93,24 @@ export default function BriefingTwoColumnView({
   wasSnoozedYesterday,
   onStatusChange,
 }: BriefingTwoColumnViewProps) {
+  // 10/27: 先按优先顺序取前 limit 件没办的, 其余折叠; 再按 urgency 分组
+  const { shown, more } = useMemo(
+    () => limit === undefined
+      ? { shown: tasks, more: [] as MainTask[] }
+      : splitByTaskLimit(tasks, limit, (t) => (effectiveStatusByUid?.get(t.taskUid) ?? "pending") === "pending"),
+    [tasks, limit, effectiveStatusByUid],
+  );
+  const [moreOpen, setMoreOpen] = useState(false);
+
   // 按 urgency 分组
   const grouped = useMemo(() => {
     const g: Record<UrgencyGroup, MainTask[]> = { high: [], medium: [], low: [] };
-    for (const t of tasks) {
+    for (const t of shown) {
       const u = (t.urgency === "high" || t.urgency === "medium") ? t.urgency : "low";
       g[u].push(t);
     }
     return g;
-  }, [tasks]);
+  }, [shown]);
 
   // P3.5.32 Phase 10 (6/18 鸿波 OpenWiki 借鉴) — reflect button → 切 Chat tab + 复制 prompt.
   // MVP: setActiveTab('chat') + clipboard 复制 prompt + alert toast.
@@ -132,6 +145,41 @@ export default function BriefingTwoColumnView({
 
   const selected = tasks.find((t) => t.id === selectedId) ?? null;
 
+  const renderRow = (t: MainTask) => {
+    // P3.5.208-A (7/9 鸿波): SSOT 读取. effectiveStatusByUid 是唯一
+    // 读取入口, 不再自己 merge. 空 map → 视为 pending (默认无徽章).
+    const effective: EffectiveTaskStatus =
+      effectiveStatusByUid?.get(t.taskUid) ?? "pending";
+    const isSelected = t.id === selectedId;
+    const u: UrgencyGroup = (t.urgency === "high" || t.urgency === "medium") ? t.urgency : "low";
+    const meta = URGENCY_META[u];
+    return (
+      <button
+        key={t.id}
+        type="button"
+        className={
+          "briefing-2col__task-row" +
+          (isSelected ? " briefing-2col__task-row--selected" : "") +
+          (effective === "resolved" ? " briefing-2col__task-row--done" : "") +
+          (effective === "paused" ? " briefing-2col__task-row--snoozed" : "")
+        }
+        style={isSelected ? { background: meta.bg, borderLeftColor: meta.color } : undefined}
+        onClick={() => setSelectedId(t.id)}
+      >
+        <div className="briefing-2col__task-title">
+          {effective === "resolved" && "✓ "}
+          {effective === "paused" && "⏰ "}
+          {t.title}
+        </div>
+        {t.reason && (
+          <div className="briefing-2col__task-subtitle">
+            {t.reason.length > 24 ? t.reason.slice(0, 24) + "…" : t.reason}
+          </div>
+        )}
+      </button>
+    );
+  };
+
   if (tasks.length === 0 && handledItems.length === 0) {
     return (
       <div className="briefing-2col__empty">
@@ -157,41 +205,25 @@ export default function BriefingTwoColumnView({
               >
                 {meta.label} · {items.length}
               </div>
-              {items.map((t) => {
-                // P3.5.208-A (7/9 鸿波): SSOT 读取. effectiveStatusByUid 是唯一
-                // 读取入口, 不再自己 merge. 空 map → 视为 pending (默认无徽章).
-                const effective: EffectiveTaskStatus =
-                  effectiveStatusByUid?.get(t.taskUid) ?? "pending";
-                const isSelected = t.id === selectedId;
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    className={
-                      "briefing-2col__task-row" +
-                      (isSelected ? " briefing-2col__task-row--selected" : "") +
-                      (effective === "resolved" ? " briefing-2col__task-row--done" : "") +
-                      (effective === "paused" ? " briefing-2col__task-row--snoozed" : "")
-                    }
-                    style={isSelected ? { background: meta.bg, borderLeftColor: meta.color } : undefined}
-                    onClick={() => setSelectedId(t.id)}
-                  >
-                    <div className="briefing-2col__task-title">
-                      {effective === "resolved" && "✓ "}
-                      {effective === "paused" && "⏰ "}
-                      {t.title}
-                    </div>
-                    {t.reason && (
-                      <div className="briefing-2col__task-subtitle">
-                        {t.reason.length > 24 ? t.reason.slice(0, 24) + "…" : t.reason}
-                      </div>
-                    )}
-                  </button>
-                );
-              })}
+              {items.map(renderRow)}
             </div>
           );
         })}
+
+        {more.length > 0 && (
+          <div style={{ marginBottom: 8 }}>
+            <button
+              type="button"
+              className="briefing-2col__group-header briefing-2col__more-toggle"
+              aria-expanded={moreOpen}
+              onClick={() => setMoreOpen((v) => !v)}
+              title="排在后面、今天不那么急的事; 点开能看"
+            >
+              {moreOpen ? "▾" : "▸"} 另外还有 {more.length} 件
+            </button>
+            {moreOpen && more.map(renderRow)}
+          </div>
+        )}
 
         {handledItems.length > 0 && (
           <div className="briefing-2col__handled">

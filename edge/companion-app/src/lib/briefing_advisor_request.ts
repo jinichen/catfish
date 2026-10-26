@@ -4,18 +4,21 @@
  * 使用不同 temperature。模型 context/max-output/供应商强制参数仍由 Gateway
  * 的中央模型配置约束。
  */
-import type { AdvisorInput } from "./briefing_advisor_common";
+import { MORE_TASKS_MAX, type AdvisorInput } from "./briefing_advisor_common";
 import { ADVISOR_JSON_SCHEMA } from "./briefing_advisor_prompts";
 import { withFactEvidence } from "./factEvidence";
 
 const ADVISOR_MAX_TOKENS = 6000;
-const AGENT_TEMPERATURE = 0.4;
+// 10/27: 0.4 → 0。同一批邮件/日程/待办, 刷新一次换一批措辞和排序, 员工以为数据变了。
+// 这一步只是核对、去重、排序, 不需要发散。
+const AGENT_TEMPERATURE = 0;
 const TRANSFORM_TEMPERATURE = 0.1;
 const TRANSFORM_TOOL_NAME = "submit_advisor_result";
 
 const TRIAGE_PROMPT = `你是早安任务整理助手。本轮只核对当前来源、去重并按紧急程度排序，不执行任何行动。
-只输出 JSON：{ "tier":"frontline|mid|senior", "mainTasks":[], "handledSilently":[] }。
-tier 使用员工档案值。frontline 最多8项，mid最多4项，senior最多2项；没有有据任务就返回空数组。
+只输出 JSON：{ "tier":"frontline|mid|senior", "mainTasks":[], "moreTasks":[], "handledSilently":[] }。
+tier 使用员工档案值。mainTasks 放最要紧的：frontline 最多8项，mid最多4项，senior最多2项；没有有据任务就返回空数组。
+超出名额、但同样有当前来源依据的其余事项不得丢弃，按紧急程度放进 moreTasks（最多12项，字段同 mainTasks，options 为空数组）；没有就返回空数组。
 每项字段：id（从1开始）、taskUid（复用已有，否则6位小写字母数字）、title、urgency（high/medium/low）、reason、contextRefs（具体来源ID与时间）、options、complianceFlags:[]、politicalFlags:[]。
 每项 reason 写这件事现在走到哪一步、卡在谁/什么、下一步和时间节点：任务带「最新进展」的必须据此写，不要只复述标题和截止时间；没有进展记录才写责任、时间和来源。不展开推理。frontline/mid 给2个简短建议选项，senior可为空。
 选项格式：{ "label":"A或B", "tone":"balanced或hold", "summary":"一句建议", "aiLean":true或false }。
@@ -45,6 +48,21 @@ type AdvisorTier = AdvisorInput["profile"]["tier"];
 
 function schemaForTier(tier: AdvisorTier): Record<string, any> {
   const schema = JSON.parse(JSON.stringify(ADVISOR_JSON_SCHEMA)) as Record<string, any>;
+  // 10/27: 超出名额的其余事项, 字段同 mainTasks, 不要求 options
+  const mainItems = schema?.properties?.mainTasks?.items;
+  if (mainItems && typeof mainItems === "object") {
+    const moreItems = JSON.parse(JSON.stringify(mainItems)) as Record<string, any>;
+    if (moreItems.properties?.options) {
+      delete moreItems.properties.options.minItems;
+      moreItems.properties.options.description = "超出名额的其余事项不给选项, 空数组";
+    }
+    schema.properties.moreTasks = {
+      type: "array",
+      description: `超出 tier 名额、但有当前来源依据的其余事项, 按紧急程度排, 最多 ${MORE_TASKS_MAX} 项`,
+      maxItems: MORE_TASKS_MAX,
+      items: moreItems,
+    };
+  }
   if (tier !== "senior") return schema;
 
   const options = schema?.properties?.mainTasks?.items?.properties?.options;
@@ -65,6 +83,7 @@ function transformSystemPrompt(tier: AdvisorTier): string {
     "不要返回自由文本，不得新增原文没有的任务、项目、人名、截止时间或理由。" +
     "原文没有具体业务事项时 mainTasks 必须为空，禁止生成等待用户输入类占位任务。" +
     "handledSilently 缺失时使用空数组；taskUid 有则复用，没有则生成 6 字符 [a-z0-9]。" +
+    "原文里超出名额的其余事项放进 moreTasks（options 为空数组），不要丢弃；没有就空数组。" +
     tierDirective
   );
 }

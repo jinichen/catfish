@@ -51,6 +51,7 @@ import { fetchBriefingSources } from "../../lib/briefing_sources";
 import { useChatStore } from "../../store/chat";
 import { useEmailStore } from "../../store/email";
 
+import { TIER_TASK_LIMIT } from "../../lib/briefing_advisor_common";
 import BriefingTwoColumnView from "./components/BriefingTwoColumnView";  // P3.3.6 (6/10): 左右两栏 layout
 import { DataDiagnosisCard } from "./components/DataDiagnosisCard";  // P3.4.4 (6/15): 三件套全空诊断卡, 替换老 "LLM 返空" 红字
 import LoadingProgress from "./components/LoadingProgress";  // P3.5.32.7 (6/18): 细化进度展现
@@ -217,7 +218,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
   useEffect(() => {
     let cancelled = false;
 
-    // refreshKey > 0 = 员工点刷新, 强制重算 + 跳缓存
+    // refreshKey > 0 = 员工点刷新: 数据有变才重算, 没变沿用上次 (见下面 cache 判断)
     const isManualRefresh = refreshKey > 0;
 
     void (async () => {
@@ -227,7 +228,9 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
         // ─── 1. profile — 同步等 recompute (in-flight 锁防 StrictMode 双调) ───
         setPhase("profile_loading");
         setPhaseStartedAt(Date.now());
-        const p = await ensureRecomputed(model, isManualRefresh);
+        // 10/27: 刷新不再强制重算画像 —— 画像也是模型生成的, 每点一次刷新就重判一次级别,
+        //   一线判成中层, 早安页从 8 件变 4 件。画像过期/没有时 ensureRecomputed 自己会重算。
+        const p = await ensureRecomputed(model);
         if (cancelled) return;
 
         // P3.5.32.3 (6/18 鸿波 catch '55% 不能用'):
@@ -307,12 +310,13 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
         };
         const cached = await advisorCacheGet();
         if (cancelled) return;
+        // 10/27: 手动刷新时, 邮件/日程/待办跟上次一字不差就沿用上次结果 (不看缓存多老) ——
+        //   同样的输入重跑一遍只会换措辞和排序, 员工以为数据变了。数据有变才重新分析。
         if (
-          !isManualRefresh
-          && config
+          config
           && cached
           && advisorCacheMatchesInput(cached, currentInput)
-          && isCacheFresh(cached, config.cacheMaxAgeMinutes)
+          && (isManualRefresh || isCacheFresh(cached, config.cacheMaxAgeMinutes))
           && isAdvisorResultGrounded(cached.result, currentInput)
         ) {
           console.log("[advisor] 当前输入 cache 命中, 跳过 LLM 调用", {
@@ -592,6 +596,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
         return (
           <BriefingTwoColumnView
             tasks={visibleTasks}
+            limit={TIER_TASK_LIMIT[result.tier]}
             handledItems={result.handledSilently}
             subconscious={result.subconscious ?? []}
             graveyard={result.graveyard ?? []}

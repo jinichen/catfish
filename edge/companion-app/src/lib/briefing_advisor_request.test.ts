@@ -22,7 +22,7 @@ describe("Advisor 两阶段请求合同", () => {
     expect(body.model).toBe("model-a");
     expect(body.messages[0].content).toContain(FACT_EVIDENCE_RULES);
     expect(body.max_tokens).toBe(6000);
-    expect(body.temperature).toBe(0.4);
+    expect(body.temperature).toBe(0);
     expect(body.stream).toBe(false);
     expect(body.response_format).toEqual({ type: "json_object" });
     expect(body).not.toHaveProperty("tool_choice");

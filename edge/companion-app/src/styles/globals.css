@@ -3438,6 +3438,19 @@ button {
   font-weight: 600;
   padding: 6px 8px 4px;
 }
+/* 10/27: 超出 tier 名额的其余事项, 折叠 */
+.briefing-2col__more-toggle {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--catfish-text-muted);
+}
+.briefing-2col__more-toggle:hover {
+  color: var(--catfish-text);
+}
 .briefing-2col__task-row {
   display: block;
   width: 100%;

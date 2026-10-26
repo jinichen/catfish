@@ -560,6 +560,7 @@ ${
     ? "3-4 件项目级主菜, 含团队进度风险 + 汇报草稿."
     : "1-2 件战略级 + 异常例外 + 关键关系节点."
 }
+超出上面件数、但同样有本轮来源依据的其余事项放进 moreTasks (options 空数组, 最多 12 件), 不要丢。
 ${
   profile.centralState === "strong"
     ? "央国企信号强 — 每件主菜必须跑 catfish_check_compliance + (涉及关键人时) catfish_political_sensitivity_scan."

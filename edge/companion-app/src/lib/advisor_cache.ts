@@ -14,7 +14,8 @@ import { advisorClosedAppend, nextLocalMidnight } from "./advisor_closed";
 /** 缓存格式版本。旧缓存没有来源指纹，不能再作为当前任务依据。 */
 export const ADVISOR_CACHE_SCHEMA_VERSION = 2;
 /** 提示词/来源边界变更时递增，避免旧模型输出跨规则复用。 */
-export const ADVISOR_CACHE_INPUT_VERSION = "current-week-sources-v4-triage";
+// v5 (10/27): 超出名额的事也交回 (moreTasks) —— v4 的缓存只有前几件, 不能再沿用
+export const ADVISOR_CACHE_INPUT_VERSION = "current-week-sources-v5-more-tasks";
 
 export interface AdvisorCacheSourceMeta {
   schemaVersion: number;
