@@ -116,6 +116,7 @@ pub(crate) fn version_floor_check() -> String {
          for _n, _v in [{}]:\n\
          \x20   try: _have = _m.version(_n)\n\
          \x20   except _m.PackageNotFoundError: continue\n\
+         \x20   if _have is None: raise SystemExit(f'{{_n}} 安装记录坏了 (dist-info 没有 METADATA)')\n\
          \x20   if _k(_have) < _k(_v): raise SystemExit(f'{{_n}} {{_have}} < {{_v}}')",
         pairs.join(", ")
     )

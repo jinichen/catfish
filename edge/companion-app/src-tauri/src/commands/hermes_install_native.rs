@@ -219,21 +219,29 @@ pub(crate) fn install_python_deps(artifacts: &RuntimeArtifacts, paths: &Bootstra
 /// 把源码树里那份钉版本 + sha256 的依赖清单离线装进指定 Python 环境。
 /// hermes 自己的 venv 和 hermes 另建的运行环境 (hermes_runtime_deps.rs) 共用。
 pub(crate) fn install_requirements(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths, python: &Path) -> Result<()> {
-    run(requirements_command(artifacts, paths, python, false), "安装 Hermes 依赖 (离线)")
+    run(requirements_command(artifacts, paths, python, &[]), "安装 Hermes 依赖 (离线)")
 }
 
-/// 清单里的包全部强制重装一遍 (10/26)。补装完还 import 不了时用: 装到一半失败的包
-/// (例如 Windows 上文件被占, 旧版 RECORD 删了、新版没装上) uv 认为版本对就跳过, 只有强制重装修得好。
-pub(crate) fn reinstall_requirements(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths, python: &Path) -> Result<()> {
-    run(requirements_command(artifacts, paths, python, true), "强制重装 Hermes 依赖 (离线)")
+/// 同一份清单, 但 `packages` 这几个强制重装 (10/26)。安装记录坏了的包 (Windows 上文件被占、装到一半:
+/// dist-info 只剩 licenses, 没有 METADATA) uv 当它已装就跳过, 只有点名重装修得好。
+///
+/// 不用 `--reinstall` 全部重装: 10/26 实测 Windows 上重装到 httpx 时改写 Scripts\*.exe 被拒
+/// ("Failed to update Windows PE resources ... 拒绝访问"), 前面卸了的 ruamel.yaml 没装回去, 网关起不来。
+pub(crate) fn reinstall_packages(
+    artifacts: &RuntimeArtifacts,
+    paths: &BootstrapPaths,
+    python: &Path,
+    packages: &[String],
+) -> Result<()> {
+    run(requirements_command(artifacts, paths, python, packages), "重装安装记录坏了的依赖 (离线)")
 }
 
-fn requirements_command(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths, python: &Path, reinstall: bool) -> Command {
+fn requirements_command(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths, python: &Path, reinstall: &[String]) -> Command {
     let dir = &paths.install_dir;
     let mut deps = uv(artifacts, paths);
     deps.arg("pip").arg("install");
-    if reinstall {
-        deps.arg("--reinstall");
+    for package in reinstall {
+        deps.arg("--reinstall-package").arg(package);
     }
     deps.arg("--quiet")
         .arg("--python")
@@ -458,17 +466,18 @@ mod tests {
     }
 
     #[test]
-    fn 强制重装只多一个_reinstall_其余跟普通补装一样离线钉哈希() {
+    fn 点名重装只多几个_reinstall_package_其余跟普通补装一样离线钉哈希() {
         let tmp = tempfile::TempDir::new().unwrap();
         let _env = crate::util::test_env::env_lock();
         let paths = BootstrapPaths::new(tmp.path().to_path_buf());
         let artifacts = RuntimeArtifacts::from_dir(tmp.path().join("runtime"));
         let python = tmp.path().join("py");
-        let normal = args(&requirements_command(&artifacts, &paths, &python, false));
-        let mut forced = args(&requirements_command(&artifacts, &paths, &python, true));
-        assert!(!normal.contains(&"--reinstall".to_string()));
-        assert_eq!(forced.remove(2), "--reinstall");
-        assert_eq!(forced, normal);
+        let normal = args(&requirements_command(&artifacts, &paths, &python, &[]));
+        let named = args(&requirements_command(&artifacts, &paths, &python, &["multidict".into()]));
+        assert!(!normal.iter().any(|a| a.starts_with("--reinstall")), "{normal:?}");
+        assert_eq!(&named[2..4], ["--reinstall-package", "multidict"]);
+        assert_eq!([&named[..2], &named[4..]].concat(), normal);
+        assert!(!named.contains(&"--reinstall".to_string()), "不全部重装");
         for want in ["--no-index", "--require-hashes", "-r"] {
             assert!(normal.contains(&want.to_string()), "{normal:?}");
         }

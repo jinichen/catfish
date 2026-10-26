@@ -22,8 +22,9 @@
 //! 也是这一步才到得了老机器)。
 //!
 //! 10/26 起 Windows 上换之前先停网关、结束所有用着 hermes 环境的进程, 换完再起 (文件被占会装坏,
-//! 见 hermes_install_gateway::stop_everything_for_deps); 装完还 import 不了的强制重装一遍,
-//! 已经装坏的机器升级后自己修好。
+//! 见 hermes_install_gateway::stop_everything_for_deps)。装到一半留下的空壳安装记录 (dist-info 没有
+//! METADATA) 先删掉、那几个包点名重装, 已经装坏的机器升级后自己修好。同一份清单补装失败过的,
+//! 之后启动不再停网关重来 (见 FAILED_FILE)。
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -92,13 +93,108 @@ fn runtime_pythons(paths: &BootstrapPaths) -> Vec<PathBuf> {
     out
 }
 
-fn imports_ok(python: &Path) -> bool {
-    crate::services::process::background_command(python)
-        .arg("-c")
-        .arg(runtime_check())
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+/// 够不够用; 不够时带上 Python 报的最后一行 (缺哪个包 / 哪个版本低), 写进日志好查。
+fn check(python: &Path) -> Result<(), String> {
+    match crate::services::process::background_command(python).arg("-c").arg(runtime_check()).output() {
+        Ok(o) if o.status.success() => Ok(()),
+        Ok(o) => {
+            let err = String::from_utf8_lossy(&o.stderr);
+            Err(err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string())
+        }
+        Err(e) => Err(format!("起不来: {e}")),
+    }
+}
+
+/// 列出环境里只剩空壳的安装记录 (dist-info 没有 METADATA)。
+///
+/// 10/26 鸿波 Windows: 1.1.81 换 multidict 时文件被占, 装到一半, 只留下
+/// `multidict-6.7.1.dist-info/licenses`。importlib 读出的版本是 None, 版本检查次次不过;
+/// uv 不认它是坏的, 普通补装修不好 —— 于是每次启动都「缺包 → 补装 → 还是缺」。
+const BROKEN_DISTS: &str = "import pathlib, sysconfig\n\
+for d in {sysconfig.get_paths()[k] for k in ('purelib', 'platlib')}:\n\
+\x20   for x in sorted(pathlib.Path(d).glob('*.dist-info')):\n\
+\x20       if x.is_dir() and not (x / 'METADATA').is_file(): print(x)";
+
+fn broken_dists(python: &Path) -> Vec<PathBuf> {
+    let Ok(out) = crate::services::process::background_command(python).arg("-I").arg("-c").arg(BROKEN_DISTS).output() else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| PathBuf::from(l.trim()))
+        .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().ends_with(".dist-info")))
+        .collect()
+}
+
+/// `multidict-6.7.1.dist-info` → `multidict` (dist-info 目录名里包名的 `-` 已经换成 `_`)。
+fn dist_name(dist_info: &Path) -> Option<String> {
+    let name = dist_info.file_name()?.to_string_lossy().into_owned();
+    Some(name.split('-').next()?.to_ascii_lowercase().replace('_', "-"))
+}
+
+/// 删掉空壳, 返回要点名重装的包。删不掉的也照样点名 (uv 重装时会覆盖)。
+fn clear_broken_dists(python: &Path) -> Vec<String> {
+    let mut names = Vec::new();
+    for dist in broken_dists(python) {
+        match fs::remove_dir_all(&dist) {
+            Ok(()) => log::warn!("[hermes-deps] 删掉只剩空壳的安装记录: {}", dist.display()),
+            Err(e) => log::warn!("[hermes-deps] 空壳安装记录删不掉 {}: {e}", dist.display()),
+        }
+        if let Some(name) = dist_name(&dist) {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
+
+/// 「这份依赖清单在这个环境里补装过、没成」的记录 (10/26)。
+///
+/// 补装要停网关 (Windows 还要结束所有 hermes 进程), 一次几分钟聊天不可用。修不好的情况下每次启动
+/// 都来一遍, 等于每次开 Companion 都断一次 —— 10/26 鸿波 Windows 就是这样。所以同一份清单
+/// 补装失败过的不再自动重来; 清单变了或 Companion 升级了才再试。
+const FAILED_FILE: &str = ".catfish-deps-repair-failed.json";
+
+fn attempt_key(paths: &BootstrapPaths) -> String {
+    use sha2::{Digest, Sha256};
+    let text = fs::read(paths.install_dir.join(hermes_install_native::REQUIREMENTS_FILE)).unwrap_or_default();
+    // 带上 Companion 版本: 新版可能带着新修法, 升级后再试一次
+    let extra = format!("{}\n{}", env!("CARGO_PKG_VERSION"), runtime_check());
+    hex::encode(Sha256::digest([text.as_slice(), extra.as_bytes()].concat()))
+}
+
+fn failed_attempts(paths: &BootstrapPaths) -> serde_json::Map<String, serde_json::Value> {
+    fs::read_to_string(paths.hermes_home.join(FAILED_FILE))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default()
+}
+
+fn failed_before(paths: &BootstrapPaths, python: &Path, key: &str) -> bool {
+    failed_attempts(paths).get(&python.display().to_string()).and_then(|v| v.as_str()) == Some(key)
+}
+
+fn remember_attempt(paths: &BootstrapPaths, python: &Path, key: &str, ok: bool) {
+    let mut all = failed_attempts(paths);
+    let id = python.display().to_string();
+    if ok {
+        if all.remove(&id).is_none() {
+            return;
+        }
+    } else {
+        all.insert(id, serde_json::Value::from(key));
+    }
+    let file = paths.hermes_home.join(FAILED_FILE);
+    let result = if all.is_empty() {
+        fs::remove_file(&file).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) })
+    } else {
+        fs::write(&file, serde_json::Value::Object(all).to_string())
+    };
+    if let Err(e) = result {
+        log::warn!("[hermes-deps] 记不下补装结果 {}: {e}", file.display());
+    }
 }
 
 /// 正在往 hermes 的环境里换依赖 (10/26)。这期间 watchdog / autostart 不拉 tool-bridge、local-search
@@ -144,30 +240,20 @@ impl Drop for Quiet<'_> {
     }
 }
 
-/// 补装一个环境: 先照常装; 装完还 import 不了, 再强制重装一遍 (10/26: 修装到一半的机器)。
-fn repair(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths, python: &Path) -> bool {
-    let first = if python == hermes_venv_python(&paths.install_dir) {
+/// 补装一个环境: 先删空壳安装记录, 照清单装, 空壳的那几个点名重装。
+fn repair(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths, python: &Path) -> Result<(), String> {
+    let broken = clear_broken_dists(python);
+    if !broken.is_empty() {
+        hermes_install_native::reinstall_packages(artifacts, paths, python, &broken).map_err(|e| format!("{e:#}"))?;
+    }
+    let result = if python == hermes_venv_python(&paths.install_dir) {
         // hermes 自己的 venv: 依赖 + hermes 本体 (editable) 一起, 跟首次安装同一步
         hermes_install_native::install_python_deps(artifacts, paths)
     } else {
         hermes_install_native::install_requirements(artifacts, paths, python)
     };
-    match first {
-        Ok(()) if imports_ok(python) => return true,
-        Ok(()) => log::warn!("[hermes-deps] 补装后仍有包 import 不了或版本不够, 强制重装一遍: {}", python.display()),
-        Err(e) => log::warn!("[hermes-deps] 补装失败, 强制重装一遍 {}: {e:#}", python.display()),
-    }
-    match hermes_install_native::reinstall_requirements(artifacts, paths, python) {
-        Ok(()) if imports_ok(python) => true,
-        Ok(()) => {
-            log::error!("[hermes-deps] 强制重装后仍有包 import 不了或版本不够: {}", python.display());
-            false
-        }
-        Err(e) => {
-            log::error!("[hermes-deps] 强制重装失败 {}: {e:#}", python.display());
-            false
-        }
-    }
+    result.map_err(|e| format!("{e:#}"))?;
+    check(python).map_err(|why| format!("装完还不够用: {why}"))
 }
 
 /// 查一遍, 缺了就补。返回 true = 补装过、网关还得重启才用得上 (Windows 上这里已经把网关起回来, 返回 false)。
@@ -180,7 +266,28 @@ pub(crate) fn ensure_runtime_deps(resource_dir: &Path, paths: &BootstrapPaths) -
             log::error!("[hermes-deps] 离线依赖换新失败, 有漏洞的旧版本还在用: {e:#}");
         }
     }
-    let missing: Vec<PathBuf> = runtime_pythons(paths).into_iter().filter(|p| !imports_ok(p)).collect();
+    let key = attempt_key(paths);
+    let mut missing = Vec::new();
+    for python in runtime_pythons(paths) {
+        let Err(why) = check(&python) else {
+            remember_attempt(paths, &python, &key, true);
+            continue;
+        };
+        if failed_before(paths, &python, &key) {
+            log::error!(
+                "[hermes-deps] {} 还是不够用 ({why}); 这份依赖清单上次补装没成, 这次不再停网关重装 —— \
+                 升级到新版 Companion 会再试, 或删掉 {} 后重启 Companion",
+                python.display(),
+                paths.hermes_home.join(FAILED_FILE).display()
+            );
+            continue;
+        }
+        log::warn!(
+            "[hermes-deps] {} 缺鲶鱼要的包 (分词/浏览器/文件解析/网关) 或依赖版本低于安全要求 ({why}) —— 离线补装, 不重装 hermes",
+            python.display()
+        );
+        missing.push(python);
+    }
     if missing.is_empty() {
         return false;
     }
@@ -194,13 +301,16 @@ pub(crate) fn ensure_runtime_deps(resource_dir: &Path, paths: &BootstrapPaths) -
     let quiet = Quiet::begin(paths);
     let mut fixed = 0;
     for python in missing {
-        log::warn!(
-            "[hermes-deps] {} 缺鲶鱼要的包 (分词/浏览器/文件解析/网关) 或依赖版本低于安全要求 —— 离线补装, 不重装 hermes",
-            python.display()
-        );
-        if repair(&artifacts, paths, &python) {
-            log::info!("[hermes-deps] 补装完成: {}", python.display());
-            fixed += 1;
+        match repair(&artifacts, paths, &python) {
+            Ok(()) => {
+                log::info!("[hermes-deps] 补装完成: {}", python.display());
+                remember_attempt(paths, &python, &key, true);
+                fixed += 1;
+            }
+            Err(e) => {
+                log::error!("[hermes-deps] 补装没成 {}: {e}", python.display());
+                remember_attempt(paths, &python, &key, false);
+            }
         }
     }
     fixed > 0 && !quiet.restarts_gateway()
@@ -268,6 +378,87 @@ mod tests {
         });
         assert!(r.is_err());
         assert!(!swapping(), "出错也要放下, 不然 tool-bridge 再也不起");
+    }
+
+    /// 真建一个 venv (不带 pip, 一秒内), 往里放一个空壳安装记录 —— 跟 10/26 Windows 那台一样。
+    fn venv_with_broken_multidict(tmp: &Path) -> Option<(PathBuf, PathBuf, PathBuf)> {
+        let env = tmp.join("venv");
+        let ok = std::process::Command::new("python3")
+            .args(["-m", "venv", "--without-pip"])
+            .arg(&env)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !ok {
+            eprintln!("没有 python3, 跳过");
+            return None;
+        }
+        let python = env_python(&env);
+        let out = std::process::Command::new(&python)
+            .args(["-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"])
+            .output()
+            .unwrap();
+        let site = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+        let broken = site.join("multidict-6.7.1.dist-info");
+        fs::create_dir_all(broken.join("licenses")).unwrap();
+        let good = site.join("python_docx-1.1.2.dist-info");
+        fs::create_dir_all(&good).unwrap();
+        fs::write(good.join("METADATA"), "Metadata-Version: 2.1\nName: python-docx\nVersion: 1.1.2\n").unwrap();
+        Some((python, broken, good))
+    }
+
+    #[test]
+    fn 空壳安装记录_版本检查报出来不崩_删掉后点名重装() {
+        let tmp = TempDir::new().unwrap();
+        let Some((python, broken, good)) = venv_with_broken_multidict(tmp.path()) else { return };
+        let out = std::process::Command::new(&python).arg("-c").arg(hermes_dep_overrides::version_floor_check()).output().unwrap();
+        assert!(!out.status.success());
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("multidict 安装记录坏了"), "{err}");
+
+        assert_eq!(broken_dists(&python), vec![broken.clone()]);
+        assert_eq!(clear_broken_dists(&python), vec!["multidict".to_string()]);
+        assert!(!broken.exists() && good.join("METADATA").is_file(), "只删空壳");
+        assert!(broken_dists(&python).is_empty());
+    }
+
+    #[test]
+    fn 安装记录目录名换回包名() {
+        assert_eq!(dist_name(Path::new("/x/python_docx-1.1.2.dist-info")).as_deref(), Some("python-docx"));
+        assert_eq!(dist_name(Path::new("/x/MultiDict-6.7.1.dist-info")).as_deref(), Some("multidict"));
+    }
+
+    #[test]
+    fn 同一份清单补装没成过_下次不再停网关重来_清单变了或修好了就放行() {
+        let tmp = TempDir::new().unwrap();
+        let _env = crate::util::test_env::env_lock();
+        let paths = BootstrapPaths::new(tmp.path().to_path_buf());
+        fs::create_dir_all(&paths.hermes_home).unwrap();
+        let py = Path::new("/h/venv/python");
+        let other = Path::new("/h/other/python");
+        assert!(!failed_before(&paths, py, "k1"));
+        remember_attempt(&paths, py, "k1", false);
+        remember_attempt(&paths, other, "k1", false);
+        assert!(failed_before(&paths, py, "k1"));
+        assert!(!failed_before(&paths, py, "k2"), "清单变了再试");
+        remember_attempt(&paths, py, "k1", true);
+        assert!(!failed_before(&paths, py, "k1"));
+        assert!(failed_before(&paths, other, "k1"), "各环境分开记");
+        remember_attempt(&paths, other, "k1", true);
+        assert!(!paths.hermes_home.join(FAILED_FILE).exists(), "都好了就不留文件");
+    }
+
+    #[test]
+    fn 清单内容进指纹() {
+        let tmp = TempDir::new().unwrap();
+        let _env = crate::util::test_env::env_lock();
+        let paths = BootstrapPaths::new(tmp.path().to_path_buf());
+        fs::create_dir_all(&paths.install_dir).unwrap();
+        let file = paths.install_dir.join(hermes_install_native::REQUIREMENTS_FILE);
+        fs::write(&file, "a==1\n").unwrap();
+        let k1 = attempt_key(&paths);
+        fs::write(&file, "a==2\n").unwrap();
+        assert_ne!(attempt_key(&paths), k1);
     }
 
     #[test]
