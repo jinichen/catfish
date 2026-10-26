@@ -7,6 +7,8 @@ import AdvisoryBanner from "./components/AdvisoryBanner";  // 6/7 BL-MANIFESTO-A
 import AuthBanner from "./components/AuthBanner";
 import HermesReconnectBanner from "./components/HermesReconnectBanner";  // P3.3.5 (6/9): hermes 重连 banner
 import WorkflowConfirmBanner from "./components/WorkflowConfirmBanner";
+import { ApprovalElsewhereBanner } from "./components/ApprovalBanner";
+import { installApprovalListener } from "./store/approvals";
 import HermesBootstrapStatus from "./components/HermesBootstrapStatus";
 import DevUserSwitcher from "./components/DevUserSwitcher";
 import ConnectLinkDialog from "./components/ConnectLinkDialog";
@@ -68,6 +70,11 @@ export default function App() {
         console.warn("[P3.5.139 Phase 4] getPickerModel 失败 (静默, 走 catalog 兜底):", e);
       }
     })();
+  }, []);
+
+  // 10/26 等批准: 全局收 (不跟工作台挂载走 —— 人在别的页面时来的请求也要接住)
+  useEffect(() => {
+    installApprovalListener();
   }, []);
 
   // 10/25 数据外发记录: 每天把指纹链头报给中央 (只有指纹, 证明记录事后没被改)
@@ -232,6 +239,8 @@ function AppShell({ activeTab }: { activeTab: string }) {
         <HermesReconnectBanner />
         {/* 10/17: 工作流停在对外步骤前等确认 —— 每个页面都看得到 (定时跑的时候员工多半不在那个页面) */}
         <WorkflowConfirmBanner />
+        {/* 10/26: 工作台 / 早安以外的页面也要知道有一步在等批准 (那两处的横幅在对话里) */}
+        {!isChatOrBriefing && <ApprovalElsewhereBanner />}
         <DevUserSwitcher />
         <main className={isChatOrBriefing ? "app-workspace__main app-workspace__main--locked" : "app-main"}>
           {/* BL-CONSOLE-TAB-KILL (5/16): {activeTab === "console" && <ConsoleTab />} */}

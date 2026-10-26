@@ -32,6 +32,9 @@ export interface SendChatParams {
    *  hermes 端已支持 (api_server.py:1188 provided_session_id).
    */
   sessionId?: string;
+  /** 10/26: 界面上这段对话的会话 id, 只用来给批准请求打标签 (哪段对话在等批准)。
+   *  早安卡片的对话不传 sessionId (hermes 自己派), 就用这个; 没传按 sessionId 算。 */
+  uiSessionId?: string;
   /** 10/18 本机专家: 选了专家时是它的 hermes profile, 请求走 `/p/<profile>/` (只有 hermes 通道能走) */
   profile?: string;
   /** 每个 token 来一次 */

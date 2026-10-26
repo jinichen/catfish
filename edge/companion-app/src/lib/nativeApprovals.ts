@@ -63,6 +63,8 @@ export interface PendingApprovalDetail {
   pattern_key: string;
   /** 卡片倒计时多少秒后自动收起 */
   timeout_s?: number;
+  /** 10/26: 哪段对话在等 (界面会话 id); 拿不到为 null —— 那就哪个界面都显 */
+  session_id?: string | null;
 }
 
 /** 原生 `approval.request` 的 data → 卡片认的格式; 没有 run_id 返回 null。 */

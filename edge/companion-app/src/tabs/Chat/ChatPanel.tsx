@@ -12,7 +12,7 @@ import { useAgentStore } from "../../store/agent";
 import { useChatStore } from "../../store/chat";
 
 import LifecycleStatus from "./LifecycleStatus";
-import { ApprovalBanner, useApprovalBanner } from "../../components/ApprovalBanner";
+import { ApprovalBanner } from "../../components/ApprovalBanner";
 
 
 interface Props {
@@ -56,8 +56,6 @@ export default function ChatPanel({
 
   const onThreadScroll = useStickToBottom(scrollRef, persistedSessionId, messages, isStreaming);
 
-  // 等批准横幅 (10/16 抽成 components/ApprovalBanner, 跟早安卡片共用)
-  const approval = useApprovalBanner((text) => onSend(text, []));
 
   // P27 (6/5 鸿波): 监听 ChatToolCall approval inline button 触发的 send event.
   // ChatToolCall → window.dispatchEvent('catfish:approval-send', detail.text)
@@ -119,7 +117,8 @@ export default function ChatPanel({
           )}
         </div>
       </div>
-      <ApprovalBanner {...approval} />
+      {/* 等批准横幅 (10/16 抽成 components/ApprovalBanner, 跟早安卡片共用; 10/26 按会话显示) */}
+      <ApprovalBanner sessionId={persistedSessionId} onRetry={(text) => onSend(text, [])} />
       <ChatInput
         isStreaming={isStreaming}
         onSend={onSend}

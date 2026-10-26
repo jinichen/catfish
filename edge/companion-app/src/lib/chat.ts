@@ -579,6 +579,8 @@ export async function streamChat(params: SendChatParams): Promise<void> {
           try {
             const detail = pendingFromNativeEvent(JSON.parse(sseData));
             if (detail) {
+              // 10/26: 带上是哪段对话的 —— 几段对话同时等批准时各管各的 (store/approvals.ts)
+              detail.session_id = params.uiSessionId ?? params.sessionId ?? null;
               window.dispatchEvent(new CustomEvent("catfish:approval-pending", { detail }));
             }
           } catch {
@@ -608,7 +610,9 @@ export async function streamChat(params: SendChatParams): Promise<void> {
               }
             } else if (ev?.status === "approval_pending") {
               window.dispatchEvent(
-                new CustomEvent("catfish:approval-pending", { detail: ev }),
+                new CustomEvent("catfish:approval-pending", {
+                  detail: { ...ev, session_id: params.uiSessionId ?? params.sessionId ?? null },
+                }),
               );
             }
           } catch {

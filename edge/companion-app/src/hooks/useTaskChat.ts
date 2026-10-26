@@ -352,6 +352,8 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
           model: optsRef.current.model,
           messages: history,
           tools,
+          // 10/26: 批准请求标上是这段任务对话的 (store/approvals.ts)
+          uiSessionId: sidForRound ?? undefined,
           onDelta: (chunk) => {
             if (ctrl.signal.aborted) return;
             finalContent += chunk;

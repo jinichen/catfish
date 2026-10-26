@@ -60,7 +60,7 @@ import { useChatStore } from "../../../store/chat";
 import { useTaskChat } from "../../../hooks/useTaskChat";
 import { ChatMsg } from "./BriefingChatMsg";
 import TaskChatProgress from "./TaskChatProgress";
-import { ApprovalBanner, useApprovalBanner } from "../../../components/ApprovalBanner";
+import { ApprovalBanner } from "../../../components/ApprovalBanner";
 
 
 // P3.3.19 C Phase 3 (6/11): buildTaskSystemPrompt 抽到 lib/taskSystemPrompt.ts.
@@ -198,10 +198,6 @@ export function DetailPane({
   // P3.3.43 (6/12 鸿波 "全部删掉"): revert P3.3.41 加的 selectedOptLabel /
   // selectedOpenError / selectedOpenedPath / handleOptionSelect — chat 才是 main UI.
 
-  // 等批准横幅 (10/16 抽成 components/ApprovalBanner, 跟工作台共用)
-  const approval = useApprovalBanner((text) => {
-    void send(text, []).catch((e) => setChatError(String(e)));
-  });
 
   // P3.3.19 C Phase 2d (6/11) + P3.5.10 (6/16 鸿波 lazy create):
   //   mount 只拿已有 sid + 历史, **不 mount 即建 session**.
@@ -520,7 +516,10 @@ export function DetailPane({
       </div>
 
       {/* P3.3.10: floating approval banner (跟工作台 ChatPanel 同款 UI) */}
-      <ApprovalBanner {...approval} />
+      <ApprovalBanner
+        sessionId={sessionId}
+        onRetry={(text) => void send(text, []).catch((e) => setChatError(String(e)))}
+      />
 
       {messages.length > 0 && (
         <div className="briefing-2col__chat-toolbar">

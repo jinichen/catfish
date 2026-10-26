@@ -59,6 +59,10 @@ interface UIState {
   pendingDraftFocus: string | null;
   openEmailDraft: (draftId: string) => void;
   consumeDraftFocus: () => string | null;
+  /** 10/26: 别的地方要打开工作台里某段对话 (例: 那段对话在等批准) —— ChatTab 挂载后消费 */
+  pendingSessionFocus: string | null;
+  openChatSession: (sessionId: string) => void;
+  consumeSessionFocus: () => string | null;
 }
 
 export const useUIStore = create<UIState>((set, get) => ({
@@ -75,6 +79,13 @@ export const useUIStore = create<UIState>((set, get) => ({
   activeEmailChatId: null,
   pendingDraftFocus: null,
   openEmailDraft: (draftId) => set({ activeTab: "email", pendingDraftFocus: draftId }),
+  pendingSessionFocus: null,
+  openChatSession: (sessionId) => set({ activeTab: "chat", pendingSessionFocus: sessionId }),
+  consumeSessionFocus: () => {
+    const id = get().pendingSessionFocus;
+    if (id) set({ pendingSessionFocus: null });
+    return id;
+  },
   consumeDraftFocus: () => {
     const id = get().pendingDraftFocus;
     if (id) set({ pendingDraftFocus: null });

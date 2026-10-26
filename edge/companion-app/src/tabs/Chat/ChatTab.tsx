@@ -187,6 +187,14 @@ export default function ChatTab() {
     setLoadError(null);
   }, [messages.length, persistedSessionId, reset]);
 
+  // 10/26: 别处要打开某段对话 (那段对话在等批准, 见 store/approvals.ts) —— 挂载时和之后都接
+  const pendingSessionFocus = useUIStore((s) => s.pendingSessionFocus);
+  useEffect(() => {
+    if (!pendingSessionFocus) return;
+    const sid = useUIStore.getState().consumeSessionFocus();
+    if (sid) void handleSelect(sid);
+  }, [pendingSessionFocus, handleSelect]);
+
   // 10/18: 对话里「切到 X」按钮 → 新开一个跟专家的会话
   useEffect(() => {
     const h = () => void handleNew();

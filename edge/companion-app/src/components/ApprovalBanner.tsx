@@ -5,135 +5,19 @@
  * 根本不存在 (「始终允许」「拒绝」两个按钮一直没样式), 按钮上也没有 loading 转圈。
  * 10/16 要给两边同时加"失败有话说 / 切走有通知 / 超时留痕", 再抄一遍只会继续分叉, 所以抽成一个。
  *
+ * 10/26: 数据搬去 store/approvals.ts (全局一份, 带会话); 这里只按会话显示。
+ *
  * 用法:
- *   const approval = useApprovalBanner();
- *   <ApprovalBanner {...approval} />     // 放在输入框上面
+ *   <ApprovalBanner sessionId={当前会话} onRetry={(text) => 发进这段对话} />   // 放在输入框上面
+ *   <ApprovalElsewhereBanner />                                                // 其它页面顶上
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
-import {
-  approvalErrorMessage, approvalNotification, approvalTimeoutNote, matchesPreapproval, type Preapproval,
-  retryAfterTimeoutPrompt, RETRY_PREAPPROVAL_MS, shouldNotifyApproval,
-} from "../lib/approvalOutcome";
 import { asksEveryTime, everyTimeReason } from "../lib/approvalScope";
-import { currentApprovalTimeoutS, setApprovalTimeoutS, type PendingApprovalDetail } from "../lib/nativeApprovals";
-import { hermesApprovalTimeout, sendNotification, toolBridgeChatApproval } from "../lib/tauri";
-
-type Choice = "once" | "session" | "always" | "deny";
-
-export interface ApprovalBannerState {
-  pending: PendingApprovalDetail | null;
-  secondsLeft: number;
-  note: string | null;
-  submitting: Choice | null;
-  /** 等超时作废的那一步 (有它且界面给了 onRetry 才显「批准并继续」) */
-  timedOutCommand: string | null;
-  dismissNote: () => void;
-  decide: (choice: Choice) => Promise<void>;
-  /** 「批准并继续」; 界面没给发消息的办法时为 undefined */
-  retry?: () => void;
-}
-
-/** 监听 `catfish:approval-pending`、倒计时、送回执。两个界面各自调一次 (各管各的横幅)。
- *  onRetry: 往这个界面的对话里发一条消息 (「批准并继续」用)。 */
-export function useApprovalBanner(onRetry?: (text: string) => void): ApprovalBannerState {
-  const [pending, setPending] = useState<PendingApprovalDetail | null>(null);
-  const [secondsLeft, setSecondsLeft] = useState(currentApprovalTimeoutS());
-  const [submitting, setSubmitting] = useState<Choice | null>(null);
-  // 10/16: 批准失败 / 等超时都要留一句话在界面上 —— 原来只 console.warn + 收横幅, 员工以为批了
-  const [note, setNote] = useState<string | null>(null);
-  // 10/26: 超时作废的那一步, 和点了「批准并继续」之后对同一条命令的预先批准
-  const [timedOutCommand, setTimedOutCommand] = useState<string | null>(null);
-  const preapproval = useRef<Preapproval | null>(null);
-
-  // 10/26: hermes 实际等多久 (config.yaml approvals.timeout) —— 事件里不带, 读一次
-  useEffect(() => {
-    hermesApprovalTimeout().then(setApprovalTimeoutS).catch(() => {});
-  }, []);
-
-  // chat.ts streamChat 解 hermes SSE 看到 approval.request 时 dispatch
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const ev = e as CustomEvent<PendingApprovalDetail>;
-      if (!ev.detail?.approval_session_key) return;
-      // 10/26: 员工刚点了「批准并继续」, 小鲶重做时弹的是同一条命令 → 就按那一下批 (只批这一次)
-      if (matchesPreapproval(preapproval.current, ev.detail.command ?? "", Date.now())) {
-        preapproval.current = null;
-        setNote(null);
-        void toolBridgeChatApproval(ev.detail.approval_session_key, "once").catch((err) => {
-          // eslint-disable-next-line no-console
-          console.warn("[approval] 预先批准送回执失败:", err);
-          setNote(approvalErrorMessage(err));
-        });
-        return;
-      }
-      setPending(ev.detail);
-      // hermes v0.22 原生审批: timeout_s = config.yaml approvals.timeout (见 nativeApprovals); 老插件那套是 60
-      setSecondsLeft(ev.detail.timeout_s ?? 60);
-      setNote(null);
-      setTimedOutCommand(null);
-      // 10/16: 横幅只在这个界面里, 人在别的标签页 / 别的 App 就完全不知道要批准,
-      // 等满时长自动拒绝 (实况见 lib/approvalOutcome.ts 文件头)。窗口在眼前就不弹。
-      if (shouldNotifyApproval(typeof document === "undefined" ? undefined : document)) {
-        const n = approvalNotification(ev.detail.command ?? "", ev.detail.timeout_s ?? currentApprovalTimeoutS());
-        void sendNotification(n.title, n.body).catch(() => {});
-      }
-    };
-    window.addEventListener("catfish:approval-pending", handler as EventListener);
-    return () => window.removeEventListener("catfish:approval-pending", handler as EventListener);
-  }, []);
-
-  // 倒计时到 0 = hermes 那边也超时了 (自动拒绝), 横幅没意义, 换成一行说明留着
-  useEffect(() => {
-    if (!pending) return;
-    const tick = setInterval(() => {
-      setSecondsLeft((s) => {
-        if (s <= 1) {
-          clearInterval(tick);
-          setNote(approvalTimeoutNote(pending.timeout_s ?? currentApprovalTimeoutS()));
-          setTimedOutCommand(pending.command ?? "");
-          setPending(null);
-          return 0;
-        }
-        return s - 1;
-      });
-    }, 1000);
-    return () => clearInterval(tick);
-  }, [pending]);
-
-  const decide = async (choice: Choice) => {
-    if (!pending || submitting) return;
-    setSubmitting(choice);
-    try {
-      await toolBridgeChatApproval(pending.approval_session_key, choice);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn("[approval] 送回执失败:", err);
-      setNote(approvalErrorMessage(err));
-      // 409 = 已经超时作废 (点晚了), 一样可以「批准并继续」
-      if (choice !== "deny" && /\b409\b/.test(String(err))) setTimedOutCommand(pending.command ?? "");
-    }
-    setSubmitting(null);
-    setPending(null);
-  };
-
-  const dismissNote = () => {
-    setNote(null);
-    setTimedOutCommand(null);
-  };
-
-  // 10/26: 超时作废后一键接着做 —— 告诉小鲶现在批准了、重做那一步; 它重做时弹的同一条命令自动批这一次
-  const retry = onRetry
-    ? () => {
-        const command = timedOutCommand ?? "";
-        preapproval.current = command.trim() ? { command, until: Date.now() + RETRY_PREAPPROVAL_MS } : null;
-        dismissNote();
-        onRetry(retryAfterTimeoutPrompt(command));
-      }
-    : undefined;
-
-  return { pending, secondsLeft, note, submitting, timedOutCommand, dismissNote, decide, retry };
-}
+import {
+  belongsTo, decideApproval, dismissApprovalNote, retryApprovalNote, useApprovalsStore, type ApprovalItem,
+} from "../store/approvals";
+import { useUIStore } from "../store/ui";
 
 /** 倒计时: 一分钟以上显「29:59」, 以下显「59s」。 */
 function countdownText(seconds: number): string {
@@ -143,77 +27,156 @@ function countdownText(seconds: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-export function ApprovalBanner({
-  pending, secondsLeft, note, submitting, timedOutCommand, dismissNote, decide, retry,
-}: ApprovalBannerState) {
+/** 有条目时每秒刷一次 (倒计时) */
+function useNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [active]);
+  return now;
+}
+
+function PendingCard({ item, now, submitting }: { item: ApprovalItem; now: number; submitting?: string }) {
+  const secondsLeft = Math.max(0, Math.ceil((item.deadline - now) / 1000));
+  const busy = submitting !== undefined;
+  return (
+    <div className="approval-banner">
+      <div className="approval-banner__header">
+        {/* P3.5.73 (6/22 鸿波 catch): "hermes 等批准" → "等批准". SOUL.md L5 品牌红线
+            "对外永不说: 我是 Hermes". 后面 pattern chip 自带 tool 名, 不需要前缀。 */}
+        <span>等批准</span>
+        <code className="pattern">{item.patternKey}</code>
+        <span className="countdown" aria-live="off">{countdownText(secondsLeft)}</span>
+      </div>
+      {asksEveryTime(item.description) && (
+        <div className="approval-banner__note">{everyTimeReason(item.description)}</div>
+      )}
+      <div className="approval-banner__code">{item.command}</div>
+      {/* 10/15: 「本会话允许」去掉 (hermes 只管这一条消息, 跟字面意思不符);
+          删除类每次都问, 不给「始终允许」—— 见 lib/approvalScope.ts */}
+      <div className="approval-banner__actions">
+        <button
+          className="approval-banner__btn-primary"
+          onClick={() => void decideApproval(item.key, "once")}
+          disabled={busy}
+          autoFocus
+        >
+          {submitting === "once" && <span className="approval-banner__spinner" />}
+          批准
+        </button>
+        {!asksEveryTime(item.description) && (
+          <button
+            className="approval-banner__btn-link"
+            onClick={() => void decideApproval(item.key, "always")}
+            disabled={busy}
+            title="以后这类操作不再问 (删除等破坏性操作除外)"
+          >
+            {submitting === "always" && <span className="approval-banner__spinner" />}
+            始终允许
+          </button>
+        )}
+        <button
+          className="approval-banner__btn-deny"
+          onClick={() => void decideApproval(item.key, "deny")}
+          disabled={busy}
+        >
+          {submitting === "deny" && <span className="approval-banner__spinner" />}
+          拒绝
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** 别的对话有要批准 / 作废了的: 提一句, 点了切过去 (那边的横幅才是它的)。 */
+function ElsewhereLine({ current }: { current: string | null }) {
+  const items = useApprovalsStore((s) => s.items);
+  const notes = useApprovalsStore((s) => s.notes);
+  const openChatSession = useUIStore((s) => s.openChatSession);
+  const waiting = items.filter((i) => i.sessionId !== null && i.sessionId !== current);
+  const lapsed = notes.filter((n) => n.sessionId !== null && n.sessionId !== current && n.command !== null);
+  const target = waiting[0]?.sessionId ?? lapsed[0]?.sessionId;
+  if (!target) return null;
+  const text = waiting.length > 0
+    ? `另外有 ${waiting.length} 步在别的对话里等你批准`
+    : "别的对话里有一步等批准超时作废了";
+  return (
+    <div className="approval-banner approval-banner--note" role="status">
+      <div className="approval-banner__note">{text}</div>
+      <div className="approval-banner__actions">
+        <button className="approval-banner__btn-primary" onClick={() => openChatSession(target)}>去看看</button>
+      </div>
+    </div>
+  );
+}
+
+export function ApprovalBanner({ sessionId, onRetry }: { sessionId: string | null; onRetry?: (text: string) => void }) {
+  const items = useApprovalsStore((s) => s.items);
+  const notes = useApprovalsStore((s) => s.notes);
+  const submitting = useApprovalsStore((s) => s.submitting);
+  const mine = items.filter((i) => belongsTo(i.sessionId, sessionId));
+  const myNotes = notes.filter((n) => belongsTo(n.sessionId, sessionId));
+  const now = useNow(mine.length > 0);
+
+  // 「批准并继续」只在作废的那段对话里给 (myNotes 已按会话筛过), 发进的就是这段对话
+  const retry = (id: string) => {
+    const prompt = retryApprovalNote(id);
+    if (prompt && onRetry) onRetry(prompt);
+  };
+
   return (
     <>
       {/* 批准失败 / 等超时留下的一句话 —— 不点掉不消失, 免得又是"悄悄没了" */}
-      {note && (
-        <div className="approval-banner approval-banner--note" role="status">
-          <div className="approval-banner__note">{note}</div>
-          {timedOutCommand && <div className="approval-banner__code">{timedOutCommand}</div>}
+      {myNotes.map((n) => (
+        <div key={n.id} className="approval-banner approval-banner--note" role="status">
+          <div className="approval-banner__note">{n.text}</div>
+          {n.command && <div className="approval-banner__code">{n.command}</div>}
           <div className="approval-banner__actions">
-            {timedOutCommand !== null && retry && (
+            {n.command !== null && onRetry && (
               <button
                 className="approval-banner__btn-primary"
-                onClick={retry}
+                onClick={() => retry(n.id)}
                 title="让小鲶重做刚才那一步; 它重做时弹出的同一条命令直接算你批准了 (只这一次)"
               >
                 批准并继续
               </button>
             )}
-            <button className="approval-banner__btn-link" onClick={dismissNote}>知道了</button>
+            <button className="approval-banner__btn-link" onClick={() => dismissApprovalNote(n.id)}>知道了</button>
           </div>
         </div>
-      )}
-      {pending && (
-        <div className="approval-banner">
-          <div className="approval-banner__header">
-            {/* P3.5.73 (6/22 鸿波 catch): "hermes 等批准" → "等批准". SOUL.md L5 品牌红线
-                "对外永不说: 我是 Hermes". 后面 pattern chip 自带 tool 名, 不需要前缀。 */}
-            <span>等批准</span>
-            <code className="pattern">{pending.pattern_key}</code>
-            <span className="countdown" aria-live="polite">{countdownText(secondsLeft)}</span>
-          </div>
-          {asksEveryTime(pending.description) && (
-            <div className="approval-banner__note">{everyTimeReason(pending.description)}</div>
-          )}
-          <div className="approval-banner__code">{pending.command}</div>
-          {/* 10/15: 「本会话允许」去掉 (hermes 只管这一条消息, 跟字面意思不符);
-              删除类每次都问, 不给「始终允许」—— 见 lib/approvalScope.ts */}
-          <div className="approval-banner__actions">
-            <button
-              className="approval-banner__btn-primary"
-              onClick={() => void decide("once")}
-              disabled={submitting !== null}
-              autoFocus
-            >
-              {submitting === "once" && <span className="approval-banner__spinner" />}
-              批准
-            </button>
-            {!asksEveryTime(pending.description) && (
-              <button
-                className="approval-banner__btn-link"
-                onClick={() => void decide("always")}
-                disabled={submitting !== null}
-                title="以后这类操作不再问 (删除等破坏性操作除外)"
-              >
-                {submitting === "always" && <span className="approval-banner__spinner" />}
-                始终允许
-              </button>
-            )}
-            <button
-              className="approval-banner__btn-deny"
-              onClick={() => void decide("deny")}
-              disabled={submitting !== null}
-            >
-              {submitting === "deny" && <span className="approval-banner__spinner" />}
-              拒绝
-            </button>
-          </div>
-        </div>
-      )}
+      ))}
+      {mine.map((item) => (
+        <PendingCard key={item.key} item={item} now={now} submitting={submitting[item.key]} />
+      ))}
+      <ElsewhereLine current={sessionId} />
     </>
+  );
+}
+
+/** 工作台 / 早安以外的页面: 有要批准的就在顶上说一声 (原来人在别的页面就完全看不到)。 */
+export function ApprovalElsewhereBanner() {
+  const items = useApprovalsStore((s) => s.items);
+  const openChatSession = useUIStore((s) => s.openChatSession);
+  const setActiveTab = useUIStore((s) => s.setActiveTab);
+  if (items.length === 0) return null;
+  const first = items[0];
+  const preview = first.command.length > 60 ? `${first.command.slice(0, 60)}…` : first.command;
+  return (
+    <div className="approval-banner approval-banner--note" role="status">
+      <div className="approval-banner__note">
+        小鲶有 {items.length} 步在等你批准{preview ? `: ${preview}` : ""}
+      </div>
+      <div className="approval-banner__actions">
+        <button
+          className="approval-banner__btn-primary"
+          onClick={() => (first.sessionId ? openChatSession(first.sessionId) : setActiveTab("chat"))}
+        >
+          去处理
+        </button>
+      </div>
+    </div>
   );
 }
