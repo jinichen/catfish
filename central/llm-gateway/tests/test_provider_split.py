@@ -132,6 +132,9 @@ def test_三个内网端点不去重成一个():
     "base,key_env,want",
     [
         ("https://dashscope.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY", "dashscope"),
+        # 百炼按账号 / 套餐分的子域名也归 dashscope (10/26: 原来会得到 token-plan)
+        ("https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY", "dashscope"),
+        ("https://llm-88ut4os6z3cmlgru.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY", "dashscope"),
         ("https://api.deepseek.com/v1", "DEEPSEEK_API_KEY", "deepseek"),
         ("", "GEMINI_API_KEY", "gemini"),
         # 内网 IP 取不出域名 → 落回 key 变量名

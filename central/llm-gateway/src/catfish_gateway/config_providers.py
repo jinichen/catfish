@@ -160,6 +160,12 @@ def suggest_provider_id(api_base: str, api_key_env: str) -> str:
         rest = api_base.split("://", 1)[-1]
         host = rest.split("/", 1)[0].split(":", 1)[0]
 
+    # 阿里云百炼 (DashScope) 的端点子域名是按账号 / 套餐分的
+    # (llm-88ut4os6z3cmlgru.cn-beijing.maas.aliyuncs.com、token-plan.cn-beijing.maas.aliyuncs.com),
+    # 取第一段会得到 llm-88ut4os6z3cmlgru / token-plan 这种看不懂的 id (10/26)。都归 dashscope。
+    if host.endswith(".aliyuncs.com"):
+        return "dashscope"
+
     # 公网域名: 取主域 (dashscope.aliyuncs.com → dashscope,
     # api.deepseek.com → deepseek —— 跳过 api/www 这类无信息前缀)
     if host and not _looks_like_ip(host):

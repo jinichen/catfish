@@ -60,16 +60,16 @@ models:
   # ---------- 内部 · 多模态 ----------
   - name: catfish-private-vision
     tier: private
-    display_name: "Qwen3-VL 30B (A3B MoE) · 多模态"
+    display_name: "Qwen3.8_27b · 多模态"
     mode: chat
 
     upstream:
-      model: openai/qwen_v3_6_35b_a3b
+      # 10/26: 跟中央门户现场配置对齐 (Qwen3-VL 30B → Qwen3.8 27B w8a8)
+      model: openai/qwen_v3_8_27b_w8a8
       api_base: ${INTERNAL_LLM_BASE_QWEN_VISION}
       api_key_env: INTERNAL_LLM_KEY
-      # 多模态模型图像/视频处理偏慢, MoE active 3B 也比稳定模型 TTFT 长.
-      # 给 180s 跟 main 对齐, 跟公共多模态 (timeout: 90) 区分 (公共更快).
-      timeout: 180
+      # 多模态模型图像/视频处理偏慢。10/26 现场配置给到 600s (长文档 / 多图一轮要好几分钟)。
+      timeout: 600
 
     # 多模态模型相比主力模型 context 略窄些，留 64K 员工承诺。
     # 真实支持大概率也是 128K+ 量级，视后续压测调整。
@@ -163,23 +163,22 @@ models:
     # tests/test_fallback_500_policy.py 现在会检查所有 chain 引用的模型是否
     # 真实存在 —— 再改名会当场红, 不用靠人记得 grep。
     tier: public
-    display_name: "Qwen3.6-Flash · 通义千问快速多模态（公共付费）"
+    display_name: "qwen3.8-flash（公有云）"
     mode: chat
+    # 10/26: 现场配置里它是默认模型 (新员工 / 没选过模型的会话用它)
+    default: true
 
     upstream:
-      # ⚠️ TODO 鸿波验证: 这个 model 名 'qwen3.6-max-preview' 在 dashscope
-      # 真实存在吗? 实际 dashscope 多模态 Qwen 系列常见命名:
-      #   qwen-vl-max-latest / qwen-vl-plus-latest (Qwen-VL 视觉系列)
-      #   qwen-max-latest / qwen-plus-latest / qwen-turbo-latest (Qwen 文本)
-      # 如果 'qwen3.6-max-preview' 不存在, fallback 真触发时会撞 404.
-      # 验证方法: 拿 DASHSCOPE_API_KEY 用 curl 测一下:
-      #   curl https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions \
-      #     -H "Authorization: Bearer $DASHSCOPE_API_KEY" \
-      #     -d '{"model":"qwen3.6-max-preview","messages":[{"role":"user","content":"hi"}]}'
-      model: openai/qwen3.7-max-2026-05-20
-      api_base: https://llm-88ut4os6z3cmlgru.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+      # 10/26: 跟中央门户现场配置对齐 —— DashScope 的 token-plan 端点 + qwen3.8-flash
+      model: openai/qwen3.8-flash
+      api_base: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
       api_key_env: DASHSCOPE_API_KEY
-      timeout: 90  # 多模态请求图像/视频处理偏慢, 给宽裕
+      timeout: 180  # 多模态请求图像/视频处理偏慢, 给宽裕
+      # qwen3.8 默认开思考, 工具调用多轮时慢且贵; 现场配置关掉 (DashScope 的开关, 只对它生效)
+      param_overrides:
+        extra_body:
+          enable_thinking: false
+      param_overrides_scope: auto
 
     context_window: 1000000  # 1000K
     # BL-MAX-OUTPUT-TOKENS (5/24 鸿波实盘补): DashScope qwen3.7-max 单次 output 上限
@@ -201,7 +200,7 @@ models:
     # 展示与计价 (7/30 从前端 modelDisplay.ts 迁过来)。
     # 模型可在 /admin/models 界面上增删改之后, 这些必须跟着模型走 ——
     # 硬编码在前端的话, 客户新加的模型会显示"未知模型"、按兜底价计费。
-    price_per_1k_tokens: 0.00045   # 元 / 1000 token
+    price_per_1k_tokens: 0.01   # 元 / 1000 token (10/26 现场配置)
     color: "#f59e0b"
     dot_emoji: "🟠"
 
@@ -229,14 +228,15 @@ models:
   #   - 出差 / 公司外网络场景
   - name: catfish-public-deepseek-flash
     tier: public
-    display_name: "Deepseek-v4-flash · Deepseek V4 flash（公共付费）"
+    display_name: "Deepseek V4 flash（公有云）"
     mode: chat
 
     upstream:
       # 9/26: DeepSeek API 只认 deepseek-flash / deepseek-v4-pro。199 实测 400 原文:
       #   "The supported API model names are deepseek-flash, deepseek-v4-pro,
       #    but you passed deepseek-v4.1-flash" —— 改成 deepseek-flash 后当天恢复。
-      model: deepseek/deepseek-flash
+      # 10/26: 跟中央门户现场配置对齐 —— 换成带视觉的 v4-flash (实验版)
+      model: deepseek/deepseek-v4-flash-vision-exp
       # P3.5.148 (6/30 鸿波 audit 切回 /v1): /beta → /v1
       #
       #   背景: P3.4.E (6/15) 把 endpoint 从 /v1 切到 /beta, 论据是当时实测 /v1 对
@@ -265,7 +265,7 @@ models:
       #   reasoning_content bug 不复现. 跟切 /beta 同款.
       api_base: https://api.deepseek.com/v1
       api_key_env: DEEPSEEK_API_KEY
-      timeout: 90
+      timeout: 60
       # 5/5 BL-D11+ 鸿波报: deepseek thinking mode 多轮对话 (含 tool call) 时
       # 要求 client 把上轮 assistant 的 reasoning_content 也传回去,
       # catfish gateway 没透传 → 第二轮 400 BadRequest
@@ -290,7 +290,7 @@ models:
     max_output_tokens: 393216
     supports_tool_use: true
     supports_streaming: true
-    supports_vision: false
+    supports_vision: true  # 10/26: vision-exp 版能看图
     # BL-F14: deepseek 也作为 public 内部用例 fallback (qwen 挂了用这)
     recommended_for: [general, chat, tool_use, code, fast, fallback,
                       summarizer, proactive_starter, a2a_aux]
