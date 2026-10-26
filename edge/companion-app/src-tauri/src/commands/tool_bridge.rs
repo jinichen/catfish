@@ -208,6 +208,12 @@ pub async fn tool_bridge_call_tool(
 // 的 approval_session_key 字段. choice ∈ {"once","session","always","deny"}.
 // 调 plugin patched tool-bridge RPC `tools/chat_approval` →
 // resolve_gateway_approval(session_key, choice).
+/// hermes 等员工批准多久 (秒), 界面倒计时 / 超时提示用 (10/26)。
+#[tauri::command]
+pub fn hermes_approval_timeout() -> u64 {
+    crate::services::hermes_policy_config::approval_timeout_s()
+}
+
 #[tauri::command]
 pub async fn tool_bridge_chat_approval(
     session_key: String,

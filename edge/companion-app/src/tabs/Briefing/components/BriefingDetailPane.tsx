@@ -199,7 +199,9 @@ export function DetailPane({
   // selectedOpenError / selectedOpenedPath / handleOptionSelect — chat 才是 main UI.
 
   // 等批准横幅 (10/16 抽成 components/ApprovalBanner, 跟工作台共用)
-  const approval = useApprovalBanner();
+  const approval = useApprovalBanner((text) => {
+    void send(text, []).catch((e) => setChatError(String(e)));
+  });
 
   // P3.3.19 C Phase 2d (6/11) + P3.5.10 (6/16 鸿波 lazy create):
   //   mount 只拿已有 sid + 历史, **不 mount 即建 session**.

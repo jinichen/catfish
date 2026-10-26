@@ -13,6 +13,7 @@
 //! | `agent.max_turns` | 不设 = **不限** | 90 (没配才补) | 一轮对话里模型最多连调多少次工具; 不限会把一个卡住的任务跑到天荒地老 |
 //! | `approvals.mode` | smart | smart (没配才补, 写明) | 10/14 定: AI 先判断, 拿不准再问员工 |
 //! | `approvals.smart_policy` | 空 | 公司规则 (空才补) | 给判断审批的 AI 的规则, 10/14 鸿波确认的措辞 |
+//! | `approvals.timeout` | 300 秒 | 1800 (没配才补) | 10/26 鸿波定: 等员工批准 30 分钟。5 分钟开个会回来就作废, 只能从头重做 |
 //!
 //! 「强制」的几项每次启动都校正 (有人改回去也改回来) —— 都是安全 / 数据相关, 员工不该自己开;
 //! 「没配才补」的尊重已有值 (运维可能有意调过)。config.yaml 不存在 (hermes 没装) → 不凭空造文件。
@@ -28,6 +29,10 @@ pub const SMART_POLICY: &str = "读取本机文件、查询数据、生成报表
 删除或覆盖文件、向外部地址发送数据、安装软件、修改系统配置、操作邮件 / 微信发送的, 一律 ESCALATE";
 
 pub const MAX_TURNS: u64 = 90;
+
+/// 等员工批准多久 (秒)。hermes 自己的默认是 300, 没配时按 300 算 (见 [`approval_timeout_s`])。
+pub const APPROVAL_TIMEOUT_S: u64 = 1800;
+const HERMES_DEFAULT_APPROVAL_TIMEOUT_S: u64 = 300;
 
 /// 替换内置 memory 工具的两个鲶鱼插件。
 const TOOL_OVERRIDE_PLUGINS: [&str; 2] = ["catfish-xcatfish-user", "catfish-memory"];
@@ -153,6 +158,9 @@ pub fn ensure_at(path: &Path) -> Result<Vec<String>> {
     if set_if_missing(map, &["approvals", "smart_policy"], YamlValue::from(SMART_POLICY)) {
         changed.push("approvals.smart_policy".into());
     }
+    if set_if_missing(map, &["approvals", "timeout"], YamlValue::from(APPROVAL_TIMEOUT_S)) {
+        changed.push("approvals.timeout".into());
+    }
 
     if changed.is_empty() {
         return Ok(changed);
@@ -167,6 +175,27 @@ pub fn ensure_at(path: &Path) -> Result<Vec<String>> {
 /// 生产入口 (lib.rs setup 用)。
 pub fn ensure() -> Result<Vec<String>> {
     ensure_at(&yaml_path()?)
+}
+
+/// hermes 实际等员工批准多久 (秒) —— 界面倒计时 / 超时提示跟它对齐。
+/// 跟 hermes 读法一致 (tools/approval_context.py _get_approval_timeout): 读 `approvals.timeout`,
+/// 没配 / 不是整数按 hermes 默认 300。hermes 的批准事件里不带这个数, 只能读配置。
+pub fn approval_timeout_at(path: &Path) -> u64 {
+    let Ok(raw) = fs::read_to_string(path) else {
+        return HERMES_DEFAULT_APPROVAL_TIMEOUT_S;
+    };
+    let Ok(root) = serde_yaml::from_str::<YamlValue>(&raw) else {
+        return HERMES_DEFAULT_APPROVAL_TIMEOUT_S;
+    };
+    match &root["approvals"]["timeout"] {
+        YamlValue::Number(n) => n.as_u64().filter(|v| *v > 0).unwrap_or(HERMES_DEFAULT_APPROVAL_TIMEOUT_S),
+        YamlValue::String(s) => s.trim().parse().ok().filter(|v| *v > 0).unwrap_or(HERMES_DEFAULT_APPROVAL_TIMEOUT_S),
+        _ => HERMES_DEFAULT_APPROVAL_TIMEOUT_S,
+    }
+}
+
+pub fn approval_timeout_s() -> u64 {
+    yaml_path().map(|p| approval_timeout_at(&p)).unwrap_or(HERMES_DEFAULT_APPROVAL_TIMEOUT_S)
 }
 
 #[cfg(test)]
@@ -208,6 +237,8 @@ mod tests {
         assert_eq!(r["agent"]["max_turns"].as_u64(), Some(90));
         assert_eq!(r["approvals"]["mode"].as_str(), Some("smart"));
         assert!(r["approvals"]["smart_policy"].as_str().unwrap().contains("ESCALATE"));
+        assert_eq!(r["approvals"]["timeout"].as_u64(), Some(1800));
+        assert_eq!(approval_timeout_at(&p), 1800);
         for plugin in TOOL_OVERRIDE_PLUGINS {
             let e = &r["plugins"]["entries"][plugin];
             assert_eq!(e["granted_capabilities"][0].as_str(), Some("tools.override"), "{plugin}");
@@ -226,7 +257,7 @@ mod tests {
         let p = cfg(
             &tmp,
             "sessions:\n  auto_prune: true\nagent:\n  max_turns: 150\n  disabled_toolsets:\n  - browser\n\
-             approvals:\n  mode: manual\n  smart_policy: 运维自己写的规则\n",
+             approvals:\n  mode: manual\n  smart_policy: 运维自己写的规则\n  timeout: 600\n",
         );
         ensure_at(&p).unwrap();
         let r = root(&p);
@@ -234,6 +265,7 @@ mod tests {
         assert_eq!(r["agent"]["max_turns"].as_u64(), Some(150), "运维调过的轮数不动");
         assert_eq!(r["approvals"]["mode"].as_str(), Some("manual"), "已配的审批模式不动");
         assert_eq!(r["approvals"]["smart_policy"].as_str(), Some("运维自己写的规则"));
+        assert_eq!(approval_timeout_at(&p), 600, "运维调过的等待时长不动, 界面也按它倒计时");
         let toolsets: Vec<_> = r["agent"]["disabled_toolsets"]
             .as_sequence()
             .unwrap()
@@ -256,6 +288,16 @@ mod tests {
         let grants = r["plugins"]["entries"]["catfish-memory"]["granted_capabilities"].as_sequence().unwrap();
         assert_eq!(grants.len(), 2);
         assert_eq!(r["plugins"]["enabled"][0].as_str(), Some("catfish-xcatfish-user"));
+    }
+
+    #[test]
+    fn approval_timeout_falls_back_to_hermes_default() {
+        let tmp = TempDir::new().unwrap();
+        assert_eq!(approval_timeout_at(&tmp.path().join("none.yaml")), 300, "没文件");
+        assert_eq!(approval_timeout_at(&cfg(&tmp, "model: {}\n")), 300, "没配");
+        assert_eq!(approval_timeout_at(&cfg(&tmp, "approvals:\n  timeout: '900'\n")), 900, "写成字符串也认");
+        assert_eq!(approval_timeout_at(&cfg(&tmp, "approvals:\n  timeout: abc\n")), 300);
+        assert_eq!(approval_timeout_at(&cfg(&tmp, "model: [unclosed\n")), 300);
     }
 
     #[test]

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  APPROVAL_TIMEOUT_NOTE, approvalErrorMessage, approvalNotification, shouldNotifyApproval,
+  approvalErrorMessage, approvalNotification, approvalTimeoutNote, approvalWindowText, matchesPreapproval,
+  retryAfterTimeoutPrompt, RETRY_PREAPPROVAL_MS, shouldNotifyApproval,
 } from "./approvalOutcome";
 
 describe("approvalOutcome (10/16: 批准失败 / 超时不能没声音)", () => {
@@ -20,19 +21,44 @@ describe("approvalOutcome (10/16: 批准失败 / 超时不能没声音)", () => 
     expect(approvalErrorMessage("boom")).toContain("boom");
   });
 
-  it("超时那句话说明白了三件事: 发生过、已拒绝、怎么补", () => {
-    for (const w of ["批准", "自动拒绝", "重来"]) expect(APPROVAL_TIMEOUT_NOTE).toContain(w);
+  it("超时那句话说明白了: 发生过、等了多久、已拒绝、怎么补", () => {
+    const note = approvalTimeoutNote(1800);
+    for (const w of ["批准", "30 分钟", "自动拒绝", "批准并继续"]) expect(note).toContain(w);
+  });
+
+  it("时长按 hermes 实际配置说, 不写死 5 分钟", () => {
+    expect(approvalWindowText(1800)).toBe("30 分钟");
+    expect(approvalWindowText(3600)).toBe("1 小时");
+    expect(approvalWindowText(300)).toBe("5 分钟");
+    expect(approvalWindowText(90)).toBe("90 秒");
+  });
+
+  it("批准并继续: 告诉小鲶现在批准了、重做那一步、接着做完", () => {
+    const text = retryAfterTimeoutPrompt("rm -f /tmp/a.xlsx");
+    for (const w of ["现在我批准", "重做这一步", "接着把任务做完", "rm -f /tmp/a.xlsx"]) expect(text).toContain(w);
+    expect(retryAfterTimeoutPrompt("")).not.toContain("那一步是");
+  });
+
+  it("预先批准只认同一条命令、只在时限内", () => {
+    const now = 1_000_000;
+    const pre = { command: "rm -f /tmp/a.xlsx", until: now + RETRY_PREAPPROVAL_MS };
+    expect(matchesPreapproval(pre, "rm -f /tmp/a.xlsx", now)).toBe(true);
+    expect(matchesPreapproval(pre, " rm -f /tmp/a.xlsx\n", now)).toBe(true);
+    expect(matchesPreapproval(pre, "rm -rf /tmp", now)).toBe(false);
+    expect(matchesPreapproval(pre, "rm -f /tmp/a.xlsx", now + RETRY_PREAPPROVAL_MS + 1)).toBe(false);
+    expect(matchesPreapproval(null, "rm -f /tmp/a.xlsx", now)).toBe(false);
+    expect(matchesPreapproval({ command: "  ", until: now + 1 }, "  ", now)).toBe(false);
   });
 
   it("系统通知带上要执行什么, 太长截断", () => {
-    const n = approvalNotification("remindctl update --uid 1AB56410 --notes '素材路径…'");
+    const n = approvalNotification("remindctl update --uid 1AB56410 --notes '素材路径…'", 1800);
     expect(n.title).toBe("小鲶等你批准");
     expect(n.body).toContain("remindctl");
-    expect(n.body).toContain("5 分钟");
-    const long = approvalNotification("x".repeat(300));
+    expect(n.body).toContain("30 分钟");
+    const long = approvalNotification("x".repeat(300), 1800);
     expect(long.body).toContain("…");
     expect(long.body.length).toBeLessThan(140);
-    expect(approvalNotification("").body).toContain("有一步要你确认");
+    expect(approvalNotification("", 1800).body).toContain("有一步要你确认");
   });
 });
 

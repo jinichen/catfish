@@ -167,6 +167,9 @@ export const toolBridgeCallTool = (
  *
  *  session_key 从 SSE event `hermes.tool.progress` (status=approval_pending) 的
  *  approval_session_key 字段拿. choice ∈ "once"|"session"|"always"|"deny". */
+/** hermes 等员工批准多久 (秒, 读 config.yaml approvals.timeout; 没配 = hermes 默认 300)。10/26 */
+export const hermesApprovalTimeout = () => rawInvoke<number>("hermes_approval_timeout");
+
 export const toolBridgeChatApproval = async (
   sessionKey: string,
   choice: "once" | "session" | "always" | "deny",

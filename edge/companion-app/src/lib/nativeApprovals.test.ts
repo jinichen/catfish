@@ -7,7 +7,9 @@ vi.mock("./env", () => ({
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
-import { nativeApprovalFor, pendingFromNativeEvent, NATIVE_APPROVAL_TIMEOUT_S } from "./nativeApprovals";
+import {
+  nativeApprovalFor, pendingFromNativeEvent, NATIVE_APPROVAL_TIMEOUT_S, setApprovalTimeoutS,
+} from "./nativeApprovals";
 import { toolBridgeChatApproval } from "./tauri_services";
 
 const ok = () => ({ ok: true, json: async () => ({ resolved: 1 }), text: async () => "" });
@@ -15,7 +17,7 @@ const ok = () => ({ ok: true, json: async () => ({ resolved: 1 }), text: async (
 describe("hermes v0.22 原生审批 (approval.request)", () => {
   beforeEach(() => fetchViaProxy.mockReset().mockResolvedValue(ok()));
 
-  it("事件转成审批卡认的格式, run_id 当 key, 倒计时 300 秒", () => {
+  it("事件转成审批卡认的格式, run_id 当 key, 倒计时按 hermes 配置 (默认 1800 秒)", () => {
     const detail = pendingFromNativeEvent({
       event: "approval.request", run_id: "chatcmpl-1", request_id: "r1",
       command: "rm -rf /tmp/x", description: "recursive delete", pattern_key: "rm_rf",
@@ -26,6 +28,16 @@ describe("hermes v0.22 原生审批 (approval.request)", () => {
       description: "recursive delete", pattern_key: "rm_rf", timeout_s: NATIVE_APPROVAL_TIMEOUT_S,
     });
     expect(nativeApprovalFor("chatcmpl-1")).toEqual({ requestId: "r1", generation: undefined });
+  });
+
+  it("读到 hermes 实际配置后倒计时跟着改; 读到怪值不改", () => {
+    expect(NATIVE_APPROVAL_TIMEOUT_S).toBe(1800);
+    setApprovalTimeoutS(600);
+    expect(pendingFromNativeEvent({ run_id: "chatcmpl-t" })?.timeout_s).toBe(600);
+    setApprovalTimeoutS(0);
+    setApprovalTimeoutS(Number.NaN);
+    expect(pendingFromNativeEvent({ run_id: "chatcmpl-t2" })?.timeout_s).toBe(600);
+    setApprovalTimeoutS(NATIVE_APPROVAL_TIMEOUT_S);
   });
 
   it("没有 run_id 的不认", () => {

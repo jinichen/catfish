@@ -57,7 +57,7 @@ export default function ChatPanel({
   const onThreadScroll = useStickToBottom(scrollRef, persistedSessionId, messages, isStreaming);
 
   // 等批准横幅 (10/16 抽成 components/ApprovalBanner, 跟早安卡片共用)
-  const approval = useApprovalBanner();
+  const approval = useApprovalBanner((text) => onSend(text, []));
 
   // P27 (6/5 鸿波): 监听 ChatToolCall approval inline button 触发的 send event.
   // ChatToolCall → window.dispatchEvent('catfish:approval-send', detail.text)

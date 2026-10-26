@@ -68,6 +68,7 @@ pub(crate) fn handler(
             crate::commands::tool_bridge::tool_bridge_list_tools,
             crate::commands::tool_bridge::tool_bridge_call_tool,
             crate::commands::tool_bridge::tool_bridge_chat_approval,
+            crate::commands::tool_bridge::hermes_approval_timeout,
             // health
             crate::commands::health::healthz,
             crate::commands::health::catalog,

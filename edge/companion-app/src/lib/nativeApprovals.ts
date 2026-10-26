@@ -20,8 +20,20 @@ interface NativeRun {
 
 const nativeRuns = new Map<string, NativeRun>();
 
-/** 默认审批等待时长 (秒) —— hermes v0.22 `approvals.timeout` 出厂 300。卡片倒计时用。 */
-export const NATIVE_APPROVAL_TIMEOUT_S = 300;
+/** 审批等待时长 (秒) 的起始值 —— Companion 给 hermes 配的 `approvals.timeout` (10/26 起 1800,
+ *  见 src-tauri services/hermes_policy_config.rs)。hermes 的批准事件里不带这个数, 横幅打开时
+ *  读一次实际配置 (setApprovalTimeoutS), 运维调过也对得上。 */
+export const NATIVE_APPROVAL_TIMEOUT_S = 1800;
+
+let approvalTimeoutS = NATIVE_APPROVAL_TIMEOUT_S;
+
+export function currentApprovalTimeoutS(): number {
+  return approvalTimeoutS;
+}
+
+export function setApprovalTimeoutS(seconds: number): void {
+  if (Number.isFinite(seconds) && seconds > 0) approvalTimeoutS = Math.round(seconds);
+}
 
 export function registerNativeApproval(runId: string, requestId?: string, generation?: number): void {
   nativeRuns.set(runId, { requestId, generation });
@@ -67,6 +79,6 @@ export function pendingFromNativeEvent(ev: unknown): PendingApprovalDetail | nul
     command: String(e.command ?? ""),
     description: String(e.description ?? ""),
     pattern_key: String(e.pattern_key ?? ""),
-    timeout_s: NATIVE_APPROVAL_TIMEOUT_S,
+    timeout_s: approvalTimeoutS,
   };
 }
