@@ -29,8 +29,8 @@ function AutoContinueToggleButton({ isStreaming }: { isStreaming: boolean }) {
       data-active={on || undefined}
       title={
         on
-          ? "⏭ 自动接力 ON: LLM 正常 stop 但任务没完 (e.g. 处理 10 个 Excel 只处理了 3 个), Companion 自动发\"继续\" (上限 3 轮). 跟系统自带 retry (流挂了自动重试) 不同 — 这条管 LLM 偷懒. 点关闭: 停下就停下, 自己打\"继续\"."
-          : "⏭ 自动接力已关: LLM 停下就停下, 要接着做自己打\"继续\". 点开启 (默认是开的): 长任务中途 stop 了, Companion 自动发\"继续\" (上限 3 轮)."
+          ? "⏭ 自动接力开: 任务做到一半被叫停 (一轮里工具调用太多、回答太长被截断) 时, 自动发\"继续\" 接着做, 最多 3 次。AI 自己说做完了就停, 不追问 —— 漏了没做的, 自己打\"继续\"。点关闭: 被叫停也停下, 自己点\"继续\"。"
+          : "⏭ 自动接力已关: 被叫停就停下, 要接着做自己打\"继续\"。点开启 (默认是开的): 任务做到一半被叫停时自动接着做, 最多 3 次。"
       }
     >
       <FastForward size={18} aria-hidden="true" />

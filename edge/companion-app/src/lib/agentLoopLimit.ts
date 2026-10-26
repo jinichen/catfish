@@ -13,5 +13,5 @@ export function isAgentLoopLimit(err: string | undefined | null): boolean {
 export function agentLoopLimitText(err: string): string {
   const m = err.match(/"max_tool_messages"\s*:\s*(\d+)/);
   const n = m ? `(超过 ${m[1]} 次工具调用) ` : "";
-  return `这一轮步骤比较多 ${n}, 已自动暂停。点「继续」接着做, 新一轮会重新计数; 打开「自动续跑」可以不用手点。`;
+  return `这一轮步骤比较多 ${n}, 已自动暂停。点「继续」接着做, 新一轮会重新计数; 打开「自动接力」可以不用手点。`;
 }

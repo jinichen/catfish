@@ -43,6 +43,8 @@ import {
   useAutoContinueStore,
   MAX_AUTO_CONTINUES,
   AUTO_CONTINUE_PROMPT,
+  AUTO_CONTINUE_EXHAUSTED_TEXT,
+  autoContinueDecision,
 } from "../../store/auto_continue";
 import {
   createFirstTransportHandler,
@@ -363,10 +365,6 @@ export async function sendMessage(
         // 鸿波 4-30 踩过坑: 第 1 轮 catfish_run_skill 已成功生成 .docx, 但模型继续
         // "再优化一版" args 一直 JSON 错, 烧完 10 轮上限. 早停让员工立刻看第一次成果.
         let consecutiveParseErrors = 0;
-        // 5/13 鸿波"长程任务咋办": 这次 send() 跑过 tool 没. 跑过才允许 auto-continue
-        // (用户首问得到答复就 stop 是正常的, 不该续; 跑过 tool 后 stop 是 mid-task
-        // 中途停, 才该续).
-        let hadToolCallThisSend = false;
         // 自动续跑次数 — 上限 MAX_AUTO_CONTINUES (3), 防死循环
         let autoContinues = 0;
         // 5/28 鸿波 P0 fix: send 入口快照 model, 整个 send 流程用这个值.
@@ -418,30 +416,26 @@ export async function sendMessage(
             consecutiveParseErrors = 0;
           }
 
-          // 标记: 这次 send 跑过 tool 没
-          if (
-            lastMsg?.role === "assistant"
-            && (lastMsg.tool_calls?.length ?? 0) > 0
-          ) {
-            hadToolCallThisSend = true;
-          }
-
           if (!result.shouldContinue) {
-            // 5/13 BL-AUTO-CONTINUE: LLM stop 没调 tool. 看要不要自动续跑.
-            // 触发条件 (4 条都满足):
-            //   1. toggle on (用户主动开)
-            //   2. 这次 send 之前跑过 tool (是 mid-task stop, 不是首问回答完)
-            //   3. 自动续跑次数 < 上限 (防死循环)
-            //   4. 没被用户 abort
-            const autoOn = useAutoContinueStore.getState().on;
-            // 10/11: 被网关每轮工具上限叫停也算 mid-task (hermes 模式下工具在 hermes
-            // 里跑, Companion 这边未必看得到 tool_calls), 一样可以自动续。
-            const shouldAutoContinue =
-              autoOn
-              && (hadToolCallThisSend || result.loopLimit === true)
-              && autoContinues < MAX_AUTO_CONTINUES
-              && !ctrl.signal.aborted;
-            if (shouldAutoContinue) {
+            // 5/13 BL-AUTO-CONTINUE: 停下了, 看要不要自动接力 (10/26 起只认明确的
+            // 「半途停下」信号, 判据见 autoContinueDecision)
+            const decision = autoContinueDecision({
+              on: useAutoContinueStore.getState().on,
+              loopLimit: result.loopLimit,
+              truncated: result.truncated,
+              used: autoContinues,
+              aborted: ctrl.signal.aborted,
+            });
+            if (decision === "exhausted") {
+              addMessage({
+                id: uuid(),
+                role: "assistant",
+                content: AUTO_CONTINUE_EXHAUSTED_TEXT,
+                ts: nowIso(),
+                status: "done",
+              });
+            }
+            if (decision === "continue") {
               autoContinues++;
               const continueMsg: ChatMessage = {
                 id: uuid(),

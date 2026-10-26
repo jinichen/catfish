@@ -65,6 +65,8 @@ export interface RoundResult {
   updatedMessages: ChatMessage[];
   /** 10/11: 这一轮被网关的每轮工具调用上限叫停 (409 agent_loop_limit_exceeded) */
   loopLimit?: boolean;
+  /** 10/26: 这一轮输出被截断 (finish_reason "length") */
+  truncated?: boolean;
 }
 
 export async function runOneRound(
@@ -148,7 +150,7 @@ export async function runOneRound(
       // 5/23 BL-COMPANION-HERMES-SESSION-REUSE (鸿波): 加 viaHermes flag.
       // hermes 路径下 hermes 自己往 state.db 写 assistant message, companion
       // 不能再 persistMessage 写一遍 (会双写, db 出现 2 条相同 assistant row).
-      const refs: { calls: ToolCall[]; viaHermes?: boolean } = { calls: [] };
+      const refs: { calls: ToolCall[]; viaHermes?: boolean; truncated?: boolean } = { calls: [] };
 
       // 5/28 鸿波 P0 fix: 用 ctx.sendModel (send 入口快照), 不读 store getState.
       // 旧实现 useChatStore.getState().model — vite HMR + zustand 多 instance 时
@@ -174,6 +176,9 @@ export async function runOneRound(
           if (text) setLifecycleStatus(null);
           pendingDelta += text;
           scheduleFlushThisRound();
+        },
+        onTruncated: () => {
+          refs.truncated = true;
         },
         onToolCalls: (calls) => {
           refs.calls = calls;
@@ -321,9 +326,9 @@ export async function runOneRound(
         return { shouldContinue: false, updatedMessages, loopLimit: true };
       }
 
-      // 没 tool_calls 就到此为止
+      // 没 tool_calls 就到此为止 (截断了就带上, 交给 sendMessage 决定是否自动接力)
       if (collectedToolCalls.length === 0) {
-        return { shouldContinue: false, updatedMessages };
+        return { shouldContinue: false, updatedMessages, truncated: refs.truncated === true };
       }
 
       // 有 tool_calls → 串行执行每个,产生 tool 角色消息

@@ -238,7 +238,7 @@ function UserBubble({
         }}
         title={
           isAutoContinue
-            ? `🔄 Companion 自动续跑 ${msg._autoContinue!.round}/${msg._autoContinue!.max} 轮 (toggle 开了, 长任务 LLM 中途停了, Companion 帮你发 "继续")`
+            ? `⏭ 自动接力 ${msg._autoContinue!.round}/${msg._autoContinue!.max} (任务做到一半被叫停, Companion 帮你发 "继续")`
             : undefined
         }
       >
@@ -252,7 +252,7 @@ function UserBubble({
             gap: 4,
           }}>
             <FastForward size={13} aria-hidden="true" />
-            自动续跑 {msg._autoContinue!.round}/{msg._autoContinue!.max}
+            自动接力 {msg._autoContinue!.round}/{msg._autoContinue!.max}
           </div>
         )}
         {/* 图片附件优先于文字, 视觉上更清楚 */}

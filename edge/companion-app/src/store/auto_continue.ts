@@ -6,9 +6,8 @@
  *
  * 开启时:
  *   - 状态进 zustand store + localStorage 持久化
- *   - useChat outer loop 看到 LLM stop + 没 tool_call + 这一 send() 跑过 tool
- *     → 自动 append 一条 user "继续", 续到下一轮
- *   - 上限 MAX_AUTO_CONTINUES (3) 防死循环 — 跑到上限就停
+ *   - 这一轮有明确「半途停下」信号 (见 autoContinueDecision) → 自动 append 一条 user "继续", 续到下一轮
+ *   - 上限 MAX_AUTO_CONTINUES (3) 防死循环 — 跑到上限就停, 并说一声
  *
  * 关闭时 (10/24 起默认开, 关了才是这样):
  *   - 跟 ChatGPT 一样: LLM stop 就 stop, 用户自己打"继续" 续跑
@@ -66,3 +65,30 @@ export const useAutoContinueStore = create<AutoContinueState>((set) => ({
     set({ on });
   },
 }));
+
+/** 这一轮停下之后: 自动接力 / 接力次数用完了要说一声 / 就此停。
+ *
+ * 10/26 改: 只认明确的「半途停下」信号 ——
+ *   - loopLimit: 网关每轮工具调用上限叫停 (409 agent_loop_limit_exceeded)
+ *   - truncated: 输出被截断 (finish_reason "length")
+ *
+ * 原来的「这次发送跑过工具 + 模型停下」不再算: 成功的任务最后一轮本来就是「跑过工具后停下」的总结轮,
+ * 直连网关时 Companion 看得见工具调用, 做完的任务会被追发 3 次「继续」; 走 hermes 时工具在 hermes 里跑,
+ * Companion 看不见, 这一条从来不成立。模型自己说做完了到底做没做完, 前端判断不了, 不猜。 */
+export type AutoContinueDecision = "continue" | "exhausted" | "stop";
+
+export function autoContinueDecision(args: {
+  on: boolean;
+  loopLimit?: boolean;
+  truncated?: boolean;
+  used: number;
+  aborted: boolean;
+}): AutoContinueDecision {
+  const midTask = args.loopLimit === true || args.truncated === true;
+  if (!args.on || !midTask || args.aborted) return "stop";
+  return args.used < MAX_AUTO_CONTINUES ? "continue" : "exhausted";
+}
+
+/** 接力次数用完时补的一句 (不然员工不知道自动接力已经停了)。 */
+export const AUTO_CONTINUE_EXHAUSTED_TEXT =
+  `⏭ 已自动接力 ${MAX_AUTO_CONTINUES} 次, 这次先停在这里。还没做完的话点「继续」接着做。`;

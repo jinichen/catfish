@@ -38,6 +38,9 @@ export interface SendChatParams {
   onDelta: (text: string) => void;
   /** LLM 决定调工具(stream 中 tool_calls 累积完毕)时触发 */
   onToolCalls?: (calls: ToolCall[]) => void;
+  /** 输出被截断 (finish_reason "length" / hermes error_code "output_truncated")。之后照常走 onDone 或 onError。
+   *  自动接力只认这种明确的「半途停下」(10/26)。 */
+  onTruncated?: () => void;
   /** 流自然结束(finish_reason=stop / [DONE]) */
   onDone: (info?: ChatStreamDoneInfo) => void;
   /** 任何错误 */

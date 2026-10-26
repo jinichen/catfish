@@ -484,7 +484,9 @@ export default function ChatInput({
             stop 正常结束但任务没完" semantic 场景 — 自动发"继续" 续上下文
             (上限 3 轮防失控). 取代 gateway 删的 BL-FIX23 mid-task retry.
             适合长任务 (合并多个 Excel / 资质材料整理 / 长流程 skill 串联).
-            关闭回常态: LLM stop 就 stop, 自己打"继续". 跨 session 隔离. */}
+            关闭回常态: LLM stop 就 stop, 自己打"继续". 跨 session 隔离.
+            10/26: 触发条件收窄成明确的「半途停下」(网关工具上限叫停 / 输出截断), 见
+            store/auto_continue.ts autoContinueDecision —— "正常 stop 但没做完" 前端判断不了。 */}
         <AutoContinueToggleButton isStreaming={isStreaming} />
 
         {/* 🎤 语音输入按钮 — 10/1 起本机 FunASR 转写 (会议组件包)

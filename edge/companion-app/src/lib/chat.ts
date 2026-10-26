@@ -23,7 +23,7 @@ import { hermesApiConfigGet, hermesApiAuthHeader, authWhoami } from "./tauri";
 // BL-CSP-PROXY (7/18 鸿波): hermes 8642 直连也走 Rust reqwest 代理, CSP 严格.
 import { fetchViaProxy } from "./http_proxy";
 import { prepareChatRequest } from "./chatRequest";
-import { chatStreamError } from "./chatStreamError";
+import { chatStreamError, isTruncatedChunk } from "./chatStreamError";
 import { pendingFromNativeEvent } from "./nativeApprovals";
 
 // 8/15: 5 个类型声明搬去 chat_types.ts。
@@ -638,6 +638,8 @@ export async function streamChat(params: SendChatParams): Promise<void> {
           // 网关 8/9 改成了新形状 —— 因为 OpenAI 官方客户端 (hermes 用的那个)
           // 遇到裸字符串会把文案整个丢掉, 只抛一句 "An error occurred during
           // streaming"。两种都认是为了新旧网关 / 新旧 Companion 交叉组合都不瞎。
+          // 10/26: 截断要在报错之前认 —— hermes 截断的那块同时带 error
+          if (isTruncatedChunk(parsed)) params.onTruncated?.();
           const streamError = chatStreamError(parsed);
           if (streamError !== undefined) {
             onError(streamError);
