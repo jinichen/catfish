@@ -177,6 +177,11 @@ pub fn schedule_watchdog() {
         loop {
             interval.tick().await;
 
+            // 10/26: 正在换 hermes 环境里的依赖, 进程是故意停的, 换完再拉
+            if crate::commands::hermes_runtime_deps::swapping() {
+                continue;
+            }
+
             // tool-bridge (client-side MCP server)
             if tool_bridge_installed
                 && !tool_bridge_health.is_in_backoff()

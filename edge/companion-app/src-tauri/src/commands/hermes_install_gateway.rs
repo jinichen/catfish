@@ -164,6 +164,28 @@ pub(crate) fn resume_after_install(paths: &BootstrapPaths, stopped: StoppedGatew
     }
 }
 
+/// 往 hermes 在用的 Python 环境里换依赖之前调 (Windows, 10/26)。
+///
+/// 10/26 鸿波 Windows 机器升 1.1.81: 换 multidict (6.7.1 → 6.9.1) 时网关、tool-bridge 还开着,
+/// Windows 锁住已加载的 `.pyd`, uv 删到一半失败 —— 旧版的 RECORD 没了、新版没装上,
+/// 网关再起来 `cannot import name 'istr' from 'multidict'`, 8642 起不来。
+///
+/// 所以先礼后兵: `hermes gateway stop` 让手头对话收尾, 然后把可执行文件在 hermes 目录下的
+/// 进程全杀掉 (端口已不通但进程还在的网关、tool-bridge、local-search、MCP 子进程)。
+/// 换完一律 `hermes gateway start` —— 原来没在跑的, 以前也是靠事后的 `gateway restart` 拉起来。
+/// tool-bridge / local-search 由 watchdog 拉回 (换依赖期间它不拉, 见 hermes_runtime_deps::swapping)。
+#[cfg(windows)]
+pub(crate) fn stop_everything_for_deps(paths: &BootstrapPaths) -> StoppedGateway {
+    let _ = stop_for_install(paths);
+    let killed = crate::services::process::kill_by_exe_dir(&paths.hermes_home);
+    if killed > 0 {
+        log::info!("[hermes-deps] 换依赖前结束了 {killed} 个用着 hermes 环境的进程");
+        // Stop-Process 返回时句柄不一定都放开了
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    StoppedGateway { resume: true }
+}
+
 /// 等 API 端口不再响应 (最多 60 秒) —— 进程真退出了, 文件才放开。
 /// 10/14 实测: v0.22 收到停止信号会先把手头的对话做完, 本机要 20 多秒才退。
 fn wait_until_down() {

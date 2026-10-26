@@ -20,9 +20,14 @@
 //! 10/25 起「够用」还包括版本: hermes-dep-overrides.txt 里那几个有漏洞的依赖, 装着的低于覆盖版本
 //! 也按缺包补装 (先从安装包把已装目录里的旧依赖清单换新, 见 hermes_dep_overrides.rs; 额外包清单后加的包
 //! 也是这一步才到得了老机器)。
+//!
+//! 10/26 起 Windows 上换之前先停网关、结束所有用着 hermes 环境的进程, 换完再起 (文件被占会装坏,
+//! 见 hermes_install_gateway::stop_everything_for_deps); 装完还 import 不了的强制重装一遍,
+//! 已经装坏的机器升级后自己修好。
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::hermes_dep_overrides;
 use super::hermes_install_artifacts::{hermes_extra_import_check, resolve_runtime_dir, RuntimeArtifacts};
@@ -96,8 +101,78 @@ fn imports_ok(python: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// 查一遍, 缺了就补。返回补装过的环境数 (调用方据此决定要不要重启网关)。失败只 warn。
-pub(crate) fn ensure_runtime_deps(resource_dir: &Path, paths: &BootstrapPaths) -> usize {
+/// 正在往 hermes 的环境里换依赖 (10/26)。这期间 watchdog / autostart 不拉 tool-bridge、local-search
+/// —— 拉起来的进程会再把文件占住 (Windows), 或者 import 到装了一半的包。
+static SWAPPING: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn swapping() -> bool {
+    SWAPPING.load(Ordering::SeqCst)
+}
+
+/// 换依赖期间的「静场」: 立起 SWAPPING; Windows 上再停网关、结束所有用着 hermes 环境的进程。
+/// 离开作用域 (装成、装败、panic 都一样) 时放下标志, Windows 上把网关起回来。
+struct Quiet<'a> {
+    #[cfg_attr(not(windows), allow(dead_code))]
+    paths: &'a BootstrapPaths,
+    #[cfg(windows)]
+    stopped: Option<super::hermes_install_gateway::StoppedGateway>,
+}
+
+impl<'a> Quiet<'a> {
+    fn begin(paths: &'a BootstrapPaths) -> Self {
+        SWAPPING.store(true, Ordering::SeqCst);
+        Quiet {
+            paths,
+            #[cfg(windows)]
+            stopped: Some(super::hermes_install_gateway::stop_everything_for_deps(paths)),
+        }
+    }
+
+    /// 网关是不是已经由这里起回来了 (调用方就不用再重启一遍)。
+    fn restarts_gateway(&self) -> bool {
+        cfg!(windows)
+    }
+}
+
+impl Drop for Quiet<'_> {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        if let Some(stopped) = self.stopped.take() {
+            super::hermes_install_gateway::resume_after_install(self.paths, stopped);
+        }
+        SWAPPING.store(false, Ordering::SeqCst);
+    }
+}
+
+/// 补装一个环境: 先照常装; 装完还 import 不了, 再强制重装一遍 (10/26: 修装到一半的机器)。
+fn repair(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths, python: &Path) -> bool {
+    let first = if python == hermes_venv_python(&paths.install_dir) {
+        // hermes 自己的 venv: 依赖 + hermes 本体 (editable) 一起, 跟首次安装同一步
+        hermes_install_native::install_python_deps(artifacts, paths)
+    } else {
+        hermes_install_native::install_requirements(artifacts, paths, python)
+    };
+    match first {
+        Ok(()) if imports_ok(python) => return true,
+        Ok(()) => log::warn!("[hermes-deps] 补装后仍有包 import 不了或版本不够, 强制重装一遍: {}", python.display()),
+        Err(e) => log::warn!("[hermes-deps] 补装失败, 强制重装一遍 {}: {e:#}", python.display()),
+    }
+    match hermes_install_native::reinstall_requirements(artifacts, paths, python) {
+        Ok(()) if imports_ok(python) => true,
+        Ok(()) => {
+            log::error!("[hermes-deps] 强制重装后仍有包 import 不了或版本不够: {}", python.display());
+            false
+        }
+        Err(e) => {
+            log::error!("[hermes-deps] 强制重装失败 {}: {e:#}", python.display());
+            false
+        }
+    }
+}
+
+/// 查一遍, 缺了就补。返回 true = 补装过、网关还得重启才用得上 (Windows 上这里已经把网关起回来, 返回 false)。
+/// 失败只记日志。
+pub(crate) fn ensure_runtime_deps(resource_dir: &Path, paths: &BootstrapPaths) -> bool {
     let artifacts = resolve_runtime_dir(resource_dir).map(RuntimeArtifacts::from_dir);
     // 先把已装目录里的离线依赖换成安装包里的 —— 下面的补装读的是已装目录那份
     if let Ok(a) = &artifacts {
@@ -107,38 +182,28 @@ pub(crate) fn ensure_runtime_deps(resource_dir: &Path, paths: &BootstrapPaths) -
     }
     let missing: Vec<PathBuf> = runtime_pythons(paths).into_iter().filter(|p| !imports_ok(p)).collect();
     if missing.is_empty() {
-        return 0;
+        return false;
     }
     let artifacts = match artifacts {
         Ok(a) => a,
         Err(e) => {
             log::warn!("[hermes-deps] {} 个环境缺包, 但找不到安装包里的离线依赖: {e:#}", missing.len());
-            return 0;
+            return false;
         }
     };
-    let primary = hermes_venv_python(&paths.install_dir);
+    let quiet = Quiet::begin(paths);
     let mut fixed = 0;
     for python in missing {
         log::warn!(
             "[hermes-deps] {} 缺鲶鱼要的包 (分词/浏览器/文件解析/网关) 或依赖版本低于安全要求 —— 离线补装, 不重装 hermes",
             python.display()
         );
-        let result = if python == primary {
-            // hermes 自己的 venv: 依赖 + hermes 本体 (editable) 一起, 跟首次安装同一步
-            hermes_install_native::install_python_deps(&artifacts, paths)
-        } else {
-            hermes_install_native::install_requirements(&artifacts, paths, &python)
-        };
-        match result {
-            Ok(()) if imports_ok(&python) => {
-                log::info!("[hermes-deps] 补装完成: {}", python.display());
-                fixed += 1;
-            }
-            Ok(()) => log::warn!("[hermes-deps] 补装后仍有包 import 不了或版本不够: {}", python.display()),
-            Err(e) => log::warn!("[hermes-deps] 补装失败 {}: {e:#}", python.display()),
+        if repair(&artifacts, paths, &python) {
+            log::info!("[hermes-deps] 补装完成: {}", python.display());
+            fixed += 1;
         }
     }
-    fixed
+    fixed > 0 && !quiet.restarts_gateway()
 }
 
 #[cfg(test)]
@@ -183,6 +248,26 @@ mod tests {
         let _env = crate::util::test_env::env_lock();
         let paths = BootstrapPaths::new(tmp.path().to_path_buf());
         assert_eq!(runtime_pythons(&paths), vec![hermes_venv_python(&paths.install_dir)]);
+    }
+
+    #[test]
+    fn 静场期间标着在换依赖_出了作用域就放下() {
+        let tmp = TempDir::new().unwrap();
+        let _env = crate::util::test_env::env_lock();
+        let paths = BootstrapPaths::new(tmp.path().to_path_buf());
+        assert!(!swapping());
+        {
+            let quiet = Quiet::begin(&paths);
+            assert!(swapping(), "watchdog / autostart 这时不拉 tool-bridge");
+            assert_eq!(quiet.restarts_gateway(), cfg!(windows));
+        }
+        assert!(!swapping());
+        let r = std::panic::catch_unwind(|| {
+            let _q = Quiet::begin(&paths);
+            panic!("装到一半出错");
+        });
+        assert!(r.is_err());
+        assert!(!swapping(), "出错也要放下, 不然 tool-bridge 再也不起");
     }
 
     #[test]

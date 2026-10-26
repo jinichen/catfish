@@ -219,11 +219,23 @@ pub(crate) fn install_python_deps(artifacts: &RuntimeArtifacts, paths: &Bootstra
 /// 把源码树里那份钉版本 + sha256 的依赖清单离线装进指定 Python 环境。
 /// hermes 自己的 venv 和 hermes 另建的运行环境 (hermes_runtime_deps.rs) 共用。
 pub(crate) fn install_requirements(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths, python: &Path) -> Result<()> {
+    run(requirements_command(artifacts, paths, python, false), "安装 Hermes 依赖 (离线)")
+}
+
+/// 清单里的包全部强制重装一遍 (10/26)。补装完还 import 不了时用: 装到一半失败的包
+/// (例如 Windows 上文件被占, 旧版 RECORD 删了、新版没装上) uv 认为版本对就跳过, 只有强制重装修得好。
+pub(crate) fn reinstall_requirements(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths, python: &Path) -> Result<()> {
+    run(requirements_command(artifacts, paths, python, true), "强制重装 Hermes 依赖 (离线)")
+}
+
+fn requirements_command(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths, python: &Path, reinstall: bool) -> Command {
     let dir = &paths.install_dir;
     let mut deps = uv(artifacts, paths);
-    deps.arg("pip")
-        .arg("install")
-        .arg("--quiet")
+    deps.arg("pip").arg("install");
+    if reinstall {
+        deps.arg("--reinstall");
+    }
+    deps.arg("--quiet")
         .arg("--python")
         .arg(python)
         .arg("--no-index")
@@ -233,7 +245,7 @@ pub(crate) fn install_requirements(artifacts: &RuntimeArtifacts, paths: &Bootstr
         .arg("--compile-bytecode") // 首次启动不用现编; jieba 那几句 SyntaxWarning 也只出现在这里
         .arg("-r")
         .arg(dir.join(REQUIREMENTS_FILE));
-    run(deps, "安装 Hermes 依赖 (离线)")
+    deps
 }
 
 /// Playwright 默认找浏览器的地方。跟 Python playwright 的 registry 一致
@@ -434,5 +446,31 @@ raise SystemExit(1 if bad else 0)
         super::super::hermes_install::bootstrap_locked(resource.path(), &paths, &reporter).unwrap();
         println!("第二遍 {:.1}s", started.elapsed().as_secs_f64());
         assert!(steps.lock().unwrap().last().unwrap().contains("Skipped"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(cmd: &Command) -> Vec<String> {
+        cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn 强制重装只多一个_reinstall_其余跟普通补装一样离线钉哈希() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let _env = crate::util::test_env::env_lock();
+        let paths = BootstrapPaths::new(tmp.path().to_path_buf());
+        let artifacts = RuntimeArtifacts::from_dir(tmp.path().join("runtime"));
+        let python = tmp.path().join("py");
+        let normal = args(&requirements_command(&artifacts, &paths, &python, false));
+        let mut forced = args(&requirements_command(&artifacts, &paths, &python, true));
+        assert!(!normal.contains(&"--reinstall".to_string()));
+        assert_eq!(forced.remove(2), "--reinstall");
+        assert_eq!(forced, normal);
+        for want in ["--no-index", "--require-hashes", "-r"] {
+            assert!(normal.contains(&want.to_string()), "{normal:?}");
+        }
     }
 }

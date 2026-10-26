@@ -167,8 +167,10 @@ pub fn hermes_agent_installed() -> bool {
 /// pywin32 的 DLL 被占用, 装到一半失败, 邮件探针从此不过 —— Hermes 跟着永远
 /// 不启动, 聊天整个不可用。一个附加组件坏了不该拖垮核心; 邮件扫描器单独等
 /// [`email_components_ready`]。
+///
+/// 10/26: 正在往 hermes 环境里换依赖时也不算就绪 —— 这时起的 tool-bridge 会占住要换的文件。
 pub fn hermes_runtime_ready() -> bool {
-    hermes_agent_installed()
+    !super::hermes_runtime_deps::swapping() && hermes_agent_installed()
 }
 
 /// 邮件扫描器的启动条件。Windows 上要确认 catfish-email 是带 `discover` 的新版
@@ -202,7 +204,7 @@ fn bootstrap_locked(
             "Hermes 核心已验证并保留，正在检查/修复附加组件", None);
         super::hermes_install_windows::ensure_optional_components(resource_dir, paths)?;
         // 10/21: hermes 实际在用的环境 (含它自己另建的) 缺鲶鱼的包就补, 跟 macOS 同一套
-        if super::hermes_runtime_deps::ensure_runtime_deps(resource_dir, paths) > 0 {
+        if super::hermes_runtime_deps::ensure_runtime_deps(resource_dir, paths) {
             super::hermes_plugin::restart_hermes_gateway();
         }
         report(
@@ -271,7 +273,7 @@ pub(crate) fn bootstrap_locked(
         // 同上: hermes 健康 ≠ jieba/playwright 装了。判据用 import 而不是看目录 ——
         // site-packages 里有目录但 import 不了的情况见过 (装了一半)。10/21 起连 hermes
         // 自己另建的运行环境一起查 (见 hermes_runtime_deps.rs)。
-        if super::hermes_runtime_deps::ensure_runtime_deps(resource_dir, paths) > 0 {
+        if super::hermes_runtime_deps::ensure_runtime_deps(resource_dir, paths) {
             super::hermes_plugin::restart_hermes_gateway();
         }
         report(

@@ -247,6 +247,29 @@ pub fn kill_by_cmdline(pattern: &str) -> usize {
         .unwrap_or(0)
 }
 
+/// 杀掉可执行文件在 `dir` 下面的所有进程 (不含自己)。返回杀掉的个数, 失败当 0。
+///
+/// 10/26 加: hermes 的网关、tool-bridge、local-search 及它们的子进程, 用的 python.exe 都在
+/// hermes 目录里 (内嵌 Python + venv 转发器)。按命令行认不全 (venv 的 python.exe 会转给
+/// 内嵌 Python 跑, 子进程命令行里不一定有 venv 路径), 按可执行文件所在目录认是全的。
+/// 用 StartsWith 不用 -like: 路径里的 `[` `]` 在 -like 里是通配符。
+#[cfg(windows)]
+pub fn kill_by_exe_dir(dir: &std::path::Path) -> usize {
+    let mut prefix = dir.to_string_lossy().trim_end_matches(['\\', '/']).replace('\'', "''");
+    prefix.push('\\');
+    let script = format!(
+        "$n=0; Get-CimInstance Win32_Process | Where-Object {{ $_.ExecutablePath -and \
+         $_.ExecutablePath.StartsWith('{prefix}', [StringComparison]::OrdinalIgnoreCase) -and $_.ProcessId -ne $PID }} | \
+         ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; $n++ }}; $n"
+    );
+    background_command("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
+        .unwrap_or(0)
+}
+
 pub fn kill(pid: u32) -> anyhow::Result<()> {
     if !is_alive(pid) {
         return Ok(()); // 已经死了，幂等返回
