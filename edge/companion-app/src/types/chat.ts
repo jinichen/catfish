@@ -90,6 +90,9 @@ export interface ChatMessage {
   /** BL-AUTO-CONTINUE (5/13 鸿波"长程任务咋办"): 这条 user msg 是 Companion
    *  自动续跑发的, UI 渲染要标记 (淡色 + "🔄 自动续 N/M" 角标). 用户原发的没这字段. */
   _autoContinue?: { round: number; max: number };
+  /** 10/27: hermes 一轮工具调用步数到上限 (agent.max_turns), 这条是它停下前做的小结 —— 界面在下面说清楚并给「继续」。
+   *  只在界面上, 不落库 (hermes 自己存消息)。 */
+  _stepLimit?: { used: number; max: number };
   /** 10/16: hermes 给这条打的显示标记, 从 state.db 带出来 (types/session.ts SessionMessage.displayKind)。
    *  ChatMessage 组件先看它再看 role: "compaction" → 一行「整理成了摘要」, "hidden" → 不显示,
    *  "internal_notification" → 一行系统说明。没标的照旧按正文认 (lib/userBubbleText)。 */

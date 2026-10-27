@@ -128,6 +128,9 @@ pub(crate) fn reconcile_windows_launcher() {
         report.rewritten,
         report.legacy
     );
+    // 10/27: 先等手头的回答写完 —— Windows 的重启是先停再起, 只给进行中的回答 30 秒。
+    // 这里本来就在 bootstrap 后台线程的最后一步, 阻塞着等不碍事。
+    crate::services::hermes_idle::wait_until_idle(crate::services::hermes_idle::MAX_WAIT, "重启 hermes 网关");
     if let Err(e) = super::codex_gateway::restart_hermes_gateway() {
         log::warn!("[hermes-launcher] 重写后重启 hermes 网关失败: {e}");
     }

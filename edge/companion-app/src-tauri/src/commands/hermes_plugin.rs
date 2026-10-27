@@ -413,14 +413,29 @@ fn request_hermes_restart() -> Result<String, String> {
 /// 9/23: 原来这里只打一行 "请手动重启"。Windows 上插件文件同步过去了、但 hermes
 /// 不重启就不加载 —— 8/9 在 mac 上修掉的"新端点 404 且完全静默"在 Windows 上
 /// 原样存在 (鸿波机器 /api/catfish/room-link/pending 一直 404)。
+///
+/// 10/27: Windows 的 `hermes gateway restart` 是先停再起, 进行中的回答只给 30 秒就打断 (鸿波机器
+/// 08:59 / 11:45 两次「说到一半停了」)。所以放到后台线程里, 先等手头的回答写完再重启
+/// (services/hermes_idle.rs), 不卡调用方 (启动 bootstrap 还要接着报「完成」)。
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn restart_hermes_gateway() {
-    match request_hermes_restart() {
-        Ok(cli) => log::info!("[P3.5.56] plugin 变了 → 已请 hermes 重启网关 ({cli})"),
-        Err(e) => log::warn!(
-            "[P3.5.56] plugin 变了但 `hermes gateway restart` 没成: {e}\n\
-             → 新 plugin 代码**还没生效** (hermes 还没装好的话, 装完启动时会加载)。手动跑: hermes gateway restart"
-        ),
+    let spawned = std::thread::Builder::new()
+        .name("hermes-restart-when-idle".into())
+        .spawn(|| {
+            crate::services::hermes_idle::wait_until_idle(
+                crate::services::hermes_idle::MAX_WAIT,
+                "重启 hermes 网关",
+            );
+            match request_hermes_restart() {
+                Ok(cli) => log::info!("[P3.5.56] plugin 变了 → 已请 hermes 重启网关 ({cli})"),
+                Err(e) => log::warn!(
+                    "[P3.5.56] plugin 变了但 `hermes gateway restart` 没成: {e}\n\
+                     → 新 plugin 代码**还没生效** (hermes 还没装好的话, 装完启动时会加载)。手动跑: hermes gateway restart"
+                ),
+            }
+        });
+    if let Err(e) = spawned {
+        log::warn!("[P3.5.56] 起不了等空闲重启的线程 ({e}), hermes 网关没重启");
     }
 }
 

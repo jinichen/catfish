@@ -26,6 +26,10 @@ type Rule = [RegExp, (m: RegExpMatchArray) => Omit<HermesStatusView, "raw">];
 const secs = (s: string) => Math.max(1, Math.round(Number(s)));
 
 const RULES: Rule[] = [
+  [
+    /Iteration budget exhausted \((\d+)\/(\d+)\)/i,
+    (m) => ({ text: `这一轮已经做了 ${m[2]} 步, 到上限了, 小鲶先把做到哪儿小结一下` }),
+  ],
   [/Context compaction complete/i, () => ({ text: "整理完了, 接着处理你的消息…" })],
   [
     /Compacting context/i,

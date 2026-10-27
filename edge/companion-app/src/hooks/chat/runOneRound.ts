@@ -26,7 +26,7 @@
 
 import { currentExpertRoute } from "../../lib/expertChat";
 import { useChatStore } from "../../store/chat";
-import { isAgentLoopLimit } from "../../lib/agentLoopLimit";
+import { isAgentLoopLimit, parseStepLimit } from "../../lib/agentLoopLimit";
 import { streamChat, type ChatTransport, type OpenAITool } from "../../lib/chat";
 import { detectToolBusinessError } from "../../lib/toolResult";
 import * as streamRegistry from "../../lib/streamRegistry";
@@ -150,7 +150,12 @@ export async function runOneRound(
       // 5/23 BL-COMPANION-HERMES-SESSION-REUSE (鸿波): 加 viaHermes flag.
       // hermes 路径下 hermes 自己往 state.db 写 assistant message, companion
       // 不能再 persistMessage 写一遍 (会双写, db 出现 2 条相同 assistant row).
-      const refs: { calls: ToolCall[]; viaHermes?: boolean; truncated?: boolean } = { calls: [] };
+      const refs: {
+        calls: ToolCall[];
+        viaHermes?: boolean;
+        truncated?: boolean;
+        stepLimit?: { used: number; max: number };
+      } = { calls: [] };
 
       // 5/28 鸿波 P0 fix: 用 ctx.sendModel (send 入口快照), 不读 store getState.
       // 旧实现 useChatStore.getState().model — vite HMR + zustand 多 instance 时
@@ -230,6 +235,9 @@ export async function runOneRound(
         // status "running" → 显; "completed" → 清 (但 hermes 目前不发 completed —
         // preflight emit 一次后 compress 跑完 stream 自然 done, finally block 清).
         onLifecycle: (status, text) => {
+          // 10/27: hermes 步数到上限的那条状态记下来, 回答结束后挂到这条消息上 (见下面 finalAssistant)
+          const limit = parseStepLimit(text);
+          if (limit) refs.stepLimit = limit;
           if (status === "completed" || !text) {
             setLifecycleStatus(null);
           } else {
@@ -257,6 +265,7 @@ export async function runOneRound(
           collectedToolCalls.length > 0 ? collectedToolCalls : undefined,
         status: isError ? "error" : "done",
         ...(isError ? { error: roundError } : {}),
+        ...(refs.stepLimit ? { _stepLimit: refs.stepLimit } : {}),
       };
       if (isError) {
         // streamChat onError 已经处理了 status + error 字段, 这里不动
@@ -268,6 +277,7 @@ export async function runOneRound(
       } else {
         updateMessage(assistantId, { status: "done" });
       }
+      if (refs.stepLimit) updateMessage(assistantId, { _stepLimit: refs.stepLimit });
       // P3.5.30 (6/17 鸿波): round 结束 镜像 final messages 到 registry.
       // ChatTab 切回时 mount restore (60 秒 TTL 内) 0 延迟看 final.
       // 多轮 tool_call 每轮都 sync, 最后一轮 finally streamRegistry.finish() 真标 not running**.

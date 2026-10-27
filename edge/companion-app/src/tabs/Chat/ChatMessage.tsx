@@ -7,7 +7,7 @@ import { Markdown } from "../../lib/markdown";
 import type { ChatMessage as Msg } from "../../types/chat";
 import ChatToolSteps from "./ChatToolSteps";
 import ChatLoopLimitNotice from "./ChatLoopLimitNotice";
-import { isAgentLoopLimit } from "../../lib/agentLoopLimit";
+import { isAgentLoopLimit, stepLimitText } from "../../lib/agentLoopLimit";
 import { extractFilePaths } from "../../lib/path_detect";
 import { FilePillList } from "../../components/FilePill";
 import { useAgentStore } from "../../store/agent";
@@ -480,6 +480,9 @@ function AssistantBubble({
         )}
         {isError && isAgentLoopLimit(msg.error) && (
           <ChatLoopLimitNotice error={msg.error!} canContinue={canContinue} />
+        )}
+        {!isError && msg._stepLimit && (
+          <ChatLoopLimitNotice text={stepLimitText(msg._stepLimit)} canContinue={canContinue} />
         )}
         {isError && !isAgentLoopLimit(msg.error) && (
           <div

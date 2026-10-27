@@ -55,6 +55,7 @@ pub mod phishing_config;  // P3.3.65 (6/13 鸿波): 钓鱼规则可配置 yaml +
 pub mod political_scan;   // P3.3.53 (6/13 鸿波): 政治敏感规则引擎 + audit chain 留档 (默认关)
 pub mod political_config; // P3.3.53 (6/13 鸿波): 政治敏感规则配置 — yaml 段, 集团信安/党办下发
 pub mod hermes_api_config; // BL-COMPANION-HERMES-API-CONFIG (5/19, Phase 2-2A)
+pub mod hermes_idle; // 10/27: 重启 hermes 网关前先等手头的回答写完 (Windows 的 restart 是先停再起, 只给 30 秒)
 pub mod hermes_compression; // BL-HERMES-CTX-CAP (10/6): 压缩绝对 token 上限, 防 400K 上下文把模型工具调用拖垮
 pub mod hermes_language; // 10/13: hermes 界面语言 display.language=zh, 微信里的固定提示变中文
 pub mod hermes_gateway_route; // 10/14 hermes v0.22: model 改 provider custom + key_env, 员工令牌另存文件

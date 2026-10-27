@@ -94,6 +94,12 @@ fn active_streams() -> &'static Mutex<HashMap<String, oneshot::Sender<()>>> {
     ACTIVE_STREAMS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// 正在收的流式请求有几条 (10/27: 重启 hermes 前看员工是不是正在等回答, 见 services/hermes_idle.rs)。
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub(crate) fn active_stream_count() -> usize {
+    active_streams().lock().map(|m| m.len()).unwrap_or(0)
+}
+
 /// 注册新 stream · 返 receiver 供后台 loop select!.
 fn register_stream(request_id: &str) -> oneshot::Receiver<()> {
     let (tx, rx) = oneshot::channel();
