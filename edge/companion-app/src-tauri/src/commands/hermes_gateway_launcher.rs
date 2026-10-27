@@ -22,6 +22,16 @@
 //!   一并删掉; 原来只靠它自启的, 补一个启动文件夹里的新启动项 (hermes 自己的兜底方式)。
 //!
 //! 有改动 → 重启一次网关, 换掉正在跑的旧解释器。没改动什么都不做。
+//!
+//! # 10/27: 只有「解释器换了」才算改动, 重启后确认网关真起来
+//!
+//! 鸿波 Windows 机 10/27 三次打开 Companion (08:58 / 11:43 / 14:51) 三次都报 rewritten=true、
+//! 三次都重启网关 —— 每次都把手头的回答掐断, 14:51 那次重启没起来, 网关停了 (日志里只记一行就完了)。
+//! 脚本文本有出入不等于要换进程: 本来只为换掉写死的旧解释器 (3.11 那种), 所以只比较
+//! `-m hermes_cli.main gateway run` 前面那个解释器路径。
+//!
+//! 重启 (Windows 上是先停再起, hermes 自己只等新网关 15 秒) 失败, 或者打开 Companion 时网关压根
+//! 没在跑, 都用 `hermes gateway start` (直接拉起, 10/27 鸿波手动跑这条恢复的) 再拉一次, 并确认端口通。
 
 use serde::Deserialize;
 
@@ -31,7 +41,11 @@ const RECONCILE_PY: &str = r#"
 import json
 from hermes_cli import gateway_windows as w
 from hermes_cli import gateway_windows_legacy as legacy
-out = {"rewritten": False, "legacy": [], "error": None}
+import re
+out = {"rewritten": False, "legacy": [], "error": None, "interpreter_before": None, "interpreter_after": None}
+def interpreter(text):
+    m = re.search(r'^\s*(?:sh\.Run\s+")?(.+?)\s+-m hermes_cli\.main gateway run', text, re.M)
+    return m.group(1).strip().strip('"') if m else None
 try:
     script = w.get_task_script_path()
     vbs = script.with_suffix(".vbs")
@@ -40,8 +54,10 @@ try:
         def read(p):
             return p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""
         before = read(script) + read(vbs)
+        out["interpreter_before"] = interpreter(read(vbs)) or interpreter(read(script))
         w._write_task_script()
         out["rewritten"] = (read(script) + read(vbs)) != before
+        out["interpreter_after"] = interpreter(read(vbs)) or interpreter(read(script))
     found = legacy.legacy_launcher_artifacts()
     out["legacy"] = [str(t) for _k, _l, t in found]
     if found:
@@ -62,12 +78,27 @@ pub(crate) struct ReconcileReport {
     pub rewritten: bool,
     pub legacy: Vec<String>,
     pub error: Option<String>,
+    #[serde(default)]
+    pub interpreter_before: Option<String>,
+    #[serde(default)]
+    pub interpreter_after: Option<String>,
 }
 
 impl ReconcileReport {
     #[cfg_attr(any(not(windows), debug_assertions), allow(dead_code))]
     pub(crate) fn changed(&self) -> bool {
-        self.rewritten || !self.legacy.is_empty()
+        self.interpreter_changed() || !self.legacy.is_empty()
+    }
+
+    /// 启动脚本里的解释器换了 (大小写不敏感 —— Windows 路径)。认不出解释器的老格式按「文本变了」算。
+    fn interpreter_changed(&self) -> bool {
+        if !self.rewritten {
+            return false;
+        }
+        match (&self.interpreter_before, &self.interpreter_after) {
+            (Some(a), Some(b)) => !a.eq_ignore_ascii_case(b),
+            _ => true,
+        }
     }
 }
 
@@ -121,19 +152,29 @@ pub(crate) fn reconcile_windows_launcher() {
         log::warn!("[hermes-launcher] 检查开机自启脚本出错: {err}");
     }
     if !report.changed() {
+        if report.rewritten {
+            log::info!(
+                "[hermes-launcher] 开机自启脚本有出入已重写, 解释器没变 ({:?}), 不重启网关",
+                report.interpreter_after
+            );
+        }
+        // 10/27: 打开 Companion 时网关没在跑 (上次重启没起来 / 登录时自启失败) → 拉起来
+        super::hermes_gateway_health::ensure_gateway_up("打开 Companion 时");
         return;
     }
     log::info!(
-        "[hermes-launcher] 开机自启脚本已按当前 hermes 重写 (rewritten={}, 删掉老启动项 {:?}), 重启网关换掉旧解释器",
-        report.rewritten,
+        "[hermes-launcher] 开机自启脚本已按当前 hermes 重写 (解释器 {:?} → {:?}, 删掉老启动项 {:?}), 重启网关换掉旧解释器",
+        report.interpreter_before,
+        report.interpreter_after,
         report.legacy
     );
     // 10/27: 先等手头的回答写完 —— Windows 的重启是先停再起, 只给进行中的回答 30 秒。
     // 这里本来就在 bootstrap 后台线程的最后一步, 阻塞着等不碍事。
     crate::services::hermes_idle::wait_until_idle(crate::services::hermes_idle::MAX_WAIT, "重启 hermes 网关");
     if let Err(e) = super::codex_gateway::restart_hermes_gateway() {
-        log::warn!("[hermes-launcher] 重写后重启 hermes 网关失败: {e}");
+        log::warn!("[hermes-launcher] 重写后重启 hermes 网关没成: {e}");
     }
+    super::hermes_gateway_health::ensure_gateway_up("重写启动脚本重启后");
 }
 
 #[cfg(test)]
@@ -147,6 +188,30 @@ mod tests {
         let r = parse_report(out).unwrap();
         assert!(r.rewritten && r.changed());
         assert_eq!(r.legacy, vec!["C:\\x\\Hermes_Gateway.vbs".to_string()]);
+    }
+
+    #[test]
+    fn 文本变了但解释器没变_不重启() {
+        let r = parse_report(
+            "CATFISH_RECONCILE {\"rewritten\": true, \"legacy\": [], \"error\": null, \
+             \"interpreter_before\": \"C:\\\\h\\\\tools\\\\python.exe\", \
+             \"interpreter_after\": \"c:\\\\H\\\\tools\\\\python.exe\"}",
+        )
+        .unwrap();
+        assert!(!r.changed());
+    }
+
+    #[test]
+    fn 解释器换了才重启_老格式认不出按变了算() {
+        let r = parse_report(
+            "CATFISH_RECONCILE {\"rewritten\": true, \"legacy\": [], \"error\": null, \
+             \"interpreter_before\": \"C:\\\\uv\\\\cpython-3.11.10\\\\pythonw.exe\", \
+             \"interpreter_after\": \"C:\\\\h\\\\tools\\\\python.exe\"}",
+        )
+        .unwrap();
+        assert!(r.changed());
+        let old = parse_report("CATFISH_RECONCILE {\"rewritten\": true, \"legacy\": [], \"error\": null}").unwrap();
+        assert!(old.changed());
     }
 
     #[test]

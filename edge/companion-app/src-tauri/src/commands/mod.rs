@@ -80,6 +80,7 @@ pub(crate) mod hermes_runtime_deps; // 10/21: hermes 实际在用的 Python 环�
 pub(crate) mod hermes_dep_overrides; // 10/25: 不升 hermes 单独把有漏洞的依赖换新 (hermes-dep-overrides.txt)
 pub mod hermes_policy_plugin; // 10/21: 红线策略插件 catfish-policy 随 Companion 装 + 启用
 pub mod hermes_plugin; // P3.5.56 (6/21 鸿波): Companion boot 自动装 catfish-xcatfish-user plugin (baked + ensure config.yaml enabled)
+pub mod hermes_gateway_health; // 10/27: hermes 网关没在跑就 `hermes gateway start` 拉起来 (重启后 / 打开 Companion 时)
 pub mod http_proxy; // BL-CSP-PROXY (7/18 鸿波): Rust reqwest HTTP 代理, CSP connect-src 保持严格
 pub mod identity;
 pub mod identity_bundle; // BL-IDENTITY-INJECT-DECOUPLE (5/26): SOUL/USER/memories prefetch 给 /v1/chat/completions body

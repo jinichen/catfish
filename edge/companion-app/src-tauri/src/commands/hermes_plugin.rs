@@ -391,13 +391,18 @@ pub(crate) fn restart_hermes_gateway() {
 /// 请 hermes 自己重启网关: venv 里 hermes 的 `gateway restart`。网关等进行中的对话收尾后干净重启,
 /// 命令发出请求就返回, 不等新网关起来。Ok 带 hermes 的路径 (写日志用)。mac / Windows 共用。
 fn request_hermes_restart() -> Result<String, String> {
+    run_hermes_cli(&["gateway", "restart"])
+}
+
+/// 跑 venv 里 hermes 的一条命令 (HERMES_HOME 指好)。Ok 带 hermes 的路径 (写日志用)。
+pub(super) fn run_hermes_cli(args: &[&str]) -> Result<String, String> {
     let home = hermes_home().ok_or("找不到 hermes 目录")?;
     let cli = crate::services::catfish_paths::hermes_venv_tool(&home.join("hermes-agent"), "hermes");
     if !cli.exists() {
         return Err(format!("hermes 还没装好 ({} 不在)", cli.display()));
     }
     let out = crate::services::process::python_command(&cli)
-        .args(["gateway", "restart"])
+        .args(args)
         .env("HERMES_HOME", &home)
         .stdin(std::process::Stdio::null())
         .output()
@@ -433,6 +438,7 @@ pub(crate) fn restart_hermes_gateway() {
                      → 新 plugin 代码**还没生效** (hermes 还没装好的话, 装完启动时会加载)。手动跑: hermes gateway restart"
                 ),
             }
+            super::hermes_gateway_health::ensure_gateway_up("插件更新重启后");
         });
     if let Err(e) = spawned {
         log::warn!("[P3.5.56] 起不了等空闲重启的线程 ({e}), hermes 网关没重启");
@@ -761,3 +767,4 @@ mod tests {
         assert!(plugin_path.join("__init__.py").is_file());
     }
 }
+
