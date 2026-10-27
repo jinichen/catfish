@@ -48,13 +48,12 @@ import {
   SUPPORTED_AUDIO_EXTS,
 } from "./components/attachmentHelpers";
 import AutoContinueToggleButton from "./components/AutoContinueToggleButton";
-import FileChip from "./components/FileChip";
+import AttachmentTray from "./components/AttachmentTray";
 import QueuedMessagesStrip from "./components/QueuedMessagesStrip";
 // P3.5.167 (7/3 鸿波): TeachingToggleButton 移入 EduPopover, ChatInput 不再直接
 // 引用. 老组件文件保留 (EduPopover 复用 useTeachingStore 内部 state 逻辑), 只是
 // 不再作独立 button render. 未来若需彻底删可 grep 无 caller 后再动.
 // import TeachingToggleButton from "./components/TeachingToggleButton";
-import ThumbCard from "./components/ThumbCard";
 // 9/23: 拖入微信「合并转发」导出的 ZIP → 确认框 → 导入本机 → 作为附件发给模型
 import WeChatImportDialog from "./components/WeChatImportDialog";
 import {
@@ -377,33 +376,12 @@ export default function ChatInput({
           onCancel={cancelWeChatImport}
         />
       )}
-      {/* 缩略图行 —— 只有 attachments 非空才渲染 */}
-      {attachments.length > 0 && (
-        <div
-          style={{
-            display: "flex",
-            gap: "var(--space-2)",
-            flexWrap: "wrap",
-            marginBottom: "var(--space-2)",
-          }}
-        >
-          {attachments.map((att, idx) =>
-            att.kind === "image" ? (
-              <ThumbCard
-                key={idx}
-                attachment={att}
-                onRemove={() => removeAttachment(idx)}
-              />
-            ) : (
-              <FileChip
-                key={idx}
-                attachment={att}
-                onRemove={() => removeAttachment(idx)}
-              />
-            )
-          )}
-        </div>
-      )}
+      {/* 附件区: 少的铺开, 多了收成一行汇总 (10/27, 见 AttachmentTray) */}
+      <AttachmentTray
+        attachments={attachments}
+        onRemove={removeAttachment}
+        onClear={() => setAttachments([])}
+      />
 
       {/* 🎤 语音 hint toast (方案 B 五一 sprint Day 1) */}
       {speechHint && (

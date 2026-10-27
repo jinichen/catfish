@@ -138,6 +138,10 @@ function UserBubble({
   // BL-COMPANION-RESEND (7/23): hover state · 显 🔄 按钮.
   // 自动续跑消息不显 (不是员工发的 · 重发无意义).
   const [hovered, setHovered] = useState(false);
+  // 10/27: 一次发几十个文件, 气泡里只列前几个, 其余收成「+N 个文件」
+  const [allFiles, setAllFiles] = useState(false);
+  const FILE_TAGS_SHOWN = 5;
+  const visibleFiles = allFiles || fileNames.length <= FILE_TAGS_SHOWN + 1 ? fileNames : fileNames.slice(0, FILE_TAGS_SHOWN);
   // BL-COMPANION-EDIT (7/23 P1): 编辑态 · click ✏️ → editing=true · 气泡变 textarea.
   // draft = 编辑中的草稿 · 确认前老 msg.content 保留 · 取消 (Esc) 时 draft 丢弃.
   const [editing, setEditing] = useState(false);
@@ -286,7 +290,7 @@ function UserBubble({
         {/* 文件附件: 小标签, 只显示文件名 (完整路径 / 预览正文是给模型的, 不在气泡里) */}
         {fileNames.length > 0 && (
           <div style={{ display: "flex", gap: "var(--space-1)", flexWrap: "wrap" }}>
-            {fileNames.map((name) => (
+            {visibleFiles.map((name) => (
               <span
                 key={name}
                 title={name}
@@ -309,6 +313,24 @@ function UserBubble({
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
               </span>
             ))}
+            {fileNames.length > visibleFiles.length && (
+              <button
+                type="button"
+                onClick={() => setAllFiles(true)}
+                style={{
+                  border: "none",
+                  cursor: "pointer",
+                  padding: "2px 8px",
+                  borderRadius: "var(--radius-sm)",
+                  background: isAutoContinue ? "var(--catfish-cyan-tint)" : "rgba(255,255,255,0.18)",
+                  color: "inherit",
+                  fontSize: 12,
+                  lineHeight: 1.6,
+                }}
+              >
+                +{fileNames.length - visibleFiles.length} 个文件
+              </button>
+            )}
           </div>
         )}
         {/* BL-COMPANION-EDIT (7/23 P1): 编辑态 · content 变 textarea + 键盘 tip
