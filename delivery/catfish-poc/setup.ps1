@@ -33,6 +33,9 @@
     ⚠ 裸 IP + HTTP 时员工浏览器会**卡在"加载中…"且不报错** —— 前端 PKCE
       要 crypto.subtle, 浏览器只在安全上下文提供它。所以默认 HTTPS。
 
+.PARAMETER LocalOnly
+    1 = 单机模式: 服务器 IP 用 127.0.0.1, 只有这台电脑自己能用 (客户端也装在这台, 演示 / 单机试用)。
+
 .PARAMETER Upgrade
     1 = 升级 (保留现有 .env / 数据 / 证书, 不从 .env.example 覆盖)
 
@@ -64,6 +67,7 @@ param(
     [string]$ServerIp = $env:SERVER_IP,
     [ValidateSet('', '0', '1')][string]$EnableHttps = $env:ENABLE_HTTPS,
     [ValidateSet('0', '1')][string]$Upgrade = $(if ($env:UPGRADE) { $env:UPGRADE } else { '0' }),
+    [ValidateSet('0', '1')][string]$LocalOnly = $(if ($env:LOCAL_ONLY) { $env:LOCAL_ONLY } else { '0' }),
     [string]$ImageTar = $env:IMAGE_TAR,
     [ValidateSet('0', '1')][string]$RegenEnvOnly = $(if ($env:REGEN_ENV_ONLY) { $env:REGEN_ENV_ONLY } else { '0' }),
     [string]$HttpsPort = $env:CATFISH_HTTPS_PORT,
@@ -114,7 +118,7 @@ Say "═════════════════════════
 # Linux/Docker 引擎, 不用装 Docker Desktop (大公司要买订阅)。跟 Linux 服务器跑同一个 setup.sh。
 $WslSetup = Join-Path $ScriptDir 'windows\setup-wsl.ps1'
 function Use-WslPath {
-    $fw = @{ EnableHttps = $(if ($EnableHttps) { $EnableHttps } else { '1' }); Upgrade = $Upgrade; AdminPassword = $AdminPassword }
+    $fw = @{ EnableHttps = $(if ($EnableHttps) { $EnableHttps } else { '1' }); Upgrade = $Upgrade; LocalOnly = $LocalOnly; AdminPassword = $AdminPassword }
     if ($ServerIp) { $fw.ServerIp = $ServerIp }
     & $WslSetup @fw
     exit $LASTEXITCODE
@@ -191,6 +195,8 @@ if (-not $HttpsPort) { $HttpsPort = Get-EnvValue 'CATFISH_HTTPS_PORT' }
 if (-not $HttpsPort) { $HttpsPort = '443' }
 
 # ── 1. 探测 / 确认 server IP ──────────────────────────────
+# 10/28: 单机模式 (中央和客户端在同一台电脑) 不探测, 直接用 127.0.0.1 —— 跟 setup.sh 同一规则
+if ($LocalOnly -eq '1' -and -not $ServerIp) { $ServerIp = '127.0.0.1' }
 if (-not $ServerIp) {
     # 排掉 loopback / APIPA / Docker 自己的 NAT 网段 —— 跟 setup.sh 同一组规则。
     # WSL 和 Hyper-V 的虚拟网卡在 Windows 上很常见, 选中它们的话员工连不上。
@@ -223,10 +229,13 @@ if (-not $ServerIp) {
     Say "→ 使用指定 IP: $ServerIp"
 }
 # 10/22: 填 127.0.0.1 证书和登录地址都签给它, 员工电脑上 127.0.0.1 是员工自己的电脑, 全连不上
-if ($ServerIp -match '^(127\.|0\.0\.0\.0$|169\.254\.)|^localhost$') {
+if ($ServerIp -match '^127\.' -and $LocalOnly -eq '1') {
+    SayWarn "单机模式: 只有这台电脑自己能用 (客户端也要装在这台), 别的电脑连不上"
+} elseif ($ServerIp -match '^(127\.|0\.0\.0\.0$|169\.254\.)|^localhost$') {
     Die "-ServerIp $ServerIp 只有这台电脑自己能访问, 员工电脑连不上" @(
         "填这台电脑的局域网 IP (命令行跑 ipconfig, 看「IPv4 地址」), 例: -ServerIp 192.168.1.20",
-        "或者不写 -ServerIp, 脚本会自动探测并让你确认")
+        "或者不写 -ServerIp, 脚本会自动探测并让你确认",
+        "真的只在这台电脑上用 (客户端也装在这台): .\setup.ps1 -LocalOnly 1")
 }
 
 # ── 2.pre · 先装 image, 再写任何配置 ──────────────────────

@@ -20,6 +20,7 @@
       · 日志: <InstallDir>\logs\
 
 .PARAMETER ServerIp      员工访问用的本机局域网 IP。不传则自动探测并确认。
+.PARAMETER LocalOnly     1 = 单机模式: 服务器 IP 用 127.0.0.1, 只有这台电脑自己能用 (客户端也装在这台), 不开防火墙
 .PARAMETER EnableHttps   1 = 开 443 (默认); 0 = 只跑 HTTP (裸 IP 下员工浏览器登录会卡住, 仅测试用)
 .PARAMETER Upgrade       1 = 升级: 用新包覆盖程序文件, 保留 .env / 证书 / 账号 / 数据库
 .PARAMETER InstallDir    WSL 磁盘、开机脚本、日志放哪 (默认 C:\CatfishCentral, 要有 20GB 以上空间)
@@ -34,6 +35,7 @@ param(
     [string]$ServerIp = $env:SERVER_IP,
     [ValidateSet('0', '1')][string]$EnableHttps = $(if ($env:ENABLE_HTTPS) { $env:ENABLE_HTTPS } else { '1' }),
     [ValidateSet('0', '1')][string]$Upgrade = $(if ($env:UPGRADE) { $env:UPGRADE } else { '0' }),
+    [ValidateSet('0', '1')][string]$LocalOnly = $(if ($env:LOCAL_ONLY) { $env:LOCAL_ONLY } else { '0' }),
     [string]$InstallDir = 'C:\CatfishCentral',
     [string]$AdminPassword = $(if ($env:ADMIN_PASSWORD) { $env:ADMIN_PASSWORD } else { 'catfish_2026' }),
     # 重启后由 RunOnce 带上, 不要手动传
@@ -169,6 +171,9 @@ $cfgPath = Join-Path $InstallDir 'catfish-wsl.json'
 if (-not $ServerIp -and $Upgrade -eq '1' -and (Test-Path $cfgPath)) {
     $ServerIp = (Get-Content $cfgPath -Raw | ConvertFrom-Json).ServerIp
 }
+# 10/28: 单机模式不探测, 直接用 127.0.0.1 (跟 setup.sh 同一规则); 升级时上次装的就是 127.x 也按单机模式走
+if ($LocalOnly -eq '1' -and -not $ServerIp) { $ServerIp = '127.0.0.1' }
+if ($Upgrade -eq '1' -and $ServerIp -match '^127\.') { $LocalOnly = '1' }
 if (-not $ServerIp) {
     # 跟 setup.ps1 / setup.sh 同一组排除规则: WSL / Hyper-V 的虚拟网卡选中了员工连不上
     $cand = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
@@ -191,10 +196,13 @@ if (-not $ServerIp) {
 }
 if ($ServerIp -notmatch '^(\d{1,3}\.){3}\d{1,3}$') { Die "IP 格式不对: $ServerIp" }
 # 10/22 现场有人填了 -ServerIp 127.0.0.1: 证书和登录地址都签给 127.0.0.1, 员工电脑上 127.0.0.1 是它自己, 全连不上
-if ($ServerIp -match '^(127\.|0\.0\.0\.0$|169\.254\.)') {
+if ($ServerIp -match '^127\.' -and $LocalOnly -eq '1') {
+    SayWarn "单机模式: 只有这台电脑自己能用 (客户端也要装在这台), 别的电脑连不上"
+} elseif ($ServerIp -match '^(127\.|0\.0\.0\.0$|169\.254\.)') {
     Die "-ServerIp $ServerIp 只有这台电脑自己能访问, 员工电脑连不上" @(
         "填这台电脑的局域网 IP (命令行跑 ipconfig, 看「IPv4 地址」), 例: -ServerIp 192.168.1.20",
-        "或者不写 -ServerIp, 脚本会自动探测并让你确认")
+        "或者不写 -ServerIp, 脚本会自动探测并让你确认",
+        "真的只在这台电脑上用 (客户端也装在这台): -LocalOnly 1")
 }
 SayOk "服务器 IP: $ServerIp"
 
@@ -261,11 +269,16 @@ foreach ($p in $Ports) {
 Set-Service -Name iphlpsvc -StartupType Automatic
 Start-Service -Name iphlpsvc
 
-if (-not (Get-NetFirewallRule -DisplayName $FwRule -ErrorAction SilentlyContinue)) {
-    New-NetFirewallRule -DisplayName $FwRule -Direction Inbound -Action Allow -Protocol TCP `
-        -LocalPort ($Ports | ForEach-Object { "$_" }) -Profile Any | Out-Null
+if ($LocalOnly -eq '1') {
+    # 单机模式本机访问不过防火墙, 不给局域网开口子
+    SayOk "单机模式: 不开防火墙端口"
+} else {
+    if (-not (Get-NetFirewallRule -DisplayName $FwRule -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -DisplayName $FwRule -Direction Inbound -Action Allow -Protocol TCP `
+            -LocalPort ($Ports | ForEach-Object { "$_" }) -Profile Any | Out-Null
+    }
+    SayOk "防火墙已放行 TCP $($Ports -join ' / ')"
 }
-SayOk "防火墙已放行 TCP $($Ports -join ' / ')"
 
 $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if (-not $task) {
@@ -312,7 +325,7 @@ Say ""
 Say "→ 安装中央服务 (setup.sh) …"
 # 单引号包住传给 bash; 值里本身有单引号 (密码可能有) 要写成 '\'' 才不会断开
 function Q { param([string]$v) "'" + ($v -replace "'", "'\''") + "'" }
-$envs = "SERVER_IP=$(Q $ServerIp) ENABLE_HTTPS=$(Q $EnableHttps) UPGRADE=$(Q $Upgrade) IMAGE_TAR=$(Q $ImageLinux) ADMIN_PASSWORD=$(Q $AdminPassword)"
+$envs = "SERVER_IP=$(Q $ServerIp) ENABLE_HTTPS=$(Q $EnableHttps) UPGRADE=$(Q $Upgrade) LOCAL_ONLY=$(Q $LocalOnly) IMAGE_TAR=$(Q $ImageLinux) ADMIN_PASSWORD=$(Q $AdminPassword)"
 $rc = InDistro "cd /opt/catfish/catfish-poc && $envs bash setup.sh"
 if ($rc -ne 0) { Die "setup.sh 失败 (详情见上)" @("修好后直接重跑本脚本, 已完成的步骤会跳过") }
 

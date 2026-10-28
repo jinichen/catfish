@@ -19,6 +19,9 @@
 #   # 显式指定 IP + 自签 cert (推荐 · 生产 POC 走 HTTPS)
 #   SERVER_IP=192.168.100.50 ENABLE_HTTPS=1 bash setup.sh
 #
+#   # 只给这台机器自己用 (客户端也装在这台, 例: 演示 / 单机试用) —— 地址用 127.0.0.1
+#   LOCAL_ONLY=1 bash setup.sh
+#
 #   # 只重生成 .env (不动 docker · 已装好想改 IP 时用)
 #   REGEN_ENV_ONLY=1 SERVER_IP=192.168.100.50 bash setup.sh
 #
@@ -61,6 +64,7 @@ SERVER_IP="${SERVER_IP:-}"
 ENABLE_HTTPS="${ENABLE_HTTPS:-}"
 REGEN_ENV_ONLY="${REGEN_ENV_ONLY:-0}"
 UPGRADE="${UPGRADE:-0}"
+LOCAL_ONLY="${LOCAL_ONLY:-0}"   # 1 = 单机模式: 服务器 IP 用 127.0.0.1, 别的电脑连不上
 IMAGE_TAR="${IMAGE_TAR:-}"   # 若未装 image · 指到 image tar 路径
 GATEWAY_WORKERS="${GATEWAY_WORKERS:-}"
 IDENTITY_WORKERS="${IDENTITY_WORKERS:-}"
@@ -85,7 +89,7 @@ for _arg in "$@"; do
             echo ""
             echo "   写在后面的话 shell 不会把它设成环境变量, 脚本收不到,"
             echo "   然后会以\"你没指定\"继续往下走 —— 报的错跟真实原因无关。"
-            [ "$_k" = "SERVER_IP" ] && echo "   (顺带: 别用 127.0.0.1, 那样只有这台机器自己能访问)"
+            [ "$_k" = "SERVER_IP" ] && echo "   (顺带: 127.0.0.1 只有这台机器自己能访问; 真要单机用写 LOCAL_ONLY=1)"
             echo ""
             exit 1
             ;;
@@ -304,6 +308,11 @@ echo "  Catfish 中央服务一键装机"
 echo "═══════════════════════════════════════════════════════"
 
 # ── 1. 探测 / 确认 server IP ─────────────────────────────
+# 10/28: 单机模式 (中央和客户端在同一台机器) 不探测, 直接用 127.0.0.1。证书本来就带 127.0.0.1,
+# 容器之间验 token 走 compose 内网 (CATFISH_OIDC_JWKS_URI), 不回连这个地址。
+if [ "$LOCAL_ONLY" = "1" ] && [ -z "$SERVER_IP" ]; then
+    SERVER_IP=127.0.0.1
+fi
 if [ -z "$SERVER_IP" ]; then
     # 探测: 取第一条非 loopback / 非 docker 的 IPv4
     # ⚠ 结尾那个 `|| true` 不是装饰。
@@ -358,11 +367,21 @@ else
     echo "→ 使用指定 IP: $SERVER_IP"
 fi
 # 10/22: 填 127.0.0.1 证书和登录地址都签给它, 员工电脑上 127.0.0.1 是员工自己的电脑, 全连不上
+# 单机模式明确要的就是这个, 只放行 127.x (0.0.0.0 / 169.254 / localhost 单机也不对)
 case "$SERVER_IP" in
-    127.*|0.0.0.0|169.254.*|localhost)
-        echo "❌ SERVER_IP=$SERVER_IP 只有这台机器自己能访问, 员工电脑连不上"
-        echo "   填服务器的局域网 IP (ip -4 addr / hostname -I 能看到), 例: SERVER_IP=192.168.1.20"
-        echo "   或者不写 SERVER_IP, 脚本会自动探测并让你确认"
+    127.*)
+        if [ "$LOCAL_ONLY" = "1" ]; then
+            echo "⚠ 单机模式: 只有这台机器自己能用 (客户端也要装在这台), 别的电脑连不上"
+        else
+            echo "❌ SERVER_IP=$SERVER_IP 只有这台机器自己能访问, 员工电脑连不上"
+            echo "   填服务器的局域网 IP (ip -4 addr / hostname -I 能看到), 例: SERVER_IP=192.168.1.20"
+            echo "   或者不写 SERVER_IP, 脚本会自动探测并让你确认"
+            echo "   真的只在这台机器上用 (客户端也装在这台): LOCAL_ONLY=1 bash setup.sh"
+            exit 1
+        fi ;;
+    0.0.0.0|169.254.*|localhost)
+        echo "❌ SERVER_IP=$SERVER_IP 不能用: 填服务器的局域网 IP, 例: SERVER_IP=192.168.1.20"
+        echo "   只在这台机器上用的话: LOCAL_ONLY=1 bash setup.sh (自动用 127.0.0.1)"
         exit 1 ;;
 esac
 

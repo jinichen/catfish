@@ -107,11 +107,11 @@ def _san_entries(ip: str) -> list[x509.GeneralName]:
     Chrome / Safari 上一律报 ERR_CERT_COMMON_NAME_INVALID —— 这就是原脚本
     里那句 `-addext subjectAltName=...` 存在的理由, 不是可选项。
     """
-    names: list[x509.GeneralName] = [
-        x509.IPAddress(ipaddress.ip_address(ip)),
-        x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
-        x509.DNSName("localhost"),
-    ]
+    names: list[x509.GeneralName] = [x509.IPAddress(ipaddress.ip_address(ip))]
+    # 单机模式 (LOCAL_ONLY, 10/28) 下 ip 本身就是 127.0.0.1, 别写两遍
+    if ip != "127.0.0.1":
+        names.append(x509.IPAddress(ipaddress.ip_address("127.0.0.1")))
+    names.append(x509.DNSName("localhost"))
     return names
 
 
