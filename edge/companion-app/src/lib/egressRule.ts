@@ -63,6 +63,7 @@ const PATH_PURPOSE: [string, string][] = [
   ["/v1/wiki/", "部门知识"],
   ["/api/proactive/", "主动提醒"],
   ["/api/egress/anchor", "报指纹 (防篡改)"],
+  ["/api/show", "查询模型信息"],
 ];
 
 /** 页面上看到的「做什么」: catfish_source 标签优先, 其次按路径 */
@@ -94,6 +95,7 @@ const SOURCE_PURPOSE: Record<string, string> = {
  *  「做什么」是指纹链的一部分 (_CHAIN_FIELDS 里有 purpose), 老记录不能改库, 只能显示时换。 */
 export function displayPurpose(purpose: string, destHost: string, url = ""): string {
   if (purpose === "/api/egress/anchor") return "报指纹 (防篡改)";
+  if (purpose === "/api/show") return "查询模型信息";
   if (purpose === "微信") return destHost.includes("cdn.") ? "微信 · 发图片 / 文件" : "微信 · 收发消息";
   if (purpose === "长期记忆") {
     if (url.includes("memory-classify")) return "记忆归类";

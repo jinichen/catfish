@@ -67,6 +67,16 @@ _SOURCE_PURPOSE = {
     "plugin:memory-recall-embed": "记忆检索",
     "plugin:memory": "长期记忆",
     "companion-chat": "对话",
+    # 10/28: Companion 自己的功能走 hermes 转发 (SERVICE_LLM_QUERY), 原来全落到下面笼统的「Companion」。
+    # 跟 companion-app/src/lib/egressRule.ts 的 SOURCE_PURPOSE 同一套叫法。
+    "companion-profile": "员工画像",
+    "companion-advisor": "早安建议",
+    "companion-briefing-card": "早安卡片",
+    "companion-email-draft": "邮件草稿",
+    "companion-email-scheduler": "邮件整理",
+    "companion-phishing-scan": "钓鱼邮件检查",
+    "companion-wiki-relation-suggest": "关系类型建议",
+    "companion-wiki-suggest": "知识链接建议",
     # 10/25: hermes 自己的辅助调用 (请求头 X-Catfish-Source, 鲶鱼插件 P3 打的)
     "hermes:aux:compression": "对话 · 上下文压缩",
     "hermes:aux:vision": "对话 · 看图",
@@ -90,6 +100,8 @@ _PATH_PURPOSE = (
     ("/v1/hub/skills", "发布技能"),
     ("/v1/wiki/", "部门知识"),
     ("/api/proactive/", "主动提醒"),
+    # 10/28: hermes 按 Ollama 的接口问网关某个模型的上下文长度 (只带模型名, 网关不实现会回 404)
+    ("/api/show", "查询模型信息"),
 )
 _HOST_PURPOSE = (
     ("parallel.ai", "网页搜索"),

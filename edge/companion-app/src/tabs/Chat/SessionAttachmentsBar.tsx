@@ -6,6 +6,9 @@
  *  10/16 鸿波: "点上传的文件, 能查看文件吗?" —— 原来只是标签, 点了没反应, 只能悬停看路径。
  *  现在点 = 用默认 App 打开 (图片走「预览」), ⌥/Alt+点 = 在文件管理器里显示。
  *  文件被挪走 / 没留副本 (keptPath 为空) 时就地说明, 不弹窗。
+ *
+ *  10/28 鸿波「文件数 +X 不能按?」: 超过 MAX_CHIPS 的原来只显示一行「+N 更多」文字, 点了没反应,
+ *  后面那些文件在界面上根本打不开。现在点它展开全部, 再点收起。
  */
 import { useState } from "react";
 
@@ -19,6 +22,7 @@ const MAX_CHIPS = 12;
 export default function SessionAttachmentsBar() {
   const sessionAttachments = useChatStore((s) => s.sessionAttachments);
   const [err, setErr] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
   if (sessionAttachments.length === 0) return null;
 
   // 去重按 name (同一文件可能被 record 多次 — 比如同一附件在多轮提及)
@@ -26,8 +30,9 @@ export default function SessionAttachmentsBar() {
   for (const a of sessionAttachments) {
     if (!byName.has(a.name)) byName.set(a.name, a);
   }
-  const unique = Array.from(byName.values()).slice(0, MAX_CHIPS);
-  const more = byName.size - unique.length;
+  const all = Array.from(byName.values());
+  const unique = showAll ? all : all.slice(0, MAX_CHIPS);
+  const more = all.length - Math.min(all.length, MAX_CHIPS);
 
   async function open(a: SessionAttachment, reveal: boolean) {
     setErr(null);
@@ -90,7 +95,25 @@ export default function SessionAttachmentsBar() {
           <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{a.name}</span>
         </button>
       ))}
-      {more > 0 && <span style={{ marginLeft: 4, fontStyle: "italic" }}>+{more} 更多</span>}
+      {more > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowAll((v) => !v)}
+          aria-expanded={showAll}
+          style={{
+            marginLeft: 4,
+            padding: "2px 6px",
+            border: "none",
+            background: "transparent",
+            font: "inherit",
+            fontStyle: "italic",
+            color: "var(--catfish-cyan)",
+            cursor: "pointer",
+          }}
+        >
+          {showAll ? "收起" : `+${more} 更多`}
+        </button>
+      )}
       {err && (
         <span role="status" style={{ flexBasis: "100%", color: "var(--status-err)" }}>
           {err}

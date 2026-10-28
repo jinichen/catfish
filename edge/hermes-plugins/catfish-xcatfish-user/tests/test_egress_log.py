@@ -56,6 +56,10 @@ def test_用途和去密钥():
     assert e.purpose("https://novac2c.cdn.weixin.qq.com/c2c/upload?encrypted_query_param=x") == "微信 · 发图片 / 文件"
     assert e.purpose("http://127.0.0.1:8999/v1/chat/completions?catfish_source=plugin:memory-classify") == "记忆归类"
     assert e.purpose("http://127.0.0.1:8999/v1/embeddings?catfish_source=plugin:memory-recall-embed") == "记忆检索"
+    assert e.purpose("http://127.0.0.1:8999/v1/chat/completions?catfish_source=companion-briefing-card") == "早安卡片"
+    assert e.purpose("http://127.0.0.1:8999/v1/chat/completions?catfish_source=companion-advisor-transform") == "早安建议"
+    assert e.purpose("http://127.0.0.1:8999/v1/chat/completions?catfish_source=companion-something-new") == "Companion"
+    assert e.purpose("http://127.0.0.1:8999/api/show") == "查询模型信息"
     assert e.purpose("https://api.tavily.com/search") == "网页搜索"
     assert "abc" not in e.clean_url("https://api.parallel.ai/v1/search?api_key=abc&q=福州")
     assert "q=福州" in e.clean_url("https://api.parallel.ai/v1/search?api_key=abc&q=福州") or "q=%E7" in e.clean_url(

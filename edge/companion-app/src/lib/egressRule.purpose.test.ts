@@ -15,6 +15,7 @@ describe("用途显示名", () => {
     expect(displayPurpose("长期记忆", "127.0.0.1", "http://x/v1/chat/completions?catfish_source=plugin:memory-classify")).toBe("记忆归类");
     expect(displayPurpose("长期记忆", "127.0.0.1")).toBe("长期记忆"); // 汇总里没 URL, 分不出来就不猜
     expect(displayPurpose("对话", "127.0.0.1")).toBe("对话");
+    expect(displayPurpose("/api/show", "192.168.205.38")).toBe("查询模型信息");
   });
 
   it("汇总: 老名字和新名字同去向的并成一行", () => {
