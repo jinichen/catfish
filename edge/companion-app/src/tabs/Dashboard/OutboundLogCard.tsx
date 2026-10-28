@@ -53,6 +53,8 @@ const TIME_RANGE_OPTIONS: { value: string; label: string }[] = [
   { value: "7d", label: "近 7 天" },
 ];
 
+const BYTES_HINT = "单位: 字节 (实际传输的数据量, 含请求格式和流式包装)。中央配额日志的 in / out 是 token, 不是一个单位";
+
 function timeRangeToIsoSince(range: string): string | undefined {
   if (!range) return undefined;
   const now = Date.now();
@@ -200,6 +202,12 @@ export default function OutboundLogCard() {
         记下所有<b>带着你的内容离开本机</b>的请求 (小鲶调模型、资料蒸馏和核对、工具、Companion 自己发的),
         和所有<b>发给第三方</b>的请求 (网页搜索、微信、天气…)。发往本机的、只拉数据的、心跳不记。
         连请求内容一起存在本机 (密钥类字段打码), 点一行就能看到当时发了什么; 回复不存。
+      </div>
+      {/* 10/28 鸿波「上下和 in、out 的含义不一样?」—— 跟中央配额日志对着看时最容易混 */}
+      <div style={{ fontSize: 12, color: "var(--catfish-text-muted)", marginBottom: "var(--space-3)" }}>
+        上行 / 下行的单位是<b>字节</b>: 网线上实际传了多少数据, 连请求格式 (历史对话、工具说明) 和流式回复的分段包装一起算。
+        中央「配额日志」的 in / out 是 <b>token</b> (模型读写的字数), 不是一个单位 —— 上行大约 3～4 字节 ≈ 1 token,
+        下行因为每一小段都有包装, 字节数会比 token 多得多。1.1.92 之前小鲶对话的下行没记上, 显示 0。
       </div>
 
       <OutboundSummary since={timeRangeToIsoSince(timeRange)} />
@@ -373,8 +381,8 @@ export default function OutboundLogCard() {
               <th style={thStyle}>做什么</th>
               <th style={thStyle}>发给</th>
               <th style={thStyle}>状态</th>
-              <th style={{ ...thStyle, textAlign: "right" }}>上↑</th>
-              <th style={{ ...thStyle, textAlign: "right" }}>下↓</th>
+              <th style={{ ...thStyle, textAlign: "right" }} title={BYTES_HINT}>上行 ↑ (字节)</th>
+              <th style={{ ...thStyle, textAlign: "right" }} title={BYTES_HINT}>下行 ↓ (字节)</th>
             </tr>
           </thead>
           <tbody>
@@ -472,8 +480,8 @@ function Row({ entry: e }: { entry: TransparentLogEntry }) {
       <td style={{ ...tdStyle, color: statusColor }}>
         {e.status ?? (e.error ? "ERR" : "?")}
       </td>
-      <td style={{ ...tdStyle, textAlign: "right" }}>{e.requestBytes}</td>
-      <td style={{ ...tdStyle, textAlign: "right" }}>{e.responseBytes}</td>
+      <td style={{ ...tdStyle, textAlign: "right" }}>{e.requestBytes.toLocaleString("en-US")}</td>
+      <td style={{ ...tdStyle, textAlign: "right" }}>{e.responseBytes.toLocaleString("en-US")}</td>
     </tr>
     {open && (
       <tr>
