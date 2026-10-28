@@ -200,7 +200,9 @@ models:
     # 展示与计价 (7/30 从前端 modelDisplay.ts 迁过来)。
     # 模型可在 /admin/models 界面上增删改之后, 这些必须跟着模型走 ——
     # 硬编码在前端的话, 客户新加的模型会显示"未知模型"、按兜底价计费。
-    price_per_1k_tokens: 0.01   # 元 / 1000 token (10/26 现场配置)
+    price_per_1k_tokens: 0.0008   # 元 / 1000 token, 输入 (未命中缓存)。qwen3.8-flash 北京: 输入0.8/输出2.7 元每百万 (官方 10/29); 缓存命中 0.1 (第三方, 官方写以控制台为准)
+    price_output_per_1k: 0.0027
+    price_cache_read_per_1k: 0.0001
     color: "#f59e0b"
     dot_emoji: "🟠"
 
@@ -298,7 +300,9 @@ models:
     # 展示与计价 (7/30 从前端 modelDisplay.ts 迁过来)。
     # 模型可在 /admin/models 界面上增删改之后, 这些必须跟着模型走 ——
     # 硬编码在前端的话, 客户新加的模型会显示"未知模型"、按兜底价计费。
-    price_per_1k_tokens: 0.0015   # 元 / 1000 token
+    price_per_1k_tokens: 0.002   # 元 / 1000 token, 输入 (未命中缓存)。DeepSeek 官方 10/29: 旧名按 deepseek-flash 计费, 高峰价 输入2/命中0.04/输出8 元每百万 (空闲时段减半)
+    price_output_per_1k: 0.008
+    price_cache_read_per_1k: 4e-05
     color: "#7c3aed"
     dot_emoji: "🟣"
 
@@ -342,7 +346,9 @@ models:
     # 展示与计价 (7/30 从前端 modelDisplay.ts 迁过来)。
     # 模型可在 /admin/models 界面上增删改之后, 这些必须跟着模型走 ——
     # 硬编码在前端的话, 客户新加的模型会显示"未知模型"、按兜底价计费。
-    price_per_1k_tokens: 0.0218   # 元 / 1000 token
+    price_per_1k_tokens: 0.01348   # 元 / 1000 token, 输入 (未命中缓存)。gemini-3.1-pro-preview ≤200k: $2/$12/缓存$0.20 每百万 (官方 10/29), 按 6.74 折算
+    price_output_per_1k: 0.08088
+    price_cache_read_per_1k: 0.001348
     color: "#dc2626"
     dot_emoji: "🔴"
 
@@ -523,7 +529,9 @@ models:
     # 展示与计价 (7/30 从前端 modelDisplay.ts 迁过来)。
     # 模型可在 /admin/models 界面上增删改之后, 这些必须跟着模型走 ——
     # 硬编码在前端的话, 客户新加的模型会显示"未知模型"、按兜底价计费。
-    price_per_1k_tokens: 0.00067   # 元 / 1000 token
+    price_per_1k_tokens: 0.005055   # 元 / 1000 token, 输入 (未命中缓存)。gemini-3.5-flash 已弃用、路由到 3.6-flash: $0.75/$3.75/缓存$0.075 每百万 (官方 10/29, 至 12/31), 按 6.74 折算
+    price_output_per_1k: 0.025275
+    price_cache_read_per_1k: 0.0005055
     color: "#ef4444"
     dot_emoji: "🔴"
 
