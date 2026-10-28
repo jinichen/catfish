@@ -16,6 +16,22 @@ logger = logging.getLogger("catfish.gateway.quota")
 
 from .quota_base import _get_conn, _pg_conn, _use_pg
 
+
+def _model_row(r: Any) -> dict:
+    """by_model 一行: 总量 + 计费三段 (10/29)。
+
+    tokens_cache_read 是 tokens_in 的子集 (上游 prompt_tokens 含 cached_tokens),
+    计费 = (tokens_in − cache) × 输入价 + cache × 缓存命中价 + tokens_out × 输出价。
+    """
+    return {
+        "model": r[0],
+        "count": int(r[1]),
+        "total_tokens": int(r[2] or 0),
+        "tokens_in": int(r[3] or 0),
+        "tokens_out": int(r[4] or 0),
+        "tokens_cache_read": int(r[5] or 0),
+    }
+
 def _sum_tokens(where_clause_sqlite: str, where_clause_pg: str, params: tuple[Any, ...]) -> int:
     """通用 sum 查询. PG / sqlite 双 backend, where 子句 placeholder 不同 (? vs %s).
 
@@ -109,13 +125,14 @@ def audit_summary_user_since(user_email: str, cutoff_ms: int) -> dict:
                     total_tokens = int(row[1] or 0)
 
                     cur.execute(
-                        """SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS used
+                        """SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS used,
+                                  SUM(tokens_in), SUM(tokens_out), SUM(tokens_cache_read)
                            FROM quota_events WHERE user_email = %s AND ts_ms >= %s
                            GROUP BY model ORDER BY used DESC LIMIT 20""",
                         (user_email, cutoff_ms),
                     )
                     by_model = [
-                        {"model": r[0], "count": int(r[1]), "total_tokens": int(r[2] or 0)}
+                        _model_row(r)
                         for r in cur.fetchall()
                     ]
 
@@ -149,13 +166,14 @@ def audit_summary_user_since(user_email: str, cutoff_ms: int) -> dict:
         total_tokens = int(row[1] or 0)
 
         cur = conn.execute(
-            """SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS used
+            """SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS used,
+                                  SUM(tokens_in), SUM(tokens_out), SUM(tokens_cache_read)
                FROM quota_events WHERE user_email = ? AND ts >= ?
                GROUP BY model ORDER BY used DESC LIMIT 20""",
             (user_email, cutoff_ms),
         )
         by_model = [
-            {"model": r[0], "count": int(r[1]), "total_tokens": int(r[2] or 0)}
+            _model_row(r)
             for r in cur.fetchall()
         ]
 
@@ -265,13 +283,14 @@ def audit_summary_dept_since(department: str, cutoff_ms: int) -> dict:
                     total_tokens = int(row[1] or 0)
 
                     cur.execute(
-                        """SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS used
+                        """SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS used,
+                                  SUM(tokens_in), SUM(tokens_out), SUM(tokens_cache_read)
                            FROM quota_events WHERE department = %s AND ts_ms >= %s
                            GROUP BY model ORDER BY used DESC LIMIT 20""",
                         (department, cutoff_ms),
                     )
                     by_model = [
-                        {"model": r[0], "count": int(r[1]), "total_tokens": int(r[2] or 0)}
+                        _model_row(r)
                         for r in cur.fetchall()
                     ]
 
@@ -307,13 +326,14 @@ def audit_summary_dept_since(department: str, cutoff_ms: int) -> dict:
         total_tokens = int(row[1] or 0)
 
         cur = conn.execute(
-            """SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS used
+            """SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS used,
+                                  SUM(tokens_in), SUM(tokens_out), SUM(tokens_cache_read)
                FROM quota_events WHERE department = ? AND ts >= ?
                GROUP BY model ORDER BY used DESC LIMIT 20""",
             (department, cutoff_ms),
         )
         by_model = [
-            {"model": r[0], "count": int(r[1]), "total_tokens": int(r[2] or 0)}
+            _model_row(r)
             for r in cur.fetchall()
         ]
 
@@ -570,14 +590,15 @@ def audit_summary_global_since(
                     internal_tokens = int(irow[1] or 0)
 
                     cur.execute(
-                        f"""SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS tk
+                        f"""SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS tk,
+                                  SUM(tokens_in), SUM(tokens_out), SUM(tokens_cache_read)
                            FROM quota_events
                            WHERE ts_ms >= %s AND user_email NOT LIKE 'internal:%%'{extra_sql_pg}
                            GROUP BY model ORDER BY tk DESC LIMIT 20""",
                         (cutoff_ms, *extra_params_pg),
                     )
                     by_model = [
-                        {"model": r[0], "count": int(r[1]), "total_tokens": int(r[2] or 0)}
+                        _model_row(r)
                         for r in cur.fetchall()
                     ]
 
@@ -682,14 +703,15 @@ def audit_summary_global_since(
         internal_tokens = int(irow[1] or 0)
 
         cur = conn.execute(
-            f"""SELECT model, COUNT(*), SUM(tokens_in + tokens_out)
+            f"""SELECT model, COUNT(*), SUM(tokens_in + tokens_out),
+                                  SUM(tokens_in), SUM(tokens_out), SUM(tokens_cache_read)
                 FROM quota_events
                 WHERE ts >= ? AND user_email NOT LIKE 'internal:%'{extra_sql_sq}
                 GROUP BY model ORDER BY 3 DESC LIMIT 20""",
             (cutoff_ms, *extra_params_sq),
         )
         by_model = [
-            {"model": r[0], "count": int(r[1]), "total_tokens": int(r[2] or 0)}
+            _model_row(r)
             for r in cur.fetchall()
         ]
 

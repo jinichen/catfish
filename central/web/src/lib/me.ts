@@ -9,6 +9,17 @@ import { api } from "./api";
 // BL-ARCH1 P1 (5/10): 加 sysadmin (catfish-identity 超级管理员).
 // sysadmin > admin > manager > employee, RoleGate 在 web 侧做继承.
 // 跟 lib/admin.ts 的 Role 对齐 (那边是 admin API 自带的, 这边给 me / quota / audit 用).
+/** 审计 by_model 一行。tokens_in / tokens_out / tokens_cache_read 10/29 起后端才返
+ *  (缓存命中是输入的子集), 老网关只有 total_tokens —— 所以三段是可选的。 */
+export interface AuditModelRow {
+  model: string;
+  count: number;
+  total_tokens: number;
+  tokens_in?: number;
+  tokens_out?: number;
+  tokens_cache_read?: number;
+}
+
 export type Role = "sysadmin" | "admin" | "manager" | "employee";
 
 export interface MeInfo {
@@ -69,7 +80,7 @@ export interface DepartmentAudit {
   since_ms: number;
   request_count: number;
   total_tokens: number;
-  by_model: { model: string; count: number; total_tokens: number }[];
+  by_model: AuditModelRow[];
   by_user: { user_email: string; count: number; total_tokens: number }[];
   viewer_role: Role;
 }
@@ -141,7 +152,7 @@ export interface GlobalAudit {
   total_tokens: number;
   active_users: number;
   active_departments: number;
-  by_model: { model: string; count: number; total_tokens: number }[];
+  by_model: AuditModelRow[];
   by_department: { department: string; count: number; total_tokens: number }[];
   by_user: { user_email: string; department: string; count: number; total_tokens: number }[];
   viewer_role: Role;
@@ -265,6 +276,8 @@ export interface AuditEvent {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+  /** 10/29 起展示: 上游报的缓存命中输入 token (输入的子集); 没命中 / 老记录不带这个键 */
+  cache_read_tokens?: number;
   latency_ms: number;
   ttft_ms?: number;
   status: string;      // ok / error / interrupted_resumed (BL-HERMES013-4)
@@ -366,6 +379,9 @@ export interface CatalogModel {
   color?: string | null;
   dot_emoji?: string | null;
   price_per_1k_tokens?: number | null;
+  // 10/29: 三段计价 —— 输出 / 缓存命中单价, 不填同输入单价
+  price_output_per_1k?: number | null;
+  price_cache_read_per_1k?: number | null;
 }
 
 export interface CatalogResponse {

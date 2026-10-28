@@ -44,6 +44,8 @@ def _model(
     # 字段也不报错, 但同时也会把真正的属性拼写错误一起盖住。假对象跟真类型
     # 保持同步, 是这个 helper 该负的责任。
     price_per_1k_tokens: float | None = None,
+    price_output_per_1k: float | None = None,  # 10/29 三段计价
+    price_cache_read_per_1k: float | None = None,
     color: str | None = None,
     dot_emoji: str | None = None,
 ):
@@ -56,6 +58,8 @@ def _model(
         display_name=display_name or name,
         recommended_for=recommended_for or ["general"],
         price_per_1k_tokens=price_per_1k_tokens,
+        price_output_per_1k=price_output_per_1k,
+        price_cache_read_per_1k=price_cache_read_per_1k,
         color=color,
         dot_emoji=dot_emoji,
         context_window=context_window,
@@ -292,3 +296,19 @@ def test_real_world_5_models_mixed_state() -> None:
 
     # default 选 main (有 key + 标了 default)
     assert out["default"] == "catfish-private-main"
+
+
+def test_three_prices_passthrough_and_validation() -> None:
+    """10/29: 输入 / 输出 / 缓存命中三个单价跟着模型配置走, 负数拒收。"""
+    import pydantic
+    import pytest
+
+    from catfish_gateway.config import ModelConfig
+
+    base = {"name": "m", "display_name": "M", "upstream": {"model": "openai/x"}}
+    m = ModelConfig.model_validate({**base, "price_per_1k_tokens": 0.002, "price_output_per_1k": 0.008, "price_cache_read_per_1k": 0.0004})
+    assert (m.price_per_1k_tokens, m.price_output_per_1k, m.price_cache_read_per_1k) == (0.002, 0.008, 0.0004)
+    old = ModelConfig.model_validate({**base, "price_per_1k_tokens": 0.01})
+    assert old.price_output_per_1k is None and old.price_cache_read_per_1k is None
+    with pytest.raises(pydantic.ValidationError):
+        ModelConfig.model_validate({**base, "price_cache_read_per_1k": -1})

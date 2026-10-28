@@ -116,7 +116,8 @@ def test_sliding_window_old_events_excluded(tmp_path: Path) -> None:
     conn = sqlite3.connect(str(db_path))
     with conn:
         conn.execute(
-            "INSERT INTO quota_events VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO quota_events (ts, user_email, department, model, tokens_in, tokens_out) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             (old_ts, "alice@x.com", "研发部", "qwen", 99999, 0),
         )
     conn.close()
@@ -759,3 +760,4 @@ def test_p3_5_93_old_update_department_quota_still_works(tmp_path: Path) -> None
     assert quota.update_department_quota("研发部", 100_000_000) is True
     cfg = quota.load_quota_config()
     assert cfg.department_quotas["研发部"].tokens_per_day == 100_000_000
+

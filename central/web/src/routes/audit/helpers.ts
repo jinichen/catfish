@@ -5,7 +5,6 @@
 
 import { costRMB, fmtRMB, getModelDisplay } from "../../lib/modelDisplay";
 import type { GlobalAudit } from "../../lib/me";
-void costRMB;  // helpers 内部 auditToCsv 用; 此 import 仅 ts strict 必要
 
 export const TIME_WINDOWS = [
   { hours: 24, label: "24h" },
@@ -66,7 +65,7 @@ export function auditToCsv(audit: GlobalAudit): string {
   );
   lines.push("");
   lines.push("## 按模型");
-  lines.push("模型,catalog ID,请求,tokens,RMB 估算");
+  lines.push("模型,catalog ID,请求,tokens,输入 token,其中缓存命中,输出 token,RMB 估算");
   for (const m of audit.by_model) {
     const md = getModelDisplay(m.model);
     lines.push(
@@ -75,7 +74,11 @@ export function auditToCsv(audit: GlobalAudit): string {
         m.model,
         String(m.count),
         String(m.total_tokens),
-        fmtRMB((m.total_tokens / 1000) * 0.0015).replace("≈ ", ""),
+        m.tokens_in == null ? "" : String(m.tokens_in),
+        m.tokens_cache_read == null ? "" : String(m.tokens_cache_read),
+        m.tokens_out == null ? "" : String(m.tokens_out),
+        // 10/29 前这里写死 0.0015 元/千 token, 跟页面上按模型单价算的成本对不上
+        fmtRMB(costRMB(m)).replace("≈ ", ""),
       ]),
     );
   }

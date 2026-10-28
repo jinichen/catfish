@@ -439,7 +439,7 @@ function ModelConfigEditor() {
                         {m.price_per_1k_tokens == null ? (
                           <Badge
                             tone="warn"
-                            title="没填单价, 概览和审计页的成本会按兜底价估算, 数字不准"
+                            title="没填输入单价, 概览和审计页的成本会按兜底价估算, 数字不准"
                           >
                             缺单价
                           </Badge>

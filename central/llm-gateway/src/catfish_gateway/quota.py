@@ -56,8 +56,12 @@ def record_usage(
     model: str,
     tokens_in: int,
     tokens_out: int,
+    tokens_cache_read: int = 0,
 ) -> None:
     """请求完成后记真实 token 用量. 失败静默不影响主流程.
+
+    tokens_cache_read (10/29): 上游报的缓存命中输入 token, 是 tokens_in 的子集
+    (prompt_tokens 本来就含 cached_tokens)。计费按「未命中输入 / 命中输入 / 输出」三段算。
 
     BL-QUOTA-SQLITE-DEPRECATE (5/17 鸿波): 老逻辑 PG 写失败 → fallback sqlite
     (写 ~/.catfish/quota.db, 员工本机文件). 违反 BL-CENTRAL-EDGE-BOUNDARY 规则.  # noqa: BOUNDARY
@@ -65,16 +69,18 @@ def record_usage(
     (CATFISH_QUOTA_DB env override).
     """
     ts_ms = int(time.time() * 1000)
+    # 上游偶有 cached > prompt 的怪数 (各家口径不一), 夹到 [0, tokens_in] 免得计费出负数
+    cache_read = max(0, min(int(tokens_cache_read or 0), int(tokens_in)))
 
     if _use_pg():
         try:
             with _pg_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "INSERT INTO quota_events (ts_ms, user_email, department, model, tokens_in, tokens_out) "
-                        "VALUES (%s, %s, %s, %s, %s, %s)",
+                        "INSERT INTO quota_events (ts_ms, user_email, department, model, tokens_in, tokens_out, tokens_cache_read) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s)",
                         (ts_ms, user_email, department, model,
-                         int(tokens_in), int(tokens_out)),
+                         int(tokens_in), int(tokens_out), cache_read),
                     )
                 conn.commit()
         except Exception as e:
@@ -91,9 +97,10 @@ def record_usage(
         conn = _get_conn()
         with conn:
             conn.execute(
-                "INSERT INTO quota_events VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO quota_events (ts, user_email, department, model, tokens_in, tokens_out, tokens_cache_read) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (ts_ms, user_email, department, model,
-                 int(tokens_in), int(tokens_out)),
+                 int(tokens_in), int(tokens_out), cache_read),
             )
         conn.close()
     except Exception as e:

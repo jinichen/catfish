@@ -212,7 +212,7 @@ function ModelBreakdownCard({
       ),
       count: m.count,
       tokens: m.total_tokens,
-      rmb: costRMB(m.model, m.total_tokens),
+      rmb: costRMB(m),
       pct: total > 0 ? (m.total_tokens / total) * 100 : 0,
       // 认不出的模型不能都用兜底的 #94a3b8 —— N 个未知模型 N 条一模一样的
       // 灰条, 而这一列的全部作用就是"一眼看出哪个占大头"。

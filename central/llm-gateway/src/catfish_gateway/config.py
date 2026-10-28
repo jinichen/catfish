@@ -245,7 +245,17 @@ class ModelConfig(BaseModel):
 
     #: 每 1000 token 的人民币单价. 审计页成本核算用。
     #: 不填 → 前端按兜底价算, 并且**应该**在界面上提示这个模型的成本不准。
-    price_per_1k_tokens: float | None = None
+    #:
+    #: 10/29 起它是「输入单价」(未命中缓存的输入)。另两个单价不填时都按它算 ——
+    #: 于是只填这一个的老配置, 算出来跟以前「合计 token × 单价」完全一样。
+    price_per_1k_tokens: float | None = Field(default=None, ge=0)
+
+    #: 10/29: 输出 token 单价 (元 / 1000 token)。多数厂商输出比输入贵几倍。不填 → 同输入单价。
+    price_output_per_1k: float | None = Field(default=None, ge=0)
+
+    #: 10/29: 缓存命中的输入 token 单价。厂商对命中缓存的输入按折扣收 (具体看各家价目表)。
+    #: quota_events.tokens_cache_read 是 tokens_in 的子集。不填 → 同输入单价 (不打折)。
+    price_cache_read_per_1k: float | None = Field(default=None, ge=0)
 
     #: 图表里区分模型用的品牌色 (CSS color, 如 "#10b981")。不填 → 前端给个默认灰。
     color: str | None = None

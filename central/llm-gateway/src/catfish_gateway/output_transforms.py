@@ -165,6 +165,7 @@ class QuotaTransform:
             model=ctx.model,
             tokens_in=ctx.prompt_tokens,
             tokens_out=ctx.completion_tokens,
+            tokens_cache_read=ctx.cache_read_tokens,
         )
 
     def on_error(self, ctx: OutputCtx) -> None:

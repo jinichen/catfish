@@ -83,6 +83,10 @@ export interface ModelConfig {
   // 增删改之后, 那样会让新加的模型显示"未知模型"、成本按兜底价 0.001 算,
   // 而真实单价跨度 0.00005~0.0218 差 400 倍。
   price_per_1k_tokens?: number | null;
+  // 10/29: 三段计价。price_per_1k_tokens 当「输入单价」; 这两个不填时同输入单价,
+  // 所以只填一个单价的老配置算出来跟以前一样。
+  price_output_per_1k?: number | null;
+  price_cache_read_per_1k?: number | null;
   color?: string | null;
   dot_emoji?: string | null;
 }
@@ -198,6 +202,8 @@ export function emptyModel(): ModelConfig {
     fallback: null,
     rate_limits: null,
     price_per_1k_tokens: null,
+    price_output_per_1k: null,
+    price_cache_read_per_1k: null,
     color: null,
     dot_emoji: null,
   };
@@ -263,7 +269,11 @@ export function validateModel(m: ModelConfig): string[] {
   if (m.max_output_tokens != null && m.max_output_tokens <= 0)
     errs.push("单次输出上限要是正数");
   if (m.price_per_1k_tokens != null && m.price_per_1k_tokens < 0)
-    errs.push("单价不能是负数");
+    errs.push("输入单价不能是负数");
+  if (m.price_output_per_1k != null && m.price_output_per_1k < 0)
+    errs.push("输出单价不能是负数");
+  if (m.price_cache_read_per_1k != null && m.price_cache_read_per_1k < 0)
+    errs.push("缓存命中单价不能是负数");
   // 填错颜色的后果是**静默的**: 图表拿到非法颜色会退回浏览器默认 (通常是黑),
   // 于是这个模型在图表里跟别的黑色模型混在一起, 而没有任何报错。
   if (m.color && !isHexColor(m.color))

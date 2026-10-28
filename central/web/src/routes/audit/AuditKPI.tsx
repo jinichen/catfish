@@ -9,12 +9,14 @@ import { useMemo } from "react";
 
 import { Delta, Stat, StatBand } from "../../components/StatBand";
 import type { GlobalAudit } from "../../lib/me";
-import { fmtRMB, isCostEstimated, totalCostRMB } from "../../lib/modelDisplay";
+import { cacheHitRate, fmtRMB, isCostEstimated, totalCostRMB } from "../../lib/modelDisplay";
 import { fmtTokens, windowLabelOf } from "./helpers";
 
 function KPIHero({ audit }: { audit: GlobalAudit }) {
   // BL-AUDIT-UX-P1: 精算 RMB — 按 model 单价加权
   const totalRMB = useMemo(() => totalCostRMB(audit.by_model), [audit.by_model]);
+  // 10/29: 输入里命中缓存的比例 —— 命中部分按「缓存命中单价」计, 成本跟着它走
+  const hit = useMemo(() => cacheHitRate(audit.by_model), [audit.by_model]);
   const windowLabel = windowLabelOf(audit.since_hours);
 
   return (
@@ -41,6 +43,11 @@ function KPIHero({ audit }: { audit: GlobalAudit }) {
             ? "含估算 · 到「模型」页填单价"
             : undefined
         }
+      />
+      <Stat
+        label="缓存命中"
+        value={hit == null ? "—" : `${(hit * 100).toFixed(1)}%`}
+        hint="输入 token 里命中上游缓存的比例 · 按缓存命中单价计费"
       />
       <Stat
         label="总请求"

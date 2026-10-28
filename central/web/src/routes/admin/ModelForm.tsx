@@ -389,9 +389,12 @@ export function ModelForm({
             gap: 8,
           }}
         >
+          {/* 10/29: 一个单价拆成三个。原来只能填「输入输出取平均」, 而上游对输出、
+              对命中缓存的输入各按不同价收 —— 本机一周里 qwen-flash 88% 的输入是缓存命中,
+              全按输入价算, 成本明显偏高。后两个留空时同输入单价, 老配置算法不变。 */}
           <Field
-            label="单价（元 / 1000 token）"
-            hint="按厂商价目表填，输入输出取平均。留空则审计页按兜底价 0.001 估算——现有模型真实单价跨度 0.00005 到 0.0218，差 400 倍，估出来的数不能当准。"
+            label="输入单价（元 / 1000 token）"
+            hint="厂商价目表里的输入价（未命中缓存）。留空则审计页按兜底价 0.001 估算——现有模型真实单价跨度 0.00005 到 0.0218，差 400 倍，估出来的数不能当准。"
           >
             <input
               style={INPUT}
@@ -400,6 +403,26 @@ export function ModelForm({
               value={model.price_per_1k_tokens ?? ""}
               onChange={(e) => set({ price_per_1k_tokens: num(e.target.value) })}
               placeholder="0.0015"
+            />
+          </Field>
+          <Field label="缓存命中单价（元 / 1000 token）" hint="命中上游缓存的输入价，厂商一般按折扣收。留空则同输入单价。">
+            <input
+              style={INPUT}
+              type="number"
+              step="0.00001"
+              value={model.price_cache_read_per_1k ?? ""}
+              onChange={(e) => set({ price_cache_read_per_1k: num(e.target.value) })}
+              placeholder="同输入单价"
+            />
+          </Field>
+          <Field label="输出单价（元 / 1000 token）" hint="厂商价目表里的输出价，一般比输入贵几倍。留空则同输入单价。">
+            <input
+              style={INPUT}
+              type="number"
+              step="0.00001"
+              value={model.price_output_per_1k ?? ""}
+              onChange={(e) => set({ price_output_per_1k: num(e.target.value) })}
+              placeholder="同输入单价"
             />
           </Field>
           {/* 8/1: 「图表颜色」和「列表圆点」原来是两个自由文本框, 各填各的。

@@ -732,6 +732,7 @@ async def _invoke_chat_completion(
             model=used_model.name,
             tokens_in=prompt_tokens,
             tokens_out=completion_tokens,
+            tokens_cache_read=cache_read,
         )
 
     # BL-ADVISOR-UPSTREAM-ERROR-AS-CONTENT (6/1 鸿波): 上游某些 LiteLLM-based 私有 LLM

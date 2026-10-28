@@ -182,7 +182,7 @@ function AdminHomeBody({ a }: { a: GlobalAudit }) {
           <Stat label="活跃部门" value={a.active_departments}
                 delta={<Delta now={a.active_departments} prev={a.previous_active_departments} upIsGood />} />
           {/* 成本 —— 管理员真正被问到的那个数, 而它一直没在概览上出现过。
-              单价 7/30 起可以在「模型」页逐个填 (price_per_1k_tokens);
+              单价 7/30 起可以在「模型」页逐个填; 10/29 起分输入 / 缓存命中 / 输出三段计价。
               没填的模型走兜底价, 所以下面标"含估算"。 */}
           <Stat
             label="成本"
@@ -281,6 +281,20 @@ function AdminHomeBody({ a }: { a: GlobalAudit }) {
               { header: "请求", align: "right", width: 90, cell: (m) => m.count.toLocaleString() },
               { header: "tokens", align: "right", width: 110, cell: (m) => fmtTokens(m.total_tokens) },
               {
+                // 10/29: 输入里命中缓存的比例 —— 命中部分按缓存命中单价计, 成本差别主要在这
+                header: "缓存命中",
+                align: "right",
+                width: 90,
+                cell: (m) =>
+                  m.tokens_in ? (
+                    <span title={`${(m.tokens_cache_read ?? 0).toLocaleString()} / ${m.tokens_in.toLocaleString()} 输入 token`}>
+                      {(((m.tokens_cache_read ?? 0) / m.tokens_in) * 100).toFixed(0)}%
+                    </span>
+                  ) : (
+                    "—"
+                  ),
+              },
+              {
                 header: "成本",
                 align: "right",
                 width: 110,
@@ -289,7 +303,7 @@ function AdminHomeBody({ a }: { a: GlobalAudit }) {
                     style={{ color: isCostEstimated(m.model) ? "var(--text-muted)" : undefined }}
                     title={isCostEstimated(m.model) ? "没配单价, 按兜底价估的" : undefined}
                   >
-                    {fmtRMB(costRMB(m.model, m.total_tokens))}
+                    {fmtRMB(costRMB(m))}
                   </span>
                 ),
               },

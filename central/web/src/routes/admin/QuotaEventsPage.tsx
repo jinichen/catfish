@@ -92,7 +92,7 @@ export function AdminQuotaEvents() {
   const exportCSV = () => {
     if (!data || data.events.length === 0) return;
     const header = [
-      "ts", "user", "department", "model", "tokens_in", "tokens_out",
+      "ts", "user", "department", "model", "tokens_in", "tokens_cache_read", "tokens_out",
       "tokens_total", "latency_ms", "ttft_ms", "status", "error", "source",
     ].join(",");
     const rows = data.events.map((e) => [
@@ -101,6 +101,7 @@ export function AdminQuotaEvents() {
       csvEscape(e.department),
       csvEscape(e.model),
       e.prompt_tokens,
+      e.cache_read_tokens ?? 0,
       e.completion_tokens,
       e.total_tokens,
       e.latency_ms,
@@ -169,6 +170,13 @@ export function AdminQuotaEvents() {
     },
     // 10/28 鸿波: 原来只写 in / out / tot, 跟 Companion 外发记录的上行 / 下行 (字节) 对着看时分不清单位
     { header: <span title={TOKEN_HINT}>输入 token</span>, cell: (e) => e.prompt_tokens.toLocaleString(), align: "right", width: 88 },
+    // 10/29: 缓存命中是输入的子集, 按缓存命中单价计 —— 原来门户只显示进 / 出, 看不到这一段
+    {
+      header: <span title={`${TOKEN_HINT}。缓存命中是输入里命中上游缓存的部分 (已含在输入 token 里)`}>其中缓存命中</span>,
+      cell: (e) => (e.cache_read_tokens ? e.cache_read_tokens.toLocaleString() : <span style={{ color: "var(--text-muted)" }}>0</span>),
+      align: "right",
+      width: 96,
+    },
     { header: <span title={TOKEN_HINT}>输出 token</span>, cell: (e) => e.completion_tokens.toLocaleString(), align: "right", width: 88 },
     {
       header: <span title={TOKEN_HINT}>合计 token</span>,

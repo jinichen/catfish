@@ -134,7 +134,8 @@ CREATE TABLE IF NOT EXISTS quota_events (
     department TEXT NOT NULL,
     model TEXT NOT NULL,
     tokens_in INTEGER NOT NULL,
-    tokens_out INTEGER NOT NULL
+    tokens_out INTEGER NOT NULL,
+    tokens_cache_read INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_quota_ts_user ON quota_events(ts, user_email);
 CREATE INDEX IF NOT EXISTS idx_quota_ts_model ON quota_events(ts, model);
@@ -147,4 +148,8 @@ def _get_conn() -> sqlite3.Connection:
     p.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(p), timeout=2.0)
     conn.executescript(_SCHEMA)
+    # 10/29: 老测试库没有 tokens_cache_read 列 (CREATE IF NOT EXISTS 不补列)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(quota_events)")}
+    if "tokens_cache_read" not in cols:
+        conn.execute("ALTER TABLE quota_events ADD COLUMN tokens_cache_read INTEGER NOT NULL DEFAULT 0")
     return conn

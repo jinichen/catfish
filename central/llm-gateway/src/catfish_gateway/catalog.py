@@ -78,6 +78,8 @@ def build_catalog(
                 # 单价和显示名不是机密, 而 upstream 那些 (api_base / api_key_env)
                 # 依然只在 sysadmin 的 /api/admin/models 里返。
                 "price_per_1k_tokens": m.price_per_1k_tokens,
+                "price_output_per_1k": m.price_output_per_1k,
+                "price_cache_read_per_1k": m.price_cache_read_per_1k,
                 "color": m.color,
                 "dot_emoji": m.dot_emoji,
                 # —— 状态三态 ——

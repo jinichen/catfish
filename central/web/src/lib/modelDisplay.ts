@@ -129,6 +129,10 @@ export interface RuntimeModelMeta {
   color?: string | null;
   dot_emoji?: string | null;
   price_per_1k_tokens?: number | null;
+  /** 10/29: 输出单价。不填 → 同输入单价。 */
+  price_output_per_1k?: number | null;
+  /** 10/29: 缓存命中的输入单价。不填 → 同输入单价 (不打折)。 */
+  price_cache_read_per_1k?: number | null;
 }
 
 let _runtime: Record<string, RuntimeModelMeta> = {};
@@ -222,8 +226,9 @@ export function isCostEstimated(catalogId: string): boolean {
 //   - Gemini Pro:        $1.25 / 1M        · $5 / 1M            → 均 ¥0.0218
 //   - 私有 (自建 GPU 摊算): ¥0.0001 / 1K (粗估, 电费 + 硬件折旧)
 //
-// 注: in/out 比例假设 5:1 (典型 chat workload). 真要按 actual usage_in/out 拆,
-// backend 要返 model × tokens_in × tokens_out 分别给前端, P2 再做.
+// 注: in/out 比例假设 5:1 (典型 chat workload)。
+// 10/29: 后端 by_model 已返 tokens_in / tokens_out / tokens_cache_read, 模型配置里能填
+// 输入 / 输出 / 缓存命中三个单价 —— 见下面 costRMB。这张表只剩"历史审计引用了已删除模型"的兜底用。
 
 const _PRICE_RMB_PER_1K_TOKEN: Record<string, number> = {
   "catfish-public-deepseek-flash": 0.0015,
@@ -243,27 +248,55 @@ const _PRICE_RMB_PER_1K_TOKEN: Record<string, number> = {
  * 时算出来的数**不该当准确值展示**。 */
 const _FALLBACK_PRICE = 0.001;
 
-/** 按模型精算: 输入 model → token 数 → RMB.
+/** 一个模型在某段时间里的用量 (后端 by_model 行)。
+ *  tokens_cache_read 是 tokens_in 的子集 (上游 prompt_tokens 本来就含缓存命中)。
+ *  老后端只返 total_tokens —— 那时三段字段缺省, 退回「合计 × 输入单价」。 */
+export interface ModelUsage {
+  model: string;
+  total_tokens: number;
+  tokens_in?: number;
+  tokens_out?: number;
+  tokens_cache_read?: number;
+}
+
+/** 这个模型的三个单价 (元 / 1000 token)。输出 / 缓存命中不填时都同输入单价 ——
+ *  所以只填了一个单价的老配置, 算出来跟以前「合计 token × 单价」完全一样。
  *
- * 优先级: 运行时配置 (可在 /admin/models 界面上改) > 硬编码表 (历史模型
- * 兜底) > _FALLBACK_PRICE。见上面 setRuntimeModelMeta 的说明。
- */
-export function costRMB(catalogId: string, tokens: number): number {
-  const price =
-    _runtime[catalogId]?.price_per_1k_tokens ??
-    _PRICE_RMB_PER_1K_TOKEN[catalogId] ??
-    _FALLBACK_PRICE;
-  return (tokens / 1000) * price;
+ * 输入单价的优先级: 运行时配置 (可在 /admin/models 界面上改) > 硬编码表 (历史模型
+ * 兜底) > _FALLBACK_PRICE。见上面 setRuntimeModelMeta 的说明。 */
+export function modelPrices(catalogId: string): { input: number; output: number; cacheRead: number } {
+  const rt = _runtime[catalogId];
+  const input = rt?.price_per_1k_tokens ?? _PRICE_RMB_PER_1K_TOKEN[catalogId] ?? _FALLBACK_PRICE;
+  return {
+    input,
+    output: rt?.price_output_per_1k ?? input,
+    cacheRead: rt?.price_cache_read_per_1k ?? input,
+  };
+}
+
+/** 按模型精算成本: (输入 − 缓存命中) × 输入价 + 缓存命中 × 命中价 + 输出 × 输出价。 */
+export function costRMB(u: ModelUsage): number {
+  const p = modelPrices(u.model);
+  if (u.tokens_in == null || u.tokens_out == null) return (u.total_tokens / 1000) * p.input;
+  const cache = Math.min(u.tokens_cache_read ?? 0, u.tokens_in);
+  return ((u.tokens_in - cache) * p.input + cache * p.cacheRead + u.tokens_out * p.output) / 1000;
 }
 
 /** 多 model 加权总 RMB. 输入 by_model 列表, 返总成本. */
-export function totalCostRMB(
-  byModel: { model: string; total_tokens: number }[],
-): number {
-  return byModel.reduce(
-    (sum, m) => sum + costRMB(m.model, m.total_tokens),
-    0,
-  );
+export function totalCostRMB(byModel: ModelUsage[]): number {
+  return byModel.reduce((sum, m) => sum + costRMB(m), 0);
+}
+
+/** 缓存命中率 = 缓存命中输入 / 全部输入。没有输入或后端没返三段时返 null (界面显示 —)。 */
+export function cacheHitRate(byModel: ModelUsage[]): number | null {
+  let tin = 0;
+  let cache = 0;
+  for (const m of byModel) {
+    if (m.tokens_in == null) return null;
+    tin += m.tokens_in;
+    cache += Math.min(m.tokens_cache_read ?? 0, m.tokens_in);
+  }
+  return tin > 0 ? cache / tin : null;
 }
 
 /** 格式化 RMB: < ¥1 → 2 位小数, < ¥100 → 1 位, >= ¥100 → 整数 + 千分位 */
