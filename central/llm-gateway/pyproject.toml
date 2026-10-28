@@ -19,7 +19,12 @@ dependencies = [
     # 代码路径 (litellm/proxy/auth/auth_utils.py::get_request_route) 实际跑不到,
     # 但纵深防御 + 清 SBOM 警告 + 防 future 误引 litellm.proxy 仍升级. 加 <2.0
     # upper bound 防 2.x breaking 时 CI 静默炸. docs/SECURITY-CVE-LOG.md 有详评.
-    "litellm>=1.84.0,<2.0.0",
+    #
+    # 10/28 锁死到 1.103.10 (鸿波「为什么不直接用最新的版本, 要一个一个去试」): litellm 1.103.10 之后的版本
+    # 要求 filelock<4.0, 跟下面 10/24 为修 CVE 加的 filelock>=4.2.1 冲突。原来写的是范围, pip 每次打包都从
+    # 最新版往回一个个试 (每个 wheel 38MB), arm64 单这一步 50 分钟, 最后落在 1.103.10 —— 线上一直跑的就是它。
+    # 锁死: 打包快、两个架构一定一致、litellm 发新版不会悄悄换掉。要升级时先看新版 filelock 限制放宽没有。
+    "litellm==1.103.10",
     # P3.6.X (7/18 鸿波 catch Task #68): litellm.responses.mcp.chat_completions_handler
     # lazy import orjson (litellm 未显式 declare · 缺就 502 APIConnectionError).
     # 强制显式 pull · 达华 POC image force-recreate 后 chat 走 mcp code path 也稳.
