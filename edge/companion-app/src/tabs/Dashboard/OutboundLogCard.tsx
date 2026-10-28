@@ -17,6 +17,7 @@
 import * as React from "react";
 
 import { IntegrityPanel, PayloadPanel } from "./OutboundLogDetail";
+import { displayPurpose, mergeSummaryRows } from "../../lib/egressRule";
 
 import {
   transparentLogQuery,
@@ -463,7 +464,7 @@ function Row({ entry: e }: { entry: TransparentLogEntry }) {
     >
       <td style={tdStyle} title={e.tsRequest}>{open ? "▾ " : "▸ "}{localTime(e.tsRequest)}</td>
       <td style={tdStyle}>{ORIGIN_LABEL[e.origin ?? ""] ?? e.origin ?? "-"}</td>
-      <td style={tdStyle} title={`${e.method} ${path}`}>{e.purpose || path}</td>
+      <td style={tdStyle} title={`${e.method} ${path}`}>{(e.purpose && displayPurpose(e.purpose, e.destHost ?? "", e.url)) || path}</td>
       <td
         style={{
           ...tdStyle,
@@ -580,7 +581,7 @@ export function OutboundSummary({ since }: { since?: string }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 12, marginBottom: "var(--space-3)" }}>
       {groups.map((g) => {
-        const mine = rows.filter((r) => r.destKind === g.kind);
+        const mine = mergeSummaryRows(rows.filter((r) => r.destKind === g.kind));
         return (
           <section key={g.kind} style={{ border: "1px solid var(--catfish-border)", borderRadius: 6, padding: 10, background: "var(--catfish-bg)" }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: g.kind === "third_party" ? "var(--catfish-orange)" : "var(--catfish-text)" }}>

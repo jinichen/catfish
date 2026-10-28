@@ -62,6 +62,9 @@ _SOURCE_PURPOSE = {
     "plugin:memory-distill": "长期记忆整理",
     "plugin:memory-summarize": "长期记忆整理",
     "plugin:memory-reconcile": "长期记忆整理",
+    # 10/28: 这两个原来落到下面的「长期记忆」, 看不出在干什么
+    "plugin:memory-classify": "记忆归类",
+    "plugin:memory-recall-embed": "记忆检索",
     "plugin:memory": "长期记忆",
     "companion-chat": "对话",
     # 10/25: hermes 自己的辅助调用 (请求头 X-Catfish-Source, 鲶鱼插件 P3 打的)
@@ -93,7 +96,9 @@ _HOST_PURPOSE = (
     ("tavily.com", "网页搜索"),
     ("firecrawl.dev", "网页抓取"),
     ("exa.ai", "网页搜索"),
-    ("weixin.qq.com", "微信"),
+    # 10/28: 拆开 —— CDN 是发图片 / 文件前先传加密文件的地方 (前面的先匹配)
+    ("cdn.weixin.qq.com", "微信 · 发图片 / 文件"),
+    ("weixin.qq.com", "微信 · 收发消息"),
     ("wttr.in", "天气"),
     ("pypi.org", "安装依赖"),
     ("pythonhosted.org", "安装依赖"),

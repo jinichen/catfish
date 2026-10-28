@@ -52,7 +52,10 @@ def test_用途和去密钥():
     assert e.purpose("http://x/v1/chat/completions", "hermes:aux:compression") == "对话 · 上下文压缩"
     assert e.purpose("http://x/v1/chat/completions", "hermes:aux:web_extract") == "hermes 辅助"
     assert e.purpose("http://x/v1/chat/completions", "hermes:api_server") == "对话"
-    assert e.purpose("https://ilinkai.weixin.qq.com/ilink/bot/getupdates") == "微信"
+    assert e.purpose("https://ilinkai.weixin.qq.com/ilink/bot/getupdates") == "微信 · 收发消息"
+    assert e.purpose("https://novac2c.cdn.weixin.qq.com/c2c/upload?encrypted_query_param=x") == "微信 · 发图片 / 文件"
+    assert e.purpose("http://127.0.0.1:8999/v1/chat/completions?catfish_source=plugin:memory-classify") == "记忆归类"
+    assert e.purpose("http://127.0.0.1:8999/v1/embeddings?catfish_source=plugin:memory-recall-embed") == "记忆检索"
     assert e.purpose("https://api.tavily.com/search") == "网页搜索"
     assert "abc" not in e.clean_url("https://api.parallel.ai/v1/search?api_key=abc&q=福州")
     assert "q=福州" in e.clean_url("https://api.parallel.ai/v1/search?api_key=abc&q=福州") or "q=%E7" in e.clean_url(

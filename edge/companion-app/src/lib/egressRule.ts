@@ -62,6 +62,7 @@ const PATH_PURPOSE: [string, string][] = [
   ["/v1/hub/skills", "发布技能"],
   ["/v1/wiki/", "部门知识"],
   ["/api/proactive/", "主动提醒"],
+  ["/api/egress/anchor", "报指纹 (防篡改)"],
 ];
 
 /** 页面上看到的「做什么」: catfish_source 标签优先, 其次按路径 */
@@ -88,6 +89,34 @@ const SOURCE_PURPOSE: Record<string, string> = {
   "companion-wiki-relation-suggest": "关系类型建议",
   "companion-wiki-suggest": "知识链接建议",
 };
+
+/** 10/28: 老记录里存的用途名换成现在的叫法再显示。
+ *  「做什么」是指纹链的一部分 (_CHAIN_FIELDS 里有 purpose), 老记录不能改库, 只能显示时换。 */
+export function displayPurpose(purpose: string, destHost: string, url = ""): string {
+  if (purpose === "/api/egress/anchor") return "报指纹 (防篡改)";
+  if (purpose === "微信") return destHost.includes("cdn.") ? "微信 · 发图片 / 文件" : "微信 · 收发消息";
+  if (purpose === "长期记忆") {
+    if (url.includes("memory-classify")) return "记忆归类";
+    if (url.includes("memory-recall-embed")) return "记忆检索";
+  }
+  return purpose;
+}
+
+/** 汇总表: 换完叫法后同名同去向的老 / 新行并成一行 */
+export function mergeSummaryRows<T extends { purpose: string; destHost: string; destKind: string; count: number;
+  bytesUp: number; bytesDown: number; lastTs: string }>(rows: T[]): T[] {
+  const out = new Map<string, T>();
+  for (const r of rows) {
+    const purpose = displayPurpose(r.purpose, r.destHost);
+    const key = `${r.destKind}|${purpose}|${r.destHost}`;
+    const prev = out.get(key);
+    out.set(key, prev
+      ? { ...prev, count: prev.count + r.count, bytesUp: prev.bytesUp + r.bytesUp, bytesDown: prev.bytesDown + r.bytesDown,
+          lastTs: prev.lastTs > r.lastTs ? prev.lastTs : r.lastTs }
+      : { ...r, purpose });
+  }
+  return [...out.values()].sort((a, b) => b.count - a.count);
+}
 
 export function egressHost(url: string): string {
   return hostPort(url)?.host ?? "";
