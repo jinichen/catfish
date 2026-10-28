@@ -533,6 +533,54 @@ def _patch_httpx() -> None:
     orig_sync, orig_async = httpx.Client.send, httpx.AsyncClient.send
     _ORIGINALS["httpx"] = (httpx, orig_sync, orig_async)
 
+    # 10/28: 回复读完 (或流关掉) 才记, 下行按实际收到的字节数。
+    # 原来 send() 一返回就记: 流式回复 (hermes 调模型全是 SSE) 那时正文还没开始传, 也没有 content-length,
+    # 下行永远是 0、ts_response 是收到响应头的时刻 —— 跟中央配额日志对不上。
+    class _CountSync(httpx.SyncByteStream):
+        def __init__(self, inner, done):
+            self._inner, self._done, self.n = inner, done, 0
+
+        def __iter__(self):
+            for chunk in self._inner:
+                self.n += len(chunk)
+                yield chunk
+
+        def close(self):
+            try:
+                self._inner.close()
+            finally:
+                done, self._done = self._done, None
+                if done:
+                    done(self.n)
+
+    class _CountAsync(httpx.AsyncByteStream):
+        def __init__(self, inner, done):
+            self._inner, self._done, self.n = inner, done, 0
+
+        async def __aiter__(self):
+            async for chunk in self._inner:
+                self.n += len(chunk)
+                yield chunk
+
+        async def aclose(self):
+            try:
+                await self._inner.aclose()
+            finally:
+                done, self._done = self._done, None
+                if done:
+                    done(self.n)
+
+    def finish(request, resp, t0, wrap) -> None:
+        def done(n: int) -> None:
+            record(request.method, str(request.url), body_len(request), resp.status_code, n, started=t0,
+                   body=body_of(request), source=request.headers.get("x-catfish-source"))
+        try:
+            n = len(resp.content)  # 非流式: send() 里已经读完
+        except httpx.ResponseNotRead:
+            resp.stream = wrap(resp.stream, done)  # 流式: 等调用方读完 / 关掉
+            return
+        done(n)
+
     def send(self, request, *a, **kw):
         t0 = time.time()
         try:
@@ -541,8 +589,7 @@ def _patch_httpx() -> None:
             record(request.method, str(request.url), body_len(request), error=repr(e), started=t0,
                    body=body_of(request), source=request.headers.get("x-catfish-source"))
             raise
-        record(request.method, str(request.url), body_len(request), resp.status_code,
-               int(resp.headers.get("content-length") or 0), started=t0, body=body_of(request), source=request.headers.get("x-catfish-source"))
+        finish(request, resp, t0, _CountSync)
         return resp
 
     async def asend(self, request, *a, **kw):
@@ -553,8 +600,7 @@ def _patch_httpx() -> None:
             record(request.method, str(request.url), body_len(request), error=repr(e), started=t0,
                    body=body_of(request), source=request.headers.get("x-catfish-source"))
             raise
-        record(request.method, str(request.url), body_len(request), resp.status_code,
-               int(resp.headers.get("content-length") or 0), started=t0, body=body_of(request), source=request.headers.get("x-catfish-source"))
+        finish(request, resp, t0, _CountAsync)
         return resp
 
     send._catfish_egress = asend._catfish_egress = True  # type: ignore[attr-defined]
@@ -580,8 +626,11 @@ def _patch_requests() -> None:
                    body=_bytes_of(request.body),
                    source=(request.headers or {}).get("X-Catfish-Source"))
             raise
+        n = int(resp.headers.get("content-length") or 0)
+        if not n and not kw.get("stream"):  # chunked 回复没有 content-length; 非流式时正文已经读进来了
+            n = len(resp.content or b"")
         record(request.method or "GET", request.url or "", _len_of(request.body), resp.status_code,
-               int(resp.headers.get("content-length") or 0), started=t0, body=_bytes_of(request.body),
+               n, started=t0, body=_bytes_of(request.body),
                    source=(request.headers or {}).get("X-Catfish-Source"))
         return resp
 

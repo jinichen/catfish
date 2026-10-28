@@ -116,6 +116,67 @@ def test_挂钩后真写进库_只记该记的(_home):
         assert not getattr(_h.Client.send, "_catfish_egress", False)
 
 
+def test_流式回复_读完才记_下行按实际字节(_home):
+    """10/28: hermes 调模型是 SSE, 没有 content-length。原来 send() 一返回就记, 下行永远 0。"""
+    import asyncio
+    import time as _t
+
+    chunks = [b"data: " + ("x" * 200).encode() + b"\n\n" for _ in range(5)]
+
+    class H(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self):  # noqa: N802
+            self.rfile.read(int(self.headers["content-length"] or 0))
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.send_header("transfer-encoding", "chunked")
+            self.end_headers()
+            for c in chunks:
+                _t.sleep(0.05)
+                self.wfile.write(b"%x\r\n%s\r\n" % (len(c), c))
+                self.wfile.flush()
+            self.wfile.write(b"0\r\n\r\n")
+
+        def log_message(self, *a):
+            pass
+
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    total = sum(len(c) for c in chunks)
+    url = f"http://127.0.0.1:{port}/v1/chat/completions"
+    try:
+        import httpx
+
+        e.install("hermes")
+        e._CENTRAL = {("127.0.0.1", port)}
+        e._CENTRAL_AT = 9e18
+        with httpx.Client() as c:
+            with c.stream("POST", url, json={"stream": True}) as r:  # 同步流式
+                for _ in r.iter_bytes():
+                    pass
+            c.post(url, json={"stream": False})  # 非流式但 chunked: 也按实际字节
+
+        async def go():
+            async with httpx.AsyncClient() as c:
+                async with c.stream("POST", url, json={"stream": True}) as r:  # 异步流式 (OpenAI SDK 走这条)
+                    async for _ in r.aiter_bytes():
+                        pass
+        asyncio.run(go())
+        e.flush()
+        rows = sqlite3.connect(str(_home / "outbound_log.db")).execute(
+            "SELECT response_bytes, ts_request, ts_response FROM outbound_log ORDER BY id").fetchall()
+        assert [r[0] for r in rows] == [total, total, total]
+        from datetime import datetime
+        for _, t0, t1 in rows:  # 完成时刻 = 读完正文, 不是收到响应头 (正文要传 0.25 秒)
+            assert (datetime.fromisoformat(t1) - datetime.fromisoformat(t0)).total_seconds() >= 0.2
+    finally:
+        srv.shutdown()
+        e._CENTRAL = None
+        e.uninstall()
+
+
 def test_存内容_去密钥_大消息去重_指纹链(_home):
     big = "很长的系统提示" * 200
     body = {"model": "m", "api_key": "sk-1", "messages": [{"role": "system", "content": big},
