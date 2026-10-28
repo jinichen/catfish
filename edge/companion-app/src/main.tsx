@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { DialogHost } from "./components/dialogs";
 import { bootstrapEndpoints } from "./lib/env";
 import { fetchViaProxy } from "./lib/http_proxy";
 import { installFetchProxy } from "./lib/fetchProxyPolicy";
@@ -81,6 +82,7 @@ function renderApp() {
     <React.StrictMode>
       <StartupErrorBoundary>
         <App />
+        <DialogHost />
       </StartupErrorBoundary>
     </React.StrictMode>,
   );

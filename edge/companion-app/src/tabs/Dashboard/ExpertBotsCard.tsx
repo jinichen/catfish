@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { confirmDialog } from "../../components/dialogs";
 
 import { useCatalog } from "../../hooks/useCatalog";
 import {
@@ -153,8 +154,8 @@ export default function ExpertBotsCard() {
     }
   };
 
-  const removeBot = (bot: ExpertBotSummary) => {
-    if (bot.managedByCompanion && !window.confirm(
+  const removeBot = async (bot: ExpertBotSummary) => {
+    if (bot.managedByCompanion && !await confirmDialog(
       `确认删除“${bot.displayName}”及其 Hermes Profile？该 Bot 的本地会话、记忆和技能也会由 Hermes 一并处理。`,
     )) return;
     void run(() => bot.managedByCompanion

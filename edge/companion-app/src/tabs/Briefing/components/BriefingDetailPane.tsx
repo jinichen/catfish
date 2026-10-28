@@ -25,6 +25,7 @@
  * 真要再切, 该先给 useTaskChat 那条链补测试, 那是另一件事的排期。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { confirmDialog } from "../../../components/dialogs";
 
 import {
   setTaskManualStatus,               // P3.5.208-A: SSOT write helper
@@ -408,7 +409,7 @@ export function DetailPane({
   // 修: clear 后 reset sessionIdRef, 下次 send 走 ensureSessionId lazy 创建
   // **新 session**, 老 session 数据保留可 debug 但被丢弃, 新 chat 干净 fresh.
   const handleClearChat = async () => {
-    if (!window.confirm("清掉这条待办的所有对话历史? 不可撤销.")) return;
+    if (!(await confirmDialog("清掉这条待办的所有对话历史? 不可撤销."))) return;
     try {
       cancel();
       await taskChatClear(chatKey);

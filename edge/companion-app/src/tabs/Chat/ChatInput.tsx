@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useRef, useState, type KeyboardEvent, type ClipboardEvent, type DragEvent, type ChangeEvent } from "react";
+import { confirmDialog } from "../../components/dialogs";
 import { invoke } from "@tauri-apps/api/core";
 import { ArrowBendDownLeft, Microphone, Paperclip } from "@phosphor-icons/react";
 import type { Attachment } from "../../types/chat";
@@ -294,7 +295,7 @@ export default function ChatInput({
     // Cmd/Ctrl+L 清屏
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "l") {
       e.preventDefault();
-      if (confirm("清空当前对话？")) onReset();
+      void confirmDialog("清空当前对话？").then((ok) => ok && onReset());
       return;
     }
     // Shift+Enter: 换行（默认行为）

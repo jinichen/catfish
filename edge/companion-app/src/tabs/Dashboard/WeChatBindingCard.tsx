@@ -24,6 +24,7 @@
  */
 
 import * as React from "react";
+import { confirmDialog } from "../../components/dialogs";
 import { invoke } from "@tauri-apps/api/core";
 
 import { fetchMe, type MeInfo } from "../../lib/me";
@@ -178,7 +179,7 @@ export default function WeChatBindingCard() {
   };
 
   const handleRevoke = async (e: BindingEntry) => {
-    const ok = window.confirm(
+    const ok = await confirmDialog(
       `解绑 ${fmtPlatform(e.platform)} 用户 ${e.user_name || shortenId(e.user_id)}?\n\n` +
         `Ta 下次再发消息会重新出现在"待审批"里, 不是真删数据.`,
     );

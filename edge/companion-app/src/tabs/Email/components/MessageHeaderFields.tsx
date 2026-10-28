@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { alertDialog } from "../../../components/dialogs";
 
 import { emailExportAttachment, openFile } from "../../../lib/tauri";
 // ⚠ type-only import: DetailPane 也 import 这个文件, 普通 import 会形成
@@ -107,7 +108,7 @@ export default function MessageHeaderFields({ msg }: { msg: FullMessage }) {
                     await openFile(path);
                   } catch (e) {
                     console.warn("[EmailDetail] 打开附件失败:", e);
-                    alert(`打开附件失败: ${e instanceof Error ? e.message : String(e)}`);
+                    void alertDialog(`打开附件失败: ${e instanceof Error ? e.message : String(e)}`);
                   }
                 }}
                 title={`点击下载并用系统默认 app 打开: ${a.filename}`}

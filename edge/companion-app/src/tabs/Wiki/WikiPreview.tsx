@@ -10,6 +10,7 @@
 
 import WikiEntryIssues from "./WikiEntryIssues";
 import { useEffect, useMemo, useState } from "react";
+import { alertDialog } from "../../components/dialogs";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useChatStore } from "../../store/chat";
@@ -143,7 +144,7 @@ export default function WikiPreview({ onOpenTask }: { onOpenTask?: (taskId: stri
     // 空的成因: 员工从没选过 model 且 catalog 也没给出 default
     // (ChatTab.tsx:181 会在 catalog.default 到位后注入)。
     if (!chatModel) {
-      window.alert(
+      void alertDialog(
         "还没有选定模型。\n\n" +
           "🔗 扫描关联要调用大模型，用的是你在「聊天」页选的那个模型。\n" +
           "请先去聊天页选一个，再回来扫描。",

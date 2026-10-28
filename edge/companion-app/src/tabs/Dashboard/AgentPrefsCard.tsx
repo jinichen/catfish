@@ -4,6 +4,7 @@
  */
 
 import { useState, useEffect } from "react";
+import { alertDialog } from "../../components/dialogs";
 import { getVersion } from "@tauri-apps/api/app";
 
 import { PERSONALITY_LABELS, type Personality } from "../../lib/agent";
@@ -62,7 +63,7 @@ export default function AgentPrefsCard() {
       // 这里直接打开 yaml 文件 — 系统会用默认 editor (TextEdit / VSCode 等)
       await open(emailCfg.yaml_path);
     } catch (e) {
-      alert(`打开 yaml 失败: ${e}\n手动打开: ${emailCfg.yaml_path}`);
+      void alertDialog(`打开 yaml 失败: ${e}\n手动打开: ${emailCfg.yaml_path}`);
     }
   };
 

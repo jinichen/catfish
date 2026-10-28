@@ -15,6 +15,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { alertDialog } from "../../../components/dialogs";
 
 // 8/15: 本文件原来 1017 行 —— 左栏列表 + 右栏详情长在一起, DetailPane 一个人
 // 就 707 行。搬去 BriefingDetailPane.tsx, 左右两栏本来就是两件事。
@@ -123,8 +124,7 @@ export default function BriefingTwoColumnView({
     setActiveTab("chat");
     // MVP alert. 未来 Phase 10.1 inline toast.
     window.setTimeout(() => {
-      // eslint-disable-next-line no-alert
-      alert(
+      void alertDialog(
         `已切到 Chat tab + 复制 reflect prompt:\n\n  ${prompt}\n\n💡 Cmd+V 粘贴到输入框 send`,
       );
     }, 50);

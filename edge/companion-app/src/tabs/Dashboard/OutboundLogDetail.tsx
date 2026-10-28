@@ -4,6 +4,7 @@
  */
 
 import * as React from "react";
+import { confirmDialog } from "../../components/dialogs";
 
 import { fetchEgressAnchors } from "../../lib/egressAnchor";
 import {
@@ -127,7 +128,7 @@ export function IntegrityPanel() {
       setMsg("保留期要填 1 到 3650 之间的整数天");
       return;
     }
-    if (info && n < info.retentionDays && !window.confirm(`改成 ${n} 天会马上删掉 ${n} 天以前的记录, 确定吗?`)) return;
+    if (info && n < info.retentionDays && !(await confirmDialog(`改成 ${n} 天会马上删掉 ${n} 天以前的记录, 确定吗?`, "缩短保留期"))) return;
     setBusy(true);
     try {
       const removed = await transparentLogSetRetention(n);

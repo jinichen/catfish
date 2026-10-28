@@ -4,6 +4,7 @@
  * 没登记的词写进条目会被归成「关联」(防止模型自造词, 9/17 起的规矩)。
  */
 import { useEffect, useState } from "react";
+import { confirmDialog } from "../../components/dialogs";
 import { Plus, Trash, X } from "@phosphor-icons/react";
 import { ModalShell, T } from "../../components/ModalShell";
 import { useRelationVocab } from "../../lib/wikiRelationVocab";
@@ -41,7 +42,7 @@ export default function WikiRelationTypesModal({ onClose }: { onClose: () => voi
   };
   const drop = async (word: string) => {
     const n = usage(word);
-    if (n > 0 && !window.confirm(`有 ${n} 条关系写着「${word}」。删掉后这些关系下次保存时会变成「关联」。确定删？`)) return;
+    if (n > 0 && !(await confirmDialog(`有 ${n} 条关系写着「${word}」。删掉后这些关系下次保存时会变成「关联」。确定删？`))) return;
     setBusy(true);
     setError(null);
     try {

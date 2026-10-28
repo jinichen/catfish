@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { confirmDialog } from "../../components/dialogs";
 import { Check, Lightning, Play, SpinnerGap, X } from "@phosphor-icons/react";
 import { wikiUpdateFile } from "../../lib/tauri";
 import {
@@ -101,7 +102,7 @@ export default function WikiActionPanel({
 
   const runAction = async (action: WikiActionBinding) => {
     if (!action.available || actionRunId) return;
-    if (action.approval === "required" && !window.confirm(`确认执行“${action.label}”吗？`)) return;
+    if (action.approval === "required" && !(await confirmDialog(`确认执行“${action.label}”吗？`))) return;
     setActionRunId(action.id);
     setActionMessage(null);
     try {

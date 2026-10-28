@@ -17,6 +17,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { promptDialog } from "../../components/dialogs";
 import { useInstalledSkillsAndMcp } from "../../hooks/useIdentity";
 import type { McpServerEntry, SkillEntry, SkillNamespace } from "../../types/identity";
 // 8/15: 本文件原来 971 行, 过了 CLAUDE.md §1 的 800 红线。下面两块是从这里
@@ -88,11 +89,11 @@ export default function SkillsMcpCard() {
 
   /** P3.3.34 (6/12): 装外部 skill zip 流程 (P3.3.23 复用):
    *    1. 隐藏 input → 拿 File 对象
-   *    2. window.prompt 拿 namespace (默认 external, 可改)
+   *    2. promptDialog 拿 namespace (默认 external, 可改)
    *    3. arrayBuffer → Uint8Array → number[] 给 Rust
    *    4. 调 installSkillFromZip → 成功 reload + 弹 done 卡; 失败 弹 error 卡 */
   const handleZipPicked = async (file: File) => {
-    const nsInput = window.prompt(
+    const nsInput = await promptDialog(
       `把 "${file.name}" 装到哪个 namespace? (a-z 0-9 _ -; 留空 = external)`,
       "external",
     );
