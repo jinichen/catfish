@@ -151,19 +151,18 @@ async fn fetch_one_city(city: &str) -> Result<WeatherEntry, String> {
         .send()
         .await
         .map_err(|e| format!("拉 {url} 失败: {e}"))?;
-    // 10/24 数据外发记录: 城市名发给第三方 (wttr.in), 记一笔
+    let status = resp.status();
+    let body = resp.text().await;
+    // 10/24 数据外发记录: 城市名发给第三方 (wttr.in), 记一笔。10/28: 读完正文再记, 下行按实际字节
     crate::commands::transparent_log::record_internal(
-        "GET", &url, None, Some(resp.status().as_u16()), "third_party", "天气",
+        "GET", &url, None, Some(status.as_u16()), body.as_ref().ok().map(|b| b.len() as u64), "third_party", "天气",
     );
 
-    if !resp.status().is_success() {
-        return Err(format!("wttr.in HTTP {}", resp.status()));
+    if !status.is_success() {
+        return Err(format!("wttr.in HTTP {status}"));
     }
 
-    let body = resp
-        .text()
-        .await
-        .map_err(|e| format!("读 body 失败: {e}"))?;
+    let body = body.map_err(|e| format!("读 body 失败: {e}"))?;
 
     let value: serde_json::Value = serde_json::from_str(&body)
         .map_err(|e| format!("parse JSON 失败 (前 100 字: {}): {e}", &body.chars().take(100).collect::<String>()))?;

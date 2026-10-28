@@ -661,7 +661,26 @@ def _patch_aiohttp() -> None:
         except Exception as e:
             record(method, url, n, error=repr(e), started=t0, body=raw, source=src)
             raise
-        record(method, url, n, resp.status, int(resp.content_length or 0), started=t0, body=raw, source=src)
+        if resp.content_length is not None:  # 声明了长度: 就按它记 (正文是空的也是 0, 不用等)
+            record(method, url, n, resp.status, resp.content_length, started=t0, body=raw, source=src)
+            return resp
+        # 10/28: 没声明长度 (chunked / 流式) —— 等正文收完 (或连接被放掉) 再按实际收到的字节记, 只记一次。
+        # 原来这里直接记 content_length or 0, 这类回复下行永远是 0。
+        state = {"done": False}
+
+        def done() -> None:
+            if not state["done"]:
+                state["done"] = True
+                record(method, url, n, resp.status, resp.content.total_bytes, started=t0, body=raw, source=src)
+
+        def hooked(fn):
+            def wrapper(*a, **k):
+                done()
+                return fn(*a, **k)
+            return wrapper
+
+        resp.content.on_eof(done)
+        resp.release, resp.close = hooked(resp.release), hooked(resp.close)
         return resp
 
     _request._catfish_egress = True  # type: ignore[attr-defined]

@@ -251,24 +251,25 @@ impl RemoteProvider {
                 )
             })
             .ok()?;
-        // 10/24 数据外发记录: 原文发去中央算向量 —— 带内容出本机, 记一笔 (连内容)
+        let status = resp.status();
+        let raw = resp.bytes().await;
+        // 10/24 数据外发记录: 原文发去中央算向量 —— 带内容出本机, 记一笔 (连内容)。
+        // 10/28: 读完正文再记, 下行按实际字节
         crate::commands::transparent_log::record_internal(
-            "POST", &url, Some(body.to_string()), Some(resp.status().as_u16()), "central", "向量计算",
+            "POST", &url, Some(body.to_string()), Some(status.as_u16()),
+            raw.as_ref().ok().map(|b| b.len() as u64), "central", "向量计算",
         );
 
-        if !resp.status().is_success() {
-            log::warn!(
-                "[embedding/remote] POST {} → {} (caller 走 fallback)",
-                url,
-                resp.status()
-            );
+        if !status.is_success() {
+            log::warn!("[embedding/remote] POST {} → {} (caller 走 fallback)", url, status);
             return None;
         }
 
-        let parsed: EmbeddingApiResponse = resp
-            .json()
-            .await
-            .map_err(|e| log::warn!("[embedding/remote] 解析 response JSON 失败: {}", err_chain(&e)))
+        let raw = raw
+            .map_err(|e| log::warn!("[embedding/remote] 读 response 失败: {}", err_chain(&e)))
+            .ok()?;
+        let parsed: EmbeddingApiResponse = serde_json::from_slice(&raw)
+            .map_err(|e| log::warn!("[embedding/remote] 解析 response JSON 失败: {e}"))
             .ok()?;
 
         let model_id = parsed.model.clone();

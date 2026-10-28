@@ -177,6 +177,73 @@ def test_流式回复_读完才记_下行按实际字节(_home):
         e.uninstall()
 
 
+def test_aiohttp_没声明长度_收完正文按实际字节记(_home):
+    """10/28: 微信 (aiohttp) 原来直接记 content_length or 0 —— chunked 回复下行永远 0。"""
+    aiohttp = pytest.importorskip("aiohttp")
+    import asyncio
+    from aiohttp import web
+
+    async def chunked(request):
+        await request.read()
+        r = web.StreamResponse()
+        r.enable_chunked_encoding()
+        await r.prepare(request)
+        for _ in range(4):
+            await asyncio.sleep(0.05)
+            await r.write(b"y" * 300)
+        await r.write_eof()
+        return r
+
+    async def sized(request):
+        await request.read()
+        return web.Response(body=b"z" * 34)
+
+    async def empty(request):  # 微信 CDN 上传: 结果在响应头里, 正文是空的
+        await request.read()
+        return web.Response(status=200, headers={"x-encrypted-param": "p"})
+
+    async def go():
+        app = web.Application()
+        app.router.add_post("/chunked", chunked)
+        app.router.add_post("/sized", sized)
+        app.router.add_post("/empty", empty)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        e._CENTRAL = {("127.0.0.1", port)}
+        e._CENTRAL_AT = 9e18
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.post(f"http://127.0.0.1:{port}/chunked", data=b"hi") as r:
+                    await r.read()
+                async with s.post(f"http://127.0.0.1:{port}/sized", data=b"hi") as r:
+                    await r.read()
+                async with s.post(f"http://127.0.0.1:{port}/empty", data=b"hi") as r:
+                    pass
+                async with s.post(f"http://127.0.0.1:{port}/chunked", data=b"hi") as r:
+                    pass  # 没读正文就放掉连接: 也要记一条 (只记一次)
+        finally:
+            await runner.cleanup()
+
+    e.install("hermes")
+    try:
+        asyncio.run(go())
+        e.flush()
+        rows = sqlite3.connect(str(_home / "outbound_log.db")).execute(
+            "SELECT url, response_bytes, ts_request, ts_response FROM outbound_log ORDER BY id").fetchall()
+        got = [(u.rsplit("/", 1)[1], b) for u, b, _, _ in rows]
+        assert got[:3] == [("chunked", 1200), ("sized", 34), ("empty", 0)]
+        assert len(got) == 4 and got[3][0] == "chunked" and got[3][1] < 1200
+        from datetime import datetime
+        t0, t1 = rows[0][2], rows[0][3]  # 完成时刻 = 正文收完 (要传 0.2 秒)
+        assert (datetime.fromisoformat(t1) - datetime.fromisoformat(t0)).total_seconds() >= 0.15
+    finally:
+        e._CENTRAL = None
+        e.uninstall()
+
+
 def test_存内容_去密钥_大消息去重_指纹链(_home):
     big = "很长的系统提示" * 200
     body = {"model": "m", "api_key": "sk-1", "messages": [{"role": "system", "content": big},

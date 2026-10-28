@@ -242,8 +242,9 @@ fn record_blocking(req: RecordReq) -> Result<i64, String> {
 }
 
 /// 10/24: Companion 后台自己发出去的 (远程向量、天气) 也记一笔, 连内容; 失败不影响调用方。
+/// `response_bytes`: 实际收到的回复字节数 —— 读完正文再调 (10/28: 原来收到响应头就记, 下行一直是 0)。
 pub(crate) fn record_internal(method: &str, url: &str, body: Option<String>, status: Option<u16>,
-                              dest_kind: &str, purpose: &str) {
+                              response_bytes: Option<u64>, dest_kind: &str, purpose: &str) {
     let host = url.split("://").nth(1).and_then(|r| r.split(['/', ':', '?']).next()).unwrap_or("").to_string();
     let req = RecordReq {
         method: method.to_string(),
@@ -251,7 +252,7 @@ pub(crate) fn record_internal(method: &str, url: &str, body: Option<String>, sta
         request_bytes: body.as_ref().map(|b| b.len() as u64),
         request_body: body,
         status,
-        response_bytes: None,
+        response_bytes,
         response_summary: None,
         error: None,
         category: Some(if dest_kind == "third_party" { "third_party" } else { "content" }.to_string()),
