@@ -67,6 +67,8 @@ def register_audit_routes(app) -> None:
         day_cutoff = now_ms - 86_400_000
 
         summary = quota.audit_summary_user_since(effective_email, day_cutoff)
+        # 10/29: summary 只含扣配额的部分 (进度条用); 后台任务 (记忆插件等) 另给
+        summary.update(quota.background_totals(day_cutoff, user_email=effective_email))
 
         # 6/2 BL-PRIVACY-CARD-QUOTA-PROGRESS (鸿波 6/2 凌晨): PrivacyCard 把"今天用了
         # 7.99M"改成 quota 进度条. 这里加 quota_day_limit 字段, 客户端就能渲染
@@ -142,6 +144,8 @@ def register_audit_routes(app) -> None:
         day_cutoff = now_ms - 86_400_000
 
         summary = quota.audit_summary_dept_since(department, day_cutoff)
+        # 10/29: summary 含后台任务 (成本要算); 这里给出其中后台任务占多少
+        summary.update(quota.background_totals(day_cutoff, department=department))
         return {
             "department": department,
             "since_ms": day_cutoff,
@@ -187,6 +191,11 @@ def register_audit_routes(app) -> None:
         }
 
         summary = quota.audit_summary_global_since(period_start_ms, **filter_kwargs)
+        # 10/29: 后台任务 (员工本机记忆插件等, 不扣配额但上游照收钱) 原来整条不记, 成本漏算;
+        # 现在记了, 含在上面的总量 / by_model 里, 这里单列其中多少。网关自己的 internal:*
+        # 调用按模型拆三段, 前端给它算成本。
+        summary.update(quota.background_totals(period_start_ms, **filter_kwargs))
+        summary["internal_by_model"] = quota.internal_by_model(period_start_ms)
         prev = quota.audit_period_totals(
             prev_period_start_ms, period_start_ms, **filter_kwargs,
         )

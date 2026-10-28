@@ -200,7 +200,9 @@ function AdminHomeBody({ a }: { a: GlobalAudit }) {
         {a.internal_request_count ? (
           <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>
             另有系统内部调用 {a.internal_request_count.toLocaleString()} 次 ·{" "}
-            {fmtTokens(a.internal_tokens ?? 0)} tok（总结 / 主动提醒等，不计入上面的员工业务）
+            {fmtTokens(a.internal_tokens ?? 0)} tok
+            {a.internal_by_model?.length ? ` · ${fmtRMB(totalCostRMB(a.internal_by_model))}` : null}
+            （总结 / 主动提醒等，不计入上面的员工业务）
           </div>
         ) : null}
       </Section>

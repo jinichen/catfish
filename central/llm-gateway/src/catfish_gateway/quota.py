@@ -57,11 +57,17 @@ def record_usage(
     tokens_in: int,
     tokens_out: int,
     tokens_cache_read: int = 0,
+    background: bool = False,
 ) -> None:
     """请求完成后记真实 token 用量. 失败静默不影响主流程.
 
     tokens_cache_read (10/29): 上游报的缓存命中输入 token, 是 tokens_in 的子集
     (prompt_tokens 本来就含 cached_tokens)。计费按「未命中输入 / 命中输入 / 输出」三段算。
+
+    background (10/29): 后台任务 —— 员工本机记忆插件这类带 X-Catfish-Internal 头、token 有
+    background.tasks scope 的调用, 以及网关自己的 internal:* 调用。原来这类调用整条不写,
+    不扣员工配额是对的, 但计费也跟着漏了 (本机一周 qwen-flash 约 1600 次、输出 token 的 38%)。
+    现在照写、打标记: 判超额的 sum_tokens_* 和配额页排行不算它, 审计 / 成本照算。
 
     BL-QUOTA-SQLITE-DEPRECATE (5/17 鸿波): 老逻辑 PG 写失败 → fallback sqlite
     (写 ~/.catfish/quota.db, 员工本机文件). 违反 BL-CENTRAL-EDGE-BOUNDARY 规则.  # noqa: BOUNDARY
@@ -77,10 +83,10 @@ def record_usage(
             with _pg_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "INSERT INTO quota_events (ts_ms, user_email, department, model, tokens_in, tokens_out, tokens_cache_read) "
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                        "INSERT INTO quota_events (ts_ms, user_email, department, model, tokens_in, tokens_out, tokens_cache_read, background) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                         (ts_ms, user_email, department, model,
-                         int(tokens_in), int(tokens_out), cache_read),
+                         int(tokens_in), int(tokens_out), cache_read, bool(background)),
                     )
                 conn.commit()
         except Exception as e:
@@ -97,10 +103,10 @@ def record_usage(
         conn = _get_conn()
         with conn:
             conn.execute(
-                "INSERT INTO quota_events (ts, user_email, department, model, tokens_in, tokens_out, tokens_cache_read) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO quota_events (ts, user_email, department, model, tokens_in, tokens_out, tokens_cache_read, background) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (ts_ms, user_email, department, model,
-                 int(tokens_in), int(tokens_out), cache_read),
+                 int(tokens_in), int(tokens_out), cache_read, 1 if background else 0),
             )
         conn.close()
     except Exception as e:
@@ -305,6 +311,7 @@ from .quota_audit import (  # noqa: E402,F401
     top_departments,
     top_users_in_department,
 )
+from .quota_background import background_totals, internal_by_model  # noqa: E402,F401
 from .quota_base import (  # noqa: E402,F401
     _audit_backend_configured,
     _get_conn,

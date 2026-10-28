@@ -126,14 +126,18 @@ def test_audit_called_on_error_too(monkeypatch):
 # ── QuotaTransform ────────────────────────────────────────
 
 
-def test_quota_skipped_when_internal(monkeypatch):
+def test_quota_internal_recorded_as_background(monkeypatch):
+    """10/29: internal 调用不再整条跳过 —— 照写、打 background 标记 (判超额不算, 计费算)。"""
     called = []
     monkeypatch.setattr(
         "catfish_gateway.quota.record_usage",
         lambda **kw: called.append(kw),
     )
     ot.QuotaTransform().on_complete(_ctx(is_internal=True))
-    assert called == []
+    assert len(called) == 1 and called[0]["background"] is True
+    called.clear()
+    ot.QuotaTransform().on_complete(_ctx(is_internal=False))
+    assert called[0]["background"] is False
 
 
 def test_quota_skipped_when_zero_tokens(monkeypatch):

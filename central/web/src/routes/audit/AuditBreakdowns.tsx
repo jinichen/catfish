@@ -19,6 +19,7 @@ import { AUDIT_TOP_N, type GlobalAudit } from "../../lib/me";
 import {
   costRMB,
   fmtRMB,
+  totalCostRMB,
   getModelDisplay,
   isKnownModel,
   splitDisplayName,
@@ -137,6 +138,8 @@ function InternalLoopbackCard({ audit }: { audit: GlobalAudit }) {
     <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
       🔁 另有 gateway 自身调用 {(audit.internal_request_count ?? 0).toLocaleString()} 次 ·{" "}
       {fmtTokens(audit.internal_tokens ?? 0)} tok
+      {/* 10/29: 原来这类调用不进 quota_events, 只有个 0; 现在记了, 按单价给成本 */}
+      {audit.internal_by_model?.length ? ` · ${fmtRMB(totalCostRMB(audit.internal_by_model))}` : null}
       <span title="summarizer / proactive / 5 维 inject 等 gateway 自调消耗。跟员工业务无关, 但一样进真实 LLM 账单。">
         （总结 / 主动提醒等，不计入上面的员工业务）
       </span>

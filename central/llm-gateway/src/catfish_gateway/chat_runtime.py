@@ -724,8 +724,9 @@ async def _invoke_chat_completion(
         source=source_hint,
     )
     # 五一 sprint 5/2 收尾: 同步写 quota_events. ok 才记 (error 时 tokens=0).
-    # BL-F17 (5/5): internal 调用跳 record_usage (audit log 仍写, 只 quota 跳).
-    if (prompt_tokens > 0 or completion_tokens > 0) and not is_internal:
+    # BL-F17 (5/5) 起 internal 调用整条不写 —— 10/29 改成照写、打 background 标记:
+    # 不扣员工配额 (sum_tokens_* 排除它), 但计费要算, 上游照样收钱。
+    if prompt_tokens > 0 or completion_tokens > 0:
         _quota_module.record_usage(
             user_email=user_sub,
             department=user_dept,
@@ -733,6 +734,7 @@ async def _invoke_chat_completion(
             tokens_in=prompt_tokens,
             tokens_out=completion_tokens,
             tokens_cache_read=cache_read,
+            background=is_internal,
         )
 
     # BL-ADVISOR-UPSTREAM-ERROR-AS-CONTENT (6/1 鸿波): 上游某些 LiteLLM-based 私有 LLM

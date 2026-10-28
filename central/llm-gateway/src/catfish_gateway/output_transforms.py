@@ -149,13 +149,12 @@ class AuditTransform:
 
 
 class QuotaTransform:
-    """包 quota.record_usage. **只**在 status=ok + 非 internal + 有 token 时计."""
+    """包 quota.record_usage. 只在 status=ok + 有 token 时计; internal 调用打 background 标记 (10/29)."""
     name = "quota"
 
     def on_complete(self, ctx: OutputCtx) -> None:
-        if ctx.is_internal:
-            # BL-F17 (5/5): internal 调用跳 quota (audit 仍写, 透明)
-            return
+        # BL-F17 (5/5) 起 internal 调用整条跳过 —— 10/29 改成照写、打 background 标记:
+        # 判超额不算它 (sum_tokens_* 排除), 审计 / 计费算 (上游照样收钱)。
         if ctx.prompt_tokens <= 0 and ctx.completion_tokens <= 0:
             return
         from . import quota as _quota_module  # noqa: PLC0415
@@ -166,6 +165,7 @@ class QuotaTransform:
             tokens_in=ctx.prompt_tokens,
             tokens_out=ctx.completion_tokens,
             tokens_cache_read=ctx.cache_read_tokens,
+            background=ctx.is_internal,
         )
 
     def on_error(self, ctx: OutputCtx) -> None:

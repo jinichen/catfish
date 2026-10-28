@@ -74,3 +74,35 @@ def test_audit_by_model_splits_in_out_cache() -> None:
     mine = {m["model"]: m for m in quota.audit_summary_user_since("bob@x.com", cutoff)["by_model"]}
     assert mine["qwen"]["tokens_in"] == 500 and mine["qwen"]["tokens_cache_read"] == 0
     assert mine["deepseek"]["tokens_out"] == 20
+
+
+# ── 10/29 后台任务：照写、打 background 标记；判超额不算，审计 / 成本算 ──────────
+
+
+def test_background_excluded_from_quota_but_in_audit() -> None:
+    quota.record_usage("alice@x.com", "研发部", "qwen", 1000, 100)
+    quota.record_usage("alice@x.com", "研发部", "qwen", 5000, 900, tokens_cache_read=4000, background=True)
+    quota.record_usage("internal:gateway-loopback", "", "qwen", 70, 30, background=True)
+    cutoff = int(time.time() * 1000) - 60_000
+
+    # 判超额只算员工自己发起的那一条
+    assert quota.sum_tokens_user_since("alice@x.com", cutoff) == 1100
+    assert quota.sum_tokens_dept_since("研发部", cutoff) == 1100
+    assert quota.sum_tokens_model_since("qwen", cutoff) == 1100
+    assert quota.top_users_in_department("研发部", cutoff) == [{"user_email": "alice@x.com", "tokens_used": 1100}]
+    assert quota.top_departments(cutoff)[0]["tokens_used"] == 1100
+
+    # 审计 / 成本：后台任务算进去 (internal:* 仍单列)
+    g = quota.audit_summary_global_since(cutoff)
+    assert g["total_tokens"] == 7000
+    row = g["by_model"][0]
+    assert (row["tokens_in"], row["tokens_out"], row["tokens_cache_read"]) == (6000, 1000, 4000)
+    assert g["internal_tokens"] == 100
+    assert quota.background_totals(cutoff) == {"background_request_count": 1, "background_tokens": 5900}
+    assert quota.internal_by_model(cutoff)[0]["tokens_out"] == 30
+
+    # 员工自查 (Companion 进度条)：只算扣配额的部分，后台任务另给
+    me = quota.audit_summary_user_since("alice@x.com", cutoff)
+    assert me["total_tokens"] == 1100
+    assert quota.background_totals(cutoff, user_email="alice@x.com")["background_tokens"] == 5900
+    assert quota.background_totals(cutoff, department="研发部")["background_request_count"] == 1

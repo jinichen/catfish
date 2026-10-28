@@ -43,7 +43,7 @@ def _sum_tokens(where_clause_sqlite: str, where_clause_pg: str, params: tuple[An
                 with conn.cursor() as cur:
                     cur.execute(
                         f"SELECT COALESCE(SUM(tokens_in + tokens_out), 0) "
-                        f"FROM quota_events WHERE {where_clause_pg}",
+                        f"FROM quota_events WHERE {where_clause_pg} AND NOT background",
                         params,
                     )
                     row = cur.fetchone()
@@ -56,7 +56,7 @@ def _sum_tokens(where_clause_sqlite: str, where_clause_pg: str, params: tuple[An
         conn = _get_conn()
         cur = conn.execute(
             f"SELECT COALESCE(SUM(tokens_in + tokens_out), 0) "
-            f"FROM quota_events WHERE {where_clause_sqlite}",
+            f"FROM quota_events WHERE {where_clause_sqlite} AND background = 0",
             params,
         )
         result = cur.fetchone()[0]
@@ -85,6 +85,10 @@ def sum_tokens_model_since(model: str, cutoff_ms: int) -> int:
 
 def audit_summary_user_since(user_email: str, cutoff_ms: int) -> dict:
     """单员工的 audit 聚合 — 给 /api/audit/me 用 (员工自查 "中央到底存了我啥").
+
+    10/29: 只算会扣配额的那部分 (NOT background) —— Companion PrivacyCard 拿 total_tokens
+    画「已用 / 上限」进度条, 后台任务不扣配额, 混进来进度条就虚高。后台任务的量
+    由 background_totals() 另给。
 
     跟 audit_summary_dept_since 同套路, 区别:
       - 按 user_email 过滤 (不是 department)
@@ -117,7 +121,7 @@ def audit_summary_user_since(user_email: str, cutoff_ms: int) -> dict:
                 with conn.cursor() as cur:
                     cur.execute(
                         """SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0)
-                           FROM quota_events WHERE user_email = %s AND ts_ms >= %s""",
+                           FROM quota_events WHERE user_email = %s AND ts_ms >= %s AND NOT background""",
                         (user_email, cutoff_ms),
                     )
                     row = cur.fetchone()
@@ -127,7 +131,7 @@ def audit_summary_user_since(user_email: str, cutoff_ms: int) -> dict:
                     cur.execute(
                         """SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS used,
                                   SUM(tokens_in), SUM(tokens_out), SUM(tokens_cache_read)
-                           FROM quota_events WHERE user_email = %s AND ts_ms >= %s
+                           FROM quota_events WHERE user_email = %s AND ts_ms >= %s AND NOT background
                            GROUP BY model ORDER BY used DESC LIMIT 20""",
                         (user_email, cutoff_ms),
                     )
@@ -158,7 +162,7 @@ def audit_summary_user_since(user_email: str, cutoff_ms: int) -> dict:
         conn = _get_conn()
         cur = conn.execute(
             """SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0)
-               FROM quota_events WHERE user_email = ? AND ts >= ?""",
+               FROM quota_events WHERE user_email = ? AND ts >= ? AND background = 0""",
             (user_email, cutoff_ms),
         )
         row = cur.fetchone()
@@ -168,7 +172,7 @@ def audit_summary_user_since(user_email: str, cutoff_ms: int) -> dict:
         cur = conn.execute(
             """SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS used,
                                   SUM(tokens_in), SUM(tokens_out), SUM(tokens_cache_read)
-               FROM quota_events WHERE user_email = ? AND ts >= ?
+               FROM quota_events WHERE user_email = ? AND ts >= ? AND background = 0
                GROUP BY model ORDER BY used DESC LIMIT 20""",
             (user_email, cutoff_ms),
         )
@@ -222,7 +226,7 @@ def top_users_in_department(
                     cur.execute(
                         """SELECT user_email, SUM(tokens_in + tokens_out) AS used
                            FROM quota_events
-                           WHERE department = %s AND ts_ms >= %s
+                           WHERE department = %s AND ts_ms >= %s AND NOT background
                            GROUP BY user_email
                            ORDER BY used DESC
                            LIMIT %s""",
@@ -239,7 +243,7 @@ def top_users_in_department(
         cur = conn.execute(
             """SELECT user_email, SUM(tokens_in + tokens_out) AS used
                FROM quota_events
-               WHERE department = ? AND ts >= ?
+               WHERE department = ? AND ts >= ? AND background = 0
                GROUP BY user_email
                ORDER BY used DESC
                LIMIT ?""",
@@ -374,7 +378,7 @@ def top_departments(cutoff_ms: int, limit: int = 10) -> list[dict]:
                     cur.execute(
                         """SELECT department, COUNT(*) AS req, SUM(tokens_in + tokens_out) AS tokens
                            FROM quota_events
-                           WHERE ts_ms >= %s AND department <> ''
+                           WHERE ts_ms >= %s AND department <> '' AND NOT background
                            GROUP BY department
                            ORDER BY tokens DESC
                            LIMIT %s""",
@@ -394,7 +398,7 @@ def top_departments(cutoff_ms: int, limit: int = 10) -> list[dict]:
         cur = conn.execute(
             """SELECT department, COUNT(*) AS req, SUM(tokens_in + tokens_out) AS tokens
                FROM quota_events
-               WHERE ts >= ? AND department != ''
+               WHERE ts >= ? AND department != '' AND background = 0
                GROUP BY department
                ORDER BY tokens DESC
                LIMIT ?""",
@@ -763,6 +767,7 @@ def audit_summary_global_since(
     except Exception as e:
         logger.warning("audit_summary_global_since sqlite 失败: %s", e)
         return empty
+
 
 
 # ── 检查接口 ────────────────────────────────────────────────

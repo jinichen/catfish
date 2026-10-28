@@ -92,7 +92,8 @@ CREATE TABLE quota_events (
   model TEXT NOT NULL,
   tokens_in INTEGER NOT NULL,
   tokens_out INTEGER NOT NULL,
-  tokens_cache_read INTEGER NOT NULL DEFAULT 0  -- 10/29: 缓存命中的输入 token, tokens_in 的子集 (alembic 014, 历史从 gateway_audit 回填)
+  tokens_cache_read INTEGER NOT NULL DEFAULT 0, -- 10/29: 缓存命中的输入 token, tokens_in 的子集 (alembic 014, 历史从 gateway_audit 回填)
+  background BOOLEAN NOT NULL DEFAULT false      -- 10/29: 后台任务 (X-Catfish-Internal / internal:*): 判超额不算, 审计 / 成本算 (alembic 015)
 );
 CREATE INDEX idx_quota_ts_user ON quota_events(ts, user_email);
 CREATE INDEX idx_quota_ts_model ON quota_events(ts, model);

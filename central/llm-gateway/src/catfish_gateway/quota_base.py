@@ -135,7 +135,8 @@ CREATE TABLE IF NOT EXISTS quota_events (
     model TEXT NOT NULL,
     tokens_in INTEGER NOT NULL,
     tokens_out INTEGER NOT NULL,
-    tokens_cache_read INTEGER NOT NULL DEFAULT 0
+    tokens_cache_read INTEGER NOT NULL DEFAULT 0,
+    background INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_quota_ts_user ON quota_events(ts, user_email);
 CREATE INDEX IF NOT EXISTS idx_quota_ts_model ON quota_events(ts, model);
@@ -152,4 +153,6 @@ def _get_conn() -> sqlite3.Connection:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(quota_events)")}
     if "tokens_cache_read" not in cols:
         conn.execute("ALTER TABLE quota_events ADD COLUMN tokens_cache_read INTEGER NOT NULL DEFAULT 0")
+    if "background" not in cols:
+        conn.execute("ALTER TABLE quota_events ADD COLUMN background INTEGER NOT NULL DEFAULT 0")
     return conn

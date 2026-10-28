@@ -83,6 +83,9 @@ export interface DepartmentAudit {
   by_model: AuditModelRow[];
   by_user: { user_email: string; count: number; total_tokens: number }[];
   viewer_role: Role;
+  /** 10/29: 其中后台任务 (不扣配额, 含在 total_tokens 里) */
+  background_request_count?: number;
+  background_tokens?: number;
 }
 
 export async function fetchDepartmentAudit(dept: string): Promise<DepartmentAudit> {
@@ -160,6 +163,12 @@ export interface GlobalAudit {
    *  / 5 维 inject 等), 不算员工业务. sysadmin 看透明度. */
   internal_request_count?: number;
   internal_tokens?: number;
+  /** 10/29: gateway 自身调用按模型拆三段 —— 上游照样收钱, 页面按单价给它算成本。 */
+  internal_by_model?: AuditModelRow[];
+  /** 10/29: 上面员工业务里**其中**后台任务 (员工本机记忆插件等) 的量。不扣员工配额,
+   *  原来整条不记、成本漏算; 现在记了、含在 total_tokens / by_model 里。 */
+  background_request_count?: number;
+  background_tokens?: number;
   /** BL-AUDIT-UX-P1 (5/17): 上一个等长窗口的对照数字, 前端做 trend ↑12% / ↓8%. */
   previous_request_count?: number;
   previous_total_tokens?: number;

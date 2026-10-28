@@ -27,6 +27,12 @@ function KPIHero({ audit }: { audit: GlobalAudit }) {
         hero
         label={`总 tokens · ${windowLabel}`}
         value={fmtTokens(audit.total_tokens)}
+        hint={
+          // 10/29: 后台任务原来整条不记, 成本漏算; 现在含在总数里, 这里说清其中多少
+          audit.background_tokens
+            ? `其中后台任务 ${fmtTokens(audit.background_tokens)}（记忆插件等，不扣员工配额）`
+            : undefined
+        }
         delta={
           <Delta
             now={audit.total_tokens}
