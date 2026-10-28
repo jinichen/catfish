@@ -37,6 +37,8 @@ import {
 } from "../../lib/me";
 import { auditSourceLabel } from "../../lib/auditSource";
 
+const TOKEN_HINT = "单位: token (模型读写的字数, 一个汉字约 1 个)。员工 Companion「数据外发记录」的上行 / 下行是字节, 不是一个单位";
+
 // BL-ADMIN-AUDIT (5/12 鸿波): /admin/quota/events — 逐条 audit 历史 + 筛选 + 分页 + CSV.
 //
 // 跟 /admin/quota 配额规则 read-only 文本互补 (一个看规则, 一个看实际数据).
@@ -165,13 +167,14 @@ export function AdminQuotaEvents() {
       truncate: true,
       width: 200,
     },
-    { header: "in", cell: (e) => e.prompt_tokens.toLocaleString(), align: "right", width: 76 },
-    { header: "out", cell: (e) => e.completion_tokens.toLocaleString(), align: "right", width: 68 },
+    // 10/28 鸿波: 原来只写 in / out / tot, 跟 Companion 外发记录的上行 / 下行 (字节) 对着看时分不清单位
+    { header: <span title={TOKEN_HINT}>输入 token</span>, cell: (e) => e.prompt_tokens.toLocaleString(), align: "right", width: 88 },
+    { header: <span title={TOKEN_HINT}>输出 token</span>, cell: (e) => e.completion_tokens.toLocaleString(), align: "right", width: 88 },
     {
-      header: "tot",
+      header: <span title={TOKEN_HINT}>合计 token</span>,
       cell: (e) => <span style={{ fontWeight: 500 }}>{e.total_tokens.toLocaleString()}</span>,
       align: "right",
-      width: 84,
+      width: 92,
     },
     {
       header: "延迟 ms",
