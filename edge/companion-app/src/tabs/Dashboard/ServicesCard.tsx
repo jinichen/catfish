@@ -87,7 +87,7 @@ function buildServices(agentName: string): ServiceRow[] {
     {
       id: "hermes",
       name: "Hermes Agent",
-      why: `${agentName}核心运行服务（对话 / 早安 / 定时任务）；检测失败不等于进程已停止。`,
+      why: `${agentName}核心运行服务（对话 / 早安 / 定时任务）。`,
     },
     {
       id: "tool_bridge",
@@ -326,11 +326,12 @@ function dotKindFor(status: ServiceStatus | undefined): "ok" | "warn" | "err" | 
   return "warn";
 }
 
+// 10/29: 右上角只放短标签 —— 原来放整句 message, 跟下面那行说明重复显示同一句话
 function compactStatusText(status: ServiceStatus | undefined): string {
   if (!status) return "探测中…";
-  if (status.probeError) return status.message ?? "检测失败，状态未知";
-  if (!status.running) return status.message ?? "未连接";
-  if (!status.healthy) return status.message ?? "进程在但未就绪";
+  if (status.probeError) return "状态未确认";
+  if (!status.running) return "未运行";
+  if (!status.healthy) return "未就绪";
   // healthy: 显示端口或 PID
   if (status.port) return `:${status.port}`;
   if (status.pid != null) return `PID ${status.pid}`;

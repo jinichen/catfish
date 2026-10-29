@@ -23,6 +23,9 @@ use crate::commands::types::ServiceStatus;
 
 /// 平台连接状态里算「已连接」的值 (同 hermes gateway/readiness.py 的 _CONNECTED_STATES)。
 const CONNECTED: [&str; 3] = ["connected", "running", "ok"];
+/// 磁盘剩余低于这个才报 (hermes 自己按已用百分比报, 大硬盘上会误报)。
+const LOW_DISK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 
 pub async fn hermes_status() -> Result<ServiceStatus, String> {
     let cfg = super::hermes_api_config::hermes_api_config();
@@ -96,14 +99,25 @@ pub(crate) fn interpret(json: &Value) -> (bool, String) {
             if matches!(name.as_str(), "gateway" | "background_queues") {
                 continue; // 网关状态上面单独说了; 队列只是计数
             }
-            if check.get("status").and_then(Value::as_str).unwrap_or("ok") != "ok" {
-                problems.push(match name.as_str() {
-                    "model" => "没有配置模型".into(),
-                    "state_db" => "状态数据库异常".into(),
-                    "session_store" => "会话存储异常".into(),
-                    "config" => "配置文件异常".into(),
-                    "disk" => "磁盘空间不足".into(),
-                    other => format!("{other} 检查未通过"),
+            let status = check.get("status").and_then(Value::as_str).unwrap_or("ok");
+            if name == "disk" {
+                // 10/29: hermes 按「已用 ≥ 90%」判 degraded —— 鸿波 Mac 已用 93.6% 但还剩 29.6 GB,
+                // 1.1.98 照翻成「磁盘空间不足」亮黄, 误报。只在真剩得少 (< 2 GB) 时才算问题。
+                if let Some(free) = check.get("free_bytes").and_then(Value::as_u64) {
+                    if free < LOW_DISK_BYTES {
+                        problems.push(format!("磁盘只剩 {:.1} GB", free as f64 / GIB));
+                    }
+                }
+                continue;
+            }
+            if status != "ok" {
+                problems.push(match (name.as_str(), status) {
+                    ("model", _) => "没有配置模型".into(),
+                    ("state_db", _) => "状态数据库读不了".into(),
+                    ("session_store", "retrying") => "会话存储正在重连".into(),
+                    ("session_store", _) => "会话存储不可用".into(),
+                    ("config", _) => "配置文件格式有误".into(),
+                    (other, _) => format!("{other} 检查未通过"),
                 });
             }
         }
@@ -239,6 +253,17 @@ mod tests {
         }));
         assert!(!ok);
         assert!(msg.contains("正在停止") && msg.contains("没有配置模型") && msg.contains("微信未连接"), "{msg}");
+    }
+
+    #[test]
+    fn 磁盘按剩余空间判_已用比例高但剩得多不算问题() {
+        // 鸿波 Mac: 已用 93.6% (hermes 判 degraded), 剩 29.6 GB
+        let (ok, msg) = interpret(&json!({"gateway_state": "running", "readiness": {"checks": {
+            "disk": {"status": "degraded", "used_percent": 93.6, "free_bytes": 31_782_174_720u64}}}}));
+        assert!(ok, "{msg}");
+        let (ok, msg) = interpret(&json!({"gateway_state": "running", "readiness": {"checks": {
+            "disk": {"status": "degraded", "used_percent": 99.7, "free_bytes": 1_073_741_824u64}}}}));
+        assert!(!ok && msg.contains("磁盘只剩 1.0 GB"), "{msg}");
     }
 
     #[test]
