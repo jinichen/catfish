@@ -173,7 +173,7 @@ export function useProactiveTriggers(): void {
         });
         saveFiredLog(firedLog);
 
-        // Phase B: 先调 gateway 让 LLM 用信号 + context 重写 starter (5s timeout).
+        // Phase B: 先调 gateway 让 LLM 用信号 + context 重写 starter (15s timeout, 10/30 从 5s 放宽).
         // 失败兜底用 trigger.message (本地模板).
         let finalStarter = trigger.message;
         let starterSource = "local_template";

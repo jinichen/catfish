@@ -688,9 +688,14 @@ export interface ProactiveStarter {
  * signal_kind: 'silence' | 'deadline' | 'focus'
  * context: 各 signal 类型对应字段, 跟 gateway proactive._SIGNAL_KIND_PROMPTS 对齐
  *
- * 5s timeout — 信号触发不能等太久, 超时 / gateway 挂 → 返 null,
- * caller (useProactiveTriggers) 用本地模板兜底.
+ * 超时 / gateway 挂 → 返 null, caller (useProactiveTriggers) 用本地模板兜底.
+ *
+ * 10/30: 超时 5s → 15s。原来 5s 太紧: 网关那边模型开着思考要 7–19s, 每次都是这里先放弃
+ * 用本地模板, 网关的模型白跑一趟 (token 照扣, 中央门户配额日志里一串「未标来源」就是它)。
+ * 网关已经关了这一步的思考, 一般几秒内回来; 这里放宽是兜底 —— 主动搭话是后台往对话里
+ * 插一句, 没有人在等, 多等几秒没关系, 白烧 token 才有关系。网关那跳等 12s, 比这里短。
  */
+const CONTEXTUAL_STARTER_TIMEOUT_MS = 15_000;
 export async function fetchContextualStarter(
   signalKind: "silence" | "deadline" | "focus",
   context: Record<string, unknown>,
@@ -709,7 +714,7 @@ export async function fetchContextualStarter(
     // BL-FIX45 A+ (5/11): 走 fetchWithAuth, 401 自动 reauth.
     const url = `${config.gatewayUrl}/api/proactive/contextual`;
     const ctrl = new AbortController();
-    const t = window.setTimeout(() => ctrl.abort(), 5000);
+    const t = window.setTimeout(() => ctrl.abort(), CONTEXTUAL_STARTER_TIMEOUT_MS);
     try {
       const resp = await fetchWithAuth(url, {
         method: "POST",

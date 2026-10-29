@@ -473,8 +473,9 @@ async def generate_contextual_starter(
     text = ""
     for attempt_idx, chosen_model in enumerate(candidates, start=1):
         try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                # 8s timeout — 信号触发 starter 没必要等长 (frontend 5s 兜底也够)
+            async with httpx.AsyncClient(timeout=12.0) as client:
+                # 10/30: 8s → 12s。Companion 那边从 5s 放宽到 15s; 这跳要比它短, 超时了还能回 fallback
+                # 而不是让 Companion 先断 (先断的话模型白跑, 网关也记不到这条访问)
                 resp = await client.post(
                     gateway_url,
                     headers={
