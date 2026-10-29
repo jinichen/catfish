@@ -186,8 +186,9 @@ async fn run_search_cli(args: Vec<String>) -> Result<IndexRunResult, String> {
 
 #[tauri::command]
 pub async fn local_search_status() -> Result<ServiceStatus, String> {
-    let pid = catfish_paths::local_search_pid_file()
-        .and_then(|p| process::read_pid_file_alive_strict(&p, "catfish_search"));
+    let pid = tokio::task::spawn_blocking(local_search_pid)
+        .await
+        .map_err(|e| format!("检查 Local Search 进程失败: {e}"))?;
 
     match pid {
         Some(pid) => Ok(ServiceStatus {
@@ -199,7 +200,28 @@ pub async fn local_search_status() -> Result<ServiceStatus, String> {
         }),
         None => Ok(ServiceStatus::down(
             None,
-            "未启动 — 点 \"启动\" 拉起 watcher（监听文件变化更新索引）",
+            "未运行 —— 点右侧 ↻ 启动 watcher（监听文件变化更新索引）",
         )),
     }
+}
+
+/// 10/29: 服务状态每 3 秒问一次。原来每次都走 read_pid_file_alive_strict —— Windows 上那是先
+/// `tasklist` 再起一个 `powershell Get-CimInstance` 核对命令行, 设置页开着就每 3 秒拉起一个
+/// PowerShell, 而且是在异步线程里同步跑的。命令行核对 (防 PID 复用) 对同一个 PID 做一次就够:
+/// 核对过的记下来, 之后只看进程还在不在。
+static VERIFIED_PID: std::sync::Mutex<Option<u32>> = std::sync::Mutex::new(None);
+
+fn local_search_pid() -> Option<u32> {
+    let path = catfish_paths::local_search_pid_file()?;
+    let recorded: Option<u32> = std::fs::read_to_string(&path).ok().and_then(|s| s.trim().parse().ok());
+    let mut verified = VERIFIED_PID.lock().unwrap_or_else(|e| e.into_inner());
+    if recorded.is_some() && *verified == recorded {
+        if process::is_alive(recorded.unwrap_or(0)) {
+            return recorded;
+        }
+        *verified = None;
+    }
+    let pid = process::read_pid_file_alive_strict(&path, "catfish_search");
+    *verified = pid;
+    pid
 }

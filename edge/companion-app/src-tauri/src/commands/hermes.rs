@@ -1,15 +1,11 @@
 //! Read-only Hermes API health. A failed probe must not kill the gateway.
 
 use crate::commands::types::ServiceStatus;
-use crate::services::hermes_api_config;
 
+/// 10/29: 改用 hermes 自己的就绪检查 (/health/detailed), 见 services::hermes_probe。
 #[tauri::command]
 pub async fn hermes_status() -> Result<ServiceStatus, String> {
-    let cfg = hermes_api_config::hermes_api_config();
-    let url = reqwest::Url::parse(&cfg.url).map_err(|e| format!("Hermes 地址无效: {e}"))?;
-    crate::util::service_probe::http_health(
-        &cfg.url, "/health", url.port_or_known_default(), false,
-    ).await
+    crate::services::hermes_probe::hermes_status().await
 }
 
 /// 10/19: 服务状态里 Hermes 那一行的「重启」(鸿波「hermes 也是本地服务, 为什么只读」)。

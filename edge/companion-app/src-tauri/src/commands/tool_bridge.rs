@@ -165,7 +165,13 @@ pub async fn tool_bridge_restart() -> Result<(), String> {
 pub async fn tool_bridge_status() -> Result<ServiceStatus, String> {
     // Protocol first: Windows endpoint files contain a TCP port, Unix uses a socket.
     // PID/WMIC inspection is neither necessary nor authoritative for RPC readiness.
-    let value = tool_bridge_rpc::call_with_timeout("health", json!(null), RPC_TIMEOUT).await?;
+    // 10/29: 通道文件不在 / 连接被拒 = 确定没在跑 → 红点「未运行」(原来一律黄点「检测失败」)。
+    if tool_bridge_rpc::listening().await == Some(false) {
+        return Ok(ServiceStatus::down(None, "未运行（本机通道没有服务在监听）—— 点右侧 ↻ 启动"));
+    }
+    let value = tool_bridge_rpc::call_with_timeout("health", json!(null), RPC_TIMEOUT)
+        .await
+        .map_err(|e| format!("{e}；运行状态未确认"))?;
     let healthy = value.get("ok").and_then(|v| v.as_bool()) == Some(true);
     Ok(ServiceStatus {
         running: true, healthy, pid: None, port: None,

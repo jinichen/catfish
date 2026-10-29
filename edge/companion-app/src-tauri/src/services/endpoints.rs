@@ -52,6 +52,9 @@ const DEFAULT_WEB_PORT: u16 = 5173;
 
 #[derive(Debug, Clone)]
 pub struct Endpoints {
+    /// 10/29: "http" / "https"。原来 gateway_base() 写死 http://, 填了 https:// 的地址会被悄悄降成
+    /// http 去连 TLS 端口 —— 聊天、工具、向量、状态检测全连不上, 而保存地址时还说「已生效」。
+    pub gateway_scheme: String,
     pub gateway_host: String,
     pub gateway_port: u16,
     pub chrome_host: String,
@@ -63,7 +66,7 @@ pub struct Endpoints {
 
 impl Endpoints {
     pub fn gateway_base(&self) -> String {
-        format!("http://{}:{}", self.gateway_host, self.gateway_port)
+        format!("{}://{}:{}", self.gateway_scheme, self.gateway_host, self.gateway_port)
     }
 
     pub fn chrome_base(&self) -> String {
@@ -169,6 +172,15 @@ fn build() -> Endpoints {
     let yaml = read_yaml();
 
     // 优先 yaml.gateway_url > yaml.host+port > env > default
+    // 10/29: scheme 跟着 gateway_url 走 (https:// 不再被降成 http); host/port / env 方式仍是 http。
+    let gateway_scheme = yaml
+        .as_ref()
+        .and_then(|y| y.gateway_url.as_deref())
+        .filter(|u| parse_url_host_port(u).is_some())
+        .and_then(|u| url::Url::parse(u).ok())
+        .map(|u| u.scheme().to_string())
+        .filter(|s| s == "https")
+        .unwrap_or_else(|| "http".to_string());
     let (gateway_host, gateway_port) = (|| -> Option<(String, u16)> {
         let y = yaml.as_ref()?;
         if let Some(url) = &y.gateway_url {
@@ -233,6 +245,7 @@ fn build() -> Endpoints {
     log::info!("BL-ARCH2 endpoints: web_url={}", web_url);
 
     Endpoints {
+        gateway_scheme,
         gateway_host,
         gateway_port,
         chrome_host,
@@ -379,6 +392,7 @@ mod tests {
     #[test]
     fn endpoints_default_compose_correctly() {
         let ep = Endpoints {
+            gateway_scheme: "http".into(),
             gateway_host: "127.0.0.1".into(),
             gateway_port: 8999,
             chrome_host: "127.0.0.1".into(),
@@ -387,5 +401,7 @@ mod tests {
         };
         assert_eq!(ep.gateway_base(), "http://127.0.0.1:8999");
         assert_eq!(ep.chrome_base(), "http://127.0.0.1:9222");
+        let tls = Endpoints { gateway_scheme: "https".into(), gateway_port: 8443, ..ep };
+        assert_eq!(tls.gateway_base(), "https://127.0.0.1:8443");
     }
 }

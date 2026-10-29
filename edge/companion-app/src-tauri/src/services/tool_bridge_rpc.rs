@@ -57,6 +57,30 @@ pub async fn call_with_timeout(
     call_at_path(&endpoint_path, method, params, rpc_timeout).await
 }
 
+/// 10/29: 服务状态用 —— tool-bridge 是不是**确定**没在跑。只连一下, 不发请求。
+/// `Some(false)` = 通道文件不在 / 连接被拒 (确定没在跑); `Some(true)` = 连上了; `None` = 说不准 (超时等)。
+pub(crate) async fn listening() -> Option<bool> {
+    let endpoint_path = sock_path().ok()?;
+    if !endpoint_path.exists() {
+        return Some(false);
+    }
+    let gone = |e: &std::io::Error| {
+        matches!(e.kind(), std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound)
+    };
+    #[cfg(unix)]
+    let result = tokio::time::timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS), UnixStream::connect(&endpoint_path)).await;
+    #[cfg(not(unix))]
+    let result = {
+        let port: u16 = tokio::fs::read_to_string(&endpoint_path).await.ok()?.trim().parse().ok()?;
+        tokio::time::timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS), TcpStream::connect(("127.0.0.1", port))).await
+    };
+    match result {
+        Ok(Ok(_)) => Some(true),
+        Ok(Err(e)) if gone(&e) => Some(false),
+        _ => None,
+    }
+}
+
 async fn call_at_path(
     endpoint_path: &std::path::Path,
     method: &str,

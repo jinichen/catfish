@@ -44,16 +44,50 @@ pub(crate) fn hermes_api_ready() -> bool {
     } else {
         format!("{hostport}:80")
     };
+    // 10/29: 原来只看 TCP 能不能连上 —— 跟服务状态卡片 (问 HTTP /health) 是两套标准:
+    // 端口占着但 HTTP 卡死时, 卡片黄、这里却说「起来了」, 自动补拉就不动。现在也问 /health,
+    // 用标准库发一个最小的 HTTP 请求 (同步调用方很多, 不能拉异步运行时), 2xx 才算就绪。
+    use std::io::{Read, Write};
     use std::net::ToSocketAddrs;
+    if url.starts_with("https") {
+        log::warn!("hermes_api.url 是 https, 本机探活只支持 http: {url}");
+        return false;
+    }
     match with_port.to_socket_addrs() {
-        Ok(mut addrs) => addrs.any(|value| {
-            std::net::TcpStream::connect_timeout(&value, Duration::from_millis(500)).is_ok()
+        Ok(addrs) => addrs.into_iter().any(|addr| {
+            let Ok(mut stream) = std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500)) else {
+                return false;
+            };
+            let _ = stream.set_read_timeout(Some(Duration::from_millis(1500)));
+            let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
+            let request = format!("GET /health HTTP/1.1\r\nHost: {hostport}\r\nConnection: close\r\n\r\n");
+            if stream.write_all(request.as_bytes()).is_err() {
+                return false;
+            }
+            let mut head = [0u8; 16];
+            let mut got = 0;
+            while got < head.len() {
+                match stream.read(&mut head[got..]) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => got += n,
+                }
+            }
+            http_status_is_2xx(&head[..got])
         }),
         Err(error) => {
             log::warn!("解析 hermes API 地址失败 ({with_port}): {error}");
             false
         }
     }
+}
+
+/// `HTTP/1.1 200 OK` 这种状态行的状态码是不是 2xx。
+fn http_status_is_2xx(head: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(head);
+    let mut parts = text.split_whitespace();
+    parts.next().is_some_and(|p| p.starts_with("HTTP/1."))
+        && parts.next().is_some_and(|code| code.len() == 3 && code.starts_with('2'))
+
 }
 
 #[cfg(unix)]
@@ -170,5 +204,15 @@ mod tests {
         assert!(!after.is_empty(), "new gateway PID should exist");
         assert!(before.is_disjoint(&after), "gateway generation did not change");
         assert!(hermes_api_ready(), "new gateway should answer health checks");
+    }
+
+    #[test]
+    fn 只认_2xx_状态行() {
+        assert!(http_status_is_2xx(b"HTTP/1.1 200 OK\r\n"));
+        assert!(http_status_is_2xx(b"HTTP/1.0 204 No"));
+        assert!(!http_status_is_2xx(b"HTTP/1.1 503 Ser"));
+        assert!(!http_status_is_2xx(b"HTTP/1.1 401 Una"));
+        assert!(!http_status_is_2xx(b""));
+        assert!(!http_status_is_2xx(b"SSH-2.0-OpenSSH"));
     }
 }

@@ -1,9 +1,13 @@
 /** 仪表盘 · 服务概览卡片
  *
- * 状态:
+ * 状态 (5 行):
  *   - **Tool Bridge / Chrome / Local Search** (3 个真本地服务) — 边缘端 Companion
- *     可启停 + 重启. 它们是单 Mac 单员工的进程, 跟 Companion 进程绑定.
+ *     可启停 + 重启. 它们是单机单员工的进程, 跟 Companion 进程绑定.
+ *   - **Hermes Agent** — 只读探测 (/health/detailed 就绪检查) + 单独的 ↻ 重启.
  *   - **LLM Gateway** (1 个中央端服务) — 只读监控. 状态点 + 端口, 没启停按钮.
+ *
+ * 点颜色 (10/29): 绿 = 就绪; 黄 = 在运行但没就绪 / 状态未确认 (超时、证书等说不准的);
+ * 红 = 确定没在运行 (端口没人监听 / 通道文件不在)。
  *
  * BL-COMPANION-SERVICES-DEMOTE (5/17 鸿波): 老逻辑允许 Companion 启停 Gateway,
  * 违 BL-CENTRAL-EDGE-BOUNDARY 操作面 — Gateway 是中央服务 (未来 SaaS 化跑客户
@@ -69,7 +73,7 @@ interface ServiceRow {
 }
 
 // BL-E11 后续: tool_bridge 的 why 提到 agent, 用员工自定义名拼出.
-// 数量恒定 (4 行), useServiceStatus hook 顺序稳定 — 跟原静态 const 等价.
+// 数量恒定 (5 行), useServiceStatus hook 顺序稳定 — 跟原静态 const 等价.
 function buildServices(agentName: string): ServiceRow[] {
   return [
     {
@@ -128,9 +132,22 @@ const rowBtnStyle: React.CSSProperties = {
 
 export default function ServicesCard() {
   // 注: 不在这里 for 循环调 useServiceStatus —— React hooks 规则不允许。
-  // 每行组件 ServiceRowItem 自己调 hook, 数量恒定 (buildServices 永远返 4 行)。
+  // 每行组件 ServiceRowItem 自己调 hook, 数量恒定 (buildServices 永远返 5 行)。
   const agentName = useAgentStore((s) => s.name);
   const SERVICES = buildServices(agentName);
+  // 10/29: 本地全启 / 全停 / 全重启原来 Promise.allSettled 后什么都不管 —— 失败了员工点了没反应也不知道为什么
+  const [batchError, setBatchError] = useState<string | null>(null);
+  const runBatch = async (label: string, steps: Array<[string, () => Promise<unknown>]>) => {
+    setBatchError(null);
+    const results = await Promise.allSettled(steps.map(([, fn]) => fn()));
+    const failed = results.flatMap((r, i) =>
+      r.status === "rejected" ? [`${steps[i][0]}: ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`] : [],
+    );
+    if (failed.length) setBatchError(`${label}没有全部成功 —— ${failed.join("；")}`);
+    return failed.length === 0;
+  };
+  const startAll = () => runBatch("本地全启", [["Chrome", chromeLaunch], ["Local Search", localSearchStart], ["Tool Bridge", toolBridgeStart]]);
+  const stopAll = () => runBatch("本地全停", [["Chrome", chromeKill], ["Local Search", localSearchStop], ["Tool Bridge", toolBridgeStop]]);
 
   return (
     <section
@@ -157,26 +174,14 @@ export default function ServicesCard() {
             真要看 log 走 ~/Library/Logs/Catfish/*.log 文件. */}
         <div style={{ display: "flex", gap: 4 }}>
           <button
-            onClick={() => {
-              void Promise.allSettled([
-                chromeLaunch(),
-                localSearchStart(),
-                toolBridgeStart(),
-              ]);
-            }}
+            onClick={() => void startAll()}
             title="一键启动 3 个本地服务 (Tool Bridge / Chrome / Local Search)"
             style={batchBtnStyle}
           >
             本地全启
           </button>
           <button
-            onClick={() => {
-              void Promise.allSettled([
-                chromeKill(),
-                localSearchStop(),
-                toolBridgeStop(),
-              ]);
-            }}
+            onClick={() => void stopAll()}
             title="一键停止 3 个本地服务"
             style={batchBtnStyle}
           >
@@ -184,17 +189,10 @@ export default function ServicesCard() {
           </button>
           <button
             onClick={async () => {
-              await Promise.allSettled([
-                chromeKill(),
-                localSearchStop(),
-                toolBridgeStop(),
-              ]);
+              // 停失败多半是本来就没在跑, 不拦着后面的启动; 只报启动阶段的失败
+              await Promise.allSettled([chromeKill(), localSearchStop(), toolBridgeStop()]);
               await new Promise((r) => setTimeout(r, 800));
-              await Promise.allSettled([
-                chromeLaunch(),
-                localSearchStart(),
-                toolBridgeStart(),
-              ]);
+              await runBatch("本地全重启", [["Chrome", chromeLaunch], ["Local Search", localSearchStart], ["Tool Bridge", toolBridgeStart]]);
             }}
             title="一键重启 3 个本地服务"
             style={batchBtnStyle}
@@ -204,6 +202,11 @@ export default function ServicesCard() {
         </div>
       </header>
 
+      {batchError && (
+        <div role="alert" style={{ fontSize: 11, marginBottom: 6, overflowWrap: "anywhere", color: "var(--status-err)" }}>
+          {batchError}
+        </div>
+      )}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {SERVICES.map((s) => (
           <ServiceRowItem key={s.id} row={s} />
@@ -294,7 +297,8 @@ function ServiceRowItem({ row }: { row: ServiceRow }) {
           重启没成功: {restartError}
         </div>
       )}
-      {status?.message && (!status.healthy || status.probeError) && (
+      {/* 10/29: Hermes 就绪时也显示 (运行中 · 微信已连接 · N 个对话进行中), 别的服务就绪时只看端口就够 */}
+      {status?.message && (!status.healthy || status.probeError || row.id === "hermes") && (
         <div style={{ fontSize: 11, paddingLeft: 18, overflowWrap: "anywhere", color: "var(--catfish-text-muted)" }}>
           {status.message}
         </div>

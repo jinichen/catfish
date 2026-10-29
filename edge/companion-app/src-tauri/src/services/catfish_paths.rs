@@ -86,10 +86,6 @@ fn edge_component_dir(name: &str) -> Option<PathBuf> {
     p.exists().then_some(p)
 }
 
-pub fn gateway_pid_file() -> Option<PathBuf> {
-    companion_state_dir().map(|d| d.join("gateway.pid"))
-}
-
 pub fn chrome_pid_file() -> Option<PathBuf> {
     companion_state_dir().map(|d| d.join("chrome.pid"))
 }

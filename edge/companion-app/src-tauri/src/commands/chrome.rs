@@ -77,7 +77,12 @@ pub async fn chrome_status() -> Result<ServiceStatus, String> {
     let ep = endpoints::endpoints();
     // Test the actual CDP protocol; a preliminary TCP timeout can reject working
     // localhost IPv4 services on Windows before the HTTP client's fallback runs.
-    crate::util::service_probe::http_health(
+    let mut status = crate::util::service_probe::http_health(
         &ep.chrome_base(), "/json/version", Some(ep.chrome_port), true,
-    ).await
+    ).await?;
+    if !status.running {
+        // 10/29: CDP 端口被拒 = 自动化专用的 Chrome 确定没开 (原来是黄点「检测失败」+ 英文报错)
+        status.message = Some(format!("未运行（调试端口 {} 没有服务在监听）—— 点右侧 ↻ 启动", ep.chrome_port));
+    }
+    Ok(status)
 }
