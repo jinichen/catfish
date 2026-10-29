@@ -22,6 +22,8 @@ pub(crate) fn ensure_gateway_up(when: &str) {
         return;
     }
     log::warn!("[hermes-gateway] {when}网关 90 秒没起来, 用 `hermes gateway start` 再拉一次");
+    // 10/29: 起不来的一个原因是 hermes 登记了没建好依赖环境的自管 Python (`gateway start` 用它)
+    super::hermes_store_guard::set_aside_uncommitted_store_python(when);
     if let Err(e) = super::hermes_plugin::run_hermes_cli(&["gateway", "start"]) {
         log::warn!("[hermes-gateway] `hermes gateway start` 报错: {e}");
     }
@@ -30,7 +32,8 @@ pub(crate) fn ensure_gateway_up(when: &str) {
     } else {
         log::error!(
             "[hermes-gateway] {when}网关还是没起来, 小鲶暂时回不了话。手动: \
-             %LOCALAPPDATA%\\hermes\\hermes-agent\\venv\\Scripts\\hermes.exe gateway start, 看 hermes\\logs\\gateway.log"
+             %LOCALAPPDATA%\\hermes\\hermes-agent\\venv\\Scripts\\hermes.exe gateway start, 看 hermes\\logs\\gateway.log \
+             和 gateway-stdio.log (启动即退出的报错只在后者)"
         );
     }
 }

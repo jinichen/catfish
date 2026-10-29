@@ -125,6 +125,10 @@ pub(crate) fn reconcile_windows_launcher() {
     if !py.is_file() {
         return;
     }
+    // 10/29: 先挪开没建好依赖环境的 hermes 自管 Python 登记 —— 否则下面按 hermes 的
+    // get_python_path() 重写出来的自启脚本还是指向它, 每次登录都起不来。挪开后解释器变了,
+    // 下面会照常判定「有改动」并重启网关。
+    super::hermes_store_guard::set_aside_uncommitted_store_python("打开 Companion 时");
     let out = match crate::services::process::python_command(&py)
         .args(["-c", RECONCILE_PY])
         .env("HERMES_HOME", &home)
