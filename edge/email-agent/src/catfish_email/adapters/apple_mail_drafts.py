@@ -132,6 +132,7 @@ tell application "Mail"
     set accName to "{ACCOUNT}"
     set subj to "{SUBJECT}"
     set bodyPath to "{BODY_PATH}"
+    set attPath to "{ATT_PATH}"
     set toList to "{TO}"
     set ccList to "{CC}"
     set bccList to "{BCC}"
@@ -187,6 +188,25 @@ tell application "Mail"
                 make new bcc recipient at end of bcc recipients with properties {address:cleanAddr}
             end if
         end repeat
+        -- 10/29: attachments, one POSIX path per line in attPath
+        set attFile to open for access POSIX file attPath
+        set attText to ""
+        try
+            set attText to (read attFile as «class utf8»)
+        end try
+        close access attFile
+        set attCount to 0
+        repeat with p in (paragraphs of attText)
+            set pp to p as string
+            if pp is not "" then
+                tell content
+                    make new attachment with properties {file name:(POSIX file pp) as alias} at after the last paragraph
+                end tell
+                set attCount to attCount + 1
+            end if
+        end repeat
+        -- Mail loads attachments asynchronously; saving right away can drop them
+        if attCount > 0 then delay (1 + attCount * 0.5)
         -- DO NOT send (red line): the draft only goes into the Drafts mailbox
     end tell
 
@@ -428,6 +448,7 @@ def create_draft(
     in_reply_to: str | None = None,
     account: str | None = None,
     replaces: str | None = None,
+    attachments: Sequence[str] = (),
 ) -> str:
     if not to:
         raise ValueError("create_draft: to 不能空")
@@ -442,22 +463,30 @@ def create_draft(
     ) as tf:
         tf.write(body)
         body_path = tf.name
+    # 10/29: 附件路径一行一个写进临时文件 (同正文): 路径里的引号 / 反斜杠不用经 AS 字符串转义
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", delete=False, encoding="utf-8",
+    ) as af:
+        af.write("\n".join(str(p) for p in attachments))
+        att_path = af.name
     try:
         script = (
             _AS_CREATE_DRAFT
             .replace("{ACCOUNT}", _escape_as_string(account_name))
             .replace("{SUBJECT}", _escape_as_string(subject))
             .replace("{BODY_PATH}", body_path)
+            .replace("{ATT_PATH}", att_path)
             .replace("{TO}", _escape_as_string(",".join(to)))
             .replace("{CC}", _escape_as_string(",".join(cc)))
             .replace("{BCC}", _escape_as_string(",".join(bcc)))
         )
         out = run(script)
     finally:
-        try:
-            os.unlink(body_path)
-        except OSError:
-            pass
+        for tmp in (body_path, att_path):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
     parts = out.strip("\r\n ").split(FS)  # 别用 strip(): Python 把 \x1f 也当空白
     if len(parts) != 3 or not parts[0] or not parts[2]:

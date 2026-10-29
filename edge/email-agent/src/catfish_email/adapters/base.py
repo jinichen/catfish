@@ -306,8 +306,12 @@ class EmailAdapter(ABC):
         bcc: Sequence[str] = (),
         in_reply_to: str | None = None,
         account: str | None = None,
+        attachments: Sequence[str] = (),
     ) -> str:
         """起草到客户端的草稿箱 (不发送), 返回新建草稿的 message_id。
+
+        attachments (10/29): 本地文件路径, 作为附件带上。不支持附件的子类别声明这个参数 ——
+        CLI 按签名判断, 有附件而来源不支持时直接说清楚, 不会悄悄丢掉。
 
         默认实现 raise NotSupportedError —— 子类不支持就不用 override。
 

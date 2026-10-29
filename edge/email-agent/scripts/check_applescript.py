@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 PLACEHOLDERS = {
     "{ACCOUNT}": "Google", "{MSG_ID}": "123", "{OUT_ID}": "", "{FOLDER}": "Inbox",
     "{LIMIT}": "5", "{UNREAD_ONLY}": "false", "{QUERY}": "x", "{READ_FLAG}": "true",
-    "{BODY_PATH}": "/tmp/body.txt", "{SOURCE_PATH}": "/tmp/source.eml",
+    "{BODY_PATH}": "/tmp/body.txt", "{SOURCE_PATH}": "/tmp/source.eml", "{ATT_PATH}": "/tmp/attachments.txt",
     "{SUBJECT}": "s", "{TO}": "a@example.cn", "{CC}": "", "{BCC}": "",
 }
 

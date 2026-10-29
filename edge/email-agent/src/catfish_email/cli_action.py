@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import sys
 
 from .adapters.base import (
@@ -101,6 +102,17 @@ def _cmd_draft(adapters: list[EmailAdapter], args) -> int:
         _err(f"[{target.name}] 不支持在鲶鱼里改草稿, 请在邮件客户端里修改这封草稿")
         return 1
     extra = {"replaces": replaces} if replaces else {}
+
+    # 10/29: 附件 —— 新加的本地文件 + 改草稿时要带过去的旧附件 (先从旧草稿导出到本地再带上;
+    # 旧草稿存完新的就去掉了, 不带过去附件就丢了)
+    attachments = _draft_attachments(target, args, replaces)
+    if attachments is None:
+        return 1
+    if attachments:
+        if "attachments" not in inspect.signature(target.create_draft).parameters:
+            _err(f"[{target.name}] 起草时不支持带附件, 请在邮件客户端里添加附件")
+            return 1
+        extra["attachments"] = attachments
     try:
         msg_id = target.create_draft(
             **extra,
@@ -135,6 +147,39 @@ def _cmd_draft(adapters: list[EmailAdapter], args) -> int:
         print(f"  主题:   {args.subject}")
         print(f"  → 打开 Mail.app Drafts 文件夹 review + 点发送")
     return 0
+
+
+# 多数企业邮箱单封上限 20–50 MB, base64 编码后体积再大三分之一 —— 原始合计超过这个就先拦下
+MAX_ATTACHMENTS_BYTES = 25 * 1024 * 1024
+
+
+def _draft_attachments(target: EmailAdapter, args, replaces: str | None) -> list[str] | None:
+    """本次草稿要带的附件路径。出错已经 _err 过, 返回 None。"""
+    paths: list[str] = []
+    for raw in getattr(args, "attach", None) or []:
+        p = os.path.abspath(os.path.expanduser(raw))
+        if not os.path.isfile(p):
+            _err(f"附件不存在或不是文件: {raw}")
+            return None
+        paths.append(p)
+    keep = getattr(args, "keep_attachment", None) or []
+    if keep and not replaces:
+        _err("--keep-attachment 只能配合 --replace (改草稿) 用")
+        return None
+    for filename in keep:
+        try:
+            paths.append(str(target.export_attachment(replaces, filename)))
+        except (EmailAdapterError, ValueError, OSError) as e:
+            _err(f"原草稿的附件「{filename}」取不出来, 没有存草稿 (以免丢附件): {e}")
+            return None
+    total = sum(os.path.getsize(p) for p in paths)
+    if total > MAX_ATTACHMENTS_BYTES:
+        _err(
+            f"附件合计 {total / 1024 / 1024:.1f} MB, 超过 {MAX_ATTACHMENTS_BYTES // 1024 // 1024} MB —— "
+            f"多数邮箱会退信。请压缩, 或放网盘发链接。"
+        )
+        return None
+    return paths
 
 
 def _cmd_send(adapters: list[EmailAdapter], args) -> int:

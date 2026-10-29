@@ -554,6 +554,9 @@ pub async fn email_create_draft(
     account: Option<String>,
     // 9/26: 改草稿 —— 草稿箱里旧草稿的 id。新的存好后旧的去掉 (见 imap_drafts.py)。
     replaces: Option<String>,
+    // 10/29: 附件 (本地文件路径) + 改草稿时要带过去的旧草稿附件 (文件名) —— 鸿波「新建缺少增加附件的能力」
+    attachments: Option<Vec<String>>,
+    keep_attachments: Option<Vec<String>>,
 ) -> Result<String, String> {
     let bin = catfish_paths::catfish_email_bin().ok_or_else(|| {
         "catfish-email CLI 没装".to_string()
@@ -593,6 +596,12 @@ pub async fn email_create_draft(
     if let Some(r) = replaces.filter(|s| !s.is_empty()) {
         args.push("--replace".to_string()); args.push(r);
     }
+    for path in attachments.unwrap_or_default().into_iter().filter(|s| !s.is_empty()) {
+        args.push("--attach".to_string()); args.push(path);
+    }
+    for name in keep_attachments.unwrap_or_default().into_iter().filter(|s| !s.is_empty()) {
+        args.push("--keep-attachment".to_string()); args.push(name);
+    }
 
     let out = email_command(&bin)
         .args(&args)
@@ -611,6 +620,31 @@ pub async fn email_create_draft(
         });
     }
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// 10/29: 写邮件「添加附件」选中的一个文件。大小给界面显示和提前提醒超限用。
+#[derive(Debug, serde::Serialize)]
+pub struct PickedAttachment {
+    pub path: String,
+    pub name: String,
+    pub size: u64,
+}
+
+/// 10/29: 写邮件「添加附件」—— 原生多选文件框 (取消 = 空)。
+/// 同步命令: macOS 的文件框要在主线程上开 (同 sales_pick_xlsx)。
+#[tauri::command]
+pub fn email_pick_attachments() -> Vec<PickedAttachment> {
+    rfd::FileDialog::new()
+        .set_title("选择要添加的附件")
+        .pick_files()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| PickedAttachment {
+            name: p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+            size: std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0),
+            path: p.to_string_lossy().into_owned(),
+        })
+        .collect()
 }
 
 /// 拉账号列表. 用于"配了几个邮箱". 卡片 header 显 "5 账号 · 12 未读".

@@ -62,6 +62,8 @@ import {
 } from "../../../lib/emailReplyContext";
 import { type Personality } from "../../../lib/agent";
 import { _mergeReplyDraftWithQuote } from "./helpers";
+import ComposeAttachments, { MAX_ATTACHMENTS_BYTES, type KeptAttachment } from "./ComposeAttachments";
+import type { PickedAttachment } from "../../../lib/tauri";
 
 export interface ComposeOriginalMessage {
   id: string;
@@ -95,6 +97,8 @@ export interface ComposeCoreProps {
   inReplyToMsgId?: string | null;
   /** 9/26: 改草稿场景传旧草稿 id —— 存草稿 / 发送都先替换掉它 (后端 --replace) */
   replacesDraftId?: string | null;
+  /** 10/29: 改草稿时旧草稿已有的附件 —— 默认带进新草稿 (后端 --keep-attachment) */
+  existingAttachments?: KeptAttachment[];
   /** 走真账号. 回复场景传 msg.account, 新建场景 parent 决定 (default account) */
   account?: string;
 
@@ -123,6 +127,7 @@ export default function ComposeCore({
   initialBody = "",
   inReplyToMsgId = null,
   replacesDraftId = null,
+  existingAttachments = [],
   account,
   originalMessage = null,
   threadCandidates = [],
@@ -140,6 +145,16 @@ export default function ComposeCore({
   const [composeCc, setComposeCc] = useState(initialCc);
   const [composeSubject, setComposeSubject] = useState(initialSubject);
   const [composeBody, setComposeBody] = useState(initialBody);
+  // 10/29: 附件 —— 新加的本地文件 + 改草稿时保留的旧附件 (只有改草稿才有)
+  const [addedAttachments, setAddedAttachments] = useState<PickedAttachment[]>([]);
+  const [keptAttachments, setKeptAttachments] = useState<KeptAttachment[]>(replacesDraftId ? existingAttachments : []);
+  const attachmentsTooBig =
+    addedAttachments.reduce((n, a) => n + a.size, 0) + keptAttachments.reduce((n, a) => n + (a.size_bytes || 0), 0) >
+    MAX_ATTACHMENTS_BYTES;
+  const attachmentArgs = {
+    attachments: addedAttachments.map((a) => a.path),
+    keepAttachments: replacesDraftId ? keptAttachments.map((a) => a.filename) : [],
+  };
   const [sending, setSending] = useState(false);
   const [drafting, setDrafting] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -365,6 +380,7 @@ export default function ComposeCore({
         inReplyTo: inReplyToMsgId || undefined,
         account: account,
         replaces: replacesDraftId || undefined,
+        ...attachmentArgs,
       });
       const parsed = JSON.parse(resultJson);
       const draftId = parsed?.draft_id ?? "ok";
@@ -401,6 +417,7 @@ export default function ComposeCore({
         inReplyTo: inReplyToMsgId || undefined,
         account: account,
         replaces: replacesDraftId || undefined,
+        ...attachmentArgs,
       });
       const draftParsed = JSON.parse(draftJson);
       const draftId = draftParsed?.draft_id;
@@ -617,6 +634,14 @@ export default function ComposeCore({
         }}
       />
 
+      <ComposeAttachments
+        added={addedAttachments}
+        kept={keptAttachments}
+        onChangeAdded={setAddedAttachments}
+        onChangeKept={setKeptAttachments}
+        disabled={sending || drafting}
+      />
+
       {/* 错误 / 成功提示 */}
       {sendError && (
         <div
@@ -676,7 +701,7 @@ export default function ComposeCore({
         <button
           type="button"
           onClick={() => void handleSaveDraft()}
-          disabled={sending || drafting}
+          disabled={sending || drafting || attachmentsTooBig}
           style={{
             background: "var(--catfish-bg)",
             color: "var(--catfish-text)",
@@ -694,7 +719,7 @@ export default function ComposeCore({
         <button
           type="button"
           onClick={() => void handleSendNow()}
-          disabled={sending || !composeTo.trim()}
+          disabled={sending || !composeTo.trim() || attachmentsTooBig}
           style={{
             background: sendConfirmPending ? "rgba(34, 197, 94, 0.15)" : "var(--catfish-cyan)",
             color: sendConfirmPending ? "rgb(21, 128, 61)" : "#fff",

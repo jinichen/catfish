@@ -170,3 +170,18 @@ def locate_appended(adapter: "ImapAdapter", append_data, drafts: str, msg_id: st
     conn = adapter._connect()
     return adapter._uid_by_message_id(drafts, msg_id) or new_uid_since(
         conn, drafts, adapter._select, before)
+
+
+def add_attachments(msg, paths) -> None:
+    """10/29: 把本地文件作为附件加进草稿。中文文件名由 EmailMessage 按 RFC 2231 编码;
+    类型按扩展名猜, 猜不出 (或是 .gz 这类压缩编码) 按二进制。"""
+    import mimetypes  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    for path in paths:
+        p = Path(path)
+        ctype, encoding = mimetypes.guess_type(p.name)
+        if ctype is None or encoding is not None:
+            ctype = "application/octet-stream"
+        maintype, subtype = ctype.split("/", 1)
+        msg.add_attachment(p.read_bytes(), maintype=maintype, subtype=subtype, filename=p.name)

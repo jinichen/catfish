@@ -91,7 +91,19 @@ export interface CreateDraftArgs {
   account?: string;
   /** 9/26: 改草稿 —— 被替换的旧草稿 id */
   replaces?: string;
+  /** 10/29: 附件的本地路径 */
+  attachments?: string[];
+  /** 10/29: 改草稿时要保留的旧草稿附件 (文件名) —— 旧草稿存完新的就去掉了, 不带过去就丢 */
+  keepAttachments?: string[];
 }
+/** 10/29: 写邮件「添加附件」选中的文件 */
+export interface PickedAttachment {
+  path: string;
+  name: string;
+  size: number;
+}
+/** 原生多选文件框; 取消返回空数组 */
+export const emailPickAttachments = () => rawInvoke<PickedAttachment[]>("email_pick_attachments");
 export const emailCreateDraft = (args: CreateDraftArgs) =>
   rawInvoke<string>("email_create_draft", {
     to: args.to,
@@ -102,6 +114,8 @@ export const emailCreateDraft = (args: CreateDraftArgs) =>
     inReplyTo: args.inReplyTo ?? null,
     account: args.account ?? null,
     replaces: args.replaces ?? null,
+    attachments: args.attachments ?? null,
+    keepAttachments: args.keepAttachments ?? null,
   });
 /** id → "急" | "中" | "低" map, scheduler 后台评级缓存. */
 /** 9/27: 邮件 id 改名表 {旧 id: 新 id} (IMAP id 里的 UIDVALIDITY 从 0 改成真值)。 */

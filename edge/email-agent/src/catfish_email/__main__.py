@@ -335,6 +335,10 @@ def _build_parser() -> argparse.ArgumentParser:
     pd.add_argument("--in-reply-to", help="原邮件 id (回复时引用, 让客户端串 thread)")
     pd.add_argument("--replace", help="改草稿: 草稿箱里旧草稿的 id。新的存好后旧的去掉, 线程头沿用旧的")
     pd.add_argument("--account", help="从哪个账号起草 (默认第一个)")
+    # 10/29: 附件。--attach 可给多次; --keep-attachment 是改草稿时要带过去的旧草稿附件文件名
+    pd.add_argument("--attach", action="append", default=[], help="附件的本地路径, 可给多次")
+    pd.add_argument("--keep-attachment", action="append", default=[],
+                    help="改草稿时保留旧草稿里的这个附件 (文件名), 可给多次; 要配合 --replace")
     pd.add_argument("--json", action="store_true", default=True)
     pd.add_argument("--human", dest="json", action="store_false")
 

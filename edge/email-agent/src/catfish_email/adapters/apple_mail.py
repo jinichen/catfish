@@ -650,6 +650,7 @@ class AppleMailAdapter(EmlxFallbackMixin, EmailAdapter):
         in_reply_to: str | None = None,
         account: str | None = None,
         replaces: str | None = None,
+        attachments: Sequence[str] = (),
     ) -> str:
         """存进该账号的草稿箱, 返回草稿箱里那封的 id。replaces: 改草稿时的旧稿 id。
 
@@ -657,7 +658,7 @@ class AppleMailAdapter(EmlxFallbackMixin, EmailAdapter):
         """
         return apple_mail_drafts.create_draft(
             self, _run_osascript, to=to, subject=subject, body=body, cc=cc, bcc=bcc,
-            in_reply_to=in_reply_to, account=account, replaces=replaces,
+            in_reply_to=in_reply_to, account=account, replaces=replaces, attachments=attachments,
         )
 
     # ── EMLX fallback (只读) ────────────────────────────

@@ -393,7 +393,7 @@ class ImapAdapter(EmailAdapter):
         self, *, to: Sequence[str], subject: str, body: str,
         cc: Sequence[str] = (), bcc: Sequence[str] = (),
         in_reply_to: str | None = None, account: str | None = None,
-        replaces: str | None = None,
+        replaces: str | None = None, attachments: Sequence[str] = (),
     ) -> str:
         """APPEND 一封草稿到草稿箱, 返回它的 id。
 
@@ -413,7 +413,7 @@ class ImapAdapter(EmailAdapter):
                      else imap_drafts.threading_headers(self, in_reply_to))
         raw = self._build_rfc822(
             to=to, subject=subject, body=body, cc=cc, bcc=bcc,
-            in_reply_to=irt, references=refs, message_id=msg_id,
+            in_reply_to=irt, references=refs, message_id=msg_id, attachments=attachments,
         )
         conn = self._connect()
         before = imap_drafts.uids_in(conn, drafts, self._select)
@@ -577,8 +577,9 @@ class ImapAdapter(EmailAdapter):
         self, *, to: Sequence[str], subject: str, body: str,
         cc: Sequence[str], bcc: Sequence[str],
         in_reply_to: str | None, message_id: str, references: str | None = None,
+        attachments: Sequence[str] = (),
     ) -> bytes:
-        """拼一封纯文本邮件。
+        """拼一封纯文本邮件 (有附件时是 multipart/mixed)。
 
         UTF-8 + base64 传输编码由 EmailMessage 自己处理 —— 中文正文和中文
         主题都不用我们手工编码 (国内企业邮箱那些 =?GB2312?B?= 我们只负责读,
@@ -599,6 +600,7 @@ class ImapAdapter(EmailAdapter):
             msg["In-Reply-To"] = in_reply_to
             msg["References"] = references or in_reply_to
         msg.set_content(body)
+        imap_drafts.add_attachments(msg, attachments)  # 10/29: 发送时原样走 SMTP, 附件跟着发出去
         return msg.as_bytes()
 
     def _has_capability(self, name: str) -> bool:

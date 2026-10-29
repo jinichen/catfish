@@ -644,6 +644,8 @@ function DetailPane({
           })}
           inReplyToMsgId={isDraft ? null : msg.id}
           replacesDraftId={isDraft ? msg.id : null}
+          // 10/29: 改草稿时把旧草稿的附件带过去 (否则存完新的、旧的去掉, 附件就丢了)
+          existingAttachments={isDraft ? (msg.attachments ?? []).map((a) => ({ filename: a.filename, size_bytes: a.size_bytes })) : []}
           account={msg.account}
           originalMessage={isDraft ? null : {
             id: msg.id,

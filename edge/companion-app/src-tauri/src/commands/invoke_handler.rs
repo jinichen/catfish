@@ -337,6 +337,7 @@ pub(crate) fn handler(
             crate::commands::email_last_draft::email_last_draft,
             crate::commands::email::email_read_message,
             crate::commands::email::email_create_draft,
+            crate::commands::email::email_pick_attachments,
             // P3.5.204.c (7/9 鸿波): 客户端还没同步的邮件, 员工可点刷新触发 IMAP/POP 同步
             crate::commands::email::email_check_new,
             crate::commands::email::email_mail_dir_status,  // 8/8: 缺完全磁盘访问权限时提示 (见该 fn 注释)
