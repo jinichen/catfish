@@ -158,8 +158,10 @@ async def test_generate_contextual_llm_success(proactive, monkeypatch):
             return False
 
         async def post(self, *a, **kw):
+            sent.update(kw.get("headers") or {})
             return FakeResponse()
 
+    sent: dict = {}
     with patch("httpx.AsyncClient", return_value=FakeClient()):
         r = await proactive.generate_contextual_starter(
             "silence",
@@ -169,6 +171,9 @@ async def test_generate_contextual_llm_success(proactive, monkeypatch):
         )
         assert r["source"] == "llm"
         assert r["starter"] == "卡哪了, 我帮你看看上会材料?"
+    # 10/30: 配额日志要能认出这条 (原来是「未标来源」), 且一句话不开深度思考 (开着要 7–19s, Companion 只等 5s)
+    assert sent["X-Catfish-Source"] == "gateway-proactive-contextual"
+    assert sent["X-Catfish-Thinking"] == "off"
 
 
 @pytest.mark.asyncio

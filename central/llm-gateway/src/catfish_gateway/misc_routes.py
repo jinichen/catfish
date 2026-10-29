@@ -2,7 +2,7 @@
 
 /v1/catalog · /v1/models · /v1/models/{id} · /v1/embeddings · /v1/roles ·
 /v1/edge/tool-config[/{tool}] · /api/me · /api/dev/users ·
-/api/proactive/{starter,contextual} · 四个探活 stub (/healthz /version
+/api/proactive/{starter,contextual} · /api/central/version · 四个探活 stub (/healthz /version
 /api/v1/models /props)
 
 放一起不是因为它们相关, 恰恰是因为**互不相关**: 每个都是独立 endpoint,
@@ -84,6 +84,13 @@ def register_misc_routes(app) -> None:
     @app.get("/healthz")
     async def health() -> dict[str, str]:
         return {"status": "ok", "service": "catfish-gateway"}
+
+    # 10/30: 门户顶栏显示中央端版本号。不要登录 (跟 /healthz 一样只读、不含敏感信息)。
+    # 不用 /api/version —— 那是 ollama 客户端探活的路径, 下面 /version stub 就是给它们的。
+    @app.get("/api/central/version")
+    async def api_central_version() -> dict[str, str]:
+        from .central_version import central_version  # noqa: PLC0415
+        return central_version()
 
     @app.get("/api/me")
     async def api_me(

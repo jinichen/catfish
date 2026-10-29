@@ -15,11 +15,13 @@ import { Link, useLocation } from "react-router-dom";
 import { useAuthStore } from "../store/auth";
 import { logout } from "../lib/auth";
 import { PasswordDialog } from "../routes/PasswordPage";
+import { centralVersionTitle, useCentralVersion } from "../lib/centralVersion";
 
 export function NavBar() {
   const me = useAuthStore((s) => s.me);
   const location = useLocation();
   const [passwordOpen, setPasswordOpen] = useState(false);
+  const centralVersion = useCentralVersion();
   const isManagerOrAbove =
     me?.role === "manager" || me?.role === "admin" || me?.role === "sysadmin";
 
@@ -79,6 +81,24 @@ export function NavBar() {
         />
         鲶鱼 · 中央门户
       </Link>
+      {/* 10/30: 中央端版本号 —— 原来页面上看不出装的是哪一版 */}
+      {centralVersion && (
+        <span
+          title={centralVersionTitle(centralVersion)}
+          style={{
+            fontSize: 11,
+            color: "var(--text-muted)",
+            fontFamily: "var(--font-mono)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-sm)",
+            padding: "1px 6px",
+            marginLeft: "calc(-1 * var(--space-2))",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {centralVersion.version === "unknown" ? "版本未知" : `v${centralVersion.version}`}
+        </span>
+      )}
       <div style={{ display: "flex", gap: "var(--space-3)", flex: 1 }}>
         {links
           .filter((l) => l.show)

@@ -134,10 +134,12 @@ case "${1:---print}" in
                 # 只动 `image: <名字>:<tag>` 这一处, 不碰别的
                 sed -i.bak -E "s|(image:[[:space:]]+${img}):[^[:space:]]+|\1:${v}|" "$f"
             done
+            # 10/30: 网关的 CATFISH_CENTRAL_VERSION (门户顶栏显示的版本号) 跟镜像 tag 同一个号
+            sed -i.bak -E "s|(CATFISH_CENTRAL_VERSION:[[:space:]]+)\"?[^\"[:space:]]*\"?|\1\"${v}\"|" "$f"
             rm -f "$f.bak"
         done
         echo "✓ 版本号 = $v"
-        echo "  已写入 $VERSION_FILE 和两份 compose 的 ${#IMAGES[@]} 个 tag"
+        echo "  已写入 $VERSION_FILE 和两份 compose 的 ${#IMAGES[@]} 个 tag + 网关 CATFISH_CENTRAL_VERSION"
         echo "  记得把这些改动一起提交。"
         ;;
     *)  echo "用法: $0 [--print | --hash | --files | --write]" >&2; exit 2 ;;

@@ -63,6 +63,17 @@ for f in "${COMPOSES[@]}"; do
     done
 done
 
+# ── 2b. 网关的 CATFISH_CENTRAL_VERSION (10/30: 门户顶栏显示它) 跟 VERSION 一致 ──
+# 不一致的话门户上看到的号跟实际镜像对不上, 比不显示还误导。
+for f in "${COMPOSES[@]}"; do
+    env_v="$(grep -E '^[[:space:]]*CATFISH_CENTRAL_VERSION:' "$f" | head -1 | sed -E 's/.*CATFISH_CENTRAL_VERSION:[[:space:]]*"?([^"[:space:]]*)"?.*/\1/')"
+    if [ -z "$env_v" ]; then
+        echo "❌ $f · 网关没配 CATFISH_CENTRAL_VERSION (门户会显示「版本未知」)"; fail=1
+    elif [ "$env_v" != "$VERSION" ]; then
+        echo "❌ $f · CATFISH_CENTRAL_VERSION=$env_v  ≠  VERSION($VERSION)"; fail=1
+    fi
+done
+
 # ── 3. VERSION 里的哈希跟源码现在算出来的一致 ────────────────────
 #
 # 这条替代了老的"改了源码记得 bump"。日期段不比 —— 同一份代码隔天重打
@@ -89,6 +100,6 @@ elif [ "$WANT" != "$GOT" ]; then
 fi
 
 if [ "$fail" -eq 0 ]; then
-    echo "✓ 版本号 $VERSION · 两份 compose 的 ${#IMAGES[@]} 个 tag 一致 · 跟源码对得上"
+    echo "✓ 版本号 $VERSION · 两份 compose 的 ${#IMAGES[@]} 个 tag 和网关 CATFISH_CENTRAL_VERSION 一致 · 跟源码对得上"
 fi
 exit "$fail"

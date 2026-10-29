@@ -100,6 +100,7 @@ def _patch_httpx(monkeypatch, post_handler):
 
         async def post(self, *a, **kw):
             call_count["n"] += 1
+            call_count["headers"] = kw.get("headers") or {}
             return post_handler(call_count["n"])
 
     import httpx  # noqa: PLC0415
@@ -157,6 +158,9 @@ async def test_happy_path_returns_llm_source(monkeypatch):
     assert result["source"] == "llm"
     assert "hello from llm" in result["starter"]
     assert call_count["n"] == 1  # 严格 1 candidate
+    # 10/30: 带来源 (配额日志不再「未标来源」) + 关思考 (开着 7–19s, 比 Companion 等的 5s 长)
+    assert call_count["headers"]["X-Catfish-Source"] == "gateway-proactive-starter"
+    assert call_count["headers"]["X-Catfish-Thinking"] == "off"
 
 
 # ── Fallback 路径 ──────────────────────────────────────────────

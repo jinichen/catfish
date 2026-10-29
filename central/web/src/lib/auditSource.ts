@@ -23,6 +23,9 @@ const LABELS: Record<string, string> = {
   "plugin:memory-wiki-merge": "后台 · 知识库整理",
   "plugin:toolbridge-meeting": "会议纪要",
   "plugin:catfish-xcatfish-user": "后台 · 界面翻译",
+  // 10/30: 网关自己调自己写主动搭话的开场白 (Companion 回到窗口 / 久没说话 / 待办快到期时触发)
+  "gateway-proactive-starter": "后台 · 主动搭话",
+  "gateway-proactive-contextual": "后台 · 主动搭话",
 };
 
 // hermes 自己发起、没有外部请求带来源时, 鲶鱼插件按 hermes 的 platform 标 `hermes:<platform>`
@@ -67,6 +70,9 @@ export function auditSourceLabel(source: string | undefined, user: string): stri
     }
     return s;
   }
+  // 10/30 之前网关自己调自己 (身份 internal:gateway-loopback) 不带来源。查过只有主动搭话一处这么调
+  // (那天在网关里抓到的提示词就是 proactive.py 的开场白模板), 老记录按它显示
+  if (user === "internal:gateway-loopback") return "后台 · 主动搭话";
   // 没标来源: 服务账号 = hermes 内部辅助调用 (会话标题 / 上下文压缩等, 不经过插件打标)
   if (user.startsWith("client:")) return "后台 · hermes 辅助";
   // 员工账号没标来源: 10/22 之前 hermes 主对话 / 微信 / 定时任务都不带来源; 10/25 之前 hermes 的看图 /

@@ -238,6 +238,11 @@ async def generate_starter(
                         "Authorization": f"Bearer {dev_token}",
                         "X-Catfish-Skip-Identity": "true",  # 防 SOUL/journal 二次注入死循环
                         "X-Catfish-Internal": "true",  # BL-F17: 主动闲聊不消耗员工 quota
+                        # 10/30: 配额日志里这条原来是 internal:gateway-loopback「未标来源」, 查了半天才知道是谁
+                        "X-Catfish-Source": "gateway-proactive-starter",
+                        # 10/30: 一句开场白不用深度思考。开着思考 qwen-flash 要 7–19s, 远超 Companion 等的 5s,
+                        # 每次都是 Companion 先放弃用本地模板, 模型白跑一趟 (token 照扣)
+                        "X-Catfish-Thinking": "off",
                         "Content-Type": "application/json",
                     },
                     json={
@@ -476,6 +481,8 @@ async def generate_contextual_starter(
                         "Authorization": f"Bearer {dev_token}",
                         "X-Catfish-Skip-Identity": "true",
                         "X-Catfish-Internal": "true",
+                        "X-Catfish-Source": "gateway-proactive-contextual",  # 10/30 同上
+                        "X-Catfish-Thinking": "off",  # 10/30: 同上, 这条网关只等 8s、Companion 只等 5s
                         "Content-Type": "application/json",
                     },
                     json={
