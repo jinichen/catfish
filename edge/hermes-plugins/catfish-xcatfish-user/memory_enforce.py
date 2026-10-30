@@ -190,6 +190,25 @@ _CLASSIFY_SYSTEM_PROMPT = (
 )
 
 
+def _resolver_hermes_home() -> str:
+    """跟 resolver._hermes_home 同一套优先级。内联: 这个文件被 spec_from_file_location
+    单独加载 (__init__.py), 拿不到兄弟模块。"""
+    import sys
+
+    env = os.environ.get("HERMES_HOME", "").strip()
+    if env:
+        return os.path.expanduser(env)
+    try:
+        from hermes_constants import get_hermes_home  # noqa: PLC0415
+
+        return str(get_hermes_home())
+    except Exception:  # noqa: BLE001
+        pass
+    if sys.platform == "win32" and os.environ.get("LOCALAPPDATA"):
+        return os.path.join(os.environ["LOCALAPPDATA"], "hermes")
+    return os.path.join(os.path.expanduser("~"), ".hermes")  # windows-parity: Windows 上面那行已经返回了
+
+
 def _read_hermes_env_key(key: str) -> str:
     """读 hermes 管理的 env key. 双查 os.environ + ~/.hermes/.env 文件.
 
@@ -205,7 +224,8 @@ def _read_hermes_env_key(key: str) -> str:
     if val:
         return val
     try:
-        env_path = Path(os.path.expanduser("~")) / ".hermes" / ".env"
+        # 10/30: 原来写死 ~/.hermes —— Windows 上 hermes 在 %LOCALAPPDATA%\hermes, 读不到
+        env_path = Path(_resolver_hermes_home()) / ".env"
         if not env_path.exists():
             return ""
         for line in env_path.read_text(encoding="utf-8").splitlines():

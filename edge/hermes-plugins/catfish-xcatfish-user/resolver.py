@@ -22,6 +22,24 @@ from typing import Any
 logger = logging.getLogger("catfish.xcatfish_user.resolver")
 
 
+def _hermes_home() -> str:
+    """hermes 数据目录: HERMES_HOME > hermes_constants > 平台默认 (同 plugin_wechat_qr._hermes_home)。"""
+    import sys
+
+    env = os.environ.get("HERMES_HOME", "").strip()
+    if env:
+        return os.path.expanduser(env)
+    try:
+        from hermes_constants import get_hermes_home  # noqa: PLC0415
+
+        return str(get_hermes_home())
+    except Exception:  # noqa: BLE001
+        pass
+    if sys.platform == "win32" and os.environ.get("LOCALAPPDATA"):
+        return os.path.join(os.environ["LOCALAPPDATA"], "hermes")
+    return os.path.join(os.path.expanduser("~"), ".hermes")  # windows-parity: Windows 上面那行已经返回了
+
+
 def _env_file_value(key: str) -> str:
     """10/30: (e) 兜底也读 ~/.hermes/.env。
 
@@ -30,9 +48,8 @@ def _env_file_value(key: str) -> str:
     os.environ 拿不到。没有这一步, hermes 自己的定时任务 / 技能整理在门户里全挂
     client:hermes-cli 名下。
     """
-    home = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
     try:
-        with open(os.path.join(home, ".env"), encoding="utf-8") as f:
+        with open(os.path.join(_hermes_home(), ".env"), encoding="utf-8") as f:
             for line in f:
                 k, sep, v = line.strip().partition("=")
                 if sep and k.strip() == key:

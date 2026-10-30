@@ -111,21 +111,11 @@ def identity_headers() -> dict:
     后台线程), 拿不到请求上下文的员工, 只能用本机员工。
 
     来源: Companion 把登录员工写进 ~/.hermes/.env 的 CATFISH_DEFAULT_USER (hermes_jwt_sync)。
-    先读进程环境; hermes 启动后才写进去的 (员工后登录 / 换号) 进程环境里没有, 再读一次
-    .env 文件。只管**记在谁名下**, 配额照旧不扣 (这些请求都带 X-Catfish-Internal,
+    走 _read_hermes_env_key: 先读进程环境, 再读 hermes 目录下的 .env (hermes load_env 不写
+    os.environ; Windows 上目录是 %LOCALAPPDATA%\\hermes, 见 _hermes_home)。只管**记在谁名下**, 配额照旧不扣 (这些请求都带 X-Catfish-Internal,
     5/5 定的: 后台总结不占员工额度)。
     """
-    user = (os.environ.get("CATFISH_DEFAULT_USER") or "").strip()
-    if not user:
-        home = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
-        try:
-            with open(os.path.join(home, ".env"), encoding="utf-8") as f:
-                for line in f:
-                    key, sep, value = line.strip().partition("=")
-                    if sep and key.strip() == "CATFISH_DEFAULT_USER":
-                        user = value.strip().strip('"').strip("'")
-        except OSError:
-            pass
+    user = _read_hermes_env_key("CATFISH_DEFAULT_USER")
     return {"X-Catfish-User": user} if "@" in user else {}
 
 
