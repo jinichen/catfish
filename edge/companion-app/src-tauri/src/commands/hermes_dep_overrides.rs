@@ -151,17 +151,25 @@ pub(crate) fn refresh_offline_deps_if_outdated(artifacts: &RuntimeArtifacts, pat
 }
 
 /// 只解依赖清单和 wheel 目录 (整包解开要多解出整份 hermes 源码)。Mac / Windows 自带的 tar 都是 bsdtar。
+///
+/// 10/30: Linux (CI 跑 cargo test 的机器) 上是 GNU tar, 不认 `--include`, 退出码 64 ——
+/// 这里三个测试在 CI 上一直红 (那一步允许失败, 没人注意)。GNU 写法是 `--wildcards` +
+/// 位置参数, 效果一样 (容器里 GNU tar 1.35 实测)。Mac / Windows 照旧走 bsdtar 那条。
 fn extract_deps(archive: &Path, dest: &Path) -> Result<()> {
     let mut untar = crate::services::process::background_command("tar");
-    untar
-        .arg("-xzf")
-        .arg(archive)
-        .arg("-C")
-        .arg(dest)
-        .arg("--include")
-        .arg(format!("*{REQUIREMENTS_FILE}"))
-        .arg("--include")
-        .arg(format!("*{WHEELHOUSE_DIR}/*"));
+    untar.arg("-xzf").arg(archive).arg("-C").arg(dest);
+    if cfg!(target_os = "linux") {
+        untar
+            .arg("--wildcards")
+            .arg(format!("*{REQUIREMENTS_FILE}"))
+            .arg(format!("*{WHEELHOUSE_DIR}/*"));
+    } else {
+        untar
+            .arg("--include")
+            .arg(format!("*{REQUIREMENTS_FILE}"))
+            .arg("--include")
+            .arg(format!("*{WHEELHOUSE_DIR}/*"));
+    }
     let status = untar.status().context("启动 tar")?;
     anyhow::ensure!(status.success(), "从 {} 解依赖失败: {status}", archive.display());
     Ok(())
