@@ -36,9 +36,9 @@ except ImportError:  # 独立脚本模式 (无父包)
 #
 # gateway 模块是 base 侧, 不 import 本文件, 直接拿没有环。
 try:
-    from .catfish_memory_gateway import with_source
+    from .catfish_memory_gateway import identity_headers, with_source
 except ImportError:  # 独立脚本模式 (无父包)
-    from catfish_memory_gateway import with_source
+    from catfish_memory_gateway import identity_headers, with_source
 try:
     from .catfish_memory_fm import _parse_frontmatter_lists, _split_frontmatter_body  # noqa: F401
 except ImportError:  # 独立脚本模式 (无父包)
@@ -142,6 +142,7 @@ async def _call_merge_llm(
                 with_source(_gateway_url(), "plugin:memory-wiki-merge"),
                 headers={
                     "Authorization": f"Bearer {token}",
+                    **identity_headers(),
                     "X-Catfish-Skip-Identity": "true",
                     "X-Catfish-Internal": "true",
                     "Content-Type": "application/json",

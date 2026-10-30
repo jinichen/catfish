@@ -32,9 +32,9 @@ except ImportError:  # 独立脚本模式 (无父包)
 #
 # gateway 模块是 base 侧, 不 import 本文件, 直接拿没有环。
 try:
-    from .catfish_memory_gateway import with_source
+    from .catfish_memory_gateway import identity_headers, with_source
 except ImportError:  # 独立脚本模式 (无父包)
-    from catfish_memory_gateway import with_source
+    from catfish_memory_gateway import identity_headers, with_source
 try:
     from .catfish_memory_prompts import _ANALYSIS_PROMPT, _DISTILL_PROMPT, _RECONCILE_PROMPT, _SUMMARIZE_PROMPT, _build_generation_prompt  # noqa: F401
     from .catfish_memory_wiki_provenance import relation_prompt_list as _relation_prompt_list
@@ -81,6 +81,7 @@ async def _call_summarize_llm(
                 with_source(_gateway_url(), "plugin:memory-summarize"),
                 headers={
                     "Authorization": f"Bearer {token}",
+                    **identity_headers(),
                     "X-Catfish-Skip-Identity": "true",
                     "X-Catfish-Internal": "true",
                     "Content-Type": "application/json",
@@ -185,6 +186,7 @@ async def _call_distill_llm(
     results: List[Tuple[str, str]] = []
     headers = {
         "Authorization": f"Bearer {token}",
+        **identity_headers(),
         "X-Catfish-Skip-Identity": "true",
         "X-Catfish-Internal": "true",
         # 10/22: 蒸馏 / 合并是单次抽取, 不需要深度思考。qwen-flash 默认开着思考时「当前状态合并」
@@ -308,6 +310,7 @@ async def _call_analysis_llm(
                 with_source(_gateway_url(), "plugin:memory-wiki-analysis"),
                 headers={
                     "Authorization": f"Bearer {token}",
+                    **identity_headers(),
                     "X-Catfish-Skip-Identity": "true",
                     "X-Catfish-Internal": "true",
                     "X-Catfish-Thinking": "off",  # 10/23: 结构化抽取, 思考模式只会吃掉输出额度和时间
@@ -415,6 +418,7 @@ async def _call_generation_llm(
                 with_source(_gateway_url(), "plugin:memory-wiki-generation"),
                 headers={
                     "Authorization": f"Bearer {token}",
+                    **identity_headers(),
                     "X-Catfish-Skip-Identity": "true",
                     "X-Catfish-Internal": "true",
                     "X-Catfish-Thinking": "off",  # 10/23: 结构化抽取, 思考模式只会吃掉输出额度和时间

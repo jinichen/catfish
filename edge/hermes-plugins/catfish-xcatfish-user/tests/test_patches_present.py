@@ -306,7 +306,7 @@ def test_resolver_env_fallback(monkeypatch):
     assert resolver.resolve_for_agent(FakeAgent()) == "default@x.com"
 
 
-def test_resolver_returns_empty_when_no_source():
+def test_resolver_returns_empty_when_no_source(monkeypatch, tmp_path):
     """完全没 user → 空串. 调用方应 pop default_headers, 不是设空."""
     import resolver
 
@@ -315,9 +315,23 @@ def test_resolver_returns_empty_when_no_source():
         _user_id = ""
         platform = "cli"
 
-    # 假定 env 没设
-    import os
-    if os.environ.get("CATFISH_DEFAULT_USER"):
-        pytest.skip("CATFISH_DEFAULT_USER set in env, can't test")
+    # 10/30: (e) 兜底也读 $HERMES_HOME/.env —— 指到空目录, 不受本机真配置影响
+    monkeypatch.delenv("CATFISH_DEFAULT_USER", raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
     assert resolver.resolve_for_agent(FakeAgent()) == ""
+
+
+def test_resolver_env_file_fallback(monkeypatch, tmp_path):
+    """10/30: 进程环境里没有时读 $HERMES_HOME/.env (Companion 写的登录员工)。"""
+    import resolver
+
+    class FakeAgent:
+        _catfish_outgoing_user = ""
+        _user_id = ""
+        platform = "cron"
+
+    monkeypatch.delenv("CATFISH_DEFAULT_USER", raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / ".env").write_text('OPENAI_API_KEY=x\nCATFISH_DEFAULT_USER="emp@x.com"\n')
+    assert resolver.resolve_for_agent(FakeAgent()) == "emp@x.com"

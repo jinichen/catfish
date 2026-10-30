@@ -22,6 +22,26 @@ from typing import Any
 logger = logging.getLogger("catfish.xcatfish_user.resolver")
 
 
+def _env_file_value(key: str) -> str:
+    """10/30: (e) 兜底也读 ~/.hermes/.env。
+
+    Companion 把登录员工写进那里的 CATFISH_DEFAULT_USER (hermes_jwt_sync); hermes 的
+    load_env 只返回 dict 不写 os.environ (见 memory_enforce._read_hermes_env_key), 光看
+    os.environ 拿不到。没有这一步, hermes 自己的定时任务 / 技能整理在门户里全挂
+    client:hermes-cli 名下。
+    """
+    home = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
+    try:
+        with open(os.path.join(home, ".env"), encoding="utf-8") as f:
+            for line in f:
+                k, sep, v = line.strip().partition("=")
+                if sep and k.strip() == key:
+                    return v.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return ""
+
+
 def resolve_for_agent(agent: Any) -> str:
     """Resolve catfish_outgoing_user for an AIAgent instance.
 
@@ -55,7 +75,9 @@ def resolve_for_agent(agent: Any) -> str:
             return f"{uid}@im.{platform}"
 
         # (e) env fallback
-        env_user = os.environ.get("CATFISH_DEFAULT_USER", "").strip()
+        env_user = os.environ.get("CATFISH_DEFAULT_USER", "").strip() or _env_file_value(
+            "CATFISH_DEFAULT_USER"
+        )
         if env_user:
             return env_user
     except Exception as e:

@@ -100,6 +100,35 @@ def _gateway_url() -> str:
     return _DEFAULT_GATEWAY_URL
 
 
+def identity_headers() -> dict:
+    """这台机器的员工身份头 (X-Catfish-User), 拿不到返空 dict。
+
+    # 为什么 (10/30 鸿波看门户配额日志)
+
+    插件自己的 LLM 调用 (对话摘要 / 记忆蒸馏 / wiki / 合并 / 召回向量) 只带 hermes 的
+    服务凭证, 网关只能记成 client:hermes-cli —— 处理的明明是这个员工的记忆, 管理员却
+    看不出是谁的, 按人统计用量也漏掉这一块。这些调用不在任何一次对话请求里 (定时 /
+    后台线程), 拿不到请求上下文的员工, 只能用本机员工。
+
+    来源: Companion 把登录员工写进 ~/.hermes/.env 的 CATFISH_DEFAULT_USER (hermes_jwt_sync)。
+    先读进程环境; hermes 启动后才写进去的 (员工后登录 / 换号) 进程环境里没有, 再读一次
+    .env 文件。只管**记在谁名下**, 配额照旧不扣 (这些请求都带 X-Catfish-Internal,
+    5/5 定的: 后台总结不占员工额度)。
+    """
+    user = (os.environ.get("CATFISH_DEFAULT_USER") or "").strip()
+    if not user:
+        home = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
+        try:
+            with open(os.path.join(home, ".env"), encoding="utf-8") as f:
+                for line in f:
+                    key, sep, value = line.strip().partition("=")
+                    if sep and key.strip() == "CATFISH_DEFAULT_USER":
+                        user = value.strip().strip('"').strip("'")
+        except OSError:
+            pass
+    return {"X-Catfish-User": user} if "@" in user else {}
+
+
 def with_source(url: str, source: str) -> str:
     """给网关 URL 挂上 `catfish_source` 归属标记。
 

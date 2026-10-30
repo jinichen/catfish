@@ -177,3 +177,35 @@ def test_with_source不从helpers拿():
                     f"{fname} 从 helpers 拿 with_source —— 会撞循环导入。"
                     "改成 from catfish_memory_gateway import with_source。"
                 )
+
+
+# ── 10/30: 记在员工名下 ──────────────────────────────────────────────────
+
+
+def test_identity_headers_读进程环境再读_env_文件(monkeypatch, tmp_path):
+    import catfish_memory_gateway as g
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.delenv("CATFISH_DEFAULT_USER", raising=False)
+    assert g.identity_headers() == {}
+
+    (tmp_path / ".env").write_text("OPENAI_API_KEY=x\nCATFISH_DEFAULT_USER=emp@x.com\n")
+    assert g.identity_headers() == {"X-Catfish-User": "emp@x.com"}
+
+    monkeypatch.setenv("CATFISH_DEFAULT_USER", "env@x.com")
+    assert g.identity_headers() == {"X-Catfish-User": "env@x.com"}
+
+    monkeypatch.setenv("CATFISH_DEFAULT_USER", "不是邮箱")
+    assert g.identity_headers() == {}
+
+
+def test_每处打网关的调用都带员工身份():
+    """七处插件自己的 LLM 调用: 有 catfish_source 标记的地方都要有 identity_headers。"""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    for name in ("catfish_memory_llm.py", "catfish_memory_merge.py",
+                 "catfish_memory_wiki_ground.py", "catfish_memory_vectors.py"):
+        src = (root / name).read_text(encoding="utf-8")
+        calls = src.count('"Authorization": f"Bearer {token}"')
+        assert calls and src.count("**identity_headers()") == calls, name

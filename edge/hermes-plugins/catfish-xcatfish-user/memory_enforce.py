@@ -287,6 +287,10 @@ def _classify_memory_route_diag(content: str, model: str) -> tuple[Optional[dict
         )
         return None, "拿不到 gateway 鉴权 token (见 log)"
     headers["Authorization"] = f"Bearer {token}"
+    # 10/30: 记在员工名下 (门户原来显示 client:hermes-cli)。配额照旧不扣 —— 上面带了 Internal。
+    _employee = _read_hermes_env_key("CATFISH_DEFAULT_USER")
+    if "@" in _employee:
+        headers["X-Catfish-User"] = _employee
 
     payload = {
         "model": model,

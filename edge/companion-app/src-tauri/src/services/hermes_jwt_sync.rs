@@ -207,6 +207,13 @@ pub async fn sync_service_token_to_env(identity_url: &str) -> Result<()> {
         identity_url.trim_end_matches('/'),
     );
     text = replace_or_append_env_line(&text, "CATFISH_HERMES_CLIENT_SECRET", HERMES_CLI_SECRET);
+    // 10/30: 这台机器的员工。插件自己的后台 LLM 调用 (对话摘要 / 记忆蒸馏 / 记忆分类) 和
+    // hermes 定时任务不在任何对话请求里, 拿不到 X-Catfish-User, 门户配额日志原来全挂在
+    // client:hermes-cli 名下。插件读这个值补上 (只管记在谁名下, 配额照旧不扣)。
+    let employee = super::oauth::current_user_sub();
+    if let Some(email) = employee.as_deref() {
+        text = replace_or_append_env_line(&text, "CATFISH_DEFAULT_USER", email);
+    }
 
     fs::write(&env_path, text).context("写 .env")?;
     #[cfg(unix)]
@@ -229,6 +236,7 @@ pub async fn sync_service_token_to_env(identity_url: &str) -> Result<()> {
         &tok.access_token,
         identity_url,
         HERMES_CLI_SECRET,
+        employee.as_deref(),
     );
 
     Ok(())

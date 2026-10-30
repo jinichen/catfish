@@ -50,13 +50,13 @@ try:
     from . import catfish_memory_wiki_verify as verify
     from .catfish_memory_fm import _parse_frontmatter_lists, _split_frontmatter_body
     from .catfish_memory_helpers import _DISTILL_HTTP_TIMEOUT, _gateway_dev_token, _gateway_url, logger
-    from .catfish_memory_gateway import with_source
+    from .catfish_memory_gateway import identity_headers, with_source
 except ImportError:  # 独立脚本模式 (无父包)
     import catfish_memory_wiki_relcheck as relcheck
     import catfish_memory_wiki_verify as verify
     from catfish_memory_fm import _parse_frontmatter_lists, _split_frontmatter_body
     from catfish_memory_helpers import _DISTILL_HTTP_TIMEOUT, _gateway_dev_token, _gateway_url, logger
-    from catfish_memory_gateway import with_source
+    from catfish_memory_gateway import identity_headers, with_source
 
 #: 每条事实给模型看几段候选
 TOP_K = 4
@@ -311,6 +311,7 @@ async def _post_judge(prompt: str, model: str) -> Optional[str]:
                 with_source(_gateway_url(), "plugin:memory-wiki-ground"),
                 headers={
                     "Authorization": f"Bearer {token}",
+                    **identity_headers(),
                     "X-Catfish-Skip-Identity": "true",
                     "X-Catfish-Internal": "true",
                     "X-Catfish-Thinking": "off",

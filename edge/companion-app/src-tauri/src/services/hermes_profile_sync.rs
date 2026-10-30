@@ -125,6 +125,7 @@ pub fn sync_profile_from_default(hermes: &Path, profile: &Path) {
         "CATFISH_GATEWAY_URL",
         "CATFISH_IDENTITY_URL",
         "CATFISH_HERMES_CLIENT_SECRET",
+        "CATFISH_DEFAULT_USER", // 10/30: 新建的专家机器人也记在这台机器员工名下
     ] {
         if let Some(value) = env_value(&root_env, key) {
             updated = replace_or_append_env_line(&updated, key, value);
@@ -180,6 +181,7 @@ pub fn sync_service_env(
     token: &str,
     identity_url: &str,
     client_secret: &str,
+    employee: Option<&str>,
 ) {
     for profile in registered_profile_dirs(hermes) {
         let env_path = profile.join(".env");
@@ -192,6 +194,10 @@ pub fn sync_service_env(
             ("CATFISH_HERMES_CLIENT_SECRET", client_secret),
         ] {
             updated = replace_or_append_env_line(&updated, key, value);
+        }
+        // 10/30: 专家机器人跟主 profile 同一个员工 (见 hermes_jwt_sync 同名注释)
+        if let Some(email) = employee {
+            updated = replace_or_append_env_line(&updated, "CATFISH_DEFAULT_USER", email);
         }
         if let Err(error) = fs::write(&env_path, updated) {
             log::warn!(
@@ -267,7 +273,7 @@ mod tests {
         fs::create_dir_all(&profile).unwrap();
         fs::write(
             dir.path().join(".env"),
-            "API_SERVER_KEY=server-key\nOPENAI_API_KEY=service-token\nOPENAI_BASE_URL=http://10.0.0.8:8999/v1\nCATFISH_GATEWAY_URL=http://10.0.0.8:8999\n",
+            "API_SERVER_KEY=server-key\nOPENAI_API_KEY=service-token\nOPENAI_BASE_URL=http://10.0.0.8:8999/v1\nCATFISH_GATEWAY_URL=http://10.0.0.8:8999\nCATFISH_DEFAULT_USER=emp@x.com\n",
         )
         .unwrap();
         fs::write(
@@ -284,10 +290,23 @@ mod tests {
         assert!(env.contains("API_SERVER_KEY=server-key"));
         assert!(env.contains("OPENAI_API_KEY=service-token"));
         assert!(env.contains("OPENAI_BASE_URL=http://10.0.0.8:8999/v1"));
+        assert!(env.contains("CATFISH_DEFAULT_USER=emp@x.com"));
         let config = fs::read_to_string(profile.join("config.yaml")).unwrap();
         assert!(config.contains("api_key: employee-token"));
         assert!(config.contains("base_url: http://10.0.0.8:8999/v1"));
         assert!(config.contains("api_mode: chat_completions"));
+    }
+
+    #[test]
+    fn service_env_同步时写入本机员工() {
+        let dir = tempdir().unwrap();
+        let profile = dir.path().join("profiles/expert-a");
+        fs::create_dir_all(&profile).unwrap();
+        fs::write(profile.join(".catfish-managed-profile"), "").unwrap();
+        sync_service_env(dir.path(), "tok", "http://id", "sec", Some("emp@x.com"));
+        let env = fs::read_to_string(profile.join(".env")).unwrap();
+        assert!(env.contains("CATFISH_DEFAULT_USER=emp@x.com"));
+        assert!(env.contains("OPENAI_API_KEY=tok"));
     }
 
     /// v0.22 装机上, 同步过去的 profile 走 custom + key_env, 不留明文 api_key

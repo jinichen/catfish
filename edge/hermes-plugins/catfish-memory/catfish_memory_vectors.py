@@ -33,9 +33,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 try:
-    from .catfish_memory_gateway import _gateway_dev_token, _gateway_url, with_source
+    from .catfish_memory_gateway import _gateway_dev_token, _gateway_url, identity_headers, with_source
 except ImportError:  # 独立脚本模式 (无父包)
-    from catfish_memory_gateway import _gateway_dev_token, _gateway_url, with_source
+    from catfish_memory_gateway import _gateway_dev_token, _gateway_url, identity_headers, with_source
 
 logger = logging.getLogger("catfish-memory.vectors")
 
@@ -135,7 +135,7 @@ def embed(texts: List[str], timeout: float) -> Optional[Tuple[str, List[array]]]
 
         resp = httpx.post(
             _endpoint(),
-            headers={"Authorization": f"Bearer {token}", "X-Catfish-Skip-Identity": "1"},
+            headers={"Authorization": f"Bearer {token}", "X-Catfish-Skip-Identity": "1", **identity_headers()},
             json={"input": texts},
             timeout=timeout,
         )
