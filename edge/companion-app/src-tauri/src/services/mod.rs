@@ -32,6 +32,7 @@ pub mod email_config;     // BL-COMPANION-EMAIL-YAML-CONFIG (5/18)
 pub mod email_classify_parse; // 分诊 LLM 输出解析 (8/21, 纯函数独立可测)
 pub mod email_llm;    // 评级 LLM 调用 (8/15 从 email_scheduler 切出)
 pub mod email_notify; // 前端事件 + 系统通知 (8/15 切出)
+pub mod email_own_domains; // 10/31: 员工自己的邮箱域, 钓鱼复审判「本单位 / 外部」
 pub mod email_state;  // 评级缓存 / push 历史 / 落盘 (8/15 切出)
 pub mod email_types;  // EmailItem + Urgency (8/15 切出, 是其余几层的地基)
 pub mod email_scheduler;  // BL-COMPANION-EMAIL-DIGEST-STEP2 (5/18)

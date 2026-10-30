@@ -60,6 +60,7 @@ use super::email_state::{
     persist_push_history, persist_urgency_cache, phishing_store, push_history, trim_cache, urgency_cache,
     ActionEntry, APP_HANDLE, DEDUP_WINDOW_SECS,
 };
+use super::email_own_domains::is_own_sender;
 use super::email_types::{EmailItem, Urgency};
 
 // BL-COMPANION-BRIEFING-V2 sub-task 2 (5/20): 通知去重 + 评级持久化.
@@ -492,6 +493,8 @@ async fn scan_phishing_for_new(new_items: &[EmailItem]) {
     if new_items.is_empty() { return; }
 
     let our_domains = our_domains_from_items(new_items);
+    // 10/31: 真正的员工自有域 (our_domains 上面那个把每个发件人的域都算进去了, 判不了内外)
+    let own_domains = super::email_own_domains::own_mail_domains();
 
     // 1. 规则 light scan
     let mut scans: Vec<PhishingScanResult> = new_items
@@ -516,6 +519,7 @@ async fn scan_phishing_for_new(new_items: &[EmailItem]) {
                 subject: it.subject.clone(),
                 sender: it.sender.clone(),
                 rule_summary: summary,
+                internal: is_own_sender(&it.sender, &own_domains),
             }
         })
         .collect();
@@ -570,7 +574,14 @@ async fn scan_phishing_for_new(new_items: &[EmailItem]) {
     };
 
     match phishing_llm::batch_llm_review(&llm_inputs, &base_url, &token, &model).await {
-        Ok(verdicts) if verdicts.len() == scans.len() => {
+        Ok(mut verdicts) if verdicts.len() == scans.len() => {
+            // 10/31: 本单位发的不进营销档 —— 提示词里说了, 这里再兜一道, 不赌模型每次都听。
+            for (v, input) in verdicts.iter_mut().zip(llm_inputs.iter()) {
+                if input.internal && v.verdict == "marketing" {
+                    v.verdict = "safe".into();
+                    v.reason = format!("本单位发出的工作邮件, 不算营销 (模型原判营销: {})", v.reason);
+                }
+            }
             for (s, v) in scans.iter_mut().zip(verdicts.iter()) {
                 s.llm_verdict = Some(v.verdict.clone());
                 s.llm_reason = Some(v.reason.clone());
@@ -609,6 +620,9 @@ async fn scan_phishing_for_new(new_items: &[EmailItem]) {
         }
     }
 
+    for s in scans.iter_mut() {
+        s.review_rev = phishing_scan::PHISHING_REVIEW_REV;
+    }
     store_and_audit(new_items, scans).await;
 }
 

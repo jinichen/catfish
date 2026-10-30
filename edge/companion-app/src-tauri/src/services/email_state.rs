@@ -225,15 +225,35 @@ pub(crate) fn persist_phishing_store() {
     }
 }
 
+/// 10/31: 按旧复审规则判成「营销」的丢掉, 打开邮件页时重审一次 (本单位群发的安全预警
+/// 之前被判营销)。别的档 (safe / suspicious / phishing) 规则没变, 留着不重花 token。
+fn drop_stale_marketing(
+    mut map: HashMap<String, PhishingScanResult>,
+) -> (HashMap<String, PhishingScanResult>, usize) {
+    let before = map.len();
+    map.retain(|_, r| {
+        r.review_rev >= super::phishing_scan::PHISHING_REVIEW_REV
+            || r.llm_verdict.as_deref() != Some("marketing")
+    });
+    let dropped = before - map.len();
+    (map, dropped)
+}
+
 pub(crate) fn load_persisted_phishing_store() {
     let Some(path) = catfish_state_file(PHISHING_CACHE_FILE) else { return };
     let Ok(content) = std::fs::read_to_string(&path) else { return };
     let Ok(parsed) = serde_json::from_str::<HashMap<String, PhishingScanResult>>(&content) else {
         return;
     };
+    let (parsed, dropped) = drop_stale_marketing(parsed);
     if let Ok(mut store) = phishing_store().lock() {
         *store = parsed;
-        log::info!("email_scheduler: loaded {} phishing entries from {}", store.len(), path.display());
+        log::info!(
+            "email_scheduler: loaded {} phishing entries from {} (旧规则判的营销 {} 封丢掉重审)",
+            store.len(),
+            path.display(),
+            dropped,
+        );
     }
 }
 
@@ -385,5 +405,27 @@ mod tests_trim_cache {
         for k in keep {
             assert!(m.contains_key(k), "{k} 是刚评的, 不该被丢");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_phishing_rev {
+    use super::{drop_stale_marketing, PhishingScanResult};
+    use std::collections::HashMap;
+
+    fn r(verdict: &str, rev: u32) -> PhishingScanResult {
+        PhishingScanResult { llm_verdict: Some(verdict.into()), review_rev: rev, ..Default::default() }
+    }
+
+    #[test]
+    fn 只丢旧规则判的营销() {
+        let mut m = HashMap::new();
+        m.insert("old-mkt".to_string(), r("marketing", 0));
+        m.insert("old-safe".to_string(), r("safe", 0));
+        m.insert("new-mkt".to_string(), r("marketing", super::super::phishing_scan::PHISHING_REVIEW_REV));
+        let (m, dropped) = drop_stale_marketing(m);
+        assert_eq!(dropped, 1);
+        assert!(!m.contains_key("old-mkt"));
+        assert!(m.contains_key("old-safe") && m.contains_key("new-mkt"));
     }
 }

@@ -19,6 +19,9 @@ pub struct LlmReviewInput {
     pub sender: String,
     /// 规则触发结果一句话总结 (e.g. "PHISH-001 (sender_spoofing high), PHISH-021 (suspicious_link high)" 或 "无触发")
     pub rule_summary: String,
+    /// 10/31: 发件人是不是员工自己单位的域 (email_own_domains)。模型原来看不到这条,
+    /// 本单位群发的安全预警 / 公文通知被当成「群发 = 营销」。
+    pub internal: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -69,10 +72,11 @@ pub async fn batch_llm_review(
         .enumerate()
         .map(|(i, it)| {
             format!(
-                "{}. 主题: {} | 发件人: {} | 规则: {}",
+                "{}. 主题: {} | 发件人: {} ({}) | 规则: {}",
                 i + 1,
                 truncate(&it.subject, 60),
                 truncate(&it.sender, 40),
+                if it.internal { "本单位" } else { "外部" },
                 truncate(&it.rule_summary, 80),
             )
         })
@@ -84,10 +88,12 @@ pub async fn batch_llm_review(
     // 分档语义清晰化: phishing/suspicious 是威胁, marketing 是打扰但非威胁, safe 是正常.
     let system = "你是邮件钓鱼识别助手. 看主题/发件人/规则触发结果, 评每封邮件: \
                   phishing (确定钓鱼/欺诈) / suspicious (可疑待查, 疑似钓鱼但不确定) / \
-                  marketing (营销推广/订阅通知/群发广告, 非威胁但员工可能不想看) / \
+                  marketing (外部商家的营销推广/促销/产品 newsletter, 非威胁但员工可能不想看) / \
                   safe (常规工作邮件). \
                   区分要点: 营销邮件从合法域名/知名品牌发来, 内容是产品推广/newsletter/促销, \
                   不诱导密码/汇款/紧急操作 — 归 marketing 不归 suspicious. \
+                  发件人标了 (本单位) 的是员工自己单位发的: 安全预警、漏洞通报、公文、制度、会议/培训/活动通知等, \
+                  就算群发给很多人也是工作邮件, 归 safe, 不归 marketing; 只有仿冒/诱导迹象时才判 suspicious/phishing. \
                   规则未触发发件人仿冒时, 不能仅因地址 local-part 含下划线、salary 或业务缩写就判 suspicious; \
                   合法企业域名下的工资条、补贴、证书通知等常规业务邮件, 没有仿冒域名、敏感信息、登录或转账诱导时归 safe. \
                   返 JSON 数组, 每元素 {\"verdict\":\"...\",\"reason\":\"一句话理由\"}. \

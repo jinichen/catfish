@@ -82,7 +82,15 @@ pub struct PhishingScanResult {
     pub highest_severity: Severity,
     pub llm_verdict: Option<String>,    // "phishing" / "suspicious" / "marketing" (P3.5.197) / "safe" / None
     pub llm_reason: Option<String>,
+    /// 10/31: 复审规则的版本。规则改了 (比如「本单位群发不算营销」), 按旧规则判出的
+    /// 结果在启动加载时丢掉重审, 见 email_state::load_persisted_phishing_store。老文件里
+    /// 没有这个字段 → 0。
+    #[serde(default)]
+    pub review_rev: u32,
 }
+
+/// 当前复审规则版本。改了复审提示词 / 判定规则就 +1。
+pub const PHISHING_REVIEW_REV: u32 = 2;
 
 /// 输入: 单封邮件元数据.
 #[derive(Debug, Clone)]
@@ -139,6 +147,7 @@ pub fn scan_rules(msg: &MessageData) -> PhishingScanResult {
         highest_severity,
         llm_verdict: None,
         llm_reason: None,
+        review_rev: 0,
     }
 }
 
