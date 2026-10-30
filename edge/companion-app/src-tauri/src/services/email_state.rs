@@ -15,6 +15,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 use tauri::AppHandle;
 
+use super::phishing_scan::PhishingScanResult;
+
 pub(crate) const DEDUP_WINDOW_SECS: u64 = 24 * 3600; // 24h
 const URGENCY_CACHE_FILE: &str = "email_urgency.json";
 const PUSH_HISTORY_FILE: &str = "email_push_history.json";
@@ -178,6 +180,38 @@ pub(crate) fn load_persisted_action_cache() {
     }
 }
 
+// ── 10/30: 钓鱼扫描结果落盘 ──────────────────────────────────────────────
+//
+// 原来只在内存 (P3.3.58 段 2A 注释写着"段 2B/2C 再加 persist", 一直没加)。
+// Companion 每重启一次, 员工打开邮件页就把整张列表 20 封一批重新送 LLM 复审 ——
+// 10/30 20:15 一次重扫 10+ 批, 每批约 1 万 token, 早上 14:00 / 15:49 / 16:02 三次
+// 重启后也各来一轮。评级 / 分诊早就落盘了 (email_urgency.json / email_action.json),
+// 这里照同款补上。
+const PHISHING_CACHE_FILE: &str = "email_phishing.json";
+static PHISHING_STORE: OnceLock<Mutex<HashMap<String, PhishingScanResult>>> = OnceLock::new();
+
+pub(crate) fn phishing_store() -> &'static Mutex<HashMap<String, PhishingScanResult>> {
+    PHISHING_STORE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub(crate) fn persist_phishing_store() {
+    if let Ok(store) = phishing_store().lock() {
+        persist_json_atomic(PHISHING_CACHE_FILE, &*store);
+    }
+}
+
+pub(crate) fn load_persisted_phishing_store() {
+    let Some(path) = catfish_state_file(PHISHING_CACHE_FILE) else { return };
+    let Ok(content) = std::fs::read_to_string(&path) else { return };
+    let Ok(parsed) = serde_json::from_str::<HashMap<String, PhishingScanResult>>(&content) else {
+        return;
+    };
+    if let Ok(mut store) = phishing_store().lock() {
+        *store = parsed;
+        log::info!("email_scheduler: loaded {} phishing entries from {}", store.len(), path.display());
+    }
+}
+
 // ── 9/27: 邮件 id 迁移 (UIDVALIDITY 读错期间的旧 id → 核实后的新 id) ─────────
 //
 // catfish-email 以前把 IMAP 邮件 id 里的 UIDVALIDITY 一律写成 0 (读错了, 见
@@ -233,6 +267,7 @@ pub(crate) fn apply_id_migration() {
     let urgency = urgency_cache().lock().map(|mut c| rename_keys(&mut *c, &mapping)).unwrap_or(false);
     let action = action_cache().lock().map(|mut c| rename_keys(&mut *c, &mapping)).unwrap_or(false);
     let push = push_history().lock().map(|mut c| rename_keys(&mut *c, &mapping)).unwrap_or(false);
+    let phishing = phishing_store().lock().map(|mut c| rename_keys(&mut *c, &mapping)).unwrap_or(false);
     if urgency {
         persist_urgency_cache();
     }
@@ -242,11 +277,14 @@ pub(crate) fn apply_id_migration() {
     if push {
         persist_push_history();
     }
+    if phishing {
+        persist_phishing_store();
+    }
     if let Ok(mut seen) = applied.lock() {
         *seen = Some(modified);
     }
     log::info!(
-        "email id 迁移: 表 {} 条, 改了 urgency={urgency} action={action} push={push}",
+        "email id 迁移: 表 {} 条, 改了 urgency={urgency} action={action} push={push} phishing={phishing}",
         mapping.len()
     );
 }
@@ -274,5 +312,29 @@ mod tests_id_migration {
         assert!(cache.contains_key("imap|INBOX|0|9"), "表里没有的旧 id 不动");
         assert!(!cache.contains_key("imap|INBOX|0|1"));
         assert!(!rename_keys(&mut cache, &mapping), "再跑一遍什么都不改");
+    }
+}
+
+#[cfg(test)]
+mod tests_phishing_persist {
+    use super::PhishingScanResult;
+    use std::collections::HashMap;
+
+    /// 落盘用的是 serde_json pretty, 启动 load 用 from_str —— 两头格式必须对得上,
+    /// 否则 load 静默失败, 又回到每次重启整表重扫。
+    #[test]
+    fn phishing_store_round_trips_through_json() {
+        let mut m = HashMap::new();
+        m.insert(
+            "imap:1:42".to_string(),
+            PhishingScanResult {
+                message_id: "imap:1:42".into(),
+                llm_verdict: Some("marketing".into()),
+                ..Default::default()
+            },
+        );
+        let json = serde_json::to_string_pretty(&m).unwrap();
+        let back: HashMap<String, PhishingScanResult> = serde_json::from_str(&json).unwrap();
+        assert_eq!(back["imap:1:42"].llm_verdict.as_deref(), Some("marketing"));
     }
 }

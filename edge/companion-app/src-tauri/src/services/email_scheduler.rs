@@ -55,9 +55,10 @@ use crate::services::phishing_scan::{self, PhishingScanResult, Severity};
 use super::email_llm::call_rate_llm;
 use super::email_notify::{emit_urgent_event, send_notification};
 use super::email_state::{
-    action_cache, apply_id_migration, load_persisted_action_cache, load_persisted_state, now_epoch_secs,
-    persist_action_cache, persist_push_history, persist_urgency_cache, push_history,
-    urgency_cache, ActionEntry, APP_HANDLE, DEDUP_WINDOW_SECS,
+    action_cache, apply_id_migration, load_persisted_action_cache, load_persisted_phishing_store,
+    load_persisted_state, now_epoch_secs, persist_action_cache, persist_phishing_store,
+    persist_push_history, persist_urgency_cache, phishing_store, push_history, urgency_cache,
+    ActionEntry, APP_HANDLE, DEDUP_WINDOW_SECS,
 };
 use super::email_types::{EmailItem, Urgency};
 
@@ -268,6 +269,8 @@ pub fn schedule_email_scheduler(app: AppHandle) {
     load_persisted_state();
     // 8/21 分诊升级: action 缓存 (知/回/办+截止日) 同样重启不重评。
     load_persisted_action_cache();
+    // 10/30: 钓鱼扫描结果同样重启不重扫 (原来只在内存, 每次重启打开邮件页整表重扫)。
+    load_persisted_phishing_store();
     // 9/27: IMAP 归档不跟着评级的开关走 —— poll_secs=0 也要归档
     super::email_archive::schedule_email_archive();
 
@@ -440,12 +443,8 @@ async fn fetch_unread() -> Result<Vec<EmailItem>, String> {
 
 // ─── P3.3.58 phishing scan 集成 (段 2A) ──────────────────────
 //
-// in-memory store, 重启丢 (段 2B/2C 再加 persist + UI). 给前端通过
+// store 在 email_state.rs (10/30 起落盘, 重启不重扫)。给前端通过
 // phishing_for_message 查.
-static PHISHING_STORE: OnceLock<Mutex<HashMap<String, PhishingScanResult>>> = OnceLock::new();
-fn phishing_store() -> &'static Mutex<HashMap<String, PhishingScanResult>> {
-    PHISHING_STORE.get_or_init(|| Mutex::new(HashMap::new()))
-}
 
 /// 前端查单封邮件的 phishing 结果. 没扫过 → None.
 pub fn phishing_for_message(id: &str) -> Option<PhishingScanResult> {
@@ -645,12 +644,14 @@ async fn store_and_audit(items: &[EmailItem], scans: Vec<PhishingScanResult>) {
         for s in &scans {
             store.insert(s.message_id.clone(), s.clone());
         }
-        // 简单 LRU: 超 500 时丢一半
-        if store.len() > 500 {
-            let keys: Vec<_> = store.keys().take(250).cloned().collect();
+        // 10/30: 500 → URGENCY_CACHE_MAX (600)。上限不高于列表上限 (500) 就是
+        // 8/15 永动机的燃料 (见 URGENCY_CACHE_MAX 注释), 评级那边修了, 这里漏了。
+        if store.len() > URGENCY_CACHE_MAX {
+            let keys: Vec<_> = store.keys().take(URGENCY_CACHE_MAX / 2).cloned().collect();
             for k in keys { store.remove(&k); }
         }
     }
+    persist_phishing_store();
     // audit (鸿波拍板"只记触发规则的", persist_audit 内部已 filter)
     for (it, s) in items.iter().zip(scans.iter()) {
         phishing_scan::persist_audit(s, &it.subject, &it.sender).await;
