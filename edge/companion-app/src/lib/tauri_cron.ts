@@ -147,6 +147,9 @@ export const emailClassifyNow = (
     date?: string;
     is_read?: boolean;
     body_text?: string;
+    /** 10/31: 分诊判「直接发给我 / 抄送我 / 群发」用 */
+    recipients?: string[];
+    cc?: string[];
   }>,
 ) =>
   rawInvoke<{
@@ -165,6 +168,9 @@ export interface EmailDigestItem {
   is_read: boolean;
   has_attachments: boolean;
   body_text: string;     // list 场景为 snippet
+  /** 收件人 / 抄送 (base.py Message 本来就有, 客户端不给时为空数组或缺省) */
+  recipients?: string[];
+  cc?: string[];
   // P3.5.58 (6/22 鸿波 catch "有回复了为啥还让小鲶处理"): RFC 822 thread chain
   // 三件套, 让 isReplied(msg, list) 算法可靠判定 — ∃ R: R.in_reply_to ==
   // M.message_id OR M.message_id ∈ R.references.split().

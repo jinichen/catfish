@@ -63,6 +63,23 @@ fn safe_llm_does_not_clear_high_risk_rule() {
     assert!(!is_low_confidence_rule_only(&scan));
 }
 
+#[test]
+fn 显示名自称客服但域外部_只命中这一条时也算低置信度() {
+    let scan = PhishingScanResult {
+        message_id: "vendor-support".into(),
+        flags: vec![PhishingFlag {
+            rule_id: "PHISH-001-display-name-mismatch".into(),
+            severity: Severity::High,
+            category: crate::services::phishing_scan::Category::SenderSpoofing,
+            reason: "显示名含客服".into(),
+            matched_text: Some("阿里云客服 <noreply@aliyun.com>".into()),
+        }],
+        highest_severity: Severity::High,
+        ..Default::default()
+    };
+    assert!(is_low_confidence_rule_only(&scan));
+}
+
 /// 本文件里每个 `time::interval(` 都必须显式设 MissedTickBehavior。
 ///
 /// tokio 默认是 Burst: 循环体耗时超过周期时, 漏掉的 tick 会一次性连着补打。
@@ -154,7 +171,7 @@ fn mk(id: &str) -> EmailItem {
         id: id.to_string(),
         subject: "test".to_string(),
         sender: "x@y.com".to_string(),
-        snippet: String::new(),
+        ..Default::default()
     }
 }
 

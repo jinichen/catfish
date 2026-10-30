@@ -8,7 +8,7 @@
 
 use serde::Deserialize;
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Clone, Debug, Default)]
 pub(crate) struct EmailItem {
     pub(crate) id: String,
     pub(crate) subject: String,
@@ -19,6 +19,36 @@ pub(crate) struct EmailItem {
     /// default 兜底老调用方手工构造的 EmailItem (不给就空串, 行为同从前)。
     #[serde(default, rename = "body_text")]
     pub(crate) snippet: String,
+    /// 10/31: 这封收在哪个账号 + 收件人 / 抄送 —— 分诊判「直接发给我 / 抄送我 / 群发」用。
+    /// 原来模型只看主题 + 发件人 + 摘要, 群发给近百人的通报和点名找我办的事长得一样,
+    /// 「办」标得过多。CLI JSON 里本来就有 (base.py Message), 老调用方不给就空。
+    #[serde(default)]
+    pub(crate) account: String,
+    #[serde(default)]
+    pub(crate) recipients: Vec<String>,
+    #[serde(default)]
+    pub(crate) cc: Vec<String>,
+}
+
+impl EmailItem {
+    /// 分诊用的「收件方式」, 如 `直接发给我, 共 3 人` / `抄送我, 共 96 人`。
+    /// 不知道收件人 (老数据 / 客户端不给) 返回空串, 调用方就不写这一栏。
+    pub(crate) fn delivery_hint(&self) -> String {
+        let total = self.recipients.len() + self.cc.len();
+        if total == 0 {
+            return String::new();
+        }
+        let me = self.account.trim().to_lowercase();
+        let hit = |list: &[String]| !me.is_empty() && list.iter().any(|a| a.to_lowercase().contains(&me));
+        let how = if hit(&self.recipients) {
+            "直接发给我"
+        } else if hit(&self.cc) {
+            "抄送我"
+        } else {
+            "我不在收件人里 (邮件组 / 密送)"
+        };
+        format!("{how}, 共 {total} 人")
+    }
 }
 
 /// LLM 评级结果. fallback 'medium' 时不通知, 不阻塞.
@@ -77,5 +107,27 @@ mod tests {
         // 模型乱返不挂, 当 Medium
         assert_eq!(Urgency::from_label("garbage"), Urgency::Medium);
         assert_eq!(Urgency::from_label(""), Urgency::Medium);
+    }
+}
+
+#[cfg(test)]
+mod tests_delivery_hint {
+    use super::EmailItem;
+
+    fn item(account: &str, to: &[&str], cc: &[&str]) -> EmailItem {
+        EmailItem {
+            account: account.into(),
+            recipients: to.iter().map(|s| s.to_string()).collect(),
+            cc: cc.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn 直接_抄送_群发_不知道() {
+        assert_eq!(item("me@x.cn", &["Me <ME@x.cn>", "b@x.cn"], &[]).delivery_hint(), "直接发给我, 共 2 人");
+        assert_eq!(item("me@x.cn", &["a@x.cn"], &["me@x.cn", "c@x.cn"]).delivery_hint(), "抄送我, 共 3 人");
+        assert_eq!(item("me@x.cn", &["list@x.cn"], &[]).delivery_hint(), "我不在收件人里 (邮件组 / 密送), 共 1 人");
+        assert_eq!(item("me@x.cn", &[], &[]).delivery_hint(), "");
     }
 }

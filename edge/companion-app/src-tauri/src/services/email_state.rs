@@ -146,7 +146,13 @@ pub(crate) struct ActionEntry {
     /// YYYY-MM-DD, 只有 回/办 且邮件里有明确日期才有
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) deadline: Option<String>,
+    /// 10/31: 分诊规则版本 (老文件没有 → 0)。规则改了, 旧规则判的在启动加载时丢掉重判。
+    #[serde(default)]
+    pub(crate) rev: u32,
 }
+
+/// 当前分诊规则版本。10/31 → 2: 加「收件」一栏 (直接 / 抄送 / 群发) 和群发通知默认 知。
+pub(crate) const ACTION_RULES_REV: u32 = 2;
 
 const ACTION_CACHE_FILE: &str = "email_action.json";
 static ACTION_CACHE: OnceLock<Mutex<HashMap<String, ActionEntry>>> = OnceLock::new();
@@ -166,13 +172,17 @@ pub(crate) fn load_persisted_action_cache() {
     forget_applied_id_migration();
     if let Some(path) = catfish_state_file(ACTION_CACHE_FILE) {
         if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Ok(parsed) = serde_json::from_str::<HashMap<String, ActionEntry>>(&content) {
+            if let Ok(mut parsed) = serde_json::from_str::<HashMap<String, ActionEntry>>(&content) {
+                // 10/31: 旧规则判的丢掉, 打开邮件页时按新规则重判 (只这一次, 之后 rev 对上就留着)
+                let before = parsed.len();
+                parsed.retain(|_, e| e.rev >= ACTION_RULES_REV);
                 if let Ok(mut cache) = action_cache().lock() {
                     *cache = parsed;
                     log::info!(
-                        "email_scheduler: loaded {} action entries from {}",
+                        "email_scheduler: loaded {} action entries from {} (旧规则判的 {} 封丢掉重判)",
                         cache.len(),
-                        path.display()
+                        path.display(),
+                        before - cache.len(),
                     );
                 }
             }
@@ -225,16 +235,14 @@ pub(crate) fn persist_phishing_store() {
     }
 }
 
-/// 10/31: 按旧复审规则判成「营销」的丢掉, 打开邮件页时重审一次 (本单位群发的安全预警
-/// 之前被判营销)。别的档 (safe / suspicious / phishing) 规则没变, 留着不重花 token。
-fn drop_stale_marketing(
+/// 10/31: 按旧复审规则扫的丢掉, 打开邮件页时按新规则重扫一次 (之后 rev 对上就留着)。
+/// 旧规则两处错: 本单位群发的预警被判营销; 「本单位域」把每个发件人都算进去, 冒充发件人的
+/// 三条规则从没生效过 —— 已经在收件箱里的冒充邮件, 不重扫就一直漏着。
+fn drop_stale_phishing(
     mut map: HashMap<String, PhishingScanResult>,
 ) -> (HashMap<String, PhishingScanResult>, usize) {
     let before = map.len();
-    map.retain(|_, r| {
-        r.review_rev >= super::phishing_scan::PHISHING_REVIEW_REV
-            || r.llm_verdict.as_deref() != Some("marketing")
-    });
+    map.retain(|_, r| r.review_rev >= super::phishing_scan::PHISHING_REVIEW_REV);
     let dropped = before - map.len();
     (map, dropped)
 }
@@ -245,11 +253,11 @@ pub(crate) fn load_persisted_phishing_store() {
     let Ok(parsed) = serde_json::from_str::<HashMap<String, PhishingScanResult>>(&content) else {
         return;
     };
-    let (parsed, dropped) = drop_stale_marketing(parsed);
+    let (parsed, dropped) = drop_stale_phishing(parsed);
     if let Ok(mut store) = phishing_store().lock() {
         *store = parsed;
         log::info!(
-            "email_scheduler: loaded {} phishing entries from {} (旧规则判的营销 {} 封丢掉重审)",
+            "email_scheduler: loaded {} phishing entries from {} (旧规则扫的 {} 封丢掉重扫)",
             store.len(),
             path.display(),
             dropped,
@@ -410,7 +418,7 @@ mod tests_trim_cache {
 
 #[cfg(test)]
 mod tests_phishing_rev {
-    use super::{drop_stale_marketing, PhishingScanResult};
+    use super::{drop_stale_phishing, PhishingScanResult};
     use std::collections::HashMap;
 
     fn r(verdict: &str, rev: u32) -> PhishingScanResult {
@@ -418,14 +426,14 @@ mod tests_phishing_rev {
     }
 
     #[test]
-    fn 只丢旧规则判的营销() {
+    fn 旧规则扫的都丢_新规则的留着() {
+        let rev = super::super::phishing_scan::PHISHING_REVIEW_REV;
         let mut m = HashMap::new();
         m.insert("old-mkt".to_string(), r("marketing", 0));
         m.insert("old-safe".to_string(), r("safe", 0));
-        m.insert("new-mkt".to_string(), r("marketing", super::super::phishing_scan::PHISHING_REVIEW_REV));
-        let (m, dropped) = drop_stale_marketing(m);
-        assert_eq!(dropped, 1);
-        assert!(!m.contains_key("old-mkt"));
-        assert!(m.contains_key("old-safe") && m.contains_key("new-mkt"));
+        m.insert("new-mkt".to_string(), r("marketing", rev));
+        let (m, dropped) = drop_stale_phishing(m);
+        assert_eq!(dropped, 2);
+        assert!(m.contains_key("new-mkt") && m.len() == 1);
     }
 }

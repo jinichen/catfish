@@ -104,6 +104,9 @@ export function useEmailScanners(opts: {
             date: it.date,
             is_read: it.is_read,
             body_text: it.body_text,
+            // 10/31: 分诊要知道是直接发给我、抄送我还是群发 (群发的通报默认「知」)
+            recipients: it.recipients,
+            cc: it.cc,
           })));
           if (!cancelled) {
             setUrgencyMap(updated.urgency);

@@ -87,11 +87,14 @@ pub(crate) async fn call_rate_llm(items: &[EmailItem]) -> Result<Vec<Classificat
         .iter()
         .enumerate()
         .map(|(i, it)| {
+            // 10/31: 收件方式 —— 不知道 (老数据) 就不写这一栏
+            let hint = it.delivery_hint();
             format!(
-                "{}. 主题: {} | 发件人: {} | 摘要: {}",
+                "{}. 主题: {} | 发件人: {}{} | 摘要: {}",
                 i + 1,
                 truncate(&it.subject, 60),
                 truncate(&it.sender, 40),
+                if hint.is_empty() { String::new() } else { format!(" | 收件: {hint}") },
                 truncate(&it.snippet, 160),
             )
         })
@@ -99,9 +102,15 @@ pub(crate) async fn call_rate_llm(items: &[EmailItem]) -> Result<Vec<Classificat
         .join("\n");
 
     // ⚠ 协议跟 email_classify_parse.rs 一体两面, 改一处必改另一处 (那边有测试钉着)。
+    // 10/31: 加「收件」一栏 + 群发 / 抄送的判法。原来 460 封里标了 179 封办、68 封回 ——
+    // 群发给近百人的通报、各单位自查的预警, 跟点名找我办的事模型分不出来。
     let system = "你是邮件分诊助手. 对每封邮件给三个判断: \
                   u = 紧急度: 急 (老板/客户/紧急任务/临近截止) / 低 (newsletter/促销/自动通知) / 其它一律 中. \
                   a = 这封要收件人干什么: 知 (知悉即可, 不用动作) / 回 (要回信) / 办 (要办事, 如提交材料/审批/参加). \
+                  「收件」一栏说明这封是直接发给我、抄送我还是群发 (共几人). 抄送我的、或群发给很多人的通知 / 通报 / \
+                  预警 / 公文 / 制度, 默认 知; 只有正文明确要求每个收件人本人去做 (每人提交、填报、参加、完成) 才是 办; \
+                  「请各单位 / 各部门落实」这类是给负责人的, 我只是群发里的一个时归 知. 回 只给直接发给我并且在等我答复的. \
+                  系统自动发的通知、订阅、营销一律 知, u 给 低. \
                   d = 截止日期, 格式严格 YYYY-MM-DD, 只在 a 为 回/办 且邮件里有明确日期时给, 没有就省略这个键. 不要编造日期. \
                   返回 JSON 数组, 每封一个对象 {\"u\":..,\"a\":..,\"d\":..}. 不要其它任何解释.";
     let user = format!(

@@ -55,7 +55,7 @@ use crate::services::phishing_scan::{self, PhishingScanResult, Severity};
 use super::email_llm::call_rate_llm;
 use super::email_notify::{emit_urgent_event, send_notification};
 use super::email_state::{
-    action_cache, apply_id_migration, load_persisted_action_cache, load_persisted_phishing_store,
+    action_cache, apply_id_migration, ACTION_RULES_REV, load_persisted_action_cache, load_persisted_phishing_store,
     load_persisted_state, now_epoch_secs, persist_action_cache, persist_phishing_store,
     persist_push_history, persist_urgency_cache, phishing_store, push_history, trim_cache, urgency_cache,
     ActionEntry, APP_HANDLE, DEDUP_WINDOW_SECS,
@@ -148,6 +148,9 @@ pub async fn email_classify_now(
                 subject: it.subject.clone(),
                 sender: it.sender.clone(),
                 snippet: it.body_text.clone().unwrap_or_default(),
+                account: it.account.clone().unwrap_or_default(),
+                recipients: it.recipients.clone().unwrap_or_default(),
+                cc: it.cc.clone().unwrap_or_default(),
             })
             .collect()
     };
@@ -214,7 +217,7 @@ pub async fn email_phishing_scan_now(
                 subject: it.subject.clone(),
                 sender: it.sender.clone(),
                 // 钓鱼扫描不用 snippet (light scan 有自己的取正文路径), 空串即可
-                snippet: String::new(),
+                ..Default::default()
             })
             .collect()
     };
@@ -245,6 +248,9 @@ pub struct EmailItemInput {
     /// 8/21 分诊升级: 正文摘要 (列表场景的 body_text 就是 snippet)。
     /// Option + 缺省 None: 老调用方不传也能编译/反序列化, 只是提不出截止日。
     pub body_text: Option<String>,
+    /// 10/31: 收件人 / 抄送, 分诊判「直接发给我 / 抄送我 / 群发」(见 EmailItem::delivery_hint)。
+    pub recipients: Option<Vec<String>>,
+    pub cc: Option<Vec<String>>,
 }
 
 /// app 启动时调一次. poll_secs=0 (yaml 或 env) 则不起.
@@ -464,25 +470,6 @@ pub fn political_store_insert(id: &str, result: &PoliticalScanResult) {
     }
 }
 
-/// 从 EmailItem 列表抽 our_domains (员工账号自己的域名).
-/// 简单从 EmailItem.account 抽 (account 是邮箱地址形式 abc@xxx.cn).
-fn our_domains_from_items(items: &[EmailItem]) -> Vec<String> {
-    let mut set = std::collections::HashSet::new();
-    for it in items {
-        // EmailItem 没 account 字段, 走 sender 抽不太准. 暂时用 hardcoded 央企域 +
-        // sender domain 都加. 段 2B 改成读 ~/.hermes/auth.json 拿员工真正账号.
-        if let Some(domain) = it.sender.rfind('@').map(|i| it.sender[i + 1..].trim_end_matches('>').to_lowercase()) {
-            if !domain.is_empty() && domain != "<unknown>" {
-                set.insert(domain);
-            }
-        }
-    }
-    // 央企常用域兜底
-    set.insert("chinatelecom.cn".into());
-    set.insert("ffcs.cn".into());
-    set.into_iter().collect()
-}
-
 /// 段 2A: 对 new_items 跑 light scan + LLM batch 复审, 存 PHISHING_STORE +
 /// audit chain 留档. 失败静默, 不阻塞 scheduler.
 ///
@@ -492,9 +479,13 @@ fn our_domains_from_items(items: &[EmailItem]) -> Vec<String> {
 async fn scan_phishing_for_new(new_items: &[EmailItem]) {
     if new_items.is_empty() { return; }
 
-    let our_domains = our_domains_from_items(new_items);
-    // 10/31: 真正的员工自有域 (our_domains 上面那个把每个发件人的域都算进去了, 判不了内外)
+    // 10/31: 员工自己的邮箱域 (邮件客户端里配的账号 + 登录员工)。原来这里是
+    // our_domains_from_items: 把**这批每一封的发件人域**都算成本单位, 再写死
+    // chinatelecom.cn / ffcs.cn —— 装到别的单位就是别人的域; 更糟的是冒充者的域
+    // 也算本单位, 「显示名自称安全中心 / 形近域 / 子域冒充」三条规则 (PHISH-001/002/003)
+    // 实际上一直没生效。
     let own_domains = super::email_own_domains::own_mail_domains();
+    let our_domains = own_domains.clone();
 
     // 1. 规则 light scan
     let mut scans: Vec<PhishingScanResult> = new_items
@@ -593,8 +584,10 @@ async fn scan_phishing_for_new(new_items: &[EmailItem]) {
                 //
                 // 高危规则继续优先；但 PHISH-011 单独命中的中风险是低置信度
                 // 信号，LLM 明确判 safe 时应撤掉可疑标记，避免正常业务通知误报。
-                if v.verdict == "safe" && is_low_confidence_rule_only(s) {
-                    s.highest_severity = Severity::None;
+                if is_low_confidence_rule_only(s) && (v.verdict == "safe" || v.verdict == "marketing") {
+                    // 10/31: 营销也一样 —— 外部云厂商「技术支持」发的 newsletter 会命中 PHISH-001,
+                    // 模型看过说是营销, 就按营销 (灰标) 而不是钓鱼 (红标)
+                    s.highest_severity = if v.verdict == "marketing" { Severity::Low } else { Severity::None };
                 } else if s.highest_severity == Severity::None {
                     s.highest_severity = match v.verdict.as_str() {
                         "phishing" => Severity::High,
@@ -626,12 +619,15 @@ async fn scan_phishing_for_new(new_items: &[EmailItem]) {
     store_and_audit(new_items, scans).await;
 }
 
+/// 只命中「低置信度」规则 —— 模型明确判 safe 时撤掉标记。
+///
+/// PHISH-011 (主题含「紧急」) 早就在这张表里。10/31 加 PHISH-001 (显示名含「安全 / 客服 /
+/// 财务」但域不是本单位): 本单位域修对之后它才真正生效, 而外部正规机构 (银行客服、云厂商
+/// 技术支持) 的来信也会命中 —— 光凭显示名不够定罪, 让模型看过再说。形近域 (002) /
+/// 子域冒充 (003) 是硬证据, 不在表里, 模型说 safe 也照样标。
 fn is_low_confidence_rule_only(scan: &PhishingScanResult) -> bool {
-    scan.highest_severity == Severity::Medium
-        && !scan.flags.is_empty()
-        && scan.flags.iter().all(|flag| {
-            flag.rule_id == "PHISH-011-urgent-keywords" && flag.severity == Severity::Medium
-        })
+    const LOW_CONFIDENCE: &[&str] = &["PHISH-011-urgent-keywords", "PHISH-001-display-name-mismatch"];
+    !scan.flags.is_empty() && scan.flags.iter().all(|flag| LOW_CONFIDENCE.contains(&flag.rule_id.as_str()))
 }
 
 /// store + audit 提抽成单独函数防多入口重复.
@@ -710,8 +706,8 @@ async fn rate_emails(items: &[EmailItem]) -> Vec<Urgency> {
                     // (没有哨兵的话, "action 缺就再评"会在模型持续不给时
                     // 变成每次挂载重评一轮 —— 8/15 永动机的低频版)。
                     let entry = match &c.action {
-                        Some(a) => ActionEntry { action: a.clone(), deadline: c.deadline.clone() },
-                        None => ActionEntry { action: String::new(), deadline: None },
+                        Some(a) => ActionEntry { action: a.clone(), deadline: c.deadline.clone(), rev: ACTION_RULES_REV },
+                        None => ActionEntry { action: String::new(), deadline: None, rev: ACTION_RULES_REV },
                     };
                     ac.insert(it.id.clone(), entry);
                 }

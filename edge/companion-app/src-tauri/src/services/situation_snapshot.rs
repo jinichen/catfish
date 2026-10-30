@@ -137,7 +137,7 @@ mod tests {
     use super::*;
 
     fn mail(id: &str, subject: &str) -> EmailItem {
-        EmailItem { id: id.into(), subject: subject.into(), sender: "张三 <z@x.cn>".into(), snippet: "正文不该出现".into() }
+        EmailItem { id: id.into(), subject: subject.into(), sender: "张三 <z@x.cn>".into(), snippet: "正文不该出现".into(), ..Default::default() }
     }
 
     #[test]
