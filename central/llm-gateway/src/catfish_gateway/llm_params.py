@@ -373,6 +373,12 @@ def _build_litellm_params(body: dict, model) -> dict:
     if _ds_removed:
         logger.info("dashscope tool schema: %s 去掉嵌套自由对象可选字段 %s", model.name, _ds_removed)
 
+    # 10/30: DeepSeek 不认 response_format=json_schema (hermes 起标题用它, 每次 400),
+    # 降成 json_object + schema 写进提示。详见 response_format_compat.py。
+    from .response_format_compat import apply as _apply_response_format_compat  # noqa: PLC0415
+
+    _apply_response_format_compat(params, model)
+
     # 8/8: 出口前最后一道 messages 规范化 —— 删掉"给了但是空的" tool_calls。
     # 放这儿而不是入口: 压缩 / model handoff / lean inject 都在入口之后动
     # messages, 贴着出口做才盖得全。详见 message_normalize.py。
