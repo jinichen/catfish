@@ -10,6 +10,8 @@ plugin.py 会让每个拆出去的模块都反向依赖它, 成环。
 from __future__ import annotations
 
 import logging
+import sys as _sys
+import types as _types
 
 # 跟 plugin.py 同名 —— logging.getLogger 同名返回同一对象
 logger = logging.getLogger("catfish.xcatfish_user.plugin")
@@ -19,6 +21,31 @@ import contextvars as _cv
 from aiohttp import web
 
 
+# ── 10/30: 三条 CV 全进程只有一份 ────────────────────────────────────────
+#
+# hermes 会把这个插件加载**不止一次**: ~/.hermes/plugins/ 一份, 每个专家机器人
+# profile (profiles/expert-*/plugins/, Companion 建的软链) 再一份, 模块名不同
+# (hermes_plugins.catfish_xcatfish_user / ..._xcatfish_user__home_<hash>)。
+# 每份都对 AIAgent / APIServerAdapter 打一遍 class 级补丁, 层层叠起来; 但
+# middleware 只有一份在 set CV。原来每份各建自己的 ContextVar, 后加载那份的
+# 补丁读到的永远是空 —— 而它包在最外层、最后执行, 把 X-Catfish-Source 盖成
+# hermes:api_server。门户配额日志里聊天 / 邮件分诊 / 钓鱼复审的来源就是这么丢的
+# (10/30 加探针实测: 同一次 _apply_client_headers 跑两遍, 一遍 cv='companion-chat'
+# 一遍 cv='', 两遍的 ContextVar id 不同)。
+#
+# 所以 CV 挂到一个固定名字的进程级模块上, 不管哪份插件 import 都拿同一个对象。
+_SHARED_NAME = "_catfish_xcatfish_user_shared_ctx"
+_SHARED = _sys.modules.setdefault(_SHARED_NAME, _types.ModuleType(_SHARED_NAME))
+
+
+def _shared_cv(name: str) -> "_cv.ContextVar[str]":
+    cv = getattr(_SHARED, name, None)
+    if cv is None:
+        cv = _cv.ContextVar(name, default="")
+        setattr(_SHARED, name, cv)
+    return cv
+
+
 # contextvar: 真独立的 X-Catfish-User / picker model 传输通道.
 # middleware 从 request 提取 → set CV → handler async 链路全程能 get().
 # _create_agent wrap 从 CV 兜底读, 不依赖 hermes caller 在 handler mid-method
@@ -26,10 +53,10 @@ from aiohttp import web
 #
 # 为什么 contextvar 而不是 request["x"]: _create_agent 签名全 kwargs 没 request,
 # wrap 拿不到. contextvar 在 asyncio 同 context 树自动透传, 任何深处函数都能 get.
-CV_CF_USER: "_cv.ContextVar[str]" = _cv.ContextVar("catfish_outgoing_user", default="")
+CV_CF_USER: "_cv.ContextVar[str]" = _shared_cv("catfish_outgoing_user")
 
 
-CV_PICKER_MODEL: "_cv.ContextVar[str]" = _cv.ContextVar("picker_model_override", default="")
+CV_PICKER_MODEL: "_cv.ContextVar[str]" = _shared_cv("picker_model_override")
 
 
 # P41 (8/8 鸿波"advisor 到底调没调"): 把 Companion 标的 catfish_source 透过 hermes
@@ -50,7 +77,7 @@ CV_PICKER_MODEL: "_cv.ContextVar[str]" = _cv.ContextVar("picker_model_override",
 # 修法跟 X-Catfish-User 完全同构 (同一条 CV 通道 + 同一处 default_headers),
 # 不新增 patch 点。网关侧一行不用改 —— app.py:2903 本来就先读
 # `x-catfish-source` header, query 只是它的 fallback。
-CV_CF_SOURCE: "_cv.ContextVar[str]" = _cv.ContextVar("catfish_source", default="")
+CV_CF_SOURCE: "_cv.ContextVar[str]" = _shared_cv("catfish_source")
 
 
 _PICKER_PLACEHOLDERS = {"", "hermes-agent", None}
