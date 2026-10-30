@@ -365,6 +365,14 @@ def _build_litellm_params(body: dict, model) -> dict:
             params.get("tool_choice"),
         )
 
+    # 10/30: 百炼解析不了嵌套的"自由对象"工具参数, 一碰到就把流收掉 ——
+    # delegate_task 只吐出 `{"tasks": ` 就 stop, hermes 当成截断。详见 dashscope_tool_schema.py。
+    from .dashscope_tool_schema import apply as _apply_dashscope_tool_schema  # noqa: PLC0415
+
+    _ds_removed = _apply_dashscope_tool_schema(params, model)
+    if _ds_removed:
+        logger.info("dashscope tool schema: %s 去掉嵌套自由对象可选字段 %s", model.name, _ds_removed)
+
     # 8/8: 出口前最后一道 messages 规范化 —— 删掉"给了但是空的" tool_calls。
     # 放这儿而不是入口: 压缩 / model handoff / lean inject 都在入口之后动
     # messages, 贴着出口做才盖得全。详见 message_normalize.py。

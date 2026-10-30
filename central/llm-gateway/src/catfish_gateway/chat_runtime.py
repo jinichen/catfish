@@ -25,6 +25,7 @@ from .errors import (
 )
 from .fallback import with_fallback
 from .llm_params import _extract_nested_usage, _raise_upstream_error
+from .tool_call_retry import ToolCallHold
 
 logger = logging.getLogger("catfish.gateway")
 
@@ -291,6 +292,8 @@ async def _stream_chat_completion(
         last_finish_reason: str | None = None
         cumulative_content = ""
         cumulative_has_tool_call = False
+        # 10/30: tool_calls 扣到流末尾验参数, 半截就重发上游, 见 tool_call_retry.py
+        tc_hold = ToolCallHold(_KEEPALIVE_INTERVAL_SECS)
 
         # 写出首 chunk (上面 with_fallback 拉到的那一个)
         if first_chunk is not None:
@@ -328,7 +331,8 @@ async def _stream_chat_completion(
                         chunk_stats["empty"] += 1
                     if choice0.get("finish_reason"):
                         last_finish_reason = choice0["finish_reason"]
-            yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+            for line in tc_hold.offer(data):
+                yield line
 
         # 后续 chunks. _stream_with_keepalive 包装: chunk 间隔 > 30s 时插 SSE
         # comment 防客户端 / 中间代理 timeout 断开.
@@ -381,7 +385,16 @@ async def _stream_chat_completion(
                         chunk_stats["empty"] += 1
                     if choice0.get("finish_reason"):
                         last_finish_reason = choice0["finish_reason"]
-            yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+            for line in tc_hold.offer(data):
+                yield line
+
+        async for line in tc_hold.flush(
+            lambda: _start_stream(used_model), _stream_with_keepalive, used_model.name, request_id,
+        ):
+            yield line
+        # 重发是真花了钱的, 配额 / 审计按实际消耗记
+        prompt_tokens = (prompt_tokens or 0) + tc_hold.usage.get("prompt_tokens", 0)
+        completion_tokens = (completion_tokens or 0) + tc_hold.usage.get("completion_tokens", 0)
 
         # 流末尾 stat 日志 (debug 用 — 看 chunk 形态 + finish_reason)
         if chunk_stats["total"] > 0:
