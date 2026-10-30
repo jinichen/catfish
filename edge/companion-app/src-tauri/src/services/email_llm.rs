@@ -134,11 +134,8 @@ pub(crate) async fn call_rate_llm(items: &[EmailItem]) -> Result<Vec<Classificat
     .build()
     .map_err(|e| format!("reqwest build 失败: {e}"))?;
 
-    let resp = client
-        .post(format!("{base_url}/v1/chat/completions"))
+    let resp = service_llm_post(&client, &base_url, "companion-email-scheduler")
         .header("Authorization", &auth_header)
-        .header("X-Catfish-Source", "companion-email-scheduler")
-        .header("X-Catfish-Skip-Identity", "true")  // 不需要 SOUL inject, 服务式调用
         .json(&req)
         .send()
         .await
@@ -171,4 +168,49 @@ pub(crate) async fn call_rate_llm(items: &[EmailItem]) -> Result<Vec<Classificat
     // 老 parse_urgencies 删掉 —— 它的全部场景 (fence/前缀文字/纯字符串数组/
     // 无数组报错) 都在新解析器的测试里, 含老格式兼容。
     parse_classifications(&content)
+}
+
+
+/// 后台分类调用 (邮件分诊 / 钓鱼复审) 的 POST: 地址带来源标记, 头带员工。
+///
+/// 10/30 鸿波看门户配额日志: 这两类调用显示成「client:hermes-cli · 对话」——
+/// 员工和来源都丢了, 配额记不到人, 也看不出是邮件在跑。原来只在请求头上标
+/// `X-Catfish-Source` / `X-Catfish-Skip-Identity`, 也不带 `X-Catfish-User`。
+/// 早安参谋走同一条 hermes 8642 却标得对, 它的标记写在 URL 上
+/// (briefing_advisor_common.ts `SERVICE_LLM_QUERY`), 员工走 `X-Catfish-User` 头。
+/// 这里照它的写法来; 原来的两个头也留着, 网关直连时照样认。
+pub(crate) fn service_llm_post(
+    client: &reqwest::Client,
+    base_url: &str,
+    source: &str,
+) -> reqwest::RequestBuilder {
+    let mut rb = client
+        .post(service_llm_url(base_url, source))
+        .header("X-Catfish-Source", source)
+        .header("X-Catfish-Skip-Identity", "true"); // 不需要 SOUL inject, 服务式调用
+    if let Some(user) = crate::services::oauth::current_user_sub() {
+        rb = rb.header("X-Catfish-User", user);
+    }
+    rb
+}
+
+fn service_llm_url(base_url: &str, source: &str) -> String {
+    format!(
+        "{}/v1/chat/completions?catfish_source={source}&catfish_skip_identity=1&catfish_internal=1",
+        base_url.trim_end_matches('/'),
+    )
+}
+
+#[cfg(test)]
+mod service_llm_url_tests {
+    use super::service_llm_url;
+
+    #[test]
+    fn source_and_flags_ride_on_the_url() {
+        assert_eq!(
+            service_llm_url("http://localhost:8642/", "companion-phishing-scan"),
+            "http://localhost:8642/v1/chat/completions?catfish_source=companion-phishing-scan\
+             &catfish_skip_identity=1&catfish_internal=1",
+        );
+    }
 }

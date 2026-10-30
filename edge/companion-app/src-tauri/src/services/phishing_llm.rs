@@ -119,11 +119,8 @@ pub async fn batch_llm_review(
     .build()
     .map_err(|e| format!("reqwest build 失败: {e}"))?;
 
-    let resp = client
-        .post(format!("{base_url}/v1/chat/completions"))
+    let resp = super::email_llm::service_llm_post(&client, base_url, "companion-phishing-scan")
         .header("Authorization", format!("Bearer {token}"))
-        .header("X-Catfish-Source", "companion-phishing-scan")
-        .header("X-Catfish-Skip-Identity", "true")
         .json(&req)
         .send()
         .await
