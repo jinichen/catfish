@@ -46,6 +46,31 @@ def _shared_cv(name: str) -> "_cv.ContextVar[str]":
     return cv
 
 
+def claim_process_patches(owner: str) -> bool:
+    """进程里第一份插件拿到「打全局补丁」的资格, 之后加载的那几份返回 False。
+
+    10/30 实测 (主 gateway 进程): ~/.hermes/plugins 那份和专家机器人 profile 那份
+    各调一次 register, 拿到的是**两个不同的 PluginContext** —— 钩子 / 工具是按
+    profile 各挂各的, 工具调用前的检查只走主 profile 那份。所以钩子和工具两份都要
+    注册; 但 monkeypatch 是改 class / 模块的, 全进程只该打一次, 打两遍就是每次
+    调用跑两遍 (P10 设头) 外加 egress 记两笔。
+    """
+    current = getattr(_SHARED, "patch_owner", None)
+    if current is None:
+        _SHARED.patch_owner = owner
+        return True
+    return current == owner
+
+
+def mark_process_patches_installed() -> None:
+    _SHARED.patches_installed = True
+
+
+def process_patches_installed() -> bool:
+    """全局补丁有没有被**某一份**插件装好 (不一定是本份)。"""
+    return bool(getattr(_SHARED, "patches_installed", False))
+
+
 # contextvar: 真独立的 X-Catfish-User / picker model 传输通道.
 # middleware 从 request 提取 → set CV → handler async 链路全程能 get().
 # _create_agent wrap 从 CV 兜底读, 不依赖 hermes caller 在 handler mid-method

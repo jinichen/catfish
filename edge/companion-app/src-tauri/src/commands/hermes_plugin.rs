@@ -172,6 +172,9 @@ pub fn bootstrap_hermes_plugin() {
     // 1b) 红线策略插件 catfish-policy (10/21): 同一套同步 + 启用, 变了一起重启
     plugin_changed |= super::hermes_policy_plugin::bootstrap_policy_plugin();
 
+    // 1c) 专家机器人 profile 里那份 (10/30): 主 gateway 进程也会加载它, 不同步就一直是旧版
+    plugin_changed |= super::hermes_profile_plugins::sync_profile_copies(PLUGIN_NAME, BAKED_FILES);
+
     // 2) ensure config.yaml plugins.enabled 含 catfish-xcatfish-user
     match ensure_plugin_enabled_in_config() {
         Ok(true) => log::info!(

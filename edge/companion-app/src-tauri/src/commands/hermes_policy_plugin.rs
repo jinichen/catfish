@@ -38,6 +38,9 @@ pub fn bootstrap_policy_plugin() -> bool {
             return false;
         }
     };
+    // 10/30: 专家机器人 profile 里的副本一起刷新 (见 hermes_profile_plugins.rs)
+    let changed = changed
+        | super::hermes_profile_plugins::sync_profile_copies(POLICY_PLUGIN_NAME, POLICY_BAKED_FILES);
     if let Some(cfg) = config_yaml_path() {
         match ensure_named_plugin_enabled_at(&cfg, POLICY_PLUGIN_NAME) {
             Ok(true) => log::info!("[policy] config.yaml plugins.enabled += {POLICY_PLUGIN_NAME}"),

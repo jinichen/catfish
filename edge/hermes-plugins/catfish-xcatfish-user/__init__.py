@@ -86,20 +86,32 @@ def register(ctx) -> None:
 
     _mod = _load_plugin_module()
 
+    # 10/30: 同一进程里这个插件会被加载不止一份 (主目录 + 每个专家机器人 profile)。
+    # 钩子 / 工具按 PluginContext 各挂各的, 照常注册; 改 class / 模块的全局补丁
+    # (egress 挂钩、P0-P59) 只让第一份打, 后面几份跳过, 免得层层叠加。
+    # 见 plugin_ctx.claim_process_patches。
+    _owns_patches = _mod.plugin_ctx.claim_process_patches(__name__)
+    if not _owns_patches:
+        logger.info(
+            "catfish-xcatfish-user: %s 不是本进程第一份, 只注册钩子 / 工具, 全局补丁由第一份负责",
+            __name__,
+        )
+
     # 10/24 数据外发记录: hermes 出口挂钩 httpx / requests / aiohttp, 「带内容出本机」「发给第三方」
     # 的请求记进 ~/.catfish/outbound_log.db (见 egress_log.py)。挂不上只是不记, 不影响 hermes 起来。
-    try:
-        from pathlib import Path as _PathE
-        import importlib.util as _iuE
-        _specE = _iuE.spec_from_file_location(
-            "_catfish_xcatfish_user_egress_log", _PathE(__file__).parent / "egress_log.py",
-        )
-        _egress = _iuE.module_from_spec(_specE)
-        _specE.loader.exec_module(_egress)
-        _egress.install("hermes")
-        logger.info("catfish-xcatfish-user: 数据外发记录挂钩 ✓")
-    except Exception as e:
-        logger.warning("catfish-xcatfish-user 数据外发记录挂钩失败: %s (不影响对话)", e)
+    if _owns_patches:
+        try:
+            from pathlib import Path as _PathE
+            import importlib.util as _iuE
+            _specE = _iuE.spec_from_file_location(
+                "_catfish_xcatfish_user_egress_log", _PathE(__file__).parent / "egress_log.py",
+            )
+            _egress = _iuE.module_from_spec(_specE)
+            _specE.loader.exec_module(_egress)
+            _egress.install("hermes")
+            logger.info("catfish-xcatfish-user: 数据外发记录挂钩 ✓")
+        except Exception as e:
+            logger.warning("catfish-xcatfish-user 数据外发记录挂钩失败: %s (不影响对话)", e)
 
     # Step 1: 静态文件检查 patch target 存在 (不 import 真模块, 避开 partial)
     try:
@@ -306,6 +318,11 @@ def register(ctx) -> None:
     #
     # 顺手把同步段拆 2 个 try (P0-P9 一块 + P15.2 单独) — 即使别处 patch fail
     # 也保证 P15.2 装上, 不再 cascade.
+    # 下面全是进程级的: 同步补丁、P15.2 中间件、后台 install (P10-P59)。不是第一份就到此为止。
+    if not _owns_patches:
+        logger.info("catfish-xcatfish-user: register ✓ (%s 只注册钩子 / 工具)", __name__)
+        return
+
     try:
         _mod._patch_asyncio_executor_for_contextvars()  # P0
         _mod._patch_p1_agent_init()                      # P1

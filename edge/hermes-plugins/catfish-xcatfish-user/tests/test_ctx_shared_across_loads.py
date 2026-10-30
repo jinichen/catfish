@@ -30,3 +30,32 @@ def test_两份插件共用同一组_contextvar():
         assert b.CV_CF_SOURCE.get() == "companion-chat"
     finally:
         a.CV_CF_SOURCE.reset(token)
+
+
+def test_全局补丁只归第一份插件(monkeypatch):
+    """钩子 / 工具两份都注册 (按 profile 各挂各的), 改 class 的补丁只打一遍。"""
+    a = _load_as("hermes_plugins.catfish_xcatfish_user.plugin_ctx_t2")
+    b = _load_as("hermes_plugins.catfish_xcatfish_user__home_abc.plugin_ctx_t2")
+    monkeypatch.delattr(a._SHARED, "patch_owner", raising=False)
+    monkeypatch.delattr(a._SHARED, "patches_installed", raising=False)
+    assert a.claim_process_patches("hermes_plugins.catfish_xcatfish_user") is True
+    assert b.claim_process_patches("hermes_plugins.catfish_xcatfish_user__home_abc") is False
+    # 同一份再问一次 (比如 hermes 重复调 register) 仍然是它的
+    assert a.claim_process_patches("hermes_plugins.catfish_xcatfish_user") is True
+    # 第二份的工具检查钩子看的是「进程里有没有一份装好」, 不是只看自己
+    assert b.process_patches_installed() is False
+    a.mark_process_patches_installed()
+    assert b.process_patches_installed() is True
+
+
+def test_register_非第一份不碰全局补丁():
+    """__init__.register 里: 非第一份在进程级补丁之前 return, egress 也不挂。"""
+    src = (PLUGIN_DIR / "__init__.py").read_text(encoding="utf-8")
+    gate = src.index("if not _owns_patches:\n        logger.info(\"catfish-xcatfish-user: register ✓")
+    assert gate < src.index("_mod._patch_asyncio_executor_for_contextvars()")
+    assert gate < src.index("_mod._patch_p15_2_chat_approval_route()")
+    assert gate < src.index("target=_delayed_install")
+    assert src.index("if _owns_patches:") < src.index('_egress.install("hermes")')
+    # 钩子 / 工具注册在门之前, 两份都会做
+    assert src.index('ctx.register_hook("pre_tool_call"') < gate
+    assert src.index("ctx.register_tool(") < gate

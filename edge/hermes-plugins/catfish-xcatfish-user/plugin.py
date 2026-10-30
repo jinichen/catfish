@@ -603,6 +603,7 @@ def install() -> None:
     _verify_patch_targets()
     _apply_patches()
     _PATCHED = True
+    plugin_ctx.mark_process_patches_installed()
     _INSTALLED = True  # 6/1 BL-PLUGIN-HERMES-015-LAZY-INSTALL: pre_tool_call hook 看这个
 
     # 8/13: 原来是写死的 "(15 patches applied)" —— 实际 33 个入口, 而且 19 个可选
@@ -645,7 +646,8 @@ def pre_tool_call_safety_check(*args, **kwargs):
       v2 改成: catfish-memory plugin prefetch 真加 _render_safety_redline 真注入
       user message 末尾, LLM 真每轮看红线 prompt 自查不绕 sandbox.
     """
-    if not _INSTALLED:
+    # 10/30: 专家机器人 profile 那份不自己打补丁 (claim_process_patches), 看进程里那份装好没有
+    if not (_INSTALLED or plugin_ctx.process_patches_installed()):
         raise RuntimeError(
             "catfish-xcatfish-user 未装载: hermes 主流程 ready 后后台 install 没完成. "
             "可能 hermes 0.15+ 内部变化, 看 ~/.hermes/logs/mcp-stderr.log. "

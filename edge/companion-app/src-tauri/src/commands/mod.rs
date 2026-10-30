@@ -78,6 +78,7 @@ pub mod hermes_plugin_env; // 8/9: 从 hermes_plugin 抽出 —— ~/.hermes/.en
 pub mod hermes_plugin_baked; // 8/21: BAKED_* 常量表, 从 hermes_plugin 抽出 (800 行红线)
 pub(crate) mod hermes_runtime_deps; // 10/21: hermes 实际在用的 Python 环境 (含它另建的) 缺鲶鱼的包就离线补
 pub(crate) mod hermes_dep_overrides; // 10/25: 不升 hermes 单独把有漏洞的依赖换新 (hermes-dep-overrides.txt)
+pub mod hermes_profile_plugins; // 10/30: 专家机器人 profile 里的插件副本跟着同步
 pub mod hermes_policy_plugin; // 10/21: 红线策略插件 catfish-policy 随 Companion 装 + 启用
 pub mod hermes_plugin; // P3.5.56 (6/21 鸿波): Companion boot 自动装 catfish-xcatfish-user plugin (baked + ensure config.yaml enabled)
 pub mod hermes_store_guard; // 10/29: hermes 登记的 Python 没建好依赖环境 → 挪开登记, 网关回到 venv
