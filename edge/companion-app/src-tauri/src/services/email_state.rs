@@ -180,6 +180,31 @@ pub(crate) fn load_persisted_action_cache() {
     }
 }
 
+// ── 10/30: 缓存超上限时怎么腾地方 ──────────────────────────────────────────
+//
+// 原来四处 (评级 ×2 / 分诊 / 钓鱼) 都是「超 600 就随便丢一半」: HashMap 的
+// `keys().take(300)` 是随机的 300 个, 正在列表里显示的邮件也照丢。员工下次打开
+// 邮件页, 被丢的那些就当成"没评过"重新送模型 —— 10/30 22:06 实测缓存从 598 掉到
+// 323 后, 一打开邮件页连评 4 批 (每批 11–17 封, 约 1 万 token)。
+//
+// 现在: 上限抬到 URGENCY_CACHE_MAX (5000, 十倍于列表上限, 几个月才满一次); 真满了
+// 先丢不在 `keep` (这一批刚评的) 里的, 丢到上限一半。
+pub(crate) fn trim_cache<V>(map: &mut HashMap<String, V>, cap: usize, keep: &[&str]) {
+    if map.len() <= cap {
+        return;
+    }
+    let excess = map.len() - cap / 2;
+    let victims: Vec<String> = map
+        .keys()
+        .filter(|k| !keep.contains(&k.as_str()))
+        .take(excess)
+        .cloned()
+        .collect();
+    for k in victims {
+        map.remove(&k);
+    }
+}
+
 // ── 10/30: 钓鱼扫描结果落盘 ──────────────────────────────────────────────
 //
 // 原来只在内存 (P3.3.58 段 2A 注释写着"段 2B/2C 再加 persist", 一直没加)。
@@ -336,5 +361,29 @@ mod tests_phishing_persist {
         let json = serde_json::to_string_pretty(&m).unwrap();
         let back: HashMap<String, PhishingScanResult> = serde_json::from_str(&json).unwrap();
         assert_eq!(back["imap:1:42"].llm_verdict.as_deref(), Some("marketing"));
+    }
+}
+
+#[cfg(test)]
+mod tests_trim_cache {
+    use super::trim_cache;
+    use std::collections::HashMap;
+
+    #[test]
+    fn 没超上限不动() {
+        let mut m: HashMap<String, u8> = (0..10).map(|i| (i.to_string(), 0)).collect();
+        trim_cache(&mut m, 10, &[]);
+        assert_eq!(m.len(), 10);
+    }
+
+    #[test]
+    fn 超了丢到一半_刚评的那批一个不丢() {
+        let mut m: HashMap<String, u8> = (0..11).map(|i| (i.to_string(), 0)).collect();
+        let keep = ["0", "1", "2", "3", "4"];
+        trim_cache(&mut m, 10, &keep);
+        assert_eq!(m.len(), 5);
+        for k in keep {
+            assert!(m.contains_key(k), "{k} 是刚评的, 不该被丢");
+        }
     }
 }

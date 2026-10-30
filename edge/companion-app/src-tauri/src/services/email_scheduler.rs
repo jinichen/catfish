@@ -57,7 +57,7 @@ use super::email_notify::{emit_urgent_event, send_notification};
 use super::email_state::{
     action_cache, apply_id_migration, load_persisted_action_cache, load_persisted_phishing_store,
     load_persisted_state, now_epoch_secs, persist_action_cache, persist_phishing_store,
-    persist_push_history, persist_urgency_cache, phishing_store, push_history, urgency_cache,
+    persist_push_history, persist_urgency_cache, phishing_store, push_history, trim_cache, urgency_cache,
     ActionEntry, APP_HANDLE, DEDUP_WINDOW_SECS,
 };
 use super::email_types::{EmailItem, Urgency};
@@ -167,18 +167,9 @@ pub async fn email_classify_now(
         for (it, u) in to_rate.iter().zip(rated.iter()) {
             cache.insert(it.id.clone(), u.as_label().to_string());
         }
-        // 8/15: 200 → URGENCY_CACHE_MAX (600)。见常量上那段注释 ——
-        // 上限低于列表上限 500 是那个"永动机"的燃料之一。
-        if cache.len() > URGENCY_CACHE_MAX {
-            let keys: Vec<_> = cache
-                .keys()
-                .take(URGENCY_CACHE_MAX / 2)
-                .cloned()
-                .collect();
-            for k in keys {
-                cache.remove(&k);
-            }
-        }
+        // 8/15: 上限必须高于列表上限 500 (永动机燃料), 10/30: 超了不再随机丢 —— 见 trim_cache
+        let keep: Vec<&str> = to_rate.iter().map(|it| it.id.as_str()).collect();
+        trim_cache(&mut cache, URGENCY_CACHE_MAX, &keep);
     }
     // BL-COMPANION-BRIEFING-V2 sub-task 2 (5/20): 持久化, 重启不重评
     persist_urgency_cache();
@@ -353,12 +344,8 @@ pub fn schedule_email_scheduler(app: AppHandle) {
                                 for (it, u) in new_items.iter().zip(rated.iter()) {
                                     cache.insert(it.id.clone(), u.as_label().to_string());
                                 }
-                                // 简单 LRU: 超 200 时随便丢一半 (BTreeMap 不行用 HashMap)
-                                if cache.len() > URGENCY_CACHE_MAX {
-                                    let keys: Vec<_> = cache
-                                        .keys().take(URGENCY_CACHE_MAX / 2).cloned().collect();
-                                    for k in keys { cache.remove(&k); }
-                                }
+                                let keep: Vec<&str> = new_items.iter().map(|it| it.id.as_str()).collect();
+                                trim_cache(&mut cache, URGENCY_CACHE_MAX, &keep);
                             }
                             // BL-COMPANION-BRIEFING-V2 sub-task 2 (5/20): 评完一批
                             // 异步写 urgency_cache 到 disk. 失败静默, 不阻塞 scheduler.
@@ -467,16 +454,12 @@ pub fn political_for_message(id: &str) -> Option<PoliticalScanResult> {
     political_store().lock().ok().and_then(|m| m.get(id).cloned())
 }
 
-/// 写入 POLITICAL_STORE. 超 500 时丢一半 (跟 phishing 同 LRU 策略).
+/// 写入 POLITICAL_STORE. 超上限时腾地方的规矩跟钓鱼 / 评级同款 (10/30: 不再随机丢一半,
+/// 刚扫的这封留着; 见 email_state::trim_cache)。
 pub fn political_store_insert(id: &str, result: &PoliticalScanResult) {
     if let Ok(mut store) = political_store().lock() {
         store.insert(id.to_string(), result.clone());
-        if store.len() > 500 {
-            let keys: Vec<_> = store.keys().take(250).cloned().collect();
-            for k in keys {
-                store.remove(&k);
-            }
-        }
+        trim_cache(&mut store, URGENCY_CACHE_MAX, &[id]);
     }
 }
 
@@ -644,12 +627,10 @@ async fn store_and_audit(items: &[EmailItem], scans: Vec<PhishingScanResult>) {
         for s in &scans {
             store.insert(s.message_id.clone(), s.clone());
         }
-        // 10/30: 500 → URGENCY_CACHE_MAX (600)。上限不高于列表上限 (500) 就是
-        // 8/15 永动机的燃料 (见 URGENCY_CACHE_MAX 注释), 评级那边修了, 这里漏了。
-        if store.len() > URGENCY_CACHE_MAX {
-            let keys: Vec<_> = store.keys().take(URGENCY_CACHE_MAX / 2).cloned().collect();
-            for k in keys { store.remove(&k); }
-        }
+        // 10/30: 500 → URGENCY_CACHE_MAX。上限不高于列表上限 (500) 就是 8/15 永动机的
+        // 燃料, 评级那边修了, 这里漏了; 超了也不再随机丢 (见 trim_cache)。
+        let keep: Vec<&str> = items.iter().map(|it| it.id.as_str()).collect();
+        trim_cache(&mut store, URGENCY_CACHE_MAX, &keep);
     }
     persist_phishing_store();
     // audit (鸿波拍板"只记触发规则的", persist_audit 内部已 filter)
@@ -672,7 +653,11 @@ async fn store_and_audit(items: &[EmailItem], scans: Vec<PhishingScanResult>) {
 ///
 /// 改这个值之前先确认 MAX_EMAIL_LIST_LIMIT 没变大 —— 两者的大小关系是
 /// 这里唯一要守的不变量, 见 tests 里的 `urgency_cache_上限必须大于列表上限`。
-pub(crate) const URGENCY_CACHE_MAX: usize = 600;
+///
+/// 10/30: 600 → 5000。600 只比列表多 100, 新邮件一来就超, 超了随机丢一半
+/// (含正在显示的), 打开邮件页就成批重评。5000 条 urgency/action 盘上不到 1MB,
+/// 钓鱼那份几 MB; 满了怎么丢见 email_state::trim_cache。
+pub(crate) const URGENCY_CACHE_MAX: usize = 5000;
 
 async fn rate_emails(items: &[EmailItem]) -> Vec<Urgency> {
     let cfg = email_config::email_config();
@@ -716,13 +701,9 @@ async fn rate_emails(items: &[EmailItem]) -> Vec<Urgency> {
                     };
                     ac.insert(it.id.clone(), entry);
                 }
-                // 上限跟 urgency 同款 (8/15: 上限低于列表上限是永动机燃料)
-                if ac.len() > URGENCY_CACHE_MAX {
-                    let keys: Vec<_> = ac.keys().take(URGENCY_CACHE_MAX / 2).cloned().collect();
-                    for k in keys {
-                        ac.remove(&k);
-                    }
-                }
+                // 上限跟 urgency 同款 (8/15: 上限低于列表上限是永动机燃料; 10/30: 不随机丢)
+                let keep: Vec<&str> = items.iter().map(|it| it.id.as_str()).collect();
+                trim_cache(&mut ac, URGENCY_CACHE_MAX, &keep);
             }
             persist_action_cache();
             cls.iter().map(|c| Urgency::from_label(&c.urgency_label)).collect()
