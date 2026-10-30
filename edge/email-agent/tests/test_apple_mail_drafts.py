@@ -404,3 +404,13 @@ def test_build_time_compile_check_covers_every_template():
                      "_AS_SEND_MESSAGE", "_AS_DELETE_DRAFT", "_AS_ACCOUNT_SETTINGS"):
         assert expected in names
     assert all(not re.search(r"\{[A-Z_]+\}", v) for v in rendered.values())
+
+
+def test_成批取列表的长度校验不用_contents_of_引用():
+    """10/31: `repeat with lst in {readList, ...}` + `count of (contents of lst)` 在真机
+    Mail (439 封) 上报「contents of item 1 of {{true, ...}} 取不到」, 成批取每次失败、
+    回落逐封取, 进邮件页要等 70 多秒。改成逐个比长度后同一个收件箱 19 秒。"""
+    body = scripts._AS_LIST_MESSAGES_BULK
+    assert "contents of lst" not in body
+    for name in ("readList", "subjList", "sndrList", "recvList"):
+        assert f"(count of {name}) is not n" in body

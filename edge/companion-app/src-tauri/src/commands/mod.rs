@@ -45,6 +45,7 @@ pub mod codex_backend; // Hermes 原生 codex_app_server runtime 的 Companion U
 pub mod cron; // P3.5.105 (6/25 鸿波 catch "定时任务跑没跑结果如何都看不到"): cron 监控 + 操作 (读 ~/.hermes/cron + 写 P26 endpoint)
 pub mod curator;
 pub mod dream; // P3.5.1 (6/15 鸿波): Dream Engine — 员工主动触发 long-term 蒸馏, picker model
+pub mod email_list_cache; // 10/31: 邮件列表落盘缓存, 重启后先显示上次的列表
 pub mod email; // BL-COMPANION-EMAIL-DIGEST (5/18): 邮件简报卡的后端 shell-out
 pub mod email_last_draft; // 9/29: 最近存进草稿箱的那封 → 对话结束后跳到草稿箱
 pub mod endpoints;

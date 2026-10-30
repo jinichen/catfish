@@ -221,6 +221,10 @@ export const emailListFetch = (unreadOnly: boolean, limit?: number, folder?: str
     limit: limit ?? null,
     folder: folder ?? null,
   });
+/** 10/31: 邮件列表落盘缓存 (~/.catfish/email_list_cache.json) —— 重启后先显示上次的列表。
+ *  见 src-tauri/src/commands/email_list_cache.rs。 */
+export const emailListCacheLoad = () => rawInvoke<string | null>("email_list_cache_load");
+export const emailListCacheSave = (payload: string) => rawInvoke<void>("email_list_cache_save", { payload });
 /** 最近一次存进草稿箱的那封 (9/29) —— catfish-email draft 成功时记的, 不管谁调的。
  *  created_at 是 Unix 秒。没存过 → null。见 lib/draftJump.ts。 */
 export interface LastDraft {

@@ -230,9 +230,10 @@ end tell
 
 set n to count of idList
 if idCheck is not idList then error "LIST_CHANGED" number 8101
-repeat with lst in {readList, subjList, sndrList, recvList}
-    if (count of (contents of lst)) is not n then error "LIST_CHANGED" number 8101
-end repeat
+-- 10/31: 原来是四个列表放进一个 list 里循环、按引用取内容再数长度,
+-- 真机上 (Mail, 439 封) 报「contents of item 1 of {{true, true, ...}} 取不到」, 成批取
+-- 每次都失败、回落逐封取 —— 列表 11.6 s 白跑 + 逐封 52 s。直接逐个比, 同样的校验。
+if (count of readList) is not n or (count of subjList) is not n or (count of sndrList) is not n or (count of recvList) is not n then error "LIST_CHANGED" number 8101
 set recs to {}
 repeat with j from n to 1 by -1
     set d to item j of recvList

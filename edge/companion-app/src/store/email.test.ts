@@ -193,3 +193,38 @@ describe("useEmailStore - readIds (sub-task 2 标已读 dedup)", () => {
     expect(useEmailStore.getState().readIds.size).toBe(0);
   });
 });
+
+describe("useEmailStore - 列表落盘缓存 (10/31)", () => {
+  it("重启后从磁盘读回上次的列表; 内存里已经有就不覆盖", async () => {
+    const { useEmailStore } = await import("./email");
+    invokeMock.mockImplementation(async (cmd: string) =>
+      cmd === "email_list_cache_load"
+        ? JSON.stringify({ items: [{ id: "a" }], sentItems: [{ id: "s" }], accounts: [], savedAt: 5 })
+        : undefined,
+    );
+    await useEmailStore.getState().hydrateListCache();
+    expect(useEmailStore.getState().listCache?.items).toEqual([{ id: "a" }]);
+
+    invokeMock.mockImplementation(async (cmd: string) =>
+      cmd === "email_list_cache_load" ? JSON.stringify({ items: [{ id: "stale" }] }) : undefined,
+    );
+    await useEmailStore.getState().hydrateListCache();
+    expect(useEmailStore.getState().listCache?.items).toEqual([{ id: "a" }]);
+  });
+
+  it("拉到新列表时落盘", async () => {
+    const { useEmailStore } = await import("./email");
+    invokeMock.mockResolvedValue(undefined);
+    useEmailStore.getState().setListCache({ items: [{ id: "b" }], sentItems: [], accounts: [] });
+    const call = invokeMock.mock.calls.find((c) => c[0] === "email_list_cache_save");
+    expect(call).toBeTruthy();
+    expect(JSON.parse((call![1] as { payload: string }).payload).items).toEqual([{ id: "b" }]);
+  });
+
+  it("磁盘读不到 / 坏文件不报错", async () => {
+    const { useEmailStore } = await import("./email");
+    invokeMock.mockResolvedValue("{坏的");
+    await expect(useEmailStore.getState().hydrateListCache()).resolves.toBeUndefined();
+    expect(useEmailStore.getState().listCache).toBeNull();
+  });
+});

@@ -21,7 +21,7 @@
 
 import { create } from "zustand";
 
-import { emailIdMigrationMap, emailUrgencyMap as rustUrgencyMap } from "../lib/tauri";
+import { emailIdMigrationMap, emailListCacheLoad, emailListCacheSave, emailUrgencyMap as rustUrgencyMap } from "../lib/tauri";
 import { hideDeleted, pruneTombstones, tombstoneKeys, type DeletedTombstones } from "../lib/emailDeleted";
 
 /** 9/27: 照改名表把以 id 为键的本地记录改名 (Rust 侧缓存由 Rust 自己改)。 */
@@ -151,9 +151,10 @@ interface EmailState {
   // EmailTab.tsx:393 `loading && items.length === 0` 才显示"加载中",
   // 所以有缓存时刷新是静默的。
   //
-  // **故意不进 localStorage**: 500 封元数据 ~200KB, 会挤占 urgency 那份
-  // 配额; 而 App 冷启动本来就该拉一次 (后端热路径现在是毫秒级)。
-  // 这个缓存治的只是"切 tab", 不治"重启" —— 边界写清楚。
+  // **故意不进 localStorage**: 500 封元数据 ~200KB, 会挤占 urgency 那份配额。
+  // 10/31: 「冷启动后端毫秒级」的前提 9/27 就没了 (emlx 索引撤掉, 回到 AppleScript,
+  // 439 封 19 秒), 所以改成也落到 ~/.catfish/email_list_cache.json (Rust 读写),
+  // 重启后先显示上次的列表 —— 见 hydrateListCache。
   listCache: {
     items: unknown[];
     sentItems: unknown[];
@@ -161,6 +162,8 @@ interface EmailState {
     savedAt: number;
   } | null;
   setListCache: (c: { items: unknown[]; sentItems: unknown[]; accounts: unknown[] }) => void;
+  /** 10/31: 邮件页挂载时把上次落盘的列表读进来 (内存里已经有就不动); 读不到就算了。 */
+  hydrateListCache: () => Promise<void>;
 
   // ── 8/21 分诊升级: id → {action, deadline} ──────────────────────────
   //
@@ -182,7 +185,23 @@ interface EmailState {
 
 export const useEmailStore = create<EmailState>((set, get) => ({
   listCache: null,
-  setListCache: (c) => set({ listCache: { ...c, savedAt: Date.now() } }),
+  hydrateListCache: async () => {
+    try {
+      const raw = await emailListCacheLoad();
+      if (!raw || get().listCache) return;
+      const c = JSON.parse(raw) as { items?: unknown[]; sentItems?: unknown[]; accounts?: unknown[]; savedAt?: number };
+      if (!Array.isArray(c.items)) return;
+      set({ listCache: { items: c.items, sentItems: c.sentItems ?? [], accounts: c.accounts ?? [], savedAt: c.savedAt ?? 0 } });
+    } catch {
+      // 没装 Tauri (测试) / 文件坏了 —— 不影响实时拉取
+    }
+  },
+  setListCache: (c) => {
+    const listCache = { ...c, savedAt: Date.now() };
+    set({ listCache });
+    // 10/31: 也落盘, 重启后先显示这份 (见 hydrateListCache)
+    void emailListCacheSave(JSON.stringify(listCache)).catch(() => {});
+  },
   actionMap: {},
   mergeActionMap: (m) => set({ actionMap: { ...get().actionMap, ...m } }),
   deleted: loadPersistedDeleted(),

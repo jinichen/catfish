@@ -18,6 +18,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useEmailListCacheHydrate } from "../../hooks/useEmailListCacheHydrate";
 import { useEmailScanners } from "../../hooks/useEmailScanners";
 import {
   emailListFetch,
@@ -73,10 +74,8 @@ const MAX_EMAIL_LIST_LIMIT = 500;
 export const EMAIL_POLL_MS = 3 * 60 * 1000;
 
 export default function EmailTab() {
-  // 8/21 治本配套: 初值取跨挂载缓存 (store 纯内存)。EmailTab 是条件渲染,
-  // 切走即卸载 —— 没有这份缓存, 切回就要白屏等 loadList。有了它, 切回瞬间
-  // 显示上次的列表, loadList 在后台静默刷新 (loading 只在 items 为空时显示,
-  // 见下面 headerSummary 的 `loading && items.length === 0`)。
+  // 8/21: 初值取跨挂载缓存 (10/31 起也落盘, 见 store hydrateListCache)。切回 / 重启瞬间
+  // 显示上次的列表, loadList 后台静默刷新 (loading 只在 items 为空时显示, 见 headerSummary)。
   const listCache = useEmailStore.getState().listCache;
   // 10/15: 缓存里也可能有刚删掉的 (删之前存的), 进界面前过一遍墓碑 (lib/emailDeleted.ts)
   const [items, setItems] = useState<EmailDigestItem[]>(
@@ -93,6 +92,7 @@ export default function EmailTab() {
   const [accounts, setAccounts] = useState<EmailAccountItem[]>(
     () => (listCache?.accounts as EmailAccountItem[]) ?? [],
   );
+  useEmailListCacheHydrate(items.length === 0, setItems, setSentItems, setAccounts); // 10/31: 重启后先显示上次的列表
   // BL-COMPANION-EMAIL-DIGEST-STEP5 (5/20): urgencyMap 走 useEmailStore
   // (localStorage hydrate + Rust reconcile + 跨 tab 共享, 不再 local useState).
   const urgencyMap = useEmailStore((s) => s.urgencyMap);

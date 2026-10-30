@@ -334,6 +334,8 @@ pub(crate) fn handler(
             crate::commands::email::email_source_select,
             // BL-COMPANION-EMAIL-TAB (5/18): 邮件 tab 用的扩展能力 (全列表 + 读全文 + 起草)
             crate::commands::email::email_list_fetch,
+            crate::commands::email_list_cache::email_list_cache_load,
+            crate::commands::email_list_cache::email_list_cache_save,
             crate::commands::email_last_draft::email_last_draft,
             crate::commands::email::email_read_message,
             crate::commands::email::email_create_draft,
