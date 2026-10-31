@@ -79,7 +79,12 @@
 3. **故障半径**: 中央端 PG / 文件如果存了 chat 内容, 一旦 leak → 全公司员工的 chat 历史全暴露. 边缘端 leak → 只暴露**那台 Mac 上的员工**.
 4. **故障定位**: 中央端只持有元数据, gateway 出 bug 不会让员工"丢 chat 历史". chat 历史只在 Companion, gateway 重启 / 升级 / 重装跟员工 chat 历史完全无关.
 
-## 当前违规清单 (2026-05-17 grep)
+## 存量违规清单 (2026-05-17 grep · **已于 2026-05-26 全部清零**)
+
+> **10/20 现状**: 下面这 30 个违规已经在 5/25–5/26 全部处理完 (砍死代码 / 改 stub / 搬 edge / 改 header 透传 / 加 `noqa: BOUNDARY`),
+> `central/llm-gateway/tests/test_central_edge_boundary.py` 的 `KNOWN_VIOLATIONS_ALLOWLIST` **现在是空集**, 逐条处理记录在那个文件的注释里。
+> 这条测试在 CI 的 gateway 任务里跑, 所以现状是「中央端零违规, CI 守住, 新增即红」。
+> 下面的表保留作历史记录, 不是待办。
 
 `central/llm-gateway/src/catfish_gateway/` 下 **30 个文件违规** (审计 only 的 quota.py / metrics.py 不算):
 
@@ -244,11 +249,11 @@ ALLOWLIST 每完成一个 BL ticket 就移除一项. **不许加新条目** (新
 
 **Q: 我开发期跑 gateway 在自己 Mac, 它就是要读 ~/.hermes/state.db, 这跟规则矛盾?**
 
-A: 不矛盾. 当前 gateway**寄生** Companion 的本机是过渡状态. 规则是**目标架构**, 不是即刻 enforce. 未来 SaaS 化时 gateway 不在员工 Mac, 那时这些代码自动 broken — 现在按规则写就是为了未来不返工.
+A: 不矛盾. 写这条时 (5/17) gateway 还**寄生**在 Companion 的本机, 那是过渡状态; 5/26 起中央端代码已不读员工本机文件, 规则就是现状。 未来 SaaS 化时 gateway 不在员工 Mac, 那时这些代码自动 broken — 现在按规则写就是为了未来不返工.
 
 **Q: 规则啥时候真生效?**
 
-A: 已经生效. Phase 0 lint 立刻拦新代码. 存量 30 个违规走 ALLOWLIST 排期, 每个独立 ticket, **不许新增**.
+A: 已经生效. Phase 0 lint 立刻拦新代码. 存量 30 个违规曾走 ALLOWLIST 排期, 5/26 已全部清零, ALLOWLIST 现在是空集, **不许新增**.
 
 **Q: 边缘端能不能也按这条规则反过来约束 (Companion 不读 gateway 中央 PG)?**
 

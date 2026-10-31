@@ -46,10 +46,10 @@ cd delivery/catfish-poc/
 SERVER_IP=<服务器内网IP> ENABLE_HTTPS=1 bash setup.sh
 ```
 
-### Windows (Docker Desktop, WSL2 后端)
+### Windows（不需要装 Docker，推荐）
 
 ```powershell
-tar xzf catfish-poc-FULL-amd64-20260728.tar.gz      # Windows 10 1803+ 自带 tar
+tar xzf catfish-poc-FULL-amd64-<日期>.tar.gz      # Windows 10 1803+ 自带 tar
 cd delivery\catfish-poc\
 
 powershell -ExecutionPolicy Bypass -File .\setup.ps1 -ServerIp <服务器内网IP>
@@ -57,8 +57,33 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -ServerIp <服务器内网I
 
 `-ExecutionPolicy Bypass` 只对这一次调用生效，不改系统设置。
 
-装机前确认 **Docker Desktop 已经启动**（托盘图标不再转）——装了不等于起了，
-这是 Windows 上最常见的一种失败，表现为一堆看不懂的 docker 报错。
+机器上**没有 Docker** 时，`setup.ps1` 自动改走 Windows 自带的 WSL2（`windows\setup-wsl.ps1`）：
+包里带了一个装好 Docker 引擎的 Linux 和 WSL 离线安装包，全程不联网，也**不需要 Docker Desktop**
+（Docker Desktop 对员工超过 250 人或年收入超过 1000 万美元的公司要收费）。
+
+| 要求 | 说明 |
+|---|---|
+| 系统 | Windows 10 21H2 及以上 / Windows 11 / **Windows Server 2022** 及以上（Server 2019 及更早不支持 WSL2） |
+| 管理员 | 脚本会自己弹「是否允许」提权 |
+| CPU 虚拟化 | BIOS 里开 Intel VT-x / AMD-V；本身是虚拟机的话，宿主机要开「嵌套虚拟化」 |
+| 重启一次 | 首次要开 Windows 功能，重启**登录后自动接着装** |
+| 账户密码 | 设开机自启时要输一次当前账户的 Windows 密码（服务器重启后不登录也能自动起来）；只用 PIN 的账户先设个密码 |
+| 磁盘 | 默认装到 `C:\CatfishCentral`，至少 20 GB；换盘加 `-InstallDir D:\CatfishCentral` |
+
+它做的事：开 WSL2 → 装 WSL（离线 MSI）→ 导入 Linux → 在里面跑**跟 Linux 服务器同一个 `setup.sh`**
+→ 设开机自启（计划任务 `CatfishCentral`）→ 把 443 / 5173 / 8998 / 8999 从本机 IP 转进去并放行防火墙。
+
+装好以后：
+
+- 数据（数据库、上传文件）都在 `C:\CatfishCentral\wsl\ext4.vhdx`，备份这个目录
+- 日志：`C:\CatfishCentral\logs\boot.log`；服务日志 `wsl -d CatfishCentral -u root -- docker logs catfish-gateway`
+- 停：`Stop-ScheduledTask CatfishCentral; wsl --terminate CatfishCentral`；起：`Start-ScheduledTask CatfishCentral`
+- 443 被 IIS 占着时脚本会停下并说明，先停掉 IIS（`Stop-Service W3SVC`）
+
+### Windows（已经装了 Docker Desktop）
+
+机器上有 Docker Desktop 时 `setup.ps1` 照旧用它，命令同上。装机前确认 **Docker Desktop 已经启动**
+（托盘图标不再转）——装了不等于起了，这是这条路上最常见的一种失败，表现为一堆看不懂的 docker 报错。
 
 > ⚠ 不要用 `central\deploy.ps1`。那个脚本会跑 `docker compose build`，而交付包里
 > 只有镜像没有源码，必然失败；它是给我们自己有源码的机器用的。客户机器上用的是
@@ -240,6 +265,14 @@ SERVER_IP=<新IP> ENABLE_HTTPS=1 bash setup.sh
 cd <装机目录>/delivery/catfish-poc/
 UPGRADE=1 SERVER_IP=<IP> ENABLE_HTTPS=1 bash setup.sh
 ```
+
+Windows（WSL2 装法）：新包解开后在新目录里跑
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\windows\setup-wsl.ps1 -Upgrade 1
+```
+
+服务器 IP 沿用上次的（记在 `C:\CatfishCentral\catfish-wsl.json`）。
 
 `UPGRADE=1` 不会用 `.env.example` 覆盖现场配置；数据库密码、JWT、加密主密钥、API key 和外置 Identity 地址都会保留，部署 IP/OIDC/HTTPS/worker 等派生参数会按本次参数更新。数据库卷、证书、用户都会保留。脚本会打印镜像 ID 变化,能看到到底换没换。
 
