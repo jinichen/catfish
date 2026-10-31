@@ -2,7 +2,7 @@
 # llm-gateway quotas overlay —— 每个客户一份, 默认空
 # ============================================================
 #
-# 空 = 用 central/llm-gateway/config/quotas.yaml 的通用额度。
+# 空 = 用 central/llm-gateway/config/quotas.yaml.example 的通用额度 (镜像首次启动拷进卷)。
 # 只有这家客户要按自己的部门/人头改额度时才写。
 #
 # 9/22 之前这里是某一家客户的真实部门表 (研发部/财务部/市场部/人力资源部)

@@ -155,7 +155,7 @@ def _browser_goto_impl(args: Dict[str, Any]) -> Dict[str, Any]:
     """走 Playwright `page.goto()`. connect_over_cdp 复用员工已登录 Chrome.
 
     https→http 自动 fallback (踩过坑 2026-04-28):
-      模型默认补 https, 但中国电信内网很多老系统 (.ffcs.cn / .10086.cn) 只监听 80.
+      模型默认补 https, 但企业内网很多老系统只监听 80.
       https 过去直接 ERR_CONNECTION_REFUSED. 这里检测到网络层 error + url 是 https
       时, 自动用同一个 page 切 http 重试 1 次. 成功就加 fallback_hint 让模型记住.
       双保险: SOUL.md 也有"内网默认 http" 纪律, 这是工程层兜底.
@@ -264,8 +264,7 @@ def _browser_goto_impl(args: Dict[str, Any]) -> Dict[str, Any]:
                 if fb_result.get("type") == "ok":
                     fb_result["fallback_hint"] = (
                         f"⚠ {url} (https) 不通 ({result['error'][:80]}…), 自动 fallback "
-                        f"到 {fallback_url} (http) 成功. 内网老系统常见 "
-                        f"(.ffcs.cn / .10086.cn / .chinatelecom.cn 等). "
+                        f"到 {fallback_url} (http) 成功. 企业内网老系统常见只开 http. "
                         f"以后**直接用 http://**, 不要补 https://."
                     )
                     fb_result["summary"] = "[https→http fallback] " + fb_result["summary"]

@@ -85,4 +85,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 
 # 生产启动: 先 alembic upgrade head 建表, 再启 gateway.
 # 容器入口 用 sh -c 串两个命令, 失败 (alembic 错) container 退出, k8s/docker-compose 重启.
-CMD ["sh", "-c", "if [ ! -f \"$CATFISH_QUOTAS_PATH\" ] && [ -f /app/config/quotas.yaml ]; then cp /app/config/quotas.yaml \"$CATFISH_QUOTAS_PATH\"; fi; alembic upgrade head && python -m catfish_gateway.app"]
+# 10/31: 首次启动的配额基线改拷跟踪的 quotas.yaml.example (原来拷的 quotas.yaml 是打包机本机的开发配置)
+CMD ["sh", "-c", "if [ ! -f \"$CATFISH_QUOTAS_PATH\" ] && [ -f /app/config/quotas.yaml.example ]; then cp /app/config/quotas.yaml.example \"$CATFISH_QUOTAS_PATH\"; fi; alembic upgrade head && python -m catfish_gateway.app"]

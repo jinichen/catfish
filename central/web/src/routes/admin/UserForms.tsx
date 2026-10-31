@@ -121,7 +121,7 @@ export function UserCreate() {
             type="email"
             value={form.email}
             onChange={(e) => setForm({ ...form, email: e.target.value })}
-            placeholder="zhangsan@ffcs.cn"
+            placeholder="zhangsan@example.com"
             style={inputStyle}
             required
           />

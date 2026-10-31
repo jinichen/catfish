@@ -247,7 +247,7 @@ export function AdminQuotaEvents() {
             <input
               value={userFilter}
               onChange={(e) => setUserFilter(e.target.value)}
-              placeholder="例 alice@ffcs.cn"
+              placeholder="例 zhangsan@example.com"
               style={inputStyle}
             />
           </FilterField>

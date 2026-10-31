@@ -1,57 +1,26 @@
-# 鲶鱼 Quota · 三维配额配置 — 五一 sprint 5/3 (BL-D9, docs/QUOTA-DESIGN.md).
+# ============================================================
+# llm-gateway 配额基线 (通用, 随镜像发给每一家客户)
+# ============================================================
 #
-# 用法:
-#   1. cp quotas.yaml.example quotas.yaml
-#   2. 改下面的数值 + 重启 gateway (Companion watchdog 5s 自动拉)
-#   3. 仪表盘"本月配额"卡片立刻反映新限额
+# 镜像首次启动时拷进持久卷 ($CATFISH_QUOTAS_PATH, 见 Dockerfile CMD), 之后管理员
+# 在门户「配额」页改的是卷里那份, 重建 / 升级镜像不覆盖。
 #
-# 三维 (任一超就拒, friendly_quota_message 提示切到 catfish-private-main):
-#   - per_user:       员工每分钟 / 每天 token (defaults + overrides)
-#   - per_model:      模型粒度全员每天 (公网 LLM 控成本)
-#   - per_department: 部门聚合每天 (manager 改自己部门)
+# 10/31: 原来镜像拷的是 config/quotas.yaml —— 那份 git 不跟踪, 是打包机上的开发配置
+# (写着某两位员工的单独额度), 跟着镜像发到了客户那里。现在基线只认这份跟踪的文件,
+# 本机 config/quotas.yaml / dev_users.yaml / *.bak 由 .dockerignore 挡在镜像外。
 #
-# 0 = 不限. 内网 LLM (catfish-private-main) + 内部员工建议 0/0/0 (管够).
-
+# 不写任何具体员工 / 部门 / 模型: 那是每家客户自己的事, 在门户里配, 或写进
+# delivery/catfish-poc/llm-gateway/config-overlay/quotas.yaml。
+#
+# 额度取值跟此前实际发出去的一致 (每人每分钟 300 万 / 每天 3 亿 token, 基本不卡),
+# 不借这次改动顺手收紧 —— 收紧额度是客户的决定。后台任务 (记忆整理、邮件分诊等,
+# 带 X-Catfish-Internal) 不计入员工额度。
 defaults:
-  # 默认每个员工的限额
   per_user:
-    tokens_per_minute: 100000      # 10w/min, 大概一次长对话上限
-    tokens_per_day: 1000000        # 100w/day, 一天高强度用够
-
-  # 模型粒度限额 (主要给公网付费 LLM 控钱用)
-  per_model:
-    "Qwen3.6-Flash":
-      tokens_per_day: 5000000      # 500w/day 全员合计, 通义千问公共付费
-    "Gemini 3.1 Pro Preview":
-      tokens_per_day: 2000000      # 200w/day, Pro 贵, 控严
-    "Gemini 3.1 Flash-Lite Preview":
-      tokens_per_day: 10000000     # 1000w/day, Flash-Lite 便宜放开
-    # 内网模型不写 = 不限
-    # "qwen_v3_5_122b_a10b": ...
-
-  # 部门粒度限额
-  per_department:
-    "研发部":
-      tokens_per_day: 30000000     # 3000w/day, 工程师重度用
-    "财务部":
-      tokens_per_day: 5000000      # 500w/day, 用得少
-    "市场部":
-      tokens_per_day: 10000000     # 1000w/day
-    "人力资源部":
-      tokens_per_day: 5000000
-
-# 个别用户/部门 override (优先级高于 defaults)
+    tokens_per_minute: 3000000
+    tokens_per_day: 300000000
+  per_model: {}
+  per_department: {}
 overrides:
-  users:
-    # CEO / 高管放宽
-    "ceo@ffcs.cn":
-      tokens_per_minute: 1000000   # 100w/min, 实质不限
-      tokens_per_day: 100000000    # 1 亿/day
-    # demo 演示员工故意压低用来触发 quota 提示
-    # "demo@ffcs.cn":
-    #   tokens_per_minute: 5000
-
-  departments:
-    # 战略部门临时放宽 (季末赶活)
-    # "研发部":
-    #   tokens_per_day: 80000000
+  users: {}
+  departments: {}

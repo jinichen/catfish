@@ -170,7 +170,7 @@ export default function CredentialModal({ onClose }: { onClose: () => void }) {
 
               {addingTo === c.label && (
                 <div style={rowStyle}>
-                  <input value={newSite} autoFocus placeholder="例：neis.ffcs.cn"
+                  <input value={newSite} autoFocus placeholder="例：oa.example.com"
                     onChange={(e) => setNewSite(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && newSite && !busy) {
@@ -194,7 +194,7 @@ export default function CredentialModal({ onClose }: { onClose: () => void }) {
             手工新增一条（一般不用 —— 教学时会自动问）
           </summary>
           <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
-            <input value={newHost} placeholder="网站，例：eis.ffcs.cn"
+            <input value={newHost} placeholder="网站，例：oa.example.com"
               onChange={(e) => setNewHost(e.target.value)} style={inputStyle} />
             <input type="password" value={newPassword} placeholder="密码" autoComplete="off"
               onChange={(e) => setNewPassword(e.target.value)} style={inputStyle} />

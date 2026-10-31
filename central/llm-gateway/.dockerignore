@@ -30,3 +30,10 @@ htmlcov
 .git
 .DS_Store
 *.log
+
+# 10/31: config/ 下本机才有的开发文件 (git 不跟踪) 不进镜像。之前 COPY config 把打包机上的
+# quotas.yaml (写着两位员工的单独额度) / dev_users.yaml / models.yaml.bak 一起发给了客户。
+# 配额基线用跟踪的 config/quotas.yaml.example。
+config/quotas.yaml
+config/dev_users.yaml
+config/*.bak
