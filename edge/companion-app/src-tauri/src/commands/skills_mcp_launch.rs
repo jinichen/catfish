@@ -164,15 +164,15 @@ pub(crate) fn parse_test_output(code: Option<i32>, out: &str) -> McpTestResult {
     }
 }
 
-/// 跑 `hermes mcp test <名字>`。第一次跑 npx 要现场下载, 给足 3 分钟。
-pub(crate) fn hermes_mcp_test(name: &str) -> Result<McpTestResult, String> {
+/// 跑一条 hermes 命令, 限时; 超时返回 None。返回 (退出码, stdout+stderr)。
+fn run_hermes(args: &[&str], timeout: Duration) -> Result<Option<(Option<i32>, String)>, String> {
     let home = crate::services::catfish_paths::hermes_home().ok_or("找不到 Hermes 目录")?;
     let cli = crate::services::catfish_paths::hermes_venv_tool(&home.join("hermes-agent"), "hermes");
     if !cli.exists() {
         return Err(format!("Hermes 还没装好 ({} 不在)", cli.display()));
     }
     let mut child = crate::services::process::python_command(&cli)
-        .args(["mcp", "test", name])
+        .args(args)
         .env("HERMES_HOME", &home)
         .env("NO_COLOR", "1")
         .stdin(Stdio::null())
@@ -183,7 +183,7 @@ pub(crate) fn hermes_mcp_test(name: &str) -> Result<McpTestResult, String> {
     let (mut so, mut se) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
     let rd_out = std::thread::spawn(move || { let mut s = String::new(); let _ = so.read_to_string(&mut s); s });
     let rd_err = std::thread::spawn(move || { let mut s = String::new(); let _ = se.read_to_string(&mut s); s });
-    let deadline = Instant::now() + Duration::from_secs(180);
+    let deadline = Instant::now() + timeout;
     let code = loop {
         match child.try_wait() {
             Ok(Some(st)) => break st.code(),
@@ -191,12 +191,58 @@ pub(crate) fn hermes_mcp_test(name: &str) -> Result<McpTestResult, String> {
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Ok(McpTestResult { ok: false, tools: 0, detail: "3 分钟还没连上 (下载太慢或程序卡住了)".into() });
+                return Ok(None);
             }
         }
     };
-    let out = format!("{}\n{}", rd_out.join().unwrap_or_default(), rd_err.join().unwrap_or_default());
-    Ok(parse_test_output(code, &out))
+    Ok(Some((code, format!("{}\n{}", rd_out.join().unwrap_or_default(), rd_err.join().unwrap_or_default()))))
+}
+
+/// 跑 `hermes mcp test <名字>`。第一次跑 npx 要现场下载, 给足 3 分钟。
+pub(crate) fn hermes_mcp_test(name: &str) -> Result<McpTestResult, String> {
+    match run_hermes(&["mcp", "test", name], Duration::from_secs(180))? {
+        Some((code, out)) => Ok(parse_test_output(code, &out)),
+        None => Ok(McpTestResult { ok: false, tools: 0, detail: "3 分钟还没连上 (下载太慢或程序卡住了)".into() }),
+    }
+}
+
+/// OAuth 令牌文件: `<hermes>/mcp-tokens/<名字>.json` (tools/mcp_oauth.py HermesTokenStorage)
+pub(crate) fn oauth_token_present(hermes_home: &Path, name: &str) -> bool {
+    hermes_home.join("mcp-tokens").join(format!("{name}.json")).is_file()
+}
+
+/// 删掉某个 MCP 的 OAuth 令牌和客户端登记 (`<名字>.json`、`<名字>.client.json` 等)
+pub(crate) fn remove_oauth_tokens(hermes_home: &Path, name: &str) {
+    let Ok(rd) = std::fs::read_dir(hermes_home.join("mcp-tokens")) else { return };
+    for e in rd.flatten() {
+        let f = e.file_name().to_string_lossy().into_owned();
+        if f == format!("{name}.json") || f.starts_with(&format!("{name}.")) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+/// `hermes mcp login <名字>`: 打开浏览器让员工登录授权, 等回调 (Hermes 默认等 5 分钟)。
+/// 它的退出码不分成败 (cmd_mcp_login 不返回值), 所以看令牌文件落没落地。
+pub(crate) fn hermes_mcp_login(name: &str) -> Result<(), String> {
+    let home = crate::services::catfish_paths::hermes_home().ok_or("找不到 Hermes 目录")?;
+    let out = run_hermes(&["mcp", "login", name], Duration::from_secs(330))?;
+    if oauth_token_present(&home, name) {
+        return Ok(());
+    }
+    let why = match out {
+        None => "5 分钟内没在浏览器里完成登录".to_string(),
+        Some((_, text)) => {
+            let text = strip_ansi(&text);
+            let lines: Vec<&str> = text
+                .lines()
+                .map(str::trim)
+                .filter(|l| l.starts_with('✗') || l.starts_with('⚠') || l.to_ascii_lowercase().contains("error") || l.contains("not obtained"))
+                .collect();
+            if lines.is_empty() { "没拿到授权 (浏览器里没点同意, 或这个服务不支持自动登记)".into() } else { lines.join("\n") }
+        }
+    };
+    Err(why)
 }
 
 #[cfg(test)]
@@ -234,6 +280,20 @@ mod tests {
         let l = resolve_launch("npx", empty.path(), |_| Some(PathBuf::from("/opt/homebrew/bin/npx"))).unwrap();
         assert_eq!(l.command, "/opt/homebrew/bin/npx");
         assert!(l.path_env.unwrap().starts_with("/opt/homebrew/bin:"));
+    }
+
+    #[test]
+    fn oauth_令牌在不在_删只删自己的() {
+        let t = tempfile::tempdir().unwrap();
+        let d = t.path().join("mcp-tokens");
+        std::fs::create_dir_all(&d).unwrap();
+        for f in ["notion.json", "notion.client.json", "notion-2.json"] {
+            std::fs::write(d.join(f), "{}").unwrap();
+        }
+        assert!(oauth_token_present(t.path(), "notion"));
+        remove_oauth_tokens(t.path(), "notion");
+        assert!(!oauth_token_present(t.path(), "notion"));
+        assert!(!d.join("notion.client.json").exists() && d.join("notion-2.json").exists());
     }
 
     #[test]

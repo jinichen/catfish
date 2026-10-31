@@ -43,6 +43,7 @@ import {
   addMcpServer,
   installSkillFromUrl,
   installSkillFromZip,
+  mcpOauthLogin,
   removeMcpServer,
   restoreMcpServer,
   restoreSkill,
@@ -209,6 +210,19 @@ export default function SkillsMcpCard() {
       }
     }
     setUndo(null);
+  };
+
+  // 10/31: OAuth MCP 重新登录 —— 打开浏览器, 员工登录完回来
+  const handleRelogin = async (name: string) => {
+    setActionErr(null);
+    setActionOk(`正在打开浏览器: 请在浏览器里登录并授权「${name}」, 完成后回到这里 (最多等 5 分钟)…`);
+    try {
+      await mcpOauthLogin(name);
+      setActionOk(`「${name}」已重新登录。Hermes 正在重新加载, 稍等片刻小鲶就能用`);
+    } catch (e) {
+      setActionOk(null);
+      setActionErr(`「${name}」重新登录没完成: ${e}`);
+    }
   };
 
   const handleRemoveMcp = async (m: McpServerEntry) => {
@@ -412,6 +426,7 @@ export default function SkillsMcpCard() {
                         onRemove={() =>
                           setModal({ kind: "remove-mcp-confirm", mcp: m })
                         }
+                        onRelogin={() => void handleRelogin(m.name)}
                       />
                     ))}
                   </ul>
@@ -572,7 +587,7 @@ export default function SkillsMcpCard() {
         <Dialog title="接入中…" onClose={() => { /* 短时间, 不让关 */ }}>
           <div className="install-dialog__running">
             <span className="install-dialog__spinner" />
-            <span>正在接入并试连 (第一次要下载, 可能要 1–2 分钟)…</span>
+            <span>正在接入并试连 (第一次要下载, 可能要 1–2 分钟); 需要网页登录的会打开浏览器, 登录授权后回到这里…</span>
           </div>
         </Dialog>
       )}

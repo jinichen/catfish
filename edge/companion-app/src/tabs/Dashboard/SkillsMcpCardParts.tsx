@@ -92,10 +92,13 @@ export function McpRow({
   m,
   locked,
   onRemove,
+  onRelogin,
 }: {
   m: McpServerEntry;
   locked: boolean;
   onRemove?: () => void;
+  /** 10/31: 要网页登录授权的 MCP —— 令牌失效时员工自己点 */
+  onRelogin?: () => void;
 }) {
   return (
     <li
@@ -110,6 +113,11 @@ export function McpRow({
       <span className="dashboard-skills__mcp-cmd">
         {m.url ? m.url.replace(/^https?:\/\//, "") : m.command.split("/").slice(-2).join("/")}
       </span>
+      {!locked && m.oauth && onRelogin && (
+        <button className="dashboard-skills__row-action" onClick={onRelogin} title="在浏览器里重新登录授权">
+          重新登录
+        </button>
+      )}
       {!locked && onRemove && (
         <button
           className="dashboard-skills__row-action"

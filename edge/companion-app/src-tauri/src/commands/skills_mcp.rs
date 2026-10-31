@@ -8,7 +8,7 @@
 //!
 //! config.yaml 里的形状 (两种):
 //!   本机程序:  <name>: { command, args?, env? }
-//!   远程网址:  <name>: { url, headers? }     (10/31 起界面能接)
+//!   远程网址:  <name>: { url, headers?, auth: oauth? }     (10/31 起界面能接; oauth = 浏览器登录授权)
 //! env / headers 里的密钥只写 `${CATFISH_MCP_...}` 引用, 真值在 Hermes 的 .env (skills_mcp_secrets)。
 
 use serde::{Deserialize, Serialize};
@@ -24,6 +24,8 @@ pub struct McpServerEntry {
     pub args: Vec<String>,
     /// 远程 MCP 的网址 (本机程序为 None)
     pub url: Option<String>,
+    /// 要网页登录授权 (auth: oauth) —— 列表上给「重新登录」按钮
+    pub oauth: bool,
     /// E7.P1 (6/6): catfish-tools 或 catfish-* 前缀 = 核心 MCP (主链路依赖), 不能删.
     /// 员工自加的 (e.g. slack-mcp) is_protected=false.
     pub is_protected: bool,
@@ -44,6 +46,9 @@ pub struct McpAddRequest {
     pub env: Vec<(String, String)>,
     #[serde(default)]
     pub headers: Vec<(String, String)>,
+    /// 远程 MCP 要网页登录授权 (OAuth); 令牌由 Hermes 存在 <hermes>/mcp-tokens/
+    #[serde(default)]
+    pub oauth: bool,
 }
 
 /// 卸载时拿走的东西 (配置原样 + 密钥), 「撤销」原样放回
@@ -111,7 +116,8 @@ pub(crate) fn list_mcp_servers_blocking() -> Result<Vec<McpServerEntry>, String>
             .map(|seq| seq.iter().filter_map(|x| x.as_str().map(String::from)).collect())
             .unwrap_or_default();
         let is_protected = is_core(&name);
-        result.push(McpServerEntry { name, command, args, url, is_protected });
+        let oauth = v.get("auth").and_then(|x| x.as_str()) == Some("oauth");
+        result.push(McpServerEntry { name, command, args, url, oauth, is_protected });
     }
     result.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(result)
@@ -159,6 +165,9 @@ pub(crate) fn add_mcp_server_blocking(req: &McpAddRequest, path_env: Option<Stri
     let mut entry = serde_yaml::Mapping::new();
     if let Some(u) = url {
         entry.insert(s("url"), s(u));
+        if req.oauth {
+            entry.insert(s("auth"), s("oauth"));
+        }
         let headers = refs(&req.headers);
         if !headers.is_empty() {
             entry.insert(s("headers"), serde_yaml::Value::Mapping(headers));
@@ -191,7 +200,10 @@ pub(crate) fn remove_mcp_server_blocking(name: String) -> Result<RemovedMcp, Str
     let entry = mcp_map.remove(s(&name)).ok_or_else(|| format!("MCP {name} 不存在"))?;
     let entry_yaml = serde_yaml::to_string(&entry).map_err(|e| e.to_string())?;
     save_config(&cfg_path, &value)?;
-    let removed_secrets = secrets::remove_for(&hermes_home()?, &name)?;
+    let hermes = hermes_home()?;
+    let removed_secrets = secrets::remove_for(&hermes, &name)?;
+    // OAuth 令牌不留 (撤销后要用就点「重新登录」)
+    super::skills_mcp_launch::remove_oauth_tokens(&hermes, &name);
     Ok(RemovedMcp { name, entry_yaml, secrets: removed_secrets })
 }
 

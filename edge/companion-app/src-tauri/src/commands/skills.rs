@@ -129,6 +129,13 @@ pub async fn add_mcp_server(req: McpAddRequest) -> Result<super::skills_mcp_laun
             path_env = launch.path_env;
         }
         add_mcp_server_blocking(&req, path_env)?;
+        // 要网页登录的: 先打开浏览器让员工登录授权, 拿到令牌再试连
+        if req.oauth && req.url.as_deref().is_some_and(|u| !u.trim().is_empty()) {
+            if let Err(why) = super::skills_mcp_launch::hermes_mcp_login(req.name.trim()) {
+                let _ = remove_mcp_server_blocking(req.name.trim().to_string());
+                return Err(format!("登录授权没完成, 已撤销这条配置。原因: {why}"));
+            }
+        }
         let test = super::skills_mcp_launch::hermes_mcp_test(req.name.trim())?;
         if !test.ok {
             let _ = remove_mcp_server_blocking(req.name.trim().to_string());
@@ -145,6 +152,20 @@ pub async fn add_mcp_server(req: McpAddRequest) -> Result<super::skills_mcp_laun
         }
     });
     Ok(report)
+}
+
+/// 重新登录 (OAuth 令牌失效 / 撤销卸载后): 打开浏览器授权, 成功后让 Hermes 重新加载
+#[tauri::command]
+pub async fn mcp_oauth_login(name: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || super::skills_mcp_launch::hermes_mcp_login(name.trim()))
+        .await
+        .map_err(|e| format!("内部错误: {e}"))??;
+    std::thread::spawn(|| {
+        if let Err(e) = super::codex_gateway::restart_hermes_gateway() {
+            log::warn!("[mcp] 重新登录后重启 Hermes 失败: {e}");
+        }
+    });
+    Ok(())
 }
 
 /// 卸载: 配置和它的密钥一起拿掉; 返回拿掉的东西, 「撤销」时原样交回 restore_mcp_server

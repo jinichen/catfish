@@ -261,6 +261,7 @@ const HERMES: &[(Pat, Class, &str)] = &[
     (Exact("catfish-companion-token"), Secret, "本机令牌"),
     (Exact("pairing"), Secret, "设备配对"),
     (Exact("channel_directory.json"), Secret, "消息平台绑定"),
+    (Exact("mcp-tokens"), Secret, "MCP 网页登录令牌 (新电脑重新登录)"),
     (Exact("auth.json"), Secret, "登录令牌"),
     (Exact("weixin"), Secret, "微信绑定 (重新扫码)"),
     (Exact("platforms"), Secret, "消息平台绑定"),

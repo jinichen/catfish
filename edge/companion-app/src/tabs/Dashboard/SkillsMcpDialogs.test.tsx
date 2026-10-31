@@ -47,4 +47,15 @@ describe("AddMcpDialog", () => {
       headers: [["Authorization", "Bearer x"]],
     });
   });
+
+  it("远程网址 + 网页登录授权: 带上 oauth", () => {
+    const onSubmit = vi.fn();
+    render(<AddMcpDialog onClose={() => {}} onSubmit={onSubmit} />);
+    fireEvent.click(screen.getByText("远程网址"));
+    type(/不能用 catfish/, "notion");
+    type("https://example.com/mcp", "https://mcp.notion.com/mcp");
+    fireEvent.click(screen.getByLabelText(/需要网页登录授权/));
+    fireEvent.click(screen.getByText("接入"));
+    expect(onSubmit).toHaveBeenCalledWith({ name: "notion", url: "https://mcp.notion.com/mcp", headers: [], oauth: true });
+  });
 });

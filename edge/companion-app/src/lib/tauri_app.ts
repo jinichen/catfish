@@ -78,6 +78,8 @@ export interface McpAddRequest {
   url?: string;
   env?: [string, string][];
   headers?: [string, string][];
+  /** 远程 MCP 要网页登录授权 (OAuth): 接入时会打开浏览器 */
+  oauth?: boolean;
 }
 export const addMcpServer = (req: McpAddRequest) => rawInvoke<McpAddResult>("add_mcp_server", { req });
 
@@ -89,6 +91,8 @@ export interface RemovedMcp {
 }
 export const removeMcpServer = (name: string) => rawInvoke<RemovedMcp>("remove_mcp_server", { name });
 export const restoreMcpServer = (removed: RemovedMcp) => rawInvoke<void>("restore_mcp_server", { removed });
+/** 重新登录授权 (打开浏览器, 最多等 5 分钟) */
+export const mcpOauthLogin = (name: string) => rawInvoke<void>("mcp_oauth_login", { name });
 
 
 // ── system ───────────────────────────────────────────────

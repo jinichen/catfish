@@ -39,6 +39,8 @@ export interface McpServerEntry {
   args: string[];
   /** 10/31: 远程 MCP 的网址 (本机程序为 null) */
   url?: string | null;
+  /** 10/31: 要网页登录授权 (OAuth) */
+  oauth?: boolean;
   /** E7.P1 (6/6): catfish-* 前缀 MCP = 主链路核心 (catfish-tools), 不能删. */
   isProtected: boolean;
 }

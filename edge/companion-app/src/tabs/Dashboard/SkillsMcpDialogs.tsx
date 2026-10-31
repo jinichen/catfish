@@ -153,6 +153,7 @@ export function AddMcpDialog({
   const [url, setUrl] = useState("");
   const [env, setEnv] = useState<Pair[]>([]);
   const [headers, setHeaders] = useState<Pair[]>([]);
+  const [oauth, setOauth] = useState(false);
   const nameValid = name.length > 0 && !name.startsWith("catfish-") && name !== "catfish-tools";
   const pairsValid = (ps: Pair[]) => ps.every(([k]) => k.trim().length > 0);
   const valid =
@@ -208,6 +209,10 @@ export function AddMcpDialog({
           <label className="install-dialog__label">网址</label>
           <input className="install-dialog__input" type="text" value={url}
             onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/mcp" />
+          <label style={{ display: "block", margin: "6px 0", fontSize: 13 }}>
+            <input type="checkbox" checked={oauth} onChange={(e) => setOauth(e.target.checked)} /> 需要网页登录授权 (OAuth) —
+            接入时会打开浏览器, 用你自己的账号登录并点同意
+          </label>
           <PairRows
             label="请求头 (要鉴权的填, 如 Authorization)"
             hint="值存在 Hermes 的 .env (只有你能读), 配置文件里只留引用, 不写明文."
@@ -228,7 +233,7 @@ export function AddMcpDialog({
             onSubmit(
               mode === "local"
                 ? { name: name.trim(), command: command.trim(), args: argsText.split(/\s+/).filter((x) => x.length > 0), env }
-                : { name: name.trim(), url: url.trim(), headers },
+                : { name: name.trim(), url: url.trim(), headers, ...(oauth ? { oauth: true } : {}) },
             )
           }
         >
