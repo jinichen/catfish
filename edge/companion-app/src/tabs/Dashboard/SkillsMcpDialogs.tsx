@@ -125,8 +125,7 @@ export function AddMcpDialog({
   return (
     <Dialog title="接入 MCP" onClose={onClose}>
       <div className="install-dialog__hint">
-        写 <code>~/.hermes/config.yaml</code> 加 <code>mcp_servers.{"<name>"}</code> 段.
-        hermes daemon 重启后生效.
+        接入后会先试连一次 (第一次可能要下载, 等 1–2 分钟); 连上了小鲶就能用, 连不上会撤销并告诉你原因.
       </div>
       <label className="install-dialog__label">名字</label>
       <input
@@ -142,7 +141,7 @@ export function AddMcpDialog({
           catfish-* 是核心命名保留, 用别的
         </div>
       )}
-      <label className="install-dialog__label">command (stdio 启动命令绝对路径)</label>
+      <label className="install-dialog__label">启动命令 (如 npx / uvx, 或程序的完整路径)</label>
       <input
         className="install-dialog__input"
         type="text"

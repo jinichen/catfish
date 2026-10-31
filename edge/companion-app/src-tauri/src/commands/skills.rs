@@ -114,15 +114,34 @@ pub async fn restore_skill(
         .map_err(|e| format!("内部错误: {e}"))?
 }
 
+/// 接入 MCP: 找好 Node → 写配置 → `hermes mcp test` 真连一次 → 连不上撤掉并说原因,
+/// 连上了让 Hermes 重新加载 (10/31, 见 skills_mcp_launch.rs 文件头)。
 #[tauri::command]
 pub async fn add_mcp_server(
     name: String,
     command: String,
     args: Vec<String>,
-) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || add_mcp_server_blocking(name, command, args))
-        .await
-        .map_err(|e| format!("内部错误: {e}"))?
+) -> Result<super::skills_mcp_launch::McpTestResult, String> {
+    let report = tokio::task::spawn_blocking(move || {
+        let hermes = crate::services::catfish_paths::hermes_home().ok_or("找不到 Hermes 目录")?;
+        let launch = super::skills_mcp_launch::resolve_launch(&command, &hermes, super::skills_mcp_launch::find_on_path)?;
+        add_mcp_server_blocking(name.clone(), launch.command, args, launch.path_env)?;
+        let test = super::skills_mcp_launch::hermes_mcp_test(&name)?;
+        if !test.ok {
+            let _ = remove_mcp_server_blocking(name);
+            return Err(format!("接不上, 已撤销这条配置。原因: {}", test.detail));
+        }
+        Ok::<_, String>(test)
+    })
+    .await
+    .map_err(|e| format!("内部错误: {e}"))??;
+    // 小鲶要在 Hermes 重新加载后才看得到新工具; 等手头的回答说完再重启, 不卡界面
+    std::thread::spawn(|| {
+        if let Err(e) = super::codex_gateway::restart_hermes_gateway() {
+            log::warn!("[mcp] 接入后重启 Hermes 失败: {e}");
+        }
+    });
+    Ok(report)
 }
 
 #[tauri::command]

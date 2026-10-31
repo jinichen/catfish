@@ -437,6 +437,13 @@
   background: rgba(217, 83, 79, 0.06);
   border-radius: 6px;
 }
+.dashboard-skills__ok {
+  color: var(--catfish-cyan);
+  font-size: 12px;
+  padding: 8px 10px;
+  background: rgba(22, 163, 74, 0.06);
+  border-radius: 6px;
+}
 .dashboard-skills__hint {
   font-size: 12px;
   color: var(--catfish-text-muted);

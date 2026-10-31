@@ -82,6 +82,7 @@ pub(crate) fn add_mcp_server_blocking(
     name: String,
     command: String,
     args: Vec<String>,
+    path_env: Option<String>,
 ) -> Result<(), String> {
     if name.is_empty() {
         return Err("name 不能空".into());
@@ -130,6 +131,12 @@ pub(crate) fn add_mcp_server_blocking(
             serde_yaml::Value::String("args".into()),
             serde_yaml::Value::Sequence(args_seq),
         );
+    }
+    // 10/31: npx 类 MCP 用本机 Node 的绝对路径时, 它的目录要在这个 MCP 的 PATH 上 (skills_mcp_launch)
+    if let Some(path) = path_env {
+        let mut env = serde_yaml::Mapping::new();
+        env.insert(serde_yaml::Value::String("PATH".into()), serde_yaml::Value::String(path));
+        entry.insert(serde_yaml::Value::String("env".into()), serde_yaml::Value::Mapping(env));
     }
     mcp_map.insert(mcp_name_key, serde_yaml::Value::Mapping(entry));
     let new_text = serde_yaml::to_string(&value)

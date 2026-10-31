@@ -82,6 +82,7 @@ export default function SkillsMcpCard() {
   const [modal, setModal] = useState<Modal>({ kind: "none" });
   const [undo, setUndo] = useState<UndoState | null>(null);
   const [actionErr, setActionErr] = useState<string | null>(null);
+  const [actionOk, setActionOk] = useState<string | null>(null);
 
   // P3.3.34 (6/12): zip 装 state — 从 MySkillsCard 挪过来, 集中入口
   const [installZip, setInstallZip] = useState<InstallZipState>({ phase: "idle" });
@@ -378,6 +379,7 @@ export default function SkillsMcpCard() {
       {actionErr && (
         <div className="dashboard-skills__err">操作失败: {actionErr}</div>
       )}
+      {actionOk && !actionErr && <div className="dashboard-skills__ok">✓ {actionOk}</div>}
 
       {!error && (skills || mcps) && (
         <>
@@ -555,7 +557,9 @@ export default function SkillsMcpCard() {
           onSubmit={async (name, command, args) => {
             setModal({ kind: "add-mcp-running" });
             try {
-              await addMcpServer(name, command, args);
+              setActionErr(null);
+              const r = await addMcpServer(name, command, args);
+              setActionOk(`MCP「${name}」已接上, 有 ${r.tools} 个工具。Hermes 正在重新加载, 稍等片刻小鲶就能用`);
               reload();
               setModal({ kind: "none" });
             } catch (e) {
@@ -569,7 +573,7 @@ export default function SkillsMcpCard() {
         <Dialog title="接入中…" onClose={() => { /* 短时间, 不让关 */ }}>
           <div className="install-dialog__running">
             <span className="install-dialog__spinner" />
-            <span>写 ~/.hermes/config.yaml…</span>
+            <span>正在接入并试连 (第一次要下载, 可能要 1–2 分钟)…</span>
           </div>
         </Dialog>
       )}

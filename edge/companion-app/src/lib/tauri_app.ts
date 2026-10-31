@@ -63,11 +63,17 @@ export const uninstallSkill = (skillPath: string) =>
 export const restoreSkill = (trashPath: string, originalPath: string) =>
   rawInvoke<void>("restore_skill", { trashPath, originalPath });
 
+/** 10/31: 接入后会真连一次 (hermes mcp test); 连不上直接报错 (配置已撤销) */
+export interface McpAddResult {
+  ok: boolean;
+  tools: number;
+  detail: string;
+}
 export const addMcpServer = (
   name: string,
   command: string,
   args: string[],
-) => rawInvoke<void>("add_mcp_server", { name, command, args });
+) => rawInvoke<McpAddResult>("add_mcp_server", { name, command, args });
 
 export const removeMcpServer = (name: string) =>
   rawInvoke<void>("remove_mcp_server", { name });
