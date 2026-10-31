@@ -54,7 +54,7 @@ const TYPING: &str = r#"{"base_info":{"channel_version":"2.2.0"},"ilink_user_id"
 const MODEL: &str = r#"{"messages":[{"content":"帮我把议程理一下","role":"user"}],"model":"m"}"#;
 
 fn anchor(id: i64, h: &str, at: chrono::DateTime<chrono::Utc>) -> Anchor {
-    Anchor { last_id: id, last_hash: h.into(), received_at: at.to_rfc3339() }
+    Anchor { last_id: id, last_hash: h.into(), received_at: at.to_rfc3339(), device_id: None }
 }
 
 #[test]

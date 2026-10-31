@@ -199,6 +199,9 @@ export function IntegrityPanel() {
             <div key={i}>· {p}</div>
           ))}
           {report.unchained > 0 && <div style={muted}>另有 {report.unchained} 条是升级前记的, 没有指纹</div>}
+          {report.anchorsOtherDevice > 0 && (
+            <div style={muted}>另有 {report.anchorsOtherDevice} 个每日指纹是你别的电脑报的 (换机前的旧电脑之后又用过 / 另一台), 不属于这台的记录</div>
+          )}
           {report.rechains?.map((r, i) => (
             <div key={`rechain-${i}`} style={muted}>· {r}</div>
           ))}

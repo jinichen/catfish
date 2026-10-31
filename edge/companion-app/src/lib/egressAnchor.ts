@@ -7,6 +7,7 @@
 import { config } from "./env";
 import { fetchWithAuth } from "./me";
 import {
+  deviceIdGet,
   transparentLogAnchorSent,
   transparentLogInfo,
   type EgressAnchor,
@@ -19,10 +20,17 @@ export async function sendEgressAnchorIfDue(now: Date = new Date()): Promise<boo
   const info = await transparentLogInfo();
   if (info.lastId === 0) return false; // 还没有进链的记录
   if (info.anchorLastSent && now.getTime() - Date.parse(info.anchorLastSent) < DAY_MS) return false;
+  // 10/31: 带上设备号 —— 换机迁移后中央能分清新旧两台的链头 (docs/DEVICE-MIGRATION-DESIGN.md §6.2)
+  const deviceId = await deviceIdGet().catch(() => null);
   const resp = await fetchWithAuth(`${config.gatewayUrl}/api/egress/anchor`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ last_id: info.lastId, last_hash: info.lastHash, row_count: info.rows }),
+    body: JSON.stringify({
+      last_id: info.lastId,
+      last_hash: info.lastHash,
+      row_count: info.rows,
+      ...(deviceId ? { device_id: deviceId } : {}),
+    }),
   });
   if (!resp.ok) return false;
   await transparentLogAnchorSent(now.toISOString());
@@ -33,8 +41,15 @@ export async function sendEgressAnchorIfDue(now: Date = new Date()): Promise<boo
 export async function fetchEgressAnchors(): Promise<EgressAnchor[]> {
   const resp = await fetchWithAuth(`${config.gatewayUrl}/api/egress/anchors`);
   if (!resp.ok) throw new Error(`中央返回 ${resp.status}`);
-  const data = (await resp.json()) as { anchors: { last_id: number; last_hash: string; received_at: string }[] };
-  return data.anchors.map((a) => ({ lastId: a.last_id, lastHash: a.last_hash, receivedAt: a.received_at }));
+  const data = (await resp.json()) as {
+    anchors: { last_id: number; last_hash: string; received_at: string; device_id?: string | null }[];
+  };
+  return data.anchors.map((a) => ({
+    lastId: a.last_id,
+    lastHash: a.last_hash,
+    receivedAt: a.received_at,
+    deviceId: a.device_id ?? null,
+  }));
 }
 
 /** 启动后过一会儿报一次, 之后每小时看一眼到没到时间。返回停止函数。 */

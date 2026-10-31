@@ -4,6 +4,7 @@
 //! commands/ 调它，前端不能直接 invoke。
 
 pub mod agent_prefs;
+pub mod device_id; // 10/31: 本机设备号 (换机迁移后分清新旧两台的外发记录锚点)
 #[cfg(any(windows, test))]
 pub mod windows_lifecycle;
 // 9/23: mac 也用它判断附加组件是不是本安装包的版本 (hermes_install_steps::addon_current)

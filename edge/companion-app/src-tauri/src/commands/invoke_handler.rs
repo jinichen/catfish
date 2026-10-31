@@ -528,5 +528,14 @@ pub(crate) fn handler(
             crate::commands::imap_credentials::imap_credential_status,
             // 9/28: 只改保留策略, 不用重填密码
             crate::commands::imap_credentials::imap_retention_set,
+            // 10/31 换机迁移 (docs/DEVICE-MIGRATION-DESIGN.md)
+            crate::services::device_id::device_id_get,
+            crate::commands::device_migration::migration_scan,
+            crate::commands::device_migration::migration_pick_save,
+            crate::commands::device_migration::migration_pick_open,
+            crate::commands::device_migration::migration_export,
+            crate::commands::device_migration::migration_inspect,
+            crate::commands::device_migration::migration_import,
+            crate::commands::device_migration::migration_restart_app,
     ]
 }

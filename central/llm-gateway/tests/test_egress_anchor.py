@@ -17,14 +17,14 @@ def client(monkeypatch):
     rows: list[dict] = []
     monkeypatch.setattr(DB, "use_pg", lambda: True)
 
-    def _add(*, sub, last_id, last_hash, row_count):
+    def _add(*, sub, last_id, last_hash, row_count, device_id=None):
         rows.append({"sub": sub, "last_id": last_id, "last_hash": last_hash, "row_count": row_count,
-                     "received_at": "2026-10-25T00:00:00+00:00"})
+                     "received_at": "2026-10-25T00:00:00+00:00", "device_id": device_id})
         return {"id": len(rows), "received_at": "2026-10-25T00:00:00+00:00"}
 
     monkeypatch.setattr(DB, "add", _add)
     monkeypatch.setattr(DB, "list_for", lambda sub, limit=400: [
-        {k: r[k] for k in ("last_id", "last_hash", "row_count", "received_at")} for r in rows if r["sub"] == sub])
+        {k: r[k] for k in ("last_id", "last_hash", "row_count", "received_at", "device_id")} for r in rows if r["sub"] == sub])
 
     def as_user(sub: str):
         app.dependency_overrides[get_current_user] = lambda: User(sub=sub, role="employee", department="d")
@@ -58,3 +58,15 @@ def test_没PG_503(client, monkeypatch):
     c, _, _, DB = client
     monkeypatch.setattr(DB, "use_pg", lambda: False)
     assert c.post("/api/egress/anchor", json={"last_id": 1, "last_hash": "ab" * 32}).status_code == 503
+
+
+def test_带设备号_换机后区分新旧两台(client):
+    c, rows, _, _ = client
+    dev = "3f2a9c1e-7b44-4d2e-9a10-5c6d7e8f9012"
+    assert c.post("/api/egress/anchor", json={"last_id": 5, "last_hash": "ab" * 32, "device_id": dev}).status_code == 201
+    assert c.post("/api/egress/anchor", json={"last_id": 6, "last_hash": "cd" * 32}).status_code == 201  # 老版本不带
+    got = c.get("/api/egress/anchors").json()["anchors"]
+    assert [a["device_id"] for a in got] == [dev, None]
+    # 设备号只收 UUID 样子的, 塞别的进不来
+    assert c.post("/api/egress/anchor", json={"last_id": 7, "last_hash": "ab" * 32, "device_id": "员工的内容"}).status_code == 422
+    assert len(rows) == 2

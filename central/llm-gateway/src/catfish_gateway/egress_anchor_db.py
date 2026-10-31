@@ -1,7 +1,7 @@
 """员工本机数据外发记录的每日指纹 (锚点) — psycopg sync, 跟 room_link_db.py 同模板.
 
-schema 见 alembic 20261025_013 (表不在时这里也会建, 免得没跑 alembic 就 500)。
-只有 sub / 序号 / sha256 / 时间, 没有任何内容。
+schema 见 alembic 20261025_013 / 20261031_016 (表不在时这里也会建, 免得没跑 alembic 就 500)。
+只有 sub / 设备号 / 序号 / sha256 / 时间, 没有任何内容。
 """
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS egress_anchor (
     received_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS ix_egress_anchor_sub ON egress_anchor (sub, received_at DESC);
+ALTER TABLE egress_anchor ADD COLUMN IF NOT EXISTS device_id TEXT;
 """
 _ready = False
 
@@ -40,7 +41,7 @@ def _ensure(cur) -> None:
         _ready = True
 
 
-def add(*, sub: str, last_id: int, last_hash: str, row_count: int) -> dict:
+def add(*, sub: str, last_id: int, last_hash: str, row_count: int, device_id: str | None = None) -> dict:
     """记一个锚点, 顺手删一年多以前的。返 {id, received_at}。"""
     with _pg_conn() as conn, conn.cursor() as cur:
         _ensure(cur)
@@ -50,10 +51,10 @@ def add(*, sub: str, last_id: int, last_hash: str, row_count: int) -> dict:
         )
         cur.execute(
             """
-            INSERT INTO egress_anchor (sub, last_id, last_hash, row_count)
-            VALUES (%s, %s, %s, %s) RETURNING id, received_at
+            INSERT INTO egress_anchor (sub, last_id, last_hash, row_count, device_id)
+            VALUES (%s, %s, %s, %s, %s) RETURNING id, received_at
             """,
-            (sub, last_id, last_hash, row_count),
+            (sub, last_id, last_hash, row_count, device_id),
         )
         row = cur.fetchone()
         conn.commit()
@@ -65,7 +66,7 @@ def list_for(sub: str, limit: int = 400) -> list[dict]:
         _ensure(cur)
         cur.execute(
             """
-            SELECT last_id, last_hash, row_count, received_at FROM egress_anchor
+            SELECT last_id, last_hash, row_count, received_at, device_id FROM egress_anchor
              WHERE sub = %s ORDER BY received_at DESC LIMIT %s
             """,
             (sub, limit),
@@ -73,6 +74,7 @@ def list_for(sub: str, limit: int = 400) -> list[dict]:
         rows = cur.fetchall()
         conn.commit()
     return [
-        {"last_id": int(r[0]), "last_hash": r[1], "row_count": int(r[2]), "received_at": r[3].isoformat()}
+        {"last_id": int(r[0]), "last_hash": r[1], "row_count": int(r[2]), "received_at": r[3].isoformat(),
+         "device_id": r[4]}
         for r in rows
     ]

@@ -367,6 +367,17 @@ pub fn find_on_path(name: &str) -> Option<PathBuf> {
 /// 注: 本文件其它地方 (tool_bridge_python / hermes_config_path) 仍写死
 /// `~/.hermes`, 全 Rust 代码里这样的还有 40 多处。那是同一类 Windows 缺口,
 /// 但面比邮件大得多, 没在这次一起动。
+/// 员工本机数据目录 `~/.catfish` (Windows: `%USERPROFILE%\.catfish`)。
+/// 10/31: 换机迁移从这里取; 其他 8 处各自拼的 (wiki_slug / wiki_read / server_config …) 同一个结果。
+pub fn catfish_home() -> Option<PathBuf> {
+    Some(home_dir()?.join(".catfish"))
+}
+
+/// 用户主目录 (HOME / USERPROFILE)。换机迁移改写文件里的绝对路径时用。
+pub fn user_home() -> Option<PathBuf> {
+    home_dir()
+}
+
 pub fn hermes_home() -> Option<PathBuf> {
     Some(hermes_home_for(&home_dir()?))
 }

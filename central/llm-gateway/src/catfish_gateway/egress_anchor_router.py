@@ -6,7 +6,7 @@
 只收指纹 (序号 + sha256), 不收内容; 身份来自 JWT, 只能报 / 看自己的。
 
 端点:
-    POST /api/egress/anchor   {last_id, last_hash, row_count}  → {id, received_at}
+    POST /api/egress/anchor   {last_id, last_hash, row_count, device_id?}  → {id, received_at}
     GET  /api/egress/anchors?limit=                           → {anchors: [...]}
 """
 from __future__ import annotations
@@ -29,6 +29,8 @@ class AnchorReq(BaseModel):
     last_id: int = Field(ge=0)
     last_hash: str = Field(pattern=r"^([0-9a-f]{64}|GENESIS)$")
     row_count: int = Field(default=0, ge=0)
+    # 本机随机生成的设备号 (换机迁移后区分新旧两台的链头); 老版本 Companion 不带
+    device_id: str | None = Field(default=None, pattern=r"^[0-9a-f-]{8,64}$")
 
 
 def _require_pg() -> None:
@@ -41,7 +43,9 @@ async def add_anchor(req: AnchorReq, user: User = Depends(get_current_user)) -> 
     _require_pg()
     sub = user.sub.strip().lower()
     try:
-        out = egress_anchor_db.add(sub=sub, last_id=req.last_id, last_hash=req.last_hash, row_count=req.row_count)
+        out = egress_anchor_db.add(
+            sub=sub, last_id=req.last_id, last_hash=req.last_hash, row_count=req.row_count, device_id=req.device_id
+        )
     except Exception as e:
         logger.warning("egress 指纹写入失败 (%s): %s", sub, e)
         raise HTTPException(503, "指纹存储暂不可用") from None

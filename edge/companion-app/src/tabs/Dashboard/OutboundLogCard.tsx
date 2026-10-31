@@ -476,7 +476,7 @@ function Row({ entry: e }: { entry: TransparentLogEntry }) {
         }}
         title={e.url}
       >
-        {e.destKind === "third_party" ? "第三方 · " : "中央 · "}{e.destHost || path}
+        {e.destKind === "third_party" ? "第三方 · " : e.destKind === "local" ? "本机 · " : "中央 · "}{e.destHost || path}
       </td>
       <td style={{ ...tdStyle, color: statusColor }}>
         {e.status ?? (e.error ? "ERR" : "?")}

@@ -79,8 +79,20 @@ fn db_path() -> Result<PathBuf, String> {
 }
 
 pub(crate) fn open_db() -> Result<Connection, String> {
-    let path = db_path()?;
-    let conn = Connection::open(&path).map_err(|e| format!("SQLite open: {e}"))?;
+    let conn = open_db_at(&db_path()?)?;
+    // 老的请求内容文件 (~/.catfish/outbound_log_payloads/) 不用了
+    if let Some(home) = home_dir() {
+        let old = home.join(".catfish").join("outbound_log_payloads");
+        if old.exists() {
+            let _ = std::fs::remove_dir_all(&old);
+        }
+    }
+    Ok(conn)
+}
+
+/// 指定路径开库 + 建表 / 补列 (10/31 换机迁移导入时对暂存目录里的库用)。
+pub(crate) fn open_db_at(path: &std::path::Path) -> Result<Connection, String> {
+    let conn = Connection::open(path).map_err(|e| format!("SQLite open: {e}"))?;
     // hermes / tool-bridge 也写这个库 (接链要排队)
     let _ = conn.busy_timeout(std::time::Duration::from_secs(15));
     conn.execute_batch(
@@ -115,15 +127,8 @@ pub(crate) fn open_db() -> Result<Connection, String> {
             let _ = conn.execute(&format!("ALTER TABLE outbound_log ADD COLUMN {col} TEXT"), []);
         }
     }
-    // 老格式的行 (origin 为空) 基本都是本机轮询 (界面每 3 秒问 hermes), 不是外发 —— 清掉;
-    // 老的请求内容文件 (~/.catfish/outbound_log_payloads/) 也不用了
+    // 老格式的行 (origin 为空) 基本都是本机轮询 (界面每 3 秒问 hermes), 不是外发 —— 清掉
     let _ = conn.execute("DELETE FROM outbound_log WHERE origin IS NULL", []);
-    if let Some(home) = home_dir() {
-        let old = home.join(".catfish").join("outbound_log_payloads");
-        if old.exists() {
-            let _ = std::fs::remove_dir_all(&old);
-        }
-    }
     super::transparent_log_store::ensure(&conn)?;
     Ok(conn)
 }

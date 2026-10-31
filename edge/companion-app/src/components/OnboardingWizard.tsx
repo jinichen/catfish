@@ -41,6 +41,7 @@ import {
   StepServerConfig,
   StepWelcome,
 } from "./OnboardingStepsConnect";
+import { StepMigrate } from "./OnboardingStepMigrate";
 import {
   type ModelInfo,
   StepCurator,
@@ -127,7 +128,7 @@ export default function OnboardingWizard() {
         }}
       >
         {/* 步骤指示 (5/3 晚 BL-E11: 4→5, 6/1 BL-ONBOARDING-DOC-DIRS-STEP: 6→7,
-            7/15 BL-ONBOARDING-SERVER-STEP: 7→8 加服务器地址) */}
+            7/15 BL-ONBOARDING-SERVER-STEP: 7→8 加服务器地址, 10/31 BL-L9: 8→9 加换机迁移) */}
         <div
           style={{
             display: "flex",
@@ -136,7 +137,7 @@ export default function OnboardingWizard() {
             justifyContent: "center",
           }}
         >
-          {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
+          {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
             <div
               key={i}
               style={{
@@ -158,16 +159,18 @@ export default function OnboardingWizard() {
         {step === 1 && <StepServerConfig onNext={next} onBack={back} onSkip={close} />}
         {step === 2 && <StepName onNext={next} onBack={back} onSkip={close} />}
         {step === 3 && <StepAuth onNext={next} onBack={back} onSkip={close} />}
-        {step === 4 && (
+        {/* 10/31 BL-L9: 登录之后问一句「从旧电脑迁移?」(导入要核对是不是本人) */}
+        {step === 4 && <StepMigrate onNext={next} onBack={back} onSkip={close} onImported={markOnboarded} />}
+        {step === 5 && (
           <StepModel models={models} onNext={next} onBack={back} onSkip={close} />
         )}
         {/* 5/7 BL-CR: Curator consent toggle */}
-        {step === 5 && <StepCurator onNext={next} onBack={back} onSkip={close} />}
+        {step === 6 && <StepCurator onNext={next} onBack={back} onSkip={close} />}
         {/* 6/1 BL-ONBOARDING-DOC-DIRS-STEP: 加文书目录, 解决默认 ~/Documents/work
             命中率低问题 — 50 员工 mac 上各种自定义目录 (~/项目/ / ~/文稿/ / ~/work/),
             不让员工指目录则文书风格永远 0 文档. */}
-        {step === 6 && <StepDocDirs onNext={next} onBack={back} onSkip={close} />}
-        {step === 7 && (
+        {step === 7 && <StepDocDirs onNext={next} onBack={back} onSkip={close} />}
+        {step === 8 && (
           <StepTryChat
             onFinish={(seedMessage) => {
               // BL-MEMORY-ONBOARDING-SEED (5/16): seedMessage 来自 StepTryChat 4 选 1

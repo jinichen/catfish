@@ -88,7 +88,7 @@ fn 指纹链_看内容_校验出篡改_锚点() {
         assert_eq!(rep.checked, 3);
 
         let head: String = conn.query_row("SELECT row_hash FROM outbound_log WHERE id = ?1", [c], |r| r.get(0)).unwrap();
-        let anchor = |id: i64, h: &str| Anchor { last_id: id, last_hash: h.into(), received_at: chrono::Utc::now().to_rfc3339() };
+        let anchor = |id: i64, h: &str| Anchor { last_id: id, last_hash: h.into(), received_at: chrono::Utc::now().to_rfc3339(), device_id: None };
         assert!(verify_with(&conn, &[anchor(c, &head)]).unwrap().ok, "锚点对得上");
 
         // 改字段
@@ -128,7 +128,7 @@ fn 保留期_清理后链还接得上() {
         assert!(rep.ok && rep.checked == 1, "{:?}", rep.problems);
         // 清掉的那条当时报过中央: 报的时间早于保留期 → 正常清理; 晚于 → 提前删 (中央时间带 +08:00)
         let gone = |at: chrono::DateTime<chrono::FixedOffset>| Anchor {
-            last_id: 1, last_hash: "x".into(), received_at: at.to_rfc3339() };
+            last_id: 1, last_hash: "x".into(), received_at: at.to_rfc3339(), device_id: None };
         let cst = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
         let old_at = (chrono::Utc::now() - chrono::Duration::days(35)).with_timezone(&cst);
         let new_at = (chrono::Utc::now() - chrono::Duration::days(5)).with_timezone(&cst);

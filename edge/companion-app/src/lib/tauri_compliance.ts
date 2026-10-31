@@ -149,7 +149,8 @@ export interface TransparentLogEntry {
   error?: string;
   category?: string;
   origin?: string;
-  destKind?: "central" | "third_party";
+  /** local = 不出本机的记录 (10/31 换机迁移: 导出 / 迁入各一行) */
+  destKind?: "central" | "third_party" | "local";
   destHost?: string;
   purpose?: string;
 }
@@ -230,6 +231,8 @@ export interface EgressAnchor {
   lastId: number;
   lastHash: string;
   receivedAt: string;
+  /** 10/31 换机迁移: 报这个锚点的设备 (老锚点没有) */
+  deviceId?: string | null;
 }
 export interface TransparentLogVerifyReport {
   ok: boolean;
@@ -239,9 +242,14 @@ export interface TransparentLogVerifyReport {
   problems: string[];
   anchorsChecked: number;
   anchorsBad: number;
+  /** 别的设备报的锚点 (旧机迁出后还在用 / 同一个人另一台电脑), 没拿来对这条链 */
+  anchorsOtherDevice: number;
   /** 做过的统一脱敏 (打码规则变严后旧记录重新打码、重算指纹), 一条一句 */
   rechains: string[];
 }
+/** 本机设备号 (第一次调时生成) */
+export const deviceIdGet = () => rawInvoke<string>("device_id_get");
+
 export const transparentLogVerify = (anchors?: EgressAnchor[]) =>
   rawInvoke<TransparentLogVerifyReport>("transparent_log_verify", { anchors });
 

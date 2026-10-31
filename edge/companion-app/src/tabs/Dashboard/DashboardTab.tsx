@@ -140,6 +140,7 @@ import SalesTemplateCard from "./SalesTemplateCard";
 // 落地, 是公理 2 (数据零出端) 的**可证明 enforcement** 层.
 import OutboundLogCard from "./OutboundLogCard";
 import AuditExportCard from "./AuditExportCard";  // P3.3.54 (6/12 鸿波): 审计员看的 xlsx 导出
+import DeviceMigrationCard from "./DeviceMigrationCard"; // 10/31 换机迁移 (docs/DEVICE-MIGRATION-DESIGN.md)
 import AuditViewCard from "./AuditViewCard";  // P3.3.55 (6/12 鸿波): 审计员现场看的 tab
 import { useUIStore } from "../../store/ui";  // P3.3.55 (6/12): auditViewEnabled 开关
 // 6/8 BL-PRIVACY-SECTION-TABS: 隐私 section 内 3 卡 → 3 tabs (空间 +25%).
@@ -247,6 +248,8 @@ export default function DashboardTab() {
             { key: "outbound", label: "📊 数据外发记录", render: () => <OutboundLogCard /> },
             // P3.3.54 (6/12 鸿波): 审计导出 — 给信合规 / 内审 / 党办手动交付
             { key: "audit-export", label: "📦 审计导出", render: () => <AuditExportCard /> },
+            // 10/31 BL-L9: 换机迁移 —— 旧电脑导出加密迁移包, 新电脑导入 (不经过中央)
+            { key: "migrate", label: "🧳 换机迁移", render: () => <DeviceMigrationCard /> },
             // P3.3.55 (6/12 鸿波): 审计视图 tab — 默认关 (PrivacyCard toggle 开)
             ...(auditViewEnabled
               ? [{ key: "audit-view", label: "🔍 审计视图", render: () => <AuditViewCard /> }]

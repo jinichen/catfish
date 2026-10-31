@@ -35,3 +35,17 @@ def test_写入读回_只给自己的(db):
     assert [a["last_id"] for a in got] == [20, 10]  # 新的在前
     assert got[0]["last_hash"] == h2 and got[0]["row_count"] == 19
     assert [a["last_id"] for a in db.list_for("bob@x.com")] == [5]
+
+
+def test_设备号_老表自动补列(db):
+    # 先按 10/25 的老结构建表 (没有 device_id), 再走 add —— _ensure 要把列补上
+    with db._pg_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "CREATE TABLE egress_anchor (id BIGSERIAL PRIMARY KEY, sub TEXT NOT NULL, last_id BIGINT NOT NULL,"
+            " last_hash TEXT NOT NULL, row_count BIGINT NOT NULL DEFAULT 0, received_at TIMESTAMPTZ NOT NULL DEFAULT now())"
+        )
+        cur.execute("INSERT INTO egress_anchor (sub, last_id, last_hash) VALUES ('alice@x.com', 1, %s)", ("ab" * 32,))
+        conn.commit()
+    db.add(sub="alice@x.com", last_id=2, last_hash="cd" * 32, row_count=2, device_id="3f2a9c1e-7b44-4d2e-9a10-5c6d7e8f9012")
+    got = db.list_for("alice@x.com")
+    assert [(a["last_id"], a["device_id"]) for a in got] == [(2, "3f2a9c1e-7b44-4d2e-9a10-5c6d7e8f9012"), (1, None)]

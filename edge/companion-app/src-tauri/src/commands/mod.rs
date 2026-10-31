@@ -99,6 +99,8 @@ pub mod self_serve; // 6/8 BL-EMPLOYEE-SELF-SERVE: A1 重置 / A2 导出 / A3 �
 pub mod task_uid_cache; // P3.5.91 (6/23 鸿波): 早安 task → canonical taskUid 客户端 cache — 治 LLM 给新 uid 时 session 关联失联
 pub mod tool_perf; // P3.5.59 (6/22 鸿波): tool-bridge audit jsonl 聚合 per-tool perf (count / success_rate / p50/p95/p99)
 pub mod transparent_log_store; // 10/25: 外发记录存内容 + 指纹链 + 保留期
+pub(crate) mod transparent_log_lineage; // 10/31: 换机迁移 —— 链上记迁移、锚点按设备分清新旧两台
+pub mod device_migration; // 10/31: 换机迁移包导出 / 导入 (docs/DEVICE-MIGRATION-DESIGN.md)
 pub(crate) mod transparent_log_redact; // 10/25: 打码规则变严后旧记录统一脱敏 + 重算指纹 (留存原指纹给中央锚点核对)
 pub mod transparent_log; // 6/8 BL-EMPLOYEE-SELF-SERVE A4: 数据外发日志 (员工自审) // BL-ADVISOR-TASK-STATE (5/22): done/snoozed/ignored 状态
                          // BL-STYLE-FP-USE-INDEX (7/27): style_fingerprint_dirs 整个删了.

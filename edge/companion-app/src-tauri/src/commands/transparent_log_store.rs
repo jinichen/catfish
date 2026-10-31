@@ -369,6 +369,9 @@ pub struct Anchor {
     pub last_id: i64,
     pub last_hash: String,
     pub received_at: String,
+    /// 10/31: 报这个锚点的设备 (换机迁移后分清新旧两台); 老锚点没有
+    #[serde(default)]
+    pub device_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -383,6 +386,8 @@ pub struct VerifyReport {
     pub problems: Vec<String>,
     pub anchors_checked: u64,
     pub anchors_bad: u64,
+    /// 别的设备报的 (旧机迁出后还在用 / 同一个人另一台电脑), 不拿来对这条链
+    pub anchors_other_device: u64,
     /// 做过的统一脱敏 (哪天、为什么、重算了几条) —— 指纹重算过要说出来, 不悄悄抹掉
     pub rechains: Vec<String>,
 }
@@ -409,6 +414,11 @@ fn blob_refs(v: &Value, out: &mut Vec<String>) {
 }
 
 pub(crate) fn verify_with(conn: &Connection, anchors: &[Anchor]) -> Result<VerifyReport, String> {
+    verify_for_device(conn, anchors, None)
+}
+
+/// `me` = 本机设备号: 只对自己 / 迁来那台迁移点之前的锚点 (transparent_log_lineage)。
+pub(crate) fn verify_for_device(conn: &Connection, anchors: &[Anchor], me: Option<&str>) -> Result<VerifyReport, String> {
     let mut rep = VerifyReport { ok: true, rechains: super::transparent_log_redact::rechain_notes(conn), ..Default::default() };
     // blob 先各验一遍
     let mut good_blobs: HashSet<String> = HashSet::new();
@@ -492,7 +502,12 @@ pub(crate) fn verify_with(conn: &Connection, anchors: &[Anchor]) -> Result<Verif
     // 中央锚点: 每天报上去的链头, 本机得对得上
     let retention = retention_days(conn);
     let cutoff = chrono::Utc::now() - chrono::Duration::days(retention);
+    let lineage = super::transparent_log_lineage::lineage(conn);
     for a in anchors {
+        if let super::transparent_log_lineage::Scope::OtherDevice = super::transparent_log_lineage::anchor_scope(a, me, &lineage) {
+            rep.anchors_other_device += 1;
+            continue;
+        }
         // 中央给的时间带时区 (+08:00), 得解析了再比, 不能比字符串
         let past_retention = chrono::DateTime::parse_from_rfc3339(&a.received_at)
             .map(|t| t.with_timezone(&chrono::Utc) < cutoff)
@@ -608,7 +623,11 @@ pub async fn transparent_log_payload(id: i64) -> Result<PayloadView, String> {
 
 #[tauri::command]
 pub async fn transparent_log_verify(anchors: Option<Vec<Anchor>>) -> Result<VerifyReport, String> {
-    blocking(move || verify_with(&open_db()?, &anchors.unwrap_or_default())).await
+    blocking(move || {
+        let me = crate::services::catfish_paths::catfish_home().and_then(|h| crate::services::device_id::read(&h));
+        verify_for_device(&open_db()?, &anchors.unwrap_or_default(), me.as_deref())
+    })
+    .await
 }
 
 #[tauri::command]
