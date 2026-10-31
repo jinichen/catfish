@@ -411,6 +411,7 @@ def _patch_p10_apply_client_headers_localhost() -> None:
         # 上一轮的值不能继承 (这一轮没有 user / source 就该不带)
         headers.pop("X-Catfish-User", None)
         headers.pop("X-Catfish-Source", None)
+        headers.pop("X-Catfish-Thinking", None)
         cf_user = _resolver().resolve_for_agent(self)
         if cf_user:
             headers["X-Catfish-User"] = cf_user
@@ -433,6 +434,15 @@ def _patch_p10_apply_client_headers_localhost() -> None:
                 cf_source = f"hermes:{platform}"
         if cf_source:
             headers["X-Catfish-Source"] = cf_source
+        # 10/31: 邮件分诊 / 钓鱼复审 (P44 白名单里的后台分类器) 不要深度思考。qwen-flash 经
+        # hermes 开着思考, 一批 30 封要 60–126 秒, Companion 15 秒就放弃了 —— 1.2.12 重判时
+        # 「办 / 回」一条都没写进去。关掉后同样 8 封 3 秒, 判对数一样 (7/8)。网关只在请求
+        # 不带工具时认这个头, 这两类本来就不带 (P44)。
+        try:
+            if cf_source in _sib("plugin_service_lean").LEAN_SOURCES:
+                headers["X-Catfish-Thinking"] = "off"
+        except Exception:  # noqa: BLE001  查不到白名单就照旧, 只是慢
+            pass
         if headers:
             self._client_kwargs["default_headers"] = headers
         else:

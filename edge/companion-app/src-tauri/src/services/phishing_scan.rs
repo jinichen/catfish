@@ -90,7 +90,10 @@ pub struct PhishingScanResult {
 }
 
 /// 当前复审规则版本。改了复审提示词 / 判定规则就 +1。
-pub const PHISHING_REVIEW_REV: u32 = 2;
+///
+/// 3 (10/31): 2 那一版把模型复审失败 (超时) 的也记成「按新规则扫过」, 458 封里只有 60 封
+/// 真被模型看过。现在只有复审成功才记版本, 3 让那批重扫。
+pub const PHISHING_REVIEW_REV: u32 = 3;
 
 /// 输入: 单封邮件元数据.
 #[derive(Debug, Clone)]

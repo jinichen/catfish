@@ -211,7 +211,8 @@ pub async fn email_phishing_scan_now(
         let store = phishing_store().lock().map_err(|e| e.to_string())?;
         items
             .iter()
-            .filter(|it| !store.contains_key(&it.id))
+            // 10/31: 只跳过「模型按当前规则看过」的; 复审失败的 (只有规则结果) 再送一次
+            .filter(|it| !store.get(&it.id).is_some_and(|r| r.review_rev >= phishing_scan::PHISHING_REVIEW_REV))
             .map(|it| EmailItem {
                 id: it.id.clone(),
                 subject: it.subject.clone(),
@@ -609,12 +610,17 @@ async fn scan_phishing_for_new(new_items: &[EmailItem]) {
             log::warn!("[phishing] LLM 返 {} verdict != {} 期望 (仅规则)", verdicts.len(), scans.len());
         }
         Err(e) => {
-            log::debug!("[phishing] LLM 复审挂 (仅规则结果): {e}");
+            // 10/31: debug → warn, 理由同评级失败
+            log::warn!("[phishing] LLM 复审失败 (先只留规则结果, 下次打开邮件页重扫): {e}");
         }
     }
 
+    // 10/31: 只有模型真看过的才记「按当前规则扫过」。复审失败 (超时 / 上游挂) 的只留规则结果,
+    // 版本留 0 —— email_phishing_scan_now 认它没扫完, 下次打开邮件页再送; 重启加载时也会丢掉重扫。
     for s in scans.iter_mut() {
-        s.review_rev = phishing_scan::PHISHING_REVIEW_REV;
+        if s.llm_verdict.is_some() {
+            s.review_rev = phishing_scan::PHISHING_REVIEW_REV;
+        }
     }
     store_and_audit(new_items, scans).await;
 }
@@ -726,7 +732,8 @@ async fn rate_emails(items: &[EmailItem]) -> Vec<Urgency> {
             vec![Urgency::Medium; items.len()]
         }
         Err(e) => {
-            log::debug!("email_scheduler: 评级失败 (fallback Medium): {e}");
+            // 10/31: debug → warn。1.2.12 重判全部超时, 日志里一个字都没有, 只看到「办 / 回」没了
+            log::warn!("email_scheduler: 评级失败 (fallback Medium, 下次打开邮件页重评): {e}");
             vec![Urgency::Medium; items.len()]
         }
     }

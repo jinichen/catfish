@@ -107,7 +107,8 @@ pub(crate) async fn call_rate_llm(items: &[EmailItem]) -> Result<Vec<Classificat
     let system = "你是邮件分诊助手. 对每封邮件给三个判断: \
                   u = 紧急度: 急 (老板/客户/紧急任务/临近截止) / 低 (newsletter/促销/自动通知) / 其它一律 中. \
                   a = 这封要收件人干什么: 知 (知悉即可, 不用动作) / 回 (要回信) / 办 (要办事, 如提交材料/审批/参加). \
-                  「收件」一栏说明这封是直接发给我、抄送我还是群发 (共几人). 抄送我的、或群发给很多人的通知 / 通报 / \
+                  「收件」一栏说明这封是直接发给我、抄送我还是群发 (共几人); 收件人几十上百的就是群发, 哪怕我在收件人一栏. \
+                  抄送我的、或群发给很多人的通知 / 通报 / \
                   预警 / 公文 / 制度, 默认 知; 只有正文明确要求每个收件人本人去做 (每人提交、填报、参加、完成) 才是 办; \
                   「请各单位 / 各部门落实」这类是给负责人的, 我只是群发里的一个时归 知. 回 只给直接发给我并且在等我答复的. \
                   系统自动发的通知、订阅、营销一律 知, u 给 低. \
@@ -138,7 +139,10 @@ pub(crate) async fn call_rate_llm(items: &[EmailItem]) -> Result<Vec<Classificat
     // 今晚 embedding 就是这么挂的 —— 这处是同一个病, 只是还没爆。
     let client = crate::util::http_client::trust_central(
         reqwest::Client::builder()
-            .timeout(Duration::from_secs(15)),
+            // 10/31: 15 → 90 s。经 hermes 一批 30 封, 开着思考实测 16–103 s, 15 s 全超时 ——
+            // 1.2.12 重判时「办 / 回」一条没写进去。插件已对这类请求关思考 (3 s 级),
+            // 这里留足余量给上游拥堵, 不再让超时决定分诊有没有结果。
+            .timeout(Duration::from_secs(90)),
     )
     .build()
     .map_err(|e| format!("reqwest build 失败: {e}"))?;

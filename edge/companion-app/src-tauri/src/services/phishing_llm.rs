@@ -120,7 +120,7 @@ pub async fn batch_llm_review(
     // 今晚 embedding 就是这么挂的 —— 这处是同一个病, 只是还没爆。
     let client = crate::util::http_client::trust_central(
         reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(20)),
+            .timeout(std::time::Duration::from_secs(90)), // 10/31: 20 → 90 s, 同 email_llm
     )
     .build()
     .map_err(|e| format!("reqwest build 失败: {e}"))?;
