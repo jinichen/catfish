@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useEmailListCacheHydrate } from "../../hooks/useEmailListCacheHydrate";
 import { useEmailScanners } from "../../hooks/useEmailScanners";
+import { markFullRefresh, mergeNewest, planListFetch } from "../../lib/emailListPlan";
 import {
   emailListFetch,
   emailAccountsFetch,
@@ -162,35 +163,34 @@ export default function EmailTab() {
   const itemCount = useRef(0);
   useEffect(() => { itemCount.current = items.length; }, [items]);
 
-  const loadList = useCallback(async (opts?: { quiet?: boolean }) => {
+  const loadList = useCallback(async (opts?: { quiet?: boolean; full?: boolean }) => {
     const quiet = opts?.quiet === true;
+    // 10/31: 平时只拉最新 30 封合并, 隔半小时 / 手动收信才全量 (见 lib/emailListPlan.ts)
+    await useEmailStore.getState().hydrateListCache?.(); // 重启后先等落盘列表读进来, 有它就不必全量
+    const plan = planListFetch({ hasItems: itemCount.current > 0 || !!useEmailStore.getState().listCache, full: opts?.full, inboxAll: folder === "Inbox" && !unreadOnly, maxLimit: MAX_EMAIL_LIST_LIMIT });
     if (quiet && inFlight.current > 0) return;
     inFlight.current += 1;
     if (!quiet) setLoading(true);
     if (!quiet) setError(null);
     try {
       const [listJson, sentJson, accountsJson, _urgency] = await Promise.all([
-        // P3.5.58 Phase 3 (6/22 鸿波 catch "邮件数量没有 100, 为什么一直显示
-        // 100, 是不是硬编码了"): 真因 — 之前硬编码 limit=100, INBOX ≥100 封时
-        // items.length 永远 100, header 显"100 封"实是被 cap 截了不告诉 user.
-        // 改成 Rust 端 clamp 上限 500 (clamp(1, 500) 见 email.rs:89), 比 100 大
-        // 5x. 一般员工 INBOX < 500 封, 真能看见全量. ≥500 时 header 显"500+"
-        // 提示 user 真值被截 (见 headerSummary).
-        emailListFetch(unreadOnly, MAX_EMAIL_LIST_LIMIT, folder === "Inbox" ? undefined : folder),
-        // P3.5.204.b (7/9): 并行拉 Sent (最近 200 封), 只用于 isReplied 数据源.
-        // 出错不阻塞 (Sent 拉不到只影响 replied badge, 不影响主流程) → catch 空数组.
-        emailListFetch(false, 200, "Sent").catch(() => "[]"),
+        // 全量上限 500 (Rust clamp), ≥500 时 header 显"500+" (见 headerSummary)。
+        emailListFetch(unreadOnly, plan.limit, folder === "Inbox" ? undefined : folder),
+        // P3.5.204.b (7/9): 并行拉 Sent, 只用于 isReplied; 出错不阻塞 → 空数组。
+        emailListFetch(false, plan.sentLimit, "Sent").catch(() => "[]"),
         emailAccountsFetch().catch(() => "[]"),
         // BL-COMPANION-EMAIL-DIGEST-STEP5: 走 store.reconcileFromRust 后台拉,
         // setUrgencyMap 不再这里调 — store 内部自己 merge + 持久化
         reconcileUrgency().catch(() => ({})),
       ]);
       void _urgency;
-      const list = JSON.parse(listJson);
-      const sent = JSON.parse(sentJson);
+      const cached = useEmailStore.getState().listCache;
+      const list = plan.incremental ? mergeNewest(cached?.items, JSON.parse(listJson), MAX_EMAIL_LIST_LIMIT) : JSON.parse(listJson);
+      const sent = plan.incremental ? mergeNewest(cached?.sentItems, JSON.parse(sentJson), 200) : JSON.parse(sentJson);
+      if (!plan.incremental) markFullRefresh();
       const accs = JSON.parse(accountsJson);
       // 10/15: 可能是删除前就发出的那轮旧列表 —— 过墓碑 (store.acceptList, lib/emailDeleted.ts)
-      const complete = folder === "Inbox" && !unreadOnly && Array.isArray(list) && list.length < MAX_EMAIL_LIST_LIMIT;
+      const complete = !plan.incremental && folder === "Inbox" && !unreadOnly && Array.isArray(list) && list.length < MAX_EMAIL_LIST_LIMIT;
       if (Array.isArray(list)) setItems(useEmailStore.getState().acceptList?.(list, complete) ?? list);
       if (Array.isArray(sent)) setSentItems(sent as EmailDigestItem[]);
       if (Array.isArray(accs)) setAccounts(accs as EmailAccountItem[]);
@@ -251,8 +251,8 @@ export default function EmailTab() {
       setSyncError(e instanceof Error ? e.message : String(e));
     } finally {
       setSyncing(false);
-      // check 完 (无论成败) 立即 refetch, 让新拉到的邮件立即入列表.
-      void loadList();
+      // check 完 (无论成败) 立即全量 refetch, 让新拉到的邮件立即入列表.
+      void loadList({ full: true });
     }
   }, [loadList]);
 
