@@ -80,19 +80,33 @@ fn norm_action(s: &str) -> Option<String> {
 /// 兼容两种元素形状:
 ///   对象 {"u","a","d"} —— 新协议
 ///   纯字符串 "急"       —— 老协议 (action/deadline 记 None)
-pub(crate) fn parse_classifications(s: &str) -> Result<Vec<Classification>, String> {
+/// 从模型回复里取出 JSON 数组并解析。邮件分诊和钓鱼复审共用。
+///
+/// 10/31: 经 hermes 拿到的回复偶尔**只缺结尾那个 `]`** —— 网关日志里模型输出完整 (541 字,
+/// finish_reason=stop), Companion 收到 540 字; 1.2.13 首轮 22 批里 6 批这样挂, 整批作废。
+/// 丢在 hermes 那一跳 (源码看不到, 网关侧垫空 chunk 试过不管用)。这里兜底: 正常解析失败、
+/// 而回复正好停在一个完整对象 `}` 之后时, 补上 `]` 再解析 —— 只补这一种, 别的残缺照旧报错。
+pub(crate) fn parse_json_array<T: serde::de::DeserializeOwned>(s: &str) -> Result<Vec<T>, String> {
     let trimmed = s.trim();
     let start = trimmed
         .find('[')
         .ok_or_else(|| format!("没 JSON array: {trimmed:?}"))?;
-    let end = trimmed
-        .rfind(']')
-        .ok_or_else(|| format!("没 ] 闭合: {trimmed:?}"))?;
-    if end <= start {
-        return Err(format!("] 在 [ 前: {trimmed:?}"));
+    if let Some(end) = trimmed.rfind(']').filter(|&e| e > start) {
+        if let Ok(v) = serde_json::from_str(&trimmed[start..=end]) {
+            return Ok(v);
+        }
     }
-    let arr: Vec<Value> = serde_json::from_str(&trimmed[start..=end])
-        .map_err(|e| format!("JSON 解析失败 ({e})"))?;
+    if trimmed.ends_with('}') {
+        if let Ok(v) = serde_json::from_str(&format!("{}]", &trimmed[start..])) {
+            log::info!("模型回复缺结尾 `]`, 补上后解析成功");
+            return Ok(v);
+        }
+    }
+    Err(format!("JSON 数组解析失败: {trimmed:?}"))
+}
+
+pub(crate) fn parse_classifications(s: &str) -> Result<Vec<Classification>, String> {
+    let arr: Vec<Value> = parse_json_array(s)?;
 
     Ok(arr
         .into_iter()
@@ -211,5 +225,28 @@ mod tests {
     fn no_array_errors() {
         assert!(parse_classifications("急 中 低").is_err());
         assert!(parse_classifications("").is_err());
+    }
+}
+
+#[cfg(test)]
+mod tests_missing_bracket {
+    use super::{parse_classifications, parse_json_array};
+
+    #[test]
+    fn 只缺结尾方括号时补上() {
+        // 10/31 真机: 网关发出完整数组, Companion 收到的少了最后一个 `]`
+        let got = parse_classifications(r#"[{"u":"中","a":"知"},{"u":"急","a":"办","d":"2026-11-05"}"#).unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[1].action.as_deref(), Some("办"));
+    }
+
+    #[test]
+    fn 正常数组和其它残缺不受影响() {
+        assert_eq!(parse_json_array::<serde_json::Value>(r#"前言 [1, 2] 后记"#).unwrap().len(), 2);
+        // 理由里带 `]` 也照常
+        assert_eq!(parse_json_array::<serde_json::Value>(r#"[{"r":"见[附件]"}]"#).unwrap().len(), 1);
+        // 截在对象中间的不硬补
+        assert!(parse_json_array::<serde_json::Value>(r#"[{"u":"中"},{"u":"#).is_err());
+        assert!(parse_json_array::<serde_json::Value>("没有数组").is_err());
     }
 }

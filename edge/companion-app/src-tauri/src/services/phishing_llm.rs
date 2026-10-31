@@ -160,15 +160,8 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 fn parse_verdicts(s: &str, expected_n: usize) -> Result<Vec<LlmPhishingVerdict>, String> {
-    let trimmed = s.trim();
-    let start = trimmed.find('[').ok_or_else(|| format!("没 JSON array: {trimmed:?}"))?;
-    let end = trimmed.rfind(']').ok_or_else(|| format!("没 ]: {trimmed:?}"))?;
-    if end <= start {
-        return Err("] 在 [ 前".into());
-    }
-    let arr = &trimmed[start..=end];
-    let parsed: Vec<LlmPhishingVerdict> = serde_json::from_str(arr)
-        .map_err(|e| format!("verdicts JSON 解析失败 ({e}): {arr:?}"))?;
+    // 10/31: 跟邮件分诊共用, 回复缺结尾 `]` 时补上 (见 parse_json_array)
+    let parsed: Vec<LlmPhishingVerdict> = super::email_classify_parse::parse_json_array(s)?;
     if parsed.len() != expected_n {
         return Err(format!("LLM 返 {} 个 verdict, 期望 {}", parsed.len(), expected_n));
     }
