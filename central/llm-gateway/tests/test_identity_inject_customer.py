@@ -1,7 +1,8 @@
 """5/13 SOUL 分层 P1 — gateway 按 CATFISH_CUSTOMER 拼客户特定 SOUL.
 
 铁律:
-- CATFISH_CUSTOMER=ffcs (默认) → 注入 ~/.hermes/SOUL_FFCS.md
+- 没设 CATFISH_CUSTOMER (10/31 起默认空) → 不注入任何客户段, 哪怕本机留着 SOUL_FFCS.md
+- CATFISH_CUSTOMER=ffcs → 注入 ~/.hermes/SOUL_FFCS.md
 - 客户文件不存在 → 静默跳过, 只注 CORE SOUL
 - 改 env → 切到 SOUL_BYD.md / 等 (大写文件名约定)
 - 跟 BL-FED2 / BL-MM 注入流程不冲突 (拼在 CORE 后, system 唯一一条 message)
@@ -25,16 +26,34 @@ def fake_hermes_home(tmp_path: Path, monkeypatch):
     yield home
 
 
-def test_customer_soul_default_ffcs(fake_hermes_home: Path, monkeypatch):
-    """没设 env → 默认 ffcs, 读 SOUL_FFCS.md."""
+def test_customer_soul_default_none(fake_hermes_home: Path, monkeypatch):
+    """没设 env → 不注客户段 (10/31: 原来默认 ffcs, 别家客户员工也收到 FFCS 规则)."""
     monkeypatch.delenv("CATFISH_CUSTOMER", raising=False)
     (fake_hermes_home / "SOUL.md").write_text("# CORE\n通用铁律", encoding="utf-8")
     (fake_hermes_home / "SOUL_FFCS.md").write_text("# FFCS\n.ffcs.cn → http", encoding="utf-8")
 
     content = identity_inject.build_identity_content()
     assert "通用铁律" in content
+    assert ".ffcs.cn → http" not in content
+    assert "客户业务环境" not in content
+
+
+def test_customer_soul_ffcs(fake_hermes_home: Path, monkeypatch):
+    """CATFISH_CUSTOMER=ffcs → 读 SOUL_FFCS.md."""
+    monkeypatch.setenv("CATFISH_CUSTOMER", "ffcs")
+    (fake_hermes_home / "SOUL.md").write_text("# CORE\n通用铁律", encoding="utf-8")
+    (fake_hermes_home / "SOUL_FFCS.md").write_text("# FFCS\n.ffcs.cn → http", encoding="utf-8")
+
+    content = identity_inject.build_identity_content()
     assert ".ffcs.cn → http" in content
     assert "Identity (SOUL_FFCS — 客户业务环境)" in content
+
+
+def test_customer_label_from_bundle(monkeypatch):
+    """Companion bundle 带了客户段 + 客户名 → 标题用 bundle 里的客户名, 不依赖中央 env."""
+    monkeypatch.delenv("CATFISH_CUSTOMER", raising=False)
+    content = identity_inject.build_identity_content(bundle={"soul": "# CORE", "soul_customer": "内网 http", "customer": "ffcs"})
+    assert "Identity (SOUL_FFCS — 客户业务环境)" in content and "内网 http" in content
 
 
 def test_customer_soul_env_overrides(fake_hermes_home: Path, monkeypatch):
@@ -61,14 +80,14 @@ def test_customer_soul_missing_file_silent(fake_hermes_home: Path, monkeypatch):
     # 不抛异常 — 没文件就 silent skip
 
 
-def test_customer_soul_empty_string_falls_back_to_ffcs(fake_hermes_home: Path, monkeypatch):
-    """env 设成空串 → 当默认 (ffcs) 处理."""
+def test_customer_soul_empty_string_means_none(fake_hermes_home: Path, monkeypatch):
+    """env 设成空串 → 跟没设一样, 不注客户段 (10/31 起)."""
     monkeypatch.setenv("CATFISH_CUSTOMER", "")
     (fake_hermes_home / "SOUL.md").write_text("# CORE", encoding="utf-8")
     (fake_hermes_home / "SOUL_FFCS.md").write_text("FFCS 段", encoding="utf-8")
 
     content = identity_inject.build_identity_content()
-    assert "FFCS 段" in content
+    assert "FFCS 段" not in content
 
 
 def test_customer_soul_after_core(fake_hermes_home: Path, monkeypatch):

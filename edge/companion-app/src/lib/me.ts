@@ -36,6 +36,8 @@ export interface MeInfo {
   role: Role;
   managed_departments: string[];
   auth_method: string;
+  /** 10/31: 这套部署是哪家客户 (中央 CATFISH_CUSTOMER, 没配 = ""; 老版本中央不带这个字段) */
+  customer?: string;
 }
 
 const _DEV_USER_STORAGE_KEY = "catfish:dev_user_token";

@@ -13,7 +13,7 @@
 //!
 //! 一个原子命令 `identity_bundle()` 返 6 字段 dict:
 //!   - soul              ~/.hermes/SOUL.md
-//!   - soul_customer     ~/.hermes/SOUL_<CUSTOMER>.md (默认 FFCS, env CATFISH_CUSTOMER override)
+//!   - soul_customer     ~/.hermes/SOUL_<CUSTOMER>.md (10/31 起按中央 /api/me 的 customer; 没配就不加载)
 //!   - soul_browser      ~/.hermes/SOUL_BROWSER.md      (BL-SOUL-SCENARIO P2 场景段)
 //!   - soul_execute_code ~/.hermes/SOUL_EXECUTE_CODE.md (场景段)
 //!   - user_memory       ~/.hermes/USER.md
@@ -76,6 +76,8 @@ const BAKED_SOUL_EXECUTE_CODE: &str = include_str!("../../../../identity/SOUL_EX
 pub struct IdentityBundle {
     pub soul: String,
     pub soul_customer: String,
+    /// 10/31: 客户段对应的客户名 (小写, 空 = 没有客户段); gateway 拿它当标题, 不再看自己的 env
+    pub customer: String,
     pub soul_browser: String,
     pub soul_execute_code: String,
     pub user_memory: String,
@@ -114,10 +116,57 @@ fn read_file_or_baked(path: &Path, baked: &'static str) -> String {
     baked.to_string()
 }
 
+/// 本机记着的「这套部署是哪家客户」: 登录后从中央 /api/me 的 customer 取来写进
+/// `~/.catfish/customer` (identity_set_customer)。
+///
+/// 10/31: 原来没设 env 就默认 "ffcs" —— 每家客户的员工都加载了 FFCS (中电福富) 的内网约定。
+/// 现在优先级: env CATFISH_CUSTOMER (调试用) > 中央给的 > 空 (不加载客户段)。
 fn customer_label() -> String {
-    // 跟 gateway 同源: env CATFISH_CUSTOMER override > "ffcs" 默认 (FFCS 大写)
-    let raw = std::env::var("CATFISH_CUSTOMER").unwrap_or_else(|_| "ffcs".to_string());
-    raw.trim().to_uppercase()
+    let from_file = || {
+        crate::services::catfish_paths::catfish_home()
+            .and_then(|h| fs::read_to_string(h.join(CUSTOMER_FILE)).ok())
+    };
+    customer_label_from(std::env::var("CATFISH_CUSTOMER").ok(), from_file())
+}
+
+const CUSTOMER_FILE: &str = "customer";
+
+fn customer_label_from(env: Option<String>, file: Option<String>) -> String {
+    env.filter(|s| !s.trim().is_empty())
+        .or(file)
+        .map(|s| s.trim().to_uppercase())
+        .filter(|s| valid_customer(s))
+        .unwrap_or_default()
+}
+
+/// 客户名只允许字母数字和连字符 (拼进文件名 SOUL_<客户>.md, 不能带路径)
+fn valid_customer(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 32 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// 登录后前端把中央 /api/me 的 customer 传进来: 记下来, 并按新客户名重新同步 SOUL 文件。
+/// 返回是否有变化。中央没配 (空串) = 不加载客户段。
+#[tauri::command]
+pub fn identity_set_customer(customer: String) -> Result<bool, String> {
+    let c = customer.trim().to_lowercase();
+    if !c.is_empty() && !valid_customer(&c) {
+        return Err(format!("客户名不合法: {customer}"));
+    }
+    let home = crate::services::catfish_paths::catfish_home().ok_or("找不到用户目录")?;
+    let path = home.join(CUSTOMER_FILE);
+    let old = fs::read_to_string(&path).unwrap_or_default();
+    if old.trim() == c {
+        return Ok(false);
+    }
+    fs::create_dir_all(&home).map_err(|e| e.to_string())?;
+    if c.is_empty() {
+        let _ = fs::remove_file(&path);
+    } else {
+        fs::write(&path, &c).map_err(|e| e.to_string())?;
+    }
+    log::info!("[identity] 客户名 {:?} → {:?}, 重新同步 SOUL 文件", old.trim(), c);
+    bootstrap_soul_files();
+    Ok(true)
 }
 
 fn read_memories_concat(home: &std::path::Path) -> String {
@@ -164,6 +213,7 @@ pub async fn identity_bundle() -> Result<IdentityBundle, String> {
                 return Ok::<IdentityBundle, String>(IdentityBundle {
                     soul: String::new(),
                     soul_customer: String::new(),
+                    customer: String::new(),
                     soul_browser: String::new(),
                     soul_execute_code: String::new(),
                     user_memory: String::new(),
@@ -175,14 +225,17 @@ pub async fn identity_bundle() -> Result<IdentityBundle, String> {
         let cust = customer_label();
         // P3.5.55: SOUL 4 件走 fs-或-baked 兜底, USER.md / memories/ 仍 fs-only
         // (员工个人, 没就是没, 不该 bake 默认).
-        // soul_customer 只 FFCS 客户在 bake, 别家 (BYD/MEITUAN/...) 仍 fs-only.
+        // soul_customer 只 FFCS 客户在 bake, 别家 (BYD/MEITUAN/...) 仍 fs-only; 没有客户名 = 不加载.
         let baked_customer = if cust == "FFCS" { BAKED_SOUL_FFCS } else { "" };
+        let soul_customer = if cust.is_empty() {
+            String::new()
+        } else {
+            read_file_or_baked(&home.join(format!("SOUL_{cust}.md")), baked_customer)
+        };
         Ok::<IdentityBundle, String>(IdentityBundle {
             soul: read_file_or_baked(&home.join("SOUL.md"), BAKED_SOUL),
-            soul_customer: read_file_or_baked(
-                &home.join(format!("SOUL_{cust}.md")),
-                baked_customer,
-            ),
+            soul_customer,
+            customer: cust.to_lowercase(),
             soul_browser: read_file_or_baked(
                 &home.join("SOUL_BROWSER.md"),
                 BAKED_SOUL_BROWSER,
@@ -250,6 +303,19 @@ pub fn bootstrap_soul_files() {
     }
 
     let cust = customer_label();
+    // 10/31: 不是 FFCS 客户 → 清掉以前 (默认 ffcs 时代) Companion 写进来的 SOUL_FFCS.md;
+    // 只删内容跟内嵌版一致的普通文件 (开发机的软链、员工自己改过的都不动)
+    if cust != "FFCS" {
+        let stale = home.join("SOUL_FFCS.md");
+        if matches!(classify_existing(&stale), ExistingKind::RegularFile)
+            && fs::read_to_string(&stale).map(|t| t == BAKED_SOUL_FFCS).unwrap_or(false)
+        {
+            match fs::remove_file(&stale) {
+                Ok(()) => log::info!("[identity] 这套部署不是 FFCS, 删掉以前写进来的 {}", stale.display()),
+                Err(e) => log::warn!("[identity] 删 {} 失败 ({e})", stale.display()),
+            }
+        }
+    }
     // (filename, baked content)
     let baked_files: &[(String, &str)] = &[
         ("SOUL.md".into(), BAKED_SOUL),
@@ -262,6 +328,7 @@ pub fn bootstrap_soul_files() {
             format!("SOUL_{cust}.md"),
             if cust == "FFCS" { BAKED_SOUL_FFCS } else { "" },
         ),
+
     ];
 
     for (name, baked) in baked_files {
@@ -333,5 +400,19 @@ fn classify_existing(path: &Path) -> ExistingKind {
         }
     } else {
         ExistingKind::RegularFile
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 客户名_默认空_中央给的生效_env_优先_不合法的丢掉() {
+        assert_eq!(customer_label_from(None, None), "");
+        assert_eq!(customer_label_from(None, Some("ffcs\n".into())), "FFCS");
+        assert_eq!(customer_label_from(Some("byd".into()), Some("ffcs".into())), "BYD");
+        assert_eq!(customer_label_from(Some("  ".into()), Some("ffcs".into())), "FFCS");
+        assert_eq!(customer_label_from(None, Some("../etc".into())), "");
     }
 }

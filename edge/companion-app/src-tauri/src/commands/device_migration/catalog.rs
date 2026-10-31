@@ -92,6 +92,7 @@ const CATFISH: &[(Pat, Class, &str)] = &[
     (Exact("server-ca.pem"), Secret, "服务器证书 (跟单位部署走)"),
     (Exact(".env"), Secret, "密钥"),
     (Exact("device_id"), Secret, "本机设备号 (每台电脑自己的)"),
+    (Exact("customer"), Rebuild, "单位标识 (登录后从中央取)"),
     // ── 记忆 / 画像 / 日志 ──
     (Prefix("employee_journal"), Required, "工作日志"),
     (Exact("journal"), Required, "工作日志"),

@@ -98,13 +98,14 @@ def _read_soul() -> str:
 def _read_soul_customer() -> str:
     """5/13 拆分: 读客户特定 SOUL (~/.hermes/SOUL_<CUSTOMER>.md).  # noqa: BOUNDARY
 
-    `CATFISH_CUSTOMER` env 决定挑哪份 (默认 'ffcs' 兼容现有部署).
+    `CATFISH_CUSTOMER` env 决定挑哪份. 10/31 起默认**空** (不注入客户段) —— 原来默认 'ffcs',
+    别家客户的员工也收到了 FFCS 内网约定; FFCS 部署要在中央 .env 写 CATFISH_CUSTOMER=ffcs.
     业务环境特定段 (内网域名 / 系统简称 / 公文称谓) 应该写在这, 不污染通用 SOUL.
 
     没配 / 文件不存在 → 返空, build_identity_content 静默跳过.
     """
     import os  # noqa: PLC0415
-    customer = (os.environ.get("CATFISH_CUSTOMER") or "ffcs").strip()
+    customer = (os.environ.get("CATFISH_CUSTOMER") or "").strip()
     if not customer:
         return ""
     # 大写文件名: SOUL_FFCS.md (跟 install.sh ${CUSTOMER^^} 对齐)
@@ -212,7 +213,7 @@ def build_identity_content(
     soul_cust = (bundle.get("soul_customer", "") if bundle else _read_soul_customer()).strip()
     if soul_cust:
         import os  # noqa: PLC0415
-        cust_label = (os.environ.get("CATFISH_CUSTOMER") or "ffcs").upper()
+        cust_label = ((bundle or {}).get("customer") or os.environ.get("CATFISH_CUSTOMER") or "客户").upper()
         parts.append(f"# Identity (SOUL_{cust_label} — 客户业务环境)\n\n{soul_cust}")
 
     # BL-SOUL-SCENARIO P2 (5/13): 按 tool 候选注入场景段

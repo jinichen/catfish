@@ -445,8 +445,11 @@ export default function OutboundLogCard() {
 
 function Row({ entry: e }: { entry: TransparentLogEntry }) {
   const path = e.url.replace(/^https?:\/\/[^/]+/, "") || e.url;
-  const statusColor =
-    e.status === undefined
+  // 10/31: 本机记录 (换机迁移的「导出迁移包」/「设备迁移」) 没有网络请求, 也就没有 HTTP 状态码
+  const local = e.destKind === "local";
+  const statusColor = local
+    ? "var(--catfish-text-muted)"
+    : e.status === undefined
       ? "var(--status-err, #d9534f)"
       : e.status >= 200 && e.status < 300
         ? "var(--catfish-cyan)"
@@ -476,10 +479,10 @@ function Row({ entry: e }: { entry: TransparentLogEntry }) {
         }}
         title={e.url}
       >
-        {e.destKind === "third_party" ? "第三方 · " : e.destKind === "local" ? "本机 · " : "中央 · "}{e.destHost || path}
+        {local ? "本机 (不出这台电脑)" : <>{e.destKind === "third_party" ? "第三方 · " : "中央 · "}{e.destHost || path}</>}
       </td>
       <td style={{ ...tdStyle, color: statusColor }}>
-        {e.status ?? (e.error ? "ERR" : "?")}
+        {local ? "完成" : e.status ?? (e.error ? "ERR" : "?")}
       </td>
       <td style={{ ...tdStyle, textAlign: "right" }}>{e.requestBytes.toLocaleString("en-US")}</td>
       <td style={{ ...tdStyle, textAlign: "right" }}>{e.responseBytes.toLocaleString("en-US")}</td>

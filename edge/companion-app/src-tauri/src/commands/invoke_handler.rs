@@ -530,6 +530,8 @@ pub(crate) fn handler(
             crate::commands::imap_credentials::imap_retention_set,
             // 10/31 换机迁移 (docs/DEVICE-MIGRATION-DESIGN.md)
             crate::services::device_id::device_id_get,
+            // 10/31 客户专属 SOUL 按中央 /api/me 的 customer 决定 (原来默认 FFCS)
+            crate::commands::identity_bundle::identity_set_customer,
             crate::commands::device_migration::migration_scan,
             crate::commands::device_migration::migration_pick_save,
             crate::commands::device_migration::migration_pick_open,

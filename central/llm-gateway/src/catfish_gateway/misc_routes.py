@@ -136,6 +136,9 @@ def register_misc_routes(app) -> None:
             "managed_departments": managed_departments,
             "auth_method": user.auth_method,
             "must_change_password": must_change_password,
+            # 10/31: 这套部署是哪家客户 (中央 .env 的 CATFISH_CUSTOMER, 默认空)。Companion 据此决定
+            # 要不要加载客户专属的 SOUL_<客户>.md —— 原来客户端默认 FFCS, 别家员工也收到了 FFCS 的规则
+            "customer": (os.environ.get("CATFISH_CUSTOMER") or "").strip().lower(),
         }
 
     @app.get("/v1/edge/tool-config/{tool_name}")

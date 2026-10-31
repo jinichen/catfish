@@ -29,6 +29,7 @@ import { getPickerModel } from "./lib/tauri";  // P3.5.139 Phase 4
 import { fetchUrgentEmailStarter } from "./lib/briefing";
 import { isTauriRuntime } from "./lib/runtime";
 import { startEgressAnchorLoop } from "./lib/egressAnchor";
+import { startCustomerSync } from "./lib/customerSync";
 
 // 非默认工作区按需加载，避免所有邮件/知识图谱/仪表盘代码挤进主包。
 // React.lazy 会缓存已加载模块，TAB 往返不会重复下载或重新初始化模块。
@@ -81,6 +82,12 @@ export default function App() {
   useEffect(() => {
     if (!isTauriRuntime()) return;
     return startEgressAnchorLoop();
+  }, []);
+
+  // 10/31: 客户专属 SOUL 跟中央 /api/me 的 customer 走 (原来默认 FFCS)
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    return startCustomerSync();
   }, []);
 
   // BL-E13 主动闲聊 (死时间兜底): 9:30 / 14:00 / 17:30

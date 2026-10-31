@@ -247,6 +247,9 @@ export interface TransparentLogVerifyReport {
   /** 做过的统一脱敏 (打码规则变严后旧记录重新打码、重算指纹), 一条一句 */
   rechains: string[];
 }
+/** 记下中央说的「这套部署是哪家客户」, 按它重新同步客户专属 SOUL。返回是否有变化 */
+export const identitySetCustomer = (customer: string) => rawInvoke<boolean>("identity_set_customer", { customer });
+
 /** 本机设备号 (第一次调时生成) */
 export const deviceIdGet = () => rawInvoke<string>("device_id_get");
 
@@ -297,8 +300,10 @@ export const authGetAccessToken = () =>
 export interface IdentityBundle {
   /** ~/.hermes/SOUL.md (核心人格) */
   soul: string;
-  /** ~/.hermes/SOUL_<CUST>.md (客户特定 — env CATFISH_CUSTOMER 默认 FFCS) */
+  /** ~/.hermes/SOUL_<CUST>.md (客户特定; 10/31 起按中央 /api/me 的 customer, 没配 = 空) */
   soul_customer: string;
+  /** 客户段对应的客户名 (小写, 空 = 没有客户段) */
+  customer?: string;
   /** ~/.hermes/SOUL_BROWSER.md (浏览器场景纪律) */
   soul_browser: string;
   /** ~/.hermes/SOUL_EXECUTE_CODE.md (代码执行场景纪律) */
