@@ -44,9 +44,11 @@ import {
   installSkillFromUrl,
   installSkillFromZip,
   removeMcpServer,
+  restoreMcpServer,
   restoreSkill,
   uninstallSkill,
   type InstallResult,
+  type RemovedMcp,
 } from "../../lib/tauri";
 
 // P3.3.34 (6/12): zip 装入口从 MySkillsCard 挪到这 — 集中 skill 装入口防割裂.
@@ -73,7 +75,8 @@ interface UndoState {
   label: string;          // skill name 或 mcp name
   kind: "skill" | "mcp-removed";
   // mcp 删了不走 trash (改 yaml 没法 atomic undo), 这里 originalPath 留空, 走"提示式" undo (再 add 回去, 需员工填)
-  mcpInfo?: { name: string; command: string; args: string[] };
+  /** MCP 卸载时拿走的配置 + 密钥 (撤销时原样放回) */
+  mcpRemoved?: RemovedMcp;
   expiresAt: number;
 }
 
@@ -197,13 +200,9 @@ export default function SkillsMcpCard() {
       } catch (e) {
         setActionErr(`还原失败: ${e}`);
       }
-    } else if (undo.kind === "mcp-removed" && undo.mcpInfo) {
+    } else if (undo.kind === "mcp-removed" && undo.mcpRemoved) {
       try {
-        await addMcpServer(
-          undo.mcpInfo.name,
-          undo.mcpInfo.command,
-          undo.mcpInfo.args,
-        );
+        await restoreMcpServer(undo.mcpRemoved);
         reload();
       } catch (e) {
         setActionErr(`还原 MCP 失败: ${e}`);
@@ -215,14 +214,14 @@ export default function SkillsMcpCard() {
   const handleRemoveMcp = async (m: McpServerEntry) => {
     setActionErr(null);
     try {
-      await removeMcpServer(m.name);
-      // MCP 删走 "提示式 undo" — yaml 没法 trash, 但记下来让员工一键 re-add
+      const removed = await removeMcpServer(m.name);
+      // MCP 删走 "提示式 undo" — 配置和密钥都记下来, 一键原样放回
       setUndo({
         trashPath: "",
         originalPath: "",
         label: m.name,
         kind: "mcp-removed",
-        mcpInfo: { name: m.name, command: m.command, args: m.args },
+        mcpRemoved: removed,
         expiresAt: Date.now() + 5000,
       });
       reload();
@@ -554,12 +553,12 @@ export default function SkillsMcpCard() {
       {modal.kind === "add-mcp" && (
         <AddMcpDialog
           onClose={() => setModal({ kind: "none" })}
-          onSubmit={async (name, command, args) => {
+          onSubmit={async (req) => {
             setModal({ kind: "add-mcp-running" });
             try {
               setActionErr(null);
-              const r = await addMcpServer(name, command, args);
-              setActionOk(`MCP「${name}」已接上, 有 ${r.tools} 个工具。Hermes 正在重新加载, 稍等片刻小鲶就能用`);
+              const r = await addMcpServer(req);
+              setActionOk(`MCP「${req.name}」已接上, 有 ${r.tools} 个工具。Hermes 正在重新加载, 稍等片刻小鲶就能用`);
               reload();
               setModal({ kind: "none" });
             } catch (e) {

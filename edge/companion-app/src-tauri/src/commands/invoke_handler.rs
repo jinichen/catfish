@@ -113,6 +113,7 @@ pub(crate) fn handler(
             crate::commands::skills::restore_skill,
             crate::commands::skills::add_mcp_server,
             crate::commands::skills::remove_mcp_server,
+            crate::commands::skills::restore_mcp_server,
             // 6/7 BL-MANIFESTO-ADVISORY-PHASE1: advisory local state (本机 SQLite)
             crate::commands::advisory::advisory_list_local_states,
             crate::commands::advisory::advisory_get_local_state,

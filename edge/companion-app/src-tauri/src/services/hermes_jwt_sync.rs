@@ -446,7 +446,7 @@ pub(super) fn sync_auth_json(hermes: &Path) -> Result<()> {
 /// dotenv line-based replace/append. 跟 server_config.rs::replace_or_append_env_line 同款.
 ///
 /// (不 dedupe 到 util module: 循环依赖风险 + 两处逻辑一致, 复用不难维护.)
-pub(super) fn replace_or_append_env_line(text: &str, key: &str, value: &str) -> String {
+pub(crate) fn replace_or_append_env_line(text: &str, key: &str, value: &str) -> String {
     let mut lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();
     let mut replaced = false;
     let prefix = format!("{key}=");

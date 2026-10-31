@@ -46,7 +46,8 @@ use super::skills_list::{
     SkillNamespace, list_installed_skills_blocking, list_my_skills_blocking,
 };
 use super::skills_mcp::{
-    McpServerEntry, add_mcp_server_blocking, list_mcp_servers_blocking, remove_mcp_server_blocking,
+    McpAddRequest, McpServerEntry, RemovedMcp, add_mcp_server_blocking, list_mcp_servers_blocking,
+    remove_mcp_server_blocking, restore_mcp_server_blocking,
 };
 
 /// 6/2 BL-SKILLS-CARD-SPLIT: 拆分后两条新命令.
@@ -114,21 +115,23 @@ pub async fn restore_skill(
         .map_err(|e| format!("内部错误: {e}"))?
 }
 
-/// 接入 MCP: 找好 Node → 写配置 → `hermes mcp test` 真连一次 → 连不上撤掉并说原因,
-/// 连上了让 Hermes 重新加载 (10/31, 见 skills_mcp_launch.rs 文件头)。
+/// 接入 MCP: 找好 Node → 写配置 (密钥进 Hermes 的 .env) → `hermes mcp test` 真连一次 →
+/// 连不上撤掉并说原因, 连上了让 Hermes 重新加载 (10/31, 见 skills_mcp_launch.rs 文件头)。
 #[tauri::command]
-pub async fn add_mcp_server(
-    name: String,
-    command: String,
-    args: Vec<String>,
-) -> Result<super::skills_mcp_launch::McpTestResult, String> {
+pub async fn add_mcp_server(req: McpAddRequest) -> Result<super::skills_mcp_launch::McpTestResult, String> {
     let report = tokio::task::spawn_blocking(move || {
         let hermes = crate::services::catfish_paths::hermes_home().ok_or("找不到 Hermes 目录")?;
-        let launch = super::skills_mcp_launch::resolve_launch(&command, &hermes, super::skills_mcp_launch::find_on_path)?;
-        add_mcp_server_blocking(name.clone(), launch.command, args, launch.path_env)?;
-        let test = super::skills_mcp_launch::hermes_mcp_test(&name)?;
+        let mut req = req;
+        let mut path_env = None;
+        if let Some(cmd) = req.command.clone().filter(|c| !c.trim().is_empty()) {
+            let launch = super::skills_mcp_launch::resolve_launch(cmd.trim(), &hermes, super::skills_mcp_launch::find_on_path)?;
+            req.command = Some(launch.command);
+            path_env = launch.path_env;
+        }
+        add_mcp_server_blocking(&req, path_env)?;
+        let test = super::skills_mcp_launch::hermes_mcp_test(req.name.trim())?;
         if !test.ok {
-            let _ = remove_mcp_server_blocking(name);
+            let _ = remove_mcp_server_blocking(req.name.trim().to_string());
             return Err(format!("接不上, 已撤销这条配置。原因: {}", test.detail));
         }
         Ok::<_, String>(test)
@@ -144,9 +147,17 @@ pub async fn add_mcp_server(
     Ok(report)
 }
 
+/// 卸载: 配置和它的密钥一起拿掉; 返回拿掉的东西, 「撤销」时原样交回 restore_mcp_server
 #[tauri::command]
-pub async fn remove_mcp_server(name: String) -> Result<(), String> {
+pub async fn remove_mcp_server(name: String) -> Result<RemovedMcp, String> {
     tokio::task::spawn_blocking(move || remove_mcp_server_blocking(name))
+        .await
+        .map_err(|e| format!("内部错误: {e}"))?
+}
+
+#[tauri::command]
+pub async fn restore_mcp_server(removed: RemovedMcp) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || restore_mcp_server_blocking(removed))
         .await
         .map_err(|e| format!("内部错误: {e}"))?
 }

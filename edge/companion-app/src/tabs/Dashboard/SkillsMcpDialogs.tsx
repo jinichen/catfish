@@ -14,6 +14,8 @@
  */
 import { useEffect, useState } from "react";
 
+import type { McpAddRequest } from "../../lib/tauri_app";
+
 /* ───────── modal 容器 + 安装/接入对话框 ───────── */
 
 export function Dialog({
@@ -106,26 +108,74 @@ export function InstallSkillDialog({
   );
 }
 
+type Pair = [string, string];
+
+/** 键值对编辑 (环境变量 / 请求头): 值一律按密钥处理, 输入框是密码样式 */
+function PairRows({ label, hint, pairs, onChange, keyPlaceholder }: {
+  label: string;
+  hint: string;
+  pairs: Pair[];
+  onChange: (p: Pair[]) => void;
+  keyPlaceholder: string;
+}) {
+  const set = (i: number, j: 0 | 1, v: string) =>
+    onChange(pairs.map((p, k) => (k === i ? ((j === 0 ? [v, p[1]] : [p[0], v]) as Pair) : p)));
+  return (
+    <>
+      <label className="install-dialog__label">{label}</label>
+      {pairs.map((p, i) => (
+        <div key={i} style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+          <input className="install-dialog__input" style={{ flex: 2 }} value={p[0]} placeholder={keyPlaceholder}
+            onChange={(e) => set(i, 0, e.target.value)} />
+          <input className="install-dialog__input" style={{ flex: 3 }} type="password" value={p[1]} placeholder="值 (按密钥保存)"
+            onChange={(e) => set(i, 1, e.target.value)} />
+          <button className="approval-banner__btn-link" onClick={() => onChange(pairs.filter((_, k) => k !== i))}>删</button>
+        </div>
+      ))}
+      <button className="approval-banner__btn-link" onClick={() => onChange([...pairs, ["", ""]])}>+ 添加</button>
+      <div className="install-dialog__hint">{hint}</div>
+    </>
+  );
+}
+
+/** 接入 MCP (10/31: 本机程序 / 远程网址两种; 密钥写进 Hermes 的 .env, 配置文件里只留引用) */
 export function AddMcpDialog({
   onClose,
   onSubmit,
 }: {
   onClose: () => void;
-  onSubmit: (name: string, command: string, args: string[]) => void;
+  onSubmit: (req: McpAddRequest) => void;
 }) {
+  const [mode, setMode] = useState<"local" | "remote">("local");
   const [name, setName] = useState("");
   const [command, setCommand] = useState("");
   const [argsText, setArgsText] = useState("");
-  const nameValid =
-    name.length > 0 &&
-    !name.startsWith("catfish-") &&
-    name !== "catfish-tools";
-  const commandValid = command.length > 0;
-  const valid = nameValid && commandValid;
+  const [url, setUrl] = useState("");
+  const [env, setEnv] = useState<Pair[]>([]);
+  const [headers, setHeaders] = useState<Pair[]>([]);
+  const nameValid = name.length > 0 && !name.startsWith("catfish-") && name !== "catfish-tools";
+  const pairsValid = (ps: Pair[]) => ps.every(([k]) => k.trim().length > 0);
+  const valid =
+    nameValid &&
+    (mode === "local"
+      ? command.trim().length > 0 && pairsValid(env)
+      : /^https?:\/\//.test(url.trim()) && pairsValid(headers));
+  const tab = (m: "local" | "remote", text: string) => (
+    <button
+      className={mode === m ? "approval-banner__btn-primary" : "approval-banner__btn-link"}
+      onClick={() => setMode(m)}
+    >
+      {text}
+    </button>
+  );
   return (
     <Dialog title="接入 MCP" onClose={onClose}>
       <div className="install-dialog__hint">
         接入后会先试连一次 (第一次可能要下载, 等 1–2 分钟); 连上了小鲶就能用, 连不上会撤销并告诉你原因.
+      </div>
+      <div style={{ display: "flex", gap: 8, margin: "4px 0 8px" }}>
+        {tab("local", "本机程序 (npx / uvx / 程序路径)")}
+        {tab("remote", "远程网址")}
       </div>
       <label className="install-dialog__label">名字</label>
       <input
@@ -133,30 +183,40 @@ export function AddMcpDialog({
         type="text"
         value={name}
         onChange={(e) => setName(e.target.value)}
-        placeholder="my-mcp (不能用 catfish-* 前缀)"
+        placeholder="如 12306、amap (不能用 catfish-* 前缀)"
         autoFocus
       />
-      {name && !nameValid && (
-        <div className="install-dialog__warn">
-          catfish-* 是核心命名保留, 用别的
-        </div>
+      {name && !nameValid && <div className="install-dialog__warn">catfish-* 是核心命名保留, 用别的</div>}
+      {mode === "local" ? (
+        <>
+          <label className="install-dialog__label">启动命令 (如 npx / uvx, 或程序的完整路径)</label>
+          <input className="install-dialog__input" type="text" value={command}
+            onChange={(e) => setCommand(e.target.value)} placeholder="npx" />
+          <label className="install-dialog__label">参数 (空格分隔, 建议写上版本号)</label>
+          <input className="install-dialog__input" type="text" value={argsText}
+            onChange={(e) => setArgsText(e.target.value)} placeholder="-y 12306-mcp@0.3.10" />
+          <PairRows
+            label="环境变量 (要填 API Key 的 MCP 在这里填)"
+            hint="值存在 Hermes 的 .env (只有你能读), 配置文件里只留引用, 不写明文."
+            pairs={env}
+            onChange={setEnv}
+            keyPlaceholder="如 AMAP_MAPS_API_KEY"
+          />
+        </>
+      ) : (
+        <>
+          <label className="install-dialog__label">网址</label>
+          <input className="install-dialog__input" type="text" value={url}
+            onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/mcp" />
+          <PairRows
+            label="请求头 (要鉴权的填, 如 Authorization)"
+            hint="值存在 Hermes 的 .env (只有你能读), 配置文件里只留引用, 不写明文."
+            pairs={headers}
+            onChange={setHeaders}
+            keyPlaceholder="如 Authorization"
+          />
+        </>
       )}
-      <label className="install-dialog__label">启动命令 (如 npx / uvx, 或程序的完整路径)</label>
-      <input
-        className="install-dialog__input"
-        type="text"
-        value={command}
-        onChange={(e) => setCommand(e.target.value)}
-        placeholder="/usr/local/bin/my-mcp-server"
-      />
-      <label className="install-dialog__label">args (空格分隔, 可空)</label>
-      <input
-        className="install-dialog__input"
-        type="text"
-        value={argsText}
-        onChange={(e) => setArgsText(e.target.value)}
-        placeholder="--port 9000 --token xxx"
-      />
       <div className="install-dialog__actions">
         <button className="approval-banner__btn-link" onClick={onClose}>
           取消
@@ -166,9 +226,9 @@ export function AddMcpDialog({
           disabled={!valid}
           onClick={() =>
             onSubmit(
-              name,
-              command,
-              argsText.split(/\s+/).filter((s) => s.length > 0),
+              mode === "local"
+                ? { name: name.trim(), command: command.trim(), args: argsText.split(/\s+/).filter((x) => x.length > 0), env }
+                : { name: name.trim(), url: url.trim(), headers },
             )
           }
         >

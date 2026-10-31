@@ -124,6 +124,7 @@ pub mod skills_install; // 安装 / 卸载 / zip 导入 / 还原
 pub mod skill_names;
 pub mod skills_list; // 扫描 / 解析 / 列举
 pub mod skills_mcp; // MCP servers 的读和写 (同一段 config.yaml)
+pub(crate) mod skills_mcp_secrets; // 10/31: 接入 MCP 填的密钥进 Hermes 的 .env, 配置里只留 ${…}
 pub(crate) mod skills_mcp_launch; // 10/31: 接入 MCP 前找好 Node, 接入后 hermes mcp test 真连一次
 pub mod speech;
 pub mod system;

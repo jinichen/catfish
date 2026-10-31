@@ -103,12 +103,12 @@ export function McpRow({
         "dashboard-skills__mcp-item" +
         (locked ? " dashboard-skills__mcp-item--locked" : "")
       }
-      title={m.command}
+      title={m.url ?? m.command}
     >
       <StatusDot status="ok" />
       <span className="dashboard-skills__mcp-name">{m.name}</span>
       <span className="dashboard-skills__mcp-cmd">
-        {m.command.split("/").slice(-2).join("/")}
+        {m.url ? m.url.replace(/^https?:\/\//, "") : m.command.split("/").slice(-2).join("/")}
       </span>
       {!locked && onRemove && (
         <button

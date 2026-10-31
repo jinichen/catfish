@@ -69,14 +69,26 @@ export interface McpAddResult {
   tools: number;
   detail: string;
 }
-export const addMcpServer = (
-  name: string,
-  command: string,
-  args: string[],
-) => rawInvoke<McpAddResult>("add_mcp_server", { name, command, args });
+/** 接入请求: 本机程序填 command/args/env, 远程填 url/headers。env / headers 的值当密钥处理
+ *  (写进 Hermes 的 .env, 配置里只留引用) */
+export interface McpAddRequest {
+  name: string;
+  command?: string;
+  args?: string[];
+  url?: string;
+  env?: [string, string][];
+  headers?: [string, string][];
+}
+export const addMcpServer = (req: McpAddRequest) => rawInvoke<McpAddResult>("add_mcp_server", { req });
 
-export const removeMcpServer = (name: string) =>
-  rawInvoke<void>("remove_mcp_server", { name });
+/** 卸载时拿走的东西 (配置 + 密钥), 撤销时原样交回 restoreMcpServer */
+export interface RemovedMcp {
+  name: string;
+  entryYaml: string;
+  secrets: { var: string; value: string }[];
+}
+export const removeMcpServer = (name: string) => rawInvoke<RemovedMcp>("remove_mcp_server", { name });
+export const restoreMcpServer = (removed: RemovedMcp) => rawInvoke<void>("restore_mcp_server", { removed });
 
 
 // ── system ───────────────────────────────────────────────
