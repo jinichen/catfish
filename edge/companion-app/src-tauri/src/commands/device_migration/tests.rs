@@ -10,7 +10,8 @@ use super::*;
 
 fn machine(dir: &Path, name: &str) -> Roots {
     let home = dir.join(name);
-    Roots { catfish: home.join(".catfish"), hermes: home.join(".hermes"), home } // windows-parity: 测试里两台假电脑的目录, 不碰真 Hermes 目录
+    // 两台假电脑各自的目录; Hermes 目录名随便取 (真机上由 catfish_paths::hermes_home 决定)
+    Roots { catfish: home.join(".catfish"), hermes: home.join("hermes-data"), home }
 }
 
 fn me(email: &str, dev: &str) -> Me {

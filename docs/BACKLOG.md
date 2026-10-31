@@ -673,7 +673,7 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 | BL-L7 | weekly-report Phase 2 完整版 — 接 hermes audit log + tool 调用历史自动判断本周做了哪些事拼草稿 (现在简化版方式 A+) | 1 周 | ⬜ |
 | BL-L8 | journal 向量召回升级 — 现在 50KB tail-truncate 半年员工正常用够, 长期 (2-3 年用户) 应升级为 embed journal 段落按相关性 retrieve top-K (语义模糊查询) | 1-2 周 | ⬜ |
 | BL-L26 (新 5/1) | 用户上传文件 ≥ 50KB 走 BM25 检索 — top-K 段落注入 user message. **不做 embedding RAG**. | ✅ 5/7 (3 天压 1 天 ship) | parse_file.py 写 sidecar `<keptPath>.parsed.txt` (PDF/Word/Text), commands/file_parse.rs `attachment_bm25_search` 调 attachment_bm25.py (TF + 长度归一化, 中文 2-char window — trigram FTS5 不行央企 2 字词如"合同"/"解除"). 24 单测 PASS. useChat.send 自动 enrich, formatFileAttachment 用 BM25 段落代替 preview |
-| BL-L9 | journal append-only 备份 / 同步策略 (员工换机 / 误删保护) | 0.5 周 | 🟡 换机迁移 ✅ 10/31 (docs/DEVICE-MIGRATION-DESIGN.md, Companion 1.2.17); 误删保护 (定时本机加密快照) 未做 |
+| BL-L9 | journal append-only 备份 / 同步策略 (员工换机 / 误删保护) | 0.5 周 | 🟡 换机迁移 ✅ 10/31 (docs/DEVICE-MIGRATION-DESIGN.md, Companion 1.2.18); 误删保护 (定时本机加密快照) 未做 |
 | BL-L10 | session_summarizer 不依赖 DASHSCOPE_API_KEY — 改用 catfish 自己 gateway 路由的任意可用模型 | 0.5 天 | ⬜ |
 | BL-L11 | catfish_run_skill 加载失败友好错误引导 (现在 stack trace 不友好) | 0.5 天 | ⬜ |
 | BL-L12 | hermes venv 也能跑 session_summarizer (现在只能从 gateway venv 跑) | 0.5 天 | ⬜ |
