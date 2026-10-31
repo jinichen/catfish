@@ -189,7 +189,19 @@ A 的包格式设计成可以直接被 B 复用：B 只是换了个运输方式�
 | §4.4 MCP 非密钥配置剥掉 token 后可以带 | `~/.catfish/mcp/` 整个不带 | token 跟配置混在同一批文件里，剥不干净就宁可不带；新机用到时重新授权 |
 | §4.1 Hermes `profiles/expert-*` 只带改过的设定 | `profiles/` 不带 | 专家运行环境由 Companion 按 `~/.catfish/experts/` 重新生成，`experts/` 是必带项 |
 | §6 Hermes 在跑时怎么换 `state.db` | 用 SQLite backup 接口**在线还原**进正在用的库，不停 Hermes；导入完再重启 Hermes 让记忆 / 人设 / 技能重新加载 | 停 launchd 托管的进程不可靠（KeepAlive 会拉起） |
-| — | 新增「未归类」：清单里没登记的第一层文件不带，导出页列出来 | 2026-10-31 用开发机真实目录名核对：`~/.catfish` 第一层约 90 项、Hermes 约 70 项原来没登记；大部分是旧备份 / 临时文件，按规则归到「重建」；仍不确定的（如 Hermes `hooks`、`shared-state.db`、`verification_evidence.db`、`~/.catfish` 下几个早已不被代码引用的老目录）保持「未归类」，导出时提醒 |
+| — | 新增「未归类」：清单里没登记的第一层文件不带（10/31 晚：**不再在导出页列给员工看**，改由 CI `check_migration_catalog.py` 把关——代码里引用到的 `~/.catfish/` 条目没登记就拦住） | 2026-10-31 用开发机真实目录名核对：`~/.catfish` 第一层约 90 项、Hermes 约 70 项原来没登记；大部分是旧备份 / 临时文件，按规则归到「重建」；仍不确定的（如 Hermes `hooks`、`shared-state.db`、`verification_evidence.db`、`~/.catfish` 下几个早已不被代码引用的老目录）保持「未归类」，导出时提醒 |
 | — | `chrome-profile`（浏览器 cookie）、`feishu.yaml` 归「凭证」不带 | 核对真实目录时发现 |
+
+### 10/31 晚 简化（Companion 1.2.19；鸿波：列得太细反而乱）
+
+- 导出页只留三句话：会带上什么（一句概括 + 大小）、一个「连同文件一起带」勾选（附件 / 生成的文件 / 下载 / 导出 / 导入的微信聊天，默认不勾）、不会带什么（账号和授权、索引和模型）。逐项清单、凭证明细、未归类警告都不给员工看。
+- 导入页只显示：谁的包、哪台电脑、什么时候导出、多少文件、带没带文件。
+- 归类修正（对照 Hermes 自己的备份清单 `hermes_cli/backup.py _QUICK_STATE_FILES` 和代码实际读写）：
+  - Hermes `response_store.db`（网关对话记录）、`verification_evidence.db`（核验记录）、`memory_store.db`、`projects.db` 改为**必带**；原来把 `response_store.db` 当缓存是错的。
+  - Hermes `sessions/` 实际是 `request_dump_*.json` 调试记录，不带；`shared-state.db` 是群聊房间状态，Hermes 自己备份也不带。
+  - `~/.catfish/recordings`（「教学录制」）是已下线的录屏学习原料，6 月后没再新增、没有代码读，从可选里去掉。还在用的「技能登录网站的密码」本来就属凭证、不带，新机上技能用到时在对话里提示重新输入。
+  - `workflow_runs` 改为必带（小）；`conversations`（6 月已迁进 Hermes 对话库）不带。
+  - CI 检查顺手查出 `wiki_install_audit.jsonl` 漏登记，已补为必带。
+- 本机开发机上仍「未归类」的 10 项都是空目录或开发残留（archive / raw / templates 等，代码不读），不带没有影响。
 
 代码位置：`edge/companion-app/src-tauri/src/commands/device_migration/`（`catalog.rs` 清单、`snapshot.rs` 快照与路径改写、`package.rs` 包格式、`apply.rs` 导入、`tests.rs` 端到端）、`commands/transparent_log_lineage.rs`（外发记录链）、`services/device_id.rs`；界面 `tabs/Dashboard/DeviceMigrationCard.tsx`、`components/DeviceMigrationImport.tsx`、`components/OnboardingStepMigrate.tsx`；中央 `central/llm-gateway/src/catfish_gateway/egress_anchor_*.py`。

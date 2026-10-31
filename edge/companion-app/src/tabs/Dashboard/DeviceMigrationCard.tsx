@@ -1,6 +1,8 @@
 /** 设置 → 隐私 / 本机数据 → 换机迁移 (BL-L9, docs/DEVICE-MIGRATION-DESIGN.md)。
  *
- * 上半: 旧电脑「导出」—— 列出带什么 / 不带什么, 可选项勾选, 设口令, 存成 .catfishmove 文件。
+ * 上半: 旧电脑「导出」—— 一句话说带什么、一个「连同文件」勾选、一句话说不带什么, 设口令,
+ * 存成 .catfishmove 文件。逐项清单不给员工看 (10/31 鸿波: 列太细反而乱); 有没有漏登记的
+ * 数据文件由 CI 的 check_migration_catalog.py 把关, 不靠员工看警告。
  * 下半: 新电脑「导入」(DeviceMigrationImport, 跟首次启动引导共用)。
  * 迁移包不经过中央; 账号和授权刻意不带, 新电脑重新登录。
  */
@@ -10,7 +12,6 @@ import DeviceMigrationImport, { inputStyle, plainBtn, primaryBtn } from "../../c
 import {
   entryKey,
   formatBytes,
-  labelsOf,
   migrationExport,
   migrationPickSave,
   migrationScan,
@@ -31,7 +32,7 @@ function today(): string {
 
 export default function DeviceMigrationCard() {
   const [scan, setScan] = React.useState<MigrationScan | null>(null);
-  const [chosen, setChosen] = React.useState<Set<string>>(new Set());
+  const [withFiles, setWithFiles] = React.useState(false);
   const [pass, setPass] = React.useState("");
   const [pass2, setPass2] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -42,13 +43,10 @@ export default function DeviceMigrationCard() {
     migrationScan().then(setScan).catch((e) => setError(String(e)));
   }, []);
 
-  const by = (c: string) => scan?.entries.filter((e) => e.class === c) ?? [];
-  const required = [...by("required"), ...by("merge")];
-  const optional = by("optional").filter((e) => e.bytes > 0);
-  const secret = by("secret");
+  const files = scan?.entries.filter((e) => e.class === "optional" && e.bytes > 0) ?? [];
+  const filesBytes = files.reduce((n, e) => n + e.bytes, 0);
   const hint = passphraseHint(pass);
   const mismatch = pass2.length > 0 && pass !== pass2;
-  const chosenBytes = optional.filter((e) => chosen.has(entryKey(e))).reduce((n, e) => n + e.bytes, 0);
 
   const run = async () => {
     setError(null);
@@ -57,7 +55,7 @@ export default function DeviceMigrationCard() {
     if (!dest) return;
     setBusy(true);
     try {
-      setResult(await migrationExport(dest, pass, Array.from(chosen)));
+      setResult(await migrationExport(dest, pass, withFiles ? files.map(entryKey) : []));
       setPass("");
       setPass2("");
     } catch (e) {
@@ -79,37 +77,15 @@ export default function DeviceMigrationCard() {
       {scan && (
         <div style={{ lineHeight: 1.7 }}>
           <div>
-            <b>一定带上</b> ({formatBytes(required.reduce((n, e) => n + e.bytes, 0))}): {labelsOf(required)}
+            会带上: 工作日志、记忆和画像、个人知识库、技能、早安待办、对话历史、设置等 (约 {formatBytes(scan.requiredBytes)}, 打包时会压缩)。
           </div>
-          {optional.length > 0 && (
-            <div>
-              <b>可选</b> (可能很大, 勾了才带):
-              {optional.map((e) => (
-                <label key={entryKey(e)} style={{ marginLeft: 10, whiteSpace: "nowrap" }}>
-                  <input
-                    type="checkbox"
-                    checked={chosen.has(entryKey(e))}
-                    disabled={busy}
-                    onChange={(ev) => {
-                      const next = new Set(chosen);
-                      if (ev.target.checked) next.add(entryKey(e));
-                      else next.delete(entryKey(e));
-                      setChosen(next);
-                    }}
-                  />{" "}
-                  {e.label} ({formatBytes(e.bytes)})
-                </label>
-              ))}
-            </div>
+          {filesBytes > 0 && (
+            <label style={{ display: "block" }}>
+              <input type="checkbox" checked={withFiles} disabled={busy} onChange={(e) => setWithFiles(e.target.checked)} />{" "}
+              连同文件一起带: 上传的附件、生成的文件等 ({formatBytes(filesBytes)})
+            </label>
           )}
-          <div style={muted}>
-            不带: {labelsOf(secret)} —— 账号和授权在新电脑上重新登录, 包丢了也不会泄露; 搜索索引、本地模型等新电脑自己重建。
-          </div>
-          {scan.unclassified.length > 0 && (
-            <div style={{ ...muted, color: "var(--catfish-orange)" }}>
-              ⚠️ 有 {scan.unclassified.length} 项还没登记归类, 这次不会带: {scan.unclassified.join("、")}
-            </div>
-          )}
+          <div style={muted}>不会带: 账号和授权 (到新电脑重新登录), 搜索索引和本地模型 (新电脑自己重建)。</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}>
             <input type="password" placeholder="设一个迁移口令 (至少 8 位)" value={pass} onChange={(e) => setPass(e.target.value)} style={inputStyle} disabled={busy} />
             <input type="password" placeholder="再输一遍" value={pass2} onChange={(e) => setPass2(e.target.value)} style={inputStyle} disabled={busy} />
@@ -125,7 +101,7 @@ export default function DeviceMigrationCard() {
               onClick={() => void run()}
               disabled={busy || pass.length < 8 || pass !== pass2}
             >
-              {busy ? `导出中… ${chosenBytes > 0 ? "(附件较多, 要等一会儿)" : ""}` : "选择保存位置并导出"}
+              {busy ? `导出中… ${withFiles ? "(带了文件, 要等一会儿)" : ""}` : "选择保存位置并导出"}
             </button>
           </div>
         </div>

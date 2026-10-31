@@ -152,6 +152,8 @@ pub struct InspectReport {
     pub bytes: u64,
     /// 包里带了的各项 (给员工看「包里有什么」)
     pub entries: Vec<Entry>,
+    /// 包里带了「文件」(附件 / 生成的文件等可选项)
+    pub with_files: bool,
     pub same_person: bool,
     pub logged_in_as: String,
     pub version_ok: bool,
@@ -186,6 +188,7 @@ fn inspect_report(roots: &Roots, me: &Me, m: &Manifest) -> InspectReport {
         files: m.items.len() as u64,
         bytes: m.total_bytes(),
         entries: m.entries.iter().filter(|e| carried.contains(&format!("{}/{}", e.root.dir_name(), e.name))).cloned().collect(),
+        with_files: m.items.iter().any(|i| i.class == Class::Optional),
         same_person: m.source.user_email.trim().eq_ignore_ascii_case(me.email.trim()),
         logged_in_as: me.email.clone(),
         version_ok: ver(&m.companion_version) <= ver(env!("CARGO_PKG_VERSION")),

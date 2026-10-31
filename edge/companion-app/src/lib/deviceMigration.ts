@@ -36,6 +36,7 @@ export interface MigrationInspectReport {
   files: number;
   bytes: number;
   entries: MigrationEntry[];
+  withFiles: boolean;
   samePerson: boolean;
   loggedInAs: string;
   versionOk: boolean;
@@ -78,9 +79,4 @@ export function passphraseHint(p: string): string | null {
   if (p.length < 8) return "至少 8 位";
   if (p.length < 12 || /^\d+$/.test(p)) return "口令偏弱: 建议 12 位以上、混用字母和数字";
   return null;
-}
-
-/** 同一类的各项合成一行展示: 「工作日志、记忆、画像 …」 */
-export function labelsOf(entries: MigrationEntry[]): string {
-  return Array.from(new Set(entries.map((e) => e.label))).join("、");
 }

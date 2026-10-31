@@ -616,6 +616,11 @@ jobs:
       - name: Windows / macOS parity
         run: python3 edge/companion-app/scripts/check_windows_parity.py
 
+      # 10/31: 换机迁移只带 catalog.rs 里登记过的东西 —— 代码里新用到的 ~/.catfish/ 条目
+      # 没登记就拦住, 免得员工换机时悄悄丢 (docs/DEVICE-MIGRATION-DESIGN.md §11)。
+      - name: 换机迁移清单不漏
+        run: python3 edge/companion-app/scripts/check_migration_catalog.py
+
       - name: Set up Rust stable
         uses: dtolnay/rust-toolchain@stable
 

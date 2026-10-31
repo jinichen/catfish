@@ -7,7 +7,6 @@ import * as React from "react";
 
 import {
   formatBytes,
-  labelsOf,
   migrationImport,
   migrationInspect,
   migrationPickOpen,
@@ -167,7 +166,7 @@ export default function DeviceMigrationImport({ beforeRestart }: { beforeRestart
             {info.createdAt.slice(0, 16).replace("T", " ")} 导出
           </div>
           <div>
-            {info.files} 个文件, {formatBytes(info.bytes)}: {labelsOf(info.entries)}
+            {info.files} 个文件, {formatBytes(info.bytes)}{info.withFiles ? " (连同文件)" : ""}
           </div>
           {!info.samePerson && (
             <div style={{ color: "var(--status-err)" }}>
