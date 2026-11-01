@@ -75,7 +75,7 @@ fn lookup(conn: &Connection, hint: &str, date: Option<&str>) -> Vec<(String, Str
 
 pub fn resolve(sources: &[String], journal: &str, conn: &Connection) -> Vec<WikiSourceSession> {
     let mut out: Vec<WikiSourceSession> = Vec::new();
-    let mut push = |s: WikiSourceSession, out: &mut Vec<WikiSourceSession>| {
+    let push = |s: WikiSourceSession, out: &mut Vec<WikiSourceSession>| {
         if !out.iter().any(|o| o.session_id == s.session_id) {
             out.push(s);
         }

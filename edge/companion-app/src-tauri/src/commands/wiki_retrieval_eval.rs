@@ -294,7 +294,7 @@ mod tests {
     }
 
     #[test]
-    fn 打分_命中率和MRR_不可用的方式单列() {
+    fn 打分_命中率和平均排名分_不可用的方式单列() {
         let items = vec![
             EvalItem { query: "q1".into(), gold: vec!["A".into()] },
             EvalItem { query: "q2".into(), gold: vec!["B".into()] },
