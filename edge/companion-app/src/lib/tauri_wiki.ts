@@ -284,3 +284,37 @@ export const writeServerConfig = (
     identityUrl,
     webUrl,
   });
+
+/** 11/02: 知识卡来源里能点开的对话 (session:<id> 精确的在前, journal:日期 那天的在后) */
+export interface WikiSourceSession {
+  source: string;
+  sessionId: string;
+  title: string;
+  startedAt: string;
+  /** true = 精确指到这次对话; false = 只知道是那天 */
+  exact: boolean;
+}
+
+export const wikiSourceSessions = (sources: string[]) =>
+  rawInvoke<WikiSourceSession[]>("wiki_source_sessions", { sources });
+
+/** 11/02: 检索打分 (知识库同一组题跑四种检索方式) */
+export interface RetrievalEngineScore {
+  engine: string;
+  label: string;
+  available: boolean;
+  note: string | null;
+  found: number;
+  total: number;
+  recall: number;
+  mrr: number;
+}
+
+export interface RetrievalEvalReport {
+  topK: number;
+  engines: RetrievalEngineScore[];
+  queries: { query: string; ranks: Record<string, number | null>; tops: Record<string, string[]> }[];
+}
+
+export const wikiRetrievalEval = (questions: string, topK: number) =>
+  rawInvoke<RetrievalEvalReport>("wiki_retrieval_eval", { questions, topK });

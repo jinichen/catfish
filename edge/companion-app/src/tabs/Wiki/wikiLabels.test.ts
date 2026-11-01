@@ -23,3 +23,10 @@ describe("wikiSourceLabel (9/17 来源粒度)", () => {
     expect(wikiSourceLabel("some/other/thing.txt")).toBe("thing.txt");
   });
 });
+
+describe("11/02 精确到对话的来源", () => {
+  it("session:<id> 显示成哪天几点的对话", () => {
+    expect(wikiSourceLabel("session:20261101_091002_aaa111")).toBe("11月1日 09:10 的对话");
+    expect(wikiSourceLabel("session:api-abc12345")).toBe("一次对话");
+  });
+});

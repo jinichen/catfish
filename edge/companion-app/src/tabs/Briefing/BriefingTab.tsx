@@ -9,6 +9,7 @@
 
 import BriefingCard from "../Dashboard/BriefingCard";
 import CustomerFollowupStrip from "./CustomerFollowupStrip";
+import PracticeStrip from "./PracticeStrip";
 
 export default function BriefingTab() {
   return (
@@ -44,6 +45,8 @@ export default function BriefingTab() {
         flexDirection: "column",
       }}
     >
+      {/* 11/02: 题库与复习 —— 今天有到期的错题才显示 */}
+      <PracticeStrip />
       {/* 10/12: 销售跟进雷达; 没有客户档案时不渲染 */}
       <CustomerFollowupStrip />
       <BriefingCard />

@@ -102,6 +102,7 @@ const CATFISH: &[(Pat, Class, &str)] = &[
     (Exact("session_meta.json"), Required, "记忆"),
     (Exact("session_goal.txt"), Required, "记忆"),
     (Exact("memory_distill_state.json"), Required, "记忆蒸馏进度"),
+    (Exact("practice.db"), Required, "题库与复习进度"),
     (Exact("memory"), Required, "记忆"),
     (Exact(".catfish_memory_buffer.jsonl"), Required, "待蒸馏的记忆"),
     (Exact(".catfish_memory_state.json"), Required, "记忆蒸馏进度"),

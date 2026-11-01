@@ -100,6 +100,9 @@ pub mod task_uid_cache; // P3.5.91 (6/23 鸿波): 早安 task → canonical task
 pub mod tool_perf; // P3.5.59 (6/22 鸿波): tool-bridge audit jsonl 聚合 per-tool perf (count / success_rate / p50/p95/p99)
 pub mod transparent_log_store; // 10/25: 外发记录存内容 + 指纹链 + 保留期
 pub(crate) mod transparent_log_lineage; // 10/31: 换机迁移 —— 链上记迁移、锚点按设备分清新旧两台
+pub mod practice_stats; // 11/02: 题库与复习的数量 (早安简报提醒用)
+pub mod wiki_retrieval_eval; // 11/02: 知识库检索打分 (借 DeepTutor kb eval)
+pub mod wiki_source_trace; // 11/02: 知识卡来源 → 能点开的那几次对话 (借 DeepTutor 记忆脚注)
 pub mod mobile_bridge; // 11/01: 手机通道 —— 经中央中转站跟手机端到端加密通信 (docs/MOBILE-CLIENT-DESIGN.md)
 pub mod device_migration; // 10/31: 换机迁移包导出 / 导入 (docs/DEVICE-MIGRATION-DESIGN.md)
 pub(crate) mod transparent_log_redact; // 10/25: 打码规则变严后旧记录统一脱敏 + 重算指纹 (留存原指纹给中央锚点核对)

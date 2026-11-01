@@ -65,6 +65,7 @@ export function wikiSubtypeLabel(subtype: string | null, kind: string): string {
 /**
  * 来源显示成员工能回查的话。9/17 起 sources 只有三种 (写入侧收敛):
  *   journal:2026-07-14                      → 7月14日日志
+ *   session:20261101_091002_aaa111          → 11月1日 09:10 的对话 (11/02 起)
  *   raw/sources/1783325914-企业资质列表(4)  → 资料「企业资质列表(4)」
  *   manual                                  → 手工录入
  * 老条目里的 employee_journal 显示成「日志（未标日期）」, 一眼看出它没来源。
@@ -75,6 +76,12 @@ export function wikiSourceLabel(source: string): string {
   if (journal) {
     return `${Number(journal[2])}月${Number(journal[3])}日日志`;
   }
+  // 11/02: 精确到哪次对话 (id 形如 20261101_091002_aaa111 → 11月1日 09:10 的对话)
+  const session = /^session:\s*(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})/.exec(raw);
+  if (session) {
+    return `${Number(session[2])}月${Number(session[3])}日 ${session[4]}:${session[5]} 的对话`;
+  }
+  if (raw.startsWith("session:")) return "一次对话";
   if (raw === "manual") return "手工录入";
   if (raw === "employee_journal") return "日志（未标日期）";
   const normalized = raw.replace(/\\/g, "/");

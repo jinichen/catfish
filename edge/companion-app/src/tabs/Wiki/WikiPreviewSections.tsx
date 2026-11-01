@@ -31,6 +31,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { WikiFileInfo } from "../../lib/tauri";
 import { wikiSourceLabel, wikiSubtypeLabel } from "./wikiLabels";
+import WikiSourceSessions from "./WikiSourceSessions";
 
 /** 部门 wiki 已被原作者撤回的警告 banner (P3.3.18 Phase 4 P2, 6/10)。
  *
@@ -205,6 +206,8 @@ export function WikiMetaHeader({
         </ul>
       </details>
     )}
+    {/* 11/02: 来源能点回原对话 */}
+    <WikiSourceSessions sources={info.sources} />
     <details className="wiki-preview__technical">
       <summary>文件信息</summary>
       <div className="wiki-preview__meta-row">

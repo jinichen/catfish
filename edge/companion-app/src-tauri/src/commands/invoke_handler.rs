@@ -532,6 +532,10 @@ pub(crate) fn handler(
             crate::commands::imap_credentials::imap_retention_set,
             // 10/31 换机迁移 (docs/DEVICE-MIGRATION-DESIGN.md)
             crate::services::device_id::device_id_get,
+            // 11/02 知识卡来源点回原对话
+            crate::commands::wiki_source_trace::wiki_source_sessions,
+            crate::commands::wiki_retrieval_eval::wiki_retrieval_eval,
+            crate::commands::practice_stats::practice_stats,
             // 11/01 手机通道 (docs/MOBILE-CLIENT-DESIGN.md)
             crate::commands::mobile_bridge::mobile_status,
             crate::commands::mobile_bridge::mobile_set_enabled,

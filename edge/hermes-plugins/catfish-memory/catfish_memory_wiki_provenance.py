@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 import re
+from typing import List
 
 # 不从 helpers 拿 logger: helpers → wiki → 这里, 直接 import 本模块会绕成环。
 # logging.getLogger 同名返回同一对象, 跟 helpers 的是一个。
@@ -170,19 +171,22 @@ class Provenance:
 
     journal_dates: 日志里 `## [YYYY-MM-DD HH:MM]` 抬头出现过的日期
     raw_sources:   本轮喂给 Analysis 的 wiki/raw/sources/<stem>
+    session_ids:   日志抬头 `| <session id>` 里的完整对话 id (11/02, 精确到哪次对话)
     """
 
-    __slots__ = ("journal_dates", "raw_sources")
+    __slots__ = ("journal_dates", "raw_sources", "session_ids")
 
-    def __init__(self, journal_dates=(), raw_sources=()):
+    def __init__(self, journal_dates=(), raw_sources=(), session_ids=()):
         self.journal_dates = frozenset(journal_dates)
         self.raw_sources = frozenset(raw_sources)
+        self.session_ids = frozenset(session_ids)
 
     @classmethod
     def from_run(cls, journal_text: str, source_paths) -> "Provenance":
         dates = re.findall(r"^## \[(\d{4}-\d{2}-\d{2})", journal_text or "", re.MULTILINE)
         stems = [Path(str(p)).stem for p in (source_paths or [])]
-        return cls(dates, stems)
+        sids = [sid for _, sid in _session_heads(journal_text or "")]
+        return cls(dates, stems, sids)
 
     def fill(self) -> list[str]:
         out = [f"journal:{d}" for d in sorted(self.journal_dates)]
@@ -191,6 +195,53 @@ class Provenance:
 
 
 _JOURNAL_SRC_RE = re.compile(r"^journal:\s*(\d{4}-\d{2}-\d{2})$")
+# 11/02: 精确到对话 —— session:<state.db 里的 session id>
+_SESSION_SRC_RE = re.compile(r"^session:\s*([A-Za-z0-9_.\-]{8,80})$")
+# 日志抬头 `## [2026-11-02 09:15] session | 20261102_091502_a1b2c3` (helpers._format_journal_entry)。
+# 8/4 之前的老条目只留后 6 位 (…a1b2c3), 认不准是哪次, 不算。
+_HEAD_SID_RE = re.compile(r"^## \[\d{4}-\d{2}-\d{2}[^\]]*\]\s*session(?:-raw)?\s*\|\s*([A-Za-z0-9_.\-]{8,80})\s*$",
+                          re.MULTILINE)
+
+
+def _session_heads(text: str) -> List[tuple]:
+    """日志里每段对话的 (起始位置, session id), 按出现顺序。"""
+    return [(m.start(), m.group(1)) for m in _HEAD_SID_RE.finditer(text or "")]
+
+
+def sessions_for_passages(source: str, passages) -> List[str]:
+    """核对事实时模型指认的原文段落 → 它们落在哪几段对话的日志里 → `session:<id>`。
+
+    11/02 (借 DeepTutor 的记忆脚注): 原来来源只记到「哪天的日志」, 一天十几次对话,
+    点回去还得自己找。原文段落是日志切出来的 (ground.passages: 短句用空格拼过),
+    所以拿段落开头 / 结尾一小截去日志里找位置, 再看它落在哪个对话抬头之后。
+    找不到、或落在不是对话的段 (资料、distill 记录) 的, 不算 —— 宁缺不猜。
+    """
+    heads = _session_heads(source)
+    if not heads:
+        return []
+    out: List[str] = []
+    for p in passages or ():
+        s = re.sub(r"\s+", " ", str(p or "")).strip()
+        if len(s) < 6:
+            continue
+        pos = -1
+        for probe in (s[:16], s[-16:], s[:8]):
+            pos = source.find(probe.strip())
+            if pos >= 0:
+                break
+        if pos < 0:
+            continue
+        own = [(st, hid) for st, hid in heads if st <= pos]
+        if not own:
+            continue
+        own_start, sid = own[-1]
+        # 中间又出现了别的抬头 (distill 记录 / 老格式条目), 这段就不属于那次对话了
+        if source.rfind("\n## [", own_start + 1, pos + 1) > own_start:
+            continue
+        tag = f"session:{sid}"
+        if tag not in out:
+            out.append(tag)
+    return out
 _BARE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
@@ -208,6 +259,9 @@ def _canon_source(raw: str) -> str | None:
     m = _JOURNAL_SRC_RE.match(v)
     if m:
         return f"journal:{m.group(1)}"
+    m = _SESSION_SRC_RE.match(v)
+    if m:
+        return f"session:{m.group(1)}"
     if _BARE_DATE_RE.match(v):
         return f"journal:{v}"
     p = v.replace("\\", "/")
@@ -244,6 +298,11 @@ def _normalize_sources(rel_path: str, content: str, provenance: "Provenance | No
             # 10/23: 本轮没读聊天日志 (只读了员工资料) 时, 任何 journal: 日期都是模型编的 ——
             # 原来 journal_dates 为空就整个不查, Windows 上资料卡全挂成「journal:当天」, 点不回原件
             if canon[len("journal:"):] not in provenance.journal_dates:
+                dropped.append(item)
+                continue
+        if provenance is not None and canon.startswith("session:"):
+            # 只收本轮真读过的那几次对话 (模型自己编 id 的丢掉)
+            if canon[len("session:"):] not in provenance.session_ids:
                 dropped.append(item)
                 continue
         if canon not in kept:

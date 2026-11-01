@@ -6,6 +6,7 @@ import {
   ClockCounterClockwise,
   SealWarning,
   Copy,
+  Gauge,
   LinkSimple,
   ListChecks,
   MagnifyingGlass,
@@ -33,7 +34,7 @@ import {
   type WikiRelationshipTaskKind,
 } from "./wikiRelationshipTasks";
 
-export type WikiWorkspaceMode = "organize" | "browse" | "hierarchy";
+export type WikiWorkspaceMode = "organize" | "browse" | "hierarchy" | "eval";
 
 const TASK_META: Record<
   WikiRelationshipTaskKind,
@@ -202,9 +203,24 @@ export default function WikiOrganizer({
           <TreeStructure size={18} aria-hidden="true" />
           层级
         </button>
+        {/* 11/02: 检索打分 (借 DeepTutor kb eval) */}
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === "eval"}
+          data-active={mode === "eval"}
+          onClick={() => onModeChange("eval")}
+        >
+          <Gauge size={18} aria-hidden="true" />
+          检索打分
+        </button>
       </div>
 
-      {mode === "browse" ? (
+      {mode === "eval" ? (
+        <p className="wiki-organizer__roots-empty">
+          用一组问题给知识库检索打分: 看小鲶聊天时用的检索、知识页的几种检索, 各自能不能把正确答案排在前面。
+        </p>
+      ) : mode === "browse" ? (
         <div className="wiki-organizer__browse"><WikiTree /></div>
       ) : mode === "hierarchy" ? (
         <div className="wiki-organizer__roots" aria-label="层级的顶层">

@@ -17,6 +17,7 @@ import WikiGraph from "./WikiGraph";
 import WikiOrganizer, { type WikiWorkspaceMode } from "./WikiOrganizer";
 import WikiRelationshipWorkbench from "./WikiRelationshipWorkbench";
 import WikiHierarchyView from "./WikiHierarchyView";
+import WikiRetrievalEval from "./WikiRetrievalEval";
 import { useWikiStore } from "../../store/wiki";
 
 export default function WikiTab() {
@@ -74,6 +75,8 @@ export default function WikiTab() {
           <WikiRelationshipWorkbench taskId={taskId} onSelectTask={setTaskId} />
         ) : mode === "hierarchy" ? (
           <WikiHierarchyView root={hierarchyRoot} onOpen={openFromHierarchy} />
+        ) : mode === "eval" ? (
+          <WikiRetrievalEval />
         ) : (
           <WikiPreview onOpenTask={(id) => { setTaskId(id); setMode("organize"); }} />
         )}

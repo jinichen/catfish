@@ -35,6 +35,8 @@ interface SessionItem {
 
 interface Briefing {
   computedAt: string | null;
+  /** 11/02: 今天要复习的错题数 (题库与复习) */
+  practiceDue?: number;
   mainTasks: { title: string; urgency: string; reason?: string }[];
   handled: { category: string; count: number }[];
 }
@@ -591,6 +593,11 @@ function BriefingView({ ready, request }: { ready: boolean; request: RequestFn }
       ) : (
         <>
           <p style={muted}>{new Date(data.computedAt).toLocaleString()} 生成 · 细节和处理在电脑上</p>
+          {(data.practiceDue ?? 0) > 0 && (
+            <p style={{ background: "var(--bg-elev)", padding: "8px 12px", borderRadius: 8 }}>
+              📚 今天有 <b>{data.practiceDue}</b> 道错题要复习 —— 到「对话」里说「开始今天的错题复习」
+            </p>
+          )}
           {data.mainTasks.map((t, i) => (
             <div key={i} style={{ borderLeft: `4px solid ${URGENCY[t.urgency] ?? "var(--border)"}`, padding: "8px 12px",
               background: "var(--bg-elev)", borderRadius: 8, marginBottom: 8 }}>

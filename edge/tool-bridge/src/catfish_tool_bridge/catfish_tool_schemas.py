@@ -28,6 +28,7 @@ from .catfish_tool_schemas_wechat import WECHAT_TOOLS
 from .catfish_tool_schemas_customer import CUSTOMER_TOOLS
 from .catfish_tool_schemas_form import FORM_TOOLS
 from .catfish_tool_schemas_workflow import WORKFLOW_TOOLS
+from .catfish_tool_schemas_practice import PRACTICE_TOOLS
 
 #: 78 个原生 tool 的 schema, 按类别拆在 catfish_tool_schemas_*.py 里, 这里拼回。
 #:
@@ -38,6 +39,7 @@ from .catfish_tool_schemas_workflow import WORKFLOW_TOOLS
 #: 顺序按类别排, 比原来的历史堆叠顺序更好读。
 CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = (
     MEMORY_TOOLS + BROWSER_TOOLS + SKILL_TOOLS + WIKI_TOOLS + TASK_TOOLS + SEARCH_TOOLS + EMAIL_TOOLS + EXPERT_TOOLS + WECHAT_TOOLS + CUSTOMER_TOOLS + FORM_TOOLS + WORKFLOW_TOOLS
+    + PRACTICE_TOOLS
 )
 # 10/22: 原来 EXPERT_TOOLS 被 import 两次、拼了两次, catfish_expert 的整段说明每次请求发两遍。
 # tests/test_tool_schema_budget.py 钉住名字不重复。

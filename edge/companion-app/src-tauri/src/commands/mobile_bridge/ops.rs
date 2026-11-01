@@ -478,8 +478,14 @@ pub fn briefing_view(cache: Option<&crate::commands::advisor_cache::AdvisorCache
 
 async fn briefing() -> Result<Value, String> {
     let cache = crate::commands::advisor_cache::advisor_cache_get().await?;
-    Ok(briefing_view(cache.as_ref()))
+    let mut v = briefing_view(cache.as_ref());
+    // 11/02: 今天要复习几道 (题库与复习), 手机早安页也提醒
+    let p = tokio::task::spawn_blocking(crate::commands::practice_stats::stats_now).await.unwrap_or_default();
+    v["practiceDue"] = json!(p.due_today);
+    Ok(v)
 }
+
+
 
 #[cfg(test)]
 mod tests {

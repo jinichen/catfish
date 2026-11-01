@@ -262,7 +262,9 @@ async def wiki_two_step(
             before.append((catfish_home / path).read_text(encoding="utf-8"))
         except OSError:
             pass
-        files[path] = verify.carry_lists(verify.check_merged_numbers(files[path], before, source), before)
+        # 11/02: sources 也带上 —— 合并时模型常把 session:<id> 这类来源丢掉
+        files[path] = verify.carry_lists(verify.check_merged_numbers(files[path], before, source), before,
+                                         fields=("evidence", "unverified", "sources"))
     n_e, n_c = _write_wiki_files(catfish_home, files, skip_merge_paths=llm_merged_paths, provenance=provenance)
     if n_e + n_c > 0:
         # journal 加 distill entry — Karpathy log.md 风格

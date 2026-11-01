@@ -46,12 +46,14 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 try:
+    from . import catfish_memory_wiki_provenance as prov
     from . import catfish_memory_wiki_relcheck as relcheck
     from . import catfish_memory_wiki_verify as verify
     from .catfish_memory_fm import _parse_frontmatter_lists, _split_frontmatter_body
     from .catfish_memory_helpers import _DISTILL_HTTP_TIMEOUT, _gateway_dev_token, _gateway_url, logger
     from .catfish_memory_gateway import identity_headers, with_source
 except ImportError:  # 独立脚本模式 (无父包)
+    import catfish_memory_wiki_provenance as prov
     import catfish_memory_wiki_relcheck as relcheck
     import catfish_memory_wiki_verify as verify
     from catfish_memory_fm import _parse_frontmatter_lists, _split_frontmatter_body
@@ -530,6 +532,7 @@ async def ground_files(files: Dict[str, str], source: str, model: str, post=None
         text_of = {n: t for n, t, _ in lines if n >= 0}
         kept_lines: List[str] = []
         evidence: List[str] = []
+        raw_evidence: List[str] = []
         dropped: List[str] = []
         for n, line in enumerate(body.splitlines()):
             if n in drop_rows:
@@ -541,6 +544,7 @@ async def ground_files(files: Dict[str, str], source: str, model: str, post=None
             if ok:
                 kept_lines.append(text_of[n])
                 evidence.extend(verify._clean_item(e, 80) for e in ev[:2])
+                raw_evidence.extend(ev[:2])
                 total["kept"] += 1
             else:
                 dropped.append(f"{verify._clean_item(text_of[n])} —— {why}")
@@ -548,6 +552,10 @@ async def ground_files(files: Dict[str, str], source: str, model: str, post=None
         lists = _parse_frontmatter_lists(fm)
         fm = verify._set_list(fm, "evidence", lists.get("evidence", []) + evidence)
         fm = verify._set_list(fm, "unverified", lists.get("unverified", []) + dropped + rel_dropped.get(path, []))
+        # 11/02: 对上的事实落在哪几次对话 → sources 补 session:<id>, 卡上能点回原对话
+        sessions = prov.sessions_for_passages(source, raw_evidence)
+        if sessions:
+            fm = verify._set_list(fm, "sources", lists.get("sources", []) + sessions)
         new_body = "\n".join(kept_lines) + ("\n" if body.endswith("\n") else "")
         out[path] = f"---\n{fm}\n---\n{new_body}"
     return out, total
