@@ -1,6 +1,7 @@
 /** 够技能说明用的 Markdown 渲染 (10/22)。
  *
- * 只认: # 标题、- / 1. 列表、``` 代码块、> 引用、| 表格 |、段落, 行内 `代码` 和 **加粗**。
+ * 只认: # 标题、- / 1. 列表、``` 代码块、> 引用、| 表格 |、--- 分隔线、段落, 行内 `代码` 和 **加粗**。
+ * 11/01 手机对话 (/m) 也用它: `breaks` 保留段落里的换行 (小鲶的回复常一行一条); 表格放进能横向滑的框, 窄屏不撑破。
  * 全部拼成 React 元素, 不用 innerHTML —— 技能是员工上传的, 不能让内容里的 HTML 跑起来。
  * 中央门户没有引 Markdown 库; 只为一个详情页加依赖, 离线打包和审计都多一份负担。
  */
@@ -41,7 +42,7 @@ function inline(text: string, keyBase: string): ReactNode[] {
 
 const cell = { border: "1px solid var(--border)", padding: "4px 8px", textAlign: "left" as const };
 
-export function SimpleMarkdown({ source }: { source: string }) {
+export function SimpleMarkdown({ source, breaks = false }: { source: string; breaks?: boolean }) {
   const lines = source.replace(/\r\n/g, "\n").split("\n");
   const blocks: ReactNode[] = [];
   let i = 0;
@@ -74,6 +75,11 @@ export function SimpleMarkdown({ source }: { source: string }) {
           {code.join("\n")}
         </pre>,
       );
+      continue;
+    }
+    if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      blocks.push(<hr key={key} style={{ border: "none", borderTop: "1px solid var(--border)", margin: "var(--space-3) 0" }} />);
+      i++;
       continue;
     }
     const h = /^(#{1,6})\s+(.*)$/.exec(line);
@@ -145,7 +151,8 @@ export function SimpleMarkdown({ source }: { source: string }) {
       }
       const [head, ...rest] = rows;
       blocks.push(
-        <table key={key} style={{ borderCollapse: "collapse", margin: "var(--space-2) 0", fontSize: 13 }}>
+        <div key={key} style={{ overflowX: "auto", maxWidth: "100%", margin: "var(--space-2) 0" }}>
+        <table style={{ borderCollapse: "collapse", fontSize: 13, whiteSpace: breaks ? "nowrap" : undefined }}>
           <thead>
             <tr>
               {head.map((c, j) => (
@@ -162,7 +169,8 @@ export function SimpleMarkdown({ source }: { source: string }) {
               </tr>
             ))}
           </tbody>
-        </table>,
+        </table>
+        </div>,
       );
       continue;
     }
@@ -170,14 +178,16 @@ export function SimpleMarkdown({ source }: { source: string }) {
     while (
       i < lines.length &&
       lines[i].trim() !== "" &&
-      !/^(#{1,6}\s|```|>|\s*([-*]|\d+\.)\s+|\s*\|)/.test(lines[i])
+      !/^(#{1,6}\s|```|>|\s*([-*]|\d+\.)\s+|\s*\||\s*(-{3,}|\*{3,}|_{3,})\s*$)/.test(lines[i])
     ) {
       para.push(lines[i++]);
     }
     if (para.length === 0) para.push(lines[i++]); // 兜底: 哪条规则都没吃掉的行, 当正文, 免得死循环
     blocks.push(
       <p key={key} style={{ margin: "var(--space-2) 0", lineHeight: 1.7 }}>
-        {inline(para.join(" "), key)}
+        {breaks
+          ? para.flatMap((l, n) => (n === 0 ? inline(l, `${key}-${n}`) : [<br key={`${key}-br${n}`} />, ...inline(l, `${key}-${n}`)]))
+          : inline(para.join(" "), key)}
       </p>,
     );
   }

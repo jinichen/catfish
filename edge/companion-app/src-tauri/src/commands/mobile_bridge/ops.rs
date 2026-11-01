@@ -260,6 +260,14 @@ async fn chat_inner(rid: &str, sid: Option<String>, text: &str, out: &Outbox, se
                         }
                     }
                 }
+                // 11/01: 小鲶在用工具时手机上要看得到 (不然批准之后几分钟没动静, 像卡住了)
+                Some("hermes.tool.progress") => {
+                    if let Ok(ev) = serde_json::from_str::<Value>(&data) {
+                        if let Some(t) = tool_progress_text(&ev) {
+                            *sent += out(json!({"op": "status", "rid": rid, "text": t}));
+                        }
+                    }
+                }
                 Some("hermes.status") => {
                     if let Ok(ev) = serde_json::from_str::<Value>(&data) {
                         let t = s(&ev, "text");
@@ -316,6 +324,26 @@ pub fn parse_sse(block: &str) -> (Option<String>, Option<String>) {
         }
     }
     (event, data)
+}
+
+/// 工具进度 → 一行字。running 显示「emoji 在做什么」(截 60 字), completed 显示「接着想…」。
+/// tool = catfish-lifecycle 是插件桥过来的压缩上下文等提示, 用它的 label / preview。
+pub fn tool_progress_text(ev: &Value) -> Option<String> {
+    let tool = s(ev, "tool");
+    let label = ev.get("label").or(ev.get("preview")).and_then(Value::as_str).unwrap_or("").trim().to_string();
+    if tool == "catfish-lifecycle" {
+        return (!label.is_empty()).then_some(label);
+    }
+    match s(ev, "status").as_str() {
+        "running" => {
+            let what = if label.is_empty() { tool } else { label };
+            let short: String = what.chars().take(60).collect();
+            let emoji = s(ev, "emoji");
+            Some(if emoji.is_empty() { format!("正在用工具: {short}") } else { format!("{emoji} {short}") })
+        }
+        "completed" => Some("接着想…".into()),
+        _ => None,
+    }
 }
 
 /// 两种报错形状都认: {"error": "文案"} / {"error": {"message": "文案"}} (同 chat.ts chatStreamError)
@@ -460,6 +488,16 @@ mod tests {
             (Some("approval.request".into()), Some("{\"a\":1}".into()))
         );
         assert_eq!(parse_sse("data: [DONE]"), (None, Some("[DONE]".into())));
+    }
+
+    #[test]
+    fn 工具进度转成一行字() {
+        let run = json!({"tool": "web_search", "emoji": "🔍", "label": "搜索 英伟达 股价", "status": "running"});
+        assert_eq!(tool_progress_text(&run).unwrap(), "🔍 搜索 英伟达 股价");
+        assert_eq!(tool_progress_text(&json!({"tool": "web_search", "status": "completed"})).unwrap(), "接着想…");
+        let life = json!({"tool": "catfish-lifecycle", "label": "压缩上下文中", "status": "running"});
+        assert_eq!(tool_progress_text(&life).unwrap(), "压缩上下文中");
+        assert!(tool_progress_text(&json!({"tool": "x", "status": "approval_pending"})).is_none());
     }
 
     #[test]

@@ -89,7 +89,7 @@ export default function MobileCard() {
           <h4 style={{ margin: "4px 0", fontSize: 13 }}>怎么连</h4>
           <ol style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7 }}>
             <li>手机浏览器打开 <code>{status.mobileUrl}</code>, 用单位账号登录 (在公司外面要先连 VPN, 看单位怎么开的)。</li>
-            <li>选这台电脑, 点「连接」。这里会弹出验证码, 跟手机上的一样就点允许。</li>
+            <li>选这台电脑: 第一次点「配对」, 这里会弹出验证码, 跟手机上的一样就点允许; 以后点「连接」(会记住, 下次打开直接连上)。</li>
             <li>想放到手机桌面: 浏览器菜单里选「添加到主屏幕」。</li>
           </ol>
         </div>

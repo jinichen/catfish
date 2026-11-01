@@ -3,8 +3,9 @@
  * 内容端到端加密, 经中央中转站到员工电脑; 中央看不到。电脑关机 / 休眠时连不上, 页面直说。
  * 第一期范围就这三样 (§11 定稿), 别的在电脑上做。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
+import { SimpleMarkdown } from "../components/SimpleMarkdown";
 import { getCurrentUser, getIdToken, login } from "../lib/auth";
 import { MobileClient, type ClientEvent, type Peer } from "./client";
 import { installPwaTags } from "./pwa";
@@ -72,7 +73,27 @@ export function MobileRoot() {
     );
   }
   if (state === "checking") return <div style={{ padding: 24, color: "var(--text-muted)" }}>正在登录…</div>;
-  return <MobileApp />;
+  return <ErrorShield><MobileApp /></ErrorShield>;
+}
+
+/** 页面出错时把原因显示出来 (11/01: 点「连接」后整页空白, 员工和我们都看不到为什么) */
+class ErrorShield extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div style={{ padding: 24 }}>
+        <p>页面出错了, 请截图发给 IT:</p>
+        <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, color: "var(--status-err)" }}>
+          {String(this.state.error?.stack ?? this.state.error)}
+        </pre>
+        <button onClick={() => window.location.reload()}>重新打开</button>
+      </div>
+    );
+  }
 }
 
 export function MobileApp() {
@@ -105,6 +126,8 @@ export function MobileApp() {
           setPairCode(null);
           if (e.ok) {
             setNotice("配好了");
+            // 记住这台, 下次打开直接连
+            localStorage.setItem("catfish.mobile.last", e.device);
             client.use(e.device);
             setPicking(false);
           } else {
@@ -284,7 +307,7 @@ function ChatView({ ready, request }: { ready: boolean; request: RequestFn }) {
   const [sessions, setSessions] = useState<SessionItem[] | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => endRef.current?.scrollIntoView({ block: "end" }), [msgs, approvals]);
+  useEffect(() => { endRef.current?.scrollIntoView?.({ block: "end" }); }, [msgs, approvals]);
 
   const patchLast = (f: (m: ChatMsg) => ChatMsg) =>
     setMsgs((all) => all.map((m, i) => (i === all.length - 1 && m.role === "assistant" ? f(m) : m)));
@@ -332,6 +355,11 @@ function ChatView({ ready, request }: { ready: boolean; request: RequestFn }) {
         ...x, state: m.op === "error" ? "pending" : "done",
         result: m.op === "error" ? String(m.message) : choice === "once" ? "已允许这一次" : "已拒绝",
       } : x)));
+      // 批准送到后小鲶接着做 (可能要几分钟), 把「等你批准…」换掉
+      if (m.op !== "error") {
+        setMsgs((all) => all.map((x, i) => (i === all.length - 1 && x.role === "assistant" && x.status === "等你批准…"
+          ? { ...x, status: choice === "once" ? "已批准, 小鲶接着做…" : "已拒绝, 小鲶在收尾…" } : x)));
+      }
     });
   };
 
@@ -384,10 +412,11 @@ function ChatView({ ready, request }: { ready: boolean; request: RequestFn }) {
         {msgs.length === 0 && <p style={{ ...muted, textAlign: "center", marginTop: 40 }}>跟电脑上的小鲶说点什么</p>}
         {msgs.map((m, i) => (
           <div key={i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start", margin: "8px 0" }}>
-            <div style={{ maxWidth: "85%", padding: "8px 12px", borderRadius: 12, whiteSpace: "pre-wrap", wordBreak: "break-word",
+            <div style={{ maxWidth: m.role === "user" ? "85%" : "100%", minWidth: 0, padding: "8px 12px", borderRadius: 12,
+              whiteSpace: m.role === "user" ? "pre-wrap" : "normal", wordBreak: "break-word",
               background: m.role === "user" ? "var(--accent)" : "var(--bg-elev)", color: m.role === "user" ? "#fff" : "var(--text)",
               border: m.role === "user" ? "none" : "1px solid var(--border)", fontSize: 15 }}>
-              {m.text}
+              {m.role === "assistant" && m.text.trim() ? <SimpleMarkdown source={m.text.trim()} breaks /> : m.text}
               {m.status && <div style={{ ...muted, marginTop: m.text ? 4 : 0 }}>{m.status}</div>}
               {m.error && <div style={{ color: "var(--status-err)", fontSize: 13 }}>{m.error}</div>}
             </div>

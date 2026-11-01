@@ -39,7 +39,8 @@ export const sharedKey = (peerPk: Uint8Array, mySk: Uint8Array): Uint8Array => n
 
 export function seal(shared: Uint8Array, kind: number, plain: Uint8Array): string {
   const nonce = nacl.randomBytes(24);
-  const ct = nacl.box.after(plain, nonce, shared);
+  // 复制一份: tweetnacl 用 instanceof 查类型, 别的 realm (iframe / 测试环境) 造的 Uint8Array 会被拒
+  const ct = nacl.box.after(new Uint8Array(plain), nonce, new Uint8Array(shared));
   const out = new Uint8Array(1 + 24 + ct.length);
   out[0] = kind;
   out.set(nonce, 1);
