@@ -53,6 +53,10 @@ paths = [
   '''.*\.env\.example$''',
   '''.*\.env\.template$''',
 
+  # 依赖锁文件: 只有包名、版本和哈希, 没有凭据。11/01 新依赖 `crypto_secretbox` 的包名
+  # 撞了 generic-api-key (关键字 secret), 以后加依赖还会再撞, 整个文件豁免。
+  '''(^|/)Cargo\.lock$''',
+
   # gitleaks 自己 (避免规则文件里的 regex 被误判)
   '''\.gitleaks\.toml$''',
   '''\.gitleaksignore$''',

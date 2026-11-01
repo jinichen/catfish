@@ -89,7 +89,7 @@ function randomHex(n: number): string {
   return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 }
 
-export function deviceName(ua = navigator.userAgent): string {
+export function deviceName(ua = typeof navigator === "undefined" ? "" : navigator.userAgent): string {
   if (/iPhone/.test(ua)) return "iPhone";
   if (/iPad/.test(ua)) return "iPad";
   if (/HarmonyOS/i.test(ua)) return "鸿蒙手机";

@@ -139,7 +139,7 @@ fn hostname_guess() -> String {
             }
         }
     }
-    std::process::Command::new("hostname")
+    crate::services::process::background_command("hostname")
         .output()
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().trim_end_matches(".local").chars().take(40).collect())
