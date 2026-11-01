@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "baseUrl": ".",
+    "paths": {
+      "react": ["node_modules/@types/react"],
+      "react/*": ["node_modules/@types/react/*"],
+      "react-dom": ["node_modules/@types/react-dom"],
+      "react-dom/*": ["node_modules/@types/react-dom/*"],
+      "tweetnacl": ["node_modules/tweetnacl"]
+    }
+  },
+  "include": ["src", "../../central/web/src/mobile", "../../central/web/src/components/SimpleMarkdown.tsx"],
+  "exclude": ["../../central/web/src/mobile/*.test.ts", "../../central/web/src/mobile/*.test.tsx",
+              "../../central/web/src/mobile/platform_web.ts"]
+}

@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  小鲶 · 完整吉祥物形象
+  用途: Onboarding 引导 / Companion 启动闪屏 / 对外宣传 banner / 名片
+  设计: 圆润亲和的鲶鱼身体 + 两根标志性长须 (鲶鱼物种特征 + 隐喻"敏感的触角探听员工需求")
+  色调: 深青基调 (墨青 #0E5F66 → 深青 #1A8A95 渐变) + 暖橙高光 (须尖 + 腮红)
+  作者注: 须的弯曲方向暗示"探询", 嘴角微笑, 眼睛大且圆 (信任感)
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 480" width="480" height="480">
+  <defs>
+    <!-- 身体渐变: 顶部深, 腹部浅, 体积感 -->
+    <radialGradient id="bodyGrad" cx="50%" cy="40%" r="65%">
+      <stop offset="0%" stop-color="#1A8A95"/>
+      <stop offset="60%" stop-color="#0E5F66"/>
+      <stop offset="100%" stop-color="#0A464C"/>
+    </radialGradient>
+    <!-- 腹部高光 -->
+    <linearGradient id="bellyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FAF1E4" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#FAF1E4" stop-opacity="0.85"/>
+    </linearGradient>
+    <!-- 须的渐变: 根部深青, 尖端暖橙 -->
+    <linearGradient id="whiskerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0E5F66"/>
+      <stop offset="100%" stop-color="#F47B3D"/>
+    </linearGradient>
+    <linearGradient id="whiskerGradRev" x1="100%" y1="0%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#0E5F66"/>
+      <stop offset="100%" stop-color="#F47B3D"/>
+    </linearGradient>
+    <!-- 眼睛高光 -->
+    <radialGradient id="eyeShine" cx="35%" cy="30%" r="20%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- 背景圆 (透明; 仅在带底色场景使用时手动开启) -->
+  <!-- <circle cx="240" cy="240" r="230" fill="#FAF1E4"/> -->
+
+  <!-- ─── 尾鳍 (在身体下方, 从右侧伸出) ─── -->
+  <path d="M 380 240 L 460 180 L 445 240 L 460 300 Z"
+        fill="#0A464C" opacity="0.9"/>
+  <path d="M 380 240 L 455 200 L 440 240 L 455 285 Z"
+        fill="#0E5F66"/>
+
+  <!-- ─── 身体主体 (椭圆形, 略向左下倾) ─── -->
+  <ellipse cx="220" cy="240" rx="170" ry="135" fill="url(#bodyGrad)"/>
+
+  <!-- 腹部浅色 -->
+  <ellipse cx="220" cy="290" rx="140" ry="80" fill="url(#bellyGrad)" opacity="0.6"/>
+
+  <!-- 背鳍 -->
+  <path d="M 180 110 Q 220 70 270 105 Q 250 115 220 115 Q 195 115 180 110 Z"
+        fill="#0A464C"/>
+
+  <!-- 鳃部纹路 (装饰, 体现"鱼") -->
+  <path d="M 130 220 Q 145 240 130 260" stroke="#0A464C" stroke-width="3"
+        fill="none" opacity="0.5" stroke-linecap="round"/>
+
+  <!-- 侧鳍 -->
+  <ellipse cx="155" cy="310" rx="35" ry="20" fill="#0A464C"
+           transform="rotate(-25 155 310)"/>
+
+  <!-- ─── 两根标志性长须 (从嘴边伸出, 优雅弯曲) ─── -->
+  <!-- 上须: 向左上飘 -->
+  <path d="M 80 215 Q 30 180 15 130 Q 13 110 25 100"
+        stroke="url(#whiskerGrad)" stroke-width="7" fill="none"
+        stroke-linecap="round"/>
+  <!-- 须尖小球 (暖橙) -->
+  <circle cx="25" cy="100" r="9" fill="#F47B3D"/>
+  <circle cx="22" cy="97" r="3" fill="#FAF1E4" opacity="0.6"/>
+
+  <!-- 下须: 向左下飘 -->
+  <path d="M 80 245 Q 30 280 15 340 Q 13 360 28 372"
+        stroke="url(#whiskerGradRev)" stroke-width="7" fill="none"
+        stroke-linecap="round"/>
+  <circle cx="28" cy="372" r="9" fill="#F47B3D"/>
+  <circle cx="25" cy="369" r="3" fill="#FAF1E4" opacity="0.6"/>
+
+  <!-- ─── 眼睛 (大, 圆, 友好) ─── -->
+  <circle cx="135" cy="200" r="32" fill="#FFFFFF"/>
+  <circle cx="135" cy="200" r="32" fill="url(#eyeShine)"/>
+  <!-- 瞳孔 -->
+  <circle cx="142" cy="206" r="18" fill="#1A2E33"/>
+  <!-- 眼睛高光 (生动感) -->
+  <circle cx="148" cy="200" r="6" fill="#FFFFFF"/>
+  <circle cx="138" cy="214" r="3" fill="#FFFFFF" opacity="0.7"/>
+
+  <!-- 腮红 (暖橙, 拉近距离) -->
+  <ellipse cx="115" cy="255" rx="18" ry="10" fill="#F47B3D" opacity="0.45"/>
+
+  <!-- ─── 嘴 (微笑曲线) ─── -->
+  <path d="M 95 235 Q 105 248 120 244" stroke="#0A464C" stroke-width="3.5"
+        fill="none" stroke-linecap="round"/>
+
+  <!-- ─── 头顶小气泡 (装饰, 暗示"思考"/"AI") ─── -->
+  <circle cx="190" cy="80" r="6" fill="#1A8A95" opacity="0.5"/>
+  <circle cx="170" cy="55" r="4" fill="#1A8A95" opacity="0.4"/>
+  <circle cx="155" cy="35" r="2.5" fill="#1A8A95" opacity="0.3"/>
+</svg>

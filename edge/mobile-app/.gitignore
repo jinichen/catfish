@@ -1,0 +1,9 @@
+node_modules/
+dist/
+build/
+# cap sync 拷进去的网页包 / 生成的配置, 每次构建重新生成
+ios/App/App/public/
+ios/App/App/capacitor.config.json
+ios/App/App/config.xml
+ios/DerivedData/
+xcuserdata/

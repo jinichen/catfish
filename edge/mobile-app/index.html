@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>小鲶</title>
+    <style>
+      :root {
+        --bg: #fafaf7; --bg-elev: #ffffff; --bg-secondary: #f5f5f0; --border: #e3e3dc; --border-soft: #efefe9;
+        --text: #1f1f1f; --text-muted: #6b6b66; --accent: #2d8a87;
+        --status-ok: #4e8a3f; --status-warn: #c97e1c; --status-err: #c43f3f;
+        --radius-sm: 4px; --radius-md: 8px; --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+        --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+      }
+      html, body { margin: 0; padding: 0; background: var(--bg); }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+        color: var(--text); font-size: 15px; line-height: 1.5;
+        padding-top: env(safe-area-inset-top);
+        -webkit-text-size-adjust: 100%;
+      }
+      button { font-family: inherit; color: inherit; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -224,3 +224,45 @@ Companion「手机通道」
 - **到上限不卡住**：中转站不再在手机这头直接拒，把请求带着「已到上限」转给电脑；电脑的确认框列出已配手机（最久没用的默认选中），「替换并允许」= 先撤销旧的再允许新的。每台手机记最后连上的时间，30 天没用的在设置里标出来。
 - **小鲶在用工具时手机上看得到**：转发 `hermes.tool.progress`（「🔍 搜索 …」/「接着想…」）；批准后提示换成「已批准，小鲶接着做…」。回复按 Markdown 显示（表格可横向滑）。
 
+
+## 13. iOS 原生 App（鸿波 2026-11-01 定：先做苹果的原生 App）
+
+### 13.1 选型：Capacitor
+
+| | Capacitor 8 | Tauri Mobile |
+|---|---|---|
+| 复用 | 直接装 `/m` 现成的网页代码 | 同样是网页，但要另起一套 Rust 移动端工程 |
+| 苹果推送 (APNs) | 官方插件 `@capacitor/push-notifications` | 只有本地通知，远程推送要自己写原生代码 |
+| 钥匙串 | 成熟插件 | 要自己写 |
+
+所以用 Capacitor。工程放 `edge/mobile-app/`，用 Swift Package Manager（不装 CocoaPods）。
+
+### 13.2 跟网页版的区别
+
+- **网页代码打包进 App**（不是打开远程网址）：第一次打开填公司服务器地址（Companion「设置 → 手机」里会显示），以后记住。中转站地址 = 服务器地址 + `/relay/ws`。
+- **登录**：App 内弹系统浏览器走单位账号登录（OIDC + PKCE），登完经 `catfish-mobile://auth/callback` 回到 App。登录令牌和续期令牌存**钥匙串**。
+- **密钥、设备号、配过的电脑都存钥匙串**：清浏览器数据、一周不打开都不会丢；删掉 App 重装才要重新配对。
+- **公司服务器是自签证书时**：iPhone 上要先装公司 CA 描述文件并在「设置 → 通用 → 关于本机 → 证书信任设置」里打开信任（跟 Mac 装证书同一个 CA）。开发时连 `127.0.0.1` 走 http（只对本地地址放开）。
+
+### 13.3 推送（APNs）
+
+- App 拿到苹果给的推送令牌后，经中转站登记（元数据：哪个人的哪台手机 ↔ 推送令牌），新表一列，30 天没连删。
+- 电脑上有新的待批准、或手机发起的对话做完了，而那台手机**不在线**：电脑发一帧 `notify`（只有种类，没有内容）→ 中央用苹果推送发**固定文字**「小鲶在等你批准」/「小鲶回复好了」，点开进 App 再经加密通道拉内容。
+- 推送内容不带任何正文，过苹果服务器的只有这句固定话 —— 数据边界不变。同一台手机 30 秒内最多推一次。
+- 中央配置：`CATFISH_APNS_KEY_FILE`（.p8 文件）、`CATFISH_APNS_KEY_ID`、`CATFISH_APNS_TEAM_ID`、`CATFISH_APNS_TOPIC`（App 的 Bundle ID）、`CATFISH_APNS_SANDBOX`（TestFlight 之前用沙盒）。中央服务器要能访问 `api.push.apple.com:443`；访问不了就没有推送，其他照常。
+
+### 13.4 分发
+
+不上公开 App Store。先用 **TestFlight**（内部测试最多 100 人，不用审核），客户量产时用 **Apple Business Manager 自定义 App / MDM** 下发。Bundle ID：`com.catfish.mobile`。
+
+### 13.5 要鸿波在苹果账号里做的（团队 LNCT7279Z6）
+
+1. Xcode → 设置 → Accounts 登录这个团队的 Apple ID（自动签名要用；做好后模拟器以外的真机才能装）。
+2. 开发者网站 → Keys → 新建一个勾选 **Apple Push Notifications service** 的密钥，下载 `.p8`（只能下一次），记下 Key ID。`.p8` 放中央服务器，不进仓库。
+3. App Store Connect → 新建 App（Bundle ID `com.catfish.mobile`），用于 TestFlight。
+
+### 13.6 顺序
+
+1. App 工程 + 服务器地址 + 登录 + 钥匙串 + 配对 / 对话 / 批准 / 早安（模拟器连本机 127.0.0.1 跑通）—— 不需要苹果账号。
+2. 推送：中央 APNs 发送、电脑 `notify`、App 登记令牌 —— 需要上面第 2 步的密钥 + 真机。
+3. 真机安装、TestFlight —— 需要第 1、3 步。

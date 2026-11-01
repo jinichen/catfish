@@ -6,7 +6,7 @@
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { SimpleMarkdown } from "../components/SimpleMarkdown";
-import { getCurrentUser, getIdToken, login } from "../lib/auth";
+import { platform } from "./platform";
 import { MobileClient, type ClientEvent, type Peer } from "./client";
 import { installPwaTags, needsHomeScreenHint, requestPersistentStorage } from "./pwa";
 
@@ -59,11 +59,17 @@ const URGENCY: Record<string, string> = { high: "var(--status-err)", medium: "va
 
 /** 先确认登录 (没登录就跳登录页, 登完回 /m), 再进手机页。不调 /api/me。 */
 export function MobileRoot() {
-  const [state, setState] = useState<"checking" | "ok" | "insecure">(
+  const [state, setState] = useState<"checking" | "login" | "ok" | "insecure">(
     window.isSecureContext ? "checking" : "insecure");
   useEffect(() => {
     if (state !== "checking") return;
-    void getCurrentUser().then((u) => (u ? setState("ok") : login("/m")));
+    void platform().isLoggedIn().then((ok) => {
+      if (ok) return setState("ok");
+      setState("login");
+      // 浏览器: 直接跳登录页 (整页跳转, 跟门户一样)。App: 先停在「登录」按钮, 点了才弹 ——
+      // 一启动就弹系统浏览器, 会被 iOS「自动填充密码」那套提示打断, 员工以为卡住了
+      if (platform().kind === "web") void platform().login();
+    });
   }, [state]);
   if (state === "insecure") {
     return (
@@ -73,6 +79,18 @@ export function MobileRoot() {
     );
   }
   if (state === "checking") return <div style={{ padding: 24, color: "var(--text-muted)" }}>正在登录…</div>;
+  if (state === "login") {
+    // App 里登录页是弹出来的, 员工关掉了就停在这: 给个按钮再来一次
+    return (
+      <div style={{ padding: 24 }}>
+        <p>请用单位账号登录 (跟电脑上 Companion 同一个账号)。</p>
+        <button style={primary} onClick={() => void platform().login()}>登录</button>
+        {platform().resetServer && (
+          <button style={{ ...btn, marginLeft: 8 }} onClick={() => platform().resetServer!()}>换服务器</button>
+        )}
+      </div>
+    );
+  }
   return <ErrorShield><MobileApp /></ErrorShield>;
 }
 
@@ -97,7 +115,7 @@ class ErrorShield extends Component<{ children: ReactNode }, { error: Error | nu
 }
 
 export function MobileApp() {
-  const client = useMemo(() => new MobileClient(getIdToken), []);
+  const client = useMemo(() => new MobileClient(), []);
   const [, force] = useState(0);
   const rerender = useCallback(() => force((n) => n + 1), []);
   const [statusText, setStatusText] = useState<string | undefined>();
@@ -108,7 +126,8 @@ export function MobileApp() {
   const [tab, setTab] = useState<Tab>("chat");
   const [homeHint, setHomeHint] = useState(() => {
     try {
-      return needsHomeScreenHint() && localStorage.getItem("catfish.mobile.homeHintDismissed") !== "1";
+      return platform().kind === "web" && needsHomeScreenHint()
+        && platform().storage.get("catfish.mobile.homeHintDismissed") !== "1";
     } catch {
       return needsHomeScreenHint();
     }
@@ -139,7 +158,7 @@ export function MobileApp() {
           if (e.ok) {
             setNotice("配好了");
             // 记住这台, 下次打开直接连
-            localStorage.setItem("catfish.mobile.last", e.device);
+            platform().storage.set("catfish.mobile.last", e.device);
             client.use(e.device);
             setPicking(false);
           } else {
@@ -185,7 +204,7 @@ export function MobileApp() {
   // 上次用的电脑在线就直接连上
   useEffect(() => {
     if (client.status !== "ready" || client.current) return;
-    const last = localStorage.getItem("catfish.mobile.last");
+    const last = platform().storage.get("catfish.mobile.last");
     const peer = client.peers.find((p) => p.device === last && p.paired && p.online);
     if (peer) {
       client.use(peer.device);
@@ -205,7 +224,7 @@ export function MobileApp() {
   const choose = (p: Peer) => {
     setNotice(null);
     if (p.paired) {
-      localStorage.setItem("catfish.mobile.last", p.device);
+      platform().storage.set("catfish.mobile.last", p.device);
       client.use(p.device);
       setPicking(false);
     } else {
@@ -238,14 +257,14 @@ export function MobileApp() {
           </span>
           <button style={{ ...btn, padding: "4px 10px", fontSize: 13 }} onClick={() => {
             setHomeHint(false);
-            try { localStorage.setItem("catfish.mobile.homeHintDismissed", "1"); } catch { /* 不记也行 */ }
+            platform().storage.set("catfish.mobile.homeHintDismissed", "1");
           }}>知道了</button>
         </div>
       )}
       {client.status === "error" && (
         <div style={{ padding: 16 }}>
           <p>{statusText}</p>
-          <button style={primary} onClick={() => void login("/m")}>重新登录</button>
+          <button style={primary} onClick={() => void platform().login()}>重新登录</button>
         </div>
       )}
       {pairCode ? (
@@ -313,6 +332,11 @@ function PcPicker({ client, onChoose }: { client: MobileClient; onChoose: (p: Pe
         内容加密后经公司中央转发, 中央看不到、不保存。
         {client.maxPhones != null && ` 每人最多配 ${client.maxPhones} 部手机。`}
       </p>
+      {platform().resetServer && (
+        <button style={{ ...btn, marginTop: 8 }} onClick={() => {
+          if (window.confirm("换一个公司服务器? 要重新登录; 这部手机上配过的电脑记录会留着。")) platform().resetServer!();
+        }}>换服务器</button>
+      )}
     </div>
   );
 }

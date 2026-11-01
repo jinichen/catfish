@@ -26,6 +26,12 @@ export default defineConfig({
         target: "http://127.0.0.1:8999",
         changeOrigin: true,
       },
+      // 11/01: 登录服务的发现文档 —— iOS App 只填一个服务器地址, 从这里找登录入口
+      // (跟正式环境 nginx catfish-locations.conf 的 location = /.well-known/* 对齐)
+      "/.well-known": {
+        target: "http://127.0.0.1:8998",
+        changeOrigin: true,
+      },
       // 11/01: 手机中转站 (WebSocket) —— 手机网页 /m 用, 开发时同样转到 127.0.0.1:8999
       "/relay": {
         target: "ws://127.0.0.1:8999",

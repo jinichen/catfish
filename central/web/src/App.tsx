@@ -32,6 +32,8 @@ import { useAuthStore } from "./store/auth";
 
 import { HomePage } from "./routes/HomePage";
 import { MobileRoot } from "./mobile/MobileApp";
+import { setPlatform } from "./mobile/platform";
+import { webPlatform } from "./mobile/platform_web";
 import { PasswordPage } from "./routes/PasswordPage";
 // BL-CENTRAL-WEB-PURGE-MEPAGE (5/17 鸿波): 删 MePage — 个人数据展示违
 // BL-CENTRAL-EDGE-BOUNDARY spirit. 员工自查 → Companion 桌面 app.
@@ -102,7 +104,10 @@ function AuthCallback() {
 export function App() {
   // 用 useLocation 而不是 window.location: 登录回调 navigate("/m") 之后要重新判断走哪套
   const path = useLocation().pathname;
-  if (path === "/m" || path.startsWith("/m/")) return <MobileRoot />;
+  if (path === "/m" || path.startsWith("/m/")) {
+    setPlatform(webPlatform);
+    return <MobileRoot />;
+  }
   return <PortalApp />;
 }
 

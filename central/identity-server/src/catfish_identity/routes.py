@@ -491,7 +491,10 @@ def _render_login_page(
            background: linear-gradient(180deg, #0E5F66 0%, #0A464C 100%); color: #FAF1E4; margin: 0;
            display: flex; min-height: 100vh; align-items: center; justify-content: center; }}
     .card {{ background: #1C2A2E; border: 1px solid #2E3F44; border-radius: 12px;
-            padding: 36px 32px; width: 360px; box-shadow: 0 8px 32px rgba(0,0,0,0.25); }}
+            padding: 36px 32px; width: 360px; box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+            /* 11/01: 手机上 (小鲶 App / 手机网页) 360 + 内边距超出屏幕, 右边被截 */
+            max-width: calc(100vw - 32px); box-sizing: border-box; }}
+    @media (max-width: 480px) {{ .card {{ padding: 28px 20px; }} input {{ font-size: 16px; }} }}
     .brand {{ display: flex; align-items: center; gap: 12px; margin: 0 0 6px 0; }}
     .brand svg {{ flex-shrink: 0; }}
     h1 {{ font-size: 22px; margin: 0; color: #FAF1E4; font-weight: 500; }}

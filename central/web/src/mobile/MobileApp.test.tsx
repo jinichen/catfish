@@ -1,15 +1,10 @@
 // @vitest-environment jsdom
 /** 手机页: 已配过的电脑, 点「连接」后进对话页 (11/01 鸿波: 点连接后整页空白)。 */
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { b64, newKeyPair } from "./crypto";
 
-vi.mock("../lib/auth", () => ({
-  getIdToken: async () => "tok",
-  getCurrentUser: async () => ({}),
-  login: async () => undefined,
-}));
 
 class FakeWS {
   static OPEN = 1;
@@ -39,6 +34,13 @@ Object.defineProperty(globalThis, "localStorage", { value: store, configurable: 
 Object.defineProperty(window, "localStorage", { value: store, configurable: true });
 
 import { MobileApp } from "./MobileApp";
+import { setPlatform, type MobileStorage } from "./platform";
+
+const lsStorage: MobileStorage = { get: (k) => localStorage.getItem(k), set: (k, v) => localStorage.setItem(k, v) };
+setPlatform({
+  kind: "web", isLoggedIn: async () => true, getToken: async () => "tok", login: async () => undefined,
+  relayUrl: () => "ws://127.0.0.1/relay/ws", storage: lsStorage,
+});
 
 afterEach(cleanup);
 

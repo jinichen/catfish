@@ -1,6 +1,6 @@
 /** 手机网页 ↔ 中央中转站 ↔ 员工电脑 (docs/MOBILE-CLIENT-DESIGN.md §2 / §4)。
  *
- * 本机 (浏览器 localStorage) 存:
+ * 本机存 (浏览器: localStorage; App: 钥匙串, 见 platform.ts):
  *   设备号、这台手机的长期密钥、配过的电脑 (名字 + 公钥)
  * 中转站只看到密文和设备号。电脑那边的协议在 Companion `commands/mobile_bridge/`。
  *
@@ -25,6 +25,8 @@ import {
   unb64,
   type KeyPair,
 } from "./crypto";
+
+import { platform } from "./platform";
 
 const LS = "catfish.mobile.";
 
@@ -53,20 +55,9 @@ export type ClientEvent =
 
 export type ClientStatus = "connecting" | "ready" | "closed" | "error";
 
-function storage(): Storage | null {
-  try {
-    return window.localStorage;
-  } catch {
-    return null;
-  }
-}
-
-/** 存不进 localStorage 时 (隐私模式等) 先放内存: 这次能用, 关掉页面后要重新配对 */
-const memory = new Map<string, string>();
-
 function load<T>(key: string, fallback: T): T {
   try {
-    const raw = storage()?.getItem(LS + key) ?? memory.get(LS + key);
+    const raw = platform().storage.get(LS + key);
     return raw ? (JSON.parse(raw) as T) : fallback;
   } catch {
     return fallback;
@@ -74,13 +65,7 @@ function load<T>(key: string, fallback: T): T {
 }
 
 function save(key: string, value: unknown) {
-  const raw = JSON.stringify(value);
-  memory.set(LS + key, raw);
-  try {
-    storage()?.setItem(LS + key, raw);
-  } catch {
-    // 只留在内存里
-  }
+  platform().storage.set(LS + key, JSON.stringify(value));
 }
 
 function randomHex(n: number): string {
@@ -95,11 +80,6 @@ export function deviceName(ua = typeof navigator === "undefined" ? "" : navigato
   if (/HarmonyOS/i.test(ua)) return "鸿蒙手机";
   if (/Android/.test(ua)) return "安卓手机";
   return "手机浏览器";
-}
-
-/** 同源的 /relay/ws (开发时 vite 代理到 127.0.0.1:8999, 正式环境 nginx 反代到网关) */
-export function relayUrl(loc: Location = window.location): string {
-  return `${loc.protocol === "https:" ? "wss" : "ws"}://${loc.host}/relay/ws`;
 }
 
 interface Session {
@@ -127,7 +107,7 @@ export class MobileClient {
   peers: Peer[] = [];
   maxPhones: number | null = null;
 
-  constructor(private getToken: () => Promise<string | null>) {
+  constructor(private getToken: () => Promise<string | null> = () => platform().getToken()) {
     let device = load<string>("device", "");
     if (!/^[A-Za-z0-9_-]{8,64}$/.test(device)) {
       device = `ph-${randomHex(12)}`;
@@ -188,7 +168,7 @@ export class MobileClient {
       return;
     }
     this.setStatus("connecting");
-    const ws = new WebSocket(relayUrl());
+    const ws = new WebSocket(platform().relayUrl());
     this.ws = ws;
     ws.onopen = () => {
       ws.send(JSON.stringify({ t: "auth", token, role: "phone", device: this.device, name: deviceName() }));

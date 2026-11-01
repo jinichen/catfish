@@ -5,6 +5,7 @@ import {
   KIND_LONG, KIND_SESSION, b64, kindOf, newKeyPair, open, Reassembler, sas, seal, sharedKey, split, unb64,
 } from "./crypto";
 import { MobileClient, type ClientEvent } from "./client";
+import { memoryStorage, setPlatform } from "./platform";
 
 class FakeWS {
   static OPEN = 1;
@@ -42,11 +43,12 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
 
 beforeEach(() => {
   (globalThis as Record<string, unknown>).WebSocket = FakeWS;
-  (globalThis as Record<string, unknown>).window = { location: { protocol: "https:", host: "catfish.test" } };
+  setPlatform({
+    kind: "web", isLoggedIn: async () => true, getToken: async () => "tok", login: async () => undefined,
+    relayUrl: () => "wss://catfish.test/relay/ws", storage: memoryStorage(),
+  });
 });
-afterEach(() => {
-  delete (globalThis as Record<string, unknown>).window;
-});
+afterEach(() => undefined);
 
 describe("MobileClient", () => {
   it("登录帧带令牌, 地址同源 wss", async () => {
