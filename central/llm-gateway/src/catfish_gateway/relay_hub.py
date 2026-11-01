@@ -291,11 +291,12 @@ class Hub:
         if not self._pair_rate_ok(conn.sub):
             await self._send(conn, {"t": "error", "code": "pair_rate_limited"})
             return
-        if await self._over_limit(conn.sub, conn.device):
-            await self._send(conn, {"t": "error", "code": "phone_limit", "max_phones": relay_db.max_phones()})
-            return
-        ok = await self.deliver(conn.sub, to, {"t": "pair_request", "from": conn.device,
-                                               "name": conn.name, "pk": frame["pk"]})
+        # 到上限也转给电脑, 带上 over_limit: 员工在电脑上选一台旧手机替换 (先 revoke 再 pair_result),
+        # 不用先跑去设置里撤销。真正落配对关系时 (on_pair_result) 还会再查一次上限。
+        over = await self._over_limit(conn.sub, conn.device)
+        ok = await self.deliver(conn.sub, to, {"t": "pair_request", "from": conn.device, "name": conn.name,
+                                               "pk": frame["pk"], "over_limit": over,
+                                               "max_phones": relay_db.max_phones()})
         if not ok:
             await self._send(conn, {"t": "offline", "device": to})
 

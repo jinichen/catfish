@@ -342,7 +342,7 @@ export class MobileClient {
       save("pcs", { ...this.pairedPcs(), [pc]: { name, pk: b64(pcPk) } });
       this.refreshPeers();
     }
-    this.emit({ type: "pair_result", device: pc, ok: ok && !!pcPk, reason: ok ? undefined : "电脑上点了拒绝" });
+    this.emit({ type: "pair_result", device: pc, ok: ok && !!pcPk, reason: ok ? undefined : "电脑上没有允许 (点了拒绝, 或者手机数量到了单位上限)" });
   }
 
   // ── 会话 (握手 + 加密请求) ──────────────────────────────

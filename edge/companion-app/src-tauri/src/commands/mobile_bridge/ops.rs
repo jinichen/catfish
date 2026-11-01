@@ -47,6 +47,39 @@ fn s(v: &Value, k: &str) -> String {
     v.get(k).and_then(Value::as_str).unwrap_or("").to_string()
 }
 
+/// 电脑上任何对话 (不只是手机发起的) 在等批准的步骤 —— 插件 P63 `GET /api/catfish/approvals/pending`。
+/// 顺手记下回执要带的 request_id / generation, 手机点批准时 approve() 用。
+/// 返回给手机的消息 (不带 rid: 不属于手机上的哪条对话)。
+pub async fn fetch_pending() -> Result<Vec<(String, Value)>, String> {
+    let (base, auth) = hermes()?;
+    let resp = http()
+        .get(format!("{base}/api/catfish/approvals/pending"))
+        .header("Authorization", auth)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status().as_u16()));
+    }
+    let body: Value = resp.json().await.map_err(|e| e.to_string())?;
+    let mut out = vec![];
+    for a in body["approvals"].as_array().cloned().unwrap_or_default() {
+        let run_id = s(&a, "run_id");
+        if run_id.is_empty() {
+            continue;
+        }
+        let req_id = a.get("request_id").and_then(Value::as_str).map(String::from);
+        let gen = a.get("execution_generation").and_then(Value::as_i64);
+        approvals().lock().unwrap().insert(run_id.clone(), (req_id, gen));
+        out.push((run_id.clone(), json!({
+            "op": "approval", "rid": "", "runId": run_id, "fromPc": true,
+            "command": s(&a, "command"), "description": s(&a, "description"),
+        })));
+    }
+    Ok(out)
+}
+
 /// 只认这两个 —— 手机更容易被别人拿到, 「本次会话都允许 / 始终允许」只能在电脑上点
 pub fn phone_choice_ok(choice: &str) -> bool {
     matches!(choice, "once" | "deny")

@@ -71,7 +71,8 @@ def _pair(c, phone_id=PHONE):
     assert phone.receive_json()["t"] == "ready"
     phone.send_json({"t": "pair_request", "to": PC, "pk": PK1})
     req = pc.receive_json()
-    assert req == {"t": "pair_request", "from": phone_id, "name": "iPhone", "pk": PK1}
+    assert req.pop("max_phones") >= 1
+    assert req == {"t": "pair_request", "from": phone_id, "name": "iPhone", "pk": PK1, "over_limit": False}
     pc.send_json({"t": "pair_offer", "to": phone_id, "pk": PK2})
     assert phone.receive_json() == {"t": "pair_offer", "from": PC, "pk": PK2}
     pc.send_json({"t": "pair_result", "to": phone_id, "ok": True, "name": "iPhone"})
@@ -133,13 +134,33 @@ def test_对方不在线立即回不在线(client):
     assert phone.receive_json() == {"t": "offline", "device": PC}
 
 
-def test_手机数量上限可设置(client, monkeypatch):
+def test_手机数量上限可设置_到上限电脑不替换就配不上(client, monkeypatch):
     monkeypatch.setenv("CATFISH_MOBILE_MAX_DEVICES", "1")
     pc, _ = _pair(client)
     phone2 = _connect(client, "tok-alice", "phone", PHONE2)
     assert phone2.receive_json()["max_phones"] == 1
     phone2.send_json({"t": "pair_request", "to": PC, "pk": PK1})
-    assert phone2.receive_json() == {"t": "error", "code": "phone_limit", "max_phones": 1}
+    req = pc.receive_json()
+    assert req["over_limit"] is True and req["max_phones"] == 1
+    pc.send_json({"t": "pair_result", "to": PHONE2, "ok": True, "name": "x"})
+    assert pc.receive_json() == {"t": "error", "code": "phone_limit", "max_phones": 1}
+    assert phone2.receive_json() == {"t": "pair_result", "from": PC, "ok": False}
+
+
+def test_到上限时替换旧手机(client, monkeypatch):
+    monkeypatch.setenv("CATFISH_MOBILE_MAX_DEVICES", "1")
+    pc, phone1 = _pair(client)
+    phone2 = _connect(client, "tok-alice", "phone", PHONE2)
+    phone2.receive_json()
+    phone2.send_json({"t": "pair_request", "to": PC, "pk": PK1})
+    assert pc.receive_json()["over_limit"] is True
+    pc.send_json({"t": "revoke", "device": PHONE})
+    pc.send_json({"t": "pair_result", "to": PHONE2, "ok": True, "name": "新手机"})
+    assert phone1.receive_json() == {"t": "revoked", "from": PC}
+    assert phone2.receive_json() == {"t": "pair_result", "from": PC, "ok": True}
+    from catfish_gateway import relay_db
+
+    assert relay_db.store().phones("alice@x.com") == {PHONE2}
 
 
 def test_上限设成0_不开放手机端(client, monkeypatch):

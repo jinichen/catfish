@@ -11,6 +11,7 @@ import {
   mobileRevoke,
   mobileSetEnabled,
   mobileStatus,
+  isStale,
   mobileStatusText,
   type MobileStatus,
 } from "../../lib/mobile";
@@ -106,7 +107,12 @@ export default function MobileCard() {
             {status.phones.map((p) => (
               <li key={p.device} style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span style={{ flex: 1 }}>
-                  {p.name} <span style={muted}>· {new Date(p.pairedAt).toLocaleString()} 配对</span>
+                  {p.name}{" "}
+                  <span style={muted}>
+                    · {new Date(p.pairedAt).toLocaleDateString()} 配对
+                    {p.lastSeen ? ` · 最后用 ${new Date(p.lastSeen).toLocaleString()}` : ""}
+                  </span>
+                  {isStale(p) && <span style={{ ...muted, color: "var(--status-warn, #c97e1c)" }}> · 很久没用, 可以撤销</span>}
                 </span>
                 <button type="button" onClick={() => void revoke(p.device, p.name)}>撤销</button>
               </li>

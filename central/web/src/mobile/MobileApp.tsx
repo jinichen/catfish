@@ -8,7 +8,7 @@ import { Component, useCallback, useEffect, useMemo, useRef, useState, type Reac
 import { SimpleMarkdown } from "../components/SimpleMarkdown";
 import { getCurrentUser, getIdToken, login } from "../lib/auth";
 import { MobileClient, type ClientEvent, type Peer } from "./client";
-import { installPwaTags } from "./pwa";
+import { installPwaTags, needsHomeScreenHint, requestPersistentStorage } from "./pwa";
 
 type Tab = "chat" | "briefing";
 
@@ -106,10 +106,22 @@ export function MobileApp() {
   const [pairCode, setPairCode] = useState<{ device: string; code: string } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("chat");
+  const [homeHint, setHomeHint] = useState(() => {
+    try {
+      return needsHomeScreenHint() && localStorage.getItem("catfish.mobile.homeHintDismissed") !== "1";
+    } catch {
+      return needsHomeScreenHint();
+    }
+  });
   const handlers = useRef(new Map<string, Handler>());
+  // 电脑上 (不是这部手机发起的) 对话在等批准的步骤 —— Companion 定时推过来, 不带 rid
+  const [pcApprovals, setPcApprovals] = useState<Approval[]>([]);
+  // 手机自己发起的对话里出现过的 runId: 同一步不在顶上再显示一遍
+  const chatRunIds = useRef(new Set<string>());
 
   useEffect(() => {
     installPwaTags();
+    requestPersistentStorage();
     const off = client.on((e: ClientEvent) => {
       switch (e.type) {
         case "status":
@@ -150,7 +162,12 @@ export function MobileApp() {
           break;
         case "message": {
           const rid = String(e.m.rid ?? "");
-          handlers.current.get(rid)?.(e.m);
+          if (!rid && (e.m.op === "approval" || e.m.op === "approval_gone")) {
+            const m = e.m;
+            setPcApprovals((all) => applyPcApproval(all, m, chatRunIds.current));
+          } else {
+            handlers.current.get(rid)?.(e.m);
+          }
           break;
         }
       }
@@ -213,6 +230,18 @@ export function MobileApp() {
         <div role="status" onClick={() => setNotice(null)}
           style={{ padding: "8px 16px", background: "var(--bg-secondary)", fontSize: 14 }}>{notice}</div>
       )}
+      {homeHint && (
+        <div style={{ padding: "8px 16px", background: "var(--bg-secondary)", fontSize: 13, display: "flex", gap: 8 }}>
+          <span style={{ flex: 1 }}>
+            建议加到主屏幕再用: 点 Safari 下方的「分享」→「添加到主屏幕」。直接在浏览器里用的话,
+            一周不打开 Safari 会清掉配对, 要重新配。
+          </span>
+          <button style={{ ...btn, padding: "4px 10px", fontSize: 13 }} onClick={() => {
+            setHomeHint(false);
+            try { localStorage.setItem("catfish.mobile.homeHintDismissed", "1"); } catch { /* 不记也行 */ }
+          }}>知道了</button>
+        </div>
+      )}
       {client.status === "error" && (
         <div style={{ padding: 16 }}>
           <p>{statusText}</p>
@@ -226,7 +255,11 @@ export function MobileApp() {
       ) : (
         <>
           <div style={{ flex: 1, minHeight: 0, display: tab === "chat" ? "flex" : "none", flexDirection: "column" }}>
-            <ChatView ready={ready} request={request} />
+            <PcApprovals items={pcApprovals} setItems={setPcApprovals} request={request} />
+            <ChatView ready={ready} request={request} onApproval={(runId) => {
+              chatRunIds.current.add(runId);
+              setPcApprovals((all) => all.filter((a) => a.runId !== runId));
+            }} />
           </div>
           {tab === "briefing" && <BriefingView ready={ready} request={request} />}
           <div style={{ ...bar, borderTop: "1px solid var(--border)", borderBottom: "none", justifyContent: "space-around",
@@ -298,7 +331,62 @@ function PairCodeView({ code, onCancel }: { code: string; onCancel: () => void }
 
 type RequestFn = (op: string, payload: Record<string, unknown>, h: Handler) => string;
 
-function ChatView({ ready, request }: { ready: boolean; request: RequestFn }) {
+/** 电脑推来的「等批准」/「已处理掉」 → 顶上那排卡片。手机自己对话里已经显示的不重复。 */
+export function applyPcApproval(all: Approval[], m: Record<string, unknown>, inChat: Set<string>): Approval[] {
+  const runId = String(m.runId ?? "");
+  if (!runId) return all;
+  if (m.op === "approval_gone") return all.filter((a) => a.runId !== runId || a.state === "done");
+  if (inChat.has(runId) || all.some((a) => a.runId === runId)) return all;
+  return [...all, { runId, command: String(m.command ?? ""), description: String(m.description ?? ""), state: "pending" }];
+}
+
+/** 电脑上的对话在等批准 (手机能处理, 只能单次)。处理完 3 秒后收起。 */
+function PcApprovals({ items, setItems, request }: {
+  items: Approval[];
+  setItems: React.Dispatch<React.SetStateAction<Approval[]>>;
+  request: RequestFn;
+}) {
+  if (items.length === 0) return null;
+  const decide = (a: Approval, choice: "once" | "deny") => {
+    setItems((all) => all.map((x) => (x.runId === a.runId ? { ...x, state: "sending" } : x)));
+    request("approve", { runId: a.runId, choice }, (m) => {
+      const failed = m.op === "error";
+      setItems((all) => all.map((x) => (x.runId === a.runId ? {
+        ...x, state: failed ? "pending" : "done",
+        result: failed ? String(m.message) : choice === "once" ? "已允许这一次" : "已拒绝",
+      } : x)));
+      if (!failed) setTimeout(() => setItems((all) => all.filter((x) => x.runId !== a.runId)), 3000);
+    });
+  };
+  return (
+    <div style={{ padding: "8px 16px 0", maxHeight: "45%", overflowY: "auto" }}>
+      {items.map((a) => (
+        <div key={a.runId} style={{ border: "1px solid var(--status-warn)", borderRadius: 12, padding: 12, marginBottom: 8,
+          background: "var(--bg-elev)" }}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>电脑上的小鲶在等你批准</div>
+          {a.description && <div style={{ fontSize: 14 }}>{a.description}</div>}
+          {a.command && <code style={{ display: "block", fontSize: 12, margin: "6px 0", wordBreak: "break-all" }}>{a.command}</code>}
+          {a.state === "done" ? <div style={muted}>{a.result}</div> : (
+            <>
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <button style={primary} disabled={a.state === "sending"} onClick={() => decide(a, "once")}>允许这一次</button>
+                <button style={btn} disabled={a.state === "sending"} onClick={() => decide(a, "deny")}>拒绝</button>
+              </div>
+              {a.result && <div style={{ color: "var(--status-err)", fontSize: 13, marginTop: 4 }}>{a.result}</div>}
+              <div style={{ ...muted, marginTop: 6 }}>「始终允许」只能在电脑上点</div>
+            </>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ChatView({ ready, request, onApproval }: {
+  ready: boolean;
+  request: RequestFn;
+  onApproval: (runId: string) => void;
+}) {
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [text, setText] = useState("");
@@ -323,6 +411,7 @@ function ChatView({ ready, request }: { ready: boolean; request: RequestFn }) {
       if (m.op === "delta") patchLast((x) => ({ ...x, text: x.text + String(m.text ?? ""), status: undefined }));
       else if (m.op === "status") patchLast((x) => ({ ...x, status: String(m.text ?? "") }));
       else if (m.op === "approval") {
+        onApproval(String(m.runId));
         setApprovals((a) => [...a, { runId: String(m.runId), command: String(m.command ?? ""),
           description: String(m.description ?? ""), state: "pending" }]);
         patchLast((x) => ({ ...x, status: "等你批准…" }));

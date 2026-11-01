@@ -387,6 +387,14 @@ def _patch_p8_p9_cors() -> None:
                     plugin_room_link.register_routes(self.router)
                 except Exception as e:  # noqa: BLE001
                     logger.warning("P49 room-link 路由注册失败: %s", e)
+                # ── P63 (11/01): 等员工批准的步骤列表 —— 手机端用 ──
+                # GET /api/catfish/approvals/pending, 只读 adapter._run_statuses。
+                # 挂不上只是手机看不到电脑上发起的批准, 不影响审批本身。
+                try:
+                    from . import plugin_pending_approvals  # noqa: PLC0415
+                    plugin_pending_approvals.register_routes(self.router)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("P63 待批准列表路由注册失败: %s", e)
                 # ── P30 (P3.5.198 7/8 鸿波): wechat qr_login start/poll ──
                 #
                 # 跟 P26 同时机注册 (router 未 freeze), handler 走 P7 stashed

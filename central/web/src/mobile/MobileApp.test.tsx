@@ -68,3 +68,28 @@ describe("小鲶回复按 Markdown 显示", () => {
     expect(container.querySelector("p br")).toBeTruthy();
   });
 });
+
+import { needsHomeScreenHint } from "./pwa";
+
+describe("加到主屏幕的提示", () => {
+  it("只在 iPhone 浏览器里提示, 主屏幕打开的不提示", () => {
+    const iphone = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Safari";
+    expect(needsHomeScreenHint(iphone, false)).toBe(true);
+    expect(needsHomeScreenHint(iphone, true)).toBe(false);
+    expect(needsHomeScreenHint("Mozilla/5.0 (Linux; Android 14) Chrome", false)).toBe(false);
+  });
+});
+
+import { applyPcApproval } from "./MobileApp";
+
+describe("电脑上的批准推到手机", () => {
+  it("新的加上、重复的不加、手机对话里已有的不加、处理掉的收起", () => {
+    const m = { op: "approval", runId: "run-1", command: "rm x", description: "删除" };
+    let list = applyPcApproval([], m, new Set());
+    expect(list).toEqual([{ runId: "run-1", command: "rm x", description: "删除", state: "pending" }]);
+    expect(applyPcApproval(list, m, new Set())).toBe(list);
+    expect(applyPcApproval([], { ...m, runId: "run-2" }, new Set(["run-2"]))).toEqual([]);
+    list = applyPcApproval(list, { op: "approval_gone", runId: "run-1" }, new Set());
+    expect(list).toEqual([]);
+  });
+});

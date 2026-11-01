@@ -125,6 +125,9 @@ const BAKED_PLUGIN_ROOM_LINK: &str =
 // macOS 开发机的 plugin 是仓库软链, 看不出来; 只有从安装包铺文件的机器会炸。
 const BAKED_WINDOWS_CHAT_CREDENTIALS: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/windows_chat_credentials.py");
+// 11/01 P63: 等员工批准的步骤列表 (手机端用, 见 plugin_pending_approvals.py)
+const BAKED_PLUGIN_PENDING_APPROVALS: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_pending_approvals.py");
 // 10/6 P50: 自动续跑 (模型"说了要做没调工具"时替员工按「继续」, 见 plugin_auto_continue.py)
 const BAKED_PLUGIN_AUTO_CONTINUE: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_auto_continue.py");
@@ -201,6 +204,7 @@ pub(crate) const BAKED_FILES: &[(&str, &str)] = &[
     ("plugin_room_link.py", BAKED_PLUGIN_ROOM_LINK),
     ("windows_chat_credentials.py", BAKED_WINDOWS_CHAT_CREDENTIALS),
     ("plugin_auto_continue.py", BAKED_PLUGIN_AUTO_CONTINUE),
+    ("plugin_pending_approvals.py", BAKED_PLUGIN_PENDING_APPROVALS),
     ("plugin_approval_ux.py", BAKED_PLUGIN_APPROVAL_UX),
     ("plugin_bridge_promoted.py", BAKED_PLUGIN_BRIDGE_PROMOTED),
     ("plugin_slash_confirm_ux.py", BAKED_PLUGIN_SLASH_CONFIRM_UX),

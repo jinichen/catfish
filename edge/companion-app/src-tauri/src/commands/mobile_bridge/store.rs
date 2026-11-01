@@ -18,6 +18,9 @@ pub struct Phone {
     pub name: String,
     pub public_key: String,
     pub paired_at: String,
+    /// 最后一次连上来的时间 (11/01; 老数据没有)。30 天没用的在界面上标出来, 替换时排第一个
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -99,6 +102,14 @@ pub fn add_phone_in(dir: &Path, phone: Phone) -> Result<(), String> {
     save_phones_in(dir, &all)
 }
 
+/// 记一下这台手机刚连上来过
+pub fn touch_phone_in(dir: &Path, device: &str, when: &str) -> Result<(), String> {
+    let mut all = phones_in(dir);
+    let Some(p) = all.iter_mut().find(|p| p.device == device) else { return Ok(()) };
+    p.last_seen = Some(when.to_string());
+    save_phones_in(dir, &all)
+}
+
 pub fn remove_phone_in(dir: &Path, device: &str) -> Result<bool, String> {
     let mut all = phones_in(dir);
     let before = all.len();
@@ -139,10 +150,12 @@ mod tests {
     #[test]
     fn 手机增删_同一台重配只留一条() {
         let t = tempfile::tempdir().unwrap();
-        let p = |n: &str| Phone { device: "phone-1".into(), name: n.into(), public_key: "k".into(), paired_at: "t".into() };
+        let p = |n: &str| Phone { device: "phone-1".into(), name: n.into(), public_key: "k".into(), paired_at: "t".into(), last_seen: None };
         add_phone_in(t.path(), p("A")).unwrap();
         add_phone_in(t.path(), p("B")).unwrap();
         assert_eq!(phones_in(t.path()), vec![p("B")]);
+        touch_phone_in(t.path(), "phone-1", "2026-11-01T10:00:00+08:00").unwrap();
+        assert_eq!(phones_in(t.path())[0].last_seen.as_deref(), Some("2026-11-01T10:00:00+08:00"));
         assert!(remove_phone_in(t.path(), "phone-1").unwrap());
         assert!(!remove_phone_in(t.path(), "phone-1").unwrap());
         assert!(phones_in(t.path()).is_empty());

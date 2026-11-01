@@ -9,8 +9,11 @@ import { listen } from "@tauri-apps/api/event";
 import {
   MOBILE_PAIR_FAILED_EVENT,
   MOBILE_PAIR_REQUEST_EVENT,
+  isStale,
   mobilePairDecide,
   mobileStatus,
+  replaceOrder,
+  type PairedPhone,
   type PendingPair,
 } from "../lib/mobile";
 
@@ -19,6 +22,9 @@ export default function MobilePairDialog() {
   const [failed, setFailed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 到上限时: 已配的手机 (最久没用的在前) 和选中要替换的那台
+  const [phones, setPhones] = useState<PairedPhone[]>([]);
+  const [replace, setReplace] = useState<string>("");
 
   useEffect(() => {
     let alive = true;
@@ -36,6 +42,16 @@ export default function MobilePairDialog() {
   }, []);
 
   const current = queue[0];
+  const overLimit = !!current?.overLimit;
+  useEffect(() => {
+    if (!overLimit) return;
+    mobileStatus().then((s) => {
+      const list = replaceOrder(s.phones);
+      setPhones(list);
+      setReplace(list[0]?.device ?? "");
+    }).catch(() => undefined);
+  }, [overLimit, current?.device]);
+
   if (!current && !failed) return null;
 
   const decide = async (allow: boolean) => {
@@ -43,7 +59,7 @@ export default function MobilePairDialog() {
     setBusy(true);
     setError(null);
     try {
-      await mobilePairDecide(current.device, allow);
+      await mobilePairDecide(current.device, allow, allow && overLimit ? replace : undefined);
       setQueue((q) => q.slice(1));
     } catch (e) {
       setError(String(e));
@@ -74,11 +90,35 @@ export default function MobilePairDialog() {
             <p style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>
               不是你自己的手机、或者数字对不上, 就点拒绝。以后可以在「设置 → 隐私 / 本机数据 → 手机」里撤销。
             </p>
+            {overLimit && (
+              <div role="group" aria-label="替换哪一台" style={{ fontSize: 13, margin: "8px 0", padding: 8,
+                border: "1px solid var(--catfish-border, #ddd)", borderRadius: "var(--radius-md)" }}>
+                <div style={{ marginBottom: 6 }}>
+                  已经配了 {current.maxPhones ?? phones.length} 台手机 (单位上限)。允许这台, 要替换掉一台旧的:
+                </div>
+                {phones.map((p) => (
+                  <label key={p.device} style={{ display: "flex", gap: 6, alignItems: "center", padding: "2px 0" }}>
+                    <input type="radio" name="replace" checked={replace === p.device} onChange={() => setReplace(p.device)} />
+                    {p.name}
+                    <span style={{ color: "var(--catfish-text-muted)", fontSize: 12 }}>
+                      · {p.lastSeen ? `最后用 ${new Date(p.lastSeen).toLocaleDateString()}` : "没连过"}
+                      {isStale(p) ? " · 很久没用" : ""}
+                    </span>
+                  </label>
+                ))}
+                {phones.length === 0 && (
+                  <div style={{ color: "var(--catfish-text-muted)" }}>
+                    这台电脑上没有配过的手机 (名额被别的电脑占了), 请到那台电脑上撤销一台。
+                  </div>
+                )}
+              </div>
+            )}
             {error && <p role="alert" style={{ fontSize: 12, color: "var(--status-err)" }}>{error}</p>}
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: "var(--space-4)" }}>
               <button type="button" onClick={() => void decide(false)} disabled={busy}>拒绝</button>
-              <button type="button" className="primary" onClick={() => void decide(true)} disabled={busy}>
-                数字一样, 允许
+              <button type="button" className="primary" onClick={() => void decide(true)}
+                disabled={busy || (overLimit && !replace)}>
+                {overLimit ? "数字一样, 替换并允许" : "数字一样, 允许"}
               </button>
             </div>
           </>

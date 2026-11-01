@@ -52,6 +52,9 @@ pub struct PendingPair {
     pub device: String,
     pub name: String,
     pub code: String,
+    /// 这个人的手机已到单位上限: 允许时要选一台旧的替换
+    pub over_limit: bool,
+    pub max_phones: Option<u32>,
     #[serde(skip)]
     public_key: String,
 }
@@ -64,6 +67,8 @@ struct State {
     tx: Option<mpsc::UnboundedSender<String>>,
     sessions: HashMap<String, PhoneSession>,
     pending: HashMap<String, PendingPair>,
+    /// 已推给手机的「电脑上等批准的步骤」: run_id → 推给手机的那条消息 (新连上的手机补发)
+    pc_approvals: HashMap<String, Value>,
     /// 刚点了「允许」、等中转站确认的那台 (超上限时中转站回 phone_limit, 要撤回)
     last_accepted: Option<(String, Instant)>,
 }
@@ -173,6 +178,8 @@ fn on_pair_request(phone: &str, f: &Value) {
         device: phone.to_string(),
         name: if name.trim().is_empty() { "手机".into() } else { name },
         code: crypto::sas(&phone_pk, &my_pk),
+        over_limit: f.get("over_limit").and_then(Value::as_bool).unwrap_or(false),
+        max_phones: f.get("max_phones").and_then(Value::as_u64).map(|n| n as u32),
         public_key: pk_s.to_string(),
     };
     bridge().state.lock().unwrap().pending.insert(phone.to_string(), pending.clone());
@@ -258,6 +265,9 @@ fn on_hello(phone: &str, phone_pk: &[u8; 32], raw: &[u8]) {
     }
     let Some(peer_eph) = m.get("eph").and_then(Value::as_str).and_then(crypto::key32) else { return };
     let sid = m.get("sid").and_then(Value::as_str).unwrap_or("").to_string();
+    if let Ok(d) = dir() {
+        let _ = store::touch_phone_in(&d, phone, &chrono::Local::now().to_rfc3339());
+    }
     let eph = crypto::new_secret();
     let eph_pk = crypto::public_of(&eph);
     bridge().state.lock().unwrap().sessions.insert(
@@ -266,6 +276,38 @@ fn on_hello(phone: &str, phone_pk: &[u8; 32], raw: &[u8]) {
     );
     let _ = send_long(phone_pk, phone, json!({"op": "hello_ack", "eph": crypto::b64(&eph_pk), "sid": sid,
                                              "name": device_name()}));
+    // 刚连上的手机: 电脑上已经在等批准的, 补发一遍
+    let waiting: Vec<Value> = bridge().state.lock().unwrap().pc_approvals.values().cloned().collect();
+    let n: usize = waiting.iter().map(|m| send_to_phone(phone, m)).sum();
+    ops::record_egress(n);
+}
+
+/// 电脑上任何对话在等批准的步骤 → 推给连着的手机; 已经处理掉的 (电脑上点了 / 超时) 通知手机收起。
+/// 没有手机连着就不问 Hermes。
+async fn poll_pc_approvals() {
+    let phones: Vec<String> = bridge().state.lock().unwrap().sessions.keys().cloned().collect();
+    if phones.is_empty() {
+        return;
+    }
+    let Ok(now) = ops::fetch_pending().await else { return };
+    let (fresh, gone) = {
+        let mut st = bridge().state.lock().unwrap();
+        let fresh: Vec<Value> = now.iter().filter(|(id, _)| !st.pc_approvals.contains_key(id)).map(|(_, m)| m.clone()).collect();
+        let keep: std::collections::HashSet<&String> = now.iter().map(|(id, _)| id).collect();
+        let gone: Vec<String> = st.pc_approvals.keys().filter(|id| !keep.contains(id)).cloned().collect();
+        st.pc_approvals = now.into_iter().collect();
+        (fresh, gone)
+    };
+    let mut n = 0;
+    for phone in &phones {
+        for m in &fresh {
+            n += send_to_phone(phone, m);
+        }
+        for id in &gone {
+            n += send_to_phone(phone, &json!({"op": "approval_gone", "runId": id}));
+        }
+    }
+    ops::record_egress(n);
 }
 
 // ── 连接循环 ────────────────────────────────────────────────
@@ -278,6 +320,7 @@ fn set_status(connected: bool, error: Option<String>) {
         if !connected {
             st.tx = None;
             st.sessions.clear();
+            st.pc_approvals.clear();
         }
     }
     emit("mobile://changed", Value::Null);
@@ -322,8 +365,10 @@ async fn run_once() -> Result<(), String> {
     send_raw(json!({"t": "sync_pairs", "phones": phones}));
 
     let mut ping = tokio::time::interval(Duration::from_secs(25));
+    let mut approvals_tick = tokio::time::interval(Duration::from_secs(4));
     loop {
         tokio::select! {
+            _ = approvals_tick.tick() => { tauri::async_runtime::spawn(poll_pc_approvals()); }
             msg = stream.next() => match msg {
                 Some(Ok(Message::Text(t))) => on_relay_frame(&t),
                 Some(Ok(Message::Close(_))) | None => return Err("中转站断开了".into()),
@@ -419,10 +464,16 @@ pub fn mobile_set_enabled(enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// `replace`: 到上限时员工选的那台旧手机 —— 先撤销它, 再允许新的 (中转站按顺序处理这两帧)
 #[tauri::command]
-pub fn mobile_pair_decide(device: String, allow: bool) -> Result<(), String> {
+pub fn mobile_pair_decide(device: String, allow: bool, replace: Option<String>) -> Result<(), String> {
     let pending = bridge().state.lock().unwrap().pending.remove(&device).ok_or("这个配对请求已经过期了")?;
     if allow {
+        if let Some(old) = replace.filter(|d| !d.is_empty() && *d != device) {
+            store::remove_phone_in(&dir()?, &old)?;
+            bridge().state.lock().unwrap().sessions.remove(&old);
+            send_raw(json!({"t": "revoke", "device": old}));
+        }
         store::add_phone_in(
             &dir()?,
             store::Phone {
@@ -430,6 +481,7 @@ pub fn mobile_pair_decide(device: String, allow: bool) -> Result<(), String> {
                 name: pending.name.clone(),
                 public_key: pending.public_key.clone(),
                 paired_at: chrono::Local::now().to_rfc3339(),
+                last_seen: None,
             },
         )?;
         bridge().state.lock().unwrap().last_accepted = Some((device.clone(), Instant::now()));
@@ -476,7 +528,7 @@ mod tests {
         let pc_pk = crypto::key32(offer["pk"].as_str().unwrap()).unwrap();
         let pending = mobile_status().unwrap().pending;
         assert_eq!(pending[0].code, crypto::sas(&phone_pk, &pc_pk));
-        mobile_pair_decide("phone-test-01".into(), true).unwrap();
+        mobile_pair_decide("phone-test-01".into(), true, None).unwrap();
         assert_eq!(next!(), json!({"t": "pair_result", "to": "phone-test-01", "ok": true, "name": "iPhone"}));
         assert_eq!(store::phones_in(tmp.path()).len(), 1);
 
@@ -529,11 +581,26 @@ mod tests {
                                "d": crypto::seal(&sess, crypto::KIND_SESSION, &piece)}).to_string());
         assert_eq!(next!(), json!({"t": "revoke", "device": "phone-test-01"}));
 
+        // 5b. 到上限时替换: 先撤销旧的, 再允许新的
+        store::add_phone_in(tmp.path(), store::Phone { device: "phone-old-01".into(), name: "旧手机".into(),
+            public_key: crypto::b64(&phone_pk), paired_at: "t".into(), last_seen: None }).unwrap();
+        on_relay_frame(&json!({"t": "pair_request", "from": "phone-test-03", "name": "新手机",
+                               "pk": crypto::b64(&phone_pk), "over_limit": true, "max_phones": 1}).to_string());
+        let _offer = next!();
+        assert!(mobile_status().unwrap().pending.iter().any(|p| p.over_limit));
+        mobile_pair_decide("phone-test-03".into(), true, Some("phone-old-01".into())).unwrap();
+        assert_eq!(next!(), json!({"t": "revoke", "device": "phone-old-01"}));
+        assert_eq!(next!()["ok"], true);
+        let left: Vec<String> = store::phones_in(tmp.path()).into_iter().map(|p| p.device).collect();
+        assert_eq!(left, vec!["phone-test-03".to_string()]);
+        mobile_revoke("phone-test-03".into()).unwrap();
+        let _ = next!();
+
         // 6. 没配过的手机发的配对请求, 员工点拒绝 → 不记
         on_relay_frame(&json!({"t": "pair_request", "from": "phone-test-02", "name": "x",
                                "pk": crypto::b64(&phone_pk)}).to_string());
         let _offer = next!();
-        mobile_pair_decide("phone-test-02".into(), false).unwrap();
+        mobile_pair_decide("phone-test-02".into(), false, None).unwrap();
         assert_eq!(next!()["ok"], false);
         assert!(store::phones_in(tmp.path()).is_empty());
 
