@@ -586,3 +586,12 @@ async def test_成功时返回值和_attempts_out_是同一份():
     got: list[str] = []
     _r, _m, returned = await with_fallback(_config(a), a, ok, attempts_out=got)
     assert returned is got and got == ["a=ok"], (returned, got)
+
+
+def test_内容审核拦截_配了content_inspection才切() -> None:
+    """11/01: 百炼 data_inspection_failed 被 LiteLLM 报成 400, 只能靠关键词接。"""
+    exc = FakeBadRequest('{"error":{"code":"data_inspection_failed","message":"Input text data may contain '
+                         'inappropriate content."}}')
+    assert should_fallback(exc, [429, 500, "upstream error", "content inspection"]) is True
+    # 没配这个触发词 = 不切 (opt-in 不变)
+    assert should_fallback(exc, [429, 500, "upstream error"]) is False

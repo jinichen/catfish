@@ -620,6 +620,10 @@ function friendlyError(err: string | undefined): string {
   if (err.includes("404") || err.includes("not found")) {
     return "上游说没这个模型 (404) — 检查 models.yaml 配置";
   }
+  // 11/01: 百炼内容审核误判 (data_inspection_failed) 也是 400, 先认出来, 别说成格式错
+  if (/data_inspection_failed|inappropriate content|content_policy_violation|content_filter/i.test(err)) {
+    return "被模型厂商的内容审核拦了 (不是格式错) — 对话里可能有被误判的文字, 换个模型再发, 或新开对话";
+  }
   if (err.includes("400") || err.includes("Bad Request") || err.includes("BadRequest")) {
     return "请求格式错 (400) — 模型 / 参数 / 工具 schema 有一个不对";
   }

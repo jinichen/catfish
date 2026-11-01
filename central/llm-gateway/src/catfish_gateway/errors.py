@@ -125,6 +125,19 @@ def _auth_reject_message(model: str | None) -> str:
     )
 
 
+#: 各家内容审核拦截的说法 (11/01)。fallback.py 的「content inspection」触发词和
+#: error_class.py 的 content_filter 分类用同一份, 免得三处各认各的。
+CONTENT_INSPECTION_KEYWORDS: tuple[str, ...] = (
+    "data_inspection_failed",          # 阿里云百炼
+    "inappropriate content",
+    "datainspectionfailed",
+    "content_policy_violation",        # OpenAI
+    "content_filter",
+    "content management policy",       # Azure
+    "responsible ai policy",
+)
+
+
 def friendly_upstream_error(raw: str, model: str | None = None) -> str:
     """把 LiteLLM / OpenAI / Google 的 trace 转人话, 截断在 200 字符以内.
 
@@ -171,6 +184,14 @@ def friendly_upstream_error(raw: str, model: str | None = None) -> str:
             f"模型的「单次输出上限」超过上游允许的 {_rng.group(1)} —— "
             f"控制台 /admin/models 里把这个模型的「单次输出上限」改成 ≤ {_rng.group(1)}"
         )
+
+    # ===== 模型厂商的内容审核 (11/01) =====
+    # 百炼 qwen 报 400 data_inspection_failed "Input text data may contain inappropriate content",
+    # 原来落进下面的 400 → 「请求格式错 — 模型名 / 参数 / 工具 schema」, 把人往 schema 方向带。
+    # 真因是对话里有文字被它的审核误判 (11/01 现场: 照片定位拼了 10 万 token 的 OCR / 网页 / 街景地址)。
+    # 同一段内容重发还会被拦, 所以建议换模型 / 新开对话, 不是「再试一次」。
+    if any(k in low for k in CONTENT_INSPECTION_KEYWORDS):
+        return "被模型厂商的内容审核拦了 (不是格式错) — 对话里可能有被误判的文字, 换个模型再发, 或新开对话"
 
     # ===== Provider 特有错误 (优先匹配, 信号最强) =====
     if "resource_exhausted" in low or ("quota" in low and "exceed" in low):

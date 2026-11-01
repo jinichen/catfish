@@ -80,7 +80,9 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
         "unable to get json response", "name or service not known",
     )),
     ("model_not_found", ("model not found", "does not exist", "unknown model")),
-    ("content_filter", ("content filter", "content_policy", "safety")),
+    # 11/01: 百炼的 data_inspection_failed 原来没认出来, 落成 bad_request
+    ("content_filter", ("content filter", "content_policy", "safety",
+                        "data_inspection_failed", "inappropriate content", "content management policy")),
     ("upstream_5xx", (
         "internalservererror", "internal server error", "bad gateway",
         "service unavailable", "upstream error", "502", "503", "504", "500",

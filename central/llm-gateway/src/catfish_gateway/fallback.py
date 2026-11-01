@@ -102,6 +102,18 @@ _ERROR_KEYWORDS = {
     #   OpenAI    insufficient_quota
     #   阿里云百炼  Arrearage (欠费) / AllocationQuota
     # 不收 "billing" 这种太宽的词 —— 正常文案里也可能出现, 误切比不切更难查。
+    # 11/01 鸿波拍板: 被模型厂商的内容审核拦下 (百炼 data_inspection_failed 等) 换个模型重试。
+    # 同一段内容对同一家审核是确定性的, 原地重试没用; 换一家往往就过 (各家的误判不一样)。
+    # 只给公网模型配 (公网 → 公网, 不涉及内网内容外流); 内网模型没有这类审核。
+    # LiteLLM 把它报成 BadRequestError (400), 状态码接不住, 只能靠关键词。
+    "content inspection": (
+        "data_inspection_failed",
+        "inappropriate content",
+        "datainspectionfailed",
+        "content_policy_violation",
+        "content management policy",
+        "responsible ai policy",
+    ),
     "insufficient balance": (
         "insufficient balance",
         "insufficient_balance",

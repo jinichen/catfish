@@ -358,3 +358,23 @@ class TestUpstreamAuthReject:
         msg = _friendly_upstream_error(self.RAW_1022, model="catfish-private-vision").lower()
         hits = [p for p in _AUTH_PATTERNS if p in msg]
         assert not hits, f"员工会被当成自己令牌失效: {hits}"
+
+
+# 11/01 现场原文: 百炼内容审核误判, 原来被说成「请求格式错 — 模型名 / 参数 / 工具 schema」
+_DASHSCOPE_INSPECTION = (
+    'litellm.BadRequestError: OpenAIException - data: {"error":{"code":"data_inspection_failed",'
+    '"param":null,"message":"Input text data may contain inappropriate content.",'
+    '"type":"data_inspection_failed"},"id":"chatcmpl-x"} 400'
+)
+
+
+def test_内容审核拦截_不说成格式错() -> None:
+    msg = _friendly_upstream_error(_DASHSCOPE_INSPECTION)
+    assert "内容审核" in msg
+    assert "schema" not in msg
+
+
+def test_内容审核_归类成content_filter() -> None:
+    from catfish_gateway.error_class import classify_upstream_error
+
+    assert classify_upstream_error(_DASHSCOPE_INSPECTION) == "content_filter"
