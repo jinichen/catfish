@@ -31,6 +31,7 @@ import { getCurrentUser, handleCallback, login } from "./lib/auth";
 import { useAuthStore } from "./store/auth";
 
 import { HomePage } from "./routes/HomePage";
+import { MobileRoot } from "./mobile/MobileApp";
 import { PasswordPage } from "./routes/PasswordPage";
 // BL-CENTRAL-WEB-PURGE-MEPAGE (5/17 鸿波): 删 MePage — 个人数据展示违
 // BL-CENTRAL-EDGE-BOUNDARY spirit. 员工自查 → Companion 桌面 app.
@@ -96,7 +97,16 @@ function AuthCallback() {
   );
 }
 
+/** 11/01: 手机网页 /m (docs/MOBILE-CLIENT-DESIGN.md) 走自己那套 —— 全屏布局、不要门户导航栏,
+ *  也不调 /api/me (中转站单独放 DMZ 时, 对外只开放 /m、登录页和 /relay/, 没有 /api)。 */
 export function App() {
+  // 用 useLocation 而不是 window.location: 登录回调 navigate("/m") 之后要重新判断走哪套
+  const path = useLocation().pathname;
+  if (path === "/m" || path.startsWith("/m/")) return <MobileRoot />;
+  return <PortalApp />;
+}
+
+function PortalApp() {
   // BL-ARCH2 fix2 (5/10): 选择器订阅, me 变就重渲, 不再白屏卡死
   const me = useAuthStore((s) => s.me);
   const loading = useAuthStore((s) => s.loading);

@@ -1,0 +1,45 @@
+# 手机中转站单独放 DMZ (可选, docs/MOBILE-CLIENT-DESIGN.md §8.2; 默认中转站跟中央一起装, 不用这个文件)
+#
+# 什么时候用: 客户 IT 不愿意把中央的任何路径开到公网, 但员工要在公司外面用手机。
+# 这台 DMZ 机器上只跑两样:
+#   relay  网关镜像的「只中转」模式 (CATFISH_ROLE=relay): 只有 /relay/ws 和 /healthz,
+#          不带模型 / 配额 / 审计等任何接口, 不碰用户数据, 转的都是端到端密文
+#   nginx  对外 HTTPS; /relay/ 给 relay, 手机网页 /m 和登录页反代回内网中央 (见 relay-dmz/nginx.conf)
+#
+# 用法 (在 DMZ 机器上, 镜像包跟中央同一个):
+#   cp relay-dmz/relay.env.example relay-dmz/relay.env   # 填中央数据库 / 登录服务地址
+#   放好证书 relay-dmz/certs/server.crt + server.key
+#   docker compose -f docker-compose.relay.yml up -d
+# 详细步骤和网络要求见 INSTALL.md「手机访问 → 中转站单独放 DMZ」。
+services:
+  relay:
+    image: catfish-gateway:20261101-31d24861
+    container_name: catfish-relay
+    restart: unless-stopped
+    env_file: relay-dmz/relay.env
+    environment:
+      CATFISH_ROLE: relay
+      CATFISH_ENV: prod
+      HOST: 0.0.0.0
+      PORT: 8999
+      # 跨进程转发靠 PostgreSQL 通知, 多开几个进程也行; DMZ 上一般 2 个够用
+      UVICORN_WORKERS: ${RELAY_WORKERS:-2}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8999/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # 用安装包里已有的门户镜像 (本身就是 nginx), 离线机房不用另外拉镜像;
+  # 只换掉它的站点配置, 不开它自带的 HTTPS 开关 (CATFISH_ENABLE_HTTPS 不设)
+  nginx:
+    image: catfish-web:20261101-31d24861
+    container_name: catfish-relay-nginx
+    restart: unless-stopped
+    depends_on:
+      - relay
+    ports:
+      - "${RELAY_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./relay-dmz/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./relay-dmz/certs:/etc/nginx/certs:ro

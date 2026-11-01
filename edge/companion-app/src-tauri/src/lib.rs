@@ -508,6 +508,8 @@ pub fn run() {
             // 失败并进入 180 秒 backoff，造成“窗口快了但工具暂时不可用”。
             // 因此正常安装路径等待严格完成标记；开发者显式禁用 bootstrap 时仍
             // 沿用立即启动，兼容自管 Hermes 环境。
+            // 11/01 手机通道: 员工在「设置 → 手机」里开了才连中转站 (默认关), 不依赖 Hermes 就绪
+            commands::mobile_bridge::start(app.handle().clone());
             let runtime_services_app = app.handle().clone();
             #[cfg(any(
                 target_os = "macos",

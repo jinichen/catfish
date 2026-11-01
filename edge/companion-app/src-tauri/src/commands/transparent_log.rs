@@ -208,7 +208,7 @@ fn classify_category(url: &str) -> &'static str {
 
 // ── 公开 API ───────────────────────────────────────────────────
 
-fn record_blocking(req: RecordReq) -> Result<i64, String> {
+pub(crate) fn record_blocking(req: RecordReq) -> Result<i64, String> {
     let mut conn = open_db()?;
     let now = chrono::Utc::now().to_rfc3339();
     let body_bytes = req

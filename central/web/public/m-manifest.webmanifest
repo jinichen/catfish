@@ -1,0 +1,14 @@
+{
+  "name": "小鲶",
+  "short_name": "小鲶",
+  "description": "在手机上跟自己电脑上的小鲶对话",
+  "start_url": "/m",
+  "scope": "/m",
+  "display": "standalone",
+  "background_color": "#fafaf7",
+  "theme_color": "#2d8a87",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "/catfish-mascot.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

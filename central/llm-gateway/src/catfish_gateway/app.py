@@ -330,6 +330,13 @@ try:
 except Exception as e:
     logger.warning("egress_anchor_router 挂载失败: %s", e)
 
+try:
+    from .relay_router import router as relay_router  # noqa: PLC0415
+    app.include_router(relay_router)
+    logger.info("relay_router: /relay/ws 已挂载 (手机中转站, 只转发密文)")
+except Exception as e:
+    logger.warning("relay_router 挂载失败: %s", e)
+
 def _resolve_model(config: Config, name: str):
     model = config.get_model(name)
     if not model:
@@ -663,8 +670,10 @@ def run():
         f"(HOST source={host_source}, PORT={port_str} source={port_source})",
         flush=True,
     )
+    # 11/01: CATFISH_ROLE=relay 只跑手机中转站 (放 DMZ, docs/MOBILE-CLIENT-DESIGN.md §8.2)
+    role = os.environ.get("CATFISH_ROLE", "").strip().lower()
     uvicorn.run(
-        "catfish_gateway.app:app",
+        "catfish_gateway.relay_app:app" if role == "relay" else "catfish_gateway.app:app",
         host=host,
         port=port,
         workers=workers,

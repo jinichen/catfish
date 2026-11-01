@@ -56,7 +56,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 VERSION_FILE="central/VERSION"
-COMPOSES=("central/docker-compose.yml" "delivery/catfish-poc/docker-compose.yml")
+# 11/01: + DMZ 手机中转站 (只用网关镜像, CATFISH_ROLE=relay)
+COMPOSES=("central/docker-compose.yml" "delivery/catfish-poc/docker-compose.yml" "delivery/catfish-poc/docker-compose.relay.yml")
 IMAGES=(catfish-identity catfish-gateway catfish-skills-hub catfish-web catfish-mcp-registry catfish-wiki-hub)
 
 # 六个镜像的源码目录。顺序无所谓 (下面 sort), 但**集合**要跟实际构建的一致 ——

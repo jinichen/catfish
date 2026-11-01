@@ -4,7 +4,7 @@ name = "catfish-companion-app"
 # Hermes 是独立发布物，由 .hermes-target-version / tag / commit 单独固定。
 # 改时记得同步 src-tauri/tauri.conf.json + ../package.json + package-lock.json。
 # CI lint: scripts/check_version_sync.sh
-version = "1.2.23"
+version = "1.2.24"
 description = "Catfish Companion App - desktop sidekick for the Catfish platform"
 authors = ["Catfish Team"]
 edition = "2021"
@@ -83,6 +83,10 @@ rand = "0.8"
 base64 = "0.22"
 # url 解析 query params
 url = "2"
+# 11/01 手机通道 (docs/MOBILE-CLIENT-DESIGN.md): 连中央中转站 + NaCl box 端到端加密 (跟网页 tweetnacl 互通)
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+futures-util = "0.3"
+crypto_box = { version = "0.9", features = ["std"] }
 # BL-JOURNAL-TODO-EXTRACT (5/20): journal markdown TODO 抽取 regex
 regex = "1"
 # P38 (6/5 鸿波): 本机 ONNX embedding (BGE-M3) — wiki 语义搜索, 完全离线.

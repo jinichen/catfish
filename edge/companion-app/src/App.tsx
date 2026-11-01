@@ -8,6 +8,7 @@ import AuthBanner from "./components/AuthBanner";
 import HermesReconnectBanner from "./components/HermesReconnectBanner";  // P3.3.5 (6/9): hermes 重连 banner
 import WorkflowConfirmBanner from "./components/WorkflowConfirmBanner";
 import { ApprovalElsewhereBanner } from "./components/ApprovalBanner";
+import MobilePairDialog from "./components/MobilePairDialog";
 import { installApprovalListener } from "./store/approvals";
 import HermesBootstrapStatus from "./components/HermesBootstrapStatus";
 import DevUserSwitcher from "./components/DevUserSwitcher";
@@ -213,6 +214,8 @@ export default function App() {
       <AboutModal />
       {/* 10/14: 点了 IT 发的 catfish://connect 接入链接 —— 没登录时也要能弹 */}
       <ConnectLinkDialog />
+      {/* 11/01: 手机请求连接 —— 在哪个页面都要能弹验证码 */}
+      <MobilePairDialog />
       {/* 首启安装与登录互不阻塞；服务器不可达时也能看见安装状态。 */}
       <HermesBootstrapStatus />
     </>

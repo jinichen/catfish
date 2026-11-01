@@ -74,6 +74,17 @@ for f in "${COMPOSES[@]}"; do
     fi
 done
 
+# ── 2c. DMZ 手机中转站 (11/01) 用网关 + 门户两个镜像, tag 也要跟上 ────
+RELAY_COMPOSE="delivery/catfish-poc/docker-compose.relay.yml"
+if [ -f "$RELAY_COMPOSE" ]; then
+    for img in catfish-gateway catfish-web; do
+        got="$(grep -oE "image:[[:space:]]+${img}:[^[:space:]]+" "$RELAY_COMPOSE" | head -1 | sed "s|.*${img}:||" || true)"
+        if [ "$got" != "$VERSION" ]; then
+            echo "❌ $RELAY_COMPOSE · ${img}:${got:-(没有)}  ≠  VERSION($VERSION)"; fail=1
+        fi
+    done
+fi
+
 # ── 3. VERSION 里的哈希跟源码现在算出来的一致 ────────────────────
 #
 # 这条替代了老的"改了源码记得 bump"。日期段不比 —— 同一份代码隔天重打

@@ -141,6 +141,7 @@ import SalesTemplateCard from "./SalesTemplateCard";
 import OutboundLogCard from "./OutboundLogCard";
 import AuditExportCard from "./AuditExportCard";  // P3.3.54 (6/12 鸿波): 审计员看的 xlsx 导出
 import DeviceMigrationCard from "./DeviceMigrationCard"; // 10/31 换机迁移 (docs/DEVICE-MIGRATION-DESIGN.md)
+import MobileCard from "./MobileCard"; // 11/01 手机通道 (docs/MOBILE-CLIENT-DESIGN.md)
 import AuditViewCard from "./AuditViewCard";  // P3.3.55 (6/12 鸿波): 审计员现场看的 tab
 import { useUIStore } from "../../store/ui";  // P3.3.55 (6/12): auditViewEnabled 开关
 // 6/8 BL-PRIVACY-SECTION-TABS: 隐私 section 内 3 卡 → 3 tabs (空间 +25%).
@@ -254,6 +255,8 @@ export default function DashboardTab() {
             ...(auditViewEnabled
               ? [{ key: "audit-view", label: "🔍 审计视图", render: () => <AuditViewCard /> }]
               : []),
+            // 11/01: 手机连这台电脑 (经中央中转站, 端到端加密)
+            { key: "mobile", label: "📱 手机", render: () => <MobileCard /> },
             { key: "wechat", label: "💬 微信接入", render: () => (
               <div style={{ display: "grid", gap: 24, minWidth: 0 }}>
                 <WeChatBindingCard />

@@ -1,6 +1,7 @@
 # 小鲶手机端设计（不依赖微信 / 飞书）
 
-> 状态：设计稿第二版，§11 五项已按建议定稿，部署分开发 / 正式两套（§8）· 2026-11-01
+> 状态：第一期已实现（中转站 + Companion 手机通道 + 网页 `/m`）· 设计稿第二版，§11 五项定稿，部署分开发 / 正式两套（§8）· 2026-11-01
+> 实现与设计稿的差别见 §12。
 > 起因：鸿波——「小鲶要怎么样才能有自己的 App 或小程序，而不是完全依靠微信、飞书等？」
 > 参照：Hermes 生态的手机 App（Hermex、hermesapp.dev、Onepilot 等，均为第三方）都是同一个思路——
 > **手机只是遥控器，agent 跑在用户自己的电脑 / 服务器上**。iOS 不允许 App 常驻后台跑任意程序，
@@ -56,7 +57,7 @@ Companion「手机通道」
 
 **配对**（一台手机一次，不用摄像头）
 1. 手机用单位账号登录，生成自己的密钥对，把公钥经中转站发给本人名下在线的电脑。
-2. Companion 弹出「有一台新手机请求连接：iPhone · 验证码 4821」；手机上同时显示 4821。
+2. Companion 弹出「有一台新手机请求连接：iPhone · 验证码 025159」；手机上同时显示同样的 6 位数。
 3. 员工在电脑上核对一致、点「允许」，Companion 回自己的公钥，配对完成。
 4. 中央只知道「这个人配了一台手机」（元数据），不经手私钥。
 
@@ -196,3 +197,23 @@ Companion「手机通道」
 5. **第一期只做对话、审批、早安简报**，邮件分诊等其他功能以后再加。
 
 另：开发环境一律 127.0.0.1，地址全部由配置推出、不写死（§8）。
+
+## 12. 实现记录（2026-11-01 第一期）
+
+| 位置 | 文件 |
+|---|---|
+| 中央中转站 | `central/llm-gateway/src/catfish_gateway/relay_router.py`（入口 + 登录帧）、`relay_hub.py`（转发、限速、配对关系）、`relay_db.py`（元数据表 / 无库时进程内存）、`relay_app.py`（DMZ 只中转模式）、alembic `20261101_017` |
+| Companion | `src-tauri/src/commands/mobile_bridge/`（`crypto.rs` 加密与分段、`store.rs` 本机存储、`ops.rs` 白名单、`mod.rs` 连接与配对）；界面 `tabs/Dashboard/MobileCard.tsx`、`components/MobilePairDialog.tsx` |
+| 手机网页 | `central/web/src/mobile/`（`crypto.ts` / `client.ts` / `MobileApp.tsx` / `pwa.ts`）、`public/m-manifest.webmanifest` |
+| 交付 | `docker-compose*.yml` 的 `CATFISH_MOBILE_MAX_DEVICES`、`catfish-locations.conf` 的 `/relay/`、`docker-compose.relay.yml` + `relay-dmz/`、INSTALL.md「手机访问」 |
+
+跟设计稿不一样的地方：
+- **验证码 6 位**（设计稿写 4 位）：中转站被冒充时撞对的机会从万分之一降到百万分之一，员工多看两位数。
+- **网关多进程**：生产网关默认 4 个进程，手机和电脑可能连在不同进程上。对方不在本进程时经 PostgreSQL NOTIFY 交过去（即时通知，没人收就没了，不入表）。NOTIFY 单条上限 8000 字节，所以密文字段限 6000 字符，大消息由两端拆成 4000 字节一段。
+- **令牌不放网址里**：浏览器的 WebSocket 不能带 Authorization 头，令牌放在连上后的第一帧里（放网址会进反向代理的访问日志）。令牌到期中转站断开，两端用新令牌重连。
+- **对话走 `catfish_source=companion-chat`**：跟电脑上聊天同一个来源标记，记忆照常生效（新开一个来源会被记忆闸当成后台任务跳过）。手机上的对话写进同一个对话列表，电脑上也看得到。
+- **手机页不调 `/api/me`**：DMZ 方案里对外只开 `/m`、登录页和 `/relay/`。
+- **外网登录的约束**（写进 INSTALL.md）：手机在外网登录时，OIDC issuer 必须是外网能打开的那个 https 域名，内网电脑用同一个域名。
+- **必须 https**：手机浏览器只在安全连接下提供算验证码要用的加密接口；http 打开会直接提示。开发环境的 `127.0.0.1` 算安全连接。
+- **语音输入**：第一期用手机输入法自带的语音输入，不另做。
+
