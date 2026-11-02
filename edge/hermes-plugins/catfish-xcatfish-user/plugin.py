@@ -189,6 +189,7 @@ _patch_p1_agent_init = plugin_runtime._patch_p1_agent_init  # noqa: F401
 _patch_p3_auxiliary_client = plugin_runtime._patch_p3_auxiliary_client  # noqa: F401
 _patch_p5_p6_p11_api_server_create_agent_and_picker = plugin_runtime._patch_p5_p6_p11_api_server_create_agent_and_picker  # noqa: F401
 _patch_p10_apply_client_headers_localhost = plugin_runtime._patch_p10_apply_client_headers_localhost  # noqa: F401
+_patch_p64_hygiene_compression_user = plugin_runtime._patch_p64_hygiene_compression_user  # noqa: F401
 _patch_p23_inbound_picker_integration = plugin_runtime._patch_p23_inbound_picker_integration  # noqa: F401
 
 plugin_misc = _import_sibling("plugin_misc")
@@ -435,6 +436,8 @@ def _apply_patches() -> None:
     # P62 (10/22 Windows 现场供应商 key 填错, 聊天框只有英文模板 + 乱码): 重试用尽那句话换中文,
     # 原因 (网关已翻成中文、指明去门户哪一页改) 原样附后。
     _try_patch(_patch_p62_failure_copy_zh, "P62: _patch_p62_failure_copy_zh 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
+    # P64 (11/03): 网关「会话卫生」压缩 (新消息前对话太长先压) 带上员工, 门户配额日志不再记成 client:hermes-cli。
+    _try_patch(_patch_p64_hygiene_compression_user, "P64: _patch_p64_hygiene_compression_user 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P50 (10/6 鸿波"中间有三次任务停下来了"): 模型回了一句"逐项目比对。"这种
     # 打算、没调工具、finish_reason=stop, 回合就结束了 —— 10/5 一晚三次。hermes
     # 没有"承诺了动作却没动作"的续跑 (v0.22 原生续跑只认英文 / 泰文), 这里替员工按最多两次「继续」。

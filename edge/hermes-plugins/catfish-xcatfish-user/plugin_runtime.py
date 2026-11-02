@@ -9,6 +9,7 @@ picker model override) · P10 (apply_client_headers) · P23 (inbound picker 联�
 from __future__ import annotations
 
 import logging
+import types
 from typing import Any, Optional
 from urllib.parse import urlparse
 import os
@@ -225,6 +226,66 @@ def _aux_user(aux, main_runtime=None) -> str:
     except Exception:  # noqa: BLE001  查不到就不带, 不能拖垮辅助调用
         pass
     return ""
+
+
+def user_for_source(source) -> str:
+    """网关消息来源 (微信等) → 员工: 走 resolver 同一条链 (绑了邮箱用邮箱, 没绑用 openid)。没有用户 id 就是空。"""
+    try:
+        uid = str(getattr(source, "user_id", "") or "").strip()
+        if not uid:
+            return ""
+        platform = getattr(source, "platform", "")
+        platform = str(getattr(platform, "value", platform) or "")
+        agent = types.SimpleNamespace(_catfish_outgoing_user="", _user_id=uid, platform=platform)
+        return (_resolver().resolve_for_agent(agent) or "").strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def bind_user_in_context(ctx, source) -> None:
+    """后台压缩用的 context 里补上员工 (CV_CF_USER), 辅助调用 (P3) 就带得上 X-Catfish-User。"""
+    user = user_for_source(source)
+    if user:
+        ctx.run(_ctx().CV_CF_USER.set, user)
+
+
+def _patch_p64_hygiene_compression_user() -> None:
+    """P64 (11/03): hermes 网关「会话卫生」压缩 (新消息进来前对话太长, 起一个临时 agent 先压) 带上员工。
+
+    那个临时 agent 没有平台用户, 压缩摘要请求不带 X-Catfish-User, 门户配额日志记成 client:hermes-cli。
+    包 GatewayTurnMixin._hmwa_hygiene_detached_attempt: 按消息来源设好 CV_CF_USER 再跑, hermes 在里面
+    copy_context() 交给后台线程, 一路带到 P3。
+    """
+    import inspect  # noqa: PLC0415
+
+    from gateway.run_turn import GatewayTurnMixin  # noqa: PLC0415
+
+    orig = getattr(GatewayTurnMixin, "_hmwa_hygiene_detached_attempt", None)
+    if orig is None:
+        logger.warning("P64: GatewayTurnMixin._hmwa_hygiene_detached_attempt 不在 (hermes 改了?), skip")
+        return
+    if getattr(orig, "_catfish_p64", False):
+        return
+    sig = inspect.signature(orig)
+
+    async def wrapped(self, *args, **kwargs):
+        token = None
+        try:
+            source = sig.bind_partial(self, *args, **kwargs).arguments.get("source")
+            user = user_for_source(source) if source is not None else ""
+            if user and not (_ctx().CV_CF_USER.get() or "").strip():
+                token = _ctx().CV_CF_USER.set(user)
+        except Exception:  # noqa: BLE001  拿不到就照旧压, 只是不带员工
+            logger.debug("P64 取员工失败", exc_info=True)
+        try:
+            return await orig(self, *args, **kwargs)
+        finally:
+            if token is not None:
+                _ctx().CV_CF_USER.reset(token)
+
+    wrapped._catfish_p64 = True  # type: ignore[attr-defined]
+    GatewayTurnMixin._hmwa_hygiene_detached_attempt = wrapped
+    logger.info("P64 会话卫生压缩带员工 patched")
 
 
 def _aux_identity_headers(aux, extra_headers, task=None, main_runtime=None):

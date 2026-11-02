@@ -54,6 +54,13 @@ REFACTOR_BASE = "cc4d71a"
 #: 一个 patch 悄悄多出来跟悄悄少一个同等危险 —— monkey-patch 是全进程生效的，
 #: 谁加的、为什么加、影响面多大，得有地方写。
 INTENTIONALLY_ADDED: dict[str, str] = {
+    "_patch_p64_hygiene_compression_user": (
+        "11/03 加 (门户配额日志里微信对话的「上下文压缩」记成 client:hermes-cli)。\n"
+        "改了什么: 包 GatewayTurnMixin._hmwa_hygiene_detached_attempt, 按消息来源 (resolver 同一条链) 设好 CV_CF_USER 再跑,\n"
+        "hermes 在里面 copy_context() 交给后台线程, P3 辅助调用就带得上 X-Catfish-User。\n"
+        "影响面: 只多一个请求头; 压缩本身、超时、锁都不碰。拿不到来源 / 员工照旧压, 已有 CV 不覆盖, 跑完复原。\n"
+        "跟已有的闸: P3 只在发给 catfish 网关时带员工 (第三方端点不发), 这里不改那个判断。"
+    ),
     "_patch_p62_failure_copy_zh": (
         "10/22 加 (Windows 现场供应商 key 填错, 聊天框只有 hermes 英文模板 + 乱码, 翻日志才找到原因)。\n"
         "改了什么: agent.turn_recovery.exhausted_copy 在 display.language=zh 时换成中文, 原因原样附后。\n"

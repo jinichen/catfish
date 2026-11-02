@@ -57,3 +57,68 @@ def test_都没有就不带_来源照标(env):
     h = plugin_runtime._aux_identity_headers(aux, {}, "compression")
     assert "X-Catfish-User" not in h
     assert h["X-Catfish-Source"] == "hermes:aux:compression"
+
+
+# ── 后台压缩 (P61 空闲压缩 / P64 会话卫生) 按消息来源补员工 ──
+
+class _Platform:
+    value = "weixin"
+
+
+def _src(uid="o9cq@im.wechat"):
+    return types.SimpleNamespace(user_id=uid, platform=_Platform())
+
+
+@pytest.fixture
+def resolved(monkeypatch):
+    cv = contextvars.ContextVar("cf_user2", default="")
+    seen = []
+
+    def resolve(agent):
+        seen.append((agent._user_id, agent.platform))
+        return "alice@corp.cn"
+
+    monkeypatch.setattr(plugin_runtime, "_ctx", lambda: types.SimpleNamespace(CV_CF_USER=cv))
+    monkeypatch.setattr(plugin_runtime, "_resolver", lambda: types.SimpleNamespace(resolve_for_agent=resolve))
+    return cv, seen
+
+
+def test_消息来源换成员工_走同一条resolver链(resolved):
+    _, seen = resolved
+    assert plugin_runtime.user_for_source(_src()) == "alice@corp.cn"
+    assert seen == [("o9cq@im.wechat", "weixin")]
+
+
+def test_没有用户id不去兜底默认员工(resolved):
+    _, seen = resolved
+    assert plugin_runtime.user_for_source(_src("")) == ""
+    assert seen == []
+
+
+def test_P61_后台压缩的context里带上员工(resolved):
+    cv, _ = resolved
+    ctx = contextvars.copy_context()
+    plugin_runtime.bind_user_in_context(ctx, _src())
+    assert ctx.run(cv.get) == "alice@corp.cn"
+    assert cv.get() == "", "不能漏到当前 context"
+
+
+def test_P64_会话卫生压缩期间带员工_完了复原(resolved, monkeypatch):
+    import asyncio
+    import sys
+
+    cv, _ = resolved
+    got = []
+
+    class GatewayTurnMixin:
+        async def _hmwa_hygiene_detached_attempt(self, attempt, hs, plan, history, _hyg_msgs, _hyg_model,
+                                                 _hyg_runtime, source, session_entry, session_key, _quick_key,
+                                                 run_generation):
+            got.append(contextvars.copy_context().run(cv.get))
+
+    monkeypatch.setitem(sys.modules, "gateway.run_turn", types.SimpleNamespace(GatewayTurnMixin=GatewayTurnMixin))
+    plugin_runtime._patch_p64_hygiene_compression_user()
+    asyncio.run(GatewayTurnMixin()._hmwa_hygiene_detached_attempt(
+        None, None, None, [], [], "m", {}, _src(), None, "k", "q", 1))
+    assert got == ["alice@corp.cn"]
+    assert cv.get() == ""

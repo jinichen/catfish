@@ -44,6 +44,15 @@ _inflight: set[str] = set()
 _last_done: dict[str, int] = {}  # session_id → 上次空闲压缩时的 token 数
 
 
+def _runtime():
+    """兄弟模块 plugin_runtime (插件目录名带 dash, 只能相对导入; 测试里是顶层模块)。"""
+    from importlib import import_module  # noqa: PLC0415
+
+    if __package__:
+        return import_module(".plugin_runtime", package=__package__)
+    return import_module("plugin_runtime")
+
+
 def should_compact(session_id: Optional[str], tokens: int) -> bool:
     if not session_id or tokens < IDLE_TRIGGER_TOKENS:
         return False
@@ -197,6 +206,11 @@ def wrap_gateway_handle_message(orig):
                     ctx = contextvars.copy_context()
             else:
                 ctx = contextvars.copy_context()
+            # 11/03: 后台压缩的摘要请求要带员工 (不然门户配额日志记成 client:hermes-cli), 按消息来源补进 context
+            try:
+                _runtime().bind_user_in_context(ctx, source)
+            except Exception:  # noqa: BLE001
+                logger.debug("P61 补员工失败", exc_info=True)
             _keep(asyncio.get_running_loop().create_task(run_in_background(build, db, session_id, tokens, ctx, after)))
         except Exception:  # noqa: BLE001
             logger.debug("P61 网关入口判断出错", exc_info=True)
