@@ -17,7 +17,7 @@
  * 全部退役, 走共享的 DataTable / Badge / BTN。
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   Badge,
@@ -33,6 +33,7 @@ import { PageShell, Stale } from "../../components/PageShell";
 import {
   fetchAuditEvents,
   type AuditEvent,
+  type AuditEventsParams,
   type AuditEventsResponse,
 } from "../../lib/me";
 import { auditSourceLabel } from "../../lib/auditSource";
@@ -43,6 +44,10 @@ const TOKEN_HINT = "单位: token (模型读写的字数, 一个汉字约 1 个)
 //
 // 跟 /admin/quota 配额规则 read-only 文本互补 (一个看规则, 一个看实际数据).
 // API: GET /api/audit/events (gateway, RBAC admin only — sysadmin 走 is_admin() 通过).
+
+// 导出逐页拉: 网关每页最多 200 条; 上限防一次拉爆浏览器
+const EXPORT_PAGE = 200;
+const EXPORT_MAX = 50_000;
 
 export function AdminQuotaEvents() {
   const PAGE_SIZE = 50;
@@ -57,16 +62,24 @@ export function AdminQuotaEvents() {
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(0);
 
+  // 11/02: 导出按「上次查询」的条件拉全部页 (原来只导当前页 50 条); 输入框改了没点查询不算
+  const lastQuery = useRef<Omit<AuditEventsParams, "limit" | "offset">>({});
+  const [exporting, setExporting] = useState<string | null>(null);
+
   const load = () => {
     setLoading(true);
     setError(null);
     const since_ms = Date.now() - hoursBack * 3600 * 1000;
-    fetchAuditEvents({
+    const query = {
       since_ms,
       dept: dept || undefined,
       user_filter: userFilter || undefined,
       model: model || undefined,
       status: status || undefined,
+    };
+    lastQuery.current = query;
+    fetchAuditEvents({
+      ...query,
       limit: PAGE_SIZE,
       offset: page * PAGE_SIZE,
     })
@@ -89,13 +102,26 @@ export function AdminQuotaEvents() {
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
 
-  const exportCSV = () => {
+  const exportCSV = async () => {
     if (!data || data.events.length === 0) return;
+    const all: AuditEvent[] = [];
+    for (let offset = 0; offset < EXPORT_MAX; offset += EXPORT_PAGE) {
+      setExporting(`导出中… ${all.length} 条`);
+      const r = await fetchAuditEvents({ ...lastQuery.current, limit: EXPORT_PAGE, offset });
+      if (!r.ok) {
+        setExporting(null);
+        setError(`导出失败: ${r.error}`);
+        return;
+      }
+      all.push(...r.data.events);
+      if (r.data.events.length < EXPORT_PAGE || all.length >= r.data.total) break;
+    }
+    setExporting(null);
     const header = [
       "ts", "user", "department", "model", "tokens_in", "tokens_cache_read", "tokens_out",
       "tokens_total", "latency_ms", "ttft_ms", "status", "error", "source",
     ].join(",");
-    const rows = data.events.map((e) => [
+    const rows = all.map((e) => [
       new Date(e.ts * 1000).toISOString(),
       csvEscape(e.user),
       csvEscape(e.department),
@@ -282,10 +308,11 @@ export function AdminQuotaEvents() {
           </button>
           <button
             onClick={exportCSV}
-            disabled={!data || data.events.length === 0}
+            disabled={!data || data.events.length === 0 || exporting != null}
             style={BTN}
+            title={data ? `按上次查询的条件导出全部 ${data.total} 条 (最多 ${EXPORT_MAX} 条)` : undefined}
           >
-            导出 CSV
+            {exporting ?? "导出 CSV"}
           </button>
         </div>
       </Section>
