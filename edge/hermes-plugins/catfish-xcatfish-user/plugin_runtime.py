@@ -200,10 +200,37 @@ def _patch_p1_agent_init() -> None:
 
 # ── P3 ───────────────────────────────────────────────────────────────────
 
-def _aux_identity_headers(aux, extra_headers, task=None):
+def _aux_user(aux, main_runtime=None) -> str:
+    """辅助调用是谁的: 请求上下文 CV → 调用方给的 main_runtime → 本轮 session 登记过的员工。
+
+    11/03: 原来只看 CV_CF_USER, 那只有 Companion 经 api_server 发的请求才有 (中间件从 X-Catfish-User 头设)。
+    微信 / 定时任务这些 hermes 自己平台上的对话没有, 上下文压缩就不带员工 → 门户配额日志记成
+    client:hermes-cli。主对话那边的身份是 P2 在 _current_main_runtime 里算的, 顺手按 session_id
+    登记到 session_registry; 压缩时 hermes 的 _RUNTIME_MAIN_CONTEXT 里有本轮 session_id, 按它查回来。
+    """
+    cf_user = (_ctx().CV_CF_USER.get() or "").strip()
+    if cf_user:
+        return cf_user
+    if isinstance(main_runtime, dict):
+        cf_user = str(main_runtime.get("catfish_outgoing_user") or "").strip()
+        if cf_user:
+            return cf_user
+    try:
+        sid = str((main_runtime or {}).get("session_id") or "").strip() if isinstance(main_runtime, dict) else ""
+        if not sid:
+            live = aux._RUNTIME_MAIN_CONTEXT.get()
+            sid = str((live or {}).get("session_id") or "").strip()
+        if sid:
+            return (_sib("session_registry").lookup(sid) or "").strip()
+    except Exception:  # noqa: BLE001  查不到就不带, 不能拖垮辅助调用
+        pass
+    return ""
+
+
+def _aux_identity_headers(aux, extra_headers, task=None, main_runtime=None):
     """辅助模型请求要带的头 —— 只发给 catfish 网关, 不发给第三方。
 
-    · X-Catfish-User: 员工身份 (请求上下文里有才带)
+    · X-Catfish-User: 员工身份 (_aux_user 找得到才带)
     · X-Catfish-Source: hermes:aux:<task> (10/25 鸿波: 门户配额日志里看图 / 上下文压缩 / 起标题这些
       hermes 自己的辅助调用原来没来源, 显示成「未标来源」, 看不出是什么)
     """
@@ -214,7 +241,7 @@ def _aux_identity_headers(aux, extra_headers, task=None):
     if not _is_catfish_gateway_base_url(base_url):
         return extra_headers
     merged = dict(extra_headers or {})
-    cf_user = (_ctx().CV_CF_USER.get() or "").strip()
+    cf_user = _aux_user(aux, main_runtime)
     if cf_user:
         merged.setdefault("X-Catfish-User", cf_user)
     task_name = str(task or "").strip()
@@ -247,7 +274,9 @@ def _patch_p3_auxiliary_client() -> None:
         # 调用方点名了别的端点 → 不是发给 catfish 网关的, 不带员工标识
         if not explicit or _is_catfish_gateway_base_url(explicit):
             task = args[0] if args else kwargs.get("task")
-            kwargs["extra_headers"] = _aux_identity_headers(aux, kwargs.get("extra_headers"), task)
+            kwargs["extra_headers"] = _aux_identity_headers(
+                aux, kwargs.get("extra_headers"), task, kwargs.get("main_runtime")
+            )
         return orig_plan(*args, **kwargs)
 
     plan_aux_call._catfish_p3 = True
