@@ -14,6 +14,7 @@
 //! | `approvals.mode` | smart | smart (没配才补, 写明) | 10/14 定: AI 先判断, 拿不准再问员工 |
 //! | `approvals.smart_policy` | 空 | 公司规则 (空才补) | 给判断审批的 AI 的规则, 10/14 鸿波确认的措辞 |
 //! | `approvals.timeout` | 300 秒 | 1800 (没配才补) | 10/26 鸿波定: 等员工批准 30 分钟。5 分钟开个会回来就作废, 只能从头重做 |
+//! | `plugins.load_timeout_seconds` | 10 秒 | 90 (没配才补) | 11/02: 8G 内存的 Windows 上小鲶插件装载要十几秒, 超时后它启动时注册的 memory 工具被 hermes 忽略 —— 重启后第一个对话的「记住」写进了 hermes 自带的记忆 |
 //!
 //! 「强制」的几项每次启动都校正 (有人改回去也改回来) —— 都是安全 / 数据相关, 员工不该自己开;
 //! 「没配才补」的尊重已有值 (运维可能有意调过)。config.yaml 不存在 (hermes 没装) → 不凭空造文件。
@@ -29,6 +30,9 @@ pub const SMART_POLICY: &str = "读取本机文件、查询数据、生成报表
 删除或覆盖文件、向外部地址发送数据、安装软件、修改系统配置、操作邮件 / 微信发送的, 一律 ESCALATE";
 
 pub const MAX_TURNS: u64 = 90;
+
+/// 每个插件装载 (import + register) 最多等多久 (秒)。hermes 默认 10, 慢机器上小鲶插件不够用。
+pub const PLUGIN_LOAD_TIMEOUT_S: u64 = 90;
 
 /// 等员工批准多久 (秒)。hermes 自己的默认是 300, 没配时按 300 算 (见 [`approval_timeout_s`])。
 pub const APPROVAL_TIMEOUT_S: u64 = 1800;
@@ -161,6 +165,9 @@ pub fn ensure_at(path: &Path) -> Result<Vec<String>> {
     if set_if_missing(map, &["approvals", "timeout"], YamlValue::from(APPROVAL_TIMEOUT_S)) {
         changed.push("approvals.timeout".into());
     }
+    if set_if_missing(map, &["plugins", "load_timeout_seconds"], YamlValue::from(PLUGIN_LOAD_TIMEOUT_S)) {
+        changed.push("plugins.load_timeout_seconds".into());
+    }
 
     if changed.is_empty() {
         return Ok(changed);
@@ -239,6 +246,7 @@ mod tests {
         assert!(r["approvals"]["smart_policy"].as_str().unwrap().contains("ESCALATE"));
         assert_eq!(r["approvals"]["timeout"].as_u64(), Some(1800));
         assert_eq!(approval_timeout_at(&p), 1800);
+        assert_eq!(r["plugins"]["load_timeout_seconds"].as_u64(), Some(90));
         for plugin in TOOL_OVERRIDE_PLUGINS {
             let e = &r["plugins"]["entries"][plugin];
             assert_eq!(e["granted_capabilities"][0].as_str(), Some("tools.override"), "{plugin}");
@@ -266,6 +274,9 @@ mod tests {
         assert_eq!(r["approvals"]["mode"].as_str(), Some("manual"), "已配的审批模式不动");
         assert_eq!(r["approvals"]["smart_policy"].as_str(), Some("运维自己写的规则"));
         assert_eq!(approval_timeout_at(&p), 600, "运维调过的等待时长不动, 界面也按它倒计时");
+        let p2 = cfg(&tmp, "plugins:\n  load_timeout_seconds: 30\n");
+        ensure_at(&p2).unwrap();
+        assert_eq!(root(&p2)["plugins"]["load_timeout_seconds"].as_u64(), Some(30), "运维调过的插件装载时限不动");
         let toolsets: Vec<_> = r["agent"]["disabled_toolsets"]
             .as_sequence()
             .unwrap()

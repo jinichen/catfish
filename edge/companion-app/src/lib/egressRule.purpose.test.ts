@@ -26,3 +26,14 @@ describe("用途显示名", () => {
       count: 251, bytesUp: 2510, bytesDown: 2, lastTs: "2026-10-28T08:00:00Z" }]);
   });
 });
+
+describe("11/02 没标用途的第三方请求", () => {
+  it("网址路径合成「网页请求」, 同一去向并成一行", () => {
+    const row = (purpose: string) => ({ destKind: "third_party", purpose, destHost: "x.example.com", count: 1,
+      bytesUp: 10, bytesDown: 1, lastTs: "2026-11-02T13:00:00Z" });
+    const merged = mergeSummaryRows([row("/captcha_v4/policy/a.png"), row("/static_resources/icon/b.png")]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].purpose).toBe("网页请求");
+    expect(merged[0].count).toBe(2);
+  });
+});

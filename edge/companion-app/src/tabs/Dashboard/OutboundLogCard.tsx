@@ -565,6 +565,8 @@ function localTime(iso: string): string {
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+const clip: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+
 /** 10/24: 「发给谁、为什么」—— 按去向分两组, 每个用途一行: 次数 / 上行 / 最近一次 */
 export function OutboundSummary({ since }: { since?: string }) {
   const [rows, setRows] = React.useState<TransparentLogSummaryRow[] | null>(null);
@@ -594,15 +596,27 @@ export function OutboundSummary({ since }: { since?: string }) {
             {mine.length === 0 ? (
               <div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>没有记录</div>
             ) : (
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              // 11/02: 固定列宽 + 长文字省略号 —— 原来一条长网址能把整栏撑出框, 次数 / 大小 / 时间被挤没
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed" }}>
+                <colgroup>
+                  <col />
+                  <col style={{ width: "24%" }} />
+                  <col style={{ width: 64 }} />
+                  <col style={{ width: 72 }} />
+                  <col style={{ width: 112 }} />
+                </colgroup>
                 <tbody>
                   {mine.map((r) => (
                     <tr key={`${r.purpose}|${r.destHost}`} style={{ borderTop: "1px solid var(--catfish-border)" }}>
-                      <td style={{ padding: "4px 2px" }}>{r.purpose || "(未标注)"}</td>
-                      <td style={{ padding: "4px 2px", color: "var(--catfish-text-muted)" }}>{r.destHost}</td>
-                      <td style={{ padding: "4px 2px", textAlign: "right" }}>{r.count} 次</td>
-                      <td style={{ padding: "4px 2px", textAlign: "right" }}>{kb(r.bytesUp)}</td>
-                      <td style={{ padding: "4px 2px", textAlign: "right", color: "var(--catfish-text-muted)" }}>{localTime(r.lastTs)}</td>
+                      <td style={{ padding: "4px 2px", ...clip }} title={r.purpose}>{r.purpose || "(未标注)"}</td>
+                      <td style={{ padding: "4px 2px", color: "var(--catfish-text-muted)", ...clip }} title={r.destHost}>
+                        {r.destHost}
+                      </td>
+                      <td style={{ padding: "4px 2px", textAlign: "right", whiteSpace: "nowrap" }}>{r.count} 次</td>
+                      <td style={{ padding: "4px 2px", textAlign: "right", whiteSpace: "nowrap" }}>{kb(r.bytesUp)}</td>
+                      <td style={{ padding: "4px 2px", textAlign: "right", color: "var(--catfish-text-muted)", whiteSpace: "nowrap" }}>
+                        {localTime(r.lastTs)}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

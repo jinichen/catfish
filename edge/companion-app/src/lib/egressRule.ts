@@ -97,6 +97,9 @@ export function displayPurpose(purpose: string, destHost: string, url = ""): str
   if (purpose === "/api/egress/anchor") return "报指纹 (防篡改)";
   if (purpose === "/api/show") return "查询模型信息";
   if (purpose === "微信") return destHost.includes("cdn.") ? "微信 · 发图片 / 文件" : "微信 · 收发消息";
+  // 11/02: 没标用途的第三方请求, purpose 里落的是网址路径 (/captcha_v4/… /static_resources/…) ——
+  // 每条路径各占一行, 又长又看不懂。按去向合成一行「网页请求」, 具体网址在下面明细里看。
+  if (purpose.startsWith("/")) return "网页请求";
   if (purpose === "长期记忆") {
     if (url.includes("memory-classify")) return "记忆归类";
     if (url.includes("memory-recall-embed")) return "记忆检索";
