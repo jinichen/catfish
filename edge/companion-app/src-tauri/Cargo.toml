@@ -118,7 +118,7 @@ age = "0.11"
 flate2 = "1"
 # P3.3.54 (6/12): 审计员看的 xlsx 多 sheet 导出 (decisions + tool_call + outbound +
 #   校验报告). pure Rust write-only, MIT, <2MB. 写本机 ~/.catfish/exports/.
-rust_xlsxwriter = "0.99"
+rust_xlsxwriter = "0.102"
 # 本机聊天导出文件选择。只返回员工显式选择的路径，不扫描微信目录。
 rfd = "0.15"
 
