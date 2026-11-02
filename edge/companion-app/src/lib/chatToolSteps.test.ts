@@ -70,4 +70,9 @@ describe("toolCallNeedsCard", () => {
     expect(toolCallNeedsCard(call("c", "x", { status: "error" }))).toBe(true);
     expect(toolCallNeedsCard(call("c", "x", { result: '{"status":"pending_approval"}' }))).toBe(true);
   });
+  it("读到的文件里有「申请获得批准」不算等批准 (11/02 差旅制度入库弹了假按钮)", () => {
+    const pdf = '{"output": "出差申\\r\\n请获得批准后方可付款; 须报请领导批准; 等待审批"}';
+    expect(toolCallNeedsCard(call("c", "execute_code", { result: pdf }))).toBe(false);
+    expect(toolCallNeedsCard(call("c", "terminal", { result: '{"approval_pending": true, "output": ""}' }))).toBe(true);
+  });
 });

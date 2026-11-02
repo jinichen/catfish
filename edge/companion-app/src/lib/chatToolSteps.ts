@@ -16,9 +16,12 @@
 import type { ChatMessage, ToolCall } from "../types/chat";
 import { parseNeedsCredential } from "./needsCredential";
 
-/** hermes approval pending 的几种返回形状 (含 LLM 翻成中文的), 见 ChatToolCall P27 注释 */
-const APPROVAL_PENDING_RE =
-  /pending_approval|approval_pending|Asking the user for approval|授权批准|请.{0,4}批准|等审批|等待.{0,4}批准|正在等待.{0,4}批准/i;
+/** hermes 等批准时工具结果的固定形状 (tools/approval.py: status=pending_approval、approval_pending、
+ *  "Asking the user for approval")。
+ *  11/02: 删掉中文那几条 (请…批准 / 等待…批准 …)。工具结果是 hermes 原样给的, 不会被翻成中文;
+ *  反倒是读文件的结果里常有这些字 —— 差旅制度原文「出差申请获得批准后」就弹出了一个假的「批准」按钮,
+ *  点了没东西可批, 退到老路发出一句 /approve。 */
+const APPROVAL_PENDING_RE = /pending_approval|approval_pending|Asking the user for approval/i;
 
 export function toolResultString(call: ToolCall): string {
   if (typeof call.result === "string") return call.result;
