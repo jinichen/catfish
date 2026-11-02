@@ -59,6 +59,34 @@ def _env_file_value(key: str) -> str:
     return ""
 
 
+def bound_email(platform: str, uid: str) -> str:
+    """(b) Companion「微信绑定」写进 <platform>-approved.json 的 catfish_email。
+
+    11/03: 原来调 PairingStore.get_email —— 现在的 hermes 没有这个方法 (早先改过的 hermes 才有),
+    异常被吞掉, 往下走到 (c): 微信的 openid 本身就长 `o9cq…@im.wechat` 这样带 @ 和点,
+    被当成 email 直接用了。门户配额日志里微信那几行就全是 openid, 绑了员工也没换过来。
+    现在直接读 approved 表 (id 比对沿用 hermes 的别名规则)。
+    """
+    try:
+        from gateway import pairing as _pairing  # noqa: PLC0415
+
+        store = _pairing.PairingStore()
+        get_email = getattr(store, "get_email", None)
+        if callable(get_email):
+            got = (get_email(platform, uid) or "").strip()
+            if got:
+                return got
+        approved = store._load_approved(platform)
+        for key in _pairing._matching_ids(platform, approved, uid):
+            info = approved.get(key)
+            email = (info.get("catfish_email") or "").strip() if isinstance(info, dict) else ""
+            if email:
+                return email
+    except Exception as e:  # noqa: BLE001
+        logger.debug("pairing lookup failed: %s", e)
+    return ""
+
+
 def resolve_for_agent(agent: Any) -> str:
     """Resolve catfish_outgoing_user for an AIAgent instance.
 
@@ -76,13 +104,9 @@ def resolve_for_agent(agent: Any) -> str:
 
         if uid and platform and platform not in ("", "cli", "api_server"):
             # (b) pairing email bind
-            try:
-                from gateway.pairing import PairingStore
-                bound = PairingStore().get_email(platform, uid)
-                if bound:
-                    return bound.strip()
-            except Exception as e:
-                logger.debug("pairing lookup failed: %s", e)
+            bound = bound_email(platform, uid)
+            if bound:
+                return bound
 
             # (c) self._user_id 已经是 email
             if "@" in uid and "." in uid:
