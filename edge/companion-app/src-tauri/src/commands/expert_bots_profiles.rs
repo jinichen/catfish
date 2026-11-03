@@ -114,6 +114,14 @@ pub fn list_profiles(hermes_home: &Path) -> Result<Vec<HermesProfileInfo>, Strin
 }
 
 pub fn run_hermes(hermes_home: &Path, args: &[&str]) -> Result<(), String> {
+    // 11/3: 网关启停跟 Companion 其他地方排队 (见 services::gateway_ops)
+    if crate::services::gateway_ops::is_gateway_lifecycle(args) {
+        return crate::services::gateway_ops::serialized(&args.join(" "), || run_hermes_now(hermes_home, args));
+    }
+    run_hermes_now(hermes_home, args)
+}
+
+fn run_hermes_now(hermes_home: &Path, args: &[&str]) -> Result<(), String> {
     let install_dir = hermes_home.join("hermes-agent");
     let hermes = hermes_venv_tool(&install_dir, "hermes");
     if !hermes.is_file() {

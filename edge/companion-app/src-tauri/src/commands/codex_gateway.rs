@@ -122,6 +122,11 @@ fn gateway_process_ids() -> HashSet<u32> {
 /// 仅用于异常兜底。API server 每条消息都会创建新 AIAgent 并重新读取 runtime，
 /// 正常模型切换无需重启整个 gateway；只有 gateway 本来就不健康时才走这里。
 pub(crate) fn restart_hermes_gateway() -> Result<(), String> {
+    // 11/3: 跟其他启停排队, 连「等新网关就绪」那段一起 (见 services::gateway_ops)
+    crate::services::gateway_ops::serialized("重启网关", restart_hermes_gateway_now)
+}
+
+fn restart_hermes_gateway_now() -> Result<(), String> {
     // 10/29: `gateway restart` 用 hermes 登记的 Python 起新网关; 登记的那份没建好依赖环境时
     // 新网关必然起来就退 —— 先挪开登记 (见 hermes_store_guard)。Mac / Windows 一样。
     super::hermes_store_guard::set_aside_uncommitted_store_python("重启网关前");

@@ -9,6 +9,7 @@ pub mod device_id; // 10/31: 本机设备号 (换机迁移后分清新旧两台�
 pub mod windows_lifecycle;
 // 9/23: mac 也用它判断附加组件是不是本安装包的版本 (hermes_install_steps::addon_current)
 pub mod addon_fingerprint;
+pub mod gateway_ops; // 11/3: Companion 发起的网关启停排队, 互不打架
 pub mod autostart_deps; // 运行时依赖自检 (8/15 从 autostart 切出)
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub mod meeting_recorder; // 10/1: 进程内录音 (cpal), 取代 speech.rs 的 ffmpeg 录音

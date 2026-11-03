@@ -187,14 +187,16 @@ pub fn schedule_watchdog() {
                 && !tool_bridge_health.is_in_backoff()
                 && !is_alive(catfish_paths::tool_bridge_pid_file, "catfish_tool_bridge")
             {
-                log::info!("watchdog: tool-bridge dead, respawning");
-                autostart::ensure_tool_bridge_running().await;
-                // tool-bridge 启动慢 (~3-5s import hermes), 给一点时间再检查
-                time::sleep(Duration::from_secs(2)).await;
-                if is_alive(catfish_paths::tool_bridge_pid_file, "catfish_tool_bridge") {
-                    tool_bridge_health.record_success("tool-bridge");
-                } else {
-                    tool_bridge_health.record_failure("tool-bridge");
+                // 11/3: 排队后复查再起 —— 冷启动可能正在起 (还没写 PID 文件), 不能再起一份
+                if autostart::respawn_tool_bridge_if_dead().await {
+                    log::info!("watchdog: tool-bridge dead, respawned");
+                    // tool-bridge 启动慢 (~3-5s import hermes), 给一点时间再检查
+                    time::sleep(Duration::from_secs(2)).await;
+                    if is_alive(catfish_paths::tool_bridge_pid_file, "catfish_tool_bridge") {
+                        tool_bridge_health.record_success("tool-bridge");
+                    } else {
+                        tool_bridge_health.record_failure("tool-bridge");
+                    }
                 }
             }
 
@@ -203,12 +205,13 @@ pub fn schedule_watchdog() {
                 && !local_search_health.is_in_backoff()
                 && !is_alive(catfish_paths::local_search_pid_file, "catfish_search")
             {
-                log::info!("watchdog: local-search dead, respawning");
-                autostart::ensure_local_search_running().await;
-                if is_alive(catfish_paths::local_search_pid_file, "catfish_search") {
-                    local_search_health.record_success("local-search");
-                } else {
-                    local_search_health.record_failure("local-search");
+                if autostart::respawn_local_search_if_dead().await {
+                    log::info!("watchdog: local-search dead, respawned");
+                    if is_alive(catfish_paths::local_search_pid_file, "catfish_search") {
+                        local_search_health.record_success("local-search");
+                    } else {
+                        local_search_health.record_failure("local-search");
+                    }
                 }
             }
         }

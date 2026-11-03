@@ -48,6 +48,13 @@ pub struct ToolCallResult {
 
 #[tauri::command]
 pub async fn tool_bridge_start() -> Result<(), String> {
+    // 11/3: 跟冷启动 / watchdog 排队 (见 autostart::TOOL_BRIDGE_LIFECYCLE)
+    let _turn = crate::services::autostart::TOOL_BRIDGE_LIFECYCLE.lock().await;
+    start_tool_bridge_locked()
+}
+
+/// 调用方必须拿着 `autostart::TOOL_BRIDGE_LIFECYCLE`。
+fn start_tool_bridge_locked() -> Result<(), String> {
     if let Some(pid_file) = catfish_paths::tool_bridge_pid_file() {
         if let Some(pid) = process::read_pid_file_alive_strict(&pid_file, "catfish_tool_bridge") {
             return Err(format!("tool-bridge 已在跑（PID {pid}）"));
@@ -116,6 +123,7 @@ pub async fn tool_bridge_start() -> Result<(), String> {
 
 #[tauri::command]
 pub async fn tool_bridge_stop() -> Result<(), String> {
+    let _turn = crate::services::autostart::TOOL_BRIDGE_LIFECYCLE.lock().await;
     let pid_file = catfish_paths::tool_bridge_pid_file()
         .ok_or_else(|| "找不到 PID 文件路径".to_string())?;
     if !pid_file.exists() {
@@ -146,6 +154,8 @@ pub async fn tool_bridge_stop() -> Result<(), String> {
 /// 跟 tool_bridge_start 不同: 后者遇到 alive 会拒绝, 这里不管死活直接 pkill+spawn.
 #[tauri::command]
 pub async fn tool_bridge_restart() -> Result<(), String> {
+    // 11/3: 整个「杀 + 起」一次排完, 中间不让 watchdog 插进来再起一份
+    let _turn = crate::services::autostart::TOOL_BRIDGE_LIFECYCLE.lock().await;
     // 1. pkill 老进程 (跟 autostart 同 pattern)
     crate::services::autostart::pkill_tool_bridge();
 
@@ -157,8 +167,8 @@ pub async fn tool_bridge_restart() -> Result<(), String> {
         let _ = std::fs::remove_file(sock);
     }
 
-    // 3. 走标准 spawn 路径 (tool_bridge_start), 现在 pid_alive check 会返 false, 顺利起来
-    tool_bridge_start().await
+    // 3. 走标准 spawn 路径, 现在 pid_alive check 会返 false, 顺利起来
+    start_tool_bridge_locked()
 }
 
 #[tauri::command]

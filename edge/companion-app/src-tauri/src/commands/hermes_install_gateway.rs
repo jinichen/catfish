@@ -86,11 +86,12 @@ pub(crate) fn stop_for_install(paths: &BootstrapPaths) -> StoppedGateway {
         if !cli.exists() || !super::codex_gateway::hermes_api_ready() {
             return StoppedGateway::default();
         }
-        match crate::services::process::python_command(&cli)
-            .args(["gateway", "stop"])
-            .env("HERMES_HOME", &paths.hermes_home)
-            .output()
-        {
+        match crate::services::gateway_ops::serialized("换目录前停网关", || {
+            crate::services::process::python_command(&cli)
+                .args(["gateway", "stop"])
+                .env("HERMES_HOME", &paths.hermes_home)
+                .output()
+        }) {
             Ok(out) if out.status.success() => {
                 wait_until_down();
                 log::info!("[hermes-install] 换目录前已停 hermes 网关");
@@ -148,11 +149,12 @@ pub(crate) fn resume_after_install(paths: &BootstrapPaths, stopped: StoppedGatew
             log::warn!("[hermes-install] {} 不在, 网关没法重新启动", cli.display());
             return;
         }
-        match crate::services::process::python_command(&cli)
-            .args(["gateway", "start"])
-            .env("HERMES_HOME", &paths.hermes_home)
-            .output()
-        {
+        match crate::services::gateway_ops::serialized("装完起网关", || {
+            crate::services::process::python_command(&cli)
+                .args(["gateway", "start"])
+                .env("HERMES_HOME", &paths.hermes_home)
+                .output()
+        }) {
             Ok(out) if out.status.success() => log::info!("[hermes-install] 装完已重新启动 hermes 网关"),
             Ok(out) => log::warn!(
                 "[hermes-install] `hermes gateway start` 失败 ({}): {}",

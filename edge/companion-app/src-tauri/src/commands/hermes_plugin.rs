@@ -399,6 +399,13 @@ fn request_hermes_restart() -> Result<String, String> {
 
 /// 跑 venv 里 hermes 的一条命令 (HERMES_HOME 指好)。Ok 带 hermes 的路径 (写日志用)。
 pub(super) fn run_hermes_cli(args: &[&str]) -> Result<String, String> {
+    if crate::services::gateway_ops::is_gateway_lifecycle(args) {
+        return crate::services::gateway_ops::serialized(&args.join(" "), || run_hermes_cli_now(args));
+    }
+    run_hermes_cli_now(args)
+}
+
+fn run_hermes_cli_now(args: &[&str]) -> Result<String, String> {
     let home = hermes_home().ok_or("找不到 hermes 目录")?;
     let cli = crate::services::catfish_paths::hermes_venv_tool(&home.join("hermes-agent"), "hermes");
     if !cli.exists() {

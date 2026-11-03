@@ -25,6 +25,8 @@ pub async fn local_search_start() -> Result<(), String> {
     // 的孤儿) 再 spawn, 等价"重启" 语义.
     //
     // 等价行为: 跟 autostart::ensure_local_search_running 同款, 调同一个 helper.
+    // 11/3: 跟冷启动 / watchdog 排队 (见 autostart::LOCAL_SEARCH_LIFECYCLE)
+    let _turn = autostart::LOCAL_SEARCH_LIFECYCLE.lock().await;
     autostart::pkill_local_search_watchers();
 
     let dir = catfish_paths::local_search_dir().ok_or_else(|| {
@@ -65,6 +67,7 @@ pub async fn local_search_start() -> Result<(), String> {
 
 #[tauri::command]
 pub async fn local_search_stop() -> Result<(), String> {
+    let _turn = autostart::LOCAL_SEARCH_LIFECYCLE.lock().await;
     let pid_file = catfish_paths::local_search_pid_file()
         .ok_or_else(|| "找不到 PID 文件路径".to_string())?;
 

@@ -44,10 +44,67 @@ pub fn schedule_autostart() {
 // 删, 只留 gateway_status 探活. 见 git blame.
 
 // ============================================================
+// 启停排队 (11/3)
+// ============================================================
+
+/// 11/3: tool-bridge / local-search 的「清旧 + 起新」一次只能有一个在做。
+///
+/// 鸿波 Windows 机 11/3 查进程: 两份 `catfish_tool_bridge --socket` (同一个 socket, 父进程都是
+/// Companion)。起两份的路子: 冷启动 [`ensure_tool_bridge_running`] 先用 PowerShell 扫一遍旧进程
+/// (`kill_by_cmdline`, 慢机器上好几秒) 再起新的、最后才写 PID 文件; watchdog 每 5 秒看一次 PID
+/// 文件 —— 冷启动还没写完就被判「死了」, 于是它也清一遍、起一份。两边谁也不等谁, 各起一份。
+/// 机器越慢越容易撞上, 快机器只是撞得少。
+///
+/// 现在: 冷启动、watchdog、面板上的启动 / 停止 / 重启都先拿这把锁; watchdog 拿到锁后**再看一次**
+/// 是不是真没在跑 ([`respawn_tool_bridge_if_dead`]), 前面那位刚起好的就不动它。
+pub static TOOL_BRIDGE_LIFECYCLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// 同上, local-search watcher 用 (结构一样, 一样会撞)。
+pub static LOCAL_SEARCH_LIFECYCLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+fn tool_bridge_alive() -> bool {
+    catfish_paths::tool_bridge_pid_file()
+        .and_then(|f| process::read_pid_file_alive_strict(&f, "catfish_tool_bridge"))
+        .is_some()
+}
+
+fn local_search_alive() -> bool {
+    catfish_paths::local_search_pid_file()
+        .and_then(|f| process::read_pid_file_alive_strict(&f, "catfish_search"))
+        .is_some()
+}
+
+/// watchdog 用: 排上队以后 tool-bridge 还是没在跑才起。返回有没有真的去起。
+pub async fn respawn_tool_bridge_if_dead() -> bool {
+    let _turn = TOOL_BRIDGE_LIFECYCLE.lock().await;
+    if tool_bridge_alive() {
+        return false;
+    }
+    spawn_fresh_tool_bridge();
+    true
+}
+
+/// watchdog 用: 同上, local-search。
+pub async fn respawn_local_search_if_dead() -> bool {
+    let _turn = LOCAL_SEARCH_LIFECYCLE.lock().await;
+    if local_search_alive() {
+        return false;
+    }
+    spawn_fresh_local_search();
+    true
+}
+
+// ============================================================
 // tool-bridge
 // ============================================================
 
+/// 清掉所有旧 tool-bridge 再起一份新的 (排队, 见 [`TOOL_BRIDGE_LIFECYCLE`])。
 pub async fn ensure_tool_bridge_running() {
+    let _turn = TOOL_BRIDGE_LIFECYCLE.lock().await;
+    spawn_fresh_tool_bridge();
+}
+
+/// 调用方必须拿着 [`TOOL_BRIDGE_LIFECYCLE`]。
+fn spawn_fresh_tool_bridge() {
     // P3.5.196 (7/7 鸿波军规审判): 每次都 pkill+spawn, 保证 tool-bridge 加载最新代码.
     //
     // # 老逻辑的问题
@@ -69,7 +126,7 @@ pub async fn ensure_tool_bridge_running() {
     //
     // caller:
     //   - autostart (schedule_autostart): app 冷启动时调, pkill 上次残留 + fresh spawn
-    //   - watchdog: 5s tick 时 !is_alive 才调 (进程真死了), pkill 无匹配静默无害
+    //   - watchdog: 5s tick 时 !is_alive 才调 (进程真死了), 走 respawn_tool_bridge_if_dead 排队复查
     pkill_tool_bridge();
 
     let dir = match catfish_paths::tool_bridge_dir() {
@@ -143,7 +200,14 @@ pub async fn ensure_tool_bridge_running() {
 // local-search (5/22 鸿波: 加进 autostart, 文件 FTS watcher)
 // ============================================================
 
+/// 清掉所有旧 watcher 再起一份新的 (排队, 见 [`LOCAL_SEARCH_LIFECYCLE`])。
 pub async fn ensure_local_search_running() {
+    let _turn = LOCAL_SEARCH_LIFECYCLE.lock().await;
+    spawn_fresh_local_search();
+}
+
+/// 调用方必须拿着 [`LOCAL_SEARCH_LIFECYCLE`]。
+fn spawn_fresh_local_search() {
     // P3.4.2 (6/15 鸿波): 强制清旧进程后重启 — 不再"在跑就 return".
     //
     // # 老逻辑的问题
