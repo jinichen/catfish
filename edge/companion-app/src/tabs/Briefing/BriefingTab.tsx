@@ -7,11 +7,22 @@
  * 日历 / Reminders / LLM rank 接入后再考虑做"展开版"布局。
  */
 
+import { useState } from "react";
+
 import BriefingCard from "../Dashboard/BriefingCard";
+import CustomerAddForm from "./CustomerAddForm";
+import CustomerChip from "./CustomerChip";
 import CustomerFollowupStrip from "./CustomerFollowupStrip";
 import PracticeStrip from "./PracticeStrip";
+import { useCustomerRadar } from "./useCustomerRadar";
 
 export default function BriefingTab() {
+  // 11/3: 客户跟进的数据一份, 有要跟的出整条; 没有时问候行里一个小标签 (省一整行)
+  const radar = useCustomerRadar();
+  const [adding, setAdding] = useState(false);
+  const addForm = adding ? (
+    <CustomerAddForm onCancel={() => setAdding(false)} onDone={() => { setAdding(false); void radar.load(); }} />
+  ) : null;
   return (
     <div
       style={{
@@ -47,9 +58,9 @@ export default function BriefingTab() {
     >
       {/* 11/02: 题库与复习 —— 今天有到期的错题才显示 */}
       <PracticeStrip />
-      {/* 10/12: 销售跟进雷达; 没有客户档案时不渲染 */}
-      <CustomerFollowupStrip />
-      <BriefingCard />
+      {/* 10/12: 销售跟进雷达; 11/3: 只在有要跟的卡片时出 */}
+      <CustomerFollowupStrip radar={radar} onAdd={() => setAdding(true)} />
+      <BriefingCard headerExtra={<CustomerChip radar={radar} onAdd={() => setAdding(true)} />} headerBelow={addForm} />
     </div>
   );
 }

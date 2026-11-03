@@ -3381,7 +3381,7 @@ button {
   display: grid;
   grid-template-columns: 220px 1fr;
   gap: 16px;
-  margin-top: 12px;
+  /* 11/3 (鸿波 catch '空间太浪费'): margin-top 12px 砍掉, 头部到两栏只留 BriefingCard header 的下边距 */
   /* 8/8 (鸿波 catch '右边内容区底部空间太大, 利用率太低'): 不再自己算高度。
    *
    * 历史: 6/18 因为同一个抱怨, 把 calc(100vh - 200px) 调成了 calc(100vh - 130px),

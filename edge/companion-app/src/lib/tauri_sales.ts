@@ -43,6 +43,14 @@ export interface SalesTemplate {
 export const salesCustomerRadar = () => invoke<RadarResult>("sales_customer_radar");
 export const salesTemplateGet = () => invoke<SalesTemplate>("sales_template_get");
 export const salesTemplateSet = (template: SalesTemplate) => invoke<SalesTemplate>("sales_template_set", { template });
+export interface CustomerContact {
+  name?: string;
+  email?: string;
+  wechat?: string;
+}
+/** 11/3: 早安「+ 加客户」。同名客户已有时 reject (「X」已经是客户了)。 */
+export const salesCustomerAdd = (name: string, stage: string | null, contacts: CustomerContact[]) =>
+  invoke<{ ok: boolean; created?: boolean; adopted?: boolean }>("sales_customer_add", { name, stage, contacts });
 export const salesPromiseDone = (customer: string, text: string) =>
   invoke<{ ok: boolean; done?: string }>("sales_promise_done", { customer, text });
 

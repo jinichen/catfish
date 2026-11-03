@@ -272,3 +272,26 @@ def test_manual_wiki_customer_still_counts(home):
     (d / "达华智能.md").write_text("---\ntitle: 达华智能\nentity_type: customer\ntags: [客户, 线索]\nsources: [manual]\n---\n# 达华智能\n",
                                 encoding="utf-8")
     assert [x["name"] for x in c(action="list")["customers"]] == ["达华智能"]
+
+
+# ── 11/3: 早安「+ 加客户」(pim/customer_add): 只新建, 名字完全一致才算同一家 ──
+
+def test_add_customer_creates_adopts_and_never_touches_existing(home):
+    r = customers.add_customer({"name": "华为云", "stage": "需求确认", "contacts": [{"name": "李工", "email": "", "wechat": "李工wx"}]})
+    assert r["ok"] and r["created"] and r["customer"]["stage"] == "需求确认"
+    assert r["customer"]["contacts"] == [{"name": "李工", "wechat": "李工wx"}]
+    # 「华为」不会被当成「华为云」改掉
+    r = customers.add_customer({"name": "华为"})
+    assert r["ok"] and r["created"] and r["customer"]["stage"] == "线索"
+    assert {x["name"] for x in customers.all_customers()} == {"华为云", "华为"}
+    r = customers.add_customer({"name": "华为云", "stage": "线索"})
+    assert not r["ok"] and r["exists"]
+    assert c(action="get", customer="华为云")["customer"]["stage"] == "需求确认"  # 没被改
+    _doc_customer(home)
+    r = customers.add_customer({"name": "招商银行"})
+    assert r["ok"] and r["adopted"]
+    assert len(list((home / "wiki" / "entities").glob("招商银行*.md"))) == 1
+    with pytest.raises(ValueError):
+        customers.add_customer({"name": " "})
+    with pytest.raises(ValueError):
+        customers.add_customer({"name": "某公司", "stage": "不存在的阶段"})

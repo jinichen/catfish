@@ -318,6 +318,45 @@ def _summary(c: dict[str, Any], timeline: int = 0) -> dict[str, Any]:
     return out
 
 
+def _create_page(name: str, stage: str, fields: dict[str, Any]) -> dict[str, Any]:
+    body = f"# {name}\n\n{TIMELINE_HEADER}\n"
+    r = wiki_files.create_wiki_entry("entity", name, body, subtype=SUBTYPE, tags=["客户"])
+    if not r.get("ok"):
+        raise RuntimeError(r.get("error") or "建客户页失败")
+    rec = _read(_entities_dir() / Path(r["rel_path"]).name)
+    _write(rec, _set_fields(rec["content"], {"stage": stage, **fields}))
+    return _summary(_read(_entities_dir() / Path(rec["rel_path"]).name))
+
+
+def add_customer(params: dict[str, Any]) -> dict[str, Any]:
+    """11/3: 早安「+ 加客户」—— 员工自己在界面上填的, 本身就是确认, 只新建不改已有。
+
+    名字完全一致才算同一家 (upsert 那条按名字会模糊匹配, 填「华为」可能改到「华为云」):
+    已经是员工的客户 → 报已存在, 不动它; 只是从文档里认出来的 → 认领那一页; 都不是 → 新建。
+    """
+    name = str(params.get("name") or "").strip()
+    if not name:
+        raise ValueError("客户公司名不能空")
+    tpl = load_template()
+    stage = str(params.get("stage") or "").strip() or stage_names(tpl)[0]
+    if stage not in stage_names(tpl):
+        raise ValueError(f"阶段 {stage!r} 不在销售模板里, 可选: {stage_names(tpl)}")
+    fields: dict[str, Any] = {}
+    contacts = [{k: str(v).strip() for k, v in x.items() if str(v or "").strip()}
+                for x in params.get("contacts") or [] if isinstance(x, dict)]
+    contacts = [x for x in contacts if x]
+    if contacts:
+        fields["contacts"] = contacts
+    same = [c for c in all_customers(include_from_documents=True) if c["name"] == name]
+    if same and not same[0]["from_documents"]:
+        return {"ok": False, "exists": True, "error": f"「{name}」已经是客户了"}
+    if same:
+        rec = same[0]
+        _write(rec, _set_fields(rec["content"], {"stage": stage, **fields}))
+        return {"ok": True, "adopted": True, "customer": _summary(_read(_entities_dir() / Path(rec["rel_path"]).name))}
+    return {"ok": True, "created": True, "customer": _create_page(name, stage, fields)}
+
+
 def action_upsert(args: dict[str, Any]) -> dict[str, Any]:
     name = str(args.get("name") or "").strip()
     if not name:
@@ -344,13 +383,7 @@ def action_upsert(args: dict[str, Any]) -> dict[str, Any]:
         if not confirmed:
             return {"ok": False, "needs_confirmation": True, "proposal": proposal,
                     "message": "新建客户要员工确认: 把 proposal 念给员工, 同意后带 confirmed=true 再调"}
-        body = f"# {name}\n\n{TIMELINE_HEADER}\n"
-        r = wiki_files.create_wiki_entry("entity", name, body, subtype=SUBTYPE, tags=["客户"])
-        if not r.get("ok"):
-            raise RuntimeError(r.get("error") or "建客户页失败")
-        rec = _read(_entities_dir() / Path(r["rel_path"]).name)
-        _write(rec, _set_fields(rec["content"], {"stage": proposal["stage"], **fields}))
-        return {"ok": True, "created": True, "customer": _summary(_read(_entities_dir() / Path(rec["rel_path"]).name))}
+        return {"ok": True, "created": True, "customer": _create_page(name, proposal["stage"], fields)}
 
     if rec.get("from_documents"):
         # 11/3: 文档里认出来、员工还没当客户管过的页 —— 认领成客户跟新建一样要员工确认

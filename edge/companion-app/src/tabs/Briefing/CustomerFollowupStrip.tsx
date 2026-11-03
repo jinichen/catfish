@@ -2,14 +2,15 @@
  *
  * 跟进雷达 (tool-bridge customer_radar.py) 每天早上出四类卡: 客户在等你回复 / 你答应的事到期 /
  * 报价没回音 / 客户冷了。每张卡引用原话, 一键交给小鲶起草 (只起草不发送)。
- * 没有客户档案的人 (不做销售) 这一条完全不显示。关卡复用早安「关闭账本」。
+ * 11/3: 只在有要跟的卡片时出; 没有时问候行里一个小标签 (CustomerChip), 带「+ 加客户」。关卡复用早安「关闭账本」。
  */
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 
-import { advisorClosedAppend, loadActiveClosures, nextLocalMidnight } from "../../lib/advisor_closed";
-import { draftPrompt, filterClosedCards } from "../../lib/customerRadar";
-import { salesCustomerRadar, salesPromiseDone, type RadarCard } from "../../lib/tauri_sales";
+import { advisorClosedAppend, nextLocalMidnight } from "../../lib/advisor_closed";
+import { draftPrompt } from "../../lib/customerRadar";
+import { salesPromiseDone, type RadarCard } from "../../lib/tauri_sales";
 import { useUIStore } from "../../store/ui";
+import type { CustomerRadarState } from "./useCustomerRadar";
 
 const COLLAPSED = 3;
 const RULE_COLOR: Record<RadarCard["rule"], string> = {
@@ -19,30 +20,14 @@ const RULE_COLOR: Record<RadarCard["rule"], string> = {
   cold: "var(--catfish-text-muted)",
 };
 
-export default function CustomerFollowupStrip() {
-  const [cards, setCards] = useState<RadarCard[] | null>(null);
-  const [customers, setCustomers] = useState(0);
+/** 11/3: 只在有要跟的卡片时出; 没有时客户数和「+ 加客户」在问候行的 CustomerChip 里。数据来自 useCustomerRadar。 */
+export default function CustomerFollowupStrip({ radar, onAdd }: { radar: CustomerRadarState; onAdd: () => void }) {
+  const { cards, customers, error, load, setError } = radar;
   const [expanded, setExpanded] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const startEmailChat = useUIStore((s) => s.startEmailChat);
 
-  const load = useCallback(async () => {
-    try {
-      const [r, closures] = await Promise.all([salesCustomerRadar(), loadActiveClosures()]);
-      setCustomers(r.customers);
-      setCards(filterClosedCards(r.cards, closures));
-      setError(null);
-    } catch (e) {
-      setError(String(e));
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
   if (error) return null; // tool-bridge 没起来时不打扰早安主体; 雷达是附加信息
-  if (!cards || customers === 0) return null;
+  if (!cards || cards.length === 0) return null;
 
   async function close(c: RadarCard, status: "done" | "snoozed") {
     await advisorClosedAppend({
@@ -67,8 +52,12 @@ export default function CustomerFollowupStrip() {
       <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)", fontSize: 13 }}>
         <strong>🤝 客户跟进</strong>
         <span style={{ color: "var(--catfish-text-muted)" }}>
-          {cards.length === 0 ? `${customers} 个客户, 今天没有要跟的 ✓` : `${cards.length} 件要跟 · ${customers} 个客户`}
+          {`${cards.length} 件要跟 · ${customers} 个客户`}
         </span>
+        <button type="button" onClick={onAdd}
+          style={{ border: "none", background: "transparent", color: "var(--catfish-cyan)", cursor: "pointer", fontSize: 12, padding: 0 }}>
+          + 加客户
+        </button>
       </div>
       {shown.map((c) => (
         <div

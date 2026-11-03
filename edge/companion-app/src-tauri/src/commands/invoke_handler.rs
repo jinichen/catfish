@@ -221,6 +221,7 @@ pub(crate) fn handler(
             crate::commands::sales::sales_template_get,
             crate::commands::sales::sales_template_set,
             crate::commands::sales::sales_promise_done,
+            crate::commands::sales::sales_customer_add,
             crate::commands::sales::sales_pick_xlsx,
             crate::commands::forms::form_call,
             crate::commands::workflows::workflow_call,

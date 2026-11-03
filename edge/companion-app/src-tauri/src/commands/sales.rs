@@ -29,6 +29,17 @@ pub async fn sales_template_set(template: Value) -> Result<Value, String> {
     tool_bridge_rpc::call_with_timeout("pim/sales_template_set", json!({ "template": template }), RPC_TIMEOUT).await
 }
 
+/// 11/3: 早安「+ 加客户」—— 员工在界面上填的就是确认, 只新建 (同名已有报错, 文档里认出来的认领)。
+#[tauri::command]
+pub async fn sales_customer_add(name: String, stage: Option<String>, contacts: Option<Value>) -> Result<Value, String> {
+    let params = json!({ "name": name, "stage": stage, "contacts": contacts.unwrap_or_else(|| json!([])) });
+    let r = tool_bridge_rpc::call_with_timeout("pim/customer_add", params, RPC_TIMEOUT).await?;
+    if r.get("ok").and_then(Value::as_bool) == Some(false) {
+        return Err(r.get("error").and_then(Value::as_str).unwrap_or("加客户失败").to_string());
+    }
+    Ok(r)
+}
+
 /// 把我方承诺标成已兑现 (客户名 + 承诺原文片段)。
 #[tauri::command]
 pub async fn sales_promise_done(customer: String, text: String) -> Result<Value, String> {

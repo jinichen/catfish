@@ -95,10 +95,15 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
         return _success(req_id, local_pim.events_for_range(rng))
 
     # 10/12: 销售跟进 (customers.py / customer_radar.py): 早安「客户跟进」+ 设置「销售模板」, 不进模型工具清单
-    if method in ("pim/customer_radar", "pim/sales_template_get", "pim/sales_template_set"):
+    if method in ("pim/customer_radar", "pim/sales_template_get", "pim/sales_template_set", "pim/customer_add"):
         from . import customer_radar, customers  # noqa: PLC0415
         if method == "pim/customer_radar":
             return _success(req_id, await asyncio.to_thread(customer_radar.scan))
+        if method == "pim/customer_add":  # 11/3: 早安「+ 加客户」
+            try:
+                return _success(req_id, await asyncio.to_thread(customers.add_customer, params))
+            except (ValueError, RuntimeError) as e:
+                return _error(req_id, INVALID_PARAMS, str(e))
         if method == "pim/sales_template_get":
             return _success(req_id, customers.load_template())
         try:

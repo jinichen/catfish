@@ -545,7 +545,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
   return (
     <div
       style={{
-        marginTop: "var(--space-4)",
+        // 11/3 (鸿波 catch '空间太浪费'): marginTop space-4 砍掉 —— 跟 header 下边距、两栏 margin-top 叠成一大块空白
         // 8/8: 高度传递链的最后一环, 见 BriefingTab 那段注释。
         // 下面 BriefingTwoColumnView 的 .briefing-2col 用 flex:1 吃满这里。
         flex: 1,

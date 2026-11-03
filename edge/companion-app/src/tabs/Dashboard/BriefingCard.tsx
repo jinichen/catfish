@@ -7,7 +7,7 @@
  *   - 本文件就一个壳, 刷新按钮 increment refreshKey 让 AdvisorView re-load
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import AdvisorView from "../Briefing/AdvisorView";
 import RefreshInfo from "../Briefing/components/RefreshInfo";  // P3.5.32.9 (6/18): 时间挪 header
@@ -15,7 +15,8 @@ import { getGreeting } from "../Briefing/components/helpers";
 import { weatherGet, type WeatherCache } from "../../lib/weather";  // P3.3.8 (6/10): 早安天气
 import WeatherChip from "./WeatherChip";  // 11/3: 点天气设常驻城市
 
-export default function BriefingCard() {
+/** 11/3: headerExtra 放进问候行 (客户小标签), headerBelow 紧贴问候行下面 (加客户表单)。 */
+export default function BriefingCard({ headerExtra, headerBelow }: { headerExtra?: ReactNode; headerBelow?: ReactNode } = {}) {
   const [refreshKey, setRefreshKey] = useState(0);
   // P3.3.8 (6/10): 早安天气 — 走 ~/.catfish/weather_cache.json (6h cache).
   // mount 时拉一次, refresh 按钮也触发. wttr.in 国内访问慢 / Clash 拦时显错.
@@ -64,12 +65,15 @@ export default function BriefingCard() {
           display: "flex",
           alignItems: "center",
           gap: "var(--space-2)",
-          marginBottom: "var(--space-3)",
+          // 11/3 (鸿波 catch '空间太浪费'): space-3 → space-2; 下面 AdvisorView / 两栏的上边距也砍了
+          marginBottom: "var(--space-2)",
+          flexWrap: "wrap",
         }}
       >
         <strong style={{ fontSize: 15, color: "var(--catfish-text)" }}>{greeting}</strong>
         <span style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>{today}</span>
         <WeatherChip weather={weather} onChange={setWeather} />
+        {headerExtra}
         {/* P3.5.32.9 (6/18 鸿波 catch '时间和刷新放一行'): RefreshInfo 挪到 header,
             放在刷新按钮左边. flex-end 自动右对齐. */}
         <div
@@ -100,6 +104,7 @@ export default function BriefingCard() {
           </button>
         </div>
       </header>
+      {headerBelow && <div style={{ marginBottom: "var(--space-2)" }}>{headerBelow}</div>}
 
       <AdvisorView refreshKey={refreshKey} />
     </div>
