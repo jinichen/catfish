@@ -99,6 +99,7 @@ pub mod self_serve; // 6/8 BL-EMPLOYEE-SELF-SERVE: A1 重置 / A2 导出 / A3 �
 pub mod task_uid_cache; // P3.5.91 (6/23 鸿波): 早安 task → canonical taskUid 客户端 cache — 治 LLM 给新 uid 时 session 关联失联
 pub mod tool_perf; // P3.5.59 (6/22 鸿波): tool-bridge audit jsonl 聚合 per-tool perf (count / success_rate / p50/p95/p99)
 pub mod transparent_log_store; // 10/25: 外发记录存内容 + 指纹链 + 保留期
+pub mod transparent_log_pending; // 11/3: 外发先登记后落账 (等回复时关掉也不漏)
 pub(crate) mod transparent_log_lineage; // 10/31: 换机迁移 —— 链上记迁移、锚点按设备分清新旧两台
 pub mod practice_stats; // 11/02: 题库与复习的数量 (早安简报提醒用)
 pub mod wiki_retrieval_eval; // 11/02: 知识库检索打分 (借 DeepTutor kb eval)

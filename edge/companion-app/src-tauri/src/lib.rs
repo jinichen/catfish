@@ -616,6 +616,9 @@ pub fn run() {
                 }
             });
 
+            // 11/3 数据外发记录: 上次关掉前还在等回复的外发, 以「没收到回应」落账 (transparent_log_pending.rs)
+            commands::transparent_log_pending::finalize_from_previous_run();
+
             // 10/25 数据外发记录: 按本机设的保留期清 (以前从没调过, 攒了 42 万条), 再看有没有要按新打码规则
             // 统一脱敏的旧记录 (transparent_log_redact.rs)。启动一次、10 分钟后一次 (补上 hermes 重启前旧插件
             // 写的), 之后每 6 小时

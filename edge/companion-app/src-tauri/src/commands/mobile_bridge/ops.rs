@@ -104,6 +104,8 @@ pub fn record_egress(bytes: usize) {
         dest_host: Some(host),
         purpose: Some(EGRESS_PURPOSE.into()),
         request_bytes: Some(bytes as u64),
+        ts_request: None,
+        pending_id: None,
     };
     std::thread::spawn(move || {
         if let Err(e) = crate::commands::transparent_log::record_blocking(req) {

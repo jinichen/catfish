@@ -159,6 +159,7 @@ async fn fetch_one_city(city: &str) -> Result<WeatherEntry, String> {
         .build()
         .map_err(|e| format!("build http client 失败: {e}"))?;
 
+    let started = chrono::Utc::now();
     let resp = client
         .get(&url)
         .header("User-Agent", "catfish-companion/0.16")
@@ -170,6 +171,7 @@ async fn fetch_one_city(city: &str) -> Result<WeatherEntry, String> {
     // 10/24 数据外发记录: 城市名发给第三方 (wttr.in), 记一笔。10/28: 读完正文再记, 下行按实际字节
     crate::commands::transparent_log::record_internal(
         "GET", &url, None, Some(status.as_u16()), body.as_ref().ok().map(|b| b.len() as u64), "third_party", "天气",
+        started,
     );
 
     if !status.is_success() {

@@ -226,6 +226,7 @@ impl RemoteProvider {
             return None;
         }
 
+        let started = chrono::Utc::now();
         let resp = self
             .client
             .post(&url)
@@ -257,7 +258,7 @@ impl RemoteProvider {
         // 10/28: 读完正文再记, 下行按实际字节
         crate::commands::transparent_log::record_internal(
             "POST", &url, Some(body.to_string()), Some(status.as_u16()),
-            raw.as_ref().ok().map(|b| b.len() as u64), "central", "向量计算",
+            raw.as_ref().ok().map(|b| b.len() as u64), "central", "向量计算", started,
         );
 
         if !status.is_success() {

@@ -245,6 +245,11 @@ export async function fetchWithAuth(
  * 失败 silent (Tauri command 挂了不该阻塞 chat). 不记 response body (隐私 + 大).
  * 保留期员工在本机设 (默认 90 天, transparent_log_store.rs).
  *
+ * 11/3: 先登记、后落账 (transparent_log_pending.rs)。原来收到回复后才在后台补写一条, 时间是补写那一刻:
+ * 窗口在后台被挂起时晚了 17 分钟 (17:01 发出记成 17:21:42), 等回复时 Companion 被关掉 / 页面重载就整条没了
+ * (21:56 早安分析, 中央有记录本机没有)。现在 fetch 前登记 (连内容), 回复到了按**发出时间**落账;
+ * 没等到回复的由 Rust 那边以「没收到回应」落账。
+ *
  * 走 dynamic import 防 storybook / dev mode 没 Tauri 时崩 (跟 env.ts 同 pattern).
  */
 async function logOutbound(
@@ -254,6 +259,36 @@ async function logOutbound(
 ): Promise<Response> {
   const method = (init?.method || "GET").toUpperCase();
 
+  // 10/24: 只记「带内容出本机」「发给第三方」的 (lib/egressRule.ts); 本机 / 拉取 / 心跳不记。
+  // 10/25: 连请求内容一起存 (有争议时要说得清发了什么), 防篡改见 transparent_log_store.rs
+  const bodyBytes = typeof init?.body === "string" ? new TextEncoder().encode(init.body).length
+    : init?.body instanceof Blob ? init.body.size
+    : init?.body instanceof ArrayBuffer ? init.body.byteLength
+    : init?.body != null ? 1 : 0;
+  const kind = classifyEgress(method, url, bodyBytes, centralSet([config.gatewayUrl, config.webUrl]));
+  if (kind === null) return realFetch();
+
+  const tsRequest = new Date().toISOString();
+  const pendingId = `ui-${tsRequest}-${Math.random().toString(36).slice(2, 10)}`;
+  const base = {
+    method,
+    url,
+    requestBytes: bodyBytes,
+    category: kind,
+    origin: "companion",
+    destKind: kind === "content" ? "central" : "third_party",
+    destHost: egressHost(url),
+    purpose: egressPurpose(url),
+    tsRequest,
+  };
+  // describeBody 不读流 (流式请求体只写一句说明), 发请求前调安全
+  const bodyP = describeBody(init?.body).catch(() => undefined);
+  // 登记不阻塞请求; 落账前等它写完, 免得落账先到、登记后到留下一条孤儿登记
+  const beginP = (async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("transparent_log_begin", { id: pendingId, req: { ...base, requestBody: await bodyP } });
+  })().catch(() => undefined);
+
   let resp: Response | null = null;
   let networkErr: unknown = null;
   try {
@@ -262,20 +297,10 @@ async function logOutbound(
     networkErr = e;
   }
 
-  // 10/24: 只记「带内容出本机」「发给第三方」的 (lib/egressRule.ts); 本机 / 拉取 / 心跳不记。
-  // 10/25: 连请求内容一起存 (有争议时要说得清发了什么), 防篡改见 transparent_log_store.rs
-  const bodyBytes = typeof init?.body === "string" ? new TextEncoder().encode(init.body).length
-    : init?.body instanceof Blob ? init.body.size
-    : init?.body instanceof ArrayBuffer ? init.body.byteLength
-    : init?.body != null ? 1 : 0;
-  const kind = classifyEgress(method, url, bodyBytes, centralSet([config.gatewayUrl, config.webUrl]));
-  if (kind === null) {
-    if (networkErr) throw networkErr;
-    return resp!;
-  }
-  // 后台 record (不 await 不阻塞主 fetch)
+  // 后台落账 (不 await 不阻塞主 fetch)
   void (async () => {
     try {
+      await beginP;
       const { invoke } = await import("@tauri-apps/api/core");
       let respSummary: string | undefined;
       let respBytes: number | undefined;
@@ -285,18 +310,11 @@ async function logOutbound(
         const clen = resp.headers.get("content-length");
         if (clen) respBytes = Number(clen);
       }
-      const requestBody = await describeBody(init?.body);
       await invoke("transparent_log_record", {
         req: {
-          method,
-          url,
-          requestBody,
-          requestBytes: bodyBytes,
-          category: kind,
-          origin: "companion",
-          destKind: kind === "content" ? "central" : "third_party",
-          destHost: egressHost(url),
-          purpose: egressPurpose(url),
+          ...base,
+          requestBody: await bodyP,
+          pendingId,
           status: resp?.status,
           responseBytes: respBytes,
           responseSummary: respSummary,

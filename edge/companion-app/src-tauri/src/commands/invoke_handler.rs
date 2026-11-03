@@ -129,6 +129,7 @@ pub(crate) fn handler(
             crate::commands::self_serve::self_serve_export_data,
             // 6/8 BL-EMPLOYEE-SELF-SERVE A4: 数据外发日志 (员工自审 catfish 中央交换)
             crate::commands::transparent_log::transparent_log_record,
+            crate::commands::transparent_log::transparent_log_begin,
             crate::commands::transparent_log::transparent_log_query,
             crate::commands::transparent_log::transparent_log_export_csv,
             crate::commands::transparent_log::transparent_log_gc,

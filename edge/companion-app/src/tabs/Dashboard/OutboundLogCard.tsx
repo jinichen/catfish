@@ -377,7 +377,8 @@ export default function OutboundLogCard() {
             }}
           >
             <tr>
-              <th style={thStyle}>时间</th>
+              {/* 11/3: 记的是请求发出的时刻; 门户「配额日志」记的是模型调用完成的时刻, 两边差的是处理时长 */}
+              <th style={thStyle} title="请求从这台电脑发出的时刻 (中央门户配额日志记的是完成时刻)">发出时间</th>
               <th style={thStyle}>谁发的</th>
               <th style={thStyle}>做什么</th>
               <th style={thStyle}>发给</th>
@@ -482,7 +483,7 @@ function Row({ entry: e }: { entry: TransparentLogEntry }) {
         {local ? "本机 (不出这台电脑)" : <>{e.destKind === "third_party" ? "第三方 · " : "中央 · "}{e.destHost || path}</>}
       </td>
       <td style={{ ...tdStyle, color: statusColor }}>
-        {local ? "完成" : e.status ?? (e.error ? "ERR" : "?")}
+        {local ? "完成" : e.status ?? (e.error?.startsWith("没收到回应") ? <span title={e.error}>没收到回应</span> : e.error ? "ERR" : "?")}
       </td>
       <td style={{ ...tdStyle, textAlign: "right" }}>{e.requestBytes.toLocaleString("en-US")}</td>
       <td style={{ ...tdStyle, textAlign: "right" }}>{e.responseBytes.toLocaleString("en-US")}</td>

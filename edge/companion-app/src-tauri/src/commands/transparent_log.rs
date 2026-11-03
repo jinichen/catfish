@@ -130,12 +130,13 @@ pub(crate) fn open_db_at(path: &std::path::Path) -> Result<Connection, String> {
     // 老格式的行 (origin 为空) 基本都是本机轮询 (界面每 3 秒问 hermes), 不是外发 —— 清掉
     let _ = conn.execute("DELETE FROM outbound_log WHERE origin IS NULL", []);
     super::transparent_log_store::ensure(&conn)?;
+    super::transparent_log_pending::ensure(&conn)?;
     Ok(conn)
 }
 
 // ── 数据模型 ──────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordReq {
     pub method: String,
@@ -153,6 +154,12 @@ pub struct RecordReq {
     pub purpose: Option<String>,
     /// 请求体字节数 (request_body 是表单 / 文件说明时, 这里是原始大小)
     pub request_bytes: Option<u64>,
+    /// 11/3: 请求**发出**的时刻 (界面在 fetch 前取)。没给就用落账时刻 (老调用方 / 后台)。
+    #[serde(default)]
+    pub ts_request: Option<String>,
+    /// 11/3: transparent_log_begin 登记号; 落账后删掉那条登记 (transparent_log_pending.rs)
+    #[serde(default)]
+    pub pending_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -223,7 +230,8 @@ pub(crate) fn record_blocking(req: RecordReq) -> Result<i64, String> {
         None
     };
     let row = super::transparent_log_store::ChainRow {
-        ts_request: now,
+        // 11/3: 记发出时间 (门户配额日志记的是完成时间, 两边差的就是模型处理时长)
+        ts_request: req.ts_request.clone().unwrap_or_else(|| now.clone()),
         ts_response,
         method: req.method,
         url: req.url,
@@ -237,19 +245,25 @@ pub(crate) fn record_blocking(req: RecordReq) -> Result<i64, String> {
         purpose: req.purpose,
         body_sha256: String::new(),
     };
-    super::transparent_log_store::insert(
+    let id = super::transparent_log_store::insert(
         &mut conn,
         row,
         req.request_body.as_deref().map(str::as_bytes),
         req.response_summary,
         Some(category),
-    )
+    )?;
+    if let Some(pid) = req.pending_id.as_deref() {
+        super::transparent_log_pending::finish(&conn, pid);
+    }
+    Ok(id)
 }
 
 /// 10/24: Companion 后台自己发出去的 (远程向量、天气) 也记一笔, 连内容; 失败不影响调用方。
 /// `response_bytes`: 实际收到的回复字节数 —— 读完正文再调 (10/28: 原来收到响应头就记, 下行一直是 0)。
+/// `started`: 请求发出的时刻 (11/3: 记发出时间, 跟界面记录、hermes 记录一致)。
 pub(crate) fn record_internal(method: &str, url: &str, body: Option<String>, status: Option<u16>,
-                              response_bytes: Option<u64>, dest_kind: &str, purpose: &str) {
+                              response_bytes: Option<u64>, dest_kind: &str, purpose: &str,
+                              started: chrono::DateTime<chrono::Utc>) {
     let host = url.split("://").nth(1).and_then(|r| r.split(['/', ':', '?']).next()).unwrap_or("").to_string();
     let req = RecordReq {
         method: method.to_string(),
@@ -265,6 +279,8 @@ pub(crate) fn record_internal(method: &str, url: &str, body: Option<String>, sta
         dest_kind: Some(dest_kind.to_string()),
         dest_host: Some(host),
         purpose: Some(purpose.to_string()),
+        ts_request: Some(started.to_rfc3339()),
+        pending_id: None,
     };
     std::thread::spawn(move || {
         if let Err(e) = record_blocking(req) {
@@ -280,6 +296,7 @@ fn query_blocking(
     limit: u32,
     offset: u32,
 ) -> Result<QueryResult, String> {
+    super::transparent_log_pending::finalize_stale_in_run();
     let conn = open_db()?;
 
     let limit = limit.clamp(1, 1000);
@@ -531,6 +548,14 @@ pub async fn transparent_log_record(req: RecordReq) -> Result<i64, String> {
         .map_err(|e| format!("内部错误: {e}"))?
 }
 
+/// 11/3: 发请求前登记 (界面 me.ts logOutbound)。`id` 由界面生成, 落账时 transparent_log_record 带回来。
+#[tauri::command]
+pub async fn transparent_log_begin(id: String, req: RecordReq) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || super::transparent_log_pending::begin_blocking(&id, req))
+        .await
+        .map_err(|e| format!("内部错误: {e}"))?
+}
+
 #[tauri::command]
 pub async fn transparent_log_query(
     since: Option<String>,
@@ -611,6 +636,8 @@ mod tests {
             dest_host: Some("10.0.0.5".into()),
             purpose: Some("主动提醒".into()),
             request_bytes: None,
+            ts_request: None,
+            pending_id: None,
         })
         .unwrap();
         let q = query_blocking(None, None, None, 100, 0).unwrap();

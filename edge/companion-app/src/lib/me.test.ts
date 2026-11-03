@@ -335,3 +335,42 @@ describe("config.backendUrl 切换 — gateway vs hermes URL", () => {
     expect(config.useHermes).toBe(true);
   });
 });
+
+describe("数据外发记录: 先登记后落账 (11/3)", () => {
+  it("发请求前登记, 回复到了带同一登记号和发出时间落账", async () => {
+    config.useHermes = false;
+    config.hermesAuthHeader = null;
+    config.backendUrl = "http://127.0.0.1:8999";
+    const order: string[] = [];
+    const logged: Array<{ cmd: string; payload: Record<string, unknown> }> = [];
+    invokeMock.mockImplementation(async (cmd: string, payload: Record<string, unknown>) => {
+      if (cmd === "auth_get_access_token") return "oauth-jwt-12345";
+      if (cmd === "transparent_log_begin" || cmd === "transparent_log_record") {
+        order.push(cmd);
+        logged.push({ cmd, payload });
+        return 1;
+      }
+      throw new Error(`unexpected invoke: ${cmd}`);
+    });
+    const { calls } = setProxyMock(() => {
+      order.push("fetch");
+      return jsonResp(200, { ok: true });
+    });
+
+    const resp = await fetchWithAuth(`${config.gatewayUrl}/v1/chat/completions?catfish_source=companion-advisor&catfish_direct=1`, {
+      method: "POST",
+      body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }),
+    });
+    expect(resp.status).toBe(200);
+    expect(calls).toHaveLength(1);
+    await vi.waitFor(() => expect(order).toContain("transparent_log_record"));
+    expect(order.indexOf("transparent_log_begin")).toBeLessThan(order.indexOf("transparent_log_record"));
+    const begin = logged.find((x) => x.cmd === "transparent_log_begin")!.payload as { id: string; req: Record<string, unknown> };
+    const rec = (logged.find((x) => x.cmd === "transparent_log_record")!.payload as { req: Record<string, unknown> }).req;
+    expect(rec.pendingId).toBe(begin.id);
+    expect(rec.tsRequest).toBe(begin.req.tsRequest);
+    expect(rec.status).toBe(200);
+    expect(begin.req.requestBody).toContain("hi");
+    expect(begin.req.status).toBeUndefined();
+  });
+});
