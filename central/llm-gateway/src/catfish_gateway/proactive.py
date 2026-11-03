@@ -158,6 +158,12 @@ def _build_user_prompt(journal_tail: str, now: datetime) -> str:
 直接输出 1 句 starter, 不要前后缀, 不要 markdown."""
 
 
+def _on_behalf_of(user_email: str | None) -> dict[str, str]:
+    """开场白是替哪个员工写的 → X-Catfish-User, 配额日志记到他名下 (不扣配额照旧)。"""
+    email = (user_email or "").strip()
+    return {"X-Catfish-User": email} if email else {}
+
+
 async def generate_starter(
     user_email: str | None = None,
     *,
@@ -240,6 +246,7 @@ async def generate_starter(
                         "X-Catfish-Internal": "true",  # BL-F17: 主动闲聊不消耗员工 quota
                         # 10/30: 配额日志里这条原来是 internal:gateway-loopback「未标来源」, 查了半天才知道是谁
                         "X-Catfish-Source": "gateway-proactive-starter",
+                        **_on_behalf_of(user_email),  # 11/03: 记到员工名下 (auth.resolve_effective_user_email)
                         # 10/30: 一句开场白不用深度思考。开着思考 qwen-flash 要 7–19s, 远超 Companion 等的 5s,
                         # 每次都是 Companion 先放弃用本地模板, 模型白跑一趟 (token 照扣)
                         "X-Catfish-Thinking": "off",
@@ -483,6 +490,7 @@ async def generate_contextual_starter(
                         "X-Catfish-Skip-Identity": "true",
                         "X-Catfish-Internal": "true",
                         "X-Catfish-Source": "gateway-proactive-contextual",  # 10/30 同上
+                        **_on_behalf_of(user_email),  # 11/03: 记到员工名下 (auth.resolve_effective_user_email)
                         "X-Catfish-Thinking": "off",  # 10/30: 同上, 这条网关只等 8s、Companion 只等 5s
                         "Content-Type": "application/json",
                     },

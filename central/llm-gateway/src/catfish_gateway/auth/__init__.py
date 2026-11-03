@@ -130,6 +130,13 @@ def resolve_effective_user_email(
 
     返: 字符串 (email 或 "client:..."), 永不返 None. raise HTTPException 表错.
     """
+    # 11/03 (鸿波「记到员工名下」): 网关自己调自己 (主动搭话的开场白) 是替某个员工写的, 带 X-Catfish-User
+    # 就记到那个员工名下。internal token 只在网关进程内存里, 外面拿不到, 不存在冒充; 不扣配额照旧
+    # (那是 X-Catfish-Internal 管的, 跟记到谁名下无关)。不带或不像 email → 还是 internal:gateway-loopback。
+    if getattr(user, "auth_method", "") == "internal_loopback":
+        raw = (x_catfish_user_header or "").strip()
+        return raw if raw and _EMAIL_SHAPE_RE.match(raw) else user.sub
+
     # 普通 user token
     if not is_service_principal(user):
         return user.sub

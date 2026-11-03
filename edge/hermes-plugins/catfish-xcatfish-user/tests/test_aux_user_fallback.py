@@ -122,3 +122,36 @@ def test_P64_会话卫生压缩期间带员工_完了复原(resolved, monkeypatc
         None, None, None, [], [], "m", {}, _src(), None, "k", "q", 1))
     assert got == ["alice@corp.cn"]
     assert cv.get() == ""
+
+
+def test_P64b_对话中途压缩从活agent取员工(resolved, monkeypatch):
+    import sys
+
+    cv, seen = resolved
+    got = []
+
+    class AIAgent:
+        def __init__(self, uid, platform):
+            self._user_id, self.platform, self._catfish_outgoing_user = uid, platform, ""
+
+        def _compress_context(self, messages, system_message, **kw):
+            got.append(cv.get())
+            return messages, system_message
+
+    monkeypatch.setitem(sys.modules, "run_agent", types.SimpleNamespace(AIAgent=AIAgent))
+    plugin_runtime._patch_p64b_compress_context_user()
+    AIAgent("o9cq@im.wechat", "weixin")._compress_context([], "", trigger="post_tool")
+    assert got == ["alice@corp.cn"] and cv.get() == ""
+
+    # 临时压缩 agent 没有平台用户: 不去兜底默认员工
+    seen.clear()
+    AIAgent("", "gateway_hygiene")._compress_context([], "")
+    assert got[-1] == "" and seen == []
+
+    # 已有员工 (Companion / P61 / P64 设的) 不覆盖
+    token = cv.set("bob@corp.cn")
+    try:
+        AIAgent("o9cq@im.wechat", "weixin")._compress_context([], "")
+    finally:
+        cv.reset(token)
+    assert got[-1] == "bob@corp.cn"

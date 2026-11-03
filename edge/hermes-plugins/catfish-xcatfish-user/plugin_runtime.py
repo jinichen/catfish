@@ -285,7 +285,54 @@ def _patch_p64_hygiene_compression_user() -> None:
 
     wrapped._catfish_p64 = True  # type: ignore[attr-defined]
     GatewayTurnMixin._hmwa_hygiene_detached_attempt = wrapped
+    _patch_p64b_compress_context_user()
     logger.info("P64 会话卫生压缩带员工 patched")
+
+
+def agent_user(agent) -> str:
+    """正在压缩的这个 agent 是谁的: 有平台用户 (微信那轮的活 agent) 才走 resolver。
+
+    临时压缩 agent (platform=gateway_hygiene, 没有 _user_id) 不走 —— resolver 会兜底到
+    CATFISH_DEFAULT_USER, 别人的微信对话就算到本机员工头上了; 那两条路 P61 / P64 已经按消息来源设好。
+    """
+    if not str(getattr(agent, "_user_id", "") or "").strip():
+        return ""
+    try:
+        return (_resolver().resolve_for_agent(agent) or "").strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _patch_p64b_compress_context_user() -> None:
+    """P64b (11/03 07:27 那条): 对话中途的压缩 (工具结果一下子把上下文撑过阈值, trigger=post_tool)。
+
+    1.2.35 指望按 session_id 去 session_registry 查, 但那张表只在 _current_main_runtime (P2) 里登记,
+    这条路上一次都没调过, 查不到。直接从正在压缩的 agent 本身取: 包 AIAgent._compress_context,
+    CV_CF_USER 空着就按 agent_user(self) 设上, 压完复原。已有 CV (Companion / P61 / P64) 不覆盖。
+    """
+    from run_agent import AIAgent  # noqa: PLC0415
+
+    orig = getattr(AIAgent, "_compress_context", None)
+    if orig is None or getattr(orig, "_catfish_p64b", False):
+        return
+
+    def _compress_context(self, *args, **kwargs):
+        token = None
+        try:
+            if not (_ctx().CV_CF_USER.get() or "").strip():
+                user = agent_user(self)
+                if user:
+                    token = _ctx().CV_CF_USER.set(user)
+        except Exception:  # noqa: BLE001
+            logger.debug("P64b 取员工失败", exc_info=True)
+        try:
+            return orig(self, *args, **kwargs)
+        finally:
+            if token is not None:
+                _ctx().CV_CF_USER.reset(token)
+
+    _compress_context._catfish_p64b = True  # type: ignore[attr-defined]
+    AIAgent._compress_context = _compress_context
 
 
 def _aux_identity_headers(aux, extra_headers, task=None, main_runtime=None):
