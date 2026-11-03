@@ -18,7 +18,7 @@ import { useEffect, useState } from "react";
 import { Markdown } from "../../lib/markdown";
 import { toolBridgeCallTool } from "../../lib/tauri_services";
 import {
-  DEFAULT_TEMPLATE_ID, meetingMinutes, meetingMinutesGenerate, meetingMinutesOpenFile, meetingTemplatesList,
+  DEFAULT_TEMPLATE_ID, meetingMinutes, meetingMinutesGenerate, meetingMinutesOpenFile, meetingTemplatesList, referencesNote,
   type MeetingMeta, type Minutes, type MinutesTemplate,
 } from "../../lib/tauri_meeting";
 import { Btn, ErrorLine, inputStyle, itemStyle } from "../Collab/roomLinkUi";
@@ -228,6 +228,8 @@ export default function MinutesView({ meta }: { meta: MeetingMeta }) {
         </div>
       )}
       {!markdownView && m.open_questions.length > 0 && list("待定问题", m.open_questions)}
+      {!markdownView && (m.carried_over?.length ?? 0) > 0 && list("上次遗留事项进展", m.carried_over ?? [])}
+      {referencesNote(m.references) && <div style={{ fontSize: 12, ...muted }}>{referencesNote(m.references)}</div>}
       {empty.length > 0 && <div style={{ fontSize: 12, ...muted }}>{empty.join(" · ")}</div>}
       <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", alignItems: "center",
         borderTop: "1px solid var(--catfish-border)", paddingTop: "var(--space-3)" }}>

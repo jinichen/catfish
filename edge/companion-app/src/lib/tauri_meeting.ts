@@ -86,10 +86,28 @@ export interface MinutesJson {
   decisions: string[];
   action_items: ActionItem[];
   open_questions: string[];
+  /** 11/3: 上次同系列会议遗留的事在本次的进展 (老纪要没有这一项) */
+  carried_over?: string[];
+  /** 11/3: 生成时参考的背景材料 (知识库条目 / 上次会议); 老纪要没有 */
+  references?: MinutesReferences;
   /** 10/3: 按自定义模版生成的才有; 没有 = 缺省格式 */
   template?: { id: string; name: string; kind?: TemplateKind };
   /** 10/3: 按 Word / Excel 模版填好的文件 (在会议目录里) */
   output_file?: string;
+}
+
+export interface MinutesReferences {
+  wiki: { title: string; rel_path: string }[];
+  previous_meeting: { meeting_id: string; title: string; date: string } | null;
+}
+
+/** 11/3: 「参考的背景材料: 知识库「X」「Y」; 上次会议「T」(日期)」, 没有参考就空串 */
+export function referencesNote(refs?: MinutesReferences): string {
+  if (!refs) return "";
+  const bits: string[] = [];
+  if (refs.wiki.length) bits.push(`知识库 ${refs.wiki.map((w) => `「${w.title}」`).join("、")}`);
+  if (refs.previous_meeting) bits.push(`上次会议「${refs.previous_meeting.title}」(${refs.previous_meeting.date})`);
+  return bits.length ? `参考的背景材料: ${bits.join("; ")}` : "";
 }
 
 export type TemplateKind = "markdown" | "docx" | "xlsx";

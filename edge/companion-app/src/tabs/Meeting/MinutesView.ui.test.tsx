@@ -50,6 +50,24 @@ describe("纪要卡片", () => {
     expect(api.generate).toHaveBeenCalledWith("mtg_1", "tpl_w");
   });
 
+  it("11/3: 有上次遗留进展和参考的背景材料就显示; 老纪要没有这两项照常", async () => {
+    api.minutes = {
+      json: {
+        ...base,
+        carried_over: ["二期报价已定"],
+        references: {
+          wiki: [{ title: "李建国", rel_path: "wiki/entities/laoli.md" }],
+          previous_meeting: { meeting_id: "mtg_0", title: "周会 10.27", date: "2026-10-27" },
+        },
+      },
+      markdown: "# 周会", path: "/x",
+    };
+    await mount();
+    expect(screen.getByText("上次遗留事项进展")).toBeTruthy();
+    expect(screen.getByText("· 二期报价已定")).toBeTruthy();
+    expect(screen.getByText("参考的背景材料: 知识库 「李建国」; 上次会议「周会 10.27」(2026-10-27)")).toBeTruthy();
+  });
+
   it("空的几节并成一行; 没待办就不出「加入任务库」", async () => {
     api.minutes = { json: base, markdown: "# 周会", path: "/x" };
     await mount();

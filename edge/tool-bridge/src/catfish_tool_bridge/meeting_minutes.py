@@ -36,7 +36,8 @@ SCHEMA_HINT = """严格输出一个 JSON 对象, 不要任何前后文字:
   "action_items": [{"owner": "负责人 (转写里能对上的人名或说话人标签, 不确定写空串)",
                     "task": "要做的事, 动词开头",
                     "due": "YYYY-MM-DD 或空串 (只在会上明确说了时间时填, 相对日期按会议日期换算)"}],
-  "open_questions": ["没定下来、需要后续确认的问题"]
+  "open_questions": ["没定下来、需要后续确认的问题"],
+  "carried_over": ["上次会议遗留的事在本次会上的进展, 每条一句 (只写本次转写里确实提到的; 没给上次的材料就给空数组)"]
 }
 没有的项给空数组。不要编造转写里没有的内容。"""
 
@@ -93,7 +94,7 @@ def meeting_date(meta: dict) -> str:
     return (meta.get("created_at") or "")[:10] or date.today().isoformat()
 
 
-def build_messages(meta: dict, body: str, *, partial: bool, names: dict[str, str]) -> list[dict]:
+def build_messages(meta: dict, body: str, *, partial: bool, names: dict[str, str], background: str = "") -> list[dict]:
     who = "、".join(sorted(set(names.values()))) or "未命名 (用说话人编号指代)"
     sys_prompt = (
         "你是会议记录员, 根据会议转写写纪要。转写由语音识别生成, 可能有错字和断句问题, "
@@ -101,19 +102,19 @@ def build_messages(meta: dict, body: str, *, partial: bool, names: dict[str, str
     )
     head = (
         f"会议: {meta.get('title', '')}\n日期: {meeting_date(meta)}\n"
-        f"参会人数: {meta.get('attendees', '')}\n已知参会人: {who}\n"
+        f"参会人数: {meta.get('attendees', '')}\n已知参会人: {who}\n{background}"
     )
     task = "下面是会议的**一部分**转写, 只总结这一部分:\n" if partial else "下面是会议转写:\n"
     return [{"role": "system", "content": sys_prompt}, {"role": "user", "content": head + task + body}]
 
 
-def build_reduce_messages(meta: dict, partials: list[dict]) -> list[dict]:
+def build_reduce_messages(meta: dict, partials: list[dict], background: str = "") -> list[dict]:
     sys_prompt = (
         "你是会议记录员。下面是同一场会议按时间顺序分段整理的要点, 合并成一份完整纪要: "
         "去重, 前后矛盾时以后面的为准, 待办合并同一件事。\n" + SCHEMA_HINT
     )
     body = "\n\n".join(f"### 第 {i + 1} 段\n{json.dumps(p, ensure_ascii=False)}" for i, p in enumerate(partials))
-    head = f"会议: {meta.get('title', '')}\n日期: {meeting_date(meta)}\n"
+    head = f"会议: {meta.get('title', '')}\n日期: {meeting_date(meta)}\n{background}"
     return [{"role": "system", "content": sys_prompt}, {"role": "user", "content": head + body}]
 
 
@@ -147,10 +148,11 @@ def parse_minutes(raw: str) -> dict:
         "decisions": strs(data.get("decisions")),
         "action_items": items,
         "open_questions": strs(data.get("open_questions")),
+        "carried_over": strs(data.get("carried_over")),
     }
 
 
-def render_markdown(meta: dict, minutes: dict, names: dict[str, str]) -> str:
+def render_markdown(meta: dict, minutes: dict, names: dict[str, str], references_note: str = "") -> str:
     out = [f"# {meta.get('title', '会议纪要')}", "", f"- 日期: {meeting_date(meta)}"]
     if names:
         out.append(f"- 参会: {'、'.join(sorted(set(names.values())))}")
@@ -164,7 +166,11 @@ def render_markdown(meta: dict, minutes: dict, names: dict[str, str]) -> str:
             out.append(f"- [ ] {it['task']}" + (f" ({extra})" if extra else ""))
     else:
         out.append("(无)")
+    if minutes.get("carried_over"):
+        out += ["", "## 上次遗留事项进展", ""] + [f"- {x}" for x in minutes["carried_over"]]
     out += ["", "---", "由小鲶根据会议录音自动生成, 转写可能有误, 请核对。"]
+    if references_note:
+        out.append(references_note)
     return "\n".join(out) + "\n"
 
 
@@ -180,26 +186,36 @@ async def summarize(
     if not lines:
         raise ValueError("转写是空的, 没法生成纪要 (录音里可能没有人声)")
     chunks = chunk_lines(lines)
+    from . import meeting_context as mc  # noqa: PLC0415
+    try:
+        ctx = mc.gather(meeting_dir, meta, "\n".join(lines), names)
+    except Exception as e:  # noqa: BLE001 — 背景材料取不到不该让纪要出不来
+        logger.warning("meeting %s: 背景材料取不到, 只按转写写纪要: %s", meta.get("id"), e)
+        ctx = {"wiki": [], "previous": None}
+    background = mc.prompt_block(ctx)
+    note = mc.references_note(ctx)
     kw = dict(gateway_url=gateway_url, auth_token=auth_token, model=model, temperature=0.2, max_tokens=4000, source=SOURCE)
     if len(chunks) == 1:
-        minutes = parse_minutes(await call_llm(build_messages(meta, "\n".join(chunks[0]), partial=False, names=names), **kw))
+        minutes = parse_minutes(await call_llm(
+            build_messages(meta, "\n".join(chunks[0]), partial=False, names=names, background=background), **kw))
     else:
         logger.info("meeting %s: 转写 %d 段, 分段总结", meta.get("id"), len(chunks))
         partials = [
-            parse_minutes(await call_llm(build_messages(meta, "\n".join(c), partial=True, names=names), **kw))
+            parse_minutes(await call_llm(build_messages(meta, "\n".join(c), partial=True, names=names, background=background), **kw))
             for c in chunks
         ]
-        minutes = parse_minutes(await call_llm(build_reduce_messages(meta, partials), **kw))
+        minutes = parse_minutes(await call_llm(build_reduce_messages(meta, partials, background), **kw))
 
-    doc: dict[str, Any] = {"version": 1, "meeting_id": meta.get("id"), "chunks": len(chunks), **minutes}
+    doc: dict[str, Any] = {"version": 1, "meeting_id": meta.get("id"), "chunks": len(chunks), **minutes,
+                           "references": mc.references(ctx)}
     from . import meeting_minutes_template as mt  # noqa: PLC0415
     # 材料: 短会议给转写原文; 长会议给分段要点 (原文塞不下, 跟 reduce 那步同一个取舍)
     material = "\n".join(chunks[0]) if len(chunks) == 1 else "\n\n".join(
         f"### 第 {i + 1} 段要点\n{json.dumps(p, ensure_ascii=False)}" for i, p in enumerate(partials)
     )
-    head = f"会议: {meta.get('title', '')}\n日期: {meeting_date(meta)}\n"
+    head = f"会议: {meta.get('title', '')}\n日期: {meeting_date(meta)}\n{background}"
     if template is None:
-        markdown = render_markdown(meta, minutes, names)
+        markdown = render_markdown(meta, minutes, names, note)
     elif template.get("kind", "markdown") in ("docx", "xlsx"):
         # 单位定死的 Word / Excel: 认空 → 大模型给每个空出值 → 代码填进原文件另存 (格式不动)
         from . import meeting_file_template as ft  # noqa: PLC0415
@@ -218,7 +234,7 @@ async def summarize(
         safe = re.sub(r'[\\/:*?"<>|\s]+', " ", str(meta.get("title") or "会议")).strip()[:40] or "会议"
         out = meeting_dir / f"{safe} 会议纪要{src.suffix.lower()}"
         ft.fill(src, out, slots, values)
-        markdown = render_markdown(meta, minutes, names)
+        markdown = render_markdown(meta, minutes, names, note)
         doc["template"] = {"id": template["id"], "name": template["name"], "kind": template["kind"]}
         doc["output_file"] = str(out)
     else:
@@ -227,6 +243,8 @@ async def summarize(
         if not body:
             raise ValueError("大模型按模版没写出内容, 换个模版或重试")
         markdown = f"{body}\n\n---\n由小鲶按纪要模版「{template['name']}」根据会议录音自动生成, 转写可能有误, 请核对。\n"
+        if note:
+            markdown += f"{note}\n"
         doc["template"] = {"id": template["id"], "name": template["name"]}
     (meeting_dir / "minutes.json").write_text(json.dumps(doc, ensure_ascii=False, indent=1), encoding="utf-8")
     (meeting_dir / "minutes.md").write_text(markdown, encoding="utf-8")
