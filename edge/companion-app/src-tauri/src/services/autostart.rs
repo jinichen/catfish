@@ -33,6 +33,7 @@ pub fn schedule_autostart() {
     tauri::async_runtime::spawn(async move {
         ensure_catfish_tools_mcp_registered();
         ensure_tool_bridge_running().await;
+        TOOL_BRIDGE_STARTUP_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
         ensure_local_search_running().await;
         ensure_chrome_running().await;
         check_runtime_deps().await;
@@ -60,6 +61,14 @@ pub fn schedule_autostart() {
 pub static TOOL_BRIDGE_LIFECYCLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// 同上, local-search watcher 用 (结构一样, 一样会撞)。
 pub static LOCAL_SEARCH_LIFECYCLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// 11/3: 冷启动那次「起 tool-bridge」做完没有 (Hermes 还在装 / 冷启动还没轮到时是 false)。
+/// tool_bridge_rpc 用它判断「通道文件不在」是还在起 (等一等) 还是真没有 (马上报错)。
+static TOOL_BRIDGE_STARTUP_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn tool_bridge_startup_done() -> bool {
+    TOOL_BRIDGE_STARTUP_DONE.load(std::sync::atomic::Ordering::SeqCst)
+}
 
 fn tool_bridge_alive() -> bool {
     catfish_paths::tool_bridge_pid_file()

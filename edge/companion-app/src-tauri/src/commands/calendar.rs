@@ -245,7 +245,7 @@ pub async fn calendar_week_fetch(force_refresh: Option<bool>) -> Result<String, 
         // 用新子命令名防旧 helper 静默沿用“从今天滚动 7 天”的历史语义。
         // 旧 helper 会返回 unknown command，随后自动走下面的自然周 JXA fallback。
 
-        match run_eventkit("natural-week", Duration::from_secs(3)) {
+        match run_eventkit("natural-week", EVENTKIT_TIMEOUT) {
             Ok(json) => Ok(json),
             Err(e) => {
                 eprintln!("[calendar] EventKit binary 不可用 ({}), fallback osascript", e);
@@ -294,7 +294,7 @@ pub async fn calendar_today_fetch(force_refresh: Option<bool>) -> Result<String,
     #[cfg(not(windows))]
     let result = tokio::task::spawn_blocking(|| {
 
-        match run_eventkit("today", Duration::from_secs(3)) {
+        match run_eventkit("today", EVENTKIT_TIMEOUT) {
             Ok(json) => Ok(json),
             Err(e) => {
                 eprintln!("[calendar] EventKit binary 不可用 ({}), fallback osascript 15s timeout", e);
@@ -316,6 +316,15 @@ pub async fn calendar_today_fetch(force_refresh: Option<bool>) -> Result<String,
     result
 }
 
+#[cfg(not(windows))]
+/// 11/3: EventKit 小程序的等待时间, 原来 3 秒。
+///
+/// 平时 < 100ms, 但升级后第一次跑 (新签名的小程序要过一遍系统检查) / 刚开机那阵子会慢好几秒:
+/// 3 秒一过就退到 AppleScript (最长 20 秒), 早安页那边 15 秒先判超时 ——
+/// 鸿波 11/3 升级后、退出重进常看到「日历 数据源超过 15 秒未返回」。给到 10 秒, 早安页的日历
+/// 等待也相应放到 35 秒 (见 src/lib/briefing_sources.ts)。
+const EVENTKIT_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[cfg(not(windows))] // Windows 见 windows_events
 /// BL-CALENDAR-EVENTKIT (5/21): spawn catfish-calendar Swift binary 调 EventKit.
 ///
@@ -326,7 +335,7 @@ pub async fn calendar_today_fetch(force_refresh: Option<bool>) -> Result<String,
 ///   4. PATH 找 (员工手动 swiftc 编译装 /usr/local/bin/)
 ///
 /// 子命令: today / week / list-cals / create
-/// 超时 3s (EventKit < 100ms 正常, 给到 3s 应对系统繁忙)
+/// 超时由调用方给 (见 [`EVENTKIT_TIMEOUT`])
 fn run_eventkit(subcmd: &str, timeout: Duration) -> Result<String, String> {
     use std::io::Read;
 

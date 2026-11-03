@@ -81,13 +81,42 @@ pub(crate) async fn listening() -> Option<bool> {
     }
 }
 
+/// 11/3: 通道文件还没出来时, tool-bridge 要是**正在起**就等它, 最多 30 秒 (也不超过本次 RPC 的超时)。
+///
+/// 鸿波 11/3: 升级后 / 退出重进, 早安页一打开就拉「当前待办」, 这时 tool-bridge 还在起 (冷启动先清旧进程、
+/// 再起 python、import hermes 要几秒, 慢机器更久), 通道文件没建好 —— 立刻报「endpoint 不存在」,
+/// 失败卡一直挂到明天或手点刷新。「正在起」= 冷启动还没轮到它 / 正有人在起停它 / 进程活着但还没建通道。
+/// 都不是 (确实没装、没起) 就不等, 照旧马上报错。
+async fn wait_while_starting(endpoint_path: &std::path::Path, rpc_timeout: Duration) -> bool {
+    use crate::services::autostart;
+    let starting = !autostart::tool_bridge_startup_done()
+        || autostart::TOOL_BRIDGE_LIFECYCLE.try_lock().is_err()
+        || catfish_paths::tool_bridge_pid_file()
+            .and_then(|f| crate::services::process::read_pid_file_alive_strict(&f, "catfish_tool_bridge"))
+            .is_some();
+    if !starting {
+        return false;
+    }
+    let deadline = std::time::Instant::now() + rpc_timeout.min(Duration::from_secs(STARTING_WAIT_SECS));
+    while std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        if endpoint_path.exists() {
+            return true;
+        }
+    }
+    false
+}
+
+/// tool-bridge 正在起时, 调用方最多等多久通道文件出来。
+const STARTING_WAIT_SECS: u64 = 30;
+
 async fn call_at_path(
     endpoint_path: &std::path::Path,
     method: &str,
     params: Value,
     rpc_timeout: Duration,
 ) -> Result<Value, String> {
-    if !endpoint_path.exists() {
+    if !endpoint_path.exists() && !wait_while_starting(endpoint_path, rpc_timeout).await {
         return Err("tool-bridge endpoint 不存在 — 还没启动？".into());
     }
 
@@ -191,5 +220,31 @@ mod windows_rpc_tests {
         std::fs::write(&path, "not-a-port").unwrap();
         let error = call_at_path(&path, "health", Value::Null, Duration::from_secs(2)).await.unwrap_err();
         assert!(error.contains("不是端口号"));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod starting_wait_tests {
+    use super::*;
+
+    /// 11/3: 冷启动还没起完时通道文件晚到 —— 调用方等它, 不立刻报「不存在」。
+    #[tokio::test]
+    async fn 正在起时等通道文件出来() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("tool-bridge.sock");
+        let server_path = path.clone();
+        let server = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(600)).await;
+            let listener = tokio::net::UnixListener::bind(&server_path).unwrap();
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = stream.into_split();
+            let mut line = String::new();
+            BufReader::new(read).read_line(&mut line).await.unwrap();
+            write.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\n").await.unwrap();
+        });
+        // 测试进程里冷启动没跑过 (tool_bridge_startup_done = false), 算「正在起」
+        let result = call_at_path(&path, "health", Value::Null, Duration::from_secs(5)).await.unwrap();
+        assert_eq!(result["ok"], true);
+        server.await.unwrap();
     }
 }

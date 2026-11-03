@@ -9,7 +9,7 @@
  * 启动顺序对 5/21 鸿波"不切信息"约束: 一次拉全数据, 一次喂 LLM, 不分块.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   advisorCacheGet,
@@ -48,6 +48,7 @@ import {
   type ReminderTodo,
 } from "../../lib/tauri";
 import { fetchBriefingSources } from "../../lib/briefing_sources";
+import { useSourceAutoRetry } from "./useSourceAutoRetry";
 import { useChatStore } from "../../store/chat";
 import { useEmailStore } from "../../store/email";
 
@@ -433,6 +434,10 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey, config?.cacheMaxAgeMinutes, loadKey, model]);
+
+  // 11/3: 数据源失败 (tool-bridge 还没起好 / 日历慢) 导致的「没有素材」, 自动重拉
+  const reloadForRetry = useCallback(() => setLoadKey((key) => key + 1), []);
+  useSourceAutoRetry(phase, sourceStatuses, refreshKey, reloadForRetry);
 
   // ─── 后台时段触发: setInterval 每分钟检查 now 跨时段就 setRefreshKey 触发刷新 ───
   const tickRef = useRef<Date>(new Date());
