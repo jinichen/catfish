@@ -39,6 +39,12 @@ pub struct WeatherEntry {
     pub wind: String,             // 风速 km/h
     pub icon: String,             // emoji ☀️ ⛅ 🌧 等
     pub raw_area: String,         // wttr.in nearest_area, 给 debug
+    /// 11/3: wttr.in nearest_area 的国家 (界面判断「按网络位置定的、在国外」时提示可能不准)。老 cache 没有
+    #[serde(default)]
+    pub country: String,
+    /// 11/3: 没设城市、按访问 IP 定的位置 (走代理时 IP 在代理出口, 鸿波 11/3 显示成日本 Takehiracho)
+    #[serde(default)]
+    pub auto_located: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,8 +80,10 @@ fn parse_wttr_json(value: &serde_json::Value, requested_city: &str) -> Option<We
     let temp_c = current.get("temp_C")?.as_str()?.to_string();
     let humidity = current.get("humidity")?.as_str()?.to_string();
     let wind = current.get("windspeedKmph")?.as_str()?.to_string();
+    // 11/3: 中文描述要 lang=zh-cn (返回 lang_zh-cn); lang=zh 给的 lang_zh 实测还是英文 ("Overcast")
     let desc = current
-        .get("lang_zh")
+        .get("lang_zh-cn")
+        .or_else(|| current.get("lang_zh"))
         .and_then(|v| v.as_array())
         .and_then(|arr| arr.first())
         .and_then(|item| item.get("value"))
@@ -92,18 +100,22 @@ fn parse_wttr_json(value: &serde_json::Value, requested_city: &str) -> Option<We
         })
         .unwrap_or_else(|| "未知".to_string());
 
-    // nearest_area for debug
-    let area = value
-        .get("nearest_area")
-        .and_then(|v| v.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|item| item.get("areaName"))
-        .and_then(|v| v.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|item| item.get("value"))
-        .and_then(|v| v.as_str())
-        .map(String::from)
-        .unwrap_or_default();
+    // nearest_area: 地名给 debug / IP 自动时当城市名, 国家给界面判断定位准不准
+    let nearest = |key: &str| {
+        value
+            .get("nearest_area")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|item| item.get(key))
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|item| item.get("value"))
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .unwrap_or_default()
+    };
+    let area = nearest("areaName");
+    let country = nearest("country");
 
     // emoji 映射 (wttr.in 自己有 weatherCode 字段, 但 hand map 简单)
     let icon = match desc.as_str() {
@@ -129,15 +141,17 @@ fn parse_wttr_json(value: &serde_json::Value, requested_city: &str) -> Option<We
         wind,
         icon: icon.to_string(),
         raw_area: area,
+        country,
+        auto_located: requested_city.is_empty(),
     })
 }
 
 async fn fetch_one_city(city: &str) -> Result<WeatherEntry, String> {
     // 空 city → wttr.in 按 IP 自动定位
     let url = if city.is_empty() {
-        "https://wttr.in/?format=j1".to_string()
+        "https://wttr.in/?format=j1&lang=zh-cn".to_string()
     } else {
-        format!("https://wttr.in/{}?format=j1", urlencoding::encode(city))
+        format!("https://wttr.in/{}?format=j1&lang=zh-cn", urlencoding::encode(city))
     };
 
     let client = reqwest::Client::builder()
@@ -253,4 +267,44 @@ pub async fn weather_get(force: Option<bool>) -> Result<WeatherCache, String> {
     }
 
     Ok(cache)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample(lang_key: &str, desc: &str) -> serde_json::Value {
+        serde_json::json!({
+            "current_condition": [{
+                "temp_C": "18", "humidity": "70", "windspeedKmph": "9",
+                "weatherDesc": [{"value": "Overcast"}],
+                lang_key: [{"value": desc}],
+            }],
+            "nearest_area": [{"areaName": [{"value": "Takehiracho"}], "country": [{"value": "Japan"}]}],
+        })
+    }
+
+    #[test]
+    fn 中文描述取_zh_cn_按网络位置的记下国家() {
+        let e = parse_wttr_json(&sample("lang_zh-cn", "阴"), "").unwrap();
+        assert_eq!(e.desc, "阴");
+        assert_eq!(e.icon, "☁️");
+        assert_eq!(e.city, "Takehiracho");
+        assert_eq!(e.country, "Japan");
+        assert!(e.auto_located);
+    }
+
+    #[test]
+    fn 设了城市_不算按网络位置() {
+        let e = parse_wttr_json(&sample("lang_zh", "Overcast"), "福州").unwrap();
+        assert_eq!(e.city, "福州");
+        assert!(!e.auto_located);
+    }
+
+    #[test]
+    fn 老缓存没有新字段也能读() {
+        let old = r#"{"city":"x","tempC":"1","desc":"晴","humidity":"1","wind":"1","icon":"☀️","rawArea":"x"}"#;
+        let e: WeatherEntry = serde_json::from_str(old).unwrap();
+        assert!(e.country.is_empty() && !e.auto_located);
+    }
 }

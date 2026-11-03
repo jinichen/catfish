@@ -15,6 +15,16 @@ export interface WeatherEntry {
   wind: string;
   icon: string;
   rawArea: string;
+  /** 11/3: wttr.in 认出的国家 (老缓存没有) */
+  country?: string;
+  /** 11/3: 没设城市、按网络位置定的 (走代理时定到代理出口, 不准) */
+  autoLocated?: boolean;
+}
+
+/** 11/3: 按网络位置定到了国外 —— 多半是网络走了代理, 定位不准, 界面提示设城市。 */
+export function likelyWrongLocation(e: WeatherEntry): boolean {
+  const country = (e.country ?? "").trim();
+  return !!e.autoLocated && !!country && !["China", "中国"].includes(country);
 }
 
 export interface WeatherCache {

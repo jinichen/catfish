@@ -225,3 +225,50 @@ def test_page_without_stage_field_still_on_radar(home):
     created = date.fromisoformat(c(action="get", customer="达近科技")["customer"]["created"][:10])
     assert [x["rule"] for x in scan((created + timedelta(days=14)).isoformat())] == ["cold"]
     assert r["ok"]
+
+
+# ── 11/3: 知识库整理从上传文档里认出来的「客户」, 员工没当客户管过 ──
+
+def _doc_customer(home, name="招商银行"):
+    d = home / "wiki" / "entities"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{name}.md").write_text(
+        "---\ntype: entity\nontology_status: active\ntitle: " + name + "\nentity_type: customer\ncreated: 2026-10-23\n"
+        "tags: [customer, finance]\nsources: [\"raw/sources/1792757030-工作汇报\"]\nevidence: [\"宝安平台迁移\"]\n---\n"
+        "# " + name + "\n\n文档里提到的公司。\n",
+        encoding="utf-8",
+    )
+
+
+def test_document_derived_customer_not_counted(home):
+    make("南岭建设")
+    _doc_customer(home)
+    names = [x["name"] for x in c(action="list")["customers"]]
+    assert names == ["南岭建设"]
+    assert [x["name"] for x in customers.all_customers()] == ["南岭建设"]
+    assert {x["name"] for x in customers.all_customers(include_from_documents=True)} == {"南岭建设", "招商银行"}
+    # 雷达只看员工的客户 (过很久也不会催「招商银行」)
+    assert all(x.get("customer") != "招商银行" for x in scan("2027-01-01"))
+
+
+def test_document_derived_customer_adopted_only_after_confirmation(home):
+    _doc_customer(home)
+    with pytest.raises(LookupError, match="从文档里认出来"):
+        customers.action_log({"customer": "招商银行", "channel": "电话", "who": "客户", "kind": "信息", "text": "x"})
+    r = c(action="upsert", name="招商银行")
+    assert not r["ok"] and r["needs_confirmation"] and r["proposal"]["adopt_existing_page"]
+    assert c(action="list")["count"] == 0
+    r = c(action="upsert", name="招商银行", confirmed=True)
+    assert r["ok"] and r["adopted"] and r["customer"]["stage"] == "线索"
+    files = list((home / "wiki" / "entities").glob("*.md"))
+    assert len(files) == 1  # 认领原页, 不另建重名的
+    assert [x["name"] for x in c(action="list")["customers"]] == ["招商银行"]
+    assert c(action="log", customer="招商银行", channel="电话", who="客户", kind="信息", text="约了下周拜访")["ok"]
+
+
+def test_manual_wiki_customer_still_counts(home):
+    d = home / "wiki" / "entities"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "达华智能.md").write_text("---\ntitle: 达华智能\nentity_type: customer\ntags: [客户, 线索]\nsources: [manual]\n---\n# 达华智能\n",
+                                encoding="utf-8")
+    assert [x["name"] for x in c(action="list")["customers"]] == ["达华智能"]

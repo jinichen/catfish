@@ -151,6 +151,22 @@ def _is_customer(fm: str) -> bool:
     return (wiki_files._parse_field(fm, "entity_type") or "").strip() == SUBTYPE
 
 
+def _from_documents_only(fm: str, rec: dict[str, Any]) -> bool:
+    """11/3: 知识库整理时从上传的文档里认出来的「客户」, 员工自己没当客户管过。
+
+    鸿波 11/3: 早安「客户跟进」显示 2 个客户, 他只有 1 个 —— 另一个「招商银行」是 10/23 上传的
+    工作汇报里提到的公司, 记忆整理抽成实体时类型判成了 customer。这种页的依据全是 raw/ 下的文档,
+    没有任何客户字段 (阶段 / 负责人 / 联系人 …), 也没有往来记录。员工建的 (知识库手建 sources: manual、
+    客户工具新建) 或者设过阶段、记过一笔往来的, 都不算。
+    """
+    sources = wiki_files._parse_list(fm, "sources")
+    if not sources or not all(str(x).strip().startswith("raw/") for x in sources):
+        return False
+    if any(wiki_files._parse_field(fm, key) not in (None, "") for key in FIELDS):
+        return False
+    return not rec["timeline"]
+
+
 def _read(path: Path) -> dict[str, Any]:
     content = path.read_text(encoding="utf-8")
     fm, body = wiki_files._split_frontmatter(content)
@@ -167,10 +183,13 @@ def _read(path: Path) -> dict[str, Any]:
     rec["contacts"] = rec["contacts"] if isinstance(rec["contacts"], list) else []
     rec["created"] = _field(fm, "created")
     rec["timeline"] = parse_timeline(body)
+    rec["from_documents"] = _from_documents_only(fm, rec)
     return rec
 
 
-def all_customers() -> list[dict[str, Any]]:
+def all_customers(*, include_from_documents: bool = False) -> list[dict[str, Any]]:
+    """员工的客户。从文档里认出来、员工没管过的 (见 _from_documents_only) 默认不算 ——
+    跟进雷达 / 客户列表 / 周报 / 发布都用默认; 只有按名字找 (upsert 认领老页面) 才带上。"""
     d = _entities_dir()
     if not d.is_dir():
         return []
@@ -181,14 +200,17 @@ def all_customers() -> list[dict[str, Any]]:
         except OSError:
             continue
         if _is_customer(wiki_files._split_frontmatter(text)[0]):
-            out.append(_read(p))
+            rec = _read(p)
+            if include_from_documents or not rec["from_documents"]:
+                out.append(rec)
     return out
 
 
 def find(name: str = "", email: str = "", wechat: str = "") -> tuple[dict[str, Any] | None, list[str]]:
     """按名字 / 联系人邮箱 (含同域名) / 微信备注名找客户。返回 (命中, 候选名)。"""
     name, email, wechat = name.strip(), email.strip().lower(), wechat.strip()
-    customers = all_customers()
+    # 按名字找要带上「从文档里认出来的」: 员工说要把它当客户, 认领这一页, 不另建一个重名的
+    customers = all_customers(include_from_documents=bool(name))
     if name:
         exact = [c for c in customers if c["name"] == name]
         if exact:
@@ -330,6 +352,16 @@ def action_upsert(args: dict[str, Any]) -> dict[str, Any]:
         _write(rec, _set_fields(rec["content"], {"stage": proposal["stage"], **fields}))
         return {"ok": True, "created": True, "customer": _summary(_read(_entities_dir() / Path(rec["rel_path"]).name))}
 
+    if rec.get("from_documents"):
+        # 11/3: 文档里认出来、员工还没当客户管过的页 —— 认领成客户跟新建一样要员工确认
+        proposal = {"name": rec["name"], "stage": stage or stage_names(tpl)[0], **fields, "adopt_existing_page": True}
+        if not confirmed:
+            return {"ok": False, "needs_confirmation": True, "proposal": proposal,
+                    "message": "知识库里已有这家 (从文档里认出来的, 还不算员工的客户)。"
+                               "要把它加成客户跟进, 把 proposal 念给员工, 同意后带 confirmed=true 再调"}
+        _write(rec, _set_fields(rec["content"], {"stage": proposal["stage"], **fields}))
+        return {"ok": True, "adopted": True, "customer": _summary(_read(_entities_dir() / Path(rec["rel_path"]).name))}
+
     if stage and stage != rec.get("stage") and not confirmed:
         return {"ok": False, "needs_confirmation": True,
                 "proposal": {"name": rec["name"], "stage_from": rec.get("stage"), "stage_to": stage},
@@ -385,6 +417,9 @@ def _resolve(args: dict[str, Any]) -> dict[str, Any]:
     if rec is None:
         hint = f"候选: {candidates}" if candidates else "没有这个客户 —— 先用 action=upsert 提议新建 (员工确认后才建)"
         raise LookupError(f"找不到对应客户。{hint}。不要把消息记到别的客户上。")
+    if rec.get("from_documents"):
+        # 11/3: 文档里认出来的还不是员工的客户, 记往来 / 看档案前先走 upsert 让员工确认认领
+        raise LookupError(f"「{rec['name']}」只是从文档里认出来的, 还不是客户 —— 先用 action=upsert 提议加成客户 (员工确认后才算)。")
     return rec
 
 

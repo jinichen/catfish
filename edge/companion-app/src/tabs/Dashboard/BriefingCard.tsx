@@ -13,6 +13,7 @@ import AdvisorView from "../Briefing/AdvisorView";
 import RefreshInfo from "../Briefing/components/RefreshInfo";  // P3.5.32.9 (6/18): 时间挪 header
 import { getGreeting } from "../Briefing/components/helpers";
 import { weatherGet, type WeatherCache } from "../../lib/weather";  // P3.3.8 (6/10): 早安天气
+import WeatherChip from "./WeatherChip";  // 11/3: 点天气设常驻城市
 
 export default function BriefingCard() {
   const [refreshKey, setRefreshKey] = useState(0);
@@ -68,37 +69,7 @@ export default function BriefingCard() {
       >
         <strong style={{ fontSize: 15, color: "var(--catfish-text)" }}>{greeting}</strong>
         <span style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>{today}</span>
-        {weather && weather.entries.length > 0 && (
-          <span
-            style={{
-              fontSize: 12,
-              color: "var(--catfish-text-muted)",
-              display: "inline-flex",
-              gap: 8,
-              alignItems: "center",
-            }}
-            title={
-              weather.stale
-                ? `天气数据 stale (>6h), 刷新拉新. fetched=${weather.fetchedAt}`
-                : `wttr.in · fetched=${weather.fetchedAt}`
-            }
-          >
-            {weather.entries.map((e, i) => (
-              <span key={i}>
-                {e.icon} {e.city || "本地"} {e.tempC}°C
-                {e.desc && <span style={{ opacity: 0.7 }}> {e.desc}</span>}
-              </span>
-            ))}
-          </span>
-        )}
-        {weather?.error && weather.entries.length === 0 && (
-          <span
-            style={{ fontSize: 11, color: "var(--catfish-text-muted)", opacity: 0.7 }}
-            title={weather.error}
-          >
-            🌐 天气不可用
-          </span>
-        )}
+        <WeatherChip weather={weather} onChange={setWeather} />
         {/* P3.5.32.9 (6/18 鸿波 catch '时间和刷新放一行'): RefreshInfo 挪到 header,
             放在刷新按钮左边. flex-end 自动右对齐. */}
         <div
