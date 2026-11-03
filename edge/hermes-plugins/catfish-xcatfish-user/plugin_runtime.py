@@ -338,6 +338,10 @@ def _patch_p64b_compress_context_user() -> None:
     AIAgent._compress_context = _compress_context
 
 
+#: 11/3: 这些 hermes 辅助调用不要深度思考 (见 _aux_identity_headers)
+AUX_THINKING_OFF_TASKS = frozenset({"compression", "title_generation"})
+
+
 def _aux_identity_headers(aux, extra_headers, task=None, main_runtime=None):
     """辅助模型请求要带的头 —— 只发给 catfish 网关, 不发给第三方。
 
@@ -357,6 +361,11 @@ def _aux_identity_headers(aux, extra_headers, task=None, main_runtime=None):
         merged.setdefault("X-Catfish-User", cf_user)
     task_name = str(task or "").strip()
     merged.setdefault("X-Catfish-Source", f"hermes:aux:{task_name}" if task_name else "hermes:aux")
+    # 11/3: 压缩摘要 / 起标题是单轮调用, 不要深度思考。网关给 qwen3.8 的「关思考」只在强制调工具时生效,
+    # 这两类原来一直开着: 一周 140 次压缩中位 171 秒 (输出 1 万多 token), 离网关 180 秒超时只差一点,
+    # 压缩时对话就卡着。网关只在请求不带工具时认这个头。
+    if task_name in AUX_THINKING_OFF_TASKS:
+        merged.setdefault("X-Catfish-Thinking", "off")
     return merged
 
 

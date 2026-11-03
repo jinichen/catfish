@@ -55,7 +55,9 @@ def test_没有员工上下文也标来源_有就带员工(aux):
         mod._plan_aux_call("title_generation", messages=[])
     finally:
         user.reset(tok)
-    assert _headers(seen) == {"X-Catfish-User": "alice@x.com", "X-Catfish-Source": "hermes:aux:title_generation"}
+    # 11/3: 起标题是单轮调用, 还带「不要深度思考」
+    assert _headers(seen) == {"X-Catfish-User": "alice@x.com", "X-Catfish-Source": "hermes:aux:title_generation",
+                              "X-Catfish-Thinking": "off"}
 
 
 def test_调用方自己给的来源不覆盖_第三方端点不带(aux):

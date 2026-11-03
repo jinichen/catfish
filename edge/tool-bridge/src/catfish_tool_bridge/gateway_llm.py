@@ -54,7 +54,9 @@ async def call_llm(
 
     payload = {"model": model, "messages": messages, "temperature": temperature,
                "max_tokens": max_tokens, "stream": False}
-    headers = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+    # 11/3: 这里只发单轮、不带工具的请求 (会议纪要等), 不要深度思考 —— 网关给 qwen3.8 配的
+    # 「关思考」只在强制调工具时生效, 不带这个头就开着, 长会议一次要 2–3 分钟, 容易撞网关 180 秒超时。
+    headers = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json", "X-Catfish-Thinking": "off"}
     if effective_user:
         headers["X-Catfish-User"] = effective_user.strip()
 

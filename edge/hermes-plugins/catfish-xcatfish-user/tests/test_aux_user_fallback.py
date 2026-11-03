@@ -59,6 +59,15 @@ def test_都没有就不带_来源照标(env):
     assert h["X-Catfish-Source"] == "hermes:aux:compression"
 
 
+def test_压缩和起标题_不要深度思考_看图照旧(env):
+    """11/3: 单轮辅助调用带 X-Catfish-Thinking: off (网关只在不带工具时认)。"""
+    aux, _, _ = env
+    for task in ("compression", "title_generation"):
+        assert plugin_runtime._aux_identity_headers(aux, {}, task)["X-Catfish-Thinking"] == "off"
+    assert "X-Catfish-Thinking" not in plugin_runtime._aux_identity_headers(aux, {}, "vision")
+    assert "X-Catfish-Thinking" not in plugin_runtime._aux_identity_headers(aux, {}, None)
+
+
 # ── 后台压缩 (P61 空闲压缩 / P64 会话卫生) 按消息来源补员工 ──
 
 class _Platform:

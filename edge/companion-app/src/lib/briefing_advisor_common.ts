@@ -32,7 +32,13 @@ import { LLM_RACE_TIMEOUT_MS } from "./timeouts";
 // 跟 briefing_workplan / briefing 同款 — 不带 X-Catfish-* header, 走 query param (5/21 CORS 修)
 
 // 跟 briefing_workplan / briefing 同款 — 不带 X-Catfish-* header, 走 query param (5/21 CORS 修)
-export const SERVICE_LLM_HEADERS = { "Content-Type": "application/json" };
+/**
+ * 11/3: 带 `X-Catfish-Thinking: off` —— 早安分析是一次出 JSON 的单轮调用, 不要深度思考。
+ * 网关给 qwen3.8 配的「关思考」只在强制调工具时生效 (主对话要靠思考), 这里不调工具, 原来一直开着:
+ * 一次输出 7000–14000 token (思考占大头), 107 秒中位、180 秒网关超时报 504 (11/3 七次里六次)。
+ * 网关只在请求不带工具时认这个头。
+ */
+export const SERVICE_LLM_HEADERS = { "Content-Type": "application/json", "X-Catfish-Thinking": "off" };
 export const SERVICE_LLM_QUERY = "?catfish_source=companion-advisor&catfish_skip_identity=1&catfish_internal=1";
 
 // P3.4.E (6/15 鸿波): Call 2 transformToStructured 直走 catfish-gateway 8999 (LiteLLM passthrough),
