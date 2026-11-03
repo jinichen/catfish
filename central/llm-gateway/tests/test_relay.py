@@ -181,8 +181,11 @@ def test_撤销后手机发不过去(client):
 def test_电脑同步配对名单_多余的删掉(client):
     pc, phone = _pair(client)
     pc.send_json({"t": "sync_pairs", "phones": []})
-    phone.send_json({"t": "ping"})  # 等上一帧处理完
-    assert phone.receive_json() == {"t": "pong"}
+    # 等 sync_pairs 处理完: 同一条连接上的帧按顺序处理, 在电脑这条上 ping。
+    # (11/03 CI 偶发失败: 原来在手机那条上 ping, 两条连接并发处理, pong 回来时 sync_pairs 还没落库)
+    pc.send_json({"t": "ping"})
+    while (f := pc.receive_json()) != {"t": "pong"}:
+        assert f.get("t") != "error", f
     from catfish_gateway import relay_db
 
     assert relay_db.store().phones("alice@x.com") == set()

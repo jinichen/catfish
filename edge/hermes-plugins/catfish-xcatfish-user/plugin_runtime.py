@@ -285,7 +285,10 @@ def _patch_p64_hygiene_compression_user() -> None:
 
     wrapped._catfish_p64 = True  # type: ignore[attr-defined]
     GatewayTurnMixin._hmwa_hygiene_detached_attempt = wrapped
-    _patch_p64b_compress_context_user()
+    try:  # P64b 自己失败不能连累 P64 (两条路各管各的)
+        _patch_p64b_compress_context_user()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("P64b 对话中途压缩带员工没装上: %s", e, exc_info=True)
     logger.info("P64 会话卫生压缩带员工 patched")
 
 

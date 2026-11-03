@@ -117,6 +117,8 @@ def test_P64_会话卫生压缩期间带员工_完了复原(resolved, monkeypatc
             got.append(contextvars.copy_context().run(cv.get))
 
     monkeypatch.setitem(sys.modules, "gateway.run_turn", types.SimpleNamespace(GatewayTurnMixin=GatewayTurnMixin))
+    # CI 里没有 hermes: run_agent 不在, P64b 装不上也不能连累 P64 (11/03 CI 就是这么挂的)
+    monkeypatch.setitem(sys.modules, "run_agent", None)
     plugin_runtime._patch_p64_hygiene_compression_user()
     asyncio.run(GatewayTurnMixin()._hmwa_hygiene_detached_attempt(
         None, None, None, [], [], "m", {}, _src(), None, "k", "q", 1))
