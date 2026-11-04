@@ -1,8 +1,18 @@
 /** 派任务给多位同事 (11/4, docs/COLLEAGUE-TASK-PLAN.md) —— Rust commands/colleague_tasks.rs 的前端封装。规则都在 tool-bridge colleague_tasks.py。 */
 import { invoke } from "@tauri-apps/api/core";
 
-export type IncomingState = "待处理" | "在做" | "已交回" | "不接" | "已取消";
-export type OwnerState = "未发" | "等回应" | "在做" | "已完成" | "逾期完成" | "不接" | "超时未回" | "超时未交" | "已取消";
+export type IncomingState =
+  | "待处理" | "在做" | "已交回" | "不接" | "已取消"
+  // 11/4 第二步: 定时 / 周期
+  | "已安排" | "进行中" | "待核对" | "已结束" | "已退出" | "要重新同意" | "没做成" | "定时没了";
+export type OwnerState =
+  | "未发" | "等回应" | "在做" | "已完成" | "逾期完成" | "不接" | "超时未回" | "超时未交" | "已取消"
+  | "已安排" | "进行中" | "已结束" | "已退出" | "等重新同意";
+
+/** 空 = 马上做。once: 定时做一次; cron: 周期, until / times 至少一个。 */
+export type Schedule =
+  | { kind: "once"; at: string }
+  | { kind: "cron"; expr: string; until?: string | null; times?: number | null };
 
 export interface IncomingTaskSummary {
   task_id: string;
@@ -13,6 +23,10 @@ export interface IncomingTaskSummary {
   late: boolean;
   received_at: string | null;
   reminded_at: string | null;
+  /** 定时 / 周期的中文说明; 马上做的是 null */
+  schedule: string | null;
+  /** 待我核对的期数 */
+  to_review: number;
 }
 
 export interface OutgoingTaskSummary {
@@ -23,6 +37,7 @@ export interface OutgoingTaskSummary {
   created_at: string | null;
   progress: Partial<Record<OwnerState, number>>;
   recipients: number;
+  schedule: string | null;
 }
 
 export interface TaskList {
@@ -34,6 +49,25 @@ export interface TaskBody {
   title: string;
   text: string;
   deadline: string | null;
+  schedule?: Schedule | null;
+}
+
+/** 收件人这边的一期 */
+export interface MyPeriod {
+  period: number;
+  result: string;
+  at: string;
+  late_minutes: number;
+  state: "待核对" | "已交回";
+  sent_at?: string;
+}
+
+/** 发起人收到的一期 */
+export interface OwnerPeriod {
+  period: number;
+  result: string;
+  at: string;
+  late_minutes: number;
 }
 
 export interface IncomingTask {
@@ -48,6 +82,16 @@ export interface IncomingTask {
   draft?: { result: string; updated_at: string };
   done?: { result: string; at: string };
   declined?: { reason: string; at: string };
+  // 定时 / 周期
+  rev?: number;
+  job_id?: string;
+  auto_return?: boolean;
+  periods?: MyPeriod[];
+  quit?: { reason: string; at: string };
+  changed_at?: string;
+  missed?: boolean;
+  job_lost?: boolean;
+  ended_at?: string;
 }
 
 export interface OwnerRow {
@@ -59,6 +103,7 @@ export interface OwnerRow {
   done_at: string | null;
   result: string | null;
   reason: string | null;
+  periods: OwnerPeriod[];
 }
 
 export interface OutgoingTask extends TaskBody {
@@ -66,18 +111,22 @@ export interface OutgoingTask extends TaskBody {
   owner: string;
   status: "draft" | "open" | "cancelled";
   created_at: string;
+  rev?: number;
   recipients: Record<string, { invited_at: string | null; reminded_at: string | null }>;
 }
 
 export type TaskDetail =
-  | { role: "owner"; task: OutgoingTask; progress: { rows: OwnerRow[]; counts: Partial<Record<OwnerState, number>>; total: number } }
-  | { role: "recipient"; record: IncomingTask; state: IncomingState };
+  | { role: "owner"; task: OutgoingTask; schedule_text: string | null;
+      progress: { rows: OwnerRow[]; counts: Partial<Record<OwnerState, number>>; total: number } }
+  | { role: "recipient"; record: IncomingTask; state: IncomingState; schedule_text?: string; next_run?: string | null };
 
 export interface TaskEvent {
-  kind: "invite" | "remind" | "cancel" | "accepted" | "done" | "declined";
+  kind: "invite" | "changed" | "remind" | "cancel" | "accepted" | "done" | "declined" | "period" | "quit"
+    | "review" | "missed" | "job_lost";
   task_id: string;
   from: string;
   title: string;
+  period?: number | null;
 }
 
 export interface TaskSyncResult {
@@ -92,13 +141,19 @@ const call = <T>(action: string, params: Record<string, unknown> = {}) =>
 export const taskList = () => call<TaskList>("list");
 export const taskGet = (taskId: string) => call<TaskDetail>("get", { task_id: taskId });
 export const taskSync = () => call<TaskSyncResult>("sync");
-export const taskCreate = (p: { title?: string; text: string; deadline?: string | null; recipients: string[] }) =>
+export const taskCreate = (p: { title?: string; text: string; deadline?: string | null; schedule?: Schedule | null; recipients: string[] }) =>
   call<{ task: OutgoingTask }>("create", p);
 export const taskAdd = (taskId: string, recipients: string[]) => call<{ task: OutgoingTask }>("add", { task_id: taskId, recipients });
 export const taskSend = (taskId: string) => call<Sent & { sent: string[] }>("send", { task_id: taskId });
 export const taskRemind = (taskId: string, text = "") => call<Sent & { reminded: string[] }>("remind", { task_id: taskId, text });
 export const taskCancel = (taskId: string) => call<Sent>("cancel", { task_id: taskId });
-export const taskAccept = (taskId: string) => call<{ accepted_at: string }>("accept", { task_id: taskId });
+export const taskAccept = (taskId: string, autoReturn = false) =>
+  call<{ accepted_at: string; next_run?: string | null }>("accept", { task_id: taskId, auto_return: autoReturn });
+export const taskUpdate = (taskId: string, p: { text?: string; deadline?: string | null; schedule?: Schedule | null }) =>
+  call<Sent & { sent: string[] }>("update", { task_id: taskId, ...p });
+export const taskPeriodSubmit = (taskId: string, period: number, result: string) =>
+  call<{ period: number }>("period_submit", { task_id: taskId, period, result });
+export const taskQuit = (taskId: string, reason: string) => call<{ ok: boolean }>("quit", { task_id: taskId, reason });
 export const taskDraft = (taskId: string, result: string) => call<{ chars: number }>("draft", { task_id: taskId, result });
 export const taskSubmit = (taskId: string, result: string) =>
   call<{ done_at: string; late: boolean }>("submit", { task_id: taskId, result });

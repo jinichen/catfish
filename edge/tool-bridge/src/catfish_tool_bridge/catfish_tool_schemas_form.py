@@ -12,13 +12,12 @@ FORM_TOOLS: List[Dict[str, Any]] = [
         "name": "catfish_form",
         "description": (
             "收集表 + 派任务给同事 (task_*)。\n"
-            "收集表: 有 Excel 模板先 from_excel 拿字段, 否则按描述列字段, 再 create; 邮箱不知道用 directory 查。"
-            "status / responses 看结果 (数字照返回说), export 导出 Excel。"
-            "帮员工填别人的表 (带 form_id): get → 从本机邮件/文件/知识库找值, 找不到留空不编 → draft (写 sources)。\n"
-            "派任务: task_create (text=要同事做什么) → task_send; task_results 看谁做完和结果。"
-            "帮员工做同事派来的任务 (带 task_id): 做完用 task_draft 存要交回的完整 result。\n"
-            "send / remind / close / task_send / task_remind / task_cancel 会发消息给同事: 先不带 confirmed, 念 proposal, 员工同意才 confirmed=true。"
-            "不能替员工提交、拒填、交回或拒绝任务, 也不要自己把结果发给对方 —— 让他去「协同」页自己点。"
+            "收集表: 有 Excel 先 from_excel 拿字段, 否则按描述列字段, 再 create; 邮箱不知道用 directory 查。"
+            "responses 看结果 (数字照返回说), export 导出。帮员工填别人的表: get → 从本机找值, 找不到留空 → draft (写 sources)。\n"
+            "派任务: task_create (text=要做什么, 定时/周期给 schedule) → task_send; task_results 看结果。"
+            "做同事派来的任务: 做完 task_draft 存 result; 定时/周期任务的这一次用 task_period。\n"
+            "send / remind / close / task_send / task_remind / task_cancel 会发消息给同事: 先不带 confirmed, 念 proposal, 同意才 confirmed=true。"
+            "不能替员工提交、拒填、交回或拒绝, 也不要自己把结果发给对方, 让他去「协同」页点。"
         ),
         "input_schema": {
             "type": "object",
@@ -27,9 +26,11 @@ FORM_TOOLS: List[Dict[str, Any]] = [
                                                       "update", "send", "remind", "close", "export", "draft",
                                                       "directory", "task_list", "task_get", "task_results",
                                                       "task_create", "task_send", "task_remind", "task_cancel",
-                                                      "task_draft"]},
+                                                      "task_draft", "task_period"]},
+                "schedule": {"type": "object", "description": "task_create 定时: {kind:once, at:YYYY-MM-DDTHH:MM}; "
+                             "周期: {kind:cron, expr:5 段 cron, until:YYYY-MM-DD 和/或 times:次数} (必须有结束)"},
                 "task_id": {"type": "string", "description": "任务编号 (t_YYYYMMDD_xxxxxxxx)"},
-                "result": {"type": "string", "description": "task_draft: 要交回给发起人的完整结果"},
+                "result": {"type": "string", "description": "task_draft / task_period: 要交回给发起人的完整结果"},
                 "form_id": {"type": "string", "description": "表单编号 (f_YYYYMMDD_xxxxxxxx)"},
                 "path": {"type": "string", "description": "from_excel: Excel 模板路径"},
                 "template_path": {"type": "string", "description": "create: 来自 Excel 模板时带上"},

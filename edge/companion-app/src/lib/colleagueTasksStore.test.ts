@@ -34,6 +34,17 @@ describe("colleagueTasksStore", () => {
     expect(notify.mock.calls.map((c) => c[0])).not.toContain(undefined);
   });
 
+  it("定时 / 周期: 待核对带期数, 改了要重新同意", async () => {
+    sync.mockResolvedValue({ events: [
+      { kind: "review", task_id: "t", from: "zhou@example.com", title: "周报", period: 3 },
+      { kind: "changed", task_id: "t", from: "zhou@example.com", title: "周报" },
+    ] });
+    list.mockResolvedValue({ incoming: [], outgoing: [] });
+    await refreshTasks();
+    expect(notify.mock.calls[0][1]).toContain("「周报」第 3 次做好了");
+    expect(notify.mock.calls[1][1]).toContain("要你重新看一下");
+  });
+
   it("中央太旧 / 没登录: 列表照样刷, 错误记下来", async () => {
     sync.mockRejectedValue(new Error("中央端版本太旧, 还不支持派任务"));
     list.mockResolvedValue({ incoming: [inc("待处理")], outgoing: [] });
@@ -45,7 +56,8 @@ describe("colleagueTasksStore", () => {
   });
 
   it("红点只算还要我动手的 (待处理 / 在做)", () => {
-    const s = { incoming: [inc("待处理"), inc("在做"), inc("已交回"), inc("不接"), inc("已取消")], outgoing: [], loaded: true, syncError: null } as never;
-    expect(pendingTaskCount(s)).toBe(2);
+    const s = { incoming: [inc("待处理"), inc("在做"), inc("已交回"), inc("不接"), inc("已取消"),
+                           inc("待核对"), inc("要重新同意"), inc("已安排"), inc("进行中"), inc("已结束")], outgoing: [], loaded: true, syncError: null } as never;
+    expect(pendingTaskCount(s)).toBe(4);
   });
 });

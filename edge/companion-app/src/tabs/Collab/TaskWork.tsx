@@ -4,6 +4,7 @@
  * 先决定接不接: 「接下, 让小鲶做」开一个工作台对话 (工具审批 / 对外确认照常弹), 小鲶做完把结果存成草稿;
  * 「接下, 我自己做」只告诉对方在做了。结果框里核对 / 改好, 点「交回」才发出去 (只发这段结果);
  * 交回后还能改了再交, 后交的覆盖。也可以「不接」并写原因。
+ * 定时 / 周期的 (11/4 第二步) 换成 TaskWorkScheduled: 接下 = 本机建定时, 每期一个框核对交回。
  */
 import { useEffect, useState } from "react";
 
@@ -16,6 +17,7 @@ import {
 import { useUIStore } from "../../store/ui";
 import { Overlay, StateTag, muted } from "./formsUi";
 import { Btn, ErrorLine, inputStyle } from "./roomLinkUi";
+import TaskWorkScheduled from "./TaskWorkScheduled";
 
 export const when = (iso?: string | null) => (iso ? iso.slice(0, 16).replace("T", " ") : "");
 
@@ -28,6 +30,7 @@ export default function TaskWork({ taskId, onClose }: { taskId: string; onClose:
   const [done, setDone] = useState<string | null>(null);
   const [declining, setDeclining] = useState(false);
   const [reason, setReason] = useState("");
+  const [extra, setExtra] = useState<{ scheduleText?: string; nextRun?: string | null }>({});
   const startChat = useUIStore((s) => s.startEmailChat);
 
   const load = async () => {
@@ -35,6 +38,7 @@ export default function TaskWork({ taskId, onClose }: { taskId: string; onClose:
     if (d.role !== "recipient") return;
     setRec(d.record);
     setState(d.state);
+    setExtra({ scheduleText: d.schedule_text, nextRun: d.next_run });
     return d.record;
   };
 
@@ -82,13 +86,17 @@ export default function TaskWork({ taskId, onClose }: { taskId: string; onClose:
       </div>
       <div style={{ fontSize: 13, whiteSpace: "pre-wrap", padding: "8px 10px", borderRadius: 4,
                     background: "var(--catfish-bg-subtle, rgba(0,0,0,0.04))" }}>{rec.task.text}</div>
-      {rec.reminded_at && !rec.done && (
+      {rec.task.schedule && (
+        <TaskWorkScheduled rec={rec} state={state} scheduleText={extra.scheduleText ?? ""} nextRun={extra.nextRun}
+                           busy={busy} run={(fn) => void run(fn)} onClose={onClose} />
+      )}
+      {!rec.task.schedule && rec.reminded_at && !rec.done && (
         <div style={{ ...muted, color: "var(--status-warn, #d97706)" }}>对方催了{rec.remind_text ? `: ${rec.remind_text}` : ""}</div>
       )}
       {cancelled && <div style={muted}>对方已经取消了这个任务, 不用做了。</div>}
-      {rec.declined && <div style={muted}>你回了不接: {rec.declined.reason}</div>}
+      {!rec.task.schedule && rec.declined && <div style={muted}>你回了不接: {rec.declined.reason}</div>}
 
-      {!cancelled && !accepted && !rec.done && !declining && (
+      {!rec.task.schedule && !cancelled && !accepted && !rec.done && !declining && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <Btn kind="primary" disabled={busy} onClick={askXiaonian}>🐟 接下, 让小鲶做</Btn>
@@ -101,7 +109,7 @@ export default function TaskWork({ taskId, onClose }: { taskId: string; onClose:
         </div>
       )}
 
-      {!cancelled && (accepted || rec.done) && (
+      {!rec.task.schedule && !cancelled && (accepted || rec.done) && (
         <>
           <strong style={{ fontSize: 13 }}>交回给 {rec.owner} 的结果</strong>
           <textarea value={result} onChange={(e) => setResult(e.target.value)} rows={8}

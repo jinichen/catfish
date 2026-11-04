@@ -54,8 +54,8 @@ export function ParamsLine({ params }: { params: ParamSpec[] }) {
 
 // ── 定时 ─────────────────────────────────────────────────────────
 
-const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
-type Freq = "daily" | "weekdays" | "weekly" | "monthly";
+export const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+export type Freq = "daily" | "weekdays" | "weekly" | "monthly";
 
 export function toCron(freq: Freq, time: string, weekday: number, monthday: number): string {
   const [h, m] = time.split(":").map((x) => Number.parseInt(x, 10));

@@ -14,6 +14,7 @@ const RPC_TIMEOUT: Duration = Duration::from_secs(90);
 
 const ALLOWED: &[&str] = &[
     "list", "get", "sync", "create", "add", "send", "remind", "cancel", "accept", "draft", "submit", "decline",
+    "update", "period_submit", "quit",
 ];
 
 fn method_for(action: &str) -> Result<String, String> {

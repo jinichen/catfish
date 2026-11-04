@@ -26,18 +26,25 @@ function emit(next: TasksState) {
   for (const l of listeners) l();
 }
 
-const NOTE: Record<string, (from: string, title: string) => [string, string] | null> = {
+const NOTE: Record<string, (from: string, title: string, period?: number | null) => [string, string] | null> = {
   invite: (f, t) => ["同事请你帮忙", `${f} 派给你一个任务「${t}」, 在「协同」页里看`],
   remind: (f, t) => ["有任务在催你", `${f} 催你交回「${t}」`],
   cancel: (f, t) => ["任务取消了", `${f} 取消了「${t}」, 不用做了`],
   done: (f, t) => ["同事交回了结果", `${f} 交回了「${t}」`],
   declined: (f, t) => ["同事没接任务", `${f} 没接「${t}」, 在「协同」页看原因`],
   accepted: () => null,   // 接下了不打扰, 进度表上看得到
+  // 11/4 第二步: 定时 / 周期
+  changed: (f, t) => ["任务改了", `${f} 改了「${t}」, 要你重新看一下接不接`],
+  period: (f, t, n) => ["同事交回了一次结果", `${f} 交回了「${t}」第 ${n ?? "?"} 次`],
+  quit: (f, t) => ["同事退出了任务", `${f} 退出了「${t}」, 在「协同」页看原因`],
+  review: (_f, t, n) => ["小鲶做完了一次, 等你核对", `「${t}」第 ${n ?? "?"} 次做好了, 核对后点交回`],
+  missed: (_f, t) => ["定时任务没做成", `「${t}」到点电脑没开, 可以在「协同」页让小鲶现在做一次`],
+  job_lost: (_f, t) => ["任务的定时被删了", `「${t}」的定时没了, 在「协同」页重新安排或退出`],
 };
 
 export function notifyFor(r: TaskSyncResult): void {
   for (const ev of r.events) {
-    const n = NOTE[ev.kind]?.(ev.from, ev.title);
+    const n = NOTE[ev.kind]?.(ev.from, ev.title, ev.period);
     if (n) void sendNotification(n[0], n[1]).catch(() => {});
   }
 }
@@ -85,9 +92,10 @@ export function useColleagueTasks(): TasksState {
   return useSyncExternalStore(subscribe, getSnapshot);
 }
 
-/** 导航红点: 同事派给我、还要我动手的 (待处理 / 在做)。 */
+/** 导航红点: 同事派给我、还要我动手的。 */
+const NEEDS_ME = new Set(["待处理", "在做", "待核对", "要重新同意", "没做成", "定时没了"]);
 export function pendingTaskCount(s: TasksState = state): number {
-  return s.incoming.filter((t) => t.state === "待处理" || t.state === "在做").length;
+  return s.incoming.filter((t) => NEEDS_ME.has(t.state)).length;
 }
 
 /** 测试用: 回到初始状态。 */

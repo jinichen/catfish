@@ -3,6 +3,7 @@
  *
  * 写要做什么 + 截止 + 发给谁 (最多 20 人) → 每人各自决定接不接, 接下后在**他自己的电脑上**由他的小鲶 (或他本人) 做,
  * 核对后交回; 结果只回到你这台电脑。也可以直接跟小鲶说「让张三、李四各整理一下本周拜访, 明天中午前」。
+ * 11/4 第二步: 「什么时候做」可以选定时做一次 / 周期 (TaskSchedulePicker), 到点在同事电脑上由他的小鲶做。
  */
 import { useCallback, useState } from "react";
 
@@ -10,6 +11,7 @@ import { refreshTasks } from "../../lib/colleagueTasksStore";
 import { taskCreate, taskSend } from "../../lib/tauri_colleague_tasks";
 import { Overlay, muted } from "./formsUi";
 import RecipientPicker, { allRecipients } from "./RecipientPicker";
+import TaskSchedulePicker, { type ScheduleValue } from "./TaskSchedulePicker";
 import { Btn, ErrorLine, inputStyle } from "./roomLinkUi";
 
 export const TEXT_MAX = 2000;
@@ -28,15 +30,20 @@ export default function TaskComposer({ onClose, onCreated }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const onPickError = useCallback((m: string) => setError(m), []);
+  const [when, setWhen] = useState<ScheduleValue>({ schedule: null, problem: null });
+  const onWhen = useCallback((v: ScheduleValue) => setWhen(v), []);
+  const periodic = when.schedule?.kind === "cron";
 
   const all = allRecipients(recipients, typed);
-  const canSend = !busy && text.trim().length > 0 && text.length <= TEXT_MAX && all.length > 0 && all.length <= MAX_PEOPLE;
+  const canSend = !busy && text.trim().length > 0 && text.length <= TEXT_MAX && all.length > 0 && all.length <= MAX_PEOPLE
+    && !when.problem;
 
   async function send() {
     setBusy(true);
     setError(null);
     try {
-      const { task } = await taskCreate({ title, text, deadline: deadline || null, recipients: all });
+      const { task } = await taskCreate({ title, text, deadline: periodic ? null : deadline || null,
+                                          schedule: when.schedule, recipients: all });
       let notice: string | undefined;
       try {
         const r = await taskSend(task.task_id);
@@ -66,9 +73,15 @@ export default function TaskComposer({ onClose, onCreated }: {
                 style={{ ...inputStyle, resize: "vertical" }} />
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 8 }}>
         <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="简短的名字 (可不填, 默认取第一行)" style={inputStyle} />
-        <input type="datetime-local" value={deadline} onChange={(e) => setDeadline(e.target.value)} title="截止时间 (可不填)" style={inputStyle} />
+        {periodic ? <span /> : (
+          <input type="datetime-local" value={deadline} onChange={(e) => setDeadline(e.target.value)} title="截止时间 (可不填)" style={inputStyle} />
+        )}
       </div>
-      <span style={muted}>{text.length}/{TEXT_MAX}{deadline ? "" : " · 不填截止就是不限时"}</span>
+      <span style={muted}>{text.length}/{TEXT_MAX}{periodic || deadline ? "" : " · 不填截止就是不限时"}</span>
+
+      <strong style={{ fontSize: 13 }}>什么时候做</strong>
+      <TaskSchedulePicker onChange={onWhen} />
+      {when.problem && <span style={{ ...muted, color: "var(--status-warn, #d97706)" }}>{when.problem}</span>}
 
       <strong style={{ fontSize: 13 }}>请谁帮忙 (最多 {MAX_PEOPLE} 人)</strong>
       <RecipientPicker picked={recipients} onPicked={setRecipients} typed={typed} onTyped={setTyped} onError={onPickError} />
