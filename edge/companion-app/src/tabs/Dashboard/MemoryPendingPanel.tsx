@@ -14,7 +14,7 @@ import {
 } from "../../lib/tauri";
 
 const REFRESH_MS = 30_000;
-const CLIP = 160;
+const CLIP = 600; // 精简建议要对着原文看有没有丢信息, 别截太短
 
 const clip = (s: string) => (s.length > CLIP ? `${s.slice(0, CLIP)}…` : s);
 
@@ -43,7 +43,9 @@ export function describeTarget(t: MemoryPendingItem["target"]) {
   return t === "user" ? "USER · 员工本人" : "MEMORY · 项目 / 技术";
 }
 
-export default function MemoryPendingPanel({ onChanged, nearlyFull }: { onChanged: () => void; nearlyFull: boolean }) {
+export default function MemoryPendingPanel({ onChanged, nearlyFull, refreshKey = 0 }: {
+  onChanged: () => void; nearlyFull: boolean; refreshKey?: number;
+}) {
   const [items, setItems] = useState<MemoryPendingItem[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -62,6 +64,9 @@ export default function MemoryPendingPanel({ onChanged, nearlyFull }: { onChange
     const t = window.setInterval(() => void load(), REFRESH_MS);
     return () => window.clearInterval(t);
   }, [load]);
+  useEffect(() => {
+    if (refreshKey > 0) void load(); // 「整理记忆」刚提了新建议
+  }, [refreshKey, load]);
 
   const resolve = async (ids: string[], approve: boolean) => {
     setBusy(ids.length > 1 ? "all" : ids[0]);
@@ -84,7 +89,7 @@ export default function MemoryPendingPanel({ onChanged, nearlyFull }: { onChange
   if (items.length === 0) {
     return nearlyFull ? (
       <div style={{ fontSize: 11, color: "var(--catfish-orange)", padding: "4px 0" }}>
-        记忆快满了 —— 点右上角「🧹 整理记忆」找重复的, 或删掉用不上的条目。
+        记忆快满了 —— 点右上角「🧹 整理记忆」, 小鲶会提精简 / 合并建议; 也可以删掉用不上的条目。
       </div>
     ) : null;
   }

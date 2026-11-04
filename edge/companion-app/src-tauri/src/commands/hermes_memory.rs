@@ -203,6 +203,18 @@ pub async fn hermes_memory_pending_list() -> Result<serde_json::Value, String> {
         .await
 }
 
+/// 11/4: 「整理记忆」—— 小鲶把长条目改短 / 同类合并, 存成待确认建议 (要调一次模型, 给足时间)。
+#[tauri::command]
+pub async fn hermes_memory_compact(target: String) -> Result<serde_json::Value, String> {
+    let params = serde_json::json!({ "target": target });
+    let r = crate::services::tool_bridge_rpc::call_with_timeout("memory/compact", params, std::time::Duration::from_secs(180))
+        .await?;
+    if r.get("ok").and_then(serde_json::Value::as_bool) == Some(false) {
+        return Err(r.get("error").and_then(serde_json::Value::as_str).unwrap_or("没整理成").to_string());
+    }
+    Ok(r)
+}
+
 /// 员工在卡片上点「同意 / 不要」。同意走 hermes `apply_memory_pending` (只动建议钉住的那条原文)。
 #[tauri::command]
 pub async fn hermes_memory_pending_resolve(id: String, approve: bool) -> Result<serde_json::Value, String> {

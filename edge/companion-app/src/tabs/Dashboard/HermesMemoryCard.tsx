@@ -18,6 +18,7 @@
 import { useEffect, useState } from "react";
 
 import {
+  hermesMemoryCompact,
   hermesMemoryRead,
   hermesMemoryRemove,  // P3.3.49 (6/12): Rust 直写, 绕过 memory_tool silent fail
   toolBridgeCallTool,
@@ -108,6 +109,9 @@ export default function HermesMemoryCard() {
   const [dedupeRunning, setDedupeRunning] = useState(false);
   const [dedupeError, setDedupeError] = useState<string | null>(null);
   const [applying, setApplying] = useState<string | null>(null);  // 哪条 suggestion 在 apply
+  // 11/4: 「整理记忆」同时让小鲶提精简 / 合并建议 (存进「待你确认」), 原来只找重复, 长条目一条不动
+  const [compactNote, setCompactNote] = useState<string | null>(null);
+  const [pendingKey, setPendingKey] = useState(0);
 
   const load = async () => {
     try {
@@ -153,6 +157,20 @@ export default function HermesMemoryCard() {
     setDedupeError(null);
     setDedupeSuggestions(null);
     setProposeHints([]);
+    setCompactNote(null);
+    const compacting = Promise.allSettled([hermesMemoryCompact("user"), hermesMemoryCompact("memory")]).then((rs) => {
+      const ok = rs.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+      const staged = ok.reduce((n, r) => n + r.staged, 0);
+      const saved = ok.reduce((n, r) => n + r.saved_chars, 0);
+      const failed = rs.find((r): r is PromiseRejectedResult => r.status === "rejected");
+      setCompactNote(
+        staged > 0
+          ? `✂️ 小鲶提了 ${staged} 条精简 / 合并建议, 全部同意能省约 ${saved} 字 —— 在上面「待你确认的整理建议」里逐条看`
+          : failed ? `精简没做成: ${failed.reason instanceof Error ? failed.reason.message : String(failed.reason)}`
+          : "✂️ 没找到能再精简的条目",
+      );
+      setPendingKey((k) => k + 1);
+    });
     try {
       const resp = await toolBridgeCallTool("catfish_memory_dedupe", {
         threshold: 0.6,
@@ -172,6 +190,7 @@ export default function HermesMemoryCard() {
     } catch (e) {
       setDedupeError(e instanceof Error ? e.message : String(e));
     } finally {
+      await compacting;
       setDedupeRunning(false);
     }
   };
@@ -252,7 +271,7 @@ export default function HermesMemoryCard() {
           type="button"
           onClick={() => void runDedupe()}
           disabled={dedupeRunning}
-          title="LLM 真判语义是否重复, 不真改盘 — 你看了再决定要不要合并"
+          title="找重复 + 让小鲶把长条目改短、同类合并; 只出建议, 你点同意才改"
           style={{
             background: dedupeRunning ? "var(--catfish-bg)" : "var(--catfish-cyan)",
             color: dedupeRunning ? "var(--catfish-text-muted)" : "white",
@@ -264,7 +283,7 @@ export default function HermesMemoryCard() {
             whiteSpace: "nowrap",
           }}
         >
-          {dedupeRunning ? "扫描中..." : "🧹 整理记忆"}
+          {dedupeRunning ? "整理中 (约 1 分钟)..." : "🧹 整理记忆"}
         </button>
       </div>
 
@@ -293,6 +312,10 @@ export default function HermesMemoryCard() {
             检查 ~/.hermes/memories/ 真文件.
           </div>
         </div>
+      )}
+
+      {compactNote && (
+        <div style={{ fontSize: 12, color: "var(--catfish-cyan)", marginBottom: 8 }}>{compactNote}</div>
       )}
 
       {dedupeError && (
@@ -423,6 +446,7 @@ export default function HermesMemoryCard() {
         >
           {/* 11/4: 小鲶后台整理出来、等你批的合并 / 删旧建议 (USER + MEMORY) */}
           <MemoryPendingPanel
+            refreshKey={pendingKey}
             onChanged={() => void load()}
             nearlyFull={
               (view.user_char_limit > 0 && userChars / view.user_char_limit >= 0.8) ||

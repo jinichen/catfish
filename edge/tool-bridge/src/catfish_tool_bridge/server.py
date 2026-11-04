@@ -103,6 +103,12 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
             return _success(req_id, await asyncio.to_thread(memory_pending.resolve, params))
         except ValueError as e:
             return _error(req_id, INVALID_PARAMS, str(e))
+    if method == "memory/compact":  # 11/4: 「整理记忆」让小鲶提精简 / 合并建议, 存成待确认 (memory_compact.py)
+        from . import memory_compact  # noqa: PLC0415
+        try:
+            return _success(req_id, await asyncio.to_thread(memory_compact.propose, params))
+        except ValueError as e:
+            return _error(req_id, INVALID_PARAMS, str(e))
 
     # 10/12: 销售跟进 (customers.py / customer_radar.py): 早安「客户跟进」+ 设置「销售模板」, 不进模型工具清单
     if method in ("pim/customer_radar", "pim/sales_template_get", "pim/sales_template_set", "pim/customer_add"):

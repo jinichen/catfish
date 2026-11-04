@@ -240,6 +240,11 @@ export const hermesMemoryPendingList = () =>
 export const hermesMemoryPendingResolve = (id: string, approve: boolean) =>
   rawInvoke<{ ok: boolean; applied: boolean }>("hermes_memory_pending_resolve", { id, approve });
 
+/** 11/4: 「整理记忆」—— 小鲶提精简 / 合并建议, 存进「待你确认」, 返回提了几条、全批能省几字。 */
+export interface MemoryCompactResult { ok: boolean; target: "user" | "memory"; staged: number; saved_chars: number; total_chars: number; char_limit: number }
+export const hermesMemoryCompact = (target: "user" | "memory") =>
+  rawInvoke<MemoryCompactResult>("hermes_memory_compact", { target });
+
 // P3.3.54 (6/12 鸿波): 审计员看的 xlsx 多 sheet 导出.
 export interface AuditExportResult {
   outputPath: string;

@@ -473,6 +473,7 @@ pub(crate) fn handler(
             crate::commands::hermes_memory::hermes_memory_remove,
             crate::commands::hermes_memory::hermes_memory_pending_list,
             crate::commands::hermes_memory::hermes_memory_pending_resolve,
+            crate::commands::hermes_memory::hermes_memory_compact,
             // BL-MM6 (5/5 晚): 显式 feedback 👍/👎/改 + ~/.catfish/feedback.jsonl
             crate::commands::feedback::feedback_record,
             crate::commands::feedback::feedback_summary,
