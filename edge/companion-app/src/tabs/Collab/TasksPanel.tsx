@@ -9,6 +9,8 @@ import { useState } from "react";
 
 import { useColleagueTasks } from "../../lib/colleagueTasksStore";
 import { StateTag, muted } from "./formsUi";
+import PipelineComposer from "./PipelineComposer";
+import PipelineProgress from "./PipelineProgress";
 import { Btn, cardStyle, itemStyle } from "./roomLinkUi";
 import TaskComposer from "./TaskComposer";
 import TaskProgress from "./TaskProgress";
@@ -20,8 +22,10 @@ const ACTIVE = new Set(["待处理", "在做", "待核对", "要重新同意", "
 const rowButton = { ...itemStyle, textAlign: "left" as const, cursor: "pointer", background: "transparent", color: "inherit", font: "inherit" };
 
 export default function TasksPanel() {
-  const { incoming, outgoing, loaded, syncError } = useColleagueTasks();
+  const { incoming, outgoing, pipelines = [], loaded, syncError } = useColleagueTasks();
   const [composing, setComposing] = useState(false);
+  const [composingPipeline, setComposingPipeline] = useState(false);
+  const [pipeline, setPipeline] = useState<string | null>(null);
   const [working, setWorking] = useState<string | null>(null);
   const [watching, setWatching] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | undefined>();
@@ -37,7 +41,10 @@ export default function TasksPanel() {
             结果只回到你这台电脑。中央只转交, 看不到内容。
           </div>
         </div>
-        <Btn kind="primary" onClick={() => setComposing(true)}>派任务</Btn>
+        <div style={{ display: "flex", gap: 6 }}>
+          <Btn kind="ghost" onClick={() => setComposingPipeline(true)}>多阶段</Btn>
+          <Btn kind="primary" onClick={() => setComposing(true)}>派任务</Btn>
+        </div>
       </div>
       {syncError && <span style={muted}>暂时收不到同事的任务: {syncError}</span>}
 
@@ -61,7 +68,19 @@ export default function TasksPanel() {
 
       <section style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <strong style={{ fontSize: 13 }}>我请同事做的</strong>
-        {loaded && outgoing.length === 0 && <span style={muted}>还没派过任务。</span>}
+        {loaded && outgoing.length === 0 && pipelines.length === 0 && <span style={muted}>还没派过任务。</span>}
+        {pipelines.map((p) => (
+          <button key={p.pipeline_id} type="button" onClick={() => { setNotice(undefined); setPipeline(p.pipeline_id); }} style={rowButton}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+              <span style={{ fontSize: "var(--text-sm)", fontWeight: 600 }}>🔀 {p.title}</span>
+              <StateTag state={p.status === "open" ? (p.waiting_release ? "待处理" : "进行中") : p.status === "done" ? "已完成" : "已取消"} />
+            </div>
+            <span style={muted}>
+              {p.status === "open" ? `第 ${p.current}/${p.stages} 段 · ${p.current_name}` : `${p.stages} 段`}
+              {p.waiting_release ? " · 这一段都回了, 等你放行" : Object.keys(p.progress).length ? ` · ${Object.entries(p.progress).map(([k, v]) => `${k} ${v}`).join(" · ")}` : ""}
+            </span>
+          </button>
+        ))}
         {outgoing.map((t) => (
           <button key={t.task_id} type="button" onClick={() => { setNotice(undefined); setWatching(t.task_id); }} style={rowButton}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
@@ -78,6 +97,9 @@ export default function TasksPanel() {
 
       {composing && <TaskComposer onClose={() => setComposing(false)}
                                   onCreated={(id, n) => { setComposing(false); setNotice(n); setWatching(id); }} />}
+      {composingPipeline && <PipelineComposer onClose={() => setComposingPipeline(false)}
+                                              onCreated={(id, n) => { setComposingPipeline(false); setNotice(n); setPipeline(id); }} />}
+      {pipeline && <PipelineProgress pipelineId={pipeline} initialError={notice} onClose={() => { setPipeline(null); setNotice(undefined); }} />}
       {working && <TaskWork taskId={working} onClose={() => setWorking(null)} />}
       {watching && <TaskProgress taskId={watching} initialError={notice} onClose={() => { setWatching(null); setNotice(undefined); }} />}
     </div>

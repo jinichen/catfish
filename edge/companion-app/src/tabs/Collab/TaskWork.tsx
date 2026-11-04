@@ -86,6 +86,16 @@ export default function TaskWork({ taskId, onClose }: { taskId: string; onClose:
       </div>
       <div style={{ fontSize: 13, whiteSpace: "pre-wrap", padding: "8px 10px", borderRadius: 4,
                     background: "var(--catfish-bg-subtle, rgba(0,0,0,0.04))" }}>{rec.task.text}</div>
+      {rec.task.context && (
+        <details open style={{ fontSize: 13 }}>
+          <summary style={{ cursor: "pointer", ...muted }}>{rec.owner} 转来的上一段结果</summary>
+          <div style={{ whiteSpace: "pre-wrap", maxHeight: 220, overflow: "auto", padding: "6px 8px", marginTop: 4,
+                        borderLeft: "2px solid var(--catfish-cyan)" }}>{rec.task.context}</div>
+        </details>
+      )}
+      {rec.redo_note && !rec.done && (
+        <div style={{ fontSize: 13, color: "var(--status-warn, #d97706)" }}>对方请你重做: {rec.redo_note}</div>
+      )}
       {rec.task.schedule && (
         <TaskWorkScheduled rec={rec} state={state} scheduleText={extra.scheduleText ?? ""} nextRun={extra.nextRun}
                            busy={busy} run={(fn) => void run(fn)} onClose={onClose} />

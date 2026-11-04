@@ -14,7 +14,8 @@ const RPC_TIMEOUT: Duration = Duration::from_secs(90);
 
 const ALLOWED: &[&str] = &[
     "list", "get", "sync", "create", "add", "send", "remind", "cancel", "accept", "draft", "submit", "decline",
-    "update", "period_submit", "quit",
+    "update", "period_submit", "quit", "redo",
+    "pipeline_create", "pipeline_get", "pipeline_release", "pipeline_cancel",
 ];
 
 fn method_for(action: &str) -> Result<String, String> {
@@ -39,6 +40,7 @@ mod tests {
     fn 只放行任务这一组() {
         assert_eq!(method_for("submit").unwrap(), "pim/ctask_submit");
         assert!(method_for("form_submit").is_err());
+        assert_eq!(method_for("pipeline_release").unwrap(), "pim/ctask_pipeline_release");
         assert!(method_for("../tools/dispatch").is_err());
     }
 }

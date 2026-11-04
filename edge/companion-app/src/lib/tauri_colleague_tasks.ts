@@ -40,9 +40,51 @@ export interface OutgoingTaskSummary {
   schedule: string | null;
 }
 
+/** 多阶段流程 (11/4 第三步) 的列表行 */
+export interface PipelineSummary {
+  pipeline_id: string;
+  title: string;
+  status: "open" | "done" | "cancelled";
+  created_at: string | null;
+  stages: number;
+  current: number;
+  current_name: string;
+  progress: Partial<Record<OwnerState, number>>;
+  /** 这一段都回了, 等我放行 */
+  waiting_release: boolean;
+}
+
 export interface TaskList {
   incoming: IncomingTaskSummary[];
   outgoing: OutgoingTaskSummary[];
+  pipelines?: PipelineSummary[];
+}
+
+export interface StageDraft {
+  name?: string;
+  text: string;
+  recipients: string[];
+  deadline?: string | null;
+}
+
+export interface PipelineStage {
+  index: number;
+  name: string;
+  text: string;
+  recipients: string[];
+  deadline: string | null;
+  task_id: string | null;
+  input: string | null;
+  started_at: string | null;
+  released_at: string | null;
+  finished: boolean;
+  progress: { rows: OwnerRow[]; counts: Partial<Record<OwnerState, number>>; total: number } | null;
+}
+
+export interface PipelineDetail {
+  pipeline: { pipeline_id: string; title: string; owner: string; status: PipelineSummary["status"]; current: number; stages: PipelineStage[] };
+  /** 默认交给下一段的内容 (这一段每人交回的结果) */
+  handoff: string;
 }
 
 export interface TaskBody {
@@ -50,6 +92,8 @@ export interface TaskBody {
   text: string;
   deadline: string | null;
   schedule?: Schedule | null;
+  /** 多阶段: 发起人放行的上一段结果 */
+  context?: string | null;
 }
 
 /** 收件人这边的一期 */
@@ -92,6 +136,8 @@ export interface IncomingTask {
   missed?: boolean;
   job_lost?: boolean;
   ended_at?: string;
+  /** 发起人请我重做时写的要求 */
+  redo_note?: string;
 }
 
 export interface OwnerRow {
@@ -122,7 +168,7 @@ export type TaskDetail =
 
 export interface TaskEvent {
   kind: "invite" | "changed" | "remind" | "cancel" | "accepted" | "done" | "declined" | "period" | "quit"
-    | "review" | "missed" | "job_lost";
+    | "review" | "missed" | "job_lost" | "stage_done";
   task_id: string;
   from: string;
   title: string;
@@ -153,6 +199,14 @@ export const taskUpdate = (taskId: string, p: { text?: string; deadline?: string
   call<Sent & { sent: string[] }>("update", { task_id: taskId, ...p });
 export const taskPeriodSubmit = (taskId: string, period: number, result: string) =>
   call<{ period: number }>("period_submit", { task_id: taskId, period, result });
+export const taskRedo = (taskId: string, email: string, note: string) => call<{ sent: string[] }>("redo", { task_id: taskId, email, note });
+export const pipelineCreate = (p: { title: string; stages: StageDraft[] }) =>
+  call<{ pipeline: { pipeline_id: string }; sent: string[]; failed: { to: string; error: string }[] }>("pipeline_create", p);
+export const pipelineGet = (pipelineId: string) => call<PipelineDetail>("pipeline_get", { pipeline_id: pipelineId });
+export const pipelineRelease = (pipelineId: string, text: string) =>
+  call<{ done: boolean; stage?: number; sent?: string[]; failed?: { to: string; error: string }[]; cancelled: string[] }>(
+    "pipeline_release", { pipeline_id: pipelineId, text });
+export const pipelineCancel = (pipelineId: string) => call<{ ok: boolean }>("pipeline_cancel", { pipeline_id: pipelineId });
 export const taskQuit = (taskId: string, reason: string) => call<{ ok: boolean }>("quit", { task_id: taskId, reason });
 export const taskDraft = (taskId: string, result: string) => call<{ chars: number }>("draft", { task_id: taskId, result });
 export const taskSubmit = (taskId: string, result: string) =>

@@ -16,7 +16,7 @@ export interface TasksState extends TaskList {
   syncError: string | null;
 }
 
-let state: TasksState = { incoming: [], outgoing: [], loaded: false, syncError: null };
+let state: TasksState = { incoming: [], outgoing: [], pipelines: [], loaded: false, syncError: null };
 const listeners = new Set<() => void>();
 let timer: ReturnType<typeof setInterval> | null = null;
 let inflight: Promise<void> | null = null;
@@ -40,6 +40,8 @@ const NOTE: Record<string, (from: string, title: string, period?: number | null)
   review: (_f, t, n) => ["小鲶做完了一次, 等你核对", `「${t}」第 ${n ?? "?"} 次做好了, 核对后点交回`],
   missed: (_f, t) => ["定时任务没做成", `「${t}」到点电脑没开, 可以在「协同」页让小鲶现在做一次`],
   job_lost: (_f, t) => ["任务的定时被删了", `「${t}」的定时没了, 在「协同」页重新安排或退出`],
+  // 11/4 第三步: 多阶段
+  stage_done: (_f, t, n) => ["这一段都回了", `「${t}」第 ${n ?? "?"} 段都回了, 核对后放行到下一段`],
 };
 
 export function notifyFor(r: TaskSyncResult): void {
@@ -95,7 +97,8 @@ export function useColleagueTasks(): TasksState {
 /** 导航红点: 同事派给我、还要我动手的。 */
 const NEEDS_ME = new Set(["待处理", "在做", "待核对", "要重新同意", "没做成", "定时没了"]);
 export function pendingTaskCount(s: TasksState = state): number {
-  return s.incoming.filter((t) => NEEDS_ME.has(t.state)).length;
+  // 多阶段: 这一段都回了、等我放行的也算
+  return s.incoming.filter((t) => NEEDS_ME.has(t.state)).length + (s.pipelines ?? []).filter((p) => p.waiting_release).length;
 }
 
 /** 测试用: 回到初始状态。 */
@@ -104,5 +107,5 @@ export function __resetTasksStore(): void {
   timer = null;
   inflight = null;
   listeners.clear();
-  state = { incoming: [], outgoing: [], loaded: false, syncError: null };
+  state = { incoming: [], outgoing: [], pipelines: [], loaded: false, syncError: null };
 }

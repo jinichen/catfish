@@ -15,6 +15,8 @@
 
 第二步 (定时 / 周期, schedule 不空): 接下 = 在同事电脑上建 hermes 定时任务; 每期结果 period 交回;
 发起人改了任务 (rev+1) 同事要重新同意; 同事可以退出 (quit)。细节在 colleague_tasks_periodic.py / _schedule.py。
+第三步 (多阶段): 每一段就是一个普通任务 (带 pipeline_id 和 context = 发起人放行的上一段结果), 流程在
+colleague_tasks_pipeline.py; 「请他重做」= 只给这一个人发 rev+1 的任务单 (redo_note 写要改什么)。
   task_remind  {v, task_id, text?}
   task_cancel  {v, task_id}
 """
@@ -158,7 +160,10 @@ def create(args: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"一次最多派给 {MAX_RECIPIENTS} 位同事 (现在 {len(recipients)} 位)")
     task_id = f"t_{datetime.now():%Y%m%d}_{secrets.token_hex(4)}"
     schedule = sched.normalize(args.get("schedule"))
-    task = {"task_id": task_id, "owner": owner, "created_at": _now(), "status": "draft", "rev": 1,
+    context = str(args.get("context") or "").strip()
+    if len(context) > RESULT_MAX:
+        raise ValueError(f"转给同事的材料太长 ({len(context)} 字), 最多 {RESULT_MAX} 字")
+    task = {"task_id": task_id, "context": context or None, "pipeline_id": args.get("pipeline_id"), "owner": owner, "created_at": _now(), "status": "draft", "rev": 1,
             "title": (str(args.get("title") or "").strip() or _title_from(text))[:60], "text": text,
             "deadline": None if schedule and schedule["kind"] == "cron" else normalize_deadline(args.get("deadline")),
             "schedule": schedule,
@@ -185,6 +190,8 @@ def _post_each(task: dict[str, Any], emails: list[str], kind: str, env: dict[str
     for e in emails:
         try:
             forms_net.post(e, kind, env, ttl)
+            if kind == "task_invite":
+                task["recipients"][e]["rev"] = int(task.get("rev", 1))
             if stamp:
                 task["recipients"][e][stamp] = _now()
             done.append(e)
@@ -208,9 +215,31 @@ def send(task_id: str) -> dict[str, Any]:
     return {"ok": bool(sent), "sent": sent, "failed": failed}
 
 
-def _invite_env(task: dict[str, Any]) -> dict[str, Any]:
-    return {"v": ENVELOPE_VERSION, "task_id": task["task_id"], "rev": task.get("rev", 1),
-            "task": {k: task.get(k) for k in ("title", "text", "deadline", "schedule")}}
+def _invite_env(task: dict[str, Any], redo_note: str | None = None) -> dict[str, Any]:
+    env = {"v": ENVELOPE_VERSION, "task_id": task["task_id"], "rev": task.get("rev", 1),
+           "task": {k: task.get(k) for k in ("title", "text", "deadline", "schedule", "context")}}
+    if redo_note is not None:
+        env["redo_note"] = redo_note
+    return env
+
+
+def redo(task_id: str, email: str, note: str) -> dict[str, Any]:
+    """请某一位同事重做 (马上做的任务): 只给他发 rev+1 的任务单, 他要重新接下; 别人的结果不动。"""
+    task = load_outgoing(task_id)
+    if task["status"] != "open" or task.get("schedule"):
+        raise ValueError("只有进行中、马上做的任务能请人重做")
+    email = str(email or "").strip().lower()
+    if email not in task["recipients"] or not task["recipients"][email].get("invited_at"):
+        raise ValueError(f"{email} 不在这个任务里")
+    note = str(note or "").strip()
+    if not note:
+        raise ValueError("说一下要怎么改, 对方好重做")
+    task["rev"] = int(task.get("rev", 1)) + 1
+    sent, failed = _post_each(task, [email], "task_invite", _invite_env(task, note[:500]), None)
+    _save_outgoing(task)
+    if failed:
+        raise ValueError(failed[0]["error"])
+    return {"ok": True, "sent": sent}
 
 
 def update(task_id: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -284,6 +313,8 @@ def _owner_state(task: dict[str, Any], v: dict[str, Any], r: dict[str, Any] | No
         from .colleague_tasks_periodic import owner_state  # noqa: PLC0415
         return owner_state(task, r)
     status = (r or {}).get("status")
+    if r and int(r.get("rev") or 1) < int(v.get("rev") or 1):   # 请他重做了, 还没重新回
+        return "已取消" if task["status"] == "cancelled" else "等回应"
     if status == "done":
         return "逾期完成" if is_late(task.get("deadline"), r.get("done_at")) else "已完成"
     if status == "declined":
@@ -462,9 +493,12 @@ def _apply(msg: dict[str, Any]) -> str | None:
         if old and rev <= int(old.get("rev") or 1) and old.get("task"):
             return None   # 重复 / 更旧的一版
         body = {"title": str(t.get("title") or _title_from(text))[:60], "text": text, "deadline": deadline,
-                "schedule": schedule}
+                "schedule": schedule, "context": str(t.get("context") or "")[:RESULT_MAX] or None}
         rec = {**old, "task_id": tid, "owner": sender, "received_at": old.get("received_at") or _now(),
                "status": "open", "rev": rev, "task": body}
+        rec.pop("redo_note", None)
+        if env.get("redo_note"):
+            rec["redo_note"] = str(env["redo_note"])[:500]
         if old.get("task"):   # 发起人改了任务: 要重新同意 (定时任务先停掉)
             from .colleague_tasks_periodic import reset_for_change  # noqa: PLC0415
             reset_for_change(rec)
@@ -501,6 +535,8 @@ def sync() -> dict[str, Any]:
                            "period": msg["env"].get("period")})
     from .colleague_tasks_periodic import maintain  # noqa: PLC0415
     events += maintain()   # 本机定时任务的补跑 / 收尾 / 要核对的提醒
+    from .colleague_tasks_pipeline import maintain as pipeline_maintain  # noqa: PLC0415
+    events += pipeline_maintain()   # 多阶段: 这一段都交回了 → 提醒发起人放行下一段
     return {"ok": True, **counts, "events": events}
 
 
@@ -544,14 +580,15 @@ def list_all() -> dict[str, Any]:
     outgoing = []
     for p in sorted((tasks_dir() / "outgoing").glob("*/task.json")):
         task = forms._read(p)
-        if task:
+        if task and not task.get("pipeline_id"):   # 多阶段里的每一段在流程里显示
             outgoing.append({"task_id": task["task_id"], "title": task["title"], "status": task["status"],
                              "deadline": task.get("deadline"), "created_at": task.get("created_at"),
                              "schedule": sched.describe(task.get("schedule")) if task.get("schedule") else None,
                              "progress": progress(task)["counts"], "recipients": len(task["recipients"])})
     incoming.sort(key=lambda r: r.get("received_at") or "", reverse=True)
     outgoing.sort(key=lambda r: r.get("created_at") or "", reverse=True)
-    return {"ok": True, "incoming": incoming, "outgoing": outgoing}
+    from .colleague_tasks_pipeline import list_pipelines  # noqa: PLC0415
+    return {"ok": True, "incoming": incoming, "outgoing": outgoing, "pipelines": list_pipelines()}
 
 
 def get(task_id: str) -> dict[str, Any]:
@@ -564,6 +601,11 @@ def get(task_id: str) -> dict[str, Any]:
     if rec["task"].get("schedule"):
         extra = {"schedule_text": sched.describe(rec["task"]["schedule"]), "next_run": sched.next_run(rec.get("job_id"))}
     return {"ok": True, "role": "recipient", "record": rec, "state": incoming_state(rec), **extra}
+
+
+def _pipeline():
+    from . import colleague_tasks_pipeline  # noqa: PLC0415
+    return colleague_tasks_pipeline
 
 
 def _periodic():
@@ -588,6 +630,8 @@ def pim_handlers(params: dict[str, Any]) -> dict[str, Any]:
         "pim/ctask_update": lambda: update(tid, params),
         "pim/ctask_period_submit": lambda: _periodic().submit_period(tid, params.get("period"), params.get("result")),
         "pim/ctask_quit": lambda: _periodic().quit(tid, str(params.get("reason") or "")),
+        "pim/ctask_redo": lambda: redo(tid, str(params.get("email") or ""), str(params.get("note") or "")),
+        **_pipeline().pim_handlers(params),
         "pim/ctask_draft": lambda: save_draft(tid, params.get("result")),
         "pim/ctask_submit": lambda: submit(tid, params.get("result")),
         "pim/ctask_decline": lambda: decline(tid, str(params.get("reason") or "")),

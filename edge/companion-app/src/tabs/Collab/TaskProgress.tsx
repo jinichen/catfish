@@ -14,7 +14,7 @@ import TaskSchedulePicker from "./TaskSchedulePicker";
 import { refreshTasks } from "../../lib/colleagueTasksStore";
 import { summaryChatKey, summaryPrompt } from "../../lib/taskPrompts";
 import {
-  taskAdd, taskCancel, taskGet, taskRemind, taskSend, taskUpdate,
+  taskAdd, taskCancel, taskGet, taskRedo, taskRemind, taskSend, taskUpdate,
   type TaskDetail,
 } from "../../lib/tauri_colleague_tasks";
 import { useUIStore } from "../../store/ui";
@@ -39,6 +39,8 @@ export default function TaskProgress({ taskId, onClose, initialError }: {
   const [remindText, setRemindText] = useState("");
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [redoFor, setRedoFor] = useState<string | null>(null);
+  const [redoNote, setRedoNote] = useState("");
   const [editText, setEditText] = useState("");
   const [editWhen, setEditWhen] = useState<ScheduleValue>({ schedule: null, problem: null });
   const onEditWhen = useCallback((v: ScheduleValue) => setEditWhen(v), []);
@@ -107,6 +109,22 @@ export default function TaskProgress({ taskId, onClose, initialError }: {
                 {p.result}
               </div>
             ))}
+            {task.status === "open" && !task.schedule && ["已完成", "逾期完成", "不接"].includes(r.state) && redoFor !== r.email && (
+              <div><Btn kind="ghost" disabled={busy} onClick={() => { setRedoFor(r.email); setRedoNote(""); }}>
+                {r.state === "不接" ? "再请他一次" : "请他重做"}
+              </Btn></div>
+            )}
+            {redoFor === r.email && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 6 }}>
+                <input value={redoNote} onChange={(e) => setRedoNote(e.target.value)} placeholder="说一下要怎么改 (会发给他)" style={inputStyle} />
+                <Btn kind="ghost" onClick={() => setRedoFor(null)}>算了</Btn>
+                <Btn kind="primary" disabled={busy || !redoNote.trim()} onClick={() => run(async () => {
+                  await taskRedo(taskId, r.email, redoNote);
+                  setRedoFor(null);
+                  return `已请 ${r.email} 重做`;
+                })}>发给他</Btn>
+              </div>
+            )}
             {r.result && (
               <div style={{ fontSize: 13, whiteSpace: "pre-wrap", maxHeight: 220, overflow: "auto", padding: "6px 8px",
                             borderLeft: "2px solid var(--status-ok, #16a34a)", background: "var(--catfish-bg-subtle, rgba(0,0,0,0.04))" }}>

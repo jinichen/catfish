@@ -90,11 +90,13 @@ def accept_scheduled(rec: dict[str, Any], *, auto_return: bool) -> dict[str, Any
 
 
 def reset_for_change(rec: dict[str, Any]) -> None:
-    """发起人改了任务: 停掉本机定时任务, 等员工重新同意 (交回过的几期留着)。"""
+    """发起人改了任务 / 请他重做: 停掉本机定时任务, 等员工重新接下 (交回过的几期留着; 马上做的任务上次交回的清掉, 草稿留着)。"""
     sched.remove_job(rec.pop("job_id", None))
     if rec.get("accepted_at"):
         rec["changed_at"] = ct._now()
-    for k in ("accepted_at", "job_lost", "missed", "catchups", "ended_at", "declined"):
+    if rec.get("done") and not rec.get("draft"):   # 重做: 上次交回的当草稿留着, 在上面改
+        rec["draft"] = {"result": rec["done"]["result"], "updated_at": rec["done"]["at"]}
+    for k in ("accepted_at", "job_lost", "missed", "catchups", "ended_at", "declined", "done"):
         rec.pop(k, None)
 
 
