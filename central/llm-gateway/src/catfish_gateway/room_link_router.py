@@ -21,7 +21,7 @@ hermes 0.21 RoomLink 让 A 远程驱动 B 的 hermes, 但 A 要先拿到 B 签�
     POST /api/room-link/mailbox   {to, kind, payload, ttl_seconds?}  → {id}
     GET  /api/room-link/mailbox?kinds=a,b                            → {messages: [...]}
 
-不带 kinds 只给请求 / 授权 (老版 Companion 的行为); 填表的 form_* 要显式要。
+不带 kinds 只给请求 / 授权 (老版 Companion 的行为); 填表的 form_*、派任务的 task_* 要显式要。
 """
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ class MailboxDeliverReq(BaseModel):
     to: str = Field(min_length=1, max_length=320)  # email 上限 RFC 5321
     kind: str
     payload: str = Field(min_length=1, max_length=room_link_db.MAX_PAYLOAD_BYTES)
-    # 只对 form_* 生效 (截止后 7 天, 夹到 [10 分钟, 30 天]); 请求 / 授权固定 10 分钟
+    # 只对 form_* / task_* 生效 (截止后 7 天, 夹到 [10 分钟, 30 天]); 请求 / 授权固定 10 分钟
     ttl_seconds: int | None = Field(default=None, ge=1)
 
 

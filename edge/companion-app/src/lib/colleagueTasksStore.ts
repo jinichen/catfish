@@ -1,0 +1,100 @@
+/**
+ * 派任务给同事的前端状态 (11/4, docs/COLLEAGUE-TASK-PLAN.md)。跟 formsStore 同一套:
+ * 订阅即开始轮询, 每 20 秒 `sync` 取一次邮筒 (中央取走即清空, 落进本机账本), 再 `list` 刷列表。
+ * 导航常驻订阅 (TabBar), 员工不进「协同」页也能看到红点、收到系统通知。
+ */
+import { useSyncExternalStore } from "react";
+
+import { sendNotification } from "./tauri_app";
+import { taskList, taskSync, type TaskList, type TaskSyncResult } from "./tauri_colleague_tasks";
+
+export const TASKS_POLL_INTERVAL_MS = 20_000;
+
+export interface TasksState extends TaskList {
+  loaded: boolean;
+  /** 最近一次取邮筒失败的原因 (没登录 / 中央连不上 / 中央太旧); 成功一次就清掉 */
+  syncError: string | null;
+}
+
+let state: TasksState = { incoming: [], outgoing: [], loaded: false, syncError: null };
+const listeners = new Set<() => void>();
+let timer: ReturnType<typeof setInterval> | null = null;
+let inflight: Promise<void> | null = null;
+
+function emit(next: TasksState) {
+  state = next;
+  for (const l of listeners) l();
+}
+
+const NOTE: Record<string, (from: string, title: string) => [string, string] | null> = {
+  invite: (f, t) => ["同事请你帮忙", `${f} 派给你一个任务「${t}」, 在「协同」页里看`],
+  remind: (f, t) => ["有任务在催你", `${f} 催你交回「${t}」`],
+  cancel: (f, t) => ["任务取消了", `${f} 取消了「${t}」, 不用做了`],
+  done: (f, t) => ["同事交回了结果", `${f} 交回了「${t}」`],
+  declined: (f, t) => ["同事没接任务", `${f} 没接「${t}」, 在「协同」页看原因`],
+  accepted: () => null,   // 接下了不打扰, 进度表上看得到
+};
+
+export function notifyFor(r: TaskSyncResult): void {
+  for (const ev of r.events) {
+    const n = NOTE[ev.kind]?.(ev.from, ev.title);
+    if (n) void sendNotification(n[0], n[1]).catch(() => {});
+  }
+}
+
+/** 取一次邮筒 + 刷列表。并发调用合并成一次。 */
+export function refreshTasks(): Promise<void> {
+  if (inflight) return inflight;
+  inflight = (async () => {
+    let syncError: string | null = null;
+    try {
+      notifyFor(await taskSync());
+    } catch (e) {
+      syncError = e instanceof Error ? e.message : String(e);
+    }
+    try {
+      const list = await taskList();
+      emit({ ...list, loaded: true, syncError });
+    } catch (e) {
+      emit({ ...state, loaded: true, syncError: syncError ?? (e instanceof Error ? e.message : String(e)) });
+    }
+  })().finally(() => {
+    inflight = null;
+  });
+  return inflight;
+}
+
+export function subscribe(cb: () => void): () => void {
+  listeners.add(cb);
+  if (!timer) {
+    void refreshTasks();
+    timer = setInterval(() => void refreshTasks(), TASKS_POLL_INTERVAL_MS);
+  }
+  return () => {
+    listeners.delete(cb);
+    if (listeners.size === 0 && timer) {
+      clearInterval(timer);
+      timer = null;
+    }
+  };
+}
+
+export const getSnapshot = (): TasksState => state;
+
+export function useColleagueTasks(): TasksState {
+  return useSyncExternalStore(subscribe, getSnapshot);
+}
+
+/** 导航红点: 同事派给我、还要我动手的 (待处理 / 在做)。 */
+export function pendingTaskCount(s: TasksState = state): number {
+  return s.incoming.filter((t) => t.state === "待处理" || t.state === "在做").length;
+}
+
+/** 测试用: 回到初始状态。 */
+export function __resetTasksStore(): void {
+  if (timer) clearInterval(timer);
+  timer = null;
+  inflight = null;
+  listeners.clear();
+  state = { incoming: [], outgoing: [], loaded: false, syncError: null };
+}

@@ -1,6 +1,7 @@
-"""catfish_form —— 一起填表 (收集表, 10/17, docs/FORM-COLLECT-PLAN.md)。
+"""catfish_form —— 一起填表 (收集表, 10/17, docs/FORM-COLLECT-PLAN.md) + 派任务给同事 (11/4, task_*)。
 
-一个工具多个 action, 只占 gateway tool cap 一格。实现在 forms.py / forms_excel.py / forms_tool.py。
+一个工具多个 action, 只占 gateway tool cap 一格 (已到上限 49, 派任务只好合进来)。
+实现在 forms.py / forms_excel.py / forms_tool.py / colleague_tasks.py。
 """
 from __future__ import annotations
 
@@ -10,27 +11,33 @@ FORM_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_form",
         "description": (
-            "收集表: 发起人发表请同事各填一份, 回收后本机汇总。\n"
-            "发起: 有 Excel 模板先 from_excel 拿字段, 否则按描述列字段 (选择题给 options), 再 create; 邮箱不知道用 directory 查。"
-            "send / remind / close 会发消息给同事: 先不带 confirmed 调, 把 proposal 念给员工, 同意才 confirmed=true。\n"
-            "结果: status 看谁交了; responses 拿全部回答 (统计/汇总都先调它, 数字照返回说); export 导出 Excel。\n"
-            "帮员工填别人的表 (消息带 form_id): get 看字段 → 从本机邮件/文件/知识库找值, 找不到留空不要编 → draft 存草稿并写 sources。"
-            "你不能替员工提交或拒填, 让他去「协同」页核对后自己提交。"
+            "收集表 + 派任务给同事 (task_*)。\n"
+            "收集表: 有 Excel 模板先 from_excel 拿字段, 否则按描述列字段, 再 create; 邮箱不知道用 directory 查。"
+            "status / responses 看结果 (数字照返回说), export 导出 Excel。"
+            "帮员工填别人的表 (带 form_id): get → 从本机邮件/文件/知识库找值, 找不到留空不编 → draft (写 sources)。\n"
+            "派任务: task_create (text=要同事做什么) → task_send; task_results 看谁做完和结果。"
+            "帮员工做同事派来的任务 (带 task_id): 做完用 task_draft 存要交回的完整 result。\n"
+            "send / remind / close / task_send / task_remind / task_cancel 会发消息给同事: 先不带 confirmed, 念 proposal, 员工同意才 confirmed=true。"
+            "不能替员工提交、拒填、交回或拒绝任务, 也不要自己把结果发给对方 —— 让他去「协同」页自己点。"
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "action": {"type": "string", "enum": ["list", "get", "status", "responses", "from_excel", "create",
                                                       "update", "send", "remind", "close", "export", "draft",
-                                                      "directory"]},
+                                                      "directory", "task_list", "task_get", "task_results",
+                                                      "task_create", "task_send", "task_remind", "task_cancel",
+                                                      "task_draft"]},
+                "task_id": {"type": "string", "description": "任务编号 (t_YYYYMMDD_xxxxxxxx)"},
+                "result": {"type": "string", "description": "task_draft: 要交回给发起人的完整结果"},
                 "form_id": {"type": "string", "description": "表单编号 (f_YYYYMMDD_xxxxxxxx)"},
                 "path": {"type": "string", "description": "from_excel: Excel 模板路径"},
                 "template_path": {"type": "string", "description": "create: 来自 Excel 模板时带上"},
                 "title": {"type": "string", "description": "表名"},
-                "deadline": {"type": "string", "description": "截止日 YYYY-MM-DD"},
+                "deadline": {"type": "string", "description": "截止 YYYY-MM-DD; 任务可带时分 YYYY-MM-DDTHH:MM"},
                 "note": {"type": "string", "description": "给填表人的说明"},
                 "recipients": {"type": "array", "items": {"type": "string"},
-                               "description": "收件人邮箱 (发出后只能加人)"},
+                               "description": "收件人邮箱 (发出后只能加人; 任务最多 20 人)"},
                 "fields": {
                     "type": "array",
                     "items": {"type": "object", "properties": {
@@ -43,7 +50,7 @@ FORM_TOOLS: List[Dict[str, Any]] = [
                 },
                 "values": {"type": "object", "description": "draft: 按字段 key; 日期 YYYY-MM-DD, 多选给数组"},
                 "sources": {"type": "object", "description": "draft: 每个字段 key 的出处"},
-                "text": {"type": "string", "description": "remind: 附言; directory: 姓名/部门/邮箱片段"},
+                "text": {"type": "string", "description": "remind / task_remind: 附言; directory: 姓名/部门/邮箱片段; task_create: 要同事做什么"},
                 "confirmed": {"type": "boolean", "description": "员工已明确同意才 true"},
             },
             "required": ["action"],

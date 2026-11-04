@@ -155,7 +155,8 @@ def test_存储层常量(client):
     assert DB.MAILBOX_TTL_SECONDS == 600
     assert DB.ROOM_LINK_KINDS == {"request", "grant"}
     assert DB.FORM_KINDS == {"form_invite", "form_response", "form_remind", "form_close"}
-    assert DB.MAILBOX_KINDS == DB.ROOM_LINK_KINDS | DB.FORM_KINDS
+    assert DB.TASK_KINDS == {"task_invite", "task_reply", "task_remind", "task_cancel"}
+    assert DB.MAILBOX_KINDS == DB.ROOM_LINK_KINDS | DB.FORM_KINDS | DB.TASK_KINDS
     assert DB.FORM_MAX_TTL_SECONDS == 30 * 24 * 3600
 
 
@@ -168,7 +169,9 @@ def test_填表期限_按kind夹(client):
     _post(c, to="bob@x.com", kind="form_response", payload="p", ttl_seconds=5)
     _post(c, to="bob@x.com", kind="form_remind", payload="p")
     _post(c, to="bob@x.com", kind="request", payload="p", ttl_seconds=10 * day)
-    assert [m["ttl"] for m in box] == [10 * day, 30 * day, 600, 30 * day, 600]
+    _post(c, to="bob@x.com", kind="task_invite", payload="p", ttl_seconds=8 * day)
+    _post(c, to="bob@x.com", kind="task_reply", payload="p")
+    assert [m["ttl"] for m in box] == [10 * day, 30 * day, 600, 30 * day, 600, 8 * day, 30 * day]
 
 
 def test_不带kinds_老客户端拿不到填表邮件(client):

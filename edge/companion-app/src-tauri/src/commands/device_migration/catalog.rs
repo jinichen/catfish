@@ -152,6 +152,7 @@ const CATFISH: &[(Pat, Class, &str)] = &[
     (Exact("meeting-templates"), Required, "会议模板"),
     (Exact("meetings"), Required, "会议记录"),
     (Exact("forms"), Required, "协作填表"),
+    (Exact("collab_tasks"), Required, "请同事帮忙 (派出 / 收到的任务和交回的结果)"),
     (Exact("workflow_drafts"), Required, "工作流"),
     (Exact("workflow_runs"), Required, "工作流运行记录"),
     // ── 审计 ──

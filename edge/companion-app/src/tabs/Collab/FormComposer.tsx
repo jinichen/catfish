@@ -5,15 +5,16 @@
  * 也可以直接跟小鲶说「把这张表发给 xx 填」—— 它走同一个 catfish_form, 发之前会先念给你确认。
  * 收件人: 输邮箱, 或按姓名 / 部门搜全公司通讯录 (中央只给 邮箱 / 姓名 / 部门)。
  */
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
 import { refreshForms } from "../../lib/formsStore";
 import { salesPickXlsx } from "../../lib/tauri_sales";
 import {
-  formCreate, formDirectory, formFromExcel, formSend,
-  type FieldDraft, type FieldType, type Person,
+  formCreate, formFromExcel, formSend,
+  type FieldDraft, type FieldType,
 } from "../../lib/tauri_forms";
 import { Overlay, muted } from "./formsUi";
+import RecipientPicker, { allRecipients } from "./RecipientPicker";
 import { Btn, ErrorLine, inputStyle } from "./roomLinkUi";
 
 const TYPES: { value: FieldType; label: string }[] = [
@@ -47,23 +48,9 @@ export default function FormComposer({ onClose, onCreated }: {
   const [template, setTemplate] = useState<string | null>(null);
   const [recipients, setRecipients] = useState<string[]>([]);
   const [typed, setTyped] = useState("");
-  const [q, setQ] = useState("");
-  const [people, setPeople] = useState<Person[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!q.trim()) { setPeople([]); return; }
-    const t = setTimeout(() => {
-      formDirectory(q.trim()).then((r) => setPeople(r.people)).catch((e) => setError(String(e)));
-    }, 300);
-    return () => clearTimeout(t);
-  }, [q]);
-
-  const addRecipient = (email: string) => {
-    const e = email.trim().toLowerCase();
-    if (e && !recipients.includes(e)) setRecipients([...recipients, e]);
-  };
+  const onPickError = useCallback((m: string) => setError(m), []);
 
   const fromExcel = async () => {
     setError(null);
@@ -85,7 +72,7 @@ export default function FormComposer({ onClose, onCreated }: {
     setBusy(true);
     setError(null);
     try {
-      const all = [...new Set([...recipients, ...typed.split(/[\s,;，；]+/).map((s) => s.trim().toLowerCase()).filter(Boolean)])];
+      const all = allRecipients(recipients, typed);
       const { form } = await formCreate({ title, fields: toFields(rows), deadline: deadline || null, note,
                                           recipients: all, template_path: template });
       let notice: string | undefined;
@@ -146,29 +133,7 @@ export default function FormComposer({ onClose, onCreated }: {
       <div><Btn kind="ghost" onClick={() => setRows([...rows, blankRow()])}>+ 加一项</Btn></div>
 
       <strong style={{ fontSize: 13 }}>发给谁</strong>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-        {recipients.map((e) => (
-          <span key={e} style={{ fontSize: 12, padding: "2px 8px", border: "1px solid var(--catfish-border)", borderRadius: 12 }}>
-            {e} <button type="button" aria-label={`去掉 ${e}`} onClick={() => setRecipients(recipients.filter((x) => x !== e))}
-                        style={{ border: "none", background: "transparent", cursor: "pointer" }}>✕</button>
-          </span>
-        ))}
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="按姓名 / 部门搜同事" style={inputStyle} />
-        <input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="或直接填邮箱, 多个用逗号隔开" style={inputStyle} />
-      </div>
-      {people.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 2, maxHeight: 160, overflowY: "auto" }}>
-          {people.map((p) => (
-            <button key={p.email} type="button" onClick={() => addRecipient(p.email)} disabled={recipients.includes(p.email)}
-                    style={{ textAlign: "left", fontSize: 12, padding: "4px 8px", border: "none", cursor: "pointer",
-                             background: "var(--catfish-bg-subtle, rgba(0,0,0,0.04))", borderRadius: 4 }}>
-              {p.name} · {p.department} · {p.email}{recipients.includes(p.email) ? " (已加)" : ""}
-            </button>
-          ))}
-        </div>
-      )}
+      <RecipientPicker picked={recipients} onPicked={setRecipients} typed={typed} onTyped={setTyped} onError={onPickError} />
 
       {error && <ErrorLine>{error}</ErrorLine>}
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>

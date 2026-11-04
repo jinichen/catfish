@@ -9,8 +9,10 @@
  * 右栏有货时导航项上有红点 (TabBar 读 roomLinkStore.pendingCount)。
  *
  * 10/17: 下面一整行 = 一起填表 (FormsPanel, docs/FORM-COLLECT-PLAN.md); 收到要填的表也算红点。
+ * 11/4: 左栏换成派任务给多位同事 (TasksPanel, docs/COLLEAGUE-TASK-PLAN.md), 不再要求双方同时在线;
+ *   同事派给我、还没交回的也算红点。右栏照旧接老版本同事的在线请求和工具审批。
  */
-import AskColleaguePanel from "./AskColleaguePanel";
+import TasksPanel from "./TasksPanel";
 import FormsPanel from "./FormsPanel";
 import PendingPanel from "./PendingPanel";
 
@@ -25,7 +27,7 @@ export default function CollabTab() {
           alignItems: "start",
         }}
       >
-        <AskColleaguePanel />
+        <TasksPanel />
         <PendingPanel />
       </div>
       <div style={{ marginTop: "var(--space-4)" }}>

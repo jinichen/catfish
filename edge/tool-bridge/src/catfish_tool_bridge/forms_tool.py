@@ -3,12 +3,13 @@
 小鲶能做: 看表 / 建表 / 从 Excel 建表 / 发 / 催 / 结束 / 看回答 / 导出 / 替员工预填草稿 / 查同事。
 发、催、结束会给同事发消息: 先不带 confirmed 调, 把对象念给员工, 员工同意才带 confirmed=true。
 **提交和不填只能员工自己在表单上点** —— 工具里没有这两个动作。
+11/4: 派任务给同事 (colleague_tasks.py) 的 task_* action 也合在这个工具里 —— 网关工具数已到上限 (49)。
 """
 from __future__ import annotations
 
 from typing import Any
 
-from . import forms, forms_excel, forms_net
+from . import colleague_tasks, forms, forms_excel, forms_net
 
 _OUTWARD = {"send", "remind", "close"}
 
@@ -34,6 +35,8 @@ def dispatch(name: str, args: dict[str, Any]) -> dict[str, Any]:
     action = str(args.get("action") or "").strip()
     form_id = str(args.get("form_id") or "").strip()
     try:
+        if action.startswith("task_"):
+            return colleague_tasks.tool_dispatch(action, args)
         if action == "list":
             return forms.list_all()
         if action in ("get", "status"):
@@ -61,7 +64,7 @@ def dispatch(name: str, args: dict[str, Any]) -> dict[str, Any]:
                 return forms.remind(form_id, str(args.get("text") or ""))
             return forms.close(form_id)
         raise ValueError("action 只能是 list / get / status / responses / from_excel / create / update / "
-                         "send / remind / close / export / draft / directory")
+                         "send / remind / close / export / draft / directory, 或派任务的 task_*")
     except (ValueError, LookupError, OSError) as e:
         return {"ok": False, "error": str(e)}
 

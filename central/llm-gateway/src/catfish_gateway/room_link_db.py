@@ -19,7 +19,11 @@ ROOM_LINK_KINDS = frozenset({"request", "grant"})
 # 所以期限由发件端按截止日给 (截止后 7 天), 这里只夹在 [10 分钟, 30 天]。
 FORM_KINDS = frozenset({"form_invite", "form_response", "form_remind", "form_close"})
 FORM_MAX_TTL_SECONDS = 30 * 24 * 3600
-MAILBOX_KINDS = ROOM_LINK_KINDS | FORM_KINDS
+# 11/4 派任务给多位同事 (docs/COLLEAGUE-TASK-PLAN.md): 任务单 / 回复 (接下·交回·不接) / 催 / 取消。
+# 跟填表一样跨天、对方可能关机, 期限规则同填表。
+TASK_KINDS = frozenset({"task_invite", "task_reply", "task_remind", "task_cancel"})
+LONG_KINDS = FORM_KINDS | TASK_KINDS
+MAILBOX_KINDS = ROOM_LINK_KINDS | LONG_KINDS
 
 # payload 上限: grant token + catalog 实测 ~3KB, 给 64KB 余量, 防人拿邮筒传文件
 MAX_PAYLOAD_BYTES = 64 * 1024
@@ -36,8 +40,8 @@ def _pg_conn():
 
 
 def ttl_for(kind: str, ttl_seconds: int | None) -> int:
-    """请求 / 授权固定 10 分钟; 表单类按发件端给的期限, 夹在 [10 分钟, 30 天], 没给就 30 天。"""
-    if kind not in FORM_KINDS:
+    """请求 / 授权固定 10 分钟; 表单 / 任务类按发件端给的期限, 夹在 [10 分钟, 30 天], 没给就 30 天。"""
+    if kind not in LONG_KINDS:
         return MAILBOX_TTL_SECONDS
     if ttl_seconds is None:
         return FORM_MAX_TTL_SECONDS

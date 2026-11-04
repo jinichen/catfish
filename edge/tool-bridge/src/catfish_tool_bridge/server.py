@@ -157,6 +157,16 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
                 return _success(req_id, await asyncio.to_thread(handlers[method]))
             except (ValueError, LookupError, OSError) as e:
                 return _error(req_id, INVALID_PARAMS, str(e))
+    # 11/4: 派任务给同事 (colleague_tasks.py, docs/COLLEAGUE-TASK-PLAN.md): 「协同」页的派出 / 接下 / 交回 / 进度。
+    # 接下 / 交回 / 不接只有这里有, 模型工具里没有。
+    if method.startswith("pim/ctask_"):
+        from . import colleague_tasks  # noqa: PLC0415
+        handlers = colleague_tasks.pim_handlers(params)
+        if method in handlers:
+            try:
+                return _success(req_id, await asyncio.to_thread(handlers[method]))
+            except (ValueError, LookupError, OSError) as e:
+                return _error(req_id, INVALID_PARAMS, str(e))
     # 10/17: 工作流 skill (workflow_tool.py, docs/WORKFLOW-SKILL-PLAN.md): 技能页的编辑 / 试跑 / 运行记录。
     # 确认对外步骤、设「不用每次确认」只有这里有, 模型工具里没有。
     if method.startswith("pim/workflow_"):

@@ -38,6 +38,11 @@ const TONE: Record<string, string> = {
   待填: "var(--catfish-cyan)", 草稿: "var(--catfish-cyan)", 未提交: "var(--catfish-text-muted)", 未发: "var(--catfish-text-muted)",
   已提交: "var(--status-ok, #16a34a)", 逾期: "var(--status-warn, #d97706)", 不填: "var(--status-error, #dc2626)",
   已结束: "var(--catfish-text-muted)", 收集中: "var(--catfish-cyan)", 没发出: "var(--catfish-text-muted)",
+  // 11/4 派任务给同事
+  待处理: "var(--catfish-cyan)", 在做: "var(--catfish-cyan)", 已交回: "var(--status-ok, #16a34a)",
+  不接: "var(--status-error, #dc2626)", 已取消: "var(--catfish-text-muted)", 等回应: "var(--catfish-text-muted)",
+  已完成: "var(--status-ok, #16a34a)", 逾期完成: "var(--status-warn, #d97706)", 超时未回: "var(--status-warn, #d97706)",
+  超时未交: "var(--status-warn, #d97706)", 进行中: "var(--catfish-cyan)",
 };
 
 export function StateTag({ state }: { state: string }) {

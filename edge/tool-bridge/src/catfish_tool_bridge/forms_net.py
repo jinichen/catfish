@@ -2,6 +2,7 @@
 
 中央只当邮筒: 投一封 / 取走自己的。payload 是这里拼的 JSON 字符串, 中央不解析、取走即清空。
 填表的 4 种 kind 必须显式要 (`?kinds=`), 老版 Companion 不带 kinds 就拿不到, 不会被它取走丢掉。
+11/4 派任务给同事 (colleague_tasks.py) 也走这里, 用自己的 4 种 task_* kind。
 """
 from __future__ import annotations
 
@@ -13,18 +14,21 @@ from typing import Any
 from . import skill_publish
 
 FORM_KINDS = ("form_invite", "form_response", "form_remind", "form_close")
+TASK_KINDS = ("task_invite", "task_reply", "task_remind", "task_cancel")
 MAILBOX_PATH = "/api/room-link/mailbox"
 MAX_TTL_SECONDS = 30 * 24 * 3600
 MIN_RESPONSE_TTL_SECONDS = 3 * 24 * 3600   # 回填至少留 3 天: 发起人可能出差关机
 AFTER_DEADLINE_DAYS = 7
 MAX_PAYLOAD_BYTES = 64 * 1024
+# 老中央 (20261104 之前) 不认 task_* kind, 投 / 取都回 400
+CENTRAL_TOO_OLD = "中央端版本太旧, 还不支持派任务 —— 请管理员把中央端升级到最新版"
 
 
 def me() -> str:
     """当前登录员工的邮箱 (id_token 里的 email / sub, 只读本机, 不验签 —— 验签是中央的事)。"""
     token = skill_publish._read_id_token()
     if not token:
-        raise ValueError("还没登录鲶鱼账号 (Companion 里先登录), 填表要用你的身份")
+        raise ValueError("还没登录鲶鱼账号 (Companion 里先登录), 跟同事协同要用你的身份")
     try:
         part = token.split(".")[1]
         claims = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
@@ -55,7 +59,7 @@ def _client_call(method: str, path: str, *, params: dict | None = None, body: di
 
     token = skill_publish._read_id_token()
     if not token:
-        raise ValueError("还没登录鲶鱼账号 (Companion 里先登录), 填表要用你的身份")
+        raise ValueError("还没登录鲶鱼账号 (Companion 里先登录), 跟同事协同要用你的身份")
     try:
         with httpx.Client(timeout=20.0) as client:
             r = client.request(method, f"{skill_publish.GATEWAY_URL}{path}", params=params, json=body,
@@ -70,7 +74,7 @@ def _client_call(method: str, path: str, *, params: dict | None = None, body: di
 
 def post(to: str, kind: str, envelope: dict[str, Any], ttl: int) -> int:
     """投一封。envelope 序列化成 payload; 超 64KB 直接拒 (中央也会拒, 这里先给句人话)。"""
-    if kind not in FORM_KINDS:
+    if kind not in FORM_KINDS + TASK_KINDS:
         raise ValueError(f"不认识的种类 {kind}")
     payload = json.dumps(envelope, ensure_ascii=False)
     if len(payload.encode("utf-8")) > MAX_PAYLOAD_BYTES:
@@ -78,16 +82,20 @@ def post(to: str, kind: str, envelope: dict[str, Any], ttl: int) -> int:
     code, data = _client_call("POST", MAILBOX_PATH, body={"to": to, "kind": kind, "payload": payload, "ttl_seconds": ttl})
     if code >= 400:
         detail = data.get("detail") if isinstance(data, dict) else data
+        if code == 400 and kind in TASK_KINDS and "kind=" in str(detail):
+            raise ValueError(f"投递给 {to} 失败: {CENTRAL_TOO_OLD}")
         raise ValueError(f"投递给 {to} 失败 ({code}): {detail}")
     return int(data.get("id") or 0)
 
 
-def take() -> list[dict[str, Any]]:
-    """取走发给我的填表邮件。payload 解析失败的丢掉 (中央已清空, 不会重复来)。"""
-    code, data = _client_call("GET", MAILBOX_PATH, params={"kinds": ",".join(FORM_KINDS)})
+def take(kinds: tuple[str, ...] = FORM_KINDS) -> list[dict[str, Any]]:
+    """取走发给我的填表 (或任务) 邮件。payload 解析失败的丢掉 (中央已清空, 不会重复来)。"""
+    code, data = _client_call("GET", MAILBOX_PATH, params={"kinds": ",".join(kinds)})
     if code >= 400:
         detail = data.get("detail") if isinstance(data, dict) else data
-        raise ValueError(f"取填表邮件失败 ({code}): {detail}")
+        if code == 400 and kinds == TASK_KINDS and "不认识" in str(detail):
+            raise ValueError(CENTRAL_TOO_OLD)
+        raise ValueError(f"取{'任务' if kinds == TASK_KINDS else '填表'}邮件失败 ({code}): {detail}")
     out = []
     for m in (data.get("messages") or []) if isinstance(data, dict) else []:
         try:

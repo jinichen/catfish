@@ -52,7 +52,7 @@
 ### 中央只转交、不留存的例外: 同事邮筒 (`room_link_mailbox`)
 
 员工**主动**发给某个同事的东西 (请同事帮忙 P50 的请求 / 授权, 一起填表的邀请 / 回答 / 催填 / 结束,
-`docs/FORM-COLLECT-PLAN.md`) 经中央邮筒转交。它不算"中央存员工数据", 条件缺一不可:
+`docs/FORM-COLLECT-PLAN.md`; 派任务给同事的任务单 / 接下·交回·不接 / 催 / 取消, `docs/COLLEAGUE-TASK-PLAN.md`) 经中央邮筒转交。它不算"中央存员工数据", 条件缺一不可:
 
 1. payload 是不透明字符串: 中央不解析、不校验结构、不写日志 (`tests/test_central_log_no_content.py` 静态拦)。
 2. 收件人取走的同一事务里 `payload = NULL`; 没人取, 到期也清空 (请求 / 授权 10 分钟; 填表类截止后 7 天, 最长 30 天)。
