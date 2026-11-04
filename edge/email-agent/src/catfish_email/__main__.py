@@ -333,6 +333,8 @@ def _build_parser() -> argparse.ArgumentParser:
     pd.add_argument("--body", help="正文 (字符串). 跟 --body-file 二选一")
     pd.add_argument("--body-file", help="正文从文件读 (避 shell 转义坑, --body 长时用)")
     pd.add_argument("--in-reply-to", help="原邮件 id (回复时引用, 让客户端串 thread)")
+    # 11/4: 转发 —— 原来没有, 小鲶写「原文见下方」可下方什么都没有
+    pd.add_argument("--forward", help="转发: 原邮件 id。原文 (发件人/时间/收件人/正文) 接在正文后面, 原附件一并带上")
     pd.add_argument("--replace", help="改草稿: 草稿箱里旧草稿的 id。新的存好后旧的去掉, 线程头沿用旧的")
     pd.add_argument("--account", help="从哪个账号起草 (默认第一个)")
     # 10/29: 附件。--attach 可给多次; --keep-attachment 是改草稿时要带过去的旧草稿附件文件名

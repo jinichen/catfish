@@ -66,7 +66,8 @@ def _cmd_draft(adapters: list[EmailAdapter], args) -> int:
     target = None
     replaces = getattr(args, "replace", None) or None
     # 改草稿: 落回旧草稿所在的来源 (跟回复落回原邮件来源同一个道理)
-    reply_to_id = replaces or getattr(args, "in_reply_to", None) or ""
+    forward_id = getattr(args, "forward", None) or ""
+    reply_to_id = replaces or getattr(args, "in_reply_to", None) or forward_id
     if "|" in reply_to_id:
         prefix = reply_to_id.split("|", 1)[0]
         for a in adapters:
@@ -108,6 +109,15 @@ def _cmd_draft(adapters: list[EmailAdapter], args) -> int:
     attachments = _draft_attachments(target, args, replaces)
     if attachments is None:
         return 1
+    if forward_id:
+        fwd = _forward_parts(adapters, forward_id)
+        if fwd is None:
+            return 1
+        body = body.rstrip() + "\n\n" + fwd[0]
+        attachments += fwd[1]
+        if sum(os.path.getsize(p) for p in attachments) > MAX_ATTACHMENTS_BYTES:
+            _err("原邮件的附件加上新附件超过 25 MB, 多数邮箱会退信。请在邮件客户端里直接转发。")
+            return 1
     if attachments:
         if "attachments" not in inspect.signature(target.create_draft).parameters:
             _err(f"[{target.name}] 起草时不支持带附件, 请在邮件客户端里添加附件")
@@ -151,6 +161,37 @@ def _cmd_draft(adapters: list[EmailAdapter], args) -> int:
 
 # 多数企业邮箱单封上限 20–50 MB, base64 编码后体积再大三分之一 —— 原始合计超过这个就先拦下
 MAX_ATTACHMENTS_BYTES = 25 * 1024 * 1024
+
+
+def _forward_parts(adapters: list[EmailAdapter], msg_id: str) -> tuple[str, list[str]] | None:
+    """11/4: 转发 = 原邮件头 + 原文 + 原附件。取不全就不建草稿 (半截转发比没有更糟)。出错已 _err。"""
+    from .html_strip import strip_html  # noqa: PLC0415
+
+    prefix = msg_id.split("|", 1)[0] if "|" in msg_id else ""
+    source = next((a for a in adapters if prefix and (a.name == prefix or a.name.replace("_", "-") == prefix)), None)
+    if source is None:
+        _err(f"转发: 认不出原邮件来自哪个邮箱 (id={msg_id!r}), 用 list / search 返回的完整 id")
+        return None
+    try:
+        m = source.read_message(msg_id)
+    except (EmailAdapterError, ValueError) as e:
+        _err(f"转发: 原邮件读不出来, 没有建草稿: {e}")
+        return None
+    text = (m.body_text or "").strip() or strip_html(m.body_html or "").strip()
+    lines = ["---------- 转发的邮件 ----------", f"发件人: {m.sender}", f"时间: {m.date}"]
+    if m.recipients:
+        lines.append(f"收件人: {', '.join(m.recipients)}")
+    if m.cc:
+        lines.append(f"抄送: {', '.join(m.cc)}")
+    lines += [f"主题: {m.subject}", "", text]
+    paths: list[str] = []
+    for att in m.attachments or ():
+        try:
+            paths.append(str(source.export_attachment(msg_id, att.filename)))
+        except (EmailAdapterError, ValueError, OSError) as e:
+            _err(f"转发: 原邮件的附件「{att.filename}」取不出来, 没有建草稿 (以免转发少了附件): {e}")
+            return None
+    return "\n".join(lines), paths
 
 
 def _draft_attachments(target: EmailAdapter, args, replaces: str | None) -> list[str] | None:

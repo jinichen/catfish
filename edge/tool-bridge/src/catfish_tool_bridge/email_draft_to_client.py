@@ -51,6 +51,7 @@ def tool_email_create_draft(args: dict[str, Any]) -> dict[str, Any]:
         body (str, 必填): 正文定稿
         cc (str, 可选): 抄送, 多人逗号
         in_reply_to (str, 可选): 原邮件 id (回复场景传, 客户端才能串 thread)
+        forward_of (str, 可选): 转发的原邮件 id —— 原文 + 原附件由 CLI 接上 (11/4)
         account (str, 可选): 从哪个账号起草
         replaces (str, 可选): 改已有草稿时传旧草稿 id, 存好新的后旧的去掉
 
@@ -95,6 +96,9 @@ def tool_email_create_draft(args: dict[str, Any]) -> dict[str, Any]:
         in_reply_to = str(args.get("in_reply_to") or "").strip()
         if in_reply_to:
             cmd += ["--in-reply-to", in_reply_to]
+        forward_of = str(args.get("forward_of") or "").strip()
+        if forward_of:
+            cmd += ["--forward", forward_of]
         account = str(args.get("account") or "").strip()
         if account:
             cmd += ["--account", account]
@@ -104,14 +108,16 @@ def tool_email_create_draft(args: dict[str, Any]) -> dict[str, Any]:
         if replaces:
             cmd += ["--replace", replaces]
 
+        # 转发要先读原信、导出原附件, 比单建草稿慢得多
+        timeout = _SUBPROCESS_TIMEOUT * 4 if forward_of else _SUBPROCESS_TIMEOUT
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT,
+                cmd, capture_output=True, text=True, timeout=timeout,
             )
         except subprocess.TimeoutExpired:
             return {
                 "ok": False,
-                "error": f"CLI 超时 ({_SUBPROCESS_TIMEOUT}s) — Mail.app 卡住了?",
+                "error": f"CLI 超时 ({timeout:.0f}s) — Mail.app 卡住了?",
             }
         except OSError as e:
             return {"ok": False, "error": f"catfish-email 调用失败: {e}"}

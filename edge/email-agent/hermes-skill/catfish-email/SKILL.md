@@ -126,7 +126,8 @@ catfish-email search "<关键词>" [--limit=20]             # 全文搜索
 3. 把生成的内容 quote 给员工预览, 含: To / Cc / Subject (Re: ...) / Body
 4. **STOP 等员工 explicit yes**
 5. 拿到 yes → **存进草稿箱, 不发送** (红线): 调 catfish_email_create_draft 工具
-   (回复时带 in_reply_to = 原邮件 id; 改草稿箱里已有的那封时带 replaces)。
+   (回复时带 in_reply_to = 原邮件 id; 转发时带 forward_of = 原邮件 id, 原文和原附件会自动接在正文后面,
+   正文只写要附的话; 改草稿箱里已有的那封时带 replaces)。
    存好后鲶鱼会自动打开邮件页草稿箱并选中这封, 员工核对后自己点发送 ——
    不用让员工自己去找草稿箱
 ```
