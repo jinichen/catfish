@@ -34,6 +34,8 @@ pub fn schedule_autostart() {
         ensure_catfish_tools_mcp_registered();
         ensure_tool_bridge_running().await;
         TOOL_BRIDGE_STARTUP_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
+        // 11/4: hermes 里的 catfish-tools 是 hermes 的子进程, 升级后不重启 hermes 就一直是旧工具表
+        let _ = tauri::async_runtime::spawn_blocking(super::hermes_tools_freshness::restart_hermes_if_tools_changed).await;
         ensure_local_search_running().await;
         ensure_chrome_running().await;
         check_runtime_deps().await;

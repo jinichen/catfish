@@ -59,6 +59,7 @@ pub mod political_scan;   // P3.3.53 (6/13 鸿波): 政治敏感规则引擎 + a
 pub mod political_config; // P3.3.53 (6/13 鸿波): 政治敏感规则配置 — yaml 段, 集团信安/党办下发
 pub mod hermes_api_config;
 pub mod hermes_probe; // 10/29: 服务状态 Hermes 行 —— /health/detailed 就绪检查 + 未运行时给上次失败原因 // BL-COMPANION-HERMES-API-CONFIG (5/19, Phase 2-2A)
+pub mod hermes_tools_freshness; // 11/4: 鲶鱼工具代码变了重启一次 hermes, 小鲶才拿得到新工具 / 新参数
 pub mod hermes_idle; // 10/27: 重启 hermes 网关前先等手头的回答写完 (Windows 的 restart 是先停再起, 只给 30 秒)
 pub mod hermes_compression; // BL-HERMES-CTX-CAP (10/6): 压缩绝对 token 上限, 防 400K 上下文把模型工具调用拖垮
 pub mod hermes_language; // 10/13: hermes 界面语言 display.language=zh, 微信里的固定提示变中文
