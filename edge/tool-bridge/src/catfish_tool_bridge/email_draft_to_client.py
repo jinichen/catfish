@@ -28,6 +28,7 @@ CLI 的 send 子命令不在任何 schema 里。就算模型想发, 也没有那
 from __future__ import annotations
 
 import json
+import re
 import logging
 import os
 import subprocess
@@ -42,6 +43,13 @@ _SUBPROCESS_TIMEOUT = 20.0  # AppleScript 建草稿要跟 Mail.app 打交道, �
 def _find_catfish_email() -> str | None:
     from .email_runtime import find_email_cli
     return find_email_cli()
+
+
+_FORWARD_PREFIX = re.compile(r"^\s*(转发|轉發|fwd?|fw)\s*[:：]", re.IGNORECASE)
+
+
+def _is_forward_subject(subject: str) -> bool:
+    return bool(_FORWARD_PREFIX.match(subject or ""))
 
 
 def tool_email_create_draft(args: dict[str, Any]) -> dict[str, Any]:
@@ -94,9 +102,13 @@ def tool_email_create_draft(args: dict[str, Any]) -> dict[str, Any]:
         if cc:
             cmd += ["--cc", cc]
         in_reply_to = str(args.get("in_reply_to") or "").strip()
+        forward_of = str(args.get("forward_of") or "").strip()
+        # 11/4 真机: 小鲶转发时把原邮件 id 填进了 in_reply_to (当回复串线程), 没填 forward_of,
+        # 草稿里只有「原文见下方」。主题是转发 (转发: / Fwd: / FW:) 就按转发办 —— 转发本来也不串线程。
+        if not forward_of and in_reply_to and _is_forward_subject(subject):
+            forward_of, in_reply_to = in_reply_to, ""
         if in_reply_to:
             cmd += ["--in-reply-to", in_reply_to]
-        forward_of = str(args.get("forward_of") or "").strip()
         if forward_of:
             cmd += ["--forward", forward_of]
         account = str(args.get("account") or "").strip()

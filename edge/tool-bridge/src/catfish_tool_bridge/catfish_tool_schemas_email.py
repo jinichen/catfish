@@ -221,8 +221,8 @@ EMAIL_TOOLS: List[Dict[str, Any]] = [
             "把员工已点头的定稿放进邮件客户端草稿箱, 只建草稿、绝不发送 (系统没有发送能力)。"
             "仅在员工看过文案并同意后调; 还在讨论先用 catfish_draft_email_reply。"
             "完成后明确告诉员工: 没有发送, 请到草稿箱核对后自己点发送。"
-            "回复邮件必传 in_reply_to; 转发必传 forward_of (原文和原附件鲶鱼自动接在正文后面, "
-            "body 只写员工要附的话, 别自己抄原文, 也别写「原文见下方」却不传 forward_of); "
+            "回复邮件必传 in_reply_to; 转发必传 forward_of (不是 in_reply_to; 原文、原排版和原附件鲶鱼自动接在"
+            "正文后面, body 只写员工要附的话, 别自己抄原文, 也别写「原文见下方」却不传 forward_of); "
             "修改已有草稿传 replaces。返回的 summary 原样转述。"
         ),
         "input_schema": {

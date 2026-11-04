@@ -170,3 +170,32 @@ def test_改草稿_replaces透传_不留重复(fake_cli):
     argv = _recorded(fake_cli)["argv"]
     assert argv[argv.index("--replace") + 1] == "imap|%26g0l6P3ux-|2|8519"
     assert "只留这一版" in r["summary"] and "没有发送" in r["summary"]
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 11/4 转发: 小鲶把原邮件 id 填进 in_reply_to 也要按转发办
+# ─────────────────────────────────────────────────────────────────────
+@pytest.mark.parametrize("subject", ["转发：【通知】安全检查", "转发: x", "Fwd: x", "FW: x", " fw：x"])
+def test_转发主题_原邮件id填在in_reply_to也按转发(fake_cli, subject):
+    r = edc.tool_email_create_draft({
+        "to": "a@x.com", "subject": subject, "body": "各位: 请看下方通知。",
+        "in_reply_to": "apple_mail|Chinatelecom|3387",
+    })
+    assert r["ok"] is True
+    argv = _recorded(fake_cli)["argv"]
+    assert argv[argv.index("--forward") + 1] == "apple_mail|Chinatelecom|3387"
+    assert "--in-reply-to" not in argv, "转发不串回复线程"
+
+
+def test_回复主题不受影响(fake_cli):
+    edc.tool_email_create_draft({"to": "a@x.com", "subject": "Re: 转发的那个事", "body": "收到",
+                                 "in_reply_to": "apple_mail|Chinatelecom|1"})
+    argv = _recorded(fake_cli)["argv"]
+    assert "--in-reply-to" in argv and "--forward" not in argv
+
+
+def test_明确传了forward_of就用它(fake_cli):
+    edc.tool_email_create_draft({"to": "a@x.com", "subject": "转发: x", "body": "b",
+                                 "forward_of": "apple_mail|W|7", "in_reply_to": "apple_mail|W|8"})
+    argv = _recorded(fake_cli)["argv"]
+    assert argv[argv.index("--forward") + 1] == "apple_mail|W|7"
