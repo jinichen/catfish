@@ -185,3 +185,18 @@ def add_attachments(msg, paths) -> None:
             ctype = "application/octet-stream"
         maintype, subtype = ctype.split("/", 1)
         msg.add_attachment(p.read_bytes(), maintype=maintype, subtype=subtype, filename=p.name)
+
+
+def set_body(msg, body: str, html_body: str | None, attachments) -> None:
+    """正文 + 附件。11/4: 转发保留原排版 —— 有 HTML 时纯文字 / HTML 两份正文 (multipart/alternative),
+    收件端按 HTML 显示, 不认 HTML 的客户端看纯文字那份。"""
+    msg.set_content(body)
+    if html_body:
+        msg.add_alternative(html_body, subtype="html")
+    add_attachments(msg, attachments)
+
+
+def read_raw_source(adapter: "ImapAdapter", message_id: str) -> bytes:
+    """原邮件完整 RFC822 (转发保留排版用, 跟邮件 App 那边的 read_raw_source 同一个用途)。"""
+    return adapter._fetch_raw(message_id).as_bytes()  # noqa: SLF001
+

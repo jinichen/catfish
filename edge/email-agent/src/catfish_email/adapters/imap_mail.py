@@ -393,9 +393,9 @@ class ImapAdapter(EmailAdapter):
         self, *, to: Sequence[str], subject: str, body: str,
         cc: Sequence[str] = (), bcc: Sequence[str] = (),
         in_reply_to: str | None = None, account: str | None = None,
-        replaces: str | None = None, attachments: Sequence[str] = (),
+        replaces: str | None = None, attachments: Sequence[str] = (), html_body: str | None = None,
     ) -> str:
-        """APPEND 一封草稿到草稿箱, 返回它的 id。
+        """APPEND 一封草稿到草稿箱, 返回它的 id。html_body: 整份 HTML 正文 (11/4 转发保留原排版)。
 
         replaces: 草稿箱里一封旧草稿的 id —— 改草稿。见 imap_drafts.py。
 
@@ -413,7 +413,7 @@ class ImapAdapter(EmailAdapter):
                      else imap_drafts.threading_headers(self, in_reply_to))
         raw = self._build_rfc822(
             to=to, subject=subject, body=body, cc=cc, bcc=bcc,
-            in_reply_to=irt, references=refs, message_id=msg_id, attachments=attachments,
+            in_reply_to=irt, references=refs, message_id=msg_id, attachments=attachments, html_body=html_body,
         )
         conn = self._connect()
         before = imap_drafts.uids_in(conn, drafts, self._select)
@@ -531,6 +531,9 @@ class ImapAdapter(EmailAdapter):
         return message_id
 
     @_reconnect_once
+    def read_raw_source(self, message_id: str) -> bytes:
+        return imap_drafts.read_raw_source(self, message_id)
+
     def _fetch_raw(self, message_id: str) -> EmailMessage:
         """把整封原始邮件取下来解析好。"""
         folder_raw, uid = self._locate(message_id)
@@ -577,13 +580,10 @@ class ImapAdapter(EmailAdapter):
         self, *, to: Sequence[str], subject: str, body: str,
         cc: Sequence[str], bcc: Sequence[str],
         in_reply_to: str | None, message_id: str, references: str | None = None,
-        attachments: Sequence[str] = (),
+        attachments: Sequence[str] = (), html_body: str | None = None,
     ) -> bytes:
-        """拼一封纯文本邮件 (有附件时是 multipart/mixed)。
-
-        UTF-8 + base64 传输编码由 EmailMessage 自己处理 —— 中文正文和中文
-        主题都不用我们手工编码 (国内企业邮箱那些 =?GB2312?B?= 我们只负责读,
-        自己发一律 UTF-8)。
+        """拼一封邮件: 纯文字 (给了 html_body 再加一份 HTML), 有附件时 multipart/mixed。
+        UTF-8 编码由 EmailMessage 处理 (国内企业邮箱的 =?GB2312?B?= 我们只负责读, 自己发一律 UTF-8)。
         """
         assert self.config is not None
         msg = EmailMessage()
@@ -599,8 +599,7 @@ class ImapAdapter(EmailAdapter):
         if in_reply_to:
             msg["In-Reply-To"] = in_reply_to
             msg["References"] = references or in_reply_to
-        msg.set_content(body)
-        imap_drafts.add_attachments(msg, attachments)  # 10/29: 发送时原样走 SMTP, 附件跟着发出去
+        imap_drafts.set_body(msg, body, html_body, attachments)  # 附件 10/29 / HTML 11/4, 发送时原样走 SMTP
         return msg.as_bytes()
 
     def _has_capability(self, name: str) -> bool:

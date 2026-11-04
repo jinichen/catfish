@@ -134,12 +134,12 @@ def _payload(target: str, op: dict[str, Any]) -> dict[str, Any]:
 
 
 def propose(params: dict[str, Any]) -> dict[str, Any]:
+    target = params.get("target")
+    if target not in ("user", "memory"):  # 先校验参数, 再碰 hermes (CI 里没装 hermes)
+        raise ValueError("target 只能是 user 或 memory")
+
     from tools import write_approval as wa  # noqa: PLC0415
     from tools.memory_tool import load_on_disk_store  # noqa: PLC0415
-
-    target = params.get("target")
-    if target not in ("user", "memory"):
-        raise ValueError("target 只能是 user 或 memory")
     entries = [e for e in load_on_disk_store()._entries_for(target) if e.strip()]  # noqa: SLF001
     limit = _limit(target)
     total = sum(len(e) for e in entries)

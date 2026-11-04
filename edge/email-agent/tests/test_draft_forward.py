@@ -164,3 +164,32 @@ def test_cli_forward_uses_html_when_the_mail_app_can_take_it(tmp_path):
     assert d["html"] and "<b>加粗</b>" in d["html"] and "各位: 请看下方通知。" in d["html"]
     assert d["attachments"] == [("议程.pdf", b"%PDF fake")]
     assert all(not os.path.exists(x) for x in d["dirs"])  # 导出的原附件存完草稿就删
+
+
+# ── IMAP 邮箱也走 HTML (11/4 鸿波「IMAP 方式会不会有问题」: 原来 IMAP 只能纯文字转发) ──
+
+import email as _email  # noqa: E402
+import email.policy as _policy  # noqa: E402
+
+from tests.test_imap_writes import adapter  # noqa: E402,F401  (pytest fixture)
+
+
+def test_imap_draft_with_html_body_is_alternative_plus_attachment(adapter, tmp_path):  # noqa: F811
+    pdf = tmp_path / "议程.pdf"
+    pdf.write_bytes(b"%PDF fake")
+    draft_id = adapter.create_draft(to=["a@b.cn"], subject="转发: 示例", body="纯文字后备",
+                                    html_body="<html><body><table><tr><td>T</td></tr></table></body></html>",
+                                    attachments=[str(pdf)])
+    parsed = _email.message_from_bytes(adapter.read_raw_source(draft_id), policy=_policy.default)
+    assert parsed.get_body(("html",)).get_content().count("<table>") == 1
+    assert parsed.get_body(("plain",)).get_content().strip() == "纯文字后备"
+    assert [p.get_filename() for p in parsed.iter_attachments()] == ["议程.pdf"]
+
+
+def test_cli_forward_on_imap_takes_the_html_path(tmp_path):
+    class _ImapLike(_HtmlSource):
+        name = "imap"
+
+    src = _ImapLike(tmp_path)
+    assert _run(src, _args(forward="imap|INBOX|1|7")) == 0
+    assert src.drafts[0]["html"] and "<b>加粗</b>" in src.drafts[0]["html"]
