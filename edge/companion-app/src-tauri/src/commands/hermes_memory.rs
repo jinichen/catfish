@@ -191,3 +191,26 @@ pub fn hermes_memory_read() -> Result<HermesMemoryView, String> {
         memory_file_path: memory_path.to_string_lossy().to_string(),
     })
 }
+
+// 11/4 鸿波「MEMORY.md 快满了为什么没有自动处理」: hermes 后台回顾提的合并 / 删旧建议不许自己删改,
+// 存在 <HERMES_HOME>/pending/memory/ 等人批, 原来界面上看不到。数据和规则在 tool-bridge
+// (memory_pending.py, 用 hermes 自己的 apply / discard), 这里只转 RPC。USER.md 和 MEMORY.md 的都在里面。
+const PENDING_RPC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+#[tauri::command]
+pub async fn hermes_memory_pending_list() -> Result<serde_json::Value, String> {
+    crate::services::tool_bridge_rpc::call_with_timeout("memory/pending_list", serde_json::json!({}), PENDING_RPC_TIMEOUT)
+        .await
+}
+
+/// 员工在卡片上点「同意 / 不要」。同意走 hermes `apply_memory_pending` (只动建议钉住的那条原文)。
+#[tauri::command]
+pub async fn hermes_memory_pending_resolve(id: String, approve: bool) -> Result<serde_json::Value, String> {
+    let params = serde_json::json!({ "id": id, "approve": approve });
+    let r = crate::services::tool_bridge_rpc::call_with_timeout("memory/pending_resolve", params, PENDING_RPC_TIMEOUT)
+        .await?;
+    if r.get("ok").and_then(serde_json::Value::as_bool) == Some(false) {
+        return Err(r.get("error").and_then(serde_json::Value::as_str).unwrap_or("没改成").to_string());
+    }
+    Ok(r)
+}

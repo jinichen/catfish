@@ -524,7 +524,16 @@ def memory_compress(args: Dict[str, Any]) -> Dict[str, Any]:
             "error": f"target 必须是 'user' 或 'memory', 收到: {target!r}",
         }
 
-    char_limit = 1375 if target == "user" else 2200  # hermes 默认
+    # 11/4: 原来写死 hermes 旧默认 1375/2200, 鲶鱼 9/17 起把上限改成 2000/4000 (memory_provider_config.rs),
+    # 用量被算高近一倍。改读 config.yaml, 没配才用 hermes 默认。
+    from .adapter_todo import _read_hermes_memory_config  # noqa: PLC0415
+
+    cfg = _read_hermes_memory_config()
+    key, default = ("user_char_limit", 1375) if target == "user" else ("memory_char_limit", 2200)
+    try:
+        char_limit = int(cfg.get(key, default))
+    except (TypeError, ValueError):
+        char_limit = default
     entries = _read_hermes_memory_entries(target)
     total_chars = sum(len(e) for e in entries)
     usage_pct = (total_chars / char_limit * 100) if char_limit > 0 else 0

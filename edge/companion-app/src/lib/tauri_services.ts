@@ -215,6 +215,30 @@ export const hermesMemoryRead = () =>
 // hermes memory_tool silent fail. byte-exact match + trim() fallback.
 export const hermesMemoryRemove = (target: "user" | "memory", entryText: string) =>
   rawInvoke<void>("hermes_memory_remove", { target, entryText });
+// 11/4: 待你确认的记忆整理建议 (hermes 后台回顾不许自己删改, 存着等人批)。USER.md / MEMORY.md 都有。
+export interface MemoryPendingOp {
+  action: "add" | "replace" | "patch" | "remove";
+  /** 要删 / 改的那条原文 (add 为空) */
+  entry: string;
+  pinned: boolean;
+  /** 新写进去的内容 (remove 为空); patch 是替换 old_text 的那一段 */
+  content: string;
+  /** patch 要换掉的那一段 (其余动作为空) */
+  old_text: string;
+}
+export interface MemoryPendingItem {
+  id: string;
+  target: "user" | "memory";
+  origin: string;
+  created_at: number;
+  ops: MemoryPendingOp[];
+  /** 要动的那条已经变了, 同意也改不成 */
+  stale: boolean;
+}
+export const hermesMemoryPendingList = () =>
+  rawInvoke<{ ok: boolean; items: MemoryPendingItem[] }>("hermes_memory_pending_list");
+export const hermesMemoryPendingResolve = (id: string, approve: boolean) =>
+  rawInvoke<{ ok: boolean; applied: boolean }>("hermes_memory_pending_resolve", { id, approve });
 
 // P3.3.54 (6/12 鸿波): 审计员看的 xlsx 多 sheet 导出.
 export interface AuditExportResult {

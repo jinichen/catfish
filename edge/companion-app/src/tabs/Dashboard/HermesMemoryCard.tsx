@@ -23,6 +23,7 @@ import {
   toolBridgeCallTool,
   type HermesMemoryView,
 } from "../../lib/tauri";
+import MemoryPendingPanel from "./MemoryPendingPanel";
 
 const REFRESH_MS = 30_000;  // 30s polling 跟其他卡一致
 
@@ -420,6 +421,14 @@ export default function HermesMemoryCard() {
             gap: "var(--space-3)",
           }}
         >
+          {/* 11/4: 小鲶后台整理出来、等你批的合并 / 删旧建议 (USER + MEMORY) */}
+          <MemoryPendingPanel
+            onChanged={() => void load()}
+            nearlyFull={
+              (view.user_char_limit > 0 && userChars / view.user_char_limit >= 0.8) ||
+              (view.memory_char_limit > 0 && memoryChars / view.memory_char_limit >= 0.8)
+            }
+          />
           <EntrySection
             label="USER · 员工本人"
             entries={view.user_entries}

@@ -94,6 +94,16 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
             return _error(req_id, INVALID_PARAMS, "range 只支持 today / natural-week")
         return _success(req_id, local_pim.events_for_range(rng))
 
+    # 11/4: 「我的记忆」卡片上「待你确认的整理建议」(memory_pending.py), 不进模型工具清单
+    if method in ("memory/pending_list", "memory/pending_resolve"):
+        from . import memory_pending  # noqa: PLC0415
+        if method == "memory/pending_list":
+            return _success(req_id, await asyncio.to_thread(memory_pending.list_pending))
+        try:
+            return _success(req_id, await asyncio.to_thread(memory_pending.resolve, params))
+        except ValueError as e:
+            return _error(req_id, INVALID_PARAMS, str(e))
+
     # 10/12: 销售跟进 (customers.py / customer_radar.py): 早安「客户跟进」+ 设置「销售模板」, 不进模型工具清单
     if method in ("pim/customer_radar", "pim/sales_template_get", "pim/sales_template_set", "pim/customer_add"):
         from . import customer_radar, customers  # noqa: PLC0415

@@ -131,6 +131,16 @@ def test_compress_over_threshold_suggests(hermes_home):
     assert "next_step_for_llm" in result
 
 
+def test_compress_reads_char_limit_from_config(hermes_home):
+    """11/4: 上限读 config.yaml (鲶鱼配的 4000), 不再按 hermes 旧默认 2200 算 —— 3000 字是 75%, 不该提压缩。"""
+    (hermes_home.parent / "config.yaml").write_text("memory:\n  memory_char_limit: 4000\n", encoding="utf-8")
+    _write_memory_file(hermes_home, "memory", ["x" * 1500, "y" * 1500])
+    result = catfish_tools.memory_compress({"target": "memory"})
+    assert result["char_limit"] == 4000
+    assert result["usage_pct"] == 75.0
+    assert result["action_needed"] is False
+
+
 def test_compress_does_not_write_disk(hermes_home):
     """关键: compress 只返建议, 不真改盘."""
     long_entry = "x" * 600
