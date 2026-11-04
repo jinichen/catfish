@@ -93,7 +93,6 @@ export default function EmailTab() {
   const [accounts, setAccounts] = useState<EmailAccountItem[]>(
     () => (listCache?.accounts as EmailAccountItem[]) ?? [],
   );
-  useEmailListCacheHydrate(items.length === 0, setItems, setSentItems, setAccounts); // 10/31: 重启后先显示上次的列表
   // BL-COMPANION-EMAIL-DIGEST-STEP5 (5/20): urgencyMap 走 useEmailStore
   // (localStorage hydrate + Rust reconcile + 跨 tab 共享, 不再 local useState).
   const urgencyMap = useEmailStore((s) => s.urgencyMap);
@@ -122,8 +121,9 @@ export default function EmailTab() {
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [folder, setFolder] = useState<MailFolder>("Inbox"); // 9/26 见 FolderTabs
-  // 11/4: 收件箱全量要 20 秒, 期间切到草稿箱, 晚回来的收件箱列表曾盖掉草稿箱 (收到的信带上了「发送这封草稿」)
-  const viewRef = useRef({ folder, unreadOnly }); viewRef.current = { folder, unreadOnly };
+  const viewRef = useRef({ folder, unreadOnly }); viewRef.current = { folder, unreadOnly }; // 11/4 晚回来的旧文件夹列表丢掉
+  // 10/31 重启后先铺上次的收件箱; 11/4 只铺「收件箱·全部」(草稿箱本就空, 曾被铺成收件箱)
+  useEmailListCacheHydrate(items.length === 0 && folder === "Inbox" && !unreadOnly, setItems, setSentItems, setAccounts);
   const [showMailSettings, setShowMailSettings] = useState(false); // 9/28 邮箱设置入口
   const [sourceDiscovery, setSourceDiscovery] = useState<EmailSourceDiscovery | null>(null);
   const [sourceDiscoveryError, setSourceDiscoveryError] = useState<string | null>(null);
@@ -197,7 +197,7 @@ export default function EmailTab() {
       if (Array.isArray(sent)) setSentItems(sent as EmailDigestItem[]);
       if (Array.isArray(accs)) setAccounts(accs as EmailAccountItem[]);
       // 8/21: 回写跨挂载缓存 — 下次切回瞬间有列表 (见 useState 初值注释); 只在拉成功后写, 失败不覆盖好的。
-      if (Array.isArray(list) && folder === "Inbox") {
+      if (Array.isArray(list) && folder === "Inbox" && !unreadOnly) {
         useEmailStore.getState().setListCache({
           items: hideDeleted(list as EmailDigestItem[], useEmailStore.getState().deleted),
           sentItems: Array.isArray(sent) ? sent : [],
