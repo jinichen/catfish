@@ -31,6 +31,7 @@ PLACEHOLDERS = {
     "{LIMIT}": "5", "{UNREAD_ONLY}": "false", "{QUERY}": "x", "{READ_FLAG}": "true",
     "{BODY_PATH}": "/tmp/body.txt", "{SOURCE_PATH}": "/tmp/source.eml", "{ATT_PATH}": "/tmp/attachments.txt",
     "{SUBJECT}": "s", "{TO}": "a@example.cn", "{CC}": "", "{BCC}": "",
+    "{USE_HTML}": "false", "{HTML_PATH}": "",  # 11/4 转发保留排版 / 照草稿 HTML 重建
 }
 
 

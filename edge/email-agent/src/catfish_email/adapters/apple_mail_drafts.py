@@ -154,7 +154,12 @@ tell application "Mail"
     set bodyText to (read fileRef as «class utf8»)
     close access fileRef
 
-    set newMsg to make new outgoing message with properties {visible:false, subject:subj, content:bodyText}
+    -- 11/4: 转发保留原排版 —— 正文是整份 HTML 时走邮件 App 的 html content (真机: HTML / 表格 / data: 图 / 附件都在)
+    if {USE_HTML} then
+        set newMsg to make new outgoing message with properties {visible:false, subject:subj, html content:bodyText}
+    else
+        set newMsg to make new outgoing message with properties {visible:false, subject:subj, content:bodyText}
+    end if
 
     -- account: the one asked for, else whichever account Mail picked as sender
     set acc to missing value
@@ -271,6 +276,7 @@ tell application "Mail"
     set accName to "{ACCOUNT}"
     set targetIdStr to "{MSG_ID}"
     set outIdStr to "{OUT_ID}"
+    set htmlPath to "{HTML_PATH}"
     set acc to first account whose name of it is accName
 
     -- saved without a confirmed Drafts id: only the compose window exists
@@ -341,7 +347,25 @@ tell application "Mail"
     end repeat
     if (count of toAddrs) is 0 then error "DRAFT_NO_RECIPIENT" number 8005
 
-    set newMsg to make new outgoing message with properties {visible:false, subject:draftSubj, content:bodyText}
+    -- 11/4: 草稿自己的 HTML 正文 (Python 从 source 里取好写进文件) —— 照它重建, 转发 / 有格式的草稿不丢排版
+    set draftHtml to ""
+    if htmlPath is not "" then
+        try
+            set hf to open for access POSIX file htmlPath
+            set draftHtml to (read hf as «class utf8»)
+            close access hf
+        on error
+            try
+                close access POSIX file htmlPath
+            end try
+            set draftHtml to ""
+        end try
+    end if
+    if draftHtml is not "" then
+        set newMsg to make new outgoing message with properties {visible:false, subject:draftSubj, html content:draftHtml}
+    else
+        set newMsg to make new outgoing message with properties {visible:false, subject:draftSubj, content:bodyText}
+    end if
     try
         set sender of newMsg to draftSender
         set senderNow to (sender of newMsg) as string
@@ -462,7 +486,11 @@ def create_draft(
     account: str | None = None,
     replaces: str | None = None,
     attachments: Sequence[str] = (),
+    html_body: str | None = None,
+    forward_of: str | None = None,
 ) -> str:
+    """html_body: 整份 HTML (转发保留排版); 给了就用它当正文, body 只作没 HTML 时的后备。
+    forward_of: 转发的原邮件 id —— 跟回复一样, 草稿落在原邮件所在的账号 (11/4 真机: 不传落到了默认账号)。"""
     if not to:
         raise ValueError("create_draft: to 不能空")
     if adapter._use_emlx_fallback:
@@ -470,11 +498,11 @@ def create_draft(
             "Apple Mail EMLX fallback 模式只读, 不能写草稿. "
             "去 System Settings 给 catfish 'Mail' Automation 权限后重试.",
         )
-    account_name = _draft_account(adapter, account, replaces or in_reply_to)
+    account_name = _draft_account(adapter, account, replaces or in_reply_to or forward_of)
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".txt", delete=False, encoding="utf-8",
     ) as tf:
-        tf.write(body)
+        tf.write(html_body or body)
         body_path = tf.name
     # 10/29: 附件路径一行一个写进临时文件 (同正文): 路径里的引号 / 反斜杠不用经 AS 字符串转义
     with tempfile.NamedTemporaryFile(
@@ -488,6 +516,7 @@ def create_draft(
             .replace("{ACCOUNT}", _escape_as_string(account_name))
             .replace("{SUBJECT}", _escape_as_string(subject))
             .replace("{BODY_PATH}", body_path)
+            .replace("{USE_HTML}", "true" if html_body else "false")
             .replace("{ATT_PATH}", att_path)
             .replace("{TO}", _escape_as_string(",".join(to)))
             .replace("{CC}", _escape_as_string(",".join(cc)))
@@ -539,12 +568,46 @@ def send_message(adapter: "AppleMailAdapter", run: Callable[[str], str], message
             "Apple Mail EMLX fallback 模式不支持 send_message — Mail.app 必须开着才能发邮件"
         )
     account_name, msg_id = adapter._unpack_id(message_id)
+    html_path = _draft_html_file(adapter, message_id)
     script = (
         _AS_SEND_MESSAGE
         .replace("{ACCOUNT}", _escape_as_string(account_name))
         .replace("{MSG_ID}", _escape_as_string(msg_id))
         .replace("{OUT_ID}", _escape_as_string(outgoing_for(message_id)))
+        .replace("{HTML_PATH}", html_path)
     )
+    try:
+        _send_with_retries(run, script, message_id)
+    finally:
+        if html_path:
+            try:
+                os.unlink(html_path)
+            except OSError:
+                pass
+
+
+def _draft_html_file(adapter: "AppleMailAdapter", message_id: str) -> str:
+    """草稿的 HTML 正文写进临时文件, 给「照草稿重建」用; 取不到返空串 (退回纯文字重建, 跟以前一样)。"""
+    if message_id.split("|")[-1].startswith(PENDING_PREFIX):
+        return ""
+    try:
+        import email  # noqa: PLC0415
+        import email.policy  # noqa: PLC0415
+
+        msg = email.message_from_bytes(adapter.read_raw_source(message_id), policy=email.policy.default)
+        part = msg.get_body(preferencelist=("html",))
+        html = part.get_content() if part is not None else ""
+    except Exception as error:  # noqa: BLE001
+        logger.info("取草稿 HTML 失败, 发送时按纯文字重建: %s", error)
+        return ""
+    if not html.strip():
+        return ""
+    with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False, encoding="utf-8") as hf:
+        hf.write(html)
+        return hf.name
+
+
+def _send_with_retries(run: Callable[[str], str], script: str, message_id: str) -> None:
     # 刚存的草稿 Mail 可能还没落定 (P3.5.57): 只有「找不到」才重试
     last: DataNotFoundError | None = None
     for attempt in range(3):

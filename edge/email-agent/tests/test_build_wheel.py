@@ -61,11 +61,9 @@ def test_same_source_builds_the_same_bytes(tmp_path):
 def test_wheel_installs_offline_and_imports(tmp_path):
     wheel = _builder().build_wheel(tmp_path / "dist")
     target = tmp_path / "site"
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "--no-deps", "--no-index", "-q",
-         "--target", str(target), str(wheel)],
-        check=True,
-    )
+    # 11/4: 纯 Python wheel 装进 --target 就是解压; 自己解, 不依赖跑测试的环境里有 pip (uv 建的环境默认没有)
+    with zipfile.ZipFile(wheel) as zf:
+        zf.extractall(target)
     probe = "import catfish_email.__main__, catfish_email.adapters.imap_archive_read; print('ok')"
     out = subprocess.run([sys.executable, "-c", probe], cwd=target, capture_output=True, text=True)
     assert out.stdout.strip() == "ok", out.stderr

@@ -651,15 +651,46 @@ class AppleMailAdapter(EmlxFallbackMixin, EmailAdapter):
         account: str | None = None,
         replaces: str | None = None,
         attachments: Sequence[str] = (),
+        html_body: str | None = None,
+        forward_of: str | None = None,
     ) -> str:
         """存进该账号的草稿箱, 返回草稿箱里那封的 id。replaces: 改草稿时的旧稿 id。
+        html_body: 整份 HTML 正文 (11/4 转发保留原排版)。
 
         见 apple_mail_drafts.create_draft (9/27 重写: 以前返回的是撰写窗口编号)。
         """
         return apple_mail_drafts.create_draft(
             self, _run_osascript, to=to, subject=subject, body=body, cc=cc, bcc=bcc,
             in_reply_to=in_reply_to, account=account, replaces=replaces, attachments=attachments,
+            html_body=html_body, forward_of=forward_of,
         )
+
+    def read_raw_source(self, message_id: str) -> bytes:
+        """原邮件完整 RFC822 (11/4 转发保留排版用)。跟 read_message 同一个脚本, 只取 source 那份。"""
+        account_name, msg_id = self._unpack_id(message_id)
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tf:
+            body_path = tf.name
+        with tempfile.NamedTemporaryFile(suffix=".eml", delete=False) as tf:
+            source_path = tf.name
+        try:
+            _run_osascript(
+                _AS_GET_MESSAGE
+                .replace("{ACCOUNT}", _escape_as_string(account_name))
+                .replace("{MSG_ID}", _escape_as_string(msg_id))
+                .replace("{BODY_PATH}", body_path)
+                .replace("{SOURCE_PATH}", source_path)
+            )
+            with open(source_path, "rb") as f:
+                raw = f.read()
+        finally:
+            for p in (body_path, source_path):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+        if not raw.strip():
+            raise EmailAdapterError("原邮件的完整内容取不出来")
+        return raw
 
     # ── EMLX fallback (只读) ────────────────────────────
     #

@@ -110,11 +110,17 @@ def _cmd_draft(adapters: list[EmailAdapter], args) -> int:
     if attachments is None:
         return 1
     if forward_id:
-        fwd = _forward_parts(adapters, forward_id)
+        wants_html = "html_body" in inspect.signature(target.create_draft).parameters
+        fwd = _forward_parts(adapters, forward_id, note=body, want_html=wants_html)
         if fwd is None:
             return 1
-        body = body.rstrip() + "\n\n" + fwd[0]
-        attachments += fwd[1]
+        text_block, fwd_paths, fwd_html = fwd
+        body = body.rstrip() + "\n\n" + text_block
+        attachments += fwd_paths
+        if fwd_html:
+            extra["html_body"] = fwd_html
+        if "forward_of" in inspect.signature(target.create_draft).parameters:
+            extra["forward_of"] = forward_id  # 草稿落在原邮件所在的账号
         if sum(os.path.getsize(p) for p in attachments) > MAX_ATTACHMENTS_BYTES:
             _err("原邮件的附件加上新附件超过 25 MB, 多数邮箱会退信。请在邮件客户端里直接转发。")
             return 1
@@ -123,6 +129,7 @@ def _cmd_draft(adapters: list[EmailAdapter], args) -> int:
             _err(f"[{target.name}] 起草时不支持带附件, 请在邮件客户端里添加附件")
             return 1
         extra["attachments"] = attachments
+    fwd_dirs = {os.path.dirname(p) for p in attachments if os.path.basename(os.path.dirname(p)).startswith("catfish-forward-")}
     try:
         msg_id = target.create_draft(
             **extra,
@@ -140,6 +147,11 @@ def _cmd_draft(adapters: list[EmailAdapter], args) -> int:
     except EmailAdapterError as e:
         _err(f"起草失败: {e}")
         return 1
+    finally:
+        import shutil  # noqa: PLC0415
+
+        for d in fwd_dirs:  # 转发时导出的原附件, 草稿存好就不用了
+            shutil.rmtree(d, ignore_errors=True)
 
     # 9/29: 记下这一封 —— Companion 对话结束后据此跳到草稿箱并选中它 (见 last_draft.py)
     if msg_id:
@@ -163,8 +175,16 @@ def _cmd_draft(adapters: list[EmailAdapter], args) -> int:
 MAX_ATTACHMENTS_BYTES = 25 * 1024 * 1024
 
 
-def _forward_parts(adapters: list[EmailAdapter], msg_id: str) -> tuple[str, list[str]] | None:
-    """11/4: 转发 = 原邮件头 + 原文 + 原附件。取不全就不建草稿 (半截转发比没有更糟)。出错已 _err。"""
+def _forward_parts(adapters: list[EmailAdapter], msg_id: str, *, note: str = "",
+                   want_html: bool = False) -> tuple[str, list[str], str | None] | None:
+    """11/4: 转发 = 原邮件头 + 原文 + 原附件。取不全就不建草稿 (半截转发比没有更糟)。出错已 _err。
+
+    返回 (纯文字转发段, 附件路径, 整份 HTML 或 None)。草稿那边认 HTML、来源能给原邮件完整内容
+    (邮件 App) 时出 HTML —— 原排版、表格、内嵌图片都保留 (forward_mime.py); 否则纯文字。
+    """
+    import tempfile  # noqa: PLC0415
+
+    from .forward_mime import parse_forward  # noqa: PLC0415
     from .html_strip import strip_html  # noqa: PLC0415
 
     prefix = msg_id.split("|", 1)[0] if "|" in msg_id else ""
@@ -177,6 +197,21 @@ def _forward_parts(adapters: list[EmailAdapter], msg_id: str) -> tuple[str, list
     except (EmailAdapterError, ValueError) as e:
         _err(f"转发: 原邮件读不出来, 没有建草稿: {e}")
         return None
+    if want_html and hasattr(source, "read_raw_source"):
+        try:
+            full_html, files = parse_forward(source.read_raw_source(msg_id), note)
+        except (EmailAdapterError, ValueError) as e:
+            _err(f"转发: 原邮件的完整内容取不出来, 没有建草稿: {e}")
+            return None
+        folder = tempfile.mkdtemp(prefix="catfish-forward-")
+        paths = []
+        for i, (name, data) in enumerate(files):
+            safe = os.path.basename(name.replace("\\", "/")) or f"附件{i + 1}"
+            path = os.path.join(folder, f"{i + 1:02d}-{safe}" if safe in {os.path.basename(p) for p in paths} else safe)
+            with open(path, "wb") as f:
+                f.write(data)
+            paths.append(path)
+        return "", paths, full_html
     text = (m.body_text or "").strip() or strip_html(m.body_html or "").strip()
     lines = ["---------- 转发的邮件 ----------", f"发件人: {m.sender}", f"时间: {m.date}"]
     if m.recipients:
@@ -191,7 +226,7 @@ def _forward_parts(adapters: list[EmailAdapter], msg_id: str) -> tuple[str, list
         except (EmailAdapterError, ValueError, OSError) as e:
             _err(f"转发: 原邮件的附件「{att.filename}」取不出来, 没有建草稿 (以免转发少了附件): {e}")
             return None
-    return "\n".join(lines), paths
+    return "\n".join(lines), paths, None
 
 
 def _draft_attachments(target: EmailAdapter, args, replaces: str | None) -> list[str] | None:

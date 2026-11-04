@@ -255,7 +255,8 @@ def test_send_uses_the_compose_window_the_draft_was_saved_from():
         seen.append(script)
         return "OK"
 
-    with patch.object(am, "_run_osascript", side_effect=fake_run):
+    with patch.object(am, "_run_osascript", side_effect=fake_run), \
+            patch.object(drafts, "_draft_html_file", return_value=""):
         AppleMailAdapter().send_message("apple_mail|Chinatelecom|2801")
     assert _assign(seen[0], "outIdStr") == "4"
     assert _assign(seen[0], "targetIdStr") == "2801"
@@ -303,10 +304,43 @@ def test_send_gives_up_after_three_not_found():
     with (
         patch.object(am, "_run_osascript", side_effect=fake_run),
         patch.object(drafts.time, "sleep"),
+        patch.object(drafts, "_draft_html_file", return_value=""),
     ):
         with pytest.raises(DataNotFoundError):
             AppleMailAdapter().send_message("apple_mail|Chinatelecom|2801")
     assert len(attempts) == 3
+
+
+def test_rebuild_on_send_uses_the_drafts_own_html(tmp_path):
+    """11/4: 撰写窗口没了要照草稿重建时, 用草稿自己的 HTML (html content), 转发 / 有格式的草稿不丢排版。"""
+    raw = (b"Content-Type: multipart/alternative; boundary=b\r\n\r\n--b\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n"
+           b"x\r\n--b\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<table><tr><td>T</td></tr></table>\r\n--b--\r\n")
+    seen: list[str] = []
+
+    def fake_run(script, **_):
+        seen.append(script)
+        return "OK"
+
+    with patch.object(am, "_run_osascript", side_effect=fake_run), \
+            patch.object(AppleMailAdapter, "read_raw_source", return_value=raw):
+        AppleMailAdapter().send_message("apple_mail|Chinatelecom|2801")
+    html_path = _assign(seen[0], "htmlPath")
+    assert html_path and html_path.endswith(".html")
+    assert not Path(html_path).exists()  # 发完删掉临时文件
+    assert "html content:draftHtml" in drafts._AS_SEND_MESSAGE
+
+
+def test_forward_draft_body_goes_in_as_html():
+    seen: list[str] = []
+
+    def fake_run(script, **_):
+        seen.append(script)
+        return f"Chinatelecom{FS}2802{FS}7"
+
+    with patch.object(am, "_run_osascript", side_effect=fake_run):
+        AppleMailAdapter().create_draft(to=["a@b.cn"], subject="转发: x", body="纯文字后备",
+                                        html_body="<p>附言</p><table></table>")
+    assert "if true then" in seen[0] and "html content:bodyText" in seen[0]
 
 
 # ── 列表 (9/27: 撤掉 emlx 索引, AppleScript 成批取) ──────────
@@ -425,3 +459,10 @@ def test_成批取列表的长度校验不用_contents_of_引用():
     assert "contents of lst" not in body
     for name in ("readList", "subjList", "sndrList", "recvList"):
         assert f"(count of {name}) is not n" in body
+
+
+def test_forward_draft_lands_in_the_account_of_the_original():
+    """11/4 真机: 转发没指定账号时落到了「邮件」App 的默认账号 (Google), 应跟原邮件同账号。"""
+    assert drafts._draft_account(AppleMailAdapter(), None, "apple_mail|Chinatelecom|3390") == "Chinatelecom"
+    assert "forward_of" in inspect.signature(drafts.create_draft).parameters
+

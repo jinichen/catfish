@@ -97,3 +97,70 @@ def test_plain_draft_unchanged(tmp_path):
     src = _Source(tmp_path)
     assert _run(src, _args(forward=None)) == 0
     assert src.drafts[0]["body"] == "各位: 请看下方通知。" and src.drafts[0]["attachments"] == []
+
+
+# ── 11/4 保留原排版: 邮件 App 那条路出整份 HTML ─────────────────────
+
+from email.message import EmailMessage  # noqa: E402
+
+from catfish_email.forward_mime import parse_forward  # noqa: E402
+
+
+def _rich_original() -> bytes:
+    m = EmailMessage()
+    m["From"] = "办公室 <office@example.com>"
+    m["To"] = "a@example.com"
+    m["Subject"] = "示例通知"
+    m["Date"] = "Mon, 05 Jan 2026 09:00:00 +0800"
+    m.set_content("纯文字版")
+    m.add_alternative('<html><body><table><tr><td><b>加粗</b></td></tr></table><img src="cid:logo1"></body></html>',
+                      subtype="html")
+    m.get_payload()[1].add_related(b"\x89PNG fake", maintype="image", subtype="png", cid="<logo1>")
+    m.add_attachment(b"%PDF fake", maintype="application", subtype="pdf", filename="议程.pdf")
+    return m.as_bytes()
+
+
+def test_parse_forward_keeps_layout_inlines_images_and_lists_real_attachments():
+    html_out, files = parse_forward(_rich_original(), "各位:\n请看下方通知。")
+    assert html_out.index("各位:<br>请看下方通知。") < html_out.index("---------- 转发的邮件 ----------") \
+        < html_out.index("<table>")
+    assert "<b>加粗</b>" in html_out
+    assert "cid:logo1" not in html_out and "data:image/png;base64," in html_out  # 内嵌图转成 data:, 不裂图
+    assert "办公室 &lt;office@example.com&gt;" in html_out
+    assert files == [("议程.pdf", b"%PDF fake")]  # 内嵌图不重复当附件
+
+
+def test_parse_forward_of_plain_text_mail_keeps_line_breaks():
+    m = EmailMessage()
+    m["From"] = "a@example.com"
+    m["Subject"] = "s"
+    m.set_content("第一行\n第二行 <不是标签>")
+    html_out, files = parse_forward(m.as_bytes(), "附言")
+    assert "white-space:pre-wrap" in html_out and "&lt;不是标签&gt;" in html_out and files == []
+
+
+class _HtmlSource(_Source):
+    name = "apple_mail"
+
+    def read_raw_source(self, message_id):
+        return _rich_original()
+
+    def create_draft(self, *, to, subject, body, cc=(), bcc=(), in_reply_to=None, account=None,
+                     replaces=None, attachments=(), html_body=None):
+        import os
+        self.drafts.append({"body": body, "html": html_body,
+                            "attachments": [(os.path.basename(p), open(p, "rb").read()) for p in attachments],
+                            "dirs": {os.path.dirname(p) for p in attachments}})
+        return "apple_mail|Work|9"
+
+
+def test_cli_forward_uses_html_when_the_mail_app_can_take_it(tmp_path):
+    import os
+    src = _HtmlSource(tmp_path)
+    # 原邮件头仍走 read_message (校验原信在); 假源只认 imap 那个 id, 这里转一下
+    src.read_message = lambda _id: _Source(tmp_path).read_message("imap|INBOX|1|7")  # type: ignore[method-assign]
+    assert _run(src, _args(forward="apple_mail|Work|7")) == 0
+    (d,) = src.drafts
+    assert d["html"] and "<b>加粗</b>" in d["html"] and "各位: 请看下方通知。" in d["html"]
+    assert d["attachments"] == [("议程.pdf", b"%PDF fake")]
+    assert all(not os.path.exists(x) for x in d["dirs"])  # 导出的原附件存完草稿就删

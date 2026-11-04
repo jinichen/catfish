@@ -192,7 +192,7 @@ def test_get_memory_store_init_failure_marks_failed(monkeypatch: pytest.MonkeyPa
         raise ImportError("fake: hermes-agent 没装")
 
     monkeypatch.setattr(
-        "catfish_tool_bridge.adapter._read_hermes_memory_config",
+        "catfish_tool_bridge.adapter_todo._read_hermes_memory_config",  # 函数在 adapter_todo 里调, 补丁要打在那
         _fail_import,
     )
 
@@ -211,7 +211,7 @@ def test_get_memory_store_init_failure_marks_failed(monkeypatch: pytest.MonkeyPa
         raise RuntimeError("不应该再被调")
 
     monkeypatch.setattr(
-        "catfish_tool_bridge.adapter._read_hermes_memory_config",
+        "catfish_tool_bridge.adapter_todo._read_hermes_memory_config",  # 函数在 adapter_todo 里调, 补丁要打在那
         _should_not_be_called,
     )
     store2 = adapter._get_memory_store()
@@ -373,7 +373,7 @@ def test_get_memory_store_caches_on_success(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setitem(__import__("sys").modules, "tools.memory_tool", fake_module)
     # config 返空 → 用默认值
     monkeypatch.setattr(
-        "catfish_tool_bridge.adapter._read_hermes_memory_config",
+        "catfish_tool_bridge.adapter_todo._read_hermes_memory_config",  # 函数在 adapter_todo 里调, 补丁要打在那
         lambda: {},
     )
 
