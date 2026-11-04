@@ -197,6 +197,7 @@ const CATFISH: &[(Pat, Class, &str)] = &[
     (Exact("skill_names_backfill.json"), Rebuild, "缓存"),
     (Exact("apple_mail_outgoing.json"), Rebuild, "邮件缓存"),
     (Exact("inflight_streams"), Rebuild, "运行状态"),
+    (Exact("hermes_tools_fingerprint"), Rebuild, "运行状态 (启动时重算, 新机第一次启动重启一次 hermes)"),
     (Prefix("last_wiki_"), Rebuild, "运行状态"),
     (Exact(".wiki-integrity-backups"), Rebuild, "旧备份"),
     (Exact(".weekly_reset_last"), Rebuild, "运行状态"),
