@@ -57,13 +57,15 @@ PENDING_PREFIX = "outgoing-"
 
 # 草稿箱里的信按编号找: 先用 Mail 自己的引用形式, 再按列表的枚举方式找。
 # 故意不用 whose —— 8/31 实测草稿箱里 whose 过滤会漏。
+# 11/4: `message id N of 草稿箱` 在 Mail 里按全局编号解析, 收件箱里同编号的信也会返回 ——
+# 收件箱的信会被当成草稿, 差点被「发送这封草稿」/「删除」。必须核对它真在这个草稿箱里。
 _AS_DRAFT_HANDLERS = """
 on draftById(mbx, targetIdStr)
     try
         set n to targetIdStr as integer
         tell application "Mail"
             set m to «class mssg» id n of mbx
-            if (id of m) is n then return m
+            if (id of m) is n and my sameMailbox(m, mbx) then return m
         end tell
     end try
     try
@@ -71,6 +73,17 @@ on draftById(mbx, targetIdStr)
     end try
     return missing value
 end draftById
+
+on sameMailbox(m, mbx)
+    tell application "Mail"
+        try
+            set mb to mailbox of m
+            if (name of mb) is not (name of mbx) then return false
+            return (name of account of mb) is (name of account of mbx)
+        end try
+    end tell
+    return false
+end sameMailbox
 
 on outgoingById(idStr)
     tell application "Mail"

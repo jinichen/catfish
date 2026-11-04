@@ -271,6 +271,17 @@ def test_send_checks_the_compose_window_subject_and_sender_before_sending():
     assert "set d to my draftById(mbx, targetIdStr)" in body
 
 
+def test_draft_lookup_only_accepts_mail_that_is_really_in_the_drafts_box():
+    """11/4 真机: `message id N of 草稿箱` 把收件箱里同编号的信原样返回 —— 收到的通知被当草稿,
+    「发送这封草稿」/「删除」都会落到原信上。快路径必须核对所在邮箱, 不对就走只扫草稿箱的慢路径。"""
+    h = drafts._AS_DRAFT_HANDLERS
+    assert "if (id of m) is n and my sameMailbox(m, mbx) then return m" in h
+    assert "on sameMailbox(m, mbx)" in h and "(name of account of mb) is (name of account of mbx)" in h
+    assert "my inBox" not in h  # inbox 是 Mail 词典里的词, 当 handler 名编译不过
+    for body in (drafts._AS_SEND_MESSAGE, drafts._AS_DELETE_DRAFT):
+        assert "my draftById(mbx, targetIdStr)" in body
+
+
 @pytest.mark.parametrize("code", ["DRAFT_HAS_ATTACHMENTS", "SENDER_MISMATCH", "SEND_FAILED"])
 def test_send_refusals_are_explained(code):
     def fake_run(script, **_):

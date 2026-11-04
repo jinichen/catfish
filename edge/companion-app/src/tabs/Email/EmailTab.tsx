@@ -122,6 +122,8 @@ export default function EmailTab() {
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [folder, setFolder] = useState<MailFolder>("Inbox"); // 9/26 见 FolderTabs
+  // 11/4: 收件箱全量要 20 秒, 期间切到草稿箱, 晚回来的收件箱列表曾盖掉草稿箱 (收到的信带上了「发送这封草稿」)
+  const viewRef = useRef({ folder, unreadOnly }); viewRef.current = { folder, unreadOnly };
   const [showMailSettings, setShowMailSettings] = useState(false); // 9/28 邮箱设置入口
   const [sourceDiscovery, setSourceDiscovery] = useState<EmailSourceDiscovery | null>(null);
   const [sourceDiscoveryError, setSourceDiscoveryError] = useState<string | null>(null);
@@ -173,7 +175,7 @@ export default function EmailTab() {
     if (!quiet) setLoading(true);
     if (!quiet) setError(null);
     try {
-      const [listJson, sentJson, accountsJson, _urgency] = await Promise.all([
+      const [listJson, sentJson, accountsJson] = await Promise.all([
         // 全量上限 500 (Rust clamp), ≥500 时 header 显"500+" (见 headerSummary)。
         emailListFetch(unreadOnly, plan.limit, folder === "Inbox" ? undefined : folder),
         // P3.5.204.b (7/9): 并行拉 Sent, 只用于 isReplied; 出错不阻塞 → 空数组。
@@ -183,7 +185,7 @@ export default function EmailTab() {
         // setUrgencyMap 不再这里调 — store 内部自己 merge + 持久化
         reconcileUrgency().catch(() => ({})),
       ]);
-      void _urgency;
+      if (viewRef.current.folder !== folder || viewRef.current.unreadOnly !== unreadOnly) return; // 已切走, 丢掉
       const cached = useEmailStore.getState().listCache;
       const list = plan.incremental ? mergeNewest(cached?.items, JSON.parse(listJson), MAX_EMAIL_LIST_LIMIT) : JSON.parse(listJson);
       const sent = plan.incremental ? mergeNewest(cached?.sentItems, JSON.parse(sentJson), 200) : JSON.parse(sentJson);
@@ -194,8 +196,7 @@ export default function EmailTab() {
       if (Array.isArray(list)) setItems(useEmailStore.getState().acceptList?.(list, complete) ?? list);
       if (Array.isArray(sent)) setSentItems(sent as EmailDigestItem[]);
       if (Array.isArray(accs)) setAccounts(accs as EmailAccountItem[]);
-      // 8/21: 回写跨挂载缓存 — 下次切回瞬间有列表 (见 useState 初值那段注释)。
-      // 只在拉成功后写: 失败不覆盖上一份好的。
+      // 8/21: 回写跨挂载缓存 — 下次切回瞬间有列表 (见 useState 初值注释); 只在拉成功后写, 失败不覆盖好的。
       if (Array.isArray(list) && folder === "Inbox") {
         useEmailStore.getState().setListCache({
           items: hideDeleted(list as EmailDigestItem[], useEmailStore.getState().deleted),
@@ -207,7 +208,7 @@ export default function EmailTab() {
       // 后台轮询失败: 安静吞掉, 留着上一份列表。但**只在真有东西可留**的时候
       // —— 手里本来就是空的还不报错, 那员工看到的就是一个永远空着、一句解释
       // 也没有的收件箱 (Foxmail 那次就是这么难排查的)。
-      const keepQuiet = quiet && itemCount.current > 0;
+      const keepQuiet = (quiet && itemCount.current > 0) || viewRef.current.folder !== folder;
       if (!keepQuiet) setError(e instanceof Error ? e.message : String(e));
     } finally {
       inFlight.current -= 1;
@@ -229,8 +230,7 @@ export default function EmailTab() {
   // ImapSyncAdapter)。在那之前每轮都要重下最近 200 封的邮件头, 三分钟一次
   // 纯属糟蹋带宽。
   //
-  // 只在 tab 挂载期间转 —— EmailTab 是条件渲染, 切走即卸载, 定时器跟着清掉。
-  // 不看邮件页的时候不该有后台流量。
+  // 只在 tab 挂载期间转 —— EmailTab 是条件渲染, 切走即卸载, 定时器跟着清掉; 不看邮件页时不该有后台流量。
   useEffect(() => {
     const t = window.setInterval(() => void loadList({ quiet: true }), EMAIL_POLL_MS);
     return () => window.clearInterval(t);
