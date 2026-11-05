@@ -84,6 +84,12 @@ export default function TaskWork({ taskId, onClose }: { taskId: string; onClose:
         </span>
         <StateTag state={state} />
       </div>
+      {!rec.task.schedule && rec.done && (
+        <div style={{ fontSize: 13, padding: "6px 10px", borderRadius: 4, border: "1px solid var(--status-ok, #16a34a)",
+                      color: "var(--status-ok, #16a34a)" }}>
+          ✅ 已交回给 {rec.owner} ({when(rec.done.at)}) —— 对方看到的是那一版。要更新就改下面的内容, 点「改了再交」。
+        </div>
+      )}
       <div style={{ fontSize: 13, whiteSpace: "pre-wrap", padding: "8px 10px", borderRadius: 4,
                     background: "var(--catfish-bg-subtle, rgba(0,0,0,0.04))" }}>{rec.task.text}</div>
       {rec.task.context && (
@@ -132,16 +138,21 @@ export default function TaskWork({ taskId, onClose }: { taskId: string; onClose:
               {!rec.done && <Btn kind="ghost" disabled={busy} onClick={() => setDeclining(true)}>不接了</Btn>}
             </div>
             <div style={{ display: "flex", gap: 8 }}>
-              <Btn kind="ghost" disabled={busy} onClick={() => run(async () => { await taskDraft(taskId, result); return "草稿存好了 (还没交回)"; })}>
+              <Btn kind="ghost" disabled={busy} onClick={() => run(async () => {
+                await taskDraft(taskId, result);
+                return rec.done
+                  ? `改动存成草稿了 —— ${rec.owner} 看到的还是 ${when(rec.done.at)} 交回的那版, 点「改了再交」才更新`
+                  : "草稿存好了 (还没交回)";
+              })}>
                 存草稿
               </Btn>
               <Btn kind="primary" disabled={busy || !result.trim()} onClick={() => run(async () => {
                 const r = await taskSubmit(taskId, result);
-                return r.late ? "交回了 (已过截止, 对方那边会标逾期)" : "交回了";
+                const again = rec.done ? "重新交回了, 对方看到的换成这一版" : "交回了";
+                return r.late ? `${again} (已过截止, 对方那边会标逾期)` : again;
               })}>{rec.done ? "改了再交" : "交回"}</Btn>
             </div>
           </div>
-          {rec.done && <span style={muted}>上次交回于 {when(rec.done.at)}</span>}
         </>
       )}
 

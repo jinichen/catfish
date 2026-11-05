@@ -70,6 +70,9 @@ describe("parseChatTask", () => {
       ["@李四 下周一前汇总成月报", ["li@example.com"], "2026-11-09T18:00"],
     ]);
     expect(P("先让@张三 收数, 再让王五汇总")).toMatchObject({ kind: "task" });   // 第二段没 @ 人: 不算多阶段
+    // @ 后面不带空格也认 (11/5 实测「再让@test下周一前汇总」)
+    expect(P("先让@张三周五前收数据，再让@李四下周一前汇总")).toMatchObject({ kind: "pipeline", label: "分 2 段: ① 张三 → ② 李四" });
+    expect(P("@张三周五前交")).toMatchObject({ recipients: ["zhang@example.com"], deadline: "2026-11-06T18:00" });
   });
 });
 
