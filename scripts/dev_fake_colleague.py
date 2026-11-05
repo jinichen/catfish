@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""开发用: 一个人测同事群聊 —— 在本机扮演另一位同事 (11/5, docs/GROUP-CHAT-PLAN.md)。
+"""开发用: 一个人测同事群聊 / 派任务 —— 在本机扮演另一位同事 (11/5, docs/GROUP-CHAT-PLAN.md)。
 
 只给开发机用:
   - 只连本机中央 (127.0.0.1 / localhost), 别的地址直接拒绝;
@@ -17,6 +17,15 @@
   edge/tool-bridge/venv/bin/python scripts/dev_fake_colleague.py <同事邮箱> watch [群名]     # 一直收, 有新消息就打出来 (Ctrl+C 停)
   edge/tool-bridge/venv/bin/python scripts/dev_fake_colleague.py <同事邮箱> leave [群名]
   edge/tool-bridge/venv/bin/python scripts/dev_fake_colleague.py <同事邮箱> create "群名" 邮箱1 邮箱2 ...  # 他来建群拉你
+
+派任务 (docs/COLLEAGUE-TASK-PLAN.md; [任务名] 不写 = 最近收到的那个):
+  ... <同事邮箱> tasks                          # 收邮筒 + 列出他收到的 / 派出的任务
+  ... <同事邮箱> task-show [任务名]              # 看任务说明 (派出的看每个人的进度和结果)
+  ... <同事邮箱> task-accept [任务名]            # 点「接下」
+  ... <同事邮箱> task-done "做完了, 结果是…" [任务名]   # 点「交回」(可以再交一次覆盖)
+  ... <同事邮箱> task-decline "这周排不开" [任务名]     # 点「不接」
+  ... <同事邮箱> task-assign "要做什么" 邮箱1 [邮箱2 ...] [--deadline 2026-11-07]   # 他派任务给你
+定时 / 周期任务要在他电脑上建 hermes 定时任务, 这个工具不扮演 (会提示), 只测一次性任务和多阶段里的单段。
 """
 from __future__ import annotations
 
@@ -96,6 +105,77 @@ def print_msgs(cr, room_id: str, n: int = 20) -> None:
             print(f"    {m['at'][11:16]} {who}: {m['text']}")
 
 
+def pick_task(ct, name: str | None, *, owner: bool = False) -> dict:
+    lst = ct.list_all()["outgoing" if owner else "incoming"]
+    if name:
+        lst = [t for t in lst if name in (t["title"], t["task_id"]) or name in t["title"]]
+    if not lst:
+        sys.exit(f"✗ 没有{'叫「' + name + '」的' if name else ''}{'派出的' if owner else '收到的'}任务; 先跑 tasks 看看")
+    return lst[0]
+
+
+def task_cmd(ct, cmd: str, rest: list[str]) -> None:
+    r = ct.sync()
+    for e in r["events"]:
+        print(f"  ← [{e['kind']}] 「{e.get('title') or ''}」 {e.get('from') or ''}")
+    if cmd == "tasks":
+        a = ct.list_all()
+        print("收到的:")
+        for t in a["incoming"]:
+            print(f"  {t['title']}  [{t['state']}]  来自 {t['owner']}" + (f"  截止 {t['deadline']}" if t["deadline"] else "")
+                  + (f"  {t['schedule']}" if t.get("schedule") else "") + f"  ({t['task_id']})")
+        print("派出的:")
+        for t in a["outgoing"]:
+            print(f"  {t['title']}  [{t['status']}]  {t['progress']}  ({t['task_id']})")
+        return
+    if cmd == "task-assign":
+        deadline = None
+        if "--deadline" in rest:
+            i = rest.index("--deadline")
+            deadline = rest[i + 1] if i + 1 < len(rest) else None
+            rest = rest[:i] + rest[i + 2:]
+        if len(rest) < 2:
+            sys.exit('✗ task-assign "要做什么" 邮箱1 [邮箱2 ...] [--deadline 2026-11-07]')
+        t = ct.create({"text": rest[0], "recipients": rest[1:], "deadline": deadline})["task"]
+        out = ct.send(t["task_id"])
+        print(f"✓ 派出「{t['title']}」给 {len(out['sent'])} 人" + (f"; 没送到: {out['failed']}" if out["failed"] else ""))
+        return
+    if cmd == "task-show":
+        name = rest[0] if rest else None
+        mine = [t for t in ct.list_all()["outgoing"] if not name or name in t["title"] or name == t["task_id"]]
+        theirs = [t for t in ct.list_all()["incoming"] if not name or name in t["title"] or name == t["task_id"]]
+        if theirs:
+            d = ct.get(theirs[0]["task_id"])
+            rec = d["record"]
+            print(f"「{rec['task']['title']}」 [{d['state']}] 来自 {rec['owner']}\n  {rec['task']['text']}")
+            if rec.get("done"):
+                print(f"  我交回的: {rec['done']['result']}")
+        elif mine:
+            d = ct.get(mine[0]["task_id"])
+            print(f"「{d['task']['title']}」 [{d['task']['status']}]")
+            for p in d["progress"]["rows"]:
+                print(f"  {p.get('email')}: {p.get('state')}" + (f" — {p['result']}" if p.get("result") else ""))
+        else:
+            sys.exit("✗ 没有这个任务; 先跑 tasks 看看")
+        return
+    t = pick_task(ct, rest[1] if len(rest) > 1 else (rest[0] if cmd == "task-accept" and rest else None))
+    if t.get("schedule"):
+        sys.exit(f"✗ 「{t['title']}」是定时 / 周期任务 ({t['schedule']}): 要在他电脑上建 hermes 定时任务, 这个工具不扮演")
+    if cmd == "task-accept":
+        ct.accept(t["task_id"])
+        print(f"✓ 接下了「{t['title']}」")
+    elif cmd == "task-done":
+        if not rest:
+            sys.exit('✗ task-done "结果" [任务名]')
+        out = ct.submit(t["task_id"], rest[0])
+        print(f"✓ 交回了「{t['title']}」" + (" (晚了)" if out.get("late") else ""))
+    elif cmd == "task-decline":
+        ct.decline(t["task_id"], rest[0] if rest else "")
+        print(f"✓ 不接「{t['title']}」")
+    else:
+        sys.exit(__doc__)
+
+
 def main() -> None:
     if len(sys.argv) < 3:
         sys.exit(__doc__)
@@ -104,6 +184,13 @@ def main() -> None:
         sys.exit("✗ 第一个参数要写同事的完整邮箱")
     cr = setup(email)
     me = email
+    if cmd == "tasks" or cmd.startswith("task-"):
+        from catfish_tool_bridge import colleague_tasks as ct
+        try:
+            task_cmd(ct, cmd, rest)
+        except (ValueError, LookupError) as e:
+            sys.exit(f"✗ {e}")
+        return
     try:
         r = cr.sync()
         show_events(r["events"])

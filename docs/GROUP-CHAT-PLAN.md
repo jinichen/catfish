@@ -76,3 +76,6 @@ edge/tool-bridge/venv/bin/python scripts/dev_fake_colleague.py chenhongco@xxx jo
 edge/tool-bridge/venv/bin/python scripts/dev_fake_colleague.py chenhongco@xxx say "收到 @chenhongbo"
 edge/tool-bridge/venv/bin/python scripts/dev_fake_colleague.py chenhongco@xxx watch     # 一直收
 ```
+
+派任务也能扮演 (一次性任务 / 多阶段里的单段; 定时 / 周期的要在真电脑上建 hermes 定时任务, 工具不扮演):
+`tasks` · `task-show` · `task-accept` · `task-done "结果"` · `task-decline "原因"` · `task-assign "要做什么" 邮箱 [--deadline 日期]`。
