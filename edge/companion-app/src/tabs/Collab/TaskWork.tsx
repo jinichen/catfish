@@ -70,7 +70,7 @@ export default function TaskWork({ taskId, onClose }: { taskId: string; onClose:
   }
 
   const askXiaonian = () => run(async () => {
-    if (!accepted) await taskAccept(taskId);
+    if (!accepted) await taskAccept(taskId, false, false);   // 在对话里看着小鲶做: 不再另起后台
     if (result.trim()) await taskDraft(taskId, result).catch(() => {});
     startChat(doChatKey(taskId), doPrompt(rec));
     onClose();
@@ -115,16 +115,30 @@ export default function TaskWork({ taskId, onClose }: { taskId: string; onClose:
       {!rec.task.schedule && !cancelled && !accepted && !rec.done && !declining && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <Btn kind="primary" disabled={busy} onClick={askXiaonian}>🐟 接下, 让小鲶做</Btn>
-            <Btn kind="ghost" disabled={busy} onClick={() => run(async () => { await taskAccept(taskId); return "已告诉对方你在做了"; })}>
+            <Btn kind="primary" disabled={busy} onClick={() => run(async () => {
+              const r = await taskAccept(taskId);
+              return r.start_error ?? "接下了, 小鲶已经在后台开工, 做好了会通知你核对";
+            })}>🐟 接下 (小鲶马上开工)</Btn>
+            <Btn kind="ghost" disabled={busy} onClick={askXiaonian}>接下, 在对话里看着小鲶做</Btn>
+            <Btn kind="ghost" disabled={busy} onClick={() => run(async () => { await taskAccept(taskId, false, false); return "已告诉对方你在做了"; })}>
               接下, 我自己做
             </Btn>
             <Btn kind="ghost" disabled={busy} onClick={() => setDeclining(true)}>不接</Btn>
           </div>
-          <span style={muted}>小鲶用你电脑上的材料做, 要发东西、删东西照常先问你; 做完只存草稿, 交不交回你定。</span>
+          <span style={muted}>
+            小鲶用你电脑上的材料做。后台做的时候发邮件、发消息、删东西这类一律不做, 写进结果里等你处理; 在对话里做的照常先问你。
+            做完只存草稿, 交不交回你定。
+          </span>
         </div>
       )}
 
+      {!rec.task.schedule && !cancelled && accepted && !rec.done && rec.auto_started_at && !rec.draft?.result && (
+        <div style={{ fontSize: 13, color: rec.start_failed ? "var(--status-warn, #d97706)" : "var(--catfish-cyan)" }}>
+          {rec.start_failed
+            ? "🐟 小鲶在后台没做出来 —— 点「让小鲶做」在对话里做, 或者自己写结果。"
+            : `🐟 小鲶 ${when(rec.auto_started_at).slice(11)} 接下后已经在后台开工, 做好了会通知你核对。想看着它做就点「让小鲶做」。`}
+        </div>
+      )}
       {!rec.task.schedule && !cancelled && (accepted || rec.done) && (
         <>
           <strong style={{ fontSize: 13 }}>交回给 {rec.owner} 的结果</strong>

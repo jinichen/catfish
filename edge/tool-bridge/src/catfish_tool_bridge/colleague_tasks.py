@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import re
 import secrets
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -397,8 +397,9 @@ def _open_rec(task_id: str) -> dict[str, Any]:
     return rec
 
 
-def accept(task_id: str, auto_return: bool = False) -> dict[str, Any]:
-    """接下。告诉发起人「在做了」。重复接下不重复通知。定时 / 周期的: 在本机建 hermes 定时任务。"""
+def accept(task_id: str, auto_return: bool = False, start: bool = True) -> dict[str, Any]:
+    """接下。告诉发起人「在做了」。重复接下不重复通知。定时 / 周期的: 在本机建 hermes 定时任务。
+    11/5: 一次性任务接下就让小鲶在后台开工 (start, 默认开): 1 分钟后跑, 无人值守, 结果存草稿, 做好了通知本人核对后交回。"""
     rec = _open_rec(task_id)
     if rec["task"].get("schedule"):
         from .colleague_tasks_periodic import accept_scheduled  # noqa: PLC0415
@@ -410,8 +411,46 @@ def accept(task_id: str, auto_return: bool = False) -> dict[str, Any]:
         at = _now()
         _reply(rec, {"status": "accepted", "at": at})
         rec["accepted_at"] = at
+    started, start_error = False, None
+    if start and not (rec.get("draft") or {}).get("result") and not sched.job_exists(rec.get("job_id")):
+        try:
+            rec["job_id"] = sched.create_now_job(rec)
+            rec["auto_started_at"] = _now()
+            rec.pop("draft_notified", None)
+            rec.pop("start_failed", None)
+            started = True
+        except Exception as e:  # noqa: BLE001  hermes 起不来不影响接下, 员工照样能点「让小鲶做」
+            start_error = f"小鲶没能自动开工 ({e}), 可以点「让小鲶做」在对话里做"
     forms._write(_in_path(task_id), rec)
-    return {"ok": True, "accepted_at": rec["accepted_at"]}
+    return {"ok": True, "accepted_at": rec["accepted_at"], "started": started,
+            **({"start_error": start_error} if start_error else {})}
+
+
+START_TIMEOUT_MIN = 30   # 接下就开工后这么久还没草稿、hermes 里也没这个任务了 → 当作没做成, 提醒本人一次
+
+
+def _watch_started(events: list[dict[str, Any]]) -> None:
+    """接下就开工的一次性任务: 草稿出来了 → 通知「小鲶做好了」(一次); 超时没出来 → 通知「没做成」(一次)。"""
+    for p in sorted((tasks_dir() / "incoming").glob("*.json")):
+        rec = forms._read(p)
+        if not rec or not rec.get("auto_started_at") or rec["task"].get("schedule") or rec.get("done"):
+            continue
+        if rec.get("status") == "cancelled" or rec.get("declined"):
+            continue
+        draft = rec.get("draft") or {}
+        changed = False
+        if draft.get("result") and draft.get("updated_at", "") >= rec["auto_started_at"] and not rec.get("draft_notified"):
+            rec["draft_notified"] = _now()
+            events.append({"kind": "drafted", "task_id": rec["task_id"], "from": rec["owner"], "title": rec["task"]["title"]})
+            changed = True
+        elif not draft.get("result") and not rec.get("start_failed"):
+            started = datetime.fromisoformat(rec["auto_started_at"]).replace(tzinfo=None)
+            if datetime.now() - started > timedelta(minutes=START_TIMEOUT_MIN) and not sched.job_exists(rec.get("job_id")):
+                rec["start_failed"] = _now()
+                events.append({"kind": "start_failed", "task_id": rec["task_id"], "from": rec["owner"], "title": rec["task"]["title"]})
+                changed = True
+        if changed:
+            forms._write(p, rec)
 
 
 def save_draft(task_id: str, result: Any) -> dict[str, Any]:
@@ -523,9 +562,17 @@ def _echo(task_id: str, state: str, period: Any = None) -> None:
 
 
 def _then(fn, task_id: str, state: str, period: Any = None):
+    """点完再回群。重复点 (已接下又点接下、交回后改了再交) 不再往群里发一遍, 免得刷屏。"""
     def run():
+        try:
+            before = load_incoming(task_id)
+        except (ValueError, LookupError):
+            before = {}
+        again = (state == "accepted" and before.get("accepted_at") and not before.get("declined")) or \
+                (state == "done" and period in (None, "") and before.get("done"))
         out = fn()
-        _echo(task_id, state, period)
+        if not again:
+            _echo(task_id, state, period)
         return out
     return run
 
@@ -596,6 +643,7 @@ def sync() -> dict[str, Any]:
                            "period": msg["env"].get("period")})
     from .colleague_tasks_periodic import maintain  # noqa: PLC0415
     events += maintain()   # 本机定时任务的补跑 / 收尾 / 要核对的提醒
+    _watch_started(events)   # 接下就开工的: 做好了 / 没做成
     from .colleague_tasks_pipeline import maintain as pipeline_maintain  # noqa: PLC0415
     events += pipeline_maintain()   # 多阶段: 这一段都交回了 → 提醒发起人放行下一段
     return {"ok": True, **counts, "events": events}
@@ -624,6 +672,8 @@ def incoming_state(rec: dict[str, Any]) -> str:
         return "不接"
     if rec.get("status") == "cancelled":
         return "已取消"
+    if rec.get("accepted_at") and (rec.get("draft") or {}).get("result"):
+        return "待核对"   # 小鲶 (或本人) 存好了结果, 等本人看了交回
     return "在做" if rec.get("accepted_at") else "待处理"
 
 
@@ -688,7 +738,8 @@ def pim_handlers(params: dict[str, Any]) -> dict[str, Any]:
         "pim/ctask_send": lambda: send(tid),
         "pim/ctask_remind": lambda: remind(tid, str(params.get("text") or "")),
         "pim/ctask_cancel": lambda: cancel(tid),
-        "pim/ctask_accept": _then(lambda: accept(tid, bool(params.get("auto_return"))), tid, "accepted"),
+        "pim/ctask_accept": _then(lambda: accept(tid, bool(params.get("auto_return")), params.get("start", True) is not False),
+                                  tid, "accepted"),
         "pim/ctask_update": lambda: update(tid, params),
         "pim/ctask_period_submit": _then(lambda: _periodic().submit_period(tid, params.get("period"), params.get("result")),
                                          tid, "done", params.get("period")),

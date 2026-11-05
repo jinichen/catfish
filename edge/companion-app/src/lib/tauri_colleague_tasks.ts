@@ -137,6 +137,9 @@ export interface IncomingTask {
   // 定时 / 周期
   rev?: number;
   job_id?: string;
+  /** 11/5: 接下就让小鲶在后台开工的时间 / 超时没做出来的时间 */
+  auto_started_at?: string;
+  start_failed?: string;
   auto_return?: boolean;
   periods?: MyPeriod[];
   quit?: { reason: string; at: string };
@@ -176,7 +179,9 @@ export type TaskDetail =
 
 export interface TaskEvent {
   kind: "invite" | "changed" | "remind" | "cancel" | "accepted" | "done" | "declined" | "period" | "quit"
-    | "review" | "missed" | "job_lost" | "stage_done" | "confirm_needed" | "waiting";
+    | "review" | "missed" | "job_lost" | "stage_done" | "confirm_needed" | "waiting"
+    // 11/5: 接下就开工的一次性任务 —— 小鲶做好了 / 超时没做出来
+    | "drafted" | "start_failed";
   task_id: string;
   from: string;
   title: string;
@@ -203,8 +208,10 @@ export const taskAdd = (taskId: string, recipients: string[]) => call<{ task: Ou
 export const taskSend = (taskId: string) => call<Sent & { sent: string[]; room_notice?: string }>("send", { task_id: taskId });
 export const taskRemind = (taskId: string, text = "") => call<Sent & { reminded: string[] }>("remind", { task_id: taskId, text });
 export const taskCancel = (taskId: string) => call<Sent>("cancel", { task_id: taskId });
-export const taskAccept = (taskId: string, autoReturn = false) =>
-  call<{ accepted_at: string; next_run?: string | null }>("accept", { task_id: taskId, auto_return: autoReturn });
+/** start (一次性任务, 默认开): 接下就让小鲶在后台开工 (11/5); 自己做 / 在对话里看着小鲶做时传 false */
+export const taskAccept = (taskId: string, autoReturn = false, start = true) =>
+  call<{ accepted_at: string; next_run?: string | null; started?: boolean; start_error?: string }>(
+    "accept", { task_id: taskId, auto_return: autoReturn, start });
 export const taskUpdate = (taskId: string, p: { text?: string; deadline?: string | null; schedule?: Schedule | null }) =>
   call<Sent & { sent: string[] }>("update", { task_id: taskId, ...p });
 export const taskPeriodSubmit = (taskId: string, period: number, result: string) =>

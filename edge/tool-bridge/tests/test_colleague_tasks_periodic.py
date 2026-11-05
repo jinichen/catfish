@@ -286,3 +286,60 @@ def test_待确认的也可以不补_直接交回(w):
     per.submit_period(tid, 1, "汇总好了 (邮件我自己发)")
     assert ct.list_all()["incoming"][0]["state"] == "进行中"
     assert _owner_states(w, tid)[ZHANG] == "进行中"
+
+
+# ── 11/5: 一次性任务接下就让小鲶开工 ───────────────────────────────
+
+def test_一次性任务_接下就让小鲶在后台开工_做好了通知一次_待核对(w):
+    tid = _send(w, None, (ZHANG,))
+    w.be(ZHANG)
+    ct.sync()
+    out = ct.accept(tid)
+    assert out["started"] is True
+    job = list(w.jobs(ZHANG).values())[0]
+    assert job["repeat"] == 1 and "无人值守" in job["prompt"] and f"task_id={tid}" in job["prompt"]
+    assert "每周一把上周客户拜访整理成三行" in job["prompt"]
+    assert ct.list_all()["incoming"][0]["state"] == "在做"
+    ct.accept(tid)                                   # 重复接下不重复开工
+    assert len(w.jobs(ZHANG)) == 1
+
+    per.record_period(tid, "拜访 3 家", skipped=["把汇总发给周总"])   # 小鲶跑完存草稿 (一次性任务没有「期」)
+    rec = ct.load_incoming(tid)
+    assert rec["draft"]["result"].startswith("拜访 3 家") and "1. 把汇总发给周总" in rec["draft"]["result"]
+    assert not rec.get("done")                       # 不自己交回
+    ev = [e for e in ct.sync()["events"] if e["kind"] == "drafted"]
+    assert [e["title"] for e in ev] == ["每周一把上周客户拜访整理成三行"]
+    assert [e for e in ct.sync()["events"] if e["kind"] == "drafted"] == []   # 只通知一次
+    assert ct.list_all()["incoming"][0]["state"] == "待核对"
+
+
+def test_接下就开工_超时没出来_提醒一次_hermes起不来不影响接下(w, monkeypatch):
+    tid = _send(w, None, (ZHANG,))
+    w.be(ZHANG)
+    ct.sync()
+    ct.accept(tid)
+    rec = ct.load_incoming(tid)
+    rec["auto_started_at"] = (datetime.now() - timedelta(minutes=ct.START_TIMEOUT_MIN + 5)).isoformat(timespec="seconds")
+    forms._write(ct._in_path(tid), rec)
+    w.jobs(ZHANG).clear()                            # hermes 跑完删掉了 (或丢了), 没存草稿
+    assert [e["kind"] for e in ct.sync()["events"] if e["kind"] == "start_failed"] == ["start_failed"]
+    assert [e for e in ct.sync()["events"] if e["kind"] == "start_failed"] == []
+
+    tid2 = _send(w, None, (LI,))
+    w.be(LI)
+    ct.sync()
+    def boom():
+        raise RuntimeError("hermes 没装")
+    monkeypatch.setattr(sched, "_jobs", boom)
+    out = ct.accept(tid2)
+    assert out["started"] is False and "让小鲶做" in out["start_error"]
+    assert ct.load_incoming(tid2)["accepted_at"]
+    assert ct.accept(tid2, start=False)["started"] is False
+
+
+def test_界面接下_start_false_不开工(w):
+    tid = _send(w, None, (ZHANG,))
+    w.be(ZHANG)
+    ct.sync()
+    ct.pim_handlers({"task_id": tid, "start": False})["pim/ctask_accept"]()
+    assert w.jobs(ZHANG) == {}

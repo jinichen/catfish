@@ -133,8 +133,12 @@ def record_period(task_id: str, result: Any, skipped: Any = None, period: Any = 
     period:  接着做时带上 —— 更新那一期 (结果换成补完后的, skipped 换成还剩下的), 不新开一期。
     """
     rec = ct.load_incoming(task_id)
-    if not rec["task"].get("schedule"):
-        return ct.save_draft(task_id, result)
+    if not rec["task"].get("schedule"):   # 一次性任务 (接下就开工 / 让小鲶做): 存草稿, 没做的步骤附在后面给本人看
+        steps = _norm_skipped(skipped)
+        text = str(result or "").strip()
+        if steps:
+            text += "\n\n—— 小鲶没做、要你确认的步骤 (交回前处理一下, 或者删掉这段):\n" + "\n".join(f"{i}. {x}" for i, x in enumerate(steps, 1))
+        return ct.save_draft(task_id, text)
     if rec.get("status") == "cancelled" or rec.get("quit") or not rec.get("accepted_at"):
         raise ValueError("这个任务已经停了 (对方取消 / 你退出 / 还没接下), 不用再做")
     text = str(result or "").strip()

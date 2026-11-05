@@ -69,7 +69,7 @@ def test_完整来回_派给三人_接下交回_不接_汇总(w):
     ct.accept(tid)   # 重复接下不重复通知
     ct.save_draft(tid, "草稿: 拜访 3 家")
     assert ct.get(tid)["record"]["draft"]["result"] == "草稿: 拜访 3 家"
-    assert ct.list_all()["incoming"][0]["state"] == "在做"
+    assert ct.list_all()["incoming"][0]["state"] == "待核对"   # 11/5: 存了结果草稿 = 待核对
 
     w.be(LI)
     ct.sync()

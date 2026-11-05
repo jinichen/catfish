@@ -44,6 +44,9 @@ const NOTE: Record<string, (from: string, title: string, period?: number | null)
   job_lost: (_f, t) => ["任务的定时被删了", `「${t}」的定时没了, 在「协同」页重新安排或退出`],
   // 11/4 第三步: 多阶段
   stage_done: (_f, t, n) => ["这一段都回了", `「${t}」第 ${n ?? "?"} 段都回了, 核对后放行到下一段`],
+  // 11/5: 接下就开工
+  drafted: (f, t) => ["小鲶做好了, 等你核对", `${f} 请你做的「${t}」小鲶做好了, 看一下再点交回`],
+  start_failed: (_f, t) => ["小鲶没做出来", `「${t}」小鲶在后台没做出来, 在「协同」页点「让小鲶做」在对话里做, 或者自己做`],
 };
 
 export function notifyFor(r: TaskSyncResult): void {

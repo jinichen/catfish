@@ -45,11 +45,19 @@ async function open(rec: object, state: string) {
 }
 
 describe("TaskWork", () => {
-  it("接下, 让小鲶做: 先通知对方在做, 再开工作台对话, 提示词里同事原话被隔开且不让小鲶交回", async () => {
-    const onClose = await open(REC, "待处理");
-    fireEvent.click(screen.getByText("🐟 接下, 让小鲶做"));
-    await waitFor(() => expect(startChat).toHaveBeenCalled());
+  it("接下 (默认): 小鲶在后台开工, 不开对话", async () => {
+    await open(REC, "待处理");
+    fireEvent.click(screen.getByText("🐟 接下 (小鲶马上开工)"));
+    await screen.findByText("接下了, 小鲶已经在后台开工, 做好了会通知你核对");
     expect(api.taskAccept).toHaveBeenCalledWith(REC.task_id);
+    expect(startChat).not.toHaveBeenCalled();
+  });
+
+  it("接下, 在对话里看着小鲶做: 先通知对方在做 (不另起后台), 再开工作台对话, 提示词里同事原话被隔开且不让小鲶交回", async () => {
+    const onClose = await open(REC, "待处理");
+    fireEvent.click(screen.getByText("接下, 在对话里看着小鲶做"));
+    await waitFor(() => expect(startChat).toHaveBeenCalled());
+    expect(api.taskAccept).toHaveBeenCalledWith(REC.task_id, false, false);
     expect(onClose).toHaveBeenCalled();
     const prompt = startChat.mock.calls[0][1] as string;
     expect(prompt).toBe(doPrompt(REC as never));

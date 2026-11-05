@@ -415,3 +415,17 @@ def test_群里显示的是发起人在聊天里说的原话(w):
     cp.create({"title": "月报", "room_id": rid, "room_text": said2, "stages": [
         {"text": "@zhang 收数", "recipients": [ZHANG]}, {"text": "@li 汇总", "recipients": [LI]}]})
     assert [m["text"] for m in cr.messages(rid) if m["kind"] == "card"][-1] == said2
+
+
+def test_重复接下_改了再交_不往群里刷屏(w):
+    ct = _ct()
+    rid = _room_all_joined(w)
+    t = ct.create({"text": "交周报", "recipients": [ZHANG], "room_id": rid})["task"]
+    ct.send(t["task_id"])
+    w.be(ZHANG)
+    ct.sync()
+    for _ in range(2):
+        ct.pim_handlers({"task_id": t["task_id"]})["pim/ctask_accept"]()
+    for r in ("v1", "v2"):
+        ct.pim_handlers({"task_id": t["task_id"], "result": r})["pim/ctask_submit"]()
+    assert [m["status"]["state"] for m in cr.messages(rid) if m["kind"] == "status"] == ["accepted", "done"]

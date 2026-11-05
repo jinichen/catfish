@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import { refreshRooms, setActiveRoom, useColleagueRooms } from "../../lib/colleagueRoomsStore";
-import { refreshTasks } from "../../lib/colleagueTasksStore";
+import { refreshTasks, useColleagueTasks } from "../../lib/colleagueTasksStore";
 import { pipelineCreate, taskAccept, taskCreate, taskGet, taskSend } from "../../lib/tauri_colleague_tasks";
 import {
   failedNotice, roomDecline, roomDelete, roomDisband, roomGet, roomJoin, roomLeave, roomRead, roomRemove, roomSend, roomUpdate,
@@ -149,6 +149,7 @@ function RoomRow({ r, on, onClick }: { r: RoomSummary; on: boolean; onClick: () 
 
 function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: string; onNotice: (n?: string) => void }) {
   const { version } = useColleagueRooms();
+  const { incoming } = useColleagueTasks();
   const [d, setD] = useState<RoomDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -264,7 +265,14 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
           {d.messages.map((m) => (
             m.kind === "card" && m.card ? (
               <TaskMessage key={m.msg_id} m={m} me={me} members={members} messages={d.messages} busy={busy}
-                           onAccept={() => void act(async () => { await refreshTasks(); return taskAccept(m.card!.task_id); }, "没收到你接下的通知")}
+                           local={incoming.find((t) => t.task_id === m.card!.task_id)?.state}
+                           onAccept={() => void act(async () => {
+                             await refreshTasks();
+                             const r = await taskAccept(m.card!.task_id);
+                             onNotice(r.start_error ?? `接下了「${m.card!.title}」, 小鲶已经在后台开工, 做好了会通知你核对`);
+                             void refreshTasks();
+                             return r;
+                           }, "没收到你接下的通知")}
                            onWork={() => void openWork(m.card!.task_id)} onWatch={() => setWatch({ id: m.card!.task_id })}
                            onSummary={joined ? () => void fillSummary(m.card!.task_id, m.card!.title) : undefined} />
             ) : (
@@ -432,8 +440,10 @@ function Bubble({ m, mine, members, me, quoted, onReply }: {
 }
 
 /** 群里派的任务: 就是发起人说的那句话, 下面一行每人的状态 + 自己能点的按钮。 */
-function TaskMessage({ m, me, members, messages, busy, onAccept, onWork, onWatch, onSummary }: {
+function TaskMessage({ m, me, members, messages, busy, local, onAccept, onWork, onWatch, onSummary }: {
   m: RoomMessage; me: string; members: RoomMember[]; messages: RoomMessage[]; busy: boolean;
+  /** 派给我的: 我这边这个任务现在的状态 (小鲶做好了 = 待核对) */
+  local?: string;
   onAccept: () => void; onWork: () => void; onWatch: () => void; onSummary?: () => void;
 }) {
   const c = m.card!;
@@ -454,12 +464,13 @@ function TaskMessage({ m, me, members, messages, busy, onAccept, onWork, onWatch
         {states.map((x) => (
           <span key={x.email} title={x.email}
                 style={{ color: x.state === "done" ? "var(--status-ok, #059669)" : undefined }}>
-            {x.email === me ? "我" : x.name} {STATE_WORD[x.state]}{x.period ? ` 第 ${x.period} 期` : ""}
+            {x.email === me ? "我" : x.name} {x.email === me && local === "待核对" ? "待核对 (小鲶做好了)" : STATE_WORD[x.state]}
+            {x.period ? ` 第 ${x.period} 期` : ""}
           </span>
         ))}
         {myState && !c.schedule && myState === "waiting" && <button type="button" style={link} disabled={busy} onClick={onAccept}>接下</button>}
         {myState && (c.schedule || myState !== "waiting") && myState !== "done" && myState !== "declined" && myState !== "quit" && (
-          <button type="button" style={link} onClick={onWork}>{c.schedule ? "去处理" : "交回"}</button>
+          <button type="button" style={link} onClick={onWork}>{c.schedule ? "去处理" : local === "待核对" ? "看一下, 交回" : "交回"}</button>
         )}
         {myState === "waiting" && !c.schedule && <button type="button" style={link} onClick={onWork}>不接</button>}
         {mine && <button type="button" style={link} onClick={onWatch}>看结果</button>}
