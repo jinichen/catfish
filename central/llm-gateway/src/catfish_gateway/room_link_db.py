@@ -22,7 +22,10 @@ FORM_MAX_TTL_SECONDS = 30 * 24 * 3600
 # 11/4 派任务给多位同事 (docs/COLLEAGUE-TASK-PLAN.md): 任务单 / 回复 (接下·交回·不接) / 催 / 取消。
 # 跟填表一样跨天、对方可能关机, 期限规则同填表。
 TASK_KINDS = frozenset({"task_invite", "task_reply", "task_remind", "task_cancel"})
-LONG_KINDS = FORM_KINDS | TASK_KINDS
+# 11/5 同事群聊 (docs/GROUP-CHAT-PLAN.md): 拉人 / 加入 / 群消息 / 群主改名单·改名·解散 / 退群。
+# 一条群消息 = 给每个成员各投一封, 群记录只在各成员本机; 期限由发件端给 (7 天), 规则同填表。
+ROOM_KINDS = frozenset({"room_invite", "room_join", "room_msg", "room_member", "room_leave"})
+LONG_KINDS = FORM_KINDS | TASK_KINDS | ROOM_KINDS
 MAILBOX_KINDS = ROOM_LINK_KINDS | LONG_KINDS
 
 # payload 上限: grant token + catalog 实测 ~3KB, 给 64KB 余量, 防人拿邮筒传文件

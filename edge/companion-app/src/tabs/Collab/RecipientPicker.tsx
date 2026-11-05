@@ -12,12 +12,14 @@ export function allRecipients(picked: string[], typed: string): string[] {
   return [...new Set([...picked, ...typed.split(/[\s,;，；]+/).map((s) => s.trim().toLowerCase()).filter(Boolean)])];
 }
 
-export default function RecipientPicker({ picked, onPicked, typed, onTyped, onError }: {
+export default function RecipientPicker({ picked, onPicked, typed, onTyped, onError, onPerson }: {
   picked: string[];
   onPicked: (next: string[]) => void;
   typed: string;
   onTyped: (v: string) => void;
   onError: (msg: string) => void;
+  /** 从通讯录点选时把姓名也给出来 (11/5 群聊: 群成员显示名字, 不只显示邮箱) */
+  onPerson?: (p: Person) => void;
 }) {
   const [q, setQ] = useState("");
   const [people, setPeople] = useState<Person[]>([]);
@@ -52,7 +54,7 @@ export default function RecipientPicker({ picked, onPicked, typed, onTyped, onEr
       {people.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 2, maxHeight: 160, overflowY: "auto" }}>
           {people.map((p) => (
-            <button key={p.email} type="button" onClick={() => add(p.email)} disabled={picked.includes(p.email)}
+            <button key={p.email} type="button" onClick={() => { add(p.email); onPerson?.(p); }} disabled={picked.includes(p.email)}
                     style={{ textAlign: "left", fontSize: 12, padding: "4px 8px", border: "none", cursor: "pointer",
                              background: "var(--catfish-bg-subtle, rgba(0,0,0,0.04))", borderRadius: 4 }}>
               {p.name} · {p.department} · {p.email}{picked.includes(p.email) ? " (已加)" : ""}

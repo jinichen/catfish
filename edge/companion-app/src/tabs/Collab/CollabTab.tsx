@@ -11,28 +11,61 @@
  * 10/17: 下面一整行 = 一起填表 (FormsPanel, docs/FORM-COLLECT-PLAN.md); 收到要填的表也算红点。
  * 11/4: 左栏换成派任务给多位同事 (TasksPanel, docs/COLLEAGUE-TASK-PLAN.md), 不再要求双方同时在线;
  *   同事派给我、还没交回的也算红点。右栏照旧接老版本同事的在线请求和工具审批。
+ * 11/5: 顶上一个切换 —— 协同事项 / 群聊 (RoomsPanel, docs/GROUP-CHAT-PLAN.md); 群邀请和群未读也算红点。
  */
+import { useState } from "react";
+
+import { pendingRoomCount, useColleagueRooms } from "../../lib/colleagueRoomsStore";
 import TasksPanel from "./TasksPanel";
 import FormsPanel from "./FormsPanel";
 import PendingPanel from "./PendingPanel";
+import RoomsPanel from "./RoomsPanel";
+
+type View = "work" | "rooms";
 
 export default function CollabTab() {
+  const [view, setView] = useState<View>("work");
+  const roomBadge = pendingRoomCount(useColleagueRooms());
+  const seg = (on: boolean) => ({
+    border: "1px solid var(--catfish-border)", cursor: "pointer", font: "inherit", fontSize: 13,
+    padding: "6px 14px", borderRadius: "var(--radius-sm, 6px)",
+    background: on ? "var(--catfish-cyan)" : "transparent", color: on ? "white" : "inherit",
+    display: "inline-flex", alignItems: "center", gap: 6,
+  });
   return (
     <div style={{ maxWidth: 1600, margin: "0 auto", padding: "var(--space-4)" }}>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
-          gap: "var(--space-4)",
-          alignItems: "start",
-        }}
-      >
-        <TasksPanel />
-        <PendingPanel />
+      <div role="tablist" style={{ display: "flex", gap: 8, marginBottom: "var(--space-4)" }}>
+        <button type="button" role="tab" aria-selected={view === "work"} style={seg(view === "work")} onClick={() => setView("work")}>
+          协同事项
+        </button>
+        <button type="button" role="tab" aria-selected={view === "rooms"} style={seg(view === "rooms")} onClick={() => setView("rooms")}>
+          群聊
+          {roomBadge > 0 && (
+            <span aria-label={`${roomBadge} 条群消息等你看`}
+                  style={{ fontSize: 10, minWidth: 16, padding: "0 5px", borderRadius: 8, background: "var(--status-error, #dc2626)", color: "white" }}>
+              {roomBadge > 99 ? "99+" : roomBadge}
+            </span>
+          )}
+        </button>
       </div>
-      <div style={{ marginTop: "var(--space-4)" }}>
-        <FormsPanel />
-      </div>
+      {view === "rooms" ? <RoomsPanel /> : (
+        <>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+              gap: "var(--space-4)",
+              alignItems: "start",
+            }}
+          >
+            <TasksPanel />
+            <PendingPanel />
+          </div>
+          <div style={{ marginTop: "var(--space-4)" }}>
+            <FormsPanel />
+          </div>
+        </>
+      )}
     </div>
   );
 }

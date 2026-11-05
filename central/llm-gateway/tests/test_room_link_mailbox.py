@@ -156,7 +156,8 @@ def test_存储层常量(client):
     assert DB.ROOM_LINK_KINDS == {"request", "grant"}
     assert DB.FORM_KINDS == {"form_invite", "form_response", "form_remind", "form_close"}
     assert DB.TASK_KINDS == {"task_invite", "task_reply", "task_remind", "task_cancel"}
-    assert DB.MAILBOX_KINDS == DB.ROOM_LINK_KINDS | DB.FORM_KINDS | DB.TASK_KINDS
+    assert DB.ROOM_KINDS == {"room_invite", "room_join", "room_msg", "room_member", "room_leave"}
+    assert DB.MAILBOX_KINDS == DB.ROOM_LINK_KINDS | DB.FORM_KINDS | DB.TASK_KINDS | DB.ROOM_KINDS
     assert DB.FORM_MAX_TTL_SECONDS == 30 * 24 * 3600
 
 
@@ -171,7 +172,22 @@ def test_填表期限_按kind夹(client):
     _post(c, to="bob@x.com", kind="request", payload="p", ttl_seconds=10 * day)
     _post(c, to="bob@x.com", kind="task_invite", payload="p", ttl_seconds=8 * day)
     _post(c, to="bob@x.com", kind="task_reply", payload="p")
-    assert [m["ttl"] for m in box] == [10 * day, 30 * day, 600, 30 * day, 600, 8 * day, 30 * day]
+    _post(c, to="bob@x.com", kind="room_msg", payload="p", ttl_seconds=7 * day)
+    _post(c, to="bob@x.com", kind="room_invite", payload="p", ttl_seconds=60 * day)
+    assert [m["ttl"] for m in box] == [10 * day, 30 * day, 600, 30 * day, 600, 8 * day, 30 * day, 7 * day, 30 * day]
+
+
+def test_群聊邮件_要显式要_取走即清空(client):
+    """群聊 room_* 跟任务一样: 老客户端不带 kinds 拿不到; 显式要了取走即清空, 只取要的种类."""
+    c, box, as_user = client
+    _post(c, to="bob@x.com", kind="room_msg", payload="hi", ttl_seconds=7 * 24 * 3600)
+    _post(c, to="bob@x.com", kind="task_invite", payload="t")
+    as_user("bob@x.com")
+    assert c.get("/api/room-link/mailbox").json()["messages"] == []
+    kinds = "room_invite,room_join,room_msg,room_member,room_leave"
+    got = c.get("/api/room-link/mailbox", params={"kinds": kinds}).json()["messages"]
+    assert [(m["kind"], m["payload"]) for m in got] == [("room_msg", "hi")]
+    assert [m["kind"] for m in box] == ["task_invite"]
 
 
 def test_不带kinds_老客户端拿不到填表邮件(client):

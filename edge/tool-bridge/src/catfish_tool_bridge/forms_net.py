@@ -2,7 +2,8 @@
 
 中央只当邮筒: 投一封 / 取走自己的。payload 是这里拼的 JSON 字符串, 中央不解析、取走即清空。
 填表的 4 种 kind 必须显式要 (`?kinds=`), 老版 Companion 不带 kinds 就拿不到, 不会被它取走丢掉。
-11/4 派任务给同事 (colleague_tasks.py) 也走这里, 用自己的 4 种 task_* kind。
+11/4 派任务给同事 (colleague_tasks.py) 也走这里, 用自己的 4 种 task_* kind;
+11/5 同事群聊 (colleague_rooms.py, docs/GROUP-CHAT-PLAN.md) 用 5 种 room_* kind。
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ from . import skill_publish
 
 FORM_KINDS = ("form_invite", "form_response", "form_remind", "form_close")
 TASK_KINDS = ("task_invite", "task_reply", "task_remind", "task_cancel")
+ROOM_KINDS = ("room_invite", "room_join", "room_msg", "room_member", "room_leave")
 MAILBOX_PATH = "/api/room-link/mailbox"
 MAX_TTL_SECONDS = 30 * 24 * 3600
 MIN_RESPONSE_TTL_SECONDS = 3 * 24 * 3600   # 回填至少留 3 天: 发起人可能出差关机
@@ -22,6 +24,8 @@ AFTER_DEADLINE_DAYS = 7
 MAX_PAYLOAD_BYTES = 64 * 1024
 # 老中央 (20261104 之前) 不认 task_* kind, 投 / 取都回 400
 CENTRAL_TOO_OLD = "中央端版本太旧, 还不支持派任务 —— 请管理员把中央端升级到最新版"
+# 老中央 (20261105 之前) 不认 room_* kind
+CENTRAL_TOO_OLD_ROOM = "中央端版本太旧, 还不支持同事群聊 —— 请管理员把中央端升级到最新版"
 
 
 def me() -> str:
@@ -74,7 +78,7 @@ def _client_call(method: str, path: str, *, params: dict | None = None, body: di
 
 def post(to: str, kind: str, envelope: dict[str, Any], ttl: int) -> int:
     """投一封。envelope 序列化成 payload; 超 64KB 直接拒 (中央也会拒, 这里先给句人话)。"""
-    if kind not in FORM_KINDS + TASK_KINDS:
+    if kind not in FORM_KINDS + TASK_KINDS + ROOM_KINDS:
         raise ValueError(f"不认识的种类 {kind}")
     payload = json.dumps(envelope, ensure_ascii=False)
     if len(payload.encode("utf-8")) > MAX_PAYLOAD_BYTES:
@@ -84,6 +88,8 @@ def post(to: str, kind: str, envelope: dict[str, Any], ttl: int) -> int:
         detail = data.get("detail") if isinstance(data, dict) else data
         if code == 400 and kind in TASK_KINDS and "kind=" in str(detail):
             raise ValueError(f"投递给 {to} 失败: {CENTRAL_TOO_OLD}")
+        if code == 400 and kind in ROOM_KINDS and "kind=" in str(detail):
+            raise ValueError(f"投递给 {to} 失败: {CENTRAL_TOO_OLD_ROOM}")
         raise ValueError(f"投递给 {to} 失败 ({code}): {detail}")
     return int(data.get("id") or 0)
 
@@ -95,7 +101,10 @@ def take(kinds: tuple[str, ...] = FORM_KINDS) -> list[dict[str, Any]]:
         detail = data.get("detail") if isinstance(data, dict) else data
         if code == 400 and kinds == TASK_KINDS and "不认识" in str(detail):
             raise ValueError(CENTRAL_TOO_OLD)
-        raise ValueError(f"取{'任务' if kinds == TASK_KINDS else '填表'}邮件失败 ({code}): {detail}")
+        if code == 400 and kinds == ROOM_KINDS and "不认识" in str(detail):
+            raise ValueError(CENTRAL_TOO_OLD_ROOM)
+        what = "任务" if kinds == TASK_KINDS else "群聊" if kinds == ROOM_KINDS else "填表"
+        raise ValueError(f"取{what}邮件失败 ({code}): {detail}")
     out = []
     for m in (data.get("messages") or []) if isinstance(data, dict) else []:
         try:

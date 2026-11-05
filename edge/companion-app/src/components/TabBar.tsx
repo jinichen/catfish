@@ -24,6 +24,7 @@ import { pendingFormCount, useForms } from "../lib/formsStore";
 import { pendingTaskCount, useColleagueTasks } from "../lib/colleagueTasksStore";
 import { useWorkflowPending } from "../lib/workflowStore";
 import { pendingCount, useRoomLink } from "../lib/roomLinkStore";
+import { pendingRoomCount, useColleagueRooms } from "../lib/colleagueRoomsStore";
 import { markSeen, unseenCount, useTaskDone } from "../lib/taskDoneStore";
 import { isTauriRuntime } from "../lib/runtime";
 
@@ -63,7 +64,8 @@ export default function TabBar() {
   // 订阅即开始轮询邮筒 + P49 探针 —— 导航常驻, 所以员工不进「协同」页也能看到红点。
   // 10/17: 收到还没填的表也算 (formsStore 订阅即轮询填表邮筒)。
   // 11/4: 同事派给我、还没交回的任务也算 (colleagueTasksStore 订阅即轮询任务邮筒)。
-  const collabPending = pendingCount(useRoomLink()) + pendingFormCount(useForms()) + pendingTaskCount(useColleagueTasks());
+  const collabPending = pendingCount(useRoomLink()) + pendingFormCount(useForms()) + pendingTaskCount(useColleagueTasks())
+    + pendingRoomCount(useColleagueRooms());
   // 9/12: 后台任务做完/没做成、员工还没看 —— 桌宠删了, 信号改挂在「工作台」项上。
   const taskUnseen = unseenCount(useTaskDone());
   // 10/17: 工作流停在对外步骤前等确认的, 也算进 Dock 角标 (员工不在鲶鱼里也知道有事)

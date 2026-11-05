@@ -21,7 +21,7 @@ hermes 0.21 RoomLink 让 A 远程驱动 B 的 hermes, 但 A 要先拿到 B 签�
     POST /api/room-link/mailbox   {to, kind, payload, ttl_seconds?}  → {id}
     GET  /api/room-link/mailbox?kinds=a,b                            → {messages: [...]}
 
-不带 kinds 只给请求 / 授权 (老版 Companion 的行为); 填表的 form_*、派任务的 task_* 要显式要。
+不带 kinds 只给请求 / 授权 (老版 Companion 的行为); 填表的 form_*、派任务的 task_*、群聊的 room_* 要显式要。
 """
 from __future__ import annotations
 

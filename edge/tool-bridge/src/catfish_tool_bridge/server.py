@@ -167,6 +167,16 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
                 return _success(req_id, await asyncio.to_thread(handlers[method]))
             except (ValueError, LookupError, OSError) as e:
                 return _error(req_id, INVALID_PARAMS, str(e))
+    # 11/5: 同事群聊 (colleague_rooms.py, docs/GROUP-CHAT-PLAN.md): 「协同」页的建群 / 加入 / 发消息 / 群主管理。
+    # 每一条都是员工在界面上点了才发, 模型工具里没有。
+    if method.startswith("pim/croom_"):
+        from . import colleague_rooms  # noqa: PLC0415
+        handlers = colleague_rooms.pim_handlers(params)
+        if method in handlers:
+            try:
+                return _success(req_id, await asyncio.to_thread(handlers[method]))
+            except (ValueError, LookupError, OSError) as e:
+                return _error(req_id, INVALID_PARAMS, str(e))
     # 10/17: 工作流 skill (workflow_tool.py, docs/WORKFLOW-SKILL-PLAN.md): 技能页的编辑 / 试跑 / 运行记录。
     # 确认对外步骤、设「不用每次确认」只有这里有, 模型工具里没有。
     if method.startswith("pim/workflow_"):

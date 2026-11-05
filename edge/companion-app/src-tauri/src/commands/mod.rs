@@ -35,6 +35,7 @@ pub mod notify_prefs; // 10/12: 「提醒同步到微信」开关 + 测试推送
 pub mod experts_local; // 10/18: 本机专家 —— 定义编译在 tool-bridge, 这里落 hermes profile + 工作台「找谁」
 pub mod workflows; // 10/17: 工作流 skill —— 技能页编辑 / 试跑 / 运行记录 + 全局对外步骤确认
 pub mod forms; // 10/17: 一起填表 —— 「协同」页发起 / 填写 / 进度 (tool-bridge forms.py)
+pub mod colleague_rooms; // 11/5: 同事群聊 —— 「协同」页建群 / 加入 / 发消息 (tool-bridge colleague_rooms.py)
 pub mod colleague_tasks; // 11/4: 派任务给多位同事 —— 「协同」页派出 / 接下 / 交回 (tool-bridge colleague_tasks.py)
 pub mod sales; // 10/12: 销售跟进 —— 早安「客户跟进」雷达 + 销售模板 (tool-bridge customers.py)
 pub mod components;    // 10/1: 可选大组件 (会议纪要组件包等) 下载 / 校验, 见 services::components
