@@ -119,6 +119,9 @@ def run_prompt(rec: dict[str, Any]) -> str:
         f"<<<\n{t['text']}\n>>>",
         "请用我电脑上的邮件、文件、知识库、任务等完成这一次。无人值守: 不要发邮件、发消息、派任务、删东西;",
         "这类要我确认的步骤, 以及因为没人确认被拦下没做成的步骤, 都先不做, 每步一句话写进 skipped (例: 「把汇总发给张三」)。",
+        "交回的东西要是文件 (Word / Excel / PPT / PDF / 图片等): 先把文件做好存到本机, 再用 catfish_email_create_draft 起草一封发给"
+        f" {rec['owner']} 的邮件 (主题「交回: {t['title'][:30]}」, attachments 带上文件路径, 只建草稿不发送);"
+        " 然后存结果时 result 写文件里的要点并注明「文件在发给你的邮件里: 文件名」, mail_draft_id 填那封草稿的 id, files 填文件名。",
         f"做完用 catfish_form action=task_period (task_id={rec['task_id']}) 存: result 写已经做好的部分, skipped 写没做的步骤;",
         "我回来后会在「协同」页点「我在了, 接着做」把它们补完。",
     ])
@@ -136,6 +139,9 @@ def run_now_prompt(rec: dict[str, Any]) -> str:
         *([f"对方看了我上次交的, 请我重做: {rec['redo_note']}"] if rec.get("redo_note") else []),
         "请用我电脑上的邮件、文件、知识库、任务等完成。无人值守: 不要发邮件、发消息、派任务、删东西;",
         "这类要我确认的步骤, 以及因为没人确认被拦下没做成的步骤, 都先不做, 每步一句话写进 skipped。",
+        "交回的东西要是文件 (Word / Excel / PPT / PDF / 图片等): 先把文件做好存到本机, 再用 catfish_email_create_draft 起草一封发给"
+        f" {rec['owner']} 的邮件 (主题「交回: {t['title'][:30]}」, attachments 带上文件路径, 只建草稿不发送);"
+        " 然后存结果时 result 写文件里的要点并注明「文件在发给你的邮件里: 文件名」, mail_draft_id 填那封草稿的 id, files 填文件名。",
         f"做完用 catfish_form action=task_period (task_id={rec['task_id']}) 存: result 写要交回给对方的完整结果, skipped 写没做的步骤。",
         "不要自己把结果发给对方, 我会在「协同」页核对后自己交回。",
     ])

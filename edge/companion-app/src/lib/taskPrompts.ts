@@ -19,6 +19,9 @@ export function doPrompt(rec: IncomingTask): string {
     ...(rec.redo_note ? [`对方看了我上次交的, 请我重做: ${rec.redo_note}`] : []),
     "请用我电脑上的邮件、文件、知识库、任务等帮我完成; 发邮件、发消息、删东西这类对外操作照常先问我。",
     "做完后用 catfish_form action=task_draft 把要交回给对方的完整结果存成草稿 (task_id 同上, result 写结果本身)。",
+    `交回的东西要是文件 (Word / Excel / PPT / PDF / 图片等): 先把文件做好存到本机, 再用 catfish_email_create_draft 起草一封发给 ${rec.owner} 的邮件`
+      + ` (主题「交回: ${rec.task.title.slice(0, 30)}」, attachments 带上文件路径, 只建草稿不发送); task_draft 的 result 写文件里的要点并注明「文件在发给你的邮件里: 文件名」,`
+      + " mail_draft_id 填那封草稿的 id, files 填文件名。",
     "不要自己把结果发给对方, 存好后告诉我做了什么, 我去「协同」页核对后自己交回。",
   ].join("\n");
 }

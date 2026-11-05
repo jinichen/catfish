@@ -91,6 +91,8 @@ export interface PipelineDetail {
   handoff: string;
 }
 
+export interface TaskMail { draft_id: string; files: string[] }
+
 export interface TaskBody {
   title: string;
   text: string;
@@ -110,6 +112,8 @@ export interface MyPeriod {
   sent_at?: string;
   /** 到点没人确认、这次没做的步骤 */
   skipped?: string[];
+  /** 11/5: 这一次交回的文件在哪封邮件草稿里 */
+  mail?: TaskMail;
 }
 
 /** 发起人收到的一期 */
@@ -131,8 +135,9 @@ export interface IncomingTask {
   accepted_at?: string;
   reminded_at?: string;
   remind_text?: string;
-  draft?: { result: string; updated_at: string };
-  done?: { result: string; at: string };
+  /** mail (11/5): 交回的是文件 —— 文件在发给发起人的哪封邮件草稿里 */
+  draft?: { result: string; updated_at: string; mail?: TaskMail };
+  done?: { result: string; at: string; mail?: TaskMail };
   declined?: { reason: string; at: string };
   // 定时 / 周期
   rev?: number;

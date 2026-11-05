@@ -199,3 +199,51 @@ def test_明确传了forward_of就用它(fake_cli):
                                  "forward_of": "apple_mail|W|7", "in_reply_to": "apple_mail|W|8"})
     argv = _recorded(fake_cli)["argv"]
     assert argv[argv.index("--forward") + 1] == "apple_mail|W|7"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 11/5: 附件 (同事任务交回文件)
+# ─────────────────────────────────────────────────────────────────────
+@pytest.fixture
+def fake_home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / "Documents").mkdir(parents=True)
+    (home / ".ssh").mkdir()
+    (home / ".catfish" / "outputs").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setenv("HOME", str(home))
+    return home
+
+
+def test_附件_透传attach_超时放宽(fake_cli, fake_home):
+    a = fake_home / "Documents" / "拜访记录.xlsx"
+    a.write_bytes(b"x" * 10)
+    b = fake_home / ".catfish" / "outputs" / "周报.docx"   # 小鲶自己的产出目录可以
+    b.write_bytes(b"y")
+    r = edc.tool_email_create_draft({"to": "zhou@example.com", "subject": "交回: 周报", "body": "附件是周报",
+                                     "attachments": [str(a), "~/.catfish/outputs/周报.docx"]})
+    assert r["ok"] is True
+    argv = _recorded(fake_cli)["argv"]
+    assert [argv[i + 1] for i, x in enumerate(argv) if x == "--attach"] == [str(a.resolve()), str(b.resolve())]
+
+
+@pytest.mark.parametrize("bad, why", [
+    ("~/.ssh/id_rsa", "隐藏目录"),
+    ("/etc/hosts", "主目录"),
+    ("~/Documents/没有这个.xlsx", "找不到"),
+])
+def test_附件_拦住隐藏目录_主目录外_不存在的(fake_cli, fake_home, bad, why):
+    (fake_home / ".ssh" / "id_rsa").write_text("KEY")
+    r = edc.tool_email_create_draft({"to": "a@x.com", "subject": "s", "body": "b", "attachments": [bad]})
+    assert r["ok"] is False and why in r["error"]
+    assert not fake_cli.exists(), "不合规的附件不该调 CLI"
+
+
+def test_附件_太大_太多(fake_cli, fake_home, monkeypatch):
+    f = fake_home / "Documents" / "big.pdf"
+    f.write_bytes(b"0" * 100)
+    monkeypatch.setattr(edc, "ATTACH_MAX_BYTES", 50)
+    r = edc.tool_email_create_draft({"to": "a@x.com", "subject": "s", "body": "b", "attachments": [str(f)]})
+    assert r["ok"] is False and "太大" in r["error"]
+    r = edc.tool_email_create_draft({"to": "a@x.com", "subject": "s", "body": "b", "attachments": [str(f)] * 11})
+    assert r["ok"] is False and "最多" in r["error"]

@@ -126,7 +126,8 @@ def _norm_skipped(raw: Any) -> list[str]:
     return [str(x).strip()[:200] for x in items if str(x or "").strip()][:MAX_SKIPPED]
 
 
-def record_period(task_id: str, result: Any, skipped: Any = None, period: Any = None) -> dict[str, Any]:
+def record_period(task_id: str, result: Any, skipped: Any = None, period: Any = None,
+                  mail: dict[str, Any] | None = None) -> dict[str, Any]:
     """小鲶做完一期调 (catfish_form task_period)。立即任务没有「期」, 当草稿存。
 
     skipped: 要人确认才能做、这次没做的步骤 → 这一期「待确认」, 不交回, 等本人回来接着做。
@@ -138,7 +139,7 @@ def record_period(task_id: str, result: Any, skipped: Any = None, period: Any = 
         text = str(result or "").strip()
         if steps:
             text += "\n\n—— 小鲶没做、要你确认的步骤 (交回前处理一下, 或者删掉这段):\n" + "\n".join(f"{i}. {x}" for i, x in enumerate(steps, 1))
-        return ct.save_draft(task_id, text)
+        return ct.save_draft(task_id, text, mail)
     if rec.get("status") == "cancelled" or rec.get("quit") or not rec.get("accepted_at"):
         raise ValueError("这个任务已经停了 (对方取消 / 你退出 / 还没接下), 不用再做")
     text = str(result or "").strip()
@@ -160,6 +161,8 @@ def record_period(task_id: str, result: Any, skipped: Any = None, period: Any = 
              "late_minutes": sched.late_minutes(rec["task"]["schedule"], last_at=periods[-1]["at"] if periods else None)}
         periods.append(p)
     p["skipped"], p["notified"] = steps, False
+    if mail:
+        p["mail"] = mail   # 这一次交回的文件在哪封邮件草稿里
     if steps:
         p["state"] = "待确认"
         ct._reply(rec, {"status": "waiting", "period": p["period"], "waiting_steps": len(steps), "at": ct._now()})

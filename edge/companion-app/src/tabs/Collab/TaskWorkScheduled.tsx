@@ -15,16 +15,19 @@ import {
   type IncomingState, type IncomingTask, type MyPeriod,
 } from "../../lib/tauri_colleague_tasks";
 import { useUIStore } from "../../store/ui";
+import MailBox from "./TaskMailBox";
 import { StateTag, muted } from "./formsUi";
 import { Btn, inputStyle } from "./roomLinkUi";
 
 const when = (iso?: string | null) => (iso ? iso.slice(0, 16).replace("T", " ") : "");
 
-function PeriodBox({ p, busy, onSubmit, onContinue }: {
+function PeriodBox({ p, owner, busy, onSubmit, onContinue, onOpenMail }: {
   p: MyPeriod;
+  owner: string;
   busy: boolean;
   onSubmit: (text: string) => void;
   onContinue: () => void;
+  onOpenMail: (draftId: string) => void;
 }) {
   const [text, setText] = useState(p.result);
   const waiting = p.state === "待确认";
@@ -45,6 +48,7 @@ function PeriodBox({ p, busy, onSubmit, onContinue }: {
           </div>
         </div>
       )}
+      {p.mail && <MailBox mail={p.mail} owner={owner} sent={p.state === "已交回"} onOpen={onOpenMail} />}
       <textarea value={text} onChange={(e) => setText(e.target.value)} rows={5} style={{ ...inputStyle, resize: "vertical" }}
                 aria-label={`第 ${p.period} 次的结果`} />
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -69,6 +73,7 @@ export default function TaskWorkScheduled({ rec, state, scheduleText, nextRun, b
   const [leaving, setLeaving] = useState<"decline" | "quit" | null>(null);
   const [reason, setReason] = useState("");
   const startChat = useUIStore((s) => s.startEmailChat);
+  const openEmailDraft = useUIStore((s) => s.openEmailDraft);
   const stopped = state === "已取消" || state === "已退出" || state === "不接";
   const needAccept = state === "待处理" || state === "要重新同意";
   const periods = [...(rec.periods ?? [])].reverse();
@@ -132,7 +137,8 @@ export default function TaskWorkScheduled({ rec, state, scheduleText, nextRun, b
 
       {periods.length > 0 && <strong style={{ fontSize: 13 }}>每次的结果</strong>}
       {periods.map((p) => (
-        <PeriodBox key={`${p.period}-${p.state}-${p.result.length}`} p={p} busy={busy}
+        <PeriodBox key={`${p.period}-${p.state}-${p.result.length}`} p={p} busy={busy} owner={rec.owner}
+                   onOpenMail={(id) => { openEmailDraft(id); onClose(); }}
                    onContinue={() => { startChat(continueChatKey(rec.task_id, p.period), continuePrompt(rec, p)); onClose(); }}
                    onSubmit={(text) => run(async () => {
           await taskPeriodSubmit(rec.task_id, p.period, text);

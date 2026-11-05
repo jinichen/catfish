@@ -343,3 +343,33 @@ def test_界面接下_start_false_不开工(w):
     ct.sync()
     ct.pim_handlers({"task_id": tid, "start": False})["pim/ctask_accept"]()
     assert w.jobs(ZHANG) == {}
+
+
+def test_交回文件_记下邮件草稿和文件名_交回后带着(w):
+    tid = _send(w, None, (ZHANG,))
+    w.be(ZHANG)
+    ct.sync()
+    ct.accept(tid)
+    forms_tool_out = ct.tool_dispatch("task_draft", {"task_id": tid, "result": "拜访表做好了, 文件在发给你的邮件里: 拜访.xlsx",
+                                                     "mail_draft_id": "draft-9", "files": ["/Users/x/Documents/拜访.xlsx"]})
+    assert forms_tool_out["ok"]
+    rec = ct.load_incoming(tid)
+    assert rec["draft"]["mail"] == {"draft_id": "draft-9", "files": ["拜访.xlsx"]}
+    ct.save_draft(tid, "本人改了一句")                  # 本人改草稿: 邮件草稿的记录还在
+    assert ct.load_incoming(tid)["draft"]["mail"]["draft_id"] == "draft-9"
+    ct.submit(tid, "本人改了一句")
+    assert ct.load_incoming(tid)["done"]["mail"]["files"] == ["拜访.xlsx"]
+
+    w.be(BOSS)                                       # 发起人那边: 收到的是文字说明 (文件走邮件, 不进邮筒)
+    ct.sync()
+    row = ct.get(tid)["progress"]["rows"][0]
+    assert row["result"] == "本人改了一句"
+
+
+def test_周期任务某一次交回文件_记在那一期(w):
+    tid = _send(w, WEEKLY, (ZHANG,))
+    w.be(ZHANG)
+    ct.sync()
+    ct.accept(tid)
+    ct.tool_dispatch("task_period", {"task_id": tid, "result": "本周报表见邮件", "mail_draft_id": "d1", "files": ["w.xlsx"]})
+    assert ct.load_incoming(tid)["periods"][0]["mail"] == {"draft_id": "d1", "files": ["w.xlsx"]}

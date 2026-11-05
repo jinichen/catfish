@@ -17,6 +17,7 @@ import {
 import { useUIStore } from "../../store/ui";
 import { Overlay, StateTag, muted } from "./formsUi";
 import { Btn, ErrorLine, inputStyle } from "./roomLinkUi";
+import MailBox from "./TaskMailBox";
 import TaskWorkScheduled from "./TaskWorkScheduled";
 
 export const when = (iso?: string | null) => (iso ? iso.slice(0, 16).replace("T", " ") : "");
@@ -32,6 +33,7 @@ export default function TaskWork({ taskId, onClose }: { taskId: string; onClose:
   const [reason, setReason] = useState("");
   const [extra, setExtra] = useState<{ scheduleText?: string; nextRun?: string | null }>({});
   const startChat = useUIStore((s) => s.startEmailChat);
+  const openEmailDraft = useUIStore((s) => s.openEmailDraft);
 
   const load = async () => {
     const d = await taskGet(taskId);
@@ -139,6 +141,10 @@ export default function TaskWork({ taskId, onClose }: { taskId: string; onClose:
             : `🐟 小鲶 ${when(rec.auto_started_at).slice(11)} 接下后已经在后台开工, 做好了会通知你核对。想看着它做就点「让小鲶做」。`}
         </div>
       )}
+      {!rec.task.schedule && (rec.draft?.mail ?? rec.done?.mail) && (
+        <MailBox mail={(rec.draft?.mail ?? rec.done?.mail)!} owner={rec.owner} sent={!!rec.done}
+                 onOpen={(id) => { openEmailDraft(id); onClose(); }} />
+      )}
       {!rec.task.schedule && !cancelled && (accepted || rec.done) && (
         <>
           <strong style={{ fontSize: 13 }}>交回给 {rec.owner} 的结果</strong>
@@ -189,3 +195,4 @@ export default function TaskWork({ taskId, onClose }: { taskId: string; onClose:
     </Overlay>
   );
 }
+

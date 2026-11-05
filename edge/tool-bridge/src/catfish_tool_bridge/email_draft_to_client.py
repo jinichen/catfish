@@ -45,6 +45,44 @@ def _find_catfish_email() -> str | None:
     return find_email_cli()
 
 
+# 11/5: 附件 (同事任务要交回文件时, 小鲶把文件放进发给发起人的邮件草稿)。草稿员工看得见、发不发他定,
+# 但模型给的路径还是要拦: 只认主目录下的普通文件, 路径里不能有隐藏目录 (~/.ssh、~/.catfish/oauth 这类),
+# 小鲶自己的产出目录 ~/.catfish/outputs 除外; 单个 / 合计都有上限 (邮箱服务器一般 20~25MB)。
+ATTACH_MAX_FILES = 10
+ATTACH_MAX_BYTES = 20 * 1024 * 1024
+
+
+def check_attachments(raw: Any) -> list[str]:
+    """附件路径 → 规范化后的绝对路径列表。不合规的直接报人话 (ValueError)。"""
+    from pathlib import Path  # noqa: PLC0415
+    if not raw:
+        return []
+    items = [raw] if isinstance(raw, str) else list(raw) if isinstance(raw, (list, tuple)) else None
+    if items is None:
+        raise ValueError("attachments 要是文件路径的列表")
+    if len(items) > ATTACH_MAX_FILES:
+        raise ValueError(f"一封最多带 {ATTACH_MAX_FILES} 个附件")
+    home = Path.home().resolve()
+    outputs = (home / ".catfish" / "outputs").resolve()
+    out, total = [], 0
+    for x in items:
+        p = Path(os.path.expanduser(str(x).strip())).resolve()
+        if not p.is_file():
+            raise ValueError(f"附件找不到 (或不是文件): {x}")
+        inside_outputs = p.is_relative_to(outputs)
+        if not inside_outputs:
+            if not p.is_relative_to(home):
+                raise ValueError(f"只能带你主目录下的文件: {x}")
+            if any(part.startswith(".") for part in p.relative_to(home).parts):
+                raise ValueError(f"隐藏目录里的文件不能当附件 (可能是密钥 / 配置): {x}")
+        size = p.stat().st_size
+        total += size
+        if size > ATTACH_MAX_BYTES or total > ATTACH_MAX_BYTES:
+            raise ValueError(f"附件太大 (合计最多 {ATTACH_MAX_BYTES // 1024 // 1024}MB): {p.name} —— 大文件用网盘链接")
+        out.append(str(p))
+    return out
+
+
 _FORWARD_PREFIX = re.compile(r"^\s*(转发|轉發|fwd?|fw)\s*[:：]", re.IGNORECASE)
 
 
@@ -62,6 +100,7 @@ def tool_email_create_draft(args: dict[str, Any]) -> dict[str, Any]:
         forward_of (str, 可选): 转发的原邮件 id —— 原文 + 原附件由 CLI 接上 (11/4)
         account (str, 可选): 从哪个账号起草
         replaces (str, 可选): 改已有草稿时传旧草稿 id, 存好新的后旧的去掉
+        attachments (list[str], 可选): 附件的本地路径 (11/5; 只认主目录下、不在隐藏目录里的普通文件, 合计 20MB)
 
     Returns:
         {ok, draft_id, summary} / {ok: False, error}
@@ -74,6 +113,11 @@ def tool_email_create_draft(args: dict[str, Any]) -> dict[str, Any]:
             "ok": False,
             "error": "to / subject / body 都必填 —— 草稿箱里不该出现空壳草稿",
         }
+
+    try:
+        attachments = check_attachments(args.get("attachments"))
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
 
     bin_path = _find_catfish_email()
     if not bin_path:
@@ -119,9 +163,11 @@ def tool_email_create_draft(args: dict[str, Any]) -> dict[str, Any]:
         replaces = str(args.get("replaces") or "").strip()
         if replaces:
             cmd += ["--replace", replaces]
+        for a in attachments:
+            cmd += ["--attach", a]
 
         # 转发要先读原信、导出原附件, 比单建草稿慢得多
-        timeout = _SUBPROCESS_TIMEOUT * 4 if forward_of else _SUBPROCESS_TIMEOUT
+        timeout = _SUBPROCESS_TIMEOUT * 4 if forward_of or attachments else _SUBPROCESS_TIMEOUT
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=timeout,

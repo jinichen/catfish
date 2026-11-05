@@ -223,7 +223,8 @@ EMAIL_TOOLS: List[Dict[str, Any]] = [
             "完成后明确告诉员工: 没有发送, 请到草稿箱核对后自己点发送。"
             "回复邮件必传 in_reply_to; 转发必传 forward_of (不是 in_reply_to; 原文、原排版和原附件鲶鱼自动接在"
             "正文后面, body 只写员工要附的话, 别自己抄原文, 也别写「原文见下方」却不传 forward_of); "
-            "修改已有草稿传 replaces。返回的 summary 原样转述。"
+            "修改已有草稿传 replaces。要带文件 (如同事任务要交回的 Excel / Word / PDF) 传 attachments (本地路径列表)。"
+            "返回的 summary 原样转述。"
         ),
         "input_schema": {
             "type": "object",
@@ -244,6 +245,10 @@ EMAIL_TOOLS: List[Dict[str, Any]] = [
                 "replaces": {
                     "type": "string",
                     "description": "改已有草稿时传旧草稿 id, 不传会多出一封重复草稿",
+                },
+                "attachments": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "附件的本地文件路径 (主目录下, 不在隐藏目录里; 合计 20MB 以内)",
                 },
             },
             "required": ["to", "subject", "body"],

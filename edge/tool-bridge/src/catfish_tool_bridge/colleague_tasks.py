@@ -23,6 +23,7 @@ colleague_tasks_pipeline.py; 「请他重做」= 只给这一个人发 rev+1 的
 from __future__ import annotations
 
 import json
+import os
 import re
 import secrets
 from datetime import date, datetime, time, timedelta
@@ -453,13 +454,21 @@ def _watch_started(events: list[dict[str, Any]]) -> None:
             forms._write(p, rec)
 
 
-def save_draft(task_id: str, result: Any) -> dict[str, Any]:
-    """结果草稿 (小鲶做完存的 / 本人改了一半)。不发出去。"""
+def mail_of(draft_id: Any, files: Any) -> dict[str, Any] | None:
+    """交回的是文件 (11/5): 文件在发给发起人的那封邮件草稿里 —— 记下草稿 id 和文件名, 界面上给「打开邮件草稿」。"""
+    did = str(draft_id or "").strip()[:200]
+    names = [os.path.basename(str(x))[:120] for x in (files or []) if str(x).strip()][:10] if isinstance(files, list) else []
+    return {"draft_id": did, "files": names} if did or names else None
+
+
+def save_draft(task_id: str, result: Any, mail: dict[str, Any] | None = None) -> dict[str, Any]:
+    """结果草稿 (小鲶做完存的 / 本人改了一半)。不发出去。mail: 文件在哪封邮件草稿里 (不传 = 保留原来记的)。"""
     rec = load_incoming(task_id)
     text = str(result or "").strip()
     if len(text) > RESULT_MAX:
         raise ValueError(f"结果太长 ({len(text)} 字), 最多 {RESULT_MAX} 字: 精简一下, 长材料用邮件发")
-    rec["draft"] = {"result": text, "updated_at": _now()}
+    old_mail = (rec.get("draft") or {}).get("mail")
+    rec["draft"] = {"result": text, "updated_at": _now(), **({"mail": mail or old_mail} if (mail or old_mail) else {})}
     forms._write(_in_path(task_id), rec)
     return {"ok": True, "chars": len(text)}
 
@@ -475,7 +484,7 @@ def submit(task_id: str, result: Any) -> dict[str, Any]:
     at = _now()
     _reply(rec, {"status": "done", "result": text, "at": at})
     rec["accepted_at"] = rec.get("accepted_at") or at
-    rec["done"] = {"result": text, "at": at}
+    rec["done"] = {"result": text, "at": at, **({"mail": rec["draft"]["mail"]} if (rec.get("draft") or {}).get("mail") else {})}
     rec.pop("declined", None)
     forms._write(_in_path(task_id), rec)
     return {"ok": True, "done_at": at, "late": is_late(rec["task"].get("deadline"), at)}
@@ -765,9 +774,10 @@ def tool_dispatch(action: str, args: dict[str, Any]) -> dict[str, Any]:
     if action == "task_create":
         return create(args)
     if action == "task_draft":
-        return save_draft(tid, args.get("result"))
+        return save_draft(tid, args.get("result"), mail_of(args.get("mail_draft_id"), args.get("files")))
     if action == "task_period":
-        return _periodic().record_period(tid, args.get("result"), args.get("skipped"), args.get("period"))
+        return _periodic().record_period(tid, args.get("result"), args.get("skipped"), args.get("period"),
+                                         mail=mail_of(args.get("mail_draft_id"), args.get("files")))
     if action in ("task_send", "task_remind", "task_cancel"):
         task = load_outgoing(tid)
         if not args.get("confirmed"):
