@@ -22,7 +22,7 @@ import {
 } from "../../lib/tauri_colleague_rooms";
 import { Overlay, muted } from "./formsUi";
 import RoomComposer, { NAME_MAX } from "./RoomComposer";
-import { STATE_WORD, cardStates, parseChatTask, summaryText, type ChatTask } from "./roomTasks";
+import { STATE_WORD, cardStates, parseChatTask, summaryText, type ChatTask, type SingleTask } from "./roomTasks";
 import TaskProgress from "./TaskProgress";
 import TaskWork from "./TaskWork";
 import { Btn, ErrorLine, cardStyle, inputStyle } from "./roomLinkUi";
@@ -190,6 +190,13 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
   const [work, setWork] = useState<string | null>(null);
   const [watch, setWatch] = useState<{ id: string; notice?: string } | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
+  /** 提示 (小鲶起草好了 / 接下了 / 派出了): 不是错误, 不用红字, 几秒后自己消失 */
+  const [hint, setHint] = useState<string | null>(null);
+  useEffect(() => {
+    if (!hint) return;
+    const t = setTimeout(() => setHint(null), 6000);
+    return () => clearTimeout(t);
+  }, [hint]);
   const [helping, setHelping] = useState<AssistKind | null>(null);
   const [autoPost, setAutoPost] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
@@ -246,7 +253,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
       const t = await taskGet(taskId);
       if (t.role !== "owner") return;
       setText(summaryText(title, t.progress.rows, (e) => labelOf(members, e)));
-      onNotice("汇总填进输入框了: 看一下、删改好再点发送。");
+      setHint("汇总填进输入框了: 看一下、删改好再点发送。");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -260,7 +267,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
       // 起草回复: 输入框里写的当要求 (如「委婉拒绝」), 选了「回复」就回那一条
       const r = await roomAssist(roomId, kind, kind === "reply" ? text : "", kind === "reply" ? replyTo?.msg_id : null);
       setText(r.text);
-      onNotice("小鲶起草好了, 在输入框里 —— 看一下、改好再发 (它不会自己发)。");
+      setHint("小鲶起草好了, 在输入框里 —— 看一下、改好再发 (它不会自己发)。");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -278,11 +285,20 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
                                          stages: t.stages.map((st) => ({ name: st.name, text: st.text, recipients: st.recipients, deadline: st.deadline || null })) });
         return { failed: r.failed.map((f) => ({ email: f.to, error: f.error })) };
       }
-      const { task } = await taskCreate({ text: t.text, recipients: t.recipients, deadline: t.deadline || null, schedule: t.schedule,
-                                          room_id: roomId, room_text: body, room_auto_post: Boolean(t.schedule) && autoPost });
-      const r = await taskSend(task.task_id);
-      if (r.room_notice) throw new Error(r.room_notice);
-      return { failed: r.failed.map((f) => ({ email: f.to, error: f.error })) };
+      const one = async (x: SingleTask, said: string) => {
+        const { task } = await taskCreate({ text: x.text, recipients: x.recipients, deadline: x.deadline || null, schedule: x.schedule,
+                                            room_id: roomId, room_text: said, room_auto_post: Boolean(x.schedule) && autoPost });
+        const r = await taskSend(task.task_id);
+        if (r.room_notice) throw new Error(r.room_notice);
+        return r.failed.map((f) => ({ email: f.to, error: f.error }));
+      };
+      if (t.kind === "batch") {   // 多行待办: 一行派一个, 群里一行一条
+        const failed = [];
+        for (const x of t.items) failed.push(...(await one(x, x.text)));
+        setHint(`派出了 ${t.items.length} 条任务`);
+        return { failed };
+      }
+      return { failed: await one(t, body) };
     }, "没收到任务");
     if (ok) { setText(""); setReplyTo(null); setAutoPost(false); void refreshTasks(); }
   }
@@ -313,6 +329,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
           <Btn kind="ghost" onClick={() => setShowMembers((v) => !v)}>{showMembers ? "收起成员" : `👥 成员 ${room.joined}`}</Btn>
         </div>
         {notice && <ErrorLine>{notice}</ErrorLine>}
+        {hint && <div style={{ fontSize: 12, color: "var(--catfish-cyan)", flexShrink: 0 }}>{hint}</div>}
         {error && <ErrorLine>{error}</ErrorLine>}
 
         {/* 只有这里滚 */}
@@ -325,7 +342,8 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
                            onAccept={() => void act(async () => {
                              await refreshTasks();
                              const r = await taskAccept(m.card!.task_id);
-                             onNotice(r.start_error ?? `接下了「${m.card!.title}」, 小鲶已经在后台开工, 做好了会通知你核对`);
+                             if (r.start_error) onNotice(r.start_error);
+                             else setHint(`接下了「${m.card!.title}」, 小鲶已经在后台开工, 做好了会通知你核对`);
                              void refreshTasks();
                              return r;
                            }, "没收到你接下的通知")}
@@ -387,7 +405,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
                 ))}
               </div>
             )}
-            <textarea value={text} rows={2} maxLength={TEXT_MAX} onKeyDown={onKey}
+            <textarea value={text} rows={Math.min(8, Math.max(2, text.split("\n").length))} maxLength={TEXT_MAX} onKeyDown={onKey}
                       onChange={(e) => { setText(e.target.value); setAtOpen(e.target.value.endsWith("@")); }}
                       placeholder="说点什么 · Enter 发送 · @ 提醒某人 · 要派任务就照常说, 如「@张三 周五前交拜访记录」, 再点「派给@的人」"
                       style={{ ...inputStyle, resize: "none" }} />
@@ -570,7 +588,7 @@ function TaskMessage({ m, me, members, messages, busy, local, onAccept, onWork, 
       </span>
       <div style={{ maxWidth: "78%", padding: "6px 10px", borderRadius: 10, fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-word",
                     background: mine ? "var(--catfish-cyan)" : "var(--catfish-bg-subtle, rgba(0,0,0,0.05))", color: mine ? "white" : "inherit",
-                    border: myState && myState !== "done" ? "1px solid var(--status-warn, #d97706)" : "1px solid transparent",
+                    border: myState && !["done", "declined", "quit"].includes(myState) ? "1px solid var(--status-warn, #d97706)" : "1px solid transparent",
                     opacity: myState === "done" || myState === "declined" ? 0.75 : 1 }}>
         {m.text}
       </div>

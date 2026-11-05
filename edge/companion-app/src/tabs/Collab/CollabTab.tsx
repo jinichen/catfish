@@ -53,7 +53,7 @@ export default function CollabTab() {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+              gridTemplateColumns: "minmax(0, 3fr) minmax(0, 2fr)",   // 右边「等我点头」多半是空的, 别占一半
               gap: "var(--space-4)",
               alignItems: "start",
             }}

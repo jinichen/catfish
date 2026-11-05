@@ -76,6 +76,27 @@ describe("parseChatTask", () => {
   });
 });
 
+describe("多行待办 → 一行派一个 (11/5)", () => {
+  const ME = "zhou@example.com";
+  it("小鲶整理的待办: 每行各自的人和截止; 标题行 / 没 @ 人的行不管", () => {
+    const t = parseChatTask("待办:\n1. @张三 发周报 (明天)\n2. @李四 交拜访记录 (周五前)\n· @张三 对一下报价 (待定)", members, ME, NOW);
+    expect(t?.kind).toBe("batch");
+    if (t?.kind !== "batch") return;
+    expect(t.items.map((x) => [x.text, x.recipients, x.deadline])).toEqual([
+      ["@张三 发周报 (明天)", ["zhang@example.com"], "2026-11-06T18:00"],
+      ["@李四 交拜访记录 (周五前)", ["li@example.com"], "2026-11-06T18:00"],
+      ["@张三 对一下报价 (待定)", ["zhang@example.com"], ""],
+    ]);
+    expect(t.label).toBe("分别派 3 条: 张三 2 条、李四 1 条");
+    expect(t.problem).toBeUndefined();
+  });
+  it("某一条有问题就说是第几条; 「先…再…」还是多阶段", () => {
+    const t = parseChatTask("@张三 每天交日报\n@李四 周五前交", members, ME, NOW);
+    expect(t).toMatchObject({ kind: "batch", problem: expect.stringContaining("第 1 条") });
+    expect(parseChatTask("先让@张三 收数,\n再让@李四 汇总", members, ME, NOW)?.kind).toBe("pipeline");
+  });
+});
+
 describe("cardStates / summaryText", () => {
   const st = (from: string, state: "accepted" | "done" | "declined", task_id = "t_20261105_0123abcd"): RoomMessage =>
     ({ msg_id: `m_${from.slice(0, 4)}${state}`, kind: "status", from, at: "x", text: "", status: { task_id, title: "周报", state } });

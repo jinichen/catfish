@@ -134,22 +134,47 @@ function parseOnce(text: string, now: Date): { schedule: Schedule; label: string
 
 export interface ChatStage { name: string; text: string; recipients: string[]; deadline: string }
 
+export type SingleTask = { kind: "task"; text: string; recipients: string[]; deadline: string; schedule: Schedule | null; label: string; problem?: string };
+
 export type ChatTask =
-  | { kind: "task"; text: string; recipients: string[]; deadline: string; schedule: Schedule | null; label: string; problem?: string }
-  | { kind: "pipeline"; title: string; stages: ChatStage[]; label: string; problem?: string };
+  | SingleTask
+  | { kind: "pipeline"; title: string; stages: ChatStage[]; label: string; problem?: string }
+  /** 11/5: 多行、每行 @ 了人 (如小鲶整理的待办) —— 一行派一个任务 */
+  | { kind: "batch"; items: SingleTask[]; label: string; problem?: string };
+
+const BULLET = /^\s*(?:[-*·•]|\d+[.、)]|[（(]?\d+[)）])\s*/;
 
 const STAGE_SPLIT = /(?:^|[，,。；;\s])(?:先|再|然后|接着|最后)(?=\s*(?:让|请|叫|由)?\s*@)/g;
 
 /** 一句话 → 要派的任务。@ 不到任何已加入的人 = null (就是普通聊天)。 */
 export function parseChatTask(text: string, members: RoomMember[], me: string, now: Date = new Date()): ChatTask | null {
   const body = text.trim();
+  // 多行待办: 两行以上各自 @ 了人 → 一行一个任务 (前面的「1.」「·」去掉; 没 @ 人的行, 如标题, 不管)
+  const lines = body.split(/\n+/).map((l) => l.replace(BULLET, "").trim()).filter((l) => atJoined(l, members, me).length);
+  if (lines.length >= 2 && !/^\s*先/.test(body)) {
+    const items = lines.map((l) => parseOneOrPipeline(l, members, me, now, false) as SingleTask);
+    const bad = items.findIndex((x) => x.problem);
+    const count = new Map<string, number>();
+    for (const it of items) for (const e of it.recipients) count.set(e, (count.get(e) ?? 0) + 1);
+    const nameOf = (e: string) => display(members.find((m) => m.email === e) ?? { email: e, name: "" });
+    return {
+      kind: "batch", items,
+      label: `分别派 ${items.length} 条: ${[...count].map(([e, n]) => `${nameOf(e)} ${n} 条`).join("、")}`,
+      ...(bad >= 0 ? { problem: `第 ${bad + 1} 条: ${items[bad].problem}` } : {}),
+    };
+  }
+  return parseOneOrPipeline(body, members, me, now);
+}
+
+/** 一段话 → 一个任务 / 多阶段。allowPipeline=false: 逐条派时一行只当一个任务 */
+function parseOneOrPipeline(body: string, members: RoomMember[], me: string, now: Date, allowPipeline = true): ChatTask | null {
   const people = atJoined(body, members, me);
   if (!body || !people.length) return null;
   const nameOf = (e: string) => display(members.find((m) => m.email === e) ?? { email: e, name: "" });
 
   // 多阶段: 「先让@张三 …, 再让@李四 …」(至少两段, 每段都 @ 了人)
   const cuts = [...body.matchAll(STAGE_SPLIT)].map((m) => m.index! + m[0].search(/先|再|然后|接着|最后/));
-  if (cuts.length >= 2 && /先/.test(body)) {
+  if (allowPipeline && cuts.length >= 2 && /先/.test(body)) {
     const parts = cuts.map((c, i) => body.slice(c, cuts[i + 1] ?? body.length).replace(/[，,。；;\s]+$/, ""));
     const stages = parts.map((p, i) => ({
       name: `第 ${i + 1} 段`, text: p.replace(/^(先|再|然后|接着|最后)\s*(让|请|叫|由)?\s*/, "").trim(),

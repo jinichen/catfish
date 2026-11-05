@@ -4,22 +4,45 @@
  * 原来 (P50, 9/10) 只能找一个人、对方 10 分钟内要点同意、你这台电脑要一直开着直连对方 ——
  * 换成跟一起填表同一个邮筒: 发出去就不用管, 对方开机再处理, 在他自己的电脑上做完交回。
  * 上: 同事派给我的 (要我动手的排前面); 下: 我发出的 (看进度)。点一行打开对应的弹层。
+ * 11/5 鸿波: 列表太长、一条占两行、找不到 —— 改成一行一条, 默认只看「要处理」的 (结束的收起来), 顶上能搜标题 / 同事。
  */
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { useColleagueTasks } from "../../lib/colleagueTasksStore";
 import { StateTag, muted } from "./formsUi";
 import PipelineComposer from "./PipelineComposer";
 import PipelineProgress from "./PipelineProgress";
-import { Btn, cardStyle, itemStyle } from "./roomLinkUi";
+import { Btn, cardStyle, inputStyle, itemStyle } from "./roomLinkUi";
 import TaskComposer from "./TaskComposer";
 import TaskProgress from "./TaskProgress";
-import TaskWork, { when } from "./TaskWork";
+import TaskWork from "./TaskWork";
 
 const STATUS_LABEL = { draft: "没发出", open: "进行中", cancelled: "已取消" } as const;
 const ACTIVE = new Set(["待处理", "在做", "待核对", "待确认", "要重新同意", "没做成", "定时没了"]);
 
-const rowButton = { ...itemStyle, textAlign: "left" as const, cursor: "pointer", background: "transparent", color: "inherit", font: "inherit" };
+const rowButton = { ...itemStyle, textAlign: "left" as const, cursor: "pointer", background: "transparent", color: "inherit", font: "inherit",
+                    padding: "6px 10px", flexDirection: "row" as const, alignItems: "center", gap: 8 };
+
+/** 一行一条: 标题 (放不下省略) · 说明 · 状态 */
+function Row({ title, sub, state, onClick }: { title: ReactNode; sub: string; state: ReactNode; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} style={rowButton} title={typeof title === "string" ? title : undefined}>
+      <span style={{ flex: 1, minWidth: 0, fontSize: "var(--text-sm)", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {title}
+      </span>
+      <span style={{ ...muted, maxWidth: "45%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={sub}>{sub}</span>
+      <span style={{ flexShrink: 0 }}>{state}</span>
+    </button>
+  );
+}
+
+/** 搜标题 / 同事邮箱 (不分大小写) */
+export function matches(q: string, ...fields: (string | null | undefined)[]): boolean {
+  const k = q.trim().toLowerCase();
+  return !k || fields.some((f) => (f ?? "").toLowerCase().includes(k));
+}
+
+const shortDay = (iso?: string | null) => (iso ? `${+iso.slice(5, 7)}/${+iso.slice(8, 10)}${iso.length > 10 ? ` ${iso.slice(11, 16)}` : ""}` : "");
 
 export default function TasksPanel() {
   const { incoming, outgoing, pipelines = [], loaded, syncError } = useColleagueTasks();
@@ -29,7 +52,20 @@ export default function TasksPanel() {
   const [working, setWorking] = useState<string | null>(null);
   const [watching, setWatching] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | undefined>();
-  const inbox = [...incoming].sort((a, b) => Number(ACTIVE.has(b.state)) - Number(ACTIVE.has(a.state)));
+  const [q, setQ] = useState("");
+  const [all, setAll] = useState(false);
+  const inboxAll = [...incoming].sort((a, b) => Number(ACTIVE.has(b.state)) - Number(ACTIVE.has(a.state)))
+    .filter((t) => matches(q, t.title, t.owner));
+  const inbox = all ? inboxAll : inboxAll.filter((t) => ACTIVE.has(t.state));
+  const outAll = outgoing.filter((t) => matches(q, t.title));
+  const finished = (t: (typeof outgoing)[number]) => !t.schedule && t.recipients > 0
+    && ["已完成", "逾期完成", "不接", "已取消"].reduce((n, k) => n + (t.progress[k as keyof typeof t.progress] ?? 0), 0) >= t.recipients;
+  const outs = all ? outAll : outAll.filter((t) => t.status !== "cancelled" && !finished(t));
+  const pipesAll = pipelines.filter((p) => matches(q, p.title));
+  const pipes = all ? pipesAll : pipesAll.filter((p) => p.status === "open");
+  const hidden = inboxAll.length - inbox.length + outAll.length - outs.length + pipesAll.length - pipes.length;
+  const seg = (on: boolean) => ({ border: "1px solid var(--catfish-border)", cursor: "pointer", font: "inherit", fontSize: 12, padding: "3px 10px",
+                                  borderRadius: 12, background: on ? "var(--catfish-cyan)" : "transparent", color: on ? "white" : "inherit" });
 
   return (
     <div style={cardStyle}>
@@ -41,57 +77,45 @@ export default function TasksPanel() {
             结果只回到你这台电脑。中央只转交, 看不到内容。
           </div>
         </div>
-        <div style={{ display: "flex", gap: 6 }}>
+        <div style={{ display: "flex", gap: 6, whiteSpace: "nowrap", flexShrink: 0 }}>
           <Btn kind="ghost" onClick={() => setComposingPipeline(true)}>多阶段</Btn>
           <Btn kind="primary" onClick={() => setComposing(true)}>派任务</Btn>
         </div>
       </div>
       {syncError && <span style={muted}>暂时收不到同事的任务: {syncError}</span>}
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜任务名 / 同事" style={{ ...inputStyle, flex: 1, padding: "4px 8px" }} />
+        <button type="button" style={seg(!all)} onClick={() => setAll(false)}>要处理的</button>
+        <button type="button" style={seg(all)} onClick={() => setAll(true)}>全部</button>
+      </div>
+      {!all && hidden > 0 && <span style={muted}>另有 {hidden} 条已结束 (交回 / 不接 / 取消), 点「全部」看。</span>}
 
       <section style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <strong style={{ fontSize: 13 }}>同事请我做的</strong>
-        {loaded && inbox.length === 0 && <span style={muted}>还没有同事找你帮忙。</span>}
+        {loaded && inbox.length === 0 && <span style={muted}>{all || q ? "没有找到。" : "没有要你处理的。"}</span>}
         {inbox.map((t) => (
-          <button key={t.task_id} type="button" onClick={() => setWorking(t.task_id)} style={rowButton}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-              <span style={{ fontSize: "var(--text-sm)", fontWeight: 600 }}>{t.title}</span>
-              <StateTag state={t.state} />
-            </div>
-            <span style={muted}>
-              {t.owner}{t.schedule ? ` · ⏰ ${t.schedule}` : t.deadline ? ` · 截止 ${when(t.deadline)}` : ""}
-              {t.to_review ? ` · ${t.to_review} 次待核对` : ""}{t.to_confirm ? ` · ${t.to_confirm} 次有步骤等你确认` : ""}
-              {t.late && ACTIVE.has(t.state) ? " · 已过截止" : ""}{t.reminded_at && ACTIVE.has(t.state) ? " · 被催了" : ""}
-            </span>
-          </button>
+          <Row key={t.task_id} title={t.title} onClick={() => setWorking(t.task_id)} state={<StateTag state={t.state} />}
+               sub={[t.owner, t.schedule ? `⏰ ${t.schedule}` : t.deadline ? `截止 ${shortDay(t.deadline)}` : "",
+                     t.to_review ? `${t.to_review} 次待核对` : "", t.to_confirm ? `${t.to_confirm} 次要确认` : "",
+                     t.late && ACTIVE.has(t.state) ? "已过截止" : "", t.reminded_at && ACTIVE.has(t.state) ? "被催了" : ""]
+                     .filter(Boolean).join(" · ")} />
         ))}
       </section>
 
       <section style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <strong style={{ fontSize: 13 }}>我请同事做的</strong>
-        {loaded && outgoing.length === 0 && pipelines.length === 0 && <span style={muted}>还没派过任务。</span>}
-        {pipelines.map((p) => (
-          <button key={p.pipeline_id} type="button" onClick={() => { setNotice(undefined); setPipeline(p.pipeline_id); }} style={rowButton}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-              <span style={{ fontSize: "var(--text-sm)", fontWeight: 600 }}>🔀 {p.title}</span>
-              <StateTag state={p.status === "open" ? (p.waiting_release ? "待处理" : "进行中") : p.status === "done" ? "已完成" : "已取消"} />
-            </div>
-            <span style={muted}>
-              {p.status === "open" ? `第 ${p.current}/${p.stages} 段 · ${p.current_name}` : `${p.stages} 段`}
-              {p.waiting_release ? " · 这一段都回了, 等你放行" : Object.keys(p.progress).length ? ` · ${Object.entries(p.progress).map(([k, v]) => `${k} ${v}`).join(" · ")}` : ""}
-            </span>
-          </button>
+        {loaded && outs.length === 0 && pipes.length === 0 && <span style={muted}>{all || q ? "没有找到。" : "没有进行中的。"}</span>}
+        {pipes.map((p) => (
+          <Row key={p.pipeline_id} title={`🔀 ${p.title}`} onClick={() => { setNotice(undefined); setPipeline(p.pipeline_id); }}
+               state={<StateTag state={p.status === "open" ? (p.waiting_release ? "待处理" : "进行中") : p.status === "done" ? "已完成" : "已取消"} />}
+               sub={(p.status === "open" ? `第 ${p.current}/${p.stages} 段` : `${p.stages} 段`)
+                    + (p.waiting_release ? " · 等你放行" : Object.keys(p.progress).length ? ` · ${Object.entries(p.progress).map(([k, v]) => `${k} ${v}`).join(" · ")}` : "")} />
         ))}
-        {outgoing.map((t) => (
-          <button key={t.task_id} type="button" onClick={() => { setNotice(undefined); setWatching(t.task_id); }} style={rowButton}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-              <span style={{ fontSize: "var(--text-sm)", fontWeight: 600 }}>{t.title}</span>
-              <StateTag state={STATUS_LABEL[t.status]} />
-            </div>
-            <span style={muted}>
-              {t.recipients} 人{t.schedule ? ` · ⏰ ${t.schedule}` : t.deadline ? ` · 截止 ${when(t.deadline)}` : ""}
-              {Object.keys(t.progress).length ? ` · ${Object.entries(t.progress).map(([k, v]) => `${k} ${v}`).join(" · ")}` : ""}
-            </span>
-          </button>
+        {outs.map((t) => (
+          <Row key={t.task_id} title={t.title} onClick={() => { setNotice(undefined); setWatching(t.task_id); }}
+               state={<StateTag state={STATUS_LABEL[t.status]} />}
+               sub={[`${t.recipients} 人`, t.schedule ? `⏰ ${t.schedule}` : t.deadline ? `截止 ${shortDay(t.deadline)}` : "",
+                     ...Object.entries(t.progress).map(([k, v]) => `${k} ${v}`)].filter(Boolean).join(" · ")} />
         ))}
       </section>
 
