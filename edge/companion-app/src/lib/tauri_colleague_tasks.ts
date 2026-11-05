@@ -195,8 +195,8 @@ const call = <T>(action: string, params: Record<string, unknown> = {}) =>
 export const taskList = () => call<TaskList>("list");
 export const taskGet = (taskId: string) => call<TaskDetail>("get", { task_id: taskId });
 export const taskSync = () => call<TaskSyncResult>("sync");
-/** room_id: 在群里派的 (GROUP-CHAT-PLAN 第二步), 发出后任务卡进群, 收件人的状态也回群 */
-export const taskCreate = (p: { title?: string; text: string; deadline?: string | null; schedule?: Schedule | null; recipients: string[]; room_id?: string }) =>
+/** room_id: 在群里派的 (GROUP-CHAT-PLAN 第二步), 发出后这条任务进群, 收件人的状态也回群; room_text = 群里显示的原话 */
+export const taskCreate = (p: { title?: string; text: string; deadline?: string | null; schedule?: Schedule | null; recipients: string[]; room_id?: string; room_text?: string }) =>
   call<{ task: OutgoingTask }>("create", p);
 export const taskAdd = (taskId: string, recipients: string[]) => call<{ task: OutgoingTask }>("add", { task_id: taskId, recipients });
 /** room_notice: 群里派的任务发出去了, 但任务卡没进群的原因 */
@@ -210,7 +210,7 @@ export const taskUpdate = (taskId: string, p: { text?: string; deadline?: string
 export const taskPeriodSubmit = (taskId: string, period: number, result: string) =>
   call<{ period: number }>("period_submit", { task_id: taskId, period, result });
 export const taskRedo = (taskId: string, email: string, note: string) => call<{ sent: string[] }>("redo", { task_id: taskId, email, note });
-export const pipelineCreate = (p: { title: string; stages: StageDraft[]; room_id?: string }) =>
+export const pipelineCreate = (p: { title: string; stages: StageDraft[]; room_id?: string; room_text?: string }) =>
   call<{ pipeline: { pipeline_id: string }; sent: string[]; failed: { to: string; error: string }[] }>("pipeline_create", p);
 export const pipelineGet = (pipelineId: string) => call<PipelineDetail>("pipeline_get", { pipeline_id: pipelineId });
 export const pipelineRelease = (pipelineId: string, text: string) =>

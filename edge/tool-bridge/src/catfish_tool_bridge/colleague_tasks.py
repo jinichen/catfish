@@ -176,7 +176,8 @@ def create(args: dict[str, Any]) -> dict[str, Any]:
     if len(context) > RESULT_MAX:
         raise ValueError(f"转给同事的材料太长 ({len(context)} 字), 最多 {RESULT_MAX} 字")
     room_id = _room_for(args.get("room_id"), recipients)
-    task = {"task_id": task_id, "context": context or None, "pipeline_id": args.get("pipeline_id"), "room_id": room_id,
+    room_text = str(args.get("room_text") or "").strip()[:4000] or None if room_id else None
+    task = {"task_id": task_id, "context": context or None, "pipeline_id": args.get("pipeline_id"), "room_id": room_id, "room_text": room_text,
             "owner": owner, "created_at": _now(), "status": "draft", "rev": 1,
             "title": (str(args.get("title") or "").strip() or _title_from(text))[:60], "text": text,
             "deadline": None if schedule and schedule["kind"] == "cron" else normalize_deadline(args.get("deadline")),

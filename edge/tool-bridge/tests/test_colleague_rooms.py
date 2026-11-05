@@ -398,3 +398,20 @@ def test_不在群里派的任务_不碰群(w):
     ct.pim_handlers({"task_id": t["task_id"]})["pim/ctask_accept"]()
     assert [m["kind"] for m in w.box] == ["task_reply"]
     assert [m["kind"] for m in cr.messages(rid) if m["kind"] in ("card", "status")] == []
+
+
+def test_群里显示的是发起人在聊天里说的原话(w):
+    ct = _ct()
+    from catfish_tool_bridge import colleague_tasks_pipeline as cp
+    rid = _room_all_joined(w)
+    said = "@zhang 每周五下午5点交周报, 做4次"
+    t = ct.create({"text": said, "recipients": [ZHANG], "room_id": rid, "room_text": said,
+                   "schedule": {"kind": "cron", "expr": "0 17 * * 5", "times": 4}})["task"]
+    ct.send(t["task_id"])
+    card = [m for m in cr.messages(rid) if m["kind"] == "card"][-1]
+    assert card["text"] == said and card["card"]["schedule"].startswith("每周五 17:00")
+    assert "room_text" not in json.dumps([m["env"] for m in w.box if m["kind"] == "task_invite"])   # 原话只进群, 任务单照旧
+    said2 = "先让@zhang 收数, 再让@li 汇总"
+    cp.create({"title": "月报", "room_id": rid, "room_text": said2, "stages": [
+        {"text": "@zhang 收数", "recipients": [ZHANG]}, {"text": "@li 汇总", "recipients": [LI]}]})
+    assert [m["text"] for m in cr.messages(rid) if m["kind"] == "card"][-1] == said2

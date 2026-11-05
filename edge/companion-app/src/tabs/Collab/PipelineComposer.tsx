@@ -1,14 +1,12 @@
 /**
  * 多阶段任务 (11/4, docs/COLLEAGUE-TASK-PLAN.md §3): 一段一段写「做什么 + 谁来做」。
  * 一段里选几个人就是几个人同时做 (并行); 每段做完结果先回到你这里, 你核对 (可以改) 后放行才交给下一段的人。
- * 11/5 群聊第二步: 传 room = 在群里派, 每段只能选群里已加入的人, 每一段开始时任务卡进群。
  */
 import { useCallback, useState } from "react";
 
 import { refreshTasks } from "../../lib/colleagueTasksStore";
 import { pipelineCreate } from "../../lib/tauri_colleague_tasks";
 import { Overlay, muted } from "./formsUi";
-import MemberPicker, { type RoomCtx } from "./MemberPicker";
 import RecipientPicker, { allRecipients } from "./RecipientPicker";
 import { Btn, ErrorLine, inputStyle } from "./roomLinkUi";
 import { MAX_PEOPLE, TEXT_MAX } from "./TaskComposer";
@@ -19,12 +17,10 @@ interface Row { name: string; text: string; picked: string[]; typed: string }
 
 const blank = (): Row => ({ name: "", text: "", picked: [], typed: "" });
 
-export default function PipelineComposer({ onClose, onCreated, room }: {
+export default function PipelineComposer({ onClose, onCreated }: {
   onClose: () => void;
   onCreated: (pipelineId: string, notice?: string) => void;
-  room?: RoomCtx;
 }) {
-  const people = (r: Row) => (room ? r.picked : allRecipients(r.picked, r.typed));
   const [title, setTitle] = useState("");
   const [rows, setRows] = useState<Row[]>([blank(), blank()]);
   const [busy, setBusy] = useState(false);
@@ -33,7 +29,7 @@ export default function PipelineComposer({ onClose, onCreated, room }: {
   const patch = (i: number, p: Partial<Row>) => setRows((old) => old.map((r, j) => (j === i ? { ...r, ...p } : r)));
 
   const problems = rows.map((r, i) => {
-    const n = people(r).length;
+    const n = allRecipients(r.picked, r.typed).length;
     if (!r.text.trim()) return `第 ${i + 1} 段要写做什么`;
     if (r.text.length > TEXT_MAX) return `第 ${i + 1} 段太长`;
     if (!n) return `第 ${i + 1} 段要选谁来做`;
@@ -48,8 +44,7 @@ export default function PipelineComposer({ onClose, onCreated, room }: {
     try {
       const r = await pipelineCreate({
         title,
-        stages: rows.map((x) => ({ name: x.name, text: x.text, recipients: people(x) })),
-        ...(room ? { room_id: room.roomId } : {}),
+        stages: rows.map((x) => ({ name: x.name, text: x.text, recipients: allRecipients(x.picked, x.typed) })),
       });
       void refreshTasks();
       onCreated(r.pipeline.pipeline_id, r.failed.length
@@ -63,7 +58,7 @@ export default function PipelineComposer({ onClose, onCreated, room }: {
   }
 
   return (
-    <Overlay title={room ? `在「${room.name}」里派多阶段任务` : "多阶段任务"} onClose={onClose} width={760}>
+    <Overlay title="多阶段任务" onClose={onClose} width={760}>
       <span style={muted}>
         一段一段做: 先发第一段; 每段的结果先回到你这里, 你核对 (可以删改) 后点「放行」才交给下一段的人 —— 上一段的东西不会绕过你流到下一个人。
         一段里选几个人就是同时做, 都交回 (或你不等了) 再放行。
@@ -79,10 +74,8 @@ export default function PipelineComposer({ onClose, onCreated, room }: {
           <textarea value={r.text} onChange={(e) => patch(i, { text: e.target.value })} rows={2} maxLength={TEXT_MAX}
                     placeholder={i === 0 ? "做什么, 如「把你负责客户本周的拜访记录整理出来」" : "做什么 (会附上你放行的上一段结果), 如「根据大家的记录写一段分析」"}
                     style={{ ...inputStyle, resize: "vertical" }} />
-          {room ? <MemberPicker room={room} picked={r.picked} onPicked={(v) => patch(i, { picked: v })} /> : (
-            <RecipientPicker picked={r.picked} onPicked={(v) => patch(i, { picked: v })} typed={r.typed}
-                             onTyped={(v) => patch(i, { typed: v })} onError={onPickError} />
-          )}
+          <RecipientPicker picked={r.picked} onPicked={(v) => patch(i, { picked: v })} typed={r.typed}
+                           onTyped={(v) => patch(i, { typed: v })} onError={onPickError} />
         </div>
       ))}
       {rows.length < MAX_STAGES && <div><Btn kind="ghost" onClick={() => setRows([...rows, blank()])}>+ 加一段</Btn></div>}

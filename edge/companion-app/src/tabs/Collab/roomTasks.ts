@@ -1,16 +1,12 @@
 /**
- * 群里派任务的小工具 (11/5, docs/GROUP-CHAT-PLAN.md 第二步) —— 都是纯函数, 好测。
+ * 群里派任务 (11/5, docs/GROUP-CHAT-PLAN.md 第二步) —— 在聊天里一句话派, 不弹窗、不用卡片。
  *
- * 「@小鲶 让张三、李四周五前把拜访记录交上来」→ 起草一张任务单 (要做什么 / 给谁 / 截止), 打开派任务弹层给发起人改了再发。
- * 起草按规则来 (认群成员的名字和常见的时间说法), 不调模型: 快、不出错, 认不出的留空让人自己填。
+ * 「@张三 @李四 周五前把拜访记录交上来」「@张三 每周五下午5点交周报, 做4次」「先让@张三 收本月数据, 再让@李四 汇总成月报」
+ * → 认出 派给谁 (@ 到的已加入成员) / 截止 / 定时 / 周期 / 分几段, 输入框下面实时显示认出来的, 员工点「派给@的人」才发。
+ * 按规则认, 不调模型: 认不出的不猜 —— 显示出来让人改那句话。
  */
-import type { OwnerRow } from "../../lib/tauri_colleague_tasks";
+import type { OwnerRow, Schedule } from "../../lib/tauri_colleague_tasks";
 import type { RoomMember, RoomMessage, RoomTaskState } from "../../lib/tauri_colleague_rooms";
-import type { TaskDraft } from "./TaskComposer";
-
-export const XIAONIAN = "@小鲶";
-
-export const isTaskAsk = (text: string): boolean => text.includes(XIAONIAN);
 
 const WD: Record<string, number> = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 0, 天: 0 };
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -67,12 +63,123 @@ export function parseDeadline(text: string, now: Date = new Date()): string {
 
 const display = (m: { email: string; name: string }) => m.name || m.email.split("@")[0];
 
-/** 「@小鲶 让张三、李四周五前把拜访记录交上来」→ 任务草稿。收件人 = 文字里出现了名字 (带不带 @ 都算) 的已加入成员。 */
-export function draftFromText(text: string, members: RoomMember[], me: string, now: Date = new Date()): TaskDraft {
-  const joined = members.filter((m) => m.state === "joined" && m.email !== me);
-  const recipients = joined.filter((m) => text.includes(display(m))).map((m) => m.email);
-  const body = text.split(XIAONIAN).join("").replace(/\s+/g, " ").trim().replace(/^[,，、]\s*/, "").replace(/^(帮我)?(让|请|叫)/, "").trim();
-  return { text: body, recipients, deadline: parseDeadline(text, now) };
+/** 文字里 @ 到的已加入成员 (不含自己)。 */
+export function atJoined(text: string, members: RoomMember[], me: string): string[] {
+  return members.filter((m) => m.state === "joined" && m.email !== me && text.includes(`@${display(m)}`)).map((m) => m.email);
+}
+
+const CN_NUM: Record<string, number> = { 一: 1, 两: 2, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+const num = (s: string) => (/^\d+$/.test(s) ? +s : CN_NUM[s] ?? NaN);
+
+/** 时分: 「下午5点」「9:30」「中午」; 没写 = null。 */
+function timeOf(text: string): [number, number] | null {
+  const m = text.match(/(上午|中午|下午|晚上|早上)?\s*(\d{1,2})(?:[点:：时](半|(\d{1,2})分?)?)/);
+  if (m) {
+    let h = +m[2];
+    const mi = m[3] === "半" ? 30 : m[4] ? +m[4] : 0;
+    if ((m[1] === "下午" || m[1] === "晚上") && h < 12) h += 12;
+    return h <= 23 && mi <= 59 ? [h, mi] : null;
+  }
+  if (text.includes("中午")) return [12, 0];
+  return null;
+}
+
+/** 周期: 「每天 / 每个工作日 / 每周五 / 每周一、三 / 每月15号」+ 时间 + 结束 (到哪天 / 做几次)。不是周期 = null。 */
+export function parseCron(text: string, now: Date = new Date()): { schedule: Schedule | null; label: string; problem?: string } | null {
+  const t = timeOf(text) ?? [9, 0];
+  const hm = `${t[1]} ${t[0]}`;
+  let expr = "";
+  let label = "";
+  let m: RegExpMatchArray | null;
+  const hhmm = `${pad(t[0])}:${pad(t[1])}`;
+  if (/每(个)?工作日/.test(text)) {
+    expr = `${hm} * * 1-5`; label = `工作日 ${hhmm}`;
+  } else if (/每天|每日/.test(text)) {
+    expr = `${hm} * * *`; label = `每天 ${hhmm}`;
+  } else if ((m = text.match(/每(?:个)?(?:周|星期|礼拜)([一二三四五六日天](?:[、,，和及]?[一二三四五六日天])*)/))) {
+    const days = [...new Set([...m[1].replace(/[、,，和及]/g, "")].map((c) => WD[c]))];
+    expr = `${hm} * * ${days.join(",")}`;
+    label = `每周${[...m[1].replace(/[、,，和及]/g, "")].join("、")} ${hhmm}`;
+  } else if ((m = text.match(/每(?:个)?月(\d{1,2})[号日]/))) {
+    expr = `${hm} ${+m[1]} * *`; label = `每月 ${+m[1]} 号 ${hhmm}`;
+  } else {
+    return null;
+  }
+  let until: string | null = null;
+  let times: number | null = null;
+  if ((m = text.match(/(?:做|跑|交|发|共|一共)?\s*(\d+|[一两二三四五六七八九十])\s*次/))) times = num(m[1]);
+  if (/到年底/.test(text)) until = `${now.getFullYear()}-12-31`;
+  else if (/到月底/.test(text)) until = local(new Date(now.getFullYear(), now.getMonth() + 1, 0)).slice(0, 10);
+  else if ((m = text.match(/到\s*(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})/))) until = `${m[1]}-${pad(+m[2])}-${pad(+m[3])}`;
+  else if ((m = text.match(/到\s*(\d{1,2})月(\d{1,2})[日号]?/))) {
+    const d = new Date(now.getFullYear(), +m[1] - 1, +m[2]);
+    if (d < new Date(now.getFullYear(), now.getMonth(), now.getDate())) d.setFullYear(d.getFullYear() + 1);
+    until = local(d).slice(0, 10);
+  }
+  if (times !== null && !(times >= 1 && times <= 100)) times = null;
+  const end = [until ? `到 ${until} 为止` : "", times ? `做 ${times} 次` : ""].filter(Boolean).join("、");
+  if (!until && !times) {
+    return { schedule: null, label, problem: "周期任务要说什么时候结束, 比如「做4次」「到年底」「到12月31日」" };
+  }
+  return { schedule: { kind: "cron", expr, until, times }, label: `${label}, ${end}` };
+}
+
+/** 定时做一次: 写了「定时」, 或「X点做 / 跑 / 发 / 执行」。其余的时间都当截止。 */
+function parseOnce(text: string, now: Date): { schedule: Schedule; label: string } | null {
+  if (!/定时/.test(text) && !/(\d{1,2}[点:：]\d{0,2}|中午)\s*(?:的时候)?(?:帮我|给我)?(?:做|跑|执行|发)/.test(text)) return null;
+  const at = parseDeadline(text, now);
+  if (!at) return null;
+  return { schedule: { kind: "once", at }, label: `${at.replace("T", " ")} 做一次` };
+}
+
+export interface ChatStage { name: string; text: string; recipients: string[]; deadline: string }
+
+export type ChatTask =
+  | { kind: "task"; text: string; recipients: string[]; deadline: string; schedule: Schedule | null; label: string; problem?: string }
+  | { kind: "pipeline"; title: string; stages: ChatStage[]; label: string; problem?: string };
+
+const STAGE_SPLIT = /(?:^|[，,。；;\s])(?:先|再|然后|接着|最后)(?=\s*(?:让|请|叫|由)?\s*@)/g;
+
+/** 一句话 → 要派的任务。@ 不到任何已加入的人 = null (就是普通聊天)。 */
+export function parseChatTask(text: string, members: RoomMember[], me: string, now: Date = new Date()): ChatTask | null {
+  const body = text.trim();
+  const people = atJoined(body, members, me);
+  if (!body || !people.length) return null;
+  const nameOf = (e: string) => display(members.find((m) => m.email === e) ?? { email: e, name: "" });
+
+  // 多阶段: 「先让@张三 …, 再让@李四 …」(至少两段, 每段都 @ 了人)
+  const cuts = [...body.matchAll(STAGE_SPLIT)].map((m) => m.index! + m[0].search(/先|再|然后|接着|最后/));
+  if (cuts.length >= 2 && /先/.test(body)) {
+    const parts = cuts.map((c, i) => body.slice(c, cuts[i + 1] ?? body.length).replace(/[，,。；;\s]+$/, ""));
+    const stages = parts.map((p, i) => ({
+      name: `第 ${i + 1} 段`, text: p.replace(/^(先|再|然后|接着|最后)\s*(让|请|叫|由)?\s*/, "").trim(),
+      recipients: atJoined(p, members, me), deadline: parseDeadline(p, now),
+    }));
+    const empty = stages.findIndex((st) => !st.recipients.length);
+    return {
+      kind: "pipeline", title: body.replace(/@\S+\s*/g, "").slice(0, 30), stages,
+      label: `分 ${stages.length} 段: ${stages.map((st, i) => `${"①②③④⑤⑥⑦⑧"[i]} ${st.recipients.map(nameOf).join("、")}`).join(" → ")}`,
+      ...(empty >= 0 ? { problem: `第 ${empty + 1} 段没 @ 到群里已加入的人` } : {}),
+      ...(stages.length > 8 ? { problem: "最多 8 段" } : {}),
+    };
+  }
+
+  const who = `派给 ${people.map(nameOf).join("、")}`;
+  const cron = parseCron(body, now);
+  if (cron) {
+    return { kind: "task", text: body, recipients: people, deadline: "", schedule: cron.schedule,
+             label: `${who} · ${cron.label}`, ...(cron.problem ? { problem: cron.problem } : {}) };
+  }
+  const once = parseOnce(body, now);
+  if (once) {
+    const past = new Date(once.schedule.kind === "once" ? once.schedule.at : "") < now;
+    return { kind: "task", text: body, recipients: people, deadline: "", schedule: once.schedule, label: `${who} · ${once.label}`,
+             ...(past ? { problem: "定的时间已经过了" } : {}) };
+  }
+  const deadline = parseDeadline(body, now);
+  return { kind: "task", text: body, recipients: people, deadline, schedule: null,
+           label: `${who} · ${deadline ? `截止 ${deadline.replace("T", " ")}` : "不限时"}`,
+           ...(people.length > 20 ? { problem: "一次最多派给 20 人" } : {}) };
 }
 
 export interface CardState { email: string; name: string; state: RoomTaskState | "waiting"; period?: number }

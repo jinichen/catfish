@@ -4,24 +4,22 @@
  * 左: 群列表 (等我加入的排最前, 未读 / @我 红点); 中: 聊天; 右: 成员 + 群主管理 (拉人 / 移出 / 改名和公告 / 解散) / 退群。
  * 一条消息 = 给每个已加入的成员各投一封, 聊天记录只在各自电脑上; 每一封都是员工自己点了才发。
  * 正打开某个群时 3 秒取一次邮筒 (colleagueRoomsStore.setActiveRoom), 平时 20 秒。
- * 第二步 (同日): 群里派任务 —— 「派任务 / 多阶段」按钮, 或输入「@小鲶 让张三周五前…」起草; 派出后任务卡进群,
- *   收件人点「接下 / 交回 / 不接」时群里显示状态 (结果只回发起人); 发起人可以把汇总填进输入框, 自己改了再发。
+ * 第二步 (同日): 在聊天里直接派任务 —— 照常打字 @ 人, 「周五前」「每周五下午5点, 做4次」「先让@张三…再让@李四…」
+ *   输入框下面实时显示认出来的 (派给谁 / 截止 / 定时 / 周期 / 分几段), 点「派给@的人」(或 Ctrl/⌘+Enter) 才派。
+ *   群里显示的就是这句话, 下面一行每人的状态; 被派到的人在这条消息上点「接下」「交回」。结果只回发起人。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import { refreshRooms, setActiveRoom, useColleagueRooms } from "../../lib/colleagueRoomsStore";
 import { refreshTasks } from "../../lib/colleagueTasksStore";
-import { taskGet } from "../../lib/tauri_colleague_tasks";
+import { pipelineCreate, taskAccept, taskCreate, taskGet, taskSend } from "../../lib/tauri_colleague_tasks";
 import {
   failedNotice, roomDecline, roomDelete, roomDisband, roomGet, roomJoin, roomLeave, roomRead, roomRemove, roomSend, roomUpdate,
   type RoomDetail, type RoomMember, type RoomMessage, type RoomSummary,
 } from "../../lib/tauri_colleague_rooms";
 import { Overlay, muted } from "./formsUi";
-import type { RoomCtx } from "./MemberPicker";
-import PipelineComposer from "./PipelineComposer";
 import RoomComposer, { NAME_MAX } from "./RoomComposer";
-import { STATE_WORD, cardStates, draftFromText, isTaskAsk, summaryText } from "./roomTasks";
-import TaskComposer, { type TaskDraft } from "./TaskComposer";
+import { STATE_WORD, cardStates, parseChatTask, summaryText, type ChatTask } from "./roomTasks";
 import TaskProgress from "./TaskProgress";
 import TaskWork, { when } from "./TaskWork";
 import { Btn, ErrorLine, cardStyle, inputStyle } from "./roomLinkUi";
@@ -158,7 +156,6 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
   const [replyTo, setReplyTo] = useState<RoomMessage | null>(null);
   const [atOpen, setAtOpen] = useState(false);
   const [modal, setModal] = useState<null | "add" | "info" | "disband" | "leave" | { remove: RoomMember }>(null);
-  const [taskModal, setTaskModal] = useState<null | { kind: "task"; draft?: TaskDraft } | { kind: "pipeline" }>(null);
   const [work, setWork] = useState<string | null>(null);
   const [watch, setWatch] = useState<{ id: string; notice?: string } | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
@@ -204,10 +201,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
   const joined = room.my_state === "joined";
   const people = members.filter((m) => m.state === "joined" || m.state === "invited");
   const waiting = notJoinedYet(members, me);
-  const roomCtx: RoomCtx = {
-    roomId, name: room.name,
-    members: members.filter((m) => m.state === "joined" && m.email !== me).map((m) => ({ email: m.email, name: m.name })),
-  };
+  const asTask: ChatTask | null = joined ? parseChatTask(text, members, me) : null;
 
   async function openWork(taskId: string) {
     await refreshTasks();   // 任务单和任务卡走两个邮筒, 先取一次, 免得任务单还没到
@@ -224,17 +218,33 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
     }
   }
 
+  async function dispatch() {
+    const t = parseChatTask(text, members, me);
+    if (!t || t.problem || busy) return;
+    const body = text.trim();
+    const ok = await act(async () => {
+      if (t.kind === "pipeline") {
+        const r = await pipelineCreate({ title: t.title, room_id: roomId, room_text: body,
+                                         stages: t.stages.map((st) => ({ name: st.name, text: st.text, recipients: st.recipients, deadline: st.deadline || null })) });
+        return { failed: r.failed.map((f) => ({ email: f.to, error: f.error })) };
+      }
+      const { task } = await taskCreate({ text: t.text, recipients: t.recipients, deadline: t.deadline || null, schedule: t.schedule,
+                                          room_id: roomId, room_text: body });
+      const r = await taskSend(task.task_id);
+      if (r.room_notice) throw new Error(r.room_notice);
+      return { failed: r.failed.map((f) => ({ email: f.to, error: f.error })) };
+    }, "没收到任务");
+    if (ok) { setText(""); setReplyTo(null); void refreshTasks(); }
+  }
+
   async function send() {
     const body = text.trim();
     if (!body) return;
-    if (isTaskAsk(body)) {   // 「@小鲶 让张三…」: 起草任务单, 不发到群里
-      setTaskModal({ kind: "task", draft: draftFromText(body, members, me) });
-      return;
-    }
     const ok = await act(() => roomSend(roomId, body, mentionsIn(body, members, me), replyTo?.msg_id), "没收到这条消息");
     if (ok) { setText(""); setReplyTo(null); }
   }
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) { e.preventDefault(); void dispatch(); return; }
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); }
   };
 
@@ -253,9 +263,10 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
           {d.older > 0 && <span style={{ ...muted, textAlign: "center" }}>更早的 {d.older} 条没显示</span>}
           {d.messages.map((m) => (
             m.kind === "card" && m.card ? (
-              <TaskCard key={m.msg_id} m={m} me={me} members={members} messages={d.messages}
-                        onWork={() => void openWork(m.card!.task_id)} onWatch={() => setWatch({ id: m.card!.task_id })}
-                        onSummary={joined ? () => void fillSummary(m.card!.task_id, m.card!.title) : undefined} />
+              <TaskMessage key={m.msg_id} m={m} me={me} members={members} messages={d.messages} busy={busy}
+                           onAccept={() => void act(async () => { await refreshTasks(); return taskAccept(m.card!.task_id); }, "没收到你接下的通知")}
+                           onWork={() => void openWork(m.card!.task_id)} onWatch={() => setWatch({ id: m.card!.task_id })}
+                           onSummary={joined ? () => void fillSummary(m.card!.task_id, m.card!.title) : undefined} />
             ) : (
               <Bubble key={m.msg_id} m={m} mine={m.from === me} members={members} me={me} quoted={m.reply_to ? byId.get(m.reply_to) : undefined}
                       onReply={joined && m.kind === "text" ? () => setReplyTo(m) : undefined} />
@@ -311,14 +322,21 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
             )}
             <textarea value={text} rows={3} maxLength={TEXT_MAX} onKeyDown={onKey}
                       onChange={(e) => { setText(e.target.value); setAtOpen(e.target.value.endsWith("@")); }}
-                      placeholder="说点什么 · Enter 发送, Shift+Enter 换行 · 输入 @ 提醒某人 · 「@小鲶 让张三周五前交周报」起草任务"
+                      placeholder="说点什么 · Enter 发送 · @ 提醒某人 · 要派任务就照常说, 如「@张三 周五前交拜访记录」, 再点「派给@的人」"
                       style={{ ...inputStyle, resize: "vertical" }} />
+            {asTask && (
+              <span style={{ ...muted, color: asTask.problem ? "var(--status-warn, #d97706)" : "inherit" }}>
+                {asTask.problem ? `派不了: ${asTask.problem}` : `点「派给@的人」= ${asTask.label}`}
+                {asTask.kind === "task" && !asTask.problem && " · 结果只回给你, 群里只显示谁接了、谁交了"}
+              </span>
+            )}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={muted}>{text.length}/{TEXT_MAX} · 长材料请用邮件, 这一步还不能传附件</span>
+              <span style={muted}>{text.length}/{TEXT_MAX} · 长材料请用邮件, 还不能传附件</span>
               <span style={{ display: "flex", gap: 6 }}>
-                <Btn kind="ghost" onClick={() => setTaskModal({ kind: "task" })}>派任务</Btn>
-                <Btn kind="ghost" onClick={() => setTaskModal({ kind: "pipeline" })}>多阶段</Btn>
                 <Btn kind="ghost" onClick={() => setAtOpen((v) => !v)}>@</Btn>
+                {asTask && (
+                  <Btn kind="ghost" disabled={busy || Boolean(asTask.problem)} onClick={() => void dispatch()}>派给@的人</Btn>
+                )}
                 <Btn kind="primary" disabled={busy || !text.trim()} onClick={() => void send()}>{busy ? "发送中…" : "发送"}</Btn>
               </span>
             </div>
@@ -354,14 +372,6 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
         {joined && !owner && <div style={{ marginTop: 6 }}><Btn kind="ghost" onClick={() => setModal("leave")}>退出群</Btn></div>}
       </div>
 
-      {taskModal?.kind === "task" && (
-        <TaskComposer room={roomCtx} draft={taskModal.draft} onClose={() => setTaskModal(null)}
-                      onCreated={(id, n) => { setTaskModal(null); if (taskModal.draft) setText(""); setWatch({ id, notice: n }); void load(); }} />
-      )}
-      {taskModal?.kind === "pipeline" && (
-        <PipelineComposer room={roomCtx} onClose={() => setTaskModal(null)}
-                          onCreated={(_id, n) => { setTaskModal(null); onNotice(n); void load(); }} />
-      )}
       {work && <TaskWork taskId={work} onClose={() => { setWork(null); void load(); }} />}
       {watch && <TaskProgress taskId={watch.id} initialError={watch.notice} onClose={() => setWatch(null)} />}
       {modal === "add" && <RoomComposer roomId={roomId} existing={room.members} onClose={() => setModal(null)}
@@ -421,40 +431,40 @@ function Bubble({ m, mine, members, me, quoted, onReply }: {
   );
 }
 
-function TaskCard({ m, me, members, messages, onWork, onWatch, onSummary }: {
-  m: RoomMessage; me: string; members: RoomMember[]; messages: RoomMessage[];
-  onWork: () => void; onWatch: () => void; onSummary?: () => void;
+/** 群里派的任务: 就是发起人说的那句话, 下面一行每人的状态 + 自己能点的按钮。 */
+function TaskMessage({ m, me, members, messages, busy, onAccept, onWork, onWatch, onSummary }: {
+  m: RoomMessage; me: string; members: RoomMember[]; messages: RoomMessage[]; busy: boolean;
+  onAccept: () => void; onWork: () => void; onWatch: () => void; onSummary?: () => void;
 }) {
   const c = m.card!;
   const mine = c.owner === me;
-  const forMe = c.assignees.includes(me);
   const states = cardStates(c.task_id, c.assignees, messages, members);
-  const doneN = states.filter((x) => x.state === "done").length;
+  const myState = states.find((x) => x.email === me)?.state;
+  const link = { border: "none", background: "transparent", cursor: "pointer", fontSize: 11, padding: 0, color: "var(--catfish-cyan)" };
   return (
-    <div style={{ alignSelf: mine ? "flex-end" : "flex-start", maxWidth: "82%", display: "flex", flexDirection: "column", gap: 2 }}>
-      <span style={{ ...muted, textAlign: mine ? "right" : "left" }}>{mine ? "我" : labelOf(members, m.from)} 派了任务 · {timeLabel(m.at)}</span>
-      <div style={{ border: `1px solid ${forMe ? "var(--status-warn, #d97706)" : "var(--catfish-border)"}`, borderRadius: 10, padding: "8px 12px",
-                    display: "flex", flexDirection: "column", gap: 6, background: "var(--catfish-bg-subtle, rgba(0,0,0,0.04))" }}>
-        <strong style={{ fontSize: 13 }}>📋 {c.title}</strong>
-        <span style={muted}>
-          {c.schedule ? `⏰ ${c.schedule}` : c.deadline ? `截止 ${when(c.deadline)}` : "不限时"} · {doneN}/{states.length} 人交回
-        </span>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-          {states.map((x) => (
-            <span key={x.email} title={x.email}
-                  style={{ fontSize: 11, padding: "1px 6px", borderRadius: 8, border: "1px solid var(--catfish-border)",
-                           color: x.state === "done" ? "var(--status-ok, #059669)" : x.state === "declined" || x.state === "quit" ? "var(--catfish-text-muted)" : "inherit" }}>
-              {x.email === me ? "我" : x.name} · {STATE_WORD[x.state]}{x.period ? ` 第 ${x.period} 期` : ""}
-            </span>
-          ))}
-        </div>
-        <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-          {forMe && <Btn kind="primary" onClick={onWork}>去处理</Btn>}
-          {mine && <Btn kind="ghost" onClick={onWatch}>看进度和结果</Btn>}
-          {mine && onSummary && <Btn kind="ghost" onClick={onSummary}>把汇总发到群里</Btn>}
-        </div>
-        {!mine && !forMe && <span style={muted}>结果只回给派任务的人, 群里只显示谁接了、谁交了。</span>}
+    <div style={{ display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start", gap: 2 }}>
+      <span style={muted}>{mine ? "我" : labelOf(members, m.from)} · {timeLabel(m.at)}</span>
+      <div style={{ maxWidth: "78%", padding: "6px 10px", borderRadius: 10, fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-word",
+                    background: mine ? "var(--catfish-cyan)" : "var(--catfish-bg-subtle, rgba(0,0,0,0.05))", color: mine ? "white" : "inherit",
+                    border: myState ? "1px solid var(--status-warn, #d97706)" : "1px solid transparent" }}>
+        {m.text}
       </div>
+      <span style={{ ...muted, display: "flex", flexWrap: "wrap", gap: 8, justifyContent: mine ? "flex-end" : "flex-start", maxWidth: "90%" }}>
+        <span>📋 {c.schedule ? `⏰ ${c.schedule}` : c.deadline ? `截止 ${when(c.deadline)}` : "不限时"}</span>
+        {states.map((x) => (
+          <span key={x.email} title={x.email}
+                style={{ color: x.state === "done" ? "var(--status-ok, #059669)" : undefined }}>
+            {x.email === me ? "我" : x.name} {STATE_WORD[x.state]}{x.period ? ` 第 ${x.period} 期` : ""}
+          </span>
+        ))}
+        {myState && !c.schedule && myState === "waiting" && <button type="button" style={link} disabled={busy} onClick={onAccept}>接下</button>}
+        {myState && (c.schedule || myState !== "waiting") && myState !== "done" && myState !== "declined" && myState !== "quit" && (
+          <button type="button" style={link} onClick={onWork}>{c.schedule ? "去处理" : "交回"}</button>
+        )}
+        {myState === "waiting" && !c.schedule && <button type="button" style={link} onClick={onWork}>不接</button>}
+        {mine && <button type="button" style={link} onClick={onWatch}>看结果</button>}
+        {mine && onSummary && <button type="button" style={link} onClick={onSummary}>汇总发到群里</button>}
+      </span>
     </div>
   );
 }

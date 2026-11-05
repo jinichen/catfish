@@ -407,9 +407,9 @@ def post_card(room_id: str, task: dict[str, Any], schedule_text: str | None = No
     assignees = [e for e in task.get("recipients") or {} if e != me]
     card = {"task_id": task["task_id"], "title": task["title"], "deadline": task.get("deadline"),
             "schedule": schedule_text, "assignees": assignees, "owner": me}
-    names = "、".join(_label(room, e) for e in assignees)
-    return _broadcast(room, me, f"派了任务「{task['title']}」给 {names}", [e for e in assignees if e in _active(room)],
-                      {"card": card}, kind="card")
+    # 群里显示的就是发起人在聊天里说的那句话 (room_text); 多阶段后面几段开始时是「进入第 k 段」
+    body = (task.get("room_text") or task["text"])[:TEXT_MAX]
+    return _broadcast(room, me, body, [e for e in assignees if e in _active(room)], {"card": card}, kind="card")
 
 
 def echo_status(room_id: str, task_id: str, title: str, state: str, period: int | None = None) -> dict[str, Any] | None:

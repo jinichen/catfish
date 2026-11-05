@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { RoomMember, RoomMessage } from "../../lib/tauri_colleague_rooms";
-import { cardStates, draftFromText, isTaskAsk, parseDeadline, summaryText } from "./roomTasks";
+import { cardStates, parseChatTask, parseDeadline, summaryText } from "./roomTasks";
 
 // 2026-11-05 是周四
 const NOW = new Date(2026, 10, 5, 15, 30);
@@ -32,18 +32,44 @@ describe("parseDeadline", () => {
   });
 });
 
-describe("draftFromText", () => {
-  it("「@小鲶 让张三、李四周五前…」→ 收件人 + 截止 + 去掉 @小鲶", () => {
-    expect(isTaskAsk("@小鲶 让张三写周报")).toBe(true);
-    expect(isTaskAsk("@张三 写周报")).toBe(false);
-    const d = draftFromText("@小鲶 让张三、@李四 周五前把本周拜访记录交上来", members, "zhou@example.com", NOW);
-    expect(d).toEqual({ text: "张三、@李四 周五前把本周拜访记录交上来", recipients: ["zhang@example.com", "li@example.com"],
-                        deadline: "2026-11-06T18:00" });
+describe("parseChatTask", () => {
+  const ME = "zhou@example.com";
+  const P = (t: string) => parseChatTask(t, members, ME, NOW);
+
+  it("没 @ 到已加入的人 = 普通聊天", () => {
+    expect(P("大家周五前交周报")).toBeNull();
+    expect(P("@王五 周五前交周报")).toBeNull();          // 王五还没加入
+    expect(P("@周总 我自己")).toBeNull();
   });
-  it("没加入的、自己不当收件人", () => {
-    const d = draftFromText("@小鲶 让王五和周总、张三看下", members, "zhou@example.com", NOW);
-    expect(d.recipients).toEqual(["zhang@example.com"]);
-    expect(d.deadline).toBe("");
+  it("一次性: @ 到的人 + 截止", () => {
+    expect(P("@张三 @李四 周五前把拜访记录交上来")).toEqual({
+      kind: "task", text: "@张三 @李四 周五前把拜访记录交上来", recipients: ["zhang@example.com", "li@example.com"],
+      deadline: "2026-11-06T18:00", schedule: null, label: "派给 张三、李四 · 截止 2026-11-06 18:00" });
+    expect(P("@张三 看下合同")).toMatchObject({ deadline: "", label: "派给 张三 · 不限时" });
+  });
+  it("周期: 每周五下午5点, 做4次 / 到年底; 没说结束 → 提示", () => {
+    expect(P("@张三 每周五下午5点交周报, 做4次")).toMatchObject({
+      schedule: { kind: "cron", expr: "0 17 * * 5", until: null, times: 4 }, label: "派给 张三 · 每周五 17:00, 做 4 次" });
+    expect(P("@李四 每个工作日 9:30 看一眼工单, 到年底")).toMatchObject({
+      schedule: { kind: "cron", expr: "30 9 * * 1-5", until: "2026-12-31", times: null } });
+    expect(P("@李四 每周一、三 上午10点同步进度 到12月31日")).toMatchObject({
+      schedule: { kind: "cron", expr: "0 10 * * 1,3", until: "2026-12-31" } });
+    expect(P("@张三 每月15号交报销 做三次")).toMatchObject({ schedule: { expr: "0 9 15 * *", times: 3 } });
+    expect(P("@张三 每天交日报")).toMatchObject({ schedule: null, problem: expect.stringContaining("什么时候结束") });
+  });
+  it("定时做一次: 「明天上午9点做」「定时」; 「X点前」还是截止", () => {
+    expect(P("@张三 明天上午9点做一次库存盘点")).toMatchObject({ schedule: { kind: "once", at: "2026-11-06T09:00" }, deadline: "" });
+    expect(P("@张三 定时 后天 14:00 发提醒")).toMatchObject({ schedule: { kind: "once", at: "2026-11-07T14:00" } });
+    expect(P("@张三 明天下午3点前交")).toMatchObject({ schedule: null, deadline: "2026-11-06T15:00" });
+  });
+  it("多阶段: 「先让@张三 …, 再让@李四 …」", () => {
+    const t = P("先让@张三 周五前收本月数据, 再让@李四 下周一前汇总成月报");
+    expect(t).toMatchObject({ kind: "pipeline", label: "分 2 段: ① 张三 → ② 李四" });
+    expect(t?.kind === "pipeline" && t.stages.map((s) => [s.text, s.recipients, s.deadline])).toEqual([
+      ["@张三 周五前收本月数据", ["zhang@example.com"], "2026-11-06T18:00"],
+      ["@李四 下周一前汇总成月报", ["li@example.com"], "2026-11-09T18:00"],
+    ]);
+    expect(P("先让@张三 收数, 再让王五汇总")).toMatchObject({ kind: "task" });   // 第二段没 @ 人: 不算多阶段
   });
 });
 
