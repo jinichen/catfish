@@ -15,8 +15,8 @@ FORM_TOOLS: List[Dict[str, Any]] = [
             "收集表: 有 Excel 先 from_excel 拿字段, 否则按描述列字段, 再 create; 邮箱不知道用 directory 查。"
             "responses 看结果 (数字照返回说), export 导出。帮员工填别人的表: get → 从本机找值, 找不到留空 → draft (写 sources)。\n"
             "派任务: task_create (text=要做什么, 定时/周期给 schedule) → task_send; task_results 看结果。"
-            "做同事派来的任务: 做完 task_draft 存 result; 定时/周期任务的这一次用 task_period (要人确认没做的步骤写 skipped)。"
-            "交回文件: 先建带 attachments 的邮件草稿给发起人, 再存结果带 mail_draft_id + files。\n"
+            # 交回文件 (11/5) 的做法写在 mail_draft_id / files 参数说明和任务提示词里 —— 这段说明有长度上限 (test_tool_schema_budget)
+            "做同事派来的任务: 做完 task_draft 存 result; 定时/周期任务的这一次用 task_period (要人确认没做的步骤写 skipped)。\n"
             "send / remind / close / task_send / task_remind / task_cancel 会发消息给同事: 先不带 confirmed, 念 proposal, 同意才 confirmed=true。"
             "不能替员工提交、拒填、交回或拒绝, 也不要自己把结果发给对方, 让他去「协同」页点。"
         ),
@@ -36,7 +36,8 @@ FORM_TOOLS: List[Dict[str, Any]] = [
                             "description": "task_period: 要员工确认才能做、这次没做的步骤, 每步一句"},
                 "period": {"type": "integer", "description": "task_period: 接着做某一次时带上第几次 (更新那一次, 不新开)"},
                 "mail_draft_id": {"type": "string",
-                                  "description": "task_draft / task_period: 交回的是文件时, 装着文件、发给发起人的那封邮件草稿 id"},
+                                  "description": "task_draft / task_period: 交回的是文件时, 先用 catfish_email_create_draft 起草发给发起人、"
+                                                 "attachments 带上文件的邮件, 这里填那封草稿的 id"},
                 "files": {"type": "array", "items": {"type": "string"},
                           "description": "task_draft / task_period: 那封邮件草稿里的文件名"},
                 "form_id": {"type": "string", "description": "表单编号 (f_YYYYMMDD_xxxxxxxx)"},
