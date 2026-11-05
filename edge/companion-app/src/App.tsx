@@ -240,6 +240,8 @@ function AppShell({ activeTab }: { activeTab: string }) {
   //   display:contents 保留早安原有布局，不额外引入一层可见容器。
   const isBriefing = activeTab === "briefing";
   const isChatOrBriefing = activeTab === "chat" || isBriefing;
+  // 11/5: 群聊整页固定 (群列表 / 标题 / 输入框不动, 只有消息区滚), 跟对话页一样锁住 main 的滚动
+  const collabRooms = useUIStore((s) => activeTab === "collab" && s.collabView === "rooms");
   return (
     <div className="app-shell" data-rail-collapsed={railCollapsed || undefined}>
       <TabBar />
@@ -252,7 +254,7 @@ function AppShell({ activeTab }: { activeTab: string }) {
         {/* 10/26: 工作台 / 早安以外的页面也要知道有一步在等批准 (那两处的横幅在对话里) */}
         {!isChatOrBriefing && <ApprovalElsewhereBanner />}
         <DevUserSwitcher />
-        <main className={isChatOrBriefing ? "app-workspace__main app-workspace__main--locked" : "app-main"}>
+        <main className={isChatOrBriefing || collabRooms ? "app-workspace__main app-workspace__main--locked" : "app-main"}>
           {/* BL-CONSOLE-TAB-KILL (5/16): {activeTab === "console" && <ConsoleTab />} */}
           <div
             style={{ display: isBriefing ? "contents" : "none" }}

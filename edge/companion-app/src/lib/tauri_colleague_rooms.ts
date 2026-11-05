@@ -17,7 +17,8 @@ export interface RoomSummary {
   unread: number;
   /** 未读里 @了我的条数 */
   mentioned: number;
-  last: { from: string; name: string; text: string; at: string } | null;
+  /** kind: 任务状态 / 自动转发的 text 里已经带了名字, 列表预览不再加「名字:」 */
+  last: { from: string; name: string; text: string; at: string; kind?: RoomMessage["kind"] } | null;
   activity: string;
 }
 
@@ -38,7 +39,12 @@ export interface RoomCard {
   schedule: string | null;
   assignees: string[];
   owner: string;
+  /** 第三步特例: 这个定时 / 周期任务的每次结果会自动发到群里 */
+  auto_post?: boolean;
 }
+
+/** 发起人电脑自动转进群的一次结果 */
+export interface RoomAuto { task_id: string; title: string; period: number; by: string }
 
 export type RoomTaskState = "accepted" | "done" | "declined" | "quit";
 
@@ -46,9 +52,10 @@ export interface RoomStatus { task_id: string; title: string; state: RoomTaskSta
 
 export interface RoomMessage {
   msg_id: string;
-  kind: "text" | "system" | "card" | "status";
+  kind: "text" | "system" | "card" | "status" | "auto";
   card?: RoomCard;
   status?: RoomStatus;
+  auto?: RoomAuto;
   from?: string;
   at: string;
   text: string;
@@ -101,6 +108,13 @@ export const roomUpdate = (roomId: string, name: string, purpose: string) =>
 export const roomDisband = (roomId: string) => call<{ room: RoomSummary; failed: Failed[] }>("disband", { room_id: roomId });
 export const roomLeave = (roomId: string) => call<{ room: RoomSummary; failed: Failed[] }>("leave", { room_id: roomId });
 export const roomDelete = (roomId: string) => call<{ ok: boolean }>("delete", { room_id: roomId });
+
+/** 第三步: 小鲶读本机群记录出草稿 (总结 / 待办 / 起草回复), 不发。instruction = 员工在输入框里写的要求 */
+export type AssistKind = "summary" | "todos" | "reply";
+export const roomAssist = (roomId: string, kind: AssistKind, instruction?: string, replyTo?: string | null) =>
+  invoke<{ text: string; kind: AssistKind }>("colleague_room_assist", {
+    roomId, kind, instruction: instruction ?? null, replyTo: replyTo ?? null,
+  });
 
 /** 投递失败汇总成一句人话 (空 = 都送到了)。 */
 export function failedNotice(failed: Failed[], what = "没收到"): string | undefined {

@@ -169,6 +169,12 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
                 return _error(req_id, INVALID_PARAMS, str(e))
     # 11/5: 同事群聊 (colleague_rooms.py, docs/GROUP-CHAT-PLAN.md): 「协同」页的建群 / 加入 / 发消息 / 群主管理。
     # 每一条都是员工在界面上点了才发, 模型工具里没有。
+    if method == "room/assist":   # 11/5 群聊第三步: 小鲶总结 / 待办 / 起草回复 (要调大模型, 异步; Rust 注入令牌)
+        from . import colleague_rooms_tasks  # noqa: PLC0415
+        try:
+            return _success(req_id, await colleague_rooms_tasks.assist(params))
+        except (ValueError, LookupError, OSError, RuntimeError) as e:
+            return _error(req_id, INVALID_PARAMS, str(e))
     if method.startswith("pim/croom_"):
         from . import colleague_rooms  # noqa: PLC0415
         handlers = colleague_rooms.pim_handlers(params)

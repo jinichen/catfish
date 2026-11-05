@@ -86,6 +86,11 @@ export default function TaskWork({ taskId, onClose }: { taskId: string; onClose:
         </span>
         <StateTag state={state} />
       </div>
+      {rec.task.room_auto_post && (
+        <div style={{ fontSize: 13, color: "var(--status-warn, #d97706)" }}>
+          ⚠️ {rec.owner} 设了「每次结果自动发到群里」: 你每次交回的结果, 群里的人都会看到。
+        </div>
+      )}
       {!rec.task.schedule && rec.done && (
         <div style={{ fontSize: 13, padding: "6px 10px", borderRadius: 4, border: "1px solid var(--status-ok, #16a34a)",
                       color: "var(--status-ok, #16a34a)" }}>

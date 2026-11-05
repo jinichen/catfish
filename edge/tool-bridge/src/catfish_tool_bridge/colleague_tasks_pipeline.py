@@ -95,7 +95,7 @@ def create(args: dict[str, Any]) -> dict[str, Any]:
     stages = _norm_stages(args.get("stages"), owner)
     room_id = None
     if args.get("room_id"):   # 在群里派的多阶段: 每一段开始时任务卡发到群里; 每段的人都要是群里已加入的
-        room_id = ct._room_for(args["room_id"], sorted({e for st in stages for e in st["recipients"]}))
+        room_id = ct._room().room_for(args["room_id"], sorted({e for st in stages for e in st["recipients"]}))
     p = {"pipeline_id": pid, "title": title, "owner": owner, "created_at": ct._now(), "status": "open",
          "stages": stages, "current": 0, "notified": [], "room_id": room_id,
          "room_text": str(args.get("room_text") or "").strip()[:4000] or None}

@@ -100,6 +100,10 @@ export interface TaskBody {
   schedule?: Schedule | null;
   /** 多阶段: 发起人放行的上一段结果 */
   context?: string | null;
+  /** 11/5 群聊: 在哪个群里派的 */
+  room_id?: string | null;
+  /** 11/5 群聊第三步特例: 每次结果自动发到群里 (发起人勾的; 收件人接之前看得到) */
+  room_auto_post?: boolean;
 }
 
 /** 收件人这边的一期 */
@@ -206,7 +210,7 @@ export const taskList = () => call<TaskList>("list");
 export const taskGet = (taskId: string) => call<TaskDetail>("get", { task_id: taskId });
 export const taskSync = () => call<TaskSyncResult>("sync");
 /** room_id: 在群里派的 (GROUP-CHAT-PLAN 第二步), 发出后这条任务进群, 收件人的状态也回群; room_text = 群里显示的原话 */
-export const taskCreate = (p: { title?: string; text: string; deadline?: string | null; schedule?: Schedule | null; recipients: string[]; room_id?: string; room_text?: string }) =>
+export const taskCreate = (p: { title?: string; text: string; deadline?: string | null; schedule?: Schedule | null; recipients: string[]; room_id?: string; room_text?: string; room_auto_post?: boolean }) =>
   call<{ task: OutgoingTask }>("create", p);
 export const taskAdd = (taskId: string, recipients: string[]) => call<{ task: OutgoingTask }>("add", { task_id: taskId, recipients });
 /** room_notice: 群里派的任务发出去了, 但任务卡没进群的原因 */
@@ -221,6 +225,9 @@ export const taskUpdate = (taskId: string, p: { text?: string; deadline?: string
   call<Sent & { sent: string[] }>("update", { task_id: taskId, ...p });
 export const taskPeriodSubmit = (taskId: string, period: number, result: string) =>
   call<{ period: number }>("period_submit", { task_id: taskId, period, result });
+/** 发起人开 / 关「每次结果自动发到群里」(只有群里派的定时 / 周期任务能开, 随时能关) */
+export const taskRoomAutoPost = (taskId: string, on: boolean) =>
+  call<{ room_auto_post: boolean }>("room_auto_post", { task_id: taskId, on });
 export const taskRedo = (taskId: string, email: string, note: string) => call<{ sent: string[] }>("redo", { task_id: taskId, email, note });
 export const pipelineCreate = (p: { title: string; stages: StageDraft[]; room_id?: string; room_text?: string }) =>
   call<{ pipeline: { pipeline_id: string }; sent: string[]; failed: { to: string; error: string }[] }>("pipeline_create", p);

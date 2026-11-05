@@ -13,18 +13,16 @@
  *   同事派给我、还没交回的也算红点。右栏照旧接老版本同事的在线请求和工具审批。
  * 11/5: 顶上一个切换 —— 协同事项 / 群聊 (RoomsPanel, docs/GROUP-CHAT-PLAN.md); 群邀请和群未读也算红点。
  */
-import { useState } from "react";
-
 import { pendingRoomCount, useColleagueRooms } from "../../lib/colleagueRoomsStore";
 import TasksPanel from "./TasksPanel";
 import FormsPanel from "./FormsPanel";
 import PendingPanel from "./PendingPanel";
 import RoomsPanel from "./RoomsPanel";
-
-type View = "work" | "rooms";
+import { useUIStore } from "../../store/ui";
 
 export default function CollabTab() {
-  const [view, setView] = useState<View>("work");
+  const view = useUIStore((s) => s.collabView);
+  const setView = useUIStore((s) => s.setCollabView);
   const roomBadge = pendingRoomCount(useColleagueRooms());
   const seg = (on: boolean) => ({
     border: "1px solid var(--catfish-border)", cursor: "pointer", font: "inherit", fontSize: 13,
@@ -33,8 +31,10 @@ export default function CollabTab() {
     display: "inline-flex", alignItems: "center", gap: 6,
   });
   return (
-    <div style={{ maxWidth: 1600, margin: "0 auto", padding: "var(--space-4)" }}>
-      <div role="tablist" style={{ display: "flex", gap: 8, marginBottom: "var(--space-4)" }}>
+    <div style={view === "rooms"
+      ? { height: "100%", boxSizing: "border-box", display: "flex", flexDirection: "column", padding: "var(--space-3) var(--space-4)" }
+      : { maxWidth: 1600, margin: "0 auto", padding: "var(--space-4)" }}>
+      <div role="tablist" style={{ display: "flex", gap: 8, marginBottom: view === "rooms" ? "var(--space-3)" : "var(--space-4)", flexShrink: 0 }}>
         <button type="button" role="tab" aria-selected={view === "work"} style={seg(view === "work")} onClick={() => setView("work")}>
           协同事项
         </button>

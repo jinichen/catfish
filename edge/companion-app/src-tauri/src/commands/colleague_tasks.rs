@@ -14,7 +14,7 @@ const RPC_TIMEOUT: Duration = Duration::from_secs(90);
 
 const ALLOWED: &[&str] = &[
     "list", "get", "sync", "create", "add", "send", "remind", "cancel", "accept", "draft", "submit", "decline",
-    "update", "period_submit", "quit", "redo",
+    "update", "period_submit", "quit", "redo", "room_auto_post",
     "pipeline_create", "pipeline_get", "pipeline_release", "pipeline_cancel",
 ];
 

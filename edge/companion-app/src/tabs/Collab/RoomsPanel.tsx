@@ -7,6 +7,8 @@
  * 第二步 (同日): 在聊天里直接派任务 —— 照常打字 @ 人, 「周五前」「每周五下午5点, 做4次」「先让@张三…再让@李四…」
  *   输入框下面实时显示认出来的 (派给谁 / 截止 / 定时 / 周期 / 分几段), 点「派给@的人」(或 Ctrl/⌘+Enter) 才派。
  *   群里显示的就是这句话, 下面一行每人的状态; 被派到的人在这条消息上点「接下」「交回」。结果只回发起人。
+ * 第三步 (同日): 「🐟 小鲶」—— 总结讨论 / 整理待办 / 起草回复, 读本机群记录出草稿填进输入框, 自己改了再发;
+ *   派定时 / 周期任务时可以勾「每次结果自动发到群里」(唯一的自动发群特例, 发起人电脑收到结果时转进群)。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
@@ -14,14 +16,15 @@ import { refreshRooms, setActiveRoom, useColleagueRooms } from "../../lib/collea
 import { refreshTasks, useColleagueTasks } from "../../lib/colleagueTasksStore";
 import { pipelineCreate, taskAccept, taskCreate, taskGet, taskSend } from "../../lib/tauri_colleague_tasks";
 import {
-  failedNotice, roomDecline, roomDelete, roomDisband, roomGet, roomJoin, roomLeave, roomRead, roomRemove, roomSend, roomUpdate,
+  failedNotice, roomAssist, roomDecline, roomDelete, roomDisband, roomGet, roomJoin, roomLeave, roomRead, roomRemove, roomSend, roomUpdate,
+  type AssistKind,
   type RoomDetail, type RoomMember, type RoomMessage, type RoomSummary,
 } from "../../lib/tauri_colleague_rooms";
 import { Overlay, muted } from "./formsUi";
 import RoomComposer, { NAME_MAX } from "./RoomComposer";
 import { STATE_WORD, cardStates, parseChatTask, summaryText, type ChatTask } from "./roomTasks";
 import TaskProgress from "./TaskProgress";
-import TaskWork, { when } from "./TaskWork";
+import TaskWork from "./TaskWork";
 import { Btn, ErrorLine, cardStyle, inputStyle } from "./roomLinkUi";
 
 export const TEXT_MAX = 4000;
@@ -58,12 +61,37 @@ export function waitingNotice(waiting: RoomMember[]): string {
   return `${shown} 还没点「加入」, 现在发的消息他们收不到 (加入后也看不到之前的)。`;
 }
 
+/** 群列表里最后一条的预览: 任务状态 / 自动转发的文字里已经有名字了 */
+export function lastPreview(last: { name: string; text: string; kind?: string }): string {
+  return last.kind === "status" || last.kind === "auto" ? last.text : `${last.name}: ${last.text}`;
+}
+
+/** 截止 / 时间写短: 「2026-11-06」→「11/6」,「2026-11-06T15:00」→「11/6 15:00」(今年以外带年份) */
+export function shortWhen(iso: string | null | undefined, now: Date = new Date()): string {
+  const m = (iso ?? "").match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?/);
+  if (!m) return iso ?? "";
+  const day = `${+m[1] !== now.getFullYear() ? `${m[1]}/` : ""}${+m[2]}/${+m[3]}`;
+  return m[4] ? `${day} ${m[4]}:${m[5]}` : day;
+}
+
+/** 状态行要不要单独显示: 那条任务就在眼前时, 状态已经写在它下面那一行了, 不再单独一行 (11/5 鸿波: 太乱) */
+export function visibleMessages(messages: RoomMessage[]): RoomMessage[] {
+  const cards = new Set(messages.filter((m) => m.kind === "card" && m.card).map((m) => m.card!.task_id));
+  return messages.filter((m) => !(m.kind === "status" && m.status && cards.has(m.status.task_id)));
+}
+
 export function timeLabel(at: string, now: Date = new Date()): string {
   const d = new Date(at);
   if (Number.isNaN(d.getTime())) return "";
   const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
   return d.toDateString() === now.toDateString() ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
 }
+
+/** 系统消息 / 状态: 一行, 放不下省略 (原来居中折成两行, 时间单独掉到下一行) */
+const oneLine = {
+  fontSize: 12, color: "var(--catfish-text-muted)", textAlign: "center" as const, whiteSpace: "nowrap" as const,
+  overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%", padding: "0 12px",
+};
 
 const listButton = (on: boolean) => ({
   textAlign: "left" as const, cursor: "pointer", font: "inherit", color: "inherit", width: "100%",
@@ -99,22 +127,23 @@ export default function RoomsPanel() {
   }, [open]);
 
   return (
-    <div style={{ ...cardStyle, height: "auto" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-        <div>
-          <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>💬 同事群聊</h3>
-          <div style={{ ...muted, marginTop: 4 }}>
-            几位同事在一个群里说事。消息只存在每个成员自己的电脑上, 中央只转交、看不到内容; 每一条都是你点了才发。
-          </div>
-        </div>
-        <Btn kind="primary" onClick={() => setCreating(true)}>建群</Btn>
-      </div>
+    <div style={{ ...cardStyle, flex: 1, minHeight: 0, height: "auto", overflow: "hidden", display: "flex", flexDirection: "column", gap: 8 }}>
       {syncError && <span style={muted}>暂时收不到群消息: {syncError}</span>}
 
-      <div style={{ display: "grid", gridTemplateColumns: "260px minmax(0, 1fr)", gap: "var(--space-3)", minHeight: 520 }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, overflowY: "auto", maxHeight: 640 }}>
-          {loaded && rooms.length === 0 && <span style={muted}>还没有群。点右上角「建群」, 拉几位同事进来。</span>}
-          {rooms.map((r) => <RoomRow key={r.room_id} r={r} on={r.room_id === open} onClick={() => { setNotice(undefined); setOpen(r.room_id); }} />)}
+      <div style={{ display: "grid", gridTemplateColumns: "200px minmax(0, 1fr)", gridTemplateRows: "minmax(0, 1fr)",
+                    gap: "var(--space-3)", flex: 1, minHeight: 0 }}>
+        {/* 左: 群列表 (自己滚) */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, minHeight: 0 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
+            <strong style={{ fontSize: 13 }} title="消息只存在每个成员自己的电脑上, 中央只转交、看不到内容; 每一条都是你点了才发">
+              💬 群聊
+            </strong>
+            <Btn kind="primary" onClick={() => setCreating(true)}>建群</Btn>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, overflowY: "auto", minHeight: 0, flex: 1 }}>
+            {loaded && rooms.length === 0 && <span style={muted}>还没有群。点「建群」, 拉几位同事进来。</span>}
+            {rooms.map((r) => <RoomRow key={r.room_id} r={r} on={r.room_id === open} onClick={() => { setNotice(undefined); setOpen(r.room_id); }} />)}
+          </div>
         </div>
         {open ? <RoomView key={open} roomId={open} notice={notice} onNotice={setNotice} /> : (
           <div style={{ ...muted, alignSelf: "center", justifySelf: "center" }}>选一个群, 或者建一个新群。</div>
@@ -129,7 +158,7 @@ export default function RoomsPanel() {
 
 function RoomRow({ r, on, onClick }: { r: RoomSummary; on: boolean; onClick: () => void }) {
   const sub = r.my_state === "invited" ? "邀请你加入" : r.my_state !== "joined" ? ENDED_LABEL[r.my_state] :
-    r.last ? `${r.last.name}: ${r.last.text}` : `${r.joined} 人已加入`;
+    r.last ? lastPreview(r.last) : `${r.joined} 人已加入`;
   return (
     <button type="button" onClick={onClick} style={listButton(on)}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 6, alignItems: "center" }}>
@@ -156,9 +185,13 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
   const [text, setText] = useState("");
   const [replyTo, setReplyTo] = useState<RoomMessage | null>(null);
   const [atOpen, setAtOpen] = useState(false);
+  const [showMembers, setShowMembers] = useState(false);
   const [modal, setModal] = useState<null | "add" | "info" | "disband" | "leave" | { remove: RoomMember }>(null);
   const [work, setWork] = useState<string | null>(null);
   const [watch, setWatch] = useState<{ id: string; notice?: string } | null>(null);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [helping, setHelping] = useState<AssistKind | null>(null);
+  const [autoPost, setAutoPost] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
@@ -219,6 +252,22 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
     }
   }
 
+  async function askXiaonian(kind: AssistKind) {
+    setHelpOpen(false);
+    setHelping(kind);
+    setError(null);
+    try {
+      // 起草回复: 输入框里写的当要求 (如「委婉拒绝」), 选了「回复」就回那一条
+      const r = await roomAssist(roomId, kind, kind === "reply" ? text : "", kind === "reply" ? replyTo?.msg_id : null);
+      setText(r.text);
+      onNotice("小鲶起草好了, 在输入框里 —— 看一下、改好再发 (它不会自己发)。");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setHelping(null);
+    }
+  }
+
   async function dispatch() {
     const t = parseChatTask(text, members, me);
     if (!t || t.problem || busy) return;
@@ -230,12 +279,12 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
         return { failed: r.failed.map((f) => ({ email: f.to, error: f.error })) };
       }
       const { task } = await taskCreate({ text: t.text, recipients: t.recipients, deadline: t.deadline || null, schedule: t.schedule,
-                                          room_id: roomId, room_text: body });
+                                          room_id: roomId, room_text: body, room_auto_post: Boolean(t.schedule) && autoPost });
       const r = await taskSend(task.task_id);
       if (r.room_notice) throw new Error(r.room_notice);
       return { failed: r.failed.map((f) => ({ email: f.to, error: f.error })) };
     }, "没收到任务");
-    if (ok) { setText(""); setReplyTo(null); void refreshTasks(); }
+    if (ok) { setText(""); setReplyTo(null); setAutoPost(false); void refreshTasks(); }
   }
 
   async function send() {
@@ -250,19 +299,26 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
   };
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 220px", gap: "var(--space-3)", minHeight: 0 }}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8, minHeight: 0 }}>
-        <div style={{ borderBottom: "1px solid var(--catfish-border)", paddingBottom: 6 }}>
-          <strong style={{ fontSize: "var(--text-sm)" }}>{room.name}</strong>
-          <span style={{ ...muted, marginLeft: 8 }}>{room.joined} 人已加入{room.members > room.joined ? ` · ${room.members - room.joined} 人还没加入` : ""}</span>
-          {room.purpose && <div style={{ ...muted, marginTop: 4, whiteSpace: "pre-wrap" }}>📌 {room.purpose}</div>}
+    <div style={{ display: "grid", gridTemplateColumns: showMembers ? "minmax(0, 1fr) 200px" : "minmax(0, 1fr)",
+                  gridTemplateRows: "minmax(0, 1fr)", gap: "var(--space-3)", minHeight: 0 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, minHeight: 0 }}>
+        <div style={{ borderBottom: "1px solid var(--catfish-border)", paddingBottom: 6, flexShrink: 0,
+                      display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+          <div style={{ minWidth: 0 }}>
+            <strong style={{ fontSize: "var(--text-sm)" }}>{room.name}</strong>
+            <span style={{ ...muted, marginLeft: 8 }}>{room.joined} 人{room.members > room.joined ? ` · ${room.members - room.joined} 人还没加入` : ""}</span>
+            {room.purpose && <div style={{ ...muted, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                                  title={room.purpose}>📌 {room.purpose}</div>}
+          </div>
+          <Btn kind="ghost" onClick={() => setShowMembers((v) => !v)}>{showMembers ? "收起成员" : `👥 成员 ${room.joined}`}</Btn>
         </div>
         {notice && <ErrorLine>{notice}</ErrorLine>}
         {error && <ErrorLine>{error}</ErrorLine>}
 
-        <div style={{ flex: 1, overflowY: "auto", maxHeight: 520, display: "flex", flexDirection: "column", gap: 8, paddingRight: 4 }}>
+        {/* 只有这里滚 */}
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: 10, paddingRight: 4 }}>
           {d.older > 0 && <span style={{ ...muted, textAlign: "center" }}>更早的 {d.older} 条没显示</span>}
-          {d.messages.map((m) => (
+          {visibleMessages(d.messages).map((m) => (
             m.kind === "card" && m.card ? (
               <TaskMessage key={m.msg_id} m={m} me={me} members={members} messages={d.messages} busy={busy}
                            local={incoming.find((t) => t.task_id === m.card!.task_id)?.state}
@@ -300,7 +356,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
           </div>
         )}
         {joined && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 4, position: "relative" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, position: "relative", flexShrink: 0 }}>
             {waiting.length > 0 && (
               <span style={{ ...muted, color: "var(--status-warn, #d97706)" }}>
                 {waitingNotice(waiting)}
@@ -318,29 +374,56 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
             {atOpen && (
               <div style={{ position: "absolute", bottom: "100%", left: 0, background: "var(--catfish-bg-elevated)", zIndex: 5,
                             border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-sm)", padding: 4,
-                            display: "flex", flexDirection: "column", maxHeight: 200, overflowY: "auto", minWidth: 180 }}>
+                            display: "flex", flexDirection: "column", maxHeight: 200, overflowY: "auto", minWidth: 180,
+                            color: "var(--catfish-text, inherit)" }}>
                 {people.filter((p) => p.email !== me).map((p) => (
                   <button key={p.email} type="button"
                           onClick={() => { setText((t) => `${t}${t.endsWith("@") ? "" : "@"}${p.name || p.email.split("@")[0]} `); setAtOpen(false); }}
-                          style={{ textAlign: "left", border: "none", background: "transparent", cursor: "pointer", padding: "4px 8px", fontSize: 12 }}>
+                          className="room-menu-item"
+                          style={{ textAlign: "left", border: "none", background: "transparent", cursor: "pointer", padding: "4px 8px",
+                                   fontSize: 13, color: "inherit", borderRadius: 4 }}>
                     @{p.name || p.email.split("@")[0]}
                   </button>
                 ))}
               </div>
             )}
-            <textarea value={text} rows={3} maxLength={TEXT_MAX} onKeyDown={onKey}
+            <textarea value={text} rows={2} maxLength={TEXT_MAX} onKeyDown={onKey}
                       onChange={(e) => { setText(e.target.value); setAtOpen(e.target.value.endsWith("@")); }}
                       placeholder="说点什么 · Enter 发送 · @ 提醒某人 · 要派任务就照常说, 如「@张三 周五前交拜访记录」, 再点「派给@的人」"
-                      style={{ ...inputStyle, resize: "vertical" }} />
+                      style={{ ...inputStyle, resize: "none" }} />
             {asTask && (
               <span style={{ ...muted, color: asTask.problem ? "var(--status-warn, #d97706)" : "inherit" }}>
                 {asTask.problem ? `派不了: ${asTask.problem}` : `点「派给@的人」= ${asTask.label}`}
-                {asTask.kind === "task" && !asTask.problem && " · 结果只回给你, 群里只显示谁接了、谁交了"}
+                {asTask.kind === "task" && !asTask.problem && !(asTask.schedule && autoPost) && " · 结果只回给你, 群里只显示谁接了、谁交了"}
               </span>
             )}
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={muted}>{text.length}/{TEXT_MAX} · 长材料请用邮件, 还不能传附件</span>
-              <span style={{ display: "flex", gap: 6 }}>
+            {asTask?.kind === "task" && asTask.schedule && !asTask.problem && (
+              <label style={{ ...muted, display: "flex", gap: 4, alignItems: "center", cursor: "pointer" }}>
+                <input type="checkbox" checked={autoPost} onChange={(e) => setAutoPost(e.target.checked)} />
+                每次结果自动发到群里 (群里的人都看得到; 同事接之前会看到这条, 你随时能在任务里关掉)
+              </label>
+            )}
+            {helpOpen && (
+              <div style={{ position: "absolute", bottom: "100%", right: 0, background: "var(--catfish-bg-elevated)", zIndex: 5,
+                            border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-sm)", padding: 4,
+                            display: "flex", flexDirection: "column", minWidth: 240, color: "var(--catfish-text, inherit)" }}>
+                {([["summary", "总结一下最近的讨论"], ["todos", "整理成待办 (谁 / 做什么 / 截止)"],
+                   ["reply", replyTo ? `起草回复 ${labelOf(members, replyTo.from)} 的那条` : "帮我起草回复 (输入框里可写要求)"]] as const).map(([k, label]) => (
+                  <button key={k} type="button" onClick={() => void askXiaonian(k)} className="room-menu-item"
+                          style={{ textAlign: "left", border: "none", background: "transparent", cursor: "pointer", padding: "6px 8px",
+                                   fontSize: 13, color: "inherit", borderRadius: 4 }}>
+                    {label}
+                  </button>
+                ))}
+                <span style={{ ...muted, padding: "4px 8px" }}>小鲶读你电脑上的群记录, 出草稿放进输入框, 发不发你定。</span>
+              </div>
+            )}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <span style={{ ...muted, whiteSpace: "nowrap" }} title="长材料请用邮件, 还不能传附件">{text.length}/{TEXT_MAX}</span>
+              <span style={{ display: "flex", gap: 6, whiteSpace: "nowrap", flexShrink: 0 }}>
+                <Btn kind="ghost" disabled={Boolean(helping)} onClick={() => setHelpOpen((v) => !v)}>
+                  {helping ? "🐟 小鲶在写…" : "🐟 小鲶"}
+                </Btn>
                 <Btn kind="ghost" onClick={() => setAtOpen((v) => !v)}>@</Btn>
                 {asTask && (
                   <Btn kind="ghost" disabled={busy || Boolean(asTask.problem)} onClick={() => void dispatch()}>派给@的人</Btn>
@@ -352,7 +435,8 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
         )}
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 6, borderLeft: "1px solid var(--catfish-border)", paddingLeft: 10 }}>
+      {showMembers && <div style={{ display: "flex", flexDirection: "column", gap: 6, borderLeft: "1px solid var(--catfish-border)", paddingLeft: 10,
+                                   minHeight: 0, overflowY: "auto" }}>
         <strong style={{ fontSize: 13 }}>成员 ({room.joined}/{room.members})</strong>
         <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 360, overflowY: "auto" }}>
           {members.map((m) => (
@@ -378,7 +462,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
           </div>
         )}
         {joined && !owner && <div style={{ marginTop: 6 }}><Btn kind="ghost" onClick={() => setModal("leave")}>退出群</Btn></div>}
-      </div>
+      </div>}
 
       {work && <TaskWork taskId={work} onClose={() => { setWork(null); void load(); }} />}
       {watch && <TaskProgress taskId={watch.id} initialError={watch.notice} onClose={() => setWatch(null)} />}
@@ -405,11 +489,23 @@ function Bubble({ m, mine, members, me, quoted, onReply }: {
   m: RoomMessage; mine: boolean; members: RoomMember[]; me: string; quoted?: RoomMessage; onReply?: () => void;
 }) {
   if (m.kind === "system") {
-    return <span style={{ ...muted, textAlign: "center" }}>{m.text} · {timeLabel(m.at)}</span>;
+    return <span style={oneLine}>{m.text} · {timeLabel(m.at)}</span>;
+  }
+  if (m.kind === "auto") {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start", gap: 2 }}>
+        <span style={muted}>🤖 自动转发 · {mine ? "我" : labelOf(members, m.from)} 的电脑 · {timeLabel(m.at)}</span>
+        <div style={{ maxWidth: "78%", padding: "6px 10px", borderRadius: 10, fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-word",
+                      border: "1px dashed var(--catfish-border)", background: "var(--catfish-bg-subtle, rgba(0,0,0,0.03))" }}>
+          {m.text}
+        </div>
+      </div>
+    );
   }
   if (m.kind === "status") {
+    // 只有那条任务不在眼前 (更早、没显示) 时才单独一行
     const icon = m.status?.state === "done" ? "✅" : m.status?.state === "accepted" ? "🛠" : "↩️";
-    return <span style={{ ...muted, textAlign: "center" }}>{icon} {m.text} · {timeLabel(m.at)}</span>;
+    return <span style={oneLine} title={m.text}>{icon} {m.text} · {timeLabel(m.at)}</span>;
   }
   const atMe = !mine && (m.mentions ?? []).includes(me);
   return (
@@ -453,14 +549,10 @@ function TaskMessage({ m, me, members, messages, busy, local, onAccept, onWork, 
   const link = { border: "none", background: "transparent", cursor: "pointer", fontSize: 11, padding: 0, color: "var(--catfish-cyan)" };
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start", gap: 2 }}>
-      <span style={muted}>{mine ? "我" : labelOf(members, m.from)} · {timeLabel(m.at)}</span>
-      <div style={{ maxWidth: "78%", padding: "6px 10px", borderRadius: 10, fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-word",
-                    background: mine ? "var(--catfish-cyan)" : "var(--catfish-bg-subtle, rgba(0,0,0,0.05))", color: mine ? "white" : "inherit",
-                    border: myState ? "1px solid var(--status-warn, #d97706)" : "1px solid transparent" }}>
-        {m.text}
-      </div>
+      {/* 11/5 鸿波: 状态别单独占一行 —— 跟「谁 · 几点」放同一行 */}
       <span style={{ ...muted, display: "flex", flexWrap: "wrap", gap: 8, justifyContent: mine ? "flex-end" : "flex-start", maxWidth: "90%" }}>
-        <span>📋 {c.schedule ? `⏰ ${c.schedule}` : c.deadline ? `截止 ${when(c.deadline)}` : "不限时"}</span>
+        <span>{mine ? "我" : labelOf(members, m.from)} · {timeLabel(m.at)}</span>
+        <span>📋 {c.schedule ? `⏰ ${c.schedule}` : c.deadline ? `截止 ${shortWhen(c.deadline)}` : "不限时"}{c.auto_post ? " · 结果自动发群" : ""}</span>
         {states.map((x) => (
           <span key={x.email} title={x.email}
                 style={{ color: x.state === "done" ? "var(--status-ok, #059669)" : undefined }}>
@@ -476,6 +568,12 @@ function TaskMessage({ m, me, members, messages, busy, local, onAccept, onWork, 
         {mine && <button type="button" style={link} onClick={onWatch}>看结果</button>}
         {mine && onSummary && <button type="button" style={link} onClick={onSummary}>汇总发到群里</button>}
       </span>
+      <div style={{ maxWidth: "78%", padding: "6px 10px", borderRadius: 10, fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-word",
+                    background: mine ? "var(--catfish-cyan)" : "var(--catfish-bg-subtle, rgba(0,0,0,0.05))", color: mine ? "white" : "inherit",
+                    border: myState && myState !== "done" ? "1px solid var(--status-warn, #d97706)" : "1px solid transparent",
+                    opacity: myState === "done" || myState === "declined" ? 0.75 : 1 }}>
+        {m.text}
+      </div>
     </div>
   );
 }

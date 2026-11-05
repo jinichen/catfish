@@ -92,6 +92,9 @@ _SOURCE_PURPOSE = {
     "hermes:curator": "后台 · 技能整理",
     "hermes:subagent": "子任务",
     "companion": "Companion",
+    # 11/5: 同事群聊 (docs/GROUP-CHAT-PLAN.md 第三步)
+    "room-auto-post": "群聊 · 定时任务结果自动转发",
+    "plugin:toolbridge-room-assist": "群聊 · 小鲶总结 / 起草",
 }
 _PATH_PURPOSE = (
     ("/v1/chat/completions", "模型调用"),
@@ -102,6 +105,8 @@ _PATH_PURPOSE = (
     ("/api/proactive/", "主动提醒"),
     # 10/28: hermes 按 Ollama 的接口问网关某个模型的上下文长度 (只带模型名, 网关不实现会回 404)
     ("/api/show", "查询模型信息"),
+    # 11/5: 填表 / 派任务 / 群聊的邮筒 (内容不透明, 取走即清空)。原来落成路径, 页面上显示成「网页请求」
+    ("/api/room-link/mailbox", "同事协作 · 邮筒"),
 )
 _HOST_PURPOSE = (
     ("parallel.ai", "网页搜索"),

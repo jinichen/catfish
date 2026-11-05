@@ -43,6 +43,9 @@ interface UIState {
   /** 10/3 鸿波: 左边栏能收起, 只剩图标。持久 localStorage, 下次打开还是收着。 */
   railCollapsed: boolean;
   toggleRail: () => void;
+  /** 11/5: 「协同」页看的是协同事项还是群聊 —— 群聊时整页固定、只有消息区滚 (App 据此锁住 main 的滚动) */
+  collabView: "work" | "rooms";
+  setCollabView: (v: "work" | "rooms") => void;
   setActiveTab: (tab: TabId) => void;
   toggleDarkMode: () => void;
   openAbout: () => void;
@@ -99,6 +102,8 @@ export const useUIStore = create<UIState>((set, get) => ({
       return false;
     }
   })(),
+  collabView: "work",
+  setCollabView: (v) => set({ collabView: v }),
   toggleRail: () => {
     const next = !get().railCollapsed;
     try {

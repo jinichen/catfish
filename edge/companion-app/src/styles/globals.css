@@ -5684,3 +5684,8 @@ button {
 .app-rail__toggle:hover {
   opacity: 1;
 }
+
+/* 11/5 群聊: 「🐟 小鲶」/「@」弹出菜单的选项 */
+.room-menu-item:hover {
+  background: var(--catfish-bg-subtle, rgba(127, 127, 127, 0.15)) !important;
+}

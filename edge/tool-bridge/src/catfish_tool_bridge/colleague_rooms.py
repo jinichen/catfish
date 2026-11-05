@@ -148,11 +148,14 @@ def _roster(room: dict[str, Any]) -> dict[str, dict[str, str]]:
             for e, v in room.get("members", {}).items() if v.get("state") in ACTIVE}
 
 
-def _post_all(emails: list[str], kind: str, env: dict[str, Any]) -> list[dict[str, str]]:
-    """给每个人各投一封 (并发 8 路)。返回没送到的 [{email, error}]。"""
+def _post_all(emails: list[str], kind: str, env: dict[str, Any], source: str | None = None) -> list[dict[str, str]]:
+    """给每个人各投一封 (并发 8 路)。返回没送到的 [{email, error}]。source: 数据外发记录里的用途标签。"""
     def one(e: str) -> dict[str, str] | None:
         try:
-            forms_net.post(e, kind, env, TTL_SECONDS)
+            if source:
+                forms_net.post(e, kind, env, TTL_SECONDS, source=source)
+            else:
+                forms_net.post(e, kind, env, TTL_SECONDS)
             return None
         except ValueError as err:
             return {"email": e, "error": str(err)}
@@ -361,14 +364,14 @@ def send(room_id: str, text: Any, mentions: Any = None, reply_to: Any = None) ->
 
 
 def _broadcast(room: dict[str, Any], me: str, body: str, ments: list[str], extra: dict[str, Any],
-               kind: str = "text") -> dict[str, Any]:
+               kind: str = "text", source: str | None = None) -> dict[str, Any]:
     """发给群里已加入的其他人 + 记进本机。extra = 信封和本机记录里都带的附加字段 (reply_to / card / status)。"""
     msg = {"msg_id": f"m_{secrets.token_hex(10)}", "kind": kind, "from": me, "at": _now(), "text": body,
            "mentions": ments, **extra}
     others = _joined_others(room, me)
     env = {"v": ENVELOPE_VERSION, "room_id": room["room_id"], "msg_id": msg["msg_id"], "at": msg["at"],
            "text": body, "mentions": ments, **extra}
-    failed = _post_all(others, "room_msg", env)
+    failed = _post_all(others, "room_msg", env, source)
     if failed:
         msg["undelivered"] = [f["email"] for f in failed]
     _append(room["room_id"], msg)
@@ -378,79 +381,7 @@ def _broadcast(room: dict[str, Any], me: str, body: str, ments: list[str], extra
     return {"ok": True, "message": msg, "sent_to": len(others) - len(failed), "failed": failed}
 
 
-# ── 第二步: 群里派任务 (docs/GROUP-CHAT-PLAN.md §2) ─────────────────
-#
-# 任务本身照旧走派任务 (colleague_tasks, 结果只回发起人); 群里只多两样:
-#   任务卡 card   {task_id, title, deadline, schedule, assignees[]}  —— 发起人派出后发到群里, 收件人算被 @
-#   状态 status   {task_id, title, state}                             —— 收件人点「接下 / 交回 / 不接」时同一次点击发到群里,
-#                                                                       只有状态, 结果正文不进群
-MSG_KINDS = ("text", "card", "status")
-STATUS_WORDS = {"accepted": "接下了", "done": "交回了", "declined": "不接", "quit": "退出了"}
-
-
-def joined_room(room_id: str) -> dict[str, Any]:
-    """派任务前核对: 这个群在本机、我已加入。"""
-    room = load(_safe_id(room_id))
-    if room.get("my_state") != "joined":
-        raise ValueError("你不在这个群里, 不能往群里派任务")
-    return room
-
-
-def joined_members(room: dict[str, Any]) -> set[str]:
-    return {e for e, v in room.get("members", {}).items() if v.get("state") == "joined"}
-
-
-def post_card(room_id: str, task: dict[str, Any], schedule_text: str | None = None) -> dict[str, Any]:
-    """发起人派出任务后, 把任务卡发到群里 (界面「派任务」那一次点击的一部分)。"""
-    me = forms_net.me()
-    room = joined_room(room_id)
-    assignees = [e for e in task.get("recipients") or {} if e != me]
-    card = {"task_id": task["task_id"], "title": task["title"], "deadline": task.get("deadline"),
-            "schedule": schedule_text, "assignees": assignees, "owner": me}
-    # 群里显示的就是发起人在聊天里说的那句话 (room_text); 多阶段后面几段开始时是「进入第 k 段」
-    body = (task.get("room_text") or task["text"])[:TEXT_MAX]
-    return _broadcast(room, me, body, [e for e in assignees if e in _active(room)], {"card": card}, kind="card")
-
-
-def echo_status(room_id: str, task_id: str, title: str, state: str, period: int | None = None) -> dict[str, Any] | None:
-    """收件人点了「接下 / 交回 / 不接」: 同一次点击往群里发一条只有状态的消息。不在群里了就不发, 发不出去也不影响任务本身。"""
-    if state not in STATUS_WORDS:
-        return None
-    try:
-        me = forms_net.me()
-        room = joined_room(room_id)
-    except (ValueError, LookupError):
-        return None
-    what = f"第 {period} 期" if period else ""
-    body = f"{_label(room, me)} {STATUS_WORDS[state]}「{title}」{what}"
-    status = {"task_id": task_id, "title": title, "state": state, **({"period": period} if period else {})}
-    try:
-        return _broadcast(room, me, body, [], {"status": status}, kind="status")
-    except ValueError:
-        return None
-
-
-def _clean_card(raw: Any, sender: str) -> dict[str, Any] | None:
-    if not isinstance(raw, dict) or str(raw.get("owner") or "").lower() != sender:
-        return None   # 任务卡只认派任务的人自己发的
-    tid = str(raw.get("task_id") or "")
-    if not re.fullmatch(r"t_\d{8}_[0-9a-f]{8}", tid):
-        return None
-    people = [str(x).lower() for x in raw.get("assignees") or [] if isinstance(x, str) and "@" in x][:MAX_MEMBERS]
-    return {"task_id": tid, "title": str(raw.get("title") or "")[:60], "deadline": str(raw.get("deadline") or "")[:20] or None,
-            "schedule": str(raw.get("schedule") or "")[:80] or None, "assignees": people, "owner": sender}
-
-
-def _clean_status(raw: Any, rid: str, sender: str) -> dict[str, Any] | None:
-    if not isinstance(raw, dict) or raw.get("state") not in STATUS_WORDS:
-        return None
-    tid = str(raw.get("task_id") or "")
-    card = next((m.get("card") for m in reversed(messages(rid)) if m.get("kind") == "card" and (m.get("card") or {}).get("task_id") == tid), None)
-    if card and sender not in card.get("assignees", []):
-        return None   # 不是这张任务卡上的人: 不收 (防冒名报状态)
-    period = raw.get("period")
-    return {"task_id": tid, "title": str(raw.get("title") or "")[:60], "state": raw["state"],
-            **({"period": int(period)} if isinstance(period, int) and period > 0 else {})}
+MSG_KINDS = ("text", "card", "status", "auto")   # 算未读 / 列表预览的消息种类
 
 
 def mark_read(room_id: str) -> dict[str, Any]:
@@ -531,16 +462,22 @@ def _apply(msg: dict[str, Any], me: str) -> dict[str, Any] | None:
         rt = str(env.get("reply_to") or "")
         extra: dict[str, Any] = {"reply_to": rt} if _MSG_ID.fullmatch(rt) else {}
         mkind = "text"
+        from . import colleague_rooms_tasks as rt  # noqa: PLC0415  (第二 / 三步: 任务卡 / 状态 / 自动转发)
         if "card" in env:
-            card = _clean_card(env.get("card"), sender)
+            card = rt._clean_card(env.get("card"), sender)
             if not card:
                 return None
             mkind, extra = "card", {"card": card}
         elif "status" in env:
-            status = _clean_status(env.get("status"), rid, sender)
+            status = rt._clean_status(env.get("status"), rid, sender)
             if not status:
                 return None
             mkind, extra, ments = "status", {"status": status}, []
+        elif "auto" in env:
+            auto = rt._clean_auto(env.get("auto"), rid, sender)
+            if not auto:
+                return None
+            mkind, extra, ments = "auto", {"auto": auto}, []
         rec = {"msg_id": mid, "kind": mkind, "from": sender, "at": str(env.get("at") or _now()), "text": text,
                "mentions": ments, **extra, "received_at": _now()}
         _append(rid, rec)
@@ -653,7 +590,8 @@ def summary(room: dict[str, Any], msgs: list[dict[str, Any]] | None = None, me: 
             "members": len(_active(room)), "joined": sum(1 for v in room.get("members", {}).values() if v.get("state") == "joined"),
             "unread": len(unread) if room.get("my_state") == "joined" else 0,
             "mentioned": sum(1 for m in unread if me and me in (m.get("mentions") or [])) if room.get("my_state") == "joined" else 0,
-            "last": ({"from": last.get("from"), "name": _label(room, last.get("from") or ""), "text": last["text"][:60], "at": last.get("at")}
+            "last": ({"from": last.get("from"), "name": _label(room, last.get("from") or ""), "text": last["text"][:60], "at": last.get("at"),
+                      "kind": last.get("kind")}
                      if last else None),
             "activity": room.get("last_msg_at") or room.get("invited_at") or room.get("created_at") or ""}
 

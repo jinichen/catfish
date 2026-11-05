@@ -35,3 +35,24 @@ describe("RoomsPanel helpers", () => {
     expect(waitingNotice(many)).toContain("a、b、c 等 4 人");
   });
 });
+
+describe("RoomsPanel 显示 (11/5 UI 优化)", () => {
+  it("任务就在眼前时, 它的状态不再单独一行; 更早的任务 (卡不在) 状态照常显示", async () => {
+    const { visibleMessages } = await import("./RoomsPanel");
+    const card = { msg_id: "m_card", kind: "card", at: "x", text: "@张三 交周报",
+                   card: { task_id: "t_20261105_0000000a", title: "交周报", deadline: null, schedule: null, assignees: [], owner: "z" } };
+    const st = (tid: string) => ({ msg_id: `m_${tid}`, kind: "status", at: "x", text: "张三 交回了",
+                                   status: { task_id: tid, title: "交周报", state: "done" } });
+    const msgs = [card, st("t_20261105_0000000a"), st("t_20261105_0000000b"), { msg_id: "m_t", kind: "text", at: "x", text: "hi" }];
+    expect(visibleMessages(msgs as never).map((m) => m.msg_id)).toEqual(["m_card", "m_t_20261105_0000000b", "m_t"]);
+  });
+  it("列表预览: 状态 / 自动转发不再加名字; 截止写短", async () => {
+    const { lastPreview, shortWhen } = await import("./RoomsPanel");
+    expect(lastPreview({ name: "chenhongbo", text: "chenhongbo 交回了「周报」", kind: "status" })).toBe("chenhongbo 交回了「周报」");
+    expect(lastPreview({ name: "张三", text: "收到", kind: "text" })).toBe("张三: 收到");
+    const now = new Date(2026, 10, 5);
+    expect(shortWhen("2026-11-06", now)).toBe("11/6");
+    expect(shortWhen("2026-11-06T15:00", now)).toBe("11/6 15:00");
+    expect(shortWhen("2027-01-03", now)).toBe("2027/1/3");
+  });
+});

@@ -22,7 +22,7 @@ colleague_tasks_pipeline.py; 「请他重做」= 只给这一个人发 rev+1 的
 """
 from __future__ import annotations
 
-import json
+import logging
 import os
 import re
 import secrets
@@ -32,6 +32,8 @@ from typing import Any
 
 from . import colleague_tasks_schedule as sched
 from . import forms, forms_net, wiki_files
+
+logger = logging.getLogger("catfish.tool_bridge.colleague_tasks")
 
 ENVELOPE_VERSION = 1
 MAX_RECIPIENTS = 20
@@ -148,18 +150,6 @@ def _title_from(text: str) -> str:
     return first[:30] + ("…" if len(first) > 30 else "")
 
 
-def _room_for(raw: Any, recipients: list[str]) -> str | None:
-    """在群里派的任务 (GROUP-CHAT-PLAN §2): 群在本机、我已加入、收件人都是群里已加入的人。"""
-    if not raw:
-        return None
-    from . import colleague_rooms  # noqa: PLC0415
-    room = colleague_rooms.joined_room(str(raw))
-    outside = [e for e in recipients if e not in colleague_rooms.joined_members(room)]
-    if outside:
-        raise ValueError(f"这些人不在群里 (或还没点「加入」), 不能在群里派给他们: {', '.join(outside)}")
-    return room["room_id"]
-
-
 def create(args: dict[str, Any]) -> dict[str, Any]:
     """建任务 (还没发)。room_id: 在群里派的, 发出后任务卡发到群里, 收件人的状态也回群。"""
     text = str(args.get("text") or "").strip()
@@ -176,9 +166,11 @@ def create(args: dict[str, Any]) -> dict[str, Any]:
     context = str(args.get("context") or "").strip()
     if len(context) > RESULT_MAX:
         raise ValueError(f"转给同事的材料太长 ({len(context)} 字), 最多 {RESULT_MAX} 字")
-    room_id = _room_for(args.get("room_id"), recipients)
+    room_id = _room().room_for(args.get("room_id"), recipients)
     room_text = str(args.get("room_text") or "").strip()[:4000] or None if room_id else None
-    task = {"task_id": task_id, "context": context or None, "pipeline_id": args.get("pipeline_id"), "room_id": room_id, "room_text": room_text,
+    # 第三步特例: 群里派的定时 / 周期任务, 发起人勾了「每次结果自动发到群里」
+    room_auto_post = bool(args.get("room_auto_post")) and bool(room_id) and bool(args.get("schedule"))
+    task = {"task_id": task_id, "context": context or None, "pipeline_id": args.get("pipeline_id"), "room_id": room_id, "room_text": room_text, "room_auto_post": room_auto_post,
             "owner": owner, "created_at": _now(), "status": "draft", "rev": 1,
             "title": (str(args.get("title") or "").strip() or _title_from(text))[:60], "text": text,
             "deadline": None if schedule and schedule["kind"] == "cron" else normalize_deadline(args.get("deadline")),
@@ -230,9 +222,9 @@ def send(task_id: str) -> dict[str, Any]:
     _save_outgoing(task)
     room_failed = None
     if sent and task.get("room_id") and not task.get("room_card_at"):
-        from . import colleague_rooms  # noqa: PLC0415
+        from . import colleague_rooms_tasks  # noqa: PLC0415
         try:
-            colleague_rooms.post_card(task["room_id"], task, sched.describe(task["schedule"]) if task.get("schedule") else None)
+            colleague_rooms_tasks.post_card(task["room_id"], task, sched.describe(task["schedule"]) if task.get("schedule") else None)
             task["room_card_at"] = _now()
             _save_outgoing(task)
         except (ValueError, LookupError) as e:
@@ -242,7 +234,7 @@ def send(task_id: str) -> dict[str, Any]:
 
 def _invite_env(task: dict[str, Any], redo_note: str | None = None) -> dict[str, Any]:
     env = {"v": ENVELOPE_VERSION, "task_id": task["task_id"], "rev": task.get("rev", 1),
-           "task": {k: task.get(k) for k in ("title", "text", "deadline", "schedule", "context", "room_id")}}
+           "task": {k: task.get(k) for k in ("title", "text", "deadline", "schedule", "context", "room_id", "room_auto_post")}}
     if redo_note is not None:
         env["redo_note"] = redo_note
     return env
@@ -532,6 +524,7 @@ def _apply_reply(tid: str, sender: str, env: dict[str, Any]) -> str | None:
                            "late_minutes": int(env.get("late_minutes") or 0)}   # 交回了: 「等确认」自然清掉
         r.update(status="accepted" if old.get("status") != "quit" else "quit", periods=periods,
                  accepted_at=old.get("accepted_at") or at, done_at=at)
+        _room().auto_post(task, sender, n, periods[str(n)]["result"])
     elif status == "waiting" and task.get("schedule"):
         try:
             n = int(env.get("period"))
@@ -551,39 +544,6 @@ def _apply_reply(tid: str, sender: str, env: dict[str, Any]) -> str | None:
         r["rev"] = int(env.get("rev") or 1)
     forms._write(_reply_path(tid, sender), r)
     return status
-
-
-def _room_id_or_none(raw: Any) -> str | None:
-    s = str(raw or "")
-    return s if re.fullmatch(r"r_\d{8}_[0-9a-f]{12}", s) else None
-
-
-def _echo(task_id: str, state: str, period: Any = None) -> None:
-    """收件人在界面上点了「接下 / 交回 / 不接 / 退出」: 群里派的任务, 同一次点击往群里发一条状态 (只有状态, 没有结果)。"""
-    try:
-        rec = load_incoming(task_id)
-    except (ValueError, LookupError):
-        return
-    rid = rec["task"].get("room_id")
-    if rid:
-        from . import colleague_rooms  # noqa: PLC0415
-        colleague_rooms.echo_status(rid, task_id, rec["task"]["title"], state, int(period) if str(period or "").isdigit() else None)
-
-
-def _then(fn, task_id: str, state: str, period: Any = None):
-    """点完再回群。重复点 (已接下又点接下、交回后改了再交) 不再往群里发一遍, 免得刷屏。"""
-    def run():
-        try:
-            before = load_incoming(task_id)
-        except (ValueError, LookupError):
-            before = {}
-        again = (state == "accepted" and before.get("accepted_at") and not before.get("declined")) or \
-                (state == "done" and period in (None, "") and before.get("done"))
-        out = fn()
-        if not again:
-            _echo(task_id, state, period)
-        return out
-    return run
 
 
 def _apply(msg: dict[str, Any]) -> str | None:
@@ -610,7 +570,8 @@ def _apply(msg: dict[str, Any]) -> str | None:
             return None   # 重复 / 更旧的一版
         body = {"title": str(t.get("title") or _title_from(text))[:60], "text": text, "deadline": deadline,
                 "schedule": schedule, "context": str(t.get("context") or "")[:RESULT_MAX] or None,
-                "room_id": _room_id_or_none(t.get("room_id"))}
+                "room_id": _room().room_id_or_none(t.get("room_id")),
+                "room_auto_post": t.get("room_auto_post") is True}   # 收件人接之前就知道: 每次交回的结果会自动进群
         rec = {**old, "task_id": tid, "owner": sender, "received_at": old.get("received_at") or _now(),
                "status": "open", "rev": rev, "task": body}
         rec.pop("redo_note", None)
@@ -729,6 +690,12 @@ def _pipeline():
     return colleague_tasks_pipeline
 
 
+def _room():
+    """群里派的任务 (群聊第二 / 三步) 的那几样: 核对群、回群状态、自动转群。拆在 colleague_tasks_room.py。"""
+    from . import colleague_tasks_room  # noqa: PLC0415
+    return colleague_tasks_room
+
+
 def _periodic():
     from . import colleague_tasks_periodic  # noqa: PLC0415
     return colleague_tasks_periodic
@@ -747,17 +714,18 @@ def pim_handlers(params: dict[str, Any]) -> dict[str, Any]:
         "pim/ctask_send": lambda: send(tid),
         "pim/ctask_remind": lambda: remind(tid, str(params.get("text") or "")),
         "pim/ctask_cancel": lambda: cancel(tid),
-        "pim/ctask_accept": _then(lambda: accept(tid, bool(params.get("auto_return")), params.get("start", True) is not False),
+        "pim/ctask_accept": _room().then(lambda: accept(tid, bool(params.get("auto_return")), params.get("start", True) is not False),
                                   tid, "accepted"),
         "pim/ctask_update": lambda: update(tid, params),
-        "pim/ctask_period_submit": _then(lambda: _periodic().submit_period(tid, params.get("period"), params.get("result")),
+        "pim/ctask_period_submit": _room().then(lambda: _periodic().submit_period(tid, params.get("period"), params.get("result")),
                                          tid, "done", params.get("period")),
-        "pim/ctask_quit": _then(lambda: _periodic().quit(tid, str(params.get("reason") or "")), tid, "quit"),
+        "pim/ctask_quit": _room().then(lambda: _periodic().quit(tid, str(params.get("reason") or "")), tid, "quit"),
         "pim/ctask_redo": lambda: redo(tid, str(params.get("email") or ""), str(params.get("note") or "")),
         **_pipeline().pim_handlers(params),
         "pim/ctask_draft": lambda: save_draft(tid, params.get("result")),
-        "pim/ctask_submit": _then(lambda: submit(tid, params.get("result")), tid, "done"),
-        "pim/ctask_decline": _then(lambda: decline(tid, str(params.get("reason") or "")), tid, "declined"),
+        "pim/ctask_room_auto_post": lambda: _room().set_room_auto_post(tid, params.get("on")),
+        "pim/ctask_submit": _room().then(lambda: submit(tid, params.get("result")), tid, "done"),
+        "pim/ctask_decline": _room().then(lambda: decline(tid, str(params.get("reason") or "")), tid, "declined"),
     }
 
 

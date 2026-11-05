@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { centralSet, classifyEgress, egressHost, egressPurpose } from "./egressRule";
+import { centralSet, classifyEgress, displayPurpose, egressHost, egressPurpose } from "./egressRule";
 
 const central = centralSet(["http://10.0.0.5:8999", "https://portal.example.com"]);
 
@@ -24,6 +24,10 @@ describe("数据外发记录标准 (10/24)", () => {
   it("用途: catfish_source 优先, 其次按路径", () => {
     expect(egressPurpose("http://x:8999/v1/chat/completions?catfish_direct=1&catfish_source=companion-profile")).toBe("员工画像");
     expect(egressPurpose("http://x:8999/api/proactive/contextual")).toBe("主动提醒");
+    // 11/5: 同事协作的邮筒 (原来显示成「网页请求」) / 群聊自动转发
+    expect(egressPurpose("http://x:8999/api/room-link/mailbox")).toBe("同事协作 · 邮筒");
+    expect(displayPurpose("/api/room-link/mailbox", "x")).toBe("同事协作 · 邮筒");
+    expect(displayPurpose("群聊 · 定时任务结果自动转发", "x")).toBe("群聊 · 定时任务结果自动转发");
     expect(egressPurpose("http://x:8997/v1/hub/skills/dept")).toBe("发布技能");
     expect(egressHost("https://wttr.in/Fuzhou")).toBe("wttr.in");
   });

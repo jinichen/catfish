@@ -58,7 +58,8 @@ def ttl_seconds(deadline: str | None, *, minimum: int = 0, now: datetime | None 
     return max(minimum, 600, min(secs, MAX_TTL_SECONDS))
 
 
-def _client_call(method: str, path: str, *, params: dict | None = None, body: dict | None = None) -> tuple[int, Any]:
+def _client_call(method: str, path: str, *, params: dict | None = None, body: dict | None = None,
+                 source: str | None = None) -> tuple[int, Any]:
     import httpx  # noqa: PLC0415
 
     token = skill_publish._read_id_token()
@@ -67,7 +68,8 @@ def _client_call(method: str, path: str, *, params: dict | None = None, body: di
     try:
         with httpx.Client(timeout=20.0) as client:
             r = client.request(method, f"{skill_publish.GATEWAY_URL}{path}", params=params, json=body,
-                               headers={"Authorization": f"Bearer {token}"})
+                               headers={"Authorization": f"Bearer {token}",
+                                        **({"X-Catfish-Source": source} if source else {})})
     except httpx.RequestError as e:
         raise ValueError(f"连不上中央服务: {e}") from None
     try:
@@ -76,14 +78,15 @@ def _client_call(method: str, path: str, *, params: dict | None = None, body: di
         return r.status_code, {"detail": r.text[:300]}
 
 
-def post(to: str, kind: str, envelope: dict[str, Any], ttl: int) -> int:
-    """投一封。envelope 序列化成 payload; 超 64KB 直接拒 (中央也会拒, 这里先给句人话)。"""
+def post(to: str, kind: str, envelope: dict[str, Any], ttl: int, source: str | None = None) -> int:
+    """投一封。envelope 序列化成 payload; 超 64KB 直接拒 (中央也会拒, 这里先给句人话)。
+    source: 数据外发记录里的用途标签 (X-Catfish-Source), 如群聊自动转发 room-auto-post。"""
     if kind not in FORM_KINDS + TASK_KINDS + ROOM_KINDS:
         raise ValueError(f"不认识的种类 {kind}")
     payload = json.dumps(envelope, ensure_ascii=False)
     if len(payload.encode("utf-8")) > MAX_PAYLOAD_BYTES:
         raise ValueError("内容太长 (超过 64KB), 发不出去: 把长文本精简一下")
-    code, data = _client_call("POST", MAILBOX_PATH, body={"to": to, "kind": kind, "payload": payload, "ttl_seconds": ttl})
+    code, data = _client_call("POST", MAILBOX_PATH, body={"to": to, "kind": kind, "payload": payload, "ttl_seconds": ttl}, source=source)
     if code >= 400:
         detail = data.get("detail") if isinstance(data, dict) else data
         if code == 400 and kind in TASK_KINDS and "kind=" in str(detail):

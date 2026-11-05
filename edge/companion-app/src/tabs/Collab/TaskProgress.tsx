@@ -14,7 +14,7 @@ import TaskSchedulePicker from "./TaskSchedulePicker";
 import { refreshTasks } from "../../lib/colleagueTasksStore";
 import { summaryChatKey, summaryPrompt } from "../../lib/taskPrompts";
 import {
-  taskAdd, taskCancel, taskGet, taskRedo, taskRemind, taskSend, taskUpdate,
+  taskAdd, taskCancel, taskGet, taskRedo, taskRemind, taskRoomAutoPost, taskSend, taskUpdate,
   type TaskDetail,
 } from "../../lib/tauri_colleague_tasks";
 import { useUIStore } from "../../store/ui";
@@ -90,6 +90,16 @@ export default function TaskProgress({ taskId, onClose, initialError }: {
       </span>
       <div style={{ fontSize: 13, whiteSpace: "pre-wrap", padding: "8px 10px", borderRadius: 4,
                     background: "var(--catfish-bg-subtle, rgba(0,0,0,0.04))" }}>{task.text}</div>
+      {task.room_id && task.schedule && live && (
+        <label style={{ fontSize: 13, display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
+          <input type="checkbox" checked={!!task.room_auto_post} disabled={busy}
+                 onChange={(e) => {
+                   const on = e.target.checked;
+                   void run(async () => { await taskRoomAutoPost(taskId, on); return on ? "以后每次结果会自动发到群里" : "关了, 以后的结果不再自动发到群里"; });
+                 }} />
+          每次结果自动发到群里 <span style={muted}>(你的电脑收到结果时自动转进群, 不用每次点; 随时能关)</span>
+        </label>
+      )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {progress.rows.map((r) => (
