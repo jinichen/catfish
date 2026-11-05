@@ -655,7 +655,7 @@ jobs:
           APT="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
           for i in 1 2 3; do
             if sudo timeout 180 apt-get $APT update \
-               && sudo timeout 240 apt-get $APT install -y --no-install-recommends \
+               && sudo timeout 240 apt-get $APT install -y \
                     libwebkit2gtk-4.1-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev; then
               exit 0
             fi
