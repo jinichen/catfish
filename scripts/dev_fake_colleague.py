@@ -20,7 +20,7 @@
 
 派任务 (docs/COLLEAGUE-TASK-PLAN.md; [任务名] 不写 = 最近收到的那个):
   ... <同事邮箱> tasks                          # 收邮筒 + 列出他收到的 / 派出的任务
-  ... <同事邮箱> task-show [任务名]              # 看任务说明 (派出的看每个人的进度和结果)
+  ... <同事邮箱> task-show [任务名或编号]        # 看任务说明 (派出的: 同名的全列出, 每个人的进度和交回的结果)
   ... <同事邮箱> task-accept [任务名]            # 点「接下」
   ... <同事邮箱> task-done "做完了, 结果是…" [任务名]   # 点「交回」(可以再交一次覆盖)
   ... <同事邮箱> task-decline "这周排不开" [任务名]     # 点「不接」
@@ -163,10 +163,13 @@ def task_cmd(ct, cmd: str, rest: list[str]) -> None:
             if rec.get("done"):
                 print(f"  我交回的: {rec['done']['result']}")
         elif mine:
-            d = ct.get(mine[0]["task_id"])
-            print(f"「{d['task']['title']}」 [{d['task']['status']}]")
-            for p in d["progress"]["rows"]:
-                print(f"  {p.get('email')}: {p.get('state')}" + (f" — {p['result']}" if p.get("result") else ""))
+            # 同名的可能派了好几次 (每次 task-assign 都是一个新任务): 全列出来, 带编号
+            for t in mine:
+                d = ct.get(t["task_id"])
+                print(f"「{d['task']['title']}」 [{d['task']['status']}]  ({t['task_id']}, 派于 {d['task']['created_at'][5:16]})")
+                for p in d["progress"]["rows"]:
+                    res = ("\n      " + p["result"].replace("\n", "\n      ")) if p.get("result") else ""
+                    print(f"  {p.get('email')}: {p.get('state')}{res}")
         else:
             sys.exit("✗ 没有这个任务; 先跑 tasks 看看")
         return
