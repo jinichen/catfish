@@ -243,3 +243,46 @@ def test_立即任务调task_period当草稿存(w):
     ct.sync()
     assert per.record_period(tid, "草稿")["ok"]
     assert ct.load_incoming(tid)["draft"]["result"] == "草稿"
+
+
+def test_要确认的步骤没做_待确认_回来接着做(w):
+    tid = _send(w, WEEKLY, recipients=(ZHANG,))
+    w.be(ZHANG)
+    ct.sync()
+    jid = ct.accept(tid, auto_return=True)["job_id"]
+    assert "skipped" in w.jobs(ZHANG)[jid]["prompt"]
+    w.box.clear()
+    # 到点无人值守: 汇总做好了, 发邮件那步要人确认没做 → 不交回 (即使勾了直接交回)
+    out = forms_tool.dispatch("catfish_form", {"action": "task_period", "task_id": tid, "result": "汇总: 拜访 2 家",
+                                               "skipped": ["把汇总发给销售部邮件组"]})
+    assert out["state"] == "待确认" and out["skipped"] == ["把汇总发给销售部邮件组"]
+    assert [m["env"]["status"] for m in w.box] == ["waiting"]
+    ev = ct.sync()["events"]
+    assert [e["kind"] for e in ev] == ["confirm_needed"] and ev[0]["period"] == 1
+    assert ct.list_all()["incoming"][0]["state"] == "待确认" and ct.list_all()["incoming"][0]["to_confirm"] == 1
+
+    assert _owner_states(w, tid)[ZHANG] == "等对方确认"
+    zhang = next(p for p in ct.results(tid)["people"] if p["同事"] == ZHANG)
+    assert zhang["每期结果"][0]["还差几步等对方确认"] == 1
+
+    # 本人回来点「我在了, 接着做」: 小鲶带 period 补完, 不新开一期; 勾了直接交回 → 这回发出去
+    w.be(ZHANG)
+    out = forms_tool.dispatch("catfish_form", {"action": "task_period", "task_id": tid, "period": 1,
+                                               "result": "汇总: 拜访 2 家 (已发给销售部邮件组)"})
+    rec = ct.load_incoming(tid)
+    assert out["state"] == "已交回" and len(rec["periods"]) == 1 and rec["periods"][0]["skipped"] == []
+    assert _owner_states(w, tid)[ZHANG] == "进行中"
+    w.be(BOSS)
+    zhang = next(p for p in ct.results(tid)["people"] if p["同事"] == ZHANG)
+    assert zhang["每期结果"][0]["还差几步等对方确认"] == 0 and "已发给" in zhang["每期结果"][0]["结果"]
+
+
+def test_待确认的也可以不补_直接交回(w):
+    tid = _send(w, WEEKLY, recipients=(ZHANG,))
+    w.be(ZHANG)
+    ct.sync()
+    ct.accept(tid)
+    per.record_period(tid, "汇总好了", skipped=["发邮件"])
+    per.submit_period(tid, 1, "汇总好了 (邮件我自己发)")
+    assert ct.list_all()["incoming"][0]["state"] == "进行中"
+    assert _owner_states(w, tid)[ZHANG] == "进行中"

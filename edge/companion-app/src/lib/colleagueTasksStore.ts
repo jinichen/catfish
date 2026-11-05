@@ -37,6 +37,8 @@ const NOTE: Record<string, (from: string, title: string, period?: number | null)
   changed: (f, t) => ["任务改了", `${f} 改了「${t}」, 要你重新看一下接不接`],
   period: (f, t, n) => ["同事交回了一次结果", `${f} 交回了「${t}」第 ${n ?? "?"} 次`],
   quit: (f, t) => ["同事退出了任务", `${f} 退出了「${t}」, 在「协同」页看原因`],
+  confirm_needed: (_f, t, n) => ["有步骤等你确认", `「${t}」第 ${n ?? "?"} 次有要你确认的步骤没做, 在「协同」页点「我在了, 接着做」`],
+  waiting: () => null,   // 发起人那边: 进度表上显示「等对方确认」, 不另外打扰
   review: (_f, t, n) => ["小鲶做完了一次, 等你核对", `「${t}」第 ${n ?? "?"} 次做好了, 核对后点交回`],
   missed: (_f, t) => ["定时任务没做成", `「${t}」到点电脑没开, 可以在「协同」页让小鲶现在做一次`],
   job_lost: (_f, t) => ["任务的定时被删了", `「${t}」的定时没了, 在「协同」页重新安排或退出`],
@@ -95,7 +97,7 @@ export function useColleagueTasks(): TasksState {
 }
 
 /** 导航红点: 同事派给我、还要我动手的。 */
-const NEEDS_ME = new Set(["待处理", "在做", "待核对", "要重新同意", "没做成", "定时没了"]);
+const NEEDS_ME = new Set(["待处理", "在做", "待核对", "待确认", "要重新同意", "没做成", "定时没了"]);
 export function pendingTaskCount(s: TasksState = state): number {
   // 多阶段: 这一段都回了、等我放行的也算
   return s.incoming.filter((t) => NEEDS_ME.has(t.state)).length + (s.pipelines ?? []).filter((p) => p.waiting_release).length;

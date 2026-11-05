@@ -4,10 +4,12 @@
  * 接下 = 在我电脑上建定时任务, 到点小鲶做; 可以勾「每次做完直接交回」(默认每次我核对后交回)。
  * 每一期一个框: 待核对的改好点「交回」; 交回过的可以改了再交。
  * 错过了 / 定时没了 / 想提前做: 「现在让小鲶做一次」(有人在, 对外动作照常问)。不想做了: 「退出」并写原因。
+ * 11/5: 到点时有要我确认的步骤没做 → 那一次「待确认」, 列出没做的步骤; 「我在了, 接着做」让小鲶带着上次的结果补完
+ *   (这回我在, 确认照常弹); 也可以不补, 直接交回。
  */
 import { useState } from "react";
 
-import { doChatKey, doNowPrompt } from "../../lib/taskPrompts";
+import { continueChatKey, continuePrompt, doChatKey, doNowPrompt } from "../../lib/taskPrompts";
 import {
   taskAccept, taskDecline, taskPeriodSubmit, taskQuit,
   type IncomingState, type IncomingTask, type MyPeriod,
@@ -18,21 +20,36 @@ import { Btn, inputStyle } from "./roomLinkUi";
 
 const when = (iso?: string | null) => (iso ? iso.slice(0, 16).replace("T", " ") : "");
 
-function PeriodBox({ p, busy, onSubmit }: { p: MyPeriod; busy: boolean; onSubmit: (text: string) => void }) {
+function PeriodBox({ p, busy, onSubmit, onContinue }: {
+  p: MyPeriod;
+  busy: boolean;
+  onSubmit: (text: string) => void;
+  onContinue: () => void;
+}) {
   const [text, setText] = useState(p.result);
+  const waiting = p.state === "待确认";
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
         <span style={{ fontSize: 13, fontWeight: 500 }}>
           第 {p.period} 次 · {when(p.at)}{p.late_minutes ? ` · 晚了 ${Math.round(p.late_minutes / 60) || 1} 小时左右` : ""}
         </span>
-        <StateTag state={p.state === "待核对" ? "待核对" : "已交回"} />
+        <StateTag state={p.state} />
       </div>
+      {waiting && (
+        <div style={{ fontSize: 13, padding: "6px 8px", borderRadius: 4, border: "1px solid var(--status-warn, #d97706)" }}>
+          <div style={{ color: "var(--status-warn, #d97706)", marginBottom: 4 }}>到点时你不在, 这几步要你确认, 小鲶没做:</div>
+          <ol style={{ margin: 0, paddingLeft: 20 }}>{(p.skipped ?? []).map((s) => <li key={s}>{s}</li>)}</ol>
+          <div style={{ marginTop: 6 }}>
+            <Btn kind="primary" disabled={busy} onClick={onContinue}>🐟 我在了, 接着做</Btn>
+          </div>
+        </div>
+      )}
       <textarea value={text} onChange={(e) => setText(e.target.value)} rows={5} style={{ ...inputStyle, resize: "vertical" }}
                 aria-label={`第 ${p.period} 次的结果`} />
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
         <Btn kind={p.state === "待核对" ? "primary" : "ghost"} disabled={busy || !text.trim()} onClick={() => onSubmit(text)}>
-          {p.state === "待核对" ? "交回" : "改了再交"}
+          {p.state === "待核对" ? "交回" : waiting ? "不补了, 直接交回" : "改了再交"}
         </Btn>
       </div>
     </div>
@@ -115,7 +132,9 @@ export default function TaskWorkScheduled({ rec, state, scheduleText, nextRun, b
 
       {periods.length > 0 && <strong style={{ fontSize: 13 }}>每次的结果</strong>}
       {periods.map((p) => (
-        <PeriodBox key={p.period} p={p} busy={busy} onSubmit={(text) => run(async () => {
+        <PeriodBox key={`${p.period}-${p.state}-${p.result.length}`} p={p} busy={busy}
+                   onContinue={() => { startChat(continueChatKey(rec.task_id, p.period), continuePrompt(rec, p)); onClose(); }}
+                   onSubmit={(text) => run(async () => {
           await taskPeriodSubmit(rec.task_id, p.period, text);
           return `第 ${p.period} 次交回了`;
         })} />

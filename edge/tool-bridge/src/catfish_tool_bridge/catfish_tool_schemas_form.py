@@ -15,7 +15,7 @@ FORM_TOOLS: List[Dict[str, Any]] = [
             "收集表: 有 Excel 先 from_excel 拿字段, 否则按描述列字段, 再 create; 邮箱不知道用 directory 查。"
             "responses 看结果 (数字照返回说), export 导出。帮员工填别人的表: get → 从本机找值, 找不到留空 → draft (写 sources)。\n"
             "派任务: task_create (text=要做什么, 定时/周期给 schedule) → task_send; task_results 看结果。"
-            "做同事派来的任务: 做完 task_draft 存 result; 定时/周期任务的这一次用 task_period。\n"
+            "做同事派来的任务: 做完 task_draft 存 result; 定时/周期任务的这一次用 task_period (要人确认没做的步骤写 skipped)。\n"
             "send / remind / close / task_send / task_remind / task_cancel 会发消息给同事: 先不带 confirmed, 念 proposal, 同意才 confirmed=true。"
             "不能替员工提交、拒填、交回或拒绝, 也不要自己把结果发给对方, 让他去「协同」页点。"
         ),
@@ -31,6 +31,9 @@ FORM_TOOLS: List[Dict[str, Any]] = [
                              "周期: {kind:cron, expr:5 段 cron, until:YYYY-MM-DD 和/或 times:次数} (必须有结束)"},
                 "task_id": {"type": "string", "description": "任务编号 (t_YYYYMMDD_xxxxxxxx)"},
                 "result": {"type": "string", "description": "task_draft / task_period: 要交回给发起人的完整结果"},
+                "skipped": {"type": "array", "items": {"type": "string"},
+                            "description": "task_period: 要员工确认才能做、这次没做的步骤, 每步一句"},
+                "period": {"type": "integer", "description": "task_period: 接着做某一次时带上第几次 (更新那一次, 不新开)"},
                 "form_id": {"type": "string", "description": "表单编号 (f_YYYYMMDD_xxxxxxxx)"},
                 "path": {"type": "string", "description": "from_excel: Excel 模板路径"},
                 "template_path": {"type": "string", "description": "create: 来自 Excel 模板时带上"},

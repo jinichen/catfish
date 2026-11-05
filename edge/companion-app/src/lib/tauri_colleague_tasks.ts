@@ -4,10 +4,12 @@ import { invoke } from "@tauri-apps/api/core";
 export type IncomingState =
   | "待处理" | "在做" | "已交回" | "不接" | "已取消"
   // 11/4 第二步: 定时 / 周期
-  | "已安排" | "进行中" | "待核对" | "已结束" | "已退出" | "要重新同意" | "没做成" | "定时没了";
+  | "已安排" | "进行中" | "待核对" | "已结束" | "已退出" | "要重新同意" | "没做成" | "定时没了"
+  // 11/5: 到点时有要我确认的步骤没做
+  | "待确认";
 export type OwnerState =
   | "未发" | "等回应" | "在做" | "已完成" | "逾期完成" | "不接" | "超时未回" | "超时未交" | "已取消"
-  | "已安排" | "进行中" | "已结束" | "已退出" | "等重新同意";
+  | "已安排" | "进行中" | "已结束" | "已退出" | "等重新同意" | "等对方确认";
 
 /** 空 = 马上做。once: 定时做一次; cron: 周期, until / times 至少一个。 */
 export type Schedule =
@@ -27,6 +29,8 @@ export interface IncomingTaskSummary {
   schedule: string | null;
   /** 待我核对的期数 */
   to_review: number;
+  /** 有步骤等我在场确认的期数 */
+  to_confirm?: number;
 }
 
 export interface OutgoingTaskSummary {
@@ -102,16 +106,20 @@ export interface MyPeriod {
   result: string;
   at: string;
   late_minutes: number;
-  state: "待核对" | "已交回";
+  state: "待确认" | "待核对" | "已交回";
   sent_at?: string;
+  /** 到点没人确认、这次没做的步骤 */
+  skipped?: string[];
 }
 
 /** 发起人收到的一期 */
 export interface OwnerPeriod {
   period: number;
-  result: string;
-  at: string;
-  late_minutes: number;
+  result?: string;
+  at?: string;
+  late_minutes?: number;
+  /** 对方那边还差几步等他确认 (交回后清掉) */
+  waiting?: number;
 }
 
 export interface IncomingTask {
@@ -168,7 +176,7 @@ export type TaskDetail =
 
 export interface TaskEvent {
   kind: "invite" | "changed" | "remind" | "cancel" | "accepted" | "done" | "declined" | "period" | "quit"
-    | "review" | "missed" | "job_lost" | "stage_done";
+    | "review" | "missed" | "job_lost" | "stage_done" | "confirm_needed" | "waiting";
   task_id: string;
   from: string;
   title: string;

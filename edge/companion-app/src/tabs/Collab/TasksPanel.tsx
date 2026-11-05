@@ -17,7 +17,7 @@ import TaskProgress from "./TaskProgress";
 import TaskWork, { when } from "./TaskWork";
 
 const STATUS_LABEL = { draft: "没发出", open: "进行中", cancelled: "已取消" } as const;
-const ACTIVE = new Set(["待处理", "在做", "待核对", "要重新同意", "没做成", "定时没了"]);
+const ACTIVE = new Set(["待处理", "在做", "待核对", "待确认", "要重新同意", "没做成", "定时没了"]);
 
 const rowButton = { ...itemStyle, textAlign: "left" as const, cursor: "pointer", background: "transparent", color: "inherit", font: "inherit" };
 
@@ -59,7 +59,7 @@ export default function TasksPanel() {
             </div>
             <span style={muted}>
               {t.owner}{t.schedule ? ` · ⏰ ${t.schedule}` : t.deadline ? ` · 截止 ${when(t.deadline)}` : ""}
-              {t.to_review ? ` · ${t.to_review} 次待核对` : ""}
+              {t.to_review ? ` · ${t.to_review} 次待核对` : ""}{t.to_confirm ? ` · ${t.to_confirm} 次有步骤等你确认` : ""}
               {t.late && ACTIVE.has(t.state) ? " · 已过截止" : ""}{t.reminded_at && ACTIVE.has(t.state) ? " · 被催了" : ""}
             </span>
           </button>

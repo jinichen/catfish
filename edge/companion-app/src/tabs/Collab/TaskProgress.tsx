@@ -105,8 +105,11 @@ export default function TaskProgress({ taskId, onClose, initialError }: {
             {[...r.periods].reverse().map((p) => (
               <div key={p.period} style={{ fontSize: 13, whiteSpace: "pre-wrap", maxHeight: 220, overflow: "auto", padding: "6px 8px",
                                            borderLeft: "2px solid var(--status-ok, #16a34a)", background: "var(--catfish-bg-subtle, rgba(0,0,0,0.04))" }}>
-                <div style={muted}>第 {p.period} 次 · {when(p.at)}{p.late_minutes ? ` · 晚了 ${Math.round(p.late_minutes / 60) || 1} 小时左右` : ""}</div>
-                {p.result}
+                <div style={muted}>
+                  第 {p.period} 次{p.at ? ` · ${when(p.at)}` : ""}{p.late_minutes ? ` · 晚了 ${Math.round(p.late_minutes / 60) || 1} 小时左右` : ""}
+                  {p.waiting ? <span style={{ color: "var(--status-warn, #d97706)" }}> · 等对方确认 (还差 {p.waiting} 步)</span> : null}
+                </div>
+                {p.result ?? ""}
               </div>
             ))}
             {task.status === "open" && !task.schedule && ["已完成", "逾期完成", "不接"].includes(r.state) && redoFor !== r.email && (

@@ -43,6 +43,7 @@ const TONE: Record<string, string> = {
   不接: "var(--status-error, #dc2626)", 已取消: "var(--catfish-text-muted)", 等回应: "var(--catfish-text-muted)",
   已完成: "var(--status-ok, #16a34a)", 逾期完成: "var(--status-warn, #d97706)", 超时未回: "var(--status-warn, #d97706)",
   超时未交: "var(--status-warn, #d97706)", 进行中: "var(--catfish-cyan)",
+  待确认: "var(--status-warn, #d97706)", 等对方确认: "var(--status-warn, #d97706)",
 };
 
 export function StateTag({ state }: { state: string }) {

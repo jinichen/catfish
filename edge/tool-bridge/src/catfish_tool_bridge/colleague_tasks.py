@@ -351,7 +351,7 @@ def results(task_id: str) -> dict[str, Any]:
         row = {"同事": r["email"], "状态": r["state"], "交回时间": r["done_at"], "结果": r["result"], "不接原因": r["reason"]}
         if r["periods"]:
             row["每期结果"] = [{"第几期": x.get("period"), "交回时间": x.get("at"), "晚了分钟": x.get("late_minutes") or 0,
-                            "结果": x.get("result")} for x in r["periods"]]
+                            "结果": x.get("result"), "还差几步等对方确认": x.get("waiting") or 0} for x in r["periods"]]
         people.append(row)
     return {"ok": True, "title": task["title"], "text": task["text"], "deadline": task.get("deadline"),
             "schedule": sched.describe(task.get("schedule")), "status": task["status"], "counts": p["counts"],
@@ -457,14 +457,25 @@ def _apply_reply(tid: str, sender: str, env: dict[str, Any]) -> str | None:
             return None
         periods = dict(old.get("periods") or {})
         periods[str(n)] = {"period": n, "result": str(env.get("result") or "")[:RESULT_MAX], "at": at,
-                           "late_minutes": int(env.get("late_minutes") or 0)}
+                           "late_minutes": int(env.get("late_minutes") or 0)}   # 交回了: 「等确认」自然清掉
         r.update(status="accepted" if old.get("status") != "quit" else "quit", periods=periods,
                  accepted_at=old.get("accepted_at") or at, done_at=at)
+    elif status == "waiting" and task.get("schedule"):
+        try:
+            n = int(env.get("period"))
+        except (TypeError, ValueError):
+            return None
+        periods = dict(old.get("periods") or {})
+        prev = periods.get(str(n)) or {}
+        periods[str(n)] = {**prev, "period": n, "waiting": max(1, int(env.get("waiting_steps") or 1)), "waiting_at": at}
+        r.update(periods=periods, accepted_at=old.get("accepted_at") or at)
+        if not old.get("status"):   # 「接下」那封没到 / 晚到: 都在做了, 当已接下
+            r.update(status="accepted", rev=int(env.get("rev") or 1))
     elif status == "quit":
         r.update(status="quit", reason=str(env.get("reason") or "")[:300], quit_at=at)
     else:
         return None
-    if status != "period":
+    if status not in ("period", "waiting"):
         r["rev"] = int(env.get("rev") or 1)
     forms._write(_reply_path(tid, sender), r)
     return status
@@ -522,7 +533,7 @@ def _apply(msg: dict[str, Any]) -> str | None:
 
 def sync() -> dict[str, Any]:
     counts = {"invite": 0, "changed": 0, "remind": 0, "cancel": 0, "accepted": 0, "done": 0, "declined": 0,
-              "period": 0, "quit": 0}
+              "period": 0, "quit": 0, "waiting": 0}
     events = []
     for msg in forms_net.take(forms_net.TASK_KINDS):
         got = _apply(msg)
@@ -576,7 +587,8 @@ def list_all() -> dict[str, Any]:
                              "late": is_late(rec["task"].get("deadline")), "received_at": rec.get("received_at"),
                              "reminded_at": rec.get("reminded_at"),
                              "schedule": sched.describe(rec["task"].get("schedule")) if rec["task"].get("schedule") else None,
-                             "to_review": sum(1 for x in rec.get("periods") or [] if x.get("state") == "待核对")})
+                             "to_review": sum(1 for x in rec.get("periods") or [] if x.get("state") == "待核对"),
+                             "to_confirm": sum(1 for x in rec.get("periods") or [] if x.get("state") == "待确认")})
     outgoing = []
     for p in sorted((tasks_dir() / "outgoing").glob("*/task.json")):
         task = forms._read(p)
@@ -653,7 +665,7 @@ def tool_dispatch(action: str, args: dict[str, Any]) -> dict[str, Any]:
     if action == "task_draft":
         return save_draft(tid, args.get("result"))
     if action == "task_period":
-        return _periodic().record_period(tid, args.get("result"))
+        return _periodic().record_period(tid, args.get("result"), args.get("skipped"), args.get("period"))
     if action in ("task_send", "task_remind", "task_cancel"):
         task = load_outgoing(tid)
         if not args.get("confirmed"):

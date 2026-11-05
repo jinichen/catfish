@@ -77,6 +77,22 @@ describe("TaskWorkScheduled", () => {
     await waitFor(() => expect(api.taskQuit).toHaveBeenCalledWith(REC.task_id, "调岗了"));
   });
 
+  it("有步骤等我确认: 列出来, 我在了接着做 (带第几次和没做的步骤), 也能不补直接交回", async () => {
+    const rec = { ...REC, accepted_at: "x", job_id: "j1",
+                  periods: [{ period: 2, result: "汇总: 拜访 2 家", at: "2026-11-09T09:01", late_minutes: 0, state: "待确认",
+                              skipped: ["把汇总发给销售部邮件组"] }] };
+    await open(rec, "待确认");
+    expect(screen.getByText("把汇总发给销售部邮件组")).toBeTruthy();
+    fireEvent.click(screen.getByText("🐟 我在了, 接着做"));
+    expect(startChat.mock.calls[0][0]).toBe(`ctask-continue:${REC.task_id}:2`);
+    const prompt = startChat.mock.calls[0][1] as string;
+    expect(prompt).toContain("period=2");
+    expect(prompt).toContain("1. 把汇总发给销售部邮件组");
+    expect(prompt).toContain("<<<\n汇总: 拜访 2 家\n>>>");
+    fireEvent.click(screen.getByText("不补了, 直接交回"));
+    await waitFor(() => expect(api.taskPeriodSubmit).toHaveBeenCalledWith(REC.task_id, 2, "汇总: 拜访 2 家"));
+  });
+
   it("对方改了: 提示重新同意", async () => {
     await open({ ...REC, changed_at: "x" }, "要重新同意");
     expect(screen.getByText(/对方改了任务/)).toBeTruthy();
