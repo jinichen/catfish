@@ -20,7 +20,9 @@ from __future__ import annotations
 import json
 import re
 import secrets
+import os
 import shutil
+import threading
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -61,9 +63,25 @@ def _read(path: Path) -> dict[str, Any] | None:
 
 def _write(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    # 11/5: 临时文件名带进程 / 线程 / 随机后缀。原来固定叫 xxx.json.tmp, 两个线程同时写同一个文件
+    # (界面「标为已读」和后台取邮筒撞在一起) 时, 先 rename 的把 tmp 挪走, 后一个就报 No such file。
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.{secrets.token_hex(4)}.tmp")
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def serialized(handlers: dict[str, Any], lock: threading.RLock) -> dict[str, Any]:
+    """界面的读改写一个一个来: tool-bridge 每个请求一个线程, 界面轮询和按钮会同时进来,
+    不排队就会互相覆盖 (后写的把先写的改动冲掉)。"""
+    def wrap(fn):
+        def run():
+            with lock:
+                return fn()
+        return run
+    return {k: wrap(v) for k, v in handlers.items()}
 
 
 def _out_dir(form_id: str) -> Path:

@@ -236,3 +236,53 @@ def test_老中央不认_room_kind_给人话(monkeypatch):
     monkeypatch.setattr(forms_net, "_client_call", lambda *a, **k: (400, {"detail": "kinds 里有不认识的: ['room_msg']"}))
     with pytest.raises(ValueError, match="还不支持同事群聊"):
         forms_net.take(forms_net.ROOM_KINDS)
+
+
+def test_同时写同一个群_不报错也不丢改动(w):
+    """11/5 实测: 打开群时「标为已读」和后台取邮筒同时写 room.json, 固定的 .tmp 名被先 rename 的挪走 → No such file。"""
+    import threading
+
+    rid = _make_room(w, (ZHANG,))
+    w.sync(ZHANG)
+    cr.join(rid)
+    w.sync(BOSS)
+    h = cr.pim_handlers({"room_id": rid})
+    errors: list[Exception] = []
+
+    def hammer(fn):
+        try:
+            for _ in range(30):
+                fn()
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    ts = [threading.Thread(target=hammer, args=(h[k],)) for k in ("pim/croom_read", "pim/croom_sync", "pim/croom_read", "pim/croom_get")]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert errors == []
+    assert not list(cr.rooms_dir().glob(f"{rid}/*.tmp"))
+    assert cr.load(rid)["my_state"] == "joined"
+
+
+def test_forms_write_并发不撞临时文件(tmp_path):
+    import threading
+
+    p = tmp_path / "x.json"
+    errors: list[Exception] = []
+
+    def go(i):
+        try:
+            for j in range(50):
+                forms._write(p, {"i": i, "j": j})
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    ts = [threading.Thread(target=go, args=(i,)) for i in range(6)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert errors == []
+    assert list(tmp_path.iterdir()) == [p]

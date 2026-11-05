@@ -25,6 +25,7 @@ import json
 import re
 import secrets
 import shutil
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -590,10 +591,13 @@ def get(room_id: str) -> dict[str, Any]:
             "messages": msgs[-HISTORY_LIMIT:], "older": max(0, len(msgs) - HISTORY_LIMIT)}
 
 
+_LOCK = threading.RLock()
+
+
 def pim_handlers(params: dict[str, Any]) -> dict[str, Any]:
     """Companion 界面 (Rust commands/colleague_rooms.rs → pim/croom_*)。按钮本身就是员工的确认。"""
     rid = str(params.get("room_id") or "")
-    return {
+    return forms.serialized({
         "pim/croom_list": list_rooms,
         "pim/croom_get": lambda: get(rid),
         "pim/croom_sync": sync,
@@ -608,4 +612,4 @@ def pim_handlers(params: dict[str, Any]) -> dict[str, Any]:
         "pim/croom_disband": lambda: disband(rid),
         "pim/croom_leave": lambda: leave(rid),
         "pim/croom_delete": lambda: delete_local(rid),
-    }
+    }, _LOCK)
