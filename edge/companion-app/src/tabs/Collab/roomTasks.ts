@@ -14,6 +14,21 @@ const local = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.
 
 /** 认文字里的截止时间 → datetime-local 的「YYYY-MM-DDTHH:mm」; 认不出 = ""。只写日子不写钟点 = 当天 18:00。 */
 export function parseDeadline(text: string, now: Date = new Date()): string {
+  // 11/6 实测: 「跟监理确认一下周一外架验收的时间 (周五前)」—— 「一下周一」里的「下周一」先被认成截止。
+  // 截止的说法优先: 句尾括号里的 > 「…前」紧挨着的 > 整句里第一个时间。
+  const paren = text.match(/[(（]([^()（）]{1,24})[)）]\s*$/);
+  if (paren) {
+    const v = parseWhen(paren[1], now);
+    if (v) return v;
+  }
+  for (const m of text.matchAll(/(\S{0,10}?)(?:之前|以前|前)/g)) {
+    const v = parseWhen(m[1], now);
+    if (v) return v;
+  }
+  return parseWhen(text, now);
+}
+
+function parseWhen(text: string, now: Date): string {
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const plus = (n: number) => new Date(today.getFullYear(), today.getMonth(), today.getDate() + n);
   let day: Date | null = null;
