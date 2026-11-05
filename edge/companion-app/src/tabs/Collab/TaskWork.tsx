@@ -121,6 +121,7 @@ export default function TaskWork({ taskId, onClose }: { taskId: string; onClose:
 
       {!rec.task.schedule && !cancelled && !accepted && !rec.done && !declining && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {rec.declined && <span style={muted}>改主意了, 还能接下:</span>}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <Btn kind="primary" disabled={busy} onClick={() => run(async () => {
               const r = await taskAccept(taskId);
@@ -130,7 +131,7 @@ export default function TaskWork({ taskId, onClose }: { taskId: string; onClose:
             <Btn kind="ghost" disabled={busy} onClick={() => run(async () => { await taskAccept(taskId, false, false); return "已告诉对方你在做了"; })}>
               接下, 我自己做
             </Btn>
-            <Btn kind="ghost" disabled={busy} onClick={() => setDeclining(true)}>不接</Btn>
+            {!rec.declined && <Btn kind="ghost" disabled={busy} onClick={() => setDeclining(true)}>不接</Btn>}
           </div>
           <span style={muted}>
             小鲶用你电脑上的材料做。后台做的时候发邮件、发消息、删东西这类一律不做, 写进结果里等你处理; 在对话里做的照常先问你。
@@ -186,11 +187,19 @@ export default function TaskWork({ taskId, onClose }: { taskId: string; onClose:
           <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="说一句为什么不接 (会发给对方)" style={inputStyle} />
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <Btn kind="ghost" onClick={() => setDeclining(false)}>算了</Btn>
-            <Btn kind="primary" disabled={busy || !reason.trim()} onClick={() => run(async () => {
-              await taskDecline(taskId, reason);
-              setDeclining(false);
-              return "已告诉对方你不接";
-            })}>告诉对方</Btn>
+            <Btn kind="primary" disabled={busy || !reason.trim()} onClick={async () => {
+              // 11/5 鸿波: 不接了就关掉弹窗, 不再停在一堆「接下」按钮上
+              setBusy(true);
+              setError(null);
+              try {
+                await taskDecline(taskId, reason);
+                void refreshTasks();
+                onClose();
+              } catch (e) {
+                setError(e instanceof Error ? e.message : String(e));
+                setBusy(false);
+              }
+            }}>告诉对方</Btn>
           </div>
         </div>
       )}

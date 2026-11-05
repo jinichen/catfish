@@ -75,14 +75,22 @@ describe("TaskWork", () => {
     await waitFor(() => expect(api.taskSubmit).toHaveBeenCalledWith(REC.task_id, "拜访 3 家: 甲 / 乙 / 丙"));
   });
 
-  it("不接要写原因", async () => {
-    await open(REC, "待处理");
+  it("不接要写原因, 告诉对方后弹窗关掉", async () => {
+    const onClose = await open(REC, "待处理");
     fireEvent.click(screen.getByText("不接"));
     const btn = screen.getByText("告诉对方").closest("button")!;
     expect(btn.disabled).toBe(true);
     fireEvent.change(screen.getByPlaceholderText(/为什么不接/), { target: { value: "这周出差" } });
     fireEvent.click(btn);
     await waitFor(() => expect(api.taskDecline).toHaveBeenCalledWith(REC.task_id, "这周出差"));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("已经回了不接: 还能改主意接下, 不再有「不接」", async () => {
+    await open({ ...REC, declined: { reason: "这周出差", at: "x" } }, "不接");
+    expect(screen.getByText("改主意了, 还能接下:")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "不接" })).toBeNull();
+    expect(screen.getByText("🐟 接下 (小鲶马上开工)")).toBeTruthy();
   });
 
   it("对方取消了: 不再有接下 / 交回", async () => {
