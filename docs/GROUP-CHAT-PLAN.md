@@ -64,3 +64,15 @@ room_leave    {v, room_id}                                            自己退�
 1. 一个群最多 50 人、单条 ≤ 4000 字、离线最多补 7 天 —— 按建议。
 2. 后加入的人看不到加入前的记录 —— 按建议。
 3. 定时 / 周期任务的结果自动发到群里 —— **支持, 作为「自己点了才发」的特例** (见 §3)。
+
+## 开发机上一个人怎么测 (11/5)
+
+`scripts/dev_fake_colleague.py` 在本机扮演另一位同事: 用本机身份服务器的密钥现签 1 小时凭证, 只连 127.0.0.1 的中央,
+同事的数据放 `~/.catfish-dev-colleagues/<邮箱>/`, 不碰真实 `~/.catfish`。走的是跟真同事一样的邮筒。
+
+```bash
+edge/tool-bridge/venv/bin/python scripts/dev_fake_colleague.py chenhongco@xxx rooms     # 收邀请、列群
+edge/tool-bridge/venv/bin/python scripts/dev_fake_colleague.py chenhongco@xxx join      # 点加入
+edge/tool-bridge/venv/bin/python scripts/dev_fake_colleague.py chenhongco@xxx say "收到 @chenhongbo"
+edge/tool-bridge/venv/bin/python scripts/dev_fake_colleague.py chenhongco@xxx watch     # 一直收
+```

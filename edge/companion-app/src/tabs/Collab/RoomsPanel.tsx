@@ -39,6 +39,17 @@ export function mentionsIn(text: string, members: RoomMember[], me: string): str
     .map((m) => m.email);
 }
 
+/** 被邀请了、还没点「加入」的人 (不含自己): 群消息不发给他们。 */
+export function notJoinedYet(members: RoomMember[], me: string): RoomMember[] {
+  return members.filter((m) => m.state === "invited" && m.email !== me);
+}
+
+export function waitingNotice(waiting: RoomMember[]): string {
+  const names = waiting.map((m) => m.name || m.email.split("@")[0]);
+  const shown = names.length > 3 ? `${names.slice(0, 3).join("、")} 等 ${names.length} 人` : names.join("、");
+  return `${shown} 还没点「加入」, 现在发的消息他们收不到 (加入后也看不到之前的)。`;
+}
+
 export function timeLabel(at: string, now: Date = new Date()): string {
   const d = new Date(at);
   if (Number.isNaN(d.getTime())) return "";
@@ -179,6 +190,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
   const owner = room.owner === me;
   const joined = room.my_state === "joined";
   const people = members.filter((m) => m.state === "joined" || m.state === "invited");
+  const waiting = notJoinedYet(members, me);
 
   async function send() {
     const body = text.trim();
@@ -228,6 +240,11 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
         )}
         {joined && (
           <div style={{ display: "flex", flexDirection: "column", gap: 4, position: "relative" }}>
+            {waiting.length > 0 && (
+              <span style={{ ...muted, color: "var(--status-warn, #d97706)" }}>
+                {waitingNotice(waiting)}
+              </span>
+            )}
             {replyTo && (
               <div style={{ ...muted, display: "flex", justifyContent: "space-between", gap: 6 }}>
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

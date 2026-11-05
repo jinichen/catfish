@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../../lib/colleagueRoomsStore", () => ({ refreshRooms: vi.fn(), setActiveRoom: vi.fn(), useColleagueRooms: () => ({}) }));
 
-import { labelOf, mentionsIn, timeLabel } from "./RoomsPanel";
+import { labelOf, mentionsIn, notJoinedYet, timeLabel, waitingNotice } from "./RoomsPanel";
 import type { RoomMember } from "../../lib/tauri_colleague_rooms";
 
 const M = (email: string, name: string, state: RoomMember["state"] = "joined"): RoomMember =>
@@ -25,5 +25,13 @@ describe("RoomsPanel helpers", () => {
     expect(timeLabel(new Date(2026, 10, 5, 9, 5).toISOString(), now)).toBe("09:05");
     expect(timeLabel(new Date(2026, 10, 3, 9, 5).toISOString(), now)).toBe("11/3 09:05");
     expect(timeLabel("bad", now)).toBe("");
+  });
+  it("还没加入的人: 提示收不到", () => {
+    const ms = [M("zhou@example.com", "周总"), M("zhang@example.com", "张三", "invited"), M("li@example.com", "", "invited")];
+    expect(notJoinedYet(ms, "zhou@example.com").map((m) => m.email)).toEqual(["zhang@example.com", "li@example.com"]);
+    expect(notJoinedYet(ms, "zhang@example.com").map((m) => m.email)).toEqual(["li@example.com"]);
+    expect(waitingNotice(notJoinedYet(ms, "zhou@example.com"))).toContain("张三、li 还没点「加入」");
+    const many = ["a", "b", "c", "d"].map((x) => M(`${x}@example.com`, x, "invited"));
+    expect(waitingNotice(many)).toContain("a、b、c 等 4 人");
   });
 });
