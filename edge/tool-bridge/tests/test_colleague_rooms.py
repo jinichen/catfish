@@ -27,7 +27,8 @@ class World:
         return self
 
     def _post(self, to, kind, env, ttl):
-        assert ttl == cr.TTL_SECONDS
+        if kind.startswith("room_"):
+            assert ttl == cr.TTL_SECONDS
         self.box.append({"from": self.who, "to": to, "kind": kind, "env": json.loads(json.dumps(env, ensure_ascii=False))})
         return len(self.box)
 
@@ -286,3 +287,114 @@ def test_forms_write_并发不撞临时文件(tmp_path):
         t.join()
     assert errors == []
     assert list(tmp_path.iterdir()) == [p]
+
+
+# ── 第二步: 群里派任务 ─────────────────────────────────────────────
+
+def _room_all_joined(w, members=(ZHANG, LI)):
+    rid = _make_room(w, members)
+    for m in members:
+        w.sync(m)
+        cr.join(rid)
+    w.sync(BOSS)
+    for m in members:
+        w.sync(m)
+    w.be(BOSS)
+    return rid
+
+
+def _ct():
+    from catfish_tool_bridge import colleague_tasks as ct
+    return ct
+
+
+def test_群里派任务_任务卡进群_状态回群_结果只回发起人(w):
+    ct = _ct()
+    rid = _room_all_joined(w)
+    w.box.clear()
+    t = ct.create({"text": "周五前把拜访记录交上来", "recipients": [ZHANG], "deadline": "2026-11-07", "room_id": rid})["task"]
+    out = ct.send(t["task_id"])
+    assert out["sent"] == [ZHANG] and "room_notice" not in out
+    kinds = sorted((m["to"], m["kind"]) for m in w.box)
+    assert kinds == [(LI, "room_msg"), (ZHANG, "room_msg"), (ZHANG, "task_invite")]
+    card_msg = [m for m in cr.messages(rid) if m["kind"] == "card"][0]
+    assert card_msg["card"]["assignees"] == [ZHANG] and card_msg["mentions"] == [ZHANG]
+
+    ev = w.sync(LI)["events"]                       # 李四: 看到任务卡, 不是派给他的
+    assert [e["kind"] for e in ev] == ["msg"]
+    assert [m["card"]["title"] for m in cr.messages(rid) if m["kind"] == "card"] == [t["title"]]
+
+    w.be(ZHANG)
+    assert [e["kind"] for e in cr.sync()["events"]] == ["mention"]   # 张三: 任务卡算 @ 他
+    ct.sync()
+    h = ct.pim_handlers({"task_id": t["task_id"]})
+    w.box.clear()
+    h["pim/ctask_accept"]()
+    assert sorted((m["to"], m["kind"]) for m in w.box) == sorted([(BOSS, "room_msg"), (BOSS, "task_reply"), (LI, "room_msg")])
+    n = len(w.box)
+    ct.pim_handlers({"task_id": t["task_id"], "result": "拜访 5 家, 2 家有意向"})["pim/ctask_submit"]()
+    group = [m for m in w.box[n:] if m["kind"] == "room_msg"]
+    assert {m["env"]["status"]["state"] for m in group} == {"done"}
+    assert all("拜访 5 家" not in json.dumps(m["env"], ensure_ascii=False) for m in group)   # 结果正文不进群
+    assert any("拜访 5 家" in json.dumps(m["env"], ensure_ascii=False) for m in w.box[n:] if m["kind"] == "task_reply")
+
+    w.sync(LI)
+    st = [m["status"]["state"] for m in cr.messages(rid) if m["kind"] == "status"]
+    assert st == ["accepted", "done"]
+    assert [m["text"] for m in cr.messages(rid) if m["kind"] == "status"] == ["zhang 接下了「周五前把拜访记录交上来」",
+                                                                             "zhang 交回了「周五前把拜访记录交上来」"]
+
+
+def test_群里派任务_只能派给群里已加入的人(w):
+    ct = _ct()
+    rid = _make_room(w)                              # 张三、李四都还没加入
+    with pytest.raises(ValueError, match="不在群里"):
+        ct.create({"text": "x", "recipients": [ZHANG], "room_id": rid})
+    w.be(WANG)
+    with pytest.raises((ValueError, LookupError)):
+        ct.create({"text": "x", "recipients": [ZHANG], "room_id": rid})
+
+
+def test_冒名的任务卡和状态_不收(w):
+    rid = _room_all_joined(w)
+    good = {"task_id": "t_20261105_0123abcd", "title": "周报", "assignees": [ZHANG], "owner": BOSS}
+    w.box.append({"from": LI, "to": ZHANG, "kind": "room_msg",
+                  "env": {"v": 1, "room_id": rid, "msg_id": "m_" + "b" * 20, "at": "x", "text": "假卡", "card": good}})
+    w.box.append({"from": BOSS, "to": ZHANG, "kind": "room_msg",
+                  "env": {"v": 1, "room_id": rid, "msg_id": "m_" + "c" * 20, "at": "x", "text": "派了", "card": good}})
+    w.box.append({"from": LI, "to": ZHANG, "kind": "room_msg",
+                  "env": {"v": 1, "room_id": rid, "msg_id": "m_" + "d" * 20, "at": "x", "text": "李四交回了",
+                          "status": {"task_id": good["task_id"], "title": "周报", "state": "done"}}})
+    w.sync(ZHANG)
+    assert [m["kind"] for m in cr.messages(rid) if m["kind"] in ("card", "status")] == ["card"]   # 只有群主自己发的卡
+
+
+def test_群里派多阶段_每段开始时任务卡进群(w):
+    ct = _ct()
+    from catfish_tool_bridge import colleague_tasks_pipeline as cp
+    rid = _room_all_joined(w)
+    w.box.clear()
+    p = cp.create({"title": "月报", "room_id": rid, "stages": [
+        {"name": "收数", "text": "交本月数据", "recipients": [ZHANG]},
+        {"name": "汇总", "text": "汇总成月报", "recipients": [LI]}]})["pipeline"]
+    cards = [m["card"] for m in cr.messages(rid) if m["kind"] == "card"]
+    assert [c["title"] for c in cards] == ["月报 · 收数"] and cards[0]["assignees"] == [ZHANG]
+    assert ct.load_outgoing(p["stages"][0]["task_id"])["room_id"] == rid
+    with pytest.raises(ValueError, match="不在群里"):
+        cp.create({"title": "x", "room_id": rid, "stages": [
+            {"text": "a", "recipients": [ZHANG]}, {"text": "b", "recipients": [WANG]}]})
+
+
+def test_不在群里派的任务_不碰群(w):
+    ct = _ct()
+    rid = _room_all_joined(w)
+    w.box.clear()
+    t = ct.create({"text": "单独找张三", "recipients": [ZHANG]})["task"]
+    ct.send(t["task_id"])
+    assert [m["kind"] for m in w.box] == ["task_invite"]
+    w.be(ZHANG)
+    ct.sync()
+    w.box.clear()
+    ct.pim_handlers({"task_id": t["task_id"]})["pim/ctask_accept"]()
+    assert [m["kind"] for m in w.box] == ["task_reply"]
+    assert [m["kind"] for m in cr.messages(rid) if m["kind"] in ("card", "status")] == []

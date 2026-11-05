@@ -147,8 +147,20 @@ def _title_from(text: str) -> str:
     return first[:30] + ("…" if len(first) > 30 else "")
 
 
+def _room_for(raw: Any, recipients: list[str]) -> str | None:
+    """在群里派的任务 (GROUP-CHAT-PLAN §2): 群在本机、我已加入、收件人都是群里已加入的人。"""
+    if not raw:
+        return None
+    from . import colleague_rooms  # noqa: PLC0415
+    room = colleague_rooms.joined_room(str(raw))
+    outside = [e for e in recipients if e not in colleague_rooms.joined_members(room)]
+    if outside:
+        raise ValueError(f"这些人不在群里 (或还没点「加入」), 不能在群里派给他们: {', '.join(outside)}")
+    return room["room_id"]
+
+
 def create(args: dict[str, Any]) -> dict[str, Any]:
-    """建任务 (还没发)。"""
+    """建任务 (还没发)。room_id: 在群里派的, 发出后任务卡发到群里, 收件人的状态也回群。"""
     text = str(args.get("text") or "").strip()
     if not text:
         raise ValueError("写一下要同事做什么")
@@ -163,7 +175,9 @@ def create(args: dict[str, Any]) -> dict[str, Any]:
     context = str(args.get("context") or "").strip()
     if len(context) > RESULT_MAX:
         raise ValueError(f"转给同事的材料太长 ({len(context)} 字), 最多 {RESULT_MAX} 字")
-    task = {"task_id": task_id, "context": context or None, "pipeline_id": args.get("pipeline_id"), "owner": owner, "created_at": _now(), "status": "draft", "rev": 1,
+    room_id = _room_for(args.get("room_id"), recipients)
+    task = {"task_id": task_id, "context": context or None, "pipeline_id": args.get("pipeline_id"), "room_id": room_id,
+            "owner": owner, "created_at": _now(), "status": "draft", "rev": 1,
             "title": (str(args.get("title") or "").strip() or _title_from(text))[:60], "text": text,
             "deadline": None if schedule and schedule["kind"] == "cron" else normalize_deadline(args.get("deadline")),
             "schedule": schedule,
@@ -212,12 +226,21 @@ def send(task_id: str) -> dict[str, Any]:
     if sent:
         task["status"] = "open"
     _save_outgoing(task)
-    return {"ok": bool(sent), "sent": sent, "failed": failed}
+    room_failed = None
+    if sent and task.get("room_id") and not task.get("room_card_at"):
+        from . import colleague_rooms  # noqa: PLC0415
+        try:
+            colleague_rooms.post_card(task["room_id"], task, sched.describe(task["schedule"]) if task.get("schedule") else None)
+            task["room_card_at"] = _now()
+            _save_outgoing(task)
+        except (ValueError, LookupError) as e:
+            room_failed = f"任务发出去了, 但任务卡没发到群里: {e}"
+    return {"ok": bool(sent), "sent": sent, "failed": failed, **({"room_notice": room_failed} if room_failed else {})}
 
 
 def _invite_env(task: dict[str, Any], redo_note: str | None = None) -> dict[str, Any]:
     env = {"v": ENVELOPE_VERSION, "task_id": task["task_id"], "rev": task.get("rev", 1),
-           "task": {k: task.get(k) for k in ("title", "text", "deadline", "schedule", "context")}}
+           "task": {k: task.get(k) for k in ("title", "text", "deadline", "schedule", "context", "room_id")}}
     if redo_note is not None:
         env["redo_note"] = redo_note
     return env
@@ -481,6 +504,31 @@ def _apply_reply(tid: str, sender: str, env: dict[str, Any]) -> str | None:
     return status
 
 
+def _room_id_or_none(raw: Any) -> str | None:
+    s = str(raw or "")
+    return s if re.fullmatch(r"r_\d{8}_[0-9a-f]{12}", s) else None
+
+
+def _echo(task_id: str, state: str, period: Any = None) -> None:
+    """收件人在界面上点了「接下 / 交回 / 不接 / 退出」: 群里派的任务, 同一次点击往群里发一条状态 (只有状态, 没有结果)。"""
+    try:
+        rec = load_incoming(task_id)
+    except (ValueError, LookupError):
+        return
+    rid = rec["task"].get("room_id")
+    if rid:
+        from . import colleague_rooms  # noqa: PLC0415
+        colleague_rooms.echo_status(rid, task_id, rec["task"]["title"], state, int(period) if str(period or "").isdigit() else None)
+
+
+def _then(fn, task_id: str, state: str, period: Any = None):
+    def run():
+        out = fn()
+        _echo(task_id, state, period)
+        return out
+    return run
+
+
 def _apply(msg: dict[str, Any]) -> str | None:
     env, kind, sender = msg["env"], msg["kind"], msg["from"]
     try:
@@ -504,7 +552,8 @@ def _apply(msg: dict[str, Any]) -> str | None:
         if old and rev <= int(old.get("rev") or 1) and old.get("task"):
             return None   # 重复 / 更旧的一版
         body = {"title": str(t.get("title") or _title_from(text))[:60], "text": text, "deadline": deadline,
-                "schedule": schedule, "context": str(t.get("context") or "")[:RESULT_MAX] or None}
+                "schedule": schedule, "context": str(t.get("context") or "")[:RESULT_MAX] or None,
+                "room_id": _room_id_or_none(t.get("room_id"))}
         rec = {**old, "task_id": tid, "owner": sender, "received_at": old.get("received_at") or _now(),
                "status": "open", "rev": rev, "task": body}
         rec.pop("redo_note", None)
@@ -638,15 +687,16 @@ def pim_handlers(params: dict[str, Any]) -> dict[str, Any]:
         "pim/ctask_send": lambda: send(tid),
         "pim/ctask_remind": lambda: remind(tid, str(params.get("text") or "")),
         "pim/ctask_cancel": lambda: cancel(tid),
-        "pim/ctask_accept": lambda: accept(tid, bool(params.get("auto_return"))),
+        "pim/ctask_accept": _then(lambda: accept(tid, bool(params.get("auto_return"))), tid, "accepted"),
         "pim/ctask_update": lambda: update(tid, params),
-        "pim/ctask_period_submit": lambda: _periodic().submit_period(tid, params.get("period"), params.get("result")),
-        "pim/ctask_quit": lambda: _periodic().quit(tid, str(params.get("reason") or "")),
+        "pim/ctask_period_submit": _then(lambda: _periodic().submit_period(tid, params.get("period"), params.get("result")),
+                                         tid, "done", params.get("period")),
+        "pim/ctask_quit": _then(lambda: _periodic().quit(tid, str(params.get("reason") or "")), tid, "quit"),
         "pim/ctask_redo": lambda: redo(tid, str(params.get("email") or ""), str(params.get("note") or "")),
         **_pipeline().pim_handlers(params),
         "pim/ctask_draft": lambda: save_draft(tid, params.get("result")),
-        "pim/ctask_submit": lambda: submit(tid, params.get("result")),
-        "pim/ctask_decline": lambda: decline(tid, str(params.get("reason") or "")),
+        "pim/ctask_submit": _then(lambda: submit(tid, params.get("result")), tid, "done"),
+        "pim/ctask_decline": _then(lambda: decline(tid, str(params.get("reason") or "")), tid, "declined"),
     }
 
 

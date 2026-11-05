@@ -24,7 +24,8 @@
   ... <同事邮箱> task-accept [任务名]            # 点「接下」
   ... <同事邮箱> task-done "做完了, 结果是…" [任务名]   # 点「交回」(可以再交一次覆盖)
   ... <同事邮箱> task-decline "这周排不开" [任务名]     # 点「不接」
-  ... <同事邮箱> task-assign "要做什么" 邮箱1 [邮箱2 ...] [--deadline 2026-11-07]   # 他派任务给你
+  ... <同事邮箱> task-assign "要做什么" 邮箱1 [邮箱2 ...] [--deadline 2026-11-07] [--room 群名]   # 他派任务给你 (--room = 在群里派)
+接下 / 交回 / 不接走的是界面按钮同一条路: 群里派的任务, 群里会出现状态。
 定时 / 周期任务要在他电脑上建 hermes 定时任务, 这个工具不扮演 (会提示), 只测一次性任务和多阶段里的单段。
 """
 from __future__ import annotations
@@ -98,8 +99,12 @@ def show_events(ev: list[dict]) -> None:
 def print_msgs(cr, room_id: str, n: int = 20) -> None:
     room = cr.load(room_id)
     for m in cr.messages(room_id)[-n:]:
-        if m.get("kind") == "system":
+        if m.get("kind") in ("system", "status"):
             print(f"    · {m['text']}")
+        elif m.get("kind") == "card":
+            c = m["card"]
+            print(f"    {m['at'][11:16]} {cr._label(room, m.get('from', ''))} 📋 任务卡「{c['title']}」→ "
+                  + "、".join(cr._label(room, e) for e in c["assignees"]) + (f" 截止 {c['deadline']}" if c.get("deadline") else ""))
         else:
             who = cr._label(room, m.get("from", ""))
             print(f"    {m['at'][11:16]} {who}: {m['text']}")
@@ -129,16 +134,23 @@ def task_cmd(ct, cmd: str, rest: list[str]) -> None:
             print(f"  {t['title']}  [{t['status']}]  {t['progress']}  ({t['task_id']})")
         return
     if cmd == "task-assign":
-        deadline = None
-        if "--deadline" in rest:
-            i = rest.index("--deadline")
-            deadline = rest[i + 1] if i + 1 < len(rest) else None
-            rest = rest[:i] + rest[i + 2:]
+        opts = {}
+        for flag in ("--deadline", "--room"):
+            if flag in rest:
+                i = rest.index(flag)
+                opts[flag] = rest[i + 1] if i + 1 < len(rest) else None
+                rest = rest[:i] + rest[i + 2:]
+        deadline = opts.get("--deadline")
+        room_id = None
+        if opts.get("--room"):
+            from catfish_tool_bridge import colleague_rooms as cr
+            room_id = pick(cr, opts["--room"], ("joined",))["room_id"]
         if len(rest) < 2:
             sys.exit('✗ task-assign "要做什么" 邮箱1 [邮箱2 ...] [--deadline 2026-11-07]')
-        t = ct.create({"text": rest[0], "recipients": rest[1:], "deadline": deadline})["task"]
+        t = ct.create({"text": rest[0], "recipients": rest[1:], "deadline": deadline, "room_id": room_id})["task"]
         out = ct.send(t["task_id"])
-        print(f"✓ 派出「{t['title']}」给 {len(out['sent'])} 人" + (f"; 没送到: {out['failed']}" if out["failed"] else ""))
+        print(f"✓ 派出「{t['title']}」给 {len(out['sent'])} 人" + (" (任务卡已进群)" if room_id and not out.get("room_notice") else "")
+              + (f"; 没送到: {out['failed']}" if out["failed"] else "") + (f"; {out['room_notice']}" if out.get("room_notice") else ""))
         return
     if cmd == "task-show":
         name = rest[0] if rest else None
@@ -161,16 +173,17 @@ def task_cmd(ct, cmd: str, rest: list[str]) -> None:
     t = pick_task(ct, rest[1] if len(rest) > 1 else (rest[0] if cmd == "task-accept" and rest else None))
     if t.get("schedule"):
         sys.exit(f"✗ 「{t['title']}」是定时 / 周期任务 ({t['schedule']}): 要在他电脑上建 hermes 定时任务, 这个工具不扮演")
+    # 走界面按钮同一条路 (pim_handlers): 群里派的任务会同时往群里发状态
     if cmd == "task-accept":
-        ct.accept(t["task_id"])
+        ct.pim_handlers({"task_id": t["task_id"]})["pim/ctask_accept"]()
         print(f"✓ 接下了「{t['title']}」")
     elif cmd == "task-done":
         if not rest:
             sys.exit('✗ task-done "结果" [任务名]')
-        out = ct.submit(t["task_id"], rest[0])
+        out = ct.pim_handlers({"task_id": t["task_id"], "result": rest[0]})["pim/ctask_submit"]()
         print(f"✓ 交回了「{t['title']}」" + (" (晚了)" if out.get("late") else ""))
     elif cmd == "task-decline":
-        ct.decline(t["task_id"], rest[0] if rest else "")
+        ct.pim_handlers({"task_id": t["task_id"], "reason": rest[0] if rest else ""})["pim/ctask_decline"]()
         print(f"✓ 不接「{t['title']}」")
     else:
         sys.exit(__doc__)

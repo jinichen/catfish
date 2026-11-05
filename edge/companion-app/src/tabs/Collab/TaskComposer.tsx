@@ -4,12 +4,14 @@
  * 写要做什么 + 截止 + 发给谁 (最多 20 人) → 每人各自决定接不接, 接下后在**他自己的电脑上**由他的小鲶 (或他本人) 做,
  * 核对后交回; 结果只回到你这台电脑。也可以直接跟小鲶说「让张三、李四各整理一下本周拜访, 明天中午前」。
  * 11/4 第二步: 「什么时候做」可以选定时做一次 / 周期 (TaskSchedulePicker), 到点在同事电脑上由他的小鲶做。
+ * 11/5 群聊第二步: 传 room = 在群里派 —— 只能从群里已加入的人里勾, 发出后任务卡进群; draft = 「@小鲶 …」起草好的内容。
  */
 import { useCallback, useState } from "react";
 
 import { refreshTasks } from "../../lib/colleagueTasksStore";
 import { taskCreate, taskSend } from "../../lib/tauri_colleague_tasks";
 import { Overlay, muted } from "./formsUi";
+import MemberPicker, { type RoomCtx } from "./MemberPicker";
 import RecipientPicker, { allRecipients } from "./RecipientPicker";
 import TaskSchedulePicker, { type ScheduleValue } from "./TaskSchedulePicker";
 import { Btn, ErrorLine, inputStyle } from "./roomLinkUi";
@@ -18,14 +20,18 @@ export const TEXT_MAX = 2000;
 export const MAX_PEOPLE = 20;
 
 /** onCreated 的 notice: 有人没发出去的原因 —— 弹层马上要关, 交给进度页接着显示。 */
-export default function TaskComposer({ onClose, onCreated }: {
+export interface TaskDraft { text?: string; recipients?: string[]; deadline?: string }
+
+export default function TaskComposer({ onClose, onCreated, room, draft }: {
   onClose: () => void;
   onCreated: (taskId: string, notice?: string) => void;
+  room?: RoomCtx;
+  draft?: TaskDraft;
 }) {
   const [title, setTitle] = useState("");
-  const [text, setText] = useState("");
-  const [deadline, setDeadline] = useState("");
-  const [recipients, setRecipients] = useState<string[]>([]);
+  const [text, setText] = useState(draft?.text ?? "");
+  const [deadline, setDeadline] = useState(draft?.deadline ?? "");
+  const [recipients, setRecipients] = useState<string[]>(draft?.recipients ?? []);
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +40,7 @@ export default function TaskComposer({ onClose, onCreated }: {
   const onWhen = useCallback((v: ScheduleValue) => setWhen(v), []);
   const periodic = when.schedule?.kind === "cron";
 
-  const all = allRecipients(recipients, typed);
+  const all = room ? recipients : allRecipients(recipients, typed);
   const canSend = !busy && text.trim().length > 0 && text.length <= TEXT_MAX && all.length > 0 && all.length <= MAX_PEOPLE
     && !when.problem;
 
@@ -43,13 +49,14 @@ export default function TaskComposer({ onClose, onCreated }: {
     setError(null);
     try {
       const { task } = await taskCreate({ title, text, deadline: periodic ? null : deadline || null,
-                                          schedule: when.schedule, recipients: all });
+                                          schedule: when.schedule, recipients: all, ...(room ? { room_id: room.roomId } : {}) });
       let notice: string | undefined;
       try {
         const r = await taskSend(task.task_id);
         if (r.failed.length) {
           notice = `${r.failed.length} 人没发出去 (可以在这里再发): ${r.failed.map((f) => `${f.to} — ${f.error}`).join("; ")}`;
         }
+        if (r.room_notice) notice = notice ? `${notice}; ${r.room_notice}` : r.room_notice;
       } catch (e) {
         notice = `任务存好了, 但没发出去: ${e instanceof Error ? e.message : String(e)}`;
       }
@@ -63,7 +70,12 @@ export default function TaskComposer({ onClose, onCreated }: {
   }
 
   return (
-    <Overlay title="请同事帮忙" onClose={onClose} width={680}>
+    <Overlay title={room ? `在「${room.name}」里派任务` : "请同事帮忙"} onClose={onClose} width={680}>
+      {room && (
+        <span style={muted}>
+          发出后任务卡会出现在群里, 大家都看得到要做什么、给了谁; 同事点「接下 / 交回 / 不接」时群里会显示状态, 交回的结果只回到你这里。
+        </span>
+      )}
       <span style={muted}>
         每位同事各自决定接不接; 接下后在他自己的电脑上由他的小鲶 (或他本人) 做, 用到的工具、要发出去的东西都由他本人放行,
         核对后交回。结果只回到你这台电脑, 中央只转交、取走即清空。
@@ -83,8 +95,10 @@ export default function TaskComposer({ onClose, onCreated }: {
       <TaskSchedulePicker onChange={onWhen} />
       {when.problem && <span style={{ ...muted, color: "var(--status-warn, #d97706)" }}>{when.problem}</span>}
 
-      <strong style={{ fontSize: 13 }}>请谁帮忙 (最多 {MAX_PEOPLE} 人)</strong>
-      <RecipientPicker picked={recipients} onPicked={setRecipients} typed={typed} onTyped={setTyped} onError={onPickError} />
+      <strong style={{ fontSize: 13 }}>请谁帮忙 (最多 {MAX_PEOPLE} 人{room ? ", 从群里已加入的人里选" : ""})</strong>
+      {room ? <MemberPicker room={room} picked={recipients} onPicked={setRecipients} /> : (
+        <RecipientPicker picked={recipients} onPicked={setRecipients} typed={typed} onTyped={setTyped} onError={onPickError} />
+      )}
       {all.length > MAX_PEOPLE && <ErrorLine>一次最多 {MAX_PEOPLE} 人, 现在 {all.length} 人</ErrorLine>}
 
       {error && <ErrorLine>{error}</ErrorLine>}

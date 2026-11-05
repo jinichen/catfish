@@ -195,10 +195,12 @@ const call = <T>(action: string, params: Record<string, unknown> = {}) =>
 export const taskList = () => call<TaskList>("list");
 export const taskGet = (taskId: string) => call<TaskDetail>("get", { task_id: taskId });
 export const taskSync = () => call<TaskSyncResult>("sync");
-export const taskCreate = (p: { title?: string; text: string; deadline?: string | null; schedule?: Schedule | null; recipients: string[] }) =>
+/** room_id: 在群里派的 (GROUP-CHAT-PLAN 第二步), 发出后任务卡进群, 收件人的状态也回群 */
+export const taskCreate = (p: { title?: string; text: string; deadline?: string | null; schedule?: Schedule | null; recipients: string[]; room_id?: string }) =>
   call<{ task: OutgoingTask }>("create", p);
 export const taskAdd = (taskId: string, recipients: string[]) => call<{ task: OutgoingTask }>("add", { task_id: taskId, recipients });
-export const taskSend = (taskId: string) => call<Sent & { sent: string[] }>("send", { task_id: taskId });
+/** room_notice: 群里派的任务发出去了, 但任务卡没进群的原因 */
+export const taskSend = (taskId: string) => call<Sent & { sent: string[]; room_notice?: string }>("send", { task_id: taskId });
 export const taskRemind = (taskId: string, text = "") => call<Sent & { reminded: string[] }>("remind", { task_id: taskId, text });
 export const taskCancel = (taskId: string) => call<Sent>("cancel", { task_id: taskId });
 export const taskAccept = (taskId: string, autoReturn = false) =>
@@ -208,7 +210,7 @@ export const taskUpdate = (taskId: string, p: { text?: string; deadline?: string
 export const taskPeriodSubmit = (taskId: string, period: number, result: string) =>
   call<{ period: number }>("period_submit", { task_id: taskId, period, result });
 export const taskRedo = (taskId: string, email: string, note: string) => call<{ sent: string[] }>("redo", { task_id: taskId, email, note });
-export const pipelineCreate = (p: { title: string; stages: StageDraft[] }) =>
+export const pipelineCreate = (p: { title: string; stages: StageDraft[]; room_id?: string }) =>
   call<{ pipeline: { pipeline_id: string }; sent: string[]; failed: { to: string; error: string }[] }>("pipeline_create", p);
 export const pipelineGet = (pipelineId: string) => call<PipelineDetail>("pipeline_get", { pipeline_id: pipelineId });
 export const pipelineRelease = (pipelineId: string, text: string) =>

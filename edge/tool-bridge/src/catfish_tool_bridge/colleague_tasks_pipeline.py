@@ -77,7 +77,8 @@ def _norm_stages(raw: Any, owner: str) -> list[dict[str, Any]]:
 def _start(p: dict[str, Any], k: int, handoff: str | None) -> dict[str, Any]:
     st = p["stages"][k]
     task = ct.create({"title": f"{p['title']} · {st['name']}", "text": st["text"], "deadline": st["deadline"],
-                      "recipients": st["recipients"], "context": handoff, "pipeline_id": p["pipeline_id"]})["task"]
+                      "recipients": st["recipients"], "context": handoff, "pipeline_id": p["pipeline_id"],
+                      "room_id": p.get("room_id")})["task"]
     st.update(task_id=task["task_id"], input=handoff, started_at=ct._now())
     p["current"] = k
     _save(p)   # 先记下段落 → 任务, 发送失败也能在那一段里重发
@@ -90,8 +91,12 @@ def create(args: dict[str, Any]) -> dict[str, Any]:
     if not title:
         raise ValueError("给流程起个名字")
     pid = f"p_{datetime.now():%Y%m%d}_{secrets.token_hex(4)}"
+    stages = _norm_stages(args.get("stages"), owner)
+    room_id = None
+    if args.get("room_id"):   # 在群里派的多阶段: 每一段开始时任务卡发到群里; 每段的人都要是群里已加入的
+        room_id = ct._room_for(args["room_id"], sorted({e for st in stages for e in st["recipients"]}))
     p = {"pipeline_id": pid, "title": title, "owner": owner, "created_at": ct._now(), "status": "open",
-         "stages": _norm_stages(args.get("stages"), owner), "current": 0, "notified": []}
+         "stages": stages, "current": 0, "notified": [], "room_id": room_id}
     sent = _start(p, 0, None)
     return {"ok": True, "pipeline": load(pid), "sent": sent.get("sent", []), "failed": sent.get("failed", [])}
 

@@ -29,9 +29,26 @@ export interface RoomMember {
   me: boolean;
 }
 
+/** 群里派的任务卡 (GROUP-CHAT-PLAN 第二步) */
+export interface RoomCard {
+  task_id: string;
+  title: string;
+  deadline: string | null;
+  /** 定时 / 周期的说明, 如「每周五 17:00」 */
+  schedule: string | null;
+  assignees: string[];
+  owner: string;
+}
+
+export type RoomTaskState = "accepted" | "done" | "declined" | "quit";
+
+export interface RoomStatus { task_id: string; title: string; state: RoomTaskState; period?: number }
+
 export interface RoomMessage {
   msg_id: string;
-  kind: "text" | "system";
+  kind: "text" | "system" | "card" | "status";
+  card?: RoomCard;
+  status?: RoomStatus;
   from?: string;
   at: string;
   text: string;
