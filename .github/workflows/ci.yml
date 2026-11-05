@@ -647,10 +647,22 @@ jobs:
           rustup target add x86_64-pc-windows-msvc
           bash edge/companion-app/scripts/cargo_check_windows.sh
 
+      # 11/5: 这一步连着两次 (5595a92 / 73c2fa5) 在 apt 下载上卡 17 分钟, 把整个 job 拖过 20 分钟上限被判「取消」,
+      # 后面的编译 / 测试一步没跑。改成每次限时 + 最多三次, 卡住就换一次重来, 不拖死整个 job。
       - name: Install Linux Tauri deps
+        timeout-minutes: 12
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+          APT="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          for i in 1 2 3; do
+            if sudo timeout 180 apt-get $APT update \
+               && sudo timeout 240 apt-get $APT install -y --no-install-recommends \
+                    libwebkit2gtk-4.1-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev; then
+              exit 0
+            fi
+            echo "::warning::apt 第 $i 次没装完 (超时或下载失败), 10 秒后重试"
+            sleep 10
+          done
+          exit 1
 
       # 8/13: 原来这一步是
       #     cargo test --lib --no-fail-fast || echo "::warning::..."
