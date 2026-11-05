@@ -68,13 +68,13 @@ export default function TasksPanel() {
                                   borderRadius: 12, background: on ? "var(--catfish-cyan)" : "transparent", color: on ? "white" : "inherit" });
 
   return (
-    <div style={cardStyle}>
+    <div style={{ ...cardStyle, minHeight: 0, overflow: "hidden" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-        <div>
+        <div style={{ minWidth: 0 }}>
           <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>🤝 请同事帮忙</h3>
-          <div style={{ ...muted, marginTop: 4 }}>
-            一次发给多位同事, 各自决定接不接; 在他自己的电脑上由他的小鲶或本人做完, 核对后交回。工具和要发出去的东西都由对方本人放行,
-            结果只回到你这台电脑。中央只转交, 看不到内容。
+          <div style={{ ...muted, marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+               title="一次发给多位同事, 各自决定接不接; 在他自己的电脑上由他的小鲶或本人做完, 核对后交回。工具和要发出去的东西都由对方本人放行, 结果只回到你这台电脑。中央只转交, 看不到内容。">
+            各自决定接不接, 在自己电脑上做完交回; 结果只回到你这里, 中央看不到内容。
           </div>
         </div>
         <div style={{ display: "flex", gap: 6, whiteSpace: "nowrap", flexShrink: 0 }}>
@@ -83,13 +83,14 @@ export default function TasksPanel() {
         </div>
       </div>
       {syncError && <span style={muted}>暂时收不到同事的任务: {syncError}</span>}
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜任务名 / 同事" style={{ ...inputStyle, flex: 1, padding: "4px 8px" }} />
         <button type="button" style={seg(!all)} onClick={() => setAll(false)}>要处理的</button>
         <button type="button" style={seg(all)} onClick={() => setAll(true)}>全部</button>
       </div>
       {!all && hidden > 0 && <span style={muted}>另有 {hidden} 条已结束 (交回 / 不接 / 取消), 点「全部」看。</span>}
 
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "var(--space-3)", paddingRight: 2 }}>
       <section style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <strong style={{ fontSize: 13 }}>同事请我做的</strong>
         {loaded && inbox.length === 0 && <span style={muted}>{all || q ? "没有找到。" : "没有要你处理的。"}</span>}
@@ -118,6 +119,8 @@ export default function TasksPanel() {
                      ...Object.entries(t.progress).map(([k, v]) => `${k} ${v}`)].filter(Boolean).join(" · ")} />
         ))}
       </section>
+
+      </div>
 
       {composing && <TaskComposer onClose={() => setComposing(false)}
                                   onCreated={(id, n) => { setComposing(false); setNotice(n); setWatching(id); }} />}

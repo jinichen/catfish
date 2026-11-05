@@ -240,8 +240,8 @@ function AppShell({ activeTab }: { activeTab: string }) {
   //   display:contents 保留早安原有布局，不额外引入一层可见容器。
   const isBriefing = activeTab === "briefing";
   const isChatOrBriefing = activeTab === "chat" || isBriefing;
-  // 11/5: 群聊整页固定 (群列表 / 标题 / 输入框不动, 只有消息区滚), 跟对话页一样锁住 main 的滚动
-  const collabRooms = useUIStore((s) => activeTab === "collab" && s.collabView === "rooms");
+  // 11/5: 「协同」整页固定 (协同事项 / 群聊都是), 只有里面的列表 / 消息区滚, 跟对话页一样锁住 main 的滚动
+  const collabRooms = activeTab === "collab";
   return (
     <div className="app-shell" data-rail-collapsed={railCollapsed || undefined}>
       <TabBar />

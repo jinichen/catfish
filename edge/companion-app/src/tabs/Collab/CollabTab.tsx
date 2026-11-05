@@ -31,10 +31,9 @@ export default function CollabTab() {
     display: "inline-flex", alignItems: "center", gap: 6,
   });
   return (
-    <div style={view === "rooms"
-      ? { height: "100%", boxSizing: "border-box", display: "flex", flexDirection: "column", padding: "var(--space-3) var(--space-4)" }
-      : { maxWidth: 1600, margin: "0 auto", padding: "var(--space-4)" }}>
-      <div role="tablist" style={{ display: "flex", gap: 8, marginBottom: view === "rooms" ? "var(--space-3)" : "var(--space-4)", flexShrink: 0 }}>
+    // 11/5 鸿波: 两个视图都只占一屏, 里面的列表自己滚 (App 锁住了 main 的滚动)
+    <div style={{ height: "100%", boxSizing: "border-box", display: "flex", flexDirection: "column", padding: "var(--space-3) var(--space-4)" }}>
+      <div role="tablist" style={{ display: "flex", gap: 8, marginBottom: "var(--space-3)", flexShrink: 0 }}>
         <button type="button" role="tab" aria-selected={view === "work"} style={seg(view === "work")} onClick={() => setView("work")}>
           协同事项
         </button>
@@ -49,22 +48,16 @@ export default function CollabTab() {
         </button>
       </div>
       {view === "rooms" ? <RoomsPanel /> : (
-        <>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "minmax(0, 3fr) minmax(0, 2fr)",   // 右边「等我点头」多半是空的, 别占一半
-              gap: "var(--space-4)",
-              alignItems: "start",
-            }}
-          >
-            <TasksPanel />
-            <PendingPanel />
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 3fr) minmax(0, 2fr)", gridTemplateRows: "minmax(0, 1fr)",
+                      gap: "var(--space-4)", flex: 1, minHeight: 0 }}>
+          {/* 左: 请同事帮忙 (列表自己滚) */}
+          <TasksPanel />
+          {/* 右: 等我点头 (多半是空的, 最多占四成) + 一起填表, 各自滚 */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)", minHeight: 0 }}>
+            <div style={{ flexShrink: 0, maxHeight: "40%", overflowY: "auto", borderRadius: "var(--radius-md)" }}><PendingPanel /></div>
+            <div style={{ flex: 1, minHeight: 0, overflowY: "auto", borderRadius: "var(--radius-md)" }}><FormsPanel /></div>
           </div>
-          <div style={{ marginTop: "var(--space-4)" }}>
-            <FormsPanel />
-          </div>
-        </>
+        </div>
       )}
     </div>
   );
