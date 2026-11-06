@@ -55,7 +55,12 @@ export default function WikiRelationTypesModal({ onClose }: { onClose: () => voi
     }
   };
 
-  const row = { display: "grid", gridTemplateColumns: "64px 1fr auto", gap: 10, padding: "6px 0", borderBottom: `1px solid ${V.border}`, fontSize: 13 } as const;
+  // 11/07 鸿波「这个 UI 需要优化」: 登记区原来缀在列表底下、上下级和按钮孤零零靠右; 列表滚动后分不清内置 / 我登记的。
+  // 改成: 顶上一块「登记新关系」(带字段名的小表单), 下面列表分组、组标题滚动时钉在顶上, 上下级 / 用了几条做成小标签。
+  const row = { display: "grid", gridTemplateColumns: "64px minmax(0, 1fr) auto", gap: 12, alignItems: "center", padding: "8px 2px", borderBottom: `1px solid ${V.border}`, fontSize: 13 } as const;
+  const pill = { display: "inline-block", marginLeft: 6, padding: "1px 7px", borderRadius: 999, border: `1px solid ${V.border}`, color: V.muted, fontSize: 11, whiteSpace: "nowrap" } as const;
+  const groupHead = { position: "sticky", top: 0, zIndex: 1, background: V.surface, padding: "8px 2px 6px", fontSize: 12, fontWeight: 600, color: V.muted, borderBottom: `1px solid ${V.border}` } as const;
+  const fieldLabel = { display: "grid", gap: 4, fontSize: 12, color: V.muted, minWidth: 0 } as const;
   return (
     <ModalShell onClose={onClose} themed maxWidth={720}>
       <div style={{ width: "100%", fontFamily: V.font, color: V.text }}>
@@ -65,54 +70,79 @@ export default function WikiRelationTypesModal({ onClose }: { onClose: () => voi
             <X size={18} />
           </button>
         </div>
-        <p style={{ margin: "0 0 12px", color: V.muted, fontSize: 13, lineHeight: 1.5 }}>
-          关系读作「本条目 关系 对方」。下面没有的，可以登记自己的（词 + 一句话意思）；登记后关系下拉、小鲶建议和对话里都能用。没登记的词会被归成「关联」。
+        <p style={{ margin: "0 0 14px", color: V.muted, fontSize: 13, lineHeight: 1.6 }}>
+          关系读作「本条目 关系 对方」。列表里没有的可以自己登记，登记后关系下拉、小鲶建议和对话里都能用；没登记的词会被归成「关联」。
         </p>
-        <div style={{ maxHeight: "46vh", overflowY: "auto", marginBottom: 14 }}>
+
+        <section aria-label="登记新关系" style={{ border: `1px solid ${V.border}`, borderRadius: 10, padding: "12px 14px", background: V.bg, marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>登记新关系</div>
+          <div style={{ display: "grid", gridTemplateColumns: "140px minmax(0, 1fr)", gap: 10 }}>
+            <label style={fieldLabel}>
+              关系名
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="如 挂靠" maxLength={6}
+                aria-label="新关系类型" style={{ ...field, padding: "7px 9px", borderRadius: 8, background: V.surface }} />
+            </label>
+            <label style={fieldLabel}>
+              一句话意思
+              <input value={meaning} onChange={(e) => setMeaning(e.target.value)} placeholder="如 本条目挂靠在对方名下 (人→公司)"
+                maxLength={60} aria-label="这个关系的意思" style={{ ...field, padding: "7px 9px", borderRadius: 8, background: V.surface }} />
+            </label>
+          </div>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 10, marginTop: 10 }}>
+            <label style={{ ...fieldLabel, width: 220 }}>
+              是不是上下级
+              <select value={hierarchy} onChange={(e) => setHierarchy(e.target.value as "" | "child" | "parent")} aria-label="是不是上下级"
+                style={{ ...field, padding: "7px 6px", borderRadius: 8, background: V.surface }}>
+                <option value="">不是上下级</option>
+                <option value="child">本条目是对方的下级</option>
+                <option value="parent">本条目是对方的上级</option>
+              </select>
+            </label>
+            {error && <span style={{ color: V.error, fontSize: 12, alignSelf: "center" }}>{error}</span>}
+            <button type="button" disabled={busy || !name.trim() || !meaning.trim()} onClick={() => void submit()}
+              style={{
+                marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 4, padding: "8px 16px", border: 0, borderRadius: 8,
+                background: V.accent, color: "#fff", fontSize: 13,
+                cursor: busy || !name.trim() || !meaning.trim() ? "not-allowed" : "pointer",
+                opacity: busy || !name.trim() || !meaning.trim() ? 0.5 : 1,
+              }}>
+              <Plus size={14} />登记
+            </button>
+          </div>
+        </section>
+
+        <div style={{ maxHeight: "42vh", overflowY: "auto", paddingRight: 4 }}>
           {custom.length > 0 && (
             <>
-              <div style={{ fontSize: 12, color: V.muted, margin: "4px 0" }}>我登记的</div>
+              <div style={groupHead}>我登记的 · {custom.length}</div>
               {custom.map((c) => (
                 <div key={c.name} style={row}>
                   <strong style={{ color: V.accent }}>{c.name}</strong>
-                  <span>{c.meaning}<small style={{ color: V.muted }}>{c.hierarchy ? ` · 上下级 (${c.hierarchy === "child" ? "本条目是下级" : "本条目是上级"})` : ""}{usage(c.name) > 0 ? ` · 用了 ${usage(c.name)} 条` : ""}</small></span>
-                  <button type="button" disabled={busy} onClick={() => void drop(c.name)} aria-label={`删除关系类型「${c.name}」`}
-                    style={{ border: 0, background: "transparent", cursor: "pointer", color: V.muted }}>
+                  <span style={{ minWidth: 0 }}>
+                    {c.meaning}
+                    {c.hierarchy && <span style={pill}>上下级 · {c.hierarchy === "child" ? "本条目是下级" : "本条目是上级"}</span>}
+                    {usage(c.name) > 0 && <span style={pill}>用了 {usage(c.name)} 条</span>}
+                  </span>
+                  <button type="button" disabled={busy} onClick={() => void drop(c.name)} aria-label={`删除关系类型「${c.name}」`} title="删除"
+                    style={{ border: 0, background: "transparent", cursor: "pointer", color: V.muted, padding: 4 }}>
                     <Trash size={15} />
                   </button>
                 </div>
               ))}
             </>
           )}
-          <div style={{ fontSize: 12, color: V.muted, margin: "10px 0 4px" }}>内置</div>
+          <div style={groupHead}>内置 · {builtin.length}</div>
           {builtin.map((b) => (
             <div key={b.name} style={row}>
               <strong>{b.name}</strong>
-              <span style={{ color: V.muted }}>{b.meaning}{b.hierarchy ? " · 上下级" : ""}</span>
+              <span style={{ color: V.muted, minWidth: 0 }}>
+                {b.meaning}
+                {b.hierarchy && <span style={pill}>上下级</span>}
+              </span>
               <span />
             </div>
           ))}
         </div>
-        {/* 11/07: 原来四样挤一行, 输入框里的提示字被截断 —— 名字 + 意思一行, 上下级 + 登记一行 */}
-        <div style={{ display: "grid", gridTemplateColumns: "130px minmax(0, 1fr)", gap: 8 }}>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="新关系，如 挂靠" maxLength={6}
-            aria-label="新关系类型" style={{ ...field, padding: "7px 9px", borderRadius: 8 }} />
-          <input value={meaning} onChange={(e) => setMeaning(e.target.value)} placeholder="一句话意思，如 本条目挂靠在对方名下 (人→公司)"
-            maxLength={60} aria-label="这个关系的意思" style={{ ...field, padding: "7px 9px", borderRadius: 8 }} />
-        </div>
-        <div style={{ display: "flex", gap: 8, marginTop: 8, justifyContent: "flex-end" }}>
-          <select value={hierarchy} onChange={(e) => setHierarchy(e.target.value as "" | "child" | "parent")} aria-label="是不是上下级"
-            style={{ ...field, padding: "7px 6px", borderRadius: 8 }}>
-            <option value="">不是上下级</option>
-            <option value="child">本条目是对方的下级</option>
-            <option value="parent">本条目是对方的上级</option>
-          </select>
-          <button type="button" disabled={busy || !name.trim() || !meaning.trim()} onClick={() => void submit()}
-            style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "7px 12px", border: 0, borderRadius: 8, background: V.accent, color: "#fff", cursor: "pointer", fontSize: 13 }}>
-            <Plus size={14} />登记
-          </button>
-        </div>
-        {error && <p style={{ color: V.error, fontSize: 12, margin: "8px 0 0" }}>{error}</p>}
       </div>
     </ModalShell>
   );
