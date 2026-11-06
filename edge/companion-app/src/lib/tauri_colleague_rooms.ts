@@ -30,6 +30,8 @@ export interface RoomSummary {
 export interface RetentionSettings {
   default: number; company: number | null; ceiling: number; ceiling_source: "company" | "default"; personal: number | null;
   removed?: number;
+  /** 11/6 本机库加没加密 (null = 还没打开过) */
+  local?: { encrypted: boolean | null; why?: string };
 }
 
 export interface RoomMember {

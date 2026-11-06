@@ -56,6 +56,26 @@ pub struct Manifest {
     pub entries: Vec<Entry>,
     pub items: Vec<Item>,
     pub egress_chain: Option<ChainTip>,
+    /// 11/6: 同事群聊本机库的加密密钥 (rooms_db_key.rs)。包本身是口令加密的; 新机导入时写进它的钥匙串。
+    /// 不带 (老包 / 旧机还没加密) = None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collab_rooms_key: Option<String>,
+}
+
+/// 11/6: 加密的群聊本机库 —— Companion 自己 (不带 SQLCipher) 打不开做不了快照, 由 tool-bridge 先做好一份。
+pub const ROOMS_DB: &str = "catfish/collab_rooms/rooms.db";
+
+#[derive(Debug, Default, Clone)]
+pub struct RoomsDb {
+    /// tool-bridge 做好的快照 (`pim/croom_snapshot`), 有就用它代替 ROOMS_DB
+    pub snapshot: Option<PathBuf>,
+    pub key: Option<String>,
+}
+
+/// 文件头是不是普通 SQLite (加密库的头是随机字节)。
+pub fn is_plain_sqlite(path: &Path) -> bool {
+    let mut head = [0u8; 16];
+    File::open(path).and_then(|mut f| f.read_exact(&mut head)).is_ok() && &head == b"SQLite format 3\0"
 }
 
 impl Manifest {
@@ -101,6 +121,7 @@ pub fn build_zip(
     tmp: &Path,
     zip_path: &Path,
     source: Source,
+    rooms: &RoomsDb,
 ) -> Result<Manifest, String> {
     let file = File::create(zip_path).map_err(|e| format!("建临时文件失败: {e}"))?;
     let mut z = zip::ZipWriter::new(BufWriter::new(file));
@@ -125,7 +146,12 @@ pub fn build_zip(
             let Some(rel) = rel_slash(base, &f) else { continue };
             let name = format!("{}/{}", e.root.dir_name(), rel);
             // 数据库先做一致性快照, 再从快照读
-            let (src, len) = if is_db_file(&rel) {
+            let (src, len) = if let (ROOMS_DB, Some(pre)) = (name.as_str(), rooms.snapshot.as_ref()) {
+                (pre.clone(), fs::metadata(pre).map_err(|e| e.to_string())?.len())
+            } else if is_db_file(&rel) {
+                if name == ROOMS_DB && f.metadata().map(|m| m.len() > 0).unwrap_or(false) && !is_plain_sqlite(&f) {
+                    return Err("本机群聊记录是加密的, 导出要等鲶鱼后台服务 (tool-bridge) 起来 —— 稍等一会儿再导出".into());
+                }
                 let snap = tmp.join("db").join(&name);
                 snapshot_sqlite(&f, &snap)?;
                 let len = fs::metadata(&snap).map_err(|e| e.to_string())?.len();
@@ -155,6 +181,7 @@ pub fn build_zip(
         entries: entries.to_vec(),
         items,
         egress_chain,
+        collab_rooms_key: rooms.key.clone(),
     };
     z.start_file(MANIFEST, SimpleFileOptions::default()).map_err(|e| e.to_string())?;
     z.write_all(&serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;

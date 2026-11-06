@@ -49,6 +49,11 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
     req_id = req.get("id")
     method = req.get("method")
     params = req.get("params") or {}
+    # 11/6: Companion 调群聊 / 派任务时带上本机群聊库的密钥 (系统钥匙串里, 只有 Companion 取得到)。
+    # 进门就摘掉: 不往下传、不进任何日志 (colleague_rooms_crypt.py 文件头)。
+    if isinstance(params, dict) and "_rooms_key" in params:
+        from . import colleague_rooms_crypt  # noqa: PLC0415
+        colleague_rooms_crypt.set_key(params.pop("_rooms_key"))
 
     if method == "tools/list":
         return _success(req_id, adapter.list_tools())

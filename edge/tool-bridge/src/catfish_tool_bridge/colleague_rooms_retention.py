@@ -107,7 +107,7 @@ def set_personal(value: Any) -> dict[str, Any]:
 def settings() -> dict[str, Any]:
     cap, cap_src = ceiling()
     return {"ok": True, "default": ROOM_RETENTION_DEFAULT, "company": company_days(), "ceiling": cap,
-            "ceiling_source": cap_src, "personal": personal_days()}
+            "ceiling_source": cap_src, "personal": personal_days(), "local": store.encryption()}
 
 
 def _cutoff(days: int) -> str:

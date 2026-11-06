@@ -191,6 +191,7 @@ A 的包格式设计成可以直接被 B 复用：B 只是换了个运输方式�
 | §6 Hermes 在跑时怎么换 `state.db` | 用 SQLite backup 接口**在线还原**进正在用的库，不停 Hermes；导入完再重启 Hermes 让记忆 / 人设 / 技能重新加载 | 停 launchd 托管的进程不可靠（KeepAlive 会拉起） |
 | — | 新增「未归类」：清单里没登记的第一层文件不带（10/31 晚：**不再在导出页列给员工看**，改由 CI `check_migration_catalog.py` 把关——代码里引用到的 `~/.catfish/` 条目没登记就拦住） | 2026-10-31 用开发机真实目录名核对：`~/.catfish` 第一层约 90 项、Hermes 约 70 项原来没登记；大部分是旧备份 / 临时文件，按规则归到「重建」；仍不确定的（如 Hermes `hooks`、`shared-state.db`、`verification_evidence.db`、`~/.catfish` 下几个早已不被代码引用的老目录）保持「未归类」，导出时提醒 |
 | — | `chrome-profile`（浏览器 cookie）、`feishu.yaml` 归「凭证」不带 | 核对真实目录时发现 |
+| — | 11/6：同事群聊本机库 `collab_rooms/rooms.db` 是 SQLCipher 加密的，**密钥随包走**（manifest `collabRoomsKey`，包本身口令加密），新机导入时写进钥匙串（原来那把另存 `rooms-db-key.before-<时间>`）；快照由 tool-bridge 做（Companion 不带 SQLCipher，打不开） | 不带密钥，新机拿到的群聊记录打不开，等于没带；见 GROUP-CHAT-PLAN §4.3 |
 
 ### 10/31 晚 简化（Companion 1.2.19；鸿波：列得太细反而乱）
 

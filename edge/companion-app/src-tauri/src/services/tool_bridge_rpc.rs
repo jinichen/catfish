@@ -54,6 +54,8 @@ pub async fn call_with_timeout(
     rpc_timeout: Duration,
 ) -> Result<Value, String> {
     let endpoint_path = sock_path()?;
+    // 11/6: 群聊 / 派任务的接口带上本机群聊库的密钥 (rooms_db_key.rs 文件头)
+    let params = crate::services::rooms_db_key::with_key(method, params).await;
     call_at_path(&endpoint_path, method, params, rpc_timeout).await
 }
 

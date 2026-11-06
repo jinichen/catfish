@@ -32,6 +32,9 @@ pub struct ImportReport {
     pub backup_dir: Option<String>,
     pub redo: Vec<String>,
     pub warnings: Vec<String>,
+    /// 11/6: 包里带的群聊本机库密钥, 导入命令写进钥匙串 (不回给前端)
+    #[serde(skip)]
+    pub rooms_key: Option<String>,
 }
 
 /// 新机是不是已经有鲶鱼数据 (有就默认拒绝导入, 见设计稿 §7)。

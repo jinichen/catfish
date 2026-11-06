@@ -268,12 +268,12 @@ mod extra_packages_tests {
         let packages: Vec<&str> = hermes_extra_entries()
             .map(|(r, _)| r.split(['=', '<', '>']).next().unwrap_or(r))
             .collect();
-        for want in ["jieba", "playwright", "watchdog", "PyYAML", "pypdfium2", "openpyxl", "python-docx"] {
+        for want in ["jieba", "playwright", "watchdog", "PyYAML", "pypdfium2", "openpyxl", "python-docx", "sqlcipher3"] {
             assert!(packages.contains(&want), "{packages:?} 缺 {want}");
         }
         assert_eq!(
             hermes_extra_import_check(),
-            "import jieba, playwright.sync_api, watchdog.observers, yaml, pypdfium2, openpyxl, docx, pptx, xlrd, tzdata"
+            "import jieba, playwright.sync_api, watchdog.observers, yaml, pypdfium2, openpyxl, docx, pptx, xlrd, tzdata, sqlcipher3"
         );
     }
 }

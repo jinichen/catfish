@@ -27,3 +27,8 @@ xlrd<2         xlrd
 # 10/22: MCP「时间 / 时区」连接器 (tool-bridge connectors/time_server.py) 用 zoneinfo ——
 # Windows 没有系统时区库, 不装 tzdata 所有 IANA 时区名都查不到。纯 Python wheel。
 tzdata         tzdata
+
+# 11/6: 同事群聊本机库整库加密 (tool-bridge colleague_rooms_crypt.py, docs/GROUP-CHAT-PLAN.md §4.3)。
+# 静态链接 SQLCipher 4.19 + OpenSSL 3.6, 三个目标都有 cp314 轮子; 带的 SQLite 3.53.4 不在 WAL 损坏区间
+# (scripts/check-embedded-sqlite.py 同判据)。别换成 sqlcipher3-wheels: 0.5.7 带的 SQLite 3.51.1 有洞。
+sqlcipher3==0.6.4  sqlcipher3

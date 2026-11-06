@@ -93,7 +93,7 @@ room_leave    {v, room_id}                                            自己退�
   发起人随时在任务进度里关掉 (`pim/ctask_room_auto_post`)。每一封都进「数据外发记录」, 用途「群聊 · 定时任务结果自动转发」;
   邮筒本身的投递原来在外发记录里显示成「网页请求」, 现在叫「同事协作 · 邮筒」。
 
-## 4. 安全与长期记录 (11/6 方案; 4.1–4.4 已做, Companion 1.2.76 / 中央 019·020)
+## 4. 安全与长期记录 (11/6 方案; 4.1–4.4 已做, 含本机整库加密; Companion 1.2.77 / 中央 019·020)
 
 ### 4.0 现状 (11/6 按代码核对)
 
@@ -120,8 +120,11 @@ room_leave    {v, room_id}                                            自己退�
 - **防中央换钥**: 同事公钥第一次见到就记下 (TOFU), 之后变了界面提示「张三换了电脑 / 密钥变了」, 指纹可在成员栏核对。
 - **换电脑**: 私钥**不随迁移包走** (换机迁移里 `collab_keys` 是 Secret 级, 跟别的凭证一样: 包丢了也不泄露); 新电脑第一次取邮筒时
   生成新密钥并登记, 同事群里提示一次「密钥变了」; 换之前发给旧电脑、还没取走的那几封新电脑读不了。
-- **密钥文件** (11/6 实现时定): 先放 `~/.catfish/collab_keys/device.json` (0600), 不放钥匙串 —— tool-bridge 读钥匙串在 macOS 上会弹看不见的
-  授权框 (companion_secrets.py 文件头); 本机加密 (§4.3) 时统一挪进钥匙串。
+- **密钥文件** (11/6 实现时定): 放 `~/.catfish/collab_keys/device.json` (0600), 不放钥匙串 —— tool-bridge 读钥匙串在 macOS 上会弹看不见的
+  授权框 (companion_secrets.py 文件头)。原定本机加密 (§4.3) 时一起挪进钥匙串, **做的时候改了主意, 不挪**:
+  钥匙串里的东西只有 Companion 开着时 tool-bridge 才拿得到 (§4.3「密钥怎么到 tool-bridge」), 而邮筒收发不只在 Companion 里 ——
+  定时 / 周期任务交结果、小鲶接下任务后在后台做完交回, 都在 Companion 没开的时候走 `forms_net`; 私钥锁进钥匙串, 这些就会断。
+  私钥文件只有本人可读, 换电脑不随迁移包走; 电脑丢失时的风险靠系统磁盘加密兜 (§4.3 表里第三行)。
 - **对方还没有公钥** (没升级 / 升级后没开过): ✅ 11/6 定 **拦住不发** —— 那个人记进「没送到」, 原因写「还没升级到能加密的版本
   (或升级后还没打开过鲶鱼)」; 群里别的已有公钥的人照常收到。收到老版本发来的明文 (`v1`) 照收, 界面标「未加密」。
 
@@ -188,9 +191,26 @@ X25519 静态-静态 DH → HKDF-SHA256 → ChaCha20-Poly1305 (用已有的 `cry
 - **WAL 损坏漏洞闸** (`scripts/check-embedded-sqlite.py` 同判据): 3.53.4 不在有洞区间 ✅。
   另一个包 `sqlcipher3-wheels 0.5.7` 带的是 SQLite 3.51.1 —— **有洞, 不能用**。
 - 许可: sqlcipher3 是 zlib 许可, SQLCipher Community 是 BSD 类, OpenSSL 3 是 Apache 2.0 —— 商用打包都可以, 附带许可文本即可。
-- 还没做: Windows 上真机跑一遍 (本机没有 Windows; 做本机加密那一步时把同一段自检加进 `smoke-windows-runtime.ps1`, 跟 MSI 一起在 CI 上跑)。
-- 密钥: 32 字节随机数放系统钥匙串 (macOS 钥匙串 / Windows 凭据管理器)。tool-bridge 在 macOS 上读钥匙串会弹看不见的授权框
-  (companion_secrets.py 文件头), 所以由 Companion (Rust) 读出来交给 tool-bridge, 跟现在别的密钥一个走法。
+- Windows 真机: 本机没有 Windows, 自检脚本 `scripts/smoke_sqlcipher.py` 已加进 `smoke-windows-runtime.ps1` —— 每次在 CI 上打 MSI 时
+  用打进包的解释器在真 Windows 上跑一遍, 不过就不出包。Mac 两种芯片在 `build-mac-resources.sh` 里同样跑一遍。
+
+**✅ 本机整库加密已做 (11/6, Companion 1.2.77)**:
+- **密钥**: 32 字节随机数, 存系统钥匙串 (service `catfish-collab-rooms` / account `rooms-db-key`), Companion 第一次调群聊时生成
+  (`src-tauri/src/services/rooms_db_key.rs`)。只有 Companion 读。
+- **密钥怎么到 tool-bridge**: Companion 每次调 `pim/croom_*` / `room/*` / `pim/ctask_*` 时把密钥带在参数 `_rooms_key` 里
+  (tool_bridge_rpc 统一塞), tool-bridge `server.py` 进门就摘掉、记在内存 (`colleague_rooms_crypt.py`), 不往下传、不进日志。
+  没有反向去钥匙串取 (那条会弹看不见的授权框), 也不在 Windows 上让 Python 另读一份 (两种语言的钥匙串条目名对不齐)。
+  tool-bridge 重启后、Companion 下一次调用前, 后台想写群 (定时任务结果自动转群) 会因为「锁着」失败, 只记日志, 不影响收结果。
+- **库**: SQLCipher 4 原始密钥 (`PRAGMA key = "x'…'"`, 不走口令派生, 每次开连接 0.3 毫秒), WAL 照旧。
+- **升级**: 第一次拿到密钥时把明文库原样转成加密库 (`sqlcipher_export`, 三张表条数核对一致才替换), 明文旧文件 + 老格式备份
+  (`r_*.migrated/`、`_sync.json.migrated`) 一起删掉 —— 留着明文备份就白加密了。转的时候等正开着的连接都关掉 (Windows 换不了开着的文件)。
+- **什么时候还是明文**: 加密组件没装上 (老机器升级后启动自检会按 `hermes-extra-packages.txt` 补装), 或者还没拿到密钥 ——
+  明文库照常用, 「记录保留」窗口里写明「本机记录还没加密」和原因。**已经加密的库**缺密钥 / 缺组件 / 密钥不对就打不开, 明说原因,
+  不退回明文。
+- **换电脑**: 迁移包 (age 口令加密) 里带上这把密钥 (manifest `collabRoomsKey`), 新机导入时写进它的钥匙串; 新机原来那把另存为
+  `rooms-db-key.before-<时间>` (覆盖导入时新机原数据挪去了备份目录, 备份里的库要用原来那把)。加密的库 Companion 自己打不开、
+  做不了快照, 导出前先请 tool-bridge 做一份 (`pim/croom_snapshot`, `VACUUM INTO`, 快照同样是加密的); tool-bridge 没起来就提示稍后再导。
+- 界面: 「记录保留」窗口显示「🔒 本机记录已加密存放」或「🔓 还没加密: 原因」。
 
 ### 4.4 聊久了不卡 + 群内搜索
 
@@ -216,7 +236,7 @@ X25519 静态-静态 DH → HKDF-SHA256 → ChaCha20-Poly1305 (用已有的 `cry
 1. ✅ 改界面说法 (§4.0) —— 加密做完, 直接改成「中央只转交加密内容、看不到原文」。
 2. ✅ (1.2.76) 同一个版本: 端到端加密 (§4.1) + 改存 SQLite (§4.3) + 保留期限 180 天 (§4.2) + 分页 / 搜索 (§4.4) —— 都在动同一块存储;
    同时验证 SQLCipher 能不能进三个安装包。
-3. 接着: 本机加密 (§4.3 —— ✅ 11/6 验证通过, 用 SQLCipher 整库加密, `sqlcipher3==0.6.4`)。
+3. ✅ (1.2.77) 本机加密 (§4.3 —— SQLCipher 整库加密, `sqlcipher3==0.6.4`; 邮筒私钥仍是 0600 文件, 理由见 §4.1)。
 4. 客户提出再做: 合规归档 (§4.6)。
 
 ## 5. 以后再说

@@ -55,6 +55,7 @@ dev = [
     "python-docx>=1.0",  # leadership-briefing / weekly-report skill 用
     "openpyxl>=3.0",     # excel skill 用
     "pypdfium2>=4.0",    # pdf 解析用
+    "sqlcipher3==0.6.4", # 群聊本机库加密 (生产里跟 hermes venv 走, 见 companion-app/src-tauri/hermes-extra-packages.txt)
 ]
 # BL-SANDBOX-PPTX (5/15 鸿波撞 PPT 退化成 markdown): execute_code 沙箱里 LLM
 # 生成 PPT / 数据图 / 报表用的 lib. 跟 sandbox.py 改用 sys.executable 配合 —

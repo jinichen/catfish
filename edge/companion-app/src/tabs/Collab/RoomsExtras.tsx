@@ -70,9 +70,16 @@ export function RetentionDialog({ onClose }: { onClose: () => void }) {
   return (
     <Overlay title="群聊记录保留" onClose={onClose} width={520}>
       <span style={muted}>
-        群聊记录只存在你这台电脑上, 到期自动删掉。公司规定 / 群主设的期限你只能再设短, 不能更长; 每个群取最短的那个。
+        群聊记录只存在你这台电脑上, 加密存放, 到期自动删掉。公司规定 / 群主设的期限你只能再设短, 不能更长; 每个群取最短的那个。
         群里派出的任务和交回的结果在「协同事项」里另有记录, 不受影响。
       </span>
+      {s?.local && s.local.encrypted !== null && (
+        <span style={{ fontSize: 12, color: s.local.encrypted ? "var(--catfish-cyan)" : "var(--status-warn, #d97706)" }}>
+          {s.local.encrypted
+            ? "🔒 本机记录已加密存放 (密钥在系统钥匙串里, 电脑丢了 / 文件被拷走也读不出来)"
+            : `🔓 本机记录还没加密: ${s.local.why ?? "原因不明"}`}
+        </span>
+      )}
       {s && (
         <>
           <span style={{ fontSize: 13 }}>

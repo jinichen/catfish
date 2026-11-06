@@ -107,7 +107,19 @@ pub struct ExportReport {
     pub unclassified: Vec<String>,
 }
 
+#[cfg(test)]
 pub fn export_at(roots: &Roots, me: &Me, dest: &Path, passphrase: &str, optional: &[String]) -> Result<ExportReport, String> {
+    export_with(roots, me, dest, passphrase, optional, &package::RoomsDb::default())
+}
+
+pub fn export_with(
+    roots: &Roots,
+    me: &Me,
+    dest: &Path,
+    passphrase: &str,
+    optional: &[String],
+    rooms: &package::RoomsDb,
+) -> Result<ExportReport, String> {
     if passphrase.chars().count() < MIN_PASSPHRASE {
         return Err(format!("迁移口令至少 {MIN_PASSPHRASE} 位"));
     }
@@ -129,7 +141,7 @@ pub fn export_at(roots: &Roots, me: &Me, dest: &Path, passphrase: &str, optional
         hermes_home: roots.hermes.to_string_lossy().into_owned(),
     };
     let chosen: HashSet<String> = optional.iter().cloned().collect();
-    let m = package::build_zip(roots, &scan.entries, &chosen, &tmp.0, &zip_path, source)?;
+    let m = package::build_zip(roots, &scan.entries, &chosen, &tmp.0, &zip_path, source, rooms)?;
     let bytes = package::encrypt(&zip_path, dest, passphrase)?;
     Ok(ExportReport {
         path: dest.to_string_lossy().into_owned(),
@@ -215,6 +227,7 @@ pub fn import_at(roots: &Roots, me: &Me, pkg: &Path, passphrase: &str, overwrite
     }
     let stamp = stamp();
     let mut rep = apply::apply(&apply::Target { roots, zip: &zip_path, tmp: &tmp.0, stamp: &stamp }, &m)?;
+    rep.rooms_key = m.collab_rooms_key.clone();
     // 外发记录: 接着旧链记一行「设备迁移」, 登记旧机锚点只认到导出点
     let egress = roots.catfish.join("outbound_log.db");
     if let (true, Some(tip)) = (egress.exists(), m.egress_chain.as_ref()) {
@@ -269,7 +282,42 @@ pub fn migration_pick_open() -> Option<String> {
 
 #[tauri::command]
 pub async fn migration_export(dest: String, passphrase: String, optional: Vec<String>) -> Result<ExportReport, String> {
-    exclusive(move || export_at(&Roots::current()?, &Me::current()?, Path::new(&dest), &passphrase, &optional)).await
+    let roots = Roots::current()?;
+    let rooms = rooms_for_export(&roots).await?;
+    let snap = rooms.snapshot.clone();
+    let r = exclusive(move || export_with(&roots, &Me::current()?, Path::new(&dest), &passphrase, &optional, &rooms)).await;
+    if let Some(p) = snap {
+        let _ = std::fs::remove_file(p);
+    }
+    r
+}
+
+/// 11/6: 群聊本机库加密了 (钥匙串里有密钥) → 让 tool-bridge 先做一份快照 (也是加密的), 密钥一起进包。
+/// 还没加密过 (没有密钥) → 照旧由这边做快照, 包里不带密钥。
+async fn rooms_for_export(roots: &Roots) -> Result<package::RoomsDb, String> {
+    let key = tokio::task::spawn_blocking(crate::services::rooms_db_key::existing)
+        .await
+        .map_err(|e| e.to_string())?
+        .unwrap_or_else(|e| {
+            log::warn!("[migration] 读不到群聊库密钥: {e}");
+            None
+        });
+    let Some(key) = key else { return Ok(package::RoomsDb::default()) };
+    let db = roots.catfish.join("collab_rooms").join("rooms.db");
+    if !db.exists() {
+        return Ok(package::RoomsDb { snapshot: None, key: Some(key) });
+    }
+    let dest = roots.catfish.join(format!(".migration-rooms-{}.db", stamp()));
+    let params = serde_json::json!({ "dest": dest.to_string_lossy() });
+    match crate::services::tool_bridge_rpc::call_with_timeout("pim/croom_snapshot", params, std::time::Duration::from_secs(120)).await {
+        Ok(_) if dest.exists() => Ok(package::RoomsDb { snapshot: Some(dest), key: Some(key) }),
+        Ok(_) => Err("群聊记录快照没做出来, 请稍后再导出".into()),
+        // 明文库 (钥匙串里有密钥但还没转过) 这边自己能做快照; 加密库 build_zip 会说清楚要等 tool-bridge
+        Err(e) => {
+            log::warn!("[migration] 群聊库快照失败: {e}");
+            Ok(package::RoomsDb { snapshot: None, key: Some(key) })
+        }
+    }
 }
 
 #[tauri::command]
@@ -280,6 +328,15 @@ pub async fn migration_inspect(path: String, passphrase: String) -> Result<Inspe
 #[tauri::command]
 pub async fn migration_import(path: String, passphrase: String, overwrite: bool) -> Result<apply::ImportReport, String> {
     let mut rep = exclusive(move || import_at(&Roots::current()?, &Me::current()?, Path::new(&path), &passphrase, overwrite)).await?;
+    // 11/6: 包里带着旧电脑的群聊库密钥 → 写进这台的钥匙串 (这台原来那把另存一条)
+    if let Some(key) = rep.rooms_key.take() {
+        let st = stamp();
+        match tokio::task::spawn_blocking(move || crate::services::rooms_db_key::replace(&key, &st)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => rep.warnings.push(format!("群聊记录的密钥没写进钥匙串 ({e}), 群聊记录暂时打不开")),
+            Err(e) => rep.warnings.push(format!("群聊记录的密钥没写进钥匙串 ({e}), 群聊记录暂时打不开")),
+        }
+    }
     // Hermes 启动时才读记忆 / 人设 / 技能: 重启一下 (对话历史已经在线写进库了)
     if let Err(e) = tokio::task::spawn_blocking(super::codex_gateway::restart_hermes_gateway).await.map_err(|e| e.to_string()).and_then(|r| r) {
         rep.warnings.push(format!("Hermes 没能自动重启 ({e}), 请重启 Companion"));

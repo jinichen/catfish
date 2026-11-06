@@ -78,5 +78,6 @@ pub mod situation_snapshot; // 10/22 P1: 「此刻」快照 (今天日程 / 未�
 pub mod picker_config;    // P3.5.28 (6/17 鸿波): chat picker 选的 model 桥给 background task
 pub mod process;
 pub mod upstream_error_guard; // 8/8: 上游把错误当正文返 (HTTP 200 + 错误文本) 的识别 + 冷却
+pub mod rooms_db_key;  // 11/6: 同事群聊本机库的 SQLCipher 密钥 (系统钥匙串, 随群聊 / 派任务 RPC 带给 tool-bridge)
 pub mod tool_bridge_rpc;  // P3.5.45 (6/20 鸿波): tool-bridge sock NDJSON RPC 公共 helper, 会议纪要等 callers 复用
 pub mod watchdog;

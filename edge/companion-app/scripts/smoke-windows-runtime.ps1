@@ -37,6 +37,9 @@ try {
     & $Uv pip install --offline --no-index --find-links $Wheelhouse --no-deps --python $VenvPython -e $Agent
     if ($LASTEXITCODE -ne 0) { throw 'Hermes editable install failed' }
     $Python = Join-Path $Agent 'venv\Scripts\python.exe'
+    # 11/6: group-chat local DB encryption (sqlcipher3) on real Windows with the bundled interpreter
+    & $Python (Join-Path $PSScriptRoot 'smoke_sqlcipher.py')
+    if ($LASTEXITCODE -ne 0) { throw 'Bundled SQLCipher smoke failed' }
     $Edge = Join-Path $Work 'edge'
     New-Item -ItemType Directory -Force -Path $Edge | Out-Null
     tar -xzf (Join-Path $Resources 'catfish-edge-runtime.tar.gz') -C $Edge

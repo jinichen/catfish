@@ -181,3 +181,51 @@ fn 口令太短不导出() {
     let e = export_at(&old, &me("a@x.cn", "aaaa1111-0000-4000-8000-000000000001"), &t.path().join("p"), "1234567", &[]).unwrap_err();
     assert!(e.contains("至少 8 位"));
 }
+
+// ── 11/6 加密的群聊本机库 (rooms_db_key.rs / colleague_rooms_crypt.py) ──
+
+fn fake_encrypted(path: &Path) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, [0xbbu8; 4096]).unwrap(); // 加密库的头是随机字节, 不是 "SQLite format 3"
+}
+
+#[test]
+fn 加密的群聊库_用tool_bridge做的快照_密钥随包到新机() {
+    let t = tempfile::tempdir().unwrap();
+    let (old, new) = (machine(t.path(), "old"), machine(t.path(), "new"));
+    seed_old(&old);
+    seed_new(&new);
+    fake_encrypted(&old.catfish.join("collab_rooms/rooms.db"));
+    let snap = old.catfish.join(".migration-rooms-1.db");
+    fs::write(&snap, [0xccu8; 2048]).unwrap();
+    let key = "ab".repeat(32);
+    let rooms = package::RoomsDb { snapshot: Some(snap), key: Some(key.clone()) };
+    let pkg = t.path().join("p.catfishmove");
+    export_with(&old, &me("linxiao@x.cn", "aaaa1111-0000-4000-8000-000000000001"), &pkg, "correct horse", &[], &rooms).unwrap();
+    // 密钥只在口令加密的包里
+    assert!(!fs::read(&pkg).unwrap().windows(64).any(|w| w == key.as_bytes()));
+
+    let who = me("linxiao@x.cn", "bbbb2222-0000-4000-8000-000000000002");
+    let rep = import_at(&new, &who, &pkg, "correct horse", false).unwrap();
+    assert_eq!(rep.rooms_key.as_deref(), Some(key.as_str()));
+    assert_eq!(fs::read(new.catfish.join("collab_rooms/rooms.db")).unwrap(), vec![0xccu8; 2048], "带的是快照");
+    // 密钥不回给前端
+    assert!(!serde_json::to_string(&rep).unwrap().contains(&key));
+}
+
+#[test]
+fn 加密的群聊库_没快照就说清楚_明文库照旧自己做快照() {
+    let t = tempfile::tempdir().unwrap();
+    let old = machine(t.path(), "old");
+    seed_old(&old);
+    let db = old.catfish.join("collab_rooms/rooms.db");
+    fake_encrypted(&db);
+    let who = me("linxiao@x.cn", "aaaa1111-0000-4000-8000-000000000001");
+    let e = export_at(&old, &who, &t.path().join("p1"), "correct horse", &[]).unwrap_err();
+    assert!(e.contains("加密") && e.contains("tool-bridge"), "{e}");
+
+    fs::remove_file(&db).unwrap();
+    Connection::open(&db).unwrap().execute_batch("CREATE TABLE rooms(room_id TEXT);").unwrap();
+    assert!(package::is_plain_sqlite(&db));
+    export_at(&old, &who, &t.path().join("p2"), "correct horse", &[]).unwrap();
+}

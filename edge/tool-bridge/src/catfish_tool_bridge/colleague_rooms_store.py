@@ -12,21 +12,23 @@
 - 群内搜索用 `LIKE` (中文不用分词也能搜任意长度; 一个群保留期内几万条, 扫一遍毫秒级)。
 - 第一次打开时把老的 `<room_id>/room.json` + `messages.jsonl` 导进来 (按 msg_id 去重), 老目录改名 `<room_id>.migrated` 留作备份;
   老的 `_sync.json` 同样导进 meta。
-- 只用 Python 自带 sqlite3, 不加依赖 (Mac / Windows 一样; 仓里数据外发记录也是这么用的)。
+- 整库加密 (11/6 §4.3): SQLCipher, 密钥在系统钥匙串 —— 打开 / 转加密 / 密钥都在 colleague_rooms_crypt.py。
+  组件没装上或还没拿到密钥时, 明文库照常用 (见那个文件头)。
 """
 from __future__ import annotations
 
 import json
 import sqlite3
 import threading
-from contextlib import closing, contextmanager
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+from . import colleague_rooms_crypt as crypt
 from . import wiki_files
 
 _lock = threading.Lock()
-_ready: set[str] = set()   # 已建表 / 已迁移的库路径 (这个进程里)
+_ready: set[tuple[str, int]] = set()   # 已建表 / 已迁移 / 已判过加密的库 (路径, 换钥代数)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS rooms (room_id TEXT PRIMARY KEY, data TEXT NOT NULL);
@@ -60,20 +62,30 @@ def db_path() -> Path:
 @contextmanager
 def _conn() -> Iterator[sqlite3.Connection]:
     path = db_path()
-    key = str(path)
+    key = (str(path), crypt.generation())
     if key not in _ready:
         with _lock:
             if key not in _ready:
-                with closing(sqlite3.connect(path, timeout=10)) as con:
+                mode = crypt.prepare(path)
+                con = crypt.connect(path)
+                try:
                     con.execute("PRAGMA journal_mode=WAL")
                     con.executescript(_SCHEMA)
                     con.commit()
                     _migrate_legacy(con)
+                finally:
+                    con.close()
+                    crypt.release()
+                if mode == "encrypted":
+                    crypt.drop_plain_leftovers(rooms_dir())
                 _ready.add(key)
-    with closing(sqlite3.connect(path, timeout=10)) as con:
-        con.row_factory = sqlite3.Row
+    con = crypt.connect(path)
+    try:
         with con:   # 一次调用 = 一个事务
             yield con
+    finally:
+        con.close()
+        crypt.release()
 
 
 def _row_msg(r: sqlite3.Row) -> dict[str, Any]:
@@ -220,6 +232,21 @@ def prune_before(cutoff_iso: str, room_id: str | None = None) -> int:
 
 
 # ── meta ─────────────────────────────────────────────────────────
+
+def snapshot(dest: Path) -> None:
+    """换电脑导出用的一致性快照 (`VACUUM INTO`; 库是加密的, 快照也是加密的、同一把密钥)。"""
+    dest.unlink(missing_ok=True)
+    with _conn() as con:
+        con.isolation_level = None
+        con.execute("VACUUM INTO ?", (str(dest),))
+
+
+def encryption() -> dict:
+    """本机库加没加密 (给「记录保留」窗口显示)。"""
+    with _conn():
+        pass
+    return crypt.status(db_path())
+
 
 def get_meta(key: str) -> str | None:
     with _conn() as con:

@@ -32,7 +32,7 @@ from typing import Any
 
 from . import colleague_rooms_retention as keep
 from . import colleague_rooms_store as store
-from . import forms, forms_net
+from . import forms, forms_net, wiki_files
 
 ENVELOPE_VERSION = 1
 MAX_MEMBERS = 50
@@ -654,6 +654,17 @@ def search(room_id: str, q: Any, from_email: Any = None) -> dict[str, Any]:
 _LOCK = threading.RLock()
 
 
+def _snapshot(dest: Any) -> dict[str, Any]:
+    """换电脑导出: Companion 要一份本机群聊库的快照 (加密的库出来也是加密的)。只许写到 ~/.catfish 下面的 .db。"""
+    home = wiki_files._catfish_home().resolve()
+    p = Path(str(dest or "")).expanduser()
+    if not p.is_absolute() or p.suffix != ".db" or home not in p.resolve().parents:
+        raise ValueError("快照位置不对 (只能在 ~/.catfish 下面)")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    store.snapshot(p)
+    return {"ok": True, "path": str(p), **store.crypt.status(store.db_path())}
+
+
 def pim_handlers(params: dict[str, Any]) -> dict[str, Any]:
     """Companion 界面 (Rust commands/colleague_rooms.rs → pim/croom_*)。按钮本身就是员工的确认。"""
     rid = str(params.get("room_id") or "")
@@ -663,6 +674,7 @@ def pim_handlers(params: dict[str, Any]) -> dict[str, Any]:
         "pim/croom_search": lambda: search(rid, params.get("q"), params.get("from")),
         "pim/croom_settings_get": keep.settings,
         "pim/croom_settings_set": lambda: keep.set_personal(params.get("days")),
+        "pim/croom_snapshot": lambda: _snapshot(params.get("dest")),
         "pim/croom_sync": sync,
         "pim/croom_create": lambda: create(params),
         "pim/croom_join": lambda: join(rid),
