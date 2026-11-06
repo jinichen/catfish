@@ -45,6 +45,10 @@ export interface RecorderStatus {
   dir: string | null;
   error: string | null;
   limit_reached: boolean;
+  /** 11/06: 电脑太忙时丢了几小段声音 (每次几十毫秒), 录音照常继续 —— 不是错误 */
+  glitches?: number;
+  /** 11/06: 不影响录音的提示 (系统换了麦克风, 自动跟过去了) */
+  notice?: string | null;
 }
 
 export interface AsrInstalled {

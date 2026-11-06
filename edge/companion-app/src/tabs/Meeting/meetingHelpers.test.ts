@@ -4,6 +4,7 @@ import type { WikiFileInfo } from "../../lib/tauri_wiki";
 import {
   actionItemToTask, estimatePercent, mergeHotwords, minutesWikiBody, minutesWikiTitle, wikiHotwords,
 } from "./meetingHelpers";
+import { recorderNotices } from "./meetingHelpers";
 
 function entry(p: Partial<WikiFileInfo>): WikiFileInfo {
   return {
@@ -81,5 +82,14 @@ describe("minutesWikiTitle", () => {
 describe("minutesWikiBody", () => {
   it("去掉首行 H1", () => {
     expect(minutesWikiBody("# 周会\n\n- 日期: x\n")).toBe("- 日期: x\n");
+  });
+});
+
+describe("recorderNotices (11/06)", () => {
+  it("丢一小段 / 换麦克风是淡色提示, 真出错时不叠", () => {
+    expect(recorderNotices({ error: null, glitches: 0, notice: null })).toEqual([]);
+    expect(recorderNotices({ error: null, glitches: 3, notice: null })[0]).toContain("有 3 次丢了一小段声音");
+    expect(recorderNotices({ error: null, glitches: 0, notice: "系统换了录音设备" })).toEqual(["系统换了录音设备"]);
+    expect(recorderNotices({ error: "录音设备出错: 设备不在了", glitches: 5, notice: "x" })).toEqual([]);
   });
 });

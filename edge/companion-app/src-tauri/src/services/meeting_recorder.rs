@@ -44,6 +44,30 @@ pub struct RecorderStatus {
     pub error: Option<String>,
     /// 写满上限自动停了
     pub limit_reached: bool,
+    /// 11/06: 丢了几小段声音 (cpal Xrun: 电脑太忙, 音频没及时取走, 每次几十毫秒)。录音照常继续, 不算错误
+    pub glitches: u32,
+    /// 11/06: 不影响录音的提示 (系统换了麦克风, 录音自动跟过去了)
+    pub notice: Option<String>,
+}
+
+/// 录音流报上来的问题分三类 (11/06 鸿波: 打包时开会录音, 冒出红字「录音设备出错: A buffer underrun or overrun
+/// occurred」, 其实录音一直在继续, 只是某一瞬间丢了几十毫秒 —— 红字还一直挂到录完, 看着像坏了)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamIssue {
+    /// 瞬间丢了一小段 (Xrun), 计数
+    Glitch,
+    /// 系统换了录音设备, 流自动跟过去了, 提示一句
+    Rerouted,
+    /// 真出错了 (设备被拔掉 / 后端报错 ...), 红字
+    Fatal,
+}
+
+fn classify(kind: cpal::ErrorKind) -> StreamIssue {
+    match kind {
+        cpal::ErrorKind::Xrun => StreamIssue::Glitch,
+        cpal::ErrorKind::DeviceChanged => StreamIssue::Rerouted,
+        _ => StreamIssue::Fatal,
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,6 +83,8 @@ struct Shared {
     running: AtomicBool,
     limit_reached: AtomicBool,
     error: Mutex<Option<String>>,
+    glitches: AtomicU32,
+    notice: Mutex<Option<String>>,
 }
 
 struct Active {
@@ -110,6 +136,8 @@ pub fn start(dir: &Path, device: Option<&str>, segment_secs: u32, max_secs: u32)
         running: AtomicBool::new(true),
         limit_reached: AtomicBool::new(false),
         error: Mutex::new(None),
+        glitches: AtomicU32::new(0),
+        notice: Mutex::new(None),
     });
     let (ready_tx, ready_rx) = mpsc::channel::<Result<(String, u32), String>>();
     let dir_owned = dir.to_path_buf();
@@ -170,9 +198,21 @@ fn record_thread(
     let mut writer = SegmentWriter::new(dir, sample_rate, segment_secs, max_secs)?;
     let (tx, rx) = mpsc::sync_channel::<Vec<i16>>(256);
     let err_shared = shared.clone();
-    let on_error = move |e: cpal::Error| {
-        log::warn!("[meeting] 录音流出错: {e}");
-        *err_shared.error.lock().unwrap() = Some(format!("录音设备出错: {e}"));
+    let on_error = move |e: cpal::Error| match classify(e.kind()) {
+        StreamIssue::Glitch => {
+            let n = err_shared.glitches.fetch_add(1, Ordering::Relaxed) + 1;
+            if n == 1 || n % 50 == 0 {
+                log::warn!("[meeting] 录音丢了一小段 (第 {n} 次, 电脑太忙): {e}");
+            }
+        }
+        StreamIssue::Rerouted => {
+            log::info!("[meeting] 系统换了录音设备, 录音自动跟过去了: {e}");
+            *err_shared.notice.lock().unwrap() = Some("系统换了录音设备 (比如插上 / 拔掉了耳机), 录音已自动跟过去, 照常继续".into());
+        }
+        StreamIssue::Fatal => {
+            log::warn!("[meeting] 录音流出错: {e}");
+            *err_shared.error.lock().unwrap() = Some(format!("录音设备出错: {e}"));
+        }
     };
 
     macro_rules! build {
@@ -240,10 +280,12 @@ pub fn status() -> RecorderStatus {
             dir: Some(a.dir.display().to_string()),
             error: a.shared.error.lock().ok().and_then(|e| e.clone()),
             limit_reached: a.shared.limit_reached.load(Ordering::Relaxed),
+            glitches: a.shared.glitches.load(Ordering::Relaxed),
+            notice: a.shared.notice.lock().ok().and_then(|n| n.clone()),
         },
         None => RecorderStatus {
             recording: false, seconds: 0.0, level: 0.0, device: String::new(),
-            sample_rate: 0, dir: None, error: None, limit_reached: false,
+            sample_rate: 0, dir: None, error: None, limit_reached: false, glitches: 0, notice: None,
         },
     }
 }
@@ -257,4 +299,17 @@ pub fn stop() -> Result<Option<RecordingSummary>, String> {
     let segments = list_segments(&a.dir).len();
     log::info!("[meeting] 停止录音 · {seconds:.1}s · {segments} 片");
     Ok(Some(RecordingSummary { dir: a.dir.display().to_string(), seconds, segments }))
+}
+
+#[cfg(test)]
+mod stream_issue_tests {
+    use super::*;
+
+    #[test]
+    fn 丢一小段和换设备不算出错_其余才红字() {
+        assert_eq!(classify(cpal::ErrorKind::Xrun), StreamIssue::Glitch);
+        assert_eq!(classify(cpal::ErrorKind::DeviceChanged), StreamIssue::Rerouted);
+        assert_eq!(classify(cpal::ErrorKind::DeviceNotAvailable), StreamIssue::Fatal);
+        assert_eq!(classify(cpal::ErrorKind::BackendError), StreamIssue::Fatal);
+    }
 }

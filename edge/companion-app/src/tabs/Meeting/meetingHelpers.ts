@@ -1,6 +1,6 @@
 /** 会议页的纯函数 (10/1) —— 单测在 meetingHelpers.test.ts。 */
 import type { WikiFileInfo } from "../../lib/tauri_wiki";
-import type { ActionItem, MeetingStatus } from "../../lib/tauri_meeting";
+import type { ActionItem, MeetingStatus, RecorderStatus } from "../../lib/tauri_meeting";
 
 /** 进热词的知识库条目类型: 人名 / 项目 / 单位 / 部门 —— 识别最容易错、纪要里最要紧的就是这些。 */
 const HOTWORD_SUBTYPES = new Set(["person", "project", "org", "organization", "department"]);
@@ -74,4 +74,16 @@ export function minutesWikiTitle(meetingTitle: string, date: string): string {
 /** minutes.md 去掉首行 H1 (标题已经是条目名) 当条目正文。 */
 export function minutesWikiBody(markdown: string): string {
   return markdown.replace(/^# .*\n+/, "");
+}
+
+/** 录音中的淡色提示 (11/06): 电脑太忙丢了几小段声音 / 系统换了麦克风 —— 都不是错误, 录音照常继续。
+ *  真出错 (rec.error) 时只显红字, 这些不再叠上去。 */
+export function recorderNotices(rec: Pick<RecorderStatus, "error" | "glitches" | "notice">): string[] {
+  if (rec.error) return [];
+  const out: string[] = [];
+  if ((rec.glitches ?? 0) > 0) {
+    out.push(`电脑有点忙, 有 ${rec.glitches} 次丢了一小段声音 (每次零点几秒), 录音还在继续。重要的会可以先关掉占资源的程序。`);
+  }
+  if (rec.notice) out.push(rec.notice);
+  return out;
 }

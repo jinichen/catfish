@@ -23,7 +23,7 @@ import {
 } from "../../lib/tauri_meeting";
 import { wikiListFiles } from "../../lib/tauri_wiki";
 import { Btn, cardStyle, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
-import { mergeHotwords, wikiHotwords } from "./meetingHelpers";
+import { mergeHotwords, recorderNotices, wikiHotwords } from "./meetingHelpers";
 
 const SILENT_WARN_SECS = 5;
 
@@ -154,6 +154,10 @@ export default function RecorderCard({ onChanged }: { onChanged: (selectId?: str
           </ErrorLine>
         )}
         {rec.error && <ErrorLine>{rec.error}</ErrorLine>}
+        {/* 11/06: 瞬间丢一小段 / 系统换了麦克风都不是错误, 录音照常继续 —— 淡色提示, 不用红字 */}
+        {recorderNotices(rec).map((text) => (
+          <div key={text} style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>{text}</div>
+        ))}
         <Btn kind="primary" disabled={busy} onClick={() => void stop()}>结束录音</Btn>
         <div style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>录音只存在本机; 最长 4 小时, 到了会自动停。</div>
       </div>
