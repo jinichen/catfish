@@ -255,7 +255,7 @@ def translate_reason(description: str) -> str:
     return "、".join(out) or "可能有风险的命令"
 
 
-EVERY_TIME_MARK = "⚠️ 每次都要确认"          # 跟 plugin_approval_always.EVERY_TIME_MARK 同一串 (测试核对)
+EVERY_TIME_MARK = "⚠ 每次都要确认"          # 跟 plugin_approval_always.EVERY_TIME_MARK 同一串 (测试核对)
 _LAST_SUMMARY: Optional[str] = None          # 最近一次审批提示的「要做的事」, 提示语用
 _RESOLVED_AT: dict = {}                      # session_key → 上次回答审批的时间 (monotonic)
 _RECENT_S = 15 * 60

@@ -48,7 +48,8 @@ function PendingCard({ item, now, submitting }: { item: ApprovalItem; now: numbe
         {/* P3.5.73 (6/22 鸿波 catch): "hermes 等批准" → "等批准". SOUL.md L5 品牌红线
             "对外永不说: 我是 Hermes". 后面 pattern chip 自带 tool 名, 不需要前缀。 */}
         <span>等批准</span>
-        <code className="pattern">{item.patternKey}</code>
+        {/* 11/06 hermes v0.23 的原生审批不再带 pattern_key, 空的就不显 */}
+        {item.patternKey && <code className="pattern">{item.patternKey}</code>}
         <span className="countdown" aria-live="off">{countdownText(secondsLeft)}</span>
       </div>
       {asksEveryTime(item.description) && (

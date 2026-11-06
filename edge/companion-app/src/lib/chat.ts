@@ -99,7 +99,17 @@ export function computeIdleTimeoutMs(model: string): number {
   return /^catfish-private-/i.test(model) ? 180_000 : 90_000;
 }
 
+/** Idempotency-Key: 随机 32 位十六进制 (hermes 只要求同一条消息前后一致)。 */
+export function newIdempotencyKey(): string {
+  const c = globalThis.crypto;
+  if (c?.randomUUID) return c.randomUUID().replace(/-/g, "");
+  return `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`.slice(0, 32).padEnd(32, "0");
+}
+
 export async function streamChat(params: SendChatParams): Promise<void> {
+  // 11/06 hermes v0.23: 每条用户消息一个固定的 Idempotency-Key (见 chat_types.ts _idempotencyKey)。
+  // 放进 params, 下面各处递归重试 `{...params}` 自然带上; 要换新 key 的两处显式清掉。
+  if (!params._idempotencyKey) params = { ...params, _idempotencyKey: newIdempotencyKey() };
   const {
     model,
     messages,
@@ -224,6 +234,9 @@ export async function streamChat(params: SendChatParams): Promise<void> {
       // 解决 "1 个对话 → state.db 出 2 条 session (companion + api_server)" 的双开.
       if (sessionId) {
         hermesHeaders["X-Hermes-Session-Id"] = sessionId;
+      }
+      if (params._idempotencyKey) {
+        hermesHeaders["Idempotency-Key"] = params._idempotencyKey;
       }
       // BL-CSP-PROXY (7/18): fetch → fetchViaProxy (Rust reqwest), CSP 严格. auto-detect
       // stream (URL /v1/chat/completions 走 event bridge).
@@ -391,6 +404,7 @@ export async function streamChat(params: SendChatParams): Promise<void> {
         }
         return streamChat({
           ...params,
+          _idempotencyKey: undefined, // 上一轮已经以失败结束, 同 key 只会拿回同一个失败
           _retryCounters: {
             ...params._retryCounters,
             upstreamFinalRetry: 1,
@@ -483,6 +497,7 @@ export async function streamChat(params: SendChatParams): Promise<void> {
       }
       return streamChat({
         ...params,
+        _idempotencyKey: undefined, // 上一轮已经结束 (被截断), 同 key 只会拿回同一个截断的结果
         _retryCounters: {
           ...params._retryCounters,
           finishReasonRetry: 1,

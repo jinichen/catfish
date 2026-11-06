@@ -285,6 +285,7 @@ describe("打 B 的 hermes", () => {
   it("终态判定", () => {
     expect(isTerminal("completed")).toBe(true);
     expect(isTerminal("failed")).toBe(true);
+    expect(isTerminal("unknown")).toBe(true); // 11/06 hermes v0.23 新状态
     expect(isTerminal("waiting_for_approval")).toBe(false);
     expect(isTerminal("running")).toBe(false);
   });

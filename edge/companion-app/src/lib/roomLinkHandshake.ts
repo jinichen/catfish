@@ -348,7 +348,9 @@ export type PeerRunStatus =
   | "completed"
   | "failed"
   | "cancelled"
-  | "interrupted";
+  | "interrupted"
+  /** 11/06 hermes v0.23: 对方网关重启时这一轮跑没跑完说不清 (要对方人工处理 /resolve-unknown), 按没跑成算 */
+  | "unknown";
 
 export interface PeerRun {
   status: PeerRunStatus;
@@ -377,4 +379,4 @@ export async function pollPeerRun(grant: RoomLinkGrant, runId: string): Promise<
 }
 
 export const isTerminal = (s: PeerRunStatus): boolean =>
-  s === "completed" || s === "failed" || s === "cancelled" || s === "interrupted";
+  s === "completed" || s === "failed" || s === "cancelled" || s === "interrupted" || s === "unknown";

@@ -9,16 +9,23 @@
  * - 「本会话允许」去掉了: hermes 拿这一条消息的 id 当审批会话, 员工下一句话就失效, 跟字面意思不符。
  */
 
-/** 跟 edge/hermes-plugins/catfish-xcatfish-user/plugin_approval_always.py EVERY_TIME_MARK 同一串 */
-export const EVERY_TIME_MARK = "⚠️ 每次都要确认";
+/** 跟 edge/hermes-plugins/catfish-xcatfish-user/plugin_approval_always.py EVERY_TIME_MARK 同一串。
+ *  11/06 hermes v0.23 把审批说明里看不见的字符显成转义 (⚠ 后的 U+FE0F 变成字面 `\ufe0f`), 插件改成不带 U+FE0F;
+ *  老插件 / 老 hermes 发来的带 U+FE0F、或被转义的, 也照样认 (见 normalizeMark)。 */
+export const EVERY_TIME_MARK = "⚠ 每次都要确认";
+
+/** 去掉 ⚠ 后面的变体选择符 (真的 U+FE0F, 或 hermes v0.23 显成的字面 `\ufe0f`)。 */
+function normalizeMark(description: string): string {
+  return description.replace(/^⚠(?:\uFE0F|\\ufe0f)/i, "⚠");
+}
 
 export function asksEveryTime(description: string | undefined | null): boolean {
-  return (description ?? "").startsWith(EVERY_TIME_MARK);
+  return normalizeMark(description ?? "").startsWith(EVERY_TIME_MARK);
 }
 
 /** 「这段代码会删除文件。删除这类操作每次都要你同意…」—— 去掉标记前缀给卡片显示 */
 export function everyTimeReason(description: string | undefined | null): string {
-  const d = description ?? "";
+  const d = normalizeMark(description ?? "");
   if (!asksEveryTime(d)) return "";
   const i = d.indexOf(": ");
   return i >= 0 ? d.slice(i + 2) : d.slice(EVERY_TIME_MARK.length);

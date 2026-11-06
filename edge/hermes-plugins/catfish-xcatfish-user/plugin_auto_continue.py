@@ -133,6 +133,9 @@ def wrap_run_agent(orig):
         if args or "user_message" not in kwargs:
             return result, usage
 
+        # 11/06 hermes v0.23: 有会话登记 (session_authority) 时, 每一轮是会话队列里的一条, 历史在会话里;
+        # 结果里不再带 messages, 同一个 request_id 再发会被当成重发 (直接拿回上一次的结果)。
+        queued = getattr(getattr(self, "gateway_runner", None), "session_authority", None) is not None
         history: List[Dict[str, Any]] = list(kwargs.get("conversation_history") or [])
         user_message = kwargs.get("user_message")
         merged_final = ""
@@ -147,8 +150,8 @@ def wrap_run_agent(orig):
             final = result.get("final_response") or ""
             if not looks_like_unfinished_intent(final):
                 break
-            transcript = _full_transcript(history, user_message, result)
-            if transcript is None:
+            transcript = None if queued else _full_transcript(history, user_message, result)
+            if transcript is None and not queued:
                 logger.info("P50: 想续跑但 result 没有 messages, 放弃 (final=%r)", final[:60])
                 break
 
@@ -162,7 +165,14 @@ def wrap_run_agent(orig):
 
             kw = dict(kwargs)
             kw["user_message"] = NUDGE_TEXT
-            kw["conversation_history"] = transcript
+            if queued:
+                # 续跑是会话里新的一轮: 历史从会话取 (上一轮已经落库), 换一个自己的 request_id (不然被当成重发)
+                kw["conversation_history"] = []
+                kw["history_from_session"] = True
+                base = kwargs.get("request_id") or kwargs.get("active_run_id") or "run"
+                kw["request_id"] = f"{base}-p50-{n}"
+            else:
+                kw["conversation_history"] = transcript
             if "resume_unanswered_turn" in kw:
                 # v0.22: 这一轮如果是「接着回答上次没答完的那条」, 续跑那一轮已经有新的用户消息了, 不能再当续答
                 kw["resume_unanswered_turn"] = False
@@ -175,8 +185,8 @@ def wrap_run_agent(orig):
             if not isinstance(result2, dict):
                 result = result2
                 break
-            # 存库用的 transcript: 上一轮全量 + 这次的续跑提示 + 这次的消息
-            t2 = _full_transcript(transcript, NUDGE_TEXT, result2)
+            # 存库用的 transcript: 上一轮全量 + 这次的续跑提示 + 这次的消息 (v0.23 由网关自己落库, 不拼)
+            t2 = None if queued else _full_transcript(transcript, NUDGE_TEXT, result2)
             result = dict(result2)
             if t2 is not None:
                 result["messages"] = t2

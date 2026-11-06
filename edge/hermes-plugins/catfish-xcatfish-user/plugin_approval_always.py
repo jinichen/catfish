@@ -33,7 +33,9 @@ from typing import Any, List, Optional
 logger = logging.getLogger("catfish.xcatfish_user.plugin")
 
 #: 审批卡认这个前缀: 有它就不显示「本会话 / 始终允许」(Companion lib/approvalScope.ts)
-EVERY_TIME_MARK = "⚠️ 每次都要确认"
+# 11/06 hermes v0.23: 审批说明里的「看不见的字符」会被显成转义 (⚠ 后面的变体选择符 U+FE0F 变成字面的 \ufe0f),
+# Companion 按开头认这串就认不出了 → 去掉 U+FE0F。Companion 那边新旧两种都认 (lib/approvalScope.ts)。
+EVERY_TIME_MARK = "⚠ 每次都要确认"
 
 #: 审批留痕 (approval_audit 模块), plugin.py 注入
 audit = None

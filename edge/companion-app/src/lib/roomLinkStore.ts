@@ -133,7 +133,13 @@ function scheduleRunPoll(roomId: string, grant: RoomLinkGrant, runId: string) {
           phase: r.status === "completed" ? "done" : "failed",
           run_status: r.status,
           output: r.output,
-          error: r.error ?? (r.status === "completed" ? undefined : r.status),
+          error:
+            r.error ??
+            (r.status === "unknown"
+              ? "对方的鲶鱼中途重启了, 这次请求有没有做完说不准 —— 请对方看一眼, 需要的话重新发一次"
+              : r.status === "completed"
+                ? undefined
+                : r.status),
         });
         return;
       }

@@ -69,6 +69,9 @@ export interface SendChatParams {
    *  upstreamFinalRetry (5/18 BL-CHAT-AUTO-RETRY-ON-UPSTREAM-500): 上游 500/502
    *    /503/504 时 sleep 5s 自动 retry **同 model** 一次 (上游间歇挂常 5s 内恢复).
    */
+  /** 11/06 hermes v0.23: 这条用户消息的 Idempotency-Key。v0.23 把输入持久排队 (网关重启后还会跑一次),
+   *  断线重发 / 流卡住重连要带同一个 key, 不然同一句话跑两遍; 上一轮已经跑完 (失败 / 被截断) 的重试换新 key。 */
+  _idempotencyKey?: string;
   _retryCounters?: {
     /** @deprecated 5/18 BL-CHAT-FALLBACK-MODEL-REVERT, 不再用 */
     fallback?: number;
