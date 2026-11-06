@@ -2470,15 +2470,18 @@ button {
 .wiki-type-card__edit-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .wiki-type-card__edit-bar small { color: var(--catfish-text-muted); font-size: 12px; }
 /* 11/07「整理属性」(WikiPropsReview) */
-.wiki-props-review { width: 980px; max-width: 92vw; display: grid; gap: 10px; }
-.wiki-props-review__table-wrap { max-height: 56vh; overflow: auto; border: 1px solid #D2D2D7; border-radius: 8px; }
-.wiki-props-review table { border-collapse: collapse; font-size: 13px; min-width: 100%; }
-.wiki-props-review th, .wiki-props-review td { padding: 6px 8px; border-bottom: 1px solid #ececef; text-align: left; vertical-align: top; white-space: nowrap; }
-.wiki-props-review th { position: sticky; top: 0; background: #fbfbfd; z-index: 1; font-weight: 600; }
-.wiki-props-review td input { width: 150px; padding: 4px 6px; font-size: 13px; border: 1px solid #D2D2D7; border-radius: 6px; }
-.wiki-props-review td input[data-source="model"] { border-color: #f59e0b; }
-.wiki-props-review__title { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
-.wiki-props-review__old { display: block; color: #86868b; font-size: 11px; text-decoration: line-through; }
+.wiki-props-review { width: 100%; min-width: 0; display: grid; gap: 10px; }
+.wiki-props-review__list { max-height: 58vh; overflow-y: auto; overflow-x: hidden; display: grid; gap: 8px; padding-right: 4px; }
+.wiki-props-review__all { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #6e6e73; }
+.wiki-props-review__card { border: 1px solid #D2D2D7; border-radius: 8px; padding: 8px 10px; display: grid; gap: 6px; background: #fff; }
+.wiki-props-review__card[data-off="true"] { opacity: 0.5; }
+.wiki-props-review__card-head { display: flex; align-items: center; gap: 8px; font-size: 14px; min-width: 0; }
+.wiki-props-review__card-head strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wiki-props-review__fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px 12px; }
+.wiki-props-review__fields label { display: grid; gap: 2px; min-width: 0; font-size: 12px; color: #6e6e73; }
+.wiki-props-review__fields input { width: 100%; box-sizing: border-box; padding: 5px 7px; font-size: 13px; border: 1px solid #D2D2D7; border-radius: 6px; color: #1d1d1f; }
+.wiki-props-review__fields input[data-source="model"] { border-color: #f59e0b; }
+.wiki-props-review__fields small { color: #86868b; text-decoration: line-through; }
 .wiki-action-card small { color: var(--catfish-text-muted); font-size: 12px; }
 .wiki-action-card--disabled { opacity: 0.72; }
 .wiki-action-card__buttons { display: flex; gap: 8px; flex: 0 0 auto; }

@@ -25,7 +25,8 @@ export const T = {
   systemFont: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', sans-serif",
 };
 
-export function ModalShell({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+/** maxWidth: 默认 600。11/07: 宽内容 (类型定义页 / 整理属性表) 原来塞进 600 的框里, 只能左右拖着看 —— 要宽的自己传。 */
+export function ModalShell({ children, onClose, maxWidth = 600 }: { children: React.ReactNode; onClose: () => void; maxWidth?: number }) {
   return (
     <div
       onClick={onClose}
@@ -45,8 +46,10 @@ export function ModalShell({ children, onClose }: { children: React.ReactNode; o
           background: T.bgSurface,
           borderRadius: 12,
           padding: "28px 32px",
-          maxWidth: 600,
+          maxWidth,
           width: "92%",
+          boxSizing: "border-box",
+          overflowX: "hidden",
           maxHeight: "85vh",
           overflowY: "auto",
           boxShadow: T.shadow,

@@ -53,8 +53,8 @@ export default function WikiTypeDefsModal({ onClose }: { onClose: () => void }) 
   };
 
   return (
-    <ModalShell onClose={onClose}>
-      <div style={{ width: 1000, maxWidth: "92vw", fontFamily: T.systemFont, color: T.text }}>
+    <ModalShell onClose={onClose} maxWidth={1080}>
+      <div style={{ width: "100%", fontFamily: T.systemFont, color: T.text }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
           <h3 style={{ margin: 0, fontSize: 17 }}>类型定义</h3>
           <button type="button" onClick={onClose} aria-label="关闭" style={{ border: 0, background: "transparent", cursor: "pointer", color: T.textSecondary }}>
@@ -69,8 +69,8 @@ export default function WikiTypeDefsModal({ onClose }: { onClose: () => void }) 
         {!view ? (
           <p style={{ fontSize: 13, color: T.textSecondary }}>读取中…</p>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 16, maxHeight: "68vh" }}>
-            <div style={{ borderRight: `1px solid ${T.border}`, paddingRight: 12, overflowY: "auto" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "180px minmax(0, 1fr)", gap: 16, maxHeight: "68vh" }}>
+            <div style={{ borderRight: `1px solid ${T.border}`, paddingRight: 12, overflowY: "auto", overflowX: "hidden", minWidth: 0 }}>
               {view.types.map((t) => (
                 <button key={t.key} type="button" onClick={() => setSelected(t.key)}
                   style={{
@@ -85,14 +85,14 @@ export default function WikiTypeDefsModal({ onClose }: { onClose: () => void }) 
               <div style={{ marginTop: 14, display: "grid", gap: 6 }}>
                 <div style={{ fontSize: 12, color: T.textSecondary }}>新建类型（从知识库已有的分类里选）</div>
                 <select value={newType.key} onChange={(e) => setNewType({ key: e.target.value, label: newType.label || subtypeName(e.target.value).replace(/（.*$/, "") })}
-                  aria-label="知识库里的分类" style={{ padding: 6, borderRadius: 6, fontSize: 13 }}>
+                  aria-label="知识库里的分类" style={{ padding: 6, borderRadius: 6, fontSize: 13, width: "100%", minWidth: 0 }}>
                   <option value="">选一个分类…</option>
                   {view.subtypes.map((s) => <option key={s.key} value={s.key}>{subtypeName(s.key)} · {s.count} 条</option>)}
                 </select>
                 {newType.key && (
                   <>
                     <input value={newType.label} onChange={(e) => setNewType({ ...newType, label: e.target.value })} maxLength={20}
-                      placeholder="类型名" aria-label="新类型名" style={{ padding: "6px 8px", border: `1px solid ${T.border}`, borderRadius: 6, fontSize: 13 }} />
+                      placeholder="类型名" aria-label="新类型名" style={{ padding: "6px 8px", border: `1px solid ${T.border}`, borderRadius: 6, fontSize: 13, width: "100%", boxSizing: "border-box" }} />
                     <button type="button" disabled={busy || !newType.label.trim()}
                       onClick={async () => {
                         if (await apply({ op: "add_type", type: newType.key, label: newType.label.trim() })) setNewType({ key: "", label: "" });

@@ -93,7 +93,7 @@ export default function WikiPropsReview({ onClose }: { onClose: () => void }) {
   const btn = { padding: "7px 12px", border: 0, borderRadius: 8, cursor: "pointer", fontSize: 13 } as const;
 
   return (
-    <ModalShell onClose={onClose}>
+    <ModalShell onClose={onClose} maxWidth={1080}>
       <div className="wiki-props-review" style={{ fontFamily: T.systemFont, color: T.text }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <h3 style={{ margin: 0, fontSize: 17 }}>整理属性</h3>
@@ -128,50 +128,40 @@ export default function WikiPropsReview({ onClose }: { onClose: () => void }) {
           <p style={{ fontSize: 13, color: T.textSecondary }}>没有要补的属性了。</p>
         )}
         {result && result.items.length > 0 && (
-          <div className="wiki-props-review__table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th><input type="checkbox" checked={allChecked} onChange={toggleAll} aria-label="全选" /></th>
-                  <th>条目</th>
-                  {columns.map((c) => <th key={c.key}>{c.label}</th>)}
-                </tr>
-              </thead>
-              <tbody>
-                {result.items.map((it) => (
-                  <tr key={it.rel_path}>
-                    <td>
+          // 11/07: 原来是一行一条的大表, 证书 10 个属性要左右拖着看; 改成一条一张卡片, 属性在卡片里换行排
+          <div className="wiki-props-review__list">
+            <label className="wiki-props-review__all">
+              <input type="checkbox" checked={allChecked} onChange={toggleAll} />
+              全选
+            </label>
+            {result.items.map((it) => (
+              <div key={it.rel_path} className="wiki-props-review__card" data-off={!rows[it.rel_path]?.checked}>
+                <label className="wiki-props-review__card-head">
+                  <input
+                    type="checkbox"
+                    checked={rows[it.rel_path]?.checked ?? false}
+                    onChange={(e) => setRows((r) => ({ ...r, [it.rel_path]: { ...r[it.rel_path], checked: e.target.checked } }))}
+                    aria-label={`写入《${it.title}》`}
+                  />
+                  <strong title={it.title}>{it.title}</strong>
+                </label>
+                <div className="wiki-props-review__fields">
+                  {columns.filter((c) => c.key in it.proposed).map((c) => (
+                    <label key={c.key}>
+                      <span>{c.label}{it.source[c.key] === "model" ? " · 小鲶抽的" : ""}</span>
                       <input
-                        type="checkbox"
-                        checked={rows[it.rel_path]?.checked ?? false}
-                        onChange={(e) => setRows((r) => ({ ...r, [it.rel_path]: { ...r[it.rel_path], checked: e.target.checked } }))}
-                        aria-label={`写入《${it.title}》`}
+                        type={c.type === "date" ? "date" : "text"}
+                        value={rows[it.rel_path]?.values[c.key] ?? ""}
+                        data-source={it.source[c.key]}
+                        onChange={(e) => setValue(it.rel_path, c.key, e.target.value)}
+                        aria-label={`${it.title} ${c.label}`}
                       />
-                    </td>
-                    <td className="wiki-props-review__title" title={it.title}>{it.title}</td>
-                    {columns.map((c) => (
-                      <td key={c.key}>
-                        {c.key in it.proposed ? (
-                          <>
-                            <input
-                              type={c.type === "date" ? "date" : "text"}
-                              value={rows[it.rel_path]?.values[c.key] ?? ""}
-                              data-source={it.source[c.key]}
-                              title={it.source[c.key] === "model" ? "小鲶读正文抽的" : "按固定句式抽的"}
-                              onChange={(e) => setValue(it.rel_path, c.key, e.target.value)}
-                              aria-label={`${it.title} ${c.label}`}
-                            />
-                            {it.current[c.key] && <span className="wiki-props-review__old">原：{it.current[c.key]}</span>}
-                          </>
-                        ) : (
-                          <span style={{ color: T.textTertiary }}>{it.current[c.key] || ""}</span>
-                        )}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                      {it.current[c.key] && <small>原：{it.current[c.key]}</small>}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
         )}
 

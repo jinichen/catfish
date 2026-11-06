@@ -19,6 +19,12 @@ const tag = (origin: string, hidden: boolean) => (
 
 type Apply = (change: TypeDefChange) => Promise<boolean>;
 
+/** 内置行动的「要做的事」里写的是属性 key ({issuer}), 给人看 / 改时换成属性名 ({发证机构}); 两种写法执行时都认 */
+export function keysToLabels(text: string, props: TypeDefProperty[]): string {
+  const byKey = new Map(props.map((p) => [p.key, p.label]));
+  return (text || "").replace(/\{([a-z_][a-z0-9_]*)\}/g, (m, k: string) => (byKey.has(k) ? `{${byKey.get(k)}}` : m));
+}
+
 function PropRow({ type, p, apply, busy }: { type: string; p: TypeDefProperty; apply: Apply; busy: boolean }) {
   const [edit, setEdit] = useState(false);
   const [label, setLabel] = useState(p.label);
@@ -28,7 +34,7 @@ function PropRow({ type, p, apply, busy }: { type: string; p: TypeDefProperty; a
     if (await apply({ op: "update_property", type, key: p.key, property: { label, hint, type: kind } })) setEdit(false);
   };
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "150px 70px 1fr 90px auto", gap: 8, alignItems: "center", padding: "5px 0", borderBottom: `1px solid #ececef`, opacity: p.hidden ? 0.55 : 1 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(90px, 140px) 64px minmax(0, 1fr) 76px auto", gap: 8, alignItems: "center", padding: "5px 0", borderBottom: `1px solid #ececef`, opacity: p.hidden ? 0.55 : 1 }}>
       {edit ? (
         <>
           <input style={input} value={label} onChange={(e) => setLabel(e.target.value)} maxLength={20} aria-label="属性名" />
@@ -78,7 +84,7 @@ function ActionForm({ props, initial, onSubmit, onCancel, busy }: {
   busy: boolean;
 }) {
   const [label, setLabel] = useState(initial?.label ?? "");
-  const [instruction, setInstruction] = useState(initial?.instruction ?? "");
+  const [instruction, setInstruction] = useState(keysToLabels(initial?.instruction ?? "", props));
   const [skill, setSkill] = useState(initial?.skill_path ?? "");
   const submit = async () => {
     if (await onSubmit({ label, instruction, skill_path: skill, description: instruction.slice(0, 60) }) && !initial) {
@@ -89,7 +95,7 @@ function ActionForm({ props, initial, onSubmit, onCancel, busy }: {
   };
   return (
     <div style={{ display: "grid", gap: 6, padding: "8px 0" }}>
-      <div style={{ display: "grid", gridTemplateColumns: "160px 1fr", gap: 8 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(110px, 160px) minmax(0, 1fr)", gap: 8 }}>
         <input style={input} value={label} onChange={(e) => setLabel(e.target.value)} maxLength={20} placeholder="行动名，如 续期准备" aria-label="行动名" />
         <input style={input} value={skill} onChange={(e) => setSkill(e.target.value)} placeholder="要用的技能 (可不填，例 personal/xxx)" aria-label="技能" />
       </div>
@@ -125,10 +131,10 @@ function ActionRow({ type, a, props, apply, busy }: { type: string; a: TypeDefAc
     );
   }
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "150px 1fr 90px auto", gap: 8, padding: "6px 0", borderBottom: `1px solid #ececef`, opacity: a.hidden ? 0.55 : 1 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(90px, 140px) minmax(0, 1fr) 76px auto", gap: 8, padding: "6px 0", borderBottom: `1px solid #ececef`, opacity: a.hidden ? 0.55 : 1 }}>
       <strong style={{ fontSize: 13 }}>{a.label}</strong>
       <span style={{ fontSize: 12, color: T.textSecondary, lineHeight: 1.5 }}>
-        {a.instruction}
+        {keysToLabels(a.instruction ?? "", props)}
         {a.skill_path && <em style={{ display: "block", color: T.textTertiary }}>技能：{a.skill_path}</em>}
       </span>
       {tag(a.origin, a.hidden)}
@@ -180,7 +186,7 @@ export default function WikiTypeDefEditor({ def, apply, busy }: { def: TypeDef; 
       <h4 style={section}>属性</h4>
       {def.properties.length === 0 && <p style={{ fontSize: 12, color: T.textTertiary }}>还没有属性。</p>}
       {def.properties.map((p) => <PropRow key={p.key} type={def.key} p={p} apply={apply} busy={busy} />)}
-      <div style={{ display: "grid", gridTemplateColumns: "150px 70px 1fr auto", gap: 8, padding: "8px 0" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(90px, 140px) 64px minmax(0, 1fr) auto", gap: 8, padding: "8px 0" }}>
         <input style={input} value={newProp.label} onChange={(e) => setNewProp({ ...newProp, label: e.target.value })} maxLength={20} placeholder="新属性名，如 投标用途" aria-label="新属性名" />
         <select style={input} value={newProp.type} onChange={(e) => setNewProp({ ...newProp, type: e.target.value })} aria-label="新属性类型">
           <option value="text">文本</option>
