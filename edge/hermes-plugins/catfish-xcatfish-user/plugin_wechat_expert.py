@@ -37,6 +37,18 @@ from typing import Any, Optional
 
 logger = logging.getLogger("catfish.xcatfish_user.plugin")
 
+
+def _weixin_compat():
+    """兄弟模块 weixin_compat (11/06; 相对 import 优先, 命中 sys.modules 里同一份, 跟 plugin_session._sib 同一套)。"""
+    from importlib import import_module  # noqa: PLC0415
+    if __package__:
+        try:
+            return import_module(".weixin_compat", package=__package__)
+        except (ImportError, SystemError, ValueError, TypeError):
+            pass
+    from plugin import _import_sibling  # noqa: PLC0415
+    return _import_sibling("weixin_compat")
+
 ROUTES_FILE = "wechat_expert_routes.json"
 EXPERT_PREFIX = "expert-"
 _FIND = re.compile(r"^\s*(?:找|切到|切换到|换成)\s*(.{1,20}?)\s*[。.!！]?\s*$")
@@ -211,17 +223,24 @@ def wrap_handle_message(orig):
 
 def _patch_p60_wechat_expert_routing() -> None:
     from gateway import run as _run  # noqa: PLC0415
-    from gateway.platforms import weixin as _wx  # noqa: PLC0415
 
     runner = getattr(_run, "GatewayRunner", None)
     orig_route = getattr(runner, "_profile_name_for_source", None) if runner else None
-    cls = getattr(_wx, "WeixinAdapter", None)
-    orig_handle = getattr(cls, "handle_message", None) if cls else None
-    if orig_route is None or orig_handle is None:
-        logger.warning("P60: GatewayRunner._profile_name_for_source / WeixinAdapter.handle_message 不在 (hermes 改了?), skip")
+    if orig_route is None:
+        logger.warning("P60: GatewayRunner._profile_name_for_source 不在 (hermes 改了?), skip")
         return
     if not getattr(orig_route, "_catfish_p60", False):
         runner._profile_name_for_source = wrap_profile_name_for_source(orig_route)
+    # 11/06 hermes v0.23: 微信适配器挪进平台插件, 从 weixin_compat 取网关真正用的那份模块
+    _weixin_compat().when_adapter_module(_apply_p60_handle, "P60")
+
+
+def _apply_p60_handle(_wx) -> None:
+    cls = getattr(_wx, "WeixinAdapter", None)
+    orig_handle = getattr(cls, "handle_message", None) if cls else None
+    if orig_handle is None:
+        logger.warning("P60: WeixinAdapter.handle_message 不在 (hermes 改了?), skip")
+        return
     if not getattr(orig_handle, "_catfish_p60", False):
         cls.handle_message = wrap_handle_message(orig_handle)
     logger.info("P60 微信里找专家 (找X / 回小鲶 / 找谁) patched")

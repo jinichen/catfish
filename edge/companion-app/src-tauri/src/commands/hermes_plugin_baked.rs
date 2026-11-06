@@ -112,6 +112,10 @@ const BAKED_PLUGIN_RUNTIME: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_runtime.py");
 const BAKED_PLUGIN_SERVICE_LEAN: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_service_lean.py");
+const BAKED_PLUGIN_API_TURN: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_api_turn.py");
+const BAKED_WEIXIN_COMPAT: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/weixin_compat.py");
 const BAKED_PLUGIN_SESSION: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin_session.py");
 const BAKED_PLUGIN_VERIFY: &str =
@@ -198,7 +202,9 @@ pub(crate) const BAKED_FILES: &[(&str, &str)] = &[
     ("plugin_misc.py", BAKED_PLUGIN_MISC),
     ("plugin_runtime.py", BAKED_PLUGIN_RUNTIME),
     ("plugin_service_lean.py", BAKED_PLUGIN_SERVICE_LEAN),
+    ("plugin_api_turn.py", BAKED_PLUGIN_API_TURN),
     ("plugin_session.py", BAKED_PLUGIN_SESSION),
+    ("weixin_compat.py", BAKED_WEIXIN_COMPAT),
     ("plugin_verify.py", BAKED_PLUGIN_VERIFY),
     ("private_auxiliary_guard.py", BAKED_PRIVATE_AUXILIARY_GUARD),
     ("plugin_room_link.py", BAKED_PLUGIN_ROOM_LINK),

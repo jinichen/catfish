@@ -109,7 +109,12 @@ def _friendly(err: str) -> str:
 
 
 async def _send(tgt: dict[str, str], text: str) -> dict[str, Any]:
-    from gateway.platforms.weixin import check_weixin_requirements, send_weixin_direct  # noqa: PLC0415 —— hermes venv 里才有
+    # hermes venv 里才有。11/06: v0.23 把微信适配器挪进内置平台插件 (plugins/platforms/weixin/adapter.py)。
+    # 这里只调函数不打补丁, 直接导入那一份就行 (打补丁要取网关真正用的那份, 见 hermes 插件 weixin_compat.py)。
+    try:
+        from gateway.platforms.weixin import check_weixin_requirements, send_weixin_direct  # noqa: PLC0415
+    except ImportError:
+        from plugins.platforms.weixin.adapter import check_weixin_requirements, send_weixin_direct  # noqa: PLC0415
 
     if not check_weixin_requirements():
         return {"error": "缺少微信通道依赖 (aiohttp / cryptography)"}

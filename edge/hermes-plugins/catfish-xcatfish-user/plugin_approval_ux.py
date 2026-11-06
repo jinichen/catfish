@@ -34,6 +34,18 @@ from typing import Optional
 
 logger = logging.getLogger("catfish.xcatfish_user.plugin")
 
+
+def _weixin_compat():
+    """兄弟模块 weixin_compat (11/06; 相对 import 优先, 命中 sys.modules 里同一份, 跟 plugin_session._sib 同一套)。"""
+    from importlib import import_module  # noqa: PLC0415
+    if __package__:
+        try:
+            return import_module(".weixin_compat", package=__package__)
+        except (ImportError, SystemError, ValueError, TypeError):
+            pass
+    from plugin import _import_sibling  # noqa: PLC0415
+    return _import_sibling("weixin_compat")
+
 # ── 回答解析 ─────────────────────────────────────────────────────────
 _MAX_REPLY_LEN = 16          # 超过就当员工在说别的事, 不硬解析
 _STRIP = re.compile(r"[\s/／。.!！,，、~～?？…]+")
@@ -143,6 +155,9 @@ DANGER_ZH = {
     "Windows cmd destructive delete": "成批删除文件", "Windows PowerShell destructive delete": "成批删除文件",
     "PowerShell encoded command execution": "运行一段被编码隐藏的命令",
     "PowerShell destructive delete (Remove-Item)": "成批删除文件",
+    # 11/06 hermes v0.23 新加的两条 (管道后面的别名 / 脚本后面才出现的删除)
+    "PowerShell destructive delete (alias after pipe)": "成批删除文件",
+    "Windows PowerShell destructive delete (later in the script)": "成批删除文件",
     "Windows destructive delete (recursive/quiet switch)": "不提示地成批删除文件",
     "pipe remote content to PowerShell (iwr | iex)": "下载网上的脚本并直接运行",
     "execute remote content via Invoke-Expression": "下载网上的脚本并直接运行",
@@ -521,11 +536,11 @@ def wrap_process_message(orig, extract_text):
 
 
 def _patch_p56_weixin_repeat_answer() -> None:
-    try:
-        from gateway.platforms import weixin as _wx
-    except ImportError as e:
-        logger.warning("P56: gateway.platforms.weixin import 失败 (%s), skip", e)
-        return
+    # 11/06 hermes v0.23: 微信适配器挪进平台插件, 从 weixin_compat 取网关真正用的那份模块
+    _weixin_compat().when_adapter_module(_apply_p56, "P56")
+
+
+def _apply_p56(_wx) -> None:
     cls = getattr(_wx, "WeixinAdapter", None)
     orig = getattr(cls, "_process_message", None) if cls else None
     extract = getattr(_wx, "_extract_text", None)

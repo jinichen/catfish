@@ -97,8 +97,8 @@ def _single_entry(args):
 
 
 def wrap_resolve(orig, registered=_registered):
-    def patched(args):
-        name, raw_args, err = orig(args)
+    def patched(args, *a, **kw):   # 11/06 hermes v0.23: 多了 session_tool_names 等参数, 原样透传
+        name, raw_args, err = orig(args, *a, **kw)
         if err and any(m in err for m in NOT_DEFERRABLE_MARKERS):
             entry, perr = _single_entry(args)
             canon = canonical_catfish_name(str(entry[0] or ""), registered) if entry else None

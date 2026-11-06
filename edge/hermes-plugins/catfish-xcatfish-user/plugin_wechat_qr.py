@@ -68,6 +68,18 @@ def _hermes_home():
 
 logger = logging.getLogger("catfish.xcatfish_user.plugin")
 
+
+def _weixin_compat():
+    """兄弟模块 weixin_compat (11/06; 相对 import 优先, 跟 plugin_session._sib 同一套)。"""
+    from importlib import import_module  # noqa: PLC0415
+    if __package__:
+        try:
+            return import_module(".weixin_compat", package=__package__)
+        except (ImportError, SystemError, ValueError, TypeError):
+            pass
+    from plugin import _import_sibling  # noqa: PLC0415
+    return _import_sibling("weixin_compat")
+
 #: qrcode(str) → {"base_url": str, "created_at": float}
 #: 8/13 从 plugin.py 搬过来 —— 定义跟使用者本来就该在一起。
 #: plugin.py 那边按 re-export 协议吐回去, 老 caller 不破。
@@ -98,10 +110,10 @@ async def _handle_wechat_qr_start(self, request):
         return auth_err
     try:
         import aiohttp  # noqa: PLC0415
-        from gateway.platforms.weixin import (  # noqa: PLC0415
-            ILINK_BASE_URL, EP_GET_BOT_QR, QR_TIMEOUT_MS,
-            _api_get, _make_ssl_connector,
-        )
+        # 11/06 hermes v0.23: 微信适配器挪进平台插件, 位置由 weixin_compat 定
+        _wf = _weixin_compat().function
+        ILINK_BASE_URL, EP_GET_BOT_QR, QR_TIMEOUT_MS, _api_get, _make_ssl_connector = (
+            _wf("ILINK_BASE_URL"), _wf("EP_GET_BOT_QR"), _wf("QR_TIMEOUT_MS"), _wf("_api_get"), _wf("_make_ssl_connector"))
     except ImportError as e:
         return web.json_response(
             {"error": f"hermes weixin 模块 import 失败: {e}"}, status=500,
@@ -172,11 +184,10 @@ async def _handle_wechat_qr_poll(self, request):
 
     try:
         import aiohttp  # noqa: PLC0415
-        from gateway.platforms.weixin import (  # noqa: PLC0415
-            EP_GET_QR_STATUS, QR_TIMEOUT_MS,
-            _api_get, _make_ssl_connector,
-            save_weixin_account,
-        )
+        _wf = _weixin_compat().function   # 11/06 hermes v0.23, 见上
+        EP_GET_QR_STATUS, QR_TIMEOUT_MS, _api_get, _make_ssl_connector, save_weixin_account = (
+            _wf("EP_GET_QR_STATUS"), _wf("QR_TIMEOUT_MS"), _wf("_api_get"), _wf("_make_ssl_connector"),
+            _wf("save_weixin_account"))
         from hermes_constants import get_hermes_home  # noqa: PLC0415
     except ImportError as e:
         return web.json_response(

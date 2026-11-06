@@ -255,11 +255,12 @@ def _patch_p48_tool_call_argument_shape() -> None:
 
     _ORIG_RESOLVE = orig
 
-    def resolve_underlying_call(args):  # noqa: ANN001, ANN202
+    # 11/06 hermes v0.23: 上游多传了 session_tool_names 等参数, 原样透传
+    def resolve_underlying_call(args, *a, **kw):  # noqa: ANN001, ANN202
         normalized = _normalize_bridge_args(args)
         if normalized is not args:
             logger.info("P48 修正一次单层嵌套的 tool_call 参数: name=%r", normalized["name"])
-        return orig(normalized)
+        return orig(normalized, *a, **kw)
 
     resolve_underlying_call._catfish_p48 = True  # noqa: SLF001
     ts.resolve_underlying_call = resolve_underlying_call

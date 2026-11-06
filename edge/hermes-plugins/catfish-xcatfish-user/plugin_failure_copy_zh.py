@@ -57,15 +57,16 @@ def _patch_p62_failure_copy_zh() -> None:
     if getattr(original, "_catfish_p62", False):
         return  # 插件重载
 
-    def exhausted_copy_zh(reason, *, label, attempts, summary, reset_seconds=None):
+    # 11/06 hermes v0.23: 上游多传了 error=…; 不认识的关键字参数原样交回原函数
+    def exhausted_copy_zh(reason, *, label, attempts, summary, reset_seconds=None, **kw):
         try:
             if i18n.get_language() != "zh":
-                return original(reason, label=label, attempts=attempts, summary=summary, reset_seconds=reset_seconds)
+                return original(reason, label=label, attempts=attempts, summary=summary, reset_seconds=reset_seconds, **kw)
             reset_text = format_reset_window(reset_seconds) if reset_seconds and reset_seconds >= 120 else None
             return failure_copy_zh(attempts, summary, reset_text)
         except Exception:  # noqa: BLE001 —— 出错退回原文, 绝不让失败提示本身再失败
             logger.exception("P62: 中文失败提示生成出错, 用原文")
-            return original(reason, label=label, attempts=attempts, summary=summary, reset_seconds=reset_seconds)
+            return original(reason, label=label, attempts=attempts, summary=summary, reset_seconds=reset_seconds, **kw)
 
     exhausted_copy_zh._catfish_p62 = True  # type: ignore[attr-defined]
     turn_recovery.exhausted_copy = exhausted_copy_zh

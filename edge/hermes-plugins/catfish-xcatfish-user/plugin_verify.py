@@ -285,6 +285,19 @@ def _check_class_method_in_source(module_path: str, class_name: str, method: str
     return False
 
 
+def _weixin_module_path() -> str:
+    """微信适配器源码在哪 (11/06 hermes v0.23 挪进内置平台插件 plugins/platforms/weixin/adapter.py; 见 weixin_compat.py)。
+
+    两处都在时以老位置为准 (v0.22 的仓里不会有新位置); 都不在就照老位置报缺失。
+    """
+    hermes_root = os.environ.get("HERMES_ROOT") or str(_hermes_home() / "hermes-agent")
+    if os.path.exists(os.path.join(hermes_root, "gateway", "platforms", "weixin.py")):
+        return "gateway.platforms.weixin"
+    if os.path.exists(os.path.join(hermes_root, "plugins", "platforms", "weixin", "adapter.py")):
+        return "plugins.platforms.weixin.adapter"
+    return "gateway.platforms.weixin"
+
+
 def _verify_patch_targets() -> None:
     """静态文件检查 patch target 存在 (不 import — 避开 hermes 0.15.1 circular).
 
@@ -293,7 +306,10 @@ def _verify_patch_targets() -> None:
     fail-loud 时机: 真 patch fail (in _patch_pX) OR pre_tool_call hook 检测 _INSTALLED.
     """
     missing = []
+    weixin = _weixin_module_path()
     for module_path, attr, kind in _PATCH_TARGETS:
+        if module_path == "gateway.platforms.weixin":
+            module_path = weixin
         if not _check_attr_in_source(module_path, attr):
             missing.append(f"{module_path}.{attr} (expected {kind})")
 

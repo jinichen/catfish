@@ -54,6 +54,14 @@ REFACTOR_BASE = "cc4d71a"
 #: 一个 patch 悄悄多出来跟悄悄少一个同等危险 —— monkey-patch 是全进程生效的，
 #: 谁加的、为什么加、影响面多大，得有地方写。
 INTENTIONALLY_ADDED: dict[str, str] = {
+    "_patch_p65_api_turn_identity": (
+        "11/06 加 (hermes v0.23「一个网关管所有会话」: api 对话先排队、由网关后台任务跑, 不再经过 _create_agent,\n"
+        "实测主对话发给网关的请求丢了 X-Catfish-User)。\n"
+        "改了什么: 包 gateway.session_api_turn.admit_api_steps, 排队时按请求上下文把「会话 → 员工 / 来源」登记进 session_registry;\n"
+        "P2 / P10 取员工时 api_server 的 agent 先按会话号 (含 parent_session_id 往上几层) 查登记。\n"
+        "影响面: 只决定请求头 X-Catfish-User / X-Catfish-Source 带谁; v0.22 没有这个模块, 跳过。\n"
+        "跟已有的闸: 不用后台任务里的 CV 兜底 (排队任务可能是别的请求建的), 查不到照旧走 resolver。"
+    ),
     "_patch_p64_hygiene_compression_user": (
         "11/03 加 (门户配额日志里微信对话的「上下文压缩」记成 client:hermes-cli)。\n"
         "改了什么: 包 GatewayTurnMixin._hmwa_hygiene_detached_attempt, 按消息来源 (resolver 同一条链) 设好 CV_CF_USER 再跑,\n"

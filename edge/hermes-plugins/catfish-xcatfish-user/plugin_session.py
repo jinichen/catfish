@@ -114,7 +114,7 @@ def _patch_p2_current_main_runtime() -> None:
 
     def patched(self: Any) -> dict:
         d = _orig(self)
-        cf_user = _resolver().resolve_for_agent(self)
+        cf_user = _sib("plugin_api_turn").outgoing_user(self)   # 11/06 P65: 先按会话查 Companion 登记的员工
         if cf_user:
             d["catfish_outgoing_user"] = cf_user
             # 注册给 auxiliary task (auto_title 等) 跨线程查找

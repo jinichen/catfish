@@ -33,6 +33,18 @@ import logging
 
 logger = logging.getLogger("catfish.xcatfish_user.plugin")
 
+
+def _weixin_compat():
+    """兄弟模块 weixin_compat (11/06; 相对 import 优先, 命中 sys.modules 里同一份, 跟 plugin_session._sib 同一套)。"""
+    from importlib import import_module  # noqa: PLC0415
+    if __package__:
+        try:
+            return import_module(".weixin_compat", package=__package__)
+        except (ImportError, SystemError, ValueError, TypeError):
+            pass
+    from plugin import _import_sibling  # noqa: PLC0415
+    return _import_sibling("weixin_compat")
+
 _P28_REPLACEMENTS = [
     # 长真 reason — first 防被短真前缀打断
     (
@@ -386,12 +398,11 @@ def _patch_p28_weixin_zh() -> None:
 
     真:** : : : : : : : : : : : : : : : : : : : : : : :
     """
-    try:
-        from gateway.platforms import weixin as _wx_mod  # noqa: PLC0415
-    except ImportError as e:
-        logger.warning("P28: hermes gateway.platforms.weixin 没导, skip (%s)", e)
-        return
+    # 11/06 hermes v0.23: 微信适配器挪进平台插件, 从 weixin_compat 取网关真正用的那份模块
+    _weixin_compat().when_adapter_module(_apply_p28, "P28")
 
+
+def _apply_p28(_wx_mod) -> None:
     _WxCls = getattr(_wx_mod, "WeixinAdapter", None)
     if _WxCls is None:
         logger.warning("P28: WeixinAdapter 没真 attr (hermes 改名?), skip")

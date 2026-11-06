@@ -50,7 +50,10 @@ def _read(rel: str) -> str:
 
 def test_gateway_仍然在空值时兜底到_home():
     """上游 gateway/run.py 仍然把 TERMINAL_CWD 兜底到 home。"""
+    # 11/06 hermes v0.23: 这段挪到了 gateway/run_bootstrap.py (_start_gateway_resolve_terminal_cwd, 启动时调)
     src = _read("gateway/run.py")
+    if (HERMES_ROOT / "gateway" / "run_bootstrap.py").exists():
+        src += "\n" + _read("gateway/run_bootstrap.py")
 
     assert "resolve_placeholder_terminal_cwd" in src, (
         "上游不再调 resolve_placeholder_terminal_cwd —— TERMINAL_CWD 的兜底链可能没了。\n"

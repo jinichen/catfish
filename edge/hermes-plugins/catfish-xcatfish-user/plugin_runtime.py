@@ -561,7 +561,8 @@ def _patch_p10_apply_client_headers_localhost() -> None:
         headers.pop("X-Catfish-User", None)
         headers.pop("X-Catfish-Source", None)
         headers.pop("X-Catfish-Thinking", None)
-        cf_user = _resolver().resolve_for_agent(self)
+        # 11/06 P65: 先按会话查 Companion 登记的员工 (v0.23 api 对话不经过 _create_agent), 再走 resolver
+        cf_user = _sib("plugin_api_turn").outgoing_user(self)
         if cf_user:
             headers["X-Catfish-User"] = cf_user
         # P41 (8/8): 来源标记跟着走。中间件在 inbound 请求上 set 的 CV,
@@ -574,6 +575,8 @@ def _patch_p10_apply_client_headers_localhost() -> None:
             cf_source = (_ctx().CV_CF_SOURCE.get() or "").strip()
         except Exception:  # noqa: BLE001  CV 不该抛, 抛了也不能拖垮发请求
             cf_source = ""
+        if not cf_source:
+            cf_source = _sib("plugin_api_turn").outgoing_source(self)   # 11/06 P65: 排队跑的 api 对话
         if not cf_source:
             # 10/22: 没有 inbound 请求带来源时 (hermes 自己的定时任务 / 技能整理 / 子代理),
             # 用 hermes 的 platform 标上。门户「配额日志」原来对这些只显示 client:hermes-cli,
