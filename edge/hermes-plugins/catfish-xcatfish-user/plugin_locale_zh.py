@@ -59,6 +59,14 @@ OVERRIDES: dict[str, str] = {
 }
 
 
+#: 11/06 hermes v0.23: 有审批卡着时, 微信回的话只有在 `approval.inputs.*` 词表里才算批准 / 拒绝
+#: (gateway/run_busy.py _route_plaintext_approval_while_busy), 不然当成「重定向当前运行」—— 我们的提示写的是
+#: 「回复 1 执行 · 2 不要执行」(P51), 而自带中文词表里没有 1 / 2: 鸿波 11/06 14:55 回了 1, 小鲶回「已重定向当前运行」,
+#: 审批一直挂着。v0.22 是 P14 在 _handle_message 里把 1 / 2 换成 /approve /deny, v0.23 忙着的会话根本不走那里。
+#: 只在这个会话真有审批卡着时才认, 而且整条消息就是这个词 —— 平常聊天回个「1」不会批准任何东西。
+INPUT_EXTRA: dict[str, str] = {"approval.inputs.approve": "1", "approval.inputs.deny": "2"}
+
+
 def build_pack(bundled: dict[str, str]) -> dict[str, str]:
     """从 hermes 自带 zh 目录派生出要覆盖的条目 (只返回有变化的)。"""
     pack: dict[str, str] = {}
@@ -76,6 +84,10 @@ def build_pack(bundled: dict[str, str]) -> dict[str, str]:
     for key, text in OVERRIDES.items():
         if key in bundled:  # 上游删了的 key 不凭空加
             pack[key] = text
+    for key, word in INPUT_EXTRA.items():
+        base = pack.get(key, bundled.get(key))
+        if isinstance(base, str) and word not in [w.strip() for w in base.split(",")]:
+            pack[key] = f"{base},{word}"
     return pack
 
 
