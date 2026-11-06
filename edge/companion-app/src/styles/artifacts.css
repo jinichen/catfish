@@ -1,0 +1,333 @@
+/* 11/07 对话右侧成果区 (tabs/Chat/artifacts/)。颜色全用 tokens.css 的变量, 亮 / 暗色跟着走。 */
+
+/* 开着成果区时聊天区最少留 400px, 右栏不会把它挤没 */
+.chat-workspace--with-artifact .chat-workspace__main {
+  min-width: 400px;
+}
+
+.artifact-panel {
+  position: relative;
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  min-width: 320px;
+  min-height: 0;
+  border-left: 1px solid var(--catfish-border);
+  background: var(--catfish-bg);
+  color: var(--catfish-text);
+}
+
+.artifact-panel__resize {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.artifact-panel__resize:hover,
+.artifact-panel__resize:focus-visible,
+.artifact-panel__resize[data-dragging="true"] {
+  outline: none;
+  background: linear-gradient(to right, transparent 3px, var(--catfish-cyan) 3px, var(--catfish-cyan) 5px, transparent 5px);
+}
+
+.artifact-panel__head {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 0 var(--space-3) 0 var(--space-4);
+  border-bottom: 1px solid var(--catfish-border);
+  background: var(--catfish-bg-elevated);
+}
+
+.artifact-panel__title {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 14px;
+}
+.artifact-panel__title strong {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact-panel__title select {
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 1 auto;
+  padding: 4px 6px;
+  border: 1px solid var(--catfish-border);
+  border-radius: var(--radius-sm);
+  background: var(--catfish-bg);
+  color: var(--catfish-text);
+  font: inherit;
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+.artifact-panel__actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 2px;
+}
+.artifact-panel__actions button {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--catfish-text-muted);
+  cursor: pointer;
+}
+.artifact-panel__actions button:hover:not(:disabled),
+.artifact-panel__actions button:focus-visible {
+  background: var(--catfish-bg);
+  color: var(--catfish-text);
+}
+.artifact-panel__actions button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.artifact-panel__meta {
+  padding: 6px var(--space-4);
+  border-bottom: 1px solid var(--catfish-border);
+  color: var(--catfish-text-muted);
+  font-size: 12px;
+}
+
+.artifact-panel__body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.artifact-notice {
+  margin: var(--space-3) var(--space-4) 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.artifact-notice--muted {
+  color: var(--catfish-text-muted);
+}
+.artifact-notice--error {
+  color: var(--status-err);
+  word-break: break-all;
+}
+
+.artifact-frame {
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  border: none;
+  background: var(--catfish-bg);
+}
+/* 网页按它自己的样子显示 —— 大多数页面默认白底, 暗色下也给白底, 不然没写背景色的页面字是黑的看不见 */
+.artifact-frame--page {
+  background: #fff;
+}
+
+.artifact-image {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  overflow: auto;
+  background-color: var(--catfish-bg);
+  background-image:
+    linear-gradient(45deg, var(--catfish-border) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--catfish-border) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--catfish-border) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--catfish-border) 75%);
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-size: 16px 16px;
+}
+.artifact-image img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  box-shadow: var(--shadow-sm);
+}
+
+.artifact-doc {
+  min-height: 0;
+  flex: 1;
+  padding: var(--space-4) var(--space-6) var(--space-8);
+  overflow: auto;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.artifact-doc > .artifact-notice {
+  margin: 0 0 var(--space-3);
+}
+.artifact-doc img {
+  max-width: 100%;
+}
+
+.artifact-text {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.artifact-sheet {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+.artifact-sheet > .artifact-notice {
+  margin-bottom: var(--space-2);
+}
+.artifact-sheet__tabs {
+  display: flex;
+  flex-shrink: 0;
+  gap: 2px;
+  padding: var(--space-2) var(--space-3) 0;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--catfish-border);
+}
+.artifact-sheet__tabs button {
+  flex-shrink: 0;
+  padding: 5px 12px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: transparent;
+  color: var(--catfish-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+.artifact-sheet__tabs button[aria-selected="true"] {
+  border-color: var(--catfish-border);
+  background: var(--catfish-bg-elevated);
+  color: var(--catfish-text);
+  font-weight: 600;
+}
+
+.artifact-table-wrap {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+.artifact-doc .artifact-table-wrap {
+  margin: var(--space-3) 0;
+  overflow-x: auto;
+}
+.artifact-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.artifact-table th,
+.artifact-table td {
+  max-width: 320px;
+  padding: 4px 10px;
+  border-right: 1px solid var(--catfish-border);
+  border-bottom: 1px solid var(--catfish-border);
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  vertical-align: top;
+  white-space: pre-wrap;
+}
+.artifact-table thead th {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  background: var(--catfish-bg-elevated);
+  font-weight: 600;
+}
+.artifact-table__rownum {
+  position: sticky;
+  left: 0;
+  min-width: 36px;
+  background: var(--catfish-bg-elevated);
+  color: var(--catfish-text-muted);
+  text-align: right !important;
+}
+.artifact-table thead .artifact-table__rownum {
+  z-index: 2;
+}
+.artifact-doc .artifact-table__rownum {
+  display: none;
+}
+
+.artifact-word h2,
+.artifact-word h3,
+.artifact-word h4,
+.artifact-word h5 {
+  margin: 1.2em 0 0.4em;
+  line-height: 1.4;
+}
+.artifact-word p {
+  margin: 0.4em 0;
+}
+.artifact-word__li {
+  position: relative;
+  padding-left: 1.2em;
+}
+.artifact-word__li::before {
+  position: absolute;
+  left: 0.2em;
+  content: "•";
+  color: var(--catfish-text-muted);
+}
+
+.artifact-slides {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.artifact-slide {
+  position: relative;
+  padding: var(--space-4) var(--space-4) var(--space-4) 52px;
+  border: 1px solid var(--catfish-border);
+  border-radius: var(--radius-md);
+  background: var(--catfish-bg-elevated);
+}
+.artifact-slide__no {
+  position: absolute;
+  top: var(--space-4);
+  left: var(--space-4);
+  color: var(--catfish-text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.artifact-slide h3 {
+  margin: 0 0 var(--space-2);
+  font-size: 15px;
+}
+.artifact-slide p {
+  margin: 0.2em 0;
+}
+.artifact-slide img {
+  display: block;
+  max-height: 260px;
+  margin-top: var(--space-2);
+  border-radius: var(--radius-sm);
+}
+.artifact-muted {
+  color: var(--catfish-text-muted);
+}

@@ -57,6 +57,7 @@ mod expert_bots_gateway;
 mod expert_bots_profiles;
 mod expert_bots_types;
 pub mod feedback;
+pub mod artifacts; // 11/07: 对话右侧成果区 (网页 / 文档 / 表格 / 图片预览)
 pub mod file;
 pub mod file_parse;
 mod file_parse_env; // 9/28: 解析用的 Python / 脚本在哪 (Windows 找不到 Python)

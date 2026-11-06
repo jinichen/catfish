@@ -31,7 +31,7 @@ fn expand_tilde(path: &str) -> PathBuf {
 /// 验证 + 展开路径, 拿到一个真正能用的 absolute PathBuf.
 ///
 /// 错误信息直接给前端展示, 别带 PII.
-fn resolve_path(raw: &str) -> Result<PathBuf, String> {
+pub(crate) fn resolve_path(raw: &str) -> Result<PathBuf, String> {
     let expanded = expand_tilde(raw);
     if !expanded.is_absolute() {
         return Err(format!("路径必须是绝对路径: {raw}"));

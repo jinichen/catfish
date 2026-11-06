@@ -20,6 +20,8 @@ import { draftParseMd, type ParsedDraft } from "../lib/drafts";
 import { basename, fileEmoji } from "../lib/path_detect";
 import { fileManagerName, modKey } from "../lib/platformLabels";
 import { emailClientName } from "../lib/emailPlatformHints";
+import { artifactKind } from "../lib/artifactKinds";
+import { useArtifactStore } from "../store/artifacts";
 
 interface Props {
   path: string;
@@ -102,6 +104,9 @@ export default function FilePill({ path }: Props) {
 
   const canSendToMail =
     parsed?.kind === "reply" && !!parsed.recipient && !!parsed.subject;
+  // 11/07: 网页 / 文档 / 表格 / 图片能在对话右边的成果区直接看, 「预览」排第一个
+  const canPreview = artifactKind(path) !== null;
+  const openArtifact = useArtifactStore((s) => s.openArtifact);
 
   return (
     <div
@@ -158,10 +163,20 @@ export default function FilePill({ path }: Props) {
             {sending ? "放中…" : `📥 放 ${emailClientName()} 草稿箱`}
           </button>
         )}
+        {canPreview && (
+          <button
+            type="button"
+            onClick={() => openArtifact(path)}
+            style={pillBtnStyle(canSendToMail ? "secondary" : "primary")}
+            title="在对话右边预览"
+          >
+            预览
+          </button>
+        )}
         <button
           type="button"
           onClick={handleReveal}
-          style={pillBtnStyle(canSendToMail ? "secondary" : "primary")}
+          style={pillBtnStyle(canSendToMail || canPreview ? "secondary" : "primary")}
           title={`在 ${fileManagerName()} 显示`}
         >
           在 {fileManagerName()} 显示

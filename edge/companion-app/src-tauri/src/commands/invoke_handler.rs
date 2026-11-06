@@ -180,6 +180,10 @@ pub(crate) fn handler(
             // file (Phase 2 优雅下载: skill 生成的 .docx/.xlsx/.pptx 在 Finder 显示)
             crate::commands::file::reveal_in_finder,
             crate::commands::file::open_file,
+            // 11/07 对话右侧成果区: 文件信息 (+ 只放行这一个文件给预览) / 读文本 / Word·Excel·PPT 转预览
+            crate::commands::artifacts::artifact_stat,
+            crate::commands::artifacts::artifact_read_text,
+            crate::commands::artifacts::artifact_office_preview,
             // file_parse (五一 sprint Day 1: 文件上传解析 PDF/Excel/Word/CSV/TXT/MD)
             crate::commands::file_parse::parse_file,
             crate::commands::file_parse::parse_file_from_b64,

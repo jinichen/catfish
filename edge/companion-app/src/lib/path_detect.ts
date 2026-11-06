@@ -52,6 +52,12 @@ const SUPPORTED_EXT = [
   "rs",
   "go",
   "html",
+  // 11/07 对话右侧成果区能显示的几种 (lib/artifactKinds.ts)
+  "htm",
+  "xlsm",
+  "markdown",
+  "xml",
+  "sql",
 ] as const;
 
 const EXT_PATTERN = SUPPORTED_EXT.join("|");
@@ -167,6 +173,10 @@ const FILE_EMOJI: Record<string, string> = {
   zip: "🗜",
   tar: "🗜",
   gz: "🗜",
+  html: "🌐",
+  htm: "🌐",
+  xlsm: "📈",
+  markdown: "📝",
 };
 
 export function fileEmoji(path: string): string {

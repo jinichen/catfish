@@ -28,6 +28,8 @@
 import React from "react";
 import { openFile } from "./tauri";
 import { basename, fileEmoji } from "./path_detect";
+import { artifactKind } from "./artifactKinds";
+import { useArtifactStore } from "../store/artifacts";
 
 // 跟 path_detect.ts SUPPORTED_EXT 对齐 (单一来源会更稳, 但跨模块 import
 // 一个 const tuple 太啰嗦, 这里手抄一份并加注释).
@@ -37,6 +39,7 @@ const EXT_PATTERN = [
   "pdf", "png", "jpg", "jpeg", "gif", "svg", "webp",
   "zip", "tar", "gz",
   "py", "js", "ts", "tsx", "rs", "go", "html",
+  "htm", "xlsm", "markdown", "xml", "sql",
 ].join("|");
 
 /**
@@ -172,7 +175,13 @@ export function linkifyChildren(
  *   - cmd+click 不分流 (保持原决定: 一致体验比智能猜好, reveal 走 FilePill 副按钮)
  */
 function FilePathLink({ path }: { path: string }) {
-  const trigger = () => {
+  const trigger = (el: HTMLElement) => {
+    // 11/07: 在对话页里 (有右侧成果区) 且成果区能显示的 (网页 / 文档 / 表格 / 图片…) 在右边打开;
+    // 早安简报 / 会议纪要这些页面也用同一个 Markdown, 那里没有成果区, 照旧用默认程序打开
+    if (artifactKind(path) !== null && el.closest(".chat-workspace")) {
+      useArtifactStore.getState().openArtifact(path);
+      return;
+    }
     void (async () => {
       try {
         await openFile(path);
@@ -188,7 +197,7 @@ function FilePathLink({ path }: { path: string }) {
   const handleClick = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    trigger();
+    trigger(e.currentTarget as HTMLElement);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -196,7 +205,7 @@ function FilePathLink({ path }: { path: string }) {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       e.stopPropagation();
-      trigger();
+      trigger(e.currentTarget as HTMLElement);
     }
   };
 

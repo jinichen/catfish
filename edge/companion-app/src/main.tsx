@@ -18,6 +18,7 @@ import "highlight.js/styles/github.css";
 import "./styles/refresh.css";
 import "./styles/workspace-glass.css";
 import "./styles/toolsteps.css";
+import "./styles/artifacts.css";
 
 // BL-CSP-PROXY-GLOBAL (7/18 鸿波): 全局 monkey-patch window.fetch → fetchViaProxy.
 //
