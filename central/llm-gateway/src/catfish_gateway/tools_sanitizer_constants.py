@@ -177,6 +177,10 @@ HIDDEN_FROM_LLM: frozenset[str] = frozenset({
     # 想恢复 (某 dept 信任高需 LLM 直调): env CATFISH_EXPOSE_TERMINAL=1.
     "terminal",
     "read_terminal",
+    # 11/06 hermes v0.23: 老 browser_* 删了, 浏览器工具集只剩 browser_exec —— 在员工电脑上跑任意 Python,
+    # 跟 terminal 一样等于开了 shell。鲶鱼的浏览器是 catfish_browser_*; Companion 规定配置也在 v0.23 上关掉了
+    # browser 工具集 (hermes_policy_config.rs), 这里是第二道: 不管同一批里有没有 catfish_browser_* 都丢。
+    "browser_exec",
 })
 
 

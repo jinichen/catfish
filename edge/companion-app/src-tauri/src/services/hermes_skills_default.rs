@@ -40,6 +40,9 @@ pub const DEFAULT_OFF: &[&str] = &[
     "imessage", "findmy", "openhue", "xurl", "obsidian", "polymarket", "arxiv", "research-paper-writing",
     // 跟鲶鱼自己的工具重复 (提醒 / 邮件), 留着会让模型选错
     "apple-reminders", "himalaya",
+    // 11/06 hermes v0.23 把这三个合并成 microsoft-office; 升级的机器上老副本不会自动删 (上游发布说明),
+    // 留着技能清单里新旧两套重复 (多占提示、模型选哪个都有)
+    "docx", "powerpoint", "xlsx",
 ];
 
 pub const MARKER: &str = ".catfish-skills-default-off.json";

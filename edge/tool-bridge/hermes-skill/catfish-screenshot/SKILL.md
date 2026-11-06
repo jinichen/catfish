@@ -1,6 +1,6 @@
 ---
 name: catfish-screenshot
-description: 给视觉模型看员工屏幕的截图工具. 触发: 这个报错是什么 / 我屏幕上 X 是什么 / 截屏看下 / 你看一下我这边 / 这按钮怎么用. 默认 mode=active_window (前台窗口, 隐私友好). **浏览器永远用 browser_vision 不绕过来**. 不主动截图, 不 fullscreen 默认 (防拍到聊天/银行/密码). macOS 全功能, Windows 退 fullscreen.
+description: 给视觉模型看员工屏幕的截图工具. 触发: 这个报错是什么 / 我屏幕上 X 是什么 / 截屏看下 / 你看一下我这边 / 这按钮怎么用. 默认 mode=active_window (前台窗口, 隐私友好). **网页永远用 catfish_browser_screenshot 不绕过来**. 不主动截图, 不 fullscreen 默认 (防拍到聊天/银行/密码). macOS 全功能, Windows 退 fullscreen.
 version: 0.1.0
 author: 鲶鱼 Catfish Platform Team
 license: MIT

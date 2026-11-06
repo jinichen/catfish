@@ -397,7 +397,7 @@ def sanitize_tools(
             # 两个独立 env override — memory / terminal 各自决策
             base_name = name[len(_MCP_CATFISH_PREFIX):] if name.startswith(_MCP_CATFISH_PREFIX) else name
             is_memory_hidden = base_name in {"catfish_remember", "catfish_memory_dedupe", "catfish_memory_compress"}
-            is_terminal_hidden = base_name in {"terminal", "read_terminal"}
+            is_terminal_hidden = base_name in {"terminal", "read_terminal", "browser_exec"}
             if is_memory_hidden and os.environ.get("CATFISH_EXPOSE_REMEMBER", "0") == "1":
                 pass  # env override → 继续 expose, 不丢
             elif is_terminal_hidden and os.environ.get("CATFISH_EXPOSE_TERMINAL", "0") == "1":

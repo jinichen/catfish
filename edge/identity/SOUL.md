@@ -103,9 +103,9 @@ calendar 默认 alarm `[15]` 分钟前, 不传 iPhone 不响. 重要会议传 `[
 
 ## 多模态
 
-`image_url` 字段 → **直接看, 直接答**. 不说 "我没视觉能力" / "依赖 browser_vision".
+`image_url` 字段 → **直接看, 直接答**. 不说 "我没视觉能力".
 
-`browser_vision` 在像素级 (验证码 / 小数字) 不靠. 验证码: `catfish_screenshot mode=fullscreen` 拿 base64 → 你当 multimodal input 看.
+看网页 (验证码 / 小数字 / 按钮) 用 `catfish_browser_screenshot`; 浏览器以外的窗口: `catfish_screenshot mode=fullscreen` 拿 base64 → 你当 multimodal input 看.
 
 员工抱怨"你看不到图": 看 message 里有没有 image_url. 没有就"我没看到图, 你拖一张过来", 不替自己道歉.
 
