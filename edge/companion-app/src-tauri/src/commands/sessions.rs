@@ -210,6 +210,8 @@ fn list_blocking() -> Result<Vec<SessionMeta>, String> {
     // 那个线程失败 / 员工首次 sessions_list 在 index 建好前触发 → 这里 lazy 补.
     // ensure_indexes_background 幂等, 二次 call 秒过. 别删这层, 是防线.
     let _ = ensure_indexes_background();
+    // 11/06 hermes v0.23: Companion 的会话改记在附表 (companion_sessions.rs), 列表按附表认
+    super::companion_sessions::ensure(&conn)?;
     // BL-SESSION-MGMT A (5/15): JOIN 子查询拉每个 session 的首条 user message,
     // sidebar 在 title 还没生成时用这条 fallback (避免显裸 timestamp).
     // BL-SESSION-MGMT C: WHERE deleted_at IS NULL 默认过滤已软删的.
@@ -221,9 +223,8 @@ fn list_blocking() -> Result<Vec<SessionMeta>, String> {
     //   - weixin: 微信接入员工对话
     // 后台 source (api_server / cron) 全部 hide. 后续如果加新员工对话渠道
     // (cli / vscode-plugin 等), 在这里加白名单.
-    let mut stmt = conn
-        .prepare(
-            r#"
+    let sql = format!(
+        r#"
             SELECT
                 s.id, s.title, s.model,
                 s.started_at, s.ended_at, s.end_reason,
@@ -251,12 +252,13 @@ fn list_blocking() -> Result<Vec<SessionMeta>, String> {
                 END AS is_possibly_streaming
             FROM sessions s
             WHERE s.deleted_at IS NULL
-              AND s.source IN ('companion', 'weixin')
+              AND {filter}
             ORDER BY s.started_at DESC
             LIMIT ?1
         "#,
-        )
-        .map_err(|e| format!("SQL 准备失败: {e}"))?;
+        filter = super::companion_sessions::LIST_FILTER,
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| format!("SQL 准备失败: {e}"))?;
 
     let rows = stmt
         .query_map(params![MAX_SESSIONS as i64], row_to_meta)

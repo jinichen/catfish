@@ -86,9 +86,12 @@ pub(crate) fn stop_for_install(paths: &BootstrapPaths) -> StoppedGateway {
         if !cli.exists() || !super::codex_gateway::hermes_api_ready() {
             return StoppedGateway::default();
         }
+        // 11/06 hermes v0.23: 有对话在跑时它拒绝停。先等对话收尾, 再带 --yes (装机 / 换目录是员工点的, 可以打断)
+        crate::services::hermes_idle::wait_until_idle(crate::services::hermes_idle::MAX_WAIT, "换目录前停网关");
         match crate::services::gateway_ops::serialized("换目录前停网关", || {
             crate::services::process::python_command(&cli)
                 .args(["gateway", "stop"])
+                .args(crate::services::gateway_ops::interrupt_flag(&paths.hermes_home))
                 .env("HERMES_HOME", &paths.hermes_home)
                 .output()
         }) {

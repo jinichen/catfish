@@ -26,7 +26,12 @@ use super::hermes_install_artifacts::{hermes_extra_package_names, RuntimeArtifac
 use super::hermes_install_native::{REQUIREMENTS_FILE, WHEELHOUSE_DIR};
 use super::hermes_install_state::BootstrapPaths;
 
+#[cfg(not(test))]
 const OVERRIDES: &str = include_str!("../../hermes-dep-overrides.txt");
+/// 11/06 升 hermes v0.23 后真清单是空的 (上游追上了)。逻辑的单测用升级前那份 (换新 / 补装 / 校验都还要能用,
+/// 以后再有要单独换新的依赖照样走这套); 真清单另有一条 [`tests::真清单读得出来`] 看着。
+#[cfg(test)]
+const OVERRIDES: &str = "pyjwt==2.15.1\nurllib3==2.8.0\nmultidict==6.9.1\nmcp==2.3.0\nmcp-types==2.3.0\ntornado==6.5.10\n";
 
 /// 解归档用的临时目录 (在 hermes_home 下, 跟安装目录同盘, 换进去是 rename)
 const REFRESH_DIR: &str = ".catfish-deps-refresh";
@@ -210,6 +215,17 @@ fn swap_in(requirements: &Path, wheelhouse: &Path, install_dir: &Path) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 真清单读得出来() {
+        // 真清单 (打进安装包的那份) 每行都得是 包名==版本; v0.23 起是空的 —— 空的时候自检脚本也要是合法 Python
+        let real = include_str!("../../hermes-dep-overrides.txt");
+        for line in real.lines().map(|l| l.split('#').next().unwrap_or("").trim()).filter(|l| !l.is_empty()) {
+            assert!(line.split_once("==").is_some_and(|(n, v)| !n.trim().is_empty() && !v.trim().is_empty()), "{line}");
+        }
+        let empty_check = format!("for _n, _v in [{}]:\n    pass", "");
+        assert!(empty_check.contains("in []"));
+    }
 
     #[test]
     fn 覆盖清单读得出来_含严重的_pyjwt() {

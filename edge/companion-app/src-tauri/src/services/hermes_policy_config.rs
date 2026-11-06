@@ -14,6 +14,9 @@
 //! | `approvals.mode` | smart | smart (没配才补, 写明) | 10/14 定: AI 先判断, 拿不准再问员工 |
 //! | `approvals.smart_policy` | 空 | 公司规则 (空才补) | 给判断审批的 AI 的规则, 10/14 鸿波确认的措辞 |
 //! | `approvals.timeout` | 300 秒 | 1800 (没配才补) | 10/26 鸿波定: 等员工批准 30 分钟。5 分钟开个会回来就作废, 只能从头重做 |
+//! | `webapp.enabled` (v0.23) | false | **false** | 网关把桌面工作台开成网页 (可以开到局域网 / 公网), 员工机不开放 |
+//! | `plugins.auto_apply` (v0.23) | false | **false** | 插件自动更新; 鲶鱼插件由 Companion 发版, 不让 hermes 自己换 |
+//! | `agent.disabled_toolsets` 加 `browser` (只 v0.23+) | — | 加 | v0.23 删了老 browser_* 工具, 浏览器工具集只剩 `browser_exec` (在本机跑任意 Python, 等于开了 shell); 鲶鱼用自己的 catfish_browser_*。v0.22 上这个工具集还是老工具, 不动 |
 //! | `plugins.load_timeout_seconds` | 10 秒 | 90 (没配才补) | 11/02: 8G 内存的 Windows 上小鲶插件装载要十几秒, 超时后它启动时注册的 memory 工具被 hermes 忽略 —— 重启后第一个对话的「记住」写进了 hermes 自带的记忆 |
 //!
 //! 「强制」的几项每次启动都校正 (有人改回去也改回来) —— 都是安全 / 数据相关, 员工不该自己开;
@@ -43,12 +46,14 @@ const TOOL_OVERRIDE_PLUGINS: [&str; 2] = ["catfish-xcatfish-user", "catfish-memo
 const TOOL_OVERRIDE_CAPABILITY: &str = "tools.override";
 
 /// 强制的布尔项: (路径, 值)
-const ENFORCED: [(&[&str], bool); 5] = [
+const ENFORCED: [(&[&str], bool); 7] = [
     (&["sessions", "auto_prune"], false),
     (&["auth", "adopt_external_logins"], false),
     (&["security", "allow_lazy_installs"], false),
     (&["nous", "guest"], false),
     (&["tools", "connectors", "enabled"], false),
+    (&["webapp", "enabled"], false),
+    (&["plugins", "auto_apply"], false),
 ];
 
 fn yaml_path() -> Result<PathBuf> {
@@ -142,6 +147,12 @@ pub fn ensure_at(path: &Path) -> Result<Vec<String>> {
     }
     if ensure_in_list(map, &["agent", "disabled_toolsets"], "connections") {
         changed.push("agent.disabled_toolsets+connections".into());
+    }
+    let home = path.parent().unwrap_or(Path::new("."));
+    if crate::services::hermes_gateway_route::hermes_home_is_v023(home)
+        && ensure_in_list(map, &["agent", "disabled_toolsets"], "browser")
+    {
+        changed.push("agent.disabled_toolsets+browser".into());
     }
     for plugin in TOOL_OVERRIDE_PLUGINS {
         let base = ["plugins", "entries", plugin];
@@ -240,7 +251,10 @@ mod tests {
         assert_eq!(r["security"]["allow_lazy_installs"].as_bool(), Some(false));
         assert_eq!(r["nous"]["guest"].as_bool(), Some(false));
         assert_eq!(r["tools"]["connectors"]["enabled"].as_bool(), Some(false));
+        assert_eq!(r["webapp"]["enabled"].as_bool(), Some(false));
+        assert_eq!(r["plugins"]["auto_apply"].as_bool(), Some(false));
         assert_eq!(r["agent"]["disabled_toolsets"][0].as_str(), Some("connections"));
+        assert_eq!(r["agent"]["disabled_toolsets"].as_sequence().unwrap().len(), 1, "v0.22: 不关 browser 工具集");
         assert_eq!(r["agent"]["max_turns"].as_u64(), Some(90));
         assert_eq!(r["approvals"]["mode"].as_str(), Some("smart"));
         assert!(r["approvals"]["smart_policy"].as_str().unwrap().contains("ESCALATE"));
@@ -257,6 +271,25 @@ mod tests {
         assert_eq!(r["display"]["language"].as_str(), Some("zh"));
         // 第二次 no-op
         assert!(ensure_at(&p).unwrap().is_empty());
+    }
+
+    #[test]
+    fn v023_关掉只剩_browser_exec_的浏览器工具集() {
+        let tmp = TempDir::new().unwrap();
+        let guards = tmp.path().join("hermes-agent").join("hermes_cli");
+        fs::create_dir_all(&guards).unwrap();
+        fs::write(guards.join("gateway_lifecycle_guards.py"), "").unwrap();
+        let p = cfg(&tmp, "model:\n  provider: custom\n");
+        let changed = ensure_at(&p).unwrap();
+        assert!(changed.contains(&"agent.disabled_toolsets+browser".to_string()), "{changed:?}");
+        let toolsets: Vec<_> = root(&p)["agent"]["disabled_toolsets"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(toolsets, ["connections", "browser"]);
+        assert!(ensure_at(&p).unwrap().is_empty(), "第二次 no-op");
     }
 
     #[test]

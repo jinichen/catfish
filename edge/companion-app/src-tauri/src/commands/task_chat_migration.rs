@@ -102,6 +102,7 @@ pub fn run_migration() -> Result<MigrationReport, String> {
     conn.busy_timeout(std::time::Duration::from_millis(5000))
         .map_err(|e| format!("设 busy_timeout 失败: {e}"))?;
 
+    super::companion_sessions::ensure(&conn)?;
     // 跑前 ensure sidecar 表存在 (跟 session_write.rs 同款)
     conn.execute_batch(
         r#"
@@ -218,7 +219,7 @@ pub fn run_migration() -> Result<MigrationReport, String> {
                 input_tokens, output_tokens, cache_read_tokens,
                 cache_write_tokens, reasoning_tokens, title
             ) VALUES (
-                ?1, 'companion-migrated', 'unknown', '{}', NULL,
+                ?1, 'api_server', 'unknown', '{}', NULL,
                 ?2, 0, 0,
                 0, 0, 0,
                 0, 0, ?3
@@ -228,6 +229,12 @@ pub fn run_migration() -> Result<MigrationReport, String> {
         );
         if let Err(e) = r {
             failed_files.push(format!("{path:?} INSERT session 失败: {e}"));
+            let _ = tx.rollback();
+            continue;
+        }
+        // 11/06 hermes v0.23 只接 api_server 来源; 「这是 Companion 迁过来的」记附表 (companion_sessions.rs)
+        if let Err(e) = super::companion_sessions::mark(&tx, &session_id, "companion-migrated", earliest) {
+            failed_files.push(format!("{path:?} 记 Companion 会话失败: {e}"));
             let _ = tx.rollback();
             continue;
         }

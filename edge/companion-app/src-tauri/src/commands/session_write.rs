@@ -2,6 +2,8 @@
 //!
 //! Plan C Week 2: Companion ↔ Hermes 数据互通(决策 1c)
 //!     Companion 起的会话标 source='companion',Hermes 起的标 source='cli'
+//!     (11/06 hermes v0.23 起改标 'api_server' —— 它只肯接这个来源; 是不是 Companion 的记在
+//!      catfish_companion_sessions 附表, 见 companion_sessions.rs)
 //!     两者共享同一份 state.db,Sessions tab 列出所有,
 //!     未来 hermes --resume <id> 也能继续 Companion 起的对话(同一 schema)。
 //!
@@ -64,6 +66,7 @@ fn ensure_catfish_sidecar_schema(conn: &Connection) -> Result<(), String> {
         "#,
     )
     .map_err(|e| format!("建 catfish_session_metadata 表失败: {e}"))?;
+    super::companion_sessions::ensure(conn)?;
     Ok(())
 }
 
@@ -160,7 +163,7 @@ pub async fn session_create(
                     input_tokens, output_tokens, cache_read_tokens,
                     cache_write_tokens, reasoning_tokens, title
                 ) VALUES (
-                    ?1, 'companion', ?2, '{}', ?3,
+                    ?1, ?6, ?2, '{}', ?3,
                     ?4, 0, 0,
                     0, 0, 0,
                     0, 0, ?5
@@ -172,10 +175,14 @@ pub async fn session_create(
                     input.system_prompt,
                     started_at,
                     attempt_title,
+                    super::companion_sessions::SOURCE,
                 ],
             );
             match r {
-                Ok(_) => break,
+                Ok(_) => {
+                    super::companion_sessions::mark(&conn, &id, "companion", started_at)?;
+                    break;
+                }
                 Err(e) => {
                     // string match "UNIQUE constraint" 比 rusqlite::ErrorCode::ConstraintViolation
                     // 更兼容 rusqlite 版本变动. SQLite UNIQUE 错文案稳定 "UNIQUE constraint failed".
@@ -409,7 +416,9 @@ pub async fn session_check(session_id: String) -> Result<Option<String>, String>
         let conn = open_db_for_write()?;
         let source: Option<String> = conn
             .query_row(
-                "SELECT source FROM sessions WHERE id = ?1",
+                // 11/06: Companion 的会话来源改写 api_server (hermes v0.23), 附表里有的照旧报 companion
+                "SELECT CASE WHEN EXISTS (SELECT 1 FROM catfish_companion_sessions c WHERE c.session_id = s.id)
+                        THEN 'companion' ELSE s.source END FROM sessions s WHERE s.id = ?1",
                 params![session_id],
                 |row| row.get(0),
             )
@@ -778,7 +787,11 @@ mod tests {
             )
             .unwrap();
         assert_eq!(model, "test-model");
-        assert_eq!(source, "companion");
+        assert_eq!(source, "api_server"); // 11/06 hermes v0.23 只接这个来源
+        let marked: i64 = conn
+            .query_row("SELECT COUNT(*) FROM catfish_companion_sessions WHERE session_id = ?1", params![out.id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(marked, 1);
         assert_eq!(title, "hi");
     }
 

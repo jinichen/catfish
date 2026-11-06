@@ -393,8 +393,20 @@ pub(crate) fn restart_hermes_gateway() {
 
 /// 请 hermes 自己重启网关: venv 里 hermes 的 `gateway restart`。网关等进行中的对话收尾后干净重启,
 /// 命令发出请求就返回, 不等新网关起来。Ok 带 hermes 的路径 (写日志用)。mac / Windows 共用。
+///
+/// 11/06 hermes v0.23: 有对话在跑时它拒绝重启 (不再自己等收尾)。被拒就交给后台等对话收尾再试
+/// (gateway_ops::retry_when_idle), 这里当作已经安排好 —— mac 上**不能**再退回 launchctl kickstart 硬杀。
 fn request_hermes_restart() -> Result<String, String> {
-    run_hermes_cli(&["gateway", "restart"])
+    match run_hermes_cli(&["gateway", "restart"]) {
+        Err(e) if crate::services::gateway_ops::is_busy_refusal(&e) => {
+            log::info!("[P3.5.56] 网关上有对话在进行, 等它们结束后再重启");
+            crate::services::gateway_ops::retry_when_idle("重启 hermes 网关 (插件更新)", || {
+                run_hermes_cli(&["gateway", "restart"]).map(|_| ())
+            });
+            Ok("等对话结束后重启".into())
+        }
+        other => other,
+    }
 }
 
 /// 跑 venv 里 hermes 的一条命令 (HERMES_HOME 指好)。Ok 带 hermes 的路径 (写日志用)。
@@ -418,7 +430,13 @@ fn run_hermes_cli_now(args: &[&str]) -> Result<String, String> {
         .output()
         .map_err(|e| format!("起不了 {} ({e})", cli.display()))?;
     if !out.status.success() {
-        return Err(format!("{} 失败: {}", out.status, String::from_utf8_lossy(&out.stderr).trim()));
+        // 11/06: stdout 也带上 —— hermes v0.23 的「有对话在跑, 拒绝重启」要认得出来
+        return Err(format!(
+            "{} 失败: {} {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim(),
+            String::from_utf8_lossy(&out.stdout).trim()
+        ));
     }
     Ok(cli.display().to_string())
 }

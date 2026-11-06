@@ -31,7 +31,7 @@ try {
     & $Uv venv (Join-Path $Agent 'venv') --python $BasePython --no-python-downloads
     if ($LASTEXITCODE -ne 0) { throw 'Hermes venv creation failed' }
     $VenvPython = Join-Path $Agent 'venv\Scripts\python.exe'
-    & $Uv pip install --offline --no-index --find-links $Wheelhouse --require-hashes --python $VenvPython `
+    & $Uv pip install --offline --no-index --find-links $Wheelhouse --require-hashes --no-deps --python $VenvPython `
         -r (Join-Path $Agent 'catfish-requirements.txt')
     if ($LASTEXITCODE -ne 0) { throw 'Bundled Hermes dependencies failed' }
     & $Uv pip install --offline --no-index --find-links $Wheelhouse --no-deps --python $VenvPython -e $Agent

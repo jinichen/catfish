@@ -138,6 +138,8 @@ fn restart_hermes_gateway_now() -> Result<(), String> {
     let mut command = crate::services::process::python_command(&python);
     command
         .args(["-m", "hermes_cli.main", "gateway", "restart"])
+        // 11/06 hermes v0.23: 这是网关不健康时的兜底重启, 进行中的对话本来就卡着, 带 --yes 不让它拒绝
+        .args(crate::services::gateway_ops::interrupt_flag(&root))
         .env("HERMES_HOME", &root)
         .current_dir(&agent_root)
         .stdin(Stdio::null());

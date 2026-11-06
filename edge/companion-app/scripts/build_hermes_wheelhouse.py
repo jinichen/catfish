@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """给 hermes 源码树配一份离线安装用的 wheelhouse (10/14, hermes v0.22.0 起)。
 
-    python build_hermes_wheelhouse.py --src <hermes 源码树> --uv <uv 0.12.3> \\
+    python build_hermes_wheelhouse.py --src <hermes 源码树> --uv <uv, 版本见 .uv-version> \\
         --target aarch64-apple-darwin|x86_64-apple-darwin|x86_64-pc-windows-msvc
 
 产出 (都写进源码树, 跟着 hermes-agent-bundle 一起打包):
@@ -47,7 +47,7 @@ EXTRA_LIST = HERE.parent / "src-tauri" / "hermes-extra-packages.txt"
 OVERRIDES = HERE.parent / "src-tauri" / "hermes-dep-overrides.txt"
 PYTHON_VERSION = "3.14"
 # editable 安装 hermes 自己要的构建后端 —— 版本跟上游 pyproject [build-system] 一致, 下面会核对
-BUILD_BACKEND = ["setuptools==83.0.0", "wheel"]
+BUILD_BACKEND = ["setuptools==84.1.0", "wheel"]
 
 PIP_PLATFORMS = {
     "aarch64-apple-darwin": ["macosx_11_0_arm64", "macosx_11_0_universal2"],
@@ -209,8 +209,26 @@ def check_overrides(requirements: Path) -> None:
 
 def check_backend(src: Path) -> None:
     text = (src / "pyproject.toml").read_text(encoding="utf-8")
-    if 'requires = ["setuptools==83.0.0", "wheel"]' not in text:
+    if "requires = [" + ", ".join(f'"{r}"' for r in BUILD_BACKEND) + "]" not in text:
         sys.exit("❌ 上游 pyproject [build-system] 变了, 改 BUILD_BACKEND 再打包 (editable 安装离线要用)")
+
+
+def merged_overrides(src: Path, out: Path) -> Path:
+    """上游 pyproject [tool.uv] override-dependencies + 我们的安全覆盖, 合成一份给 compile 用。
+
+    11/06 hermes v0.23: 上游用 override 强压 Pillow==13.0.0 (browser-harness 0.1.13 钉死 pillow==12.3.0),
+    uv export 出来的锁定版本就是压过之后的; 我们 compile 时不带上游的 override, 两个钉死的版本解不出来, 包打不出。
+    同一个包两边都写了以我们的为准 (我们这份是安全修复, 按规矩上游追上就删)。
+    """
+    import tomllib  # noqa: PLC0415
+    data = tomllib.loads((src / "pyproject.toml").read_text(encoding="utf-8"))
+    upstream = list((data.get("tool", {}).get("uv", {}) or {}).get("override-dependencies") or [])
+    ours = [ln.strip() for ln in OVERRIDES.read_text(encoding="utf-8").splitlines()
+            if ln.strip() and not ln.strip().startswith("#")]
+    mine = {norm(re.split(r"[<>=!~;\[\s]", r, maxsplit=1)[0]) for r in ours}
+    keep = [r for r in upstream if norm(re.split(r"[<>=!~;\[\s]", r, maxsplit=1)[0]) not in mine]
+    out.write_text("\n".join(keep + ours) + "\n", encoding="utf-8")
+    return out
 
 
 def main() -> int:
@@ -260,7 +278,8 @@ def main() -> int:
             no_binary += ["--no-binary", n]
         run([args.uv, "pip", "compile", str(wanted), "--python-platform", UV_PLATFORMS[args.target],
              "-p", PYTHON_VERSION, "--only-binary", ":all:", *no_binary, "--generate-hashes", "--no-header",
-             "--no-annotate", "--override", str(OVERRIDES), "-o", str(req_out), "-q"], env=env)
+             "--no-annotate", "--override", str(merged_overrides(src, Path(tmp) / "overrides.txt")),
+             "-o", str(req_out), "-q"], env=env)
         check_overrides(req_out)
         # 只有源码包的 (jieba) / 本平台要现编的 (watchdog@mac) 单独解析出版本 —— 它们都没有依赖
         src_pins: dict[str, str] = {}

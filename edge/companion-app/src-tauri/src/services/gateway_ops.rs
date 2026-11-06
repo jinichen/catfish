@@ -37,6 +37,62 @@ pub(crate) fn serialized<T>(what: &str, f: impl FnOnce() -> T) -> T {
     f()
 }
 
+// ── hermes v0.23: 有对话在跑就拒绝停 / 重启 (11/06) ─────────────────────────────
+//
+// v0.23 的 `gateway stop|restart` 先数进行中的对话 / 定时任务 / 后台子任务, 有就拒绝 (exit 1, 打
+// 「Refusing to restart the gateway: N live session(s) would be interrupted.」), 要 `--yes` 才硬停
+// (H23 hermes_cli/gateway_lifecycle_guards.py)。v0.22 没有这道闸, 也不认 `--yes`。
+//
+// Companion 的做法: 改了配置要重启的 (插件更新、专家上下线、改专家设定) 被拒就**不回滚、不 kickstart 硬杀**,
+// 后台等对话收尾 (hermes_idle) 再试, 直到重启成功; 网关本来就坏了的兜底重启和换安装目录前停网关
+// 可以打断, 带 `--yes` (见 [`interrupt_flag`])。
+
+/// 装的 hermes 有没有「有对话就拒绝停 / 重启」那道闸 (v0.23+)。
+pub(crate) fn guards_live_sessions(hermes_home: &std::path::Path) -> bool {
+    hermes_home.join("hermes-agent").join("hermes_cli").join("gateway_lifecycle_guards.py").is_file()
+}
+
+/// 要打断进行中的对话时追加的参数 (v0.22 不认 `--yes`, 不加)。
+pub(crate) fn interrupt_flag(hermes_home: &std::path::Path) -> Option<&'static str> {
+    guards_live_sessions(hermes_home).then_some("--yes")
+}
+
+/// 命令输出是不是「有对话在跑, 拒绝停 / 重启」。
+pub(crate) fn is_busy_refusal(text: &str) -> bool {
+    text.contains("Refusing to restart the gateway") || text.contains("Refusing to stop the gateway")
+}
+
+/// 被拒后最多再试几次 (每次先等对话收尾, 等满 hermes_idle::MAX_WAIT 还忙就隔一分钟再看)。
+const BUSY_RETRIES: u32 = 8;
+
+/// 后台线程: 等对话收尾再跑 `attempt`, 还被拒就过一分钟再来, 直到成功 / 别的错 / 试满。
+pub(crate) fn retry_when_idle(
+    what: &'static str,
+    attempt: impl Fn() -> Result<(), String> + Send + 'static,
+) {
+    let spawned = std::thread::Builder::new().name("hermes-gateway-retry".into()).spawn(move || {
+        for _ in 0..BUSY_RETRIES {
+            crate::services::hermes_idle::wait_until_idle(crate::services::hermes_idle::MAX_WAIT, what);
+            // attempt 自己经过 serialized (run_hermes / run_hermes_cli 都是), 这里不能再套一层 —— 锁不可重入
+            match attempt() {
+                Ok(()) => {
+                    log::info!("[hermes-gateway] {what}: 对话收尾后完成");
+                    return;
+                }
+                Err(e) if is_busy_refusal(&e) => std::thread::sleep(std::time::Duration::from_secs(60)),
+                Err(e) => {
+                    log::warn!("[hermes-gateway] {what} 失败: {e}");
+                    return;
+                }
+            }
+        }
+        log::warn!("[hermes-gateway] {what}: 一直有对话在进行, 试了 {BUSY_RETRIES} 次还没做成, 下次打开 Companion 再做");
+    });
+    if let Err(e) = spawned {
+        log::warn!("[hermes-gateway] 起不了等空闲再{what}的线程 ({e})");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,5 +131,18 @@ mod tests {
             w.join().unwrap();
         }
         assert_eq!(max_seen.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn 认得出_v023_的拒绝() {
+        assert!(is_busy_refusal("Refusing to restart the gateway: 2 live session(s) would be interrupted."));
+        assert!(is_busy_refusal("✗ Refusing to stop the gateway: 1 live session(s) would be interrupted."));
+        assert!(!is_busy_refusal("Gateway restarted"));
+        let t = tempfile::tempdir().unwrap();
+        assert_eq!(interrupt_flag(t.path()), None, "v0.22: 不认 --yes, 不加");
+        let guards = t.path().join("hermes-agent").join("hermes_cli");
+        std::fs::create_dir_all(&guards).unwrap();
+        std::fs::write(guards.join("gateway_lifecycle_guards.py"), "").unwrap();
+        assert_eq!(interrupt_flag(t.path()), Some("--yes"));
     }
 }

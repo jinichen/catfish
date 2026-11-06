@@ -279,7 +279,7 @@ PW_VENV="/tmp/catfish-pw-venv-$ARCH"
 rm -rf "$PW_VENV"
 "$RESOURCES/uv" venv -q "$PW_VENV" --python "$EMBED_PY"
 VIRTUAL_ENV="$PW_VENV" "$RESOURCES/uv" pip install -q --offline --no-index \
-    --find-links "$HERMES_SRC/wheelhouse" --require-hashes -r "$HERMES_SRC/catfish-requirements.txt"
+    --find-links "$HERMES_SRC/wheelhouse" --require-hashes --no-deps -r "$HERMES_SRC/catfish-requirements.txt"
 PW_VERSION="$("$PW_VENV/bin/python" -c 'import importlib.metadata as m; print(m.version("playwright"))')"
 echo "  playwright $PW_VERSION (跟员工机上装的同一版)"
 # 11/6: 群聊本机库加密组件 (sqlcipher3) 用这个架构的内嵌解释器真跑一遍 (见脚本文件头)

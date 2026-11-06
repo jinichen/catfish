@@ -71,6 +71,11 @@ pub fn hermes_home_is_v022(home: &Path) -> bool {
         .is_file()
 }
 
+/// 指定的 hermes home 下装的是不是 v0.23+ (11/06)。认 v0.23 才有的文件: 网关启停的「有对话就拒绝」那道闸。
+pub fn hermes_home_is_v023(home: &Path) -> bool {
+    crate::services::gateway_ops::guards_live_sessions(home)
+}
+
 /// 删掉顶层 `model:` 段下的某个字段 (整行)。没有就原样返回。
 pub(super) fn remove_model_field(text: &str, field: &str) -> String {
     let prefix = format!("{field}:");

@@ -152,7 +152,18 @@ fn persist_and_reconcile(
         return Err(error);
     }
     if gateway_changed {
-        if let Err(error) = run_hermes(home, &["gateway", "restart"]) {
+        // 11/06 hermes v0.23: 有对话在跑时拒绝重启 —— 配置是对的, 不回滚, 等对话收尾后台再重启
+        let restarted = run_hermes(home, &["gateway", "restart"]);
+        if let Err(error) = &restarted {
+            if crate::services::gateway_ops::is_busy_refusal(error) {
+                let home = home.to_path_buf();
+                crate::services::gateway_ops::retry_when_idle("重启网关 (专家 Bot 设置)", move || {
+                    run_hermes(&home, &["gateway", "restart"])
+                });
+                return Ok(new_cfg);
+            }
+        }
+        if let Err(error) = restarted {
             let _ = atomic_write(&hermes_path, &old_hermes);
             restore_parked(&parked_before);
             let _ = save_config(companion_path, old_cfg);

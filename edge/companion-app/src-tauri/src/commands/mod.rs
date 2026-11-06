@@ -121,6 +121,7 @@ pub mod profile; // BL-ADVISOR-PROFILE (5/21 Phase 7): 员工职级 + 画像自�
 pub mod relation;
 pub mod room_link; // P50 (9/10): 横向协同 —— 本机 install_id + 内网地址
 pub mod session_goal; // BL-BRIEFING-GOAL-INPUT (5/20): /goal UI 路径
+pub mod companion_sessions;  // 11/06 hermes v0.23: Companion 的会话来源写 api_server, 自己记附表
 pub mod session_write;
 pub mod sessions;
 pub mod skill_audit;

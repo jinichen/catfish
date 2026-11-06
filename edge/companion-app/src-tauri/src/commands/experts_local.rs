@@ -171,7 +171,16 @@ pub async fn expert_local_apply(id: String) -> Result<Json, String> {
         })?;
         // 已经在跑的专家改了 SOUL / 范围, 网关要重启才读到新的 (注册表没变时上面的事务不会重启)
         if was_served && enabled {
-            run_hermes(&get_home()?, &["gateway", "restart"])?;
+            let home = get_home()?;
+            match run_hermes(&home, &["gateway", "restart"]) {
+                // 11/06 hermes v0.23: 有对话在跑时拒绝重启 → 等对话收尾后台再重启, 设定已经存好了
+                Err(e) if crate::services::gateway_ops::is_busy_refusal(&e) => {
+                    crate::services::gateway_ops::retry_when_idle("重启网关 (专家设定)", move || {
+                        run_hermes(&home, &["gateway", "restart"])
+                    });
+                }
+                other => other?,
+            }
         }
         Ok(json!({ "ok": true, "profile_id": pid }))
     })

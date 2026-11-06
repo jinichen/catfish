@@ -139,7 +139,8 @@ fn run_hermes_now(hermes_home: &Path, args: &[&str]) -> Result<(), String> {
     }
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let detail = if stderr.is_empty() { stdout } else { stderr };
+    // 11/06: 两路都带上 —— hermes v0.23 的「有对话在跑, 拒绝重启」打在哪一路要认得出来 (gateway_ops::is_busy_refusal)
+    let detail = [stderr, stdout].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n");
     Err(format!("Hermes 命令失败 ({}): {detail}", output.status))
 }
 

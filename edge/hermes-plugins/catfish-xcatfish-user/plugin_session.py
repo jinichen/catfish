@@ -104,6 +104,35 @@ def _session_registry():
 
 
 
+_COMPANION_SIDS: set[str] = set()
+
+
+def _is_companion_session(db, session_id: str, session) -> bool:
+    """P40 用: 这个会话是不是 Companion 建的。
+
+    11/06 hermes v0.23 只肯接 source='api_server' 的会话 (别的来源一律 permission_denied), Companion 建会话改写
+    api_server, 「是 Companion 的」记在它自己的附表 catfish_companion_sessions (companion_sessions.rs)。
+    老库里还没迁移的 source='companion' 照旧认。只读查一次, 命中的记在内存里。
+    """
+    source = str((session or {}).get("source") or "")
+    if source == "companion" or session_id in _COMPANION_SIDS:
+        return True
+    if source != "api_server":
+        return False
+    import sqlite3  # noqa: PLC0415
+    try:
+        con = sqlite3.connect(f"file:{db.db_path}?mode=ro", uri=True, timeout=2)
+        try:
+            hit = con.execute("SELECT 1 FROM catfish_companion_sessions WHERE session_id = ?", (session_id,)).fetchone()
+        finally:
+            con.close()
+    except Exception:  # noqa: BLE001  表还没建 / 读不到 → 当不是 (不去重, 最坏多一条)
+        return False
+    if hit:
+        _COMPANION_SIDS.add(session_id)
+    return bool(hit)
+
+
 # ── P2 ───────────────────────────────────────────────────────────────────
 
 def _patch_p2_current_main_runtime() -> None:
@@ -518,7 +547,7 @@ def _patch_p40_companion_user_message_dedup() -> None:
         with session_lock:
             try:
                 session = self.get_session(session_id)
-                if str((session or {}).get("source") or "") == "companion":
+                if _is_companion_session(self, session_id, session):
                     messages = self.get_messages(session_id)
                     if messages:
                         last = messages[-1]

@@ -250,6 +250,9 @@ fn requirements_command(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths, py
         .arg("--find-links")
         .arg(dir.join(WHEELHOUSE_DIR))
         .arg("--require-hashes")
+        // 11/06 hermes v0.23: 清单本来就是打包时解好的完整闭包 (版本钉死 + sha256), 不再重新解依赖 ——
+        // 上游用 override 压过的版本 (Pillow 13 vs browser-harness 钉的 12.3) 重新解会说冲突装不上
+        .arg("--no-deps")
         .arg("--compile-bytecode") // 首次启动不用现编; jieba 那几句 SyntaxWarning 也只出现在这里
         .arg("-r")
         .arg(dir.join(REQUIREMENTS_FILE));
