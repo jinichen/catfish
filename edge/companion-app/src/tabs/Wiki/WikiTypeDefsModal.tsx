@@ -8,7 +8,8 @@
  */
 import { useEffect, useState } from "react";
 import { X } from "@phosphor-icons/react";
-import { ModalShell, T } from "../../components/ModalShell";
+import { ModalShell } from "../../components/ModalShell";
+import { V, field } from "./wikiTheme";
 import { wikiTypeDefs, wikiTypeDefsApply, type TypeDefChange, type TypeDefsView } from "../../lib/tauri_wiki_types";
 import WikiTypeDefEditor from "./WikiTypeDefEditor";
 import { wikiSubtypeLabel } from "./wikiLabels";
@@ -53,51 +54,51 @@ export default function WikiTypeDefsModal({ onClose }: { onClose: () => void }) 
   };
 
   return (
-    <ModalShell onClose={onClose} maxWidth={1080}>
-      <div style={{ width: "100%", fontFamily: T.systemFont, color: T.text }}>
+    <ModalShell onClose={onClose} maxWidth={1080} themed>
+      <div style={{ width: "100%", fontFamily: V.font, color: V.text }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
           <h3 style={{ margin: 0, fontSize: 17 }}>类型定义</h3>
-          <button type="button" onClick={onClose} aria-label="关闭" style={{ border: 0, background: "transparent", cursor: "pointer", color: T.textSecondary }}>
+          <button type="button" onClick={onClose} aria-label="关闭" style={{ border: 0, background: "transparent", cursor: "pointer", color: V.muted }}>
             <X size={18} />
           </button>
         </div>
-        <p style={{ margin: "0 0 12px", color: T.textSecondary, fontSize: 13, lineHeight: 1.5 }}>
+        <p style={{ margin: "0 0 12px", color: V.muted, fontSize: 13, lineHeight: 1.5 }}>
           每一类知识有哪些属性、到期前多少天提醒、能做哪些行动。改完马上生效：知识页的属性卡片、「整理属性」、小鲶按属性查都按这里来。
           内置的属性和行动不能删，可以隐藏；只改你这台电脑上的设置。
         </p>
-        {error && <p style={{ color: T.errorRed, fontSize: 13, margin: "0 0 8px" }}>{error}</p>}
+        {error && <p style={{ color: V.error, fontSize: 13, margin: "0 0 8px" }}>{error}</p>}
         {!view ? (
-          <p style={{ fontSize: 13, color: T.textSecondary }}>读取中…</p>
+          <p style={{ fontSize: 13, color: V.muted }}>读取中…</p>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "180px minmax(0, 1fr)", gap: 16, maxHeight: "68vh" }}>
-            <div style={{ borderRight: `1px solid ${T.border}`, paddingRight: 12, overflowY: "auto", overflowX: "hidden", minWidth: 0 }}>
+            <div style={{ borderRight: `1px solid ${V.border}`, paddingRight: 12, overflowY: "auto", overflowX: "hidden", minWidth: 0 }}>
               {view.types.map((t) => (
                 <button key={t.key} type="button" onClick={() => setSelected(t.key)}
                   style={{
                     display: "flex", justifyContent: "space-between", width: "100%", padding: "8px 10px", marginBottom: 4,
                     border: 0, borderRadius: 8, cursor: "pointer", fontSize: 14, textAlign: "left",
-                    background: t.key === selected ? "rgba(6,182,212,0.12)" : "transparent", color: T.text,
+                    background: t.key === selected ? V.accentSoft : "transparent", color: V.text,
                   }}>
                   <span>{t.label}</span>
-                  <small style={{ color: T.textTertiary }}>{t.properties.filter((p) => !p.hidden).length} 项</small>
+                  <small style={{ color: V.muted }}>{t.properties.filter((p) => !p.hidden).length} 项</small>
                 </button>
               ))}
               <div style={{ marginTop: 14, display: "grid", gap: 6 }}>
-                <div style={{ fontSize: 12, color: T.textSecondary }}>新建类型（从知识库已有的分类里选）</div>
+                <div style={{ fontSize: 12, color: V.muted }}>新建类型（从知识库已有的分类里选）</div>
                 <select value={newType.key} onChange={(e) => setNewType({ key: e.target.value, label: newType.label || subtypeName(e.target.value).replace(/（.*$/, "") })}
-                  aria-label="知识库里的分类" style={{ padding: 6, borderRadius: 6, fontSize: 13, width: "100%", minWidth: 0 }}>
+                  aria-label="知识库里的分类" style={{ ...field, width: "100%", minWidth: 0 }}>
                   <option value="">选一个分类…</option>
                   {view.subtypes.map((s) => <option key={s.key} value={s.key}>{subtypeName(s.key)} · {s.count} 条</option>)}
                 </select>
                 {newType.key && (
                   <>
                     <input value={newType.label} onChange={(e) => setNewType({ ...newType, label: e.target.value })} maxLength={20}
-                      placeholder="类型名" aria-label="新类型名" style={{ padding: "6px 8px", border: `1px solid ${T.border}`, borderRadius: 6, fontSize: 13, width: "100%", boxSizing: "border-box" }} />
+                      placeholder="类型名" aria-label="新类型名" style={{ ...field, width: "100%" }} />
                     <button type="button" disabled={busy || !newType.label.trim()}
                       onClick={async () => {
                         if (await apply({ op: "add_type", type: newType.key, label: newType.label.trim() })) setNewType({ key: "", label: "" });
                       }}
-                      style={{ padding: "6px 12px", border: 0, borderRadius: 8, background: T.cyan, color: "#fff", cursor: "pointer", fontSize: 13 }}>
+                      style={{ padding: "6px 12px", border: 0, borderRadius: 8, background: V.accent, color: "#fff", cursor: "pointer", fontSize: 13 }}>
                       新建
                     </button>
                   </>
@@ -110,13 +111,13 @@ export default function WikiTypeDefsModal({ onClose }: { onClose: () => void }) 
                   <WikiTypeDefEditor def={def} apply={apply} busy={busy} />
                   {def.origin === "local" && (
                     <button type="button" disabled={busy} onClick={() => void apply({ op: "delete_type", type: def.key })}
-                      style={{ marginTop: 16, border: 0, background: "transparent", color: T.errorRed, cursor: "pointer", fontSize: 13 }}>
+                      style={{ marginTop: 16, border: 0, background: "transparent", color: V.error, cursor: "pointer", fontSize: 13 }}>
                       删除这个类型（已写进知识的属性不会删）
                     </button>
                   )}
                 </>
               ) : (
-                <p style={{ fontSize: 13, color: T.textSecondary }}>左边选一个类型。</p>
+                <p style={{ fontSize: 13, color: V.muted }}>左边选一个类型。</p>
               )}
             </div>
           </div>

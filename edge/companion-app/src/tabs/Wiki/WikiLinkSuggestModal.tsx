@@ -19,7 +19,8 @@
  */
 
 import { useState, useEffect } from "react";
-import { ModalShell, T } from "../../components/ModalShell";
+import { ModalShell } from "../../components/ModalShell";
+import { V } from "./wikiTheme";
 import { wikiUpdateFile } from "../../lib/tauri";
 import {
   suggestWikilinks,
@@ -142,13 +143,13 @@ export default function WikiLinkSuggestModal({
 
   // 严格 confidence 视觉分级
   function confidenceBadge(c: number): { label: string; color: string } {
-    if (c >= 0.85) return { label: "强", color: T.cyan };
+    if (c >= 0.85) return { label: "强", color: V.accent };
     if (c >= 0.65) return { label: "中", color: "#F47B3D" }; // 暖橙
-    return { label: "弱", color: T.textTertiary };
+    return { label: "弱", color: V.muted };
   }
 
   return (
-    <ModalShell onClose={onClose}>
+    <ModalShell onClose={onClose} themed>
       {/* 关闭按钮 */}
       <button
         onClick={onClose}
@@ -163,8 +164,8 @@ export default function WikiLinkSuggestModal({
           height: 22,
           borderRadius: "50%",
           border: "none",
-          background: closeHover ? T.closeBgHover : T.closeBg,
-          color: T.textSecondary,
+          background: closeHover ? V.border : V.bg,
+          color: V.muted,
           fontSize: 11,
           cursor: "pointer",
           lineHeight: 1,
@@ -192,12 +193,12 @@ export default function WikiLinkSuggestModal({
           width: 56,
           height: 56,
           borderRadius: 14,
-          background: `linear-gradient(135deg, ${T.cyan}, ${T.cyanHover})`,
+          background: `linear-gradient(135deg, ${V.accent}, ${V.accent})`,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           marginBottom: 18,
-          boxShadow: `0 6px 16px ${T.cyan}40`,
+          boxShadow: `0 6px 16px ${V.accent}40`,
         }}
       >
         <svg
@@ -220,9 +221,9 @@ export default function WikiLinkSuggestModal({
           margin: 0,
           fontSize: 19,
           fontWeight: 600,
-          color: T.text,
+          color: V.text,
           letterSpacing: "-0.015em",
-          fontFamily: T.systemFont,
+          fontFamily: V.font,
         }}
       >
         扫描关联建议
@@ -231,13 +232,13 @@ export default function WikiLinkSuggestModal({
         style={{
           margin: "6px 0 0",
           fontSize: 13,
-          color: T.textSecondary,
+          color: V.muted,
           lineHeight: 1.5,
-          fontFamily: T.systemFont,
+          fontFamily: V.font,
         }}
       >
         AI 扫描「{currentTitle}」的内容, 找出可能对应现有 wiki 节点的名字. 你确认后加入{" "}
-        <strong style={{ color: T.text, fontWeight: 600 }}>关联概念</strong>{" "}
+        <strong style={{ color: V.text, fontWeight: 600 }}>关联概念</strong>{" "}
         段落, 图会自动拉这些节点进来.
       </p>
 
@@ -248,9 +249,9 @@ export default function WikiLinkSuggestModal({
             style={{
               padding: "40px 20px",
               textAlign: "center",
-              color: T.textSecondary,
+              color: V.muted,
               fontSize: 13,
-              fontFamily: T.systemFont,
+              fontFamily: V.font,
             }}
           >
             <div style={{ fontSize: 28, marginBottom: 8 }}>⏳</div>
@@ -262,12 +263,12 @@ export default function WikiLinkSuggestModal({
           <div
             style={{
               padding: "20px",
-              background: `${T.errorRed}15`,
-              border: `1px solid ${T.errorRed}40`,
+              background: `${V.error}15`,
+              border: `1px solid ${V.error}40`,
               borderRadius: 8,
-              color: T.errorRed,
+              color: V.error,
               fontSize: 13,
-              fontFamily: T.systemFont,
+              fontFamily: V.font,
               lineHeight: 1.5,
             }}
           >
@@ -277,13 +278,13 @@ export default function WikiLinkSuggestModal({
               onClick={handleRetry}
               style={{
                 padding: "6px 14px",
-                border: `1px solid ${T.errorRed}`,
+                border: `1px solid ${V.error}`,
                 borderRadius: 6,
                 background: "transparent",
-                color: T.errorRed,
+                color: V.error,
                 fontSize: 12,
                 cursor: "pointer",
-                fontFamily: T.systemFont,
+                fontFamily: V.font,
               }}
             >
               重试
@@ -296,15 +297,15 @@ export default function WikiLinkSuggestModal({
             style={{
               padding: "40px 20px",
               textAlign: "center",
-              color: T.textSecondary,
+              color: V.muted,
               fontSize: 13,
-              fontFamily: T.systemFont,
+              fontFamily: V.font,
               lineHeight: 1.6,
             }}
           >
             <div style={{ fontSize: 28, marginBottom: 8 }}>🔍</div>
             <div style={{ marginBottom: 4 }}>没找到明确匹配</div>
-            <div style={{ fontSize: 11, color: T.textTertiary }}>
+            <div style={{ fontSize: 11, color: V.muted }}>
               AI 严格审阅了 body 里的内容, 没找到跟现有 wiki 节点明确对应的名字.
               <br />
               可以到左侧「+ 新建」加子概念, 或手动在 body 里加 `[[名字]]`.
@@ -317,9 +318,9 @@ export default function WikiLinkSuggestModal({
             <div
               style={{
                 fontSize: 12,
-                color: T.textSecondary,
+                color: V.muted,
                 marginBottom: 10,
-                fontFamily: T.systemFont,
+                fontFamily: V.font,
               }}
             >
               找到 {suggestions.length} 个候选. 默认勾选强匹配 (置信度 ≥
@@ -329,7 +330,7 @@ export default function WikiLinkSuggestModal({
               style={{
                 maxHeight: 320,
                 overflowY: "auto",
-                border: `1px solid ${T.border}`,
+                border: `1px solid ${V.border}`,
                 borderRadius: 8,
                 padding: 4,
               }}
@@ -348,14 +349,14 @@ export default function WikiLinkSuggestModal({
                       cursor: "pointer",
                       borderRadius: 6,
                       background: isSelected
-                        ? `${T.cyan}10`
+                        ? V.accentSoft
                         : "transparent",
                       transition: "background 120ms ease",
                     }}
                     onMouseEnter={(e) => {
                       if (!isSelected)
                         (e.currentTarget as HTMLElement).style.background =
-                          "rgba(0,0,0,0.03)";
+                          "color-mix(in srgb, var(--catfish-text) 5%, transparent)";
                     }}
                     onMouseLeave={(e) => {
                       if (!isSelected)
@@ -369,7 +370,7 @@ export default function WikiLinkSuggestModal({
                       onChange={() => toggleSelected(s.title)}
                       style={{
                         marginTop: 3,
-                        accentColor: T.cyan,
+                        accentColor: V.accent,
                         cursor: "pointer",
                       }}
                     />
@@ -386,8 +387,8 @@ export default function WikiLinkSuggestModal({
                           style={{
                             fontSize: 13,
                             fontWeight: 600,
-                            color: T.text,
-                            fontFamily: T.systemFont,
+                            color: V.text,
+                            fontFamily: V.font,
                           }}
                         >
                           [[{s.title}]]
@@ -399,7 +400,7 @@ export default function WikiLinkSuggestModal({
                             borderRadius: 4,
                             background: `${badge.color}20`,
                             color: badge.color,
-                            fontFamily: T.systemFont,
+                            fontFamily: V.font,
                             fontWeight: 500,
                           }}
                         >
@@ -409,25 +410,25 @@ export default function WikiLinkSuggestModal({
                       <div
                         style={{
                           fontSize: 11,
-                          color: T.textSecondary,
+                          color: V.muted,
                           lineHeight: 1.5,
-                          fontFamily: T.systemFont,
+                          fontFamily: V.font,
                           marginBottom: 2,
                         }}
                       >
-                        <span style={{ color: T.textTertiary }}>片段:</span>{" "}
+                        <span style={{ color: V.muted }}>片段:</span>{" "}
                         {s.snippet}
                       </div>
                       {s.reason && (
                         <div
                           style={{
                             fontSize: 11,
-                            color: T.textTertiary,
+                            color: V.muted,
                             lineHeight: 1.5,
-                            fontFamily: T.systemFont,
+                            fontFamily: V.font,
                           }}
                         >
-                          <span style={{ color: T.textTertiary }}>依据:</span>{" "}
+                          <span style={{ color: V.muted }}>依据:</span>{" "}
                           {s.reason}
                         </div>
                       )}
@@ -444,9 +445,9 @@ export default function WikiLinkSuggestModal({
             style={{
               padding: "40px 20px",
               textAlign: "center",
-              color: T.textSecondary,
+              color: V.muted,
               fontSize: 13,
-              fontFamily: T.systemFont,
+              fontFamily: V.font,
             }}
           >
             <div style={{ fontSize: 28, marginBottom: 8 }}>💾</div>
@@ -459,10 +460,10 @@ export default function WikiLinkSuggestModal({
             style={{
               padding: "40px 20px",
               textAlign: "center",
-              color: T.cyan,
+              color: V.accent,
               fontSize: 14,
               fontWeight: 600,
-              fontFamily: T.systemFont,
+              fontFamily: V.font,
             }}
           >
             <div style={{ fontSize: 32, marginBottom: 8 }}>✓</div>
@@ -479,7 +480,7 @@ export default function WikiLinkSuggestModal({
             gap: 8,
             marginTop: 20,
             paddingTop: 16,
-            borderTop: `1px solid ${T.border}`,
+            borderTop: `1px solid ${V.border}`,
             alignItems: "center",
           }}
         >
@@ -491,9 +492,9 @@ export default function WikiLinkSuggestModal({
               border: "none",
               borderRadius: 8,
               background: "transparent",
-              color: T.textSecondary,
+              color: V.muted,
               fontSize: 14,
-              fontFamily: T.systemFont,
+              fontFamily: V.font,
               cursor: view === "applying" ? "default" : "pointer",
             }}
           >
@@ -503,8 +504,8 @@ export default function WikiLinkSuggestModal({
           <div
             style={{
               fontSize: 12,
-              color: T.textSecondary,
-              fontFamily: T.systemFont,
+              color: V.muted,
+              fontFamily: V.font,
               marginRight: 8,
             }}
           >
@@ -521,23 +522,23 @@ export default function WikiLinkSuggestModal({
               borderRadius: 8,
               background:
                 view === "applying"
-                  ? T.textTertiary
+                  ? V.muted
                   : selected.size === 0
-                    ? T.textTertiary
+                    ? V.muted
                     : applyHover
-                      ? T.cyanHover
-                      : T.cyan,
+                      ? V.accent
+                      : V.accent,
               color: "white",
               fontSize: 14,
               fontWeight: 600,
-              fontFamily: T.systemFont,
+              fontFamily: V.font,
               cursor:
                 view === "applying" || selected.size === 0
                   ? "default"
                   : "pointer",
               opacity: selected.size === 0 ? 0.6 : 1,
               transition: "background 120ms ease",
-              boxShadow: selected.size > 0 ? `0 2px 6px ${T.cyan}40` : "none",
+              boxShadow: selected.size > 0 ? `0 2px 6px ${V.accent}40` : "none",
             }}
           >
             {view === "applying"

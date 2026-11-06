@@ -3,16 +3,16 @@
  * 每次只提交一处改动 (onChange → wiki_type_defs_apply), 内置的不能删只能隐藏, 自己加的随便删。
  */
 import { useEffect, useState } from "react";
-import { T } from "../../components/ModalShell";
+import { V, field } from "./wikiTheme";
 import type { TypeDef, TypeDefAction, TypeDefChange, TypeDefProperty } from "../../lib/tauri_wiki_types";
 
 const ORIGIN: Record<string, string> = { builtin: "内置", local: "我加的", "builtin+local": "内置 · 改过" };
-const input = { padding: "6px 8px", border: `1px solid ${T.border}`, borderRadius: 6, fontSize: 13, boxSizing: "border-box" } as const;
-const small = { border: 0, background: "transparent", color: T.cyanHover, cursor: "pointer", fontSize: 12, padding: "2px 4px" } as const;
-const primary = { padding: "6px 12px", border: 0, borderRadius: 8, background: T.cyan, color: "#fff", cursor: "pointer", fontSize: 13 } as const;
+const input = field;
+const small = { border: 0, background: "transparent", color: V.accent, cursor: "pointer", fontSize: 12, padding: "2px 4px" } as const;
+const primary = { padding: "6px 12px", border: 0, borderRadius: 8, background: V.accent, color: "#fff", cursor: "pointer", fontSize: 13 } as const;
 const section = { margin: "14px 0 6px", fontSize: 14, fontWeight: 600 } as const;
 const tag = (origin: string, hidden: boolean) => (
-  <span style={{ fontSize: 11, color: hidden ? T.textTertiary : origin === "local" ? "#b45309" : T.textSecondary }}>
+  <span style={{ fontSize: 11, color: hidden ? V.muted : origin === "local" ? V.warn : V.muted }}>
     {hidden ? "已隐藏" : ORIGIN[origin] ?? origin}
   </span>
 );
@@ -34,7 +34,7 @@ function PropRow({ type, p, apply, busy }: { type: string; p: TypeDefProperty; a
     if (await apply({ op: "update_property", type, key: p.key, property: { label, hint, type: kind } })) setEdit(false);
   };
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(90px, 140px) 64px minmax(0, 1fr) 76px auto", gap: 8, alignItems: "center", padding: "5px 0", borderBottom: `1px solid #ececef`, opacity: p.hidden ? 0.55 : 1 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(90px, 140px) 64px minmax(0, 1fr) 76px auto", gap: 8, alignItems: "center", padding: "5px 0", borderBottom: `1px solid ${V.border}`, opacity: p.hidden ? 0.55 : 1 }}>
       {edit ? (
         <>
           <input style={input} value={label} onChange={(e) => setLabel(e.target.value)} maxLength={20} aria-label="属性名" />
@@ -47,8 +47,8 @@ function PropRow({ type, p, apply, busy }: { type: string; p: TypeDefProperty; a
       ) : (
         <>
           <strong style={{ fontSize: 13 }}>{p.label}</strong>
-          <span style={{ fontSize: 12, color: T.textSecondary }}>{p.type === "date" ? "日期" : "文本"}</span>
-          <span style={{ fontSize: 12, color: T.textSecondary }}>{p.hint}</span>
+          <span style={{ fontSize: 12, color: V.muted }}>{p.type === "date" ? "日期" : "文本"}</span>
+          <span style={{ fontSize: 12, color: V.muted }}>{p.hint}</span>
         </>
       )}
       {tag(p.origin, p.hidden)}
@@ -101,10 +101,10 @@ function ActionForm({ props, initial, onSubmit, onCancel, busy }: {
       </div>
       <textarea style={{ ...input, minHeight: 64, fontFamily: "inherit" }} value={instruction} onChange={(e) => setInstruction(e.target.value)} maxLength={1000}
         placeholder="要做的事：点了这个行动，小鲶按这句话做。可以写 {属性名}，会换成这条知识的属性值" aria-label="要做的事" />
-      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center", fontSize: 12, color: T.textSecondary }}>
+      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center", fontSize: 12, color: V.muted }}>
         插入属性：
         {props.filter((p) => !p.hidden).map((p) => (
-          <button key={p.key} type="button" style={{ ...small, border: `1px solid ${T.border}`, borderRadius: 6 }}
+          <button key={p.key} type="button" style={{ ...small, border: `1px solid ${V.border}`, borderRadius: 6 }}
             onClick={() => setInstruction((s) => `${s}{${p.label}}`)}>{p.label}</button>
         ))}
       </div>
@@ -112,7 +112,7 @@ function ActionForm({ props, initial, onSubmit, onCancel, busy }: {
         <button type="button" style={primary} disabled={busy || !label.trim() || !instruction.trim()} onClick={() => void submit()}>
           {initial ? "保存行动" : "加行动"}
         </button>
-        {onCancel && <button type="button" style={{ ...primary, background: T.closeBg, color: T.text }} onClick={onCancel}>取消</button>}
+        {onCancel && <button type="button" style={{ ...primary, background: V.bg, color: V.text }} onClick={onCancel}>取消</button>}
       </div>
     </div>
   );
@@ -131,11 +131,11 @@ function ActionRow({ type, a, props, apply, busy }: { type: string; a: TypeDefAc
     );
   }
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(90px, 140px) minmax(0, 1fr) 76px auto", gap: 8, padding: "6px 0", borderBottom: `1px solid #ececef`, opacity: a.hidden ? 0.55 : 1 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(90px, 140px) minmax(0, 1fr) 76px auto", gap: 8, padding: "6px 0", borderBottom: `1px solid ${V.border}`, opacity: a.hidden ? 0.55 : 1 }}>
       <strong style={{ fontSize: 13 }}>{a.label}</strong>
-      <span style={{ fontSize: 12, color: T.textSecondary, lineHeight: 1.5 }}>
+      <span style={{ fontSize: 12, color: V.muted, lineHeight: 1.5 }}>
         {keysToLabels(a.instruction ?? "", props)}
-        {a.skill_path && <em style={{ display: "block", color: T.textTertiary }}>技能：{a.skill_path}</em>}
+        {a.skill_path && <em style={{ display: "block", color: V.muted }}>技能：{a.skill_path}</em>}
       </span>
       {tag(a.origin, a.hidden)}
       <span style={{ whiteSpace: "nowrap" }}>
@@ -170,7 +170,7 @@ export default function WikiTypeDefEditor({ def, apply, busy }: { def: TypeDef; 
         {label.trim() && label !== def.label && (
           <button type="button" style={small} disabled={busy} onClick={() => void apply({ op: "rename_type", type: def.key, label: label.trim() })}>改名</button>
         )}
-        <span style={{ fontSize: 12, color: T.textTertiary }}>知识里的细分类型：{def.key} · {def.origin === "builtin" ? "内置" : "我加的"}</span>
+        <span style={{ fontSize: 12, color: V.muted }}>知识里的细分类型：{def.key} · {def.origin === "builtin" ? "内置" : "我加的"}</span>
       </div>
       {def.status && (
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10, fontSize: 13 }}>
@@ -184,7 +184,7 @@ export default function WikiTypeDefEditor({ def, apply, busy }: { def: TypeDef; 
       )}
 
       <h4 style={section}>属性</h4>
-      {def.properties.length === 0 && <p style={{ fontSize: 12, color: T.textTertiary }}>还没有属性。</p>}
+      {def.properties.length === 0 && <p style={{ fontSize: 12, color: V.muted }}>还没有属性。</p>}
       {def.properties.map((p) => <PropRow key={p.key} type={def.key} p={p} apply={apply} busy={busy} />)}
       <div style={{ display: "grid", gridTemplateColumns: "minmax(90px, 140px) 64px minmax(0, 1fr) auto", gap: 8, padding: "8px 0" }}>
         <input style={input} value={newProp.label} onChange={(e) => setNewProp({ ...newProp, label: e.target.value })} maxLength={20} placeholder="新属性名，如 投标用途" aria-label="新属性名" />
@@ -201,8 +201,8 @@ export default function WikiTypeDefEditor({ def, apply, busy }: { def: TypeDef; 
           }}>加属性</button>
       </div>
 
-      <h4 style={section}>行动 <small style={{ fontWeight: 400, color: T.textTertiary }}>这一类的每条知识都会有，点了交给小鲶</small></h4>
-      {def.actions.length === 0 && <p style={{ fontSize: 12, color: T.textTertiary }}>还没有行动。</p>}
+      <h4 style={section}>行动 <small style={{ fontWeight: 400, color: V.muted }}>这一类的每条知识都会有，点了交给小鲶</small></h4>
+      {def.actions.length === 0 && <p style={{ fontSize: 12, color: V.muted }}>还没有行动。</p>}
       {def.actions.map((a) => <ActionRow key={a.id} type={def.key} a={a} props={def.properties} apply={apply} busy={busy} />)}
       <ActionForm props={def.properties} busy={busy} onSubmit={(a) => apply({ op: "add_action", type: def.key, action: a })} />
     </div>

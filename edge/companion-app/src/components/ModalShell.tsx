@@ -26,7 +26,8 @@ export const T = {
 };
 
 /** maxWidth: 默认 600。11/07: 宽内容 (类型定义页 / 整理属性表) 原来塞进 600 的框里, 只能左右拖着看 —— 要宽的自己传。 */
-export function ModalShell({ children, onClose, maxWidth = 600 }: { children: React.ReactNode; onClose: () => void; maxWidth?: number }) {
+/** themed: 跟着亮 / 暗色 (tokens.css 变量); 不传还是原来写死的浅色, 老弹窗里的字色都按浅底写的, 不能一起改 */
+export function ModalShell({ children, onClose, maxWidth = 600, themed = false }: { children: React.ReactNode; onClose: () => void; maxWidth?: number; themed?: boolean }) {
   return (
     <div
       onClick={onClose}
@@ -43,7 +44,9 @@ export function ModalShell({ children, onClose, maxWidth = 600 }: { children: Re
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          background: T.bgSurface,
+          background: themed ? "var(--catfish-bg-elevated)" : T.bgSurface,
+          color: themed ? "var(--catfish-text)" : undefined,
+          border: themed ? "1px solid var(--catfish-border)" : undefined,
           borderRadius: 12,
           padding: "28px 32px",
           maxWidth,

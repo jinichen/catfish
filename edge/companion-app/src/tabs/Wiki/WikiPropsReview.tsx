@@ -7,7 +7,8 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { SpinnerGap, X } from "@phosphor-icons/react";
-import { ModalShell, T } from "../../components/ModalShell";
+import { ModalShell } from "../../components/ModalShell";
+import { V, field } from "./wikiTheme";
 import {
   wikiPropsApply,
   wikiPropsPropose,
@@ -90,34 +91,34 @@ export default function WikiPropsReview({ onClose }: { onClose: () => void }) {
   const allChecked = result ? result.items.every((it) => rows[it.rel_path]?.checked) : false;
   const toggleAll = () =>
     setRows((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, { ...v, checked: !allChecked }])));
-  const btn = { padding: "7px 12px", border: 0, borderRadius: 8, cursor: "pointer", fontSize: 13 } as const;
+  const btn = { padding: "7px 12px", border: `1px solid ${V.border}`, borderRadius: 8, cursor: "pointer", fontSize: 13, color: V.text } as const;
 
   return (
-    <ModalShell onClose={onClose} maxWidth={1080}>
-      <div className="wiki-props-review" style={{ fontFamily: T.systemFont, color: T.text }}>
+    <ModalShell onClose={onClose} maxWidth={1080} themed>
+      <div className="wiki-props-review" style={{ fontFamily: V.font, color: V.text }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <h3 style={{ margin: 0, fontSize: 17 }}>整理属性</h3>
-          <button type="button" onClick={onClose} aria-label="关闭" style={{ border: 0, background: "transparent", cursor: "pointer", color: T.textSecondary }}>
+          <button type="button" onClick={onClose} aria-label="关闭" style={{ border: 0, background: "transparent", cursor: "pointer", color: V.muted }}>
             <X size={18} />
           </button>
         </div>
-        <p style={{ margin: 0, color: T.textSecondary, fontSize: 13, lineHeight: 1.5 }}>
+        <p style={{ margin: 0, color: V.muted, fontSize: 13, lineHeight: 1.5 }}>
           把正文里写着的信息抽成属性，之后才能按到期日查、挂类型上的行动。每个值都能改，勾上的才写进去；只改文件头里的属性，正文不动，写之前整份备份。
-          <b style={{ color: "#b45309" }}> 橙框</b>是小鲶读正文抽的，多看一眼。
+          <b style={{ color: V.warn }}> 橙框</b>是小鲶读正文抽的，多看一眼。
         </p>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           {types.length > 1 && (
-            <select value={typeKey} onChange={(e) => setTypeKey(e.target.value)} aria-label="哪一类" style={{ padding: "6px", borderRadius: 8, fontSize: 13 }}>
+            <select value={typeKey} onChange={(e) => setTypeKey(e.target.value)} aria-label="哪一类" style={field}>
               {types.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
             </select>
           )}
           {result && (
-            <span style={{ fontSize: 13, color: T.textSecondary }}>
+            <span style={{ fontSize: 13, color: V.muted }}>
               {result.label} {result.scanned} 条，{result.items.length} 条有可补 / 可改的属性
             </span>
           )}
           {result && !result.used_model && result.model_candidates > 0 && (
-            <button type="button" disabled={!!busy} onClick={() => void run(true)} style={{ ...btn, background: T.closeBg }}>
+            <button type="button" disabled={!!busy} onClick={() => void run(true)} style={{ ...btn, background: V.bg }}>
               {busy === "model" ? "小鲶在读…（一两分钟）" : `让小鲶读正文补（${result.model_candidates} 条句式没抽全）`}
             </button>
           )}
@@ -125,7 +126,7 @@ export default function WikiPropsReview({ onClose }: { onClose: () => void }) {
         </div>
 
         {result && result.items.length === 0 && !busy && (
-          <p style={{ fontSize: 13, color: T.textSecondary }}>没有要补的属性了。</p>
+          <p style={{ fontSize: 13, color: V.muted }}>没有要补的属性了。</p>
         )}
         {result && result.items.length > 0 && (
           // 11/07: 原来是一行一条的大表, 证书 10 个属性要左右拖着看; 改成一条一张卡片, 属性在卡片里换行排
@@ -167,10 +168,10 @@ export default function WikiPropsReview({ onClose }: { onClose: () => void }) {
 
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <button type="button" disabled={!!busy || chosen.length === 0} onClick={() => void apply()}
-            style={{ ...btn, background: T.cyan, color: "#fff" }}>
+            style={{ ...btn, background: V.accent, color: "#fff" }}>
             {busy === "apply" ? "写入中…" : `写入勾上的 ${chosen.length} 条`}
           </button>
-          {message && <span style={{ fontSize: 13, color: message.includes("失败") ? T.errorRed : T.textSecondary }}>{message}</span>}
+          {message && <span style={{ fontSize: 13, color: message.includes("失败") ? V.error : V.muted }}>{message}</span>}
         </div>
       </div>
     </ModalShell>
