@@ -7,7 +7,8 @@
     "同名类型按 key 合并属性 / 按 id 合并行动, 也可以新加类型。说明见 docs/WIKI-TYPE-SCHEMA.md。",
     "每个属性可选 pattern (正则, 第 1 组是值, 从正文抽) 和 keywords; pattern 抽不到时, 正文出现 keywords 或属性名本身才请小鲶读这条帮抽。",
     "aliases: 同一个值的不同写法归成一个 (例 等级「无等级」→「无」), 按属性查才不会漏。",
-    "status.done_when: 某个属性是这些值时状态算「已结束」, 不再按日期算 (例 项目阶段=已结束)。"
+    "status.done_when: 某个属性是这些值时状态算「已结束」, 不再按日期算 (例 项目阶段=已结束)。",
+    "max_len: 值的最长字数 (文本默认 60), 超了不当值 —— 防止把整段话抽成一个属性。"
   ],
   "version": 1,
   "types": {
@@ -70,7 +71,8 @@
           "type": "text",
           "keywords": [
             "范围"
-          ]
+          ],
+          "max_len": 300
         },
         {
           "key": "holder",
@@ -189,7 +191,8 @@
             "方向",
             "领域",
             "行业"
-          ]
+          ],
+          "max_len": 80
         },
         {
           "key": "maintainer",
@@ -239,7 +242,8 @@
             "客户",
             "甲方",
             "业主"
-          ]
+          ],
+          "max_len": 80
         },
         {
           "key": "owner",
@@ -375,6 +379,328 @@
           "label": "截止提醒",
           "description": "在截止日期前 30 天建提醒",
           "instruction": "用 catfish_create_reminder 给这个项目建提醒：截止日期 {due_on} 前 30 天提醒，标题写项目名和截止日期。截止日期没填就不建，告诉我先补截止日期。建之前把提醒的日期和内容给我确认。"
+        }
+      ]
+    },
+    "person": {
+      "label": "人",
+      "kind": "entity",
+      "properties": [
+        {
+          "key": "department",
+          "label": "部门",
+          "type": "text",
+          "hint": "所在部门 / 分公司 / 中心",
+          "keywords": [
+            "部",
+            "中心",
+            "分公司",
+            "事业部",
+            "研究院"
+          ]
+        },
+        {
+          "key": "title",
+          "label": "职务",
+          "type": "text",
+          "keywords": [
+            "经理",
+            "总监",
+            "主任",
+            "负责人",
+            "专员",
+            "岗位",
+            "职务",
+            "总经理"
+          ]
+        },
+        {
+          "key": "email",
+          "label": "邮箱",
+          "type": "text",
+          "pattern": "邮箱\\s*[:：]?\\s*([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,})"
+        },
+        {
+          "key": "phone",
+          "label": "电话",
+          "type": "text",
+          "pattern": "(?:电话|手机)(?:号码?)?\\s*[:：]?\\s*(1\\d{10}|0\\d{2,3}-?\\d{7,8})"
+        },
+        {
+          "key": "duties",
+          "label": "负责事项",
+          "type": "text",
+          "hint": "维护哪些资质 / 对接哪些系统、项目",
+          "keywords": [
+            "负责",
+            "维护人",
+            "对接人",
+            "牵头"
+          ],
+          "max_len": 200
+        },
+        {
+          "key": "certs",
+          "label": "个人证书",
+          "type": "text",
+          "hint": "PMP、CISP、高级工程师等",
+          "keywords": [
+            "证书",
+            "PMP",
+            "CISP",
+            "CISSP",
+            "职称",
+            "工程师"
+          ],
+          "max_len": 150
+        }
+      ],
+      "relations": [
+        {
+          "rel": "隶属",
+          "to": [
+            "department",
+            "org"
+          ]
+        },
+        {
+          "rel": "负责",
+          "to": [
+            "cert",
+            "project",
+            "software",
+            "system"
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "id": "type.person.recent",
+          "label": "往来汇总",
+          "description": "汇总最近和这个人有关的邮件、会议、知识库内容",
+          "instruction": "汇总最近和这个人（{department} {title}）有关的事：用邮件搜索、会议纪要和 catfish_wiki_search 找，按时间列出最近的往来、他负责或对接的事项、还没了结的事，每条注明出处和日期。查不到的不要编。发现他的部门、职务、邮箱等和知识库记的不一样，列出来问我，我同意后再用 catfish_wiki_update 的 props 更新属性。"
+        },
+        {
+          "id": "type.person.draft-mail",
+          "label": "起草邮件",
+          "description": "给他起草一封邮件，只存草稿不发送",
+          "instruction": "给这个人起草一封邮件（邮箱 {email}；没填就先帮我从邮件往来里找，找不到问我）。先问我要写什么事，再用 catfish_email_create_draft 存成草稿，不要发送。"
+        }
+      ]
+    },
+    "department": {
+      "label": "部门",
+      "kind": "entity",
+      "properties": [
+        {
+          "key": "full_name",
+          "label": "全称",
+          "type": "text",
+          "pattern": "全称\\s*([^。，,\\n]{2,60})",
+          "max_len": 80
+        },
+        {
+          "key": "system",
+          "label": "所属体系",
+          "type": "text",
+          "hint": "生产运营体系 / 市场经营体系 / 典型职能体系 …",
+          "pattern": "福富([^，,。\\s]{2,8}?体系)"
+        },
+        {
+          "key": "level",
+          "label": "层级",
+          "type": "text",
+          "hint": "一级部 / 二级部 / 研究院 …",
+          "pattern": "体系(一级部|二级部|三级部|研究院|分公司)"
+        },
+        {
+          "key": "parent",
+          "label": "上级部门",
+          "type": "text",
+          "hint": "上级部门的名字 (例 云网运营事业部); 不是体系或层级; 一级部没有上级部门就不填",
+          "keywords": [
+            "下属",
+            "隶属",
+            "归属",
+            "上级"
+          ]
+        },
+        {
+          "key": "children",
+          "label": "下辖",
+          "type": "text",
+          "pattern": "下辖\\s*([^。\\n]{2,200})",
+          "max_len": 300
+        },
+        {
+          "key": "leader",
+          "label": "负责人",
+          "type": "text",
+          "keywords": [
+            "负责人",
+            "总经理",
+            "主任",
+            "部长",
+            "院长"
+          ]
+        },
+        {
+          "key": "duties",
+          "label": "职责",
+          "type": "text",
+          "keywords": [
+            "职责",
+            "负责"
+          ],
+          "max_len": 200
+        }
+      ],
+      "relations": [
+        {
+          "rel": "隶属",
+          "to": [
+            "department",
+            "org"
+          ]
+        },
+        {
+          "rel": "包含",
+          "to": [
+            "department"
+          ]
+        },
+        {
+          "rel": "负责",
+          "to": [
+            "project",
+            "software",
+            "cert"
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "id": "type.department.overview",
+          "label": "部门概况",
+          "description": "汇总这个部门的上下级、负责的项目、软著、资质和人员",
+          "instruction": "整理这个部门（{full_name}，{system}{level}）的概况：先用 catfish_wiki_read 看它的全部关系（上下级、谁隶属于它、它负责什么），再用 catfish_wiki_query 查 type=project 承建部门、type=software 著作权人、type=person 部门里含这个部门名的条目，汇总成「组织位置 / 负责的项目 / 名下软著和资质 / 人员」几段，每条注明来自哪条知识。查不到的写查不到，不要编。"
+        },
+        {
+          "id": "type.department.recent",
+          "label": "近期动态",
+          "description": "汇总最近和这个部门有关的邮件通知和会议",
+          "instruction": "汇总最近和这个部门（{full_name}）有关的动态：用邮件搜索和会议纪要找部门发出或涉及它的通知、会议、人事和组织调整，按时间列出，每条注明出处和日期，查不到的不要编。发现负责人、下辖、上级等和知识库记的不一样，列出来问我，我同意后再用 catfish_wiki_update 的 props 更新属性。"
+        }
+      ]
+    },
+    "org": {
+      "label": "组织",
+      "kind": "entity",
+      "properties": [
+        {
+          "key": "org_type",
+          "label": "跟我们的关系",
+          "type": "text",
+          "hint": "本公司 / 上级单位 / 兄弟单位 / 客户 / 合作伙伴 / 供应商 / 发证机构 / 竞争对手",
+          "keywords": [
+            "客户",
+            "合作",
+            "子公司",
+            "集团",
+            "发证",
+            "竞争",
+            "供应商",
+            "上级",
+            "兄弟"
+          ]
+        },
+        {
+          "key": "full_name",
+          "label": "全称",
+          "type": "text",
+          "pattern": "全称\\s*([^。，,\\n]{2,60})",
+          "max_len": 80
+        },
+        {
+          "key": "credit_code",
+          "label": "统一社会信用代码",
+          "type": "text",
+          "pattern": "(?:统一社会信用代码|信用代码)\\s*[:：]?\\s*([0-9A-HJ-NPQRTUWXY]{18})"
+        },
+        {
+          "key": "founded",
+          "label": "成立时间",
+          "type": "text",
+          "pattern": "成立于\\s*(\\d{4}(?:[-年.]\\d{1,2}(?:[-月.]\\d{1,2}日?)?)?)年?"
+        },
+        {
+          "key": "capital",
+          "label": "注册资本",
+          "type": "text",
+          "pattern": "注册资本\\s*[:：]?\\s*([\\d.,]+\\s*[万亿]?元)"
+        },
+        {
+          "key": "address",
+          "label": "地址",
+          "type": "text",
+          "keywords": [
+            "地址",
+            "位于",
+            "坐落"
+          ],
+          "max_len": 120
+        },
+        {
+          "key": "website",
+          "label": "官网",
+          "type": "text",
+          "pattern": "(?:官网|网址)\\s*[:：]?\\s*((?:https?://)?[A-Za-z0-9.-]+\\.[A-Za-z]{2,}(?:/\\S*)?)"
+        },
+        {
+          "key": "contact",
+          "label": "联系人",
+          "type": "text",
+          "keywords": [
+            "联系人",
+            "对接人",
+            "对接"
+          ]
+        }
+      ],
+      "relations": [
+        {
+          "rel": "包含",
+          "to": [
+            "department",
+            "org"
+          ]
+        },
+        {
+          "rel": "持有",
+          "to": [
+            "cert",
+            "software"
+          ]
+        },
+        {
+          "rel": "参与",
+          "to": [
+            "project"
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "id": "type.org.recent",
+          "label": "往来汇总",
+          "description": "汇总和这个组织有关的项目、邮件、合同",
+          "instruction": "汇总我们和这个组织（{full_name}，{org_type}）的往来：用 catfish_wiki_read 看它的关系，用 catfish_wiki_query 查 type=project 客户含它名字的项目，再用邮件搜索找最近的往来，按「合作项目 / 最近往来 / 待办」写，每条注明出处和日期，查不到的不要编。"
+        },
+        {
+          "id": "type.org.verify-public",
+          "label": "公开信息核对",
+          "description": "到官网或企业信用信息公示系统核对全称、信用代码、注册资本、成立时间、地址",
+          "instruction": "联网核对这个组织的公开信息：到它的官网（{website}）或国家企业信用信息公示系统查全称、统一社会信用代码（知识库记的是 {credit_code}）、注册资本（{capital}）、成立时间（{founded}）、地址（{address}）。逐项列出核对结果和出处；有不一致或知识库没填的先给我看，我同意后再用 catfish_wiki_update 的 props 更新属性。"
         }
       ]
     }

@@ -200,3 +200,22 @@ def test_项目_阶段已结束就不按截止日期算过期():
     assert wt.status_of({"due_on": "2026-11-20"}, tdef, today)["value"] == "临近截止"
     assert wt.status_of({"stage": "实施"}, tdef, today)["value"] == "截止日期未填"
     assert wt._clean({"aliases": {"已完成": "已结束"}}, "已完成") == "已结束"
+
+
+def test_太长的不当属性值_有的属性允许长一点():
+    dept = {p["key"]: p for p in wt.load_schema()["department"]["properties"]}
+    person = {p["key"]: p for p in wt.load_schema()["person"]["properties"]}
+    assert not wt._usable(person["department"], "直属上级=邱益亮(企发与风控部主任);" * 5)
+    assert wt._usable(person["department"], "北京分公司销售部")
+    assert wt._usable(dept["children"], "、".join(["综合推进部"] * 20))
+
+
+def test_人部门组织都有定义_部门按组织架构句式抽():
+    schema = wt.load_schema()
+    assert {"person", "department", "org"} <= set(schema)
+    got = wt._regex_extract("# 云网运营事业部\n\n福富生产运营体系一级部。下辖市场销售部、综合推进部、智能网络部。", schema["department"])
+    assert got == {"system": "生产运营体系", "level": "一级部", "children": "市场销售部、综合推进部、智能网络部"}
+    got = wt._regex_extract("傅岱松是人力资源部的员工（通讯录邮箱：fffuds@chinatelecom.cn）", schema["person"])
+    assert got == {"email": "fffuds@chinatelecom.cn"}
+    got = wt._regex_extract("中电福富（简称中电福富）成立于1987年，注册资本2.01亿元。", schema["org"])
+    assert got == {"founded": "1987", "capital": "2.01亿元"}

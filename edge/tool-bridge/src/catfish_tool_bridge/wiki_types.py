@@ -129,7 +129,7 @@ def _clean(prop: dict[str, Any], value: Any) -> str:
     if prop.get("type") == "date":
         text = normalize_date(text)
     text = (prop.get("aliases") or {}).get(text, text)
-    return text[:300]
+    return text[:400]
 
 
 # 正文说「待核 / 疑似 / 未录入 / 占位」的不是值 (11/07 实测: 小鲶把正文标了「疑似误录」的编号、「未录入（占位值 1）」都抽了出来)
@@ -142,7 +142,8 @@ def _usable(prop: dict[str, Any], value: str) -> bool:
         return False
     if prop.get("type") == "date":
         return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", value))
-    return True
+    # 太长的不是一个值, 是一段话 (11/07 实测: 一条「人员与邮箱对照」被当成人, 整段对照表抽进了「部门」)
+    return len(value) <= int(prop.get("max_len") or 60)
 
 
 def read_props(fm: str, tdef: dict[str, Any]) -> dict[str, str]:
