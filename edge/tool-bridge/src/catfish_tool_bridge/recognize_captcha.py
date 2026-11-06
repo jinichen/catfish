@@ -385,7 +385,7 @@ def recognize_captcha(args: dict[str, Any]) -> dict[str, Any]:
         try:
             with httpx.Client(timeout=30.0) as client:
                 resp = client.post(
-                    f"{GATEWAY_URL}/v1/chat/completions",
+                    f"{GATEWAY_URL}/v1/chat/completions?catfish_source=plugin:toolbridge-captcha",
                     headers={
                         "Authorization": f"Bearer {token}",
                         "Content-Type": "application/json",

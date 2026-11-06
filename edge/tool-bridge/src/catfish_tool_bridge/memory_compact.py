@@ -86,7 +86,7 @@ def _llm(prompt: str) -> str:
     try:
         with httpx.Client(timeout=240.0) as client:   # 11/06: 21 条记忆 + move 建议实测 85s, 慢的时候 150s 不够
             resp = client.post(
-                f"{GATEWAY_URL}/v1/chat/completions",
+                f"{GATEWAY_URL}/v1/chat/completions?catfish_source=plugin:toolbridge-memory-compact",
                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
                 json={"model": model, "messages": [{"role": "user", "content": prompt}],
                       "temperature": 0.1, "max_tokens": 4000, "stream": False},

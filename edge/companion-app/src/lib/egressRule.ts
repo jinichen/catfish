@@ -93,6 +93,13 @@ const SOURCE_PURPOSE: Record<string, string> = {
   // 11/5: 同事群聊 (tool-bridge 打的 X-Catfish-Source, 跟 egress_log.py 同一套叫法)
   "room-auto-post": "群聊 · 定时任务结果自动转发",
   "plugin:toolbridge-room-assist": "群聊 · 小鲶总结 / 起草",
+  // 11/06: tool-bridge 直接调网关的几处 (原来不带来源)
+  "plugin:toolbridge-memory-compact": "整理记忆",
+  "plugin:toolbridge-memory-dedupe": "记忆去重判断",
+  "plugin:toolbridge-expertise": "专长提取",
+  "plugin:toolbridge-browser-locate": "浏览器 · 看图找位置",
+  "plugin:toolbridge-captcha": "浏览器 · 识别验证码",
+  "plugin:toolbridge-workflow": "工作流 · 小鲶判断",
 };
 
 /** 10/28: 老记录里存的用途名换成现在的叫法再显示。

@@ -22,6 +22,14 @@ const LABELS: Record<string, string> = {
   "plugin:memory-wiki-generation": "后台 · 知识库整理",
   "plugin:memory-wiki-merge": "后台 · 知识库整理",
   "plugin:toolbridge-meeting": "会议纪要",
+  // 11/06: tool-bridge 直接调网关的这几处原来不带来源, 配额日志一串「未标来源」(当天那几条是整理记忆)
+  "plugin:toolbridge-room-assist": "群聊 · 小鲶总结 / 起草",
+  "plugin:toolbridge-memory-compact": "记忆 · 整理记忆",
+  "plugin:toolbridge-memory-dedupe": "记忆 · 去重判断",
+  "plugin:toolbridge-expertise": "后台 · 专长提取",
+  "plugin:toolbridge-browser-locate": "浏览器 · 看图找位置",
+  "plugin:toolbridge-captcha": "浏览器 · 识别验证码",
+  "plugin:toolbridge-workflow": "工作流 · 小鲶判断",
   "plugin:catfish-xcatfish-user": "后台 · 界面翻译",
   // 10/30: 网关自己调自己写主动搭话的开场白 (Companion 回到窗口 / 久没说话 / 待办快到期时触发)
   "gateway-proactive-starter": "后台 · 主动搭话",

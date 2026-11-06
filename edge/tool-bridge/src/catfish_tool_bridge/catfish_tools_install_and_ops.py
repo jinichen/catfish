@@ -283,7 +283,7 @@ def _llm_dedupe_judge(
     try:
         with httpx.Client(timeout=30.0) as client:
             resp = client.post(
-                f"{GATEWAY_URL}/v1/chat/completions",
+                f"{GATEWAY_URL}/v1/chat/completions?catfish_source=plugin:toolbridge-memory-dedupe",
                 headers={
                     "Authorization": f"Bearer {token}",
                     "Content-Type": "application/json",

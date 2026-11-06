@@ -40,7 +40,7 @@ def _call_llm(prompt: str) -> str:
     model = picker_state.read_picker_model() or role_resolver.resolve("chat_default") or "catfish-private-main"
     try:
         with httpx.Client(timeout=120.0) as client:
-            r = client.post(f"{GATEWAY_URL}/v1/chat/completions", headers={"Authorization": f"Bearer {token}"},
+            r = client.post(f"{GATEWAY_URL}/v1/chat/completions?catfish_source=plugin:toolbridge-workflow", headers={"Authorization": f"Bearer {token}"},
                             json={"model": model, "messages": [{"role": "user", "content": prompt}],
                                   "temperature": 0.1, "max_tokens": 4000, "stream": False})
     except httpx.RequestError as e:

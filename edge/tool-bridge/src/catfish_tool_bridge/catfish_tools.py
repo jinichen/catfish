@@ -773,7 +773,7 @@ def _expertise_llm_call(prompt: str) -> str:
     try:
         with httpx.Client(timeout=60.0) as client:
             resp = client.post(
-                f"{GATEWAY_URL}/v1/chat/completions",
+                f"{GATEWAY_URL}/v1/chat/completions?catfish_source=plugin:toolbridge-expertise",
                 headers={
                     "Authorization": f"Bearer {token}",
                     "Content-Type": "application/json",
