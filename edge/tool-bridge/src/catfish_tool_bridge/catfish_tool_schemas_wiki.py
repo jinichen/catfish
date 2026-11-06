@@ -310,7 +310,8 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
         "name": "catfish_wiki_query",
         "description": (
             "按类型和属性查知识库 —— 「哪些证书 2027 年 6 月前到期」「谢竞翔维护的证书」「即将到期的证书」这类问题用它, "
-            "比全文搜索准. type 是类型 key (现有: cert=资质证书); 属性 key 见 catfish_wiki_read 返参 type_info.properties. "
+            "比全文搜索准. type 是类型 key (现有: cert=资质证书, software=软件产品/软著, project=项目); "
+            "属性 key 见 catfish_wiki_read 返参 type_info.properties. "
             "日期属性用 before / after (YYYY-MM-DD, 含当天). 属性没填的条目不满足条件, 要找没填的用 empty: true. "
             "返回 total 是符合条件的总数, items 最多 limit 条."
         ),
@@ -323,7 +324,7 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
                     "description": "条件, 全部满足. 每条 {field, eq | contains | before | after | empty}",
                     "items": {"type": "object"},
                 },
-                "status": {"type": "string", "description": "按自动算的状态筛: 有效 / 即将到期 / 已过期 / 有效期未填"},
+                "status": {"type": "string", "description": "按自动算的状态筛, 例 证书: 有效 / 即将到期 / 已过期; 项目: 进行中 / 临近截止 / 已过截止 / 已结束"},
                 "sort": {"type": "string", "description": "按哪个属性升序排, 例 valid_until"},
                 "fields": {
                     "type": "array",

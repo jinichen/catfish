@@ -16,6 +16,7 @@ const STATUS_CLASS: Record<string, string> = {
   warn: "wiki-type-card__status--warn",
   expired: "wiki-type-card__status--expired",
   unknown: "wiki-type-card__status--unknown",
+  done: "wiki-type-card__status--unknown",
 };
 
 export default function WikiTypeCard({ relPath, title, readOnly }: { relPath: string; title: string; readOnly: boolean }) {

@@ -42,7 +42,11 @@
     "框架": "framework",
     "分类标准": "standard",
     "客户": "customer",
-    "客户公司": "customer"
+    "客户公司": "customer",
+    "软件产品": "software",
+    "软件": "software",
+    "软著": "software",
+    "软件著作权": "software"
   },
   "entity_types": [
     "cert",
@@ -55,7 +59,8 @@
     "project",
     "standard",
     "system",
-    "customer"
+    "customer",
+    "software"
   ],
   "concept_types": [
     "method",

@@ -179,3 +179,24 @@ def test_待核_疑似_未录入_无限期都不当属性值(home, monkeypatch):
     proposed = r["items"][0]["proposed"]
     assert "cert_no" not in proposed and "valid_until" not in proposed
     assert rel
+
+
+def test_软件产品_按软著句式抽_中文细分类型也认(home):
+    tdef = wt.load_schema()["software"]
+    got = wt._regex_extract("# X\n\n- 版本为 V1.0，归属 ICT-BG，登记号 2020SR0304906 - 登记日期为 2020-04-02", tdef)
+    assert got == {"reg_no": "2020SR0304906", "version": "V1.0", "owner": "ICT-BG", "reg_date": "2020-04-02"}
+    got = wt._regex_extract("- 版本号V2.0，登记日期2023-06-12，证书号2023SR0622870。", tdef)
+    assert got["reg_no"] == "2023SR0622870" and got["version"] == "V2.0"
+    rel = _write(home, "s.md", "---\ntype: entity\ntitle: S\nentity_type: 软件产品\n---\n\n- 登记号为2006SR12927，登记日期为2006-09-19。\n")
+    assert wt.describe(rel)["type"] == "software"
+    assert [a["label"] for a in wt.describe(rel)["actions"]] == ["版权登记核对", "整理投标用产品说明"]
+
+
+def test_项目_阶段已结束就不按截止日期算过期():
+    tdef = wt.load_schema()["project"]
+    today = date(2026, 11, 7)
+    assert wt.status_of({"due_on": "2026-01-01"}, tdef, today)["value"] == "已过截止"
+    assert wt.status_of({"due_on": "2026-01-01", "stage": "已结束"}, tdef, today)["value"] == "已结束"
+    assert wt.status_of({"due_on": "2026-11-20"}, tdef, today)["value"] == "临近截止"
+    assert wt.status_of({"stage": "实施"}, tdef, today)["value"] == "截止日期未填"
+    assert wt._clean({"aliases": {"已完成": "已结束"}}, "已完成") == "已结束"

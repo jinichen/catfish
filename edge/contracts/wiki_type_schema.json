@@ -6,7 +6,8 @@
     "Python (tool-bridge wiki_types.py) 读这一份; 本机 ~/.catfish/wiki-type-schema.json 可以补充:",
     "同名类型按 key 合并属性 / 按 id 合并行动, 也可以新加类型。说明见 docs/WIKI-TYPE-SCHEMA.md。",
     "每个属性可选 pattern (正则, 第 1 组是值, 从正文抽) 和 keywords; pattern 抽不到时, 正文出现 keywords 或属性名本身才请小鲶读这条帮抽。",
-    "aliases: 同一个值的不同写法归成一个 (例 等级「无等级」→「无」), 按属性查才不会漏。"
+    "aliases: 同一个值的不同写法归成一个 (例 等级「无等级」→「无」), 按属性查才不会漏。",
+    "status.done_when: 某个属性是这些值时状态算「已结束」, 不再按日期算 (例 项目阶段=已结束)。"
   ],
   "version": 1,
   "types": {
@@ -142,6 +143,238 @@
           "label": "到期提醒",
           "description": "在有效期至前 180 天建提醒；有复审日期的也提前 180 天提醒",
           "instruction": "用 catfish_create_reminder 给这张证书建提醒：有效期至 {valid_until} 前 180 天提醒准备续期；复审日期 {review_on} 有值的话也在它前 180 天建一条。标题写证书名和到期 / 复审日期。日期没填的那条不建，告诉我缺哪个。建之前把提醒的日期和内容给我确认。"
+        }
+      ]
+    },
+    "software": {
+      "label": "软件产品",
+      "kind": "entity",
+      "properties": [
+        {
+          "key": "reg_no",
+          "label": "登记号",
+          "type": "text",
+          "hint": "软件著作权登记号 / 证书号, 例 2023SR0622870",
+          "pattern": "(?:登记号|证书号|登记证书号)(?:为|是)?[:：\\s]*(\\d{4}SR\\d{5,})"
+        },
+        {
+          "key": "version",
+          "label": "版本",
+          "type": "text",
+          "pattern": "版本(?:号)?(?:为|是)?[:：\\s]*([Vv]\\s?\\d+(?:\\.\\d+)*)"
+        },
+        {
+          "key": "reg_date",
+          "label": "登记日期",
+          "type": "date",
+          "pattern": "登记日期(?:为|是)?[:：\\s]*(\\d{4}[-年./]\\d{1,2}[-月./]\\d{1,2})"
+        },
+        {
+          "key": "owner",
+          "label": "著作权人",
+          "type": "text",
+          "hint": "著作权人 / 归属单位 (例 中电福富、ICT-BG)",
+          "pattern": "(?:著作权人|归属)(?:为|是)?[:：\\s]*([^，,。；;\\s]{2,30})",
+          "keywords": [
+            "著作权人",
+            "归属"
+          ]
+        },
+        {
+          "key": "domain",
+          "label": "产品方向",
+          "type": "text",
+          "hint": "例 网信安、智慧环保、客户关系管理",
+          "keywords": [
+            "方向",
+            "领域",
+            "行业"
+          ]
+        },
+        {
+          "key": "maintainer",
+          "label": "维护人",
+          "type": "text",
+          "pattern": "维护人(?:为|是)?\\s*([^，,。；;\\s（(]{2,10})"
+        }
+      ],
+      "relations": [
+        {
+          "rel": "使用",
+          "from": [
+            "project"
+          ]
+        },
+        {
+          "rel": "持有",
+          "from": [
+            "org"
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "id": "type.software.verify-copyright",
+          "label": "版权登记核对",
+          "description": "到中国版权保护中心查登记号，核对名称、版本、登记日期、著作权人",
+          "instruction": "到中国版权保护中心官网（www.ccopyright.com.cn）按登记号 {reg_no} 查这个软件的著作权登记，核对软件名称、版本（知识库记的是 {version}）、登记日期（{reg_date}）、著作权人（{owner}）是否一致。逐项列出核对结果和查询出处；登记号没填就先问我。有不一致的先给我看，我同意后再用 catfish_wiki_update 的 props 更新属性。"
+        },
+        {
+          "id": "type.software.bid-brief",
+          "label": "整理投标用产品说明",
+          "description": "汇总这个产品的软著信息、用过的项目和客户，写成投标可用的一段说明",
+          "instruction": "给这个软件产品整理一段投标可用的产品说明：软著信息（登记号 {reg_no}、版本 {version}、登记日期 {reg_date}、著作权人 {owner}），再用 catfish_wiki_read 看它的关系、用 catfish_wiki_search 和邮件搜索找它用在过哪些项目和客户。只写查得到出处的内容，每条注明出处；查不到的就写查不到，不要编。写好先给我看。"
+        }
+      ]
+    },
+    "project": {
+      "label": "项目",
+      "kind": "entity",
+      "properties": [
+        {
+          "key": "customer",
+          "label": "客户",
+          "type": "text",
+          "keywords": [
+            "客户",
+            "甲方",
+            "业主"
+          ]
+        },
+        {
+          "key": "owner",
+          "label": "负责人",
+          "type": "text",
+          "hint": "项目经理 / 负责人",
+          "keywords": [
+            "负责人",
+            "项目经理",
+            "牵头"
+          ]
+        },
+        {
+          "key": "department",
+          "label": "承建部门",
+          "type": "text",
+          "keywords": [
+            "承建",
+            "部门",
+            "事业部"
+          ]
+        },
+        {
+          "key": "amount",
+          "label": "合同金额",
+          "type": "text",
+          "hint": "带单位, 例 300 万元",
+          "keywords": [
+            "金额",
+            "合同额",
+            "万元",
+            "亿元"
+          ]
+        },
+        {
+          "key": "stage",
+          "label": "阶段",
+          "type": "text",
+          "hint": "商机 / 投标 / 立项 / 实施 / 验收 / 运维 / 已结束",
+          "keywords": [
+            "阶段",
+            "状态",
+            "中标",
+            "立项",
+            "验收",
+            "上线"
+          ],
+          "aliases": {
+            "已完成": "已结束",
+            "结项": "已结束",
+            "完结": "已结束",
+            "已验收": "验收",
+            "运维中": "运维",
+            "实施中": "实施"
+          }
+        },
+        {
+          "key": "start_on",
+          "label": "开始日期",
+          "type": "date",
+          "keywords": [
+            "开始",
+            "启动",
+            "签订",
+            "立项"
+          ]
+        },
+        {
+          "key": "due_on",
+          "label": "截止日期",
+          "type": "date",
+          "hint": "计划完成 / 交付 / 合同到期",
+          "keywords": [
+            "截止",
+            "完成",
+            "交付",
+            "到期",
+            "验收"
+          ]
+        }
+      ],
+      "status": {
+        "label": "进度",
+        "from": "due_on",
+        "warn_days": 30,
+        "done_when": {
+          "field": "stage",
+          "in": [
+            "已结束",
+            "运维"
+          ]
+        },
+        "values": {
+          "ok": "进行中",
+          "warn": "临近截止",
+          "expired": "已过截止",
+          "unknown": "截止日期未填",
+          "done": "已结束"
+        }
+      },
+      "relations": [
+        {
+          "rel": "使用",
+          "to": [
+            "software",
+            "system"
+          ]
+        },
+        {
+          "rel": "负责",
+          "from": [
+            "person"
+          ]
+        },
+        {
+          "rel": "参与",
+          "from": [
+            "person",
+            "org",
+            "department"
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "id": "type.project.progress",
+          "label": "进展汇总",
+          "description": "汇总邮件、会议纪要、知识库里关于这个项目的最新进展",
+          "instruction": "汇总这个项目（客户 {customer}，负责人 {owner}，当前记的阶段 {stage}）的最新进展：用邮件搜索、会议纪要和 catfish_wiki_search 找最近关于它的内容，按「当前阶段 / 最近动态 / 待办和风险」三段写，每条注明出处和日期，查不到的不要编。如果发现阶段、截止日期、负责人等和知识库记的不一样，列出来问我，我同意后再用 catfish_wiki_update 的 props 更新属性。"
+        },
+        {
+          "id": "type.project.due-reminder",
+          "label": "截止提醒",
+          "description": "在截止日期前 30 天建提醒",
+          "instruction": "用 catfish_create_reminder 给这个项目建提醒：截止日期 {due_on} 前 30 天提醒，标题写项目名和截止日期。截止日期没填就不建，告诉我先补截止日期。建之前把提醒的日期和内容给我确认。"
         }
       ]
     }

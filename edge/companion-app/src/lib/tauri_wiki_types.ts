@@ -10,7 +10,7 @@ export interface WikiTypeProperty {
 }
 
 export interface WikiTypeStatus {
-  code: "ok" | "warn" | "expired" | "unknown";
+  code: "ok" | "warn" | "expired" | "unknown" | "done";
   label: string;
   value: string;
   days_left?: string;

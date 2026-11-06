@@ -185,6 +185,9 @@ def status_of(props: dict[str, str], tdef: dict[str, Any], today: date | None = 
     if not isinstance(spec, dict) or not spec.get("from"):
         return None
     values = spec.get("values") or {}
+    done = spec.get("done_when") or {}
+    if isinstance(done, dict) and done.get("field") and props.get(done["field"], "") in (done.get("in") or []):
+        return {"code": "done", "label": spec.get("label", "状态"), "value": values.get("done", "已结束")}
     raw = normalize_date(props.get(spec["from"], ""))
     try:
         due = datetime.strptime(raw, "%Y-%m-%d").date()
