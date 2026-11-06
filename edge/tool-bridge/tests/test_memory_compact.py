@@ -101,3 +101,29 @@ def test_model_unreachable_is_reported(hhome, monkeypatch):
 def test_bad_target_rejected():
     with pytest.raises(ValueError):
         mc.propose({"target": "../x"})
+
+
+def test_move_只要标题和指针_正文是原文_指针得指向那页():
+    """11/06: 长口径挪进知识库, 记忆里留一句指针。正文我们自己放原文, 模型只给 title / pointer。"""
+    from catfish_tool_bridge import memory_compact as mc
+    long = "采购文书纪律: " + "以中通已挂澄清回复为口径基准, 日期逐字核对; " * 8
+    entries = ["短的一条", long]
+    ok = mc.validate_ops([{"type": "move", "index": 1, "title": "采购文书纪律",
+                           "pointer": "写采购 / 招投标文书前看知识库[[采购文书纪律]]"}], entries)
+    assert len(ok) == 1 and ok[0]["type"] == "move"
+    assert ok[0]["wiki"] == {"title": "采购文书纪律", "body": long}, "正文一字不改"
+    assert ok[0]["content"].endswith("[[采购文书纪律]]")
+    bad = [
+        {"type": "move", "index": 1, "title": "采购文书纪律", "pointer": "写采购文书前看知识库"},            # 没指向那页
+        {"type": "move", "index": 1, "title": "a/b", "pointer": "见知识库[[a/b]]"},                         # 标题带斜杠
+        {"type": "move", "index": 1, "title": "采购", "pointer": "见知识库[[采购]]" + "啰嗦" * 50},          # 指针太长
+        {"type": "move", "index": 0, "title": "短", "pointer": "见知识库[[短]]"},                           # 没省 15%
+    ]
+    assert mc.validate_ops(bad, entries) == []
+
+
+def test_提示里要求每条150字_删举例来历_有move():
+    from catfish_tool_bridge import memory_compact as mc
+    p = mc._prompt("memory", ["a" * 200], 4000)
+    assert "150 字以内" in p and "举例" in p and '"type":"move"' in p
+    assert '"type":"move"' not in mc._prompt("user", ["a" * 200], 2000), "USER.md 不往知识库挪"

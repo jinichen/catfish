@@ -84,14 +84,21 @@ def resolve(params: dict[str, Any]) -> dict[str, Any]:
     rec = wa.get_pending(wa.MEMORY, pid)
     if not rec:
         return {"ok": False, "error": "这条建议已经不在了 (可能刚处理过)"}
+    from . import memory_compact_moves as moves  # noqa: PLC0415
     if not approve:
         wa.discard_pending(wa.MEMORY, pid)
+        moves.drop(pid)
         return {"ok": True, "applied": False}
+    # 11/06: 「挪进知识库」的建议 —— 先写知识库, 写成了再把记忆那条换成指针 (反过来的话指针指向一个不存在的页)
+    moved = moves.apply(pid)
+    if not moved.get("ok"):
+        return {"ok": False, "error": moved.get("error")}
     result = apply_memory_pending(rec.get("payload") or {}, load_on_disk_store())
     if not result.get("success"):
         return {"ok": False, "error": _plain_error(str(result.get("error") or ""))}
     wa.discard_pending(wa.MEMORY, pid)
-    return {"ok": True, "applied": True}
+    moves.drop(pid)
+    return {"ok": True, "applied": True, **({"wiki": moved["wiki"]} if moved.get("wiki") else {})}
 
 
 def _plain_error(msg: str) -> str:

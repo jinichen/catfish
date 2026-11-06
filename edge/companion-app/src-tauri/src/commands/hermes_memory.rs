@@ -207,7 +207,7 @@ pub async fn hermes_memory_pending_list() -> Result<serde_json::Value, String> {
 #[tauri::command]
 pub async fn hermes_memory_compact(target: String) -> Result<serde_json::Value, String> {
     let params = serde_json::json!({ "target": target });
-    let r = crate::services::tool_bridge_rpc::call_with_timeout("memory/compact", params, std::time::Duration::from_secs(180))
+    let r = crate::services::tool_bridge_rpc::call_with_timeout("memory/compact", params, std::time::Duration::from_secs(300))
         .await?;
     if r.get("ok").and_then(serde_json::Value::as_bool) == Some(false) {
         return Err(r.get("error").and_then(serde_json::Value::as_str).unwrap_or("没整理成").to_string());

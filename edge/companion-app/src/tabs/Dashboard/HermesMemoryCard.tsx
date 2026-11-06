@@ -283,7 +283,7 @@ export default function HermesMemoryCard() {
             whiteSpace: "nowrap",
           }}
         >
-          {dedupeRunning ? "整理中 (约 1 分钟)..." : "🧹 整理记忆"}
+          {dedupeRunning ? "整理中 (一两分钟)..." : "🧹 整理记忆"}
         </button>
       </div>
 

@@ -95,3 +95,26 @@ def test_bad_id_rejected(hhome):
     with pytest.raises(ValueError):
         memory_pending.resolve({"id": "../../etc", "approve": True})
     assert memory_pending.resolve({"id": "deadbeef", "approve": True})["ok"] is False
+
+
+def test_挪进知识库_同意时先写知识库再换指针_放弃什么都不写(hhome, tmp_path, monkeypatch):
+    """11/06 move 建议: 同意 → 知识库多一页 (正文 = 原文) + 记忆那条换成指针; 放弃 → 都不动。"""
+    from catfish_tool_bridge import memory_compact_moves as moves
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path / "catfish"))
+    long = "结算单口径: 三期项目当年支付 33%/33%/34%, 一次性项目 100% 不分摊, 税 6%。" * 3
+    _write(hhome, "memory", ["别的一条", long])
+    pointer = "做结算单按知识库[[结算单口径]]"
+    payload = {"target": "memory", "action": "replace", "old_text": long, "matched_entry": long, "content": pointer}
+    pid = wa.stage_write(wa.MEMORY, payload, summary="move", origin="catfish_compact")["id"]
+    moves.save(pid, {"title": "结算单口径", "body": long})
+    out = memory_pending.resolve({"id": pid, "approve": True})
+    assert out["ok"] and out["applied"] and out.get("wiki")
+    page = (tmp_path / "catfish" / out["wiki"]).read_text(encoding="utf-8")
+    assert long in page
+    assert _read(hhome, "memory") == ["别的一条", pointer]
+    assert moves.load(pid) is None
+
+    pid2 = wa.stage_write(wa.MEMORY, {**payload, "old_text": "别的一条", "matched_entry": "别的一条"}, summary="move", origin="catfish_compact")["id"]
+    moves.save(pid2, {"title": "另一页", "body": "别的一条"})
+    assert memory_pending.resolve({"id": pid2, "approve": False})["applied"] is False
+    assert moves.load(pid2) is None and not list((tmp_path / "catfish").rglob("另一页*"))

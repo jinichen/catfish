@@ -387,6 +387,20 @@ def _audit_log(entry: dict) -> None:
 # ── 主 hook ──────────────────────────────────────────────────────
 
 
+def _budget():
+    """兄弟模块 memory_budget (按文件路径加载, 跟本模块被插件加载的方式一样; 同名缓存在 sys.modules, 不重复执行)。"""
+    import importlib.util  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+    name = "_catfish_xcatfish_user_memory_budget"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name("memory_budget.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def memory_enforce_hook(tool_name: str = "", args: Optional[dict] = None,
                         task_id: str = "", **kwargs: Any) -> Optional[dict]:
     """hermes pre_tool_call hook — 拦 memory_update 误写.
@@ -411,6 +425,15 @@ def memory_enforce_hook(tool_name: str = "", args: Optional[dict] = None,
         content = args.get("content", "")
         if not isinstance(content, str) or not content.strip():
             return None
+
+        # 11/06: 单条字数 / 快满了不许再加 —— 硬规矩, 不调模型 (memory_budget.py)
+        over = _budget().check(target, action, content, str(args.get("old_text") or ""))
+        if over:
+            _audit_log({
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "tool": tool_name, "target": target, "action": action,
+                "content_preview": content[:100], "decision": "block_budget", "reason": over[:200],
+            })
+            return {"action": "block", "message": over}
 
         # 调 LLM 二次校验
         model = get_verifier_model()

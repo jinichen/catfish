@@ -164,6 +164,8 @@ const CATFISH: &[(Pat, Class, &str)] = &[
     (Exact("outbound_log_payloads"), Rebuild, "旧版外发记录内容 (新版已不用)"),
     (Exact("approval_audit.jsonl"), Required, "审批记录"),
     (Exact("memory_audit.jsonl"), Required, "记忆审计"),
+    // 11/06: 「整理记忆」挪进知识库那类建议要写的知识库页; 待批建议本身 (hermes pending/) 不随迁移走, 这个也不带
+    (Exact("memory_compact_moves"), Rebuild, "整理记忆待批建议的附件"),
     (Exact("skill_audit.jsonl"), Required, "技能审计"),
     (Exact("wiki_install_audit.jsonl"), Required, "知识库安装审计"),
     (Exact("gateway_audit.jsonl"), Required, "调用审计"),

@@ -7,6 +7,12 @@
 每条建议存成 hermes 的待批写入 (``write_approval.stage_write``, 钉住原文 ``matched_entry``),
 出现在卡片「待你确认的整理建议」里 —— 员工点同意才改, 原文后来变了 hermes 会拒绝。
 重点一次只留一批: 再点「整理记忆」先放弃上一批还没批的精简建议, 不叠。
+
+11/06 鸿波「memory.md 又快满了」: 那一轮只提了 1 条 (省 35 字) —— 提示要「保留每个事实」, 模型不敢动。改成:
+- 每条目标 150 字以内, 举例 / 来龙去脉 / 谁哪天定的都可以删 (规矩本身不能丢);
+- 新加 move: 长的做事口径挪进知识库 (一条规则页), 记忆里只留一句指针。知识库页的正文就是**这条原文**
+  (我们自己放, 不让模型重写, 一个字不丢); 模型只给页面标题和那句指针。员工点同意时才写知识库、改记忆
+  (memory_pending.resolve), 点放弃就什么都不写。
 """
 from __future__ import annotations
 
@@ -20,6 +26,9 @@ ORIGIN = "catfish_compact"
 _SEP = "§"
 _MIN_LEN = 80          # 再短的条目不值得改
 _MIN_SAVING = 0.15     # 改完至少省 15%, 否则不提
+_ENTRY_TARGET = 150    # 每条目标字数
+_POINTER_MAX = 80      # move 留下的指针最多几个字
+_TITLE_MAX = 40
 _DEFAULT_LIMIT = {"user": 1375, "memory": 2200}  # hermes 默认; 鲶鱼配置里一般是 2000 / 4000
 
 
@@ -37,18 +46,27 @@ def _prompt(target: str, entries: list[str], limit: int) -> str:
     total = sum(len(e) for e in entries)
     kind = "员工本人 (身份、偏好、习惯)" if target == "user" else "项目 / 技术 / 工作口径"
     listing = "\n".join(f"[{i}] {e}" for i, e in enumerate(entries))
+    move = (
+        "- move: 一条很长的做事口径 / 流程细则 (超过 150 字、改短也会丢细节的), 整条原文挪进知识库的一条规则页, "
+        f"记忆里只留一句指针 (≤{_POINTER_MAX} 字, 说清什么时候去看, 必须写「见知识库[[页面标题]]」)。"
+        "知识库那页的正文由系统直接放这条原文, 你只给 title (页面标题, 名词短语, 不带斜杠) 和 pointer\n"
+    ) if target == "memory" else ""
     return (
         f"下面是员工的长期记忆 ({kind}), 每次对话都会整段带上, 上限 {limit} 字, 现在 {total} 字。\n"
-        f"请提精简建议, 目标总字数降到 {int(limit * 0.6)} 字左右。\n\n"
-        "两种改法:\n"
-        "- rewrite: 把一条改短。删掉重复说法、修饰、举例、来龙去脉; 保留每个事实、数字、人名、专有名词、规则和禁忌, 意思不能变\n"
-        "- merge: 几条讲同一件事 / 同一类偏好的合成一条, 同样不丢信息\n"
+        f"请提精简建议, 目标总字数降到 {int(limit * 0.6)} 字以内, 每条尽量 {_ENTRY_TARGET} 字以内。\n\n"
+        "改法:\n"
+        "- rewrite: 把一条改短。只留规矩本身 (做什么 / 不做什么 / 以什么为准 / 关键数字和名字); "
+        "举例、实例、来龙去脉、谁哪天定的、重复说法都删。条目里已经写了「细则见 skill X / 知识库[[Y]]」的, 细则直接删, 只留指针\n"
+        "- merge: 几条讲同一件事 / 同一类规矩的合成一条, 规矩不丢\n"
+        f"{move}"
         f"规则: 不许新增或推测任何信息; 少于 {_MIN_LEN} 字且不重复的条目不用动; 每条只能出现在一个建议里; "
         f"新内容里不要出现「{_SEP}」。\n\n"
         f"记忆条目:\n{listing}\n\n"
         '只返 JSON, 不要别的文字:\n'
         '{"ops":[{"type":"rewrite","index":3,"content":"改短后的整条"},'
-        '{"type":"merge","indices":[1,5],"content":"合并后的整条"}]}'
+        '{"type":"merge","indices":[1,5],"content":"合并后的整条"}'
+        + (',{"type":"move","index":0,"title":"知识库页面标题","pointer":"X 时按 …, 细则见知识库[[知识库页面标题]]"}' if move else "")
+        + ']}'
     )
 
 
@@ -66,7 +84,7 @@ def _llm(prompt: str) -> str:
         return ""
     model = picker_state.read_picker_model() or role_resolver.resolve("chat_default") or "catfish-private-main"
     try:
-        with httpx.Client(timeout=150.0) as client:
+        with httpx.Client(timeout=240.0) as client:   # 11/06: 21 条记忆 + move 建议实测 85s, 慢的时候 150s 不够
             resp = client.post(
                 f"{GATEWAY_URL}/v1/chat/completions",
                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
@@ -101,7 +119,7 @@ def validate_ops(raw: list[dict[str, Any]], entries: list[str]) -> list[dict[str
     out: list[dict[str, Any]] = []
     for op in raw:
         kind = op.get("type")
-        if kind == "rewrite":
+        if kind in ("rewrite", "move"):
             idx = [op.get("index")]
         elif kind == "merge":
             idx = op.get("indices") if isinstance(op.get("indices"), list) else []
@@ -114,13 +132,23 @@ def validate_ops(raw: list[dict[str, Any]], entries: list[str]) -> list[dict[str
             continue
         if used & set(idx):
             continue
-        content = str(op.get("content") or "").strip()
+        title = ""
+        if kind == "move":
+            title = str(op.get("title") or "").strip().strip("[]")
+            content = str(op.get("pointer") or "").strip()
+            if (not title or len(title) > _TITLE_MAX or any(c in title for c in "/\\§\n")
+                    or len(content) > _POINTER_MAX or f"[[{title}]]" not in content):
+                continue
+        else:
+            content = str(op.get("content") or "").strip()
         before = sum(len(entries[i]) for i in idx)
         if not content or _SEP in content or len(content) > before * (1 - _MIN_SAVING):
             continue
         used.update(idx)
-        out.append({"type": kind, "originals": [entries[i] for i in idx], "content": content,
-                    "saved": before - len(content)})
+        item = {"type": kind, "originals": [entries[i] for i in idx], "content": content, "saved": before - len(content)}
+        if kind == "move":
+            item["wiki"] = {"title": title, "body": entries[idx[0]]}   # 正文 = 原文, 一字不改
+        out.append(item)
     return out
 
 
@@ -151,10 +179,17 @@ def propose(params: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "target": target, "error": "小鲶这会儿连不上模型, 过一会儿再点「整理记忆」"}
     ops = validate_ops(_parse(raw), entries)
     # 上一批还没批的精简建议作废, 免得同一条原文挂两份建议
+    from . import memory_compact_moves as moves  # noqa: PLC0415
     for rec in wa.list_pending(wa.MEMORY):
         if rec.get("origin") == ORIGIN and (rec.get("payload") or {}).get("target") == target:
             wa.discard_pending(wa.MEMORY, str(rec.get("id")))
+            moves.drop(str(rec.get("id")))
     for op in ops:
-        label = "合并" if op["type"] == "merge" else "精简"
-        wa.stage_write(wa.MEMORY, _payload(target, op), summary=f"{label}记忆, 省 {op['saved']} 字", origin=ORIGIN)
+        if op["type"] == "move":
+            summary = f"挪进知识库「{op['wiki']['title']}」, 记忆里留一句指针, 省 {op['saved']} 字"
+        else:
+            summary = f"{'合并' if op['type'] == 'merge' else '精简'}记忆, 省 {op['saved']} 字"
+        rec = wa.stage_write(wa.MEMORY, _payload(target, op), summary=summary, origin=ORIGIN)
+        if op["type"] == "move":
+            moves.save(str(rec.get("id")), op["wiki"])
     return {**base, "staged": len(ops), "saved_chars": sum(op["saved"] for op in ops)}
