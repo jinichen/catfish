@@ -5,12 +5,9 @@
 //! a model, a platform, or an implementation-specific tool name.
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
-use std::time::Duration;
 
-use super::tool_bridge::ToolCallResult;
 use super::wiki_slug::catfish_home;
 
 const REGISTRY_ENV: &str = "CATFISH_ACTION_REGISTRY";
@@ -60,17 +57,15 @@ pub struct WikiActionBinding {
     pub id: String,
     pub label: String,
     pub description: String,
+    /// 11/06: 「执行」改成交给小鲶 —— 小鲶要知道技能在哪、是能直接调的 (script.py / workflow.yaml)
+    /// 还是只有一份说明 (照 SKILL.md 做)。
+    pub skill_path: String,
+    pub skill_dir: Option<String>,
+    pub runnable: bool,
     pub executor: String,
     pub approval: String,
     pub available: bool,
     pub reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct WikiActionRun {
-    pub action_id: String,
-    pub label: String,
-    pub result: ToolCallResult,
 }
 
 fn parse_registry(raw: &str, source: &str) -> Result<ActionRegistryFile, String> {
@@ -184,13 +179,23 @@ fn binding(action: &ActionDefinition) -> WikiActionBinding {
         reason = Some("当前只允许通过现有 skill bridge 执行".into());
     } else if action.skill_path.as_deref().map(str::trim).unwrap_or("").is_empty() {
         reason = Some("注册表缺少 skill_path".into());
-    } else if !skill_installed(action.skill_path.as_deref().unwrap_or_default()) {
+    }
+    let skill_path = action.skill_path.as_deref().unwrap_or_default().trim().trim_matches('/').to_string();
+    let skill_dir = if action.executor == "skill" { find_skill_dir(&skill_roots(), &skill_path) } else { None };
+    if reason.is_none() && skill_dir.is_none() {
         reason = Some("本机没装这个技能".into());
     }
+    let runnable = skill_dir
+        .as_ref()
+        .map(|d| d.join("script.py").is_file() || d.join("workflow.yaml").is_file())
+        .unwrap_or(false);
     WikiActionBinding {
         id: action.id.clone(),
         label: action.label.clone(),
         description: action.description.clone(),
+        skill_path,
+        skill_dir: skill_dir.map(|d| d.to_string_lossy().to_string()),
+        runnable,
         executor: action.executor.clone(),
         approval: action.approval.clone(),
         available: reason.is_none(),
@@ -215,18 +220,14 @@ fn skill_roots() -> Vec<PathBuf> {
     roots
 }
 
-/// 11/06 鸿波: 内置 6 个行动 (EIS 登录 / 周报 …) 的技能员工机上一般没装, 原来照样显示可选,
-/// 关联后一点执行才报「skill 不存在」。没装的灰掉。
-fn skill_installed(skill_path: &str) -> bool {
-    skill_installed_in(&skill_roots(), skill_path)
-}
-
-fn skill_installed_in(roots: &[PathBuf], skill_path: &str) -> bool {
+/// 11/06 鸿波: 内置 6 个行动 (EIS 登录 / 周报 …) 的技能员工机上一般没装, 原来照样显示可选。没装的灰掉。
+/// 先找到的根优先 (跟 catfish_run_skill 一致)
+fn find_skill_dir(roots: &[PathBuf], skill_path: &str) -> Option<PathBuf> {
     let rel = skill_path.trim().trim_matches('/');
     if rel.is_empty() || rel.split('/').any(|part| part == ".." || part.is_empty()) {
-        return false;
+        return None;
     }
-    roots.iter().any(|root| root.join(rel).is_dir())
+    roots.iter().map(|root| root.join(rel)).find(|dir| dir.is_dir())
 }
 
 fn find_action<'a>(
@@ -254,6 +255,9 @@ pub async fn wiki_resolve_actions(
                 id,
                 label: "未注册行动".into(),
                 description: String::new(),
+                skill_path: String::new(),
+                skill_dir: None,
+                runnable: false,
                 executor: String::new(),
                 approval: "required".into(),
                 available: false,
@@ -263,47 +267,13 @@ pub async fn wiki_resolve_actions(
         .collect()
 }
 
-/// 返回内置行动目录，供普通员工在界面中按名称选择。
+/// 返回行动目录 (内置注册表 + 本机装了的技能)，供员工在界面中按名称选择。
 ///
-/// 不把 Hermes 的全部工具暴露成 Wiki action：这里只返回 Catfish 明确允许
-/// 作为知识条目关联入口的行动。
+/// 不把 Hermes 的全部工具暴露成 Wiki action。执行不在这里: 界面把这条知识 + 行动交给小鲶 (11/06)。
 #[tauri::command(rename_all = "camelCase")]
 pub async fn wiki_list_actions() -> Result<Vec<WikiActionBinding>, String> {
     let registry = load_registry()?;
     Ok(registry.actions.iter().map(binding).collect())
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub async fn wiki_execute_action(
-    action_id: String,
-    confirmed: bool,
-) -> Result<WikiActionRun, String> {
-    let registry = load_registry()?;
-    let action = find_action(&registry, &action_id)?;
-    let resolved = binding(action);
-    if !resolved.available {
-        return Err(resolved.reason.unwrap_or_else(|| "行动不可执行".into()));
-    }
-    if action.approval == "required" && !confirmed {
-        return Err("该行动需要员工明确确认".into());
-    }
-    let skill_path = action.skill_path.as_deref().unwrap_or_default().to_string();
-    let raw_result = crate::services::tool_bridge_rpc::call_with_timeout(
-        "tools/dispatch",
-        json!({
-            "name": "catfish_run_skill",
-            "args": { "skill_path": skill_path },
-        }),
-        Duration::from_secs(action.timeout_seconds),
-    )
-    .await?;
-    let result = serde_json::from_value::<ToolCallResult>(raw_result)
-        .map_err(|e| format!("解析行动执行结果失败: {e}"))?;
-    Ok(WikiActionRun {
-        action_id,
-        label: action.label.clone(),
-        result,
-    })
 }
 
 #[cfg(test)]
@@ -331,17 +301,17 @@ mod tests {
     }
 
     #[test]
-    fn skill_installed_checks_every_root_and_rejects_traversal() {
+    fn find_skill_dir_checks_every_root_and_rejects_traversal() {
         let tmp = std::env::temp_dir().join(format!("catfish-wiki-actions-{}", std::process::id()));
         let (a, b) = (tmp.join("a"), tmp.join("b"));
         fs::create_dir_all(b.join("department/weekly-report")).unwrap();
         fs::create_dir_all(&a).unwrap();
         let roots = vec![a.clone(), b.clone()];
-        assert!(skill_installed_in(&roots, "department/weekly-report"));
-        assert!(skill_installed_in(&roots, "/department/weekly-report/"));
-        assert!(!skill_installed_in(&roots, "department/eis-login"));
-        assert!(!skill_installed_in(&roots, "department/../department/weekly-report"));
-        assert!(!skill_installed_in(&roots, ""));
+        assert_eq!(find_skill_dir(&roots, "department/weekly-report"), Some(b.join("department/weekly-report")));
+        assert!(find_skill_dir(&roots, "/department/weekly-report/").is_some());
+        assert!(find_skill_dir(&roots, "department/eis-login").is_none());
+        assert!(find_skill_dir(&roots, "department/../department/weekly-report").is_none());
+        assert!(find_skill_dir(&roots, "").is_none());
         let _ = fs::remove_dir_all(&tmp);
     }
 

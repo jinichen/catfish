@@ -4,21 +4,14 @@ export interface WikiActionBinding {
   id: string;
   label: string;
   description: string;
+  /** 11/06: 执行交给小鲶 —— 技能路径 / 装在哪 / 能不能直接调 (有 script.py 或 workflow.yaml) */
+  skill_path: string;
+  skill_dir: string | null;
+  runnable: boolean;
   executor: string;
   approval: string;
   available: boolean;
   reason: string | null;
-}
-
-export interface WikiActionRun {
-  action_id: string;
-  label: string;
-  result: {
-    ok: boolean;
-    tool: string;
-    result: unknown;
-    error: string | null;
-  };
 }
 
 export const wikiResolveActions = (actionRefs: string[]) =>
@@ -27,8 +20,28 @@ export const wikiResolveActions = (actionRefs: string[]) =>
 export const wikiListActions = () =>
   rawInvoke<WikiActionBinding[]>("wiki_list_actions");
 
-export const wikiExecuteAction = (actionId: string, confirmed: boolean) =>
-  rawInvoke<WikiActionRun>("wiki_execute_action", { actionId, confirmed });
+/** 同一条知识 + 同一个行动, 一次只开一段对话 (startEmailChat 按 key 去重) */
+export const wikiActionChatKey = (relPath: string, actionId: string) => `wiki-action:${actionId}:${relPath}`;
+
+/**
+ * 11/06 鸿波: 知识页「执行」交给小鲶。原来直接调 catfish_run_skill 且一个参数都不传 ——
+ * 周报 / 汇报 / 立项缺必填项一点就报错, EIS 用代码里写死的默认账号, 只有说明的技能根本跑不了。
+ * 现在开一段对话: 小鲶读这条知识, 从里面取参数, 缺的问员工; 对外动作照常先确认。
+ */
+export function wikiActionPrompt(
+  action: Pick<WikiActionBinding, "label" | "skill_path" | "skill_dir" | "runnable">,
+  entry: { title: string; relPath: string },
+): string {
+  const how = action.runnable
+    ? `用 catfish_run_skill 调技能 ${action.skill_path}; 参数不清楚先传 params={"_help": true} 看要什么。`
+    : `这个技能只有操作说明, 没有可以直接调的脚本: 先读 ${action.skill_dir ?? action.skill_path}/SKILL.md, 照着做。`;
+  return [
+    `用「${action.label}」处理知识库里的《${entry.title}》。`,
+    `先用 catfish_wiki_read (rel_path=${entry.relPath}, 读不到就用 name=${entry.title}) 读这条知识和它的关系, 技能要的输入优先从里面取。`,
+    how,
+    "缺的输入问我, 不要编; 登录、提交、发送这类对外操作照常先问我。做完告诉我结果, 产出了文件就说在哪。",
+  ].join("\n");
+}
 
 function unquoteYaml(value: string): string {
   const trimmed = value.trim();

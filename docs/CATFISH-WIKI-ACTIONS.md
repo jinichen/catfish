@@ -10,9 +10,11 @@ Companion 自带 `edge/contracts/action_registry.default.yaml` 的内置行动�
 
 ## 使用
 
-在 Wiki 关系工作台的“关联行动”区域从行动名称下拉选择即可，系统自动保存 action ID。普通用户看不到也不需要填写 `skill_path`。执行写操作前会弹出确认框；行动不可用、平台不支持或 skill bridge 不可用时，界面会显示原因，不会自动执行。
+在知识页「关联行动」区域从下拉选择行动即可，系统自动保存 action ID；普通用户看不到也不需要填写 `skill_path`。下拉里是内置注册表加上本机装了的技能（`~/.catfish/skills/`、专家包，开发机还有仓库 `skills/`），本机没装对应技能的灰掉。
 
-行动不会在切换 Tab、读取 Wiki 或刷新关系图时触发。实际执行仍经过现有 tool bridge，并沿用其权限、审计和员工身份上下文。
+点「交给小鲶」（11/06 起）会切到工作台开一段新对话，让小鲶：先用 `catfish_wiki_read` 读这条知识和它的关系，从中取技能要的输入；能直接调的技能（有 `script.py` / `workflow.yaml`）走 `catfish_run_skill`，只有说明的技能读它的 `SKILL.md` 照着做；缺的输入问员工，登录、提交、发送这类对外操作照常先确认。原来的做法是在知识页直接调 `catfish_run_skill` 且不传任何参数，有必填项的技能一点就失败，已去掉。
+
+行动不会在切换 Tab、读取 Wiki 或刷新关系图时触发。
 
 ## 历史关系整理
 

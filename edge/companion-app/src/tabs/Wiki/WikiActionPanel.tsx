@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { confirmDialog } from "../../components/dialogs";
-import { Check, Lightning, Play, SpinnerGap, X } from "@phosphor-icons/react";
+import { ChatCircleDots, Check, Lightning, SpinnerGap, X } from "@phosphor-icons/react";
 import { wikiUpdateFile } from "../../lib/tauri";
 import {
-  wikiExecuteAction,
+  wikiActionChatKey,
+  wikiActionPrompt,
   wikiListActions,
   wikiResolveActions,
   parseWikiActionRefs,
@@ -11,6 +11,8 @@ import {
   type WikiActionBinding,
 } from "../../lib/wikiActions";
 import { useWikiStore } from "../../store/wiki";
+import { useUIStore } from "../../store/ui";
+import { selectExpert } from "../../lib/expertChat";
 import type { WikiFileFull } from "../../lib/tauri_wiki";
 
 export default function WikiActionPanel({
@@ -29,7 +31,7 @@ export default function WikiActionPanel({
   const [selectedActionId, setSelectedActionId] = useState("");
   const [actionsLoading, setActionsLoading] = useState(false);
   const [actionSaving, setActionSaving] = useState(false);
-  const [actionRunId, setActionRunId] = useState<string | null>(null);
+  const startChat = useUIStore((state) => state.startEmailChat);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -100,27 +102,21 @@ export default function WikiActionPanel({
     void saveActionRefs(nextRefs, `已解绑行动：${action.label}`);
   };
 
-  const runAction = async (action: WikiActionBinding) => {
-    if (!action.available || actionRunId) return;
-    if (action.approval === "required" && !(await confirmDialog(`确认执行“${action.label}”吗？`))) return;
-    setActionRunId(action.id);
-    setActionMessage(null);
-    try {
-      const run = await wikiExecuteAction(action.id, true);
-      if (!run.result.ok) throw new Error(run.result.error || "行动执行失败");
-      setActionMessage(`行动已完成：${run.label}`);
-    } catch (error) {
-      setActionMessage(`行动执行失败：${String(error)}`);
-    } finally {
-      setActionRunId(null);
-    }
+  // 11/06: 交给小鲶在工作台里做 (读这条知识取参数, 缺的问员工, 对外动作照常确认), 不再在这里直接空参数调技能
+  const runAction = (action: WikiActionBinding) => {
+    if (!action.available) return;
+    selectExpert(null); // 给主小鲶, 不是某个专家
+    startChat(
+      wikiActionChatKey(selectedFile.info.rel_path, action.id),
+      wikiActionPrompt(action, { title: selectedFile.info.title, relPath: selectedFile.info.rel_path }),
+    );
   };
 
   return (
     <section className="wiki-workbench__section wiki-workbench__section--actions">
       <div className="wiki-workbench__section-title">
         <Lightning size={22} aria-hidden="true" />
-        <div><h3>关联行动</h3><p>选择一个行动，系统会自动完成关联；无需填写配置。</p></div>
+        <div><h3>关联行动</h3><p>给这条知识配上常用的技能。点「交给小鲶」，小鲶会读这条知识取需要的信息，缺的会问你。</p></div>
       </div>
       {!readOnly && (
         <div className="wiki-action-selector">
@@ -158,7 +154,7 @@ export default function WikiActionPanel({
       )}
       {actionsLoading && <div className="wiki-workbench__quiet">正在解析行动注册表…</div>}
       {!actionsLoading && actionBindings.length === 0 && (
-        <div className="wiki-workbench__quiet">尚未绑定行动；绑定后才会出现执行入口。</div>
+        <div className="wiki-workbench__quiet">尚未关联行动；关联后这里会出现「交给小鲶」。</div>
       )}
       <div className="wiki-actions-list">
         {actionBindings.map((action) => (
@@ -169,10 +165,10 @@ export default function WikiActionPanel({
               {!action.available && <small className="wiki-workbench__error">{action.reason || "当前不可执行"}</small>}
             </div>
             <div className="wiki-action-card__buttons">
-              {!readOnly && <button type="button" className="wiki-workbench__secondary" onClick={() => removeAction(action)} disabled={actionSaving || actionRunId !== null} title="解除这个行动关联"><X size={18} />解除</button>}
-              <button type="button" className="wiki-workbench__primary" onClick={() => void runAction(action)} disabled={!action.available || actionRunId !== null}>
-                {actionRunId === action.id ? <SpinnerGap className="wiki-spin" size={18} /> : <Play size={18} />}
-                执行
+              {!readOnly && <button type="button" className="wiki-workbench__secondary" onClick={() => removeAction(action)} disabled={actionSaving} title="解除这个行动关联"><X size={18} />解除</button>}
+              <button type="button" className="wiki-workbench__primary" onClick={() => runAction(action)} disabled={!action.available} title="去工作台让小鲶按这条知识来做">
+                <ChatCircleDots size={18} />
+                交给小鲶
               </button>
             </div>
           </div>
