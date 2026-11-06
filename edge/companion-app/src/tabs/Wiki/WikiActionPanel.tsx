@@ -152,6 +152,10 @@ export default function WikiActionPanel({
       {!readOnly && !actionCatalogLoading && actionCatalog.length === 0 && (
         <div className="wiki-workbench__quiet">当前没有可关联行动。</div>
       )}
+      {/* 11/06: 技能没装的行动灰掉 (wiki_actions.rs skill_installed), 全灰时说一句为什么 */}
+      {!readOnly && !actionCatalogLoading && actionCatalog.length > 0 && actionCatalog.every((a) => !a.available) && (
+        <div className="wiki-workbench__quiet">这些行动对应的技能本机都还没装，装好后才能关联。</div>
+      )}
       {actionsLoading && <div className="wiki-workbench__quiet">正在解析行动注册表…</div>}
       {!actionsLoading && actionBindings.length === 0 && (
         <div className="wiki-workbench__quiet">尚未绑定行动；绑定后才会出现执行入口。</div>

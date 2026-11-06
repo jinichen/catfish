@@ -179,6 +179,8 @@ fn binding(action: &ActionDefinition) -> WikiActionBinding {
         reason = Some("当前只允许通过现有 skill bridge 执行".into());
     } else if action.skill_path.as_deref().map(str::trim).unwrap_or("").is_empty() {
         reason = Some("注册表缺少 skill_path".into());
+    } else if !skill_installed(action.skill_path.as_deref().unwrap_or_default()) {
+        reason = Some("本机没装这个技能".into());
     }
     WikiActionBinding {
         id: action.id.clone(),
@@ -189,6 +191,37 @@ fn binding(action: &ActionDefinition) -> WikiActionBinding {
         available: reason.is_none(),
         reason,
     }
+}
+
+/// catfish_run_skill (tool-bridge `_skill_search_roots`) 会去找技能的几个根, 顺序一致:
+/// CATFISH_SKILLS_DIR / 仓库 skills/ (只有开发机有), ~/.catfish/skills/, ~/.catfish/expert-packs/。
+fn skill_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(dir) = std::env::var_os("CATFISH_SKILLS_DIR") {
+        roots.push(PathBuf::from(dir));
+    }
+    if let Some(root) = crate::services::catfish_paths::catfish_root() {
+        roots.push(root.join("skills"));
+    }
+    if let Ok(home) = catfish_home() {
+        roots.push(home.join("skills"));
+        roots.push(home.join("expert-packs"));
+    }
+    roots
+}
+
+/// 11/06 鸿波: 内置 6 个行动 (EIS 登录 / 周报 …) 的技能员工机上一般没装, 原来照样显示可选,
+/// 关联后一点执行才报「skill 不存在」。没装的灰掉。
+fn skill_installed(skill_path: &str) -> bool {
+    skill_installed_in(&skill_roots(), skill_path)
+}
+
+fn skill_installed_in(roots: &[PathBuf], skill_path: &str) -> bool {
+    let rel = skill_path.trim().trim_matches('/');
+    if rel.is_empty() || rel.split('/').any(|part| part == ".." || part.is_empty()) {
+        return false;
+    }
+    roots.iter().any(|root| root.join(rel).is_dir())
 }
 
 fn find_action<'a>(
@@ -290,6 +323,21 @@ mod tests {
         let mut item = action("skill");
         item.id = id.into();
         item
+    }
+
+    #[test]
+    fn skill_installed_checks_every_root_and_rejects_traversal() {
+        let tmp = std::env::temp_dir().join(format!("catfish-wiki-actions-{}", std::process::id()));
+        let (a, b) = (tmp.join("a"), tmp.join("b"));
+        fs::create_dir_all(b.join("department/weekly-report")).unwrap();
+        fs::create_dir_all(&a).unwrap();
+        let roots = vec![a.clone(), b.clone()];
+        assert!(skill_installed_in(&roots, "department/weekly-report"));
+        assert!(skill_installed_in(&roots, "/department/weekly-report/"));
+        assert!(!skill_installed_in(&roots, "department/eis-login"));
+        assert!(!skill_installed_in(&roots, "department/../department/weekly-report"));
+        assert!(!skill_installed_in(&roots, ""));
+        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
