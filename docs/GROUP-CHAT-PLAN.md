@@ -176,6 +176,22 @@ X25519 静态-静态 DH → HKDF-SHA256 → ChaCha20-Poly1305 (用已有的 `cry
 
 定: **先上 SQLite (不加密), 同时验证 SQLCipher 能不能顺利打进三个安装包** —— 能就用它 (加密和搜索都保住); 不行退「只加密正文」, 那样就不做搜索。
 
+**SQLCipher 验证结果 (11/6)**: ✅ 能进三个安装包, 用 `sqlcipher3==0.6.4` (PyPI, 2026-10-13 发布)。
+- 三个目标都有现成 CPython 3.14 轮子: `macosx_11_0_arm64` / `macosx_10_15_x86_64` (Intel 最低 10.15, 跟安装包一致) / `win_amd64`, 各 2.5–3 MB。
+  按打包脚本的办法 (`uv pip compile --python-platform … --only-binary`, 带 sha256) 三个都解析得出 —— 接入只要在
+  `src-tauri/hermes-extra-packages.txt` 加一行 `sqlcipher3==0.6.4  sqlcipher3`, 跟着 wheelhouse 走, 员工机器离线装。
+- 静态链接: Mac 的 .so 只依赖系统 `libSystem`; Windows 的 .pyd 只依赖系统 DLL + `python314.dll` / `VCRUNTIME140.dll` (内嵌 Python 自带)。
+  不用另带 OpenSSL / SQLCipher 原生库。
+- 实测 (arm64 本机 + Intel 用 Rosetta 跑 x86_64 的 CPython 3.14): SQLite 3.53.4 / SQLCipher 4.19.0 community / OpenSSL 3.6.0;
+  WAL 正常; 库文件里没有明文; 不给密钥打不开 (`file is not a database`); 中文 `LIKE` 正常; FTS5 trigram 也能用 (以后要全文索引可以直接上);
+  `sqlcipher_export` 能把现在的明文库原样转成加密库 (升级迁移就用它)。
+- **WAL 损坏漏洞闸** (`scripts/check-embedded-sqlite.py` 同判据): 3.53.4 不在有洞区间 ✅。
+  另一个包 `sqlcipher3-wheels 0.5.7` 带的是 SQLite 3.51.1 —— **有洞, 不能用**。
+- 许可: sqlcipher3 是 zlib 许可, SQLCipher Community 是 BSD 类, OpenSSL 3 是 Apache 2.0 —— 商用打包都可以, 附带许可文本即可。
+- 还没做: Windows 上真机跑一遍 (本机没有 Windows; 做本机加密那一步时把同一段自检加进 `smoke-windows-runtime.ps1`, 跟 MSI 一起在 CI 上跑)。
+- 密钥: 32 字节随机数放系统钥匙串 (macOS 钥匙串 / Windows 凭据管理器)。tool-bridge 在 macOS 上读钥匙串会弹看不见的授权框
+  (companion_secrets.py 文件头), 所以由 Companion (Rust) 读出来交给 tool-bridge, 跟现在别的密钥一个走法。
+
 ### 4.4 聊久了不卡 + 群内搜索
 
 ✅ 11/6 已做:
@@ -200,7 +216,7 @@ X25519 静态-静态 DH → HKDF-SHA256 → ChaCha20-Poly1305 (用已有的 `cry
 1. ✅ 改界面说法 (§4.0) —— 加密做完, 直接改成「中央只转交加密内容、看不到原文」。
 2. ✅ (1.2.76) 同一个版本: 端到端加密 (§4.1) + 改存 SQLite (§4.3) + 保留期限 180 天 (§4.2) + 分页 / 搜索 (§4.4) —— 都在动同一块存储;
    同时验证 SQLCipher 能不能进三个安装包。
-3. 接着: 本机加密 (§4.3 —— SQLCipher 整库, 验证不过就只加密正文)。
+3. 接着: 本机加密 (§4.3 —— ✅ 11/6 验证通过, 用 SQLCipher 整库加密, `sqlcipher3==0.6.4`)。
 4. 客户提出再做: 合规归档 (§4.6)。
 
 ## 5. 以后再说
