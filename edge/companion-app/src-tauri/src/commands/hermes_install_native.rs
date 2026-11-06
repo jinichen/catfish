@@ -431,7 +431,8 @@ mod e2e {
 import pkgutil, importlib, catfish_tool_bridge as t
 bad = []
 # Intel Mac 上这几个是打包时现编的 (cryptography 带 Rust 二进制), 真加载一次
-for m in ("cryptography.hazmat.bindings._rust", "greenlet", "watchdog.observers", "yaml"):
+# 11/06 hermes v0.23: PIL (上游 override 压到 Pillow 13, 装依赖 --no-deps) / sqlcipher3 (群聊本机库加密) 也真加载
+for m in ("cryptography.hazmat.bindings._rust", "greenlet", "watchdog.observers", "yaml", "PIL.Image", "sqlcipher3"):
     try:
         importlib.import_module(m)
     except Exception as e:
@@ -457,6 +458,69 @@ raise SystemExit(1 if bad else 0)
         super::super::hermes_install::bootstrap_locked(resource.path(), &paths, &reporter).unwrap();
         println!("第二遍 {:.1}s", started.elapsed().as_secs_f64());
         assert!(steps.lock().unwrap().last().unwrap().contains("Skipped"));
+    }
+
+    /// 11/06: 原地升级 —— 先用老资源 (上一版安装包, hermes 0.22.2) 装, 写点员工数据, 再用新资源 (0.23) 装一遍:
+    ///   CATFISH_TEST_RUNTIME_OLD=<老 resources/mac-aarch64> CATFISH_TEST_RUNTIME=src-tauri/resources/mac-aarch64 \
+    ///   cargo test --lib hermes_install_native::e2e::upgrades -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn upgrades_in_place_from_previous_bundle() {
+        let pick = |var: &str| {
+            let runtime = std::path::PathBuf::from(std::env::var(var).unwrap()).canonicalize().unwrap();
+            let resource = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(resource.path().join("resources")).unwrap();
+            std::os::unix::fs::symlink(&runtime, resource.path().join("resources").join("mac")).unwrap();
+            resource
+        };
+        let (old, new) = (pick("CATFISH_TEST_RUNTIME_OLD"), pick("CATFISH_TEST_RUNTIME"));
+        let home = tempfile::tempdir().unwrap();
+        let _env = crate::util::test_env::env_lock();
+        let paths = BootstrapPaths::new(home.path().to_path_buf());
+        let reporter = |p: super::super::hermes_install_base::HermesBootstrapProgress| println!("{p:?}");
+        super::super::hermes_install::bootstrap_locked(old.path(), &paths, &reporter).unwrap();
+        // 这一遍是新 Companion 装的老归档, 它把装好的记成新 pin 的 commit; 员工机上是老 Companion 装的, 记的是老 commit。
+        // 照员工机的样子改回老 commit (CATFISH_TEST_OLD_COMMIT = 老版本仓里的 .hermes-git-commit)。
+        let old_commit = std::env::var("CATFISH_TEST_OLD_COMMIT").unwrap();
+        let new_commit = super::super::hermes_install_base::hermes_pinned_commit();
+        for f in [".catfish-hermes-version", super::super::hermes_install_base::COMPLETION_MARKER] {
+            let p = paths.install_dir.join(f);
+            let text = std::fs::read_to_string(&p).unwrap();
+            assert!(text.contains(new_commit), "{f}: {text}");
+            std::fs::write(&p, text.replace(new_commit, old_commit.trim())).unwrap();
+        }
+        let version = |paths: &BootstrapPaths| {
+            let out = crate::services::process::background_command(paths.install_dir.join("venv/bin/hermes"))
+                .arg("--version")
+                .env("HOME", &paths.home)
+                .env("HERMES_HOME", &paths.hermes_home)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).lines().next().unwrap_or("").to_string()
+        };
+        let before = version(&paths);
+        println!("老版本: {before}");
+        // 员工数据: 记忆 / 配置里的自定义项, 升级后都得在
+        std::fs::create_dir_all(paths.hermes_home.join("memories")).unwrap();
+        std::fs::write(paths.hermes_home.join("memories/MEMORY.md"), "爱用表格").unwrap();
+        let started = std::time::Instant::now();
+        super::super::hermes_install::bootstrap_locked(new.path(), &paths, &reporter).unwrap();
+        println!("升级 {:.1}s", started.elapsed().as_secs_f64());
+        let after = version(&paths);
+        println!("新版本: {after}");
+        assert_ne!(before, after, "装完版本没变 = 没升级");
+        assert!(after.contains(super::super::hermes_install_base::hermes_pinned_tag().trim_start_matches('v')), "{after}");
+        let problems = super::super::hermes_install_health::core_health_problems(&paths, true);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(!paths.install_dir.join(".git").exists());
+        assert_eq!(std::fs::read_to_string(paths.hermes_home.join("memories/MEMORY.md")).unwrap(), "爱用表格");
+        let out = crate::services::process::background_command(paths.install_dir.join("venv/bin/python"))
+            .args(["-c", "import PIL.Image, sqlcipher3, jieba, yaml, playwright.sync_api, gateway.run, run_agent"])
+            .env("HOME", &paths.home)
+            .env("HERMES_HOME", &paths.hermes_home)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     }
 }
 
