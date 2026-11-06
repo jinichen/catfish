@@ -2361,8 +2361,9 @@ button {
 }
 
 /* 10/23: 知识体系「关系类型」入口 */
-.wiki-organizer__searchrow { display: flex; align-items: stretch; gap: 6px; }
-.wiki-organizer__searchrow .wiki-organizer__search { flex: 1; min-width: 0; min-height: 38px; }
+/* 11/07: 关系 / 属性 / 类型定义三个按钮, 窄的时候换到下一行, 不把搜索框挤没 */
+.wiki-organizer__searchrow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px; }
+.wiki-organizer__searchrow .wiki-organizer__search { flex: 1 1 180px; min-width: 0; min-height: 38px; }
 .wiki-organizer__vocab {
   display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; white-space: nowrap;
   padding: 5px 10px; border: 1px solid color-mix(in srgb, var(--catfish-text-muted) 35%, transparent);

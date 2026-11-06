@@ -73,3 +73,58 @@ export const wikiPropsPropose = (typeKey: string, useModel: boolean) =>
   invoke<WikiPropsProposeResult>("wiki_props_propose", { typeKey, useModel });
 export const wikiPropsApply = (items: { rel_path: string; props: Record<string, string> }[]) =>
   invoke<WikiPropsApplyResult>("wiki_props_apply", { items });
+
+// ─── 11/07 类型定义页 ───────────────────────────────────────────────────────
+
+export type DefOrigin = "builtin" | "local" | "builtin+local";
+
+export interface TypeDefProperty {
+  key: string;
+  label: string;
+  type: string;
+  hint?: string;
+  keywords?: string[];
+  origin: DefOrigin;
+  hidden: boolean;
+}
+
+export interface TypeDefAction {
+  id: string;
+  label: string;
+  description?: string;
+  instruction?: string;
+  skill_path?: string;
+  origin: DefOrigin;
+  hidden: boolean;
+}
+
+export interface TypeDef {
+  key: string;
+  label: string;
+  origin: "builtin" | "local";
+  status: { label?: string; from?: string; warn_days?: number } | null;
+  properties: TypeDefProperty[];
+  actions: TypeDefAction[];
+}
+
+export interface TypeDefsView {
+  ok: boolean;
+  types: TypeDef[];
+  /** 知识库里有、还没定义的细分类型 (新建类型从这里挑) */
+  subtypes: { key: string; count: number }[];
+}
+
+export type TypeDefChange =
+  | { op: "add_type"; type: string; label: string }
+  | { op: "delete_type"; type: string }
+  | { op: "rename_type"; type: string; label: string }
+  | { op: "set_warn_days"; type: string; warn_days: number }
+  | { op: "add_property"; type: string; property: Partial<TypeDefProperty> }
+  | { op: "update_property"; type: string; key: string; property: Partial<TypeDefProperty> }
+  | { op: "hide_property" | "unhide_property" | "delete_property"; type: string; key: string }
+  | { op: "add_action"; type: string; action: Partial<TypeDefAction> }
+  | { op: "update_action"; type: string; id: string; action: Partial<TypeDefAction> }
+  | { op: "hide_action" | "unhide_action" | "delete_action"; type: string; id: string };
+
+export const wikiTypeDefs = () => invoke<TypeDefsView>("wiki_type_defs");
+export const wikiTypeDefsApply = (change: TypeDefChange) => invoke<TypeDefsView>("wiki_type_defs_apply", { change });

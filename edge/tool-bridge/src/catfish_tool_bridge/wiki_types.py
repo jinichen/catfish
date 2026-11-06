@@ -57,33 +57,56 @@ def _merge_by(base: list[dict], extra: list[dict], key: str) -> list[dict]:
     return out
 
 
-def load_schema() -> dict[str, dict[str, Any]]:
-    """{类型 key: 定义}。内置 + 本机补充。读坏了的本机文件跳过 (记日志), 不让内置也跟着失效。"""
-    types: dict[str, dict[str, Any]] = {}
+def load_builtin() -> dict[str, dict[str, Any]]:
     path = _builtin_path()
-    if path is not None:
-        try:
-            types = dict(json.loads(path.read_text(encoding="utf-8")).get("types") or {})
-        except (OSError, ValueError) as e:
-            logger.warning("类型定义读失败 %s: %s", path, e)
+    if path is None:
+        return {}
+    try:
+        return dict(json.loads(path.read_text(encoding="utf-8")).get("types") or {})
+    except (OSError, ValueError) as e:
+        logger.warning("类型定义读失败 %s: %s", path, e)
+        return {}
+
+
+def load_local() -> dict[str, dict[str, Any]]:
     local = wiki_files._catfish_home() / LOCAL_FILE
-    if local.is_file():
-        try:
-            extra = json.loads(local.read_text(encoding="utf-8")).get("types") or {}
-        except (OSError, ValueError) as e:
-            logger.warning("本机类型定义读失败 %s: %s", local, e)
-            extra = {}
-        for key, tdef in extra.items():
-            if not isinstance(tdef, dict):
-                continue
-            if key not in types:
-                types[key] = dict(tdef)
-                continue
-            merged = {**types[key], **{k: v for k, v in tdef.items() if k not in ("properties", "actions")}}
-            merged["properties"] = _merge_by(types[key].get("properties") or [], tdef.get("properties") or [], "key")
-            merged["actions"] = _merge_by(types[key].get("actions") or [], tdef.get("actions") or [], "id")
-            types[key] = merged
+    if not local.is_file():
+        return {}
+    try:
+        data = json.loads(local.read_text(encoding="utf-8")).get("types") or {}
+    except (OSError, ValueError) as e:
+        logger.warning("本机类型定义读失败 %s: %s", local, e)
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, dict)}
+
+
+def merge_types(builtin: dict[str, dict[str, Any]], local: dict[str, dict[str, Any]],
+                keep_hidden: bool = False) -> dict[str, dict[str, Any]]:
+    """内置 + 本机补充。本机里同名类型: 属性按 key、行动按 id 合并, status 按字段合并, 其它字段覆盖;
+    hidden_properties / hidden_actions 列着的内置属性 / 行动藏起来 (keep_hidden=True 时留着并标 hidden, 给类型定义页显示)。"""
+    types = {k: dict(v) for k, v in builtin.items()}
+    for key, tdef in local.items():
+        base = types.get(key, {})
+        merged = {**base, **{k: v for k, v in tdef.items() if k not in ("properties", "actions", "status")}}
+        merged["properties"] = _merge_by(base.get("properties") or [], tdef.get("properties") or [], "key")
+        merged["actions"] = _merge_by(base.get("actions") or [], tdef.get("actions") or [], "id")
+        if isinstance(tdef.get("status"), dict) or isinstance(base.get("status"), dict):
+            merged["status"] = {**(base.get("status") or {}), **(tdef.get("status") or {})}
+        types[key] = merged
+    for key, tdef in types.items():
+        hide_p, hide_a = set(tdef.get("hidden_properties") or []), set(tdef.get("hidden_actions") or [])
+        if keep_hidden:
+            tdef["properties"] = [{**p, "hidden": p.get("key") in hide_p} for p in tdef.get("properties") or []]
+            tdef["actions"] = [{**a, "hidden": a.get("id") in hide_a} for a in tdef.get("actions") or []]
+        else:
+            tdef["properties"] = [p for p in tdef.get("properties") or [] if p.get("key") not in hide_p]
+            tdef["actions"] = [a for a in tdef.get("actions") or [] if a.get("id") not in hide_a]
     return types
+
+
+def load_schema() -> dict[str, dict[str, Any]]:
+    """{类型 key: 定义}。内置 + 本机补充 (类型定义页改的就是本机补充, wiki_type_defs.py)。读坏了的本机文件跳过。"""
+    return merge_types(load_builtin(), load_local())
 
 
 def type_of(fm: str, schema: dict[str, dict[str, Any]]) -> str | None:
@@ -199,8 +222,18 @@ def status_of(props: dict[str, str], tdef: dict[str, Any], today: date | None = 
     return {"code": code, "label": spec.get("label", "状态"), "value": values.get(code, code), "days_left": str(left)}
 
 
-def fill_instruction(text: str, props: dict[str, str]) -> str:
-    return re.sub(r"\{([a-z_][a-z0-9_]*)\}", lambda m: props.get(m[1]) or "（未填）", text or "")
+def fill_instruction(text: str, props: dict[str, str], tdef: dict[str, Any] | None = None) -> str:
+    """「要做的事」里的 {属性key} 或 {属性名} (类型定义页上员工写的是中文名, 例 {有效期至}) 换成这条知识的属性值。"""
+    by_label = {str(p.get("label")): p["key"] for p in (tdef or {}).get("properties") or [] if p.get("label")}
+
+    def sub(m: re.Match) -> str:
+        name = m[1].strip()
+        key = name if name in props or name in by_label.values() else by_label.get(name)
+        if key is None:
+            return m[0]   # 不是属性 (例 JSON 里的花括号), 原样留着
+        return props.get(key) or "（未填）"
+
+    return re.sub(r"\{([^{}\n]{1,20})\}", sub, text or "")
 
 
 # ─── 一条知识的类型信息 (界面属性卡片 / catfish_wiki_read 用) ─────────────────
@@ -224,7 +257,7 @@ def describe_content(content: str, schema: dict[str, dict[str, Any]] | None = No
         "status": status_of(props, tdef),
         "actions": [
             {"id": a["id"], "label": a.get("label", a["id"]), "description": a.get("description", ""),
-             "skill_path": a.get("skill_path", ""), "instruction": fill_instruction(a.get("instruction", ""), props)}
+             "skill_path": a.get("skill_path", ""), "instruction": fill_instruction(a.get("instruction", ""), props, tdef)}
             for a in tdef.get("actions") or [] if a.get("id")
         ],
     }

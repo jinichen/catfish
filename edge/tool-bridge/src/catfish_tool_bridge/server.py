@@ -109,6 +109,11 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
         except ValueError as e:
             return _error(req_id, INVALID_PARAMS, str(e))
     # 11/07: 知识库类型定义 (wiki_types.py): 证书页属性卡片 / 类型上的行动 / 「整理属性」建议 + 写入, 不进模型工具清单
+    if method in ("wiki/type_defs", "wiki/type_defs_apply"):  # 11/07 知识体系「类型定义」页 (wiki_type_defs.py)
+        from . import wiki_type_defs  # noqa: PLC0415
+        if method == "wiki/type_defs":
+            return _success(req_id, await asyncio.to_thread(wiki_type_defs.view))
+        return _success(req_id, await asyncio.to_thread(wiki_type_defs.apply, params))
     if method in ("wiki/types", "wiki/type_entry", "wiki/props_propose", "wiki/props_apply"):
         from . import wiki_types  # noqa: PLC0415
         if method == "wiki/types":

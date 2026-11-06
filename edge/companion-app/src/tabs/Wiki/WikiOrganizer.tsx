@@ -26,6 +26,7 @@ import { useKeptUntyped } from "../../lib/wikiUntypedKept";
 import { customHierarchy, useRelationVocab } from "../../lib/wikiRelationVocab";
 import WikiRelationTypesModal from "./WikiRelationTypesModal";
 import WikiPropsReview from "./WikiPropsReview";
+import WikiTypeDefsModal from "./WikiTypeDefsModal";
 import { useHierarchyModel } from "./WikiHierarchyView";
 import {
   buildConfirmedWikiContent,
@@ -91,6 +92,7 @@ export default function WikiOrganizer({
   const loadRelationVocab = useRelationVocab((state) => state.load);
   const [showRelationTypes, setShowRelationTypes] = useState(false);
   const [showPropsReview, setShowPropsReview] = useState(false);
+  const [showTypeDefs, setShowTypeDefs] = useState(false);
   useEffect(() => {
     void loadRelationVocab();
   }, [loadRelationVocab]);
@@ -259,7 +261,8 @@ export default function WikiOrganizer({
               title={`关系类型${customRelations.length > 0 ? `（含 ${customRelations.length} 个自定义）` : ""}`}
             >
               <Tag size={16} aria-hidden="true" />
-              类型
+              {/* 11/07: 原来叫「类型」, 跟新加的「类型定义」撞名, 它管的是关系类型 */}
+              关系
             </button>
             {/* 11/07: 把正文里的编号 / 有效期 … 抽成属性 (WikiPropsReview) */}
             <button
@@ -271,9 +274,20 @@ export default function WikiOrganizer({
               <ListChecks size={16} aria-hidden="true" />
               属性
             </button>
+            {/* 11/07: 每一类有哪些属性 / 行动 / 提醒天数 (WikiTypeDefsModal) */}
+            <button
+              type="button"
+              className="wiki-organizer__vocab"
+              onClick={() => setShowTypeDefs(true)}
+              title="类型定义：每一类知识有哪些属性、到期前多少天提醒、能做哪些行动"
+            >
+              <TreeStructure size={16} aria-hidden="true" />
+              类型定义
+            </button>
           </div>
           {showRelationTypes && <WikiRelationTypesModal onClose={() => setShowRelationTypes(false)} />}
           {showPropsReview && <WikiPropsReview onClose={() => setShowPropsReview(false)} />}
+          {showTypeDefs && <WikiTypeDefsModal onClose={() => setShowTypeDefs(false)} />}
 
           <div className="wiki-organizer__summary" aria-label="关系健康概览">
             {visibleKinds.map((kind) => {

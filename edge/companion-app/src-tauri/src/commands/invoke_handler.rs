@@ -99,6 +99,8 @@ pub(crate) fn handler(
             // skills + mcp
             crate::commands::wiki_actions::wiki_list_actions,
             crate::commands::wiki_types::wiki_types_list,
+            crate::commands::wiki_types::wiki_type_defs,
+            crate::commands::wiki_types::wiki_type_defs_apply,
             crate::commands::wiki_types::wiki_type_entry,
             crate::commands::wiki_types::wiki_props_propose,
             crate::commands::wiki_types::wiki_props_apply,

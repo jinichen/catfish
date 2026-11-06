@@ -40,6 +40,18 @@ fn annotate_actions(info: &mut Value) {
     }
 }
 
+/// 类型定义页: 每一类的属性 / 行动 (标内置还是自己加的、藏没藏) + 知识库里还没定义的细分类型。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn wiki_type_defs() -> Result<Value, String> {
+    ok_or_err(call_with_timeout("wiki/type_defs", json!({}), Duration::from_secs(30)).await?, "读类型定义失败")
+}
+
+/// 类型定义页改一处 (op + 参数, 见 tool-bridge wiki_type_defs.apply), 只写本机 ~/.catfish/wiki-type-schema.json。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn wiki_type_defs_apply(change: Value) -> Result<Value, String> {
+    ok_or_err(call_with_timeout("wiki/type_defs_apply", change, Duration::from_secs(30)).await?, "没改成")
+}
+
 /// 定义了哪些类型 ([{key, label}]) —— 「整理属性」按类型列入口。
 #[tauri::command(rename_all = "camelCase")]
 pub async fn wiki_types_list() -> Result<Value, String> {

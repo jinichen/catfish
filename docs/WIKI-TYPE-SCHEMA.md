@@ -7,10 +7,20 @@
 ## 定义在哪
 
 - 内置：`edge/contracts/wiki_type_schema.json`，随安装包发（edge-runtime 里的 `contracts/`）。
-- 本机补充：`~/.catfish/wiki-type-schema.json`，格式相同，只写要加 / 要改的部分：
-  - 同名类型：属性按 `key` 合并，行动按 `id` 合并，其它字段覆盖；
+- 本机补充：`~/.catfish/wiki-type-schema.json`（一般用类型定义页改，不用手写），格式相同，只写要加 / 要改的部分：
+  - 同名类型：属性按 `key` 合并，行动按 `id` 合并，`status` 按字段合并，其它字段覆盖；`hidden_properties` / `hidden_actions` 列着的内置项隐藏；
   - 新类型：直接写进 `types`（key 用条目的 `entity_type` / `concept_type` 值，中文细分类型按受控词表归一后也认，例「资质」→ `cert`）。
 - 读写全在 tool-bridge `wiki_types.py`；Companion（`commands/wiki_types.rs`）只转发，再给行动标上本机技能装没装。
+
+## 在界面上改（类型定义页）
+
+知识体系 → 关系整理 → 搜索框旁「类型定义」（旁边原来叫「类型」的按钮管关系类型，改叫「关系」）：
+
+- 左边是各类型，右边改这一类：类型名、到期前多少天提醒、属性（名字 / 文本或日期 / 说明）、行动（名字 / 要做的事 / 可选技能）。
+- 「要做的事」里可以写 `{属性名}`（例 `{有效期至}`），点「插入属性」也行，执行时换成这条知识的属性值；没填的换成「（未填）」。
+- 内置的属性和行动能改名、改说明、隐藏 / 恢复，不能删；自己加的随便删。新建类型从知识库里已有的细分类型里选（列出条数），自建类型可以删，已写进知识的属性不删。
+- 改的是本机补充文件 `~/.catfish/wiki-type-schema.json`（每次改前旧文件备份成 `.bak`），换机迁移会带走；内置定义不动。
+- 后端 `wiki_type_defs.py`：`view()` 给合并后的定义（每项标内置 / 我加的 / 内置改过、是否隐藏），`apply({op, …})` 一次改一处并校验。
 
 ## 一个类型里有什么
 
@@ -20,7 +30,7 @@
 | `properties` | 属性：`key`、`label`、`type`（`text` / `date`）、可选 `hint`、`pattern`、`keywords`、`aliases`、`max_len`（文本默认 60 字，超了不当值） |
 | `status` | 自动算的状态：`from` 哪个日期属性、`warn_days` 提前多少天算「即将到期」；可选 `done_when`（某属性是这些值时算「已结束」，不再按日期算，例 项目阶段=已结束） |
 | `relations` | 这一类常用的关系（目前是说明，还不拦截） |
-| `actions` | 这一类都有的行动：`id`、`label`、`description`、可选 `skill_path`、`instruction`（`{属性key}` 会换成属性值） |
+| `actions` | 这一类都有的行动：`id`、`label`、`description`、可选 `skill_path`、`instruction`（`{属性key}` 或 `{属性名}` 会换成属性值） |
 
 ### 属性存在哪
 
