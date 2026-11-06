@@ -29,7 +29,7 @@
 | 2 | 插件因微信挪位置不加载 | ✅ 自检两处都认 | 两版都「46 个补丁入口全部生效」 |
 | 3 | 主对话丢员工身份头 | ✅ P65 `plugin_api_turn.py`: 包 `admit_api_steps`, 排队时登记 会话 → 员工 / 来源; P2 / P10 按会话 (含父会话) 查 | 两版发给网关的 X-Catfish-User / Source 一模一样 (带会话号 / 不带会话号两种) |
 | 4 | 微信补丁打到另一份模块 | ✅ `weixin_compat.py` 从平台注册表取网关真正用的类 (`hermes_plugins.platforms__weixin.adapter`), 没注册就挂在 register 上补; P28 / P56 / P60 / P30 / wechat_push 都改 | 0.23 日志: 三个补丁都打在 `hermes_plugins.platforms__weixin.adapter` 上 |
-| 5 | Pillow 13 冲突 | ✅ 打 wheelhouse 合并上游 override; 装依赖 `--no-deps` (清单本是完整闭包) —— Rust 装机、mac 资源、Windows 冒烟三处 | 待: 真打一次 0.23 离线资源 (三个目标) |
+| 5 | Pillow 13 冲突 | ✅ 打 wheelhouse 合并上游 override; 装依赖 `--no-deps` (清单本是完整闭包) —— Rust 装机、mac 资源、Windows 冒烟三处 | 三个目标的离线资源都打出来了, 装机见下 |
 | 6 | setuptools 84.1.0 | ✅ | 同上 |
 | 7 | uv 0.13.5 | ✅ `.uv-version` | 同上 |
 | 8 | P48 / P53 参数 | ✅ 透传 | 插件测试 |
@@ -52,7 +52,18 @@
 
 已确认不用改 (实测): 原生审批事件 / 回执、「小鲶正在做什么」(0.23 从网关会话登记取得到)、定时任务 P21、catfish-memory。
 
-还剩: 真打 0.23 离线资源 (mac arm64 / Intel / Windows CI) 并离线装机; 从 0.22.2 原地升级一遍; 真 Companion 上点一遍 (聊天、审批、微信、专家 Bot、换机迁移)。
+**离线资源 + 装机 (11/06)**:
+
+| 目标 | 离线资源 | 全新装 | 0.22.2 → 0.23.0 原地升级 |
+|---|---|---|---|
+| mac arm64 | ✅ 502 MB (SQLCipher 自检过) | ✅ 14.5s, 健康, PIL / sqlcipher3 / 工具桥全部模块导得进, 第二遍走快路径 | ✅ 14.1s, 健康, 员工记忆保留 |
+| mac Intel (Rosetta) | ✅ 513 MB (cryptography / greenlet 现编, SQLCipher 自检过) | ✅ 22.6s, 同上 (含 cryptography Rust 二进制真加载) | ✅ 19.1s, 同上 |
+| Windows (CI run 42158072479) | ✅ v0.23.0 / Python 3.14.7 / uv 0.13.5 | ✅ 打包后运行时冒烟: 离线装依赖、SQLCipher 自检、工具桥起来健康 (165 个工具) | — (CI 只有冒烟) |
+
+用的是 `hermes_install_native::e2e` 两条忽略测试 (装机 / 原地升级, 注释里有跑法)。升级测试第一遍假失败: 新 Companion 装老归档时把装好的记成新 pin 的 commit,
+第二遍以为已是新版; 员工机上是老 Companion 记的老 commit —— 测试照员工机的样子改回老 commit 后真升级, 升级判据本身没问题。
+
+还剩: 真 Companion 上点一遍 (聊天、审批、微信、专家 Bot、换机迁移); Windows 从 0.22.2 原地升级 (要真 Windows 机)。
 
 ## 实测结果 (两个版本同样配置真起网关)
 
