@@ -135,7 +135,7 @@ export default function RoomsPanel() {
         {/* 左: 群列表 (自己滚) */}
         <div style={{ display: "flex", flexDirection: "column", gap: 6, minHeight: 0 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
-            <strong style={{ fontSize: 13 }} title="消息只存在每个成员自己的电脑上, 中央只转交、看不到内容; 每一条都是你点了才发">
+            <strong style={{ fontSize: 13 }} title="消息只存在每个成员自己的电脑上, 中央只转交加密内容、看不到原文, 取走即清空, 不保存记录; 每一条都是你点了才发">
               💬 群聊
             </strong>
             <Btn kind="primary" onClick={() => setCreating(true)}>建群</Btn>
@@ -528,7 +528,10 @@ function Bubble({ m, mine, members, me, quoted, onReply }: {
   const atMe = !mine && (m.mentions ?? []).includes(me);
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start", gap: 2 }}>
-      <span style={muted}>{mine ? "我" : labelOf(members, m.from)} · {timeLabel(m.at)}</span>
+      <span style={muted}>
+        {mine ? "我" : labelOf(members, m.from)} · {timeLabel(m.at)}
+        {m.plain && <span title="对方还是老版本, 这条没加密: 投递途中中央看得到原文" style={{ marginLeft: 6, color: "var(--status-warn, #d97706)" }}>未加密</span>}
+      </span>
       <div style={{ maxWidth: "78%", padding: "6px 10px", borderRadius: 10, fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-word",
                     background: mine ? "var(--catfish-cyan)" : "var(--catfish-bg-subtle, rgba(0,0,0,0.05))",
                     color: mine ? "white" : "inherit",

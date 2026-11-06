@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -21,7 +22,8 @@ MAILBOX_PATH = "/api/room-link/mailbox"
 MAX_TTL_SECONDS = 30 * 24 * 3600
 MIN_RESPONSE_TTL_SECONDS = 3 * 24 * 3600   # 回填至少留 3 天: 发起人可能出差关机
 AFTER_DEADLINE_DAYS = 7
-MAX_PAYLOAD_BYTES = 64 * 1024
+logger = logging.getLogger("catfish.tool_bridge.forms_net")
+MAX_PAYLOAD_BYTES = 128 * 1024   # 11/6 加密后 (base64) 放宽, 跟中央 room_link_db 一致
 # 老中央 (20261104 之前) 不认 task_* kind, 投 / 取都回 400
 CENTRAL_TOO_OLD = "中央端版本太旧, 还不支持派任务 —— 请管理员把中央端升级到最新版"
 # 老中央 (20261105 之前) 不认 room_* kind
@@ -79,13 +81,15 @@ def _client_call(method: str, path: str, *, params: dict | None = None, body: di
 
 
 def post(to: str, kind: str, envelope: dict[str, Any], ttl: int, source: str | None = None) -> int:
-    """投一封。envelope 序列化成 payload; 超 64KB 直接拒 (中央也会拒, 这里先给句人话)。
+    """投一封。11/6 起一律端到端加密 (mailbox_crypto): 收件人还没有公钥就拦住不发 (NoKeyError, 原因写给发件人)。
+    加密后超 128KB 直接拒 (中央也会拒, 这里先给句人话)。
     source: 数据外发记录里的用途标签 (X-Catfish-Source), 如群聊自动转发 room-auto-post。"""
     if kind not in FORM_KINDS + TASK_KINDS + ROOM_KINDS:
         raise ValueError(f"不认识的种类 {kind}")
-    payload = json.dumps(envelope, ensure_ascii=False)
+    from . import mailbox_crypto  # noqa: PLC0415
+    payload = mailbox_crypto.seal(to, kind, me(), envelope)
     if len(payload.encode("utf-8")) > MAX_PAYLOAD_BYTES:
-        raise ValueError("内容太长 (超过 64KB), 发不出去: 把长文本精简一下")
+        raise ValueError("内容太长 (加密后超过 128KB), 发不出去: 把长文本精简一下, 长材料用邮件发")
     code, data = _client_call("POST", MAILBOX_PATH, body={"to": to, "kind": kind, "payload": payload, "ttl_seconds": ttl}, source=source)
     if code >= 400:
         detail = data.get("detail") if isinstance(data, dict) else data
@@ -98,7 +102,10 @@ def post(to: str, kind: str, envelope: dict[str, Any], ttl: int, source: str | N
 
 
 def take(kinds: tuple[str, ...] = FORM_KINDS) -> list[dict[str, Any]]:
-    """取走发给我的填表 (或任务) 邮件。payload 解析失败的丢掉 (中央已清空, 不会重复来)。"""
+    """取走发给我的填表 / 任务 / 群聊邮件, 解开加密的 (v2)。解不开 / 发件人公钥对不上的丢掉 (中央已清空, 不会重复来);
+    老版本发来的明文 (v1) 照收, 信封里标 `_plain: True` (界面显示「未加密」)。"""
+    from . import mailbox_crypto  # noqa: PLC0415
+    mailbox_crypto.ensure_registered()   # 升级后第一次取邮筒就把本机公钥登记上, 同事才发得过来
     code, data = _client_call("GET", MAILBOX_PATH, params={"kinds": ",".join(kinds)})
     if code >= 400:
         detail = data.get("detail") if isinstance(data, dict) else data
@@ -109,14 +116,23 @@ def take(kinds: tuple[str, ...] = FORM_KINDS) -> list[dict[str, Any]]:
         what = "任务" if kinds == TASK_KINDS else "群聊" if kinds == ROOM_KINDS else "填表"
         raise ValueError(f"取{what}邮件失败 ({code}): {detail}")
     out = []
+    myself = me()
     for m in (data.get("messages") or []) if isinstance(data, dict) else []:
+        sender = str(m.get("from") or "").lower()
         try:
             env = json.loads(m.get("payload") or "")
         except ValueError:
             continue
+        if mailbox_crypto.is_sealed(env):
+            try:
+                env = mailbox_crypto.open_sealed(env, str(m.get("kind") or ""), sender, myself)
+            except ValueError as e:
+                logger.warning("丢掉一封解不开的邮件 (%s, %s): %s", sender, m.get("kind"), e)
+                continue
+        elif isinstance(env, dict):
+            env = {**env, "_plain": True}   # 老版本发来的明文
         if isinstance(env, dict):
-            out.append({"from": str(m.get("from") or "").lower(), "kind": m.get("kind"), "env": env,
-                        "created_at": m.get("created_at")})
+            out.append({"from": sender, "kind": m.get("kind"), "env": env, "created_at": m.get("created_at")})
     return out
 
 

@@ -154,6 +154,9 @@ const CATFISH: &[(Pat, Class, &str)] = &[
     (Exact("forms"), Required, "协作填表"),
     (Exact("collab_tasks"), Required, "请同事帮忙 (派出 / 收到的任务和交回的结果)"),
     (Exact("collab_rooms"), Required, "同事群聊 (群成员、本机聊天记录)"),
+    // 11/6 同事协作的端到端加密私钥 (mailbox_crypto.py): 跟别的凭证一样不随迁移包走 (包丢了也不泄露),
+    // 新电脑第一次取邮筒时生成新密钥并登记, 同事那边提示一次「密钥变了」。
+    (Exact("collab_keys"), Secret, "同事协作的加密私钥"),
     (Exact("workflow_drafts"), Required, "工作流"),
     (Exact("workflow_runs"), Required, "工作流运行记录"),
     // ── 审计 ──

@@ -73,8 +73,8 @@ export default function TasksPanel() {
         <div style={{ minWidth: 0 }}>
           <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>🤝 请同事帮忙</h3>
           <div style={{ ...muted, marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-               title="一次发给多位同事, 各自决定接不接; 在他自己的电脑上由他的小鲶或本人做完, 核对后交回。工具和要发出去的东西都由对方本人放行, 结果只回到你这台电脑。中央只转交, 看不到内容。">
-            各自决定接不接, 在自己电脑上做完交回; 结果只回到你这里, 中央看不到内容。
+               title="一次发给多位同事, 各自决定接不接; 在他自己的电脑上由他的小鲶或本人做完, 核对后交回。工具和要发出去的东西都由对方本人放行, 结果只回到你这台电脑。中央只转交加密内容、看不到原文, 取走即清空, 不保存记录。">
+            各自决定接不接, 在自己电脑上做完交回; 结果只回到你这里, 中央看不到原文。
           </div>
         </div>
         <div style={{ display: "flex", gap: 6, whiteSpace: "nowrap", flexShrink: 0 }}>

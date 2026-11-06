@@ -62,7 +62,7 @@ export default function RoomComposer({ roomId, existing = 0, onClose, onDone }: 
   return (
     <Overlay title={adding ? "拉同事进群" : "建群"} onClose={onClose} width={640}>
       <span style={muted}>
-        群消息只存在每个成员自己的电脑上, 中央只转交、取走即清空。对方收到邀请后自己点「加入」才进群, 加入前的聊天记录看不到。
+        群消息只存在每个成员自己的电脑上, 中央只转交加密内容、看不到原文, 取走即清空。对方收到邀请后自己点「加入」才进群, 加入前的聊天记录看不到。
       </span>
       {!adding && (
         <>

@@ -66,7 +66,7 @@ export default function TaskComposer({ onClose, onCreated }: {
     <Overlay title="请同事帮忙" onClose={onClose} width={680}>
       <span style={muted}>
         每位同事各自决定接不接; 接下后在他自己的电脑上由他的小鲶 (或他本人) 做, 用到的工具、要发出去的东西都由他本人放行,
-        核对后交回。结果只回到你这台电脑, 中央只转交、取走即清空。
+        核对后交回。结果只回到你这台电脑, 中央只转交加密内容、看不到原文, 取走即清空。
       </span>
       <textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} maxLength={TEXT_MAX}
                 placeholder="想请同事做什么, 如「把本周客户拜访情况整理成三行发我, 周例会用」—— 对方接不接之前看到的就是这段话"

@@ -108,3 +108,18 @@ def test_填表期限_写进expires_at(db):
         span = {r[0]: r[1].total_seconds() for r in cur.fetchall()}
     assert abs(span[mid] - 3 * 24 * 3600) < 5
     assert abs(span[rid] - 600) < 5
+
+
+def test_公钥目录_登记更新_超过10台删最早(db):
+    DB = db
+    with DB._pg_conn() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM room_link_keys")
+        conn.commit()
+    DB.put_key("a@x", "dev00000001", "A" * 43 + "=")
+    DB.put_key("a@x", "dev00000001", "B" * 43 + "=")           # 同一台更新, 不重复
+    assert [k["pubkey"][0] for k in DB.get_keys(["a@x"])["a@x"]] == ["B"]
+    for i in range(2, 13):
+        DB.put_key("a@x", f"dev{i:08d}", "C" * 43 + "=")
+    devs = {k["device_id"] for k in DB.get_keys(["a@x", "nobody@x"])["a@x"]}
+    assert len(devs) == DB.MAX_DEVICES_PER_SUB and "dev00000001" not in devs
+    assert "nobody@x" not in DB.get_keys(["a@x", "nobody@x"])

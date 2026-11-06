@@ -479,7 +479,8 @@ def _apply(msg: dict[str, Any], me: str) -> dict[str, Any] | None:
                 return None
             mkind, extra, ments = "auto", {"auto": auto}, []
         rec = {"msg_id": mid, "kind": mkind, "from": sender, "at": str(env.get("at") or _now()), "text": text,
-               "mentions": ments, **extra, "received_at": _now()}
+               "mentions": ments, **extra, "received_at": _now(),
+               **({"plain": True} if env.get("_plain") else {})}   # 老版本发来的明文: 界面标「未加密」
         _append(rid, rec)
         room["last_msg_at"] = rec["received_at"]
         _save(room)
@@ -566,12 +567,28 @@ def sync() -> dict[str, Any]:
         if ev:
             events.append(ev)
     forms._write(state_path, {"at": _now()})
+    _note_key_changes()
     if gap:
         for rid in _room_ids():
             room = forms._read(_room_path(rid))
             if room and room.get("my_state") == "joined":
                 _system(room, f"超过 {GAP_DAYS} 天没打开 Companion, 这期间的群消息可能没收到")
     return {"ok": True, "events": events, "gap": gap}
+
+
+def _note_key_changes() -> None:
+    """同事的加密公钥变了 (换了电脑, 或者中央换了钥): 在他所在的群里提示一句, 指纹可在成员栏核对。"""
+    from . import mailbox_crypto  # noqa: PLC0415
+    changes = mailbox_crypto.pop_key_changes()
+    if not changes:
+        return
+    for rid in _room_ids():
+        room = forms._read(_room_path(rid))
+        if not room or room.get("my_state") != "joined":
+            continue
+        for c in changes:
+            if (room.get("members", {}).get(c["email"]) or {}).get("state") in ACTIVE:
+                _system(room, f"⚠ {_label(room, c['email'])} 的加密密钥变了 (多半是换了电脑), 新指纹 {c['fingerprint']}")
 
 
 # ── 列表 / 详情 ──────────────────────────────────────────────────

@@ -100,7 +100,7 @@ export default function FormComposer({ onClose, onCreated }: {
 
   return (
     <Overlay title="发起填表" onClose={onClose} width={760}>
-      <span style={muted}>也可以直接跟小鲶说「把这张表发给安全部的人填, 周五前」。回答只回到你这台电脑, 中央只转交。</span>
+      <span style={muted}>也可以直接跟小鲶说「把这张表发给安全部的人填, 周五前」。回答只回到你这台电脑, 中央只转交加密内容、看不到原文。</span>
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 8 }}>
         <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="表名, 如「10 月安全检查」" style={inputStyle} />
         <input type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} title="截止日" style={inputStyle} />

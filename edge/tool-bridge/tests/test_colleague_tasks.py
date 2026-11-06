@@ -207,6 +207,11 @@ def test_界面入口(w):
 
 
 def test_老中央_说人话(monkeypatch):
+    # 只验「种类不认识」那句人话; 加密那层 (公钥目录) 在 test_mailbox_crypto.py 另测
+    from catfish_tool_bridge import mailbox_crypto
+    monkeypatch.setattr(mailbox_crypto, "ensure_registered", lambda: None)
+    monkeypatch.setattr(mailbox_crypto, "seal", lambda *a, **k: "{}")
+    monkeypatch.setattr(forms_net, "me", lambda: "zhou@example.com")
     monkeypatch.setattr(forms_net, "_client_call",
                         lambda *a, **k: (400, {"detail": "kinds 里有不认识的: ['task_cancel']"}))
     with pytest.raises(ValueError, match="中央端版本太旧"):

@@ -63,6 +63,8 @@ export interface RoomMessage {
   reply_to?: string;
   /** 我发的、有人没收到 */
   undelivered?: string[];
+  /** 11/6: 老版本同事发来的明文 (没加密), 界面标「未加密」 */
+  plain?: boolean;
 }
 
 export interface RoomDetail {

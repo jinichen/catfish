@@ -28,8 +28,12 @@ ROOM_KINDS = frozenset({"room_invite", "room_join", "room_msg", "room_member", "
 LONG_KINDS = FORM_KINDS | TASK_KINDS | ROOM_KINDS
 MAILBOX_KINDS = ROOM_LINK_KINDS | LONG_KINDS
 
-# payload 上限: grant token + catalog 实测 ~3KB, 给 64KB 余量, 防人拿邮筒传文件
-MAX_PAYLOAD_BYTES = 64 * 1024
+# payload 上限: grant token + catalog 实测 ~3KB, 给 64KB 余量, 防人拿邮筒传文件。
+# 11/6 端到端加密: 密文要 base64 (多 1/3), 交回的结果最长 1.5 万字 ≈ 45KB → 密文约 61KB, 放宽到 128KB。
+MAX_PAYLOAD_BYTES = 128 * 1024
+
+# 11/6 公钥目录 (端到端加密, docs/GROUP-CHAT-PLAN.md §4.1): 只存公钥, 不涉内容
+MAX_DEVICES_PER_SUB = 10    # 一个人最多登记 10 台电脑, 超了删最早的
 
 
 def use_pg() -> bool:
@@ -122,3 +126,44 @@ def take_inbox(to_sub: str, kinds: frozenset[str] = ROOM_LINK_KINDS) -> list[dic
         }
         for r in rows
     ]
+
+
+# ── 公钥目录 (11/6, 端到端加密) ───────────────────────────────────────
+#
+# 每台员工电脑一对 X25519 密钥, 私钥只在那台电脑上。这里存的是**公钥**, 不是员工内容:
+# 发件端按收件人查公钥, 在本机加密后才投递 —— 邮筒里只剩密文 (payload 照旧不解析)。
+
+def put_key(sub: str, device_id: str, pubkey: str) -> None:
+    """登记 / 更新我这台电脑的公钥。同一人超过 MAX_DEVICES_PER_SUB 台, 删最早登记的。"""
+    with _pg_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO room_link_keys (sub, device_id, pubkey) VALUES (%s, %s, %s)
+            ON CONFLICT (sub, device_id) DO UPDATE SET pubkey = EXCLUDED.pubkey, updated_at = now()
+            """,
+            (sub, device_id, pubkey),
+        )
+        cur.execute(
+            """
+            DELETE FROM room_link_keys WHERE sub = %s AND device_id NOT IN (
+                SELECT device_id FROM room_link_keys WHERE sub = %s ORDER BY updated_at DESC LIMIT %s)
+            """,
+            (sub, sub, MAX_DEVICES_PER_SUB),
+        )
+        conn.commit()
+
+
+def get_keys(subs: list[str]) -> dict[str, list[dict]]:
+    """按邮箱查公钥: {sub: [{device_id, pubkey, updated_at}]}, 没登记的人不出现在结果里。"""
+    if not subs:
+        return {}
+    with _pg_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT sub, device_id, pubkey, updated_at FROM room_link_keys WHERE sub = ANY(%s) ORDER BY sub, updated_at DESC",
+            (sorted(set(subs)),),
+        )
+        rows = cur.fetchall()
+    out: dict[str, list[dict]] = {}
+    for sub, dev, pk, at in rows:
+        out.setdefault(sub, []).append({"device_id": dev, "pubkey": pk, "updated_at": at.isoformat()})
+    return out

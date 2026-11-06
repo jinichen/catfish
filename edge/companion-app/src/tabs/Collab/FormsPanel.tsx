@@ -28,7 +28,7 @@ export default function FormsPanel() {
         <div>
           <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>📋 一起填表</h3>
           <div style={{ ...muted, marginTop: 4 }}>
-            发一张表请同事各填一份, 同事的小鲶帮他预填、他本人核对后提交; 回答只回到你这台电脑汇总。中央只转交, 取走即清空。
+            发一张表请同事各填一份, 同事的小鲶帮他预填、他本人核对后提交; 回答只回到你这台电脑汇总。中央只转交加密内容、看不到原文, 取走即清空。
           </div>
         </div>
         <Btn kind="primary" onClick={() => setComposing(true)}>发起填表</Btn>

@@ -208,3 +208,43 @@ def test_kinds_有不认识的_400(client):
     as_user("bob@x.com")
     assert c.get("/api/room-link/mailbox", params={"kinds": "form_invite,chat"}).status_code == 400
     assert c.get("/api/room-link/mailbox", params={"kinds": " , "}).status_code == 400
+
+
+# ── 11/6 公钥目录 (端到端加密) ───────────────────────────────────────
+
+@pytest.fixture()
+def keys(client, monkeypatch):
+    c, box, as_user = client
+    from catfish_gateway import room_link_db as DB
+    store: dict[str, dict[str, str]] = {}
+    monkeypatch.setattr(DB, "put_key", lambda sub, dev, pk: store.setdefault(sub, {}).__setitem__(dev, pk))
+    monkeypatch.setattr(DB, "get_keys", lambda subs: {s: [{"device_id": d, "pubkey": p, "updated_at": "x"} for d, p in store[s].items()]
+                                                      for s in subs if s in store})
+    return c, store, as_user
+
+
+PK = "A" * 43 + "="
+
+
+def test_公钥只能登记自己的_按邮箱查(keys):
+    c, store, as_user = keys
+    as_user("Alice@x.com")
+    r = c.put("/api/room-link/keys", json={"device_id": "dev_alice_01", "pubkey": PK, "sub": "mallory@x.com"})
+    assert r.status_code == 200
+    assert list(store) == ["alice@x.com"]                 # 身份来自 JWT, 不信 body
+    as_user("bob@x.com")
+    got = c.get("/api/room-link/keys", params={"subs": "ALICE@x.com, carol@x.com"}).json()["keys"]
+    assert list(got) == ["alice@x.com"] and got["alice@x.com"][0]["pubkey"] == PK   # 没登记的人不出现
+
+
+def test_公钥格式和查询人数(keys):
+    c, _store, _ = keys
+    assert c.put("/api/room-link/keys", json={"device_id": "x", "pubkey": PK}).status_code == 422
+    assert c.put("/api/room-link/keys", json={"device_id": "dev_alice_01", "pubkey": "!" * 43}).status_code == 400
+    many = ",".join(f"u{i}@x.com" for i in range(61))
+    assert c.get("/api/room-link/keys", params={"subs": many}).status_code == 400
+
+
+def test_密文放宽到128KB():
+    from catfish_gateway import room_link_db as DB
+    assert DB.MAX_PAYLOAD_BYTES == 128 * 1024

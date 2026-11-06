@@ -233,6 +233,11 @@ def test_没收到加入就先收到消息_按已加入算(w):
 
 
 def test_老中央不认_room_kind_给人话(monkeypatch):
+    # 只验「种类不认识」那句人话; 加密那层 (公钥目录) 在 test_mailbox_crypto.py 另测
+    from catfish_tool_bridge import mailbox_crypto
+    monkeypatch.setattr(mailbox_crypto, "seal", lambda *a, **k: "{}")
+    monkeypatch.setattr(mailbox_crypto, "ensure_registered", lambda: None)
+    monkeypatch.setattr(forms_net, "me", lambda: BOSS)
     monkeypatch.setattr(forms_net, "_client_call", lambda *a, **k: (400, {"detail": "kind=room_msg 不在 [...]"}))
     with pytest.raises(ValueError, match="还不支持同事群聊"):
         forms_net.post(ZHANG, "room_msg", {"v": 1}, cr.TTL_SECONDS)

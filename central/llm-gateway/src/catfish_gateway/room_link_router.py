@@ -22,10 +22,15 @@ hermes 0.21 RoomLink 让 A 远程驱动 B 的 hermes, 但 A 要先拿到 B 签�
     GET  /api/room-link/mailbox?kinds=a,b                            → {messages: [...]}
 
 不带 kinds 只给请求 / 授权 (老版 Companion 的行为); 填表的 form_*、派任务的 task_*、群聊的 room_* 要显式要。
+
+11/6 端到端加密 (docs/GROUP-CHAT-PLAN.md §4.1) —— 员工电脑的公钥目录 (只有公钥, 不涉内容):
+    PUT  /api/room-link/keys         {device_id, pubkey}   → {ok}       登记我这台电脑的公钥 (身份来自 JWT)
+    GET  /api/room-link/keys?subs=a,b                      → {keys: {sub: [{device_id, pubkey, updated_at}]}}
 """
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -101,3 +106,45 @@ async def take_inbox(
         senders = ", ".join(f"{m['from']}({m['kind']})" for m in messages)
         logger.info("room-link 取件 %s ← %s", user.sub, senders)
     return {"messages": messages}
+
+
+# ── 公钥目录 (11/6, 端到端加密) ──────────────────────────────────────
+
+_DEVICE_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+_PUBKEY = re.compile(r"^[A-Za-z0-9_-]{43}=?$")   # X25519 公钥 32 字节, urlsafe base64
+MAX_KEY_LOOKUP = 60   # 一次最多查 60 人 (群最多 50 人, 留余量)
+
+
+class KeyPutReq(BaseModel):
+    device_id: str = Field(min_length=8, max_length=64)
+    pubkey: str = Field(min_length=43, max_length=44)
+
+
+@router.put("/room-link/keys")
+async def put_key(req: KeyPutReq, user: User = Depends(get_current_user)) -> dict[str, Any]:
+    _require_pg()
+    if not _DEVICE_ID.match(req.device_id) or not _PUBKEY.match(req.pubkey):
+        raise HTTPException(400, "device_id / pubkey 格式不对")
+    sub = user.sub.strip().lower()   # 只能登记自己的: 身份来自 JWT
+    try:
+        room_link_db.put_key(sub, req.device_id, req.pubkey)
+    except Exception as e:
+        logger.warning("公钥登记失败 (%s): %s", sub, e)
+        raise HTTPException(503, "公钥目录暂不可用") from None
+    logger.info("公钥登记 %s device=%s", sub, req.device_id)
+    return {"ok": True}
+
+
+@router.get("/room-link/keys")
+async def get_keys(subs: str = Query(min_length=3, max_length=60 * 330),
+                   user: User = Depends(get_current_user)) -> dict[str, Any]:
+    _require_pg()
+    wanted = sorted({s.strip().lower() for s in subs.split(",") if s.strip()})
+    if not wanted or len(wanted) > MAX_KEY_LOOKUP:
+        raise HTTPException(400, f"一次查 1 到 {MAX_KEY_LOOKUP} 人")
+    try:
+        keys = room_link_db.get_keys(wanted)
+    except Exception as e:
+        logger.warning("公钥查询失败 (%s): %s", user.sub, e)
+        raise HTTPException(503, "公钥目录暂不可用") from None
+    return {"keys": keys}
