@@ -270,6 +270,9 @@ pub(crate) fn bootstrap_locked(
         // 这个安装包里的那一份」(安装指纹, 跟 Windows 同一套): 文件在但版本旧, 一样
         // 要重装 —— 否则升级 Companion 带来的新 wheel 永远到不了老机器。
         refresh_addons(resource_dir, paths);
+        // 11/06: 换过安装目录后 launchd 服务还指着老目录里的启动器 (1.2.79 升 hermes v0.23 撞到) → 重新生成
+        #[cfg(target_os = "macos")]
+        super::hermes_install_gateway::repair_launchd_launcher(paths);
         // 同上: hermes 健康 ≠ jieba/playwright 装了。判据用 import 而不是看目录 ——
         // site-packages 里有目录但 import 不了的情况见过 (装了一半)。10/21 起连 hermes
         // 自己另建的运行环境一起查 (见 hermes_runtime_deps.rs)。

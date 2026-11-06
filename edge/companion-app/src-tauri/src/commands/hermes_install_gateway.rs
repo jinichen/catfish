@@ -116,6 +116,58 @@ pub(crate) fn stop_for_install(paths: &BootstrapPaths) -> StoppedGateway {
     }
 }
 
+/// 11/06 hermes v0.23 (1.2.79 鸿波本机): launchd 的 plist 由 `hermes gateway install` 生成, 启动的是**安装目录里**的
+/// `<安装目录>/.hermes/bin/hermes` (hermes 自己发布的启动器)。换安装目录 (升级 / 重装) 后新目录里没有这个启动器,
+/// 原样装回老 plist 只会让 launchd 每 30 秒报一次 `cannot execute: No such file or directory` (exit 126), 8642 一直不通。
+/// 用新安装自己的 `hermes gateway install --force` 重新生成 plist + 发布启动器 + 装回 launchd。
+#[cfg(target_os = "macos")]
+fn reinstall_launchd_service(paths: &BootstrapPaths) -> bool {
+    let cli = crate::services::catfish_paths::hermes_venv_tool(&paths.install_dir, "hermes");
+    if !cli.exists() {
+        return false;
+    }
+    match crate::services::gateway_ops::serialized("重新生成网关服务", || {
+        crate::services::process::python_command(&cli)
+            .args(["gateway", "install", "--force"])
+            .env("HERMES_HOME", &paths.hermes_home)
+            .current_dir(&paths.hermes_home)
+            .stdin(std::process::Stdio::null())
+            .output()
+    }) {
+        Ok(out) if out.status.success() => {
+            log::info!("[hermes-install] 已用新安装重新生成 hermes 网关服务 (launchd plist + 启动器)");
+            true
+        }
+        Ok(out) => {
+            log::warn!(
+                "[hermes-install] `hermes gateway install --force` 失败 ({}): {} {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim(),
+                String::from_utf8_lossy(&out.stdout).trim()
+            );
+            false
+        }
+        Err(e) => {
+            log::warn!("[hermes-install] 起不了新 hermes CLI ({e})");
+            false
+        }
+    }
+}
+
+/// launchd 的 plist 指向安装目录里的启动器, 而那个启动器不在 (换过安装目录) → 重新生成服务。
+/// 启动时 / 网关没起来时调; 已经受影响的机器 (装过 1.2.79 那一版) 下次打开 Companion 就好了。
+#[cfg(target_os = "macos")]
+pub(crate) fn repair_launchd_launcher(paths: &BootstrapPaths) -> bool {
+    let Some((_domain, plist)) = launchd_target() else { return false };
+    let Ok(text) = std::fs::read_to_string(&plist) else { return false };
+    let launcher = paths.install_dir.join(".hermes").join("bin").join("hermes");
+    if !text.contains(&*launcher.to_string_lossy()) || launcher.exists() {
+        return false;
+    }
+    log::warn!("[hermes-install] 网关服务指向的启动器 {} 不在 (换过安装目录), 重新生成服务", launcher.display());
+    reinstall_launchd_service(paths)
+}
+
 /// 装完 (成功或回滚之后) 调: 原来在跑的就重新起来。
 pub(crate) fn resume_after_install(paths: &BootstrapPaths, stopped: StoppedGateway) {
     if !stopped.resume {
@@ -123,7 +175,10 @@ pub(crate) fn resume_after_install(paths: &BootstrapPaths, stopped: StoppedGatew
     }
     #[cfg(target_os = "macos")]
     {
-        let _ = paths;
+        // 11/06: 先用新安装重新生成服务 (见 reinstall_launchd_service); 不行再装回原来的 plist
+        if reinstall_launchd_service(paths) {
+            return;
+        }
         let Some((domain, plist)) = launchd_target() else { return };
         if !plist.is_file() {
             log::warn!("[hermes-install] {} 不在了, 没法把网关装回 launchd", plist.display());

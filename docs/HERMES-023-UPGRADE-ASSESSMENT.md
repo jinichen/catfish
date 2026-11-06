@@ -63,6 +63,13 @@
 用的是 `hermes_install_native::e2e` 两条忽略测试 (装机 / 原地升级, 注释里有跑法)。升级测试第一遍假失败: 新 Companion 装老归档时把装好的记成新 pin 的 commit,
 第二遍以为已是新版; 员工机上是老 Companion 记的老 commit —— 测试照员工机的样子改回老 commit 后真升级, 升级判据本身没问题。
 
+**真机装 1.2.79 撞到的 (11/06 13:00, 鸿波本机)**: 升级后 Hermes 显示未运行。launchd 的 `ai.hermes.gateway.plist` 是 hermes `gateway install` 生成的,
+启动的是 `<安装目录>/.hermes/bin/hermes` (hermes 自己发布的启动器, 0.22 / 0.23 一样); 换安装目录后新目录里没有它, Companion 原样装回老 plist →
+launchd 每 30 秒 `cannot execute: No such file or directory` (exit 126)。离线装机 e2e 不经过 launchd, 没测出来。
+修 (1.2.80): 装完用新安装的 `hermes gateway install --force` 重新生成服务 (plist + 启动器); 每次打开 Companion 查一遍「plist 指向的启动器在不在」,
+不在就同样重新生成 (已经装了 1.2.79 的机器打开 1.2.80 就好)。Windows 的服务直接用 venv 的 python.exe, 不受影响。本机手动跑过一次, 网关起来、插件 46 个补丁入口全部生效。
+1.2.79 未发 (Apple Silicon 那个 dmg 已挪进废纸篓)。
+
 还剩: 真 Companion 上点一遍 (聊天、审批、微信、专家 Bot、换机迁移); Windows 从 0.22.2 原地升级 (要真 Windows 机)。
 
 ## 实测结果 (两个版本同样配置真起网关)
