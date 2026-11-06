@@ -141,6 +141,11 @@ fn load_registry() -> Result<ActionRegistryFile, String> {
         validate_registry(&local)?;
         merge_registry(&mut registry, local);
     }
+    // 11/06: 本机装了的技能都列进来 (见 wiki_actions_local.rs)
+    super::wiki_actions_local::append_missing(
+        &mut registry.actions,
+        super::wiki_actions_local::discover(&skill_roots()),
+    );
     validate_registry(&registry)?;
     Ok(registry)
 }
