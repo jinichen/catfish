@@ -57,8 +57,8 @@ export default function WikiRelationTypesModal({ onClose }: { onClose: () => voi
 
   const row = { display: "grid", gridTemplateColumns: "64px 1fr auto", gap: 10, padding: "6px 0", borderBottom: `1px solid ${V.border}`, fontSize: 13 } as const;
   return (
-    <ModalShell onClose={onClose} themed>
-      <div style={{ width: 560, maxWidth: "88vw", fontFamily: V.font, color: V.text }}>
+    <ModalShell onClose={onClose} themed maxWidth={720}>
+      <div style={{ width: "100%", fontFamily: V.font, color: V.text }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
           <h3 style={{ margin: 0, fontSize: 17 }}>关系类型</h3>
           <button type="button" onClick={onClose} aria-label="关闭" style={{ border: 0, background: "transparent", cursor: "pointer", color: V.muted }}>
@@ -93,11 +93,14 @@ export default function WikiRelationTypesModal({ onClose }: { onClose: () => voi
             </div>
           ))}
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "96px 1fr 150px auto", gap: 8 }}>
+        {/* 11/07: 原来四样挤一行, 输入框里的提示字被截断 —— 名字 + 意思一行, 上下级 + 登记一行 */}
+        <div style={{ display: "grid", gridTemplateColumns: "130px minmax(0, 1fr)", gap: 8 }}>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="新关系，如 挂靠" maxLength={6}
             aria-label="新关系类型" style={{ ...field, padding: "7px 9px", borderRadius: 8 }} />
           <input value={meaning} onChange={(e) => setMeaning(e.target.value)} placeholder="一句话意思，如 本条目挂靠在对方名下 (人→公司)"
             maxLength={60} aria-label="这个关系的意思" style={{ ...field, padding: "7px 9px", borderRadius: 8 }} />
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 8, justifyContent: "flex-end" }}>
           <select value={hierarchy} onChange={(e) => setHierarchy(e.target.value as "" | "child" | "parent")} aria-label="是不是上下级"
             style={{ ...field, padding: "7px 6px", borderRadius: 8 }}>
             <option value="">不是上下级</option>

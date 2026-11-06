@@ -34,7 +34,7 @@ function PropRow({ type, p, apply, busy }: { type: string; p: TypeDefProperty; a
     if (await apply({ op: "update_property", type, key: p.key, property: { label, hint, type: kind } })) setEdit(false);
   };
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(90px, 140px) 64px minmax(0, 1fr) 76px auto", gap: 8, alignItems: "center", padding: "5px 0", borderBottom: `1px solid ${V.border}`, opacity: p.hidden ? 0.55 : 1 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(130px, 180px) 64px minmax(0, 1fr) 76px auto", gap: 8, alignItems: "center", padding: "5px 0", borderBottom: `1px solid ${V.border}`, opacity: p.hidden ? 0.55 : 1 }}>
       {edit ? (
         <>
           <input style={input} value={label} onChange={(e) => setLabel(e.target.value)} maxLength={20} aria-label="属性名" />
@@ -131,7 +131,7 @@ function ActionRow({ type, a, props, apply, busy }: { type: string; a: TypeDefAc
     );
   }
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(90px, 140px) minmax(0, 1fr) 76px auto", gap: 8, padding: "6px 0", borderBottom: `1px solid ${V.border}`, opacity: a.hidden ? 0.55 : 1 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(130px, 180px) minmax(0, 1fr) 76px auto", gap: 8, padding: "6px 0", borderBottom: `1px solid ${V.border}`, opacity: a.hidden ? 0.55 : 1 }}>
       <strong style={{ fontSize: 13 }}>{a.label}</strong>
       <span style={{ fontSize: 12, color: V.muted, lineHeight: 1.5 }}>
         {keysToLabels(a.instruction ?? "", props)}
@@ -186,7 +186,7 @@ export default function WikiTypeDefEditor({ def, apply, busy }: { def: TypeDef; 
       <h4 style={section}>属性</h4>
       {def.properties.length === 0 && <p style={{ fontSize: 12, color: V.muted }}>还没有属性。</p>}
       {def.properties.map((p) => <PropRow key={p.key} type={def.key} p={p} apply={apply} busy={busy} />)}
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(90px, 140px) 64px minmax(0, 1fr) auto", gap: 8, padding: "8px 0" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(130px, 180px) 64px minmax(0, 1fr) auto", gap: 8, padding: "8px 0" }}>
         <input style={input} value={newProp.label} onChange={(e) => setNewProp({ ...newProp, label: e.target.value })} maxLength={20} placeholder="新属性名，如 投标用途" aria-label="新属性名" />
         <select style={input} value={newProp.type} onChange={(e) => setNewProp({ ...newProp, type: e.target.value })} aria-label="新属性类型">
           <option value="text">文本</option>
