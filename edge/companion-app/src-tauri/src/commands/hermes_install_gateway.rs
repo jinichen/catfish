@@ -154,13 +154,18 @@ fn reinstall_launchd_service(paths: &BootstrapPaths) -> bool {
     }
 }
 
+/// hermes 发布在**安装目录里**的启动器 (hermes_cli/_launchers.py `root / ".hermes" / "bin"`)。
+/// 是安装目录下的子路径, 不是 hermes 的数据目录 ~/.hermes (那个一律走 catfish_paths::hermes_home)。
+#[cfg(target_os = "macos")]
+const INSTALL_LAUNCHER: &str = ".hermes/bin/hermes"; // windows-parity: macOS launchd 专用, 安装目录内的启动器, 不是数据目录
+
 /// launchd 的 plist 指向安装目录里的启动器, 而那个启动器不在 (换过安装目录) → 重新生成服务。
 /// 启动时 / 网关没起来时调; 已经受影响的机器 (装过 1.2.79 那一版) 下次打开 Companion 就好了。
 #[cfg(target_os = "macos")]
 pub(crate) fn repair_launchd_launcher(paths: &BootstrapPaths) -> bool {
     let Some((_domain, plist)) = launchd_target() else { return false };
     let Ok(text) = std::fs::read_to_string(&plist) else { return false };
-    let launcher = paths.install_dir.join(".hermes").join("bin").join("hermes");
+    let launcher = paths.install_dir.join(INSTALL_LAUNCHER);
     if !text.contains(&*launcher.to_string_lossy()) || launcher.exists() {
         return false;
     }
