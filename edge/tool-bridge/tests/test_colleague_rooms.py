@@ -592,3 +592,21 @@ def test_删旧消息后_未读不错位(w):
     assert cr.store.prune_before("2026-06-01T00:00:00+08:00") == 1
     room = cr.list_rooms()["rooms"][0]
     assert room["unread"] == 1 and room["last"]["text"] == "新的"
+
+
+def test_任务卡和状态不算未读_聊天才算(w):
+    """11/06: 群里派的任务卡 / 状态行在「协同事项」处理过, 群里不会标已读 —— 原来一直挂在红点上。只数聊天消息。"""
+    rid = _room_all_joined(w, (ZHANG,))
+    w.be(ZHANG)
+    cr.mark_read(rid)
+    base = next(r for r in cr.list_rooms()["rooms"] if r["room_id"] == rid)["unread"]
+    for i, kind in enumerate(("card", "status")):
+        cr.store.add_message(rid, {"msg_id": f"m_k{i:018x}", "kind": kind, "from": BOSS, "at": cr._now(),
+                                   "text": f"@{ZHANG} 周五前把拜访记录发我", "mentions": [ZHANG], "card": {"task_id": "t_x"}})
+    r = next(r for r in cr.list_rooms()["rooms"] if r["room_id"] == rid)
+    assert r["unread"] == base and r["mentioned"] == 0
+    assert r["last"]["kind"] == "status", "卡 / 状态照样做最后一条预览"
+    cr.store.add_message(rid, {"msg_id": "m_t00000000000000000a", "kind": "text", "from": BOSS, "at": cr._now(),
+                               "text": f"收到 @{ZHANG}", "mentions": [ZHANG]})
+    r = next(r for r in cr.list_rooms()["rooms"] if r["room_id"] == rid)
+    assert r["unread"] == base + 1 and r["mentioned"] == 1

@@ -373,7 +373,12 @@ def _broadcast(room: dict[str, Any], me: str, body: str, ments: list[str], extra
     return {"ok": True, "message": msg, "sent_to": len(others) - len(failed), "failed": failed}
 
 
-MSG_KINDS = ("text", "card", "status", "auto")   # 算未读 / 列表预览的消息种类
+MSG_KINDS = ("text", "card", "status", "auto")   # 列表预览的消息种类
+# 11/06 鸿波「协同的都看过、处理了, 为什么还有数字」: 群里派的任务卡 / 任务状态行原来也算未读, 而任务本身在
+# 「协同事项」里已经处理 (接下 / 不接 / 交回) —— 那里不会把群里那张卡标成已读, 红点一直挂着 (实测「测试」群 9 条未读里
+# 7 张是已处理的任务卡)。任务卡要处理的那一下已经算在协同事项的待办数里 (待处理的任务), 群里再算一遍是重复。
+# 所以未读 / @我 只数聊天消息和自动转发的结果; 卡和状态照样显示在群里、照样做最后一条预览。
+UNREAD_KINDS = ("text", "auto")
 
 
 def mark_read(room_id: str) -> dict[str, Any]:
@@ -595,7 +600,7 @@ def _room_ids() -> list[str]:
 def summary(room: dict[str, Any], me: str = "") -> dict[str, Any]:
     rid = room["room_id"]
     # 已读到哪条按 seq 记 (本机收到的先后, 不按时间: 同一秒里收到的不会被当成已读; 删旧消息也不错位)
-    unread = [m for m in store.after(rid, int(room.get("read_upto") or 0), MSG_KINDS) if m.get("from") != me]
+    unread = [m for m in store.after(rid, int(room.get("read_upto") or 0), UNREAD_KINDS) if m.get("from") != me]
     last = store.last_of(rid, MSG_KINDS)
     return {"room_id": room["room_id"], "name": room["name"], "purpose": room.get("purpose") or "",
             "owner": room["owner"], "my_state": room.get("my_state"),
