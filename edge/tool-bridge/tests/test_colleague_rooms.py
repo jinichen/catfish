@@ -209,7 +209,7 @@ def test_超过7天没取邮筒_提示可能缺消息(w):
     rid = _make_room(w, (ZHANG,))
     w.sync(BOSS)
     old = (datetime.now().astimezone() - timedelta(days=8)).isoformat(timespec="seconds")
-    forms._write(cr.rooms_dir() / "_sync.json", {"at": old})
+    cr.store.set_meta("sync_at", old)
     assert w.sync(BOSS)["gap"] is True
     assert any("可能没收到" in m["text"] for m in cr.messages(rid))
     assert w.sync(BOSS)["gap"] is False
@@ -270,7 +270,8 @@ def test_同时写同一个群_不报错也不丢改动(w):
     for t in ts:
         t.join()
     assert errors == []
-    assert not list(cr.rooms_dir().glob(f"{rid}/*.tmp"))
+    assert not list(cr.rooms_dir().glob("**/*.tmp"))
+    assert len({m["msg_id"] for m in cr.messages(rid)}) == len(cr.messages(rid))   # 没有重复 / 写坏
     assert cr.load(rid)["my_state"] == "joined"
 
 
@@ -539,3 +540,55 @@ def test_小鲶帮忙_读本机群记录_别人的话包在分隔符里_出草�
         asyncio.run(rt.assist({"room_id": rid, "kind": "hack", "auth_token": "t", "gateway_url": "g"}))
     with pytest.raises(ValueError, match="没登录"):
         asyncio.run(rt.assist({"room_id": rid, "kind": "summary", "gateway_url": "g"}))
+
+
+
+# ── 11/6 本机库 (SQLite, §4.3 / §4.4) ───────────────────────────────
+
+def test_老格式的群导进库_已读位置换成seq_老目录留备份(w):
+    w.be(ZHANG)
+    d = cr.rooms_dir()
+    rid = "r_20261101_aaaaaaaaaaaa"
+    (d / rid).mkdir(parents=True)
+    room = {"room_id": rid, "name": "老群", "purpose": "", "owner": BOSS, "ver": 1, "my_state": "joined", "read_upto": 2,
+            "members": {BOSS: {"state": "joined", "name": "周总"}, ZHANG: {"state": "joined", "name": "张三"}}}
+    (d / rid / "room.json").write_text(json.dumps(room, ensure_ascii=False))
+    lines = [{"msg_id": f"m_{i:020x}", "kind": "text", "from": BOSS, "at": f"2026-11-01T10:0{i}:00+08:00", "text": f"第{i}条", "mentions": []}
+             for i in range(4)]
+    (d / rid / "messages.jsonl").write_text("\n".join(json.dumps(x, ensure_ascii=False) for x in lines) + "\n")
+    (d / "_sync.json").write_text(json.dumps({"at": "2026-11-01T10:00:00+08:00"}))
+    cr.store._ready.clear()
+    assert [m["text"] for m in cr.messages(rid)] == ["第0条", "第1条", "第2条", "第3条"]
+    assert cr.list_rooms()["rooms"][0]["unread"] == 2              # 读过前 2 条: 还剩 2 条未读
+    assert (d / f"{rid}.migrated" / "messages.jsonl").exists() and not (d / rid).exists()
+    assert cr.store.get_meta("sync_at") == "2026-11-01T10:00:00+08:00"
+
+
+def test_往上翻一页_搜索_点进去看前后(w, monkeypatch):
+    rid = _room_all_joined(w, (ZHANG,))
+    monkeypatch.setattr(cr, "HISTORY_LIMIT", 5)
+    for i in range(12):
+        cr.send(rid, f"消息{i} {'南岭置业报价' if i == 3 else '日常'}")
+    page = cr.get(rid)
+    assert [m["text"].split()[0] for m in page["messages"]] == ["消息7", "消息8", "消息9", "消息10", "消息11"]
+    assert page["older"] > 0
+    older = cr.get(rid, before=page["messages"][0]["seq"])
+    assert older["messages"][-1]["seq"] < page["messages"][0]["seq"]
+    hits = cr.search(rid, "南岭")["results"]
+    assert [h["text"] for h in hits] == ["消息3 南岭置业报价"] and hits[0]["name"]
+    ctx = cr.get(rid, around=hits[0]["seq"])["messages"]
+    assert any(m["seq"] == hits[0]["seq"] for m in ctx)
+    assert cr.search(rid, "100%")["results"] == []                # % 不当通配符
+    with pytest.raises(ValueError, match="关键词"):
+        cr.search(rid, "  ")
+
+
+def test_删旧消息后_未读不错位(w):
+    rid = _room_all_joined(w, (ZHANG,))
+    w.be(ZHANG)
+    cr.store.add_message(rid, {"msg_id": "m_" + "1" * 20, "kind": "text", "from": BOSS, "at": "2026-01-01T09:00:00+08:00", "text": "很久以前", "mentions": []})
+    cr.mark_read(rid)
+    cr.store.add_message(rid, {"msg_id": "m_" + "2" * 20, "kind": "text", "from": BOSS, "at": "2026-11-06T09:00:00+08:00", "text": "新的", "mentions": []})
+    assert cr.store.prune_before("2026-06-01T00:00:00+08:00") == 1
+    room = cr.list_rooms()["rooms"][0]
+    assert room["unread"] == 1 and room["last"]["text"] == "新的"

@@ -10,7 +10,7 @@
  * 第三步 (同日): 「🐟 小鲶」—— 总结讨论 / 整理待办 / 起草回复, 读本机群记录出草稿填进输入框, 自己改了再发;
  *   派定时 / 周期任务时可以勾「每次结果自动发到群里」(唯一的自动发群特例, 发起人电脑收到结果时转进群)。
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import { refreshRooms, setActiveRoom, useColleagueRooms } from "../../lib/colleagueRoomsStore";
 import { refreshTasks, useColleagueTasks } from "../../lib/colleagueTasksStore";
@@ -22,6 +22,7 @@ import {
 } from "../../lib/tauri_colleague_rooms";
 import { Overlay, muted } from "./formsUi";
 import RoomComposer, { NAME_MAX } from "./RoomComposer";
+import { RetentionDialog, RetentionSelect, SearchPanel, daysLabel } from "./RoomsExtras";
 import { STATE_WORD, cardStates, parseChatTask, summaryText, type ChatTask, type SingleTask } from "./roomTasks";
 import TaskProgress from "./TaskProgress";
 import TaskWork from "./TaskWork";
@@ -114,6 +115,7 @@ export default function RoomsPanel() {
   const { rooms, loaded, syncError } = useColleagueRooms();
   const [open, setOpen] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [keeping, setKeeping] = useState(false);
   const [notice, setNotice] = useState<string | undefined>();
 
   // 列表里第一个群默认打开 (有等我加入的就是它)
@@ -138,7 +140,10 @@ export default function RoomsPanel() {
             <strong style={{ fontSize: 13 }} title="消息只存在每个成员自己的电脑上, 中央只转交加密内容、看不到原文, 取走即清空, 不保存记录; 每一条都是你点了才发">
               💬 群聊
             </strong>
-            <Btn kind="primary" onClick={() => setCreating(true)}>建群</Btn>
+            <span style={{ display: "flex", gap: 4 }}>
+              <Btn kind="ghost" onClick={() => setKeeping(true)}>记录保留</Btn>
+              <Btn kind="primary" onClick={() => setCreating(true)}>建群</Btn>
+            </span>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6, overflowY: "auto", minHeight: 0, flex: 1 }}>
             {loaded && rooms.length === 0 && <span style={muted}>还没有群。点「建群」, 拉几位同事进来。</span>}
@@ -150,6 +155,7 @@ export default function RoomsPanel() {
         )}
       </div>
 
+      {keeping && <RetentionDialog onClose={() => { setKeeping(false); void refreshRooms(); }} />}
       {creating && <RoomComposer onClose={() => setCreating(false)}
                                  onDone={(id, n) => { setCreating(false); setNotice(n); setOpen(id); }} />}
     </div>
@@ -201,9 +207,14 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
   const [autoPost, setAutoPost] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
 
+  // 11/6 往上翻 (更早的页) / 搜索结果跳到某条前后
+  const [olderPages, setOlderPages] = useState<RoomMessage[]>([]);
+  const [jump, setJump] = useState<number | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [olderLeft, setOlderLeft] = useState<number | null>(null);
   const load = useCallback(async () => {
     try {
-      const r = await roomGet(roomId);
+      const r = await roomGet(roomId, jump ? { around: jump } : {});
       setD(r);
       setError(null);
       if (r.room.my_state === "joined" && r.room.unread) {
@@ -213,10 +224,24 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [roomId]);
+  }, [roomId, jump]);
   useEffect(() => { void load(); }, [load, version]);
-  const count = d?.messages.length ?? 0;
-  useEffect(() => { bottom.current?.scrollIntoView?.({ block: "end" }); }, [count]);
+  const lastSeq = d?.messages.at(-1)?.seq ?? 0;
+  useEffect(() => { if (!jump) bottom.current?.scrollIntoView?.({ block: "end" }); }, [lastSeq, jump]);
+  useEffect(() => {
+    if (jump) document.getElementById(`room-msg-${jump}`)?.scrollIntoView?.({ block: "center" });
+  }, [jump, d]);
+  async function loadOlder() {
+    const first = (olderPages[0] ?? d?.messages[0])?.seq;
+    if (!first) return;
+    try {
+      const r = await roomGet(roomId, { before: first });
+      setOlderPages((p) => [...r.messages, ...p]);
+      setOlderLeft(r.older);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
 
   const act = async (fn: () => Promise<{ failed?: { email: string; error: string }[] } | unknown>, what?: string) => {
     setBusy(true);
@@ -235,7 +260,13 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
     }
   };
 
-  const byId = useMemo(() => new Map((d?.messages ?? []).map((m) => [m.msg_id, m])), [d]);
+  const shown = useMemo(() => {
+    if (!d) return [];
+    if (jump) return d.messages;
+    const seen = new Set(d.messages.map((m) => m.msg_id));
+    return [...olderPages.filter((m) => !seen.has(m.msg_id)), ...d.messages];
+  }, [d, olderPages, jump]);
+  const byId = useMemo(() => new Map(shown.map((m) => [m.msg_id, m])), [shown]);
   if (!d) return <div style={muted}>{error ? <ErrorLine>{error}</ErrorLine> : "读取中…"}</div>;
   const { room, members, me } = d;
   const owner = room.owner === me;
@@ -323,21 +354,41 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
           <div style={{ minWidth: 0 }}>
             <strong style={{ fontSize: "var(--text-sm)" }}>{room.name}</strong>
             <span style={{ ...muted, marginLeft: 8 }}>{room.joined} 人{room.members > room.joined ? ` · ${room.members - room.joined} 人还没加入` : ""}</span>
+            {room.retention && (
+              <span style={{ ...muted, marginLeft: 8 }} title="记录只存在你这台电脑上, 到期自动删掉; 取公司规定 / 群主 / 你自己设的里最短的那个">
+                · 记录保留 {daysLabel(room.retention.days)} ({room.retention.label})
+              </span>
+            )}
             {room.purpose && <div style={{ ...muted, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                                   title={room.purpose}>📌 {room.purpose}</div>}
           </div>
+          <Btn kind="ghost" onClick={() => setSearching((v) => !v)}>🔍 搜索</Btn>
           <Btn kind="ghost" onClick={() => setShowMembers((v) => !v)}>{showMembers ? "收起成员" : `👥 成员 ${room.joined}`}</Btn>
         </div>
+        {searching && <SearchPanel roomId={roomId} members={members} onJump={(seq) => setJump(seq)} onClose={() => { setSearching(false); setJump(null); }} />}
         {notice && <ErrorLine>{notice}</ErrorLine>}
         {hint && <div style={{ fontSize: 12, color: "var(--catfish-cyan)", flexShrink: 0 }}>{hint}</div>}
         {error && <ErrorLine>{error}</ErrorLine>}
 
         {/* 只有这里滚 */}
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: 10, paddingRight: 4 }}>
-          {d.older > 0 && <span style={{ ...muted, textAlign: "center" }}>更早的 {d.older} 条没显示</span>}
-          {visibleMessages(d.messages).map((m) => (
-            m.kind === "card" && m.card ? (
-              <TaskMessage key={m.msg_id} m={m} me={me} members={members} messages={d.messages} busy={busy}
+          {jump ? (
+            <span style={{ ...muted, textAlign: "center" }}>
+              在看搜索结果附近的记录 · <button type="button" onClick={() => setJump(null)}
+                style={{ border: "none", background: "transparent", cursor: "pointer", color: "var(--catfish-cyan)", fontSize: 12 }}>回到最新</button>
+            </span>
+          ) : (olderLeft ?? d.older) > 0 && (
+            <button type="button" onClick={() => void loadOlder()}
+                    style={{ ...muted, alignSelf: "center", border: "none", background: "transparent", cursor: "pointer", color: "var(--catfish-cyan)" }}>
+              加载更早的 ({olderLeft ?? d.older} 条)
+            </button>
+          )}
+          {visibleMessages(shown).map((m) => (<Fragment key={m.msg_id}>
+            {jump !== null && m.seq === jump && (
+              <span id={`room-msg-${jump}`} style={{ ...muted, color: "var(--catfish-cyan)" }}>↓ 搜到的这条</span>
+            )}
+            {m.kind === "card" && m.card ? (
+              <TaskMessage m={m} me={me} members={members} messages={shown} busy={busy}
                            local={incoming.find((t) => t.task_id === m.card!.task_id)?.state}
                            onAccept={() => void act(async () => {
                              await refreshTasks();
@@ -350,10 +401,10 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
                            onWork={() => void openWork(m.card!.task_id)} onWatch={() => setWatch({ id: m.card!.task_id })}
                            onSummary={joined ? () => void fillSummary(m.card!.task_id, m.card!.title) : undefined} />
             ) : (
-              <Bubble key={m.msg_id} m={m} mine={m.from === me} members={members} me={me} quoted={m.reply_to ? byId.get(m.reply_to) : undefined}
+              <Bubble m={m} mine={m.from === me} members={members} me={me} quoted={m.reply_to ? byId.get(m.reply_to) : undefined}
                       onReply={joined && m.kind === "text" ? () => setReplyTo(m) : undefined} />
-            )
-          ))}
+            )}
+          </Fragment>))}
           <div ref={bottom} />
         </div>
 
@@ -487,7 +538,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
       {modal === "add" && <RoomComposer roomId={roomId} existing={room.members} onClose={() => setModal(null)}
                                         onDone={(_id, n) => { setModal(null); onNotice(n); void load(); }} />}
       {modal === "info" && <InfoEditor room={room} busy={busy} onClose={() => setModal(null)}
-                                       onSave={async (n, p) => { if (await act(() => roomUpdate(roomId, n, p))) setModal(null); }} />}
+                                       onSave={async (n, p, k) => { if (await act(() => roomUpdate(roomId, n, p, k))) setModal(null); }} />}
       {modal === "disband" && <Confirm title="解散群" text={`解散「${room.name}」? 所有成员都会收到通知, 之后谁都不能再发消息。各人电脑上的聊天记录还在。`}
                                        ok="解散" busy={busy} onClose={() => setModal(null)}
                                        onOk={async () => { if (await act(() => roomDisband(roomId))) setModal(null); }} />}
@@ -600,19 +651,21 @@ function TaskMessage({ m, me, members, messages, busy, local, onAccept, onWork, 
 }
 
 function InfoEditor({ room, busy, onClose, onSave }: {
-  room: RoomSummary; busy: boolean; onClose: () => void; onSave: (name: string, purpose: string) => void;
+  room: RoomSummary; busy: boolean; onClose: () => void; onSave: (name: string, purpose: string, retentionDays: number | null) => void;
 }) {
   const [name, setName] = useState(room.name);
   const [purpose, setPurpose] = useState(room.purpose);
+  const [keep, setKeep] = useState<number | null>(room.retention_days ?? null);
   return (
     <Overlay title="改群名 / 公告" onClose={onClose} width={520}>
       <input value={name} onChange={(e) => setName(e.target.value)} maxLength={NAME_MAX} style={inputStyle} />
       <textarea value={purpose} onChange={(e) => setPurpose(e.target.value)} rows={3} maxLength={500} placeholder="群公告 / 用途"
                 style={{ ...inputStyle, resize: "vertical" }} />
-      <span style={muted}>改了会通知所有成员。</span>
+      <RetentionSelect value={keep} onChange={setKeep} />
+      <span style={muted}>改了会通知所有成员。记录保留只能比公司规定短; 每个人还能给自己设得更短。</span>
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
         <Btn kind="ghost" onClick={onClose}>取消</Btn>
-        <Btn kind="primary" disabled={busy || !name.trim()} onClick={() => onSave(name.trim(), purpose.trim())}>保存</Btn>
+        <Btn kind="primary" disabled={busy || !name.trim()} onClick={() => onSave(name.trim(), purpose.trim(), keep)}>保存</Btn>
       </div>
     </Overlay>
   );

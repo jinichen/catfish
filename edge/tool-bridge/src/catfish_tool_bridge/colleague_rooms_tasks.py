@@ -93,7 +93,7 @@ def _clean_auto(raw: Any, rid: str, sender: str) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
     tid = str(raw.get("task_id") or "")
-    card = next((m.get("card") for m in reversed(cr.messages(rid)) if m.get("kind") == "card" and (m.get("card") or {}).get("task_id") == tid), None)
+    card = cr.store.find_card(rid, tid)
     if not card or card.get("owner") != sender or not card.get("auto_post"):
         return None
     try:
@@ -157,7 +157,7 @@ async def assist(params: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("gateway_url 必填")
     me = forms_net.me()
     room = joined_room(str(params.get("room_id") or ""))
-    msgs = [m for m in cr.messages(room["room_id"]) if m.get("kind") in ("text", "card", "status", "auto", "system")][-ASSIST_HISTORY:]
+    msgs = [m for m in cr.store.recent(room["room_id"], ASSIST_HISTORY * 2) if m.get("kind") in ("text", "card", "status", "auto", "system")][-ASSIST_HISTORY:]
     if not any(m.get("kind") != "system" for m in msgs):
         raise ValueError("群里还没聊什么, 小鲶没东西可总结")
     rid = str(params.get("reply_to") or "")
@@ -188,7 +188,7 @@ def _clean_status(raw: Any, rid: str, sender: str) -> dict[str, Any] | None:
     if not isinstance(raw, dict) or raw.get("state") not in STATUS_WORDS:
         return None
     tid = str(raw.get("task_id") or "")
-    card = next((m.get("card") for m in reversed(cr.messages(rid)) if m.get("kind") == "card" and (m.get("card") or {}).get("task_id") == tid), None)
+    card = cr.store.find_card(rid, tid)
     if card and sender not in card.get("assignees", []):
         return None   # 不是这张任务卡上的人: 不收 (防冒名报状态)
     period = raw.get("period")

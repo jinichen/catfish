@@ -85,6 +85,8 @@ export const ROUTES = [
   { path: "system", label: "服务状态", group: "系统", require: SYSADMIN, nested: true },
   { path: "facts", label: "政策同步", group: "系统", require: ADMIN, nested: true },
   { path: "advisory", label: "公告发布", group: "系统", require: SYSADMIN },
+  // 11/6: 下发给员工 Companion 的公司级设置 (先只有群聊记录保留天数, docs/GROUP-CHAT-PLAN.md §4.2)
+  { path: "policy", label: "协作设置", group: "系统", require: ADMIN },
 ] as const;
 
 /** 所有合法路径的联合类型. AdminPage 的元素表必须覆盖它, 少一个就编译不过。 */

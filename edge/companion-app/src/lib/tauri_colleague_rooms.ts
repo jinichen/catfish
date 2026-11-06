@@ -20,6 +20,16 @@ export interface RoomSummary {
   /** kind: 任务状态 / 自动转发的 text 里已经带了名字, 列表预览不再加「名字:」 */
   last: { from: string; name: string; text: string; at: string; kind?: RoomMessage["kind"] } | null;
   activity: string;
+  /** 11/6 本机记录保留几天、谁定的 (默认 / 公司规定 / 群主设置 / 你自己设的) */
+  retention?: { days: number; source: "default" | "company" | "room" | "personal"; label: string };
+  /** 群主设的保留天数 (空 = 跟公司 / 默认) */
+  retention_days?: number | null;
+}
+
+/** 11/6 记录保留设置 (这台电脑): 群主 / 个人能设的上限 = ceiling */
+export interface RetentionSettings {
+  default: number; company: number | null; ceiling: number; ceiling_source: "company" | "default"; personal: number | null;
+  removed?: number;
 }
 
 export interface RoomMember {
@@ -52,6 +62,8 @@ export interface RoomStatus { task_id: string; title: string; state: RoomTaskSta
 
 export interface RoomMessage {
   msg_id: string;
+  /** 本机库里的先后编号 (11/6): 往上翻 / 搜索结果定位用 */
+  seq?: number;
   kind: "text" | "system" | "card" | "status" | "auto";
   card?: RoomCard;
   status?: RoomStatus;
@@ -92,7 +104,13 @@ const call = <T,>(action: string, params: Record<string, unknown> = {}) =>
   invoke<T>("colleague_room_call", { action, params });
 
 export const roomList = () => call<{ me: string; rooms: RoomSummary[] }>("list");
-export const roomGet = (roomId: string) => call<RoomDetail>("get", { room_id: roomId });
+export const roomGet = (roomId: string, opts: { before?: number; around?: number } = {}) =>
+  call<RoomDetail>("get", { room_id: roomId, ...opts });
+/** 群内搜索本机记录 (11/6): 新的在前, 最多 50 条 */
+export const roomSearch = (roomId: string, q: string, from?: string) =>
+  call<{ q: string; results: (RoomMessage & { name: string })[] }>("search", { room_id: roomId, q, from: from ?? null });
+export const roomSettingsGet = () => call<RetentionSettings>("settings_get");
+export const roomSettingsSet = (days: number | null) => call<RetentionSettings>("settings_set", { days });
 export const roomSync = () => call<{ events: RoomEvent[]; gap: boolean }>("sync");
 export const roomCreate = (name: string, purpose: string, members: PersonIn[]) =>
   call<{ room: RoomSummary; failed: Failed[] }>("create", { name, purpose, members });
@@ -105,8 +123,10 @@ export const roomAdd = (roomId: string, members: PersonIn[]) =>
   call<{ room: RoomSummary; failed: Failed[] }>("add", { room_id: roomId, members });
 export const roomRemove = (roomId: string, email: string) =>
   call<{ room: RoomSummary; failed: Failed[] }>("remove", { room_id: roomId, email });
-export const roomUpdate = (roomId: string, name: string, purpose: string) =>
-  call<{ room: RoomSummary; failed: Failed[] }>("update", { room_id: roomId, name, purpose });
+export const roomUpdate = (roomId: string, name: string, purpose: string, retentionDays?: number | null) =>
+  call<{ room: RoomSummary; failed: Failed[] }>("update", {
+    room_id: roomId, name, purpose, ...(retentionDays !== undefined ? { retention_days: retentionDays } : {}),
+  });
 export const roomDisband = (roomId: string) => call<{ room: RoomSummary; failed: Failed[] }>("disband", { room_id: roomId });
 export const roomLeave = (roomId: string) => call<{ room: RoomSummary; failed: Failed[] }>("leave", { room_id: roomId });
 export const roomDelete = (roomId: string) => call<{ ok: boolean }>("delete", { room_id: roomId });

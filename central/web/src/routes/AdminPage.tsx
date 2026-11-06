@@ -18,6 +18,7 @@ import { AccessPage } from "./admin/AccessPage";
 import { AdvisoryPage } from "./admin/AdvisoryPage";
 import { FactsPage } from "./admin/FactsPage";
 import { ModelConfigPage } from "./admin/ModelConfigPage";
+import { OrgPolicyPage } from "./admin/OrgPolicyPage";
 import { ProvidersPage } from "./admin/ProvidersPage";
 import { PerfPage } from "./admin/PerfPage";
 import { QuotaConfigPage } from "./admin/QuotaConfigPage";
@@ -50,6 +51,7 @@ const ELEMENTS: Record<AdminPath, ReactNode> = {
   system: <SystemPage />,
   facts: <FactsPage />,
   advisory: <AdvisoryPage />,
+  policy: <OrgPolicyPage />,
 };
 
 /** /admin 落地时按角色分流.

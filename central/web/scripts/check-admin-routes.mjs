@@ -57,6 +57,7 @@ const PAGE_FILES = {
   system: "src/routes/admin/SystemPage.tsx",
   facts: "src/routes/admin/FactsPage.tsx",
   advisory: "src/routes/admin/AdvisoryPage.tsx",
+  policy: "src/routes/admin/OrgPolicyPage.tsx",
 };
 
 /** RoleGate 的 require 归一成 ADMIN / MANAGER / SYSADMIN 三档之一。 */

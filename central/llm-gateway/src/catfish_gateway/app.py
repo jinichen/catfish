@@ -324,6 +324,13 @@ except Exception as e:
     logger.warning("room_link_router 挂载失败: %s", e)
 
 try:
+    from .org_policy_router import router as org_policy_router  # noqa: PLC0415
+    app.include_router(org_policy_router)
+    logger.info("org_policy_router: /api/org/policy 已挂载 (公司级设置: 群聊记录保留天数)")
+except Exception as e:
+    logger.warning("org_policy_router 挂载失败: %s", e)
+
+try:
     from .egress_anchor_router import router as egress_anchor_router  # noqa: PLC0415
     app.include_router(egress_anchor_router)
     logger.info("egress_anchor_router: /api/egress/* 已挂载 (员工外发记录每日指纹)")

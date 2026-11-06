@@ -4,10 +4,11 @@
 **一条群消息 = 给每个成员各投一封**, 群的聊天记录只在每个成员自己电脑上, 中央和 web 都看不到。
 每一封都是员工在界面上点了才发 (发消息 / 建群 / 加入 / 群主改名单 / 退群)。
 
-本机账本 (`~/.catfish/collab_rooms/`):
-  <room_id>/room.json        群: 名字 / 用途 / 群主 / 名单版本 / 成员 (我看到的状态) / 我的状态 / 读到第几条 (read_upto)
-  <room_id>/messages.jsonl   消息 (一行一条; 系统提示 kind=system 也在这里)
-  _sync.json                 上次取邮筒的时间 (超过 7 天没取 = 中间可能缺消息)
+本机账本: `~/.catfish/collab_rooms/rooms.db` (SQLite, 11/6 起; 见 colleague_rooms_store.py)
+  rooms      群: 名字 / 用途 / 群主 / 名单版本 / 成员 (我看到的状态) / 我的状态 / 已读到哪条 (read_upto = seq)
+  messages   消息一条一行 (系统提示 kind=system 也在这里), seq = 本机收到的先后
+  meta       上次取邮筒的时间 (超过 7 天没取 = 中间可能缺消息)
+  (1.2.75 之前是每群一个目录 room.json + messages.jsonl, 第一次打开时导进库, 老目录改名 .migrated 留作备份)
 
 邮筒里的信封 (JSON, 中央看不懂也不看), 期限 7 天:
   room_invite  {v, room_id, ver, name, purpose, owner, members: {邮箱: {state, name}}, at}   群主拉人
@@ -21,17 +22,17 @@
 """
 from __future__ import annotations
 
-import json
 import re
 import secrets
-import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from . import forms, forms_net, wiki_files
+from . import colleague_rooms_retention as keep
+from . import colleague_rooms_store as store
+from . import forms, forms_net
 
 ENVELOPE_VERSION = 1
 MAX_MEMBERS = 50
@@ -51,9 +52,7 @@ GONE = ("declined", "left", "removed")
 # ── 本机账本 ─────────────────────────────────────────────────────
 
 def rooms_dir() -> Path:
-    d = wiki_files._catfish_home() / "collab_rooms"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    return store.rooms_dir()
 
 
 def _now() -> str:
@@ -67,44 +66,33 @@ def _safe_id(room_id: Any) -> str:
     return rid
 
 
-def _room_path(room_id: str) -> Path:
-    return rooms_dir() / _safe_id(room_id) / "room.json"
-
-
-def _msgs_path(room_id: str) -> Path:
-    return rooms_dir() / _safe_id(room_id) / "messages.jsonl"
+def _room(room_id: Any) -> dict[str, Any] | None:
+    """本机库里的群 (没有 = None)。"""
+    return store.get_room(_safe_id(room_id))
 
 
 def load(room_id: str) -> dict[str, Any]:
-    room = forms._read(_room_path(room_id))
+    room = _room(room_id)
     if not room:
         raise LookupError(f"没有这个群: {room_id}")
     return room
 
 
 def _save(room: dict[str, Any]) -> None:
-    forms._write(_room_path(room["room_id"]), room)
+    store.put_room(room)
 
 
 def messages(room_id: str) -> list[dict[str, Any]]:
-    p = _msgs_path(room_id)
-    out = []
-    if p.exists():
-        for line in p.read_text(encoding="utf-8").splitlines():
-            try:
-                m = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(m, dict):
-                out.append(m)
-    return out
+    """这个群本机的全部消息 (按收到的先后, 每条带 seq)。界面只取最近一页, 用 store.recent。"""
+    return store.all_messages(_safe_id(room_id))
 
 
 def _append(room_id: str, msg: dict[str, Any]) -> None:
-    p = _msgs_path(room_id)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+    store.add_message(room_id, msg)
+
+
+def _mark_read(room: dict[str, Any]) -> None:
+    room["read_upto"] = store.max_seq(room["room_id"])   # 已读到的最大 seq (删旧消息不错位)
 
 
 def _system(room: dict[str, Any], text: str) -> None:
@@ -203,7 +191,8 @@ def _invite_env(room: dict[str, Any]) -> dict[str, Any]:
 
 def _member_env(room: dict[str, Any], op: str = "update") -> dict[str, Any]:
     return {"v": ENVELOPE_VERSION, "room_id": room["room_id"], "ver": room["ver"], "op": op, "name": room["name"],
-            "purpose": room.get("purpose") or "", "members": _roster(room), "at": _now()}
+            "purpose": room.get("purpose") or "", "members": _roster(room), "at": _now(),
+            "retention_days": room.get("retention_days")}   # 11/6 群主设的记录保留天数 (空 = 跟公司 / 默认)
 
 
 def add_members(room_id: str, raw: Any) -> dict[str, Any]:
@@ -255,14 +244,17 @@ def update_info(room_id: str, args: dict[str, Any]) -> dict[str, Any]:
     if not name:
         raise ValueError("群名不能空")
     purpose = str(args.get("purpose") if args.get("purpose") is not None else room.get("purpose") or "").strip()[:PURPOSE_MAX]
-    if name == room["name"] and purpose == (room.get("purpose") or ""):
+    keep_days = keep.check_room_days(args["retention_days"]) if "retention_days" in args else room.get("retention_days")
+    if name == room["name"] and purpose == (room.get("purpose") or "") and keep_days == room.get("retention_days"):
         return {"ok": True, "room": summary(room, me=me), "failed": []}
     changed = []
     if name != room["name"]:
         changed.append(f"群名改成「{name}」")
     if purpose != (room.get("purpose") or ""):
         changed.append("更新了群公告")
-    room.update(name=name, purpose=purpose, ver=room["ver"] + 1)
+    if keep_days != room.get("retention_days"):
+        changed.append(f"把记录保留改成 {keep_days} 天" if keep_days else "把记录保留改回跟公司规定")
+    room.update(name=name, purpose=purpose, ver=room["ver"] + 1, retention_days=keep_days)
     _save(room)
     _system(room, f"你{'、'.join(changed)}")
     failed = _post_all(_active_others(room, me), "room_member", _member_env(room))
@@ -297,7 +289,7 @@ def join(room_id: str) -> dict[str, Any]:
     room.setdefault("members", {}).setdefault(me, {"name": ""})["state"] = "joined"
     room["joined_at"] = _now()
     _system(room, "你加入了群 (加入前的消息看不到)")
-    room["read_upto"] = len(messages(room["room_id"]))
+    _mark_read(room)
     _save(room)
     env = {"v": ENVELOPE_VERSION, "room_id": room["room_id"], "status": "joined", "at": _now()}
     failed = _post_all(_active_others(room, me), "room_join", env)
@@ -339,7 +331,7 @@ def delete_local(room_id: str) -> dict[str, Any]:
     room = load(room_id)
     if room.get("my_state") in ("joined", "invited"):
         raise ValueError("还在群里的不能删记录; 先退群 (群主先解散)")
-    shutil.rmtree(rooms_dir() / _safe_id(room_id), ignore_errors=True)
+    store.delete_room(_safe_id(room_id))
     return {"ok": True}
 
 
@@ -376,7 +368,7 @@ def _broadcast(room: dict[str, Any], me: str, body: str, ments: list[str], extra
         msg["undelivered"] = [f["email"] for f in failed]
     _append(room["room_id"], msg)
     room["last_msg_at"] = msg["at"]
-    room["read_upto"] = len(messages(room["room_id"]))
+    _mark_read(room)
     _save(room)
     return {"ok": True, "message": msg, "sent_to": len(others) - len(failed), "failed": failed}
 
@@ -386,7 +378,7 @@ MSG_KINDS = ("text", "card", "status", "auto")   # 算未读 / 列表预览的�
 
 def mark_read(room_id: str) -> dict[str, Any]:
     room = load(room_id)
-    room["read_upto"] = len(messages(room_id))
+    _mark_read(room)
     _save(room)
     return {"ok": True}
 
@@ -399,7 +391,7 @@ def _apply(msg: dict[str, Any], me: str) -> dict[str, Any] | None:
         rid = _safe_id(env.get("room_id"))
     except ValueError:
         return None
-    room = forms._read(_room_path(rid))
+    room = _room(rid)
     if kind == "room_invite":
         owner = str(env.get("owner") or "").lower()
         if owner != sender:
@@ -454,7 +446,7 @@ def _apply(msg: dict[str, Any], me: str) -> dict[str, Any] | None:
         text = str(env.get("text") or "").strip()[:TEXT_MAX]
         if not _MSG_ID.fullmatch(mid) or not text:
             return None
-        if any(m.get("msg_id") == mid for m in messages(rid)):
+        if store.has_message(rid, mid):
             return None   # 重复
         if st == "invited":   # 没收到他的「加入」就先收到消息: 他已经在群里了
             members[sender]["state"] = "joined"
@@ -538,7 +530,10 @@ def _apply_roster(room: dict[str, Any], env: dict[str, Any], sender: str, me: st
         notes.append(f"群名改成「{name}」")
     if purpose != (room.get("purpose") or ""):
         notes.append("群主更新了群公告")
-    room.update(ver=ver, name=name, purpose=purpose, members=merged)
+    keep_days = keep._valid(env.get("retention_days"))
+    if keep_days != room.get("retention_days"):
+        notes.append(f"群主把记录保留改成 {keep_days} 天" if keep_days else "群主把记录保留改回跟公司规定")
+    room.update(ver=ver, name=name, purpose=purpose, members=merged, retention_days=keep_days)
     removed_me = me in gone or (env.get("removed") and me in env.get("removed"))
     if removed_me and room.get("my_state") in ACTIVE:
         room["my_state"], room["ended_at"] = "removed", _now()
@@ -553,8 +548,7 @@ def _apply_roster(room: dict[str, Any], env: dict[str, Any], sender: str, me: st
 
 def sync() -> dict[str, Any]:
     me = forms_net.me()
-    state_path = rooms_dir() / "_sync.json"
-    last = (forms._read(state_path) or {}).get("at")
+    last = store.get_meta("sync_at")
     gap = False
     if last:
         try:
@@ -566,11 +560,12 @@ def sync() -> dict[str, Any]:
         ev = _apply(msg, me)
         if ev:
             events.append(ev)
-    forms._write(state_path, {"at": _now()})
+    store.set_meta("sync_at", _now())
     _note_key_changes()
+    keep.maintain()   # 到期删 (最多 10 分钟一次)
     if gap:
         for rid in _room_ids():
-            room = forms._read(_room_path(rid))
+            room = _room(rid)
             if room and room.get("my_state") == "joined":
                 _system(room, f"超过 {GAP_DAYS} 天没打开 Companion, 这期间的群消息可能没收到")
     return {"ok": True, "events": events, "gap": gap}
@@ -583,7 +578,7 @@ def _note_key_changes() -> None:
     if not changes:
         return
     for rid in _room_ids():
-        room = forms._read(_room_path(rid))
+        room = _room(rid)
         if not room or room.get("my_state") != "joined":
             continue
         for c in changes:
@@ -594,14 +589,14 @@ def _note_key_changes() -> None:
 # ── 列表 / 详情 ──────────────────────────────────────────────────
 
 def _room_ids() -> list[str]:
-    return [p.parent.name for p in rooms_dir().glob("r_*/room.json") if _ID.fullmatch(p.parent.name)]
+    return [r for r in store.room_ids() if _ID.fullmatch(r)]
 
 
-def summary(room: dict[str, Any], msgs: list[dict[str, Any]] | None = None, me: str = "") -> dict[str, Any]:
-    msgs = messages(room["room_id"]) if msgs is None else msgs
-    # 读到第几条 (按本机记录的条数, 不按时间: 同一秒里收到的不会被当成已读)
-    unread = [m for m in msgs[int(room.get("read_upto") or 0):] if m.get("kind") in MSG_KINDS and m.get("from") != me]
-    last = next((m for m in reversed(msgs) if m.get("kind") in MSG_KINDS), None)
+def summary(room: dict[str, Any], me: str = "") -> dict[str, Any]:
+    rid = room["room_id"]
+    # 已读到哪条按 seq 记 (本机收到的先后, 不按时间: 同一秒里收到的不会被当成已读; 删旧消息也不错位)
+    unread = [m for m in store.after(rid, int(room.get("read_upto") or 0), MSG_KINDS) if m.get("from") != me]
+    last = store.last_of(rid, MSG_KINDS)
     return {"room_id": room["room_id"], "name": room["name"], "purpose": room.get("purpose") or "",
             "owner": room["owner"], "my_state": room.get("my_state"),
             "members": len(_active(room)), "joined": sum(1 for v in room.get("members", {}).values() if v.get("state") == "joined"),
@@ -610,7 +605,8 @@ def summary(room: dict[str, Any], msgs: list[dict[str, Any]] | None = None, me: 
             "last": ({"from": last.get("from"), "name": _label(room, last.get("from") or ""), "text": last["text"][:60], "at": last.get("at"),
                       "kind": last.get("kind")}
                      if last else None),
-            "activity": room.get("last_msg_at") or room.get("invited_at") or room.get("created_at") or ""}
+            "activity": room.get("last_msg_at") or room.get("invited_at") or room.get("created_at") or "",
+            "retention": keep.effective(room), "retention_days": room.get("retention_days")}
 
 
 def list_rooms() -> dict[str, Any]:
@@ -620,23 +616,39 @@ def list_rooms() -> dict[str, Any]:
         me = ""
     rooms = []
     for rid in _room_ids():
-        room = forms._read(_room_path(rid))
+        room = _room(rid)
         if room and room.get("room_id") == rid:
-            rooms.append(summary(room, me=me))
+            rooms.append(summary(room, me))
     rooms.sort(key=lambda r: (r["my_state"] == "invited", r["activity"]), reverse=True)
     return {"ok": True, "me": me, "rooms": rooms}
 
 
-def get(room_id: str) -> dict[str, Any]:
+def get(room_id: str, before: Any = None, around: Any = None) -> dict[str, Any]:
+    """群详情 + 一页消息。before = 往上翻 (只要比这条 seq 早的); around = 搜索结果点进去 (这条前后各一些)。"""
     me = forms_net.me()
     room = load(room_id)
-    msgs = messages(room_id)
+    rid = room["room_id"]
+    if around:
+        msgs = store.around(rid, int(around))
+    else:
+        msgs = store.recent(rid, HISTORY_LIMIT, int(before) if before else None)
     people = [{"email": e, "name": v.get("name") or "", "state": v.get("state"), "owner": e == room["owner"], "me": e == me}
               for e, v in room.get("members", {}).items()]
     order = {"joined": 0, "invited": 1}
     people.sort(key=lambda p: (not p["owner"], order.get(p["state"], 2), p["name"] or p["email"]))
-    return {"ok": True, "me": me, "room": summary(room, msgs, me), "members": people,
-            "messages": msgs[-HISTORY_LIMIT:], "older": max(0, len(msgs) - HISTORY_LIMIT)}
+    older = store.count_before(rid, msgs[0]["seq"]) if msgs else 0
+    return {"ok": True, "me": me, "room": summary(room, me), "members": people, "messages": msgs, "older": older}
+
+
+def search(room_id: str, q: Any, from_email: Any = None) -> dict[str, Any]:
+    """群内搜索本机记录 (§4.4): 正文包含 q, 可按人筛; 最多 50 条, 新的在前。"""
+    room = load(room_id)
+    text = str(q or "").strip()
+    if not text:
+        raise ValueError("要搜什么? 写个关键词")
+    who = _norm_email(from_email) if from_email else None
+    hits = store.search(room["room_id"], text[:100], who)
+    return {"ok": True, "q": text, "results": [{**m, "name": _label(room, m.get("from") or "")} for m in hits]}
 
 
 _LOCK = threading.RLock()
@@ -647,7 +659,10 @@ def pim_handlers(params: dict[str, Any]) -> dict[str, Any]:
     rid = str(params.get("room_id") or "")
     return forms.serialized({
         "pim/croom_list": list_rooms,
-        "pim/croom_get": lambda: get(rid),
+        "pim/croom_get": lambda: get(rid, params.get("before"), params.get("around")),
+        "pim/croom_search": lambda: search(rid, params.get("q"), params.get("from")),
+        "pim/croom_settings_get": keep.settings,
+        "pim/croom_settings_set": lambda: keep.set_personal(params.get("days")),
         "pim/croom_sync": sync,
         "pim/croom_create": lambda: create(params),
         "pim/croom_join": lambda: join(rid),

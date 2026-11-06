@@ -1,0 +1,83 @@
+/** /admin/policy — 协作设置 (11/6, docs/GROUP-CHAT-PLAN.md §4.2), admin+.
+ *
+ * 群聊记录存在每个员工自己的电脑上 (中央不存); 这里定**最多留几天**, 员工 Companion 每次同步时取这个数,
+ * 到期自动从本机删。群主 / 员工个人只能在这个上限之内再设短, 不能更长。
+ */
+import { useEffect, useState } from "react";
+
+import { Card } from "../../components/Card";
+import { PageShell } from "../../components/PageShell";
+import { RoleGate } from "../../components/RoleGate";
+import { RETENTION_DEFAULT, RETENTION_MAX, RETENTION_MIN, orgPolicyApi, type OrgPolicy } from "../../lib/org_policy";
+
+const PRESETS = [30, 90, 180, 365, 730];
+
+export function OrgPolicyPage() {
+  return (
+    <RoleGate require={["admin"]}>
+      <PolicyBody />
+    </RoleGate>
+  );
+}
+
+function PolicyBody() {
+  const [p, setP] = useState<OrgPolicy | null>(null);
+  const [days, setDays] = useState<string>("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    orgPolicyApi.get().then((r) => { setP(r); setDays(r.room_retention_days ? String(r.room_retention_days) : ""); })
+      .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
+  }, []);
+
+  const n = days.trim() ? Number(days) : null;
+  const bad = n !== null && (!Number.isInteger(n) || n < RETENTION_MIN || n > RETENTION_MAX);
+
+  async function save(v: number | null) {
+    setBusy(true); setErr(null); setMsg(null);
+    try {
+      const r = await orgPolicyApi.setRoomRetention(v);
+      setP(r);
+      setDays(r.room_retention_days ? String(r.room_retention_days) : "");
+      setMsg(v === null ? `已清空, 员工电脑按默认 ${RETENTION_DEFAULT} 天` : `已保存: 群聊记录最多保留 ${v} 天`);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <PageShell>
+      <Card title="群聊记录保留天数">
+        <p style={{ margin: "0 0 12px", color: "var(--text-muted)" }}>
+          同事群聊的记录只存在每个成员自己的电脑上, 中央不存。这里定员工电脑上<strong>最多留几天</strong>,
+          到期自动删掉; 员工的鲶鱼 Companion 下次同步时生效。群主或员工自己可以再设短, 不能比这里长。
+        </p>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <input type="number" min={RETENTION_MIN} max={RETENTION_MAX} value={days} placeholder={`默认 ${RETENTION_DEFAULT}`}
+                 onChange={(e) => setDays(e.target.value)} style={{ width: 120, padding: "6px 8px" }} aria-label="保留天数" />
+          <span>天</span>
+          {PRESETS.map((d) => (
+            <button key={d} type="button" onClick={() => setDays(String(d))} style={{ padding: "4px 10px" }}>{d} 天</button>
+          ))}
+        </div>
+        {bad && <p style={{ color: "var(--status-err)" }}>天数要在 {RETENTION_MIN} 到 {RETENTION_MAX} 之间的整数</p>}
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <button type="button" disabled={busy || bad || n === (p?.room_retention_days ?? null)} onClick={() => void save(n)}>保存</button>
+          {p?.room_retention_days != null && (
+            <button type="button" disabled={busy} onClick={() => void save(null)}>清空 (用默认 {RETENTION_DEFAULT} 天)</button>
+          )}
+        </div>
+        <p style={{ marginTop: 12, color: "var(--text-muted)", fontSize: 13 }}>
+          现在: {p == null ? "读取中…" : p.room_retention_days == null ? `没设, 员工电脑按默认 ${RETENTION_DEFAULT} 天`
+            : `最多 ${p.room_retention_days} 天${p.updated_by ? ` (${p.updated_by} 设于 ${p.updated_at?.slice(0, 16).replace("T", " ")})` : ""}`}
+        </p>
+        {msg && <p style={{ color: "var(--status-ok)" }}>{msg}</p>}
+        {err && <p style={{ color: "var(--status-err)" }}>{err}</p>}
+      </Card>
+    </PageShell>
+  );
+}
