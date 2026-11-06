@@ -774,6 +774,10 @@ def tool_wiki_read(args: dict) -> dict[str, Any]:
         relations = wiki_relations.relations_of(_catfish_home(), rel)
         if relations is not None:
             result["relations"] = relations
+        from . import wiki_types  # noqa: PLC0415  (11/07: 有类型定义的条目带属性 / 状态 / 这一类能做的事)
+        info = wiki_types.describe_content(str(result.get("content") or ""))
+        if info is not None:
+            result["type_info"] = info
     return result
 
 

@@ -43,6 +43,29 @@ export function wikiActionPrompt(
   ].join("\n");
 }
 
+/**
+ * 11/07: 挂在类型上的行动 (证书的「官网核查」「到期提醒」…) 交给小鲶。属性直接写进请求 (不用小鲶再去找),
+ * 「要做的事」是类型定义里写好、属性已填进去的那句; 不要技能的行动用小鲶自己的工具做。
+ */
+export function wikiTypeActionPrompt(
+  action: { label: string; instruction: string; skill_path: string; skill_dir: string | null; runnable: boolean },
+  entry: { title: string; relPath: string; typeLabel: string; properties: { label: string; value: string }[] },
+): string {
+  const props = entry.properties.map((p) => `${p.label}: ${p.value || "（未填）"}`).join("；");
+  const how = !action.skill_path
+    ? ""
+    : action.runnable
+      ? `可以用 catfish_run_skill 调技能 ${action.skill_path}（参数不清楚先传 params={"_help": true}）。`
+      : `可以参考技能说明 ${action.skill_dir ?? action.skill_path}/SKILL.md 照着做。`;
+  return [
+    `对知识库里的《${entry.title}》（${entry.typeLabel}）做「${action.label}」。`,
+    `这条的属性：${props}。`,
+    `要做的事：${action.instruction}`,
+    ...(how ? [how] : []),
+    `还要别的信息就用 catfish_wiki_read (rel_path=${entry.relPath}) 读这条知识。缺的问我，不要编；登录、提交、发送这类对外操作照常先问我。`,
+  ].join("\n");
+}
+
 function unquoteYaml(value: string): string {
   const trimmed = value.trim();
   if (trimmed.startsWith('"') && trimmed.endsWith('"')) {

@@ -25,6 +25,7 @@ import WikiTree from "./WikiTree";
 import { useKeptUntyped } from "../../lib/wikiUntypedKept";
 import { customHierarchy, useRelationVocab } from "../../lib/wikiRelationVocab";
 import WikiRelationTypesModal from "./WikiRelationTypesModal";
+import WikiPropsReview from "./WikiPropsReview";
 import { useHierarchyModel } from "./WikiHierarchyView";
 import {
   buildConfirmedWikiContent,
@@ -89,6 +90,7 @@ export default function WikiOrganizer({
   const customRelations = useRelationVocab((state) => state.custom);
   const loadRelationVocab = useRelationVocab((state) => state.load);
   const [showRelationTypes, setShowRelationTypes] = useState(false);
+  const [showPropsReview, setShowPropsReview] = useState(false);
   useEffect(() => {
     void loadRelationVocab();
   }, [loadRelationVocab]);
@@ -259,8 +261,19 @@ export default function WikiOrganizer({
               <Tag size={16} aria-hidden="true" />
               类型
             </button>
+            {/* 11/07: 把正文里的编号 / 有效期 … 抽成属性 (WikiPropsReview) */}
+            <button
+              type="button"
+              className="wiki-organizer__vocab"
+              onClick={() => setShowPropsReview(true)}
+              title="整理属性：把资质证书等正文里的编号、发证机构、有效期抽成属性"
+            >
+              <ListChecks size={16} aria-hidden="true" />
+              属性
+            </button>
           </div>
           {showRelationTypes && <WikiRelationTypesModal onClose={() => setShowRelationTypes(false)} />}
+          {showPropsReview && <WikiPropsReview onClose={() => setShowPropsReview(false)} />}
 
           <div className="wiki-organizer__summary" aria-label="关系健康概览">
             {visibleKinds.map((kind) => {

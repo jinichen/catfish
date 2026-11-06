@@ -1,0 +1,149 @@
+{
+  "_why": [
+    "11/07 知识库本体的「类型定义」: 每一类知识有哪些属性、自动算的状态、能做哪些行动。",
+    "属性按扁平字段写进条目文件头 (key: value), 正文不动; 行动挂在类型上, 这一类的条目自动都有,",
+    "点了交给小鲶, 参数从属性里取 (instruction 里的 {属性 key} 会换成属性值)。",
+    "Python (tool-bridge wiki_types.py) 读这一份; 本机 ~/.catfish/wiki-type-schema.json 可以补充:",
+    "同名类型按 key 合并属性 / 按 id 合并行动, 也可以新加类型。说明见 docs/WIKI-TYPE-SCHEMA.md。",
+    "每个属性可选 pattern (正则, 第 1 组是值, 从正文抽) 和 keywords; pattern 抽不到时, 正文出现 keywords 或属性名本身才请小鲶读这条帮抽。",
+    "aliases: 同一个值的不同写法归成一个 (例 等级「无等级」→「无」), 按属性查才不会漏。"
+  ],
+  "version": 1,
+  "types": {
+    "cert": {
+      "label": "资质证书",
+      "kind": "entity",
+      "properties": [
+        {
+          "key": "cert_no",
+          "label": "证书编号",
+          "type": "text",
+          "pattern": "证书编号[为是:：\\s]*([A-Za-z0-9][A-Za-z0-9\\-_/.]*\\d[A-Za-z0-9\\-_/.]*)"
+        },
+        {
+          "key": "issuer",
+          "label": "发证机构",
+          "type": "text",
+          "pattern": "由([^，,。；;]{2,60}?)于\\s*\\d{4}"
+        },
+        {
+          "key": "issued_on",
+          "label": "颁发日期",
+          "type": "date",
+          "pattern": "于\\s*(\\d{4}[-年./]\\d{1,2}[-月./]\\d{1,2})日?\\s*颁发"
+        },
+        {
+          "key": "valid_until",
+          "label": "有效期至",
+          "type": "date",
+          "pattern": "有效期至\\s*(\\d{4}[-年./]\\d{1,2}[-月./]\\d{1,2})"
+        },
+        {
+          "key": "review_on",
+          "label": "复审日期",
+          "type": "date",
+          "hint": "下一次复审 / 年审 / 监督审核的日期",
+          "keywords": [
+            "复审",
+            "年审",
+            "监督审核",
+            "再认证"
+          ]
+        },
+        {
+          "key": "level",
+          "label": "等级",
+          "type": "text",
+          "pattern": "(?:[，,。]\\s*等级(?:为|[:：])?|评定等级[:：]?|\\|\\s*等级\\s*\\|)\\s*([^，,。；;（(\\s|:：]{1,8})",
+          "aliases": {
+            "无等级": "无",
+            "体系认证无等级": "无",
+            "不分等级": "无",
+            "无级别": "无",
+            "—": "无"
+          }
+        },
+        {
+          "key": "scope",
+          "label": "认证范围",
+          "type": "text",
+          "keywords": [
+            "范围"
+          ]
+        },
+        {
+          "key": "holder",
+          "label": "持有单位",
+          "type": "text",
+          "pattern": "^\\s*([^，,。\\n]{2,40}?)持有的"
+        },
+        {
+          "key": "category",
+          "label": "归类",
+          "type": "text",
+          "pattern": "归类为\\s*([^，,。；;\\s]{2,20})"
+        },
+        {
+          "key": "maintainer",
+          "label": "维护人",
+          "type": "text",
+          "pattern": "维护人(?:为|是)?\\s*([^，,。；;\\s（(]{2,10})"
+        }
+      ],
+      "status": {
+        "label": "状态",
+        "from": "valid_until",
+        "warn_days": 180,
+        "values": {
+          "ok": "有效",
+          "warn": "即将到期",
+          "expired": "已过期",
+          "unknown": "有效期未填"
+        }
+      },
+      "relations": [
+        {
+          "rel": "依据",
+          "to": [
+            "standard",
+            "rule"
+          ]
+        },
+        {
+          "rel": "同类",
+          "to": [
+            "cert"
+          ]
+        },
+        {
+          "rel": "隶属",
+          "to": [
+            "system",
+            "category"
+          ]
+        },
+        {
+          "rel": "负责",
+          "from": [
+            "person"
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "id": "type.cert.verify-official",
+          "label": "官网核查",
+          "description": "到发证机构官网核对证书编号、状态、有效期、等级、认证范围",
+          "skill_path": "personal/renzheng-gongshi-website-verify",
+          "instruction": "到发证机构（{issuer}）官网核对这张证书（编号 {cert_no}）：证书状态、有效期、等级、认证范围是否和知识库一致。逐项列出核对结果和官网出处；有不一致的先给我看，我同意后再用 catfish_wiki_update 的 props 更新属性。"
+        },
+        {
+          "id": "type.cert.expiry-reminder",
+          "label": "到期提醒",
+          "description": "在有效期至前 180 天建提醒；有复审日期的也提前 180 天提醒",
+          "instruction": "用 catfish_create_reminder 给这张证书建提醒：有效期至 {valid_until} 前 180 天提醒准备续期；复审日期 {review_on} 有值的话也在它前 180 天建一条。标题写证书名和到期 / 复审日期。日期没填的那条不建，告诉我缺哪个。建之前把提醒的日期和内容给我确认。"
+        }
+      ]
+    }
+  }
+}

@@ -39,6 +39,10 @@ FILE_PARSE_SRC = EDGE / "companion-app" / "src-tauri" / "scripts"
 # 找, 开发机读源码树、客户机读 edge-runtime, 不用另开一条查找路径。它跑在会议组件包的
 # venv 里, 不是 hermes venv。
 FILE_PARSE_PATTERNS = ("parse_file*.py", "attachment_bm25.py", "meeting_asr.py")
+# 11/07: tool-bridge 读的受控词表 / 知识库类型定义在 edge/contracts/, 按 Path(__file__).parents[3]/contracts 找
+# (开发机 = edge/contracts, 员工机 = edge-runtime 根下的 contracts/)。原来没打进包, wiki_files 的细分类型归一在员工机上一直是空转。
+CONTRACTS_SRC = EDGE / "contracts"
+CONTRACTS = ("wiki_type_schema.json", "wiki_type_vocab.json", "wiki_relation_vocab.json")
 # Companion 解完会检查 (services/edge_runtime.rs 的 must 列表) —— 两边的清单要对得上
 MUST_EXIST = [
     "tool-bridge/src/catfish_tool_bridge/__main__.py",
@@ -46,6 +50,7 @@ MUST_EXIST = [
     "file-parse/parse_file.py",
     "file-parse/attachment_bm25.py",
     "file-parse/meeting_asr.py",
+    "contracts/wiki_type_schema.json",
 ]
 SKIP_PARTS = {"__pycache__", "tests", ".pytest_cache"}
 
@@ -66,6 +71,7 @@ def collect() -> list[tuple[str, Path]]:
             out.append((f"{name}/src/{rel.as_posix()}", p))
     parse_files = sorted({p for pattern in FILE_PARSE_PATTERNS for p in FILE_PARSE_SRC.glob(pattern)})
     out.extend((f"file-parse/{p.name}", p) for p in parse_files if p.is_file())
+    out.extend((f"contracts/{name}", CONTRACTS_SRC / name) for name in CONTRACTS)
     return out
 
 

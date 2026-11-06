@@ -168,4 +168,5 @@ pub mod wiki_slug; // slug 校验/归一化/碰撞检测 (8/15 从 wiki_write �
 pub mod wiki_write; // BL-CATFISH-WIKI-MODE P3.3.7 (6/4): wiki write API (create_entity_or_concept + update_file) // P3.4.1 (6/13 鸿波): mcp OAuth token 本机存 ~/.catfish/mcp/oauth-tokens/ (砍 secret-broker)
 pub mod wiki_actions; // 知识节点 action_id → 本机声明式 Action Registry → 现有 skill bridge
 pub mod wiki_actions_local; // 11/06: 本机装了的技能自动列进「关联行动」
+pub mod wiki_types; // 11/07: 知识库类型定义 (属性 / 状态 / 类型上的行动), 转发 tool-bridge wiki_types.py
 pub(crate) mod invoke_handler; // centralized Tauri invoke command registry

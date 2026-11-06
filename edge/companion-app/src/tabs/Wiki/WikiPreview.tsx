@@ -9,6 +9,7 @@
  */
 
 import WikiEntryIssues from "./WikiEntryIssues";
+import WikiTypeCard from "./WikiTypeCard";
 import { useEffect, useMemo, useState } from "react";
 import { alertDialog } from "../../components/dialogs";
 import ReactMarkdown from "react-markdown";
@@ -491,6 +492,14 @@ export default function WikiPreview({ onOpenTask }: { onOpenTask?: (taskId: stri
 
       {/* 10/23: 这一条待确认 / 没对上原文 / 关系要改 —— 就地处理, 不用换到关系整理 */}
       <WikiEntryIssues selectedFile={selectedFile} onOpenTask={onOpenTask} />
+
+      {/* 11/07: 有类型定义的条目 (资质证书…) 的属性 / 状态 / 这一类都有的行动 */}
+      <WikiTypeCard
+        key={info.rel_path}
+        relPath={info.rel_path}
+        title={info.title}
+        readOnly={info.rel_path.startsWith("wiki-shared/")}
+      />
 
       <WikiHubStaleBanner hubStaleInfo={hubStaleInfo} />
 

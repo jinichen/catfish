@@ -205,7 +205,7 @@ fn binding(action: &ActionDefinition) -> WikiActionBinding {
 
 /// catfish_run_skill (tool-bridge `_skill_search_roots`) 会去找技能的几个根, 顺序一致:
 /// CATFISH_SKILLS_DIR / 仓库 skills/ (只有开发机有), ~/.catfish/skills/, ~/.catfish/expert-packs/。
-fn skill_roots() -> Vec<PathBuf> {
+pub(crate) fn skill_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(dir) = std::env::var_os("CATFISH_SKILLS_DIR") {
         roots.push(PathBuf::from(dir));
@@ -222,7 +222,7 @@ fn skill_roots() -> Vec<PathBuf> {
 
 /// 11/06 鸿波: 内置 6 个行动 (EIS 登录 / 周报 …) 的技能员工机上一般没装, 原来照样显示可选。没装的灰掉。
 /// 先找到的根优先 (跟 catfish_run_skill 一致)
-fn find_skill_dir(roots: &[PathBuf], skill_path: &str) -> Option<PathBuf> {
+pub(crate) fn find_skill_dir(roots: &[PathBuf], skill_path: &str) -> Option<PathBuf> {
     let rel = skill_path.trim().trim_matches('/');
     if rel.is_empty() || rel.split('/').any(|part| part == ".." || part.is_empty()) {
         return None;

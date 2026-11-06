@@ -654,9 +654,9 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_wiki_read":
         from . import wiki_files  # noqa: PLC0415
         return wiki_files.tool_wiki_read(args)
-    if name == "catfish_wiki_update":
-        from . import wiki_files  # noqa: PLC0415
-        return wiki_files.tool_wiki_update(args)
+    if name in ("catfish_wiki_update", "catfish_wiki_query"):  # 11/07: 改属性 / 按属性查走 wiki_types
+        from . import wiki_types  # noqa: PLC0415
+        return wiki_types.tool_dispatch(name, args)
     # 8/4: 溯源 —— 知识库 66% 是 journal 蒸馏来的 (摘要的摘要, 四次 LLM 转写),
     # 失真消不掉, 但"看到错的能查证"可以做到。见 wiki_trace.py 文件头。
     if name == "catfish_wiki_trace":

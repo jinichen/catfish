@@ -100,6 +100,7 @@ const SOURCE_PURPOSE: Record<string, string> = {
   "plugin:toolbridge-browser-locate": "浏览器 · 看图找位置",
   "plugin:toolbridge-captcha": "浏览器 · 识别验证码",
   "plugin:toolbridge-workflow": "工作流 · 小鲶判断",
+  "plugin:toolbridge-wiki-props": "知识库 · 整理属性",
 };
 
 /** 10/28: 老记录里存的用途名换成现在的叫法再显示。

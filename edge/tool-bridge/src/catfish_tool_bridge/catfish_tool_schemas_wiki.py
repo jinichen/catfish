@@ -276,6 +276,7 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
         "description": (
             "修改个人知识库已有条目 —— 整文件覆写, 不是追加. 必须先 catfish_wiki_read 取全文, "
             "在其上修改后整篇传回, 否则原内容全丢. 新建条目用 catfish_wiki_create. "
+            "只改属性 (证书编号 / 有效期这类, catfish_wiki_read 返参 type_info.properties 里列着) 时只传 rel_path + props, 不传 content. "
             "返参有 warning 说明覆写后会被 TAB 隐藏 (内容太短且无 frontmatter)."
         ),
         "input_schema": {
@@ -293,10 +294,47 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
                     "type": "string",
                     "description": "完整新内容已存成本机文本文件时给路径 (代替 content, 长内容用这个)",
                 },
+                "props": {
+                    "type": "object",
+                    "description": "只改属性: {属性key: 值}, 值给空串表示清掉. 跟 content 二选一",
+                },
             },
             "required": ["rel_path"],
         },
         "emoji": "✏️",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    # 11/07: 按类型 + 属性查 (wiki_types.py, 类型定义见 edge/contracts/wiki_type_schema.json)
+    {
+        "name": "catfish_wiki_query",
+        "description": (
+            "按类型和属性查知识库 —— 「哪些证书 2027 年 6 月前到期」「谢竞翔维护的证书」「即将到期的证书」这类问题用它, "
+            "比全文搜索准. type 是类型 key (现有: cert=资质证书); 属性 key 见 catfish_wiki_read 返参 type_info.properties. "
+            "日期属性用 before / after (YYYY-MM-DD, 含当天). 属性没填的条目不满足条件, 要找没填的用 empty: true. "
+            "返回 total 是符合条件的总数, items 最多 limit 条."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "type": {"type": "string", "description": "类型 key, 例 cert"},
+                "where": {
+                    "type": "array",
+                    "description": "条件, 全部满足. 每条 {field, eq | contains | before | after | empty}",
+                    "items": {"type": "object"},
+                },
+                "status": {"type": "string", "description": "按自动算的状态筛: 有效 / 即将到期 / 已过期 / 有效期未填"},
+                "sort": {"type": "string", "description": "按哪个属性升序排, 例 valid_until"},
+                "fields": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "每条还要带哪些属性 (默认只带条件 / 排序 / 有效期用到的); [\"*\"] 带全部",
+                },
+                "limit": {"type": "integer", "description": "最多返回几条, 默认 15; total 是全部符合的条数"},
+            },
+            "required": ["type"],
+        },
+        "emoji": "🗂️",
         "toolset": "catfish_native",
         "available": True,
     },

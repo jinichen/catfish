@@ -108,6 +108,15 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
             return _success(req_id, await asyncio.to_thread(memory_pending.resolve, params))
         except ValueError as e:
             return _error(req_id, INVALID_PARAMS, str(e))
+    # 11/07: 知识库类型定义 (wiki_types.py): 证书页属性卡片 / 类型上的行动 / 「整理属性」建议 + 写入, 不进模型工具清单
+    if method in ("wiki/types", "wiki/type_entry", "wiki/props_propose", "wiki/props_apply"):
+        from . import wiki_types  # noqa: PLC0415
+        if method == "wiki/types":
+            return _success(req_id, await asyncio.to_thread(wiki_types.list_types))
+        if method == "wiki/type_entry":
+            return _success(req_id, await asyncio.to_thread(wiki_types.describe, str(params.get("rel_path") or "")))
+        fn = wiki_types.propose if method == "wiki/props_propose" else wiki_types.apply
+        return _success(req_id, await asyncio.to_thread(fn, params))
     if method == "memory/compact":  # 11/4: 「整理记忆」让小鲶提精简 / 合并建议, 存成待确认 (memory_compact.py)
         from . import memory_compact  # noqa: PLC0415
         try:

@@ -2449,6 +2449,35 @@ button {
 .wiki-action-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid rgba(14, 97, 105, 0.18); border-radius: 10px; background: rgba(14, 97, 105, 0.04); }
 .wiki-action-card > div { display: grid; gap: 4px; min-width: 0; }
 .wiki-action-card code { color: var(--catfish-text-muted); font-size: 12px; overflow-wrap: anywhere; }
+/* 11/07 知识页属性卡片 (WikiTypeCard): 资质证书等有类型定义的条目 */
+.wiki-type-card { display: grid; gap: 12px; margin: 12px 0; }
+.wiki-type-card__head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.wiki-type-card__head strong { font-size: 15px; }
+.wiki-type-card__head small { color: var(--catfish-text-muted); font-size: 13px; }
+.wiki-type-card__head button { margin-left: auto; }
+.wiki-type-card__status { padding: 2px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; }
+.wiki-type-card__status--ok { color: var(--catfish-cyan); background: color-mix(in srgb, var(--catfish-cyan) 14%, transparent); }
+.wiki-type-card__status--warn { color: var(--catfish-orange); background: color-mix(in srgb, var(--catfish-orange) 16%, transparent); }
+.wiki-type-card__status--expired { color: #e5484d; background: color-mix(in srgb, #e5484d 16%, transparent); }
+.wiki-type-card__status--unknown { color: var(--catfish-text-muted); background: color-mix(in srgb, var(--catfish-text-muted) 14%, transparent); }
+.wiki-type-card__props { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px 16px; margin: 0; }
+.wiki-type-card__props > div { display: grid; gap: 2px; min-width: 0; }
+.wiki-type-card__props dt { color: var(--catfish-text-muted); font-size: 13px; }
+.wiki-type-card__props dd { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+.wiki-type-card__props input { width: 100%; box-sizing: border-box; padding: 6px 8px; font-size: 14px; border: 1px solid var(--catfish-border); border-radius: 6px; background: var(--catfish-bg); color: var(--catfish-text); }
+.wiki-type-card__empty { color: var(--catfish-text-muted); }
+.wiki-type-card__edit-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wiki-type-card__edit-bar small { color: var(--catfish-text-muted); font-size: 12px; }
+/* 11/07「整理属性」(WikiPropsReview) */
+.wiki-props-review { width: 980px; max-width: 92vw; display: grid; gap: 10px; }
+.wiki-props-review__table-wrap { max-height: 56vh; overflow: auto; border: 1px solid #D2D2D7; border-radius: 8px; }
+.wiki-props-review table { border-collapse: collapse; font-size: 13px; min-width: 100%; }
+.wiki-props-review th, .wiki-props-review td { padding: 6px 8px; border-bottom: 1px solid #ececef; text-align: left; vertical-align: top; white-space: nowrap; }
+.wiki-props-review th { position: sticky; top: 0; background: #fbfbfd; z-index: 1; font-weight: 600; }
+.wiki-props-review td input { width: 150px; padding: 4px 6px; font-size: 13px; border: 1px solid #D2D2D7; border-radius: 6px; }
+.wiki-props-review td input[data-source="model"] { border-color: #f59e0b; }
+.wiki-props-review__title { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.wiki-props-review__old { display: block; color: #86868b; font-size: 11px; text-decoration: line-through; }
 .wiki-action-card small { color: var(--catfish-text-muted); font-size: 12px; }
 .wiki-action-card--disabled { opacity: 0.72; }
 .wiki-action-card__buttons { display: flex; gap: 8px; flex: 0 0 auto; }

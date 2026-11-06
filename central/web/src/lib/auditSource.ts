@@ -30,6 +30,7 @@ const LABELS: Record<string, string> = {
   "plugin:toolbridge-browser-locate": "浏览器 · 看图找位置",
   "plugin:toolbridge-captcha": "浏览器 · 识别验证码",
   "plugin:toolbridge-workflow": "工作流 · 小鲶判断",
+  "plugin:toolbridge-wiki-props": "知识库 · 整理属性",
   "plugin:catfish-xcatfish-user": "后台 · 界面翻译",
   // 10/30: 网关自己调自己写主动搭话的开场白 (Companion 回到窗口 / 久没说话 / 待办快到期时触发)
   "gateway-proactive-starter": "后台 · 主动搭话",
