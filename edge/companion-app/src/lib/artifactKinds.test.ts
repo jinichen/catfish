@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessage } from "../types/chat";
-import { artifactKind, artifactLabel, lastRoundArtifacts, messageArtifactPaths, sessionArtifactPaths } from "./artifactKinds";
+import { artifactKind, artifactLabel, isOutputPath, lastAnswerOutputs, lastRoundArtifacts, messageArtifactPaths, sessionArtifactPaths } from "./artifactKinds";
 
 const msg = (m: Partial<ChatMessage> & Pick<ChatMessage, "role">): ChatMessage => ({ id: Math.random().toString(36), content: "", ts: "2026-11-07T10:00:00.000Z", ...m });
 
@@ -69,3 +69,26 @@ describe("lastRoundArtifacts", () => {
     expect(lastRoundArtifacts([msg({ role: "assistant", content: "/Users/x/a.md" })])).toBeNull();
   });
 });
+
+describe("lastAnswerOutputs (之前做好、这一轮原样交付的成果)", () => {
+  it("只认最后回答正文里、成果目录下的文件, 最后提到的在前", () => {
+    const list = lastAnswerOutputs([
+      msg({ role: "user", content: "周报" }),
+      msg({ role: "assistant", content: "", tool_calls: [{ id: "1", name: "x", args: {}, status: "done", result: "/Users/x/.catfish/outputs/2026-11-07/中间稿.xlsx" }] }),
+      msg({ role: "assistant", content: "参考了 /Users/x/Downloads/上周.xlsx , 本周在 /Users/x/.catfish/outputs/2026-11-07/周报.xlsx 和 ~/.catfish/outputs/2026-11-07/附表.csv" }),
+    ]);
+    expect(list).toEqual(["~/.catfish/outputs/2026-11-07/附表.csv", "/Users/x/.catfish/outputs/2026-11-07/周报.xlsx"]);
+  });
+
+  it("这一轮还没回答 / 回答没给成果 → 空", () => {
+    expect(lastAnswerOutputs([msg({ role: "assistant", content: "/Users/x/.catfish/outputs/a.md" }), msg({ role: "user", content: "再来" })])).toEqual([]);
+    expect(lastAnswerOutputs([msg({ role: "user", content: "hi" }), msg({ role: "assistant", content: "好的" })])).toEqual([]);
+  });
+
+  it("成果目录判断 (mac / Windows)", () => {
+    expect(isOutputPath("/Users/x/.catfish/outputs/2026-11-07/a.xlsx")).toBe(true);
+    expect(isOutputPath("C:\\Users\\x\\.catfish\\outputs\\a.xlsx")).toBe(true);
+    expect(isOutputPath("/Users/x/.catfish/uploads/a.xlsx")).toBe(false);
+  });
+});
+

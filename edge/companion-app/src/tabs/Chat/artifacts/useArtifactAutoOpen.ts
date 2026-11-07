@@ -4,6 +4,8 @@
  *     一轮里写了好几个, 右栏跟到最新的那个。只看已完成的工具结果 —— 正文还在一个字一个字出来, 路径可能只有半截。
  *   - 一轮结束: 再按回答正文 + 工具结果整体看一遍, 打开最后提到的新文件 (正文里才提到的也能接住)。
  *   - 「新文件」= 修改时间在这一轮开始之后; 小鲶只是读了 / 引用了的老文件不弹。
+ *     例外: 一轮结束时没有新文件, 但最后回答里交出了成果目录 (~/.catfish/outputs/) 下的文件 —— 之前做好、
+ *     这一轮原样交付的 —— 也打开 (lib/artifactKinds.ts lastAnswerOutputs)。
  *   - 这一轮里用户自己开过 / 切过 / 关过右栏, 自动打开就不再抢 (store.autoOpen 判断)。
  *   - 回答进行中小鲶用上了浏览器工具 (名字里带 browser 的, 如 catfish_browser_goto), 切到「浏览器」页看它操作;
  *     之后写出新文件照样切回「成果」。
@@ -18,7 +20,7 @@
  */
 import { useEffect, useRef } from "react";
 import type { ChatMessage } from "../../../types/chat";
-import { artifactKind, lastRoundArtifacts } from "../../../lib/artifactKinds";
+import { artifactKind, lastAnswerOutputs, lastRoundArtifacts } from "../../../lib/artifactKinds";
 import { extractFilePaths } from "../../../lib/path_detect";
 import { artifactStat } from "../../../lib/tauri_artifacts";
 import { useArtifactStore } from "../../../store/artifacts";
@@ -161,12 +163,15 @@ export function useArtifactAutoOpen(messages: ChatMessage[], isStreaming: boolea
     if (!ended) return;
     const round = lastRoundArtifacts(latest.current);
     if (!round) return;
+    const delivered = lastAnswerOutputs(latest.current);
     const seq = ++checkSeq.current;
-    void freshArtifact(round.paths, round.since).then((p) => {
+    void (async () => {
+      // 先找这一轮新写的; 没有就看最后回答里交出来的成果 (之前做好、这轮原样交付的)
+      const p = (await freshArtifact(round.paths, round.since)) ?? (await freshArtifact(delivered, 0));
       if (!p || !mounted.current || seq < appliedSeq.current) return;
       appliedSeq.current = seq;
       useArtifactStore.getState().autoOpen(p, round.since);
-    });
+    })();
   }, [isStreaming]);
 
   const prevSession = useRef(sessionId);

@@ -119,4 +119,22 @@ describe("useArtifactAutoOpen", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(useArtifactStore.getState().view).toBeNull();
   });
+
+  it("鸿波 11/07 实测: 问「周报」, 小鲶核对后原样交出上午做好的周报 (不是这一轮写的) → 结束时也打开, 从浏览器页切过来", async () => {
+    useArtifactStore.setState({ view: "browser" });
+    const weekly = "/Users/x/.catfish/outputs/2026-11-07/周报-陈鸿波-20261107.xlsx";
+    invoke.mockImplementation(async (_c: string, a: { path: string }) => ({ path: a.path, name: "x", ext: "xlsx", kind: "office", size: 1, mtime_ms: ROUND - 15 * 60_000 }));
+    const { rerender } = renderHook(({ m, s }) => useArtifactAutoOpen(m, s, "sid"), { initialProps: { m: [user], s: true } });
+    rerender({ m: [user, asst(`本周周报 = 今早 10:00 定稿那份: ${weekly}`, [])], s: false });
+    await waitFor(() => expect(useArtifactStore.getState()).toMatchObject({ view: "file", path: weekly }));
+  });
+
+  it("回答里只是引用了别处的老文件 → 还是不弹", async () => {
+    invoke.mockImplementation(async (_c: string, a: { path: string }) => ({ path: a.path, name: "x", ext: "xlsx", kind: "office", size: 1, mtime_ms: ROUND - 60_000 }));
+    const { rerender } = renderHook(({ m, s }) => useArtifactAutoOpen(m, s, "sid"), { initialProps: { m: [user], s: true } });
+    rerender({ m: [user, asst("参考了 /Users/x/Downloads/上周周报.xlsx", [])], s: false });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(useArtifactStore.getState().view).toBeNull();
+  });
 });
+

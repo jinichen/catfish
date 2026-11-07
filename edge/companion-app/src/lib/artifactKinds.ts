@@ -89,3 +89,25 @@ export function lastRoundArtifacts(messages: ChatMessage[], toolsOnly = false): 
   const paths = sessionArtifactPaths(messages.slice(lastUser + 1), toolsOnly);
   return paths.length ? { paths, since } : null;
 }
+
+/** 鲶鱼的成果目录 (~/.catfish/outputs/, Windows 上反斜杠) —— 只放小鲶做出来的东西, 不放员工上传 / 参考的原文件 */
+export function isOutputPath(path: string): boolean {
+  return /[\\/]\.catfish[\\/]outputs[\\/]/.test(path);
+}
+
+/**
+ * 这一轮最后一段回答里点名的、成果目录下的文件, 最后提到的在前 (11/07 鸿波「为什么没有转到成果」):
+ * 小鲶把之前做好的成果原样交出来 (这次周报 10:00 写的, 10:15 问「周报」核对后没改), 文件不是这一轮写的,
+ * 按「修改时间晚于这一轮开始」那条接不住。只认回答正文 + 成果目录, 小鲶读过 / 引用过的别处文件照样不弹。
+ */
+export function lastAnswerOutputs(messages: ChatMessage[]): string[] {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === "user") return [];
+    if (m.role === "assistant" && m.content.trim()) {
+      return extractFilePaths(m.content).filter((p) => artifactKind(p) !== null && isOutputPath(p)).reverse();
+    }
+  }
+  return [];
+}
+
