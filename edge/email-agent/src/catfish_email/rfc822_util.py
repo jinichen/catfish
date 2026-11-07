@@ -198,21 +198,85 @@ def embed_inline_images(
     return _IMG_TAG.sub(one, html)
 
 
-def has_attachments(msg: EmailMessage) -> bool:
+def _cid_refs(msg: EmailMessage) -> str:
+    """正文 HTML 里所有 ``cid:`` 引用拼在一起 (小写), 用来判断某个部件是不是被正文内嵌显示的图。
+
+    Apple Mail 发出的信 HTML 会被附件切成好几段 text/html, 所以每段都要看, 不能只取第一段。
+    """
+    out: list[str] = []
+    for part in msg.walk():
+        if part.get_content_type() != "text/html" or part.get_content_disposition() == "attachment":
+            continue
+        try:
+            text = part.get_content()
+        except Exception:  # noqa: BLE001
+            text = (part.get_payload(decode=True) or b"").decode("utf-8", errors="replace")
+        if "cid:" in text.lower():
+            out.append(text.lower())
+    return "\n".join(out)
+
+
+def attachment_parts(msg: EmailMessage) -> list[EmailMessage]:
+    """邮件里**用户看来是附件**的那些部件。全系统只认这一个口径 (列附件 / 有没有附件 / 导出附件)。
+
+    11/07 鸿波: 已发送里带两个 PDF 的信, 鲶鱼显示没附件。真机 MIME 树:
+
+        multipart/alternative
+        ├── text/plain
+        └── multipart/mixed
+            ├── text/html
+            ├── application/pdf   Content-Disposition: inline; filename="党委会记录….pdf"
+            ├── text/html
+            ├── application/pdf   Content-Disposition: inline; filename="…59号….pdf"
+            └── text/html
+
+    Apple Mail 把附件标成 ``inline`` (它要在正文里原地画出 PDF 图标), 不是
+    ``attachment``; 以前只收 ``attachment`` 的过滤一个都没认出来。
+
+    规则:
+      - ``Content-Disposition: attachment`` → 附件 (哪怕也带 Content-ID)
+      - 其余带文件名的叶子 (inline / 没写 disposition) → 附件,
+        **除非**它的 Content-ID 被正文 ``<img src="cid:…">`` 引用 —— 那是正文里的图
+        (签名档 logo / Foxmail 内嵌截图), 正文已经画出来了, 不该再列成附件
+      - 没文件名的 (正文本身、没名字的内嵌图) → 不算
+    """
     try:
-        return any(True for _ in msg.iter_attachments())
+        parts = list(msg.walk())
     except Exception:  # noqa: BLE001
-        return False
+        return []
+    refs: str | None = None
+    out: list[EmailMessage] = []
+    for part in parts:
+        if part.is_multipart():
+            continue
+        try:
+            disp = part.get_content_disposition()
+            name = part.get_filename()
+        except Exception:  # noqa: BLE001
+            continue
+        if disp == "attachment":
+            out.append(part)
+            continue
+        if not name:
+            continue
+        cid = (part.get("Content-ID") or "").strip().strip("<>").strip().lower()
+        if cid:
+            if refs is None:
+                refs = _cid_refs(msg)
+            if f"cid:{cid}" in refs:
+                continue
+        out.append(part)
+    return out
+
+
+def has_attachments(msg: EmailMessage) -> bool:
+    return bool(attachment_parts(msg))
 
 
 def attachment_meta(msg: EmailMessage) -> list[tuple[str, int, str]]:
     """``[(文件名, 字节数, content-type), ...]`` —— 只取元信息, 不解内容。"""
     out: list[tuple[str, int, str]] = []
-    try:
-        parts = list(msg.iter_attachments())
-    except Exception:  # noqa: BLE001
-        return out
-    for part in parts:
+    for part in attachment_parts(msg):
         try:
             payload = part.get_payload(decode=True) or b""
         except Exception:  # noqa: BLE001

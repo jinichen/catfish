@@ -449,7 +449,7 @@ class AppleMailAdapter(EmlxFallbackMixin, EmailAdapter):
             if out_path is None:
                 raise DataNotFoundError(
                     f"附件 {filename!r} 在邮件 {message_id!r} 里找不到 "
-                    f"(MIME walk 0 命中 Content-Disposition: attachment)"
+                    f"(邮件里没有这个名字的附件)"
                 )
             return out_path
         finally:

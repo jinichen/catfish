@@ -64,7 +64,7 @@ def _parse_applescript_date(s: str) -> str:
     return s
 
 def _walk_attachments(msg) -> list[Attachment]:
-    """从 parse 完的 RFC822 邮件 MIME 树 walk 出 Content-Disposition: attachment 的 part.
+    """从 parse 完的 RFC822 邮件 MIME 树取出附件元 (口径见 rfc822.attachment_parts).
 
     P3.5.100 (6/24 鸿波 catch '附件看不到') — Apple Mail 全家 adapter 之前
     构造 Message(...) 时没传 attachments, 永远空, 前端 DetailPane.tsx:560
@@ -72,18 +72,17 @@ def _walk_attachments(msg) -> list[Attachment]:
     不显附件 row. 真因不在前端, 在 backend adapter.
 
     本 helper 收集真附件元数据 (filename / size_bytes / content_type):
-      - 只收 Content-Disposition 以 'attachment' 开头的 part
-      - inline 图片 (e.g. signature / 邮件正文渲染的图) 不算附件, 跳过
+      - attachment 一律收; inline / 无 disposition 但有文件名的也收 (Apple Mail 发信就这样)
+      - 正文用 cid: 引用的内嵌图 (签名档 / 截图) 不算附件, 跳过
       - filename RFC2231 自动解 (Python email.utils 内置), 中文名能解
       - size_bytes 取 decoded payload 字节数, 不是 raw base64 长度
     """
     out: list[Attachment] = []
     if not msg.is_multipart():
         return out
-    for part in msg.walk():
-        disposition = (part.get("Content-Disposition") or "").lower().strip()
-        if not disposition.startswith("attachment"):
-            continue
+    # 11/07: 口径统一到 rfc822.attachment_parts —— Apple Mail 发出的信附件是
+    # ``inline; filename=…``, 只认 attachment 会整封漏掉 (已发送里看不到附件)。
+    for part in rfc822.attachment_parts(msg):
         filename = part.get_filename() or "untitled"
         try:
             payload = part.get_payload(decode=True) or b""
@@ -124,10 +123,7 @@ def _save_attachment_payload_from_source(
         return None
     if not msg.is_multipart():
         return None
-    for part in msg.walk():
-        disposition = (part.get("Content-Disposition") or "").lower().strip()
-        if not disposition.startswith("attachment"):
-            continue
+    for part in rfc822.attachment_parts(msg):  # 跟列附件同一口径, 列得出来就导得出来
         part_filename = part.get_filename() or ""
         if part_filename != target_filename:
             continue
