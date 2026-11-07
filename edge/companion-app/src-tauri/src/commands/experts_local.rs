@@ -32,7 +32,11 @@ const PASSTHROUGH: &[&str] = &[
     "suggest",
     // 10/18 专家包 (第二阶段): 打包预览 / 看包 / 发布到中央 / 市场 / 我提交的 / 撤回
     "pack_preview", "pack_inspect", "pack_publish", "pack_market", "pack_mine", "pack_withdraw",
+    // 11/08 一句话搭专家: 起草总览卡 / 看 / 改 / 落地 / 撤回 / 丢掉 / 「现在教」的开场白
+    "build_plan", "build_list", "build_get", "build_update", "build_apply", "build_rollback", "build_discard", "build_teach",
 ];
+/// 起草总览卡要调好几次模型 (拆活 + 每件新工作流起草, 校验不过还要改), 比别的动作久
+const BUILD_PLAN_TIMEOUT: Duration = Duration::from_secs(600);
 
 async fn rpc(method: &str, params: Json) -> Result<Json, String> {
     tool_bridge_rpc::call_with_timeout(method, params, RPC_TIMEOUT).await
@@ -44,7 +48,11 @@ pub async fn expert_local_call(action: String, params: Option<Json>) -> Result<J
     if !PASSTHROUGH.contains(&action.as_str()) {
         return Err(format!("不支持的专家动作: {action}"));
     }
-    rpc(&format!("pim/expert_{action}"), params.unwrap_or_else(|| json!({}))).await
+    let params = params.unwrap_or_else(|| json!({}));
+    if action == "build_plan" {
+        return tool_bridge_rpc::call_with_timeout("pim/expert_build_plan", params, BUILD_PLAN_TIMEOUT).await;
+    }
+    rpc(&format!("pim/expert_{action}"), params).await
 }
 
 fn str_list(v: &Json, key: &str) -> Vec<String> {

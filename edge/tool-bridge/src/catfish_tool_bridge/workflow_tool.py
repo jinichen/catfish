@@ -81,7 +81,8 @@ def runnable_skills() -> list[dict[str, Any]]:
 def chain(wf: dict[str, Any]) -> list[dict[str, Any]]:
     """步骤链 (界面画成「搜邮件 → 读正文 → … → 🔔推送微信」): 每步中文名 + 是不是对外 (会停下等确认)。"""
     return [{"id": s.get("id"), "label": engine.step_label(s), "block": engine.block_of(s),
-             "outward": engine.is_outward(s) or bool(s.get("confirm")), "each": "for_each" in s}
+             "outward": engine.is_outward(s) or bool(s.get("confirm")), "each": "for_each" in s,
+             "cond": engine.when_text(s["when"], wf) if isinstance(s.get("when"), dict) else None}
             for s in wf.get("steps") or [] if isinstance(s, dict)]
 
 
@@ -210,6 +211,12 @@ def dispatch(name: str, args: dict[str, Any]) -> dict[str, Any]:
                                     f"({len(d['workflow'].get('steps') or [])} 步)",
                         "note": "念给员工听, 员工同意后带 confirmed=true 再调"}
             return save(str(args.get("name") or ""))
+        if action == "build_expert":   # 11/08 一句话搭专家: 起草总览卡, 保存生效只能员工在界面上点
+            from . import expert_builder  # noqa: PLC0415
+            b = expert_builder.plan(str(args.get("sentence") or ""))
+            return {"ok": True, "build_id": b["build_id"], "overview": expert_builder.summary_text(b),
+                    "note": "把总览念给员工听 (哪几件是新搭的、哪件要他先教一遍、哪些定时)。保存并生效要员工在卡片上点"
+                            " (对话里会出现「打开总览卡」按钮), 你不能替他保存。"}
         if action == "runs":
             return {"ok": True, "runs": store.list_runs(int(args.get("limit") or 20), args.get("status"))}
         if action == "status":

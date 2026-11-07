@@ -23,6 +23,8 @@ export interface ExpertDef {
   allow_code: boolean;
   model: string;
   enabled: boolean;
+  /** 11/08 还不会、要员工先教一遍的事 (教完自动接进选路) */
+  todo?: { when: string; what: string; teach_name: string }[];
 }
 
 export interface ExpertSummary {
@@ -77,6 +79,58 @@ export const expertSave = (expert: ExpertDef) => call<{ expert: ExpertDef }>("sa
 export const expertSuggest = (name: string, description: string) =>
   call<{ suggestion: Pick<ExpertDef, "workflows" | "skills" | "routes" | "tool_groups" | "persona" | "quick_prompts"> }>(
     "suggest", { name, description });
+// ── 11/08 一句话搭专家 (tool-bridge expert_builder.py) ──
+export type BuildJobKind = "reuse" | "new" | "knowledge" | "teach";
+export interface BuildJob {
+  when: string;
+  title: string;
+  kind: BuildJobKind;
+  include: boolean;
+  problems: string[];
+  /** reuse / 落地后的 new: "workflow:personal/x" / "skill:personal/y" */
+  use?: string;
+  use_title?: string;
+  goal?: string;
+  /** new: 工作流草稿名 */
+  draft?: string | null;
+  what?: string;
+  teach_name?: string;
+  /** teach: 教完接上的技能 */
+  attached?: string;
+  schedule?: { cron: string; text: string } | null;
+}
+export interface BuildExpert {
+  key: number;
+  include: boolean;
+  name: string;
+  description: string;
+  persona: string;
+  quick_prompts: string[];
+  tool_groups: string[];
+  decline: string;
+  jobs: BuildJob[];
+  expert_id?: string;
+}
+export interface ExpertBuild {
+  build_id: string;
+  sentence: string;
+  status: "draft" | "saved";
+  created_at: string;
+  experts: BuildExpert[];
+}
+export const expertBuildPlan = (sentence: string) => call<{ build: ExpertBuild }>("build_plan", { sentence });
+export const expertBuildList = () => call<{ builds: ExpertBuild[] }>("build_list");
+export const expertBuildGet = (buildId: string) => call<{ build: ExpertBuild }>("build_get", { build_id: buildId });
+export const expertBuildUpdate = (buildId: string, expert: number, patch: Record<string, unknown>) =>
+  call<{ build: ExpertBuild }>("build_update", { build_id: buildId, expert, patch });
+export const expertBuildApply = (buildId: string) =>
+  call<{ experts: { id: string; name: string }[]; schedules: { skill_path: string; title: string; cron: string }[]; build: ExpertBuild }>(
+    "build_apply", { build_id: buildId });
+export const expertBuildRollback = (buildId: string) => call<{ build: ExpertBuild }>("build_rollback", { build_id: buildId });
+export const expertBuildDiscard = (buildId: string) => call<{ ok: boolean }>("build_discard", { build_id: buildId });
+export const expertBuildTeach = (buildId: string, expert: number, index: number) =>
+  call<{ prompt: string; chat_key: string }>("build_teach", { build_id: buildId, expert, index });
+
 /** 存好之后让它生效: 建 / 更新专家 profile、写人设和范围、网关托管 (会重启一次小鲶本机服务)。 */
 export const expertApply = (id: string) => invoke<{ ok: boolean; profile_id: string }>("expert_local_apply", { id });
 export const expertRemove = (id: string) => invoke<void>("expert_local_remove", { id });

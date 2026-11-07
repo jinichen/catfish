@@ -32,7 +32,12 @@ export interface WorkflowStep {
   for_each?: string;
   expect?: Record<string, unknown>;
   confirm?: boolean;
+  /** 11/08 有条件才做: of 取哪个值, is 怎么比, to 跟什么比 */
+  when?: StepWhen;
 }
+
+export type WhenOp = "not_empty" | "empty" | "true" | "false" | "eq" | "ne" | "gt" | "ge" | "lt" | "le" | "contains";
+export interface StepWhen { of: string; is: WhenOp; to?: unknown }
 
 export interface WorkflowParam {
   type?: "text" | "number" | "date" | "bool" | "list";
@@ -55,6 +60,8 @@ export interface ChainStep {
   block: "skill" | "action" | "xiaonian" | "";
   outward: boolean;
   each: boolean;
+  /** 11/08 有条件才做: 条件的中文说法 */
+  cond?: string | null;
 }
 
 export interface ParamSpec {
@@ -86,6 +93,8 @@ export interface DraftSummary {
   description: string;
   saved_at: string;
   steps: number;
+  /** 11/08 「一句话搭专家」起草的: 在总览卡上管, 工作流卡片里不列 */
+  from_build?: string | null;
 }
 
 export interface Pending {

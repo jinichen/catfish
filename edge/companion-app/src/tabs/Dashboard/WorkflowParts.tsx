@@ -18,14 +18,14 @@ export function StepChain({ chain }: { chain: ChainStep[] }) {
         <span key={c.id || i} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
           {i > 0 && <span style={{ color: "var(--catfish-text-muted)" }}>→</span>}
           <span
-            title={c.outward ? "对外: 跑到这一步会停下, 等你在鲶鱼里确认" : undefined}
+            title={[c.outward ? "对外: 跑到这一步会停下, 等你在鲶鱼里确认" : "", c.cond ? `只有 ${c.cond} 时才做` : ""].filter(Boolean).join("\n") || undefined}
             style={{
               padding: "1px 8px", borderRadius: 999, border: "1px solid var(--catfish-border)",
               background: c.outward ? "color-mix(in srgb, var(--status-warn, #d97706) 10%, transparent)" : "var(--catfish-bg)",
               color: c.outward ? "var(--status-warn, #d97706)" : "var(--catfish-text)", whiteSpace: "nowrap",
             }}
           >
-            {c.outward ? "🔔 " : ""}{c.label}{c.each ? " (逐条)" : ""}
+            {c.outward ? "🔔 " : ""}{c.cond ? "◇ " : ""}{c.label}{c.each ? " (逐条)" : ""}
           </span>
         </span>
       ))}

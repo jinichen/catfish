@@ -561,8 +561,8 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
         from . import skill_freeze  # noqa: PLC0415
         return skill_freeze.freeze_inspect(args)
     if name == "catfish_freeze_skill":
-        from . import skill_freeze  # noqa: PLC0415
-        return skill_freeze.freeze_skill(args)
+        from . import expert_builder, skill_freeze  # noqa: PLC0415
+        return expert_builder.after_freeze(args, skill_freeze.freeze_skill(args))   # 11/08 教完接进专家
     if name == "catfish_freeze_rotate":
         from . import skill_freeze  # noqa: PLC0415
         return skill_freeze.freeze_rotate(args)

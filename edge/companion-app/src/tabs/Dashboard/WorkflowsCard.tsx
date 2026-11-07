@@ -42,10 +42,12 @@ function resultText(r: RunResult): string {
   return r.summary ?? r.error ?? r.status;
 }
 
-function Detail({ target, onClose, onChanged }: {
+/** inBuild (11/08): 从「一句话搭专家」的总览卡打开的草稿 —— 不能单独删 / 单独保存 (要在卡上一起落地) */
+export function Detail({ target, onClose, onChanged, inBuild = false }: {
   target: { kind: "workflow"; skillPath: string; title?: string } | { kind: "draft"; name: string; title?: string };
   onClose: () => void;
   onChanged: () => void;
+  inBuild?: boolean;
 }) {
   const [cat, setCat] = useState<Catalog | null>(null);
   const [wf, setWf] = useState<Workflow | null>(null);
@@ -133,10 +135,10 @@ function Detail({ target, onClose, onChanged }: {
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
             {target.kind === "draft" ? (
               <>
-                <Btn kind="ghost" disabled={busy} onClick={() => void act(async () => {
+                {!inBuild && <Btn kind="ghost" disabled={busy} onClick={() => void act(async () => {
                   await workflowDraftDelete(target.name);
                   onClose();
-                })}>删除草稿</Btn>
+                })}>删除草稿</Btn>}
                 <Btn kind="ghost" disabled={busy} onClick={() => void act(async () => ((await persist()) ? "草稿存好了" : "还有问题, 见上面"))}>存草稿</Btn>
                 <Btn kind="ghost" disabled={busy} onClick={() => void act(async () => {
                   if (!(await persist())) return "还有问题, 见上面";
@@ -144,7 +146,7 @@ function Detail({ target, onClose, onChanged }: {
                   void refreshPending();
                   return `试跑: ${resultText(r)}`;
                 })}>试跑</Btn>
-                <Btn kind="primary" disabled={busy} onClick={() => void act(async () => {
+                {!inBuild && <Btn kind="primary" disabled={busy} onClick={() => void act(async () => {
                   if (!(await persist())) return "还有问题, 见上面";
                   const r = await workflowSave(target.name);
                   if (!r.ok) {
@@ -152,7 +154,7 @@ function Detail({ target, onClose, onChanged }: {
                     return r.error ?? "保存失败";
                   }
                   onClose();
-                })}>保存为工作流</Btn>
+                })}>保存为工作流</Btn>}
               </>
             ) : (
               <>
@@ -284,8 +286,9 @@ export default function WorkflowsCard() {
         );
       })}
 
-      {list.drafts.length > 0 && <strong style={{ fontSize: 13 }}>草稿 (还没保存)</strong>}
-      {list.drafts.map((d) => (
+      {list.drafts.some((d) => !d.from_build) && <strong style={{ fontSize: 13 }}>草稿 (还没保存)</strong>}
+      {/* 11/08 一句话搭专家起草的草稿在专家页的总览卡上管, 这里不列 */}
+      {list.drafts.filter((d) => !d.from_build).map((d) => (
         <button key={d.name} type="button" onClick={() => setOpen({ kind: "draft", name: d.name, title: d.title })}
                 style={{ ...itemStyle, textAlign: "left", cursor: "pointer", background: "transparent", color: "inherit", font: "inherit" }}>
           <span style={{ fontSize: 13, fontWeight: 600 }}>{d.title || d.name}</span>

@@ -8,6 +8,10 @@ workflow.yaml = 一串步骤, 每步是一块积木:
 取值只有 `${params.x}` / `${steps.<id>.<字段>[n]...}` / `${item...}` (for_each 里) 三种, 没有表达式。
 整个值就是一个 `${...}` 时原样取 (列表还是列表); 夹在文字里时换成文字。
 
+条件 (11/08): 一步可以写 `when: {of: ${...}, is: <比较>, to: <值>}`, 不满足就跳过这一步 (记成 skipped)。
+比较只有这几种: not_empty / empty / true / false / eq / ne / gt / ge / lt / le / contains —— 还是没有表达式,
+写不出任意逻辑。分支 = 两步写相反的条件 (「核对不合格才发提醒」「合格才归档」)。
+
 运行: 开跑前检查 → 逐步跑 → 每步查 expect → 对外步骤前停下 (等员工在界面里确认, 小鲶不能替他确认)
 → 失败 / 停下时记住走到哪, 之后从那一步接着跑。运行记录只在本机 (workflow_store)。
 """
@@ -28,6 +32,10 @@ from . import workflow_xiaonian
 MAX_STEPS = 30
 MAX_FOR_EACH = 50
 EXPECT_KEYS = ("ok", "count_min", "files_min", "text_contains", "page_contains")
+WHEN_UNARY = ("not_empty", "empty", "true", "false")
+WHEN_BINARY = ("eq", "ne", "gt", "ge", "lt", "le", "contains")
+WHEN_LABEL = {"not_empty": "有内容", "empty": "没有内容", "true": "是", "false": "不是", "eq": "等于", "ne": "不等于",
+              "gt": "大于", "ge": "不少于", "lt": "小于", "le": "不超过", "contains": "包含"}
 PARAM_TYPES = ("text", "number", "date", "bool", "list")
 _ID = re.compile(r"^[a-z][a-z0-9_]{0,30}$")
 _REF = re.compile(r"\$\{([^}]+)\}")
@@ -151,8 +159,9 @@ def validate(wf: dict[str, Any], *, skill_lookup: Callable[[str], Path | None]) 
         exp = st.get("expect") or {}
         if not isinstance(exp, dict) or any(k not in EXPECT_KEYS for k in exp):
             errs.append(f"{where} expect 只能用 {' / '.join(EXPECT_KEYS)}")
+        errs += _when_problems(st.get("when"), where)
         has_each = "for_each" in st
-        for ref in _refs({k: st.get(k) for k in ("params", "input", "for_each", "expect", "xiaonian")}):
+        for ref in _refs({k: st.get(k) for k in ("params", "input", "for_each", "expect", "xiaonian", "when")}):
             head = ref.split(".")[0].split("[")[0]
             if head == "params":
                 name = ref.split(".")[1] if "." in ref else ""
@@ -163,7 +172,7 @@ def validate(wf: dict[str, Any], *, skill_lookup: Callable[[str], Path | None]) 
                 if target not in seen:
                     errs.append(f"{where} ${{{ref}}} 只能引用前面的步骤")
             elif head == "item":
-                if not has_each:
+                if not has_each or ref in _refs(st.get("when")):
                     errs.append(f"{where} ${{item}} 只能用在带 for_each 的步骤里")
             else:
                 errs.append(f"{where} 看不懂 ${{{ref}}} (只能用 params / steps / item)")
@@ -171,6 +180,25 @@ def validate(wf: dict[str, Any], *, skill_lookup: Callable[[str], Path | None]) 
             errs.append(f"{where} for_each 要写成 ${{steps.某步.某个列表}}")
         if sid:
             seen.append(sid)
+    return errs
+
+
+def _when_problems(when: Any, where: str) -> list[str]:
+    if when is None:
+        return []
+    if not isinstance(when, dict) or set(when) - {"of", "is", "to"}:
+        return [f"{where} 条件要写成 {{of: ${{steps.某步.字段}}, is: 比较, to: 值}}"]
+    errs = []
+    of = when.get("of")
+    if not (isinstance(of, str) and _REF.fullmatch(of.strip())):
+        errs.append(f"{where} 条件的 of 要写成一个 ${{...}} (拿哪个值来比)")
+    op = when.get("is")
+    if op not in WHEN_UNARY + WHEN_BINARY:
+        errs.append(f"{where} 条件的 is 只能是 {' / '.join(WHEN_UNARY + WHEN_BINARY)}")
+    elif op in WHEN_BINARY and when.get("to") in (None, ""):
+        errs.append(f"{where} 条件「{WHEN_LABEL[op]}」要写 to (跟什么比)")
+    elif op in WHEN_UNARY and "to" in when:
+        errs.append(f"{where} 条件「{WHEN_LABEL[op]}」不用写 to")
     return errs
 
 
@@ -184,7 +212,8 @@ def _lookup(path: str, ctx: dict[str, Any]) -> Any:
             raise StepFailure(f"看不懂 ${{{path}}}")
         key, idx = m.group(1), m.group(2)
         if not isinstance(cur, dict) or key not in cur:
-            raise StepFailure(f"${{{path}}} 取不到: 没有「{key}」", "missing_ref", path=path, key=key)
+            raise StepFailure(f"${{{path}}} 取不到: 没有「{key}」", "missing_ref", path=path, key=key,
+                              skipped=isinstance(cur, dict) and bool(cur.get("_skipped")))
         cur = cur[key]
         for n in re.findall(r"\[(\d+)\]", idx):
             if not isinstance(cur, list) or int(n) >= len(cur):
@@ -266,6 +295,69 @@ def run_block(st: dict[str, Any], args: dict[str, Any], ctx: dict[str, Any]) -> 
         raise StepFailure(str(e), "xiaonian") from None
 
 
+def when_text(when: dict[str, Any], wf: dict[str, Any]) -> str:
+    """条件的中文说法 (步骤链上 / 编辑器里): 「第 2 步 (核对) 的 ok 不是」。"""
+    of = str(when.get("of") or "")
+    m = re.fullmatch(r"\$\{\s*steps\.([a-z][a-z0-9_]*)\.?([^}]*)\}", of.strip())
+    if m:
+        j, st = _step_by_id(wf, m.group(1))
+        src = f"第 {j + 1} 步「{step_label(st)}」" + (f"的 {m.group(2)}" if m.group(2) else "") if st else of
+    else:
+        pm = re.fullmatch(r"\$\{\s*params\.([A-Za-z_][A-Za-z0-9_]*)\s*\}", of.strip())
+        src = f"参数 {pm.group(1)}" if pm else of
+    op = WHEN_LABEL.get(str(when.get("is")), str(when.get("is")))
+    return f"{src} {op}{'' if when.get('to') in (None, '') else ' ' + str(when.get('to'))}"
+
+
+def _num(v: Any) -> float:
+    if isinstance(v, bool):
+        raise ValueError
+    if isinstance(v, list):
+        return float(len(v))
+    return float(v)
+
+
+def when_holds(when: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, str]:
+    """条件成不成立 + 一句话 (跳过时记进运行记录)。
+    条件看的那一步自己被跳过了 → 这一步也跳过 (「不合格才提醒」不能因为没核对就当不合格); 别的取不到当「没有内容」。"""
+    try:
+        v = resolve(when["of"], ctx)
+    except StepFailure as e:
+        if e.data.get("skipped"):
+            return False, f"{when['of']} 那一步这次被跳过了, 这一步也跳过"
+        v = None
+    op, to = when["is"], when.get("to")
+    if to is not None:
+        to = resolve(to, ctx)
+    empty = v is None or v == "" or v == [] or v == {}
+    falsy = empty or v is False or str(v).strip().lower() in ("false", "no", "否", "0", "不合格")
+    if op == "not_empty":
+        ok = not empty
+    elif op == "empty":
+        ok = empty
+    elif op == "true":
+        ok = not falsy
+    elif op == "false":
+        ok = falsy
+    elif op == "contains":
+        ok = (str(to) in [str(x) for x in v]) if isinstance(v, list) else (str(to) in ("" if v is None else str(v)))
+    elif op in ("eq", "ne"):
+        try:
+            same = _num(v) == _num(to)
+        except (TypeError, ValueError):
+            same = str("" if v is None else v).strip() == str(to).strip()
+        ok = same if op == "eq" else not same
+    else:
+        try:
+            a, b = _num(v), _num(to)
+        except (TypeError, ValueError):
+            raise StepFailure(f"条件要比大小, 但「{when['of']}」取到的不是数字: {str(v)[:40]}", "when") from None
+        ok = {"gt": a > b, "ge": a >= b, "lt": a < b, "le": a <= b}[op]
+    shown = f"{len(v)} 项" if isinstance(v, list) else ("空" if empty else str(v)[:40])
+    text = f"{when['of']} 是 {shown}, 条件「{WHEN_LABEL[op]}{'' if to is None else ' ' + str(to)[:40]}」{'成立' if ok else '不成立'}"
+    return ok, text
+
+
 def _count(out: dict[str, Any]) -> int:
     if isinstance(out.get("count"), int):
         return out["count"]
@@ -302,7 +394,7 @@ def _audit(run: dict[str, Any]) -> None:
     _write_skill_audit({"ts": store.now(), "kind": "workflow", "skill_path": run["skill_path"],
                         "skill_version": run.get("version"), "run_id": run["run_id"], "status": run["status"],
                         "param_keys": sorted(run.get("params") or {}),
-                        "steps": [{"id": s["id"], "block": s.get("block"), "ok": s.get("status") == "done",
+                        "steps": [{"id": s["id"], "block": s.get("block"), "ok": s.get("status") in ("done", "skipped"),
                                    "ms": s.get("ms")} for s in run["steps"]]})
 
 
@@ -344,6 +436,9 @@ def humanize(wf: dict[str, Any], i: int, st: dict[str, Any], e: Exception) -> tu
         ref = str(data.get("path") or "").split(".")
         j, ref_st = _step_by_id(wf, ref[1]) if len(ref) > 2 and ref[0] == "steps" else (-1, None)
         src = f"第 {j + 1} 步「{step_label(ref_st)}」" if ref_st else "前面那一步"
+        if data.get("skipped"):
+            return (f"第 {n} 步要用{src}的结果，但那一步这次因为条件不满足被跳过了。"
+                    "给这一步也加上同样的条件 (或者改成不依赖它)，需要改一下工作流。", "workflow")
         return (f"第 {n} 步要用{src}的「{data.get('key')}」，但那一步的结果里没有它。"
                 "这是工作流本身写得跟实际结果对不上，需要改一下工作流 (可以让小鲶改)。", "workflow")
     if kind == "files_min":
@@ -353,6 +448,8 @@ def humanize(wf: dict[str, Any], i: int, st: dict[str, Any], e: Exception) -> tu
         return f"第 {n} 步「{label}」做完了，但结果里没看到「{data.get('want')}」，没达到预期。从这一步重跑试试。", "retry"
     if kind == "for_each":
         return f"第 {n} 步要逐条处理前面给出的列表，但拿到的不是列表。需要改一下工作流。", "workflow"
+    if kind == "when":
+        return f"第 {n} 步的条件要比大小，但拿到的不是数字 ({msg[:80]})。需要改一下这一步的条件。", "workflow"
     if kind == "too_many":
         return f"第 {n} 步要逐条处理 {data.get('got')} 条，一次最多 {MAX_FOR_EACH} 条。缩小范围 (比如少看几天) 再跑。", "conditions"
     if re.search(r"登录|token|401|未授权|unauthor", msg, re.I):
@@ -456,13 +553,21 @@ def _advance(run: dict[str, Any], start_index: int) -> dict[str, Any]:
     run["status"], run["pending"], run["error"] = "running", None, None
     run["error_human"] = run["error_fix"] = run["outcome"] = None
     run["steps"] = run["steps"][:start_index]
-    ctx: dict[str, Any] = {"params": run["params"], "steps": {s["id"]: s.get("result") or {} for s in run["steps"]}}
+    ctx: dict[str, Any] = {"params": run["params"],
+                           "steps": {s["id"]: ({"_skipped": True} if s.get("status") == "skipped" else s.get("result") or {})
+                                     for s in run["steps"]}}
     auto = store.auto_confirm_outward(run["skill_path"])
     for i in range(start_index, len(steps)):
         st = steps[i]
         sid = st["id"]
         needs_ok = (is_outward(st) and not auto) or bool(st.get("confirm"))
         try:
+            if st.get("when"):
+                holds, why = when_holds(st["when"], ctx)
+                if not holds:
+                    run["steps"].append({"id": sid, "block": block_of(st), "status": "skipped", "reason": why})
+                    ctx["steps"][sid] = {"_skipped": True}
+                    continue
             if needs_ok and sid not in run["approved"]:
                 preview = (resolve(st.get("params") or {}, ctx))
                 each = resolve(st["for_each"], ctx) if "for_each" in st else None

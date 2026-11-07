@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /** 提醒条状态 (11/07): 挂 / 稍后 / 关 / 标完成 / 排序 / 重启后还在。 */
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   briefingReminder,
@@ -162,6 +162,9 @@ describe("store", () => {
   });
 
   it("持久化: 重启后挂着的、稍后中的、处理过的都还在; 过期的清掉", () => {
+    // 重启加载时按「现在」清过期的: 现在也钉在 T (11/08 起真实时间过了 T 当天午夜, 「今天不再提醒」那条被当过期清掉)
+    vi.useFakeTimers();
+    vi.setSystemTime(T);
     const s = useRemindersStore.getState();
     s.add(deadline("A", "2026-11-08T18:00:00"), T);
     s.add(deadline("B", "2026-11-09T18:00:00"), T);
@@ -174,6 +177,7 @@ describe("store", () => {
     expect(after.items.map((r) => r.id).sort()).toEqual(["deadline:A", "deadline:B"]);
     expect(after.items.find((r) => r.id === "deadline:B")?.snoozedUntil).toBe(tomorrowNineAm(T));
     expect(after.handled["deadline:C"]).toBe(nextLocalMidnight(T));
+    vi.useRealTimers();
   });
 
   it("localStorage 坏数据 / 写不进不报错", () => {

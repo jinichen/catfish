@@ -1,5 +1,6 @@
 /** 单个 tool 调用展示 —— 折叠式,默认收起,点开看 args / result */
 
+import { BuildOverviewButton, TaughtReapply } from "./ChatExpertBuild";
 import { ExpertSuggestButton } from "./ExpertPicker";
 import { useState } from "react";
 import type { ToolCall } from "../../types/chat";
@@ -181,6 +182,9 @@ export default function ChatToolCall({ call }: Props) {
       {credentialReq && <InlineCredentialPrompt req={credentialReq} />}
       {/* 10/18: 小鲶推荐找专家 (catfish_expert suggest) → 「切到 X」按钮, 员工点了才切。折叠状态也显示。 */}
       {call.status === "done" && call.name?.endsWith("catfish_expert") && <ExpertSuggestButton resultText={resultStr} />}
+      {/* 11/08 一句话搭专家: 起草好总览卡 → 打开; 教会了「还不会」的那件 → 专家自动重新生效 */}
+      {call.status === "done" && call.name?.endsWith("catfish_workflow") && <BuildOverviewButton resultText={resultStr} />}
+      {call.status === "done" && call.name?.endsWith("catfish_freeze_skill") && <TaughtReapply callId={call.id} resultText={resultStr} />}
     </div>
   );
 }

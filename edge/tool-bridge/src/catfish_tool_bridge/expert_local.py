@@ -121,7 +121,13 @@ def normalize(raw: dict[str, Any]) -> dict[str, Any]:
             problems.append(f"第 {i} 条选路用的「{use}」不在这个专家选中的工作流 / 技能里")
         routes.append({"when": when[:120], "use": use,
                        "ask": [str(a).strip()[:80] for a in r.get("ask") or [] if str(a).strip()][:5]})
-    if not routes:
+    # 11/08 一句话搭专家: 还不会、要员工先教一遍的事 (教完自动接进选路, 见 expert_builder.attach_taught)
+    todo = []
+    for t in raw.get("todo") or []:
+        if isinstance(t, dict) and str(t.get("when") or "").strip() and str(t.get("what") or "").strip():
+            todo.append({"when": str(t["when"]).strip()[:120], "what": str(t["what"]).strip()[:200],
+                         "teach_name": str(t.get("teach_name") or "").strip()[:40]})
+    if not routes and not todo:
         problems.append("至少写一条选路: 什么事走哪个工作流 (或查知识库)")
     if len(routes) > MAX_ROUTES:
         problems.append(f"选路最多 {MAX_ROUTES} 条")
@@ -137,7 +143,7 @@ def normalize(raw: dict[str, Any]) -> dict[str, Any]:
         "id": eid, "name": name[:30], "description": str(raw.get("description") or "").strip()[:200],
         "persona": str(raw.get("persona") or "").strip()[:20000],
         "quick_prompts": [str(q).strip()[:80] for q in raw.get("quick_prompts") or [] if str(q).strip()][:6],
-        "workflows": workflows, "skills": skills, "routes": routes,
+        "workflows": workflows, "skills": skills, "routes": routes, "todo": todo[:10],
         "checks": [{"after": str(c.get("after") or "").strip(), "verify": str(c.get("verify") or "").strip()[:200]}
                    for c in raw.get("checks") or [] if isinstance(c, dict) and str(c.get("verify") or "").strip()][:10],
         "tool_groups": groups, "allow_web": bool(raw.get("allow_web")), "allow_code": bool(raw.get("allow_code")),
@@ -233,6 +239,11 @@ def build_soul(d: dict[str, Any]) -> str:
         lines.append(f"{i}. 员工要「{r['when']}」 → {_use_text(r['use'])}")
         if r.get("ask"):
             lines.append(f"   开始前先确认 (员工没说就问): {'; '.join(r['ask'])}")
+    if d.get("todo"):
+        lines += ["", "## 还不会的事 (员工还没教过, 不要硬做、不要用别的办法凑)", ""]
+        for t in d["todo"]:
+            lines.append(f"- 员工要「{t['when']}」 → 说「这件事我还不会: 要{t['what']}。请在工作台「专家」里点「现在教」,"
+                         " 你演示一遍我就会了」")
     lines += ["", "不在上面任何一条里的事: 说「这件事不归我管, 请在对话框上方「找谁」切回小鲶」, 不要硬做。", ""]
     if d.get("checks"):
         lines += ["## 交付前核对 (告诉员工结果之前逐条自查, 没做到就补上或者明说)", ""]
@@ -381,7 +392,7 @@ def suggest(name: str, description: str, *, llm=None) -> dict[str, Any]:
 
 
 def pim_handlers(params: dict[str, Any]) -> dict[str, Any]:
-    from . import expert_pack  # noqa: PLC0415
+    from . import expert_builder, expert_pack  # noqa: PLC0415
     eid = str(params.get("id") or "")
     return {
         "pim/expert_catalog": catalog,
@@ -392,4 +403,5 @@ def pim_handlers(params: dict[str, Any]) -> dict[str, Any]:
         "pim/expert_delete": lambda: (delete(eid), {"ok": True})[1],
         "pim/expert_suggest": lambda: suggest(str(params.get("name") or ""), str(params.get("description") or "")),
         **expert_pack.pim_handlers(params),
+        **expert_builder.pim_handlers(params),   # 11/08 一句话搭专家
     }

@@ -16,6 +16,7 @@ import {
 import { useUIStore } from "../../store/ui";
 import { Overlay, muted } from "../Collab/formsUi";
 import { Btn, ErrorLine, cardStyle, inputStyle, itemStyle } from "../Collab/roomLinkUi";
+import ExpertBuildCard from "./ExpertBuildCard";
 import { InstallDialog, MarketSection, MineSection, PublishDialog } from "./ExpertPackUi";
 
 type InstallSource = { path: string } | { from: "hub"; id: string; version: string };
@@ -194,6 +195,12 @@ export function Editor({ initial, isNew, cat, onClose, onSaved }: {
         </div>
       ))}
       <div><Btn kind="ghost" onClick={() => set({ checks: [...d.checks, { after: "", verify: "" }] })}>+ 加一条核对</Btn></div>
+      {(d.todo ?? []).length > 0 && (
+        <div style={{ fontSize: 12, color: "var(--status-warn, #d97706)" }}>
+          还不会的事 (在上面「一句话搭专家」的卡上点「现在教」, 教完自动接上):{" "}
+          {(d.todo ?? []).map((t) => `${t.when} —— ${t.what}`).join("; ")}
+        </div>
+      )}
 
       <strong style={{ fontSize: 13 }}>还能用哪些能力 (工作流里的步骤不用勾, 会自动带上)</strong>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
@@ -317,6 +324,8 @@ export default function ExpertsCard() {
           <Btn kind="primary" disabled={!cat} onClick={() => setEditing({ def: blank(), isNew: true })}>新建专家</Btn>
         </div>
       </div>
+      {/* 11/08 一句话搭专家: 起草总览卡, 看过一次落地 */}
+      <ExpertBuildCard onApplied={() => void load()} />
       {error && <ErrorLine>{error}</ErrorLine>}
       {notice && <span style={{ fontSize: 12, color: "var(--status-ok, #16a34a)" }}>{notice}</span>}
       {list.length === 0 && <span style={muted}>还没有专家。</span>}

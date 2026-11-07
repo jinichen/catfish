@@ -4,15 +4,68 @@
  * 一列卡片, 不做拖拽连线: 加一步 (从积木目录挑) / 上下移 / 删; 每个参数可以填固定值、选工作流参数,
  * 或从下拉里选**前面某一步声明过的输出** —— 下拉里没有的东西选不到, 写不出指向不存在的数据。
  * 对外的积木会停下等确认, 勾选框锁定; 别的步骤也可以自己勾「这步要我确认」。
+ * 11/08: 每一步可以设「满足条件才做」—— 从下拉里选前面某一步的结果, 选怎么比 (有内容 / 是 / 大于 / 包含 …),
+ *        不满足就跳过这一步。分支 = 两步设相反的条件 (「不合格才建提醒」「合格才归档」)。
  */
 import { useState, type CSSProperties } from "react";
 
-import type { CatalogAction, CatalogSkill, ReturnType, Workflow, WorkflowStep } from "../../lib/tauri_workflows";
+import type { CatalogAction, CatalogSkill, ReturnType, StepWhen, WhenOp, Workflow, WorkflowStep } from "../../lib/tauri_workflows";
 import { Btn, inputStyle } from "../Collab/roomLinkUi";
 
 const RETURN_TYPES: ReturnType[] = ["text", "number", "list", "bool", "date"];
 const LEVEL_LABEL = { read: "查", local: "写 (本机)", outward: "对外 · 会停下等你确认" } as const;
 const small: CSSProperties = { ...inputStyle, padding: "4px 8px", fontSize: 12 };
+/** 条件怎么比 (跟 tool-bridge skill_workflow.WHEN_LABEL 一一对应) */
+export const WHEN_OPS: { op: WhenOp; label: string; binary: boolean }[] = [
+  { op: "not_empty", label: "有内容", binary: false }, { op: "empty", label: "没有内容", binary: false },
+  { op: "true", label: "是 (成立)", binary: false }, { op: "false", label: "不是 (不成立)", binary: false },
+  { op: "eq", label: "等于", binary: true }, { op: "ne", label: "不等于", binary: true },
+  { op: "gt", label: "大于", binary: true }, { op: "ge", label: "不少于", binary: true },
+  { op: "lt", label: "小于", binary: true }, { op: "le", label: "不超过", binary: true },
+  { op: "contains", label: "包含", binary: true },
+];
+
+/** 选了一种比法后的条件: 不用比较值的去掉 to, 要的保留原来填的 */
+export function withOp(w: StepWhen, op: WhenOp): StepWhen {
+  const binary = WHEN_OPS.find((x) => x.op === op)?.binary;
+  const { to, ...rest } = w;
+  return binary ? { ...rest, is: op, ...(to !== undefined ? { to } : {}) } : { ...rest, is: op };
+}
+
+function WhenRow({ when, sources, onChange }: { when?: StepWhen; sources: { value: string; label: string }[];
+                                                onChange: (w: StepWhen | undefined) => void }) {
+  const choices = sources.filter((x) => x.value !== "${item}");
+  const op = WHEN_OPS.find((x) => x.op === when?.is);
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", gap: 6, alignItems: "center" }}>
+      <span style={{ fontSize: 12 }} title="不满足就跳过这一步; 后面要用这一步结果的步骤也会跟着跳过">什么时候做</span>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <select value={when ? "if" : ""} style={{ ...small, width: "auto" }} aria-label="这一步什么时候做"
+                onChange={(e) => onChange(e.target.value ? { of: choices[0]?.value ?? "", is: "not_empty" } : undefined)}>
+          <option value="">总是做</option>
+          <option value="if" disabled={!choices.length}>满足条件才做</option>
+        </select>
+        {when && (
+          <>
+            <select value={when.of} onChange={(e) => onChange({ ...when, of: e.target.value })} style={{ ...small, width: "auto", maxWidth: 260 }}
+                    aria-label="拿哪个值来比">
+              {!choices.some((c) => c.value === when.of) && <option value={when.of}>{when.of}</option>}
+              {choices.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+            </select>
+            <select value={when.is} onChange={(e) => onChange(withOp(when, e.target.value as WhenOp))} style={{ ...small, width: "auto" }}
+                    aria-label="怎么比">
+              {WHEN_OPS.map((x) => <option key={x.op} value={x.op}>{x.label}</option>)}
+            </select>
+            {op?.binary && (
+              <input value={when.to == null ? "" : String(when.to)} onChange={(e) => onChange({ ...when, to: e.target.value })}
+                     placeholder="跟什么比" style={{ ...small, width: 120 }} aria-label="跟什么比" />
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export interface Catalog {
   actions: CatalogAction[];
@@ -124,6 +177,9 @@ function StepCard({ wf, i, cat, onChange, onMove, onRemove }: {
             </select>
           </div>
         </>
+      )}
+      {(i > 0 || Object.keys(wf.params ?? {}).length > 0 || s.when) && (
+        <WhenRow when={s.when} sources={sources} onChange={(w) => set({ when: w })} />
       )}
       <div style={{ display: "flex", gap: 14, fontSize: 12, alignItems: "center", flexWrap: "wrap" }}>
         <label style={{ display: "flex", gap: 4, alignItems: "center" }}>

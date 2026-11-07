@@ -175,7 +175,7 @@ def list_drafts() -> list[dict[str, Any]]:
     for p in sorted(drafts_dir().glob("*.json")):
         d = _read(p)
         if d:
-            out.append({k: d.get(k) for k in ("name", "title", "namespace", "description", "saved_at")}
+            out.append({k: d.get(k) for k in ("name", "title", "namespace", "description", "saved_at", "from_build")}
                        | {"steps": len((d.get("workflow") or {}).get("steps") or [])})
     return out
 
