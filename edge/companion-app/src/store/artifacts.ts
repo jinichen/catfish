@@ -1,4 +1,9 @@
-/** 11/07 对话右侧成果区的开关 / 当前文件 / 宽度。宽度记在本机 (localStorage), 下次打开还是这么宽。 */
+/**
+ * 11/07 对话右侧栏: 开着哪一页 (成果 / 浏览器)、成果页显示哪个文件、宽度。宽度记在本机 (localStorage), 下次打开还是这么宽。
+ *
+ * 自动打开 (小鲶写出新文件 / 开始操作浏览器) 走 autoOpen / autoBrowser: 这一轮里你自己开过 / 切过 / 关过右栏,
+ * 就不再自动抢 (userActedAt 比这一轮开始晚)。
+ */
 import { create } from "zustand";
 
 const WIDTH_KEY = "catfish.artifactPanel.width";
@@ -14,20 +19,28 @@ function loadWidth(): number {
   }
 }
 
+export type PanelView = "file" | "browser";
+
 interface ArtifactState {
-  /** 右栏正在显示的文件; null = 右栏关着 */
+  /** 右栏开着哪一页; null = 右栏关着 */
+  view: PanelView | null;
+  /** 成果页显示的文件 (切到浏览器页时保留, 切回来还在) */
   path: string | null;
   width: number;
   /** 点「刷新」+1, 让显示区重读 */
   reloadKey: number;
-  /** 用户自己最后一次打开 / 切换 / 关闭右栏的时间。这一轮里用户动过, 自动打开就不再抢 (11/07) */
+  /** 用户自己最后一次打开 / 切换 / 关闭右栏的时间 */
   userActedAt: number;
-  /** 用户点的: 胶囊「预览」、正文文件名、右栏顶上切换 */
+  /** 用户点的: 胶囊「预览」、正文文件名、成果页顶上切换文件 */
   openArtifact: (path: string) => void;
+  /** 用户点的: 右栏顶上切「成果 / 浏览器」 */
+  showView: (view: PanelView) => void;
   /** 用户点的关闭 */
   close: () => void;
-  /** 小鲶写出了新文件, 自动打开; 这一轮 (since 之后) 用户自己开过 / 关过就不动 */
+  /** 小鲶写出了新文件, 自动打开 */
   autoOpen: (path: string, since: number) => void;
+  /** 小鲶开始操作浏览器, 自动切到浏览器页 */
+  autoBrowser: (since: number) => void;
   /** 换对话时收起 (不算用户操作) */
   dismiss: () => void;
   setWidth: (w: number) => void;
@@ -35,15 +48,18 @@ interface ArtifactState {
 }
 
 export const useArtifactStore = create<ArtifactState>((set) => ({
+  view: null,
   path: null,
   width: loadWidth(),
   reloadKey: 0,
   userActedAt: 0,
-  openArtifact: (path) => set({ path, userActedAt: Date.now() }),
-  close: () => set({ path: null, userActedAt: Date.now() }),
+  openArtifact: (path) => set({ path, view: "file", userActedAt: Date.now() }),
+  showView: (view) => set({ view, userActedAt: Date.now() }),
+  close: () => set({ view: null, userActedAt: Date.now() }),
   autoOpen: (path, since) =>
-    set((s) => (s.userActedAt >= since || s.path === path ? s : { path })),
-  dismiss: () => set({ path: null }),
+    set((s) => (s.userActedAt >= since || (s.view === "file" && s.path === path) ? s : { path, view: "file" })),
+  autoBrowser: (since) => set((s) => (s.userActedAt >= since || s.view === "browser" ? s : { view: "browser" })),
+  dismiss: () => set({ view: null, path: null }),
   setWidth: (w) => {
     const width = Math.max(ARTIFACT_MIN_WIDTH, Math.round(w));
     try {

@@ -184,6 +184,7 @@ pub(crate) fn handler(
             crate::commands::artifacts::artifact_stat,
             crate::commands::artifacts::artifact_read_text,
             crate::commands::artifacts::artifact_office_preview,
+            crate::commands::browser_view::browser_view_endpoint, // 11/07 右侧浏览器页: 鲶鱼 Chrome 的调试地址
             // file_parse (五一 sprint Day 1: 文件上传解析 PDF/Excel/Word/CSV/TXT/MD)
             crate::commands::file_parse::parse_file,
             crate::commands::file_parse::parse_file_from_b64,

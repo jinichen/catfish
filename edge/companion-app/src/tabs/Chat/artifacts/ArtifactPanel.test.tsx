@@ -18,14 +18,14 @@ const stat = (path: string, kind: string, mtime = 1000) => ({ path, name: path.s
 
 beforeEach(() => {
   invoke.mockReset();
-  useArtifactStore.setState({ path: null, reloadKey: 0 });
+  useArtifactStore.setState({ path: null, view: null, reloadKey: 0 });
 });
 afterEach(cleanup);
 
 describe("ArtifactPanel", () => {
   it("网页: iframe 走 asset 地址, 只开 allow-scripts (碰不到 Companion)", async () => {
     invoke.mockImplementation(async (cmd: string, a: { path: string }) => (cmd === "artifact_stat" ? stat(a.path, "html") : null));
-    useArtifactStore.setState({ path: "/Users/x/out/报告.html" });
+    useArtifactStore.setState({ path: "/Users/x/out/报告.html", view: "file" });
     render(<ArtifactPanel paths={["/Users/x/out/报告.html"]} />);
     const frame = await screen.findByTitle("报告.html");
     expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
@@ -40,7 +40,7 @@ describe("ArtifactPanel", () => {
       if (cmd === "artifact_read_text") return { b64: b64(a.path.endsWith(".md") ? "# 周报\n\n正文" : "名称,金额\n甲,1"), truncated: false, size: 10 };
       return null;
     });
-    useArtifactStore.setState({ path: "/Users/x/a.md" });
+    useArtifactStore.setState({ path: "/Users/x/a.md", view: "file" });
     render(<ArtifactPanel paths={["/Users/x/a.md", "/Users/x/b.csv"]} />);
     expect(await screen.findByRole("heading", { name: "周报" })).toBeTruthy();
     fireEvent.change(screen.getByLabelText(/这段对话的成果，共 2 个/), { target: { value: "/Users/x/b.csv" } });
@@ -58,7 +58,7 @@ describe("ArtifactPanel", () => {
         ] };
       return null;
     });
-    useArtifactStore.setState({ path: "/Users/x/t.xlsx" });
+    useArtifactStore.setState({ path: "/Users/x/t.xlsx", view: "file" });
     render(<ArtifactPanel paths={[]} />);
     expect(await screen.findByRole("cell", { name: "12" })).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "汇总" }));
@@ -67,11 +67,11 @@ describe("ArtifactPanel", () => {
 
   it("文件不在了: 显示原因; 关闭按钮关掉右栏", async () => {
     invoke.mockRejectedValue("文件不存在: /Users/x/gone.pdf");
-    useArtifactStore.setState({ path: "/Users/x/gone.pdf" });
+    useArtifactStore.setState({ path: "/Users/x/gone.pdf", view: "file" });
     render(<ArtifactPanel paths={[]} />);
     expect(await screen.findByText("文件不存在: /Users/x/gone.pdf")).toBeTruthy();
-    fireEvent.click(screen.getByLabelText("关闭预览"));
-    expect(useArtifactStore.getState().path).toBeNull();
+    fireEvent.click(screen.getByLabelText("关闭右侧栏"));
+    expect(useArtifactStore.getState().view).toBeNull();
   });
 
   it("文件被改了 (修改时间变) 自动重读", async () => {
@@ -84,7 +84,7 @@ describe("ArtifactPanel", () => {
         if (cmd === "artifact_read_text") return { b64: b64(body), truncated: false, size: 9 };
         return null;
       });
-      useArtifactStore.setState({ path: "/Users/x/n.txt" });
+      useArtifactStore.setState({ path: "/Users/x/n.txt", view: "file" });
       render(<ArtifactPanel paths={[]} />);
       expect(await screen.findByText("第一版")).toBeTruthy();
       mtime = 2000;
@@ -96,6 +96,22 @@ describe("ArtifactPanel", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("右侧栏两页", () => {
+  it("切到浏览器页: 小鲶的浏览器没开时说清楚, 给「打开」按钮; 切页算用户操作", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "browser_view_endpoint") throw "小鲶的浏览器还没打开";
+      return null;
+    });
+    useArtifactStore.setState({ view: "file", path: null, userActedAt: 0 });
+    render(<ArtifactPanel paths={[]} />);
+    expect(screen.getByText(/这段对话还没有生成文件/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "浏览器" }));
+    expect(await screen.findByRole("button", { name: "打开小鲶的浏览器" })).toBeTruthy();
+    expect(useArtifactStore.getState().userActedAt).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /我来操作/ })).toHaveProperty("disabled", true);
   });
 });
 

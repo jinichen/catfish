@@ -24,7 +24,7 @@ import ChatSidebar from "./ChatSidebar";
 // P3.3.19 C Phase 3 (6/11): 工作台 chat 加 task picker, 让员工直接从工作台进 task 上下文
 // (跟早安 DetailPane 共享同一 session, 哪边发都进同条 db row)
 import TaskPicker from "./TaskPicker";
-// 11/07: 对话右侧成果区 (小鲶生成的网页 / 文档 / 表格 / 图片在右边看)
+// 11/07: 对话右侧栏 —— 成果 (小鲶生成的网页 / 文档 / 表格 / 图片) + 浏览器 (小鲶在操作的网页)
 import ArtifactPanel from "./artifacts/ArtifactPanel";
 import { useArtifactAutoOpen } from "./artifacts/useArtifactAutoOpen";
 import { useArtifactStore } from "../../store/artifacts";
@@ -324,12 +324,12 @@ export default function ChatTab() {
     return () => window.clearInterval(t);
   }, [persistedSessionId, isStreaming, messages.length, loadSession, loadSessionAttachments]);
 
-  const artifactPath = useArtifactStore((s) => s.path);
+  const artifactView = useArtifactStore((s) => s.view);
   const artifactPaths = useMemo(() => sessionArtifactPaths(messages), [messages]);
   useArtifactAutoOpen(messages, isStreaming, persistedSessionId);
 
   return (
-    <div className={artifactPath ? "chat-workspace chat-workspace--with-artifact" : "chat-workspace"}>
+    <div className={artifactView ? "chat-workspace chat-workspace--with-artifact" : "chat-workspace"}>
       <ChatSidebar
         activeId={persistedSessionId}
         onSelect={handleSelect}
@@ -439,7 +439,7 @@ export default function ChatTab() {
         </div>
       </div>
 
-      {artifactPath && <ArtifactPanel paths={artifactPaths} />}
+      {artifactView && <ArtifactPanel paths={artifactPaths} />}
     </div>
   );
 }

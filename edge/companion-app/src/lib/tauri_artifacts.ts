@@ -89,3 +89,8 @@ export function assetUrlKeepingDirs(path: string): string {
     : parts.map(encodeURIComponent).join("/");
   return base + encoded;
 }
+
+/** 小鲶的浏览器 (鲶鱼 Chrome) 的浏览器级调试地址; 没开着会报「小鲶的浏览器还没打开」 */
+export function browserViewEndpoint(): Promise<string> {
+  return invoke<string>("browser_view_endpoint");
+}

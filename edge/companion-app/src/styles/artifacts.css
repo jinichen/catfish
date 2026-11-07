@@ -45,6 +45,55 @@
   background: var(--catfish-bg-elevated);
 }
 
+/* 顶上「成果 / 浏览器」两页 */
+.artifact-panel__tabs {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: var(--radius-md);
+  background: var(--catfish-bg);
+  gap: 2px;
+}
+.artifact-panel__tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--catfish-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+.artifact-panel__tabs button[aria-selected="true"] {
+  background: var(--catfish-bg-elevated);
+  box-shadow: var(--shadow-sm);
+  color: var(--catfish-text);
+  font-weight: 600;
+}
+.artifact-panel__count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: var(--catfish-cyan-tint);
+  color: var(--catfish-cyan-dim);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+
+/* 每一页自己的工具行 (成果: 文件名 + 刷新 / 打开 / 定位; 浏览器: 前进后退 + 网址 + 我来操作) */
+.artifact-panel__toolbar {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px var(--space-3) 4px var(--space-4);
+  border-bottom: 1px solid var(--catfish-border);
+}
+
 .artifact-panel__title {
   display: flex;
   min-width: 0;
@@ -109,6 +158,7 @@
 }
 
 .artifact-panel__body {
+  position: relative;
   display: flex;
   min-height: 0;
   flex: 1;
@@ -330,4 +380,204 @@
 }
 .artifact-muted {
   color: var(--catfish-text-muted);
+}
+
+.artifact-filelist {
+  margin: var(--space-2) var(--space-4);
+  padding: 0;
+  list-style: none;
+}
+.artifact-filelist button {
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--catfish-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+.artifact-filelist button:hover {
+  background: var(--catfish-bg-elevated);
+}
+
+/* ── 浏览器页 ─────────────────────────────────────────────── */
+.browser-bar {
+  padding-left: var(--space-2);
+}
+.browser-bar__address {
+  min-width: 0;
+  flex: 1;
+}
+.browser-bar__address input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 10px;
+  border: 1px solid var(--catfish-border);
+  border-radius: var(--radius-full);
+  background: var(--catfish-bg-elevated);
+  color: var(--catfish-text);
+  font: inherit;
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
+.browser-bar__address input:focus {
+  border-color: var(--catfish-cyan);
+  outline: none;
+}
+.browser-bar__takeover {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border: 1px solid var(--catfish-border);
+  border-radius: var(--radius-full);
+  background: var(--catfish-bg-elevated);
+  color: var(--catfish-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.browser-bar__takeover[data-on="true"] {
+  border-color: var(--catfish-orange);
+  background: var(--catfish-orange);
+  color: #fff;
+}
+.browser-bar__takeover:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.browser-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.browser-tabs select {
+  min-width: 0;
+  max-width: 70%;
+  padding: 2px 6px;
+  border: 1px solid var(--catfish-border);
+  border-radius: var(--radius-sm);
+  background: var(--catfish-bg-elevated);
+  color: var(--catfish-text);
+  font: inherit;
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
+.browser-tabs button {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--catfish-cyan-dim);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+}
+
+.browser-takeover-note {
+  position: absolute;
+  z-index: 1;
+  bottom: 10px;
+  left: 50%;
+  max-width: calc(100% - 24px);
+  padding: 4px 12px;
+  border-radius: var(--radius-full);
+  background: var(--catfish-orange);
+  box-shadow: var(--shadow-md);
+  color: #fff;
+  font-size: 12px;
+  pointer-events: none;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.browser-empty__actions {
+  display: flex;
+  gap: var(--space-2);
+  margin: var(--space-3) var(--space-4);
+}
+.browser-empty__actions button {
+  padding: 6px 14px;
+  border: 1px solid var(--catfish-border);
+  border-radius: var(--radius-sm);
+  background: var(--catfish-bg-elevated);
+  color: var(--catfish-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+.browser-empty__actions .browser-primary {
+  border-color: transparent;
+  background: var(--catfish-cyan-dim);
+  color: #fff;
+}
+
+.browser-screen {
+  position: relative;
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  background: var(--catfish-bg);
+}
+.browser-screen[hidden] {
+  display: none;
+}
+.browser-screen img {
+  display: block;
+  width: 100%;
+  height: auto;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.browser-screen[data-takeover="true"] img {
+  cursor: default;
+  outline: 2px solid var(--catfish-orange);
+  outline-offset: -2px;
+}
+.browser-screen__tools {
+  position: absolute;
+  z-index: 1;
+  top: 8px;
+  right: 14px;
+  display: flex;
+  gap: 4px;
+}
+.browser-screen__tools button {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--catfish-border);
+  border-radius: var(--radius-full);
+  background: var(--catfish-bg-elevated);
+  color: var(--catfish-text-muted);
+  cursor: pointer;
+  opacity: 0.8;
+}
+.browser-screen__tools button:hover {
+  color: var(--catfish-text);
+  opacity: 1;
+}
+/* 收键盘输入用, 看不见 (不能 display:none —— 那样拿不到焦点, 输入法也不工作) */
+.browser-keys {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+  resize: none;
 }

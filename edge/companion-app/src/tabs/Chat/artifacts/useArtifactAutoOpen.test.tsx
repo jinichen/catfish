@@ -20,7 +20,7 @@ beforeEach(() => {
   invoke.mockImplementation(async (_c: string, a: { path: string }) => ({
     path: a.path, name: "x", ext: "html", kind: "html", size: 1, mtime_ms: a.path.includes("old") ? ROUND - 60_000 : ROUND + 5_000,
   }));
-  useArtifactStore.setState({ path: null, userActedAt: 0 });
+  useArtifactStore.setState({ path: null, view: null, userActedAt: 0 });
 });
 
 describe("useArtifactAutoOpen", () => {
@@ -74,6 +74,22 @@ describe("useArtifactAutoOpen", () => {
     const { rerender } = renderHook(({ id }) => useArtifactAutoOpen([], false, id), { initialProps: { id: "a" as string | null } });
     useArtifactStore.setState({ path: "/Users/x/a.html" });
     rerender({ id: "b" });
-    expect(useArtifactStore.getState()).toMatchObject({ path: null, userActedAt: 0 });
+    expect(useArtifactStore.getState()).toMatchObject({ path: null, view: null, userActedAt: 0 });
+  });
+
+  it("回答进行中小鲶用上浏览器工具 → 切到浏览器页; 之后写出新文件再切回成果", async () => {
+    const browse: ToolCall = { id: "b", name: "mcp__catfish_tools__catfish_browser_goto", args: {}, status: "running" };
+    const { rerender } = renderHook(({ m, s }) => useArtifactAutoOpen(m, s, "sid"), { initialProps: { m: [user], s: true } });
+    rerender({ m: [user, asst("", [browse])], s: true });
+    expect(useArtifactStore.getState().view).toBe("browser");
+    rerender({ m: [user, asst("", [{ ...browse, status: "done" }, call("2", "done", "/Users/x/out/a.html")])], s: true });
+    await waitFor(() => expect(useArtifactStore.getState()).toMatchObject({ view: "file", path: "/Users/x/out/a.html" }));
+  });
+
+  it("这一轮用户关过右栏, 用浏览器也不弹", () => {
+    const { rerender } = renderHook(({ m, s }) => useArtifactAutoOpen(m, s, "sid"), { initialProps: { m: [user], s: true } });
+    useArtifactStore.setState({ userActedAt: ROUND + 1000 });
+    rerender({ m: [user, asst("", [{ id: "b", name: "browser_navigate", args: {}, status: "running" }])], s: true });
+    expect(useArtifactStore.getState().view).toBeNull();
   });
 });
