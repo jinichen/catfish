@@ -407,6 +407,8 @@ pub(crate) fn handler(
             crate::services::email_scheduler::email_classify_now,
             // P3.3.58 段 2B (6/12 鸿波): 前端 trigger 钓鱼扫描
             crate::services::email_scheduler::email_phishing_scan_now,
+            crate::services::phishing_marks::email_phishing_marks,
+            crate::services::phishing_marks::email_phishing_mark,
             // BL-COMPANION-HERMES-API-CONFIG (5/19 Phase 2-2A): 暴露 hermes_api 配置给 React
             crate::services::hermes_api_config::hermes_api_config_get,
             // BL-COMPANION-CHAT-SWITCH-TO-HERMES (5/19 Phase 2-2B): chat.ts 走 hermes 时拿 auth header

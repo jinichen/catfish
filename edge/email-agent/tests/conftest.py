@@ -266,3 +266,10 @@ def make_foxmail_profile(tmp_path: Path):
         return profiles, account
 
     return _factory
+
+
+@pytest.fixture(autouse=True)
+def _isolated_catfish_home(tmp_path_factory, monkeypatch):
+    """11/07: 测试一律写临时目录, 不碰员工真实的 ~/.catfish (Apple Mail 账号编号表等会落盘)。
+    个别测试自己再 setenv CATFISH_HOME 的, 以它为准。"""
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path_factory.mktemp("catfish_home")))

@@ -52,6 +52,7 @@ pub mod desktop_notify;  // 9/23: 系统通知三平台一个入口 (原来只�
 pub mod edge_runtime;  // 9/23: tool-bridge / local-search 从安装包解到 ~/.catfish/edge-runtime
 pub mod endpoints;
 pub mod phishing_llm; // LLM batch 复审 (8/15 从 phishing_scan 切出)
+pub mod phishing_marks; // 11/07: 员工标注「不是钓鱼 / 这是钓鱼」(按发件地址), 改结果 + 给模型当参考
 pub mod phishing_rules; // 5 个工具 + 5 个 scan_* 纯函数 (8/15 从 phishing_scan 切出)
 pub mod phishing_scan;    // P3.3.58 (6/12 鸿波): 钓鱼邮件 deterministic 规则集 + audit chain 留档
 pub mod phishing_config;  // P3.3.65 (6/13 鸿波): 钓鱼规则可配置 yaml + 政企域名白名单

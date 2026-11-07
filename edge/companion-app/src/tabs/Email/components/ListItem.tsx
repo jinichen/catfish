@@ -3,7 +3,11 @@
  * 列表单条邮件渲染. urgency badge (急/中/低) + sender + subject + date.
  */
 
+import { useEffect } from "react";
+
+import { withMark } from "../../../lib/phishingMarks";
 import type { EmailDigestItem, PhishingScanResult, PoliticalScanResult } from "../../../lib/tauri";
+import { usePhishingMarksStore } from "../../../store/phishingMarks";
 import { _extractSenderName, _formatShortDate } from "./helpers";
 
 
@@ -11,7 +15,7 @@ function ListItem({
   item,
   active,
   urgency,
-  phishing,
+  phishing: rawPhishing,
   political,
   replied,
   actionEntry,
@@ -27,6 +31,13 @@ function ListItem({
   actionEntry?: { action: string; deadline?: string };
   onClick: () => void;
 }) {
+  // 11/07: 员工标过这个发件人 (不是钓鱼 / 是钓鱼) 的按标注显示; 标完后台重扫回来的结果优先
+  const marks = usePhishingMarksStore((s) => s.marks);
+  const loadMarks = usePhishingMarksStore((s) => s.load);
+  useEffect(() => { if (!marks) void loadMarks(); }, [marks, loadMarks]);   // 同时只取一次 (store 里合并)
+  const rescanned = usePhishingMarksStore((s) => s.rescanned[item.id]);
+  const shown = withMark(rescanned ?? rawPhishing, item.sender, marks);
+  const phishing = shown ?? undefined;
   return (
     <li
       onClick={onClick}

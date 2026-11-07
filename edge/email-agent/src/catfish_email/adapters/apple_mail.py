@@ -134,6 +134,7 @@ from .apple_mail_emlx import (  # noqa: F401
 # 用 mixin 是为了让方法体逐字节不变 —— 搬运的正确性能机械验证。MRO 里放在
 # EmailAdapter 前面: 兜底方法是本类的实现细节, 不该被基类的同名默认值盖掉。
 from .apple_mail_emlx_path import EmlxFallbackMixin
+from . import apple_mail_account_map as account_map
 
 
 class AppleMailAdapter(EmlxFallbackMixin, EmailAdapter):
@@ -186,6 +187,13 @@ class AppleMailAdapter(EmlxFallbackMixin, EmailAdapter):
             for r in records
         ]
         return self._accounts_cache
+
+    def refresh_account_map(self) -> None:
+        """11/07: 记下「编号 → 账号名 / 邮箱」, Mail 没开走 EMLX 兜底时用 (apple_mail_account_map.py)。
+        `accounts` 命令里调 (鲶鱼每小时取一次本单位邮箱域名); Mail 用不了就什么都不做。"""
+        if self._use_emlx_fallback or not _is_mail_running():
+            return
+        account_map.refresh(_run_osascript)
 
     def account_settings(self) -> list[dict[str, object]]:
         """各账号的收信服务器设置 (9/28), 配 IMAP 直连时带入表单。**没有密码** ——

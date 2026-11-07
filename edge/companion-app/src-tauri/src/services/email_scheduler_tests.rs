@@ -232,3 +232,23 @@ fn dedup_mixed_some_blocked_some_allowed() {
     assert_eq!(allowed.len(), 1);
     assert_eq!(allowed[0].id, "id-B");
 }
+
+/// 11/07: 那一轮本单位邮箱域没取到, 信息安全中心的安全预警按「冒充」报了 —— 域取到后要重判; 员工标过的不动
+#[test]
+fn 本单位域取到后_冒充类误报要重扫() {
+    use super::{spoof_flags_stale, EmailItemInput};
+    let it = EmailItemInput {
+        id: "m1".into(),
+        subject: "【网信安专项2026年第234期】OpenSSH 密码认证绕过漏洞预警".into(),
+        sender: "信息安全中心 <ff_nic@chinatelecom.cn>".into(),
+        account: None, date: None, is_read: None, body_text: None, recipients: None, cc: None,
+    };
+    let wrong = crate::services::phishing_scan::scan_rules_light("m1", &it.subject, &it.sender, &[]);
+    assert!(wrong.flags.iter().any(|f| f.rule_id.starts_with("PHISH-001")), "本单位域为空时确实会误报");
+    let own = vec!["chinatelecom.cn".to_string()];
+    assert!(spoof_flags_stale(&wrong, &it, &own));
+    assert!(!spoof_flags_stale(&wrong, &it, &[]), "域还是空的: 不算过期, 不白白重扫");
+    let mut marked = wrong.clone();
+    marked.user_mark = Some("safe".into());
+    assert!(!spoof_flags_stale(&marked, &it, &own));
+}

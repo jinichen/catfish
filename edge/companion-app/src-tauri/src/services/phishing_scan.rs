@@ -87,6 +87,10 @@ pub struct PhishingScanResult {
     /// 没有这个字段 → 0。
     #[serde(default)]
     pub review_rev: u32,
+    /// 11/07: 员工标过这个发件人 ("safe" 不是钓鱼 / "phishing" 是钓鱼), 见 phishing_marks.rs。
+    /// 红条 / 列表据此显示「你标过」和「撤销」。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_mark: Option<String>,
 }
 
 /// 当前复审规则版本。改了复审提示词 / 判定规则就 +1。
@@ -151,6 +155,7 @@ pub fn scan_rules(msg: &MessageData) -> PhishingScanResult {
         llm_verdict: None,
         llm_reason: None,
         review_rev: 0,
+        user_mark: None,
     }
 }
 

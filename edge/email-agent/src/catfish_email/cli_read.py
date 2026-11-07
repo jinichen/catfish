@@ -110,9 +110,14 @@ def _cmd_accounts(adapters: list[EmailAdapter], args) -> int:
     for adapter in adapters:
         try:
             accs = adapter.list_accounts()
-        except EmailAdapterError as e:
+        except (EmailAdapterError, OSError) as e:
+            # 11/07: OSError 也只算这一个客户端失败 —— macOS 不让读 Foxmail 的目录 (PermissionError)
+            # 时原来整条命令崩掉, Mail 的账号也一起拿不到, 鲶鱼那一轮「本单位邮箱域名」就是空的。
             errors.append(f"[{adapter.name}] 列账号失败: {e}")
             continue
+        refresh = getattr(adapter, "refresh_account_map", None)   # 11/07 Apple Mail: 记下账号编号表
+        if refresh is not None:
+            refresh()
         # 每个 account dict 加 client 字段标识从哪来
         for a in accs:
             d = asdict(a)

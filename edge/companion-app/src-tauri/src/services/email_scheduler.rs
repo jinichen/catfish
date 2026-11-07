@@ -206,13 +206,19 @@ fn classify_snapshot() -> ClassifyNowResult {
 pub async fn email_phishing_scan_now(
     items: Vec<EmailItemInput>,
 ) -> Result<HashMap<String, PhishingScanResult>, String> {
+    // 11/07: 本单位邮箱域变了 (比如那一轮没取到、后来取到了 / 中央下发了), 当时按「冒充本单位」报的要重判
+    let own = super::email_own_domains::own_mail_domains().await;
     // 跳过已 scan 的
     let to_scan: Vec<EmailItem> = {
         let store = phishing_store().lock().map_err(|e| e.to_string())?;
         items
             .iter()
             // 10/31: 只跳过「模型按当前规则看过」的; 复审失败的 (只有规则结果) 再送一次
-            .filter(|it| !store.get(&it.id).is_some_and(|r| r.review_rev >= phishing_scan::PHISHING_REVIEW_REV))
+            .filter(|it| {
+                !store.get(&it.id).is_some_and(|r| {
+                    r.review_rev >= phishing_scan::PHISHING_REVIEW_REV && !spoof_flags_stale(r, it, &own)
+                })
+            })
             .map(|it| EmailItem {
                 id: it.id.clone(),
                 subject: it.subject.clone(),
@@ -485,7 +491,7 @@ async fn scan_phishing_for_new(new_items: &[EmailItem]) {
     // chinatelecom.cn / ffcs.cn —— 装到别的单位就是别人的域; 更糟的是冒充者的域
     // 也算本单位, 「显示名自称安全中心 / 形近域 / 子域冒充」三条规则 (PHISH-001/002/003)
     // 实际上一直没生效。
-    let own_domains = super::email_own_domains::own_mail_domains();
+    let own_domains = super::email_own_domains::own_mail_domains().await;
     let our_domains = own_domains.clone();
 
     // 1. 规则 light scan
@@ -565,7 +571,9 @@ async fn scan_phishing_for_new(new_items: &[EmailItem]) {
         }
     };
 
-    match phishing_llm::batch_llm_review(&llm_inputs, &base_url, &token, &model).await {
+    // 11/07: 员工标过的发件人当参考一起给模型 (phishing_marks.rs)
+    let hints = super::phishing_marks::llm_hints(&super::phishing_marks::load());
+    match phishing_llm::batch_llm_review(&llm_inputs, &hints, &base_url, &token, &model).await {
         Ok(mut verdicts) if verdicts.len() == scans.len() => {
             // 10/31: 本单位发的不进营销档 —— 提示词里说了, 这里再兜一道, 不赌模型每次都听。
             for (v, input) in verdicts.iter_mut().zip(llm_inputs.iter()) {
@@ -625,6 +633,19 @@ async fn scan_phishing_for_new(new_items: &[EmailItem]) {
     store_and_audit(new_items, scans).await;
 }
 
+/// 11/07: 结果里有「冒充本单位」类的规则 (PHISH-001/002/003), 但按现在的本单位邮箱域再跑一遍规则已经不命中了 ——
+/// 那次是本单位域没取到 (或中央后来下发了新域名) 判错的, 要重扫。员工标过的不动。
+pub(crate) fn spoof_flags_stale(r: &PhishingScanResult, it: &EmailItemInput, own: &[String]) -> bool {
+    const SPOOF: &[&str] = &["PHISH-001", "PHISH-002", "PHISH-003"];
+    let is_spoof = |id: &str| SPOOF.iter().any(|p| id.starts_with(p));
+    if r.user_mark.is_some() || !r.flags.iter().any(|f| is_spoof(&f.rule_id)) {
+        return false;
+    }
+    let now = phishing_scan::scan_rules_light(&it.id, &it.subject, &it.sender, own);
+    let had: Vec<&str> = r.flags.iter().map(|f| f.rule_id.as_str()).filter(|id| is_spoof(id)).collect();
+    had.iter().any(|id| !now.flags.iter().any(|f| f.rule_id == *id))
+}
+
 /// 只命中「低置信度」规则 —— 模型明确判 safe 时撤掉标记。
 ///
 /// PHISH-011 (主题含「紧急」) 早就在这张表里。10/31 加 PHISH-001 (显示名含「安全 / 客服 /
@@ -637,7 +658,15 @@ fn is_low_confidence_rule_only(scan: &PhishingScanResult) -> bool {
 }
 
 /// store + audit 提抽成单独函数防多入口重复.
-async fn store_and_audit(items: &[EmailItem], scans: Vec<PhishingScanResult>) {
+async fn store_and_audit(items: &[EmailItem], mut scans: Vec<PhishingScanResult>) {
+    // 11/07: 员工标过的发件人, 按标注改 (标过就算按当前规则判过了, 不再重送模型)
+    let marks = super::phishing_marks::load();
+    for (it, s) in items.iter().zip(scans.iter_mut()) {
+        if let Some(v) = super::phishing_marks::verdict_for(&marks, &it.sender) {
+            super::phishing_marks::apply(s, v);
+            s.review_rev = phishing_scan::PHISHING_REVIEW_REV;
+        }
+    }
     // store
     if let Ok(mut store) = phishing_store().lock() {
         for s in &scans {

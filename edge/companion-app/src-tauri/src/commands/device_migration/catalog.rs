@@ -224,6 +224,9 @@ const CATFISH: &[(Pat, Class, &str)] = &[
     (Exact("mcp_registry.db"), Rebuild, "开发机中央端数据"),
     (Exact("identity-server"), Rebuild, "开发机中央端数据"),
     (Prefix("email"), Rebuild, "邮件分诊 / 列表缓存 (新机重新跑)"),
+    (Exact("phishing_marks.json"), Required, "钓鱼标注 (你标过「不是钓鱼 / 是钓鱼」的发件人)"),
+    (Exact("own_mail_domains.json"), Rebuild, "本单位邮箱域 (新机从中央和邮件客户端重新取)"),
+    (Exact("apple_mail_accounts.json"), Rebuild, "「邮件」App 账号编号表 (新机重新取)"),
     (Exact("imap-source.json"), Rebuild, "邮箱来源 (新机重新配)"),
     (Exact("wechat_archive.json"), Rebuild, "微信导出文件位置 (本机路径)"),
     (Exact("wiki-shared"), Rebuild, "部门共享知识 (从中央重新拉)"),
@@ -387,6 +390,9 @@ mod tests {
         assert_eq!(classify(Root::Catfish, "mcp").0, Secret);
         assert_eq!(classify(Root::Catfish, "search.db").0, Rebuild);
         assert_eq!(classify(Root::Catfish, "email_phishing.json").0, Rebuild);
+        assert_eq!(classify(Root::Catfish, "phishing_marks.json").0, Required);
+        assert_eq!(classify(Root::Catfish, "own_mail_domains.json").0, Rebuild);
+        assert_eq!(classify(Root::Catfish, "apple_mail_accounts.json").0, Rebuild);
         assert_eq!(classify(Root::Catfish, "uploads").0, Optional);
         assert_eq!(classify(Root::Hermes, "state.db").0, Required);
         assert_eq!(classify(Root::Hermes, "SOUL_BROWSER.md").0, Required);

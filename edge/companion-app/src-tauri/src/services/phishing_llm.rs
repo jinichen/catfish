@@ -59,6 +59,7 @@ struct ChatResponse { choices: Vec<ChatChoice> }
 /// base_url 选). callee 不区分, 一律 `Authorization: Bearer {token}`.
 pub async fn batch_llm_review(
     items: &[LlmReviewInput],
+    hints: &[String],
     base_url: &str,
     token: &str,
     model: &str,
@@ -99,7 +100,8 @@ pub async fn batch_llm_review(
                   返 JSON 数组, 每元素 {\"verdict\":\"...\",\"reason\":\"一句话理由\"}. \
                   不要 markdown, 不要解释, 只返 JSON 数组.";
     let user = format!(
-        "{list}\n\n按上面顺序返回 {} 个 verdict 的 JSON 数组. 只返 JSON.",
+        "{}{list}\n\n按上面顺序返回 {} 个 verdict 的 JSON 数组. 只返 JSON.",
+        hints_block(hints),
         items.len()
     );
 
@@ -149,6 +151,17 @@ pub async fn batch_llm_review(
     parse_verdicts(&content, items.len())
 }
 
+/// 11/07: 员工标过的发件人 (phishing_marks.rs) —— 参考, 同一个发件人 / 同类的来信按员工的判断走。
+fn hints_block(hints: &[String]) -> String {
+    if hints.is_empty() {
+        return String::new();
+    }
+    format!(
+        "员工之前对这些发件人的判断 (参考; 同一发件人照此判, 同类来信参照):\n{}\n\n要评的邮件:\n",
+        hints.iter().map(|h| format!("- {}", truncate(h, 80))).collect::<Vec<_>>().join("\n")
+    )
+}
+
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
@@ -156,6 +169,16 @@ fn truncate(s: &str, max: usize) -> String {
         let mut out: String = s.chars().take(max).collect();
         out.push('…');
         out
+    }
+}
+
+#[cfg(test)]
+mod hint_tests {
+    #[test]
+    fn 没标注_不加参考段() {
+        assert_eq!(super::hints_block(&[]), "");
+        let b = super::hints_block(&["ff_nic@chinatelecom.cn → 不是钓鱼 (正常来信)".to_string()]);
+        assert!(b.contains("- ff_nic@chinatelecom.cn → 不是钓鱼") && b.ends_with("要评的邮件:\n"));
     }
 }
 

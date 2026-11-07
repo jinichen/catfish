@@ -286,7 +286,16 @@ export interface PhishingScanResult {
   highestSeverity: PhishingSeverity;
   llmVerdict?: string | null;
   llmReason?: string | null;
+  /** 11/07: 员工标过这个发件人 ("safe" 不是钓鱼 / "phishing" 是钓鱼) */
+  userMark?: "safe" | "phishing" | null;
 }
+/** 11/07 员工的钓鱼标注 (按发件地址, 小写) */
+export interface PhishingSenderMark { verdict: "safe" | "phishing"; at: string; subject: string; name: string }
+export interface PhishingMarks { senders: Record<string, PhishingSenderMark> }
+export const emailPhishingMarks = () => rawInvoke<PhishingMarks>("email_phishing_marks");
+/** 标 / 撤销 (verdict = null)。ids: 这个发件人在列表里的那几封 —— 旧结果删掉, 调用方随后重扫 */
+export const emailPhishingMark = (sender: string, verdict: "safe" | "phishing" | null, subject: string, ids: string[]) =>
+  rawInvoke<{ marks: PhishingMarks; store: Record<string, PhishingScanResult> }>("email_phishing_mark", { sender, verdict, subject, ids });
 export const emailPhishingGet = (ids: string[]) =>
   rawInvoke<Record<string, PhishingScanResult>>("email_phishing_get", { ids });
 

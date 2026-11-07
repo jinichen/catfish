@@ -26,6 +26,7 @@ import { buildEmailSrcDoc, countRemoteRefs } from "../../../lib/emailSrcDoc";
 // P3.5.158 Phase 3 (7/2 鸿波): Compose panel 抽到 ComposeCore 共享组件
 import ComposeCore from "./ComposeCore";
 import MessageHeaderFields from "./MessageHeaderFields";
+import PhishingBanner, { MarkPhishingButton } from "./PhishingBanner";
 import { modKey } from "../../../lib/platformLabels";
 
 interface FullMessage extends EmailDigestItem {
@@ -291,62 +292,8 @@ function DetailPane({
           background: "var(--catfish-bg-elevated)",
         }}
       >
-        {/* P3.3.58 段 2C (6/12 鸿波): 钓鱼红条 — high/medium 触发规则或 LLM 标 phishing/suspicious */}
-        {phishing &&
-          (phishing.highestSeverity === "high" || phishing.highestSeverity === "medium") && (
-            <div
-              style={{
-                marginBottom: 12,
-                padding: "10px 12px",
-                background: phishing.highestSeverity === "high"
-                  ? "rgba(220,38,38,0.08)"
-                  : "rgba(251,146,60,0.08)",
-                border: phishing.highestSeverity === "high"
-                  ? "1px solid rgba(220,38,38,0.4)"
-                  : "1px solid rgba(251,146,60,0.4)",
-                borderRadius: 4,
-                fontSize: 12,
-              }}
-            >
-              <div
-                style={{
-                  fontWeight: 700,
-                  color: phishing.highestSeverity === "high"
-                    ? "rgb(185,28,28)"
-                    : "rgb(194,65,12)",
-                  marginBottom: 6,
-                }}
-              >
-                {phishing.highestSeverity === "high"
-                  ? "⚠ catfish 标记此邮件有钓鱼嫌疑"
-                  : "⚠ catfish 标记此邮件可疑"}
-              </div>
-              {phishing.flags.length > 0 && (
-                <div style={{ marginBottom: 4, color: "var(--catfish-text)" }}>
-                  触发规则 ({phishing.flags.length}):{" "}
-                  {phishing.flags.slice(0, 4).map((f) => f.ruleId).join(", ")}
-                  {phishing.flags.length > 4 && ` 等 ${phishing.flags.length} 条`}
-                </div>
-              )}
-              {phishing.llmVerdict && (
-                <div style={{ marginBottom: 4, color: "var(--catfish-text)" }}>
-                  LLM 复审: <strong>{phishing.llmVerdict}</strong>
-                  {phishing.llmReason ? ` — ${phishing.llmReason}` : ""}
-                </div>
-              )}
-              <div
-                style={{
-                  marginTop: 4,
-                  fontWeight: 600,
-                  color: phishing.highestSeverity === "high"
-                    ? "rgb(185,28,28)"
-                    : "rgb(194,65,12)",
-                }}
-              >
-                审慎打开链接 / 附件 / 回复, 如不确定请咨询信安部门.
-              </div>
-            </div>
-          )}
+        {/* P3.3.58 段 2C (6/12 鸿波): 钓鱼红条; 11/07 抽到 PhishingBanner, 加「不是钓鱼 / 撤销」 */}
+        <PhishingBanner result={phishing} msg={msg} list={list} />
         {/* P3.3.53.2 (6/13 鸿波): 政治敏感红条 — 引擎开 + high/medium 触发 */}
         {political && political.engineEnabled &&
           (political.highestSeverity === "high" || political.highestSeverity === "medium") && (
@@ -539,6 +486,8 @@ function DetailPane({
             ✏️ 回复
           </button>
           </>)}
+          {/* 11/07 没报的信员工觉得是钓鱼: 「标为钓鱼」(按发件地址记), 跟删除一起靠右 */}
+          <MarkPhishingButton result={phishing} msg={msg} list={list} />
           {/* 5/18 BL-EMAIL-DELETE: 两步点击确认 (window.confirm 在 Tauri 不可靠).
               第一次点 → "🗑 再次点击确认" (3s 内有效), 第二次才真删. */}
           <button
@@ -555,7 +504,6 @@ function DetailPane({
               fontWeight: confirmPending ? 600 : 400,
               cursor: deleting ? "wait" : "pointer",
               fontFamily: "inherit",
-              marginLeft: "auto",
             }}
             title={
               onlyInArchive

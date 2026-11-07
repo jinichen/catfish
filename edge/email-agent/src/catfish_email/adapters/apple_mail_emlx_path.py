@@ -37,6 +37,7 @@ from .apple_mail_emlx import (
     _save_attachment_payload_from_source,
 )
 from .base import Account, DataNotFoundError, ListFilter, Message
+from . import apple_mail_account_map as account_map
 
 logger = logging.getLogger("catfish_email.adapters.apple_mail")
 
@@ -100,14 +101,16 @@ class EmlxFallbackMixin:
                 f"EMLX fallback: 找不到 Mail 数据目录 {mail_dir}",
             )
         accounts: list[Account] = []
+        table = account_map.load()   # 11/07: 编号目录 → Mail 里的账号名 / 邮箱 (Mail 开着时存下的)
         for child in sorted(mail_dir.iterdir()):
             if not child.is_dir():
                 continue
             # 跳过 MailData / Mailboxes 等系统目录
             if child.name in ("MailData", "Mailboxes"):
                 continue
-            email_addr = _parse_email_from_dir_name(child.name)
-            display_name = email_addr or child.name
+            known = account_map.resolve(child.name, table)
+            email_addr = (known or {}).get("address") or _parse_email_from_dir_name(child.name)
+            display_name = (known or {}).get("name") or email_addr or child.name
             accounts.append(
                 Account(
                     name=display_name,
@@ -126,14 +129,17 @@ class EmlxFallbackMixin:
         mail_dir = self._emlx_mail_dir
         if mail_dir is None:
             raise DataNotFoundError("EMLX mail_dir 未初始化")
+        table = account_map.load()
         for child in mail_dir.iterdir():
             if not child.is_dir():
                 continue
             if child.name in ("MailData", "Mailboxes"):
                 continue
+            known = account_map.resolve(child.name, table) or {}
             if (
                 account_name in child.name
                 or _parse_email_from_dir_name(child.name) == account_name
+                or account_name in (known.get("name"), known.get("address"))   # 11/07 按账号名 / 邮箱认编号目录
             ):
                 return child
         raise DataNotFoundError(

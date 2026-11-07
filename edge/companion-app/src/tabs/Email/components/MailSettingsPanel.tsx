@@ -12,6 +12,7 @@
 import type { EmailAccountItem } from "../../../lib/tauri";
 import ArchivePanel from "./ArchivePanel";
 import ImapSetup from "./ImapSetup";
+import PhishingMarksPanel from "./PhishingMarksPanel";
 
 const CLIENT_LABEL: Record<string, string> = {
   apple_mail: "「邮件」App",
@@ -78,6 +79,7 @@ export default function MailSettingsPanel({
           </div>
         )}
       </div>
+      <PhishingMarksPanel />
       {imapVisible && <ImapSetup onConfigured={onChanged} />}
       <ArchivePanel />
     </>
