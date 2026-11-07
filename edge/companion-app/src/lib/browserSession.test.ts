@@ -28,6 +28,7 @@ function fakeChrome(targets: { targetId: string; type: string; url: string; titl
         : m.method === "Page.getLayoutMetrics" ? { cssVisualViewport: { clientWidth: 1200, clientHeight: 800 } }
         : m.method === "Page.captureScreenshot" ? { data: "SHOT" }
         : m.method === "Target.createTarget" ? { targetId: "NEW" }
+        : m.method === "Page.addScriptToEvaluateOnNewDocument" ? { identifier: "SCRIPT1" }
         : {};
       queueMicrotask(() => this.onmessage?.({ data: JSON.stringify({ id: m.id, result }) }));
     }
@@ -98,7 +99,7 @@ describe("BrowserSession", () => {
     chrome.push("Page.screencastFrame", { data: "OLD", sessionId: 8, metadata: {} }, "S-other");
     await flush();
     expect(state.frames.at(-1)).toEqual({ src: "data:image/jpeg;base64,F1", width: 1280, height: 720 });
-    expect(chrome.sent.filter((m) => m.method === "Page.screencastFrameAck").map((m) => m.params.sessionId)).toEqual([7, 8]);
+    expect(chrome.sent.filter((m) => m.method === "Page.screencastFrameAck").map((m) => m.params.sessionId).sort()).toEqual([7, 8]);
   });
 
   it("你的操作发到当前标签页; 网址不带协议补 https", async () => {
@@ -142,5 +143,38 @@ describe("BrowserSession", () => {
     await s.setPanel(1000, 300);
     expect(chrome.sent.some((m) => m.method === "Emulation.clearDeviceMetricsOverride")).toBe(true);
     expect(state.frames.at(-1)).toMatchObject({ width: 1200, height: 800 });
+  });
+
+  it("接手: 链接改本页打开 (新页面也生效), 交还就撤掉", async () => {
+    const { s, chrome } = start([{ targetId: "C", type: "page", url: "https://a.com/", title: "A" }]);
+    await s.start(860, 8000);
+    await s.setTakeover(true);
+    expect(chrome.sent.find((m) => m.method === "Page.addScriptToEvaluateOnNewDocument")!.params.source).toContain("_self");
+    expect(chrome.sent.filter((m) => m.method === "Runtime.evaluate").at(-1)!.params.expression).toContain("__catfishSameTab");
+    await s.setTakeover(false);
+    expect(chrome.sent.some((m) => m.method === "Page.removeScriptToEvaluateOnNewDocument")).toBe(true);
+    expect(chrome.sent.filter((m) => m.method === "Runtime.evaluate").at(-1)!.params.expression).toContain("on = false");
+  });
+
+  it("画面按显示宽度传; 画上去之后才回执 (帧不堆积)", async () => {
+    const { chrome, state } = start([{ targetId: "C", type: "page", url: "https://a.com/", title: "A" }]);
+    let release: () => void = () => {};
+    const s2 = new BrowserSession("ws://x", {
+      onPages: () => {},
+      onFrame: () => new Promise<void>((r) => { release = r; }),
+      onClosed: () => {},
+    }, chrome.WS);
+    void state;
+    await s2.start(860, 8000);
+    expect(chrome.sent.find((m) => m.method === "Page.startScreencast")!.params).toMatchObject({ maxWidth: 860, quality: 60 });
+    const sid = chrome.sent.find((m) => m.method === "Page.startScreencast")!.sessionId!;
+    chrome.push("Page.screencastFrame", { data: "F", sessionId: 1, metadata: {} }, sid);
+    await flush();
+    expect(chrome.sent.some((m) => m.method === "Page.screencastFrameAck")).toBe(false);
+    release();
+    await flush();
+    expect(chrome.sent.some((m) => m.method === "Page.screencastFrameAck")).toBe(true);
+    await s2.setFrameWidth(1200);
+    expect(chrome.sent.filter((m) => m.method === "Page.startScreencast").at(-1)!.params).toMatchObject({ maxWidth: 1200 });
   });
 });

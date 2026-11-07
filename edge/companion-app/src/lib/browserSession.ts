@@ -29,12 +29,38 @@ export interface FrameInfo {
 
 export interface BrowserSessionCallbacks {
   onPages: (pages: PageTarget[], currentId: string | null, following: boolean) => void;
-  onFrame: (frame: FrameInfo) => void;
+  /** 返回 Promise 时等它 (= 这一帧画到界面上了) 再回执, Chrome 才发下一帧 —— 帧不会堆在路上 */
+  onFrame: (frame: FrameInfo) => void | Promise<void>;
   onClosed: (reason: string) => void;
 }
 
 /** 小鲶会去的网页 (自动跟随只跟这些; chrome:// 设置页、空白页这类浏览器自己开的不跟, 但列表里还能手动选) */
+const QUALITY = 60;
+
 const isWeb = (url: string) => /^(https?|file):/i.test(url);
+
+/**
+ * 接手时让链接在当前标签页打开 (11/07 鸿波「我控制模式会在外面的浏览器也打开」):
+ * 你在右栏点一个「新标签页打开」的链接, Chrome 会把自己的窗口切到最前面盖住 Companion (测试 Chrome 里复现过,
+ * 点完最前面的程序从 Finder 变成 Google Chrome)。接手时把 target=_blank 的链接 / 表单 / window.open
+ * 都改成本页打开, 点完 Chrome 留在后面 (同样测过, 还是 Finder 在最前)。交还小鲶就关掉。
+ */
+const SAME_TAB = `(() => {
+  const st = window.__catfishSameTab;
+  if (st) { st.on = true; return; }
+  const state = { on: true };
+  Object.defineProperty(window, "__catfishSameTab", { value: state });
+  const fix = (el) => { if (state.on && el && el.target && el.target !== "_self") el.target = "_self"; };
+  document.addEventListener("click", (e) => fix(e.target && e.target.closest && e.target.closest("a[target],area[target]")), true);
+  document.addEventListener("submit", (e) => fix(e.target), true);
+  const open = window.open;
+  window.open = function (url, ...rest) {
+    if (!state.on || !url) return open.call(this, url, ...rest);
+    location.href = new URL(String(url), location.href).href;
+    return window;
+  };
+})();`;
+const SAME_TAB_OFF = "window.__catfishSameTab && (window.__catfishSameTab.on = false)";
 
 const isPage = (t: { type?: string; url?: string }) =>
   t.type === "page" && !String(t.url ?? "").startsWith("devtools://") && !String(t.url ?? "").startsWith("chrome-extension://");
@@ -52,6 +78,8 @@ export class BrowserSession {
   /** 这个标签页没被我们拉高之前的视口 */
   private natural = { width: 0, height: 0 };
   private disposed = false;
+  private takeover = false;
+  private sameTabScript: string | null = null;
   private attachSeq = 0;
 
   constructor(wsUrl: string, private cb: BrowserSessionCallbacks, WS?: typeof WebSocket) {
@@ -104,9 +132,11 @@ export class BrowserSession {
     const old = this.session;
     this.current = targetId;
     this.session = null;
+    this.sameTabScript = null;
     this.emitPages();
     if (old) {
       void this.cdp.send("Page.stopScreencast", {}, old).catch(() => {});
+      if (this.takeover) void this.cdp.send("Runtime.evaluate", { expression: SAME_TAB_OFF }, old).catch(() => {});
       void this.cdp.send("Target.detachFromTarget", { sessionId: old }).catch(() => {});
     }
     try {
@@ -120,8 +150,9 @@ export class BrowserSession {
       await this.refreshViewport();
       this.natural = { ...this.viewport };
       await this.applyFit();
+      if (this.takeover) await this.applySameTab(true);
       await this.snapshot();
-      await this.cdp.send("Page.startScreencast", { format: "jpeg", quality: 75, maxWidth: this.maxSize.width, maxHeight: this.maxSize.height, everyNthFrame: 1 }, sessionId);
+      await this.startScreencast();
     } catch {
       // 标签页刚好被关了: targetDestroyed 会接着处理
     }
@@ -162,17 +193,80 @@ export class BrowserSession {
   async snapshot() {
     const sid = this.session;
     if (!sid) return;
-    const { data } = await this.cdp.send<{ data: string }>("Page.captureScreenshot", { format: "jpeg", quality: 75 }, sid);
+    // 截图也按显示宽度缩 (不缩的话拉高后的页面一张就是 2940x4510); clip 用当前可见区域 (页面坐标)
+    const m = await this.cdp.send<{
+      cssVisualViewport?: { pageX: number; pageY: number; clientWidth: number; clientHeight: number };
+      visualViewport?: { clientWidth: number };
+    }>("Page.getLayoutMetrics", {}, sid);
+    const css = m.cssVisualViewport;
+    const params: Record<string, unknown> = { format: "jpeg", quality: QUALITY };
+    if (css?.clientWidth) {
+      const ratio = m.visualViewport?.clientWidth ? m.visualViewport.clientWidth / css.clientWidth : 1;
+      const scale = Math.min(1, this.maxSize.width / (css.clientWidth * ratio));
+      params.clip = { x: css.pageX, y: css.pageY, width: css.clientWidth, height: css.clientHeight, scale };
+    }
+    const { data } = await this.cdp.send<{ data: string }>("Page.captureScreenshot", params, sid);
     if (sid === this.session) this.cb.onFrame({ src: `data:image/jpeg;base64,${data}`, ...this.viewport });
   }
 
-  private frame(p: Record<string, unknown>, sid?: string) {
+  private async frame(p: Record<string, unknown>, sid?: string) {
     if (!sid) return;
-    void this.cdp.send("Page.screencastFrameAck", { sessionId: p.sessionId }, sid).catch(() => {});
-    if (sid !== this.session) return;
+    const ack = () => this.cdp.send("Page.screencastFrameAck", { sessionId: p.sessionId }, sid).catch(() => {});
+    if (sid !== this.session) {
+      void ack();
+      return;
+    }
     const meta = p.metadata as { deviceWidth?: number; deviceHeight?: number } | undefined;
     if (meta?.deviceWidth && meta.deviceHeight) this.viewport = { width: meta.deviceWidth, height: meta.deviceHeight };
-    this.cb.onFrame({ src: `data:image/jpeg;base64,${p.data}`, ...this.viewport });
+    try {
+      await this.cb.onFrame({ src: `data:image/jpeg;base64,${p.data}`, ...this.viewport });
+    } finally {
+      void ack();
+    }
+  }
+
+  private startScreencast() {
+    const sid = this.session;
+    if (!sid) return Promise.resolve();
+    return this.cdp
+      .send("Page.startScreencast", { format: "jpeg", quality: QUALITY, maxWidth: this.maxSize.width, maxHeight: this.maxSize.height, everyNthFrame: 1 }, sid)
+      .then(() => {}, () => {});
+  }
+
+  /**
+   * 画面传多宽 (设备像素)。11/07 鸿波「变得卡」: 原来按原始清晰度传 (最大 2560 宽), 页面拉高后一帧好几百万像素,
+   * 每动一下都要整张编码 / 传 / 解码; 按右栏实际显示的宽度传就够了 (测试页同样 20 帧/秒, 每帧 63KB → 14KB)。
+   */
+  async setFrameWidth(width: number) {
+    const w = Math.max(320, Math.min(2560, Math.round(width)));
+    if (w === this.maxSize.width) return;
+    this.maxSize = { width: w, height: 8000 };
+    const sid = this.session;
+    if (!sid) return;
+    await this.cdp.send("Page.stopScreencast", {}, sid).catch(() => {});
+    await this.startScreencast();
+  }
+
+  /** 我来操作 / 交还小鲶 */
+  async setTakeover(on: boolean) {
+    this.takeover = on;
+    await this.applySameTab(on);
+  }
+
+  private async applySameTab(on: boolean) {
+    const sid = this.session;
+    if (!sid) return;
+    if (on) {
+      if (!this.sameTabScript) {
+        const r = await this.cdp.send<{ identifier: string }>("Page.addScriptToEvaluateOnNewDocument", { source: SAME_TAB }, sid).catch(() => null);
+        this.sameTabScript = r?.identifier ?? null;
+      }
+      await this.cdp.send("Runtime.evaluate", { expression: SAME_TAB }, sid).catch(() => {});
+    } else {
+      if (this.sameTabScript) await this.cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: this.sameTabScript }, sid).catch(() => {});
+      this.sameTabScript = null;
+      await this.cdp.send("Runtime.evaluate", { expression: SAME_TAB_OFF }, sid).catch(() => {});
+    }
   }
 
   /** 你手动选了一个标签页: 停在它上面, 不再跟着小鲶跳 */
@@ -233,7 +327,11 @@ export class BrowserSession {
 
   dispose() {
     this.disposed = true;
-    if (this.session) void this.cdp.send("Page.stopScreencast", {}, this.session).catch(() => {});
+    if (this.session) {
+      void this.cdp.send("Page.stopScreencast", {}, this.session).catch(() => {});
+      // 当前页面里已经改过的「本页打开」恢复 (新页面的脚本随连接断开自动撤掉)
+      if (this.takeover) void this.cdp.send("Runtime.evaluate", { expression: SAME_TAB_OFF }, this.session).catch(() => {});
+    }
     this.cdp.close();
   }
 }

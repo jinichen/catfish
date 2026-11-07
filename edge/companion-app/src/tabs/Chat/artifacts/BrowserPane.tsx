@@ -17,8 +17,8 @@ import { Notice } from "./ArtifactViews";
 
 const isMac = typeof navigator !== "undefined" && /Mac/.test(navigator.userAgent);
 const BUTTON = ["left", "middle", "right"] as const;
-/** 画面按网页原始清晰度传 (CDP 只在比这个大时才缩), 右栏里缩小显示也不糊, 切「原始大小」也清楚 */
-const FRAME_MAX = { width: 2560, height: 4000 };
+/** 画面传多宽: 按右栏实际显示的宽度 (设备像素), 「原始大小」时按网页宽度 —— 见 BrowserSession.setFrameWidth */
+const dpr = () => window.devicePixelRatio || 1;
 
 type Status = { kind: "connecting" } | { kind: "ready" } | { kind: "error"; message: string; notRunning: boolean };
 
@@ -47,6 +47,7 @@ export default function BrowserPane() {
     let dead = false;
     setStatus({ kind: "connecting" });
     setHasFrame(false);
+    setTakeover(false); // 重新连上默认只看
     void (async () => {
       let ws: string;
       try {
@@ -63,9 +64,18 @@ export default function BrowserPane() {
         },
         onFrame: (f) => {
           frame.current = f;
-          if (img.current) img.current.src = f.src; // 直接换图, 不走 React 重渲染 (一秒十几帧)
           setHasFrame(true);
           setPageWidth(f.width);
+          const el = img.current;
+          if (!el) return;
+          // 直接换图, 不走 React 重渲染; 画上去之后才让 Chrome 发下一帧 (最多等 0.5 秒)
+          return new Promise<void>((resolve) => {
+            const done = () => { el.onload = null; el.onerror = null; resolve(); };
+            el.onload = done;
+            el.onerror = done;
+            window.setTimeout(done, 500);
+            el.src = f.src;
+          });
         },
         onClosed: (message) => setStatus({ kind: "error", message, notRunning: false }),
       });
@@ -73,7 +83,7 @@ export default function BrowserPane() {
       const box = screen.current?.getBoundingClientRect();
       if (box) void s.setPanel(box.width, box.height);
       try {
-        await s.start(FRAME_MAX.width, FRAME_MAX.height);
+        await s.start(Math.max(box?.width || 600, 320) * dpr(), 8000);
         if (!dead) setStatus({ kind: "ready" });
       } catch (e) {
         if (!dead) setStatus({ kind: "error", message: String(e instanceof Error ? e.message : e), notRunning: false });
@@ -96,6 +106,7 @@ export default function BrowserPane() {
       t = window.setTimeout(() => {
         const r = el.getBoundingClientRect();
         void session.current?.setPanel(r.width, r.height);
+        if (fitRef.current) void session.current?.setFrameWidth(r.width * dpr());
       }, 250);
     });
     ro.observe(el);
@@ -127,12 +138,25 @@ export default function BrowserPane() {
     return () => el.removeEventListener("wheel", onWheel);
   }, [takeover, toPage, hasFrame]);
 
+  // 适应宽度 ↔ 原始大小: 画面按显示宽度重新传
+  const fitRef = useRef(fit);
+  useEffect(() => {
+    fitRef.current = fit;
+    const w = fit ? (screen.current?.getBoundingClientRect().width ?? 600) : pageWidth || 1600;
+    void session.current?.setFrameWidth(w * dpr());
+  }, [fit, pageWidth]);
+
+  // 我来操作: 链接改在本页打开, 免得 Chrome 窗口跳到最前面
+  useEffect(() => {
+    void session.current?.setTakeover(takeover);
+  }, [takeover]);
+
   const lastMove = useRef(0);
   const onMouse = (type: "mousePressed" | "mouseReleased" | "mouseMoved") => (e: React.MouseEvent) => {
     if (!takeover) return;
     if (type === "mouseMoved") {
       const now = performance.now();
-      if (now - lastMove.current < 30) return; // 拖动时最多 30 次 / 秒
+      if (now - lastMove.current < (e.buttons ? 30 : 100)) return; // 拖动时 30 次 / 秒, 光移动 10 次 / 秒
       lastMove.current = now;
     } else {
       e.preventDefault();

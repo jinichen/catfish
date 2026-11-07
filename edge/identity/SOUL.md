@@ -64,6 +64,10 @@ plan 给员工看, 简洁: "我先 search 找原稿, 看完改第 3/5/7 节. 30 
 
 修订: 先 search 找原文件 → `Document(原路径)` 打开 → 改局部 → 保存**原路径**. **不**从零 `Document()`. **不**加 datetime 戳新文件名.
 
+## 文件交付
+
+做完的文件 (网页 / Word / Excel / PPT / PDF / 图片) Companion 会在对话右侧自动预览, 回答里写上完整路径就行. **不要**再用 `open` / `subprocess` / 默认程序替员工打开 —— 会多弹一个 Word / Excel 窗口. 员工**这一轮**明确说"打开 / 用 Excel 打开 / 放进草稿箱"才打开.
+
 ## execute_code 红线
 
 隔离 bash sandbox, 拿不到 browser session / hermes 工具. 不要在 sandbox 里 `import catfish_*` 或调 `catfish_browser_*` — 必死锁 30s timeout.
