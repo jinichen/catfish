@@ -177,6 +177,32 @@ compose_images() {
     grep -E '^[[:space:]]+image:[[:space:]]+[^[:space:]]+' "$SCRIPT_DIR/docker-compose.yml" \
         | awk '{print $2}'
 }
+
+# >>> pick_image_tar (11/08; test_setup_env.sh 直接取这一段来测)
+# 没传 IMAGE_TAR 时挑 images/ 里哪个包:
+#   1. 这个包的 BUILD-INFO.txt 写着 image_tar= (新包解压会覆盖它, 所以永远是这次的包)
+#   2. 老包没写: 本机架构 (x86_64 → amd64, aarch64/arm64 → arm64) 里文件名日期最新的
+#   3. 都对不上: 所有包里日期最新的 (总比按字母排第一的最旧那个强)
+pick_image_tar() {
+    local dir="$1" want="" arch="" f
+    if [ -f "$dir/BUILD-INFO.txt" ]; then
+        want=$(grep -E '^image_tar=' "$dir/BUILD-INFO.txt" 2>/dev/null | tail -1 | cut -d= -f2- || true)
+        if [ -n "$want" ] && [ -f "$dir/images/$want" ]; then
+            echo "$dir/images/$want"; return 0
+        fi
+    fi
+    case "$(uname -m 2>/dev/null)" in
+        x86_64|amd64) arch=amd64 ;;
+        aarch64|arm64) arch=arm64 ;;
+    esac
+    if [ -n "$arch" ]; then
+        f=$(ls "$dir/images/"catfish-poc-central-"$arch"-*.tar.gz 2>/dev/null | sort -r | head -1 || true)
+        if [ -n "$f" ]; then echo "$f"; return 0; fi
+    fi
+    ls "$dir/images/"*.tar.gz 2>/dev/null | sort -r | head -1 || true
+}   # set -euo pipefail 下: 一个都没有时不能让 ls 的失败把整个脚本带走
+# <<< pick_image_tar
+
 IDENTITY_IMAGE="$(compose_images | grep '^catfish-identity:' | head -1)"
 if [ -z "$IDENTITY_IMAGE" ]; then
     echo "❌ docker-compose.yml 里找不到 catfish-identity 的 image 行"
@@ -402,11 +428,15 @@ if [ "$REGEN_ENV_ONLY" = "1" ]; then
     echo "→ REGEN_ENV_ONLY=1 · 跳过 image load"
 else
     # ── 4. 装 image tar (若指定 / 若 images/ 里有) ──────────
+    # 11/08 鸿波「每次升级都会因为 images 下面还有老的 gz 残留出错」: 新包解压到旧目录上, images/ 里
+    # 同时躺着 1106 / 1107 / 1108 几个包。原来 `ls images/*.tar.gz | head -1` 按文件名挑第一个 = 日期最旧的,
+    # 装进去的是旧镜像, 后面「本地缺 image」报错。挑法见 pick_image_tar; 装好核对过后把别的旧包删掉 (4.6)。
+
     # IMAGE_TAR 未传 · 自动探 images/*.tar.gz.
     # 用户命令 `\ ` 续行错时 · IMAGE_TAR 没进 env · 老版直接 skip load · 后面 docker
     # compose up 去 docker.io pull · 内网挂. 现在自动探 · 兜底更稳.
     if [ -z "$IMAGE_TAR" ]; then
-        AUTO_TAR=$(ls "$SCRIPT_DIR/images/"*.tar.gz 2>/dev/null | head -1)
+        AUTO_TAR=$(pick_image_tar "$SCRIPT_DIR")
         if [ -n "$AUTO_TAR" ]; then
             echo "→ 自动发现 image tar: $(basename "$AUTO_TAR") (IMAGE_TAR 未传 · 兜底)"
             IMAGE_TAR="$AUTO_TAR"
@@ -477,6 +507,19 @@ else
         echo "     IMAGE_TAR=./images/catfish-poc-central-<arch>-<date>.tar.gz bash setup.sh"
         echo "   (内网机不能连 docker.io · 必须本地 load)"
         exit 1
+    fi
+
+    # ── 4.6 · 镜像核对过了: images/ 里别的旧镜像包删掉 (11/08) ──
+    # 新包解压到旧目录上会留下以前的包 (每个约 1G), 下次自动挑又可能挑错。只删我们自己命名的
+    # catfish-poc-central-*.tar.gz, 这次装的那个留着; 别的文件不碰。
+    if [ -n "$IMAGE_TAR" ] && [ "${SKIP_IMAGE_LOAD:-0}" != "1" ]; then
+        KEEP_TAR="$(cd "$(dirname "$IMAGE_TAR")" && pwd)/$(basename "$IMAGE_TAR")"
+        for old in "$SCRIPT_DIR/images/"catfish-poc-central-*.tar.gz; do
+            [ -f "$old" ] || continue
+            [ "$(cd "$(dirname "$old")" && pwd)/$(basename "$old")" = "$KEEP_TAR" ] && continue
+            size=$(du -h "$old" 2>/dev/null | cut -f1)
+            if rm -f "$old"; then echo "→ 删掉旧镜像包 $(basename "$old") (${size:-?}, 这次装的是 $(basename "$IMAGE_TAR"))"; fi
+        done
     fi
 
 fi

@@ -199,6 +199,26 @@ else
     ok "没有会让 set -e 静默退出的 \$(grep …)"
 fi
 
+# 11/08 鸿波「每次升级都会因为 images 下面还有老的 gz 残留出错」: 原来按文件名挑第一个 = 最旧的包。
+echo ""
+echo "── 没传 IMAGE_TAR: images/ 里有旧包残留也挑对 ──"
+eval "$(sed -n '/^# >>> pick_image_tar/,/^# <<< pick_image_tar/p' setup.sh)"
+PK="$WORK/pick"; mkdir -p "$PK/images"
+for d in 20261106 20261107 20261108; do touch "$PK/images/catfish-poc-central-amd64-$d.tar.gz" "$PK/images/catfish-poc-central-arm64-$d.tar.gz"; done
+printf 'arch=amd64\ndate=20261107\nimage_tar=catfish-poc-central-amd64-20261107.tar.gz\n' > "$PK/BUILD-INFO.txt"
+[ "$(basename "$(pick_image_tar "$PK")")" = "catfish-poc-central-amd64-20261107.tar.gz" ] \
+    && ok "BUILD-INFO.txt 写了 image_tar: 就用它" || bad "没按 BUILD-INFO.txt 挑: $(pick_image_tar "$PK")"
+printf 'arch=amd64\ndate=20261020\n' > "$PK/BUILD-INFO.txt"   # 老包: 没有 image_tar 这一行
+case "$(uname -m)" in x86_64|amd64) want=amd64 ;; aarch64|arm64) want=arm64 ;; *) want="" ;; esac
+got="$(basename "$(pick_image_tar "$PK")")"
+if [ -n "$want" ]; then
+    [ "$got" = "catfish-poc-central-$want-20261108.tar.gz" ] && ok "老包: 本机架构里日期最新的 ($got)" || bad "老包挑错了: $got"
+fi
+rm -f "$PK/BUILD-INFO.txt" "$PK/images/"*
+[ -z "$(pick_image_tar "$PK")" ] && ok "一个包都没有: 返回空, 不让 set -e 把脚本带走" || bad "空目录没返回空"
+(set -euo pipefail; x=$(pick_image_tar "$PK"); echo "still-alive$x") | grep -q still-alive \
+    && ok "set -euo pipefail 下也不退出" || bad "set -e 下没包时脚本被带走"
+
 echo ""
 echo "通过 $PASS · 失败 $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

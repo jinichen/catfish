@@ -377,6 +377,8 @@ for ARCH in $ARCHES; do
         echo "git_dirty=$([ -n "$GIT_DIRTY" ] && echo yes || echo no)"
         echo "built_at=$(date '+%Y-%m-%d %H:%M:%S %Z')"
         echo "built_on=$(uname -sm)"
+        # 11/08: 装机脚本没传 IMAGE_TAR 时按这一行挑 images/ 里的包 (新包解压覆盖这个文件, 旧包残留也不会挑错)
+        echo "image_tar=catfish-poc-central-$ARCH-$DATE.tar.gz"
     } > "$STAGE/delivery/catfish-poc/BUILD-INFO.txt"
     [ -n "$GIT_DIRTY" ] && echo "  ⚠ central/ 或 delivery/ 有未提交改动, git_sha=$GIT_SHA 描述不全这个包"
 

@@ -249,8 +249,27 @@ if ($RegenEnvOnly -eq '1') {
     Say "→ RegenEnvOnly 1 · 跳过 image load"
 } else {
     if (-not $ImageTar) {
-        $auto = Get-ChildItem -Path (Join-Path $ScriptDir 'images') -Filter '*.tar.gz' -ErrorAction SilentlyContinue |
-            Select-Object -First 1
+        # 11/08: 原来取按文件名排第一个 = 日期最旧的包 (新包解压到旧目录上, images\ 里有好几个), 装进旧镜像。
+        # 挑法跟 setup.sh pick_image_tar 一样: BUILD-INFO.txt 的 image_tar= → 本机架构里日期最新的 → 所有包里最新的。
+        $imagesDir = Join-Path $ScriptDir 'images'
+        $auto = $null
+        $info = Join-Path $ScriptDir 'BUILD-INFO.txt'
+        if (Test-Path $info) {
+            $line = Get-Content $info -ErrorAction SilentlyContinue | Where-Object { $_ -like 'image_tar=*' } | Select-Object -Last 1
+            if ($line) {
+                $want = Join-Path $imagesDir ($line.Substring('image_tar='.Length))
+                if (Test-Path $want) { $auto = Get-Item $want }
+            }
+        }
+        if (-not $auto) {
+            $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
+            $auto = Get-ChildItem -Path $imagesDir -Filter "catfish-poc-central-$arch-*.tar.gz" -ErrorAction SilentlyContinue |
+                Sort-Object Name -Descending | Select-Object -First 1
+        }
+        if (-not $auto) {
+            $auto = Get-ChildItem -Path $imagesDir -Filter '*.tar.gz' -ErrorAction SilentlyContinue |
+                Sort-Object Name -Descending | Select-Object -First 1
+        }
         if ($auto) {
             Say "→ 自动发现 image tar: $($auto.Name)"
             $ImageTar = $auto.FullName
@@ -304,6 +323,17 @@ if ($RegenEnvOnly -eq '1') {
         )
     }
     SayOk "compose 需要的 image 都在本地"
+
+    # 11/08: 镜像核对过了, images\ 里别的旧镜像包 (每个约 1G) 删掉, 下次也不会挑错。只删我们命名的包, 这次装的留着。
+    if ($ImageTar -and $SkipImageLoad -ne '1') {
+        $keep = (Resolve-Path $ImageTar).Path
+        Get-ChildItem -Path (Join-Path $ScriptDir 'images') -Filter 'catfish-poc-central-*.tar.gz' -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -ne $keep } | ForEach-Object {
+                $mb = [math]::Round($_.Length / 1MB)
+                Remove-Item $_.FullName -ErrorAction SilentlyContinue
+                if (-not (Test-Path $_.FullName)) { Say "→ 删掉旧镜像包 $($_.Name) ($mb MB, 这次装的是 $(Split-Path $ImageTar -Leaf))" }
+            }
+    }
 }
 
 # ── 共用逻辑: 在容器里跑 tools/*.py ───────────────────────
