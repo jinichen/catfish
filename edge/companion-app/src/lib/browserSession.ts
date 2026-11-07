@@ -6,6 +6,10 @@
  *     起步时挑第一个不是空白页的标签页 (小鲶的 Playwright 也是用第一个标签页)。
  *   - 你在顶上手动选了某个标签页, 就停在那个上, 直到点「跟着小鲶」。
  * 画面: Page.startScreencast (页面有变化才来一帧); 刚挂上时先截一张, 不用干等。
+ * 铺满右栏 (11/07 鸿波「为什么是这么一截」): 小鲶的 Chrome 窗口又宽又矮, 原样缩进右栏只剩一条。
+ *   挂上时让这个标签页按右栏的比例排版 —— 宽度不变 (网页布局不变), 高度按右栏拉长
+ *   (Emulation.setDeviceMetricsOverride)。这个设置跟着本连接走: 右栏关了 / 切走 / Companion 退出,
+ *   Chrome 自动恢复原尺寸 (测试 Chrome 里验过 1600x763 → 1600x2600 → 断开回 1600x763)。
  */
 import { CdpClient } from "./cdp";
 
@@ -43,6 +47,10 @@ export class BrowserSession {
   private following = true;
   private viewport = { width: 0, height: 0 };
   private maxSize = { width: 1280, height: 1600 };
+  /** 右栏显示区的大小 (只用比例) */
+  private panel = { width: 0, height: 0 };
+  /** 这个标签页没被我们拉高之前的视口 */
+  private natural = { width: 0, height: 0 };
   private disposed = false;
   private attachSeq = 0;
 
@@ -110,6 +118,8 @@ export class BrowserSession {
       this.session = sessionId;
       await this.cdp.send("Page.enable", {}, sessionId);
       await this.refreshViewport();
+      this.natural = { ...this.viewport };
+      await this.applyFit();
       await this.snapshot();
       await this.cdp.send("Page.startScreencast", { format: "jpeg", quality: 75, maxWidth: this.maxSize.width, maxHeight: this.maxSize.height, everyNthFrame: 1 }, sessionId);
     } catch {
@@ -121,6 +131,31 @@ export class BrowserSession {
     if (!this.session) return;
     const m = await this.cdp.send<{ cssVisualViewport?: { clientWidth: number; clientHeight: number } }>("Page.getLayoutMetrics", {}, this.session);
     if (m.cssVisualViewport) this.viewport = { width: m.cssVisualViewport.clientWidth, height: m.cssVisualViewport.clientHeight };
+  }
+
+  /** 右栏显示区大小变了 (打开 / 拖宽 / 窗口缩放): 按新比例重排 */
+  async setPanel(width: number, height: number) {
+    if (width <= 0 || height <= 0) return;
+    this.panel = { width, height };
+    if (this.session) {
+      await this.applyFit();
+      await this.snapshot().catch(() => {});
+    }
+  }
+
+  private async applyFit() {
+    const sid = this.session;
+    const { width, height } = this.natural;
+    if (!sid || !width || !height || !this.panel.width) return;
+    const want = Math.min(4000, Math.round((width * this.panel.height) / this.panel.width));
+    if (want <= height) {
+      // 右栏本来就比窗口「扁」: 不用拉, 恢复原样
+      await this.cdp.send("Emulation.clearDeviceMetricsOverride", {}, sid).catch(() => {});
+      this.viewport = { ...this.natural };
+      return;
+    }
+    await this.cdp.send("Emulation.setDeviceMetricsOverride", { width, height: want, deviceScaleFactor: 0, mobile: false }, sid).catch(() => {});
+    this.viewport = { width, height: want };
   }
 
   /** 截一张当前画面 (刚挂上时 / 点「刷新画面」; 后台标签页 Chrome 不推 screencast 帧, 靠这个兜底) */

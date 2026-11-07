@@ -70,6 +70,8 @@ export default function BrowserPane() {
         onClosed: (message) => setStatus({ kind: "error", message, notRunning: false }),
       });
       session.current = s;
+      const box = screen.current?.getBoundingClientRect();
+      if (box) void s.setPanel(box.width, box.height);
       try {
         await s.start(FRAME_MAX.width, FRAME_MAX.height);
         if (!dead) setStatus({ kind: "ready" });
@@ -83,6 +85,25 @@ export default function BrowserPane() {
       session.current = null;
     };
   }, [attempt]);
+
+  // 右栏显示区大小变了 (拖宽 / 窗口缩放): 让页面按新比例排版, 铺满右栏
+  useEffect(() => {
+    const el = screen.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let t = 0;
+    const ro = new ResizeObserver(() => {
+      window.clearTimeout(t);
+      t = window.setTimeout(() => {
+        const r = el.getBoundingClientRect();
+        void session.current?.setPanel(r.width, r.height);
+      }, 250);
+    });
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      window.clearTimeout(t);
+    };
+  }, []);
 
   // 缩小画面上的位置 → 页面 CSS 坐标
   const toPage = useCallback((clientX: number, clientY: number) => {

@@ -132,4 +132,15 @@ describe("BrowserSession", () => {
     expect(chrome.sent.find((m) => m.method === "Target.createTarget")!.params.url).toBe("about:blank");
     expect(chrome.sent.some((m) => m.method === "Target.attachToTarget")).toBe(true);
   });
+
+  it("铺满右栏: 宽度不变, 高度按右栏比例拉长; 右栏比窗口还扁就恢复原样", async () => {
+    const { s, chrome, state } = start([{ targetId: "C", type: "page", url: "https://a.com/", title: "A" }]);
+    await s.setPanel(500, 1000); // 还没连上: 先记下比例
+    await s.start(2560, 4000);
+    expect(chrome.sent.find((m) => m.method === "Emulation.setDeviceMetricsOverride")!.params).toMatchObject({ width: 1200, height: 2400, mobile: false });
+    expect(state.frames[0]).toMatchObject({ width: 1200, height: 2400 }); // 点击坐标按拉长后的视口换算
+    await s.setPanel(1000, 300);
+    expect(chrome.sent.some((m) => m.method === "Emulation.clearDeviceMetricsOverride")).toBe(true);
+    expect(state.frames.at(-1)).toMatchObject({ width: 1200, height: 800 });
+  });
 });
