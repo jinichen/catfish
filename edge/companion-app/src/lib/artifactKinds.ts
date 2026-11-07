@@ -43,10 +43,11 @@ function resultText(result: unknown): string {
   return typeof result === "string" ? result : JSON.stringify(result);
 }
 
-/** 一条消息里提到的、右栏能显示的文件 (回答正文 + 已完成的工具结果)。 */
-export function messageArtifactPaths(msg: ChatMessage): string[] {
+/** 一条消息里提到的、右栏能显示的文件 (回答正文 + 已完成的工具结果)。
+ *  toolsOnly: 只看已完成的工具结果 —— 回答还在一个字一个字出来时, 正文里的路径可能只写了一半。 */
+export function messageArtifactPaths(msg: ChatMessage, toolsOnly = false): string[] {
   if (msg.role !== "assistant" && msg.role !== "tool") return [];
-  const texts = [msg.role === "assistant" ? msg.content : resultText(msg.content)];
+  const texts = toolsOnly ? [] : [msg.role === "assistant" ? msg.content : resultText(msg.content)];
   for (const call of msg.tool_calls ?? []) {
     if (call.status === "done") texts.push(resultText(call.result));
   }
@@ -54,11 +55,11 @@ export function messageArtifactPaths(msg: ChatMessage): string[] {
 }
 
 /** 整段对话出现过的成果, 最新的在前、去重。 */
-export function sessionArtifactPaths(messages: ChatMessage[]): string[] {
+export function sessionArtifactPaths(messages: ChatMessage[], toolsOnly = false): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (let i = messages.length - 1; i >= 0; i--) {
-    const paths = messageArtifactPaths(messages[i]);
+    const paths = messageArtifactPaths(messages[i], toolsOnly);
     for (let j = paths.length - 1; j >= 0; j--) {
       if (!seen.has(paths[j])) {
         seen.add(paths[j]);
@@ -70,10 +71,11 @@ export function sessionArtifactPaths(messages: ChatMessage[]): string[] {
 }
 
 /**
- * 刚结束的这一轮 (最后一条用户消息之后) 提到的成果, 最后提到的在前, 以及这一轮开始的时间。
+ * 这一轮 (最后一条用户消息之后) 提到的成果, 最后提到的在前, 以及这一轮开始的时间。
  * 右栏自动打开时再拿文件修改时间比一下 —— 只开这一轮里真写过的文件, 小鲶只是读了 / 引用了的不弹。
+ * toolsOnly: 回答进行中用, 只看已完成的工具结果 (见 messageArtifactPaths)。
  */
-export function lastRoundArtifacts(messages: ChatMessage[]): { paths: string[]; since: number } | null {
+export function lastRoundArtifacts(messages: ChatMessage[], toolsOnly = false): { paths: string[]; since: number } | null {
   let lastUser = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i].role === "user") {
@@ -84,6 +86,6 @@ export function lastRoundArtifacts(messages: ChatMessage[]): { paths: string[]; 
   if (lastUser < 0) return null;
   const since = Date.parse(messages[lastUser].ts);
   if (!Number.isFinite(since)) return null;
-  const paths = sessionArtifactPaths(messages.slice(lastUser + 1));
+  const paths = sessionArtifactPaths(messages.slice(lastUser + 1), toolsOnly);
   return paths.length ? { paths, since } : null;
 }

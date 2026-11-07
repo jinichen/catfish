@@ -20,8 +20,16 @@ interface ArtifactState {
   width: number;
   /** 点「刷新」+1, 让显示区重读 */
   reloadKey: number;
+  /** 用户自己最后一次打开 / 切换 / 关闭右栏的时间。这一轮里用户动过, 自动打开就不再抢 (11/07) */
+  userActedAt: number;
+  /** 用户点的: 胶囊「预览」、正文文件名、右栏顶上切换 */
   openArtifact: (path: string) => void;
+  /** 用户点的关闭 */
   close: () => void;
+  /** 小鲶写出了新文件, 自动打开; 这一轮 (since 之后) 用户自己开过 / 关过就不动 */
+  autoOpen: (path: string, since: number) => void;
+  /** 换对话时收起 (不算用户操作) */
+  dismiss: () => void;
   setWidth: (w: number) => void;
   reload: () => void;
 }
@@ -30,8 +38,12 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
   path: null,
   width: loadWidth(),
   reloadKey: 0,
-  openArtifact: (path) => set({ path }),
-  close: () => set({ path: null }),
+  userActedAt: 0,
+  openArtifact: (path) => set({ path, userActedAt: Date.now() }),
+  close: () => set({ path: null, userActedAt: Date.now() }),
+  autoOpen: (path, since) =>
+    set((s) => (s.userActedAt >= since || s.path === path ? s : { path })),
+  dismiss: () => set({ path: null }),
   setWidth: (w) => {
     const width = Math.max(ARTIFACT_MIN_WIDTH, Math.round(w));
     try {
