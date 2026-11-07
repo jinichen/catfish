@@ -75,15 +75,25 @@ export interface RoomMessage {
   text: string;
   mentions?: string[];
   reply_to?: string;
-  /** 我发的、有人没收到 */
+  /** 我发的、有人没收到 (升级前的老记号; 现在看 delivery) */
   undelivered?: string[];
+  /** 11/07 这条下面没送到的, 一个人一行 (送到就没了) */
+  delivery?: Delivery[];
+  /** 11/07 群文件: 清单 + 本机收齐没有 */
+  files?: RoomFile[];
   /** 11/6: 老版本同事发来的明文 (没加密), 界面标「未加密」 */
   plain?: boolean;
 }
 
+/** 11/07 没送到的一封 (colleague_rooms_outbox.py): sending 正在发 / 自动重试; nokey 等对方升级;
+ *  too_old 中央太旧; failed 没送到, 点「重发」。left = 还剩几封 (文件分块) */
+export interface Delivery { email: string; state: "sending" | "nokey" | "too_old" | "failed"; error: string; left: number }
+
+export interface RoomFile { id: string; name: string; size: number; sha256: string; n: number; have?: boolean; got?: number }
+
 export interface RoomDetail {
   me: string;
-  room: RoomSummary;
+  room: RoomSummary & { issue?: "too_old" | null };
   members: RoomMember[];
   messages: RoomMessage[];
   /** 更早的条数 (只显示最近 300 条) */
@@ -118,8 +128,20 @@ export const roomCreate = (name: string, purpose: string, members: PersonIn[]) =
   call<{ room: RoomSummary; failed: Failed[] }>("create", { name, purpose, members });
 export const roomJoin = (roomId: string) => call<{ room: RoomSummary; failed: Failed[] }>("join", { room_id: roomId });
 export const roomDecline = (roomId: string) => call<{ room: RoomSummary; failed: Failed[] }>("decline", { room_id: roomId });
-export const roomSend = (roomId: string, text: string, mentions: string[], replyTo?: string | null) =>
-  call<{ message: RoomMessage; sent_to: number; failed: Failed[] }>("send", { room_id: roomId, text, mentions, reply_to: replyTo ?? null });
+export const roomSend = (roomId: string, text: string, mentions: string[], replyTo?: string | null,
+                         files?: { name: string; data: string }[]) =>
+  call<{ message: RoomMessage; sent_to: number; failed: Failed[] }>("send", {
+    room_id: roomId, text, mentions, reply_to: replyTo ?? null, ...(files?.length ? { files } : {}),
+  });
+/** 11/07 群主转让 */
+export const roomTransfer = (roomId: string, email: string) =>
+  call<{ room: RoomSummary; failed: Failed[] }>("transfer", { room_id: roomId, email });
+/** 11/07 这条下没送到的马上再发 (email 空 = 全部) */
+export const roomResend = (roomId: string, msgId: string, email?: string) =>
+  call<{ sent: number; left: number }>("resend", { room_id: roomId, msg_id: msgId, email: email ?? null });
+/** 11/07 群文件写到 ~/Downloads/鲶鱼群文件/<群名>/, 返回路径 (再用 openFile / revealInFinder) */
+export const roomFileSave = (roomId: string, fileId: string) =>
+  call<{ path: string }>("file_save", { room_id: roomId, file_id: fileId });
 export const roomRead = (roomId: string) => call<{ ok: boolean }>("read", { room_id: roomId });
 export const roomAdd = (roomId: string, members: PersonIn[]) =>
   call<{ room: RoomSummary; failed: Failed[] }>("add", { room_id: roomId, members });
@@ -140,7 +162,7 @@ export const roomAssist = (roomId: string, kind: AssistKind, instruction?: strin
     roomId, kind, instruction: instruction ?? null, replyTo: replyTo ?? null,
   });
 
-/** 投递失败汇总成一句人话 (空 = 都送到了)。 */
+/** 投递失败汇总成一句人话 (空 = 都送到了)。11/07 群聊不再用它 (没送到的挂在消息下面), 派任务还用。 */
 export function failedNotice(failed: Failed[], what = "没收到"): string | undefined {
   if (!failed.length) return undefined;
   return `${failed.length} 人${what}: ${failed.map((f) => `${f.email} — ${f.error}`).join("; ")}`;

@@ -658,7 +658,10 @@ def list_all() -> dict[str, Any]:
                              "reminded_at": rec.get("reminded_at"),
                              "schedule": sched.describe(rec["task"].get("schedule")) if rec["task"].get("schedule") else None,
                              "to_review": sum(1 for x in rec.get("periods") or [] if x.get("state") == "待核对"),
-                             "to_confirm": sum(1 for x in rec.get("periods") or [] if x.get("state") == "待确认")})
+                             "to_confirm": sum(1 for x in rec.get("periods") or [] if x.get("state") == "待确认"),
+                             # 11/07 接下就开工的: 小鲶在后台做到哪了 (只给本人看)
+                             **({"work": sched.run_progress(rec.get("job_id"))}
+                                if rec.get("auto_started_at") and incoming_state(rec) == "在做" else {})})
     outgoing = []
     for p in sorted((tasks_dir() / "outgoing").glob("*/task.json")):
         task = forms._read(p)

@@ -13,12 +13,17 @@
 邮筒里的信封 (JSON, 中央看不懂也不看), 期限 7 天:
   room_invite  {v, room_id, ver, name, purpose, owner, members: {邮箱: {state, name}}, at}   群主拉人
   room_join    {v, room_id, status: joined|declined, at}        加入发给群里所有人 / 不加入只回群主
-  room_msg     {v, room_id, msg_id, at, text, mentions[], reply_to?}
-  room_member  {v, room_id, ver, op: update|disband, name, purpose, members: {...}, at}   只认群主
+  room_msg     {v, room_id, msg_id, at, text, mentions[], reply_to?, files?}
+               11/07 同一种信还装两样不进聊天记录的: chunk (群文件的一块) / need (找发件人要缺的块), 见 colleague_rooms_files.py
+  room_member  {v, room_id, ver, op: update|disband, name, purpose, members: {...}, owner?, at}   只认群主
+               11/07 owner: 群主转让 (新群主必须是已加入的成员); 之后只认新群主发的, 版本号 ver 照常 +1
   room_leave   {v, room_id, at}                                 退群, 发给群里所有人
 
 规则 (11/5 鸿波定): 一个群最多 50 人; 一条消息 ≤ 4000 字; 离线最多补 7 天; 后加入的人看不到加入前的记录;
 不是成员发来的不收, 名单 / 群名 / 解散只认群主发的 (防冒名)。
+
+11/07 没送到的不再只弹一次红字: 每封记进 outbox, 挂在那条消息 / 系统提示下面, 按原因自动补发, 界面可「重发」
+(colleague_rooms_outbox.py)。群主可以把群主转给已加入的成员, 转了才能退群。
 """
 from __future__ import annotations
 
@@ -30,6 +35,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from . import colleague_rooms_files as rfiles
+from . import colleague_rooms_mend as mend
+from . import colleague_rooms_outbox as outbox
 from . import colleague_rooms_retention as keep
 from . import colleague_rooms_store as store
 from . import forms, forms_net, wiki_files
@@ -95,8 +103,11 @@ def _mark_read(room: dict[str, Any]) -> None:
     room["read_upto"] = store.max_seq(room["room_id"])   # 已读到的最大 seq (删旧消息不错位)
 
 
-def _system(room: dict[str, Any], text: str) -> None:
-    _append(room["room_id"], {"msg_id": f"m_{secrets.token_hex(8)}", "kind": "system", "at": _now(), "text": text})
+def _system(room: dict[str, Any], text: str) -> str:
+    """记一条系统提示, 返回它的 msg_id (这次投递没送到的信挂在它下面)。"""
+    mid = f"m_{secrets.token_hex(8)}"
+    _append(room["room_id"], {"msg_id": mid, "kind": "system", "at": _now(), "text": text})
+    return mid
 
 
 def _norm_email(e: Any) -> str:
@@ -136,8 +147,10 @@ def _roster(room: dict[str, Any]) -> dict[str, dict[str, str]]:
             for e, v in room.get("members", {}).items() if v.get("state") in ACTIVE}
 
 
-def _post_all(emails: list[str], kind: str, env: dict[str, Any], source: str | None = None) -> list[dict[str, str]]:
-    """给每个人各投一封 (并发 8 路)。返回没送到的 [{email, error}]。source: 数据外发记录里的用途标签。"""
+def _post_all(emails: list[str], kind: str, env: dict[str, Any], source: str | None = None, *,
+              room: dict[str, Any] | None = None, ref: str | None = None) -> list[dict[str, str]]:
+    """给每个人各投一封 (并发 8 路)。返回没送到的 [{email, error, reason}]。source: 数据外发记录里的用途标签。
+    room 给了: 没送到的记进 outbox (挂在 ref 那条消息 / 系统提示下面), 自动补发、界面可重发 —— 不再靠弹一次红字。"""
     def one(e: str) -> dict[str, str] | None:
         try:
             if source:
@@ -146,11 +159,14 @@ def _post_all(emails: list[str], kind: str, env: dict[str, Any], source: str | N
                 forms_net.post(e, kind, env, TTL_SECONDS)
             return None
         except ValueError as err:
-            return {"email": e, "error": str(err)}
+            return {"email": e, "error": str(err)[:300], "reason": outbox.classify(err)}
     if not emails:
         return []
     with ThreadPoolExecutor(max_workers=min(8, len(emails))) as ex:
-        return [r for r in ex.map(one, emails) if r]
+        failed = [r for r in ex.map(one, emails) if r]
+    if failed and room:
+        outbox.record(room["room_id"], ref, failed, kind, env, source)
+    return failed
 
 
 def _require_owner(room: dict[str, Any], me: str) -> None:
@@ -179,8 +195,8 @@ def create(args: dict[str, Any]) -> dict[str, Any]:
             "members": {me: {"state": "joined", "name": str(args.get("my_name") or "").strip()[:30]},
                         **{e: {"state": "invited", "name": n} for e, n in people.items()}}}
     _save(room)
-    _system(room, f"你建了群「{name}」, 邀请了 {len(people)} 位同事")
-    failed = _post_all(list(people), "room_invite", _invite_env(room))
+    ref = _system(room, f"你建了群「{name}」, 邀请了 {len(people)} 位同事")
+    failed = _post_all(list(people), "room_invite", _invite_env(room), room=room, ref=ref)
     return {"ok": True, "room": summary(room, me=me), "failed": failed}
 
 
@@ -210,9 +226,9 @@ def add_members(room_id: str, raw: Any) -> dict[str, Any]:
         room["members"][e] = {"state": "invited", "name": n or (room["members"].get(e) or {}).get("name") or ""}
     room["ver"] += 1
     _save(room)
-    _system(room, f"你邀请了 {'、'.join(_label(room, e) for e in new)}")
-    failed = _post_all(list(new), "room_invite", _invite_env(room))
-    failed += _post_all(old_joined, "room_member", _member_env(room))
+    ref = _system(room, f"你邀请了 {'、'.join(_label(room, e) for e in new)}")
+    failed = _post_all(list(new), "room_invite", _invite_env(room), room=room, ref=ref)
+    failed += _post_all(old_joined, "room_member", _member_env(room), room=room, ref=ref)
     return {"ok": True, "room": summary(room, me=me), "failed": failed}
 
 
@@ -229,10 +245,10 @@ def remove_member(room_id: str, email: str) -> dict[str, Any]:
     room["members"][email]["state"] = "removed"
     room["ver"] += 1
     _save(room)
-    _system(room, f"你把 {_label(room, email)} 移出了群")
+    ref = _system(room, f"你把 {_label(room, email)} 移出了群")
     env = _member_env(room)
     env["removed"] = [email]
-    failed = _post_all(sorted(set(notify) | {email}), "room_member", env)
+    failed = _post_all(sorted(set(notify) | {email}), "room_member", env, room=room, ref=ref)
     return {"ok": True, "room": summary(room, me=me), "failed": failed}
 
 
@@ -256,8 +272,8 @@ def update_info(room_id: str, args: dict[str, Any]) -> dict[str, Any]:
         changed.append(f"把记录保留改成 {keep_days} 天" if keep_days else "把记录保留改回跟公司规定")
     room.update(name=name, purpose=purpose, ver=room["ver"] + 1, retention_days=keep_days)
     _save(room)
-    _system(room, f"你{'、'.join(changed)}")
-    failed = _post_all(_active_others(room, me), "room_member", _member_env(room))
+    ref = _system(room, f"你{'、'.join(changed)}")
+    failed = _post_all(_active_others(room, me), "room_member", _member_env(room), room=room, ref=ref)
     return {"ok": True, "room": summary(room, me=me), "failed": failed}
 
 
@@ -273,8 +289,31 @@ def disband(room_id: str) -> dict[str, Any]:
     room["ver"] += 1
     room["my_state"], room["ended_at"] = "disbanded", _now()
     _save(room)
-    _system(room, "你解散了这个群")
-    failed = _post_all(notify, "room_member", _member_env(room, "disband"))
+    ref = _system(room, "你解散了这个群")
+    failed = _post_all(notify, "room_member", _member_env(room, "disband"), room=room, ref=ref)
+    return {"ok": True, "room": summary(room, me=me), "failed": failed}
+
+
+def transfer(room_id: str, email: str) -> dict[str, Any]:
+    """群主转让 (11/07, 参照 hermes 群聊的「换主持 + 版本号」): 新群主必须已加入; 版本号 +1 通知所有人,
+    之后大家只认新群主发的名单 / 群名 / 解散 —— 原群主再发的一律不认。转了之后原群主就能退群了。
+    (原群主电脑坏了 / 人走了、没来得及转: 这一步帮不上, 群里其他人照样能聊, 只是没人能改名单。)"""
+    me = forms_net.me()
+    room = load(room_id)
+    _require_owner(room, me)
+    email = _norm_email(email)
+    if email == me:
+        raise ValueError("你已经是群主了")
+    if (room["members"].get(email) or {}).get("state") != "joined":
+        raise ValueError("只能转给已经加入的成员")
+    notify = _active_others(room, me)
+    room["owner"] = email
+    room["ver"] += 1
+    _save(room)
+    ref = _system(room, f"你把群主转给了 {_label(room, email)}")
+    env = _member_env(room)
+    env["owner"] = email
+    failed = _post_all(notify, "room_member", env, room=room, ref=ref)
     return {"ok": True, "room": summary(room, me=me), "failed": failed}
 
 
@@ -288,11 +327,11 @@ def join(room_id: str) -> dict[str, Any]:
     room["my_state"] = "joined"
     room.setdefault("members", {}).setdefault(me, {"name": ""})["state"] = "joined"
     room["joined_at"] = _now()
-    _system(room, "你加入了群 (加入前的消息看不到)")
+    ref = _system(room, "你加入了群 (加入前的消息看不到)")
     _mark_read(room)
     _save(room)
     env = {"v": ENVELOPE_VERSION, "room_id": room["room_id"], "status": "joined", "at": _now()}
-    failed = _post_all(_active_others(room, me), "room_join", env)
+    failed = _post_all(_active_others(room, me), "room_join", env, room=room, ref=ref)
     return {"ok": True, "room": summary(room, me=me), "failed": failed}
 
 
@@ -306,7 +345,7 @@ def decline(room_id: str) -> dict[str, Any]:
     room["ended_at"] = _now()
     _save(room)
     env = {"v": ENVELOPE_VERSION, "room_id": room["room_id"], "status": "declined", "at": _now()}
-    failed = _post_all([room["owner"]], "room_join", env)
+    failed = _post_all([room["owner"]], "room_join", env, room=room)
     return {"ok": True, "room": summary(room, me=me), "failed": failed}
 
 
@@ -314,15 +353,15 @@ def leave(room_id: str) -> dict[str, Any]:
     me = forms_net.me()
     room = load(room_id)
     if room.get("owner") == me:
-        raise ValueError("群主不能退群; 不想要这个群就解散")
+        raise ValueError("群主不能直接退群: 先在成员栏把群主转给别人, 或者解散这个群")
     if room.get("my_state") != "joined":
         raise ValueError("你已经不在这个群里")
     notify = _active_others(room, me)
     room["my_state"], room["ended_at"] = "left", _now()
     room["members"].setdefault(me, {"name": ""})["state"] = "left"
     _save(room)
-    _system(room, "你退出了群")
-    failed = _post_all(notify, "room_leave", {"v": ENVELOPE_VERSION, "room_id": room["room_id"], "at": _now()})
+    ref = _system(room, "你退出了群")
+    failed = _post_all(notify, "room_leave", {"v": ENVELOPE_VERSION, "room_id": room["room_id"], "at": _now()}, room=room, ref=ref)
     return {"ok": True, "room": summary(room, me=me), "failed": failed}
 
 
@@ -337,13 +376,14 @@ def delete_local(room_id: str) -> dict[str, Any]:
 
 # ── 发消息 / 已读 ────────────────────────────────────────────────
 
-def send(room_id: str, text: Any, mentions: Any = None, reply_to: Any = None) -> dict[str, Any]:
+def send(room_id: str, text: Any, mentions: Any = None, reply_to: Any = None, files: Any = None) -> dict[str, Any]:
     me = forms_net.me()
     room = load(room_id)
     if room.get("my_state") != "joined":
         raise ValueError("你不在这个群里, 发不了消息")
     body = str(text or "").strip()
-    if not body:
+    attached = rfiles.prepare(files)   # 11/07 群文件 (先核对, 不合规直接报, 一封都不发)
+    if not body and not attached:
         raise ValueError("消息是空的")
     if len(body) > TEXT_MAX:
         raise ValueError(f"一条消息最多 {TEXT_MAX} 字, 长材料请用邮件")
@@ -352,21 +392,26 @@ def send(room_id: str, text: Any, mentions: Any = None, reply_to: Any = None) ->
     rt = str(reply_to or "").strip() or None
     if rt and not _MSG_ID.fullmatch(rt):
         rt = None
-    return _broadcast(room, me, body, ments, {**({"reply_to": rt} if rt else {})})
+    extra: dict[str, Any] = {**({"reply_to": rt} if rt else {}), **({"files": rfiles.meta(attached)} if attached else {})}
+    return _broadcast(room, me, body, ments, extra, attached=attached)
 
 
 def _broadcast(room: dict[str, Any], me: str, body: str, ments: list[str], extra: dict[str, Any],
-               kind: str = "text", source: str | None = None) -> dict[str, Any]:
-    """发给群里已加入的其他人 + 记进本机。extra = 信封和本机记录里都带的附加字段 (reply_to / card / status)。"""
+               kind: str = "text", source: str | None = None, attached: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """发给群里已加入的其他人 + 记进本机。extra = 信封和本机记录里都带的附加字段 (reply_to / card / status / files)。
+    没送到的记进 outbox 挂在这条下面 (界面显示「张三没收到 · 重发」), 不再写 undelivered。
+    attached: 群文件 —— 消息先发, 文件分块排进 outbox 后台发 (发送按钮不等)。"""
     msg = {"msg_id": f"m_{secrets.token_hex(10)}", "kind": kind, "from": me, "at": _now(), "text": body,
            "mentions": ments, **extra}
     others = _joined_others(room, me)
     env = {"v": ENVELOPE_VERSION, "room_id": room["room_id"], "msg_id": msg["msg_id"], "at": msg["at"],
            "text": body, "mentions": ments, **extra}
-    failed = _post_all(others, "room_msg", env, source)
-    if failed:
-        msg["undelivered"] = [f["email"] for f in failed]
-    _append(room["room_id"], msg)
+    _append(room["room_id"], msg)   # 先记本机: 没送到的信要挂在它下面
+    if attached:
+        rfiles.keep_sent(room["room_id"], msg, attached, me)
+    failed = _post_all(others, "room_msg", env, source, room=room, ref=msg["msg_id"])
+    if attached:
+        rfiles.send_chunks(room["room_id"], msg["msg_id"], attached, others)
     room["last_msg_at"] = msg["at"]
     _mark_read(room)
     _save(room)
@@ -448,8 +493,17 @@ def _apply(msg: dict[str, Any], me: str) -> dict[str, Any] | None:
         if st not in ACTIVE:
             return None   # 不是成员发来的不收
         mid = str(env.get("msg_id") or "")
+        if not _MSG_ID.fullmatch(mid):
+            return None
+        if "chunk" in env:   # 11/07 群文件的一块: 不进聊天记录, 收齐了挂到那条消息上
+            rfiles.take_chunk(rid, sender, env)
+            return None
+        if "need" in env:    # 同事来要缺的块: 我发的我补
+            rfiles.serve_need(rid, sender, me, env)
+            return None
         text = str(env.get("text") or "").strip()[:TEXT_MAX]
-        if not _MSG_ID.fullmatch(mid) or not text:
+        got_files = rfiles.clean_meta(env.get("files"))
+        if not text and not got_files:
             return None
         if store.has_message(rid, mid):
             return None   # 重复
@@ -458,6 +512,8 @@ def _apply(msg: dict[str, Any], me: str) -> dict[str, Any] | None:
         ments = [str(x).lower() for x in env.get("mentions") or [] if isinstance(x, str)][:MAX_MEMBERS]
         rt = str(env.get("reply_to") or "")
         extra: dict[str, Any] = {"reply_to": rt} if _MSG_ID.fullmatch(rt) else {}
+        if got_files:
+            extra["files"] = got_files
         mkind = "text"
         from . import colleague_rooms_tasks as rt  # noqa: PLC0415  (第二 / 三步: 任务卡 / 状态 / 自动转发)
         if "card" in env:
@@ -481,8 +537,10 @@ def _apply(msg: dict[str, Any], me: str) -> dict[str, Any] | None:
         _append(rid, rec)
         room["last_msg_at"] = rec["received_at"]
         _save(room)
+        if got_files:
+            rfiles.assemble(rid, rec)   # 块可能比消息先到
         return {"kind": "mention" if me in ments else "msg", "room_id": rid, "from": sender, "title": room["name"],
-                "text": text[:80], "joined": room.get("my_state") == "joined"}
+                "text": (text or "📎 " + "、".join(f["name"] for f in got_files))[:80], "joined": room.get("my_state") == "joined"}
     return None
 
 
@@ -538,6 +596,10 @@ def _apply_roster(room: dict[str, Any], env: dict[str, Any], sender: str, me: st
     keep_days = keep._valid(env.get("retention_days"))
     if keep_days != room.get("retention_days"):
         notes.append(f"群主把记录保留改成 {keep_days} 天" if keep_days else "群主把记录保留改回跟公司规定")
+    new_owner = str(env.get("owner") or "").lower()
+    if new_owner and new_owner != room.get("owner") and (merged.get(new_owner) or {}).get("state") == "joined":
+        room["owner"] = new_owner   # 11/07 群主转让: 之后只认新群主
+        notes.append("群主把群主转给了你" if new_owner == me else f"群主把群主转给了 {merged[new_owner].get('name') or new_owner.split('@')[0]}")
     room.update(ver=ver, name=name, purpose=purpose, members=merged, retention_days=keep_days)
     removed_me = me in gone or (env.get("removed") and me in env.get("removed"))
     if removed_me and room.get("my_state") in ACTIVE:
@@ -568,6 +630,7 @@ def sync() -> dict[str, Any]:
     store.set_meta("sync_at", _now())
     _note_key_changes()
     keep.maintain()   # 到期删 (最多 10 分钟一次)
+    mend.retry_and_mend()
     if gap:
         for rid in _room_ids():
             room = _room(rid)
@@ -607,11 +670,18 @@ def summary(room: dict[str, Any], me: str = "") -> dict[str, Any]:
             "members": len(_active(room)), "joined": sum(1 for v in room.get("members", {}).values() if v.get("state") == "joined"),
             "unread": len(unread) if room.get("my_state") == "joined" else 0,
             "mentioned": sum(1 for m in unread if me and me in (m.get("mentions") or [])) if room.get("my_state") == "joined" else 0,
-            "last": ({"from": last.get("from"), "name": _label(room, last.get("from") or ""), "text": last["text"][:60], "at": last.get("at"),
+            "last": ({"from": last.get("from"), "name": _label(room, last.get("from") or ""), "text": _preview(last)[:60], "at": last.get("at"),
                       "kind": last.get("kind")}
                      if last else None),
             "activity": room.get("last_msg_at") or room.get("invited_at") or room.get("created_at") or "",
             "retention": keep.effective(room), "retention_days": room.get("retention_days")}
+
+
+def _preview(m: dict[str, Any]) -> str:
+    """只发了文件的消息, 预览写文件名。"""
+    if m.get("text"):
+        return m["text"]
+    return "📎 " + "、".join(f.get("name", "") for f in m.get("files") or [])
 
 
 def list_rooms() -> dict[str, Any]:
@@ -642,7 +712,9 @@ def get(room_id: str, before: Any = None, around: Any = None) -> dict[str, Any]:
     order = {"joined": 0, "invited": 1}
     people.sort(key=lambda p: (not p["owner"], order.get(p["state"], 2), p["name"] or p["email"]))
     older = store.count_before(rid, msgs[0]["seq"]) if msgs else 0
-    return {"ok": True, "me": me, "room": summary(room, me), "members": people, "messages": msgs, "older": older}
+    mend.decorate(rid, msgs, me)
+    return {"ok": True, "me": me, "room": {**summary(room, me), "issue": outbox.room_issue(rid)},
+            "members": people, "messages": msgs, "older": older}
 
 
 def search(room_id: str, q: Any, from_email: Any = None) -> dict[str, Any]:
@@ -684,12 +756,15 @@ def pim_handlers(params: dict[str, Any]) -> dict[str, Any]:
         "pim/croom_create": lambda: create(params),
         "pim/croom_join": lambda: join(rid),
         "pim/croom_decline": lambda: decline(rid),
-        "pim/croom_send": lambda: send(rid, params.get("text"), params.get("mentions"), params.get("reply_to")),
+        "pim/croom_send": lambda: send(rid, params.get("text"), params.get("mentions"), params.get("reply_to"), params.get("files")),
         "pim/croom_read": lambda: mark_read(rid),
         "pim/croom_add": lambda: add_members(rid, params.get("members")),
         "pim/croom_remove": lambda: remove_member(rid, str(params.get("email") or "")),
         "pim/croom_update": lambda: update_info(rid, params),
         "pim/croom_disband": lambda: disband(rid),
+        "pim/croom_transfer": lambda: transfer(rid, str(params.get("email") or "")),
+        "pim/croom_resend": lambda: mend.resend(rid, str(params.get("msg_id") or ""), params.get("email")),
+        "pim/croom_file_save": lambda: rfiles.save(load(rid), str(params.get("file_id") or "")),
         "pim/croom_leave": lambda: leave(rid),
         "pim/croom_delete": lambda: delete_local(rid),
     }, _LOCK)

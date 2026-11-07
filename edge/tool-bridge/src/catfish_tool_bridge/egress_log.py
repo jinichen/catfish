@@ -95,6 +95,7 @@ _SOURCE_PURPOSE = {
     # 11/5: 同事群聊 (docs/GROUP-CHAT-PLAN.md 第三步)
     "room-auto-post": "群聊 · 定时任务结果自动转发",
     "plugin:toolbridge-room-assist": "群聊 · 小鲶总结 / 起草",
+    "room-file": "群聊 · 发文件",   # 11/07 群文件分块 / 补块
     # 11/06: tool-bridge 直接调网关的几处 (原来不带来源)
     "plugin:toolbridge-memory-compact": "整理记忆",
     "plugin:toolbridge-memory-dedupe": "记忆去重判断",
@@ -115,6 +116,8 @@ _PATH_PURPOSE = (
     ("/api/show", "查询模型信息"),
     # 11/5: 填表 / 派任务 / 群聊的邮筒 (内容不透明, 取走即清空)。原来落成路径, 页面上显示成「网页请求」
     ("/api/room-link/mailbox", "同事协作 · 邮筒"),
+    # 11/07: 登记 / 查同事的加密公钥 (只有公钥, 没有内容)。原来也落成路径, 显示成「网页请求」
+    ("/api/room-link/keys", "同事协作 · 加密公钥"),
 )
 _HOST_PURPOSE = (
     ("parallel.ai", "网页搜索"),

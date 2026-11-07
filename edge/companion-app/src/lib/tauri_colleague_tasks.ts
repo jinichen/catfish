@@ -31,6 +31,20 @@ export interface IncomingTaskSummary {
   to_review: number;
   /** 有步骤等我在场确认的期数 */
   to_confirm?: number;
+  /** 11/07 接下就开工的: 小鲶在后台做到哪了 (只给本人看; 还没开始 = null) */
+  work?: TaskWorkProgress | null;
+}
+
+/** 11/07 小鲶后台做任务的进度 (tool-bridge 读 hermes 定时任务会话) */
+export interface TaskWorkProgress {
+  running: boolean;
+  /** 做了几步 (调用了几次工具) */
+  steps: number;
+  /** 最近一步用的工具 (hermes 工具名) */
+  tool: string;
+  /** 那一步的参数摘要 (搜什么 / 读哪个文件) */
+  detail: string;
+  updated_at: string | null;
 }
 
 export interface OutgoingTaskSummary {

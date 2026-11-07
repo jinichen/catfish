@@ -46,6 +46,34 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS messages_room_seq ON messages (room_id, seq);
 CREATE INDEX IF NOT EXISTS messages_at ON messages (at);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+-- 11/07 没送到的信 (colleague_rooms_outbox.py): 每个收件人一行, 自动补发 / 界面「重发」; 送到就删
+CREATE TABLE IF NOT EXISTS outbox (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id    TEXT NOT NULL,
+    ref        TEXT,
+    to_email   TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    env        TEXT NOT NULL,
+    source     TEXT,
+    reason     TEXT NOT NULL,
+    error      TEXT,
+    tries      INTEGER NOT NULL DEFAULT 0,
+    next_at    REAL NOT NULL,
+    created_at REAL NOT NULL,
+    gave_up    INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS outbox_due ON outbox (gave_up, next_at);
+CREATE INDEX IF NOT EXISTS outbox_ref ON outbox (room_id, ref);
+-- 11/07 群文件 (colleague_rooms_files.py): 收齐的文件整个存库里 (库是加密的, 不落明文文件); 没收齐的块先放 file_chunks
+CREATE TABLE IF NOT EXISTS files (
+    room_id TEXT NOT NULL, file_id TEXT NOT NULL, msg_id TEXT NOT NULL, sender TEXT NOT NULL,
+    name TEXT NOT NULL, size INTEGER NOT NULL, sha256 TEXT NOT NULL, data BLOB NOT NULL, at TEXT NOT NULL,
+    PRIMARY KEY (room_id, file_id)
+);
+CREATE TABLE IF NOT EXISTS file_chunks (
+    room_id TEXT NOT NULL, file_id TEXT NOT NULL, sender TEXT NOT NULL, i INTEGER NOT NULL, data BLOB NOT NULL,
+    at REAL NOT NULL, PRIMARY KEY (room_id, file_id, i)
+);
 """
 
 
@@ -115,8 +143,8 @@ def room_ids() -> list[str]:
 
 def delete_room(room_id: str) -> None:
     with _conn() as con:
-        con.execute("DELETE FROM messages WHERE room_id = ?", (room_id,))
-        con.execute("DELETE FROM rooms WHERE room_id = ?", (room_id,))
+        for table in ("messages", "outbox", "files", "file_chunks", "rooms"):
+            con.execute(f"DELETE FROM {table} WHERE room_id = ?", (room_id,))
 
 
 # ── 消息 ─────────────────────────────────────────────────────────
@@ -137,6 +165,12 @@ def update_message(room_id: str, msg: dict[str, Any]) -> None:
     with _conn() as con:
         con.execute("UPDATE messages SET data = ? WHERE room_id = ? AND msg_id = ?",
                     (json.dumps(data, ensure_ascii=False), room_id, msg["msg_id"]))
+
+
+def get_message(room_id: str, msg_id: str) -> dict[str, Any] | None:
+    with _conn() as con:
+        r = con.execute("SELECT seq, data FROM messages WHERE room_id = ? AND msg_id = ?", (room_id, msg_id)).fetchone()
+    return _row_msg(r) if r else None
 
 
 def has_message(room_id: str, msg_id: str) -> bool:
@@ -228,7 +262,19 @@ def prune_before(cutoff_iso: str, room_id: str | None = None) -> int:
             cur = con.execute("DELETE FROM messages WHERE room_id = ? AND at < ?", (room_id, cutoff_iso))
         else:
             cur = con.execute("DELETE FROM messages WHERE at < ?", (cutoff_iso,))
+        # 11/07 消息删了, 挂在它上面的文件 / 没送到的信一起删 (文件跟着消息的保留期走)
+        con.execute("DELETE FROM files WHERE NOT EXISTS "
+                    "(SELECT 1 FROM messages m WHERE m.room_id = files.room_id AND m.msg_id = files.msg_id)")
+        con.execute("DELETE FROM outbox WHERE ref IS NOT NULL AND NOT EXISTS "
+                    "(SELECT 1 FROM messages m WHERE m.room_id = outbox.room_id AND m.msg_id = outbox.ref)")
         return cur.rowcount
+
+
+@contextmanager
+def tx() -> Iterator[sqlite3.Connection]:
+    """一个事务 (outbox / 文件那两个文件直接写 SQL 用)。"""
+    with _conn() as con:
+        yield con
 
 
 # ── meta ─────────────────────────────────────────────────────────

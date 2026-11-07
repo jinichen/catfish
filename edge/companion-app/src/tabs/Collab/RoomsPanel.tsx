@@ -9,20 +9,26 @@
  *   群里显示的就是这句话, 下面一行每人的状态; 被派到的人在这条消息上点「接下」「交回」。结果只回发起人。
  * 第三步 (同日): 「🐟 小鲶」—— 总结讨论 / 整理待办 / 起草回复, 读本机群记录出草稿填进输入框, 自己改了再发;
  *   派定时 / 周期任务时可以勾「每次结果自动发到群里」(唯一的自动发群特例, 发起人电脑收到结果时转进群)。
+ * 11/07 (参照 hermes 群聊): 没送到的不再弹红字, 挂在那条消息下面 (RoomsDelivery.tsx); 群主可以转让; 群里能发文件 (📎);
+ *   接下就开工的任务, 我这一栏显示小鲶做到第几步。
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import { refreshRooms, setActiveRoom, useColleagueRooms } from "../../lib/colleagueRoomsStore";
 import { refreshTasks, useColleagueTasks } from "../../lib/colleagueTasksStore";
+import type { IncomingTaskSummary } from "../../lib/tauri_colleague_tasks";
+import { workText } from "../../lib/taskWorkProgress";
 import { pipelineCreate, taskAccept, taskCreate, taskGet, taskSend } from "../../lib/tauri_colleague_tasks";
 import {
-  failedNotice, roomAssist, roomDecline, roomDelete, roomDisband, roomGet, roomJoin, roomLeave, roomRead, roomRemove, roomSend, roomUpdate,
+  failedNotice, roomAssist, roomDecline, roomDelete, roomDisband, roomGet, roomJoin, roomLeave, roomRead, roomRemove, roomSend, roomTransfer,
+  roomUpdate,
   type AssistKind,
   type RoomDetail, type RoomMember, type RoomMessage, type RoomSummary,
 } from "../../lib/tauri_colleague_rooms";
 import { Overlay, muted } from "./formsUi";
 import RoomComposer, { NAME_MAX } from "./RoomComposer";
 import { RetentionDialog, RetentionSelect, SearchPanel, daysLabel } from "./RoomsExtras";
+import { AttachButton, DeliveryLine, IssueBar, PickedChips, RoomFileList, pickFiles, type PickedFile } from "./RoomsDelivery";
 import { STATE_WORD, cardStates, parseChatTask, summaryText, type ChatTask, type SingleTask } from "./roomTasks";
 import TaskProgress from "./TaskProgress";
 import TaskWork from "./TaskWork";
@@ -192,7 +198,9 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
   const [replyTo, setReplyTo] = useState<RoomMessage | null>(null);
   const [atOpen, setAtOpen] = useState(false);
   const [showMembers, setShowMembers] = useState(false);
-  const [modal, setModal] = useState<null | "add" | "info" | "disband" | "leave" | { remove: RoomMember }>(null);
+  const [modal, setModal] = useState<null | "add" | "info" | "disband" | "leave" | { remove: RoomMember } | { transfer: RoomMember }>(null);
+  const [picked, setPicked] = useState<PickedFile[]>([]);
+  const [dragOver, setDragOver] = useState(false);
   const [work, setWork] = useState<string | null>(null);
   const [watch, setWatch] = useState<{ id: string; notice?: string } | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -248,7 +256,8 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
     setError(null);
     try {
       const r = (await fn()) as { failed?: { email: string; error: string }[] };
-      onNotice(r?.failed ? failedNotice(r.failed, what) : undefined);
+      // 11/07 群里没送到的挂在那条消息下面 (自动补发 / 重发), 不再在顶上弹红字; 只有派任务 (另一个邮筒) 还在这说
+      onNotice(r?.failed && what ? failedNotice(r.failed, what) : undefined);
       await load();
       void refreshRooms();
       return true;
@@ -336,9 +345,15 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
 
   async function send() {
     const body = text.trim();
-    if (!body) return;
-    const ok = await act(() => roomSend(roomId, body, mentionsIn(body, members, me), replyTo?.msg_id), "没收到这条消息");
-    if (ok) { setText(""); setReplyTo(null); }
+    if (!body && !picked.length) return;
+    const files = picked.map((f) => ({ name: f.name, data: f.data }));
+    const ok = await act(() => roomSend(roomId, body, mentionsIn(body, members, me), replyTo?.msg_id, files));
+    if (ok) { setText(""); setReplyTo(null); setPicked([]); }
+  }
+  async function addPicked(list: FileList | File[]) {
+    const r = await pickFiles(list, picked);
+    setPicked(r.files);
+    setError(r.error ?? null);
   }
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) { e.preventDefault(); void dispatch(); return; }
@@ -365,6 +380,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
           <Btn kind="ghost" onClick={() => setSearching((v) => !v)}>🔍 搜索</Btn>
           <Btn kind="ghost" onClick={() => setShowMembers((v) => !v)}>{showMembers ? "收起成员" : `👥 成员 ${room.joined}`}</Btn>
         </div>
+        <IssueBar issue={room.issue} />
         {searching && <SearchPanel roomId={roomId} members={members} onJump={(seq) => setJump(seq)} onClose={() => { setSearching(false); setJump(null); }} />}
         {notice && <ErrorLine>{notice}</ErrorLine>}
         {hint && <div style={{ fontSize: 12, color: "var(--catfish-cyan)", flexShrink: 0 }}>{hint}</div>}
@@ -388,8 +404,8 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
               <span id={`room-msg-${jump}`} style={{ ...muted, color: "var(--catfish-cyan)" }}>↓ 搜到的这条</span>
             )}
             {m.kind === "card" && m.card ? (
-              <TaskMessage m={m} me={me} members={members} messages={shown} busy={busy}
-                           local={incoming.find((t) => t.task_id === m.card!.task_id)?.state}
+              <TaskMessage m={m} me={me} members={members} messages={shown} busy={busy} roomId={roomId} onChanged={() => void load()}
+                           local={incoming.find((t) => t.task_id === m.card!.task_id)}
                            onAccept={() => void act(async () => {
                              await refreshTasks();
                              const r = await taskAccept(m.card!.task_id);
@@ -402,6 +418,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
                            onSummary={joined ? () => void fillSummary(m.card!.task_id, m.card!.title) : undefined} />
             ) : (
               <Bubble m={m} mine={m.from === me} members={members} me={me} quoted={m.reply_to ? byId.get(m.reply_to) : undefined}
+                      roomId={roomId} onChanged={() => void load()}
                       onReply={joined && m.kind === "text" ? () => setReplyTo(m) : undefined} />
             )}
           </Fragment>))}
@@ -414,7 +431,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
             <span style={{ fontSize: 13 }}>{labelOf(members, room.owner)} 邀请你加入「{room.name}」。加入后才收发群消息, 加入前的记录看不到。</span>
             <span style={{ display: "flex", gap: 6 }}>
               <Btn kind="ghost" disabled={busy} onClick={() => void act(() => roomDecline(roomId))}>不加入</Btn>
-              <Btn kind="primary" disabled={busy} onClick={() => void act(() => roomJoin(roomId), "没收到你加入的通知")}>加入</Btn>
+              <Btn kind="primary" disabled={busy} onClick={() => void act(() => roomJoin(roomId))}>加入</Btn>
             </span>
           </div>
         )}
@@ -425,7 +442,16 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
           </div>
         )}
         {joined && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 4, position: "relative", flexShrink: 0 }}>
+          // 11/07 文件直接拖进来 / 粘贴 (跟对话输入框一样); 不接住的话浏览器会把文件路径当文字插进输入框
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, position: "relative", flexShrink: 0 }}
+               onDragOver={(e) => { if (e.dataTransfer?.types?.includes("Files")) { e.preventDefault(); setDragOver(true); } }}
+               onDragLeave={() => setDragOver(false)}
+               onDrop={(e) => {
+                 if (!e.dataTransfer?.files?.length) return;
+                 e.preventDefault();
+                 setDragOver(false);
+                 void addPicked(e.dataTransfer.files);
+               }}>
             {waiting.length > 0 && (
               <span style={{ ...muted, color: "var(--status-warn, #d97706)" }}>
                 {waitingNotice(waiting)}
@@ -456,10 +482,17 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
                 ))}
               </div>
             )}
+            <PickedChips files={picked} onRemove={(i) => setPicked((p) => p.filter((_, k) => k !== i))} />
             <textarea value={text} rows={Math.min(8, Math.max(2, text.split("\n").length))} maxLength={TEXT_MAX} onKeyDown={onKey}
+                      onPaste={(e) => {
+                        const files = Array.from(e.clipboardData?.items ?? []).filter((it) => it.kind === "file")
+                          .map((it) => it.getAsFile()).filter((f): f is File => Boolean(f));
+                        if (files.length) { e.preventDefault(); void addPicked(files); }
+                      }}
                       onChange={(e) => { setText(e.target.value); setAtOpen(e.target.value.endsWith("@")); }}
-                      placeholder="说点什么 · Enter 发送 · @ 提醒某人 · 要派任务就照常说, 如「@张三 周五前交拜访记录」, 再点「派给@的人」"
-                      style={{ ...inputStyle, resize: "none" }} />
+                      placeholder={dragOver ? "松手, 把文件加到这条消息里" : "说点什么 · Enter 发送 · @ 提醒某人 · 文件可以直接拖进来 · 要派任务就照常说, 如「@张三 周五前交拜访记录」, 再点「派给@的人」"}
+                      style={{ ...inputStyle, resize: "none",
+                               ...(dragOver ? { borderColor: "var(--catfish-cyan)", boxShadow: "0 0 0 2px var(--catfish-cyan)" } : {}) }} />
             {asTask && (
               <span style={{ ...muted, color: asTask.problem ? "var(--status-warn, #d97706)" : "inherit" }}>
                 {asTask.problem ? `派不了: ${asTask.problem}` : `点「派给@的人」= ${asTask.label}`}
@@ -488,16 +521,17 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
               </div>
             )}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-              <span style={{ ...muted, whiteSpace: "nowrap" }} title="长材料请用邮件, 还不能传附件">{text.length}/{TEXT_MAX}</span>
+              <span style={{ ...muted, whiteSpace: "nowrap" }} title="长文字请用邮件; 文件点 📎 (最多 5 个, 合计 5MB)">{text.length}/{TEXT_MAX}</span>
               <span style={{ display: "flex", gap: 6, whiteSpace: "nowrap", flexShrink: 0 }}>
                 <Btn kind="ghost" disabled={Boolean(helping)} onClick={() => setHelpOpen((v) => !v)}>
                   {helping ? "🐟 小鲶在写…" : "🐟 小鲶"}
                 </Btn>
                 <Btn kind="ghost" onClick={() => setAtOpen((v) => !v)}>@</Btn>
+                <AttachButton disabled={busy} onPick={(l) => void addPicked(l)} />
                 {asTask && (
                   <Btn kind="ghost" disabled={busy || Boolean(asTask.problem)} onClick={() => void dispatch()}>派给@的人</Btn>
                 )}
-                <Btn kind="primary" disabled={busy || !text.trim()} onClick={() => void send()}>{busy ? "发送中…" : "发送"}</Btn>
+                <Btn kind="primary" disabled={busy || (!text.trim() && !picked.length)} onClick={() => void send()}>{busy ? "发送中…" : "发送"}</Btn>
               </span>
             </div>
           </div>
@@ -515,6 +549,10 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
               </span>
               <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
                 <span style={{ ...muted, whiteSpace: "nowrap" }}>{STATE_LABEL[m.state]}</span>
+                {owner && joined && !m.me && m.state === "joined" && (
+                  <button type="button" aria-label={`把群主转给 ${m.email}`} onClick={() => setModal({ transfer: m })}
+                          style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 11, color: "var(--catfish-text-muted)" }}>设为群主</button>
+                )}
                 {owner && joined && !m.me && (m.state === "joined" || m.state === "invited") && (
                   <button type="button" aria-label={`移出 ${m.email}`} onClick={() => setModal({ remove: m })}
                           style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 11, color: "var(--catfish-text-muted)" }}>移出</button>
@@ -528,6 +566,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
             <Btn kind="ghost" onClick={() => setModal("add")}>拉同事进群</Btn>
             <Btn kind="ghost" onClick={() => setModal("info")}>改群名 / 公告</Btn>
             <Btn kind="ghost" onClick={() => setModal("disband")}>解散群</Btn>
+            <span style={muted}>要退群: 先在上面把「设为群主」给一位已加入的成员。</span>
           </div>
         )}
         {joined && !owner && <div style={{ marginTop: 6 }}><Btn kind="ghost" onClick={() => setModal("leave")}>退出群</Btn></div>}
@@ -545,20 +584,33 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
       {modal === "leave" && <Confirm title="退出群" text={`退出「${room.name}」? 群里的人会收到通知, 之后收不到这个群的消息。`}
                                      ok="退出" busy={busy} onClose={() => setModal(null)}
                                      onOk={async () => { if (await act(() => roomLeave(roomId))) setModal(null); }} />}
-      {modal && typeof modal === "object" && (
+      {modal && typeof modal === "object" && "remove" in modal && (
         <Confirm title="移出成员" text={`把 ${modal.remove.name || modal.remove.email} 移出「${room.name}」?`} ok="移出" busy={busy}
                  onClose={() => setModal(null)}
                  onOk={async () => { if (await act(() => roomRemove(roomId, modal.remove.email))) setModal(null); }} />
+      )}
+      {modal && typeof modal === "object" && "transfer" in modal && (
+        <Confirm title="转让群主" busy={busy} ok="转让" onClose={() => setModal(null)}
+                 text={`把「${room.name}」的群主转给 ${modal.transfer.name || modal.transfer.email}? 之后拉人、移出、改群名和公告、解散都由 TA 来, 你就是普通成员 (也就能退群了)。所有成员都会收到通知。`}
+                 onOk={async () => { if (await act(() => roomTransfer(roomId, modal.transfer.email))) setModal(null); }} />
       )}
     </div>
   );
 }
 
-function Bubble({ m, mine, members, me, quoted, onReply }: {
+function Bubble({ m, mine, members, me, quoted, onReply, roomId, onChanged }: {
   m: RoomMessage; mine: boolean; members: RoomMember[]; me: string; quoted?: RoomMessage; onReply?: () => void;
+  roomId: string; onChanged: () => void;
 }) {
+  const delivery = <DeliveryLine roomId={roomId} msgId={m.msg_id} rows={m.delivery} members={members} hasFiles={Boolean(m.files?.length)}
+                                 align={m.kind === "system" ? "center" : mine ? "flex-end" : "flex-start"} onChanged={onChanged} />;
   if (m.kind === "system") {
-    return <span style={oneLine}>{m.text} · {timeLabel(m.at)}</span>;
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+        <span style={oneLine}>{m.text} · {timeLabel(m.at)}</span>
+        {delivery}
+      </div>
+    );
   }
   if (m.kind === "auto") {
     return (
@@ -568,6 +620,7 @@ function Bubble({ m, mine, members, me, quoted, onReply }: {
                       border: "1px dashed var(--catfish-border)", background: "var(--catfish-bg-subtle, rgba(0,0,0,0.03))" }}>
           {m.text}
         </div>
+        {delivery}
       </div>
     );
   }
@@ -593,9 +646,10 @@ function Bubble({ m, mine, members, me, quoted, onReply }: {
           </div>
         )}
         {m.text}
+        {m.files?.length ? <RoomFileList roomId={roomId} files={m.files} mine={mine} /> : null}
       </div>
+      {delivery}
       <span style={{ display: "flex", gap: 8 }}>
-        {m.undelivered?.length ? <span style={{ ...muted, color: "var(--status-warn, #d97706)" }}>{m.undelivered.length} 人没收到</span> : null}
         {onReply && (
           <button type="button" onClick={onReply}
                   style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 11, color: "var(--catfish-text-muted)", padding: 0 }}>
@@ -608,12 +662,14 @@ function Bubble({ m, mine, members, me, quoted, onReply }: {
 }
 
 /** 群里派的任务: 就是发起人说的那句话, 下面一行每人的状态 + 自己能点的按钮。 */
-function TaskMessage({ m, me, members, messages, busy, local, onAccept, onWork, onWatch, onSummary }: {
+function TaskMessage({ m, me, members, messages, busy, local: rec, onAccept, onWork, onWatch, onSummary, roomId, onChanged }: {
   m: RoomMessage; me: string; members: RoomMember[]; messages: RoomMessage[]; busy: boolean;
-  /** 派给我的: 我这边这个任务现在的状态 (小鲶做好了 = 待核对) */
-  local?: string;
+  /** 派给我的: 我这边这个任务 (状态: 小鲶做好了 = 待核对; 11/07 work = 小鲶在后台做到哪了) */
+  local?: IncomingTaskSummary;
   onAccept: () => void; onWork: () => void; onWatch: () => void; onSummary?: () => void;
+  roomId: string; onChanged: () => void;
 }) {
+  const local = rec?.state;
   const c = m.card!;
   const mine = c.owner === me;
   const states = cardStates(c.task_id, c.assignees, messages, members);
@@ -628,7 +684,8 @@ function TaskMessage({ m, me, members, messages, busy, local, onAccept, onWork, 
         {states.map((x) => (
           <span key={x.email} title={x.email}
                 style={{ color: x.state === "done" ? "var(--status-ok, #059669)" : undefined }}>
-            {x.email === me ? "我" : x.name} {x.email === me && local === "待核对" ? "待核对 (小鲶做好了)" : STATE_WORD[x.state]}
+            {x.email === me ? "我" : x.name} {x.email === me && local === "待核对" ? "待核对 (小鲶做好了)"
+              : x.email === me && local === "在做" && rec?.work !== undefined ? workText(rec.work) : STATE_WORD[x.state]}
             {x.period ? ` 第 ${x.period} 期` : ""}
           </span>
         ))}
@@ -646,6 +703,7 @@ function TaskMessage({ m, me, members, messages, busy, local, onAccept, onWork, 
                     opacity: myState === "done" || myState === "declined" ? 0.75 : 1 }}>
         {m.text}
       </div>
+      <DeliveryLine roomId={roomId} msgId={m.msg_id} rows={m.delivery} members={members} align={mine ? "flex-end" : "flex-start"} onChanged={onChanged} />
     </div>
   );
 }

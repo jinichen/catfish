@@ -7,7 +7,7 @@
 import { useCallback, useState } from "react";
 
 import { refreshRooms } from "../../lib/colleagueRoomsStore";
-import { failedNotice, roomAdd, roomCreate, type PersonIn } from "../../lib/tauri_colleague_rooms";
+import { roomAdd, roomCreate, type PersonIn } from "../../lib/tauri_colleague_rooms";
 import type { Person } from "../../lib/tauri_forms";
 import { Overlay, muted } from "./formsUi";
 import RecipientPicker, { allRecipients } from "./RecipientPicker";
@@ -51,7 +51,8 @@ export default function RoomComposer({ roomId, existing = 0, onClose, onDone }: 
       const members = withNames(all, names);
       const r = adding ? await roomAdd(roomId as string, members) : await roomCreate(name.trim(), purpose.trim(), members);
       void refreshRooms();
-      onDone(r.room.room_id, failedNotice(r.failed, "没收到邀请"));
+      // 11/07 没收到邀请的挂在聊天里「你邀请了…」那条下面 (自动补发 / 重发), 不再在顶上弹红字
+      onDone(r.room.room_id);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

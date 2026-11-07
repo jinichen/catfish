@@ -19,7 +19,9 @@ hermes 自己管不到的, 每次同步 (Companion 20 秒一次) 在这里补:
 """
 from __future__ import annotations
 
+import json
 import re
+import sqlite3
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -237,3 +239,60 @@ def overdue_once(rec: dict[str, Any], now: datetime | None = None) -> bool:
     if s["kind"] != "once" or rec.get("periods"):
         return False
     return (now or datetime.now()) > datetime.fromisoformat(s["at"]) + CATCHUP_AFTER
+
+
+# ── 小鲶在后台做到哪了 (11/07) ─────────────────────────────────────
+#
+# 参照 hermes 群聊把成员 AI 的实时工具进度单独推出来 (不写进群记录): 「接下就让小鲶开工」原来做完之前只显示「在做」。
+# hermes 跑定时任务时会话叫 cron_<job_id>_<时间>, 每做完一步就把消息写进 state.db —— 只读那个库, 数第几步、最近在用哪个工具。
+# 只给本人自己的界面看, 不往群里发, 也不发给派任务的人。
+
+def run_progress(job_id: str | None) -> dict[str, Any] | None:
+    """{running, steps, tool, detail, updated_at}; 还没开始 / 读不到 = None。"""
+    if not job_id or not re.fullmatch(r"[0-9A-Za-z_-]{4,64}", str(job_id)):
+        return None
+    from .sessions_search import _connect_ro  # noqa: PLC0415
+    con = _connect_ro()
+    if con is None:
+        return None
+    try:
+        con.row_factory = sqlite3.Row
+        like = "cron_" + str(job_id).replace("_", "\\_") + "\\_%"
+        s = con.execute("SELECT id, ended_at FROM sessions WHERE id LIKE ? ESCAPE '\\' ORDER BY started_at DESC LIMIT 1",
+                        (like,)).fetchone()
+        if not s:
+            return None
+        rows = con.execute("SELECT tool_calls, timestamp FROM messages WHERE session_id = ? AND tool_calls IS NOT NULL"
+                           " AND tool_calls != '' ORDER BY timestamp", (s["id"],)).fetchall()
+        last_ts = con.execute("SELECT MAX(timestamp) FROM messages WHERE session_id = ?", (s["id"],)).fetchone()[0]
+    except sqlite3.Error:
+        return None
+    finally:
+        con.close()
+    steps, tool, detail = 0, "", ""
+    for r in rows:
+        try:
+            calls = json.loads(r["tool_calls"]) or []
+        except ValueError:
+            continue
+        for c in calls if isinstance(calls, list) else []:
+            fn = (c or {}).get("function") or {}
+            steps += 1
+            tool, detail = str(fn.get("name") or ""), _arg_preview(fn.get("arguments"))
+    return {"running": s["ended_at"] is None, "steps": steps, "tool": tool, "detail": detail,
+            "updated_at": datetime.fromtimestamp(last_ts).astimezone().isoformat(timespec="seconds") if last_ts else None}
+
+
+def _arg_preview(raw: Any) -> str:
+    """工具参数里第一个像样的字符串 (搜什么 / 读哪个文件), 截 40 字。"""
+    try:
+        args = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        return ""
+    if not isinstance(args, dict):
+        return ""
+    for k in ("query", "q", "keyword", "path", "file_path", "url", "name", "title", "subject", "command"):
+        v = args.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip().replace("\n", " ")[:40]
+    return ""

@@ -167,7 +167,7 @@ def test_群主拉人_移出_改名_解散(w):
 
 def test_只有群主能管_群主不能退(w):
     rid = _make_room(w, (ZHANG,))
-    with pytest.raises(ValueError, match="群主不能退群"):
+    with pytest.raises(ValueError, match="群主不能直接退群"):
         cr.leave(rid)
     w.sync(ZHANG)
     cr.join(rid)

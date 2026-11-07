@@ -65,6 +65,8 @@ const PATH_PURPOSE: [string, string][] = [
   ["/api/egress/anchor", "报指纹 (防篡改)"],
   ["/api/show", "查询模型信息"],
   ["/api/room-link/mailbox", "同事协作 · 邮筒"],
+  // 11/07: 登记 / 查同事的加密公钥 (只有公钥), 原来显示成「网页请求」
+  ["/api/room-link/keys", "同事协作 · 加密公钥"],
 ];
 
 /** 页面上看到的「做什么」: catfish_source 标签优先, 其次按路径 */
@@ -93,6 +95,7 @@ const SOURCE_PURPOSE: Record<string, string> = {
   // 11/5: 同事群聊 (tool-bridge 打的 X-Catfish-Source, 跟 egress_log.py 同一套叫法)
   "room-auto-post": "群聊 · 定时任务结果自动转发",
   "plugin:toolbridge-room-assist": "群聊 · 小鲶总结 / 起草",
+  "room-file": "群聊 · 发文件",
   // 11/06: tool-bridge 直接调网关的几处 (原来不带来源)
   "plugin:toolbridge-memory-compact": "整理记忆",
   "plugin:toolbridge-memory-dedupe": "记忆去重判断",
@@ -109,6 +112,7 @@ export function displayPurpose(purpose: string, destHost: string, url = ""): str
   if (purpose === "/api/egress/anchor") return "报指纹 (防篡改)";
   if (purpose === "/api/show") return "查询模型信息";
   if (purpose === "/api/room-link/mailbox") return "同事协作 · 邮筒";
+  if (purpose === "/api/room-link/keys") return "同事协作 · 加密公钥";
   if (purpose === "微信") return destHost.includes("cdn.") ? "微信 · 发图片 / 文件" : "微信 · 收发消息";
   // 11/02: 没标用途的第三方请求, purpose 里落的是网址路径 (/captcha_v4/… /static_resources/…) ——
   // 每条路径各占一行, 又长又看不懂。按去向合成一行「网页请求」, 具体网址在下面明细里看。

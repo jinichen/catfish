@@ -9,6 +9,7 @@
 import { useState, type ReactNode } from "react";
 
 import { useColleagueTasks } from "../../lib/colleagueTasksStore";
+import { workText } from "../../lib/taskWorkProgress";
 import { StateTag, muted } from "./formsUi";
 import PipelineComposer from "./PipelineComposer";
 import PipelineProgress from "./PipelineProgress";
@@ -96,7 +97,8 @@ export default function TasksPanel() {
         {loaded && inbox.length === 0 && <span style={muted}>{all || q ? "没有找到。" : "没有要你处理的。"}</span>}
         {inbox.map((t) => (
           <Row key={t.task_id} title={t.title} onClick={() => setWorking(t.task_id)} state={<StateTag state={t.state} />}
-               sub={[t.owner, t.schedule ? `⏰ ${t.schedule}` : t.deadline ? `截止 ${shortDay(t.deadline)}` : "",
+               sub={[t.state === "在做" && t.work !== undefined ? workText(t.work) : "",   // 11/07 小鲶做到哪了放最前 (行窄会截)
+                     t.owner, t.schedule ? `⏰ ${t.schedule}` : t.deadline ? `截止 ${shortDay(t.deadline)}` : "",
                      t.to_review ? `${t.to_review} 次待核对` : "", t.to_confirm ? `${t.to_confirm} 次要确认` : "",
                      t.late && ACTIVE.has(t.state) ? "已过截止" : "", t.reminded_at && ACTIVE.has(t.state) ? "被催了" : ""]
                      .filter(Boolean).join(" · ")} />

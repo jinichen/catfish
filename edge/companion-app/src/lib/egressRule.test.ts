@@ -27,6 +27,9 @@ describe("数据外发记录标准 (10/24)", () => {
     // 11/5: 同事协作的邮筒 (原来显示成「网页请求」) / 群聊自动转发
     expect(egressPurpose("http://x:8999/api/room-link/mailbox")).toBe("同事协作 · 邮筒");
     expect(displayPurpose("/api/room-link/mailbox", "x")).toBe("同事协作 · 邮筒");
+    // 11/07 登记公钥原来显示成「网页请求」
+    expect(egressPurpose("http://x:8999/api/room-link/keys")).toBe("同事协作 · 加密公钥");
+    expect(displayPurpose("/api/room-link/keys", "x")).toBe("同事协作 · 加密公钥");
     expect(displayPurpose("群聊 · 定时任务结果自动转发", "x")).toBe("群聊 · 定时任务结果自动转发");
     expect(egressPurpose("http://x:8997/v1/hub/skills/dept")).toBe("发布技能");
     expect(egressHost("https://wttr.in/Fuzhou")).toBe("wttr.in");
