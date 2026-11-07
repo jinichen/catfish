@@ -4,7 +4,7 @@
  *   - 浏览器 (BrowserPane): 小鲶正在操作的网页, 需要时「我来操作」自己接手
  * 什么时候自动打开见 useArtifactAutoOpen; 左边缘拖动调宽, 宽度记在本机。
  */
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { X } from "@phosphor-icons/react";
 import { useArtifactStore, ARTIFACT_MIN_WIDTH } from "../../../store/artifacts";
 import FilePane from "./FilePane";
@@ -12,22 +12,48 @@ import BrowserPane from "./BrowserPane";
 
 /** 聊天区至少留这么宽, 右栏拖不过来 */
 const CHAT_MIN_WIDTH = 400;
+/** 浮起来时离窗口左边至少留这么多 (看得见下面是聊天) */
+const OVERLAY_GAP = 48;
 
 export default function ArtifactPanel({ paths }: { paths: string[] }) {
   const { view, width, showView, close, setWidth } = useArtifactStore();
   const [dragWidth, setDragWidth] = useState<number | null>(null);
   const asideRef = useRef<HTMLElement>(null);
 
-  const maxWidth = useCallback(() => {
+  /**
+   * 右栏能占多宽 (11/07 鸿波「关闭按钮被遮挡」: 窗口窄时聊天区留 400 后右栏放不下, 整个被挤出窗口)。
+   * total = 聊天区 + 右栏一共能用的宽度; docked = 并排时右栏最多多宽。
+   * 并排连最小宽度都给不了 → 浮起来 (盖在聊天区右边, 带阴影), 宽度不超出窗口。
+   */
+  const measure = useCallback(() => {
     const aside = asideRef.current;
     const workspace = aside?.parentElement;
-    if (!aside || !workspace) return 1200;
+    if (!aside || !workspace) return { total: 1600, docked: 1200 };
     const others = Array.from(workspace.children).reduce(
       (sum, el) => (el === aside || el.classList.contains("chat-workspace__main") ? sum : sum + (el as HTMLElement).offsetWidth),
       0,
     );
-    return Math.max(ARTIFACT_MIN_WIDTH, workspace.clientWidth - others - CHAT_MIN_WIDTH);
+    const total = workspace.clientWidth - others;
+    return { total, docked: total - CHAT_MIN_WIDTH };
   }, []);
+  const [space, setSpace] = useState<{ total: number; docked: number } | null>(null);
+  useLayoutEffect(() => {
+    const workspace = asideRef.current?.parentElement;
+    if (!workspace) return;
+    const update = () => setSpace(measure());
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(update);
+    ro.observe(workspace);
+    // 会话侧栏收起 / 展开也会改可用宽度
+    for (const el of Array.from(workspace.children)) if (el !== asideRef.current) ro.observe(el);
+    return () => ro.disconnect();
+  }, [measure, view]);
+  const overlay = space !== null && space.docked < ARTIFACT_MIN_WIDTH;
+  const maxWidth = useCallback(() => {
+    const m = measure();
+    return m.docked < ARTIFACT_MIN_WIDTH ? Math.max(ARTIFACT_MIN_WIDTH, m.total - OVERLAY_GAP) : m.docked;
+  }, [measure]);
 
   const startResize = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -61,9 +87,11 @@ export default function ArtifactPanel({ paths }: { paths: string[] }) {
   };
 
   if (!view) return null;
+  const limit = space ? (overlay ? Math.max(280, space.total - OVERLAY_GAP) : space.docked) : Infinity;
+  const shown = Math.min(dragWidth ?? width, limit);
 
   return (
-    <aside ref={asideRef} className="artifact-panel" style={{ width: dragWidth ?? width }} aria-label="右侧栏">
+    <aside ref={asideRef} className={overlay ? "artifact-panel artifact-panel--overlay" : "artifact-panel"} style={{ width: shown }} aria-label="右侧栏">
       <div
         className="artifact-panel__resize"
         role="separator"

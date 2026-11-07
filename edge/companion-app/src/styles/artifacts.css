@@ -4,13 +4,29 @@
 .chat-workspace--with-artifact .chat-workspace__main {
   min-width: 400px;
 }
+/* 窗口窄到并排放不下: 右栏浮在聊天区右边 (ArtifactPanel 判断), 聊天区不再要 400 */
+.chat-workspace--with-artifact {
+  position: relative;
+}
+.chat-workspace--with-artifact:has(.artifact-panel--overlay) .chat-workspace__main {
+  min-width: 0;
+}
+.artifact-panel--overlay {
+  position: absolute;
+  z-index: 20;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  min-width: 280px;
+  box-shadow: var(--shadow-lg);
+}
 
 .artifact-panel {
   position: relative;
   display: flex;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   flex-direction: column;
-  min-width: 320px;
+  min-width: 0;
   min-height: 0;
   border-left: 1px solid var(--catfish-border);
   background: var(--catfish-bg);
