@@ -6,10 +6,11 @@
  * 上: 同事派给我的 (要我动手的排前面); 下: 我发出的 (看进度)。点一行打开对应的弹层。
  * 11/5 鸿波: 列表太长、一条占两行、找不到 —— 改成一行一条, 默认只看「要处理」的 (结束的收起来), 顶上能搜标题 / 同事。
  */
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { useColleagueTasks } from "../../lib/colleagueTasksStore";
 import { workText } from "../../lib/taskWorkProgress";
+import { useUIStore } from "../../store/ui";
 import { StateTag, muted } from "./formsUi";
 import PipelineComposer from "./PipelineComposer";
 import PipelineProgress from "./PipelineProgress";
@@ -55,6 +56,14 @@ export default function TasksPanel() {
   const [notice, setNotice] = useState<string | undefined>();
   const [q, setQ] = useState("");
   const [all, setAll] = useState(false);
+  // 11/07 提醒条上点「看任务」「去交回」过来的: 直接打开那个任务
+  const focus = useUIStore((s) => s.pendingTaskFocus);
+  useEffect(() => {
+    if (!focus) return;
+    const f = useUIStore.getState().consumeTaskFocus();
+    if (f?.role === "owner") setWatching(f.taskId);
+    else if (f) setWorking(f.taskId);
+  }, [focus]);
   const inboxAll = [...incoming].sort((a, b) => Number(ACTIVE.has(b.state)) - Number(ACTIVE.has(a.state)))
     .filter((t) => matches(q, t.title, t.owner));
   const inbox = all ? inboxAll : inboxAll.filter((t) => ACTIVE.has(t.state));

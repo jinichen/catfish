@@ -20,7 +20,7 @@ import type { IncomingTaskSummary } from "../../lib/tauri_colleague_tasks";
 import { workText } from "../../lib/taskWorkProgress";
 import { pipelineCreate, taskAccept, taskCreate, taskGet, taskSend } from "../../lib/tauri_colleague_tasks";
 import {
-  failedNotice, roomAssist, roomDecline, roomDelete, roomDisband, roomGet, roomJoin, roomLeave, roomRead, roomRemove, roomSend, roomTransfer,
+  failedNotice, roomAssist, roomDecline, roomDelete, roomDisband, roomGet, roomJoin, roomLeave, roomRead, roomRemove, roomSend, roomTasks, roomTransfer,
   roomUpdate,
   type AssistKind,
   type RoomDetail, type RoomMember, type RoomMessage, type RoomSummary,
@@ -29,7 +29,8 @@ import { Overlay, muted } from "./formsUi";
 import RoomComposer, { NAME_MAX } from "./RoomComposer";
 import { RetentionDialog, RetentionSelect, SearchPanel, daysLabel } from "./RoomsExtras";
 import { AttachButton, DeliveryLine, IssueBar, PickedChips, RoomFileList, pickFiles, stageFiles, type PickedFile } from "./RoomsDelivery";
-import { STATE_WORD, cardStates, parseChatTask, summaryText, type ChatTask, type SingleTask } from "./roomTasks";
+import { STATE_WORD, cardStates, expectHint, latestDeadline, parseChatTask, summaryText, type ChatTask, type SingleTask } from "./roomTasks";
+import RoomTasksBoard, { tasksButtonLabel, type RoomTasksData } from "./RoomTasksBoard";
 import TaskProgress from "./TaskProgress";
 import TaskWork from "./TaskWork";
 import { Btn, ErrorLine, cardStyle, inputStyle } from "./roomLinkUi";
@@ -70,7 +71,7 @@ export function waitingNotice(waiting: RoomMember[]): string {
 
 /** 群列表里最后一条的预览: 任务状态 / 自动转发的文字里已经有名字了 */
 export function lastPreview(last: { name: string; text: string; kind?: string }): string {
-  return last.kind === "status" || last.kind === "auto" ? last.text : `${last.name}: ${last.text}`;
+  return last.kind === "status" || last.kind === "auto" || last.kind === "deadline" ? last.text : `${last.name}: ${last.text}`;
 }
 
 /** 截止 / 时间写短: 「2026-11-06」→「11/6」,「2026-11-06T15:00」→「11/6 15:00」(今年以外带年份) */
@@ -98,6 +99,8 @@ export function timeLabel(at: string, now: Date = new Date()): string {
 const oneLine = {
   fontSize: 12, color: "var(--catfish-text-muted)", textAlign: "center" as const, whiteSpace: "nowrap" as const,
   overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%", padding: "0 12px",
+  // 11/07: 聊天区是滚动的列; overflow:hidden 的行不写这个会被压成 0 高 (延期 / 状态行看不见)
+  flexShrink: 0,
 };
 
 const listButton = (on: boolean) => ({
@@ -221,12 +224,16 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
   const [olderPages, setOlderPages] = useState<RoomMessage[]>([]);
   const [jump, setJump] = useState<number | null>(null);
   const [searching, setSearching] = useState(false);
+  // 11/07 群里的「任务」面板
+  const [tasksData, setTasksData] = useState<RoomTasksData | null>(null);
+  const [showTasks, setShowTasks] = useState(false);
   const [olderLeft, setOlderLeft] = useState<number | null>(null);
   const load = useCallback(async () => {
     try {
       const r = await roomGet(roomId, jump ? { around: jump } : {});
       setD(r);
       setError(null);
+      roomTasks(roomId).then(setTasksData).catch(() => {});   // 面板读不出来不影响聊天
       if (r.room.my_state === "joined" && r.room.unread) {
         await roomRead(roomId);
         void refreshRooms();
@@ -328,7 +335,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
         return { failed: r.failed.map((f) => ({ email: f.to, error: f.error })) };
       }
       const one = async (x: SingleTask, said: string) => {
-        const { task } = await taskCreate({ text: x.text, recipients: x.recipients, deadline: x.deadline || null, schedule: x.schedule,
+        const { task } = await taskCreate({ text: x.text, expect: x.expect || null, recipients: x.recipients, deadline: x.deadline || null, schedule: x.schedule,
                                             room_id: roomId, room_text: said, room_auto_post: Boolean(x.schedule) && autoPost });
         const r = await taskSend(task.task_id);
         if (r.room_notice) throw new Error(r.room_notice);
@@ -386,10 +393,17 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
             {room.purpose && <div style={{ ...muted, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                                   title={room.purpose}>📌 {room.purpose}</div>}
           </div>
-          <Btn kind="ghost" onClick={() => setSearching((v) => !v)}>🔍 搜索</Btn>
-          <Btn kind="ghost" onClick={() => setShowMembers((v) => !v)}>{showMembers ? "收起成员" : `👥 成员 ${room.joined}`}</Btn>
+          {/* 按钮不折行; 窄的时候让左边的群名 / 说明去折 */}
+          <span style={{ display: "flex", gap: 8, flexShrink: 0, whiteSpace: "nowrap" }}>
+            <Btn kind="ghost" onClick={() => setShowTasks((v) => !v)}>{showTasks ? "收起任务" : tasksButtonLabel(tasksData)}</Btn>
+            <Btn kind="ghost" onClick={() => setSearching((v) => !v)}>🔍 搜索</Btn>
+            <Btn kind="ghost" onClick={() => setShowMembers((v) => !v)}>{showMembers ? "收起成员" : `👥 成员 ${room.joined}`}</Btn>
+          </span>
         </div>
         <IssueBar issue={room.issue} />
+        {showTasks && <RoomTasksBoard data={tasksData} me={me} members={members} onJump={(seq) => setJump(seq)}
+                                      onWatch={(id) => setWatch({ id })} onWork={(id) => void openWork(id)}
+                                      onClose={() => setShowTasks(false)} onChanged={() => void load()} />}
         {searching && <SearchPanel roomId={roomId} members={members} onJump={(seq) => setJump(seq)} onClose={() => { setSearching(false); setJump(null); }} />}
         {notice && <ErrorLine>{notice}</ErrorLine>}
         {hint && <div style={{ fontSize: 12, color: "var(--catfish-cyan)", flexShrink: 0 }}>{hint}</div>}
@@ -505,7 +519,9 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
             {asTask && (
               <span style={{ ...muted, color: asTask.problem ? "var(--status-warn, #d97706)" : "inherit" }}>
                 {asTask.problem ? `派不了: ${asTask.problem}` : `点「派给@的人」= ${asTask.label}`}
+                {asTask.kind === "task" && asTask.expect && !asTask.problem && ` · 要交: ${asTask.expect.length > 30 ? `${asTask.expect.slice(0, 30)}…` : asTask.expect}`}
                 {asTask.kind === "task" && !asTask.problem && !(asTask.schedule && autoPost) && " · 结果只回给你, 群里只显示谁接了、谁交了"}
+                {expectHint(asTask) && <span style={{ color: "var(--status-warn, #d97706)" }}> · {expectHint(asTask)}</span>}
               </span>
             )}
             {asTask?.kind === "task" && asTask.schedule && !asTask.problem && (
@@ -633,6 +649,9 @@ function Bubble({ m, mine, members, me, quoted, onReply, roomId, onChanged }: {
       </div>
     );
   }
+  if (m.kind === "deadline") {   // 11/07 发起人延期
+    return <span style={oneLine} title={m.text}>⏳ {m.text} · {timeLabel(m.at)}</span>;
+  }
   if (m.kind === "status") {
     // 只有那条任务不在眼前 (更早、没显示) 时才单独一行
     const icon = m.status?.state === "done" ? "✅" : m.status?.state === "accepted" ? "🛠" : "↩️";
@@ -682,6 +701,7 @@ function TaskMessage({ m, me, members, messages, busy, local: rec, onAccept, onW
   const c = m.card!;
   const mine = c.owner === me;
   const states = cardStates(c.task_id, c.assignees, messages, members);
+  const deadline = latestDeadline(c.task_id, c.deadline, messages);
   const myState = states.find((x) => x.email === me)?.state;
   const link = { border: "none", background: "transparent", cursor: "pointer", fontSize: 11, padding: 0, color: "var(--catfish-cyan)" };
   return (
@@ -689,7 +709,7 @@ function TaskMessage({ m, me, members, messages, busy, local: rec, onAccept, onW
       {/* 11/5 鸿波: 状态别单独占一行 —— 跟「谁 · 几点」放同一行 */}
       <span style={{ ...muted, display: "flex", flexWrap: "wrap", gap: 8, justifyContent: mine ? "flex-end" : "flex-start", maxWidth: "90%" }}>
         <span>{mine ? "我" : labelOf(members, m.from)} · {timeLabel(m.at)}</span>
-        <span>📋 {c.schedule ? `⏰ ${c.schedule}` : c.deadline ? `截止 ${shortWhen(c.deadline)}` : "不限时"}{c.auto_post ? " · 结果自动发群" : ""}</span>
+        <span>📋 {c.schedule ? `⏰ ${c.schedule}` : deadline ? `截止 ${shortWhen(deadline)}` : "不限时"}{c.auto_post ? " · 结果自动发群" : ""}</span>
         {states.map((x) => (
           <span key={x.email} title={x.email}
                 style={{ color: x.state === "done" ? "var(--status-ok, #059669)" : undefined }}>

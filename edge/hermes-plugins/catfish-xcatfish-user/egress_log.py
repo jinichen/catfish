@@ -95,6 +95,7 @@ _SOURCE_PURPOSE = {
     # 11/5: 同事群聊 (docs/GROUP-CHAT-PLAN.md 第三步)
     "room-auto-post": "群聊 · 定时任务结果自动转发",
     "plugin:toolbridge-room-assist": "群聊 · 小鲶总结 / 起草",
+    "plugin:toolbridge-task-check": "派任务 · 小鲶核对结果",
     "room-file": "群聊 · 发文件",   # 11/07 群文件分块 / 补块
     # 11/06: tool-bridge 直接调网关的几处 (原来不带来源)
     "plugin:toolbridge-memory-compact": "整理记忆",

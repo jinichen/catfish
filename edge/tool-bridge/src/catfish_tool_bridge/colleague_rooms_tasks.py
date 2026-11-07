@@ -122,11 +122,11 @@ ASSIST_HISTORY = 200
 def _history_text(room: dict[str, Any], msgs: list[dict[str, Any]], me: str) -> str:
     lines = []
     for m in msgs:
-        if m.get("kind") not in ("text", "card", "status", "auto", "system"):
+        if m.get("kind") not in ("text", "card", "status", "auto", "system", "deadline"):
             continue
         who = "系统" if m.get("kind") == "system" else ("我" if m.get("from") == me else cr._label(room, m.get("from") or ""))
         at = str(m.get("at") or "")[5:16].replace("T", " ")
-        tag = {"card": "[派任务] ", "status": "[任务状态] ", "auto": "[自动转发] "}.get(m.get("kind"), "")
+        tag = {"card": "[派任务] ", "status": "[任务状态] ", "auto": "[自动转发] ", "deadline": "[延期] "}.get(m.get("kind"), "")
         lines.append(f"[{at}] {who}: {tag}{m.get('text', '')}")
     return "\n".join(lines)
 
@@ -194,3 +194,72 @@ def _clean_status(raw: Any, rid: str, sender: str) -> dict[str, Any] | None:
     period = raw.get("period")
     return {"task_id": tid, "title": str(raw.get("title") or "")[:60], "state": raw["state"],
             **({"period": int(period)} if isinstance(period, int) and period > 0 else {})}
+
+
+# ── 11/07 延期 + 「任务」面板 (GROUP-CHAT-PLAN §4.10) ─────────────────────
+#
+# 延期: 发起人改了截止 → 往群里发一条 room_msg.deadline {task_id, deadline}, 只认这张任务卡的发起人;
+# 老版本收到只当一条普通消息 (正文就是「「周报」截止改到 11/09 18:00」), 能看懂。
+# 面板: 本机群记录里的任务卡 + 状态 + 延期, 汇总成每个任务一行、每人一格, 逾期的排前面。
+
+def post_deadline(room_id: str, task: dict[str, Any]) -> dict[str, Any]:
+    me = forms_net.me()
+    room = joined_room(room_id)
+    dl = task["deadline"]
+    body = f"「{task['title']}」截止改到 {dl[5:16].replace('-', '/').replace('T', ' ')}"
+    return cr._broadcast(room, me, body, [], {"deadline": {"task_id": task["task_id"], "deadline": dl}}, kind="deadline")
+
+
+def _clean_deadline(raw: Any, rid: str, sender: str) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    tid = str(raw.get("task_id") or "")
+    card = cr.store.find_card(rid, tid)
+    if not card or card.get("owner") != sender:
+        return None
+    from .colleague_tasks import normalize_deadline  # noqa: PLC0415
+    try:
+        dl = normalize_deadline(raw.get("deadline"))
+    except ValueError:
+        return None
+    return {"task_id": tid, "deadline": dl} if dl else None
+
+
+def _deadline_passed(dl: str | None) -> bool:
+    from .colleague_tasks import is_late  # noqa: PLC0415
+    return bool(dl) and is_late(dl)
+
+
+OPEN_STATES = ("waiting", "accepted")
+
+
+def room_tasks(room_id: str) -> dict[str, Any]:
+    """这个群里派过的任务: [{task_id, title, owner, deadline, schedule, at, people: [{email, state, period?}], late, open}]。
+    state: waiting 还没回 / accepted 在做 / done 已交回 / declined 不接 / quit 退出; late = 过了截止还没交的人数。"""
+    room = cr.load(cr._safe_id(room_id))
+    cards: dict[str, dict[str, Any]] = {}
+    last: dict[tuple[str, str], dict[str, Any]] = {}
+    for m in cr.store.task_messages(room["room_id"]):
+        if m.get("kind") == "card" and m.get("card"):
+            c = m["card"]
+            cards[c["task_id"]] = {**c, "at": m.get("at"), "msg_id": m.get("msg_id"), "seq": m.get("seq")}
+        elif m.get("kind") == "status" and m.get("status"):
+            st = m["status"]
+            last[(st["task_id"], m.get("from") or "")] = st
+        elif m.get("kind") == "deadline" and m.get("deadline"):
+            d = m["deadline"]
+            if d["task_id"] in cards:
+                cards[d["task_id"]]["deadline"] = d["deadline"]
+    out = []
+    for tid, c in cards.items():
+        people = []
+        for e in c.get("assignees") or []:
+            st = last.get((tid, e)) or {}
+            people.append({"email": e, "state": st.get("state") or "waiting", **({"period": st["period"]} if st.get("period") else {})})
+        undone = [p for p in people if p["state"] in OPEN_STATES]
+        late = len(undone) if not c.get("schedule") and _deadline_passed(c.get("deadline")) else 0
+        out.append({"task_id": tid, "title": c.get("title") or "", "owner": c.get("owner"), "deadline": c.get("deadline"),
+                    "schedule": c.get("schedule"), "at": c.get("at"), "msg_id": c.get("msg_id"), "seq": c.get("seq"), "people": people,
+                    "late": late, "open": bool(undone) or bool(c.get("schedule") and any(p["state"] != "quit" for p in people))})
+    out.sort(key=lambda t: (-(t["late"] > 0), not t["open"], t.get("deadline") or "9999", t.get("at") or ""))
+    return {"ok": True, "tasks": out, "open": sum(1 for t in out if t["open"]), "late": sum(1 for t in out if t["late"])}

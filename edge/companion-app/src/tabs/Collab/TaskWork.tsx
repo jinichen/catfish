@@ -99,6 +99,7 @@ export default function TaskWork({ taskId, onClose }: { taskId: string; onClose:
       )}
       <div style={{ fontSize: 13, whiteSpace: "pre-wrap", padding: "8px 10px", borderRadius: 4,
                     background: "var(--catfish-bg-subtle, rgba(0,0,0,0.04))" }}>{rec.task.text}</div>
+      {rec.task.expect && <ExpectLine text={rec.task.expect} />}
       {rec.task.context && (
         <details open style={{ fontSize: 13 }}>
           <summary style={{ cursor: "pointer", ...muted }}>{rec.owner} 转来的上一段结果</summary>
@@ -210,3 +211,12 @@ export default function TaskWork({ taskId, onClose }: { taskId: string; onClose:
   );
 }
 
+
+/** 11/07 「要交成什么样」: 任务原话下面单独一行, 收件人 / 发起人两边都显示 */
+export function ExpectLine({ text }: { text: string }) {
+  return (
+    <div style={{ fontSize: 13, padding: "6px 10px", borderRadius: 4, borderLeft: "3px solid var(--catfish-cyan)", whiteSpace: "pre-wrap" }}>
+      <strong>要交：</strong>{text}
+    </div>
+  );
+}

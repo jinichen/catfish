@@ -110,6 +110,8 @@ export interface TaskMail { draft_id: string; files: string[] }
 export interface TaskBody {
   title: string;
   text: string;
+  /** 11/07 要交成什么样 (验收标准); 小鲶照着做, 发起人的小鲶照着核对 */
+  expect?: string | null;
   deadline: string | null;
   schedule?: Schedule | null;
   /** 多阶段: 发起人放行的上一段结果 */
@@ -188,6 +190,8 @@ export interface OwnerRow {
 
 export interface OutgoingTask extends TaskBody {
   task_id: string;
+  /** 11/07 小鲶核对过的结果 */
+  check?: TaskCheck;
   owner: string;
   status: "draft" | "open" | "cancelled";
   created_at: string;
@@ -204,11 +208,18 @@ export interface TaskEvent {
   kind: "invite" | "changed" | "remind" | "cancel" | "accepted" | "done" | "declined" | "period" | "quit"
     | "review" | "missed" | "job_lost" | "stage_done" | "confirm_needed" | "waiting"
     // 11/5: 接下就开工的一次性任务 —— 小鲶做好了 / 超时没做出来
-    | "drafted" | "start_failed";
+    | "drafted" | "start_failed"
+    // 11/07: 收件人快到截止还没交 / 发起人过了截止有人没交 / 发起人延期了
+    | "due_soon" | "overdue" | "extended";
   task_id: string;
   from: string;
   title: string;
   period?: number | null;
+  deadline?: string | null;
+  /** overdue: 还没交的人 */
+  people?: string[];
+  /** due_soon: 我这边的状态 (待处理 / 在做 / 待核对) */
+  state?: string;
 }
 
 export interface TaskSyncResult {
@@ -224,7 +235,7 @@ export const taskList = () => call<TaskList>("list");
 export const taskGet = (taskId: string) => call<TaskDetail>("get", { task_id: taskId });
 export const taskSync = () => call<TaskSyncResult>("sync");
 /** room_id: 在群里派的 (GROUP-CHAT-PLAN 第二步), 发出后这条任务进群, 收件人的状态也回群; room_text = 群里显示的原话 */
-export const taskCreate = (p: { title?: string; text: string; deadline?: string | null; schedule?: Schedule | null; recipients: string[]; room_id?: string; room_text?: string; room_auto_post?: boolean }) =>
+export const taskCreate = (p: { title?: string; text: string; expect?: string | null; deadline?: string | null; schedule?: Schedule | null; recipients: string[]; room_id?: string; room_text?: string; room_auto_post?: boolean }) =>
   call<{ task: OutgoingTask }>("create", p);
 export const taskAdd = (taskId: string, recipients: string[]) => call<{ task: OutgoingTask }>("add", { task_id: taskId, recipients });
 /** room_notice: 群里派的任务发出去了, 但任务卡没进群的原因 */
@@ -242,6 +253,16 @@ export const taskPeriodSubmit = (taskId: string, period: number, result: string)
 /** 发起人开 / 关「每次结果自动发到群里」(只有群里派的定时 / 周期任务能开, 随时能关) */
 export const taskRoomAutoPost = (taskId: string, on: boolean) =>
   call<{ room_auto_post: boolean }>("room_auto_post", { task_id: taskId, on });
+/** 11/07 延期: 只改截止, 通知还没交的人 (不用重新同意); 群里派的往群里说一声 */
+export const taskExtend = (taskId: string, deadline: string) =>
+  call<Sent & { sent: string[]; deadline: string; room_notice?: string }>("extend", { task_id: taskId, deadline });
+
+export interface TaskCheckPerson { ok: boolean; gaps: string[]; redo_note: string; result_at?: string | null; at?: string }
+export interface TaskCheck { at: string; summary: string; people: Record<string, TaskCheckPerson> }
+/** 11/07 小鲶帮发起人核对交回的结果 (调大模型, 要一两分钟; 只回意见) */
+export const taskCheck = (taskId: string) =>
+  invoke<{ check: TaskCheck; checked: string[] }>("colleague_task_check", { taskId });
+
 export const taskRedo = (taskId: string, email: string, note: string) => call<{ sent: string[] }>("redo", { task_id: taskId, email, note });
 export const pipelineCreate = (p: { title: string; stages: StageDraft[]; room_id?: string; room_text?: string }) =>
   call<{ pipeline: { pipeline_id: string }; sent: string[]; failed: { to: string; error: string }[] }>("pipeline_create", p);

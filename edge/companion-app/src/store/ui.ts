@@ -57,6 +57,10 @@ interface UIState {
   /** 11/5: 「协同」页看的是协同事项还是群聊 —— 群聊时整页固定、只有消息区滚 (App 据此锁住 main 的滚动) */
   collabView: "work" | "rooms";
   setCollabView: (v: "work" | "rooms") => void;
+  /** 11/07 提醒条上「看任务」「去交回」: 切到「协同 · 协同事项」并打开这个任务 (发起人 = 进度, 收件人 = 处理窗口) */
+  pendingTaskFocus: { taskId: string; role: "owner" | "recipient" } | null;
+  openColleagueTask: (taskId: string, role: "owner" | "recipient") => void;
+  consumeTaskFocus: () => { taskId: string; role: "owner" | "recipient" } | null;
   setActiveTab: (tab: TabId) => void;
   toggleDarkMode: () => void;
   openAbout: () => void;
@@ -135,6 +139,13 @@ export const useUIStore = create<UIState>((set, get) => ({
   })(),
   collabView: "work",
   setCollabView: (v) => set({ collabView: v }),
+  pendingTaskFocus: null,
+  openColleagueTask: (taskId, role) => set({ activeTab: "collab", collabView: "work", pendingTaskFocus: { taskId, role } }),
+  consumeTaskFocus: () => {
+    const f = get().pendingTaskFocus;
+    if (f) set({ pendingTaskFocus: null });
+    return f;
+  },
   toggleRail: () => {
     const next = !get().railCollapsed;
     try {

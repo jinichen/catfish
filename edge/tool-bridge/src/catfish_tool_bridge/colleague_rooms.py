@@ -427,7 +427,7 @@ def _broadcast(room: dict[str, Any], me: str, body: str, ments: list[str], extra
     return {"ok": True, "message": msg, "sent_to": len(others) - len(failed), "failed": failed}
 
 
-MSG_KINDS = ("text", "card", "status", "auto")   # 列表预览的消息种类
+MSG_KINDS = ("text", "card", "status", "auto", "deadline")   # 列表预览的消息种类
 # 11/06 鸿波「协同的都看过、处理了, 为什么还有数字」: 群里派的任务卡 / 任务状态行原来也算未读, 而任务本身在
 # 「协同事项」里已经处理 (接下 / 不接 / 交回) —— 那里不会把群里那张卡标成已读, 红点一直挂着 (实测「测试」群 9 条未读里
 # 7 张是已处理的任务卡)。任务卡要处理的那一下已经算在协同事项的待办数里 (待处理的任务), 群里再算一遍是重复。
@@ -540,6 +540,10 @@ def _apply(msg: dict[str, Any], me: str) -> dict[str, Any] | None:
             if not auto:
                 return None
             mkind, extra, ments = "auto", {"auto": auto}, []
+        elif "deadline" in env:   # 11/07 发起人延期 (只认这张任务卡的发起人)
+            if not (dl := rt._clean_deadline(env.get("deadline"), rid, sender)):
+                return None
+            mkind, extra, ments = "deadline", {"deadline": dl}, []
         rec = {"msg_id": mid, "kind": mkind, "from": sender, "at": str(env.get("at") or _now()), "text": text,
                "mentions": ments, **extra, "received_at": _now(),
                **({"plain": True} if env.get("_plain") else {})}   # 老版本发来的明文: 界面标「未加密」
@@ -748,6 +752,11 @@ def _big():
     return big
 
 
+def _rooms_tasks():
+    from . import colleague_rooms_tasks as rt  # noqa: PLC0415
+    return rt
+
+
 def _snapshot(dest: Any) -> dict[str, Any]:
     """换电脑导出: Companion 要一份本机群聊库的快照 (加密的库出来也是加密的)。只许写到 ~/.catfish 下面的 .db。"""
     home = wiki_files._catfish_home().resolve()
@@ -784,6 +793,7 @@ def pim_handlers(params: dict[str, Any]) -> dict[str, Any]:
         "pim/croom_file_save": lambda: rfiles.save(load(rid), str(params.get("file_id") or "")),
         "pim/croom_stage": lambda: _big().stage(params),
         "pim/croom_file_retry": lambda: _big().retry(load(rid)["room_id"], str(params.get("file_id") or "")),
+        "pim/croom_tasks": lambda: _rooms_tasks().room_tasks(rid),
         "pim/croom_leave": lambda: leave(rid),
         "pim/croom_delete": lambda: delete_local(rid),
     }, _LOCK)

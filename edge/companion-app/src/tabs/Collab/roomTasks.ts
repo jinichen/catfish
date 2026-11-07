@@ -149,7 +149,18 @@ function parseOnce(text: string, now: Date): { schedule: Schedule; label: string
 
 export interface ChatStage { name: string; text: string; recipients: string[]; deadline: string }
 
-export type SingleTask = { kind: "task"; text: string; recipients: string[]; deadline: string; schedule: Schedule | null; label: string; problem?: string };
+/** 11/07 「要交成什么样」: 「要交：…」「交付：…」「验收：…」到这一行末尾 (句尾括号里的截止去掉); 没写 = ""。 */
+export function parseExpect(text: string): string {
+  const m = text.match(/(?:要交|交付物?|验收标准?)\s*[:：]\s*([^\n]+)/);
+  if (!m) return "";
+  return m[1].replace(/[(（][^()（）]{1,24}[)）]\s*$/, "").replace(/[，,。；;\s]+$/, "").trim().slice(0, 500);
+}
+
+/** 没写「要交：…」时提示行里的那句 (不拦着派) */
+export const NO_EXPECT_HINT = "没说要交成什么样，容易返工 —— 可以加一句「要交：…」";
+
+export type SingleTask = { kind: "task"; text: string; recipients: string[]; deadline: string; schedule: Schedule | null; label: string; problem?: string;
+                           /** 11/07 要交成什么样 */ expect: string };
 
 export type ChatTask =
   | SingleTask
@@ -207,17 +218,18 @@ function parseOneOrPipeline(body: string, members: RoomMember[], me: string, now
   const who = `派给 ${people.map(nameOf).join("、")}`;
   const cron = parseCron(body, now);
   if (cron) {
-    return { kind: "task", text: body, recipients: people, deadline: "", schedule: cron.schedule,
+    return { kind: "task", text: body, recipients: people, deadline: "", schedule: cron.schedule, expect: parseExpect(body),
              label: `${who} · ${cron.label}`, ...(cron.problem ? { problem: cron.problem } : {}) };
   }
   const once = parseOnce(body, now);
   if (once) {
     const past = new Date(once.schedule.kind === "once" ? once.schedule.at : "") < now;
-    return { kind: "task", text: body, recipients: people, deadline: "", schedule: once.schedule, label: `${who} · ${once.label}`,
+    return { kind: "task", text: body, recipients: people, deadline: "", schedule: once.schedule, expect: parseExpect(body), label: `${who} · ${once.label}`,
              ...(past ? { problem: "定的时间已经过了" } : {}) };
   }
-  const deadline = parseDeadline(body, now);
-  return { kind: "task", text: body, recipients: people, deadline, schedule: null,
+  // 「要交：…一张表（周五前）」: 截止只从「要交」前面那段认, 免得把要交的内容里的数字当成时间
+  const deadline = parseDeadline(body.split(/(?:要交|交付物?|验收标准?)\s*[:：]/)[0], now) || parseDeadline(body, now);
+  return { kind: "task", text: body, recipients: people, deadline, schedule: null, expect: parseExpect(body),
            label: `${who} · ${deadline ? `截止 ${deadline.replace("T", " ")}` : "不限时"}`,
            ...(people.length > 20 ? { problem: "一次最多派给 20 人" } : {}) };
 }
@@ -248,4 +260,22 @@ export function summaryText(title: string, rows: OwnerRow[], nameOf: (email: str
     return `· ${nameOf(r.email)} ${r.state}${res}`;
   });
   return `「${title}」汇总\n${lines.join("\n")}`.slice(0, 4000);
+}
+
+/** 11/07 提示行: 派之前没写「要交什么」的提醒一句 (多行待办: 几条没写)。不拦着派。 */
+export function expectHint(t: ChatTask | null): string | null {
+  if (!t || t.problem) return null;
+  if (t.kind === "task") return t.expect ? null : NO_EXPECT_HINT;
+  if (t.kind === "batch") {
+    const n = t.items.filter((x) => !x.expect).length;
+    return n ? `${n} 条${n === t.items.length ? "都" : ""}没说要交成什么样，容易返工 —— 可以在那行加「要交：…」` : null;
+  }
+  return null;
+}
+
+/** 11/07 任务卡上显示的截止: 群里发起人延期过就用最新那次 (room_msg.deadline), 没有就是卡上原来的 */
+export function latestDeadline(taskId: string, original: string | null, messages: RoomMessage[]): string | null {
+  let dl = original;
+  for (const m of messages) if (m.kind === "deadline" && m.deadline?.task_id === taskId) dl = m.deadline.deadline;
+  return dl;
 }

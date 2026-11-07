@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { RoomMember, RoomMessage } from "../../lib/tauri_colleague_rooms";
-import { cardStates, parseChatTask, parseDeadline, summaryText } from "./roomTasks";
+import { NO_EXPECT_HINT, cardStates, expectHint, latestDeadline, parseChatTask, parseDeadline, parseExpect, summaryText } from "./roomTasks";
 
 // 2026-11-05 是周四
 const NOW = new Date(2026, 10, 5, 15, 30);
@@ -48,7 +48,7 @@ describe("parseChatTask", () => {
   it("一次性: @ 到的人 + 截止", () => {
     expect(P("@张三 @李四 周五前把拜访记录交上来")).toEqual({
       kind: "task", text: "@张三 @李四 周五前把拜访记录交上来", recipients: ["zhang@example.com", "li@example.com"],
-      deadline: "2026-11-06T18:00", schedule: null, label: "派给 张三、李四 · 截止 2026-11-06 18:00" });
+      deadline: "2026-11-06T18:00", schedule: null, expect: "", label: "派给 张三、李四 · 截止 2026-11-06 18:00" });
     expect(P("@张三 看下合同")).toMatchObject({ deadline: "", label: "派给 张三 · 不限时" });
   });
   it("周期: 每周五下午5点, 做4次 / 到年底; 没说结束 → 提示", () => {
@@ -115,5 +115,50 @@ describe("cardStates / summaryText", () => {
     const t = summaryText("周报", [row("zhang@example.com", "已完成", "字".repeat(250)), row("li@example.com", "在做", null)],
                           (e) => (e.startsWith("zhang") ? "张三" : "李四"));
     expect(t.split("\n")).toEqual(["「周报」汇总", `· 张三 已完成: ${"字".repeat(200)}…`, "· 李四 在做"]);
+  });
+});
+
+describe("要交什么 (11/07)", () => {
+  const ME = "zhou@example.com";
+  const P = (t: string) => parseChatTask(t, members, ME, NOW);
+  it.each([
+    ["@张三 周五前整理拜访记录, 要交: 一张表, 含客户名、金额、下一步", "一张表, 含客户名、金额、下一步"],
+    ["@张三 整理拜访记录 要交：表格（周五前）", "表格"],
+    ["@张三 整理 交付物: 汇总 Excel。", "汇总 Excel"],
+    ["@张三 整理拜访记录\n验收标准：每家都有下一步\n周五前", "每家都有下一步"],
+    ["@张三 周五前交拜访记录", ""],
+  ])("%s → %s", (text, want) => {
+    expect(parseExpect(text)).toBe(want);
+  });
+  it("一次性任务带上 expect; 截止只从「要交」前面认, 要交的内容里有数字不当时间", () => {
+    const t = P("@张三 周五前整理拜访记录, 要交: 3 列表格, 每家 2 行");
+    expect(t).toMatchObject({ kind: "task", expect: "3 列表格, 每家 2 行", deadline: "2026-11-06T18:00" });
+    expect(expectHint(t)).toBeNull();
+  });
+  it("没写要交什么: 提示一句, 不拦着派", () => {
+    const t = P("@张三 周五前交拜访记录");
+    expect(t?.problem).toBeUndefined();
+    expect(expectHint(t)).toBe(NO_EXPECT_HINT);
+  });
+  it("多行待办: 说几条没写", () => {
+    const t = P("1. @张三 整理华东客户 要交: 表格\n2. @李四 整理华南客户");
+    expect(t?.kind).toBe("batch");
+    expect(expectHint(t)).toContain("1 条没说要交成什么样");
+  });
+  it("派不了的 (有 problem) 不再多提示", () => {
+    expect(expectHint(P("@张三 每周五交周报"))).toBeNull();
+  });
+});
+
+describe("latestDeadline (11/07 延期)", () => {
+  const msg = (kind: RoomMessage["kind"], extra: Partial<RoomMessage>): RoomMessage => ({ msg_id: `m_${Math.random()}`, kind, at: "", text: "", ...extra });
+  it("延期过就用最新那次, 别的任务的不算", () => {
+    const ms = [
+      msg("deadline", { deadline: { task_id: "t_1", deadline: "2026-11-09T18:00" } }),
+      msg("deadline", { deadline: { task_id: "t_2", deadline: "2026-11-30T18:00" } }),
+      msg("deadline", { deadline: { task_id: "t_1", deadline: "2026-11-10T18:00" } }),
+    ];
+    expect(latestDeadline("t_1", "2026-11-06T18:00", ms)).toBe("2026-11-10T18:00");
+    expect(latestDeadline("t_3", "2026-11-06T18:00", ms)).toBe("2026-11-06T18:00");
   });
 });

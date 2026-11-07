@@ -38,6 +38,8 @@ logger = logging.getLogger("catfish.tool_bridge.colleague_tasks")
 ENVELOPE_VERSION = 1
 MAX_RECIPIENTS = 20
 TEXT_MAX = 2000
+EXPECT_MAX = 500     # 11/07 「要交成什么样」(验收标准): 小鲶照着做、发起人的小鲶照着核对
+DUE_SOON = timedelta(hours=2)   # 11/07 截止前这么久还没交 → 提醒本人一次
 RESULT_MAX = 15000   # 邮筒单封 64KB: 中文一个字 3 字节, 留 JSON 余量
 _ID = re.compile(r"t_[0-9]{8}_[0-9a-f]{6,16}")
 
@@ -145,6 +147,14 @@ def _ttl(deadline: str | None, **kw: Any) -> int:
 
 # ── 发起人 ───────────────────────────────────────────────────────
 
+def normalize_expect(raw: Any) -> str | None:
+    """「要交成什么样」: 一两句话, 不写 = None。"""
+    s = str(raw or "").strip()
+    if len(s) > EXPECT_MAX:
+        raise ValueError(f"「要交什么」写得太长 ({len(s)} 字), 最多 {EXPECT_MAX} 字")
+    return s or None
+
+
 def _title_from(text: str) -> str:
     first = text.strip().splitlines()[0] if text.strip() else ""
     return first[:30] + ("…" if len(first) > 30 else "")
@@ -170,9 +180,10 @@ def create(args: dict[str, Any]) -> dict[str, Any]:
     room_text = str(args.get("room_text") or "").strip()[:4000] or None if room_id else None
     # 第三步特例: 群里派的定时 / 周期任务, 发起人勾了「每次结果自动发到群里」
     room_auto_post = bool(args.get("room_auto_post")) and bool(room_id) and bool(args.get("schedule"))
+    expect = normalize_expect(args.get("expect"))
     task = {"task_id": task_id, "context": context or None, "pipeline_id": args.get("pipeline_id"), "room_id": room_id, "room_text": room_text, "room_auto_post": room_auto_post,
             "owner": owner, "created_at": _now(), "status": "draft", "rev": 1,
-            "title": (str(args.get("title") or "").strip() or _title_from(text))[:60], "text": text,
+            "title": (str(args.get("title") or "").strip() or _title_from(text))[:60], "text": text, "expect": expect,
             "deadline": None if schedule and schedule["kind"] == "cron" else normalize_deadline(args.get("deadline")),
             "schedule": schedule,
             "recipients": {e: {"invited_at": None, "reminded_at": None} for e in recipients}}
@@ -234,7 +245,7 @@ def send(task_id: str) -> dict[str, Any]:
 
 def _invite_env(task: dict[str, Any], redo_note: str | None = None) -> dict[str, Any]:
     env = {"v": ENVELOPE_VERSION, "task_id": task["task_id"], "rev": task.get("rev", 1),
-           "task": {k: task.get(k) for k in ("title", "text", "deadline", "schedule", "context", "room_id", "room_auto_post")}}
+           "task": {k: task.get(k) for k in ("title", "text", "expect", "deadline", "schedule", "context", "room_id", "room_auto_post")}}
     if redo_note is not None:
         env["redo_note"] = redo_note
     return env
@@ -370,7 +381,7 @@ def results(task_id: str) -> dict[str, Any]:
             row["每期结果"] = [{"第几期": x.get("period"), "交回时间": x.get("at"), "晚了分钟": x.get("late_minutes") or 0,
                             "结果": x.get("result"), "还差几步等对方确认": x.get("waiting") or 0} for x in r["periods"]]
         people.append(row)
-    return {"ok": True, "title": task["title"], "text": task["text"], "deadline": task.get("deadline"),
+    return {"ok": True, "title": task["title"], "text": task["text"], "expect": task.get("expect"), "deadline": task.get("deadline"),
             "schedule": sched.describe(task.get("schedule")), "status": task["status"], "counts": p["counts"],
             "people": people}
 
@@ -568,7 +579,8 @@ def _apply(msg: dict[str, Any]) -> str | None:
         rev = int(env.get("rev") or 1)
         if old and rev <= int(old.get("rev") or 1) and old.get("task"):
             return None   # 重复 / 更旧的一版
-        body = {"title": str(t.get("title") or _title_from(text))[:60], "text": text, "deadline": deadline,
+        body = {"title": str(t.get("title") or _title_from(text))[:60], "text": text,
+                "expect": str(t.get("expect") or "").strip()[:EXPECT_MAX] or None, "deadline": deadline,
                 "schedule": schedule, "context": str(t.get("context") or "")[:RESULT_MAX] or None,
                 "room_id": _room().room_id_or_none(t.get("room_id")),
                 "room_auto_post": t.get("room_auto_post") is True}   # 收件人接之前就知道: 每次交回的结果会自动进群
@@ -588,6 +600,9 @@ def _apply(msg: dict[str, Any]) -> str | None:
             return None
         if kind == "task_remind":
             rec["reminded_at"], rec["remind_text"] = _now(), str(env.get("text") or "")[:200]
+            if _deadlines().apply_extend(rec, env):   # 11/07 延期: 只改截止, 不用重新同意
+                forms._write(_in_path(tid), rec)
+                return "extended"
         else:
             rec["status"], rec["cancelled_at"] = "cancelled", _now()
             sched.remove_job(rec.pop("job_id", None))
@@ -600,7 +615,7 @@ def _apply(msg: dict[str, Any]) -> str | None:
 
 def sync() -> dict[str, Any]:
     counts = {"invite": 0, "changed": 0, "remind": 0, "cancel": 0, "accepted": 0, "done": 0, "declined": 0,
-              "period": 0, "quit": 0, "waiting": 0}
+              "period": 0, "quit": 0, "waiting": 0, "extended": 0}
     events = []
     for msg in forms_net.take(forms_net.TASK_KINDS):
         got = _apply(msg)
@@ -610,10 +625,12 @@ def sync() -> dict[str, Any]:
             title = ((msg["env"].get("task") or {}).get("title")
                      or _title_of(tid))
             events.append({"kind": got, "task_id": tid, "from": msg["from"], "title": title,
-                           "period": msg["env"].get("period")})
+                           "period": msg["env"].get("period"),
+                           **({"deadline": msg["env"].get("deadline")} if got == "extended" else {})})
     from .colleague_tasks_periodic import maintain  # noqa: PLC0415
     events += maintain()   # 本机定时任务的补跑 / 收尾 / 要核对的提醒
     _watch_started(events)   # 接下就开工的: 做好了 / 没做成
+    _deadlines().watch(events)   # 11/07 截止前 2 小时还没交 (提醒本人) / 过了截止有人没交 (提醒发起人)
     from .colleague_tasks_pipeline import maintain as pipeline_maintain  # noqa: PLC0415
     events += pipeline_maintain()   # 多阶段: 这一段都交回了 → 提醒发起人放行下一段
     return {"ok": True, **counts, "events": events}
@@ -688,6 +705,11 @@ def get(task_id: str) -> dict[str, Any]:
     return {"ok": True, "role": "recipient", "record": rec, "state": incoming_state(rec), **extra}
 
 
+def _deadlines():
+    from . import colleague_tasks_deadline  # noqa: PLC0415
+    return colleague_tasks_deadline
+
+
 def _pipeline():
     from . import colleague_tasks_pipeline  # noqa: PLC0415
     return colleague_tasks_pipeline
@@ -724,6 +746,7 @@ def pim_handlers(params: dict[str, Any]) -> dict[str, Any]:
                                          tid, "done", params.get("period")),
         "pim/ctask_quit": _room().then(lambda: _periodic().quit(tid, str(params.get("reason") or "")), tid, "quit"),
         "pim/ctask_redo": lambda: redo(tid, str(params.get("email") or ""), str(params.get("note") or "")),
+        "pim/ctask_extend": lambda: _deadlines().extend(tid, params.get("deadline")),
         **_pipeline().pim_handlers(params),
         "pim/ctask_draft": lambda: save_draft(tid, params.get("result")),
         "pim/ctask_room_auto_post": lambda: _room().set_room_auto_post(tid, params.get("on")),

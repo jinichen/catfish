@@ -18,7 +18,15 @@
 import type { DueTask, TriggerResult } from "./triggers";
 import { calendarDaysUntil, QUIET_HOURS_END, QUIET_HOURS_START } from "./triggers";
 
-export type ReminderKind = "deadline" | "briefing" | "email" | "silence" | "focus";
+export type ReminderKind = "deadline" | "briefing" | "email" | "silence" | "focus" | "ctask";
+
+/** 11/07 派给同事的任务: 发起人这边过了截止有人没交 (owner) / 收件人这边快到截止还没交回 (recipient) */
+export interface ReminderColleagueTask {
+  taskId: string;
+  role: "owner" | "recipient";
+  /** 那时的截止 (YYYY-MM-DD 或 YYYY-MM-DDTHH:mm, 本机时间) */
+  deadline: string;
+}
 
 export interface ReminderTaskRef {
   /** 任务库 task_id —— 「已完成」靠它写回任务库; 没有就不给「已完成」按钮 */
@@ -43,6 +51,8 @@ export interface Reminder {
   prompt: string;
   /** 只有待办有 —— 「稍后提醒」「已完成」用 */
   task?: ReminderTaskRef;
+  /** 只有同事任务有 —— 主按钮是「催一下 / 去交回」, 不开对话 */
+  ctask?: ReminderColleagueTask;
   /** 排序用的「到点时刻」(待办 = 截止时刻) */
   dueAt?: number;
   /** 过了这个时刻自动消失 (待办 = 截止日当天结束; 早安 = 当天结束; 其余几小时) */
@@ -109,6 +119,8 @@ function rank(r: Reminder, now: number): number {
     case "deadline":
       // 今天到期 (或已过点) 最急, 其次急邮件, 然后才是明后天到期的
       return r.dueAt !== undefined && r.dueAt <= endOfLocalDay(now) ? 0 : 2;
+    case "ctask":
+      return 0;   // 同事任务过了 / 快到截止: 跟今天到期的待办一样急
     case "email":
       return 1;
     case "briefing":
@@ -315,6 +327,79 @@ export function urgentEmailReminder(
     ].filter((l) => l !== null).join("\n"),
     expiresAt: now.getTime() + 12 * HOUR,
   };
+}
+
+// ── 文案: 派给同事的任务 (11/07) ─────────────────────────────
+
+/** 任务截止 (本机时间字符串) → 时刻; 只写日期 = 当天 23:59 (跟 tool-bridge _deadline_at 一样) */
+export function colleagueDeadlineAt(deadline: string): number {
+  const d = deadline.length === 10 ? new Date(`${deadline}T23:59:59`) : new Date(deadline);
+  return d.getTime();
+}
+
+function names(people: string[]): string {
+  const short = people.map((e) => e.split("@")[0]);
+  return short.length > 3 ? `${short.slice(0, 3).join("、")} 等 ${short.length} 人` : short.join("、");
+}
+
+/** 发起人: 过了截止, 名单里的人还没交 */
+export function colleagueOverdueReminder(
+  ev: { task_id: string; title: string; deadline?: string | null; people?: string[] },
+  now: Date,
+): Reminder | null {
+  if (!ev.deadline || !ev.people?.length) return null;
+  const due = colleagueDeadlineAt(ev.deadline);
+  return {
+    id: `ctask-overdue:${ev.task_id}:${ev.deadline}`,
+    kind: "ctask",
+    createdAt: now.getTime(),
+    text: `「${oneLine(ev.title)}」过了截止，${names(ev.people)} 还没交`,
+    meta: `截止 ${dueLabel(new Date(due), now)}`,
+    actionLabel: "催一下",
+    chatTitle: "",
+    prompt: "",
+    ctask: { taskId: ev.task_id, role: "owner", deadline: ev.deadline },
+    dueAt: due,
+    // 都交了 / 延期了 / 取消了由 colleagueTasksStore 收掉; 一直没处理的三天后自己消失
+    expiresAt: now.getTime() + 3 * DAY,
+  };
+}
+
+/** 收件人: 截止前两小时还没交回 */
+export function colleagueDueSoonReminder(
+  ev: { task_id: string; title: string; from: string; deadline?: string | null; state?: string },
+  now: Date,
+): Reminder | null {
+  if (!ev.deadline) return null;
+  const due = colleagueDeadlineAt(ev.deadline);
+  if (!(due > now.getTime())) return null;
+  return {
+    id: `ctask-due:${ev.task_id}:${ev.deadline}`,
+    kind: "ctask",
+    createdAt: now.getTime(),
+    text: `「${oneLine(ev.title)}」${dueLabel(new Date(due), now)} 截止，还没交回`,
+    meta: [`${senderName(ev.from)} 派的`, ev.state === "待核对" ? "小鲶做好了，等你核对" : ev.state === "待处理" ? "还没接" : ""]
+      .filter(Boolean).join(" · "),
+    actionLabel: ev.state === "待处理" ? "去看看" : "去交回",
+    chatTitle: "",
+    prompt: "",
+    ctask: { taskId: ev.task_id, role: "recipient", deadline: ev.deadline },
+    dueAt: due,
+    expiresAt: due,
+  };
+}
+
+/** 「延期 ▾」的选项: 今天 18:00 (还没到 17 点时) / 明天 / 后天 / 下周一 18:00 */
+export function extendOptions(now: Date): { label: string; deadline: string }[] {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const at = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T18:00`;
+  const day = (n: number) => new Date(now.getFullYear(), now.getMonth(), now.getDate() + n);
+  const out: { label: string; deadline: string }[] = [];
+  if (now.getHours() < 17) out.push({ label: "今天 18:00", deadline: at(day(0)) });
+  out.push({ label: "明天 18:00", deadline: at(day(1)) }, { label: "后天 18:00", deadline: at(day(2)) });
+  const toMonday = ((8 - now.getDay()) % 7) || 7;
+  if (toMonday > 2) out.push({ label: "下周一 18:00", deadline: at(day(toMonday)) });
+  return out;
 }
 
 /** 测试用: 一天的毫秒数 */

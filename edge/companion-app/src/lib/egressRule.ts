@@ -95,6 +95,7 @@ const SOURCE_PURPOSE: Record<string, string> = {
   // 11/5: 同事群聊 (tool-bridge 打的 X-Catfish-Source, 跟 egress_log.py 同一套叫法)
   "room-auto-post": "群聊 · 定时任务结果自动转发",
   "plugin:toolbridge-room-assist": "群聊 · 小鲶总结 / 起草",
+  "plugin:toolbridge-task-check": "派任务 · 小鲶核对结果",
   "room-file": "群聊 · 发文件",
   // 11/06: tool-bridge 直接调网关的几处 (原来不带来源)
   "plugin:toolbridge-memory-compact": "整理记忆",

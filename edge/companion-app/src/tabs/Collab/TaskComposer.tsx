@@ -24,6 +24,7 @@ export default function TaskComposer({ onClose, onCreated }: {
 }) {
   const [title, setTitle] = useState("");
   const [text, setText] = useState("");
+  const [expect, setExpect] = useState("");
   const [deadline, setDeadline] = useState("");
   const [recipients, setRecipients] = useState<string[]>([]);
   const [typed, setTyped] = useState("");
@@ -42,7 +43,7 @@ export default function TaskComposer({ onClose, onCreated }: {
     setBusy(true);
     setError(null);
     try {
-      const { task } = await taskCreate({ title, text, deadline: periodic ? null : deadline || null,
+      const { task } = await taskCreate({ title, text, expect: expect.trim() || null, deadline: periodic ? null : deadline || null,
                                           schedule: when.schedule, recipients: all });
       let notice: string | undefined;
       try {
@@ -71,6 +72,10 @@ export default function TaskComposer({ onClose, onCreated }: {
       <textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} maxLength={TEXT_MAX}
                 placeholder="想请同事做什么, 如「把本周客户拜访情况整理成三行发我, 周例会用」—— 对方接不接之前看到的就是这段话"
                 style={{ ...inputStyle, resize: "vertical" }} />
+      {/* 11/07 要交成什么样: 对方的小鲶照着做, 交回来你的小鲶照着核对 */}
+      <input value={expect} onChange={(e) => setExpect(e.target.value)} maxLength={500} style={inputStyle}
+             aria-label="要交成什么样" title="对方的小鲶照着做; 交回来你的小鲶照着核对, 标出缺什么"
+             placeholder="要交成什么样 (建议写), 如「一张表: 客户名、金额、下一步」" />
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 8 }}>
         <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="简短的名字 (可不填, 默认取第一行)" style={inputStyle} />
         {periodic ? <span /> : (

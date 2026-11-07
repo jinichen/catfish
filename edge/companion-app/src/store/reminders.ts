@@ -37,6 +37,8 @@ interface RemindersState extends Persisted {
   markStarted: (id: string, now?: number) => void;
   /** 「已完成」写回任务库成功之后 */
   markDone: (id: string, now?: number) => void;
+  /** 事情自己了结了 (同事都交了 / 延期了 / 任务取消了): 直接收掉, 不记 handled (以后同一件事再出事还能再提醒) */
+  drop: (pred: (r: Reminder) => boolean) => void;
   /** 发了系统通知 (窗口不在前台时) */
   noteNotified: (now?: number) => void;
   /** 窗口重新获焦: 刚发过通知、还有提醒挂着 → true (调用方切到工作台), 只认一次 */
@@ -116,6 +118,11 @@ export const useRemindersStore = create<RemindersState>((set, get) => {
     },
     markStarted: (id, now = Date.now()) => handle(id, nextLocalMidnight(now), now),
     markDone: (id, now = Date.now()) => handle(id, now + DONE_SUPPRESS_MS, now),
+    drop: (pred) => {
+      const s = snapshot();
+      const items = s.items.filter((r) => !pred(r));
+      if (items.length !== s.items.length) commit({ ...s, items });
+    },
     noteNotified: (now = Date.now()) => commit({ ...snapshot(), notifiedAt: now }),
     consumeNotifyReturn: (now = Date.now()) => {
       const s = snapshot();

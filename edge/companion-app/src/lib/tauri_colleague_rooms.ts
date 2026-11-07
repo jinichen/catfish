@@ -66,8 +66,10 @@ export interface RoomMessage {
   msg_id: string;
   /** 本机库里的先后编号 (11/6): 往上翻 / 搜索结果定位用 */
   seq?: number;
-  kind: "text" | "system" | "card" | "status" | "auto";
+  kind: "text" | "system" | "card" | "status" | "auto" | "deadline";
   card?: RoomCard;
+  /** 11/07 发起人延期: 这张任务卡的新截止 */
+  deadline?: { task_id: string; deadline: string };
   status?: RoomStatus;
   auto?: RoomAuto;
   from?: string;
@@ -127,6 +129,14 @@ export const roomGet = (roomId: string, opts: { before?: number; around?: number
 /** 群内搜索本机记录 (11/6): 新的在前, 最多 50 条 */
 export const roomSearch = (roomId: string, q: string, from?: string) =>
   call<{ q: string; results: (RoomMessage & { name: string })[] }>("search", { room_id: roomId, q, from: from ?? null });
+/** 11/07 群里的「任务」面板: 本机群记录里的任务卡 + 每人状态 + 延期, 逾期的排前面 */
+export interface RoomTaskPerson { email: string; state: RoomTaskState | "waiting"; period?: number }
+export interface RoomTaskRow {
+  task_id: string; title: string; owner: string; deadline: string | null; schedule: string | null; at: string;
+  msg_id: string; seq?: number; people: RoomTaskPerson[]; late: number; open: boolean;
+}
+export const roomTasks = (roomId: string) =>
+  call<{ tasks: RoomTaskRow[]; open: number; late: number }>("tasks", { room_id: roomId });
 export const roomSettingsGet = () => call<RetentionSettings>("settings_get");
 export const roomSettingsSet = (days: number | null) => call<RetentionSettings>("settings_set", { days });
 export const roomSync = () => call<{ events: RoomEvent[]; gap: boolean }>("sync");

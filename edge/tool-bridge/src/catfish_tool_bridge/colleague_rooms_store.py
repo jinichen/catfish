@@ -249,6 +249,13 @@ def find_card(room_id: str, task_id: str) -> dict[str, Any] | None:
     return None
 
 
+def task_messages(room_id: str) -> list[dict[str, Any]]:
+    """群里跟任务有关的消息 (任务卡 / 状态 / 延期), 按先后。给「任务」面板汇总用。"""
+    with _conn() as con:
+        return [_row_msg(r) for r in con.execute(
+            "SELECT seq, data FROM messages WHERE room_id = ? AND kind IN ('card','status','deadline') ORDER BY seq", (room_id,))]
+
+
 def search(room_id: str, q: str, from_email: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
     """群内搜索 (正文包含 q, 可按发件人筛), 新的在前。"""
     like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
