@@ -101,6 +101,32 @@ def _run_with_hard_timeout(fn: Any, args: Dict[str, Any], hard_timeout_sec: floa
         pool.shutdown(wait=False)
 
 
+def _ensure_open_page(chrome_base: str) -> bool:
+    """Chrome 开着但一个标签页都没有时, 先开一个空白页。返回是否开了。
+
+    11/07 鸿波实测「打开搜狐国际频道」报 "Browser context management is not supported":
+    mac 上把鲶鱼 Chrome 的窗口全关了, 进程还在 (mac 的 Chrome 关窗不退出), 但这时它把配置卸了,
+    没有浏览器上下文 —— Playwright 一连上先发 Browser.setDownloadBehavior 就被拒, 连都连不上,
+    更轮不到下面「没 page 就 new_page」。先用 Chrome 自己的 /json/new 开一页, 配置就回来了
+    (测试 Chrome 里复现过: 关光窗口 → 连接报同样的错; 先开空白页 → 连上, 1 个上下文 1 个页)。
+    查不到 / 开不了都不报错, 交给后面的连接报原本的错。
+    """
+    import urllib.request  # noqa: PLC0415
+
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # 本机地址不走代理
+    try:
+        with opener.open(f"{chrome_base}/json/list", timeout=3) as r:
+            targets = json.loads(r.read().decode("utf-8") or "[]")
+        if any(t.get("type") == "page" for t in targets):
+            return False
+        req = urllib.request.Request(f"{chrome_base}/json/new?about:blank", method="PUT")
+        with opener.open(req, timeout=5):
+            pass
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _connect_playwright_browser(playwright):
     """connect_over_cdp 复用 Companion 起的 Chrome.
 
@@ -109,6 +135,7 @@ def _connect_playwright_browser(playwright):
         失败抛 RuntimeError, 上层 catch 转 friendly error.
     """
     chrome_base = _chrome_base()
+    _ensure_open_page(chrome_base)
     try:
         browser = playwright.chromium.connect_over_cdp(chrome_base)
     except Exception as e:

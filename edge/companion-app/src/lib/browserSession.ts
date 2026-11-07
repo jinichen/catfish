@@ -189,6 +189,13 @@ export class BrowserSession {
     return this.session ? this.cdp.send("Page.reload", {}, this.session).then(() => {}) : Promise.resolve();
   }
 
+  /** 新开一个标签页 (小鲶的 Chrome 窗口被关光了时用 —— mac 上进程还在, 开一页配置就回来); 跟着小鲶时会自动切过去 */
+  async newTab(url = "about:blank") {
+    const { targetId } = await this.cdp.send<{ targetId: string }>("Target.createTarget", { url });
+    this.following = true;
+    await this.attach(targetId);
+  }
+
   dispose() {
     this.disposed = true;
     if (this.session) void this.cdp.send("Page.stopScreencast", {}, this.session).catch(() => {});

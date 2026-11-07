@@ -27,6 +27,7 @@ function fakeChrome(targets: { targetId: string; type: string; url: string; titl
         : m.method === "Target.attachToTarget" ? { sessionId: `S-${m.params.targetId}-${++n}` }
         : m.method === "Page.getLayoutMetrics" ? { cssVisualViewport: { clientWidth: 1200, clientHeight: 800 } }
         : m.method === "Page.captureScreenshot" ? { data: "SHOT" }
+        : m.method === "Target.createTarget" ? { targetId: "NEW" }
         : {};
       queueMicrotask(() => this.onmessage?.({ data: JSON.stringify({ id: m.id, result }) }));
     }
@@ -121,5 +122,14 @@ describe("BrowserSession", () => {
     chrome.push("Target.targetDestroyed", { targetId: "C" });
     await flush();
     expect(state.current).toBe("G");
+  });
+
+  it("一个网页都没有: 新开一页并挂上去", async () => {
+    const { s, chrome, state } = start([]);
+    await s.start(2560, 4000);
+    expect(state.current).toBeNull();
+    await s.newTab();
+    expect(chrome.sent.find((m) => m.method === "Target.createTarget")!.params.url).toBe("about:blank");
+    expect(chrome.sent.some((m) => m.method === "Target.attachToTarget")).toBe(true);
   });
 });

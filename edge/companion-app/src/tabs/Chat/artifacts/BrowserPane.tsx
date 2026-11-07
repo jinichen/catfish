@@ -212,7 +212,14 @@ export default function BrowserPane() {
           </div>
         )}
         {status.kind === "connecting" && <Notice>正在连接小鲶的浏览器…</Notice>}
-        {status.kind === "ready" && !page && <Notice>小鲶的浏览器里还没有打开的网页。</Notice>}
+        {status.kind === "ready" && !page && (
+          <div className="browser-empty">
+            <Notice>小鲶的浏览器开着，但一个网页都没打开（窗口可能被关了）。小鲶用到网页时会自己开，也可以现在开一个。</Notice>
+            <div className="browser-empty__actions">
+              <button type="button" className="browser-primary" onClick={() => void s?.newTab()}>新开一个网页</button>
+            </div>
+          </div>
+        )}
         <div ref={screen} className="browser-screen" data-takeover={takeover} hidden={status.kind !== "ready" || !page}>
           <img
             ref={img}
