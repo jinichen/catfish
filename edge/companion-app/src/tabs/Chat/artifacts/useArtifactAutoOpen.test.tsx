@@ -92,4 +92,31 @@ describe("useArtifactAutoOpen", () => {
     rerender({ m: [user, asst("", [{ id: "b", name: "browser_navigate", args: {}, status: "running" }])], s: true });
     expect(useArtifactStore.getState().view).toBeNull();
   });
+
+  // 11/07 鸿波 dev 实测: hermes 跑的工具, 回答进行中消息里没有 tool_calls, 只有 hermes.tool.progress 事件
+  const progress = (detail: Record<string, unknown>) =>
+    window.dispatchEvent(new CustomEvent("catfish:tool-progress", { detail: { label: "", toolCallId: "", session_id: "sid", ...detail } }));
+
+  it("hermes 跑的浏览器工具一开始 → 切到浏览器页 (消息里还没有 tool_calls)", () => {
+    renderHook(() => useArtifactAutoOpen([user, asst("", [])], true, "sid"));
+    progress({ tool: "mcp__catfish_tools__catfish_browser_goto", status: "running", label: "https://finance.sohu.com", toolCallId: "c1" });
+    expect(useArtifactStore.getState().view).toBe("browser");
+  });
+
+  it("hermes 跑的 write_file 结束 → 从开始时的摘要取路径, 是这一轮写的就打开", async () => {
+    renderHook(() => useArtifactAutoOpen([user, asst("", [])], true, "sid"));
+    progress({ tool: "write_file", status: "running", label: "/Users/x/out/q3.html", toolCallId: "w1" });
+    expect(useArtifactStore.getState().view).toBeNull(); // 还没写完不开
+    progress({ tool: "write_file", status: "completed", toolCallId: "w1" });
+    await waitFor(() => expect(useArtifactStore.getState()).toMatchObject({ view: "file", path: "/Users/x/out/q3.html" }));
+  });
+
+  it("读老文件 / 别的对话的事件不弹", async () => {
+    renderHook(() => useArtifactAutoOpen([user, asst("", [])], true, "sid"));
+    progress({ tool: "read_file", status: "running", label: "/Users/x/old.pdf", toolCallId: "r1" });
+    progress({ tool: "read_file", status: "completed", toolCallId: "r1" });
+    progress({ tool: "catfish_browser_goto", status: "running", session_id: "other" });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(useArtifactStore.getState().view).toBeNull();
+  });
 });

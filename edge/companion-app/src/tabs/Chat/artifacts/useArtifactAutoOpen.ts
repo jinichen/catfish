@@ -8,10 +8,18 @@
  *   - 回答进行中小鲶用上了浏览器工具 (名字里带 browser 的, 如 catfish_browser_goto), 切到「浏览器」页看它操作;
  *     之后写出新文件照样切回「成果」。
  *   - 换到别的对话 / 开新对话, 右栏收起 (上一段对话的成果不该挂在新对话旁边)。
+ *
+ * 两条信号来源 (11/07 鸿波实测 dev 下右栏没弹才发现第二条):
+ *   - Companion 自己跑的工具: 消息里的 tool_calls 随时更新, 上面按消息看。
+ *   - hermes 跑的工具 (小鲶多数工具, 包括 catfish_browser_goto): 回答进行中消息里**没有** tool_calls,
+ *     要等这一轮结束从库里重读才有。过程中只有 hermes 推的「工具开始 / 结束」事件
+ *     (lib/chat.ts 转成 window 事件 catfish:tool-progress): 开始带工具名和一行参数摘要, 结束只带名字。
+ *     用上浏览器 → 开始就切浏览器页; 写文件 → 结束时从它开始时的摘要里取路径, 是这一轮写的就打开。
  */
 import { useEffect, useRef } from "react";
 import type { ChatMessage } from "../../../types/chat";
-import { lastRoundArtifacts } from "../../../lib/artifactKinds";
+import { artifactKind, lastRoundArtifacts } from "../../../lib/artifactKinds";
+import { extractFilePaths } from "../../../lib/path_detect";
 import { artifactStat } from "../../../lib/tauri_artifacts";
 import { useArtifactStore } from "../../../store/artifacts";
 
@@ -38,6 +46,25 @@ export function roundBrowserUse(messages: ChatMessage[]): number | null {
   const since = Date.parse(messages[i].ts);
   const used = messages.slice(i + 1).some((m) => (m.tool_calls ?? []).some((c) => /browser/i.test(c.name)));
   return used && Number.isFinite(since) ? since : null;
+}
+
+/** 这一轮开始的时间 (最后一条用户消息的时间) */
+function roundStart(messages: ChatMessage[]): number | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user") {
+      const t = Date.parse(messages[i].ts);
+      return Number.isFinite(t) ? t : null;
+    }
+  }
+  return null;
+}
+
+export interface ToolProgress {
+  tool: string;
+  status: "running" | "completed";
+  label: string;
+  toolCallId: string;
+  session_id: string | null;
 }
 
 /** 已完成的工具调用数 —— 回答进行中消息每来一个字都会变, 只在这个数变了才去找新文件 */
@@ -94,6 +121,37 @@ export function useArtifactAutoOpen(messages: ChatMessage[], isStreaming: boolea
     browserRound.current = browserSince;
     useArtifactStore.getState().autoBrowser(browserSince);
   }, [browserSince]);
+
+  // hermes 跑的工具: 过程中只有开始 / 结束事件
+  const sessionRef = useRef(sessionId);
+  sessionRef.current = sessionId;
+  useEffect(() => {
+    const labels = new Map<string, string>();
+    const onProgress = (e: Event) => {
+      const d = (e as CustomEvent<ToolProgress>).detail;
+      if (!d?.tool) return;
+      if (d.session_id && sessionRef.current && d.session_id !== sessionRef.current) return; // 别的对话的
+      const since = roundStart(latest.current);
+      if (since === null) return;
+      if (d.status === "running") {
+        labels.set(d.toolCallId, d.label);
+        if (/browser/i.test(d.tool)) useArtifactStore.getState().autoBrowser(since);
+        return;
+      }
+      const label = labels.get(d.toolCallId) ?? "";
+      labels.delete(d.toolCallId);
+      const paths = extractFilePaths(label).filter((p) => artifactKind(p) !== null).reverse();
+      if (paths.length === 0) return;
+      const seq = ++checkSeq.current;
+      void freshArtifact(paths, since).then((p) => {
+        if (!p || !mounted.current || seq < appliedSeq.current) return;
+        appliedSeq.current = seq;
+        useArtifactStore.getState().autoOpen(p, since);
+      });
+    };
+    window.addEventListener("catfish:tool-progress", onProgress);
+    return () => window.removeEventListener("catfish:tool-progress", onProgress);
+  }, []);
 
   // 一轮结束: 正文 + 工具结果整体再看一遍
   const wasStreaming = useRef(isStreaming);

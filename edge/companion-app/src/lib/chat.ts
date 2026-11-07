@@ -12,6 +12,7 @@
  */
 
 
+import { toolProgressDetail } from "./toolProgress";
 import type { ToolCall } from "../types/chat";
 import { fetchWithAuth } from "./me";
 import { formatRecentOutputsFootnote } from "./drafts";
@@ -629,6 +630,12 @@ export async function streamChat(params: SendChatParams): Promise<void> {
                   detail: { ...ev, session_id: params.uiSessionId ?? params.sessionId ?? null },
                 }),
               );
+            } else {
+              // 11/07: hermes 自己跑的工具 (小鲶多数工具都是), 开始 / 结束只在这里有信号 ——
+              // 消息列表里的 tool_calls 要等这轮结束从库里重读才有。对话右侧栏靠它在过程中
+              // 切到浏览器页 / 打开刚写出的文件 (tabs/Chat/artifacts/useArtifactAutoOpen.ts)。
+              const detail = toolProgressDetail(ev, params.uiSessionId ?? params.sessionId ?? null);
+              if (detail) window.dispatchEvent(new CustomEvent("catfish:tool-progress", { detail }));
             }
           } catch {
             // ignore parse error

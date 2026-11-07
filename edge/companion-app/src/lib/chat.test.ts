@@ -92,3 +92,21 @@ describe("P3.5.34 修-A: computeIdleTimeoutMs", () => {
     expect(computeIdleTimeoutMs("x-catfish-private-main")).toBe(90_000); // 前面有东西
   });
 });
+
+// 11/07: hermes 跑的工具只在 hermes.tool.progress 里有开始 / 结束信号, 右侧栏靠它在过程中切浏览器 / 开文件
+import { toolProgressDetail } from "./toolProgress";
+describe("toolProgressDetail", () => {
+  it("真工具的开始 / 结束转过去, 带上是哪段对话", () => {
+    expect(toolProgressDetail({ tool: "mcp__catfish_tools__catfish_browser_goto", label: "https://finance.sohu.com", toolCallId: "c1", status: "running", emoji: "🌐" }, "S1"))
+      .toEqual({ tool: "mcp__catfish_tools__catfish_browser_goto", status: "running", label: "https://finance.sohu.com", toolCallId: "c1", session_id: "S1" });
+    expect(toolProgressDetail({ tool: "write_file", toolCallId: "c2", status: "completed" }, null))
+      .toEqual({ tool: "write_file", status: "completed", label: "", toolCallId: "c2", session_id: null });
+  });
+
+  it("插件的进度条 / 审批 / 怪数据不转", () => {
+    expect(toolProgressDetail({ tool: "catfish-lifecycle", status: "running" }, "S")).toBeNull();
+    expect(toolProgressDetail({ tool: "terminal", status: "approval_pending" }, "S")).toBeNull();
+    expect(toolProgressDetail(null, "S")).toBeNull();
+    expect(toolProgressDetail({ status: "running" }, "S")).toBeNull();
+  });
+});
