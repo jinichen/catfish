@@ -13,6 +13,7 @@ import { useChatStore } from "../../store/chat";
 
 import LifecycleStatus from "./LifecycleStatus";
 import { ApprovalBanner } from "../../components/ApprovalBanner";
+import ReminderBar from "./ReminderBar";
 
 
 interface Props {
@@ -117,6 +118,8 @@ export default function ChatPanel({
           )}
         </div>
       </div>
+      {/* 11/07 提醒条: 待办到期 / 早安 / 急邮件 —— 在消息流和输入框之间, 不进对话 */}
+      <ReminderBar />
       {/* 等批准横幅 (10/16 抽成 components/ApprovalBanner, 跟早安卡片共用; 10/26 按会话显示) */}
       <ApprovalBanner sessionId={persistedSessionId} onRetry={(text) => onSend(text, [])} />
       <ChatInput

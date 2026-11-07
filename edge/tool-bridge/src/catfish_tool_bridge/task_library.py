@@ -186,8 +186,8 @@ def upsert_reminders(reminders: list[dict[str, Any]]) -> int:
       就认 source_id 相同的已有行。以前这里直接按提醒 ID 新建一行, 结果同一条提醒
       在任务库里两行 (一行新备注, 一行旧备注), 早安页两条都读。
     · 同一条提醒已经有多行 (历史遗留) → 留一行, 其余标 cancelled。
-    · 任务库里已取消的不被导入改回 pending —— 取消是员工/小鲶的决定, 提醒还挂着
-      只说明没去 Reminders 里删, 不说明事情又活了。提醒勾完成照常记 completed。
+    · 任务库里已取消 / 已完成的不被导入改回 pending —— 那是员工/小鲶的决定, 提醒还挂着
+      只说明没去 Reminders 里删/勾, 不说明事情又活了。提醒勾完成照常记 completed。
     """
     count = 0
     with _connect() as conn:
@@ -210,8 +210,11 @@ def upsert_reminders(reminders: list[dict[str, Any]]) -> int:
         with _connect() as conn:
             prev = conn.execute("SELECT status FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
         status = "completed" if reminder.get("completed") else "pending"
-        if prev is not None and prev["status"] == "cancelled" and status == "pending":
-            status = "cancelled"
+        # 11/07: 已完成也同理 —— 员工在 Companion 提醒条上点「已完成」/ 小鲶按 task_id
+        # 标完成, 写的是任务库; Reminders 里那条没勾, 不说明事情又没做完。以前这里只护
+        # cancelled, 标完成 5 分钟后下一轮导入就把它改回 pending, 第二天又提醒一遍。
+        if prev is not None and prev["status"] in _COMPLETED_STATUSES and status == "pending":
+            status = prev["status"]
         upsert_task({
             "task_id": task_id,
             "title": title,

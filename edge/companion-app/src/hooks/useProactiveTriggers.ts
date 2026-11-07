@@ -7,24 +7,40 @@
  *   1. 1 分钟一次 tick
  *   2. 拉当前 chat messages + 任务库活跃待办 + focus 状态 + fired log
  *   3. 调 detectAnyTrigger 看有没有信号命中 + 不打扰守卫
- *   4. 命中 → startProactiveChat (chat assistant 直接出) + 写 firedLog 给下次 tick 防重
+ *   4. 命中 → 挂到提醒条 (store/reminders.ts) + 写 firedLog 给下次 tick 防重
  *
  * focus 状态: getCurrentWindow().onFocusChanged 事件, useRef 维护离开 / 回来时间戳
  *
  * 9/12: 桌宠气泡出口 (BL-E27) 删了, 只剩工作台 assistant 消息这一个出口。
  *   这类信号触发的闲聊本来就是员工在看 Companion 时才有意义, 不另发系统通知。
+ *
+ * 11/07: 出口从「当前对话末尾插一条 assistant 消息 + 切到工作台」改成输入框上面的提醒条。
+ *   原来那样会污染正打开的那段对话 (下一轮模型当上下文)、把人从别的页面拽走; 待办那句
+ *   还先让 LLM 改写成「11/9材料闭环，还差啥?」, 看不出是提醒、哪件事、几点到期。
+ *   现在待办的字全用任务库事实拼 (lib/reminders.ts deadlineReminder), 不过 LLM;
+ *   沉默 / 切回来的开场白仍可由 LLM 写 (那本来就是一句话的语气)。
+ *   待办到期时窗口不在前台 → 发一条系统通知, 只是叫人回来; 切回来时落到工作台 (提醒条在那)。
  */
 
 import { useEffect, useRef } from "react";
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
+import { useAgentStore } from "../store/agent";
 import { useChatStore } from "../store/chat";
+import { useRemindersStore } from "../store/reminders";
 import { useUIStore } from "../store/ui";
 import { isTauriRuntime } from "../lib/runtime";
 import { fetchContextualStarter } from "../lib/me";
-import { detectAnyTrigger, type DueTask, type TriggerKind, type TriggerResult } from "../lib/triggers";
-import { remindersWeekFetch } from "../lib/tauri";
+import { deadlineReminder, nudgeReminder, type Reminder } from "../lib/reminders";
+import {
+  detectAnyTrigger,
+  PROACTIVE_DISMISS_TS_KEY,
+  type DueTask,
+  type TriggerKind,
+  type TriggerResult,
+} from "../lib/triggers";
+import { remindersWeekFetch, sendNotification } from "../lib/tauri";
 
 const TASKS_CACHE_MS = 10 * 60_000;
 let tasksCache: { at: number; tasks: DueTask[] } | null = null;
@@ -45,7 +61,7 @@ async function loadActiveTasks(nowMs: number): Promise<DueTask[]> {
 const TICK_MS = 60_000;
 const FIRED_LOG_KEY = "catfish:proactive_triggers_fired_log";
 const FIRED_LOG_MAX_ENTRIES = 30;
-const DISMISS_TS_KEY = "catfish:proactive_triggers_last_dismiss";
+const DISMISS_TS_KEY = PROACTIVE_DISMISS_TS_KEY; // 11/07 起由提醒条 ✕ 写 (store/reminders.ts dismiss)
 // 5/25 BL-PROACTIVE-RUNAWAY: 复用 scheduler 的 enable flag, 一关全关.
 // 老 useProactiveTriggers 没读这个, 鸿波关 scheduler 但 triggers 仍 fire 7 条 spam.
 const ENABLED_KEY = "catfish:proactive_enabled";
@@ -96,6 +112,103 @@ function loadDismissTs(): number | null {
   }
 }
 
+/** 窗口没在前台 (员工在别的 app 里) */
+function appInBackground(): boolean {
+  try {
+    return typeof document !== "undefined" && !document.hasFocus();
+  } catch {
+    return false;
+  }
+}
+
+/** 测试用: 清掉任务库 10 分钟缓存 */
+export function resetTriggerTasksCacheForTest(): void {
+  tasksCache = null;
+}
+
+/**
+ * 一次 tick: 看有没有信号命中, 命中就挂到提醒条。返回命中的信号 (没命中 / 关了 → null)。
+ *
+ * 11/07 从 hook 里拆出来: 测试要能直接跑一轮, 断言它不再往对话里塞消息、不切页面。
+ */
+export async function runTriggerTick(opts: {
+  now: Date;
+  lastFocusLeftTs: number | null;
+  lastFocusReturnTs: number | null;
+}): Promise<TriggerResult | null> {
+  // 5/25 BL-PROACTIVE-RUNAWAY: enable flag 检查 (跟 scheduler 同 key 一关全关).
+  // 老 hook 没这条, 鸿波关 scheduler 但 triggers 仍 7 条 spam.
+  if (!isProactiveEnabled()) return null;
+  const { now } = opts;
+  const messages = useChatStore.getState().messages;
+
+  // 9/29: deadline 信号看任务库 (待办事实源), 不再翻 journal 原文 —— 那是
+  // append-only 时间线, 8/31 的旧待办表会被当成今天的事 (见 triggers.ts)。
+  // 任务库走 tool-bridge, 10 分钟拉一次够了 (截止日期不会分钟级变)。
+  const tasks = await loadActiveTasks(now.getTime());
+
+  const firedLog = loadFiredLog();
+  const lastDismissTs = loadDismissTs();
+  const reminders = useRemindersStore.getState();
+
+  const trigger: TriggerResult | null = detectAnyTrigger({
+    now,
+    messages,
+    tasks,
+    lastFocusLeftTs: opts.lastFocusLeftTs,
+    lastFocusReturnTs: opts.lastFocusReturnTs,
+    firedLog: firedLog.map((e) => ({ kind: e.kind, ts: e.ts, dedupe_key: e.dedupe_key })),
+    lastDismissTs,
+    // 11/07: 已经挂在提醒条上 / 稍后中 / 今天处理过的不再命中, 免得白占每天的名额
+    skipKeys: reminders.activeKeys(now.getTime()),
+  });
+
+  if (!trigger) return null;
+
+  console.log(`[triggers] 🔔 fire ${trigger.kind}: ${trigger.why}`);
+
+  // 落 fired log (写 localStorage 给下一 tick 防重)
+  // 5/25 BL-PROACTIVE-RUNAWAY: 把 trigger.dedupe_key 也存进去, 给下一 tick 的
+  // shouldStaySilent 做内容级 dedupe (同一 "5/26 周一" deadline 24h 内不重发).
+  firedLog.push({
+    kind: trigger.kind,
+    ts: now.getTime(),
+    why: trigger.why,
+    dedupe_key: trigger.dedupe_key,
+  });
+  saveFiredLog(firedLog);
+
+  const agentName = useAgentStore.getState().name || "小鲶";
+  let reminder: Reminder | null = null;
+  if (trigger.kind === "deadline" && trigger.task && trigger.dedupe_key) {
+    // 待办: 字用任务库事实拼, 不过 LLM (改写后看不出哪件事、几点到期)
+    reminder = deadlineReminder(trigger.task, trigger.dedupe_key, now, agentName);
+  } else {
+    // Phase B: 沉默 / 切回来的开场白让 gateway LLM 用信号 + context 重写 (15s timeout, 10/30 从 5s 放宽).
+    // 失败兜底用 trigger.message (本地模板).
+    let starter = trigger.message;
+    try {
+      const llm = await fetchContextualStarter(trigger.kind, trigger.context);
+      if (llm && llm.starter) starter = llm.starter;
+    } catch (e) {
+      console.warn("[triggers] fetchContextualStarter 异常, 用本地模板:", e);
+    }
+    reminder = nudgeReminder(trigger, starter, now, agentName);
+  }
+  if (!reminder || !useRemindersStore.getState().add(reminder, now.getTime())) return trigger;
+
+  // 待办到期而人不在 Companion 里: 系统通知只负责叫人回来, 回来落在工作台 (提醒条在那)
+  if (reminder.kind === "deadline" && appInBackground()) {
+    try {
+      await sendNotification("⏰ 待办快到期", reminder.meta ? `${reminder.text} · ${reminder.meta}` : reminder.text);
+      useRemindersStore.getState().noteNotified(now.getTime());
+    } catch (e) {
+      console.warn("[triggers] 系统通知失败:", e);
+    }
+  }
+  return trigger;
+}
+
 export function useProactiveTriggers(): void {
   // focus 状态用 ref 避免 effect 重 mount
   const lastFocusLeftTsRef = useRef<number | null>(null);
@@ -111,6 +224,11 @@ export function useProactiveTriggers(): void {
       const now = Date.now();
       if (focused) {
         lastFocusReturnTsRef.current = now;
+        // 11/07: 刚发过提醒通知、这会儿切回来 —— 多半是点通知回来的, 落到工作台 (提醒条在那)。
+        // 系统通知点了没有单独的回调 (macOS 只是把 app 拉到前台), 只能按「通知后不久回来」认。
+        if (useRemindersStore.getState().consumeNotifyReturn(now)) {
+          useUIStore.getState().setActiveTab("chat");
+        }
         console.log(`[triggers] focus return @ ${new Date(now).toLocaleTimeString()}`);
       } else {
         lastFocusLeftTsRef.current = now;
@@ -129,72 +247,14 @@ export function useProactiveTriggers(): void {
 
     const tick = async () => {
       if (cancelled) return;
-      // 5/25 BL-PROACTIVE-RUNAWAY: enable flag 检查 (跟 scheduler 同 key 一关全关).
-      // 老 hook 没这条, 鸿波关 scheduler 但 triggers 仍 7 条 spam.
-      if (!isProactiveEnabled()) {
-        return;
-      }
       try {
-        const now = new Date();
-        const messages = useChatStore.getState().messages;
-
-        // 9/29: deadline 信号看任务库 (待办事实源), 不再翻 journal 原文 —— 那是
-        // append-only 时间线, 8/31 的旧待办表会被当成今天的事 (见 triggers.ts)。
-        // 任务库走 tool-bridge, 10 分钟拉一次够了 (截止日期不会分钟级变)。
-        const tasks = await loadActiveTasks(now.getTime());
-
-        const firedLog = loadFiredLog();
-        const lastDismissTs = loadDismissTs();
-
-        const trigger: TriggerResult | null = detectAnyTrigger({
-          now,
-          messages,
-          tasks,
+        const trigger = await runTriggerTick({
+          now: new Date(),
           lastFocusLeftTs: lastFocusLeftTsRef.current,
           lastFocusReturnTs: lastFocusReturnTsRef.current,
-          firedLog: firedLog.map((e) => ({ kind: e.kind, ts: e.ts })),
-          lastDismissTs,
         });
-
-        if (!trigger) return;
-
-        console.log(
-          `[triggers] 🔔 fire ${trigger.kind}: ${trigger.why}`,
-        );
-
-        // 落 fired log (写 localStorage 给下一 tick 防重)
-        // 5/25 BL-PROACTIVE-RUNAWAY: 把 trigger.dedupe_key 也存进去, 给下一 tick 的
-        // shouldStaySilent 做内容级 dedupe (同一 "5/26 周一" deadline 24h 内不重发).
-        firedLog.push({
-          kind: trigger.kind,
-          ts: now.getTime(),
-          why: trigger.why,
-          dedupe_key: trigger.dedupe_key,
-        });
-        saveFiredLog(firedLog);
-
-        // Phase B: 先调 gateway 让 LLM 用信号 + context 重写 starter (15s timeout, 10/30 从 5s 放宽).
-        // 失败兜底用 trigger.message (本地模板).
-        let finalStarter = trigger.message;
-        let starterSource = "local_template";
-        try {
-          const llm = await fetchContextualStarter(trigger.kind, trigger.context);
-          if (llm && llm.starter) {
-            finalStarter = llm.starter;
-            starterSource = `llm (${llm.source})`;
-          }
-        } catch (e) {
-          console.warn("[triggers] fetchContextualStarter 异常, 用本地模板:", e);
-        }
-        console.log(
-          `[triggers]   starter (${starterSource}): "${finalStarter.slice(0, 80)}"`,
-        );
-
-        // chat assistant 直接发 (跟死时间触发同一出口)
-        useUIStore.getState().startProactiveChat(finalStarter);
-
         // focus return 触发后, 清掉 lastFocusLeftTs 防重复触发
-        if (trigger.kind === "focus") {
+        if (trigger?.kind === "focus") {
           lastFocusLeftTsRef.current = null;
         }
       } catch (e) {

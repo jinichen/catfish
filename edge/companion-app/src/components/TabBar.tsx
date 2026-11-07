@@ -27,6 +27,7 @@ import { pendingCount, useRoomLink } from "../lib/roomLinkStore";
 import { pendingRoomCount, useColleagueRooms } from "../lib/colleagueRoomsStore";
 import { markSeen, unseenCount, useTaskDone } from "../lib/taskDoneStore";
 import { isTauriRuntime } from "../lib/runtime";
+import { useVisibleReminders } from "../store/reminders";
 
 // 注: "会话" tab 已并入 "工作台" 的左侧 sidebar (P0-3.1), 这里不再列出
 // BL-CONSOLE-TAB-KILL (5/16): 控制台 tab 砍, 90% 跟仪表盘"本地服务"卡重叠 + log
@@ -70,6 +71,8 @@ export default function TabBar() {
   const taskUnseen = unseenCount(useTaskDone());
   // 10/17: 工作流停在对外步骤前等确认的, 也算进 Dock 角标 (员工不在鲶鱼里也知道有事)
   const workflowWaiting = useWorkflowPending().length;
+  // 11/07: 提醒条只在工作台显示; 人在别的页面时不切过去, 只在「工作台」上点个小圆点
+  const reminderWaiting = useVisibleReminders().length > 0;
 
   // 员工在工作台 tab 且窗口有焦点 = 看到了。窗口重新获焦时也再判一次
   // (Cmd+Tab 回来的那一下, activeTab 没变但人回来了)。
@@ -123,6 +126,10 @@ export default function TabBar() {
                 <span className="app-rail__badge" aria-label={`${taskUnseen} 个任务有结果了`}>
                   {taskUnseen > 9 ? "9+" : taskUnseen}
                 </span>
+              )}
+              {/* 已经有数字角标就不再叠一个点 */}
+              {t.id === "chat" && !active && reminderWaiting && taskUnseen === 0 && (
+                <span className="app-rail__dot" role="img" aria-label="工作台有提醒" />
               )}
             </button>
           );

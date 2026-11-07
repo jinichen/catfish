@@ -18,6 +18,10 @@
  *
  * 9/12: 桌宠 (BL-E27) 删了。它曾是"主动信息统一出口", 但默认隐藏、没人开过,
  *   而且隐藏时本来就兜底走 macOS 通知 —— 现在直接走通知, 少一层分支。
+ *
+ * 11/07: 工作台那个出口从「当前对话末尾插一条 ☀️ 早, … 的 assistant 消息 + 切到工作台」
+ *   改成输入框上面的提醒条 (store/reminders.ts): 不污染正打开的对话、不把人拽走。
+ *   点「展开看看」才新开一段对话把整段播报交给小鲶。系统通知照旧。
  */
 
 import { useEffect } from "react";
@@ -34,8 +38,9 @@ import {
 } from "../lib/tauri";
 import { useAgentStore } from "../store/agent";
 import { useChatStore } from "../store/chat";
-import { useUIStore } from "../store/ui";
+import { useRemindersStore } from "../store/reminders";
 import { isTauriRuntime } from "../lib/runtime";
+import { briefingReminder } from "../lib/reminders";
 
 interface ScheduledTime {
   time: string;                 // "HH:MM"
@@ -152,7 +157,8 @@ async function fetchMorningBriefingStarter(): Promise<string | null> {
   return await fetchBriefingSuggestion(unread, evts, todos, model, personality);
 }
 
-async function fireOne(time: string, source: ScheduledTime["source"]): Promise<void> {
+/** 一次早安播报 (到点 / 过点补发)。11/07 export 给测试: 断言它不再往对话里塞消息。 */
+export async function fireOne(time: string, source: ScheduledTime["source"]): Promise<void> {
   try {
     console.log(`[proactive] fireOne(${time}, ${source}): 拉 starter...`);
 
@@ -162,25 +168,27 @@ async function fireOne(time: string, source: ScheduledTime["source"]): Promise<v
       console.log(`[proactive] morning_push disabled (localStorage), skip ${time}`);
       return;
     }
-    let starter = await fetchMorningBriefingStarter();
+    const starter = await fetchMorningBriefingStarter();
     if (!starter) {
       console.log(`[proactive] fireOne(${time}, morning_briefing): 三源都空, skip`);
       return;
     }
-    // 加个开头让员工知道这是"早安"而不是普通闲聊
-    starter = `☀️ 早, ${starter}`;
 
     console.log(`[proactive] fireOne(${time}, ${source}): starter="${starter.slice(0, 60)}..."`);
     // 5/18 BL-COMPANION-VITE-CHUNK-WARN: useAgentStore 顶部 static (跟 App.tsx 等保持一致).
     const agentName = useAgentStore.getState().name || "小鲶";
 
     // 两个出口, 都走:
-    //   1. 工作台里以 assistant 身份直接出现这条 (员工开 Companion 就看到)
+    //   1. 工作台输入框上面的提醒条 (11/07 起; 原来是往当前对话里塞一条 assistant 消息)
     //   2. macOS 通知 (员工没开 Companion 也能被拉回)
-    useUIStore.getState().startProactiveChat(starter);
+    const now = new Date();
+    useRemindersStore.getState().add(briefingReminder(starter, now), now.getTime());
     // BL-PROACTIVE-STARTER-KILL (7/24): 只剩 morning_briefing 分支, title 直接用.
     const title = `☀️ ${agentName}的早安播报`;
+    const inBackground = typeof document !== "undefined" && !document.hasFocus();
     await sendNotification(title, starter);
+    // 人不在 Companion 里时, 这条通知是叫人回来的: 回来落到工作台 (useProactiveTriggers 的 focus 监听)
+    if (inBackground) useRemindersStore.getState().noteNotified(now.getTime());
     // 5/6 fix: markFired 已在 tick() 决定 fire 时立即标过, 这里不重复.
     console.log(`[proactive] fireOne(${time}, ${source}): ✅ 完成`);
   } catch (e) {

@@ -23,11 +23,10 @@ import BriefingTab from "./tabs/Briefing/BriefingTab";  // 5/20 BL-COMPANION-DAI
 import { useUIStore } from "./store/ui";
 import { useAgentStore } from "./store/agent";
 import { useChatStore } from "./store/chat";  // P3.5.139 Phase 4: 启动同步 picker_model → store
-import { useEmailStore } from "./store/email";
 import { useProactiveScheduler } from "./hooks/useProactiveScheduler";
 import { useProactiveTriggers } from "./hooks/useProactiveTriggers";
 import { getPickerModel } from "./lib/tauri";  // P3.5.139 Phase 4
-import { fetchUrgentEmailStarter } from "./lib/briefing";
+import { handleUrgentEmail, type UrgentEmailPayload } from "./lib/urgentEmail";
 import { isTauriRuntime } from "./lib/runtime";
 import { startEgressAnchorLoop } from "./lib/egressAnchor";
 import { startCustomerSync } from "./lib/customerSync";
@@ -113,73 +112,22 @@ export default function App() {
   }, [openAbout]);
 
   // 5/18 BL-COMPANION-EMAIL-DIGEST-STEP4: 邮件 scheduler 检测到"急"邮件 →
-  // Rust 端 emit catfish:email-urgent. 这里接 → 走主动闲聊路径 (BL-E13 同套).
+  // Rust 端 emit catfish:email-urgent. 这里接.
   //
-  // 5/20 BL-EMAIL-URGENT-LLM-PUSH: 改用 LLM 写 starter (跟早安播报同套路, 更自然),
-  // LLM 挂了 fallback 老 Rust 拼的 hard-coded starter.
-  const startProactiveChat = useUIStore((s) => s.startProactiveChat);
+  // 11/07: 不再 LLM 写一句再塞进当前对话 + 切工作台 (5/20 BL-EMAIL-URGENT-LLM-PUSH 那条路),
+  // 改挂输入框上面的提醒条, 字是事实 —— 见 lib/urgentEmail.ts。
   useEffect(() => {
     if (!isTauriRuntime()) return;
     let unlisten: (() => void) | null = null;
     void (async () => {
-      unlisten = await listen<{
-        count: number;
-        starter: string;
-        ids: string[];
-        items?: Array<{ subject: string; sender: string }>;
-      }>("catfish:email-urgent", async (event) => {
-        const { starter: fallbackStarter, count, items, ids } = event.payload;
-        if (!fallbackStarter || count === 0) return;
-
-        // BL-COMPANION-EMAIL-DIGEST-STEP5 sub-task 2 (5/20): 员工已点开过的急
-        // 邮件不再叫醒. Rust scheduler 24h push_history dedup 只防"刚 push 过",
-        // 不知道员工是否真读了; 前端 useEmailStore.readIds (localStorage 持久化)
-        // 记录员工真读过的 id, 这里 filter.
-        if (ids && ids.length > 0) {
-          const readSet = useEmailStore.getState().readIds;
-          const unreadIds = ids.filter((id) => !readSet.has(id));
-          if (unreadIds.length === 0) {
-            console.log(
-              `[email-urgent] ${ids.length} 封急邮件员工都已读过, 跳过通知`,
-            );
-            return;
-          }
-          if (unreadIds.length < ids.length) {
-            console.log(
-              `[email-urgent] ${ids.length - unreadIds.length}/${ids.length} 封已读, 仍 ${unreadIds.length} 封未读, 走通知`,
-            );
-          }
-        }
-
-        // BL-EMAIL-URGENT-LLM-PUSH (5/20): 调 LLM 写更自然版本
-        let finalStarter = fallbackStarter;
-        if (items && items.length > 0) {
-          try {
-            const model = useChatStore.getState().model;
-            const personality = useAgentStore.getState().personality;
-            const llmStarter = await fetchUrgentEmailStarter(
-              items.map((it) => ({ subject: it.subject, sender: it.sender })),
-              model,
-              personality,
-            );
-            if (llmStarter) {
-              finalStarter = llmStarter;
-              console.log(`[email-urgent] LLM starter: ${llmStarter.slice(0, 60)}`);
-            } else {
-              console.log("[email-urgent] LLM 挂, fallback scheduler starter");
-            }
-          } catch (e) {
-            console.warn("[email-urgent] LLM 异常, fallback scheduler starter", e);
-          }
-        }
-
-        startProactiveChat(finalStarter);
+      unlisten = await listen<UrgentEmailPayload>("catfish:email-urgent", (event) => {
+        handleUrgentEmail(event.payload);
       });
     })();
     return () => {
       if (unlisten) unlisten();
     };
-  }, [startProactiveChat]);
+  }, []);
 
   // 五一 sprint 5/5: Esc 隐藏浮窗 (配合 Cmd+Shift+Space 召唤)
   // 输入框聚焦时 Esc 由组件自己处理 (e.g. 关闭弹层); 这里只在 body 聚焦时拦截.

@@ -19,6 +19,7 @@ import "./styles/refresh.css";
 import "./styles/workspace-glass.css";
 import "./styles/toolsteps.css";
 import "./styles/artifacts.css";
+import "./styles/reminders.css"; // 11/07 输入框上面的提醒条
 
 // BL-CSP-PROXY-GLOBAL (7/18 鸿波): 全局 monkey-patch window.fetch → fetchViaProxy.
 //

@@ -359,6 +359,20 @@ def test_import_does_not_revive_cancelled_task(tmp_path, monkeypatch):
     assert task_library.list_tasks({"scope": "all", "include_completed": True})["tasks"][0]["status"] == "completed"
 
 
+def test_import_does_not_revive_task_completed_in_library(tmp_path, monkeypatch):
+    """11/07: 提醒条「已完成」按 task_id 写 completed; Reminders 里那条没勾, 导入不能改回 pending。"""
+    monkeypatch.setenv("CATFISH_TASK_LIBRARY_PATH", str(tmp_path / "tasks.db"))
+    task_library.upsert_reminders([{"id": "r1", "title": "11/9 材料闭环", "due_date_iso": "2026-11-09T18:00:00"}])
+    task_id = task_library.list_tasks({"scope": "active"})["tasks"][0]["task_id"]
+    done = task_library.tool_create_task({"task_id": task_id, "title": "11/9 材料闭环", "status": "completed"})
+    assert done["ok"] and done["task"]["status"] == "completed"
+    assert done["task"]["source"] == "reminders" and done["task"]["due_date_iso"] == "2026-11-09T18:00:00"
+    task_library.upsert_reminders([{"id": "r1", "title": "11/9 材料闭环", "due_date_iso": "2026-11-09T18:00:00"}])
+    assert task_library.list_tasks({"scope": "active"})["count"] == 0
+    row = task_library.list_tasks({"scope": "all", "include_completed": True})["tasks"][0]
+    assert (row["task_id"], row["status"]) == (task_id, "completed")
+
+
 def test_create_task_reuses_same_title_and_flags_similar(tmp_path, monkeypatch):
     monkeypatch.setenv("CATFISH_TASK_LIBRARY_PATH", str(tmp_path / "tasks.db"))
     first = task_library.tool_create_task({"title": "高新资质申报跟进", "body": "旧"})

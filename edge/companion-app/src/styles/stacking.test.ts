@@ -41,6 +41,8 @@ const STACKING_PROPS: Record<string, (v: string) => boolean> = {
   "mix-blend-mode": (v) => v !== "normal",
   isolation: (v) => v === "isolate",
   contain: (v) => /\b(layout|paint|strict|content)\b/.test(v),
+  // 11/07: container-type (size / inline-size) 自带 layout containment
+  "container-type": (v) => v !== "normal",
   "will-change": (v) => /\b(transform|opacity|filter|backdrop-filter)\b/.test(v),
   opacity: (v) => parseFloat(v) < 1,
 };
@@ -52,9 +54,14 @@ const POPOVER_HOSTS = [
     popovers: [".chat-model-picker__hint", ".chat-model-picker__error"],
     note: "模型选择器的两个浮层从这里往下溢出到消息区",
   },
+  {
+    selector: ".reminder-bar-slot",
+    popovers: [".reminder-bar__menu"],
+    note: "11/07 提醒条的「稍后提醒」「…」菜单从输入框上方往上溢出到消息区; container-type 自带层叠上下文",
+  },
 ];
 
-const CSS_FILES = ["globals.css", "refresh.css"];
+const CSS_FILES = ["globals.css", "refresh.css", "reminders.css"];
 
 /** 极简 CSS 规则提取: 返回该选择器在所有文件里的声明合并结果（后加载的覆盖前面）。
  *

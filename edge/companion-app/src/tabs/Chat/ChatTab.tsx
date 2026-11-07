@@ -13,7 +13,7 @@ import { useChat } from "../../hooks/useChat";
 import { useChatStore } from "../../store/chat";
 import { useUIStore } from "../../store/ui";
 import { useCatalog } from "../../hooks/useCatalog";
-import { getSession, sessionGetTaskUid } from "../../lib/tauri";
+import { getSession, sessionGetTaskUid, sessionUpdateTitle } from "../../lib/tauri";
 import * as streamRegistry from "../../lib/streamRegistry";
 import ChatPanel from "./ChatPanel";
 import SessionAttachmentsBar from "./SessionAttachmentsBar";
@@ -104,6 +104,56 @@ export default function ChatTab() {
     send,
   ]);
 
+  /** 父组件持有 sidebar 的 refresh key —— 发完一条消息后 bump 让左侧列表重拉 */
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  /**
+   * 11/07 提醒条主按钮 (「让小鲶看看还差啥」「展开看看」…): 跟上面邮件交接同一条路 ——
+   * reset 开新对话 + useChat.send 发第一句用户消息, 由 send 自己建会话、落库。
+   * 提醒不再塞进当前打开的那段对话 (旧 startProactiveChat 的毛病)。
+   *
+   * 会话标题按那件事起 (「待办：11/9 材料闭环」), 不然左边列表里只看得到第一句
+   * 「（这条是从待办到期提醒点进来的）」, 几条提醒点出来的会话分不清。send 一开头就建会话,
+   * 盯着 persistedSessionId 从空变成新 id 那一下改标题, 不用等整轮回答结束。
+   */
+  const pendingReminderChat = useUIStore((s) => s.pendingReminderChat);
+  const autoSentReminderRequest = useRef<string | null>(null);
+  useEffect(() => {
+    if (!pendingReminderChat || !model) return;
+    if (autoSentReminderRequest.current === pendingReminderChat.requestId) return;
+    // 当前对话还在出字: 不等它 —— 先开新对话 (跟「+ 新对话」一样不打断老的流, 它在后台跑完)。
+    // reset 把 isStreaming 清掉, 重渲染后拿到新的 send (老的 send 闭包里 isStreaming=true 会直接不发) 再走下面。
+    if (isStreaming) {
+      reset();
+      return;
+    }
+    const action = useUIStore.getState().consumeReminderChat();
+    if (!action) return;
+    autoSentReminderRequest.current = action.requestId;
+
+    reset();
+    let titled = false;
+    const unsub = useChatStore.subscribe((s) => {
+      const sid = s.persistedSessionId;
+      if (titled || !sid) return;
+      titled = true;
+      unsub();
+      void sessionUpdateTitle(sid, action.title)
+        .then(() => setRefreshKey((k) => k + 1))
+        .catch((e) => console.warn("[catfish chat] 提醒会话改标题失败:", e));
+    });
+    void (async () => {
+      try {
+        await send(action.prompt);
+      } catch (error) {
+        console.warn("[catfish chat] 提醒交接发送失败:", error);
+      } finally {
+        if (!titled) unsub();
+        setRefreshKey((k) => k + 1);
+      }
+    })();
+  }, [pendingReminderChat, model, isStreaming, reset, send]);
+
   const persistedSessionId = useChatStore((s) => s.persistedSessionId);
   const loadSession = useChatStore((s) => s.loadSession);
   const loadSessionAttachments = useChatStore((s) => s.loadSessionAttachments);
@@ -143,8 +193,6 @@ export default function ChatTab() {
     };
   }, [persistedSessionId]);
 
-  /** 父组件持有 sidebar 的 refresh key —— 发完一条消息后 bump 让左侧列表重拉 */
-  const [refreshKey, setRefreshKey] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   /** BL-COMPANION-UX2 (5/12): streaming 中点列表切换.

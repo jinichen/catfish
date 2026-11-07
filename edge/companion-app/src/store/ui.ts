@@ -9,6 +9,13 @@ export interface PendingEmailChat {
   prompt: string;
 }
 
+/** 11/07: 提醒条主按钮 → 新开一段对话, 第一句用户消息是提醒里的事实, 会话标题按那件事起 */
+export interface PendingReminderChat {
+  requestId: string;
+  prompt: string;
+  title: string;
+}
+
 // "sessions" tab 已并入 "chat" 的 sidebar (P0-3.1 后), 不再单独 tab.
 // "email" tab 5/18 BL-COMPANION-EMAIL-TAB 加 — AI 邮件管家独立 tab, 跟工作台 / 仪表盘同级.
 // "briefing" tab 5/20 BL-COMPANION-DAILY-BRIEFING-MVP 加 — 早安播报独立 tab,
@@ -35,6 +42,10 @@ interface UIState {
    */
   pendingEmailChat: PendingEmailChat | null;
   activeEmailChatId: string | null;
+  /** 11/07 提醒条交给工作台的一次性请求 (ChatTab 挂载后消费, 跟 pendingEmailChat 同一套路) */
+  pendingReminderChat: PendingReminderChat | null;
+  startReminderChat: (prompt: string, title: string) => void;
+  consumeReminderChat: () => PendingReminderChat | null;
   /** P3.3.55 (6/12 鸿波 "信合规审计闭环"): 员工自己开/关审计视图 tab.
    *  默认关. 关时 Dashboard 隐私 section 没第 5 tab "审计视图"; 开时显.
    *  跟 manifesto 公理 1 (员工主权): 员工**自己**决定何时给审计员看. 持久 localStorage. */
@@ -52,7 +63,11 @@ interface UIState {
   closeAbout: () => void;
   /** 5/6 鸿波要求: 主动闲聊 = 一条 assistant message 直接出现在 chat 里
    *  (不再塞员工输入框让员工自己按发送). 切到 chat tab + addMessage 当前会话末尾.
-   *  顺手持久化 (sessionCreate / sessionMessageAppend), 切走会话回来还能看到. */
+   *  顺手持久化 (sessionCreate / sessionMessageAppend), 切走会话回来还能看到.
+   *
+   *  11/07: 自动触发的提醒 (待办到期 / 早安播报 / 急邮件 / 沉默和切回来) 不再走这里 ——
+   *  它会污染当前打开的那段对话、把人拽到工作台。那些改走提醒条 (store/reminders.ts)。
+   *  这里只剩员工自己点出来的 (邮件摘要卡、首次引导), 那时人本来就要去工作台。 */
   startProactiveChat: (starter: string) => void;
   startEmailChat: (emailId: string, prompt: string) => void;
   consumeEmailChat: () => PendingEmailChat | null;
@@ -80,6 +95,22 @@ export const useUIStore = create<UIState>((set, get) => ({
   pendingChatPrefill: "",
   pendingEmailChat: null,
   activeEmailChatId: null,
+  pendingReminderChat: null,
+  startReminderChat: (prompt, title) =>
+    set({
+      // 员工就在工作台的提醒条上点的; 从别处调也该落到工作台
+      activeTab: "chat",
+      pendingReminderChat: {
+        requestId: `reminder-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        prompt,
+        title,
+      },
+    }),
+  consumeReminderChat: () => {
+    const action = get().pendingReminderChat;
+    if (action) set({ pendingReminderChat: null });
+    return action;
+  },
   pendingDraftFocus: null,
   openEmailDraft: (draftId) => set({ activeTab: "email", pendingDraftFocus: draftId }),
   pendingSessionFocus: null,

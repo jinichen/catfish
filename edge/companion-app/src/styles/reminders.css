@@ -1,0 +1,237 @@
+/* 11/07 提醒条 (tabs/Chat/ReminderBar.tsx): 输入框上面一条, 放待办到期 / 早安播报 / 急邮件 / 闲聊提醒。
+ * 颜色全用 tokens.css 的变量, 亮 / 暗色跟着走。
+ *
+ * 宽度: 聊天列 = 窗口 − 左导航 − 会话列表 (− 右侧成果区), 900 宽的窗口只剩三百来像素,
+ * 所以按自己这一列的宽度 (容器查询) 排, 不按窗口: 字一行、按钮折到下一行; 很窄时
+ * 「稍后提醒」「已完成」收进「…」菜单, 只留主按钮和 ✕。 */
+
+/* 容器查询的容器 + 菜单往上溢出到消息区。
+ * container-type 会带上 layout containment, 那就是一个层叠上下文 —— 必须自己有 z-index,
+ * 否则菜单被关在里面, 盖不住消息区里有定位的元素 (styles/stacking.test.ts 盯着这条)。 */
+.reminder-bar-slot {
+  container-type: inline-size;
+  position: relative;
+  z-index: 3;
+  padding: 0 16px 6px;
+}
+
+.reminder-bar {
+  --reminder-accent: var(--catfish-cyan);
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  /* 右边留出 ✕ 的位置 (✕ 绝对定位在右上角) */
+  padding: 8px 40px 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--reminder-accent) 30%, var(--catfish-border));
+  border-left: 3px solid var(--reminder-accent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--reminder-accent) 7%, var(--catfish-bg-elevated));
+  color: var(--catfish-text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.reminder-bar[data-kind="deadline"] {
+  --reminder-accent: var(--status-warn);
+}
+.reminder-bar[data-kind="email"] {
+  --reminder-accent: var(--catfish-orange);
+}
+.reminder-bar--done {
+  --reminder-accent: var(--status-ok);
+}
+
+.reminder-bar__text {
+  flex: 1 1 260px;
+  min-width: 0;
+  margin: 0;
+  /* 任务名 + 截止 + 来源最多两行, 再长省略 (悬停 title 看全) */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.reminder-bar__icon {
+  margin-right: 6px;
+}
+.reminder-bar--done .reminder-bar__icon {
+  color: var(--status-ok);
+  font-weight: 700;
+}
+.reminder-bar__main {
+  font-weight: 600;
+}
+.reminder-bar__meta {
+  color: var(--catfish-text-muted);
+}
+.reminder-bar__error {
+  color: var(--status-err);
+}
+
+.reminder-bar__actions {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-left: auto;
+  max-width: 100%;
+}
+
+.reminder-bar__primary,
+.reminder-bar__secondary,
+.reminder-bar__step,
+.reminder-bar__close {
+  box-sizing: border-box;
+  min-height: 28px;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+}
+.reminder-bar__primary:focus-visible,
+.reminder-bar__secondary:focus-visible,
+.reminder-bar__step:focus-visible,
+.reminder-bar__close:focus-visible,
+.reminder-bar__menu button:focus-visible {
+  outline: 2px solid var(--catfish-cyan-bright);
+  outline-offset: 2px;
+}
+.reminder-bar button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* 主按钮: 实色。字用 bg-elevated 而不是写死白 —— 暗色下主色提亮成 #22A4B0, 白字只有 2.9:1 */
+.reminder-bar__primary {
+  padding: 6px 12px;
+  border: 1px solid var(--catfish-cyan);
+  background: var(--catfish-cyan);
+  color: var(--catfish-bg-elevated);
+  font-weight: 650;
+}
+.reminder-bar__primary:hover:not(:disabled) {
+  background: var(--catfish-cyan-dim);
+  border-color: var(--catfish-cyan-dim);
+}
+
+.reminder-bar__secondary {
+  padding: 6px 10px;
+  border: 1px solid var(--catfish-border-strong);
+  background: var(--catfish-bg-elevated);
+  color: var(--catfish-text);
+  font-weight: 550;
+}
+.reminder-bar__secondary:hover:not(:disabled) {
+  background: var(--catfish-bg-cream);
+}
+.reminder-bar__more {
+  min-width: 32px;
+  padding-inline: 8px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.reminder-bar__step {
+  padding: 6px 6px;
+  border: none;
+  background: transparent;
+  color: var(--catfish-cyan);
+  font-weight: 550;
+}
+.reminder-bar__step:hover {
+  background: var(--catfish-bg-cream);
+}
+
+.reminder-bar__close {
+  position: absolute;
+  top: 8px;
+  right: 6px;
+  width: 28px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--catfish-text-muted);
+  font-size: 13px;
+}
+.reminder-bar__close:hover:not(:disabled) {
+  background: var(--catfish-bg-cream);
+  color: var(--catfish-text);
+}
+
+/* 菜单从按钮往上开 (提醒条贴着输入框, 下面没地方) */
+.reminder-bar__anchor {
+  position: relative;
+}
+.reminder-bar__menu {
+  position: absolute;
+  z-index: 5;
+  right: 0;
+  bottom: calc(100% + 4px);
+  display: flex;
+  flex-direction: column;
+  min-width: 132px;
+  padding: 4px;
+  border: 1px solid var(--catfish-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--catfish-bg-elevated);
+  box-shadow: var(--shadow-md);
+}
+.reminder-bar__menu button {
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--catfish-text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.reminder-bar__menu button:hover {
+  background: var(--catfish-bg-cream);
+}
+
+/* 宽: 「稍后提醒」「已完成」直接摆出来; 窄 (条内宽 < 340, 即聊天列约 370 以下, 900 宽的窗口就是): 收进「…」 */
+.reminder-bar__narrow-only {
+  display: none;
+}
+@container (max-width: 340px) {
+  .reminder-bar__wide-only {
+    display: none;
+  }
+  .reminder-bar__narrow-only {
+    display: block;
+  }
+  .reminder-bar-slot {
+    padding-inline: 10px;
+  }
+}
+
+/* 不在工作台时, 左导航「工作台」上的小圆点: 那边有提醒在等 (不切页面, 只提示) */
+.app-rail__dot {
+  position: absolute;
+  top: 9px;
+  right: 14px;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--catfish-orange);
+  box-shadow: 0 0 0 2px var(--catfish-rail);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reminder-bar__primary,
+  .reminder-bar__secondary,
+  .reminder-bar__step,
+  .reminder-bar__close {
+    transition: none;
+  }
+}

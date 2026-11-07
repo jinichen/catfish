@@ -45,6 +45,8 @@ export const fetchProactiveContext = () =>
 // 3 个 export 删除, Tauri 后端改 stub 返 error 防回归.
 
 export interface ReminderTodo {
+  /** 任务库主键。11/07 起带出来: 提醒条「已完成」要按它写回任务库 */
+  task_id?: string;
   text: string;
   line: number; // Reminders 没有 markdown 行号，固定 0
   source: "reminder";
@@ -101,6 +103,7 @@ export async function remindersWeekFetch(): Promise<string> {
     .map((item) => {
       const priority = typeof item.priority === "number" ? item.priority : 0;
       return {
+        task_id: typeof item.task_id === "string" ? item.task_id : undefined,
         text: (item.title as string).trim(),
         line: 0,
         source: "reminder",
@@ -118,6 +121,22 @@ export async function remindersWeekFetch(): Promise<string> {
       };
     });
   return JSON.stringify(todos);
+}
+
+/** 11/07 提醒条「已完成」: 把任务库里这条标成 completed。
+ *
+ * 走的是任务库唯一的写入口 catfish_create_task (带 task_id = 更新, 只改传了的字段,
+ * 截止 / 正文 / 来源都保持原值 —— 见 tool-bridge task_library.tool_create_task)。
+ * 来自 Reminders 的任务, 下次导入不会把它改回 pending (task_library.upsert_reminders 11/07)。 */
+export async function taskMarkCompleted(taskId: string, title: string): Promise<void> {
+  const dispatched = await toolBridgeCallTool("catfish_create_task", {
+    task_id: taskId,
+    title,
+    status: "completed",
+  });
+  if (!dispatched.ok) throw new Error(dispatched.error || "任务库写入失败");
+  const result = dispatched.result as { ok?: boolean; error?: string } | null;
+  if (!result?.ok) throw new Error(result?.error || "任务库写入失败");
 }
 
 // ── BL-BRIEFING-DECISION (5/21 Phase 5): 综合判断上下文包 ─────────────

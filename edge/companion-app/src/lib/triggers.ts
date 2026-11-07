@@ -38,7 +38,13 @@ export interface TriggerResult {
    * fire" 这种 bug.
    */
   dedupe_key?: string;
+  /** 11/07: deadline 命中的那条待办原样带出来 —— 提醒条用任务库事实拼字, 「已完成」要它的 task_id */
+  task?: DueTask;
 }
+
+/** 11/07: 提醒条点 ✕ 时写这里, 下一 tick 的 shouldStaySilent 据此静默 SNOOZE_AFTER_DISMISS_MS.
+ *  (原来是桌宠气泡关掉时写, 9/12 桌宠删了以后一直没人写, 30 分钟静默形同虚设) */
+export const PROACTIVE_DISMISS_TS_KEY = "catfish:proactive_triggers_last_dismiss";
 
 /** 不打扰: 一天最多主动几次.
  *
@@ -194,7 +200,11 @@ export function detectSilence(args: {
 
 /** 任务库里的一条活跃待办 (remindersWeekFetch 的形状, 只取这里用得到的) */
 export interface DueTask {
+  /** 任务库主键 (11/07 起 remindersWeekFetch 带出来, 提醒条「已完成」写回用) */
+  task_id?: string;
   text: string;
+  /** Reminders 清单名 (提醒条上「来自 …」) */
+  section?: string;
   due_date_iso?: string | null;
   body?: string;
   priority?: number;
@@ -211,8 +221,10 @@ export function calendarDaysUntil(target: Date, now: Date): number {
 export function detectDeadline(args: {
   tasks: DueTask[];
   now: Date;
+  /** 11/07: 已经挂在提醒条上 / 稍后 / 今天处理过的 dedupe_key —— 跳过它们, 让下一条急的有机会 */
+  skipKeys?: ReadonlySet<string>;
 }): TriggerResult | null {
-  const { tasks, now } = args;
+  const { tasks, now, skipKeys } = args;
   let best: { task: DueTask; due: Date; daysUntil: number } | null = null;
   for (const task of tasks) {
     if (!task.due_date_iso || !task.text) continue;
@@ -220,6 +232,7 @@ export function detectDeadline(args: {
     if (Number.isNaN(due.getTime())) continue;
     const daysUntil = calendarDaysUntil(due, now);
     if (daysUntil < 0 || daysUntil > 3) continue;
+    if (skipKeys?.has(deadlineKey(due, task.text))) continue;
     const rank = (t: { daysUntil: number; task: DueTask }) =>
       t.daysUntil * 10 + (t.task.priority && t.task.priority > 0 ? t.task.priority : 9);
     if (!best || rank({ daysUntil, task }) < rank(best)) best = { task, due, daysUntil };
@@ -243,8 +256,13 @@ export function detectDeadline(args: {
       task_body: body.slice(0, 200),
     },
     // 5/25 BL-PROACTIVE-RUNAWAY: 内容级 dedupe — 同一条待办 24h 内只 fire 1 次
-    dedupe_key: `deadline:${month}/${day}:${task.text}`,
+    dedupe_key: deadlineKey(due, task.text),
+    task,
   };
+}
+
+function deadlineKey(due: Date, text: string): string {
+  return `deadline:${due.getMonth() + 1}/${due.getDate()}:${text}`;
 }
 
 // ── 信号 3: focus 切回 Companion ───────────────────────────────
@@ -297,11 +315,14 @@ export function detectAnyTrigger(args: {
   lastFocusReturnTs: number | null;
   firedLog: FiredLogEntry[];
   lastDismissTs: number | null;
+  /** 11/07: 提醒条上已有 / 稍后中 / 今天处理过的 (按 dedupe_key, 没有就按 kind)。
+   *  不跳过的话, 同一条还挂在条上时信号照样命中, 白占一天 MAX_PROACTIVE_PER_DAY 的名额。 */
+  skipKeys?: ReadonlySet<string>;
 }): TriggerResult | null {
   // 优先级: deadline > silence > focus
   // (deadline 时效性最强, focus 偶发性最强但场景最具体)
   const candidates = [
-    detectDeadline({ tasks: args.tasks, now: args.now }),
+    detectDeadline({ tasks: args.tasks, now: args.now, skipKeys: args.skipKeys }),
     detectSilence({ messages: args.messages, now: args.now }),
     detectFocusReturn({
       lastFocusLeftTs: args.lastFocusLeftTs,
@@ -312,6 +333,7 @@ export function detectAnyTrigger(args: {
   ];
   for (const c of candidates) {
     if (!c) continue;
+    if (args.skipKeys?.has(c.dedupe_key || c.kind)) continue;
     const guard = shouldStaySilent({
       now: args.now,
       firedLog: args.firedLog,
