@@ -14,7 +14,7 @@ const RPC_TIMEOUT: Duration = Duration::from_secs(90);
 
 const ALLOWED: &[&str] = &[
     "list", "get", "sync", "create", "join", "decline", "send", "read", "add", "remove", "update", "disband", "leave",
-    "delete", "search", "settings_get", "settings_set", "transfer", "resend", "file_save",
+    "delete", "search", "settings_get", "settings_set", "transfer", "resend", "file_save", "stage", "file_retry",
 ];
 
 fn method_for(action: &str) -> Result<String, String> {

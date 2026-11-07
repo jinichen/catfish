@@ -46,30 +46,53 @@ def _clean_name(name: Any) -> str:
     return s
 
 
-def prepare(raw: Any) -> list[dict[str, Any]]:
-    """界面传来的文件 [{name, data(base64)}] → 核对好的 [{id, name, size, sha256, n, data(bytes)}]。"""
+def prepare(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """界面传来的文件 → (小文件, 大文件)。
+    界面传法: [{name, stage_id}] (先一段段暂存好, 见 colleague_rooms_bigfiles.stage) 或老的 [{name, data(base64)}]。
+    一条消息合计 ≤ 5MB: 全按小文件走邮筒分块 → [{id, name, size, sha256, n, data(bytes)}];
+    超过: 全按大文件走中央暂存 (11/07) → [{name, path(明文暂存)}], 单个 / 合计 ≤ 200MB。"""
+    from . import colleague_rooms_bigfiles as big  # noqa: PLC0415
     items = list(raw or []) if isinstance(raw, (list, tuple)) else []
     if not items:
-        return []
+        return [], []
     if len(items) > MAX_FILES:
         raise ValueError(f"一条消息最多带 {MAX_FILES} 个文件")
-    out, total = [], 0
+    got, total = [], 0
     for it in items:
         if not isinstance(it, dict):
             raise ValueError("文件格式不对")
         name = _clean_name(it.get("name"))
-        try:
-            data = base64.b64decode(str(it.get("data") or ""), validate=True)
-        except ValueError:
-            raise ValueError(f"文件读不出来: {name}") from None
-        if not data:
+        if it.get("stage_id"):
+            path = big.staged(str(it["stage_id"]))
+            size, data = path.stat().st_size, None
+        else:
+            try:
+                data = base64.b64decode(str(it.get("data") or ""), validate=True)
+            except ValueError:
+                raise ValueError(f"文件读不出来: {name}") from None
+            path, size = None, len(data)
+        if not size:
             raise ValueError(f"文件是空的: {name}")
-        total += len(data)
-        if total > MAX_TOTAL:
-            raise ValueError(f"文件太大 (一条消息合计最多 {MAX_TOTAL // 1024 // 1024}MB): {name} —— 大文件用邮件或网盘")
-        out.append({"id": f"f_{secrets.token_hex(8)}", "name": name, "size": len(data),
+        if size > big.MAX_FILE:
+            raise ValueError(f"文件太大 (单个最多 {big.MAX_FILE // 1024 // 1024}MB): {name} —— 更大的用网盘")
+        total += size
+        if total > big.MAX_TOTAL:
+            raise ValueError(f"文件太大 (一条消息合计最多 {big.MAX_TOTAL // 1024 // 1024}MB) —— 分几条发, 或用网盘")
+        got.append({"name": name, "path": path, "data": data})
+    if total > MAX_TOTAL:   # 大文件: 都要有暂存的明文 (老的 base64 传法也落一份)
+        for g in got:
+            if g["path"] is None:
+                p = big.staged(big.stage({"offset": 0, "data": base64.b64encode(g["data"]).decode()})["stage_id"])
+                g["path"] = p
+        return [], [{"name": g["name"], "path": g["path"]} for g in got]
+    out = []
+    for g in got:
+        data = g["data"] if g["data"] is not None else g["path"].read_bytes()
+        if g["path"] is not None:
+            g["path"].unlink(missing_ok=True)
+        out.append({"id": f"f_{secrets.token_hex(8)}", "name": g["name"], "size": len(data),
                     "sha256": hashlib.sha256(data).hexdigest(), "n": max(1, -(-len(data) // CHUNK)), "data": data})
-    return out
+    return out, []
 
 
 def meta(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -108,6 +131,7 @@ def send_chunks(room_id: str, msg_id: str, files: list[dict[str, Any]], to: list
 
 def clean_meta(raw: Any) -> list[dict[str, Any]]:
     """收到的消息里的文件清单, 核对格式 (不合规的丢掉)。"""
+    from . import colleague_rooms_bigfiles as big  # noqa: PLC0415
     out = []
     for f in (raw if isinstance(raw, list) else [])[:MAX_FILES]:
         if not isinstance(f, dict) or not _FILE_ID.fullmatch(str(f.get("id") or "")):
@@ -118,7 +142,14 @@ def clean_meta(raw: Any) -> list[dict[str, Any]]:
         except (ValueError, TypeError):
             continue
         sha = str(f.get("sha256") or "")
-        if not re.fullmatch(r"[0-9a-f]{64}", sha) or not 0 < size <= MAX_TOTAL or n != max(1, -(-size // CHUNK)):
+        if not re.fullmatch(r"[0-9a-f]{64}", sha):
+            continue
+        if f.get("blob") is not None:   # 11/07 大文件: 中央暂存的编号 + 解密钥匙
+            extra = big.clean_meta(f)
+            if extra:
+                out.append({"id": f["id"], "name": name, "size": size, "sha256": sha, "n": n, **extra})
+            continue
+        if not 0 < size <= MAX_TOTAL or n != max(1, -(-size // CHUNK)):
             continue
         out.append({"id": f["id"], "name": name, "size": size, "sha256": sha, "n": n})
     return out
@@ -158,6 +189,8 @@ def assemble(room_id: str, msg: dict[str, Any]) -> None:
     """这条消息的文件, 块收齐了就拼起来、核对 sha256, 存进 files。核对不上的丢掉那些块 (等补发)。"""
     sender = msg.get("from") or ""
     for f in msg.get("files") or []:
+        if f.get("blob"):
+            continue   # 大文件不走邮筒分块
         with store.tx() as con:
             if con.execute("SELECT 1 FROM files WHERE room_id = ? AND file_id = ?", (room_id, f["id"])).fetchone():
                 continue
@@ -205,6 +238,8 @@ def missing_requests(now: float | None = None) -> list[tuple[str, str, dict[str,
             if not m.get("received_at"):
                 continue   # 我自己发的
             for f in m.get("files") or []:
+                if f.get("blob"):
+                    continue   # 大文件走中央暂存, 不找人要块
                 if con.execute("SELECT 1 FROM files WHERE room_id = ? AND file_id = ?", (r["room_id"], f["id"])).fetchone():
                     continue
                 got = con.execute("SELECT i, at FROM file_chunks WHERE room_id = ? AND file_id = ?",
@@ -276,16 +311,22 @@ def drop_orphans(now: float | None = None) -> None:
 
 def save(room: dict[str, Any], file_id: str) -> dict[str, Any]:
     """写到 ~/Downloads/鲶鱼群文件/<群名>/<文件名> (重名加 (1)(2)), 返回路径给界面打开。同一个文件已经写过、内容没变就不再写。"""
+    from . import colleague_rooms_bigfiles as big  # noqa: PLC0415
     if not _FILE_ID.fullmatch(str(file_id or "")):
         raise ValueError("文件编号不对")
+    b = big.row(room["room_id"], file_id)
     with store.tx() as con:
-        r = con.execute("SELECT name, sha256, data FROM files WHERE room_id = ? AND file_id = ?",
-                        (room["room_id"], file_id)).fetchone()
-    if not r:
+        r = None if b else con.execute("SELECT name, sha256, data FROM files WHERE room_id = ? AND file_id = ?",
+                                       (room["room_id"], file_id)).fetchone()
+    if b and b["state"] not in ("ready", "sent", "local", "uploading"):
+        raise ValueError("这个文件还没收下来, 稍等再开")
+    if not b and not r:
         raise ValueError("这个文件还没收齐, 稍等再开")
     folder = Path.home() / "Downloads" / "鲶鱼群文件" / _safe_dir(room.get("name") or room["room_id"])
     folder.mkdir(parents=True, exist_ok=True)
-    data = bytes(r["data"])
+    if b:
+        r = {"name": b["name"], "sha256": b["sha256"]}
+    data = bytes(r["data"]) if not b else None
     target = folder / r["name"]
     stem, suffix, k = target.stem, target.suffix, 1
     while target.exists():
@@ -296,7 +337,10 @@ def save(room: dict[str, Any], file_id: str) -> dict[str, Any]:
             pass
         target = folder / f"{stem} ({k}){suffix}"
         k += 1
-    target.write_bytes(data)
+    if b:
+        big.write_plain(b, target)   # 大文件: 本机密文边解边写
+    else:
+        target.write_bytes(data)
     return {"ok": True, "path": str(target)}
 
 

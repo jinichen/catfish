@@ -25,6 +25,10 @@ def retry_and_mend() -> None:
             if room and room.get("my_state") == "joined" and (room.get("members", {}).get(sender) or {}).get("state") in cr.ACTIVE:
                 cr._post_all([sender], "room_msg", env, "room-file", room=room)
         rfiles.drop_orphans()
+        from . import colleague_rooms_bigfiles as big  # noqa: PLC0415
+        big.drop_orphans()
+        if big.pending():
+            big.kick()
     except Exception as e:  # noqa: BLE001
         logger.warning("补发 / 要缺块失败: %s", e)
 
@@ -67,5 +71,9 @@ def decorate(rid: str, msgs: list[dict[str, Any]], me: str) -> None:
         if rows:
             m["delivery"] = rows
         if m.get("files"):
-            st = rfiles.status(rid, m["files"])
-            m["files"] = [{**f, **st.get(f["id"], {"have": False, "got": 0})} for f in m["files"]]
+            from . import colleague_rooms_bigfiles as big  # noqa: PLC0415
+            st = rfiles.status(rid, [f for f in m["files"] if not f.get("blob")])
+            st.update(big.status(rid, [f["id"] for f in m["files"] if f.get("blob")]))
+            # 钥匙不给界面 (界面用不着); 大文件标 big 状态 (上传中 / 等对方传完 / 接收中 / 中央已删 …)
+            m["files"] = [{**{k: v for k, v in f.items() if k != "blob"}, **({"via": "central"} if f.get("blob") else {}),
+                           **st.get(f["id"], {"have": False, "got": 0})} for f in m["files"]]

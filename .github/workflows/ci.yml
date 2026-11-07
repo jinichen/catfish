@@ -286,7 +286,8 @@ jobs:
         env:
           CATFISH_TEST_PG_URL: postgresql://catfish:catfish@localhost:5432/catfish
         run: |
-          PYTHONPATH=src python -m pytest tests/test_provider_split_real_pg.py tests/test_relay_real_pg.py -v \
+          PYTHONPATH=src python -m pytest tests/test_provider_split_real_pg.py tests/test_relay_real_pg.py \
+            tests/test_room_link_blobs_real_pg.py -v \
             -p no:cacheprovider
           # ⚠ 这个文件没设 CATFISH_TEST_PG_URL 时会整体 skip —— 而 skip 在
           # pytest 里是绿的。所以这里再确认一次它**真的跑了**, 否则哪天

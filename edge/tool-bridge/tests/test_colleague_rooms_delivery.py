@@ -253,9 +253,11 @@ def test_文件块丢了_找发件人要_补齐(w, monkeypatch):
     assert st[fid] == {"have": True, "got": 3}
 
 
-def test_文件_上限和伪造块(w):
+def test_文件_上限和伪造块(w, monkeypatch):
+    from catfish_tool_bridge import colleague_rooms_bigfiles as bigmod
     rid = _room_with(w, (ZHANG,))
     w.be(BOSS)
+    monkeypatch.setattr(bigmod, "MAX_FILE", rfiles.MAX_TOTAL)    # 真上限 200MB, 测试里缩小
     big, _ = _file("大.zip", rfiles.MAX_TOTAL + 1)
     with pytest.raises(ValueError, match="文件太大"):
         cr.send(rid, "", files=[big])

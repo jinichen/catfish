@@ -382,8 +382,8 @@ def send(room_id: str, text: Any, mentions: Any = None, reply_to: Any = None, fi
     if room.get("my_state") != "joined":
         raise ValueError("你不在这个群里, 发不了消息")
     body = str(text or "").strip()
-    attached = rfiles.prepare(files)   # 11/07 群文件 (先核对, 不合规直接报, 一封都不发)
-    if not body and not attached:
+    attached, bigs = rfiles.prepare(files)   # 11/07 群文件 (先核对, 不合规直接报, 一封都不发)
+    if not body and not attached and not bigs:
         raise ValueError("消息是空的")
     if len(body) > TEXT_MAX:
         raise ValueError(f"一条消息最多 {TEXT_MAX} 字, 长材料请用邮件")
@@ -393,15 +393,24 @@ def send(room_id: str, text: Any, mentions: Any = None, reply_to: Any = None, fi
     if rt and not _MSG_ID.fullmatch(rt):
         rt = None
     extra: dict[str, Any] = {**({"reply_to": rt} if rt else {}), **({"files": rfiles.meta(attached)} if attached else {})}
-    return _broadcast(room, me, body, ments, extra, attached=attached)
+    if not bigs:
+        return _broadcast(room, me, body, ments, extra, attached=attached)
+    # 大文件 (合计超 5MB): 先在本机加密、中央建好暂存 (建不了整条不发), 消息带上暂存编号和钥匙, 再后台一块块传
+    from . import colleague_rooms_bigfiles as big  # noqa: PLC0415
+    mid, at = f"m_{secrets.token_hex(10)}", _now()
+    extra["files"] = big.prepare_send(room["room_id"], mid, me, bigs, _joined_others(room, me), at)
+    out = _broadcast(room, me, body, ments, extra, msg_id=mid, at=at)
+    big.kick()
+    return out
 
 
 def _broadcast(room: dict[str, Any], me: str, body: str, ments: list[str], extra: dict[str, Any],
-               kind: str = "text", source: str | None = None, attached: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+               kind: str = "text", source: str | None = None, attached: list[dict[str, Any]] | None = None,
+               msg_id: str | None = None, at: str | None = None) -> dict[str, Any]:
     """发给群里已加入的其他人 + 记进本机。extra = 信封和本机记录里都带的附加字段 (reply_to / card / status / files)。
     没送到的记进 outbox 挂在这条下面 (界面显示「张三没收到 · 重发」), 不再写 undelivered。
     attached: 群文件 —— 消息先发, 文件分块排进 outbox 后台发 (发送按钮不等)。"""
-    msg = {"msg_id": f"m_{secrets.token_hex(10)}", "kind": kind, "from": me, "at": _now(), "text": body,
+    msg = {"msg_id": msg_id or f"m_{secrets.token_hex(10)}", "kind": kind, "from": me, "at": at or _now(), "text": body,
            "mentions": ments, **extra}
     others = _joined_others(room, me)
     env = {"v": ENVELOPE_VERSION, "room_id": room["room_id"], "msg_id": msg["msg_id"], "at": msg["at"],
@@ -539,6 +548,9 @@ def _apply(msg: dict[str, Any], me: str) -> dict[str, Any] | None:
         _save(room)
         if got_files:
             rfiles.assemble(rid, rec)   # 块可能比消息先到
+            from . import colleague_rooms_bigfiles as big  # noqa: PLC0415
+            if big.register_incoming(rid, rec):   # 大文件: 后台去中央取
+                big.kick()
         return {"kind": "mention" if me in ments else "msg", "room_id": rid, "from": sender, "title": room["name"],
                 "text": (text or "📎 " + "、".join(f["name"] for f in got_files))[:80], "joined": room.get("my_state") == "joined"}
     return None
@@ -731,6 +743,11 @@ def search(room_id: str, q: Any, from_email: Any = None) -> dict[str, Any]:
 _LOCK = threading.RLock()
 
 
+def _big():
+    from . import colleague_rooms_bigfiles as big  # noqa: PLC0415
+    return big
+
+
 def _snapshot(dest: Any) -> dict[str, Any]:
     """换电脑导出: Companion 要一份本机群聊库的快照 (加密的库出来也是加密的)。只许写到 ~/.catfish 下面的 .db。"""
     home = wiki_files._catfish_home().resolve()
@@ -765,6 +782,8 @@ def pim_handlers(params: dict[str, Any]) -> dict[str, Any]:
         "pim/croom_transfer": lambda: transfer(rid, str(params.get("email") or "")),
         "pim/croom_resend": lambda: mend.resend(rid, str(params.get("msg_id") or ""), params.get("email")),
         "pim/croom_file_save": lambda: rfiles.save(load(rid), str(params.get("file_id") or "")),
+        "pim/croom_stage": lambda: _big().stage(params),
+        "pim/croom_file_retry": lambda: _big().retry(load(rid)["room_id"], str(params.get("file_id") or "")),
         "pim/croom_leave": lambda: leave(rid),
         "pim/croom_delete": lambda: delete_local(rid),
     }, _LOCK)

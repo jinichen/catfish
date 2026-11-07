@@ -12,11 +12,14 @@
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 
 import { openFile, revealInFinder } from "../../lib/tauri_app";
-import { roomFileSave, roomResend, type Delivery, type RoomFile, type RoomMember } from "../../lib/tauri_colleague_rooms";
+import { roomFileRetry, roomFileSave, roomResend, roomStage, type Delivery, type RoomFile, type RoomMember } from "../../lib/tauri_colleague_rooms";
 import { muted } from "./formsUi";
 
 const MAX_FILES = 5;
-const MAX_TOTAL = 5 * 1024 * 1024;
+/** 11/07 合计 5MB 以内走邮筒分块; 超过走中央暂存一份 (单个 / 合计 200MB, 跟中央默认上限一致) */
+const MAX_FILE = 200 * 1024 * 1024;
+const MAX_TOTAL = 200 * 1024 * 1024;
+const PART = 1024 * 1024;
 
 export function sizeLabel(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -100,10 +103,28 @@ export function DeliveryLine({ roomId, msgId, rows, members, hasFiles, align, on
   );
 }
 
+/** 文件旁边那句状态 (收好了 / 只在本机的不写)。纯函数, 测试用。 */
+export function fileState(f: RoomFile): string {
+  const prog = `${f.got ?? 0}/${f.n}`;
+  switch (f.big) {
+    case "uploading": return `上传中 ${prog}`;
+    case "waiting": return "等对方传完";
+    case "downloading": return `接收中 ${prog}`;
+    case "gone": return "中央已删 (超过 7 天没取), 收不到了";
+    case "failed": return "没收下来";
+    case "sent": case "local": case "ready": return "";
+    default: return f.have ? "" : `接收中 ${prog}`;
+  }
+}
+
 /** 消息里的文件: 一个一行。mine = 我发的 (气泡是主色, 字是白的)。 */
 export function RoomFileList({ roomId, files, mine }: { roomId: string; files: RoomFile[]; mine: boolean }) {
   const [err, setErr] = useState<string | null>(null);
   const [saved, setSaved] = useState<Record<string, string>>({});
+  async function retry(f: RoomFile) {
+    setErr(null);
+    try { await roomFileRetry(roomId, f.id); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+  }
   async function open(f: RoomFile, reveal = false) {
     setErr(null);
     try {
@@ -125,13 +146,19 @@ export function RoomFileList({ roomId, files, mine }: { roomId: string; files: R
             📄 {f.name}
           </span>
           <span style={{ opacity: 0.75 }}>{sizeLabel(f.size)}</span>
-          {f.have ? (
+          {f.have && (
             <>
               <button type="button" style={btn} onClick={() => void open(f)}>打开</button>
               <button type="button" style={btn} onClick={() => void open(f, true)}>在文件夹中显示</button>
             </>
-          ) : (
-            <span style={{ opacity: 0.75 }}>接收中 {f.got ?? 0}/{f.n}</span>
+          )}
+          {fileState(f) && (
+            <span style={{ opacity: 0.75 }} title={f.error}>
+              {fileState(f)}
+              {f.big === "failed" && (
+                <button type="button" style={{ ...btn, marginLeft: 6 }} onClick={() => void retry(f)}>重试</button>
+              )}
+            </span>
           )}
         </div>
       ))}
@@ -140,27 +167,49 @@ export function RoomFileList({ roomId, files, mine }: { roomId: string; files: R
   );
 }
 
-export interface PickedFile { name: string; size: number; data: string }
+export interface PickedFile { name: string; size: number; file: File }
 
-async function toBase64(file: File): Promise<string> {
-  const bytes = new Uint8Array(await file.arrayBuffer());
+/** 挑文件 (📎 / 拖进来 / 粘贴): 先只记下来, 发送时再一段段传给本机 (stageFiles)。超上限当场说。 */
+export async function pickFiles(list: FileList | File[], already: PickedFile[]): Promise<{ files: PickedFile[]; error?: string }> {
+  const files = [...already];
+  for (const f of Array.from(list)) {
+    if (files.length >= MAX_FILES) return { files, error: `一条消息最多带 ${MAX_FILES} 个文件` };
+    if (!f.size) return { files, error: `${f.name} 是空文件` };
+    if (f.size > MAX_FILE) return { files, error: `${f.name} 太大 (单个最多 ${MAX_FILE / 1024 / 1024}MB) —— 更大的用网盘` };
+    if (files.reduce((n, x) => n + x.size, 0) + f.size > MAX_TOTAL) {
+      return { files, error: `一条消息合计最多 ${MAX_TOTAL / 1024 / 1024}MB (${f.name} 放不下) —— 分几条发` };
+    }
+    files.push({ name: f.name, size: f.size, file: f });
+  }
+  return { files };
+}
+
+function b64(bytes: Uint8Array): string {
   let bin = "";
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(bin);
 }
 
-/** 挑文件 (📎): 读成 base64 交给 tool-bridge 分块加密发。超上限当场说。 */
-export async function pickFiles(list: FileList | File[], already: PickedFile[]): Promise<{ files: PickedFile[]; error?: string }> {
-  const files = [...already];
-  for (const f of Array.from(list)) {
-    if (files.length >= MAX_FILES) return { files, error: `一条消息最多带 ${MAX_FILES} 个文件` };
-    if (files.reduce((n, x) => n + x.size, 0) + f.size > MAX_TOTAL) {
-      return { files, error: `文件合计最多 ${MAX_TOTAL / 1024 / 1024}MB (${f.name} 放不下) —— 大文件用邮件或网盘` };
+/** 发送前: 每个文件 1MB 一段传给本机暂存 (RPC 一行最多 16MB)。onProgress(已传字节, 总字节)。 */
+export async function stageFiles(files: PickedFile[], onProgress: (done: number, total: number) => void,
+                                 stage = roomStage): Promise<{ name: string; stage_id: string }[]> {
+  const total = files.reduce((n, f) => n + f.size, 0);
+  let done = 0;
+  const out = [];
+  for (const f of files) {
+    let id: string | null = null;
+    let offset = 0;
+    while (offset < f.size) {
+      const part = new Uint8Array(await f.file.slice(offset, offset + PART).arrayBuffer());
+      const r = await stage(id, offset, b64(part));
+      id = r.stage_id;
+      done += r.size - offset;
+      offset = r.size;          // ok=false 时 size 是本机已有的, 从那接着传
+      onProgress(done, total);
     }
-    if (!f.size) return { files, error: `${f.name} 是空文件` };
-    files.push({ name: f.name, size: f.size, data: await toBase64(f) });
+    out.push({ name: f.name, stage_id: id as string });
   }
-  return { files };
+  return out;
 }
 
 export function AttachButton({ disabled, onPick }: { disabled?: boolean; onPick: (files: FileList) => void }) {
@@ -169,7 +218,7 @@ export function AttachButton({ disabled, onPick }: { disabled?: boolean; onPick:
     <>
       <input ref={ref} type="file" multiple style={{ display: "none" }} aria-label="选文件发到群里"
              onChange={(e: ChangeEvent<HTMLInputElement>) => { if (e.target.files?.length) onPick(e.target.files); e.target.value = ""; }} />
-      <button type="button" disabled={disabled} onClick={() => ref.current?.click()} title={`发文件 (最多 ${MAX_FILES} 个, 合计 5MB; 加密后经中央转交, 取走即清空)`}
+      <button type="button" disabled={disabled} onClick={() => ref.current?.click()} title={`发文件 (最多 ${MAX_FILES} 个, 合计 ${MAX_TOTAL / 1024 / 1024}MB; 加密后经中央转交, 中央看不到内容, 大家取完就删)`}
               style={{ border: "1px solid var(--catfish-border)", background: "transparent", borderRadius: "var(--radius-sm, 6px)",
                        cursor: disabled ? "default" : "pointer", padding: "4px 8px", fontSize: 13, color: "inherit" }}>
         📎

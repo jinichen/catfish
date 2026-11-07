@@ -70,6 +70,14 @@ CREATE TABLE IF NOT EXISTS files (
     name TEXT NOT NULL, size INTEGER NOT NULL, sha256 TEXT NOT NULL, data BLOB NOT NULL, at TEXT NOT NULL,
     PRIMARY KEY (room_id, file_id)
 );
+-- 11/07 群里发大文件 (colleague_rooms_bigfiles.py): 中央暂存一份密文; 本机 .bin 也是密文, 钥匙 key 在这里
+CREATE TABLE IF NOT EXISTS bigfiles (
+    room_id TEXT NOT NULL, file_id TEXT NOT NULL, msg_id TEXT NOT NULL, sender TEXT NOT NULL, mine INTEGER NOT NULL,
+    name TEXT NOT NULL, size INTEGER NOT NULL, sha256 TEXT NOT NULL, n INTEGER NOT NULL, key TEXT NOT NULL,
+    blob_id TEXT, state TEXT NOT NULL, got INTEGER NOT NULL DEFAULT 0, tries INTEGER NOT NULL DEFAULT 0,
+    error TEXT, next_at REAL NOT NULL DEFAULT 0, at TEXT NOT NULL,
+    PRIMARY KEY (room_id, file_id)
+);
 CREATE TABLE IF NOT EXISTS file_chunks (
     room_id TEXT NOT NULL, file_id TEXT NOT NULL, sender TEXT NOT NULL, i INTEGER NOT NULL, data BLOB NOT NULL,
     at REAL NOT NULL, PRIMARY KEY (room_id, file_id, i)
@@ -143,7 +151,7 @@ def room_ids() -> list[str]:
 
 def delete_room(room_id: str) -> None:
     with _conn() as con:
-        for table in ("messages", "outbox", "files", "file_chunks", "rooms"):
+        for table in ("messages", "outbox", "files", "file_chunks", "bigfiles", "rooms"):
             con.execute(f"DELETE FROM {table} WHERE room_id = ?", (room_id,))
 
 

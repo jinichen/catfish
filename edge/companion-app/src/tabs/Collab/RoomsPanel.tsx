@@ -28,7 +28,7 @@ import {
 import { Overlay, muted } from "./formsUi";
 import RoomComposer, { NAME_MAX } from "./RoomComposer";
 import { RetentionDialog, RetentionSelect, SearchPanel, daysLabel } from "./RoomsExtras";
-import { AttachButton, DeliveryLine, IssueBar, PickedChips, RoomFileList, pickFiles, type PickedFile } from "./RoomsDelivery";
+import { AttachButton, DeliveryLine, IssueBar, PickedChips, RoomFileList, pickFiles, stageFiles, type PickedFile } from "./RoomsDelivery";
 import { STATE_WORD, cardStates, parseChatTask, summaryText, type ChatTask, type SingleTask } from "./roomTasks";
 import TaskProgress from "./TaskProgress";
 import TaskWork from "./TaskWork";
@@ -201,6 +201,8 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
   const [modal, setModal] = useState<null | "add" | "info" | "disband" | "leave" | { remove: RoomMember } | { transfer: RoomMember }>(null);
   const [picked, setPicked] = useState<PickedFile[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  /** 发文件时准备到百分之几 (显示在发送按钮上, 不往顶上插提示) */
+  const [prep, setPrep] = useState<number | null>(null);
   const [work, setWork] = useState<string | null>(null);
   const [watch, setWatch] = useState<{ id: string; notice?: string } | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -346,8 +348,15 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
   async function send() {
     const body = text.trim();
     if (!body && !picked.length) return;
-    const files = picked.map((f) => ({ name: f.name, data: f.data }));
-    const ok = await act(() => roomSend(roomId, body, mentionsIn(body, members, me), replyTo?.msg_id, files));
+    const ok = await act(async () => {
+      // 大文件先一段段交给本机 (显示进度), 再发; 加密 / 传中央在后台, 消息下面看进度
+      try {
+        const files = picked.length ? await stageFiles(picked, (d, t) => setPrep(Math.floor((d / t) * 100))) : [];
+        return await roomSend(roomId, body, mentionsIn(body, members, me), replyTo?.msg_id, files);
+      } finally {
+        setPrep(null);
+      }
+    });
     if (ok) { setText(""); setReplyTo(null); setPicked([]); }
   }
   async function addPicked(list: FileList | File[]) {
@@ -521,7 +530,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
               </div>
             )}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-              <span style={{ ...muted, whiteSpace: "nowrap" }} title="长文字请用邮件; 文件点 📎 (最多 5 个, 合计 5MB)">{text.length}/{TEXT_MAX}</span>
+              <span style={{ ...muted, whiteSpace: "nowrap" }} title="长文字请用邮件; 文件点 📎 或直接拖进来 (最多 5 个, 合计 200MB)">{text.length}/{TEXT_MAX}</span>
               <span style={{ display: "flex", gap: 6, whiteSpace: "nowrap", flexShrink: 0 }}>
                 <Btn kind="ghost" disabled={Boolean(helping)} onClick={() => setHelpOpen((v) => !v)}>
                   {helping ? "🐟 小鲶在写…" : "🐟 小鲶"}
@@ -531,7 +540,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
                 {asTask && (
                   <Btn kind="ghost" disabled={busy || Boolean(asTask.problem)} onClick={() => void dispatch()}>派给@的人</Btn>
                 )}
-                <Btn kind="primary" disabled={busy || (!text.trim() && !picked.length)} onClick={() => void send()}>{busy ? "发送中…" : "发送"}</Btn>
+                <Btn kind="primary" disabled={busy || (!text.trim() && !picked.length)} onClick={() => void send()}>{prep !== null ? `准备文件 ${prep}%` : busy ? "发送中…" : "发送"}</Btn>
               </span>
             </div>
           </div>

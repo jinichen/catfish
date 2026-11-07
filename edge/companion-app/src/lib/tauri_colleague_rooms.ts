@@ -89,7 +89,13 @@ export interface RoomMessage {
  *  too_old 中央太旧; failed 没送到, 点「重发」。left = 还剩几封 (文件分块) */
 export interface Delivery { email: string; state: "sending" | "nokey" | "too_old" | "failed"; error: string; left: number }
 
-export interface RoomFile { id: string; name: string; size: number; sha256: string; n: number; have?: boolean; got?: number }
+/** big (11/07 大文件, 经中央暂存): uploading 上传中 / sent 传完 / local 只在本机 / waiting 等对方传完 /
+ *  downloading 接收中 / ready 收好了 / gone 中央已删 / failed 没收下来 */
+export type BigState = "uploading" | "sent" | "local" | "waiting" | "downloading" | "ready" | "gone" | "failed";
+export interface RoomFile {
+  id: string; name: string; size: number; sha256: string; n: number; have?: boolean; got?: number;
+  via?: "central"; big?: BigState; error?: string;
+}
 
 export interface RoomDetail {
   me: string;
@@ -129,7 +135,7 @@ export const roomCreate = (name: string, purpose: string, members: PersonIn[]) =
 export const roomJoin = (roomId: string) => call<{ room: RoomSummary; failed: Failed[] }>("join", { room_id: roomId });
 export const roomDecline = (roomId: string) => call<{ room: RoomSummary; failed: Failed[] }>("decline", { room_id: roomId });
 export const roomSend = (roomId: string, text: string, mentions: string[], replyTo?: string | null,
-                         files?: { name: string; data: string }[]) =>
+                         files?: { name: string; stage_id: string }[]) =>
   call<{ message: RoomMessage; sent_to: number; failed: Failed[] }>("send", {
     room_id: roomId, text, mentions, reply_to: replyTo ?? null, ...(files?.length ? { files } : {}),
   });
@@ -139,6 +145,11 @@ export const roomTransfer = (roomId: string, email: string) =>
 /** 11/07 这条下没送到的马上再发 (email 空 = 全部) */
 export const roomResend = (roomId: string, msgId: string, email?: string) =>
   call<{ sent: number; left: number }>("resend", { room_id: roomId, msg_id: msgId, email: email ?? null });
+/** 11/07 文件一段段暂存到本机 (RPC 一行最多 16MB, 大文件不能一口气传); offset 对不上回 ok=false + 已有大小, 从那续 */
+export const roomStage = (stageId: string | null, offset: number, data: string) =>
+  call<{ ok: boolean; stage_id: string; size: number }>("stage", { stage_id: stageId, offset, data });
+/** 11/07 大文件没收下来, 再试一次 */
+export const roomFileRetry = (roomId: string, fileId: string) => call<{ ok: boolean }>("file_retry", { room_id: roomId, file_id: fileId });
 /** 11/07 群文件写到 ~/Downloads/鲶鱼群文件/<群名>/, 返回路径 (再用 openFile / revealInFinder) */
 export const roomFileSave = (roomId: string, fileId: string) =>
   call<{ path: string }>("file_save", { room_id: roomId, file_id: fileId });
