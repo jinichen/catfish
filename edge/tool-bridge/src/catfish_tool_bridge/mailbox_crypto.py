@@ -52,6 +52,9 @@ CENTRAL_TOO_OLD_KEYS = "中央端版本太旧, 还不支持加密传输 —— �
 _lock = threading.RLock()
 _cache: dict[str, tuple[float, list[dict[str, str]]]] = {}
 _registered: dict[str, str] = {}   # 网关地址 → 已登记的公钥 (这个进程里)
+# 登记单独一把锁: 启动后表单 / 派任务 / 群聊同时第一次取邮筒, 不加锁会各登记一次 (11/7 数据外发记录里同一秒 3 条)。
+# 不用 _lock: 登记要等网络, 别让查公钥 / 读本机密钥跟着等。
+_register_lock = threading.Lock()
 _changes: list[dict[str, str]] = []
 
 
@@ -125,13 +128,16 @@ def ensure_registered() -> None:
     gw = skill_publish.GATEWAY_URL
     if _registered.get(gw) == d["pk"]:
         return
-    code, data = _call("PUT", KEYS_PATH, body={"device_id": d["device_id"], "pubkey": d["pk"]})
-    if code == 404 or code == 405:
-        raise ValueError(CENTRAL_TOO_OLD_KEYS)
-    if code >= 400:
-        detail = data.get("detail") if isinstance(data, dict) else data
-        raise ValueError(f"登记加密公钥失败 ({code}): {detail}")
-    _registered[gw] = d["pk"]
+    with _register_lock:
+        if _registered.get(gw) == d["pk"]:   # 等锁时别的线程已经登记好了
+            return
+        code, data = _call("PUT", KEYS_PATH, body={"device_id": d["device_id"], "pubkey": d["pk"]})
+        if code == 404 or code == 405:
+            raise ValueError(CENTRAL_TOO_OLD_KEYS)
+        if code >= 400:
+            detail = data.get("detail") if isinstance(data, dict) else data
+            raise ValueError(f"登记加密公钥失败 ({code}): {detail}")
+        _registered[gw] = d["pk"]
 
 
 def lookup(emails: list[str], *, fresh: bool = False) -> dict[str, list[dict[str, str]]]:

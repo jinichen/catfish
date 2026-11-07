@@ -161,3 +161,33 @@ def test_私钥文件只有本人可读(c):
     d = mc.device()
     mode = stat.S_IMODE(os.stat(mc.keys_dir() / "device.json").st_mode)
     assert mode == 0o600 and d["device_id"].startswith("dev_")
+
+
+def test_同时第一次取邮筒_只登记一次(c):
+    """启动后表单 / 派任务 / 群聊同时取邮筒: 公钥只登记一次 (11/7 数据外发记录里同一秒 3 条)。"""
+    import threading
+    import time
+    c.be(A)
+    mc.device()                        # 先生成好本机密钥, 只看登记这一步
+    puts: list[int] = []
+    inner = c.call
+
+    def slow(method, path, **kw):
+        if path == mc.KEYS_PATH and method == "PUT":
+            puts.append(1)
+            time.sleep(0.05)           # 像真网络一样慢: 别的线程这时也进来了
+        return inner(method, path, **kw)
+
+    c.mp.setattr(forms_net, "_client_call", slow)
+    start = threading.Barrier(3)
+
+    def go():
+        start.wait()
+        mc.ensure_registered()
+
+    ts = [threading.Thread(target=go) for _ in range(3)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert len(puts) == 1 and A in c.keys
