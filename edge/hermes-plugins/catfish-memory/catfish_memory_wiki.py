@@ -24,6 +24,10 @@ try:
 except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_helpers import logger  # noqa: F401
 try:
+    from . import catfish_memory_wiki_guard as _wiki_guard   # 11/08 写入前过 tool-bridge 那道把关
+except ImportError:  # 独立脚本模式 (无父包)
+    import catfish_memory_wiki_guard as _wiki_guard
+try:
     from .catfish_memory_wiki_provenance import (  # noqa: F401
         Provenance, _RELATION_FALLBACK, _canon_relation, _canon_source,
         _is_untyped_relation, _normalize_relations, _normalize_sources,
@@ -522,6 +526,8 @@ def _write_wiki_files(
         # 8/4: LLM 每次造的拼音 slug 不一样 → 先看有没有规范化等价的已有文件,
         # 有就指回去走 merge, 不新建。
         rel_path = _redirect_to_existing_equivalent(catfish_home, rel_path, content)
+        # 11/08: 名字「像」的 (人力部 / 人力资源部) 也并进已有的那条, 不新建 (tool-bridge wiki_guard 同一条规则)
+        rel_path, content = _wiki_guard.redirect_to_alike(catfish_home, rel_path, content)
         target = catfish_home / rel_path
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -572,6 +578,8 @@ def _write_wiki_files(
             for _gap in report_ontology_gaps(rel_path, final_content):
                 logger.info("catfish-memory wiki 体检: %s —— %s", rel_path, _gap)
             final_content = _normalize_types(rel_path, final_content)
+            # 11/08: 关系按类型定义不允许的 (名单「包含」人) 降成「关联」, 后面照旧进待确认交给人定
+            final_content, _bad_rels = _wiki_guard.demote_bad_relations(catfish_home, rel_path, final_content)
             # 9/17: rel 归一到词表 (表外 → 「关联」等人定); sources 格式收敛
             # (merge 并进来的 employee_journal 这类老值在这里被清掉)
             final_content = _normalize_relations(rel_path, final_content)

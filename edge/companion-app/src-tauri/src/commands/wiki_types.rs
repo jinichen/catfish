@@ -76,6 +76,13 @@ pub async fn wiki_props_propose(type_key: String, use_model: Option<bool>) -> Re
     ok_or_err(call_with_timeout("wiki/props_propose", params, Duration::from_secs(600)).await?, "整理属性失败")
 }
 
+/// 11/08 界面建页 / 改关系前的校验 (tool-bridge wiki_guard.check): 相似名 / 关系类型不对 / 引用不存在的页。
+/// tool-bridge 没起来时返 Err, 前端照常保存 (校验是帮忙, 不是闸)。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn wiki_guard_check(params: Value) -> Result<Value, String> {
+    call_with_timeout("wiki/guard_check", params, Duration::from_secs(20)).await
+}
+
 /// 员工过目改好的属性写进条目 (每个文件先整份备份到 ~/.catfish/wiki/.props-backups/)。
 #[tauri::command(rename_all = "camelCase")]
 pub async fn wiki_props_apply(items: Value) -> Result<Value, String> {

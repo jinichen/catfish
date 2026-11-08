@@ -73,6 +73,18 @@ export const wikiTypesList = () => invoke<{ ok: boolean; types: { key: string; l
 export const wikiTypeEntry = (relPath: string) => invoke<WikiTypeEntry>("wiki_type_entry", { relPath });
 export const wikiPropsPropose = (typeKey: string, useModel: boolean) =>
   invoke<WikiPropsProposeResult>("wiki_props_propose", { typeKey, useModel });
+/** 11/08 保存前校验: 相似名 (新建时) / 关系类型不对 / 引用不存在的页。tool-bridge 没起来会抛, 调用方当没校验照常保存。 */
+export interface WikiGuardResult {
+  ok: boolean;
+  bad: { name: string; rel: string; why: string }[];
+  missing: string[];
+  similar: { rel_path: string; title: string; matched: string }[];
+  similar_message: string;
+  missing_message: string;
+}
+export const wikiGuardCheck = (params: { title: string; subtype?: string | null; related: { name: string; rel: string | null }[];
+                                         rel_path?: string; new?: boolean }) =>
+  invoke<WikiGuardResult>("wiki_guard_check", { params });
 export const wikiPropsApply = (items: { rel_path: string; props: Record<string, string> }[]) =>
   invoke<WikiPropsApplyResult>("wiki_props_apply", { items });
 

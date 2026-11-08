@@ -194,3 +194,15 @@ def test_工具入口_create走把关_update走把关(home):
     r = wiki_types.tool_dispatch("catfish_wiki_update", {"rel_path": "wiki/entities/yundi.md", "content": got["content"],
                                                          "base_mtime": got["mtime"]})
     assert r["ok"]
+
+
+def test_界面保存前的校验_入口(home):
+    _page(home, "wiki/entities/cert.md", "ISO 9001 证书", type="entity", entity_type="cert")
+    _page(home, "wiki/entities/yundi.md", "云堤", type="entity", entity_type="org")
+    r = wiki_guard.check({"title": "云堤公司", "subtype": "org", "new": True,
+                          "related": [{"name": "ISO 9001 证书", "rel": "包含"}, {"name": "没有的页", "rel": "持有"}]})
+    assert not r["ok"] and r["bad"][0]["rel"] == "包含" and r["missing"] == ["没有的页"] and r["similar"][0]["title"] == "云堤"
+    assert "很像" in r["similar_message"] and "没有这一页" in r["missing_message"]
+    r = wiki_guard.check({"title": "云堤", "subtype": "org", "rel_path": "wiki/entities/yundi.md",
+                          "related": [{"name": "ISO 9001 证书", "rel": "持有"}]})
+    assert r["ok"] and r["similar"] == [] and r["bad"] == []

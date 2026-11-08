@@ -11,6 +11,7 @@
 import { useMemo, useState } from "react";
 import { Check, CheckCircle, Plus, Sparkle, SpinnerGap, Trash, WarningCircle } from "@phosphor-icons/react";
 import { wikiCreateEntityOrConcept, wikiUpdateFile, type RelatedRef } from "../../lib/tauri";
+import { wikiGuardCheck } from "../../lib/tauri_wiki_types";
 import type { WikiFileFull } from "../../lib/tauri_wiki";
 import { useWikiStore } from "../../store/wiki";
 import { useChatStore } from "../../store/chat";
@@ -75,6 +76,14 @@ export default function WikiRelationsEditor({
     setError(null);
     setNotice(null);
     try {
+      // 11/08: 保存前先校验关系类型 (人→证书不能「包含」) 和引用的页在不在; tool-bridge 没起来就跳过校验
+      const guard = await wikiGuardCheck({ title: info.title, subtype: info.subtype, rel_path: info.rel_path,
+                                           related: next.map((r) => ({ name: r.name, rel: r.rel ?? null })) }).catch(() => null);
+      if (guard && !guard.ok) {
+        setError("关系用得不对, 没保存: " + guard.bad.map((b) => b.why).join("; "));
+        return;
+      }
+      if (guard?.missing.length) message = `${message} (${guard.missing_message})`;
       // 正文引用原样留在正文里; buildConfirmedWikiContent 只写 frontmatter 关系
       const content = buildConfirmedWikiContent(selectedFile.content, [...bodyRefs, ...next], info, {
         keepStatus: !confirm,

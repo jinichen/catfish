@@ -186,8 +186,8 @@ def _allowed(schema: dict[str, Any], src: str, rel: str, dst: str) -> bool | Non
     return any(dst in r["to"] for r in src_rels) or any(src in r["from"] for r in dst_rels)
 
 
-def relation_problems(subtype: str, related: list[Any], *, self_title: str = "") -> tuple[list[str], list[str]]:
-    """返回 (不允许的关系, 找不到页的名字)。related 每项 {name, rel} 或裸名字。"""
+def bad_relations(subtype: str, related: list[Any], *, self_title: str = "") -> tuple[list[dict[str, str]], list[str]]:
+    """结构化版本: ([{name, rel, why}], 找不到页的名字)。蒸馏那边按它把写错的关系降成「关联」交给人定。"""
     from . import wiki_files, wiki_types  # noqa: PLC0415
     if not related:
         return [], []
@@ -208,9 +208,27 @@ def relation_problems(subtype: str, related: list[Any], *, self_title: str = "")
             label = lambda k: (schema.get(k) or {}).get("label") or k or "未分类"  # noqa: E731
             ok_rels = sorted({r["rel"] for r in (schema.get(src) or {}).get("relations") or [] if hit[1] in (r.get("to") or [])}
                              | {r["rel"] for r in (schema.get(hit[1]) or {}).get("relations") or [] if src in (r.get("from") or [])})
-            bad.append(f"{label(src)}→{label(hit[1])}「{name}」不能用「{rel}」"
-                       + (f", 这两类之间能用: {' / '.join(ok_rels)}" if ok_rels else ", 类型定义里这两类之间没有这种关系"))
+            bad.append({"name": name, "rel": rel, "why": f"{label(src)}→{label(hit[1])}「{name}」不能用「{rel}」"
+                        + (f", 这两类之间能用: {' / '.join(ok_rels)}" if ok_rels else ", 类型定义里这两类之间没有这种关系")})
     return bad, missing
+
+
+def relation_problems(subtype: str, related: list[Any], *, self_title: str = "") -> tuple[list[str], list[str]]:
+    """返回 (不允许的关系的说法, 找不到页的名字)。related 每项 {name, rel} 或裸名字。"""
+    bad, missing = bad_relations(subtype, related, self_title=self_title)
+    return [b["why"] for b in bad], missing
+
+
+def check(params: dict[str, Any]) -> dict[str, Any]:
+    """界面保存前的校验 (Companion wiki_guard_check → RPC wiki/guard_check): 新建 / 改关系前先问一声。
+    params: {title, subtype, related: [{name, rel}], rel_path? (改已有页时给, 相似名查重跳过自己), new? (true = 新建)}"""
+    title = str(params.get("title") or "").strip()
+    rel_path = str(params.get("rel_path") or "")
+    bad, missing = bad_relations(str(params.get("subtype") or ""), list(params.get("related") or []), self_title=title)
+    similar = similar_names(title, exclude=rel_path) if title and params.get("new") else []
+    return {"ok": not bad, "bad": bad, "missing": missing, "similar": similar,
+            "similar_message": similar_message(title, similar) if similar else "",
+            "missing_message": missing_message(missing) if missing else ""}
 
 
 def missing_message(missing: list[str]) -> str:

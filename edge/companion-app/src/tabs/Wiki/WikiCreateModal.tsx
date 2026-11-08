@@ -18,6 +18,7 @@
 
 import { useMemo, useState } from "react";
 import { wikiCreateEntityOrConcept } from "../../lib/tauri";
+import { wikiGuardCheck } from "../../lib/tauri_wiki_types";
 import { useWikiStore } from "../../store/wiki";
 
 interface Props {
@@ -93,6 +94,8 @@ export default function WikiCreateModal({ onClose, prefillTitle, prefillKind }: 
     setSubtype(defaultSubtype(k));
   }
 
+  const [allowSimilar, setAllowSimilar] = useState(false);
+
   async function handleSubmit() {
     if (!title.trim()) {
       setError("title 必填");
@@ -110,6 +113,17 @@ export default function WikiCreateModal({ onClose, prefillTitle, prefillKind }: 
         const rel = draft.rel.trim();
         return target && rel ? [{ name: target.title, rel }] : [];
       });
+      // 11/08: 建页前先校验 —— 名字跟已有的很像 (「云堤」/「云堤公司」) 先拦一次, 再点一次才建; 关系类型不对直接拦
+      const guard = await wikiGuardCheck({ title: title.trim(), subtype, related, new: !allowSimilar }).catch(() => null);
+      if (guard && !guard.ok) {
+        setError("关系用得不对: " + guard.bad.map((b) => b.why).join("; "));
+        return;
+      }
+      if (guard?.similar.length && !allowSimilar) {
+        setAllowSimilar(true);
+        setError(`${guard.similar_message.replace(/是同一个就用 catfish_wiki_update 改那一条.*$/, "")}是同一个就去改那一条; 确认是两个不同的东西, 再点一次「✓ 创建」。`);
+        return;
+      }
       // P3.5.109: UI kind "system" → backend "concept" 0 后端改动, concept_type=system
       // WikiTree P3.5.107 A 真自动归"🌟 顶级体系"组 (related 空 → 顶级).
       // P3.5.108 WikiGraph isSystemConcept 真升级看 subtype === "system" 优先于 title heuristic.

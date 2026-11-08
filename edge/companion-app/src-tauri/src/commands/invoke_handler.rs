@@ -104,6 +104,7 @@ pub(crate) fn handler(
             crate::commands::wiki_types::wiki_type_entry,
             crate::commands::wiki_types::wiki_props_propose,
             crate::commands::wiki_types::wiki_props_apply,
+            crate::commands::wiki_types::wiki_guard_check,
             crate::commands::wiki_actions::wiki_resolve_actions,
             // 6/2 BL-SKILLS-CARD-SPLIT (鸿波): 拆 2 命令 — list_my_skills (扫 ~/.catfish/skills/,
             // 员工真生成) + list_installed_skills (扫 catfish 仓库 + ~/.hermes/skills/, 内置/装的).

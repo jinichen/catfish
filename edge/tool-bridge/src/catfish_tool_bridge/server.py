@@ -118,6 +118,9 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
         if method == "wiki/type_defs":
             return _success(req_id, await asyncio.to_thread(wiki_type_defs.view))
         return _success(req_id, await asyncio.to_thread(wiki_type_defs.apply, params))
+    if method == "wiki/guard_check":   # 11/08 界面建页 / 改关系前的校验 (相似名 / 关系类型 / 引用不存在的页)
+        from . import wiki_guard  # noqa: PLC0415
+        return _success(req_id, await asyncio.to_thread(wiki_guard.check, params))
     if method in ("wiki/types", "wiki/type_entry", "wiki/props_propose", "wiki/props_apply"):
         from . import wiki_types  # noqa: PLC0415
         if method == "wiki/types":
