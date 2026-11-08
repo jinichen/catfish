@@ -41,7 +41,9 @@ import sys
 import time
 from pathlib import Path
 
-# 同目录的 publichosts.py (容器里是 /tools/, 宿主机直接跑时是脚本所在目录, 都在 sys.path[0])
+# 同目录的 publichosts.py: 当脚本跑时本来就在 sys.path[0]; 被别处按路径 import (测试) 时补上
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
 from publichosts import PublicHostError, domains, normalize, origin, parse_list
 
 # 跨装机必须原样保留的值。换掉任何一个都会出事, 见文件顶部。
