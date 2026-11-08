@@ -54,6 +54,11 @@ def _wechat_push(args: dict[str, Any]) -> dict[str, Any]:
     return {"ok": bool(ok), "error": None if ok else (st.get("error") or "推送失败")}
 
 
+def _export_docx(args: dict[str, Any]) -> dict[str, Any]:
+    from . import docx_export  # noqa: PLC0415
+    return docx_export.export(args)
+
+
 _A = Action
 ACTIONS: dict[str, Action] = {a.name: a for a in [
     # ── 查 (只读) ──
@@ -96,6 +101,8 @@ ACTIONS: dict[str, Action] = {a.name: a for a in [
        ("kind", "title", "body", "subtype"), _native("catfish_wiki_create")),
     _A("wiki_update", "改知识库页面", LOCAL, "写", ("rel_path", "content"), ("rel_path",), ("rel_path", "content"),
        _native("catfish_wiki_update")),
+    _A("export_docx", "导出 Word 文件", LOCAL, "写", ("title", "body", "filename"), ("path",), ("title", "body"),
+       _export_docx),   # 11/08 小鲶那步出不了文件; 要 Word 用这块 (存进「我的产出」)
     _A("form_create", "建一张收集表", LOCAL, "写", ("title", "fields", "deadline", "note", "recipients", "template_path"),
        ("form",), ("title", "fields"), _form("create")),
     _A("form_export", "导出收集表汇总", LOCAL, "写", ("form_id",), ("path", "rows"), ("form_id",), _form("export")),
@@ -110,7 +117,7 @@ ACTIONS: dict[str, Action] = {a.name: a for a in [
 
 #: 教学时要录的原生工具名 (catfish_ 前缀) → 积木名。trace_recorder 用。
 NATIVE_TO_ACTION: dict[str, str] = {
-    f"catfish_{a.name}": a.name for a in ACTIONS.values() if not a.name.startswith(("form_", "wechat_push"))
+    f"catfish_{a.name}": a.name for a in ACTIONS.values() if not a.name.startswith(("form_", "wechat_push", "export_docx"))
 }
 
 

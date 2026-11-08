@@ -400,8 +400,9 @@ def _audit(run: dict[str, Any]) -> None:
 
 # ── 给员工看的说法 (10/19, 鸿波「失败原因员工看不懂」) ─────────────────
 
-def step_label(st: dict[str, Any]) -> str:
-    """一步的中文名: 积木用目录里的名字, 技能用它的中文名, 小鲶那步用说明的开头。"""
+def step_label(st: dict[str, Any], wf: dict[str, Any] | None = None) -> str:
+    """一步的中文名: 积木用目录里的名字, 技能用它的中文名, 小鲶那步用说明的开头
+    (说明里的 ${params.x} 换成参数的中文名, 别的 ${...} 去掉 —— 不然成了「按 、 写分镜脚本」)。"""
     kind = block_of(st)
     if kind == "action":
         a = catalog.get(str(st.get("action") or ""))
@@ -411,8 +412,17 @@ def step_label(st: dict[str, Any]) -> str:
         from .catfish_tools_skill_ops import _find_skill_dir  # noqa: PLC0415
         d = _find_skill_dir(str(st["skill"]).split("@")[0])
         return skill_names.skill_title(d) if d else str(st["skill"])
+    params = (wf or {}).get("params") or {}
+
+    def name(m: re.Match[str]) -> str:
+        ref = m.group(1).strip()
+        spec = params.get(ref[7:]) if ref.startswith("params.") else None
+        return (str(spec.get("label") or "") if isinstance(spec, dict) else "") or "\0"
     text = re.split(r"[，,。；;：:\n]", str(st.get("xiaonian") or ""), maxsplit=1)[0].strip()
-    text = _REF.sub("", text)
+    text = _REF.sub(name, text)
+    text = re.sub(r"\s*[、和与及]?\s*\0(\s*[、和与及]\s*\0)*\s*[、和与及]?\s*", "\0", text)   # 取不到名字的一串连同顿号收成一个空位
+    text = re.sub(r"^(按照?|根据|依据|用|把|将|对|从)?\0+", "", text).replace("\0", "")   # 「按 ___ 写」→「写」
+    text = re.sub(r"\s+", " ", re.sub(r"\s*、\s*", "、", text)).strip()
     return "小鲶：" + (text[:12] + ("…" if len(text) > 12 else "") if text else "整理判断")
 
 

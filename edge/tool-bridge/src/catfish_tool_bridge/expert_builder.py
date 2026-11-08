@@ -31,8 +31,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import expert_local, wiki_files
-from . import skill_workflow as engine
 from . import workflow_catalog as catalog
+from . import workflow_lint as lint
 from . import workflow_store as store
 from . import workflow_tool, workflow_xiaonian
 
@@ -125,7 +125,12 @@ _WF_PROMPT = """用鲶鱼的积木搭一个工作流 (一串步骤), 完成这�
 - 有条件才做: "when": {{"of": "${{...}}", "is": not_empty|empty|true|false|eq|ne|gt|ge|lt|le|contains, "to": 值}}; 分支 = 两步写相反的条件
 - 一步至少要有结果才算成: "expect": {{"count_min": 1}}
 - 级别 outward 的积木会停下等员工确认, 照常用
-{fix}
+- 小鲶那步 (xiaonian) 只能看交进来的数据写字: 不能调工具、跑代码、生成文件、上网、发东西。
+  要 Word 用 export_docx (body 填前面那步交出的 markdown); 要存知识库用 wiki_create;
+  网上的资料、链接、版权信息拿不到, 只用本机文件 / 知识库 / 邮件里查得到的, 不要让小鲶编
+- 越简单越好, 最多 {max_steps} 步: 对一串东西做同一件事, 先让一步交出列表, 再 for_each 一步做完, 不要抄好几遍
+- 每个参数写 label (员工看得懂的中文名, 例 {{"type": "text", "label": "主题"}}), 员工没说的值给合理的 default
+{current}{fix}
 只交回 JSON: {{"title": "4-12 字中文名", "description": "一句话: 什么时候用", "triggers": ["员工的说法"],
   "workflow": {{"kind": "workflow", "version": "1.0.0", "params": {{}}, "steps": [...]}}}}
 """
@@ -166,14 +171,22 @@ def _slug(bid: str, ek: int, jk: int) -> str:
     return f"{bid[1:7]}-e{ek}-j{jk}"
 
 
-def draft_workflow(job: dict[str, Any], name: str, llm: Llm) -> dict[str, Any]:
-    """起草一件 new 的活的工作流, 校验不过把问题交回去改, 最多 FIX_ROUNDS 轮。存成草稿; 返回 {draft, problems}。"""
+def draft_workflow(job: dict[str, Any], name: str, llm: Llm, *, current: dict[str, Any] | None = None,
+                   request: str = "") -> dict[str, Any]:
+    """起草一件 new 的活的工作流, 校验不过把问题交回去改, 最多 FIX_ROUNDS 轮。存成草稿; 返回 {draft, problems}。
+    current + request: 在现有草稿上按员工的一句话改 (卡上「改一改」/「让小鲶修好」)。
+    步数太多、同一块积木抄好几遍这类 (lint.build_hints) 也交回去改, 但改不动不算问题、不拦保存。"""
     fix = ""
     problems: list[str] = []
     got: dict[str, Any] = {}
+    cur = ""
+    if current:
+        cur = ("现在的工作流 (在它上面改, 员工没让改的地方别动):\n"
+               + json.dumps(current.get("workflow") or {}, ensure_ascii=False)[:6000]
+               + f"\n员工要这样改: <<<{request[:500]}>>>\n")
     for _round in range(FIX_ROUNDS + 1):
-        raw = llm(_WF_PROMPT.format(goal=job["goal"] or job["title"], when=job["when"], actions=_actions_text(True),
-                                    skills=_skills_text(), fix=fix))
+        raw = llm(_WF_PROMPT.format(goal=job.get("goal") or job["title"], when=job["when"], actions=_actions_text(True),
+                                    skills=_skills_text(), max_steps=lint.BUILD_MAX_STEPS, current=cur, fix=fix))
         try:
             got = workflow_xiaonian.parse_json(raw)
             wf = got.get("workflow")
@@ -181,17 +194,20 @@ def draft_workflow(job: dict[str, Any], name: str, llm: Llm) -> dict[str, Any]:
                 raise ValueError("没交回 workflow")
             wf.setdefault("kind", "workflow")
             wf.setdefault("version", "1.0.0")
-            problems = engine.validate(wf, skill_lookup=workflow_tool.skill_lookup)
+            problems = lint.check(wf, skill_lookup=workflow_tool.skill_lookup)
+            hints = lint.build_hints(wf)
         except ValueError as e:
-            problems = [f"交回的不是能用的 JSON: {e}"]
-        if not problems:
+            problems, hints = [f"交回的不是能用的 JSON: {e}"], []
+        if not problems and not hints:
             break
-        fix = "上一次写的有这些问题, 改好再交:\n" + "\n".join(f"- {p}" for p in problems[:10])
+        fix = "上一次写的有这些问题, 改好再交:\n" + "\n".join(f"- {p}" for p in (problems + hints)[:10])
     if not isinstance(got.get("workflow"), dict):
         return {"draft": None, "problems": problems}
-    d = store.save_draft({"name": name, "title": str(got.get("title") or job["title"])[:30], "namespace": "personal",
-                          "description": str(got.get("description") or job["when"])[:300],
-                          "triggers": [str(t)[:60] for t in got.get("triggers") or [job["when"]]][:12],
+    keep = current or {}
+    d = store.save_draft({"name": name, "title": str(got.get("title") or keep.get("title") or job["title"])[:30],
+                          "namespace": "personal",
+                          "description": str(got.get("description") or keep.get("description") or job["when"])[:300],
+                          "triggers": [str(t)[:60] for t in got.get("triggers") or keep.get("triggers") or [job["when"]]][:12],
                           "workflow": got["workflow"], "from_build": name.split("-")[0]})
     return {"draft": d["name"], "problems": problems}
 
@@ -260,6 +276,7 @@ def plan(sentence: str, *, llm: Llm | None = None) -> dict[str, Any]:
         results = list(ex.map(lambda t: draft_workflow(t[2], _slug(bid, t[0]["key"], t[1]), llm), todo))
     for (_e, _jk, j), r in zip(todo, results):
         j["draft"], j["problems"] = r["draft"], r["problems"]
+        _check_job(j)
     for e in experts:
         for jk, j in enumerate(e["jobs"], 1):
             if j["kind"] == "teach":
@@ -304,17 +321,60 @@ def update(bid: str, ek: int, patch: dict[str, Any]) -> dict[str, Any]:
     return _save(b)
 
 
+def _check_job(j: dict[str, Any]) -> None:
+    """重新查一件 new 的活: 卡上的问题 + 步骤链 (卡上直接画「① 搜邮件 → ② 小鲶：整理 → ③ 导出 Word 文件」)。"""
+    if j["kind"] != "new" or not j.get("draft"):
+        return
+    try:
+        wf = store.load_draft(j["draft"])["workflow"]
+    except LookupError:
+        j["problems"], j["chain"] = ["工作流草稿不见了, 点「让小鲶修好」重新搭这一件"], []
+        return
+    j["problems"] = lint.check(wf, skill_lookup=workflow_tool.skill_lookup)
+    j["chain"] = workflow_tool.chain(wf)
+
+
 def refresh_problems(bid: str) -> dict[str, Any]:
-    """员工在工作流编辑器里改过草稿之后: 重新校验, 卡上的红字跟着变。"""
+    """员工在工作流编辑器里 / 小鲶在对话里改过草稿之后: 重新校验, 卡上的红字跟着变。"""
     b = load(bid)
-    for e in b["experts"]:
-        for j in e["jobs"]:
-            if j["kind"] == "new" and j.get("draft"):
-                try:
-                    d = store.load_draft(j["draft"])
-                    j["problems"] = engine.validate(d["workflow"], skill_lookup=workflow_tool.skill_lookup)
-                except LookupError:
-                    j["problems"] = ["工作流草稿不见了, 重新生成这张卡"]
+    if b["status"] == "draft":
+        for e in b["experts"]:
+            for j in e["jobs"]:
+                _check_job(j)
+    return _save(b)
+
+
+def refresh_for_draft(draft: str) -> None:
+    """对话里改了某件活的草稿 (workflow_tool.save_draft): 找到它所在的总览卡, 卡上的问题跟着刷新。"""
+    tag = draft.split("-")[0]
+    for p in builds_dir().glob(f"b{tag}*.json"):
+        try:
+            refresh_problems(p.stem)
+        except (LookupError, ValueError, OSError):
+            continue
+
+
+def revise(bid: str, ek: int, index: int, request: str) -> dict[str, Any]:
+    """卡上那件活旁边说一句「要怎么改」/ 点「让小鲶修好」: 在现有草稿上改, 校验不过再改, 卡跟着刷新。
+    草稿丢了就按这件活的目标重新搭。"""
+    b = load(bid)
+    if b["status"] != "draft":
+        raise ValueError("这张卡已经保存生效了, 去工作流列表里改")
+    jobs = _expert(b, ek)["jobs"]
+    if not 0 <= index < len(jobs) or jobs[index]["kind"] != "new":
+        raise ValueError("这件活不是新搭的工作流, 没有步骤可改")
+    j = jobs[index]
+    try:
+        current = store.load_draft(j["draft"]) if j.get("draft") else None
+    except LookupError:
+        current = None
+    request = str(request or "").strip()
+    if not request:
+        problems = [lint.plain(p) for p in j.get("problems") or []]
+        request = "把这些问题修好, 别的不动: " + "; ".join(problems) if problems else "再检查一遍, 能简化就简化"
+    r = draft_workflow(j, j.get("draft") or _slug(bid, ek, index + 1), _llm, current=current, request=request)
+    j["draft"] = r["draft"]
+    _check_job(j)
     return _save(b)
 
 
@@ -378,13 +438,13 @@ def _definition(e: dict[str, Any]) -> dict[str, Any]:
 
 def apply(bid: str) -> dict[str, Any]:
     """员工点「全部保存并生效」的前半段: 保存新工作流 + 存专家定义。专家分身由 Companion 建 (Rust), 失败时调 rollback。"""
-    b = load(bid)
+    b = refresh_problems(bid)   # 草稿可能刚在编辑器 / 对话里改过, 按现在的样子查
     if b["status"] != "draft":
         raise ValueError("这张卡已经保存过了")
     chosen = [e for e in b["experts"] if e.get("include") and any(j.get("include") for j in e["jobs"])]
     if not chosen:
         raise ValueError("一个专家都没勾")
-    bad = [f"「{e['name']}」的「{j['title']}」: {j['problems'][0]}" for e in chosen for j in e["jobs"]
+    bad = [f"「{e['name']}」的「{j['title']}」: {lint.plain(j['problems'][0])}" for e in chosen for j in e["jobs"]
            if j.get("include") and j["kind"] == "new" and (j.get("problems") or not j.get("draft"))]
     if bad:
         raise ValueError("还有工作流没搭好, 先改好或者不勾那件活: " + "; ".join(bad[:4]))
@@ -528,7 +588,7 @@ def summary_text(b: dict[str, Any]) -> str:
         lines.append(f"专家「{e['name']}」: {e['description']}")
         for j in e["jobs"]:
             how = {"reuse": f"用已有的「{j.get('use_title') or j.get('use')}」",
-                   "new": "新搭工作流" + (f" (还有问题: {j['problems'][0]})" if j.get("problems") else ""),
+                   "new": "新搭工作流" + (f" (还没搭好: {lint.plain(j['problems'][0])})" if j.get("problems") else ""),
                    "knowledge": "查知识库回答", "teach": f"还不会, 要你先教一遍: {j.get('what')}"}[j["kind"]]
             sched = f", {j['schedule']['text']}" if j.get("schedule") else ""
             lines.append(f"  - {j['title']}: {how}{sched}")
@@ -545,5 +605,8 @@ def pim_handlers(params: dict[str, Any]) -> dict[str, Any]:
         "pim/expert_build_apply": lambda: apply(bid),
         "pim/expert_build_rollback": lambda: rollback(bid),
         "pim/expert_build_discard": lambda: discard(bid),
+        "pim/expert_build_revise": lambda: {"ok": True, "build": revise(bid, int(params.get("expert") or 0),
+                                                                       int(params.get("index") or 0),
+                                                                       str(params.get("request") or ""))},
         "pim/expert_build_teach": lambda: teach_prompt(bid, int(params.get("expert") or 0), int(params.get("index") or 0)),
     }

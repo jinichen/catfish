@@ -39,7 +39,7 @@ PLAN = {"experts": [{
     ]}]}
 
 GOOD_WF = {"title": "整理资质邮件", "description": "每周整理资质邮件", "triggers": ["整理资质邮件"], "workflow": {
-    "kind": "workflow", "version": "1.0.0", "params": {"keyword": {"type": "text", "default": "资质"}},
+    "kind": "workflow", "version": "1.0.0", "params": {"keyword": {"type": "text", "label": "关键词", "default": "资质"}},
     "steps": [{"id": "mails", "action": "email_search", "params": {"query": "${params.keyword}"}},
               {"id": "todo", "action": "create_task", "params": {"title": "资质邮件 ${steps.mails.count} 封"},
                "when": {"of": "${steps.mails.matches}", "is": "not_empty"}}]}}

@@ -6,10 +6,12 @@
  * 对外的积木会停下等确认, 勾选框锁定; 别的步骤也可以自己勾「这步要我确认」。
  * 11/08: 每一步可以设「满足条件才做」—— 从下拉里选前面某一步的结果, 选怎么比 (有内容 / 是 / 大于 / 包含 …),
  *        不满足就跳过这一步。分支 = 两步设相反的条件 (「不合格才建提醒」「合格才归档」)。
+ *        删一步 / 一个参数时, 后面用到它的地方一起清掉 (lib/workflowRefs.ts), 不留一行红字让人去找。
  */
 import { useState, type CSSProperties } from "react";
 
 import type { CatalogAction, CatalogSkill, ReturnType, StepWhen, WhenOp, Workflow, WorkflowStep } from "../../lib/tauri_workflows";
+import { removeParam, removeStep } from "../../lib/workflowRefs";
 import { Btn, inputStyle } from "../Collab/roomLinkUi";
 
 const RETURN_TYPES: ReturnType[] = ["text", "number", "list", "bool", "date"];
@@ -224,6 +226,12 @@ function newId(wf: Workflow, base: string): string {
 
 export default function WorkflowEditor({ wf, cat, onChange }: { wf: Workflow; cat: Catalog; onChange: (wf: Workflow) => void }) {
   const steps = wf.steps;
+  /** 删了一步 / 一个参数, 后面用到它的地方一起清掉了: 告诉员工动了哪几步 */
+  const [cleaned, setCleaned] = useState<string | null>(null);
+  const drop = (r: { wf: Workflow; touched: number[] }, what: string) => {
+    onChange(r.wf);
+    setCleaned(r.touched.length ? `${what}, 第 ${r.touched.join("、")} 步里用到它的地方也一起清掉了, 看一眼对不对` : null);
+  };
   const setStep = (i: number, s: WorkflowStep) => onChange({ ...wf, steps: steps.map((x, j) => (j === i ? s : x)) });
   const move = (i: number, d: -1 | 1) => {
     const next = [...steps];
@@ -250,7 +258,7 @@ export default function WorkflowEditor({ wf, cat, onChange }: { wf: Workflow; ca
                    onChange={(e) => onChange({ ...wf, params: { ...wf.params, [k]: { ...p, label: e.target.value } } })} />
             <input value={p.default == null ? "" : String(p.default)} placeholder="默认值 (日期可填 today)" style={small}
                    onChange={(e) => onChange({ ...wf, params: { ...wf.params, [k]: { ...p, default: e.target.value } } })} />
-            <Btn kind="ghost" onClick={() => { const ps = { ...wf.params }; delete ps[k]; onChange({ ...wf, params: ps }); }}>删</Btn>
+            <Btn kind="ghost" onClick={() => drop(removeParam(wf, k), `删了参数「${p.label || k}」`)}>删</Btn>
           </div>
         ))}
         <AddName label="+ 参数" placeholder="参数名, 小写字母 (例 keyword)"
@@ -258,8 +266,9 @@ export default function WorkflowEditor({ wf, cat, onChange }: { wf: Workflow; ca
       </div>
       {steps.map((_, i) => (
         <StepCard key={i} wf={wf} i={i} cat={cat} onChange={(s) => setStep(i, s)} onMove={(d) => move(i, d)}
-                  onRemove={() => onChange({ ...wf, steps: steps.filter((__, j) => j !== i) })} />
+                  onRemove={() => drop(removeStep(wf, i), `删了第 ${i + 1} 步`)} />
       ))}
+      {cleaned && <span style={{ fontSize: 12, color: "var(--status-warn, #d97706)" }}>{cleaned}</span>}
       <select value="" onChange={(e) => add(e.target.value)} style={inputStyle} aria-label="加一步">
         <option value="">+ 加一步…</option>
         {groups.map((g) => (

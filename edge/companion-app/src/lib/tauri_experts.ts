@@ -1,6 +1,8 @@
 /** 本机专家 (10/18, docs/EXPERT-PACK-PLAN.md 第一阶段) —— Rust commands/experts_local.rs 的前端封装。 */
 import { invoke } from "@tauri-apps/api/core";
 
+import type { ChainStep } from "./tauri_workflows";
+
 export interface ExpertRoute {
   when: string;
   /** workflow:<ns/name> | skill:<ns/name> | knowledge | decline */
@@ -98,6 +100,8 @@ export interface BuildJob {
   /** teach: 教完接上的技能 */
   attached?: string;
   schedule?: { cron: string; text: string } | null;
+  /** new: 步骤链 (卡上直接画出来) */
+  chain?: ChainStep[];
 }
 export interface BuildExpert {
   key: number;
@@ -128,6 +132,9 @@ export const expertBuildApply = (buildId: string) =>
     "build_apply", { build_id: buildId });
 export const expertBuildRollback = (buildId: string) => call<{ build: ExpertBuild }>("build_rollback", { build_id: buildId });
 export const expertBuildDiscard = (buildId: string) => call<{ ok: boolean }>("build_discard", { build_id: buildId });
+/** 卡上那件活旁边说一句要怎么改 (空 = 把卡上的问题修好); 小鲶在现有草稿上改, 返回刷新后的卡 */
+export const expertBuildRevise = (buildId: string, expert: number, index: number, request: string) =>
+  call<{ build: ExpertBuild }>("build_revise", { build_id: buildId, expert, index, request });
 export const expertBuildTeach = (buildId: string, expert: number, index: number) =>
   call<{ prompt: string; chat_key: string }>("build_teach", { build_id: buildId, expert, index });
 

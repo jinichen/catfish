@@ -292,3 +292,10 @@ steps:
 - 列表比大小按项数; 要比大小却取到文字 → 停在那一步, 说清要改条件。
 - 编辑器每一步「什么时候做: 总是做 / 满足条件才做」, 从下拉里选前面步骤的结果 (选不到不存在的); 步骤链上有条件的步骤标 ◇。
 - 实现: `skill_workflow.py` `when_holds` / `_when_problems` / `when_text`; 测试 `tests/test_workflow_when.py`。
+
+## 14. 导出 Word 积木 + 小鲶那步的边界 (11/08)
+
+- 新积木 `export_docx`「导出 Word 文件」(写 · 本机): title / body (Markdown) / filename → `~/.catfish/outputs/<今天>/<名字>.docx`, 输出 `path`。
+- 小鲶那步 (xiaonian) 不给工具: 说明里要它调工具、生成文件、上网给链接、发东西的, 起草 / 保存时当问题拦下来 (`workflow_lint.py`),
+  跑已装好的工作流时不查。详见 docs/EXPERT-PACK-PLAN.md §9.5。
+- 编辑器删一步 / 删参数时, 后面引用它的地方一起清掉 (`companion-app/src/lib/workflowRefs.ts`)。

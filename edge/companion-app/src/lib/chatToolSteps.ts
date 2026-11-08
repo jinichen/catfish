@@ -33,13 +33,25 @@ export function isApprovalPending(resultStr: string): boolean {
   return APPROVAL_PENDING_RE.test(resultStr);
 }
 
-/** 收起状态下也要整张卡片露出的步骤: 员工得看见进度/错误, 或得动手 (批准、填密码) */
+/** 结果里带着要员工点的按钮或要自动做的事 (ChatToolCall 里那几处):
+ *  「切到 X 专家」、「打开总览卡」、教会后专家自动重新生效。
+ *  11/08: 之前收起时这几步不露, 「打开总览卡」藏在「后台动作」里找不到, 教会后的自动生效也不跑。 */
+function carriesAction(call: ToolCall, resultStr: string): boolean {
+  const name = call.name ?? "";
+  if (name.endsWith("catfish_expert")) return /"suggestion"\s*:\s*\{/.test(resultStr);
+  if (name.endsWith("catfish_workflow")) return /"build_id"\s*:\s*"/.test(resultStr);
+  if (name.endsWith("catfish_freeze_skill")) return /"(reapply_experts|attached|attach_error)"\s*:/.test(resultStr);
+  return false;
+}
+
+/** 收起状态下也要整张卡片露出的步骤: 员工得看见进度/错误, 或得动手 (批准、填密码、点按钮) */
 export function toolCallNeedsCard(call: ToolCall): boolean {
   if (call.status !== "done") return true; // pending / running / error
   const resultStr = toolResultString(call);
   return (
     isApprovalPending(resultStr) ||
-    parseNeedsCredential(resultStr, call.name) !== null
+    parseNeedsCredential(resultStr, call.name) !== null ||
+    carriesAction(call, resultStr)
   );
 }
 

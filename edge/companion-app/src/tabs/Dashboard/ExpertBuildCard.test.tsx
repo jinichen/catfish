@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const api = vi.hoisted(() => ({
   expertBuildList: vi.fn(), expertBuildPlan: vi.fn(), expertBuildUpdate: vi.fn(), expertBuildApply: vi.fn(),
   expertBuildRollback: vi.fn(), expertBuildDiscard: vi.fn(), expertBuildTeach: vi.fn(), expertBuildGet: vi.fn(),
+  expertBuildRevise: vi.fn(),
   expertApply: vi.fn(), expertRemove: vi.fn(),
 }));
 const wf = vi.hoisted(() => ({ workflowScheduleSet: vi.fn() }));
@@ -123,6 +124,41 @@ describe("ExpertBuildCard", () => {
   });
 });
 
+describe("不打开编辑器也能改 (11/08 鸿波「一般人很难适应」)", () => {
+  const broken = () => build({ experts: [{ ...build().experts[0], jobs: [{
+    ...build().experts[0].jobs[0], problems: ["第 2 步 (word) 是小鲶自己想、自己写的一步, 它不能生成文件"],
+    chain: [{ id: "script", label: "小鲶：写分镜脚本", block: "xiaonian", outward: false, each: false, cond: null },
+            { id: "push", label: "推送到我的微信", block: "action", outward: true, each: false, cond: null }] }] }] });
+
+  it("步骤链直接画在卡上; 问题说人话 (不带步骤 id)", async () => {
+    api.expertBuildList.mockResolvedValue({ builds: [broken()] });
+    render(<ExpertBuildCard onApplied={vi.fn()} />);
+    expect(await screen.findByText("小鲶：写分镜脚本")).toBeTruthy();
+    expect(screen.getByText(/🔔 推送到我的微信/)).toBeTruthy();
+    expect(screen.getByText(/还没搭好: 第 2 步 是小鲶自己想/)).toBeTruthy();
+    expect(screen.queryByText(/\(word\)/)).toBeNull();
+  });
+
+  it("让小鲶修好: 不带话发给后端, 卡跟着刷新", async () => {
+    api.expertBuildList.mockResolvedValue({ builds: [broken()] });
+    api.expertBuildRevise.mockResolvedValue({ build: build() });
+    render(<ExpertBuildCard onApplied={vi.fn()} />);
+    fireEvent.click(await screen.findByText("让小鲶修好"));
+    await waitFor(() => expect(screen.queryByText("让小鲶修好")).toBeNull());
+    expect(api.expertBuildRevise).toHaveBeenCalledWith("b12345678", 1, 0, "");
+  });
+
+  it("改一改: 一句话说要怎么改", async () => {
+    api.expertBuildRevise.mockResolvedValue({ build: build() });
+    render(<ExpertBuildCard onApplied={vi.fn()} />);
+    fireEvent.click(await screen.findByText("改一改"));
+    fireEvent.change(screen.getByLabelText("一句话说要怎么改"), { target: { value: "不要 Word 了" } });
+    fireEvent.click(screen.getByText("改"));
+    await waitFor(() => expect(api.expertBuildRevise).toHaveBeenCalledWith("b12345678", 1, 0, "不要 Word 了"));
+    await waitFor(() => expect(screen.queryByLabelText("一句话说要怎么改")).toBeNull());
+  });
+});
+
 describe("applyBlocker / jobHow", () => {
   it("有没搭好的工作流不让保存, 说清是哪件; 不勾就能保存", () => {
     const b = build();
@@ -142,6 +178,7 @@ describe("plainProblem", () => {
   it("去掉写给小鲶的工具提示", async () => {
     const { plainProblem } = await import("./ExpertBuildCard");
     expect(plainProblem("第 2 步 没有「excel_export」这块积木 (用 catfish_workflow action=catalog 看有哪些)")).toBe("第 2 步 没有「excel_export」这块积木");
+    expect(plainProblem("第 4 步 (deliver_docx) skill 写法不对")).toBe("第 4 步 skill 写法不对");
     expect(plainProblem("第 1 步 要有 id (小写字母开头, 例 mails)")).toBe("第 1 步 要有 id (小写字母开头, 例 mails)");
   });
 });

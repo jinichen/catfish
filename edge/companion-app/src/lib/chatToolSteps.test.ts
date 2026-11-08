@@ -75,4 +75,11 @@ describe("toolCallNeedsCard", () => {
     expect(toolCallNeedsCard(call("c", "execute_code", { result: pdf }))).toBe(false);
     expect(toolCallNeedsCard(call("c", "terminal", { result: '{"approval_pending": true, "output": ""}' }))).toBe(true);
   });
+  it("带按钮的结果收起时也露出: 打开总览卡 / 切到专家 / 教会后重新生效 (11/08 按钮藏在后台动作里找不到)", () => {
+    expect(toolCallNeedsCard(call("c", "catfish_workflow", { result: { ok: true, build_id: "b1", overview: "x" } }))).toBe(true);
+    expect(toolCallNeedsCard(call("c", "catfish_workflow", { result: '{"ok":true,"draft":"x"}' }))).toBe(false);
+    expect(toolCallNeedsCard(call("c", "mcp_catfish_catfish_expert", { result: '{"suggestion": {"profile_id": "p"}}' }))).toBe(true);
+    expect(toolCallNeedsCard(call("c", "catfish_freeze_skill", { result: '{"ok":true,"attached":["a"],"reapply_experts":[]}' }))).toBe(true);
+    expect(toolCallNeedsCard(call("c", "catfish_freeze_skill", { result: '{"ok":true}' }))).toBe(false);
+  });
 });

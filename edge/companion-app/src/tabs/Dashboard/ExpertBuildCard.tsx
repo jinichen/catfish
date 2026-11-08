@@ -7,18 +7,21 @@
  *   保存新工作流 + 存专家定义 (tool-bridge) → 建专家分身 (Rust expert_local_apply) → 挂定时。
  * 建分身失败就整张撤回 (已建的分身删掉、新工作流退回草稿), 不留半成品; 定时没挂上的单独列出来能重试。
  * 「还不会」的那件: 点「现在教」开一段教学对话, 教完技能自动接进专家、专家自动重新生效 (见 ChatToolCall)。
+ * 新搭的那件直接画出步骤链; 要改就在那件活旁边说一句 (「改一改」), 有问题点「让小鲶修好」——
+ * 一般人不用打开步骤编辑器 (那个留给要细调的人)。
  */
 import { useEffect, useRef, useState } from "react";
 
 import { refreshExperts } from "../../lib/expertChat";
 import {
   expertApply, expertBuildApply, expertBuildDiscard, expertBuildGet, expertBuildList, expertBuildPlan, expertBuildRollback,
-  expertBuildTeach, expertBuildUpdate, expertRemove, type BuildExpert, type BuildJob, type ExpertBuild,
+  expertBuildRevise, expertBuildTeach, expertBuildUpdate, expertRemove, type BuildExpert, type BuildJob, type ExpertBuild,
 } from "../../lib/tauri_experts";
 import { workflowScheduleSet } from "../../lib/tauri_workflows";
 import { useUIStore } from "../../store/ui";
 import { muted } from "../Collab/formsUi";
 import { Btn, ErrorLine, inputStyle, itemStyle } from "../Collab/roomLinkUi";
+import { StepChain } from "./WorkflowParts";
 import { Detail } from "./WorkflowsCard";
 
 const KIND_TEXT: Record<BuildJob["kind"], string> = {
@@ -32,9 +35,10 @@ export function jobHow(j: BuildJob): string {
   return KIND_TEXT[j.kind];
 }
 
-/** 校验的话是写给小鲶看的, 里面「(用 catfish_workflow action=… 看)」这种提示员工用不上, 显示时去掉 */
+/** 校验的话是写给小鲶看的: 「(用 catfish_workflow action=… 看)」这种提示、「第 4 步 (deliver_docx)」里的步骤 id
+ *  员工用不上, 显示时去掉 (跟 tool-bridge workflow_lint.plain 一样) */
 export function plainProblem(p: string): string {
-  return p.replace(/\s*\((?:用|见) ?catfish_[^)]*\)/g, "").trim();
+  return p.replace(/(第 \d+(?:-\d+)? 步) \([a-z][a-z0-9_]*\)/g, "$1").replace(/\s*\((?:用|见) ?catfish_[^)]*\)/g, "").trim();
 }
 
 /** 能不能点「全部保存并生效」, 不能的话为什么 */
@@ -43,7 +47,7 @@ export function applyBlocker(b: ExpertBuild): string | null {
   if (!chosen.length) return "一个专家都没勾";
   for (const e of chosen) {
     const bad = e.jobs.find((j) => j.include && j.kind === "new" && (j.problems.length > 0 || !j.draft));
-    if (bad) return `「${e.name}」的「${bad.title}」还没搭好: 点「看步骤」改好, 或者不勾这件`;
+    if (bad) return `「${e.name}」的「${bad.title}」还没搭好: 点「让小鲶修好」, 或者不勾这件`;
   }
   return null;
 }
@@ -120,6 +124,7 @@ function BuildView({ build: b, highlight, onChange, onGone, onApplied }: {
   const [failedSchedules, setFailedSchedules] = useState<ScheduleItem[]>([]);
   const [steps, setSteps] = useState<BuildJob | null>(null);
   const [persona, setPersona] = useState<number | null>(null);
+  const [revising, setRevising] = useState<string | null>(null);   // 「改一改」框开在哪件活上: `${专家}-${第几件}`
   const ref = useRef<HTMLDivElement>(null);
   const draft = b.status === "draft";
   const blocker = draft ? applyBlocker(b) : null;
@@ -177,6 +182,12 @@ function BuildView({ build: b, highlight, onChange, onGone, onApplied }: {
     }
   });
 
+  /** 「改一改」/「让小鲶修好」(request 空): 小鲶在现有草稿上改, 卡跟着刷新 */
+  const revise = (e: BuildExpert, index: number, request: string) => run(`revise-${e.key}-${index}`, async () => {
+    onChange((await expertBuildRevise(b.build_id, e.key, index, request)).build);
+    setRevising(null);
+  });
+
   const teach = (e: BuildExpert, index: number) => run("teach", async () => {
     const t = await expertBuildTeach(b.build_id, e.key, index);
     useUIStore.getState().startEmailChat(t.chat_key, t.prompt);
@@ -221,12 +232,23 @@ function BuildView({ build: b, highlight, onChange, onGone, onApplied }: {
                   {j.schedule && <span style={{ fontSize: 12, color: "var(--catfish-cyan)", whiteSpace: "nowrap" }}> · ⏰ {j.schedule.text}</span>}
                 </span>
                 <span style={muted}>你会说: {j.when}</span>
+                {j.kind === "new" && j.chain && j.chain.length > 0 && <StepChain chain={j.chain} />}
                 {j.include && j.kind === "new" && j.problems.length > 0 && (
                   <span style={{ fontSize: 12, color: "var(--status-error, #dc2626)" }}>还没搭好: {j.problems.slice(0, 2).map(plainProblem).join("; ")}</span>
                 )}
+                {busy === `revise-${e.key}-${i}` && <span style={muted}>小鲶在改… 一般半分钟到两分钟</span>}
+                {draft && revising === `${e.key}-${i}` && (
+                  <ReviseBox busy={!!busy} onCancel={() => setRevising(null)} onSubmit={(t) => void revise(e, i, t)} />
+                )}
               </div>
               <span style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                {draft && j.kind === "new" && j.draft && <Btn kind="ghost" onClick={() => setSteps(j)}>看步骤 / 试跑</Btn>}
+                {draft && j.kind === "new" && j.include && j.problems.length > 0 && (
+                  <Btn kind="primary" disabled={!!busy} onClick={() => void revise(e, i, "")}>让小鲶修好</Btn>
+                )}
+                {draft && j.kind === "new" && (
+                  <Btn kind="ghost" disabled={!!busy} onClick={() => setRevising(revising === `${e.key}-${i}` ? null : `${e.key}-${i}`)}>改一改</Btn>
+                )}
+                {draft && j.kind === "new" && j.draft && <Btn kind="ghost" onClick={() => setSteps(j)}>细调 / 试跑</Btn>}
                 {draft && j.schedule && (
                   <Btn kind="ghost" disabled={!!busy} onClick={() => void patch(e, { jobs: [{ index: i, schedule: "" }] })}>不定时</Btn>
                 )}
@@ -262,6 +284,21 @@ function BuildView({ build: b, highlight, onChange, onGone, onApplied }: {
                 onClose={() => { setSteps(null); void expertBuildGet(b.build_id).then((r) => onChange(r.build)).catch(() => {}); }}
                 onChanged={() => {}} />
       )}
+    </div>
+  );
+}
+
+/** 「改一改」: 一句话说要怎么改这件活 */
+function ReviseBox({ busy, onCancel, onSubmit }: { busy: boolean; onCancel: () => void; onSubmit: (text: string) => void }) {
+  const [text, setText] = useState("");
+  return (
+    <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 2 }}>
+      <input value={text} onChange={(ev) => setText(ev.target.value)} disabled={busy} autoFocus aria-label="一句话说要怎么改"
+             onKeyDown={(ev) => { if (ev.key === "Enter" && text.trim().length >= 2 && !ev.nativeEvent.isComposing) onSubmit(text.trim()); }}
+             placeholder="例: 不要 Word 了, 只存知识库"
+             style={{ ...inputStyle, flex: "1 1 220px", minWidth: 0 }} />
+      <Btn kind="primary" disabled={busy || text.trim().length < 2} onClick={() => onSubmit(text.trim())}>改</Btn>
+      <Btn kind="ghost" disabled={busy} onClick={onCancel}>算了</Btn>
     </div>
   );
 }

@@ -15,6 +15,7 @@ import yaml
 
 from . import skill_workflow as engine
 from . import workflow_catalog as catalog
+from . import workflow_lint as lint
 from . import workflow_store as store
 
 
@@ -80,7 +81,7 @@ def runnable_skills() -> list[dict[str, Any]]:
 
 def chain(wf: dict[str, Any]) -> list[dict[str, Any]]:
     """步骤链 (界面画成「搜邮件 → 读正文 → … → 🔔推送微信」): 每步中文名 + 是不是对外 (会停下等确认)。"""
-    return [{"id": s.get("id"), "label": engine.step_label(s), "block": engine.block_of(s),
+    return [{"id": s.get("id"), "label": engine.step_label(s, wf), "block": engine.block_of(s),
              "outward": engine.is_outward(s) or bool(s.get("confirm")), "each": "for_each" in s,
              "cond": engine.when_text(s["when"], wf) if isinstance(s.get("when"), dict) else None}
             for s in wf.get("steps") or [] if isinstance(s, dict)]
@@ -136,15 +137,34 @@ def _with_outward_marks(wf: dict[str, Any]) -> dict[str, Any]:
     return {**wf, "steps": [{**s, "_outward": engine.is_outward(s) or bool(s.get("confirm"))} for s in wf.get("steps") or []]}
 
 
+def _keep_build_tag(d: dict[str, Any]) -> dict[str, Any]:
+    """小鲶在对话里改一句话搭专家的草稿: 原样带上 from_build, 不然草稿就从总览卡上掉出去、跑到草稿列表里。"""
+    try:
+        old = store.load_draft(str(d.get("name") or ""))
+    except (LookupError, ValueError):
+        return d
+    return {**d, "from_build": old["from_build"]} if old.get("from_build") else d
+
+
 def save_draft(args: dict[str, Any]) -> dict[str, Any]:
-    d = store.save_draft(_draft_from(args))
-    problems = engine.validate(d["workflow"], skill_lookup=skill_lookup)
+    d = store.save_draft(_keep_build_tag(_draft_from(args)))
+    problems = lint.check(d["workflow"], skill_lookup=skill_lookup)
     steps = [{"id": s.get("id"), "block": engine.block_of(s),
               "what": s.get("skill") or s.get("action") or str(s.get("xiaonian") or "")[:60],
               "outward": engine.is_outward(s) or bool(s.get("confirm"))} for s in d["workflow"].get("steps") or []]
+    if d.get("from_build"):
+        from . import expert_builder  # noqa: PLC0415
+        expert_builder.refresh_for_draft(d["name"])
+        return {"ok": not problems, "draft": d["name"], "namespace": d["namespace"], "steps": steps,
+                "problems": [lint.plain(p) for p in problems],
+                "note": ("改好了, 总览卡上的问题也跟着清了。用大白话告诉员工改了什么, 请他回总览卡看一眼、点「全部保存并生效」。"
+                         if not problems else
+                         "还没改好 (见 problems), 不要跟员工说改好了。接着改; 改不动就照实说哪里不行, "
+                         "请他在总览卡上那件活旁边点「让小鲶修好」或说一句要怎么改。")}
     return {"ok": not problems, "draft": d["name"], "namespace": d["namespace"], "steps": steps, "problems": problems,
-            "note": ("草稿存好了。把步骤念给员工听 (哪步会停下等他确认), 他同意后可以 action=trial 试跑, 再 action=save 保存。"
-                     if not problems else "草稿有问题, 改好再存: 见 problems。缺积木的那步请员工教一遍。")}
+            "note": ("草稿存好了。用大白话把步骤念给员工听 (哪步会停下等他确认; 不要念 id、字段名), 他同意后可以 action=trial 试跑,"
+                     " 再 action=save 保存。" if not problems else
+                     "草稿有问题, 改好再存: 见 problems。没改好之前不要跟员工说好了。缺积木的那步请员工教一遍。")}
 
 
 def trial(name: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -155,7 +175,7 @@ def trial(name: str, params: dict[str, Any]) -> dict[str, Any]:
 
 def save(name: str) -> dict[str, Any]:
     d = store.load_draft(name)
-    problems = engine.validate(d["workflow"], skill_lookup=skill_lookup)
+    problems = lint.check(d["workflow"], skill_lookup=skill_lookup)
     if problems:
         return {"ok": False, "error": "还有问题, 不能保存: " + "; ".join(problems[:6]), "problems": problems}
     path = store.install(d["name"], d["namespace"], d["description"], d["triggers"],
@@ -171,7 +191,7 @@ def update_installed(skill_path: str, wf: Any) -> dict[str, Any]:
     if d is None or not (d / "workflow.yaml").exists():
         raise LookupError(f"没有这个工作流: {skill_path}")
     wf = engine.parse(wf) if isinstance(wf, str) else wf
-    problems = engine.validate(wf, skill_lookup=skill_lookup)
+    problems = lint.check(wf, skill_lookup=skill_lookup)
     if problems:
         return {"ok": False, "problems": problems}
     fm = _frontmatter(d / "SKILL.md")
@@ -204,19 +224,23 @@ def dispatch(name: str, args: dict[str, Any]) -> dict[str, Any]:
         if action == "trial":
             return trial(str(args.get("name") or ""), args.get("params") or {})
         if action == "save":
+            name = str(args.get("name") or "")
+            if store.load_draft(name).get("from_build"):   # 总览卡上的一件活: 跟专家一起在卡上保存
+                return {"ok": False, "error": "这是一句话搭专家总览卡上的一件活, 要员工在卡上点「全部保存并生效」一起保存"}
             if not args.get("confirmed"):
-                d = store.load_draft(str(args.get("name") or ""))
+                d = store.load_draft(name)
                 return {"ok": True, "needs_confirmation": True,
                         "proposal": f"保存工作流 {d['namespace']}/{d['name']}: {d['description']} "
                                     f"({len(d['workflow'].get('steps') or [])} 步)",
                         "note": "念给员工听, 员工同意后带 confirmed=true 再调"}
-            return save(str(args.get("name") or ""))
+            return save(name)
         if action == "build_expert":   # 11/08 一句话搭专家: 起草总览卡, 保存生效只能员工在界面上点
             from . import expert_builder  # noqa: PLC0415
             b = expert_builder.plan(str(args.get("sentence") or ""))
             return {"ok": True, "build_id": b["build_id"], "overview": expert_builder.summary_text(b),
-                    "note": "把总览念给员工听 (哪几件是新搭的、哪件要他先教一遍、哪些定时)。保存并生效要员工在卡片上点"
-                            " (对话里会出现「打开总览卡」按钮), 你不能替他保存。"}
+                    "note": "用大白话把总览念给员工听: 搭了哪几个专家、各管哪几件事、哪件要他先教一遍、哪件定时。"
+                            "不要说编号、草稿名、字段名、cron 这些词; 卡上有没搭好的就照实说。保存并生效要员工在卡片上点"
+                            " (对话里会出现「打开总览卡」按钮), 你不能替他保存; 要改哪件, 请他在卡上那件活旁边说一句。"}
         if action == "runs":
             return {"ok": True, "runs": store.list_runs(int(args.get("limit") or 20), args.get("status"))}
         if action == "status":
