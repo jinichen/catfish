@@ -15,10 +15,13 @@ import {
   getSkill,
   listSkills,
   publishSkill,
+  SCOPE_LABEL,
+  type ShareScope,
   type SkillSummary,
 } from "../lib/hub";
 import { metaList, metaText, namespaceLabel, parseSkillMd } from "../lib/skillMd";
 import { useAuthStore } from "../store/auth";
+import { ReviewBadge, scopeText, SkillReviewSections } from "./SkillReviewDialog";
 
 export function SkillsHubPage() {
   return (
@@ -43,6 +46,9 @@ function humanTime(iso?: string): string {
 }
 
 function SkillList() {
+  const me = useAuthStore((s) => s.me);
+  // 11/08: 部门主管审本部门范围的, 管理员审全公司范围的 —— 后端按 managed_depts / role 过滤, 这里只决定要不要拉
+  const reviewer = !!me && roleAllows(me.role, "manager");
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -92,6 +98,10 @@ function SkillList() {
           </Link>
         }
       >
+        <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: "var(--space-2)", lineHeight: 1.6 }}>
+          这里列的是已经审核通过、你能装的技能 (本部门的 + 全公司的)，加上你自己提交的和等你审的。
+          发布后要等部门主管 (全公司范围: 管理员) 审核通过，同事才能看到。
+        </div>
         <input
           type="text"
           placeholder="搜 skill 名 / 描述 / namespace…"
@@ -107,6 +117,8 @@ function SkillList() {
           }}
         />
       </Card>
+
+      <SkillReviewSections reviewer={reviewer} />
 
       {loading && <div>加载中…</div>}
       {error && <div style={{ color: "var(--status-err)" }}>{error}</div>}
@@ -169,7 +181,8 @@ function SkillList() {
                   <span style={{ fontFamily: "var(--font-mono)", fontWeight: 500 }}>
                     {s.name}
                   </span>
-                  <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                  <span style={{ fontSize: 11, color: "var(--text-muted)", display: "flex", gap: 6, alignItems: "center" }}>
+                    <ReviewBadge review={s.review} />
                     v{s.latest_version}
                   </span>
                 </div>
@@ -265,7 +278,8 @@ function SkillDetail() {
       <Card
         title={title}
         action={
-          <span style={muted}>
+          <span style={{ ...muted, display: "flex", gap: 8, alignItems: "center" }}>
+            <ReviewBadge review={detail.review} />
             v{detail.version}
             {detail.deprecated && (
               <span style={{ color: "var(--status-warn)", marginLeft: 8 }}>（已停用）</span>
@@ -281,7 +295,21 @@ function SkillDetail() {
           {author && <span>作者：{author}</span>}
           {updated && <span>更新：{updated}</span>}
           <span>文件：{detail.files.length} 个</span>
+          {detail.review && !detail.review.legacy && <span>范围：{scopeText(detail.review)}</span>}
+          {detail.review?.reviewed_by && detail.review.status === "approved" && (
+            <span>审核：{detail.review.reviewed_by}</span>
+          )}
         </div>
+        {detail.review?.status === "pending" && (
+          <div style={{ marginTop: "var(--space-3)", color: "var(--status-warn)", fontSize: 13 }}>
+            这一版还在等审核，同事暂时看不到。
+          </div>
+        )}
+        {detail.review?.status === "rejected" && detail.review.review_note && (
+          <div style={{ marginTop: "var(--space-3)", color: "var(--status-err)", fontSize: 13 }}>
+            被驳回 ({detail.review.reviewed_by})：{detail.review.review_note}
+          </div>
+        )}
         {triggers.length > 0 && (
           <div style={{ marginTop: "var(--space-3)" }}>
             <div style={{ ...muted, marginBottom: 6 }}>员工这样说时，小鲶会用上它：</div>
@@ -437,8 +465,12 @@ function SkillDetail() {
 
 function PublishForm() {
   const navigate = useNavigate();
+  const me = useAuthStore((s) => s.me);
   const [namespace, setNamespace] = useState("personal");
   const [files, setFiles] = useState<FileList | null>(null);
+  // 11/08 分享治理: 发到哪个范围 + 给审批人看的说明。部门范围默认提交人自己的部门 (后端也这么兜底)
+  const [scope, setScope] = useState<ShareScope>("department");
+  const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   /** 发布成功后要跳去哪。放 state 里而不是直接 setTimeout —— 见下面。 */
@@ -468,11 +500,13 @@ function PublishForm() {
     e.preventDefault();
     if (!canSubmit || !files) return;
     setBusy(true);
-    const r = await publishSkill(namespace, Array.from(files));
+    const r = await publishSkill(namespace, Array.from(files), { scope, note: note.trim() || undefined });
     setBusy(false);
     if (r.ok) {
-      setResult(`✓ 已发布 ${namespace}/${r.name}/${r.version}`);
-      setGoTo(`/skills/${namespace}/${r.name}`);
+      const who = scope === "company" ? "管理员" : "部门主管";
+      setResult(`✓ 已提交 ${namespace}/${r.name}/${r.version}，等${who}审核通过后同事才能看到。可以在列表页「我提交的」里看进度。`);
+      // 11/08: 原来跳技能详情 (而且路径还是老的 /skills/…, 会被兜底跳回首页); 现在回列表页看「我提交的」
+      setGoTo("/market/skills");
     } else {
       setResult(`✗ ${r.error}`);
     }
@@ -480,6 +514,9 @@ function PublishForm() {
 
   return (
     <Card title="发布 skill 到 hub">
+      <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: "var(--space-3)", lineHeight: 1.6 }}>
+        发布后先进「待审核」：本部门范围由部门主管审，全公司范围由管理员审。审核通过并签名后同事才能看到、才能装。
+      </div>
       <form
         onSubmit={handleSubmit}
         style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}
@@ -509,6 +546,40 @@ function PublishForm() {
           >
             {nsErr ?? "小写字母 / 数字 / - / _，以字母开头"}
           </div>
+        </label>
+
+        <div>
+          <div style={{ marginBottom: 4, fontSize: 13 }}>范围（发给谁用）</div>
+          <div style={{ display: "flex", gap: "var(--space-4)", fontSize: 13 }}>
+            {(["department", "company"] as ShareScope[]).map((v) => (
+              <label key={v} style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
+                <input type="radio" name="scope" value={v} checked={scope === v} onChange={() => setScope(v)} />
+                {SCOPE_LABEL[v]}
+                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                  {v === "department" ? `（${me?.department || "你的部门"}，由部门主管审核）` : "（由管理员审核）"}
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <label>
+          <div style={{ marginBottom: 4, fontSize: 13 }}>说明（给审核的人看，选填）</div>
+          <textarea
+            rows={2}
+            value={note}
+            onChange={(e) => setNote(e.target.value.slice(0, 300))}
+            placeholder="这个技能做什么、会打开哪些网站、要哪些账号…"
+            style={{
+              width: "100%",
+              padding: "6px 10px",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius-sm)",
+              fontSize: 13,
+              fontFamily: "inherit",
+              boxSizing: "border-box",
+            }}
+          />
         </label>
 
         <label>
@@ -565,7 +636,7 @@ function PublishForm() {
               fontSize: 13,
             }}
           >
-            {busy ? "发布中…" : "发布"}
+            {busy ? "提交中…" : "提交审核"}
           </button>
           <button
             type="button"

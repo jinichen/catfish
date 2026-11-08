@@ -5,6 +5,8 @@
  *   · 待审核 (主管 / 管理员才有): 看清单、选路、每个工作流的步骤、脚本里会打开的网站 —— 都是服务器自己从包里拆的,
  *     不是提交人自报; 通过 = 中央签名上架, 驳回要写原因, 回到提交人
  *   · 我提交的: 状态、驳回原因、撤回 / 下架
+ *   · 11/08 分享治理 §3.3: 审核弹窗里多「试用」一块 —— 审批人在 Companion 资源市场点「装到我这里试用」,
+ *     试跑结果 (哪条工作流、哪步成了、产出什么文件) 回传到 hub, 这里展示 (trials)
  */
 import { useCallback, useEffect, useState } from "react";
 
@@ -17,6 +19,7 @@ import {
   type ExpertPackMeta,
 } from "../lib/experts";
 import { useAuthStore } from "../store/auth";
+import { TrialHint, TrialResults } from "./TrialResults";
 
 const muted = { fontSize: 12, color: "var(--text-muted)" } as const;
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -109,6 +112,13 @@ function ReviewDialog({ m, onClose, onDone }: { m: ExpertPackMeta; onClose: () =
              </div>
            }>
       <Detail m={m} />
+      <div style={{ marginTop: 12 }}>
+        <b style={{ fontSize: 13 }}>试用</b>
+        <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 6 }}>
+          <TrialHint what="这个专家包" />
+          <TrialResults trials={m.trials} />
+        </div>
+      </div>
       <textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} placeholder="审核意见 (驳回必填, 会回给提交人)"
                 style={{ width: "100%", marginTop: 12, boxSizing: "border-box", fontFamily: "inherit", fontSize: 13, padding: 8 }} />
       {error && <div style={{ color: "var(--status-err)", fontSize: 12 }}>{error}</div>}

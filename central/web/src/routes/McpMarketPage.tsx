@@ -6,12 +6,16 @@
  * 对一次订阅, 自动接上 / 停掉连接器并通知小鲶刷新工具 —— 不用装、不用重启。在这之前订阅只在
  * 中央留一条记录, 员工机从没拉过, 而且这页本身也跟 registry 的返回对不上 (见 lib/mcp.ts)。
  * 只列 status=active 的; 要 OAuth 的 (jira / gitlab) 员工机还接不了, 是 preview, 不列。
+ *
+ * 11/08 分享治理 §3.4: 员工能「提交连接器」(贴 manifest → 待审核); 列表页多「我提交的」和
+ * 主管 / 管理员的「待我审核」(McpReviewSections); 表单在 McpSubmitForm。
  */
 
 import { useEffect, useState } from "react";
 import { Link, Route, Routes, useParams } from "react-router-dom";
 
 import { Card } from "../components/Card";
+import { roleAllows } from "../components/RoleGate";
 import {
   listConnectors,
   listMySubscriptions,
@@ -19,6 +23,9 @@ import {
   unsubscribe,
   type McpConnector,
 } from "../lib/mcp";
+import { useAuthStore } from "../store/auth";
+import { McpReviewSections } from "./McpReviewSections";
+import { McpSubmitForm } from "./McpSubmitForm";
 
 const AUTH_LABEL: Record<string, string> = {
   none: "免授权",
@@ -34,12 +41,15 @@ export function McpMarketPage() {
   return (
     <Routes>
       <Route index element={<McpList />} />
+      <Route path="submit" element={<McpSubmitForm />} />
       <Route path=":id" element={<McpDetail />} />
     </Routes>
   );
 }
 
 function McpList() {
+  const me = useAuthStore((s) => s.me);
+  const reviewer = !!me && roleAllows(me.role, "manager");
   const [connectors, setConnectors] = useState<McpConnector[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -58,11 +68,30 @@ function McpList() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
-      <Card title={`MCP 连接器市场 · ${allowed.length} 个可用`}>
+      <Card
+        title={`MCP 连接器市场 · ${allowed.length} 个可用`}
+        action={
+          <Link
+            to="/market/mcp/submit"
+            style={{
+              background: "var(--accent)",
+              color: "white",
+              padding: "6px 14px",
+              borderRadius: "var(--radius-sm)",
+              fontSize: 13,
+            }}
+          >
+            + 提交连接器
+          </Link>
+        }
+      >
         <div style={{ color: "var(--text-muted)", fontSize: 13, lineHeight: 1.7 }}>
           每个连接器给小鲶接上一类工具。点开卡片，在详情里订阅。{EFFECT_NOTE}
+          自己写了连接器想给同事用，点右上角「提交连接器」，部门主管 (全公司范围: 管理员) 审核通过后同事就能订阅。
         </div>
       </Card>
+
+      <McpReviewSections reviewer={reviewer} />
 
       <div
         style={{

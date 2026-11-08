@@ -8,18 +8,21 @@
  *                          inline bar / 异常告警占位
  *   8/1: 跟概览页 / 性能页对齐 — 三张表改分段切换, KPI 换共享指标带,
  *        表格换共享 DataTable, 删掉永远不渲染的异常告警占位
+ *   11/08: 顶部多一个「分享审计」页签 (admin 才有) — 技能 / 专家包 / 知识页 / 连接器
+ *        四条线的提交 / 审核 / 试用 / 撤回合一张表 (audit/ShareAudit.tsx)。用量那套不动。
  */
 
 import { useEffect, useState } from "react";
 
 import { Section, Tabs } from "../components/DataTable";
 import { PageShell, Stale } from "../components/PageShell";
-import { RoleGate } from "../components/RoleGate";
+import { RoleGate, roleAllows } from "../components/RoleGate";
 import {
   fetchGlobalAudit,
   type AuditFilter,
   type GlobalAudit,
 } from "../lib/me";
+import { useAuthStore } from "../store/auth";
 
 
 // 5/20 拆 1090 → ~131: helpers + 4 子文件抽到 audit/
@@ -32,8 +35,13 @@ import {
 } from "./audit/AuditBreakdowns";
 import { FilterPillBar, PageHeader } from "./audit/AuditControls";
 import DataReconciliation from "./audit/DataReconciliation";
+import { ShareAudit } from "./audit/ShareAudit";
 
 export function AuditPage() {
+  const me = useAuthStore((s) => s.me);
+  // 分享审计的三个来源 (hub / wiki / mcp 的 /audit) 后端都是 admin only; manager 看不到这个页签
+  const shareAllowed = !!me && roleAllows(me.role, "admin");
+  const [view, setView] = useState<"usage" | "share">("usage");
   const [audit, setAudit] = useState<GlobalAudit | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -79,9 +87,34 @@ export function AuditPage() {
   const setSingleFilter = (next: AuditFilter) => setFilter(next);
   const clearFilter = () => setFilter({});
 
+  const viewTabs = shareAllowed && (
+    <Section>
+      <Tabs
+        active={view}
+        onChange={setView}
+        tabs={[
+          { key: "usage", label: "用量" },
+          { key: "share", label: "分享审计" },
+        ]}
+      />
+    </Section>
+  );
+
+  if (shareAllowed && view === "share") {
+    return (
+      <RoleGate require={["manager", "admin"]}>
+        <PageShell scroll="data">
+          {viewTabs}
+          <ShareAudit />
+        </PageShell>
+      </RoleGate>
+    );
+  }
+
   return (
     <RoleGate require={["manager", "admin"]}>
       <PageShell scroll="data">
+        {viewTabs}
         {error && (
           <Section>
             <div style={{ fontSize: 12, color: "var(--status-err)" }}>

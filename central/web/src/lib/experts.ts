@@ -3,6 +3,9 @@
  * 门户里不装 (装在 Companion 里, 要验签、落 profile); 这里看、审。
  */
 import { api } from "./api";
+import type { TrialRecord } from "./hub";
+
+export type { TrialRecord } from "./hub";
 
 export interface ExpertStep {
   id: string;
@@ -47,6 +50,8 @@ export interface ExpertPackMeta {
   reviewed_at?: string;
   review_note?: string;
   signature?: string;
+  /** 11/08: 审批人「装到我这里试用」的记录 + 试跑结果; 只有审批人 / 提交人拿得到 */
+  trials?: TrialRecord[];
 }
 
 type List = { experts: ExpertPackMeta[] };
