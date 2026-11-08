@@ -169,4 +169,4 @@
 - 门户: 四个市场页 + 分享审计, 测试 30。
 - Companion: 对话里发技能带范围 (`skill_publish` scope / departments / note); 装技能验签; 审批人「装到我这里试用」(技能 / 专家包 / MCP)、「回传试用结果」、「卸掉试用」, 审完自动卸 / 退订; 共享知识页 待审 / 已撤回 标 (搜索默认不列已撤回)。
 - 验收 (§5) 对应的自动测试: 技能 `central/skills-hub/tests/test_skill_review.py`, 知识 `central/wiki-hub/tests/test_wiki_hub_app.py` 末尾两条, MCP `central/mcp-registry/tests/test_submissions_api.py`, Companion `edge/tool-bridge/tests/test_skill_trial.py` + `SkillTrialUi.test.tsx` / `McpTrialUi.test.tsx`。
-- 没做成一键的: 试用通过后「转成正式安装」是自动卸掉试用 + 提示去市场点「安装」, 不是原地一键转; Companion 的「我的技能」卡上发布只有默认范围 (本部门), 要发全公司跟小鲶说。
+- 没做成一键的: 试用通过后「转成正式安装」是自动卸掉试用 + 提示去市场点「安装」, 不是原地一键转。Companion「我的技能」卡上分享时直接选范围 (本部门 / 全公司) + 给审批人的一句话 (1.2.123)。

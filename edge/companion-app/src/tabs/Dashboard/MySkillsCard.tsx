@@ -141,13 +141,13 @@ export default function MySkillsCard() {
    *   失败: {ok: False, error: "凭据扫描命中..."} (3 层安全扫描命中 / 缺 token / gateway 502)
    *
    * 所以**两层 ok 都要查** — dispatch_tool.ok=True 但 tool 内 ok=False = 真业务失败. */
-  const handlePublish = async (ns: string, skill: SkillEntry) => {
+  const handlePublish = async (ns: string, skill: SkillEntry, opts: PublishOpts) => {
     const skillKey = `${ns}/${skill.name}`;
     setShare({ phase: "publishing", skillKey });
     try {
       const result = await toolBridgeCallTool(
         "catfish_skill_publish",
-        { skill_path: skill.path, namespace: ns },
+        { skill_path: skill.path, namespace: ns, scope: opts.scope, ...(opts.note.trim() ? { note: opts.note.trim() } : {}) },
       );
       // L1: dispatch_tool 自己有没有异常 (网络/挂)
       if (!result.ok) {
@@ -306,7 +306,7 @@ export default function MySkillsCard() {
                 borderTop: "1px solid var(--catfish-border)",
               }}
             >
-              <ShareStatusBar share={share} onDismiss={dismiss} onPublish={(ns, s) => void handlePublish(ns, s)} skills={skills} />
+              <ShareStatusBar share={share} onDismiss={dismiss} onPublish={(ns, s, o) => void handlePublish(ns, s, o)} skills={skills} />
             </div>
           )}
         </>
@@ -319,6 +319,9 @@ export default function MySkillsCard() {
   );
 }
 
+/** 11/08 分享范围: 本部门 (部门主管审) / 全公司 (管理员审); 说明给审批人看 */
+export interface PublishOpts { scope: "department" | "company"; note: string }
+
 /** 6/2 BL-SKILLS-PUBLISH-WIRE: 共享状态条 — 1 个组件覆盖 4 个状态 (confirming/
  * publishing/done/error). 跟独立 dialog 不同, 这里 inline 在卡底, 让员工保留 skill
  * 列表视觉上下文, 不弹窗打断. */
@@ -330,9 +333,11 @@ function ShareStatusBar({
 }: {
   share: ShareState;
   onDismiss: () => void;
-  onPublish: (ns: string, skill: SkillEntry) => void;
+  onPublish: (ns: string, skill: SkillEntry, opts: PublishOpts) => void;
   skills: SkillNamespace[];
 }) {
+  const [scope, setScope] = useState<PublishOpts["scope"]>("department");
+  const [note, setNote] = useState("");
   // 通过 share.skillKey 反查 namespace + skill
   const found = (() => {
     if (!share.skillKey) return null;
@@ -351,11 +356,25 @@ function ShareStatusBar({
       <div style={{ fontSize: 12, color: "var(--catfish-text)" }}>
         共享 <code style={{ fontFamily: "var(--font-mono)" }}>{ns}/{skill.name}</code>
         {skill.version && <span style={{ opacity: 0.6 }}> v{skill.version}</span>}
-        {" "}到中央 hub? 提交后由部门主管审核, 通过了同部门同事才看得到 (想发全公司或指定部门, 跟小鲶说「分享到全公司」).
+        {" "}给同事用?
+        <div role="radiogroup" aria-label="分享范围" style={{ marginTop: 8, display: "flex", gap: 14, flexWrap: "wrap" }}>
+          {([["department", "本部门", "部门主管审核, 通过后同部门同事能装"], ["company", "全公司", "管理员审核, 通过后全公司都能装"]] as const).map(([v, label, hint]) => (
+            <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer" }} title={hint}>
+              <input type="radio" name="skill-share-scope" checked={scope === v} onChange={() => setScope(v)} />
+              {label}
+              <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>({hint})</span>
+            </label>
+          ))}
+        </div>
+        <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={300} aria-label="给审批人的说明"
+               placeholder="给审批人的一句话 (选填): 这个技能做什么、在哪个系统上用"
+               style={{ marginTop: 6, width: "100%", boxSizing: "border-box", fontSize: 12, padding: "4px 8px",
+                        border: "1px solid var(--catfish-border)", borderRadius: 4, background: "var(--catfish-bg)",
+                        color: "var(--catfish-text)" }} />
         <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
           <button
             type="button"
-            onClick={() => onPublish(ns, skill)}
+            onClick={() => onPublish(ns, skill, { scope, note })}
             style={{
               background: "var(--catfish-cyan, #38b2ac)",
               color: "#fff",

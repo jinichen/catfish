@@ -110,7 +110,8 @@ export function TrialSkillsList({ refreshKey, onChanged }: { refreshKey?: number
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
-    trialSkillList().then((r) => setItems(r.trials)).catch(() => setItems([]));
+    // 回来的数据少了 trials (老 tool-bridge / 出错) 当成没有试用, 不能让整张「我的技能」卡白屏
+    trialSkillList().then((r) => setItems(Array.isArray(r?.trials) ? r.trials : [])).catch(() => setItems([]));
   }, [refreshKey, tick]);
 
   if (!items.length) return null;
