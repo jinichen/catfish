@@ -394,7 +394,7 @@ export default function ChatTab() {
                 "对话" 两字被竖向压扁 (header 一行塞太多撞挤). */}
             <span className="chat-workspace__context-title">
               <img src="/catfish-avatar.svg" alt="" width={18} height={18} style={{ display: "block" }} />
-              对话
+              <span className="chat-workspace__context-label">对话</span>
             </span>
             {persistedSessionId && (
               <span

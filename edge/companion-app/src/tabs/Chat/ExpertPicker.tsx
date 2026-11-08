@@ -13,8 +13,8 @@ export function ExpertPicker({ disabled, onSwitch }: { disabled?: boolean; onSwi
   useEffect(() => { void refreshExperts(); }, []);
   if (experts.length === 0 && !selected) return null;
   return (
-    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }} title="跟小鲶聊, 还是找某个专家">
-      <span style={{ color: "var(--catfish-text-muted)", whiteSpace: "nowrap", flexShrink: 0 }}>找谁</span>
+    <label className="chat-expert-picker" title="跟小鲶聊, 还是找某个专家">
+      <span className="chat-expert-picker__label">找谁</span>
       <select
         value={selected ?? ""}
         disabled={disabled}

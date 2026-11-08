@@ -4771,12 +4771,77 @@ button {
   font-family: var(--font-sans);
 }
 
+.chat-expert-picker {
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.chat-expert-picker__label {
+  flex-shrink: 0;
+  color: var(--catfish-text-muted);
+  white-space: nowrap;
+}
+
 /* 10/18: 「找谁」跟任务 / 模型同高同样式 (原来是内联的小框, 三个不齐) */
 .chat-expert-picker__select {
+  min-width: 64px;
   max-width: 160px;
   padding: 4px 26px 4px 8px;
   font-family: var(--font-sans);
   text-overflow: ellipsis;
+}
+
+/* 11/08: 生成内容时右边「成果」栏自动打开, 聊天区只剩 360 左右 —— 三个选择器的最小宽度加起来 ~480,
+   右组 (justify-content: flex-end) 往左溢出, 盖到「对话」和左边会话列表上 (鸿波截图「上面的状态位置乱」)。
+   窄的时候进紧凑模式: 「对话」两个字、「找谁」、任务图标收起 (悬停有说明), 选择器最小宽度收小, 边距收小;
+   再窄就折成两行 —— 宁可多一行也不能互相盖住。 */
+@container (max-width: 640px) {
+  .chat-workspace__header {
+    gap: 8px;
+    padding: 8px 12px;
+  }
+  .chat-workspace__context-label,
+  .chat-expert-picker__label {
+    display: none;
+  }
+  .chat-workspace__controls {
+    gap: 6px;
+  }
+  .chat-task-picker {
+    min-width: 92px; /* 图标 15 + 间距 7 + 下拉 70 */
+    flex-shrink: 1; /* 紧凑时三个一起按比例缩, 不让任务下拉先缩成「—…」 */
+  }
+  .chat-task-picker__select {
+    min-width: 70px;
+  }
+  .chat-model-picker,
+  .chat-model-picker__select {
+    min-width: 92px;
+  }
+}
+
+@container (max-width: 440px) {
+  .chat-task-picker__label {
+    display: none;
+  }
+  .chat-task-picker {
+    min-width: 70px;
+  }
+}
+
+@container (max-width: 330px) {
+  .chat-workspace__header {
+    flex-wrap: wrap;
+  }
+  .chat-workspace__controls {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+    margin-left: 0;
+  }
 }
 
 .chat-task-picker__select[data-active="true"] {
