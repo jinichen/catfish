@@ -163,6 +163,38 @@ async def list_skills(
     return await _proxy(request, "/skills", user)
 
 
+# ── 11/08 技能审批 (docs/SHARE-GOVERNANCE-PLAN.md §3.1) ──
+
+@router.get("/skills/review")
+async def skills_review_list(request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, "/skills/review", user)
+
+
+@router.get("/skills/mine")
+async def skills_mine(request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, "/skills/mine", user)
+
+
+@router.post("/skills/{namespace}/{name}/{version}/review")
+async def skills_review(namespace: str, name: str, version: str, request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, f"/skills/{namespace}/{name}/{version}/review", user)
+
+
+@router.post("/skills/{namespace}/{name}/{version}/withdraw")
+async def skills_withdraw(namespace: str, name: str, version: str, request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, f"/skills/{namespace}/{name}/{version}/withdraw", user)
+
+
+@router.get("/skills/{namespace}/{name}/{version}/trial-token")
+async def skills_trial_token(namespace: str, name: str, version: str, request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, f"/skills/{namespace}/{name}/{version}/trial-token", user)
+
+
+@router.post("/skills/{namespace}/{name}/{version}/trial-result")
+async def skills_trial_result(namespace: str, name: str, version: str, request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, f"/skills/{namespace}/{name}/{version}/trial-result", user)
+
+
 @router.get("/skills/{namespace}/{name}")
 async def get_skill_latest(
     namespace: str,
@@ -277,6 +309,16 @@ async def experts_review(pack_id: str, version: str, request: Request, user: Use
 @router.post("/experts/{pack_id}/{version}/withdraw")
 async def experts_withdraw(pack_id: str, version: str, request: Request, user: User = Depends(get_current_user)) -> Response:
     return await _proxy(request, f"/experts/{pack_id}/{version}/withdraw", user)
+
+
+@router.get("/experts/{pack_id}/{version}/trial-token")
+async def experts_trial_token(pack_id: str, version: str, request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, f"/experts/{pack_id}/{version}/trial-token", user)
+
+
+@router.post("/experts/{pack_id}/{version}/trial-result")
+async def experts_trial_result(pack_id: str, version: str, request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, f"/experts/{pack_id}/{version}/trial-result", user)
 
 
 @router.get("/experts/{pack_id}/{version}/download")

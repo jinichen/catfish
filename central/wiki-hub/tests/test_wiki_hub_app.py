@@ -235,3 +235,39 @@ def test_sales_funnel_for_managers_only(client):
         assert client.get(url, headers=who).status_code == 403
     # 主管能在部门知识库列表里看到摘要 (管的部门), 也能打开
     assert client.get(_doc_url("销售部", fid), headers=SALES_MGR).status_code == 200
+
+
+# ── 11/08 知识页「待审」标 (docs/SHARE-GOVERNANCE-PLAN.md §3.2) ──────────────
+
+MGR = {**_h("mgr@x", "研发部", "manager"), "X-Catfish-User-Managed-Depts": urllib.parse.quote("研发部", safe="")}
+SALES_MGR = {**_h("smgr@x", "销售部", "manager"), "X-Catfish-User-Managed-Depts": urllib.parse.quote("销售部", safe="")}
+
+
+def test_发了即可见但带待审标_主管打钩后变已审(client):
+    r = _publish(client, ALICE)
+    assert r.status_code == 200 and r.json()["review_status"] == "pending"
+    fid = r.json()["file_id"]
+    docs = client.get("/wiki/documents", headers=BOB).json()["documents"]
+    assert [d["review_status"] for d in docs if d["file_id"] == fid] == ["pending"], "同事立刻能看到, 带待审标"
+    assert client.get(_doc_url("研发部", fid), headers=BOB).json()["review_status"] == "pending"
+    assert [d["file_id"] for d in client.get("/wiki/review", headers=MGR).json()["documents"]] == [fid]
+    assert client.get("/wiki/review", headers=SALES_MGR).json()["documents"] == []
+    assert client.post(_doc_url("研发部", fid) + "/review", headers=BOB, json={"decision": "approve"}).status_code == 403
+    ok = client.post(_doc_url("研发部", fid) + "/review", headers=MGR, json={"decision": "approve"}).json()
+    assert ok["review_status"] == "approved" and ok["reviewed_by"] == "mgr@x"
+    assert client.get(_doc_url("研发部", fid), headers=BOB).json()["review_status"] == "approved"
+    assert client.get("/wiki/review", headers=MGR).json()["documents"] == []
+    # 重发 (内容变了) 回到待审
+    _publish(client, ALICE, file_id=fid, body="正文 v2")
+    assert client.get(_doc_url("研发部", fid), headers=BOB).json()["review_status"] == "pending"
+
+
+def test_主管撤下要写原因_撤下后标已撤回且正文清零(client):
+    fid = _publish(client, ALICE).json()["file_id"]
+    r = client.post(_doc_url("研发部", fid) + "/review", headers=MGR, json={"decision": "withdraw"})
+    assert r.status_code == 400 and "写原因" in r.json()["detail"]
+    r = client.post(_doc_url("研发部", fid) + "/review", headers=MGR, json={"decision": "withdraw", "note": "客户信息不该发"})
+    assert r.json()["review_status"] == "withdrawn"
+    doc = client.get(_doc_url("研发部", fid), headers=BOB).json()
+    assert doc["stale_after_unpublish"] is True and doc["review_status"] == "withdrawn" and doc["review_note"] == "客户信息不该发"
+    assert client.get("/wiki/review", headers=MGR).json()["documents"] == []

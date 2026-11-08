@@ -117,6 +117,8 @@ class ManifestResponse(BaseModel):
     """GET /v1/mcp/manifest/{id} 完整响应 (含 OAuth / mcp_command 等内部字段)."""
 
     manifest: McpManifest
+    trial: bool = False
+    """11/08: true = 还在待审, 这是审批人试用 (Companion 装成试用身份, 审完自动退订)。"""
 
 
 class HealthResponse(BaseModel):
@@ -145,6 +147,8 @@ class SubscriptionView(BaseModel):
 
 class SubscribeRequest(BaseModel):
     connector_id: str = Field(..., min_length=1, max_length=100)
+    trial: bool = False
+    """11/08: 审批人订阅还在待审的连接器 (要有测试账号说明), 订阅记在审核记录里。"""
 
 
 class SubscribeResponse(BaseModel):

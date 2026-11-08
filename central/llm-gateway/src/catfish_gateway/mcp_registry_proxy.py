@@ -117,6 +117,10 @@ async def _proxy(
     headers["X-Catfish-User-Sub"] = _safe_header_value(user.sub or "")
     headers["X-Catfish-User-Dept"] = _safe_header_value(user.department or "")
     headers["X-Catfish-User-Role"] = _safe_header_value(user.role or "employee")
+    # 11/08 连接器审批要知道 manager 管哪些部门 (跟 skills_hub_proxy 同写法)
+    headers["X-Catfish-User-Managed-Depts"] = ",".join(
+        urllib.parse.quote(d, safe="") for d in (getattr(user, "managed_departments", None) or []) if d
+    )
 
     body = await request.body()
     client: httpx.AsyncClient = request.app.state.mcp_registry_client
@@ -190,6 +194,33 @@ async def unsubscribe(
     return await _proxy(
         request, f"/v1/mcp/subscribe/{subscription_id}", user
     )
+
+
+# ── 11/08 员工提交连接器 → 审批 (docs/SHARE-GOVERNANCE-PLAN.md §3.4) ──
+
+@router.post("/submit")
+async def submit_connector(request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, "/v1/mcp/submit", user)
+
+
+@router.get("/review")
+async def review_list(request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, "/v1/mcp/review", user)
+
+
+@router.get("/mine")
+async def my_submissions(request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, "/v1/mcp/mine", user)
+
+
+@router.get("/submissions/{sid}")
+async def submission_detail(sid: str, request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, f"/v1/mcp/submissions/{sid}", user)
+
+
+@router.post("/submissions/{sid}/review")
+async def review_submission(sid: str, request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, f"/v1/mcp/submissions/{sid}/review", user)
 
 
 @router.get("/subscribed")

@@ -195,6 +195,18 @@ async def publish_document(
     return await _proxy(request, "/wiki/documents", user)
 
 
+@router.get("/review")
+async def review_list(request: Request, user: User = Depends(get_current_user)) -> Response:
+    """11/08 待我审的知识页 (主管 / admin)。"""
+    return await _proxy(request, "/wiki/review", user)
+
+
+@router.post("/documents/dept/{dept}/{file_id}/review")
+async def review_document(dept: str, file_id: str, request: Request, user: User = Depends(get_current_user)) -> Response:
+    """11/08 主管看过打钩 / 撤下。"""
+    return await _proxy(request, _doc_path(dept, file_id, "/review"), user)
+
+
 @router.post("/documents/dept/{dept}/{file_id}/unpublish")
 async def unpublish_document(
     dept: str,

@@ -108,3 +108,49 @@
 - 员工发一页知识到部门：同部门立刻能搜到、页面带「待审」；主管打钩后标消失；主管撤下后，装过的人那边标「已撤回」、搜索默认不列。
 - 审批人试用专家包里的工作流：试跑一次，审核记录里出现每一步的结果。
 - 门户审计页能按四条线、按人、按时间查到以上每一步。
+
+## 6. 接口 (11/08 后端已实现, 门户 / Companion 按这个接)
+
+身份都由网关注入 (`X-Catfish-User-Sub / -Dept / -Role / -Managed-Depts`), 调用方只管带 OAuth token 走网关。
+审批人 = 部门范围: `role=manager` 且目标部门在 `managed_depts`; 公司范围: admin / sysadmin。
+
+### 6.1 技能 (网关 `/v1/hub/…` → skills-hub)
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/skills/{namespace}?scope=department\|company&departments=a,b&note=…` | multipart 提交 (同原来), 返 `{…, review: {status: pending, …}, summary}` |
+| GET | `/skills` | 只列你看得见的 (已通过且在范围内 / 自己提交的 / 待你审的); 每条多 `review: {scope, departments, status, submitted_by, submitted_at, reviewed_by, reviewed_at, review_note, legacy}`; 最新版待审时普通员工拿到上一个已通过的 |
+| GET | `/skills/review` | 待我审的 `{skills: [record]}` |
+| GET | `/skills/mine` | 我提交的 |
+| GET | `/skills/{ns}/{name}` / `/{ver}` | 原字段 + `review` (审批人 / 提交人多 `trials`); 看不见的 403 / 404 |
+| POST | `/skills/{ns}/{name}/{ver}/review` | `{decision: approve\|reject, note}`; approve 返 `signature` (Ed25519, 消息 `catfish-skill-v1\n ns\n name\n ver\n bundle_sha256\n reviewed_by\n reviewed_at`) |
+| POST | `/skills/{ns}/{name}/{ver}/withdraw` | 提交人 / 审批人 / admin |
+| GET | `/skills/{ns}/{name}/{ver}/trial-token` | 审批人: `{trial: true, expires, signature, public_key, bundle_sha256}`; 消息 `catfish-skill-trial-v1\n ns/name\n ver\n bundle_sha256\n by\n expires` |
+| POST | `/skills/{ns}/{name}/{ver}/trial-result` | 审批人回传 `{ok, summary, files[], steps[]}` |
+| GET | `/audit` | admin; 每条带 `line: skill\|expert` |
+
+`bundle_sha256` = 把 `files_sha256` 按路径排序, 每行 `path\tsha256`, 用 `\n` 连起来再 sha256 —— Companion 装机时按下载到的文件重算, 再用 `/experts/signing-key` 的公钥验签名。
+
+### 6.2 专家包 (同上 `/v1/hub/experts/…`)
+
+新增 `GET /experts/{id}/{ver}/trial-token` (同技能, 消息 `catfish-expert-trial-v1\n id\n ver\n sha256\n by\n expires`)、`POST /experts/{id}/{ver}/trial-result` (`{ok, summary, workflow, files[], steps[]}`); detail 对审批人 / 提交人多 `trials`。
+
+### 6.3 知识页 (网关 `/v1/wiki/…` → wiki-hub)
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/documents` | 同原来; 返回多 `review_status: pending` (重发也回到 pending) |
+| GET | `/documents`, `/documents/dept/{dept}/{id}` | 每条多 `review_status: pending\|approved\|withdrawn` (+ `reviewed_by/at`, `review_note`, `withdrawn_by/at`, 老的 `legacy: true`) |
+| GET | `/review` | 待我审的 (主管: 管的部门; admin 全部) |
+| POST | `/documents/dept/{dept}/{id}/review` | `{decision: approve\|withdraw, note}`; withdraw 要写原因, 等于 unpublish + 标 withdrawn |
+
+### 6.4 MCP (网关 `/v1/mcp/…` → mcp-registry)
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/submit` | `{manifest_yaml, scope, departments[], note, trial_credentials}` → `{submission: {id, status: pending, …}}` |
+| GET | `/review` / `/mine` | 待我审的 / 我提交的 `{submissions: […]}` |
+| GET | `/submissions/{id}` | `{submission, manifest_yaml}` (审批人 / 提交人) |
+| POST | `/submissions/{id}/review` | `{decision, note}`; approve → 写进 manifests, `allowed_dept` 按范围, 同事可订阅 |
+| GET | `/manifest/{id}` | 待审的只有审批人能拿到, 且返回 `trial: true` |
+| POST | `/subscribe` | 多 `trial: true`: 审批人订阅待审的连接器 (提交人要写了 `trial_credentials` 才行), 审计 `subscribe_trial` |

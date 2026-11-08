@@ -56,7 +56,7 @@ def _load_dotenv() -> Path | None:
 _ENV_FILE_LOADED = _load_dotenv()
 
 from . import __version__
-from . import sales, storage
+from . import review, sales, storage   # 11/08 review: 知识页「待审」标 (docs/SHARE-GOVERNANCE-PLAN.md §3.2)
 from .namespaces import can_see, is_admin, namespace_for, validate_dept
 
 logger = logging.getLogger("catfish.wiki_hub")
@@ -147,8 +147,14 @@ async def list_documents_endpoint(
     else:
         dept = (user.get("dept") or "").strip()
         visible = [namespace_for(dept)] if dept and validate_dept(dept) is None else []
-    docs = [d for d in storage.list_documents(visible, include_stale=include_stale) if not sales.hidden_from(user, d)]
+    docs = [review.annotate(d) for d in storage.list_documents(visible, include_stale=include_stale) if not sales.hidden_from(user, d)]
     return {"documents": docs, "count": len(docs)}
+
+
+@app.get("/wiki/review")
+async def review_list_endpoint(user: dict = Depends(require_user)) -> dict:
+    """11/08 待我审的知识页 (部门主管: 管的部门; admin: 全部)。知识页发了就可见, 这里是「看过打钩 / 撤下」。"""
+    return {"documents": review.pending_for(user)}
 
 
 def _require_visible(user: dict, dept: str) -> str:
@@ -181,7 +187,7 @@ async def get_document_endpoint(
         raise HTTPException(status_code=404, detail=f"{namespace}/{file_id} 不存在")
     if sales.hidden_from(user, doc):
         raise HTTPException(status_code=403, detail="这是同事的销售漏斗摘要, 只有本人和部门主管能看")
-    return doc
+    return review.annotate(doc)
 
 
 @app.get("/wiki/sales/dept/{dept}")
@@ -261,7 +267,33 @@ async def publish_document_endpoint(
     )
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "publish 失败"))
-    return result
+    # 11/08: 发了即可见, 但标「待审」; 重发 (内容变了) 也回到待审
+    rec = review.mark_pending(namespace, file_id, user["sub"])
+    return {**result, "review_status": rec["review_status"],
+            "note": "同部门同事现在就能看到, 页面上带「待审」标; 部门主管看过打钩后标消失"}
+
+
+@app.post("/wiki/documents/dept/{dept}/{file_id}/review")
+async def review_document_endpoint(
+    dept: str,
+    file_id: str,
+    payload: dict = Body(default={}),
+    user: dict = Depends(require_user),
+) -> dict:
+    """11/08 主管 / admin: approve (看过, 没问题) 或 withdraw (撤下, 要写原因)。"""
+    err = validate_dept(dept)
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+    namespace = namespace_for(dept)
+    if storage.get_document(namespace, file_id) is None:
+        raise HTTPException(status_code=404, detail=f"{namespace}/{file_id} 不存在")
+    try:
+        rec = review.decide(user, namespace, file_id, str(payload.get("decision") or ""), str(payload.get("note") or ""))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from None
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    return {"ok": True, "namespace": namespace, "file_id": file_id, **rec}
 
 
 @app.post("/wiki/documents/dept/{dept}/{file_id}/unpublish")

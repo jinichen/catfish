@@ -268,6 +268,47 @@ def withdraw(user: dict, pid: str, ver: str) -> dict[str, Any]:
     return _public(meta)
 
 
+def trial_token(user: dict, pid: str, ver: str) -> dict[str, Any]:
+    """11/08 审批人「装到我这里试用」: 临时签名 (7 天, 签名里带 trial), Companion 装成试用身份, 不进别人的市场。"""
+    import time  # noqa: PLC0415
+    from .skill_review import TRIAL_TTL_S, trial_message  # noqa: PLC0415
+    meta = _load(pid, ver)
+    if meta is None:
+        raise LookupError("没有这个专家包")
+    if not can_review(user, meta):
+        raise PermissionError("只有审批人能试用待审核的专家包")
+    if meta.get("status") not in ("pending", "approved"):
+        raise ValueError(f"这个版本的状态是 {meta.get('status')}, 不能试用")
+    expires = int(time.time()) + TRIAL_TTL_S
+    sig = _private_key().sign(trial_message("expert", pid, ver, meta["sha256"], user.get("sub") or "", expires))
+    meta.setdefault("trials", []).append({"by": user.get("sub"), "at": _now(), "expires": expires})
+    _save(meta)
+    _audit({"event": "trial", "id": pid, "version": ver, "by": user.get("sub")})
+    return {"id": pid, "version": ver, "sha256": meta["sha256"], "trial": True, "by": user.get("sub"), "expires": expires,
+            "signature": base64.b64encode(sig).decode(), "public_key": public_key_b64()}
+
+
+def trial_result(user: dict, pid: str, ver: str, result: dict[str, Any]) -> dict[str, Any]:
+    """试跑结果回传 (哪步成了 / 产出了什么), 记进审核记录。"""
+    meta = _load(pid, ver)
+    if meta is None:
+        raise LookupError("没有这个专家包")
+    if not can_review(user, meta):
+        raise PermissionError("只有审批人能回传试用结果")
+    trials = meta.setdefault("trials", [])
+    mine_t = next((t for t in reversed(trials) if t.get("by") == user.get("sub")), None)
+    if mine_t is None:
+        mine_t = {"by": user.get("sub"), "at": _now()}
+        trials.append(mine_t)
+    mine_t["result"] = {"ok": bool(result.get("ok")), "summary": str(result.get("summary") or "")[:1000],
+                        "workflow": str(result.get("workflow") or "")[:80],
+                        "files": [str(f) for f in (result.get("files") or [])][:20],
+                        "steps": [str(x)[:200] for x in (result.get("steps") or [])][:30], "at": _now()}
+    _save(meta)
+    _audit({"event": "trial_result", "id": pid, "version": ver, "by": user.get("sub"), "ok": mine_t["result"]["ok"]})
+    return {"ok": True, "trials": trials}
+
+
 def market(user: dict) -> list[dict[str, Any]]:
     """每个专家包已上架的最新版 (按部门过滤)。"""
     best: dict[str, dict] = {}
@@ -293,7 +334,10 @@ def detail(user: dict, pid: str, ver: str) -> dict[str, Any]:
     meta = _load(pid, ver)
     if meta is None or not can_see(user, meta):
         raise LookupError("没有这个专家包, 或者你看不到")
-    return _public(meta)
+    out = _public(meta)
+    if not (can_review(user, meta) or meta.get("submitted_by") == user.get("sub")):
+        out.pop("trials", None)   # 试用记录只给审批人 / 提交人看
+    return out
 
 
 def download(user: dict, pid: str, ver: str) -> tuple[bytes, dict[str, Any]]:

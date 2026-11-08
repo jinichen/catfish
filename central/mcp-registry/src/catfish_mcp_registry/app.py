@@ -57,6 +57,7 @@ _ENV_FILE_LOADED = _load_dotenv()
 from . import __version__
 from .db import make_db
 from .loader import ManifestRegistry
+from .submissions import Submissions, can_review   # 11/08 员工提交 → 审批 → 上架
 from .models import (
     ConnectorListItem,
     HealthResponse,
@@ -188,6 +189,21 @@ def _decode_header(value: str | None) -> str | None:
         return value
 
 
+def _user(request: Request) -> dict:
+    """11/08 审批要知道角色和管哪些部门 (gateway 注入, 跟 skills-hub 同一套头)。"""
+    h = request.headers
+    return {"sub": _decode_header(h.get("x-catfish-user-sub")), "dept": _decode_header(h.get("x-catfish-user-dept")),
+            "role": _decode_header(h.get("x-catfish-user-role")) or "employee",
+            "managed": [d for d in (_decode_header(x) for x in (h.get("x-catfish-user-managed-depts") or "").split(",")) if d]}
+
+
+def _subs(request: Request) -> Submissions:
+    s = getattr(request.app.state, "submissions", None)
+    if s is None:   # 跟 registry 同一个目录; 测试里跳过了 lifespan 也能用
+        s = request.app.state.submissions = Submissions(_registry(request).manifests_dir)
+    return s
+
+
 def _require_user_sub(x_catfish_user_sub: str | None) -> str:
     decoded = _decode_header(x_catfish_user_sub)
     if not decoded:
@@ -280,6 +296,10 @@ async def get_manifest(
     registry = _registry(request)
     manifest = registry.get(connector_id)
     if manifest is None:
+        # 11/08: 还在待审的, 审批人能看 (试用要拿 mcp_command)
+        trial_man = _subs(request).can_trial(_user(request), connector_id) if _ID_OK(connector_id) else None
+        if trial_man is not None:
+            return ManifestResponse(manifest=trial_man, trial=True)
         raise HTTPException(status_code=404, detail=f"connector not found: {connector_id}")
 
     # 部门权限: allowed_dept 空 = 全员可见; 非空且员工不在列 = 403
@@ -295,6 +315,75 @@ async def get_manifest(
 
 
 # ── Phase 2 (5/9): 订阅 / OAuth endpoints ────────────────────────────
+
+
+import re as _re  # noqa: E402
+
+_ID_OK = _re.compile(r"^[a-z][a-z0-9\-]{1,40}$").match
+
+
+def _sub_call(fn, *a, **k):
+    try:
+        return fn(*a, **k)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from None
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from None
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+
+
+@app.post("/v1/mcp/submit")
+async def submit_connector(request: Request, body: dict) -> dict:
+    """11/08 员工提交连接器 → 待审核 (部门范围由本部门主管审, 全公司由 admin)。"""
+    user = _user(request)
+    if not user["sub"]:
+        raise HTTPException(status_code=401, detail="missing X-Catfish-User-Sub")
+    rec = _sub_call(_subs(request).submit, user, str(body.get("manifest_yaml") or ""), scope=str(body.get("scope") or "department"),
+                    departments=list(body.get("departments") or []), note=str(body.get("note") or ""),
+                    trial_credentials=str(body.get("trial_credentials") or ""),
+                    existing_ids={m.id for m in _registry(request).list_all()})
+    request.app.state.db.write_audit(user_sub=user["sub"], connector_id=rec["id"], action="submit",
+                                     meta={"scope": rec["scope"], "departments": rec["departments"]})
+    return {"ok": True, "submission": rec,
+            "note": f"已提交, 等{'管理员' if rec['scope'] == 'company' else '部门主管'}审核通过后同事才能订阅"}
+
+
+@app.get("/v1/mcp/review")
+async def review_list(request: Request) -> dict:
+    """待我审的连接器 (部门主管: 管的部门; admin: 全部)。"""
+    return {"submissions": _subs(request).pending_for(_user(request))}
+
+
+@app.get("/v1/mcp/mine")
+async def my_submissions(request: Request) -> dict:
+    return {"submissions": _subs(request).mine(_user(request))}
+
+
+@app.get("/v1/mcp/submissions/{sid}")
+async def submission_detail(sid: str, request: Request) -> dict:
+    subs = _subs(request)
+    rec = subs.load(sid) if _ID_OK(sid) else None
+    user = _user(request)
+    if rec is None or not (can_review(user, rec) or rec.get("submitted_by") == user["sub"]):
+        raise HTTPException(status_code=404, detail="没有这份提交, 或者你看不到")
+    yp, _ = subs._paths(sid)
+    return {"submission": rec, "manifest_yaml": yp.read_text(encoding="utf-8") if yp.exists() else ""}
+
+
+@app.post("/v1/mcp/submissions/{sid}/review")
+async def review_submission(sid: str, request: Request, body: dict) -> dict:
+    """approve → 写进 manifests/, registry 重新加载, 同事能订阅; reject 写原因。"""
+    if not _ID_OK(sid):
+        raise HTTPException(status_code=400, detail="id 不合法")
+    user = _user(request)
+    rec = _sub_call(_subs(request).review, user, sid, str(body.get("decision") or ""), str(body.get("note") or ""),
+                    manifests_dir=_registry(request).manifests_dir)
+    if rec["status"] == "approved":
+        _registry(request).load_all()
+    request.app.state.db.write_audit(user_sub=user["sub"], connector_id=sid, action="review_" + str(body.get("decision") or ""),
+                                     meta={"note": rec.get("review_note")})
+    return {"ok": True, "submission": rec}
 
 
 @app.post("/v1/mcp/subscribe", response_model=SubscribeResponse)
@@ -319,6 +408,13 @@ async def subscribe(
     db = request.app.state.db
 
     manifest = registry.get(body.connector_id)
+    trial = False
+    if manifest is None and body.trial and _ID_OK(body.connector_id):
+        # 11/08 审批人试用待审的连接器: 要有测试账号说明, 且本人能审
+        manifest = _subs(request).can_trial(_user(request), body.connector_id)
+        trial = manifest is not None
+        if not trial:
+            raise HTTPException(status_code=403, detail="这个连接器不能试用: 不在待审核、你不是它的审批人, 或者提交人没写测试账号怎么拿")
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"connector {body.connector_id} 不存在")
 
@@ -333,7 +429,7 @@ async def subscribe(
 
     # 10/22: preview / deprecated 的不让订阅 —— 原来照收, 订阅了员工机也起不来 (OAuth 型
     # 连接器的凭据那一环员工机还没做), 记录在、工具没有, 管理员以为能用。
-    if manifest.status != "active":
+    if manifest.status != "active" and not trial:
         raise HTTPException(
             status_code=409,
             detail=f"connector {manifest.id} 还没开放订阅 (status={manifest.status})",
@@ -341,11 +437,13 @@ async def subscribe(
 
     auth_required = manifest.auth_type in ("oauth2", "api_key")
     sub_row = db.create_subscription(user_sub, manifest.id, auth_required)
+    if trial:
+        _subs(request).note_trial(_user(request), manifest.id)
     db.write_audit(
         user_sub=user_sub,
         connector_id=manifest.id,
-        action="subscribe",
-        meta={"auth_type": manifest.auth_type, "auth_required": auth_required},
+        action="subscribe_trial" if trial else "subscribe",
+        meta={"auth_type": manifest.auth_type, "auth_required": auth_required, "trial": trial},
     )
 
     view = _sub_row_to_view(sub_row, manifest)

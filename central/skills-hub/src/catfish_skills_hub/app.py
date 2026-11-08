@@ -67,6 +67,7 @@ _ENV_FILE_LOADED = _load_dotenv()
 
 from . import __version__
 from . import storage
+from . import skill_review as sr   # 11/08 技能的范围 / 审批 / 试用 (docs/SHARE-GOVERNANCE-PLAN.md)
 
 logger = logging.getLogger("catfish.skills_hub")
 
@@ -152,41 +153,74 @@ async def healthz() -> dict:
 
 
 @app.get("/skills")
-async def list_skills_endpoint(namespace: str | None = None) -> dict:
-    """列已发布 skill (按 ns/name 分组, 各取最新版本)."""
-    skills = storage.list_skills(namespace_filter=namespace)
+async def list_skills_endpoint(namespace: str | None = None, user: dict = Depends(require_user)) -> dict:
+    """列已发布 skill (按 ns/name 分组, 各取最新版本). 11/08: 只列你看得见的 (已通过且在范围内 / 自己提交的 / 待你审的), 每条带 review。"""
+    skills = sr.annotate_list(user, storage.list_skills(namespace_filter=namespace))
     return {"skills": skills, "count": len(skills)}
 
 
-@app.get("/skills/{namespace}/{name}")
-async def get_skill_latest(namespace: str, name: str) -> dict:
-    """获取 skill 最新版元信息."""
-    info = storage.get_skill(namespace, name, version="latest")
+# ── 11/08 技能审批: 待我审 / 我提交的 (放在 /skills/{namespace}/{name} 前面, 免得被当成 namespace) ──
+
+@app.get("/skills/review")
+async def skills_review_list(user: dict = Depends(require_user)) -> dict:
+    """待我审核的技能 (部门主管: 管的部门; admin: 全部)。"""
+    return {"skills": sr.pending_for(user)}
+
+
+@app.get("/skills/mine")
+async def skills_mine(user: dict = Depends(require_user)) -> dict:
+    return {"skills": sr.mine(user)}
+
+
+def _visible_or_404(user: dict, namespace: str, name: str, version: str, info: dict | None) -> dict:
     if info is None:
-        raise HTTPException(status_code=404, detail=f"skill {namespace}/{name} 不存在")
-    return info
+        raise HTTPException(status_code=404, detail=f"skill {namespace}/{name}/{version} 不存在")
+    rec = sr.record_for(namespace, name, version, str(info.get("published_by") or ""))
+    if not sr.can_see(user, rec):
+        raise HTTPException(status_code=403, detail=f"skill {namespace}/{name}/{version} 还没审核通过, 或不是给你部门的")
+    return {**info, "review": sr.detail(user, namespace, name, version, str(info.get("published_by") or ""))}
+
+
+def _latest_visible(user: dict, namespace: str, name: str) -> str | None:
+    """最新的、用户看得见的版本 (最新版还在待审时, 普通员工该拿到上一个已通过的)。文件系统两种模式都有。"""
+    d = storage._skills_dir() / namespace / name
+    if not d.is_dir():
+        return None
+    for v in sorted((p.name for p in d.iterdir() if p.is_dir() and not p.name.startswith(".")), reverse=True):
+        if sr.can_see(user, sr.record_for(namespace, name, v)):
+            return v
+    return None
+
+
+@app.get("/skills/{namespace}/{name}")
+async def get_skill_latest(namespace: str, name: str, user: dict = Depends(require_user)) -> dict:
+    """获取 skill 最新 (你看得见的) 版本元信息."""
+    try:
+        ver = _latest_visible(user, namespace, name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if ver is None:
+        raise HTTPException(status_code=404, detail=f"skill {namespace}/{name} 不存在, 或还没有你能看的版本")
+    return _visible_or_404(user, namespace, name, ver, storage.get_skill(namespace, name, version=ver))
 
 
 @app.get("/skills/{namespace}/{name}/{version}")
-async def get_skill_version(namespace: str, name: str, version: str) -> dict:
-    """获取 skill 指定版本元信息 + 文件列表 + SKILL.md 全文."""
+async def get_skill_version(namespace: str, name: str, version: str, user: dict = Depends(require_user)) -> dict:
+    """获取 skill 指定版本元信息 + 文件列表 + SKILL.md 全文 (+ review)."""
     try:
         info = storage.get_skill(namespace, name, version=version)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    if info is None:
-        raise HTTPException(
-            status_code=404, detail=f"skill {namespace}/{name}/{version} 不存在",
-        )
-    return info
+    return _visible_or_404(user, namespace, name, version, info)
 
 
 @app.get("/skills/{namespace}/{name}/{version}/files/{file_path:path}")
 async def download_skill_file(
-    namespace: str, name: str, version: str, file_path: str,
+    namespace: str, name: str, version: str, file_path: str, user: dict = Depends(require_user),
 ) -> Response:
-    """下载 skill 某个文件 (二进制). file_path 支持子目录 (e.g., 'tests/test_smoke.py')."""
+    """下载 skill 某个文件 (二进制). file_path 支持子目录 (e.g., 'tests/test_smoke.py'). 11/08: 看不见的版本拿不到文件。"""
     try:
+        _visible_or_404(user, namespace, name, version, storage.get_skill(namespace, name, version=version))
         content = storage.download_file(namespace, name, version, file_path)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -211,9 +245,14 @@ async def download_skill_file(
 async def publish_skill_endpoint(
     namespace: str,
     files: list[UploadFile],
+    scope: str = "department",
+    departments: str = "",
+    note: str = "",
     user: dict = Depends(require_user),
 ) -> dict:
-    """发布 skill — multipart files. 必须含 SKILL.md.
+    """提交 skill — multipart files. 必须含 SKILL.md.
+    11/08: 发了不再直接上架 —— 进待审核 (scope=department 由本部门主管审 / company 由管理员审), 通过才能被别人看到。
+    scope / departments (逗号分隔, 部门范围默认提交人自己的部门) / note 走 query 参数 (multipart 正文只放文件)。
 
     curl -X POST http://localhost:8997/skills/department \\
          -H "Authorization: Bearer dev-token-local" \\
@@ -240,7 +279,48 @@ async def publish_skill_endpoint(
     result = storage.publish_skill(namespace, file_map, published_by=user["sub"])
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "publish 失败"))
-    return result
+    info = storage.get_skill(namespace, result["name"], version=result["version"]) or {}
+    try:
+        review = sr.submit(user, namespace, result["name"], result["version"], info.get("files_sha256") or {},
+                           scope=scope, departments=[d for d in departments.split(",") if d.strip()], note=note)
+    except ValueError as e:
+        storage.delete_skill_version(namespace, result["name"], result["version"], deleted_by=user["sub"], reason="提交参数不对")
+        raise HTTPException(status_code=400, detail=str(e))
+    who = "管理员" if scope == "company" else "部门主管"
+    return {**result, "review": review,
+            "summary": f"已提交 {namespace}/{result['name']}/{result['version']} ({len(file_map)} 个文件), 等{who}审核通过后同事才能看到"}
+
+
+def _review_call(fn, *args):
+    try:
+        return fn(*args)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from None
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from None
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+
+
+@app.post("/skills/{namespace}/{name}/{version}/review")
+async def skills_review(namespace: str, name: str, version: str, body: dict, user: dict = Depends(require_user)) -> dict:
+    return _review_call(sr.review, user, namespace, name, version, str(body.get("decision") or ""), str(body.get("note") or ""))
+
+
+@app.post("/skills/{namespace}/{name}/{version}/withdraw")
+async def skills_withdraw(namespace: str, name: str, version: str, user: dict = Depends(require_user)) -> dict:
+    return _review_call(sr.withdraw, user, namespace, name, version)
+
+
+@app.get("/skills/{namespace}/{name}/{version}/trial-token")
+async def skills_trial_token(namespace: str, name: str, version: str, user: dict = Depends(require_user)) -> dict:
+    """审批人「装到我这里试用」: 7 天临时签名 (带 trial), Companion 装成试用身份。"""
+    return _review_call(sr.trial_token, user, namespace, name, version)
+
+
+@app.post("/skills/{namespace}/{name}/{version}/trial-result")
+async def skills_trial_result(namespace: str, name: str, version: str, body: dict, user: dict = Depends(require_user)) -> dict:
+    return _review_call(sr.trial_result, user, namespace, name, version, body or {})
 
 
 @app.delete("/skills/{namespace}/{name}/{version}")
@@ -265,8 +345,20 @@ async def audit_endpoint(
     limit: int = 100,
     user: dict = Depends(require_admin),  # noqa: ARG001
 ) -> dict:
-    """admin 看发布 / 删除审计 (倒序最近 N 条)."""
-    return {"events": storage.read_audit(limit=limit), "limit": limit}
+    """admin 看审计 (倒序最近 N 条)。11/08: 技能 (提交 / 审核 / 试用 / 删除) 和专家包两条线合在一起, 每条带 line。"""
+    import json as _json  # noqa: PLC0415
+    events = [{"line": e.get("line") or "skill", **e} for e in storage.read_audit(limit=limit)]
+    try:
+        lines = (experts._root() / "audit.jsonl").read_text(encoding="utf-8").splitlines()
+        for ln in lines[-limit:]:
+            try:
+                events.append({"line": "expert", **_json.loads(ln)})
+            except ValueError:
+                continue
+    except OSError:
+        pass
+    events.sort(key=lambda e: str(e.get("ts") or ""), reverse=True)
+    return {"events": events[:limit], "limit": limit}
 
 
 # ── 专家包 (10/18, experts.py, docs/EXPERT-PACK-PLAN.md §5) ───────────
@@ -339,6 +431,17 @@ async def experts_review(pack_id: str, version: str, body: dict, user: dict = De
 @app.post("/experts/{pack_id}/{version}/withdraw")
 async def experts_withdraw(pack_id: str, version: str, user: dict = Depends(require_user)) -> dict:
     return _expert_call(experts.withdraw, user, pack_id, version)
+
+
+@app.get("/experts/{pack_id}/{version}/trial-token")
+async def experts_trial_token(pack_id: str, version: str, user: dict = Depends(require_user)) -> dict:
+    """11/08 审批人「装到我这里试用」: 7 天临时签名 (带 trial)。"""
+    return _expert_call(experts.trial_token, user, pack_id, version)
+
+
+@app.post("/experts/{pack_id}/{version}/trial-result")
+async def experts_trial_result(pack_id: str, version: str, body: dict, user: dict = Depends(require_user)) -> dict:
+    return _expert_call(experts.trial_result, user, pack_id, version, body or {})
 
 
 @app.get("/experts/{pack_id}/{version}/download")
