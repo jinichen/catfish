@@ -440,7 +440,8 @@ def _safe_rel_path(home: Path, rel_path: str) -> tuple[Path | None, str | None]:
     直白的 `../`, 挡不住符号链接指出去。这里多做一步 resolve 后确认仍在
     home 底下 —— 鲶鱼是自动调用的, 比人手点 UI 更值得多一道。
     """
-    if ".." in rel_path or not rel_path.startswith("wiki/"):
+    # 11/08: 装机部门 wiki (wiki-shared/dept/<部门>/<id>.md) 也能读 —— 搜索结果给的就是这种路径, 以前读不了
+    if ".." in rel_path or not rel_path.startswith(("wiki/", "wiki-shared/dept/")):
         return None, f"rel_path 白名单不通过: {rel_path}"
     abs_path = (home / rel_path)
     try:

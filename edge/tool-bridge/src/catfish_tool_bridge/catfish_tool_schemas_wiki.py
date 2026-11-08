@@ -110,26 +110,20 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_wiki_search",
         "description": (
-            "按关键词搜员工个人知识库 (wiki), 含已装到本机的部门 wiki. 返回 top-K 条目的 "
-            "开头约 1500 字和 rel_path.\n"
-            "用于: '我 wiki 里关于 X 写过啥' / '之前记的 Y' / 公司或部门关于 Z 的流程规定 / "
-            "某客户在知识库里有没有条目.\n"
-            "要全文 → 拿 rel_path 调 catfish_wiki_read. 要列出全部条目 → catfish_wiki_list.\n"
-            "不用于: catfish 设计文档 (catfish_search_docs) / skill (catfish_search_skills) / "
-            "邮件、历史对话、附件、本机文件 (catfish_email_search / catfish_search_sessions / "
-            "catfish_search_attachments / catfish_search_files)."
+            "搜员工个人知识库 (wiki, 含装到本机的部门 wiki): 关键词 + 语义 + 顺着关系扩一跳, 标题 / 别名 / "
+            "属性值 (证书编号、登记号) / 全文都搜。每条带类型、已填属性、状态 (有效 / 即将到期 …)、最相关的一段。\n"
+            "用于: 知识库里关于 X 写过啥 / 公司或部门的流程规定 / 某客户、证书、项目、人有没有条目.\n"
+            "全文和全部关系 → catfish_wiki_read 调 rel_path; 按属性筛 (快到期 / 某部门的 / 没填的) → catfish_wiki_query; "
+            "列全部 → catfish_wiki_list. 已过期 / 已结束、待确认的默认不列 (summary 里说有几条).\n"
+            "不用于: 邮件 / 本机文件 / catfish 设计文档 / skill (各有自己的搜索工具)."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "关键词或自然语言, 例 '资质评估流程'",
-                },
-                "top_k": {
-                    "type": "integer",
-                    "description": "默认 5, 上限 15",
-                },
+                "query": {"type": "string", "description": "关键词或自然语言, 例 '资质评估流程' / 'ZTY2026…' (编号也行)"},
+                "top_k": {"type": "integer", "description": "默认 5, 上限 15"},
+                "include_expired": {"type": "boolean", "description": "true 把已过期 / 已结束的也列出来"},
+                "include_pending": {"type": "boolean", "description": "true 把待确认 (关系没对上) 的也列出来"},
             },
             "required": ["query"],
         },

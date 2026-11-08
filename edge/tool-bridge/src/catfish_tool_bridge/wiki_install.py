@@ -50,8 +50,16 @@ logger = logging.getLogger("catfish.tool_bridge.wiki_install")
 
 
 GATEWAY_URL = skill_publish.GATEWAY_URL
-WIKI_SHARED_ROOT = Path.home() / ".catfish" / "wiki-shared"
-WIKI_INSTALL_AUDIT = Path.home() / ".catfish" / "wiki_install_audit.jsonl"
+# 11/08: 跟搜索 / 读取同一个根 (CATFISH_HOME 设了就用它; 以前这里写死 ~/.catfish, 装进来的页搜不到)
+from .wiki_files import _catfish_home as _home  # noqa: E402
+
+
+def _shared_root() -> Path:
+    return _home() / "wiki-shared"
+
+
+def _audit_path() -> Path:
+    return _home() / "wiki_install_audit.jsonl"
 
 
 def _read_id_token() -> str | None:
@@ -80,8 +88,8 @@ def _validate_ns_and_id(namespace: str, file_id: str) -> str | None:
 def _write_install_audit(event: dict) -> None:
     """append 一行 audit. 失败静默."""
     try:
-        WIKI_INSTALL_AUDIT.parent.mkdir(parents=True, exist_ok=True)
-        with open(WIKI_INSTALL_AUDIT, "a", encoding="utf-8") as f:
+        _audit_path().parent.mkdir(parents=True, exist_ok=True)
+        with open(_audit_path(), "a", encoding="utf-8") as f:
             f.write(json.dumps(event, ensure_ascii=False) + "\n")
     except Exception as e:
         logger.warning("写 wiki_install_audit.jsonl 失败: %s", e)
@@ -161,7 +169,7 @@ def wiki_install(args: dict[str, Any]) -> dict[str, Any]:
     hub_updated_at = doc.get("updated_at") or ""
 
     # 写本机 ~/.catfish/wiki-shared/<ns>/<file_id>.md
-    target_dir = WIKI_SHARED_ROOT / namespace
+    target_dir = _shared_root() / namespace
     target_dir.mkdir(parents=True, exist_ok=True)
     target_md = target_dir / f"{file_id}.md"
 

@@ -38,7 +38,10 @@ from typing import Iterable
 _CJK_RANGE = ('一', '鿿')
 
 # 按这些字符切 ASCII (标点 / 引号 / 括号 / 通用符号). 不切 CJK char (它们各自一 token).
-_ASCII_SPLIT_RE = re.compile(r"[\s,.;:!?'\"()\[\]{}<>/\\|@#$%^&*=+~`\-]+")
+# 11/08: 原来只按 ASCII 标点切, 「证书编号ZTY2026011513590212，由…」里编号后面紧跟的中文标点被粘进了
+# token (「zty2026011513590212，」), 搜编号永远对不上 —— 鸿波机器上 262/659 条知识正文有这种写法
+# (证书编号 / 软著登记号 / 文号 / 日期)。中文标点、全角符号、通用标点也当分隔符。
+_ASCII_SPLIT_RE = re.compile(r"[\s,.;:!?'\"()\[\]{}<>/\\|@#$%^&*=+~`\-\u2000-\u206f\u3000-\u303f\uff00-\uffef]+")
 
 
 def tokenize(text: str) -> list[str]:

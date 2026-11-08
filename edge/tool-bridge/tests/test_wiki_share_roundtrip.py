@@ -42,8 +42,7 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
     monkeypatch.setattr(wiki_publish, "PUBLISH_STATE_PATH", tmp_path / ".catfish" / "wiki_publish_state.json")
     monkeypatch.setattr(wiki_publish, "SENSITIVE_TERMS_PATH", tmp_path / "none")
-    monkeypatch.setattr(wiki_install, "WIKI_SHARED_ROOT", tmp_path / ".catfish" / "wiki-shared")
-    monkeypatch.setattr(wiki_install, "WIKI_INSTALL_AUDIT", tmp_path / ".catfish" / "audit.jsonl")
+    monkeypatch.delenv("CATFISH_HOME", raising=False)   # 11/08: 装机根目录跟搜索一样走 _catfish_home (= Path.home()/.catfish)
     d = tmp_path / ".catfish" / "wiki" / "entities"
     d.mkdir(parents=True)
     (d / "老李.md").write_text("---\ntitle: 老李\n---\n\n正文\n", encoding="utf-8")
@@ -101,7 +100,7 @@ def test_install_records_hub_updated_at_and_encodes_dept(home, gateway):
     assert calls[0].url.raw_path.decode() == (
         f"/v1/wiki/documents/dept/{urllib.parse.quote('研发部')}/abc123def456"
     )
-    meta_path = wiki_install.WIKI_SHARED_ROOT / "dept" / "研发部" / "abc123def456.meta.json"
+    meta_path = wiki_install._shared_root() / "dept" / "研发部" / "abc123def456.meta.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     assert meta["hub_updated_at"] == "2026-09-30T02:00:00Z"
 

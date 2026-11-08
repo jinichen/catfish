@@ -14,3 +14,12 @@ def test_skills_loader_module_is_stubbed_in_central():
 
     with pytest.raises(RuntimeError, match="DEPRECATED 5/26"):
         m.any_attr_should_raise  # 触发 __getattr__ stub
+
+
+def test_tokenize_编号后面紧跟中文标点_不粘进词里():
+    """11/08: 「证书编号ZTY2026…，由…」切成了 'zty2026…，', 搜编号永远对不上 (跟 tool-bridge 同一份算法)。"""
+    from catfish_gateway.skills_retrieval import tokenize
+
+    toks = tokenize("证书编号ZTY2026011513590212，文号〔2026〕48号；CCRC-2019-ISV")
+    assert "zty2026011513590212" in toks and "zty2026011513590212，" not in toks
+    assert "2026" in toks and "ccrc" in toks

@@ -273,10 +273,18 @@ def describe(rel_path: str) -> dict[str, Any]:
 
 # ─── 按属性查 (catfish_wiki_query) ─────────────────────────────────────────
 
+def _typed_dirs(home: Path) -> list[tuple[Path, str]]:
+    """自家两个目录 + 装机部门 wiki (11/08: 部门发下来的证书 / 项目页以前进不了按属性查)。"""
+    out = [(home / sub, sub) for sub in _OWN_DIRS]
+    shared = home / "wiki-shared" / "dept"
+    if shared.is_dir():
+        out += [(d, f"wiki-shared/dept/{d.name}") for d in sorted(shared.iterdir()) if d.is_dir()]
+    return out
+
+
 def _iter_typed(type_key: str, schema: dict[str, dict[str, Any]]):
     home = wiki_files._catfish_home()
-    for sub in _OWN_DIRS:
-        d = home / sub
+    for d, sub in _typed_dirs(home):
         if not d.is_dir():
             continue
         for path in sorted(d.glob("*.md")):
@@ -285,6 +293,11 @@ def _iter_typed(type_key: str, schema: dict[str, dict[str, Any]]):
             except OSError:
                 continue
             fm, body = wiki_files._split_frontmatter(content)
+            # 11/08: 废弃 / 驳回的不算 (以前过期证书的旧页和正主一起被查出来)
+            if (wiki_files._parse_field(fm, "deprecated") or "").strip().lower() in ("true", "yes", "1"):
+                continue
+            if (wiki_files._parse_field(fm, "ontology_status") or "").strip().lower() == "rejected":
+                continue
             if type_of(fm, schema) == type_key:
                 yield f"{sub}/{path.name}", fm, body
 
@@ -324,7 +337,11 @@ def query(args: dict[str, Any]) -> dict[str, Any]:
     fields = [str(f) for f in (args.get("fields") or []) if str(f)]
     status_from = (tdef.get("status") or {}).get("from")
     shown = {str(c.get("field")) for c in where if isinstance(c, dict)} | {str(args.get("sort") or ""), str(status_from or "")} | set(fields)
+    # 11/08: 以前是「按文件名顺序收前 limit 条, 再排序」—— 「最早到期的 15 张证书」实际是字母序前 15 张里最早的。
+    # 现在全部符合的先收齐、排好序, 再截 limit。
     items, total = [], 0
+    sort_key = str(args.get("sort") or "").strip()
+    sort_prop = props_def.get(sort_key)
     for rel, fm, _body in _iter_typed(type_key, schema):
         props = read_props(fm, tdef)
         st = status_of(props, tdef)
@@ -343,13 +360,14 @@ def query(args: dict[str, Any]) -> dict[str, Any]:
         if not ok:
             continue
         total += 1
-        if len(items) < limit:
-            title = _unquote(wiki_files._parse_field(fm, "title") or "") or Path(rel).stem
-            picked = props if "*" in fields else {k: v for k, v in props.items() if k in shown}
-            items.append({"rel_path": rel, "title": title, "props": picked, "status": st["value"] if st else None})
-    sort_key = str(args.get("sort") or "").strip()
-    if sort_key in props_def:
-        items.sort(key=lambda x: x["props"].get(sort_key) or "9999")
+        title = _unquote(wiki_files._parse_field(fm, "title") or "") or Path(rel).stem
+        picked = props if "*" in fields else {k: v for k, v in props.items() if k in shown}
+        items.append({"rel_path": rel, "title": title, "props": picked, "status": st["value"] if st else None})
+    if sort_prop is not None:
+        is_date = sort_prop.get("type") == "date"
+        # 没填的排最后 (日期按 ISO 比, 文字按字面比)
+        items.sort(key=lambda x: ((v := x["props"].get(sort_key) or "") == "", normalize_date(v) if is_date else v))
+    items = items[:limit]
     return {"ok": True, "type": type_key, "label": tdef.get("label"), "total": total, "items": items,
             "note": "属性没填的条目按条件比较时算不满足; 想看哪些没填用 where=[{field, empty: true}]"}
 
