@@ -99,8 +99,8 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
     if method == "pim/calendar_events":
         from . import local_pim  # noqa: PLC0415
         rng = str(params.get("range") or "today")
-        if rng not in ("today", "natural-week"):
-            return _error(req_id, INVALID_PARAMS, "range 只支持 today / natural-week")
+        if rng not in ("today", "natural-week", "upcoming"):
+            return _error(req_id, INVALID_PARAMS, "range 只支持 today / natural-week / upcoming")
         return _success(req_id, local_pim.events_for_range(rng))
 
     # 11/4: 「我的记忆」卡片上「待你确认的整理建议」(memory_pending.py), 不进模型工具清单

@@ -7,6 +7,7 @@
 // 子命令:
 //   today  --json     → 输出今日 events JSON
 //   natural-week --json → 输出本自然周（周一到周日）events JSON
+//   upcoming --json   → 今天 0 点起 4 天的 events JSON (11/09 会前准备: 周五要看得到下周一的会)
 //   list-cals --json  → 列所有日历账号
 //   create --title=X --start=ISO --end=ISO [--location=L] [--description=D] [--calendar=C]
 //                     → 创建事件, 返 JSON {ok, event_id}
@@ -203,6 +204,25 @@ func cmdWeek() {
     printJSON(events.map(eventToOut))
 }
 
+/// 11/09 会前准备: 今天 0 点 → 4 天后 0 点。周五也能看到下周一的会 (自然周看不到)。
+func cmdUpcoming() {
+    guard let store = requestAccess() else { exit(2) }
+
+    let cal = Calendar.current
+    let startOfDay = cal.startOfDay(for: Date())
+    let end = cal.date(byAdding: .day, value: 4, to: startOfDay)!
+
+    let predicate = store.predicateForEvents(
+        withStart: startOfDay,
+        end: end,
+        calendars: nil
+    )
+    let events = filterSubscribed(store.events(matching: predicate))
+        .sorted { $0.startDate < $1.startDate }
+
+    printJSON(events.map(eventToOut))
+}
+
 func cmdListCalendars() {
     guard let store = requestAccess() else { exit(2) }
     let cals = store.calendars(for: .event)
@@ -274,7 +294,7 @@ func cmdCreate(args: [String]) {
 
 let args = CommandLine.arguments
 guard args.count >= 2 else {
-    printErr("用法: catfish-calendar today|natural-week|list-cals|create [--args]")
+    printErr("用法: catfish-calendar today|natural-week|upcoming|list-cals|create [--args]")
     exit(1)
 }
 
@@ -286,6 +306,8 @@ case "today":
     cmdToday()
 case "week", "natural-week":
     cmdWeek()
+case "upcoming":
+    cmdUpcoming()
 case "list-cals":
     cmdListCalendars()
 case "create":

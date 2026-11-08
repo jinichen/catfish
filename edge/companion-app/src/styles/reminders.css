@@ -235,3 +235,45 @@
     transition: none;
   }
 }
+
+/* 11/09 小鲶秘书: 定时任务做完 (绿) / 没做成 (红) / 托管提议 (主色) */
+.reminder-bar[data-kind="cron"] {
+  --reminder-accent: var(--status-ok);
+}
+.reminder-bar[data-kind="cron"][data-status="error"] {
+  --reminder-accent: var(--status-err);
+}
+
+/* 「看结果」弹窗 (tabs/Chat/CronResultDialog.tsx) */
+.cron-result__head {
+  margin-bottom: 12px;
+}
+.cron-result__title {
+  margin: 0;
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+.cron-result__sub {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--catfish-text-muted);
+}
+.cron-result__warn {
+  color: var(--status-warn);
+}
+.cron-result__body {
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.cron-result__muted {
+  color: var(--catfish-text-muted);
+}
+.cron-result__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--catfish-border);
+}

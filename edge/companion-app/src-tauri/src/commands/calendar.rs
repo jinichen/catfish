@@ -216,6 +216,80 @@ out.sort((a, b) => a.start.localeCompare(b.start));
 JSON.stringify(out);
 "#;
 
+#[cfg(not(windows))] // Windows 见 windows_events
+/// 11/09 会前准备: 今天 0 点起 4 天 (周五要看得到下周一的会)。跟自然周同一段脚本, 只换区间。
+const JXA_UPCOMING_EVENTS: &str = r#"
+const Calendar = Application("Calendar");
+Calendar.includeStandardAdditions = true;
+
+const today = new Date();
+today.setHours(0, 0, 0, 0);
+const weekStart = new Date(today);
+const weekEnd = new Date(today);
+weekEnd.setDate(weekEnd.getDate() + 4);
+
+const out = [];
+try {
+  const cals = Calendar.calendars();
+  for (let i = 0; i < cals.length; i++) {
+    const cal = cals[i];
+    // 同 today: 跳订阅 / readonly calendar 减查询次数 (5/20 鸿波报超时优化)
+    try {
+      if (cal.writable && cal.writable() === false) continue;
+    } catch (_) {}
+    let evts;
+    try {
+      evts = cal.events.whose({
+        _and: [
+          { startDate: { _greaterThanEquals: weekStart } },
+          { startDate: { _lessThan: weekEnd } },
+        ],
+      })();
+    } catch (e) {
+      continue;
+    }
+    for (let j = 0; j < evts.length; j++) {
+      const e = evts[j];
+      try {
+        const item = {
+          calendar: cal.name(),
+          summary: e.summary() || "(无标题)",
+          start: e.startDate().toISOString(),
+          end: e.endDate().toISOString(),
+          all_day: e.alldayEvent(),
+        };
+        try { item.location = e.location() || ""; } catch (_) {}
+        // BL-COMPANION-BRIEFING-V2 (5/20): attendees / description (跟 today 同套路)
+        try {
+          const atts = e.attendees();
+          if (atts && atts.length > 0) {
+            const names = [];
+            for (let k = 0; k < atts.length; k++) {
+              try {
+                const nm = atts[k].displayName();
+                const em = atts[k].emailAddress();
+                if (nm) names.push(nm);
+                else if (em) names.push(em);
+              } catch (_) {}
+            }
+            if (names.length > 0) item.attendees = names;
+          }
+        } catch (_) {}
+        try {
+          const desc = e.description();
+          if (desc) {
+            item.description = desc.length > 500 ? desc.slice(0, 500) + "…" : desc;
+          }
+        } catch (_) {}
+        out.push(item);
+      } catch (e2) {}
+    }
+  }
+} catch (e) {}
+out.sort((a, b) => a.start.localeCompare(b.start));
+JSON.stringify(out);
+"#;
+
 /// 取本自然周 events 列表 (周一 0 点 — 下周一 0 点). BL-CALENDAR-WEEK (5/20).
 ///
 /// 设计同 calendar_today_fetch: osascript JXA + 5min 缓存 + force_refresh 跳缓存.
@@ -262,6 +336,46 @@ pub async fn calendar_week_fetch(force_refresh: Option<bool>) -> Result<String, 
         }
     }
 
+    result
+}
+
+/// 11/09 会前准备 (hooks/useMeetingPrep.ts): 今天 0 点起 4 天的 events。
+/// 自然周在周五 / 周日看不到下周一的会, 所以单开一个区间; 缓存跟 week 一样 5 分钟。
+fn upcoming_cache() -> &'static Mutex<Option<(Instant, String)>> {
+    static CACHE: OnceLock<Mutex<Option<(Instant, String)>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
+#[tauri::command]
+pub async fn calendar_upcoming_fetch(force_refresh: Option<bool>) -> Result<String, String> {
+    if !force_refresh.unwrap_or(false) {
+        let guard = upcoming_cache().lock().map_err(|e| format!("upcoming_cache lock 坏 {e}"))?;
+        if let Some((fetched_at, json)) = guard.as_ref() {
+            if fetched_at.elapsed() < CACHE_TTL {
+                return Ok(json.clone());
+            }
+        }
+    }
+    #[cfg(windows)]
+    let result = windows_events("upcoming").await;
+    #[cfg(not(windows))]
+    let result = tokio::task::spawn_blocking(|| {
+        // 老 helper 不认 upcoming → unknown command → 走 JXA (跟 natural-week 上线时一样)
+        match run_eventkit("upcoming", EVENTKIT_TIMEOUT) {
+            Ok(json) => Ok(json),
+            Err(e) => {
+                eprintln!("[calendar] EventKit upcoming 不可用 ({}), fallback osascript", e);
+                run_osascript(JXA_UPCOMING_EVENTS, Duration::from_secs(20))
+            }
+        }
+    })
+    .await
+    .map_err(|e| format!("join error: {e}"))?;
+    if let Ok(json) = &result {
+        if let Ok(mut guard) = upcoming_cache().lock() {
+            *guard = Some((Instant::now(), json.clone()));
+        }
+    }
     result
 }
 

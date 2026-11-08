@@ -183,6 +183,10 @@ export const calendarTodayFetch = (forceRefresh = false) =>
 export const calendarWeekFetch = (forceRefresh = false) =>
   rawInvoke<string>("calendar_week_fetch", { forceRefresh });
 
+/** 11/09 会前准备: 今天 0 点起 4 天的日程 (周五也看得到下周一的会)。 */
+export const calendarUpcomingFetch = (forceRefresh = false) =>
+  rawInvoke<string>("calendar_upcoming_fetch", { forceRefresh });
+
 export interface CalendarEvent {
   calendar: string;     // 日历名 (Home / Work / 节假日 ...)
   summary: string;      // 事件标题

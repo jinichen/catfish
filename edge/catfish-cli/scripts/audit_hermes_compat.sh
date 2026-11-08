@@ -460,6 +460,30 @@ check_grep "tools/process_registry.py" "if not _IS_LINUX:" "Mac/Windows 定时�
 check_grep "cron/scheduler.py" "^        discover_plugins\(\)" "Linux 子进程跑定时任务时也加载插件"
 echo ""
 
+# ============================================================
+# Section 22 — 小鲶秘书 (Companion 11/09) 用到的 hermes 定时任务接口和存档格式
+# ============================================================
+#
+# Companion 不打补丁, 直接用这些; 变了不报错, 只是:
+#   · 托管周期性事务 / 会前准备建不了任务 (POST /api/jobs) —— 提醒条上点「好」报错
+#   · 「重跑」没反应 (POST /api/jobs/{id}/run)
+#   · 会前准备的时间被当成别的 (parse_schedule 不认本地 ISO 就成了 400)
+#   · 一次性任务跑完立刻删记录 → 「做完就报」看不到会前准备跑完了
+#   · 「看结果」切不出正文 / 报不出结果第一句 (存档格式, lib/cronWatch.ts outputBody)
+#   · delivery_failed 改名 → 没送到微信的那次当成「没状态」不报
+echo "── Section 22: 小鲶秘书用到的定时任务接口 / 存档格式 ──"
+check_grep "gateway/platforms/api_server.py" '\("POST", "/api/jobs", self\._handle_create_job\)' "POST /api/jobs 建任务 (托管 / 会前准备)"
+check_grep "gateway/platforms/api_server.py" '\("POST", "/api/jobs/\{job_id\}/run", self\._handle_run_job\)' "POST /api/jobs/{id}/run 立即跑 (提醒条「重跑」)"
+check_grep "gateway/platforms/api_server.py" '"deliver": body\.get\("deliver", "local"\)' "建任务时 deliver 照传 (我们传 local)"
+check_grep "cron/jobs.py" "if 'T' in schedule or re\.match\(r'\^\\\\d\{4\}" "parse_schedule 认本地 ISO (会前准备的一次性时间)"
+check_grep "cron/jobs.py" "^COMPLETED_ONESHOT_RETENTION_DAYS = " "一次性任务跑完保留记录 (做完就报看得到)"
+check_grep "cron/jobs.py" '"delivery_failed" if delivery_failed else "ok"' "last_status 有 delivery_failed (跑完但没送到)"
+check_grep "cron/jobs.py" "strftime\('%Y-%m-%d_%H-%M-%S'\)\}\.md" "结果存档文件名 = 本地时间 (outputTsMs 按它对时间)"
+check_grep "cron/scheduler_prompt.py" '^_RESPONSE_FRAME = "\*\*Response Characters:\*\* "' "存档 Response 帧 (outputBody 按它切正文)"
+check_grep "cron/scheduler_prompt.py" '^_RESPONSE_HEADING = "## Response' "存档 ## Response 标题"
+check_grep "cron/scheduler.py" 'f"\{header\}\\n---\\n\\n\{output\}' "脚本模式存档: 头 + --- + 输出"
+echo ""
+
 echo "========================================"
 echo "结果: pass=$pass  fail=$fail"
 if [ "$fail" -eq 0 ]; then
@@ -468,6 +492,7 @@ if [ "$fail" -eq 0 ]; then
     echo "  + P36 退役依赖的 TERMINAL_CWD home 兜底还在 (sec 19)"
     echo "  + P25 退役依赖的 cron ContextVar 化还在 (sec 20)"
     echo "  + 定时任务补丁 P21 / P26 / P59 锚点在位 (sec 21); 行为验证跑 test_cron_patches_on_real_hermes.py"
+    echo "  + 小鲶秘书用到的建任务 / 立即跑接口和结果存档格式在位 (sec 22)"
     echo "  + models.yaml chat model 全配 max_output_tokens (sec 17), 升级/加 model OK"
     exit 0
 else

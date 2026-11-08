@@ -105,6 +105,15 @@ def test_calendar_event_ics_alarm_and_briefing_shape(tmp_db):
     assert "工作" in calendar_events.tool_list_calendars({})["calendar_names"]
 
 
+def test_upcoming_range_reaches_next_monday_from_friday(tmp_db):
+    """11/09 会前准备: 今天 0 点起 4 天 —— 周五 (10/9) 看得到下周一 (10/12) 的会, 自然周看不到。"""
+    calendar_events.tool_create_calendar_event({"title": "周一例会", "start_iso": "2026-10-12T10:00:00"})
+    calendar_events.tool_create_calendar_event({"title": "太远的会", "start_iso": "2026-10-13T10:00:00"})
+    friday = datetime(2026, 10, 9, 15, 0)
+    assert [e["summary"] for e in local_pim.events_for_range("upcoming", now=friday)] == ["周一例会"]
+    assert local_pim.events_for_range("natural-week", now=friday) == []
+
+
 def test_cancelled_event_leaves_the_briefing(tmp_db):
     calendar_events.tool_create_calendar_event({"title": "取消的会", "start_iso": "2026-10-09T10:00:00"})
     tid = task_library.list_tasks({"scope": "all"})["tasks"][0]["task_id"]
@@ -132,5 +141,7 @@ def test_rpc_calendar_events_for_briefing(monkeypatch):
     calendar_events.tool_create_calendar_event({"title": "今天下午的会", "start_iso": today.isoformat()})
     resp = asyncio.run(server._handle_request({"id": 1, "method": "pim/calendar_events", "params": {"range": "today"}}))
     assert [e["summary"] for e in resp["result"]] == ["今天下午的会"]
+    up = asyncio.run(server._handle_request({"id": 3, "method": "pim/calendar_events", "params": {"range": "upcoming"}}))
+    assert [e["summary"] for e in up["result"]] == ["今天下午的会"]
     bad = asyncio.run(server._handle_request({"id": 2, "method": "pim/calendar_events", "params": {"range": "year"}}))
     assert "error" in bad

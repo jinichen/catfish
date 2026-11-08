@@ -106,3 +106,13 @@ export const sessionGetByTaskUid = (taskUid: string) =>
 /** 列 task 关联的所有 session (按 started_at DESC) */
 export const listSessionsByTaskUid = (taskUid: string) =>
   rawInvoke<SessionTaskAssoc[]>("list_sessions_by_task_uid", { taskUid });
+
+/** 11/09 小鲶秘书: 最近 `days` 天员工在 Companion / 微信里发起的对话 (第一句 + 开始时刻, 本地时区), 按时间正序。 */
+export interface UserRequest {
+  session_id: string;
+  started_at: string;
+  title?: string;
+  text: string;
+}
+export const sessionsUserRequests = (days: number) =>
+  rawInvoke<UserRequest[]>("sessions_user_requests", { days });

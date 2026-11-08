@@ -10,6 +10,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { PERSONALITY_LABELS, type Personality } from "../../lib/agent";
 import { useAgentStore } from "../../store/agent";
 import { emailConfigGet, type EmailConfigPublic } from "../../lib/tauri";
+import { MEETING_PREP_KEY, prefEnabled, ROUTINE_OFFER_KEY, setPref } from "../../lib/secretaryPrefs";
 
 // BL-COMPANION-PREFS-TOGGLES (5/20): localStorage key 跟 useProactiveScheduler 对齐
 const MORNING_PUSH_KEY = "catfish:morning_push_enabled";
@@ -49,6 +50,14 @@ export default function AgentPrefsCard() {
   useEffect(() => {
     void emailConfigGet().then(setEmailCfg).catch(() => {});
   }, []);
+
+  // 11/09 小鲶秘书: 托管周期性事务的提议 / 会前自动准备
+  const [routineOffer, setRoutineOffer] = useState(() => prefEnabled(ROUTINE_OFFER_KEY));
+  const [meetingPrep, setMeetingPrep] = useState(() => prefEnabled(MEETING_PREP_KEY));
+  const togglePref = (key: string, set: (v: boolean) => void, next: boolean) => {
+    setPref(key, next);
+    set(next);
+  };
 
   const toggleMorningPush = (next: boolean) => {
     setMorningPushEnabled(next);
@@ -174,6 +183,24 @@ export default function AgentPrefsCard() {
                 onClick={() => toggleMorningPush(false)}
                 label="关"
               />
+            </div>
+
+            {/* 11/09 小鲶秘书 */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", flex: 1 }}>
+                🔁 发现周期性的事，问要不要托管
+                <span style={{ marginLeft: 6, fontSize: 10, opacity: 0.7 }}>(点「好」才建定时任务)</span>
+              </span>
+              <ToggleButton active={routineOffer} onClick={() => togglePref(ROUTINE_OFFER_KEY, setRoutineOffer, true)} label="开" />
+              <ToggleButton active={!routineOffer} onClick={() => togglePref(ROUTINE_OFFER_KEY, setRoutineOffer, false)} label="关" />
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", flex: 1 }}>
+                📋 会前自动准备会务安排
+                <span style={{ marginLeft: 6, fontSize: 10, opacity: 0.7 }}>(前一天 16:00, 只起草不发送)</span>
+              </span>
+              <ToggleButton active={meetingPrep} onClick={() => togglePref(MEETING_PREP_KEY, setMeetingPrep, true)} label="开" />
+              <ToggleButton active={!meetingPrep} onClick={() => togglePref(MEETING_PREP_KEY, setMeetingPrep, false)} label="关" />
             </div>
 
             {/* 邮件 LLM 评级 — yaml 配置展示 (只读) + 打开 yaml 按钮 */}

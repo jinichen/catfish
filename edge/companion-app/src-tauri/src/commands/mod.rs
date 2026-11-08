@@ -127,6 +127,7 @@ pub mod session_goal; // BL-BRIEFING-GOAL-INPUT (5/20): /goal UI 路径
 pub mod companion_sessions;  // 11/06 hermes v0.23: Companion 的会话来源写 api_server, 自己记附表
 pub mod session_write;
 pub mod sessions;
+pub mod user_requests;
 pub mod skill_audit;
 pub mod skill_feedback;
 pub mod skill_revision;

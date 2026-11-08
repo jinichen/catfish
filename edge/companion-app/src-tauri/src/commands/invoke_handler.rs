@@ -77,6 +77,7 @@ pub(crate) fn handler(
             crate::commands::logs::stop_tail,
             // sessions (read)
             crate::commands::sessions::sessions_list,
+            crate::commands::user_requests::sessions_user_requests,
             crate::commands::sessions::sessions_count,
             crate::commands::sessions::sessions_get,
             // sessions (delete) —— BL-SESSION-MGMT C (5/15)
@@ -298,6 +299,7 @@ pub(crate) fn handler(
             crate::commands::calendar::calendar_today_fetch,
             // BL-CALENDAR-WEEK (5/20): 跨日 7 天 events (今天 + 明天 + 后 5 天)
             crate::commands::calendar::calendar_week_fetch,
+            crate::commands::calendar::calendar_upcoming_fetch,
             // BL-BRIEFING-DECISION (5/21 Phase 5): 综合判断上下文包 (distilled_facts + 24h sessions)
             crate::commands::briefing_context::briefing_context_fetch,
             // BL-JOURNAL-TODO-EXTRACT step2 (5/20): 读 journal 最近 5KB 给 LLM 抽自然语言 TODO
@@ -386,6 +388,8 @@ pub(crate) fn handler(
             crate::commands::cron::cron_job_pause,
             crate::commands::cron::cron_job_resume,
             crate::commands::cron::cron_job_delete,
+            crate::commands::cron::cron_job_run,
+            crate::commands::cron::cron_job_create,
             // BL-COMPANION-EMAIL-TAB-STEP2 (5/18): 评级 badge 取数
             crate::services::email_scheduler::email_urgency_map,
             // BL-COMPANION-PREFS-TOGGLES (5/20): 暴露 email config 给前端 AgentPrefsCard 展示

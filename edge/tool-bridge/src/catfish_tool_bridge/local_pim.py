@@ -265,8 +265,10 @@ def events_between(start: datetime, end: datetime) -> list[dict[str, Any]]:
 
 
 def events_for_range(range_name: str, now: datetime | None = None) -> list[dict[str, Any]]:
-    """range: "today" / "natural-week" (本周一 00:00 到下周一 00:00), 跟 mac 一致。"""
+    """range: "today" / "natural-week" (本周一 00:00 到下周一 00:00) / "upcoming" (今天 0 点起 4 天), 跟 mac 一致。"""
     today = datetime.combine((now or datetime.now()).date(), dtime.min)
+    if range_name == "upcoming":
+        return events_between(today, today + timedelta(days=4))
     if range_name == "natural-week":
         start = today - timedelta(days=today.weekday())
         return events_between(start, start + timedelta(days=7))

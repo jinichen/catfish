@@ -18,7 +18,29 @@
 import type { DueTask, TriggerResult } from "./triggers";
 import { calendarDaysUntil, QUIET_HOURS_END, QUIET_HOURS_START } from "./triggers";
 
-export type ReminderKind = "deadline" | "briefing" | "email" | "silence" | "focus" | "ctask";
+export type ReminderKind = "deadline" | "briefing" | "email" | "silence" | "focus" | "ctask" | "cron" | "routine";
+
+/** 11/09 定时任务的一次运行 (kind=cron, lib/cronWatch.ts) */
+export interface ReminderCronRun {
+  jobId: string;
+  jobName: string;
+  runAt: string;
+  status: "ok" | "error" | "delivery_failed";
+  /** 结果存档的文件名 (不含 .md), 「看结果」读它 */
+  outputTs?: string;
+  /** 会前准备任务 (hooks/useMeetingPrep.ts 建的) */
+  prep?: boolean;
+}
+
+/** 11/09 发现的周期性事务, 问员工要不要托管 (kind=routine, lib/routines.ts) */
+export interface ReminderRoutineOffer {
+  key: string;
+  /** 建定时任务用 */
+  jobName: string;
+  schedule: string;
+  scheduleLabel: string;
+  jobPrompt: string;
+}
 
 /** 11/07 派给同事的任务: 发起人这边过了截止有人没交 (owner) / 收件人这边快到截止还没交回 (recipient) */
 export interface ReminderColleagueTask {
@@ -53,6 +75,10 @@ export interface Reminder {
   task?: ReminderTaskRef;
   /** 只有同事任务有 —— 主按钮是「催一下 / 去交回」, 不开对话 */
   ctask?: ReminderColleagueTask;
+  /** 只有定时任务有 —— 主按钮「看结果」直接看存档, 失败的多一个「重跑」 */
+  cron?: ReminderCronRun;
+  /** 只有托管提议有 —— 主按钮直接建定时任务 */
+  routine?: ReminderRoutineOffer;
   /** 排序用的「到点时刻」(待办 = 截止时刻) */
   dueAt?: number;
   /** 过了这个时刻自动消失 (待办 = 截止日当天结束; 早安 = 当天结束; 其余几小时) */
@@ -123,8 +149,13 @@ function rank(r: Reminder, now: number): number {
       return 0;   // 同事任务过了 / 快到截止: 跟今天到期的待办一样急
     case "email":
       return 1;
+    case "cron":
+      // 失败的跟急邮件一样要人管; 做完了的是好消息, 排在早安播报前面
+      return r.cron?.status === "error" ? 1 : 2;
     case "briefing":
       return 3;
+    case "routine":
+      return 5;   // 提议不急, 最后看
     default:
       return 4;
   }

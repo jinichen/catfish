@@ -29,7 +29,8 @@ export interface CronJob {
   created_at?: string | null;
   next_run_at?: string | null;
   last_run_at?: string | null;
-  last_status?: "ok" | "error" | string | null;
+  /** "ok" / "error" / "delivery_failed" (跑完了但没送到微信等渠道) / "cancelled" */
+  last_status?: "ok" | "error" | "delivery_failed" | "cancelled" | string | null;
   last_error?: string | null;
   last_delivery_error?: string | null;
   deliver?: string | null;
@@ -66,6 +67,21 @@ export const cronJobResume = (jobId: string) =>
 /** DELETE /api/cron/jobs/{id} — 真删 jobs.json 条目 + 清 output. */
 export const cronJobDelete = (jobId: string) =>
   rawInvoke<void>("cron_job_delete", { jobId });
+
+/** 11/09: 马上跑一次 (hermes 原生 POST /api/jobs/{id}/run, 不动排期)。提醒条上的「重跑」。 */
+export const cronJobRun = (jobId: string) => rawInvoke<void>("cron_job_run", { jobId });
+
+export interface CronJobCreateArgs {
+  name: string;
+  /** cron 表达式 ("0 8 * * 1") 或本地时间 ISO ("2026-11-10T16:00") */
+  schedule: string;
+  prompt: string;
+  /** 一次性任务传 1 */
+  repeat?: number;
+}
+/** 11/09: 建一条定时任务 (hermes 原生 POST /api/jobs, deliver=local —— 结果由提醒条报)。 */
+export const cronJobCreate = (args: CronJobCreateArgs) =>
+  rawInvoke<CronJob>("cron_job_create", { args: { ...args, repeat: args.repeat ?? null } });
 
 // BL-COMPANION-HERMES-API-CONFIG (5/19 Phase 2-2A): 暴露 hermes API server 配置
 // 给 chat.ts. 不返 key (key 在 Rust 端拼 header, 不发 JS, 防 XSS / 误 log).

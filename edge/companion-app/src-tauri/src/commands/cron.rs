@@ -340,3 +340,113 @@ pub async fn cron_job_delete(job_id: String) -> Result<(), String> {
     let auth = hermes_auth_header()?;
     http_delete(&url, &auth).await
 }
+
+// ── 11/09 小鲶秘书: 提醒条上的「重跑」+ 托管周期性事务 / 会前准备 建任务 ──
+//
+// 走 hermes 原生 /api/jobs (api_server.py _http_route_table), 不是 P26 的 /api/cron/jobs:
+// 原生的 create / run 本来就有, 不用再打补丁。审计锚点见 audit_hermes_compat.sh Section 22。
+
+/// POST /api/jobs/{id}/run —— 马上跑一次 (不动排期, hermes 记成 extra fire)
+#[tauri::command]
+pub async fn cron_job_run(job_id: String) -> Result<(), String> {
+    let url = hermes_url_with_path(&format!("/api/jobs/{}/run", urlencoding::encode(&job_id)))?;
+    let auth = hermes_auth_header()?;
+    http_post_json(&url, &auth, serde_json::json!({})).await
+}
+
+/// 建任务的参数 —— 只放我们用得到的: hermes 其余字段 (model / skills ...) 走它自己的默认,
+/// 模型由 P21 跟 Companion 里选的走。
+#[derive(Debug, Clone, Deserialize)]
+pub struct CronJobCreateArgs {
+    pub name: String,
+    /// cron 表达式 ("0 8 * * 1") 或本地时间 ISO ("2026-11-10T16:00") —— hermes parse_schedule 两种都认
+    pub schedule: String,
+    pub prompt: String,
+    /// 一次性任务传 1; 周期任务不传
+    #[serde(default)]
+    pub repeat: Option<u32>,
+}
+
+/// POST /api/jobs —— 建一条定时任务, 返回 hermes 存下的那条 (含 id / next_run_at)。
+/// deliver 固定 "local": 结果由 Companion 提醒条报 (useCronWatcher), 不往微信推 ——
+/// 微信那条线要员工先给机器人发过话才通 (iLink session not ready), 推不到还算一次失败。
+#[tauri::command]
+pub async fn cron_job_create(args: CronJobCreateArgs) -> Result<Value, String> {
+    let url = hermes_url_with_path("/api/jobs")?;
+    let auth = hermes_auth_header()?;
+    let mut body = serde_json::json!({
+        "name": args.name,
+        "schedule": args.schedule,
+        "prompt": args.prompt,
+        "deliver": "local",
+    });
+    if let Some(n) = args.repeat {
+        body["repeat"] = serde_json::json!(n);
+    }
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .header("Authorization", &auth)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("POST {url} 失败: {e}"))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+    if !status.is_success() {
+        let msg = v.get("error").and_then(|e| e.as_str()).map(String::from).unwrap_or(text);
+        return Err(format!("HTTP {} {url}: {msg}", status.as_u16()));
+    }
+    v.get("job").cloned().ok_or_else(|| format!("hermes 没返回 job: {text}"))
+}
+
+/// 对真 hermes 跑一遍小鲶秘书用到的整条链: 建一次性任务 → 立即跑 → jobs.json 记下这次 → 存档读得到。
+/// 默认跳过; 手动跑 (临时 HOME 里起一个 hermes gateway, 不碰员工真数据):
+///   HOME=<临时> CATFISH_HERMES_API_URL=http://127.0.0.1:<port> CATFISH_HERMES_API_KEY=<key> \
+///   CATFISH_E2E_ARCHIVE_OUT=<存档拷到哪> cargo test --lib cron_secretary_e2e -- --ignored --nocapture
+#[cfg(test)]
+mod secretary_e2e {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore]
+    async fn cron_secretary_e2e() {
+        let at = (chrono::Local::now() + chrono::Duration::hours(3)).format("%Y-%m-%dT%H:%M").to_string();
+        let job = cron_job_create(CronJobCreateArgs {
+            name: "会前准备：e2e 周例会（11/10 10:00）".into(),
+            schedule: at.clone(),
+            prompt: "请为我下面这个会提前准备一份会务安排。只查阅和起草：不要发会议通知、不要回邮件、不要改日程。".into(),
+            repeat: Some(1),
+        })
+        .await
+        .expect("建任务");
+        let id = job["id"].as_str().expect("job.id").to_string();
+        assert_eq!(job["deliver"], "local");
+        assert_eq!(job["schedule"]["kind"], "once", "本地 ISO 要被认成一次性: {job}");
+        assert!(job["next_run_at"].as_str().unwrap().starts_with(&at[..16]), "排在 {at}: {job}");
+
+        cron_job_run(id.clone()).await.expect("立即跑");
+        let mut ran: Option<CronJob> = None;
+        for _ in 0..120 {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let jobs = cron_jobs_list().await.expect("jobs.json");
+            if let Some(j) = jobs.into_iter().find(|j| j.id == id && j.last_run_at.is_some()) {
+                ran = Some(j);
+                break;
+            }
+        }
+        let ran = ran.expect("两分钟内跑完");
+        println!("last_status={:?} last_run_at={:?} error={:?}", ran.last_status, ran.last_run_at, ran.last_error);
+        assert_eq!(ran.last_status.as_deref(), Some("ok"));
+        let outs = cron_job_outputs(id.clone(), Some(1)).await.expect("存档列表");
+        assert_eq!(outs.len(), 1, "跑完有一份存档");
+        let archive = cron_job_output_read(id.clone(), outs[0].timestamp.clone()).await.expect("读存档");
+        assert!(archive.contains("## Response"), "{archive}");
+        if let Ok(p) = std::env::var("CATFISH_E2E_ARCHIVE_OUT") {
+            std::fs::write(&p, &archive).unwrap();
+            println!("存档 {} → {p} (runAt={:?})", outs[0].timestamp, ran.last_run_at);
+        }
+        cron_job_delete(id).await.expect("清掉");
+    }
+}

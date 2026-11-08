@@ -109,7 +109,7 @@ fn state_db_path() -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn open_db() -> Result<Connection, String> {
+pub(super) fn open_db() -> Result<Connection, String> {
     let path = state_db_path()?;
     Connection::open(&path).map_err(|e| format!("打开 state.db 失败: {e}"))
 }
@@ -134,7 +134,7 @@ fn unix_to_iso(unix_secs: f64) -> String {
 /// —— 截到 4000 字时 JSON 还在第一张图的 base64 里, 解不出来。
 const HERMES_JSON_SENTINEL: &str = "\u{0}json:";
 
-fn decode_hermes_content(s: String) -> String {
+pub(super) fn decode_hermes_content(s: String) -> String {
     let Some(body) = s.strip_prefix(HERMES_JSON_SENTINEL) else { return s };
     match serde_json::from_str::<serde_json::Value>(body) {
         Ok(serde_json::Value::Array(parts)) => {

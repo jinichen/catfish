@@ -47,7 +47,7 @@ done
 
 ```bash
 HERMES_ROOT="$HERMES_AUDIT_DIR" bash ~/person_task/catfish/edge/catfish-cli/scripts/audit_hermes_compat.sh
-# 期望: fail=0 (11/09 v0.22 上 pass=85; Section 21 = 定时任务补丁 P21/P26/P59 锚点)
+# 期望: fail=0 (11/09 v0.22 上 pass=96; Section 21 = 定时任务补丁 P21/P26/P59 锚点; Section 22 = 小鲶秘书用到的建任务 / 立即跑接口和结果存档格式)
 # 任何 fail → 看下面 "已知坑分类" 排查
 ```
 

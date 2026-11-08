@@ -49,7 +49,8 @@ fn run(script: &str, env: &[(&str, String)]) -> Result<String, String> {
 /// JSON 形状 (`[{calendar, summary, start, end, all_day, location?, attendees?,
 /// description?}]`), 前端不用分平台。
 ///
-/// `range`: `"today"` / `"natural-week"` (本周一 00:00 到下周一 00:00, 跟 mac 一致)。
+/// `range`: `"today"` / `"natural-week"` (本周一 00:00 到下周一 00:00, 跟 mac 一致) /
+/// `"upcoming"` (今天 0 点起 4 天, 11/09 会前准备用)。
 /// 用 `IncludeRecurrences` + `Restrict` —— 不加 IncludeRecurrences 的话周会这类
 /// 重复事件一条都读不出来 (Outlook 只返回母事件, 它的 Start 是第一次开会那天)。
 pub fn read_events(range: &str) -> Result<String, String> {
@@ -57,6 +58,8 @@ pub fn read_events(range: &str) -> Result<String, String> {
 $today = (Get-Date).Date
 if ($env:CF_RANGE -eq 'natural-week') {
   $from = $today.AddDays(-(([int]$today.DayOfWeek + 6) % 7)); $to = $from.AddDays(7)
+} elseif ($env:CF_RANGE -eq 'upcoming') {
+  $from = $today; $to = $today.AddDays(4)
 } else { $from = $today; $to = $today.AddDays(1) }
 $cal = $ns.GetDefaultFolder(9)
 $items = $cal.Items
