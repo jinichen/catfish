@@ -253,6 +253,20 @@ Copy-Item $BootSrc $BootPs1 -Force
 # 端口被别的程序占着 (常见: IIS 占 443) 就别往下走, 不然转发静默失败、员工打不开
 # 只在还没有我们自己的转发时查 (重跑时这些端口本来就是我们的 iphlpsvc / wslrelay 在听)
 $ours = (& netsh.exe interface portproxy show v4tov4) -join "`n"
+
+# 11/08 HTTPS 模式下 80 → https 跳转 (setup.sh 在 WSL 里映射到 web 容器的跳转口)。80 在 Windows 上常被 IIS 占着:
+# 被别的程序占着就不转发、说一句, 不拦装机 (跳转是方便, 门户照常走 https)。
+if ($EnableHttps -eq '1' -and $Ports -notcontains 80) {
+    $l80 = Get-NetTCPConnection -LocalPort 80 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    $pn80 = if ($l80) { (Get-Process -Id $l80.OwningProcess -ErrorAction SilentlyContinue).ProcessName } else { $null }
+    if (-not $l80 -or $ours -match "\b80\b" -or $pn80 -in @('wslrelay', 'svchost')) {
+        $Ports += 80
+    } else {
+        SayWarn "端口 80 被 $pn80 (PID $($l80.OwningProcess)) 占着 · 不做 http → https 跳转 (门户照常, 员工用 https://$ServerIp 打开)"
+    }
+    [pscustomobject]@{ Distro = $Distro; ServerIp = $ServerIp; Ports = $Ports } |
+        ConvertTo-Json | Set-Content -Path $cfgPath -Encoding UTF8
+}
 foreach ($p in $Ports) {
     if ($ours -match "\b$p\b") { continue }
     $l = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -276,6 +290,9 @@ if ($LocalOnly -eq '1') {
     if (-not (Get-NetFirewallRule -DisplayName $FwRule -ErrorAction SilentlyContinue)) {
         New-NetFirewallRule -DisplayName $FwRule -Direction Inbound -Action Allow -Protocol TCP `
             -LocalPort ($Ports | ForEach-Object { "$_" }) -Profile Any | Out-Null
+    } else {
+        # 11/08: 重跑时端口列表可能变了 (加了 80 跳转), 原来只在第一次建规则时写端口, 之后不更新
+        Set-NetFirewallRule -DisplayName $FwRule -LocalPort ($Ports | ForEach-Object { "$_" }) -ErrorAction SilentlyContinue
     }
     SayOk "防火墙已放行 TCP $($Ports -join ' / ')"
 }

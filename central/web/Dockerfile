@@ -55,6 +55,8 @@ COPY catfish-locations.conf /etc/nginx/catfish-locations.conf
 # 若无条件写死 443 block 而证书不存在, nginx 加载证书失败会直接起不来 ——
 # 等于为了没启用的 HTTPS 把默认 HTTP 路径搞坏.
 COPY catfish-ssl.conf /etc/nginx/catfish-ssl.conf.disabled
+# 11/08 HTTPS 模式下宿主机 80 → 容器 8080 跳 https (41-catfish-ssl.sh 填好端口才启用)
+COPY catfish-http-redirect.conf /etc/nginx/catfish-http-redirect.conf.disabled
 
 # ── P3.5.79+ (7/22 达华 POC 血案) runtime config 注入 ──
 # 老 build-arg VITE_OIDC_ISSUER 路子行不通 · 客户每台 server IP 不同 · 每客户重编
@@ -71,7 +73,7 @@ COPY docker-entrypoint-catfish-ssl.sh    /docker-entrypoint.d/41-catfish-ssl.sh
 RUN chmod +x /docker-entrypoint.d/40-catfish-config.sh \
              /docker-entrypoint.d/41-catfish-ssl.sh
 
-EXPOSE 80 443
+EXPOSE 80 443 8080
 # healthcheck 走 :80 —— HTTPS 是可选的, 而且自签证书下 wget 要 --no-check-certificate,
 # 徒增噪音. :80 始终在跑 (HTTPS 模式下它只做 301 跳转以外的静态服务也照常),
 # 用它判活最稳.

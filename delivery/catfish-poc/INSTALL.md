@@ -140,6 +140,13 @@ docker compose up -d --force-recreate gateway
 
 setup.sh 结尾会检查这项,空的会显眼提示。
 
+### 直接敲 IP 自动跳到 HTTPS (80 端口)
+
+HTTPS 模式下, 员工在浏览器里直接敲 `http://<IP>` (走 80 端口) 会自动跳到 `https://<IP>`。
+80 被别的程序 (nginx / apache / IIS) 占着时, 装机脚本不开这个跳转、打印一句说明, 不影响门户本身 —— 员工直接用 `https://<IP>`。
+要换跳转口: `.env` 里 `CATFISH_HTTP_REDIRECT_PORT=8080`; 不要跳转: `CATFISH_HTTP_REDIRECT_PORT=0`。
+(员工接入链接 `http://<IP>:5173/connect.html` 不受影响, 照常不跳。)
+
 ### 换端口(443 被占且不能停)
 
 ```bash

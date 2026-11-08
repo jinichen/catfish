@@ -219,6 +219,18 @@ rm -f "$PK/BUILD-INFO.txt" "$PK/images/"*
 (set -euo pipefail; x=$(pick_image_tar "$PK"); echo "still-alive$x") | grep -q still-alive \
     && ok "set -euo pipefail 下也不退出" || bad "set -e 下没包时脚本被带走"
 
+# 11/08 80 → https 跳转: 单独的叠加文件、只在 HTTPS 模式下叠, 80 被别人占着不拦装机
+echo ""
+echo "── 80 → https 跳转 ──"
+grep -qE '"\$\{CATFISH_HTTP_REDIRECT_PORT:-80\}:8080"' docker-compose.http-redirect.yml \
+    && ok "叠加文件把宿主机 80 映射到容器的跳转口 8080" || bad "docker-compose.http-redirect.yml 映射不对"
+grep -q 'CATFISH_HTTPS_PORT: "${CATFISH_HTTPS_PORT:-443}"' docker-compose.https.yml \
+    && ok "web 容器拿得到 HTTPS 端口 (改过端口的跳转要带上)" || bad "https.yml 没把 CATFISH_HTTPS_PORT 传给 web"
+! grep -q '8080' docker-compose.yml && ok "主 compose 不映射 80 (HTTP 模式 / 80 被占时不受影响)" || bad "主 compose 里出现了 8080"
+SECTION=$(awk '/^COMPOSE_FILES=\(-f docker-compose.yml\)/{on=1} on{print} /docker compose "\$\{COMPOSE_FILES\[@\]\}" up/{exit}' setup.sh)
+echo "$SECTION" | grep -q 'docker-compose.http-redirect.yml' && ok "只在 HTTPS 那段里叠跳转文件" || bad "跳转文件不在 HTTPS 那段里"
+echo "$SECTION" | grep -A3 '被别的程序占着 · 不做' | grep -q 'exit 1' && bad "80 被占时把装机拦下了" || ok "80 被占: 只说一句, 不拦装机"
+
 echo ""
 echo "通过 $PASS · 失败 $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

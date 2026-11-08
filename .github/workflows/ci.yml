@@ -80,6 +80,8 @@ jobs:
       # 一个写得挺好、记着真实 bug 的测试, 躺在仓库里死了十天。挂上。
       - name: 交付装机脚本 .env 生成回归
         run: bash delivery/catfish-poc/test_setup_env.sh
+      - name: web 容器 HTTPS / 80 跳转启动脚本 (11/08)
+        run: bash central/web/test_ssl_entrypoint.sh
 
       # 9/22: 中央端六个镜像的版本号。
       #

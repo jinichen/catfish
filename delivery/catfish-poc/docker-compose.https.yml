@@ -28,6 +28,8 @@ services:
       # =1 时 web 容器内 entrypoint 41-catfish-ssl.sh 才启用 443 server block.
       # 仍会检查证书是否真实存在, 缺失则打日志降级为只跑 :80, 不让容器反复重启.
       CATFISH_ENABLE_HTTPS: "1"
+      # 11/08 80 → https 跳转要知道 https 在哪个端口 (443 以外的要带上, 例 https://<ip>:8443)
+      CATFISH_HTTPS_PORT: "${CATFISH_HTTPS_PORT:-443}"
     ports:
       - "${CATFISH_HTTPS_PORT:-443}:443"
     volumes:

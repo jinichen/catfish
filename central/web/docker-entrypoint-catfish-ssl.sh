@@ -17,10 +17,11 @@
 
 set -eu
 
-SRC=/etc/nginx/catfish-ssl.conf.disabled
-DST=/etc/nginx/conf.d/catfish-ssl.conf
-CERT=/etc/nginx/certs/cert.pem
-KEY=/etc/nginx/certs/key.pem
+NGX="${CATFISH_NGINX_DIR:-/etc/nginx}"   # 只给测试换目录用 (central/web/test_ssl_entrypoint.sh)
+SRC=$NGX/catfish-ssl.conf.disabled
+DST=$NGX/conf.d/catfish-ssl.conf
+CERT=$NGX/certs/cert.pem
+KEY=$NGX/certs/key.pem
 
 if [ "${CATFISH_ENABLE_HTTPS:-0}" != "1" ]; then
     echo "[catfish-web-ssl] CATFISH_ENABLE_HTTPS != 1 · 只跑 HTTP (:80)"
@@ -39,3 +40,11 @@ fi
 
 cp "$SRC" "$DST"
 echo "[catfish-web-ssl] ✓ HTTPS 已启用 (:443) · 证书 $CERT"
+
+# 11/08: 容器 8080 一律 301 跳 https (宿主机 80 映射过来)。HTTPS 改过端口就带上, 不是数字的当 443。
+HP="${CATFISH_HTTPS_PORT:-443}"
+case "$HP" in ''|*[!0-9]*) HP=443 ;; esac
+SUFFIX=""
+[ "$HP" != "443" ] && SUFFIX=":$HP"
+sed "s/__HTTPS_PORT__/$SUFFIX/" "$NGX/catfish-http-redirect.conf.disabled" > "$NGX/conf.d/catfish-http-redirect.conf"
+echo "[catfish-web-ssl] ✓ :8080 → https://<host>$SUFFIX 跳转已启用 (宿主机 80 映射到这里)"

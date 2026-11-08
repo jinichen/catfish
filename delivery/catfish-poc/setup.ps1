@@ -442,6 +442,7 @@ if ($EnableHttps -eq '1') {
 # 是**建容器时**读的, 老值不会换 —— 现场会反复怀疑"为啥 workers 还是 4 /
 # CORS 还挂"。
 $composeArgs = @('-f', 'docker-compose.yml')
+$RedirectOn = $false
 if ($EnableHttps -eq '1') {
     $composeArgs += @('-f', 'docker-compose.https.yml')
 
@@ -464,6 +465,29 @@ if ($EnableHttps -eq '1') {
                 "  B. 换端口重跑 (员工则访问 https://${ServerIp}:8443):",
                 "       .\setup.ps1 -ServerIp $ServerIp -HttpsPort 8443"
             )
+        }
+    }
+
+    # 11/08 80 → https 跳转 (同 setup.sh): 80 被**别人**占着就不开、说一句, 不拦装机; 我们自己的 web 占着照常接管。
+    # .env 里 CATFISH_HTTP_REDIRECT_PORT 可改端口, =0 不要跳转。
+    $RedirectPort = if ($env:CATFISH_HTTP_REDIRECT_PORT) { $env:CATFISH_HTTP_REDIRECT_PORT } else { Get-EnvValue 'CATFISH_HTTP_REDIRECT_PORT' }
+    if (-not $RedirectPort) { $RedirectPort = '80' }
+    if ($RedirectPort -eq '0') {
+        Say "→ CATFISH_HTTP_REDIRECT_PORT=0 · 不做 http → https 跳转"
+    } else {
+        $busy = Get-NetTCPConnection -State Listen -LocalPort ([int]$RedirectPort) -ErrorAction SilentlyContinue
+        $oursR = $null
+        if ($busy) {
+            $oursR = Invoke-Native { docker ps --filter 'name=catfish-web' --format '{{.Ports}}' 2>$null } |
+                Where-Object { $_ -match ":$RedirectPort->" }
+        }
+        if ($busy -and -not $oursR) {
+            Say "→ 宿主机 $RedirectPort 端口被别的程序占着 · 不做 http → https 跳转 (门户照常, 员工用 https://$ServerIp 打开)"
+            Say "  要跳转: 停掉占用方 (常见是 IIS: Stop-Service W3SVC) 后重跑, 或 .env 里 CATFISH_HTTP_REDIRECT_PORT=其它端口"
+        } else {
+            $composeArgs += @('-f', 'docker-compose.http-redirect.yml')
+            $env:CATFISH_HTTP_REDIRECT_PORT = $RedirectPort
+            $RedirectOn = $true
         }
     }
 }
@@ -535,6 +559,25 @@ if (Test-Url "http://${ServerIp}:8999/healthz") {
     Say "  gateway healthz:    ✓ 200"
 } else {
     Write-Host "  gateway healthz:    ❌ 挂 · docker logs catfish-gateway" -ForegroundColor Red
+}
+
+# 11/08 80 → https 跳转: 不跟着跳, 直接看是不是 301 到 https
+if ($RedirectOn) {
+    $code = 0; $loc = ''
+    try {
+        $req = [System.Net.HttpWebRequest]::Create("http://${ServerIp}:$RedirectPort/")
+        $req.AllowAutoRedirect = $false
+        $req.Timeout = 8000
+        $resp = $req.GetResponse()
+        $code = [int]$resp.StatusCode; $loc = $resp.Headers['Location']; $resp.Close()
+    } catch [System.Net.WebException] {
+        if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode; $loc = $_.Exception.Response.Headers['Location'] }
+    } catch { }
+    if ($code -eq 301 -and $loc -like 'https://*') {
+        Say "  http → https 跳转:  ✓ http://$ServerIp$(if ($RedirectPort -ne '80') { ":$RedirectPort" }) → $loc"
+    } else {
+        SayWarn "http → https 没跳 (得到 $code) · docker logs catfish-web | Select-String catfish-web-ssl · 门户本身不受影响"
+    }
 }
 
 $cfg = Test-Url "$WebUrl/config.js"
@@ -648,6 +691,7 @@ if ($EnableHttps -eq '1') {
     Say "  ★ 员工接入 (Companion 桌面端): 把下面这段发给员工 (群消息即可, 不用传文件):"
     Say "      接入链接  http://${ServerIp}:$HttpPort/connect.html?web=$WebEnc&code=$PairingCode"
     Say "      门户地址  $WebUrl"
+    if ($RedirectOn) { Say "      (直接敲 http://$ServerIp$(if ($RedirectPort -ne '80') { ":$RedirectPort" }) 也行, 会自动跳到 https)" }
     Say "      接入码    $PairingCode"
     Say "    员工装好 Companion 后点接入链接 →「打开鲶鱼 Companion」→ 确认, 自动取证书并核对接入码。"
     Say "    也可以在 Companion「服务器配置」手填门户地址 + 接入码。门户「用户」页能一键复制这段。"

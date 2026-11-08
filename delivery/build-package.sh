@@ -423,6 +423,8 @@ for ARCH in $ARCHES; do
                 "delivery/catfish-poc/renew-cert.ps1" \
                 "delivery/catfish-poc/tools/build_component_manifest.py" \
                 "delivery/catfish-poc/docker-compose.yml" \
+                "delivery/catfish-poc/docker-compose.https.yml" \
+                "delivery/catfish-poc/docker-compose.http-redirect.yml" \
                 "delivery/catfish-poc/llm-gateway/config/models.yaml" \
                 "delivery/catfish-poc/images/catfish-poc-central-$ARCH-$DATE.tar.gz" \
                 "delivery/catfish-poc/linux/install-docker.sh" \

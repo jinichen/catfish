@@ -1,0 +1,15 @@
+# 宿主机 80 → HTTPS 跳转 (11/08, 鸿波「80 端口也做个跳转到 HTTPS」)
+#
+# 员工在浏览器里直接敲 IP 走的是 80, 原来没映射, 看到「连不上」以为服务挂了。
+# 跟 docker-compose.https.yml 一样单独一个文件, 不写进主 compose: 宿主机 80 常被别的程序 (nginx / apache / IIS) 占着,
+# 无条件映射会让 web 容器起不来, 连累整个门户 —— 443 当初就是这么踩的 (见 https.yml 文件头)。
+# setup.sh / setup.ps1 在 HTTPS 模式下先看 80 有没有被**别人**占着: 没有才叠加本文件; 被占就跳过、说一句, 不拦装机。
+#
+# 容器 8080 只做 301 跳转 (web 镜像 catfish-http-redirect.conf, 41-catfish-ssl.sh 在证书齐全时启用);
+# 容器 :80 (宿主机 5173) 还是原来的门户 + 接入页, 不受影响。
+# 端口可改: .env 里 CATFISH_HTTP_REDIRECT_PORT=8080 (员工则访问 http://<ip>:8080 会跳到 https)。
+
+services:
+  web:
+    ports:
+      - "${CATFISH_HTTP_REDIRECT_PORT:-80}:8080"

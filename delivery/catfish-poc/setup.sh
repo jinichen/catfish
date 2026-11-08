@@ -747,6 +747,24 @@ if [ "$ENABLE_HTTPS" = "1" ]; then
             exit 1
         fi
     fi
+
+    # 11/08 鸿波「80 端口也做个跳转到 HTTPS」: 员工敲 IP 走 80, 原来没映射看着像服务挂了。
+    # 80 常被别的程序占着 —— 被**别人**占就不开跳转、说一句, 不拦装机 (跳转是方便, 不值得让门户起不来);
+    # 我们自己的 web 占着 (重跑 / 升级) 照常接管。.env 里 CATFISH_HTTP_REDIRECT_PORT 可改端口, =0 不要跳转。
+    REDIRECT_PORT="${CATFISH_HTTP_REDIRECT_PORT:-$(grep -E '^CATFISH_HTTP_REDIRECT_PORT=' .env 2>/dev/null | tail -1 | cut -d= -f2 || true)}"
+    REDIRECT_PORT="${REDIRECT_PORT:-80}"
+    REDIRECT_ON=0
+    if [ "$REDIRECT_PORT" = "0" ]; then
+        echo "→ CATFISH_HTTP_REDIRECT_PORT=0 · 不做 http → https 跳转"
+    elif command -v ss >/dev/null 2>&1 && ss -tln 2>/dev/null | grep -qE ":$REDIRECT_PORT\b" \
+         && [ "$(docker ps --filter "name=catfish-web" --format '{{.Ports}}' 2>/dev/null | grep -c ":${REDIRECT_PORT}->" || true)" -lt 1 ]; then
+        echo "→ 宿主机 $REDIRECT_PORT 端口被别的程序占着 · 不做 http → https 跳转 (门户照常, 员工用 https://$SERVER_IP 打开)"
+        echo "  要跳转: 停掉占用方 (sudo ss -tlnp | grep ':$REDIRECT_PORT' 看是谁) 后重跑, 或 .env 里 CATFISH_HTTP_REDIRECT_PORT=其它端口"
+    else
+        COMPOSE_FILES+=(-f docker-compose.http-redirect.yml)
+        export CATFISH_HTTP_REDIRECT_PORT="$REDIRECT_PORT"
+        REDIRECT_ON=1
+    fi
 fi
 
 echo ""
@@ -861,6 +879,14 @@ if [ "$ENABLE_HTTPS" = "1" ]; then
     else
         echo "❌ 挂 · docker compose logs web | grep catfish-web-ssl"
     fi
+    if [ "${REDIRECT_ON:-0}" = "1" ]; then
+        echo -n "  http → https 跳转:  "
+        GOT=$(curl "${CURL_T[@]}" -s -o /dev/null -w '%{http_code} %{redirect_url}' "http://$SERVER_IP:$REDIRECT_PORT/" 2>/dev/null || true)
+        case "$GOT" in
+            301\ https://*) echo "✓ http://$SERVER_IP$([ "$REDIRECT_PORT" = "80" ] || echo ":$REDIRECT_PORT") → ${GOT#301 }" ;;
+            *) echo "⚠ 没跳 (得到「${GOT:-连不上}」) · docker compose logs web | grep catfish-web-ssl · 门户本身不受影响" ;;
+        esac
+    fi
 fi
 
 # ── identity 签名密钥唯一性 ──
@@ -936,6 +962,9 @@ echo ""
 if [ "$ENABLE_HTTPS" = "1" ]; then
     echo "  🔒 已启用 HTTPS (web 容器 443 · 自签证书)"
     echo "     首次访问浏览器会提示证书不受信 · 点「高级 → 继续前往」即可."
+    if [ "${REDIRECT_ON:-0}" = "1" ]; then
+        echo "     直接敲 http://$SERVER_IP$([ "${REDIRECT_PORT:-80}" = "80" ] || echo ":$REDIRECT_PORT") 也行, 会自动跳到 https."
+    fi
     echo "     点过之后就是安全上下文, crypto.subtle 可用, 登录正常."
     echo ""
     # 10/14: 桌面端改成「门户地址 + 接入码」, 不用再一台台发 ca.pem 文件。
