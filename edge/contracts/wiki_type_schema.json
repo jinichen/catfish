@@ -109,7 +109,8 @@
           "rel": "依据",
           "to": [
             "standard",
-            "rule"
+            "rule",
+            "doc"
           ]
         },
         {
@@ -122,13 +123,54 @@
           "rel": "隶属",
           "to": [
             "system",
-            "category"
+            "category",
+            "cert",
+            "org"
           ]
         },
         {
           "rel": "负责",
           "from": [
             "person"
+          ]
+        },
+        {
+          "rel": "维护",
+          "from": [
+            "person"
+          ]
+        },
+        {
+          "rel": "在办",
+          "from": [
+            "org",
+            "department"
+          ]
+        },
+        {
+          "rel": "参与",
+          "from": [
+            "person",
+            "org",
+            "department"
+          ]
+        },
+        {
+          "rel": "对标",
+          "to": [
+            "cert"
+          ]
+        },
+        {
+          "rel": "替代",
+          "to": [
+            "cert"
+          ]
+        },
+        {
+          "rel": "配套",
+          "to": [
+            "cert"
           ]
         }
       ],
@@ -212,6 +254,19 @@
           "rel": "持有",
           "from": [
             "org"
+          ]
+        },
+        {
+          "rel": "隶属",
+          "to": [
+            "org",
+            "department"
+          ]
+        },
+        {
+          "rel": "维护",
+          "from": [
+            "person"
           ]
         }
       ],
@@ -365,6 +420,38 @@
             "org",
             "department"
           ]
+        },
+        {
+          "rel": "隶属",
+          "to": [
+            "org",
+            "department",
+            "project"
+          ]
+        },
+        {
+          "rel": "同类",
+          "to": [
+            "project"
+          ]
+        },
+        {
+          "rel": "申报",
+          "to": [
+            "cert"
+          ]
+        },
+        {
+          "rel": "分析",
+          "to": [
+            "org"
+          ]
+        },
+        {
+          "rel": "依据",
+          "to": [
+            "doc"
+          ]
         }
       ],
       "actions": [
@@ -471,6 +558,34 @@
             "software",
             "system"
           ]
+        },
+        {
+          "rel": "维护",
+          "to": [
+            "cert",
+            "software"
+          ]
+        },
+        {
+          "rel": "参与",
+          "to": [
+            "project",
+            "org",
+            "cert"
+          ]
+        },
+        {
+          "rel": "协作",
+          "to": [
+            "person"
+          ]
+        },
+        {
+          "rel": "记录",
+          "to": [
+            "person",
+            "org"
+          ]
         }
       ],
       "actions": [
@@ -566,7 +681,9 @@
         {
           "rel": "包含",
           "to": [
-            "department"
+            "department",
+            "project",
+            "person"
           ]
         },
         {
@@ -574,6 +691,19 @@
           "to": [
             "project",
             "software",
+            "cert"
+          ]
+        },
+        {
+          "rel": "协作",
+          "to": [
+            "department"
+          ]
+        },
+        {
+          "rel": "参与",
+          "to": [
+            "project",
             "cert"
           ]
         }
@@ -672,7 +802,9 @@
           "rel": "包含",
           "to": [
             "department",
-            "org"
+            "org",
+            "project",
+            "person"
           ]
         },
         {
@@ -684,6 +816,44 @@
         },
         {
           "rel": "参与",
+          "to": [
+            "project",
+            "cert",
+            "org"
+          ]
+        },
+        {
+          "rel": "隶属",
+          "to": [
+            "org"
+          ]
+        },
+        {
+          "rel": "对标",
+          "to": [
+            "org"
+          ]
+        },
+        {
+          "rel": "协作",
+          "to": [
+            "org"
+          ]
+        },
+        {
+          "rel": "同类",
+          "to": [
+            "org"
+          ]
+        },
+        {
+          "rel": "在办",
+          "to": [
+            "cert"
+          ]
+        },
+        {
+          "rel": "负责",
           "to": [
             "project"
           ]
@@ -701,6 +871,97 @@
           "label": "公开信息核对",
           "description": "到官网或企业信用信息公示系统核对全称、信用代码、注册资本、成立时间、地址",
           "instruction": "联网核对这个组织的公开信息：到它的官网（{website}）或国家企业信用信息公示系统查全称、统一社会信用代码（知识库记的是 {credit_code}）、注册资本（{capital}）、成立时间（{founded}）、地址（{address}）。逐项列出核对结果和出处；有不一致或知识库没填的先给我看，我同意后再用 catfish_wiki_update 的 props 更新属性。"
+        }
+      ]
+    },
+    "doc": {
+      "label": "文件资料",
+      "properties": [
+        {
+          "key": "doc_no",
+          "label": "文号",
+          "type": "text",
+          "hint": "例 中电福富司〔2026〕59号",
+          "pattern": "([一-龥A-Za-z]{2,20}[〔\\[（(]\\d{4}[〕\\]）)]\\s?\\d{1,4}\\s?号)",
+          "keywords": [
+            "文号",
+            "〔"
+          ]
+        },
+        {
+          "key": "issuer",
+          "label": "发文单位",
+          "type": "text",
+          "keywords": [
+            "发文单位",
+            "印发",
+            "下发"
+          ],
+          "pattern": "(?:发文单位|印发单位|发布单位)[：:\\s]*([^，,。；;\\n]{2,40})"
+        },
+        {
+          "key": "issued_on",
+          "label": "发布日期",
+          "type": "date",
+          "keywords": [
+            "发布日期",
+            "印发日期",
+            "发文日期"
+          ],
+          "pattern": "(?:发布日期|印发日期|发文日期|发布于|印发于|签发日期)[：:\\s]*(\\d{4}[-./年]\\s?\\d{1,2}[-./月]\\s?\\d{1,2}日?)"
+        },
+        {
+          "key": "category",
+          "label": "类别",
+          "type": "text",
+          "hint": "通知 / 制度 / 规划 / 汇报 / 政策解读",
+          "keywords": [
+            "类别"
+          ]
+        },
+        {
+          "key": "applies_to",
+          "label": "适用范围",
+          "type": "text",
+          "keywords": [
+            "适用范围",
+            "适用于"
+          ]
+        }
+      ],
+      "relations": [
+        {
+          "rel": "印发",
+          "to": [
+            "org",
+            "department"
+          ]
+        },
+        {
+          "rel": "依据",
+          "from": [
+            "project",
+            "cert",
+            "process",
+            "rule"
+          ]
+        },
+        {
+          "rel": "记录",
+          "to": [
+            "person",
+            "org",
+            "project",
+            "cert"
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "id": "summarize",
+          "label": "要点摘要",
+          "description": "把这份文件的要点、对我们的要求、时限整理成一页, 注明出处段落",
+          "instruction": "读知识库里「{title}」这份文件 (文号 {文号}), 整理: 核心要点 / 对我们单位的具体要求 / 时限和责任人 / 需要跟进的事, 每条注明出处。"
         }
       ]
     }

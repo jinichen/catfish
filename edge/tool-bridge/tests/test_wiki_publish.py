@@ -63,7 +63,7 @@ def test_infer_kind_from_path():
 
 def test_load_sensitive_terms_missing(monkeypatch, tmp_path):
     """文件不存在 → 空 list, 不报错."""
-    monkeypatch.setattr(wiki_publish, "SENSITIVE_TERMS_PATH", tmp_path / "no_such")
+    monkeypatch.setattr(wiki_publish, "_sensitive_terms_path", lambda: tmp_path / "no_such")
     assert wiki_publish._load_sensitive_terms() == []
 
 
@@ -79,7 +79,7 @@ def test_load_sensitive_terms_parsing(monkeypatch, tmp_path):
         "CSMM-4\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(wiki_publish, "SENSITIVE_TERMS_PATH", f)
+    monkeypatch.setattr(wiki_publish, "_sensitive_terms_path", lambda: f)
     terms = wiki_publish._load_sensitive_terms()
     assert "FFCS" in terms
     assert "中电福富" in terms
@@ -144,6 +144,7 @@ def test_publish_rejects_credentials(monkeypatch, tmp_path):
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     monkeypatch.setattr("pathlib.Path.home", lambda: fake_home)
+    monkeypatch.setenv("CATFISH_HOME", str(fake_home / ".catfish"))   # 11/08: 发布跟搜索 / 读取同一个根
     wiki_dir = fake_home / ".catfish" / "wiki" / "entities"
     wiki_dir.mkdir(parents=True)
     (wiki_dir / "x.md").write_text(
@@ -163,6 +164,7 @@ def test_publish_warns_on_pii_default_rejects(monkeypatch, tmp_path):
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     monkeypatch.setattr("pathlib.Path.home", lambda: fake_home)
+    monkeypatch.setenv("CATFISH_HOME", str(fake_home / ".catfish"))   # 11/08: 发布跟搜索 / 读取同一个根
     wiki_dir = fake_home / ".catfish" / "wiki" / "entities"
     wiki_dir.mkdir(parents=True)
     (wiki_dir / "x.md").write_text(
@@ -175,7 +177,8 @@ def test_publish_warns_on_pii_default_rejects(monkeypatch, tmp_path):
     })
     assert result["ok"] is False
     assert result.get("scan_phase") == "warnings"
-    assert result.get("acknowledge_warnings_available") is True
+    assert result.get("acknowledge_warnings_available") is False   # 11/08: 小鲶自己加确认不算, 要界面上点
+    assert result["confirm_in_ui"]["wiki_rel_path"] == "wiki/entities/x.md"
     warnings = result.get("warnings", [])
     pii_warns = [w for w in warnings if w["category"] == "pii"]
     assert len(pii_warns) == 1
@@ -186,6 +189,7 @@ def test_publish_ack_warnings_passes_scan(monkeypatch, tmp_path):
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     monkeypatch.setattr("pathlib.Path.home", lambda: fake_home)
+    monkeypatch.setenv("CATFISH_HOME", str(fake_home / ".catfish"))   # 11/08: 发布跟搜索 / 读取同一个根
     wiki_dir = fake_home / ".catfish" / "wiki" / "entities"
     wiki_dir.mkdir(parents=True)
     (wiki_dir / "x.md").write_text(
@@ -205,6 +209,7 @@ def test_publish_ack_warnings_passes_scan(monkeypatch, tmp_path):
     result = wiki_publish.wiki_publish({
         "wiki_rel_path": "wiki/entities/x.md",
         "acknowledge_warnings": True,
+        "_from_ui": True,   # 11/08: 只有 Companion 界面那条路带这个标记, 小鲶传的 acknowledge_warnings 不算
     })
     # 应该不是 warnings 阶段了, 卡 OAuth
     assert result["ok"] is False
@@ -219,5 +224,6 @@ def test_publish_refuses_customer_pages(monkeypatch, tmp_path):
     page.parent.mkdir(parents=True)
     page.write_text("---\ntitle: 南岭建设\ntype: entity\nentity_type: customer\n---\n## 时间线\n- 客户原话\n", encoding="utf-8")
     monkeypatch.setattr("pathlib.Path.home", lambda: fake_home)
+    monkeypatch.setenv("CATFISH_HOME", str(fake_home / ".catfish"))   # 11/08: 发布跟搜索 / 读取同一个根
     r = wiki_publish.wiki_publish({"wiki_rel_path": "wiki/entities/南岭建设.md"})
     assert not r["ok"] and "发布给主管" in r["error"]

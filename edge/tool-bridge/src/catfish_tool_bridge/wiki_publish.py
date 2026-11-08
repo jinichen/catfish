@@ -48,19 +48,26 @@ GATEWAY_URL = skill_publish.GATEWAY_URL
 OAUTH_ID_TOKEN_PATH = skill_publish.OAUTH_ID_TOKEN_PATH
 
 #: 员工自配敏感词 list (一行一个, # 开头注释)
-SENSITIVE_TERMS_PATH = Path.home() / ".catfish" / "wiki" / "sensitive_terms.txt"
+def _catfish_home() -> Path:
+    from .wiki_files import _catfish_home as h  # noqa: PLC0415  (11/08: 跟搜索 / 读取同一个根, CATFISH_HOME 设了就用它)
+    return h()
+
+
+def _sensitive_terms_path() -> Path:
+    return _catfish_home() / "wiki" / "sensitive_terms.txt"
 
 #: 本机 wiki rel_path → 上次发布拿到的 {file_id, namespace, updated_at}
-PUBLISH_STATE_PATH = Path.home() / ".catfish" / "wiki_publish_state.json"
+def _publish_state_path() -> Path:
+    return _catfish_home() / "wiki_publish_state.json"
 
 
 def _load_publish_state() -> dict[str, dict[str, Any]]:
     try:
-        data = json.loads(PUBLISH_STATE_PATH.read_text(encoding="utf-8"))
+        data = json.loads(_publish_state_path().read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
     except Exception as e:
-        logger.warning("读 %s 失败 (当作没发过): %s", PUBLISH_STATE_PATH, e)
+        logger.warning("读 %s 失败 (当作没发过): %s", _publish_state_path(), e)
         return {}
     return data if isinstance(data, dict) else {}
 
@@ -69,13 +76,13 @@ def _save_publish_state(rel_path: str, entry: dict[str, Any]) -> None:
     state = _load_publish_state()
     state[rel_path] = entry
     try:
-        PUBLISH_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmp = PUBLISH_STATE_PATH.with_suffix(".json.tmp")
+        _publish_state_path().parent.mkdir(parents=True, exist_ok=True)
+        tmp = _publish_state_path().with_suffix(".json.tmp")
         tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(PUBLISH_STATE_PATH)
+        tmp.replace(_publish_state_path())
     except Exception as e:
         # 发布本身已成功; 记不下来的后果是下次重发变成新条目, 不值得让这次报错
-        logger.warning("写 %s 失败: %s", PUBLISH_STATE_PATH, e)
+        logger.warning("写 %s 失败: %s", _publish_state_path(), e)
 
 
 def _read_id_token() -> str | None:
@@ -95,11 +102,11 @@ def _load_sensitive_terms() -> list[str]:
 
     文件格式: 一行一个词, # 开头注释忽略, 空行跳过.
     """
-    if not SENSITIVE_TERMS_PATH.exists():
+    if not _sensitive_terms_path().exists():
         return []
     terms: list[str] = []
     try:
-        for line in SENSITIVE_TERMS_PATH.read_text(encoding="utf-8").splitlines():
+        for line in _sensitive_terms_path().read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
@@ -185,7 +192,11 @@ def wiki_publish(args: dict[str, Any]) -> dict[str, Any]:
       {ok:false, scan_phase:"credentials", leaks:[...]}
     """
     wiki_rel_path = (args.get("wiki_rel_path") or "").strip()
-    ack_warnings = bool(args.get("acknowledge_warnings", False))
+    # 11/08: 警告只认员工在界面上点的确认 (Companion 走 tools/dispatch 会带 _from_ui); 小鲶在对话里自己加
+    # acknowledge_warnings=true 不算 —— 以前这一步由小鲶转述, 它说员工同意了就能发出去, 代码上没人拦。
+    from_ui = bool(args.get("_from_ui"))
+    ack_warnings = bool(args.get("acknowledge_warnings", False)) and from_ui
+    llm_acked = bool(args.get("acknowledge_warnings", False)) and not from_ui
     file_id = (args.get("file_id") or "").strip()
 
     # 校验
@@ -199,7 +210,7 @@ def wiki_publish(args: dict[str, Any]) -> dict[str, Any]:
             "error": f"wiki_rel_path 必须以 'wiki/' 开头 (拿到 {wiki_rel_path})",
         }
     # 读 wiki 文件
-    catfish_home = Path.home() / ".catfish"
+    catfish_home = _catfish_home()
     abs_path = (catfish_home / wiki_rel_path).resolve()
     # 安全: resolve 后必须仍在 catfish_home 下
     try:
@@ -288,12 +299,14 @@ def wiki_publish(args: dict[str, Any]) -> dict[str, Any]:
             "ok": False,
             "scan_phase": "warnings",
             "warnings": warnings,
-            "acknowledge_warnings_available": True,
+            "acknowledge_warnings_available": False,
+            # 对话里会出现「我看过警告, 确认发布」按钮 (ChatWikiPublish), 员工点了才真发
+            "confirm_in_ui": {"wiki_rel_path": wiki_rel_path, "warnings": warnings},
             "error": (
-                f"wiki publish 前扫描有 {len(warnings)} 类警告. "
-                "把 warnings 转告员工, 员工确认要继续后, LLM 加 "
-                "acknowledge_warnings=true retry. (跟 skill auto_scrub 不同 — "
-                "wiki 内容不能自动脱敏, 员工要自己拍.)"
+                f"发布前扫描有 {len(warnings)} 类警告 (内容不会自动脱敏). "
+                + ("你不能替员工确认: " if llm_acked else "")
+                + "把 warnings 用大白话转告员工, 请他在这条消息下面点「确认发布」(或在知识体系页里分享), "
+                "点了才会发出去; 不要再带 acknowledge_warnings 重试."
             ),
         }
 

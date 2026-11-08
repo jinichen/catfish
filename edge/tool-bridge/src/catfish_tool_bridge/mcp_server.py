@@ -216,7 +216,8 @@ async def amain() -> None:
         dict. 我们 JSON 序列化给 LLM 看. LLM 解析后就知道成功/失败 + 拿
         result. 跟 Companion 那边 dispatch 同 shape, 行为一致.
         """
-        args = arguments or {}
+        args = dict(arguments or {})
+        args.pop("_from_ui", None)   # 11/08: 只有界面那条路 (server.py tools/dispatch) 能带这个标记
         try:
             result = await adapter.dispatch_tool(name, args)
         except Exception as e:  # noqa: BLE001

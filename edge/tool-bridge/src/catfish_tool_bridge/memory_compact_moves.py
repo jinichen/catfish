@@ -61,11 +61,15 @@ def apply(pid: str) -> dict[str, Any]:
     title, body = str(move["title"]), str(move["body"])
     created = wiki_files.create_wiki_entry("concept", title, body, subtype="rule", tags=["做事口径", "记忆整理"])
     if created.get("ok"):
-        return {"ok": True, "wiki": created.get("rel_path") or title}
+        return {"ok": True, "wiki": created.get("rel_path") or title, "created": created.get("rel_path")}
     rel = created.get("rel_path")
     if not rel:
         return {"ok": False, "error": f"写知识库「{title}」失败: {created.get('error')}"}
-    # 同名页已有: 原文追加到末尾 (已经包含这段就不重复追加)
+    # 11/08: 名字撞上的只能是「做事口径」类的概念页才追加 —— 「福富」是公司页的别名, 口径原文不能糊进公司页
+    if not rel.startswith("wiki/concepts/"):
+        return {"ok": False, "error": f"「{title}」已经是 {rel} 这一页的名字 (不是做事口径), 不能把口径追加进去: "
+                                      "把这条建议的标题改一下再同意, 或者放弃这条"}
+    # 同名概念页已有: 原文追加到末尾 (已经包含这段就不重复追加)
     try:
         current = (wiki_files._catfish_home() / rel).read_text(encoding="utf-8")
     except OSError as e:
@@ -75,4 +79,16 @@ def apply(pid: str) -> dict[str, Any]:
     updated = wiki_files.update_wiki_file(rel, current.rstrip() + "\n\n" + body.strip() + "\n")
     if not updated.get("ok", True):
         return {"ok": False, "error": f"补进知识库「{title}」失败: {updated.get('error')}"}
-    return {"ok": True, "wiki": rel}
+    return {"ok": True, "wiki": rel, "appended": rel, "before": current}
+
+
+def undo(moved: dict[str, Any]) -> None:
+    """记忆那一步没改成: 刚建的页删掉 / 刚追加的还原, 不留孤儿页 (11/08)。"""
+    home = wiki_files._catfish_home()
+    try:
+        if moved.get("created"):
+            (home / str(moved["created"])).unlink(missing_ok=True)
+        elif moved.get("appended") and moved.get("before") is not None:
+            (home / str(moved["appended"])).write_text(str(moved["before"]), encoding="utf-8")
+    except OSError:
+        pass

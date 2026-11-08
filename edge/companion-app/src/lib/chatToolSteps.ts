@@ -41,6 +41,7 @@ function carriesAction(call: ToolCall, resultStr: string): boolean {
   if (name.endsWith("catfish_expert")) return /"suggestion"\s*:\s*\{/.test(resultStr);
   if (name.endsWith("catfish_workflow")) return /"build_id"\s*:\s*"/.test(resultStr);
   if (name.endsWith("catfish_freeze_skill")) return /"(reapply_experts|attached|attach_error)"\s*:/.test(resultStr);
+  if (name.endsWith("catfish_wiki_publish")) return /"confirm_in_ui"\s*:\s*\{/.test(resultStr);
   return false;
 }
 

@@ -81,5 +81,7 @@ describe("toolCallNeedsCard", () => {
     expect(toolCallNeedsCard(call("c", "mcp_catfish_catfish_expert", { result: '{"suggestion": {"profile_id": "p"}}' }))).toBe(true);
     expect(toolCallNeedsCard(call("c", "catfish_freeze_skill", { result: '{"ok":true,"attached":["a"],"reapply_experts":[]}' }))).toBe(true);
     expect(toolCallNeedsCard(call("c", "catfish_freeze_skill", { result: '{"ok":true}' }))).toBe(false);
+    expect(toolCallNeedsCard(call("c", "catfish_wiki_publish", { result: '{"ok":false,"confirm_in_ui":{"wiki_rel_path":"wiki/entities/a.md"}}' }))).toBe(true);
+    expect(toolCallNeedsCard(call("c", "catfish_wiki_publish", { result: '{"ok":true,"file_id":"f"}' }))).toBe(false);
   });
 });

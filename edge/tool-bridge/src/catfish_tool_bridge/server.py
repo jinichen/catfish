@@ -67,6 +67,10 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
         session_id = params.get("session_id")
         if not name:
             return _error(req_id, INVALID_PARAMS, "params.name 必填")
+        # 11/08: 这条路只有 Companion 界面走 (小鲶走 MCP, 那边把这个键剥掉) —— 发布到部门的敏感内容警告
+        # 只认界面上点的确认, 小鲶自己说「员工同意了」不算 (wiki_publish)
+        if isinstance(args, dict):
+            args = {**args, "_from_ui": True}
         result = await adapter.dispatch_tool(name, args, session_id=session_id)
         return _success(req_id, result)
 

@@ -39,8 +39,9 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
             "把员工本机一条 wiki 笔记发布到他自己部门的 wiki-hub (仅同部门和管理员可见). "
             "只在员工明确要求分享时调, 后台自动学的 wiki 不要主动发.\n"
             "发布前必须告诉员工: 同事装到本机的副本无法撤回.\n"
-            "凭据命中直接拒; PII/内网/敏感词命中返 warnings 并拒 —— 把 warnings 转告员工, "
-            "他同意后再带 acknowledge_warnings=true 重试. 同一文件再发 = 更新."
+            "凭据命中直接拒; PII/内网/敏感词命中返 warnings 并拒 —— 把 warnings 用大白话转告员工, "
+            "对话里会出现「确认发布」按钮, 员工点了才会发出去 (你不能替他确认, 不要带 acknowledge_warnings 重试). "
+            "同一文件再发 = 更新."
         ),
         "input_schema": {
             "type": "object",
@@ -51,7 +52,7 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
                 },
                 "acknowledge_warnings": {
                     "type": "boolean",
-                    "description": "员工看过 warnings 并同意后才设 true",
+                    "description": "只有界面上的「确认发布」按钮会带; 小鲶不要传",
                     "default": False,
                 },
                 "file_id": {
@@ -124,6 +125,7 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
                 "top_k": {"type": "integer", "description": "默认 5, 上限 15"},
                 "include_expired": {"type": "boolean", "description": "true 把已过期 / 已结束的也列出来"},
                 "include_pending": {"type": "boolean", "description": "true 把待确认 (关系没对上) 的也列出来"},
+                "include_sources": {"type": "boolean", "description": "true 把员工上传的原始资料 (原件转存) 也列出来"},
             },
             "required": ["query"],
         },
@@ -199,6 +201,14 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
                         "正文已经存成本机文本文件 (如全文转录 .md) 时给它的路径, 工具自己读, "
                         "不要把几千字再抄进 body。同时给 body 时 body 在前当导语"
                     ),
+                },
+                "props": {
+                    "type": "object",
+                    "description": "按类型定义直接填属性 {属性key: 值} (例 cert: cert_no / issuer / valid_until); 正文里按固定句式抽得到的会自动填",
+                },
+                "allow_similar": {
+                    "type": "boolean",
+                    "description": "标题跟已有条目很像 (「云堤」vs「云堤公司」) 时默认拒建; 确认是两个不同的东西才传 true",
                 },
                 "subtype": {
                     "type": "string",
@@ -287,6 +297,10 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
                 "content_file": {
                     "type": "string",
                     "description": "完整新内容已存成本机文本文件时给路径 (代替 content, 长内容用这个)",
+                },
+                "base_mtime": {
+                    "type": "number",
+                    "description": "catfish_wiki_read 返回的 mtime; 带上它, 这一页在你读过之后被别人改过就不会被你盖掉 (会把现在的内容交回来合并)",
                 },
                 "props": {
                     "type": "object",

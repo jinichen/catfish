@@ -137,6 +137,8 @@ const CATFISH: &[(Pat, Class, &str)] = &[
     (Exact("wiki_publish_state.json"), Required, "知识库发布状态"),
     (Exact("wiki_ingested_state.json"), Required, "知识库摄取进度"),
     (Exact("wiki_source_progress.json"), Required, "资料入库进度"),
+    (Exact("wiki_gold.json"), Required, "知识库金标问题集 (11/08, 发版前自检用)"),
+    (Exact("wiki_health"), Required, "知识库体检记录 (11/08)"),
     (Exact("action-registry.yaml"), Required, "知识节点动作"),
     (Exact(".obsidian"), Required, "知识库 Obsidian 设置"),
     (Exact(".obsidianignore"), Required, "知识库 Obsidian 设置"),

@@ -60,6 +60,16 @@ def test_属性值_别名_关系对象名都能搜到_结果带类型和属性(h
     assert "只按字面匹配" in r["summary"]
 
 
+def test_问题里写着标题或别名_那条排最前_长名字优先(home):
+    _page(home, "wiki/entities/hq.md", "北京福富软件技术股份有限公司", "母公司。", type="entity", entity_type="org")
+    _page(home, "wiki/entities/fz.md", "北京福富软件技术股份有限公司福州分公司", "分公司。", type="entity", entity_type="org",
+          aliases='["福州分公司"]')
+    _page(home, "wiki/entities/bj.md", "北京分公司", "另一个分公司。", type="entity", entity_type="org")
+    r = ws.search_wiki("北京福富软件技术股份有限公司福州分公司 的全称", 3)
+    assert r["matches"][0]["title"] == "北京福富软件技术股份有限公司福州分公司" and r["matches"][0]["matched_in"][0] == "name"
+    assert ws.search_wiki("福州分公司 有几个人", 3)["matches"][0]["title"] == "北京福富软件技术股份有限公司福州分公司"
+
+
 def test_正文两千字以后的内容也搜得到(home):
     _page(home, "wiki/concepts/long.md", "长文", "前面是废话。" * 400 + "深处藏着一句: 福富知识管理平台的口令规则。", type="concept",
           concept_type="rule")

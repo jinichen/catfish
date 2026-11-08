@@ -649,8 +649,8 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
         from . import wiki_files  # noqa: PLC0415
         return wiki_files.tool_wiki_list(args)
     if name == "catfish_wiki_create":
-        from . import wiki_files  # noqa: PLC0415
-        return wiki_files.tool_wiki_create(args)
+        from . import wiki_write_tools  # noqa: PLC0415  (11/08: 相似名 / 关系校验先过一道)
+        return wiki_write_tools.tool_wiki_create(args)
     if name == "catfish_wiki_read":
         from . import wiki_files  # noqa: PLC0415
         return wiki_files.tool_wiki_read(args)

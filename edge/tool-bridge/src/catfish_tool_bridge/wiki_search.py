@@ -79,7 +79,7 @@ def _wiki_shared_dept_dirs() -> list[tuple[Path, str]]:
 def _discover_all_paths() -> list[tuple[Path, str]]:
     """全部 wiki 文件, 返 (file_path, source)。source: "own" | "dept/<部门>"。"""
     out: list[tuple[Path, str]] = []
-    for d in _wiki_own_dirs():
+    for d in [*_wiki_own_dirs(), _catfish_home() / "wiki" / "raw" / "sources"]:   # 11/08: 原始资料也进索引 (默认不列)
         if not d.is_dir():
             continue
         try:
@@ -136,6 +136,8 @@ def _parse_wiki(path: Path, source: str) -> dict[str, Any] | None:
         title = _parse_frontmatter_field(fm, "title") or title
         kind = _parse_frontmatter_field(fm, "type") or kind
         body = raw[m.end():]
+    if "raw" in path.parts and "sources" in path.parts:
+        kind = "source"   # 员工上传 / 入库的原件转存 (wiki/raw/sources), 不是整理过的知识
     if not kind:
         for marker, k in (("entities", "entity"), ("concepts", "concept"), ("queries", "query")):
             if marker in path.parts:
@@ -389,11 +391,25 @@ def _expand(fused: dict[int, dict[str, Any]], meta: list[dict[str, Any]], seeds:
                 fused[j] = {"score": bonus, "matched_in": ["graph-1hop"], "snippet": None, "via": p["title"]}
 
 
+def _name_hits(query: str, meta: list[dict[str, Any]], fused: dict[int, dict[str, Any]]) -> None:
+    """问题里原文写着某条的标题 / 别名 → 那条排最前 (11/08 金标: 「北京福富…福州分公司 的全称」被母公司和「北京分公司」挤出前五,
+    单字 BM25 分不清前缀)。越长的名字越靠前; 两字以下的别名不算 (太容易误中)。"""
+    q = query.lower()
+    for i, p in enumerate(meta):
+        names = [n for n in [p["title"], *p["aliases"]] if len(n.strip()) >= 3]
+        hit = max((len(n) for n in names if n.strip().lower() in q), default=0)
+        if not hit:
+            continue
+        f = fused.setdefault(i, {"score": 0.0, "matched_in": [], "snippet": None})
+        f["score"] += 1.0 + hit / 100.0
+        f["matched_in"].insert(0, "name")
+
+
 # ── 公开 API ──────────────────────────────────────────────────────
 
 
 def search_wiki(query: str, top_k: int = 5, *, include_expired: bool = False,
-                include_pending: bool = False) -> dict[str, Any]:
+                include_pending: bool = False, include_sources: bool = False) -> dict[str, Any]:
     """混合搜员工本机 wiki (自家 + 装机部门)。
 
     Returns: {"matches": [{name, title, kind, type, source, head, rel_path, score, matched_in, status, props,
@@ -412,13 +428,17 @@ def search_wiki(query: str, top_k: int = 5, *, include_expired: bool = False,
     lexical = idx.rank(query, top_k=50)
     semantic = _semantic(query, by_rel)
     fused = _rrf(lexical, semantic)
+    _name_hits(query, meta, fused)
     seeds = [i for i, _s, _sn in semantic] if semantic else [i for i, _s in lexical]
     _expand(fused, meta, seeds[:10])
 
-    hidden = {"expired": 0, "pending": 0}
+    hidden = {"expired": 0, "pending": 0, "sources": 0}
     matches = []
     for i, f in sorted(fused.items(), key=lambda kv: -kv[1]["score"]):
         p = meta[i]
+        if p["kind"] == "source" and not include_sources:
+            hidden["sources"] += 1
+            continue
         st = p.get("type_status")
         if st and st.get("code") in ("expired", "done") and not include_expired:
             hidden["expired"] += 1
@@ -456,8 +476,9 @@ def search_wiki(query: str, top_k: int = 5, *, include_expired: bool = False,
     if semantic is None:
         summary += " (这次只按字面匹配, 没用上向量: Companion 没开或还没建向量)"
     if hidden:
-        parts = [f"{n} 条已过期 / 已结束" if k == "expired" else f"{n} 条待确认" for k, n in hidden.items()]
-        summary += f" 另有 {', '.join(parts)} 没列 (要看就传 include_expired / include_pending=true)。"
+        parts = [f"{n} 条已过期 / 已结束" if k == "expired" else f"{n} 条待确认" if k == "pending" else f"{n} 份原始资料 (上传的原件)"
+                 for k, n in hidden.items()]
+        summary += f" 另有 {', '.join(parts)} 没列 (要看就传 include_expired / include_pending / include_sources=true)。"
     return {"matches": matches, "count": len(matches), "total_indexed": len(meta), "semantic": semantic is not None,
             "hidden": hidden, "summary": summary, "latency_ms": int((time.monotonic() - start_ts) * 1000)}
 
@@ -469,7 +490,7 @@ def tool_wiki_search(args: dict) -> dict[str, Any]:
         return {"matches": [], "count": 0, "total_indexed": 0, "summary": "query 空: 给关键词或问题", "error": "query 空"}
     try:
         return search_wiki(query, top_k=int(args.get("top_k") or 5), include_expired=bool(args.get("include_expired")),
-                           include_pending=bool(args.get("include_pending")))
+                           include_pending=bool(args.get("include_pending")), include_sources=bool(args.get("include_sources")))
     except Exception as e:  # noqa: BLE001
         logger.exception("wiki_search 失败")
         return {"matches": [], "count": 0, "total_indexed": 0, "summary": f"wiki 搜索出错: {e}", "error": str(e)}

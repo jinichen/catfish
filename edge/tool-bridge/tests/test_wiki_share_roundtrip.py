@@ -40,8 +40,7 @@ def gateway(monkeypatch):
 @pytest.fixture()
 def home(tmp_path, monkeypatch):
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-    monkeypatch.setattr(wiki_publish, "PUBLISH_STATE_PATH", tmp_path / ".catfish" / "wiki_publish_state.json")
-    monkeypatch.setattr(wiki_publish, "SENSITIVE_TERMS_PATH", tmp_path / "none")
+    monkeypatch.setattr(wiki_publish, "_sensitive_terms_path", lambda: tmp_path / "none")
     monkeypatch.delenv("CATFISH_HOME", raising=False)   # 11/08: 装机根目录跟搜索一样走 _catfish_home (= Path.home()/.catfish)
     d = tmp_path / ".catfish" / "wiki" / "entities"
     d.mkdir(parents=True)
@@ -83,7 +82,7 @@ def test_failed_publish_does_not_record_file_id(home, gateway):
     r = wiki_publish.wiki_publish({"wiki_rel_path": "wiki/entities/老李.md"})
     assert r["ok"] is False
     assert "部门" in r["error"]
-    assert not wiki_publish.PUBLISH_STATE_PATH.exists()
+    assert not wiki_publish._publish_state_path().exists()
 
 
 def test_install_records_hub_updated_at_and_encodes_dept(home, gateway):

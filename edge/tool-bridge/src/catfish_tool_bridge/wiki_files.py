@@ -680,6 +680,8 @@ def update_wiki_file(rel_path: str, content: str) -> dict[str, Any]:
         content = _upsert_ontology_status(content, status)
     else:
         status, reasons = "active", []
+    from . import wiki_guard  # noqa: PLC0415  (11/08: 先备份到 wiki/.history, updated 换成今天)
+    content, _bak = wiki_guard.touch_updated(content), wiki_guard.snapshot(home, rel_path)
     try:
         abs_path.write_text(content, encoding="utf-8")
     except OSError as e:

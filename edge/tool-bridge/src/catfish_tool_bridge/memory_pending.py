@@ -95,6 +95,7 @@ def resolve(params: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": moved.get("error")}
     result = apply_memory_pending(rec.get("payload") or {}, load_on_disk_store())
     if not result.get("success"):
+        moves.undo(moved)   # 11/08: 知识库那页退回去, 不留指针指不到 / 多追加一段的半成品
         return {"ok": False, "error": _plain_error(str(result.get("error") or ""))}
     wa.discard_pending(wa.MEMORY, pid)
     moves.drop(pid)
