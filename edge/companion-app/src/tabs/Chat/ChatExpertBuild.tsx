@@ -30,7 +30,7 @@ export function BuildOverviewButton({ resultText }: { resultText: string }) {
                        background: "var(--catfish-cyan)", color: "white", cursor: "pointer" }}>
         打开总览卡
       </button>
-      <span style={{ color: "var(--catfish-text-muted)" }}>在工作台「技能 → 专家」里看过、勾选, 点「全部保存并生效」</span>
+      <span style={{ color: "var(--catfish-text-muted)" }}>在「设置 → 技能 → 专家」里看过、勾选, 点「全部保存并生效」</span>
     </div>
   );
 }

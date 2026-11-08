@@ -57,7 +57,7 @@ interface UIState {
   /** 11/5: 「协同」页看的是协同事项还是群聊 —— 群聊时整页固定、只有消息区滚 (App 据此锁住 main 的滚动) */
   collabView: "work" | "rooms";
   setCollabView: (v: "work" | "rooms") => void;
-  /** 11/08 对话里「打开总览卡」: 切到工作台「技能 → 专家」并展开这张「一句话搭专家」的总览卡 */
+  /** 11/08 对话里「打开总览卡」: 切到「设置 → 技能 → 专家」并展开这张「一句话搭专家」的总览卡 */
   pendingExpertBuild: string | null;
   openExpertBuild: (buildId: string) => void;
   /** 11/07 提醒条上「看任务」「去交回」: 切到「协同 · 协同事项」并打开这个任务 (发起人 = 进度, 收件人 = 处理窗口) */
@@ -144,7 +144,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   setCollabView: (v) => set({ collabView: v }),
   pendingExpertBuild: null,
   openExpertBuild: (buildId) => {
-    try {   // 工作台「技能」那一栏展开、选中「专家」页签 (DashboardTab 挂上时读这两个)
+    try {   // 「设置」页「技能」那一栏展开、选中「专家」页签 (DashboardTab 挂上时读这两个)
       localStorage.setItem("section_tab_skills", "experts");
       localStorage.setItem("dashboard_section_skills_collapsed", "0");
     } catch {
