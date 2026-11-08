@@ -112,6 +112,35 @@ describe("buildWikiRelationshipTasks", () => {
     expect(duplicates[0].duplicatePaths).toHaveLength(2);
   });
 
+  it("11/08: 名字很像的 (人力部 / 人力资源部、云堤 / 云堤公司) 也算可能重复; 点过「不是同一个」的不再提示", () => {
+    const files = [
+      file({ rel_path: "wiki/entities/a.md", title: "人力部", subtype: "department" }),
+      file({ rel_path: "wiki/entities/b.md", title: "人力资源部", subtype: "department" }),
+      file({ rel_path: "wiki/entities/c.md", title: "云堤", subtype: "org" }),
+      file({ rel_path: "wiki/entities/d.md", title: "云堤公司", subtype: "org" }),
+      file({ rel_path: "wiki/entities/e.md", title: "北京分公司", subtype: "org" }),
+      file({ rel_path: "wiki/entities/f.md", title: "北京福富软件技术股份有限公司福州分公司", subtype: "org" }),
+      file({ rel_path: "wiki/entities/g.md", title: "财务部", subtype: "department" }),
+      file({ rel_path: "wiki/entities/h.md", title: "中国电信", subtype: "org" }),
+      file({ rel_path: "wiki/entities/i.md", title: "中国电信海南公司", subtype: "org" }),
+    ];
+    const dups = buildWikiRelationshipTasks(files).filter((t) => t.kind === "duplicate");
+    expect(dups.map((t) => t.duplicatePaths!.sort().join("|")).sort()).toEqual([
+      "wiki/entities/a.md|wiki/entities/b.md", "wiki/entities/c.md|wiki/entities/d.md",
+    ]);
+    const ignored = new Set(["wiki/entities/a.md|wiki/entities/b.md"]);
+    const left = buildWikiRelationshipTasks(files, new Date(), new Set(), {}, ignored).filter((t) => t.kind === "duplicate");
+    expect(left.map((t) => t.duplicatePaths!.join("|"))).toEqual(["wiki/entities/c.md|wiki/entities/d.md"]);
+  });
+
+  it("11/08: 类型不同的不当重复 (项目「人力资源系统」vs 部门「人力资源部」)", () => {
+    const files = [
+      file({ rel_path: "wiki/entities/a.md", title: "人力资源部", subtype: "department" }),
+      file({ rel_path: "wiki/entities/b.md", title: "人力资源系统", subtype: "project" }),
+    ];
+    expect(buildWikiRelationshipTasks(files).filter((t) => t.kind === "duplicate")).toEqual([]);
+  });
+
   it("把断链和缺少关系类型拆成可逐条修复的任务", () => {
     const tasks = buildWikiRelationshipTasks([
       file({

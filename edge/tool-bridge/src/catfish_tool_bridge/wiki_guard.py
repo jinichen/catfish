@@ -101,6 +101,30 @@ def normalize_name(name: str) -> str:
     return s or unicodedata.normalize("NFKC", name or "").strip().lower()
 
 
+_GENERIC_TAIL = frozenset({"平台", "机制", "系统", "项目", "专项", "方案", "办法", "制度", "规范", "流程", "中心", "部", "部门", "处", "组", "室"})
+
+
+def _subsequence(short: str, long: str) -> bool:
+    it = iter(long)
+    return all(c in it for c in short)
+
+
+def names_alike(a: str, b: str) -> bool:
+    """「像」的定义 (跟界面 wikiRelationshipTasks.namesAlike 同一条): 归一后一样 (云堤 / 云堤公司),
+    或者短的是长的子序列且长度不少于长的一半 (人力部 / 人力资源部; 「北京分公司」对「北京福富…福州分公司」就不算)。"""
+    na, nb = normalize_name(a), normalize_name(b)
+    if not na or not nb:
+        return False
+    if na == nb:
+        return True
+    short, long = (na, nb) if len(na) <= len(nb) else (nb, na)
+    if len(short) < 3 or len(short) * 2 < len(long) or short == long or not _subsequence(short, long):
+        return False
+    # 短的是长的开头 (「中国电信」/「中国电信海南公司」「CCRC 资质」/「CCRC 资质…二级」) 多半是上下级 / 母子, 不是同一个;
+    # 只有后面多的是「平台 / 机制 / 系统」这类泛称才算 (「墨攻」/「墨攻平台」)
+    return not long.startswith(short) or long[len(short):] in _GENERIC_TAIL
+
+
 def similar_names(title: str, *, exclude: str = "") -> list[dict[str, str]]:
     """跟已有条目的标题 / 别名归一后一样的 (完全一样的归 wiki_names.name_owners 管, 这里管「像」)。"""
     from . import wiki_files  # noqa: PLC0415
@@ -117,7 +141,7 @@ def similar_names(title: str, *, exclude: str = "") -> list[dict[str, str]]:
         names = [item["title"], *(item.get("aliases") or [])]
         if any(n.strip().lower() == exact for n in names):
             continue   # 完全一样的另有规则 (那是同一个东西, 直接指过去)
-        hit = next((n for n in names if normalize_name(n) == want), None)
+        hit = next((n for n in names if names_alike(n, title)), None)
         if hit:
             out.append({"rel_path": item["rel_path"], "title": item["title"], "matched": hit})
     return out

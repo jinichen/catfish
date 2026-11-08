@@ -15,6 +15,7 @@ import WikiActionPanel from "./WikiActionPanel";
 import WikiAmbiguousPanel from "./WikiAmbiguousPanel";
 import WikiRelationsEditor from "./WikiRelationsEditor";
 import WikiUntypedBatch from "./WikiUntypedBatch";
+import { useIgnoredDuplicates } from "../../lib/wikiDuplicateIgnored";
 import { useKeptUntyped } from "../../lib/wikiUntypedKept";
 import { customHierarchy, useRelationVocab } from "../../lib/wikiRelationVocab";
 import WikiHierarchyIssuePanel from "./WikiHierarchyIssuePanel";
@@ -61,10 +62,11 @@ export default function WikiRelationshipWorkbench({
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const keptUntyped = useKeptUntyped();
+  const ignoredDuplicates = useIgnoredDuplicates();
   const customRelations = useRelationVocab((state) => state.custom);
   const tasks = useMemo(
-    () => buildWikiRelationshipTasks(files, new Date(), keptUntyped, customHierarchy(customRelations)),
-    [files, keptUntyped, customRelations],
+    () => buildWikiRelationshipTasks(files, new Date(), keptUntyped, customHierarchy(customRelations), ignoredDuplicates),
+    [files, keptUntyped, customRelations, ignoredDuplicates],
   );
   const selectedTask = useMemo(
     () => tasks.find((task) => task.id === taskId)

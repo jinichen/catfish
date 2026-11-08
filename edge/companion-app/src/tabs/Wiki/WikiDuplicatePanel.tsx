@@ -3,6 +3,7 @@
  * 每条一张卡 (类型 · 来源 · 正文前几行), 两种处理:
  *   · 保留这条 —— 其余的内容、别名、关系、来源并进来, 其余文件移到回收站 (wiki/.trash, 可找回)
  *   · 改个名 —— 确实是两个东西, 名字撞了; 改完各自留着
+ *   · 不是同一个 (11/08) —— 名字只是像 (「人力部」/「人力资源部」这种现在也会提示), 记住不再提示
  */
 import { useEffect, useState } from "react";
 import { ArrowRight, CheckCircle, PencilSimple, SpinnerGap, Stack, WarningCircle } from "@phosphor-icons/react";
@@ -11,6 +12,7 @@ import { useWikiStore } from "../../store/wiki";
 import type { WikiRelationshipTask } from "./wikiRelationshipTasks";
 import { wikiSourceLabel, wikiSubtypeLabel, wikiKindLabel } from "./wikiLabels";
 import { mergeWikiEntries, renameWikiEntry } from "./wikiMerge";
+import { addIgnoredDuplicate } from "../../lib/wikiDuplicateIgnored";
 
 function preview(body: string): string[] {
   return body.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#")).slice(0, 3);
@@ -58,6 +60,11 @@ export default function WikiDuplicatePanel({ task, onLater }: { task: WikiRelati
     return `已合并成一条「${main.info.title}」，另外 ${others.length} 条移到了回收站`;
   }, main.info.rel_path);
 
+  const notSame = () => {
+    addIgnoredDuplicate(paths);
+    setNotice("记住了：这几条不是同一个东西，以后不再提示");
+  };
+
   const rename = (entry: WikiFileFull) => {
     const name = newName.trim();
     if (!name || name === entry.info.title) return;
@@ -83,7 +90,7 @@ export default function WikiDuplicatePanel({ task, onLater }: { task: WikiRelati
         <Stack size={22} aria-hidden="true" />
         <div>
           <h3>这 {paths.length} 条可能是同一个东西</h3>
-          <p>是同一个：选要保留的那条，其余的内容并进来。不是：给其中一条改个名字。</p>
+          <p>是同一个：选要保留的那条，其余的内容、别名、关系并进来（原名自动变成别名，别处引用照样能找到）。不是：点「不是同一个」，以后不再提示。</p>
         </div>
       </div>
       {!entries && !error && <p className="wiki-dup__loading"><SpinnerGap className="wiki-spin" size={18} />正在读取…</p>}
@@ -127,6 +134,7 @@ export default function WikiDuplicatePanel({ task, onLater }: { task: WikiRelati
       {error && <p className="wiki-workbench__error"><WarningCircle size={16} />{error}</p>}
       <div className="wiki-relation-editor__actions">
         <span className="wiki-workbench__hint">合并后另一条移到回收站，可以找回</span>
+        <button type="button" className="wiki-workbench__secondary" disabled={busy} onClick={notSame}>不是同一个</button>
         {onLater && <button type="button" className="wiki-workbench__secondary" onClick={onLater}>稍后处理</button>}
       </div>
     </section>

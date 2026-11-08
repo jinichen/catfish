@@ -163,7 +163,34 @@ function normalizeName(value: string): string {
     .replace(/[\s·•,，.。()（）\-_]/g, "");
 }
 
-function duplicateGroups(files: WikiFileInfo[]): WikiFileInfo[][] {
+/** 11/08: 公司类后缀去掉再比 (「云堤」vs「云堤公司」) */
+const ORG_SUFFIX = /(集团)?(股份)?(有限)?(责任)?公司$|有限公司|股份有限公司|科技公司$|信息科技|信息技术|科技$|公司$/;
+function stripSuffix(name: string): string {
+  return name.replace(ORG_SUFFIX, "") || name;
+}
+const GENERIC_TAIL = new Set(["平台", "机制", "系统", "项目", "专项", "方案", "办法", "制度", "规范", "流程", "中心", "部", "部门", "处", "组", "室"]);
+function isSubsequence(short: string, long: string): boolean {
+  let i = 0;
+  for (const ch of long) if (i < short.length && ch === short[i]) i += 1;
+  return i === short.length;
+}
+/** 「像」的定义 (跟 tool-bridge wiki_guard.names_alike 同一条): 归一后一样, 或短的是长的子序列且长度不少于长的一半
+ *  (「人力部」/「人力资源部」算; 「北京分公司」对「北京福富…福州分公司」不算)。两个字以下不比。 */
+export function namesAlike(a: string, b: string): boolean {
+  const na = stripSuffix(normalizeName(a));
+  const nb = stripSuffix(normalizeName(b));
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  const [short, long] = na.length <= nb.length ? [na, nb] : [nb, na];
+  if (short.length < 3 || short.length * 2 < long.length || !isSubsequence(short, long)) return false;
+  // 短的是长的开头 (「中国电信」/「中国电信海南公司」) 多半是上下级, 不算; 后面多的是泛称才算 (「墨攻」/「墨攻平台」)
+  return !long.startsWith(short) || GENERIC_TAIL.has(long.slice(short.length));
+}
+function sameType(a: WikiFileInfo, b: WikiFileInfo): boolean {
+  return a.kind === b.kind && (!a.subtype || !b.subtype || a.subtype === b.subtype);
+}
+
+function duplicateGroups(files: WikiFileInfo[], ignored: ReadonlySet<string> = new Set()): WikiFileInfo[][] {
   const candidates = files.filter((file) => file.kind !== "query");
   const namesByPath = new Map<string, Set<string>>();
   const pathsByName = new Map<string, Set<string>>();
@@ -182,31 +209,47 @@ function duplicateGroups(files: WikiFileInfo[]): WikiFileInfo[][] {
     }
   }
 
-  const duplicatePaths = new Set<string>();
+  // 邻接: 名字 / 别名完全一样的 (老规则) + 名字「像」的 (11/08, 同类型才比)
+  const neighbors = new Map<string, Set<string>>();
+  const link = (a: string, b: string) => {
+    if (a === b) return;
+    (neighbors.get(a) ?? neighbors.set(a, new Set()).get(a)!).add(b);
+    (neighbors.get(b) ?? neighbors.set(b, new Set()).get(b)!).add(a);
+  };
   for (const paths of pathsByName.values()) {
-    if (paths.size > 1) paths.forEach((path) => duplicatePaths.add(path));
+    const list = [...paths];
+    for (let i = 1; i < list.length; i += 1) link(list[0], list[i]);
+  }
+  for (let i = 0; i < candidates.length; i += 1) {
+    for (let j = i + 1; j < candidates.length; j += 1) {
+      const a = candidates[i];
+      const b = candidates[j];
+      if (!sameType(a, b)) continue;
+      if (namesAlike(a.title, b.title) || a.aliases.some((x) => namesAlike(x, b.title)) || b.aliases.some((x) => namesAlike(x, a.title))) {
+        link(a.rel_path, b.rel_path);
+      }
+    }
   }
 
   const groups: WikiFileInfo[][] = [];
   const visited = new Set<string>();
   for (const file of candidates) {
-    if (!duplicatePaths.has(file.rel_path) || visited.has(file.rel_path)) continue;
+    if (!neighbors.has(file.rel_path) || visited.has(file.rel_path)) continue;
     const groupPaths = new Set<string>([file.rel_path]);
     const queue = [file.rel_path];
     while (queue.length > 0) {
       const path = queue.shift()!;
-      for (const name of namesByPath.get(path) ?? []) {
-        for (const neighbor of pathsByName.get(name) ?? []) {
-          if (!groupPaths.has(neighbor)) {
-            groupPaths.add(neighbor);
-            queue.push(neighbor);
-          }
+      for (const neighbor of neighbors.get(path) ?? []) {
+        if (!groupPaths.has(neighbor)) {
+          groupPaths.add(neighbor);
+          queue.push(neighbor);
         }
       }
     }
     groupPaths.forEach((path) => visited.add(path));
     const group = candidates.filter((candidate) => groupPaths.has(candidate.rel_path));
-    if (group.length > 1) groups.push(group);
+    // 点过「不是同一个」的组不再提示 (完全一样的组除外 —— 同一个名字指两条永远是问题)
+    if (group.length > 1 && !ignored.has(group.map((f) => f.rel_path).sort().join("|"))) groups.push(group);
   }
   return groups;
 }
@@ -216,6 +259,7 @@ export function buildWikiRelationshipTasks(
   today: Date = new Date(),
   keptUntyped: ReadonlySet<string> = new Set(),
   customHierarchy: Readonly<Record<string, HierarchyDirection>> = {},
+  ignoredDuplicates: ReadonlySet<string> = new Set(),
 ): WikiRelationshipTask[] {
   const isPending = (file: WikiFileInfo) => (file.ontology_status ?? "active") === "pending";
 
@@ -278,11 +322,11 @@ export function buildWikiRelationshipTasks(
     candidates: group.candidates,
   }));
 
-  const duplicates = duplicateGroups(files).map((group): WikiRelationshipTask => ({
+  const duplicates = duplicateGroups(files, ignoredDuplicates).map((group): WikiRelationshipTask => ({
     id: `duplicate:${group.map((file) => file.rel_path).sort().join("|")}`,
     kind: "duplicate",
     title: `核对「${group.map((file) => file.title).join(" / ")}」`,
-    detail: `${group.length} 个名称或别名相同的条目，本轮只提示、不自动合并`,
+    detail: `${group.length} 个名字一样或很像的条目，可能是同一个东西：是就合并，不是就点「不是同一个」`,
     file: group[0],
     duplicatePaths: group.map((file) => file.rel_path),
   }));

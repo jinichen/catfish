@@ -10,6 +10,7 @@ import { useMemo } from "react";
 import { ArrowRight, WarningCircle } from "@phosphor-icons/react";
 import { customHierarchy, useRelationVocab } from "../../lib/wikiRelationVocab";
 import { useKeptUntyped } from "../../lib/wikiUntypedKept";
+import { useIgnoredDuplicates } from "../../lib/wikiDuplicateIgnored";
 import type { WikiFileFull } from "../../lib/tauri_wiki";
 import { useWikiStore } from "../../store/wiki";
 import WikiRelationsEditor from "./WikiRelationsEditor";
@@ -51,13 +52,14 @@ export default function WikiEntryIssues({
 }) {
   const files = useWikiStore((state) => state.files);
   const keptUntyped = useKeptUntyped();
+  const ignoredDuplicates = useIgnoredDuplicates();
   const customRelations = useRelationVocab((state) => state.custom);
   const mine = useMemo(
     () => entryTasks(
-      buildWikiRelationshipTasks(files, new Date(), keptUntyped, customHierarchy(customRelations)),
+      buildWikiRelationshipTasks(files, new Date(), keptUntyped, customHierarchy(customRelations), ignoredDuplicates),
       selectedFile.info.rel_path,
     ),
-    [files, keptUntyped, customRelations, selectedFile.info.rel_path],
+    [files, keptUntyped, customRelations, ignoredDuplicates, selectedFile.info.rel_path],
   );
   if (mine.length === 0 || selectedFile.info.rel_path.startsWith("wiki-shared/")) return null;
 

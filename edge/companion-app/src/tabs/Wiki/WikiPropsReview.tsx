@@ -2,8 +2,8 @@
  * 11/07「整理属性」: 把一类知识 (现在是资质证书) 正文里写着的编号 / 发证机构 / 有效期 … 抽成属性。
  *
  * 先按固定句式抽 (秒出, 不花 token); 句式抽不到、正文像是写了的, 可以再「让小鲶读正文补」(一两分钟)。
- * 只给建议: 每个值都能改, 勾上的才写; 写之前每个文件整份备份到 ~/.catfish/wiki/.props-backups/。
- * 小鲶抽的值框是橙色的 —— 那是模型读出来的 (后端已校验值确实出现在正文里), 建议多看一眼。
+ * 11/08 鸿波「为什么只给建议」: 固定句式抽到的是原文照抄, 直接写 (改前有历史备份); 小鲶读出来的默认全勾, 一键全写,
+ * 只需要把明显不对的勾掉。小鲶抽的值框是橙色的 —— 那是模型读出来的 (后端已校验值确实出现在正文或原件里)。
  */
 import { useEffect, useMemo, useState } from "react";
 import { SpinnerGap, X } from "@phosphor-icons/react";
@@ -103,8 +103,8 @@ export default function WikiPropsReview({ onClose }: { onClose: () => void }) {
           </button>
         </div>
         <p style={{ margin: 0, color: V.muted, fontSize: 13, lineHeight: 1.5 }}>
-          把正文里写着的信息抽成属性，之后才能按到期日查、挂类型上的行动。每个值都能改，勾上的才写进去；只改文件头里的属性，正文不动，写之前整份备份。
-          <b style={{ color: V.warn }}> 橙框</b>是小鲶读正文抽的，多看一眼。
+          把正文里写着的信息抽成属性，之后才能按到期日查、挂类型上的行动。按固定句式抽到的（编号、日期这类原文照抄）已经直接写进去；
+          <b style={{ color: V.warn }}> 橙框</b>是小鲶读正文和上传资料抽的，默认全勾，把不对的勾掉再「全部写入」。只改文件头里的属性，正文不动，改前有备份。
         </p>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           {types.length > 1 && (
@@ -114,19 +114,24 @@ export default function WikiPropsReview({ onClose }: { onClose: () => void }) {
           )}
           {result && (
             <span style={{ fontSize: 13, color: V.muted }}>
-              {result.label} {result.scanned} 条，{result.items.length} 条有可补 / 可改的属性
+              {result.label} {result.scanned} 条
+              {result.written?.length ? `，按固定句式已直接写入 ${result.written.length} 条` : ""}
+              {result.items.length ? `，${result.items.length} 条等你过目` : ""}
             </span>
           )}
           {result && !result.used_model && result.model_candidates > 0 && (
             <button type="button" disabled={!!busy} onClick={() => void run(true)} style={{ ...btn, background: V.bg }}>
-              {busy === "model" ? "小鲶在读…（一两分钟）" : `让小鲶读正文补（${result.model_candidates} 条句式没抽全）`}
+              {busy === "model" ? "小鲶在读…（一两分钟）" : `让小鲶读正文和上传资料补（${result.model_candidates} 条）`}
             </button>
           )}
           {busy === "pattern" && <SpinnerGap className="wiki-spin" size={16} />}
         </div>
 
         {result && result.items.length === 0 && !busy && (
-          <p style={{ fontSize: 13, color: V.muted }}>没有要补的属性了。</p>
+          <p style={{ fontSize: 13, color: V.muted }}>
+            {result.written?.length ? `固定句式抽到的 ${result.written.length} 条已经写好了：${result.written.slice(0, 5).map((w) => w.title).join("、")}${result.written.length > 5 ? "…" : ""}。` : ""}
+            {result.model_candidates > 0 ? "剩下的要小鲶读一读才补得到。" : "没有要补的属性了。"}
+          </p>
         )}
         {result && result.items.length > 0 && (
           // 11/07: 原来是一行一条的大表, 证书 10 个属性要左右拖着看; 改成一条一张卡片, 属性在卡片里换行排
@@ -169,7 +174,7 @@ export default function WikiPropsReview({ onClose }: { onClose: () => void }) {
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <button type="button" disabled={!!busy || chosen.length === 0} onClick={() => void apply()}
             style={{ ...btn, background: V.accent, color: "#fff" }}>
-            {busy === "apply" ? "写入中…" : `写入勾上的 ${chosen.length} 条`}
+            {busy === "apply" ? "写入中…" : allChecked ? `全部写入（${chosen.length} 条）` : `写入勾上的 ${chosen.length} 条`}
           </button>
           {message && <span style={{ fontSize: 13, color: message.includes("失败") ? V.error : V.muted }}>{message}</span>}
         </div>

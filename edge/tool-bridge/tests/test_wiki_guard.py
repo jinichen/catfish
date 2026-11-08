@@ -83,6 +83,16 @@ def test_相似名归一():
     assert n("ISO 27001") == n("iso27001")
 
 
+def test_像不像_人力部与人力资源部算像_北京分公司与长名字不算():
+    alike = wiki_guard.names_alike
+    assert alike("人力部", "人力资源部") and alike("云堤", "云堤公司") and alike("董事会", "公司董事会")
+    assert not alike("北京分公司", "北京福富软件技术股份有限公司福州分公司")
+    assert not alike("中国电信", "中国电信海南公司") and not alike("CCRC 信息安全服务资质", "CCRC 信息安全服务资质软件安全开发一级")
+    assert alike("揭榜挂帅", "揭榜挂帅机制") and alike("墨攻平台", "墨攻安全运营平台")
+    assert not alike("星辰", "星辰平台"), "两个字的名字不比, 太容易误中"
+    assert not alike("财务部", "人力资源部") and not alike("ab", "abc")
+
+
 def test_建页_跟已有的很像就拦_确认不同才建(home):
     _page(home, "wiki/entities/yundi.md", "云堤", type="entity", entity_type="org")
     r = wt.tool_wiki_create({"kind": "entity", "title": "云堤公司", "subtype": "org", "body": "x"})

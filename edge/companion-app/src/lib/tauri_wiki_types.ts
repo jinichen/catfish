@@ -58,6 +58,8 @@ export interface WikiPropsProposeResult {
   items: WikiPropsProposal[];
   used_model: boolean;
   model_candidates: number;
+  /** 11/08: 固定句式抽到、已经直接写进去的 (标题 + 属性) */
+  written?: { rel_path: string; title: string; props: Record<string, string> }[];
 }
 
 export interface WikiPropsApplyResult {

@@ -86,3 +86,15 @@ def test_词表外的细分类型归一_资料要点是文件资料(home):
                              "body": "文号：中电福富司〔2026〕59号，发布日期 2026-05-01。"})
     assert r["ok"] and r["type"] == "doc" and r["props"]["doc_no"] == "中电福富司〔2026〕59号" and r["props"]["issued_on"] == "2026-05-01"
     assert wiki_types.query({"type": "doc", "where": [{"field": "doc_no", "contains": "59号"}]})["total"] == 1
+
+
+def test_整理属性_固定句式抽到的直接写_小鲶读的仍是建议(home, monkeypatch):
+    _page(home, "wiki/entities/c1.md", "证书甲", "证书编号：CN-0001，有效期至 2030-01-01。", type="entity", entity_type="cert")
+    _page(home, "wiki/entities/c2.md", "证书乙", "这张证书的编号写在附件里。发证机构是方圆。", type="entity", entity_type="cert")
+    monkeypatch.setattr(wiki_types, "_call_model", lambda prompt: '{"0": {"issuer": "方圆"}}')
+    r = wiki_types.propose({"type": "cert", "use_model": True, "use_sources": False})
+    assert [w["title"] for w in r["written"]] == ["证书甲"] and r["written"][0]["props"]["cert_no"] == "CN-0001"
+    assert 'cert_no: "CN-0001"' in (home / "wiki/entities/c1.md").read_text()
+    assert [it["title"] for it in r["items"]] == ["证书乙"] and r["items"][0]["source"] == {"issuer": "model"}
+    r2 = wiki_types.propose({"type": "cert", "use_model": False, "auto_pattern": False})
+    assert r2["written"] == [] and r2["items"] == []

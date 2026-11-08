@@ -521,6 +521,20 @@ def propose(params: dict[str, Any]) -> dict[str, Any]:
         # 正文没提、原件也没提到的, 不白花 token
         llm_jobs = [j for j in llm_jobs if j.get("extra") or any(_llm_wanted(j["body"], props_def[k]) for k in j["want"])]
     by_rel = {e["rel_path"]: e for e in entries}
+    # 11/08 鸿波「整理属性为什么只给建议」: 固定句式抽到的是原文照抄, 没有理解成分, 直接写 (每页改前有历史备份, 能退);
+    # 小鲶读出来的仍然给建议 (界面上默认全勾, 一键全写)。auto_pattern=false 回到全部只给建议。
+    written: list[dict[str, Any]] = []
+    if params.get("auto_pattern", True) is not False:
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        for e in entries:
+            changes = {k: v for k, v in e["found"].items() if v and e["current"].get(k) != v}
+            if not changes:
+                continue
+            w = set_props_file(e["rel_path"], changes, schema, backup_stamp=stamp)
+            if w.get("ok"):
+                written.append({"rel_path": e["rel_path"], "title": e["title"], "props": changes})
+                e["current"].update(changes)
+                e["found"] = {k: v for k, v in e["found"].items() if k not in changes}
     for i in range(0, len(llm_jobs) if use_model else 0, _LLM_BATCH):
         for rel, vals in _llm_extract(llm_jobs[i:i + _LLM_BATCH], tdef).items():
             by_rel[rel]["found"].update(vals)
@@ -535,6 +549,7 @@ def propose(params: dict[str, Any]) -> dict[str, Any]:
         "ok": True, "type": type_key, "label": tdef.get("label"),
         "properties": [{"key": p["key"], "label": p.get("label", p["key"]), "type": p.get("type", "text")} for p in tdef.get("properties") or []],
         "scanned": len(entries), "items": items, "used_model": use_model,
+        "written": written,   # 固定句式抽到、已经直接写进去的 (标题 + 属性)
         # 固定句式抽不到、但正文像是写了的条目数 (use_model=false 时告诉界面「让小鲶读正文再补」要读几条)
         "model_candidates": len(llm_jobs),
     }

@@ -23,6 +23,7 @@ import {
 } from "../../lib/tauri_wiki";
 import WikiTree from "./WikiTree";
 import { useKeptUntyped } from "../../lib/wikiUntypedKept";
+import { useIgnoredDuplicates } from "../../lib/wikiDuplicateIgnored";
 import { customHierarchy, useRelationVocab } from "../../lib/wikiRelationVocab";
 import WikiRelationTypesModal from "./WikiRelationTypesModal";
 import WikiPropsReview from "./WikiPropsReview";
@@ -51,7 +52,7 @@ const TASK_META: Record<
   skiplevel: { label: "跨级重复", icon: TreeStructure },
   multiparent: { label: "多个上级", icon: TreeStructure },
   stale: { label: "进度待核对", icon: ClockCounterClockwise },
-  duplicate: { label: "可能重复", icon: Copy },
+  duplicate: { label: "可能重复", icon: Copy },   // 11/08: 名字一样或很像 (人力部 / 人力资源部)
 };
 
 export default function WikiOrganizer({
@@ -86,6 +87,7 @@ export default function WikiOrganizer({
   }, [files.length, filesLoading, loadFiles]);
 
   const keptUntyped = useKeptUntyped();
+  const ignoredDuplicates = useIgnoredDuplicates();
   const hierarchy = useHierarchyModel();
   // 10/23: 关系类型 (内置 + 自定义); 打开知识体系就加载一次, 下拉 / 建议都从 store 拿
   const customRelations = useRelationVocab((state) => state.custom);
@@ -97,8 +99,8 @@ export default function WikiOrganizer({
     void loadRelationVocab();
   }, [loadRelationVocab]);
   const tasks = useMemo(
-    () => buildWikiRelationshipTasks(files, new Date(), keptUntyped, customHierarchy(customRelations)),
-    [files, keptUntyped, customRelations],
+    () => buildWikiRelationshipTasks(files, new Date(), keptUntyped, customHierarchy(customRelations), ignoredDuplicates),
+    [files, keptUntyped, customRelations, ignoredDuplicates],
   );
   const hasLegacyRelations = useMemo(() => hasLegacyWikiRelations(files), [files]);
   const counts = useMemo(() => {

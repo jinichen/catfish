@@ -109,7 +109,7 @@ def test_按属性查(home):
 
 def test_建议不写文件_确认后写入且先备份(home):
     rel = _write(home, "a.md", CERT)
-    r = wt.propose({"type": "cert", "use_model": False})
+    r = wt.propose({"type": "cert", "use_model": False, "auto_pattern": False})   # 11/08: 默认固定句式抽到的直接写, 这里关掉只看建议
     assert r["scanned"] == 1 and r["items"][0]["proposed"]["cert_no"] == "CCRC-2019-ISV-SD-210"
     assert (home / rel).read_text(encoding="utf-8") == CERT
     done = wt.apply({"items": [{"rel_path": rel, "props": r["items"][0]["proposed"]}]})
@@ -117,7 +117,7 @@ def test_建议不写文件_确认后写入且先备份(home):
     assert 'cert_no: "CCRC-2019-ISV-SD-210"' in (home / rel).read_text(encoding="utf-8")
     backups = list((home / "wiki" / ".props-backups").rglob("a.md"))
     assert len(backups) == 1 and backups[0].read_text(encoding="utf-8") == CERT
-    assert wt.propose({"type": "cert", "use_model": False})["items"] == []
+    assert wt.propose({"type": "cert", "use_model": False, "auto_pattern": False})["items"] == []
 
 
 def test_小鲶抽的值必须真在正文里(home, monkeypatch):
@@ -129,8 +129,9 @@ def test_小鲶抽的值必须真在正文里(home, monkeypatch):
     got = r["items"][0]
     assert got["proposed"]["scope"] == "信息系统安全集成服务" and got["source"]["scope"] == "model"
     assert got["proposed"]["review_on"] == "2027-05-01"
-    assert got["proposed"]["cert_no"] == "CCRC-2019-ISV-SD-210" and got["source"]["cert_no"] == "pattern"
-    assert rel == got["rel_path"]
+    # 11/08: 固定句式抽到的编号已经直接写进去了, 不再出现在建议里
+    assert "cert_no" not in got["proposed"] and r["written"][0]["props"]["cert_no"] == "CCRC-2019-ISV-SD-210"
+    assert rel == got["rel_path"] == r["written"][0]["rel_path"]
 
 
 def test_本机补充定义_加属性和行动(home):
@@ -176,7 +177,7 @@ def test_待核_疑似_未录入_无限期都不当属性值(home, monkeypatch):
     reply = {"0": {"cert_no": "未录入（资质列表中为占位值「1」）", "valid_until": "无限期", "level": "无等级"}}
     monkeypatch.setattr(wt, "_call_model", lambda prompt: json.dumps(reply, ensure_ascii=False))
     r = wt.propose({"type": "cert"})
-    proposed = r["items"][0]["proposed"]
+    proposed = r["items"][0]["proposed"] if r["items"] else {}
     assert "cert_no" not in proposed and "valid_until" not in proposed
     assert rel
 
