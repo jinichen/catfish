@@ -198,6 +198,7 @@ const CATFISH: &[(Pat, Class, &str)] = &[
     (Prefix(".migration-"), Rebuild, "迁移临时文件"),
     (Exact("search.db"), Rebuild, "搜索索引"),
     (Exact("wiki_embeddings.db"), Rebuild, "知识库向量"),
+    (Exact("ca-bundle.pem"), Rebuild, "连中央用的证书包 (系统证书 + 公司内部 CA, 启动时重建)"),
     (Exact("wiki_graph.db"), Rebuild, "知识图谱索引"),
     (Exact("attachments.db"), Rebuild, "附件索引"),
     (Exact("advisor_embed_cache.db"), Rebuild, "缓存"),
