@@ -407,6 +407,58 @@ else
 fi
 echo ""
 
+# ============================================================
+# Section 21 — 定时任务三个补丁 (P21 / P26 / P59) 的上游锚点 (11/09)
+# ============================================================
+#
+# 这三个失效都不报错, 启动日志照样写「已装上」:
+#   P21 定时任务跟 Companion 选的模型走 —— 包的是 cron.scheduler.run_job 这个模块属性。
+#       调用方只要改成模块层 `from cron.scheduler import run_job`, 就攥着原函数绕过补丁
+#       (P27 就是这么死的)。v0.22 起真正跑任务的是会话属主 gateway/session_cron.execute,
+#       它在函数体里 import, 拿得到补丁。
+#   P26 卡片上的暂停 / 恢复 / 删除 —— 调 cron.jobs 的 pause_job / resume_job / remove_job。
+#   P59 定时任务里的「始终允许」—— 包 tools.approval 三个函数, 靠两个私有函数判断。
+# 这里只验锚点还在; 真调一遍的行为验证在
+#   edge/hermes-plugins/catfish-xcatfish-user/tests/test_cron_patches_on_real_hermes.py
+# 升级前两样都要跑。
+echo "── Section 21: 定时任务补丁锚点 (P21 / P26 / P59) ──"
+
+check_grep "cron/scheduler.py" "^def run_job\(" "P21 cron.scheduler.run_job 还在"
+check_grep "cron/scheduler.py" "^def _load_cron_job_config\(job" "P21 定模型的函数还在"
+check_grep "cron/scheduler.py" "model = job\.get\(\"model\"\)" "P21 定模型时先看 job[\"model\"] (注入才有用)"
+check_grep "cron/scheduler.py" "_load_cron_job_config\(job," "P21 run_job 把同一个 job 交给定模型函数"
+check_grep "cron/scheduler.py" "_run_job_unless_cancelled\($" "P21 调度器调 run_job 的入口还在"
+check_grep "gateway/session_cron.py" "^    from cron\.scheduler import run_job" "P21 会话属主在函数体里 import run_job (拿得到补丁)"
+
+# 直接判据: 不该有模块在顶层把 run_job 绑成本地名字 (那样会攥着原函数, P21 静默失效)
+_p21_binders=$(grep -rnE "^from cron(\.scheduler)? import .*\brun_job\b|^from \.scheduler import .*\brun_job\b" \
+    "$HERMES_ROOT" --include=*.py 2>/dev/null | grep -v "/tests/" | grep -v "/evals/" | wc -l | tr -d ' ')
+if [ "${_p21_binders:-0}" -eq 0 ]; then
+    echo "  ✓ 没有模块在顶层 import run_job (P21 补丁不会被绕过)"
+    ((pass++))
+else
+    echo "  ✗ 有 $_p21_binders 处在模块顶层 import run_job —— 它们攥着原函数, P21 对那条路径无效"
+    echo "     → 跑 tests/test_cron_patches_on_real_hermes.py 看是哪条, 再决定补丁换包哪里"
+    ((fail++))
+fi
+
+check_grep "cron/jobs.py" "^def pause_job\(job_id: str, reason" "P26 cron.jobs.pause_job(job_id, reason)"
+check_grep "cron/jobs.py" "^def resume_job\(job_id: str\)" "P26 cron.jobs.resume_job(job_id)"
+check_grep "cron/jobs.py" "^def remove_job\(job_id: str\)" "P26 cron.jobs.remove_job(job_id)"
+check_grep "gateway/platforms/api_server.py" "def _check_auth\(" "P26 APIServerAdapter._check_auth (三个接口鉴权)"
+
+check_grep "tools/approval.py" "^def check_execute_code_guard\(code, env_type, has_host_access|^def check_execute_code_guard\(code: str, env_type: str, has_host_access" \
+    "P59 check_execute_code_guard(code, env_type, has_host_access)"
+check_grep "tools/approval.py" "^def is_approved\(" "P59 is_approved 还在"
+check_grep "tools/approval.py" "^def _human_decision\(" "P59 _human_decision 还在"
+check_grep "tools/approval.py" "^def _unattended_contexts\(\)" "P59 _unattended_contexts() (认定时任务 = 无人值守)"
+check_grep "tools/approval.py" "^def _is_permanently_approved\(pattern_key" "P59 _is_permanently_approved(pattern_key)"
+
+# Mac / Windows: 定时任务一律在 gateway 进程里跑, 补丁才在场 (Linux+systemd 才另起子进程, 子进程也会加载插件)
+check_grep "tools/process_registry.py" "if not _IS_LINUX:" "Mac/Windows 定时任务进程内跑"
+check_grep "cron/scheduler.py" "^        discover_plugins\(\)" "Linux 子进程跑定时任务时也加载插件"
+echo ""
+
 echo "========================================"
 echo "结果: pass=$pass  fail=$fail"
 if [ "$fail" -eq 0 ]; then
@@ -414,6 +466,7 @@ if [ "$fail" -eq 0 ]; then
     echo "  + P45 被 defer 工具改名守卫锚点在位 (sec 18)"
     echo "  + P36 退役依赖的 TERMINAL_CWD home 兜底还在 (sec 19)"
     echo "  + P25 退役依赖的 cron ContextVar 化还在 (sec 20)"
+    echo "  + 定时任务补丁 P21 / P26 / P59 锚点在位 (sec 21); 行为验证跑 test_cron_patches_on_real_hermes.py"
     echo "  + models.yaml chat model 全配 max_output_tokens (sec 17), 升级/加 model OK"
     exit 0
 else

@@ -47,7 +47,7 @@ done
 
 ```bash
 HERMES_ROOT="$HERMES_AUDIT_DIR" bash ~/person_task/catfish/edge/catfish-cli/scripts/audit_hermes_compat.sh
-# 期望: pass=53 fail=0
+# 期望: fail=0 (11/09 v0.22 上 pass=85; Section 21 = 定时任务补丁 P21/P26/P59 锚点)
 # 任何 fail → 看下面 "已知坑分类" 排查
 ```
 
@@ -100,6 +100,11 @@ git checkout "$HERMES_VERSION"
 
 # 跑 plugin 验证脚本
 HERMES_ROOT=~/.hermes/hermes-agent bash ~/person_task/catfish/edge/catfish-cli/scripts/audit_hermes_compat.sh
+
+# 定时任务补丁真调一遍 (P21 模型联动 / P26 暂停恢复删除 / P59 始终允许) —— 这三个失效时
+# 日志照样写「已装上」, 只有这个测试看得出来。用新树自己的 venv 跑, HERMES_HOME 是临时目录。
+cd ~/person_task/catfish/edge/hermes-plugins/catfish-xcatfish-user && \
+  HERMES_ROOT=~/.hermes/hermes-agent python -m pytest tests/test_cron_patches_on_real_hermes.py -q -p no:cacheprovider
 
 # 重启 hermes
 hermes gateway restart
