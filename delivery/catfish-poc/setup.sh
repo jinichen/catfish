@@ -29,6 +29,21 @@
 #   UPGRADE=1 IMAGE_TAR=./images/catfish-poc-central-amd64-<date>.tar.gz \
 #     SERVER_IP=192.168.100.50 ENABLE_HTTPS=1 bash setup.sh
 #
+#   # IP + 域名同时用 (11/08): 内网照旧 https://<IP>, 另外 https://<域名> 也能登录
+#   SERVER_IP=192.168.100.50 PUBLIC_HOST=catfish.example.com bash setup.sh
+#
+#   # 域名用正式证书 (公网 CA 签的, 浏览器 / 手机不用装任何东西); IP 仍用内部证书
+#   SERVER_IP=192.168.100.50 PUBLIC_HOST=catfish.example.com \
+#     TLS_CERT=/root/ssl/fullchain.pem TLS_KEY=/root/ssl/privkey.pem bash setup.sh
+#
+#   # 内网服务器 + 公网映射 (NAT): 公网 203.0.113.7:8443 → 内网 192.168.100.50:443
+#   SERVER_IP=192.168.100.50 PUBLIC_HOST=203.0.113.7:8443,catfish.example.com bash setup.sh
+#
+#   PUBLIC_HOST: 逗号分隔, 每项 域名或公网 IP [:外面实际打开的 https 端口, 默认同内部端口]。
+#     写进 .env (CATFISH_PUBLIC_HOSTS), 以后重跑 / UPGRADE=1 不写就沿用; PUBLIC_HOST=none 去掉。
+#   TLS_CERT / TLS_KEY: 只给域名用 (公网 CA 不给 IP 签证书); 校验后拷到 certs/official/,
+#     以后升级沿用, 换证书就带上新的 TLS_CERT / TLS_KEY 再跑一次。自动续期只管内部证书。
+#
 # 前置:
 #   - Ubuntu 22.04+ / CentOS 8+ / 麒麟 / 统信 · x86_64 或 arm64 (包要对上架构)
 #   - Docker 24+ + docker compose plugin —— 没有的话用 root 跑本脚本会先离线装好
@@ -68,6 +83,9 @@ LOCAL_ONLY="${LOCAL_ONLY:-0}"   # 1 = 单机模式: 服务器 IP 用 127.0.0.1, 
 IMAGE_TAR="${IMAGE_TAR:-}"   # 若未装 image · 指到 image tar 路径
 GATEWAY_WORKERS="${GATEWAY_WORKERS:-}"
 IDENTITY_WORKERS="${IDENTITY_WORKERS:-}"
+PUBLIC_HOST="${PUBLIC_HOST:-}"   # 11/08 域名 / 公网映射 (见文件头); 空 = 沿用 .env, none = 去掉
+TLS_CERT="${TLS_CERT:-}"         # 11/08 域名的正式证书 (fullchain PEM), 跟 TLS_KEY 成对
+TLS_KEY="${TLS_KEY:-}"
 
 # ── 参数写法: 环境变量必须在命令**前面** ──────────────────
 #
@@ -209,6 +227,24 @@ if [ -z "$IDENTITY_IMAGE" ]; then
     exit 1
 fi
 cd "$SCRIPT_DIR"
+
+# 11/08 正式证书: 先查参数齐不齐、文件在不在 —— 证书内容 (跟域名对不对得上 / 过没过期) 等镜像
+# load 好以后用 tools/certcheck.py 查 (跟 certgen 一样跑在 identity 镜像里)。
+if [ -n "$TLS_CERT$TLS_KEY" ]; then
+    if [ -z "$TLS_CERT" ] || [ -z "$TLS_KEY" ]; then
+        echo "❌ TLS_CERT 和 TLS_KEY 要一起给 (证书 + 私钥), 现在只给了一个"
+        exit 1
+    fi
+    for _f in "$TLS_CERT" "$TLS_KEY"; do
+        if [ ! -f "$_f" ]; then
+            echo "❌ 找不到文件: $_f"
+            echo "   TLS_CERT = 证书 (fullchain, PEM), TLS_KEY = 私钥 (PEM, 不带密码), 写绝对路径最稳"
+            exit 1
+        fi
+    done
+    TLS_CERT="$(cd "$(dirname "$TLS_CERT")" && pwd)/$(basename "$TLS_CERT")"
+    TLS_KEY="$(cd "$(dirname "$TLS_KEY")" && pwd)/$(basename "$TLS_KEY")"
+fi
 
 if [ "$UPGRADE" = "1" ] && [ ! -f .env ]; then
     echo "❌ UPGRADE=1 但当前目录没有 .env · 拒绝按新装流程生成配置"
@@ -575,6 +611,7 @@ ENVGEN_ARGS=(
     --gateway-workers "${GATEWAY_WORKERS:-}"
     --identity-workers "${IDENTITY_WORKERS:-}"
     --identity-url "${CATFISH_IDENTITY_URL:-}"
+    --public-host "$PUBLIC_HOST"
 )
 
 # 正在跑的 catfish 容器属于哪个 compose 项目 —— 升级时新容器必须接上它的卷。
@@ -617,9 +654,29 @@ COMPOSE_PROJECT_NAME=$(grep -E '^COMPOSE_PROJECT_NAME=' .env | head -1 | cut -d=
 [ -n "$COMPOSE_PROJECT_NAME" ] || { echo "❌ .env 里没有 COMPOSE_PROJECT_NAME (envgen 应该写了)"; exit 1; }
 export COMPOSE_PROJECT_NAME
 
+# 11/08 对外地址 (域名 / 公网映射) —— envgen 校验 + 规范化过的, 以 .env 为准 (PUBLIC_HOST 没传时是沿用的)
+PUBLIC_HOSTS=$(grep -E '^CATFISH_PUBLIC_HOSTS=' .env | head -1 | cut -d= -f2- || true)
+# 有字母 = 有域名 (纯数字点 = 公网 IP)。正式证书只管域名。
+PUBLIC_HAS_DOMAIN=0
+case "$PUBLIC_HOSTS" in *[a-z]*) PUBLIC_HAS_DOMAIN=1 ;; esac
+
+# 每行 "主机 对外端口 地址" (地址 = https://主机[:端口], 443 不写)。端口没写 = 跟内部 HTTPS 端口一样。
+public_entries() {
+    [ -n "$PUBLIC_HOSTS" ] || return 0
+    local _e _h _p
+    local IFS=','
+    for _e in $PUBLIC_HOSTS; do
+        [ -n "$_e" ] || continue
+        _h="${_e%%:*}"; _p="$HTTPS_PORT"
+        case "$_e" in *:*) _p="${_e##*:}" ;; esac
+        if [ "$_p" = "443" ]; then echo "$_h $_p https://$_h"; else echo "$_h $_p https://$_h:$_p"; fi
+    done
+}
+
 # ── 若只重生 .env · 到此为止 ───────────────────────────
 if [ "$REGEN_ENV_ONLY" = "1" ]; then
     echo ""
+    [ -n "$TLS_CERT" ] && echo "  ⓘ REGEN_ENV_ONLY=1 不处理 TLS_CERT / TLS_KEY (证书要装机时校验、拷贝), 完整跑一次 setup.sh"
     echo "✓ .env 已重生 · REGEN_ENV_ONLY=1 模式退出"
     echo "  下一步 · 重启涉及服务:"
     echo "    docker compose up -d --force-recreate identity gateway web"
@@ -687,8 +744,47 @@ if [ "$(id -u)" = "0" ]; then
 elif [ "$(id -u)" != "1000" ]; then
   echo "  ⚠ components/ 属主不是 uid 1000, 门户上传组件包会失败; 用 root 跑: chown 1000:1000 $(pwd)/components"
 fi
+# ── 3a. 正式证书 (11/08, 域名用) ───────────────────────────
+# 先于 certgen: certgen 收尾写 cert-info.json (门户「服务状态」的证书到期), 要把正式证书也算进去。
+# 新给的 TLS_CERT: 校验通过才拷进 certs/official/, 不过就停 (什么都没改)。
+# 没给但 certs/official/ 里已经有 (以前装的): 按现在的域名再核对一遍 —— 换了域名而证书没覆盖,
+#   nginx 会把那张证书发给新域名, 浏览器报错; 停下来说清楚。过期只提醒 (停下装机修不好它)。
+# renew-cert.sh 永远不碰 certs/official/。
+run_certcheck() {   # $1 $2 = 宿主机上的证书 / 私钥; 其余 = certcheck 的参数
+    local _c="$1" _k="$2"; shift 2
+    docker run --rm \
+        --user "$(id -u):$(id -g)" \
+        -v "$_c:/in/fullchain.pem:ro" \
+        -v "$_k:/in/privkey.pem:ro" \
+        -v "$SCRIPT_DIR/certs:/certs" \
+        -v "$SCRIPT_DIR/tools:/tools:ro" \
+        "$IDENTITY_IMAGE" \
+        python3 /tools/certcheck.py --cert /in/fullchain.pem --key /in/privkey.pem \
+            --public-hosts "$PUBLIC_HOSTS" "$@"
+}
+if [ -n "$TLS_CERT" ]; then
+    if [ "$ENABLE_HTTPS" != "1" ]; then
+        echo "❌ 给了 TLS_CERT 但没开 HTTPS —— 去掉 ENABLE_HTTPS=0 重跑"
+        exit 1
+    fi
+    echo "→ 正式证书: 校验 $TLS_CERT"
+    if ! run_certcheck "$TLS_CERT" "$TLS_KEY" --out /certs; then
+        echo "❌ 正式证书没装上 (原因见上), 装机停在这里 —— 正在跑的服务没动"
+        exit 1
+    fi
+elif [ "$ENABLE_HTTPS" = "1" ] && [ -s certs/official/fullchain.pem ] && [ -s certs/official/privkey.pem ]; then
+    if [ "$PUBLIC_HAS_DOMAIN" = "1" ]; then
+        echo "→ 正式证书: 沿用 certs/official/ (核对跟现在的域名对得上)"
+        if ! run_certcheck "$SCRIPT_DIR/certs/official/fullchain.pem" "$SCRIPT_DIR/certs/official/privkey.pem" --existing; then
+            exit 1
+        fi
+    else
+        echo "  ⓘ certs/official/ 里有正式证书, 但现在没配域名 (PUBLIC_HOST) —— 不启用。不要了可以删掉这个目录"
+    fi
+fi
+
 if [ "$ENABLE_HTTPS" = "1" ]; then
-    echo "→ 证书 (SAN 含 $SERVER_IP)"
+    echo "→ 证书 (SAN 含 $SERVER_IP${PUBLIC_HOSTS:+ + $PUBLIC_HOSTS})"
     # --user: 让产物属主是当前用户, 否则 Linux 上会变成镜像里的 uid 1000,
     # 下次非 root 的运维想动 certs/ 会 permission denied。
     # Windows/macOS 的 Docker Desktop 自己处理属主, 那边不传这个参数 (见 setup.ps1)。
@@ -697,7 +793,7 @@ if [ "$ENABLE_HTTPS" = "1" ]; then
             -v "$SCRIPT_DIR/certs:/certs" \
             -v "$SCRIPT_DIR/tools:/tools:ro" \
             "$IDENTITY_IMAGE" \
-            python3 /tools/certgen.py --ip "$SERVER_IP" --out /certs; then
+            python3 /tools/certgen.py --ip "$SERVER_IP" --out /certs --public-hosts "$PUBLIC_HOSTS"; then
         echo "❌ 证书生成失败 (详情见上)"
         exit 1
     fi
@@ -889,6 +985,82 @@ if [ "$ENABLE_HTTPS" = "1" ]; then
     fi
 fi
 
+# ── 11/08 对外地址 (PUBLIC_HOST: 域名 / 公网映射) ─────────────────
+# 在服务器上**模拟外面的请求**: 连的是本机 (--connect-to), 但 SNI / Host 跟外面打开时一模一样
+# (公网映射换了端口的, Host 带对外端口)。所以 DNS 没配、端口映射没做, 这里也验得了 ——
+# 验的是「请求真到了这台服务器, 它认不认这个地址」: issuer 对不对、给的哪张证书。
+# 外面到这台服务器那一段 (DNS / 防火墙 / 映射) 服务器自己验不了, 下面打印要找网管做的事。
+PUBLIC_TODO=""
+if [ "$ENABLE_HTTPS" = "1" ] && [ -n "$PUBLIC_HOSTS" ]; then
+    echo "  对外地址 (在服务器上模拟外面的请求, 不依赖 DNS / 映射):"
+    HAS_OFFICIAL=0
+    [ "$PUBLIC_HAS_DOMAIN" = "1" ] && [ -s certs/official/fullchain.pem ] && HAS_OFFICIAL=1
+    while read -r h ep url; do
+        [ -n "$h" ] || continue
+        hosthdr="$h"; [ "$ep" = "443" ] || hosthdr="$h:$ep"
+        # --noproxy: 服务器上设了 https_proxy 的话, 这些 (还没解析 / 公网) 名字会被送去代理, 验的就不是本机了
+        CT=(--noproxy '*' --connect-to "$h:$HTTPS_PORT:$SERVER_IP:$HTTPS_PORT" -H "Host: $hosthdr")
+        GOT_ISS=$(curl "${CURL_T[@]}" -s "${CT[@]}" "https://$h:$HTTPS_PORT/.well-known/openid-configuration" 2>/dev/null \
+                  | grep -oE '"issuer":"[^"]+"' | head -1 | cut -d'"' -f4 || true)
+        if [ "$GOT_ISS" = "$url" ]; then
+            echo "    ✓ $url · 登录地址 (issuer) 对"
+        else
+            echo "    ❌ $url · issuer 是「${GOT_ISS:-拿不到}」, 应为 $url —— docker compose logs identity web | tail -50"
+        fi
+        if [ "${REDIRECT_ON:-0}" = "1" ]; then
+            GOT=$(curl "${CURL_T[@]}" --noproxy '*' -s -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: $h" \
+                  "http://$SERVER_IP:$REDIRECT_PORT/" 2>/dev/null || true)
+            if [ "$GOT" = "301 $url/" ]; then
+                echo "      ✓ http://$h → $url"
+            else
+                echo "      ⚠ http://$h 没跳到 $url (得到「${GOT:-连不上}」) · 门户本身不受影响"
+            fi
+        fi
+        CERT_ISSUER=$(curl "${CURL_T[@]}" -sv -o /dev/null "${CT[@]}" "https://$h:$HTTPS_PORT/healthz" 2>&1 \
+                      | grep -iE '^\*[[:space:]]+issuer:' | head -1 | sed -E 's/^\*[[:space:]]+issuer:[[:space:]]*//' || true)
+        want_official=0
+        case "$h" in *[a-z]*) [ "$HAS_OFFICIAL" = "1" ] && want_official=1 ;; esac
+        if [ -z "$CERT_ISSUER" ]; then
+            echo "      ⚠ 看不出给的是哪张证书 (curl 没打出签发者)"
+        elif echo "$CERT_ISSUER" | grep -q 'Catfish Internal CA'; then
+            if [ "$want_official" = "1" ]; then
+                echo "      ❌ 给的是内部证书, 应该是正式证书 —— docker compose logs web | grep catfish-web-ssl"
+            else
+                echo "      · 证书: 内部 CA 签的 (员工用接入码装一次内部 CA; 浏览器首次点「继续前往」)"
+            fi
+        else
+            if [ "$want_official" = "1" ]; then
+                if curl --connect-timeout 3 --max-time 8 -s -o /dev/null "${CT[@]}" "https://$h:$HTTPS_PORT/healthz" 2>/dev/null; then
+                    echo "      ✓ 证书: 正式证书 ($CERT_ISSUER), 服务器自己的信任库也认 —— 员工什么都不用装"
+                else
+                    echo "      ⚠ 证书: 正式证书 ($CERT_ISSUER), 但服务器自己的信任库验不过 (服务器 CA 库太旧, 或缺中间证书)"
+                    echo "        从外网用手机浏览器打开 $url 确认没有证书警告"
+                fi
+            else
+                echo "      ⚠ 证书签发者是「$CERT_ISSUER」, 不是内部 CA —— 端口上是不是别的程序?"
+            fi
+        fi
+        case "$h" in
+            *[a-z]*)
+                PUBLIC_TODO="$PUBLIC_TODO
+    · 域名 $h: 内网 DNS 把它解析到 $SERVER_IP (内网员工用域名时直连这台)"
+                PUBLIC_TODO="$PUBLIC_TODO
+      外网要用: 公网 DNS 指到公网出口地址, 出口把 $ep 端口映射到 $SERVER_IP:$HTTPS_PORT"
+                ;;
+            *)
+                PUBLIC_TODO="$PUBLIC_TODO
+    · 在防火墙 / 路由器上把 公网 $h:$ep 映射到 $SERVER_IP:$HTTPS_PORT;"
+                PUBLIC_TODO="$PUBLIC_TODO
+      映射好以后从外网打开 $url/.well-known/openid-configuration 应该看到 issuer 是 $url"
+                ;;
+        esac
+        case "$h" in *[a-z]*)
+                PUBLIC_TODO="$PUBLIC_TODO
+      配好以后从外网打开 $url/.well-known/openid-configuration 应该看到 issuer 是 $url" ;;
+        esac
+    done < <(public_entries)
+fi
+
 # ── identity 签名密钥唯一性 ──
 #
 # 两个 worker 若各生成一把 RSA, JWT 验签会约 50% 失败, 表现为"登录时好时坏".
@@ -955,6 +1127,9 @@ echo ""
 echo "═══════════════════════════════════════════════════════"
 echo "  装机完毕 · 员工浏览器打:"
 echo "    $WEB_URL"
+if [ -n "$PUBLIC_HOSTS" ] && [ "$ENABLE_HTTPS" = "1" ]; then
+    while read -r _h _p _u; do [ -n "$_u" ] && echo "    $_u   (域名 / 外网)"; done < <(public_entries)
+fi
 echo ""
 echo "  默认 sysadmin: admin@catfish.com / catfish_2026"
 echo "  ★ 首次登录后立刻改密"
@@ -990,6 +1165,29 @@ if [ "$ENABLE_HTTPS" = "1" ]; then
     echo "               (域控组策略 / Jamf / Intune), 一次导入永久免警告;"
     echo "               不推的话每台每个浏览器都要手点一次「继续前往」."
     echo ""
+    # 11/08 域名 / 公网映射: 外面只够得着门户这一个 https 端口 (8999 / 8998 没开出去),
+    # 所以链接里网关 / 认证 (gw / id) 都写门户地址, Companion 走门户的反代。
+    if [ -n "$PUBLIC_HOSTS" ]; then
+        echo "     ★ 用域名 / 在公司外面的员工, 发这段 (上面那段是内网 IP 的):"
+        while read -r _h _p _u; do
+            [ -n "$_u" ] || continue
+            _enc="$(printf '%s' "$_u" | sed 's#:#%3A#g; s#/#%2F#g')"
+            echo "         门户地址  $_u"
+            echo "         接入链接  $_u/connect.html?web=$_enc&gw=$_enc&id=$_enc&code=$PAIRING_CODE"
+        done < <(public_entries)
+        echo "         接入码    $PAIRING_CODE  (跟内网同一个)"
+        if [ "$PUBLIC_HAS_DOMAIN" = "1" ] && [ -s certs/official/fullchain.pem ]; then
+            echo "       域名用的是正式证书: 浏览器 / 手机不用装任何东西; 接入码带着也无害。"
+        fi
+        echo "       手机在外面: 浏览器打开 <上面的门户地址>/m"
+        echo ""
+        echo "     ★ 要找网管 / 防火墙做的 (服务器自己验不了这一段):"
+        echo "$PUBLIC_TODO"
+        echo ""
+        echo "     ⚠ 整个门户开到公网 = 登录页也在公网上: 优先用域名 + 正式证书, 能限来源 IP 就限;"
+        echo "       只想让手机在外面用, 可以只开手机中转 (INSTALL.md「中转站单独放 DMZ」)。"
+        echo ""
+    fi
     if [ -n "$CERT_AUTO_RENEW" ]; then
         echo "     ✓ 服务器证书 397 天到期, 已设自动续期: 每天检查, 剩不到 30 天自动重签并换上"
         echo "       (CA 不变, 接入码不变, 员工那边什么都不用动)。记录: logs/cert-renew.log"
@@ -1028,6 +1226,8 @@ fi
     echo "installed_at=$(date '+%Y-%m-%d %H:%M:%S %z')"
     echo "server_ip=$SERVER_IP"
     echo "https=$ENABLE_HTTPS"
+    [ -n "$PUBLIC_HOSTS" ] && echo "public_hosts=$PUBLIC_HOSTS"
+    [ -s certs/official/fullchain.pem ] && [ "$PUBLIC_HAS_DOMAIN" = "1" ] && echo "official_cert=certs/official/fullchain.pem"
     if [ -f BUILD-INFO.txt ]; then
         echo "# ↓ 来自交付包的 BUILD-INFO.txt"
         sed 's/^/package_/' BUILD-INFO.txt

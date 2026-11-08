@@ -7,8 +7,10 @@
 # 一年没人管, 到期那天员工的 Companion 就连不上中央。
 #
 # 做的事跟 setup.sh 第 4 步同一份逻辑 (tools/certgen.py, 跑在 identity 镜像里):
-#   · 剩不到 30 天 / SAN 里没有当前 IP → 重签服务器证书; 否则什么都不做
+#   · 剩不到 30 天 / SAN 里没有当前 IP 或 PUBLIC_HOST 的域名 / 公网 IP → 重签服务器证书; 否则什么都不做
 #   · 内部 CA 不动 —— 员工机器上的 ca.pem 不用换
+#   · certs/official/ (客户给的域名正式证书) 永远不碰 —— 那个由客户的 CA 续, 换证书是带
+#     TLS_CERT / TLS_KEY 重跑 setup.sh
 #   · 真重签了才让 web 容器的 nginx 重新加载证书 (不重启, 在线连接不断)
 #
 # 谁调它:
@@ -32,6 +34,8 @@ if ! [[ "$SERVER_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
     say "❌ 从 .env 的 CATFISH_OIDC_ISSUER ($ISSUER) 取不到服务器 IP"
     exit 1
 fi
+# 11/08: 对外地址 (域名 / 公网映射) 也要在 SAN 里, 跟 setup.sh 传同一个值 (解析在 tools/publichosts.py)
+PUBLIC_HOSTS=$(grep -E '^CATFISH_PUBLIC_HOSTS=' .env | tail -1 | cut -d= -f2- | tr -d "\"'" | tr -d '\r' || true)
 [ -f certs/cert.pem ] || { say "certs/cert.pem 不存在 (证书还没生成过, 由 setup.sh 生成), 跳过"; exit 0; }
 
 # 用正在跑的 identity 容器的镜像 (就是 setup.sh 生成证书用的那个); 没在跑就按 compose 里写的
@@ -48,7 +52,7 @@ if ! OUT=$(docker run --rm \
         -v "$PWD/certs:/certs" \
         -v "$PWD/tools:/tools:ro" \
         "$IDENTITY_IMAGE" \
-        python3 /tools/certgen.py --ip "$SERVER_IP" --out /certs 2>&1); then
+        python3 /tools/certgen.py --ip "$SERVER_IP" --out /certs --public-hosts "$PUBLIC_HOSTS" 2>&1); then
     say "❌ 证书检查 / 重签失败:"
     echo "$OUT"
     exit 1

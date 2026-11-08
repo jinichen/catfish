@@ -421,6 +421,8 @@ for ARCH in $ARCHES; do
                 "delivery/catfish-poc/tools/envgen.py" \
                 "delivery/catfish-poc/tools/seedgen.py" \
                 "delivery/catfish-poc/tools/certgen.py" \
+                "delivery/catfish-poc/tools/certcheck.py" \
+                "delivery/catfish-poc/tools/publichosts.py" \
                 "delivery/catfish-poc/renew-cert.sh" \
                 "delivery/catfish-poc/renew-cert.ps1" \
                 "delivery/catfish-poc/tools/build_component_manifest.py" \

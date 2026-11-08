@@ -45,6 +45,18 @@
 .PARAMETER RegenEnvOnly
     1 = 只重生成 .env 就退出, 不碰 docker。改 IP 时用。
 
+.PARAMETER PublicHost
+    11/08 IP + 域名同时用: IP 之外的对外地址, 逗号分隔, 每项 域名或公网 IP [:外面实际打开的 https 端口]。
+    例 catfish.example.com  /  203.0.113.7:8443,catfish.example.com (公网映射换了端口时写对外端口)。
+    内网员工照旧用 https://<IP>。写进 .env, 以后重跑 / 升级不写就沿用; none = 去掉。必须 HTTPS。
+
+.PARAMETER TlsCert
+    域名的正式证书 (fullchain, PEM), 跟 -TlsKey 成对。校验通过后拷到 certs\official\, 以后升级沿用。
+    只给域名用 (公网 CA 不给 IP 签证书, IP 仍走内部证书)。自动续期不碰它, 换证书就带新的再跑一次。
+
+.PARAMETER TlsKey
+    正式证书的私钥 (PEM, 不带密码)。
+
 .EXAMPLE
     # 首次装机 (自动探 IP, 默认 HTTPS)
     powershell -ExecutionPolicy Bypass -File .\setup.ps1
@@ -52,6 +64,11 @@
 .EXAMPLE
     # 指定 IP
     powershell -ExecutionPolicy Bypass -File .\setup.ps1 -ServerIp 192.168.100.50
+
+.EXAMPLE
+    # IP + 域名, 域名用正式证书
+    powershell -ExecutionPolicy Bypass -File .\setup.ps1 -ServerIp 192.168.100.50 `
+        -PublicHost catfish.example.com -TlsCert C:\ssl\fullchain.pem -TlsKey C:\ssl\privkey.pem
 
 .EXAMPLE
     # 升级
@@ -73,6 +90,9 @@ param(
     [string]$HttpsPort = $env:CATFISH_HTTPS_PORT,
     [string]$GatewayWorkers = $env:GATEWAY_WORKERS,
     [string]$IdentityWorkers = $env:IDENTITY_WORKERS,
+    [string]$PublicHost = $env:PUBLIC_HOST,
+    [string]$TlsCert = $env:TLS_CERT,
+    [string]$TlsKey = $env:TLS_KEY,
     [string]$AdminPassword = $(if ($env:ADMIN_PASSWORD) { $env:ADMIN_PASSWORD } else { 'catfish_2026' }),
     [ValidateSet('0', '1')][string]$SkipImageLoad = $(if ($env:SKIP_IMAGE_LOAD) { $env:SKIP_IMAGE_LOAD } else { '0' })
 )
@@ -120,6 +140,10 @@ $WslSetup = Join-Path $ScriptDir 'windows\setup-wsl.ps1'
 function Use-WslPath {
     $fw = @{ EnableHttps = $(if ($EnableHttps) { $EnableHttps } else { '1' }); Upgrade = $Upgrade; LocalOnly = $LocalOnly; AdminPassword = $AdminPassword }
     if ($ServerIp) { $fw.ServerIp = $ServerIp }
+    # 11/08 域名 / 正式证书原样转过去 (setup-wsl.ps1 把证书路径换算成 WSL 里的路径)
+    if ($PublicHost) { $fw.PublicHost = $PublicHost }
+    if ($TlsCert) { $fw.TlsCert = $TlsCert }
+    if ($TlsKey) { $fw.TlsKey = $TlsKey }
     & $WslSetup @fw
     exit $LASTEXITCODE
 }
@@ -166,6 +190,19 @@ if (-not $IdentityImage) { Die "docker-compose.yml 里找不到 catfish-identity
 
 # ── 参数解析 ──────────────────────────────────────────────
 $EnvPath = Join-Path $ScriptDir '.env'
+
+# 11/08 正式证书: 先查参数齐不齐、文件在不在; 内容 (跟域名对不对得上 / 过没过期) 后面用
+# tools/certcheck.py 在 identity 镜像里查 —— 跟 setup.sh 同一份。
+if ($TlsCert -or $TlsKey) {
+    if (-not ($TlsCert -and $TlsKey)) { Die "-TlsCert 和 -TlsKey 要一起给 (证书 + 私钥), 现在只给了一个" }
+    foreach ($f in @($TlsCert, $TlsKey)) {
+        if (-not (Test-Path $f -PathType Leaf)) {
+            Die "找不到文件: $f" @("-TlsCert = 证书 (fullchain, PEM), -TlsKey = 私钥 (PEM, 不带密码), 写完整路径最稳")
+        }
+    }
+    $TlsCert = (Resolve-Path $TlsCert).Path
+    $TlsKey = (Resolve-Path $TlsKey).Path
+}
 
 if ($Upgrade -eq '1' -and -not (Test-Path $EnvPath)) {
     Die "Upgrade 1 但当前目录没有 .env · 拒绝按新装流程生成配置" @(
@@ -372,6 +409,8 @@ $envArgs = @(
 if ($GatewayWorkers)  { $envArgs += @('--gateway-workers', $GatewayWorkers) }
 if ($IdentityWorkers) { $envArgs += @('--identity-workers', $IdentityWorkers) }
 if ($env:CATFISH_IDENTITY_URL) { $envArgs += @('--identity-url', $env:CATFISH_IDENTITY_URL) }
+# 11/08: 不传 = 沿用 .env 里的对外地址 (跟 setup.sh 传空串一个意思; PowerShell 5.1 传空串参数不可靠, 所以不传)
+if ($PublicHost) { $envArgs += @('--public-host', $PublicHost) }
 
 # 正在跑的 catfish 容器属于哪个 compose 项目 —— 升级时新容器必须接上它的卷
 # (9/23 现场: 包目录改名后 compose 当成新项目, 新建了 5 个空卷; 见 envgen)。
@@ -405,8 +444,22 @@ if ((Invoke-Tool 'envgen.py' $envArgs) -ne 0) { Die ".env 生成失败 (详情�
 $env:COMPOSE_PROJECT_NAME = Get-EnvValue 'COMPOSE_PROJECT_NAME'
 if (-not $env:COMPOSE_PROJECT_NAME) { Die ".env 里没有 COMPOSE_PROJECT_NAME (envgen 应该写了)" }
 
+# 11/08 对外地址 (域名 / 公网映射), envgen 校验 + 规范化过的, 以 .env 为准
+$PublicHosts = Get-EnvValue 'CATFISH_PUBLIC_HOSTS'
+$PublicHasDomain = $PublicHosts -cmatch '[a-z]'   # 有字母 = 有域名; 纯数字点 = 公网 IP
+# 每项 @{ Host; Port; Url } —— 端口没写 = 跟内部 HTTPS 端口一样; Url = https://主机[:端口] (443 不写)
+$PublicEntries = @()
+foreach ($e in ($PublicHosts -split ',')) {
+    if (-not $e) { continue }
+    $h = $e; $p = $HttpsPort
+    if ($e -match '^(.+):(\d+)$') { $h = $Matches[1]; $p = $Matches[2] }
+    $u = if ($p -eq '443') { "https://$h" } else { "https://${h}:$p" }
+    $PublicEntries += [pscustomobject]@{ Host = $h; Port = $p; Url = $u }
+}
+
 if ($RegenEnvOnly -eq '1') {
     Say ""
+    if ($TlsCert) { Say "  ⓘ RegenEnvOnly 不处理 -TlsCert / -TlsKey (证书要装机时校验、拷贝), 完整跑一次 setup.ps1" }
     Say "✓ .env 已重生 · RegenEnvOnly 模式退出"
     Say "  下一步 · 重启涉及服务:"
     Say "    docker compose up -d --force-recreate identity gateway web"
@@ -425,14 +478,48 @@ if ((Invoke-Tool 'seedgen.py' @('--admin-password', $AdminPassword)) -ne 0) {
 New-Item -ItemType Directory -Force -Path (Join-Path $ScriptDir 'certs') | Out-Null
 # 10/1: 组件分发目录 (web 容器只读挂载到 /components/, 见 compose web.volumes)
 New-Item -ItemType Directory -Force -Path (Join-Path $ScriptDir 'components') | Out-Null
+# ── 3a. 正式证书 (11/08, 域名用) —— 跟 setup.sh 同一套: 新给的校验通过才拷进 certs\official\;
+# 没给但以前装过的, 按现在的域名再核对一遍 (过期只提醒)。自动续期永远不碰 certs\official\。
+function Invoke-CertCheck {
+    param([string]$Cert, [string]$Key, [string[]]$Extra)
+    $full = @('run', '--rm',
+        '-v', "$($Cert -replace '\\', '/'):/in/fullchain.pem:ro",
+        '-v', "$($Key -replace '\\', '/'):/in/privkey.pem:ro",
+        '-v', "${MountDir}/certs:/certs",
+        '-v', "${MountDir}/tools:/tools:ro",
+        $IdentityImage,
+        'python3', '/tools/certcheck.py', '--cert', '/in/fullchain.pem', '--key', '/in/privkey.pem',
+        '--public-hosts', $(if ($PublicHosts) { $PublicHosts } else { 'none' })) + $Extra
+    & docker @full | Out-Host
+    return $LASTEXITCODE
+}
+$OfficialCert = Join-Path $ScriptDir 'certs\official\fullchain.pem'
+$OfficialKey = Join-Path $ScriptDir 'certs\official\privkey.pem'
+if ($TlsCert) {
+    if ($EnableHttps -ne '1') { Die "给了 -TlsCert 但没开 HTTPS —— 去掉 -EnableHttps 0 重跑" }
+    Say "→ 正式证书: 校验 $TlsCert"
+    if ((Invoke-CertCheck $TlsCert $TlsKey @('--out', '/certs')) -ne 0) {
+        Die "正式证书没装上 (原因见上), 装机停在这里 —— 正在跑的服务没动"
+    }
+} elseif ($EnableHttps -eq '1' -and (Test-Path $OfficialCert) -and (Test-Path $OfficialKey)) {
+    if ($PublicHasDomain) {
+        Say "→ 正式证书: 沿用 certs\official\ (核对跟现在的域名对得上)"
+        if ((Invoke-CertCheck $OfficialCert $OfficialKey @('--existing')) -ne 0) { Die "certs\official\ 里的正式证书跟现在的域名对不上 (原因见上)" }
+    } else {
+        Say "  ⓘ certs\official\ 里有正式证书, 但现在没配域名 (-PublicHost) —— 不启用。不要了可以删掉这个目录"
+    }
+}
+
 if ($EnableHttps -eq '1') {
-    Say "→ 证书 (SAN 含 $ServerIp)"
+    Say "→ 证书 (SAN 含 $ServerIp$(if ($PublicHosts) { " + $PublicHosts" }))"
     # 10/22: | Out-Host —— 原来 `$rc = & docker run ...` 把 certgen 的说明 (签没签、几天后到期) 吞进没人用的变量
+    # 11/08: --public-hosts 永远带一个值 (没配就是 none) —— PowerShell 5.1 传空串给外部命令不可靠
+    $certgenPublic = if ($PublicHosts) { $PublicHosts } else { 'none' }
     & docker run --rm `
         -v "${MountDir}/certs:/certs" `
         -v "${MountDir}/tools:/tools:ro" `
         $IdentityImage `
-        python3 /tools/certgen.py --ip $ServerIp --out /certs | Out-Host
+        python3 /tools/certgen.py --ip $ServerIp --out /certs --public-hosts $certgenPublic | Out-Host
     if ($LASTEXITCODE -ne 0) { Die "证书生成失败 (详情见上)" }
 }
 
@@ -580,6 +667,52 @@ if ($RedirectOn) {
     }
 }
 
+# ── 11/08 对外地址 (PUBLIC_HOST): 在服务器上模拟外面的请求 —— 连本机, SNI / Host 跟外面一样
+# (公网映射换了端口的, Host 带对外端口), 所以 DNS / 映射还没配也验得了。用 Windows 自带的 curl.exe
+# (Win10 1803+); 看给的是哪张证书用 .NET 的 SslStream。外面到这台那一段打印给网管。
+$PublicTodo = @()
+if ($EnableHttps -eq '1' -and $PublicEntries.Count -gt 0) {
+    Say "  对外地址 (在服务器上模拟外面的请求, 不依赖 DNS / 映射):"
+    $hasOfficial = $PublicHasDomain -and (Test-Path $OfficialCert)
+    $curlExe = Get-Command curl.exe -ErrorAction SilentlyContinue
+    foreach ($pe in $PublicEntries) {
+        $hostHdr = if ($pe.Port -eq '443') { $pe.Host } else { "$($pe.Host):$($pe.Port)" }
+        if ($curlExe) {
+            $body = Invoke-Native { curl.exe -sk --connect-timeout 3 --max-time 8 --connect-to "$($pe.Host):${HttpsPort}:${ServerIp}:$HttpsPort" -H "Host: $hostHdr" "https://$($pe.Host):$HttpsPort/.well-known/openid-configuration" 2>$null }
+            $m = ([regex]'"issuer":"([^"]+)"').Match("$body")
+            $got = if ($m.Success) { $m.Groups[1].Value } else { '' }
+            if ($got -eq $pe.Url) { Say "    ✓ $($pe.Url) · 登录地址 (issuer) 对" }
+            else { Write-Host "    ❌ $($pe.Url) · issuer 是「$(if ($got) { $got } else { '拿不到' })」, 应为 $($pe.Url) —— docker compose logs identity web" -ForegroundColor Red }
+        } else {
+            SayWarn "没有 curl.exe, 跳过 $($pe.Url) 的 issuer 检查"
+        }
+        $certIssuer = ''
+        try {
+            $tcp = New-Object System.Net.Sockets.TcpClient($ServerIp, [int]$HttpsPort)
+            $script:servedCert = $null
+            $cb = [System.Net.Security.RemoteCertificateValidationCallback] { param($s, $c, $ch, $e) $script:servedCert = $c; $true }
+            $ssl = New-Object System.Net.Security.SslStream($tcp.GetStream(), $false, $cb)
+            $ssl.AuthenticateAsClient($pe.Host)
+            if ($script:servedCert) { $certIssuer = $script:servedCert.Issuer }
+            $ssl.Dispose(); $tcp.Close()
+        } catch { }
+        $wantOfficial = $hasOfficial -and ($pe.Host -cmatch '[a-z]')
+        if (-not $certIssuer) { SayWarn "看不出 $($pe.Host) 给的是哪张证书" }
+        elseif ($certIssuer -match 'Catfish Internal CA') {
+            if ($wantOfficial) { Write-Host "      ❌ 给的是内部证书, 应该是正式证书 —— docker logs catfish-web | Select-String catfish-web-ssl" -ForegroundColor Red }
+            else { Say "      · 证书: 内部 CA 签的 (员工用接入码装一次内部 CA; 浏览器首次点「继续前往」)" }
+        } elseif ($wantOfficial) { Say "      ✓ 证书: 正式证书 ($certIssuer) —— 员工什么都不用装" }
+        else { SayWarn "$($pe.Host) 的证书签发者是「$certIssuer」, 不是内部 CA —— 端口上是不是别的程序?" }
+        if ($pe.Host -cmatch '[a-z]') {
+            $PublicTodo += "· 域名 $($pe.Host): 内网 DNS 把它解析到 $ServerIp (内网员工用域名时直连这台)"
+            $PublicTodo += "  外网要用: 公网 DNS 指到公网出口地址, 出口把 $($pe.Port) 端口映射到 ${ServerIp}:$HttpsPort"
+        } else {
+            $PublicTodo += "· 在防火墙 / 路由器上把 公网 $($pe.Host):$($pe.Port) 映射到 ${ServerIp}:$HttpsPort;"
+        }
+        $PublicTodo += "  映射好以后从外网打开 $($pe.Url)/.well-known/openid-configuration 应该看到 issuer 是 $($pe.Url)"
+    }
+}
+
 $cfg = Test-Url "$WebUrl/config.js"
 if ($cfg -and $cfg.Content -match [regex]::Escape($ServerIp)) {
     Say "  web /config.js:     ✓ oidcIssuer 含 $ServerIp"
@@ -617,6 +750,7 @@ $lines = @(
     "server_ip=$ServerIp",
     "https=$EnableHttps"
 )
+if ($PublicHosts) { $lines += "public_hosts=$PublicHosts" }
 if (Test-Path (Join-Path $ScriptDir 'BUILD-INFO.txt')) {
     $lines += "# ↓ 来自交付包的 BUILD-INFO.txt"
     $lines += (Get-Content (Join-Path $ScriptDir 'BUILD-INFO.txt') | ForEach-Object { "package_$_" })
@@ -677,6 +811,7 @@ if ($EnableHttps -eq '1') {
 Say ""
 Say "═══════════════════════════════════════════════════════"
 Say "  装完了。员工访问: $WebUrl"
+if ($EnableHttps -eq '1') { foreach ($pe in $PublicEntries) { Say "                    $($pe.Url)   (域名 / 外网)" } }
 Say "  默认 sysadmin: admin@catfish.com / $AdminPassword"
 Say "  ⚠ 首次登进立即改密"
 if ($EnableHttps -eq '1') {
@@ -698,6 +833,25 @@ if ($EnableHttps -eq '1') {
     Say "    接入码是内部 CA 的指纹, CA 十年不变, 接入码也不变。"
     Say "    浏览器: 把 certs\ca.pem (内部 CA, **不是** cert.pem) 推进系统信任库 (域控组策略 / Intune)。"
     Say ""
+    # 11/08 域名 / 公网映射: 外面只够得着门户这一个 https 端口, 网关 / 认证 (gw / id) 都走门户地址 (同 setup.sh)
+    if ($PublicEntries.Count -gt 0) {
+        Say "  ★ 用域名 / 在公司外面的员工, 发这段 (上面那段是内网 IP 的):"
+        foreach ($pe in $PublicEntries) {
+            $enc = [uri]::EscapeDataString($pe.Url)
+            Say "      门户地址  $($pe.Url)"
+            Say "      接入链接  $($pe.Url)/connect.html?web=$enc&gw=$enc&id=$enc&code=$PairingCode"
+        }
+        Say "      接入码    $PairingCode  (跟内网同一个)"
+        if ($PublicHasDomain -and (Test-Path $OfficialCert)) { Say "    域名用的是正式证书: 浏览器 / 手机不用装任何东西; 接入码带着也无害。" }
+        Say "    手机在外面: 浏览器打开 <上面的门户地址>/m"
+        Say ""
+        Say "  ★ 要找网管 / 防火墙做的 (服务器自己验不了这一段):"
+        foreach ($t in $PublicTodo) { Say "    $t" }
+        Say ""
+        SayWarn "整个门户开到公网 = 登录页也在公网上: 优先用域名 + 正式证书, 能限来源 IP 就限;"
+        Say "    只想让手机在外面用, 可以只开手机中转 (INSTALL.md「中转站单独放 DMZ」)。"
+        Say ""
+    }
     if ($CertAutoRenew) {
         Say "  ✓ 服务器证书 397 天到期, 已设自动续期 (计划任务 CatfishCertRenew, 每天检查, 剩不到 30 天自动重签并换上)。"
         Say "    CA 不变, 接入码不变, 员工那边什么都不用动。记录: logs\cert-renew.log"

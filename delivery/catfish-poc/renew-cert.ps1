@@ -6,6 +6,8 @@
     跟 setup.ps1 第 4 步同一份逻辑 (tools/certgen.py, 跑在 identity 镜像里): 剩不到 30 天 / SAN 里
     没有当前 IP 才重签服务器证书; 内部 CA 不动, 员工机器上的 ca.pem 不用换。真重签了才让 web 容器的
     nginx 重新加载证书。记录在 logs\cert-renew.log。
+    11/08: .env 的 CATFISH_PUBLIC_HOSTS (域名 / 公网映射) 也要在 SAN 里, 原样交给 certgen;
+    certs\official\ (客户给的域名正式证书) 永远不碰 —— 换证书是带 -TlsCert / -TlsKey 重跑 setup.ps1。
 #>
 $ErrorActionPreference = 'Continue'
 $Dir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -21,6 +23,10 @@ $issuer = if ($issuerLine) { ($issuerLine -split '=', 2)[1].Trim().Trim('"', "'"
 if ($issuer -notmatch '^https://') { Log "HTTP 模式 (没用证书), 跳过"; exit 0 }
 $serverIp = ($issuer -replace '^https://', '') -replace '[:/].*$', ''
 if ($serverIp -notmatch '^(\d{1,3}\.){3}\d{1,3}$') { Log "❌ 从 .env 的 CATFISH_OIDC_ISSUER ($issuer) 取不到服务器 IP"; exit 1 }
+$phLine = Get-Content $envFile | Where-Object { $_ -match '^CATFISH_PUBLIC_HOSTS=' } | Select-Object -Last 1
+$publicHosts = if ($phLine) { ($phLine -split '=', 2)[1].Trim().Trim('"', "'") } else { '' }
+# PowerShell 5.1 传空串给外部命令不可靠, 没配就传 none (certgen 当作没有)
+if (-not $publicHosts) { $publicHosts = 'none' }
 $cert = Join-Path $Dir 'certs\cert.pem'
 if (-not (Test-Path $cert)) { Log "certs\cert.pem 不存在 (证书还没生成过, 由 setup.ps1 生成), 跳过"; exit 0 }
 
@@ -34,7 +40,7 @@ if (-not $image) { Log "❌ 找不到 catfish-identity 镜像 (Docker Desktop �
 # 同 setup.ps1: 挂载路径用正斜杠 (带空格的路径反斜杠形式 docker 解析会错)
 $mount = $Dir -replace '\\', '/'
 $before = (Get-FileHash $cert).Hash
-$out = & docker run --rm -v "${mount}/certs:/certs" -v "${mount}/tools:/tools:ro" $image python3 /tools/certgen.py --ip $serverIp --out /certs 2>&1
+$out = & docker run --rm -v "${mount}/certs:/certs" -v "${mount}/tools:/tools:ro" $image python3 /tools/certgen.py --ip $serverIp --out /certs --public-hosts $publicHosts 2>&1
 if ($LASTEXITCODE -ne 0) { Log ("❌ 证书检查 / 重签失败: " + (($out | ForEach-Object { "$_" }) -join ' | ')); exit 1 }
 if ((Get-FileHash $cert).Hash -eq $before) {
     $left = ($out | ForEach-Object { "$_" } | Select-String -Pattern '(\d+) 天后到期' | Select-Object -Last 1)

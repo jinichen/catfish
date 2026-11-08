@@ -77,7 +77,7 @@ def main() -> int:
     sh, ps1 = SH.read_text(), PS1.read_text()
     fail = 0
 
-    for tool in ("envgen.py", "seedgen.py", "certgen.py"):
+    for tool in ("envgen.py", "seedgen.py", "certgen.py", "certcheck.py"):
         src_path = TOOLS / tool
         if not src_path.exists():
             print(f"❌ tools/{tool} 不存在, 但 wrapper 在调它")

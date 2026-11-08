@@ -51,5 +51,17 @@ setup_case "https://10.0.0.8"; rc=$(CERTGEN_FAIL=1 run)
 setup_case "https://10.0.0.8"; rm "$T/certs/cert.pem"; rc=$(run)
 [ "$rc" = 0 ] && ! grep -q "docker run" "$CALLS" && ok "还没生成过证书: 跳过 (由 setup.sh 生成)" || bad "无证书 (rc=$rc)"
 
+# 11/08 PUBLIC_HOST: 对外地址原样交给 certgen (SAN 里要有); certs/official/ 不在任何参数里
+setup_case "https://10.0.0.8"; printf 'CATFISH_PUBLIC_HOSTS=catfish.example.com,203.0.113.7:8443\n' >> "$T/.env"
+mkdir -p "$T/certs/official"; echo OFFICIAL > "$T/certs/official/fullchain.pem"; rc=$(RENEW=1 run)
+[ "$rc" = 0 ] && grep -q -- "--ip 10.0.0.8 --out /certs --public-hosts catfish.example.com,203.0.113.7:8443" "$CALLS" \
+  && ok "PUBLIC_HOST: 对外地址一起交给 certgen" || bad "PUBLIC_HOST 没传 (rc=$rc) $(cat "$CALLS")"
+[ "$(cat "$T/certs/official/fullchain.pem")" = OFFICIAL ] && ! grep -q "official" "$CALLS" \
+  && ok "certs/official/ (正式证书) 没被碰" || bad "正式证书被动了"
+
+setup_case "https://10.0.0.8"; rc=$(run)
+grep -q -- '--public-hosts $' "$CALLS" || grep -qE -- "--public-hosts ?$" "$CALLS" \
+  && ok "没配 PUBLIC_HOST: 传空 (只有 IP, 跟以前一样)" || bad "没配 PUBLIC_HOST 时参数不对: $(cat "$CALLS")"
+
 echo "通过 $pass · 失败 $fail"
 [ "$fail" = 0 ]

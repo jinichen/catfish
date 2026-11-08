@@ -25,6 +25,9 @@
 .PARAMETER Upgrade       1 = 升级: 用新包覆盖程序文件, 保留 .env / 证书 / 账号 / 数据库
 .PARAMETER InstallDir    WSL 磁盘、开机脚本、日志放哪 (默认 C:\CatfishCentral, 要有 20GB 以上空间)
 .PARAMETER AdminPassword 门户初始管理员密码 (默认 catfish_2026, 装完立刻改)
+.PARAMETER PublicHost    11/08 IP 之外的对外地址 (域名 / 公网 IP[:对外端口]), 逗号分隔; 见 setup.sh 文件头
+.PARAMETER TlsCert       域名的正式证书 (fullchain PEM, Windows 路径), 跟 -TlsKey 成对
+.PARAMETER TlsKey        正式证书的私钥 (PEM, 不带密码)
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\setup.ps1          # 自动判断走这条路
@@ -38,6 +41,9 @@ param(
     [ValidateSet('0', '1')][string]$LocalOnly = $(if ($env:LOCAL_ONLY) { $env:LOCAL_ONLY } else { '0' }),
     [string]$InstallDir = 'C:\CatfishCentral',
     [string]$AdminPassword = $(if ($env:ADMIN_PASSWORD) { $env:ADMIN_PASSWORD } else { 'catfish_2026' }),
+    [string]$PublicHost = $env:PUBLIC_HOST,
+    [string]$TlsCert = $env:TLS_CERT,
+    [string]$TlsKey = $env:TLS_KEY,
     # 重启后由 RunOnce 带上, 不要手动传
     [switch]$Resume,
     # 提权后 / 重启后是新开的窗口, 出错时窗口一闪就关, 客户看不到原因 —— 这两种情况结束前等回车
@@ -93,6 +99,10 @@ if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$($MyInvocation.MyCommand.Path)`"",
                  '-EnableHttps', $EnableHttps, '-Upgrade', $Upgrade, '-InstallDir', "`"$InstallDir`"", '-KeepOpen')
     if ($ServerIp) { $argList += @('-ServerIp', $ServerIp) }
+    # 11/08 域名 / 正式证书也要带过去, 不然提权后的窗口里就丢了
+    if ($PublicHost) { $argList += @('-PublicHost', $PublicHost) }
+    if ($TlsCert) { $argList += @('-TlsCert', "`"$TlsCert`"") }
+    if ($TlsKey) { $argList += @('-TlsKey', "`"$TlsKey`"") }
     Start-Process powershell.exe -Verb RunAs -ArgumentList $argList
     exit 0
 }
@@ -143,6 +153,9 @@ if ($needReboot) {
     # 重启后自动接着装 (登录后弹出这个窗口)
     $cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$($MyInvocation.MyCommand.Path)`" -Resume -KeepOpen -EnableHttps $EnableHttps -Upgrade $Upgrade -InstallDir `"$InstallDir`""
     if ($ServerIp) { $cmd += " -ServerIp $ServerIp" }
+    if ($PublicHost) { $cmd += " -PublicHost $PublicHost" }
+    if ($TlsCert) { $cmd += " -TlsCert `"$TlsCert`"" }
+    if ($TlsKey) { $cmd += " -TlsKey `"$TlsKey`"" }
     Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' -Name 'CatfishCentralSetup' -Value $cmd
     Say ""
     SayWarn "Windows 功能已开启, 需要重启一次才生效。重启并登录后会自动继续安装。"
@@ -343,6 +356,19 @@ Say "→ 安装中央服务 (setup.sh) …"
 # 单引号包住传给 bash; 值里本身有单引号 (密码可能有) 要写成 '\'' 才不会断开
 function Q { param([string]$v) "'" + ($v -replace "'", "'\''") + "'" }
 $envs = "SERVER_IP=$(Q $ServerIp) ENABLE_HTTPS=$(Q $EnableHttps) UPGRADE=$(Q $Upgrade) LOCAL_ONLY=$(Q $LocalOnly) IMAGE_TAR=$(Q $ImageLinux) ADMIN_PASSWORD=$(Q $AdminPassword)"
+# 11/08 域名 / 正式证书: setup.sh 收 PUBLIC_HOST / TLS_CERT / TLS_KEY; 证书是 Windows 路径, 换算成发行版里的 /mnt/c/...
+if ($PublicHost) { $envs += " PUBLIC_HOST=$(Q $PublicHost)" }
+# (用有序哈希表, 不用嵌套数组 —— 嵌套数组在某些上下文会被摊平, 见 setup.ps1 里那段)
+$tls = [ordered]@{ TLS_CERT = $TlsCert; TLS_KEY = $TlsKey }
+foreach ($k in @($tls.Keys)) {
+    $v = $tls[$k]
+    if (-not $v) { continue }
+    if (-not (Test-Path $v -PathType Leaf)) { Die "找不到文件: $v" @("-TlsCert / -TlsKey 写完整的 Windows 路径") }
+    $full = (Resolve-Path $v).Path -replace '\\', '/'
+    $lin = ((& wsl.exe -d $Distro -u root -e wslpath -a $full) -replace '\x00', '').Trim()
+    if (-not $lin) { Die "换算不出证书在 Linux 里的路径: $v" }
+    $envs += " $k=$(Q $lin)"
+}
 $rc = InDistro "cd /opt/catfish/catfish-poc && $envs bash setup.sh"
 if ($rc -ne 0) { Die "setup.sh 失败 (详情见上)" @("修好后直接重跑本脚本, 已完成的步骤会跳过") }
 

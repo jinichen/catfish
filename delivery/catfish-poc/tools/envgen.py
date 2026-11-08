@@ -41,6 +41,9 @@ import sys
 import time
 from pathlib import Path
 
+# 同目录的 publichosts.py (容器里是 /tools/, 宿主机直接跑时是脚本所在目录, 都在 sys.path[0])
+from publichosts import PublicHostError, domains, normalize, origin, parse_list
+
 # 跨装机必须原样保留的值。换掉任何一个都会出事, 见文件顶部。
 PERSISTENT = ("PG_PASSWORD", "JWT_SIGNING_KEY", "CATFISH_SECRET_KEY", "COMPOSE_PROJECT_NAME")
 
@@ -70,6 +73,15 @@ def set_value(text: str, key: str, value: str) -> str:
         return re.sub(pattern, f"{key}={value}", text, count=1, flags=re.MULTILINE)
     sep = "" if text.endswith("\n") else "\n"
     return f"{text}{sep}{key}={value}\n"
+
+
+def del_value(text: str, key: str) -> str:
+    """删掉 `KEY=...` 那一行 (没有就原样)。"""
+    return re.sub(rf"^{re.escape(key)}=.*\n?", "", text, flags=re.MULTILINE)
+
+
+#: PUBLIC_HOST 派生出来的几项 —— 没配 PUBLIC_HOST 时一项都不写 (IP-only 的 .env 跟以前一模一样)
+PUBLIC_KEYS = ("CATFISH_PUBLIC_HOSTS", "CATFISH_IDENTITY_ISSUERS", "CATFISH_OIDC_ISSUERS")
 
 
 def rand_hex(n: int) -> str:
@@ -130,6 +142,11 @@ def main() -> int:
     ap.add_argument("--identity-workers", default="")
     ap.add_argument("--identity-url", default="", help="显式指定的 CATFISH_IDENTITY_URL")
     ap.add_argument(
+        "--public-host", default="",
+        help="对外地址 (域名 / 公网 IP, 可带对外端口), 逗号分隔。空 = 沿用 .env 里的 "
+             "CATFISH_PUBLIC_HOSTS; none = 去掉。见 publichosts.py",
+    )
+    ap.add_argument(
         "--project-name", default="",
         help="宿主机上**已经在跑**的 catfish 容器所属的 compose 项目名 (wrapper 用 "
              "docker inspect 读 com.docker.compose.project 标签得到, 没容器就留空)。"
@@ -144,6 +161,14 @@ def main() -> int:
 
     work: Path = args.dir
     env_path, example = work / ".env", work / ".env.example"
+    # PUBLIC_HOST 先校验 —— 写错了在动 .env 之前就停, 不留半截配置
+    want_public = args.public_host.strip()
+    if want_public and want_public.lower() != "none":
+        try:
+            parse_list(want_public)
+        except PublicHostError as e:
+            print(f"❌ {e}")
+            return 1
 
     # ── 1. 先把旧值捞出来, 再动 .env ─────────────────────────
     #
@@ -153,6 +178,7 @@ def main() -> int:
     # 永远走不到。
     old: dict[str, str] = {}
     old_identity_url = ""
+    old_public_hosts = ""
     if env_path.exists():
         stamp = int(time.time())
         shutil.copy2(env_path, work / f".env.bak.{stamp}")
@@ -161,6 +187,7 @@ def main() -> int:
         old = {k: read_value(cur, k) for k in PERSISTENT}
         old = {k: v for k, v in old.items() if v}
         old_identity_url = read_value(cur, "CATFISH_IDENTITY_URL")
+        old_public_hosts = read_value(cur, "CATFISH_PUBLIC_HOSTS")
     else:
         old = recover_from_backups(work)
 
@@ -267,9 +294,45 @@ def main() -> int:
         issuer_url = f"http://{args.server_ip}:8998"
         web_url = f"http://{args.server_ip}:5173"
 
+    # ── 11/08 PUBLIC_HOST: IP 之外的对外地址 (域名 / 公网映射) ────────────
+    #
+    # 主地址 (上面的 issuer_url, 内网 IP) 一个字都不变 —— CATFISH_OIDC_ISSUER /
+    # CATFISH_IDENTITY_ISSUER 照旧是它, renew-cert / verify-login / 老镜像都只认它。
+    # 对外地址**另外**写进 *_ISSUERS 列表 (主地址在前), identity 按请求来源挑,
+    # 网关全部都认, 门户按 window.location 挑。CORS 来源 = 全部地址。
+    # 没传就沿用 .env 里的 (升级 / 重跑不会把域名丢掉); none = 去掉。
+    if want_public.lower() == "none":
+        public_raw = ""
+    else:
+        public_raw = want_public or old_public_hosts or read_value(text, "CATFISH_PUBLIC_HOSTS")
+    try:
+        public = parse_list(public_raw)
+    except PublicHostError as e:  # .env 里被手改坏了
+        print(f"❌ .env 里的 CATFISH_PUBLIC_HOSTS 不对: {e}")
+        print("   改 .env 或者重跑时显式写 PUBLIC_HOST=... (PUBLIC_HOST=none 去掉)")
+        return 1
+    if public and args.https != "1":
+        print("❌ 配了 PUBLIC_HOST (域名 / 公网地址) 就必须走 HTTPS:")
+        print("   浏览器只在 https 下给登录用的加密功能, 外网 http 登录也不安全。")
+        print("   去掉 ENABLE_HTTPS=0 重跑 (默认就是 HTTPS), 或者 PUBLIC_HOST=none 不要域名。")
+        return 1
+    public_origins: list[str] = []
+    for host, p in public:
+        o = origin(host, p, int(port))
+        if o != issuer_url and o not in public_origins:
+            public_origins.append(o)
+
     text = set_value(text, "CATFISH_OIDC_ISSUER", issuer_url)
     text = set_value(text, "CATFISH_IDENTITY_ISSUER", issuer_url)
-    text = set_value(text, "CATFISH_IDENTITY_CORS_ORIGINS", web_url)
+    text = set_value(text, "CATFISH_IDENTITY_CORS_ORIGINS", ",".join([web_url] + public_origins))
+    if public:
+        all_issuers = ",".join([issuer_url] + public_origins)
+        text = set_value(text, "CATFISH_PUBLIC_HOSTS", normalize(public))
+        text = set_value(text, "CATFISH_IDENTITY_ISSUERS", all_issuers)
+        text = set_value(text, "CATFISH_OIDC_ISSUERS", all_issuers)
+    else:
+        for k in PUBLIC_KEYS:
+            text = del_value(text, k)
     text = set_value(text, "CATFISH_ENABLE_HTTPS", args.https)
     text = set_value(text, "CATFISH_HTTPS_PORT", port)
     if args.gateway_workers:
@@ -315,6 +378,13 @@ def main() -> int:
     if kept:
         print(f"→ 保持不变 (改了会出事): {', '.join(kept)}")
     print(f"→ .env 已写入 · issuer {issuer_url} · 前端 {web_url}")
+    if public_origins:
+        print(f"→ 对外地址 (PUBLIC_HOST): {', '.join(public_origins)}")
+        print("  这些地址跟内网 IP 同时能登录; 每个都是一个 OIDC issuer, 已写进 identity / 网关 / 门户")
+        if domains(public):
+            print(f"  域名: {', '.join(domains(public))}")
+    elif want_public.lower() == "none" and old_public_hosts:
+        print(f"→ PUBLIC_HOST=none · 去掉了对外地址 ({old_public_hosts}), 只剩内网 IP")
     return 0
 
 

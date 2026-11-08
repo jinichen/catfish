@@ -35,8 +35,15 @@ openssl 命令行。调用方式三个平台完全一样:
 CA: **只在不存在时生成**。重新生成 CA 会让所有已经发到员工机器上的 ca.pem
     立刻失效, 而那些机器不会自动更新 —— 等于要挨台重装一遍。
 
-服务器证书: 缺失 / SAN 里没有当前 IP / 30 天内到期, 三者之一才重签。
+服务器证书: 缺失 / SAN 里少了要用的 IP 或域名 / 30 天内到期, 三者之一才重签。
     CA 不动, 所以员工机器上的 ca.pem 不用跟着换。
+
+# 11/08 域名 / 公网映射 (PUBLIC_HOST)
+
+`--public-hosts` 原样收 .env 的 CATFISH_PUBLIC_HOSTS (解析在 publichosts.py): 域名进 SAN 的
+DNSName, 公网 IP 进 IPAddress。也可以直接 `--dns` / `--ip` 多次给。SAN 里**少了**哪个就重签
+(多出来的不管, 去掉域名不用重签)。客户另给的正式证书在 certs/official/, 这里**从不碰** ——
+只把它的到期日一起写进 cert-info.json 给门户「服务状态」看。
 
 退出码: 0 = 成功 (不管有没有重签) / 1 = 失败
 """
@@ -45,9 +52,14 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import ipaddress
+import json
 import os
 import sys
 from pathlib import Path
+
+from publichosts import PublicHostError, parse_list
+from publichosts import domains as public_domains
+from publichosts import ips as public_ips
 
 try:
     from cryptography import x509
@@ -100,7 +112,7 @@ def _key_bytes(key: rsa.RSAPrivateKey) -> bytes:
     )
 
 
-def _san_entries(ip: str) -> list[x509.GeneralName]:
+def _san_entries(ip: str, extra_ips: list[str] = (), dns: list[str] = ()) -> list[x509.GeneralName]:
     """SAN 列表。
 
     ⚠ 现代浏览器**只看 SAN, 完全忽略 CN**。早年只填 CN 的证书在今天的
@@ -112,7 +124,21 @@ def _san_entries(ip: str) -> list[x509.GeneralName]:
     if ip != "127.0.0.1":
         names.append(x509.IPAddress(ipaddress.ip_address("127.0.0.1")))
     names.append(x509.DNSName("localhost"))
+    for extra in extra_ips:
+        if extra not in (ip, "127.0.0.1"):
+            names.append(x509.IPAddress(ipaddress.ip_address(extra)))
+    for d in dns:
+        if d != "localhost":
+            names.append(x509.DNSName(d))
     return names
+
+
+def _san_sets(cert: x509.Certificate) -> tuple[set[str], set[str]]:
+    san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    return (
+        {str(v) for v in san.get_values_for_type(x509.IPAddress)},
+        {v.lower() for v in san.get_values_for_type(x509.DNSName)},
+    )
 
 
 def ensure_ca(out: Path) -> tuple[x509.Certificate, rsa.RSAPrivateKey, bool]:
@@ -166,7 +192,7 @@ def pairing_code(ca_cert: x509.Certificate) -> str:
     return "-".join(raw[i:i + 4] for i in range(0, 16, 4))
 
 
-def server_cert_is_fine(out: Path, ip: str) -> tuple[bool, str]:
+def server_cert_is_fine(out: Path, ip: str, extra_ips: list[str] = (), dns: list[str] = ()) -> tuple[bool, str]:
     """现有服务器证书还能不能用。返回 (能用, 原因)。"""
     server_pem, key_pem = out / "server.pem", out / "key.pem"
     if not server_pem.exists() or not key_pem.exists():
@@ -177,12 +203,14 @@ def server_cert_is_fine(out: Path, ip: str) -> tuple[bool, str]:
         return False, "现有 server.pem 解不开 (文件坏了)"
 
     try:
-        san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
-        ips = {str(v) for v in san.get_values_for_type(x509.IPAddress)}
+        ips, names = _san_sets(cert)
     except x509.ExtensionNotFound:
         return False, "现有证书没有 SAN (浏览器只认 SAN, 不看 CN)"
     if ip not in ips:
         return False, f"现有证书的 SAN 里没有 {ip} (SAN: {', '.join(sorted(ips)) or '空'})"
+    missing = [x for x in extra_ips if x not in ips] + [d for d in dns if d.lower() not in names]
+    if missing:
+        return False, f"现有证书的 SAN 里没有 {', '.join(missing)} (新加的对外地址)"
 
     not_after = cert.not_valid_after_utc
     left = (not_after - _utcnow()).days
@@ -191,7 +219,10 @@ def server_cert_is_fine(out: Path, ip: str) -> tuple[bool, str]:
     return True, f"现有证书可用, 还有 {left} 天"
 
 
-def issue_server_cert(out: Path, ip: str, ca_cert: x509.Certificate, ca_key: rsa.RSAPrivateKey) -> None:
+def issue_server_cert(
+    out: Path, ip: str, ca_cert: x509.Certificate, ca_key: rsa.RSAPrivateKey,
+    extra_ips: list[str] = (), dns: list[str] = (),
+) -> None:
     key = _new_key()
     now = _utcnow()
     cert = (
@@ -205,7 +236,7 @@ def issue_server_cert(out: Path, ip: str, ca_cert: x509.Certificate, ca_key: rsa
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - dt.timedelta(minutes=5))
         .not_valid_after(now + dt.timedelta(days=CERT_DAYS))
-        .add_extension(x509.SubjectAlternativeName(_san_entries(ip)), critical=False)
+        .add_extension(x509.SubjectAlternativeName(_san_entries(ip, extra_ips, dns)), critical=False)
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(
             x509.KeyUsage(
@@ -232,7 +263,7 @@ def issue_server_cert(out: Path, ip: str, ca_cert: x509.Certificate, ca_key: rsa
     )
 
 
-def verify(out: Path, ip: str) -> None:
+def verify(out: Path, ip: str, extra_ips: list[str] = (), dns: list[str] = ()) -> None:
     """独立回读核对 —— 不信刚才写入时的返回值, 重新从磁盘读一遍。
 
     写成功不等于写对了。这一步多花几毫秒, 换的是"装完才发现证书是废的"
@@ -264,23 +295,62 @@ def verify(out: Path, ip: str) -> None:
             "        若已经发出去过, 改为只删 server.pem / key.pem / cert.pem, 保住 CA。"
         ) from None
 
-    san = srv.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
-    ips = {str(v) for v in san.get_values_for_type(x509.IPAddress)}
+    ips, names = _san_sets(srv)
     if ip not in ips:
         raise SystemExit(f"❌ 回读核对失败: SAN 里没有 {ip}")
+    missing = [x for x in extra_ips if x not in ips] + [d for d in dns if d.lower() not in names]
+    if missing:
+        raise SystemExit(f"❌ 回读核对失败: SAN 里没有 {', '.join(missing)}")
 
     fullchain = (out / "cert.pem").read_bytes()
     if not fullchain.startswith(srv.public_bytes(serialization.Encoding.PEM)):
         raise SystemExit("❌ 回读核对失败: cert.pem 开头不是服务器证书 (fullchain 顺序错了)")
 
     left = (srv.not_valid_after_utc - _utcnow()).days
-    print(f"  ✓ 回读核对通过 · SAN 含 {ip} · 由内部 CA 签发 · {left} 天后到期")
+    extra = "".join(f" / {x}" for x in [*extra_ips, *dns])
+    print(f"  ✓ 回读核对通过 · SAN 含 {ip}{extra} · 由内部 CA 签发 · {left} 天后到期")
+
+
+def _cert_entry(cert: x509.Certificate) -> dict:
+    try:
+        ips, names = _san_sets(cert)
+    except x509.ExtensionNotFound:
+        ips, names = set(), set()
+    return {
+        "not_after": cert.not_valid_after_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "names": sorted(ips) + sorted(names - {"localhost"}),
+        "issuer": cert.issuer.rfc4514_string(),
+    }
+
+
+def write_cert_info(out: Path, has_domain: bool) -> None:
+    """certs/cert-info.json —— 门户「服务状态」显示证书到期 (web 容器 443 上的 /catfish-cert-info.json)。
+
+    只有公开信息 (到期日 / 证书上的名字 / 签发者), TLS 握手时本来就看得到。
+    official: certs/official/fullchain.pem 的第一张 (服务器证书); 没配域名时那份证书不生效, 不报。
+    写失败不影响装机 (只是门户少一张卡片)。
+    """
+    info: dict = {"internal": None, "official": None}
+    try:
+        info["internal"] = _cert_entry(x509.load_pem_x509_certificate((out / "server.pem").read_bytes()))
+        off = out / "official" / "fullchain.pem"
+        if has_domain and off.exists():
+            info["official"] = _cert_entry(x509.load_pem_x509_certificate(off.read_bytes()))
+        _write(out / "cert-info.json", (json.dumps(info, ensure_ascii=False, indent=1) + "\n").encode(), secret=False)
+    except Exception as e:  # noqa: BLE001 —— 这是附带信息, 不该让装机 / 续期失败
+        print(f"  ⚠ cert-info.json 没写成 (门户「服务状态」看不到证书到期, 不影响使用): {e}")
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="生成 Catfish 自签证书体系")
     ap.add_argument("--ip", required=True, help="服务器 IP, 会写进 SAN")
     ap.add_argument("--out", required=True, type=Path, help="输出目录 (容器内路径)")
+    ap.add_argument("--dns", action="append", default=[], help="额外写进 SAN 的域名, 可多次")
+    ap.add_argument("--san-ip", action="append", default=[], help="额外写进 SAN 的 IP (公网映射), 可多次")
+    ap.add_argument(
+        "--public-hosts", default="",
+        help=".env 的 CATFISH_PUBLIC_HOSTS 原样 (逗号分隔, 主机[:端口]); 域名进 DNS, IP 进 IP",
+    )
     args = ap.parse_args()
 
     try:
@@ -288,6 +358,19 @@ def main() -> int:
     except ValueError:
         sys.stderr.write(f"❌ --ip 不是合法 IP: {args.ip!r}\n")
         return 1
+    try:
+        public = parse_list(args.public_hosts)
+    except PublicHostError as e:
+        sys.stderr.write(f"❌ {e}\n")
+        return 1
+    extra_ips = list(dict.fromkeys([*args.san_ip, *public_ips(public)]))
+    dns = list(dict.fromkeys(d.strip().lower() for d in [*args.dns, *public_domains(public)] if d.strip()))
+    for x in extra_ips:
+        try:
+            ipaddress.ip_address(x)
+        except ValueError:
+            sys.stderr.write(f"❌ --san-ip 不是合法 IP: {x!r}\n")
+            return 1
 
     out: Path = args.out
     out.mkdir(parents=True, exist_ok=True)
@@ -298,15 +381,16 @@ def main() -> int:
     else:
         print("  · 内部 CA 已存在, 不动 (重建会让员工机器上已装的 ca.pem 全部失效)")
 
-    fine, why = server_cert_is_fine(out, args.ip)
+    fine, why = server_cert_is_fine(out, args.ip, extra_ips, dns)
     if fine:
         print(f"  · 服务器证书不用换: {why}")
     else:
         print(f"  → 重签服务器证书: {why}")
-        issue_server_cert(out, args.ip, ca_cert, ca_key)
+        issue_server_cert(out, args.ip, ca_cert, ca_key, extra_ips, dns)
         print(f"  ✓ cert.pem (fullchain) / key.pem / server.pem · {CERT_DAYS} 天")
 
-    verify(out, args.ip)
+    verify(out, args.ip, extra_ips, dns)
+    write_cert_info(out, has_domain=bool(public_domains(public)))
     code = pairing_code(ca_cert)
     # setup.sh / setup.ps1 收尾时读这个文件打印给管理员 (不是机密: 它是公开证书的指纹)
     _write(out / "pairing-code.txt", (code + "\n").encode(), secret=False)

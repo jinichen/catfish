@@ -155,6 +155,71 @@ SERVER_IP=<IP> ENABLE_HTTPS=1 CATFISH_HTTPS_PORT=8443 bash setup.sh
 
 员工则访问 `https://<IP>:8443`。脚本会把端口同步进所有相关配置。
 
+### 用域名 / 正式证书(IP 和域名同时能用)
+
+默认只有内网 IP:员工用 `https://<IP>`,证书是装机时生成的内部证书。加 `PUBLIC_HOST` 后,**IP 照旧能用,域名也能用**,两边都能登录(每个地址各有一个登录地址 / OIDC issuer,identity、网关、门户都认)。
+
+三种装法(Windows 对应 `-PublicHost` / `-TlsCert` / `-TlsKey`):
+
+```bash
+# 1. 只有 IP (跟以前一样, 什么都不用加)
+SERVER_IP=192.168.31.199 bash setup.sh
+
+# 2. IP + 域名, 都用内部证书 (内部证书的 SAN 自动加上域名)
+SERVER_IP=192.168.31.199 PUBLIC_HOST=catfish.example.com bash setup.sh
+
+# 3. IP + 域名, 域名用正式证书 (公网 CA 签的; 浏览器 / 手机什么都不用装)
+SERVER_IP=192.168.31.199 PUBLIC_HOST=catfish.example.com \
+  TLS_CERT=/root/ssl/fullchain.pem TLS_KEY=/root/ssl/privkey.pem bash setup.sh
+```
+
+- `PUBLIC_HOST` 可以写多个,逗号分隔:`PUBLIC_HOST=catfish.example.com,m.example.com`。必须走 HTTPS(默认就是)。
+- `TLS_CERT` 是**完整链**(服务器证书 + 中间证书,证书供应商一般叫 fullchain / 「Nginx 格式」),`TLS_KEY` 是不带密码的私钥。装机脚本先检查:私钥跟证书是不是一对、证书包不包含每个域名(支持 `*.example.com`)、有没有过期;不合格直接停下并说明原因,什么都不改。只有服务器证书没有中间证书、30 天内到期会提醒。合格的拷到 `certs/official/`。
+- 正式证书只给域名用(公网 CA 不给 IP 签证书)。IP 访问仍用内部证书,员工照旧用接入码。
+- 选择会记进 `.env`(`CATFISH_PUBLIC_HOSTS`),以后重跑 / `UPGRADE=1` 不写也沿用,`certs/official/` 里的正式证书也沿用。不要域名了:`PUBLIC_HOST=none bash setup.sh`。
+
+**DNS**:内网 DNS 把域名解析到服务器内网 IP(内网员工用域名时直连);外网要用的话,公网 DNS 指到公司出口,出口把 443 映射到服务器的 443。装机脚本在服务器上模拟外面的请求验证(不依赖 DNS),并打印要找网管做的事。
+
+**员工怎么连**:
+
+| 员工在哪 | 门户地址 | Companion 接入 |
+|---|---|---|
+| 公司内网 | `https://<IP>` | 跟以前一样:接入链接 `http://<IP>:5173/connect.html?…` + 接入码 |
+| 用域名 / 在公司外面 | `https://<域名>` | 装机脚本另打一段域名的接入链接(`https://<域名>/connect.html?…`),网关和登录都走这个 https 地址(外面只开了这一个端口)。正式证书时不用接入码也能连;带着也无害 |
+
+门户「后台 → 用户」页顶部会把每个地址的接入链接都列出来,一键复制。
+
+**证书续期**:内部证书照旧每天自动检查、到期前自动重签(域名也在里面)。**正式证书不会自动续**——门户「服务状态」会显示它的到期日,30 天内标黄。拿到新证书后:
+
+```bash
+UPGRADE=1 TLS_CERT=/root/ssl/new-fullchain.pem TLS_KEY=/root/ssl/new-privkey.pem bash setup.sh
+```
+
+### 内网部署 + 公网映射(NAT)
+
+服务器只有内网地址(例 `192.168.31.199`),外面通过公司路由器 / 防火墙的端口映射进来,而且对外端口可能不一样(例 公网 `203.0.113.7:8443` → 内网 `192.168.31.199:443`)。`PUBLIC_HOST` 里写**外面实际打开的地址和端口**:
+
+```bash
+SERVER_IP=192.168.31.199 PUBLIC_HOST=203.0.113.7:8443 bash setup.sh
+# 有域名的话一起写:
+SERVER_IP=192.168.31.199 PUBLIC_HOST=203.0.113.7:8443,catfish.example.com bash setup.sh
+```
+
+外面的人用 `https://203.0.113.7:8443` 登录,登录地址(issuer)就是它;内网员工照旧 `https://192.168.31.199`。端口不写就等于服务器自己的 HTTPS 端口(默认 443)。
+
+交给网管的映射表:
+
+| 公网(外面打开的) | 映射到(服务器) | 说明 |
+|---|---|---|
+| `203.0.113.7:8443` TCP | `192.168.31.199:443` | 门户 + 登录 + 网关 + 手机,全走这一个端口 |
+| `catfish.example.com` 的 443(有域名时) | `192.168.31.199:443` | 公网 DNS 指到公司出口 |
+
+8998 / 8999 / 5173 **不用**映射出去。映射好以后从外网打开 `https://203.0.113.7:8443/.well-known/openid-configuration`,应该看到 `"issuer":"https://203.0.113.7:8443"`(装机脚本结尾也会打印这句)。
+
+公网 IP 拿不到正式证书,外面的人第一次用浏览器打开会提示证书不受信;Companion 用接入码装一次内部 CA 即可。要免警告就用域名 + 正式证书。
+
+> ⚠ 安全:这样做是**把整个门户(含登录页)开到公网**。优先用域名 + 正式证书;防火墙上能限来源 IP 就限;管理员账号改强密码。如果只是想让员工手机在外面用,更稳的是只开手机中转站(见下面「中转站单独放 DMZ」,`docker-compose.relay.yml`),中央本体不出内网。
+
 ---
 
 ## 四、装机后验证
@@ -213,7 +278,7 @@ bash verify-login.sh
 | 门户 URL | `https://<IP>` | 这项独立,改上面两个不会自动带上它 |
 | 接入码 | 装机脚本打印的那串 | 填了 https 门户 URL 才出现;保存时自动取证书并核对,已装过证书可不填 |
 
-前两项走 http 是当前实现的限制(桌面端直连这两个端口,不经 HTTPS 反代)。
+内网用 IP 时前两项走 http 直连这两个端口。**用域名 / 在公司外面**(见第三节「用域名 / 正式证书」)时三项都填 `https://<域名>`(公网映射填 `https://<公网IP>:<对外端口>`):外面只开了门户这一个端口,网关和登录都走门户的 https 反代。接入链接会自动这样填。
 
 **填完必须退出 Companion 重新打开**才生效。
 
@@ -248,14 +313,14 @@ oidc:
 1. 员工手机连 VPN,跟在公司里一样用。
 2. 把门户的 `/m`、登录页和 `/relay/` 经反向代理开放到公网,其余路径不开放(`relay-dmz/nginx.conf` 就是这样一份白名单,可以照着改)。
 
-> ⚠ 外网登录的硬约束:手机在外网要能打开登录页,所以**登录服务的地址(OIDC issuer)必须是外网能访问的那个 https 域名**,员工电脑在内网也用同一个域名(内网 DNS 解析到内网 IP)。issuer 跟手机实际打开的地址不一致时,登录会报错。只在内网 Wi-Fi / VPN 下用手机就没有这个问题。
+> 外网登录:手机在外网要能打开登录页,所以中央装机时要带上外网能访问的地址 `PUBLIC_HOST=<域名>`(见第三节「用域名 / 正式证书」)。11/08 起 IP 和域名可以同时登录:员工电脑在内网照旧用 IP,手机在外网用域名,各自的登录地址都认。只在内网 Wi-Fi / VPN 下用手机就不用配。
 
 #### 中转站单独放 DMZ(客户不愿意把中央任何路径开到公网时)
 
 同一个网关镜像的「只中转」模式(`CATFISH_ROLE=relay`):只有 `/relay/ws` 和 `/healthz`,不带模型、配额、审计等接口,不碰用户数据。
 
 1. DMZ 机器上导入跟中央同一个镜像包,解开本目录。
-2. `cp relay-dmz/relay.env.example relay-dmz/relay.env`,填中央数据库地址、登录服务地址(见上面的硬约束)、手机上限。
+2. `cp relay-dmz/relay.env.example relay-dmz/relay.env`,填中央数据库地址、登录服务地址(中央 `.env` 里 `CATFISH_OIDC_ISSUERS` 那一整串;中央装机时要带 `PUBLIC_HOST=<对外域名>`)、手机上限。
 3. 证书放到 `relay-dmz/certs/server.crt` 和 `server.key`(对外域名的证书)。
 4. 改 `relay-dmz/nginx.conf` 里的 `<中央内网地址>`。
 5. `docker compose -f docker-compose.relay.yml up -d`,`curl -k https://<对外域名>/healthz` 回 `{"status":"ok","role":"relay"}` 就好了。
@@ -278,6 +343,8 @@ SERVER_IP=<IP> ENABLE_HTTPS=1 bash setup.sh
 ```
 
 脚本检测到 30 天内到期会自动重签。**CA 不变,员工机器上的 `ca.pem` 不用动。**
+
+域名用的正式证书(`certs/official/`)不在自动续期范围里,换法见第三节「用域名 / 正式证书」。
 
 > 为什么不签十年:macOS / iOS 对 TLS 服务器证书有 398 天上限,超了直接拒绝连接,且跟证书受不受信任无关。
 
@@ -329,6 +396,8 @@ powershell -ExecutionPolicy Bypass -File .\windows\setup-wsl.ps1 -Upgrade 1
 | 聊天报「上游 LLM Provider 鉴权挂了」 | 服务器 `.env` 的 `DASHSCOPE_API_KEY` 空或过期,见第三节。门户能登录不代表 key 已配 |
 | 员工机器装了 Clash / VPN | 内网地址被代理劫走。Companion 已默认绕过代理,浏览器需在代理软件里把服务器 IP 加进直连规则 |
 | 装机脚本报 443 被占 | 按提示停掉占用方,或用 `CATFISH_HTTPS_PORT` 换端口 |
+| 用域名打开报证书错误,IP 正常 | 正式证书过期 / 没覆盖这个域名 —— 门户「服务状态」看到期日;换证书见第三节「用域名 / 正式证书」 |
+| 外网打开域名 / 公网 IP 登录报 issuer 不一致 | 外面打开的地址跟 `PUBLIC_HOST` 不完全一样(端口也算)。按外面实际的 `主机:端口` 重跑 `PUBLIC_HOST=… bash setup.sh` |
 
 日志位置:
 
