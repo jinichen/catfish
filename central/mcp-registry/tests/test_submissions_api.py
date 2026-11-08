@@ -115,3 +115,12 @@ def test_审计只给管理员_每条带line(client):
     assert client.get("/v1/mcp/audit", headers=EMP).status_code == 403
     events = client.get("/v1/mcp/audit", headers=ADMIN).json()["events"]
     assert events and all(e["line"] == "mcp" for e in events) and any(e["action"] == "submit" for e in events)
+
+
+def test_我订阅的_试用订阅带trial标(client):
+    submit(client, EMP, sid="withcreds2", trial_credentials="test/test")
+    client.post("/v1/mcp/subscribe", headers=MGR, json={"connector_id": "withcreds2", "trial": True})
+    client.post("/v1/mcp/subscribe", headers=MGR, json={"connector_id": "time"})
+    subs = {s["connector_id"]: s for s in client.get("/v1/mcp/subscribed", headers=MGR).json()["subscriptions"]}
+    assert subs["withcreds2"]["trial"] is True and subs["withcreds2"]["connector_name"] == "工单系统"
+    assert subs["time"]["trial"] is False

@@ -242,6 +242,7 @@ pub(crate) fn handler(
             crate::commands::colleague_tasks::colleague_task_check,
             crate::commands::workflows::workflow_call,
             crate::commands::experts_local::expert_local_call,
+            crate::commands::share_trial::share_trial_call,
             crate::commands::experts_local::expert_local_apply,
             crate::commands::experts_local::expert_local_remove,
             crate::commands::experts_local::expert_chat_list,

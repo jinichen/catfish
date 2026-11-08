@@ -33,6 +33,7 @@ pub mod meeting;       // 10/1: 会议录音 (建会议 / 录 / 停 / 列表), �
 pub mod meeting_import; // 10/11: 导入录音笔 / 手机录音 → 一场会议, 后面复用转写
 pub mod notify_prefs; // 10/12: 「提醒同步到微信」开关 + 测试推送 (tool-bridge wechat_push.py)
 pub mod experts_local; // 10/18: 本机专家 —— 定义编译在 tool-bridge, 这里落 hermes profile + 工作台「找谁」
+pub mod share_trial; // 11/08: 分享治理 —— 审批人「装到我这里试用」(tool-bridge skill_trial.py), 专家试用连 profile 一起装 / 卸
 pub mod workflows; // 10/17: 工作流 skill —— 技能页编辑 / 试跑 / 运行记录 + 全局对外步骤确认
 pub mod forms; // 10/17: 一起填表 —— 「协同」页发起 / 填写 / 进度 (tool-bridge forms.py)
 pub mod colleague_rooms; // 11/5: 同事群聊 —— 「协同」页建群 / 加入 / 发消息 (tool-bridge colleague_rooms.py)

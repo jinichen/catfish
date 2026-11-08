@@ -201,23 +201,28 @@ pub async fn expert_local_apply(id: String) -> Result<Json, String> {
 /// 删专家: 注销 + 删它的 profile (只删 Companion 管的) + 删定义。
 #[tauri::command]
 pub async fn expert_local_remove(id: String) -> Result<(), String> {
+    expert_profile_remove(id.clone()).await?;
+    rpc("pim/expert_delete", json!({ "id": id })).await?;
+    Ok(())
+}
+
+/// 只删 profile 那一半 (注销 + 删 Companion 管的 profile), 定义不动。
+/// 11/08 share_trial.rs 用: 试用专家被 tool-bridge 自动卸掉后 (定义已删), 补删 profile。
+pub(crate) async fn expert_profile_remove(id: String) -> Result<(), String> {
     let pid = format!("expert-{id}");
-    let pid2 = pid.clone();
     tokio::task::spawn_blocking(move || {
         with_config_transaction(|_, home, old_cfg| {
             let mut cfg = old_cfg.clone();
-            cfg.registrations.remove(&pid2);
-            cfg.bindings.retain(|_, v| v != &pid2);
-            if profile_dir(home, &pid2).map(|d| d.exists()).unwrap_or(false) {
-                delete_managed_profile(home, &pid2)?;
+            cfg.registrations.remove(&pid);
+            cfg.bindings.retain(|_, v| v != &pid);
+            if profile_dir(home, &pid).map(|d| d.exists()).unwrap_or(false) {
+                delete_managed_profile(home, &pid)?;
             }
             Ok((cfg, ()))
         })
     })
     .await
-    .map_err(|e| format!("删除专家异常: {e}"))??;
-    rpc("pim/expert_delete", json!({ "id": id })).await?;
-    Ok(())
+    .map_err(|e| format!("删除专家异常: {e}"))?
 }
 
 /// 「从文件安装」: 原生文件框, 只列 .catfish-expert。取消返回 None。

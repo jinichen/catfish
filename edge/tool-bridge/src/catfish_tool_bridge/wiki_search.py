@@ -103,7 +103,9 @@ _NON_CURRENT_STATUSES = frozenset({"expired", "historical", "archived", "superse
 _SKIP_KEYS = frozenset({"type", "title", "created", "updated", "sources", "source", "related", "tags", "aliases",
                         "ontology_status", "deprecated", "status", "authored_by", "evidence", "unverified",
                         "kept_path", "uploaded", "bytes", "filename", "conflicts", "action_refs",
-                        "entity_type", "concept_type"})
+                        "entity_type", "concept_type",
+                        # 11/08 分享治理: 部门共享页的审核字段 (wiki_install 写的), 不是属性
+                        "review_status", "reviewed_by", "reviewed_at", "review_note", "withdrawn_by", "withdrawn_at"})
 _MD_NOISE = re.compile(r"[#*>`|_\[\]()]+")
 
 
@@ -163,6 +165,8 @@ def _parse_wiki(path: Path, source: str) -> dict[str, Any] | None:
             if k and v and k not in _SKIP_KEYS and not v.startswith("["):
                 props[k] = v
     ontology_status = (_parse_frontmatter_field(fm, "ontology_status") or "active").lower() if fm else "active"
+    # 11/08 分享治理: 装机部门页带 review_status (pending 待审 / approved / withdrawn 已撤回); 自家的和老副本都算 approved
+    review_status = (_parse_frontmatter_field(fm, "review_status") or "approved").lower() if fm else "approved"
     try:
         rel_path = str(path.relative_to(_catfish_home()))
     except ValueError:
@@ -171,7 +175,7 @@ def _parse_wiki(path: Path, source: str) -> dict[str, Any] | None:
         "name": path.stem, "title": title, "kind": kind, "source": source, "rel_path": rel_path,
         "head": body.strip()[:_WIKI_HEAD_PREVIEW_CHARS + 500],
         "aliases": aliases, "tags": tags, "subtype": subtype, "props": props, "related": related,
-        "ontology_status": ontology_status, "fm": fm, "body": body,
+        "ontology_status": ontology_status, "review_status": review_status, "fm": fm, "body": body,
     }
 
 
@@ -409,12 +413,13 @@ def _name_hits(query: str, meta: list[dict[str, Any]], fused: dict[int, dict[str
 
 
 def search_wiki(query: str, top_k: int = 5, *, include_expired: bool = False,
-                include_pending: bool = False, include_sources: bool = False) -> dict[str, Any]:
+                include_pending: bool = False, include_sources: bool = False,
+                include_withdrawn: bool = False) -> dict[str, Any]:
     """混合搜员工本机 wiki (自家 + 装机部门)。
 
     Returns: {"matches": [{name, title, kind, type, source, head, rel_path, score, matched_in, status, props,
-              relations, aliases?, via?}], "count", "total_indexed", "semantic" (向量用上了没),
-              "hidden" (没列的条数), "summary"}
+              relations, aliases?, via?, review? ("待审": 部门页主管还没审)}], "count", "total_indexed",
+              "semantic" (向量用上了没), "hidden" (没列的条数; withdrawn = 部门里撤回的共享页), "summary"}
     """
     top_k = max(1, min(int(top_k or 5), 15))
     start_ts = time.monotonic()
@@ -432,12 +437,16 @@ def search_wiki(query: str, top_k: int = 5, *, include_expired: bool = False,
     seeds = [i for i, _s, _sn in semantic] if semantic else [i for i, _s in lexical]
     _expand(fused, meta, seeds[:10])
 
-    hidden = {"expired": 0, "pending": 0, "sources": 0}
+    hidden = {"expired": 0, "pending": 0, "sources": 0, "withdrawn": 0}
     matches = []
+    unreviewed = 0
     for i, f in sorted(fused.items(), key=lambda kv: -kv[1]["score"]):
         p = meta[i]
         if p["kind"] == "source" and not include_sources:
             hidden["sources"] += 1
+            continue
+        if p.get("review_status") == "withdrawn" and not include_withdrawn:
+            hidden["withdrawn"] += 1
             continue
         st = p.get("type_status")
         if st and st.get("code") in ("expired", "done") and not include_expired:
@@ -461,6 +470,11 @@ def search_wiki(query: str, top_k: int = 5, *, include_expired: bool = False,
             row["aliases"] = p["aliases"]
         if f.get("via"):
             row["via"] = f["via"]
+        if p.get("review_status") == "pending":
+            row["review"] = "待审"   # 部门共享页, 主管还没审过: 照常列, 但标出来
+            unreviewed += 1
+        elif p.get("review_status") == "withdrawn":
+            row["review"] = "已撤回"
         matches.append(row)
 
     hidden = {k: v for k, v in hidden.items() if v}
@@ -473,12 +487,16 @@ def search_wiki(query: str, top_k: int = 5, *, include_expired: bool = False,
         summary = (f"找到 {len(matches)} 份 wiki ({src}, top: {', '.join(titles)}). "
                    "head 是最相关的一段; 想看全文和全部关系用 catfish_wiki_read 调 rel_path; "
                    "按属性筛 (到期 / 某部门 / 没填) 用 catfish_wiki_query.")
+    if unreviewed:
+        summary += f" 其中 {unreviewed} 份是部门同事分享、主管还没审过的页 (review=待审), 引用时说明一下。"
     if semantic is None:
         summary += " (这次只按字面匹配, 没用上向量: Companion 没开或还没建向量)"
     if hidden:
-        parts = [f"{n} 条已过期 / 已结束" if k == "expired" else f"{n} 条待确认" if k == "pending" else f"{n} 份原始资料 (上传的原件)"
-                 for k, n in hidden.items()]
-        summary += f" 另有 {', '.join(parts)} 没列 (要看就传 include_expired / include_pending / include_sources=true)。"
+        labels = {"expired": "条已过期 / 已结束", "pending": "条待确认", "sources": "份原始资料 (上传的原件)",
+                  "withdrawn": "份部门里已撤回的共享页"}
+        parts = [f"{n} {labels[k]}" for k, n in hidden.items()]
+        summary += (f" 另有 {', '.join(parts)} 没列 (要看就传 include_expired / include_pending / include_sources / "
+                    "include_withdrawn=true)。")
     return {"matches": matches, "count": len(matches), "total_indexed": len(meta), "semantic": semantic is not None,
             "hidden": hidden, "summary": summary, "latency_ms": int((time.monotonic() - start_ts) * 1000)}
 
@@ -490,7 +508,8 @@ def tool_wiki_search(args: dict) -> dict[str, Any]:
         return {"matches": [], "count": 0, "total_indexed": 0, "summary": "query 空: 给关键词或问题", "error": "query 空"}
     try:
         return search_wiki(query, top_k=int(args.get("top_k") or 5), include_expired=bool(args.get("include_expired")),
-                           include_pending=bool(args.get("include_pending")), include_sources=bool(args.get("include_sources")))
+                           include_pending=bool(args.get("include_pending")), include_sources=bool(args.get("include_sources")),
+                           include_withdrawn=bool(args.get("include_withdrawn")))
     except Exception as e:  # noqa: BLE001
         logger.exception("wiki_search 失败")
         return {"matches": [], "count": 0, "total_indexed": 0, "summary": f"wiki 搜索出错: {e}", "error": str(e)}

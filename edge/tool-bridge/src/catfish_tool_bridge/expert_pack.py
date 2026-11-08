@@ -433,8 +433,10 @@ def inspect(data: bytes) -> dict[str, Any]:
 
 
 def install(data: bytes, *, confirmed: bool = False, origin: str = "file",
-            signature: dict[str, Any] | None = None) -> dict[str, Any]:
-    """装 / 升级。新装要 confirmed (界面上看过权限摘要点了安装); 升级权限变多了也要重新 confirmed。"""
+            signature: dict[str, Any] | None = None, trial: dict[str, Any] | None = None) -> dict[str, Any]:
+    """装 / 升级。新装要 confirmed (界面上看过权限摘要点了安装); 升级权限变多了也要重新 confirmed。
+    11/08 trial = 审批人试用 ({by, expires, id, version}, skill_trial.install_expert_trial): 名字带「(试用)」, source.trial 记下,
+    不进别人的市场、不能再打包 (从包装的本来就不能)。"""
     info = inspect(data)
     if info["problems"]:
         raise ValueError("这个包没过检查: " + "; ".join(info["problems"]))
@@ -462,8 +464,11 @@ def install(data: bytes, *, confirmed: bool = False, origin: str = "file",
     if had:
         final.rename(old)
     staging.rename(final)
+    name = str(man.get("name") or pid)
+    if trial and not name.endswith("(试用)"):
+        name = f"{name} (试用)"[:30]
     defn = {
-        "id": pid, "name": man.get("name"), "description": man.get("description"),
+        "id": pid, "name": name, "description": man.get("description"),
         "persona": files.get("SOUL.md", b"").decode("utf-8", errors="ignore"),
         "quick_prompts": man.get("quick_prompts") or [], "workflows": man.get("workflows") or [],
         "skills": man.get("skills") or [], "routes": man.get("routes") or [], "checks": man.get("checks") or [],
@@ -484,7 +489,7 @@ def install(data: bytes, *, confirmed: bool = False, origin: str = "file",
     d["enabled"] = prev.get("enabled", True) is not False
     d["source"] = {"kind": "pack", "version": man["version"], "sha256": info["sha256"], "origin": origin,
                    "signature": signature or {"status": "unsigned"}, "installed_at": workflow_store.now(),
-                   "permissions": info["permissions"]}
+                   "permissions": info["permissions"], **({"trial": trial} if trial else {})}
     p = expert_local._dir(pid) / "expert.yaml"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(yaml.safe_dump(d, allow_unicode=True, sort_keys=False), encoding="utf-8")
@@ -551,7 +556,8 @@ def market() -> dict[str, Any]:
     items = _hub("GET", "").json().get("experts") or []
     for m in items:
         src = (_installed(m["id"]) or {}).get("source") or {}
-        m["installed_version"] = src.get("version") if src.get("kind") == "pack" else None
+        # 11/08: 试用装的不算「已装」—— 通过后市场上照样显示「安装」(转成正式安装)
+        m["installed_version"] = src.get("version") if src.get("kind") == "pack" and not src.get("trial") else None
         m["local_conflict"] = bool(_installed(m["id"])) and src.get("kind") != "pack"
         m["can_upgrade"] = bool(m["installed_version"]) and _ver_tuple(m["version"]) > _ver_tuple(m["installed_version"])
         m["expanded"] = expanded(src.get("permissions"), m.get("summary") or {}) if m["can_upgrade"] else []

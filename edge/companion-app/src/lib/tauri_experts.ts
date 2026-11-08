@@ -40,8 +40,11 @@ export interface ExpertSummary {
   routes: number;
   workflows: number;
   skills: number;
-  /** 从专家包装的才有 (不能直接改, 只能升级 / 卸载) */
-  pack: { version: string; origin: "hub" | "file"; signed: boolean; reviewed_by: string | null } | null;
+  /** 从专家包装的才有 (不能直接改, 只能升级 / 卸载); trial = 审批人试用装的 (11/08): 谁试的、unix 秒到期 */
+  pack: {
+    version: string; origin: "hub" | "file"; signed: boolean; reviewed_by: string | null;
+    trial?: { by: string; expires: number; id: string; version: string } | null;
+  } | null;
   /** 自己搭的专家上次打包的版本 */
   packed_version: string | null;
 }

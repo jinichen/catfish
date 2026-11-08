@@ -29,6 +29,19 @@ import { useAgentStore } from "../../store/agent";
 // P3.3.16: 拉本机已装 skill 对比 hub 版本
 import { fetchMySkills, toolBridgeCallTool } from "../../lib/tauri";
 import type { SkillEntry } from "../../types/identity";
+// 11/08 分享治理: 审批人「待我审」+ 装到我这里试用; 刷新时不在待审的试用自动卸 (SkillTrialUi.tsx)
+import { PendingSkillsSection, removedSkillText, syncSkillTrials } from "./SkillTrialUi";
+
+/** 11/08: hub 每条带的审核状态 (skill_review.annotate_list) */
+interface SkillReview {
+  scope?: "department" | "company";
+  departments?: string[];
+  status?: "pending" | "approved" | "rejected" | "withdrawn";
+  submitted_by?: string;
+  reviewed_by?: string;
+  review_note?: string;
+  legacy?: boolean;
+}
 
 interface SkillSummary {
   namespace: string;
@@ -38,6 +51,7 @@ interface SkillSummary {
   published_by?: string;
   published_at?: string;  // ISO
   versions?: string[];
+  review?: SkillReview;
 }
 
 interface ListResponse {
@@ -100,8 +114,16 @@ export default function SkillsHubCard() {
   const [installingKey, setInstallingKey] = useState<string | null>(null);
   /** P3.3.16: install 后 toast — 简单实现. */
   const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  /** 11/08: 待我审列表的刷新计数 (装了试用 / 刷新后重拉) */
+  const [pendingKey, setPendingKey] = useState(0);
 
   const refresh = async () => {
+    // 11/08: 先把不在待审了的试用安装卸掉 (通过 / 驳回 / 撤回 / 到期), 再拉列表 —— 列表里的「已装」才准
+    const removed = await syncSkillTrials();
+    if (removed.length) {
+      setToast({ kind: "ok", text: removed.map(removedSkillText).join("; ") });
+      setPendingKey((k) => k + 1);
+    }
     // 并发拉 hub + 本机 my skills (本机失败不阻塞 hub 显)
     try {
       // P3.3.37 (6/12 鸿波 audit): config.backendUrl 在 hermes proxy 开时切 8642,
@@ -177,10 +199,10 @@ export default function SkillsHubCard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // P3.3.16: toast 3 秒自消
+  // P3.3.16: toast 3 秒自消 (11/08: 试用相关的话长一点, 6 秒)
   useEffect(() => {
     if (!toast) return;
-    const t = window.setTimeout(() => setToast(null), 3500);
+    const t = window.setTimeout(() => setToast(null), toast.text.includes("试用") ? 6500 : 3500);
     return () => window.clearTimeout(t);
   }, [toast]);
 
@@ -332,6 +354,12 @@ export default function SkillsHubCard() {
         </div>
       )}
 
+      {/* 11/08: 审批人才看得到 —— 待我审的技能 + 「装到我这里试用」 */}
+      {!error && (
+        <PendingSkillsSection refreshKey={pendingKey}
+                              onInstalled={(msg) => { setToast({ kind: "ok", text: msg }); void refresh(); }} />
+      )}
+
       {!loading && !error && skills.length === 0 && (
         <div
           style={{
@@ -341,7 +369,7 @@ export default function SkillsHubCard() {
             textAlign: "center",
           }}
         >
-          hub 上还没人发布过 skill. 写完一个 skill 后, 让 {agentName} 帮你发布到这里, 全公司能看到.
+          hub 上还没有你能看到的 skill. 写完一个 skill 后, 让 {agentName} 帮你分享到这里 (部门主管或管理员审核通过后同事就能看到).
         </div>
       )}
 
@@ -385,6 +413,23 @@ export default function SkillsHubCard() {
         </div>
       )}
     </div>
+  );
+}
+
+/** 11/08 分享治理: 这条在 hub 上的审核状态. 已通过 (或上线前的老版本) 不标; 自己提交的待审 / 被驳回的标出来. */
+function ReviewBadge({ review }: { review?: SkillReview }) {
+  if (!review || !review.status || review.status === "approved") return null;
+  const label = { pending: "待审核", rejected: "被驳回", withdrawn: "已撤回" }[review.status];
+  const tone = review.status === "pending" ? "#d97706" : "#6b7280";
+  const who = review.scope === "company" ? "管理员" : "部门主管";
+  const title = review.status === "pending"
+    ? `等${who}审核; 通过前同事看不到, 装不了`
+    : review.review_note ? `${label}: ${review.review_note}` : label;
+  return (
+    <span title={title} style={{ fontSize: 10, padding: "0 6px", borderRadius: 999, border: `1px solid ${tone}`, color: tone,
+                                 fontFamily: "inherit", fontWeight: 400, whiteSpace: "nowrap" }}>
+      {label}
+    </span>
   );
 }
 
@@ -466,7 +511,14 @@ function SkillRow({
         v{skill.latest_version}
       </span>
     );
-    actionBtn = (
+    // 11/08: 还没审核通过的 (自己提交的 / 待我审的) 不给「安装」—— hub 那边也装不了; 审批人用上面的「装到我这里试用」
+    const notApproved = !!skill.review?.status && skill.review.status !== "approved";
+    actionBtn = notApproved ? (
+      <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}
+            title="审核通过后这里才会出现「安装」">
+        {skill.review?.status === "pending" ? "等审核" : "不可安装"}
+      </span>
+    ) : (
       <button
         type="button"
         onClick={onInstall}
@@ -506,8 +558,9 @@ function SkillRow({
           marginBottom: "var(--space-1)",
         }}
       >
-        <span style={{ fontFamily: "var(--font-mono)", fontWeight: 500 }}>
+        <span style={{ fontFamily: "var(--font-mono)", fontWeight: 500, display: "inline-flex", gap: 6, alignItems: "baseline" }}>
           {skill.name}
+          <ReviewBadge review={skill.review} />
         </span>
         {badge}
       </div>

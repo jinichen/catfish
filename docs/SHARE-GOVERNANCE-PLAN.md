@@ -56,7 +56,7 @@
 
 ### 3.1 技能
 
-- skills-hub：`POST /skills/{namespace}` 改成提交 → `status=pending`；新增 `/skills/review`（待我审的）、`/skills/{ns}/{name}/{version}/review`（通过 / 驳回）、`/trial`（给审批人的临时签名下载）；`namespace` 改成 `dept/<部门>` 和 `company`（老的 `department` 桶迁移成各部门桶，按提交人部门归）。
+- skills-hub：`POST /skills/{namespace}` 改成提交 → `status=pending`；新增 `/skills/review`（待我审的）、`/skills/{ns}/{name}/{version}/review`（通过 / 驳回）、`/trial-token`（给审批人的临时签名）。`namespace` **不改**（路径段只允许 ASCII，部门名是中文）——范围和部门记在审核记录里，老的 `department` 桶照旧，可见性由记录决定。
 - 中央门户 `SkillsHubPage`：员工看到自己提交的状态；主管 / admin 看到「待我审」列表 + 试用按钮 + 服务器拆出来的摘要（SKILL.md 全文、script.py 会打开哪些网站、要哪些凭据）。
 - Companion：`skill_publish` 多一个「发到哪个范围」；`skills_install` 认 `trial` 标记和临时签名；技能列表里试用的带标。
 - 工作量：hub 2 天、门户 1.5 天、Companion 1 天。
@@ -154,3 +154,19 @@
 | POST | `/submissions/{id}/review` | `{decision, note}`; approve → 写进 manifests, `allowed_dept` 按范围, 同事可订阅 |
 | GET | `/manifest/{id}` | 待审的只有审批人能拿到, 且返回 `trial: true` |
 | POST | `/subscribe` | 多 `trial: true`: 审批人订阅待审的连接器 (提交人要写了 `trial_credentials` 才行), 审计 `subscribe_trial` |
+
+### 6.5 实现时补的几条 (11/08 晚)
+
+- 三条线审计的字段名不一样 (技能 `event/by_user/namespace/name/version`, 专家 `event/by/id/version`, 知识 `event/by_user/namespace/file_id`, MCP `action/user_sub/connector_id/meta`), 门户「分享审计」里统一成 时间 / 哪条线 / 事件 / 谁 / 对象 / 备注; `line` 技能 + 专家由 hub 给, 知识页门户自己标 `wiki`, MCP 由 registry 给 (`GET /v1/mcp/audit`, admin)。
+- `GET /v1/wiki/review` 返 `{documents}`; `GET /v1/hub/skills/review|mine` 返的是审核记录 (`{skills: [record]}`), 不是技能摘要。
+- `GET /v1/mcp/subscribed` 每条多 `trial: true|false` (连接器还没上架的订阅 = 审批人试用), Companion 据此打标、审完自动退订。
+- Companion 装 hub 技能走 tool-bridge `catfish_tools_install._install_from_hub` (Python), 下载带 OAuth token (以前不带, 新的可见性规则下会 403), 按 §6.1 重算 `bundle_sha256` 并验签; 试用安装在技能目录里放 `trial.json`。
+
+## 7. 进度 (11/08)
+
+三期一次做完, 已落代码:
+- 后端: skills-hub / wiki-hub / mcp-registry / gateway 反代 (§6 全部接口), 测试 skills-hub 38 · wiki-hub 22 · mcp-registry 57 · 网关代理 25。
+- 门户: 四个市场页 + 分享审计, 测试 30。
+- Companion: 对话里发技能带范围 (`skill_publish` scope / departments / note); 装技能验签; 审批人「装到我这里试用」(技能 / 专家包 / MCP)、「回传试用结果」、「卸掉试用」, 审完自动卸 / 退订; 共享知识页 待审 / 已撤回 标 (搜索默认不列已撤回)。
+- 验收 (§5) 对应的自动测试: 技能 `central/skills-hub/tests/test_skill_review.py`, 知识 `central/wiki-hub/tests/test_wiki_hub_app.py` 末尾两条, MCP `central/mcp-registry/tests/test_submissions_api.py`, Companion `edge/tool-bridge/tests/test_skill_trial.py` + `SkillTrialUi.test.tsx` / `McpTrialUi.test.tsx`。
+- 没做成一键的: 试用通过后「转成正式安装」是自动卸掉试用 + 提示去市场点「安装」, 不是原地一键转; Companion 的「我的技能」卡上发布只有默认范围 (本部门), 要发全公司跟小鲶说。

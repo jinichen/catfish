@@ -126,6 +126,7 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
                 "include_expired": {"type": "boolean", "description": "true 把已过期 / 已结束的也列出来"},
                 "include_pending": {"type": "boolean", "description": "true 把待确认 (关系没对上) 的也列出来"},
                 "include_sources": {"type": "boolean", "description": "true 把员工上传的原始资料 (原件转存) 也列出来"},
+                "include_withdrawn": {"type": "boolean", "description": "true 把部门里已撤回的共享页也列出来"},
             },
             "required": ["query"],
         },

@@ -143,6 +143,8 @@ class SubscriptionView(BaseModel):
     # connector 元信息 join 进来给 Companion 渲染 (减一次往返)
     connector_name: str | None = None
     connector_version: str | None = None
+    trial: bool = False
+    """11/08: 审批人试用待审连接器的订阅 (连接器还没上架), Companion 据此打「试用」标、审完自动退订。"""
 
 
 class SubscribeRequest(BaseModel):

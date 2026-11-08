@@ -11,6 +11,7 @@ import {
   expertPackInstall, expertPackMarket, expertPackMine, expertPackPreview, expertPackPublish, expertPackWithdraw,
   type HubExpert, type PackInspect, type PackPermissions, type PackPreview,
 } from "../../lib/tauri_experts";
+import { trialExpertInstall } from "../../lib/tauri_trial";
 import { Overlay, StateTag, muted } from "../Collab/formsUi";
 import { Btn, ErrorLine, inputStyle, itemStyle } from "../Collab/roomLinkUi";
 
@@ -44,10 +45,10 @@ export function PermissionSummary({ p }: { p: Partial<PackPermissions> }) {
   );
 }
 
-/** 装 / 升级前的确认框。source = 从文件 (path) 或从市场 (id + version)。 */
+/** 装 / 升级前的确认框。source = 从文件 (path) / 从市场 (hub, id + version) / 审批人试用 (trial, 11/08)。 */
 export function InstallDialog({ info, source, onClose, onDone }: {
   info: PackInspect;
-  source: { path: string } | { from: "hub"; id: string; version: string };
+  source: { path: string } | { from: "hub" | "trial"; id: string; version: string };
   onClose: () => void;
   onDone: (msg: string) => void;
 }) {
@@ -56,15 +57,20 @@ export function InstallDialog({ info, source, onClose, onDone }: {
   const blocked = info.problems.length > 0 || ["same", "older", "conflict"].includes(info.state);
   const upgrade = info.state === "upgrade";
   const fromFile = "path" in source;
+  const trial = !fromFile && source.from === "trial";
 
   async function go() {
     setBusy(true);
     setError(null);
     try {
-      const r = await expertPackInstall({ ...source, confirmed: true });
+      const r = !fromFile && source.from === "trial"
+        ? await trialExpertInstall(source.id, source.version, true)
+        : await expertPackInstall({ ...(source as { path?: string; from?: "hub"; id?: string; version?: string }), confirmed: true });
       if (r.ok) {
         await refreshExperts();
-        onDone(`${info.name} ${r.version} ${r.upgraded ? "已升级" : "装好了"}, 在工作台「找谁」里能找到它`);
+        onDone(trial
+          ? `${info.name} ${r.version} 已以试用身份装上 (「找谁」里带「(试用)」); 试过后在专家列表里回传结果`
+          : `${info.name} ${r.version} ${r.upgraded ? "已升级" : "装好了"}, 在工作台「找谁」里能找到它`);
       } else if ("error" in r) {
         setError(r.error);
       } else {
@@ -78,10 +84,12 @@ export function InstallDialog({ info, source, onClose, onDone }: {
   }
 
   return (
-    <Overlay title={`${upgrade ? "升级" : "安装"}专家 · ${info.name} ${info.version}`} onClose={onClose} width={640}>
+    <Overlay title={`${trial ? "试用" : upgrade ? "升级" : "安装"}专家 · ${info.name} ${info.version}`} onClose={onClose} width={640}>
       {info.description && <span style={{ fontSize: 13 }}>{info.description}</span>}
       <span style={muted}>
-        {fromFile ? "⚠️ 从文件装: 没有中央签名, 确认文件来源可靠再装。" : "✅ 从公司资源市场装: 装之前会核对中央签名。"}
+        {fromFile ? "⚠️ 从文件装: 没有中央签名, 确认文件来源可靠再装。"
+          : trial ? "🧪 审批人试用: 装到你这台电脑 (7 天), 中央给的是带「试用」的临时签名; 不会给同事, 审核有结果后自动卸掉。"
+          : "✅ 从公司资源市场装: 装之前会核对中央签名。"}
         {upgrade && ` 本机现在是 ${info.installed_version}, 升级保留它的会话和记忆。`}
       </span>
       {upgrade && info.expanded.length > 0 && (
@@ -104,7 +112,7 @@ export function InstallDialog({ info, source, onClose, onDone }: {
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
         <Btn kind="ghost" disabled={busy} onClick={onClose}>取消</Btn>
         <Btn kind="primary" disabled={busy || blocked} onClick={() => void go()}>
-          {busy ? "处理中 (会重启一次小鲶本机服务)…" : upgrade ? "升级" : "安装"}
+          {busy ? "处理中 (会重启一次小鲶本机服务)…" : trial ? "装到我这里试用" : upgrade ? "升级" : "安装"}
         </Btn>
       </div>
     </Overlay>

@@ -85,6 +85,56 @@ def _validate_ns_and_id(namespace: str, file_id: str) -> str | None:
     return None
 
 
+#: 11/08 分享治理: hub 返回的审核字段, 原样记进 .meta.json (docs/SHARE-GOVERNANCE-PLAN.md §3.2)
+_REVIEW_KEYS = ("review_status", "reviewed_by", "reviewed_at", "review_note", "withdrawn_by", "withdrawn_at", "legacy")
+
+
+def _review_fields(doc: dict[str, Any]) -> dict[str, Any]:
+    out = {k: doc[k] for k in _REVIEW_KEYS if doc.get(k) not in (None, "")}
+    out["review_status"] = str(doc.get("review_status") or "approved")   # 老 hub / 老页面没这个字段 = 视作已审
+    return out
+
+
+def _set_frontmatter_field(text: str, key: str, value: str) -> str:
+    """frontmatter 里设一个顶层 `key: value` (有就替换, 没有就加在闭合 --- 前); 没 frontmatter 就补一个。"""
+    if not text.startswith("---\n"):
+        return f"---\n{key}: {value}\n---\n\n{text}"
+    end = text.find("\n---", 4)
+    if end < 0:
+        return text
+    lines = text[4:end].split("\n")
+    kept = [ln for ln in lines if not ln.startswith(f"{key}:")]
+    kept.append(f"{key}: {value}")
+    return "---\n" + "\n".join(kept) + text[end:]
+
+
+def _mark_local_withdrawn(target_dir: Path, file_id: str, doc: dict[str, Any]) -> dict[str, Any]:
+    """主管 / 发布人撤下了: 员工本机那份不删 (公理 4), 只标 review_status: withdrawn (搜索默认不列, 卡片显「已撤回」)。"""
+    md = target_dir / f"{file_id}.md"
+    try:
+        md.write_text(_set_frontmatter_field(md.read_text(encoding="utf-8"), "review_status", "withdrawn"), encoding="utf-8")
+    except OSError as e:
+        return {"ok": False, "error": f"标记本机副本失败: {e}"}
+    meta_path = target_dir / f"{file_id}.meta.json"
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+    except (OSError, ValueError):
+        meta = {}
+    meta.update(_review_fields(doc), review_status="withdrawn")
+    if doc.get("unpublished_reason") and not meta.get("review_note"):
+        meta["review_note"] = doc["unpublished_reason"]
+    try:
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as e:
+        logger.warning("写 install meta 失败 (不阻塞): %s", e)
+    _write_install_audit({"ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"), "event": "withdrawn",
+                          "namespace": doc.get("namespace"), "file_id": file_id, "by": doc.get("withdrawn_by")})
+    return {"ok": True, "withdrawn": True, "installed_path": str(md), "review_status": "withdrawn",
+            "review_note": meta.get("review_note") or "",
+            "summary": f"这页已被{'主管' if doc.get('withdrawn_by') else '发布人'}撤回. 你本机的副本没删, 只标成「已撤回」: "
+                       "搜索默认不再列出, 知识库页面上能看到标记; 不想留就自己删。"}
+
+
 def _write_install_audit(event: dict) -> None:
     """append 一行 audit. 失败静默."""
     try:
@@ -147,15 +197,22 @@ def wiki_install(args: dict[str, Any]) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {"ok": False, "error": f"gateway 返非 json: {resp.text[:200]}"}
 
-    # Stale 检查 — 原作者已撤回, 内容已清零, 不让装
-    if doc.get("stale_after_unpublish"):
+    target_dir = _shared_root() / namespace
+    target_md = target_dir / f"{file_id}.md"
+    review = _review_fields(doc)
+
+    # Stale / 已撤回 — 内容已清零, 不让装; 11/08: 本机已有副本的 (「拉更新」) 只标「已撤回」, 不删员工的文件
+    if doc.get("stale_after_unpublish") or review["review_status"] == "withdrawn":
+        if target_md.exists():
+            return _mark_local_withdrawn(target_dir, file_id, {**doc, "namespace": namespace})
         return {
             "ok": False,
             "error": (
-                f"wiki {namespace}/{file_id} 已被原作者撤回 (stale), "
+                f"wiki {namespace}/{file_id} 已被{'主管' if doc.get('withdrawn_by') else '原作者'}撤回, "
                 "中央 body 已清零, 不能 install. "
                 f"原 publisher: {doc.get('published_by')}, "
-                f"撤回时间: {doc.get('unpublished_at')}"
+                f"撤回时间: {doc.get('withdrawn_at') or doc.get('unpublished_at')}"
+                + (f", 原因: {doc.get('review_note') or doc.get('unpublished_reason')}" if (doc.get('review_note') or doc.get('unpublished_reason')) else "")
             ),
         }
 
@@ -168,12 +225,10 @@ def wiki_install(args: dict[str, Any]) -> dict[str, Any]:
     published_at = doc.get("published_at") or ""
     hub_updated_at = doc.get("updated_at") or ""
 
-    # 写本机 ~/.catfish/wiki-shared/<ns>/<file_id>.md
-    target_dir = _shared_root() / namespace
+    # 写本机 ~/.catfish/wiki-shared/<ns>/<file_id>.md (frontmatter 带 review_status, 搜索 / 页面按它标「待审」)
     target_dir.mkdir(parents=True, exist_ok=True)
-    target_md = target_dir / f"{file_id}.md"
 
-    full_text = f"---\n{frontmatter_yaml.strip()}\n---\n\n{body_md}"
+    full_text = _set_frontmatter_field(f"---\n{frontmatter_yaml.strip()}\n---\n\n{body_md}", "review_status", review["review_status"])
     try:
         target_md.write_text(full_text, encoding="utf-8")
     except Exception as e:
@@ -192,6 +247,7 @@ def wiki_install(args: dict[str, Any]) -> dict[str, Any]:
         "hub_updated_at": hub_updated_at,
         "installed_at": now_iso,
         "size_bytes": len(full_text.encode("utf-8")),
+        **review,
     }
     meta_path = target_dir / f"{file_id}.meta.json"
     try:
@@ -211,6 +267,7 @@ def wiki_install(args: dict[str, Any]) -> dict[str, Any]:
         "installed_path": str(target_md),
     })
 
+    pending_note = " 这页主管还没审过 (标「待审」), 内容以主管审过为准." if review["review_status"] == "pending" else ""
     return {
         "ok": True,
         "installed_path": str(target_md),
@@ -219,10 +276,11 @@ def wiki_install(args: dict[str, Any]) -> dict[str, Any]:
         "title": title,
         "kind": kind,
         "published_by": published_by,
+        "review_status": review["review_status"],
         "summary": (
             f"已装 wiki '{title}' (by {published_by}) 到 ~/.catfish/wiki-shared/"
             f"{namespace}/{file_id}.md. "
-            f"在 Companion 知识体系 tab 下 '📥 部门 wiki' 分组能看到 (read-only)."
+            f"在 Companion 知识体系 tab 下 '📥 部门 wiki' 分组能看到 (read-only).{pending_note}"
         ),
     }
 

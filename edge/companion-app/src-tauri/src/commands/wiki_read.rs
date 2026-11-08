@@ -493,6 +493,10 @@ pub struct InstalledWikiSharedInfo {
     pub installed_at: String,
     /// 文件 byte size
     pub size_bytes: u64,
+    /// 11/08 分享治理: 装的时候 hub 上的审核状态 pending / approved / withdrawn (老副本没记, 空字符串 = 视作已审)
+    pub review_status: String,
+    /// 审核意见 / 撤下原因 (有才有)
+    pub review_note: String,
 }
 
 #[tauri::command]
@@ -565,6 +569,8 @@ pub async fn list_installed_wiki_shared() -> Result<Vec<InstalledWikiSharedInfo>
                 let mut published_at = String::new();
                 let mut hub_updated_at = String::new();
                 let mut installed_at = String::new();
+                let mut review_status = String::new();
+                let mut review_note = String::new();
                 if let Ok(meta_text) = fs::read_to_string(&meta_path) {
                     if let Ok(meta_json) = serde_json::from_str::<serde_json::Value>(&meta_text) {
                         if let Some(t) = meta_json.get("title").and_then(|v| v.as_str()) {
@@ -585,6 +591,12 @@ pub async fn list_installed_wiki_shared() -> Result<Vec<InstalledWikiSharedInfo>
                         if let Some(p) = meta_json.get("installed_at").and_then(|v| v.as_str()) {
                             installed_at = p.to_string();
                         }
+                        if let Some(p) = meta_json.get("review_status").and_then(|v| v.as_str()) {
+                            review_status = p.to_string();
+                        }
+                        if let Some(p) = meta_json.get("review_note").and_then(|v| v.as_str()) {
+                            review_note = p.to_string();
+                        }
                     }
                 }
 
@@ -599,6 +611,8 @@ pub async fn list_installed_wiki_shared() -> Result<Vec<InstalledWikiSharedInfo>
                     hub_updated_at,
                     installed_at,
                     size_bytes,
+                    review_status,
+                    review_note,
                 });
             }
         }

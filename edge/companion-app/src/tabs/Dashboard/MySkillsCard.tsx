@@ -39,6 +39,8 @@ import { useMySkills } from "../../hooks/useIdentity";
 import { toolBridgeCallTool } from "../../lib/tauri";
 import { backfillNamesOnce, skillNameSet } from "../../lib/tauri_skill_names";
 import type { SkillEntry, SkillNamespace } from "../../types/identity";
+// 11/08 分享治理: 审批人试用装的技能 (trial.json) —— 「试用」标 + 回传试用结果 + 卸掉试用
+import { TrialSkillsList } from "./SkillTrialUi";
 
 // P3.3.24 (6/11): namespace 中文 label — 给员工看. unknown ns 走原名.
 //   department / external 是当前两个固定 namespace, 其他 (员工自起) 显原名.
@@ -117,6 +119,13 @@ export default function MySkillsCard() {
   const hasAny = totalSkills > 0;
 
   const [share, setShare] = useState<ShareState>({ phase: "idle" });
+  /** 11/08: 试用区动了 (回传 / 卸掉) 后的一句话 */
+  const [trialNote, setTrialNote] = useState<string | null>(null);
+  useEffect(() => {
+    if (!trialNote) return;
+    const t = window.setTimeout(() => setTrialNote(null), 5000);
+    return () => window.clearTimeout(t);
+  }, [trialNote]);
   // P3.3.34 (6/12): 装外部 skill zip 状态 + handler 全挪去 SkillsMcpCard.
   //   useMySkills 的 reload 留着 — handlePublish 走完 share 流程后可能也需要刷
   //   (虽然实际场景 share 不改 ~/.catfish/skills/, 但保留 reload 接口不破坏).
@@ -155,6 +164,7 @@ export default function MySkillsCard() {
         hub_url?: string;
         version?: string;
         name?: string;
+        summary?: string;
       } | null;
       // L2: tool 内部业务成功 / 失败 (3 层扫描命中 / 缺 token / gateway 502 等)
       if (!inner || inner.ok === false) {
@@ -165,10 +175,13 @@ export default function MySkillsCard() {
         });
         return;
       }
+      // 11/08: 发了不再直接上架 —— 用 tool 返回的 summary 原话 (等部门主管 / 管理员审核, 通过前同事看不到)
       setShare({
         phase: "done",
         skillKey,
-        message: `✓ 已共享 ${ns}/${inner.name || skill.name}${inner.version ? " v" + inner.version : ""}`,
+        message: inner.summary
+          ? `✓ ${inner.summary}`
+          : `✓ 已提交 ${ns}/${inner.name || skill.name}${inner.version ? " v" + inner.version : ""}, 等审核通过后同事才能看到`,
         hubUrl: inner.hub_url,
       });
     } catch (e) {
@@ -298,6 +311,10 @@ export default function MySkillsCard() {
           )}
         </>
       )}
+
+      {/* 11/08: 审批人试用装的技能 (不在「我录的」里, 单独一区; 没有就不显示) */}
+      {trialNote && <div style={{ fontSize: 12, color: "var(--catfish-cyan, #38b2ac)", marginTop: 8 }}>✓ {trialNote}</div>}
+      <TrialSkillsList onChanged={(msg) => { setTrialNote(msg); reload(); }} />
     </div>
   );
 }
@@ -334,7 +351,7 @@ function ShareStatusBar({
       <div style={{ fontSize: 12, color: "var(--catfish-text)" }}>
         共享 <code style={{ fontFamily: "var(--font-mono)" }}>{ns}/{skill.name}</code>
         {skill.version && <span style={{ opacity: 0.6 }}> v{skill.version}</span>}
-        {" "}到中央 hub? 同事在 catfish-web /skills 看得到.
+        {" "}到中央 hub? 提交后由部门主管审核, 通过了同部门同事才看得到 (想发全公司或指定部门, 跟小鲶说「分享到全公司」).
         <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
           <button
             type="button"

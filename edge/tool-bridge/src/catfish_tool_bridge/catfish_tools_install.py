@@ -193,13 +193,23 @@ def _dry_run_skill(skill_dir: Path) -> Dict[str, Any]:
     }
 
 
+def _hub_open(url: str, timeout: float):
+    """GET hub (走 gateway): 带员工自己的登录令牌 —— 11/08 起 hub 只给看得见的版本 (已通过且在范围内 / 自己提交的 / 待自己审的)。"""
+    import urllib.request  # noqa: PLC0415
+    from . import skill_publish  # noqa: PLC0415
+    token = skill_publish._read_id_token()
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"} if token else {})
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
 def _install_from_hub(
     hub_skill: str,
     hub_url: str,
+    trial: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """从 Skills Hub server 拉 skill 到 ~/.catfish/skill-staging/<uuid>/.
 
-    成功返 {ok: True, staging_dir, hub_namespace, hub_name, hub_version}.
+    成功返 {ok: True, staging_dir, hub_namespace, hub_name, hub_version, review}.
     失败返 {ok: False, error}.
 
     流程:
@@ -207,10 +217,11 @@ def _install_from_hub(
       2. GET {hub_url}/skills/{ns}/{name}/{version} 拿元信息 + 文件列表
       3. mkdir staging dir
       4. 对每个 file, GET {hub_url}/.../files/{path} 写到 staging
-      5. 返 staging_dir, caller 走原 install 流程 (dedup + dry-run + 复制)
+      5. 11/08 分享治理: 按下载到的文件重算 bundle_sha256, 正式装验 review.signature (老版本 legacy 照旧),
+         试用装 (trial=令牌) 验令牌签名 + 没过期 (skill_trial.py)
+      6. 返 staging_dir, caller 走原 install 流程 (dedup + dry-run + 复制)
     """
     import json as _json  # noqa: PLC0415
-    import urllib.request  # noqa: PLC0415
     import urllib.error  # noqa: PLC0415
     import uuid as _uuid  # noqa: PLC0415
 
@@ -234,7 +245,7 @@ def _install_from_hub(
     # 1. 拿元信息
     meta_url = f"{hub_url}/skills/{ns_part}/{name_part}/{version_part}"
     try:
-        with urllib.request.urlopen(meta_url, timeout=10) as resp:
+        with _hub_open(meta_url, 10) as resp:
             meta = _json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         if e.code == 404:
@@ -242,6 +253,8 @@ def _install_from_hub(
                 "ok": False,
                 "error": f"hub 里找不到 {hub_skill}. URL: {meta_url}",
             }
+        if e.code == 403:
+            return {"ok": False, "error": f"hub {hub_skill} 还没审核通过, 或不是给你部门的, 装不了"}
         return {"ok": False, "error": f"hub GET 元信息失败 ({e.code}): {meta_url}"}
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         return {
@@ -286,6 +299,7 @@ def _install_from_hub(
 
     # 3. 逐个下载文件 + sha256 校验
     real_version = meta.get("version") or version_part
+    actual_sha256: Dict[str, str] = {}
     for file_path in files_list:
         if not isinstance(file_path, str) or ".." in file_path or file_path.startswith("/"):
             # 防 zip-slip 类路径越界
@@ -294,7 +308,7 @@ def _install_from_hub(
             f"{hub_url}/skills/{ns_part}/{name_part}/{real_version}/files/{file_path}"
         )
         try:
-            with urllib.request.urlopen(file_url, timeout=20) as resp:
+            with _hub_open(file_url, 20) as resp:
                 content = resp.read()
         except Exception as e:
             # 清 staging 防部分文件残留
@@ -306,8 +320,9 @@ def _install_from_hub(
             }
         # sha256 校验 (有 expected hash 才校, 没 expected 走 unsigned 流程)
         expected = files_sha256.get(file_path)
+        actual = _hashlib.sha256(content).hexdigest()
+        actual_sha256[file_path] = actual
         if expected:
-            actual = _hashlib.sha256(content).hexdigest()
             if actual.lower() != str(expected).lower():
                 import shutil as _sh  # noqa: PLC0415
                 _sh.rmtree(staging, ignore_errors=True)
@@ -332,6 +347,19 @@ def _install_from_hub(
             "error": f"hub 拿到的 {hub_skill} 缺 SKILL.md (元信息里 files={files_list})",
         }
 
+    # 5. 11/08 分享治理: 整版指纹 + 中央签名 (正式) / 试用令牌 (审批人试用)
+    from . import skill_trial  # noqa: PLC0415
+    bundle = skill_trial.bundle_sha256(actual_sha256)
+    try:
+        if trial:
+            review = skill_trial.check_skill_trial(trial, ns_part, name_part, real_version, bundle)
+        else:
+            review = skill_trial.check_skill_review(meta.get("review"), ns_part, name_part, real_version, bundle, f"hub {hub_skill}")
+    except ValueError as e:
+        import shutil as _sh  # noqa: PLC0415
+        _sh.rmtree(staging, ignore_errors=True)
+        return {"ok": False, "error": str(e)}
+
     return {
         "ok": True,
         "staging_dir": str(staging),
@@ -339,6 +367,8 @@ def _install_from_hub(
         "hub_name": name_part,
         "hub_version": real_version,
         "unsigned": unsigned,  # 5/6 G2: 没 sha256 校验时为 True
+        "review": review,  # 11/08: signed / legacy / unreviewed / trial
+        "bundle_sha256": bundle,
     }
 
 
@@ -379,7 +409,9 @@ def skill_install(args: Dict[str, Any]) -> Dict[str, Any]:
         hub_url_raw = (args.get("hub_url") or "").strip()
         if not hub_url_raw:
             hub_url_raw = os.environ.get("CATFISH_HUB_URL") or "http://127.0.0.1:9001"
-        hub_result = _install_from_hub(hub_skill, hub_url_raw)
+        # 11/08: _trial = 审批人的试用令牌 (skill_trial.install_skill_trial 传进来, 模型工具的 schema 里没有)
+        trial_token = args.get("_trial") if isinstance(args.get("_trial"), dict) else None
+        hub_result = _install_from_hub(hub_skill, hub_url_raw, trial=trial_token)
         if not hub_result.get("ok"):
             return hub_result  # 错误透传
         source = hub_result["staging_dir"]
@@ -390,6 +422,7 @@ def skill_install(args: Dict[str, Any]) -> Dict[str, Any]:
             "hub_namespace": hub_result["hub_namespace"],
             "hub_name": hub_result["hub_name"],
             "hub_version": hub_result["hub_version"],
+            "review": hub_result.get("review") or {},
         }
         # hub 自带 namespace 时, 如果员工没 explicit 传 namespace, 用 hub 的
         if "namespace" not in args or not args.get("namespace"):
@@ -573,6 +606,17 @@ def skill_install(args: Dict[str, Any]) -> Dict[str, Any]:
             }
         audit_event["dry_run"] = dry
 
+    # 11/08 试用安装: 目录里写 trial.json (不给别人、不再发布、刷新发现不在待审就自动卸; 见 skill_trial.py)
+    trial_token = args.get("_trial") if install_source == "hub" and isinstance(args.get("_trial"), dict) else None
+    if trial_token:
+        from . import skill_trial  # noqa: PLC0415
+        skill_trial.write_trial_marker(
+            target_dir, trial_token, namespace=hub_meta["hub_namespace"], name=hub_meta["hub_name"],
+            version=hub_meta["hub_version"], hub_url=hub_meta["hub_url"],
+            bundle=str(hub_meta["review"].get("bundle_sha256") or trial_token.get("bundle_sha256") or ""),
+            replaced_backup=audit_event.get("backup_path"))
+        audit_event["trial"] = {"by": trial_token.get("by"), "expires": trial_token.get("expires")}
+
     audit_event.update({
         "ok": True,
         "installed_path": str(target_dir),
@@ -593,14 +637,19 @@ def skill_install(args: Dict[str, Any]) -> Dict[str, Any]:
     source_label = (
         f"hub {hub_meta.get('hub_skill')}" if install_source == "hub" else str(source_path)
     )
+    review_status = (hub_meta.get("review") or {}).get("status") if hub_meta else None
+    review_note = {
+        "signed": " 中央签名已核对.", "legacy": " (上线前发的老版本, 没有中央签名.)", "trial": " 这是审批人试用安装, 只有你这台电脑能用.",
+    }.get(str(review_status or ""), "")
     return {
         "ok": True,
         "installed_path": f"{namespace}/{skill_name}",
         "source": install_source,
         **({"hub_meta": hub_meta} if hub_meta else {}),
+        **({"backup_path": audit_event["backup_path"]} if audit_event.get("backup_path") else {}),
         "summary": (
             f"已安装 skill {namespace}/{skill_name} (v{metadata['version']}) "
-            f"从 {source_label}. dry-run 通过 ({dry_note}). "
+            f"从 {source_label}. dry-run 通过 ({dry_note}).{review_note} "
             f"设置下次刷新会出现, gateway 重新扫到后 LLM 也能调."
             + (f" 旧版备份: {audit_event.get('backup_path')}" if overwrite else "")
         ),

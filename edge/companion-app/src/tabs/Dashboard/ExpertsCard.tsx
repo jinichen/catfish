@@ -18,8 +18,11 @@ import { Overlay, muted } from "../Collab/formsUi";
 import { Btn, ErrorLine, cardStyle, inputStyle, itemStyle } from "../Collab/roomLinkUi";
 import ExpertBuildCard from "./ExpertBuildCard";
 import { InstallDialog, MarketSection, MineSection, PublishDialog } from "./ExpertPackUi";
+// 11/08 分享治理: 审批人「待我审」+ 装到我这里试用 + 试用的回传 / 卸掉; 刷新时不在待审的试用自动卸
+import { ExpertTrialActions, PendingExpertsSection, removedExpertText, syncExpertTrials } from "./ExpertTrialUi";
+import { trialExpertInstall } from "../../lib/tauri_trial";
 
-type InstallSource = { path: string } | { from: "hub"; id: string; version: string };
+type InstallSource = { path: string } | { from: "hub" | "trial"; id: string; version: string };
 
 const blank = (): ExpertDef => ({
   id: "", name: "", description: "", persona: "", quick_prompts: [], workflows: [], skills: [],
@@ -246,10 +249,33 @@ export default function ExpertsCard() {
   const [notice, setNotice] = useState<string | null>(null);
   const [installing, setInstalling] = useState<{ info: PackInspect; source: InstallSource } | null>(null);
   const [publishing, setPublishing] = useState<ExpertSummary | null>(null);
-  const [panel, setPanel] = useState<"market" | "mine" | null>(null);
+  const [panel, setPanel] = useState<"market" | "mine" | "review" | null>(null);
   const [marketKey, setMarketKey] = useState(0);
   const setTab = useUIStore((s) => s.setActiveTab);
   const fail = (e: unknown) => setError(e instanceof Error ? e.message : String(e));
+
+  /** 11/08 审批人「装到我这里试用」: 先走一遍拿权限摘要 (need_confirm), 再在确认框里点 */
+  async function tryFromHub(m: HubExpert) {
+    setBusy(m.id);
+    setError(null);
+    try {
+      const source = { from: "trial" as const, id: m.id, version: m.version };
+      const r = await trialExpertInstall(m.id, m.version, false);
+      if (r.ok) {
+        await refreshExperts();
+        setNotice(`${m.name} ${r.version} 已以试用身份装上`);
+        await load();
+      } else if ("need_confirm" in r) {
+        setInstalling({ info: r.inspect, source });
+      } else {
+        setError(r.error);
+      }
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function installFromFile() {
     const path = await expertPackPickFile();
@@ -307,7 +333,17 @@ export default function ExpertsCard() {
       setError(e instanceof Error ? e.message : String(e));
     }
   };
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    // 11/08: 打开时先把不在待审了的试用专家卸掉 (通过 / 驳回 / 撤回 / 到期), 再列
+    void (async () => {
+      const removed = await syncExpertTrials();
+      if (removed.length) {
+        setNotice(removed.map(removedExpertText).join("; "));
+        await refreshExperts();
+      }
+      await load();
+    })();
+  }, []);
 
   return (
     <div style={{ ...cardStyle, height: "auto" }}>
@@ -336,10 +372,25 @@ export default function ExpertsCard() {
             <span style={muted}>{e.workflows} 个工作流 · {e.skills} 个技能 · {e.routes} 条选路</span>
           </div>
           <span style={muted}>{e.description}</span>
-          {e.pack && (
+          {e.pack && !e.pack.trial && (
             <span style={{ fontSize: 11, color: e.pack.signed ? "var(--status-ok, #16a34a)" : "var(--status-warn, #d97706)" }}>
               📦 专家包 {e.pack.version} · {e.pack.signed ? `✅ 中央已签名${e.pack.reviewed_by ? ` (${e.pack.reviewed_by} 审核)` : ""}` : "⚠️ 未签名 (从文件装的)"}
             </span>
+          )}
+          {e.pack?.trial && (
+            <ExpertTrialActions e={e} busy={busy === e.id} onDone={(msg) => setNotice(msg)} onRemove={() => void (async () => {
+              setBusy(e.id);
+              try {
+                await expertRemove(e.id);
+                await refreshExperts();
+                await load();
+                setNotice(`已卸掉试用 ${e.name}`);
+              } catch (err) {
+                fail(err);
+              } finally {
+                setBusy(null);
+              }
+            })()} />
           )}
           {!e.pack && e.packed_version && <span style={muted}>上次打包 {e.packed_version}</span>}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -359,28 +410,34 @@ export default function ExpertsCard() {
             }}>💬 跟它对话</Btn>
             {!e.pack && <Btn kind="ghost" disabled={!!busy} onClick={() => void exportPack(e)}>导出</Btn>}
             {!e.pack && <Btn kind="ghost" disabled={!!busy} onClick={() => setPublishing(e)}>发布到资源市场</Btn>}
-            <Btn kind="ghost" disabled={!!busy} onClick={() => void (async () => {
-              setBusy(e.id);
-              try {
-                await expertRemove(e.id);
-                await refreshExperts();
-                await load();
-                setMarketKey((k) => k + 1);
-              } catch (err) {
-                setError(err instanceof Error ? err.message : String(err));
-              } finally {
-                setBusy(null);
-              }
-            })()}>{busy === e.id ? "处理中…" : e.pack ? "卸载" : "删除"}</Btn>
+            {!e.pack?.trial && (
+              <Btn kind="ghost" disabled={!!busy} onClick={() => void (async () => {
+                setBusy(e.id);
+                try {
+                  await expertRemove(e.id);
+                  await refreshExperts();
+                  await load();
+                  setMarketKey((k) => k + 1);
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : String(err));
+                } finally {
+                  setBusy(null);
+                }
+              })()}>{busy === e.id ? "处理中…" : e.pack ? "卸载" : "删除"}</Btn>
+            )}
           </div>
         </div>
       ))}
       <div style={{ display: "flex", gap: 8 }}>
         <Btn kind={panel === "market" ? "primary" : "ghost"} onClick={() => setPanel(panel === "market" ? null : "market")}>资源市场</Btn>
         <Btn kind={panel === "mine" ? "primary" : "ghost"} onClick={() => setPanel(panel === "mine" ? null : "mine")}>我提交的</Btn>
+        <span title="部门主管 / 管理员: 等你审核的专家包, 可以先装到自己电脑上试">
+          <Btn kind={panel === "review" ? "primary" : "ghost"} onClick={() => setPanel(panel === "review" ? null : "review")}>待我审</Btn>
+        </span>
       </div>
       {panel === "market" && <MarketSection key={marketKey} onInstall={(m) => void installFromHub(m)} />}
       {panel === "mine" && <MineSection />}
+      {panel === "review" && <PendingExpertsSection key={marketKey} onTry={(m) => void tryFromHub(m)} />}
       {installing && (
         <InstallDialog info={installing.info} source={installing.source} onClose={() => setInstalling(null)}
                        onDone={(msg) => { setInstalling(null); setNotice(msg); void load(); setMarketKey((k) => k + 1); }} />

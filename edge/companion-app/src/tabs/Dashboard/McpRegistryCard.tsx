@@ -19,6 +19,10 @@ import { config } from "../../lib/env";
 import { fetchWithAuth } from "../../lib/me";
 // P3.4.1 (6/13 鸿波): OAuth token 本机存, 中央不再持有.
 import { mcpOauthTokenSave, mcpOauthTokenDelete } from "../../lib/tauri";
+// 11/08 分享治理: 审批人「待我审」的连接器 + 试用订阅 (只许测试账号); 刷新时不在待审了的试用自动退订
+import {
+  PendingMcpSection, fetchPendingMcp, syncMcpTrials, trialSubscriptions, type McpSubmission, type McpSubscription,
+} from "./McpTrialUi";
 
 interface ConnectorTool {
   name: string;
@@ -73,10 +77,28 @@ export default function McpRegistryCard() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
+  /** 11/08: 待我审的连接器 (不是审批人 = 空) + 我在试用订阅的 (connector_id → 订阅) */
+  const [pending, setPending] = useState<McpSubmission[]>([]);
+  const [trialSubs, setTrialSubs] = useState<Map<string, McpSubscription>>(new Map());
 
   const showFlash = (msg: string, ms = 3000) => {
     setFlash(msg);
     window.setTimeout(() => setFlash(null), ms);
+  };
+
+  /** 11/08: 待审列表 + 我的订阅 → 算出试用订阅; 对应提交不在待审了的自动退订 */
+  const refreshTrials = async (registryIds: Set<string>) => {
+    try {
+      const [pend, subsRes] = await Promise.all([fetchPendingMcp(), fetchWithAuth(`${config.backendUrl}/v1/mcp/subscribed`)]);
+      setPending(pend);
+      const subs = subsRes.ok ? ((await subsRes.json()) as { subscriptions: McpSubscription[] }).subscriptions : [];
+      const gone = await syncMcpTrials(subs, registryIds, new Set(pend.map((p) => p.id)), async (sid) =>
+        (await fetchWithAuth(`${config.backendUrl}/v1/mcp/subscribe/${sid}`, { method: "DELETE" })).ok);
+      if (gone.length) showFlash(`${gone.join(", ")} 审核有结果了, 试用订阅已自动退掉`, 6000);
+      setTrialSubs(new Map(trialSubscriptions(subs.filter((s) => !gone.includes(s.connector_id)), registryIds).map((s) => [s.connector_id, s])));
+    } catch (e) {
+      console.warn("[mcp] 试用同步失败:", e);
+    }
   };
 
   const refresh = async () => {
@@ -96,6 +118,7 @@ export default function McpRegistryCard() {
       const json = (await res.json()) as RegistryResponse;
       setData(json);
       setError(null);
+      await refreshTrials(new Set(json.connectors.map((c) => c.id)));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -322,6 +345,12 @@ export default function McpRegistryCard() {
         <div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>读取中…</div>
       )}
 
+      {/* 11/08: 审批人才看得到 —— 待我审的连接器 + 试用订阅 */}
+      {data && (
+        <PendingMcpSection items={pending} trialSubs={trialSubs}
+                           onChanged={(msg) => { showFlash(msg, 6000); void refresh(); }} />
+      )}
+
       {data && data.connectors.length === 0 && !error && (
         <div
           style={{
@@ -393,6 +422,12 @@ export default function McpRegistryCard() {
                         }}
                       >
                         ✓ 已订阅
+                      </span>
+                    )}
+                    {c.subscribed && trialSubs.has(c.id) && (
+                      <span title="审批人试用订阅 (测试账号); 审核有结果后自动退订"
+                            style={{ fontSize: 10, padding: "0 6px", borderRadius: 999, border: "1px solid #d97706", color: "#d97706" }}>
+                        试用
                       </span>
                     )}
                     <span

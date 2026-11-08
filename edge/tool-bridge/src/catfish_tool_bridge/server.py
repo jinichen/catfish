@@ -244,6 +244,16 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
                 return _success(req_id, await asyncio.to_thread(handlers[method]))
             except (ValueError, LookupError, OSError) as e:
                 return _error(req_id, INVALID_PARAMS, str(e))
+    # 11/08: 分享治理 · 审批人「装到我这里试用」(skill_trial.py, docs/SHARE-GOVERNANCE-PLAN.md §2.3): 技能 / 专家包的试用安装、
+    # 回传试用结果、刷新时自动卸掉不在待审的。装试用 = 审批人在界面上点的, 模型工具里没有。
+    if method.startswith("pim/trial_"):
+        from . import skill_trial  # noqa: PLC0415
+        handlers = skill_trial.pim_handlers(params)
+        if method in handlers:
+            try:
+                return _success(req_id, await asyncio.to_thread(handlers[method]))
+            except (ValueError, LookupError, OSError) as e:
+                return _error(req_id, INVALID_PARAMS, str(e))
     # 10/12: 「提醒同步到微信」的「发一条测试」(wechat_push.py), Rust 侧 notify_prefs.rs 调; 不进模型工具清单
     if method == "pim/wechat_push_test":
         from . import wechat_push  # noqa: PLC0415

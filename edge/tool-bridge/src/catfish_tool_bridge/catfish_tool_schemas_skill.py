@@ -312,8 +312,9 @@ SKILL_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_skill_publish",
         "description": (
-            "把员工本机 skill 发布到中央 Skills Hub 供全公司共享. "
-            "**员工明确确认后才调** (例: '发布到 hub' / '分享给团队'). 不要把含凭据或敏感路径的 skill 发上去. "
+            "把员工本机 skill 提交到中央 Skills Hub 分享给同事 (本部门或全公司). "
+            "**员工明确确认后才调** (例: '发布到 hub' / '分享给团队'). 提交后进待审核: 部门范围由部门主管审, 全公司由管理员审, "
+            "通过前同事看不到 —— 把返回的 summary 原话转告员工. 不要把含凭据或敏感路径的 skill 发上去. "
             "若失败且 auto_scrub_available=true (scan_phase=pii/intranet): 把 error 给员工看, "
             "问是否自动替换成占位; 同意后带 auto_scrub_pii 或 auto_scrub_intranet=true 重试. "
             "scan_phase=credentials 永不自动脱敏, 让员工本机改成 keychain:// 引用."
@@ -328,6 +329,20 @@ SKILL_TOOLS: List[Dict[str, Any]] = [
                 "namespace": {
                     "type": "string",
                     "description": "例 'department'; 部门名见 catfish_today_summary",
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["department", "company"],
+                    "description": "分享范围: department 本部门 (默认) / company 全公司",
+                },
+                "departments": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "部门范围时给哪些部门 (空 = 员工自己的部门)",
+                },
+                "note": {
+                    "type": "string",
+                    "description": "给审核人的一句话 (可不填)",
                 },
                 "auto_scrub_pii": {
                     "type": "boolean",

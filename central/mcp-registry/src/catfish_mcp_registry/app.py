@@ -513,10 +513,14 @@ async def my_subscriptions(
     db = request.app.state.db
     registry = _registry(request)
     rows = db.list_user_subscriptions(user_sub, status=status_filter)
+    subs = _subs(request)
     views = [
-        _sub_row_to_view(r, registry.get(r["connector_id"]))
+        _sub_row_to_view(r, registry.get(r["connector_id"]) or subs.manifest(r["connector_id"]))
         for r in rows
     ]
+    for v in views:   # 11/08: 连接器还没上架 (待审) 的订阅 = 审批人试用
+        if registry.get(v.connector_id) is None and (subs.load(v.connector_id) or {}).get("status") == "pending":
+            v.trial = True
     return SubscriptionListResponse(subscriptions=views, total=len(views))
 
 

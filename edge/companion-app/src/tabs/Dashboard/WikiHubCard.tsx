@@ -41,6 +41,30 @@ interface WikiDoc {
   stale_after_unpublish: boolean;
   unpublished_at: string | null;
   unpublished_reason: string | null;
+  /** 11/08 分享治理 (docs/SHARE-GOVERNANCE-PLAN.md §2.2): 发了即可见但标「待审」; 主管打钩 approved; 撤下 withdrawn (= unpublish + 标) */
+  review_status?: "pending" | "approved" | "withdrawn";
+  reviewed_by?: string | null;
+  review_note?: string | null;
+  withdrawn_by?: string | null;
+  withdrawn_at?: string | null;
+  legacy?: boolean;
+}
+
+/** 本机副本 / hub 上这条的审核状态标 */
+function ReviewBadge({ status, note, by }: { status?: string | null; note?: string | null; by?: string | null }) {
+  if (!status || status === "approved") return null;
+  const pending = status === "pending";
+  const label = pending ? "待审" : "已撤回";
+  const tone = pending ? "#d97706" : "#6b7280";
+  const title = pending
+    ? "部门同事分享的, 主管还没审过 —— 能看能装, 内容以主管审过为准"
+    : `${by ? `${by} ` : ""}撤回了这页${note ? `: ${note}` : ""}`;
+  return (
+    <span title={title} style={{ fontSize: 10, padding: "0 6px", borderRadius: 999, border: `1px solid ${tone}`, color: tone,
+                                 whiteSpace: "nowrap", marginLeft: 6 }}>
+      {label}
+    </span>
+  );
 }
 
 interface ListResponse {
@@ -157,8 +181,10 @@ export default function WikiHubCard() {
   const handleInstall = async (doc: WikiDoc) => {
     const key = `${doc.namespace}/${doc.file_id}`;
     if (installingKey) return;
-    if (doc.stale_after_unpublish) {
-      setToast({ kind: "err", text: "原作者已撤回, body 已清零, 无法安装" });
+    const withdrawn = doc.stale_after_unpublish || doc.review_status === "withdrawn";
+    // 11/08: 已撤回的, 本机有副本时「拉更新」= 让工具把本机副本标成「已撤回」(不删员工的文件); 没副本的装不了
+    if (withdrawn && !installedByKey.has(key)) {
+      setToast({ kind: "err", text: "这页已被撤回, 内容已清零, 无法安装" });
       return;
     }
     setInstallingKey(key);
@@ -169,12 +195,15 @@ export default function WikiHubCard() {
       });
       const errMsg = toolResultError(res);
       if (errMsg === null) {
+        const inner = res.result as { withdrawn?: boolean; review_status?: string } | null;
         const updating = installedByKey.has(key);
         setToast({
           kind: "ok",
-          text: updating
-            ? `已更新 '${doc.title}' 到最新版`
-            : `已装 '${doc.title}' 到 ~/.catfish/wiki-shared/${doc.namespace}/`,
+          text: inner?.withdrawn
+            ? `'${doc.title}' 已被撤回, 本机副本已标成「已撤回」(文件没删, 搜索默认不再列出)`
+            : updating
+              ? `已更新 '${doc.title}' 到最新版${inner?.review_status === "pending" ? " (主管还没审过, 标「待审」)" : ""}`
+              : `已装 '${doc.title}' 到 ~/.catfish/wiki-shared/${doc.namespace}/${inner?.review_status === "pending" ? " (主管还没审过, 标「待审」)" : ""}`,
         });
         // 之前装完不重扫本机, 按钮要等下一分钟轮询才变 "✓ 已装"
         void refresh();
@@ -194,14 +223,17 @@ export default function WikiHubCard() {
     (grouped[d.namespace] ||= []).push(d);
   }
   const namespaces = Object.keys(grouped).sort();
-  const staleCount = docs.filter((d) => d.stale_after_unpublish).length;
+  const isWithdrawn = (d: WikiDoc) => d.stale_after_unpublish || d.review_status === "withdrawn";
+  const staleCount = docs.filter(isWithdrawn).length;
   // P3.3.18 Phase 4: 本机已装 + hub 已 stale 的 "需要员工注意" 计数
   const installedStaleCount = docs.filter(
-    (d) => d.stale_after_unpublish && installedByKey.has(`${d.namespace}/${d.file_id}`),
+    (d) => isWithdrawn(d) && installedByKey.has(`${d.namespace}/${d.file_id}`),
   ).length;
   const updateCount = docs.filter(
-    (d) => !d.stale_after_unpublish && hasHubUpdate(d, installedByKey.get(`${d.namespace}/${d.file_id}`)),
+    (d) => !isWithdrawn(d) && hasHubUpdate(d, installedByKey.get(`${d.namespace}/${d.file_id}`)),
   ).length;
+  // 11/08: 主管还没审过的
+  const pendingCount = docs.filter((d) => d.review_status === "pending").length;
 
   return (
     <div
@@ -244,9 +276,24 @@ export default function WikiHubCard() {
                 borderRadius: 3,
                 marginLeft: "var(--space-2)",
               }}
-              title={`${staleCount} 条已被原作者撤回 (灰色显示, 无法安装)`}
+              title={`${staleCount} 条已被撤回 (灰色显示, 无法安装)`}
             >
-              ⏸ {staleCount} stale
+              ⏸ {staleCount} 已撤回
+            </span>
+          )}
+          {pendingCount > 0 && (
+            <span
+              style={{
+                fontSize: 11,
+                color: "#d97706",
+                background: "rgba(217,119,6,0.1)",
+                padding: "2px 6px",
+                borderRadius: 3,
+                marginLeft: "var(--space-2)",
+              }}
+              title={`${pendingCount} 条是同事刚分享的, 部门主管还没审过 (能看能装, 带「待审」标)`}
+            >
+              {pendingCount} 待审
             </span>
           )}
           {installedStaleCount > 0 && (
@@ -368,7 +415,7 @@ export default function WikiHubCard() {
                       key={key}
                       doc={doc}
                       installed={installed}
-                      updateAvailable={!doc.stale_after_unpublish && hasHubUpdate(doc, installed)}
+                      updateAvailable={!isWithdrawn(doc) && hasHubUpdate(doc, installed)}
                       installing={installingKey === key}
                       onInstall={() => void handleInstall(doc)}
                     />
@@ -396,9 +443,14 @@ function WikiRow({
   installing: boolean;
   onInstall: () => void;
 }) {
-  const stale = doc.stale_after_unpublish;
+  const stale = doc.stale_after_unpublish || doc.review_status === "withdrawn";
   const isInstalled = installed !== undefined;
   const kindLabel = KIND_LABEL[doc.kind] || doc.kind;
+  // 11/08: 本机副本还没标「已撤回」(装的时候还在) → 「拉更新」一下把状态同步过来
+  const localNotMarked = stale && isInstalled && installed.reviewStatus !== "withdrawn";
+  const withdrawnBy = doc.withdrawn_by ? "主管" : "原作者";
+  const withdrawnAt = doc.withdrawn_at || doc.unpublished_at;
+  const withdrawnNote = doc.review_note || doc.unpublished_reason;
   // P3.3.18 Phase 4: 4 状态分支
   //   - stale + installed: 本机有副本但原作者撤回了 (manifesto 公理 4 — 员工自己决定)
   //   - stale + !installed: hub 已撤回 (灰显, 不让装)
@@ -423,7 +475,11 @@ function WikiRow({
           marginBottom: "var(--space-1)",
         }}
       >
-        <span style={{ fontWeight: 500 }}>{doc.title}</span>
+        <span style={{ fontWeight: 500 }}>
+          {doc.title}
+          {/* 11/08: hub 上的审核状态 (待审 / 已撤回); 本机副本自己的状态在下面 */}
+          <ReviewBadge status={stale ? "withdrawn" : doc.review_status} note={withdrawnNote} by={doc.withdrawn_by} />
+        </span>
         <span
           style={{
             fontSize: 11,
@@ -448,10 +504,11 @@ function WikiRow({
             borderRadius: 4,
             border: "1px solid rgba(220,38,38,0.2)",
           }}
-          title={doc.unpublished_reason || ""}
+          title={withdrawnNote || ""}
         >
-          ⚠ 原作者已撤回 ({humanTime(doc.unpublished_at)}). 你本机仍有副本
-          (~/.catfish/wiki-shared/{doc.namespace}/{doc.file_id}.md), 自己决定是否卸. (manifesto 公理 4 — 中央不强制清你本机)
+          ⚠ {withdrawnBy}已撤回 ({humanTime(withdrawnAt)}){withdrawnNote ? `, 原因: ${withdrawnNote}` : ""}. 你本机仍有副本
+          (~/.catfish/wiki-shared/{doc.namespace}/{doc.file_id}.md), 自己决定是否卸. (中央不强制清你本机)
+          {installed.reviewStatus === "withdrawn" && " 本机副本已标「已撤回」, 搜索默认不列."}
         </div>
       ) : stale ? (
         <div
@@ -461,9 +518,9 @@ function WikiRow({
             marginBottom: "var(--space-1)",
             fontStyle: "italic",
           }}
-          title={doc.unpublished_reason || ""}
+          title={withdrawnNote || ""}
         >
-          ⏸ 已被原作者撤回 ({humanTime(doc.unpublished_at)}). body 已清零, 无法安装.
+          ⏸ 已被{withdrawnBy}撤回 ({humanTime(withdrawnAt)}). 内容已清零, 无法安装.
         </div>
       ) : (
         doc.description_preview && (
@@ -493,7 +550,28 @@ function WikiRow({
       >
         <span>
           👤 {doc.published_by || "?"} · {humanTime(doc.updated_at || doc.published_at)}
+          {doc.review_status === "approved" && doc.reviewed_by && !doc.legacy && ` · ${doc.reviewed_by} 审过`}
         </span>
+        {localNotMarked && (
+          <button
+            type="button"
+            onClick={onInstall}
+            disabled={installing}
+            style={{
+              fontSize: 11,
+              padding: "3px 10px",
+              background: "transparent",
+              color: "#dc2626",
+              border: "1px solid #dc2626",
+              borderRadius: "var(--radius-sm)",
+              cursor: installing ? "wait" : "pointer",
+              opacity: installing ? 0.6 : 1,
+            }}
+            title="把本机副本标成「已撤回」(不删文件; 搜索默认不再列出)"
+          >
+            {installing ? "标记中…" : "↻ 标成已撤回"}
+          </button>
+        )}
         {!stale && isInstalled && updateAvailable && (
           <button
             type="button"
@@ -523,10 +601,32 @@ function WikiRow({
               padding: "1px 6px",
               borderRadius: 3,
             }}
-            title={`已装 ${humanTime(installed.installedAt)}`}
+            title={`已装 ${humanTime(installed.installedAt)}${installed.reviewStatus === "pending" ? "; 装的时候主管还没审, 主管审过后「拉更新」会把标去掉" : ""}`}
           >
-            ✓ 已装
+            ✓ 已装{installed.reviewStatus === "pending" && doc.review_status === "approved" ? " · 已审过, 可更新" : ""}
           </span>
+        )}
+        {/* 11/08: 本机副本还标着「待审」, hub 上主管已经审过 → 让「更新」出现, 拉一次把标去掉 */}
+        {!stale && isInstalled && !updateAvailable && installed.reviewStatus === "pending" && doc.review_status === "approved" && (
+          <button
+            type="button"
+            onClick={onInstall}
+            disabled={installing}
+            style={{
+              fontSize: 11,
+              padding: "3px 10px",
+              background: "transparent",
+              color: "#2563eb",
+              border: "1px solid #2563eb",
+              borderRadius: "var(--radius-sm)",
+              cursor: installing ? "wait" : "pointer",
+              opacity: installing ? 0.6 : 1,
+              marginLeft: 6,
+            }}
+            title="主管审过了, 拉一次把本机副本的「待审」标去掉"
+          >
+            {installing ? "更新中…" : "↻ 更新"}
+          </button>
         )}
         {!stale && !isInstalled && (
           <button

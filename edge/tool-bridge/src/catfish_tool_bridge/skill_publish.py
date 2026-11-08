@@ -376,11 +376,17 @@ def skill_publish(args: dict[str, Any]) -> dict[str, Any]:
     namespace = (args.get("namespace") or "").strip()
     auto_scrub_pii = bool(args.get("auto_scrub_pii", False))
     auto_scrub_intranet = bool(args.get("auto_scrub_intranet", False))
+    # 11/08 分享治理 (docs/SHARE-GOVERNANCE-PLAN.md §3.1): 发到哪个范围 + 给哪些部门 + 给审核人的话, 走 POST 的 query 参数
+    scope = str(args.get("scope") or "department").strip().lower()
+    departments = [str(d).strip() for d in (args.get("departments") or []) if str(d).strip()]
+    note = str(args.get("note") or "").strip()[:300]
 
     if not skill_path:
         return {"ok": False, "error": "skill_path 必填"}
     if not namespace:
         return {"ok": False, "error": "namespace 必填"}
+    if scope not in ("department", "company"):
+        return {"ok": False, "error": f"scope 只能是 department (本部门) 或 company (全公司), 拿到 {scope!r}"}
     if not re.fullmatch(r"[a-z][a-z0-9_-]{0,40}", namespace):
         return {
             "ok": False,
@@ -519,10 +525,12 @@ def skill_publish(args: dict[str, Any]) -> dict[str, Any]:
         ("files", (rel, content, "application/octet-stream"))
         for rel, content in file_map.items()
     ]
+    query = {"scope": scope, "departments": ",".join(departments), "note": note}
     try:
         with httpx.Client(timeout=30.0) as client:
             resp = client.post(
                 url,
+                params=query,
                 headers={"Authorization": f"Bearer {token}"},
                 files=files_payload,
             )
@@ -544,6 +552,10 @@ def skill_publish(args: dict[str, Any]) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {"ok": False, "error": f"gateway 返非 json: {resp.text[:200]}"}
 
+    review = data.get("review") if isinstance(data.get("review"), dict) else {}
+    status = str(review.get("status") or "pending")
+    who = "管理员" if scope == "company" else "部门主管"
+    where = "全公司" if scope == "company" else ("、".join(departments) if departments else "你所在的部门")
     result = {
         "ok": True,
         "namespace": data.get("namespace", namespace),
@@ -552,6 +564,16 @@ def skill_publish(args: dict[str, Any]) -> dict[str, Any]:
         "published_at": data.get("published_at"),
         "files_count": len(file_map),
         "hub_url": f"{GATEWAY_URL}/v1/hub/skills/{namespace}/{data.get('name')}",
+        "scope": scope,
+        "departments": departments,
+        "review": review,
+        # 11/08: 发了不再直接上架 —— 原话转告员工, 别说「同事已经能看到」
+        "summary": (
+            f"已提交 {data.get('name')} v{data.get('version')} 到中央, 范围: {where}. "
+            f"现在是「待审核」, 等{who}审核通过后同事才能看到和安装; 审核结果 (通过 / 驳回原因) 在 Companion「技能分享」卡和门户里能看到。"
+            if status == "pending" else
+            f"已发布 {data.get('name')} v{data.get('version')} 到中央 ({where}), 状态: {status}."
+        ),
     }
     # P3.3.17: scrub 跑过就告诉 LLM 替换了什么, LLM 应转告员工
     if pii_scrub_records or intranet_scrub_records:

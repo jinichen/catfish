@@ -198,7 +198,9 @@ def list_all() -> list[dict[str, Any]]:
                       "workflows": len(d.get("workflows") or []), "skills": len(d.get("skills") or []),
                       "pack": {"version": src.get("version"), "origin": src.get("origin"),
                                "signed": (src.get("signature") or {}).get("status") == "signed",
-                               "reviewed_by": (src.get("signature") or {}).get("reviewed_by")}
+                               "reviewed_by": (src.get("signature") or {}).get("reviewed_by"),
+                               # 11/08 审批人试用装的: {by, expires, id, version}; 正式装的 None
+                               "trial": src.get("trial") or None}
                       if src.get("kind") == "pack" else None,
                       "packed_version": (d.get("pack") or {}).get("version")})
     return out

@@ -175,6 +175,9 @@ export interface InstalledWikiSharedInfo {
   hubUpdatedAt: string;     // 装的是 hub 哪个版本 (hub updated_at); 9/30 前装的为 ""
   installedAt: string;      // ISO-8601 or ""
   sizeBytes: number;
+  /** 11/08 分享治理: 装的时候 hub 上的审核状态 pending / approved / withdrawn; 老副本 "" = 视作已审 */
+  reviewStatus: string;
+  reviewNote: string;
 }
 export const listInstalledWikiShared = () =>
   rawInvoke<InstalledWikiSharedInfo[]>("list_installed_wiki_shared");
