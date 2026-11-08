@@ -55,6 +55,9 @@ const BAKED_TODO_COLLISION_GUARD: &str =
 // 10/24 数据外发记录: hermes 出口挂钩, 带内容 / 发第三方的请求记进 outbound_log.db
 const BAKED_EGRESS_LOG: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/egress_log.py");
+// 11/09 IP + 域名同时用: 连中央的 https 用「系统证书 + 公司内部 CA」(插件 register 时建 ~/.catfish/ca-bundle.pem)
+const BAKED_CENTRAL_TLS: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/central_tls.py");
 const BAKED_HERMES_TOKEN_RENEWAL: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/hermes_token_renewal.py");
 // ── 8/9 补: plugin.py 拆出来的 sibling, 之前漏了 (见上面 P0 说明) ──
@@ -185,6 +188,7 @@ pub(crate) const BAKED_FILES: &[(&str, &str)] = &[
     ("memory_enforce.py", BAKED_MEMORY_ENFORCE),
     ("todo_collision_guard.py", BAKED_TODO_COLLISION_GUARD),
     ("egress_log.py", BAKED_EGRESS_LOG),
+    ("central_tls.py", BAKED_CENTRAL_TLS),
     ("hermes_token_renewal.py", BAKED_HERMES_TOKEN_RENEWAL),
     ("plugin_weixin_zh.py", BAKED_PLUGIN_WEIXIN_ZH),
     ("plugin_wechat_qr.py", BAKED_PLUGIN_WECHAT_QR),

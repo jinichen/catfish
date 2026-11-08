@@ -1,5 +1,5 @@
 /** 手机端连接逻辑: 假中转站 + 用 crypto.ts 模拟的电脑 (电脑那头的真实现在 Companion mobile_bridge, 格式由固定向量钉住)。 */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   KIND_LONG, KIND_SESSION, b64, kindOf, newKeyPair, open, Reassembler, sas, seal, sharedKey, split, unb64,
@@ -77,8 +77,8 @@ describe("MobileClient", () => {
     const req = ws.take("pair_request");
     const phonePk = unb64(String(req.pk));
     ws.deliver({ t: "pair_offer", from: "pc-1", pk: b64(pc.publicKey) });
-    await tick();
-    await tick();
+    // 11/09: 验证码要等加密库算完 (异步, CI 机器慢时两个 tick 不够, 偶发拿不到) —— 等到出现为止
+    await vi.waitFor(() => expect(events.some((e) => e.type === "pair_code")).toBe(true), { timeout: 3000 });
     const code = events.find((e) => e.type === "pair_code");
     expect(code).toMatchObject({ code: await sas(phonePk, pc.publicKey) });
     ws.deliver({ t: "pair_result", from: "pc-1", ok: true });
