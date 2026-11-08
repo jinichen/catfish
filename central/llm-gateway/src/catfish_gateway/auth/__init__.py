@@ -209,7 +209,15 @@ def make_auth_provider() -> AuthProvider:
         return DevTokenProvider()
 
     if env == "prod":
-        oidc_issuer = os.environ.get("CATFISH_OIDC_ISSUER", "").strip()
+        # 11/08: 主地址在 CATFISH_OIDC_ISSUER (也可以逗号分隔多个), 域名 / 公网映射
+        # 地址在 CATFISH_OIDC_ISSUERS —— 合起来就是 token iss 的白名单, 主地址排第一。
+        oidc_issuers: list[str] = []
+        for env_key in ("CATFISH_OIDC_ISSUER", "CATFISH_OIDC_ISSUERS"):
+            for item in os.environ.get(env_key, "").split(","):
+                v = item.strip().rstrip("/")
+                if v and v not in oidc_issuers:
+                    oidc_issuers.append(v)
+        oidc_issuer = ",".join(oidc_issuers)
         if oidc_issuer:
             # BL-COMPANION-AUTH (5/15 凌晨): 默认接两个 audience —
             #   catfish-companion: Companion id_token (catfish-identity 老默认 aud=client_id)
@@ -223,7 +231,7 @@ def make_auth_provider() -> AuthProvider:
             )
             jwks_uri_env = os.environ.get("CATFISH_OIDC_JWKS_URI", "").strip()
             oidc = OIDCProvider(
-                issuer=oidc_issuer,
+                issuer=oidc_issuers,
                 audience=audience,
                 jwks_uri=jwks_uri_env or None,
             )

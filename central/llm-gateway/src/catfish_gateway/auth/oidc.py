@@ -59,7 +59,7 @@ class OIDCProvider(AuthProvider):
     def __init__(
         self,
         *,
-        issuer: str,
+        issuer: str | list[str],
         audience: str | list[str],
         jwks_uri: str | None = None,
         cache_ttl: int = 600,
@@ -67,7 +67,19 @@ class OIDCProvider(AuthProvider):
         # 测试 hook: 直接传 jwks dict, 跳过 HTTP 拉 (生产代码别用)
         jwks_for_testing: dict | None = None,
     ) -> None:
-        self.issuer = issuer.rstrip("/")
+        # 11/08 (IP + 域名同时用): 同一个 identity 有好几个对外地址, 每个地址签出来的
+        # token iss 不同 (见 identity issuers.py)。接受列表 (或逗号分隔的字符串),
+        # iss 在列表里任一个就过; 第一个是主地址, 只用来拼默认 jwks_uri 和日志。
+        # 签名密钥只有一套, jwks 从哪个地址拉都一样 (生产走 CATFISH_OIDC_JWKS_URI 内网直连)。
+        raw = issuer.split(",") if isinstance(issuer, str) else list(issuer)
+        self.issuers: list[str] = []
+        for item in raw:
+            v = str(item).strip().rstrip("/")
+            if v and v not in self.issuers:
+                self.issuers.append(v)
+        if not self.issuers:
+            raise ValueError("OIDCProvider: issuer 为空")
+        self.issuer = self.issuers[0]
         # BL-COMPANION-AUTH (5/15 凌晨): audience 接 list, PyJWT.decode 原生支持
         # 多 audience (token 的 aud 在 list 任一就过). 修我今晚把 access_token aud
         # 从 catfish-companion (老) 改 catfish-gateway (新, RFC 9068) 后, 老 Companion
@@ -149,11 +161,16 @@ class OIDCProvider(AuthProvider):
                 key,
                 algorithms=self.algorithms,
                 audience=self.audience,
-                issuer=self.issuer,
-                # PyJWT 自动验 exp / iat / nbf
+                # iss 自己比 (下面), PyJWT 只管签名 / exp / iat / nbf / aud。
+                # 老版 PyJWT 的 issuer= 只收单个字符串, 不靠它做列表比对。
+                options={"require": ["iss"]},
             )
         except jwt.InvalidTokenError as e:
             logger.debug("OIDC 验签 / claims 校验失败: %s", e)
+            return None
+        token_iss = payload.get("iss")
+        if token_iss not in self.issuers:
+            logger.debug("OIDC iss=%r 不在 %s 里, 拒绝", token_iss, self.issuers)
             return None
 
         sub = payload.get("sub", "").strip()

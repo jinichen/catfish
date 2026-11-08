@@ -36,6 +36,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .clients import ClientRegistry
 from .code_store import AuthCodeRecord, CodeStore
+from .issuers import issuer_for_request
 from .jwt_signer import JwtSigner
 from .refresh_tokens import RefreshTokenStore
 from .users import UserRegistry
@@ -77,8 +78,13 @@ def make_router(
     code_store: CodeStore,
     client_registry: ClientRegistry | None = None,
     refresh_token_store: RefreshTokenStore | None = None,
+    issuers: list[str] | None = None,
 ) -> APIRouter:
     """构造 fastapi router. issuer 是 base URL (例 http://127.0.0.1:8998).
+
+    issuers (11/08, IP + 域名同时用): 同一个 identity 的全部对外地址, 第一个是主地址。
+    discovery 和 /token 签出来的 iss 按请求的外部来源从里面挑 (见 issuers.py);
+    不传 = 只有 issuer 这一个, 行为跟以前完全一样。签名密钥 / JWKS 所有地址共用。
 
     设计: 把这几个依赖通过闭包传进去, 不用 fastapi global state, 测试可以单独
     构造小 router 验证.
@@ -91,13 +97,18 @@ def make_router(
     (老客户端兼容, 1h 后重 catfish login).
     """
     router = APIRouter()
+    all_issuers = [i.rstrip("/") for i in (issuers or [])] or [issuer.rstrip("/")]
+
+    def _issuer(request: Request) -> str:
+        return issuer_for_request(all_issuers, request)
 
     # ============================================================
     # /.well-known/openid-configuration  (discovery)
     # ============================================================
 
     @router.get("/.well-known/openid-configuration")
-    async def discovery() -> dict:
+    async def discovery(request: Request) -> dict:
+        issuer = _issuer(request)
         return {
             "issuer": issuer,
             "authorization_endpoint": f"{issuer}/authorize",
@@ -233,6 +244,7 @@ def make_router(
 
     @router.post("/token")
     async def token(
+        request: Request,
         grant_type: str = Form(...),
         # authorization_code grant 字段 (用户走 SSO 用)
         code: str = Form(""),
@@ -260,7 +272,11 @@ def make_router(
 
         Phase 1B-1: authorization_code 的 client_secret 不验 (demo).
         Day 1 (5/14): client_credentials 的 client_secret **必须验** (服务身份硬要求).
+
+        11/08: iss 按请求来源挑 (IP 来的签 IP 的 issuer, 域名来的签域名的) ——
+        refresh 也一样, 所以客户端必须从**同一个地址**续期, 它本来也就是这么做的。
         """
+        issuer = _issuer(request)
         if grant_type == "authorization_code":
             return await _handle_authorization_code(
                 code=code,

@@ -55,6 +55,8 @@ COPY catfish-locations.conf /etc/nginx/catfish-locations.conf
 # 若无条件写死 443 block 而证书不存在, nginx 加载证书失败会直接起不来 ——
 # 等于为了没启用的 HTTPS 把默认 HTTP 路径搞坏.
 COPY catfish-ssl.conf /etc/nginx/catfish-ssl.conf.disabled
+# 11/08 域名 + 正式证书的第二个 443 块 (41-catfish-ssl.sh 有正式证书 + 域名时才生成)
+COPY catfish-ssl-official.conf /etc/nginx/catfish-ssl-official.conf.disabled
 # 11/08 HTTPS 模式下宿主机 80 → 容器 8080 跳 https (41-catfish-ssl.sh 填好端口才启用)
 COPY catfish-http-redirect.conf /etc/nginx/catfish-http-redirect.conf.disabled
 

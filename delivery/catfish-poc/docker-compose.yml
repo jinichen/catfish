@@ -40,7 +40,7 @@ services:
     build:
       context: ./identity-server
       dockerfile: Dockerfile
-    image: catfish-identity:20261108-8011d185
+    image: catfish-identity:20261108-e09a10bc
     container_name: catfish-identity
     restart: unless-stopped
     depends_on:
@@ -67,6 +67,9 @@ services:
       CATFISH_IDENTITY_ISSUER: ${CATFISH_IDENTITY_ISSUER:-http://host.docker.internal:8998}
       # OIDC 配置 (跟 gateway 共享, 必须跟 CATFISH_IDENTITY_ISSUER 一致 - JWT iss claim)
       CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://host.docker.internal:8998}
+      # 11/08 IP + 域名 / 公网映射同时用: 全部对外地址 (主地址在前), 按请求来源挑 issuer。
+      # setup 按 PUBLIC_HOST 写; 没配就是空 = 只有上面那一个 (跟以前一样)。
+      CATFISH_IDENTITY_ISSUERS: ${CATFISH_IDENTITY_ISSUERS:-}
       # P3.5.79+ (7/22 POC 现场血案): web 前端跨域调 identity discovery/token 必设.
       # 默认 CORS 白名单只 allow localhost / 127.0.0.1 / tauri:// · 客户内网 IP 需显式加.
       # 多 origin 逗号分隔: e.g. http://<客户内网IP>:5173,https://catfish.company.com
@@ -97,7 +100,7 @@ services:
     # 及 pyproject.toml orjson>=3.10 依赖. rebuild + docker save 分发客户 IT.
     # 9/12 0.1.2: P50 横向协同邮筒 (/api/room-link/mailbox + room_link_mailbox 表迁移);
     #   六个自造镜像版本从此一起走, 升版本只改 compose (setup.sh / build-package.sh 都从这读)。
-    image: catfish-gateway:20261108-8011d185
+    image: catfish-gateway:20261108-e09a10bc
     container_name: catfish-gateway
     restart: unless-stopped
     depends_on:
@@ -113,7 +116,7 @@ services:
       # 11/01: 每人最多配几台手机 (手机中转站, docs/MOBILE-CLIENT-DESIGN.md); 0 = 不开放手机端
       CATFISH_MOBILE_MAX_DEVICES: ${CATFISH_MOBILE_MAX_DEVICES:-3}
       # 10/30: 门户顶栏显示的中央端版本号, 跟镜像 tag 同一个号 (scripts/central_version.sh --write 一起改)
-      CATFISH_CENTRAL_VERSION: "20261108-8011d185"
+      CATFISH_CENTRAL_VERSION: "20261108-e09a10bc"
       # 6/9 BL-DOCKER-HOST: app.py 默认 127.0.0.1 (安全 P0 G1 dev 兜底), prod docker 必须 0.0.0.0
       HOST: 0.0.0.0
       PORT: 8999
@@ -134,6 +137,8 @@ services:
       # 7/15 BL-OIDC-ISSUER fix: 跟 identity CATFISH_IDENTITY_ISSUER 一致.
       # 用 host.docker.internal 让浏览器 + gateway container 双向可达.
       CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://host.docker.internal:8998}
+      # 11/08: 域名 / 公网映射地址签出来的 token iss 也认 (跟 identity 的 CATFISH_IDENTITY_ISSUERS 同一串)
+      CATFISH_OIDC_ISSUERS: ${CATFISH_OIDC_ISSUERS:-}
       # BL-COMPANION-AUTH (7/18 鸿波 catch Task #66): Companion Rust auth_get_access_token
       # 实际返 id_token (aud=catfish-companion, OIDC 惯例), 不是 access_token. gateway 需
       # 双 audience 才接. 默认单值 catfish-gateway 会拒 Companion id_token · 员工 chat 401.
@@ -184,7 +189,7 @@ services:
     build:
       context: ./skills-hub
       dockerfile: Dockerfile
-    image: catfish-skills-hub:20261108-8011d185
+    image: catfish-skills-hub:20261108-e09a10bc
     container_name: catfish-skills-hub
     restart: unless-stopped
     environment:
@@ -209,7 +214,7 @@ services:
     build:
       context: ./web
       dockerfile: Dockerfile
-    image: catfish-web:20261108-8011d185
+    image: catfish-web:20261108-e09a10bc
     container_name: catfish-web
     restart: unless-stopped
     # 10/21: nginx 只在启动时解析一次上游名字 (catfish-locations.conf 里字面写的 identity / gateway)。
@@ -229,6 +234,10 @@ services:
     environment:
       # OIDC issuer · 复用 identity 段同名 env · 保持一致 (跨 identity+gateway+web)
       CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://127.0.0.1:8998}
+      # 11/08: 全部 issuer 进 config.js, 门户按 window.location 挑 (lib/issuer.ts)
+      CATFISH_OIDC_ISSUERS: ${CATFISH_OIDC_ISSUERS:-}
+      # 11/08: 对外地址 → 443 正式证书块的 server_name + http→https 跳转目标 (41-catfish-ssl.sh)
+      CATFISH_PUBLIC_HOSTS: ${CATFISH_PUBLIC_HOSTS:-}
       CATFISH_OIDC_CLIENT_ID: ${CATFISH_OIDC_CLIENT_ID:-catfish-companion}
       CATFISH_OIDC_SCOPE: ${CATFISH_OIDC_SCOPE:-openid email profile}
       # 10/14: 员工接入落地页的 http 链接要知道宿主机端口 (见 docker-entrypoint-catfish-config.sh)
@@ -254,7 +263,7 @@ services:
     build:
       context: ./mcp-registry
       dockerfile: Dockerfile
-    image: catfish-mcp-registry:20261108-8011d185
+    image: catfish-mcp-registry:20261108-e09a10bc
     container_name: catfish-mcp-registry
     restart: unless-stopped
     depends_on:
@@ -287,7 +296,7 @@ services:
     build:
       context: ./wiki-hub
       dockerfile: Dockerfile
-    image: catfish-wiki-hub:20261108-8011d185
+    image: catfish-wiki-hub:20261108-e09a10bc
     container_name: catfish-wiki-hub
     restart: unless-stopped
     depends_on:

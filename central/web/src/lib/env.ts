@@ -16,6 +16,8 @@
  * 就重编 = 不可 scale · image tar 也无法"一份到处装").
  */
 
+import { pickIssuer } from "./issuer";
+
 interface RuntimeConfig {
   /** OIDC issuer URL (例 'http://127.0.0.1:8998', 生产 'https://sso.client.com') */
   oidcIssuer: string;
@@ -33,6 +35,8 @@ declare global {
   interface Window {
     __CATFISH_CONFIG__?: {
       oidcIssuer?: string;
+      /** 11/08: 全部对外 issuer (IP + 域名 / 公网映射), 主地址在前 —— 用哪个见 lib/issuer.ts */
+      oidcIssuers?: string[];
       oidcClientId?: string;
       oidcScope?: string;
       /** 10/14: 宿主机上映射给 web 的 http 端口 (CATFISH_HTTP_PORT), 拼员工接入落地页的 http 链接用 */
@@ -49,7 +53,10 @@ const env = import.meta.env;
 
 export const config: RuntimeConfig = {
   oidcIssuer:
-    runtimeCfg.oidcIssuer || env.VITE_OIDC_ISSUER || "http://127.0.0.1:8998",
+    pickIssuer(
+      [...(runtimeCfg.oidcIssuers ?? []), runtimeCfg.oidcIssuer ?? ""],
+      window.location.origin,
+    ) || env.VITE_OIDC_ISSUER || "http://127.0.0.1:8998",
   oidcClientId:
     runtimeCfg.oidcClientId || env.VITE_OIDC_CLIENT_ID || "catfish-companion",
   oidcScope:
@@ -61,3 +68,9 @@ export const isDev = import.meta.env.DEV;
 
 /** 10/14: 员工接入落地页走 http (微信里点开不会撞自签证书警告); 端口由 config.js 注入, 没有就退回当前地址 */
 export const publicHttpPort: string | undefined = runtimeCfg.publicHttpPort || undefined;
+
+/** 11/08: 全部对外 issuer (= 全部门户地址: 内网 IP + 域名 / 公网映射), 主地址在前。
+ *  「用户」页据此把每个地址的接入方式都列出来。没配多个地址时只有当前这一个。 */
+export const allIssuers: string[] = Array.from(
+  new Set([runtimeCfg.oidcIssuer, ...(runtimeCfg.oidcIssuers ?? [])].filter((x): x is string => !!x)),
+);

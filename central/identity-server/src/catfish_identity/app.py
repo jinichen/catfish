@@ -63,6 +63,7 @@ _ENV_FILE_LOADED = _load_dotenv()
 
 from .clients import ClientRegistry
 from .code_store import CodeStore
+from .issuers import configured_issuers
 from .jwt_signer import JwtSigner
 from .refresh_tokens import RefreshTokenStore
 from .routes import make_router
@@ -102,13 +103,20 @@ def configure_logging() -> None:
     )
 
 
-def _issuer_url() -> str:
-    """OIDC issuer URL. 必须跟 gateway 端配置完全一致."""
-    if env := os.environ.get("CATFISH_IDENTITY_ISSUER"):
-        return env.rstrip("/")
+def _issuer_urls() -> list[str]:
+    """全部对外 issuer, 第一个是主地址。必须跟 gateway 端 (CATFISH_OIDC_ISSUER(S)) 一致.
+
+    11/08: CATFISH_IDENTITY_ISSUERS (逗号分隔, IP + 域名 / 公网映射) 优先;
+    只设老的 CATFISH_IDENTITY_ISSUER 就是一个元素的列表。每个请求用哪个见 issuers.py。
+    """
     host = os.environ.get("CATFISH_IDENTITY_HOST", DEFAULT_HOST)
     port = os.environ.get("CATFISH_IDENTITY_PORT", str(DEFAULT_PORT))
-    return f"http://{host}:{port}"
+    return configured_issuers(f"http://{host}:{port}")
+
+
+def _issuer_url() -> str:
+    """主 issuer (列表第一个)。"""
+    return _issuer_urls()[0]
 
 
 def create_app(
@@ -134,7 +142,8 @@ def create_app(
     # 否则密钥初始化的 kid= 日志会丢.
     configure_logging()
 
-    issuer = _issuer_url()
+    issuers = _issuer_urls()
+    issuer = issuers[0]
     signer = signer if signer is not None else JwtSigner()
     registry = registry if registry is not None else UserRegistry()
     # 6/9 BL-F11.P2: code_store sqlite 持久化, 跨 worker 共享 authorization_code state.
@@ -202,6 +211,11 @@ def create_app(
             "tauri://localhost",            # Tauri v2 mac/Linux WebView origin
             "https://tauri.localhost",      # Tauri v2 Windows WebView origin
         ]
+    # 11/08: 每个 issuer 本身就是一个门户来源 (IP / 域名 / 公网映射), 都得放行 ——
+    # setup 已经把它们写进 CATFISH_IDENTITY_CORS_ORIGINS, 这里再补一次, 手改 .env 漏了也不至于挂。
+    for iss in issuers:
+        if iss.startswith(("http://", "https://")) and iss not in cors_origins:
+            cors_origins.append(iss)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
@@ -228,6 +242,7 @@ def create_app(
             code_store=code_store,
             client_registry=client_registry,
             refresh_token_store=refresh_token_store,
+            issuers=issuers,
         )
     )
     if len(client_registry) > 0:
@@ -258,13 +273,14 @@ def create_app(
         return {
             "status": "ok",
             "issuer": issuer,
+            "issuers": issuers,
             "user_count": len(registry),
             "kid": signer.kid,
         }
 
     logger.info(
-        "catfish-identity 起来了: issuer=%s, users=%d, kid=%s",
-        issuer, len(registry), signer.kid,
+        "catfish-identity 起来了: issuer=%s (全部: %s), users=%d, kid=%s",
+        issuer, ", ".join(issuers), len(registry), signer.kid,
     )
     return app
 

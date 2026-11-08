@@ -2,6 +2,7 @@
  *
  * 系统级操作, 只 sysadmin 看到. 内容:
  *   - 服务状态 (gateway / identity / mcp / hub / broker 5 个端口)
+ *   - 证书到期 (11/08: 内部证书 + 域名的正式证书; 正式证书不自动续, 30 天内标黄)
  *   - 系统配置查看 (OIDC issuer / audience / quotas.yaml)
  *   - 操作审计 (users_audit)
  *   - 危险操作 (重启 / 备份)
@@ -19,6 +20,7 @@ import { adminApi, type UsersAuditEvent } from "../../lib/admin";
 // ("dynamic import will not move module into another chunk"),
 // 而一条永远存在、又永远无害的警告, 结果是训练所有人忽略 build 输出。
 import { getIdToken } from "../../lib/auth";
+import { certLevel, certSummary, daysLeft, fetchCertInfo, type CertEntry, type CertInfo } from "../../lib/certInfo";
 
 export function SystemPage() {
   return (
@@ -32,10 +34,12 @@ export function SystemPage() {
 function SystemDashboard() {
   const [audit, setAudit] = useState<UsersAuditEvent[]>([]);
   const [services, setServices] = useState<ServiceStatus[]>([]);
+  const [certs, setCerts] = useState<CertInfo | null>(null);
 
   useEffect(() => {
     adminApi.listAudit(50).then((r) => setAudit(r.events));
     void checkServices().then(setServices);
+    void fetchCertInfo().then(setCerts);
   }, []);
 
   return (
@@ -79,6 +83,15 @@ function SystemDashboard() {
           ))}
         </div>
       </Card>
+
+      {certs && (certs.internal || certs.official) && (
+        <Card title="证书">
+          <div style={{ display: "grid", gap: "var(--space-2)", fontSize: 13 }}>
+            {certs.internal && <CertRow label="内部证书 (IP 访问)" kind="internal" entry={certs.internal} />}
+            {certs.official && <CertRow label="正式证书 (域名)" kind="official" entry={certs.official} />}
+          </div>
+        </Card>
+      )}
 
       {/* 7/30: 这里原本有个「快捷入口」区, 重复了用户管理 / 配额规则 / 审计
           大查询三个入口 —— 它们在 /admin 磁贴上也有一份。同一个入口需要放在
@@ -149,6 +162,33 @@ function SystemDashboard() {
           注: doc string 顶部还保留'危险操作 (重启/备份)' 项目说明作为 future
           backlog, 但不渲染卡片. */}
     </PageShell>
+  );
+}
+
+
+function CertRow({ label, kind, entry }: { label: string; kind: "internal" | "official"; entry: CertEntry }) {
+  const level = certLevel(daysLeft(entry.not_after));
+  const color =
+    level === "ok" ? "var(--status-ok)" : level === "warn" ? "var(--status-warn)" : "var(--status-err)";
+  return (
+    <div
+      style={{
+        background: "var(--bg-secondary)",
+        padding: "var(--space-2) var(--space-3)",
+        borderRadius: "var(--radius-sm)",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontWeight: 500 }}>{label}</span>
+        <span style={{ color, fontSize: 12 }}>● {certSummary(kind, entry)}</span>
+      </div>
+      {entry.names.length > 0 && (
+        <div style={{ color: "var(--text-muted)", fontSize: 12, marginTop: 2, wordBreak: "break-all" }}>
+          {entry.names.join(" · ")}
+          {entry.issuer ? ` · 签发: ${entry.issuer}` : ""}
+        </div>
+      )}
+    </div>
   );
 }
 
