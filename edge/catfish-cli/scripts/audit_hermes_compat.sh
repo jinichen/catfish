@@ -429,6 +429,7 @@ check_grep "cron/scheduler.py" "model = job\.get\(\"model\"\)" "P21 定模型时
 check_grep "cron/scheduler.py" "_load_cron_job_config\(job," "P21 run_job 把同一个 job 交给定模型函数"
 check_grep "cron/scheduler.py" "_run_job_unless_cancelled\($" "P21 调度器调 run_job 的入口还在"
 check_grep "gateway/session_cron.py" "^    from cron\.scheduler import run_job" "P21 会话属主在函数体里 import run_job (拿得到补丁)"
+check_grep "gateway/session_cron.py" "^    from cron\.scheduler import _load_cron_job_config" "P21 会话属主建记录时在函数体里 import 定模型函数 (会话模型名跟 picker)"
 
 # 直接判据: 不该有模块在顶层把 run_job 绑成本地名字 (那样会攥着原函数, P21 静默失效)
 _p21_binders=$(grep -rnE "^from cron(\.scheduler)? import .*\brun_job\b|^from \.scheduler import .*\brun_job\b" \

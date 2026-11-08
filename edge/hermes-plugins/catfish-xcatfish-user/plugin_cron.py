@@ -236,6 +236,42 @@ def _patch_p21_cron_picker_integration() -> None:
         "P21 cron picker integration patched — cron job model 跟 picker_state.json "
         "联动 (优先级: picker > job.model > yaml.default > env) ✓"
     )
+    _patch_p21_session_model_label(_cron_scheduler)
+
+
+def _patch_p21_session_model_label(_cron_scheduler) -> None:
+    """P21 第二处 (11/09): 定时任务的会话记录也写实际用的模型。
+
+    v0.22 起定时任务交给 gateway 的会话属主跑。属主建会话时 (gateway/session_cron._create)
+    **不经过 run_job**, 直接调 `_load_cron_job_config(job, ...)` 算模型写进会话的 policy.model ——
+    上面的 run_job 包装管不到, 会话记录 / 历史里显示的就是任务原来配的模型, 实际跑的却是
+    picker 选的。这里把「定模型」这一步也包上: 给它一份换了 model 的副本, 不改调用方的 job
+    (_create 随后要把 job 原样冻进 request_json)。
+
+    _create 是在函数体里 `from cron.scheduler import _load_cron_job_config`, 调用时才查, 拿得到
+    这个包装; run_job 内部按名字调它, 也拿得到 (那时 job 已是 picker 模型, 等于没改)。
+    """
+    orig = getattr(_cron_scheduler, "_load_cron_job_config", None)
+    if orig is None:
+        logger.warning("P21: cron.scheduler._load_cron_job_config 不在 (hermes 改了?), 会话记录的模型名不跟 picker")
+        return
+    if getattr(orig, "_catfish_p21", False):
+        return
+
+    @functools.wraps(orig)
+    def _patched_load_config(job, *args, **kwargs):
+        try:
+            picker_model = model_authority.read_picker_model()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("P21 cron: picker_state 读失败 (%s), 会话模型名走 hermes 原逻辑", e)
+            picker_model = None
+        if picker_model and isinstance(job, dict) and job.get("model") != picker_model:
+            job = dict(job, model=picker_model)
+        return orig(job, *args, **kwargs)
+
+    _patched_load_config._catfish_p21 = True
+    _cron_scheduler._load_cron_job_config = _patched_load_config
+    logger.info("P21 定时任务会话记录的模型名跟 picker 走 (_load_cron_job_config) ✓")
 
 
 

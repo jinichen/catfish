@@ -88,6 +88,7 @@ def check_p21() -> None:
         seen["model"] = sched._load_cron_job_config(job, job["id"], "自检").model
         return True, "", "", None
 
+    real_loader = sched._load_cron_job_config
     sched.run_job = fake_orig
     plugin_cron.model_authority = types.SimpleNamespace(read_picker_model=lambda: "picker-model-x")
     plugin_cron._patch_p21_cron_picker_integration()
@@ -125,6 +126,20 @@ def check_p21() -> None:
     at_call_time({"id": "j1", "model": "job-old-model"})
     report("P21 经补丁跑一次, 真的定模型那一步拿到的是 picker 的", seen.get("model") == "picker-model-x",
            f"实际: {seen.get('model')!r}")
+    # 会话属主建会话记录时 (gateway/session_cron._create) 不经过 run_job, 自己调定模型函数
+    # 写 policy.model —— 这一步也得是 picker 的, 会话 / 历史里显示的才是实际用的模型
+    import gateway.session_cron as sc
+    create_names = set().union(*(co.co_names for co in code_objects(sc._create)))
+    report("P21 会话属主建记录时在调用时才 import 定模型函数",
+           {"cron.scheduler", "_load_cron_job_config"} <= create_names)
+    holders = stale_holders(real_loader, "_load_cron_job_config")
+    report("P21 没有模块攥着原定模型函数", not holders, ", ".join(holders))
+    from cron.scheduler import _load_cron_job_config as loader_at_call_time
+    job = {"id": "j2", "model": "job-old-model"}
+    label = loader_at_call_time(job, "j2", "自检").model
+    report("P21 会话记录的模型名是 picker 的 (不是任务原来配的)", label == "picker-model-x", f"实际: {label!r}")
+    report("P21 定模型时不改调用方的 job (它随后原样冻进 request_json)", job["model"] == "job-old-model",
+           f"实际: {job['model']!r}")
 
 
 # ── P26: 卡片上的暂停 / 恢复 / 删除 ──────────────────────────────────────
