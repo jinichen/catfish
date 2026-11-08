@@ -223,6 +223,12 @@ async def review_submission(sid: str, request: Request, user: User = Depends(get
     return await _proxy(request, f"/v1/mcp/submissions/{sid}/review", user)
 
 
+@router.get("/audit")
+async def mcp_audit(request: Request, user: User = Depends(get_current_user)) -> Response:
+    """11/08 admin 审计 (上游再查一遍角色)。"""
+    return await _proxy(request, "/v1/mcp/audit", user)
+
+
 @router.get("/subscribed")
 async def my_subscriptions(
     request: Request,

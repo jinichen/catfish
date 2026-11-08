@@ -386,6 +386,16 @@ async def review_submission(sid: str, request: Request, body: dict) -> dict:
     return {"ok": True, "submission": rec}
 
 
+@app.get("/v1/mcp/audit")
+async def audit_list(request: Request, limit: int = 100) -> dict:
+    """11/08 admin 看连接器审计 (提交 / 审核 / 订阅 / 试用), 门户「分享审计」合并四条线用。"""
+    user = _user(request)
+    if user["role"] not in ("admin", "sysadmin"):
+        raise HTTPException(status_code=403, detail=f"admin only (你是 {user['role']})")
+    events = request.app.state.db.list_audit(limit=max(1, min(int(limit), 500)))
+    return {"events": [{"line": "mcp", **e} for e in events], "limit": limit}
+
+
 @app.post("/v1/mcp/subscribe", response_model=SubscribeResponse)
 async def subscribe(
     body: SubscribeRequest,

@@ -108,3 +108,10 @@ def test_审批人试用_要有测试账号说明_同事不能试(client):
     assert rec["trials"][0]["by"] == "boss@x"
     audit = app.state.db.list_audit(limit=20)
     assert any(a["action"] == "subscribe_trial" for a in audit)
+
+
+def test_审计只给管理员_每条带line(client):
+    submit(client, EMP)
+    assert client.get("/v1/mcp/audit", headers=EMP).status_code == 403
+    events = client.get("/v1/mcp/audit", headers=ADMIN).json()["events"]
+    assert events and all(e["line"] == "mcp" for e in events) and any(e["action"] == "submit" for e in events)

@@ -29,7 +29,7 @@
 #   bash delivery/build-package.sh amd64
 #   bash delivery/build-package.sh arm64
 #
-# 产出: ~/Downloads/catfish-poc-FULL-<arch>-<日期>.tar.gz
+# 产出: ~/Downloads/catfish-poc-FULL-<arch>-<中央版本号 例 20261108-05ca4886>.tar.gz
 #
 # 前提: Docker 在跑; Apple Silicon 上打 amd64 靠 buildx + QEMU, 会慢很多
 #       (十几分钟到半小时, 取决于机器), 属正常。
@@ -53,6 +53,8 @@ TEMPLATE="$SCRIPT_DIR/catfish-poc"          # 交付目录模板 (配置 / setup
 COMPOSE="$TEMPLATE/docker-compose.yml"
 OUT_DIR="${OUT_DIR:-$HOME/Downloads}"
 DATE="$(date +%Y%m%d)"
+# 11/08 鸿波: 包名只带日期, 同一天打两次同名覆盖, 装错版本分不清 —— 文件名带中央版本号 (本身以日期开头, 例 20261108-05ca4886)
+STAMP="$(tr -d '[:space:]' < "$CENTRAL/VERSION" 2>/dev/null || true)"; STAMP="${STAMP:-$DATE}"
 
 # ── 版本戳 (10/17 补回来) ────────────────────────────────────────────
 # 包里的 BUILD-INFO.txt 是「客户装的到底是哪一版」的唯一凭据。7/20 的老脚本会写它, 换成这个脚本后
@@ -378,11 +380,11 @@ for ARCH in $ARCHES; do
         echo "built_at=$(date '+%Y-%m-%d %H:%M:%S %Z')"
         echo "built_on=$(uname -sm)"
         # 11/08: 装机脚本没传 IMAGE_TAR 时按这一行挑 images/ 里的包 (新包解压覆盖这个文件, 旧包残留也不会挑错)
-        echo "image_tar=catfish-poc-central-$ARCH-$DATE.tar.gz"
+        echo "image_tar=catfish-poc-central-$ARCH-$STAMP.tar.gz"
     } > "$STAGE/delivery/catfish-poc/BUILD-INFO.txt"
     [ -n "$GIT_DIRTY" ] && echo "  ⚠ central/ 或 delivery/ 有未提交改动, git_sha=$GIT_SHA 描述不全这个包"
 
-    IMG_TAR="$STAGE/delivery/catfish-poc/images/catfish-poc-central-$ARCH-$DATE.tar.gz"
+    IMG_TAR="$STAGE/delivery/catfish-poc/images/catfish-poc-central-$ARCH-$STAMP.tar.gz"
     echo "→ docker save → $(basename "$IMG_TAR")"
     # shellcheck disable=SC2086
     docker save $ALL_IMGS | gzip -1 > "$IMG_TAR" || { echo "❌ save 失败"; exit 1; }
@@ -394,7 +396,7 @@ for ARCH in $ARCHES; do
     # 包里没有密钥 (.env / 证书 / 密码都在装机时现场生成), 放开读权限没有泄露问题。
     chmod -R a+rX "$STAGE/delivery"
 
-    OUT="$OUT_DIR/catfish-poc-FULL-$ARCH-$DATE.tar.gz"
+    OUT="$OUT_DIR/catfish-poc-FULL-$ARCH-$STAMP.tar.gz"
     mkdir -p "$OUT_DIR"
     echo "→ 打包 → $OUT"
     # 10/21: macOS 的 bsdtar 会把扩展属性 (com.apple.provenance / quarantine) 写进包, 客户 Linux 上
@@ -426,7 +428,7 @@ for ARCH in $ARCHES; do
                 "delivery/catfish-poc/docker-compose.https.yml" \
                 "delivery/catfish-poc/docker-compose.http-redirect.yml" \
                 "delivery/catfish-poc/llm-gateway/config/models.yaml" \
-                "delivery/catfish-poc/images/catfish-poc-central-$ARCH-$DATE.tar.gz" \
+                "delivery/catfish-poc/images/catfish-poc-central-$ARCH-$STAMP.tar.gz" \
                 "delivery/catfish-poc/linux/install-docker.sh" \
                 "delivery/catfish-poc/linux/docker.tgz" \
                 "delivery/catfish-poc/linux/docker-compose" \
@@ -455,10 +457,10 @@ done
 echo ""
 echo "═══════════════════════════════════════════════════════"
 echo "✅ 完成"
-ls -lh "$OUT_DIR"/catfish-poc-FULL-*-"$DATE".tar.gz 2>/dev/null | sed 's/^/   /'
+ls -lh "$OUT_DIR"/catfish-poc-FULL-*-"$STAMP".tar.gz 2>/dev/null | sed 's/^/   /'
 echo ""
 echo "客户侧装机 (手册在仓库 delivery/catfish-poc/INSTALL.md, 不随包走):"
-echo "    tar xzf catfish-poc-FULL-<arch>-$DATE.tar.gz"
+echo "    tar xzf catfish-poc-FULL-<arch>-$STAMP.tar.gz"
 echo "    cd delivery/catfish-poc/"
 echo "    SERVER_IP=<服务器内网IP> ENABLE_HTTPS=1 bash setup.sh"
 echo ""
