@@ -8,11 +8,24 @@
  * 所以 证书族 (CCRC → 子证书)、规则 (评分规则 → 子规则)、项目 (招投标 → 集采 → 标包) 都是层级,
  * 以后新加的也自动出现。
  *
+ * 11/08 例外: 文件、名单、数据这类 (类型词表里归到 doc / data / notification 的) 不能当上级 ——
+ * 「一级建造师持证人员名单 包含 陈功」是蒸馏写错的关系 (该是「记录」), 原来把名单当成了陈功的上级, 跟真正的部门并列报「多个上级」。
+ *
  * 顶层 = 有下级、自己没有上级的条目。
  * 质量检查 (进关系整理): 跨级重复 (已在部门下, 又直挂公司) / 多个上级 (挂在两个不相干的上级下)。
  */
+import typeVocab from "../../../../contracts/wiki_type_vocab.json";
 import type { WikiFileInfo } from "../../lib/tauri_wiki";
 import { resolveWikiRefOrNull } from "../../lib/wikiResolve";
+
+/** 不能当上级的类型 (文件 / 数据 / 通知): 细分类型先按词表别名归一再比 */
+const NON_PARENT_TYPES = new Set(["doc", "data", "notification"]);
+const TYPE_ALIASES: Record<string, string> = (typeVocab as { aliases?: Record<string, string> }).aliases ?? {};
+export function canBeParent(file: WikiFileInfo | undefined): boolean {
+  const raw = (file?.subtype ?? "").trim();
+  if (!raw) return true;
+  return !NON_PARENT_TYPES.has(TYPE_ALIASES[raw] ?? raw);
+}
 
 export type HierarchyDirection = "child" | "parent";
 
@@ -54,6 +67,7 @@ export function buildHierarchy(
       const target = resolveWikiRefOrNull(related.name, files);
       if (!target || target.rel_path === file.rel_path) continue;
       const [parent, child] = dir === "child" ? [target.rel_path, file.rel_path] : [file.rel_path, target.rel_path];
+      if (!canBeParent(byPath.get(parent))) continue;
       const key = `${parent}→${child}`;
       if (seen.has(key)) continue;
       seen.add(key);

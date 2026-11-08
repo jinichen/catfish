@@ -24,6 +24,18 @@ describe("buildHierarchy", () => {
     expect(m.parents.has("wiki/entities/x.md")).toBe(false);
   });
 
+  it("11/08: 名单 / 文件不能当上级 (名单「包含 陈功」是写错的关系, 不算陈功的第二个上级)", () => {
+    const files = [
+      { ...f("dept", "集成能力中心"), subtype: "department" },
+      { ...f("p", "陈功", [{ name: "集成能力中心", rel: "隶属" }]), subtype: "person" },
+      { ...f("list", "一级建造师持证人员名单", [{ name: "陈功", rel: "包含" }]), subtype: "roster" },
+      { ...f("notice", "某通知", [{ name: "陈功", rel: "包含" }]), subtype: "资料要点" },
+    ];
+    const model = buildHierarchy(files);
+    expect(model.parents.get("wiki/entities/p.md")).toEqual(["wiki/entities/dept.md"]);
+    expect(hierarchyIssues(model)).toEqual([]);
+  });
+
   it("自定义的层级型关系也算", () => {
     const m = buildHierarchy([f("a", "挂靠人", [{ name: "公司", rel: "挂靠" }]), f("b", "公司")], { 挂靠: "child" });
     expect(m.roots[0].path).toBe("wiki/entities/b.md");
