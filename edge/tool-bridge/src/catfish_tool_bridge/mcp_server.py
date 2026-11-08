@@ -333,6 +333,10 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         stream=sys.stderr,
     )
+    # 11/08: 中央用域名 + 内部证书时网关走 https —— 默认信任库之上加公司内部 CA (central_tls.py)。
+    # 没有 ~/.catfish/server-ca.pem 就什么都不做。
+    from .central_tls import ensure_central_ca_env
+    ensure_central_ca_env()
     try:
         asyncio.run(amain())
         return 0

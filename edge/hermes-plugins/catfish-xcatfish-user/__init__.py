@@ -97,6 +97,22 @@ def register(ctx) -> None:
             __name__,
         )
 
+    # 11/08 连中央的 https (域名 + 内部证书时网关走 https): 默认信任库之上加公司内部 CA,
+    # 设 SSL_CERT_FILE / REQUESTS_CA_BUNDLE —— 本进程之后建的客户端和子进程 (tool-bridge) 都认。
+    # 不能写 verify=server-ca.pem: 那会替换默认信任库, 正式证书和公网服务全验不过。见 central_tls.py。
+    if _owns_patches:
+        try:
+            from pathlib import Path as _PathT
+            import importlib.util as _iuT
+            _specT = _iuT.spec_from_file_location(
+                "_catfish_xcatfish_user_central_tls", _PathT(__file__).parent / "central_tls.py",
+            )
+            _tls = _iuT.module_from_spec(_specT)
+            _specT.loader.exec_module(_tls)
+            _tls.ensure_central_ca_env()
+        except Exception as _e:  # noqa: BLE001 —— 信任库没合上只影响用内部证书的 https 中央地址
+            logger.warning("catfish-xcatfish-user: 合并公司内部 CA 失败 (%s)", _e)
+
     # 10/24 数据外发记录: hermes 出口挂钩 httpx / requests / aiohttp, 「带内容出本机」「发给第三方」
     # 的请求记进 ~/.catfish/outbound_log.db (见 egress_log.py)。挂不上只是不记, 不影响 hermes 起来。
     if _owns_patches:
