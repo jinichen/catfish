@@ -6,8 +6,6 @@
  *
  * 挑事和写任务说明: lib/meetingPrep.ts (日历), lib/prepSources.ts (待办、邮件)。排期: lib/advancePrep.ts。
  */
-import { useEffect } from "react";
-
 import {
   localDayKey,
   localIso,
@@ -18,7 +16,6 @@ import {
 } from "../lib/advancePrep";
 import { calendarItems } from "../lib/meetingPrep";
 import { emailItems, todoItems } from "../lib/prepSources";
-import { isTauriRuntime } from "../lib/runtime";
 import { MEETING_PREP_KEY, prefEnabled } from "../lib/secretaryPrefs";
 import {
   calendarUpcomingFetch,
@@ -34,7 +31,6 @@ import type { DueTask } from "../lib/triggers";
 
 /** 第一版 (只有会议) 就用这个 key, 不改: 已经建好的准备任务记录接着用 */
 const RECORDS_KEY = "catfish:meeting_prep:v1";
-const TICK_MS = 15 * 60_000;
 /** 邮件只看最近这么多封 (跟个人画像同一个量; 分诊缓存也只覆盖列表里的) */
 const EMAIL_LIMIT = 100;
 
@@ -153,24 +149,21 @@ export async function advancePrepTick(now = new Date()): Promise<{ created: numb
   return { created, cancelled };
 }
 
-export function useAdvancePrep(): void {
-  useEffect(() => {
-    if (!isTauriRuntime()) return;
-    let running = false;
-    const tick = () => {
-      if (running) return;
-      running = true;
-      advancePrepTick()
-        .catch((e) => console.warn("[advance-prep] 这一轮没跑成:", e))
-        .finally(() => {
-          running = false;
-        });
-    };
-    const first = window.setTimeout(tick, 90_000);
-    const t = window.setInterval(tick, TICK_MS);
-    return () => {
-      window.clearTimeout(first);
-      window.clearInterval(t);
-    };
-  }, []);
+/** 11/09 关掉「提前准备」: 已经排上、还没到点的准备任务撤掉 (以前关了照样会跑)。返回撤了几条。 */
+export async function cancelPendingPreps(now = Date.now()): Promise<number> {
+  const records = loadRecords();
+  let cancelled = 0;
+  for (const [key, rec] of Object.entries(records)) {
+    if (rec.jobId && rec.runAt > now) {
+      try {
+        await cronJobDelete(rec.jobId);
+        cancelled++;
+      } catch (e) {
+        console.warn(`[advance-prep] 关掉时撤准备任务 ${rec.jobId}:`, e);   // 已经不在也算撤了
+      }
+    }
+    delete records[key];
+  }
+  saveRecords(records);
+  return cancelled;
 }

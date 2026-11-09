@@ -5,8 +5,6 @@
  * 系统通知: 窗口不在前台、又不在夜间免打扰 (22–7 点) 时发一条; 同一轮有几条就合成一条通知。
  * 回到 Companion 时落到工作台 (store/reminders noteNotified → useProactiveTriggers 的获焦监听)。
  */
-import { useEffect } from "react";
-
 import {
   cronReminder,
   diffCronRuns,
@@ -15,14 +13,12 @@ import {
   type CronSeen,
 } from "../lib/cronWatch";
 import type { Reminder } from "../lib/reminders";
-import { isTauriRuntime } from "../lib/runtime";
 import { cronJobOutputRead, cronJobOutputs, cronJobsList, sendNotification } from "../lib/tauri";
 import { QUIET_HOURS_END, QUIET_HOURS_START } from "../lib/triggers";
 import { useAgentStore } from "../store/agent";
 import { useRemindersStore } from "../store/reminders";
 
 const SEEN_KEY = "catfish:cron_seen:v1";
-const TICK_MS = 60_000;
 
 function loadSeen(): CronSeen | null {
   try {
@@ -122,25 +118,6 @@ export async function cronWatchTick(now = new Date()): Promise<Reminder[]> {
     }
   }
   return added;
-}
-
-export function useCronWatcher(): void {
-  useEffect(() => {
-    if (!isTauriRuntime()) return;
-    let running = false;
-    const tick = () => {
-      if (running) return; // 读存档慢的时候别叠两轮
-      running = true;
-      cronWatchTick()
-        .catch((e) => console.warn("[cron-watch] 这一轮没跑成 (hermes 没起来?):", e))
-        .finally(() => {
-          running = false;
-        });
-    };
-    tick();
-    const t = window.setInterval(tick, TICK_MS);
-    return () => window.clearInterval(t);
-  }, []);
 }
 
 /** 测试用 */

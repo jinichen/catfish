@@ -3,9 +3,6 @@
  * 一天最多跑一次: 10 点以后、Companion 开着的时候 (早上大家忙着开口, 等今天的请求也进来再看)。
  * 最近 8 周的请求不到 8 条就不看 (看不出规律, 白花一次模型调用)。
  */
-import { useEffect } from "react";
-
-import { isTauriRuntime } from "../lib/runtime";
 import {
   fetchRoutineCandidates,
   routineReminder,
@@ -22,7 +19,6 @@ import { useRemindersStore } from "../store/reminders";
 const LAST_RUN_KEY = "catfish:routine_discovery_day";
 const START_HOUR = 10;
 const MIN_REQUESTS = 8;
-const TICK_MS = 15 * 60_000;
 
 function today(now: Date): string {
   return `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
@@ -65,20 +61,4 @@ export async function routineDiscoveryTick(now = new Date()): Promise<number> {
   }
   console.log(`[routines] 候选 ${cands.length} 组, 核过节奏的 ${offers.length} 条, 挂上 ${n} 条`);
   return n;
-}
-
-export function useRoutineDiscovery(): void {
-  useEffect(() => {
-    if (!isTauriRuntime()) return;
-    const tick = () => {
-      routineDiscoveryTick().catch((e) => console.warn("[routines] 这一轮没跑成:", e));
-    };
-    // 启动后等一分钟再看: 先让登录、hermes 连上
-    const first = window.setTimeout(tick, 60_000);
-    const t = window.setInterval(tick, TICK_MS);
-    return () => {
-      window.clearTimeout(first);
-      window.clearInterval(t);
-    };
-  }, []);
 }

@@ -1,4 +1,4 @@
-/** 小鲶秘书三个开关 (11/09), 默认都开。仪表盘「名字 + 风格」卡上能关 (AgentPrefsCard)。
+/** 小鲶秘书三个开关 (11/09), 默认都开。哪个能力用哪个开关、关掉时撤什么, 登记在 lib/secretary.ts; 仪表盘按登记列开关。
  *   · 发现周期性的事, 问要不要托管 (hooks/useRoutineDiscovery.ts)
  *   · 提前准备: 会议、出差拜访、快到期的待办、邮件里要办 / 要回的事 (hooks/useAdvancePrep.ts; key 沿用第一版的会前准备)
  *   · 群里 @我 交代的事挂到提醒条 (lib/roomAskFlow.ts)

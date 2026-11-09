@@ -308,3 +308,74 @@ describe("routineDiscoveryTick", () => {
     expect(fetchRoutineCandidates).not.toHaveBeenCalled();
   });
 });
+
+// ── 11/09 能力登记 (lib/secretary.ts): 关了就是真停; 统一入口; 群聊不认识秘书 ──────────────
+describe("小鲶秘书能力登记", () => {
+  const meeting = { calendar: "工作", summary: "ITSS 线上答辩", start: iso(11, 10, 10), end: iso(11, 10, 11), all_day: false };
+
+  it("关掉「提前准备」: 已经排上、还没到点的准备任务撤掉, 记录清掉; 再开会重新排", async () => {
+    const { SECRETARY, setAbilityEnabled } = await import("../lib/secretary");
+    const prep = SECRETARY.find((a) => a.id === "advance-prep")!;
+    t.calendarUpcomingFetch.mockResolvedValue(JSON.stringify([meeting]));
+    t.cronJobCreate.mockResolvedValue({ id: "prep1" });
+    expect(await advancePrepTick(NOW)).toEqual({ created: 1, cancelled: 0 });
+    vi.spyOn(Date, "now").mockReturnValue(NOW.getTime());
+    const note = await setAbilityEnabled(prep, false);
+    expect(t.cronJobDelete).toHaveBeenCalledWith("prep1");
+    expect(note).toBe("已经排上、还没做的 1 条准备任务撤了");
+    expect(localStorage.getItem(MEETING_PREP_KEY)).toBe("false");
+    expect(await advancePrepTick(NOW)).toEqual({ created: 0, cancelled: 0 });   // 关着: 不再排
+    await setAbilityEnabled(prep, true);
+    expect(await advancePrepTick(NOW)).toEqual({ created: 1, cancelled: 0 });   // 再开: 记录清过, 重新排
+  });
+
+  it("关掉「群里 @我」: 提醒条上挂着的那类提醒撤掉, 别的提醒不动", async () => {
+    const { SECRETARY, setAbilityEnabled } = await import("../lib/secretary");
+    const store = useRemindersStore.getState();
+    const base = { title: "x", text: "y", createdAt: NOW.getTime(), expiresAt: NOW.getTime() + 86_400_000 };
+    store.add({ ...base, id: "ask:1", kind: "ask" } as never, NOW.getTime());
+    store.add({ ...base, id: "dl:1", kind: "deadline" } as never, NOW.getTime());
+    const note = await setAbilityEnabled(SECRETARY.find((a) => a.id === "room-ask")!, false);
+    expect(useRemindersStore.getState().items.map((r) => r.id)).toEqual(["dl:1"]);
+    expect(note).toBe("提醒条上 1 条群里交代的事也撤了");
+    expect(localStorage.getItem(ROOM_ASK_KEY)).toBe("false");
+  });
+
+  it("「做完就报」不设开关; 其余三项都有, 都能撤", async () => {
+    const { SECRETARY } = await import("../lib/secretary");
+    expect(SECRETARY.filter((a) => a.prefKey === null).map((a) => a.id)).toEqual(["cron-done"]);
+    expect(SECRETARY.filter((a) => a.prefKey).every((a) => a.onDisable)).toBe(true);
+    expect(SECRETARY.find((a) => a.id === "routine-offer")!.prefKey).toBe(ROUTINE_OFFER_KEY);
+  });
+
+  it("统一入口: 按登记起计时器 (不叠轮), 群消息经广播送到订了的能力", async () => {
+    vi.useFakeTimers();
+    try {
+      const { startSecretary } = await import("./useSecretary");
+      const { emitRoomEvents } = await import("../lib/roomEventBus");
+      let release: () => void = () => {};
+      const tick = vi.fn(() => new Promise<void>((r) => { release = r; }));
+      const onRoomEvents = vi.fn(async () => 0);
+      const stop = startSecretary([
+        { id: "a", icon: "", label: "a", prefKey: null, schedule: { tick, everyMs: 1000, firstMs: 0 } },
+        { id: "b", icon: "", label: "b", prefKey: null, onRoomEvents },
+      ]);
+      expect(tick).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(3000);
+      expect(tick).toHaveBeenCalledTimes(1);   // 上一轮没完, 不叠
+      release();
+      await Promise.resolve(); await Promise.resolve();
+      vi.advanceTimersByTime(1000);
+      expect(tick).toHaveBeenCalledTimes(2);
+      emitRoomEvents([{ kind: "mention", room_id: "r", from: "x", title: "群" }]);
+      expect(onRoomEvents).toHaveBeenCalledTimes(1);
+      stop();
+      emitRoomEvents([{ kind: "mention", room_id: "r", from: "x", title: "群" }]);
+      vi.advanceTimersByTime(5000);
+      expect(onRoomEvents).toHaveBeenCalledTimes(1);
+      expect(tick).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

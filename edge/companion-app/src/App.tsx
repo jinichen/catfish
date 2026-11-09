@@ -25,9 +25,7 @@ import { useAgentStore } from "./store/agent";
 import { useChatStore } from "./store/chat";  // P3.5.139 Phase 4: 启动同步 picker_model → store
 import { useProactiveScheduler } from "./hooks/useProactiveScheduler";
 import { useProactiveTriggers } from "./hooks/useProactiveTriggers";
-import { useCronWatcher } from "./hooks/useCronWatcher";
-import { useRoutineDiscovery } from "./hooks/useRoutineDiscovery";
-import { useAdvancePrep } from "./hooks/useAdvancePrep";
+import { useSecretary } from "./hooks/useSecretary";
 import { getPickerModel } from "./lib/tauri";  // P3.5.139 Phase 4
 import { handleUrgentEmail, type UrgentEmailPayload } from "./lib/urgentEmail";
 import { isTauriRuntime } from "./lib/runtime";
@@ -99,10 +97,8 @@ export default function App() {
   // 5/6 BL-E13.5 真主动 Phase A: chat 沉默 / journal deadline / focus 切换 信号触发
   useProactiveTriggers();
 
-  // 11/09 小鲶秘书: 定时任务做完就报 / 发现周期性的事问要不要托管 / 提前准备 (会议、出差拜访、待办、邮件)
-  useCronWatcher();
-  useRoutineDiscovery();
-  useAdvancePrep();
+  // 11/09 小鲶秘书: 各能力登记在 lib/secretary.ts (做完就报 / 托管提议 / 提前准备 / 群里 @我 交代的事)
+  useSecretary();
 
   // 5/18 BL-COMPANION-ABOUT-HIJACK: macOS app menu "鲶鱼 Companion → 关于鲶鱼"
   // 走自定义 React 模态, 不走原生 NSPanel. Rust 端 emit "show-about", 这里接.

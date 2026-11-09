@@ -10,7 +10,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { PERSONALITY_LABELS, type Personality } from "../../lib/agent";
 import { useAgentStore } from "../../store/agent";
 import { emailConfigGet, type EmailConfigPublic } from "../../lib/tauri";
-import { MEETING_PREP_KEY, prefEnabled, ROOM_ASK_KEY, ROUTINE_OFFER_KEY, setPref } from "../../lib/secretaryPrefs";
+import { abilityEnabled, SECRETARY, setAbilityEnabled, type SecretaryAbility } from "../../lib/secretary";
 
 // BL-COMPANION-PREFS-TOGGLES (5/20): localStorage key 跟 useProactiveScheduler 对齐
 const MORNING_PUSH_KEY = "catfish:morning_push_enabled";
@@ -51,13 +51,15 @@ export default function AgentPrefsCard() {
     void emailConfigGet().then(setEmailCfg).catch(() => {});
   }, []);
 
-  // 11/09 小鲶秘书: 托管周期性事务的提议 / 会前自动准备
-  const [routineOffer, setRoutineOffer] = useState(() => prefEnabled(ROUTINE_OFFER_KEY));
-  const [meetingPrep, setMeetingPrep] = useState(() => prefEnabled(MEETING_PREP_KEY));
-  const [roomAsk, setRoomAsk] = useState(() => prefEnabled(ROOM_ASK_KEY));
-  const togglePref = (key: string, set: (v: boolean) => void, next: boolean) => {
-    setPref(key, next);
-    set(next);
+  // 11/09 小鲶秘书: 开关按 lib/secretary.ts 的登记列; 关掉时顺带撤掉它已经排上 / 挂上的, 撤了什么说一句
+  const switchable = SECRETARY.filter((a) => a.prefKey !== null);
+  const [secOn, setSecOn] = useState<Record<string, boolean>>(() => Object.fromEntries(switchable.map((a) => [a.id, abilityEnabled(a)])));
+  const [secNote, setSecNote] = useState<string | null>(null);
+  const toggleAbility = async (a: SecretaryAbility, next: boolean) => {
+    setSecOn((m) => ({ ...m, [a.id]: next }));
+    setSecNote(null);
+    const note = await setAbilityEnabled(a, next);
+    if (note) setSecNote(`已关「${a.label}」: ${note}`);
   };
 
   const toggleMorningPush = (next: boolean) => {
@@ -186,31 +188,18 @@ export default function AgentPrefsCard() {
               />
             </div>
 
-            {/* 11/09 小鲶秘书 */}
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-              <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", flex: 1 }}>
-                🔁 发现周期性的事，问要不要托管
-                <span style={{ marginLeft: 6, fontSize: 10, opacity: 0.7 }}>(点「好」才建定时任务)</span>
-              </span>
-              <ToggleButton active={routineOffer} onClick={() => togglePref(ROUTINE_OFFER_KEY, setRoutineOffer, true)} label="开" />
-              <ToggleButton active={!routineOffer} onClick={() => togglePref(ROUTINE_OFFER_KEY, setRoutineOffer, false)} label="关" />
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-              <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", flex: 1 }}>
-                📋 提前准备
-                <span style={{ marginLeft: 6, fontSize: 10, opacity: 0.7 }}>(会议、出差拜访、快到期的待办、邮件里要办 / 要回的; 前一天 16:00, 只起草不发送)</span>
-              </span>
-              <ToggleButton active={meetingPrep} onClick={() => togglePref(MEETING_PREP_KEY, setMeetingPrep, true)} label="开" />
-              <ToggleButton active={!meetingPrep} onClick={() => togglePref(MEETING_PREP_KEY, setMeetingPrep, false)} label="关" />
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-              <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", flex: 1 }}>
-                🙋 群里 @我 交代的事挂到提醒条
-                <span style={{ marginLeft: 6, fontSize: 10, opacity: 0.7 }}>(可一键让小鲶先做 / 记成待办)</span>
-              </span>
-              <ToggleButton active={roomAsk} onClick={() => togglePref(ROOM_ASK_KEY, setRoomAsk, true)} label="开" />
-              <ToggleButton active={!roomAsk} onClick={() => togglePref(ROOM_ASK_KEY, setRoomAsk, false)} label="关" />
-            </div>
+            {/* 11/09 小鲶秘书: 按登记列 (lib/secretary.ts) */}
+            {switchable.map((a) => (
+              <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", flex: 1 }}>
+                  {a.icon} {a.label}
+                  {a.hint && <span style={{ marginLeft: 6, fontSize: 10, opacity: 0.7 }}>({a.hint})</span>}
+                </span>
+                <ToggleButton active={secOn[a.id]} onClick={() => void toggleAbility(a, true)} label="开" />
+                <ToggleButton active={!secOn[a.id]} onClick={() => void toggleAbility(a, false)} label="关" />
+              </div>
+            ))}
+            {secNote && <div style={{ fontSize: 11, color: "var(--catfish-cyan)", marginBottom: 8 }}>{secNote}</div>}
 
             {/* 邮件 LLM 评级 — yaml 配置展示 (只读) + 打开 yaml 按钮 */}
             <div
