@@ -3,128 +3,90 @@
  * 整合 Skills Hub + MCP 连接器市场为单一入口 — 它们本质同类 (LLM plugin
  * marketplace), 员工脑子里没"skill vs mcp"区分, 都是"找能给 LLM 用的工具".
  *
- * 内部 2 个 sub-tab:
- *   /market/skills/* — 技能脚本市场 (原 /skills, 复用 SkillsHubPage)
- *   /market/mcp/*    — 连接器市场 (原 /mcp, 复用 McpMarketPage)
- *   /market/components — 组件 · 模型与运行包 (10/3, 中央 /components/ 发布的大件, 只读)
- *   /market/experts    — 专家包 (10/18): 已上架 / 主管的待审核 / 我提交的
- *   /market/wiki/*     — 部门知识库分享 (11/4): 员工在 Companion 分享的笔记, 看 / 撤回
+ *   /market/skills/* — 技能 (SkillsHubPage)
+ *   /market/mcp/*    — 连接器 (McpMarketPage)
+ *   /market/experts  — 专家包 (10/18): 已上架 / 主管的待审核 / 我提交的
+ *   /market/wiki/*   — 部门知识库分享 (11/4): 员工在 Companion 分享的笔记, 看 / 撤回
+ *   /market/components — 组件 · 模型与运行包 (10/3, 中央 /components/ 发布的大件)
  *
- * 未来扩展 (不在本 sprint): prompts / personas / 模板 也归 /market 下.
+ * 11/09 鸿波「市场的 UI 是不是应该和控制台的风格一致」: 原来是一张大卡片里一排带 emoji、
+ * 带副标题的横向页签, 下面每页各自一摞卡片。现在跟控制台一个外壳 (components/SideNav):
+ * 左侧分组导航 + 右侧内容列, 页面用控制台那套 Toolbar / Tabs / Section / DataTable。
+ * 主管 / 管理员的待审核数挂在导航项上 (控制台没有这个, 但审核就散在这几类里, 不挂的话
+ * 得一页页点进去才知道哪类有人等着)。
  */
-import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Navigate, Route, Routes } from "react-router-dom";
 
-import { Card } from "../components/Card";
-import { SkillsHubPage } from "./SkillsHubPage";
-import { McpMarketPage } from "./McpMarketPage";
+import { roleAllows } from "../components/RoleGate";
+import { SideNavLayout } from "../components/SideNav";
+import { listReviewExperts } from "../lib/experts";
+import { listReviewSkills } from "../lib/hub";
+import { listReviewSubmissions } from "../lib/mcp";
+import { listReviewWikiDocs } from "../lib/wiki";
+import { useAuthStore } from "../store/auth";
 import { ComponentsMarketPage } from "./ComponentsMarketPage";
 import { ExpertsMarketPage } from "./ExpertsMarketPage";
+import { McpMarketPage } from "./McpMarketPage";
+import { SkillsHubPage } from "./SkillsHubPage";
+import { RefreshCounts } from "./marketShared";
 import { WikiMarketPage } from "./WikiMarketPage";
 
-const TABS = [
-  { to: "/market/skills", label: "🛠️ Skills", desc: "技能脚本" },
-  { to: "/market/mcp", label: "🔌 MCP", desc: "连接器" },
-  { to: "/market/experts", label: "🧑‍💼 专家", desc: "专家包 · 审核" },
-  { to: "/market/wiki", label: "📚 知识库", desc: "部门知识分享" },
-  { to: "/market/components", label: "🧩 组件", desc: "模型与运行包" },
-];
+type Kind = "skills" | "mcp" | "experts" | "wiki";
 
-function MarketLayout({ children }: { children: React.ReactNode }) {
-  const loc = useLocation();
+function usePendingCounts(reviewer: boolean): [Partial<Record<Kind, number>>, () => void] {
+  const [counts, setCounts] = useState<Partial<Record<Kind, number>>>({});
+  const load = useCallback(() => {
+    if (!reviewer) return;
+    // 每类各拉各的: 一个接口挂了 (老中央没有某类审核) 只是那一类不显示数字
+    const one = (k: Kind, p: Promise<number>) =>
+      p.then((n) => setCounts((c) => ({ ...c, [k]: n }))).catch(() => setCounts((c) => ({ ...c, [k]: undefined })));
+    void one("skills", listReviewSkills().then((r) => (r.skills || []).length));
+    void one("mcp", listReviewSubmissions().then((r) => (r.submissions || []).length));
+    void one("experts", listReviewExperts().then((r) => (r.experts || []).length));
+    void one("wiki", listReviewWikiDocs().then((r) => (r.documents || []).length));
+  }, [reviewer]);
+  useEffect(load, [load]);
+  return [counts, load];
+}
+
+function MarketLayout({ children }: { children: ReactNode }) {
+  const me = useAuthStore((s) => s.me);
+  const reviewer = !!me && roleAllows(me.role, "manager");
+  const [counts, refresh] = usePendingCounts(reviewer);
+  const groups = [
+    {
+      title: "资源",
+      items: [
+        { href: "/market/skills", label: "技能", count: counts.skills },
+        { href: "/market/mcp", label: "连接器", count: counts.mcp },
+        { href: "/market/experts", label: "专家包", count: counts.experts },
+        { href: "/market/wiki", label: "知识库", count: counts.wiki },
+      ],
+    },
+    { title: "下载", items: [{ href: "/market/components", label: "组件" }] },
+  ];
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
-      <Card title="📦 市场 · LLM 工具与资源">
-        <div
-          style={{
-            display: "flex",
-            gap: "var(--space-3)",
-            marginTop: "var(--space-2)",
-            borderBottom: "1px solid var(--border)",
-            paddingBottom: 0,
-          }}
-        >
-          {TABS.map((t) => {
-            const active =
-              loc.pathname === t.to || loc.pathname.startsWith(t.to + "/");
-            return (
-              <Link
-                key={t.to}
-                to={t.to}
-                style={{
-                  padding: "8px 16px",
-                  fontSize: 14,
-                  fontWeight: active ? 600 : 400,
-                  color: active ? "var(--accent)" : "var(--text)",
-                  borderBottom: active
-                    ? "2px solid var(--accent)"
-                    : "2px solid transparent",
-                  marginBottom: "-1px",
-                  textDecoration: "none",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  gap: 2,
-                }}
-              >
-                <span>{t.label}</span>
-                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                  {t.desc}
-                </span>
-              </Link>
-            );
-          })}
-        </div>
-      </Card>
-      {children}
-    </div>
+    <RefreshCounts.Provider value={refresh}>
+      <SideNavLayout ariaLabel="市场导航" groups={groups}>
+        {children}
+      </SideNavLayout>
+    </RefreshCounts.Provider>
   );
 }
 
 export function MarketPage() {
   return (
-    <Routes>
-      {/* 默认进 Skills tab */}
-      <Route index element={<Navigate to="/market/skills" replace />} />
-      <Route
-        path="skills/*"
-        element={
-          <MarketLayout>
-            <SkillsHubPage />
-          </MarketLayout>
-        }
-      />
-      <Route
-        path="mcp/*"
-        element={
-          <MarketLayout>
-            <McpMarketPage />
-          </MarketLayout>
-        }
-      />
-      <Route
-        path="experts"
-        element={
-          <MarketLayout>
-            <ExpertsMarketPage />
-          </MarketLayout>
-        }
-      />
-      <Route
-        path="wiki/*"
-        element={
-          <MarketLayout>
-            <WikiMarketPage />
-          </MarketLayout>
-        }
-      />
-      <Route
-        path="components"
-        element={
-          <MarketLayout>
-            <ComponentsMarketPage />
-          </MarketLayout>
-        }
-      />
-    </Routes>
+    <MarketLayout>
+      <Routes>
+        {/* 默认进技能 */}
+        <Route index element={<Navigate to="/market/skills" replace />} />
+        <Route path="skills/*" element={<SkillsHubPage />} />
+        <Route path="mcp/*" element={<McpMarketPage />} />
+        <Route path="experts" element={<ExpertsMarketPage />} />
+        <Route path="wiki/*" element={<WikiMarketPage />} />
+        <Route path="components" element={<ComponentsMarketPage />} />
+      </Routes>
+    </MarketLayout>
   );
 }

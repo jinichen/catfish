@@ -59,13 +59,14 @@ describe("技能市场 · 审核", () => {
   it("列表上每条带状态; 老的 (legacy) 算已上架; 员工没有「待我审核」", async () => {
     me("alice@example.com");
     at("/market/skills");
-    const card = (await screen.findByText("old-skill")).closest("a")!;
-    expect(within(card).getByText("已上架")).toBeTruthy();
-    const bad = screen.getByText("bad-skill").closest("a")!;
+    // 11/09 跟控制台统一: 一行一条 (表格), 不再是卡片
+    const row = (await screen.findByText("old-skill")).closest("tr")!;
+    expect(within(row).getByText("已上架")).toBeTruthy();
+    const bad = screen.getByText("bad-skill").closest("tr")!;
     expect(within(bad).getByText("被驳回")).toBeTruthy();
     expect(screen.queryByText(/待我审核/)).toBeNull();
-    // 我提交的: 状态 + 撤回按钮
-    expect(await screen.findByText("📤 我提交的")).toBeTruthy();
+    // 我提交的: 一个分段, 里面带状态 + 撤回按钮
+    fireEvent.click(await screen.findByRole("tab", { name: "我提交的 1" }));
     fireEvent.click(screen.getByRole("button", { name: "撤回" }));
     await waitFor(() => expect(withdrawSkill).toHaveBeenCalledWith("dept/研发部", "release-notes", "0.2.0"));
   });
@@ -73,7 +74,7 @@ describe("技能市场 · 审核", () => {
   it("主管看到「待我审核」, 弹窗里有 SKILL.md 全文、文件、试用结果; 驳回必须写原因; 通过调 reviewSkill", async () => {
     me("boss@example.com", "manager");
     at("/market/skills");
-    expect(await screen.findByText(/待我审核 \(1\)/)).toBeTruthy();
+    fireEvent.click(await screen.findByRole("tab", { name: "待我审核 1" }));
     fireEvent.click(screen.getByRole("button", { name: "审核" }));
     expect(await screen.findByText(/会打开 gitlab 看 MR/)).toBeTruthy();
     expect(screen.getByText("script.py")).toBeTruthy();

@@ -80,8 +80,10 @@ describe("连接器 · 提交与审核", () => {
   it("列表页: 我提交的带驳回原因; 主管的「待我审核」弹窗显示清单原文、测试账号, 通过调 reviewSubmission", async () => {
     me("manager");
     at("/market/mcp");
+    // 11/09 跟控制台统一: 我提交的 / 待我审核 是列表页的两个分段
+    fireEvent.click(await screen.findByRole("tab", { name: /^我提交的/ }));
     expect(await screen.findByText(/驳回原因 \(boss@example.com\)：密钥写死了/)).toBeTruthy();
-    expect(screen.getByText(/待我审核 \(1\)/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "待我审核 1" }));
     fireEvent.click(screen.getByRole("button", { name: "审核" }));
     expect(await screen.findByText(/name: CRM 只读/)).toBeTruthy();
     expect(screen.getByText("找 IT 小王要测试账号")).toBeTruthy();

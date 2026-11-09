@@ -73,5 +73,7 @@ export const NAMESPACE_LABEL: Record<string, string> = {
 };
 
 export function namespaceLabel(ns: string): string {
+  // 11/08 起部门范围的技能存在 dept/<部门名> 下; 列表上直接显示部门名, 原样在 title 里
+  if (ns.startsWith("dept/") && ns.length > 5) return ns.slice(5);
   return NAMESPACE_LABEL[ns] ?? ns;
 }

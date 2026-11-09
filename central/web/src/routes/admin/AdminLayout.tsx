@@ -35,34 +35,17 @@
  */
 
 import type { ReactNode } from "react";
-import { Link, useLocation } from "react-router-dom";
 
 import { roleAllows } from "../../components/RoleGate";
+import { SideNavLayout } from "../../components/SideNav";
 import { useAuthStore } from "../../store/auth";
 import { GROUP_ORDER, ROUTES, toHref } from "./navConfig";
 
-/** 当前路径命中哪一项.
- *
- * 最长前缀匹配, 不是逐个 startsWith —— /admin/quota 和 /admin/quota/events
- * 是前缀关系, 逐个试的话在 events 页上两项会同时高亮。
- * "/admin" 本身只在完全相等时命中, 否则它会匹配所有子路径。
- * (顶栏原本就栽在这上面: /admin 是 /admin/system 的前缀, 两个 tab 同时亮。)
- */
-function activeHref(pathname: string, hrefs: string[]): string | null {
-  let best: string | null = null;
-  for (const h of hrefs) {
-    const hit =
-      h === "/admin"
-        ? pathname === "/admin" || pathname === "/admin/"
-        : pathname === h || pathname.startsWith(h + "/");
-    if (hit && (best === null || h.length > best.length)) best = h;
-  }
-  return best;
-}
-
+// 11/09: 导航壳本身 (分组侧栏 + 内容列 + 最长前缀高亮) 抽到 components/SideNav.tsx,
+// 市场 (/market) 也用它 —— 两边长得一样。这里只剩控制台自己的事: 按权限挑出能看的项。
+// "/admin" 本身只在完全相等时高亮, 否则它是所有子路径的前缀 (顶栏原本就栽在这上面)。
 export function AdminLayout({ children }: { children: ReactNode }) {
   const me = useAuthStore((s) => s.me);
-  const { pathname } = useLocation();
 
   // 权限过滤跟目标页的 RoleGate 同源 —— 都读 navConfig 里那条 require,
   // 所以"菜单里有、点进去 403"在结构上不可能发生。
@@ -70,93 +53,16 @@ export function AdminLayout({ children }: { children: ReactNode }) {
     me ? roleAllows(me.role, [...r.require]) : false,
   );
 
-  const visible = GROUP_ORDER.map((title) => ({
+  const groups = GROUP_ORDER.map((title) => ({
     title,
-    items: allowed.filter((r) => r.group === title),
-  })).filter((g) => g.items.length > 0);
-
-  const active = activeHref(
-    pathname,
-    allowed.map((r) => toHref(r.path)),
-  );
+    items: allowed
+      .filter((r) => r.group === title)
+      .map((r) => ({ href: toHref(r.path), label: r.label })),
+  }));
 
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "168px minmax(0, 1fr)",
-        gap: "var(--space-4)",
-        // start → stretch: 右侧内容列要拿到整屏高度, 才轮得到它内部
-        // 决定"哪一块滚"。alignItems:start 的话它高度是 auto, 高度确定的
-        // 链条在这里就断了。
-        alignItems: "stretch",
-        flex: 1,
-        minHeight: 0,
-      }}
-    >
-      <nav
-        aria-label="后台导航"
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: 2,
-          fontSize: 13,
-          // 侧栏自己也可能比屏幕高 (13 项 + 5 个分组标题, 小屏上放不下),
-          // 那时它单独滚, 不去动右边。
-          overflowY: "auto",
-          minHeight: 0,
-        }}
-      >
-        {visible.map((g) => (
-          <div key={g.title} style={{ marginBottom: 10 }}>
-            <div
-              style={{
-                fontSize: 11,
-                color: "var(--text-muted)",
-                padding: "4px 8px",
-                letterSpacing: 0.3,
-              }}
-            >
-              {g.title}
-            </div>
-            {g.items.map((it) => {
-              const href = toHref(it.path);
-              const isActive = active === href;
-              return (
-                <Link
-                  key={href}
-                  to={href}
-                  style={{
-                    display: "block",
-                    padding: "5px 8px",
-                    borderRadius: 6,
-                    textDecoration: "none",
-                    color: isActive ? "var(--accent)" : "var(--text)",
-                    background: isActive ? "var(--bg-elev)" : "transparent",
-                    fontWeight: isActive ? 600 : 400,
-                  }}
-                >
-                  {it.label}
-                </Link>
-              );
-            })}
-          </div>
-        ))}
-      </nav>
-
-      {/* 内容列。flex column + minHeight:0 = 给子页面一个高度确定的容器,
-          页面把该滚的那一块标 `fill` 就行 (见 DataTable 的 Section)。
-          minWidth: 0 是老的那条 —— 不写的话宽表会把整个 grid 撑破。 */}
-      <div
-        style={{
-          minWidth: 0,
-          minHeight: 0,
-          display: "flex",
-          flexDirection: "column",
-        }}
-      >
-        {children}
-      </div>
-    </div>
+    <SideNavLayout ariaLabel="后台导航" groups={groups} exact={["/admin"]}>
+      {children}
+    </SideNavLayout>
   );
 }

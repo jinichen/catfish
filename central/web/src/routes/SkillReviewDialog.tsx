@@ -1,12 +1,15 @@
-/** 技能审核弹窗 + 「我提交的」/「待我审核」两块 (11/08 分享治理 §3.1)。
+/** 技能审核弹窗 + 「我提交的」/「待我审核」的数据和表格列 (11/08 分享治理 §3.1)。
+ *
+ * 11/09 跟控制台统一样式: 原来是列表页顶上两张卡片 (📝 待我审核 / 📤 我提交的), 现在是列表页
+ * 「已上架 / 待我审核 / 我提交的」三段切换里的两段, 用控制台的表格 —— 这里只给数据 (useSkillReviews)
+ * 和列定义, 版式在 SkillsHubPage。
  *
  * 照专家包那页 (ExpertsMarketPage) 的样子: 审批人看 SKILL.md 全文、文件清单、提交说明、试用结果,
  * 通过 = 中央签名上架, 驳回要写原因回给提交人。试用在 Companion 里做, 这里只看回传。
  */
 import { useCallback, useEffect, useState } from "react";
 
-import { Card } from "../components/Card";
-import { Badge, BTN, BTN_DANGER, BTN_PRIMARY } from "../components/DataTable";
+import { Badge, BTN, BTN_DANGER, BTN_PRIMARY, type Column } from "../components/DataTable";
 import { Modal } from "../components/Dialog";
 import {
   getSkill,
@@ -19,6 +22,7 @@ import {
   type SkillDetail,
   type SkillReview,
 } from "../lib/hub";
+import { NameCell, when as shortWhen } from "./marketShared";
 import { TrialHint, TrialResults, when } from "./TrialResults";
 
 const muted = { fontSize: 12, color: "var(--text-muted)" } as const;
@@ -152,36 +156,10 @@ export function SkillReviewDialog({ rec, onClose, onDone }: { rec: SkillReview; 
   );
 }
 
-function ReviewRow({ r, children }: { r: SkillReview; children?: React.ReactNode }) {
-  return (
-    <div style={{ borderTop: "1px solid var(--border)", padding: "8px 0", display: "flex", flexDirection: "column", gap: 4 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}>
-        <span style={{ fontSize: 13, fontWeight: 600, fontFamily: "var(--font-mono)" }}>
-          {r.namespace}/{r.name} <span style={muted}>{r.version}</span>
-        </span>
-        <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <ReviewBadge review={r} />
-          <span style={muted}>{scopeText(r)}</span>
-        </span>
-      </div>
-      <div style={muted}>
-        {r.submitted_by} {when(r.submitted_at)} 提交
-        {r.reviewed_by && ` · ${r.reviewed_by} ${when(r.reviewed_at)} ${r.status === "approved" ? "通过" : r.status === "rejected" ? "驳回" : "处理"}`}
-      </div>
-      {r.submit_note && <div style={{ fontSize: 12 }}>说明：{r.submit_note}</div>}
-      {r.status === "rejected" && r.review_note && (
-        <div style={{ fontSize: 12, color: "var(--status-err)" }}>驳回原因 ({r.reviewed_by})：{r.review_note}</div>
-      )}
-      {children && <div style={{ display: "flex", gap: 8 }}>{children}</div>}
-    </div>
-  );
-}
-
-/** 「我提交的」+ (主管 / 管理员) 「待我审核」。放在技能列表页顶部。 */
-export function SkillReviewSections({ reviewer }: { reviewer: boolean }) {
+/** 「我提交的」+ (主管 / 管理员) 「待我审核」两份列表。拉不到就带着错误, 不影响已上架那段。 */
+export function useSkillReviews(reviewer: boolean) {
   const [mine, setMine] = useState<SkillReview[] | null>(null);
   const [pending, setPending] = useState<SkillReview[] | null>(null);
-  const [reviewing, setReviewing] = useState<SkillReview | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -207,43 +185,54 @@ export function SkillReviewSections({ reviewer }: { reviewer: boolean }) {
       setError(errText(e));
     }
   };
+  return { mine, pending, error, reload: load, withdraw };
+}
 
-  // 两块都空、也不是审批人时不占地方 —— 大多数员工从没提交过
-  if (!error && mine?.length === 0 && !reviewer) return null;
+export const reviewKey = key;
 
-  return (
-    <>
-      {error && <div style={{ color: "var(--status-err)", fontSize: 13 }}>{error}</div>}
-      {reviewer && (
-        <Card title={`📝 待我审核${pending?.length ? ` (${pending.length})` : ""}`}>
-          <div style={muted}>
-            你管的部门 (管理员: 全公司范围) 有人提交的技能。看清楚 SKILL.md 写了什么、脚本会做什么, 通过才上架; 没通过的同事看不到。
-          </div>
-          {pending?.length === 0 && <div style={{ ...muted, marginTop: 8 }}>没有待审核的。</div>}
-          {pending?.map((r) => (
-            <ReviewRow key={key(r)} r={r}>
-              <button type="button" style={BTN_PRIMARY} onClick={() => setReviewing(r)}>审核</button>
-            </ReviewRow>
-          ))}
-        </Card>
-      )}
-      {mine && mine.length > 0 && (
-        <Card title="📤 我提交的">
-          <div style={muted}>待审核的要等部门主管 (全公司范围: 管理员) 通过后同事才能看到; 被驳回的看原因改好再发一版。</div>
-          {mine.map((r) => (
-            <ReviewRow key={key(r)} r={r}>
-              {(r.status === "pending" || r.status === "approved") && (
-                <button type="button" style={BTN} onClick={() => void withdraw(r)}>
-                  {r.status === "pending" ? "撤回" : "下架"}
-                </button>
-              )}
-            </ReviewRow>
-          ))}
-        </Card>
-      )}
-      {reviewing && (
-        <SkillReviewDialog rec={reviewing} onClose={() => setReviewing(null)} onDone={() => { setReviewing(null); void load(); }} />
-      )}
-    </>
-  );
+const nameCol: Column<SkillReview> = {
+  header: "技能",
+  cell: (r) => <NameCell mono name={`${r.namespace}/${r.name}`} sub={r.submit_note ? `说明：${r.submit_note}` : null} />,
+};
+
+/** 待我审核: 谁、给谁、什么时候提交, 「审核」开弹窗 */
+export function pendingColumns(onReview: (r: SkillReview) => void): Column<SkillReview>[] {
+  return [
+    nameCol,
+    { header: "版本", width: 70, nowrap: true, cell: (r) => r.version },
+    { header: "范围", width: "14%", truncate: true, cell: (r) => <span title={scopeText(r)}>{scopeText(r)}</span> },
+    { header: "提交人", width: "20%", truncate: true, cell: (r) => <span title={r.submitted_by ?? ""}>{r.submitted_by}</span> },
+    { header: "提交时间", width: 110, nowrap: true, cell: (r) => shortWhen(r.submitted_at) },
+    {
+      header: "", width: 60, cell: (r) => (
+        <button type="button" style={BTN_PRIMARY} onClick={() => onReview(r)}>审核</button>
+      ),
+    },
+  ];
+}
+
+/** 我提交的: 状态 + 谁什么时候处理的 (驳回带原因), 待审核的能撤回、已上架的能下架 */
+export function mineColumns(onWithdraw: (r: SkillReview) => void): Column<SkillReview>[] {
+  return [
+    nameCol,
+    { header: "版本", width: 70, nowrap: true, cell: (r) => r.version },
+    { header: "范围", width: "14%", truncate: true, cell: (r) => <span title={scopeText(r)}>{scopeText(r)}</span> },
+    { header: "状态", width: 70, cell: (r) => <ReviewBadge review={r} /> },
+    {
+      header: "处理", width: "26%", cell: (r) =>
+        r.status === "rejected" && r.review_note ? (
+          <span style={{ color: "var(--status-err)" }} title={r.review_note}>驳回原因 ({r.reviewed_by})：{r.review_note}</span>
+        ) : r.reviewed_by ? (
+          <span style={muted}>{r.reviewed_by} {shortWhen(r.reviewed_at)}</span>
+        ) : (
+          <span style={muted}>{shortWhen(r.submitted_at)} 提交</span>
+        ),
+    },
+    {
+      header: "", width: 60, cell: (r) =>
+        r.status === "pending" || r.status === "approved" ? (
+          <button type="button" style={BTN} onClick={() => onWithdraw(r)}>{r.status === "pending" ? "撤回" : "下架"}</button>
+        ) : null,
+    },
+  ];
 }

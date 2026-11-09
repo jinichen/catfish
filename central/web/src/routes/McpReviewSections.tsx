@@ -1,16 +1,19 @@
 /** 连接器「我提交的」+ (主管 / 管理员) 「待我审核」+ 审核弹窗 (11/08 分享治理 §3.4)。
  *
+ * 11/09 跟控制台统一样式: 原来是列表页顶上两张卡片, 现在是列表页三段切换里的两段 (控制台的表格);
+ * 这里只给数据 (useMcpReviews) 和列定义, 版式在 McpMarketPage。
+ *
  * 跟专家包 / 技能那两页一个样子: 审批人看 manifest 原文、工具清单、提交说明、测试账号怎么拿、试用结果;
  * 通过 = 写进 registry (allowed_dept 按范围填), 驳回要写原因回给提交人。
  * 试用在 Companion 里做 (订阅时带 trial), 只有提交人写了「测试账号怎么拿」才能试。
  */
 import { useCallback, useEffect, useState } from "react";
 
-import { Card } from "../components/Card";
-import { Badge, BTN, BTN_DANGER, BTN_PRIMARY } from "../components/DataTable";
+import { Badge, BTN, BTN_DANGER, BTN_PRIMARY, type Column } from "../components/DataTable";
 import { Modal } from "../components/Dialog";
 import { REVIEW_STATUS_LABEL, SCOPE_LABEL } from "../lib/hub";
 import { getSubmission, listMySubmissions, listReviewSubmissions, reviewSubmission, type McpSubmission } from "../lib/mcp";
+import { NameCell, when as shortWhen } from "./marketShared";
 import { TrialHint, TrialResults, when } from "./TrialResults";
 
 const muted = { fontSize: 12, color: "var(--text-muted)" } as const;
@@ -134,36 +137,9 @@ export function McpReviewDialog({ s, onClose, onDone }: { s: McpSubmission; onCl
   );
 }
 
-function Row({ s, children }: { s: McpSubmission; children?: React.ReactNode }) {
-  return (
-    <div style={{ borderTop: "1px solid var(--border)", padding: "8px 0", display: "flex", flexDirection: "column", gap: 4 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}>
-        <span style={{ fontSize: 13, fontWeight: 600 }}>
-          {s.name} <span style={{ ...muted, fontFamily: "var(--font-mono)" }}>{s.id} · {s.version}</span>
-        </span>
-        <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <StatusBadge s={s} />
-          <span style={muted}>{scopeText(s)}</span>
-        </span>
-      </div>
-      {s.description && <div style={{ fontSize: 12 }}>{s.description}</div>}
-      <div style={muted}>
-        {s.submitted_by} {when(s.submitted_at)} 提交
-        {s.reviewed_by && ` · ${s.reviewed_by} ${when(s.reviewed_at)} ${s.status === "approved" ? "通过" : s.status === "rejected" ? "驳回" : "处理"}`}
-        {!s.trial_credentials && s.status === "pending" && " · 没写测试账号, 审批人不能试用"}
-      </div>
-      {s.status === "rejected" && s.review_note && (
-        <div style={{ fontSize: 12, color: "var(--status-err)" }}>驳回原因 ({s.reviewed_by})：{s.review_note}</div>
-      )}
-      {children && <div style={{ display: "flex", gap: 8 }}>{children}</div>}
-    </div>
-  );
-}
-
-export function McpReviewSections({ reviewer }: { reviewer: boolean }) {
+export function useMcpReviews(reviewer: boolean) {
   const [mine, setMine] = useState<McpSubmission[] | null>(null);
   const [pending, setPending] = useState<McpSubmission[] | null>(null);
-  const [reviewing, setReviewing] = useState<McpSubmission | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -180,34 +156,46 @@ export function McpReviewSections({ reviewer }: { reviewer: boolean }) {
     }
   }, [reviewer]);
   useEffect(() => { void load(); }, [load]);
+  return { mine, pending, error, reload: load };
+}
 
-  if (!error && mine?.length === 0 && !reviewer) return null;
+const nameCol: Column<McpSubmission> = {
+  header: "连接器",
+  cell: (s) => <NameCell name={<>{s.name} <span style={{ ...muted, fontFamily: "var(--font-mono)" }}>{s.id}</span></>} sub={s.description} />,
+};
 
-  return (
-    <>
-      {error && <div style={{ color: "var(--status-err)", fontSize: 13 }}>{error}</div>}
-      {reviewer && (
-        <Card title={`📝 待我审核${pending?.length ? ` (${pending.length})` : ""}`}>
-          <div style={muted}>
-            你管的部门 (管理员: 全公司范围) 有人提交的连接器。看清楚它连的是什么系统、暴露哪些工具, 通过后同事才能订阅。
-          </div>
-          {pending?.length === 0 && <div style={{ ...muted, marginTop: 8 }}>没有待审核的。</div>}
-          {pending?.map((s) => (
-            <Row key={s.id} s={s}>
-              <button type="button" style={BTN_PRIMARY} onClick={() => setReviewing(s)}>审核</button>
-            </Row>
-          ))}
-        </Card>
-      )}
-      {mine && mine.length > 0 && (
-        <Card title="📤 我提交的">
-          <div style={muted}>待审核的要等部门主管 (全公司范围: 管理员) 通过后同事才能订阅; 被驳回的看原因改好再提交。</div>
-          {mine.map((s) => <Row key={s.id} s={s} />)}
-        </Card>
-      )}
-      {reviewing && (
-        <McpReviewDialog s={reviewing} onClose={() => setReviewing(null)} onDone={() => { setReviewing(null); void load(); }} />
-      )}
-    </>
-  );
+export function pendingColumns(onReview: (s: McpSubmission) => void): Column<McpSubmission>[] {
+  return [
+    nameCol,
+    { header: "版本", width: 70, nowrap: true, cell: (s) => s.version },
+    { header: "范围", width: "14%", truncate: true, cell: (s) => <span title={scopeText(s)}>{scopeText(s)}</span> },
+    { header: "提交人", width: "20%", truncate: true, cell: (s) => <span title={s.submitted_by}>{s.submitted_by}</span> },
+    {
+      header: "测试账号", width: 80, cell: (s) =>
+        s.trial_credentials ? <Badge tone="ok">可试用</Badge> : <span style={muted} title="提交人没写测试账号, 审批人不能试用">没写</span>,
+    },
+    { header: "提交时间", width: 110, nowrap: true, cell: (s) => shortWhen(s.submitted_at) },
+    { header: "", width: 60, cell: (s) => <button type="button" style={BTN_PRIMARY} onClick={() => onReview(s)}>审核</button> },
+  ];
+}
+
+export function mineColumns(): Column<McpSubmission>[] {
+  return [
+    nameCol,
+    { header: "版本", width: 70, nowrap: true, cell: (s) => s.version },
+    { header: "范围", width: "14%", truncate: true, cell: (s) => <span title={scopeText(s)}>{scopeText(s)}</span> },
+    { header: "状态", width: 70, cell: (s) => <StatusBadge s={s} /> },
+    {
+      header: "处理", width: "30%", cell: (s) =>
+        s.status === "rejected" && s.review_note ? (
+          <span style={{ color: "var(--status-err)" }} title={s.review_note}>驳回原因 ({s.reviewed_by})：{s.review_note}</span>
+        ) : s.reviewed_by ? (
+          <span style={muted}>{s.reviewed_by} {shortWhen(s.reviewed_at)}</span>
+        ) : (
+          <span style={muted}>
+            {shortWhen(s.submitted_at)} 提交{!s.trial_credentials && s.status === "pending" ? " · 没写测试账号, 审批人不能试用" : ""}
+          </span>
+        ),
+    },
+  ];
 }

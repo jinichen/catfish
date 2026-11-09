@@ -15,6 +15,8 @@ import { useEffect, useState } from "react";
 import { Link, Route, Routes, useParams } from "react-router-dom";
 
 import { Card } from "../components/Card";
+import { Badge, BTN_PRIMARY, DataTable, Section, Toolbar, type Column } from "../components/DataTable";
+import { PageShell } from "../components/PageShell";
 import { roleAllows } from "../components/RoleGate";
 import {
   listConnectors,
@@ -22,9 +24,11 @@ import {
   subscribe,
   unsubscribe,
   type McpConnector,
+  type McpSubmission,
 } from "../lib/mcp";
 import { useAuthStore } from "../store/auth";
-import { McpReviewSections } from "./McpReviewSections";
+import { FilterBar, NameCell, SubPage, tabLabel, useRefreshMarketCounts } from "./marketShared";
+import { McpReviewDialog, mineColumns, pendingColumns, useMcpReviews } from "./McpReviewSections";
 import { McpSubmitForm } from "./McpSubmitForm";
 
 const AUTH_LABEL: Record<string, string> = {
@@ -41,18 +45,25 @@ export function McpMarketPage() {
   return (
     <Routes>
       <Route index element={<McpList />} />
-      <Route path="submit" element={<McpSubmitForm />} />
-      <Route path=":id" element={<McpDetail />} />
+      <Route path="submit" element={<SubPage back="/market/mcp" section="连接器" title="提交"><McpSubmitForm /></SubPage>} />
+      <Route path=":id" element={<SubPage back="/market/mcp" section="连接器" title="详情"><McpDetail /></SubPage>} />
     </Routes>
   );
 }
 
+type Tab = "market" | "review" | "mine";
+
 function McpList() {
   const me = useAuthStore((s) => s.me);
   const reviewer = !!me && roleAllows(me.role, "manager");
+  const refreshCounts = useRefreshMarketCounts();
   const [connectors, setConnectors] = useState<McpConnector[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [q, setQ] = useState("");
+  const [tab, setTab] = useState<Tab>("market");
+  const [reviewing, setReviewing] = useState<McpSubmission | null>(null);
+  const rv = useMcpReviews(reviewer);
 
   useEffect(() => {
     listConnectors()
@@ -61,111 +72,71 @@ function McpList() {
       .finally(() => setLoading(false));
   }, []);
 
-  if (loading) return <div>加载中…</div>;
-  if (error) return <div style={{ color: "var(--status-err)" }}>{error}</div>;
-
+  const needle = q.trim().toLowerCase();
+  const hit = (...vals: Array<string | null | undefined>) => !needle || vals.some((v) => (v || "").toLowerCase().includes(needle));
   const allowed = connectors.filter((c) => c.status === "active");
+  const market = allowed.filter((c) => hit(c.name, c.id, c.description, ...c.tools.map((t) => t.name)));
+  const pending = (rv.pending ?? []).filter((s) => hit(s.name, s.id, s.description, s.submitted_by));
+  const mine = (rv.mine ?? []).filter((s) => hit(s.name, s.id, s.description));
+
+  const tabs = [
+    { key: "market" as const, label: tabLabel("可订阅", loading ? null : allowed.length) },
+    ...(reviewer ? [{ key: "review" as const, label: tabLabel("待我审核", rv.pending?.length) }] : []),
+    ...(rv.mine?.length ? [{ key: "mine" as const, label: tabLabel("我提交的", rv.mine.length) }] : []),
+  ];
+  const current = tabs.some((t) => t.key === tab) ? tab : "market";
+
+  const cols: Column<McpConnector>[] = [
+    { header: "连接器", cell: (c) => <NameCell name={<Link to={`/market/mcp/${c.id}`}>{c.name}</Link>} sub={c.description} /> },
+    { header: "工具", width: 60, align: "right", cell: (c) => c.tools.length },
+    { header: "授权", width: "14%", truncate: true, cell: (c) => AUTH_LABEL[c.auth_type] ?? c.auth_type },
+    { header: "版本", width: 70, nowrap: true, cell: (c) => `v${c.version}` },
+    {
+      header: "订阅", width: 80, cell: (c) =>
+        c.subscribed ? <Badge tone="ok">已订阅</Badge> : <Link to={`/market/mcp/${c.id}`} style={{ fontSize: 12 }}>去订阅</Link>,
+    },
+  ];
+
+  const hint =
+    current === "review"
+      ? "你管的部门 (管理员: 全公司范围) 有人提交的连接器。看清楚它连的是什么系统、暴露哪些工具, 通过后同事才能订阅。"
+      : current === "mine"
+        ? "待审核的要等部门主管 (全公司范围: 管理员) 通过后同事才能订阅; 被驳回的看原因改好再提交。"
+        : `每个连接器给小鲶接上一类工具, 点名字进详情订阅。${EFFECT_NOTE}`;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
-      <Card
-        title={`MCP 连接器市场 · ${allowed.length} 个可用`}
-        action={
-          <Link
-            to="/market/mcp/submit"
-            style={{
-              background: "var(--accent)",
-              color: "white",
-              padding: "6px 14px",
-              borderRadius: "var(--radius-sm)",
-              fontSize: 13,
-            }}
-          >
-            + 提交连接器
-          </Link>
-        }
-      >
-        <div style={{ color: "var(--text-muted)", fontSize: 13, lineHeight: 1.7 }}>
-          每个连接器给小鲶接上一类工具。点开卡片，在详情里订阅。{EFFECT_NOTE}
-          自己写了连接器想给同事用，点右上角「提交连接器」，部门主管 (全公司范围: 管理员) 审核通过后同事就能订阅。
-        </div>
-      </Card>
-
-      <McpReviewSections reviewer={reviewer} />
-
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-          gap: "var(--space-3)",
-        }}
-      >
-        {allowed.map((c) => (
-          <Link
-            key={c.id}
-            to={`/market/mcp/${c.id}`}
-            style={{
-              background: "var(--bg-elev)",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--radius-md)",
-              padding: "var(--space-4)",
-              textDecoration: "none",
-              color: "var(--text)",
-            }}
-            onMouseEnter={(e) =>
-              (e.currentTarget.style.borderColor = "var(--accent)")
-            }
-            onMouseLeave={(e) =>
-              (e.currentTarget.style.borderColor = "var(--border)")
-            }
-          >
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "baseline",
-                marginBottom: "var(--space-2)",
-              }}
-            >
-              <span style={{ fontWeight: 500 }}>{c.name}</span>
-              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                v{c.version}
-              </span>
-            </div>
-            <div
-              style={{
-                fontSize: 12,
-                color: "var(--text-muted)",
-                marginBottom: "var(--space-2)",
-                display: "-webkit-box",
-                WebkitLineClamp: 2,
-                WebkitBoxOrient: "vertical",
-                overflow: "hidden",
-              }}
-            >
-              {c.description}
-            </div>
-            <div
-              style={{
-                fontSize: 11,
-                color: "var(--text-muted)",
-                display: "flex",
-                justifyContent: "space-between",
-              }}
-            >
-              <span>
-                {c.tools.length} 个工具 · {AUTH_LABEL[c.auth_type] ?? c.auth_type}
-              </span>
-              {c.subscribed ? (
-                <span style={{ color: "var(--status-ok)" }}>✓ 已订阅</span>
-              ) : (
-                <span style={{ color: "var(--accent)" }}>点开订阅 →</span>
-              )}
-            </div>
-          </Link>
-        ))}
-      </div>
-    </div>
+    <PageShell scroll="data">
+      <Toolbar title="连接器">
+        <Link to="/market/mcp/submit" style={{ ...BTN_PRIMARY, textDecoration: "none" }}>
+          + 提交连接器
+        </Link>
+      </Toolbar>
+      <FilterBar tabs={tabs} tab={current} onTab={setTab} q={q} onQ={setQ} placeholder="搜连接器名 / 说明 / 工具…" hint={hint} />
+      {(error || rv.error) && <div style={{ color: "var(--status-err)", fontSize: 12 }}>{error || rv.error}</div>}
+      <Section fill>
+        {current === "market" && (
+          <DataTable fill columns={cols} rows={market} rowKey={(c) => c.id}
+                     empty={loading ? "加载中…" : allowed.length === 0 ? "还没有可订阅的连接器" : "没有匹配的连接器"} />
+        )}
+        {current === "review" && (
+          <DataTable fill columns={pendingColumns(setReviewing)} rows={pending} rowKey={(s) => `${s.id}@${s.version}`} empty="没有待审核的。" />
+        )}
+        {current === "mine" && (
+          <DataTable fill columns={mineColumns()} rows={mine} rowKey={(s) => `${s.id}@${s.version}`} empty="没有匹配的" />
+        )}
+      </Section>
+      {reviewing && (
+        <McpReviewDialog
+          s={reviewing}
+          onClose={() => setReviewing(null)}
+          onDone={() => {
+            setReviewing(null);
+            void rv.reload();
+            refreshCounts();
+          }}
+        />
+      )}
+    </PageShell>
   );
 }
 

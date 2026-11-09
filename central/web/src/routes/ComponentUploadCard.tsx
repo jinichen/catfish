@@ -1,8 +1,7 @@
 /** 管理员上传组件包 (10/3)。分块 + 续传: 页面关了 / 断网了, 重新选同一个文件接着传。 */
 import { useEffect, useRef, useState } from "react";
 
-import { Card } from "../components/Card";
-import { BTN, BTN_PRIMARY } from "../components/DataTable";
+import { BTN, BTN_PRIMARY, Section } from "../components/DataTable";
 import {
   cancelUpload, completeUpload, listComponentsAdmin, parseComponentFilename, startUpload, uploadFrom,
   type PendingUpload,
@@ -85,8 +84,8 @@ export function ComponentUploadCard({ onPublished }: { onPublished: () => void }
   const resumable = file ? pending.find((p) => p.file === file.name && p.size === file.size) : undefined;
 
   return (
-    <Card title="上传组件包 (管理员)">
-      <div style={{ display: "flex", flexDirection: "column", gap: 10, fontSize: 13 }}>
+    <Section title="上传组件包 (管理员)">
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, fontSize: 12 }}>
         <div style={{ color: "var(--text-muted)", lineHeight: 1.7 }}>
           选 <code>.tar.gz</code> 安装包, 分块上传, 断了重新选同一个文件接着传; 传完自动校验并更新清单。
           会议转写包这类带 <code>pack.json</code> 的, 文件名里的版本和平台要跟包里对得上。
@@ -155,6 +154,6 @@ export function ComponentUploadCard({ onPublished }: { onPublished: () => void }
           </div>
         )}
       </div>
-    </Card>
+    </Section>
   );
 }

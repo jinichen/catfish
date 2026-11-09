@@ -13,14 +13,15 @@
  */
 import { useCallback, useEffect, useState } from "react";
 
-import { Card } from "../components/Card";
-import { Badge, BTN, DataTable, type Column } from "../components/DataTable";
+import { Badge, BTN, DataTable, Section, Toolbar, type Column } from "../components/DataTable";
 import { ConfirmDialog } from "../components/Dialog";
+import { PageShell } from "../components/PageShell";
 import { roleAllows } from "../components/RoleGate";
 import { deleteComponent, type ComponentEntry, type Manifest } from "../lib/components_admin";
 import { useAuthStore } from "../store/auth";
 import { ComponentUploadCard } from "./ComponentUploadCard";
 import { formatSize, platformLabel } from "./componentsFormat";
+import { FilterBar } from "./marketShared";
 
 /** 认识的组件: 给员工看的名字 / 用途 / 应该有哪些平台。不认识的照样列, 只是没说明。 */
 const KNOWN: Record<string, { title: string; purpose: string; platforms: string[] }> = {
@@ -110,48 +111,53 @@ export function ComponentsMarketPage() {
     }
   }
 
-  if (error) return <div style={{ color: "var(--status-err)" }}>{error}</div>;
-  if (!manifest) return <div>加载中…</div>;
+  if (error) return <PageShell><Toolbar title="组件" /><div style={{ color: "var(--status-err)", fontSize: 12 }}>{error}</div></PageShell>;
+  if (!manifest) return <PageShell><Toolbar title="组件" /><div style={{ fontSize: 12 }}>加载中…</div></PageShell>;
 
   const groups = groupByComponent(manifest.components);
   const isAdmin = !!me && roleAllows(me.role, "admin");
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
-      <Card title={`组件 · 模型与运行包 · ${groups.length} 个组件 / ${manifest.components.length} 个安装包`}>
-        <div style={{ color: "var(--text-muted)", fontSize: 13, lineHeight: 1.7 }}>
-          体积大、不是人人都用的模型和运行环境不放进 Companion 安装包, 由中央统一发布。
-          员工在 Companion 里用到对应功能时点「安装」, 自动下载并校验, 不用到这里下载。
-          {manifest.generated_at && <> 清单更新于 {manifest.generated_at.slice(0, 16).replace("T", " ")} (UTC)。</>}
-        </div>
-      </Card>
+    <PageShell>
+      <Toolbar title={`组件 · ${groups.length} 个组件 / ${manifest.components.length} 个安装包`} />
+      <FilterBar
+        hint={
+          <>
+            体积大、不是人人都用的模型和运行环境不放进 Companion 安装包, 由中央统一发布。
+            员工在 Companion 里用到对应功能时点「安装」, 自动下载并校验, 不用到这里下载; 这里的下载链接给断网机器的 IT 手动拷。
+            {manifest.generated_at && <> 清单更新于 {manifest.generated_at.slice(0, 16).replace("T", " ")} (UTC)。</>}
+          </>
+        }
+      />
 
       {groups.length === 0 && (
-        <Card title="还没有发布任何组件">
-          <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
+        <Section title="还没有发布任何组件">
+          <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
             {isAdmin ? "在下面「上传组件包」传一个。" : "请管理员发布。"}
           </div>
-        </Card>
+        </Section>
       )}
 
       {groups.map((g) => {
         const info = KNOWN[g.name];
         return (
-          <Card key={g.name} title={`${info?.title ?? g.name}`}>
-            <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: 13 }}>
-                <Badge tone="neutral">{g.name}</Badge>
-                {info && <span style={{ color: "var(--text-muted)" }}>{info.purpose}</span>}
+          <Section
+            key={g.name}
+            title={
+              <>
+                {info?.title ?? g.name} <Badge tone="neutral">{g.name}</Badge>
+              </>
+            }
+          >
+            {info && <div style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 4 }}>{info.purpose}</div>}
+            {g.missing.length > 0 && (
+              <div style={{ fontSize: 12, color: "var(--status-warn)", marginBottom: 4 }}>
+                缺 {g.missing.map(platformLabel).join("、")} 的包 —— 这些电脑上的员工装不了
+                {isAdmin ? ", 拿到对应平台的安装包后在下面「上传组件包」传上来" : ", 请联系管理员"}。
               </div>
-              {g.missing.length > 0 && (
-                <div style={{ fontSize: 12, color: "var(--status-warn)" }}>
-                  ⚠ 缺 {g.missing.map(platformLabel).join("、")} 的包 —— 这些电脑上的员工装不了
-                  {isAdmin ? ", 拿到对应平台的安装包后在下面「上传组件包」传上来" : ", 请联系管理员"}。
-                </div>
-              )}
-              <DataTable columns={columns(isAdmin ? setDeleting : null)} rows={g.items} rowKey={(r) => r.file} />
-            </div>
-          </Card>
+            )}
+            <DataTable columns={columns(isAdmin ? setDeleting : null)} rows={g.items} rowKey={(r) => r.file} />
+          </Section>
         );
       })}
 
@@ -171,6 +177,6 @@ export function ComponentsMarketPage() {
             " 这是这个平台唯一的版本, 下架后这个平台的员工就装不了这个组件了。"}
         </ConfirmDialog>
       )}
-    </div>
+    </PageShell>
   );
 }

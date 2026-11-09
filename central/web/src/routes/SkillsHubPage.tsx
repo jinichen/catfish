@@ -1,4 +1,4 @@
-/** /skills — Skills Hub 全公司广场 (BL-ARCH1 5/10).
+/** /market/skills — 技能 (原 Skills Hub 全公司广场, BL-ARCH1 5/10).
  *
  * 列表 + 详情 + publish UI 三视图. Companion 卡只列订阅 + 快速链接, 详细在这看.
  */
@@ -7,7 +7,9 @@ import { useEffect, useState } from "react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 
 import { Card } from "../components/Card";
+import { BTN_PRIMARY, DataTable, Section, Toolbar, type Column } from "../components/DataTable";
 import { ConfirmDialog } from "../components/Dialog";
+import { PageShell } from "../components/PageShell";
 import { roleAllows } from "../components/RoleGate";
 import { SimpleMarkdown } from "../components/SimpleMarkdown";
 import {
@@ -17,11 +19,23 @@ import {
   publishSkill,
   SCOPE_LABEL,
   type ShareScope,
+  type SkillReview,
   type SkillSummary,
 } from "../lib/hub";
 import { metaList, metaText, namespaceLabel, parseSkillMd } from "../lib/skillMd";
 import { useAuthStore } from "../store/auth";
-import { ReviewBadge, scopeText, SkillReviewSections } from "./SkillReviewDialog";
+import { FilterBar, NameCell, tabLabel, useRefreshMarketCounts, when } from "./marketShared";
+import {
+  mineColumns,
+  pendingColumns,
+  ReviewBadge,
+  reviewKey,
+  scopeText,
+  SkillReviewDialog,
+  useSkillReviews,
+} from "./SkillReviewDialog";
+
+type Tab = "market" | "review" | "mine";
 
 export function SkillsHubPage() {
   return (
@@ -33,26 +47,18 @@ export function SkillsHubPage() {
   );
 }
 
-function humanTime(iso?: string): string {
-  if (!iso) return "";
-  const ts = new Date(iso).getTime();
-  if (Number.isNaN(ts)) return iso.slice(0, 10);
-  const diff = (Date.now() - ts) / 1000;
-  if (diff < 60) return "刚刚";
-  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
-  if (diff < 86400 * 7) return `${Math.floor(diff / 86400)} 天前`;
-  return iso.slice(0, 10);
-}
-
 function SkillList() {
   const me = useAuthStore((s) => s.me);
   // 11/08: 部门主管审本部门范围的, 管理员审全公司范围的 —— 后端按 managed_depts / role 过滤, 这里只决定要不要拉
   const reviewer = !!me && roleAllows(me.role, "manager");
+  const refreshCounts = useRefreshMarketCounts();
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState("");
+  const [q, setQ] = useState("");
+  const [tab, setTab] = useState<Tab>("market");
+  const [reviewing, setReviewing] = useState<SkillReview | null>(null);
+  const rv = useSkillReviews(reviewer);
 
   useEffect(() => {
     listSkills()
@@ -61,163 +67,100 @@ function SkillList() {
       .finally(() => setLoading(false));
   }, []);
 
-  // 按 namespace 分组
-  const filtered = filter
-    ? skills.filter(
-        (s) =>
-          s.name.toLowerCase().includes(filter.toLowerCase()) ||
-          (s.description || "").toLowerCase().includes(filter.toLowerCase()) ||
-          s.namespace.toLowerCase().includes(filter.toLowerCase()),
-      )
-    : skills;
+  const needle = q.trim().toLowerCase();
+  const hit = (...vals: Array<string | null | undefined>) => !needle || vals.some((v) => (v || "").toLowerCase().includes(needle));
+  const market = skills
+    .filter((s) => hit(s.name, s.description, s.namespace, namespaceLabel(s.namespace), s.published_by))
+    .sort((a, b) => a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name));
+  const pending = (rv.pending ?? []).filter((r) => hit(r.name, r.namespace, r.submitted_by, r.submit_note));
+  const mine = (rv.mine ?? []).filter((r) => hit(r.name, r.namespace, r.submit_note));
 
-  const grouped: Record<string, SkillSummary[]> = {};
-  for (const s of filtered) {
-    (grouped[s.namespace] ||= []).push(s);
-  }
-  const namespaces = Object.keys(grouped).sort();
+  const tabs = [
+    { key: "market" as const, label: tabLabel("已上架", loading ? null : skills.length) },
+    ...(reviewer ? [{ key: "review" as const, label: tabLabel("待我审核", rv.pending?.length) }] : []),
+    // 大多数员工从没提交过: 没有就不占一个分段
+    ...(rv.mine?.length ? [{ key: "mine" as const, label: tabLabel("我提交的", rv.mine.length) }] : []),
+  ];
+  const current = tabs.some((t) => t.key === tab) ? tab : "market";
+
+  const marketCols: Column<SkillSummary>[] = [
+    {
+      header: "技能",
+      cell: (s) => (
+        <NameCell
+          mono
+          name={<Link to={`/market/skills/${s.namespace}/${s.name}`}>{s.name}</Link>}
+          sub={s.description}
+        />
+      ),
+    },
+    { header: "范围", width: "16%", truncate: true, cell: (s) => <span title={s.namespace}>{namespaceLabel(s.namespace)}</span> },
+    { header: "状态", width: 70, cell: (s) => <ReviewBadge review={s.review} /> },
+    { header: "版本", width: 70, nowrap: true, cell: (s) => `v${s.latest_version}` },
+    { header: "发布人", width: "20%", truncate: true, cell: (s) => <span title={s.published_by ?? ""}>{s.published_by || "?"}</span> },
+    { header: "发布时间", width: 110, nowrap: true, cell: (s) => when(s.published_at) },
+  ];
+
+  const hint =
+    current === "review"
+      ? "你管的部门 (管理员: 全公司范围) 有人提交的技能。看清楚 SKILL.md 写了什么、脚本会做什么, 通过才上架; 没通过的同事看不到。"
+      : current === "mine"
+        ? "待审核的要等部门主管 (全公司范围: 管理员) 通过后同事才能看到; 被驳回的看原因改好再发一版。"
+        : "已经审核通过、你能装的技能 (本部门的 + 全公司的), 加上你自己提交的。在 Companion「设置」→「技能」里安装。";
 
   return (
-    <div
-      style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}
-    >
-      <Card
-        title={`Skills Hub · ${skills.length} skill / ${namespaces.length} namespace`}
-        action={
-          <Link
-            to="/market/skills/publish"
-            style={{
-              background: "var(--accent)",
-              color: "white",
-              padding: "6px 14px",
-              borderRadius: "var(--radius-sm)",
-              fontSize: 13,
-            }}
-          >
-            + 发布
-          </Link>
-        }
-      >
-        <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: "var(--space-2)", lineHeight: 1.6 }}>
-          这里列的是已经审核通过、你能装的技能 (本部门的 + 全公司的)，加上你自己提交的和等你审的。
-          发布后要等部门主管 (全公司范围: 管理员) 审核通过，同事才能看到。
-        </div>
-        <input
-          type="text"
-          placeholder="搜 skill 名 / 描述 / namespace…"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          style={{
-            width: "100%",
-            padding: "6px 10px",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius-sm)",
-            fontSize: 13,
-            boxSizing: "border-box",
+    <PageShell scroll="data">
+      <Toolbar title="技能">
+        <Link to="/market/skills/publish" style={{ ...BTN_PRIMARY, textDecoration: "none" }}>
+          + 发布
+        </Link>
+      </Toolbar>
+      <FilterBar
+        tabs={tabs}
+        tab={current}
+        onTab={setTab}
+        q={q}
+        onQ={setQ}
+        placeholder="搜技能名 / 说明 / 范围 / 发布人…"
+        hint={hint}
+      />
+      {(error || rv.error) && <div style={{ color: "var(--status-err)", fontSize: 12 }}>{error || rv.error}</div>}
+      <Section fill>
+        {current === "market" && (
+          <DataTable
+            fill
+            columns={marketCols}
+            rows={market}
+            rowKey={(s) => `${s.namespace}/${s.name}`}
+            empty={
+              loading ? "加载中…" : skills.length === 0 ? (
+                <>
+                  还没人发布过技能。写完一个后让小鲶帮你发布, 或者
+                  <Link to="/market/skills/publish"> 在这里直接上传</Link>。
+                </>
+              ) : "没有匹配的技能"
+            }
+          />
+        )}
+        {current === "review" && (
+          <DataTable fill columns={pendingColumns(setReviewing)} rows={pending} rowKey={reviewKey} empty="没有待审核的。" />
+        )}
+        {current === "mine" && (
+          <DataTable fill columns={mineColumns((r) => void rv.withdraw(r))} rows={mine} rowKey={reviewKey} empty="没有匹配的" />
+        )}
+      </Section>
+      {reviewing && (
+        <SkillReviewDialog
+          rec={reviewing}
+          onClose={() => setReviewing(null)}
+          onDone={() => {
+            setReviewing(null);
+            void rv.reload();
+            refreshCounts();
           }}
         />
-      </Card>
-
-      <SkillReviewSections reviewer={reviewer} />
-
-      {loading && <div>加载中…</div>}
-      {error && <div style={{ color: "var(--status-err)" }}>{error}</div>}
-      {!loading && !error && skills.length === 0 && (
-        <Card title="还没人发布过 skill">
-          <div style={{ color: "var(--text-muted)" }}>
-            写完一个 skill 后, 让小鲶帮你发布 (调 catfish_skill_publish), 或者
-            <Link to="/market/skills/publish"> 在这里直接上传</Link>.
-          </div>
-        </Card>
       )}
-
-      {namespaces.map((ns) => (
-        <div key={ns}>
-          <div
-            style={{
-              fontSize: 12,
-              color: "var(--text-muted)",
-              marginBottom: "var(--space-2)",
-              fontFamily: "var(--font-mono)",
-            }}
-          >
-            {namespaceLabel(ns)} ({ns}) · {grouped[ns].length} 个
-          </div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-              gap: "var(--space-2)",
-            }}
-          >
-            {grouped[ns].map((s) => (
-              <Link
-                key={`${s.namespace}/${s.name}`}
-                to={`/market/skills/${s.namespace}/${s.name}`}
-                style={{
-                  background: "var(--bg-elev)",
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--radius-sm)",
-                  padding: "var(--space-3)",
-                  fontSize: 13,
-                  color: "var(--text)",
-                  textDecoration: "none",
-                }}
-                onMouseEnter={(e) =>
-                  (e.currentTarget.style.borderColor = "var(--accent)")
-                }
-                onMouseLeave={(e) =>
-                  (e.currentTarget.style.borderColor = "var(--border)")
-                }
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "baseline",
-                    marginBottom: "var(--space-1)",
-                  }}
-                >
-                  <span style={{ fontFamily: "var(--font-mono)", fontWeight: 500 }}>
-                    {s.name}
-                  </span>
-                  <span style={{ fontSize: 11, color: "var(--text-muted)", display: "flex", gap: 6, alignItems: "center" }}>
-                    <ReviewBadge review={s.review} />
-                    v{s.latest_version}
-                  </span>
-                </div>
-                {s.description && (
-                  <div
-                    style={{
-                      color: "var(--text-muted)",
-                      fontSize: 12,
-                      marginBottom: "var(--space-1)",
-                      display: "-webkit-box",
-                      WebkitLineClamp: 2,
-                      WebkitBoxOrient: "vertical",
-                      overflow: "hidden",
-                    }}
-                  >
-                    {s.description}
-                  </div>
-                )}
-                <div
-                  style={{
-                    fontSize: 11,
-                    color: "var(--text-muted)",
-                    display: "flex",
-                    justifyContent: "space-between",
-                  }}
-                >
-                  <span>👤 {s.published_by || "?"}</span>
-                  <span>{humanTime(s.published_at)}</span>
-                </div>
-              </Link>
-            ))}
-          </div>
-        </div>
-      ))}
-    </div>
+    </PageShell>
   );
 }
 
@@ -238,9 +181,9 @@ function SkillDetail() {
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
   }, [namespace, name]);
 
-  if (!namespace || !name) return <div>路径错</div>;
-  if (error) return <div style={{ color: "var(--status-err)" }}>{error}</div>;
-  if (!detail) return <div>加载中…</div>;
+  if (!namespace || !name) return <PageShell><Toolbar title="技能" /><div>路径错</div></PageShell>;
+  if (error) return <PageShell><Toolbar title="技能" /><div style={{ color: "var(--status-err)" }}>{error}</div></PageShell>;
+  if (!detail) return <PageShell><Toolbar title="技能" /><div style={{ fontSize: 12 }}>加载中…</div></PageShell>;
 
   const handleDelete = async () => {
     setBusy(true);
@@ -271,7 +214,8 @@ function SkillDetail() {
   const muted = { fontSize: 12, color: "var(--text-muted)" } as const;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+    <PageShell gap="var(--space-4)">
+      <Toolbar title={<><Link to="/market/skills" style={{ color: "var(--text-muted)", fontWeight: 400 }}>技能</Link> / {title}</>} />
       {/* 10/22 鸿波: 原来标题是 slug、正文是整份 SKILL.md 原文 (含 YAML 头), 而且页面上
           没说怎么装 —— 「自己上传的就不能安装?」。安装本来就在 Companion 里 (网页装不到员工
           电脑上), 这里把它说清楚; 头部字段拆成人话, 正文按 Markdown 排版, 原文收进折叠区。 */}
@@ -459,7 +403,7 @@ function SkillDetail() {
         )}
         </Card>
       )}
-    </div>
+    </PageShell>
   );
 }
 
@@ -513,7 +457,9 @@ function PublishForm() {
   };
 
   return (
-    <Card title="发布 skill 到 hub">
+    <PageShell gap="var(--space-4)">
+    <Toolbar title={<><Link to="/market/skills" style={{ color: "var(--text-muted)", fontWeight: 400 }}>技能</Link> / 发布</>} />
+    <Card title="发布技能">
       <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: "var(--space-3)", lineHeight: 1.6 }}>
         发布后先进「待审核」：本部门范围由部门主管审，全公司范围由管理员审。审核通过并签名后同事才能看到、才能装。
       </div>
@@ -522,7 +468,7 @@ function PublishForm() {
         style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}
       >
         <label>
-          <div style={{ marginBottom: 4, fontSize: 13 }}>Namespace</div>
+          <div style={{ marginBottom: 4, fontSize: 13 }}>存放位置 <span style={{ color: "var(--text-muted)", fontSize: 11 }}>(namespace)</span></div>
           <input
             type="text"
             value={namespace}
@@ -607,7 +553,7 @@ function PublishForm() {
               : "还没选文件 —— 必须包含 SKILL.md"}
           </div>
           <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
-            选 skill 目录里的所有文件（SKILL.md + 可选的 *.py / *.yaml 等）。
+            选技能目录里的所有文件（SKILL.md + 可选的 *.py / *.yaml 等）。
             浏览器不支持直接选目录，用 Cmd/Ctrl 多选。
           </div>
         </label>
@@ -622,8 +568,8 @@ function PublishForm() {
                 : !files || files.length === 0
                   ? "先选文件（必须含 SKILL.md）"
                   : !namespace
-                    ? "先填 namespace"
-                    : "namespace 不合法"
+                    ? "先填存放位置"
+                    : "存放位置不合法"
             }
             style={{
               background: "var(--accent)",
@@ -673,5 +619,6 @@ function PublishForm() {
         )}
       </form>
     </Card>
+    </PageShell>
   );
 }

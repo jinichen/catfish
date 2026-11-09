@@ -55,7 +55,7 @@ describe("知识库页签", () => {
     me("carol@example.com");
     at("/market/wiki");
     expect(await screen.findByText("发版流程")).toBeTruthy();
-    expect(screen.getByText(/知识库分享 · 2 条 \/ 1 个部门/)).toBeTruthy();
+    expect(screen.getByText(/知识库 · 2 条 \/ 1 个部门/)).toBeTruthy();
     expect(screen.getByText("已撤回")).toBeTruthy();
     const link = screen.getByText("发版流程").closest("a")!;
     expect(decodeURIComponent(link.getAttribute("href")!)).toBe("/market/wiki/研发部/a1");
@@ -73,11 +73,12 @@ describe("知识库页签", () => {
   it("列表上带审核状态: 待审 / 已审 (老的算已审); 主管有「待我审核」筛选", async () => {
     me("boss@example.com", "manager");
     at("/market/wiki");
-    const a1 = (await screen.findByText("发版流程")).closest("a")!;
+    // 11/09 跟控制台统一: 一行一条 (表格); 「待我审核」是分段切换
+    const a1 = (await screen.findByText("发版流程")).closest("tr")!;
     expect(within(a1).getByText("待审")).toBeTruthy();
-    const c3 = screen.getByText("老规矩").closest("a")!;
+    const c3 = screen.getByText("老规矩").closest("tr")!;
     expect(within(c3).getByText("已审")).toBeTruthy();
-    fireEvent.click(await screen.findByRole("button", { name: /待我审核 \(1\)/ }));
+    fireEvent.click(await screen.findByRole("tab", { name: "待我审核 1" }));
     expect(screen.getByText("发版流程")).toBeTruthy();
     expect(screen.queryByText("老规矩")).toBeNull();
   });

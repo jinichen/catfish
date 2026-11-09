@@ -9,13 +9,15 @@
  * - 发布 / 安装都在 Companion 里: 笔记在员工自己电脑上, 网页够不着
  * - 11/08 分享治理 (§2.2 纯文字的): 发了即可见但标「待审」; 主管 / 管理员「看过, 没问题」打钩变「已审」,
  *   或「撤下」(要写原因, 等于撤回 + 标已撤回, 装过的人那边显示「已撤回」)。有「待我审核」筛选。
+ * - 11/09 跟控制台统一样式: 按部门分组的卡片墙换成一张表 (部门一列, 按部门排), 「待我审核」从按钮变成分段切换
  */
 import { useEffect, useState } from "react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 
 import { Card } from "../components/Card";
-import { Badge, BTN, BTN_DANGER, BTN_PRIMARY } from "../components/DataTable";
+import { Badge, BTN_DANGER, BTN_PRIMARY, DataTable, Section, Toolbar, type Column } from "../components/DataTable";
 import { ConfirmDialog } from "../components/Dialog";
+import { PageShell } from "../components/PageShell";
 import { roleAllows } from "../components/RoleGate";
 import { SimpleMarkdown } from "../components/SimpleMarkdown";
 import {
@@ -32,12 +34,13 @@ import {
   type WikiDocSummary,
 } from "../lib/wiki";
 import { useAuthStore } from "../store/auth";
+import { FilterBar, NameCell, SubPage, tabLabel } from "./marketShared";
 
 export function WikiMarketPage() {
   return (
     <Routes>
       <Route index element={<WikiList />} />
-      <Route path=":dept/:fileId" element={<WikiDetail />} />
+      <Route path=":dept/:fileId" element={<SubPage back="/market/wiki" section="知识库" title="详情"><WikiDetail /></SubPage>} />
     </Routes>
   );
 }
@@ -59,6 +62,8 @@ const HOW_TO = (
   </>
 );
 
+type Tab = "all" | "review";
+
 function WikiList() {
   const me = useAuthStore((s) => s.me);
   const reviewer = !!me && roleAllows(me.role, "manager");
@@ -67,7 +72,7 @@ function WikiList() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("");
-  const [onlyPending, setOnlyPending] = useState(false);
+  const [tab, setTab] = useState<Tab>("all");
 
   useEffect(() => {
     listWikiDocs()
@@ -77,145 +82,89 @@ function WikiList() {
   }, []);
   useEffect(() => {
     if (!reviewer) return;
-    // 待我审的单独一条接口 (后端按 managed_depts / admin 过滤); 拉不到就不显示筛选, 不影响列表
+    // 待我审的单独一条接口 (后端按 managed_depts / admin 过滤); 拉不到就不显示这一段, 不影响列表
     listReviewWikiDocs().then((r) => setPending(r.documents || [])).catch(() => setPending(null));
   }, [reviewer]);
 
+  const tabs = [
+    { key: "all" as const, label: tabLabel("全部", loading ? null : docs.length) },
+    ...(reviewer && pending ? [{ key: "review" as const, label: tabLabel("待我审核", pending.length) }] : []),
+  ];
+  const current = tabs.some((t) => t.key === tab) ? tab : "all";
+
   const q = filter.trim().toLowerCase();
-  const base = onlyPending && pending ? pending : docs;
-  const shown = q
+  const base = current === "review" && pending ? pending : docs;
+  const shown = (q
     ? base.filter((d) =>
-        [d.title, d.description_preview, d.namespace, d.published_by]
+        [d.title, d.description_preview, d.namespace, deptOf(d.namespace), d.published_by]
           .some((v) => (v || "").toLowerCase().includes(q)),
       )
-    : base;
-  const grouped: Record<string, WikiDocSummary[]> = {};
-  for (const d of shown) (grouped[d.namespace] ||= []).push(d);
-  for (const list of Object.values(grouped)) {
-    // 有效的在前, 新的在前; 撤回的沉底
-    list.sort((a, b) =>
-      Number(!!a.stale_after_unpublish) - Number(!!b.stale_after_unpublish) ||
-      (b.updated_at || b.published_at || "").localeCompare(a.updated_at || a.published_at || ""),
-    );
-  }
-  const namespaces = Object.keys(grouped).sort();
+    : [...base]
+  ).sort((a, b) =>
+    // 按部门排; 部门内有效的在前、新的在前, 撤回的沉底
+    a.namespace.localeCompare(b.namespace) ||
+    Number(!!a.stale_after_unpublish) - Number(!!b.stale_after_unpublish) ||
+    (b.updated_at || b.published_at || "").localeCompare(a.updated_at || a.published_at || ""),
+  );
   const live = docs.filter((d) => !d.stale_after_unpublish).length;
+  const depts = new Set(docs.map((d) => d.namespace)).size;
+
+  const cols: Column<WikiDocSummary>[] = [
+    {
+      header: "标题",
+      cell: (d) => (
+        <NameCell
+          name={
+            <Link to={`/market/wiki/${encodeURIComponent(deptOf(d.namespace))}/${encodeURIComponent(d.file_id)}`}>{d.title}</Link>
+          }
+          sub={d.stale_after_unpublish ? null : d.description_preview}
+        />
+      ),
+    },
+    { header: "部门", width: "14%", truncate: true, cell: (d) => <span title={d.namespace}>{deptOf(d.namespace)}</span> },
+    { header: "类型", width: 70, cell: (d) => (d.stale_after_unpublish ? "—" : KIND_LABEL[d.kind] ?? d.kind) },
+    { header: "状态", width: 70, cell: (d) => <ReviewBadge d={d} /> },
+    { header: "作者", width: "18%", truncate: true, cell: (d) => <span title={d.published_by ?? ""}>{d.published_by || "?"}</span> },
+    { header: "更新", width: 90, nowrap: true, cell: (d) => day(d.updated_at || d.published_at) },
+  ];
+
+  const noDept = !!me && !me.department && !roleAllows(me.role, "admin");
+  const hint =
+    current === "review"
+      ? "只列你管的部门里还没看过的; 点进去「看过, 没问题」或「撤下」。"
+      : <>{HOW_TO} 分享出来的页面同事马上能看到、能装, 但带「待审」标; 部门主管看过打钩后变「已审」, 有问题可以撤下。</>;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
-      <Card title={`知识库分享 · ${live} 条 / ${new Set(docs.map((d) => d.namespace)).size} 个部门`}>
-        <div style={{ ...muted, marginBottom: "var(--space-2)" }}>
-          {HOW_TO}
-          分享出来的页面同事马上能看到、能装，但带「待审」标；部门主管看过打钩后变「已审」，有问题可以撤下。
-        </div>
-        {reviewer && pending && (
-          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: "var(--space-2)", fontSize: 13 }}>
-            <button
-              type="button"
-              style={onlyPending ? BTN_PRIMARY : BTN}
-              onClick={() => setOnlyPending((v) => !v)}
-            >
-              📝 待我审核{pending.length ? ` (${pending.length})` : ""}
-            </button>
-            {onlyPending && <span style={muted}>只列你管的部门里还没看过的；点进去「看过, 没问题」或「撤下」。</span>}
-          </div>
-        )}
-        <input
-          type="text"
-          placeholder="搜标题 / 摘要 / 部门 / 作者…"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          style={{
-            width: "100%",
-            padding: "6px 10px",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius-sm)",
-            fontSize: 13,
-            boxSizing: "border-box",
-          }}
+    <PageShell scroll="data">
+      <Toolbar title={`知识库 · ${live} 条 / ${depts} 个部门`} />
+      <FilterBar
+        tabs={tabs}
+        tab={current}
+        onTab={setTab}
+        q={filter}
+        onQ={setFilter}
+        placeholder="搜标题 / 摘要 / 部门 / 作者…"
+        hint={hint}
+      />
+      {error && <div style={{ color: "var(--status-err)", fontSize: 12 }}>{error}</div>}
+      <Section fill>
+        <DataTable
+          fill
+          columns={cols}
+          rows={shown}
+          rowKey={(d) => `${d.namespace}/${d.file_id}`}
+          rowStyle={(d) => (d.stale_after_unpublish ? { opacity: 0.55 } : undefined)}
+          empty={
+            loading ? "加载中…"
+              : base.length === 0
+                ? current === "review" ? "没有待你审核的。" : noDept
+                  ? "你的账号还没设置部门，看不到部门知识库，请联系管理员在用户管理里补上部门。"
+                  : "还没人分享过知识。"
+                : "没有匹配的"
+          }
         />
-      </Card>
-
-      {loading && <div>加载中…</div>}
-      {error && <div style={{ color: "var(--status-err)" }}>{error}</div>}
-      {!loading && !error && docs.length === 0 && (
-        <Card title="还没人分享过知识">
-          <div style={muted}>
-            {me && !me.department && !roleAllows(me.role, "admin")
-              ? "你的账号还没设置部门，看不到部门知识库，请联系管理员在用户管理里补上部门。"
-              : HOW_TO}
-          </div>
-        </Card>
-      )}
-
-      {namespaces.map((ns) => (
-        <div key={ns}>
-          <div style={{ ...muted, marginBottom: "var(--space-2)", fontFamily: "var(--font-mono)" }}>
-            {deptOf(ns)} ({ns}) · {grouped[ns].length} 条
-          </div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-              gap: "var(--space-2)",
-            }}
-          >
-            {grouped[ns].map((d) => (
-              <Link
-                key={`${d.namespace}/${d.file_id}`}
-                to={`/market/wiki/${encodeURIComponent(deptOf(d.namespace))}/${encodeURIComponent(d.file_id)}`}
-                style={{
-                  background: "var(--bg-elev)",
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--radius-sm)",
-                  padding: "var(--space-3)",
-                  fontSize: 13,
-                  color: "var(--text)",
-                  textDecoration: "none",
-                  opacity: d.stale_after_unpublish ? 0.55 : 1,
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--accent)")}
-                onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--border)")}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "baseline",
-                    gap: 8,
-                    marginBottom: "var(--space-1)",
-                  }}
-                >
-                  <span style={{ fontWeight: 500 }}>{d.title}</span>
-                  <span style={{ fontSize: 11, color: "var(--text-muted)", whiteSpace: "nowrap", display: "flex", gap: 6, alignItems: "center" }}>
-                    <ReviewBadge d={d} />
-                    {!d.stale_after_unpublish && (KIND_LABEL[d.kind] ?? d.kind)}
-                  </span>
-                </div>
-                {d.description_preview && !d.stale_after_unpublish && (
-                  <div
-                    style={{
-                      ...muted,
-                      marginBottom: "var(--space-1)",
-                      display: "-webkit-box",
-                      WebkitLineClamp: 2,
-                      WebkitBoxOrient: "vertical",
-                      overflow: "hidden",
-                    }}
-                  >
-                    {d.description_preview}
-                  </div>
-                )}
-                <div style={{ fontSize: 11, color: "var(--text-muted)", display: "flex", justifyContent: "space-between" }}>
-                  <span>👤 {d.published_by || "?"}</span>
-                  <span>{day(d.updated_at || d.published_at)}</span>
-                </div>
-              </Link>
-            ))}
-          </div>
-        </div>
-      ))}
-    </div>
+      </Section>
+    </PageShell>
   );
 }
 

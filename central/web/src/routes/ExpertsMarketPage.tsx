@@ -1,5 +1,8 @@
 /** /market/experts — 专家包 (10/18, docs/EXPERT-PACK-PLAN.md §5)。
  *
+ * 11/09 跟控制台统一样式: 三张卡片 (📝 待审核 / 🧑‍💼 已上架 / 📤 我提交的) 变成一页里的三段切换 + 控制台表格;
+ * 原来每条下面「看详情」展开, 表格行里放不下, 改成点名字弹出详情 (跟审核弹窗同一份内容)。
+ *
  * 三块:
  *   · 已上架: 本部门 / 全公司能装的 (服务器按部门过滤, 下载接口也拦); 在 Companion 里装
  *   · 待审核 (主管 / 管理员才有): 看清单、选路、每个工作流的步骤、脚本里会打开的网站 —— 都是服务器自己从包里拆的,
@@ -10,19 +13,19 @@
  */
 import { useCallback, useEffect, useState } from "react";
 
-import { Card } from "../components/Card";
-import { Badge, BTN, BTN_DANGER, BTN_PRIMARY } from "../components/DataTable";
+import { BTN, BTN_DANGER, BTN_PRIMARY, DataTable, Section, Toolbar, type Column } from "../components/DataTable";
 import { Modal } from "../components/Dialog";
+import { PageShell } from "../components/PageShell";
 import { roleAllows } from "../components/RoleGate";
 import {
   BLOCK_LABEL, STATUS_LABEL, listMarketExperts, listMyExperts, listReviewExperts, reviewExpert, withdrawExpert,
   type ExpertPackMeta,
 } from "../lib/experts";
 import { useAuthStore } from "../store/auth";
+import { errText, FilterBar, NameCell, StatusBadge, tabLabel, useRefreshMarketCounts } from "./marketShared";
 import { TrialHint, TrialResults } from "./TrialResults";
 
 const muted = { fontSize: 12, color: "var(--text-muted)" } as const;
-const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const scopeText = (m: ExpertPackMeta) => (m.scope === "company" ? "全公司" : m.departments.join("、") || "—");
 /** 中央存的是 UTC (…+00:00), 显示成本地时间 */
 const when = (t?: string) => (t ? new Date(t).toLocaleString("zh-CN", { hour12: false }).slice(0, -3) : "");
@@ -37,7 +40,7 @@ function Perms({ m }: { m: ExpertPackMeta }) {
       {row("写员工电脑上的东西", s.local)}
       {row("对外 (跑到时停下等员工确认)", s.outward, "var(--status-warn)")}
       {row("会打开的网站", m.sites)}
-      {m.allow_code && <div style={{ fontSize: 12, color: "var(--status-err)" }}>⚠️ 要用终端 / 执行代码</div>}
+      {m.allow_code && <div style={{ fontSize: 12, color: "var(--status-err)" }}>要用终端 / 执行代码</div>}
       {m.allow_web && <div style={{ fontSize: 12 }}>要上网搜索</div>}
     </div>
   );
@@ -126,43 +129,47 @@ function ReviewDialog({ m, onClose, onDone }: { m: ExpertPackMeta; onClose: () =
   );
 }
 
-function Item({ m, children }: { m: ExpertPackMeta; children?: React.ReactNode }) {
-  const [open, setOpen] = useState(false);
+/** 只看详情 (已上架 / 我提交的): 跟审核弹窗同一份内容, 没有通过 / 驳回 */
+function DetailDialog({ m, onClose }: { m: ExpertPackMeta; onClose: () => void }) {
   return (
-    <div style={{ borderTop: "1px solid var(--border)", padding: "10px 0", display: "flex", flexDirection: "column", gap: 6 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}>
-        <span style={{ fontSize: 14, fontWeight: 600 }}>
-          {m.name} <span style={muted}>{m.version}</span>
-        </span>
-        <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <Badge tone={m.status === "approved" ? "ok" : m.status === "rejected" ? "err" : m.status === "pending" ? "warn" : "neutral"}>
-            {STATUS_LABEL[m.status]}
-          </Badge>
-          <span style={muted}>{scopeText(m)}</span>
-        </span>
-      </div>
-      {m.description && <span style={{ fontSize: 13 }}>{m.description}</span>}
-      <Perms m={m} />
+    <Modal title={`${m.name} ${m.version}`} width={720} onClose={onClose}
+           footer={<div style={{ display: "flex", justifyContent: "flex-end" }}><button type="button" style={BTN} onClick={onClose}>关闭</button></div>}>
+      {m.description && <div style={{ fontSize: 13, marginBottom: 8 }}>{m.description}</div>}
+      <Detail m={m} />
       {m.status === "rejected" && m.review_note && (
-        <div style={{ fontSize: 12, color: "var(--status-err)" }}>驳回原因 ({m.reviewed_by}): {m.review_note}</div>
+        <div style={{ fontSize: 12, color: "var(--status-err)", marginTop: 8 }}>驳回原因 ({m.reviewed_by}): {m.review_note}</div>
       )}
-      <div style={{ display: "flex", gap: 8 }}>
-        <button type="button" style={BTN} onClick={() => setOpen(!open)}>{open ? "收起" : "看详情"}</button>
-        {children}
-      </div>
-      {open && <Detail m={m} />}
-    </div>
+    </Modal>
   );
 }
+
+/** 「用到」那一格: 对外 / 执行代码这类要人留意的放前面, 全部在详情里 */
+function usesText(m: ExpertPackMeta): string {
+  const s = m.summary ?? {};
+  const parts = [
+    m.allow_code ? "执行代码" : "",
+    s.outward?.length ? `对外 ${s.outward.length} 项` : "",
+    m.sites.length ? `${m.sites.length} 个网站` : "",
+    s.read?.length ? `查 ${s.read.length} 类` : "",
+    m.allow_web ? "上网搜索" : "",
+  ].filter(Boolean);
+  return parts.join(" · ") || "—";
+}
+
+type Tab = "market" | "review" | "mine";
 
 export function ExpertsMarketPage() {
   const me = useAuthStore((s) => s.me);
   const reviewer = !!me && roleAllows(me.role, "manager");
+  const refreshCounts = useRefreshMarketCounts();
   const [market, setMarket] = useState<ExpertPackMeta[] | null>(null);
   const [mine, setMine] = useState<ExpertPackMeta[] | null>(null);
   const [review, setReview] = useState<ExpertPackMeta[] | null>(null);
   const [reviewing, setReviewing] = useState<ExpertPackMeta | null>(null);
+  const [viewing, setViewing] = useState<ExpertPackMeta | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [q, setQ] = useState("");
+  const [tab, setTab] = useState<Tab>("market");
 
   const load = useCallback(async () => {
     try {
@@ -188,39 +195,81 @@ export function ExpertsMarketPage() {
     }
   };
 
+  const needle = q.trim().toLowerCase();
+  const hit = (m: ExpertPackMeta) =>
+    !needle || [m.name, m.id, m.description, m.submitted_by].some((v) => (v || "").toLowerCase().includes(needle));
+  const tabs = [
+    { key: "market" as const, label: tabLabel("已上架", market?.length) },
+    ...(reviewer ? [{ key: "review" as const, label: tabLabel("待我审核", review?.length) }] : []),
+    { key: "mine" as const, label: tabLabel("我提交的", mine?.length) },
+  ];
+  const current = tabs.some((t) => t.key === tab) ? tab : "market";
+  const rows = (current === "review" ? review : current === "mine" ? mine : market) ?? [];
+
+  const cols: Column<ExpertPackMeta>[] = [
+    {
+      header: "专家包",
+      cell: (m) => (
+        <NameCell
+          name={<button type="button" onClick={() => setViewing(m)} style={LINK_BTN}>{m.name}</button>}
+          sub={m.description}
+        />
+      ),
+    },
+    { header: "范围", width: "14%", truncate: true, cell: (m) => <span title={scopeText(m)}>{scopeText(m)}</span> },
+    { header: "用到", width: "22%", truncate: true, cell: (m) => <span title={usesText(m)}>{usesText(m)}</span> },
+    { header: "状态", width: 70, cell: (m) => <StatusBadge status={m.status} label={STATUS_LABEL[m.status]} /> },
+    { header: "版本", width: 70, nowrap: true, cell: (m) => m.version },
+    ...(current === "market"
+      ? []
+      : [{ header: current === "review" ? "提交人" : "提交时间", width: current === "review" ? "18%" : 110, truncate: true,
+           cell: (m: ExpertPackMeta) => (current === "review" ? <span title={m.submitted_by}>{m.submitted_by}</span> : when(m.submitted_at)) }]),
+    {
+      header: "", width: 60, cell: (m) =>
+        current === "review" ? (
+          <button type="button" style={BTN_PRIMARY} onClick={() => setReviewing(m)}>审核</button>
+        ) : current === "mine" && (m.status === "pending" || m.status === "approved") ? (
+          <button type="button" style={BTN} onClick={() => void withdraw(m)}>{m.status === "pending" ? "撤回" : "下架"}</button>
+        ) : null,
+    },
+  ];
+
+  const hint =
+    current === "review"
+      ? "你管的部门 (管理员: 全公司) 有人提交的专家包。看清楚它会用到什么、会打开哪些网站, 通过才上架。"
+      : current === "mine"
+        ? "在 Companion 里搭好专家后点「发布到资源市场」提交。"
+        : "你能装的专家 (本部门的 + 全公司的)。在 Companion 设置 → 技能 →「专家」→「资源市场」里安装, 装之前会验中央签名。点名字看详情。";
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
-      {error && <div style={{ color: "var(--status-err)", fontSize: 13 }}>{error}</div>}
-      {reviewer && (
-        <Card title={`📝 待审核${review?.length ? ` (${review.length})` : ""}`}>
-          <div style={muted}>你管的部门 (管理员: 全公司) 有人提交的专家包。看清楚它会用到什么、会打开哪些网站, 通过才上架。</div>
-          {review?.length === 0 && <div style={{ ...muted, marginTop: 8 }}>没有待审核的。</div>}
-          {review?.map((m) => (
-            <Item key={`${m.id}@${m.version}`} m={m}>
-              <button type="button" style={BTN_PRIMARY} onClick={() => setReviewing(m)}>审核</button>
-            </Item>
-          ))}
-        </Card>
-      )}
-      <Card title="🧑‍💼 专家 · 已上架">
-        <div style={muted}>你能装的专家 (本部门的 + 全公司的)。在 Companion 设置 → 技能 →「专家」→「资源市场」里安装, 装之前会验中央签名。</div>
-        {market?.length === 0 && <div style={{ ...muted, marginTop: 8 }}>还没有。</div>}
-        {market?.map((m) => <Item key={m.id} m={m} />)}
-      </Card>
-      <Card title="📤 我提交的">
-        <div style={muted}>在 Companion 里搭好专家后点「发布到资源市场」提交。</div>
-        {mine?.length === 0 && <div style={{ ...muted, marginTop: 8 }}>还没提交过。</div>}
-        {mine?.map((m) => (
-          <Item key={`${m.id}@${m.version}`} m={m}>
-            {(m.status === "pending" || m.status === "approved") && (
-              <button type="button" style={BTN} onClick={() => void withdraw(m)}>{m.status === "pending" ? "撤回" : "下架"}</button>
-            )}
-          </Item>
-        ))}
-      </Card>
+    <PageShell scroll="data">
+      <Toolbar title="专家包" />
+      <FilterBar tabs={tabs} tab={current} onTab={setTab} q={q} onQ={setQ} placeholder="搜专家包名 / 说明 / 提交人…" hint={hint} />
+      {error && <div style={{ color: "var(--status-err)", fontSize: 12 }}>{error}</div>}
+      <Section fill>
+        <DataTable
+          fill
+          columns={cols}
+          rows={rows.filter(hit)}
+          rowKey={(m) => `${m.id}@${m.version}`}
+          empty={
+            (current === "review" ? review : current === "mine" ? mine : market) === null
+              ? "加载中…"
+              : rows.length === 0
+                ? current === "review" ? "没有待审核的。" : current === "mine" ? "还没提交过。" : "还没有。"
+                : "没有匹配的"
+          }
+        />
+      </Section>
       {reviewing && (
-        <ReviewDialog m={reviewing} onClose={() => setReviewing(null)} onDone={() => { setReviewing(null); void load(); }} />
+        <ReviewDialog m={reviewing} onClose={() => setReviewing(null)}
+                      onDone={() => { setReviewing(null); void load(); refreshCounts(); }} />
       )}
-    </div>
+      {viewing && <DetailDialog m={viewing} onClose={() => setViewing(null)} />}
+    </PageShell>
   );
 }
+
+const LINK_BTN = {
+  background: "none", border: "none", padding: 0, font: "inherit", color: "var(--accent)", cursor: "pointer", textAlign: "left",
+} as const;
