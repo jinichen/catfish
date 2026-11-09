@@ -31,7 +31,8 @@ import {
   type WikiSharePlan,
   type WikiShareRelation,
 } from "../../lib/tauri";
-import { shareIssues, shareSteps, sizeLabel, warningLabel, type ShareChoice } from "../../lib/wikiShare";
+import { attachedKeys, shareIssues, shareSteps, sizeLabel, warningLabel, type ShareChoice } from "../../lib/wikiShare";
+import WikiSharePreview, { reachableNames } from "./WikiSharePreview";
 
 type Result = { label: string; ok: boolean; text: string };
 
@@ -97,6 +98,10 @@ export default function WikiShareDialog({
   const choice: ShareChoice = useMemo(() => ({ attach, together }), [attach, together]);
   const steps = useMemo(() => (plan ? shareSteps(plan, choice, ackWarnings) : []), [plan, choice, ackWarnings]);
   const issues = useMemo(() => shareIssues(steps), [steps]);
+  const reachable = useMemo(
+    () => (plan ? reachableNames(plan, attachedKeys(plan, choice), together) : new Set<string>()),
+    [plan, choice, together],
+  );
   // 个人信息 / 内网地址 / 你设的敏感词: 看过才能发; 含凭据的那一页直接不能发
   const canSend =
     !!plan && !!dept && ack && !sharing && issues.blocked.length === 0 && (issues.warned.length === 0 || ackWarnings);
@@ -175,8 +180,11 @@ export default function WikiShareDialog({
                   {showPreview ? "收起" : "看发出去的全文"}
                 </button>
               </div>
-              {showPreview && (
-                <pre className="wiki-share__preview">{`---\n${plan.preview.frontmatter_yaml}\n---\n\n${plan.preview.body_md}`}</pre>
+              {showPreview && <WikiSharePreview plan={plan} reachable={reachable} />}
+              {!showPreview && (plan.preview.fields?.evidence.length ?? 0) > 0 && (
+                <div className="wiki-share__warn-text">
+                  这一页带 {plan.preview.fields!.evidence.length} 条原文依据 (从原件里摘的原话), 会一起发出去。点「看发出去的全文」核对。
+                </div>
               )}
             </section>
 

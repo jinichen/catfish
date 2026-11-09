@@ -174,3 +174,94 @@
   justify-content: flex-end;
   gap: 8px;
 }
+
+/* 渲染后的预览 (WikiSharePreview): 跟知识页一样的正文排版, 头部字段一条条列 */
+.wiki-share__preview-wrap {
+  margin-top: 6px;
+}
+.wiki-share__preview--rendered {
+  max-height: 340px;
+  font-family: inherit;
+  font-size: 13px;
+  white-space: normal;
+  background: var(--catfish-bg-elevated);
+}
+.wiki-share__doc-title {
+  margin-bottom: 6px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.wiki-share__fields {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+.wiki-share__fields dt {
+  color: var(--catfish-text-muted);
+  white-space: nowrap;
+}
+.wiki-share__fields dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.wiki-share__rel {
+  margin-right: 10px;
+  display: inline-block;
+}
+.wiki-share__evidence {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--status-warn) 50%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--status-warn) 8%, var(--catfish-bg-elevated));
+  font-size: 12px;
+}
+.wiki-share__evidence summary {
+  cursor: pointer;
+}
+.wiki-share__evidence ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.wiki-share__warn-text {
+  color: var(--status-warn);
+  font-size: 12px;
+}
+.wiki-share__doc {
+  border-top: 1px solid var(--catfish-border);
+  padding-top: 6px;
+}
+.wiki-share__ext {
+  color: var(--catfish-cyan-bright);
+}
+.wiki-share__legend {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+  font-size: 11px;
+}
+.wiki-share__legend .wiki-share__link {
+  margin-left: auto;
+}
+/* 头部字段 / 图例里的链接: 跟正文一样是行内文字, 不用知识页"关系"区那种 34px 带框按钮 */
+.wiki-share__fields .wiki-preview__wikilink,
+.wiki-share__legend .wiki-preview__wikilink {
+  display: inline;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  font: inherit;
+  font-weight: 500;
+  cursor: default;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+  text-underline-offset: 3px;
+}
+.wiki-share__fields .wiki-preview__wikilink--dangling,
+.wiki-share__legend .wiki-preview__wikilink--dangling { text-decoration-style: dashed; }

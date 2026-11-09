@@ -173,6 +173,12 @@ def test_plan_lists_sources_and_relations_with_what_colleagues_can_see(home, gat
     assert src["raw"]["attachable"] and src["raw"]["title"] == "原件 · 福富组织架构20260423" and not src["raw"]["shared"]
     assert src["conversation"]["label"] == "发布人的对话记录 (没随这页分享)"
     assert "[[原件 · 福富组织架构20260423]]" in p["preview"]["body_md"]
+    # 预览用的头部字段: 跟知识页同一套解析, 来源是改写后的说法
+    f = p["preview"]["fields"]
+    assert f["title"] == "市场部" and f["entity_type"] == "department"
+    assert f["related"][0] == {"name": "中电福富信息科技有限公司", "rel": "隶属"}
+    assert f["sources"] == ["原件 · 福富组织架构20260423", "发布人的对话记录 (没随这页分享)"]
+    assert f["evidence"] == []
 
 
 def test_plan_without_hub_still_works(home, gateway):

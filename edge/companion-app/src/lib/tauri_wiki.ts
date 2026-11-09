@@ -370,7 +370,21 @@ export interface WikiSharePlan {
   /** 拿到了部门知识库列表 (拿不到时「同事能不能看到」只能按本机记录判断) */
   hub_known: boolean;
   scan: WikiShareScan;
-  preview: { frontmatter_yaml: string; body_md: string };
+  preview: {
+    frontmatter_yaml: string;
+    body_md: string;
+    /** 11/09: 头部解析好的字段 (跟知识页同一套口径), 预览按知识页的样子显示; 老 tool-bridge 没有 */
+    fields?: {
+      title: string;
+      entity_type: string | null;
+      aliases: string[];
+      tags: string[];
+      related: { name: string; rel: string | null }[];
+      sources: string[];
+      /** 从原件里摘的原话 —— 会一起发出去 */
+      evidence: string[];
+    };
+  };
   sources: WikiShareSource[];
   relations: WikiShareRelation[];
 }

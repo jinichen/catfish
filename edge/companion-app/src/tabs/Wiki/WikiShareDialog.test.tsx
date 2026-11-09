@@ -21,7 +21,13 @@ function makePlan(attached: string[]): WikiSharePlan {
     ok: true, title: "市场部", rel_path: "wiki/entities/市场部.md", shared_before: false, hub_known: true, scan: clean,
     preview: {
       frontmatter_yaml: "title: 市场部",
-      body_md: linked ? "- **来源**: [[原件 · 组织架构]]" : "- **来源**: 原件「组织架构」(在发布人那里, 没随这页分享)",
+      body_md: "# 市场部\n\n一级部。\n\n## 关联\n\n- **来源**: " + (linked ? "[[原件 · 组织架构]]" : "原件「组织架构」(在发布人那里, 没随这页分享)") + "\n- 另见 [[营销手册]]",
+      fields: {
+        title: "市场部", entity_type: "department", aliases: ["市场经营部"], tags: ["组织架构"],
+        related: [{ name: "中电福富信息科技有限公司", rel: "隶属" }, { name: "销售单元", rel: "下辖" }],
+        sources: [linked ? "原件 · 组织架构" : "原件「组织架构」(在发布人那里, 没随这页分享)"],
+        evidence: ["毛利672万元...17.23%", "行业外收入 | 3600 | 239"],
+      },
     },
     sources: [
       { ref: "raw/sources/1-组织架构", kind: "raw", label: "原件「组织架构」(在发布人那里, 没随这页分享)", key: "raw/sources/1-组织架构",
@@ -56,6 +62,26 @@ describe("分享到部门", () => {
     expect(screen.getByText("同事已经能看到")).toBeTruthy();
     expect(screen.getByText("你本机也没有这一页")).toBeTruthy();
     expect(await screen.findByText("研发部")).toBeTruthy();   // 分享到哪个部门摆在眼前
+    // 原文依据 (从原件摘的原话) 会一起发出去: 没展开预览时也提醒一句
+    expect(screen.getByText(/这一页带 2 条原文依据/)).toBeTruthy();
+  });
+
+  it("预览: 按知识页渲染, 关系 / 链接按同事点不点得开上色, 原文依据单独列出; 可以切到原始文本", async () => {
+    render(<WikiShareDialog selectedFile={file} onClose={() => {}} />);
+    fireEvent.click(await screen.findByText("看发出去的全文"));
+    expect(screen.getByText("部门")).toBeTruthy();                       // 类型显示成中文
+    expect(screen.getByText("市场经营部")).toBeTruthy();                 // 别名
+    expect(screen.getByRole("heading", { name: "关联" })).toBeTruthy();   // 正文渲染了 markdown
+    expect(screen.queryByText("# 市场部")).toBeNull();
+    const reach = (name: string) => screen.getAllByText(name).find((e) => e.className.includes("wikilink"))!.className;
+    expect(reach("销售单元")).toBe("wiki-preview__wikilink");                                   // 同事已经能看到
+    expect(reach("中电福富信息科技有限公司")).toContain("wiki-preview__wikilink--dangling");     // 还没一起发
+    expect(reach("营销手册")).toContain("wiki-preview__wikilink--dangling");
+    fireEvent.click(screen.getByText("中电福富信息科技有限公司", { selector: "label *" }));
+    await waitFor(() => expect(reach("中电福富信息科技有限公司")).toBe("wiki-preview__wikilink"));
+    expect(screen.getByText(/原文依据 2 条/)).toBeTruthy();
+    fireEvent.click(screen.getByText("看原始文本"));
+    expect(screen.getByText(/^---/)).toBeTruthy();
   });
 
   it("什么都不勾: 只发这一页; 没勾「我知道」不能发", async () => {
@@ -77,8 +103,11 @@ describe("分享到部门", () => {
     fireEvent.click(await screen.findByText(/把原件「组织架构」也分享/));
     await waitFor(() => expect(t.wikiSharePlan).toHaveBeenLastCalledWith("wiki/entities/市场部.md", ["raw/sources/1-组织架构"]));
     fireEvent.click(screen.getByText("看发出去的全文"));
-    expect(await screen.findByText(/\[\[原件 · 组织架构\]\]/)).toBeTruthy();
-    fireEvent.click(screen.getByText("中电福富信息科技有限公司"));
+    // 11/09: 渲染后的样子 (不是 YAML): 原件一起发了 → 正文和来源里都是点得开的链接
+    const docLink = (await screen.findAllByText("原件 · 组织架构")).find((e) => e.closest(".wiki-doc"))!;
+    expect(docLink.className).toBe("wiki-preview__wikilink");
+    expect(screen.queryByText(/^---/)).toBeNull();
+    fireEvent.click(screen.getByText("中电福富信息科技有限公司", { selector: "label *" }));
     expect(screen.getByText("一起分享")).toBeTruthy();
     expect(screen.getByText(/「原件 · 组织架构」含 个人信息/)).toBeTruthy();
     fireEvent.click(screen.getByText(/已经装走的撤不回/));

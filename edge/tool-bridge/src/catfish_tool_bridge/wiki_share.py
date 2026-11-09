@@ -300,6 +300,18 @@ def plan(params: dict[str, Any]) -> dict[str, Any]:
         relations.append(entry)
 
     new_fm, new_body = rewrite_for_share(fm, body, attached)
+    from .wiki_files import _parse_field, _parse_list  # noqa: PLC0415
+    # 11/09: 预览按知识页的样子显示 (头部字段一条条列, 正文渲染), 不给员工看 YAML; 解析口径跟知识页同一套
+    fields = {
+        "title": _parse_field(new_fm, "title") or title,
+        "entity_type": _parse_field(new_fm, "entity_type") or _parse_field(new_fm, "concept_type"),
+        "aliases": _parse_list(new_fm, "aliases"),
+        "tags": _parse_list(new_fm, "tags"),
+        "related": _parse_related(new_fm),
+        "sources": source_refs(new_fm),
+        # 从原件里摘的原话 —— 会跟着发出去, 预览里要单独让员工看到
+        "evidence": _parse_list(new_fm, "evidence"),
+    }
     return {
         "ok": True,
         "title": title,
@@ -307,7 +319,7 @@ def plan(params: dict[str, Any]) -> dict[str, Any]:
         "shared_before": rel_path in published,
         "hub_known": on_hub is not None,
         "scan": scan(path.name, f"---\n{new_fm}\n---\n\n{new_body}"),
-        "preview": {"frontmatter_yaml": new_fm, "body_md": new_body},
+        "preview": {"frontmatter_yaml": new_fm, "body_md": new_body, "fields": fields},
         "sources": sources,
         "relations": relations,
     }
