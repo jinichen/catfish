@@ -30,7 +30,8 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { WikiFileInfo } from "../../lib/tauri";
-import { wikiSourceLabel, wikiSubtypeLabel } from "./wikiLabels";
+import { wikiSourceLabel } from "./wikiLabels";
+import WikiTypePicker from "./WikiTypePicker";
 import WikiSourceSessions from "./WikiSourceSessions";
 
 /** 部门 wiki 已被原作者撤回的警告 banner (P3.3.18 Phase 4 P2, 6/10)。
@@ -144,12 +145,12 @@ export function WikiMetaHeader({
   isDangling: (name: string) => boolean;
   handleWikilinkClick: (name: string) => void;
 }) {
-  const subtypeLabel = wikiSubtypeLabel(info.subtype, info.kind);
   return (
   <div className="wiki-preview__meta">
     <div className="wiki-preview__meta-kicker">
       <span className={`wiki-kind-badge wiki-kind-badge--${kind}`}>{kindLabel}</span>
-      <span>{subtypeLabel}</span>
+      {/* 11/09: 分类能就地改 (以前只能显示, 分错了界面上改不回来) */}
+      <WikiTypePicker info={info} readOnly={info.rel_path.startsWith("wiki-shared/")} />
     </div>
     <div className="wiki-preview__meta-title">
       <span className="wiki-preview__title-text">{info.title}</span>

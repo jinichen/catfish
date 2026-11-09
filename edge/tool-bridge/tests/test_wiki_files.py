@@ -267,10 +267,29 @@ def test_update_warns_when_it_becomes_invisible(tmp_path, monkeypatch):
     """
     monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
     wiki_files.create_wiki_entry("entity", "待清空", "原本有内容。", subtype="doc")
-    r = wiki_files.update_wiki_file("wiki/entities/待清空.md", "\n")
+    # 11/09 起不带 frontmatter 的覆写会保留原 frontmatter, 所以这里用标了 tombstone 的空壳
+    r = wiki_files.update_wiki_file("wiki/entities/待清空.md", "---\ntombstone: true\n---\n")
     assert r["ok"]
     assert r["visible_in_tab"] is False
     assert "warning" in r and "TAB" in r["warning"], r
+
+
+def test_update_without_frontmatter_keeps_the_old_one(tmp_path, monkeypatch):
+    """11/09「AAA信用等级证书」: 小鲶换证时整篇覆写只给了正文, 标题 / 类型 / 标签全丢, 掉进「未分类」。"""
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
+    wiki_files.create_wiki_entry("entity", "AAA信用等级证书", "旧证 2025。", subtype="cert", tags=["专项体系"])
+    rel = "wiki/entities/AAA信用等级证书.md"
+    r = wiki_files.update_wiki_file(rel, "# AAA信用等级证书\n\n新证 2026-10-22 换发。\n")
+    assert r["ok"] and "保留原来的" in r["warning"], r
+    got = wiki_files.read_wiki_file(rel)
+    fm, body = wiki_files._split_frontmatter(got["content"])
+    assert wiki_files._parse_field(fm, "entity_type") == "cert" and "专项体系" in fm
+    assert "新证 2026-10-22 换发" in body and "旧证" not in body
+    # 带了 frontmatter 的照旧整篇覆写 (改类型就是这么改的)
+    r2 = wiki_files.update_wiki_file(rel, "---\ntype: entity\ntitle: AAA信用等级证书\nentity_type: doc\n---\n\n正文\n")
+    assert r2["ok"] and "保留原来的" not in (r2.get("warning") or "")
+    fm2, _ = wiki_files._split_frontmatter(wiki_files.read_wiki_file(rel)["content"])
+    assert wiki_files._parse_field(fm2, "entity_type") == "doc"
 
 
 def test_update_refuses_missing_file(tmp_path, monkeypatch):

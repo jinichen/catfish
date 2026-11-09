@@ -670,6 +670,8 @@ def update_wiki_file(rel_path: str, content: str) -> dict[str, Any]:
             "ok": False,
             "error": f"文件不存在: {rel_path} — 建新条目用 catfish_wiki_create",
         }
+    from . import wiki_guard  # noqa: PLC0415  (11/09: 只给正文的覆写保留原 frontmatter)
+    content, kept_frontmatter = wiki_guard.keep_frontmatter(abs_path, content, _split_frontmatter)
     dropped_aliases: list[str] = []
     if rel_path.startswith("wiki/entities/") or rel_path.startswith("wiki/concepts/"):
         content, dropped_aliases = _drop_claimed_aliases(rel_path, content)
@@ -680,7 +682,6 @@ def update_wiki_file(rel_path: str, content: str) -> dict[str, Any]:
         content = _upsert_ontology_status(content, status)
     else:
         status, reasons = "active", []
-    from . import wiki_guard  # noqa: PLC0415  (11/08: 先备份到 wiki/.history, updated 换成今天)
     content, _bak = wiki_guard.touch_updated(content), wiki_guard.snapshot(home, rel_path)
     try:
         abs_path.write_text(content, encoding="utf-8")
@@ -688,14 +689,11 @@ def update_wiki_file(rel_path: str, content: str) -> dict[str, Any]:
         return {"ok": False, "error": f"写 {rel_path} 失败: {e}"}
     fm, body = _split_frontmatter(content)
     size = len(content.encode("utf-8"))
-    result = {
-        "ok": True,
-        "rel_path": rel_path,
-        "bytes": size,
-        "created": False,
-    }
+    result = {"ok": True, "rel_path": rel_path, "bytes": size, "created": False}
     if status == "pending":
         result["warning"] = "条目已保存，但暂列为待确认，不进入关系图：" + ",".join(reasons)
+    if kept_frontmatter:
+        result["warning"] = (result.get("warning", "") + " " if result.get("warning") else "") + wiki_guard.KEPT_FRONTMATTER_NOTE
     if dropped_aliases:
         result["warning"] = (result.get("warning", "") + " " if result.get("warning") else "") + (
             "这些别名已属于别的条目, 没有写入 (同一个名字只能指一个条目): " + "、".join(dropped_aliases)

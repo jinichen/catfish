@@ -70,6 +70,26 @@ def history(home: Path, rel_path: str) -> list[dict[str, Any]]:
     return out
 
 
+KEPT_FRONTMATTER_NOTE = ("你传的内容没带 frontmatter (--- 之间的标题 / 类型 / 标签 / 来源), 已保留原来的; "
+                         "要改这些字段, 带上改过的 frontmatter 整篇传, 或者只改属性用 props。")
+
+
+def keep_frontmatter(abs_path: Path, content: str, split) -> tuple[str, bool]:
+    """11/09: 整篇覆写时传进来的内容没带 frontmatter、原文件有 → 保留原来的。
+
+    11/02 小鲶换证时只给了正文, 「AAA信用等级证书」的标题 / 类型 / 标签 / 来源全丢, 掉进「未分类」,
+    员工在界面上也改不回来。整篇去掉 frontmatter 没有正当理由; 要改字段就带着改过的 frontmatter 传。
+    split = wiki_files._split_frontmatter (传进来, 免得循环 import)。"""
+    try:
+        old_fm, _ = split(abs_path.read_text(encoding="utf-8"))
+    except OSError:
+        return content, False
+    new_fm, new_body = split(content)
+    if old_fm.strip() and not new_fm.strip():
+        return f"---\n{old_fm.strip()}\n---\n\n{new_body.lstrip()}", True
+    return content, False
+
+
 def touch_updated(content: str, today: str | None = None) -> str:
     """frontmatter 的 updated 换成今天; 没有这一行就补在 created 后面 (没 created 就补在 title 后面)。没 frontmatter 原样返回。"""
     from .wiki_files import _split_frontmatter  # noqa: PLC0415

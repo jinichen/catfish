@@ -30,3 +30,38 @@ describe("11/02 精确到对话的来源", () => {
     expect(wikiSourceLabel("session:api-abc12345")).toBe("一次对话");
   });
 });
+
+describe("11/09 分类", () => {
+  const f = (subtype: string | null, title: string, kind = "entity") => ({ subtype, kind, title });
+
+  it("英文类型显示中文; 同一个显示名的合成一组", async () => {
+    const { groupByType, ENTITY_TYPE_ORDER } = await import("./wikiLabels");
+    const groups = groupByType(
+      [f("org", "福富"), f("organization", "中电"), f("strategy", "云改数转"), f("software", "A"), f("软件产品", "B"), f(null, "没类型")],
+      ENTITY_TYPE_ORDER,
+    );
+    expect(groups.map(([label, list]) => [label, list.length])).toEqual([
+      ["组织", 2], ["软件产品", 2], ["战略", 1], ["未分类", 1],
+    ]);
+  });
+
+  it("改分类的候选: 同类里在用的, 按显示名去重取最常用的写法", async () => {
+    const { subtypeOptions } = await import("./wikiLabels");
+    const opts = subtypeOptions(
+      [f("cert", "a"), f("cert", "b"), f("software", "c"), f("软件产品", "d"), f("软件产品", "e"), f("rule", "x", "concept")],
+      "entity",
+    );
+    expect(opts).toEqual([
+      { key: "软件产品", label: "软件产品", count: 3 },
+      { key: "cert", label: "证书", count: 2 },
+    ]);
+  });
+
+  it("改 frontmatter 单值字段: 有就换, 没有就加, 没 frontmatter 就补", async () => {
+    const { setFrontmatterScalar } = await import("./wikiLabels");
+    expect(setFrontmatterScalar("---\ntitle: x\nentity_type: org\n---\n\n正文", "entity_type", "cert"))
+      .toBe("---\ntitle: x\nentity_type: cert\n---\n\n正文");
+    expect(setFrontmatterScalar("---\ntitle: x\n---\n正文", "entity_type", "cert")).toBe("---\ntitle: x\nentity_type: cert\n---\n正文");
+    expect(setFrontmatterScalar("# x\n正文", "entity_type", "cert")).toBe("---\nentity_type: cert\n---\n\n# x\n正文");
+  });
+});

@@ -5787,3 +5787,52 @@ button {
 .room-menu-item:hover {
   background: var(--catfish-bg-subtle, rgba(127, 127, 127, 0.15)) !important;
 }
+
+/* 11/09 页面顶上的分类: 点「改」就地换 (WikiTypePicker) */
+.wiki-type-picker__btn {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.wiki-type-picker__btn--none { color: var(--status-warn); }
+.wiki-type-picker__edit {
+  margin-left: 4px;
+  font-size: 12px;
+  color: var(--catfish-cyan);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.wiki-type-picker__btn:hover .wiki-type-picker__edit,
+.wiki-type-picker__btn:focus-visible .wiki-type-picker__edit,
+.wiki-type-picker__btn--none .wiki-type-picker__edit { opacity: 1; }
+.wiki-type-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.wiki-type-picker select,
+.wiki-type-picker input {
+  font: inherit;
+  font-size: 13px;
+  padding: 2px 6px;
+  border: 1px solid var(--catfish-border);
+  border-radius: var(--radius-sm);
+  background: var(--catfish-bg);
+  color: var(--catfish-text);
+  min-width: 0;
+}
+.wiki-type-picker__act {
+  border: 0;
+  background: none;
+  padding: 0 2px;
+  font-size: 12px;
+  color: var(--catfish-cyan);
+  cursor: pointer;
+}
+.wiki-type-picker__act:disabled { opacity: 0.5; cursor: default; }
+.wiki-type-picker__hint { font-size: 12px; }
+.wiki-type-picker__err { font-size: 12px; color: var(--status-err); }
