@@ -31,7 +31,41 @@ _dl_curl() {  # $1=url $2=output, 其余参数原样给 curl
         "$@" -o "$o" "$u"
 }
 
+# ─── 11/09 本机缓存: GitHub Release 的带版本号文件 (…/releases/download/<tag>/<名>) 内容不会变 ───
+# 1.2.128 打包时 GitHub Release 下载持续 504, 同一个 cpython 包上午 1.2.127 刚下过, 却每次都要重下,
+# 10 次全挂整个打包就停。现在下成功一次 (curl 返回成功 + gzip 校验过) 就存一份, 以后先用本机的。
+# 只缓存 releases/download/ 下的 (tag 固定, 内容不变); 别的 URL 照旧每次下。
+# 位置可用 CATFISH_DL_CACHE 改; 设成空 (CATFISH_DL_CACHE="") 关掉缓存。
+DL_CACHE="${CATFISH_DL_CACHE-$HOME/Library/Caches/catfish-build-downloads}"
+
+_dl_cache_path() {  # $1=url → 缓存文件路径 (不可缓存返回空)
+    [ -n "$DL_CACHE" ] || return 0
+    case "$1" in */releases/download/*) ;; *) return 0 ;; esac
+    local u="${1#https://}"                       # github.com/<owner>/<repo>/releases/download/<tag>/<文件名>
+    echo "$DL_CACHE/${u%%/releases/download/*}/${u#*/releases/download/}"   # → <cache>/github.com/<owner>/<repo>/<tag>/<文件名>
+}
+
+_dl_ok() {  # 文件完整: tar.gz / .gz 过 gzip -t, 其余非空
+    [ -s "$1" ] || return 1
+    case "$1" in *.gz) gzip -t "$1" 2>/dev/null ;; *) return 0 ;; esac
+}
+
 download_with_retry() {
+    local url="$1"
+    local output="$2"
+    local cached; cached="$(_dl_cache_path "$url")"
+    if [ -n "$cached" ] && _dl_ok "$cached"; then
+        cp "$cached" "$output" && echo "  ✓ 用本机缓存 ($cached · $(ls -lh "$output" | awk '{print $5}'))" && return 0
+    fi
+    _download_with_retry_net "$url" "$output" || return 1
+    if [ -n "$cached" ]; then
+        mkdir -p "$(dirname "$cached")" && cp "$output" "$cached.tmp.$$" && mv -f "$cached.tmp.$$" "$cached" \
+            || echo "  ⚠ 存缓存失败 (不影响这次): $cached"
+    fi
+    return 0
+}
+
+_download_with_retry_net() {
     local url="$1"
     local output="$2"
     local url_proxied="${GH_PROXY}${url}"
