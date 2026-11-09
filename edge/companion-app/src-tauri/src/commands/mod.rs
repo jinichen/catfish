@@ -107,7 +107,6 @@ pub mod transparent_log_store; // 10/25: 外发记录存内容 + 指纹链 + 保
 pub mod transparent_log_pending; // 11/3: 外发先登记后落账 (等回复时关掉也不漏)
 pub(crate) mod transparent_log_lineage; // 10/31: 换机迁移 —— 链上记迁移、锚点按设备分清新旧两台
 pub mod practice_stats; // 11/02: 题库与复习的数量 (早安简报提醒用)
-pub mod wiki_retrieval_eval; // 11/02: 知识库检索打分 (借 DeepTutor kb eval)
 pub mod wiki_source_trace; // 11/02: 知识卡来源 → 能点开的那几次对话 (借 DeepTutor 记忆脚注)
 pub mod wiki_share; // 11/09: 分享到部门之前的预检 (来源 / 关系同事能不能看到)
 pub mod mobile_bridge; // 11/01: 手机通道 —— 经中央中转站跟手机端到端加密通信 (docs/MOBILE-CLIENT-DESIGN.md)

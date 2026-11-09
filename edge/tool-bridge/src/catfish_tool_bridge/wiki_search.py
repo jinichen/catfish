@@ -427,7 +427,7 @@ def search_wiki(query: str, top_k: int = 5, *, include_expired: bool = False,
     if idx is None:
         return {"matches": [], "count": 0, "total_indexed": 0, "semantic": False, "hidden": {},
                 "summary": ("员工本机 wiki 空 (~/.catfish/wiki/ 和 ~/.catfish/wiki-shared/dept/ 都不存在或空). "
-                            "员工可以: (1) 在知识体系页自建条目 (2) 从部门装机部门 wiki."),
+                            "员工可以: (1) 在资料库自建条目 (2) 从部门装机部门 wiki."),
                 "latency_ms": int((time.monotonic() - start_ts) * 1000)}
     by_rel = {p["rel_path"]: i for i, p in enumerate(meta)}
     lexical = idx.rank(query, top_k=50)

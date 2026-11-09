@@ -418,7 +418,7 @@ export default function WikiHubCard() {
             textAlign: "center",
           }}
         >
-          还没人分享过 wiki. 在知识体系页打开一条笔记, 点「分享」, 选本部门或全公司, 同事就能在这里看到并安装.
+          还没人分享过 wiki. 在资料库打开一条笔记, 点「分享」, 选本部门或全公司, 同事就能在这里看到并安装.
         </div>
       )}
 
@@ -679,7 +679,7 @@ function WikiRow({
               cursor: installing ? "wait" : "pointer",
               opacity: installing ? 0.6 : 1,
             }}
-            title="装到本机 ~/.catfish/wiki-shared/ (read-only, 知识体系 tab 能看到)"
+            title="装到本机 ~/.catfish/wiki-shared/ (read-only, 资料库能看到)"
           >
             {installing ? "安装中…" : "安装"}
           </button>

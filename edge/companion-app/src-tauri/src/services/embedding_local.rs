@@ -159,7 +159,7 @@ impl LocalProvider {
             let pack = "从中央「组件市场」下载 embed-model-<版本>-<平台>.tar.gz, \
                         把里面的文件解压到 ~/.catfish/models/ \
                         (Windows: tar -xzf <包> -C %USERPROFILE%\\.catfish\\models), \
-                        再回到「知识体系」页。";
+                        再回到「资料库」页。";
             #[cfg(windows)]
             return format!("本机向量模型没装齐 —— {}\n\n手动安装: {pack}", missing.join("; "));
             #[cfg(not(windows))]

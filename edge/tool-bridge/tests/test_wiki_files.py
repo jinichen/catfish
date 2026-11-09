@@ -271,7 +271,7 @@ def test_update_warns_when_it_becomes_invisible(tmp_path, monkeypatch):
     r = wiki_files.update_wiki_file("wiki/entities/待清空.md", "---\ntombstone: true\n---\n")
     assert r["ok"]
     assert r["visible_in_tab"] is False
-    assert "warning" in r and "TAB" in r["warning"], r
+    assert "warning" in r and "资料库会把它隐藏" in r["warning"], r
 
 
 def test_update_without_frontmatter_keeps_the_old_one(tmp_path, monkeypatch):

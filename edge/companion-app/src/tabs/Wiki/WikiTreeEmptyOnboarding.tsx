@@ -25,7 +25,7 @@ export function EmptyOnboarding({ onCreateClick }: { onCreateClick: () => void }
       }}
     >
       <div style={{ fontWeight: 600, marginBottom: 10, fontSize: 13 }}>
-        🐟 知识体系还是空的
+        🐟 资料库还是空的
       </div>
       <div style={{ color: "var(--catfish-text-muted)", marginBottom: 14 }}>
         3 种方式开始累积:

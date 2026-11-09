@@ -156,7 +156,7 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_wiki_list",
         "description": (
-            "列出员工个人知识库全部条目, 结果与知识体系 TAB 显示的完全一致 (不在列表 = TAB 看不到).\n"
+            "列出员工个人知识库全部条目, 结果与资料库显示的完全一致 (不在列表 = TAB 看不到).\n"
             "用于: 员工说'知识库里怎么没有 X / 存了看不到'时先查证, 别猜; 建条目前查重名; "
             "员工问'知识库里都有啥'. ingest 后还没蒸馏的材料不在列表里.\n"
             "按内容找用 catfish_wiki_search."

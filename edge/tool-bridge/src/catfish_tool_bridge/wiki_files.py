@@ -500,7 +500,7 @@ def list_wiki_files(kind: str | None = None, limit: int = 200) -> dict[str, Any]
         "items": items[:limit],
         "truncated": total > limit,
         "note": (
-            "这就是知识体系 TAB 的全部内容 (wiki_list_files 同源)。"
+            "这就是资料库的全部内容 (wiki_list_files 同源)。"
             "不在这个列表里 = TAB 里也看不到。"
         ),
     }
@@ -619,7 +619,7 @@ def create_wiki_entry(
         "rel_path": f"{subdir}/{slug}.md",
         "bytes": len(content.encode("utf-8")),
         "created": True,
-        "note": "已写入。员工在知识体系 TAB 切走再切回就能看到 (TAB 挂载时重新扫目录)。",
+        "note": "已写入。员工在资料库切走再切回就能看到 (TAB 挂载时重新扫目录)。",
     }
     if ontology_status == "pending":
         result["warning"] = (
@@ -707,7 +707,7 @@ def update_wiki_file(rel_path: str, content: str) -> dict[str, Any]:
     if _is_tombstone(size, fm, body):
         result["warning"] = (
             "写进去了, 但这份内容命中了墓碑规则 (<=256 字节 + 无 frontmatter/标了 "
-            "deprecated + body 空或废弃注释), 知识体系 TAB 会把它隐藏。"
+            "deprecated + body 空或废弃注释), 资料库会把它隐藏。"
             "要让它可见就把内容写实一些。"
         )
         result["visible_in_tab"] = False

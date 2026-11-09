@@ -301,26 +301,6 @@ export interface WikiSourceSession {
 export const wikiSourceSessions = (sources: string[]) =>
   rawInvoke<WikiSourceSession[]>("wiki_source_sessions", { sources });
 
-/** 11/02: 检索打分 (知识库同一组题跑四种检索方式) */
-export interface RetrievalEngineScore {
-  engine: string;
-  label: string;
-  available: boolean;
-  note: string | null;
-  found: number;
-  total: number;
-  recall: number;
-  mrr: number;
-}
-
-export interface RetrievalEvalReport {
-  topK: number;
-  engines: RetrievalEngineScore[];
-  queries: { query: string; ranks: Record<string, number | null>; tops: Record<string, string[]> }[];
-}
-
-export const wikiRetrievalEval = (questions: string, topK: number) =>
-  rawInvoke<RetrievalEvalReport>("wiki_retrieval_eval", { questions, topK });
 
 // ── 11/09 分享到部门之前的预检 (tool-bridge wiki_share.py) ─────────────────
 export interface WikiShareWarning {

@@ -67,7 +67,7 @@ function ScopeBadge({ d }: { d: Pick<WikiDocSummary, "scope" | "visible_to" | "c
 
 const HOW_TO = (
   <>
-    分享：在鲶鱼 Companion「知识体系」里打开一条笔记，点「📤 分享」，选本部门或全公司。装到自己电脑上：Companion「设置」→「技能」→「📚 部门知识库」，点「安装」。
+    分享：在鲶鱼 Companion「资料库」里打开一条笔记，点「📤 分享」，选本部门或全公司。装到自己电脑上：Companion「设置」→「技能」→「📚 部门知识库」，点「安装」。
   </>
 );
 

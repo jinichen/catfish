@@ -321,7 +321,7 @@ def wiki_install(args: dict[str, Any]) -> dict[str, Any]:
         "summary": (
             f"已装 wiki '{title}' (by {published_by}) 到 ~/.catfish/wiki-shared/"
             f"{namespace}/{file_id}.md. "
-            f"在 Companion 知识体系 tab 下 '📥 部门 wiki' 分组能看到 (read-only).{pending_note}{linked_note}"
+            f"在 Companion 资料库下 '📥 部门 wiki' 分组能看到 (read-only).{pending_note}{linked_note}"
         ),
     }
 

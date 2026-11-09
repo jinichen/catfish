@@ -502,7 +502,7 @@ class _RenderMixin:
             ranked = False
 
         suffix = " — 按当前话题排序" if ranked else ""
-        lines = [f"## 🧠 员工 wiki 已有 (P3.3 知识体系 tab){suffix}"]
+        lines = [f"## 🧠 员工 wiki 已有 (资料库){suffix}"]
         for label, shown, pool in (("实体", ents, entities), ("概念", cons, concepts)):
             if not pool:
                 continue
@@ -513,7 +513,7 @@ class _RenderMixin:
             if len(shown) < len(pool):
                 lines.append(
                     f"_(只列了 {len(shown)}/{len(pool)} 个, 其余用 "
-                    f"`catfish_wiki_search` 查, 或看 Companion 知识体系 tab)_"
+                    f"`catfish_wiki_search` 查, 或看 Companion 资料库)_"
                 )
         lines.append("\n_chat 时引用员工 wiki 用 `[[标题]]` 精确链接._")
         return "\n".join(lines)

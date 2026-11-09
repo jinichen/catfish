@@ -281,7 +281,7 @@ export default function WikiTree() {
   return (
     <div className="wiki-tree">
       <div className="wiki-tree__title">
-        <h3>知识体系</h3>
+        <h3>资料库</h3>
         <div className="wiki-tree__actions">
           <button
             onClick={() => openCreateModal()}

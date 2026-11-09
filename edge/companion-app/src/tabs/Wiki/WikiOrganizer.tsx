@@ -6,7 +6,6 @@ import {
   ClockCounterClockwise,
   SealWarning,
   Copy,
-  Gauge,
   LinkSimple,
   ListChecks,
   MagnifyingGlass,
@@ -28,7 +27,6 @@ import { customHierarchy, useRelationVocab } from "../../lib/wikiRelationVocab";
 import WikiRelationTypesModal from "./WikiRelationTypesModal";
 import WikiPropsReview from "./WikiPropsReview";
 import WikiTypeDefsModal from "./WikiTypeDefsModal";
-import { useHierarchyModel } from "./WikiHierarchyView";
 import {
   buildConfirmedWikiContent,
   buildWikiRelationshipTasks,
@@ -37,7 +35,8 @@ import {
   type WikiRelationshipTaskKind,
 } from "./wikiRelationshipTasks";
 
-export type WikiWorkspaceMode = "organize" | "browse" | "hierarchy" | "eval";
+// 11/10 鸿波: 「层级」「检索打分」没用, 拿掉; 只留关系整理 / 全部知识 (导航名「知识体系」改成「资料库」)
+export type WikiWorkspaceMode = "organize" | "browse";
 
 const TASK_META: Record<
   WikiRelationshipTaskKind,
@@ -60,16 +59,11 @@ export default function WikiOrganizer({
   onModeChange,
   taskId,
   onSelectTask,
-  hierarchyRoot = null,
-  onHierarchyRoot,
 }: {
   mode: WikiWorkspaceMode;
   onModeChange: (mode: WikiWorkspaceMode) => void;
   taskId: string | null;
   onSelectTask: (taskId: string | null) => void;
-  /** 10/23「层级」: 选中的顶层 */
-  hierarchyRoot?: string | null;
-  onHierarchyRoot?: (path: string) => void;
 }) {
   const files = useWikiStore((state) => state.files);
   const filesLoading = useWikiStore((state) => state.filesLoading);
@@ -88,8 +82,7 @@ export default function WikiOrganizer({
 
   const keptUntyped = useKeptUntyped();
   const ignoredDuplicates = useIgnoredDuplicates();
-  const hierarchy = useHierarchyModel();
-  // 10/23: 关系类型 (内置 + 自定义); 打开知识体系就加载一次, 下拉 / 建议都从 store 拿
+  // 10/23: 关系类型 (内置 + 自定义); 打开资料库就加载一次, 下拉 / 建议都从 store 拿
   const customRelations = useRelationVocab((state) => state.custom);
   const loadRelationVocab = useRelationVocab((state) => state.load);
   const [showRelationTypes, setShowRelationTypes] = useState(false);
@@ -178,7 +171,7 @@ export default function WikiOrganizer({
 
   return (
     <div className="wiki-organizer">
-      <div className="wiki-organizer__switch" role="tablist" aria-label="知识体系视图">
+      <div className="wiki-organizer__switch" role="tablist" aria-label="资料库视图">
         <button
           type="button"
           role="tab"
@@ -199,50 +192,10 @@ export default function WikiOrganizer({
           <Books size={18} aria-hidden="true" />
           全部知识
         </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={mode === "hierarchy"}
-          data-active={mode === "hierarchy"}
-          onClick={() => onModeChange("hierarchy")}
-        >
-          <TreeStructure size={18} aria-hidden="true" />
-          层级
-        </button>
-        {/* 11/02: 检索打分 (借 DeepTutor kb eval) */}
-        <button
-          type="button"
-          role="tab"
-          aria-selected={mode === "eval"}
-          data-active={mode === "eval"}
-          onClick={() => onModeChange("eval")}
-        >
-          <Gauge size={18} aria-hidden="true" />
-          检索打分
-        </button>
       </div>
 
-      {mode === "eval" ? (
-        <p className="wiki-organizer__roots-empty">
-          用一组问题给知识库检索打分: 看小鲶聊天时用的检索、知识页的几种检索, 各自能不能把正确答案排在前面。
-        </p>
-      ) : mode === "browse" ? (
+      {mode === "browse" ? (
         <div className="wiki-organizer__browse"><WikiTree /></div>
-      ) : mode === "hierarchy" ? (
-        <div className="wiki-organizer__roots" aria-label="层级的顶层">
-          {hierarchy.roots.length === 0 && <p className="wiki-organizer__roots-empty">还没有上下级关系</p>}
-          {hierarchy.roots.map((r) => (
-            <button
-              type="button"
-              key={r.path}
-              data-active={(hierarchyRoot ?? hierarchy.roots[0]?.path) === r.path}
-              onClick={() => onHierarchyRoot?.(r.path)}
-            >
-              <span>{hierarchy.byPath.get(r.path)?.title ?? r.path}</span>
-              <small>{r.size}</small>
-            </button>
-          ))}
-        </div>
       ) : (
         <>
           {/* 10/24: 搜索框和「关系类型」放一行 (原来各占一行) */}

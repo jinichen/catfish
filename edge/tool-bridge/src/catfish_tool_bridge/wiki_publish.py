@@ -346,7 +346,7 @@ def wiki_publish(args: dict[str, Any]) -> dict[str, Any]:
             "error": (
                 f"发布前扫描有 {len(warnings)} 类警告 (内容不会自动脱敏). "
                 + ("你不能替员工确认: " if llm_acked else "")
-                + "把 warnings 用大白话转告员工, 请他在这条消息下面点「确认发布」(或在知识体系页里分享), "
+                + "把 warnings 用大白话转告员工, 请他在这条消息下面点「确认发布」(或在资料库里分享), "
                 "点了才会发出去; 不要再带 acknowledge_warnings 重试."
             ),
         }

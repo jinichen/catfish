@@ -110,8 +110,8 @@ export default function MinutesView({ meta }: { meta: MeetingMeta }) {
       tags: ["会议纪要"],
     });
     const r = (res.result ?? {}) as { ok?: boolean; error?: string; rel_path?: string };
-    if (res.ok && r.ok) setNote(`已存进知识库: 知识体系里搜「${title}」`);
-    else if (res.ok && r.error?.includes("已存在")) setNote(`已经存过了: 知识体系里搜「${title}」`);
+    if (res.ok && r.ok) setNote(`已存进资料库: 资料库里搜「${title}」`);
+    else if (res.ok && r.error?.includes("已存在")) setNote(`已经存过了: 资料库里搜「${title}」`);
     else setError(`存知识库失败: ${res.error || r.error || "未知错误"}`);
   }
 

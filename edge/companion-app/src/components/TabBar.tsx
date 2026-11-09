@@ -50,7 +50,7 @@ const TABS: { id: TabId; label: string; icon: Icon }[] = [
   // BL-CATFISH-WIKI-MODE P3.3 (6/4): 知识体系 tab — 跟其它 tab 纯文字对齐, 无 emoji
   // 6/9 鸿波: 知识体系 ↔ 仪表盘 互换. 知识体系日常翻看比仪表盘多, 放中段.
   //          仪表盘 (本地服务 / 配额 / 隐私 / 技能) 是配置看不勤, 放最右当"设置".
-  { id: "wiki", label: "知识体系", icon: BookOpenText },
+  { id: "wiki", label: "资料库", icon: BookOpenText },
   // 10/3 鸿波: 最后一项叫「设置」不叫「仪表盘」—— 里面就是本地服务 / 搜索范围 / 配额 / 隐私 /
   //   账号安全 / 技能这些配置。tab id 仍是 dashboard (路由、事件、测试都认这个名字)。
   { id: "dashboard", label: "设置", icon: GearSix },

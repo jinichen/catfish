@@ -750,7 +750,7 @@ function NoProfileNotice(_: { hasProfileButZero: boolean }) {
         正常用 catfish 写邮件 / 跟我聊几次, 1-2 周后早安会自动开.
       </div>
       <div style={{ marginTop: 8, fontSize: 12, opacity: 0.85 }}>
-        其他 tab (工作台 / 邮件 / 知识体系) 都能正常用.
+        其他 tab (工作台 / 邮件 / 资料库) 都能正常用.
       </div>
     </div>
   );

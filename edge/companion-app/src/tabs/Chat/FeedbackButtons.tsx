@@ -203,7 +203,7 @@ export default function FeedbackButtons({ messageId, preview, hidden }: Props) {
       ) : (
         <FeedbackBtn
           /* P3.5.80 (7/28): 去掉内部编号，说员工能理解的效果 */
-          title="把这轮问答存进知识体系，自动提取里面的人、事、概念"
+          title="把这轮问答存进资料库，自动提取里面的人、事、概念"
           onClick={async () => {
             // P1.2.2 ship (6/4): 调 tauri command wiki_save_chat_message,
             // 写 ~/.catfish/wiki/queries/<date>-<slug>.md (frontmatter + Q&A).
