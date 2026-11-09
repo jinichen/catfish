@@ -8,7 +8,7 @@
  *   · 待确认条目的主按钮是「确认」—— 关系可以一条都没有
  * 改类型 / 删 / 加 只改关系, 不改待确认状态; 只有「确认」才算员工核对过。
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, CheckCircle, Plus, Sparkle, SpinnerGap, Trash, WarningCircle } from "@phosphor-icons/react";
 import { wikiCreateEntityOrConcept, wikiUpdateFile, type RelatedRef } from "../../lib/tauri";
 import { wikiGuardCheck } from "../../lib/tauri_wiki_types";
@@ -27,6 +27,9 @@ import {
   relationTypeOptions,
 } from "./wikiRelationshipTasks";
 
+/** 一条关系的身份 (名字 + 类型), 判断是不是这次新加 / 改过的 */
+export const relationKey = (name: string, rel: string | null | undefined) => `${name.trim()}\u0000${(rel ?? "").trim()}`;
+
 export default function WikiRelationsEditor({
   selectedFile,
   onLater,
@@ -40,6 +43,11 @@ export default function WikiRelationsEditor({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // 11/09 结果 (没保存的原因 / 已保存) 在面板最底下, 关系一多就看不见: 出结果时滚过去
+  const resultRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (error || notice) resultRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  }, [error, notice]);
   const [adding, setAdding] = useState(false);
   const [newRel, setNewRel] = useState("");
   const [newTarget, setNewTarget] = useState("");
@@ -79,8 +87,12 @@ export default function WikiRelationsEditor({
       // 11/08: 保存前先校验关系类型 (人→证书不能「包含」) 和引用的页在不在; tool-bridge 没起来就跳过校验
       const guard = await wikiGuardCheck({ title: info.title, subtype: info.subtype, rel_path: info.rel_path,
                                            related: next.map((r) => ({ name: r.name, rel: r.rel ?? null })) }).catch(() => null);
-      if (guard && !guard.ok) {
-        setError("关系用得不对, 没保存: " + guard.bad.map((b) => b.why).join("; "));
+      // 11/09 只拦这次新加 / 改过的: 页上别处原来就有的一条不对, 不能让「删掉另一条」也存不了
+      // (鸿波: 中电福富那页删「金智达」点了没反应 —— 页上另一条老关系不合规, 整页被拦, 提示还在面板最底下)
+      const before = new Set(typed.map((r) => relationKey(r.name, r.rel)));
+      const newBad = (guard?.bad ?? []).filter((b) => !before.has(relationKey(b.name, b.rel)));
+      if (newBad.length) {
+        setError("关系用得不对, 没保存: " + newBad.map((b) => b.why).join("; "));
         return;
       }
       if (guard?.missing.length) message = `${message} (${guard.missing_message})`;
@@ -325,7 +337,7 @@ export default function WikiRelationsEditor({
         </button>
       )}
 
-      <div className="wiki-relation-editor__actions">
+      <div className="wiki-relation-editor__actions" ref={resultRef}>
         {error && <span className="wiki-workbench__error">{error}</span>}
         {notice && <span className="wiki-workbench__success"><CheckCircle size={18} />{notice}</span>}
         {isPending && issueCount > 0 && <span className="wiki-workbench__hint">先处理标红的关系再确认</span>}

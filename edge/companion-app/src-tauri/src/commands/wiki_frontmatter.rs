@@ -257,6 +257,51 @@ pub(crate) fn mark_authored_by_employee(content: &str) -> String {
     )
 }
 
+/// 11/09: 界面保存 (wiki_update_file) 时 related 那一行里的 rel 也过词表 —— 别名归一, 表外归「关联」。
+/// 以前只有新建过词表, 界面整篇保存原样写回: 中电福富那页写进了表外的「拉通」(鸿波「删除无效」那次查出来的)。
+/// 只动 frontmatter 里 `related:` 那一行的 `rel: "…"`; 名字、正文、别的字段一个字不碰。
+pub(crate) fn canon_related_line(content: &str) -> String {
+    let trimmed = content.trim_start();
+    if !trimmed.starts_with("---") {
+        return content.to_string();
+    }
+    let lead = content.len() - trimmed.len();
+    let after = &trimmed[3..];
+    let Some(end) = after.find("\n---") else {
+        return content.to_string();
+    };
+    let fm = &after[..end];
+    let mut changed = false;
+    let new_fm: Vec<String> = fm
+        .lines()
+        .map(|line| {
+            if !line.starts_with("related:") {
+                return line.to_string();
+            }
+            let mut out = String::new();
+            let mut rest = line;
+            while let Some(at) = rest.find("rel: \"") {
+                let start = at + "rel: \"".len();
+                let Some(len) = rest[start..].find('"') else { break };
+                let raw = &rest[start..start + len];
+                let canon = canon_relation(raw);
+                if canon != raw {
+                    changed = true;
+                }
+                out.push_str(&rest[..start]);
+                out.push_str(&canon);
+                rest = &rest[start + len..];
+            }
+            out.push_str(rest);
+            out
+        })
+        .collect();
+    if !changed {
+        return content.to_string();
+    }
+    format!("{}---{}\n---{}", &content[..lead], new_fm.join("\n"), &after[end + 4..])
+}
+
 #[cfg(test)]
 mod authored_by_tests {
     use super::mark_authored_by_employee;
@@ -360,9 +405,10 @@ mod type_vocab_tests {
     }
 }
 
+
 #[cfg(test)]
 mod display_title_tests {
-    use super::{canon_relation, display_title, RELATION_FALLBACK, RELATION_VOCAB_JSON};
+    use super::{canon_related_line, canon_relation, display_title, RELATION_FALLBACK, RELATION_VOCAB_JSON};
 
     #[test]
     fn keeps_a_real_frontmatter_title() {
@@ -429,5 +475,18 @@ mod display_title_tests {
         assert_eq!(canon_relation("瞎编的"), RELATION_FALLBACK);
         assert_eq!(canon_relation(""), RELATION_FALLBACK);
         assert_eq!(canon_relation("不同条目"), RELATION_FALLBACK);
+    }
+
+    #[test]
+    fn canon_related_line_界面保存也过词表() {
+        let c = "---\ntitle: 中电福富\nrelated: [{name: \"351体系\", rel: \"拉通\"}, {name: \"市场部\", rel: \"所属部门\"}, {name: \"金智达\", rel: \"协作\"}]\n---\n\nrel: \"拉通\" 正文不动\n";
+        let out = canon_related_line(c);
+        assert!(out.contains("{name: \"351体系\", rel: \"关联\"}"), "{out}");
+        assert!(out.contains("{name: \"市场部\", rel: \"隶属\"}"));
+        assert!(out.contains("{name: \"金智达\", rel: \"协作\"}"));
+        assert!(out.ends_with("rel: \"拉通\" 正文不动\n"));
+        let ok = "---\ntitle: x\nrelated: [{name: \"a\", rel: \"隶属\"}]\n---\n正文";
+        assert_eq!(canon_related_line(ok), ok);
+        assert_eq!(canon_related_line("没有 frontmatter"), "没有 frontmatter");
     }
 }

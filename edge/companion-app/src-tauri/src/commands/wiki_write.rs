@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use crate::util::date::chrono_today;
 use super::wiki_frontmatter::{
+    canon_related_line,
     canon_relation, mark_authored_by_employee, normalize_type_line, RELATION_FALLBACK,
 };
 use super::wiki_read::{name_owner, ontology_target_resolves};
@@ -213,7 +214,7 @@ pub async fn wiki_create_entity_or_concept(
     );
 
     // 8/4: UI 新建的也是员工的
-    let content = normalize_type_line(&mark_authored_by_employee(&content), is_entity);
+    let content = canon_related_line(&normalize_type_line(&mark_authored_by_employee(&content), is_entity));   // 11/09 关系词也过词表
     fs::write(&path, &content).map_err(|e| format!("写 {path:?} 失败: {e}"))?;
     let bytes = content.len() as u64;
     let rel_path = format!("{sub_dir}/{slug}.md");
@@ -243,7 +244,7 @@ pub async fn wiki_update_file(
     // 8/4: 员工在 UI 里改的 → 打 authored_by: employee, 挡住后台蒸馏覆盖
     //      + 类型归一化 (kind 从路径判, 跟 wiki_read.rs::build_file_info 同口径)
     let is_entity = rel_path.starts_with("wiki/entities/");
-    let content = normalize_type_line(&mark_authored_by_employee(&content), is_entity);
+    let content = canon_related_line(&normalize_type_line(&mark_authored_by_employee(&content), is_entity));   // 11/09 关系词也过词表
     fs::write(&abs_path, &content).map_err(|e| format!("写 {abs_path:?} 失败: {e}"))?;
     Ok(WikiWriteResult {
         rel_path,
