@@ -50,19 +50,62 @@ def _call_llm(prompt: str, source: str = "plugin:toolbridge-workflow") -> str:
     return (r.json().get("choices") or [{}])[0].get("message", {}).get("content") or ""
 
 
+def _balanced_objects(t: str):
+    """按花括号配平依次切出候选对象 (跳过字符串里的括号)。模型常在 JSON 前后加话, 或给两个对象 (先一个示例再一个真的)。"""
+    depth = 0
+    start = -1
+    in_str = False
+    esc = False
+    for i, ch in enumerate(t):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start >= 0:
+                yield t[start:i + 1]
+                start = -1
+
+
 def parse_json(text: str) -> dict[str, Any]:
+    """模型的回答 → 对象。11/02 一次运行死在这: 回答是空的 (Expecting value: char 0)。
+    现在: 去掉 <think> 段和代码围栏; 不是整段 JSON 就按括号配平找对象, 几个候选里取最后一个能解析的
+    (模型先给示例再给结果时, 结果在后); 空回答单独说清楚。"""
     t = (text or "").strip()
+    t = re.sub(r"<think>.*?</think>", "", t, flags=re.S).strip()
     t = re.sub(r"^```(?:json)?\s*|\s*```$", "", t, flags=re.S).strip()
-    if not t.startswith("{"):
-        m = re.search(r"\{.*\}", t, flags=re.S)
-        t = m.group(0) if m else t
-    try:
-        v = json.loads(t)
-    except ValueError as e:
-        raise ValueError(f"小鲶没有按要求交回 JSON: {e}") from None
-    if not isinstance(v, dict):
-        raise ValueError("小鲶交回的不是 JSON 对象")
-    return v
+    if not t:
+        raise ValueError("小鲶没有按要求交回 JSON: 回答是空的")
+    candidates = [t] if t.startswith("{") else []
+    candidates += [c for c in _balanced_objects(t) if c != t]
+    last_err: str | None = None
+    for c in reversed(candidates):
+        try:
+            v = json.loads(c)
+        except ValueError as e:
+            last_err = str(e)
+            continue
+        if isinstance(v, dict):
+            return v
+        last_err = "不是 JSON 对象"
+    raise ValueError(f"小鲶没有按要求交回 JSON: {last_err or '回答里没有 JSON 对象'}")
+
+
+_RETRY_SUFFIX = """
+
+上一次你的回答没法解析 ({why}); 回答开头是: {head}
+这次**只输出 JSON 对象本身**, 第一个字符必须是 {{, 不要解释、不要代码围栏、不要示例。"""
 
 
 def check_returns(got: dict[str, Any], returns: dict[str, str]) -> dict[str, Any]:
@@ -107,6 +150,15 @@ def run(instruction: str, data: Any, returns: dict[str, str], *, llm=None) -> di
     if len(text) > MAX_INPUT_CHARS:
         text = text[:MAX_INPUT_CHARS] + f"\n…(数据太长, 只给了前 {MAX_INPUT_CHARS} 字)"
     fields = "\n".join(f'- "{k}": {t}' for k, t in returns.items())
-    raw = (llm or _call_llm)(_PROMPT.format(instruction=instruction, data=text, fields=fields))
-    out = check_returns(parse_json(raw), returns)
+    call = llm or _call_llm
+    prompt = _PROMPT.format(instruction=instruction, data=text, fields=fields)
+    raw = call(prompt)
+    try:
+        got = parse_json(raw)
+    except ValueError as e:
+        # 模型偶尔不守格式 (空回答 / 一段话): 带着它上次的开头再要一次, 还不行才算这一步失败
+        head = json.dumps((raw or "")[:80], ensure_ascii=False)
+        raw = call(prompt + _RETRY_SUFFIX.format(why=str(e).replace("小鲶没有按要求交回 JSON: ", ""), head=head))
+        got = parse_json(raw)
+    out = check_returns(got, returns)
     return {"ok": True, **out}

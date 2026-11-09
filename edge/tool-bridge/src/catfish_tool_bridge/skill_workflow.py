@@ -239,12 +239,54 @@ def resolve(value: Any, ctx: dict[str, Any]) -> Any:
     return value
 
 
+_LIST_SEPARATORS = re.compile(r"[,，、;；/|\n]+")
+
+
+def coerce_param(value: Any, typ: str) -> Any:
+    """按参数声明的类型整理传进来的值 (11/09)。
+
+    小鲶从对话里发起工作流时, 经常把 list 参数写成一个字符串 ("资质,认证,审核" / "资质/认证/审核"):
+    10/19、11/02 「每周资质邮件摘要」两次都死在这 (for_each 取到的不是列表)。模型没写对不该让工作流失败,
+    类型是我们声明的, 转换也该是我们做。number / bool 同理; 转不了就原样留着, 让后面的步骤报它自己的错。"""
+    if value is None:
+        return value
+    if typ == "list":
+        if isinstance(value, list):
+            return value
+        if isinstance(value, (tuple, set)):
+            return list(value)
+        if isinstance(value, str):
+            t = value.strip()
+            if t.startswith("["):
+                try:
+                    v = json.loads(t)
+                    if isinstance(v, list):
+                        return v
+                except ValueError:
+                    pass
+            return [x.strip() for x in _LIST_SEPARATORS.split(t) if x.strip()]
+        return [value]
+    if typ == "number" and isinstance(value, str):
+        try:
+            f = float(value.strip())
+            return int(f) if f.is_integer() else f
+        except ValueError:
+            return value
+    if typ == "bool" and isinstance(value, str):
+        low = value.strip().lower()
+        if low in ("true", "yes", "1", "是", "开"):
+            return True
+        if low in ("false", "no", "0", "否", "关"):
+            return False
+    return value
+
+
 def resolve_params(wf: dict[str, Any], given: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for k, spec in (wf.get("params") or {}).items():
         spec = spec if isinstance(spec, dict) else {}
         if k in given and given[k] not in (None, ""):
-            out[k] = given[k]
+            out[k] = coerce_param(given[k], spec.get("type", "text"))
         elif "default" in spec:
             d = spec["default"]
             out[k] = time.strftime("%Y-%m-%d") if (spec.get("type") == "date" and d == "today") else d

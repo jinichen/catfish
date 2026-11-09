@@ -262,3 +262,46 @@ def test_删运行记录_还在跑和等确认的留着(env):
     assert res["deleted"] == [failed] and set(res["kept"]) == {waiting, running}
     with pytest.raises(ValueError):
         store.delete_runs(["../../etc/passwd"])
+
+
+# ── 11/09 两个真失败 (每周资质邮件摘要 10/19、11/02): list 参数传成字符串; 小鲶回答空 / 带话 ──
+
+def test_list参数传成字符串也能跑for_each(env):
+    """小鲶从对话里发起时把 keywords 写成 "资质,认证,审核" —— 工作流声明的是 list, 该由引擎转, 不该死在 for_each。"""
+    wf = {**WF, "params": {"keywords": {"type": "list", "default": ["资质"]}},
+          "steps": [{"id": "mails", "action": "email_search", "for_each": "${params.keywords}", "params": {"query": "${item}"}}]}
+    for given in ("资质,认证,审核", "资质/认证/审核", "资质、认证、审核", '["资质", "认证", "审核"]'):
+        env["calls"]["email_search"].clear()
+        r = engine.start("personal/qual", wf, {"keywords": given}, skill_lookup=_lookup)
+        assert r["status"] == "done", (given, r.get("error"))
+        assert [c["query"] for c in env["calls"]["email_search"]] == ["资质", "认证", "审核"], given
+
+
+def test_参数按声明类型转换():
+    c = engine.coerce_param
+    assert c(["a"], "list") == ["a"] and c("a;b|c\nd", "list") == ["a", "b", "c", "d"] and c("", "list") == []
+    assert c("7", "number") == 7 and c("7.5", "number") == 7.5 and c("七", "number") == "七"
+    assert c("true", "bool") is True and c("否", "bool") is False and c("maybe", "bool") == "maybe"
+    assert c("随便", "text") == "随便" and c(None, "list") is None
+
+
+def test_小鲶回答空或带话_再要一次():
+    replies = iter(["", '{"a": "A"}'])
+    prompts = []
+
+    def llm(p):
+        prompts.append(p)
+        return next(replies)
+    assert workflow_xiaonian.run("x", {}, {"a": "text"}, llm=llm) == {"ok": True, "a": "A"}
+    assert len(prompts) == 2 and "回答是空的" in prompts[1] and "第一个字符必须是 {" in prompts[1]
+
+    # 先给示例再给结果: 取最后一个能解析的对象; <think> 段和前后的话都不算
+    raw = '<think>想一想</think>比如 {"a": "示例"} 这样。最终: {"a": "真的"} 完毕'
+    assert workflow_xiaonian.parse_json(raw) == {"a": "真的"}
+    assert workflow_xiaonian.parse_json('{"a": "带}花括号的字符串"}') == {"a": "带}花括号的字符串"}
+
+    # 两次都不是 JSON 才算失败, 而且只重试一次
+    n = []
+    with pytest.raises(ValueError, match="没有按要求交回 JSON"):
+        workflow_xiaonian.run("x", {}, {"a": "text"}, llm=lambda p: n.append(1) or "我觉得是 A")
+    assert len(n) == 2
