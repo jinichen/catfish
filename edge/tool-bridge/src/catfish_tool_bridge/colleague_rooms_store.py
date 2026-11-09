@@ -249,6 +249,16 @@ def find_card(room_id: str, task_id: str) -> dict[str, Any] | None:
     return None
 
 
+def find_form_card(room_id: str, form_id: str) -> dict[str, Any] | None:
+    """这个群里这张表的表卡 (11/09 群里发表)。"""
+    with _conn() as con:
+        for r in con.execute("SELECT data FROM messages WHERE room_id = ? AND kind = 'form' ORDER BY seq DESC", (room_id,)):
+            card = (json.loads(r["data"]).get("form") or {})
+            if card.get("form_id") == form_id:
+                return card
+    return None
+
+
 def task_messages(room_id: str) -> list[dict[str, Any]]:
     """群里跟任务有关的消息 (任务卡 / 状态 / 延期), 按先后。给「任务」面板汇总用。"""
     with _conn() as con:

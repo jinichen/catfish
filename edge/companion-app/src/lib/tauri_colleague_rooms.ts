@@ -55,6 +55,19 @@ export interface RoomCard {
   auto_post?: boolean;
 }
 
+/** 11/09 群里发的表 (colleague_rooms_forms.py): 表本身走填表, 群里只有这张卡 + 每人的状态 */
+export interface RoomFormCard {
+  form_id: string;
+  title: string;
+  deadline: string | null;
+  /** 几项 */
+  fields: number;
+  recipients: string[];
+  owner: string;
+}
+export type RoomFormState = "submitted" | "declined" | "closed";
+export interface RoomFormStatus { form_id: string; title: string; state: RoomFormState }
+
 /** 发起人电脑自动转进群的一次结果 */
 export interface RoomAuto { task_id: string; title: string; period: number; by: string }
 
@@ -66,8 +79,11 @@ export interface RoomMessage {
   msg_id: string;
   /** 本机库里的先后编号 (11/6): 往上翻 / 搜索结果定位用 */
   seq?: number;
-  kind: "text" | "system" | "card" | "status" | "auto" | "deadline";
+  kind: "text" | "system" | "card" | "status" | "auto" | "deadline" | "form" | "form_status";
   card?: RoomCard;
+  /** 11/09 群里发表 */
+  form?: RoomFormCard;
+  form_status?: RoomFormStatus;
   /** 11/07 发起人延期: 这张任务卡的新截止 */
   deadline?: { task_id: string; deadline: string };
   status?: RoomStatus;

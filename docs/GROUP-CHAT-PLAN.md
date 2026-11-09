@@ -302,6 +302,19 @@ X25519 静态-静态 DH → HKDF-SHA256 → ChaCha20-Poly1305 (用已有的 `cry
    同事的结果包在分隔符里只当材料; 只出意见, 不替人发任何东西。核对结论存在任务上, 谁后来改了再交会标「再核对一次」。
    外发记录用途「派任务 · 小鲶核对结果」。暂时只核对马上做的任务 (定时 / 周期每期不一样)。
 
+## 4.11 群里发表 (11/09, 鸿波「填表能力和群聊的能力有没重叠?」)
+
+重叠的是底座 (同一个邮筒、同一层加密、同一个协同页), 用途不重叠; 缺的是「在群里发一张表」—— 「项目群里统计一下各人进度」
+走群比选邮箱自然。做法跟 §2 群里派任务一样: 表照旧走填表 (字段发给每个人、回答只回发起人), 群里只多两样:
+
+- 表卡 `room_msg.form {form_id, title, deadline, fields(项数), recipients[], owner}`: 群聊顶上「📋 发表」(FormComposer 的群模式,
+  收件人 = 群里已加入的人, 可去掉几个) → 发出去后表卡进群, 收件人算被 @。只认发起人自己发的。
+- 状态 `room_msg.form_status {form_id, title, state: submitted | declined | closed}`: 收件人点「提交 / 不填」、发起人点「结束收集」时
+  同一次点击回群; 只有状态, 填的内容不进群。submitted / declined 只认表卡上的人, closed 只认发起人。
+- 表卡下面每人一格 (还没交 / 已交 / 不填), 被点名的人在卡上点「去填」, 发起人点「看进度」。老版本收到只当普通消息。
+- 代码: tool-bridge `colleague_rooms_forms.py` (+ `colleague_rooms_tasks.classify` 统一收各种附加字段), `forms.py` create 收 `room_id`;
+  Companion `RoomFormMessage.tsx` / `roomForms.ts`, `FormComposer` 多 `room` 参数; 小鲶 `catfish_form create` 多 `room_id`。
+
 ## 5. 以后再说
 
 手机端看群 (经手机中转站, 端到端加密)、企微 / 飞书群打通 (中转站已有分发)、

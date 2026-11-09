@@ -48,6 +48,7 @@ FORM_TOOLS: List[Dict[str, Any]] = [
                 "note": {"type": "string", "description": "给填表人的说明"},
                 "recipients": {"type": "array", "items": {"type": "string"},
                                "description": "收件人邮箱 (发出后只能加人; 任务最多 20 人)"},
+                "room_id": {"type": "string", "description": "create: 在哪个群里发 (r_…, 收件人须是群里已加入的人); 表卡进群, 谁交了群里看得到"},
                 "fields": {
                     "type": "array",
                     "items": {"type": "object", "properties": {

@@ -612,3 +612,91 @@ def test_任务卡和状态不算未读_聊天才算(w):
                                "text": f"收到 @{ZHANG}", "mentions": [ZHANG]})
     r = next(r for r in cr.list_rooms()["rooms"] if r["room_id"] == rid)
     assert r["unread"] == base + 1 and r["mentioned"] == 1
+
+
+# ── 11/09 群里发表 (colleague_rooms_forms): 表卡进群, 提交 / 不填 / 结束 回群状态, 填的内容只回发起人 ──────
+
+
+def _form_fields():
+    return [{"label": "项目部", "type": "text", "required": True}, {"label": "检查次数", "type": "number"}]
+
+
+def test_群里发表_表卡进群_状态回群_内容只回发起人(w):
+    rid = _room_all_joined(w)
+    w.box.clear()
+    f = forms.create({"title": "10 月安全检查", "fields": _form_fields(), "deadline": "2099-11-24", "note": "每个项目部一行",
+                      "recipients": [ZHANG, LI], "room_id": rid})["form"]
+    assert f["room_id"] == rid
+    out = forms.send(f["form_id"])
+    assert sorted(out["sent"]) == [LI, ZHANG] and "room_notice" not in out
+    assert sorted((m["to"], m["kind"]) for m in w.box) == [(LI, "form_invite"), (LI, "room_msg"), (ZHANG, "form_invite"), (ZHANG, "room_msg")]
+    assert all(m["env"]["room_id"] == rid for m in w.box if m["kind"] == "form_invite")
+    card = [m for m in cr.messages(rid) if m["kind"] == "form"][0]
+    assert card["form"]["recipients"] == [ZHANG, LI] and card["form"]["fields"] == 2 and sorted(card["mentions"]) == [LI, ZHANG]
+    assert card["text"] == "📋 请填《10 月安全检查》(2 项, 11/24 截止)\n每个项目部一行"
+    # 字段定义走 form_invite, 群里的表卡只有名字 / 项数 / 截止 / 给谁
+    assert not any("检查次数" in json.dumps(m["env"], ensure_ascii=False) for m in w.box if m["kind"] == "room_msg")
+
+    w.be(LI)
+    cr.sync()
+    forms.sync()                                     # 李四先把表收下 (下面 box.clear 会把没取的清掉)
+    w.be(ZHANG)
+    ev = cr.sync()["events"]
+    assert [(e["kind"], e["msg_kind"]) for e in ev] == [("mention", "form")]   # 表卡算 @ 他 (秘书按 form 跳过, 走填表那条)
+    forms.sync()
+    rec = forms.load_incoming(f["form_id"])
+    assert rec["room_id"] == rid
+    w.box.clear()
+    r = forms.submit(f["form_id"], {"项目部": "华东一部", "检查次数": 3})
+    assert r["ok"]
+    group = [m for m in w.box if m["kind"] == "room_msg"]
+    assert sorted(m["to"] for m in group) == sorted([BOSS, LI]) and {m["env"]["form_status"]["state"] for m in group} == {"submitted"}
+    assert all("华东一部" not in json.dumps(m["env"], ensure_ascii=False) for m in group)      # 填的内容不进群
+    assert any("华东一部" in json.dumps(m["env"], ensure_ascii=False) for m in w.box if m["kind"] == "form_response")
+
+    w.be(LI)
+    cr.sync()
+    forms.decline(f["form_id"], "我们部不涉及")
+    w.sync(BOSS)
+    forms.sync()
+    st = [(m["from"], m["form_status"]["state"], m["text"]) for m in cr.messages(rid) if m["kind"] == "form_status"]
+    assert st == [(ZHANG, "submitted", "zhang 交了《10 月安全检查》"), (LI, "declined", "li 不填《10 月安全检查》")]
+    assert "我们部不涉及" not in json.dumps(cr.messages(rid), ensure_ascii=False)
+    w.box.clear()
+    forms.close(f["form_id"])
+    assert {m["env"]["form_status"]["state"] for m in w.box if m["kind"] == "room_msg"} == {"closed"}
+    w.sync(ZHANG)
+    assert [m["form_status"]["state"] for m in cr.messages(rid) if m["kind"] == "form_status"][-1] == "closed"
+    assert [m["text"] for m in cr.messages(rid) if m["kind"] == "form_status"][-1] == "zhou 结束收集了《10 月安全检查》"
+
+
+def test_群里发表_只能发给群里已加入的人_不在群里的表不碰群(w):
+    rid = _make_room(w)                              # 张三、李四都还没加入
+    with pytest.raises(ValueError, match="不在群里"):
+        forms.create({"title": "x", "fields": _form_fields(), "recipients": [ZHANG], "room_id": rid})
+    f = forms.create({"title": "x", "fields": _form_fields(), "recipients": [ZHANG]})["form"]
+    assert f["room_id"] is None
+    w.box.clear()
+    forms.send(f["form_id"])
+    assert [m["kind"] for m in w.box] == ["form_invite"] and "room_id" not in w.box[0]["env"]
+
+
+def test_冒名的表卡和填表状态_不收(w):
+    from catfish_tool_bridge import colleague_rooms_forms as rf
+    rid = _room_all_joined(w)
+    good = {"form_id": "f_20261109_0123abcd", "title": "安全检查", "fields": 2, "recipients": [ZHANG], "owner": BOSS}
+    w.box.append({"from": LI, "to": ZHANG, "kind": "room_msg",
+                  "env": {"v": 1, "room_id": rid, "msg_id": "m_" + "e" * 20, "at": "x", "text": "假卡", "form": good}})
+    w.box.append({"from": BOSS, "to": ZHANG, "kind": "room_msg",
+                  "env": {"v": 1, "room_id": rid, "msg_id": "m_" + "f" * 20, "at": "x", "text": "请填", "form": good}})
+    w.box.append({"from": LI, "to": ZHANG, "kind": "room_msg",       # 李四不在这张表上: 报「交了」不收
+                  "env": {"v": 1, "room_id": rid, "msg_id": "m_" + "a" * 20, "at": "x", "text": "li 交了",
+                          "form_status": {"form_id": good["form_id"], "title": "安全检查", "state": "submitted"}}})
+    w.sync(ZHANG)
+    assert [m["kind"] for m in cr.messages(rid) if m["kind"] in ("form", "form_status")] == ["form"]
+    w.be(LI)
+    cr.sync()
+    w.box.clear()
+    rf.echo_status(rid, good["form_id"], "安全检查", "closed")   # 不是发起人说「结束收集」: 不收
+    w.sync(ZHANG)
+    assert [m["kind"] for m in cr.messages(rid) if m["kind"] in ("form", "form_status")] == ["form"]

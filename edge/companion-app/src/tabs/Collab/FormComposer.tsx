@@ -4,6 +4,8 @@
  * 字段两种来源: 选一个 Excel 模板 (第一行做表头, 类型自动推断, 导出按模板列顺序), 或者一行一行自己加。
  * 也可以直接跟小鲶说「把这张表发给 xx 填」—— 它走同一个 catfish_form, 发之前会先念给你确认。
  * 收件人: 输邮箱, 或按姓名 / 部门搜全公司通讯录 (中央只给 邮箱 / 姓名 / 部门)。
+ * 11/09 在群里发 (room 有值): 收件人就是群里已加入的人 (可以去掉几个), 不再选邮箱; 发出去后表卡进群,
+ *   谁交了 / 不填 群里看得到, 填的内容照旧只回发起人。
  */
 import { useCallback, useState } from "react";
 
@@ -36,17 +38,25 @@ function toFields(rows: Row[]): FieldDraft[] {
   }));
 }
 
+export interface ComposerRoom {
+  roomId: string;
+  name: string;
+  /** 群里已加入的人 (不含自己) */
+  members: { email: string; name: string }[];
+}
+
 /** onCreated 的 notice: 发送失败的原因 —— 弹层马上要关, 得交给进度页接着显示, 不然员工以为发出去了。 */
-export default function FormComposer({ onClose, onCreated }: {
+export default function FormComposer({ onClose, onCreated, room }: {
   onClose: () => void;
   onCreated: (formId: string, notice?: string) => void;
+  room?: ComposerRoom;
 }) {
   const [title, setTitle] = useState("");
   const [deadline, setDeadline] = useState("");
   const [note, setNote] = useState("");
   const [rows, setRows] = useState<Row[]>([blankRow()]);
   const [template, setTemplate] = useState<string | null>(null);
-  const [recipients, setRecipients] = useState<string[]>([]);
+  const [recipients, setRecipients] = useState<string[]>(room ? room.members.map((m) => m.email) : []);
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -74,7 +84,7 @@ export default function FormComposer({ onClose, onCreated }: {
     try {
       const all = allRecipients(recipients, typed);
       const { form } = await formCreate({ title, fields: toFields(rows), deadline: deadline || null, note,
-                                          recipients: all, template_path: template });
+                                          recipients: all, template_path: template, room_id: room?.roomId ?? null });
       let notice: string | undefined;
       if (send) {
         try {
@@ -82,6 +92,7 @@ export default function FormComposer({ onClose, onCreated }: {
           if (r.failed.length) {
             notice = `${r.failed.length} 人没发出去 (表已存好, 可以在这里再发): ${r.failed.map((f) => `${f.to} — ${f.error}`).join("; ")}`;
           }
+          if (r.room_notice) notice = [notice, r.room_notice].filter(Boolean).join("; ");
         } catch (e) {
           notice = `表已存好, 但没发出去: ${e instanceof Error ? e.message : String(e)}`;
         }
@@ -99,8 +110,11 @@ export default function FormComposer({ onClose, onCreated }: {
   const canSend = canSave && (recipients.length > 0 || typed.trim());
 
   return (
-    <Overlay title="发起填表" onClose={onClose} width={760}>
-      <span style={muted}>也可以直接跟小鲶说「把这张表发给安全部的人填, 周五前」。回答只回到你这台电脑, 中央只转交加密内容、看不到原文。</span>
+    <Overlay title={room ? `在「${room.name}」里发表` : "发起填表"} onClose={onClose} width={760}>
+      <span style={muted}>
+        {room ? "群里会出现一张表卡, 谁交了 / 不填 群里看得到; 每个人填的内容只回到你这台电脑, 不进群。"
+              : "也可以直接跟小鲶说「把这张表发给安全部的人填, 周五前」。回答只回到你这台电脑, 中央只转交加密内容、看不到原文。"}
+      </span>
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 8 }}>
         <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="表名, 如「10 月安全检查」" style={inputStyle} />
         <input type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} title="截止日" style={inputStyle} />
@@ -132,8 +146,21 @@ export default function FormComposer({ onClose, onCreated }: {
       ))}
       <div><Btn kind="ghost" onClick={() => setRows([...rows, blankRow()])}>+ 加一项</Btn></div>
 
-      <strong style={{ fontSize: 13 }}>发给谁</strong>
-      <RecipientPicker picked={recipients} onPicked={setRecipients} typed={typed} onTyped={setTyped} onError={onPickError} />
+      <strong style={{ fontSize: 13 }}>发给谁{room ? ` · 群里已加入的 ${room.members.length} 人 (不填的去掉勾)` : ""}</strong>
+      {room ? (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 14px" }}>
+          {room.members.map((p) => (
+            <label key={p.email} style={{ fontSize: 13, display: "flex", gap: 4, alignItems: "center" }} title={p.email}>
+              <input type="checkbox" checked={recipients.includes(p.email)}
+                     onChange={(e) => setRecipients(e.target.checked ? [...recipients, p.email] : recipients.filter((x) => x !== p.email))} />
+              {p.name || p.email.split("@")[0]}
+            </label>
+          ))}
+          {room.members.length === 0 && <span style={muted}>群里还没有别人加入, 没法发。</span>}
+        </div>
+      ) : (
+        <RecipientPicker picked={recipients} onPicked={setRecipients} typed={typed} onTyped={setTyped} onError={onPickError} />
+      )}
 
       {error && <ErrorLine>{error}</ErrorLine>}
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>

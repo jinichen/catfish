@@ -11,6 +11,7 @@
  *   派定时 / 周期任务时可以勾「每次结果自动发到群里」(唯一的自动发群特例, 发起人电脑收到结果时转进群)。
  * 11/07 (参照 hermes 群聊): 没送到的不再弹红字, 挂在那条消息下面 (RoomsDelivery.tsx); 群主可以转让; 群里能发文件 (📎);
  *   接下就开工的任务, 我这一栏显示小鲶做到第几步。
+ * 11/09 「📋 发表」: 在群里发一张表给已加入的人填 (RoomFormMessage.tsx); 表本身走填表, 群里只有表卡和谁交了。
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
@@ -25,15 +26,21 @@ import {
   type AssistKind,
   type RoomDetail, type RoomMember, type RoomMessage, type RoomSummary,
 } from "../../lib/tauri_colleague_rooms";
-import { Overlay, muted } from "./formsUi";
-import RoomComposer, { NAME_MAX } from "./RoomComposer";
-import { RetentionDialog, RetentionSelect, SearchPanel, daysLabel } from "./RoomsExtras";
+import { muted } from "./formsUi";
+import FormComposer from "./FormComposer";
+import FormFill from "./FormFill";
+import FormProgress from "./FormProgress";
+import RoomComposer from "./RoomComposer";
+import RoomFormMessage from "./RoomFormMessage";
+import { hiddenFormStatus } from "./roomForms";
+import { Confirm, InfoEditor, RetentionDialog, SearchPanel, daysLabel } from "./RoomsExtras";
 import { AttachButton, DeliveryLine, IssueBar, PickedChips, RoomFileList, pickFiles, stageFiles, type PickedFile } from "./RoomsDelivery";
 import { STATE_WORD, cardStates, expectHint, latestDeadline, parseChatTask, summaryText, type ChatTask, type SingleTask } from "./roomTasks";
 import RoomTasksBoard, { tasksButtonLabel, type RoomTasksData } from "./RoomTasksBoard";
 import TaskProgress from "./TaskProgress";
 import TaskWork from "./TaskWork";
 import { Btn, ErrorLine, cardStyle, inputStyle } from "./roomLinkUi";
+import { refreshForms } from "../../lib/formsStore";
 import { useUIStore } from "../../store/ui";
 
 export const TEXT_MAX = 4000;
@@ -72,7 +79,7 @@ export function waitingNotice(waiting: RoomMember[]): string {
 
 /** 群列表里最后一条的预览: 任务状态 / 自动转发的文字里已经有名字了 */
 export function lastPreview(last: { name: string; text: string; kind?: string }): string {
-  return last.kind === "status" || last.kind === "auto" || last.kind === "deadline" ? last.text : `${last.name}: ${last.text}`;
+  return last.kind === "status" || last.kind === "auto" || last.kind === "deadline" || last.kind === "form_status" ? last.text : `${last.name}: ${last.text}`;
 }
 
 /** 截止 / 时间写短: 「2026-11-06」→「11/6」,「2026-11-06T15:00」→「11/6 15:00」(今年以外带年份) */
@@ -86,7 +93,9 @@ export function shortWhen(iso: string | null | undefined, now: Date = new Date()
 /** 状态行要不要单独显示: 那条任务就在眼前时, 状态已经写在它下面那一行了, 不再单独一行 (11/5 鸿波: 太乱) */
 export function visibleMessages(messages: RoomMessage[]): RoomMessage[] {
   const cards = new Set(messages.filter((m) => m.kind === "card" && m.card).map((m) => m.card!.task_id));
-  return messages.filter((m) => !(m.kind === "status" && m.status && cards.has(m.status.task_id)));
+  const forms = hiddenFormStatus(messages);
+  return messages.filter((m) => !(m.kind === "status" && m.status && cards.has(m.status.task_id))
+                               && !(m.kind === "form_status" && m.form_status && forms.has(m.form_status.form_id)));
 }
 
 export function timeLabel(at: string, now: Date = new Date()): string {
@@ -218,6 +227,8 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
   const [work, setWork] = useState<string | null>(null);
   const [watch, setWatch] = useState<{ id: string; notice?: string } | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
+  // 11/09 群里发表: 发起弹层 / 我去填 / 发起人看进度
+  const [formUi, setFormUi] = useState<null | { compose: true } | { fill: string } | { watch: string; notice?: string }>(null);
   /** 提示 (小鲶起草好了 / 接下了 / 派出了): 不是错误, 不用红字, 几秒后自己消失 */
   const [hint, setHint] = useState<string | null>(null);
   useEffect(() => {
@@ -404,6 +415,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
           </div>
           {/* 按钮不折行; 窄的时候让左边的群名 / 说明去折 */}
           <span style={{ display: "flex", gap: 8, flexShrink: 0, whiteSpace: "nowrap" }}>
+            {joined && <Btn kind="ghost" onClick={() => setFormUi({ compose: true })}>📋 发表</Btn>}
             <Btn kind="ghost" onClick={() => setShowTasks((v) => !v)}>{showTasks ? "收起任务" : tasksButtonLabel(tasksData)}</Btn>
             <Btn kind="ghost" onClick={() => setSearching((v) => !v)}>🔍 搜索</Btn>
             <Btn kind="ghost" onClick={() => setShowMembers((v) => !v)}>{showMembers ? "收起成员" : `👥 成员 ${room.joined}`}</Btn>
@@ -448,6 +460,10 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
                            }, "没收到你接下的通知")}
                            onWork={() => void openWork(m.card!.task_id)} onWatch={() => setWatch({ id: m.card!.task_id })}
                            onSummary={joined ? () => void fillSummary(m.card!.task_id, m.card!.title) : undefined} />
+            ) : m.kind === "form" && m.form ? (
+              <RoomFormMessage m={m} me={me} members={members} messages={shown} roomId={roomId} onChanged={() => void load()}
+                               onFill={async (id) => { await refreshForms(); setFormUi({ fill: id }); }}   // 表卡和表走两个邮筒, 先取一次
+                               onWatch={(id) => setFormUi({ watch: id })} />
             ) : (
               <Bubble m={m} mine={m.from === me} members={members} me={me} quoted={m.reply_to ? byId.get(m.reply_to) : undefined}
                       roomId={roomId} onChanged={() => void load()}
@@ -607,6 +623,12 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
       </div>}
 
       {work && <TaskWork taskId={work} onClose={() => { setWork(null); void load(); }} />}
+      {formUi && "compose" in formUi && (
+        <FormComposer room={{ roomId, name: room.name, members: members.filter((x) => x.state === "joined" && x.email !== me) }}
+                      onClose={() => setFormUi(null)} onCreated={(id, n) => { setFormUi({ watch: id, notice: n }); void load(); }} />
+      )}
+      {formUi && "fill" in formUi && <FormFill formId={formUi.fill} onClose={() => { setFormUi(null); void load(); }} />}
+      {formUi && "watch" in formUi && <FormProgress formId={formUi.watch} initialError={formUi.notice} onClose={() => { setFormUi(null); void load(); }} />}
       {watch && <TaskProgress taskId={watch.id} initialError={watch.notice} onClose={() => setWatch(null)} />}
       {modal === "add" && <RoomComposer roomId={roomId} existing={room.members} onClose={() => setModal(null)}
                                         onDone={(_id, n) => { setModal(null); onNotice(n); void load(); }} />}
@@ -661,9 +683,10 @@ function Bubble({ m, mine, members, me, quoted, onReply, roomId, onChanged }: {
   if (m.kind === "deadline") {   // 11/07 发起人延期
     return <span style={oneLine} title={m.text}>⏳ {m.text} · {timeLabel(m.at)}</span>;
   }
-  if (m.kind === "status") {
-    // 只有那条任务不在眼前 (更早、没显示) 时才单独一行
-    const icon = m.status?.state === "done" ? "✅" : m.status?.state === "accepted" ? "🛠" : "↩️";
+  if (m.kind === "status" || m.kind === "form_status") {
+    // 只有那条任务 / 那张表不在眼前 (更早、没显示) 时才单独一行
+    const st = m.status?.state ?? m.form_status?.state;
+    const icon = st === "done" || st === "submitted" ? "✅" : st === "accepted" ? "🛠" : st === "closed" ? "📋" : "↩️";
     return <span style={oneLine} title={m.text}>{icon} {m.text} · {timeLabel(m.at)}</span>;
   }
   const atMe = !mine && (m.mentions ?? []).includes(me);
@@ -743,40 +766,5 @@ function TaskMessage({ m, me, members, messages, busy, local: rec, onAccept, onW
       </div>
       <DeliveryLine roomId={roomId} msgId={m.msg_id} rows={m.delivery} members={members} align={mine ? "flex-end" : "flex-start"} onChanged={onChanged} />
     </div>
-  );
-}
-
-function InfoEditor({ room, busy, onClose, onSave }: {
-  room: RoomSummary; busy: boolean; onClose: () => void; onSave: (name: string, purpose: string, retentionDays: number | null) => void;
-}) {
-  const [name, setName] = useState(room.name);
-  const [purpose, setPurpose] = useState(room.purpose);
-  const [keep, setKeep] = useState<number | null>(room.retention_days ?? null);
-  return (
-    <Overlay title="改群名 / 公告" onClose={onClose} width={520}>
-      <input value={name} onChange={(e) => setName(e.target.value)} maxLength={NAME_MAX} style={inputStyle} />
-      <textarea value={purpose} onChange={(e) => setPurpose(e.target.value)} rows={3} maxLength={500} placeholder="群公告 / 用途"
-                style={{ ...inputStyle, resize: "vertical" }} />
-      <RetentionSelect value={keep} onChange={setKeep} />
-      <span style={muted}>改了会通知所有成员。记录保留只能比公司规定短; 每个人还能给自己设得更短。</span>
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-        <Btn kind="ghost" onClick={onClose}>取消</Btn>
-        <Btn kind="primary" disabled={busy || !name.trim()} onClick={() => onSave(name.trim(), purpose.trim(), keep)}>保存</Btn>
-      </div>
-    </Overlay>
-  );
-}
-
-function Confirm({ title, text, ok, busy, onClose, onOk }: {
-  title: string; text: string; ok: string; busy: boolean; onClose: () => void; onOk: () => void;
-}) {
-  return (
-    <Overlay title={title} onClose={onClose} width={460}>
-      <span style={{ fontSize: 13 }}>{text}</span>
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-        <Btn kind="ghost" onClick={onClose}>取消</Btn>
-        <Btn kind="primary" disabled={busy} onClick={onOk}>{busy ? "处理中…" : ok}</Btn>
-      </div>
-    </Overlay>
   );
 }

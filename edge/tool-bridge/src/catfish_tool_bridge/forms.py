@@ -10,7 +10,8 @@
   incoming/<form_id>.json                别人发给我的: 字段 + 草稿 + 我交了什么
 
 邮筒里的信封 (JSON, 中央看不懂也不看):
-  form_invite   {v, form_id, form: {title, note, deadline, fields}}   —— 不含收件人名单、不含别人的回答
+  form_invite   {v, form_id, form: {title, note, deadline, fields}, room_id?}   —— 不含收件人名单、不含别人的回答
+                room_id (11/09 群里发表): 收件人提交 / 不填时往这个群回一条状态 (colleague_rooms_forms)
   form_response {v, form_id, status: submitted|declined, values?, reason?, at}
   form_remind   {v, form_id, text?}
   form_close    {v, form_id}
@@ -240,12 +241,15 @@ def create(args: dict[str, Any]) -> dict[str, Any]:
     if deadline:
         date.fromisoformat(deadline)
     owner = forms_net.me()
+    recipients = _norm_recipients(args.get("recipients"), owner)
+    # 11/09 群里发表: 群在本机、我已加入、收件人都是群里已加入的人; 发出去后表卡进群, 提交 / 不填 / 结束 回群状态
+    from . import colleague_rooms_forms  # noqa: PLC0415
+    room_id = colleague_rooms_forms.room_for(args.get("room_id"), recipients)
     form_id = f"f_{datetime.now():%Y%m%d}_{secrets.token_hex(4)}"
-    form = {"form_id": form_id, "title": title[:80], "owner": owner, "created_at": _now(),
+    form = {"form_id": form_id, "title": title[:80], "owner": owner, "created_at": _now(), "room_id": room_id,
             "deadline": deadline, "note": str(args.get("note") or "").strip()[:500],
             "fields": normalize_fields(args.get("fields")), "status": "draft", "template": None,
-            "recipients": {e: {"invited_at": None, "reminded_at": None}
-                           for e in _norm_recipients(args.get("recipients"), owner)}}
+            "recipients": {e: {"invited_at": None, "reminded_at": None} for e in recipients}}
     tpl = str(args.get("template_path") or "").strip()
     if tpl:
         dest = _out_dir(form_id) / "template.xlsx"
@@ -287,7 +291,8 @@ def send(form_id: str) -> dict[str, Any]:
     todo = [e for e, v in form["recipients"].items() if not v.get("invited_at")]
     if not todo:
         raise ValueError("没有要发的人 (都发过了, 或还没加收件人)")
-    env = {"v": ENVELOPE_VERSION, "form_id": form_id, "form": _public_form(form)}
+    env = {"v": ENVELOPE_VERSION, "form_id": form_id, "form": _public_form(form),
+           **({"room_id": form["room_id"]} if form.get("room_id") else {})}
     ttl = forms_net.ttl_seconds(form.get("deadline"))
     sent, failed = [], []
     for e in todo:
@@ -300,7 +305,16 @@ def send(form_id: str) -> dict[str, Any]:
     if sent:
         form["status"] = "open"
     _save_outgoing(form)
-    return {"ok": bool(sent), "sent": sent, "failed": failed}
+    room_failed = None
+    if sent and form.get("room_id") and not form.get("room_card_at"):   # 11/09 表卡进群 (一张表只发一次)
+        from . import colleague_rooms_forms  # noqa: PLC0415
+        try:
+            colleague_rooms_forms.post_card(form["room_id"], form)
+            form["room_card_at"] = _now()
+            _save_outgoing(form)
+        except (ValueError, LookupError) as e:
+            room_failed = f"表发出去了, 但没发到群里: {e}"
+    return {"ok": bool(sent), "sent": sent, "failed": failed, **({"room_notice": room_failed} if room_failed else {})}
 
 
 def remind(form_id: str, text: str = "") -> dict[str, Any]:
@@ -340,7 +354,16 @@ def close(form_id: str) -> dict[str, Any]:
             failed.append({"to": e, "error": str(err)})
     form["status"], form["closed_at"] = "closed", _now()
     _save_outgoing(form)
+    _echo_room(form.get("room_id"), form_id, form["title"], "closed")
     return {"ok": True, "failed": failed}
+
+
+def _echo_room(room_id: str | None, form_id: str, title: str, state: str) -> None:
+    """11/09 群里发的表: 提交 / 不填 / 结束 往群里回一条状态 (只有状态, 内容不进群); 回不出去不影响表本身。"""
+    if not room_id:
+        return
+    from . import colleague_rooms_forms  # noqa: PLC0415
+    colleague_rooms_forms.echo_status(room_id, form_id, title, state)
 
 
 def progress(form: dict[str, Any]) -> dict[str, Any]:
@@ -407,6 +430,7 @@ def submit(form_id: str, values: Any) -> dict[str, Any]:
     rec["submitted"] = {"values": clean, "at": at}
     rec.pop("declined", None)
     _write(_in_path(form_id), rec)
+    _echo_room(rec.get("room_id"), form_id, rec["form"]["title"], "submitted")
     return {"ok": True, "submitted_at": at, "late": _is_late(rec["form"].get("deadline"), at)}
 
 
@@ -419,6 +443,7 @@ def decline(form_id: str, reason: str) -> dict[str, Any]:
     _respond(rec, {"v": ENVELOPE_VERSION, "form_id": form_id, "status": "declined", "reason": reason[:300], "at": at})
     rec["declined"] = {"reason": reason[:300], "at": at}
     _write(_in_path(form_id), rec)
+    _echo_room(rec.get("room_id"), form_id, rec["form"]["title"], "declined")
     return {"ok": True}
 
 
@@ -440,8 +465,9 @@ def _apply(msg: dict[str, Any]) -> str | None:
         old = _read(_in_path(fid)) or {}
         if old and old.get("owner") != sender:
             return None   # 同编号别人发的: 不覆盖
+        from .colleague_tasks_room import room_id_or_none  # noqa: PLC0415
         rec = {**old, "form_id": fid, "owner": sender, "received_at": old.get("received_at") or _now(),
-               "status": "open", "form": {"title": str(form.get("title") or "")[:80],
+               "status": "open", "room_id": room_id_or_none(env.get("room_id")), "form": {"title": str(form.get("title") or "")[:80],
                                           "note": str(form.get("note") or "")[:500],
                                           "deadline": form.get("deadline"), "fields": fields}}
         _write(_in_path(fid), rec)
@@ -514,7 +540,7 @@ def list_all() -> dict[str, Any]:
     for p in sorted((forms_dir() / "outgoing").glob("*/form.json")):
         form = _read(p)
         if form:
-            outgoing.append({"form_id": form["form_id"], "title": form["title"], "status": form["status"],
+            outgoing.append({"form_id": form["form_id"], "title": form["title"], "status": form["status"], "room_id": form.get("room_id"),
                              "deadline": form.get("deadline"), "created_at": form.get("created_at"),
                              "progress": progress(form)["counts"], "recipients": len(form["recipients"])})
     incoming.sort(key=lambda r: r.get("received_at") or "", reverse=True)

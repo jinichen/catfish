@@ -34,6 +34,8 @@ export interface OutgoingSummary {
   form_id: string;
   title: string;
   status: "draft" | "open" | "closed";
+  /** 11/09 在群里发的表 */
+  room_id?: string | null;
   deadline: string | null;
   created_at: string | null;
   progress: Record<string, number>;
@@ -49,6 +51,8 @@ export interface IncomingRecord {
   form_id: string;
   owner: string;
   status: "open" | "closed";
+  /** 11/09 群里发的表: 提交 / 不填时往这个群回一条状态 */
+  room_id?: string | null;
   received_at: string;
   reminded_at?: string;
   remind_text?: string;
@@ -76,6 +80,7 @@ export interface OutgoingForm {
   fields: FormField[];
   status: "draft" | "open" | "closed";
   template: string | null;
+  room_id?: string | null;
   recipients: Record<string, { invited_at: string | null; reminded_at: string | null }>;
 }
 
@@ -107,10 +112,13 @@ export const formSync = () => call<SyncResult>("sync");
 export const formFromExcel = (path: string) => call<{ title: string; fields: FormField[] }>("from_excel", { path });
 export const formCreate = (p: {
   title: string; fields: FieldDraft[]; deadline?: string | null; note?: string; recipients: string[]; template_path?: string | null;
+  /** 11/09 在群里发: 收件人必须都是群里已加入的人; 发出去后表卡进群 */
+  room_id?: string | null;
 }) => call<{ form: OutgoingForm }>("create", p);
 export const formUpdate = (formId: string, p: Partial<{ title: string; fields: FieldDraft[]; deadline: string | null; note: string; recipients: string[] }>) =>
   call<{ form: OutgoingForm }>("update", { form_id: formId, ...p });
-export const formSend = (formId: string) => call<Sent & { sent: string[] }>("send", { form_id: formId });
+/** room_notice: 群里发的表发出去了, 但表卡没进群的原因 */
+export const formSend = (formId: string) => call<Sent & { sent: string[]; room_notice?: string }>("send", { form_id: formId });
 export const formRemind = (formId: string, text = "") => call<Sent & { reminded: string[] }>("remind", { form_id: formId, text });
 export const formClose = (formId: string) => call<Sent>("close", { form_id: formId });
 export const formExport = (formId: string) => call<{ path: string; rows: number }>("export", { form_id: formId });

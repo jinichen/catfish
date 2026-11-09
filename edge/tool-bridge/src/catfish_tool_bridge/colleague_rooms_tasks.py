@@ -122,11 +122,12 @@ ASSIST_HISTORY = 200
 def _history_text(room: dict[str, Any], msgs: list[dict[str, Any]], me: str) -> str:
     lines = []
     for m in msgs:
-        if m.get("kind") not in ("text", "card", "status", "auto", "system", "deadline"):
+        if m.get("kind") not in ("text", "card", "status", "auto", "system", "deadline", "form", "form_status"):
             continue
         who = "系统" if m.get("kind") == "system" else ("我" if m.get("from") == me else cr._label(room, m.get("from") or ""))
         at = str(m.get("at") or "")[5:16].replace("T", " ")
-        tag = {"card": "[派任务] ", "status": "[任务状态] ", "auto": "[自动转发] ", "deadline": "[延期] "}.get(m.get("kind"), "")
+        tag = {"card": "[派任务] ", "status": "[任务状态] ", "auto": "[自动转发] ", "deadline": "[延期] ",
+               "form": "[发表] ", "form_status": "[填表状态] "}.get(m.get("kind"), "")
         lines.append(f"[{at}] {who}: {tag}{m.get('text', '')}")
     return "\n".join(lines)
 
@@ -157,7 +158,7 @@ async def assist(params: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("gateway_url 必填")
     me = forms_net.me()
     room = joined_room(str(params.get("room_id") or ""))
-    msgs = [m for m in cr.store.recent(room["room_id"], ASSIST_HISTORY * 2) if m.get("kind") in ("text", "card", "status", "auto", "system")][-ASSIST_HISTORY:]
+    msgs = [m for m in cr.store.recent(room["room_id"], ASSIST_HISTORY * 2) if m.get("kind") in ("text", "card", "status", "auto", "system", "form", "form_status")][-ASSIST_HISTORY:]
     if not any(m.get("kind") != "system" for m in msgs):
         raise ValueError("群里还没聊什么, 小鲶没东西可总结")
     rid = str(params.get("reply_to") or "")
@@ -170,6 +171,31 @@ async def assist(params: dict[str, Any]) -> dict[str, Any]:
     if not text:
         raise ValueError("小鲶这次没写出来, 再试一次")
     return {"ok": True, "text": text[:cr.TEXT_MAX], "kind": kind}
+
+
+def classify(env: dict[str, Any], rid: str, sender: str, ments: list[str]) -> tuple[str, dict[str, Any], list[str]] | None:
+    """收到的 room_msg 带了附加字段 → (消息种类, 本机记录里的附加字段, @到的人); 校验不过返 None (整条不收)。
+    11/09 从 colleague_rooms._apply 挪过来 (那边守 800 行), 顺带接上群里发表 (colleague_rooms_forms)。"""
+    from . import colleague_rooms_forms as rf  # noqa: PLC0415
+    if "card" in env:
+        card = _clean_card(env.get("card"), sender)
+        return ("card", {"card": card}, ments) if card else None
+    if "status" in env:
+        status = _clean_status(env.get("status"), rid, sender)
+        return ("status", {"status": status}, []) if status else None
+    if "auto" in env:
+        auto = _clean_auto(env.get("auto"), rid, sender)
+        return ("auto", {"auto": auto}, []) if auto else None
+    if "deadline" in env:
+        dl = _clean_deadline(env.get("deadline"), rid, sender)
+        return ("deadline", {"deadline": dl}, []) if dl else None
+    if "form" in env:
+        card = rf._clean_form(env.get("form"), sender)
+        return ("form", {"form": card}, ments) if card else None
+    if "form_status" in env:
+        st = rf._clean_form_status(env.get("form_status"), rid, sender)
+        return ("form_status", {"form_status": st}, []) if st else None
+    return "text", {}, ments
 
 
 def _clean_card(raw: Any, sender: str) -> dict[str, Any] | None:

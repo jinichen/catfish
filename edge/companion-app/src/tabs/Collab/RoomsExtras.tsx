@@ -10,7 +10,9 @@ import {
   roomSearch, roomSettingsGet, roomSettingsSet,
   type RetentionSettings, type RoomMember, type RoomMessage,
 } from "../../lib/tauri_colleague_rooms";
+import type { RoomSummary } from "../../lib/tauri_colleague_rooms";
 import { Overlay, muted } from "./formsUi";
+import { NAME_MAX } from "./RoomComposer";
 import { Btn, ErrorLine, inputStyle } from "./roomLinkUi";
 
 const CHOICES = [7, 14, 30, 60, 90, 180, 365, 730, 1095, 1825, 3650];
@@ -162,5 +164,42 @@ export function SearchPanel({ roomId, members, onJump, onClose }: {
         </div>
       )}
     </div>
+  );
+}
+
+// ── 11/09 从 RoomsPanel 挪过来 (那边守 800 行): 改群名 / 公告, 二次确认 ──────
+
+export function InfoEditor({ room, busy, onClose, onSave }: {
+  room: RoomSummary; busy: boolean; onClose: () => void; onSave: (name: string, purpose: string, retentionDays: number | null) => void;
+}) {
+  const [name, setName] = useState(room.name);
+  const [purpose, setPurpose] = useState(room.purpose);
+  const [keep, setKeep] = useState<number | null>(room.retention_days ?? null);
+  return (
+    <Overlay title="改群名 / 公告" onClose={onClose} width={520}>
+      <input value={name} onChange={(e) => setName(e.target.value)} maxLength={NAME_MAX} style={inputStyle} />
+      <textarea value={purpose} onChange={(e) => setPurpose(e.target.value)} rows={3} maxLength={500} placeholder="群公告 / 用途"
+                style={{ ...inputStyle, resize: "vertical" }} />
+      <RetentionSelect value={keep} onChange={setKeep} />
+      <span style={muted}>改了会通知所有成员。记录保留只能比公司规定短; 每个人还能给自己设得更短。</span>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Btn kind="ghost" onClick={onClose}>取消</Btn>
+        <Btn kind="primary" disabled={busy || !name.trim()} onClick={() => onSave(name.trim(), purpose.trim(), keep)}>保存</Btn>
+      </div>
+    </Overlay>
+  );
+}
+
+export function Confirm({ title, text, ok, busy, onClose, onOk }: {
+  title: string; text: string; ok: string; busy: boolean; onClose: () => void; onOk: () => void;
+}) {
+  return (
+    <Overlay title={title} onClose={onClose} width={460}>
+      <span style={{ fontSize: 13 }}>{text}</span>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Btn kind="ghost" onClick={onClose}>取消</Btn>
+        <Btn kind="primary" disabled={busy} onClick={onOk}>{busy ? "处理中…" : ok}</Btn>
+      </div>
+    </Overlay>
   );
 }
