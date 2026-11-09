@@ -44,6 +44,7 @@ from typing import TYPE_CHECKING, Callable, Sequence
 
 from .apple_mail_as_handlers import AS_FIND_MESSAGE, AS_RESOLVE_INBOX
 from .apple_mail_osascript import FS, _escape_as_string
+from .. import rfc822_util as rfc822
 from .base import DataNotFoundError, EmailAdapterError, NotSupportedError
 
 if TYPE_CHECKING:
@@ -277,6 +278,7 @@ tell application "Mail"
     set targetIdStr to "{MSG_ID}"
     set outIdStr to "{OUT_ID}"
     set htmlPath to "{HTML_PATH}"
+    set attPath to "{ATT_PATH}"
     set acc to first account whose name of it is accName
 
     -- saved without a confirmed Drafts id: only the compose window exists
@@ -323,7 +325,11 @@ tell application "Mail"
     end if
 
     -- 2. rebuild the draft as a new message, from the draft's own sender
-    if (count of mail attachments of d) > 0 then error "DRAFT_HAS_ATTACHMENTS" number 8002
+    -- 11/09: 附件由 Python 从草稿 source 里导出成文件 (attPath 一行一个), 重建时挂回去; 挂不齐就不发
+    set draftAttCount to 0
+    try
+        set draftAttCount to count of mail attachments of d
+    end try
     set bodyText to content of d
     try
         set bodyText to bodyText as text
@@ -384,6 +390,36 @@ tell application "Mail"
             make new bcc recipient at end of bcc recipients with properties {address:(a as string)}
         end repeat
     end tell
+    set attCount to 0
+    if attPath is not "" then
+        set attText to ""
+        try
+            set attFile to open for access POSIX file attPath
+            set attText to (read attFile as «class utf8»)
+            close access attFile
+        on error
+            try
+                close access POSIX file attPath
+            end try
+        end try
+        repeat with p in (paragraphs of attText)
+            set pp to p as string
+            if pp is not "" then
+                tell content of newMsg
+                    make new attachment with properties {file name:(POSIX file pp) as alias} at after the last paragraph
+                end tell
+                set attCount to attCount + 1
+            end if
+        end repeat
+        -- Mail loads attachments asynchronously; sending right away can drop them
+        if attCount > 0 then delay (1 + attCount * 0.5)
+    end if
+    if attCount < draftAttCount then
+        try
+            delete newMsg
+        end try
+        error "DRAFT_HAS_ATTACHMENTS" number 8002
+    end if
     my sendOutgoing(newMsg)
     try
         delete d
@@ -407,7 +443,7 @@ end tell
 """ + _AS_DRAFT_HANDLERS + AS_RESOLVE_INBOX + AS_FIND_MESSAGE
 
 _SEND_ERRORS = {
-    "DRAFT_HAS_ATTACHMENTS": "这封草稿带附件, 鲶鱼没法原样带着附件发出。请在「邮件」App 的草稿箱里打开它发送。",
+    "DRAFT_HAS_ATTACHMENTS": "这封草稿的附件没能完整取出来, 为免少了附件发出去, 没有发。请在「邮件」App 的草稿箱里打开它发送。",
     "SENDER_MISMATCH": "「邮件」App 不接受用这封草稿原来的发件账号发送, 为免从别的账号发出去, 已停止。请在「邮件」App 里发送。",
     "DRAFT_NO_RECIPIENT": "这封草稿还没有收件人, 先点「修改草稿」填上收件人。",
     "SEND_FAILED": "「邮件」App 没能发出这封邮件 (账号离线或发件服务器拒收), 草稿还在草稿箱里。",
@@ -568,33 +604,85 @@ def send_message(adapter: "AppleMailAdapter", run: Callable[[str], str], message
             "Apple Mail EMLX fallback 模式不支持 send_message — Mail.app 必须开着才能发邮件"
         )
     account_name, msg_id = adapter._unpack_id(message_id)
-    html_path = _draft_html_file(adapter, message_id)
+    source = _draft_source(adapter, message_id)
+    html_path = _draft_html_file(source)
+    att_path, att_files = _draft_attachment_files(source)
     script = (
         _AS_SEND_MESSAGE
         .replace("{ACCOUNT}", _escape_as_string(account_name))
         .replace("{MSG_ID}", _escape_as_string(msg_id))
         .replace("{OUT_ID}", _escape_as_string(outgoing_for(message_id)))
         .replace("{HTML_PATH}", html_path)
+        .replace("{ATT_PATH}", att_path)
     )
     try:
         _send_with_retries(run, script, message_id)
     finally:
-        if html_path:
-            try:
-                os.unlink(html_path)
-            except OSError:
-                pass
+        for p in [html_path, att_path, *att_files]:
+            if p:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
 
 
-def _draft_html_file(adapter: "AppleMailAdapter", message_id: str) -> str:
-    """草稿的 HTML 正文写进临时文件, 给「照草稿重建」用; 取不到返空串 (退回纯文字重建, 跟以前一样)。"""
+def _draft_source(adapter: "AppleMailAdapter", message_id: str):
+    """草稿的 RFC822 解析结果; 还没落到草稿箱的 (pending) 或取不到的返 None。
+    HTML 正文和附件都从这一份里取, 只问 Mail 一次。"""
     if message_id.split("|")[-1].startswith(PENDING_PREFIX):
-        return ""
+        return None
     try:
         import email  # noqa: PLC0415
         import email.policy  # noqa: PLC0415
 
-        msg = email.message_from_bytes(adapter.read_raw_source(message_id), policy=email.policy.default)
+        return email.message_from_bytes(adapter.read_raw_source(message_id), policy=email.policy.default)
+    except Exception as error:  # noqa: BLE001
+        logger.info("取草稿 source 失败, 发送时按纯文字重建、附件按取不出算: %s", error)
+        return None
+
+
+def _draft_attachment_files(msg) -> tuple[str, list[str]]:
+    """11/09: 草稿的附件导出成文件, 路径一行一个写进清单, 给「照草稿重建」挂回去。
+    以前带附件的草稿直接拒发 (附件带不过去); 现在跟改草稿保留原附件同一条路 (从 source 里取 payload)。
+    取不全就少写几行, 脚本按数量对不上拒发 —— 宁可不发, 不发少了附件的。
+    返回 (清单文件路径或空串, 导出的文件列表)。"""
+    if msg is None or not msg.is_multipart():
+        return "", []
+    files: list[str] = []
+    tmpdir: str | None = None
+    for part in rfc822.attachment_parts(msg):
+        name = os.path.basename(part.get_filename() or "") or f"attachment-{len(files) + 1}"
+        try:
+            payload = part.get_payload(decode=True) or b""
+        except Exception:  # noqa: BLE001
+            payload = b""
+        if not payload:
+            logger.warning("草稿附件「%s」取不出内容, 发送会被拦下", name)
+            continue
+        tmpdir = tmpdir or tempfile.mkdtemp(prefix="catfish-email-send-")
+        out = os.path.join(tmpdir, name)
+        if os.path.exists(out):  # 同名附件
+            stem, ext = os.path.splitext(name)
+            out = os.path.join(tmpdir, f"{stem}-{len(files) + 1}{ext}")
+        try:
+            with open(out, "wb") as f:
+                f.write(payload)
+        except OSError as error:
+            logger.warning("写草稿附件「%s」失败: %s", name, error)
+            continue
+        files.append(out)
+    if not files:
+        return "", []
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as lf:
+        lf.write("\n".join(files))
+        return lf.name, files
+
+
+def _draft_html_file(msg) -> str:
+    """草稿的 HTML 正文写进临时文件, 给「照草稿重建」用; 取不到返空串 (退回纯文字重建, 跟以前一样)。"""
+    if msg is None:
+        return ""
+    try:
         part = msg.get_body(preferencelist=("html",))
         html = part.get_content() if part is not None else ""
     except Exception as error:  # noqa: BLE001

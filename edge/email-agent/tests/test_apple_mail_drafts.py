@@ -256,7 +256,7 @@ def test_send_uses_the_compose_window_the_draft_was_saved_from():
         return "OK"
 
     with patch.object(am, "_run_osascript", side_effect=fake_run), \
-            patch.object(drafts, "_draft_html_file", return_value=""):
+            patch.object(drafts, "_draft_source", return_value=None):
         AppleMailAdapter().send_message("apple_mail|Chinatelecom|2801")
     assert _assign(seen[0], "outIdStr") == "4"
     assert _assign(seen[0], "targetIdStr") == "2801"
@@ -304,7 +304,7 @@ def test_send_gives_up_after_three_not_found():
     with (
         patch.object(am, "_run_osascript", side_effect=fake_run),
         patch.object(drafts.time, "sleep"),
-        patch.object(drafts, "_draft_html_file", return_value=""),
+        patch.object(drafts, "_draft_source", return_value=None),
     ):
         with pytest.raises(DataNotFoundError):
             AppleMailAdapter().send_message("apple_mail|Chinatelecom|2801")
@@ -466,3 +466,67 @@ def test_forward_draft_lands_in_the_account_of_the_original():
     assert drafts._draft_account(AppleMailAdapter(), None, "apple_mail|Chinatelecom|3390") == "Chinatelecom"
     assert "forward_of" in inspect.signature(drafts.create_draft).parameters
 
+
+
+def _raw_with_attachments():
+    import email.message
+    m = email.message.EmailMessage()
+    m["Subject"] = "结算单"
+    m.set_content("正文")
+    m.add_attachment(b"PK-docx-1", maintype="application", subtype="octet-stream", filename="结算单-上海擎标.docx")
+    m.add_attachment(b"PK-docx-2", maintype="application", subtype="octet-stream", filename="服务质量考核单.docx")
+    return m.as_bytes()
+
+
+def test_rebuild_on_send_carries_the_drafts_attachments(tmp_path):
+    """11/09 鸿波: 带 4 个附件的草稿点「发送这封草稿」被拒。以前附件带不过去就一律拒发;
+    现在从草稿 source 里把附件导出成文件, 重建时挂回去 (跟改草稿保留原附件同一条路)。"""
+    seen: list[str] = []
+    listed: list[str] = []
+
+    def fake_run(script, **_):
+        seen.append(script)
+        att_path = _assign(script, "attPath")
+        if att_path:
+            listed.extend(Path(att_path).read_text(encoding="utf-8").splitlines())
+            for p in listed:
+                assert Path(p).read_bytes().startswith(b"PK-docx-")  # 脚本跑的时候文件真在
+        return "OK"
+
+    with patch.object(am, "_run_osascript", side_effect=fake_run), \
+            patch.object(drafts.time, "sleep"), \
+            patch.object(AppleMailAdapter, "read_raw_source", return_value=_raw_with_attachments()):
+        AppleMailAdapter().send_message("apple_mail|Chinatelecom|2801")
+    assert [Path(p).name for p in listed] == ["结算单-上海擎标.docx", "服务质量考核单.docx"]
+    assert not any(Path(p).exists() for p in listed)  # 发完清掉临时文件
+    assert not Path(_assign(seen[0], "attPath")).exists()
+    body = drafts._AS_SEND_MESSAGE
+    assert "make new attachment with properties {file name:(POSIX file pp) as alias}" in body
+    # 挂不齐 (导出少了 / 取不出) 就不发: 数量对不上才报 DRAFT_HAS_ATTACHMENTS, 而且先把重建的那封删掉
+    assert 'if attCount < draftAttCount then' in body and body.index("delete newMsg") < body.index('error "DRAFT_HAS_ATTACHMENTS"')
+    assert body.index('error "DRAFT_HAS_ATTACHMENTS"') < body.index("my sendOutgoing(newMsg)")
+
+
+def test_rebuild_on_send_without_attachments_passes_an_empty_list():
+    seen: list[str] = []
+
+    def fake_run(script, **_):
+        seen.append(script)
+        return "OK"
+
+    raw = b"Content-Type: text/plain; charset=utf-8\r\n\r\nhi\r\n"
+    with patch.object(am, "_run_osascript", side_effect=fake_run), \
+            patch.object(AppleMailAdapter, "read_raw_source", return_value=raw):
+        AppleMailAdapter().send_message("apple_mail|Chinatelecom|2801")
+    assert _assign(seen[0], "attPath") == ""
+
+
+def test_attachment_export_skips_empty_parts_so_the_script_refuses():
+    import email
+    import email.message
+    import email.policy
+    m = email.message.EmailMessage()
+    m.set_content("正文")
+    m.add_attachment(b"", maintype="application", subtype="octet-stream", filename="空.docx")
+    msg = email.message_from_bytes(m.as_bytes(), policy=email.policy.default)
+    assert drafts._draft_attachment_files(msg) == ("", [])   # 清单为空 → 脚本按 0 < 1 拒发
