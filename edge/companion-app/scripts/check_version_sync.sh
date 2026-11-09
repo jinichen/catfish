@@ -134,12 +134,17 @@ if [ "$PKG_VER" = "$CARGO_VER" ] && [ "$CARGO_VER" = "$TAURI_VER" ]; then
             echo "   本机: git fetch --unshallow" >&2
             exit 2
         fi
+        SRC_PATHS=(src src-tauri/src src-tauri/wix
+            ':(exclude,glob)src/**/*.test.ts' ':(exclude,glob)src/**/*.test.tsx'
+            ':(exclude,glob)src/**/__fixtures__/**')
         # 当前版本号是哪个 commit 引入的 (-S 查内容增删, tail -1 取最早那次)
         VER_COMMIT="$(git -C "$COMPANION_DIR" log --format=%H \
             -S"\"version\": \"$PKG_VER\"" -- package.json 2>/dev/null | tail -1)"
         if [ -n "$VER_COMMIT" ]; then
+            # 11/09: 测试文件跟源码放在一起 (src/**/*.test.ts(x)), 按目录算会把只改测试也当成
+            #   「二进制变了」—— 1.2.127 就因为修一个测试的时区写法被拦。排除掉, 跟上面说的判据一致。
             CHANGED="$(git -C "$COMPANION_DIR" log --oneline "$VER_COMMIT..HEAD" -- \
-                src src-tauri/src src-tauri/wix 2>/dev/null | wc -l | tr -d ' ')"
+                "${SRC_PATHS[@]}" 2>/dev/null | wc -l | tr -d ' ')"
             if [ "${CHANGED:-0}" -gt 0 ]; then
                 echo "❌ 版本号还是 $PKG_VER, 但从它被定下来之后 Companion 源码改了 $CHANGED 次。" >&2
                 echo "" >&2
@@ -160,7 +165,7 @@ if [ "$PKG_VER" = "$CARGO_VER" ] && [ "$CARGO_VER" = "$TAURI_VER" ]; then
                 #    报错信息照样打全了, 所以肉眼看不出问题 —— 正是这个脚本
                 #    通篇在治的那种病。
                 git -C "$COMPANION_DIR" log --oneline "$VER_COMMIT..HEAD" -- \
-                    src src-tauri/src src-tauri/wix 2>/dev/null | head -5 \
+                    "${SRC_PATHS[@]}" 2>/dev/null | head -5 \
                     | sed 's/^/     /' >&2 || true
                 exit 1
             fi
