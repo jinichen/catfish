@@ -672,6 +672,7 @@ def update_wiki_file(rel_path: str, content: str) -> dict[str, Any]:
         }
     from . import wiki_guard  # noqa: PLC0415  (11/09: 只给正文的覆写保留原 frontmatter)
     content, kept_frontmatter = wiki_guard.keep_frontmatter(abs_path, content, _split_frontmatter)
+    content = wiki_guard.canon_related(content)   # 11/09 关系词表外的归一 (以前只有新建过词表)
     dropped_aliases: list[str] = []
     if rel_path.startswith("wiki/entities/") or rel_path.startswith("wiki/concepts/"):
         content, dropped_aliases = _drop_claimed_aliases(rel_path, content)

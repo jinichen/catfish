@@ -90,6 +90,26 @@ def keep_frontmatter(abs_path: Path, content: str, split) -> tuple[str, bool]:
     return content, False
 
 
+def canon_related(content: str) -> str:
+    """11/09: 整篇覆写时 related 里的关系也按词表归一 (表外 → 兜底「关联」), 跟新建同一个口径。
+    以前只有新建过词表, 小鲶整篇覆写写进了「被依据」「涉及」这种表外的词 (11/08「一级建造师持证人员名单」)。
+    只改 related 那一行, 没有要改的就原样返回。"""
+    from . import wiki_files as wf  # noqa: PLC0415
+    fm, _body = wf._split_frontmatter(content)
+    rows = fm.splitlines()
+    at = next((i for i, r in enumerate(rows) if r.startswith("related:")), -1)
+    related = wf._parse_related(fm)
+    if at < 0 or not related or not rows[at].rstrip().endswith("]"):
+        return content
+    new = "related: [" + ", ".join(wf._relation_render(r if r.get("rel") else r["name"]) for r in related) + "]"
+    if new == rows[at].rstrip():
+        return content
+    changed = [r for r in related if r.get("rel") and wf._canonical_relation(str(r["rel"])) != str(r["rel"]).strip()]
+    if not changed:
+        return content
+    return content.replace(rows[at], new, 1)
+
+
 def touch_updated(content: str, today: str | None = None) -> str:
     """frontmatter 的 updated 换成今天; 没有这一行就补在 created 后面 (没 created 就补在 title 后面)。没 frontmatter 原样返回。"""
     from .wiki_files import _split_frontmatter  # noqa: PLC0415

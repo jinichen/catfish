@@ -356,3 +356,19 @@ def test_员工登记的自定义关系不被归成关联(tmp_path, monkeypatch)
         _json.dumps({"relations": {"挂靠": "本条目挂靠在对方名下"}}, ensure_ascii=False), encoding="utf-8")
     assert wf._canonical_relation("挂靠") == "挂靠"
     assert wf._canonical_relation("办理中") == "在办"
+
+
+def test_update_normalizes_relation_words_like_create(tmp_path, monkeypatch):
+    """11/09: 整篇覆写写进了词表外的「被依据」「涉及」; 现在跟新建一样归一 (别名 → 词表词, 表外 → 关联)。"""
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
+    wiki_files.create_wiki_entry("entity", "一级建造师持证人员名单", "名单。", subtype="doc")
+    rel = "wiki/entities/一级建造师持证人员名单.md"
+    fm = ('---\ntype: entity\ntitle: 一级建造师持证人员名单\nentity_type: doc\n'
+          'related: [{name: "集成能力中心", rel: "涉及"}, {name: "中电福富", rel: "名单"}, {name: "张三", rel: "记录"}]\n---\n\n正文\n')
+    assert wiki_files.update_wiki_file(rel, fm)["ok"]
+    got = wiki_files._parse_related(wiki_files._split_frontmatter(wiki_files.read_wiki_file(rel)["content"])[0])
+    assert got == [{"name": "集成能力中心", "rel": "关联"}, {"name": "中电福富", "rel": "记录"}, {"name": "张三", "rel": "记录"}]
+    # 都在词表里: 原样不动
+    same = fm.replace('rel: "涉及"', 'rel: "记录"').replace('rel: "名单"', 'rel: "记录"')
+    from catfish_tool_bridge import wiki_guard
+    assert wiki_guard.canon_related(same) == same
