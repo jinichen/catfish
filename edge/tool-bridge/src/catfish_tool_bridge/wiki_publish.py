@@ -172,6 +172,63 @@ def _infer_kind_from_path(rel_path: str) -> str:
     return "entity"  # 默认
 
 
+def scan_text(name: str, text: str) -> tuple[list[str], list[dict[str, Any]]]:
+    """发布前扫描 (11/09 抽出来, 分享对话框的预检 wiki_share.plan 也用): (凭据命中 → 拒发, 其余警告)。"""
+    file_map = {name: text.encode("utf-8")}
+    leaks = skill_publish._scan_sensitive(file_map)
+    warnings: list[dict[str, Any]] = []
+    pii_hits = skill_publish._scan_pii(file_map)
+    if pii_hits:
+        warnings.append({
+            "category": "pii",
+            "hits": pii_hits,
+            "advice": "wiki 含身份证 / 手机 / 工号 / 银行卡. 员工你确认要 share 给部门吗?",
+        })
+    intranet_hits = skill_publish._scan_intranet(file_map)
+    if intranet_hits:
+        warnings.append({
+            "category": "intranet",
+            "hits": intranet_hits,
+            "advice": "wiki 含内网 IP / hostname. 员工你确认要 share 给部门吗?",
+        })
+    terms = _load_sensitive_terms()
+    if terms:
+        term_hits = _scan_sensitive_terms(text, terms)
+        if term_hits:
+            warnings.append({
+                "category": "sensitive_terms",
+                "hits": term_hits,
+                "advice": (
+                    "wiki 命中员工自配敏感词 (~/.catfish/wiki/sensitive_terms.txt). "
+                    "员工你确认要 share 客户/项目信息给部门吗?"
+                ),
+            })
+    return leaks, warnings
+
+
+def _read_source_doc(wiki_rel_path: str) -> tuple[dict[str, Any] | None, str | None]:
+    """11/09: 原件 (raw/sources/…) 当单独一页发 —— 知识页的来源同事那边点得开。
+    返 ({title, kind, fm, body}, None) 或 (None, 错误)。标题固定「原件 · 名称」, 知识页里的来源改写成同名链接。"""
+    from . import wiki_share  # noqa: PLC0415
+    p = wiki_share.source_path(wiki_rel_path)
+    if p is None:
+        return None, f"原件不存在或不是文本: {wiki_rel_path}"
+    if p.stat().st_size > wiki_share.MAX_SOURCE_BYTES:
+        return None, "原件超过 1MB, 不能当一页分享"
+    raw = p.read_text(encoding="utf-8", errors="replace")
+    if not raw.strip():
+        return None, "原件是空的"
+    _, raw_body = _parse_frontmatter(raw)   # 原件自己带的头部 (导入时的元数据) 不发
+    title = wiki_share.source_doc_title(wiki_rel_path)
+    fm = "\n".join([
+        "type: concept",
+        f"title: {json.dumps(title, ensure_ascii=False)}",
+        "concept_type: source_original",
+        "tags: [原件]",
+    ])
+    return {"title": title, "kind": "concept", "fm": fm, "body": raw_body}, None
+
+
 def wiki_publish(args: dict[str, Any]) -> dict[str, Any]:
     """tool entry — 读 + 扫描 + POST JSON 到 gateway /v1/wiki/documents.
 
@@ -204,52 +261,64 @@ def wiki_publish(args: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": "wiki_rel_path 必填 (例: wiki/entities/老李.md)"}
     if ".." in wiki_rel_path or wiki_rel_path.startswith("/"):
         return {"ok": False, "error": f"wiki_rel_path 不合法: {wiki_rel_path}"}
-    if not wiki_rel_path.startswith("wiki/"):
+    source_doc: dict[str, Any] | None = None
+    if wiki_rel_path.startswith("raw/sources/"):
+        source_doc, err = _read_source_doc(wiki_rel_path)
+        if err:
+            return {"ok": False, "error": err}
+    elif not wiki_rel_path.startswith("wiki/"):
         return {
             "ok": False,
             "error": f"wiki_rel_path 必须以 'wiki/' 开头 (拿到 {wiki_rel_path})",
         }
-    # 读 wiki 文件
-    catfish_home = _catfish_home()
-    abs_path = (catfish_home / wiki_rel_path).resolve()
-    # 安全: resolve 后必须仍在 catfish_home 下
-    try:
-        abs_path.relative_to(catfish_home.resolve())
-    except ValueError:
-        return {"ok": False, "error": f"wiki_rel_path 路径逃逸: {wiki_rel_path}"}
-    if not abs_path.exists() or not abs_path.is_file():
-        return {"ok": False, "error": f"wiki 文件不存在: {abs_path}"}
+    if source_doc is not None:
+        title, kind = source_doc["title"], source_doc["kind"]
+        fm_yaml, body_md = source_doc["fm"], source_doc["body"]
+        scan_name = wiki_rel_path.rsplit("/", 1)[-1]
+    else:
+        # 读 wiki 文件
+        catfish_home = _catfish_home()
+        abs_path = (catfish_home / wiki_rel_path).resolve()
+        # 安全: resolve 后必须仍在 catfish_home 下
+        try:
+            abs_path.relative_to(catfish_home.resolve())
+        except ValueError:
+            return {"ok": False, "error": f"wiki_rel_path 路径逃逸: {wiki_rel_path}"}
+        if not abs_path.exists() or not abs_path.is_file():
+            return {"ok": False, "error": f"wiki 文件不存在: {abs_path}"}
 
-    try:
-        text = abs_path.read_text(encoding="utf-8")
-    except Exception as e:
-        return {"ok": False, "error": f"读 wiki 文件失败: {e}"}
+        try:
+            text = abs_path.read_text(encoding="utf-8")
+        except Exception as e:
+            return {"ok": False, "error": f"读 wiki 文件失败: {e}"}
 
-    if not text.strip():
-        return {"ok": False, "error": "wiki 文件为空"}
+        if not text.strip():
+            return {"ok": False, "error": "wiki 文件为空"}
 
-    if len(text.encode("utf-8")) > 1024 * 1024:
-        return {"ok": False, "error": f"wiki 文件超 1MB 上限 ({len(text)} bytes)"}
+        if len(text.encode("utf-8")) > 1024 * 1024:
+            return {"ok": False, "error": f"wiki 文件超 1MB 上限 ({len(text)} bytes)"}
 
-    # 解 frontmatter
-    fm_yaml, body_md = _parse_frontmatter(text)
-    # 10/12: 客户页 (时间线里是客户原话) 只在本机; 给主管看走「发布给主管」的结构化摘要 (sales_publish.py)
-    if _extract_field(fm_yaml, "entity_type") == "customer":
-        return {"ok": False, "error": "客户档案只存在你本机, 不能整页分享到部门 (里面有客户原话)。"
-                                      "要让主管看到进展, 用 设置 →「🤝 销售跟进」→「发布给主管」, 只发阶段 / 金额 / 下一步。"}
-    title = _extract_field(fm_yaml, "title")
-    if not title:
-        # title fallback: 用文件 stem
-        title = abs_path.stem
-    kind = _extract_field(fm_yaml, "type") or _infer_kind_from_path(wiki_rel_path)
-    if kind not in ("entity", "concept", "query"):
-        kind = "entity"
+        # 解 frontmatter
+        fm_yaml, body_md = _parse_frontmatter(text)
+        # 10/12: 客户页 (时间线里是客户原话) 只在本机; 给主管看走「发布给主管」的结构化摘要 (sales_publish.py)
+        if _extract_field(fm_yaml, "entity_type") == "customer":
+            return {"ok": False, "error": "客户档案只存在你本机, 不能整页分享到部门 (里面有客户原话)。"
+                                          "要让主管看到进展, 用 设置 →「🤝 销售跟进」→「发布给主管」, 只发阶段 / 金额 / 下一步。"}
+        title = _extract_field(fm_yaml, "title")
+        if not title:
+            # title fallback: 用文件 stem
+            title = abs_path.stem
+        kind = _extract_field(fm_yaml, "type") or _infer_kind_from_path(wiki_rel_path)
+        if kind not in ("entity", "concept", "query"):
+            kind = "entity"
+        # 11/09: 发出去那份的来源换成人话 (本机路径 / 对话编号同事那边没有); 一起分享了的原件换成 [[原件 · 名称]]。本机文件不动。
+        from . import wiki_share  # noqa: PLC0415
+        attached = {wiki_share.source_key(r) for r in (args.get("attached_sources") or []) if isinstance(r, str)}
+        fm_yaml, body_md = wiki_share.rewrite_for_share(fm_yaml, body_md, attached)
+        scan_name = abs_path.name
 
-    # 用 file_map 接口跑共享扫描
-    file_map = {abs_path.name: text.encode("utf-8")}
-
-    # (a) 凭据扫 — 永拒
-    leaks = skill_publish._scan_sensitive(file_map)
+    # 扫的是改写后真正发出去的那份。凭据永拒; 个人信息 / 内网地址 / 自配敏感词警告
+    leaks, warnings = scan_text(scan_name, f"---\n{fm_yaml}\n---\n\n{body_md}")
     if leaks:
         return {
             "ok": False,
@@ -260,39 +329,6 @@ def wiki_publish(args: dict[str, Any]) -> dict[str, Any]:
             ),
             "scan_phase": "credentials",
         }
-
-    # 收集 warnings — 非凭据的 3 类
-    warnings: list[dict[str, Any]] = []
-
-    pii_hits = skill_publish._scan_pii(file_map)
-    if pii_hits:
-        warnings.append({
-            "category": "pii",
-            "hits": pii_hits,
-            "advice": "wiki 含身份证 / 手机 / 工号 / 银行卡. 员工你确认要 share 给部门吗?",
-        })
-
-    intranet_hits = skill_publish._scan_intranet(file_map)
-    if intranet_hits:
-        warnings.append({
-            "category": "intranet",
-            "hits": intranet_hits,
-            "advice": "wiki 含内网 IP / hostname. 员工你确认要 share 给部门吗?",
-        })
-
-    # (d) 敏感词扫 — 员工自配 list
-    terms = _load_sensitive_terms()
-    if terms:
-        term_hits = _scan_sensitive_terms(text, terms)
-        if term_hits:
-            warnings.append({
-                "category": "sensitive_terms",
-                "hits": term_hits,
-                "advice": (
-                    "wiki 命中员工自配敏感词 (~/.catfish/wiki/sensitive_terms.txt). "
-                    "员工你确认要 share 客户/项目信息给部门吗?"
-                ),
-            })
 
     if warnings and not ack_warnings:
         return {

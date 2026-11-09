@@ -1,304 +1,339 @@
-/** 分享到部门 wiki 的 dialog (P3.3.18, 6/10)。
+/** 分享到部门知识库的对话框 (P3.3.18 6/10; 11/09 改成先看清楚再发)。
  *
- * 8/15 从 WikiPreview.tsx 搬出来 (1096 行, 过了 CLAUDE.md §1 的 800 红线)。
+ * # 11/09 为什么改
  *
- * # 这次是纯搬运, 不是重构
+ * 鸿波看「市场部」这页: 正文就一句话, 依据在来源 `raw/sources/…福富组织架构` 里, 关系指向「中电福富」等别的条目。
+ * 原来点「确认分享」只发这一个 md —— 同事那边来源是一个点不开的本机路径, 关系是点不开的名字 (或者按名字
+ * 连到他自己的同名条目上)。而且员工发之前看不到会发出去什么, 警告也是发一次被拦一次才出来。
  *
- * WikiPreview 是**一个** 1001 行的组件, 不像 WikiTree 那样是一堆平级声明。
- * 这种形状最容易在拆的时候顺手"改好一点", 然后就说不清哪个行为变了 ——
- * 而这个文件**一条测试都没有** (仓里 23 个 test 文件没有一个碰 Wiki 组件)。
+ * 现在打开就做一次预检 (tool-bridge wiki_share.plan, 只读):
+ *   · 会发出去什么: 这一页改写后的样子 (本机路径 / 对话编号换成人话), 可以展开看全文
+ *   · 来源: 原件能不能一起分享 (作为「原件 · 名称」一页, 这一页里的来源变成能点的链接)
+ *   · 关系: 同事已经能看到 / 本机有、可以一起分享 / 本机也没有 / 客户档案不能分享
+ *   · 这次要发的几页的扫描结果一次列全: 含凭据的不能发, 其余警告看过勾一下
+ * 顺序和参数在 lib/wikiShare.ts (纯函数)。
  *
- * 所以这里刻意只做机械搬运:
- *   · JSX 一行没改, 只整体减了 6 格缩进
- *   · state 和 handler **全部留在 WikiPreview 里**, 原样当 props 传下来
- *   · props 名字跟原来的变量名逐字一致 (setShareDialogOpen 没改叫 onClose)
+ * # 守的东西 (没变, 别顺手简化掉)
  *
- * props 有 12 个, 确实多。但"把 state 提到子组件里"是行为改动 —— 比如
- * shareAck 若改成 dialog 内部 state, 关掉再开就自动重置了, 那跟现在
- * 第 281/293 行显式 setShareAck(false) 的时机不一定一样。没有测试兜底的时候,
- * 宁可多几个 props。
- *
- * # 这个 dialog 守的东西 (别顺手简化掉)
- *
- * 分享是**不可逆**的 —— 别人 pull 走的副本撤不回来 (manifesto 公理 4)。
- * 所以流程是: 第一次提交若返回 warnings (PII / 内网地址 / 敏感词), 不直接发,
- * 而是显警告 + 一个 ack checkbox, 员工勾了才 retry (acknowledge_warnings=true)。
- * 发到哪个部门要**明明白白摆在员工眼前**, 员工看清楚再点 (公理 3, 不静默自决)。
- *
- * 这两条是产品约束不是交互糖, 改之前先问。
- *
- * 9/30 改: 部门不再手填。原来是填 `dept/finance`, 但 (1) 这个格式到 hub 路由
- * 永远 405, 分享一次都没成功过; (2) 手填的跟身份里的部门 ("研发部") 对不上,
- * 没法做部门隔离, 打错一个字母就多一个部门。现在 hub 按身份里的部门定,
- * dialog 里把"分享到 dept/<你的部门>"显式写出来, 员工照样是看清楚之后自己点确认,
- * "不静默自决"这条没变, 变的只是这个值不再由员工打字。
+ * 分享是**不可逆**的 —— 别人装走的副本撤不回来 (manifesto 公理 4), 所以「我知道」那一勾必须员工自己勾;
+ * 发到哪个部门明明白白摆出来 (公理 3, 不静默自决); 警告只认员工在这里点的确认 (tools/dispatch 带 _from_ui)。
+ * 默认什么都不一起发: 原件和关联页都要员工自己勾 —— 多发出去的内容同样撤不回。
  */
-import type { WikiFileFull } from "../../lib/tauri_wiki";
+import { useEffect, useMemo, useState } from "react";
 
-interface WikiShareDialogProps {
-  selectedFile: WikiFileFull;
-  /** 身份里的部门. undefined = 还在查; "" = 账号没设部门 (不能分享) */
-  shareDept: string | undefined;
-  shareDeptError: string | null;
-  shareAck: boolean;
-  setShareAck: (v: boolean) => void;
-  sharing: boolean;
-  shareWarnings: Array<{ category: string; hits: any[]; advice: string }>;
-  shareError: string | null;
-  shareSuccess: string | null;
-  sensitiveTermsHint: string | null;
-  handleShare: (acknowledgeWarnings: boolean) => void;
-  handleEnsureSensitiveTerms: () => void;
-  setShareDialogOpen: (v: boolean) => void;
-}
+import { fetchMe } from "../../lib/me";
+import { fileManagerName } from "../../lib/platformLabels";
+import {
+  toolBridgeCallTool,
+  wikiSensitiveTermsEnsure,
+  wikiSharePlan,
+  type WikiFileFull,
+  type WikiSharePlan,
+  type WikiShareRelation,
+} from "../../lib/tauri";
+import { shareIssues, shareSteps, sizeLabel, warningLabel, type ShareChoice } from "../../lib/wikiShare";
+
+type Result = { label: string; ok: boolean; text: string };
+
+const REL_STATUS: Record<WikiShareRelation["status"], string> = {
+  shared: "同事已经能看到",
+  local: "同事还看不到",
+  missing: "你本机也没有这一页",
+  private: "客户档案不能分享",
+};
 
 export default function WikiShareDialog({
   selectedFile,
-  shareDept,
-  shareDeptError,
-  shareAck,
-  setShareAck,
-  sharing,
-  shareWarnings,
-  shareError,
-  shareSuccess,
-  sensitiveTermsHint,
-  handleShare,
-  handleEnsureSensitiveTerms,
-  setShareDialogOpen,
-}: WikiShareDialogProps) {
+  onClose,
+  onShared,
+}: {
+  selectedFile: WikiFileFull;
+  onClose: () => void;
+  /** 发完了 (至少一页成功) —— 让外面刷新知识库列表 */
+  onShared?: () => void;
+}) {
+  const relPath = selectedFile.info.rel_path;
+  // 9/30: 分享目标 = 身份里的部门 (hub 也按这个定)。undefined = 还在查; "" = 账号没设部门
+  const [dept, setDept] = useState<string | undefined>(undefined);
+  const [deptError, setDeptError] = useState<string | null>(null);
+  const [plan, setPlan] = useState<WikiSharePlan | null>(null);
+  const [planError, setPlanError] = useState<string | null>(null);
+  const [attach, setAttach] = useState<Set<string>>(new Set());
+  const [together, setTogether] = useState<Set<string>>(new Set());
+  const [showPreview, setShowPreview] = useState(false);
+  const [ack, setAck] = useState(false);
+  const [ackWarnings, setAckWarnings] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [results, setResults] = useState<Result[] | null>(null);
+  const [termsHint, setTermsHint] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchMe()
+      .then((me) => setDept((me.department || "").trim()))
+      .catch((e) => setDeptError(e instanceof Error ? e.message : String(e)));
+  }, []);
+
+  // 勾 / 取消原件时重算预览: 这一页里的来源要在「人话」和「[[原件 · 名称]] 链接」之间切换
+  const attachKey = [...attach].sort().join("\n");
+  useEffect(() => {
+    let cancelled = false;
+    wikiSharePlan(relPath, attachKey ? attachKey.split("\n") : [])
+      .then((p) => {
+        if (cancelled) return;
+        if (!p.ok) setPlanError(p.error ?? "预检失败");
+        else {
+          setPlan(p);
+          setPlanError(null);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) setPlanError(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [relPath, attachKey]);
+
+  const choice: ShareChoice = useMemo(() => ({ attach, together }), [attach, together]);
+  const steps = useMemo(() => (plan ? shareSteps(plan, choice, ackWarnings) : []), [plan, choice, ackWarnings]);
+  const issues = useMemo(() => shareIssues(steps), [steps]);
+  // 个人信息 / 内网地址 / 你设的敏感词: 看过才能发; 含凭据的那一页直接不能发
+  const canSend =
+    !!plan && !!dept && ack && !sharing && issues.blocked.length === 0 && (issues.warned.length === 0 || ackWarnings);
+
+  const toggle = (set: Set<string>, key: string, on: boolean) => {
+    const next = new Set(set);
+    if (on) next.add(key);
+    else next.delete(key);
+    return next;
+  };
+
+  const send = async () => {
+    setSharing(true);
+    const out: Result[] = [];
+    for (const step of steps) {
+      try {
+        const res = await toolBridgeCallTool("catfish_wiki_publish", step.args);
+        const r = (res.result ?? {}) as { ok?: boolean; error?: string; republished?: boolean };
+        if (res.ok && r.ok) out.push({ label: step.label, ok: true, text: r.republished ? "已更新" : "已分享" });
+        else out.push({ label: step.label, ok: false, text: r.error || res.error || "没发出去" });
+      } catch (e) {
+        out.push({ label: step.label, ok: false, text: e instanceof Error ? e.message : String(e) });
+      }
+      setResults([...out]);
+    }
+    setSharing(false);
+    if (out.some((r) => r.ok)) onShared?.();
+  };
+
+  const ensureTerms = async () => {
+    try {
+      const r = await wikiSensitiveTermsEnsure();
+      setTermsHint(`${r.created ? "已创建模板" : "已存在"}: ${r.path}。用 ${fileManagerName()} 打开编辑${r.created ? ", 删掉 # 启用对应行" : ""}。`);
+    } catch (e) {
+      setTermsHint(`创建失败: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  const done = !!results && !sharing;
+  const rawSources = plan?.sources.filter((s) => s.kind === "raw") ?? [];
+  const otherSources = plan?.sources.filter((s) => s.kind !== "raw" && s.kind !== "manual") ?? [];
+  const sourceName = (title?: string) => (title ?? "").replace(/^原件 · /, "");
+
   return (
-  <div
-    style={{
-      position: "fixed",
-      inset: 0,
-      background: "rgba(0,0,0,0.5)",
-      zIndex: 1000,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      padding: 20,
-    }}
-    onClick={() => setShareDialogOpen(false)}
-  >
-    <div
-      onClick={(e) => e.stopPropagation()}
-      style={{
-        background: "var(--catfish-bg-elevated)",
-        border: "1px solid var(--catfish-border)",
-        borderRadius: "var(--radius-md)",
-        padding: 24,
-        maxWidth: 560,
-        width: "100%",
-        maxHeight: "90vh",
-        overflowY: "auto",
-      }}
-    >
-      <h3 style={{ margin: "0 0 12px", display: "flex", alignItems: "center", gap: 8 }}>
-        📤 分享 wiki 到部门
-      </h3>
-      <div style={{ fontSize: 13, color: "var(--catfish-text-muted)", marginBottom: 16 }}>
-        要分享: <code>{selectedFile.info.rel_path}</code>
-      </div>
+    <div className="wiki-share__backdrop" onClick={() => !sharing && onClose()}>
+      <div className="wiki-share" role="dialog" aria-label="分享到部门知识库" onClick={(e) => e.stopPropagation()}>
+        <h3 className="wiki-share__title">分享到部门知识库</h3>
 
-      {/* 强警告 banner — 用户拍要的, manifesto 公理 4 提醒 */}
-      <div
-        style={{
-          background: "#fef3c7",
-          border: "1px solid #f59e0b",
-          color: "#78350f",
-          padding: 12,
-          borderRadius: 6,
-          fontSize: 13,
-          lineHeight: 1.6,
-          marginBottom: 16,
-        }}
-      >
-        <strong>⚠️ 重要提醒</strong> (manifesto 公理 4)
-        <ul style={{ margin: "6px 0 0", paddingLeft: 20 }}>
-          <li>分享后, 部门所有同事能看到 / 装这条 wiki 到本机</li>
-          <li>
-            你后面 <strong>哪怕撤回</strong>, 中央那一份会清零 + 标 stale, 但 <strong>已 pull 装本机的副本撤不回</strong>
-          </li>
-          <li>已扩散的信息在部门里"永久存在", 跟 OneNote / Confluence 一回事</li>
-          <li>客户名 / 项目细节 / 关键人名 这种敏感内容, 决定前想清楚</li>
-        </ul>
-      </div>
-
-      {/* P3.3.18 Phase 4 P2: 敏感词文件 onboarding hint */}
-      <div
-        style={{
-          background: "rgba(74,158,255,0.08)",
-          border: "1px solid rgba(74,158,255,0.2)",
-          padding: "8px 12px",
-          borderRadius: 4,
-          fontSize: 12,
-          marginBottom: 12,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 8,
-        }}
-      >
-        <span style={{ flex: 1 }}>
-          💡 想扫客户名/项目代号? 配 <code>~/.catfish/wiki/sensitive_terms.txt</code>
-        </span>
-        <button
-          onClick={() => void handleEnsureSensitiveTerms()}
-          disabled={sharing}
-          style={{
-            fontSize: 11,
-            padding: "3px 10px",
-            background: "transparent",
-            color: "var(--catfish-text)",
-            border: "1px solid var(--catfish-border)",
-            borderRadius: 3,
-            cursor: "pointer",
-            whiteSpace: "nowrap",
-          }}
-        >
-          创建模板
-        </button>
-      </div>
-      {sensitiveTermsHint && (
-        <div
-          style={{
-            fontSize: 11,
-            marginBottom: 12,
-            color: sensitiveTermsHint.startsWith("✗") ? "#dc2626" : "#16a34a",
-            padding: "4px 8px",
-            background: sensitiveTermsHint.startsWith("✗") ? "#fee2e2" : "#d1fae5",
-            borderRadius: 3,
-          }}
-        >
-          {sensitiveTermsHint}
+        <div className="wiki-share__dept">
+          {deptError ? (
+            <span className="wiki-share__err">查不到你的部门: {deptError}</span>
+          ) : dept === undefined ? (
+            <span className="wiki-share__muted">正在查你所在的部门…</span>
+          ) : dept === "" ? (
+            <span className="wiki-share__err">你的账号没有设置部门, 不能分享到部门知识库。请联系管理员在用户管理里补上部门。</span>
+          ) : (
+            <>
+              分享到 <strong>{dept}</strong> 部门知识库
+              <span className="wiki-share__muted"> · 只有这个部门的同事和管理员看得到</span>
+            </>
+          )}
         </div>
-      )}
 
-      <div
-        style={{
-          marginBottom: 16,
-          fontSize: 13,
-          padding: "8px 12px",
-          border: "1px solid var(--catfish-border)",
-          borderRadius: 4,
-          background: "var(--catfish-bg)",
-        }}
-      >
-        {shareDeptError ? (
-          <span style={{ color: "#dc2626" }}>查不到你的部门: {shareDeptError}</span>
-        ) : shareDept === undefined ? (
-          <span style={{ color: "var(--catfish-text-muted)" }}>正在查你所在的部门…</span>
-        ) : shareDept === "" ? (
-          <span style={{ color: "#dc2626" }}>
-            你的账号没有设置部门, 不能分享到部门知识库. 请联系管理员在用户管理里补上部门.
-          </span>
-        ) : (
+        {planError && <div className="wiki-share__box wiki-share__box--err">{planError}</div>}
+        {!plan && !planError && <div className="wiki-share__muted">正在看这一页会发出去什么…</div>}
+
+        {plan && (
           <>
-            分享到: <strong style={{ fontFamily: "var(--font-mono)" }}>dept/{shareDept}</strong>
-            <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 4 }}>
-              你账号里的部门. 只有这个部门的同事和管理员看得到, 别的部门看不到.
-            </div>
+            <section className="wiki-share__section">
+              <div className="wiki-share__label">会发出去</div>
+              <div className="wiki-share__row wiki-share__row--static">
+                <span className="wiki-share__grow">
+                  这一页「{plan.title}」{plan.shared_before && <span className="wiki-share__muted"> (分享过, 这次是更新)</span>}
+                </span>
+                <button type="button" className="wiki-share__link" onClick={() => setShowPreview((v) => !v)}>
+                  {showPreview ? "收起" : "看发出去的全文"}
+                </button>
+              </div>
+              {showPreview && (
+                <pre className="wiki-share__preview">{`---\n${plan.preview.frontmatter_yaml}\n---\n\n${plan.preview.body_md}`}</pre>
+              )}
+            </section>
+
+            {(rawSources.length > 0 || otherSources.length > 0) && (
+              <section className="wiki-share__section">
+                <div className="wiki-share__label">来源</div>
+                {rawSources.map((s) => {
+                  const pickable = !!s.attachable && !s.shared;
+                  return (
+                    <label key={s.key} className={`wiki-share__row${pickable ? "" : " wiki-share__row--static"}`}>
+                      {pickable ? (
+                        <input
+                          type="checkbox"
+                          checked={attach.has(s.key!)}
+                          disabled={sharing || done}
+                          onChange={(e) => setAttach((a) => toggle(a, s.key!, e.target.checked))}
+                        />
+                      ) : (
+                        <span className="wiki-share__dot" aria-hidden="true" />
+                      )}
+                      <span className="wiki-share__grow">
+                        {s.shared ? (
+                          <>
+                            原件「{sourceName(s.title)}」<span className="wiki-share__ok"> · 部门里已经有, 这一页会链接过去</span>
+                          </>
+                        ) : pickable ? (
+                          <>
+                            把原件「{sourceName(s.title)}」也分享
+                            <span className="wiki-share__muted"> ({sizeLabel(s.size_bytes)}, 作为单独一页)</span>
+                            <div className="wiki-share__muted">
+                              {attach.has(s.key!)
+                                ? "这一页里的来源会变成能点开的链接。"
+                                : "不勾: 同事那边显示「原件在发布人那里」, 看不到内容。"}
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            {s.label} <span className="wiki-share__muted">({s.reason})</span>
+                          </>
+                        )}
+                      </span>
+                    </label>
+                  );
+                })}
+                {otherSources.map((s) => (
+                  <div key={s.ref} className="wiki-share__row wiki-share__row--static">
+                    <span className="wiki-share__dot" aria-hidden="true" />
+                    <span className="wiki-share__grow">
+                      {s.kind === "conversation" ? "你的对话记录不会分享出去" : s.ref}
+                      <span className="wiki-share__muted"> · 同事那边显示「{s.label}」</span>
+                    </span>
+                  </div>
+                ))}
+              </section>
+            )}
+
+            {plan.relations.length > 0 && (
+              <section className="wiki-share__section">
+                <div className="wiki-share__label">
+                  关系 <span className="wiki-share__muted">· 同事那边只有他能看到的页才点得开</span>
+                </div>
+                {plan.relations.map((r) => {
+                  const pickable = r.status === "local" && !!r.rel_path && !r.scan?.blocked;
+                  const picked = !!r.rel_path && together.has(r.rel_path);
+                  return (
+                    <label key={r.name} className={`wiki-share__row${pickable ? "" : " wiki-share__row--static"}`}>
+                      {pickable ? (
+                        <input
+                          type="checkbox"
+                          checked={picked}
+                          disabled={sharing || done}
+                          onChange={(e) => setTogether((t) => toggle(t, r.rel_path!, e.target.checked))}
+                        />
+                      ) : (
+                        <span className="wiki-share__dot" aria-hidden="true" />
+                      )}
+                      <span className="wiki-share__grow">
+                        {r.rel ? <span className="wiki-share__muted">{r.rel} · </span> : null}
+                        {r.title ?? r.name}
+                        <span className={`wiki-share__status wiki-share__status--${r.status}`}>
+                          {r.status === "local" && picked ? "一起分享" : REL_STATUS[r.status]}
+                        </span>
+                        {r.scan?.blocked && <div className="wiki-share__err">{r.scan.blocked}</div>}
+                      </span>
+                    </label>
+                  );
+                })}
+                {!plan.hub_known && (
+                  <div className="wiki-share__muted">没连上部门知识库, 「同事能不能看到」只按你自己分享过的算。</div>
+                )}
+              </section>
+            )}
+
+            {(issues.blocked.length > 0 || issues.warned.length > 0) && (
+              <section className="wiki-share__box wiki-share__box--warn">
+                {issues.blocked.map((b) => (
+                  <div key={b.label}>
+                    <strong>「{b.label}」不能发</strong>: {b.reason}
+                  </div>
+                ))}
+                {issues.warned.map((w) => (
+                  <div key={w.label}>
+                    「{w.label}」含 {w.warnings.map(warningLabel).join("、")}
+                  </div>
+                ))}
+                {issues.warned.length > 0 && issues.blocked.length === 0 && (
+                  <label className="wiki-share__check">
+                    <input
+                      type="checkbox"
+                      checked={ackWarnings}
+                      disabled={sharing || done}
+                      onChange={(e) => setAckWarnings(e.target.checked)}
+                    />
+                    <span>我看过这些内容, 确认要分享给部门 (不会自动脱敏)</span>
+                  </label>
+                )}
+              </section>
+            )}
           </>
         )}
-      </div>
 
-      <div style={{ marginBottom: 16 }}>
-        <label style={{ fontSize: 13, display: "flex", gap: 8, cursor: "pointer" }}>
-          <input
-            type="checkbox"
-            checked={shareAck}
-            onChange={(e) => setShareAck(e.target.checked)}
-            disabled={sharing}
-          />
+        <div className="wiki-share__muted wiki-share__terms">
+          想让发布前扫到客户名 / 项目代号? 配 <code>~/.catfish/wiki/sensitive_terms.txt</code>{" "}
+          <button type="button" className="wiki-share__link" onClick={() => void ensureTerms()} disabled={sharing}>
+            创建模板
+          </button>
+          {termsHint && <div>{termsHint}</div>}
+        </div>
+
+        <label className="wiki-share__check wiki-share__check--strong">
+          <input type="checkbox" checked={ack} disabled={sharing || done} onChange={(e) => setAck(e.target.checked)} />
           <span>
-            <strong>我知道</strong> 已 pull 副本撤不回, 信息会在部门里扩散
+            <strong>我知道</strong>分享后部门同事能看到、能装到自己电脑上; 以后撤回只清中央那份, <strong>已经装走的撤不回</strong>。
           </span>
         </label>
-      </div>
 
-      {/* warnings 显 (PII / 内网 / 敏感词命中) */}
-      {shareWarnings.length > 0 && (
-        <div
-          style={{
-            background: "#fee2e2",
-            border: "1px solid #dc2626",
-            color: "#7f1d1d",
-            padding: 12,
-            borderRadius: 6,
-            fontSize: 12,
-            marginBottom: 16,
-          }}
-        >
-          <strong>扫到 {shareWarnings.length} 类内容警告</strong>:
-          <ul style={{ margin: "6px 0 0", paddingLeft: 20 }}>
-            {shareWarnings.map((w, i) => (
-              <li key={i}>
-                <strong>{w.category}</strong>: {w.advice} ({w.hits.length} 处)
-              </li>
+        {results && (
+          <div className="wiki-share__results">
+            {results.map((r) => (
+              <div key={r.label} className={r.ok ? "wiki-share__ok" : "wiki-share__err"}>
+                {r.ok ? "✓" : "✗"} 「{r.label}」{r.text}
+              </div>
             ))}
-          </ul>
-          <div style={{ marginTop: 8, color: "#7f1d1d" }}>
-            确认要继续 share 这些内容到部门? 点"我看过了, 强发"再发一次.
           </div>
-        </div>
-      )}
-
-      {shareError && (
-        <div
-          style={{
-            background: "#fee2e2",
-            border: "1px solid #dc2626",
-            color: "#7f1d1d",
-            padding: 10,
-            borderRadius: 4,
-            fontSize: 12,
-            marginBottom: 16,
-          }}
-        >
-          {shareError}
-        </div>
-      )}
-
-      {shareSuccess && (
-        <div
-          style={{
-            background: "#d1fae5",
-            border: "1px solid #16a34a",
-            color: "#14532d",
-            padding: 10,
-            borderRadius: 4,
-            fontSize: 12,
-            marginBottom: 16,
-          }}
-        >
-          ✓ {shareSuccess}
-        </div>
-      )}
-
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-        <button
-          className="approval-banner__btn-link"
-          onClick={() => setShareDialogOpen(false)}
-          disabled={sharing}
-        >
-          {shareSuccess ? "关闭" : "取消"}
-        </button>
-        {!shareSuccess && (
-          <button
-            className="approval-banner__btn-primary"
-            onClick={() => void handleShare(shareWarnings.length > 0)}
-            disabled={sharing || !shareAck || !shareDept}
-          >
-            {sharing
-              ? "分享中…"
-              : shareWarnings.length > 0
-                ? "我看过了, 强发"
-                : "确认分享"}
-          </button>
         )}
+
+        <div className="wiki-share__actions">
+          <button type="button" className="approval-banner__btn-link" onClick={onClose} disabled={sharing}>
+            {done ? "关闭" : "取消"}
+          </button>
+          {!done && (
+            <button type="button" className="approval-banner__btn-primary" onClick={() => void send()} disabled={!canSend}>
+              {sharing ? "分享中…" : steps.length > 1 ? `分享 ${steps.length} 页` : "确认分享"}
+            </button>
+          )}
+        </div>
       </div>
     </div>
-  </div>
   );
 }

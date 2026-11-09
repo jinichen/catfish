@@ -561,6 +561,7 @@ pub(crate) fn handler(
             crate::services::device_id::device_id_get,
             // 11/02 知识卡来源点回原对话
             crate::commands::wiki_source_trace::wiki_source_sessions,
+            crate::commands::wiki_share::wiki_share_plan,
             crate::commands::wiki_retrieval_eval::wiki_retrieval_eval,
             crate::commands::practice_stats::practice_stats,
             // 11/01 手机通道 (docs/MOBILE-CLIENT-DESIGN.md)

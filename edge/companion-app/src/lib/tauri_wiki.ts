@@ -321,3 +321,58 @@ export interface RetrievalEvalReport {
 
 export const wikiRetrievalEval = (questions: string, topK: number) =>
   rawInvoke<RetrievalEvalReport>("wiki_retrieval_eval", { questions, topK });
+
+// ── 11/09 分享到部门之前的预检 (tool-bridge wiki_share.py) ─────────────────
+export interface WikiShareWarning {
+  category: string;
+  hits: unknown[];
+  advice: string;
+}
+export interface WikiShareScan {
+  /** 凭据命中: 这一项不能发 */
+  blocked: string | null;
+  warnings: WikiShareWarning[];
+}
+export interface WikiShareSource {
+  ref: string;
+  kind: "raw" | "conversation" | "manual" | "other";
+  /** 不一起分享时, 发出去那份里这条来源显示成什么 */
+  label: string;
+  /** raw: 规范引用 (raw/sources/<名>), 一起分享时传给发布 */
+  key?: string;
+  /** raw: 一起分享时的页标题「原件 · 名称」 */
+  title?: string;
+  /** raw: 一起分享时当一页发的路径 */
+  publish_path?: string;
+  size_bytes?: number;
+  attachable?: boolean;
+  reason?: string | null;
+  /** 部门知识库里已经有这份原件 */
+  shared?: boolean;
+  scan?: WikiShareScan | null;
+}
+export interface WikiShareRelation {
+  name: string;
+  rel?: string | null;
+  /** shared 同事已经能看到 / local 本机有、可以一起分享 / missing 本机也没有 / private 客户档案不能分享 */
+  status: "shared" | "local" | "missing" | "private";
+  rel_path?: string;
+  title?: string;
+  reason?: string;
+  scan?: WikiShareScan;
+}
+export interface WikiSharePlan {
+  ok: boolean;
+  error?: string;
+  title: string;
+  rel_path: string;
+  shared_before: boolean;
+  /** 拿到了部门知识库列表 (拿不到时「同事能不能看到」只能按本机记录判断) */
+  hub_known: boolean;
+  scan: WikiShareScan;
+  preview: { frontmatter_yaml: string; body_md: string };
+  sources: WikiShareSource[];
+  relations: WikiShareRelation[];
+}
+export const wikiSharePlan = (relPath: string, attachSources: string[]) =>
+  rawInvoke<WikiSharePlan>("wiki_share_plan", { relPath, attachSources });

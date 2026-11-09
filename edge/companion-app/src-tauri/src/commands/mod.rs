@@ -109,6 +109,7 @@ pub(crate) mod transparent_log_lineage; // 10/31: 换机迁移 —— 链上记�
 pub mod practice_stats; // 11/02: 题库与复习的数量 (早安简报提醒用)
 pub mod wiki_retrieval_eval; // 11/02: 知识库检索打分 (借 DeepTutor kb eval)
 pub mod wiki_source_trace; // 11/02: 知识卡来源 → 能点开的那几次对话 (借 DeepTutor 记忆脚注)
+pub mod wiki_share; // 11/09: 分享到部门之前的预检 (来源 / 关系同事能不能看到)
 pub mod mobile_bridge; // 11/01: 手机通道 —— 经中央中转站跟手机端到端加密通信 (docs/MOBILE-CLIENT-DESIGN.md)
 pub mod device_migration; // 10/31: 换机迁移包导出 / 导入 (docs/DEVICE-MIGRATION-DESIGN.md)
 pub(crate) mod transparent_log_redact; // 10/25: 打码规则变严后旧记录统一脱敏 + 重算指纹 (留存原指纹给中央锚点核对)

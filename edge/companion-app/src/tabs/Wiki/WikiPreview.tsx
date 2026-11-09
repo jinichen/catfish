@@ -19,9 +19,7 @@ import { useWikiStore } from "../../store/wiki";
 import {
   wikiDeleteFile,
   wikiUpdateFile,
-  toolBridgeCallTool,
   wikiUninstallShared,
-  wikiSensitiveTermsEnsure,
 } from "../../lib/tauri";
 // P3.5.172 Phase C (7/3 鸿波): 🔗 扫描关联 AI 建议 modal.
 // 严格 audit "组织架构" orphan root cause = 员工上传 md 无 [[wikilink]] → 系统扫
@@ -30,7 +28,7 @@ import {
 import WikiLinkSuggestModal from "./WikiLinkSuggestModal";
 // P3.3.18 Phase 4 P2 (6/10): 检 hub 是否 stale
 import { config } from "../../lib/env";
-import { fetchMe, fetchWithAuth } from "../../lib/me";
+import { fetchWithAuth } from "../../lib/me";
 import WikiShareDialog from "./WikiShareDialog";
 import WikiActionPanel from "./WikiActionPanel";
 // 8/15: 下面三段是从本文件搬出去的 JSX section, 不是新组件。挑它们是因为
@@ -44,8 +42,7 @@ import {
 import { wikiKindLabel } from "./wikiLabels";
 import { isExternalLink } from "../../lib/linkBehavior";
 import { wikiMarkdownUrl } from "../../lib/wikiMarkdownUrl";
-import { resolveWikiRefOrNull } from "../../lib/wikiResolve";
-import { fileManagerName } from "../../lib/platformLabels";
+import { resolveRefForPage } from "../../lib/wikiResolve";
 
 /** Hide the legacy generated `## Related` block from older wiki documents.
  *
@@ -77,6 +74,7 @@ export default function WikiPreview({ onOpenTask }: { onOpenTask?: (taskId: stri
   const selectedLoading = useWikiStore((s) => s.selectedLoading);
   const selectedError = useWikiStore((s) => s.selectedError);
   const files = useWikiStore((s) => s.files);
+  const sharedFiles = useWikiStore((s) => s.sharedFiles);
   const selectFile = useWikiStore((s) => s.selectFile);
   const loadFiles = useWikiStore((s) => s.loadFiles);
   // 缺失链接只进入虚拟态，不自动落盘伪概念。真正的知识条目必须由员工
@@ -94,18 +92,8 @@ export default function WikiPreview({ onOpenTask }: { onOpenTask?: (taskId: stri
   const [deleting, setDeleting] = useState(false);
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
 
-  // P3.3.18 (6/10): 分享到部门 dialog state. 走 catfish_wiki_publish tool.
-  // 强警告员工 "已 pull 副本撤不回" (manifesto 公理 4). 第一次失败若 warnings
-  // (PII / 内网 / 敏感词), 显警告 + ack checkbox + 再 retry with acknowledge_warnings=true.
+  // P3.3.18 (6/10): 分享到部门 dialog. 11/09 起状态和发布都在 WikiShareDialog 里 (先预检再发)。
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
-  // 9/30: 分享目标 = 身份里的部门 (hub 也按这个定), 打开 dialog 时查一次
-  const [shareDept, setShareDept] = useState<string | undefined>(undefined);
-  const [shareDeptError, setShareDeptError] = useState<string | null>(null);
-  const [shareAck, setShareAck] = useState(false);
-  const [sharing, setSharing] = useState(false);
-  const [shareWarnings, setShareWarnings] = useState<Array<{ category: string; hits: any[]; advice: string }>>([]);
-  const [shareError, setShareError] = useState<string | null>(null);
-  const [shareSuccess, setShareSuccess] = useState<string | null>(null);
 
   // P3.3.18 Phase 4 P2 (6/10): 卸载本机部门 wiki 副本 state. 5 秒 confirm 同款.
   const [confirmUninstall, setConfirmUninstall] = useState(false);
@@ -316,90 +304,13 @@ export default function WikiPreview({ onOpenTask }: { onOpenTask?: (taskId: stri
     }
   };
 
-  // P3.3.18 share dialog — selectedFile 变时 reset state
+  // P3.3.18 share dialog — 换了一页就关掉
   useEffect(() => {
     setShareDialogOpen(false);
-    setShareAck(false);
-    setShareWarnings([]);
-    setShareError(null);
-    setShareSuccess(null);
   }, [selectedFile?.info.rel_path]);
 
-  // P3.3.18 Phase 4 P2 (6/10): 敏感词文件 onboarding state
-  const [sensitiveTermsHint, setSensitiveTermsHint] = useState<string | null>(null);
-
   const openShareDialog = () => {
-    if (!selectedFile) return;
-    setShareDialogOpen(true);
-    setShareAck(false);
-    setShareWarnings([]);
-    setShareError(null);
-    setShareSuccess(null);
-    setSensitiveTermsHint(null);
-    // 分享目标 dialog 里显式写出来, 员工看清楚再确认 (manifesto 公理 3, 不静默自决)
-    setShareDept(undefined);
-    setShareDeptError(null);
-    fetchMe()
-      .then((me) => setShareDept((me.department || "").trim()))
-      .catch((e) => setShareDeptError(e instanceof Error ? e.message : String(e)));
-  };
-
-  const handleEnsureSensitiveTerms = async () => {
-    try {
-      const result = await wikiSensitiveTermsEnsure();
-      if (result.created) {
-        setSensitiveTermsHint(`✓ 已创建模板: ${result.path}. 用 ${fileManagerName()} 打开编辑, 删 # 启用对应行.`);
-      } else {
-        setSensitiveTermsHint(`✓ 已存在: ${result.path}. 用 ${fileManagerName()} 打开编辑.`);
-      }
-    } catch (e) {
-      setSensitiveTermsHint(`✗ 创建失败: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  };
-
-  const handleShare = async (acknowledgeWarnings: boolean) => {
-    if (!selectedFile) return;
-    if (!shareDept) {
-      setShareError("你的账号没有设置部门, 不能分享到部门知识库");
-      return;
-    }
-    if (!shareAck) {
-      setShareError("必须勾选 '我知道已 pull 副本撤不回' 才能继续");
-      return;
-    }
-    setSharing(true);
-    setShareError(null);
-    try {
-      const res = await toolBridgeCallTool("catfish_wiki_publish", {
-        wiki_rel_path: selectedFile.info.rel_path,
-        acknowledge_warnings: acknowledgeWarnings,
-      });
-      const result: any = res.result;
-      if (res.ok && result?.ok) {
-        setShareSuccess(
-          result.republished
-            ? `已更新 ${result.namespace} 里的这一条, 装过的同事会看到"有更新"`
-            : `已分享到 ${result.namespace}`,
-        );
-        setShareWarnings([]);
-      } else {
-        // 看是不是 warnings (默认拒)
-        const errResult = result || {};
-        if (errResult.scan_phase === "warnings" && errResult.warnings?.length) {
-          setShareWarnings(errResult.warnings);
-          setShareError(null);
-        } else {
-          setShareError(
-            errResult.error ||
-              (typeof result === "string" ? result : JSON.stringify(result || res)),
-          );
-        }
-      }
-    } catch (e) {
-      setShareError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSharing(false);
-    }
+    if (selectedFile) setShareDialogOpen(true);
   };
 
   // P39 (6/5 鸿波): 变更历史 collapsible — 检测 body 末尾 "## 变更历史" 段 (P19 LLM
@@ -441,9 +352,10 @@ export default function WikiPreview({ onOpenTask }: { onOpenTask?: (taskId: stri
 
   async function handleWikilinkClick(name: string) {
     // 找 title / slug match file
-    const match = resolveWikiRefOrNull(name, files);
-    if (match) {
-      void selectFile(match.rel_path);
+    // 11/09: 看装进来的部门页时, 先找同一个发布人分享的同名页 (resolveRefForPage)
+    const target = resolveRefForPage(name, selectedFile?.info.rel_path, files, sharedFiles);
+    if (target) {
+      void selectFile(target);
       return;
     }
     // 缺失链接只显示虚拟体系；否则一次点击会把 raw/sources 路径或普通
@@ -474,7 +386,7 @@ export default function WikiPreview({ onOpenTask }: { onOpenTask?: (taskId: stri
 
   const info = selectedFile.info;
   const isDangling = (name: string) => {
-    return !resolveWikiRefOrNull(name, files);
+    return !resolveRefForPage(name, info.rel_path, files, sharedFiles);
   };
 
   const kind = info.kind;
@@ -572,7 +484,7 @@ export default function WikiPreview({ onOpenTask }: { onOpenTask?: (taskId: stri
             <button
               className="approval-banner__btn-link"
               onClick={openShareDialog}
-              disabled={deleting || sharing}
+              disabled={deleting || shareDialogOpen}
               title="把这条 wiki 发布到部门 wiki-hub — 部门同事能看到, 已 pull 副本撤不回"
             >
               📤 分享到部门
@@ -640,18 +552,8 @@ export default function WikiPreview({ onOpenTask }: { onOpenTask?: (taskId: stri
       {shareDialogOpen && selectedFile && (
         <WikiShareDialog
           selectedFile={selectedFile}
-          shareDept={shareDept}
-          shareDeptError={shareDeptError}
-          shareAck={shareAck}
-          setShareAck={setShareAck}
-          sharing={sharing}
-          shareWarnings={shareWarnings}
-          shareError={shareError}
-          shareSuccess={shareSuccess}
-          sensitiveTermsHint={sensitiveTermsHint}
-          handleShare={handleShare}
-          handleEnsureSensitiveTerms={handleEnsureSensitiveTerms}
-          setShareDialogOpen={setShareDialogOpen}
+          onClose={() => setShareDialogOpen(false)}
+          onShared={() => void loadFiles()}
         />
       )}
 

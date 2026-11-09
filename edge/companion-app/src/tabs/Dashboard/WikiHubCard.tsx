@@ -195,15 +195,19 @@ export default function WikiHubCard() {
       });
       const errMsg = toolResultError(res);
       if (errMsg === null) {
-        const inner = res.result as { withdrawn?: boolean; review_status?: string } | null;
+        const inner = res.result as { withdrawn?: boolean; review_status?: string; also_installed?: string[] } | null;
         const updating = installedByKey.has(key);
+        // 11/09: 同一个人分享的、这页关联到的页 (关系 / 原件) 一起装上了 —— 说一声, 不然同事不知道多了几页
+        const also = inner?.also_installed?.length
+          ? `; 它关联的 ${inner.also_installed.length} 页也一起装上了 (${inner.also_installed.slice(0, 3).join("、")}${inner.also_installed.length > 3 ? " 等" : ""})`
+          : "";
         setToast({
           kind: "ok",
           text: inner?.withdrawn
             ? `'${doc.title}' 已被撤回, 本机副本已标成「已撤回」(文件没删, 搜索默认不再列出)`
             : updating
-              ? `已更新 '${doc.title}' 到最新版${inner?.review_status === "pending" ? " (主管还没审过, 标「待审」)" : ""}`
-              : `已装 '${doc.title}' 到 ~/.catfish/wiki-shared/${doc.namespace}/${inner?.review_status === "pending" ? " (主管还没审过, 标「待审」)" : ""}`,
+              ? `已更新 '${doc.title}' 到最新版${inner?.review_status === "pending" ? " (主管还没审过, 标「待审」)" : ""}${also}`
+              : `已装 '${doc.title}' 到 ~/.catfish/wiki-shared/${doc.namespace}/${inner?.review_status === "pending" ? " (主管还没审过, 标「待审」)" : ""}${also}`,
         });
         // 之前装完不重扫本机, 按钮要等下一分钟轮询才变 "✓ 已装"
         void refresh();

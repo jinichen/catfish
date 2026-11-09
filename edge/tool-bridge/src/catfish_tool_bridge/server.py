@@ -103,6 +103,12 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
             return _error(req_id, INVALID_PARAMS, "range 只支持 today / natural-week / upcoming")
         return _success(req_id, local_pim.events_for_range(rng))
 
+    # 11/09: 知识页「分享到部门」对话框的预检 (wiki_share.py): 发出去长什么样、来源 / 关系同事能不能看到、
+    # 每项的扫描结果。只读, 不进模型工具清单; 真发布还是走 tools/dispatch catfish_wiki_publish (界面确认才算数)。
+    if method == "wiki/share_plan":
+        from . import wiki_share  # noqa: PLC0415
+        return _success(req_id, await asyncio.to_thread(wiki_share.plan, params))
+
     # 11/4: 「我的记忆」卡片上「待你确认的整理建议」(memory_pending.py), 不进模型工具清单
     if method in ("memory/pending_list", "memory/pending_resolve"):
         from . import memory_pending  # noqa: PLC0415

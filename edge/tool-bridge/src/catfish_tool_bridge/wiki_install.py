@@ -145,6 +145,43 @@ def _write_install_audit(event: dict) -> None:
         logger.warning("写 wiki_install_audit.jsonl 失败: %s", e)
 
 
+def _install_linked(namespace: str, file_id: str, published_by: str, frontmatter_yaml: str, body_md: str) -> list[str]:
+    """11/09: 装一页时, 同一个人分享的、这页关联到的页 (关系 + [[原件 · 名称]]) 一起装上, 只装一层。
+
+    不这么做的话, 同事装了「市场部」, 它关联的「中电福富」、来源「原件 · 福富组织架构」都在中央上,
+    他本机却没有 —— 点哪个都是死链, 或者按名字连到他自己的同名条目上 (内容可能完全不同)。
+    只认同一个发布人的同名页: 别人分享的同名页不算 (那是另一份东西)。拉不到列表 / 装失败都不影响这一页。"""
+    from .wiki_files import _merge_related_with_body, _parse_related  # noqa: PLC0415
+    from .wiki_share import _norm  # noqa: PLC0415
+    names = {_norm(str(r["name"])) for r in _merge_related_with_body(_parse_related(frontmatter_yaml), body_md)}
+    names.discard("")
+    if not names or not published_by or published_by == "?":
+        return []
+    token = _read_id_token()
+    if not token:
+        return []
+    import httpx  # noqa: PLC0415
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            r = client.get(f"{GATEWAY_URL}/v1/wiki/documents?include_stale=false", headers={"Authorization": f"Bearer {token}"})
+        docs = (r.json().get("documents") or []) if r.status_code == 200 else []
+    except Exception as e:  # noqa: BLE001
+        logger.info("装关联页: 拉部门知识库列表失败, 跳过: %s", e)
+        return []
+    out: list[str] = []
+    for d in docs:
+        fid = str(d.get("file_id") or "")
+        if (d.get("namespace") != namespace or fid == file_id or d.get("published_by") != published_by
+                or d.get("stale_after_unpublish") or _norm(str(d.get("title") or "")) not in names):
+            continue
+        if (_shared_root() / namespace / f"{fid}.md").exists():
+            continue
+        res = wiki_install({"hub_namespace": namespace, "hub_file_id": fid, "_linked": True})
+        if res.get("ok"):
+            out.append(str(d.get("title") or fid))
+    return out
+
+
 def wiki_install(args: dict[str, Any]) -> dict[str, Any]:
     """tool entry — 从 wiki-hub 拉一条 wiki 装本机.
 
@@ -268,6 +305,8 @@ def wiki_install(args: dict[str, Any]) -> dict[str, Any]:
     })
 
     pending_note = " 这页主管还没审过 (标「待审」), 内容以主管审过为准." if review["review_status"] == "pending" else ""
+    also = [] if args.get("_linked") else _install_linked(namespace, file_id, published_by, frontmatter_yaml, body_md)
+    linked_note = f" 它关联的 {len(also)} 页 ({'、'.join(also[:5])}{' 等' if len(also) > 5 else ''}) 也一起装上了." if also else ""
     return {
         "ok": True,
         "installed_path": str(target_md),
@@ -277,10 +316,11 @@ def wiki_install(args: dict[str, Any]) -> dict[str, Any]:
         "kind": kind,
         "published_by": published_by,
         "review_status": review["review_status"],
+        "also_installed": also,
         "summary": (
             f"已装 wiki '{title}' (by {published_by}) 到 ~/.catfish/wiki-shared/"
             f"{namespace}/{file_id}.md. "
-            f"在 Companion 知识体系 tab 下 '📥 部门 wiki' 分组能看到 (read-only).{pending_note}"
+            f"在 Companion 知识体系 tab 下 '📥 部门 wiki' 分组能看到 (read-only).{pending_note}{linked_note}"
         ),
     }
 

@@ -137,3 +137,35 @@ export function auditWikiRefs(files: WikiFileInfo[]): {
   }
   return { total, hits, misses, ambiguous };
 }
+
+/** 装进来的部门页 (wiki-shared/…) 的最小信息 —— 跟 InstalledWikiSharedInfo 同名字段, 这里不 import 免得绕圈 */
+export interface SharedPageRef {
+  relPath: string;
+  title: string;
+  namespace: string;
+  publishedBy: string;
+}
+
+/** 11/09: 点一个关系 / 链接时该打开哪一页 (只回 rel_path)。
+ *
+ * 正在看的是装进来的部门页时, 它的关系是**发布人**写的: 先找同一个人分享、装在本机的同名页, 再找同部门别人分享的,
+ * 最后才是自己知识库里的。不这样的话, 同事看「市场部」点「中电福富」会打开**他自己**那条 (内容可能完全不同),
+ * 而且看不出来连错了。看自己的页时跟原来一样 (resolveWikiRefOrNull)。
+ * 部门页只比标题 (标点无关): 装进来的页没有别名信息。 */
+export function resolveRefForPage(
+  name: string,
+  currentRelPath: string | null | undefined,
+  files: WikiFileInfo[],
+  shared: SharedPageRef[],
+): string | null {
+  const current = currentRelPath ? shared.find((s) => s.relPath === currentRelPath) : undefined;
+  if (current) {
+    const t = normTitle(name);
+    const same = (s: SharedPageRef) => s.relPath !== current.relPath && normTitle(s.title) === t;
+    const byPublisher = shared.filter((s) => same(s) && s.publishedBy === current.publishedBy && s.namespace === current.namespace);
+    if (byPublisher.length) return byPublisher[0].relPath;
+    const byDept = shared.filter((s) => same(s) && s.namespace === current.namespace);
+    if (byDept.length === 1) return byDept[0].relPath;
+  }
+  return resolveWikiRefOrNull(name, files)?.rel_path ?? null;
+}
