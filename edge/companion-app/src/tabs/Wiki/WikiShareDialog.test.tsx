@@ -61,7 +61,8 @@ describe("分享到部门", () => {
     expect(screen.getByText("同事还看不到")).toBeTruthy();
     expect(screen.getByText("同事已经能看到")).toBeTruthy();
     expect(screen.getByText("你本机也没有这一页")).toBeTruthy();
-    expect(await screen.findByText("研发部")).toBeTruthy();   // 分享到哪个部门摆在眼前
+    expect(await screen.findByText(/研发部同事马上能看到/)).toBeTruthy();   // 分享到哪个部门摆在眼前
+    expect((screen.getByRole("radio", { name: /^本部门/ }) as HTMLInputElement).checked).toBe(true);   // 没发过 = 本部门
     // 原文依据 (从原件摘的原话) 会一起发出去: 没展开预览时也提醒一句
     expect(screen.getByText(/这一页带 2 条原文依据/)).toBeTruthy();
   });
@@ -94,7 +95,7 @@ describe("分享到部门", () => {
     fireEvent.click(btn);
     await waitFor(() => expect(t.toolBridgeCallTool).toHaveBeenCalledTimes(1));
     expect(t.toolBridgeCallTool.mock.calls[0]).toEqual(["catfish_wiki_publish",
-      { wiki_rel_path: "wiki/entities/市场部.md", acknowledge_warnings: false, attached_sources: [] }]);
+      { wiki_rel_path: "wiki/entities/市场部.md", acknowledge_warnings: false, attached_sources: [], scope: "department" }]);
     expect(await screen.findByText(/「市场部」已分享/)).toBeTruthy();
   });
 
@@ -122,6 +123,32 @@ describe("分享到部门", () => {
     ]);
     expect((t.toolBridgeCallTool.mock.calls[2][1] as { attached_sources: string[] }).attached_sources).toEqual(["raw/sources/1-组织架构"]);
     expect((t.toolBridgeCallTool.mock.calls[2][1] as { acknowledge_warnings: boolean }).acknowledge_warnings).toBe(true);
+  });
+
+  it("全公司 (11/09): 关系按其他部门点不点得开重算; 换范围要重新勾「我知道」; 每页都带 scope=company", async () => {
+    render(<WikiShareDialog selectedFile={file} onClose={() => {}} />);
+    await screen.findByText(/把原件「组织架构」也分享/);
+    fireEvent.click(screen.getByText(/已经装走的撤不回/));
+    fireEvent.click(await screen.findByRole("radio", { name: /^全公司/ }));
+    expect((screen.getByRole("button", { name: "确认分享" }) as HTMLButtonElement).disabled).toBe(true);
+    // 销售单元只在部门里 (不是我发的) → 其他部门点不开
+    expect(screen.getByText("只在别人的部门里, 其他部门点不开")).toBeTruthy();
+    expect(screen.getByText(/本部门同事 \(管理员审过后全公司同事\)/)).toBeTruthy();
+    fireEvent.click(screen.getByText(/已经装走的撤不回/));
+    fireEvent.click(screen.getByRole("button", { name: "确认分享" }));
+    await waitFor(() => expect(t.toolBridgeCallTool).toHaveBeenCalledTimes(1));
+    expect((t.toolBridgeCallTool.mock.calls[0][1] as { scope: string }).scope).toBe("company");
+    expect(await screen.findByText(/全公司等管理员审/)).toBeTruthy();
+  });
+
+  it("上次发到全公司: 默认选全公司, 说清管理员审到哪了", async () => {
+    t.wikiSharePlan.mockImplementation(async (_p: string, attached: string[]) => ({
+      ...makePlan(attached), shared_before: true, scope_before: "company",
+      hub_status: { scope: "company", company_status: "rejected", company_note: "有经营数字" },
+    }));
+    render(<WikiShareDialog selectedFile={file} onClose={() => {}} />);
+    expect(await screen.findByText(/上次申请全公司可见没通过: 有经营数字/)).toBeTruthy();
+    await waitFor(() => expect((screen.getByRole("radio", { name: /^全公司/ }) as HTMLInputElement).checked).toBe(true));
   });
 
   it("某一页没发出去: 逐页说清", async () => {

@@ -25,7 +25,7 @@ import {
   type InstalledWikiSharedInfo,
 } from "../../lib/tauri";
 import { useAgentStore } from "../../store/agent";
-import { hasHubUpdate, toolResultError } from "./wikiHubStatus";
+import { COMPANY_GROUP, groupOf, hasHubUpdate, sortGroups, toolResultError } from "./wikiHubStatus";
 
 interface WikiDoc {
   namespace: string;
@@ -48,6 +48,37 @@ interface WikiDoc {
   withdrawn_by?: string | null;
   withdrawn_at?: string | null;
   legacy?: boolean;
+  /** 11/09 全公司范围: scope=company 是发布人申请了全公司; visible_to=company 是管理员已通过、别的部门也能看到 */
+  scope?: "department" | "company";
+  visible_to?: "department" | "company";
+  company_status?: "pending" | "approved" | "rejected";
+  company_note?: string | null;
+}
+
+/** 范围标: 全公司 (别的部门也能看) / 申请全公司中 (管理员还没审, 现在只有本部门看得到) */
+function ScopeBadge({ doc }: { doc: Pick<WikiDoc, "namespace" | "visible_to" | "scope" | "company_status" | "company_note"> }) {
+  const dept = doc.namespace.replace(/^dept\//, "");
+  let label = "", title = "", tone = "#0891b2";
+  if (doc.visible_to === "company") {
+    label = `全公司 · ${dept}`;
+    title = `${dept}分享的, 管理员审过, 全公司都能看到、能装`;
+  } else if (doc.scope === "company" && doc.company_status === "pending") {
+    label = "申请全公司中";
+    title = "发布人申请了全公司可见, 管理员还没审; 现在只有本部门看得到";
+    tone = "#d97706";
+  } else if (doc.scope === "company" && doc.company_status === "rejected") {
+    label = "全公司未通过";
+    title = `管理员没通过全公司可见${doc.company_note ? `: ${doc.company_note}` : ""}; 只在本部门`;
+    tone = "#6b7280";
+  } else {
+    return null;
+  }
+  return (
+    <span title={title} style={{ fontSize: 10, padding: "0 6px", borderRadius: 999, border: `1px solid ${tone}`, color: tone,
+                                 whiteSpace: "nowrap", marginLeft: 6 }}>
+      {label}
+    </span>
+  );
 }
 
 /** 本机副本 / hub 上这条的审核状态标 */
@@ -221,12 +252,13 @@ export default function WikiHubCard() {
     }
   };
 
-  // 按 namespace 分组
+  // 按部门分组; 11/09 全公司可见的 (含别的部门分享的) 单独一组, 放最前
   const grouped: Record<string, WikiDoc[]> = {};
   for (const d of docs) {
-    (grouped[d.namespace] ||= []).push(d);
+    (grouped[groupOf(d)] ||= []).push(d);
   }
-  const namespaces = Object.keys(grouped).sort();
+  const namespaces = sortGroups(Object.keys(grouped));
+  const deptCount = new Set(docs.map((d) => d.namespace)).size;
   const isWithdrawn = (d: WikiDoc) => d.stale_after_unpublish || d.review_status === "withdrawn";
   const staleCount = docs.filter(isWithdrawn).length;
   // P3.3.18 Phase 4: 本机已装 + hub 已 stale 的 "需要员工注意" 计数
@@ -268,7 +300,7 @@ export default function WikiHubCard() {
               marginLeft: "var(--space-2)",
             }}
           >
-            ({docs.length} wiki / {namespaces.length} 部门)
+            ({docs.length} wiki / {deptCount} 部门)
           </span>
           {staleCount > 0 && (
             <span
@@ -339,7 +371,7 @@ export default function WikiHubCard() {
             color: "var(--catfish-text-muted)",
           }}
         >
-          本部门共享的知识文档 · 每分钟刷新
+          本部门和全公司共享的知识文档 · 每分钟刷新
         </span>
       </div>
 
@@ -386,7 +418,7 @@ export default function WikiHubCard() {
             textAlign: "center",
           }}
         >
-          部门里还没人分享过 wiki. 在知识体系页打开一条笔记, 点「分享到部门」, 同部门同事就能在这里看到并安装.
+          还没人分享过 wiki. 在知识体系页打开一条笔记, 点「分享」, 选本部门或全公司, 同事就能在这里看到并安装.
         </div>
       )}
 
@@ -399,10 +431,9 @@ export default function WikiHubCard() {
                   fontSize: 12,
                   color: "var(--catfish-text-muted)",
                   marginBottom: "var(--space-2)",
-                  fontFamily: "var(--font-mono)",
                 }}
               >
-                {ns}  ·  {grouped[ns].length} wiki
+                {ns === COMPANY_GROUP ? "全公司共享 (管理员审过)" : ns}  ·  {grouped[ns].length} wiki
               </div>
               <div
                 style={{
@@ -483,6 +514,7 @@ function WikiRow({
           {doc.title}
           {/* 11/08: hub 上的审核状态 (待审 / 已撤回); 本机副本自己的状态在下面 */}
           <ReviewBadge status={stale ? "withdrawn" : doc.review_status} note={withdrawnNote} by={doc.withdrawn_by} />
+          {!stale && <ScopeBadge doc={doc} />}
         </span>
         <span
           style={{

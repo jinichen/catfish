@@ -86,7 +86,8 @@ def _validate_ns_and_id(namespace: str, file_id: str) -> str | None:
 
 
 #: 11/08 分享治理: hub 返回的审核字段, 原样记进 .meta.json (docs/SHARE-GOVERNANCE-PLAN.md §3.2)
-_REVIEW_KEYS = ("review_status", "reviewed_by", "reviewed_at", "review_note", "withdrawn_by", "withdrawn_at", "legacy")
+_REVIEW_KEYS = ("review_status", "reviewed_by", "reviewed_at", "review_note", "withdrawn_by", "withdrawn_at", "legacy",
+                "scope", "visible_to")   # 11/09 全公司范围: 装的时候这页对谁可见
 
 
 def _review_fields(doc: dict[str, Any]) -> dict[str, Any]:

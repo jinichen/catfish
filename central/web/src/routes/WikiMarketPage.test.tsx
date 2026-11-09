@@ -17,9 +17,17 @@ const docs: WikiDocSummary[] = [
     stale_after_unpublish: true, unpublished_at: "2026-10-05T08:00:00Z" },
   { namespace: "dept/研发部", file_id: "c3", filename: "wiki/concepts/老规矩.md", title: "老规矩",
     kind: "concept", published_by: "bob@example.com", published_at: "2026-09-01T08:00:00Z", legacy: true, review_status: "approved" },
+  { namespace: "dept/研发部", file_id: "d4", filename: "wiki/entities/集成能力中心.md", title: "集成能力中心",
+    kind: "entity", published_by: "alice@example.com", published_at: "2026-11-09T08:00:00Z", review_status: "approved",
+    scope: "company", company_status: "pending", visible_to: "department" },
+  { namespace: "dept/销售部", file_id: "e5", filename: "wiki/concepts/报价规则.md", title: "报价规则",
+    kind: "concept", published_by: "sam@example.com", published_at: "2026-11-08T08:00:00Z", review_status: "approved",
+    scope: "company", company_status: "approved", visible_to: "company" },
 ];
 const unpublish = vi.fn(async () => ({ ok: true }));
 const review = vi.fn(async () => ({ ok: true }));
+const scopeFn = vi.fn(async (_d: string, _f: string, scope: string) => ({
+  ok: true, scope, company_status: scope === "company" ? "pending" : undefined, visible_to: "department" }));
 
 vi.mock("../lib/wiki", async (orig) => ({
   ...(await orig<typeof import("../lib/wiki")>()),
@@ -32,6 +40,7 @@ vi.mock("../lib/wiki", async (orig) => ({
   unpublishWikiDoc: (...a: unknown[]) => unpublish(...(a as [])),
   listReviewWikiDocs: async () => ({ documents: docs.filter((d) => d.review_status === "pending") }),
   reviewWikiDoc: (...a: unknown[]) => review(...(a as [])),
+  setWikiScope: (...a: unknown[]) => scopeFn(...(a as [string, string, string])),
 }));
 
 function at(path: string) {
@@ -47,7 +56,7 @@ const me = (email: string, role: "employee" | "manager" | "admin" | "sysadmin" =
   useAuthStore.getState().setMe({ email, department: "研发部", role, managed_departments: role === "manager" ? ["研发部"] : [],
     auth_method: "password", must_change_password: false });
 
-beforeEach(() => { unpublish.mockClear(); review.mockClear(); });
+beforeEach(() => { unpublish.mockClear(); review.mockClear(); scopeFn.mockClear(); });
 afterEach(cleanup);
 
 describe("知识库页签", () => {
@@ -55,7 +64,7 @@ describe("知识库页签", () => {
     me("carol@example.com");
     at("/market/wiki");
     expect(await screen.findByText("发版流程")).toBeTruthy();
-    expect(screen.getByText(/知识库 · 2 条 \/ 1 个部门/)).toBeTruthy();
+    expect(screen.getByText(/知识库 · 4 条 \/ 2 个部门/)).toBeTruthy();
     expect(screen.getByText("已撤回")).toBeTruthy();
     const link = screen.getByText("发版流程").closest("a")!;
     expect(decodeURIComponent(link.getAttribute("href")!)).toBe("/market/wiki/研发部/a1");
@@ -134,5 +143,52 @@ describe("知识库页签", () => {
     at(`/market/wiki/${encodeURIComponent("研发部")}/b2`);
     expect(await screen.findByText(/原作者已于 2026-10-05 撤回/)).toBeTruthy();
     expect(screen.queryByText("撤回分享")).toBeNull();
+  });
+
+  it("范围一列: 全公司 / 申请全公司 / 本部门", async () => {
+    me("carol@example.com");
+    at("/market/wiki");
+    await screen.findByText("报价规则");
+    const row = (t: string) => screen.getByText(t).closest("tr")!;
+    expect(within(row("报价规则")).getByText("全公司")).toBeTruthy();
+    expect(within(row("集成能力中心")).getByText("申请全公司")).toBeTruthy();
+    expect(within(row("发版流程")).getByText("本部门")).toBeTruthy();
+  });
+
+  it("管理员审全公司: 同意直接调; 驳回要写原因; 部门主管看不到这一块", async () => {
+    me("boss@example.com", "manager");
+    at(`/market/wiki/${encodeURIComponent("研发部")}/d4`);
+    expect(await screen.findByText(/作者申请了全公司可见/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "同意全公司可见" })).toBeNull();
+    cleanup();
+    me("root@example.com", "admin");
+    at(`/market/wiki/${encodeURIComponent("研发部")}/d4`);
+    fireEvent.click(await screen.findByRole("button", { name: "驳回" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "驳回" }).at(-1)!);
+    expect(await screen.findByText(/驳回要写原因/)).toBeTruthy();
+    expect(review).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByPlaceholderText(/驳回原因/), { target: { value: "有经营数字" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "驳回" }).at(-1)!);
+    await waitFor(() => expect(review).toHaveBeenCalledWith("研发部", "d4", "reject_company", "有经营数字"));
+    expect(await screen.findByText(/管理员没通过全公司可见：有经营数字/)).toBeTruthy();
+    cleanup();
+    review.mockClear();
+    at(`/market/wiki/${encodeURIComponent("研发部")}/d4`);
+    fireEvent.click(await screen.findByRole("button", { name: "同意全公司可见" }));
+    await waitFor(() => expect(review).toHaveBeenCalledWith("研发部", "d4", "approve_company", ""));
+    expect(await screen.findByText(/全公司可见（root@example.com/)).toBeTruthy();
+  });
+
+  it("作者申请全公司可见 / 收回到本部门; 别人看不到这一块", async () => {
+    me("alice@example.com");
+    at(`/market/wiki/${encodeURIComponent("研发部")}/a1`);
+    fireEvent.click(await screen.findByRole("button", { name: "申请全公司可见" }));
+    await waitFor(() => expect(scopeFn).toHaveBeenCalledWith("研发部", "a1", "company"));
+    expect(await screen.findByRole("button", { name: "收回到只在研发部" })).toBeTruthy();
+    cleanup();
+    me("carol@example.com");
+    at(`/market/wiki/${encodeURIComponent("研发部")}/a1`);
+    await screen.findByText("步骤");
+    expect(screen.queryByRole("button", { name: "申请全公司可见" })).toBeNull();
   });
 });

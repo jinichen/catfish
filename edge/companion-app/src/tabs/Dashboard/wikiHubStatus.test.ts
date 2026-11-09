@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { hasHubUpdate, toolResultError } from "./wikiHubStatus";
+import { groupOf, hasHubUpdate, sortGroups, toolResultError } from "./wikiHubStatus";
 
 describe("hasHubUpdate", () => {
   const doc = (updated_at: string | null, published_at: string | null = null) => ({
@@ -55,5 +55,14 @@ describe("toolResultError", () => {
 
   it("外层失败 → 外层 error", () => {
     expect(toolResultError({ ok: false, result: null, error: "bridge down" })).toBe("bridge down");
+  });
+});
+
+describe("分组 (11/09 全公司)", () => {
+  it("全公司可见的单独一组排最前, 其余按部门", () => {
+    expect(groupOf({ namespace: "dept/销售部", visible_to: "company" })).toBe("全公司");
+    expect(groupOf({ namespace: "dept/研发部", visible_to: "department" })).toBe("研发部");
+    expect(groupOf({ namespace: "dept/研发部" })).toBe("研发部");
+    expect(sortGroups(["研发部", "全公司", "市场部"])).toEqual(["全公司", "市场部", "研发部"]);
   });
 });

@@ -349,17 +349,33 @@ export interface WikiShareSource {
   reason?: string | null;
   /** 部门知识库里已经有这份原件 */
   shared?: boolean;
+  /** 11/09: 全公司可见的知识库里已经有 (别的部门也点得开) */
+  shared_company?: boolean;
+  /** 11/09: 是我发过的 (分享到全公司时可以带着一起重发成全公司) */
+  mine?: boolean;
   scan?: WikiShareScan | null;
 }
 export interface WikiShareRelation {
   name: string;
   rel?: string | null;
-  /** shared 同事已经能看到 / local 本机有、可以一起分享 / missing 本机也没有 / private 客户档案不能分享 */
-  status: "shared" | "local" | "missing" | "private";
+  /** shared 同事已经能看到 / local 本机有、可以一起分享 / missing 本机也没有 / private 客户档案不能分享
+   *  dept_only (界面算出来的, 分享到全公司时): 只在部门里, 别的部门点不开, 也不是我发的 */
+  status: "shared" | "local" | "missing" | "private" | "dept_only";
   rel_path?: string;
   title?: string;
   reason?: string;
   scan?: WikiShareScan;
+  /** 11/09: 全公司可见 (管理员已通过) */
+  company?: boolean;
+  /** 11/09: 是我发过的 */
+  mine?: boolean;
+}
+export type WikiShareScope = "department" | "company";
+export interface WikiShareHubStatus {
+  scope?: WikiShareScope;
+  company_status?: "pending" | "approved" | "rejected";
+  company_note?: string;
+  visible_to?: WikiShareScope;
 }
 export interface WikiSharePlan {
   ok: boolean;
@@ -367,6 +383,10 @@ export interface WikiSharePlan {
   title: string;
   rel_path: string;
   shared_before: boolean;
+  /** 11/09: 上次分享的范围 (对话框默认选它); 老 tool-bridge 没有 = department */
+  scope_before?: WikiShareScope;
+  /** 11/09: 上次分享的这一页在中央上的全公司审核状态 */
+  hub_status?: WikiShareHubStatus | null;
   /** 拿到了部门知识库列表 (拿不到时「同事能不能看到」只能按本机记录判断) */
   hub_known: boolean;
   scan: WikiShareScan;

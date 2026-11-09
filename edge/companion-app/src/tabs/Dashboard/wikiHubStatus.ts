@@ -37,3 +37,12 @@ export function toolResultError(res: { ok: boolean; result?: unknown; error?: st
   if (r && typeof r === "object" && typeof r.error === "string" && r.error) return r.error;
   return typeof res.result === "string" ? res.result : JSON.stringify(res.result ?? null);
 }
+
+/** 11/09 分组: 全公司可见的 (管理员审过, 含别的部门分享的) 放一组排最前, 其余按部门 */
+export const COMPANY_GROUP = "全公司";
+export function groupOf(d: { namespace: string; visible_to?: string | null }): string {
+  return d.visible_to === "company" ? COMPANY_GROUP : d.namespace.replace(/^dept\//, "");
+}
+export function sortGroups(groups: string[]): string[] {
+  return [...groups].sort((a, b) => Number(b === COMPANY_GROUP) - Number(a === COMPANY_GROUP) || a.localeCompare(b));
+}

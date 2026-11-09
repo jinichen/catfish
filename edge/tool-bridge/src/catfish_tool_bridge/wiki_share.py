@@ -193,8 +193,8 @@ def _norm(s: str) -> str:
     return re.sub(r"[\s\-_·・.,，。:：()（）「」\"'【】\[\]]", "", (s or "").lower())
 
 
-def hub_titles() -> set[str] | None:
-    """我能看到的部门知识库里已有的页标题 (归一化)。拿不到 (没登录 / 中央连不上) 返 None。"""
+def hub_docs() -> list[dict[str, Any]] | None:
+    """我能看到的知识库条目 (本部门的 + 别的部门全公司可见的)。拿不到 (没登录 / 中央连不上) 返 None。"""
     import httpx  # noqa: PLC0415
 
     from . import wiki_publish  # noqa: PLC0415
@@ -211,7 +211,18 @@ def hub_titles() -> set[str] | None:
     except Exception as e:  # noqa: BLE001
         logger.info("读部门知识库列表失败 (按「不知道」处理): %s", e)
         return None
-    return {_norm(str(d.get("title") or "")) for d in docs if not d.get("stale_after_unpublish")}
+    return [d for d in docs if not d.get("stale_after_unpublish") and d.get("review_status") != "withdrawn"]
+
+
+def hub_titles(docs: list[dict[str, Any]] | None = None) -> set[str] | None:
+    """我能看到的知识库页标题 (归一化) —— 跟我同部门的同事看到的是同一批。"""
+    docs = hub_docs() if docs is None else docs
+    return None if docs is None else {_norm(str(d.get("title") or "")) for d in docs}
+
+
+def company_titles(docs: list[dict[str, Any]] | None) -> set[str] | None:
+    """11/09 全公司可见 (管理员已通过) 的页标题 —— 分享到全公司时, 只有这些别的部门点得开。"""
+    return None if docs is None else {_norm(str(d.get("title") or "")) for d in docs if d.get("visible_to") == "company"}
 
 
 # ── 分享对话框的数据 ───────────────────────────────────────────
@@ -245,7 +256,9 @@ def plan(params: dict[str, Any]) -> dict[str, Any]:
     attached = {source_key(r) for r in (params.get("attach_sources") or []) if isinstance(r, str)}
 
     published = wiki_publish._load_publish_state()
-    on_hub = hub_titles()
+    docs = hub_docs()
+    on_hub = hub_titles(docs)
+    on_company = company_titles(docs)
     items = list_wiki_files(limit=100000).get("items", [])
 
     # 来源: 原件能不能一起分享 (本机有、是文本、不超 1MB), 已经分享过没有
@@ -270,6 +283,9 @@ def plan(params: dict[str, Any]) -> dict[str, Any]:
                 reason=None if p and size <= MAX_SOURCE_BYTES else ("原件超过 1MB" if p else "本机找不到原件或不是文本"),
                 shared=source_publish_path(ref) in published
                 or (on_hub is not None and _norm(source_doc_title(ref)) in on_hub),
+                # 11/09 全公司: 别的部门也点得开; mine = 我发过 (发到全公司时可以带着一起改成全公司)
+                shared_company=on_company is not None and _norm(source_doc_title(ref)) in on_company,
+                mine=source_publish_path(ref) in published,
                 scan=scan(p.name, p.read_text(encoding="utf-8", errors="replace")) if p and size <= MAX_SOURCE_BYTES else None,
             )
         sources.append(entry)
@@ -284,9 +300,12 @@ def plan(params: dict[str, Any]) -> dict[str, Any]:
         on_hub_by_name = on_hub is not None and _norm(name) in on_hub
         entry = {"name": name, "rel": r.get("rel")}
         if local and local["rel_path"] != rel_path:
-            shared = local["rel_path"] in published or on_hub_by_name or (on_hub is not None and _norm(local["title"]) in on_hub)
-            entry.update(status="shared" if shared else "local", rel_path=local["rel_path"], title=local["title"])
-            if not shared:
+            mine = local["rel_path"] in published
+            shared = mine or on_hub_by_name or (on_hub is not None and _norm(local["title"]) in on_hub)
+            entry.update(status="shared" if shared else "local", rel_path=local["rel_path"], title=local["title"], mine=mine,
+                         company=on_company is not None and (_norm(name) in on_company or _norm(local["title"]) in on_company))
+            if not shared or (mine and not entry["company"]):
+                # 没发过的要扫; 我发过但只在部门里的, 分享到全公司时可以一起重发, 也要扫
                 ltext = (_home() / local["rel_path"]).read_text(encoding="utf-8", errors="replace")
                 lfm, _ = wiki_publish._parse_frontmatter(ltext)
                 if wiki_publish._extract_field(lfm, "entity_type") == "customer":
@@ -297,6 +316,7 @@ def plan(params: dict[str, Any]) -> dict[str, Any]:
             continue  # 指向自己
         else:
             entry["status"] = "shared" if on_hub_by_name else "missing"
+            entry["company"] = on_company is not None and _norm(name) in on_company
         relations.append(entry)
 
     new_fm, new_body = rewrite_for_share(fm, body, attached)
@@ -312,11 +332,18 @@ def plan(params: dict[str, Any]) -> dict[str, Any]:
         # 从原件里摘的原话 —— 会跟着发出去, 预览里要单独让员工看到
         "evidence": _parse_list(new_fm, "evidence"),
     }
+    prev = published.get(rel_path) or {}
+    hub_doc = next((d for d in docs or [] if prev.get("file_id") and d.get("file_id") == prev.get("file_id")
+                    and d.get("namespace") == prev.get("namespace")), None)
     return {
         "ok": True,
         "title": title,
         "rel_path": rel_path,
         "shared_before": rel_path in published,
+        # 11/09 上次分享的范围 (对话框默认选它) + 中央上的全公司审核状态 (待管理员审 / 已全公司可见 / 驳回原因)
+        "scope_before": str((hub_doc or {}).get("scope") or prev.get("scope") or "department"),
+        "hub_status": {k: hub_doc.get(k) for k in ("scope", "company_status", "company_note", "visible_to")
+                       if hub_doc.get(k) is not None} if hub_doc else None,
         "hub_known": on_hub is not None,
         "scan": scan(path.name, f"---\n{new_fm}\n---\n\n{new_body}"),
         "preview": {"frontmatter_yaml": new_fm, "body_md": new_body, "fields": fields},

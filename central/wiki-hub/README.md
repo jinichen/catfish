@@ -26,6 +26,8 @@ GET  /wiki/documents?include_stale=                     列本部门已发布 wi
 GET  /wiki/documents/dept/{部门}/{file_id}              单条详情 + body (别的部门 403)
 POST /wiki/documents                                    发布 / 重发到自己部门 (员工)
 POST /wiki/documents/dept/{部门}/{file_id}/unpublish    撤回 (员工 self / admin)
+POST /wiki/documents/dept/{部门}/{file_id}/scope        改范围: 申请全公司可见 / 收回本部门 (作者 / admin, 11/09)
+POST /wiki/documents/dept/{部门}/{file_id}/review       approve / withdraw (部门主管) · approve_company / reject_company (admin)
 GET  /wiki/audit?limit=                                 audit (admin)
 ```
 

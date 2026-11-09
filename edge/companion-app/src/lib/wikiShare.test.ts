@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { WikiSharePlan } from "./tauri_wiki";
-import { attachedKeys, shareIssues, shareSteps, warningLabel } from "./wikiShare";
+import { attachedKeys, scopePlan, shareIssues, shareSteps, warningLabel } from "./wikiShare";
 import { resolveRefForPage, type SharedPageRef } from "./wikiResolve";
 import type { WikiFileInfo } from "./tauri";
 
@@ -37,6 +37,7 @@ describe("shareSteps", () => {
     expect(steps.map((s) => [s.kind, s.label])).toEqual([["main", "市场部"]]);
     expect(steps[0].args).toEqual({
       wiki_rel_path: "wiki/entities/市场部.md", acknowledge_warnings: false, attached_sources: ["raw/sources/2-旧规范"],
+      scope: "department",
     });
   });
 
@@ -46,7 +47,7 @@ describe("shareSteps", () => {
       together: new Set(["wiki/entities/中电福富.md"]),
     }, true);
     expect(steps.map((s) => s.kind)).toEqual(["source", "related", "main"]);
-    expect(steps[0].args).toEqual({ wiki_rel_path: "raw/sources/1-组织架构.md", acknowledge_warnings: true });
+    expect(steps[0].args).toEqual({ wiki_rel_path: "raw/sources/1-组织架构.md", acknowledge_warnings: true, scope: "department" });
     const attached = ["raw/sources/1-组织架构", "raw/sources/2-旧规范"];
     expect(steps[1].args.attached_sources).toEqual(attached);
     expect(steps[2].args.attached_sources).toEqual(attached);
@@ -56,6 +57,40 @@ describe("shareSteps", () => {
   it("只有「本机有」的关联页能一起发: 已分享 / 本机没有的勾了也不算", () => {
     const steps = shareSteps(plan, { attach: new Set(), together: new Set(["销售单元", "营销手册"]) }, false);
     expect(steps).toHaveLength(1);
+  });
+});
+
+describe("全公司 (11/09)", () => {
+  // 销售单元: 我发过、只在部门里; 北部分公司: 全公司可见; 旧规范原件: 部门里有、全公司没有
+  const p2: WikiSharePlan = {
+    ...plan,
+    relations: [
+      ...plan.relations,
+      { name: "北部分公司", status: "shared", company: true },
+      { name: "华南单元", status: "shared", company: false, mine: false },
+    ].map((r) => (r.name === "销售单元" ? { ...r, mine: true, rel_path: "wiki/entities/销售单元.md", company: false, scan: clean } : r)) as WikiSharePlan["relations"],
+  };
+
+  it("部门范围: 预检原样", () => {
+    expect(scopePlan(p2, "department")).toBe(p2);
+  });
+
+  it("全公司: 只有全公司可见的算点得开; 我发过的部门页可以一起重发; 别人部门里的点不开", () => {
+    const c = scopePlan(p2, "company");
+    const st = Object.fromEntries(c.relations.map((r) => [r.name, r.status]));
+    expect(st).toMatchObject({ 北部分公司: "shared", 销售单元: "local", 华南单元: "dept_only", 中电福富: "local", 营销手册: "missing" });
+    expect(c.sources.find((s) => s.key === "raw/sources/2-旧规范")!.shared).toBe(false);
+  });
+
+  it("全公司: 每一页都带 scope=company; 部门里有、全公司没有的原件不再自动当链接", () => {
+    const c = scopePlan(p2, "company");
+    const steps = shareSteps(c, {
+      attach: new Set(["raw/sources/2-旧规范"]),
+      together: new Set(["wiki/entities/销售单元.md"]),
+    }, false, "company");
+    expect(steps.map((s) => [s.kind, s.args.scope])).toEqual([["source", "company"], ["related", "company"], ["main", "company"]]);
+    expect(steps[2].args.attached_sources).toEqual(["raw/sources/2-旧规范"]);
+    expect(attachedKeys(c, { attach: new Set(), together: new Set() })).toEqual([]);
   });
 });
 

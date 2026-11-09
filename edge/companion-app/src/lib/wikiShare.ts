@@ -3,7 +3,26 @@
  * 顺序: 原件 → 一起分享的关联页 → 这一页。原件先上去, 后面几页里的 [[原件 · 名称]] 同事装的时候才连得上。
  * 每一页都带同一份 attached_sources (勾了的原件 + 部门里已经有的原件): 关联页引用同一份原件时也改成链接。
  */
-import type { WikiSharePlan, WikiShareScan, WikiShareWarning } from "./tauri_wiki";
+import type { WikiSharePlan, WikiShareScan, WikiShareScope, WikiShareWarning } from "./tauri_wiki";
+
+/** 11/09 按分享范围重算「同事那边点不点得开」。
+ *
+ * 部门: 预检原样 (我能看到的 = 同部门同事能看到的: 本部门的 + 全公司可见的)。
+ * 全公司: 只有全公司可见的 (管理员已通过) 才算别的部门点得开;
+ *   我发过但只在部门里的关联页 → 可以勾「一起分享」(重发成全公司, 一样等管理员审);
+ *   别人发的、只在他部门里的 → dept_only, 别的部门点不开, 我也没法替他发。
+ */
+export function scopePlan(plan: WikiSharePlan, scope: WikiShareScope): WikiSharePlan {
+  if (scope === "department") return plan;
+  return {
+    ...plan,
+    sources: plan.sources.map((s) => (s.kind === "raw" ? { ...s, shared: !!s.shared_company } : s)),
+    relations: plan.relations.map((r) => {
+      if (r.status !== "shared" || r.company) return r;
+      return r.mine && r.rel_path ? { ...r, status: "local" as const } : { ...r, status: "dept_only" as const };
+    }),
+  };
+}
 
 export interface ShareChoice {
   /** 勾了「把原件也分享」的来源 (source.key) */
@@ -27,7 +46,13 @@ export function attachedKeys(plan: WikiSharePlan, choice: ShareChoice): string[]
     .map((s) => s.key!);
 }
 
-export function shareSteps(plan: WikiSharePlan, choice: ShareChoice, ackWarnings: boolean): ShareStep[] {
+/** plan 先过 scopePlan; 每一页都带同一个 scope (原件、关联页跟这一页同一个范围) */
+export function shareSteps(
+  plan: WikiSharePlan,
+  choice: ShareChoice,
+  ackWarnings: boolean,
+  scope: WikiShareScope = "department",
+): ShareStep[] {
   const attached = attachedKeys(plan, choice);
   const steps: ShareStep[] = [];
   for (const s of plan.sources) {
@@ -35,7 +60,7 @@ export function shareSteps(plan: WikiSharePlan, choice: ShareChoice, ackWarnings
     steps.push({
       label: s.title ?? s.key,
       kind: "source",
-      args: { wiki_rel_path: s.publish_path, acknowledge_warnings: ackWarnings },
+      args: { wiki_rel_path: s.publish_path, acknowledge_warnings: ackWarnings, scope },
       scan: s.scan,
     });
   }
@@ -44,14 +69,14 @@ export function shareSteps(plan: WikiSharePlan, choice: ShareChoice, ackWarnings
     steps.push({
       label: r.title ?? r.name,
       kind: "related",
-      args: { wiki_rel_path: r.rel_path, acknowledge_warnings: ackWarnings, attached_sources: attached },
+      args: { wiki_rel_path: r.rel_path, acknowledge_warnings: ackWarnings, attached_sources: attached, scope },
       scan: r.scan,
     });
   }
   steps.push({
     label: plan.title,
     kind: "main",
-    args: { wiki_rel_path: plan.rel_path, acknowledge_warnings: ackWarnings, attached_sources: attached },
+    args: { wiki_rel_path: plan.rel_path, acknowledge_warnings: ackWarnings, attached_sources: attached, scope },
     scan: plan.scan,
   });
   return steps;

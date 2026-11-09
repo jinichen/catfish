@@ -71,6 +71,14 @@ def test_unpublish(client, seen):
     assert seen[-1].url.raw_path.decode() == f"/wiki/documents/dept/{dept}/abc123/unpublish"
 
 
+def test_scope_change_forwarded(client, seen):
+    # 11/09 申请全公司可见 / 收回到本部门
+    dept = urllib.parse.quote("研发部")
+    r = client.post(f"/v1/wiki/documents/dept/{dept}/abc123/scope", content=b'{"scope": "company"}')
+    assert r.status_code == 200
+    assert seen[-1].url.raw_path.decode() == f"/wiki/documents/dept/{dept}/abc123/scope"
+
+
 def test_old_single_segment_namespace_route_gone(client, seen):
     # 老形态 POST /v1/wiki/documents/dept/finance 不该再被当成发布
     r = client.post("/v1/wiki/documents/dept/finance", content=b"{}")

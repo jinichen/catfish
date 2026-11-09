@@ -29,11 +29,9 @@
 }
 .wiki-share__dept {
   margin-bottom: 12px;
-  padding: 8px 10px;
-  border: 1px solid var(--catfish-border);
-  border-radius: var(--radius-sm);
-  background: var(--catfish-bg);
 }
+.wiki-share__dept > .wiki-share__muted,
+.wiki-share__dept > .wiki-share__warn-text { margin-top: 6px; font-size: 12px; }
 .wiki-share__section {
   margin-bottom: 12px;
   padding-top: 10px;
@@ -265,3 +263,30 @@
 }
 .wiki-share__fields .wiki-preview__wikilink--dangling,
 .wiki-share__legend .wiki-preview__wikilink--dangling { text-decoration-style: dashed; }
+/* 11/09 分享范围: 本部门 / 全公司 */
+.wiki-share__scope {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.wiki-share__scope-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--catfish-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  min-width: 0;
+}
+.wiki-share__scope-opt.is-on {
+  border-color: var(--catfish-cyan);
+  background: color-mix(in srgb, var(--catfish-cyan) 8%, transparent);
+}
+.wiki-share__scope-opt input { margin-top: 3px; }
+.wiki-share__scope-sub {
+  display: block;
+  font-size: 11px;
+  margin-top: 2px;
+}
+.wiki-share__status--dept_only { color: var(--catfish-text-muted); }

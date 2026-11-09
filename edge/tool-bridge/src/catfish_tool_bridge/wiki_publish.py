@@ -240,6 +240,8 @@ def wiki_publish(args: dict[str, Any]) -> dict[str, Any]:
         confirm 后才能加这个参数 retry.
       file_id (可选): 一般不用传 —— 同一个文件上次发布的 file_id 会自动带上.
       namespace: 已废弃, 传了也忽略 (hub 按身份里的部门定).
+      scope (可选, 11/09): department (本部门) | company (全公司: 本部门马上可见, 管理员审过后全公司可见).
+        不传 = 沿用这个文件上次的范围, 从没发过就是 department.
 
     成功返:
       {ok:true, file_id, namespace, hub_url, published_at, warnings?}
@@ -255,6 +257,9 @@ def wiki_publish(args: dict[str, Any]) -> dict[str, Any]:
     ack_warnings = bool(args.get("acknowledge_warnings", False)) and from_ui
     llm_acked = bool(args.get("acknowledge_warnings", False)) and not from_ui
     file_id = (args.get("file_id") or "").strip()
+    scope = str(args.get("scope") or "").strip()
+    if scope and scope not in ("department", "company"):
+        return {"ok": False, "error": "scope 只能是 department (本部门) 或 company (全公司)"}
 
     # 校验
     if not wiki_rel_path:
@@ -366,6 +371,8 @@ def wiki_publish(args: dict[str, Any]) -> dict[str, Any]:
         "body_md": body_md,
     }
     previous = _load_publish_state().get(wiki_rel_path) or {}
+    scope = scope or str(previous.get("scope") or "department")
+    payload["scope"] = scope
     if not file_id:
         file_id = str(previous.get("file_id") or "")
     if file_id:
@@ -406,6 +413,7 @@ def wiki_publish(args: dict[str, Any]) -> dict[str, Any]:
             "file_id": new_file_id,
             "namespace": namespace,
             "updated_at": data.get("updated_at"),
+            "scope": scope,
         })
     republished = bool(previous) and previous.get("file_id") == new_file_id \
         and previous.get("namespace") == namespace
@@ -418,11 +426,14 @@ def wiki_publish(args: dict[str, Any]) -> dict[str, Any]:
         "updated_at": data.get("updated_at"),
         "size_bytes": data.get("size_bytes"),
         "hub_url": wiki_doc_url(namespace, new_file_id),
+        "scope": scope,
+        "company_status": data.get("company_status"),
     }
     # 显式说明发出去的是什么 (帮 LLM 转告员工)
     result["summary"] = (
         f"已{'更新' if republished else '发布'} wiki '{title}' 到 {namespace}. "
-        f"已安装的同事会看到有更新. "
+        + ("本部门同事现在就能看到; 全公司可见要等管理员审过, 之前其他部门看不到. " if scope == "company" else "")
+        + "已安装的同事会看到有更新. "
         f"已 pull 副本不受未来 unpublish 影响 (manifesto 公理 4)."
     )
     if warnings:

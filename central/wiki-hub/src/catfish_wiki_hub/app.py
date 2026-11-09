@@ -7,6 +7,8 @@
   GET  /wiki/documents/dept/{部门}/{file_id}             单条详情 + body
   POST /wiki/documents                                   发布 / 重发到自己部门 (员工)
   POST /wiki/documents/dept/{部门}/{file_id}/unpublish   撤回 (员工 self only)
+  POST /wiki/documents/dept/{部门}/{file_id}/scope       改范围: 申请全公司可见 / 收回到本部门 (作者 / admin)
+  POST /wiki/documents/dept/{部门}/{file_id}/review      审: approve / withdraw (部门主管) · approve_company / reject_company (admin)
   GET  /wiki/audit?limit=                                audit (admin)
 
 # 部门隔离 (9/30)
@@ -14,6 +16,11 @@
 namespace 固定是 `dept/<部门>`, <部门> 取自身份里的 department (见 namespaces.py).
 9/30 之前 namespace 是 `{namespace}` 一个路径段, 而员工填的是 `dept/finance`
 —— 含 `/`, 路由永远匹配不上, 发布一直是 405, 这条链路从来没通过.
+
+# 全公司范围 (11/09)
+
+页面始终存在发布人部门的 namespace 里; 审核记录里 scope=company 且管理员通过的, 其他部门也看得到、能装
+(见 review.py 顶部)。选了全公司但还没通过的, 跟部门页一样只有本部门看得到。
 
 # Auth
 
@@ -143,11 +150,17 @@ async def list_documents_endpoint(
     9/30 之前这个端点连身份都不要, 直连 hub 就能列全部.
     """
     if is_admin(user):
-        visible: list[str] | None = None
+        metas = storage.list_documents(None, include_stale=include_stale)
     else:
         dept = (user.get("dept") or "").strip()
-        visible = [namespace_for(dept)] if dept and validate_dept(dept) is None else []
-    docs = [review.annotate(d) for d in storage.list_documents(visible, include_stale=include_stale) if not sales.hidden_from(user, d)]
+        own = namespace_for(dept) if dept and validate_dept(dept) is None else None
+        metas = storage.list_documents([own], include_stale=include_stale) if own else []
+        # 11/09: 加上别的部门里管理员已通过、全公司可见的
+        company = {k for k in review.company_keys() if k[0] != own}
+        if company:
+            others = storage.list_documents(sorted({ns for ns, _ in company}), include_stale=include_stale)
+            metas += [m for m in others if (m["namespace"], m["file_id"]) in company]
+    docs = [review.annotate(d) for d in metas if not sales.hidden_from(user, d)]
     return {"documents": docs, "count": len(docs)}
 
 
@@ -168,6 +181,22 @@ def _require_visible(user: dict, dept: str) -> str:
     return namespace
 
 
+def _require_doc_visible(user: dict, dept: str, file_id: str) -> str:
+    """能看这一页: 本部门 / admin / 管理员已通过全公司可见的。"""
+    err = validate_dept(dept)
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+    namespace = namespace_for(dept)
+    if can_see(user, namespace):
+        return namespace
+    try:
+        if review.company_visible(review.load(namespace, file_id)):
+            return namespace
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    raise HTTPException(status_code=403, detail=f"{namespace} 不是你的部门, 这一页也没有全公司可见, 看不到")
+
+
 @app.get("/wiki/documents/dept/{dept}/{file_id}")
 async def get_document_endpoint(
     dept: str,
@@ -178,7 +207,7 @@ async def get_document_endpoint(
 
     manager 能按 id 打开所管部门的条目 (中央 web 部门页看销售摘要原文用)。"""
     namespace = namespace_for(dept) if validate_dept(dept) is None and sales.can_manage(user, dept) \
-        else _require_visible(user, dept)
+        else _require_doc_visible(user, dept, file_id)
     try:
         doc = storage.get_document(namespace, file_id)
     except ValueError as e:
@@ -216,6 +245,7 @@ async def publish_document_endpoint(
       - kind (entity | concept | query)
       - frontmatter_yaml (原 frontmatter 文本)
       - body_md (markdown body)
+      - scope (可选, 11/09): department (默认, 本部门) | company (本部门马上可见 + 申请全公司可见, 管理员审)
 
     namespace 不从请求里拿, 由身份里的 department 推出 (见 namespaces.py).
     """
@@ -237,8 +267,13 @@ async def publish_document_endpoint(
     frontmatter_yaml = payload.get("frontmatter_yaml") or ""
     body_md = payload.get("body_md") or ""
 
+    scope = (payload.get("scope") or "department").strip()
+    if scope not in review.SCOPES:
+        raise HTTPException(status_code=400, detail="scope 只能是 department (本部门) 或 company (全公司)")
     if not filename:
         raise HTTPException(status_code=400, detail="filename 必填")
+    if scope == "company" and filename == sales.SALES_FILENAME:
+        raise HTTPException(status_code=400, detail="销售漏斗摘要只给主管看, 不能分享到全公司")
     if not title:
         raise HTTPException(status_code=400, detail="title 必填 (frontmatter title)")
 
@@ -268,9 +303,36 @@ async def publish_document_endpoint(
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "publish 失败"))
     # 11/08: 发了即可见, 但标「待审」; 重发 (内容变了) 也回到待审
-    rec = review.mark_pending(namespace, file_id, user["sub"])
-    return {**result, "review_status": rec["review_status"],
-            "note": "同部门同事现在就能看到, 页面上带「待审」标; 部门主管看过打钩后标消失"}
+    rec = review.mark_pending(namespace, file_id, user["sub"], scope)
+    note = "同部门同事现在就能看到, 页面上带「待审」标; 部门主管看过打钩后标消失"
+    if scope == "company":
+        note += "。全公司可见要等管理员审过, 之前其他部门看不到"
+    return {**result, "review_status": rec["review_status"], "scope": scope,
+            "company_status": rec.get("company_status"), "note": note}
+
+
+@app.post("/wiki/documents/dept/{dept}/{file_id}/scope")
+async def scope_document_endpoint(
+    dept: str,
+    file_id: str,
+    payload: dict = Body(default={}),
+    user: dict = Depends(require_user),
+) -> dict:
+    """11/09 不重发只改范围: {scope: company} 申请全公司可见 (管理员审) / {scope: department} 收回到只在本部门。作者或 admin。"""
+    namespace = _require_visible(user, dept)
+    existing = storage.get_document(namespace, file_id)
+    if existing is None or existing.get("stale_after_unpublish"):
+        raise HTTPException(status_code=404, detail=f"{namespace}/{file_id} 不存在或已撤回")
+    if existing.get("published_by") != user["sub"] and not is_admin(user):
+        raise HTTPException(status_code=403, detail="只有作者或管理员能改分享范围")
+    scope = str(payload.get("scope") or "").strip()
+    if scope == "company" and existing.get("filename") == sales.SALES_FILENAME:
+        raise HTTPException(status_code=400, detail="销售漏斗摘要只给主管看, 不能分享到全公司")
+    try:
+        rec = review.set_scope(user, namespace, file_id, scope)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    return {"ok": True, "namespace": namespace, "file_id": file_id, **review.annotate({k: v for k, v in existing.items() if k != "body_md"}, rec)}
 
 
 @app.post("/wiki/documents/dept/{dept}/{file_id}/review")
@@ -280,7 +342,8 @@ async def review_document_endpoint(
     payload: dict = Body(default={}),
     user: dict = Depends(require_user),
 ) -> dict:
-    """11/08 主管 / admin: approve (看过, 没问题) 或 withdraw (撤下, 要写原因)。"""
+    """11/08 主管 / admin: approve (看过, 没问题) 或 withdraw (撤下, 要写原因)。
+    11/09 admin: approve_company (全公司可见) / reject_company (驳回, 要写原因; 页面仍在本部门)。"""
     err = validate_dept(dept)
     if err:
         raise HTTPException(status_code=400, detail=err)

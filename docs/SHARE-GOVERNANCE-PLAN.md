@@ -67,6 +67,11 @@
 - 中央门户 `WikiMarketPage`：「待审」标 + 主管的打钩 / 撤下；审计页接入。
 - Companion：装机部门页的 frontmatter 带 `review_status`；搜索结果和页面上显示「待审 / 已撤回」；已撤回的搜索默认不列（跟过期一样进 `hidden`）。「拉更新」时同步状态。
 - 工作量：hub 1 天、门户 0.5 天、Companion 1 天。
+- **11/09 补上全公司那一档**（鸿波「WIKI 也应该支持部门 / 公司分享才合理吧」—— 11/08 只做了部门）：
+  - 页面始终存在作者部门的 `dept/<部门>` 里（链接、安装路径、同事的副本都不变），审核记录多 `scope: department | company`、`company_status: pending | approved | rejected`、`company_*` 审批人 / 时间 / 原因。
+  - 选全公司 = 本部门照常马上可见（带待审，部门主管审）+ 申请全公司可见；**管理员审过前其他部门看不到**（知识页常带经营数字，跟技能 / 专家包「全公司由 admin 审」同口径）。内容改了重发，全公司那档回到待审。驳回要写原因，页面留在本部门。
+  - 接口：`POST /wiki/documents` 多 `scope`；`POST /wiki/documents/dept/{dept}/{id}/scope`（作者 / admin 不重发改范围）；`/review` 多 `approve_company` / `reject_company`（admin）；列表 / 详情对全公司可见的放开给所有人；`/wiki/review` 每条带 `needs: [department, company]`。
+  - Companion 分享对话框顶上选「本部门 / 全公司」（默认上次的），「同事那边点不点得开」按范围重算，原件和一起发的关联页跟这一页同一个范围；知识库卡片里全公司可见的单独一组。门户「范围」一列、管理员「全公司可见」审核卡、作者「申请全公司可见 / 收回到本部门」。
 
 ### 3.3 专家包
 

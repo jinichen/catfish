@@ -10,6 +10,8 @@
  * - 11/08 分享治理 (§2.2 纯文字的): 发了即可见但标「待审」; 主管 / 管理员「看过, 没问题」打钩变「已审」,
  *   或「撤下」(要写原因, 等于撤回 + 标已撤回, 装过的人那边显示「已撤回」)。有「待我审核」筛选。
  * - 11/09 跟控制台统一样式: 按部门分组的卡片墙换成一张表 (部门一列, 按部门排), 「待我审核」从按钮变成分段切换
+ * - 11/09 本部门 / 全公司: 「范围」一列; 作者可以申请全公司可见 / 收回到本部门; 管理员审全公司那一档
+ *   (同意 / 驳回要写原因)。页面一直存在作者部门里, 全公司只是多一档可见范围 (wiki-hub review.py)。
  */
 import { useEffect, useState } from "react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
@@ -28,6 +30,8 @@ import {
   listWikiDocs,
   REVIEW_LABEL,
   reviewWikiDoc,
+  scopeLabel,
+  setWikiScope,
   unpublishWikiDoc,
   wikiReviewStatus,
   type WikiDocDetail,
@@ -56,9 +60,14 @@ function ReviewBadge({ d }: { d: Pick<WikiDocSummary, "review_status" | "stale_a
   return <Badge tone={st === "approved" ? "ok" : st === "pending" ? "warn" : "neutral"}>{REVIEW_LABEL[st]}</Badge>;
 }
 
+function ScopeBadge({ d }: { d: Pick<WikiDocSummary, "scope" | "visible_to" | "company_status"> }) {
+  const { text, tone } = scopeLabel(d);
+  return <Badge tone={tone}>{text}</Badge>;
+}
+
 const HOW_TO = (
   <>
-    分享：在鲶鱼 Companion「知识体系」里打开一条笔记，点「📤 分享到部门」。装到自己电脑上：Companion「设置」→「技能」→「📚 部门知识库」，点「安装」。
+    分享：在鲶鱼 Companion「知识体系」里打开一条笔记，点「📤 分享」，选本部门或全公司。装到自己电脑上：Companion「设置」→「技能」→「📚 部门知识库」，点「安装」。
   </>
 );
 
@@ -122,6 +131,21 @@ function WikiList() {
       ),
     },
     { header: "部门", width: "14%", truncate: true, cell: (d) => <span title={d.namespace}>{deptOf(d.namespace)}</span> },
+    {
+      header: "范围",
+      width: 96,
+      cell: (d) =>
+        current === "review" && d.needs ? (
+          <span style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+            {d.needs.includes("company") && <Badge tone="warn">审全公司</Badge>}
+            {d.needs.includes("department") && <Badge tone="neutral">审部门</Badge>}
+          </span>
+        ) : d.stale_after_unpublish ? (
+          "—"
+        ) : (
+          <ScopeBadge d={d} />
+        ),
+    },
     { header: "类型", width: 70, cell: (d) => (d.stale_after_unpublish ? "—" : KIND_LABEL[d.kind] ?? d.kind) },
     { header: "状态", width: 70, cell: (d) => <ReviewBadge d={d} /> },
     { header: "作者", width: "18%", truncate: true, cell: (d) => <span title={d.published_by ?? ""}>{d.published_by || "?"}</span> },
@@ -131,8 +155,8 @@ function WikiList() {
   const noDept = !!me && !me.department && !roleAllows(me.role, "admin");
   const hint =
     current === "review"
-      ? "只列你管的部门里还没看过的; 点进去「看过, 没问题」或「撤下」。"
-      : <>{HOW_TO} 分享出来的页面同事马上能看到、能装, 但带「待审」标; 部门主管看过打钩后变「已审」, 有问题可以撤下。</>;
+      ? "部门主管：你管的部门里还没看过的，点进去「看过，没问题」或「撤下」。管理员另外审申请全公司可见的（「审全公司」），同意后全公司都能看到。"
+      : <>{HOW_TO} 分享出来的页面本部门同事马上能看到、能装, 带「待审」标, 部门主管看过打钩后变「已审」; 选了全公司的, 管理员审过后其他部门才看得到。</>;
 
   return (
     <PageShell scroll="data">
@@ -182,6 +206,11 @@ function WikiDetail() {
   const [withdrawing, setWithdrawing] = useState(false);
   const [withdrawNote, setWithdrawNote] = useState("");
   const [reviewErr, setReviewErr] = useState<string | null>(null);
+  // 11/09 全公司: 管理员驳回要写原因; 作者申请 / 收回
+  const [rejecting, setRejecting] = useState(false);
+  const [rejectNote, setRejectNote] = useState("");
+  const [companyErr, setCompanyErr] = useState<string | null>(null);
+  const [scopeErr, setScopeErr] = useState<string | null>(null);
 
   useEffect(() => {
     if (!dept || !fileId) return;
@@ -203,6 +232,53 @@ function WikiDetail() {
     status !== "withdrawn" && !!me &&
     (roleAllows(me.role, "admin") ||
       (roleAllows(me.role, "manager") && (me.managed_departments || []).includes(deptOf(doc.namespace))));
+
+  const isAdmin = !!me && roleAllows(me.role, "admin");
+  const isAuthor = !!me && me.email === doc.published_by;
+  const live = status !== "withdrawn" && !doc.stale_after_unpublish;
+  const companyPending = doc.scope === "company" && doc.company_status === "pending";
+  const canReviewCompany = live && isAdmin && companyPending;
+  const canChangeScope = live && (isAuthor || isAdmin);
+
+  const doCompany = async (decision: "approve_company" | "reject_company") => {
+    const note = rejectNote.trim();
+    if (decision === "reject_company" && !note) {
+      setCompanyErr("驳回要写原因，作者会看到");
+      return;
+    }
+    setBusy(true);
+    setCompanyErr(null);
+    try {
+      await reviewWikiDoc(dept, fileId, decision, decision === "reject_company" ? note : "");
+      const approved = decision === "approve_company";
+      setDoc({
+        ...doc,
+        company_status: approved ? "approved" : "rejected",
+        visible_to: approved ? "company" : "department",
+        company_reviewed_by: me?.email,
+        company_reviewed_at: new Date().toISOString(),
+        company_note: approved ? "" : note,
+      });
+      setRejecting(false);
+    } catch (e) {
+      setCompanyErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const changeScope = async (scope: "department" | "company") => {
+    setBusy(true);
+    setScopeErr(null);
+    try {
+      const r = await setWikiScope(dept, fileId, scope);
+      setDoc({ ...doc, ...r });
+    } catch (e) {
+      setScopeErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const doReview = async (decision: "approve" | "withdraw") => {
     const note = withdrawNote.trim();
@@ -246,6 +322,7 @@ function WikiDetail() {
         action={
           <span style={{ ...muted, display: "flex", gap: 8, alignItems: "center" }}>
             <ReviewBadge d={doc} />
+            <ScopeBadge d={doc} />
             {KIND_LABEL[doc.kind] ?? doc.kind}
           </span>
         }
@@ -276,6 +353,19 @@ function WikiDetail() {
                 这一页还没经部门主管看过，同事已经能看到、能装，页面上带「待审」标。
               </div>
             )}
+            {doc.visible_to === "company" ? (
+              <div style={{ marginTop: "var(--space-3)", fontSize: 13 }}>
+                全公司可见{doc.company_reviewed_by ? `（${doc.company_reviewed_by} ${day(doc.company_reviewed_at)} 审过）` : ""}。
+              </div>
+            ) : companyPending ? (
+              <div style={{ marginTop: "var(--space-3)", color: "var(--status-warn)", fontSize: 13 }}>
+                作者申请了全公司可见，等管理员审；审过前只有{deptOf(doc.namespace)}看得到。
+              </div>
+            ) : doc.scope === "company" && doc.company_status === "rejected" ? (
+              <div style={{ marginTop: "var(--space-3)", color: "var(--text-muted)", fontSize: 13 }}>
+                管理员没通过全公司可见{doc.company_note ? `：${doc.company_note}` : ""}；只在{deptOf(doc.namespace)}可见。
+              </div>
+            ) : null}
             <div style={{ ...muted, marginTop: "var(--space-3)" }}>{HOW_TO}</div>
           </>
         )}
@@ -340,6 +430,77 @@ function WikiDetail() {
               {reviewErr && <div style={{ marginTop: 8, color: "var(--status-err)" }}>{reviewErr}</div>}
             </ConfirmDialog>
           )}
+        </Card>
+      )}
+
+      {canReviewCompany && (
+        <Card title="全公司可见">
+          <div style={{ ...muted, marginBottom: "var(--space-2)" }}>
+            作者想让全公司都能看到这一页。同意后其他部门的同事也能搜到、能装；驳回后页面仍留在{deptOf(doc.namespace)}。
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap" }}>
+            <button type="button" style={BTN_PRIMARY} disabled={busy} onClick={() => void doCompany("approve_company")}>
+              同意全公司可见
+            </button>
+            <button type="button" style={BTN_DANGER} disabled={busy} onClick={() => setRejecting(true)}>
+              驳回
+            </button>
+            {companyErr && !rejecting && <span style={{ fontSize: 12, color: "var(--status-err)" }}>{companyErr}</span>}
+          </div>
+          {rejecting && (
+            <ConfirmDialog
+              danger
+              title={`不让「${doc.title}」全公司可见?`}
+              confirmLabel="驳回"
+              busy={busy}
+              onCancel={() => {
+                setRejecting(false);
+                setCompanyErr(null);
+              }}
+              onConfirm={() => void doCompany("reject_company")}
+            >
+              页面仍留在{deptOf(doc.namespace)}，本部门同事照常能看。作者能看到原因。
+              <input
+                type="text"
+                placeholder="驳回原因（必填）"
+                value={rejectNote}
+                onChange={(e) => setRejectNote(e.target.value)}
+                style={{
+                  width: "100%",
+                  marginTop: 8,
+                  padding: "6px 10px",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)",
+                  fontSize: 13,
+                  boxSizing: "border-box",
+                }}
+              />
+              {companyErr && <div style={{ marginTop: 8, color: "var(--status-err)" }}>{companyErr}</div>}
+            </ConfirmDialog>
+          )}
+        </Card>
+      )}
+
+      {canChangeScope && (
+        <Card title="分享范围">
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap" }}>
+            {doc.scope === "company" && doc.company_status !== "rejected" ? (
+              <>
+                <button type="button" style={BTN_DANGER} disabled={busy} onClick={() => void changeScope("department")}>
+                  收回到只在{deptOf(doc.namespace)}
+                </button>
+                <span style={muted}>其他部门就看不到了；已经装走的副本不受影响。</span>
+              </>
+            ) : (
+              <>
+                <button type="button" style={BTN_PRIMARY} disabled={busy} onClick={() => void changeScope("company")}>
+                  申请全公司可见
+                </button>
+                <span style={muted}>管理员审过后全公司都能看到、能装；审之前只有{deptOf(doc.namespace)}看得到。</span>
+              </>
+            )}
+            {scopeErr && <span style={{ fontSize: 12, color: "var(--status-err)" }}>{scopeErr}</span>}
+          </div>
         </Card>
       )}
 

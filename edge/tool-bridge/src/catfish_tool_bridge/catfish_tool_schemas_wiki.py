@@ -36,7 +36,8 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_wiki_publish",
         "description": (
-            "把员工本机一条 wiki 笔记发布到他自己部门的 wiki-hub (仅同部门和管理员可见). "
+            "把员工本机一条 wiki 笔记发布到他自己部门的 wiki-hub (默认仅同部门和管理员可见; "
+            "scope=company 时同时申请全公司可见, 管理员审过后其他部门才看得到). "
             "只在员工明确要求分享时调, 后台自动学的 wiki 不要主动发.\n"
             "发布前必须告诉员工: 同事装到本机的副本无法撤回.\n"
             "凭据命中直接拒; PII/内网/敏感词命中返 warnings 并拒 —— 把 warnings 用大白话转告员工, "
@@ -58,6 +59,11 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
                 "file_id": {
                     "type": "string",
                     "description": "一般不传 (自动带上次的); 仅覆盖特定条目时传",
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["department", "company"],
+                    "description": "department=本部门; company=全公司 (管理员审过才全公司可见)。员工没说就不传 (沿用上次)",
                 },
             },
             "required": ["wiki_rel_path"],

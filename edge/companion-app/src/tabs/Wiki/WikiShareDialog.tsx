@@ -18,6 +18,13 @@
  * 分享是**不可逆**的 —— 别人装走的副本撤不回来 (manifesto 公理 4), 所以「我知道」那一勾必须员工自己勾;
  * 发到哪个部门明明白白摆出来 (公理 3, 不静默自决); 警告只认员工在这里点的确认 (tools/dispatch 带 _from_ui)。
  * 默认什么都不一起发: 原件和关联页都要员工自己勾 —— 多发出去的内容同样撤不回。
+ *
+ * # 11/09 本部门 / 全公司
+ *
+ * 鸿波:「WIKI 也应该支持部门 / 公司分享才合理吧」。顶上选范围, 默认上次的 (没发过 = 本部门):
+ *   · 本部门: 跟原来一样, 同部门马上可见 (带待审), 部门主管审
+ *   · 全公司: 本部门马上可见, 同时申请全公司可见, 管理员审过后别的部门才看得到 (知识页常带经营数字)
+ * 「同事那边点不点得开」按选的范围重算 (lib/wikiShare.ts scopePlan); 原件和一起分享的关联页跟这一页同一个范围。
  */
 import { useEffect, useMemo, useState } from "react";
 
@@ -30,8 +37,9 @@ import {
   type WikiFileFull,
   type WikiSharePlan,
   type WikiShareRelation,
+  type WikiShareScope,
 } from "../../lib/tauri";
-import { attachedKeys, shareIssues, shareSteps, sizeLabel, warningLabel, type ShareChoice } from "../../lib/wikiShare";
+import { attachedKeys, scopePlan, shareIssues, shareSteps, sizeLabel, warningLabel, type ShareChoice } from "../../lib/wikiShare";
 import WikiSharePreview, { reachableNames } from "./WikiSharePreview";
 
 type Result = { label: string; ok: boolean; text: string };
@@ -41,6 +49,7 @@ const REL_STATUS: Record<WikiShareRelation["status"], string> = {
   local: "同事还看不到",
   missing: "你本机也没有这一页",
   private: "客户档案不能分享",
+  dept_only: "只在别人的部门里, 其他部门点不开",
 };
 
 export default function WikiShareDialog({
@@ -57,7 +66,13 @@ export default function WikiShareDialog({
   // 9/30: 分享目标 = 身份里的部门 (hub 也按这个定)。undefined = 还在查; "" = 账号没设部门
   const [dept, setDept] = useState<string | undefined>(undefined);
   const [deptError, setDeptError] = useState<string | null>(null);
-  const [plan, setPlan] = useState<WikiSharePlan | null>(null);
+  const [rawPlan, setPlan] = useState<WikiSharePlan | null>(null);
+  // 11/09 范围: null = 还没定 (等预检拿到上次的范围)
+  const [scopeChoice, setScope] = useState<WikiShareScope | null>(null);
+  const scope: WikiShareScope = scopeChoice ?? rawPlan?.scope_before ?? "department";
+  const plan = useMemo(() => (rawPlan ? scopePlan(rawPlan, scope) : null), [rawPlan, scope]);
+  const company = scope === "company";
+  const who = company ? "其他部门同事" : "同事";
   const [planError, setPlanError] = useState<string | null>(null);
   const [attach, setAttach] = useState<Set<string>>(new Set());
   const [together, setTogether] = useState<Set<string>>(new Set());
@@ -96,7 +111,7 @@ export default function WikiShareDialog({
   }, [relPath, attachKey]);
 
   const choice: ShareChoice = useMemo(() => ({ attach, together }), [attach, together]);
-  const steps = useMemo(() => (plan ? shareSteps(plan, choice, ackWarnings) : []), [plan, choice, ackWarnings]);
+  const steps = useMemo(() => (plan ? shareSteps(plan, choice, ackWarnings, scope) : []), [plan, choice, ackWarnings, scope]);
   const issues = useMemo(() => shareIssues(steps), [steps]);
   const reachable = useMemo(
     () => (plan ? reachableNames(plan, attachedKeys(plan, choice), together) : new Set<string>()),
@@ -105,6 +120,13 @@ export default function WikiShareDialog({
   // 个人信息 / 内网地址 / 你设的敏感词: 看过才能发; 含凭据的那一页直接不能发
   const canSend =
     !!plan && !!dept && ack && !sharing && issues.blocked.length === 0 && (issues.warned.length === 0 || ackWarnings);
+
+  // 范围变了, 看到的人不一样了: 「我知道」和警告确认都要重新勾
+  const pickScope = (next: WikiShareScope) => {
+    setScope(next);
+    setAck(false);
+    setAckWarnings(false);
+  };
 
   const toggle = (set: Set<string>, key: string, on: boolean) => {
     const next = new Set(set);
@@ -120,7 +142,12 @@ export default function WikiShareDialog({
       try {
         const res = await toolBridgeCallTool("catfish_wiki_publish", step.args);
         const r = (res.result ?? {}) as { ok?: boolean; error?: string; republished?: boolean };
-        if (res.ok && r.ok) out.push({ label: step.label, ok: true, text: r.republished ? "已更新" : "已分享" });
+        if (res.ok && r.ok)
+          out.push({
+            label: step.label,
+            ok: true,
+            text: (r.republished ? "已更新" : "已分享") + (company ? ", 本部门已能看到, 全公司等管理员审" : ""),
+          });
         else out.push({ label: step.label, ok: false, text: r.error || res.error || "没发出去" });
       } catch (e) {
         out.push({ label: step.label, ok: false, text: e instanceof Error ? e.message : String(e) });
@@ -147,8 +174,8 @@ export default function WikiShareDialog({
 
   return (
     <div className="wiki-share__backdrop" onClick={() => !sharing && onClose()}>
-      <div className="wiki-share" role="dialog" aria-label="分享到部门知识库" onClick={(e) => e.stopPropagation()}>
-        <h3 className="wiki-share__title">分享到部门知识库</h3>
+      <div className="wiki-share" role="dialog" aria-label="分享到知识库" onClick={(e) => e.stopPropagation()}>
+        <h3 className="wiki-share__title">分享到知识库</h3>
 
         <div className="wiki-share__dept">
           {deptError ? (
@@ -156,12 +183,38 @@ export default function WikiShareDialog({
           ) : dept === undefined ? (
             <span className="wiki-share__muted">正在查你所在的部门…</span>
           ) : dept === "" ? (
-            <span className="wiki-share__err">你的账号没有设置部门, 不能分享到部门知识库。请联系管理员在用户管理里补上部门。</span>
+            <span className="wiki-share__err">你的账号没有设置部门, 不能分享 (知识库按部门存放)。请联系管理员在用户管理里补上部门。</span>
           ) : (
-            <>
-              分享到 <strong>{dept}</strong> 部门知识库
-              <span className="wiki-share__muted"> · 只有这个部门的同事和管理员看得到</span>
-            </>
+            <div className="wiki-share__scope" role="radiogroup" aria-label="分享范围">
+              <label className={`wiki-share__scope-opt${!company ? " is-on" : ""}`}>
+                <input type="radio" name="wiki-share-scope" checked={!company} disabled={sharing || done || !rawPlan}
+                  onChange={() => pickScope("department")} />
+                <span>
+                  <strong>本部门</strong> · {dept}
+                  <span className="wiki-share__muted wiki-share__scope-sub">{dept}同事马上能看到, 部门主管审</span>
+                </span>
+              </label>
+              <label className={`wiki-share__scope-opt${company ? " is-on" : ""}`}>
+                <input type="radio" name="wiki-share-scope" checked={company} disabled={sharing || done || !rawPlan}
+                  onChange={() => pickScope("company")} />
+                <span>
+                  <strong>全公司</strong>
+                  <span className="wiki-share__muted wiki-share__scope-sub">{dept}马上能看到; 管理员审过后全公司都能看到</span>
+                </span>
+              </label>
+            </div>
+          )}
+          {rawPlan?.hub_status?.scope === "company" && (
+            <div className={rawPlan.hub_status.company_status === "rejected" ? "wiki-share__warn-text" : "wiki-share__muted"}>
+              {rawPlan.hub_status.company_status === "approved"
+                ? "上次分享的这一页现在全公司都能看到。这次更新后要管理员再审一次, 审过前其他部门暂时看不到这一页 (已经装走的副本还在)。"
+                : rawPlan.hub_status.company_status === "pending"
+                  ? "上次申请的全公司可见还在等管理员审。"
+                  : `上次申请全公司可见没通过${rawPlan.hub_status.company_note ? `: ${rawPlan.hub_status.company_note}` : ""}。`}
+              {!company && rawPlan.hub_status.company_status !== "rejected" && (
+                <strong> 这次选本部门 = 收回全公司{rawPlan.hub_status.company_status === "approved" ? "可见" : "申请"}, 其他部门就看不到了。</strong>
+              )}
+            </div>
           )}
         </div>
 
@@ -208,7 +261,8 @@ export default function WikiShareDialog({
                       <span className="wiki-share__grow">
                         {s.shared ? (
                           <>
-                            原件「{sourceName(s.title)}」<span className="wiki-share__ok"> · 部门里已经有, 这一页会链接过去</span>
+                            原件「{sourceName(s.title)}」
+                            <span className="wiki-share__ok"> · {company ? "全公司" : "部门里"}已经有, 这一页会链接过去</span>
                           </>
                         ) : pickable ? (
                           <>
@@ -217,7 +271,7 @@ export default function WikiShareDialog({
                             <div className="wiki-share__muted">
                               {attach.has(s.key!)
                                 ? "这一页里的来源会变成能点开的链接。"
-                                : "不勾: 同事那边显示「原件在发布人那里」, 看不到内容。"}
+                                : `不勾: ${who}那边显示「原件在发布人那里」, 看不到内容。`}
                             </div>
                           </>
                         ) : (
@@ -244,7 +298,7 @@ export default function WikiShareDialog({
             {plan.relations.length > 0 && (
               <section className="wiki-share__section">
                 <div className="wiki-share__label">
-                  关系 <span className="wiki-share__muted">· 同事那边只有他能看到的页才点得开</span>
+                  关系 <span className="wiki-share__muted">· {who}那边只有他能看到的页才点得开</span>
                 </div>
                 {plan.relations.map((r) => {
                   const pickable = r.status === "local" && !!r.rel_path && !r.scan?.blocked;
@@ -265,7 +319,13 @@ export default function WikiShareDialog({
                         {r.rel ? <span className="wiki-share__muted">{r.rel} · </span> : null}
                         {r.title ?? r.name}
                         <span className={`wiki-share__status wiki-share__status--${r.status}`}>
-                          {r.status === "local" && picked ? "一起分享" : REL_STATUS[r.status]}
+                          {r.status === "local" && picked
+                            ? "一起分享"
+                            : company && r.status === "shared"
+                              ? "全公司已经能看到"
+                              : company && r.status === "local" && r.mine
+                                ? "只在你部门里, 可以一起分享到全公司"
+                                : REL_STATUS[r.status]}
                         </span>
                         {r.scan?.blocked && <div className="wiki-share__err">{r.scan.blocked}</div>}
                       </span>
@@ -273,7 +333,7 @@ export default function WikiShareDialog({
                   );
                 })}
                 {!plan.hub_known && (
-                  <div className="wiki-share__muted">没连上部门知识库, 「同事能不能看到」只按你自己分享过的算。</div>
+                  <div className="wiki-share__muted">没连上中央知识库, 「同事能不能看到」只按你自己分享过的算。</div>
                 )}
               </section>
             )}
@@ -298,7 +358,7 @@ export default function WikiShareDialog({
                       disabled={sharing || done}
                       onChange={(e) => setAckWarnings(e.target.checked)}
                     />
-                    <span>我看过这些内容, 确认要分享给部门 (不会自动脱敏)</span>
+                    <span>我看过这些内容, 确认要分享给{company ? "全公司" : "部门"} (不会自动脱敏)</span>
                   </label>
                 )}
               </section>
@@ -317,7 +377,8 @@ export default function WikiShareDialog({
         <label className="wiki-share__check wiki-share__check--strong">
           <input type="checkbox" checked={ack} disabled={sharing || done} onChange={(e) => setAck(e.target.checked)} />
           <span>
-            <strong>我知道</strong>分享后部门同事能看到、能装到自己电脑上; 以后撤回只清中央那份, <strong>已经装走的撤不回</strong>。
+            <strong>我知道</strong>分享后{company ? "本部门同事 (管理员审过后全公司同事)" : "部门同事"}能看到、能装到自己电脑上;
+            以后撤回只清中央那份, <strong>已经装走的撤不回</strong>。
           </span>
         </label>
 

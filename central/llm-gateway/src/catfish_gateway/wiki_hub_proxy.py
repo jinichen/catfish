@@ -13,6 +13,7 @@ gateway 收 `/v1/wiki/*` → 透传到 catfish-wiki-hub upstream (默认 :8994),
   GET   /v1/wiki/documents/dept/{部门}/{file_id}          单条详情 + body
   POST  /v1/wiki/documents                                发布 / 重发到自己部门
   POST  /v1/wiki/documents/dept/{部门}/{file_id}/unpublish  撤回 (员工 self / admin)
+  POST  /v1/wiki/documents/dept/{部门}/{file_id}/scope      改范围: 申请全公司可见 / 收回本部门 (11/09)
   GET   /v1/wiki/audit                                    admin 审计
 
 # Manifesto
@@ -205,6 +206,12 @@ async def review_list(request: Request, user: User = Depends(get_current_user)) 
 async def review_document(dept: str, file_id: str, request: Request, user: User = Depends(get_current_user)) -> Response:
     """11/08 主管看过打钩 / 撤下。"""
     return await _proxy(request, _doc_path(dept, file_id, "/review"), user)
+
+
+@router.post("/documents/dept/{dept}/{file_id}/scope")
+async def scope_document(dept: str, file_id: str, request: Request, user: User = Depends(get_current_user)) -> Response:
+    """11/09 作者 / admin 改分享范围 (申请全公司可见 / 收回到本部门), 不重发。hub 核作者身份。"""
+    return await _proxy(request, _doc_path(dept, file_id, "/scope"), user)
 
 
 @router.post("/documents/dept/{dept}/{file_id}/unpublish")

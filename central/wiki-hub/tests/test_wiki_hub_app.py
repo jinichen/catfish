@@ -271,3 +271,86 @@ def test_主管撤下要写原因_撤下后标已撤回且正文清零(client):
     doc = client.get(_doc_url("研发部", fid), headers=BOB).json()
     assert doc["stale_after_unpublish"] is True and doc["review_status"] == "withdrawn" and doc["review_note"] == "客户信息不该发"
     assert client.get("/wiki/review", headers=MGR).json()["documents"] == []
+
+
+# ── 11/09 全公司范围: 本部门马上可见, 管理员通过后其他部门才看得到 ──────────────
+
+
+def _publish_company(client, headers, file_id=None, body="正文 v1"):
+    payload = {"filename": "wiki/entities/集成能力中心.md", "title": "集成能力中心", "kind": "entity",
+               "frontmatter_yaml": "title: 集成能力中心", "body_md": body, "scope": "company"}
+    if file_id:
+        payload["file_id"] = file_id
+    return client.post("/wiki/documents", json=payload, headers=headers)
+
+
+def _ids(client, headers):
+    return [d["file_id"] for d in client.get("/wiki/documents", headers=headers).json()["documents"]]
+
+
+def test_全公司_管理员通过前其他部门看不到_通过后能看能装(client):
+    r = _publish_company(client, ALICE)
+    assert r.status_code == 200, r.text
+    assert r.json()["scope"] == "company" and r.json()["company_status"] == "pending"
+    fid = r.json()["file_id"]
+    assert fid in _ids(client, BOB), "本部门照常马上可见"
+    assert fid not in _ids(client, CAROL)
+    assert client.get(_doc_url("研发部", fid), headers=CAROL).status_code == 403
+    # 部门主管只审部门那档; 全公司那档只有 admin
+    mgr_q = client.get("/wiki/review", headers=MGR).json()["documents"]
+    assert [d["needs"] for d in mgr_q] == [["department"]]
+    adm_q = client.get("/wiki/review", headers=ADMIN).json()["documents"]
+    assert [d["needs"] for d in adm_q] == [["department", "company"]]
+    assert client.post(_doc_url("研发部", fid) + "/review", headers=MGR,
+                       json={"decision": "approve_company"}).status_code == 403
+    ok = client.post(_doc_url("研发部", fid) + "/review", headers=ADMIN, json={"decision": "approve_company"}).json()
+    assert ok["company_status"] == "approved"
+    docs = {d["file_id"]: d for d in client.get("/wiki/documents", headers=CAROL).json()["documents"]}
+    assert docs[fid]["visible_to"] == "company" and docs[fid]["namespace"] == "dept/研发部"
+    assert client.get(_doc_url("研发部", fid), headers=CAROL).json()["body_md"] == "正文 v1"
+    # 其他部门的人不能改 / 撤
+    assert client.post(_doc_url("研发部", fid) + "/unpublish", headers=CAROL, json={}).status_code == 403
+    # 内容改了重发: 全公司那档回到待审, 其他部门暂时看不到
+    _publish_company(client, ALICE, file_id=fid, body="正文 v2")
+    assert fid not in _ids(client, CAROL)
+    assert client.get(_doc_url("研发部", fid), headers=BOB).json()["company_status"] == "pending"
+
+
+def test_全公司_驳回要写原因_页面留在本部门(client):
+    fid = _publish_company(client, ALICE).json()["file_id"]
+    r = client.post(_doc_url("研发部", fid) + "/review", headers=ADMIN, json={"decision": "reject_company"})
+    assert r.status_code == 400 and "写原因" in r.json()["detail"]
+    r = client.post(_doc_url("研发部", fid) + "/review", headers=ADMIN,
+                    json={"decision": "reject_company", "note": "有经营数字, 只在本部门"})
+    assert r.json()["company_status"] == "rejected"
+    assert fid in _ids(client, BOB) and fid not in _ids(client, CAROL)
+    doc = client.get(_doc_url("研发部", fid), headers=ALICE).json()
+    assert doc["company_note"] == "有经营数字, 只在本部门" and doc["visible_to"] == "department"
+    assert all(d["file_id"] != fid for d in client.get("/wiki/review", headers=ADMIN).json()["documents"]
+               if "company" in d["needs"])
+
+
+def test_不重发改范围_作者申请全公司_收回到本部门(client):
+    fid = _publish(client, ALICE).json()["file_id"]
+    url = _doc_url("研发部", fid) + "/scope"
+    assert client.post(url, headers=BOB, json={"scope": "company"}).status_code == 403, "只有作者 / admin"
+    assert client.post(url, headers=CAROL, json={"scope": "company"}).status_code == 403
+    r = client.post(url, headers=ALICE, json={"scope": "company"}).json()
+    assert r["scope"] == "company" and r["company_status"] == "pending" and "body_md" not in r
+    client.post(_doc_url("研发部", fid) + "/review", headers=ADMIN, json={"decision": "approve_company"})
+    assert fid in _ids(client, CAROL)
+    r = client.post(url, headers=ALICE, json={"scope": "department"}).json()
+    assert r["scope"] == "department" and r["visible_to"] == "department"
+    assert fid not in _ids(client, CAROL)
+    assert client.post(url, headers=ALICE, json={"scope": "everyone"}).status_code == 400
+
+
+def test_全公司_撤下后其他部门也看不到_销售摘要不能发全公司(client):
+    fid = _publish_company(client, ALICE).json()["file_id"]
+    client.post(_doc_url("研发部", fid) + "/review", headers=ADMIN, json={"decision": "approve_company"})
+    client.post(_doc_url("研发部", fid) + "/review", headers=MGR, json={"decision": "withdraw", "note": "过时"})
+    assert fid not in _ids(client, CAROL)
+    r = client.post("/wiki/documents", headers=ALICE, json={
+        "filename": "catfish/sales-summary.md", "title": "销售摘要", "kind": "entity",
+        "frontmatter_yaml": "title: 销售摘要", "body_md": "x", "scope": "company"})
+    assert r.status_code == 400 and "全公司" in r.json()["detail"]

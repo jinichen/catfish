@@ -181,6 +181,46 @@ def test_plan_lists_sources_and_relations_with_what_colleagues_can_see(home, gat
     assert f["evidence"] == []
 
 
+def test_publish_scope_company_is_sent_and_remembered(home, gateway, monkeypatch):
+    # 11/09 全公司: scope 跟着发; 下次不传 scope 沿用上次的
+    state: dict = {}
+    monkeypatch.setattr(wiki_publish, "_load_publish_state", lambda: state)
+    monkeypatch.setattr(wiki_publish, "_save_publish_state", lambda rel, e: state.__setitem__(rel, e))
+    gateway["routes"][("POST", "/v1/wiki/documents")] = _capture_post(gateway)
+    r = wiki_publish.wiki_publish({"wiki_rel_path": "wiki/entities/市场部.md", "_from_ui": True, "scope": "company"})
+    assert r["ok"] and r["scope"] == "company" and "管理员审过" in r["summary"]
+    assert gateway["payloads"][0]["scope"] == "company"
+    wiki_publish.wiki_publish({"wiki_rel_path": "wiki/entities/市场部.md", "_from_ui": True})
+    assert gateway["payloads"][1]["scope"] == "company" and gateway["payloads"][1]["file_id"] == "fid000001"
+    wiki_publish.wiki_publish({"wiki_rel_path": "wiki/entities/市场部.md", "_from_ui": True, "scope": "department"})
+    assert gateway["payloads"][2]["scope"] == "department"
+    bad = wiki_publish.wiki_publish({"wiki_rel_path": "wiki/entities/市场部.md", "_from_ui": True, "scope": "all"})
+    assert not bad["ok"] and len(gateway["payloads"]) == 3
+
+
+def test_plan_marks_what_other_departments_can_open(home, gateway, monkeypatch):
+    # 「销售单元」我发过, 只在部门里; 「北部分公司」别人发的、全公司可见; 上次这页发到全公司, 等管理员审
+    monkeypatch.setattr(wiki_publish, "_load_publish_state", lambda: {
+        "wiki/entities/销售单元.md": {"file_id": "s1", "namespace": "dept/研发部"},
+        "wiki/entities/市场部.md": {"file_id": "m1", "namespace": "dept/研发部", "scope": "company"}})
+    gateway["routes"][("GET", "/v1/wiki/documents")] = _hub_list(
+        {"namespace": "dept/研发部", "file_id": "s1", "title": "销售单元", "visible_to": "department"},
+        {"namespace": "dept/销售部", "file_id": "f1", "title": "北部分公司", "visible_to": "company", "scope": "company",
+         "company_status": "approved"},
+        {"namespace": "dept/研发部", "file_id": "m1", "title": "市场部", "visible_to": "department", "scope": "company",
+         "company_status": "rejected", "company_note": "有经营数字"})
+    p = wiki_share.plan({"wiki_rel_path": "wiki/entities/市场部.md"})
+    rel = {r["name"]: r for r in p["relations"]}
+    assert rel["北部分公司"]["status"] == "shared" and rel["北部分公司"]["company"] is True
+    sales = rel["销售单元"]
+    assert sales["status"] == "shared" and sales["company"] is False and sales["mine"] is True
+    assert sales["scan"] == {"blocked": None, "warnings": []}, "我发过的部门页, 发全公司时可以一起重发, 要先扫"
+    assert p["scope_before"] == "company"
+    assert p["hub_status"] == {"scope": "company", "company_status": "rejected", "company_note": "有经营数字",
+                               "visible_to": "department"}
+    assert p["sources"][0]["shared_company"] is False and p["sources"][0]["mine"] is False
+
+
 def test_plan_without_hub_still_works(home, gateway):
     gateway["routes"][("GET", "/v1/wiki/documents")] = lambda req: httpx.Response(502)
     p = wiki_share.plan({"wiki_rel_path": "wiki/entities/市场部.md"})

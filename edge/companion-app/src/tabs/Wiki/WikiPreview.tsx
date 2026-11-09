@@ -485,9 +485,9 @@ export default function WikiPreview({ onOpenTask }: { onOpenTask?: (taskId: stri
               className="approval-banner__btn-link"
               onClick={openShareDialog}
               disabled={deleting || shareDialogOpen}
-              title="把这条 wiki 发布到部门 wiki-hub — 部门同事能看到, 已 pull 副本撤不回"
+              title="把这条 wiki 分享到本部门或全公司 (全公司要管理员审) — 已装走的副本撤不回"
             >
-              📤 分享到部门
+              📤 分享
             </button>
             <button
               className={

@@ -1,6 +1,6 @@
 /** 部门知识库分享 (wiki-hub) 客户端 (11/4)。走 gateway /v1/wiki/* 反代, 不直连 :8994。
  *
- * hub 按身份里的部门过滤: 员工只看得到本部门, admin / sysadmin 看全部。
+ * hub 按身份里的部门过滤: 员工看得到本部门的 + 管理员审过、全公司可见的 (11/09), admin / sysadmin 看全部。
  * 发布在 Companion 里做 (笔记在员工自己电脑上), 网页只看和撤回。
  */
 import { api } from "./api";
@@ -30,6 +30,31 @@ export interface WikiDocSummary {
   legacy?: boolean;
   submitted_by?: string;
   submitted_at?: string;
+  /** 11/09 全公司范围: scope=company 是发布人申请了全公司; visible_to=company 是管理员已通过、全公司可见。
+   *  页面始终存在发布人部门里 (namespace 不变)。老 hub 没这些字段 = 本部门。 */
+  scope?: WikiScope;
+  visible_to?: WikiScope;
+  company_status?: "pending" | "approved" | "rejected";
+  company_requested_by?: string;
+  company_requested_at?: string;
+  company_reviewed_by?: string;
+  company_reviewed_at?: string;
+  company_note?: string;
+  /** 待我审列表: 这一页等的是哪一档 (部门主管审 department / 管理员审 company) */
+  needs?: WikiScope[];
+}
+
+export type WikiScope = "department" | "company";
+
+/** 范围标的文字: 全公司 / 申请全公司 / 全公司未通过 / 本部门 */
+export function scopeLabel(d: Pick<WikiDocSummary, "scope" | "visible_to" | "company_status">): {
+  text: string;
+  tone: "ok" | "warn" | "neutral";
+} {
+  if (d.visible_to === "company") return { text: "全公司", tone: "ok" };
+  if (d.scope === "company" && d.company_status === "pending") return { text: "申请全公司", tone: "warn" };
+  if (d.scope === "company" && d.company_status === "rejected") return { text: "全公司未通过", tone: "neutral" };
+  return { text: "本部门", tone: "neutral" };
 }
 
 export type WikiReviewStatus = "pending" | "approved" | "withdrawn";
@@ -68,6 +93,12 @@ export const unpublishWikiDoc = (dept: string, fileId: string, reason: string) =
 /** 待我审的知识页 (主管: 管的部门; admin: 全部)。 */
 export const listReviewWikiDocs = () => api.get<{ documents: WikiDocSummary[] }>("/v1/wiki/review");
 
-/** 主管 / admin: 看过打钩 (approve) 或撤下 (withdraw, 要写原因; 等于 unpublish + 标 withdrawn)。 */
-export const reviewWikiDoc = (dept: string, fileId: string, decision: "approve" | "withdraw", note: string) =>
+/** 主管 / admin: 看过打钩 (approve) 或撤下 (withdraw, 要写原因; 等于 unpublish + 标 withdrawn)。
+ *  11/09 admin: approve_company (全公司可见) / reject_company (驳回, 要写原因, 页面留在本部门)。 */
+export type WikiReviewDecision = "approve" | "withdraw" | "approve_company" | "reject_company";
+export const reviewWikiDoc = (dept: string, fileId: string, decision: WikiReviewDecision, note: string) =>
   api.post<Record<string, unknown>>(`${docPath(dept, fileId)}/review`, { decision, note });
+
+/** 11/09 作者 / admin: 申请全公司可见 (管理员审) / 收回到只在本部门。不重发。 */
+export const setWikiScope = (dept: string, fileId: string, scope: WikiScope) =>
+  api.post<WikiDocSummary & { ok: boolean }>(`${docPath(dept, fileId)}/scope`, { scope });
