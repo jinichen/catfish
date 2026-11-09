@@ -56,7 +56,7 @@ beforeEach(() => {
   localStorage.clear();
   reloadRemindersForTest();
   cronJobRun.mockReset().mockResolvedValue(undefined);
-  cronJobCreate.mockReset().mockResolvedValue({ ...job({ id: "newjob" }), next_run_at: "2026-11-16T08:00:00+08:00" });
+  cronJobCreate.mockReset().mockResolvedValue({ ...job({ id: "newjob" }), next_run_at: new Date(2026, 10, 16, 8, 0).toISOString()   /* 本机时区的 8:00 —— CI 是 UTC */ });
   cronJobOutputRead.mockReset().mockResolvedValue(ARCHIVE);
   taskLibraryCreate.mockReset().mockResolvedValue(undefined);
   taskAccept.mockReset().mockResolvedValue({ accepted_at: "x", started: true });
