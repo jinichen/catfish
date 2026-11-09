@@ -97,7 +97,7 @@ fn remove_path(p: &Path) -> Result<(), String> {
 fn restore_live(staged: &Path, target: &Path) -> Result<(), String> {
     let mut dst = Connection::open(target).map_err(|e| format!("打开 {} 失败: {e}", target.display()))?;
     let _ = dst.busy_timeout(std::time::Duration::from_secs(30));
-    dst.restore(rusqlite::DatabaseName::Main, staged, None::<fn(rusqlite::backup::Progress)>)
+    dst.restore(rusqlite::MAIN_DB, staged, None::<fn(rusqlite::backup::Progress)>)
         .map_err(|e| format!("写入 {} 失败: {e}", target.display()))
 }
 

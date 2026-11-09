@@ -185,7 +185,7 @@ pub(crate) fn redact_existing(conn: &mut Connection) -> Result<Option<String>, S
     }
     tx.execute(
         "INSERT INTO outbound_rechain (at, reason, rows, changed, old_head, new_head) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![now, REASON, rehashed, changed, old_head, prev],
+        params![now, REASON, rehashed as i64, changed as i64, old_head, prev],   // rusqlite 0.41 起 u64 / usize 不直接当参数 (可能溢出), 计数很小, 转 i64
     )
     .map_err(|e| format!("rechain log: {e}"))?;
     // 新链头尽快报给中央 (不等满一天)

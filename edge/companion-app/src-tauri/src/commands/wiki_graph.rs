@@ -555,7 +555,7 @@ fn graph_neighbors(
             / (1.0
                 + ((seed_degree as f64 / 12.0).ln().max(0.0) * 0.25));
         let rows = statement
-            .query_map(params![seed_path, GRAPH_MAX_NEIGHBORS_PER_SEED], |row| {
+            .query_map(params![seed_path, GRAPH_MAX_NEIGHBORS_PER_SEED as i64], |row| {
                 let relation_types: String = row.get(4)?;
                 let type_weight = relation_types
                     .split(',')
