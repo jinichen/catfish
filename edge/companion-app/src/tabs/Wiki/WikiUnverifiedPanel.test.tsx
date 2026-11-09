@@ -50,6 +50,19 @@ describe("WikiUnverifiedPanel", () => {
     expect(out).toContain("ontology_status: pending");
   });
 
+  it("11/09 这一页剩下的全部丢掉: 先确认, 再一次清空列表, 正文不动", async () => {
+    const task = buildWikiRelationshipTasks([current]).find((x) => x.kind === "unverified")!;
+    render(<WikiUnverifiedPanel task={task} onLater={null} />);
+    fireEvent.click(screen.getByText(/这一页剩下的 2 条全部丢掉/));
+    expect(writes).toHaveLength(0);
+    fireEvent.click(screen.getByText(/确定，全部丢掉/));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    const out = writes[0][1];
+    expect(out).not.toContain("unverified");
+    expect(out).toContain("- 已有事实");
+    expect(out).not.toContain("新材料破万亿");
+  });
+
   it("丢掉 = 只删列表, 正文不加", async () => {
     const task = buildWikiRelationshipTasks([current]).find((x) => x.kind === "unverified")!;
     render(<WikiUnverifiedPanel task={task} onLater={null} />);

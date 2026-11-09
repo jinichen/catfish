@@ -69,6 +69,23 @@ export default function WikiUnverifiedPanel({ task, onLater }: { task: WikiRelat
     }
   };
 
+  // 11/09 鸿波「怎么这么多」: 一条一条点不现实。这一页剩下的全部丢掉 (核对过、没啥要加回的时候用)
+  const [confirmAll, setConfirmAll] = useState(false);
+  const dropAll = async () => {
+    setBusy("__all__");
+    setError(null);
+    try {
+      const full = await wikiReadFile(task.file.rel_path);
+      await wikiUpdateFile(task.file.rel_path, setFrontmatterList(full.content, "unverified", []));
+      await loadFiles();
+      setConfirmAll(false);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <section className="wiki-workbench__section">
       <div className="wiki-workbench__section-title">
@@ -108,11 +125,22 @@ export default function WikiUnverifiedPanel({ task, onLater }: { task: WikiRelat
         </details>
       )}
       {error && <p className="wiki-workbench__error">{error}</p>}
-      {onLater && (
-        <div className="wiki-relation-editor__actions">
-          <button type="button" className="wiki-workbench__secondary" onClick={onLater}>稍后处理</button>
-        </div>
-      )}
+      <div className="wiki-relation-editor__actions">
+        {items.length > 1 && (confirmAll ? (
+          <>
+            <span className="wiki-workbench__hint">这 {items.length} 条都不加回、直接删掉? (它们本来就不在正文里)</span>
+            <button type="button" className="wiki-workbench__secondary" disabled={!!busy} onClick={() => void dropAll()}>
+              {busy === "__all__" ? <SpinnerGap className="wiki-spin" size={16} /> : <Trash size={16} />}确定，全部丢掉
+            </button>
+            <button type="button" className="wiki-workbench__secondary" disabled={!!busy} onClick={() => setConfirmAll(false)}>取消</button>
+          </>
+        ) : (
+          <button type="button" className="wiki-workbench__secondary" disabled={!!busy} onClick={() => setConfirmAll(true)}>
+            <Trash size={16} />这一页剩下的 {items.length} 条全部丢掉
+          </button>
+        ))}
+        {onLater && <button type="button" className="wiki-workbench__secondary" onClick={onLater}>稍后处理</button>}
+      </div>
     </section>
   );
 }
