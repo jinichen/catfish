@@ -8,6 +8,7 @@ import { useSyncExternalStore } from "react";
 
 import { sendNotification } from "./tauri_app";
 import { roomList, roomSync, type RoomEvent, type RoomSummary } from "./tauri_colleague_rooms";
+import { processRoomMentions } from "./roomAskFlow";
 
 export const ROOMS_POLL_IDLE_MS = 20_000;
 export const ROOMS_POLL_ACTIVE_MS = 3_000;
@@ -60,6 +61,8 @@ export function refreshRooms(): Promise<void> {
       const r = await roomSync();
       got = r.events.length;
       notifyFor(r.events);
+      // 11/09 小鲶秘书: @我 交代的事挂到提醒条 (要调模型, 不等它)
+      void processRoomMentions(r.events).catch((e) => console.warn("[room-ask]", e));
     } catch (e) {
       syncError = e instanceof Error ? e.message : String(e);
     }

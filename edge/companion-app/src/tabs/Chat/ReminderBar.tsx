@@ -25,8 +25,10 @@ import { useEffect, useRef, useState } from "react";
 
 import { extendOptions, snoozeOptions, type Reminder } from "../../lib/reminders";
 import { ROUTINE_DECLINE_MS } from "../../lib/routines";
-import { cronJobCreate, cronJobRun, taskMarkCompleted } from "../../lib/tauri";
-import { taskExtend, taskRemind } from "../../lib/tauri_colleague_tasks";
+import { cronJobCreate, cronJobRun, taskLibraryCreate, taskMarkCompleted } from "../../lib/tauri";
+import { taskAccept, taskExtend, taskRemind } from "../../lib/tauri_colleague_tasks";
+import { localIso, PREP_SOON_MS } from "../../lib/advancePrep";
+import { roomAskJobName, roomAskJobPrompt, roomAskTodo } from "../../lib/roomAsks";
 import { useRemindersStore, useVisibleReminders } from "../../store/reminders";
 import { useUIStore } from "../../store/ui";
 import { useAgentStore } from "../../store/agent";
@@ -41,6 +43,7 @@ const ICONS: Record<Reminder["kind"], string> = {
   ctask: "📋",
   cron: "✅",
   routine: "🔁",
+  ask: "🙋",
 };
 
 function iconFor(r: Reminder): string {
@@ -130,7 +133,9 @@ export default function ReminderBar() {
   const extends_ = owner ? extendOptions(new Date(now)) : [];
   const cronFailed = current.kind === "cron" && current.cron?.status === "error" ? current.cron : null;
   const routine = current.routine ?? null;
-  const hasSecondary = snoozes.length > 0 || canDone || !!owner || !!cronFailed || !!routine;
+  const invitee = current.ctask?.role === "invitee" ? current.ctask : null;
+  const ask = current.ask ?? null;
+  const hasSecondary = snoozes.length > 0 || canDone || !!owner || !!cronFailed || !!routine || !!invitee || !!ask;
   const busy = done?.phase === "saving" || done?.phase === "done";
 
   const startChat = () => {
@@ -150,9 +155,23 @@ export default function ReminderBar() {
       );
       return;
     }
+    // 群里 @我 交代的事: 2 分钟后小鲶在后台先做 (一次性定时任务, 只起草), 做好了第 1 层报
+    if (current.ask) {
+      const a = current.ask;
+      void act(() =>
+        cronJobCreate({ name: roomAskJobName(a), schedule: localIso(Date.now() + PREP_SOON_MS), prompt: roomAskJobPrompt(a), repeat: 1 })
+          .then(() => `${agentName}开始做了，做好了告诉你`),
+      );
+      return;
+    }
     if (current.ctask) {
-      if (current.ctask.role === "owner") void act(() => taskRemind(current.ctask!.taskId).then((r) => `催了 ${r.reminded.length} 人`));
-      else openTask();
+      const c = current.ctask;
+      if (c.role === "owner") void act(() => taskRemind(c.taskId).then((r) => `催了 ${r.reminded.length} 人`));
+      // 同事刚派来的一次性任务: 接下 = 小鲶在后台开工 (跟任务窗口里的「接下」同一个入口), 做好了通知等核对
+      else if (c.role === "invitee" && c.oneOff) {
+        void act(() => taskAccept(c.taskId, false, true).then((r) =>
+          r.started === false && r.start_error ? `接下了，但${agentName}没开工：${r.start_error}` : `接下了，${agentName}开工了，做好了告诉你核对`));
+      } else openTask();
       return;
     }
     useUIStore.getState().startReminderChat(current.prompt, current.chatTitle);
@@ -162,7 +181,7 @@ export default function ReminderBar() {
   const openTask = () => {
     if (!current.ctask) return;
     setMenu(null);
-    useUIStore.getState().openColleagueTask(current.ctask.taskId, current.ctask.role);
+    useUIStore.getState().openColleagueTask(current.ctask.taskId, current.ctask.role === "owner" ? "owner" : "recipient");
     store.markStarted(current.id);
     setIndex(0);
   };
@@ -192,6 +211,17 @@ export default function ReminderBar() {
   const tweakRoutine = () => {
     setMenu(null);
     useUIStore.getState().startReminderChat(current.prompt, current.chatTitle);
+    store.markStarted(current.id);
+    setIndex(0);
+  };
+  const askToTodo = () => {
+    if (!ask) return;
+    void act(() => taskLibraryCreate(roomAskTodo(ask)).then(() => "记进待办了"));
+  };
+  const openRoom = () => {
+    if (!ask) return;
+    setMenu(null);
+    useUIStore.getState().openRoom(ask.roomId);
     store.markStarted(current.id);
     setIndex(0);
   };
@@ -270,7 +300,7 @@ export default function ReminderBar() {
           <span className="reminder-bar__main">{current.text}</span>
           {current.meta && <span className="reminder-bar__meta"> · {current.meta}</span>}
           {done?.phase === "error" && (
-            <span className="reminder-bar__error" role="alert"> · {current.ctask || current.cron || current.routine ? "没成功" : "没标上"}：{done.message}</span>
+            <span className="reminder-bar__error" role="alert"> · {current.ctask || current.cron || current.routine || current.ask ? "没成功" : "没标上"}：{done.message}</span>
           )}
         </p>
         <div className="reminder-bar__actions">
@@ -289,8 +319,25 @@ export default function ReminderBar() {
             </button>
           )}
           <button type="button" className="reminder-bar__primary" onClick={startChat} disabled={busy}>
-            {done?.phase === "saving" && (current.ctask || current.cron || current.routine) ? "处理中…" : current.actionLabel}
+            {done?.phase === "saving" && (current.ctask || current.cron || current.routine || current.ask) ? "处理中…" : current.actionLabel}
           </button>
+          {invitee && invitee.oneOff && (
+            <button type="button" className="reminder-bar__secondary reminder-bar__wide-only" onClick={openTask} disabled={busy}
+              title="先看任务内容; 不接 / 自己做 / 在对话里看着小鲶做 都在那里">
+              看看
+            </button>
+          )}
+          {ask && (
+            <button type="button" className="reminder-bar__secondary reminder-bar__wide-only" onClick={askToTodo} disabled={busy}
+              title="写进任务库, 到期前会提醒">
+              记成待办
+            </button>
+          )}
+          {ask && (
+            <button type="button" className="reminder-bar__secondary reminder-bar__wide-only" onClick={openRoom} disabled={busy}>
+              去群里看
+            </button>
+          )}
           {cronFailed && (
             <button type="button" className="reminder-bar__secondary reminder-bar__wide-only" onClick={rerun} disabled={busy}
               title="马上再跑一次 (不改排期)">
@@ -415,6 +462,21 @@ export default function ReminderBar() {
                   {routine && (
                     <button type="button" role="menuitem" onClick={tweakRoutine}>
                       改一改
+                    </button>
+                  )}
+                  {invitee && invitee.oneOff && (
+                    <button type="button" role="menuitem" onClick={openTask}>
+                      看看
+                    </button>
+                  )}
+                  {ask && (
+                    <button type="button" role="menuitem" onClick={askToTodo}>
+                      记成待办
+                    </button>
+                  )}
+                  {ask && (
+                    <button type="button" role="menuitem" onClick={openRoom}>
+                      去群里看
                     </button>
                   )}
                   {routine && (

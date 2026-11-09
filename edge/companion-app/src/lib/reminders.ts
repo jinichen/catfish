@@ -18,7 +18,7 @@
 import type { DueTask, TriggerResult } from "./triggers";
 import { calendarDaysUntil, QUIET_HOURS_END, QUIET_HOURS_START } from "./triggers";
 
-export type ReminderKind = "deadline" | "briefing" | "email" | "silence" | "focus" | "ctask" | "cron" | "routine";
+export type ReminderKind = "deadline" | "briefing" | "email" | "silence" | "focus" | "ctask" | "cron" | "routine" | "ask";
 
 /** 11/09 定时任务的一次运行 (kind=cron, lib/cronWatch.ts) */
 export interface ReminderCronRun {
@@ -42,10 +42,13 @@ export interface ReminderRoutineOffer {
   jobPrompt: string;
 }
 
-/** 11/07 派给同事的任务: 发起人这边过了截止有人没交 (owner) / 收件人这边快到截止还没交回 (recipient) */
+/** 11/07 派给同事的任务: 发起人这边过了截止有人没交 (owner) / 收件人这边快到截止还没交回 (recipient)
+ *  11/09 同事刚派来、还等我接 (invitee) */
 export interface ReminderColleagueTask {
   taskId: string;
-  role: "owner" | "recipient";
+  role: "owner" | "recipient" | "invitee";
+  /** invitee: 一次性任务 (能「接下, 让小鲶开工」); 定时 / 周期的要在任务窗口里看清排期再接 */
+  oneOff?: boolean;
   /** 那时的截止 (YYYY-MM-DD 或 YYYY-MM-DDTHH:mm, 本机时间) */
   deadline: string;
 }
@@ -79,6 +82,8 @@ export interface Reminder {
   cron?: ReminderCronRun;
   /** 只有托管提议有 —— 主按钮直接建定时任务 */
   routine?: ReminderRoutineOffer;
+  /** 只有群里 @我 交代的事有 (lib/roomAsks.ts) */
+  ask?: import("./roomAsks").RoomAsk;
   /** 排序用的「到点时刻」(待办 = 截止时刻) */
   dueAt?: number;
   /** 过了这个时刻自动消失 (待办 = 截止日当天结束; 早安 = 当天结束; 其余几小时) */
@@ -148,6 +153,7 @@ function rank(r: Reminder, now: number): number {
     case "ctask":
       return 0;   // 同事任务过了 / 快到截止: 跟今天到期的待办一样急
     case "email":
+    case "ask":
       return 1;
     case "cron":
       // 失败的跟急邮件一样要人管; 做完了的是好消息, 排在早安播报前面
@@ -417,6 +423,32 @@ export function colleagueDueSoonReminder(
     ctask: { taskId: ev.task_id, role: "recipient", deadline: ev.deadline },
     dueAt: due,
     expiresAt: due,
+  };
+}
+
+/** 11/09 同事刚派来、还等我接 (待处理 / 要重新同意): 一次性的「接下, 让小鲶开工」一键; 定时 / 周期 / 改过的去看看再接 */
+export function colleagueInviteReminder(
+  t: { task_id: string; title: string; owner: string; deadline: string | null; state: string; schedule: string | null },
+  now: Date,
+  agentName = "小鲶",
+): Reminder {
+  const oneOff = t.schedule === null && t.state === "待处理";
+  const due = t.deadline ? colleagueDeadlineAt(t.deadline) : undefined;
+  return {
+    id: `ctask-invite:${t.task_id}:${t.state}`,
+    kind: "ctask",
+    createdAt: now.getTime(),
+    text: t.state === "要重新同意"
+      ? `${senderName(t.owner)} 改了「${oneLine(t.title)}」，要你重新看一下接不接`
+      : `${senderName(t.owner)} 派给你「${oneLine(t.title)}」`,
+    meta: [due !== undefined ? `截止 ${dueLabel(new Date(due), now)}` : "", t.schedule ?? ""].filter(Boolean).join(" · ") || undefined,
+    actionLabel: oneOff ? `接下，让${agentName}开工` : "去看看",
+    chatTitle: "",
+    prompt: "",
+    ctask: { taskId: t.task_id, role: "invitee", deadline: t.deadline ?? "", oneOff },
+    dueAt: due,
+    // 接了 / 不接 / 取消了由 colleagueTasksStore 收掉; 一直没理的一天后消失, 第二天还没接再挂
+    expiresAt: due !== undefined && due > now.getTime() ? Math.min(due, now.getTime() + DAY) : now.getTime() + DAY,
   };
 }
 

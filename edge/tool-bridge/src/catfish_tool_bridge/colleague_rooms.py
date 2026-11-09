@@ -555,8 +555,8 @@ def _apply(msg: dict[str, Any], me: str) -> dict[str, Any] | None:
             from . import colleague_rooms_bigfiles as big  # noqa: PLC0415
             if big.register_incoming(rid, rec):   # 大文件: 后台去中央取
                 big.kick()
-        return {"kind": "mention" if me in ments else "msg", "room_id": rid, "from": sender, "title": room["name"],
-                "text": (text or "📎 " + "、".join(f["name"] for f in got_files))[:80], "joined": room.get("my_state") == "joined"}
+        return {"kind": "mention" if me in ments else "msg", "room_id": rid, "from": sender, "title": room["name"],  # msg_id / msg_kind: 11/09 秘书认「@我交代的事」
+                "text": (text or "📎 " + "、".join(f["name"] for f in got_files))[:80], "joined": room.get("my_state") == "joined", "msg_id": mid, "msg_kind": mkind}
     return None
 
 

@@ -10,7 +10,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { PERSONALITY_LABELS, type Personality } from "../../lib/agent";
 import { useAgentStore } from "../../store/agent";
 import { emailConfigGet, type EmailConfigPublic } from "../../lib/tauri";
-import { MEETING_PREP_KEY, prefEnabled, ROUTINE_OFFER_KEY, setPref } from "../../lib/secretaryPrefs";
+import { MEETING_PREP_KEY, prefEnabled, ROOM_ASK_KEY, ROUTINE_OFFER_KEY, setPref } from "../../lib/secretaryPrefs";
 
 // BL-COMPANION-PREFS-TOGGLES (5/20): localStorage key 跟 useProactiveScheduler 对齐
 const MORNING_PUSH_KEY = "catfish:morning_push_enabled";
@@ -54,6 +54,7 @@ export default function AgentPrefsCard() {
   // 11/09 小鲶秘书: 托管周期性事务的提议 / 会前自动准备
   const [routineOffer, setRoutineOffer] = useState(() => prefEnabled(ROUTINE_OFFER_KEY));
   const [meetingPrep, setMeetingPrep] = useState(() => prefEnabled(MEETING_PREP_KEY));
+  const [roomAsk, setRoomAsk] = useState(() => prefEnabled(ROOM_ASK_KEY));
   const togglePref = (key: string, set: (v: boolean) => void, next: boolean) => {
     setPref(key, next);
     set(next);
@@ -196,11 +197,19 @@ export default function AgentPrefsCard() {
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
               <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", flex: 1 }}>
-                📋 会前自动准备会务安排
-                <span style={{ marginLeft: 6, fontSize: 10, opacity: 0.7 }}>(前一天 16:00, 只起草不发送)</span>
+                📋 提前准备
+                <span style={{ marginLeft: 6, fontSize: 10, opacity: 0.7 }}>(会议、出差拜访、快到期的待办、邮件里要办 / 要回的; 前一天 16:00, 只起草不发送)</span>
               </span>
               <ToggleButton active={meetingPrep} onClick={() => togglePref(MEETING_PREP_KEY, setMeetingPrep, true)} label="开" />
               <ToggleButton active={!meetingPrep} onClick={() => togglePref(MEETING_PREP_KEY, setMeetingPrep, false)} label="关" />
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", flex: 1 }}>
+                🙋 群里 @我 交代的事挂到提醒条
+                <span style={{ marginLeft: 6, fontSize: 10, opacity: 0.7 }}>(可一键让小鲶先做 / 记成待办)</span>
+              </span>
+              <ToggleButton active={roomAsk} onClick={() => togglePref(ROOM_ASK_KEY, setRoomAsk, true)} label="开" />
+              <ToggleButton active={!roomAsk} onClick={() => togglePref(ROOM_ASK_KEY, setRoomAsk, false)} label="关" />
             </div>
 
             {/* 邮件 LLM 评级 — yaml 配置展示 (只读) + 打开 yaml 按钮 */}

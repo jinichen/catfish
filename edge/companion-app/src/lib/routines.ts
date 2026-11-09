@@ -13,10 +13,7 @@
  *
  * 一天最多跑一次 LLM, 一次最多提 2 条。
  */
-import { config } from "./env";
-import { fetchWithAuth } from "./me";
-import { SERVICE_LLM_HEADERS, SERVICE_LLM_QUERY } from "./briefing_advisor_common";
-import { warnIfUpstreamError } from "./upstreamErrorGuard";
+import { parseJsonObject, serviceLlm } from "./serviceLlm";
 import type { CronJob } from "./tauri_cron";
 import type { UserRequest } from "./tauri_sessions";
 import type { Reminder } from "./reminders";
@@ -277,17 +274,7 @@ export function buildRoutineUserPrompt(reqs: UserRequest[], jobs: CronJob[]): st
 
 /** LLM 回的 JSON → 候选; 坏的条目跳过, 整体坏返空 */
 export function parseRoutineCandidates(text: string): RoutineCandidate[] {
-  const s = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
-  const a = s.indexOf("{");
-  const b = s.lastIndexOf("}");
-  if (a < 0 || b <= a) return [];
-  let data: unknown;
-  try {
-    data = JSON.parse(s.slice(a, b + 1));
-  } catch {
-    return [];
-  }
-  const list = (data as { routines?: unknown })?.routines;
+  const list = parseJsonObject(text)?.routines;
   if (!Array.isArray(list)) return [];
   const out: RoutineCandidate[] = [];
   for (const it of list) {
@@ -306,36 +293,7 @@ export async function fetchRoutineCandidates(
   jobs: CronJob[],
   model: string,
 ): Promise<RoutineCandidate[] | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 90_000);
-  try {
-    const resp = await fetchWithAuth(`${config.backendUrl}/v1/chat/completions${SERVICE_LLM_QUERY}`, {
-      method: "POST",
-      headers: SERVICE_LLM_HEADERS,
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: buildRoutineUserPrompt(reqs, jobs) },
-        ],
-        max_tokens: 2000,
-        temperature: 0.2,
-        stream: false,
-      }),
-      signal: controller.signal,
-    });
-    if (!resp.ok) {
-      console.warn(`[routines] LLM 调用失败 ${resp.status}`);
-      return null;
-    }
-    const data = await resp.json();
-    const content = data?.choices?.[0]?.message?.content;
-    if (typeof content !== "string" || warnIfUpstreamError("routines", content)) return null;
-    return parseRoutineCandidates(content);
-  } catch (e) {
-    console.warn("[routines] LLM 调用异常", e);
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
+  const content = await serviceLlm("routines", SYSTEM_PROMPT, buildRoutineUserPrompt(reqs, jobs), model,
+    { maxTokens: 2000, timeoutMs: 90_000 });
+  return content === null ? null : parseRoutineCandidates(content);
 }

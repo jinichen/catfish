@@ -9,19 +9,29 @@ const t = vi.hoisted(() => ({
   cronJobCreate: vi.fn(),
   cronJobDelete: vi.fn(),
   calendarUpcomingFetch: vi.fn(),
+  remindersWeekFetch: vi.fn(),
+  emailListFetch: vi.fn(),
+  emailClassifyNow: vi.fn(),
   sessionsUserRequests: vi.fn(),
   sendNotification: vi.fn(),
 }));
 vi.mock("../lib/tauri", async (orig) => ({ ...(await orig<typeof import("../lib/tauri")>()), ...t }));
 const fetchRoutineCandidates = vi.hoisted(() => vi.fn());
 vi.mock("../lib/routines", async (orig) => ({ ...(await orig<typeof import("../lib/routines")>()), fetchRoutineCandidates }));
+const serviceLlm = vi.hoisted(() => vi.fn());
+vi.mock("../lib/serviceLlm", async (orig) => ({ ...(await orig<typeof import("../lib/serviceLlm")>()), serviceLlm }));
+const roomGet = vi.hoisted(() => vi.fn());
+vi.mock("../lib/tauri_colleague_rooms", async (orig) => ({ ...(await orig<typeof import("../lib/tauri_colleague_rooms")>()), roomGet }));
 
 import { installMemoryLocalStorage } from "../lib/__fixtures__/memoryLocalStorage";
-import { MEETING_PREP_KEY, ROUTINE_OFFER_KEY } from "../lib/secretaryPrefs";
+import { inviteRemindersFor, settledReminder } from "../lib/colleagueTasksStore";
+import { processRoomMentions } from "../lib/roomAskFlow";
+import { MEETING_PREP_KEY, ROOM_ASK_KEY, ROUTINE_OFFER_KEY } from "../lib/secretaryPrefs";
+import type { TaskList } from "../lib/tauri_colleague_tasks";
 import type { CronJob } from "../lib/tauri_cron";
 import { reloadRemindersForTest, useRemindersStore } from "../store/reminders";
 import { CRON_SEEN_STORAGE_KEY, cronWatchTick, outputTsMs } from "./useCronWatcher";
-import { meetingPrepTick } from "./useMeetingPrep";
+import { advancePrepTick } from "./useAdvancePrep";
 import { routineDiscoveryTick } from "./useRoutineDiscovery";
 
 installMemoryLocalStorage();
@@ -39,6 +49,13 @@ beforeEach(() => {
   reloadRemindersForTest();
   Object.values(t).forEach((f) => f.mockReset());
   fetchRoutineCandidates.mockReset();
+  serviceLlm.mockReset();
+  roomGet.mockReset();
+  // 提前准备的四个来源默认: 读到空 (各测试按需覆盖)
+  t.calendarUpcomingFetch.mockResolvedValue("[]");
+  t.remindersWeekFetch.mockResolvedValue("[]");
+  t.emailListFetch.mockResolvedValue("[]");
+  t.emailClassifyNow.mockResolvedValue({ urgency: {}, actions: {} });
   t.sendNotification.mockResolvedValue(undefined);
   t.cronJobOutputs.mockResolvedValue([{ timestamp: "2026-11-09_09-34-34", size_bytes: 10, snippet: "" }]);
   t.cronJobOutputRead.mockResolvedValue(ARCHIVE);
@@ -116,48 +133,147 @@ describe("cronWatchTick", () => {
   });
 });
 
-describe("meetingPrepTick", () => {
+describe("advancePrepTick", () => {
   const meeting = { calendar: "工作", summary: "ITSS 线上答辩", start: iso(11, 10, 10), end: iso(11, 10, 11), all_day: false };
 
   it("明天的会: 建一次性准备任务 (今天 16:00, repeat 1); 下一轮不重复建", async () => {
     t.calendarUpcomingFetch.mockResolvedValue(JSON.stringify([meeting]));
     t.cronJobCreate.mockResolvedValue({ id: "prep1" });
-    expect(await meetingPrepTick(NOW)).toEqual({ created: 1, cancelled: 0 });
+    expect(await advancePrepTick(NOW)).toEqual({ created: 1, cancelled: 0 });
     expect(t.cronJobCreate).toHaveBeenCalledWith(expect.objectContaining({
       name: "会前准备：ITSS 线上答辩（11/10 10:00）", schedule: "2026-11-09T16:00", repeat: 1,
     }));
-    expect(await meetingPrepTick(NOW)).toEqual({ created: 0, cancelled: 0 });
+    expect(await advancePrepTick(NOW)).toEqual({ created: 0, cancelled: 0 });
     expect(t.cronJobCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("四个来源一起: 会、出差、待办初稿、邮件回复各建一条", async () => {
+    t.calendarUpcomingFetch.mockResolvedValue(JSON.stringify([meeting, { ...meeting, summary: "拜访福州客户", start: iso(11, 11, 9) }]));
+    t.remindersWeekFetch.mockResolvedValue(JSON.stringify([{ task_id: "t1", text: "写 Q4 汇报 PPT", due_date_iso: "2026-11-11T18:00:00" }]));
+    t.emailListFetch.mockImplementation(async (_u: boolean, _l: number, folder?: string) => folder === "Sent" ? "[]" : JSON.stringify([{ id: "e1", account: "a", folder: "INBOX", subject: "报价确认", sender: "王总",
+      date: iso(11, 9, 8), is_read: false, has_attachments: false, body_text: "" }]));
+    t.emailClassifyNow.mockResolvedValue({ urgency: {}, actions: { e1: { action: "回" } } });
+    t.cronJobCreate.mockImplementation(async (a: { name: string }) => ({ id: a.name }));
+    expect((await advancePrepTick(NOW)).created).toBe(4);
+    expect(t.emailClassifyNow).toHaveBeenCalledWith([]);   // 只取分诊缓存, 不调模型
+    expect(t.cronJobCreate.mock.calls.map((c) => c[0].name.split("：")[0]).sort())
+      .toEqual(["会前准备", "出行准备", "待办初稿", "邮件回复"].sort());
   });
 
   it("会取消了 (日历上没了、还有别的会): 撤掉还没跑的准备任务", async () => {
     t.calendarUpcomingFetch.mockResolvedValue(JSON.stringify([meeting]));
     t.cronJobCreate.mockResolvedValue({ id: "prep1" });
-    await meetingPrepTick(NOW);
+    await advancePrepTick(NOW);
     t.calendarUpcomingFetch.mockResolvedValue(JSON.stringify([{ ...meeting, summary: "别的会", start: iso(11, 11, 10) }]));
     t.cronJobCreate.mockResolvedValue({ id: "prep2" });
-    const r = await meetingPrepTick(NOW);
+    const r = await advancePrepTick(NOW);
     expect(r.cancelled).toBe(1);
     expect(t.cronJobDelete).toHaveBeenCalledWith("prep1");
   });
 
-  it("日历读不到: 什么都不动", async () => {
+  it("日历读不到: 会议的准备任务不撤, 别的来源照常", async () => {
+    t.calendarUpcomingFetch.mockResolvedValue(JSON.stringify([meeting]));
+    t.cronJobCreate.mockResolvedValue({ id: "prep1" });
+    await advancePrepTick(NOW);
     t.calendarUpcomingFetch.mockRejectedValue(new Error("没授权"));
-    expect(await meetingPrepTick(NOW)).toEqual({ created: 0, cancelled: 0 });
-    expect(t.cronJobCreate).not.toHaveBeenCalled();
+    t.remindersWeekFetch.mockResolvedValue(JSON.stringify([{ task_id: "t1", text: "写方案", due_date_iso: "2026-11-11T18:00:00" }]));
+    t.cronJobCreate.mockResolvedValue({ id: "todo1" });
+    expect(await advancePrepTick(NOW)).toEqual({ created: 1, cancelled: 0 });
+    expect(t.cronJobDelete).not.toHaveBeenCalled();
   });
 
   it("建失败: 不记, 下一轮再试", async () => {
     t.calendarUpcomingFetch.mockResolvedValue(JSON.stringify([meeting]));
     t.cronJobCreate.mockRejectedValueOnce(new Error("hermes 没起来")).mockResolvedValue({ id: "prep1" });
-    expect((await meetingPrepTick(NOW)).created).toBe(0);
-    expect((await meetingPrepTick(NOW)).created).toBe(1);
+    expect((await advancePrepTick(NOW)).created).toBe(0);
+    expect((await advancePrepTick(NOW)).created).toBe(1);
   });
 
-  it("关了开关: 不看日历", async () => {
+  it("hermes 拒了 (400): 记下不再重试; 连不上 (别的错) 下一轮再试", async () => {
+    t.calendarUpcomingFetch.mockResolvedValue(JSON.stringify([meeting]));
+    t.cronJobCreate.mockRejectedValue(new Error("HTTP 400 http://127.0.0.1:8642/api/jobs: Blocked: prompt matches threat pattern"));
+    await advancePrepTick(NOW);
+    await advancePrepTick(NOW);
+    expect(t.cronJobCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("关了开关: 什么都不读", async () => {
     localStorage.setItem(MEETING_PREP_KEY, "false");
-    await meetingPrepTick(NOW);
+    await advancePrepTick(NOW);
     expect(t.calendarUpcomingFetch).not.toHaveBeenCalled();
+    expect(t.emailListFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("processRoomMentions (群里 @我 交代的事)", () => {
+  const mention = { kind: "mention" as const, room_id: "r_1", from: "zhang@example.com", title: "项目群",
+    text: "@hongbo 周五前把报价单发我", joined: true, msg_id: "m_1", msg_kind: "text" as const };
+
+  it("规则筛过 + 模型说是 → 挂提醒 (用本机群记录里的全文); 同一条不再问", async () => {
+    roomGet.mockResolvedValue({ me: "hongbo@example.com", messages: [{ msg_id: "m_1", kind: "text", at: "", text: "@hongbo 周五前把报价单发我，含税价" }] });
+    serviceLlm.mockResolvedValue('{"is_task":true,"what":"把含税报价单发给张三","deadline":"2026-11-13"}');
+    expect(await processRoomMentions([mention], NOW)).toBe(1);
+    expect(serviceLlm.mock.calls[0][2]).toContain("含税价");
+    const [r] = useRemindersStore.getState().items;
+    expect(r).toMatchObject({ kind: "ask", text: "zhang 在「项目群」让你：把含税报价单发给张三", meta: "截止 11/13 18:00" });
+    expect(await processRoomMentions([mention], NOW)).toBe(0);
+    expect(serviceLlm).toHaveBeenCalledTimes(1);
+  });
+
+  it("任务卡 (走派任务那条)、普通群消息、寒暄、没加入的群: 不调模型", async () => {
+    await processRoomMentions([
+      { ...mention, msg_kind: "card" },
+      { ...mention, kind: "msg", msg_id: "m_2" },
+      { ...mention, msg_id: "m_3", text: "@hongbo 收到谢谢" },
+      { ...mention, msg_id: "m_4", joined: false },
+    ], NOW);
+    expect(serviceLlm).not.toHaveBeenCalled();
+  });
+
+  it("模型说不是 / 模型挂了: 不挂", async () => {
+    roomGet.mockRejectedValue(new Error("x"));
+    serviceLlm.mockResolvedValueOnce('{"is_task":false}').mockResolvedValueOnce(null);
+    expect(await processRoomMentions([mention, { ...mention, msg_id: "m_9" }], NOW)).toBe(0);
+  });
+
+  it("关了开关: 不看", async () => {
+    localStorage.setItem(ROOM_ASK_KEY, "false");
+    expect(await processRoomMentions([mention], NOW)).toBe(0);
+    expect(roomGet).not.toHaveBeenCalled();
+  });
+});
+
+describe("同事派来的任务 → 提醒条", () => {
+  const list = (state: string, schedule: string | null = null): TaskList => ({
+    incoming: [{ task_id: "t_9", title: "整理拜访记录", owner: "zhou@example.com", deadline: "2026-11-13T18:00", state: state as never,
+      late: false, received_at: null, reminded_at: null, schedule, to_review: 0 }],
+    outgoing: [], pipelines: [],
+  });
+
+  it("待处理的一次性任务: 挂「接下，让小鲶开工」; 接下后收掉", () => {
+    inviteRemindersFor(list("待处理"), NOW);
+    const [r] = useRemindersStore.getState().items;
+    expect(r).toMatchObject({ text: "zhou 派给你「整理拜访记录」", actionLabel: "接下，让小鲶开工",
+      ctask: { taskId: "t_9", role: "invitee", oneOff: true } });
+    expect(r.meta).toMatch(/^截止 /);
+    expect(settledReminder(r, list("待处理"))).toBe(false);
+    expect(settledReminder(r, list("在做"))).toBe(true);
+    expect(settledReminder(r, { incoming: [], outgoing: [], pipelines: [] })).toBe(true);
+  });
+
+  it("周期任务 / 改了要重新同意的: 主按钮「去看看」(要看清排期再接)", () => {
+    inviteRemindersFor(list("待处理", "每周一 9:00"), NOW);
+    expect(useRemindersStore.getState().items[0]).toMatchObject({ actionLabel: "去看看", ctask: { oneOff: false } });
+    reloadRemindersForTest();
+    localStorage.clear();
+    reloadRemindersForTest();
+    inviteRemindersFor(list("要重新同意"), NOW);
+    expect(useRemindersStore.getState().items[0].text).toBe("zhou 改了「整理拜访记录」，要你重新看一下接不接");
+  });
+
+  it("在做 / 已交回的不挂", () => {
+    inviteRemindersFor(list("在做"), NOW);
+    expect(useRemindersStore.getState().items).toEqual([]);
   });
 });
 

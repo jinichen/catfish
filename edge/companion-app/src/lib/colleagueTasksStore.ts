@@ -6,7 +6,8 @@
 import { useSyncExternalStore } from "react";
 
 import { useRemindersStore } from "../store/reminders";
-import { colleagueDueSoonReminder, colleagueOverdueReminder, type Reminder } from "./reminders";
+import { colleagueDueSoonReminder, colleagueInviteReminder, colleagueOverdueReminder, type Reminder } from "./reminders";
+import { useAgentStore } from "../store/agent";
 import { sendNotification } from "./tauri_app";
 import { taskList, taskSync, type TaskEvent, type TaskList, type TaskSyncResult } from "./tauri_colleague_tasks";
 
@@ -81,7 +82,19 @@ export function settledReminder(rem: Reminder, list: TaskList): boolean {
     return t.status !== "open" || t.deadline !== c.deadline || late === 0;
   }
   const t = list.incoming.find((x) => x.task_id === c.taskId);
+  if (c.role === "invitee") return !t || !WAITS_FOR_ME.has(t.state);   // 接了 / 不接 / 取消了
   return !t || t.deadline !== c.deadline || !["待处理", "在做", "待核对"].includes(t.state);
+}
+
+/** 11/09 等我接的任务 (刚派来的 / 改了要重新同意的): 提醒条上挂一条, 一次性的能一键「接下, 让小鲶开工」。
+ *  从列表挂而不是从 invite 事件挂: 事件取走就没了, Companion 关着时派来的、重启前没处理的也要能挂上。
+ *  今天关掉 (✕) 的明天还没接会再挂 (store.add 认 handled 到当天结束)。 */
+const WAITS_FOR_ME = new Set(["待处理", "要重新同意"]);
+export function inviteRemindersFor(list: TaskList, now: Date = new Date()): void {
+  const agentName = useAgentStore.getState().name || "小鲶";
+  for (const t of list.incoming) {
+    if (WAITS_FOR_ME.has(t.state)) useRemindersStore.getState().add(colleagueInviteReminder(t, now, agentName), now.getTime());
+  }
 }
 
 export function notifyFor(r: TaskSyncResult): void {
@@ -106,6 +119,7 @@ export function refreshTasks(): Promise<void> {
     try {
       const list = await taskList();
       useRemindersStore.getState().drop((rem) => settledReminder(rem, list));
+      inviteRemindersFor(list);
       emit({ ...list, loaded: true, syncError });
     } catch (e) {
       emit({ ...state, loaded: true, syncError: syncError ?? (e instanceof Error ? e.message : String(e)) });

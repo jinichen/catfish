@@ -63,6 +63,9 @@ interface UIState {
   /** 11/07 提醒条上「看任务」「去交回」: 切到「协同 · 协同事项」并打开这个任务 (发起人 = 进度, 收件人 = 处理窗口) */
   pendingTaskFocus: { taskId: string; role: "owner" | "recipient" } | null;
   openColleagueTask: (taskId: string, role: "owner" | "recipient") => void;
+  /** 11/09 提醒条「去群里看」: 切到协同 → 群聊并打开这个群 (RoomsPanel 取走) */
+  pendingRoomFocus: string | null;
+  openRoom: (roomId: string) => void;
   consumeTaskFocus: () => { taskId: string; role: "owner" | "recipient" } | null;
   setActiveTab: (tab: TabId) => void;
   toggleDarkMode: () => void;
@@ -154,6 +157,8 @@ export const useUIStore = create<UIState>((set, get) => ({
   },
   pendingTaskFocus: null,
   openColleagueTask: (taskId, role) => set({ activeTab: "collab", collabView: "work", pendingTaskFocus: { taskId, role } }),
+  pendingRoomFocus: null,
+  openRoom: (roomId) => set({ activeTab: "collab", collabView: "rooms", pendingRoomFocus: roomId }),
   consumeTaskFocus: () => {
     const f = get().pendingTaskFocus;
     if (f) set({ pendingTaskFocus: null });

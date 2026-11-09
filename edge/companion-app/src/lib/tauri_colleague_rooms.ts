@@ -115,6 +115,9 @@ export interface RoomEvent {
   title: string;
   text?: string;
   joined?: boolean;
+  /** 11/09 msg / mention: 哪条消息、什么类型 (text / card / …) —— 秘书认「@我交代的事」用 */
+  msg_id?: string;
+  msg_kind?: RoomMessage["kind"];
 }
 
 export interface Failed { email: string; error: string }

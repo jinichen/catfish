@@ -34,6 +34,7 @@ import RoomTasksBoard, { tasksButtonLabel, type RoomTasksData } from "./RoomTask
 import TaskProgress from "./TaskProgress";
 import TaskWork from "./TaskWork";
 import { Btn, ErrorLine, cardStyle, inputStyle } from "./roomLinkUi";
+import { useUIStore } from "../../store/ui";
 
 export const TEXT_MAX = 4000;
 
@@ -126,6 +127,14 @@ export default function RoomsPanel() {
   const [creating, setCreating] = useState(false);
   const [keeping, setKeeping] = useState(false);
   const [notice, setNotice] = useState<string | undefined>();
+
+  // 11/09 提醒条「去群里看」: 打开指定的群 (取走就清掉)
+  const focus = useUIStore((s) => s.pendingRoomFocus);
+  useEffect(() => {
+    if (!focus || !rooms.some((r) => r.room_id === focus)) return;
+    setOpen(focus);
+    useUIStore.setState({ pendingRoomFocus: null });
+  }, [focus, rooms]);
 
   // 列表里第一个群默认打开 (有等我加入的就是它)
   useEffect(() => {

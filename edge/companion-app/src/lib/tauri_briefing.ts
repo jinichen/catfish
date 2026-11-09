@@ -139,6 +139,14 @@ export async function taskMarkCompleted(taskId: string, title: string): Promise<
   if (!result?.ok) throw new Error(result?.error || "任务库写入失败");
 }
 
+/** 11/09 提醒条「记成待办」(群里 @我 交代的事): 写进任务库。同一个 source + source_id 只会有一条。 */
+export async function taskLibraryCreate(args: Record<string, unknown>): Promise<void> {
+  const dispatched = await toolBridgeCallTool("catfish_create_task", args);
+  if (!dispatched.ok) throw new Error(dispatched.error || "任务库写入失败");
+  const result = dispatched.result as { ok?: boolean; error?: string } | null;
+  if (!result?.ok) throw new Error(result?.error || "任务库写入失败");
+}
+
 // ── BL-BRIEFING-DECISION (5/21 Phase 5): 综合判断上下文包 ─────────────
 
 export interface SessionBrief {

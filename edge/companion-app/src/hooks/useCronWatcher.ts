@@ -76,7 +76,12 @@ function inQuietHours(d: Date): boolean {
 function notificationFor(added: Reminder[]): { title: string; body: string } {
   if (added.length === 1) {
     const r = added[0];
-    const title = r.cron?.status === "error" ? "⚠️ 定时任务没做成" : r.cron?.prep ? "📋 会务安排准备好了" : "✅ 定时任务做完了";
+    // 准备任务: 标题用「会务安排准备好了」这类说法 (提醒条主句冒号前那半), 正文是准备的是哪件事
+    if (r.cron?.prep && r.cron.status !== "error") {
+      const [head, ...rest] = r.text.split("：");
+      return { title: `📋 ${head}`, body: rest.join("：") + (r.meta ? ` · ${r.meta}` : "") };
+    }
+    const title = r.cron?.status === "error" ? "⚠️ 定时任务没做成" : "✅ 定时任务做完了";
     return { title, body: r.meta ? `${r.text} · ${r.meta}` : r.text };
   }
   const failed = added.filter((r) => r.cron?.status === "error").length;

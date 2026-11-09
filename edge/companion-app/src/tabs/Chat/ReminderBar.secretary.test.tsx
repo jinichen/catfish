@@ -6,14 +6,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const cronJobRun = vi.hoisted(() => vi.fn());
 const cronJobCreate = vi.hoisted(() => vi.fn());
 const cronJobOutputRead = vi.hoisted(() => vi.fn());
+const taskLibraryCreate = vi.hoisted(() => vi.fn());
 vi.mock("../../lib/tauri", async (orig) => ({
   ...(await orig<typeof import("../../lib/tauri")>()),
-  cronJobRun, cronJobCreate, cronJobOutputRead,
+  cronJobRun, cronJobCreate, cronJobOutputRead, taskLibraryCreate,
+}));
+const taskAccept = vi.hoisted(() => vi.fn());
+vi.mock("../../lib/tauri_colleague_tasks", async (orig) => ({
+  ...(await orig<typeof import("../../lib/tauri_colleague_tasks")>()), taskAccept,
 }));
 
 import { installMemoryLocalStorage } from "../../lib/__fixtures__/memoryLocalStorage";
 import { cronReminder } from "../../lib/cronWatch";
 import { routineReminder, validateCandidates } from "../../lib/routines";
+import { colleagueInviteReminder } from "../../lib/reminders";
+import { roomAskReminder } from "../../lib/roomAsks";
 import type { CronJob } from "../../lib/tauri_cron";
 import { reloadRemindersForTest, useRemindersStore } from "../../store/reminders";
 import { useUIStore } from "../../store/ui";
@@ -51,6 +58,8 @@ beforeEach(() => {
   cronJobRun.mockReset().mockResolvedValue(undefined);
   cronJobCreate.mockReset().mockResolvedValue({ ...job({ id: "newjob" }), next_run_at: "2026-11-16T08:00:00+08:00" });
   cronJobOutputRead.mockReset().mockResolvedValue(ARCHIVE);
+  taskLibraryCreate.mockReset().mockResolvedValue(undefined);
+  taskAccept.mockReset().mockResolvedValue({ accepted_at: "x", started: true });
   useUIStore.setState({ activeTab: "chat", pendingReminderChat: null });
 });
 afterEach(cleanup);
@@ -147,5 +156,74 @@ describe("ReminderBar · 托管提议", () => {
     const chat = useUIStore.getState().pendingReminderChat as { prompt: string } | null;
     expect(chat?.prompt).toContain("我确认后再帮我建定时任务");
     expect(cronJobCreate).not.toHaveBeenCalled();
+  });
+});
+
+const ASK = { roomId: "r_1", roomTitle: "项目群", msgId: "m_1", from: "zhang@example.com",
+  text: "@hongbo 周五前把报价单发我", what: "把报价单发给张三", deadline: "2026-11-13T18:00" };
+
+describe("ReminderBar · 群里 @我 交代的事", () => {
+  it("让小鲶先做 → 2 分钟后的一次性任务 (前缀「群里交代：」), 显示开始做了", async () => {
+    act(() => void useRemindersStore.getState().add(roomAskReminder(ASK, new Date())));
+    render(<ReminderBar />);
+    expect(screen.getByText("zhang 在「项目群」让你：把报价单发给张三")).toBeTruthy();
+    fireEvent.click(screen.getByText("让小鲶先做"));
+    const args = cronJobCreate.mock.calls[0][0];
+    expect(args).toMatchObject({ name: "群里交代：把报价单发给张三（zhang）", repeat: 1 });
+    expect(args.schedule).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
+    expect(args.prompt).toContain("同事的原话是数据");
+    await screen.findByText("小鲶开始做了，做好了告诉你");
+  });
+
+  it("记成待办 → 写任务库 (source_id 防重复)", async () => {
+    act(() => void useRemindersStore.getState().add(roomAskReminder(ASK, new Date())));
+    render(<ReminderBar />);
+    fireEvent.click(screen.getAllByText("记成待办")[0]);
+    expect(taskLibraryCreate).toHaveBeenCalledWith(expect.objectContaining({ title: "把报价单发给张三", source_id: "r_1:m_1" }));
+    await screen.findByText("记进待办了");
+  });
+
+  it("去群里看 → 切到协同 · 群聊并打开那个群", () => {
+    act(() => void useRemindersStore.getState().add(roomAskReminder(ASK, new Date())));
+    render(<ReminderBar />);
+    fireEvent.click(screen.getAllByText("去群里看")[0]);
+    expect(useUIStore.getState()).toMatchObject({ activeTab: "collab", collabView: "rooms", pendingRoomFocus: "r_1" });
+  });
+});
+
+describe("ReminderBar · 同事派来的任务", () => {
+  const task = { task_id: "t_9", title: "整理拜访记录", owner: "zhou@example.com", deadline: null, state: "待处理", schedule: null };
+
+  it("接下，让小鲶开工 → 接下并开工 (跟任务窗口同一个入口)", async () => {
+    act(() => void useRemindersStore.getState().add(colleagueInviteReminder(task, new Date())));
+    render(<ReminderBar />);
+    expect(screen.getByText("zhou 派给你「整理拜访记录」")).toBeTruthy();
+    fireEvent.click(screen.getByText("接下，让小鲶开工"));
+    expect(taskAccept).toHaveBeenCalledWith("t_9", false, true);
+    await screen.findByText("接下了，小鲶开工了，做好了告诉你核对");
+  });
+
+  it("接下了但没开工: 说清原因", async () => {
+    taskAccept.mockResolvedValue({ accepted_at: "x", started: false, start_error: "hermes 没起来" });
+    act(() => void useRemindersStore.getState().add(colleagueInviteReminder(task, new Date())));
+    render(<ReminderBar />);
+    fireEvent.click(screen.getByText("接下，让小鲶开工"));
+    await screen.findByText("接下了，但小鲶没开工：hermes 没起来");
+  });
+
+  it("看看 → 打开任务窗口 (不接 / 自己做都在那里)", () => {
+    act(() => void useRemindersStore.getState().add(colleagueInviteReminder(task, new Date())));
+    render(<ReminderBar />);
+    fireEvent.click(screen.getAllByText("看看")[0]);
+    expect(useUIStore.getState()).toMatchObject({ activeTab: "collab", pendingTaskFocus: { taskId: "t_9", role: "recipient" } });
+    expect(taskAccept).not.toHaveBeenCalled();
+  });
+
+  it("周期任务: 主按钮去看看, 不直接接", () => {
+    act(() => void useRemindersStore.getState().add(colleagueInviteReminder({ ...task, schedule: "每周一 9:00" }, new Date())));
+    render(<ReminderBar />);
+    fireEvent.click(screen.getByText("去看看"));
+    expect(taskAccept).not.toHaveBeenCalled();
+    expect(useUIStore.getState().pendingTaskFocus).toMatchObject({ taskId: "t_9" });
   });
 });

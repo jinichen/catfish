@@ -80,6 +80,7 @@ def test_建群_拉人_加入_发消息只给已加入的人(w):
 
     ev = w.sync(ZHANG)["events"]
     assert [(e["kind"], e["text"]) for e in ev] == [("mention", "大家周五前把拜访记录发我")]
+    assert ev[0]["msg_kind"] == "text" and ev[0]["msg_id"] == r["message"]["msg_id"]   # 11/09 秘书: 靠这两个认「@我交代的事」、取原文
     room = cr.list_rooms()["rooms"][0]
     assert (room["unread"], room["mentioned"]) == (1, 1)
     cr.mark_read(rid)
@@ -333,7 +334,8 @@ def test_群里派任务_任务卡进群_状态回群_结果只回发起人(w):
     assert [m["card"]["title"] for m in cr.messages(rid) if m["kind"] == "card"] == [t["title"]]
 
     w.be(ZHANG)
-    assert [e["kind"] for e in cr.sync()["events"]] == ["mention"]   # 张三: 任务卡算 @ 他
+    ev = cr.sync()["events"]
+    assert [(e["kind"], e["msg_kind"]) for e in ev] == [("mention", "card")]   # 张三: 任务卡算 @ 他 (秘书按 card 跳过, 走派任务那条)
     ct.sync()
     h = ct.pim_handlers({"task_id": t["task_id"]})
     w.box.clear()
