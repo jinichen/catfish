@@ -372,3 +372,15 @@ def test_update_normalizes_relation_words_like_create(tmp_path, monkeypatch):
     same = fm.replace('rel: "涉及"', 'rel: "记录"').replace('rel: "名单"', 'rel: "记录"')
     from catfish_tool_bridge import wiki_guard
     assert wiki_guard.canon_related(same) == same
+
+
+def test_create_title_with_fullwidth_parens_and_plus(tmp_path, monkeypatch):
+    """11/09: 「福富增值业务订购关系管理平台（VSOP）应用软件」建不出来 (slug 含非法字符 '（'); 跟 Rust entry_slug 对齐。"""
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
+    for title, slug in [("福富增值业务订购关系管理平台（VSOP）应用软件", "福富增值业务订购关系管理平台-VSOP-应用软件"),
+                        ("AI+政务产品包", "AI-政务产品包"), ("3+5+1专项团队", "3-5-1专项团队")]:
+        r = wiki_files.create_wiki_entry("entity", title, "正文足够长, 不会被当墓碑。", subtype="software")
+        assert r["ok"], r
+        assert r["rel_path"] == f"wiki/entities/{slug}.md"
+        assert f"title: {title}" in wiki_files.read_wiki_file(r["rel_path"])["content"]
+    assert wiki_files._slugify("+++") == "untitled"

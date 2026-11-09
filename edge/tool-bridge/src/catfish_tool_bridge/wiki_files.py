@@ -51,6 +51,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -374,9 +375,10 @@ def _slugify(title: str, max_chars: int = 50) -> str:
     ⚠ 它**保留中文** —— 只把文件系统敏感字符换成 '-'。"必须用拼音 slug"是 8/3
     猜错的另一条。「中电系资质对标对齐矩阵」出来就是同名文件, 不需要转拼音。
     """
-    cleaned = "".join("-" if c in _SLUG_BAD else c for c in title[:max_chars])
-    trimmed = cleaned.strip("-").strip(".")
-    return trimmed or "untitled"
+    # 11/09 跟 Rust entry_slug (wiki_slug.rs, 10/24) 对齐: validate 不收的字 (+ （ ） 、…) 也换成 '-', 连续的并一个;
+    # 以前只换路径危险字符,「福富增值业务订购关系管理平台（VSOP）应用软件」建不出来。标题原样写进 frontmatter。
+    cleaned = re.sub(r"-+", "-", "".join(c if c.isalnum() or c == "_" else "-" for c in title[:max_chars]))
+    return cleaned.strip("-") or "untitled"
 
 
 def _validate_slug(slug: str) -> str | None:
