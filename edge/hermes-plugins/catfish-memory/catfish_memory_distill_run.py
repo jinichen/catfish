@@ -25,10 +25,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 try:
+    from .catfish_memory_distill_guard import guarded_write_distilled, journal_shrunk, snapshot_journal
     from .catfish_memory_distill_reconcile import head_needs_reconcile, parse_segments
     from .catfish_memory_distill_state import _distill_cursor, _mark_distill_failed, _mark_distill_run, _write_distilled
     from .catfish_memory_helpers import _DISTILL_CHUNK_CHARS, _read_full_journal
 except ImportError:  # 独立脚本模式 (无父包)
+    from catfish_memory_distill_guard import guarded_write_distilled, journal_shrunk, snapshot_journal
     from catfish_memory_distill_reconcile import head_needs_reconcile, parse_segments
     from catfish_memory_distill_state import _distill_cursor, _mark_distill_failed, _mark_distill_run, _write_distilled
     from catfish_memory_helpers import _DISTILL_CHUNK_CHARS, _read_full_journal
@@ -72,7 +74,9 @@ async def distill_incremental(
 
     返回 {ok, reason, chunks_total, chunks_failed, bytes_written, model, took_seconds,
           incremental_from, reconciled}。
-    reason: empty_journal / no_new_journal / reconcile_only / llm_fail / "".
+    reason: empty_journal / no_new_journal / reconcile_only / llm_fail / journal_shrunk / distilled_shrunk / "".
+    11/10 保险 (catfish_memory_distill_guard): 日志比上次短了一半以上 → journal_shrunk, 不蒸不写;
+    新长期记忆比旧的小了六成以上 → distilled_shrunk, 不覆盖。覆盖前都先备份。
     """
     started = time.time()
     base: Dict[str, Any] = {
@@ -84,6 +88,16 @@ async def distill_incremental(
     journal_text = _read_full_journal(home)
     if not journal_text.strip():
         return {**base, "reason": "empty_journal", "took_seconds": time.time() - started}
+    # 11/10: 日志被清空 / 截断 (11/09 一行 open(journal,"w") 把 4000 条清成 1 条) → 这一轮不蒸、不动长期记忆
+    shrunk = journal_shrunk(home, journal_text)
+    if shrunk:
+        logger.error("catfish-memory 日志比上次蒸馏时短了一半以上 (%s → %s 字), 不蒸, 长期记忆不动; 最近的快照 %s",
+                     shrunk["was_chars"], shrunk["now_chars"], shrunk["snapshot"])
+        return {**base, "reason": "journal_shrunk", "took_seconds": time.time() - started}
+    try:
+        snapshot_journal(home, journal_text)
+    except OSError as e:
+        logger.warning("日志快照没留成: %s", e)
 
     cursor, gaps = _distill_cursor(home, journal_text)
     prior = parse_segments(_read_distilled(home)) if cursor > 0 else []
@@ -129,7 +143,10 @@ async def distill_incremental(
         _mark_distill_failed(home)
         return {**out, "reason": "llm_fail", "took_seconds": time.time() - started}
 
-    _write_distilled(home, distilled)
+    if not guarded_write_distilled(home, distilled, _write_distilled):
+        logger.error("catfish-memory 新的长期记忆比旧的小了六成以上, 没覆盖 (旧的留着)")
+        _mark_distill_failed(home)
+        return {**out, "reason": "distilled_shrunk", "took_seconds": time.time() - started}
     # 只重跑合并时没喂任何 piece, 旧缺口原样保留
     new_gaps = gaps if reconcile_only else _to_absolute(pieces, report.get("failed_ranges") or [])
     _mark_distill_run(

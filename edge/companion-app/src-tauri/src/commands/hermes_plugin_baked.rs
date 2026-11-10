@@ -52,6 +52,9 @@ const BAKED_MEMORY_ENFORCE: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/memory_enforce.py");
 const BAKED_TODO_COLLISION_GUARD: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/todo_collision_guard.py");
+// 11/10: 日志 / 长期记忆只许追加 (pre_tool_call 钩子, 拦 execute_code / terminal 的改写)
+const BAKED_JOURNAL_GUARD: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/journal_guard.py");
 // 10/24 数据外发记录: hermes 出口挂钩, 带内容 / 发第三方的请求记进 outbound_log.db
 const BAKED_EGRESS_LOG: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/egress_log.py");
@@ -187,6 +190,7 @@ pub(crate) const BAKED_FILES: &[(&str, &str)] = &[
     ("memory_router.py", BAKED_MEMORY_ROUTER),
     ("memory_enforce.py", BAKED_MEMORY_ENFORCE),
     ("todo_collision_guard.py", BAKED_TODO_COLLISION_GUARD),
+    ("journal_guard.py", BAKED_JOURNAL_GUARD),
     ("egress_log.py", BAKED_EGRESS_LOG),
     ("central_tls.py", BAKED_CENTRAL_TLS),
     ("hermes_token_renewal.py", BAKED_HERMES_TOKEN_RENEWAL),

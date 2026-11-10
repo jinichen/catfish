@@ -182,6 +182,20 @@ def register(ctx) -> None:
                 "memory 写入回落 prompt 自查模式)", e,
             )
 
+        # 11/10: 日志 / 长期记忆文件只许追加 (11/09 一行 open(journal,"w") 把整本日志清空了)。见 journal_guard.py。
+        try:
+            from pathlib import Path as _PathJ
+            import importlib.util as _iuJ
+            _specJ = _iuJ.spec_from_file_location(
+                "_catfish_xcatfish_user_journal_guard", _PathJ(__file__).parent / "journal_guard.py",
+            )
+            _jg = _iuJ.module_from_spec(_specJ)
+            _specJ.loader.exec_module(_jg)
+            ctx.register_hook("pre_tool_call", _jg.journal_guard_hook)
+            logger.info("catfish-xcatfish-user: journal guard pre_tool_call hook registered ✓")
+        except Exception as e:
+            logger.warning("catfish-xcatfish-user journal guard register fail: %s", e)
+
         # 8/24: Hermes todo 是 Agent 会话规划，不是 macOS Reminders。Qwen 曾把
         # “查询 Reminders 中当前所有待办”连续写进 todo 12 次，工具每次都成功，
         # 但从未读取系统提醒。只拦有明确 Reminders 查询语义的条目，正常计划放行。

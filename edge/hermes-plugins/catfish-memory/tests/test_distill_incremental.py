@@ -335,3 +335,58 @@ async def test_distill_requests_ask_gateway_to_turn_thinking_off(monkeypatch):
     monkeypatch.setattr(llm, "_post_distill", fake_post)
     await llm._call_distill_llm(_entry("2026-09-01", "z" * 400), "m", report={})
     assert seen and set(seen) == {"off"}, seen
+
+
+# ── 11/10 保险: 11/09 日志被一行 open(journal,"w") 清空 → 蒸馏全量重建把 18 万字的长期记忆写成 1.3KB ──────
+
+async def _fake_distill(text, model, *, progress_cb=None, prior_segments=None, report=None):
+    segs = list(prior_segments or []) + [("2026-11-09", SEG_NEW)]
+    report.update({"chunks_total": 1, "chunks_failed": 0, "consumed_chars": len(text), "reconciled": True})
+    return assemble(segs, "## 进行中\n(无)")
+
+
+@pytest.mark.asyncio
+async def test_日志被清空_不蒸_长期记忆不动_报出最近快照(tmp_path: Path):
+    journal = tmp_path / "employee_journal.md"
+    big = "".join(_entry(f"2026-10-{d:02d}", "做了很多事 " * 40) for d in range(1, 29))
+    journal.write_text(big, encoding="utf-8")
+    assert (await distill_incremental(tmp_path, "m", _fake_distill))["ok"]
+    snaps = list((tmp_path / "backups" / "journal").glob("*.md"))
+    assert len(snaps) == 1, "第一次蒸馏就留一份日志快照"
+    before = (tmp_path / "distilled_facts.md").read_text(encoding="utf-8")
+
+    journal.write_text(_entry("2026-11-09", "更正: 只剩这一条"), encoding="utf-8")   # 11/09 那种清空
+    r = await distill_incremental(tmp_path, "m", _fake_distill)
+    assert r["reason"] == "journal_shrunk" and not r["ok"]
+    assert (tmp_path / "distilled_facts.md").read_text(encoding="utf-8") == before
+    state = json.loads((tmp_path / "memory_distill_state.json").read_text(encoding="utf-8"))
+    assert state["journal_shrunk"]["now_chars"] < state["journal_shrunk"]["was_chars"]
+    assert state["journal_shrunk"]["snapshot"].endswith(".md")
+    assert len(list((tmp_path / "backups" / "journal").glob("*.md"))) == 1, "被清空的日志不能覆盖好快照"
+
+
+@pytest.mark.asyncio
+async def test_新长期记忆缩水六成以上_不覆盖_旧的先备份(tmp_path: Path):
+    journal = tmp_path / "employee_journal.md"
+    journal.write_text(_entry("2026-10-01", "起点"), encoding="utf-8")
+    (tmp_path / "distilled_facts.md").write_text("### 蒸馏段 1（2026-09-01）\n" + "旧的长期记忆 " * 3000, encoding="utf-8")
+    old = (tmp_path / "distilled_facts.md").read_text(encoding="utf-8")
+
+    async def tiny(text, model, *, progress_cb=None, prior_segments=None, report=None):
+        report.update({"chunks_total": 1, "chunks_failed": 0})
+        return "### 蒸馏段 0\n很少"
+
+    r = await distill_incremental(tmp_path, "m", tiny)
+    assert r["reason"] == "distilled_shrunk"
+    assert (tmp_path / "distilled_facts.md").read_text(encoding="utf-8") == old
+    state = json.loads((tmp_path / "memory_distill_state.json").read_text(encoding="utf-8"))
+    assert state["distilled_refused"]["new_bytes"] < state["distilled_refused"]["old_bytes"]
+
+    async def normal(text, model, *, progress_cb=None, prior_segments=None, report=None):
+        report.update({"chunks_total": 1, "chunks_failed": 0})
+        return assemble([("2026-10-01", SEG_NEW + "补充 " * 9000)], "## 进行中\n(无)")
+
+    r2 = await distill_incremental(tmp_path, "m", normal)   # 正常大小的结果: 先备份旧的再写
+    assert r2["ok"]
+    backups = list((tmp_path / "backups" / "distilled").glob("*.md"))
+    assert len(backups) == 1 and backups[0].read_text(encoding="utf-8") == old

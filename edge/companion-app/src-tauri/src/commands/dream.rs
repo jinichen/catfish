@@ -278,6 +278,12 @@ pub struct DreamStatus {
     pub distilled_bytes: u64,
     /// employee_journal.md 当前字节数 (蒸馏的输入). 0 = 文件不存在.
     pub journal_bytes: u64,
+    /// 11/10 保险: 日志比上次蒸馏时短了一半以上 (多半被清空) → 蒸馏停了.
+    /// `{at, was_chars, now_chars, snapshot}`, 原样从 state 透传. None = 正常.
+    pub journal_shrunk: Option<serde_json::Value>,
+    /// 11/10 保险: 新蒸出来的长期记忆比旧的小六成以上 → 没覆盖.
+    /// `{at, old_bytes, new_bytes}`. None = 正常.
+    pub distilled_refused: Option<serde_json::Value>,
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -288,23 +294,16 @@ pub async fn dream_distill_status() -> Result<DreamStatus, String> {
     let catfish_home = PathBuf::from(home).join(".catfish");
 
     let state_path = catfish_home.join("memory_distill_state.json");
-    let (last_run_ts, last_run_iso) = if state_path.exists() {
-        match std::fs::read_to_string(&state_path) {
-            Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
-                Ok(v) => (
-                    v.get("last_run_ts").and_then(|x| x.as_f64()),
-                    v.get("last_run_iso").and_then(|x| x.as_str()).map(String::from),
-                ),
-                Err(e) => {
-                    log::warn!("[dream] state 文件 JSON parse 失败 (返默认): {e}");
-                    (None, None)
-                }
-            },
-            Err(_) => (None, None),
-        }
-    } else {
-        (None, None)
+    let state: serde_json::Value = match std::fs::read_to_string(&state_path) {
+        Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| {
+            log::warn!("[dream] state 文件 JSON parse 失败 (返默认): {e}");
+            serde_json::Value::Null
+        }),
+        Err(_) => serde_json::Value::Null,
     };
+    let last_run_ts = state.get("last_run_ts").and_then(|x| x.as_f64());
+    let last_run_iso = state.get("last_run_iso").and_then(|x| x.as_str()).map(String::from);
+    let flag = |k: &str| state.get(k).filter(|v| v.is_object()).cloned();
 
     let distilled_bytes = std::fs::metadata(catfish_home.join("distilled_facts.md"))
         .map(|m| m.len())
@@ -318,6 +317,8 @@ pub async fn dream_distill_status() -> Result<DreamStatus, String> {
         last_run_iso,
         distilled_bytes,
         journal_bytes,
+        journal_shrunk: flag("journal_shrunk"),
+        distilled_refused: flag("distilled_refused"),
     })
 }
 

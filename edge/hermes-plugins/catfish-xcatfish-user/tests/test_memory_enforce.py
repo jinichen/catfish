@@ -179,14 +179,32 @@ def test_hook_block_when_route_journal(tmp_catfish, monkeypatch):
               "content": "陈淡孜 6/19 飞抵福州长乐, MF878"},
         task_id="t1",
     )
-    assert result is not None
-    assert result["action"] == "block"
-    assert "journal" in result["message"]
-    assert "employee_journal.md" in result["message"]
-    # audit log block
+    # 11/10: 判成 journal → 插件代写进日志 (只追加), 告诉模型已记下, 不再让它自己写文件
+    assert result is not None and result["action"] == "block"
+    assert "已经记进日志" in result["message"] and "不要" in result["message"]
+    journal = (tmp_catfish / "employee_journal.md").read_text(encoding="utf-8")
+    assert "journal | 陈淡孜 6/19 飞抵福州长乐, MF878" in journal
     audit_path = tmp_catfish / "memory_audit.jsonl"
     entry = json.loads(audit_path.read_text().strip().splitlines()[-1])
-    assert entry["decision"] == "block_wrong_kind"
+    assert entry["decision"] == "journal_appended"
+
+
+def test_kind_journal_直接代写_不调模型_只追加(tmp_catfish, monkeypatch):
+    """11/10: 11/09 小鲶自己写代码改日志把整本清空了; 带 kind='journal' 的由插件追加, 旧内容一个字不动。"""
+    called = []
+    monkeypatch.setattr(memory_enforce, "_classify_memory_route", lambda *a: called.append(1))
+    old = "## [2026-11-08 10:00] journal | 旧的一条\n\n旧正文\n"
+    (tmp_catfish / "employee_journal.md").write_text(old, encoding="utf-8")
+    result = memory_enforce.memory_enforce_hook(
+        tool_name="memory",
+        args={"action": "add", "target": "memory", "kind": "journal",
+              "content": "更正: 擎标一期框架协议号是 924\n923 是金智达的, 擎标原稿抄错了。"},
+    )
+    assert result["action"] == "block" and "已经记进日志" in result["message"]
+    assert not called
+    text = (tmp_catfish / "employee_journal.md").read_text(encoding="utf-8")
+    assert text.startswith(old)
+    assert "journal | 更正: 擎标一期框架协议号是 924" in text and "923 是金智达的" in text
 
 
 def test_hook_block_when_target_mismatch(tmp_catfish, monkeypatch):

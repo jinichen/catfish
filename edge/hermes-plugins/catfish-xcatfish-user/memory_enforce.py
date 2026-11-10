@@ -401,6 +401,36 @@ def _budget():
     return mod
 
 
+# ── 11/10 落日志由插件代写 (只追加) ──────────────────────────────────────
+#
+# 11/09 16:59 小鲶记一条「纠正」时自己写代码 open(journal,"w").write(open(journal).read()+…) ——
+# "w" 先清空文件再读, 整本 4000 条日志只剩那一条; 19:53 蒸馏按「日志换过了」全量重建, 长期记忆也跟着没了。
+# 根子在这里: 判成 journal 的内容原来是 block 掉、让它「直接写 ~/.catfish/employee_journal.md」, 它只能自己写代码改文件。
+# 现在判成 journal (或调用时自己带 kind='journal') 的, 由这里追加进日志, 回一句「已记下」; 模型不用、也不许碰那个文件
+# (journal_guard.py 拦改写)。
+
+def _journal_entry(content: str, kind: str = "journal") -> str:
+    lines = [ln for ln in content.strip().splitlines() if ln.strip()]
+    title = (lines[0] if lines else "").lstrip("#- ").strip()[:60] or "记录"
+    body = "\n".join(lines[1:]).strip() if len(lines) > 1 and len(lines[0]) <= 60 else content.strip()
+    return f"## [{time.strftime('%Y-%m-%d %H:%M')}] {kind} | {title}\n\n{body}"
+
+
+def append_journal(content: str, kind: str = "journal") -> Path:
+    """只追加 (open "a")。返回日志路径。"""
+    path = _catfish_home() / "employee_journal.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write("\n" + _journal_entry(content, kind).strip() + "\n\n")
+    return path
+
+
+JOURNAL_WRITTEN = (
+    "✅ 已经记进日志 (插件代写, 只追加)。不用再写, 也**不要**用代码去改 employee_journal.md "
+    "—— 那个文件只能追加, 改写会被拦。记错了就再记一条更正 (开头写「更正: …」), 不要删旧的。"
+)
+
+
 def memory_enforce_hook(tool_name: str = "", args: Optional[dict] = None,
                         task_id: str = "", **kwargs: Any) -> Optional[dict]:
     """hermes pre_tool_call hook — 拦 memory_update 误写.
@@ -425,6 +455,13 @@ def memory_enforce_hook(tool_name: str = "", args: Optional[dict] = None,
         content = args.get("content", "")
         if not isinstance(content, str) or not content.strip():
             return None
+
+        # 11/10: 调用时自己标了 kind='journal' → 直接代写进日志, 不用再判
+        if str(args.get("kind") or "").strip().lower() == "journal":
+            append_journal(content)
+            _audit_log({"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "tool": tool_name, "target": target, "action": action,
+                        "content_preview": content[:100], "decision": "journal_appended", "reason": "kind=journal"})
+            return {"action": "block", "message": JOURNAL_WRITTEN}
 
         # 11/06: 单条字数 / 快满了不许再加 —— 硬规矩, 不调模型 (memory_budget.py)
         over = _budget().check(target, action, content, str(args.get("old_text") or ""))
@@ -521,7 +558,15 @@ def memory_enforce_hook(tool_name: str = "", args: Optional[dict] = None,
                 ),
             }
 
-        # route 是 journal / todo / skill → block + 引导改调对应 tool
+        # 11/10: 判成 journal → 插件代写进日志 (只追加), 不再让模型自己写文件
+        if route == "journal":
+            append_journal(content)
+            _audit_log({"ts": now_iso, "tool": tool_name, "target": target, "action": action,
+                        "content_preview": content[:100], "model": model, "decision": "journal_appended",
+                        "llm_route": route, "llm_reason": reason, "confidence": confidence})
+            return {"action": "block", "message": JOURNAL_WRITTEN}
+
+        # route 是 todo / skill / wiki → block + 引导改调对应 tool
         _audit_log({
             "ts": now_iso,
             "tool": tool_name,
@@ -540,7 +585,6 @@ def memory_enforce_hook(tool_name: str = "", args: Optional[dict] = None,
                 "先 catfish_wiki_search 找对应条目 (人/证书/项目), 有就 catfish_wiki_read 后 "
                 "catfish_wiki_update 补进去, 没有再 catfish_wiki_create"
             ),
-            "journal": "直接写 ~/.catfish/employee_journal.md (append `## [YYYY-MM-DD HH:MM] kind | title`)",
             "todo": "调 catfish_create_task tool (写入本机任务库)",
             "skill": "调 catfish_propose_skill tool (多步流程 / SKILL.md)",
         }

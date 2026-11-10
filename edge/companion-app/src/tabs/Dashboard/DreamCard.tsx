@@ -1,19 +1,12 @@
-/** P3.5.1 (6/15 鸿波 Dream Engine): 仪表盘卡 — 员工主动触发 long-term 蒸馏.
+/** P3.5.1 (6/15 鸿波 Dream Engine): 仪表盘卡 — 员工主动触发长期记忆整理 (蒸馏).
  *
  * 设计 (方案 D, 6/15 鸿波拍):
  *   - 复用 hermes catfish-memory plugin 现有 distill 算法 + cooldown state
  *   - Model 用 companion picker (useChatStore.model), 不引入 Qwen3, 不读 yaml/env
- *   - 进度: progress bar + "chunk X / N"
- *   - 上次蒸馏: 时间 + 字节数
  *   - 跑完 plugin auto 24h 内自然 skip (共享 cooldown state, 零冲突)
  *
- * UI:
- *   - 标题 + 一句"做啥的"说明
- *   - 当前 model 显式 (let employee see)
- *   - 上次蒸馏时间 + distilled_facts.md 大小 + employee_journal.md 大小
- *   - "🌙 现在重蒸" 按钮 (在跑时 disable + 显进度)
- *   - 进度条 + chunk count
- *   - 跑完结果 (成功/失败 reason)
+ * 11/10: 文案全改中文、不露文件名 (员工不需要知道 employee_journal.md 叫什么);
+ * 加 MemoryAlerts —— 日志被清空 / 新结果缩水时蒸馏会停下并记进 state, 这里报警。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -24,6 +17,7 @@ import {
   formatAgo,
   formatBytes,
   listenDreamProgress,
+  reasonText,
   type DreamEvent,
   type DreamStatus,
 } from "../../lib/dream";
@@ -78,7 +72,7 @@ export default function DreamCard() {
   const handleRun = useCallback(async () => {
     if (phase.kind === "running") return;
     if (!model || !model.trim()) {
-      setPhase({ kind: "error", msg: "当前没选 model (chat picker 是空的), 不跑" });
+      setPhase({ kind: "error", msg: "还没选模型, 先去聊天页选一个" });
       return;
     }
     setPhase({ kind: "running", done: 0, total: 0 });
@@ -118,13 +112,13 @@ export default function DreamCard() {
       const out = await dreamRun(model);
       // dreamRun await 直到 CLI 退出. exit_code 看是否正常.
       if (!out.spawnOk) {
-        setPhase({ kind: "error", msg: `spawn 失败: ${out.error ?? "未知"}` });
+        setPhase({ kind: "error", msg: `没能启动整理: ${out.error ?? "未知原因"}` });
       } else if (out.exitCode !== 0 && out.exitCode !== null) {
         // CLI 内部失败 (theoretically done event 会先到, 这里兜底)
         console.warn("[DreamCard] dream_cli exit code 非零:", out.exitCode);
       }
     } catch (e) {
-      setPhase({ kind: "error", msg: `调用 dream_distill_run 异常: ${e}` });
+      setPhase({ kind: "error", msg: `整理出错: ${e}` });
     } finally {
       // 主路径 await 完才 unlisten — 防 done event 丢
       if (unlistenRef.current) {
@@ -151,17 +145,16 @@ export default function DreamCard() {
       }}
     >
       <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
-        <strong style={{ fontSize: 16 }}>🌙 Dream Engine</strong>
-        <span style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>
-          重新蒸馏长期记忆 · 用 chat picker 当前模型
-        </span>
+        <strong style={{ fontSize: 16 }}>🌙 做梦 · 整理长期记忆</strong>
       </div>
 
       <div style={{ fontSize: 12, color: "var(--catfish-text-muted)", marginBottom: 12 }}>
-        把累积的对话日志 (<code>employee_journal.md</code>) 重新蒸馏成长期画像
-        (<code>distilled_facts.md</code>) — 早安卡 / chat 注入 system prompt 时读这个.
-        平时由 hermes plugin 自动每 24h 跑, 这里让你**立即重蒸**, 跑完 plugin 自动 24h skip.
+        小鲶每天把工作日志里新增的内容整理进长期记忆 (你是谁、在忙什么、和谁合作、有哪些约定),
+        聊天和早安卡都靠它记住你。平时每 24 小时自动整理一次, 想马上整理就点下面的按钮。
+        日志只追加不改写, 每天留一份快照; 长期记忆每次覆盖前都先备份。
       </div>
+
+      <MemoryAlerts status={status} />
 
       {/* 当前 model + 状态 */}
       <div
@@ -177,28 +170,28 @@ export default function DreamCard() {
           marginBottom: 12,
         }}
       >
-        <span style={{ color: "var(--catfish-text-muted)" }}>当前 model:</span>
-        <code style={{ color: "var(--catfish-cyan-bright)" }}>{model || "(空, 去 chat tab 选)"}</code>
+        <span style={{ color: "var(--catfish-text-muted)" }}>用的模型:</span>
+        <code style={{ color: "var(--catfish-cyan-bright)" }}>{model || "还没选, 去聊天页选一个"}</code>
 
-        <span style={{ color: "var(--catfish-text-muted)" }}>上次蒸馏:</span>
+        <span style={{ color: "var(--catfish-text-muted)" }}>上次整理:</span>
         <span>
           {formatAgo(status?.lastRunTs ?? null)}
           {status?.lastRunIso && (
             <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginLeft: 6 }}>
-              ({status.lastRunIso})
+              ({status.lastRunIso.replace("T", " ").slice(0, 16)})
             </span>
           )}
         </span>
 
-        <span style={{ color: "var(--catfish-text-muted)" }}>distilled_facts.md:</span>
+        <span style={{ color: "var(--catfish-text-muted)" }}>长期记忆:</span>
         <span>{formatBytes(status?.distilledBytes ?? 0)}</span>
 
-        <span style={{ color: "var(--catfish-text-muted)" }}>employee_journal.md:</span>
+        <span style={{ color: "var(--catfish-text-muted)" }}>工作日志:</span>
         <span>
           {formatBytes(status?.journalBytes ?? 0)}
           {journalEmpty && (
             <span style={{ color: "var(--catfish-hint-amber-text)", marginLeft: 6, fontSize: 11 }}>
-              ⚠ journal 是空, 没什么可蒸馏 (先跟 catfish 聊几次累积一下)
+              还没有日志, 先跟小鲶聊几次
             </span>
           )}
         </span>
@@ -223,7 +216,7 @@ export default function DreamCard() {
             opacity: !model || journalEmpty ? 0.6 : 1,
           }}
         >
-          {isRunning ? "蒸馏中..." : "🌙 现在重蒸"}
+          {isRunning ? "整理中…" : "🌙 现在整理"}
         </button>
 
         {isRunning && (
@@ -236,7 +229,7 @@ export default function DreamCard() {
                 marginTop: 4,
               }}
             >
-              chunk {phase.done} / {phase.total || "?"}
+              第 {phase.done} / {phase.total || "?"} 段
             </div>
           </div>
         )}
@@ -263,11 +256,12 @@ export default function DreamCard() {
         >
           {phase.ok ? (
             <>
-              ✓ 蒸馏完成 · {phase.chunks} 段 · 写 {formatBytes(phase.bytes ?? 0)} ·{" "}
-              耗时 {(phase.took ?? 0).toFixed(1)}s
+              {phase.reason
+                ? <>✓ {reasonText(phase.reason)}</>
+                : <>✓ 整理完成 · {phase.chunks} 段 · 长期记忆 {formatBytes(phase.bytes ?? 0)} · 用时 {(phase.took ?? 0).toFixed(0)} 秒</>}
             </>
           ) : (
-            <>✗ 蒸馏未跑 — 原因: {phase.reason || "未知"}</>
+            <>✗ 没有整理: {reasonText(phase.reason)}</>
           )}
         </div>
       )}
@@ -284,7 +278,7 @@ export default function DreamCard() {
             color: "var(--catfish-hint-amber-text)",
           }}
         >
-          ⚠ 错误: {phase.msg}
+          ⚠ {phase.msg}
         </div>
       )}
 
@@ -298,7 +292,7 @@ export default function DreamCard() {
           }}
         >
           <summary style={{ cursor: "pointer" }}>
-            🔍 dream_cli stderr ({stderrLines.length} 行, 诊断用)
+            🔍 诊断信息 ({stderrLines.length} 行, 出问题时给开发看)
           </summary>
           <pre
             style={{
@@ -320,6 +314,63 @@ export default function DreamCard() {
         </details>
       )}
     </div>
+  );
+}
+
+// ── 子组件: 记忆异常警告 (11/10) ─────────────────────────────────
+//
+// 11/09 日志被一行代码清空、长期记忆跟着被覆盖成 1.3KB, 当时这张卡只是平静地显示两个小数字。
+// 现在蒸馏发现「日志短了一大半」或「新结果小了六成以上」会停下并记进 state, 这里大红字说出来。
+
+const alertBox = {
+  marginBottom: 12,
+  padding: "8px 12px",
+  background: "var(--catfish-hint-amber-bg)",
+  border: "1px solid var(--status-error, #dc2626)",
+  borderRadius: "var(--radius-sm)",
+  fontSize: 12,
+  color: "var(--status-error, #dc2626)",
+  lineHeight: 1.6,
+} as const;
+
+/** 快照文件名是 YYYY-MM-DD.md, 只露日期给员工看 */
+function snapshotDay(path: string): string {
+  const m = /(\d{4})-(\d{2})-(\d{2})\.md$/.exec(path);
+  return m ? `${Number(m[2])} 月 ${Number(m[3])} 日` : "最近一次";
+}
+
+export function MemoryAlerts({ status }: { status: DreamStatus | null }) {
+  const js = status?.journalShrunk;
+  const dr = status?.distilledRefused;
+  if (!js && !dr) return null;
+  return (
+    <>
+      {js && (
+        <div style={alertBox} role="alert">
+          <strong>⚠ 工作日志少了一大半</strong>
+          {js.at && <span style={{ marginLeft: 6, opacity: 0.8 }}>({js.at.replace("T", " ").slice(0, 16)} 发现)</span>}
+          <div>
+            上次整理时日志有 {(js.was_chars ?? 0).toLocaleString()} 字, 现在只剩 {(js.now_chars ?? 0).toLocaleString()} 字,
+            多半是被误清空了。自动整理已经停下, 长期记忆没动。
+          </div>
+          <div>
+            {js.snapshot
+              ? <>已留有 {snapshotDay(js.snapshot)} 的日志快照, 请找开发恢复。</>
+              : <>没有找到日志快照, 请找开发恢复。</>}
+          </div>
+        </div>
+      )}
+      {dr && (
+        <div style={alertBox} role="alert">
+          <strong>⚠ 这次整理结果异常, 没有覆盖长期记忆</strong>
+          {dr.at && <span style={{ marginLeft: 6, opacity: 0.8 }}>({dr.at.replace("T", " ").slice(0, 16)})</span>}
+          <div>
+            新整理出来的只有 {formatBytes(dr.new_bytes ?? 0)}, 原来有 {formatBytes(dr.old_bytes ?? 0)}, 少得太多,
+            所以保留了原来的。下次整理正常后这条提示会自动消失。
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
