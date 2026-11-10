@@ -182,6 +182,20 @@ jobs:
       #    正是离线要用的归档 —— 实测瘦身后离线 sync 立刻失败。
       #
       # 先只测量, 不改产物。拿到数字再决定整包发还是先砍 [all] 里用不到的 extra。
+      # 11/10: 本地搜索识字走 Windows 自带的 OCR, 要中文的「光学字符识别」语言功能 (中文版 Windows 自带,
+      # 英文 runner 没有)。装上了 → 冒烟要求图片里的中文认得出来; 装不上 → 要求明确记成 needs_ocr。
+      - name: Install Chinese OCR capability for the local search smoke
+        id: zh_ocr
+        shell: pwsh
+        timeout-minutes: 15
+        continue-on-error: true
+        run: |
+          $cap = Get-WindowsCapability -Online -Name 'Language.OCR~~~zh-CN~0.0.1.0'
+          if ($cap.State -ne 'Installed') { Add-WindowsCapability -Online -Name 'Language.OCR~~~zh-CN~0.0.1.0' | Out-Null }
+          $state = (Get-WindowsCapability -Online -Name 'Language.OCR~~~zh-CN~0.0.1.0').State
+          Write-Host "zh-CN OCR capability: $state"
+          if ($state -eq 'Installed') { "CATFISH_SMOKE_REQUIRE_OCR=1" >> $env:GITHUB_ENV }
+
       - name: Verify packaged Windows runtime startup and email upgrade
         shell: pwsh
         timeout-minutes: 20

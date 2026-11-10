@@ -16,6 +16,7 @@ from pathlib import Path
 
 from .config import DB_FILE, SearchConfig
 from .extractor import RICH_DOC_EXTS, extract_sections, fit_sections
+from .ocr import IMAGE_EXTS, OcrUnavailable
 
 logger = logging.getLogger("catfish.search.indexer")
 
@@ -78,8 +79,9 @@ MAX_CONTENT_CHARS = 3_000_000
 #: Word / PPT / Excel / PDF 不按 max_file_size_mb 拦 (大的多是图片, 字没几个: 121MB 的 ITSS PPT
 #: 才 3 万字), 只留一道防内存爆的上限。
 RICH_MAX_FILE_BYTES = 512 * 1024 * 1024
-#: 抽取规则版本。2 = 11/10 (hermes 环境的库读富文档、PPT 读组合、300 万字按段分)。
-EXTRACT_VERSION = 2
+#: 抽取规则版本。2 = 11/10 (hermes 环境的库读富文档、PPT 读组合、300 万字按段分);
+#: 3 = 11/10 晚 (图片和扫描版 PDF 本机识字)。
+EXTRACT_VERSION = 3
 _OLD_CONTENT_CAP = 500_000
 
 
@@ -134,6 +136,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
     v2 (11/10): 老版本在没有 markitdown 的机器上收不进 Word / PPT / Excel / PDF, 超 20MB 的文档
     也被拦; 已收的超长文件只留了前 50 万字。
+    v3 (11/10 晚): 图片和扫描版 PDF 能识字了 —— 同样重走一遍, 之前跳过的这次识别。
       · 清 indexed_roots → watcher 下次启动把各目录重走一遍 (没变的按 mtime 跳过, 很快),
         漏掉的文档这次收进来;
       · 删掉正文正好卡在 50 万字的文件的 file_meta → 那一遍会按新规则重新抽。
@@ -168,6 +171,20 @@ def _record_skipped(conn: sqlite3.Connection, path: Path, reason: str) -> None:
         "size_bytes = excluded.size_bytes, at = excluded.at",
         (str(path), reason, size, time.time()),
     )
+
+
+def _skipped_and_unchanged(conn: sqlite3.Connection, path: Path) -> bool:
+    """上次抽不出字 (no_text) 之后文件没再改过 → 不重试。
+
+    图片里没字是常态 (照片、视频帧): 鲶鱼机器上一个宣传片工程目录就有 479 帧, 每次全量扫都重新识字
+    要多花三分钟。needs_ocr (本机当时没法识字) 不算 —— 机器可能后来能识字了, 要重试。"""
+    row = conn.execute("SELECT reason, at FROM skipped_files WHERE path = ?", (str(path),)).fetchone()
+    if row is None or row[0] != "no_text":
+        return False
+    try:
+        return path.stat().st_mtime <= float(row[1] or 0)
+    except OSError:
+        return False
 
 
 def _clear_skipped(conn: sqlite3.Connection, path_str: str) -> None:
@@ -219,7 +236,7 @@ def skip_reason(path: Path, cfg: SearchConfig) -> str | None:
         size = path.stat().st_size
     except OSError:
         return "ignored"
-    limit = RICH_MAX_FILE_BYTES if ext in RICH_DOC_EXTS else cfg.max_file_size_bytes
+    limit = RICH_MAX_FILE_BYTES if (ext in RICH_DOC_EXTS or ext in IMAGE_EXTS) else cfg.max_file_size_bytes
     if size > limit:
         return "too_large"
     return None
@@ -304,8 +321,15 @@ def _index_one(conn: sqlite3.Connection, path: Path) -> str:
     """
     if not _needs_reindex(conn, path):
         return "unchanged"
+    if _skipped_and_unchanged(conn, path):
+        return "no_text"  # 不重抽, 但统计上照样是「抽不出」
 
-    sections = extract_sections(path)
+    try:
+        sections = extract_sections(path)
+    except OcrUnavailable as e:
+        logger.debug("需要识字但本机没法识别 (%s): %s", e.reason, path)
+        _record_skipped(conn, path, "needs_ocr")
+        return "no_text"
     text = fit_sections(sections, MAX_CONTENT_CHARS) if sections else ""
     if not text.strip():
         _record_skipped(conn, path, "no_text")

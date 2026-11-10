@@ -217,6 +217,40 @@ pub fn tool_bridge_python() -> Option<PathBuf> {
 
 // —————————————— local-search ——————————————
 
+/// 11/10 识字 helper (swift/catfish-ocr, macOS 自带 Vision): 本地搜索靠它读图片 / 扫描版 PDF 里的字。
+/// 装好的 App 在 Contents/Resources/catfish-ocr; 开发期用源码目录里编好的那份。找不到 → None,
+/// 本地搜索就把图片 / 扫描件记成「本机没法识别」。Windows 不走这里 (local-search 自带 PowerShell 脚本)。
+pub fn ocr_helper() -> Option<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(contents) = exe.parent().and_then(|m| m.parent()) {
+            let candidate = contents.join("Resources").join("catfish-ocr");
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+    #[cfg(debug_assertions)]
+    {
+        let candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("swift").join("catfish-ocr");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// 起 local-search (watcher / 手动索引) 时要带的环境变量。
+pub fn local_search_env(pythonpath: String) -> Vec<(String, String)> {
+    let mut env = vec![("PYTHONPATH".to_string(), pythonpath)];
+    if let Some(ocr) = ocr_helper() {
+        env.push(("CATFISH_OCR_BIN".to_string(), ocr.to_string_lossy().into_owned()));
+    }
+    env
+}
+
 pub fn local_search_dir() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("CATFISH_LOCAL_SEARCH_DIR") {
         let path = PathBuf::from(p);

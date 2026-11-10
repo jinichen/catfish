@@ -177,7 +177,10 @@ ONLY_WINDOWS = {"uv.exe", "install-catfish-email.ps1", "install-wechat-reader.ps
 ONLY_MAC = {"uv",
             # EventKit 读日历的 Swift 小程序。Windows 那边日历 / 提醒走 Outlook COM
             # (commands/system_outlook.rs), 不需要对应的二进制。
-            "catfish-calendar"}
+            "catfish-calendar",
+            # 11/10 本地搜索识字的 Swift 小程序 (macOS Vision)。Windows 用系统自带的 Windows.Media.Ocr,
+            # 脚本 ocr_windows.ps1 随 local-search 源码进 edge runtime, 不需要对应的二进制。
+            "catfish-ocr"}
 
 
 def resource_names(conf: Path) -> set[str]:

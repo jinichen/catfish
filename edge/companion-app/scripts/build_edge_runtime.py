@@ -47,6 +47,7 @@ CONTRACTS = ("wiki_type_schema.json", "wiki_type_vocab.json", "wiki_relation_voc
 MUST_EXIST = [
     "tool-bridge/src/catfish_tool_bridge/__main__.py",
     "local-search/src/catfish_search/cli.py",
+    "local-search/src/catfish_search/ocr_windows.ps1",  # 11/10 Windows 识字 (ocr.py 调)
     "file-parse/parse_file.py",
     "file-parse/attachment_bm25.py",
     "file-parse/meeting_asr.py",

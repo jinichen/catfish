@@ -16,11 +16,16 @@ xlsx → openpyxl, xls → xlrd。它们缺了、或者是 .doc / .ppt / .epub �
 超长时按段平均分额度用 —— 不然截断只留前面, 一本 54 个工作表的台账只搜得到前 10 个表。
 
 PPT 的文字常在「组合」形状里 (ITSS 汇报 57 页, 不进组合读是 0 字, 进去读 2.8 万字), 要递归。
+
+图片和扫描版 PDF (没有文字层) 走本机识字 (ocr.py): 图片整张识别; PDF 只识别没字的那些页。
+这台机器没法识别时抛 OcrUnavailable, indexer 记成 needs_ocr, 面板上说明原因。
 """
 from __future__ import annotations
 
 import logging
 from pathlib import Path
+
+from .ocr import IMAGE_EXTS, OcrUnavailable, meaningful, ocr_image, ocr_pdf_pages
 
 logger = logging.getLogger("catfish.search.extractor")
 
@@ -82,13 +87,18 @@ _MARKITDOWN = _try_import_markitdown()
 
 
 def extract_sections(path: Path) -> list[str] | None:
-    """抽文字, 按段返回 (见模块说明)。抽不出 / 失败返回 None。"""
+    """抽文字, 按段返回 (见模块说明)。抽不出 / 失败返回 None; 需要识字但本机没法识别抛 OcrUnavailable。"""
     ext = path.suffix.lower()
     try:
         if ext in PLAIN_TEXT_EXTS:
             return [_read_plain(path)]
         if ext in RICH_DOC_EXTS:
             return _read_rich(path)
+        if ext in IMAGE_EXTS:
+            text = ocr_image(path)
+            return [text] if meaningful(text) else None
+    except OcrUnavailable:
+        raise
     except Exception as e:
         logger.debug("extract failed for %s: %s", path, e)
         return None
@@ -112,6 +122,10 @@ def _read_plain(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
+#: 一页抽出来不到这么多字, 当它是扫描页 (页码 / 页眉那点字不算)
+_SCANNED_PAGE_CHARS = 10
+
+
 def _pdf(path: Path) -> list[str]:
     import pypdfium2 as pdfium  # noqa: PLC0415
 
@@ -124,9 +138,22 @@ def _pdf(path: Path) -> list[str]:
                 pages.append(page.get_textpage().get_text_range().strip())
             finally:
                 page.close()
-        return pages
     finally:
         pdf.close()
+    empty = [i for i, t in enumerate(pages) if len(t) < _SCANNED_PAGE_CHARS]
+    if not empty:
+        return pages
+    whole_scan = sum(len(t) for t in pages) < 20
+    try:
+        recognized = ocr_pdf_pages(path, empty)
+    except OcrUnavailable:
+        if whole_scan:
+            raise  # 整份都是扫描件, 又没法识别 → 让 indexer 记 needs_ocr
+        return pages  # 只有几页是图, 有字的照收
+    for i, text in recognized.items():
+        if meaningful(text):
+            pages[i] = text
+    return pages
 
 
 def _docx(path: Path) -> list[str]:

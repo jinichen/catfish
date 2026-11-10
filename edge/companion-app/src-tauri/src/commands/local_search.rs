@@ -54,7 +54,7 @@ pub async fn local_search_start() -> Result<(), String> {
         ],
         log_path,
         working_dir: dir,
-        env: vec![("PYTHONPATH".into(), pythonpath)],
+        env: catfish_paths::local_search_env(pythonpath),
     };
 
     let handle = process::spawn_detached(cfg).map_err(|e| format!("启动失败: {e}"))?;
@@ -154,7 +154,7 @@ async fn run_search_cli(args: Vec<String>) -> Result<IndexRunResult, String> {
         let out = crate::services::process::python_command(&python)
             .args(&args)
             .current_dir(&dir)
-            .env("PYTHONPATH", &pythonpath)
+            .envs(catfish_paths::local_search_env(pythonpath.clone()))
             .env("PYTHONUNBUFFERED", "1")
             .output()
             .map_err(|e| format!("跑索引失败: {e}"))?;

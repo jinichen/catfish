@@ -47,6 +47,12 @@ try {
     & $Python (Join-Path $PSScriptRoot 'smoke_tool_bridge.py') --python $Python `
         --source (Join-Path $Edge 'tool-bridge\src') --hermes $Agent
     if ($LASTEXITCODE -ne 0) { throw 'Packaged Tool Bridge failed its real startup / IPC smoke' }
+    # 11/10: local search reads Word / PPT / Excel with the packaged libraries and images via Windows OCR.
+    # The workflow sets CATFISH_SMOKE_REQUIRE_OCR=1 when it managed to install Chinese OCR on the runner.
+    $LsArgs = @((Join-Path $PSScriptRoot 'smoke_local_search.py'), '--source', (Join-Path $Edge 'local-search\src'))
+    if ($env:CATFISH_SMOKE_REQUIRE_OCR -eq '1') { $LsArgs += '--require-ocr' }
+    & $Python @LsArgs
+    if ($LASTEXITCODE -ne 0) { throw 'Packaged local search failed its document / OCR smoke' }
 
     $Installer = Join-Path $Resources 'install-catfish-email.ps1'
     $Distribution = Join-Path $Resources 'catfish-email-dist.tar.gz'

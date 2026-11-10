@@ -88,6 +88,27 @@ fn main() {
         if swift_dir.exists() {
             println!("cargo:rerun-if-changed=swift/catfish-calendar.swift");
             println!("cargo:rerun-if-changed=swift/build.sh");
+            println!("cargo:rerun-if-changed=swift/catfish-ocr.swift");
+            println!("cargo:rerun-if-changed=swift/build-ocr.sh");
+            // 11/10 catfish-ocr (本地搜索读图片 / 扫描件里的字): 同样只在源码比二进制新时编。
+            {
+                let src = swift_dir.join("catfish-ocr.swift");
+                let bin = swift_dir.join("catfish-ocr");
+                let newer = match (
+                    src.metadata().and_then(|m| m.modified()).ok(),
+                    bin.metadata().and_then(|m| m.modified()).ok(),
+                ) {
+                    (Some(s), Some(b)) => s > b,
+                    (Some(_), None) => true,
+                    _ => false,
+                };
+                if newer {
+                    match Command::new("bash").arg("build-ocr.sh").current_dir(&swift_dir).status() {
+                        Ok(s) if s.success() => println!("cargo:warning=catfish-ocr 编译完成"),
+                        other => println!("cargo:warning=catfish-ocr 编译失败 ({other:?}), 本地搜索不识别图片"),
+                    }
+                }
+            }
 
             let src_path = swift_dir.join("catfish-calendar.swift");
             let bin_path = swift_dir.join("catfish-calendar");

@@ -95,7 +95,8 @@ fi
 # 2 · 主程序、helper 与 uv 都必须包含目标架构。
 MAIN_BIN="$APP/Contents/MacOS/catfish-companion-app"
 CALENDAR_BIN="$APP/Contents/Resources/catfish-calendar"
-for label_path in "主程序|$MAIN_BIN" "日历 helper|$CALENDAR_BIN" "uv|$RES/uv"; do
+OCR_BIN="$APP/Contents/Resources/catfish-ocr"   # 11/10 本地搜索读图片 / 扫描件
+for label_path in "主程序|$MAIN_BIN" "日历 helper|$CALENDAR_BIN" "识字 helper|$OCR_BIN" "uv|$RES/uv"; do
     label="${label_path%%|*}"
     path="${label_path#*|}"
     actual="$(file -b "$path" 2>/dev/null || true)"

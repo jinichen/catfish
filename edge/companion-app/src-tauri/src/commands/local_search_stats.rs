@@ -51,6 +51,9 @@ pub struct LocalSearchStats {
     pub skipped_total: i64,
     /// 最近的跳过记录 (最多 SKIPPED_LIST_MAX 条, 新的在前)
     pub skipped: Vec<SkippedFile>,
+    /// 识了字也没认出字的图片 (照片、视频帧) —— 正常情况, 不算进 skipped_total, 面板另起一行淡色显示。
+    /// 鸿波机器上一个宣传片工程就有 479 帧, 混在一起会把真正该看的 18 份扫描件淹掉。
+    pub images_without_text: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,23 +67,38 @@ pub struct SkippedFile {
 
 const SKIPPED_LIST_MAX: i64 = 50;
 
+/// 「图片里没认出字」的判据 (跟 local-search ocr.IMAGE_EXTS 一致)
+const IMAGE_NO_TEXT: &str = "(reason = 'no_text' AND (lower(path) LIKE '%.png' OR lower(path) LIKE '%.jpg' \
+     OR lower(path) LIKE '%.jpeg' OR lower(path) LIKE '%.heic' OR lower(path) LIKE '%.heif' \
+     OR lower(path) LIKE '%.webp' OR lower(path) LIKE '%.tif' OR lower(path) LIKE '%.tiff' \
+     OR lower(path) LIKE '%.bmp' OR lower(path) LIKE '%.gif'))";
+
 /// 跳过记录。老索引库 (watcher 还没升级) 没有这张表 → 当作 0 条。
-fn collect_skipped(conn: &rusqlite::Connection) -> (i64, Vec<SkippedFile>) {
-    let total: i64 = match conn.query_row("SELECT COUNT(*) FROM skipped_files", [], |r| r.get(0)) {
-        Ok(n) => n,
-        Err(_) => return (0, vec![]),
-    };
-    let mut list = Vec::new();
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT path, COALESCE(reason, ''), size_bytes FROM skipped_files ORDER BY at DESC LIMIT ?1",
+/// 返回 (该看的跳过数, 列表, 没字的图片数)。
+fn collect_skipped(conn: &rusqlite::Connection) -> (i64, Vec<SkippedFile>, i64) {
+    let total: i64 = match conn.query_row(
+        &format!("SELECT COUNT(*) FROM skipped_files WHERE NOT {IMAGE_NO_TEXT}"),
+        [],
+        |r| r.get(0),
     ) {
+        Ok(n) => n,
+        Err(_) => return (0, vec![], 0),
+    };
+    let images: i64 = conn
+        .query_row(&format!("SELECT COUNT(*) FROM skipped_files WHERE {IMAGE_NO_TEXT}"), [], |r| r.get(0))
+        .unwrap_or(0);
+    let mut list = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(&format!(
+        "SELECT path, COALESCE(reason, ''), size_bytes FROM skipped_files WHERE NOT {IMAGE_NO_TEXT} \
+         ORDER BY at DESC LIMIT ?1"
+    )) {
         if let Ok(rows) = stmt.query_map([SKIPPED_LIST_MAX], |r| {
             Ok(SkippedFile { path: r.get(0)?, reason: r.get(1)?, size_bytes: r.get(2)? })
         }) {
             list.extend(rows.flatten());
         }
     }
-    (total, list)
+    (total, list, images)
 }
 
 /// 在已开 DB 上跑全部统计查询 — 抽出来给 #[cfg(test)] 用内存 DB 验 SQL.
@@ -152,6 +170,7 @@ pub async fn local_search_stats() -> Result<LocalSearchStats, String> {
             db_path: db_path_str,
             skipped_total: 0,
             skipped: vec![],
+            images_without_text: 0,
         });
     }
 
@@ -159,7 +178,7 @@ pub async fn local_search_stats() -> Result<LocalSearchStats, String> {
         .map_err(|e| format!("打开 search.db 失败: {e}"))?;
 
     let (total_files, by_type, total_size_bytes, last_indexed_at) = collect_stats(&conn)?;
-    let (skipped_total, skipped) = collect_skipped(&conn);
+    let (skipped_total, skipped, images_without_text) = collect_skipped(&conn);
 
     Ok(LocalSearchStats {
         db_exists: true,
@@ -170,6 +189,7 @@ pub async fn local_search_stats() -> Result<LocalSearchStats, String> {
         db_path: db_path_str,
         skipped_total,
         skipped,
+        images_without_text,
     })
 }
 
@@ -238,9 +258,10 @@ mod tests {
     #[test]
     fn skipped_files_old_db_without_table_is_zero() {
         let conn = setup_test_db();
-        let (n, list) = collect_skipped(&conn);
+        let (n, list, imgs) = collect_skipped(&conn);
         assert_eq!(n, 0);
         assert!(list.is_empty());
+        assert_eq!(imgs, 0);
     }
 
     #[test]
@@ -249,11 +270,18 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE skipped_files (path TEXT PRIMARY KEY, reason TEXT, size_bytes INTEGER, at REAL);
              INSERT INTO skipped_files VALUES ('/old.md', 'too_large', 30000000, 1.0);
-             INSERT INTO skipped_files VALUES ('/scan.pdf', 'no_text', 5000, 2.0);",
+             INSERT INTO skipped_files VALUES ('/scan.pdf', 'no_text', 5000, 2.0);
+             INSERT INTO skipped_files VALUES ('/frames/0001.PNG', 'no_text', 900, 3.0);
+             INSERT INTO skipped_files VALUES ('/frames/0002.png', 'no_text', 900, 4.0);
+             INSERT INTO skipped_files VALUES ('/old-mac/photo.jpg', 'needs_ocr', 900, 5.0);",
         )
         .unwrap();
-        let (n, list) = collect_skipped(&conn);
-        assert_eq!(n, 2);
+        let (n, list, imgs) = collect_skipped(&conn);
+        // 没字的图片另算; 本机没法识字的图片 (needs_ocr) 仍算该看的
+        assert_eq!(imgs, 2);
+        assert_eq!(n, 3);
+        assert_eq!(list[0].path, "/old-mac/photo.jpg");
+        let list: Vec<_> = list.into_iter().skip(1).collect();
         assert_eq!(list[0].path, "/scan.pdf");
         assert_eq!(list[0].reason, "no_text");
         assert_eq!(list[1].size_bytes, Some(30000000));

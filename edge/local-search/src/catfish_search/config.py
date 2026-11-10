@@ -460,13 +460,20 @@ def load_config() -> SearchConfig:
     for p in missing:
         logger.warning("include 里的目录拿不到，本次不扫: %s（不存在，或没有访问授权）", p)
 
+    file_types = {
+        t.lower() if t.startswith(".") else "." + t.lower()
+        for t in data.get("file_types", [])
+    }
+    # 11/10: 图片 (png / jpg / heic ...) 本机识字后也收。员工的 yaml 是老版本生成的, file_types 里
+    # 没有图片类型, 这里直接补上而不去改他的文件; 不想收图片就在 yaml 里写 `ocr: false`。
+    if data.get("ocr", True) is not False:
+        from .ocr import IMAGE_EXTS  # noqa: PLC0415
+        file_types |= IMAGE_EXTS
+
     return SearchConfig(
         include=include_paths,
         exclude=data.get("exclude", []),
         max_file_size_mb=data.get("max_file_size_mb", 10),
-        file_types={
-            t.lower() if t.startswith(".") else "." + t.lower()
-            for t in data.get("file_types", [])
-        },
+        file_types=file_types,
         missing=missing,
     )

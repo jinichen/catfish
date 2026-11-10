@@ -21,6 +21,8 @@ import { useEffect, useState, useCallback } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
 
+import { currentEmailPlatform } from "../../lib/emailPlatformHints";
+
 interface ScopeResult {
   include: string[];
   exclude: string[];
@@ -45,6 +47,8 @@ interface LocalSearchStats {
   /** 11/10: 该收但没收进去的 (太大 / 抽不出字)。以前静默跳过, 员工看数字不动不知道为什么。 */
   skippedTotal: number;
   skipped: SkippedFile[];
+  /** 识了字也没认出字的图片 (照片、视频帧) —— 正常, 淡色一行, 不算「没收进」 */
+  imagesWithoutText: number;
 }
 interface SkippedFile {
   path: string;
@@ -52,12 +56,22 @@ interface SkippedFile {
   sizeBytes: number | null;
 }
 
+const IMAGE_RE = /\.(png|jpe?g|heic|heif|webp|tiff?|bmp|gif)$/i;
+
 /** 跳过原因 → 员工看得懂的话 */
 function skippedReasonText(f: SkippedFile): string {
   if (f.reason === "too_large") {
     return f.sizeBytes ? `太大没收（${formatBytes(f.sizeBytes)}）` : "太大没收";
   }
-  if (f.reason === "no_text") return "读不出文字（扫描件、全是图片，或文件损坏）";
+  if (f.reason === "no_text") {
+    return IMAGE_RE.test(f.path) ? "图片里没认出文字" : "读不出文字（识字也没认出来，或文件损坏）";
+  }
+  // 11/10: 图片 / 扫描件要本机识字, 这台电脑做不了
+  if (f.reason === "needs_ocr") {
+    return currentEmailPlatform() === "windows"
+      ? "图片/扫描件：要在 Windows 设置里给中文装「光学字符识别」才能认字"
+      : "图片/扫描件：这台电脑没法识别文字（需要 macOS 11 或更新）";
+  }
   return f.reason || "没收";
 }
 
@@ -368,6 +382,11 @@ export default function LocalSearchScopeCard() {
                         <code>{t.fileType}</code> × {t.count}
                       </span>
                     ))}
+                  </div>
+                )}
+                {stats.imagesWithoutText > 0 && (
+                  <div style={{ marginTop: 4, fontSize: 11, color: "var(--catfish-text-muted)" }}>
+                    另有 {stats.imagesWithoutText.toLocaleString()} 张图片里没有文字（照片、视频帧之类），不用管
                   </div>
                 )}
                 {stats.skippedTotal > 0 && (

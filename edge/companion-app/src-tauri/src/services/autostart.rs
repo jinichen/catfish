@@ -286,7 +286,7 @@ fn spawn_fresh_local_search() {
         ],
         log_path,
         working_dir: dir,
-        env: vec![("PYTHONPATH".into(), pythonpath)],
+        env: catfish_paths::local_search_env(pythonpath),
     };
 
     match process::spawn_detached(cfg) {
