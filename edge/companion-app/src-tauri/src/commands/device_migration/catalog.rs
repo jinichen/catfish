@@ -250,6 +250,9 @@ const CATFISH: &[(Pat, Class, &str)] = &[
     (Exact(".forget_backup"), Rebuild, "遗忘备份"),
     (Exact("weather_cache.json"), Rebuild, "缓存"),
     (Exact("notify_status.json"), Rebuild, "运行状态"),
+    // 推微信被拒、等员工说话后补发的内容: 最多留 24 小时, 换机不带
+    (Exact("weixin_resend.json"), Rebuild, "微信待补发"),
+    (Exact("weixin_resend_direct.jsonl"), Rebuild, "微信待补发"),
     (Exact("pet_pending_bubbles.jsonl"), Rebuild, "运行状态"),
     (Exact("codex-backend-shim.json"), Rebuild, "运行状态"),
     (Exact("migration_v1_done"), Rebuild, "升级标记"),
