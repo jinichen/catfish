@@ -497,6 +497,12 @@ class AppleMailAdapter(EmlxFallbackMixin, EmailAdapter):
                 f"delete_message: AS 返非 OK ({out[:120]!r})"
             )
 
+    def recent_draft(self, max_age_seconds: int) -> tuple[str, int] | None:
+        """草稿箱里刚存的那封 → (id, 多少秒之前)。见 apple_mail_recent_draft.py。"""
+        from .apple_mail_recent_draft import newest_draft  # noqa: PLC0415
+        found = None if self._use_emlx_fallback else newest_draft(_run_osascript, max_age_seconds)
+        return (self._pack_id(found[0], found[1]), found[2]) if found else None
+
     def mark_read(self, message_id: str, *, read: bool = True) -> None:
         """5/18 BL-EMAIL-MARK-READ: AS `set read status of m to true/false`.
 

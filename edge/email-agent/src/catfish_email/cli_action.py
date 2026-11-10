@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import time
 import os
 import sys
 
@@ -612,6 +613,30 @@ def _cmd_archive(adapters: list[EmailAdapter], args) -> int:
         ensure_ascii=False,
     ))
     return 1 if errs and not ran else 0
+
+
+def _cmd_recent_draft(adapters: list[EmailAdapter], args) -> int:
+    """草稿箱里最近 --max-age 秒内存的那封 (11/11), 输出跟 email-last-draft.json 同样的三个字段, 没有就 null。
+
+    给 Companion 兜底: 小鲶绕开 `draft` 命令自己往邮件客户端里建草稿时, 没有 last_draft 那一笔。
+    只有能回答这个问题的来源 (目前是 macOS「邮件」App) 参与。
+    """
+    best: dict | None = None
+    for adapter in adapters:
+        probe = getattr(adapter, "recent_draft", None)
+        if probe is None:
+            continue
+        try:
+            found = probe(args.max_age)
+        except EmailAdapterError as e:
+            _err(f"[{adapter.name}] 查最近的草稿失败: {e}")
+            continue
+        if found and (best is None or found[1] < best["age"]):
+            best = {"id": found[0], "adapter": adapter.name, "created_at": time.time() - found[1], "age": found[1]}
+    if best:
+        best.pop("age")
+    print(json.dumps(best, ensure_ascii=False))
+    return 0
 
 
 def _cmd_mail_accounts(adapters: list[EmailAdapter], args) -> int:

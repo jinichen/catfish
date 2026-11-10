@@ -42,6 +42,34 @@ pub fn email_last_draft() -> Option<LastDraft> {
     read_marker(&marker_path()?)
 }
 
+/// 11/11 兜底: 没有那一笔时, 问邮件组件「草稿箱里最近 max_age_secs 秒内存的那封」。
+///
+/// 11/10 鸿波: 「邮件落草稿箱后没有跳到草稿邮件」。那一回合小鲶没走 `catfish-email draft`, 按它自己
+/// 记的一条旧技能用脚本直接在 Mail 里建了草稿 —— 没有那一笔。见 catfish_email/adapters/
+/// apple_mail_recent_draft.py。查不到 / 邮件组件没装 / 出错 → None (不跳, 不报错)。
+#[tauri::command]
+pub async fn email_recent_draft(max_age_secs: u32) -> Option<LastDraft> {
+    let bin = crate::services::catfish_paths::catfish_email_bin()?;
+    let out = tokio::task::spawn_blocking(move || {
+        crate::commands::email::email_command(&bin)
+            .args(["recent-draft", "--max-age", &max_age_secs.to_string()])
+            .output()
+    })
+    .await
+    .ok()?
+    .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_recent(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// `catfish-email recent-draft` 的输出: 一行 JSON (跟那一笔同样的字段) 或 `null`。
+fn parse_recent(stdout: &str) -> Option<LastDraft> {
+    let draft: LastDraft = serde_json::from_str(stdout.trim()).ok()?;
+    (!draft.id.is_empty()).then_some(draft)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,6 +88,17 @@ mod tests {
             read_marker(&path),
             Some(LastDraft { id: "imap|INBOX.Drafts|1|42".into(), created_at: 1790000000.5 })
         );
+    }
+
+    #[test]
+    fn 兜底查询的输出_有就解析_null和坏的都当没有() {
+        assert_eq!(
+            parse_recent("{\"id\": \"apple_mail|Chinatelecom|3542\", \"adapter\": \"apple_mail\", \"created_at\": 1794295189.7}\n"),
+            Some(LastDraft { id: "apple_mail|Chinatelecom|3542".into(), created_at: 1794295189.7 })
+        );
+        assert_eq!(parse_recent("null\n"), None);
+        assert_eq!(parse_recent(""), None);
+        assert_eq!(parse_recent("catfish-email: 出错了"), None);
     }
 
     #[test]

@@ -36,6 +36,7 @@ from .cli_action import (
     _cmd_archive,
     _cmd_mail_accounts,
     _cmd_attachment,
+    _cmd_recent_draft,
     _cmd_check,
     _cmd_delete,
     _cmd_draft,
@@ -50,7 +51,7 @@ __all__ = [
     "main",
     "_cmd_accounts", "_cmd_list", "_cmd_read", "_cmd_search",
     "_cmd_draft", "_cmd_send", "_cmd_delete", "_cmd_mark_read",
-    "_cmd_check", "_cmd_attachment", "_cmd_archive", "_cmd_mail_accounts",
+    "_cmd_check", "_cmd_attachment", "_cmd_recent_draft", "_cmd_archive", "_cmd_mail_accounts",
     "_msg_to_dict", "_err",
 ]
 
@@ -173,6 +174,8 @@ def _main(argv: list[str] | None = None) -> int:
         return _cmd_accounts(adapters, args)
     if args.cmd == "draft":
         return _cmd_draft(adapters, args)
+    if args.cmd == "recent-draft":
+        return _cmd_recent_draft(adapters, args)
     if args.cmd == "mark-read":
         return _cmd_mark_read(adapters, args)
     if args.cmd == "delete":
@@ -276,6 +279,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     # mark-read (5/18 BL-EMAIL-MARK-READ): 独立 subcommand 也能批量标 (不读正文)
+    prd = sub.add_parser("recent-draft", help="草稿箱里最近存的那封 (Companion 跳转兜底)")
+    prd.add_argument("--max-age", type=int, default=600, help="多少秒之内存的才算, 默认 600")
     pm = sub.add_parser("mark-read", help="标记邮件已读/未读")
     pm.add_argument("--id", required=True, help="message id")
     pm.add_argument(

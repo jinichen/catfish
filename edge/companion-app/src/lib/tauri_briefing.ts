@@ -263,6 +263,9 @@ export interface LastDraft {
   created_at: number;
 }
 export const emailLastDraft = () => rawInvoke<LastDraft | null>("email_last_draft");
+/** 11/11 兜底: 草稿箱里最近 maxAgeSecs 秒内存的那封 (小鲶绕开起草命令、自己往邮件客户端里建草稿时没有上面那一笔)。 */
+export const emailRecentDraft = (maxAgeSecs: number) =>
+  rawInvoke<LastDraft | null>("email_recent_draft", { max_age_secs: maxAgeSecs });
 export const emailReadMessage = (id: string, options?: { markRead?: boolean }) =>
   rawInvoke<string>("email_read_message", {
     id,

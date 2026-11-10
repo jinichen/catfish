@@ -359,6 +359,7 @@ pub(crate) fn handler(
             crate::commands::email_list_cache::email_list_cache_load,
             crate::commands::email_list_cache::email_list_cache_save,
             crate::commands::email_last_draft::email_last_draft,
+            crate::commands::email_last_draft::email_recent_draft,
             crate::commands::email::email_read_message,
             crate::commands::email::email_create_draft,
             crate::commands::email::email_pick_attachments,
