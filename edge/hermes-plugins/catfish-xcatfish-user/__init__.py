@@ -91,6 +91,7 @@ def register(ctx) -> None:
     # (egress 挂钩、P0-P59) 只让第一份打, 后面几份跳过, 免得层层叠加。
     # 见 plugin_ctx.claim_process_patches。
     _owns_patches = _mod.plugin_ctx.claim_process_patches(__name__)
+    _weixin_resend_mod: list = []
     if not _owns_patches:
         logger.info(
             "catfish-xcatfish-user: %s 不是本进程第一份, 只注册钩子 / 工具, 全局补丁由第一份负责",
@@ -195,6 +196,24 @@ def register(ctx) -> None:
             logger.info("catfish-xcatfish-user: journal guard pre_tool_call hook registered ✓")
         except Exception as e:
             logger.warning("catfish-xcatfish-user journal guard register fail: %s", e)
+
+        # 11/10: 定时任务推微信被拒 (session not ready: 员工一阵子没在微信里说话) → 内容留着,
+        # 员工在微信里发来消息时补发。包投递函数是改模块的全局补丁, 只让本进程第一份做; 钩子也只挂一份,
+        # 免得一条消息触发几遍补发。见 weixin_resend.py。
+        if _owns_patches:
+            try:
+                from pathlib import Path as _PathW
+                import importlib.util as _iuW
+                _specW = _iuW.spec_from_file_location(
+                    "_catfish_xcatfish_user_weixin_resend", _PathW(__file__).parent / "weixin_resend.py",
+                )
+                _wr = _iuW.module_from_spec(_specW)
+                _specW.loader.exec_module(_wr)
+                ctx.register_hook("pre_gateway_dispatch", _wr.pre_gateway_dispatch_hook)
+                _weixin_resend_mod.append(_wr)  # 包投递函数要 import cron.scheduler, 放到下面后台安装里做
+                logger.info("catfish-xcatfish-user: 微信补发钩子已挂 (收到微信消息时补推没推出去的定时任务) ✓")
+            except Exception as e:
+                logger.warning("catfish-xcatfish-user 微信补发挂载失败: %s (定时任务照常推, 只是不补发)", e)
 
         # 8/24: Hermes todo 是 Agent 会话规划，不是 macOS Reminders。Qwen 曾把
         # “查询 Reminders 中当前所有待办”连续写进 todo 12 次，工具每次都成功，
@@ -435,6 +454,11 @@ def register(ctx) -> None:
                 "pre_tool_call hook 会 raise. 排查: 看 traceback 哪条 patch fail.",
                 e, exc_info=True,
             )
+        for _wr in _weixin_resend_mod:
+            try:
+                _wr.install()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("catfish-xcatfish-user 微信补发: 包定时任务投递失败: %s (不补发)", e)
 
     t = threading.Thread(
         target=_delayed_install, daemon=True, name="catfish-xcatfish-installer"

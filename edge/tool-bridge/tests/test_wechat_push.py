@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from datetime import datetime
 
 import pytest
@@ -72,6 +73,38 @@ def test_push_success_and_stale_session_message(iso, monkeypatch):
     assert wechat_push.push("x") is False
     st = json.loads((iso / ".catfish" / "notify_status.json").read_text(encoding="utf-8"))
     assert "给小鲶发一句话" in st["error"]
+    # 11/10: 会话过期被拒的留给网关补发 (hermes 插件 weixin_resend.py 读这个文件)
+    q = [json.loads(x) for x in (iso / ".catfish" / "weixin_resend_direct.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [(i["text"], i["chat_id"], i["kind"]) for i in q] == [("x", "wxid_me", "message")]
+    assert "自动补发" in st["error"]
+
+
+def test_only_session_expiry_is_queued_and_test_push_never(iso, monkeypatch):
+    turn_on(iso)
+    (iso / "hermes" / ".env").write_text(ENV, encoding="utf-8")
+
+    async def not_ready(tgt, text):
+        return {"error": "RuntimeError: iLink sendmessage session not ready: ret=-2 errcode=None errmsg= "
+                         "— the user must send the bot a message first (or re-pair)"}
+
+    async def broken(tgt, text):
+        return {"error": "ClientConnectorError: 连不上"}
+
+    q = iso / ".catfish" / "weixin_resend_direct.jsonl"
+    monkeypatch.setattr(wechat_push, "_send", broken)
+    assert wechat_push.push("网络坏了") is False
+    assert not q.exists()
+    monkeypatch.setattr(wechat_push, "_send", not_ready)
+    assert wechat_push.push("测试", resend_kind=None) is False
+    assert not q.exists()
+    assert wechat_push.push_reminder("⏰ 小鲶提醒", "交月报") is False
+    item = json.loads(q.read_text(encoding="utf-8"))
+    assert item["kind"] == "reminder" and item["text"] == "⏰ 小鲶提醒: 交月报"
+
+
+def test_file_name_matches_the_gateway_side():
+    plugin = (Path(__file__).resolve().parents[2] / "hermes-plugins" / "catfish-xcatfish-user" / "weixin_resend.py")
+    assert f'"{wechat_push.RESEND_FILE}"' in plugin.read_text(encoding="utf-8")
 
 
 def test_hermes_rate_limit_report_means_send_one_message():
@@ -86,7 +119,7 @@ def test_dates_are_not_mistaken_for_error_codes():
 
 def test_alarm_pushes_only_when_switch_on(iso, monkeypatch):
     calls = []
-    monkeypatch.setattr(wechat_push, "push", lambda text, tgt=None: calls.append(text) or True)
+    monkeypatch.setattr(wechat_push, "push", lambda text, tgt=None, **kw: calls.append((text, kw)) and True or True)
     toasts = []
     r = reminders.tool_create_reminder({"title": "交月报", "due_date_iso": "2026-10-09T09:30:00"})
     local_pim.fire_due_alarms(datetime(2026, 10, 9, 9, 31), lambda t, b: toasts.append((t, b)))
@@ -95,7 +128,8 @@ def test_alarm_pushes_only_when_switch_on(iso, monkeypatch):
     turn_on(iso)
     r2 = reminders.tool_create_reminder({"title": "进度会", "due_date_iso": "2026-10-09T14:00:00"})
     local_pim.fire_due_alarms(datetime(2026, 10, 9, 14, 0, 5), lambda t, b: toasts.append((t, b)))
-    assert calls == ["⏰ 小鲶提醒: 进度会 · 10-09 14:00"]  # 一行, 微信里是一个气泡
+    # 一行, 微信里是一个气泡; 会话过期被拒时按「提醒」留着补发 (1 小时内)
+    assert calls == [("⏰ 小鲶提醒: 进度会 · 10-09 14:00", {"resend_kind": "reminder"})]
     assert r["task_id"] != r2["task_id"]
 
 

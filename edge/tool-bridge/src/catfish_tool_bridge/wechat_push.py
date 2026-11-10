@@ -9,7 +9,10 @@ hermes 已经是他自己的微信机器人 (腾讯 iLink Bot, gateway/platforms
 - 微信机器人的配置在 hermes 的 .env 里, 只有 hermes 进程会加载; tool-bridge 拿不到
   环境变量, 所以这里自己读 .env 再显式传给 send_weixin_direct。
 - iLink 要求每条外发带上该用户最近一条消息里的 context_token; 员工很久没跟机器人说话
-  可能被拒 (会话过期)。失败只记日志 + 写 notify_status.json 给界面提示, 系统通知照旧。
+  就会被拒 (会话过期)。失败记日志 + 写 notify_status.json 给界面提示, 系统通知照旧。
+- 11/10: 因会话过期被拒的, 追加进 ~/.catfish/weixin_resend_direct.jsonl; 员工在微信里给小鲶
+  发消息时, hermes 插件 (catfish-xcatfish-user/weixin_resend.py) 用网关的微信通道补发。
+  提醒过了 1 小时不补, 其余 24 小时。测试推送不补。
 """
 from __future__ import annotations
 
@@ -98,14 +101,40 @@ def last_status() -> dict[str, Any]:
         return {}
 
 
-def _friendly(err: str) -> str:
-    # iLink 会话过期: errcode/ret = -14, 或 -2 "unknown error" (weixin.py _is_stale_session_ret)。
-    # 10/12 实测: 员工 7 天没跟机器人说话, 主动推送被 iLink 拒成 ret=-2, hermes 报成
-    # "rate limited; cooldown" —— 说一句话就恢复, 所以同样按会话过期给提示。
+RESEND_FILE = "weixin_resend_direct.jsonl"
+
+
+def session_expired(err: str) -> bool:
+    """iLink 会话过期: errcode/ret = -14, 或 -2 "unknown error" (weixin.py _is_stale_session_ret);
+    v0.23 起 hermes 报成 "session not ready ... must send the bot a message first"。
+    10/12 实测: 员工 7 天没跟机器人说话, 主动推送被 iLink 拒成 ret=-2, 当时 hermes 报成
+    "rate limited; cooldown" —— 说一句话就恢复, 所以同样按会话过期算。"""
     low = err.lower()
-    if re.search(r"(errcode|ret)\D{0,3}-(14|2)\b", err) or "expired" in low or "rate limited" in low:
-        return "微信会话过期了: 在微信里给小鲶发一句话, 之后的提醒就能推过来"
+    return bool(re.search(r"(errcode|ret)\D{0,3}-(14|2)\b", err) or "expired" in low or "rate limited" in low
+                or "session not ready" in low or "must send the bot a message" in low)
+
+
+def _friendly(err: str, queued: bool = False) -> str:
+    if session_expired(err):
+        if queued:
+            return "微信会话过期了, 这条先留着: 在微信里给小鲶发一句话就自动补发"
+        return "微信会话过期了: 在微信里给小鲶发一句话, 之后就能推过来"
     return err[:200]
+
+
+def _queue_resend(text: str, chat_id: str, kind: str) -> bool:
+    """会话过期被拒的留给网关补发 (见模块说明)。追加写, 网关那边整份取走再处理, 两边不抢。"""
+    try:
+        path = _catfish_dir() / RESEND_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps({"text": text, "chat_id": chat_id, "kind": kind, "saved_at": time.time()},
+                          ensure_ascii=False)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+        return True
+    except OSError:
+        logger.warning("留待补发失败", exc_info=True)
+        return False
 
 
 async def _send(tgt: dict[str, str], text: str) -> dict[str, Any]:
@@ -122,8 +151,9 @@ async def _send(tgt: dict[str, str], text: str) -> dict[str, Any]:
     return await send_weixin_direct(extra=extra, token=tgt["token"], chat_id=tgt["chat_id"], message=text)
 
 
-def push(text: str, tgt: dict[str, str] | None = None) -> bool:
-    """推一条到员工微信。在 to_thread 里被调 (local_pim.alarm_loop), 所以可以 asyncio.run。"""
+def push(text: str, tgt: dict[str, str] | None = None, *, resend_kind: str | None = "message") -> bool:
+    """推一条到员工微信。在 to_thread 里被调 (local_pim.alarm_loop), 所以可以 asyncio.run。
+    resend_kind: 会话过期被拒时留着补发 ("reminder" 1 小时内有效, 其余 24 小时); None = 不补 (测试推送)。"""
     tgt = tgt or target()
     if tgt is None:
         _write_status(False, "还没绑定微信 (先在「微信账号绑定」里扫码连上小鲶)")
@@ -139,7 +169,8 @@ def push(text: str, tgt: dict[str, str] | None = None) -> bool:
         return True
     err = str(result.get("error") or "未知错误")
     logger.warning("提醒推送到微信失败: %s", err)
-    _write_status(False, _friendly(err))
+    queued = bool(resend_kind) and session_expired(err) and _queue_resend(text, tgt["chat_id"], resend_kind)
+    _write_status(False, _friendly(err, queued))
     return False
 
 
@@ -148,4 +179,4 @@ def push_reminder(title: str, line: str) -> bool:
     if not enabled():
         return False
     # 一行发: hermes 的微信适配器会把多行拆成几个气泡 (10/12 真机测试看到的)
-    return push(f"{title}: {line}")
+    return push(f"{title}: {line}", resend_kind="reminder")

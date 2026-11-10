@@ -96,7 +96,7 @@ export default function WeChatReminderPushCard() {
             )}
           </div>
           <div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>
-            微信那边要求最近跟小鲶说过话; 很久没聊时推送可能失败, 在微信里给小鲶发一句话就恢复。
+            微信那边要求最近跟小鲶说过话; 很久没聊时推送会被拒, 没推出去的会留着, 在微信里给小鲶发一句话就自动补发。
           </div>
         </>
       )}

@@ -170,9 +170,9 @@ describe("runAtLabel", () => {
 });
 
 describe("deliveryProblem", () => {
-  it("微信 iLink 没就绪 → 说清要先给机器人发一句话", () => {
+  it("微信 iLink 没就绪 → 说清发句话就自动补发", () => {
     expect(deliveryProblem("live adapter send failed: iLink sendmessage session not ready: ret=-2 … the user must send the bot a message first"))
-      .toBe("没发到微信：要先在微信里给机器人发一句话才能推送");
+      .toBe("没发到微信（微信会话过期）：在微信里给小鲶发句话就自动补发");
   });
 });
 
@@ -191,7 +191,7 @@ describe("cronReminder", () => {
   it("没送到微信: 小字带上原因", () => {
     const r = cronReminder({ job: job({ id: "a", last_status: "delivery_failed", last_delivery_error: "iLink session not ready" }),
       runAt: "2026-11-09T09:34:36+08:00", status: "delivery_failed" }, "结果", "ts", now);
-    expect(r.meta).toBe("结果 · 没发到微信：要先在微信里给机器人发一句话才能推送");
+    expect(r.meta).toBe("结果 · 没发到微信（微信会话过期）：在微信里给小鲶发句话就自动补发");
   });
 
   it("没做成: 错误 + 让小鲶看看, 每次运行一条", () => {

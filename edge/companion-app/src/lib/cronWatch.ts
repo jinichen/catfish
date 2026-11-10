@@ -164,10 +164,12 @@ function clip(s: string, n: number): string {
 }
 
 /** 推送失败的原因说成人话 */
-export function deliveryProblem(err: string | null | undefined): string {
+export function deliveryProblem(err: string | null | undefined, agentName = "小鲶"): string {
   const e = err ?? "";
+  // 微信只让机器人在员工最近说过话之后主动推。内容已经留着 (hermes 插件 weixin_resend.py),
+  // 员工在微信里随便说一句, 就自动补发。
   if (/session not ready|must send the bot a message|re-pair/i.test(e)) {
-    return "没发到微信：要先在微信里给机器人发一句话才能推送";
+    return `没发到微信（微信会话过期）：在微信里给${agentName}发句话就自动补发`;
   }
   if (/weixin/i.test(e)) return `没发到微信：${clip(e, 40)}`;
   return e ? `没送出去：${clip(e, 40)}` : "没送出去";
@@ -222,7 +224,7 @@ export function cronReminder(
   }
 
   const summary = body ? clip(firstLine(body), 60) : "";
-  const metaParts = [summary, status === "delivery_failed" ? deliveryProblem(job.last_delivery_error) : ""]
+  const metaParts = [summary, status === "delivery_failed" ? deliveryProblem(job.last_delivery_error, agentName) : ""]
     .filter(Boolean);
   return {
     id: `cron:${job.id}:${runAt}`,

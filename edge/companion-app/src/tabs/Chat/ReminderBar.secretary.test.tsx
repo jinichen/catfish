@@ -92,7 +92,7 @@ describe("ReminderBar · 定时任务做完", () => {
   it("没送到微信: 小字说清原因", () => {
     act(() => void useRemindersStore.getState().add(done({ last_delivery_error: "iLink sendmessage session not ready" }, "delivery_failed")));
     render(<ReminderBar />);
-    expect(screen.getByText(/没发到微信：要先在微信里给机器人发一句话才能推送/)).toBeTruthy();
+    expect(screen.getByText(/没发到微信（微信会话过期）：在微信里给小鲶发句话就自动补发/)).toBeTruthy();
   });
 });
 
