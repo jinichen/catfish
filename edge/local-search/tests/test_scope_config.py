@@ -89,7 +89,10 @@ def scope(monkeypatch):
 
     CATFISH_HOME / CONFIG_FILE 是 import 期就算好的常量，改 HOME 后必须 reload。
     """
-    with tempfile.TemporaryDirectory() as home:
+    with tempfile.TemporaryDirectory() as tmp:
+        # macOS 的临时目录 /var/folders/... 其实是 /private/var/... 的链接; load_config 会把 include
+        # 路径 resolve 成真实路径, 这里也用真实路径当 HOME, 断言才对得上 (Linux 上两者本来一样)。
+        home = str(Path(tmp).resolve())
         monkeypatch.setenv("HOME", home)
         importlib.reload(scope_config)
         for d in _HOME_DIRS:

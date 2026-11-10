@@ -62,8 +62,15 @@ def test_build_server_registers_two_tools():
     """启动前先确认 tool 清单结构 OK。"""
     pytest_skip_if_no_mcp()
     server, _stdio = mcp_server._build_server()
-    # mcp.Server 把 handler 存在实例里；我们只要它能被构造出来即可。
     assert server is not None
+    # 11/10: 以前只看构造得出来; mcp 2.x 改了注册方式后老写法直接 AttributeError。
+    # 现在把两个工具的清单和调用都真走一遍。
+    from mcp.types import TextContent, Tool  # noqa: PLC0415
+    tools = mcp_server._tools(Tool)
+    assert [t.name for t in tools] == ["local_search", "local_search_status"]
+    import asyncio  # noqa: PLC0415
+    out = asyncio.run(mcp_server._call(TextContent, "local_search", {"query": ""}))
+    assert "query is required" in out[0].text
 
 
 def pytest_skip_if_no_mcp():

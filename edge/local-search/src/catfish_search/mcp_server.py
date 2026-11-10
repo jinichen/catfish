@@ -35,60 +35,83 @@ def _try_import_mcp():
     return Server, stdio_server, TextContent, Tool
 
 
+def _tools(tool_cls) -> list[Any]:
+    return [
+        tool_cls(
+            name="local_search",
+            description=(
+                "员工本地 Mac 全文搜索。找文件、合同、文档、笔记、代码、"
+                "Office 文件、PDF 时必选此工具。基于 SQLite FTS5 trigram 索引，"
+                "100ms 内返回，支持 40+ 种文件格式，完全离线不联网。"
+                "典型触发：找文件、找合同、找上次那份、我电脑里有没有、"
+                "本地有没有、上周那份文档。优先用这个工具，"
+                "不要用 search_files / find / grep 全盘扫（那些要 30~60 秒）。"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "搜索关键词。中文英文都行，多词用空格隔开。",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "返回前 N 条结果，默认 10。",
+                        "default": 10,
+                        "minimum": 1,
+                        "maximum": 50,
+                    },
+                },
+                "required": ["query"],
+            },
+        ),
+        tool_cls(
+            name="local_search_status",
+            description=(
+                "查看本地索引库状态：总文件数、按类型分布、索引库大小。"
+                "典型触发：索引建好了吗、索引里有多少文件、本地搜索能用吗。"
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+    ]
+
+
+async def _call(text_content_cls, name: str, arguments: dict[str, Any] | None) -> list[Any]:
+    arguments = arguments or {}
+    if name == "local_search":
+        return [text_content_cls(type="text", text=_run_query(arguments))]
+    if name == "local_search_status":
+        return [text_content_cls(type="text", text=_run_status())]
+    raise ValueError(f"unknown tool: {name}")
+
+
 def _build_server():
+    """11/10: mcp 2.x 去掉了 Server.list_tools() / call_tool() 装饰器, 改成构造函数传 handler
+    (hermes 环境现在带的是 mcp 2.3.0, 老写法一启动就 AttributeError)。两种都认, 跟 tool-bridge
+    mcp_server.py 同一个办法。"""
     server_cls, stdio_server, text_content_cls, tool_cls = _try_import_mcp()
 
-    server = server_cls("catfish-local-search")
-
-    @server.list_tools()  # type: ignore[misc]
     async def list_tools() -> list[Any]:
-        return [
-            tool_cls(
-                name="local_search",
-                description=(
-                    "员工本地 Mac 全文搜索。找文件、合同、文档、笔记、代码、"
-                    "Office 文件、PDF 时必选此工具。基于 SQLite FTS5 trigram 索引，"
-                    "100ms 内返回，支持 40+ 种文件格式，完全离线不联网。"
-                    "典型触发：找文件、找合同、找上次那份、我电脑里有没有、"
-                    "本地有没有、上周那份文档。优先用这个工具，"
-                    "不要用 search_files / find / grep 全盘扫（那些要 30~60 秒）。"
-                ),
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "搜索关键词。中文英文都行，多词用空格隔开。",
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "description": "返回前 N 条结果，默认 10。",
-                            "default": 10,
-                            "minimum": 1,
-                            "maximum": 50,
-                        },
-                    },
-                    "required": ["query"],
-                },
-            ),
-            tool_cls(
-                name="local_search_status",
-                description=(
-                    "查看本地索引库状态：总文件数、按类型分布、索引库大小。"
-                    "典型触发：索引建好了吗、索引里有多少文件、本地搜索能用吗。"
-                ),
-                inputSchema={"type": "object", "properties": {}},
-            ),
-        ]
+        return _tools(tool_cls)
 
-    @server.call_tool()  # type: ignore[misc]
     async def call_tool(name: str, arguments: dict[str, Any]) -> list[Any]:
-        if name == "local_search":
-            return [text_content_cls(type="text", text=_run_query(arguments))]
-        if name == "local_search_status":
-            return [text_content_cls(type="text", text=_run_status())]
-        raise ValueError(f"unknown tool: {name}")
+        return await _call(text_content_cls, name, arguments)
 
+    probe = server_cls("catfish-local-search")
+    if hasattr(probe, "list_tools"):  # mcp 1.x
+        probe.list_tools()(list_tools)
+        probe.call_tool()(call_tool)
+        return probe, stdio_server
+
+    from mcp.types import CallToolResult, ListToolsResult  # noqa: PLC0415
+
+    async def list_tools_v2(_ctx: Any, _params: Any) -> Any:
+        return ListToolsResult(tools=await list_tools())
+
+    async def call_tool_v2(_ctx: Any, params: Any) -> Any:
+        return CallToolResult(content=await call_tool(params.name, params.arguments))
+
+    server = server_cls("catfish-local-search", on_list_tools=list_tools_v2, on_call_tool=call_tool_v2)
     return server, stdio_server
 
 
