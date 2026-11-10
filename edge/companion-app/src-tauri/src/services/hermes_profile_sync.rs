@@ -168,6 +168,10 @@ pub fn sync_profile_from_default(hermes: &Path, profile: &Path) {
             );
         }
     }
+    // 11/11: 规定配置也跟主配置一致 (原来只在克隆那一刻带过去, 后加的规定项到不了专家 Bot)
+    if let Err(error) = super::hermes_policy_config::ensure_profile(&profile_config_path, hermes) {
+        log::warn!("[hermes-profile-sync] {} 规定配置没写成: {error:#}", profile_config_path.display());
+    }
     let _ = sync_auth_json(profile);
     if let Some(base_url) = env_value(&root_env, "OPENAI_BASE_URL") {
         let _ = sync_auth_json_base_url(profile, base_url);

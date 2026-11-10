@@ -229,46 +229,71 @@ tell application "Mail"
         -- DO NOT send (red line): the draft only goes into the Drafts mailbox
     end tell
 
+    -- 11/11: Mail files a saved draft by its own rules, not always in the Drafts box of the account
+    -- we asked for (11/11 test: asked for Google, landed in Chinatelecom; looking only in Google's
+    -- box found nothing, we returned a placeholder id, and Companion's jump opened nothing).
+    -- So snapshot every account's Drafts box first and look for the new copy in all of them.
+    set accts to every account
+    set beforeAll to {}
+    repeat with a in accts
+        set ids to missing value
+        try
+            set ids to id of every message of (my resolveInbox(a, "Drafts"))
+        end try
+        set end of beforeAll to ids
+    end repeat
     set mbx to my resolveInbox(acc, "Drafts")
-    set beforeIds to {}
-    set haveBefore to false
-    try
-        set beforeIds to id of every message of mbx
-        set haveBefore to true
-    end try
     save newMsg in mbx
     set outId to (id of newMsg) as string
 
-    -- the saved copy is the message that was not in the Drafts mailbox before
-    -- (without a before-snapshot an older draft with the same subject could be taken for it)
+    -- the saved copy is the message that was not in a Drafts box before and has our subject;
+    -- an account whose box could not be read before is skipped (an older draft with the same
+    -- subject there could be taken for it)
     set savedId to ""
-    if not haveBefore then set savedId to "-"
-    repeat 20 times
-        if savedId is "-" then exit repeat
-        try
-            set nowIds to id of every message of mbx
-            set newIds to {}
-            set fallbackId to ""
-            set k to 0
-            repeat with x in nowIds
-                set k to k + 1
-                if beforeIds does not contain (contents of x) then
-                    set fallbackId to (contents of x) as string
-                    set end of newIds to fallbackId
-                    set candSubj to ""
-                    try
-                        set candSubj to (subject of (message k of mbx)) as string
-                    end try
-                    if candSubj is subj then set savedId to fallbackId
-                end if
-            end repeat
-            if savedId is "" and (count of newIds) is 1 then set savedId to fallbackId
-        end try
+    set savedAcc to (name of acc) as string
+    set loneId to ""
+    set loneAcc to ""
+    set newCount to 0
+    repeat 24 times
+        set newCount to 0
+        set k to 0
+        repeat with a in accts
+            set k to k + 1
+            set beforeIds to item k of beforeAll
+            if beforeIds is not missing value then
+                try
+                    set box to my resolveInbox(a, "Drafts")
+                    set nowIds to id of every message of box
+                    set j to 0
+                    repeat with x in nowIds
+                        set j to j + 1
+                        if beforeIds does not contain (contents of x) then
+                            set newCount to newCount + 1
+                            set loneId to (contents of x) as string
+                            set loneAcc to (name of a) as string
+                            set candSubj to ""
+                            try
+                                set candSubj to (subject of (message j of box)) as string
+                            end try
+                            if candSubj is subj then
+                                set savedId to loneId
+                                set savedAcc to loneAcc
+                                exit repeat
+                            end if
+                        end if
+                    end repeat
+                end try
+            end if
+            if savedId is not "" then exit repeat
+        end repeat
+        if savedId is "" and newCount is 1 then
+            set savedId to loneId
+            set savedAcc to loneAcc
+        end if
         if savedId is not "" then exit repeat
         delay 0.25
     end repeat
-    if savedId is "-" then set savedId to ""
-    return ((name of acc) as string) & FS & savedId & FS & outId
+    return savedAcc & FS & savedId & FS & outId
 end tell
 """ + _AS_DRAFT_HANDLERS + AS_RESOLVE_INBOX + AS_FIND_MESSAGE
 

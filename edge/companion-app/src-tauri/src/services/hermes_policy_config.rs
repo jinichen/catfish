@@ -17,6 +17,9 @@
 //! | `webapp.enabled` (v0.23) | false | **false** | 网关把桌面工作台开成网页 (可以开到局域网 / 公网), 员工机不开放 |
 //! | `plugins.auto_apply` (v0.23) | false | **false** | 插件自动更新; 鲶鱼插件由 Companion 发版, 不让 hermes 自己换 |
 //! | `agent.disabled_toolsets` 加 `browser` (只 v0.23+) | — | 加 | v0.23 删了老 browser_* 工具, 浏览器工具集只剩 `browser_exec` (在本机跑任意 Python, 等于开了 shell); 鲶鱼用自己的 catfish_browser_*。v0.22 上这个工具集还是老工具, 不动 |
+//! | `delegation.gateway_mode` (v0.23) | auto | **inline** | 11/11: 小鲶派帮手 (delegate_task) 时, auto 对 API 会话 (Companion) 走后台: 本轮立刻结束只回「已派出」, 结果写进会话不叫醒模型 —— 员工再说一句才看得到; 帮手要删文件的审批请求也发不到员工 (待审批列表里没有), 干等到超时。inline = 帮手并行干完、本轮汇总回答, 审批照常弹 (临时网关实测) |
+//! | `delegation.subagent_auto_approve` | false | **false** | 帮手碰到要审批的命令不许自动放行 (写明, 防有人改开) |
+//! | `delegation.max_concurrent_children` | 10 | 3 (没配才补) | 同时最多几个帮手。10 个会一下打 10 路请求给中央模型, 费用和排队都扛不住 |
 //! | `plugins.load_timeout_seconds` | 10 秒 | 90 (没配才补) | 11/02: 8G 内存的 Windows 上小鲶插件装载要十几秒, 超时后它启动时注册的 memory 工具被 hermes 忽略 —— 重启后第一个对话的「记住」写进了 hermes 自带的记忆 |
 //!
 //! 「强制」的几项每次启动都校正 (有人改回去也改回来) —— 都是安全 / 数据相关, 员工不该自己开;
@@ -46,7 +49,7 @@ const TOOL_OVERRIDE_PLUGINS: [&str; 2] = ["catfish-xcatfish-user", "catfish-memo
 const TOOL_OVERRIDE_CAPABILITY: &str = "tools.override";
 
 /// 强制的布尔项: (路径, 值)
-const ENFORCED: [(&[&str], bool); 7] = [
+const ENFORCED: [(&[&str], bool); 8] = [
     (&["sessions", "auto_prune"], false),
     (&["auth", "adopt_external_logins"], false),
     (&["security", "allow_lazy_installs"], false),
@@ -54,7 +57,13 @@ const ENFORCED: [(&[&str], bool); 7] = [
     (&["tools", "connectors", "enabled"], false),
     (&["webapp", "enabled"], false),
     (&["plugins", "auto_apply"], false),
+    (&["delegation", "subagent_auto_approve"], false),
 ];
+
+/// 小鲶派帮手时等帮手干完、本轮回答 (见文件头表格 `delegation.gateway_mode`)。
+pub const DELEGATION_GATEWAY_MODE: &str = "inline";
+/// 同时最多几个帮手。
+pub const DELEGATION_MAX_CHILDREN: u64 = 3;
 
 fn yaml_path() -> Result<PathBuf> {
     if let Ok(home) = std::env::var("HERMES_HOME") {
@@ -127,6 +136,33 @@ fn ensure_in_list(root: &mut Mapping, path: &[&str], item: &str) -> bool {
 
 /// 把规定配置落到 config.yaml。返回改了哪些 key (空 = 没改)。
 pub fn ensure_at(path: &Path) -> Result<Vec<String>> {
+    ensure_with_home(path, path.parent().unwrap_or(Path::new(".")))
+}
+
+/// 专家 Bot 的 profile (`<hermes home>/profiles/<id>/config.yaml`) 也要同一套规定配置 (11/11)。
+///
+/// 原来只给主配置写, profile 是建的时候从主配置克隆一次, 之后只同步模型和凭据 —— 后来加的规定项
+/// (今天的派帮手三项、v0.23 关掉的浏览器工具集 ...) 到不了专家 Bot。hermes 版本看主目录, 不看 profile 目录。
+pub fn ensure_profile(profile_config: &Path, hermes_home: &Path) -> Result<Vec<String>> {
+    ensure_with_home(profile_config, hermes_home)
+}
+
+/// 启动时给已有的每个 profile 补一遍 (没有 profiles 目录 = 没建过专家 Bot, 什么都不做)。
+pub fn ensure_profiles() -> Vec<(String, Result<Vec<String>>)> {
+    let Ok(main) = yaml_path() else { return Vec::new() };
+    let Some(home) = main.parent() else { return Vec::new() };
+    let Ok(dirs) = fs::read_dir(home.join("profiles")) else { return Vec::new() };
+    let mut out = Vec::new();
+    for entry in dirs.flatten() {
+        let cfg = entry.path().join("config.yaml");
+        if cfg.is_file() {
+            out.push((entry.file_name().to_string_lossy().into_owned(), ensure_profile(&cfg, home)));
+        }
+    }
+    out
+}
+
+fn ensure_with_home(path: &Path, version_home: &Path) -> Result<Vec<String>> {
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -148,8 +184,7 @@ pub fn ensure_at(path: &Path) -> Result<Vec<String>> {
     if ensure_in_list(map, &["agent", "disabled_toolsets"], "connections") {
         changed.push("agent.disabled_toolsets+connections".into());
     }
-    let home = path.parent().unwrap_or(Path::new("."));
-    if crate::services::hermes_gateway_route::hermes_home_is_v023(home)
+    if crate::services::hermes_gateway_route::hermes_home_is_v023(version_home)
         && ensure_in_list(map, &["agent", "disabled_toolsets"], "browser")
     {
         changed.push("agent.disabled_toolsets+browser".into());
@@ -178,6 +213,12 @@ pub fn ensure_at(path: &Path) -> Result<Vec<String>> {
     }
     if set_if_missing(map, &["plugins", "load_timeout_seconds"], YamlValue::from(PLUGIN_LOAD_TIMEOUT_S)) {
         changed.push("plugins.load_timeout_seconds".into());
+    }
+    if set_if_different(map, &["delegation", "gateway_mode"], YamlValue::from(DELEGATION_GATEWAY_MODE)) {
+        changed.push("delegation.gateway_mode".into());
+    }
+    if set_if_missing(map, &["delegation", "max_concurrent_children"], YamlValue::from(DELEGATION_MAX_CHILDREN)) {
+        changed.push("delegation.max_concurrent_children".into());
     }
 
     if changed.is_empty() {
@@ -232,6 +273,21 @@ mod tests {
     }
 
     #[test]
+    fn expert_bot_profiles_get_the_same_policy() {
+        let tmp = TempDir::new().unwrap();
+        let profile = tmp.path().join("profiles").join("expert-1");
+        fs::create_dir_all(&profile).unwrap();
+        let cfg_path = profile.join("config.yaml");
+        fs::write(&cfg_path, "model:\n  provider: custom\ndelegation:\n  gateway_mode: auto\n").unwrap();
+        let changed = ensure_profile(&cfg_path, tmp.path()).unwrap();
+        assert!(changed.contains(&"delegation.gateway_mode".to_string()), "{changed:?}");
+        let r = root(&cfg_path);
+        assert_eq!(r["delegation"]["gateway_mode"].as_str(), Some("inline"));
+        assert_eq!(r["sessions"]["auto_prune"].as_bool(), Some(false));
+        assert_eq!(r["model"]["provider"].as_str(), Some("custom"), "profile 自己的模型配置不动");
+    }
+
+    #[test]
     fn missing_file_is_left_alone() {
         let tmp = TempDir::new().unwrap();
         let p = tmp.path().join("config.yaml");
@@ -261,6 +317,9 @@ mod tests {
         assert_eq!(r["approvals"]["timeout"].as_u64(), Some(1800));
         assert_eq!(approval_timeout_at(&p), 1800);
         assert_eq!(r["plugins"]["load_timeout_seconds"].as_u64(), Some(90));
+        assert_eq!(r["delegation"]["gateway_mode"].as_str(), Some("inline"));
+        assert_eq!(r["delegation"]["subagent_auto_approve"].as_bool(), Some(false));
+        assert_eq!(r["delegation"]["max_concurrent_children"].as_u64(), Some(3));
         for plugin in TOOL_OVERRIDE_PLUGINS {
             let e = &r["plugins"]["entries"][plugin];
             assert_eq!(e["granted_capabilities"][0].as_str(), Some("tools.override"), "{plugin}");
@@ -317,6 +376,13 @@ mod tests {
             .filter_map(|v| v.as_str())
             .collect();
         assert_eq!(toolsets, ["browser", "connections"], "原有的保留, 追加 connections");
+        // 11/11 派帮手: 本轮等结果、不许自动放行 —— 改了也改回来; 同时几个帮手尊重运维的值
+        let p3 = cfg(&tmp, "delegation:\n  gateway_mode: auto\n  subagent_auto_approve: true\n  max_concurrent_children: 5\n");
+        ensure_at(&p3).unwrap();
+        let r3 = root(&p3);
+        assert_eq!(r3["delegation"]["gateway_mode"].as_str(), Some("inline"));
+        assert_eq!(r3["delegation"]["subagent_auto_approve"].as_bool(), Some(false));
+        assert_eq!(r3["delegation"]["max_concurrent_children"].as_u64(), Some(5), "运维调过的帮手数不动");
     }
 
     #[test]

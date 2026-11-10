@@ -103,4 +103,23 @@ describe("draftJump", () => {
       expect(ui.openEmailDraft).not.toHaveBeenCalled();
     });
   });
+
+  // 11/11 鸿波: 「跳到了草稿箱, 但没打开那封邮件」—— 记下的是占位号 apple_mail|Google|outgoing-6
+  it("记下的是占位号 → 不拿它选中, 去问草稿箱里这一回合新存的那封", async () => {
+    const roundStartedAt = Date.now() - 20_000;
+    lastDraft.mockResolvedValueOnce({ id: "apple_mail|Google|outgoing-6", created_at: Date.now() / 1000 - 5 });
+    chat.messages = [{ role: "assistant", content: "好了。" }]; // 没提「草稿」也要问: 这一回合确实存过
+    recentDraft.mockResolvedValueOnce({ id: "apple_mail|Chinatelecom|3565", created_at: Date.now() / 1000 - 5 });
+    await jumpToFreshDraft(roundStartedAt);
+    expect(recentDraft).toHaveBeenCalledTimes(1);
+    expect(ui.openEmailDraft).toHaveBeenCalledWith("apple_mail|Chinatelecom|3565");
+    expect(ui.openEmailDraft).not.toHaveBeenCalledWith("apple_mail|Google|outgoing-6");
+  });
+
+  it("占位号而且草稿箱里也找不到 → 不跳", async () => {
+    lastDraft.mockResolvedValueOnce({ id: "apple_mail|Google|outgoing-7", created_at: Date.now() / 1000 });
+    recentDraft.mockResolvedValueOnce(null);
+    await jumpToFreshDraft(Date.now() - 10_000);
+    expect(ui.openEmailDraft).not.toHaveBeenCalled();
+  });
 });

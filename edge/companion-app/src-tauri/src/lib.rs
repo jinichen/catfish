@@ -220,6 +220,14 @@ pub fn run() {
                 Ok(_) => log::debug!("hermes 规定配置已是最新或 hermes 未装, 不动"),
                 Err(e) => log::warn!("hermes 规定配置 ensure 失败 (不阻塞启动): {e}"),
             }
+            // 11/11: 专家 Bot 的 profile 也补一遍 (原来只有建的那一刻从主配置克隆)
+            for (name, result) in services::hermes_policy_config::ensure_profiles() {
+                match result {
+                    Ok(changed) if !changed.is_empty() => log::info!("专家 Bot {name} 规定配置已写入: {}", changed.join(", ")),
+                    Ok(_) => {}
+                    Err(e) => log::warn!("专家 Bot {name} 规定配置 ensure 失败 (不阻塞启动): {e}"),
+                }
+            }
             // 10/22: hermes 自带的办公无关技能 (机器学习 / GitHub / 写代码 / 智能家居 ...) 默认停用 ——
             // 技能清单每次请求都发, 白占几千字。每台只停一次, 员工 / IT 启用过的不再关。
             match services::hermes_skills_default::apply_once() {

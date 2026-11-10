@@ -194,6 +194,20 @@ def test_new_draft_returns_the_saved_id_and_the_account_it_landed_in():
     assert drafts.outgoing_for(draft_id) == "4"
 
 
+def test_saved_draft_is_looked_for_in_every_accounts_drafts_box():
+    """11/11 鸿波:「跳到草稿箱但没打开那封」。小鲶存草稿时 Mail 把它放进了 Chinatelecom 的草稿箱, 而我们只在
+    (默认发件的) Google 草稿箱里找, 找不到就回了占位号 apple_mail|Google|outgoing-6, Companion 打不开它。
+    现在存之前给每个账号的草稿箱拍快照, 存完在所有账号里找新出现、主题一样的那封, 报它真正落的账号。"""
+    calls, fake_run = _run_recorder(f"Chinatelecom{FS}3567{FS}12")
+    draft_id = _create(fake_run, account="Google")
+    assert draft_id == "apple_mail|Chinatelecom|3567"   # 报真正落的账号, 不是要求的那个
+    script = calls[-1]
+    assert "set accts to every account" in script and "repeat with a in accts" in script
+    assert "set end of beforeAll to ids" in script            # 每个账号都拍了快照
+    assert "if candSubj is subj then" in script               # 认主题, 不随便拿一封新的
+    assert "return savedAcc & FS & savedId & FS & outId" in script
+
+
 def test_reply_draft_goes_to_the_account_of_the_original_mail():
     calls, fake_run = _run_recorder(f"Chinatelecom{FS}2802{FS}5")
     _create(fake_run, in_reply_to="apple_mail|Chinatelecom|2760")

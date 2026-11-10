@@ -149,6 +149,13 @@ def register(ctx) -> None:
                 "catfish-xcatfish-user register_hook fail: %s (fail-loud 降级)", e
             )
 
+        # 11/11: 小鲶派的帮手 (delegate_task) 记成跟父对话同一个员工 / 来源。见 plugin_api_turn.subagent_start_hook。
+        try:
+            ctx.register_hook("subagent_start", _mod.plugin_api_turn.subagent_start_hook)
+            logger.info("catfish-xcatfish-user: subagent_start 钩子 ✓ (帮手记成父对话的员工)")
+        except Exception as e:
+            logger.warning("catfish-xcatfish-user subagent_start 钩子挂不上: %s (帮手请求退回本机默认用户)", e)
+
         # 10/14 hermes v0.22 审批默认 smart (AI 先判断): 每次审批结果记到 ~/.catfish/approval_audit.jsonl,
         # 管理员能查"AI 自动批了哪些"。见 approval_audit.py。
         try:

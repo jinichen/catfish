@@ -57,11 +57,16 @@ def _session_chain(agent) -> list[str]:
     if not sid:
         return []
     chain = [sid]
+    # 11/11: 派出去的帮手 (delegate_task) 建出来时就带着父会话号 (agent._parent_session_id)。它的模型客户端在
+    # 建的时候就把请求头定了, 那时库里还没有它这一行、subagent_start 钩子也还没调 —— 只能从这个属性往上找。
+    direct_parent = str(getattr(agent, "_parent_session_id", "") or "").strip()
+    if direct_parent and direct_parent != sid:
+        chain.append(direct_parent)
     db = getattr(agent, "_session_db", None)
     get = getattr(db, "get_session", None)
     if not callable(get):
         return chain
-    cur = sid
+    cur = chain[-1]
     for _ in range(_PARENT_HOPS):
         try:
             row = get(cur) or {}
@@ -77,7 +82,9 @@ def _session_chain(agent) -> list[str]:
 
 def _is_api_agent(agent) -> bool:
     platform = str(getattr(agent, "platform", "") or "").lower().strip()
-    return platform in ("", "api_server")
+    # 11/11: subagent = 小鲶派出去的帮手 (delegate_task)。它的会话号是新开的, 登记表里由 subagent_start_hook
+    # 记成跟父对话同一个员工 / 来源; 认不出来时照旧走 resolver 兜底。
+    return platform in ("", "api_server", "subagent")
 
 
 def outgoing_user(agent) -> str:
@@ -153,3 +160,28 @@ def _patch_p65_api_turn_identity() -> None:
     admit_api_steps._catfish_p65 = True  # type: ignore[attr-defined]
     session_api_turn.admit_api_steps = admit_api_steps
     logger.info("P65 ✓ api 对话排队时登记会话 → 员工 (v0.23 不再经过 _create_agent)")
+
+
+def subagent_start_hook(parent_session_id: Any = None, child_session_id: Any = None, **_: Any) -> None:
+    """hermes 派帮手时调 (subagent_start)。把帮手的会话记成跟父对话同一个员工、同一个来源。
+
+    11/11 临时网关实测: 父对话发给网关的请求带员工本人 (X-Catfish-User), 两个帮手带的却是本机默认用户 ——
+    帮手是 platform=subagent 的新会话, 登记表里没有它。员工机上默认用户就是登录的那位, 实际记账没错,
+    但多人共用一台网关时会记到别人头上。父会话往上找几层 (压缩续接出来的也算)。"""
+    child = str(child_session_id or "").strip()
+    parent = str(parent_session_id or "").strip()
+    if not child or not parent:
+        return None
+    try:
+        reg = _registry()
+        user = (reg.lookup(parent) or "").strip()
+        source = (reg.lookup_source(parent) or "").strip()
+        if user:
+            reg.register(child, user)
+        if source:
+            reg.register_source(child, source)
+        logger.info("subagent_start: 帮手 %s ← 父会话 %s (%s)", child, parent, "已登记" if user else "父会话没登记过, 帮手退回默认用户")
+    except Exception:  # noqa: BLE001  记不上只是退回默认用户, 不能拦着派帮手
+        logger.debug("subagent_start: 帮手会话没登记上", exc_info=True)
+    return None
+

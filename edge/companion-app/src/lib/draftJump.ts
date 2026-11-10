@@ -17,6 +17,9 @@ import { emailLastDraft, emailRecentDraft } from "./tauri";
 import { useChatStore } from "../store/chat";
 import { useUIStore } from "../store/ui";
 
+/** 邮件组件存了但没认出是哪一封时给的占位号 (catfish_email/adapters/apple_mail_drafts.py PENDING_PREFIX) */
+const PENDING_ID = /\|outgoing-[^|]*$/;
+
 /** Python 的 time.time() 和 Date.now() 是同一台机器的钟; 留一点给浮点和换算 */
 const CLOCK_SLACK_MS = 1000;
 
@@ -38,11 +41,15 @@ export async function jumpToFreshDraft(roundStartedAt: number): Promise<void> {
   if (useUIStore.getState().activeTab !== "chat") return;
   try {
     const last = await emailLastDraft();
-    if (last?.id && last.created_at * 1000 >= roundStartedAt - CLOCK_SLACK_MS) {
-      useUIStore.getState().openEmailDraft(last.id);
+    const fresh = !!last?.id && last.created_at * 1000 >= roundStartedAt - CLOCK_SLACK_MS;
+    // 11/11: 「…|outgoing-N」是占位号 —— 交给 Mail 存了, 但没在草稿箱里认出是哪一封 (Mail 把它放进了
+    // 别的账号的草稿箱, 1.2.146 前只在指定账号里找)。拿它去选中只会读不到、被当成「邮件不存在」。
+    // 这一回合确实存了草稿, 直接去问草稿箱里新存的那封。
+    if (fresh && !PENDING_ID.test(last!.id)) {
+      useUIStore.getState().openEmailDraft(last!.id);
       return;
     }
-    if (!roundMentionsDraft()) return;
+    if (!fresh && !roundMentionsDraft()) return;
     const maxAgeSecs = Math.ceil((Date.now() - roundStartedAt) / 1000) + 5;
     const found = await emailRecentDraft(maxAgeSecs);
     // 查的这几秒里员工可能已经切走了
