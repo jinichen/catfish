@@ -16,6 +16,9 @@ use std::sync::Mutex;
 
 use serde_json::Value;
 
+/// 钥匙串服务名。只有 macOS / Windows 有系统凭据库后端用得到 (见下面 `entry`); Linux 上不编译,
+/// 免得 CI (Linux) 报 dead_code。
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const SERVICE: &str = "catfish-collab-rooms";
 const ACCOUNT: &str = "rooms-db-key";
 /// 带密钥的方法: 群聊 / 群里的小鲶 / 派任务 (群里派的任务会往群里发任务卡和状态)。
