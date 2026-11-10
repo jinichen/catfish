@@ -133,6 +133,8 @@ interface EmailState {
   setUrgencyMap: (map: Record<string, string>) => void;
   /** 标某封已读 — 加进 readIds, 持久化. 主动闲聊路径检查这个 set 跳过. */
   markRead: (id: string) => void;
+  /** 拉回来的列表里, 在「拉取发出之后才读过」的邮件保持已读 (见 markRead 里的说明) */
+  applyRecentRead: <T>(list: T[], fetchStartedAt: number) => T[];
   /** 批量标已读 (e.g. 员工在 EmailTab 选多封) */
   markReadBulk: (ids: string[]) => void;
   /** 检查某 id 是否被标过 — 主动闲聊 / 通知 dedup 用 */
@@ -181,6 +183,26 @@ interface EmailState {
   markDeleted: (item: { id: string; message_id?: string }) => void;
   /** 一份刚拉回的列表来了: 撤掉服务器已确认没了的墓碑 (complete 时), 返回藏掉墓碑后的列表 */
   acceptList: <T extends { id: string; message_id?: string }>(fresh: T[], complete: boolean) => T[];
+}
+
+/** 这次运行里在 Companion 点开过的邮件 → 点开的时刻。只在内存里: 重启后列表以邮件客户端为准。 */
+const recentReadAt = new Map<string, number>();
+/** 标已读要经过 AppleScript / 客户端落库, 给一点余量: 读过之后这么久内发出的拉取也可能还没看到 */
+export const READ_SETTLE_MS = 5000;
+
+/** 拉取是在读这封信之前 (或刚读完那几秒内) 发出的 → 它带回来的「未读」是旧的, 保持已读。
+ *  之后发出的拉取以邮件客户端为准 (员工在客户端里手动标回未读, 这边会跟着变)。 */
+export function applyRecentRead<T>(list: T[], fetchStartedAt: number): T[] {
+  if (recentReadAt.size === 0) return list;
+  return list.map((it) => {
+    const m = it as { id?: string; is_read?: boolean };
+    const at = m.id ? recentReadAt.get(m.id) : undefined;
+    return at !== undefined && !m.is_read && fetchStartedAt <= at + READ_SETTLE_MS ? ({ ...(it as object), is_read: true } as T) : it;
+  });
+}
+
+export function _resetRecentReadForTest(): void {
+  recentReadAt.clear();
 }
 
 export const useEmailStore = create<EmailState>((set, get) => ({
@@ -285,12 +307,25 @@ export const useEmailStore = create<EmailState>((set, get) => ({
 
   markRead: (id) => {
     if (!id) return;
+    // 11/11: 「看过了切走再回来又变未读」。两处漏: ① 跨挂载的列表缓存没跟着改, 切回来先显示的是
+    // 缓存里未读的旧样子; ② 点开之前就发出去的那轮后台拉取 (从 Mail 拉一次十几秒) 晚回来, 带着
+    // 「未读」把页面和缓存都盖回去。这里改缓存 + 记下几点读的, applyRecentRead 挡住旧结果。
+    recentReadAt.set(id, Date.now());
+    const cache = get().listCache;
+    if (cache && cache.items.some((it) => (it as { id?: string; is_read?: boolean }).id === id && !(it as { is_read?: boolean }).is_read)) {
+      get().setListCache({
+        items: cache.items.map((it) => ((it as { id?: string }).id === id ? { ...(it as object), is_read: true } : it)),
+        sentItems: cache.sentItems,
+        accounts: cache.accounts,
+      });
+    }
     const next = new Set(get().readIds);
     if (next.has(id)) return;  // 已标过, 不重复 trigger persist
     next.add(id);
     set({ readIds: next });
     savePersistedRead(next);
   },
+  applyRecentRead: (list, fetchStartedAt) => applyRecentRead(list, fetchStartedAt),
 
   markReadBulk: (ids) => {
     const next = new Set(get().readIds);

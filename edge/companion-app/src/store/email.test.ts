@@ -228,3 +228,47 @@ describe("useEmailStore - 列表落盘缓存 (10/31)", () => {
     expect(useEmailStore.getState().listCache).toBeNull();
   });
 });
+
+// 11/11: 「看过了切走再回来又变未读」
+describe("读过的邮件不被旧列表改回未读", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    localStorage.clear();
+    invokeMock.mockResolvedValue(undefined); // 缓存落盘走 Tauri invoke, 真实里返回 Promise
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const mail = (id: string, is_read: boolean) => ({ id, is_read, date: "2026-11-10T19:02:00" });
+
+  it("点开时跨挂载的列表缓存也改成已读 (切回来先显示的就是它)", async () => {
+    const { useEmailStore } = await import("./email");
+    useEmailStore.getState().setListCache({ items: [mail("a", false), mail("b", false)], sentItems: [], accounts: [] });
+    useEmailStore.getState().markRead("a");
+    const items = useEmailStore.getState().listCache!.items as { id: string; is_read: boolean }[];
+    expect(items.map((m) => [m.id, m.is_read])).toEqual([["a", true], ["b", false]]);
+  });
+
+  it("点开之前发出的拉取晚回来: 保持已读; 之后发出的拉取: 以邮件客户端为准", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-11T05:00:00"));
+    const { useEmailStore, READ_SETTLE_MS } = await import("./email");
+    const fetchStartedBefore = Date.now();
+    vi.advanceTimersByTime(8000); // 拉取在路上的时候点开了信
+    useEmailStore.getState().markRead("a");
+    const readAt = Date.now();
+
+    const stale = useEmailStore.getState().applyRecentRead([mail("a", false), mail("b", false)], fetchStartedBefore);
+    expect(stale.map((m) => m.is_read)).toEqual([true, false]);
+
+    // 刚读完那几秒内发出的, 客户端可能还没落库 —— 也保持已读
+    expect(useEmailStore.getState().applyRecentRead([mail("a", false)], readAt + READ_SETTLE_MS)[0].is_read).toBe(true);
+    // 再往后发出的拉取说未读 (员工在邮件客户端里手动标回未读) → 跟着变
+    expect(useEmailStore.getState().applyRecentRead([mail("a", false)], readAt + READ_SETTLE_MS + 1)[0].is_read).toBe(false);
+  });
+
+  it("没点开过的信原样返回", async () => {
+    const { useEmailStore } = await import("./email");
+    const list = [mail("x", false)];
+    expect(useEmailStore.getState().applyRecentRead(list, Date.now())).toBe(list);
+  });
+});

@@ -20,7 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useEmailListCacheHydrate } from "../../hooks/useEmailListCacheHydrate";
 import { useEmailScanners } from "../../hooks/useEmailScanners";
-import { markFullRefresh, mergeNewest, planListFetch } from "../../lib/emailListPlan";
+import { markFullRefresh, mergeNewest, planListFetch, keepRecentRead } from "../../lib/emailListPlan";
 import {
   emailListFetch,
   emailAccountsFetch,
@@ -187,7 +187,7 @@ export default function EmailTab() {
       ]);
       if (viewRef.current.folder !== folder || viewRef.current.unreadOnly !== unreadOnly) return; // 已切走, 丢掉
       const cached = useEmailStore.getState().listCache;
-      const list = plan.incremental ? mergeNewest(cached?.items, JSON.parse(listJson), MAX_EMAIL_LIST_LIMIT) : JSON.parse(listJson);
+      const list = keepRecentRead(plan.incremental ? mergeNewest(cached?.items, JSON.parse(listJson), MAX_EMAIL_LIST_LIMIT) : JSON.parse(listJson), plan.startedAt, useEmailStore.getState().applyRecentRead); // 11/11 这轮发出之后才读过的信不许改回未读
       const sent = plan.incremental ? mergeNewest(cached?.sentItems, JSON.parse(sentJson), 200) : JSON.parse(sentJson);
       if (!plan.incremental) markFullRefresh();
       const accs = JSON.parse(accountsJson);

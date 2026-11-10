@@ -22,13 +22,17 @@ export interface ListFetchPlan {
   incremental: boolean;
   limit: number;
   sentLimit: number;
+  /** 11/11: 这轮拉取发出的时刻。从 Mail 拉一次十几秒, 期间员工点开的信, 这轮带回来的还是「未读」
+   *  —— 回来后不许把它改回未读 (keepRecentRead / store.applyRecentRead)。 */
+  startedAt: number;
 }
 
 export function planListFetch(o: { hasItems: boolean; full?: boolean; inboxAll: boolean; maxLimit: number }): ListFetchPlan {
   const incremental = o.inboxAll && o.hasItems && !o.full && Date.now() - lastFullAt < FULL_REFRESH_MS;
+  const startedAt = Date.now();
   return incremental
-    ? { incremental, limit: INCREMENTAL_LIMIT, sentLimit: INCREMENTAL_LIMIT }
-    : { incremental, limit: o.maxLimit, sentLimit: 200 };
+    ? { incremental, limit: INCREMENTAL_LIMIT, sentLimit: INCREMENTAL_LIMIT, startedAt }
+    : { incremental, limit: o.maxLimit, sentLimit: 200, startedAt };
 }
 
 export function markFullRefresh(): void {
@@ -49,4 +53,9 @@ export function mergeNewest<T>(prev: unknown[] | undefined, fresh: T[], max: num
   return [...fresh, ...rest]
     .sort((a, b) => String((b as Mail).date ?? "").localeCompare(String((a as Mail).date ?? "")))
     .slice(0, max);
+}
+
+/** 拉回来的列表过一遍「刚读过的保持已读」。不是数组 (后端回了别的)、或 store 没这个函数 (测试里的假 store) → 原样。 */
+export function keepRecentRead<T>(list: T, startedAt: number, apply?: (l: unknown[], at: number) => unknown[]): T {
+  return Array.isArray(list) && apply ? (apply(list, startedAt) as unknown as T) : list;
 }

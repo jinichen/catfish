@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { _setLastFullAtForTest, FULL_REFRESH_MS, INCREMENTAL_LIMIT, mergeNewest, planListFetch } from "./emailListPlan";
+import { _setLastFullAtForTest, FULL_REFRESH_MS, INCREMENTAL_LIMIT, keepRecentRead, mergeNewest, planListFetch } from "./emailListPlan";
 
 describe("邮件列表增量刷新 (10/31)", () => {
   it("手里有列表、收件箱全部视图、半小时内 → 只拉最新一小批", () => {
@@ -32,5 +32,29 @@ describe("邮件列表增量刷新 (10/31)", () => {
     expect(got.map((m) => m.id)).toEqual(["n", "a", "b"]);
     expect((got[1] as { is_read?: boolean }).is_read).toBe(true);
     expect(mergeNewest(undefined, fresh, 10).length).toBe(2);
+  });
+});
+
+// 11/11: 「看过了切走再回来又变未读」—— 计划里带上拉取发出的时刻, 结果回来时拿它挡旧的「未读」
+describe("keepRecentRead", () => {
+  it("计划记下拉取发出的时刻", () => {
+    const before = Date.now();
+    const p = planListFetch({ hasItems: true, inboxAll: true, maxLimit: 500 });
+    expect(p.startedAt).toBeGreaterThanOrEqual(before);
+    expect(p.startedAt).toBeLessThanOrEqual(Date.now());
+  });
+
+  it("数组交给 store 的函数处理, 带上发出时刻", () => {
+    const seen: number[] = [];
+    const out = keepRecentRead([{ id: "a" }], 123, (l, at) => { seen.push(at); return l.map((m) => ({ ...(m as object), is_read: true })); });
+    expect(seen).toEqual([123]);
+    expect(out).toEqual([{ id: "a", is_read: true }]);
+  });
+
+  it("不是数组、或没有那个函数 (假 store) → 原样返回", () => {
+    const notList = { error: "x" };
+    expect(keepRecentRead(notList, 1, (l) => l)).toBe(notList);
+    const list = [{ id: "a" }];
+    expect(keepRecentRead(list, 1, undefined)).toBe(list);
   });
 });
