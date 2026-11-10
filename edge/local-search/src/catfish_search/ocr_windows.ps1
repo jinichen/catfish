@@ -1,4 +1,4 @@
-# catfish 识字 (Windows, 11/10): 系统自带的 Windows.Media.Ocr, 由 ocr.py 常驻调用。
+﻿# catfish 识字 (Windows, 11/10): 系统自带的 Windows.Media.Ocr, 由 ocr.py 常驻调用。
 # 从标准输入一行读一个图片路径, 每张输出一行 JSON: {"path","ok","text"} 或 {"path","ok":false,"error"}。
 # 只认中文识别 (zh-Hans): 没装中文的「光学字符识别」语言功能就每行回 no_zh_ocr ——
 # 拿英文识别读中文只会是乱码, 不如明说。中文版 Windows 一般随显示语言自带。
