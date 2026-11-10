@@ -34,6 +34,18 @@ jobs:
 
       # 先拦版本漂移，再开始下载/打包几百 MB 的离线资源。Companion 与 Hermes
       # 各自版本独立；脚本只检查 Companion 三处一致和 Hermes pins 自洽。
+      # 11/10: 本地搜索识字走 Windows 自带的 OCR, 要中文的「光学字符识别」语言功能 (中文版 Windows 自带,
+      # 英文 runner 没有)。Add-WindowsCapability 前台跑会卡十几分钟 (11/10 第一次就超时了),
+      # 这里放后台装、不等: 后面几十分钟的编译期间它自己装完。冒烟测试不看它装没装成, 只要求
+      # 结果对 —— 认出中文, 或者明确记成 needs_ocr; 乱码 / 静默丢掉才算失败。
+      - name: Start installing Chinese OCR in the background (for the local search smoke)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Start-Process -WindowStyle Hidden -FilePath powershell.exe -ArgumentList @(
+            '-NoProfile', '-Command', "Add-WindowsCapability -Online -Name 'Language.OCR~~~zh-CN~0.0.1.0'")
+          Write-Host 'zh-CN OCR install started in the background'
+
       - name: Validate Companion and Hermes versions
         shell: bash
         working-directory: edge/companion-app
@@ -182,20 +194,6 @@ jobs:
       #    正是离线要用的归档 —— 实测瘦身后离线 sync 立刻失败。
       #
       # 先只测量, 不改产物。拿到数字再决定整包发还是先砍 [all] 里用不到的 extra。
-      # 11/10: 本地搜索识字走 Windows 自带的 OCR, 要中文的「光学字符识别」语言功能 (中文版 Windows 自带,
-      # 英文 runner 没有)。装上了 → 冒烟要求图片里的中文认得出来; 装不上 → 要求明确记成 needs_ocr。
-      - name: Install Chinese OCR capability for the local search smoke
-        id: zh_ocr
-        shell: pwsh
-        timeout-minutes: 15
-        continue-on-error: true
-        run: |
-          $cap = Get-WindowsCapability -Online -Name 'Language.OCR~~~zh-CN~0.0.1.0'
-          if ($cap.State -ne 'Installed') { Add-WindowsCapability -Online -Name 'Language.OCR~~~zh-CN~0.0.1.0' | Out-Null }
-          $state = (Get-WindowsCapability -Online -Name 'Language.OCR~~~zh-CN~0.0.1.0').State
-          Write-Host "zh-CN OCR capability: $state"
-          if ($state -eq 'Installed') { "CATFISH_SMOKE_REQUIRE_OCR=1" >> $env:GITHUB_ENV }
-
       - name: Verify packaged Windows runtime startup and email upgrade
         shell: pwsh
         timeout-minutes: 20

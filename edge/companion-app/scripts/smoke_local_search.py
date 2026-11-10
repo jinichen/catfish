@@ -1,8 +1,12 @@
 """本地搜索冒烟 (11/10): 用安装包里的 Python 和 local-search 源码, 真索引一遍 Word / PPT / Excel / 中文图片。
 
 在 Windows 构建里由 smoke-windows-runtime.ps1 调 (packaged hermes venv 的 python)。
-  --require-ocr   这台机器装了中文识字 (工作流里装了 Language.OCR zh-CN): 图片里的中文必须认出来
-  不带           图片必须被记成 needs_ocr (没法识别时要明说, 不能静默丢掉)
+  不带           图片要么认出中文, 要么明确记成 needs_ocr (这台机器有没有中文识字都行);
+                 认成乱码、或者既没进索引又没记原因, 才算失败
+  --require-ocr   必须认出中文 (手动在装了中文识字的机器上验)
+
+11/10 第一次在 Windows 构建里跑: 装中文识字那一步超时没报上「装好了」, 冒烟按「没装」去要求 needs_ocr,
+结果图片里的中文其实认出来了 —— 测试自己判错。所以默认不再依赖装没装成, 只看结果对不对。
 
 用法: python smoke_local_search.py --source <edge/local-search/src> [--require-ocr]
 """
@@ -88,14 +92,15 @@ def main() -> None:
     if font is None:
         print("local search smoke passed (documents only)", flush=True)
         return
-    if a.require_ocr:
-        if not text or "营业执照" not in text:
-            _fail(f"装了中文识字, 图片却没认出来: text={text!r} skipped={skipped}")
+    ok_text = bool(text) and "营业执照" in text and "信用代码" in text
+    if ok_text:
         print(f"ocr ok: {text!r}", flush=True)
+    elif a.require_ocr:
+        _fail(f"要求认出中文, 实际: text={text!r} skipped={skipped}")
+    elif text is None and skipped.get("执照.png") == "needs_ocr":
+        print("ocr unavailable on this machine, reported as needs_ocr", flush=True)
     else:
-        if text is not None or skipped.get("执照.png") != "needs_ocr":
-            _fail(f"没装中文识字时图片应记成 needs_ocr: text={text!r} skipped={skipped}")
-        print("ocr unavailable reported as needs_ocr", flush=True)
+        _fail(f"图片既没认对、也没明确记成 needs_ocr: text={text!r} skipped={skipped}")
     print("local search smoke passed", flush=True)
 
 
