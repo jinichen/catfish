@@ -450,14 +450,17 @@ def memory_enforce_hook(tool_name: str = "", args: Optional[dict] = None,
         if action not in ("add", "replace"):
             return None
         target = args.get("target", "")
-        if target not in ("memory", "user"):
+        # 11/10: 模型常顺手传 target='journal' (11/08、11/09 各一次, hermes 回「Invalid memory target」),
+        # 跟 kind='journal' 一样代写进日志, 别让它转头去自己写文件
+        as_journal = target == "journal" or str(args.get("kind") or "").strip().lower() == "journal"
+        if target not in ("memory", "user") and not as_journal:
             return None
         content = args.get("content", "")
         if not isinstance(content, str) or not content.strip():
             return None
 
-        # 11/10: 调用时自己标了 kind='journal' → 直接代写进日志, 不用再判
-        if str(args.get("kind") or "").strip().lower() == "journal":
+        # 11/10: 调用时自己标了 kind='journal' (或 target='journal') → 直接代写进日志, 不用再判
+        if as_journal:
             append_journal(content)
             _audit_log({"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "tool": tool_name, "target": target, "action": action,
                         "content_preview": content[:100], "decision": "journal_appended", "reason": "kind=journal"})

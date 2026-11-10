@@ -207,6 +207,18 @@ def test_kind_journal_直接代写_不调模型_只追加(tmp_catfish, monkeypat
     assert "journal | 更正: 擎标一期框架协议号是 924" in text and "923 是金智达的" in text
 
 
+def test_target_journal_也代写_不让hermes报无效target(tmp_catfish, monkeypatch):
+    """11/08、11/09 小鲶传过 target='journal', hermes 回「Invalid memory target」, 它就转头自己写文件。"""
+    monkeypatch.setattr(memory_enforce, "_classify_memory_route", lambda *a: pytest.fail("不该调模型"))
+    result = memory_enforce.memory_enforce_hook(
+        tool_name="memory", args={"action": "add", "target": "journal", "content": "周会改到周四\n跟张三确认过"},
+    )
+    assert result["action"] == "block" and "已经记进日志" in result["message"]
+    assert "journal | 周会改到周四" in (tmp_catfish / "employee_journal.md").read_text(encoding="utf-8")
+    # 其它没见过的 target 照旧交给 hermes 自己报错
+    assert memory_enforce.memory_enforce_hook(tool_name="memory", args={"action": "add", "target": "x", "content": "y"}) is None
+
+
 def test_hook_block_when_target_mismatch(tmp_catfish, monkeypatch):
     """target=memory 但 LLM 判定 user → block + 建议改 target=user."""
     monkeypatch.setattr(memory_enforce, "_classify_memory_route",
