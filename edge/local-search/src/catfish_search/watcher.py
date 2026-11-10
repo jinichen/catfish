@@ -20,10 +20,11 @@ from .config import SearchConfig, load_config
 from .indexer import (
     full_index_lock,
     index_path,
+    note_too_large,
     remove_path,
     roots_needing_full_index,
     run_index,
-    should_index,
+    skip_reason,
 )
 
 logger = logging.getLogger("catfish.search.watcher")
@@ -114,8 +115,14 @@ def _flush(pending: _Pending, cfg: SearchConfig, force: bool = False) -> dict:
                 else:
                     result["skip"] += 1
                 continue
-            # upsert：先过滤，再索引。过滤不过的当跳过。
-            if not p.exists() or not should_index(p, cfg):
+            # upsert：先过滤，再索引。过滤不过的当跳过; 太大的记一笔给面板看。
+            if not p.exists():
+                result["skip"] += 1
+                continue
+            reason = skip_reason(p, cfg)
+            if reason is not None:
+                if reason == "too_large":
+                    note_too_large(p)
                 result["skip"] += 1
                 continue
             if index_path(p):

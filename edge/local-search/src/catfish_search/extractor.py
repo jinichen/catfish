@@ -1,7 +1,21 @@
 """从文件抽取纯文本。
 
-优先用 markitdown（支持 pdf/docx/xlsx/pptx 等）。
-没装 markitdown 时，md/txt 类纯文本可以直接读。
+# 11/10 改: 富文档不再只靠 markitdown
+
+Companion 拉起的 watcher 跑在 hermes 的 Python 环境里, 那里**没有 markitdown** ——
+于是员工机上新增的 Word / PPT / Excel / PDF 一个都进不了索引 (抽不出字 → 静默跳过)。
+鸿波开发机上旧的 launchd watcher 碰巧带 markitdown, 掩盖了这件事; 11/10 卸掉它后,
+往 ~/.catfish/outputs 放一份「任命书.docx」, 索引里查无此文件。
+
+现在用 hermes 环境里本来就装着的库 (src-tauri/hermes-extra-packages.txt, 跟 tool-bridge
+doc_text.py 同一套): pdf → pypdfium2, docx → python-docx, pptx → python-pptx,
+xlsx → openpyxl, xls → xlrd。它们缺了、或者是 .doc / .ppt / .epub 这种它们读不了的,
+再退回 markitdown (装了的话)。
+
+按「段」返回 (PDF 每页、PPT 每页、Excel 每个工作表、Word 整篇一段), 给 indexer 在文字
+超长时按段平均分额度用 —— 不然截断只留前面, 一本 54 个工作表的台账只搜得到前 10 个表。
+
+PPT 的文字常在「组合」形状里 (ITSS 汇报 57 页, 不进组合读是 0 字, 进去读 2.8 万字), 要递归。
 """
 from __future__ import annotations
 
@@ -67,18 +81,24 @@ def _try_import_markitdown():
 _MARKITDOWN = _try_import_markitdown()
 
 
-def extract_text(path: Path) -> str | None:
-    """从文件抽纯文本，失败返回 None。"""
+def extract_sections(path: Path) -> list[str] | None:
+    """抽文字, 按段返回 (见模块说明)。抽不出 / 失败返回 None。"""
     ext = path.suffix.lower()
     try:
         if ext in PLAIN_TEXT_EXTS:
-            return _read_plain(path)
+            return [_read_plain(path)]
         if ext in RICH_DOC_EXTS:
             return _read_rich(path)
     except Exception as e:
         logger.debug("extract failed for %s: %s", path, e)
         return None
     return None
+
+
+def extract_text(path: Path) -> str | None:
+    """从文件抽纯文本 (各段拼起来)，失败返回 None。"""
+    sections = extract_sections(path)
+    return None if sections is None else "\n\n".join(sections)
 
 
 def _read_plain(path: Path) -> str:
@@ -92,10 +112,138 @@ def _read_plain(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
-def _read_rich(path: Path) -> str | None:
-    """用 markitdown 读富文档。没装 markitdown 则跳过。"""
+def _pdf(path: Path) -> list[str]:
+    import pypdfium2 as pdfium  # noqa: PLC0415
+
+    pdf = pdfium.PdfDocument(str(path))
+    try:
+        pages = []
+        for i in range(len(pdf)):
+            page = pdf[i]
+            try:
+                pages.append(page.get_textpage().get_text_range().strip())
+            finally:
+                page.close()
+        return pages
+    finally:
+        pdf.close()
+
+
+def _docx(path: Path) -> list[str]:
+    from docx import Document  # noqa: PLC0415
+
+    doc = Document(str(path))
+    parts = [p.text for p in doc.paragraphs if p.text.strip()]
+    for table in doc.tables:
+        for row in table.rows:
+            parts.append(" | ".join(c.text.strip() for c in row.cells))
+    return ["\n".join(parts)]
+
+
+def _pptx_shape_texts(shapes, out: list[str]) -> None:
+    from pptx.enum.shapes import MSO_SHAPE_TYPE  # noqa: PLC0415
+
+    for shape in shapes:
+        if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+            _pptx_shape_texts(shape.shapes, out)
+            continue
+        if getattr(shape, "has_text_frame", False) and shape.text_frame.text.strip():
+            out.append(shape.text_frame.text.strip())
+        if getattr(shape, "has_table", False) and shape.has_table:
+            for row in shape.table.rows:
+                out.append(" | ".join(c.text.strip() for c in row.cells))
+
+
+def _pptx(path: Path) -> list[str]:
+    from pptx import Presentation  # noqa: PLC0415
+
+    slides = []
+    for i, slide in enumerate(Presentation(str(path)).slides, 1):
+        texts: list[str] = []
+        _pptx_shape_texts(slide.shapes, texts)
+        if slide.has_notes_slide:
+            note = slide.notes_slide.notes_text_frame.text.strip() if slide.notes_slide.notes_text_frame else ""
+            if note:
+                texts.append(note)
+        if texts:
+            slides.append(f"第 {i} 页\n" + "\n".join(texts))
+    return slides
+
+
+def _xlsx(path: Path) -> list[str]:
+    from openpyxl import load_workbook  # noqa: PLC0415
+
+    wb = load_workbook(str(path), read_only=True, data_only=True)
+    sheets = []
+    try:
+        for ws in wb.worksheets:
+            rows = []
+            for row in ws.iter_rows(values_only=True):
+                cells = ["" if v is None else str(v) for v in row]
+                if any(c.strip() for c in cells):
+                    rows.append(" | ".join(cells))
+            if rows:
+                sheets.append(f"{ws.title}\n" + "\n".join(rows))
+    finally:
+        wb.close()
+    return sheets
+
+
+def _xls(path: Path) -> list[str]:
+    import xlrd  # noqa: PLC0415
+
+    book = xlrd.open_workbook(str(path), on_demand=True)
+    sheets = []
+    try:
+        for sh in book.sheets():
+            rows = []
+            for r in range(sh.nrows):
+                cells = ["" if v is None else str(v) for v in sh.row_values(r)]
+                if any(c.strip() for c in cells):
+                    rows.append(" | ".join(cells))
+            if rows:
+                sheets.append(f"{sh.name}\n" + "\n".join(rows))
+    finally:
+        book.release_resources()
+    return sheets
+
+
+_NATIVE = {".pdf": _pdf, ".docx": _docx, ".pptx": _pptx, ".xlsx": _xlsx, ".xls": _xls}
+
+
+def _read_rich(path: Path) -> list[str] | None:
+    """富文档: 先用 hermes 环境里的库, 缺库 / 读不了的类型再退回 markitdown。"""
+    fn = _NATIVE.get(path.suffix.lower())
+    if fn is not None:
+        try:
+            return [s for s in fn(path) if s.strip()]
+        except ImportError:
+            pass  # 这台机器没装对应的库, 试 markitdown
     if _MARKITDOWN is None:
-        logger.debug("markitdown not installed, skipping %s", path)
+        logger.debug("no extractor for %s (markitdown not installed)", path)
         return None
     result = _MARKITDOWN.convert(str(path))
-    return getattr(result, "text_content", None) or getattr(result, "markdown", None)
+    text = getattr(result, "text_content", None) or getattr(result, "markdown", None)
+    return [text] if text else None
+
+
+def fit_sections(sections: list[str], cap: int) -> str:
+    """把各段拼成不超过 cap 字的正文。
+
+    不超 → 原样拼。超了 → 每段平均分额度 (短的段用不完的份额让给长的), 每段从头截。
+    这样一本 54 个工作表的台账, 每个表的表名和前面若干行都搜得到, 而不是只剩前 10 个表。
+    """
+    sep = "\n\n"
+    total = sum(len(s) for s in sections) + len(sep) * max(0, len(sections) - 1)
+    if total <= cap:
+        return sep.join(sections)
+    budget = max(0, cap - len(sep) * max(0, len(sections) - 1))
+    alloc = [0] * len(sections)
+    remaining = budget
+    order = sorted(range(len(sections)), key=lambda i: len(sections[i]))
+    for k, i in enumerate(order):
+        share = remaining // (len(order) - k)
+        take = min(len(sections[i]), share)
+        alloc[i] = take
+        remaining -= take
+    return sep.join(s[:alloc[i]] for i, s in enumerate(sections))

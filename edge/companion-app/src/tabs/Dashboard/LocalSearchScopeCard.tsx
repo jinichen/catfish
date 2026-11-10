@@ -42,6 +42,23 @@ interface LocalSearchStats {
   totalSizeBytes: number;
   lastIndexedAt: number | null;
   dbPath: string;
+  /** 11/10: 该收但没收进去的 (太大 / 抽不出字)。以前静默跳过, 员工看数字不动不知道为什么。 */
+  skippedTotal: number;
+  skipped: SkippedFile[];
+}
+interface SkippedFile {
+  path: string;
+  reason: string;
+  sizeBytes: number | null;
+}
+
+/** 跳过原因 → 员工看得懂的话 */
+function skippedReasonText(f: SkippedFile): string {
+  if (f.reason === "too_large") {
+    return f.sizeBytes ? `太大没收（${formatBytes(f.sizeBytes)}）` : "太大没收";
+  }
+  if (f.reason === "no_text") return "读不出文字（扫描件、全是图片，或文件损坏）";
+  return f.reason || "没收";
 }
 
 // BL-SEARCH-NO-BOOTSTRAP (7/27 鸿波实盘): watcher 只吃**文件变化事件**,
@@ -90,6 +107,7 @@ export default function LocalSearchScopeCard() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [typesExpanded, setTypesExpanded] = useState(false);
+  const [skippedExpanded, setSkippedExpanded] = useState(false);
   /** 正在跑索引时显的那行字 (加完目录自动补建 / 手点重建) */
   const [indexing, setIndexing] = useState<string | null>(null);
   /** 索引跑完后的完整输出 —— 里面有各目录条数和"读不了的目录"提示 */
@@ -350,6 +368,62 @@ export default function LocalSearchScopeCard() {
                         <code>{t.fileType}</code> × {t.count}
                       </span>
                     ))}
+                  </div>
+                )}
+                {stats.skippedTotal > 0 && (
+                  <div style={{ marginTop: 6 }}>
+                    <button
+                      type="button"
+                      onClick={() => setSkippedExpanded((v) => !v)}
+                      style={{
+                        fontSize: 12,
+                        background: "transparent",
+                        border: "none",
+                        cursor: "pointer",
+                        color: "var(--status-warn, #b45309)",
+                        padding: 0,
+                      }}
+                    >
+                      {skippedExpanded ? "▼" : "▶"} 有 {stats.skippedTotal.toLocaleString()} 个文件没收进索引
+                    </button>
+                    {skippedExpanded && (
+                      // 卡片总高封顶 380 (见上), 这里自己限高滚动, 不挤掉下面的「包含目录」
+                      <div
+                        style={{
+                          marginTop: 4,
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 3,
+                          paddingLeft: 4,
+                          maxHeight: 110,
+                          overflowY: "auto",
+                        }}
+                      >
+                        {stats.skipped.map((f) => (
+                          <div key={`sk-${f.path}`} style={{ fontSize: 11, lineHeight: 1.4 }}>
+                            <span>{f.path.split("/").pop()}</span>
+                            <span style={{ color: "var(--catfish-text-muted)" }}> · {skippedReasonText(f)}</span>
+                            <div
+                              style={{
+                                color: "var(--catfish-text-muted)",
+                                fontSize: 10,
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                              }}
+                              title={f.path}
+                            >
+                              {f.path}
+                            </div>
+                          </div>
+                        ))}
+                        {stats.skippedTotal > stats.skipped.length && (
+                          <div style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
+                            只列最近 {stats.skipped.length} 个
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </>

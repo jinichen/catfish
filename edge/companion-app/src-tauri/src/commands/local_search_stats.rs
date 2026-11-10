@@ -47,6 +47,40 @@ pub struct LocalSearchStats {
     pub last_indexed_at: Option<f64>,
     /// search.db 完整路径 — 员工知道索引落哪
     pub db_path: String,
+    /// 11/10: 该收但没收进去的文件数 (太大 / 抽不出字) — skipped_files 表。以前是静默跳过的。
+    pub skipped_total: i64,
+    /// 最近的跳过记录 (最多 SKIPPED_LIST_MAX 条, 新的在前)
+    pub skipped: Vec<SkippedFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedFile {
+    pub path: String,
+    /// "too_large" (超过大小上限) / "no_text" (抽不出文字: 扫描件 / 全是图片 / 文件坏了)
+    pub reason: String,
+    pub size_bytes: Option<i64>,
+}
+
+const SKIPPED_LIST_MAX: i64 = 50;
+
+/// 跳过记录。老索引库 (watcher 还没升级) 没有这张表 → 当作 0 条。
+fn collect_skipped(conn: &rusqlite::Connection) -> (i64, Vec<SkippedFile>) {
+    let total: i64 = match conn.query_row("SELECT COUNT(*) FROM skipped_files", [], |r| r.get(0)) {
+        Ok(n) => n,
+        Err(_) => return (0, vec![]),
+    };
+    let mut list = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT path, COALESCE(reason, ''), size_bytes FROM skipped_files ORDER BY at DESC LIMIT ?1",
+    ) {
+        if let Ok(rows) = stmt.query_map([SKIPPED_LIST_MAX], |r| {
+            Ok(SkippedFile { path: r.get(0)?, reason: r.get(1)?, size_bytes: r.get(2)? })
+        }) {
+            list.extend(rows.flatten());
+        }
+    }
+    (total, list)
 }
 
 /// 在已开 DB 上跑全部统计查询 — 抽出来给 #[cfg(test)] 用内存 DB 验 SQL.
@@ -116,6 +150,8 @@ pub async fn local_search_stats() -> Result<LocalSearchStats, String> {
             total_size_bytes: 0,
             last_indexed_at: None,
             db_path: db_path_str,
+            skipped_total: 0,
+            skipped: vec![],
         });
     }
 
@@ -123,6 +159,7 @@ pub async fn local_search_stats() -> Result<LocalSearchStats, String> {
         .map_err(|e| format!("打开 search.db 失败: {e}"))?;
 
     let (total_files, by_type, total_size_bytes, last_indexed_at) = collect_stats(&conn)?;
+    let (skipped_total, skipped) = collect_skipped(&conn);
 
     Ok(LocalSearchStats {
         db_exists: true,
@@ -131,6 +168,8 @@ pub async fn local_search_stats() -> Result<LocalSearchStats, String> {
         total_size_bytes,
         last_indexed_at,
         db_path: db_path_str,
+        skipped_total,
+        skipped,
     })
 }
 
@@ -194,6 +233,30 @@ mod tests {
         assert_eq!(by_type[0].count, 2);
         assert_eq!(by_type[1].file_type, ".txt");
         assert_eq!(by_type[1].count, 1);
+    }
+
+    #[test]
+    fn skipped_files_old_db_without_table_is_zero() {
+        let conn = setup_test_db();
+        let (n, list) = collect_skipped(&conn);
+        assert_eq!(n, 0);
+        assert!(list.is_empty());
+    }
+
+    #[test]
+    fn skipped_files_newest_first() {
+        let conn = setup_test_db();
+        conn.execute_batch(
+            "CREATE TABLE skipped_files (path TEXT PRIMARY KEY, reason TEXT, size_bytes INTEGER, at REAL);
+             INSERT INTO skipped_files VALUES ('/old.md', 'too_large', 30000000, 1.0);
+             INSERT INTO skipped_files VALUES ('/scan.pdf', 'no_text', 5000, 2.0);",
+        )
+        .unwrap();
+        let (n, list) = collect_skipped(&conn);
+        assert_eq!(n, 2);
+        assert_eq!(list[0].path, "/scan.pdf");
+        assert_eq!(list[0].reason, "no_text");
+        assert_eq!(list[1].size_bytes, Some(30000000));
     }
 
     #[test]

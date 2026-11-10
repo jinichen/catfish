@@ -510,7 +510,8 @@ jobs:
         include:
           - module: local-search
             python: "3.10"
-            extra_deps: "pyyaml"
+            # 11/10: 富文档抽取改用 hermes 环境里的这几个库 (extractor.py), 测试要真读 docx/pptx/xlsx/xls/pdf
+            extra_deps: "pyyaml python-docx python-pptx openpyxl xlrd pypdfium2 xlwt"
           - module: journal-agent
             python: "3.10"
             extra_deps: ""

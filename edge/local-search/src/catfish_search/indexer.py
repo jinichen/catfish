@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 
 from .config import DB_FILE, SearchConfig
-from .extractor import extract_text
+from .extractor import RICH_DOC_EXTS, extract_sections, fit_sections
 
 logger = logging.getLogger("catfish.search.indexer")
 
@@ -53,7 +53,34 @@ CREATE TABLE IF NOT EXISTS indexed_roots (
     finished_at REAL,
     file_count  INTEGER
 );
+
+-- 11/10: 没进索引的文件和原因 (too_large / no_text)。以前这些是静默跳过的 ——
+-- 员工往 outputs 放了 4 份 70~120MB 的 PPT, 面板上的数字一直不动, 没人知道为什么。
+-- Companion 面板读这张表显示「跳过 N 个」。
+CREATE TABLE IF NOT EXISTS skipped_files (
+    path        TEXT PRIMARY KEY,
+    reason      TEXT,
+    size_bytes  INTEGER,
+    at          REAL
+);
+
+-- 索引格式版本 (extract_version)。抽取规则变了要回填老数据时 +1, 见 _migrate。
+CREATE TABLE IF NOT EXISTS index_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
 """
+
+#: 每个文件最多收这么多字。11/10 从 50 万提到 300 万: 实测鸿波库 1920 个文件只有 7 个超 50 万
+#: (3 本研发加计台账 190~245 万字, 只搜得到前 20~26%); 全文放进去索引库只多 4~5% (台账重复度高,
+#: trigram 只记一次), 查询速度不变。超了按段平均分 (extractor.fit_sections)。
+MAX_CONTENT_CHARS = 3_000_000
+#: Word / PPT / Excel / PDF 不按 max_file_size_mb 拦 (大的多是图片, 字没几个: 121MB 的 ITSS PPT
+#: 才 3 万字), 只留一道防内存爆的上限。
+RICH_MAX_FILE_BYTES = 512 * 1024 * 1024
+#: 抽取规则版本。2 = 11/10 (hermes 环境的库读富文档、PPT 读组合、300 万字按段分)。
+EXTRACT_VERSION = 2
+_OLD_CONTENT_CAP = 500_000
 
 
 # 撞锁时最多等这么久再放弃（秒）。
@@ -73,7 +100,7 @@ CREATE TABLE IF NOT EXISTS indexed_roots (
 DB_BUSY_TIMEOUT_SEC = 30.0
 
 # SCHEMA 里建的表，用来判断要不要跑 DDL
-_EXPECTED_TABLES = ("documents", "file_meta", "indexed_roots")
+_EXPECTED_TABLES = ("documents", "file_meta", "indexed_roots", "skipped_files", "index_meta")
 
 
 def open_db() -> sqlite3.Connection:
@@ -98,7 +125,53 @@ def open_db() -> sqlite3.Connection:
     }
     if not all(t in have for t in _EXPECTED_TABLES):
         conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """抽取规则升级后把老数据补齐 (只做一次)。
+
+    v2 (11/10): 老版本在没有 markitdown 的机器上收不进 Word / PPT / Excel / PDF, 超 20MB 的文档
+    也被拦; 已收的超长文件只留了前 50 万字。
+      · 清 indexed_roots → watcher 下次启动把各目录重走一遍 (没变的按 mtime 跳过, 很快),
+        漏掉的文档这次收进来;
+      · 删掉正文正好卡在 50 万字的文件的 file_meta → 那一遍会按新规则重新抽。
+    """
+    try:
+        row = conn.execute("SELECT value FROM index_meta WHERE key='extract_version'").fetchone()
+        if row is not None and int(row[0]) >= EXTRACT_VERSION:
+            return
+        conn.execute(
+            "DELETE FROM file_meta WHERE path IN "
+            "(SELECT path FROM documents WHERE length(content) >= ?)", (_OLD_CONTENT_CAP,),
+        )
+        conn.execute("DELETE FROM indexed_roots")
+        conn.execute(
+            "INSERT INTO index_meta(key, value) VALUES('extract_version', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (str(EXTRACT_VERSION),),
+        )
+        conn.commit()
+        logger.info("索引格式升到 v%d: 各目录下次补扫一遍, 收进之前漏掉的文档", EXTRACT_VERSION)
+    except sqlite3.Error as e:
+        logger.warning("索引格式升级没做成 (%s), 下次打开再试", e)
+
+
+def _record_skipped(conn: sqlite3.Connection, path: Path, reason: str) -> None:
+    try:
+        size = path.stat().st_size
+    except OSError:
+        size = None
+    conn.execute(
+        "INSERT INTO skipped_files(path, reason, size_bytes, at) VALUES(?, ?, ?, ?) "
+        "ON CONFLICT(path) DO UPDATE SET reason = excluded.reason, "
+        "size_bytes = excluded.size_bytes, at = excluded.at",
+        (str(path), reason, size, time.time()),
+    )
+
+
+def _clear_skipped(conn: sqlite3.Connection, path_str: str) -> None:
+    conn.execute("DELETE FROM skipped_files WHERE path = ?", (path_str,))
 
 
 def _should_skip(path: Path, exclude_patterns: list[str]) -> bool:
@@ -132,23 +205,33 @@ def _should_skip(path: Path, exclude_patterns: list[str]) -> bool:
     return False
 
 
+def skip_reason(path: Path, cfg: SearchConfig) -> str | None:
+    """None = 该收。"ignored" = 不归索引管 (类型不对 / exclude / 不是文件), 不记。
+    "too_large" = 该管但太大, 记进 skipped_files 给面板看。"""
+    if not path.is_file():
+        return "ignored"
+    ext = path.suffix.lower()
+    if ext not in cfg.file_types:
+        return "ignored"
+    if _should_skip(path, cfg.exclude):
+        return "ignored"
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return "ignored"
+    limit = RICH_MAX_FILE_BYTES if ext in RICH_DOC_EXTS else cfg.max_file_size_bytes
+    if size > limit:
+        return "too_large"
+    return None
+
+
 def _should_index(path: Path, cfg: SearchConfig) -> bool:
     """判断文件是否应该被索引。"""
-    if not path.is_file():
-        return False
-    if path.suffix.lower() not in cfg.file_types:
-        return False
-    try:
-        if path.stat().st_size > cfg.max_file_size_bytes:
-            return False
-    except OSError:
-        return False
-    if _should_skip(path, cfg.exclude):
-        return False
-    return True
+    return skip_reason(path, cfg) is None
 
 
-def _iter_files(root: Path, cfg: SearchConfig, errors: list[OSError] | None = None):
+def _iter_files(root: Path, cfg: SearchConfig, errors: list[OSError] | None = None,
+                too_large: list[Path] | None = None):
     """递归遍历目录，yield 合规的文件路径。遍历途中的 OSError 收进 `errors`。
 
     BL-SEARCH-EXCLUDE-DIR-FIX (7/27): 从 pathlib.rglob 换成 os.walk。
@@ -184,8 +267,11 @@ def _iter_files(root: Path, cfg: SearchConfig, errors: list[OSError] | None = No
         ]
         for name in filenames:
             p = base / name
-            if _should_index(p, cfg):
+            reason = skip_reason(p, cfg)
+            if reason is None:
                 yield p
+            elif reason == "too_large" and too_large is not None:
+                too_large.append(p)
 
 
 def _hash_content(text: str) -> str:
@@ -219,8 +305,10 @@ def _index_one(conn: sqlite3.Connection, path: Path) -> str:
     if not _needs_reindex(conn, path):
         return "unchanged"
 
-    text = extract_text(path)
-    if not text or not text.strip():
+    sections = extract_sections(path)
+    text = fit_sections(sections, MAX_CONTENT_CHARS) if sections else ""
+    if not text.strip():
+        _record_skipped(conn, path, "no_text")
         return "no_text"
 
     # 标题简单取文件名（不含扩展名）
@@ -237,8 +325,7 @@ def _index_one(conn: sqlite3.Connection, path: Path) -> str:
         if _m:
             title = _m.group(1)
 
-    # 内容过长截断，防止单条超大
-    content = text[:500_000]
+    content = text  # 已按 MAX_CONTENT_CHARS 截过 (fit_sections)
     content_hash = _hash_content(content)
     mtime = path.stat().st_mtime
     size = path.stat().st_size
@@ -262,6 +349,7 @@ def _index_one(conn: sqlite3.Connection, path: Path) -> str:
         """,
         (str(path), size, mtime, time.time(), content_hash),
     )
+    _clear_skipped(conn, str(path))
     return "indexed"
 
 
@@ -299,6 +387,7 @@ def run_index(cfg: SearchConfig, on_progress=None) -> dict:
         "indexed": 0,      # 真写进库了（新文件 / 内容变了）
         "unchanged": 0,    # mtime 没变，不用重建 —— 正常，重跑时占绝大多数
         "failed": 0,       # 抽不出文本 / 抛异常
+        "too_large": 0,    # 太大没收 (记在 skipped_files)
         "roots": len(cfg.include),
         "per_root": {},
         "unreadable": [],
@@ -309,7 +398,8 @@ def run_index(cfg: SearchConfig, on_progress=None) -> dict:
         for root in cfg.include:
             logger.info("scanning %s", root)
             walk_errors: list[OSError] = []
-            for path in _iter_files(root, cfg, errors=walk_errors):
+            too_large: list[Path] = []
+            for path in _iter_files(root, cfg, errors=walk_errors, too_large=too_large):
                 stats["scanned"] += 1
                 try:
                     outcome = _index_one(conn, path)
@@ -329,6 +419,9 @@ def run_index(cfg: SearchConfig, on_progress=None) -> dict:
                 if stats["scanned"] % 200 == 0:
                     conn.commit()
 
+            for p in too_large:
+                _record_skipped(conn, p, "too_large")
+            stats["too_large"] += len(too_large)
             conn.commit()  # 先落盘，_count_under 才数得到这一轮写的
             stats["per_root"][str(root)] = _count_under(conn, root)
             if walk_errors:
@@ -472,6 +565,7 @@ def remove_path(path: Path) -> bool:
     try:
         cur = conn.execute("DELETE FROM file_meta WHERE path = ?", (str(path),))
         conn.execute("DELETE FROM documents WHERE path = ?", (str(path),))
+        _clear_skipped(conn, str(path))
         conn.commit()
         return cur.rowcount > 0
     finally:
@@ -481,6 +575,16 @@ def remove_path(path: Path) -> bool:
 def should_index(path: Path, cfg: SearchConfig) -> bool:
     """供外部（比如 watcher）判断某个路径是否需要索引。"""
     return _should_index(path, cfg)
+
+
+def note_too_large(path: Path) -> None:
+    """watcher 碰到太大的文件: 记一笔给面板看。"""
+    conn = open_db()
+    try:
+        _record_skipped(conn, path, "too_large")
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _under_any_root(path: Path, roots: list[Path]) -> bool:
@@ -528,6 +632,12 @@ def cleanup_missing(cfg: SearchConfig) -> int:
             conn.execute("DELETE FROM documents WHERE path = ?", (path_str,))
             conn.execute("DELETE FROM file_meta WHERE path = ?", (path_str,))
             removed += 1
+        # 跳过记录也按同样三条判据清 (文件删了 / 被排除 / 目录不在范围里了)
+        for (path_str,) in conn.execute("SELECT path FROM skipped_files").fetchall():
+            p = Path(path_str)
+            if not (p.exists() and not _should_skip(p, cfg.exclude)
+                    and (not scope_check or _under_any_root(p, cfg.include))):
+                _clear_skipped(conn, path_str)
         conn.commit()
     finally:
         conn.close()
