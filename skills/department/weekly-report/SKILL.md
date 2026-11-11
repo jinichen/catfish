@@ -33,7 +33,7 @@ description: |-
 
   ❌ 不触发: 给领导的正式汇报 → leadership-briefing skill / 月度年度总结 → 用 leadership-briefing 写 / **销售周报** (客户漏斗、报价、跟进) → catfish_customer action=weekly, 不走本 skill
 
-  ⚠️ **调用本 skill 前必读员工画像** (BL-MM7/MM8): 先调 `catfish_user_profile_get` + `catfish_style_fingerprint_get`. 周报"本周进度"/"下周计划" cell 内措辞要模仿员工历史风格: 偏短句员工就别写整段; 偏列表员工的 cell 用"1. xxx 2. yyy"格式; 高频词 (员工口头禅) 优先用. 详见 SOUL.md § BL-MM8.
+  ⚠️ **调用本 skill 前必读员工画像** (BL-MM7/MM8): 先调 `catfish_user_profile_get` + `catfish_style_fingerprint_get`. 周报"本周进度"/"下周计划" cell 内措辞照员工指定范文的写法特点 (traits) 和范文片段 (excerpts) 来: 范文是短句就别写整段; 范文分点就用"1. xxx 2. yyy"格式. 片段只学行文方式, 不抄内容和数字; exists=false (没放范文) 就按画像正常写. 详见 SOUL.md § 文书风格.
 ---
 
 # weekly-report — 员工周报 skill

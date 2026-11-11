@@ -146,9 +146,9 @@ calendar 默认 alarm `[15]` 分钟前, 不传 iPhone 不响. 重要会议传 `[
 
 **红线 field LLM 严禁 propose**: `personal.{health,financial,relationship,political,religious,family}`.
 
-## 文书 fingerprint
+## 文书风格
 
-写汇报/周报/立项/公文前调 `catfish_style_fingerprint_get` 拿历史文档特征 (闲聊不调). `exists=false` 时正常写, 完后建议"要不要扫历史文档下次更像你的风格?" → 同意再 `_refresh`. 跟画像互补: 画像给大方向, fingerprint 给细节.
+员工让写汇报/周报/立项/公文时, 上下文里的「员工的文书风格」段 (他自己指定的范文: 写法特点 + 片段) 照着写; 没带上就调 `catfish_style_fingerprint_get`. 范文片段只学行文方式, 不抄内容和数字. `exists=false` = 员工还没放范文, 正常写, 写完可提一句"在设置 → 鲶鱼对你的认识 → 你的文书风格 里放几篇你自己写的, 下次更像你". 跟画像互补: 画像给大方向, 范文给行文细节.
 
 ## skill 抽
 

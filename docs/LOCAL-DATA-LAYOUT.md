@@ -96,7 +96,7 @@ Plan C Week 2 决策 1c: Companion 起的会话标 `source='companion'`, hermes 
 | `memory_distill_state.json` | gateway `memory_distill.py` | 同上模块自己 | 蒸馏完写 cursor (避免重算 messages) | < 1 KB |
 | `session_facts.json` | LLM 调 `catfish_remember(key, value)` | Dashboard "**小鲶记的具体信息**" 卡 / SOUL.md 注入 | session 内员工告诉硬事实 (e.g. "eis_url=...") | v2 schema (按 key 存 revision 数组) |
 | `user_profile.json` | LLM 调 `catfish_user_profile_propose/_confirm` | Dashboard "**小鲶对你的画像**" 卡 / SOUL.md 注入 | LLM 累 evidence ≥3 才 propose, 员工 confirm 才落 | 8-12 字段 (语气 / 节奏 / 偏好等) |
-| `style_fingerprint.json` | `catfish_style_fingerprint_refresh` 后台 | Dashboard "**你的文书风格 (隐式)**" 卡 / 写文档 skill 注入 | 后台扫历史输出文档 (周报/通知) 抽统计 | < 5 KB |
+| `style_samples/` (`index.json` + 每篇范文一个 `<id>.txt`) | 员工在「你的文书风格」页加范文 / 让小鲶总结 (tool-bridge `style_samples.py`) | Dashboard「你的文书风格」卡 / 员工让写正式文书的那一轮由 catfish-memory 插件带进上下文 / 文书技能调 `catfish_style_fingerprint_get` | 员工自己指定的范文正文 + 小鲶总结的写法特点 (11/12 起; 老的 `style_fingerprint.json` 自动扫文档统计不用了) |
 | `feedback.jsonl` | Companion 直接 append (Rust) | Dashboard "**你给小鲶的反馈**" 卡 | 员工点 👍/👎/✏️改 时 | append-only, 永不重写 |
 | `session_meta.json` | Companion 起 session 时写 | Dashboard "距上次找我 / 今天第 N 次" 字段 | 每次开 session | < 1 KB |
 
@@ -105,7 +105,7 @@ Plan C Week 2 决策 1c: Companion 起的会话标 `source='companion'`, hermes 
 | 模块 | 写哪几个 | 读哪几个 | 路径常量 |
 |---|---|---|---|
 | **catfish-gateway** (中央) | `employee_journal.md` / `memory_distill_state.json` | 同上 (蒸馏时回溯) | `memory_distill.py:DISTILL_STATE_PATH` + `employee_journal.py:journal_path` |
-| **catfish-tool-bridge** | `session_facts.json` / `user_profile.json` / `style_fingerprint.json` | 同上 (tool 实现) | `catfish_tools.py:SESSION_FACTS_PATH` / `user_profile.py:USER_PROFILE_PATH` / `style_fingerprint.py:STYLE_FINGERPRINT_PATH` |
+| **catfish-tool-bridge** | `session_facts.json` / `user_profile.json` / `style_samples/` | 同上 (tool 实现) | `catfish_tools.py:SESSION_FACTS_PATH` / `user_profile.py:USER_PROFILE_PATH` / `style_fingerprint.py:STYLE_FINGERPRINT_PATH` |
 | **Companion** (Tauri Rust) | `feedback.jsonl` / `session_meta.json` | 全部 7 个 (Dashboard 卡渲染) | `commands/feedback.rs` / `commands/relation.rs` / `commands/memory_history.rs` |
 | **hermes CLI** | ❌ 一个都不写 | ❌ 一个都不读 | catfish 私有, hermes 不知道 |
 
@@ -113,7 +113,7 @@ Plan C Week 2 决策 1c: Companion 起的会话标 `source='companion'`, hermes 
 
 - **手可改可看**: `cat ~/.catfish/user_profile.json` 直接读, 不用打开 sqlite client
 - **rsync 备份一行**
-- **故障自愈**: 一个文件坏了 (e.g. style_fingerprint.json 写到一半 crash) 不污染别的; sqlite WAL 一坏全表挂
+- **故障自愈**: 一个文件坏了 (e.g. user_profile.json 写到一半 crash) 不污染别的; sqlite WAL 一坏全表挂
 - **schema 零成本演进**: JSON 加字段不要 migration (BL-MM2 v1 → v2 revision 数组就是直接加, 老格式 reader 兼容)
 - **写并发不存在**: 单员工单 Companion + 单 tool-bridge, 不需要事务
 - **量小**: 你机器现在 ~6.6 KB 便签 + 641 KB 印象 + 几个 KB 画像, 加起来 < 1 MB
@@ -173,7 +173,7 @@ Plan C Week 2 决策 1c: Companion 起的会话标 `source='companion'`, hermes 
 | 让小鲶忘记对我的印象 (5 段日记) | `rm ~/.catfish/employee_journal.md ~/.catfish/memory_distill_state.json` |
 | 清空具体便签 (catfish_remember 写的) | Dashboard "**清空记忆**" 按钮 / `rm ~/.catfish/session_facts.json` |
 | 清空长期画像 (8 项) | Dashboard "**清空全部画像**" 按钮 / `rm ~/.catfish/user_profile.json` |
-| 重置文书风格 | `rm ~/.catfish/style_fingerprint.json` (下次写文档时自动重扫) |
+| 重置文书风格 | 「你的文书风格」页逐篇删除, 或 `rm -r ~/.catfish/style_samples` |
 | 清空 feedback 历史 | Dashboard "**清空反馈**" 按钮 / `rm ~/.catfish/feedback.jsonl` |
 | 完全 factory reset (本地全清, 不动中央) | `rm -rf ~/.catfish ~/.hermes/state.db ~/.hermes/skills` |
 | 清中央 audit (admin) | `DELETE FROM gateway_audit WHERE started_at < ?` (PG, admin 才能调) |
@@ -233,7 +233,7 @@ cleanup daemon: `central/llm-gateway/.../recmode/cleanup.py` 每 24h 跑一次, 
 ~/.catfish/memory_distill_state.json            # 蒸馏 cursor
 ~/.catfish/session_facts.json                   # 便签 (catfish_remember)
 ~/.catfish/user_profile.json                    # 长期画像
-~/.catfish/style_fingerprint.json               # 文书风格
+~/.catfish/style_samples/                       # 文书风格 (你指定的范文 + 写法特点)
 ~/.catfish/feedback.jsonl                       # 👍/👎/改
 ~/.catfish/session_meta.json                    # 距上次 / 今天第 N 次
 ~/.catfish/recordings/<sid>/                    # (10/20 下线) 老 RecMode 录屏残留

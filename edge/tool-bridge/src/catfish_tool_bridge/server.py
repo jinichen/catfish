@@ -219,6 +219,18 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
             return _success(req_id, await colleague_rooms_revise_ai.suggest(params))
         except (ValueError, LookupError, OSError, RuntimeError) as e:
             return _error(req_id, INVALID_PARAMS, str(e))
+    if method.startswith("style/"):   # 11/12 文书风格: 员工指定的范文 + 写法特点 (style_samples.py)
+        from . import style_samples  # noqa: PLC0415
+        try:
+            if method == "style/summarize":   # 调大模型, 异步; Rust 注入令牌
+                return _success(req_id, await style_samples.summarize(params))
+            fn = {"style/state": lambda: style_samples.state(), "style/add": lambda: style_samples.add(params),
+                  "style/remove": lambda: style_samples.remove(params), "style/set_traits": lambda: style_samples.set_traits(params),
+                  "style/clear": lambda: style_samples.clear()}.get(method)
+            if fn is not None:
+                return _success(req_id, await asyncio.to_thread(fn))
+        except (ValueError, LookupError, OSError, RuntimeError) as e:
+            return _error(req_id, INVALID_PARAMS, str(e))
     if method.startswith("pim/croom_"):
         from . import colleague_rooms  # noqa: PLC0415
         handlers = colleague_rooms.pim_handlers(params)

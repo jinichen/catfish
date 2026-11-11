@@ -42,7 +42,7 @@ export const PROFILE_SYSTEM_PROMPT = `你是 catfish 员工画像分析师. 看�
 # Cold start (新员工 catfish 历史空) 必读
 - 邮件历史是**主源**: sender 出现高频的 = 关键人脉 / 上级; 主题词频 = 主管事务 / 项目
 - 日历历史: 频繁参会人 = 团队 / 上下级关系; 会议主题 = 项目 / 节奏
-- style_fingerprint: 员工历史文档抽出的写作特征, 直接映射到 personality
+- style_fingerprint: 员工自己指定的范文里总结的写法特点 (traits) 和范文片段 (excerpts), 直接映射到 personality
 - catfish 自己历史 (distilled_facts / sessions) 为空 不是问题, 用上面 3 个能跑起来
 
 输出严格 JSON (不加 markdown 反引号, 不加前缀):

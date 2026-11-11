@@ -31,7 +31,7 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     (
         "catfish-output-2026-07",
         "~/.catfish/output",
-        "鲶鱼替你生成的文档（周报 / 汇报 / 报告）—— 文书风格就是从这里学的",
+        "鲶鱼替你生成的文档（周报 / 汇报 / 报告）, 加进来才搜得到",
     ),
     # 8/14: 产出目录统一到 outputs (复数)。
     #
@@ -45,7 +45,7 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     (
         "catfish-outputs-2026-08",
         "~/.catfish/outputs",
-        "鲶鱼替你生成的文档（统一产出目录）—— 文书风格就是从这里学的",
+        "鲶鱼替你生成的文档（统一产出目录）, 加进来才搜得到",
     ),
 ]
 _MIGRATION_KEY = "_applied_migrations"
@@ -68,7 +68,7 @@ include:
   # 跨会话搜. 元数据 + session 关联仍走 ~/.catfish/attachments.db.
   - ~/.catfish/uploads
 
-  # 鲶鱼替你生成的文档（周报 / 汇报 / 报告）—— 文书风格就是从这里学的
+  # 鲶鱼替你生成的文档（周报 / 汇报 / 报告）, 加进来才搜得到
   # 8/14: 统一用 outputs (复数)。老员工的 yaml 里可能还有 output/ (单数),
   # 那是 catfish-output-2026-07 迁移加的; 里面有历史文件就留着能搜, 空的会自动摘掉。
   - ~/.catfish/outputs

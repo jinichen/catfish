@@ -37,6 +37,7 @@ pub mod share_trial; // 11/08: 分享治理 —— 审批人「装到我这里�
 pub mod workflows; // 10/17: 工作流 skill —— 技能页编辑 / 试跑 / 运行记录 + 全局对外步骤确认
 pub mod forms; // 10/17: 一起填表 —— 「协同」页发起 / 填写 / 进度 (tool-bridge forms.py)
 pub mod colleague_rooms; // 11/5: 同事群聊 —— 「协同」页建群 / 加入 / 发消息 (tool-bridge colleague_rooms.py)
+pub mod style_samples; // 11/12: 文书风格 = 员工指定的范文 + 写法特点 (tool-bridge style_samples.py)
 pub mod colleague_tasks; // 11/4: 派任务给多位同事 —— 「协同」页派出 / 接下 / 交回 (tool-bridge colleague_tasks.py)
 pub mod sales; // 10/12: 销售跟进 —— 早安「客户跟进」雷达 + 销售模板 (tool-bridge customers.py)
 pub mod components;    // 10/1: 可选大组件 (会议纪要组件包等) 下载 / 校验, 见 services::components

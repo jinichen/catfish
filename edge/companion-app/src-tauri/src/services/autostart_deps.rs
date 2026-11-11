@@ -18,7 +18,8 @@ use crate::services::{catfish_paths, process};
 ///
 /// 7/27 一晚上挖出来的坑里，有两个属于同一类：**依赖没了,但没人知道**。
 ///
-/// 1. `jieba` 不在 hermes venv 里 → style_fingerprint 静默退化成字符二元组。
+/// 1. `jieba` 不在 hermes venv 里 → 中文分词静默退化成字符二元组 (当时是文书风格统计, 11/12 起那块
+///    换成员工指定范文不用分词了; 记忆召回 / 记忆去重还在用)。
 ///    同一批公文语料实测差距:
 ///      无 jieba: 覆盖 绩材 台账 兄弟 显缺 范围 补充 占优 弃投 项施
 ///      有 jieba: 资质 完成 服务 对标 施工 工作 调用 情况 公司 其中
@@ -72,10 +73,8 @@ fn check_jieba_installed() {
     log::warn!(
         concat!(
             "deps: ⚠ jieba 不在 {py}\n",
-            "     后果: 文书风格 (style_fingerprint) 的中文分词静默退化成字符二元组,\n",
-            "     top_words 会变成「覆盖 绩材 台账 兄弟 显缺」这类无意义碎片,\n",
-            "     而它是要注进 system prompt 让 LLM 模仿员工用词的。Dashboard 上\n",
-            "     「jieba 分词」那栏会显 ❌,但没人会天天去看。\n",
+            "     后果: 记忆召回 (catfish_memory_recall) 和记忆去重的中文分词静默退化,\n",
+            "     按字切出来的碎片匹配不上, 该想起来的记忆想不起来。\n",
             "     修: {py} -m pip install jieba\n",
             "     (hermes 升级重建 venv 后会再次丢失 —— 这条检查就是为那时准备的)"
         ),

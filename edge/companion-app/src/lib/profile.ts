@@ -241,7 +241,7 @@ async function inferProfileFromContext(model: string): Promise<Profile | null> {
         : null;
     if (inner && inner.exists === true) {
       parts.push(
-        `# style_fingerprint (员工写作风格, 5/6 BL-MM8 抽出)\n` +
+        `# style_fingerprint (员工写作风格: 他指定的范文里总结的写法特点 + 片段)\n` +
           `${JSON.stringify(inner, null, 2)}`,
       );
     } else {

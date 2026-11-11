@@ -63,7 +63,7 @@ description: |-
 
   ❌ 不触发: 给同事的内部说明 → docx skill / 周报 → weekly-report (TODO) / PPT → pptx / 邮件 → email / 口头汇报草稿 → 直接对话
 
-  ⚠️ **调用本 skill 前必读员工文书画像** (BL-MM7/MM8): 先调 `catfish_user_profile_get` + `catfish_style_fingerprint_get` 拿 (1) 显式画像 (writing_style.tone='直接' / length_pref='短' 等) + (2) 隐式特征 (avg_sent_len / 高频词 / 列表 vs 散文比例 / 样本句). 据此调整 sections 内容: 员工偏短 → 段落紧凑; 偏列表 → 多 ordered_list 少 paragraph; 高频词 (资质/风控/合规) 优先用. 这样汇报像员工自己写的, 不像 ChatGPT 通用八股. 详见 SOUL.md § BL-MM8.
+  ⚠️ **调用本 skill 前必读员工文书画像** (BL-MM7/MM8): 先调 `catfish_user_profile_get` + `catfish_style_fingerprint_get` 拿 (1) 显式画像 (writing_style.tone='直接' / length_pref='短' 等) + (2) 员工指定范文的写法特点 (traits) + 范文片段 (excerpts, 只学行文方式不抄内容; exists=false 表示没放范文). 据此调整 sections 内容: 员工偏短 → 段落紧凑; 偏列表 → 多 ordered_list 少 paragraph; 范文怎么起头、怎么分点就怎么写. 这样汇报像员工自己写的, 不像 ChatGPT 通用八股. 详见 SOUL.md § 文书风格.
 ---
 
 # leadership-briefing — 公司领导汇报材料 skill

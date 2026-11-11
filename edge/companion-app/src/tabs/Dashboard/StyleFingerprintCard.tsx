@@ -1,327 +1,156 @@
-/** Dashboard 卡 — "鲶鱼学到的你的写作风格" (BL-MM8, 5/6 ship)
+/** 「你的文书风格」—— 你自己指定的范文 + 小鲶从范文里总结的写法特点 (11/12)。
  *
- * 跟 UserProfileCard 配对:
- *   - UserProfileCard: 显式画像 (员工 confirm 过的 trait)
- *   - 本卡: 隐式特征 (从员工历史文档自动抽的统计)
- *
- * 设计立场:
- *   - 列基础统计 (扫了 N 个文档 / 平均句长 / Top 词 / 标点偏好)
- *   - "重新抽取" 按钮 (员工写完一份新汇报后想更新)
- *   - "清空" 按钮 (隐私逃生)
- *   - 调 catfish_style_fingerprint_* 工具 (走 tool-bridge)
- *
- * BL-STYLE-FP-USE-INDEX (7/27 鸿波实盘 "完全不抽了"):
- *   数据源换成 local_search 索引 (~/.catfish/search.db). 本卡里那个
- *   ScanDirsManager (5/22 加的 scan_dirs 加/删 UI, 写 companion.yaml) 整个删了 —
- *   目录范围现在唯一由 "📂 搜索范围" 卡 (search-scope.yaml) 决定, 一处配置.
- *   本卡改成: 扫不到时把员工指向那张卡, 不再自己维护第二份目录列表.
+ * 鸿波 11/12「文书风格合理吗」: 老的「自动学」取搜索索引里最近 500 篇抽统计数字, 实盘 395 篇是小鲶自己的产出
+ * (学的不是员工), 抽出来的是主题词和碎片 (一条待办勾选项当「样本句」), 模型 30 天一次没查过。
+ * 谁写的只有员工自己知道 → 改成你挑 3–5 篇自己写得满意的放进来:
+ *   · 范文只存本机 (~/.catfish/style_samples/);
+ *   · 「让小鲶总结写法特点」会把范文正文发给模型 —— 按钮旁写明, 点了才发;
+ *   · 特点你可以改 (一行一条);
+ *   · 你让小鲶写周报 / 汇报这类正式文书时, 特点和范文片段自动带上 (catfish-memory 插件 render_style)。
  */
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
 
-import { useEffect, useState, useCallback } from "react";
-
-import { toolBridgeCallTool } from "../../lib/tauri";
+import {
+  STYLE_ACCEPT, styleAdd, styleRemove, styleSetTraits, styleState, styleSummarize, type StyleState,
+} from "../../lib/tauri_style_samples";
 import { useAgentStore } from "../../store/agent";
+import { stageFiles } from "../Collab/RoomsDelivery";
 
-interface FingerprintView {
-  exists: boolean;
-  stats?: {
-    total_docs: number;
-    total_chars: number;
-    avg_sentence_length: number;
-    sentence_count: number;
-  };
-  top_words?: Array<{ word: string; weight: number }>;
-  punctuation_pref?: Record<string, number>;
-  structure_pref?: {
-    list_ratio: number;
-    table_ratio: number;
-    prose_ratio: number;
-  };
-  sample_sentences?: string[];
-  last_refreshed?: number;
-  source_count?: number;
-  had_jieba?: boolean;
-  hint?: string;
-}
+const MAX_BYTES = 20 * 1024 * 1024;
 
-const REFRESH_MS = 60_000;
+const btn = (primary = false) => ({
+  fontSize: 12, padding: "4px 12px", borderRadius: 4, cursor: "pointer", whiteSpace: "nowrap" as const,
+  border: `1px solid ${primary ? "var(--catfish-cyan)" : "var(--catfish-border)"}`,
+  background: primary ? "var(--catfish-cyan)" : "transparent",
+  color: primary ? "var(--catfish-bg)" : "var(--catfish-text)",
+});
+const linkBtn = { border: "none", background: "transparent", cursor: "pointer", padding: 0, fontSize: 12, color: "var(--catfish-text-muted)" } as const;
+const muted = { fontSize: 12, color: "var(--catfish-text-muted)", lineHeight: 1.6 } as const;
 
-/** BL-STYLE-FP-NAN-FIX (5/20 鸿波): source_count=0 时 ratio 是 NaN / undefined → 显 "—".
- * (NaN * 100).toFixed(0) === "NaN" 显 "NaN%" 看着像 bug. */
-function pct(ratio: number | null | undefined): string {
-  if (typeof ratio !== "number" || !Number.isFinite(ratio)) return "—";
-  return `${(ratio * 100).toFixed(0)}%`;
-}
-
-function humanTime(ts: number | undefined | null): string {
-  if (!ts || ts <= 0) return "未抽取";
-  const now = Date.now() / 1000;
-  const diff = now - ts;
-  if (diff < 60) return "刚刚";
-  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
-  if (diff < 86400 * 7) return `${Math.floor(diff / 86400)} 天前`;
+function day(ts: number): string {
   const d = new Date(ts * 1000);
-  return `${d.getFullYear()}-${(d.getMonth() + 1)
-    .toString()
-    .padStart(2, "0")}-${d.getDate().toString().padStart(2, "0")}`;
+  return `${d.getMonth() + 1}月${d.getDate()}日`;
 }
 
 export default function StyleFingerprintCard() {
   const agentName = useAgentStore((s) => s.name);
-  const [view, setView] = useState<FingerprintView | null>(null);
+  const [st, setSt] = useState<StyleState | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
-  const [confirmingClear, setConfirmingClear] = useState(false);
-  /** BL-STYLE-FP-USE-INDEX (7/27): refresh 返的 hint —— "索引没建" / "都被筛掉了"
-   *  这类下一步动作。老版本抽到 0 只是默默显 "来源文档 0"，员工看不出该干嘛。 */
-  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"add" | "sum" | "save" | string | null>(null);
+  const [draft, setDraft] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
-  const load = useCallback(async () => {
+  const refresh = useCallback(() => styleState().then((s) => { setSt(s); setError(null); })
+    .catch((e) => setError(e instanceof Error ? e.message : String(e))), []);
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  async function run(tag: string, fn: () => Promise<StyleState>) {
+    setBusy(tag);
+    setError(null);
     try {
-      const r = await toolBridgeCallTool("catfish_style_fingerprint_get", {});
-      if (!r.ok) {
-        setError(r.error || "调用 fingerprint_get 失败");
-        return;
-      }
-      const inner = (r.result as { type: string; result: FingerprintView }) || {};
-      setView(inner.result || { exists: false });
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-    const t = window.setInterval(() => void load(), REFRESH_MS);
-    return () => window.clearInterval(t);
-  }, [load]);
-
-  const refresh = async () => {
-    setRefreshing(true);
-    setNotice(null);
-    try {
-      const r = await toolBridgeCallTool("catfish_style_fingerprint_refresh", {});
-      // refresh 返 {type:"result", result:{...}}. hint 只在抽到 0 / 索引没通时有值.
-      const inner = (r.result as { result?: { hint?: string } })?.result;
-      setNotice(inner?.hint ?? null);
-      await load();
+      setSt(await fn());
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setRefreshing(false);
+      setBusy(null);
     }
-  };
-
-  const clear = async () => {
-    setRefreshing(true);
-    try {
-      await toolBridgeCallTool("catfish_style_fingerprint_clear", {});
-      setConfirmingClear(false);
-      await load();
-    } finally {
-      setRefreshing(false);
-    }
-  };
-
-  // BL-STYLE-FP-COMPACT-EMPTY (5/16): 99% 员工没点过"重新抽取", view.exists=false.
-  // 卡跟左边 RelationCard / UserProfileCard 撑齐高度 → 大块空白. 空时压缩成单行 hint
-  // (不占大卡空间), 真抽过样有数据时正常显示. 比 return null 好的是: 保留入口让员工
-  // 看到这功能存在, 想用时点按钮 (按 grid auto-fit reflow 会让 layout 稍紧).
-  if (!view?.exists && !error && !refreshing) {
-    return (
-      <div
-        style={{
-          background: "var(--catfish-bg-elevated)",
-          border: "1px solid var(--catfish-border)",
-          borderRadius: "var(--radius-md)",
-          padding: "var(--space-3) var(--space-4)",
-          alignSelf: "start",  // 不撑齐 row 高度, 只占内容自然高度
-          display: "flex",
-          alignItems: "center",
-          gap: "var(--space-3)",
-          minHeight: "auto",
-        }}
-      >
-        <span style={{ fontSize: 13 }}>
-          ✍️ {agentName}还没学过你的文书风格
-        </span>
-        <button
-          onClick={() => void refresh()}
-          style={{
-            marginLeft: "auto",
-            fontSize: 12,
-            padding: "4px 12px",
-            background: "var(--catfish-cyan)",
-            color: "white",
-            border: "none",
-            borderRadius: "var(--radius-sm)",
-            cursor: "pointer",
-          }}
-          title="从本地搜索索引里挑你写过的中文文档, 学你的文书风格"
-        >
-          学一下
-        </button>
-      </div>
-    );
   }
+  async function pick(e: ChangeEvent<HTMLInputElement>) {
+    const files = [...(e.target.files ?? [])];
+    e.target.value = "";
+    for (const f of files) {
+      if (f.size > MAX_BYTES) { setError(`「${f.name}」超过 20MB, 范文不用这么大`); continue; }
+      await run("add", async () => {
+        const [staged] = await stageFiles([{ name: f.name, size: f.size, file: f }], () => undefined);
+        return styleAdd(staged.stage_id, f.name);
+      });
+    }
+  }
+  const saveTraits = () => run("save", async () => {
+    const s = await styleSetTraits((draft ?? "").split("\n").map((x) => x.trim()).filter(Boolean));
+    setDraft(null);
+    return s;
+  });
 
+  const samples = st?.samples ?? [];
+  const traits = st?.traits ?? [];
+  const full = !!st && samples.length >= st.max_samples;
   return (
-    <div
-      style={{
-        background: "var(--catfish-bg-elevated)",
-        border: "1px solid var(--catfish-border)",
-        borderRadius: "var(--radius-md)",
-        padding: "var(--space-4)",
-        // BL-STYLE-FP-EQUAL-HEIGHT (5/16 V4): 数据态卡跟 RelationCard /
-        // UserProfileCard 同高, 三卡 row 整齐. 空态保持单行紧凑 (alignSelf:start).
-        height: "min(480px, 50vh)",
-        boxSizing: "border-box",
-        display: "flex",
-        flexDirection: "column",
-        overflowY: "auto",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)", marginBottom: "var(--space-2)" }}>
-        <h3 style={{ margin: 0 }}>✍️ 你的文书风格 (隐式)</h3>
-        {/* 6/1 鸿波 ABBB: 简化, 删 "从你历史文档抽的统计" (dev 解释 = 联想). 留真用途. */}
-        <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
-          学你写汇报的风格
-        </span>
-        <button
-          onClick={() => void refresh()}
-          disabled={refreshing}
-          style={{
-            marginLeft: "auto",
-            fontSize: 11,
-            padding: "2px 8px",
-            background: "transparent",
-            border: "1px solid var(--catfish-border)",
-            borderRadius: 3,
-            cursor: "pointer",
-            color: "var(--catfish-text-muted)",
-          }}
-          title="从本地搜索索引重新抽一次"
-        >
-          {refreshing ? "抽取中..." : "重新抽取"}
-        </button>
+    <div style={{
+      background: "var(--catfish-bg-elevated)", border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-md)",
+      padding: "var(--space-4)", height: "min(480px, 50vh)", boxSizing: "border-box", display: "flex", flexDirection: "column", gap: "var(--space-3)",
+    }}>
+      <div>
+        <h3 style={{ margin: 0 }}>✍️ 你的文书风格</h3>
+        <div style={{ ...muted, marginTop: 4 }}>
+          挑 3–5 篇你自己写得满意的周报、汇报放进来。你让{agentName}写正式文书时, 它会照这几篇的写法来。范文只存在这台电脑上。
+        </div>
       </div>
 
-      {error && (
-        <div style={{ fontSize: 12, color: "var(--status-err)", marginBottom: "var(--space-2)" }}>
-          {error}
-        </div>
-      )}
+      {error && <div style={{ fontSize: 12, color: "var(--status-err)" }}>{error}</div>}
 
-      {/* BL-STYLE-FP-USE-INDEX (7/27): 抽到 0 / 索引没通时后端给的下一步动作.
-          老版本只显 "来源文档 0", 员工看不出是该建索引还是该加目录 —— 鸿波
-          5/20 到 7/27 一直卡在这个空状态上. */}
-      {notice && (
-        <div
-          style={{
-            fontSize: 11,
-            lineHeight: 1.6,
-            color: "#a16207",
-            background: "var(--catfish-bg)",
-            border: "1px solid #a16207",
-            borderRadius: 4,
-            padding: "6px 10px",
-            marginBottom: "var(--space-2)",
-          }}
-        >
-          ⚠️ {notice}
-        </div>
-      )}
-
-      {view?.exists && view.stats && (
-        <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8, fontSize: 13, marginBottom: "var(--space-3)" }}>
-            <div>📚 来源文档: <strong>{view.source_count ?? 0}</strong></div>
-            {/* 5/15 鸿波撞 white screen — view.stats={} 空对象通过 truthy 检查
-                但内部字段 undefined → .toFixed/.toLocaleString 崩.
-                每个字段独立 nullish 兜底 '-'. */}
-            <div>📝 总字数: <strong>{view.stats.total_chars?.toLocaleString() ?? "-"}</strong></div>
-            <div>📏 平均句长: <strong>{typeof view.stats.avg_sentence_length === "number" ? `${view.stats.avg_sentence_length.toFixed(1)} 字` : "-"}</strong></div>
-            <div>📊 句子总数: <strong>{view.stats.sentence_count ?? "-"}</strong></div>
-            <div>🕐 上次抽取: <strong>{humanTime(view.last_refreshed)}</strong></div>
-            <div>🔧 jieba 分词: <strong>{view.had_jieba ? "✅" : "❌ (退 char fallback)"}</strong></div>
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "var(--space-3)", paddingRight: 4 }}>
+        <section>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <strong style={{ fontSize: 13 }}>我的范文{st ? ` (${samples.length}/${st.max_samples})` : ""}</strong>
+            <span style={{ flex: 1 }} />
+            <input ref={fileRef} type="file" multiple accept={STYLE_ACCEPT} aria-label="选范文" style={{ display: "none" }} onChange={(e) => void pick(e)} />
+            <button type="button" style={btn()} disabled={!st || full || busy !== null} onClick={() => fileRef.current?.click()}
+                    title={full ? "已经放满了, 先删掉一篇" : "Word / PDF / 文本"}>
+              {busy === "add" ? "读取中…" : "＋ 添加范文"}
+            </button>
           </div>
-
-          {view.top_words && view.top_words.length > 0 && (
-            <div style={{ marginBottom: "var(--space-3)" }}>
-              <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 4 }}>Top 高频词</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                {view.top_words.map((w) => (
-                  <span
-                    key={w.word}
-                    title={`权重 ${w.weight}`}
-                    style={{
-                      fontSize: 12,
-                      padding: "2px 8px",
-                      background: "var(--catfish-bg)",
-                      border: "1px solid var(--catfish-border)",
-                      borderRadius: 12,
-                      color: "var(--catfish-text)",
-                    }}
-                  >
-                    {w.word}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {view.structure_pref && (
-            <div style={{ marginBottom: "var(--space-3)", fontSize: 12 }}>
-              <div style={{ fontWeight: 500, marginBottom: 4 }}>段落结构偏好</div>
-              <div style={{ color: "var(--catfish-text-muted)" }}>
-                列表 {pct(view.structure_pref.list_ratio)} ·
-                {" "}表格 {pct(view.structure_pref.table_ratio)} ·
-                {" "}散文 {pct(view.structure_pref.prose_ratio)}
-              </div>
-            </div>
-          )}
-
-          {view.sample_sentences && view.sample_sentences.length > 0 && (
-            <div style={{ marginBottom: "var(--space-3)" }}>
-              <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 4 }}>样本句 (LLM 模仿用)</div>
-              {view.sample_sentences.map((s, i) => (
-                <div key={i} style={{ fontSize: 12, color: "var(--catfish-text-muted)", padding: "2px 0", borderLeft: "2px solid var(--catfish-cyan-dim)", paddingLeft: 8, marginBottom: 2 }}>
-                  {s}
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div style={{ display: "flex", justifyContent: "flex-end" }}>
-            {!confirmingClear ? (
-              <button
-                onClick={() => setConfirmingClear(true)}
-                style={{
-                  fontSize: 11, padding: "4px 8px", background: "transparent",
-                  border: "1px solid var(--catfish-border)", borderRadius: 3, cursor: "pointer",
-                  color: "var(--catfish-text-muted)",
-                }}
-              >
-                清空指纹
+          {st && samples.length === 0 && <div style={muted}>还没有范文。支持 Word (.docx)、PDF、文本; 扫描件读不出字, 老的 .doc 请先另存为 .docx。</div>}
+          {samples.map((s) => (
+            <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: "1px dashed var(--catfish-border)", fontSize: 13 }}>
+              <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={s.name}>{s.name}</span>
+              <span style={{ ...muted, whiteSpace: "nowrap" }}>{s.chars.toLocaleString()} 字 · {day(s.added_at)}加</span>
+              <button type="button" style={linkBtn} disabled={busy !== null} onClick={() => void run(s.id, () => styleRemove(s.id))}>
+                {busy === s.id ? "删除中…" : "删除"}
               </button>
+            </div>
+          ))}
+        </section>
+
+        {samples.length > 0 && (
+          <section>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+              <strong style={{ fontSize: 13 }}>写法特点</strong>
+              {st?.stale && traits.length > 0 && <span style={{ fontSize: 12, color: "var(--status-warn)" }}>范文换过了, 建议重新总结</span>}
+              <span style={{ flex: 1 }} />
+              {draft === null && traits.length > 0 && (
+                <button type="button" style={btn()} disabled={busy !== null} onClick={() => setDraft(traits.join("\n"))}>我来改</button>
+              )}
+              {draft === null && (
+                <button type="button" style={btn(traits.length === 0 || !!st?.stale)} disabled={busy !== null} onClick={() => void run("sum", styleSummarize)}>
+                  {busy === "sum" ? `${agentName}在读范文…` : traits.length ? "重新总结" : `让${agentName}总结写法特点`}
+                </button>
+              )}
+            </div>
+            {draft === null ? (
+              traits.length > 0 ? (
+                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.8 }}>
+                  {traits.map((t) => <li key={t}>{t}</li>)}
+                </ul>
+              ) : (
+                <div style={muted}>还没总结。没总结也会带上范文片段, 总结后{agentName}学得更准。</div>
+              )
             ) : (
-              <div style={{ display: "flex", gap: 8, fontSize: 12 }}>
-                <span style={{ color: "var(--status-warn)" }}>确认清空? (下次写汇报又从零猜)</span>
-                <button onClick={() => void clear()} disabled={refreshing}
-                  style={{ background: "var(--status-err)", color: "white", border: "none", borderRadius: 3, padding: "2px 8px", cursor: "pointer" }}>
-                  清
-                </button>
-                <button onClick={() => setConfirmingClear(false)}
-                  style={{ background: "transparent", border: "1px solid var(--catfish-border)", borderRadius: 3, padding: "2px 8px", cursor: "pointer" }}>
-                  取消
-                </button>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <textarea aria-label="写法特点" value={draft} rows={6} onChange={(e) => setDraft(e.target.value)}
+                          style={{ fontSize: 13, lineHeight: 1.7, padding: 8, borderRadius: 4, resize: "vertical", fontFamily: "inherit",
+                                   border: "1px solid var(--catfish-border)", background: "var(--catfish-bg)", color: "var(--catfish-text)" }} />
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <span style={{ ...muted, flex: 1 }}>一行一条, 最多 8 条</span>
+                  <button type="button" style={btn()} disabled={busy !== null} onClick={() => setDraft(null)}>取消</button>
+                  <button type="button" style={btn(true)} disabled={busy !== null} onClick={() => void saveTraits()}>{busy === "save" ? "保存中…" : "保存"}</button>
+                </div>
               </div>
             )}
-          </div>
-        </>
-      )}
+            {draft === null && <div style={{ ...muted, marginTop: 6 }}>总结时, 范文正文会发给模型 (每篇最多前 5000 字), 点了才发。</div>}
+          </section>
+        )}
+      </div>
     </div>
   );
 }

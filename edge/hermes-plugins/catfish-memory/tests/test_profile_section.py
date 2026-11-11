@@ -38,3 +38,35 @@ def test_不认识的字段和红线字段不带(tmp_path):
     _write(tmp_path, {"personal.health": {"value": "x"}, "foo.bar": {"value": "y"}})
     out = render_profile(tmp_path)
     assert "x" not in out.split("\n\n")[1] and "foo" not in out
+
+
+# ── 文书风格 (员工指定的范文) ──────────────────────────────
+
+from catfish_memory_profile import render_style  # noqa: E402
+
+_BODY = ("本季度资质维护工作总体平稳，三项到期资质全部按期完成换证。现将有关情况汇报如下。\n\n"
+         "| 资质 | 状态 |\n\n- [ ] 打印计划表\n\n联系人：张三 13800001111 负责材料汇总，请知悉。\n\n"
+         "一、完成情况。信息安全服务资质于九月通过监督审核；软件能力成熟度评估完成材料初审。\n")
+
+
+def _samples(home: Path, traits=("开头一句话先说结论",)):
+    d = home / "style_samples"
+    d.mkdir()
+    (d / "ab12cd34ef56.txt").write_text(_BODY, encoding="utf-8")
+    (d / "index.json").write_text(json.dumps(
+        {"samples": [{"id": "ab12cd34ef56", "name": "三季度汇报.docx"}], "traits": list(traits)}, ensure_ascii=False), encoding="utf-8")
+
+
+def test_让写文书的这一轮才带范文(tmp_path):
+    _samples(tmp_path)
+    assert render_style(tmp_path, "今天天气怎么样") == ""
+    out = render_style(tmp_path, "帮我写一份本周周报")
+    assert "- 开头一句话先说结论" in out and "《三季度汇报.docx》" in out and "总体平稳" in out
+    assert "13800001111" not in out and "- [ ]" not in out and "| 资质" not in out
+
+
+def test_没放范文不带_没总结特点也带片段(tmp_path):
+    assert render_style(tmp_path, "写一份汇报") == ""
+    _samples(tmp_path, traits=())
+    out = render_style(tmp_path, "写一份汇报")
+    assert "写法特点" not in out and "总体平稳" in out

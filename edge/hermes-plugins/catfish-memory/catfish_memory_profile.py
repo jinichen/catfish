@@ -48,3 +48,67 @@ def render_profile(catfish_home: Path) -> str:
     if not lines:
         return "## 👤 员工偏好画像\n\n还没有确认过的偏好。" + _RULE
     return head + "\n".join(lines) + "\n\n" + _RULE
+
+
+# ── 文书风格: 员工指定的范文 + 写法特点 (tool-bridge style_samples.py 管写) ─────────
+
+# 员工这一轮在让写正式文书才带 (闲聊 / 查资料不带: 范文片段有一千来字)
+_WRITING = ("周报", "月报", "季报", "年报", "汇报", "总结", "请示", "报告", "方案", "通知", "纪要", "讲话稿", "发言稿",
+            "述职", "立项", "公文", "发函", "复函", "简报", "通报", "按我的风格", "照我的风格", "我的文风", "起草", "拟一", "写一份", "写一篇", "写个")
+_MAX_EXCERPTS = 2
+_EXCERPT_CHARS = 400
+
+
+def wants_writing(query: str) -> bool:
+    return bool(query) and any(k in query for k in _WRITING)
+
+
+def _excerpt(text: str, limit: int = _EXCERPT_CHARS) -> str:
+    """跟 tool-bridge style_samples.excerpt 同一套挑法: 只要成段的正文。"""
+    import re  # noqa: PLC0415
+
+    out, n = [], 0
+    for para in re.split(r"\n+", text):
+        p = para.strip()
+        if len(p) < 30 or p.startswith(("|", "- [", "#")) or p.count("|") >= 3:
+            continue
+        if not re.search(r"[。；！？]", p) or re.search(r"1\d{10}|@\w+\.", p):
+            continue
+        room = limit - n
+        if room < 60:
+            break
+        out.append(p if len(p) <= room else p[:room].rstrip() + "…")
+        n += len(out[-1])
+    return "\n".join(out)
+
+
+def render_style(catfish_home: Path, query: str) -> str:
+    if not wants_writing(query):
+        return ""
+    d = catfish_home / "style_samples"
+    try:
+        idx = json.loads((d / "index.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    samples = [s for s in idx.get("samples") or [] if isinstance(s, dict)] if isinstance(idx, dict) else []
+    if not samples:
+        return ""
+    traits = [t for t in idx.get("traits") or [] if isinstance(t, str) and t.strip()]
+    parts = ["## ✍️ 员工的文书风格 (他自己指定的范文, 写正式文书照这个来)"]
+    if traits:
+        parts.append("写法特点:\n" + "\n".join(f"- {t}" for t in traits))
+    shown = 0
+    for s in samples:
+        if shown >= _MAX_EXCERPTS:
+            break
+        try:
+            ex = _excerpt((d / f"{s.get('id')}.txt").read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if ex:
+            parts.append(f"范文片段 (《{s.get('name')}》):\n{ex}")
+            shown += 1
+    if len(parts) == 1:
+        return ""
+    parts.append("范文片段只学行文方式 (怎么起头、怎么分点、句子长短、语气), 不要抄里面的内容和数字。")
+    return "\n\n".join(parts)

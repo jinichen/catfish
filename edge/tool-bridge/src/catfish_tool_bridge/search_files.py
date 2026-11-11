@@ -32,7 +32,7 @@
 
 与其给它再加一层自动注册 (还得先装二进制), 不如让 tool-bridge 直读 search.db:
 tool-bridge 本身是被 autostart 自动注册的, 一次砍掉「装二进制」和「注册第二个
-MCP」两个会失效的手工步骤。这个访问方式仓里已有先例 —— style_fingerprint.py
+MCP」两个会失效的手工步骤。这个访问方式仓里有过先例 —— 老的 style_fingerprint.py (11/12 已换成 style_samples.py)
 就是直读同一个库。
 
 # trigram 分词器的三个坑 (都是拿真库测出来的, 不是看文档猜的)
@@ -75,11 +75,11 @@ from typing import Any
 
 logger = logging.getLogger("catfish.tool_bridge.search_files")
 
-#: 跟 style_fingerprint.py 用同一个库 (员工本机 local_search 索引)。
+#: 员工本机 local_search 索引。
 _DB_NAME = "search.db"
 
 #: 撞锁时最多等这么久。全量索引一跑几分钟, sqlite 默认 busy_timeout=0 会当场抛
-#: "database is locked" —— 跟 style_fingerprint.DB_BUSY_TIMEOUT_SEC 对齐。
+#: "database is locked"。
 DB_BUSY_TIMEOUT_SEC = 30.0
 
 #: trigram 的硬下限。低于此的词进 MATCH 只会静默返 0 行。

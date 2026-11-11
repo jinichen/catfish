@@ -129,29 +129,23 @@ MEMORY_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
-    # ── BL-MM8 style_fingerprint (5/6) — 写文档时模仿员工历史风格 ──
+    # ── 文书风格 (11/12 改: 员工自己指定的范文 + 小鲶总结的写法特点, style_samples.py; 工具名沿用) ──
     {
         "name": "catfish_style_fingerprint_get",
         "description": (
-            "读员工文书风格指纹 (句长/高频词/标点/列表偏好/样本句), 用来模仿员工语气写正式文档。"
-            "写汇报/周报/立项材料前, 或员工说'按我的风格写'时调; 普通闲聊不调。"
-            "返回 exists=false 表示还没生成, 调 catfish_style_fingerprint_refresh。"
+            "读员工的文书风格: 他自己指定的范文里总结出的写法特点 (traits) + 几段范文片段 (excerpts)。"
+            "写汇报/周报/立项等正式文书、或员工说'按我的风格写'时用; 这类请求的上下文里通常已自动带上, 没带再调。"
+            "exists=false 表示员工还没放范文, 正常写, 不要编他的风格。范文片段只学行文方式, 不抄内容和数字。"
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
         "emoji": "✍️",
         "toolset": "catfish_native",
         "available": True,
     },
-    # 实现细节: 数据源是 local_search 索引 (~/.catfish/search.db), 范围 = Companion 「搜索范围」卡;
-    # 收 .md/.txt/.docx/.pdf/.pptx 中文占比够高的, 跳过 <200 字, 取 mtime 最新 500 篇;
-    # 时间衰减 30 天 1.0 / 90 天 0.5 / 180 天 0.25 / 更老 0.1。返回带 funnel 和 total_docs=0 时的 hint。
     {
         "name": "catfish_style_fingerprint_refresh",
         "description": (
-            "从本地搜索索引 (员工在 Companion 配的搜索范围) 重建文书风格指纹, 无参数。"
-            "员工要求更新对其写作风格的认识、首次 onboarding、或新增较多文档后调; "
-            "别每次写文档前都调。"
-            "返回 error='index_unavailable' 表示还没建本地索引, 要引导员工先建索引, 别说'没找到文档'。"
+            "已停用: 文书风格不再自动扫文档。员工想更新, 请他到 Companion 设置 → 鲶鱼对你的认识 → 你的文书风格 里加范文。"
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
         "emoji": "🔄",
@@ -161,7 +155,7 @@ MEMORY_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_style_fingerprint_clear",
         "description": (
-            "清除文书风格指纹。仅在员工明说'别用我的历史风格了/重新认识我的写作'时调, 别自作主张。"
+            "清掉员工的范文和写法特点。仅在员工明说'别用我的范文了/清掉文书风格'时调, 别自作主张。"
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
         "emoji": "🗑️",

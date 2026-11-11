@@ -55,7 +55,7 @@ description: |-
 
   ❌ 不触发: 周报 → weekly-report / 月度汇报 / 决策事项 → leadership-briefing / 内部说明 → docx skill / PPT 立项汇报 → pptx
 
-  ⚠️ **调用本 skill 前必读员工画像** (BL-MM7/MM8): 先调 `catfish_user_profile_get` + `catfish_style_fingerprint_get`. 立项的语气尤其受员工风格影响 (有的偏严谨保守, 有的偏激进推动): personality.feedback_style + writing_style.tone 决定 § 3 风险分析的措辞强度; 高频词 (业务领域) 优先用; 偏列表的员工 § 4 进度计划用 ordered_list 不用大段 paragraph. 详见 SOUL.md § BL-MM8.
+  ⚠️ **调用本 skill 前必读员工画像** (BL-MM7/MM8): 先调 `catfish_user_profile_get` + `catfish_style_fingerprint_get`. 立项的语气尤其受员工风格影响 (有的偏严谨保守, 有的偏激进推动): personality.feedback_style + writing_style.tone 决定 § 3 风险分析的措辞强度; 行文方式照员工指定范文的写法特点 (traits) 和片段 (excerpts), 片段不抄内容和数字; 偏列表的员工 § 4 进度计划用 ordered_list 不用大段 paragraph. 详见 SOUL.md § 文书风格.
 ---
 
 # project-approval — 项目立项 / 立项申请 skill

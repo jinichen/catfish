@@ -227,12 +227,12 @@ try:
     from .catfish_memory_tools import _ToolsMixin
     from .catfish_memory_recall import prewarm as _recall_prewarm
     from .catfish_memory_situation import render_situation
-    from .catfish_memory_profile import render_profile
+    from .catfish_memory_profile import render_profile, render_style
     from .catfish_memory_graph import render_graph
 except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_recall import prewarm as _recall_prewarm
     from catfish_memory_situation import render_situation
-    from catfish_memory_profile import render_profile
+    from catfish_memory_profile import render_profile, render_style
     from catfish_memory_graph import render_graph
     from catfish_memory_render import _RenderMixin
     from catfish_memory_sections import _SectionsMixin
@@ -550,6 +550,15 @@ class CatfishMemoryProvider(
             feedback = self._render_feedback(catfish_home)
             if feedback:
                 sections.append(feedback)
+
+            # 4b. 11/12: 员工让写正式文书的这一轮, 带上他指定的范文里的写法特点 + 片段 (条件触发)
+            try:
+                style = render_style(catfish_home, query)
+            except Exception as e:  # noqa: BLE001 —— 范文坏了不能拖垮 prefetch
+                logger.warning("catfish-memory 文书风格块渲染失败 (跳过): %s", e)
+                style = ""
+            if style:
+                sections.append(style)
 
             # 5. skill_guard — 员工提 skill 时铁律 (条件触发)
             guard = self._render_skill_guard(query)

@@ -495,13 +495,13 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
         return user_profile.user_profile_clear(args)
     # 5/6 BL-MM8 文书风格 fingerprint
     if name == "catfish_style_fingerprint_get":
-        from . import style_fingerprint  # noqa: PLC0415
+        from . import style_samples as style_fingerprint  # noqa: PLC0415
         return style_fingerprint.style_fingerprint_get(args)
     if name == "catfish_style_fingerprint_refresh":
-        from . import style_fingerprint  # noqa: PLC0415
+        from . import style_samples as style_fingerprint  # noqa: PLC0415
         return style_fingerprint.style_fingerprint_refresh(args)
     if name == "catfish_style_fingerprint_clear":
-        from . import style_fingerprint  # noqa: PLC0415
+        from . import style_samples as style_fingerprint  # noqa: PLC0415
         return style_fingerprint.style_fingerprint_clear(args)
     # 5/8 BL-A2.1: 后台任务 (chat 不阻塞)
     if name == "catfish_run_task":
