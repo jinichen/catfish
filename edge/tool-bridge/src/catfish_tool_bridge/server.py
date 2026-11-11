@@ -213,6 +213,12 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
             return _success(req_id, await colleague_rooms_tasks.assist(params))
         except (ValueError, LookupError, OSError, RuntimeError) as e:
             return _error(req_id, INVALID_PARAMS, str(e))
+    if method == "room/revise_suggest":   # 11/11 一起改文档: 冲突处小鲶给建议 (调大模型, 异步; Rust 注入令牌)
+        from . import colleague_rooms_revise_ai  # noqa: PLC0415
+        try:
+            return _success(req_id, await colleague_rooms_revise_ai.suggest(params))
+        except (ValueError, LookupError, OSError, RuntimeError) as e:
+            return _error(req_id, INVALID_PARAMS, str(e))
     if method.startswith("pim/croom_"):
         from . import colleague_rooms  # noqa: PLC0415
         handlers = colleague_rooms.pim_handlers(params)

@@ -195,6 +195,9 @@ def classify(env: dict[str, Any], rid: str, sender: str, ments: list[str]) -> tu
     if "form_status" in env:
         st = rf._clean_form_status(env.get("form_status"), rid, sender)
         return ("form_status", {"form_status": st}, []) if st else None
+    if any(k in env for k in ("revise", "revise_status", "revise_return")):   # 11/11 群里一起改文档
+        from . import colleague_rooms_revise as rv  # noqa: PLC0415
+        return rv.classify(env, rid, sender, ments)
     return "text", {}, ments
 
 

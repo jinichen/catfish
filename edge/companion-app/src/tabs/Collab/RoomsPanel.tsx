@@ -32,6 +32,10 @@ import FormFill from "./FormFill";
 import FormProgress from "./FormProgress";
 import RoomComposer from "./RoomComposer";
 import RoomFormMessage from "./RoomFormMessage";
+import RoomReviseMessage from "./RoomReviseMessage";
+import ReviseMergePanel from "./ReviseMergePanel";
+import DocVersions from "./DocVersions";
+import { ReviseStartButton, ReviseStartDialog, hiddenReviseStatus, useReviseDetect, type ReviseSource } from "./reviseUi";
 import { hiddenFormStatus } from "./roomForms";
 import { Confirm, InfoEditor, RetentionDialog, SearchPanel, daysLabel } from "./RoomsExtras";
 import { AttachButton, DeliveryLine, IssueBar, PickedChips, RoomFileList, pickFiles, stageFiles, type PickedFile } from "./RoomsDelivery";
@@ -79,7 +83,7 @@ export function waitingNotice(waiting: RoomMember[]): string {
 
 /** 群列表里最后一条的预览: 任务状态 / 自动转发的文字里已经有名字了 */
 export function lastPreview(last: { name: string; text: string; kind?: string }): string {
-  return last.kind === "status" || last.kind === "auto" || last.kind === "deadline" || last.kind === "form_status" ? last.text : `${last.name}: ${last.text}`;
+  return last.kind === "status" || last.kind === "auto" || last.kind === "deadline" || last.kind === "form_status" || last.kind === "revise_status" ? last.text : `${last.name}: ${last.text}`;
 }
 
 /** 截止 / 时间写短: 「2026-11-06」→「11/6」,「2026-11-06T15:00」→「11/6 15:00」(今年以外带年份) */
@@ -94,7 +98,8 @@ export function shortWhen(iso: string | null | undefined, now: Date = new Date()
 export function visibleMessages(messages: RoomMessage[]): RoomMessage[] {
   const cards = new Set(messages.filter((m) => m.kind === "card" && m.card).map((m) => m.card!.task_id));
   const forms = hiddenFormStatus(messages);
-  return messages.filter((m) => !(m.kind === "status" && m.status && cards.has(m.status.task_id))
+  const revs = hiddenReviseStatus(messages);   // 11/11 一起改文档: 卡片在眼前时状态写在卡片上
+  return messages.filter((m) => !revs.has(m.msg_id) && !(m.kind === "status" && m.status && cards.has(m.status.task_id))
                                && !(m.kind === "form_status" && m.form_status && forms.has(m.form_status.form_id)));
 }
 
@@ -229,6 +234,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
   const [helpOpen, setHelpOpen] = useState(false);
   // 11/09 群里发表: 发起弹层 / 我去填 / 发起人看进度
   const [formUi, setFormUi] = useState<null | { compose: true } | { fill: string } | { watch: string; notice?: string }>(null);
+  const [reviseUi, setReviseUi] = useState<null | { merge: string; title: string } | { versions: string } | { start: ReviseSource }>(null);   // 11/11 一起改文档
   /** 提示 (小鲶起草好了 / 接下了 / 派出了): 不是错误, 不用红字, 几秒后自己消失 */
   const [hint, setHint] = useState<string | null>(null);
   useEffect(() => {
@@ -237,6 +243,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
     return () => clearTimeout(t);
   }, [hint]);
   const [helping, setHelping] = useState<AssistKind | null>(null);
+  const detect = useReviseDetect(roomId, setHint);
   const [autoPost, setAutoPost] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
 
@@ -390,6 +397,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
     const r = await pickFiles(list, picked);
     setPicked(r.files);
     setError(r.error ?? null);
+    void detect.check(r.files.slice(picked.length));   // 带某一轮记号的交回稿: 提示直接交回
   }
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) { e.preventDefault(); void dispatch(); return; }
@@ -460,13 +468,17 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
                            }, "没收到你接下的通知")}
                            onWork={() => void openWork(m.card!.task_id)} onWatch={() => setWatch({ id: m.card!.task_id })}
                            onSummary={joined ? () => void fillSummary(m.card!.task_id, m.card!.title) : undefined} />
+            ) : m.kind === "revise" || m.kind === "revise_return" || m.kind === "revise_status" ? (
+              <RoomReviseMessage m={m} me={me} members={members} roomId={roomId} tick={shown.length} onChanged={() => void load()} onNotice={setHint}
+                                 onMerge={(id) => setReviseUi({ merge: id, title: m.revise?.title ?? "" })} onVersions={(id) => setReviseUi({ versions: id })}
+                                 onRevise={(src) => setReviseUi({ start: src })} />
             ) : m.kind === "form" && m.form ? (
               <RoomFormMessage m={m} me={me} members={members} messages={shown} roomId={roomId} onChanged={() => void load()}
                                onFill={async (id) => { await refreshForms(); setFormUi({ fill: id }); }}   // 表卡和表走两个邮筒, 先取一次
                                onWatch={(id) => setFormUi({ watch: id })} />
             ) : (
               <Bubble m={m} mine={m.from === me} members={members} me={me} quoted={m.reply_to ? byId.get(m.reply_to) : undefined}
-                      roomId={roomId} onChanged={() => void load()}
+                      roomId={roomId} onChanged={() => void load()} onRevise={joined ? (src) => setReviseUi({ start: src }) : undefined}
                       onReply={joined && m.kind === "text" ? () => setReplyTo(m) : undefined} />
             )}
           </Fragment>))}
@@ -530,6 +542,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
                 ))}
               </div>
             )}
+            {detect.banner((f) => setPicked((p) => p.filter((x) => x !== f)))}
             <PickedChips files={picked} onRemove={(i) => setPicked((p) => p.filter((_, k) => k !== i))} />
             <textarea value={text} rows={Math.min(8, Math.max(2, text.split("\n").length))} maxLength={TEXT_MAX} onKeyDown={onKey}
                       onPaste={(e) => {
@@ -578,6 +591,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
                 </Btn>
                 <Btn kind="ghost" onClick={() => setAtOpen((v) => !v)}>@</Btn>
                 <AttachButton disabled={busy} onPick={(l) => void addPicked(l)} />
+                <ReviseStartButton disabled={busy} onStaged={(src) => setReviseUi({ start: src })} onError={setError} />
                 {asTask && (
                   <Btn kind="ghost" disabled={busy || Boolean(asTask.problem)} onClick={() => void dispatch()}>派给@的人</Btn>
                 )}
@@ -630,6 +644,11 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
       {formUi && "fill" in formUi && <FormFill formId={formUi.fill} onClose={() => { setFormUi(null); void load(); }} />}
       {formUi && "watch" in formUi && <FormProgress formId={formUi.watch} initialError={formUi.notice} onClose={() => { setFormUi(null); void load(); }} />}
       {watch && <TaskProgress taskId={watch.id} initialError={watch.notice} onClose={() => setWatch(null)} />}
+      {reviseUi && "merge" in reviseUi && <ReviseMergePanel roomId={roomId} revId={reviseUi.merge} title={reviseUi.title} onClose={() => setReviseUi(null)}
+                                                            onDone={(t) => { setReviseUi(null); setHint(t); void load(); }} />}
+      {reviseUi && "versions" in reviseUi && <DocVersions roomId={roomId} docId={reviseUi.versions} onClose={() => setReviseUi(null)} />}
+      {reviseUi && "start" in reviseUi && <ReviseStartDialog roomId={roomId} me={me} members={members} source={reviseUi.start}
+                                                             onClose={() => setReviseUi(null)} onDone={(t) => { setReviseUi(null); setHint(t); void load(); }} />}
       {modal === "add" && <RoomComposer roomId={roomId} existing={room.members} onClose={() => setModal(null)}
                                         onDone={(_id, n) => { setModal(null); onNotice(n); void load(); }} />}
       {modal === "info" && <InfoEditor room={room} busy={busy} onClose={() => setModal(null)}
@@ -654,9 +673,9 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
   );
 }
 
-function Bubble({ m, mine, members, me, quoted, onReply, roomId, onChanged }: {
+function Bubble({ m, mine, members, me, quoted, onReply, roomId, onChanged, onRevise }: {
   m: RoomMessage; mine: boolean; members: RoomMember[]; me: string; quoted?: RoomMessage; onReply?: () => void;
-  roomId: string; onChanged: () => void;
+  roomId: string; onChanged: () => void; onRevise?: (src: ReviseSource) => void;
 }) {
   const delivery = <DeliveryLine roomId={roomId} msgId={m.msg_id} rows={m.delivery} members={members} hasFiles={Boolean(m.files?.length)}
                                  align={m.kind === "system" ? "center" : mine ? "flex-end" : "flex-start"} onChanged={onChanged} />;
@@ -706,7 +725,8 @@ function Bubble({ m, mine, members, me, quoted, onReply, roomId, onChanged }: {
           </div>
         )}
         {m.text}
-        {m.files?.length ? <RoomFileList roomId={roomId} files={m.files} mine={mine} /> : null}
+        {m.files?.length ? <RoomFileList roomId={roomId} files={m.files} mine={mine}
+                                         onRevise={onRevise && ((f) => onRevise({ msg_id: m.msg_id, file_id: f.id, name: f.name }))} /> : null}
       </div>
       {delivery}
       <span style={{ display: "flex", gap: 8 }}>

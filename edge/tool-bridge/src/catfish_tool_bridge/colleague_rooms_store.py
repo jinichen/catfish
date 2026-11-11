@@ -78,6 +78,11 @@ CREATE TABLE IF NOT EXISTS bigfiles (
     error TEXT, next_at REAL NOT NULL DEFAULT 0, at TEXT NOT NULL,
     PRIMARY KEY (room_id, file_id)
 );
+-- 11/11 群里一起改文档 (colleague_rooms_revise.py): 每一轮修改一行 (发起人 / 修改人各记各的); 底稿、交回稿、合并版的内容另存
+CREATE TABLE IF NOT EXISTS revise (rev_id TEXT PRIMARY KEY, room_id TEXT NOT NULL, doc_id TEXT NOT NULL, msg_id TEXT NOT NULL,
+    data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS revise_blobs (doc_id TEXT NOT NULL, name TEXT NOT NULL, data BLOB NOT NULL, at TEXT NOT NULL,
+    PRIMARY KEY (doc_id, name));
 CREATE TABLE IF NOT EXISTS file_chunks (
     room_id TEXT NOT NULL, file_id TEXT NOT NULL, sender TEXT NOT NULL, i INTEGER NOT NULL, data BLOB NOT NULL,
     at REAL NOT NULL, PRIMARY KEY (room_id, file_id, i)
@@ -151,7 +156,8 @@ def room_ids() -> list[str]:
 
 def delete_room(room_id: str) -> None:
     with _conn() as con:
-        for table in ("messages", "outbox", "files", "file_chunks", "bigfiles", "rooms"):
+        con.execute("DELETE FROM revise_blobs WHERE doc_id IN (SELECT doc_id FROM revise WHERE room_id = ?)", (room_id,))
+        for table in ("messages", "outbox", "files", "file_chunks", "bigfiles", "revise", "rooms"):
             con.execute(f"DELETE FROM {table} WHERE room_id = ?", (room_id,))
 
 
@@ -292,6 +298,14 @@ def prune_before(cutoff_iso: str, room_id: str | None = None) -> int:
                     "(SELECT 1 FROM messages m WHERE m.room_id = files.room_id AND m.msg_id = files.msg_id)")
         con.execute("DELETE FROM outbox WHERE ref IS NOT NULL AND NOT EXISTS "
                     "(SELECT 1 FROM messages m WHERE m.room_id = outbox.room_id AND m.msg_id = outbox.ref)")
+        # 11/11 一起改文档: 卡片那条消息过了保留期, 这一轮的本机记录跟着删; 底稿 / 交回稿 / 合并版的副本也按同一期限删
+        con.execute("DELETE FROM revise WHERE NOT EXISTS "
+                    "(SELECT 1 FROM messages m WHERE m.room_id = revise.room_id AND m.msg_id = revise.msg_id)")
+        if room_id:
+            con.execute("DELETE FROM revise_blobs WHERE at < ? AND (doc_id IN (SELECT doc_id FROM revise WHERE room_id = ?)"
+                        " OR doc_id NOT IN (SELECT doc_id FROM revise))", (cutoff_iso, room_id))
+        else:
+            con.execute("DELETE FROM revise_blobs WHERE at < ?", (cutoff_iso,))
         return cur.rowcount
 
 

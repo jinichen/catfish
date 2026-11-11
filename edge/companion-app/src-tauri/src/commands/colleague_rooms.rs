@@ -15,6 +15,9 @@ const RPC_TIMEOUT: Duration = Duration::from_secs(90);
 const ALLOWED: &[&str] = &[
     "list", "get", "sync", "create", "join", "decline", "send", "read", "add", "remove", "update", "disband", "leave",
     "delete", "search", "settings_get", "settings_set", "transfer", "resend", "file_save", "stage", "file_retry", "tasks",
+    // 11/11 群里一起改文档 (colleague_rooms_revise.py)
+    "revise_start", "revise_open", "revise_return", "revise_decline", "revise_progress", "revise_remind", "revise_close",
+    "revise_merge", "revise_decide", "revise_publish", "revise_versions", "revise_diff", "revise_detect",
 ];
 
 fn method_for(action: &str) -> Result<String, String> {
@@ -60,6 +63,23 @@ pub async fn colleague_room_assist(
     tool_bridge_rpc::call_with_timeout("room/assist", params, ASSIST_TIMEOUT).await
 }
 
+/// 11/11 一起改文档: 冲突处让小鲶给一版兼顾各人改法的建议 (调大模型)。跟 assist 一样注入员工自己的令牌;
+/// 只回建议稿, 用不用发起人在合并面板上点。
+#[tauri::command]
+pub async fn colleague_room_revise_suggest(room_id: String, rev_id: String, cid: String) -> Result<Value, String> {
+    let token = oauth::ensure_fresh_access_token()
+        .await
+        .ok_or("没登录 (拿不到访问令牌), 登录后再让小鲶给建议")?;
+    let params = json!({
+        "room_id": room_id,
+        "rev_id": rev_id,
+        "cid": cid,
+        "auth_token": token,
+        "gateway_url": endpoints::endpoints().gateway_base(),
+    });
+    tool_bridge_rpc::call_with_timeout("room/revise_suggest", params, ASSIST_TIMEOUT).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::method_for;
@@ -68,6 +88,7 @@ mod tests {
     fn 只放行群聊这一组() {
         assert_eq!(method_for("send").unwrap(), "pim/croom_send");
         assert_eq!(method_for("disband").unwrap(), "pim/croom_disband");
+        assert_eq!(method_for("revise_publish").unwrap(), "pim/croom_revise_publish");
         assert!(method_for("ctask_send").is_err());
         assert!(method_for("../tools/dispatch").is_err());
     }

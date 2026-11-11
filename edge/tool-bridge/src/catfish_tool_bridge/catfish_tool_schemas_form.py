@@ -11,14 +11,15 @@ FORM_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_form",
         "description": (
-            "收集表 + 派任务给同事 (task_*)。\n"
-            "收集表: 有 Excel 先 from_excel 拿字段, 否则按描述列字段, 再 create; 邮箱不知道用 directory 查。"
-            "responses 看结果 (数字照返回说), export 导出。帮员工填别人的表: get → 从本机找值, 找不到留空 → draft (写 sources)。\n"
-            "派任务: task_create (text=要做什么, 定时/周期给 schedule) → task_send; task_results 看结果。"
+            "收集表 + 派任务 (task_*) + 群里一起改文档 (revise_*)。\n"
+            "收集表: from_excel 或按描述列字段 → create; 邮箱用 directory 查; responses 看结果, export 导出。"
+            "替员工填表: get → 本机找值 (找不到留空) → draft (带 sources)。\n"
+            "派任务: task_create (text=做什么, 定时/周期给 schedule) → task_send; task_results 看结果。"
             # 交回文件 (11/5) 的做法写在 mail_draft_id / files 参数说明和任务提示词里 —— 这段说明有长度上限 (test_tool_schema_budget)
-            "做同事派来的任务: 做完 task_draft 存 result; 定时/周期任务的这一次用 task_period (要人确认没做的步骤写 skipped)。\n"
-            "send / remind / close / task_send / task_remind / task_cancel 会发消息给同事: 先不带 confirmed, 念 proposal, 同意才 confirmed=true。"
-            "不能替员工提交、拒填、交回或拒绝, 也不要自己把结果发给对方, 让他去「协同」页点。"
+            "做同事派的任务: 做完 task_draft 存 result; 定时/周期的这次用 task_period。\n"
+            "改文档: revise_start (room_id+path) → revise_merge 看冲突 → decide → publish\n"
+            "会发消息的 (send、remind、close、task_send/remind/cancel、revise_start/remind/publish): "
+            "先不带 confirmed, 念 proposal, 同意才 confirmed=true。不能替员工提交、拒填、交回、拒绝。"
         ),
         "input_schema": {
             "type": "object",
@@ -27,7 +28,12 @@ FORM_TOOLS: List[Dict[str, Any]] = [
                                                       "update", "send", "remind", "close", "export", "draft",
                                                       "directory", "task_list", "task_get", "task_results",
                                                       "task_create", "task_send", "task_remind", "task_cancel",
-                                                      "task_draft", "task_period"]},
+                                                      "task_draft", "task_period", "revise_list", "revise_start",
+                                                      "revise_status", "revise_merge", "revise_decide", "revise_publish",
+                                                      "revise_remind"]},
+                "rev_id": {"type": "string", "description": "revise_*: 一轮修改的编号 (r_…)"},
+                "cid": {"type": "string", "description": "revise_decide: 冲突编号; pick=选项 key / base / text (text 带上写好的文字)"},
+                "pick": {"type": "string"},
                 "schedule": {"type": "object", "description": "task_create 定时: {kind:once, at:YYYY-MM-DDTHH:MM}; "
                              "周期: {kind:cron, expr:5 段 cron, until:YYYY-MM-DD 和/或 times:次数} (必须有结束)"},
                 "task_id": {"type": "string", "description": "任务编号 (t_YYYYMMDD_xxxxxxxx)"},
@@ -41,13 +47,13 @@ FORM_TOOLS: List[Dict[str, Any]] = [
                 "files": {"type": "array", "items": {"type": "string"},
                           "description": "task_draft / task_period: 那封邮件草稿里的文件名"},
                 "form_id": {"type": "string", "description": "表单编号 (f_YYYYMMDD_xxxxxxxx)"},
-                "path": {"type": "string", "description": "from_excel: Excel 模板路径"},
+                "path": {"type": "string", "description": "from_excel: Excel 模板路径; revise_start: 要请大家改的文档"},
                 "template_path": {"type": "string", "description": "create: 来自 Excel 模板时带上"},
                 "title": {"type": "string", "description": "表名"},
                 "deadline": {"type": "string", "description": "截止 YYYY-MM-DD; 任务可带时分 YYYY-MM-DDTHH:MM"},
                 "note": {"type": "string", "description": "给填表人的说明"},
                 "recipients": {"type": "array", "items": {"type": "string"},
-                               "description": "收件人邮箱 (发出后只能加人; 任务最多 20 人)"},
+                               "description": "收件人邮箱 (发出后只能加人; 任务最多 20 人); revise_start: 请谁改"},
                 "room_id": {"type": "string", "description": "create: 在哪个群里发 (r_…, 收件人须是群里已加入的人); 表卡进群, 谁交了群里看得到"},
                 "fields": {
                     "type": "array",

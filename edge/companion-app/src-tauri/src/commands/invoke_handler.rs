@@ -241,6 +241,7 @@ pub(crate) fn handler(
             crate::commands::colleague_tasks::colleague_task_call,
             crate::commands::colleague_rooms::colleague_room_call,
             crate::commands::colleague_rooms::colleague_room_assist,
+            crate::commands::colleague_rooms::colleague_room_revise_suggest,
             crate::commands::colleague_tasks::colleague_task_check,
             crate::commands::workflows::workflow_call,
             crate::commands::experts_local::expert_local_call,

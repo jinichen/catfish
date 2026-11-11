@@ -37,6 +37,9 @@ def dispatch(name: str, args: dict[str, Any]) -> dict[str, Any]:
     try:
         if action.startswith("task_"):
             return colleague_tasks.tool_dispatch(action, args)
+        if action.startswith("revise_"):   # 11/11 群里一起改文档
+            from . import colleague_rooms_revise_ai  # noqa: PLC0415
+            return colleague_rooms_revise_ai.tool_dispatch(action, args)
         if action == "list":
             return forms.list_all()
         if action in ("get", "status"):

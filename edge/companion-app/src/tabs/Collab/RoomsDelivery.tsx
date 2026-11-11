@@ -118,7 +118,11 @@ export function fileState(f: RoomFile): string {
 }
 
 /** 消息里的文件: 一个一行。mine = 我发的 (气泡是主色, 字是白的)。 */
-export function RoomFileList({ roomId, files, mine }: { roomId: string; files: RoomFile[]; mine: boolean }) {
+export function RoomFileList({ roomId, files, mine, onRevise }: {
+  roomId: string; files: RoomFile[]; mine: boolean;
+  /** 11/11 「请大家修改」: 拿这份文件发起一轮一起改 (只在群里的聊天消息上有) */
+  onRevise?: (f: RoomFile) => void;
+}) {
   const [err, setErr] = useState<string | null>(null);
   const [saved, setSaved] = useState<Record<string, string>>({});
   async function retry(f: RoomFile) {
@@ -150,6 +154,7 @@ export function RoomFileList({ roomId, files, mine }: { roomId: string; files: R
             <>
               <button type="button" style={btn} onClick={() => void open(f)}>打开</button>
               <button type="button" style={btn} onClick={() => void open(f, true)}>在文件夹中显示</button>
+              {onRevise && <button type="button" style={btn} onClick={() => onRevise(f)} title="请群里的同事各自修改这份文件, 交回后系统合并">请大家修改</button>}
             </>
           )}
           {fileState(f) && (

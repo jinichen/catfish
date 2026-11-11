@@ -1,5 +1,6 @@
 /** 同事群聊 (11/5, docs/GROUP-CHAT-PLAN.md) —— Rust commands/colleague_rooms.rs 的前端封装。规则都在 tool-bridge colleague_rooms.py。 */
 import { invoke } from "@tauri-apps/api/core";
+import type { ReviseCard, ReviseReturn, ReviseStatus } from "./tauri_room_revise";
 
 /** 我在群里的状态。disbanded = 群主解散了; removed = 被群主移出。 */
 export type MyRoomState = "invited" | "joined" | "declined" | "left" | "removed" | "disbanded";
@@ -79,11 +80,15 @@ export interface RoomMessage {
   msg_id: string;
   /** 本机库里的先后编号 (11/6): 往上翻 / 搜索结果定位用 */
   seq?: number;
-  kind: "text" | "system" | "card" | "status" | "auto" | "deadline" | "form" | "form_status";
+  kind: "text" | "system" | "card" | "status" | "auto" | "deadline" | "form" | "form_status" | "revise" | "revise_status" | "revise_return";
   card?: RoomCard;
   /** 11/09 群里发表 */
   form?: RoomFormCard;
   form_status?: RoomFormStatus;
+  /** 11/11 群里一起改文档 (tauri_room_revise.ts) */
+  revise?: ReviseCard;
+  revise_status?: ReviseStatus;
+  revise_return?: ReviseReturn;
   /** 11/07 发起人延期: 这张任务卡的新截止 */
   deadline?: { task_id: string; deadline: string };
   status?: RoomStatus;

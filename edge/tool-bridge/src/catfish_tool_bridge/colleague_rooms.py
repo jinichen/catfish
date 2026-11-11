@@ -376,7 +376,9 @@ def delete_local(room_id: str) -> dict[str, Any]:
 
 # ── 发消息 / 已读 ────────────────────────────────────────────────
 
-def send(room_id: str, text: Any, mentions: Any = None, reply_to: Any = None, files: Any = None) -> dict[str, Any]:
+def send(room_id: str, text: Any, mentions: Any = None, reply_to: Any = None, files: Any = None, *, kind: str = "text",
+         extra_in: dict[str, Any] | None = None, to: list[str] | None = None, record: bool = True) -> dict[str, Any]:
+    """kind / extra_in / to / record: 11/11 群里一起改文档 (colleague_rooms_revise) 发卡片 / 交回稿 (只发给发起人) 用。"""
     me = forms_net.me()
     room = load(room_id)
     if room.get("my_state") != "joined":
@@ -392,30 +394,32 @@ def send(room_id: str, text: Any, mentions: Any = None, reply_to: Any = None, fi
     rt = str(reply_to or "").strip() or None
     if rt and not _MSG_ID.fullmatch(rt):
         rt = None
-    extra: dict[str, Any] = {**({"reply_to": rt} if rt else {}), **({"files": rfiles.meta(attached)} if attached else {})}
+    extra: dict[str, Any] = {**({"reply_to": rt} if rt else {}), **({"files": rfiles.meta(attached)} if attached else {}), **(extra_in or {})}
+    more = {"kind": kind, "to": to, "record": record}
     if not bigs:
-        return _broadcast(room, me, body, ments, extra, attached=attached)
+        return _broadcast(room, me, body, ments, extra, attached=attached, **more)
     # 大文件 (合计超 5MB): 先在本机加密、中央建好暂存 (建不了整条不发), 消息带上暂存编号和钥匙, 再后台一块块传
     from . import colleague_rooms_bigfiles as big  # noqa: PLC0415
     mid, at = f"m_{secrets.token_hex(10)}", _now()
-    extra["files"] = big.prepare_send(room["room_id"], mid, me, bigs, _joined_others(room, me), at)
-    out = _broadcast(room, me, body, ments, extra, msg_id=mid, at=at)
+    extra["files"] = big.prepare_send(room["room_id"], mid, me, bigs, to or _joined_others(room, me), at)
+    out = _broadcast(room, me, body, ments, extra, msg_id=mid, at=at, **more)
     big.kick()
     return out
 
 
 def _broadcast(room: dict[str, Any], me: str, body: str, ments: list[str], extra: dict[str, Any],
                kind: str = "text", source: str | None = None, attached: list[dict[str, Any]] | None = None,
-               msg_id: str | None = None, at: str | None = None) -> dict[str, Any]:
-    """发给群里已加入的其他人 + 记进本机。extra = 信封和本机记录里都带的附加字段 (reply_to / card / status / files)。
+               msg_id: str | None = None, at: str | None = None, to: list[str] | None = None, record: bool = True) -> dict[str, Any]:
+    """发给群里已加入的其他人 (to: 只发给其中这几个) + 记进本机 (record=False 不记)。extra = 信封和本机记录里都带的附加字段 (reply_to / card / status / files)。
     没送到的记进 outbox 挂在这条下面 (界面显示「张三没收到 · 重发」), 不再写 undelivered。
     attached: 群文件 —— 消息先发, 文件分块排进 outbox 后台发 (发送按钮不等)。"""
     msg = {"msg_id": msg_id or f"m_{secrets.token_hex(10)}", "kind": kind, "from": me, "at": at or _now(), "text": body,
            "mentions": ments, **extra}
-    others = _joined_others(room, me)
+    others = [e for e in _joined_others(room, me) if to is None or e in to]
     env = {"v": ENVELOPE_VERSION, "room_id": room["room_id"], "msg_id": msg["msg_id"], "at": msg["at"],
            "text": body, "mentions": ments, **extra}
-    _append(room["room_id"], msg)   # 先记本机: 没送到的信要挂在它下面
+    if record:
+        _append(room["room_id"], msg)   # 先记本机: 没送到的信要挂在它下面
     if attached:
         rfiles.keep_sent(room["room_id"], msg, attached, me)
     failed = _post_all(others, "room_msg", env, source, room=room, ref=msg["msg_id"])
@@ -427,12 +431,12 @@ def _broadcast(room: dict[str, Any], me: str, body: str, ments: list[str], extra
     return {"ok": True, "message": msg, "sent_to": len(others) - len(failed), "failed": failed}
 
 
-MSG_KINDS = ("text", "card", "status", "auto", "deadline", "form", "form_status")   # 列表预览的消息种类
+MSG_KINDS = ("text", "card", "status", "auto", "deadline", "form", "form_status", "revise", "revise_status", "revise_return")   # 列表预览的消息种类
 # 11/06 鸿波「协同的都看过、处理了, 为什么还有数字」: 群里派的任务卡 / 任务状态行原来也算未读, 而任务本身在
 # 「协同事项」里已经处理 (接下 / 不接 / 交回) —— 那里不会把群里那张卡标成已读, 红点一直挂着 (实测「测试」群 9 条未读里
 # 7 张是已处理的任务卡)。任务卡要处理的那一下已经算在协同事项的待办数里 (待处理的任务), 群里再算一遍是重复。
 # 所以未读 / @我 只数聊天消息和自动转发的结果; 卡和状态照样显示在群里、照样做最后一条预览。
-UNREAD_KINDS = ("text", "auto")
+UNREAD_KINDS = ("text", "auto", "revise", "revise_return")   # 11/11 请你修改 / 交回稿: 别处没有待办, 算未读
 
 
 def mark_read(room_id: str) -> dict[str, Any]:
@@ -742,6 +746,11 @@ def _rooms_tasks():
     return rt
 
 
+def _revise():
+    from . import colleague_rooms_revise as rv  # noqa: PLC0415
+    return rv
+
+
 def _snapshot(dest: Any) -> dict[str, Any]:
     """换电脑导出: Companion 要一份本机群聊库的快照 (加密的库出来也是加密的)。只许写到 ~/.catfish 下面的 .db。"""
     home = wiki_files._catfish_home().resolve()
@@ -781,4 +790,5 @@ def pim_handlers(params: dict[str, Any]) -> dict[str, Any]:
         "pim/croom_tasks": lambda: _rooms_tasks().room_tasks(rid),
         "pim/croom_leave": lambda: leave(rid),
         "pim/croom_delete": lambda: delete_local(rid),
+        **_revise().pim_handlers(rid, params),   # 11/11 群里一起改文档
     }, _LOCK)
