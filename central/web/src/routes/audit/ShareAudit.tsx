@@ -40,6 +40,11 @@ export const EVENT_LABEL: Record<string, string> = {
   review_approve: "看过",
   review_withdraw: "撤下",
   review_reject: "驳回",
+  // 11/09 知识页「全公司可见」那一档 (wiki-hub review.py)
+  company_request: "申请全公司",
+  company_revoke: "收回全公司",
+  review_approve_company: "全公司通过",
+  review_reject_company: "全公司驳回",
   publish: "发布",
   unpublish: "撤回",
   delete_version: "删除版本",
@@ -99,9 +104,16 @@ export function mcpRow(e: McpAuditEvent, i: number): ShareAuditRow {
   return { key: `m${i}`, ts: str(e.ts), line: "mcp", event: str(e.action), who: str(e.user_sub), object: str(e.connector_id), note: bits.join(" · ") };
 }
 
+/** 审核 / 改范围的旧记录不带标题 (11/11 前), 用同一页别的记录 (发布) 里的标题补上, 不显示 dept/研发/6cf42163eb34 */
+export function fillWikiTitles(events: WikiAuditEvent[]): WikiAuditEvent[] {
+  const titles = new Map<string, string>();
+  for (const e of events) if (e.title && e.file_id) titles.set(`${e.namespace}/${e.file_id}`, e.title);
+  return events.map((e) => (e.title || !e.file_id ? e : { ...e, title: titles.get(`${e.namespace}/${e.file_id}`) }));
+}
+
 /** 三条线合并、按时间倒序。导出来给测试和页面共用。 */
 export function mergeShareAudit(hub: HubAuditEvent[], wiki: WikiAuditEvent[], mcp: McpAuditEvent[]): ShareAuditRow[] {
-  return [...hub.map(hubRow), ...wiki.map(wikiRow), ...mcp.map(mcpRow)].sort((a, b) => b.ts.localeCompare(a.ts));
+  return [...hub.map(hubRow), ...fillWikiTitles(wiki).map(wikiRow), ...mcp.map(mcpRow)].sort((a, b) => b.ts.localeCompare(a.ts));
 }
 
 const fetchWikiAudit = async (limit: number): Promise<WikiAuditEvent[]> => {
@@ -186,7 +198,8 @@ export function ShareAudit() {
           columns={[
             { header: "时间", width: 140, nowrap: true, cell: (r) => when(r.ts) },
             { header: "哪条线", width: 72, cell: (r) => <Badge tone={LINE_TONE[r.line]}>{LINE_LABEL[r.line]}</Badge> },
-            { header: "事件", width: 84, nowrap: true, cell: (r) => eventLabel(r.event) },
+            // 11/11: nowrap 的长事件名 (company_request) 会压到「谁」那一列上; 改成截断 + 悬停看全名
+            { header: "事件", width: 96, truncate: true, cell: (r) => <span title={r.event}>{eventLabel(r.event)}</span> },
             { header: "谁", width: 180, truncate: true, cell: (r) => <span title={r.who}>{r.who || "—"}</span> },
             { header: "对象", width: "26%", truncate: true, cell: (r) => <span title={r.object} style={{ fontFamily: "var(--font-mono)" }}>{r.object || "—"}</span> },
             { header: "备注", truncate: true, cell: (r) => <span title={r.note}>{r.note || ""}</span> },

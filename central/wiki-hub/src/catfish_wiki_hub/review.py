@@ -75,6 +75,21 @@ def company_visible(rec: dict[str, Any]) -> bool:
         and rec.get("review_status") != "withdrawn"
 
 
+def _audit(event: str, namespace: str, file_id: str, by: str, note: str | None = None) -> None:
+    """审核 / 改范围的审计带上页面标题 (11/11): 门户「分享审计」原来只能显示 dept/研发/6cf42163eb34 这种 id。
+    取不到标题 (已删) 不带, 门户那边再用同一页的发布记录补。"""
+    ev: dict[str, Any] = {"ts": _now(), "event": event, "namespace": namespace, "file_id": file_id, "by_user": by, "line": "wiki"}
+    if note is not None:
+        ev["note"] = note
+    try:
+        doc = storage.get_document(namespace, file_id)
+        if doc and doc.get("title"):
+            ev["title"] = doc["title"]
+    except Exception:  # noqa: BLE001 —— 标题只是方便看, 取不到也要记审计
+        pass
+    storage._write_audit(ev)
+
+
 def _company_request(rec: dict[str, Any], by: str) -> None:
     rec.update(scope="company", company_status="pending", company_requested_by=by, company_requested_at=_now())
     for k in ("company_reviewed_by", "company_reviewed_at", "company_note"):
@@ -97,8 +112,7 @@ def mark_pending(namespace: str, file_id: str, by: str, scope: str = "department
         _company_request(rec, by)
     _save(namespace, file_id, rec)
     if scope == "company":
-        storage._write_audit({"ts": _now(), "event": "company_request", "namespace": namespace, "file_id": file_id,
-                              "by_user": by, "line": "wiki"})
+        _audit("company_request", namespace, file_id, by)
     return rec
 
 
@@ -119,8 +133,7 @@ def set_scope(user: dict, namespace: str, file_id: str, scope: str) -> dict[str,
             return rec
         _drop_company(rec)
     _save(namespace, file_id, rec)
-    storage._write_audit({"ts": _now(), "event": "company_request" if scope == "company" else "company_revoke",
-                          "namespace": namespace, "file_id": file_id, "by_user": user.get("sub"), "line": "wiki"})
+    _audit("company_request" if scope == "company" else "company_revoke", namespace, file_id, user.get("sub") or "")
     return rec
 
 
@@ -144,8 +157,7 @@ def decide(user: dict, namespace: str, file_id: str, decision: str, note: str = 
             raise ValueError(r.get("error") or "撤下失败")
         rec.update(review_status="withdrawn", withdrawn_by=user.get("sub"), withdrawn_at=_now(), review_note=note)
     _save(namespace, file_id, rec)
-    storage._write_audit({"ts": _now(), "event": "review_" + decision, "namespace": namespace, "file_id": file_id,
-                          "by_user": user.get("sub"), "note": note, "line": "wiki"})
+    _audit("review_" + decision, namespace, file_id, user.get("sub") or "", note)
     return rec
 
 
@@ -161,8 +173,7 @@ def _decide_company(user: dict, namespace: str, file_id: str, decision: str, not
     rec.update(company_status="approved" if decision == "approve_company" else "rejected",
                company_reviewed_by=user.get("sub"), company_reviewed_at=_now(), company_note=note)
     _save(namespace, file_id, rec)
-    storage._write_audit({"ts": _now(), "event": "review_" + decision, "namespace": namespace, "file_id": file_id,
-                          "by_user": user.get("sub"), "note": note, "line": "wiki"})
+    _audit("review_" + decision, namespace, file_id, user.get("sub") or "", note)
     return rec
 
 

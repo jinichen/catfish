@@ -40,6 +40,11 @@ describe("分享审计", () => {
     expect(eventLabel("review_withdraw")).toBe("撤下");
     expect(eventLabel("subscribe_trial")).toBe("试用订阅");
     expect(eventLabel("whatever")).toBe("whatever");
+    // 11/09 知识页全公司那一档的事件 (门户截图里原样显示成英文、压到「谁」那一列)
+    expect(eventLabel("company_request")).toBe("申请全公司");
+    expect(eventLabel("company_revoke")).toBe("收回全公司");
+    expect(eventLabel("review_approve_company")).toBe("全公司通过");
+    expect(eventLabel("review_reject_company")).toBe("全公司驳回");
 
     const rows = mergeShareAudit(
       [{ ts: "2026-01-02T00:00:00Z", event: "submit", namespace: "dept/a", name: "s", version: "1", by_user: "u", scope: "department", departments: ["a"] }],
@@ -50,6 +55,16 @@ describe("分享审计", () => {
     expect(rows[1]).toMatchObject({ who: "u", object: "dept/a/s@1", note: "部门 a" });
     expect(rows[0].object).toBe("T (dept/a)");
     expect(rows[2].note).toBe("试用");
+  });
+
+  it("知识页审核 / 改范围的旧记录没标题: 用同一页发布记录里的标题, 不显示 id", async () => {
+    const { mergeShareAudit } = await import("./ShareAudit");
+    const rows = mergeShareAudit([], [
+      { ts: "2026-11-09T08:47:00Z", event: "review_approve_company", namespace: "dept/研发", file_id: "4087d3b5825a", by_user: "a" },
+      { ts: "2026-11-09T08:42:00Z", event: "publish", namespace: "dept/研发", file_id: "4087d3b5825a", title: "产数研究院", by_user: "a" },
+      { ts: "2026-11-09T08:40:00Z", event: "company_revoke", namespace: "dept/研发", file_id: "gone", by_user: "a" },
+    ], []);
+    expect(rows.map((r) => r.object)).toEqual(["产数研究院 (dept/研发)", "产数研究院 (dept/研发)", "dept/研发/gone"]);
   });
 
   it("页面渲染四条线的行, 专家包用 by / id", async () => {

@@ -345,6 +345,18 @@ def test_不重发改范围_作者申请全公司_收回到本部门(client):
     assert client.post(url, headers=ALICE, json={"scope": "everyone"}).status_code == 400
 
 
+def test_审核和改范围的审计带页面标题(client):
+    """11/11 门户「分享审计」截图: 全公司那一档的记录只有 dept/研发部/<id>, 看不出是哪一页。"""
+    fid = _publish_company(client, ALICE).json()["file_id"]
+    client.post(_doc_url("研发部", fid) + "/review", headers=ADMIN, json={"decision": "approve_company"})
+    client.post(_doc_url("研发部", fid) + "/scope", headers=ALICE, json={"scope": "department"})
+    events = client.get("/wiki/audit?limit=50", headers=ADMIN).json()["events"]
+    mine = {e["event"]: e for e in events if e.get("file_id") == fid}
+    for ev in ("company_request", "review_approve_company", "company_revoke"):
+        assert mine[ev].get("title") == "集成能力中心", (ev, mine.get(ev))
+        assert mine[ev]["line"] == "wiki"
+
+
 def test_全公司_撤下后其他部门也看不到_销售摘要不能发全公司(client):
     fid = _publish_company(client, ALICE).json()["file_id"]
     client.post(_doc_url("研发部", fid) + "/review", headers=ADMIN, json={"decision": "approve_company"})
