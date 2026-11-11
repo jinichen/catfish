@@ -438,3 +438,22 @@ def test_用苹果自带的_Keynote_Pages_改的_存成了别的格式_交回时
     got = rv.give_back(rid, rev)
     assert got["need_confirm"] == "unchanged"
     assert got["saved_elsewhere"] == {"app": "Pages", "office": "Word", "saved": str(key), "target": str(p)}
+
+
+def test_没人交回_发起人只合自己改的那份(w, tmp_path):
+    rid = _room(w)
+    rev = _start(w, rid)["rev_id"]
+    w.be(BOSS)
+    with pytest.raises(ValueError, match="还没有人交回"):
+        rv.merge(rid, rev)
+    mine = tmp_path / "我改的.docx"
+    mine.write_bytes(_doc())
+    _edit(str(mine), "第二阶段: 系统开发, 8 周。", "第二阶段: 系统开发, 12 周。")
+    sid = big.stage({"offset": 0, "data": base64.b64encode(mine.read_bytes()).decode()})["stage_id"]
+    assert rv.give_back(rid, rev, stage_id=sid, name="我改的.docx")["self"] is True
+    an = rv.merge(rid, rev)
+    assert an["changes"] == {BOSS: 1} and an["conflicts"] == [] and an["self_file"] == "我改的.docx"
+    pub = rv.publish(rid, rev)
+    assert pub["version"] == 2
+    texts = [x.text for x in docx.Document(io.BytesIO(rv._blob(pub["message"]["revise_status"]["doc_id"], "v2"))).paragraphs]
+    assert "第二阶段: 系统开发, 12 周。" in texts

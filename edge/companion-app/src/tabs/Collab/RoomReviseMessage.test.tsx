@@ -106,6 +106,20 @@ describe("RoomReviseMessage", () => {
     render(<RoomReviseMessage m={msg} me="zhou@example.com" {...props} />);
     await screen.findByText("催一下");
     expect(screen.queryByText(/^合并/)).toBeNull();
+    // 没人交回, 发起人自己改了: 「更多」里能进合并面板
+    const onMerge = vi.fn();
+    cleanup();
+    render(<RoomReviseMessage m={msg} me="zhou@example.com" {...props} onMerge={onMerge} />);
+    fireEvent.click(await screen.findByText("更多"));
+    fireEvent.click(screen.getByText("我自己改了, 合并"));
+    expect(onMerge).toHaveBeenCalledWith(card.rev_id);
+  });
+
+  it("合并面板: 还没人交回时不报红字, 让发起人选自己改的文件; 选了就能合", async () => {
+    api.reviseMerge.mockRejectedValueOnce(new Error("还没有人交回修改"));
+    render(<ReviseMergePanel roomId="r1" revId={card.rev_id} title="实施方案" onClose={vi.fn()} onDone={vi.fn()} />);
+    await screen.findByText(/同事还没有交回修改/);
+    expect(screen.getByText("选你改的文件, 一起合")).toBeTruthy();
   });
 
   it("合并版发出后卡片收成一行, 不再有按钮; 有人迟交才重新出现合并", async () => {

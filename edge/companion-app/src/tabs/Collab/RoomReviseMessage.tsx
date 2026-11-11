@@ -189,6 +189,8 @@ function ReviseCardView({ m, me, members, roomId, tick, onChanged, onNotice, onM
     if (!returned) extra.push(["不改了", () => setAsk("decline")]);
   }
   if (!ended && mine) {
+    // 还没人交回时主按钮是「催一下」; 发起人自己改了想先合 (只合自己那份也行), 从这里进合并面板选文件 (11/12 鸿波: 进不去)
+    if (!pr?.can_merge) extra.push(["我自己改了, 合并", () => onMerge(c.rev_id)]);
     if (pr?.can_merge && waiting > 0) extra.push(["催一下", () => void run(() => reviseRemind(roomId, c.rev_id))]);
     extra.push(["结束", () => setAsk("close")]);
   }

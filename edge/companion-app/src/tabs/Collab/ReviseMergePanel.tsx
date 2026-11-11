@@ -92,7 +92,8 @@ export default function ReviseMergePanel({ roomId, revId, title, onClose, onDone
   return (
     <Overlay title={`合并《${title}》`} onClose={onClose} width={820}>
       {!an && !error && <span style={muted}>正在合并大家交回的修改…</span>}
-      {error && <ErrorLine>{error}</ErrorLine>}
+      {error && !/还没有人交回|还没有新交回/.test(error) && <ErrorLine>{error}</ErrorLine>}
+      {error && !an && /还没有人交回|还没有新交回/.test(error) && <span style={{ fontSize: 13 }}>同事还没有交回修改。你自己改过的话, 可以先把你那份合成新版本:</span>}
       {error && !an && mineRow}
       {an && (
         <>
