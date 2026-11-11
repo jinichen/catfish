@@ -20,6 +20,7 @@ vi.mock("../../lib/tauri", () => ({
     { name: "Chinatelecom", address: "me@example.cn", is_default: false, client: "apple_mail" },
   ])),
   emailReadMessage: vi.fn(async () => "{}"),
+  emailMarkRead: vi.fn(async () => "{}"),
   emailCheckNew: vi.fn(async () => undefined),
   emailMailDirStatus: vi.fn(async () => "ok"),
   emailPoliticalGet: vi.fn(async () => ({})),

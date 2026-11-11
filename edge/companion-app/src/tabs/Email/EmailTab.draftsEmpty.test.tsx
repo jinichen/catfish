@@ -18,6 +18,7 @@ vi.mock("../../lib/tauri", () => ({
   }),
   emailAccountsFetch: vi.fn(async () => "[]"),
   emailReadMessage: vi.fn(async () => "{}"),
+  emailMarkRead: vi.fn(async () => "{}"),
   emailCheckNew: vi.fn(async () => undefined),
   emailMailDirStatus: vi.fn(async () => "ok"),
   emailPoliticalGet: vi.fn(async () => ({})),

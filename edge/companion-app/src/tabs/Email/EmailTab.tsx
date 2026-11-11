@@ -44,6 +44,7 @@ import { needsEmailSourceSetup, parseEmailSourceDiscovery } from "../../lib/emai
 import ActionFilterChips from "./components/ActionFilterChips";
 import FolderTabs, { EMPTY_FOLDER_TEXT, type MailFolder } from "./components/FolderTabs";
 import { useDraftFocus } from "./useDraftFocus";
+import { useAutoOpenFirst, useMailSelection } from "./useMailSelection";
 import { MAIL_GONE_TEXT, useEmailDetail } from "./useEmailDetail";
 import { useEmailStore } from "../../store/email";
 import { hideDeleted } from "../../lib/emailDeleted";
@@ -119,7 +120,7 @@ export default function EmailTab() {
   // 让员工看完 detail 切回 list 时 badge 能显. 不调 scan_now 批量 (避白扫).
   const [politicalMap, setPoliticalMap] = useState<Record<string, PoliticalScanResult>>({});
   const [error, setError] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const mailSel = useMailSelection(); const { selectedId, setSelectedId } = mailSel; // 11/11 自动开第一封, 见 useMailSelection
   const [folder, setFolder] = useState<MailFolder>("Inbox"); // 9/26 见 FolderTabs
   const viewRef = useRef({ folder, unreadOnly }); viewRef.current = { folder, unreadOnly }; // 11/4 晚回来的旧文件夹列表丢掉
   // 10/31 重启后先铺上次的收件箱; 11/4 只铺「收件箱·全部」(草稿箱本就空, 曾被铺成收件箱)
@@ -356,6 +357,7 @@ export default function EmailTab() {
   // 选邮件 → 拉全文; 读到「邮件不存在」就从列表拿掉并刷新 (见 useEmailDetail)
   const { detail, detailLoading, detailError } = useEmailDetail({
     selectedId,
+    autoRead: mailSel.autoSelected,
     onRead: (id) => {
       setItems((prev) => prev.map((it) => (it.id === id ? { ...it, is_read: true } : it)));
       markEmailRead(id); // 主动闲聊不再 push 这封 (5/20 BL-COMPANION-EMAIL-DIGEST-STEP5)
@@ -384,6 +386,7 @@ export default function EmailTab() {
   // 支持 in_reply_to Option=None 走新建, 只差 UI 入口, 这里补.
 
   const [newComposing, setNewComposing] = useState(false);
+  const openNextAfterDelete = useAutoOpenFirst(mailSel, filteredItems, newComposing);
   const agentName = useAgentStore((s) => s.name);
   const agentPersonality = useAgentStore((s) => s.personality);
   // 新建邮件默认账号: is_default=true 那个, 兜底第一个
@@ -780,14 +783,11 @@ export default function EmailTab() {
             isDraft={folder === "Drafts"}
             onDraftSaved={showDraft}
             onDeleted={() => {
-              // 5/18 BL-EMAIL-DELETE: 删除成功后从列表移除 + 清详情. 不重新拉
-              // list_fetch (avoid 网络 + 抖动), Mail.app 那边已经移到 Trash, 列表
-              // 反映即可.
-              if (selectedId) {
+              if (selectedId) { // 从列表移除 (Mail 那边已进废纸篓) 并接着开下一封 (11/11)
                 // 10/15: 记墓碑 + 清缓存, 在途的旧列表 / 切回时的缓存都不会再带回来
                 useEmailStore.getState().markDeleted(items.find((it) => it.id === selectedId) ?? { id: selectedId });
                 setItems((prev) => prev.filter((it) => it.id !== selectedId));
-                setSelectedId(null);
+                openNextAfterDelete(selectedId);
                 if (folder === "Drafts") void loadList({ quiet: true }); // 改草稿后新版本要出现
               }
             }}
