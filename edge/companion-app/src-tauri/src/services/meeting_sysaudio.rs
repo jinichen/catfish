@@ -73,7 +73,8 @@ impl Drop for SysCapture {
     }
 }
 
-/// 小程序 stderr 的一行事件
+/// 小程序 stderr 的一行事件 (只有 Mac 有小程序)
+#[cfg(any(target_os = "macos", test))]
 #[derive(Debug, Deserialize, PartialEq)]
 pub struct HelperEvent {
     pub event: String,
@@ -89,6 +90,7 @@ pub struct HelperEvent {
     pub message: String,
 }
 
+#[cfg(any(target_os = "macos", test))]
 pub fn parse_event(line: &str) -> Option<HelperEvent> {
     serde_json::from_str(line.trim()).ok()
 }

@@ -210,12 +210,14 @@ pub fn pad_track_to(dir: &Path, seconds: f64, rate: u32) -> Result<(), String> {
 }
 
 /// 电脑声音小程序 (catfish-audiotap) 往 stdout 写的是 32 位浮点交错 PCM; 管道一次读到的字节
-/// 不一定是整帧, 把零头留到下一次。
+/// 不一定是整帧, 把零头留到下一次。只有 Mac 有这个小程序 (Windows 走 cpal 回环, 直接拿到样本)。
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub struct F32FrameDecoder {
     frame_bytes: usize,
     rest: Vec<u8>,
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 impl F32FrameDecoder {
     pub fn new(channels: usize) -> Self {
         Self { frame_bytes: 4 * channels.max(1), rest: Vec::new() }
