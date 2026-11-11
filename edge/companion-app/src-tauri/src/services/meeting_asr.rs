@@ -245,6 +245,8 @@ pub struct TranscribeArgs<'a> {
     pub out: &'a Path,
     /// 0 = 不分说话人 (语音输入 / 上传音频)
     pub speakers: u32,
+    /// 11/11 线上会议: 这台电脑前说话的人数 (有 audio/system/ 时脚本才用)
+    pub local_speakers: u32,
     pub hotwords: &'a [String],
 }
 
@@ -310,6 +312,7 @@ pub fn transcribe(inst: &Installed, a: &TranscribeArgs, empty_cache: &Path, mut 
     };
     cmd.arg("--models").arg(&inst.models)
         .arg("--speakers").arg(a.speakers.to_string())
+        .arg("--local-speakers").arg(a.local_speakers.to_string())
         .arg("--hotwords").arg(a.hotwords.join(" "))
         .arg("--out").arg(a.out)
         // 全程离线: 真要联网会立刻失败, 不会悄悄下载几个 G

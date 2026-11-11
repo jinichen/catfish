@@ -151,7 +151,7 @@ fn run_transcribe(
 ) -> Result<(), String> {
     let audio = store::audio_dir(root, &meta.id)?;
     let out = store::transcript_path(root, &meta.id)?;
-    let args = TranscribeArgs { script, audio: asr::AudioInput::Dir(&audio), out: &out, speakers: meta.attendees, hotwords: &meta.hotwords };
+    let args = TranscribeArgs { script, audio: asr::AudioInput::Dir(&audio), out: &out, speakers: meta.attendees, local_speakers: meta.local_speakers.unwrap_or(0), hotwords: &meta.hotwords };
     let started = std::time::Instant::now();
     let done = asr::transcribe(inst, &args, &asr::root(home).join(".empty-cache"), |ev| {
         if let AsrEvent::Phase { phase, duration_secs } = ev {
@@ -162,7 +162,28 @@ fn run_transcribe(
         }
     })?;
     log::info!("[meeting] {} 转写完成 {done:?} · 用时 {:.0}s", meta.id, started.elapsed().as_secs_f64());
+    apply_speaker_hints(&store::meeting_dir(root, &meta.id)?, &out);
     Ok(())
+}
+
+/// 11/11 线上会议: 这台电脑前只有员工一个人时, 麦克风那条的说话人就是他自己 —— 脚本在
+/// transcript.json 里给了 speaker_hints ({"0": "我"})。员工还没给说话人起过名字时, 照这个先填上;
+/// 起过名字的不动 (重新转写不该冲掉员工改过的)。
+fn apply_speaker_hints(meeting_dir: &Path, transcript: &Path) {
+    let names = meeting_dir.join("speakers.json");
+    if names.exists() {
+        return;
+    }
+    let hints = std::fs::read_to_string(transcript)
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("speaker_hints").cloned())
+        .filter(|h| h.as_object().is_some_and(|o| !o.is_empty()));
+    if let Some(h) = hints {
+        if let Ok(body) = serde_json::to_string_pretty(&h) {
+            let _ = std::fs::write(&names, body);
+        }
+    }
 }
 
 /// transcript.json 原样返回 (前端渲染)。
@@ -177,6 +198,24 @@ pub fn meeting_transcript(id: String) -> Result<serde_json::Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn speaker_hints_fill_names_only_when_none_were_given() {
+        let d = tempfile::tempdir().unwrap();
+        let t = d.path().join("transcript.json");
+        std::fs::write(&t, r#"{"segments":[],"speaker_hints":{"0":"我"}}"#).unwrap();
+        apply_speaker_hints(d.path(), &t);
+        assert_eq!(std::fs::read_to_string(d.path().join("speakers.json")).unwrap().contains("我"), true);
+        // 员工改过的名字, 重新转写不冲掉
+        std::fs::write(d.path().join("speakers.json"), r#"{"0":"陈经理"}"#).unwrap();
+        apply_speaker_hints(d.path(), &t);
+        assert!(std::fs::read_to_string(d.path().join("speakers.json")).unwrap().contains("陈经理"));
+        // 没有提示 (只录麦克风的会) → 不建文件
+        let d2 = tempfile::tempdir().unwrap();
+        std::fs::write(d2.path().join("t.json"), r#"{"segments":[]}"#).unwrap();
+        apply_speaker_hints(d2.path(), &d2.path().join("t.json"));
+        assert!(!d2.path().join("speakers.json").exists());
+    }
 
     #[test]
     fn ready_pack_picks_highest_verified_version_for_this_platform() {

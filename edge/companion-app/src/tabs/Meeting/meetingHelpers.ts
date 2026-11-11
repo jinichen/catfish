@@ -1,6 +1,6 @@
 /** 会议页的纯函数 (10/1) —— 单测在 meetingHelpers.test.ts。 */
 import type { WikiFileInfo } from "../../lib/tauri_wiki";
-import type { ActionItem, MeetingStatus, RecorderStatus } from "../../lib/tauri_meeting";
+import type { ActionItem, MeetingStatus, RecorderStatus, SysApp, SysPick, SysSources, SystemTrackStatus } from "../../lib/tauri_meeting";
 
 /** 进热词的知识库条目类型: 人名 / 项目 / 单位 / 部门 —— 识别最容易错、纪要里最要紧的就是这些。 */
 const HOTWORD_SUBTYPES = new Set(["person", "project", "org", "organization", "department"]);
@@ -86,4 +86,42 @@ export function recorderNotices(rec: Pick<RecorderStatus, "error" | "glitches" |
   }
   if (rec.notice) out.push(rec.notice);
   return out;
+}
+
+// ── 11/11 线上会议: 录会议软件放出来的对方声音 ──
+
+/** 选项的 key: 程序按 bundle id (没有就按名字); "" = 全部电脑声音 */
+export const sysAppKey = (a: SysApp): string => a.bundle_id || `name:${a.name}`;
+
+/** 默认选哪个: 正在出声的会议软件 > 开着的会议软件 (微信除外 —— 开着不等于在开会) > 全部电脑声音 */
+export function defaultSysKey(src: SysSources): string {
+  if (src.mode !== "tap" && src.mode !== "sck") return "";
+  const meetings = src.apps.filter((a) => a.meeting);
+  const playing = meetings.find((a) => a.playing);
+  if (playing) return sysAppKey(playing);
+  const open = meetings.find((a) => !/xinWeChat/i.test(a.bundle_id));
+  return open ? sysAppKey(open) : "";
+}
+
+export function sysPickFor(src: SysSources, key: string): SysPick {
+  const app = key ? src.apps.find((a) => sysAppKey(a) === key) : undefined;
+  if (!app) return { name: "", bundle_id: null, pids: [] };
+  // bundle id 优先: 会议开着开着换了帮手进程 (进出会议室) 也认得; 没有 bundle id 才按进程号
+  return { name: app.name, bundle_id: app.bundle_id || null, pids: app.bundle_id ? [] : app.pids };
+}
+
+/** 本地人数: 1 ≤ n ≤ 参会人数-1 (至少留一个对方); 参会人数没填时只管 ≥1 */
+export function clampLocalSpeakers(raw: string, attendees: number | null): number {
+  const n = Math.floor(Number(raw));
+  const lo = Number.isFinite(n) && n >= 1 ? n : 1;
+  return attendees && attendees > 1 ? Math.min(lo, attendees - 1) : lo;
+}
+
+/** 对方那条连续没声音多久才提示 —— 会议里几十秒没人说话很正常, 不能 5 秒就报 */
+export const SYSTEM_SILENT_WARN_SECS = 30;
+
+export function systemTrackNotice(sys: SystemTrackStatus, silentSecs: number, hint: string): string | null {
+  if (sys.error) return null; // 错误另外红字显示
+  if (silentSecs < SYSTEM_SILENT_WARN_SECS) return null;
+  return `「${sys.source}」${Math.floor(silentSecs)} 秒没有声音。会议里暂时没人说话就没关系; 对方明明在说却一直是 0, 多半是没给权限 —— ${hint}`;
 }

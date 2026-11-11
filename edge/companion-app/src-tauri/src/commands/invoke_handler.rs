@@ -222,6 +222,7 @@ pub(crate) fn handler(
             crate::commands::meeting::meeting_create,
             crate::commands::meeting::meeting_delete,
             crate::commands::meeting::meeting_audio_devices,
+            crate::commands::meeting::meeting_system_audio_sources,
             crate::commands::meeting::meeting_record_start,
             crate::commands::meeting::meeting_record_status,
             crate::commands::meeting::meeting_record_stop,

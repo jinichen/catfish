@@ -28,6 +28,43 @@ export interface MeetingMeta {
   duration_secs: number;
   device: string | null;
   error: string | null;
+  /** 11/11 线上会议: 同时录了谁的电脑声音 (「腾讯会议」/「全部电脑声音」); 只录麦克风 = null */
+  system_audio?: string | null;
+  /** 11/11 线上会议: 这台电脑前说话的人数 (含自己) */
+  local_speakers?: number | null;
+}
+
+/** 11/11 能录哪些程序放出来的声音 (Rust services/meeting_sysaudio.rs) */
+export interface SysApp {
+  name: string;
+  bundle_id: string;
+  pids: number[];
+  /** 这会儿正在出声 */
+  playing: boolean;
+  /** 认得的会议软件 */
+  meeting: boolean;
+}
+
+export interface SysSources {
+  /** tap / sck: Mac, 可以只录某个程序; loopback: Windows, 录全部电脑声音; none: 录不了 */
+  mode: "tap" | "sck" | "loopback" | "none";
+  apps: SysApp[];
+  hint: string;
+}
+
+/** 录哪个程序的声音; bundle_id 和 pids 都空 = 全部电脑声音 */
+export interface SysPick {
+  name: string;
+  bundle_id: string | null;
+  pids: number[];
+}
+
+export interface SystemTrackStatus {
+  source: string;
+  level: number;
+  seconds: number;
+  mode: string;
+  error: string | null;
 }
 
 export interface InputDevice {
@@ -49,6 +86,8 @@ export interface RecorderStatus {
   glitches?: number;
   /** 11/06: 不影响录音的提示 (系统换了麦克风, 自动跟过去了) */
   notice?: string | null;
+  /** 11/11: 同时在录的电脑声音 (线上会议对方); 只录麦克风时 null */
+  system?: SystemTrackStatus | null;
 }
 
 export interface AsrInstalled {
@@ -69,6 +108,8 @@ export interface TranscriptSegment {
   start: number;
   end: number;
   text: string;
+  /** 11/11 线上会议: mic = 这台电脑前的人, system = 会议软件里的对方 */
+  track?: "mic" | "system";
 }
 
 export interface Transcript {
@@ -150,8 +191,13 @@ export const meetingDelete = (id: string) => rawInvoke<void>("meeting_delete", {
 export const meetingCreate = (title: string, attendees: number, hotwords: string[]) =>
   rawInvoke<MeetingMeta>("meeting_create", { title, attendees, hotwords });
 export const meetingAudioDevices = () => rawInvoke<InputDevice[]>("meeting_audio_devices");
-export const meetingRecordStart = (id: string, device: string | null) =>
-  rawInvoke<RecorderStatus>("meeting_record_start", { id, device });
+export const meetingRecordStart = (
+  id: string,
+  device: string | null,
+  system: SysPick | null = null,
+  localSpeakers: number | null = null,
+) => rawInvoke<RecorderStatus>("meeting_record_start", { id, device, system, localSpeakers });
+export const meetingSystemAudioSources = () => rawInvoke<SysSources>("meeting_system_audio_sources");
 export const meetingRecordStatus = () => rawInvoke<RecorderStatus>("meeting_record_status");
 export const meetingRecordStop = () => rawInvoke<MeetingMeta | null>("meeting_record_stop");
 /** 10/11 导入录音笔 / 手机录音: 原生选择器 (取消 = null) + 解码进一场新会议 (状态「已录」) */

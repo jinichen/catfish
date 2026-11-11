@@ -9,6 +9,10 @@ FunASR: FSMN-VAD + SeACo-Paraformer (支持热词) + CT-Transformer 标点 + CAM
     # 语音输入 / 上传的音频文件: 单个 16k wav, 不分说话人
     python meeting_asr.py --audio-file x.wav --models <models 目录> --speakers 0 --out t.json
 
+    # 线上会议 (11/11): audio/ 下是麦克风, audio/system/ 下是会议软件放出来的声音 (对方)。
+    # --local-speakers = 这台电脑前说话的人数 (含自己), 其余 = 对方
+    python meeting_asr.py --audio-dir <meeting>/audio --models <models> --speakers 5 --local-speakers 1 ...
+
     # Windows 解码 (10/2): 任意音频 / 视频 → 16k 单声道 wav。macOS 用系统 afconvert,
     # Windows 没有对应的系统工具, 用组件包里的 PyAV (只在 Windows 包里装)
     python meeting_asr.py --decode in.m4a --out in.wav
@@ -26,6 +30,9 @@ FunASR 自己的日志在 stderr, 不混进事件流。
 - 分片是设备原生采样率 (常见 48k), 这里统一转 16k 单声道 —— FunASR 也会转, 但拼接要
   同一采样率, 而且 16k 拼出来的临时文件小三倍。
 - 全程离线: 模型只从 --models 读; 调用方还会设 MODELSCOPE_CACHE 到空目录兜底。
+- 线上会议两条音轨分开识别 (11/11): 麦克风那条只有本地的人, 对方那条只有对方 —— 说话人
+  不会跨两边认错, 本地只有 1 人时那一条就是「我」。外放开会时麦克风也会收进对方的声音 (回声),
+  跟对方那条同一时间、内容几乎一样的句子从麦克风那边去掉 (drop_echo), 纪要里不会重复。
 """
 from __future__ import annotations
 
@@ -52,6 +59,71 @@ def emit(event: str, **kw) -> None:
 
 def list_segments(audio_dir: Path) -> list[Path]:
     return sorted(p for p in audio_dir.glob("seg-*.wav") if p.is_file())
+
+
+SYSTEM_TRACK_DIR = "system"
+
+
+def _norm(text: str) -> str:
+    return "".join(ch for ch in text if ch.isalnum()).lower()
+
+
+def _overlap(a: dict, b: dict) -> float:
+    return max(0.0, min(a["end"], b["end"]) - max(a["start"], b["start"]))
+
+
+def drop_echo(mic: list[dict], system: list[dict], *, min_ratio: float = 0.6, window: float = 1.0) -> tuple[list[dict], int]:
+    """麦克风那条里, 跟对方那条同时说的、字几乎一样的句子是回声 (外放时喇叭里的对方被麦克风收进来)。
+
+    拿麦克风这句, 跟对方在这句前后 window 秒内说的**所有**话连起来比 —— 两边断句不一样
+    (对方那条把「另外」断到上一句末尾, 麦克风这条把它放在下一句开头), 只跟对方某一句比会漏。
+    本句的字有 min_ratio 以上按顺序出现在那段话里 → 回声。只看文字不看时间会误删「我复述对方的话」,
+    所以只比同一时间段的。很短的句子 (≤3 个字, 「好的」) 字太少比不准: 对方同时在说、且有字对得上就算回声。
+    返回 (留下的, 去掉了几句)。
+    """
+    from difflib import SequenceMatcher
+
+    kept, dropped = [], 0
+    for m in mic:
+        mt = _norm(m["text"])
+        lo, hi = m["start"] - window, m["end"] + window
+        near = [s for s in system if s["end"] > lo and s["start"] < hi]
+        st = "".join(_norm(s["text"]) for s in near)
+        echo = False
+        if mt and st:
+            sm = SequenceMatcher(None, mt, st, autojunk=False)
+            matched = sum(b.size for b in sm.get_matching_blocks())
+            if len(mt) <= 3:
+                dur = max(m["end"] - m["start"], 0.01)
+                talking = sum(_overlap(m, s) for s in near)
+                echo = matched > 0 and talking >= 0.5 * dur
+            else:
+                echo = matched / len(mt) >= min_ratio
+        if echo:
+            dropped += 1
+        else:
+            kept.append(m)
+    return kept, dropped
+
+
+def merge_tracks(mic: list[dict], system: list[dict]) -> list[dict]:
+    """两条按时间排成一份; 对方那条的说话人编号接在本地后面 (本地 0..k-1, 对方 k..)。"""
+    offset = (max((s["spk"] for s in mic), default=-1) + 1) if mic else 0
+    out = [{**s, "track": "mic"} for s in mic]
+    out += [{**s, "spk": s["spk"] + offset, "track": "system"} for s in system]
+    out.sort(key=lambda s: (s["start"], s["end"]))
+    return out
+
+
+def pad_to(path: Path, seconds: float) -> None:
+    """16k 单声道 wav 补静音到 seconds 长 (两条对齐; 录音那边已按时间补过, 这里兜最后一点差)。"""
+    import numpy as np
+    import soundfile as sf
+
+    data, sr = sf.read(str(path), dtype="float32")
+    need = int(round(seconds * sr)) - len(data)
+    if need > 0:
+        sf.write(str(path), np.concatenate([data, np.zeros(need, dtype="float32")]), sr, subtype="PCM_16")
 
 
 def concat_to_16k(segments: list[Path], out: Path) -> float:
@@ -159,6 +231,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--models", required=True, type=Path)
     # 0 = 不分说话人 (语音输入 / 上传音频): 不加载 CAM++, 也不传 preset_spk_num
     ap.add_argument("--speakers", required=True, type=int)
+    # 线上会议: 这台电脑前说话的人数 (含自己)。只在有 audio/system/ 时用; 0 = 没说 (按 1)
+    ap.add_argument("--local-speakers", type=int, default=0)
     ap.add_argument("--hotwords", default="")
     ap.add_argument("--out", required=True, type=Path)
     args = ap.parse_args(argv)
@@ -188,21 +262,40 @@ def main(argv: list[str] | None = None) -> int:
             **extra,
         )
 
+        system_segments = list_segments(args.audio_dir / SYSTEM_TRACK_DIR) if args.audio_dir else []
         emit("phase", phase="preparing")
+        tracks_info = None
         with tempfile.TemporaryDirectory(prefix="catfish-meeting-") as td:
             merged = Path(td) / "merged-16k.wav"
             duration = concat_to_16k(segments, merged)
-            emit("phase", phase="recognizing", duration_secs=round(duration, 1))
-            kw = {"batch_size_s": 300}
-            if with_spk:
-                kw["preset_spk_num"] = args.speakers
+            base_kw = {"batch_size_s": 300}
             if args.hotwords.strip():
-                kw["hotword"] = args.hotwords.strip()
-            result = model.generate(input=str(merged), **kw)[0]
+                base_kw["hotword"] = args.hotwords.strip()
+            if system_segments and with_spk:
+                sys_wav = Path(td) / "system-16k.wav"
+                sys_duration = concat_to_16k(system_segments, sys_wav)
+                duration = max(duration, sys_duration)
+                pad_to(merged, duration)
+                pad_to(sys_wav, duration)
+                local = max(1, min(args.local_speakers or 1, args.speakers))
+                remote = max(1, args.speakers - local)
+                emit("phase", phase="recognizing", duration_secs=round(duration, 1))
+                mic_res = model.generate(input=str(merged), preset_spk_num=local, **base_kw)[0]
+                sys_res = model.generate(input=str(sys_wav), preset_spk_num=remote, **base_kw)[0]
+                mic_segs, dropped = drop_echo(to_segments(mic_res), to_segments(sys_res))
+                segs = merge_tracks(mic_segs, to_segments(sys_res))
+                text = "".join(s["text"] for s in segs)
+                tracks_info = {"local_speakers": local, "remote_speakers": remote, "echo_dropped": dropped}
+            else:
+                emit("phase", phase="recognizing", duration_secs=round(duration, 1))
+                kw = dict(base_kw)
+                if with_spk:
+                    kw["preset_spk_num"] = args.speakers
+                result = model.generate(input=str(merged), **kw)[0]
+                segs = to_segments(result)
+                text = (result.get("text") or "").strip() or "".join(s["text"] for s in segs)
 
         emit("phase", phase="writing")
-        segs = to_segments(result)
-        text = (result.get("text") or "").strip() or "".join(s["text"] for s in segs)
         doc = {
             "text": text,
             "version": 1,
@@ -214,6 +307,11 @@ def main(argv: list[str] | None = None) -> int:
             "elapsed_secs": round(time.time() - t0, 1),
             "segments": segs,
         }
+        if tracks_info:
+            doc["tracks"] = tracks_info
+            # 本地只有一个人 → 麦克风那条的说话人就是员工自己, 先替他起好名字 (可以改)
+            if tracks_info["local_speakers"] == 1 and any(s["track"] == "mic" for s in segs):
+                doc["speaker_hints"] = {"0": "我"}
         args.out.parent.mkdir(parents=True, exist_ok=True)
         tmp = args.out.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(doc, ensure_ascii=False, indent=1), encoding="utf-8")

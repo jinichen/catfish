@@ -12,6 +12,11 @@
 //! ⚠ 打包签名: 进程内录音受 hardened runtime 管, 主 App 必须带
 //! `com.apple.security.device.audio-input` entitlement (build-sign-notarize-mac.sh),
 //! 否则签名后的正式包录到的是静音, 而 `tauri dev` 一切正常。
+//!
+//! 11/11 线上会议: 选了「同时录电脑声音」时, 再开一路 (meeting_sysaudio), 写到 audio/system/。
+//! 两条以同一个起点对齐: 没有声音在放时系统不送数据, 按墙上时间补静音 (silence_needed)。
+//! 电脑声音开不起来 (没授权 / 系统太老) 就整个不开始 —— 员工要的是录线上会议, 悄悄只录麦克风
+//! 会到会后才发现对方的话一句没有。
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -23,7 +28,11 @@ use std::time::Duration;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::Serialize;
 
-use super::meeting_audio::{downmix_to_mono_i16, list_segments, peak_level, pick_device_index, SegmentWriter, WriteOutcome};
+use super::meeting_audio::{
+    downmix_to_mono_i16, list_segments, pad_track_to, peak_level, pick_device_index, silence_needed, system_track_dir,
+    track_seconds, SegmentWriter, WriteOutcome,
+};
+use super::meeting_sysaudio::{self as sysaudio, SysCapture, SysPick};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct InputDevice {
@@ -48,6 +57,19 @@ pub struct RecorderStatus {
     pub glitches: u32,
     /// 11/06: 不影响录音的提示 (系统换了麦克风, 录音自动跟过去了)
     pub notice: Option<String>,
+    /// 11/11: 同时在录的电脑声音 (线上会议对方的声音); 只录麦克风时 None
+    pub system: Option<SystemTrackStatus>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SystemTrackStatus {
+    /// 录的是谁的声音: 「腾讯会议」/「全部电脑声音」
+    pub source: String,
+    pub level: f32,
+    pub seconds: f64,
+    /// "tap" | "sck" | "loopback"
+    pub mode: String,
+    pub error: Option<String>,
 }
 
 /// 录音流报上来的问题分三类 (11/06 鸿波: 打包时开会录音, 冒出红字「录音设备出错: A buffer underrun or overrun
@@ -85,6 +107,8 @@ struct Shared {
     error: Mutex<Option<String>>,
     glitches: AtomicU32,
     notice: Mutex<Option<String>>,
+    sys_level_bits: AtomicU32,
+    sys_millis: AtomicU64,
 }
 
 struct Active {
@@ -94,6 +118,73 @@ struct Active {
     device: String,
     sample_rate: u32,
     dir: PathBuf,
+    system: Option<ActiveSystem>,
+}
+
+struct ActiveSystem {
+    source: String,
+    mode: String,
+    error: Arc<Mutex<Option<String>>>,
+    join: JoinHandle<Result<(), String>>,
+}
+
+/// 电脑声音那条的写盘线程: 收一块写一块, 落后墙上时间就先补静音; 麦克风那边停了它也停。
+fn system_thread(
+    mut cap: SysCapture,
+    dir: PathBuf,
+    t0: std::time::Instant,
+    segment_secs: u32,
+    max_secs: u32,
+    stop: Arc<AtomicBool>,
+    shared: Arc<Shared>,
+) -> Result<(), String> {
+    const TOLERANCE: Duration = Duration::from_millis(250);
+    let rate = cap.rate;
+    let mut writer = SegmentWriter::new(&dir, rate, segment_secs, max_secs)?;
+    let mut written: u64 = 0;
+    let silence = vec![0i16; rate as usize];
+    let result = (|| -> Result<(), String> {
+        loop {
+            if stop.load(Ordering::Relaxed) || !shared.running.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+            let block = match cap.blocks.recv_timeout(Duration::from_millis(200)) {
+                Ok(b) => Some(b),
+                Err(mpsc::RecvTimeoutError::Timeout) => None,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    // 小程序退了 (出错 / 被杀): 记一句, 麦克风照录
+                    let mut e = cap.error.lock().unwrap();
+                    if e.is_none() {
+                        *e = Some("电脑声音中断了 (会议软件退出? ), 麦克风照常在录".into());
+                    }
+                    return Ok(());
+                }
+            };
+            let mut gap = silence_needed(written, rate, t0.elapsed(), TOLERANCE);
+            while gap > 0 {
+                let n = gap.min(silence.len() as u64) as usize;
+                if writer.write(&silence[..n])? == WriteOutcome::LimitReached {
+                    return Ok(());
+                }
+                written += n as u64;
+                gap -= n as u64;
+            }
+            match block {
+                Some(b) => {
+                    shared.sys_level_bits.store(peak_level(&b).to_bits(), Ordering::Relaxed);
+                    written += b.len() as u64;
+                    if writer.write(&b)? == WriteOutcome::LimitReached {
+                        return Ok(());
+                    }
+                }
+                None => shared.sys_level_bits.store(0f32.to_bits(), Ordering::Relaxed),
+            }
+            shared.sys_millis.store((writer.seconds() * 1000.0) as u64, Ordering::Relaxed);
+        }
+    })();
+    cap.stop();
+    writer.finish()?;
+    result
 }
 
 fn slot() -> &'static Mutex<Option<Active>> {
@@ -117,7 +208,13 @@ pub fn list_input_devices() -> Result<Vec<InputDevice>, String> {
         .collect())
 }
 
-pub fn start(dir: &Path, device: Option<&str>, segment_secs: u32, max_secs: u32) -> Result<RecorderStatus, String> {
+pub fn start(
+    dir: &Path,
+    device: Option<&str>,
+    segment_secs: u32,
+    max_secs: u32,
+    system: Option<&SysPick>,
+) -> Result<RecorderStatus, String> {
     let mut guard = slot().lock().map_err(|e| e.to_string())?;
     if let Some(a) = guard.as_ref() {
         if a.shared.running.load(Ordering::Relaxed) {
@@ -138,7 +235,11 @@ pub fn start(dir: &Path, device: Option<&str>, segment_secs: u32, max_secs: u32)
         error: Mutex::new(None),
         glitches: AtomicU32::new(0),
         notice: Mutex::new(None),
+        sys_level_bits: AtomicU32::new(0),
+        sys_millis: AtomicU64::new(0),
     });
+    // 同一场会停了又录: 麦克风那条已经有多长 (电脑声音那条要先补齐到这里再接着录)
+    let mic_before = track_seconds(dir);
     let (ready_tx, ready_rx) = mpsc::channel::<Result<(String, u32), String>>();
     let dir_owned = dir.to_path_buf();
     let wanted = device.map(str::to_string);
@@ -159,8 +260,20 @@ pub fn start(dir: &Path, device: Option<&str>, segment_secs: u32, max_secs: u32)
 
     match ready_rx.recv_timeout(Duration::from_secs(10)) {
         Ok(Ok((device, sample_rate))) => {
+            let t0 = std::time::Instant::now();
+            let system = match system {
+                None => None,
+                Some(pick) => match start_system(dir, pick, mic_before, t0, segment_secs, max_secs, &stop, &shared) {
+                    Ok(s) => Some(s),
+                    Err(e) => {
+                        stop.store(true, Ordering::Relaxed);
+                        let _ = join.join();
+                        return Err(e);
+                    }
+                },
+            };
             log::info!("[meeting] 开始录音 · {device} · {sample_rate}Hz → {}", dir.display());
-            *guard = Some(Active { stop, shared, join, device, sample_rate, dir: dir.to_path_buf() });
+            *guard = Some(Active { stop, shared, join, device, sample_rate, dir: dir.to_path_buf(), system });
             drop(guard);
             Ok(status())
         }
@@ -173,6 +286,30 @@ pub fn start(dir: &Path, device: Option<&str>, segment_secs: u32, max_secs: u32)
             Err("打开麦克风超时 (10 秒没响应)".into())
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn start_system(
+    dir: &Path,
+    pick: &SysPick,
+    mic_before: f64,
+    t0: std::time::Instant,
+    segment_secs: u32,
+    max_secs: u32,
+    stop: &Arc<AtomicBool>,
+    shared: &Arc<Shared>,
+) -> Result<ActiveSystem, String> {
+    let cap = sysaudio::start(pick)?;
+    let sys_dir = system_track_dir(dir);
+    // 前面几段只录了麦克风: 电脑声音这条先补静音到同样长, 两条才对得上时间
+    pad_track_to(&sys_dir, mic_before, cap.rate)?;
+    let (mode, error) = (cap.mode.clone(), cap.error.clone());
+    let (stop_t, shared_t) = (stop.clone(), shared.clone());
+    let join = std::thread::Builder::new()
+        .name("meeting-system-audio".into())
+        .spawn(move || system_thread(cap, sys_dir, t0, segment_secs, max_secs, stop_t, shared_t))
+        .map_err(|e| format!("起电脑声音线程失败: {e}"))?;
+    Ok(ActiveSystem { source: pick.label(), mode, error, join })
 }
 
 fn record_thread(
@@ -282,10 +419,17 @@ pub fn status() -> RecorderStatus {
             limit_reached: a.shared.limit_reached.load(Ordering::Relaxed),
             glitches: a.shared.glitches.load(Ordering::Relaxed),
             notice: a.shared.notice.lock().ok().and_then(|n| n.clone()),
+            system: a.system.as_ref().map(|s| SystemTrackStatus {
+                source: s.source.clone(),
+                level: f32::from_bits(a.shared.sys_level_bits.load(Ordering::Relaxed)),
+                seconds: a.shared.sys_millis.load(Ordering::Relaxed) as f64 / 1000.0,
+                mode: s.mode.clone(),
+                error: s.error.lock().ok().and_then(|e| e.clone()),
+            }),
         },
         None => RecorderStatus {
             recording: false, seconds: 0.0, level: 0.0, device: String::new(),
-            sample_rate: 0, dir: None, error: None, limit_reached: false, glitches: 0, notice: None,
+            sample_rate: 0, dir: None, error: None, limit_reached: false, glitches: 0, notice: None, system: None,
         },
     }
 }
@@ -296,6 +440,19 @@ pub fn stop() -> Result<Option<RecordingSummary>, String> {
     let Some(a) = active else { return Ok(None) };
     a.stop.store(true, Ordering::Relaxed);
     let seconds = a.join.join().map_err(|_| "录音线程异常退出".to_string())??;
+    let had_system = a.system.is_some();
+    if let Some(s) = a.system {
+        if let Err(e) = s.join.join().map_err(|_| "电脑声音线程异常退出".to_string()).and_then(|r| r) {
+            log::warn!("[meeting] 电脑声音收尾出错: {e}");
+        }
+    }
+    // 两条收成一样长 (尾巴上没声音在放的那段, 以及这次没录电脑声音的那段)
+    let sys_dir = system_track_dir(&a.dir);
+    if had_system || !list_segments(&sys_dir).is_empty() {
+        if let Err(e) = pad_track_to(&sys_dir, track_seconds(&a.dir), 16_000) {
+            log::warn!("[meeting] 电脑声音那条补齐失败: {e}");
+        }
+    }
     let segments = list_segments(&a.dir).len();
     log::info!("[meeting] 停止录音 · {seconds:.1}s · {segments} 片");
     Ok(Some(RecordingSummary { dir: a.dir.display().to_string(), seconds, segments }))

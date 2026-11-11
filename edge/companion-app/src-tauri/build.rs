@@ -90,6 +90,27 @@ fn main() {
             println!("cargo:rerun-if-changed=swift/build.sh");
             println!("cargo:rerun-if-changed=swift/catfish-ocr.swift");
             println!("cargo:rerun-if-changed=swift/build-ocr.sh");
+            println!("cargo:rerun-if-changed=swift/catfish-audiotap.swift");
+            println!("cargo:rerun-if-changed=swift/build-audiotap.sh");
+            // 11/11 catfish-audiotap (线上会议录电脑放出来的声音): 同样只在源码比二进制新时编。
+            {
+                let src = swift_dir.join("catfish-audiotap.swift");
+                let bin = swift_dir.join("catfish-audiotap");
+                let newer = match (
+                    src.metadata().and_then(|m| m.modified()).ok(),
+                    bin.metadata().and_then(|m| m.modified()).ok(),
+                ) {
+                    (Some(s), Some(b)) => s > b,
+                    (Some(_), None) => true,
+                    _ => false,
+                };
+                if newer {
+                    match Command::new("bash").arg("build-audiotap.sh").current_dir(&swift_dir).status() {
+                        Ok(s) if s.success() => println!("cargo:warning=catfish-audiotap 编译完成"),
+                        other => println!("cargo:warning=catfish-audiotap 编译失败 ({other:?}), 会议录不了电脑声音"),
+                    }
+                }
+            }
             // 11/10 catfish-ocr (本地搜索读图片 / 扫描件里的字): 同样只在源码比二进制新时编。
             {
                 let src = swift_dir.join("catfish-ocr.swift");

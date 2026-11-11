@@ -1,7 +1,7 @@
 //! 会议录音 —— 前端入口 (10/1, docs/MEETING-MINUTES-PLAN.md §3)。
 //! 存储在 services::meeting_store, 录音在 services::meeting_recorder (mac / Windows)。
 
-use crate::services::meeting_audio::list_segments;
+use crate::services::meeting_audio::track_seconds;
 use crate::services::meeting_store::{self as store, MeetingMeta, MeetingStatus};
 
 fn root() -> Result<std::path::PathBuf, String> {
@@ -9,12 +9,9 @@ fn root() -> Result<std::path::PathBuf, String> {
 }
 
 /// 分片里实际录到的秒数 (读 WAV 头, 不信 meta) —— 进程被杀后 meta 里的时长不准。
+/// 麦克风那条为准 (线上会议的电脑声音那条录音时按它对齐)。
 fn recorded_seconds(audio_dir: &std::path::Path) -> f64 {
-    list_segments(audio_dir)
-        .iter()
-        .filter_map(|p| hound::WavReader::open(p).ok())
-        .map(|r| r.duration() as f64 / r.spec().sample_rate.max(1) as f64)
-        .sum()
+    track_seconds(audio_dir)
 }
 
 /// meta 说"录音中"但录音线程并不在录 (App 被强退 / 崩溃): 改成已录, 时长按分片算。
@@ -79,23 +76,45 @@ mod recording {
     use super::*;
     use crate::services::meeting_audio::{DEFAULT_MAX_SECS, DEFAULT_SEGMENT_SECS};
     use crate::services::meeting_recorder::{self as rec, InputDevice, RecorderStatus};
+    use crate::services::meeting_sysaudio::{self as sysaudio, SysPick, SysSources};
 
     #[tauri::command]
     pub fn meeting_audio_devices() -> Result<Vec<InputDevice>, String> {
         rec::list_input_devices()
     }
 
+    /// 11/11: 能录哪些程序的声音 (线上会议)。Mac 上要问一下系统, 放后台线程。
     #[tauri::command]
-    pub fn meeting_record_start(id: String, device: Option<String>) -> Result<RecorderStatus, String> {
-        let root = root()?;
-        let mut meta = store::load(&root, &id)?;
-        let audio = store::audio_dir(&root, &id)?;
-        let device = device.filter(|d| !d.trim().is_empty());
-        let st = rec::start(&audio, device.as_deref(), DEFAULT_SEGMENT_SECS, DEFAULT_MAX_SECS)?;
-        meta.status = MeetingStatus::Recording;
-        meta.device = Some(st.device.clone());
-        store::save(&root, &meta)?;
-        Ok(st)
+    pub async fn meeting_system_audio_sources() -> Result<SysSources, String> {
+        tauri::async_runtime::spawn_blocking(sysaudio::sources).await.map_err(|e| e.to_string())
+    }
+
+    /// `system`: 线上会议同时录电脑声音 (None = 只录麦克风); `local_speakers`: 这台电脑前说话的人数。
+    #[tauri::command]
+    pub async fn meeting_record_start(
+        id: String,
+        device: Option<String>,
+        system: Option<SysPick>,
+        local_speakers: Option<u32>,
+    ) -> Result<RecorderStatus, String> {
+        // 第一次录电脑声音时系统会弹授权框, 等用户点的这段不能卡住界面线程
+        tauri::async_runtime::spawn_blocking(move || {
+            let root = root()?;
+            let mut meta = store::load(&root, &id)?;
+            let audio = store::audio_dir(&root, &id)?;
+            let device = device.filter(|d| !d.trim().is_empty());
+            let st = rec::start(&audio, device.as_deref(), DEFAULT_SEGMENT_SECS, DEFAULT_MAX_SECS, system.as_ref())?;
+            meta.status = MeetingStatus::Recording;
+            meta.device = Some(st.device.clone());
+            if let Some(s) = &st.system {
+                meta.system_audio = Some(s.source.clone());
+                meta.local_speakers = Some(local_speakers.unwrap_or(1).clamp(1, meta.attendees.max(1)));
+            }
+            store::save(&root, &meta)?;
+            Ok(st)
+        })
+        .await
+        .map_err(|e| e.to_string())?
     }
 
     #[tauri::command]
@@ -128,7 +147,16 @@ mod recording {
         Err("会议录音目前只支持 macOS / Windows".into())
     }
     #[tauri::command]
-    pub fn meeting_record_start(_id: String, _device: Option<String>) -> Result<serde_json::Value, String> {
+    pub fn meeting_system_audio_sources() -> Result<serde_json::Value, String> {
+        Ok(serde_json::json!({ "mode": "none", "apps": [], "hint": "会议录音目前只支持 macOS / Windows" }))
+    }
+    #[tauri::command]
+    pub fn meeting_record_start(
+        _id: String,
+        _device: Option<String>,
+        _system: Option<serde_json::Value>,
+        _local_speakers: Option<u32>,
+    ) -> Result<serde_json::Value, String> {
         Err("会议录音目前只支持 macOS / Windows".into())
     }
     #[tauri::command]

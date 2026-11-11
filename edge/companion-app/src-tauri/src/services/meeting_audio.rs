@@ -163,6 +163,77 @@ impl SegmentWriter {
     }
 }
 
+/// 线上会议 (11/11): 会议软件放出来的声音 (对方) 存在 audio/system/ 下, 跟麦克风那条分开。
+/// 转写时两条分开识别 (meeting_asr.py), 说话人不会两边认错。
+pub const SYSTEM_TRACK_DIR: &str = "system";
+
+pub fn system_track_dir(audio_dir: &Path) -> PathBuf {
+    audio_dir.join(SYSTEM_TRACK_DIR)
+}
+
+/// 一条音轨实际录到的秒数 (读 WAV 头)。
+pub fn track_seconds(dir: &Path) -> f64 {
+    list_segments(dir)
+        .iter()
+        .filter_map(|p| hound::WavReader::open(p).ok())
+        .map(|r| r.duration() as f64 / r.spec().sample_rate.max(1) as f64)
+        .sum()
+}
+
+/// 电脑声音那条要先补多少个静音样本, 才跟墙上时间对齐。
+///
+/// 没有声音在放的时候, 系统根本不送数据 (11/11 实测: macOS 输出设备闲着时 tap 一个字节都不给,
+/// Windows WASAPI 回环也是) —— 不补的话这条会比麦克风那条短, 两边的时间就对不上了, 回声也认不出。
+/// 落后超过 `tolerance` 才补 (数据本来就晚到几十毫秒, 不能一卡就塞静音)。
+pub fn silence_needed(written: u64, rate: u32, elapsed: Duration, tolerance: Duration) -> u64 {
+    let behind = elapsed.saturating_sub(tolerance);
+    let expected = (behind.as_secs_f64() * rate as f64) as u64;
+    expected.saturating_sub(written)
+}
+
+/// 把一条音轨补静音到 `seconds` 秒 (同一场会停了又录, 中间有一段没录电脑声音时用)。
+pub fn pad_track_to(dir: &Path, seconds: f64, rate: u32) -> Result<(), String> {
+    let have = track_seconds(dir);
+    let missing = ((seconds - have) * rate as f64).round();
+    if missing < rate as f64 * 0.05 {
+        return Ok(());
+    }
+    let mut w = SegmentWriter::new(dir, rate, DEFAULT_SEGMENT_SECS, u32::MAX / 2)?;
+    let chunk = vec![0i16; rate as usize];
+    let mut left = missing as u64;
+    while left > 0 {
+        let n = left.min(chunk.len() as u64) as usize;
+        w.write(&chunk[..n])?;
+        left -= n as u64;
+    }
+    w.finish().map(|_| ())
+}
+
+/// 电脑声音小程序 (catfish-audiotap) 往 stdout 写的是 32 位浮点交错 PCM; 管道一次读到的字节
+/// 不一定是整帧, 把零头留到下一次。
+pub struct F32FrameDecoder {
+    frame_bytes: usize,
+    rest: Vec<u8>,
+}
+
+impl F32FrameDecoder {
+    pub fn new(channels: usize) -> Self {
+        Self { frame_bytes: 4 * channels.max(1), rest: Vec::new() }
+    }
+
+    /// 返回这次凑齐的整帧 (交错 f32)。
+    pub fn push(&mut self, bytes: &[u8]) -> Vec<f32> {
+        self.rest.extend_from_slice(bytes);
+        let whole = self.rest.len() / self.frame_bytes * self.frame_bytes;
+        let out = self.rest[..whole]
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+        self.rest.drain(..whole);
+        out
+    }
+}
+
 #[cfg(test)]
 #[path = "meeting_audio_tests.rs"]
 mod tests;

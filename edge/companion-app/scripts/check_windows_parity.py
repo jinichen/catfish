@@ -180,7 +180,10 @@ ONLY_MAC = {"uv",
             "catfish-calendar",
             # 11/10 本地搜索识字的 Swift 小程序 (macOS Vision)。Windows 用系统自带的 Windows.Media.Ocr,
             # 脚本 ocr_windows.ps1 随 local-search 源码进 edge runtime, 不需要对应的二进制。
-            "catfish-ocr"}
+            "catfish-ocr",
+            # 11/11 线上会议录电脑声音的 Swift 小程序 (Core Audio 进程抓取 / ScreenCaptureKit)。
+            # Windows 用 cpal 的 WASAPI 回环 (services/meeting_sysaudio.rs), 在主程序里, 不需要对应的二进制。
+            "catfish-audiotap"}
 
 
 def resource_names(conf: Path) -> set[str]:

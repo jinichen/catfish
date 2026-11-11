@@ -55,7 +55,7 @@ mod imp {
         }
         let dir = dictate_dir();
         let _ = std::fs::remove_dir_all(&dir);
-        rec::start(&dir, None, DICTATE_MAX_SECS, DICTATE_MAX_SECS)?;
+        rec::start(&dir, None, DICTATE_MAX_SECS, DICTATE_MAX_SECS, None)?;
         Ok(())
     }
 
@@ -90,7 +90,7 @@ mod imp {
         let home = meeting_store::home()?;
         let script = super::super::file_parse_env::find_script("meeting_asr.py")?;
         let out = std::env::temp_dir().join(format!("catfish-stt-{}.json", std::process::id()));
-        let args = TranscribeArgs { script: &script, audio, out: &out, speakers: 0, hotwords: &[] };
+        let args = TranscribeArgs { script: &script, audio, out: &out, speakers: 0, local_speakers: 0, hotwords: &[] };
         let r = asr::transcribe(&inst, &args, &asr::root(&home).join(".empty-cache"), |_| {})
             .and_then(|_| asr::read_text(&out));
         let _ = std::fs::remove_file(&out);
@@ -284,7 +284,7 @@ mod tests {
     #[ignore]
     fn dictation_never_stops_a_meeting_recording() {
         let meeting = tempfile::tempdir().unwrap();
-        crate::services::meeting_recorder::start(meeting.path(), None, 300, 3600).unwrap();
+        crate::services::meeting_recorder::start(meeting.path(), None, 300, 3600, None).unwrap();
         // 没装包的机器 start 会先报"要安装组件包", 装了的报"会议正在录音"; 两种都不能开录
         assert!(imp::start().is_err());
         assert!(imp::stop_and_transcribe().unwrap_err().contains("没在语音输入"));

@@ -93,3 +93,43 @@ describe("recorderNotices (11/06)", () => {
     expect(recorderNotices({ error: "录音设备出错: 设备不在了", glitches: 5, notice: "x" })).toEqual([]);
   });
 });
+
+// ── 11/11 线上会议 ──
+import { clampLocalSpeakers, defaultSysKey, sysPickFor, systemTrackNotice, SYSTEM_SILENT_WARN_SECS } from "./meetingHelpers";
+import type { SysApp, SysSources } from "../../lib/tauri_meeting";
+
+const app = (p: Partial<SysApp>): SysApp => ({ name: "x", bundle_id: "", pids: [1], playing: false, meeting: false, ...p });
+const srcOf = (apps: SysApp[], mode: SysSources["mode"] = "tap"): SysSources => ({ mode, apps, hint: "" });
+
+describe("线上会议: 默认录哪个程序", () => {
+  it("正在出声的会议软件优先, 其次开着的 (微信不算), 都没有录全部", () => {
+    const wechat = app({ name: "微信", bundle_id: "com.tencent.xinWeChat", meeting: true });
+    const tm = app({ name: "腾讯会议", bundle_id: "com.tencent.meeting", meeting: true });
+    const aone = app({ name: "AONE", bundle_id: "com.alibaba.aone", meeting: true, playing: true });
+    expect(defaultSysKey(srcOf([wechat, tm, aone]))).toBe("com.alibaba.aone");
+    expect(defaultSysKey(srcOf([wechat, tm]))).toBe("com.tencent.meeting");
+    expect(defaultSysKey(srcOf([wechat, app({ name: "Chrome", bundle_id: "com.google.Chrome" })]))).toBe("");
+    expect(defaultSysKey(srcOf([tm], "loopback"))).toBe("");
+  });
+
+  it("选了程序按 bundle id 录 (进出会议室换了帮手进程也认得); 没 bundle id 才按进程号; 空 = 全部", () => {
+    const s = srcOf([app({ name: "腾讯会议", bundle_id: "com.tencent.meeting", pids: [5, 6] }), app({ name: "进程", pids: [9] })]);
+    expect(sysPickFor(s, "com.tencent.meeting")).toEqual({ name: "腾讯会议", bundle_id: "com.tencent.meeting", pids: [] });
+    expect(sysPickFor(s, "name:进程")).toEqual({ name: "进程", bundle_id: null, pids: [9] });
+    expect(sysPickFor(s, "")).toEqual({ name: "", bundle_id: null, pids: [] });
+  });
+
+  it("本地人数至少 1、至少给对方留 1 个", () => {
+    expect(clampLocalSpeakers("", 4)).toBe(1);
+    expect(clampLocalSpeakers("3", 4)).toBe(3);
+    expect(clampLocalSpeakers("9", 4)).toBe(3);
+    expect(clampLocalSpeakers("0", null)).toBe(1);
+  });
+
+  it("对方那边没声音: 30 秒内不吵; 出错时不重复提示", () => {
+    const sys = { source: "腾讯会议", level: 0, seconds: 40, mode: "tap", error: null };
+    expect(systemTrackNotice(sys, SYSTEM_SILENT_WARN_SECS - 1, "h")).toBeNull();
+    expect(systemTrackNotice(sys, SYSTEM_SILENT_WARN_SECS, "去开权限")).toContain("去开权限");
+    expect(systemTrackNotice({ ...sys, error: "坏了" }, 99, "h")).toBeNull();
+  });
+});

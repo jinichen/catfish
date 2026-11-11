@@ -13,6 +13,8 @@ pub mod gateway_ops; // 11/3: Companion 发起的网关启停排队, 互不打�
 pub mod autostart_deps; // 运行时依赖自检 (8/15 从 autostart 切出)
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub mod meeting_recorder; // 10/1: 进程内录音 (cpal), 取代 speech.rs 的 ffmpeg 录音
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub mod meeting_sysaudio; // 11/11: 线上会议录电脑放出来的声音 (macOS catfish-audiotap / Windows WASAPI 回环)
 pub mod meeting_asr;   // 10/1: 会议组件包安装 + 调转写脚本 (离线)
 pub mod meeting_store; // 10/1: ~/.catfish/meetings/<id>/ 的 meta / 目录
 pub mod meeting_templates; // 10/3: 会议纪要自定义模版 ~/.catfish/meeting-templates/
