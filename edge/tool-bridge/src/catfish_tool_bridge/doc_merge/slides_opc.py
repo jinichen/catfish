@@ -296,6 +296,25 @@ class Importer:
             self.d.add_master(self.copy(master))
         return self.memo.get(id(src)) or self.copy(src)
 
+    def adopt(self, el: Any, src: Any, dst: Any) -> Any:
+        """el 是从 src 那页拷出来的一个形状 / 一段: 它引用的图片 / 图表 / 链接搬进合并版, rId 改写成 dst 这页的。"""
+        for e in el.iter():
+            if not isinstance(e.tag, str):
+                continue
+            for k, v in list(e.attrib.items()):
+                if etree.QName(k).namespace != R_NS:
+                    continue
+                rel = src.rels.get(v)
+                if rel is None:
+                    continue
+                if rel.is_external:
+                    e.set(k, dst.rels.get_or_add_ext_rel(rel.reltype, rel.target_ref))
+                elif rel.reltype == RT.SLIDE:
+                    e.set(k, dst.relate_to(rel.target_part, RT.SLIDE))      # relink() 再改指向
+                else:
+                    e.set(k, dst.relate_to(self.copy(rel.target_part), rel.reltype))
+        return el
+
     def copy(self, src: Any) -> Any:
         hit = self.memo.get(id(src))
         if hit is not None:
@@ -316,6 +335,18 @@ class Importer:
             elif rel.reltype not in (RT.SLIDE, RT.NOTES_SLIDE, RT.OFFICE_DOCUMENT):   # 不顺着别的页走
                 set_rel(new, rid, rel.reltype, self.copy(rel.target_part))
         return new
+
+
+_CONTENT_RT = ("/image", "/chart", "/hyperlink", "/media", "/video", "/audio", "/slide", "/oleObject", "/package")
+
+
+def prune_rels(slide_part: Any) -> None:
+    """页内合并换掉形状后, 页 XML 里不再引用的图片 / 图表 / 链接关系摘掉 (不然旧图还留在包里)。"""
+    used = {v for e in slide_part._element.iter() if isinstance(e.tag, str)
+            for k, v in e.attrib.items() if etree.QName(k).namespace == R_NS}
+    for rid, rel in list(slide_part.rels.items()):
+        if rid not in used and rel.reltype.endswith(_CONTENT_RT):
+            slide_part.rels.pop(rid)
 
 
 def relink(slide_part: Any, resolve: Callable[[Any], Any]) -> int:

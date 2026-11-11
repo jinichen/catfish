@@ -238,29 +238,27 @@ def test_docprops_only_is_not_a_change(base):
 # ── 2. 同一页改法不同 → 冲突 ────────────────────────────────────────────────
 
 def test_same_slide_different_edits_conflict(base):
+    # 两人把同一页正文的三段各自重写了: 页内按段合, 改到同一处 → 文本冲突 (整页冲突见删页 / 形状对不上号的测试)
     rets = [edit(base, LI, set_body("项目进度", ["系统设计: 完成"])),
             edit(base, WANG, set_body("项目进度", ["系统设计: 延期两周"]))]
     a = analyze(base, rets)
     assert len(a["conflicts"]) == 1
     c = a["conflicts"][0]
-    assert c["kind"] == "slide" and c["where"] == "第 3 页「项目进度」" and c["combined"] is None
-    assert c["base"] == "项目进度\n需求调研: 完成\n系统设计: 进行中 (60%)\n开发: 未开始"
+    assert c["kind"] == "text" and c["custom"] is True and c["where"] == "第 3 页「项目进度」 · 正文第 1–3 段"
+    assert c["base"] == "需求调研: 完成\n系统设计: 进行中 (60%)\n开发: 未开始"
     assert [(o["key"], o["who"], o["text"]) for o in c["options"]] == [
-        (LI, [LI], "项目进度\n系统设计: 完成"), (WANG, [WANG], "项目进度\n系统设计: 延期两周")]
+        (LI, [LI], "系统设计: 完成"), (WANG, [WANG], "系统设计: 延期两周")]
     assert a["changes"] == {}
 
     with pytest.raises(core.Undecided):
         render(base, rets)
-    with pytest.raises(core.Undecided):        # pptx 没有「自己写」
-        render(base, rets, {c["cid"]: {"pick": "text", "text": "随便写"}})
     out = render(base, rets, {c["cid"]: {"pick": WANG}})
     assert body(out["clean"], "项目进度") == "系统设计: 延期两周"
     assert out["changes"] == {WANG: 1}
-    assert "这页用的是王五的版本" in notes(out["tracked"])[2]
+    assert "这页合并了王五 (正文)" in notes(out["tracked"])[2]
     out = render(base, rets, {c["cid"]: {"pick": "base"}})
     assert body(out["clean"], "项目进度") == "需求调研: 完成\n系统设计: 进行中 (60%)\n开发: 未开始"
-    assert out["changes"] == {}
-    assert "这页保留原稿" in notes(out["tracked"])[2]
+    assert out["changes"] == {} and notes(out["tracked"])[2] == ""
 
 
 # ── 3. 改成一样 → 不冲突 ───────────────────────────────────────────────────

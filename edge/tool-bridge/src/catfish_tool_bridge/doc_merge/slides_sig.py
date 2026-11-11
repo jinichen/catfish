@@ -223,34 +223,36 @@ def _bullet(ppr: Any, chain: list[Any]) -> bool:
     return False
 
 
-def _paras(sp: Any, ctx: _Ctx | None, body: Any = None) -> list[str]:
-    """一个 txBody 的段落签名; ctx=None (表格格子) 只取文字。末尾的空段落不算。"""
-    body = body if body is not None else sp.find(p("txBody"))
-    out: list[str] = []
-    for para in (body.findall(a("p")) if body is not None else []):
-        ppr = para.find(a("pPr"))
-        lvl = int(ppr.get("lvl") or 0) if ppr is not None else 0
-        chain, own = ctx.lvl_chain(sp, lvl) if ctx is not None else ([], 0)
-        font_ref = sp.find(f"{p('style')}/{a('fontRef')}") if ctx is not None else None
-        runs: list[list[str]] = []
-        for r in para:
-            n = _local(r)
-            if n not in ("r", "fld", "br"):
-                continue
-            t = "\n" if n == "br" else "".join(x.text or "" for x in r.findall(a("t")))
-            fmt = _run_fmt(r.find(a("rPr")), chain, ctx, font_ref, own) if ctx is not None and n != "br" else ""
-            refs = _refs(r, ctx.fp, ctx.part) if ctx is not None else ""
-            if not t:
-                continue
-            if runs and runs[-1][1] == fmt and runs[-1][2] == refs:
-                runs[-1][0] += t
-            else:
-                runs.append([t, fmt, refs])
-        if not runs:
-            out.append("")
+def _para(para: Any, sp: Any, ctx: _Ctx | None) -> str:
+    """一段的签名: 级别、有没有项目符号、每个 run 的文字 + 生效的格式; ctx=None (表格格子) 只取文字。空段 = ''。"""
+    ppr = para.find(a("pPr"))
+    lvl = int(ppr.get("lvl") or 0) if ppr is not None else 0
+    chain, own = ctx.lvl_chain(sp, lvl) if ctx is not None else ([], 0)
+    font_ref = sp.find(f"{p('style')}/{a('fontRef')}") if ctx is not None else None
+    runs: list[list[str]] = []
+    for r in para:
+        n = _local(r)
+        if n not in ("r", "fld", "br"):
             continue
-        bu = _bullet(ppr, chain) if ctx is not None else False
-        out.append(f"L{lvl}{'•' if bu else ''}:" + "|".join(f"{t!r}<{f}>{x}" for t, f, x in runs))
+        t = "\n" if n == "br" else "".join(x.text or "" for x in r.findall(a("t")))
+        fmt = _run_fmt(r.find(a("rPr")), chain, ctx, font_ref, own) if ctx is not None and n != "br" else ""
+        refs = _refs(r, ctx.fp, ctx.part) if ctx is not None else ""
+        if not t:
+            continue
+        if runs and runs[-1][1] == fmt and runs[-1][2] == refs:
+            runs[-1][0] += t
+        else:
+            runs.append([t, fmt, refs])
+    if not runs:
+        return ""
+    bu = _bullet(ppr, chain) if ctx is not None else False
+    return f"L{lvl}{'•' if bu else ''}:" + "|".join(f"{t!r}<{f}>{x}" for t, f, x in runs)
+
+
+def _paras(sp: Any, ctx: _Ctx | None, body: Any = None) -> list[str]:
+    """一个 txBody 的段落签名。末尾的空段落不算。"""
+    body = body if body is not None else sp.find(p("txBody"))
+    out = [_para(para, sp, ctx) for para in (body.findall(a("p")) if body is not None else [])]
     while out and not out[-1]:
         out.pop()
     return out
@@ -415,3 +417,101 @@ def slide_lite(slide_part: Any, fp: Fingerprint) -> str:
     tree = slide_part._element.find(f"{p('cSld')}/{p('spTree')}")
     shapes = [s for c in (tree if tree is not None else []) for s in _shape(c, ctx, (0.0, 0.0, 1.0, 1.0))]
     return "\n".join(shapes)
+
+
+# ── 页内按形状合并用: 一页拆成形状, 形状拆成 位置 / 外框 / 段落 (slides_shapes.py) ──────
+
+class ShapeInfo:
+    """页里的一个顶层形状。sig 相同 ⇔ 这个形状语义上没变。"""
+
+    def __init__(self, el: Any, ctx: _Ctx):
+        self.el = el
+        n = _local(el)
+        inner = el
+        if n == "AlternateContent":
+            alt = next((c for c in el if _local(c) in ("Choice", "Fallback")), None)
+            inner = next((c for c in (alt if alt is not None else []) if _local(c) in _SHAPES), el)
+        self.tag = _local(inner)
+        nv = inner.find(f".//{p('cNvPr')}")
+        self.id: int | None = int(nv.get("id")) if nv is not None and (nv.get("id") or "").isdigit() else None
+        ph = _ph(inner) if self.tag == "sp" else None
+        self.ph = ph[0] if ph is not None else ""        # 占位符类型 ('' = 不是占位符)
+        self.kind, self.pos, self.frame = "other", "", ""
+        self.paras: list[tuple[str, str, Any]] = []      # (签名, 文字, a:p)
+        self.cells: dict[tuple[int, int], tuple[Any, list[tuple[str, str, Any]]]] = {}
+        tf = (0.0, 0.0, 1.0, 1.0)
+        if inner is not el:
+            self.frame = "|".join(_shape(el, ctx, tf))
+        elif n == "sp":
+            self.kind, self.pos = "text", _pos(el, ctx, tf)
+            self.frame = _geom(el) + "#" + _refs(el, ctx.fp, ctx.part, skip=("txBody",))
+            body = el.find(p("txBody"))
+            self.paras = [(_para(x, el, ctx), _ptext(x), x) for x in (body.findall(a("p")) if body is not None else [])]
+        elif n == "pic":
+            self.kind, self.pos, self.frame = "pic", _pos(el, ctx, tf), _refs(el, ctx.fp, ctx.part)
+        elif n == "graphicFrame":
+            self.pos = _pos(el, ctx, tf)
+            gd = el.find(f"{a('graphic')}/{a('graphicData')}")
+            tbl = gd.find(a("tbl")) if gd is not None else None
+            if tbl is not None:
+                self.kind = "table"
+                spans = []
+                for r, tr in enumerate(tbl.findall(a("tr"))):
+                    for c, tc in enumerate(tr.findall(a("tc"))):
+                        spans.append("".join(f"{k}={tc.get(k)}" for k in ("gridSpan", "rowSpan", "hMerge", "vMerge")
+                                             if tc.get(k) not in (None, "0", "1", "false")))
+                        body = tc.find(a("txBody"))
+                        ps = body.findall(a("p")) if body is not None else []
+                        self.cells[(r, c)] = (tc, [(repr(_ptext(x)), _ptext(x), x) for x in ps])
+                    spans.append("/")
+                self.frame = f"T{len(tbl.findall(a('tblGrid') + '/' + a('gridCol')))}:" + ",".join(spans)
+            else:
+                self.frame = _graphic(el, ctx)
+                self.kind = "chart" if self.frame.startswith(("C[", "chart")) else "other"
+        elif n == "grpSp":
+            self.kind, self.frame = "group", "|".join(_shape(el, ctx, tf))
+        else:
+            self.pos, self.frame = _pos(el, ctx, tf), _refs(el, ctx.fp, ctx.part)
+
+    @property
+    def body(self) -> str:
+        if self.kind == "table":
+            return "".join(f"{k}{[x[0] for x in v[1]]}" for k, v in sorted(self.cells.items()))
+        return "/".join(x[0] for x in self.paras)
+
+    @property
+    def sig(self) -> str:
+        return f"{self.tag}|{self.pos}|{self.frame}|{self.body}"
+
+    @property
+    def text(self) -> str:
+        if self.kind == "table":
+            rows: dict[int, list[str]] = {}
+            for (r, _), (_, ps) in sorted(self.cells.items()):
+                rows.setdefault(r, []).append(" ".join(x[1] for x in ps).strip())
+            return "\n".join(" | ".join(v) for v in rows.values())
+        return "\n".join(x[1] for x in self.paras).strip()
+
+
+def _ptext(para: Any) -> str:
+    return "".join("\n" if _local(r) == "br" else "".join(x.text or "" for x in r.findall(a("t")))
+                   for r in para if _local(r) in ("r", "fld", "br"))
+
+
+def shape_infos(slide_part: Any, fp: Fingerprint) -> list[ShapeInfo]:
+    ctx = _Ctx(slide_part, fp)
+    tree = slide_part._element.find(f"{p('cSld')}/{p('spTree')}")
+    return [ShapeInfo(c, ctx) for c in (tree if tree is not None else [])
+            if _local(c) in _SHAPES or _local(c) == "AlternateContent"]
+
+
+def xfrm_of(el: Any) -> Any:
+    return _xfrm(el)
+
+
+def is_shape(el: Any) -> bool:
+    return _local(el) in _SHAPES or _local(el) == "AlternateContent"
+
+
+def shape_tree(slide_part: Any) -> Any:
+    return slide_part._element.find(f"{p('cSld')}/{p('spTree')}")

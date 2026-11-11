@@ -6,7 +6,8 @@ LibreOffice 另存会把页编号按顺序重排: 看出编号不可信 (内容�
 每一页对每个交回人只有三种情况: 没动 / 改了 (内容签名变了) / 删了。每页单独交给 core.merge_seq
 (底稿 = 这一页, 每人的版本 = [他的这页] 或 [] (删了), scope = 页编号), 于是:
   · 一个人改了 → 用他的;几个人改成一样 → 用这个
-  · 改法不同、一个删一个改 → 冲突 (kind="slide", 整页二选一, 没有「自己写」)
+  · 改法不同 → 先在页内按形状合 (slides_shapes: 形状 → 位置 / 外框 / 段落), 改到同一个形状的同一段才冲突
+  · 一个删一个改、或者有人那份页里的形状对不上号 → 整页冲突 (kind="slide", 整页二选一, 没有「自己写」)
 页序单独算 (挪页在序列 diff 里会变成「删 + 插」, 跟别人改这页撞成假冲突):
   · 只有一个人调过顺序 → 用他的;几个人调得不一样 → 用先交回的人的, warnings 里写明
   · 新页插在它在交回稿里的前一页后面;同一处几个人各加了页, 都保留, 按交回先后排 (内容一样的只留一份)
@@ -24,11 +25,13 @@ from typing import TYPE_CHECKING, Any
 
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
+from pptx.opc.constants import RELATIONSHIP_TYPE as RT
 from pptx.util import Emu
 
 from . import core
 from . import slides_opc as opc
-from .slides_sig import slide_lite
+from . import slides_shapes as shapes
+from .slides_sig import is_shape, shape_infos, shape_tree, slide_lite
 
 if TYPE_CHECKING:
     from . import Ctx, Return
@@ -50,6 +53,7 @@ class Page:
     has_notes: bool
     comments: str
     lite: str = ""    # 语义签名原文 (按内容认页时比相似度)
+    notes: str = ""   # 备注文字
 
 
 @dataclass
@@ -84,6 +88,7 @@ class Plan:
     order_who: list[str]          # 页序算谁的改动
     touched: set[str] = field(default_factory=set)
     warnings: list[str] = field(default_factory=list)
+    inpage: dict[int, shapes.PageMerge] = field(default_factory=dict)   # 页内按形状合的页 (页编号 → 合法)
 
 
 # ── 读一份 pptx ──────────────────────────────────────────────────────────────
@@ -142,6 +147,7 @@ def _sign(d: Deck) -> None:
         notes = ""
         if s.has_notes_slide and s.notes_slide.notes_text_frame is not None:
             notes = s.notes_slide.notes_text_frame.text
+        pg.notes = notes
         pg.lite = slide_lite(s.part, d.fp) + "\0" + pg.layout + "\0" + notes
         pg.sig = hashlib.sha1(pg.lite.encode("utf-8")).hexdigest()[:20]
 
@@ -216,6 +222,7 @@ def _plan(base_data: bytes, returns: list[Return], ctx: Ctx) -> Plan:
             versions[d.who] = [_unit(q, d.who)] if q is not None else []
         segs.extend(core.merge_seq([_unit(p, None)], versions, whos, scope=f"slide:{p.sid}"))
     plan = Plan(base, decks, segs, [], [p.sid for p in base.pages], [])
+    _plan_inpage(plan, ctx)
     for d in decks:
         mine = d.by_sid
         if any(p.sid not in mine or mine[p.sid].sig != p.sig for p in base.pages):
@@ -224,6 +231,33 @@ def _plan(base_data: bytes, returns: list[Return], ctx: Ctx) -> Plan:
     _plan_order(plan, ctx)
     _plan_warnings(plan, ctx)
     return plan
+
+
+def _src(d: Deck, q: Page) -> shapes.PageSrc:
+    return shapes.PageSrc(d.who, shape_infos(q.part, d.fp), q.notes, q.layout, q.part)
+
+
+def _plan_inpage(plan: Plan, ctx: Ctx) -> None:
+    """一页被几个人改成了不同结果 (没人删): 先试页内按形状合; 形状对不上号的留着整页冲突, 写进 warnings。"""
+    for i, (p, s) in enumerate(zip(plan.base.pages, plan.segs)):
+        if s.kind != "conflict" or not all(o.units for o in s.options):
+            continue
+        others = [_src(d, d.by_sid[p.sid]) for d in plan.decks
+                  if p.sid in d.by_sid and d.by_sid[p.sid].sig != p.sig]
+        got = shapes.plan_page(f"slide:{p.sid}:shape", _where(p), _src(plan.base, p), others, ctx.name)
+        if isinstance(got, str):
+            plan.warnings.append(got)
+        else:
+            plan.inpage[p.sid] = got
+            plan.segs[i] = core.Seg("keep", s.start, s.end, s.old)
+
+
+def _inpage_warnings(pm: shapes.PageMerge, ctx: Ctx) -> list[str]:
+    who = list(shapes.credits(pm))
+    out = list(pm.warnings)
+    if len(who) > 1 and shapes.moved_or_added(pm):
+        out.append(f"{pm.where}合并了{'、'.join(ctx.name(w) for w in who)}的修改, 请看一眼版式有没有重叠")
+    return out
 
 
 def _plan_runs(plan: Plan) -> None:
@@ -330,6 +364,9 @@ def _changes(plan: Plan, segs: list[core.Seg]) -> dict[str, int]:
             n[w] = n.get(w, 0) + len(r.pages)
     for w in plan.order_who:
         n[w] = n.get(w, 0) + 1
+    for pm in plan.inpage.values():
+        for w, what in shapes.credits(pm).items():
+            n[w] = n.get(w, 0) + len(what)
     return n
 
 
@@ -343,6 +380,9 @@ def analyze(base: bytes, returns: list[Return], ctx: Ctx) -> dict[str, Any]:
     plan = _plan(base, returns, ctx)
     conflicts, warnings = [], list(plan.warnings)
     for p, s in zip(plan.base.pages, plan.segs):
+        if p.sid in plan.inpage:
+            conflicts += [c.info for c in plan.inpage[p.sid].confs]
+            warnings += _inpage_warnings(plan.inpage[p.sid], ctx)
         if s.kind == "change" and s.new:
             warnings += _take_warnings(plan, p, s.new[0].data[1], s.who[0], ctx)
         if s.kind != "conflict":
@@ -353,8 +393,8 @@ def analyze(base: bytes, returns: list[Return], ctx: Ctx) -> dict[str, Any]:
             if o.units:
                 pre = f"如果{_where(p)}选{ctx.name(o.who[0])}的: "
                 warnings += _take_warnings(plan, p, o.units[0].data[1], o.who[0], ctx, pre)
-        conflicts.append({"cid": s.cid, "where": _where(p), "kind": "slide", "base": p.text or _NO_TEXT,
-                          "options": options, "combined": None})
+        conflicts.append({"cid": s.cid, "where": _where(p), "kind": "slide", "custom": False,
+                          "base": p.text or _NO_TEXT, "options": options, "combined": None})
     for r in plan.runs:
         for q in r.pages:
             warnings += _take_warnings(plan, None, q, r.who[0], ctx)
@@ -369,11 +409,21 @@ class _Entry:
     who: list[str]          # 用谁的 (底稿 = [])
     note: str = ""          # tracked 版备注里加的那一行
     src: str = ""           # page 属于谁那份 (底稿 = "")
+    merge: Any = None       # 页内按形状合的 (shapes.PageMerge): 在底稿这页上换 / 加形状
+    nshapes: int = -1       # 页内合并后这页该有几个顶层形状 (自检用)
 
 
 def render(base: bytes, returns: list[Return], decisions: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     plan = _plan(base, returns, ctx)
-    segs = core.resolve(plan.segs, decisions, ctx.owner)      # 没定完 → core.Undecided
+    segs, left = [], 0
+    for s in plan.segs:
+        try:
+            segs += core.resolve([s], decisions, ctx.owner)
+        except core.Undecided:
+            left += 1
+    left += sum(shapes.resolve(pm, decisions, ctx.owner) for pm in plan.inpage.values())
+    if left:
+        raise core.Undecided(f"还有 {left} 处冲突没定")
     warnings = list(plan.warnings)
 
     def names(ws: list[str]) -> str:
@@ -381,7 +431,14 @@ def render(base: bytes, returns: list[Return], decisions: dict[str, Any], ctx: C
     take: dict[int, _Entry | None] = {}
     for p, s, old in zip(plan.base.pages, segs, plan.segs):
         decided = old.kind == "conflict"
-        if s.kind == "keep":
+        pm = plan.inpage.get(p.sid)
+        if pm is not None:
+            cr = shapes.credits(pm)
+            note = "这页合并了" + "、".join(
+                f"{ctx.name(w)} ({'、'.join(dict.fromkeys(what))})" for w, what in cr.items()) if cr else ""
+            take[p.sid] = _Entry(p.sid, p, list(cr), note, merge=pm)
+            warnings += _inpage_warnings(pm, ctx)
+        elif s.kind == "keep":
             note = ""
             if decided:
                 note = f"这页保留原稿 ({names([w for o in old.options for w in o.who])} 的改法没有采用)"
@@ -442,7 +499,8 @@ def _write(base: bytes, plan: Plan, entries: list[_Entry]) -> tuple[bytes, list[
     prs = Presentation(io.BytesIO(base))   # 底稿另开一份, 在它上面改
     dest = opc.Dest(prs)
     base_part = {s.slide_id: s.part for s in prs.slides}
-    if any(e.src and e.page.has_notes for e in entries):
+    slide_of = {s.slide_id: s for s in prs.slides}
+    if any((e.src and e.page.has_notes) or (e.merge is not None and e.merge.notes is not None) for e in entries):
         dest.notes_master()     # 先建好备注母版, 免得它的部件名跟后面搬进来的撞
     importers: dict[str, opc.Importer] = {}
     key: dict[int, tuple[str, int]] = {id(p): ("", sid) for sid, p in base_part.items()}
@@ -454,6 +512,8 @@ def _write(base: bytes, plan: Plan, entries: list[_Entry]) -> tuple[bytes, list[
     for e in entries:
         if not e.src:
             part = base_part[e.page.sid]
+            if e.merge is not None:
+                e.nshapes = _apply_merge(dest, slide_of[e.page.sid], e.merge, importers)
         else:
             part = importers.setdefault(e.src, opc.Importer(dest)).slide(e.page.part)
             by_src[(e.src, e.page.sid)] = part
@@ -477,6 +537,38 @@ def _write(base: bytes, plan: Plan, entries: list[_Entry]) -> tuple[bytes, list[
     new_ids = {e.sid for e in entries if e.sid not in plan.base.by_sid}
     opc.set_sections(dest, plan.base.secs, [sid for sid, _ in final], new_ids)
     return _save(prs), warnings
+
+
+def _apply_merge(dest: opc.Dest, slide: Any, pm: shapes.PageMerge, importers: dict[str, opc.Importer]) -> int:
+    """页内合并的结果写到底稿这页上: 换 / 加形状 (各人的图片、图表、链接跟着搬, rId 改写), 备注, 版式。"""
+    part = slide.part
+
+    def adopt(el: Any, who: str) -> Any:
+        return importers.setdefault(who, opc.Importer(dest)).adopt(el, pm.parts[who], part)
+    els = shapes.build(pm, adopt)
+    tree = shape_tree(part)
+    old = [c for c in tree if is_shape(c)]
+    at = tree.index(old[0]) if old else min(2, len(tree))
+    for c in old:
+        tree.remove(c)
+    for i, el in enumerate(els):
+        tree.insert(at + i, el)
+    text = shapes.notes_text(pm)
+    if text is not None:
+        fresh = not slide.has_notes_slide
+        ns = slide.notes_slide
+        if fresh:               # python-pptx 起的名字可能跟搬进来还没挂上的备注页撞
+            ns.part.partname = dest.fresh(str(ns.part.partname))
+        if ns.notes_text_frame is not None:
+            ns.notes_text_frame.text = text
+    if pm.layout is not None:
+        who, src = pm.layout
+        lay = importers.setdefault(who, opc.Importer(dest)).layout(src.part_related_by(RT.SLIDE_LAYOUT))
+        for rid, rel in list(part.rels.items()):
+            if rel.reltype == RT.SLIDE_LAYOUT:
+                opc.set_rel(part, rid, RT.SLIDE_LAYOUT, lay)
+    opc.prune_rels(part)
+    return len(els)
 
 
 def _save(prs: Any) -> bytes:
@@ -511,13 +603,17 @@ def _check(data: bytes, entries: list[_Entry]) -> None:
             raise ValueError("包里有重名的部件")
         prs = Presentation(io.BytesIO(data))
         got = [(s.slide_id, _title(s, "\n".join(_texts(s.shapes)))) for s in prs.slides]
+        counts = [len([c for c in shape_tree(s.part) if is_shape(c)]) for s in prs.slides]
         for s in prs.slides:
             s.slide_layout.name   # noqa: B018  (版式要能找到)
     except Exception as e:  # noqa: BLE001
         raise RuntimeError(f"合并版自检没通过, 打不开: {e}") from e
     want = [(e.sid, e.page.title) for e in entries]
-    if got != want:
+    if len(got) != len(want) or any(g[0] != w[0] or (e.merge is None and g[1] != w[1])
+                                    for g, w, e in zip(got, want, entries)):
         raise RuntimeError(f"合并版自检没通过: 页对不上 {got} != {want}")
+    if any(e.nshapes >= 0 and e.nshapes != n for e, n in zip(entries, counts)):
+        raise RuntimeError("合并版自检没通过: 页内合并后形状数对不上")
 
 
 __all__ = ["analyze", "render"]
