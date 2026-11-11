@@ -69,6 +69,18 @@ describe("RoomReviseMessage", () => {
     await waitFor(() => expect(api.reviseReturn).toHaveBeenLastCalledWith("r1", card.rev_id, { confirm_unchanged: true, confirm_open: true }));
   });
 
+  it("用 Keynote 改的 (存成了 .key): 说清楚改动在哪、怎么导出, 不再问「就当没改」", async () => {
+    api.reviseProgress.mockResolvedValue(progress({ local_path: "/d/方案 (v1·待我修改).pptx", my_state: "editing" }));
+    render(<RoomReviseMessage m={msg} me="li@example.com" {...props} />);
+    api.reviseReturn.mockResolvedValueOnce({ ok: false, need_confirm: "unchanged",
+      saved_elsewhere: { app: "Keynote", office: "PowerPoint", saved: "/Users/x/Downloads/方案 (v1·待我修改).key", target: "/d/方案 (v1·待我修改).pptx" } });
+    fireEvent.click(await screen.findByText("交回"));
+    await screen.findByText("改动存在了 Keynote 文件里");
+    expect(screen.getByText(/导出为 → PowerPoint/)).toBeTruthy();
+    expect(screen.getByText(/方案 \(v1·待我修改\)\.key/)).toBeTruthy();
+    expect(screen.getByText("不用了, 就当没改")).toBeTruthy();
+  });
+
   it("发起人「我也改」: 下了之后「我改好了」; 我那行不算进已交 x/y", async () => {
     api.reviseProgress.mockResolvedValue(progress({ owner: true, me: "zhou@example.com", my_state: null, can_merge: true }));
     render(<RoomReviseMessage m={msg} me="zhou@example.com" {...props} />);

@@ -415,3 +415,18 @@ def test_群里普通文件的记号读过就记住(w, monkeypatch):
     for _ in range(3):
         rv.progress(rid, rev)
     assert len(calls) == 1
+
+
+def test_用苹果自带的_Keynote_Pages_改的_存成了别的格式_交回时说清楚(w):
+    rid = _room(w)
+    rev = _start(w, rid)["rev_id"]
+    w.sync(ZHANG)
+    p = Path(rv.open_copy(rid, rev)["path"])
+    assert rv.give_back(rid, rev) == {"ok": False, "need_confirm": "unchanged"}   # 真没改: 照旧只问一句
+    # 用 Pages 打开、改完存: 存成了下载目录里同名的 .pages, 下载的那份 .docx 没动
+    key = Path.home() / "Downloads" / (p.stem + ".pages")
+    key.parent.mkdir(parents=True, exist_ok=True)
+    key.write_bytes(b"pages")
+    got = rv.give_back(rid, rev)
+    assert got["need_confirm"] == "unchanged"
+    assert got["saved_elsewhere"] == {"app": "Pages", "office": "Word", "saved": str(key), "target": str(p)}

@@ -12,7 +12,7 @@ import { openFile } from "../../lib/tauri_app";
 import type { RoomMember, RoomMessage } from "../../lib/tauri_colleague_rooms";
 import {
   PERSON_STATE_WORD, fmtNote, reviseClose, reviseDecline, reviseOpen, reviseProgress, reviseRemind, reviseReturn,
-  type ReviseProgress, type RevisePerson,
+  type ReviseProgress, type RevisePerson, type SavedElsewhere,
 } from "../../lib/tauri_room_revise";
 import { muted } from "./formsUi";
 import { Confirm } from "./RoomsExtras";
@@ -94,6 +94,7 @@ function ReviseCardView({ m, me, members, roomId, tick, onChanged, onNotice, onM
   const [ask, setAsk] = useState<null | "unchanged" | "open" | "decline" | "close">(null);
   /** 员工已经点过「确认」的 (文件开着 / 没改), 再点交回时带上 */
   const [okd, setOkd] = useState<{ open?: boolean; unchanged?: boolean }>({});
+  const [elsewhere, setElsewhere] = useState<SavedElsewhere | null>(null);
   const [reason, setReason] = useState("");
   const [picked, setPicked] = useState<{ name: string; stage_id: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -123,14 +124,16 @@ function ReviseCardView({ m, me, members, roomId, tick, onChanged, onNotice, onM
     const r = await run(() => reviseOpen(roomId, c.rev_id));
     if (r) {
       await openFile(r.path).catch(() => undefined);
-      onNotice(r.again ? "打开了你之前下载的那份 (接着改)" : `已下载到 ${r.path.split("/").slice(-2).join("/")} 并打开; 改完存盘, 回这里点「交回」`);
+      onNotice(r.again ? "打开了你之前下载的那份 (接着改)"
+        : `已下载到 ${r.path.split("/").slice(-2).join("/")} 并打开; 改完存盘, 回这里点「交回」`
+          + " (用 Keynote / Pages / Numbers 打开的, 改完要「文件 → 导出为」Office 格式, 覆盖这个文件)");
     }
   }
   async function giveBack(flags: { open?: boolean; unchanged?: boolean } = {}, stage = picked) {
     const r = await run(() => reviseReturn(roomId, c.rev_id, { confirm_unchanged: Boolean(flags.unchanged), confirm_open: Boolean(flags.open),
                                                                ...(stage ? stage : {}) }));
     if (!r) return;
-    if (r.need_confirm) { setOkd(flags); setAsk(r.need_confirm); return; }
+    if (r.need_confirm) { setOkd(flags); setElsewhere(r.saved_elsewhere ?? null); setAsk(r.need_confirm); return; }
     setAsk(null);
     setOkd({});
     setPicked(null);
@@ -210,7 +213,13 @@ function ReviseCardView({ m, me, members, roomId, tick, onChanged, onNotice, onM
       {error && <span style={{ ...muted, color: "var(--status-warn, #d97706)", maxWidth: "78%" }}>{error}</span>}
       <DeliveryLine roomId={roomId} msgId={m.msg_id} rows={m.delivery} members={members} hasFiles={Boolean(m.files?.length)}
                     align={mine ? "flex-end" : "flex-start"} onChanged={onChanged} />
-      {ask === "unchanged" && (
+      {ask === "unchanged" && elsewhere && (
+        <Confirm title={`改动存在了 ${elsewhere.app} 文件里`}
+                 text={`你是用 ${elsewhere.app} 改的: 改动存进了「${elsewhere.saved.split("/").pop()}」, 下载的那份没变。`
+                   + `在 ${elsewhere.app} 里点「文件 → 导出为 → ${elsewhere.office}」, 存到「${elsewhere.target}」覆盖它, 再回来点${my?.self ? "「我改好了」" : "「交回」"}。`}
+                 ok="不用了, 就当没改" busy={busy} onClose={() => setAsk(null)} onOk={() => void giveBack({ ...okd, unchanged: true })} />
+      )}
+      {ask === "unchanged" && !elsewhere && (
         <Confirm title="跟原版一样" text={`这份《${c.title}》跟原版一样, 一点没改。${my?.self ? "就当你没改?" : "交回「看过, 没改」?"}`} ok="确定" busy={busy}
                  onClose={() => setAsk(null)} onOk={() => void giveBack({ ...okd, unchanged: true })} />
       )}

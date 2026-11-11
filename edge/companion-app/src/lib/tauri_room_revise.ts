@@ -55,7 +55,11 @@ export const reviseOpen = (roomId: string, revId: string) =>
   call<{ path: string; again?: boolean }>("revise_open", { room_id: roomId, rev_id: revId });
 export const reviseReturn = (roomId: string, revId: string, p: {
   note?: string; confirm_unchanged?: boolean; confirm_open?: boolean; stage_id?: string; name?: string;
-} = {}) => call<{ ok: boolean; need_confirm?: "unchanged" | "open"; self?: boolean }>("revise_return", { room_id: roomId, rev_id: revId, ...p });
+} = {}) => call<{ ok: boolean; need_confirm?: "unchanged" | "open"; self?: boolean; saved_elsewhere?: SavedElsewhere }>(
+  "revise_return", { room_id: roomId, rev_id: revId, ...p });
+
+/** 11/11 Mac 上用 Keynote / Pages / Numbers 打开改的: 改动存成了 .key / .pages / .numbers, 下载的那份没变 */
+export interface SavedElsewhere { app: string; office: string; saved: string; target: string }
 
 /** 「协同事项」里的待办: 各群里请我改、我还没交回的 (截止早的在前; days_left 0 = 今天截止, 负数 = 过了) */
 export interface RevisePendingItem {

@@ -270,6 +270,33 @@ def _may_edit(me: str, card: dict[str, Any]) -> None:
         raise ValueError("这一轮没请你改 (可以先看原文件)")
 
 
+# Mac 上 .pptx / .docx / .xlsx 默认常是 Keynote / Pages / Numbers 打开: 改完一存, 存成的是 .key / .pages / .numbers
+# (11/11 鸿波实测: Keynote 存到了 ~/Downloads/…(v1·待我修改).key), 下载的那份 Office 文件一点没变, 交回时只会被判「没改」。
+_APPLE = {".pptx": (".key", "Keynote", "PowerPoint"), ".docx": (".pages", "Pages", "Word"), ".xlsx": (".numbers", "Numbers", "Excel")}
+
+
+def _saved_by_apple_app(p: Path) -> dict[str, str] | None:
+    """下载的那份没变, 但同名的 .key / .pages / .numbers 在它之后存过 → 告诉员工改动存到哪去了、怎么导出回来。"""
+    hit = _APPLE.get(p.suffix.lower())
+    if not hit:
+        return None
+    ext, app, office = hit
+    try:
+        since = p.stat().st_mtime
+    except OSError:
+        return None
+    found: list[Path] = []
+    for d in dict.fromkeys([p.parent, Path.home() / "Downloads", Path.home() / "Documents", Path.home() / "Desktop"]):
+        try:
+            found += [f for f in d.iterdir() if f.name.startswith(p.stem) and f.suffix.lower() == ext and f.stat().st_mtime >= since]
+        except OSError:
+            continue
+    if not found:
+        return None
+    f = max(found, key=lambda x: x.stat().st_mtime)
+    return {"app": app, "office": office, "saved": str(f), "target": str(p)}
+
+
 def _open_in_app(p: Path) -> bool:
     """文件还在 Word / Excel / PowerPoint / WPS / LibreOffice 里开着 (多半还没存或没关)。
     Office 和 WPS 打开文件时在同目录放 `~$名字` 锁文件 (名字长时开头两个字被 ~$ 顶掉), LibreOffice 放 `.~lock.名字#`。"""
@@ -374,7 +401,7 @@ def give_back(room_id: str, rev_id: str, path: Any = None, note: Any = None, con
         except Exception as e:  # noqa: BLE001  (文件坏了 / 根本不是同一类文件)
             raise ValueError(f"这份文件读不出来, 交不了: {e}") from None
     if unchanged and not confirm_unchanged:
-        return {"ok": False, "need_confirm": "unchanged"}
+        return {"ok": False, "need_confirm": "unchanged", **({"saved_elsewhere": got} if (got := _saved_by_apple_app(p)) else {})}
     if me == card["owner"]:
         rec.update({"state": "unchanged" if unchanged else "returned", "returned_at": _now()})
         rec.pop("self_return", None)
