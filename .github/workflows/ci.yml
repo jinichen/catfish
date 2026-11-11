@@ -664,6 +664,9 @@ jobs:
               exit 0
             fi
             echo "::warning::apt 第 $i 次没装完 (超时或下载失败), 10 秒后重试"
+            # 11/11: GitHub 构建机默认的 azure.archive.ubuntu.com 整晚连不上 (三次全 Ign, 1.2.154 / 1.2.155 的 CI 都死在这),
+            # 第一次失败后换成 Ubuntu 官方源再试。
+            sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null || true
             sleep 10
           done
           exit 1
