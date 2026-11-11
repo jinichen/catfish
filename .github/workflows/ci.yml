@@ -666,7 +666,14 @@ jobs:
             echo "::warning::apt 第 $i 次没装完 (超时或下载失败), 10 秒后重试"
             # 11/11: GitHub 构建机默认的 azure.archive.ubuntu.com 整晚连不上 (三次全 Ign, 1.2.154 / 1.2.155 的 CI 都死在这),
             # 第一次失败后换成 Ubuntu 官方源再试。
-            sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null || true
+            # 同一晚官方源 (http) 也一样全 Ign, 而 https 的 packages.microsoft.com 是通的 —— 构建机当晚出站 http 有问题。
+            # 所以第二次失败后再换成走 https 的镜像 (kernel.org)。
+            if [ "$i" = 1 ]; then
+              sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null || true
+            else
+              sudo sed -i -E 's#http://(azure\.)?archive\.ubuntu\.com/ubuntu#https://mirrors.edge.kernel.org/ubuntu#g; s#http://security\.ubuntu\.com/ubuntu#https://mirrors.edge.kernel.org/ubuntu#g' \
+                /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null || true
+            fi
             sleep 10
           done
           exit 1
