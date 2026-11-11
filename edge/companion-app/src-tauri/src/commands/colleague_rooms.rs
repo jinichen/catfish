@@ -17,7 +17,7 @@ const ALLOWED: &[&str] = &[
     "delete", "search", "settings_get", "settings_set", "transfer", "resend", "file_save", "stage", "file_retry", "tasks",
     // 11/11 群里一起改文档 (colleague_rooms_revise.py)
     "revise_start", "revise_open", "revise_return", "revise_decline", "revise_progress", "revise_remind", "revise_close",
-    "revise_merge", "revise_decide", "revise_publish", "revise_versions", "revise_diff", "revise_detect", "revise_pending",
+    "revise_merge", "revise_decide", "revise_publish", "revise_versions", "revise_diff", "revise_detect", "revise_pending", "revise_self_clear",
 ];
 
 fn method_for(action: &str) -> Result<String, String> {

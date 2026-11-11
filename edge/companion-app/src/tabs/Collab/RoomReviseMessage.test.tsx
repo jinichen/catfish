@@ -9,7 +9,7 @@ vi.mock("./RoomsDelivery", () => ({ DeliveryLine: () => null, RoomFileList: () =
 vi.mock("../../lib/tauri_app", () => ({ openFile: vi.fn(async () => undefined) }));
 const api = vi.hoisted(() => ({
   reviseProgress: vi.fn(), reviseOpen: vi.fn(), reviseReturn: vi.fn(), reviseDecline: vi.fn(), reviseRemind: vi.fn(),
-  reviseClose: vi.fn(), reviseMerge: vi.fn(), reviseDecide: vi.fn(), revisePublish: vi.fn(), reviseSuggest: vi.fn(),
+  reviseClose: vi.fn(), reviseSelfClear: vi.fn(), reviseMerge: vi.fn(), reviseDecide: vi.fn(), revisePublish: vi.fn(), reviseSuggest: vi.fn(),
 }));
 vi.mock("../../lib/tauri_room_revise", async (orig) => ({ ...(await orig<object>()), ...api }));
 
@@ -37,24 +37,29 @@ beforeEach(() => { for (const f of Object.values(api)) f.mockReset(); });
 afterEach(cleanup);
 
 describe("RoomReviseMessage", () => {
-  it("被请的人: 下载修改 → 下了之后能交回; 一点没改先问", async () => {
+  it("被请的人: 只有一个主按钮 —— 没下载「下载修改」, 下了之后「交回」; 别的收在「更多」里; 一点没改先问", async () => {
     api.reviseProgress.mockResolvedValue(progress({}));
     render(<RoomReviseMessage m={msg} me="li@example.com" {...props} />);
-    await screen.findByText("张三 交回了");
-    expect(screen.getByText("我 还没动")).toBeTruthy();
-    expect(screen.getByText(/已交 1\/2/)).toBeTruthy();
+    await screen.findByText(/已交 1\/2/);
+    expect(screen.queryByText("张三 交回了")).toBeNull();             // 每个人的状态点开才看
+    fireEvent.click(screen.getByText(/已交 1\/2/));
+    expect(screen.getByText("张三 交回了")).toBeTruthy();
     expect(screen.queryByText("交回")).toBeNull();
+    expect(screen.queryByText("不改了")).toBeNull();
+    fireEvent.click(screen.getByText("更多"));
+    expect(screen.getByText("不改了")).toBeTruthy();
     api.reviseOpen.mockResolvedValue({ path: "/Users/x/Downloads/鲶鱼群文件/方案群/实施方案 (v1·待我修改).docx" });
     api.reviseProgress.mockResolvedValue(progress({ local_path: "/p.docx", my_state: "editing",
       people: [{ email: "zhang@example.com", name: "张三", state: "returned", at: "x", late: false }, { email: "li@example.com", name: "李四", state: "editing", at: "y", late: false }] }));
     fireEvent.click(screen.getByText("下载修改"));
     await screen.findByText("交回");
+    expect(screen.queryByText("下载修改")).toBeNull();
     api.reviseReturn.mockResolvedValueOnce({ ok: false, need_confirm: "unchanged" }).mockResolvedValueOnce({ ok: true });
     fireEvent.click(screen.getByText("交回"));
     await screen.findByText(/一点没改/);
     fireEvent.click(screen.getByText("确定"));
     await waitFor(() => expect(api.reviseReturn).toHaveBeenLastCalledWith("r1", card.rev_id, { confirm_unchanged: true, confirm_open: false }));
-    expect(screen.queryByText("合并已交的 (1)")).toBeNull();   // 不是发起人: 没有合并
+    expect(screen.queryByText(/^合并/)).toBeNull();   // 不是发起人: 没有合并
   });
 
   it("文件还开着: 先问; 点「已经存好了, 交」再带上 confirm_open; 接着没改再问一次时两样都带", async () => {
@@ -81,26 +86,42 @@ describe("RoomReviseMessage", () => {
     expect(screen.getByText("不用了, 就当没改")).toBeTruthy();
   });
 
-  it("发起人「我也改」: 下了之后「我改好了」; 我那行不算进已交 x/y", async () => {
-    api.reviseProgress.mockResolvedValue(progress({ owner: true, me: "zhou@example.com", my_state: null, can_merge: true }));
-    render(<RoomReviseMessage m={msg} me="zhou@example.com" {...props} />);
-    api.reviseOpen.mockResolvedValue({ path: "/p.docx" });
-    api.reviseProgress.mockResolvedValue(progress({ owner: true, me: "zhou@example.com", my_state: "editing", can_merge: true, local_path: "/p.docx",
-      people: [...progress({}).people, { email: "zhou@example.com", name: "我", state: "editing", at: "x", late: false, self: true }] }));
-    fireEvent.click(await screen.findByText("我也改"));
-    await screen.findByText("我改好了");
-    expect(screen.getByText(/已交 1\/2/)).toBeTruthy();
-    expect(screen.queryByText("不改了")).toBeNull();
-  });
-
-  it("发起人: 都交了才加粗「都交了, 合并」; 还有人没交能催", async () => {
+  it("发起人: 有人交了主按钮是「合并」, 催 / 结束在「更多」里; 卡片上没有「我也改」(自己改的在合并面板里选)", async () => {
     api.reviseProgress.mockResolvedValue(progress({ owner: true, me: "zhou@example.com", can_merge: true, my_state: null }));
     const onMerge = vi.fn();
     render(<RoomReviseMessage m={msg} me="zhou@example.com" {...props} onMerge={onMerge} />);
-    fireEvent.click(await screen.findByText("合并已交的 (1)"));
+    fireEvent.click(await screen.findByText("合并 (1)"));
     expect(onMerge).toHaveBeenCalledWith(card.rev_id);
+    expect(screen.queryByText("催一下")).toBeNull();
+    expect(screen.queryByText("我也改")).toBeNull();
+    fireEvent.click(screen.getByText("更多"));
     expect(screen.getByText("催一下")).toBeTruthy();
+    expect(screen.getByText("结束")).toBeTruthy();
     expect(screen.queryByText("下载修改")).toBeNull();
+  });
+
+  it("发起人: 还没人交, 主按钮是「催一下」", async () => {
+    api.reviseProgress.mockResolvedValue(progress({ owner: true, me: "zhou@example.com", my_state: null,
+      people: [{ email: "zhang@example.com", name: "张三", state: "pending", at: null, late: false }, { email: "li@example.com", name: "李四", state: "editing", at: null, late: false }] }));
+    render(<RoomReviseMessage m={msg} me="zhou@example.com" {...props} />);
+    await screen.findByText("催一下");
+    expect(screen.queryByText(/^合并/)).toBeNull();
+  });
+
+  it("合并版发出后卡片收成一行, 不再有按钮; 有人迟交才重新出现合并", async () => {
+    api.reviseProgress.mockResolvedValue(progress({ owner: true, me: "zhou@example.com", my_state: null, can_merge: true,
+      merged: { version: 2, at: "x", msg_id: "m_m" } }));
+    const { unmount } = render(<RoomReviseMessage m={msg} me="zhou@example.com" {...props} />);
+    await screen.findByText("📝 《实施方案》已出 v2");
+    expect(screen.getByText("版本记录")).toBeTruthy();
+    expect(screen.queryByText("更多")).toBeNull();
+    unmount();
+    api.reviseProgress.mockResolvedValue(progress({ owner: true, me: "zhou@example.com", my_state: null, can_merge: true,
+      merged: { version: 2, at: "x", msg_id: "m_m" },
+      people: [{ email: "zhang@example.com", name: "张三", state: "returned", at: "x", late: false },
+               { email: "li@example.com", name: "李四", state: "returned", at: "y", late: false, after_merge: true }] }));
+    render(<RoomReviseMessage m={msg} me="zhou@example.com" {...props} />);
+    await screen.findByText("合并迟到的 1 份");
   });
 
   it("合并版那条: 有「版本记录」和「在这一版上再请大家改」", () => {
@@ -130,6 +151,7 @@ describe("ReviseMergePanel", () => {
     const onDone = vi.fn();
     render(<ReviseMergePanel roomId="r1" revId={card.rev_id} title="实施方案" onClose={vi.fn()} onDone={onDone} />);
     await screen.findByText(/自动合并: 张三 2 处、李四 1 处/);
+    expect(screen.getByText("选你改的文件, 一起合")).toBeTruthy();   // 发起人自己也改了: 在这里选
     expect(screen.getByText("⚠ 王五 只调了格式")).toBeTruthy();
     expect(screen.getByText("还有 1 处没定")).toBeTruthy();
     expect((screen.getByText("发出合并版").closest("button") as HTMLButtonElement).disabled).toBe(true);

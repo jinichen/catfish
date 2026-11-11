@@ -259,9 +259,10 @@ def _status(room_id: str, card: dict[str, Any], state: str, *, to: list[str] | N
 
 
 def _editor_rec(room_id: str, card: dict[str, Any], msg_id: str) -> dict[str, Any]:
-    if any((m.get("revise_status") or {}).get("state") == "closed" for m in _round_msgs(room_id, card["rev_id"])):
-        raise ValueError(f"{card['title']} 这一轮已经结束了, 不能再改 / 交回")
-    rec = _get(card["rev_id"])   # 发起人自己也改 (11/11 「我也改」): 用的就是他那条发起人记录
+    rec = _get(card["rev_id"])
+    if (rec or {}).get("role") != "owner" and any(   # 结束之后同事不能再交; 发起人还能在合并面板里加自己改的那份
+            (m.get("revise_status") or {}).get("state") == "closed" for m in _round_msgs(room_id, card["rev_id"])):
+        raise ValueError(f"{card['title']} 这一轮已经结束了, 不能再改 / 交回")   # 发起人自己也改 (11/11 「我也改」): 用的就是他那条发起人记录
     return rec or {**card, "room_id": room_id, "msg_id": msg_id, "role": "editor"}
 
 
@@ -408,7 +409,8 @@ def give_back(room_id: str, rev_id: str, path: Any = None, note: Any = None, con
         if not unchanged:
             key = f"self:{rev_id}:{secrets.token_hex(4)}"
             _blob_put(card["doc_id"], key, marker.strip(data) if ext in OOXML else data)
-            rec["self_return"] = {"key": key, "at": _now(), "after_version": (rec.get("merged") or {}).get("version")}
+            rec["self_return"] = {"key": key, "at": _now(), "after_version": (rec.get("merged") or {}).get("version"),
+                                  "name": PurePath(str(name or p.name)).name[:120]}
         _put(rec)
         return {"ok": True, "self": True}
     joined = cr._joined_others(room, me)
@@ -581,6 +583,15 @@ def close(room_id: str, rev_id: str) -> dict[str, Any]:
 
 # ── 合并 (发起人本机) ───────────────────────────────────────────────
 
+def self_clear(rev_id: str) -> dict[str, Any]:
+    """合并面板里「去掉我自己改的那份」。"""
+    rec = _owner_rec(rev_id)
+    rec.pop("self_return", None)
+    rec.pop("state", None)
+    _put(rec)
+    return {"ok": True}
+
+
 def _owner_rec(rev_id: str) -> dict[str, Any]:
     rec = _get(rev_id)
     if not rec or rec.get("role") != "owner":
@@ -652,7 +663,9 @@ def merge(room_id: str, rev_id: str) -> dict[str, Any]:
         for o in c["options"]:
             o["names"] = [names.get(x, x) for x in o["who"]]
         c["suggest"] = (rec.get("suggestions") or {}).get(c["cid"])
+    mine = next((r for r in rets if r.who == pr["me"]), None)   # 发起人自己改的那份 (合并面板里选的)
     return {"ok": True, **out, "names": names, "late": late, "decisions": rec.get("decisions") or {},
+            "self_file": (rec.get("self_return") or {}).get("name") if mine else None,
             "returned": [r.who for r in rets if r.who != MERGED]}
 
 
@@ -728,6 +741,7 @@ def pim_handlers(rid: str, params: dict[str, Any]) -> dict[str, Any]:
         "pim/croom_revise_return": lambda: give_back(rid, rv, params.get("path"), params.get("note"), params.get("confirm_unchanged") is True,
                                                      params.get("stage_id"), params.get("name"), params.get("confirm_open") is True),
         "pim/croom_revise_pending": pending,
+        "pim/croom_revise_self_clear": lambda: self_clear(rv),
         "pim/croom_revise_detect": lambda: detect(rid, params.get("stage_id"), params.get("name")),
         "pim/croom_revise_decline": lambda: decline(rid, rv, params.get("note")),
         "pim/croom_revise_progress": lambda: progress(rid, rv),

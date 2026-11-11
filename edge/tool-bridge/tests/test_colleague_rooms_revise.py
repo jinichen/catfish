@@ -375,7 +375,15 @@ def test_发起人我也改_跟大家的一起合(w):
     pr = rv.progress(rid, rev)
     me = next(x for x in pr["people"] if x.get("self"))
     assert me["state"] == "returned" and me["name"] == "我" and not pr["all_in"]   # 李四还没交; 我不算进「都交了」
-    assert rv.merge(rid, rev)["changes"] == {ZHANG: 1, BOSS: 1}
+    an = rv.merge(rid, rev)
+    assert an["changes"] == {ZHANG: 1, BOSS: 1} and an["self_file"]
+    # 合并面板里: 去掉我那份 → 只合张三的; 再选一份我改的文件 (暂存的) 加回来
+    rv.self_clear(rev)
+    an = rv.merge(rid, rev)
+    assert an["changes"] == {ZHANG: 1} and an["self_file"] is None
+    sid = big.stage({"offset": 0, "data": base64.b64encode(Path(p).read_bytes()).decode()})["stage_id"]
+    assert rv.give_back(rid, rev, stage_id=sid, name="我改的方案.docx")["self"] is True
+    assert rv.merge(rid, rev)["self_file"] == "我改的方案.docx"
     pub = rv.publish(rid, rev)
     clean = rv._blob(pub["message"]["revise_status"]["doc_id"], "v2")
     texts = [x.text for x in docx.Document(io.BytesIO(clean)).paragraphs]

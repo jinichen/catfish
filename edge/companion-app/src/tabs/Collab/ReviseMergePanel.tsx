@@ -5,14 +5,17 @@
  * 原文 + 每个人的改法 + (两人改的是同一段不同地方时) 按字拼好的建议 + 小鲶建议 (要点一下才去问大模型) + 保留原文 + 我自己改。
  * 每点一下就存 (关了面板再开还在)。冲突没定完「发出」是灰的。
  */
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
 
 import {
-  reviseDecide, reviseMerge, revisePublish, reviseSuggest, type ReviseAnalysis, type ReviseConflict, type ReviseDecision,
+  reviseDecide, reviseMerge, revisePublish, reviseReturn, reviseSelfClear, reviseSuggest,
+  type ReviseAnalysis, type ReviseConflict, type ReviseDecision,
 } from "../../lib/tauri_room_revise";
+import { stageFiles } from "./RoomsDelivery";
 import { Overlay, muted } from "./formsUi";
 import { Btn, ErrorLine, inputStyle } from "./roomLinkUi";
 
+const linkBtn = { border: "none", background: "transparent", cursor: "pointer", padding: 0, fontSize: 12, color: "var(--catfish-cyan)" } as const;
 const box = { fontSize: 12, whiteSpace: "pre-wrap", wordBreak: "break-word", padding: "6px 8px", borderRadius: 6,
               border: "1px solid var(--catfish-border)", background: "var(--catfish-bg)", maxHeight: 180, overflowY: "auto" } as const;
 
@@ -24,9 +27,44 @@ export default function ReviseMergePanel({ roomId, revId, title, onClose, onDone
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
-  useEffect(() => {
-    reviseMerge(roomId, revId).then((a) => { setAn(a); setDec(a.decisions); }).catch((e) => setError(e instanceof Error ? e.message : String(e)));
-  }, [roomId, revId]);
+  const load = useCallback(() => reviseMerge(roomId, revId).then((a) => { setAn(a); setDec(a.decisions); setError(null); })
+    .catch((e) => { setAn(null); setError(e instanceof Error ? e.message : String(e)); }), [roomId, revId]);
+  useEffect(() => { void load(); }, [load]);
+  // 发起人自己也改了: 在这里选他改的文件, 跟大家交回的一起合 (11/11 鸿波: 发起人本来就能改, 不该在卡片上多一步)
+  const mineRef = useRef<HTMLInputElement>(null);
+  const [mineNote, setMineNote] = useState<string | null>(null);
+  async function addMine(e: ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f) return;
+    setBusy(true);
+    setMineNote(null);
+    try {
+      const [st] = await stageFiles([{ name: f.name, size: f.size, file: f }], () => undefined);
+      const r = await reviseReturn(roomId, revId, st);
+      if (r.need_confirm === "unchanged") setMineNote(`「${f.name}」跟原版一样, 没有改动, 没加进来`);
+      await load();
+    } catch (err) {
+      setMineNote(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function dropMine() {
+    setBusy(true);
+    try { await reviseSelfClear(roomId, revId); await load(); } finally { setBusy(false); }
+  }
+  const mineRow = (
+    <span style={{ ...muted, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+      <input ref={mineRef} type="file" style={{ display: "none" }} aria-label="选我自己改的文件" onChange={(e) => void addMine(e)} />
+      {an?.self_file ? <>已加上你自己改的「{an.self_file}」
+        <button type="button" disabled={busy} onClick={() => void dropMine()} style={linkBtn}>去掉</button>
+        <button type="button" disabled={busy} onClick={() => mineRef.current?.click()} style={linkBtn}>换一份</button></>
+        : <>你自己也改了?
+          <button type="button" disabled={busy} onClick={() => mineRef.current?.click()} style={linkBtn}>选你改的文件, 一起合</button></>}
+      {mineNote && <span style={{ color: "var(--status-warn, #d97706)" }}>{mineNote}</span>}
+    </span>
+  );
 
   async function decide(cid: string, pick: string | null, text?: string) {
     setDec((d) => { const n = { ...d }; if (pick === null) delete n[cid]; else n[cid] = { pick, ...(text !== undefined ? { text } : {}) }; return n; });
@@ -55,6 +93,7 @@ export default function ReviseMergePanel({ roomId, revId, title, onClose, onDone
     <Overlay title={`合并《${title}》`} onClose={onClose} width={820}>
       {!an && !error && <span style={muted}>正在合并大家交回的修改…</span>}
       {error && <ErrorLine>{error}</ErrorLine>}
+      {error && !an && mineRow}
       {an && (
         <>
           {an.late && <span style={{ ...muted, color: "var(--status-warn, #d97706)" }}>这批是合并版发出之后才交回的: 跟上一版合并稿再合一次, 出下一版。</span>}
@@ -63,6 +102,7 @@ export default function ReviseMergePanel({ roomId, revId, title, onClose, onDone
               {parts.length ? <>自动合并: {parts.map(([w, n]) => `${names[w] ?? w} ${n} 处`).join("、")}</> : "没有能自动合的改动"}
               {an.conflicts.length ? <> · <strong>{an.conflicts.length} 处要你定</strong></> : " · 没有冲突"}
             </span>
+            {mineRow}
             {an.same.length > 0 && <span style={muted}>看过没改: {an.same.map((w) => names[w] ?? w).join("、")}</span>}
             {an.warnings.map((x) => <span key={x} style={{ ...muted, color: "var(--status-warn, #d97706)" }}>⚠ {x}</span>)}
           </div>

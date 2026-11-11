@@ -39,6 +39,8 @@ export interface ReviseDecision { pick: string; text?: string }
 export interface ReviseAnalysis {
   conflicts: ReviseConflict[]; changes: Record<string, number>; same: string[]; warnings: string[];
   names: Record<string, string>; late: boolean; decisions: Record<string, ReviseDecision>; returned: string[];
+  /** 发起人自己改的那份 (合并面板里选的) 的文件名; 没加 = null */
+  self_file?: string | null;
 }
 export interface ReviseVersion {
   version: number; at: string; by: string; kind: "start" | "merged"; msg_id: string;
@@ -76,6 +78,7 @@ export const reviseClose = (roomId: string, revId: string) => call<{ ok: boolean
 export const reviseMerge = (roomId: string, revId: string) => call<ReviseAnalysis>("revise_merge", { room_id: roomId, rev_id: revId });
 export const reviseDecide = (roomId: string, revId: string, cid: string, pick: string | null, text?: string) =>
   call<{ decisions: Record<string, ReviseDecision> }>("revise_decide", { room_id: roomId, rev_id: revId, cid, pick, text: text ?? null });
+export const reviseSelfClear = (roomId: string, revId: string) => call<{ ok: boolean }>("revise_self_clear", { room_id: roomId, rev_id: revId });
 export const revisePublish = (roomId: string, revId: string, note: string) =>
   call<{ version: number; warnings: string[] }>("revise_publish", { room_id: roomId, rev_id: revId, note });
 export const reviseVersions = (roomId: string, docId: string) =>
