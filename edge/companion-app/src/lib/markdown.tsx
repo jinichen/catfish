@@ -15,6 +15,7 @@
 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { PluggableList } from "unified";
 import rehypeHighlight from "rehype-highlight";
 import rehypeRaw from "rehype-raw";
 import { linkifyChildren } from "./linkify_paths";
@@ -103,12 +104,19 @@ function reformatPseudoTable(text: string): string {
   return (prefix ? prefix + "\n\n" : "") + out.join("\n") + "\n\n";
 }
 
+/**
+ * GFM, 但只认 `~~删除线~~`。remark-gfm 默认单个 `~` 也算删除线: 小鲶写「上周（11-02~11-08）…各举1~2 条」,
+ * 两个 `~` 配成一对, 中间整段被划掉 (11/11 鸿波截图)。日期范围、约数「~3 天」、文件名里的 `~` 在中文回复里都很常见, 单 `~` 一律当普通字。
+ * 所有 Markdown 渲染 (对话 / 知识库预览 / 分享预览) 都用这一份。
+ */
+export const GFM_PLUGINS: PluggableList = [[remarkGfm, { singleTilde: false }]];
+
 export function Markdown({ text }: Props) {
   const normalized = normalizeLLMTable(text);
   return (
     <div className="markdown-body">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={GFM_PLUGINS}
         // 注意 plugin 顺序: rehype-raw 先 (把 raw HTML 转成 hast 节点),
         // rehype-highlight 后 (给 code 块染色). 两个都需要.
         rehypePlugins={[rehypeRaw, rehypeHighlight]}

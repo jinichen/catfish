@@ -13,7 +13,7 @@ import WikiTypeCard from "./WikiTypeCard";
 import { useEffect, useMemo, useState } from "react";
 import { alertDialog } from "../../components/dialogs";
 import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { GFM_PLUGINS } from "../../lib/markdown";
 import { useChatStore } from "../../store/chat";
 import { useWikiStore } from "../../store/wiki";
 import {
@@ -570,7 +570,7 @@ export default function WikiPreview({ onOpenTask }: { onOpenTask?: (taskId: stri
            h2/表格全是浏览器默认 (h2 比页面标题还显眼, 表格首列被挤成一字一行) */
         <div className="wiki-doc">
         <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
+          remarkPlugins={GFM_PLUGINS}
           urlTransform={wikiMarkdownUrl}
           components={{
             a: ({ href, children }) => {

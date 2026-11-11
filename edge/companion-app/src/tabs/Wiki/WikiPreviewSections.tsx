@@ -28,7 +28,7 @@
  * 优化任何东西 —— 改了就说不清是哪一步动的。
  */
 import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { GFM_PLUGINS } from "../../lib/markdown";
 import type { WikiFileInfo } from "../../lib/tauri";
 import { wikiSourceLabel } from "./wikiLabels";
 import WikiTypePicker from "./WikiTypePicker";
@@ -118,7 +118,7 @@ export function WikiHistorySection({
       </button>
       {showHistory && (
         <div className="wiki-preview__history-body wiki-doc">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          <ReactMarkdown remarkPlugins={GFM_PLUGINS}>
             {historyBody}
           </ReactMarkdown>
         </div>

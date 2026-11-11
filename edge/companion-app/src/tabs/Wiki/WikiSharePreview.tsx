@@ -9,7 +9,7 @@
  */
 import { useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { GFM_PLUGINS } from "../../lib/markdown";
 
 import type { WikiSharePlan } from "../../lib/tauri";
 import { wikiMarkdownUrl } from "../../lib/wikiMarkdownUrl";
@@ -109,7 +109,7 @@ export default function WikiSharePreview({
         )}
         <div className="wiki-doc wiki-share__doc">
           <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
+            remarkPlugins={GFM_PLUGINS}
             urlTransform={wikiMarkdownUrl}
             components={{
               a: ({ href, children }) => {
