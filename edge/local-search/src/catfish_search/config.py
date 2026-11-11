@@ -26,12 +26,14 @@ DB_FILE = CATFISH_HOME / "search.db"
 #
 # 加新条目的规矩：往列表尾部加，永远不改已有条目的 id；**同时把这条路径写进 DEFAULT_CONFIG**
 # —— 新员工的 yaml 一生成就把现有迁移全标成已执行 (ensure_config_exists, 10/21)。
+# 11/12: 下面的注释文字是匹配老员工 yaml 用的 (_prune_legacy_output 按原文找那行注释一起删), 不能改字 ——
+# 哪怕「文书风格就是从这里学的」已经不对了 (文书风格 11/12 起改成员工指定范文)。
 MIGRATIONS: list[tuple[str, str, str]] = [
     # (marker id, 要加的路径, 写进 yaml 的说明注释)
     (
         "catfish-output-2026-07",
         "~/.catfish/output",
-        "鲶鱼替你生成的文档（周报 / 汇报 / 报告）, 加进来才搜得到",
+        "鲶鱼替你生成的文档（周报 / 汇报 / 报告）—— 文书风格就是从这里学的",
     ),
     # 8/14: 产出目录统一到 outputs (复数)。
     #
@@ -45,7 +47,7 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     (
         "catfish-outputs-2026-08",
         "~/.catfish/outputs",
-        "鲶鱼替你生成的文档（统一产出目录）, 加进来才搜得到",
+        "鲶鱼替你生成的文档（统一产出目录）—— 文书风格就是从这里学的",
     ),
 ]
 _MIGRATION_KEY = "_applied_migrations"
