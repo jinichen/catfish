@@ -1,86 +1,76 @@
-/** Dashboard 卡 — "鲶鱼对你的画像" (BL-MM7, 5/6 ship)
+/** 「小鲶对你的画像」—— 9 项长期偏好 (语气 / 长短 / 列表还是段落 / 节奏 ...)。
  *
- * 跟 RelationCard / MemoryHistoryCard 配对的隐私透明卡:
- *   - RelationCard: 鲶鱼总结的对话主题 (像日记)
- *   - MemoryHistoryCard: 鲶鱼记的硬事实 (像便签贴)
- *   - 本卡: 鲶鱼累积的**长期画像** (writing_style / work_pattern / personality)
- *          满 3 次 evidence 才 propose, 员工 confirm 后落盘
+ * 11/12 鸿波「画像为什么一直在变」「现在的画像功能合理吗」→ 按 3 条改:
+ *   1. 确认过的值每轮自动带进对话 (catfish-memory 插件 catfish_memory_profile.py), 这页就是那份东西;
+ *   2. 证据只认两种: 你在对话里明确说的 (小鲶记成「待确认」), 你在这页自己改的 (直接生效)。
+ *      原来拿关键词套工作日志、每次重扫, 「正在观察」在几个值之间来回跳 —— 那条路停了;
+ *   3. 这页只显示当前值 + 待你确认的提议, 不再显示「x/3 次 evidence」。
  *
- * 设计立场:
- *   - 列每个字段 + 当前值 + evidence_count + 锁/未锁 + 最后确认时间
- *   - 单字段 "锁定" / "解锁" / "改一下" / "删掉这条"
- *   - 全部 "清空" — 隐私逃生口
- *   - 调 catfish_user_profile_* 工具 (走 tool-bridge)
+ * 写都走 tool-bridge catfish_user_profile_* (confirm = 你改 / 你确认; clear proposal_only = 「不用」)。
  */
-
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { toolBridgeCallTool } from "../../lib/tauri";
 import { useAgentStore } from "../../store/agent";
 
 interface FieldSummary {
   value: string | null;
-  evidence_count: number;
+  /** null = 自由文本 */
+  options: string[] | null;
   locked: boolean;
   last_confirmed: number | null;
   proposed_value: string | null;
-  proposed_evidence_count?: number;
+  /** 提议的依据: 你说过的原话 */
+  proposed_quote: string | null;
 }
-
 type ProfileMap = Record<string, FieldSummary>;
 
 const REFRESH_MS = 30_000;
-const MIN_EVIDENCE_TO_CONFIRM = 3;
 
-function humanTime(ts: number | null): string {
-  if (!ts || ts <= 0) return "未确认";
-  const now = Date.now() / 1000;
-  const diff = now - ts;
-  if (diff < 60) return "刚刚";
-  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
-  if (diff < 86400 * 2) return "昨天";
-  if (diff < 86400 * 7) return `${Math.floor(diff / 86400)} 天前`;
-  const d = new Date(ts * 1000);
-  return `${d.getFullYear()}-${(d.getMonth() + 1)
-    .toString()
-    .padStart(2, "0")}-${d.getDate().toString().padStart(2, "0")}`;
-}
+const FIELD_LABEL: Record<string, string> = {
+  "writing_style.tone": "语气",
+  "writing_style.length_pref": "回答长短",
+  "writing_style.bullet_pref": "列表还是段落",
+  "work_pattern.task_pref": "任务怎么呈现",
+  "work_pattern.review_pref": "看材料的习惯",
+  "work_pattern.peak_hours": "工作黄金时段",
+  "personality.pace": "节奏",
+  "personality.feedback_style": "反馈方式",
+  "personality.deference": "称呼和口吻",
+};
+const ORDER = Object.keys(FIELD_LABEL);
+const VALUE_LABEL: Record<string, string> = { formal: "正式", casual: "随意" };
+const show = (v: string) => VALUE_LABEL[v] ?? v;
 
-/** 把 dotted name "writing_style.tone" 翻成员工友好"文风.语气". */
-function prettyField(field: string): string {
-  const map: Record<string, string> = {
-    "writing_style.tone": "文风 · 语气",
-    "writing_style.length_pref": "文风 · 偏好长度",
-    "writing_style.bullet_pref": "文风 · 列表 vs 段落",
-    "work_pattern.peak_hours": "工作 · 黄金时段",
-    "work_pattern.task_pref": "工作 · 任务呈现",
-    "work_pattern.review_pref": "工作 · 看材料偏好",
-    "personality.pace": "性格 · 节奏",
-    "personality.feedback_style": "性格 · 反馈风格",
-    "personality.deference": "性格 · 称呼正式度",
-  };
-  return map[field] || field;
+const smallBtn = (color = "var(--catfish-text-muted)", border = "var(--catfish-border)") => ({
+  fontSize: 11, padding: "2px 8px", background: "transparent", border: `1px solid ${border}`,
+  borderRadius: 3, cursor: "pointer", color, whiteSpace: "nowrap" as const,
+});
+const selectStyle = {
+  fontSize: 13, padding: "3px 6px", borderRadius: 4, border: "1px solid var(--catfish-border)",
+  background: "var(--catfish-bg)", color: "var(--catfish-text)", minWidth: 120,
+};
+
+async function call(name: string, args: Record<string, unknown>) {
+  const r = await toolBridgeCallTool(name, args);
+  if (!r.ok) throw new Error(r.error || `${name} 失败`);
+  const out = r.result as { type: string; result?: unknown; error?: string };
+  if (out?.type === "error") throw new Error(out.error || `${name} 失败`);
+  return out;
 }
 
 export default function UserProfileCard() {
   const agentName = useAgentStore((s) => s.name);
   const [profile, setProfile] = useState<ProfileMap>({});
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null); // 哪个字段在操作
+  const [busy, setBusy] = useState<string | null>(null);
   const [confirmingClearAll, setConfirmingClearAll] = useState(false);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
 
   const refresh = useCallback(async () => {
     try {
-      const r = await toolBridgeCallTool("catfish_user_profile_get", {});
-      if (!r.ok) {
-        setError(r.error || "调用 catfish_user_profile_get 失败");
-        return;
-      }
-      // result 嵌套: { type: 'result', result: ProfileMap }
-      const inner = (r.result as { type: string; result: ProfileMap }) || {};
-      const data = inner.result || {};
-      setProfile(data);
+      const r = await call("catfish_user_profile_get", {});
+      setProfile((r.result as ProfileMap) || {});
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -93,239 +83,115 @@ export default function UserProfileCard() {
     return () => window.clearInterval(t);
   }, [refresh]);
 
-  const toggleLock = async (field: string, currentLocked: boolean) => {
-    const cur = profile[field];
-    if (!cur || cur.value == null) return;
+  async function run(field: string, fn: () => Promise<unknown>) {
     setBusy(field);
     try {
-      await toolBridgeCallTool("catfish_user_profile_confirm", {
-        field,
-        value: cur.value,
-        locked: !currentLocked,
-      });
-      await refresh();
+      await fn();
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
+      await refresh();
       setBusy(null);
     }
+  }
+  /** 你自己改 = 直接生效; 改成「还没定」= 清掉这项 */
+  const setValue = (field: string, value: string) =>
+    run(field, () => (value
+      ? call("catfish_user_profile_confirm", { field, value, locked: profile[field]?.locked ?? false })
+      : call("catfish_user_profile_clear", { field })));
+  const accept = (field: string) => {
+    const f = profile[field];
+    if (f?.proposed_value) void run(field, () => call("catfish_user_profile_confirm", { field, value: f.proposed_value, locked: f.locked }));
   };
-
-  const confirmProposal = async (field: string) => {
-    const cur = profile[field];
-    if (!cur || !cur.proposed_value) return;
-    setBusy(field);
-    try {
-      await toolBridgeCallTool("catfish_user_profile_confirm", {
-        field,
-        value: cur.proposed_value,
-        locked: cur.locked,
-      });
-      await refresh();
-    } finally {
-      setBusy(null);
-    }
+  const dismiss = (field: string) => void run(field, () => call("catfish_user_profile_clear", { field, proposal_only: true }));
+  const toggleLock = (field: string) => {
+    const f = profile[field];
+    if (f?.value) void run(field, () => call("catfish_user_profile_confirm", { field, value: f.value, locked: !f.locked }));
   };
+  async function clearAll() {
+    await run("__all", () => call("catfish_user_profile_clear", {}));
+    setConfirmingClearAll(false);
+  }
 
-  const clearField = async (field: string) => {
-    setBusy(field);
-    try {
-      await toolBridgeCallTool("catfish_user_profile_clear", { field });
-      await refresh();
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const clearAll = async () => {
-    setBusy("__all");
-    try {
-      await toolBridgeCallTool("catfish_user_profile_clear", {});
-      setConfirmingClearAll(false);
-      await refresh();
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const fields = Object.keys(profile);
-  // 排序: confirmed 在前, proposed 中间, 空在后. 同档按 evidence_count 倒序.
-  fields.sort((a, b) => {
-    const fa = profile[a];
-    const fb = profile[b];
-    const sa = fa.value ? 0 : fa.proposed_value ? 1 : 2;
-    const sb = fb.value ? 0 : fb.proposed_value ? 1 : 2;
-    if (sa !== sb) return sa - sb;
-    return fb.evidence_count - fa.evidence_count;
-  });
+  const fields = [...ORDER.filter((k) => k in profile), ...Object.keys(profile).filter((k) => !ORDER.includes(k))];
+  const pending = fields.filter((k) => profile[k].proposed_value && profile[k].proposed_value !== profile[k].value).length;
+  const anySet = fields.some((k) => profile[k].value);
 
   return (
-    <div
-      style={{
-        background: "var(--catfish-bg-elevated)",
-        border: "1px solid var(--catfish-border)",
-        borderRadius: "var(--radius-md)",
-        padding: "var(--space-4)",
-        // BL-USER-PROFILE-LIMIT-HEIGHT (5/16 V4): 固定 height 480 跟 RelationCard
-        // 同步, 三卡 row 整齐. fields 区 flex:1 撑满 + overflow auto 滚动.
-        height: "min(480px, 50vh)",
-        boxSizing: "border-box",
-        display: "flex",
-        flexDirection: "column",
-      }}
-    >
+    <div style={{
+      background: "var(--catfish-bg-elevated)", border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-md)",
+      padding: "var(--space-4)", height: "min(480px, 50vh)", boxSizing: "border-box", display: "flex", flexDirection: "column",
+    }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)", marginBottom: "var(--space-2)" }}>
         <h3 style={{ margin: 0 }}>👤 {agentName}对你的画像</h3>
-        {/* 6/1 鸿波 ABBB: 简化, "跨 session 长期画像" 删 (dev 术语 + 重复信息). */}
-        <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
-          {fields.length} 项 · 你随时改 / 锁 / 清
-        </span>
+        {pending > 0 && <span style={{ fontSize: 12, color: "var(--status-warn)" }}>{pending} 项等你确认</span>}
+      </div>
+      <div style={{ fontSize: 12, color: "var(--catfish-text-muted)", marginBottom: "var(--space-3)", lineHeight: 1.6 }}>
+        这里定下的偏好, {agentName}每次回答都会照着做。你在对话里说「以后回答短一点」这类话, {agentName}会记成待确认, 你点确认才算数;
+        也可以直接在这里改。锁定 = {agentName}不再提议改这一项。
       </div>
 
-      <div style={{ fontSize: 12, color: "var(--catfish-text-muted)", marginBottom: "var(--space-3)" }}>
-        新对话会自动累积低风险偏好；达到 3 次后显示待确认，不会静默覆盖当前画像。锁定 = 不再 propose 修改。
-      </div>
+      {error && <div style={{ fontSize: 12, color: "var(--status-err)", marginBottom: "var(--space-2)" }}>{error}</div>}
 
-      {error && (
-        <div style={{ fontSize: 12, color: "var(--status-err)", marginBottom: "var(--space-2)" }}>
-          {error}
-        </div>
-      )}
-
-      {fields.length === 0 && !error && (
-        <div style={{ fontSize: 13, color: "var(--catfish-text-muted)", padding: "var(--space-2) 0" }}>
-          还没记过你的画像。多聊几次, {agentName}会主动观察 + 跟你确认。
-        </div>
-      )}
-
-      {/* BL-USER-PROFILE-LIMIT-HEIGHT (5/16 V4 fix): flex:1 撑满 + overflow:auto.
-          minHeight:0 关键 — flex item 默认 min-height:auto 不能压缩, 内容撑爆卡. */}
-      <div
-        style={{
-          flex: 1,
-          minHeight: 0,
-          overflowY: "auto",
-          paddingRight: 4,
-        }}
-      >
-      {fields.map((field) => {
-        const f = profile[field];
-        const display = f.value || f.proposed_value || "(空)";
-        const isProposed = !f.value && !!f.proposed_value;
-        const hasPendingProposal = !!f.proposed_value && f.proposed_value !== f.value;
-        const proposalEvidenceCount = f.proposed_evidence_count || 0;
-        const proposalReady = hasPendingProposal && proposalEvidenceCount >= MIN_EVIDENCE_TO_CONFIRM;
-        return (
-          <div
-            key={field}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "var(--space-2)",
-              padding: "6px 0",
-              borderTop: "1px dashed var(--catfish-border)",
-              fontSize: 13,
-            }}
-          >
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
-                <span style={{ fontWeight: 500 }}>{prettyField(field)}</span>
-                {f.locked && (
-                  <span style={{ fontSize: 10, color: "var(--catfish-cyan)", border: "1px solid var(--catfish-cyan)", borderRadius: 3, padding: "0 4px" }}>
-                    🔒 锁定
-                  </span>
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", paddingRight: 4 }}>
+        {fields.map((field) => {
+          const f = profile[field];
+          const proposal = f.proposed_value && f.proposed_value !== f.value ? f.proposed_value : null;
+          const isBusy = busy === field;
+          const draft = drafts[field] ?? f.value ?? "";
+          return (
+            <div key={field} style={{ padding: "8px 0", borderTop: "1px dashed var(--catfish-border)", fontSize: 13 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
+                <span style={{ fontWeight: 500, width: 104, flexShrink: 0 }}>{FIELD_LABEL[field] ?? field}</span>
+                {f.options ? (
+                  <select aria-label={FIELD_LABEL[field] ?? field} value={f.value ?? ""} disabled={isBusy}
+                          onChange={(e) => void setValue(field, e.target.value)} style={selectStyle}>
+                    <option value="">还没定</option>
+                    {f.options.map((o) => <option key={o} value={o}>{show(o)}</option>)}
+                  </select>
+                ) : (
+                  <input aria-label={FIELD_LABEL[field] ?? field} value={draft} disabled={isBusy} placeholder="还没定, 例 9:00-12:00"
+                         onChange={(e) => setDrafts((d) => ({ ...d, [field]: e.target.value }))}
+                         onBlur={() => { if (draft.trim() !== (f.value ?? "")) void setValue(field, draft.trim()); setDrafts((d) => { const n = { ...d }; delete n[field]; return n; }); }}
+                         onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                         style={{ ...selectStyle, minWidth: 160 }} />
                 )}
-                {isProposed && proposalReady && (
-                  <span style={{ fontSize: 10, color: "var(--status-warn)", border: "1px solid var(--status-warn)", borderRadius: 3, padding: "0 4px" }}>
-                    待确认
-                  </span>
-                )}
-                {isProposed && !proposalReady && (
-                  <span style={{ fontSize: 10, color: "var(--catfish-text-muted)", border: "1px solid var(--catfish-border)", borderRadius: 3, padding: "0 4px" }}>
-                    观察中
-                  </span>
-                )}
-                {!isProposed && proposalReady && (
-                  <span style={{ fontSize: 10, color: "var(--status-warn)", border: "1px solid var(--status-warn)", borderRadius: 3, padding: "0 4px" }}>
-                    有新建议
-                  </span>
+                <span style={{ flex: 1 }} />
+                {f.value && (
+                  <button type="button" onClick={() => toggleLock(field)} disabled={isBusy}
+                          title={f.locked ? `解锁后${agentName}可以提议改这一项` : `锁定后${agentName}不再提议改这一项`}
+                          style={smallBtn(f.locked ? "var(--catfish-cyan)" : undefined, f.locked ? "var(--catfish-cyan)" : undefined)}>
+                    {f.locked ? "🔒 已锁定" : "锁定"}
+                  </button>
                 )}
               </div>
-              <div style={{ marginTop: 2, color: isProposed ? "var(--catfish-text-muted)" : "var(--catfish-text)" }}>
-                {display}
-              </div>
-              {hasPendingProposal && (
-                <div style={{ marginTop: 2, color: "var(--status-warn)" }}>
-                  {proposalReady ? "待确认新画像" : "正在观察"}：{f.proposed_value}（{proposalEvidenceCount}/{MIN_EVIDENCE_TO_CONFIRM} 次 evidence）
+              {proposal && (
+                <div style={{ marginTop: 6, marginLeft: 112, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+                              color: "var(--status-warn)", fontSize: 12 }}>
+                  <span style={{ minWidth: 0 }}>
+                    {f.value ? "想改成" : "想记成"}「{show(proposal)}」
+                    {f.proposed_quote && <span style={{ color: "var(--catfish-text-muted)" }}> · 你说过: “{f.proposed_quote}”</span>}
+                  </span>
+                  <button type="button" onClick={() => accept(field)} disabled={isBusy} style={smallBtn("var(--status-warn)", "var(--status-warn)")}>确认</button>
+                  <button type="button" onClick={() => dismiss(field)} disabled={isBusy} style={smallBtn()}>不用</button>
                 </div>
               )}
-              <div style={{ marginTop: 2, fontSize: 11, color: "var(--catfish-text-muted)" }}>
-                {f.evidence_count} 次 evidence · {humanTime(f.last_confirmed)}
-              </div>
             </div>
-            {proposalReady && (
-              <button
-                onClick={() => void confirmProposal(field)}
-                disabled={busy === field}
-                style={{
-                  fontSize: 11, padding: "2px 6px", background: "transparent",
-                  border: "1px solid var(--status-warn)", borderRadius: 3, cursor: "pointer",
-                  color: "var(--status-warn)",
-                }}
-              >
-                确认
-              </button>
-            )}
-            <button
-              onClick={() => void toggleLock(field, f.locked)}
-              disabled={busy === field || !f.value}
-              title={f.locked ? "解锁后允许 LLM propose 修改" : "锁定后 LLM 不再 propose"}
-              style={{
-                fontSize: 11, padding: "2px 6px", background: "transparent",
-                border: "1px solid var(--catfish-border)", borderRadius: 3, cursor: "pointer",
-                color: "var(--catfish-text-muted)",
-              }}
-            >
-              {f.locked ? "解锁" : "锁定"}
-            </button>
-            <button
-              onClick={() => void clearField(field)}
-              disabled={busy === field}
-              style={{
-                fontSize: 11, padding: "2px 6px", background: "transparent",
-                border: "1px solid var(--catfish-border)", borderRadius: 3, cursor: "pointer",
-                color: "var(--catfish-text-muted)",
-              }}
-            >
-              删掉
-            </button>
-          </div>
-        );
-      })}
-      </div>{/* BL-USER-PROFILE-LIMIT-HEIGHT: 滚动 wrapper 闭合 */}
+          );
+        })}
+      </div>
 
-      {fields.length > 0 && (
+      {anySet && (
         <div style={{ marginTop: "var(--space-3)", display: "flex", justifyContent: "flex-end" }}>
           {!confirmingClearAll ? (
-            <button
-              onClick={() => setConfirmingClearAll(true)}
-              style={{
-                fontSize: 11, padding: "4px 8px", background: "transparent",
-                border: "1px solid var(--catfish-border)", borderRadius: 3, cursor: "pointer",
-                color: "var(--catfish-text-muted)",
-              }}
-            >
-              清空全部画像
-            </button>
+            <button type="button" onClick={() => setConfirmingClearAll(true)} style={smallBtn()}>清空全部画像</button>
           ) : (
-            <div style={{ display: "flex", gap: 8, fontSize: 12 }}>
+            <div style={{ display: "flex", gap: 8, fontSize: 12, alignItems: "center" }}>
               <span style={{ color: "var(--status-warn)" }}>确认清空全部?</span>
-              <button onClick={() => void clearAll()} disabled={busy === "__all"}
-                style={{ background: "var(--status-err)", color: "white", border: "none", borderRadius: 3, padding: "2px 8px", cursor: "pointer" }}>
-                清
-              </button>
-              <button onClick={() => setConfirmingClearAll(false)}
-                style={{ background: "transparent", border: "1px solid var(--catfish-border)", borderRadius: 3, padding: "2px 8px", cursor: "pointer" }}>
-                取消
-              </button>
+              <button type="button" onClick={() => void clearAll()} disabled={busy === "__all"}
+                      style={{ background: "var(--status-err)", color: "white", border: "none", borderRadius: 3, padding: "2px 8px", cursor: "pointer" }}>清空</button>
+              <button type="button" onClick={() => setConfirmingClearAll(false)} style={smallBtn()}>取消</button>
             </div>
           )}
         </div>

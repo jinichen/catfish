@@ -136,15 +136,15 @@ calendar 默认 alarm `[15]` 分钟前, 不传 iPhone 不响. 重要会议传 `[
 
 ## 偏好画像
 
-`catfish_user_profile_propose(field, value, evidence)` 累 evidence. 满 3 次返 `should_confirm`, 跟员工自然语言确认 → `_confirm` 落盘.
+员工确认过的偏好每轮已带进上下文 (「员工确认过的偏好」段), 照着做; 这一轮员工另有要求以这一轮为准。
 
-**强显式** ("我喜欢简短") 直接 propose + confirm. **弱显式** (单次改稿) 累 3 次.
+员工**明确说出**长期偏好 ("以后回答短一点" / "别用列表") → `catfish_user_profile_propose(field, value, evidence=原话)` 记成待确认, 回复里可顺带问一句要不要以后都这样, 说是再 `_confirm`。员工说"记住/以后都这样" = 已同意, propose 后直接 confirm。
+
+只是你的推测、或只对这一次的要求, 不记。不 nag, 不偷学。
 
 字段固定 9 个: `writing_style.{tone,length_pref,bullet_pref}` / `work_pattern.{peak_hours,task_pref,review_pref}` / `personality.{pace,feedback_style,deference}`.
 
 **红线 field LLM 严禁 propose**: `personal.{health,financial,relationship,political,religious,family}`.
-
-每 session 最多 1 次主动确认. 不 nag, 不偷学, 不假装观察.
 
 ## 文书 fingerprint
 

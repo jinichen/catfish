@@ -47,10 +47,9 @@ MEMORY_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_user_profile_get",
         "description": (
-            "读员工跨 session 的长期画像 (writing_style / work_pattern / personality)。"
-            "对话开始时调一次, 或员工问'你了解我吗'时调; 别每轮都调。"
-            "locked=true 表示员工锁定, 不能再 propose; proposed_value 非空表示员工还没确认, 别当真; "
-            "evidence_count 越大越可信。"
+            "读员工的长期偏好画像 (语气 / 长短 / 列表还是段落 / 节奏等 9 项)。"
+            "确认过的值每轮已经自动带进对话, 一般不用调; 员工问「你了解我吗」时再调。"
+            "proposed_value 是员工还没确认的提议, 别当真。"
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
         "emoji": "👤",
@@ -60,10 +59,9 @@ MEMORY_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_user_profile_propose",
         "description": (
-            "从员工言行推断出画像 trait 时累积一条 evidence, 不立即写入。"
-            "同值独立 evidence 满 3 次会返回 should_confirm, 你再用自然语言问员工, "
-            "员工同意后才调 catfish_user_profile_confirm。"
-            "单次行为别推断; evidence 须引用真实对话; 每 session 最多主动确认 1 次。\n"
+            "员工在对话里明确说出长期偏好时调 (例「以后回答短一点」「别用列表」), 记成待确认, 不改已确认的值。"
+            "只是你的推测、或只对这一次的要求, 不调。evidence 写员工原话。"
+            "记下后可在回复里顺带问一句要不要以后都这样, 员工说是再调 catfish_user_profile_confirm。\n"
             "field=取值: writing_style.tone=formal/casual/直接/委婉/幽默, .length_pref=短/中/长, "
             ".bullet_pref=列表/段落/混合; work_pattern.peak_hours=自由文本, "
             ".task_pref=列清单/看图表/纯文字/对照表, .review_pref=先看摘要/全量看/只看异常; "
@@ -119,6 +117,10 @@ MEMORY_TOOLS: List[Dict[str, Any]] = [
                 "field": {
                     "type": "string",
                     "description": "字段名, 空字符串 = 清全部",
+                },
+                "proposal_only": {
+                    "type": "boolean",
+                    "description": "true = 只撤掉该字段待确认的提议, 确认过的值不动",
                 },
             },
             "required": [],

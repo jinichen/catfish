@@ -227,10 +227,12 @@ try:
     from .catfish_memory_tools import _ToolsMixin
     from .catfish_memory_recall import prewarm as _recall_prewarm
     from .catfish_memory_situation import render_situation
+    from .catfish_memory_profile import render_profile
     from .catfish_memory_graph import render_graph
 except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_recall import prewarm as _recall_prewarm
     from catfish_memory_situation import render_situation
+    from catfish_memory_profile import render_profile
     from catfish_memory_graph import render_graph
     from catfish_memory_render import _RenderMixin
     from catfish_memory_sections import _SectionsMixin
@@ -470,6 +472,13 @@ class CatfishMemoryProvider(
         meta = self._render_session_meta(catfish_home)
         if meta:
             sections.append(meta)
+
+        # 1a. 11/12: 员工确认过的偏好画像, 每轮带上 (原来只能等模型自己调 user_profile_get, 30 天 0 次)。
+        #     早安 advisor 写的也是给员工看的话, sparse 也带, 只有几行。
+        try:
+            sections.append(render_profile(catfish_home))
+        except Exception as e:  # noqa: BLE001 —— 画像坏了不能拖垮 prefetch
+            logger.warning("catfish-memory 偏好画像块渲染失败 (跳过): %s", e)
 
         # 1b. P3.5.78 (6/22 鸿波): expense summary — 注入最近收支 (今日/本月/累计).
         # 跟 session_meta 同款轻量化, 让 LLM 看 prefetch 知道 expense 数据存在,
