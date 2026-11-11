@@ -3,7 +3,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../lib/colleagueRoomsStore", () => ({ refreshRooms: vi.fn(), setActiveRoom: vi.fn(), useColleagueRooms: () => ({}) }));
+vi.mock("../../lib/colleagueRoomsStore", () => ({ refreshRooms: vi.fn(), refreshRevisePending: vi.fn(async () => undefined),
+                                                   setActiveRoom: vi.fn(), useColleagueRooms: () => ({}) }));
 vi.mock("./RoomsDelivery", () => ({ DeliveryLine: () => null, RoomFileList: () => null, stageFiles: vi.fn() }));
 vi.mock("../../lib/tauri_app", () => ({ openFile: vi.fn(async () => undefined) }));
 const api = vi.hoisted(() => ({
@@ -51,9 +52,33 @@ describe("RoomReviseMessage", () => {
     api.reviseReturn.mockResolvedValueOnce({ ok: false, need_confirm: "unchanged" }).mockResolvedValueOnce({ ok: true });
     fireEvent.click(screen.getByText("交回"));
     await screen.findByText(/一点没改/);
-    fireEvent.click(screen.getAllByText("交回").at(-1)!);
-    await waitFor(() => expect(api.reviseReturn).toHaveBeenLastCalledWith("r1", card.rev_id, { confirm_unchanged: true }));
+    fireEvent.click(screen.getByText("确定"));
+    await waitFor(() => expect(api.reviseReturn).toHaveBeenLastCalledWith("r1", card.rev_id, { confirm_unchanged: true, confirm_open: false }));
     expect(screen.queryByText("合并已交的 (1)")).toBeNull();   // 不是发起人: 没有合并
+  });
+
+  it("文件还开着: 先问; 点「已经存好了, 交」再带上 confirm_open; 接着没改再问一次时两样都带", async () => {
+    api.reviseProgress.mockResolvedValue(progress({ local_path: "/p.docx", my_state: "editing" }));
+    render(<RoomReviseMessage m={msg} me="li@example.com" {...props} />);
+    api.reviseReturn.mockResolvedValueOnce({ ok: false, need_confirm: "open" })
+      .mockResolvedValueOnce({ ok: false, need_confirm: "unchanged" }).mockResolvedValueOnce({ ok: true });
+    fireEvent.click(await screen.findByText("交回"));
+    fireEvent.click(await screen.findByText("已经存好了, 交"));
+    await waitFor(() => expect(api.reviseReturn).toHaveBeenLastCalledWith("r1", card.rev_id, { confirm_unchanged: false, confirm_open: true }));
+    fireEvent.click(await screen.findByText("确定"));
+    await waitFor(() => expect(api.reviseReturn).toHaveBeenLastCalledWith("r1", card.rev_id, { confirm_unchanged: true, confirm_open: true }));
+  });
+
+  it("发起人「我也改」: 下了之后「我改好了」; 我那行不算进已交 x/y", async () => {
+    api.reviseProgress.mockResolvedValue(progress({ owner: true, me: "zhou@example.com", my_state: null, can_merge: true }));
+    render(<RoomReviseMessage m={msg} me="zhou@example.com" {...props} />);
+    api.reviseOpen.mockResolvedValue({ path: "/p.docx" });
+    api.reviseProgress.mockResolvedValue(progress({ owner: true, me: "zhou@example.com", my_state: "editing", can_merge: true, local_path: "/p.docx",
+      people: [...progress({}).people, { email: "zhou@example.com", name: "我", state: "editing", at: "x", late: false, self: true }] }));
+    fireEvent.click(await screen.findByText("我也改"));
+    await screen.findByText("我改好了");
+    expect(screen.getByText(/已交 1\/2/)).toBeTruthy();
+    expect(screen.queryByText("不改了")).toBeNull();
   });
 
   it("发起人: 都交了才加粗「都交了, 合并」; 还有人没交能催", async () => {

@@ -9,6 +9,8 @@ import { useSyncExternalStore } from "react";
 import { sendNotification } from "./tauri_app";
 import { roomList, roomSync, type RoomEvent, type RoomSummary } from "./tauri_colleague_rooms";
 import { emitRoomEvents } from "./roomEventBus";
+import { REVISE_PENDING_EVERY_MS, dueToNotify, loadNotified, noticeKey, noticeText, saveNotified } from "./revisePending";
+import { revisePending, type RevisePendingItem } from "./tauri_room_revise";
 
 export const ROOMS_POLL_IDLE_MS = 20_000;
 export const ROOMS_POLL_ACTIVE_MS = 3_000;
@@ -21,9 +23,37 @@ export interface RoomsState {
   syncError: string | null;
   /** 每次取到新东西 +1, 打开的群据此刷新消息 */
   version: number;
+  /** 11/11 群里请我改、我还没交回的 (协同事项待办 + 红点) */
+  revise: RevisePendingItem[];
 }
 
-let state: RoomsState = { me: "", rooms: [], loaded: false, syncError: null, version: 0 };
+let state: RoomsState = { me: "", rooms: [], loaded: false, syncError: null, version: 0, revise: [] };
+let reviseAt = 0;
+
+/** 一起改文档的待办: 有新群消息时、或隔一分钟取一次 (算进度要读群记录, 不跟着 3 秒的聊天轮询跑); 快截止的弹一次通知。 */
+async function refreshRevise(force: boolean): Promise<RevisePendingItem[]> {
+  if (!force && Date.now() - reviseAt < REVISE_PENDING_EVERY_MS) return state.revise;
+  reviseAt = Date.now();
+  try {
+    const items = (await revisePending()).items;
+    const notified = loadNotified();
+    const due = dueToNotify(items, notified, new Date());
+    for (const x of due) {
+      const [t, b] = noticeText(x);
+      void sendNotification(t, b).catch(() => {});
+      notified.add(noticeKey(x));
+    }
+    if (due.length) saveNotified(notified);
+    return items;
+  } catch {
+    return state.revise;   // 老版本 tool-bridge 没有这个动作 / 没登录: 不影响群聊
+  }
+}
+
+/** 交回 / 不改了之后马上刷新待办 (不等一分钟) */
+export function refreshRevisePending(): Promise<void> {
+  return refreshRevise(true).then((revise) => emit({ ...state, revise }));
+}
 const listeners = new Set<() => void>();
 let timer: ReturnType<typeof setInterval> | null = null;
 let inflight: Promise<void> | null = null;
@@ -68,7 +98,8 @@ export function refreshRooms(): Promise<void> {
     }
     try {
       const list = await roomList();
-      emit({ me: list.me, rooms: list.rooms, loaded: true, syncError, version: state.version + (got ? 1 : 0) });
+      const revise = await refreshRevise(got > 0);
+      emit({ me: list.me, rooms: list.rooms, loaded: true, syncError, version: state.version + (got ? 1 : 0), revise });
     } catch (e) {
       emit({ ...state, loaded: true, syncError: syncError ?? (e instanceof Error ? e.message : String(e)) });
     }
@@ -116,6 +147,11 @@ export function pendingRoomCount(s: RoomsState = state): number {
   return s.rooms.reduce((n, r) => n + (r.my_state === "invited" ? 1 : r.my_state === "joined" ? r.unread : 0), 0);
 }
 
+/** 11/11 群里请我改、还没交回的 (显示在「协同事项」, 也算导航红点) */
+export function pendingReviseCount(s: RoomsState = state): number {
+  return s.revise.length;
+}
+
 /** 测试用: 回到初始状态。 */
 export function __resetRoomsStore(): void {
   if (timer) clearInterval(timer);
@@ -123,5 +159,6 @@ export function __resetRoomsStore(): void {
   inflight = null;
   activeRoom = null;
   listeners.clear();
-  state = { me: "", rooms: [], loaded: false, syncError: null, version: 0 };
+  reviseAt = 0;
+  state = { me: "", rooms: [], loaded: false, syncError: null, version: 0, revise: [] };
 }

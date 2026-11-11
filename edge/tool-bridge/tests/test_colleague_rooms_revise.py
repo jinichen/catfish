@@ -15,6 +15,7 @@ from catfish_tool_bridge import colleague_rooms_bigfiles as big
 from catfish_tool_bridge import colleague_rooms_outbox as outbox
 from catfish_tool_bridge import colleague_rooms_revise as rv
 from catfish_tool_bridge import colleague_rooms_revise_ai as rai
+from catfish_tool_bridge import colleague_rooms_revise_docs as rvd
 from catfish_tool_bridge import forms_tool
 from catfish_tool_bridge import forms_net
 from catfish_tool_bridge.doc_merge import marker
@@ -137,13 +138,13 @@ def test_完整一轮_交回只给发起人_合并_发出(w):
 
     w.sync_all()
     w.be(ZHANG)
-    vs = rv.versions(rid, card["doc_id"])["versions"]
+    vs = rvd.versions(rid, card["doc_id"])["versions"]
     assert [(v["version"], v["kind"]) for v in vs] == [(2, "merged"), (1, "start")]
     clean = next(f for f in vs[0]["files"] if "修订版" not in f["name"])
     texts = [p.text for p in docx.Document(io.BytesIO(rv.file_bytes(cr.load(rid)["room_id"], clean["id"]))).paragraphs]
     assert "第一阶段: 需求调研, 3 周。" in texts and "实施周期 3 个月, 总价 52 万。" in texts
     assert marker.read(rv.file_bytes(cr.load(rid)["room_id"], clean["id"])) is None   # 发出去的不带记号
-    d = rv.diff(rid, card["doc_id"], 1, 2)
+    d = rvd.diff(rid, card["doc_id"], 1, 2)
     assert d["path"].endswith("v1→v2 对比.docx") and Path(d["path"]).exists()
     assert rv.progress(rid, rev)["merged"]["version"] == 2
 
@@ -340,3 +341,77 @@ def test_小鲶_发起要先念_同意才发_能看进度和合并(w, tmp_path):
     assert p["needs_confirmation"] and "合并版" in p["proposal"]
     assert forms_tool.dispatch("catfish_form", {"action": "revise_publish", "rev_id": rev, "confirmed": True})["version"] == 2
     assert forms_tool.dispatch("catfish_form", {"action": "revise_status", "rev_id": "r_20260101_ffffffff"})["ok"] is False
+
+
+def test_文件还在_Word_里开着_先问一句(w):
+    rid = _room(w)
+    rev = _start(w, rid)["rev_id"]
+    w.sync(ZHANG)
+    p = Path(rv.open_copy(rid, rev)["path"])
+    _edit(str(p), "第一阶段: 需求调研, 2 周。", "第一阶段: 需求调研, 3 周。")
+    lock = p.parent / ("~$" + p.name[2:])          # Word 名字长时把开头两个字换成 ~$
+    lock.write_bytes(b"x")
+    assert rv.give_back(rid, rev) == {"ok": False, "need_confirm": "open"}
+    lock.unlink()
+    lo = p.parent / f".~lock.{p.name}#"            # LibreOffice
+    lo.write_bytes(b"x")
+    assert rv.give_back(rid, rev)["need_confirm"] == "open"
+    assert rv.give_back(rid, rev, confirm_open=True)["ok"]   # 锁文件是上次崩溃留下的: 员工确认存好了照样能交
+
+
+def test_发起人我也改_跟大家的一起合(w):
+    rid = _room(w)
+    rev = _start(w, rid)["rev_id"]
+    w.be(BOSS)
+    p = rv.open_copy(rid, rev)["path"]
+    assert not any(m["kind"] == "room_msg" and "revise_status" in m["env"] for m in w.box)   # 发起人在改不往群里报
+    _edit(p, "实施周期 3 个月, 总价 48 万。", "实施周期 3 个月, 总价 50 万。")
+    assert rv.give_back(rid, rev)["self"] is True
+    w.sync(ZHANG)
+    _edit(rv.open_copy(rid, rev)["path"], "第一阶段: 需求调研, 2 周。", "第一阶段: 需求调研, 3 周。")
+    rv.give_back(rid, rev)
+    w.sync_all()
+    w.be(BOSS)
+    pr = rv.progress(rid, rev)
+    me = next(x for x in pr["people"] if x.get("self"))
+    assert me["state"] == "returned" and me["name"] == "我" and not pr["all_in"]   # 李四还没交; 我不算进「都交了」
+    assert rv.merge(rid, rev)["changes"] == {ZHANG: 1, BOSS: 1}
+    pub = rv.publish(rid, rev)
+    clean = rv._blob(pub["message"]["revise_status"]["doc_id"], "v2")
+    texts = [x.text for x in docx.Document(io.BytesIO(clean)).paragraphs]
+    assert "实施周期 3 个月, 总价 50 万。" in texts and "第一阶段: 需求调研, 3 周。" in texts
+    r = rv.remind(rid, rev)   # 只催李四, 不催自己
+    assert "李四" in r["message"]["text"] and "我" not in r["message"]["text"].split("还等")[1]
+
+
+def test_待办_请我改还没交的_截止早的在前(w):
+    rid = _room(w)
+    a = _start(w, rid)["rev_id"]
+    b = _start(w, rid, deadline="2026-11-12")["rev_id"]
+    c = _start(w, rid, editors=[LI])["rev_id"]
+    w.sync(ZHANG)
+    items = rv.pending()["items"]
+    assert [x["rev_id"] for x in items] == [b, a] and items[0]["owner_name"]   # c 没请张三
+    _edit(rv.open_copy(rid, a)["path"], "第一阶段: 需求调研, 2 周。", "第一阶段: 需求调研, 3 周。")
+    assert next(x for x in rv.pending()["items"] if x["rev_id"] == a)["state"] == "editing"
+    rv.give_back(rid, a)
+    rv.decline(rid, b, "这周出差")
+    assert rv.pending()["items"] == []
+    w.be(BOSS)
+    assert rv.pending()["items"] == [] and c   # 发起人自己没有待办
+
+
+def test_群里普通文件的记号读过就记住(w, monkeypatch):
+    rid = _room(w)
+    rev = _start(w, rid)["rev_id"]
+    w.sync(ZHANG)
+    p = rv.open_copy(rid, rev)["path"]
+    cr.send(rid, "改好了", files=[{"name": "方案.docx", "data": base64.b64encode(Path(p).read_bytes()).decode()}])
+    w.sync_all()
+    w.be(BOSS)
+    calls = []
+    real = rv.marker.read
+    monkeypatch.setattr(rv.marker, "read", lambda d: calls.append(1) or real(d))
+    for _ in range(3):
+        rv.progress(rid, rev)
+    assert len(calls) == 1

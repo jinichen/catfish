@@ -436,7 +436,7 @@ MSG_KINDS = ("text", "card", "status", "auto", "deadline", "form", "form_status"
 # 「协同事项」里已经处理 (接下 / 不接 / 交回) —— 那里不会把群里那张卡标成已读, 红点一直挂着 (实测「测试」群 9 条未读里
 # 7 张是已处理的任务卡)。任务卡要处理的那一下已经算在协同事项的待办数里 (待处理的任务), 群里再算一遍是重复。
 # 所以未读 / @我 只数聊天消息和自动转发的结果; 卡和状态照样显示在群里、照样做最后一条预览。
-UNREAD_KINDS = ("text", "auto", "revise", "revise_return")   # 11/11 请你修改 / 交回稿: 别处没有待办, 算未读
+UNREAD_KINDS = ("text", "auto", "revise_return")   # 11/11 交回稿算未读; 「请你修改」卡片在协同事项里有待办 (跟任务卡一样不再算)
 
 
 def mark_read(room_id: str) -> dict[str, Any]:

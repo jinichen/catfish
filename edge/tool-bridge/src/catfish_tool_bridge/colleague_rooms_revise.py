@@ -261,10 +261,25 @@ def _status(room_id: str, card: dict[str, Any], state: str, *, to: list[str] | N
 def _editor_rec(room_id: str, card: dict[str, Any], msg_id: str) -> dict[str, Any]:
     if any((m.get("revise_status") or {}).get("state") == "closed" for m in _round_msgs(room_id, card["rev_id"])):
         raise ValueError(f"{card['title']} 这一轮已经结束了, 不能再改 / 交回")
-    rec = _get(card["rev_id"])
-    if rec and rec.get("role") == "owner":
-        raise ValueError("这是你自己发起的修改")
+    rec = _get(card["rev_id"])   # 发起人自己也改 (11/11 「我也改」): 用的就是他那条发起人记录
     return rec or {**card, "room_id": room_id, "msg_id": msg_id, "role": "editor"}
+
+
+def _may_edit(me: str, card: dict[str, Any]) -> None:
+    if me not in card["editors"] and me != card["owner"]:
+        raise ValueError("这一轮没请你改 (可以先看原文件)")
+
+
+def _open_in_app(p: Path) -> bool:
+    """文件还在 Word / Excel / PowerPoint / WPS / LibreOffice 里开着 (多半还没存或没关)。
+    Office 和 WPS 打开文件时在同目录放 `~$名字` 锁文件 (名字长时开头两个字被 ~$ 顶掉), LibreOffice 放 `.~lock.名字#`。"""
+    try:
+        names = [x.name for x in p.parent.iterdir()]
+    except OSError:
+        return False
+    n = p.name
+    return any((x.startswith("~$") and len(x) > 3 and n.endswith(x[2:]) and len(x) >= len(n)) or x == f".~lock.{n}#"
+               for x in names)
 
 
 def _safe(name: str) -> str:
@@ -277,8 +292,7 @@ def open_copy(room_id: str, rev_id: str) -> dict[str, Any]:
     room = cr.load(room_id)
     msg = _card_msg(room["room_id"], rev_id)
     card = msg["revise"]
-    if me not in card["editors"]:
-        raise ValueError("这一轮没请你改 (可以先看原文件)")
+    _may_edit(me, card)
     rec = _editor_rec(room["room_id"], card, msg["msg_id"])
     if rec.get("local_path") and Path(rec["local_path"]).exists():
         return {"ok": True, "path": rec["local_path"], "again": True}
@@ -299,7 +313,7 @@ def open_copy(room_id: str, rev_id: str) -> dict[str, Any]:
     first = not rec.get("state")
     rec.update({"local_path": str(target), "state": rec.get("state") or "editing", "opened_at": _now()})
     _put(rec)
-    if first:
+    if first and me != card["owner"]:   # 发起人自己改不往群里报「在改」
         try:
             _status(room["room_id"], card, "editing")
         except ValueError:
@@ -326,14 +340,15 @@ def detect(room_id: str, stage_id: Any, name: Any) -> dict[str, Any]:
 
 
 def give_back(room_id: str, rev_id: str, path: Any = None, note: Any = None, confirm_unchanged: bool = False,
-              stage_id: Any = None, name: Any = None) -> dict[str, Any]:
-    """「交回」: 默认交刚才下载的那份; 也可以是员工另选 / 拖进来的文件 (stage_id + name)。一点没改的先问一句 (need_confirm)。"""
+              stage_id: Any = None, name: Any = None, confirm_open: bool = False) -> dict[str, Any]:
+    """「交回」: 默认交刚才下载的那份; 也可以是员工另选 / 拖进来的文件 (stage_id + name)。
+    先问一句的两种 (need_confirm): 文件还在 Word / WPS 里开着 (open, 改了没存就交上去的是旧的); 一点没改 (unchanged)。
+    发起人自己也改的 (「我也改」): 不发消息, 存在本机, 合并时跟大家交回的一起合。"""
     me = forms_net.me()
     room = cr.load(room_id)
     msg = _card_msg(room["room_id"], rev_id)
     card = msg["revise"]
-    if me not in card["editors"]:
-        raise ValueError("这一轮没请你改")
+    _may_edit(me, card)
     rec = _editor_rec(room["room_id"], card, msg["msg_id"])
     if stage_id:
         p, suffix = _staged(stage_id), PurePath(str(name or "")).suffix
@@ -342,6 +357,8 @@ def give_back(room_id: str, rev_id: str, path: Any = None, note: Any = None, con
         suffix = p.suffix
         if not str(path or rec.get("local_path") or "") or not p.is_file():
             raise ValueError("找不到要交回的文件: 先点「下载修改」, 或选一下改好的文件")
+        if not confirm_open and _open_in_app(p):
+            return {"ok": False, "need_confirm": "open"}
     ext = PurePath(card["name"]).suffix.lower()
     if suffix.lower() != ext:
         raise ValueError(f"交回的文件类型 ({suffix or '无后缀'}) 跟原文件 ({ext}) 不一样")
@@ -358,6 +375,15 @@ def give_back(room_id: str, rev_id: str, path: Any = None, note: Any = None, con
             raise ValueError(f"这份文件读不出来, 交不了: {e}") from None
     if unchanged and not confirm_unchanged:
         return {"ok": False, "need_confirm": "unchanged"}
+    if me == card["owner"]:
+        rec.update({"state": "unchanged" if unchanged else "returned", "returned_at": _now()})
+        rec.pop("self_return", None)
+        if not unchanged:
+            key = f"self:{rev_id}:{secrets.token_hex(4)}"
+            _blob_put(card["doc_id"], key, marker.strip(data) if ext in OOXML else data)
+            rec["self_return"] = {"key": key, "at": _now(), "after_version": (rec.get("merged") or {}).get("version")}
+        _put(rec)
+        return {"ok": True, "self": True}
     joined = cr._joined_others(room, me)
     if card["owner"] not in joined:
         raise ValueError("发起人已经不在群里了, 交不回去 —— 私下发给他吧")
@@ -410,6 +436,9 @@ def progress(room_id: str, rev_id: str) -> dict[str, Any]:
     owner = card["owner"] == me
     people = {e: {"email": e, "name": cr._label(room, e), "state": "pending", "at": None, "late": False} for e in card["editors"]}
     merged, closed, n_merged = None, False, 0
+    rec = _get(rev_id) or {}
+    seen = rec.setdefault("marker_seen", {}) if owner and rec else {}   # 群里普通文件读过记号的, 记住 (不每次重读大文件)
+    seen_before = dict(seen)
     for m in _round_msgs(room["room_id"], rev_id):
         who = m.get("from") or me
         st = m.get("revise_status")
@@ -432,10 +461,14 @@ def progress(room_id: str, rev_id: str) -> dict[str, Any]:
         if owner and m.get("kind") == "text" and who in people and card["fmt"] in ("docx", "xlsx", "pptx"):
             f = next((f for f in m.get("files") or [] if PurePath(f["name"]).suffix.lower() == "." + card["fmt"]), None)
             if f:   # 老版本鲶鱼直接发回群里的普通文件: 带这一轮的记号就算交回 (记号只有下载修改之后才有, 不用再比时间)
-                try:
-                    mk = marker.read(file_bytes(room["room_id"], f["id"]))
-                except ValueError:
-                    mk = None
+                if f["id"] in seen:
+                    mk = seen[f["id"]] or None
+                else:
+                    try:
+                        mk = marker.read(file_bytes(room["room_id"], f["id"]))
+                        seen[f["id"]] = mk or ""
+                    except ValueError:
+                        mk = None   # 还没收齐: 不记, 下次再读
                 if mk and mk.startswith(rev_id + ":"):
                     people[who].update({"state": "returned", "at": m["at"], "msg_id": m["msg_id"], "file": f, "note": "", "plain": True,
                                         "epoch": n_merged})
@@ -447,19 +480,62 @@ def progress(room_id: str, rev_id: str) -> dict[str, Any]:
         if not owner:
             p.pop("file", None)
             p.pop("note", None)
-    rec = _get(rev_id) or {}
+    if seen != seen_before:
+        _put(rec)
     done = all(p["state"] in ("returned", "unchanged", "declined") for p in people.values())
-    return {"ok": True, "card": card, "owner": owner, "me": me, "people": list(people.values()), "merged": merged, "closed": closed,
-            "all_in": done, "can_merge": owner and any(p["state"] == "returned" for p in people.values()),
-            "my_state": None if owner else (people.get(me) or {}).get("state"), "local_path": None if owner else rec.get("local_path"),
+    plist = list(people.values())
+    if owner and rec.get("state"):   # 发起人「我也改」: 排在最后, 不算进「都交了」
+        sr = rec.get("self_return") or {}
+        plist.append({"email": me, "name": "我", "state": rec["state"], "at": sr.get("at") or rec.get("opened_at"), "late": False,
+                      "self": True, **({"after_merge": True} if merged and sr and sr.get("after_version") == merged["version"] else {})})
+    return {"ok": True, "card": card, "owner": owner, "me": me, "people": plist, "merged": merged, "closed": closed,
+            "all_in": done, "can_merge": owner and any(p["state"] == "returned" for p in plist),
+            "my_state": rec.get("state") if owner else (people.get(me) or {}).get("state"), "local_path": rec.get("local_path"),
             "file": (msg.get("files") or [None])[0], "msg_id": msg["msg_id"]}
+
+
+PENDING_MAX_AGE_DAYS = 30
+
+
+def pending() -> dict[str, Any]:
+    """「协同事项」里的待办: 各群里请我改、我还没交回 / 没说不改、这一轮也没结束的 (30 天内发起的)。截止早的排前面。
+    截止提醒在 Companion 本机弹 (今天 / 明天截止), 不往群里自动发 —— 群里的消息都得员工自己点了才发。"""
+    me = forms_net.me()
+    today = datetime.now().date()
+    out = []
+    for rid in cr._room_ids():
+        room = cr._room(rid)
+        if not room or room.get("my_state") != "joined":
+            continue
+        with cr.store.tx() as con:
+            cards = [json.loads(r["data"]) for r in con.execute(
+                "SELECT data FROM messages WHERE room_id = ? AND kind = 'revise' ORDER BY seq", (rid,))]
+        for m in cards:
+            card = m.get("revise") or {}
+            if me not in card.get("editors", []):
+                continue
+            try:
+                if (today - datetime.fromisoformat(m["at"]).date()).days > PENDING_MAX_AGE_DAYS:
+                    continue
+                pr = progress(rid, card["rev_id"])
+            except (ValueError, LookupError):
+                continue
+            if pr["closed"] or pr["my_state"] not in ("pending", "editing"):
+                continue
+            dl = card.get("deadline")
+            days = (datetime.fromisoformat(dl).date() - today).days if dl else None
+            out.append({"room_id": rid, "room_name": room.get("name") or "", "rev_id": card["rev_id"], "title": card["title"],
+                        "version": card["version"], "owner_name": cr._label(room, card["owner"]), "deadline": dl, "days_left": days,
+                        "state": pr["my_state"], "local_path": pr["local_path"], "msg_id": m["msg_id"], "at": m["at"]})
+    out.sort(key=lambda x: (x["days_left"] is None, x["days_left"] if x["days_left"] is not None else 0, x["at"]))
+    return {"ok": True, "items": out}
 
 
 def remind(room_id: str, rev_id: str) -> dict[str, Any]:
     pr = progress(room_id, rev_id)
     if not pr["owner"]:
         raise ValueError("只有发起人能催")
-    wait = [p for p in pr["people"] if p["state"] in ("pending", "editing")]
+    wait = [p for p in pr["people"] if p["state"] in ("pending", "editing") and not p.get("self")]
     if not wait:
         raise ValueError("大家都交了 (或说了不改)")
     names = "、".join(p["name"] for p in wait)
@@ -514,6 +590,12 @@ def _inputs(room_id: str, rev_id: str) -> tuple[dict[str, Any], dict[str, Any], 
             data = marker.strip(file_bytes(room_id, p["file"]["id"]))
             _blob_put(card["doc_id"], key, data)
         rets.append(dm.Return(p["email"], data, p["at"]))
+    sr = rec.get("self_return")   # 发起人「我也改」的那份 (迟到那批只要合并版发出之后改的)
+    if sr and (sr.get("after_version") == (pr["merged"] or {}).get("version")):
+        data = _blob(card["doc_id"], sr["key"])
+        if data is not None:
+            rets.append(dm.Return(pr["me"], data, sr["at"]))
+    rets.sort(key=lambda r: (r.who != MERGED, r.at))
     if not [r for r in rets if r.who != MERGED]:
         raise ValueError("还没有人交回修改" if not late else "合并版发出之后还没有新交回的")
     return pr, rec, base, rets, names, late
@@ -606,71 +688,9 @@ def publish(room_id: str, rev_id: str, note: Any = None) -> dict[str, Any]:
     return {"ok": True, "message": sent["message"], "version": version, "warnings": out["warnings"]}
 
 
-# ── 版本记录 / 对比 ────────────────────────────────────────────────
-
-def versions(room_id: str, doc_id: str) -> dict[str, Any]:
-    """这份文档在群里的每一版 (发起的那份 + 每次合并版)。"""
-    rid = cr.load(room_id)["room_id"]
-    out, title = [], ""
-    with cr.store.tx() as con:
-        rows = [json.loads(r["data"]) for r in con.execute(
-            "SELECT data FROM messages WHERE room_id = ? AND kind IN ('revise', 'revise_status') ORDER BY seq", (rid,))]
-    room = cr.load(room_id)
-    seen = set()
-    for m in rows:
-        c = m.get("revise")
-        st = m.get("revise_status") or {}
-        if c and c["doc_id"] == doc_id and c["version"] not in seen:
-            seen.add(c["version"])
-            title = c["title"]
-            out.append({"version": c["version"], "at": m["at"], "by": cr._label(room, c["owner"]), "kind": "start",
-                        "msg_id": m["msg_id"], "files": m.get("files") or []})
-        elif st.get("doc_id") == doc_id and st.get("state") == "merged":
-            out.append({"version": st.get("version"), "at": m["at"], "by": cr._label(room, m.get("from") or ""), "kind": "merged",
-                        "msg_id": m["msg_id"], "files": m.get("files") or [], "text": m.get("text") or ""})
-    out.sort(key=lambda v: (v["version"] or 0, v["at"]), reverse=True)
-    return {"ok": True, "doc_id": doc_id, "title": title, "versions": out}
-
-
-def _version_bytes(room_id: str, doc_id: str, v: int) -> bytes:
-    data = _blob(doc_id, f"v{v}")
-    if data is not None:
-        return data
-    ver = next((x for x in versions(room_id, doc_id)["versions"] if x["version"] == v), None)
-    f = next((f for f in (ver or {}).get("files") or [] if "修订版" not in f["name"]), None)
-    if not f:
-        raise ValueError(f"v{v} 找不到了 (可能过了保留期)")
-    return marker.strip(file_bytes(cr.load(room_id)["room_id"], f["id"]))
-
-
-def diff(room_id: str, doc_id: str, a: Any, b: Any) -> dict[str, Any]:
-    """任意两版对比: Word / Excel / PPT 出一份带修订痕迹 (批注 / 备注) 的文件, 文本出一份对比文本。写到下载目录, 返回路径。"""
-    va, vb = int(a), int(b)
-    vs = versions(room_id, doc_id)
-    first = next((x for x in vs["versions"] if x["kind"] == "start"), None)
-    name = (first or {}).get("files", [{}])[0].get("name", "") if first else ""
-    fmt = dm.fmt_of(name)
-    if not fmt:
-        raise ValueError("这种格式没法对比, 两版分别打开看")
-    old, new = _version_bytes(room_id, doc_id, va), _version_bytes(room_id, doc_id, vb)
-    room = cr.load(room_id)
-    key = f"v{vb}"
-    ext = PurePath(name).suffix
-    if fmt == "text":
-        import difflib  # noqa: PLC0415
-
-        from .doc_merge.text import decode  # noqa: PLC0415
-        a_t, b_t = decode(old)[0].splitlines(), decode(new)[0].splitlines()
-        data = "\n".join(difflib.unified_diff(a_t, b_t, f"v{va}", f"v{vb}", lineterm="")).encode("utf-8")
-        ext = ".diff.txt"
-    else:
-        out = dm.render(fmt, old, [dm.Return(key, new, _now())], {}, dm.Ctx(forms_net.me(), {key: f"v{vb}"}, _now()))
-        data = out["tracked"]
-    folder = Path.home() / "Downloads" / "鲶鱼群文件" / rfiles._safe_dir(room.get("name") or room["room_id"])
-    folder.mkdir(parents=True, exist_ok=True)
-    target = folder / f"{_safe(vs['title'] or PurePath(name).stem)} v{va}→v{vb} 对比{ext}"
-    target.write_bytes(data)
-    return {"ok": True, "path": str(target)}
+def _docs():
+    from . import colleague_rooms_revise_docs as d  # noqa: PLC0415
+    return d
 
 
 def pim_handlers(rid: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -679,7 +699,8 @@ def pim_handlers(rid: str, params: dict[str, Any]) -> dict[str, Any]:
         "pim/croom_revise_start": lambda: start(rid, params),
         "pim/croom_revise_open": lambda: open_copy(rid, rv),
         "pim/croom_revise_return": lambda: give_back(rid, rv, params.get("path"), params.get("note"), params.get("confirm_unchanged") is True,
-                                                     params.get("stage_id"), params.get("name")),
+                                                     params.get("stage_id"), params.get("name"), params.get("confirm_open") is True),
+        "pim/croom_revise_pending": pending,
         "pim/croom_revise_detect": lambda: detect(rid, params.get("stage_id"), params.get("name")),
         "pim/croom_revise_decline": lambda: decline(rid, rv, params.get("note")),
         "pim/croom_revise_progress": lambda: progress(rid, rv),
@@ -688,10 +709,10 @@ def pim_handlers(rid: str, params: dict[str, Any]) -> dict[str, Any]:
         "pim/croom_revise_merge": lambda: merge(rid, rv),
         "pim/croom_revise_decide": lambda: decide(rid, rv, params.get("cid"), params.get("pick"), params.get("text")),
         "pim/croom_revise_publish": lambda: publish(rid, rv, params.get("note")),
-        "pim/croom_revise_versions": lambda: versions(rid, str(params.get("doc_id") or "")),
-        "pim/croom_revise_diff": lambda: diff(rid, str(params.get("doc_id") or ""), params.get("a"), params.get("b")),
+        "pim/croom_revise_versions": lambda: _docs().versions(rid, str(params.get("doc_id") or "")),
+        "pim/croom_revise_diff": lambda: _docs().diff(rid, str(params.get("doc_id") or ""), params.get("a"), params.get("b")),
     }
 
 
-__all__ = ["classify", "start", "open_copy", "give_back", "decline", "progress", "merge", "decide", "publish", "versions",
-           "diff", "pim_handlers"]
+__all__ = ["classify", "start", "open_copy", "give_back", "decline", "progress", "pending", "merge", "decide", "publish",
+           "pim_handlers"]

@@ -11,19 +11,23 @@
  * 10/17: 下面一整行 = 一起填表 (FormsPanel, docs/FORM-COLLECT-PLAN.md); 收到要填的表也算红点。
  * 11/4: 左栏换成派任务给多位同事 (TasksPanel, docs/COLLEAGUE-TASK-PLAN.md), 不再要求双方同时在线;
  *   同事派给我、还没交回的也算红点。右栏照旧接老版本同事的在线请求和工具审批。
+ * 11/11: 右栏最上面「请你修改」—— 群里请我改、还没交回的文档 (ReviseTodoPanel), 也算红点。
  * 11/5: 顶上一个切换 —— 协同事项 / 群聊 (RoomsPanel, docs/GROUP-CHAT-PLAN.md); 群邀请和群未读也算红点。
  */
-import { pendingRoomCount, useColleagueRooms } from "../../lib/colleagueRoomsStore";
+import { pendingReviseCount, pendingRoomCount, useColleagueRooms } from "../../lib/colleagueRoomsStore";
 import TasksPanel from "./TasksPanel";
 import FormsPanel from "./FormsPanel";
 import PendingPanel from "./PendingPanel";
+import ReviseTodoPanel from "./ReviseTodoPanel";
 import RoomsPanel from "./RoomsPanel";
 import { useUIStore } from "../../store/ui";
 
 export default function CollabTab() {
   const view = useUIStore((s) => s.collabView);
   const setView = useUIStore((s) => s.setCollabView);
-  const roomBadge = pendingRoomCount(useColleagueRooms());
+  const rooms = useColleagueRooms();
+  const roomBadge = pendingRoomCount(rooms);
+  const reviseBadge = pendingReviseCount(rooms);
   const seg = (on: boolean) => ({
     border: "1px solid var(--catfish-border)", cursor: "pointer", font: "inherit", fontSize: 13,
     padding: "6px 14px", borderRadius: "var(--radius-sm, 6px)",
@@ -36,6 +40,12 @@ export default function CollabTab() {
       <div role="tablist" style={{ display: "flex", gap: 8, marginBottom: "var(--space-3)", flexShrink: 0 }}>
         <button type="button" role="tab" aria-selected={view === "work"} style={seg(view === "work")} onClick={() => setView("work")}>
           协同事项
+          {reviseBadge > 0 && (
+            <span aria-label={`${reviseBadge} 份文档等你修改`}
+                  style={{ fontSize: 10, minWidth: 16, padding: "0 5px", borderRadius: 8, background: "var(--status-error, #dc2626)", color: "white" }}>
+              {reviseBadge}
+            </span>
+          )}
         </button>
         <button type="button" role="tab" aria-selected={view === "rooms"} style={seg(view === "rooms")} onClick={() => setView("rooms")}>
           群聊
@@ -54,6 +64,9 @@ export default function CollabTab() {
           <TasksPanel />
           {/* 右: 等我点头 (多半是空的, 最多占四成) + 一起填表, 各自滚 */}
           <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)", minHeight: 0 }}>
+            {rooms.revise.length > 0 && (   // 11/11 群里请我改的文档 (没有就不占地方)
+              <div style={{ flexShrink: 0, maxHeight: "35%", overflowY: "auto", borderRadius: "var(--radius-md)" }}><ReviseTodoPanel /></div>
+            )}
             <div style={{ flexShrink: 0, maxHeight: "40%", overflowY: "auto", borderRadius: "var(--radius-md)" }}><PendingPanel /></div>
             <div style={{ flex: 1, minHeight: 0, overflowY: "auto", borderRadius: "var(--radius-md)" }}><FormsPanel /></div>
           </div>

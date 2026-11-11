@@ -7,6 +7,7 @@
  */
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 
+import { refreshRevisePending } from "../../lib/colleagueRoomsStore";
 import { openFile } from "../../lib/tauri_app";
 import type { RoomMember, RoomMessage } from "../../lib/tauri_colleague_rooms";
 import {
@@ -90,7 +91,9 @@ function ReviseCardView({ m, me, members, roomId, tick, onChanged, onNotice, onM
   const [pr, setPr] = useState<ReviseProgress | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [ask, setAsk] = useState<null | "unchanged" | "decline" | "close">(null);
+  const [ask, setAsk] = useState<null | "unchanged" | "open" | "decline" | "close">(null);
+  /** 员工已经点过「确认」的 (文件开着 / 没改), 再点交回时带上 */
+  const [okd, setOkd] = useState<{ open?: boolean; unchanged?: boolean }>({});
   const [reason, setReason] = useState("");
   const [picked, setPicked] = useState<{ name: string; stage_id: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -107,6 +110,7 @@ function ReviseCardView({ m, me, members, roomId, tick, onChanged, onNotice, onM
       const r = await fn();
       setPr(await reviseProgress(roomId, c.rev_id));
       onChanged();
+      void refreshRevisePending();   // 协同事项里的「请你修改」马上跟着变
       return r;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -122,13 +126,15 @@ function ReviseCardView({ m, me, members, roomId, tick, onChanged, onNotice, onM
       onNotice(r.again ? "打开了你之前下载的那份 (接着改)" : `已下载到 ${r.path.split("/").slice(-2).join("/")} 并打开; 改完存盘, 回这里点「交回」`);
     }
   }
-  async function giveBack(confirm = false, stage = picked) {
-    const r = await run(() => reviseReturn(roomId, c.rev_id, { confirm_unchanged: confirm, ...(stage ? stage : {}) }));
+  async function giveBack(flags: { open?: boolean; unchanged?: boolean } = {}, stage = picked) {
+    const r = await run(() => reviseReturn(roomId, c.rev_id, { confirm_unchanged: Boolean(flags.unchanged), confirm_open: Boolean(flags.open),
+                                                               ...(stage ? stage : {}) }));
     if (!r) return;
-    if (r.need_confirm === "unchanged") { setAsk("unchanged"); return; }
+    if (r.need_confirm) { setOkd(flags); setAsk(r.need_confirm); return; }
     setAsk(null);
+    setOkd({});
     setPicked(null);
-    onNotice(`已交回《${c.title}》, 只发给了 ${labelOf(members, c.owner)}`);
+    onNotice(r.self ? `你对《${c.title}》的修改存好了, 合并时跟大家交回的一起合` : `已交回《${c.title}》, 只发给了 ${labelOf(members, c.owner)}`);
   }
   async function pickOther(e: ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
@@ -137,25 +143,26 @@ function ReviseCardView({ m, me, members, roomId, tick, onChanged, onNotice, onM
     try {
       const [st] = await stageFiles([{ name: f.name, size: f.size, file: f }], () => undefined);
       setPicked(st);
-      await giveBack(false, st);
+      await giveBack({}, st);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   }
 
   const people: RevisePerson[] = pr?.people ?? c.editors.map((e) => ({ email: e, name: labelOf(members, e), state: "pending" as const, at: null, late: false }));
-  const done = people.filter((p) => p.state === "returned" || p.state === "unchanged").length;
-  const my = people.find((p) => p.email === me);
+  const others = people.filter((p) => !p.self);   // 「我也改」那行不算进已交 x/y、不催
+  const done = others.filter((p) => p.state === "returned" || p.state === "unchanged").length;
+  const my = people.find((p) => p.email === me) ?? (mine && pr ? { email: me, name: "我", state: "pending" as const, at: null, late: false, self: true } : undefined);
   const ended = pr?.closed;
-  const waiting = people.filter((p) => p.state === "pending" || p.state === "editing").length;
+  const waiting = others.filter((p) => p.state === "pending" || p.state === "editing").length;
   const lateCount = people.filter((p) => p.after_merge).length;
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start", gap: 2 }}>
       <span style={{ ...muted, display: "flex", flexWrap: "wrap", gap: 8, justifyContent: mine ? "flex-end" : "flex-start", maxWidth: "90%" }}>
         <span>{mine ? "我" : labelOf(members, m.from)} · {timeLabel(m.at)}</span>
-        <span>📝 v{c.version} · {ended ? "已结束" : c.deadline ? `截止 ${shortWhen(c.deadline)}` : "不限时"} · 已交 {done}/{people.length}
+        <span>📝 v{c.version} · {ended ? "已结束" : c.deadline ? `截止 ${shortWhen(c.deadline)}` : "不限时"} · 已交 {done}/{others.length}
           {pr?.merged ? ` · 已出 v${pr.merged.version}` : ""}</span>
-        {people.map((p) => (
+        {people.filter((p) => !(p.self && p.state === "pending")).map((p) => (
           <span key={p.email} title={p.email + (p.late ? " · 逾期交回" : "")}
                 style={{ color: p.state === "returned" ? "var(--status-ok, #059669)" : p.late ? "var(--status-warn, #d97706)" : undefined }}>
             {p.email === me ? "我" : p.name} {PERSON_STATE_WORD[p.state]}{p.late ? " (逾期)" : ""}
@@ -172,15 +179,16 @@ function ReviseCardView({ m, me, members, roomId, tick, onChanged, onNotice, onM
       <span style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: mine ? "flex-end" : "flex-start" }}>
         {my && !ended && my.state !== "declined" && (
           <>
-            <button type="button" style={link} disabled={busy} onClick={() => void download()}>
-              {pr?.local_path ? "接着改" : "下载修改"}
+            <button type="button" style={link} disabled={busy} onClick={() => void download()}
+                    title={my.self ? "你自己也改一份, 合并时跟大家交回的一起合 (不发到群里)" : undefined}>
+              {pr?.local_path ? "接着改" : my.self ? "我也改" : "下载修改"}
             </button>
             {pr?.local_path && <button type="button" style={link} disabled={busy} onClick={() => void giveBack()}>
-              {my.state === "returned" || my.state === "unchanged" ? "再交一次 (覆盖上次)" : "交回"}
+              {my.self ? (my.state === "returned" ? "更新我的修改" : "我改好了") : my.state === "returned" || my.state === "unchanged" ? "再交一次 (覆盖上次)" : "交回"}
             </button>}
             <button type="button" style={link} disabled={busy} onClick={() => fileRef.current?.click()}
                     title="改好的文件存在别处 / 另存了一份: 选那份交回">交别的文件</button>
-            {my.state !== "returned" && my.state !== "unchanged" && (
+            {!my.self && my.state !== "returned" && my.state !== "unchanged" && (
               <button type="button" style={link} disabled={busy} onClick={() => setAsk("decline")}>不改了</button>
             )}
             <input ref={fileRef} type="file" style={{ display: "none" }} aria-label="选改好的文件交回" onChange={(e) => void pickOther(e)} />
@@ -203,8 +211,12 @@ function ReviseCardView({ m, me, members, roomId, tick, onChanged, onNotice, onM
       <DeliveryLine roomId={roomId} msgId={m.msg_id} rows={m.delivery} members={members} hasFiles={Boolean(m.files?.length)}
                     align={mine ? "flex-end" : "flex-start"} onChanged={onChanged} />
       {ask === "unchanged" && (
-        <Confirm title="跟原版一样" text={`这份《${c.title}》跟原版一样, 一点没改。交回「看过, 没改」?`} ok="交回" busy={busy}
-                 onClose={() => setAsk(null)} onOk={() => void giveBack(true)} />
+        <Confirm title="跟原版一样" text={`这份《${c.title}》跟原版一样, 一点没改。${my?.self ? "就当你没改?" : "交回「看过, 没改」?"}`} ok="确定" busy={busy}
+                 onClose={() => setAsk(null)} onOk={() => void giveBack({ ...okd, unchanged: true })} />
+      )}
+      {ask === "open" && (
+        <Confirm title="文件还开着" text={`《${c.title}》还在 Word / WPS 里开着 —— 改了没存的话, 交上去的是没改的旧内容。先存好并关掉文件再交; 已经存好了也可以直接交。`}
+                 ok="已经存好了, 交" busy={busy} onClose={() => setAsk(null)} onOk={() => void giveBack({ ...okd, open: true })} />
       )}
       {ask === "close" && (
         <Confirm title="结束修改" text={`结束《${c.title}》这一轮? 之后大家不能再交回 (已经交的还能合并)。`} ok="结束" busy={busy}

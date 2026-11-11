@@ -15,6 +15,8 @@ export interface RevisePerson {
   email: string; name: string;
   state: "pending" | "editing" | "returned" | "unchanged" | "declined";
   at: string | null; late: boolean; after_merge?: boolean; note?: string; plain?: boolean;
+  /** 发起人自己「我也改」的那一行 (不算进「已交 x/y」) */
+  self?: boolean;
 }
 export interface ReviseProgress {
   card: ReviseCard; owner: boolean; me: string; people: RevisePerson[];
@@ -52,8 +54,15 @@ export const reviseStart = (roomId: string, p: {
 export const reviseOpen = (roomId: string, revId: string) =>
   call<{ path: string; again?: boolean }>("revise_open", { room_id: roomId, rev_id: revId });
 export const reviseReturn = (roomId: string, revId: string, p: {
-  note?: string; confirm_unchanged?: boolean; stage_id?: string; name?: string;
-} = {}) => call<{ ok: boolean; need_confirm?: "unchanged" }>("revise_return", { room_id: roomId, rev_id: revId, ...p });
+  note?: string; confirm_unchanged?: boolean; confirm_open?: boolean; stage_id?: string; name?: string;
+} = {}) => call<{ ok: boolean; need_confirm?: "unchanged" | "open"; self?: boolean }>("revise_return", { room_id: roomId, rev_id: revId, ...p });
+
+/** 「协同事项」里的待办: 各群里请我改、我还没交回的 (截止早的在前; days_left 0 = 今天截止, 负数 = 过了) */
+export interface RevisePendingItem {
+  room_id: string; room_name: string; rev_id: string; title: string; version: number; owner_name: string;
+  deadline: string | null; days_left: number | null; state: "pending" | "editing"; local_path: string | null; msg_id: string; at: string;
+}
+export const revisePending = () => call<{ items: RevisePendingItem[] }>("revise_pending", {});
 export const reviseDecline = (roomId: string, revId: string, note: string) =>
   call<{ ok: boolean }>("revise_decline", { room_id: roomId, rev_id: revId, note });
 export const reviseProgress = (roomId: string, revId: string) =>
