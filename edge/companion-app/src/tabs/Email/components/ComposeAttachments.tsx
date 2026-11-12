@@ -101,6 +101,8 @@ export default function ComposeAttachments({
           style={{
             border: "1px solid var(--catfish-border)",
             background: "var(--catfish-bg)",
+            // 11/12: 按钮不继承文字颜色, 深色主题下「添加附件」原来是黑字压在深底上, 几乎看不见
+            color: "var(--catfish-text)",
             borderRadius: 4,
             padding: "4px 10px",
             fontSize: 12,

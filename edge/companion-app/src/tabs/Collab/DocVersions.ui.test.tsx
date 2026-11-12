@@ -49,7 +49,7 @@ describe("DocVersions", () => {
     expect(screen.getByTestId("meta").textContent).toBe("《汇报》v4 合并版|zs@x.cn|汇报 v4.pptx|true");
     expect(screen.getByTestId("body").textContent).toBe("《汇报》v4 合并版, 请查收附件。\n\n这一版:\n· 合并了 张三 14 处\n· 冲突 2 处已定");
     expect(api.saved).toHaveBeenCalledWith("r", "f4");
-    await act(async () => { fireEvent.click(screen.getByLabelText(/同时附上修订版/)); });
+    await act(async () => { fireEvent.click(screen.getByLabelText(/同时附修订版/)); });
     expect(screen.getByTestId("meta").textContent).toBe("《汇报》v4 合并版|zs@x.cn|汇报 v4.pptx,汇报 v4 修订版.pptx|true");
   });
 });

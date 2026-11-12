@@ -63,15 +63,17 @@ export default function VersionEmail({ roomId, title, version, me, onClose, onDo
       onClose={onClose}
       onDone={onDone}
       notes={<>
-        {editors.length > 0
-          ? <span style={{ ...muted, color: "var(--status-ok)" }}>收件人已填这一轮请来改的同事: {editors.map((e) => e.name).join("、")} (可删)</span>
-          : <span style={muted}>这一版没有记到请了谁改, 收件人请自己填。</span>}
-        {tracked && (
-          <label style={{ ...muted, display: "flex", gap: 6, alignItems: "center", color: "var(--catfish-text)" }}>
-            <input type="checkbox" checked={withTracked} onChange={(e) => setWithTracked(e.target.checked)} />
-            同时附上修订版 (每处修改标着是谁改的, 给要逐条审阅的人)
-          </label>
-        )}
+        <span style={{ ...muted, display: "flex", flexWrap: "wrap", gap: "2px 16px", alignItems: "center" }}>
+          {editors.length > 0
+            ? <span style={{ color: "var(--status-ok)" }}>收件人已填这一轮请来改的同事: {editors.map((e) => e.name).join("、")} (可删)</span>
+            : <span>这一版没有记到请了谁改, 收件人请自己填。</span>}
+          {tracked && (
+            <label style={{ display: "flex", gap: 6, alignItems: "center", color: "var(--catfish-text)", cursor: "pointer" }}>
+              <input type="checkbox" checked={withTracked} onChange={(e) => setWithTracked(e.target.checked)} />
+              同时附修订版 (标着谁改的)
+            </label>
+          )}
+        </span>
         {error && <span style={{ fontSize: 12, color: "var(--status-warn)" }}>{error}</span>}
       </>}
     />

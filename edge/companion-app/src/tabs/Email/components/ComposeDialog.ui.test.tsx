@@ -31,10 +31,10 @@ const mount = () => act(async () => {
 describe("ComposeDialog 附件上限", () => {
   it("默认 25 MB: 72 MB 提示收不了; 选不带附件 → 去掉附件、正文补一句", async () => {
     await mount();
-    expect(screen.getByText(/附件合计 72.0 MB, 超过你设的 25 MB/)).toBeTruthy();
-    fireEvent.click(screen.getByText("不带附件, 正文里写明文件在哪"));
+    expect(screen.getByText(/附件 72.0 MB, 超过上限 25 MB/)).toBeTruthy();
+    fireEvent.click(screen.getByText("不带附件, 正文写明文件在哪"));
     expect(screen.getByTestId("core").textContent).toBe("|正文\n\n文件在群里。");
-    expect(screen.queryByText(/超过你设的/)).toBeNull();
+    expect(screen.queryByText(/超过上限/)).toBeNull();
   });
 
   it("当场把上限改到 100 MB → 提示消失, 附件照带; 设置记住了 (5–200 夹住)", async () => {
@@ -42,7 +42,7 @@ describe("ComposeDialog 附件上限", () => {
     const input = screen.getByLabelText("附件合计上限 (MB)");
     fireEvent.change(input, { target: { value: "100" } });
     await act(async () => { fireEvent.blur(input); });
-    expect(screen.queryByText(/超过你设的/)).toBeNull();
+    expect(screen.queryByText(/超过上限/)).toBeNull();
     expect(screen.getByTestId("core").textContent).toBe("汇报.pptx|正文");
     expect(getAttachLimitMb()).toBe(100);
     expect(setAttachLimitMb(1000)).toBe(200);

@@ -474,7 +474,7 @@ export default function ComposeCore({
           ariaLabel="收件人"
           value={composeTo}
           onChange={setComposeTo}
-          placeholder="alice@x.com, bob@y.com"
+          placeholder="填邮箱, 或打名字从知识库找人"
           style={{
             flex: 1,
             background: "var(--catfish-bg-elevated)",
@@ -537,7 +537,8 @@ export default function ComposeCore({
           回复场景 originalMessage 非空且 bodyText 非空 → 按钮启用
           新建场景 originalMessage=null → 按钮禁用 + title 变文案
           回复场景但原邮件正文为空 → 按钮禁用 (拟不出稿, 老 DetailPane 相同逻辑) */}
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      {/* 11/12: 新写的邮件 (没有原邮件) 拟稿用不了, 这一行不出 (原来是一个灰按钮白占一行) */}
+      {originalMessage && <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <span style={{ width: 50, color: "var(--catfish-text-muted)", flex: "0 0 auto" }}>
           正文
         </span>
@@ -598,7 +599,7 @@ export default function ComposeCore({
             📎 {draftCtxNote}
           </span>
         )}
-      </div>
+      </div>}
 
       {/* 8/21: [QUESTIONS] 协议 —— 模型说"信息不足, 先答我几个问题"。
           显示在这, **绝不进正文框** (进了就会被当草稿寄给对方, 见
