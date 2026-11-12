@@ -50,7 +50,6 @@ import SkillsLibraryCard from "./SkillsLibraryCard";
 import WorkflowsCard from "./WorkflowsCard";
 import ExpertsCard from "./ExpertsCard";
 // P3.3.18 (6/10): 部门 wiki publish 市场, 跟 SkillsMcpCard 并列 (manifesto 公理 2 例外)
-import WikiHubMovedCard from "./WikiHubMovedCard";
 // 6/2 BL-SKILLS-CARD-SPLIT (鸿波 6/2 凌晨拍 方案 C): MySkillsCard 显员工自己教会
 // (教学凝固) + propose_skill 落地的 skill (~/.catfish/skills/), 含共享按钮占位. 主卡, 上.
 // SkillsMcpCard 改成只显内置+装的, 次卡, 下. 配套 catfish 5 大卖点之 "员工自助生成
@@ -342,9 +341,7 @@ export default function DashboardTab() {
             // P3.3.38 (6/12): "中央市场 (别人分享的)" → "内部技能分享" — 不再"市场"
             //   (商业感), 强调"内部分享". "部门 wiki" → "部门知识库" 中文化.
             { key: "hub", label: "🌐 内部技能分享", render: () => <SkillsHubCard /> },
-            // P3.3.18 (6/10): 部门 wiki 跟技能在概念上都是"部门 share 资源", 同 section.
-            // 11/12: 部门知识库挪到 资料库 →「同事分享」; 这里先留一阵, 只放跳转
-            { key: "wiki-hub", label: "📚 部门知识库", render: () => <WikiHubMovedCard /> },
+            // 11/12: 「部门知识库」挪到 资料库 →「同事分享」分页 (WikiTab), 这里不再有入口
           ]}
         />
       </CollapsibleSection>

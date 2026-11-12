@@ -16,7 +16,6 @@ import WikiPreview from "./WikiPreview";
 import WikiGraph from "./WikiGraph";
 import WikiOrganizer, { type WikiWorkspaceMode } from "./WikiOrganizer";
 import WikiRelationshipWorkbench from "./WikiRelationshipWorkbench";
-import { useUIStore } from "../../store/ui";
 import { useWikiStore } from "../../store/wiki";
 import WikiHubCard from "../Dashboard/WikiHubCard";
 
@@ -25,11 +24,6 @@ export default function WikiTab() {
   // 9/24: 关系整理按任务 id 选中 (一个名字指向不明是一条任务, 不属于某个文件)
   const [taskId, setTaskId] = useState<string | null>(null);
   const refreshQuiet = useWikiStore((state) => state.refreshQuiet);
-  // 11/12: 设置里原来的「部门知识库」入口点过来 → 直接打开「同事分享」
-  const pendingShared = useUIStore((s) => s.pendingWikiShared);
-  useEffect(() => {
-    if (pendingShared && useUIStore.getState().consumeWikiShared()) setMode("shared");
-  }, [pendingShared]);
   // 10/23: 盘上的知识库会被插件后台改 (蒸馏新卡、核对、清冲突) —— 窗口回到前台、每分钟静默重读一次
   useEffect(() => {
     const refresh = () => { if (document.visibilityState === "visible") void refreshQuiet(); };
