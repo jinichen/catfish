@@ -122,8 +122,8 @@ def _cmd_draft(adapters: list[EmailAdapter], args) -> int:
             extra["html_body"] = fwd_html
         if "forward_of" in inspect.signature(target.create_draft).parameters:
             extra["forward_of"] = forward_id  # 草稿落在原邮件所在的账号
-        if sum(os.path.getsize(p) for p in attachments) > MAX_ATTACHMENTS_BYTES:
-            _err("原邮件的附件加上新附件超过 25 MB, 多数邮箱会退信。请在邮件客户端里直接转发。")
+        if sum(os.path.getsize(p) for p in attachments) > max_attach_bytes(args):
+            _err(f"原邮件的附件加上新附件超过 {max_attach_bytes(args) // 1024 // 1024} MB, 多数邮箱会退信。请在邮件客户端里直接转发。")
             return 1
     if attachments:
         if "attachments" not in inspect.signature(target.create_draft).parameters:
@@ -174,6 +174,14 @@ def _cmd_draft(adapters: list[EmailAdapter], args) -> int:
 
 # 多数企业邮箱单封上限 20–50 MB, base64 编码后体积再大三分之一 —— 原始合计超过这个就先拦下
 MAX_ATTACHMENTS_BYTES = 25 * 1024 * 1024
+
+
+def max_attach_bytes(args) -> int:
+    """11/12: 员工在 Companion「邮件 → 设置」里设的上限 (--max-attach-mb), 限在 5–200 MB; 没给用 25。"""
+    mb = getattr(args, "max_attach_mb", None)
+    if not isinstance(mb, int):
+        return MAX_ATTACHMENTS_BYTES
+    return max(5, min(200, mb)) * 1024 * 1024
 
 
 def _forward_parts(adapters: list[EmailAdapter], msg_id: str, *, note: str = "",
@@ -250,10 +258,11 @@ def _draft_attachments(target: EmailAdapter, args, replaces: str | None) -> list
             _err(f"原草稿的附件「{filename}」取不出来, 没有存草稿 (以免丢附件): {e}")
             return None
     total = sum(os.path.getsize(p) for p in paths)
-    if total > MAX_ATTACHMENTS_BYTES:
+    limit = max_attach_bytes(args)
+    if total > limit:
         _err(
-            f"附件合计 {total / 1024 / 1024:.1f} MB, 超过 {MAX_ATTACHMENTS_BYTES // 1024 // 1024} MB —— "
-            f"多数邮箱会退信。请压缩, 或放网盘发链接。"
+            f"附件合计 {total / 1024 / 1024:.1f} MB, 超过 {limit // 1024 // 1024} MB —— "
+            f"多数邮箱会退信。请压缩, 或放网盘发链接 (上限可在 Companion「邮件 → 设置」里改)。"
         )
         return None
     return paths

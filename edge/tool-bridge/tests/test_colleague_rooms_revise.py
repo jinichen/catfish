@@ -457,3 +457,27 @@ def test_没人交回_发起人只合自己改的那份(w, tmp_path):
     assert pub["version"] == 2
     texts = [x.text for x in docx.Document(io.BytesIO(rv._blob(pub["message"]["revise_status"]["doc_id"], "v2"))).paragraphs]
     assert "第二阶段: 系统开发, 12 周。" in texts
+
+
+def test_版本列表_带这一轮的人_从合并版再发起一轮标成基于(w):
+    """11/12: 版本记录里每一版带那一轮请了谁 (发邮件填收件人用); 合并出 v2 再从 v2 发起新一轮, 不再列成第二个「v2 · 发起」。"""
+    rid = _room(w)
+    st = _start(w, rid)
+    rev, card = st["rev_id"], st["message"]["revise"]
+    w.sync(ZHANG)
+    _edit(rv.open_copy(rid, rev)["path"], "第一阶段: 需求调研, 2 周。", "第一阶段: 需求调研, 3 周。")
+    rv.give_back(rid, rev)
+    w.sync_all()
+    w.be(BOSS)
+    pub = rv.publish(rid, rev)
+    clean = next(f for f in pub["message"]["files"] if "修订版" not in f["name"])
+    st2 = rv.start(rid, {"msg_id": pub["message"]["msg_id"], "file_id": clean["id"], "doc_id": card["doc_id"],
+                         "editors": [LI], "deadline": None, "note": "再看一轮"})
+    assert st2["message"]["revise"]["version"] == 2
+    vs = rvd.versions(rid, card["doc_id"])["versions"]
+    assert [(v["version"], v["kind"]) for v in vs] == [(2, "restart"), (2, "merged"), (1, "start")]
+    assert [e["email"] for e in vs[1]["editors"]] == [ZHANG, LI] and vs[1]["rev_id"] == rev
+    assert [e["email"] for e in vs[0]["editors"]] == [LI]
+    assert vs[1]["editors"][0]["name"] == "张三"
+    # 对比 / 取 v2 用的是合并版本身, 不是新一轮发出去的那份
+    assert rvd.diff(rid, card["doc_id"], 1, 2)["path"].endswith("v1→v2 对比.docx")

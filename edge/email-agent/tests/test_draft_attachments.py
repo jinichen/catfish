@@ -102,6 +102,18 @@ def test_cli_rejects_oversized_attachments(tmp_path, capsys):
     assert a.calls == [] and "超过" in capsys.readouterr().err
 
 
+def test_cli_attach_limit_from_setting(tmp_path, capsys):
+    """11/12: 上限员工能改 (--max-attach-mb, 限 5–200)。6 MB 的文件: 默认 25 收; 设 5 拦。"""
+    f = tmp_path / "汇报.pptx"
+    f.write_bytes(b"0" * (6 * 1024 * 1024))
+    a = _FakeDraftAdapter()
+    assert _run(a, _args(attach=[str(f)], max_attach_mb=None)) == 0
+    assert _run(a, _args(attach=[str(f)], max_attach_mb=5)) == 1
+    assert "超过 5 MB" in capsys.readouterr().err
+    assert cli_action.max_attach_bytes(SimpleNamespace(max_attach_mb=1000)) == 200 * 1024 * 1024
+    assert cli_action.max_attach_bytes(SimpleNamespace(max_attach_mb=1)) == 5 * 1024 * 1024
+
+
 def test_cli_says_so_when_the_source_cannot_attach(tmp_path, capsys):
     f = tmp_path / "x.txt"
     f.write_text("x")

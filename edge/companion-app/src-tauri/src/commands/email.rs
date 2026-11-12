@@ -557,6 +557,8 @@ pub async fn email_create_draft(
     // 10/29: 附件 (本地文件路径) + 改草稿时要带过去的旧草稿附件 (文件名) —— 鸿波「新建缺少增加附件的能力」
     attachments: Option<Vec<String>>,
     keep_attachments: Option<Vec<String>>,
+    // 11/12: 附件合计上限 (MB), 员工在「邮件 → 设置」里改; None = CLI 默认 25
+    max_attach_mb: Option<u32>,
 ) -> Result<String, String> {
     let bin = catfish_paths::catfish_email_bin().ok_or_else(|| {
         "catfish-email CLI 没装".to_string()
@@ -601,6 +603,9 @@ pub async fn email_create_draft(
     }
     for name in keep_attachments.unwrap_or_default().into_iter().filter(|s| !s.is_empty()) {
         args.push("--keep-attachment".to_string()); args.push(name);
+    }
+    if let Some(mb) = max_attach_mb {
+        args.push("--max-attach-mb".to_string()); args.push(mb.clamp(5, 200).to_string());
     }
 
     let out = email_command(&bin)

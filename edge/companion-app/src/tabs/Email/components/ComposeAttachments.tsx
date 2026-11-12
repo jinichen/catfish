@@ -15,7 +15,7 @@ export interface KeptAttachment {
   size_bytes: number;
 }
 
-/** 跟 catfish-email CLI 的 MAX_ATTACHMENTS_BYTES 一致 */
+/** 默认上限, 跟 catfish-email CLI 的 MAX_ATTACHMENTS_BYTES 一致; 11/12 起员工能改 (lib/emailAttachLimit.ts) */
 export const MAX_ATTACHMENTS_BYTES = 25 * 1024 * 1024;
 
 export function fmtSize(bytes: number): string {
@@ -48,16 +48,19 @@ export default function ComposeAttachments({
   onChangeAdded,
   onChangeKept,
   disabled,
+  maxBytes = MAX_ATTACHMENTS_BYTES,
 }: {
   added: PickedAttachment[];
   kept: KeptAttachment[];
   onChangeAdded: (next: PickedAttachment[]) => void;
   onChangeKept: (next: KeptAttachment[]) => void;
   disabled?: boolean;
+  /** 11/12: 员工设的附件上限 */
+  maxBytes?: number;
 }) {
   const [pickError, setPickError] = useState<string | null>(null);
   const total = added.reduce((s, a) => s + a.size, 0) + kept.reduce((s, a) => s + (a.size_bytes || 0), 0);
-  const tooBig = total > MAX_ATTACHMENTS_BYTES;
+  const tooBig = total > maxBytes;
 
   const pick = async () => {
     setPickError(null);
@@ -114,7 +117,7 @@ export default function ComposeAttachments({
         {(added.length > 0 || kept.length > 0) && (
           <span style={{ fontSize: 11, color: tooBig ? "var(--status-err)" : "var(--catfish-text-muted)" }}>
             合计 {fmtSize(total)}
-            {tooBig ? `，超过 ${fmtSize(MAX_ATTACHMENTS_BYTES)}，多数邮箱会退信 —— 请压缩或放网盘发链接` : ""}
+            {tooBig ? `，超过 ${fmtSize(maxBytes)} (上限在「邮件 → 设置」里改)，多数邮箱会退信 —— 请压缩或放网盘发链接` : ""}
           </span>
         )}
         {pickError && <span style={{ fontSize: 11, color: "var(--status-err)" }}>选文件失败: {pickError}</span>}

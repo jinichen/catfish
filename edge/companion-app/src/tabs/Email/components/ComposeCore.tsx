@@ -63,7 +63,8 @@ import {
 import { type Personality } from "../../../lib/agent";
 import { _mergeReplyDraftWithQuote } from "./helpers";
 import RecipientInput from "./RecipientInput";
-import ComposeAttachments, { MAX_ATTACHMENTS_BYTES, type KeptAttachment } from "./ComposeAttachments";
+import ComposeAttachments, { type KeptAttachment } from "./ComposeAttachments";
+import { useAttachLimitMb } from "./AttachLimitSetting";
 import type { PickedAttachment } from "../../../lib/tauri";
 
 export interface ComposeOriginalMessage {
@@ -152,12 +153,15 @@ export default function ComposeCore({
   // 10/29: 附件 —— 新加的本地文件 + 改草稿时保留的旧附件 (只有改草稿才有)
   const [addedAttachments, setAddedAttachments] = useState<PickedAttachment[]>(initialAttachments);
   const [keptAttachments, setKeptAttachments] = useState<KeptAttachment[]>(replacesDraftId ? existingAttachments : []);
+  // 11/12: 上限员工在「邮件 → 设置」里改, 存草稿时也传给 CLI
+  const attachLimitMb = useAttachLimitMb();
   const attachmentsTooBig =
     addedAttachments.reduce((n, a) => n + a.size, 0) + keptAttachments.reduce((n, a) => n + (a.size_bytes || 0), 0) >
-    MAX_ATTACHMENTS_BYTES;
+    attachLimitMb * 1024 * 1024;
   const attachmentArgs = {
     attachments: addedAttachments.map((a) => a.path),
     keepAttachments: replacesDraftId ? keptAttachments.map((a) => a.filename) : [],
+    maxAttachMb: attachLimitMb,
   };
   const [sending, setSending] = useState(false);
   const [drafting, setDrafting] = useState(false);
@@ -644,6 +648,7 @@ export default function ComposeCore({
         onChangeAdded={setAddedAttachments}
         onChangeKept={setKeptAttachments}
         disabled={sending || drafting}
+        maxBytes={attachLimitMb * 1024 * 1024}
       />
 
       {/* 错误 / 成功提示 */}

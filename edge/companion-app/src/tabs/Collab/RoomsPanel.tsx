@@ -646,7 +646,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
       {watch && <TaskProgress taskId={watch.id} initialError={watch.notice} onClose={() => setWatch(null)} />}
       {reviseUi && "merge" in reviseUi && <ReviseMergePanel roomId={roomId} revId={reviseUi.merge} title={reviseUi.title} onClose={() => setReviseUi(null)}
                                                             onDone={(t) => { setReviseUi(null); setHint(t); void load(); }} />}
-      {reviseUi && "versions" in reviseUi && <DocVersions roomId={roomId} docId={reviseUi.versions} onClose={() => setReviseUi(null)} />}
+      {reviseUi && "versions" in reviseUi && <DocVersions roomId={roomId} docId={reviseUi.versions} me={me} onClose={() => setReviseUi(null)} />}
       {reviseUi && "start" in reviseUi && <ReviseStartDialog roomId={roomId} me={me} members={members} source={reviseUi.start}
                                                              onClose={() => setReviseUi(null)} onDone={(t) => { setReviseUi(null); setHint(t); void load(); }} />}
       {modal === "add" && <RoomComposer roomId={roomId} existing={room.members} onClose={() => setModal(null)}

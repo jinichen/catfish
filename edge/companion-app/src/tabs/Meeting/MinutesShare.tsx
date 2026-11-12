@@ -26,14 +26,11 @@ import { useEffect, useState } from "react";
 
 import { ModalShell } from "../../components/ModalShell";
 import { openFile, revealInFinder } from "../../lib/tauri_app";
-import { emailAccountsFetch } from "../../lib/tauri_briefing";
 import { roomList, roomSend, type RoomSummary } from "../../lib/tauri_colleague_rooms";
-import type { EmailAccountItem } from "../../lib/tauri_cron";
 import { meetingMinutesDocx, meetingMinutesStage, meetingSpeakers, type MeetingMeta } from "../../lib/tauri_meeting";
 import { wikiPeopleEmails } from "../../lib/tauri_wiki_people";
-import { useAgentStore } from "../../store/agent";
 import { Btn, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
-import ComposeCore from "../Email/components/ComposeCore";
+import ComposeDialog from "../Email/components/ComposeDialog";
 import { minutesPlainText } from "./meetingHelpers";
 
 const ROOM_TEXT_MAX = 4000;   // 跟 tool-bridge colleague_rooms.TEXT_MAX 一致
@@ -91,9 +88,6 @@ export default function MinutesShare({ meta, markdown, onNote, onError }: {
 function EmailDialog({ meta, body, onClose, onDone }: {
   meta: MeetingMeta; body: string; onClose: () => void; onDone: (text: string) => void;
 }) {
-  const agentName = useAgentStore((s) => s.name);
-  const personality = useAgentStore((s) => s.personality);
-  const [account, setAccount] = useState<string | undefined>(undefined);
   const [to, setTo] = useState("");
   const [who, setWho] = useState<ReturnType<typeof recipientsFromSpeakers> | null>(null);
   const [named, setNamed] = useState(true);
@@ -102,25 +96,18 @@ function EmailDialog({ meta, body, onClose, onDone }: {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // 账号: 默认那个; 附件: 纪要 Word (生成失败就不带附件, 正文照样有纪要)
-    // 收件人: 说话人改过的真名 → 知识库里找邮箱
+    // 收件人: 说话人改过的真名 → 知识库里找邮箱; 附件: 纪要 Word (生成失败就不带, 正文照样有纪要)
     const people = meetingSpeakers(meta.id).then(async (sp) => {
       const names = [...new Set(Object.values(sp).map((n) => n.trim()).filter(Boolean))];
       if (!names.length) return { names, matches: {} as Record<string, string[]> };
       return { names, matches: (await wikiPeopleEmails(names)).matches };
     });
-    void Promise.allSettled([emailAccountsFetch(), meetingMinutesDocx(meta.id), people]).then(([accs, docx, ppl]) => {
+    void Promise.allSettled([meetingMinutesDocx(meta.id), people]).then(([docx, ppl]) => {
       if (ppl.status === "fulfilled") {
         setNamed(ppl.value.names.length > 0);
         const r = recipientsFromSpeakers(ppl.value.names, ppl.value.matches);
         setWho(r);
         setTo(r.filled.map((f) => f.email).join(", "));
-      }
-      if (accs.status === "fulfilled") {
-        try {
-          const list = JSON.parse(accs.value) as EmailAccountItem[];
-          setAccount(list.find((a) => a.is_default)?.address || list[0]?.address);
-        } catch { /* 读不到账号就让 ComposeCore 用缺省 */ }
       }
       if (docx.status === "fulfilled") setAttachment(docx.value);
       else setError(`没生成 Word 附件 (${String(docx.reason)}), 正文里有纪要全文`);
@@ -129,36 +116,22 @@ function EmailDialog({ meta, body, onClose, onDone }: {
   }, [meta.id]);
 
   return (
-    <ModalShell onClose={onClose} maxWidth={760} themed>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8, color: "var(--catfish-text)" }}>
-        <strong style={{ fontSize: 15 }}>发邮件 · {meta.title}</strong>
+    <ComposeDialog
+      title={`发邮件 · ${meta.title}`}
+      subject={minutesSubject(meta)}
+      body={body}
+      initialTo={to}
+      attachments={attachment ? [attachment] : []}
+      dropNote="(纪要全文见上; Word 版太大没随邮件附上, 需要的话找我要。)"
+      ready={ready}
+      resetKey={`meeting-${meta.id}`}
+      onClose={onClose}
+      onDone={onDone}
+      notes={<>
         <RecipientNote named={named} who={who} />
-        <span style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>
-          收件人框里打名字, 会从知识库里给候选。可以先存草稿, 也可以直接发送 —— 发送要点两次确认。
-        </span>
         {error && <span style={{ fontSize: 12, color: "var(--status-warn)" }}>{error}</span>}
-        {!ready ? <span style={{ fontSize: 13, color: "var(--catfish-text-muted)" }}>正在准备…</span> : (
-          <div style={{ display: "flex", flexDirection: "column", minHeight: 420, maxHeight: "70vh", overflowY: "auto" }}>
-            <ComposeCore
-              isOpen
-              onClose={onClose}
-              initialTo={to}
-              initialSubject={minutesSubject(meta)}
-              initialBody={body}
-              initialAttachments={attachment ? [attachment] : []}
-              inReplyToMsgId={null}
-              account={account}
-              originalMessage={null}
-              agentName={agentName}
-              agentPersonality={personality}
-              resetKey={`meeting-${meta.id}`}
-              onSaveDraftSuccess={() => onDone("已存进邮件草稿箱, 去「邮件」或邮件 App 里检查后发送")}
-              onSendSuccess={() => onDone("邮件已发送")}
-            />
-          </div>
-        )}
-      </div>
-    </ModalShell>
+      </>}
+    />
   );
 }
 

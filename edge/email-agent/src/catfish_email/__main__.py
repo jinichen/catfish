@@ -344,6 +344,8 @@ def _build_parser() -> argparse.ArgumentParser:
     pd.add_argument("--account", help="从哪个账号起草 (默认第一个)")
     # 10/29: 附件。--attach 可给多次; --keep-attachment 是改草稿时要带过去的旧草稿附件文件名
     pd.add_argument("--attach", action="append", default=[], help="附件的本地路径, 可给多次")
+    # 11/12: 附件合计上限 (MB), 员工在 Companion「邮件 → 设置」里改; 不给 = 25
+    pd.add_argument("--max-attach-mb", type=int, default=None, help="附件合计上限 (MB, 5–200), 默认 25")
     pd.add_argument("--keep-attachment", action="append", default=[],
                     help="改草稿时保留旧草稿里的这个附件 (文件名), 可给多次; 要配合 --replace")
     pd.add_argument("--json", action="store_true", default=True)

@@ -111,6 +111,8 @@ export interface CreateDraftArgs {
   attachments?: string[];
   /** 10/29: 改草稿时要保留的旧草稿附件 (文件名) —— 旧草稿存完新的就去掉了, 不带过去就丢 */
   keepAttachments?: string[];
+  /** 11/12: 附件合计上限 (MB), 员工在「邮件 → 设置」里改 */
+  maxAttachMb?: number;
 }
 /** 10/29: 写邮件「添加附件」选中的文件 */
 export interface PickedAttachment {
@@ -132,6 +134,7 @@ export const emailCreateDraft = (args: CreateDraftArgs) =>
     replaces: args.replaces ?? null,
     attachments: args.attachments ?? null,
     keepAttachments: args.keepAttachments ?? null,
+    maxAttachMb: args.maxAttachMb ?? null,
   });
 /** id → "急" | "中" | "低" map, scheduler 后台评级缓存. */
 /** 9/27: 邮件 id 改名表 {旧 id: 新 id} (IMAP id 里的 UIDVALIDITY 从 0 改成真值)。 */

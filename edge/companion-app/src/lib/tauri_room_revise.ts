@@ -43,8 +43,11 @@ export interface ReviseAnalysis {
   self_file?: string | null;
 }
 export interface ReviseVersion {
-  version: number; at: string; by: string; kind: "start" | "merged"; msg_id: string;
+  /** restart = 合并出 vN 之后又从 vN 发起新一轮 (11/12 起; 界面挂在 vN 下面, 不算新的一版) */
+  version: number; at: string; by: string; kind: "start" | "merged" | "restart"; msg_id: string;
   files: { id: string; name: string; size: number }[]; text?: string;
+  /** 11/12: 那一轮的 rev_id 和请了谁改 (发邮件填收件人用) */
+  rev_id?: string | null; editors?: { email: string; name: string }[];
 }
 
 const call = <T,>(action: string, params: Record<string, unknown>) => invoke<T>("colleague_room_call", { action, params });
