@@ -194,6 +194,8 @@ function AppShell({ activeTab }: { activeTab: string }) {
   const isChatOrBriefing = activeTab === "chat" || isBriefing;
   // 11/5: 「协同」整页固定 (协同事项 / 群聊都是), 只有里面的列表 / 消息区滚, 跟对话页一样锁住 main 的滚动
   const collabRooms = activeTab === "collab";
+  // 11/12: 会议页左右两栏各自滚 (MeetingTab), 外面这层不再整页滚
+  const meetingCols = activeTab === "meeting";
   return (
     <div className="app-shell" data-rail-collapsed={railCollapsed || undefined}>
       <TabBar />
@@ -206,7 +208,7 @@ function AppShell({ activeTab }: { activeTab: string }) {
         {/* 10/26: 工作台 / 早安以外的页面也要知道有一步在等批准 (那两处的横幅在对话里) */}
         {!isChatOrBriefing && <ApprovalElsewhereBanner />}
         <DevUserSwitcher />
-        <main className={isChatOrBriefing || collabRooms ? "app-workspace__main app-workspace__main--locked" : "app-main"}>
+        <main className={isChatOrBriefing || collabRooms || meetingCols ? "app-workspace__main app-workspace__main--locked" : "app-main"}>
           {/* BL-CONSOLE-TAB-KILL (5/16): {activeTab === "console" && <ConsoleTab />} */}
           <div
             style={{ display: isBriefing ? "contents" : "none" }}

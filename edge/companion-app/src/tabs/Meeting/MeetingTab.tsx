@@ -2,6 +2,8 @@
  * 「会议」tab (10/1, docs/MEETING-MINUTES-PLAN.md) —— 录会议 → 本机转写 → 纪要 → 写回任务库 / 知识库。
  *
  * 左栏: 新会议 / 录音中 + 会议列表; 右栏: 选中那场的详情。
+ * 11/12 (鸿波「左右栏应该分开滚动」): 两栏各自滚 —— 右栏纪要 / 转写很长, 原来整页一起滚, 一往下看纪要, 左边的
+ * 录音和会议列表就滚没了。现在页面占满高度, 左右各有自己的滚动条。
  * 音频 / 转写 / 纪要都在 ~/.catfish/meetings/, 只有转写文字在生成纪要时经网关去大模型。
  */
 import { useCallback, useEffect, useState } from "react";
@@ -47,9 +49,10 @@ export default function MeetingTab() {
   const current = meetings.find((m) => m.id === selected) ?? null;
 
   return (
-    <div style={{ maxWidth: 1600, margin: "0 auto", padding: "var(--space-4)" }}>
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, 380px) minmax(0, 1fr)", gap: "var(--space-4)", alignItems: "start" }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+    <div style={{ maxWidth: 1600, margin: "0 auto", padding: "var(--space-4) var(--space-4) 0", height: "100%", boxSizing: "border-box" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, 380px) minmax(0, 1fr)", gap: "var(--space-4)", height: "100%" }}>
+        <div className="meeting-col" style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)", minHeight: 0, overflowY: "auto",
+                                              paddingBottom: "var(--space-4)" }}>
           <RecorderCard onChanged={(id) => void refresh(id)} />
           <div style={{ ...cardStyle, gap: "var(--space-1)" }}>
             <div style={{ fontWeight: 600, fontSize: 13 }}>会议记录</div>
@@ -79,6 +82,7 @@ export default function MeetingTab() {
           </div>
           {error && <ErrorLine>{error}</ErrorLine>}
         </div>
+        <div className="meeting-col" style={{ minHeight: 0, overflowY: "auto", paddingBottom: "var(--space-4)" }}>
         {current ? (
           <MeetingDetail
             meta={current}
@@ -95,6 +99,7 @@ export default function MeetingTab() {
             开一场会: 在左边填参会人数, 点「开始录音」; 录音笔 / 手机录好的会议点「导入录音」。之后在本机转写、区分说话人, 再由小鲶生成纪要和待办。
           </div>
         )}
+        </div>
       </div>
     </div>
   );
