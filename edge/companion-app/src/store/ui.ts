@@ -65,6 +65,10 @@ interface UIState {
   openColleagueTask: (taskId: string, role: "owner" | "recipient") => void;
   /** 11/09 提醒条「去群里看」: 切到协同 → 群聊并打开这个群 (RoomsPanel 取走) */
   pendingRoomFocus: string | null;
+  /** 11/12: 设置里点「去资料库看」→ 资料库页打开「同事分享」分页 (一次性, 资料库页读到就清) */
+  pendingWikiShared: boolean;
+  openWikiShared: () => void;
+  consumeWikiShared: () => boolean;
   openRoom: (roomId: string) => void;
   consumeTaskFocus: () => { taskId: string; role: "owner" | "recipient" } | null;
   setActiveTab: (tab: TabId) => void;
@@ -158,6 +162,13 @@ export const useUIStore = create<UIState>((set, get) => ({
   pendingTaskFocus: null,
   openColleagueTask: (taskId, role) => set({ activeTab: "collab", collabView: "work", pendingTaskFocus: { taskId, role } }),
   pendingRoomFocus: null,
+  pendingWikiShared: false,
+  openWikiShared: () => set({ activeTab: "wiki", pendingWikiShared: true }),
+  consumeWikiShared: () => {
+    const v = get().pendingWikiShared;
+    if (v) set({ pendingWikiShared: false });
+    return v;
+  },
   openRoom: (roomId) => set({ activeTab: "collab", collabView: "rooms", pendingRoomFocus: roomId }),
   consumeTaskFocus: () => {
     const f = get().pendingTaskFocus;

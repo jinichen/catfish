@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowsLeftRight,
   Books,
@@ -11,6 +11,7 @@ import {
   MagnifyingGlass,
   Tag,
   TreeStructure,
+  UsersThree,
   WarningCircle,
 } from "@phosphor-icons/react";
 import { useWikiStore } from "../../store/wiki";
@@ -36,7 +37,8 @@ import {
 } from "./wikiRelationshipTasks";
 
 // 11/10 鸿波: 「层级」「检索打分」没用, 拿掉; 只留关系整理 / 全部知识 (导航名「知识体系」改成「资料库」)
-export type WikiWorkspaceMode = "organize" | "browse";
+// 11/12: 加「同事分享」—— 部门 / 全公司分享的知识原来藏在 设置 → 技能 → 部门知识库, 找知识的人不会去那翻
+export type WikiWorkspaceMode = "organize" | "browse" | "shared";
 
 const TASK_META: Record<
   WikiRelationshipTaskKind,
@@ -76,8 +78,13 @@ export default function WikiOrganizer({
   const [migrationRunning, setMigrationRunning] = useState(false);
   const [migrationError, setMigrationError] = useState<string | null>(null);
 
+  // 11/12: 只在打开时拉一次。原来「列表空 + 没在拉」就拉 —— 知识库本来就是空的 (新员工) 时,
+  // 每拉完一次 filesLoading 变回 false, 又满足条件, 无限重拉 (测试页里直接卡死)。
+  const triedLoad = useRef(false);
   useEffect(() => {
-    if (files.length === 0 && !filesLoading) void loadFiles();
+    if (triedLoad.current || files.length > 0 || filesLoading) return;
+    triedLoad.current = true;
+    void loadFiles();
   }, [files.length, filesLoading, loadFiles]);
 
   const keptUntyped = useKeptUntyped();
@@ -192,9 +199,25 @@ export default function WikiOrganizer({
           <Books size={18} aria-hidden="true" />
           全部知识
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === "shared"}
+          data-active={mode === "shared"}
+          onClick={() => onModeChange("shared")}
+        >
+          <UsersThree size={18} aria-hidden="true" />
+          同事分享
+        </button>
       </div>
 
-      {mode === "browse" ? (
+      {mode === "shared" ? (
+        <div className="wiki-organizer__shared-note">
+          <p>同事分享到本部门、以及管理员通过后全公司都能看的知识页, 都在右边。</p>
+          <p>点「预览」先看全文; 点「收进资料库」存一份到你本机, 之后在「全部知识」里能找到, 小鲶回答问题时也会查。</p>
+          <p>你自己的知识页要分享给同事: 在「全部知识」里打开那一页, 点「分享」。</p>
+        </div>
+      ) : mode === "browse" ? (
         <div className="wiki-organizer__browse"><WikiTree /></div>
       ) : (
         <>

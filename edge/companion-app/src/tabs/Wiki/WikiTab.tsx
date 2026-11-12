@@ -16,13 +16,20 @@ import WikiPreview from "./WikiPreview";
 import WikiGraph from "./WikiGraph";
 import WikiOrganizer, { type WikiWorkspaceMode } from "./WikiOrganizer";
 import WikiRelationshipWorkbench from "./WikiRelationshipWorkbench";
+import { useUIStore } from "../../store/ui";
 import { useWikiStore } from "../../store/wiki";
+import WikiHubCard from "../Dashboard/WikiHubCard";
 
 export default function WikiTab() {
   const [mode, setMode] = useState<WikiWorkspaceMode>("organize");
   // 9/24: 关系整理按任务 id 选中 (一个名字指向不明是一条任务, 不属于某个文件)
   const [taskId, setTaskId] = useState<string | null>(null);
   const refreshQuiet = useWikiStore((state) => state.refreshQuiet);
+  // 11/12: 设置里原来的「部门知识库」入口点过来 → 直接打开「同事分享」
+  const pendingShared = useUIStore((s) => s.pendingWikiShared);
+  useEffect(() => {
+    if (pendingShared && useUIStore.getState().consumeWikiShared()) setMode("shared");
+  }, [pendingShared]);
   // 10/23: 盘上的知识库会被插件后台改 (蒸馏新卡、核对、清冲突) —— 窗口回到前台、每分钟静默重读一次
   useEffect(() => {
     const refresh = () => { if (document.visibilityState === "visible") void refreshQuiet(); };
@@ -37,11 +44,13 @@ export default function WikiTab() {
   }, [refreshQuiet]);
   // 阅读优先：进入知识库先把正文铺开，图谱按需打开，不抢占首屏空间。
   const [graphVisible, setGraphVisible] = useState(false);
+  // 「同事分享」那页不画关联图谱 (图谱是你本机知识的)
+  const showGraph = graphVisible && mode !== "shared";
   // E4 (6/6 taste-skill 改造): 走 className `.wikitab*` (见 globals.css).
   // 老版 3 列 1px hairline border → bg shift (elevated/cream/elevated) + 内
   // box-shadow subtle 边界, 减视觉噪声, 跟 brand 墨青 hue tinted.
   return (
-    <div className={`wikitab${graphVisible ? "" : " wikitab--graph-hidden"}`}>
+    <div className={`wikitab${showGraph ? "" : " wikitab--graph-hidden"}`}>
       <aside className="wikitab__pane-tree">
         <WikiOrganizer
           mode={mode}
@@ -51,7 +60,7 @@ export default function WikiTab() {
         />
       </aside>
       <main className="wikitab__pane-preview">
-        {!graphVisible && (
+        {!graphVisible && mode !== "shared" && (
           <button
             type="button"
             className="wikitab__graph-reopen"
@@ -60,13 +69,15 @@ export default function WikiTab() {
             <ShareNetwork size={18} aria-hidden="true" />查看关联图谱
           </button>
         )}
-        {mode === "organize" ? (
+        {mode === "shared" ? (
+          <div className="wikitab__shared"><WikiHubCard /></div>
+        ) : mode === "organize" ? (
           <WikiRelationshipWorkbench taskId={taskId} onSelectTask={setTaskId} />
         ) : (
           <WikiPreview onOpenTask={(id) => { setTaskId(id); setMode("organize"); }} />
         )}
       </main>
-      {graphVisible && (
+      {showGraph && (
         <aside className="wikitab__pane-graph">
           <WikiGraph onCollapse={() => setGraphVisible(false)} />
         </aside>

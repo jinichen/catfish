@@ -1937,6 +1937,17 @@ button {
   width: min(76ch, 100%);
   max-width: 76ch;
 }
+/* 11/12 资料库「同事分享」: 卡片网格要宽, 不跟正文一样卡 76ch */
+.wikitab__shared {
+  width: min(1100px, 100%);
+}
+.wiki-organizer__shared-note {
+  padding: 8px 4px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--catfish-text-muted);
+}
+.wiki-organizer__shared-note p { margin: 0 0 10px; }
 .wikitab--graph-hidden .wiki-workbench {
   width: min(900px, 100%);
   max-width: 900px;
@@ -1960,17 +1971,18 @@ button {
 }
 .wiki-organizer__switch > button {
   min-height: 44px;
-  padding: 0 4px;
+  padding: 0 2px;
   white-space: nowrap;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 4px;
   border: 0;
   border-bottom: 3px solid transparent;
   background: transparent;
   color: var(--catfish-text-muted);
-  font: 600 14px/1 var(--font-sans);
+  /* 11/12: 加了「同事分享」第三个, 窄窗口 (左栏 280px) 14px 三个放不下, 降到 13px */
+  font: 600 13px/1 var(--font-sans);
   cursor: pointer;
 }
 .wiki-organizer__switch > button[data-active="true"] {
