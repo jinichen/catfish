@@ -1985,6 +1985,11 @@ button {
   font: 600 13px/1 var(--font-sans);
   cursor: pointer;
 }
+/* 11/12: 左栏窄 (窗口 1000 宽时只剩 220px) 三个分页放不下 —— 窄时去掉图标只留字 */
+.wikitab__pane-tree { container-type: inline-size; }
+@container (max-width: 270px) {
+  .wiki-organizer__switch > button svg { display: none; }
+}
 .wiki-organizer__switch > button[data-active="true"] {
   color: var(--catfish-cyan);
   border-bottom-color: var(--catfish-cyan);
@@ -2351,6 +2356,18 @@ button {
 /* 10/23: 知识体系「关系类型」入口 */
 /* 11/07: 关系 / 属性 / 类型定义三个按钮, 窄的时候换到下一行, 不把搜索框挤没 */
 .wiki-organizer__searchrow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px; }
+/* 11/12 整理工具: 原来是搜索框旁三个看着像筛选的按钮, 挪到面板底部, 各带一句说明 */
+.wiki-organizer__tools { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--catfish-border); display: flex; flex-direction: column; gap: 6px; }
+.wiki-organizer__tools h3 { margin: 0 0 2px; font-size: 12px; font-weight: 600; color: var(--catfish-text-muted); }
+.wiki-organizer__tools > button {
+  display: flex; align-items: flex-start; gap: 8px; width: 100%; text-align: left; padding: 8px 10px;
+  border: 1px solid var(--catfish-border); border-radius: 8px; background: transparent; color: var(--catfish-text); cursor: pointer;
+}
+.wiki-organizer__tools > button:hover { border-color: var(--catfish-cyan); }
+.wiki-organizer__tools > button svg { flex: 0 0 auto; margin-top: 2px; color: var(--catfish-cyan); }
+.wiki-organizer__tools > button span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.wiki-organizer__tools strong { font-size: 13px; font-weight: 600; }
+.wiki-organizer__tools small { font-size: 12px; color: var(--catfish-text-muted); line-height: 1.5; }
 .wiki-organizer__searchrow .wiki-organizer__search { flex: 1 1 180px; min-width: 0; min-height: 38px; }
 .wiki-organizer__vocab {
   display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; white-space: nowrap;
@@ -2540,6 +2557,11 @@ button {
 }
 .wiki-workbench__empty svg { color: var(--catfish-cyan); }
 .wiki-workbench__empty strong { color: var(--catfish-text); font-size: 17px; }
+.wiki-workbench__empty span { max-width: 420px; line-height: 1.7; }
+.wiki-workbench__empty-action {
+  margin-top: 6px; padding: 7px 16px; border-radius: 8px; border: 1px solid var(--catfish-cyan);
+  background: transparent; color: var(--catfish-cyan); font-size: 13px; cursor: pointer;
+}
 .wiki-workbench__empty--error,
 .wiki-workbench__empty--error svg { color: var(--status-err); }
 .wiki-spin { animation: wiki-spin 0.8s linear infinite; }

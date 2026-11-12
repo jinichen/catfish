@@ -48,9 +48,14 @@ const HEADER_HINT: Record<string, string> = {
 export default function WikiRelationshipWorkbench({
   taskId,
   onSelectTask,
+  hasTasks = true,
+  onBrowse,
 }: {
   taskId: string | null;
   onSelectTask: (taskId: string) => void;
+  /** 11/12: 一条待整理的都没有时, 右边不写「从左侧选一项」(左边根本没得选) */
+  hasTasks?: boolean;
+  onBrowse?: () => void;
 }) {
   const files = useWikiStore((state) => state.files);
   const selectedFile = useWikiStore((state) => state.selectedFile);
@@ -108,6 +113,18 @@ export default function WikiRelationshipWorkbench({
     return <div className="wiki-workbench__empty wiki-workbench__empty--error"><WarningCircle size={30} />{selectedError}</div>;
   }
   if (!selectedFile) {
+    if (!hasTasks) {
+      return (
+        <div className="wiki-workbench__empty">
+          <LinkSimple size={36} weight="duotone" aria-hidden="true" />
+          <strong>知识之间的关系都整理好了</strong>
+          <span>小鲶从对话、邮件、文档里抽出新知识时, 拿不准的关系 (两个说法、指向不明、没对上原文…) 会列在左边等你定。</span>
+          {onBrowse && (
+            <button type="button" className="wiki-workbench__empty-action" onClick={onBrowse}>去「全部知识」看看</button>
+          )}
+        </div>
+      );
+    }
     return (
       <div className="wiki-workbench__empty">
         <LinkSimple size={36} weight="duotone" aria-hidden="true" />

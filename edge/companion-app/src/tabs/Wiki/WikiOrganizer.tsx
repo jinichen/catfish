@@ -61,11 +61,14 @@ export default function WikiOrganizer({
   onModeChange,
   taskId,
   onSelectTask,
+  onTaskCount,
 }: {
   mode: WikiWorkspaceMode;
   onModeChange: (mode: WikiWorkspaceMode) => void;
   taskId: string | null;
   onSelectTask: (taskId: string | null) => void;
+  /** 11/12: 待整理的关系有几条 (读完列表后报一次) —— 0 条时资料库默认打开「全部知识」, 右边不写「从左侧选一项」 */
+  onTaskCount?: (n: number) => void;
 }) {
   const files = useWikiStore((state) => state.files);
   const filesLoading = useWikiStore((state) => state.filesLoading);
@@ -130,6 +133,10 @@ export default function WikiOrganizer({
     setBulkRunning(false);
     if (failed.length > 0) setBulkError(failed.join("\n"));
   };
+  useEffect(() => {
+    if (!filesLoading) onTaskCount?.(tasks.length);
+  }, [filesLoading, tasks.length, onTaskCount]);
+
   const visibleTasks = useMemo(() => {
     const query = search.trim().toLocaleLowerCase("zh-CN");
     return tasks.filter((task) => {
@@ -221,8 +228,9 @@ export default function WikiOrganizer({
         <div className="wiki-organizer__browse"><WikiTree /></div>
       ) : (
         <>
-          {/* 10/24: 搜索框和「关系类型」放一行 (原来各占一行) */}
-          <div className="wiki-organizer__searchrow">
+          {/* 11/12 (鸿波「中间这块面板 UI 是不是需要优化」): 搜索框原来跟「关系 / 属性 / 类型定义」三个按钮挤一行、折成两行,
+              三个按钮看着像筛选条件。现在: 有待处理的才出搜索框 (占满一行); 三个按钮挪到最下面「整理工具」, 各带一句说明。 */}
+          {(tasks.length > 0 || search) && (
             <label className="wiki-organizer__search">
               <MagnifyingGlass size={18} aria-hidden="true" />
               <span className="sr-only">搜索整理任务</span>
@@ -232,37 +240,7 @@ export default function WikiOrganizer({
                 placeholder="搜索关系任务"
               />
             </label>
-            <button
-              type="button"
-              className="wiki-organizer__vocab"
-              onClick={() => setShowRelationTypes(true)}
-              title={`关系类型${customRelations.length > 0 ? `（含 ${customRelations.length} 个自定义）` : ""}`}
-            >
-              <Tag size={16} aria-hidden="true" />
-              {/* 11/07: 原来叫「类型」, 跟新加的「类型定义」撞名, 它管的是关系类型 */}
-              关系
-            </button>
-            {/* 11/07: 把正文里的编号 / 有效期 … 抽成属性 (WikiPropsReview) */}
-            <button
-              type="button"
-              className="wiki-organizer__vocab"
-              onClick={() => setShowPropsReview(true)}
-              title="整理属性：把资质证书等正文里的编号、发证机构、有效期抽成属性"
-            >
-              <ListChecks size={16} aria-hidden="true" />
-              属性
-            </button>
-            {/* 11/07: 每一类有哪些属性 / 行动 / 提醒天数 (WikiTypeDefsModal) */}
-            <button
-              type="button"
-              className="wiki-organizer__vocab"
-              onClick={() => setShowTypeDefs(true)}
-              title="类型定义：每一类知识有哪些属性、到期前多少天提醒、能做哪些行动"
-            >
-              <TreeStructure size={16} aria-hidden="true" />
-              类型定义
-            </button>
-          </div>
+          )}
           {showRelationTypes && <WikiRelationTypesModal onClose={() => setShowRelationTypes(false)} />}
           {showPropsReview && <WikiPropsReview onClose={() => setShowPropsReview(false)} />}
           {showTypeDefs && <WikiTypeDefsModal onClose={() => setShowTypeDefs(false)} />}
@@ -348,7 +326,7 @@ export default function WikiOrganizer({
               <strong>当前关系已整理完成</strong>
               <span>新知识进入后，会自动出现在这里。</span>
               <button type="button" onClick={() => onModeChange("browse")}>
-                去全部知识关联行动
+                去「全部知识」看看
               </button>
             </div>
           )}
@@ -380,6 +358,23 @@ export default function WikiOrganizer({
               );
             })}
           </div>
+
+          <section className="wiki-organizer__tools" aria-label="整理工具">
+            <h3>整理工具</h3>
+            <button type="button" onClick={() => setShowRelationTypes(true)}>
+              <Tag size={16} aria-hidden="true" />
+              <span><strong>关系类型{customRelations.length > 0 ? ` (含 ${customRelations.length} 个自定义)` : ""}</strong>
+                <small>「上级 / 负责人 / 合作方」这类关系有哪些、什么意思</small></span>
+            </button>
+            <button type="button" onClick={() => setShowPropsReview(true)}>
+              <ListChecks size={16} aria-hidden="true" />
+              <span><strong>整理属性</strong><small>把证书正文里的编号、发证机构、有效期抽成属性</small></span>
+            </button>
+            <button type="button" onClick={() => setShowTypeDefs(true)}>
+              <TreeStructure size={16} aria-hidden="true" />
+              <span><strong>类型定义</strong><small>每一类知识有哪些属性、到期前几天提醒、能做哪些事</small></span>
+            </button>
+          </section>
         </>
       )}
     </div>

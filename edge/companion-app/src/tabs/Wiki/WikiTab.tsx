@@ -10,7 +10,7 @@
  *         filter (搜索 / tag / type) / graph (build from wikilink edges)
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ShareNetwork } from "@phosphor-icons/react";
 import WikiPreview from "./WikiPreview";
 import WikiGraph from "./WikiGraph";
@@ -21,6 +21,14 @@ import WikiHubCard from "../Dashboard/WikiHubCard";
 
 export default function WikiTab() {
   const [mode, setMode] = useState<WikiWorkspaceMode>("organize");
+  // 11/12: 待整理的关系有几条 (null = 还没读完)。0 条时: 一进来就开「全部知识」(员工自己点过分页就不再自动换),
+  // 关系整理那页右边也不写「从左侧选一项」。
+  const [taskCount, setTaskCount] = useState<number | null>(null);
+  const userPicked = useRef(false);
+  const pickMode = (m: WikiWorkspaceMode) => { userPicked.current = true; setMode(m); };
+  useEffect(() => {
+    if (taskCount === 0 && !userPicked.current && mode === "organize") setMode("browse");
+  }, [taskCount, mode]);
   // 9/24: 关系整理按任务 id 选中 (一个名字指向不明是一条任务, 不属于某个文件)
   const [taskId, setTaskId] = useState<string | null>(null);
   const refreshQuiet = useWikiStore((state) => state.refreshQuiet);
@@ -48,7 +56,8 @@ export default function WikiTab() {
       <aside className="wikitab__pane-tree">
         <WikiOrganizer
           mode={mode}
-          onModeChange={setMode}
+          onModeChange={pickMode}
+          onTaskCount={setTaskCount}
           taskId={taskId}
           onSelectTask={setTaskId}
         />
@@ -66,9 +75,10 @@ export default function WikiTab() {
         {mode === "shared" ? (
           <div className="wikitab__shared"><WikiHubCard /></div>
         ) : mode === "organize" ? (
-          <WikiRelationshipWorkbench taskId={taskId} onSelectTask={setTaskId} />
+          <WikiRelationshipWorkbench taskId={taskId} onSelectTask={setTaskId} hasTasks={taskCount !== 0}
+                                     onBrowse={() => pickMode("browse")} />
         ) : (
-          <WikiPreview onOpenTask={(id) => { setTaskId(id); setMode("organize"); }} />
+          <WikiPreview onOpenTask={(id) => { setTaskId(id); pickMode("organize"); }} />
         )}
       </main>
       {showGraph && (
