@@ -210,17 +210,6 @@ export default function MinutesView({ meta }: { meta: MeetingMeta }) {
   ].filter(Boolean);
   const checkedCount = m.action_items.filter((_, i) => checked[i]).length;
 
-  if (editing) {
-    return (
-      <div style={{ ...itemStyle, fontSize: 13, gap: "var(--space-3)" }}>
-        {header}
-        <MinutesEditor meetingId={meta.id} minutes={minutes} markdownView={markdownView} onCancel={() => setEditing(false)}
-                       onSaved={() => { setEditing(false); setNote("纪要已保存"); void reload(); }} />
-        {manager}
-      </div>
-    );
-  }
-
   return (
     <div style={{ ...itemStyle, fontSize: 13, gap: "var(--space-3)" }}>
       {header}
@@ -283,6 +272,11 @@ export default function MinutesView({ meta }: { meta: MeetingMeta }) {
         {note && <span style={{ fontSize: 12, color: "var(--status-ok)" }}>✓ {note}</span>}
       </div>
       {manager}
+      {editing && (
+        <MinutesEditor meetingId={meta.id} title={meta.title} minutes={minutes} markdownView={markdownView}
+                       onCancel={() => setEditing(false)}
+                       onSaved={() => { setEditing(false); setNote("纪要已保存"); void reload(); }} />
+      )}
       {error && <ErrorLine>{error}</ErrorLine>}
     </div>
   );

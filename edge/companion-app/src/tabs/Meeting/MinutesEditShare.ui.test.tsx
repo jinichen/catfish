@@ -67,11 +67,13 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("纪要: 编辑", () => {
-  it("改摘要 / 删决议 / 改待办负责人 → 存回去的是逐项", async () => {
+  it("改摘要 / 删决议 / 改待办负责人 → 存回去的是逐项; 在单独的编辑框里改, 纪要原样留在后面", async () => {
     await mount();
     fireEvent.click(screen.getByText("编辑"));
+    expect(screen.getByRole("dialog", { name: "编辑纪要" })).toBeTruthy();
+    expect(screen.getByText("确认存在严重不符合项")).toBeTruthy();   // 后面的纪要还在
     fireEvent.change(screen.getByLabelText("摘要"), { target: { value: "审核方指出工具测试记录不符合项。" } });
-    fireEvent.click(screen.getAllByTitle("删掉这条")[0]);
+    fireEvent.click(screen.getByLabelText("删掉决议 1"));
     fireEvent.change(screen.getByLabelText("待办 1 负责人"), { target: { value: "张三" } });
     fireEvent.click(screen.getByText("＋ 加一条待定问题"));
     fireEvent.change(screen.getByLabelText("待定问题 1"), { target: { value: "  " } });
