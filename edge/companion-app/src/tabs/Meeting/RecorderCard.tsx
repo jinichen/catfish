@@ -22,6 +22,7 @@ import {
   meetingRecordStop,
   type InputDevice,
   type RecorderStatus,
+  meetingHotwordsSaved,
 } from "../../lib/tauri_meeting";
 import { wikiListFiles } from "../../lib/tauri_wiki";
 import { Btn, cardStyle, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
@@ -45,6 +46,14 @@ export default function RecorderCard({ onChanged }: { onChanged: (selectId?: str
   const [importing, setImporting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const timer = useRef<number | null>(null);
+
+  // 11/12: 改转写错字时记下的常用热词, 新会议自动带上 (框是空的才填, 不冲掉员工已经输的)
+  const loadSavedHotwords = useCallback(() => {
+    meetingHotwordsSaved().then((ws) => setHotwords((cur) => (cur.trim() ? cur : ws.join(" ")))).catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    loadSavedHotwords();
+  }, [loadSavedHotwords]);
 
   useEffect(() => {
     meetingAudioDevices().then(setDevices).catch((e) => setError(String(e)));
@@ -79,6 +88,7 @@ export default function RecorderCard({ onChanged }: { onChanged: (selectId?: str
     setTitle("");
     setAttendees("");
     setHotwords("");
+    loadSavedHotwords();   // 下一场会议照样带上常用热词
   }
 
   async function importFile() {

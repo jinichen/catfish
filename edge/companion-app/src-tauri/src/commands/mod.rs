@@ -27,6 +27,7 @@ pub mod briefing_context; // BL-BRIEFING-DECISION (5/21 Phase 5): distilled_fact
 pub mod calendar; // BL-CALENDAR-INTEGRATION (5/20): macOS Calendar.app via osascript JXA
 pub mod chrome;
 pub mod meeting_minutes_cmd; // 10/1: 说话人改名 + 纪要 (tool-bridge meeting/summarize)
+pub mod meeting_edit_cmd; // 11/12: 纪要 / 转写的修正和分享 (存回去、Word、发到群、改错字、常用热词)
 pub mod meeting_asr_cmd; // 10/1: 会议组件包安装 + 转写, 见 services::meeting_asr
 pub mod embed_model_cmd; // 10/6: 向量模型组件包状态 + 安装, 见 services::embed_model
 pub mod meeting;       // 10/1: 会议录音 (建会议 / 录 / 停 / 列表), 见 services::meeting_*

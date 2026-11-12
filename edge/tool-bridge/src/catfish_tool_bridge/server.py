@@ -86,6 +86,17 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
             return _error(req_id, INVALID_PARAMS, str(e))
         except RuntimeError as e:
             return _error(req_id, INTERNAL_ERROR, str(e))
+    # 11/12: 纪要改 / 导出 Word / 准备发到群 (meeting_minutes_edit.py) —— 只动本机文件
+    if method in ("meeting/minutes_save", "meeting/minutes_docx", "meeting/minutes_stage"):
+        from . import meeting_minutes_edit as me  # noqa: PLC0415
+        fn = {"meeting/minutes_save": me.handle_save, "meeting/minutes_docx": me.handle_docx,
+              "meeting/minutes_stage": me.handle_stage}[method]
+        try:
+            return _success(req_id, await asyncio.to_thread(fn, params))
+        except (ValueError, OSError) as e:
+            return _error(req_id, INVALID_PARAMS, str(e))
+        except RuntimeError as e:
+            return _error(req_id, INTERNAL_ERROR, str(e))
     # 10/3: 上传的 Word / Excel 纪要模版认空 (meeting_file_template.py)
     if method == "meeting/template_inspect":
         from . import meeting_minutes  # noqa: PLC0415

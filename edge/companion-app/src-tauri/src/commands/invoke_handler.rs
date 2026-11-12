@@ -282,6 +282,12 @@ pub(crate) fn handler(
             crate::commands::meeting_minutes_cmd::meeting_template_delete,
             crate::commands::meeting_minutes_cmd::meeting_template_upload,
             crate::commands::meeting_minutes_cmd::meeting_minutes_open_file,
+            crate::commands::meeting_edit_cmd::meeting_minutes_save,
+            crate::commands::meeting_edit_cmd::meeting_minutes_docx,
+            crate::commands::meeting_edit_cmd::meeting_minutes_stage,
+            crate::commands::meeting_edit_cmd::meeting_transcript_edit,
+            crate::commands::meeting_edit_cmd::meeting_hotwords_saved,
+            crate::commands::meeting_edit_cmd::meeting_hotwords_remember,
             // speech (五一 sprint Day 1 方案 C+: ffmpeg 录 + Whisper.cpp 转, 全本地)
             crate::commands::speech::speech_start_recording,
             crate::commands::speech::speech_stop_and_transcribe,

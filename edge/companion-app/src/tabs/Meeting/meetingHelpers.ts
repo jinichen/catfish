@@ -125,3 +125,56 @@ export function systemTrackNotice(sys: SystemTrackStatus, silentSecs: number, hi
   if (silentSecs < SYSTEM_SILENT_WARN_SECS) return null;
   return `「${sys.source}」${Math.floor(silentSecs)} 秒没有声音。会议里暂时没人说话就没关系; 对方明明在说却一直是 0, 多半是没给权限 —— ${hint}`;
 }
+
+/** 11/12「复制」: 纪要 Markdown → 能直接贴进微信 / 群里的纯文本 (去掉 # ** 这些符号, 待办的 [ ] 换成 ☐)。 */
+export function minutesPlainText(markdown: string): string {
+  return markdown
+    .split("\n")
+    .map((l) => l
+      .replace(/^#{1,6}\s+(.*)$/, "【$1】")
+      .replace(/^(\s*)[-*]\s+\[\s?\]\s+/, "$1☐ ")
+      .replace(/^(\s*)[-*]\s+\[x\]\s+/i, "$1☑ ")
+      .replace(/^(\s*)[-*]\s+/, "$1· ")
+      .replace(/\*\*(.+?)\*\*/g, "$1")
+      .replace(/`([^`]+)`/g, "$1")
+      .replace(/^---+$/, ""))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/** 11/12 改转写错字后, 建议记成常用热词的词: 新句子里新出现的连续片段 (2–20 字), 最多 5 个。
+ *  例: 「西西RC末次」→「CC RC末次」给出「CC RC」。纯标点 / 空白的改动不算。 */
+export function changedWords(orig: string, next: string): string[] {
+  const a = [...orig];
+  const b = [...next];
+  // 最长公共子序列, 标出 next 里哪些字是原来就有的
+  const dp: number[][] = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const kept = new Array(b.length).fill(false);
+  for (let i = 0, j = 0; i < a.length && j < b.length;) {
+    if (a[i] === b[j]) { kept[j] = true; i++; j++; } else if (dp[i + 1][j] >= dp[i][j + 1]) i++; else j++;
+  }
+  const isWord = (c: string) => /[A-Za-z0-9]/.test(c);
+  const trimP = (w: string) => w.replace(/^[\s，。、,.!?！？：:；;]+|[\s，。、,.!?！？：:；;]+$/g, "");
+  const out: string[] = [];
+  let j = 0;
+  while (j < b.length) {
+    if (kept[j]) { j++; continue; }
+    let s = j;
+    while (j < b.length && !kept[j]) j++;
+    let e = j;
+    // 英文 / 数字连着的带上 (「CC」+「RC」→「CC RC」)
+    while (s > 0 && (isWord(b[s - 1]) || (b[s - 1] === " " && s > 1 && isWord(b[s - 2])))) s--;
+    while (e < b.length && (isWord(b[e]) || (b[e] === " " && e + 1 < b.length && isWord(b[e + 1])))) e++;
+    // 只改了一个汉字 (「鸾总」→「栾总」): 带上后面一个字, 不然记不成词
+    if (e - s === 1 && e < b.length && !/[\s，。、,.!?！？：:；;]/.test(b[e])) e++;
+    const w = trimP(b.slice(s, e).join(""));
+    if ([...w].length >= 2 && [...w].length <= 20 && !out.includes(w)) out.push(w);
+  }
+  return out.slice(0, 5);
+}

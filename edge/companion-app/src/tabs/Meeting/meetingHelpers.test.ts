@@ -133,3 +133,19 @@ describe("线上会议: 默认录哪个程序", () => {
     expect(systemTrackNotice({ ...sys, error: "坏了" }, 99, "h")).toBeNull();
   });
 });
+
+describe("11/12 纪要复制 / 改错字记热词", () => {
+  it("minutesPlainText: 去掉 Markdown 符号, 待办变 ☐", async () => {
+    const { minutesPlainText } = await import("./meetingHelpers");
+    expect(minutesPlainText("# CC RC末次\n\n- 日期: 2026-11-12\n\n## 待办\n\n- [ ] 补充**工具测试**记录 (张三)\n\n---\n由小鲶生成"))
+      .toBe("【CC RC末次】\n\n· 日期: 2026-11-12\n\n【待办】\n\n☐ 补充工具测试记录 (张三)\n\n由小鲶生成");
+  });
+
+  it("changedWords: 改对的人名 / 术语", async () => {
+    const { changedWords } = await import("./meetingHelpers");
+    expect(changedWords("西西RC末次审核", "CC RC末次审核")).toContain("CC RC");
+    expect(changedWords("我们找鸾总确认", "我们找栾总确认")).toEqual(["栾总"]);
+    expect(changedWords("好的。", "好的!")).toEqual([]);
+    expect(changedWords("一样", "一样")).toEqual([]);
+  });
+});

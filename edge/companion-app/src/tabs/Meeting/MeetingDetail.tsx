@@ -11,7 +11,6 @@ import {
   meetingTranscribe,
   meetingTranscript,
   onTranscribeProgress,
-  speakerName,
   type AsrStatus,
   type MeetingMeta,
   type Transcript,
@@ -19,6 +18,7 @@ import {
 import { Btn, cardStyle, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
 import AsrSetup from "./AsrSetup";
 import MinutesView from "./MinutesView";
+import TranscriptView from "./TranscriptView";
 import { estimatePercent, STATUS_LABEL } from "./meetingHelpers";
 
 const PHASE_LABEL: Record<string, string> = {
@@ -189,15 +189,7 @@ export default function MeetingDetail({
           <Btn kind="ghost" onClick={() => void saveNames()}>{saved ? "已保存 ✓" : "保存名字"}</Btn>
         </div>
         <MinutesView meta={meta} />
-        <div style={{ maxHeight: 420, overflowY: "auto", fontSize: 13, lineHeight: 1.6 }}>
-          {transcript.segments.map((seg, i) => (
-            <div key={i}>
-              <span style={{ color: "var(--catfish-text-muted)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{formatClock(seg.start)} </span>
-              <span style={{ color: SPK_COLORS[seg.spk % SPK_COLORS.length], fontWeight: 600 }}>{speakerName(seg.spk, names)}: </span>
-              {seg.text}
-            </div>
-          ))}
-        </div>
+        <TranscriptView key={meta.id} meetingId={meta.id} transcript={transcript} names={names} colors={SPK_COLORS} />
       </>
     );
   }

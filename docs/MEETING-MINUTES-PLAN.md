@@ -115,3 +115,21 @@ FunASR: FSMN-VAD + SeACo-Paraformer (支持热词) + CT-Transformer 标点 + CAM
   `meeting_asr.py --decode`; mac 继续用系统 afconvert)。Windows 版组件包由
   `.github/workflows/build-meeting-asr-pack.yml` 在 windows-latest 上打, 自检含"离线装 → 分说话人转写
   → m4a 解码后不分说话人转写, 文字跟原 wav 一致"。聊天 🎤 / 上传音频 / 文件解析里的音频跟着可用。
+
+## 11/12 纪要能改、能分享; 转写能改错字
+
+鸿波 11/12:「是不是应该有个分享或者邮件; 还有内容是不是还应该可以修正?」
+
+- **改纪要** (MinutesEditor.tsx → tool-bridge `meeting/minutes_save`, meeting_minutes_edit.py):
+  - 标准纪要逐项改: 摘要 / 决议 / 待办 (事项 · 负责人 · 截止) / 待定问题 / 上次遗留; minutes.md 按改后的重排, 末尾写「已人工核对修改」。
+  - 文字模版写的那份改全文, 待办照样逐条改。
+  - minutes.json 记 `edited_at`; 「重新生成」第一下只提醒会覆盖, 4 秒内再点才生成。
+- **改转写** (TranscriptView.tsx → Rust `meeting_transcript_edit`):
+  - 点一句改错字, 原话留在 `orig_text`, 清空保存 = 改回原话; 改过的转写在重新生成纪要时用上。
+  - 改出的新词 (changedWords) 可一键记成常用热词 (`~/.catfish/meetings/hotwords.json`), 新建会议的热词框自动带上。
+- **分享** (MinutesShare.tsx), 都是员工点了才发:
+  - 复制: 纯文本, 贴微信 / 群。
+  - 发邮件: 打开「邮件」页同一个写信面板 (ComposeCore), 主题 / 正文 / Word 附件填好, 收件人员工自己填; 存草稿或发送 (两次确认)。
+  - 发到协同群: 选群、改要发的文字 (一条最多 4000 字), 可附 Word (`meeting/minutes_stage` 放进群聊暂存区, 再走群聊原来的发送)。
+  - 导出 Word: `meeting/minutes_docx`, 会议目录里「<标题> 会议纪要 <日期>.docx」(Word / Excel 模版生成过的直接用填好的那份)。
+- 会议记录里只有「说话人 N」, 没有参会人邮箱, 发邮件的收件人只能员工填。

@@ -152,7 +152,7 @@ def parse_minutes(raw: str) -> dict:
     }
 
 
-def render_markdown(meta: dict, minutes: dict, names: dict[str, str], references_note: str = "") -> str:
+def render_markdown(meta: dict, minutes: dict, names: dict[str, str], references_note: str = "", *, edited: bool = False) -> str:
     out = [f"# {meta.get('title', '会议纪要')}", "", f"- 日期: {meeting_date(meta)}"]
     if names:
         out.append(f"- 参会: {'、'.join(sorted(set(names.values())))}")
@@ -168,7 +168,8 @@ def render_markdown(meta: dict, minutes: dict, names: dict[str, str], references
         out.append("(无)")
     if minutes.get("carried_over"):
         out += ["", "## 上次遗留事项进展", ""] + [f"- {x}" for x in minutes["carried_over"]]
-    out += ["", "---", "由小鲶根据会议录音自动生成, 转写可能有误, 请核对。"]
+    # 11/12: 员工在纪要上改过 (meeting_minutes_edit.handle_save) 就不再写「请核对」
+    out += ["", "---", "由小鲶根据会议录音生成, 已人工核对修改。" if edited else "由小鲶根据会议录音自动生成, 转写可能有误, 请核对。"]
     if references_note:
         out.append(references_note)
     return "\n".join(out) + "\n"

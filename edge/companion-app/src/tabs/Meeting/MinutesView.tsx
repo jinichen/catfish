@@ -12,6 +12,9 @@
  * 10/3: 可以选纪要模版 (TemplateManager)。缺省 = 原来的固定格式; 选了自定义模版, 这里
  * 显示按模版写的那份 Markdown, 下面照样列待办给「加入任务库」用 —— 存知识库存的也是它。
  * Word / Excel 模版: 顶上给「打开 Word / Excel」(填好的那张表), 下面显示缺省版过目。
+ *
+ * 11/12: 纪要能改 (MinutesEditor, 改过的标「已人工修改」, 「重新生成」先提醒会覆盖);
+ * 能分享 (MinutesShare: 复制 / 发邮件 / 发到协同群 / 导出 Word, 都是员工点了才发)。
  */
 import { useEffect, useState } from "react";
 
@@ -24,6 +27,8 @@ import {
 import { Btn, ErrorLine, inputStyle, itemStyle } from "../Collab/roomLinkUi";
 import { actionItemToTask, minutesWikiBody, minutesWikiTitle } from "./meetingHelpers";
 import { lastTemplateId, rememberTemplateId } from "./minutesTemplates";
+import MinutesEditor from "./MinutesEditor";
+import MinutesShare from "./MinutesShare";
 import TemplateManager from "./TemplateManager";
 
 function toolError(res: { ok: boolean; result: unknown; error: string | null }, success: (r: Record<string, unknown>) => boolean) {
@@ -41,6 +46,9 @@ export default function MinutesView({ meta }: { meta: MeetingMeta }) {
   const [templates, setTemplates] = useState<MinutesTemplate[]>([]);
   const [templateId, setTemplateId] = useState(DEFAULT_TEMPLATE_ID);
   const [managing, setManaging] = useState(false);
+  const [editing, setEditing] = useState(false);
+  // 改过的纪要, 「重新生成」点第一下只提醒, 4 秒内再点才真生成 (WebView 里 window.confirm 不能用)
+  const [confirmRegen, setConfirmRegen] = useState(false);
 
   async function loadTemplates(selectId?: string) {
     try {
@@ -56,16 +64,30 @@ export default function MinutesView({ meta }: { meta: MeetingMeta }) {
     void loadTemplates();
   }, []);
 
-  useEffect(() => {
-    setMinutes(null);
-    setNote(null);
-    meetingMinutes(meta.id).then((m) => {
+  function reload() {
+    return meetingMinutes(meta.id).then((m) => {
       setMinutes(m);
       setChecked(Object.fromEntries((m?.json.action_items ?? []).map((_, i) => [i, true])));
     }).catch((e) => setError(String(e)));
+  }
+
+  useEffect(() => {
+    setMinutes(null);
+    setNote(null);
+    setEditing(false);
+    setConfirmRegen(false);
+    void reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meta.id]);
 
   async function generate() {
+    if (minutes?.json.edited_at && !confirmRegen) {
+      setConfirmRegen(true);
+      window.setTimeout(() => setConfirmRegen(false), 4000);
+      return;
+    }
+    setConfirmRegen(false);
+    setEditing(false);
     setGenerating(true);
     setError(null);
     try {
@@ -129,6 +151,9 @@ export default function MinutesView({ meta }: { meta: MeetingMeta }) {
             按「{minutes.json.template.name}」
           </span>
         )}
+        {minutes?.json.edited_at && (
+          <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 400, color: "var(--catfish-cyan)" }}>已人工修改</span>
+        )}
       </div>
       <select
         aria-label="纪要模版"
@@ -143,8 +168,8 @@ export default function MinutesView({ meta }: { meta: MeetingMeta }) {
           <option key={t.id} value={t.id}>{t.kind === "docx" ? "Word · " : t.kind === "xlsx" ? "Excel · " : ""}{t.name}</option>
         ))}
       </select>
-      <Btn kind={minutes ? "ghost" : "primary"} disabled={generating} onClick={() => void generate()}>
-        {generating ? generatingLabel : minutes ? "重新生成" : "生成纪要"}
+      <Btn kind={minutes ? "ghost" : "primary"} disabled={generating || editing} onClick={() => void generate()}>
+        {generating ? generatingLabel : confirmRegen ? "再点一次: 覆盖改过的内容" : minutes ? "重新生成" : "生成纪要"}
       </Btn>
       <Btn kind="ghost" onClick={() => setManaging(true)}>管理模版</Btn>
     </div>
@@ -185,9 +210,23 @@ export default function MinutesView({ meta }: { meta: MeetingMeta }) {
   ].filter(Boolean);
   const checkedCount = m.action_items.filter((_, i) => checked[i]).length;
 
+  if (editing) {
+    return (
+      <div style={{ ...itemStyle, fontSize: 13, gap: "var(--space-3)" }}>
+        {header}
+        <MinutesEditor meetingId={meta.id} minutes={minutes} markdownView={markdownView} onCancel={() => setEditing(false)}
+                       onSaved={() => { setEditing(false); setNote("纪要已保存"); void reload(); }} />
+        {manager}
+      </div>
+    );
+  }
+
   return (
     <div style={{ ...itemStyle, fontSize: 13, gap: "var(--space-3)" }}>
       {header}
+      {confirmRegen && (
+        <div style={{ fontSize: 12, color: "var(--status-warn)" }}>这份纪要你改过, 重新生成会按录音重写, 你改的内容会被覆盖。确定的话再点一次「重新生成」。</div>
+      )}
       {m.output_file && (
         // Word / Excel 模版: 填好的那张表就是交出去的纪要; 下面照常显示缺省版给员工过目
         <div style={{ display: "flex", gap: "var(--space-2)", alignItems: "center", flexWrap: "wrap", fontSize: 12,
@@ -239,6 +278,8 @@ export default function MinutesView({ meta }: { meta: MeetingMeta }) {
           </Btn>
         )}
         <Btn kind="ghost" onClick={() => void saveWiki()}>存进知识库</Btn>
+        <Btn kind="ghost" onClick={() => { setNote(null); setEditing(true); }}>编辑</Btn>
+        <MinutesShare meta={meta} markdown={minutes.markdown} onNote={(t) => { setError(null); setNote(t); }} onError={setError} />
         {note && <span style={{ fontSize: 12, color: "var(--status-ok)" }}>✓ {note}</span>}
       </div>
       {manager}
