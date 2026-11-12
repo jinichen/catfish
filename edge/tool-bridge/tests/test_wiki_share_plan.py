@@ -261,3 +261,23 @@ def test_install_brings_linked_pages_from_same_publisher(home, gateway):
     assert "也一起装上了" in r["summary"]
     # 只装一层: 关联页自己的关联不再往外拉 (列表只拉一次)
     assert sum(1 for q in gateway["reqs"] if q.url.path == "/v1/wiki/documents") == 1
+
+
+# ── 11/12 发出去那份不带本机路径 (原件页开头小鲶写的 SOURCE_PATH / METHOD, 正文里的绝对路径) ──
+
+def test_scrub_local_去掉说明行和本机路径_留文件名():
+    body = ("# Upload: 中电福富工作汇报（栾总） -v1.65.pptx\n\n"
+            "SOURCE_PATH: /Users/someone/Downloads/材料库/2024/中电福富工作汇报（栾总） -v1.65.pptx\n"
+            "METHOD: python-pptx full extract\n\n"
+            "## 第 1 页\n详见 /Users/someone/Downloads/材料库/附件一.docx。另见 C:\\Users\\zhang\\Desktop\\方案.pdf 和 ~/Documents/对标.xlsx\n"
+            "目录 /Users/someone/Downloads/材料库 里有; 网址 https://example.com/a/b.html 和相对路径 docs/a.md 不动")
+    out = wiki_share.scrub_local(body)
+    assert out.startswith("## 第 1 页")
+    assert "/Users/" not in out and "C:\\" not in out and "~/" not in out and "SOURCE_PATH" not in out and "METHOD" not in out
+    assert "「附件一.docx」" in out and "「方案.pdf」 和 「对标.xlsx」" in out and "目录 「材料库」 里有" in out
+    assert "https://example.com/a/b.html" in out and "docs/a.md" in out
+
+
+def test_rewrite_for_share_也去本机路径():
+    _, body = wiki_share.rewrite_for_share("title: x", "见 /Users/someone/Desktop/规范.pdf 第二节。")
+    assert body == "见 「规范.pdf」 第二节。"

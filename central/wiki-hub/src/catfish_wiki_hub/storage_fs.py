@@ -22,6 +22,8 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .preview import make_preview
+
 logger = logging.getLogger("catfish.wiki_hub.storage_fs")
 
 
@@ -88,7 +90,7 @@ def write_document(
         "filename": filename,
         "title": title,
         "kind": kind,
-        "description_preview": (body_md or "")[:200],
+        "description_preview": make_preview(title, body_md or ""),
         "published_by": published_by,
         "published_at": prev.get("published_at") or ts,
         "updated_at": ts,
@@ -117,7 +119,7 @@ def _meta_for(md_or_meta_dir: Path, file_id: str, namespace: str) -> dict | None
         "filename": file_id,
         "title": file_id,
         "kind": "entity",
-        "description_preview": body[:200],
+        "description_preview": make_preview(file_id, body),
         "published_by": "",
         "published_at": None,
         "updated_at": None,

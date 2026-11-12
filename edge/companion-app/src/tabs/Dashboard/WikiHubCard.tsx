@@ -10,7 +10,8 @@
  *   - 没有 version 号, 但有 updated_at: 发布方重发后 hub 的 updated_at 比本机
  *     装的那版新 → 显"有更新" + 更新按钮 (9/30, 见 wikiHubStatus.ts)
  *   - stale 项显灰 + 不让装 (原作者撤回了, body 已清零)
- *   - "安装" 按钮调 catfish_wiki_install (tool_bridge), 装到 ~/.catfish/wiki-shared/
+ *   - 「收进资料库」按钮 (原来叫「安装」, 11/12 改) 调 catfish_wiki_install (tool_bridge), 存到 ~/.catfish/wiki-shared/
+ *   - 「预览」不收也能先看全文; 摘要 / 分享人显示见 WikiHubPreview.tsx
  *
  * Phase 4 polish 加 ~/.catfish/wiki-shared/ 扫描 + 已装状态对比.
  */
@@ -24,8 +25,8 @@ import {
   listInstalledWikiShared,
   type InstalledWikiSharedInfo,
 } from "../../lib/tauri";
-import { useAgentStore } from "../../store/agent";
 import { COMPANY_GROUP, groupOf, hasHubUpdate, sortGroups, toolResultError } from "./wikiHubStatus";
+import { cleanPreview, personLabel, WikiDocPreview } from "./WikiHubPreview";
 
 interface WikiDoc {
   namespace: string;
@@ -124,11 +125,11 @@ function humanTime(iso?: string | null): string {
 }
 
 export default function WikiHubCard() {
-  const agentName = useAgentStore((s) => s.name);
   const [docs, setDocs] = useState<WikiDoc[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [installingKey, setInstallingKey] = useState<string | null>(null);
+  const [previewing, setPreviewing] = useState<WikiDoc | null>(null);
   const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   // P3.3.18 Phase 4 (6/10): 本机已装 wiki-shared 索引 (ns/file_id → InstalledWikiSharedInfo)
   const [installedByKey, setInstalledByKey] = useState<Map<string, InstalledWikiSharedInfo>>(new Map());
@@ -215,7 +216,7 @@ export default function WikiHubCard() {
     const withdrawn = doc.stale_after_unpublish || doc.review_status === "withdrawn";
     // 11/08: 已撤回的, 本机有副本时「拉更新」= 让工具把本机副本标成「已撤回」(不删员工的文件); 没副本的装不了
     if (withdrawn && !installedByKey.has(key)) {
-      setToast({ kind: "err", text: "这页已被撤回, 内容已清零, 无法安装" });
+      setToast({ kind: "err", text: "这页已被撤回, 内容已清零, 收不进资料库了" });
       return;
     }
     setInstallingKey(key);
@@ -230,7 +231,7 @@ export default function WikiHubCard() {
         const updating = installedByKey.has(key);
         // 11/09: 同一个人分享的、这页关联到的页 (关系 / 原件) 一起装上了 —— 说一声, 不然同事不知道多了几页
         const also = inner?.also_installed?.length
-          ? `; 它关联的 ${inner.also_installed.length} 页也一起装上了 (${inner.also_installed.slice(0, 3).join("、")}${inner.also_installed.length > 3 ? " 等" : ""})`
+          ? `; 它关联的 ${inner.also_installed.length} 页也一起收进来了 (${inner.also_installed.slice(0, 3).join("、")}${inner.also_installed.length > 3 ? " 等" : ""})`
           : "";
         setToast({
           kind: "ok",
@@ -238,15 +239,15 @@ export default function WikiHubCard() {
             ? `'${doc.title}' 已被撤回, 本机副本已标成「已撤回」(文件没删, 搜索默认不再列出)`
             : updating
               ? `已更新 '${doc.title}' 到最新版${inner?.review_status === "pending" ? " (主管还没审过, 标「待审」)" : ""}${also}`
-              : `已装 '${doc.title}' 到 ~/.catfish/wiki-shared/${doc.namespace}/${inner?.review_status === "pending" ? " (主管还没审过, 标「待审」)" : ""}${also}`,
+              : `已把 '${doc.title}' 收进资料库${inner?.review_status === "pending" ? " (主管还没审过, 标「待审」)" : ""}${also}`,
         });
         // 之前装完不重扫本机, 按钮要等下一分钟轮询才变 "✓ 已装"
         void refresh();
       } else {
-        setToast({ kind: "err", text: `安装失败: ${errMsg.slice(0, 120)}` });
+        setToast({ kind: "err", text: `没收进来: ${errMsg.slice(0, 120)}` });
       }
     } catch (e) {
-      setToast({ kind: "err", text: `安装异常: ${e instanceof Error ? e.message : String(e)}` });
+      setToast({ kind: "err", text: `没收进来: ${e instanceof Error ? e.message : String(e)}` });
     } finally {
       setInstallingKey(null);
     }
@@ -291,7 +292,7 @@ export default function WikiHubCard() {
       >
         {/* P3.3.38 (6/12): "Wiki Hub" → "知识库" 中文化 */}
         <h3 style={{ margin: 0 }}>
-          📚 {agentName} 知识库
+          📚 部门知识库
           <span
             style={{
               fontSize: 12,
@@ -453,6 +454,7 @@ export default function WikiHubCard() {
                       updateAvailable={!isWithdrawn(doc) && hasHubUpdate(doc, installed)}
                       installing={installingKey === key}
                       onInstall={() => void handleInstall(doc)}
+                      onPreview={() => setPreviewing(doc)}
                     />
                   );
                 })}
@@ -460,6 +462,10 @@ export default function WikiHubCard() {
             </div>
           ))}
         </div>
+      )}
+      {previewing && (
+        <WikiDocPreview namespace={previewing.namespace} fileId={previewing.file_id} title={previewing.title}
+                        onClose={() => setPreviewing(null)} />
       )}
     </div>
   );
@@ -471,12 +477,14 @@ function WikiRow({
   updateAvailable,
   installing,
   onInstall,
+  onPreview,
 }: {
   doc: WikiDoc;
   installed: InstalledWikiSharedInfo | undefined;
   updateAvailable: boolean;
   installing: boolean;
   onInstall: () => void;
+  onPreview: () => void;
 }) {
   const stale = doc.stale_after_unpublish || doc.review_status === "withdrawn";
   const isInstalled = installed !== undefined;
@@ -510,7 +518,7 @@ function WikiRow({
           marginBottom: "var(--space-1)",
         }}
       >
-        <span style={{ fontWeight: 500 }}>
+        <span style={{ fontWeight: 500, minWidth: 0 }}>
           {doc.title}
           {/* 11/08: hub 上的审核状态 (待审 / 已撤回); 本机副本自己的状态在下面 */}
           <ReviewBadge status={stale ? "withdrawn" : doc.review_status} note={withdrawnNote} by={doc.withdrawn_by} />
@@ -523,6 +531,9 @@ function WikiRow({
             background: "rgba(0,0,0,0.05)",
             padding: "1px 6px",
             borderRadius: 3,
+            whiteSpace: "nowrap",
+            flexShrink: 0,
+            marginLeft: 8,
           }}
         >
           {kindLabel}
@@ -556,7 +567,7 @@ function WikiRow({
           }}
           title={withdrawnNote || ""}
         >
-          ⏸ 已被{withdrawnBy}撤回 ({humanTime(withdrawnAt)}). 内容已清零, 无法安装.
+          ⏸ 已被{withdrawnBy}撤回 ({humanTime(withdrawnAt)}). 内容已清零, 收不进资料库了.
         </div>
       ) : (
         doc.description_preview && (
@@ -571,7 +582,7 @@ function WikiRow({
               overflow: "hidden",
             }}
           >
-            {doc.description_preview}
+            {cleanPreview(doc.title, doc.description_preview)}
           </div>
         )
       )}
@@ -584,10 +595,24 @@ function WikiRow({
           alignItems: "center",
         }}
       >
-        <span>
-          👤 {doc.published_by || "?"} · {humanTime(doc.updated_at || doc.published_at)}
-          {doc.review_status === "approved" && doc.reviewed_by && !doc.legacy && ` · ${doc.reviewed_by} 审过`}
+        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={doc.published_by}>
+          👤 {personLabel(doc.published_by, humanTime(doc.updated_at || doc.published_at),
+                          doc.review_status === "approved" && !doc.legacy ? doc.reviewed_by : null)}
         </span>
+        <span style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+        {!stale && (
+          <button
+            type="button"
+            onClick={onPreview}
+            style={{
+              fontSize: 11, padding: "3px 10px", background: "transparent", color: "var(--catfish-text)",
+              border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-sm)", cursor: "pointer",
+            }}
+            title="先看看全文, 不用收进资料库"
+          >
+            预览
+          </button>
+        )}
         {localNotMarked && (
           <button
             type="button"
@@ -637,9 +662,9 @@ function WikiRow({
               padding: "1px 6px",
               borderRadius: 3,
             }}
-            title={`已装 ${humanTime(installed.installedAt)}${installed.reviewStatus === "pending" ? "; 装的时候主管还没审, 主管审过后「拉更新」会把标去掉" : ""}`}
+            title={`${humanTime(installed.installedAt)}收进资料库${installed.reviewStatus === "pending" ? "; 收的时候主管还没审, 主管审过后点「更新」会把标去掉" : ""}`}
           >
-            ✓ 已装{installed.reviewStatus === "pending" && doc.review_status === "approved" ? " · 已审过, 可更新" : ""}
+            ✓ 已在资料库{installed.reviewStatus === "pending" && doc.review_status === "approved" ? " · 已审过, 可更新" : ""}
           </span>
         )}
         {/* 11/08: 本机副本还标着「待审」, hub 上主管已经审过 → 让「更新」出现, 拉一次把标去掉 */}
@@ -679,11 +704,12 @@ function WikiRow({
               cursor: installing ? "wait" : "pointer",
               opacity: installing ? 0.6 : 1,
             }}
-            title="装到本机 ~/.catfish/wiki-shared/ (read-only, 资料库能看到)"
+            title="收进你本机的资料库 (只读副本), 小鲶回答问题时也能查到"
           >
-            {installing ? "安装中…" : "安装"}
+            {installing ? "收录中…" : "收进资料库"}
           </button>
         )}
+        </span>
       </div>
     </div>
   );

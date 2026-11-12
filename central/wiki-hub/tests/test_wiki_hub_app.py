@@ -366,3 +366,25 @@ def test_全公司_撤下后其他部门也看不到_销售摘要不能发全公
         "filename": "catfish/sales-summary.md", "title": "销售摘要", "kind": "entity",
         "frontmatter_yaml": "title: 销售摘要", "body_md": "x", "scope": "company"})
     assert r.status_code == 400 and "全公司" in r.json()["detail"]
+
+
+# ── 11/12 卡片摘要: 去格式符号 / 重复标题 / 原件页的本机路径 ─────────────
+
+def test_preview_去掉标题重复和格式符号():
+    from catfish_wiki_hub.preview import make_preview
+    body = "# 中电福富信息科技有限公司\n\n中电福富信息科技有限公司（简称**中电福富**）成立于1987年。\n\n| 项 | 值 |\n|---|---|\n| 注册资本 | 2.01亿 |"
+    p = make_preview("中电福富信息科技有限公司", body)
+    assert not p.startswith("#") and "**" not in p and "|" not in p
+    assert p.startswith("中电福富信息科技有限公司（简称中电福富）成立于1987年"), p
+    assert make_preview("产数研究院", "# 产数研究院 - 产数研究院牵头产业创新") == "产数研究院牵头产业创新"
+    assert "注册资本 2.01亿" in p
+
+
+def test_preview_原件页不露本机路径():
+    from catfish_wiki_hub.preview import make_preview
+    body = ("# Upload: 中电福富工作汇报（栾总） -v1.65.pptx\n\nSOURCE_PATH: /Users/someone/Downloads/材料库/2024/汇报 -v1.65.pptx\n"
+            "METHOD: python-pptx full extract\n\n## 第 1 页\n见 C:\\Users\\zhang\\Desktop\\方案.pdf 的第三节。")
+    p = make_preview("原件 · 中电福富工作汇报栾总--v165", body)
+    assert "/Users/" not in p and "SOURCE_PATH" not in p and "METHOD" not in p and "C:\\" not in p
+    assert "Upload" not in p and p.startswith("第 1 页"), p
+    assert "方案.pdf" in p

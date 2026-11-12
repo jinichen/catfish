@@ -26,6 +26,7 @@ from pathlib import Path
 
 from . import storage_fs
 from .namespaces import dept_of
+from .preview import make_preview
 
 logger = logging.getLogger("catfish.wiki_hub.storage")
 
@@ -130,7 +131,7 @@ def publish_document(
     if len(body_md) > 1024 * 1024:  # 1 MB 单 wiki 上限
         return {"ok": False, "error": f"wiki body 超 1MB 上限 ({len(body_md)} bytes)"}
 
-    description_preview = (body_md or "")[:200]
+    description_preview = make_preview(title, body_md or "")   # 11/12: 去格式符号 / 重复标题 / 本机路径
     size_bytes = len(body_md.encode("utf-8")) + len(frontmatter_yaml.encode("utf-8"))
     now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 

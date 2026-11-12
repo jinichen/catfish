@@ -226,7 +226,8 @@ def _read_source_doc(wiki_rel_path: str) -> tuple[dict[str, Any] | None, str | N
         "concept_type: source_original",
         "tags: [原件]",
     ])
-    return {"title": title, "kind": "concept", "fm": fm, "body": raw_body}, None
+    # 11/12: 原件正文开头小鲶写的「SOURCE_PATH: /Users/…」这类说明和本机路径不发
+    return {"title": title, "kind": "concept", "fm": fm, "body": wiki_share.scrub_local(raw_body)}, None
 
 
 def wiki_publish(args: dict[str, Any]) -> dict[str, Any]:

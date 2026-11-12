@@ -63,6 +63,7 @@ def _load_dotenv() -> Path | None:
 _ENV_FILE_LOADED = _load_dotenv()
 
 from . import __version__
+from .preview import make_preview
 from . import review, sales, storage   # 11/08 review: 知识页「待审」标 (docs/SHARE-GOVERNANCE-PLAN.md §3.2)
 from .namespaces import can_see, is_admin, namespace_for, validate_dept
 
@@ -161,6 +162,10 @@ async def list_documents_endpoint(
             others = storage.list_documents(sorted({ns for ns, _ in company}), include_stale=include_stale)
             metas += [m for m in others if (m["namespace"], m["file_id"]) in company]
     docs = [review.annotate(d) for d in metas if not sales.hidden_from(user, d)]
+    # 11/12: 老数据存的是正文原样截的 200 字 (带 # 符号 / 重复标题 / 原件页的本机路径), 列出来时再过一遍
+    for d in docs:
+        if not d.get("stale_after_unpublish"):
+            d["description_preview"] = make_preview(d.get("title") or "", d.get("description_preview") or "")
     return {"documents": docs, "count": len(docs)}
 
 

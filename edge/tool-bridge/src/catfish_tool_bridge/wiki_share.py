@@ -37,6 +37,29 @@ _TEXT_SUFFIXES = {".md", ".markdown", ".txt", ".csv"}
 _CONVERSATION = re.compile(r"^(journal:|session:|employee_journal$)")
 _BODY_RAW = re.compile(r"raw/sources/[^\s\)\]\"'，。、；;,|]+")
 _BODY_CONV = re.compile(r"\b(?:journal|session):[0-9A-Za-z_\-:]+")
+# 11/12 鸿波「部门知识库」: 原件页开头是小鲶入库时自己写的说明 ——「SOURCE_PATH: /Users/<名>/Downloads/材料库/…」
+# 「METHOD: python-pptx …」, 原样发出去, 全部门都看到发布人电脑上的目录。发出去那份去掉这些说明行,
+# 正文里别处出现的本机绝对路径只留文件名。本机文件不动。
+_META_LINE = re.compile(r"^\s*(?:SOURCE_PATH|SOURCE_FILE|KEPT_PATH|kept_path|METHOD|EXTRACT(?:ED)?_(?:BY|WITH))\s*[:：].*$\n?", re.M)
+_UPLOAD_HEAD = re.compile(r"\A\s*#\s*Upload:\s*[^\n]*\n+")
+_LOCAL_PATH = re.compile(
+    r"(?:~|/Users/[^/\s]+|/home/[^/\s]+|[A-Za-z]:\\Users\\[^\\\s]+)[/\\]"
+    # 文件名里常有空格 (「工作汇报（栾总） -v1.65.pptx」): 先按「到扩展名为止」最短匹配; 没有扩展名 (目录) 就到空白为止
+    r"(?:(?:(?!://)[^\n\"'`<>|;；，。、])*?\.[A-Za-z0-9]{1,8}(?=$|[\s，。；;、）)\]\"'`])|[^\s\"'`<>|，。；;、）)\]]+)",
+    re.M,
+)
+
+
+def scrub_local(body: str) -> str:
+    """发出去那份去掉本机信息: 原件头上的「# Upload: 文件名」、SOURCE_PATH / METHOD 这类说明行、本机绝对路径 (只留文件名)。"""
+    body = _UPLOAD_HEAD.sub("", body)
+    body = _META_LINE.sub("", body)
+
+    def keep_name(m: re.Match[str]) -> str:
+        name = re.split(r"[/\\]", m.group(0).rstrip("/\\ "))[-1].strip()
+        return f"「{name}」" if name else "「本机文件」"
+
+    return _LOCAL_PATH.sub(keep_name, body).lstrip("\n")
 
 
 def _home() -> Path:
@@ -172,7 +195,7 @@ def rewrite_for_share(fm: str, body: str, attached: set[str] | None = None) -> t
 
     new_body = _BODY_RAW.sub(raw_sub, body)
     new_body = _BODY_CONV.sub("发布人的对话记录", new_body)
-    return new_fm, new_body
+    return new_fm, scrub_local(new_body)
 
 
 # ── 扫描 (跟 wiki_publish 同一套) ──────────────────────────────
