@@ -19,6 +19,7 @@ import { Btn, cardStyle, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
 import AsrSetup from "./AsrSetup";
 import MinutesView from "./MinutesView";
 import TranscriptView from "./TranscriptView";
+import { sampleSegment, toggleClip } from "./meetingPlayer";
 import { estimatePercent, STATUS_LABEL } from "./meetingHelpers";
 import { COL_CARD } from "./meetingHelpers";
 
@@ -175,18 +176,29 @@ export default function MeetingDetail({
     body = (
       <>
         <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)", alignItems: "center" }}>
-          {spks.map((s) => (
-            <input
-              key={s}
-              style={{ ...inputStyle, width: 120, borderColor: SPK_COLORS[s % SPK_COLORS.length] }}
-              placeholder={`说话人${s + 1}`}
-              value={names[String(s)] ?? ""}
-              onChange={(e) => {
-                setSaved(false);
-                setNames({ ...names, [String(s)]: e.target.value });
-              }}
-            />
-          ))}
+          {/* 11/12: 每个说话人旁边 ▶ 听他说得最长的一句, 听出是谁再填名字 */}
+          {spks.map((s) => {
+            const sample = sampleSegment(transcript.segments, s);
+            return (
+              <span key={s} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
+                <input
+                  style={{ ...inputStyle, width: 120, borderColor: SPK_COLORS[s % SPK_COLORS.length] }}
+                  placeholder={`说话人${s + 1}`}
+                  value={names[String(s)] ?? ""}
+                  onChange={(e) => {
+                    setSaved(false);
+                    setNames({ ...names, [String(s)]: e.target.value });
+                  }}
+                />
+                {sample && (
+                  <button type="button" aria-label={`听说话人${s + 1}`} title="听他说的一句, 认出是谁"
+                          onClick={() => void toggleClip(`spk-${meta.id}-${s}`, meta.id, sample).catch((e) => setError(`放不了: ${String(e)}`))}
+                          style={{ border: "none", background: "transparent", cursor: "pointer", padding: "2px 4px", fontSize: 11,
+                                   color: "var(--catfish-text-muted)" }}>▶</button>
+                )}
+              </span>
+            );
+          })}
           <Btn kind="ghost" onClick={() => void saveNames()}>{saved ? "已保存 ✓" : "保存名字"}</Btn>
         </div>
         <MinutesView meta={meta} />

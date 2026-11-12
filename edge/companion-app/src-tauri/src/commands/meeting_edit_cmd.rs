@@ -3,6 +3,10 @@
 //! - 纪要: 改了存回去、存成 Word、放进群聊暂存区 —— 都在 tool-bridge (meeting_minutes_edit.py), 这里注入会议根目录。
 //! - 转写: 点一句改错字。原话留在 `orig_text` (改回去时对照); 改过的转写下次「重新生成」纪要就按改后的写。
 //! - 常用热词: 改错字时顺手把人名 / 术语记下, 新建会议的热词框自动带上 (~/.catfish/meetings/hotwords.json)。
+//! - 听一句 (11/12 鸿波「不能播放录音, 怎么来修正识别内容」): 按转写里那句的起止时间, 从会议录音 (5 分钟一个
+//!   audio/seg-NNNN.wav; 线上会议对方的声音在 audio/system/, 跟麦克风那条时间对齐) 截一小段, 在内存里拼成 WAV
+//!   以 base64 交给界面, 界面转成 blob 播 —— 不落临时文件、不走 asset 协议 (Mac / Windows 临时目录的放行规则不同,
+//!   WebView 还可能吃旧缓存)。一句几秒几百 KB; 最长截 90 秒。录音不出本机。
 //!
 //! 发邮件 / 发到群都是员工在界面上点了才发, 这里没有直接发送的口子。
 
@@ -10,6 +14,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
+use crate::services::meeting_audio;
 use crate::services::meeting_store as store;
 use crate::services::tool_bridge_rpc;
 
@@ -124,6 +129,83 @@ fn update_hotwords(p: &std::path::Path, words: &[String], remove: bool) -> Resul
     Ok(cur)
 }
 
+const CLIP_BEFORE: f64 = 0.3;
+const CLIP_AFTER: f64 = 0.6;
+const CLIP_MAX_SECS: f64 = 90.0;
+
+/// 截一句话的录音: `track` = "system" 截电脑声音那条 (线上会议对方说的), 其余截麦克风那条。返回 WAV 的 base64。
+#[tauri::command]
+pub fn meeting_audio_clip(id: String, start: f64, end: f64, track: Option<String>) -> Result<String, String> {
+    use base64::Engine as _;
+    let root = store::meetings_root(&store::home()?);
+    let audio = store::audio_dir(&root, &id)?;
+    let sys = meeting_audio::system_track_dir(&audio);
+    let dir = if track.as_deref() == Some("system") && !meeting_audio::list_segments(&sys).is_empty() { sys } else { audio };
+    let mut buf = std::io::Cursor::new(Vec::new());
+    cut_clip(&dir, start, end, &mut buf)?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(buf.into_inner()))
+}
+
+/// 从一条音轨 (按序号排好的若干 WAV 分片) 截 [start - 0.3s, end + 0.6s] 写成单声道 16-bit WAV。
+fn cut_clip<W: std::io::Write + std::io::Seek>(dir: &std::path::Path, start: f64, end: f64, out: &mut W) -> Result<(), String> {
+    if !(start.is_finite() && end.is_finite()) || end < start {
+        return Err("这一句的时间不对".into());
+    }
+    let from = (start - CLIP_BEFORE).max(0.0);
+    let to = (end + CLIP_AFTER).min(from + CLIP_MAX_SECS);
+    let segs = meeting_audio::list_segments(dir);
+    if segs.is_empty() {
+        return Err("这场会议的录音不在本机了 (可能被删了), 听不了".into());
+    }
+    let mut samples: Vec<i16> = Vec::new();
+    let mut out_rate: Option<u32> = None;
+    let mut offset = 0.0_f64; // 这个分片开头在整场会议里是第几秒
+    for p in segs {
+        let mut r = hound::WavReader::open(&p).map_err(|e| format!("读录音失败: {e}"))?;
+        let spec = r.spec();
+        let rate = spec.sample_rate.max(1) as f64;
+        let ch = spec.channels.max(1) as usize;
+        let secs = r.duration() as f64 / rate;
+        let (seg_from, seg_to) = ((from - offset).max(0.0), (to - offset).min(secs));
+        if seg_to > seg_from {
+            let rate_now = *out_rate.get_or_insert(spec.sample_rate);
+            if rate_now != spec.sample_rate {
+                return Err("这场会议的录音分片采样率不一致, 截不了".into());
+            }
+            let first = (seg_from * rate).round() as u32;
+            let frames = ((seg_to - seg_from) * rate).round() as usize;
+            r.seek(first).map_err(|e| format!("读录音失败: {e}"))?;
+            let mono: Vec<i16> = match spec.sample_format {
+                hound::SampleFormat::Int if spec.bits_per_sample <= 16 => {
+                    let raw: Vec<i16> = r.samples::<i16>().take(frames * ch).filter_map(Result::ok).collect();
+                    raw.chunks(ch).map(|c| (c.iter().map(|&x| x as i32).sum::<i32>() / c.len() as i32) as i16).collect()
+                }
+                hound::SampleFormat::Int => {
+                    let shift = spec.bits_per_sample.saturating_sub(16);
+                    let raw: Vec<i32> = r.samples::<i32>().take(frames * ch).filter_map(Result::ok).collect();
+                    raw.chunks(ch).map(|c| ((c.iter().map(|&x| x as i64).sum::<i64>() / c.len() as i64) >> shift) as i16).collect()
+                }
+                hound::SampleFormat::Float => {
+                    let raw: Vec<f32> = r.samples::<f32>().take(frames * ch).filter_map(Result::ok).collect();
+                    raw.chunks(ch).map(|c| ((c.iter().sum::<f32>() / c.len() as f32).clamp(-1.0, 1.0) * i16::MAX as f32) as i16).collect()
+                }
+            };
+            samples.extend(mono);
+        }
+        offset += secs;
+        if offset >= to {
+            break;
+        }
+    }
+    let Some(rate) = out_rate else { return Err("这一句的时间超出了录音长度".into()) };
+    let mut w = hound::WavWriter::new(out, hound::WavSpec { channels: 1, sample_rate: rate, bits_per_sample: 16, sample_format: hound::SampleFormat::Int })
+        .map_err(|e| format!("截录音失败: {e}"))?;
+    for v in samples {
+        w.write_sample(v).map_err(|e| format!("截录音失败: {e}"))?;
+    }
+    w.finalize().map_err(|e| format!("截录音失败: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,6 +228,32 @@ mod tests {
         assert!(edit_segment(&p, 9, "x").is_err());
         let doc: Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
         assert_eq!(doc["segments"][1]["text"], "好");
+    }
+
+    fn tone(path: &std::path::Path, secs: u32, rate: u32, value: i16) {
+        let mut w = hound::WavWriter::create(path, hound::WavSpec { channels: 1, sample_rate: rate, bits_per_sample: 16, sample_format: hound::SampleFormat::Int }).unwrap();
+        for _ in 0..secs * rate {
+            w.write_sample(value).unwrap();
+        }
+        w.finalize().unwrap();
+    }
+
+    #[test]
+    fn 截一句_跨分片_前后多留一点() {
+        let d = tempfile::tempdir().unwrap();
+        tone(&d.path().join("seg-0001.wav"), 5, 1000, 100);
+        tone(&d.path().join("seg-0002.wav"), 5, 1000, 200);
+        let mut out = std::io::Cursor::new(Vec::new());
+        cut_clip(d.path(), 4.0, 6.0, &mut out).unwrap();   // 跨两片: 3.7 .. 6.6 秒
+        let mut r = hound::WavReader::new(std::io::Cursor::new(out.into_inner())).unwrap();
+        let v: Vec<i16> = r.samples::<i16>().map(|x| x.unwrap()).collect();
+        assert_eq!(v.len(), 2900);
+        assert_eq!(v[0], 100);
+        assert_eq!(*v.last().unwrap(), 200);
+        let mut sink = std::io::Cursor::new(Vec::new());
+        assert!(cut_clip(d.path(), 20.0, 21.0, &mut sink).is_err());          // 超出录音长度
+        assert!(cut_clip(d.path(), 3.0, 1.0, &mut sink).is_err());            // 时间倒了
+        assert!(cut_clip(&d.path().join("没有"), 0.0, 1.0, &mut sink).is_err()); // 录音不在了
     }
 
     #[test]

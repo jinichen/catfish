@@ -285,3 +285,6 @@ export const meetingTranscriptEdit = (id: string, index: number, text: string) =
 export const meetingHotwordsSaved = () => rawInvoke<string[]>("meeting_hotwords_saved");
 export const meetingHotwordsRemember = (words: string[], remove = false) =>
   rawInvoke<string[]>("meeting_hotwords_remember", { words, remove });
+/** 11/12 听一句: 从会议录音里截 [start, end] (前后多留一点), 返回 WAV 的 base64。track = "system" 截线上会议对方那条 */
+export const meetingAudioClip = (id: string, start: number, end: number, track?: string) =>
+  rawInvoke<string>("meeting_audio_clip", { id, start, end, track: track ?? null });
