@@ -62,6 +62,7 @@ import {
 } from "../../../lib/emailReplyContext";
 import { type Personality } from "../../../lib/agent";
 import { _mergeReplyDraftWithQuote } from "./helpers";
+import RecipientInput from "./RecipientInput";
 import ComposeAttachments, { MAX_ATTACHMENTS_BYTES, type KeptAttachment } from "./ComposeAttachments";
 import type { PickedAttachment } from "../../../lib/tauri";
 
@@ -465,10 +466,10 @@ export default function ComposeCore({
         <span style={{ width: 50, color: "var(--catfish-text-muted)", flex: "0 0 auto" }}>
           收件人
         </span>
-        <input
-          type="text"
+        <RecipientInput
+          ariaLabel="收件人"
           value={composeTo}
-          onChange={(e) => setComposeTo(e.target.value)}
+          onChange={setComposeTo}
           placeholder="alice@x.com, bob@y.com"
           style={{
             flex: 1,
@@ -488,10 +489,10 @@ export default function ComposeCore({
         <span style={{ width: 50, color: "var(--catfish-text-muted)", flex: "0 0 auto" }}>
           抄送
         </span>
-        <input
-          type="text"
+        <RecipientInput
+          ariaLabel="抄送"
           value={composeCc}
-          onChange={(e) => setComposeCc(e.target.value)}
+          onChange={setComposeCc}
           placeholder="可选, 多人逗号分隔"
           style={{
             flex: 1,

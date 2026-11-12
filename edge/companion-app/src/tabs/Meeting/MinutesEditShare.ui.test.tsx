@@ -13,6 +13,7 @@ const api = vi.hoisted(() => ({
   remember: vi.fn(async (w: string[]) => w),
   roomSend: vi.fn(async () => ({ message: {}, sent_to: 3, failed: [] })),
   reveal: vi.fn(async () => undefined),
+  speakers: {} as Record<string, string>,
 }));
 
 vi.mock("../../lib/tauri_meeting", async (orig) => ({
@@ -26,6 +27,11 @@ vi.mock("../../lib/tauri_meeting", async (orig) => ({
   meetingMinutesStage: api.stage,
   meetingTranscriptEdit: api.edit,
   meetingHotwordsRemember: api.remember,
+  meetingSpeakers: vi.fn(async () => api.speakers),
+}));
+vi.mock("../../lib/tauri_wiki_people", () => ({
+  wikiPeopleEmails: vi.fn(async (names: string[]) => ({ people: [], matches: Object.fromEntries(names.map((n) => [n,
+    n === "迟小璐" ? ["cxl@ex.cn"] : n === "陈功" ? ["cg1@ex.cn", "cg2@ex.cn"] : []])) })),
 }));
 vi.mock("../../lib/tauri_services", () => ({ toolBridgeCallTool: vi.fn(async () => ({ ok: true, result: { ok: true } })) }));
 vi.mock("../../lib/tauri_colleague_rooms", () => ({
@@ -38,8 +44,8 @@ vi.mock("../../lib/tauri_colleague_rooms", () => ({
 vi.mock("../../lib/tauri_app", () => ({ revealInFinder: api.reveal, openFile: vi.fn(async () => undefined) }));
 vi.mock("../../lib/tauri_briefing", () => ({ emailAccountsFetch: vi.fn(async () => JSON.stringify([{ name: "工作", address: "me@x.cn", is_default: true }])) }));
 vi.mock("../Email/components/ComposeCore", () => ({
-  default: (p: { initialSubject: string; initialBody: string; initialAttachments: { name: string }[]; account?: string }) => (
-    <div data-testid="compose">{p.initialSubject}|{p.account}|{p.initialAttachments.map((a) => a.name).join(",")}|{p.initialBody.slice(0, 20)}</div>
+  default: (p: { initialTo?: string; initialSubject: string; initialBody: string; initialAttachments: { name: string }[]; account?: string }) => (
+    <div data-testid="compose">{p.initialSubject}|{p.account}|{p.initialAttachments.map((a) => a.name).join(",")}|{p.initialBody.slice(0, 20)}|to={p.initialTo}</div>
   ),
 }));
 
@@ -62,6 +68,7 @@ beforeEach(() => {
     value: { getItem: (k: string) => data.get(k) ?? null, setItem: (k: string, v: string) => void data.set(k, v) },
   });
   api.minutes = { json, markdown, path: "/m/minutes.md" };
+  api.speakers = {};
   Object.values(api).forEach((f) => typeof f === "function" && "mockClear" in f && (f as { mockClear: () => void }).mockClear());
 });
 afterEach(cleanup);
@@ -123,6 +130,24 @@ describe("纪要: 分享", () => {
     const [subject, account, files, body] = (c.textContent ?? "").split("|");
     expect([subject, account, files]).toEqual(["CC RC末次 会议纪要 (2026-11-12)", "me@x.cn", "CC RC末次 会议纪要.docx"]);
     expect(body.startsWith("【CC RC末次】")).toBe(true);
+  });
+
+  it("发邮件: 说话人改过真名 → 知识库里找邮箱填收件人; 没找到 / 两个邮箱的列出来", async () => {
+    api.speakers = { "0": "迟小璐", "1": "陈功", "2": "王五", "3": "迟小璐" };
+    await mount();
+    await act(async () => { fireEvent.click(screen.getByText("发邮件")); });
+    const c = await screen.findByTestId("compose");
+    expect(c.textContent?.endsWith("to=cxl@ex.cn")).toBe(true);
+    expect(screen.getByText("已按说话人从知识库填好: 迟小璐")).toBeTruthy();
+    expect(screen.getByText(/陈功 在知识库里有 2 个邮箱/)).toBeTruthy();
+    expect(screen.getByText(/知识库里没找到邮箱: 王五/)).toBeTruthy();
+  });
+
+  it("发邮件: 说话人没改真名 → 提示去改名", async () => {
+    await mount();
+    await act(async () => { fireEvent.click(screen.getByText("发邮件")); });
+    await screen.findByTestId("compose");
+    expect(screen.getByText(/说话人还是「说话人 1、2……」/)).toBeTruthy();
   });
 
   it("发到协同群: 只列我在的群, 点发送才发, 带 Word", async () => {

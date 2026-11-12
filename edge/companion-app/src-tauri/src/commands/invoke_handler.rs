@@ -288,6 +288,7 @@ pub(crate) fn handler(
             crate::commands::meeting_edit_cmd::meeting_transcript_edit,
             crate::commands::meeting_edit_cmd::meeting_hotwords_saved,
             crate::commands::meeting_edit_cmd::meeting_hotwords_remember,
+            crate::commands::wiki_people::wiki_people_emails,
             // speech (五一 sprint Day 1 方案 C+: ffmpeg 录 + Whisper.cpp 转, 全本地)
             crate::commands::speech::speech_start_recording,
             crate::commands::speech::speech_stop_and_transcribe,

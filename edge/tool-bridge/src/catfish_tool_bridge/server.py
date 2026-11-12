@@ -135,6 +135,10 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
         if method == "wiki/type_defs":
             return _success(req_id, await asyncio.to_thread(wiki_type_defs.view))
         return _success(req_id, await asyncio.to_thread(wiki_type_defs.apply, params))
+    # 11/12: 知识库里的「人 → 邮箱」(wiki_people.py): 写信面板按名字填收件人 / 收件人框给候选。只读本机
+    if method == "wiki/people_emails":
+        from . import wiki_people  # noqa: PLC0415
+        return _success(req_id, await asyncio.to_thread(wiki_people.handle, params))
     if method == "wiki/guard_check":   # 11/08 界面建页 / 改关系前的校验 (相似名 / 关系类型 / 引用不存在的页)
         from . import wiki_guard  # noqa: PLC0415
         return _success(req_id, await asyncio.to_thread(wiki_guard.check, params))

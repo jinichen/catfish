@@ -5,8 +5,23 @@
  *  · 发邮件: 打开跟「邮件」页同一个写信面板 (ComposeCore) —— 主题、正文 (纪要纯文本)、附件 (纪要 Word) 填好,
  *    收件人员工自己填; 存草稿 / 发送跟「邮件」页一样 (发送要点两次确认)。
  *  · 发到协同群: 选群、看一眼要发的文字, 点「发送」才发 (群消息只在员工点了之后才发, CENTRAL-EDGE-DATA-BOUNDARY 第 4 条)。
- * 会议记录里只有「说话人 1、2」, 没有参会人邮箱, 收件人只能员工填。
+ * 收件人 (11/12 第二版): 说话人改过真名的, 按名字去知识库找邮箱 (wiki_people.py) 自动填; 找不到 / 一个名字对上两个邮箱的
+ * 在上面列出来让员工补。收件人框里打字也能从知识库给候选 (RecipientInput)。填进去的员工都看得到、能删, 发送照旧员工点。
  */
+
+/** 说话人名字 → 收件人: 只对上一个邮箱的填进去; 没找到 / 对上好几个的另列 */
+export function recipientsFromSpeakers(names: string[], matches: Record<string, string[]>) {
+  const filled: { name: string; email: string }[] = [];
+  const missing: string[] = [];
+  const ambiguous: { name: string; emails: string[] }[] = [];
+  for (const n of names) {
+    const es = matches[n] ?? [];
+    if (es.length === 1) { if (!filled.some((f) => f.email === es[0])) filled.push({ name: n, email: es[0] }); }
+    else if (es.length > 1) ambiguous.push({ name: n, emails: es });
+    else missing.push(n);
+  }
+  return { filled, missing, ambiguous };
+}
 import { useEffect, useState } from "react";
 
 import { ModalShell } from "../../components/ModalShell";
@@ -14,7 +29,8 @@ import { openFile, revealInFinder } from "../../lib/tauri_app";
 import { emailAccountsFetch } from "../../lib/tauri_briefing";
 import { roomList, roomSend, type RoomSummary } from "../../lib/tauri_colleague_rooms";
 import type { EmailAccountItem } from "../../lib/tauri_cron";
-import { meetingMinutesDocx, meetingMinutesStage, type MeetingMeta } from "../../lib/tauri_meeting";
+import { meetingMinutesDocx, meetingMinutesStage, meetingSpeakers, type MeetingMeta } from "../../lib/tauri_meeting";
+import { wikiPeopleEmails } from "../../lib/tauri_wiki_people";
 import { useAgentStore } from "../../store/agent";
 import { Btn, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
 import ComposeCore from "../Email/components/ComposeCore";
@@ -78,13 +94,28 @@ function EmailDialog({ meta, body, onClose, onDone }: {
   const agentName = useAgentStore((s) => s.name);
   const personality = useAgentStore((s) => s.personality);
   const [account, setAccount] = useState<string | undefined>(undefined);
+  const [to, setTo] = useState("");
+  const [who, setWho] = useState<ReturnType<typeof recipientsFromSpeakers> | null>(null);
+  const [named, setNamed] = useState(true);
   const [attachment, setAttachment] = useState<{ path: string; name: string; size: number } | null>(null);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     // 账号: 默认那个; 附件: 纪要 Word (生成失败就不带附件, 正文照样有纪要)
-    void Promise.allSettled([emailAccountsFetch(), meetingMinutesDocx(meta.id)]).then(([accs, docx]) => {
+    // 收件人: 说话人改过的真名 → 知识库里找邮箱
+    const people = meetingSpeakers(meta.id).then(async (sp) => {
+      const names = [...new Set(Object.values(sp).map((n) => n.trim()).filter(Boolean))];
+      if (!names.length) return { names, matches: {} as Record<string, string[]> };
+      return { names, matches: (await wikiPeopleEmails(names)).matches };
+    });
+    void Promise.allSettled([emailAccountsFetch(), meetingMinutesDocx(meta.id), people]).then(([accs, docx, ppl]) => {
+      if (ppl.status === "fulfilled") {
+        setNamed(ppl.value.names.length > 0);
+        const r = recipientsFromSpeakers(ppl.value.names, ppl.value.matches);
+        setWho(r);
+        setTo(r.filled.map((f) => f.email).join(", "));
+      }
       if (accs.status === "fulfilled") {
         try {
           const list = JSON.parse(accs.value) as EmailAccountItem[];
@@ -101,8 +132,9 @@ function EmailDialog({ meta, body, onClose, onDone }: {
     <ModalShell onClose={onClose} maxWidth={760} themed>
       <div style={{ display: "flex", flexDirection: "column", gap: 8, color: "var(--catfish-text)" }}>
         <strong style={{ fontSize: 15 }}>发邮件 · {meta.title}</strong>
+        <RecipientNote named={named} who={who} />
         <span style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>
-          收件人请自己填 (会议记录里没有参会人的邮箱)。可以先存草稿, 也可以直接发送 —— 发送要点两次确认。
+          收件人框里打名字, 会从知识库里给候选。可以先存草稿, 也可以直接发送 —— 发送要点两次确认。
         </span>
         {error && <span style={{ fontSize: 12, color: "var(--status-warn)" }}>{error}</span>}
         {!ready ? <span style={{ fontSize: 13, color: "var(--catfish-text-muted)" }}>正在准备…</span> : (
@@ -110,6 +142,7 @@ function EmailDialog({ meta, body, onClose, onDone }: {
             <ComposeCore
               isOpen
               onClose={onClose}
+              initialTo={to}
               initialSubject={minutesSubject(meta)}
               initialBody={body}
               initialAttachments={attachment ? [attachment] : []}
@@ -126,6 +159,21 @@ function EmailDialog({ meta, body, onClose, onDone }: {
         )}
       </div>
     </ModalShell>
+  );
+}
+
+function RecipientNote({ named, who }: { named: boolean; who: ReturnType<typeof recipientsFromSpeakers> | null }) {
+  const muted = { fontSize: 12, color: "var(--catfish-text-muted)", lineHeight: 1.6 } as const;
+  if (!named) return <span style={muted}>说话人还是「说话人 1、2……」, 没法按名字找邮箱 —— 在会议页把说话人改成真名并保存, 再点「发邮件」就会自动填。</span>;
+  if (!who) return null;
+  return (
+    <span style={{ ...muted, display: "flex", flexDirection: "column", gap: 2 }}>
+      {who.filled.length > 0 && <span style={{ color: "var(--status-ok)" }}>已按说话人从知识库填好: {who.filled.map((f) => f.name).join("、")}</span>}
+      {who.ambiguous.map((a) => (
+        <span key={a.name} style={{ color: "var(--status-warn)" }}>{a.name} 在知识库里有 {a.emails.length} 个邮箱 ({a.emails.join(" / ")}), 没自动填, 请选一个填进去</span>
+      ))}
+      {who.missing.length > 0 && <span>知识库里没找到邮箱: {who.missing.join("、")} —— 请手动填, 或在知识库里给他们的人物页补上邮箱</span>}
+    </span>
   );
 }
 
