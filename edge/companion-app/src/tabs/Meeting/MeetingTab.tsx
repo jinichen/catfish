@@ -13,6 +13,7 @@ import { cardStyle, ErrorLine } from "../Collab/roomLinkUi";
 import MeetingDetail from "./MeetingDetail";
 import RecorderCard from "./RecorderCard";
 import { STATUS_LABEL } from "./meetingHelpers";
+import { COL_CARD } from "./meetingHelpers";
 
 const EMPTY_ASR: AsrStatus = { installed: null, pack_ready: null, installing: false, transcribing: false };
 
@@ -54,7 +55,7 @@ export default function MeetingTab() {
         <div className="meeting-col" style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)", minHeight: 0, overflowY: "auto",
                                               paddingBottom: "var(--space-4)" }}>
           <RecorderCard onChanged={(id) => void refresh(id)} />
-          <div style={{ ...cardStyle, gap: "var(--space-1)" }}>
+          <div style={{ ...cardStyle, ...COL_CARD, gap: "var(--space-1)" }}>
             <div style={{ fontWeight: 600, fontSize: 13 }}>会议记录</div>
             {meetings.length === 0 && <div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>还没有会议</div>}
             {meetings.map((m) => (
@@ -95,7 +96,7 @@ export default function MeetingTab() {
             }}
           />
         ) : (
-          <div style={{ ...cardStyle, fontSize: 13, color: "var(--catfish-text-muted)" }}>
+          <div style={{ ...cardStyle, ...COL_CARD, fontSize: 13, color: "var(--catfish-text-muted)" }}>
             开一场会: 在左边填参会人数, 点「开始录音」; 录音笔 / 手机录好的会议点「导入录音」。之后在本机转写、区分说话人, 再由小鲶生成纪要和待办。
           </div>
         )}

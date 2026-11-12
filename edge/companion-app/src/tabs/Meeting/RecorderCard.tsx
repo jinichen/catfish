@@ -28,6 +28,7 @@ import { wikiListFiles } from "../../lib/tauri_wiki";
 import { Btn, cardStyle, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
 import { clampLocalSpeakers, mergeHotwords, recorderNotices, systemTrackNotice, wikiHotwords } from "./meetingHelpers";
 import SystemAudioPicker, { type SystemAudioChoice } from "./SystemAudioPicker";
+import { COL_CARD } from "./meetingHelpers";
 
 const SILENT_WARN_SECS = 5;
 
@@ -168,7 +169,7 @@ export default function RecorderCard({ onChanged }: { onChanged: (selectId?: str
     const sys = rec.system;
     const sysNotice = sys ? systemTrackNotice(sys, sysSilentFor, "系统设置 → 隐私与安全性 → 屏幕与系统录音 里打开 Catfish Companion") : null;
     return (
-      <div style={cardStyle}>
+      <div style={{ ...cardStyle, ...COL_CARD }}>
         <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>🔴 录音中 · {formatClock(rec.seconds)}</h3>
         <div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>{sys ? "麦克风 (这边)" : "设备"}: {rec.device}</div>
         {meter(rec.level)}
@@ -197,7 +198,7 @@ export default function RecorderCard({ onChanged }: { onChanged: (selectId?: str
   }
 
   return (
-    <div style={cardStyle}>
+    <div style={{ ...cardStyle, ...COL_CARD }}>
       <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>🎙 新会议</h3>
       <input style={inputStyle} placeholder="会议标题 (可空)" value={title} onChange={(e) => setTitle(e.target.value)} />
       <input

@@ -20,6 +20,7 @@ import AsrSetup from "./AsrSetup";
 import MinutesView from "./MinutesView";
 import TranscriptView from "./TranscriptView";
 import { estimatePercent, STATUS_LABEL } from "./meetingHelpers";
+import { COL_CARD } from "./meetingHelpers";
 
 const PHASE_LABEL: Record<string, string> = {
   loading: "加载模型",
@@ -195,7 +196,7 @@ export default function MeetingDetail({
   }
 
   return (
-    <div style={cardStyle}>
+    <div style={{ ...cardStyle, ...COL_CARD }}>
       {head}
       {body}
       {error && <ErrorLine>{error}</ErrorLine>}

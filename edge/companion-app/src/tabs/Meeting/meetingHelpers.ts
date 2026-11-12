@@ -178,3 +178,7 @@ export function changedWords(orig: string, next: string): string[] {
   }
   return out.slice(0, 5);
 }
+
+/** 11/12: 会议页左右两栏各自滚 (MeetingTab), 栏里的卡片高度跟内容走。roomLinkUi 的 cardStyle 写的是 height: 100%,
+ *  放进固定高度的滚动栏就被钉成一屏高, 内容溢出框外 (纪要框画到一半, 后面的待办 / 转写露在框外)。 */
+export const COL_CARD = { height: "auto", flexShrink: 0 } as const;
