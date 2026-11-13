@@ -303,7 +303,7 @@ except Exception as e:
     logger.warning("admin_proxy 挂载失败: %s", e)
 
 # 11/14: 「政策同步」(/api/facts/*) 整体下线 —— 5/26 起分析步骤拿不到模型一直跑不出结果,
-# 半年没人用; 制度内容现在放资料库, 不写在技能里。PG 里 fact_* 四张表留着不删 (不动客户数据)。
+# 半年没人用; 制度内容现在放资料库, 不写在技能里。PG 里 fact_* 四张表由迁移 20261114_022 删掉。
 
 try:
     from .advisory_router import router as advisory_router  # noqa: PLC0415
