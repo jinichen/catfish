@@ -38,7 +38,7 @@ import DocVersions from "./DocVersions";
 import { ReviseStartButton, ReviseStartDialog, hiddenReviseStatus, useReviseDetect, type ReviseSource } from "./reviseUi";
 import { hiddenFormStatus } from "./roomForms";
 import { Confirm, InfoEditor, RetentionDialog, SearchPanel, daysLabel } from "./RoomsExtras";
-import { AttachButton, DeliveryLine, IssueBar, PickedChips, RoomFileList, pickFiles, stageFiles, type PickedFile } from "./RoomsDelivery";
+import { AttachButton, DeliveryLine, IssueBar, PickedChips, QuietDeliveryContext, RoomFileList, lastQuietDelivery, pickFiles, stageFiles, type PickedFile } from "./RoomsDelivery";
 import { STATE_WORD, cardStates, expectHint, latestDeadline, parseChatTask, summaryText, type ChatTask, type SingleTask } from "./roomTasks";
 import RoomTasksBoard, { tasksButtonLabel, type RoomTasksData } from "./RoomTasksBoard";
 import TaskProgress from "./TaskProgress";
@@ -173,8 +173,7 @@ export default function RoomsPanel() {
               💬 群聊
             </strong>
             <span style={{ display: "flex", gap: 4 }}>
-              <Btn kind="ghost" onClick={() => setKeeping(true)}>记录保留</Btn>
-              <Btn kind="primary" onClick={() => setCreating(true)}>建群</Btn>
+              <Btn kind="ghost" onClick={() => setCreating(true)}>＋ 建群</Btn>
             </span>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6, overflowY: "auto", minHeight: 0, flex: 1 }}>
@@ -182,7 +181,7 @@ export default function RoomsPanel() {
             {rooms.map((r) => <RoomRow key={r.room_id} r={r} on={r.room_id === open} onClick={() => { setNotice(undefined); setOpen(r.room_id); }} />)}
           </div>
         </div>
-        {open ? <RoomView key={open} roomId={open} notice={notice} onNotice={setNotice} /> : (
+        {open ? <RoomView key={open} roomId={open} notice={notice} onNotice={setNotice} onKeep={() => setKeeping(true)} /> : (
           <div style={{ ...muted, alignSelf: "center", justifySelf: "center" }}>选一个群, 或者建一个新群。</div>
         )}
       </div>
@@ -214,7 +213,7 @@ function RoomRow({ r, on, onClick }: { r: RoomSummary; on: boolean; onClick: () 
   );
 }
 
-function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: string; onNotice: (n?: string) => void }) {
+function RoomView({ roomId, notice, onNotice, onKeep }: { roomId: string; notice?: string; onNotice: (n?: string) => void; onKeep: () => void }) {
   const { version } = useColleagueRooms();
   const { incoming } = useColleagueTasks();
   const [d, setD] = useState<RoomDetail | null>(null);
@@ -413,11 +412,11 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
           <div style={{ minWidth: 0 }}>
             <strong style={{ fontSize: "var(--text-sm)" }}>{room.name}</strong>
             <span style={{ ...muted, marginLeft: 8 }}>{room.joined} 人{room.members > room.joined ? ` · ${room.members - room.joined} 人还没加入` : ""}</span>
-            {room.retention && (
-              <span style={{ ...muted, marginLeft: 8 }} title="记录只存在你这台电脑上, 到期自动删掉; 取公司规定 / 群主 / 你自己设的里最短的那个">
-                · 记录保留 {daysLabel(room.retention.days)} ({room.retention.label})
-              </span>
-            )}
+            {/* 11/13: 保留期只在这里说一次, 点它就是设置 (原来左边还有个「记录保留」按钮) */}
+            <button type="button" onClick={onKeep} title="记录只存在你这台电脑上, 到期自动删掉; 取公司规定 / 群主 / 你自己设的里最短的那个。点这里设置"
+                    style={{ ...muted, marginLeft: 8, border: "none", background: "transparent", cursor: "pointer", padding: 0, textDecoration: "underline dotted" }}>
+              {room.retention ? `记录保留 ${daysLabel(room.retention.days)} (${room.retention.label})` : "记录保留"}
+            </button>
             {room.purpose && <div style={{ ...muted, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                                   title={room.purpose}>📌 {room.purpose}</div>}
           </div>
@@ -451,7 +450,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
               加载更早的 ({olderLeft ?? d.older} 条)
             </button>
           )}
-          {visibleMessages(shown).map((m) => (<Fragment key={m.msg_id}>
+          <QuietDeliveryContext.Provider value={lastQuietDelivery(shown)}>{visibleMessages(shown).map((m) => (<Fragment key={m.msg_id}>
             {jump !== null && m.seq === jump && (
               <span id={`room-msg-${jump}`} style={{ ...muted, color: "var(--catfish-cyan)" }}>↓ 搜到的这条</span>
             )}
@@ -481,7 +480,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
                       roomId={roomId} onChanged={() => void load()} onRevise={joined ? (src) => setReviseUi({ start: src }) : undefined}
                       onReply={joined && m.kind === "text" ? () => setReplyTo(m) : undefined} />
             )}
-          </Fragment>))}
+          </Fragment>))}</QuietDeliveryContext.Provider>
           <div ref={bottom} />
         </div>
 
@@ -551,7 +550,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
                         if (files.length) { e.preventDefault(); void addPicked(files); }
                       }}
                       onChange={(e) => { setText(e.target.value); setAtOpen(e.target.value.endsWith("@")); }}
-                      placeholder={dragOver ? "松手, 把文件加到这条消息里" : "说点什么 · Enter 发送 · @ 提醒某人 · 文件可以直接拖进来 · 要派任务就照常说, 如「@张三 周五前交拜访记录」, 再点「派给@的人」"}
+                      placeholder={dragOver ? "松手, 把文件加到这条消息里" : "说点什么, Enter 发送"}
                       style={{ ...inputStyle, resize: "none",
                                ...(dragOver ? { borderColor: "var(--catfish-cyan)", boxShadow: "0 0 0 2px var(--catfish-cyan)" } : {}) }} />
             {asTask && (
@@ -589,7 +588,7 @@ function RoomView({ roomId, notice, onNotice }: { roomId: string; notice?: strin
                 <Btn kind="ghost" disabled={Boolean(helping)} onClick={() => setHelpOpen((v) => !v)}>
                   {helping ? "🐟 小鲶在写…" : "🐟 小鲶"}
                 </Btn>
-                <Btn kind="ghost" onClick={() => setAtOpen((v) => !v)}>@</Btn>
+                <span title="@ 提醒某人。要派任务就照常说, 如「@张三 周五前交拜访记录」, 再点出现的「派给@的人」"><Btn kind="ghost" onClick={() => setAtOpen((v) => !v)}>@</Btn></span>
                 <AttachButton disabled={busy} onPick={(l) => void addPicked(l)} />
                 <ReviseStartButton disabled={busy} onStaged={(src) => setReviseUi({ start: src })} onError={setError} />
                 {asTask && (

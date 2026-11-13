@@ -9,11 +9,12 @@
  *   - 中央太旧是整个群的事: 群名下面一条细横条说一次, 不在每条消息上重复。
  * 群文件: 消息下面一个文件一行, 收齐了「打开」(写到 ~/Downloads/鲶鱼群文件/<群名>/ 再用默认程序开, 员工自己点的)。
  */
-import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ChangeEvent } from "react";
 
 import { openFile, revealInFinder } from "../../lib/tauri_app";
 import { roomFileRetry, roomFileSave, roomResend, roomStage, type Delivery, type RoomFile, type RoomMember } from "../../lib/tauri_colleague_rooms";
 import { muted } from "./formsUi";
+import { _splitFilename } from "../Email/components/helpers";
 
 const MAX_FILES = 5;
 /** 11/07 合计 5MB 以内走邮筒分块; 超过走中央暂存一份 (单个 / 合计 200MB, 跟中央默认上限一致) */
@@ -52,16 +53,32 @@ export function deliveryLines(rows: Delivery[], members: RoomMember[], hasFiles 
 
 const link = { border: "none", background: "transparent", cursor: "pointer", fontSize: 11, padding: 0, color: "var(--catfish-cyan)" } as const;
 
+/** 「等对方打开新版 / 等中央升级后自动补发」这种不用员工管的, 只挂在群里最后一条有这情况的消息下面
+ *  (RoomsPanel 给出那条的 msg_id)。原来每条消息下面都重复同一句, 版本越多越吵 (11/13)。
+ *  没送到 / 正在发 照旧每条都显示 —— 那是这一条自己的事。没有 Provider (单独渲染一条) 时全显示。 */
+export const QuietDeliveryContext = createContext<string | null | undefined>(undefined);
+const QUIET: Delivery["state"][] = ["nokey", "too_old"];
+/** 群里最后一条带「自动补发」的消息。纯函数, 测试用。 */
+export function lastQuietDelivery(messages: { msg_id: string; delivery?: Delivery[] }[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].delivery?.some((r) => QUIET.includes(r.state))) return messages[i].msg_id;
+  }
+  return null;
+}
+
 export function DeliveryLine({ roomId, msgId, rows, members, hasFiles, align, onChanged }: {
   roomId: string; msgId: string; rows: Delivery[] | undefined; members: RoomMember[]; hasFiles?: boolean;
   align: "flex-start" | "flex-end" | "center"; onChanged: () => void;
 }) {
+  const quietAt = useContext(QuietDeliveryContext);
+  const all = rows;
+  if (quietAt !== undefined && quietAt !== msgId) rows = rows?.filter((r) => !QUIET.includes(r.state));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [delivered, setDelivered] = useState(false);
-  const had = useRef(Boolean(rows?.length));
+  const had = useRef(Boolean(all?.length));
   useEffect(() => {
-    const now = Boolean(rows?.length);
+    const now = Boolean(all?.length);
     if (had.current && !now) {   // 刚补发成功: 「已送到」亮 3 秒
       setDelivered(true);
       const t = setTimeout(() => setDelivered(false), 3000);
@@ -69,7 +86,7 @@ export function DeliveryLine({ roomId, msgId, rows, members, hasFiles, align, on
       return () => clearTimeout(t);
     }
     had.current = now;
-  }, [rows]);
+  }, [all]);
   if (delivered) return <span style={{ ...muted, alignSelf: align, color: "var(--status-ok, #059669)" }}>✓ 已送到</span>;
   if (!rows?.length) return null;
   async function resend(email?: string) {
@@ -118,8 +135,10 @@ export function fileState(f: RoomFile): string {
 }
 
 /** 消息里的文件: 一个一行。mine = 我发的 (气泡是主色, 字是白的)。 */
-export function RoomFileList({ roomId, files, mine, onRevise }: {
+export function RoomFileList({ roomId, files, mine, onRevise, tagOf }: {
   roomId: string; files: RoomFile[]; mine: boolean;
+  /** 文件名前面的小标签 + 悬停说明 (合并版卡片: 干净版 / 修订版 —— 两个文件名几乎一样, 截断后分不出来) */
+  tagOf?: (f: RoomFile) => { tag: string; tip?: string } | undefined;
   /** 11/11 「请大家修改」: 拿这份文件发起一轮一起改 (只在群里的聊天消息上有) */
   onRevise?: (f: RoomFile) => void;
 }) {
@@ -146,8 +165,17 @@ export function RoomFileList({ roomId, files, mine, onRevise }: {
         <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 12,
                                  padding: "4px 8px", borderRadius: 6, background: mine ? "rgba(255,255,255,0.16)" : "var(--catfish-bg-elevated)",
                                  border: mine ? "1px solid rgba(255,255,255,0.3)" : "1px solid var(--catfish-border)" }}>
-          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 260 }} title={f.name}>
-            📄 {f.name}
+          {tagOf?.(f) && (
+            <span title={tagOf(f)!.tip} style={{ flex: "0 0 auto", padding: "0 6px", borderRadius: 8, fontSize: 11, lineHeight: "18px",
+                                                 border: "1px solid var(--catfish-border)", color: "var(--catfish-text-muted)" }}>
+              {tagOf(f)!.tag}
+            </span>
+          )}
+          {/* 名字太长省中间、留结尾 + 扩展名 (同一批文件常常只有结尾不同) */}
+          <span style={{ minWidth: 0, display: "flex", maxWidth: 300 }} title={f.name}>
+            <span style={{ flex: "0 0 auto" }}>📄&nbsp;</span>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{_splitFilename(f.name)[0]}</span>
+            {_splitFilename(f.name)[1] && <span style={{ flex: "0 0 auto", whiteSpace: "nowrap" }}>{_splitFilename(f.name)[1]}</span>}
           </span>
           <span style={{ opacity: 0.75 }}>{sizeLabel(f.size)}</span>
           {f.have && (

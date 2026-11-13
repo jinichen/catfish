@@ -23,6 +23,13 @@ import type { ReviseSource } from "./reviseUi";
 const link = { border: "none", background: "transparent", cursor: "pointer", fontSize: 11, padding: 0, color: "var(--catfish-cyan)" } as const;
 const oneLine = { ...muted, alignSelf: "center", maxWidth: "90%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as const;
 
+/** 合并版卡片里两个文件的标签。说明放在悬停里 —— 原来是卡片下面一行字, 每出一版重复一遍 (11/13)。 */
+function mergedTag(f: { name: string }): { tag: string; tip: string } {
+  return f.name.includes("修订版")
+    ? { tag: "修订版", tip: "打开就能看到谁改了哪里, 可以在 Word / WPS 里一条条接受或拒绝" }
+    : { tag: "干净版", tip: "已经合好的最终稿, 不带修改痕迹" };
+}
+
 export default function RoomReviseMessage({ m, me, members, roomId, tick, onChanged, onNotice, onMerge, onVersions, onRevise }: {
   m: RoomMessage; me: string; members: RoomMember[]; roomId: string;
   /** 群消息变了 (有人交回 / 状态变了) 就重取进度 */
@@ -60,7 +67,7 @@ export default function RoomReviseMessage({ m, me, members, roomId, tick, onChan
         <div style={{ maxWidth: "78%", padding: "6px 10px", borderRadius: 10, fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-word",
                       border: "1px solid var(--status-ok, #059669)", background: "var(--catfish-bg-subtle, rgba(0,0,0,0.03))" }}>
           {m.text}
-          {m.files?.length ? <RoomFileList roomId={roomId} files={m.files} mine={false} /> : null}
+          {m.files?.length ? <RoomFileList roomId={roomId} files={m.files} mine={false} tagOf={mergedTag} /> : null}
           <span style={{ display: "flex", gap: 10, marginTop: 4 }}>
             <button type="button" style={link} onClick={() => onVersions(st.doc_id)}>版本记录</button>
             {clean?.have && (
@@ -71,9 +78,6 @@ export default function RoomReviseMessage({ m, me, members, roomId, tick, onChan
             )}
           </span>
         </div>
-        {m.files?.some((f) => f.name.includes("修订版")) && (
-          <span style={muted}>「修订版」打开就能看到谁改了哪里, 可以在 Word / WPS 里一条条接受或拒绝</span>
-        )}
         <DeliveryLine roomId={roomId} msgId={m.msg_id} rows={m.delivery} members={members} align={mine ? "flex-end" : "flex-start"} onChanged={onChanged} />
       </div>
     );
@@ -162,17 +166,9 @@ function ReviseCardView({ m, me, members, roomId, tick, onChanged, onNotice, onM
   const waiting = people.filter((p) => p.state === "pending" || p.state === "editing").length;
   const lateCount = (pr?.people ?? []).filter((p) => p.after_merge).length;
   const side = mine ? "flex-end" : "flex-start";
-  // 11/11 鸿波「太复杂了」: 合并版发出、也没有迟到的 → 收成一行, 不再挂按钮
-  if (pr?.merged && !lateCount) {
-    return (
-      <div style={{ display: "flex", flexDirection: "column", alignItems: side, gap: 2 }}>
-        <span style={{ ...muted, display: "flex", gap: 8 }}>
-          <span>📝 《{c.title}》已出 v{pr.merged.version}</span>
-          <button type="button" style={link} onClick={() => onVersions(c.doc_id)}>版本记录</button>
-        </span>
-      </div>
-    );
-  }
+  // 合并版发出、也没有迟到的 → 这张卡片不再显示: 群里已经有那条「vN 合并版」(带文件和版本记录)。
+  // 11/11 先是收成一行「已出 vN · 版本记录」, 但它紧挨着合并版那条, 说的是同一件事 (11/13)。
+  if (pr?.merged && !lateCount) return null;
   const returned = my && (my.state === "returned" || my.state === "unchanged");
   // 每种状态一个主按钮, 其余收进「更多」
   const primary: { label: string; run: () => void; off?: boolean } | null = ended ? null

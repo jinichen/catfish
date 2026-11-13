@@ -5,7 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../lib/colleagueRoomsStore", () => ({ refreshRooms: vi.fn(), refreshRevisePending: vi.fn(async () => undefined),
                                                    setActiveRoom: vi.fn(), useColleagueRooms: () => ({}) }));
-vi.mock("./RoomsDelivery", () => ({ DeliveryLine: () => null, RoomFileList: () => null, stageFiles: vi.fn() }));
+// RoomFileList 只画出每个文件的标签 (干净版 / 修订版), 别的不关这里的事
+vi.mock("./RoomsDelivery", () => ({
+  DeliveryLine: () => null, stageFiles: vi.fn(),
+  RoomFileList: ({ files, tagOf }: { files: { id: string; name: string }[]; tagOf?: (f: { name: string }) => { tag: string; tip?: string } | undefined }) =>
+    files.map((f) => <span key={f.id} title={tagOf?.(f)?.tip}>{tagOf?.(f)?.tag}</span>),
+}));
 vi.mock("../../lib/tauri_app", () => ({ openFile: vi.fn(async () => undefined) }));
 const api = vi.hoisted(() => ({
   reviseProgress: vi.fn(), reviseOpen: vi.fn(), reviseReturn: vi.fn(), reviseDecline: vi.fn(), reviseRemind: vi.fn(),
@@ -122,13 +127,11 @@ describe("RoomReviseMessage", () => {
     expect(screen.getByText("选你改的文件, 一起合")).toBeTruthy();
   });
 
-  it("合并版发出后卡片收成一行, 不再有按钮; 有人迟交才重新出现合并", async () => {
+  it("合并版发出后这张卡片不再显示 (群里有「vN 合并版」那条); 有人迟交才重新出现合并", async () => {
     api.reviseProgress.mockResolvedValue(progress({ owner: true, me: "zhou@example.com", my_state: null, can_merge: true,
       merged: { version: 2, at: "x", msg_id: "m_m" } }));
-    const { unmount } = render(<RoomReviseMessage m={msg} me="zhou@example.com" {...props} />);
-    await screen.findByText("📝 《实施方案》已出 v2");
-    expect(screen.getByText("版本记录")).toBeTruthy();
-    expect(screen.queryByText("更多")).toBeNull();
+    const { unmount, container } = render(<RoomReviseMessage m={msg} me="zhou@example.com" {...props} />);
+    await waitFor(() => expect(container.textContent).toBe(""));
     unmount();
     api.reviseProgress.mockResolvedValue(progress({ owner: true, me: "zhou@example.com", my_state: null, can_merge: true,
       merged: { version: 2, at: "x", msg_id: "m_m" },
@@ -146,7 +149,10 @@ describe("RoomReviseMessage", () => {
     render(<RoomReviseMessage m={merged} me="li@example.com" {...props} onRevise={onRevise} />);
     fireEvent.click(screen.getByText("在这一版上再请大家改"));
     expect(onRevise).toHaveBeenCalledWith({ msg_id: "m_m", file_id: "f_c", name: "实施方案 v2.docx", doc_id: card.doc_id, version: 2 });
-    expect(screen.getByText(/修订版」打开就能看到谁改了哪里/)).toBeTruthy();
+    // 两个文件各带标签 (名字截断后分不出来); 修订版的说明在悬停里, 不再是卡片下面一行字
+    expect(screen.getByText("修订版").getAttribute("title")).toMatch(/打开就能看到谁改了哪里/);
+    expect(screen.getByText("干净版")).toBeTruthy();
+    expect(screen.queryByText(/修订版」打开就能看到/)).toBeNull();
   });
 });
 

@@ -67,3 +67,19 @@ describe("pickFiles / stageFiles (11/07 大文件: 单个 / 合计 200MB, 发送
     expect(fileState({ ...base, have: false, got: 3 })).toBe("接收中 3/40");
   });
 });
+
+
+// 11/13: 「打开后自动补发」只挂在群里最后一条有这情况的消息下面
+import { lastQuietDelivery } from "./RoomsDelivery";
+
+describe("lastQuietDelivery", () => {
+  const d = (state: "nokey" | "too_old" | "failed" | "sending") => [{ email: "zhang@example.com", state }];
+  it("取最后一条带 nokey / too_old 的; 没送到、正在发不算", () => {
+    expect(lastQuietDelivery([
+      { msg_id: "m1", delivery: d("nokey") }, { msg_id: "m2", delivery: d("too_old") },
+      { msg_id: "m3", delivery: d("failed") }, { msg_id: "m4" },
+    ])).toBe("m2");
+    expect(lastQuietDelivery([{ msg_id: "m1", delivery: d("sending") }])).toBeNull();
+    expect(lastQuietDelivery([])).toBeNull();
+  });
+});
