@@ -92,12 +92,117 @@ pre,code{white-space:pre-wrap;word-break:break-word;}
 a{word-break:break-all;}
 </style>`;
 
+/** 附件占位小标签 (后端 rfc822_util.replace_attachment_objects 给的 class)。 */
+const CHIP_CSS = `<style>
+.catfish-attach-chip{display:inline-block;padding:3px 10px;margin:4px 6px 4px 0;border:1px solid #DCE5E6;border-radius:6px;background:#F3F6F6;color:#0E6169;font-size:12px;}
+</style>`;
+
+/** 跟随鲶鱼深浅色的那套。色值抄自 styles/tokens.css (iframe 是另一个文档, 拿不到
+ *  父页面的 CSS 变量; emailSrcDoc.test.ts 钉着两边一致)。浅色下仍是白底, 跟以前一样。 */
+export const THEME_DARK = { bg: "#0C1317", text: "#ECEAE2", link: "#22A4B0", border: "#2B3E47", chipBg: "#19262D" };
+const THEMED_CSS = `<meta name="color-scheme" content="light dark"><style>
+html,body{color:#14232A;}
+@media (prefers-color-scheme: dark){
+html,body{background:${THEME_DARK.bg};color:${THEME_DARK.text};}
+a{color:${THEME_DARK.link};}
+blockquote,hr{border-color:${THEME_DARK.border};}
+.catfish-attach-chip{background:${THEME_DARK.chipBg};border-color:${THEME_DARK.border};color:${THEME_DARK.link};}
+}
+</style>`;
+
+type Rgb = [number, number, number];
+
+/** CSS 颜色值 → RGB; "keep" = 不带具体颜色 (inherit 之类); null = 认不出。 */
+function parseColor(raw: string): Rgb | "keep" | null {
+  const v = raw.replace(/!important/i, "").trim().toLowerCase();
+  if (/^(inherit|initial|unset|currentcolor|transparent|none)$/.test(v)) return "keep";
+  if (v === "black") return [0, 0, 0];
+  if (v === "white") return [255, 255, 255];
+  let m = v.match(/^#([0-9a-f]{3})$/);
+  if (m) return [...m[1]].map((c) => parseInt(c + c, 16)) as Rgb;
+  m = v.match(/^#([0-9a-f]{6})(?:[0-9a-f]{2})?$/);
+  if (m) return [0, 2, 4].map((i) => parseInt(m![1].slice(i, i + 2), 16)) as Rgb;
+  m = v.match(/^rgba?\(\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*(?:[,/]\s*[\d.]+%?\s*)?\)$/);
+  if (m) return [Number(m[1]), Number(m[2]), Number(m[3])];
+  return null;
+}
+
+const luminance = ([r, g, b]: Rgb) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+
+/** 文字颜色: "strip" = 近黑 (就是"默认黑字", 去掉后跟主题走); "keep" = 深底上也看得清;
+ *  null = 深底上看不清或认不出 → 这封不跟主题。 */
+function judgeTextColor(raw: string): "strip" | "keep" | null {
+  const c = parseColor(raw);
+  if (c === null) return null;
+  if (c === "keep") return "keep";
+  if (Math.max(...c) <= 0x40) return "strip";
+  return luminance(c) >= 0.45 ? "keep" : null;
+}
+
+/** 背景: 白底去掉; 别的颜色 / 图片 → 这封有自己的版式, 不跟主题。 */
+function judgeBackground(raw: string): "strip" | "keep" | null {
+  if (/url\(/i.test(raw)) return null;
+  const c = parseColor(raw);
+  if (c === null) return null;
+  if (c === "keep") return "keep";
+  return Math.min(...c) >= 0xf0 ? "strip" : null;
+}
+
+/** 一封「只有字」的 HTML 邮件 (Apple Mail / Outlook 写的普通信) → 去掉写死的黑字白底,
+ *  好让它跟随鲶鱼的深浅色; 有自己版式的 (表格 / 图片 / 样式表 / 底色 / 深色字) 返回 null,
+ *  照旧白底显示。
+ *
+ *  判不准一律返回 null: 白底只是不好看, 深底配深字是看不见。
+ */
+export function themeableHtml(html: string): string | null {
+  if (!html) return null;
+  if (/<(style|table|img|link|svg|video|canvas)\b/i.test(html)) return null;
+  if (/\sbackground\s*=/i.test(html)) return null;
+  let ok = true;
+  const cleanStyle = (css: string): string =>
+    css
+      .split(";")
+      .map((decl) => {
+        const i = decl.indexOf(":");
+        if (i < 0) return decl;
+        const prop = decl.slice(0, i).trim().toLowerCase();
+        const value = decl.slice(i + 1);
+        let verdict: "strip" | "keep" | null = "keep";
+        if (prop === "color") verdict = judgeTextColor(value);
+        else if (prop === "background-color" || prop === "background") verdict = judgeBackground(value);
+        else if (prop === "background-image") verdict = /^\s*none\s*$/i.test(value) ? "keep" : null;
+        if (verdict === null) ok = false;
+        return verdict === "strip" ? "" : decl;
+      })
+      .filter((d) => d.trim())
+      .join(";");
+  let out = html.replace(/(\sstyle\s*=\s*)(["'])([\s\S]*?)\2/gi, (_m, pre, q, css) => `${pre}${q}${cleanStyle(css)}${q}`);
+  // <font color> / <body text> 写的字色, <body bgcolor> 写的底色
+  out = out.replace(/\s(color|text|bgcolor)\s*=\s*(?:(["'])(.*?)\2|([^\s>]+))/gi, (m, attr, _q, quoted, bare) => {
+    const value = quoted ?? bare ?? "";
+    const verdict = attr.toLowerCase() === "bgcolor" ? judgeBackground(value) : judgeTextColor(value);
+    if (verdict === null) ok = false;
+    return verdict === "strip" ? "" : m;
+  });
+  return ok ? out : null;
+}
+
+/** 正文最前面的空行 (Apple Mail 发出的信开头常有一个空 div) 去掉, 免得正文上面空一截。 */
+function trimLeadingBlank(html: string): string {
+  const blank = String.raw`(?:\s|&nbsp;|<br\s*/?>|<div[^>]*>(?:\s|&nbsp;|<br\s*/?>)*</div>)+`;
+  const afterBody = new RegExp(String.raw`(<body\b[^>]*>)` + blank, "i");
+  if (afterBody.test(html)) return html.replace(afterBody, "$1");
+  return /<body\b/i.test(html) ? html : html.replace(new RegExp("^" + blank, "i"), "");
+}
+
 export function buildEmailSrcDoc(
   bodyHtml: string,
   opts: { allowRemote?: boolean } = {},
 ): string {
   const csp = opts.allowRemote ? BLOCK_SCRIPTS_ONLY : BLOCK_ALL_REMOTE;
+  const trimmed = trimLeadingBlank(bodyHtml);
+  const themed = themeableHtml(trimmed);
   // meta CSP 必须在任何会发请求的东西之前 —— 浏览器是边解析边加载的,
   // 排在图片后面就等于没拦。
-  return `${csp}<base target="_blank">${DEFAULT_CSS}${bodyHtml}`;
+  return `${csp}<base target="_blank">${DEFAULT_CSS}${CHIP_CSS}${themed !== null ? THEMED_CSS : ""}${themed ?? trimmed}`;
 }

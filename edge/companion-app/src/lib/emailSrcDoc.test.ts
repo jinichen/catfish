@@ -73,3 +73,63 @@ describe("buildEmailSrcDoc", () => {
     expect(doc.indexOf("<style>")).toBeLessThan(doc.indexOf("<p>正文</p>"));
   });
 });
+
+// 11/13: 只有字的信跟随深浅色; 判不准就照旧白底 (深底配深字是看不见)。
+import { readFileSync } from "node:fs";
+import { THEME_DARK, themeableHtml } from "./emailSrcDoc";
+
+// Apple Mail 写的普通信的真实结构 (内容是假的): 每段都写死黑字
+const APPLE_PLAIN =
+  '<html><head></head><body style="overflow-wrap: break-word;"><div class="Apple-Mail-URLShareUserContentTopClass"><br></div>' +
+  '<p style="margin: 0px"><font face="PingFang SC" size="3" color="#000000" style="font: 12.0px \'PingFang SC\'; color: #000000; -webkit-text-stroke: 0px #000000">张工：</font></p>' +
+  '<p style="margin: 0px; font: 12.0px Helvetica; color: rgb(0, 0, 0); background-color: #ffffff">附件是本期材料。</p></body></html>';
+
+describe("themeableHtml", () => {
+  it("普通信: 去掉写死的黑字白底, 别的样式留着", () => {
+    const out = themeableHtml(APPLE_PLAIN)!;
+    expect(out).not.toBeNull();
+    expect(out).not.toMatch(/(?<![-\w])color\s*[:=]/i);
+    expect(out).not.toContain("background-color");
+    expect(out).toContain("font: 12.0px 'PingFang SC'");
+    expect(out).toContain("-webkit-text-stroke: 0px #000000");
+    expect(out).toContain("张工：");
+  });
+
+  it("深底上看得清的强调色留着 (红字提醒)", () => {
+    const out = themeableHtml('<p>请于 <span style="color: #ff4d4f">周五前</span> 回复</p>');
+    expect(out).toContain("color: #ff4d4f");
+  });
+
+  it.each([
+    ["表格版式", "<table><tr><td>x</td></tr></table>"],
+    ["自带样式表", "<style>p{color:#333}</style><p>x</p>"],
+    ["有图", '<p>x</p><img src="data:image/png;base64,AA">'],
+    ["有底色", '<div style="background-color: #1a73e8">x</div>'],
+    ["背景图", '<div style="background: url(data:image/png;base64,AA)">x</div>'],
+    ["深色字 (深底上看不清)", '<p style="color: #00008b">x</p>'],
+    ["认不出的颜色写法", '<p style="color: hsl(240 100% 20%)">x</p>'],
+    ["body bgcolor", '<body bgcolor="#336699"><p>x</p></body>'],
+    ["font 深色", '<font color="navy">x</font>'],
+  ])("%s → 不跟主题, 照旧白底", (_name, html) => {
+    expect(themeableHtml(html)).toBeNull();
+    expect(buildEmailSrcDoc(html)).not.toContain("prefers-color-scheme");
+  });
+
+  it("跟主题的信: 文档里带深色那套, 正文最前面的空行去掉", () => {
+    const doc = buildEmailSrcDoc(APPLE_PLAIN);
+    expect(doc).toContain("prefers-color-scheme: dark");
+    expect(doc).not.toContain("Apple-Mail-URLShareUserContentTopClass");
+    expect(doc.indexOf("Content-Security-Policy")).toBeLessThan(doc.indexOf("<style>"));
+  });
+
+  it("深色色值跟 tokens.css 一致 (iframe 拿不到父页面的变量, 只能抄一份)", () => {
+    const css = readFileSync(new URL("../styles/tokens.css", import.meta.url), "utf8");
+    const dark = css.slice(css.indexOf("@media (prefers-color-scheme: dark)"));
+    const token = (name: string) => dark.match(new RegExp(`--catfish-${name}:\\s*(#[0-9A-Fa-f]{6})`))![1].toUpperCase();
+    expect(THEME_DARK.bg).toBe(token("bg"));
+    expect(THEME_DARK.text).toBe(token("text"));
+    expect(THEME_DARK.link).toBe(token("cyan"));
+    expect(THEME_DARK.border).toBe(token("border"));
+    expect(THEME_DARK.chipBg).toBe(token("bg-elevated"));
+  });
+});

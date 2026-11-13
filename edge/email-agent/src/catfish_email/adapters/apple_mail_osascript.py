@@ -196,6 +196,61 @@ def _parse_thread_headers(raw_headers: str) -> tuple[str | None, str | None, str
     )
 
 
+# Mail 的 `all headers` 会把常见头名换成系统语言 (中文系统给的是「收件人:」「抄送:」,
+# 真机 11/13 实测), 所以两种写法都认。
+_ADDRESS_HEADER_NAMES = {
+    "to": "to", "收件人": "to", "收件者": "to", "宛先": "to",
+    "cc": "cc", "抄送": "cc", "副本": "cc",
+}
+
+
+def _parse_address_headers(raw_headers: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """从 raw headers 取 (收件人, 抄送), 每个是 ``显示名 <地址>`` 或裸地址。
+
+    11/13: 列表以前不带收件人 —— 已发送里每封的发件人都是自己, 同主题发给
+    不同人的几封在列表里分不出来。`all headers` 列表本来就取了, 这里只是多认两行。
+    跟 _parse_thread_headers 一样逐行扫 (email.parser 遇到裸行会提前收尾, 见上)。
+    """
+    if not raw_headers:
+        return ((), ())
+    from email.header import decode_header, make_header
+    from email.utils import getaddresses
+
+    want: dict[str, list[str]] = {"to": [], "cc": []}
+    cur: str | None = None
+    try:
+        for line in raw_headers.splitlines():
+            if line[:1] in (" ", "\t"):
+                if cur is not None:
+                    want[cur][-1] += " " + line.strip()
+                continue
+            cur = None
+            idx = line.find(":")
+            if idx <= 0:
+                continue
+            name = _ADDRESS_HEADER_NAMES.get(line[:idx].strip().lower())
+            if name:
+                want[name].append(line[idx + 1 :].strip())
+                cur = name
+
+        def clean(values: list[str]) -> tuple[str, ...]:
+            out: list[str] = []
+            for display, addr in getaddresses(values):
+                if not addr:
+                    continue
+                try:
+                    display = str(make_header(decode_header(display))) if display else ""
+                except Exception:  # noqa: BLE001  坏编码: 留原样, 地址还在
+                    pass
+                out.append(f"{display} <{addr}>" if display else addr)
+            return tuple(out)
+
+        return (clean(want["to"]), clean(want["cc"]))
+    except Exception as e:  # noqa: BLE001
+        logger.debug("_parse_address_headers fail: %s", e)
+        return ((), ())
+
+
 def _read_thread_headers_from_source_file(source_path: str) -> tuple[str | None, str | None, str | None]:
     """从 read_message AS dump 出的 RFC822 source 文件 parse 三件套.
 

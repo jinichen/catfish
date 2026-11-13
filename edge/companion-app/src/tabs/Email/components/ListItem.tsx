@@ -8,7 +8,7 @@ import { useEffect } from "react";
 import { withMark } from "../../../lib/phishingMarks";
 import type { EmailDigestItem, PhishingScanResult, PoliticalScanResult } from "../../../lib/tauri";
 import { usePhishingMarksStore } from "../../../store/phishingMarks";
-import { _extractSenderName, _formatShortDate } from "./helpers";
+import { _extractSenderName, _formatShortDate, _recipientsLabel } from "./helpers";
 
 
 function ListItem({
@@ -19,6 +19,7 @@ function ListItem({
   political,
   replied,
   actionEntry,
+  showRecipients = false,
   onClick,
 }: {
   item: EmailDigestItem;
@@ -29,6 +30,9 @@ function ListItem({
   replied?: boolean;  // P3.5.204 (7/9): 已回复标志, 由 EmailTab 一次算 O(N²) map 传下来
   /** 8/21 分诊: {action:"知"|"回"|"办", deadline?:"YYYY-MM-DD"}, undef = 没分 */
   actionEntry?: { action: string; deadline?: string };
+  /** 11/13 已发送 / 草稿箱: 第一行显示「→ 收件人」。这两个文件夹里发件人永远是自己,
+   *  同一个主题发给不同人的几封在列表里分不出来。 */
+  showRecipients?: boolean;
   onClick: () => void;
 }) {
   // 11/07: 员工标过这个发件人 (不是钓鱼 / 是钓鱼) 的按标注显示; 标完后台重扫回来的结果优先
@@ -84,7 +88,7 @@ function ListItem({
             whiteSpace: "nowrap",
           }}
         >
-          {_extractSenderName(item.sender)}
+          {(showRecipients && _recipientsLabel(item.recipients)) || _extractSenderName(item.sender)}
         </strong>
         {/* 8/21 分诊 badge — 办 (带截止日显 "办·9/10") / 回。
             "知"不显: 知悉即可的邮件占大多数, 给它们都贴 badge 只会稀释

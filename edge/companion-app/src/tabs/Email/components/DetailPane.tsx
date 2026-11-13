@@ -22,7 +22,7 @@ import { useAgentStore } from "../../../store/agent";
 // P3.5.58 (6/22 鸿波 catch "有回复了为啥还要让小鲶处理 是不是重复了"):
 // RFC 822 thread chain 算法 + 已回复 badge
 import { isReplied, formatReplyTime } from "../../../lib/emailThread";
-import { buildEmailSrcDoc, countRemoteRefs } from "../../../lib/emailSrcDoc";
+import { buildEmailSrcDoc, countRemoteRefs, themeableHtml } from "../../../lib/emailSrcDoc";
 // P3.5.158 Phase 3 (7/2 鸿波): Compose panel 抽到 ComposeCore 共享组件
 import ComposeCore from "./ComposeCore";
 import MessageHeaderFields from "./MessageHeaderFields";
@@ -93,6 +93,8 @@ function DetailPane({
     [msg.body_html],
   );
 
+  const bodyThemed = useMemo(() => themeableHtml(msg.body_html || "") !== null, [msg.body_html]);
+
   // P3.5.58: 算已回复状态. msg / list 任一变即重算 (useMemo 兜 O(N) 性能).
   //
   // ★ 8/6 修 bug: 原来用的是 list (只有 Inbox). 员工的回信在 Sent, 不在 Inbox
@@ -115,6 +117,7 @@ function DetailPane({
    *  第二次点才真删. 3s 后自动取消恢复初态. 比 window.confirm 在 Tauri WebView
    *  下可靠 (有些场景 confirm 被吞), 也比系统 dialog 打扰. */
   const [confirmPending, setConfirmPending] = useState(false);
+  const [deleteHover, setDeleteHover] = useState(false);
 
   // 取消 confirm 状态的 timer
   useEffect(() => {
@@ -168,6 +171,8 @@ function DetailPane({
     })();
     return () => { cancelled = true; };
   }, [msg.id, msg.subject, msg.sender, msg.body_text]);
+
+  const deleteRed = confirmPending || (deleteHover && !deleting && !onlyInArchive);
 
   const handleDelete = async () => {
     if (!confirmPending) {
@@ -494,10 +499,14 @@ function DetailPane({
             type="button"
             onClick={() => void handleDelete()}
             disabled={deleting || onlyInArchive}
+            onMouseEnter={() => setDeleteHover(true)}
+            onMouseLeave={() => setDeleteHover(false)}
             style={{
+              // 11/13: 平时是普通按钮, 指上去 / 等确认时才变红 —— 原来一直是红框红字,
+              // 跟主按钮一样抢眼, 而删除是这排里最少用的。
               background: confirmPending ? "rgba(220, 80, 60, 0.15)" : "var(--catfish-bg)",
-              color: "rgb(220, 80, 60)",
-              border: `1px solid ${confirmPending ? "rgb(220, 80, 60)" : "rgba(220, 80, 60, 0.4)"}`,
+              color: deleteRed ? "rgb(220, 80, 60)" : "var(--catfish-text-muted)",
+              border: `1px solid ${confirmPending ? "rgb(220, 80, 60)" : deleteRed ? "rgba(220, 80, 60, 0.5)" : "var(--catfish-border)"}`,
               borderRadius: 4,
               padding: "8px 14px",
               fontSize: 13,
@@ -673,7 +682,8 @@ function DetailPane({
               flex: 1,
               width: "100%",
               border: "none",
-              background: "white",
+              // 11/13: 只有字的信跟随深浅色 (emailSrcDoc.themeableHtml), 有自己版式的照旧白底
+              background: bodyThemed ? "var(--catfish-bg)" : "white",
             }}
           />
         </>

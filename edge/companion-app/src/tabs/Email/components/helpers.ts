@@ -84,3 +84,30 @@ export function _formatShortDate(iso: string): string {
     return "";
   }
 }
+
+/** 已发送 / 草稿箱列表里那一行显示「发给谁」: "→ 张三"、"→ 张三、李四"、"→ 张三、李四 等 5 人"。
+ *  没有收件人 (还没填的草稿 / 客户端没给) 返回空串, 调用方退回显示发件人。 */
+export function _recipientsLabel(recipients: string[] | undefined | null): string {
+  const names = (recipients ?? []).map((r) => _extractSenderName(r)).filter((n) => n && n !== "(未知)");
+  if (names.length === 0) return "";
+  const shown = names.slice(0, 2).join("、");
+  return names.length > 2 ? `→ ${shown} 等 ${names.length} 人` : `→ ${shown}`;
+}
+
+/** 长文件名中间省略用: 拆成 [前段 (可被截断), 尾段 (始终显示, 含扩展名)]。
+ *  尾段留主名最后 4 个字 —— 一批附件常常只有结尾不同 ("…-上海擎标.pdf")。 */
+export function _splitFilename(name: string): [string, string] {
+  const dot = name.lastIndexOf(".");
+  const ext = dot > 0 && name.length - dot <= 8 ? name.slice(dot) : "";
+  const stem = [...(ext ? name.slice(0, dot) : name)];
+  if (stem.length <= 12) return [name, ""];
+  return [stem.slice(0, -4).join(""), stem.slice(-4).join("") + ext];
+}
+
+/** 附件大小: 1 MB 以下用 KB, 以上用一位小数的 MB。 */
+export function _formatSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "";
+  if (bytes < 1024) return "1 KB";
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}

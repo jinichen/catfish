@@ -5,6 +5,7 @@ import { emailExportAttachment, openFile } from "../../../lib/tauri";
 // ⚠ type-only import: DetailPane 也 import 这个文件, 普通 import 会形成
 // 运行时循环。`import type` 编译期就擦掉了, 不产生循环。
 import type { FullMessage } from "./DetailPane";
+import { _formatSize, _splitFilename } from "./helpers";
 
 /** 邮件头那块 —— 发件人/收件人/抄送/时间/账号/附件。
  *
@@ -45,6 +46,57 @@ function CollapsibleAddresses({ addrs, previewN = 3 }: { addrs: string[]; previe
         {expanded ? "折叠" : "展开"}
       </button>
     </>
+  );
+}
+
+
+/** 附件栏里的一行: 📎 文件名 (太长省中间) …… 大小。点了用系统默认 app 打开。 */
+function AttachmentRow({ msgId, filename, sizeBytes }: { msgId: string; filename: string; sizeBytes: number }) {
+  const [hover, setHover] = useState(false);
+  const [head, tail] = _splitFilename(filename);
+  return (
+    <button
+      type="button"
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onClick={async () => {
+        // P3.5.103 (6/24 鸿波): 点附件 → CLI 导出到本地 tmp → 系统默认 app 打开.
+        // CLI 退出码 4 = adapter 不支持 (outlook 暂未 implement export_attachment).
+        try {
+          const path = await emailExportAttachment(msgId, filename);
+          await openFile(path);
+        } catch (e) {
+          console.warn("[EmailDetail] 打开附件失败:", e);
+          void alertDialog(`打开附件失败: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }}
+      title={`点击用系统默认 app 打开: ${filename}`}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        width: "100%",
+        minWidth: 0,
+        padding: "5px 10px",
+        border: `1px solid ${hover ? "var(--catfish-cyan)" : "var(--catfish-border)"}`,
+        borderRadius: 6,
+        background: hover ? "var(--catfish-cyan-tint)" : "var(--catfish-bg)",
+        color: "var(--catfish-text)",
+        cursor: "pointer",
+        fontSize: 12,
+        fontFamily: "inherit",
+        textAlign: "left",
+      }}
+    >
+      <span aria-hidden="true" style={{ flex: "0 0 auto" }}>📎</span>
+      <span style={{ flex: "1 1 auto", minWidth: 0, display: "flex" }}>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{head}</span>
+        {tail && <span style={{ flex: "0 0 auto", whiteSpace: "nowrap" }}>{tail}</span>}
+      </span>
+      <span style={{ flex: "0 0 auto", color: "var(--catfish-text-muted)", fontVariantNumeric: "tabular-nums" }}>
+        {_formatSize(sizeBytes)}
+      </span>
+    </button>
   );
 }
 
@@ -96,35 +148,11 @@ export default function MessageHeaderFields({ msg }: { msg: FullMessage }) {
       {msg.has_attachments && msg.attachments && msg.attachments.length > 0 && (
         <>
           <div>附件</div>
-          <div>
+          {/* 11/13: 一个附件一行、等宽左对齐。原来是按文件名长度各画各的框, 长名字折成
+              两行还居中, 三个附件三种宽度。名字太长时省中间、留结尾和扩展名。 */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: 560, minWidth: 0 }}>
             {msg.attachments.map((a, i) => (
-              <button
-                key={i}
-                onClick={async () => {
-                  // P3.5.103 (6/24 鸿波): 点附件 → CLI 导出到本地 tmp → 系统默认 app 打开.
-                  // CLI 退出码 4 = adapter 不支持 (outlook 暂未 implement export_attachment).
-                  try {
-                    const path = await emailExportAttachment(msg.id, a.filename);
-                    await openFile(path);
-                  } catch (e) {
-                    console.warn("[EmailDetail] 打开附件失败:", e);
-                    void alertDialog(`打开附件失败: ${e instanceof Error ? e.message : String(e)}`);
-                  }
-                }}
-                title={`点击下载并用系统默认 app 打开: ${a.filename}`}
-                style={{
-                  marginRight: 8,
-                  padding: "3px 10px",
-                  border: "1px solid var(--catfish-accent, #0d9488)",
-                  borderRadius: 4,
-                  background: "transparent",
-                  color: "var(--catfish-accent, #0d9488)",
-                  cursor: "pointer",
-                  fontSize: 12,
-                }}
-              >
-                📎 {a.filename} ({Math.round(a.size_bytes / 1024)} KB)
-              </button>
+              <AttachmentRow key={i} msgId={msg.id} filename={a.filename} sizeBytes={a.size_bytes} />
             ))}
           </div>
         </>

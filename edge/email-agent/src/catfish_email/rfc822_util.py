@@ -243,11 +243,9 @@ _CID_ATTR = re.compile(r"""\b(?:data|src)\s*=\s*(?P<q>["'])\s*cid:(?P<cid>.*?)(?
 
 def _attachment_chip(name: str) -> str:
     safe = name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    return (
-        '<span style="display:inline-block;padding:4px 10px;margin:4px 6px 4px 0;'
-        'border:1px solid #c9d6d8;border-radius:6px;background:#f4f8f8;color:#0e6169;'
-        'font-size:12px;font-family:inherit;">📎 ' + safe + "</span>"
-    )
+    # 样式由界面给 (emailSrcDoc.ts 的 .catfish-attach-chip, 深浅色各一套); 这里不写死颜色,
+    # 写死了深色主题下就是一块白。
+    return '<span class="catfish-attach-chip">📎 ' + safe + "</span>"
 
 
 def replace_attachment_objects(html: str, msg: EmailMessage | None, *, drop: bool = False) -> str:

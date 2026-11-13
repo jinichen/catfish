@@ -668,7 +668,7 @@ export default function EmailTab() {
               phishing={phishingMap[m.id]}  // P3.3.58 段 2B
               political={politicalMap[m.id]}  // P3.3.53.2
               replied={repliedMap.get(m.id)}  // P3.5.204 (7/9)
-              actionEntry={actionMap[m.id]}  // 8/21 分诊: 知/回/办+截止日
+              actionEntry={actionMap[m.id]} showRecipients={folder !== "Inbox"}  // 8/21 分诊; 11/13 已发送/草稿显示收件人
               onClick={() => setSelectedId(m.id)}
             />
           ))}

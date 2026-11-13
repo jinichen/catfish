@@ -73,6 +73,7 @@ from .apple_mail_osascript import (  # noqa: F401
     RS,
     _escape_as_string,
     _is_mail_running,
+    _parse_address_headers,
     _parse_records,
     _parse_thread_headers,
     _read_thread_headers_from_source_file,
@@ -286,6 +287,7 @@ class AppleMailAdapter(EmlxFallbackMixin, EmailAdapter):
             # In-Reply-To/References), 缺时 fallback rfcMsgId-only.
             parsed_mid, parsed_in_reply, parsed_refs = _parse_thread_headers(raw_hdrs)
             final_msg_id = parsed_mid or (rfc_msg_id.strip() if rfc_msg_id else None)
+            to_list, cc_list = _parse_address_headers(raw_hdrs)
             result.append(
                 Message(
                     id=self._pack_id(account_name, msg_id),
@@ -295,6 +297,8 @@ class AppleMailAdapter(EmlxFallbackMixin, EmailAdapter):
                     sender=sndr,
                     date=date_iso,
                     is_read=(read_st == "1"),
+                    recipients=to_list,
+                    cc=cc_list,
                     body_text="",  # list 场景不带 body
                     message_id=final_msg_id,
                     in_reply_to=parsed_in_reply,

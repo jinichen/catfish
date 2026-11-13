@@ -150,3 +150,27 @@ def test_draft_rebuild_html_drops_attachment_placeholders():
     finally:
         Path(path).unlink()
     assert "<object" not in text.lower() and "📎" not in text and "附件是结算材料" in text
+
+
+def test_attachment_chip_carries_no_inline_colors():
+    """占位小标签的颜色由界面给 (深浅色各一套); 这里写死颜色, 深色主题下就是一块白。"""
+    msg = email.message_from_bytes(_apple_mail_draft(), policy=email.policy.default)
+    html = next(p for p in msg.walk() if p.get_content_type() == "text/html").get_content()
+    out = rfc822.display_html(html, msg)
+    assert 'class="catfish-attach-chip"' in out
+    assert "style=" not in out[out.index("catfish-attach-chip"):].split("</span>")[0]
+
+
+def test_list_address_headers_localized_names():
+    """Mail 的 all headers 在中文系统上给的是「收件人:」「抄送:」(真机 11/13), 英文系统是 To/Cc。"""
+    from catfish_email.adapters.apple_mail_osascript import _parse_address_headers
+
+    zh = (
+        "发件人: me <me@example.com>\n主题: 结算\nMessage-Id: <a@example.com>\n"
+        "收件人: =?utf-8?B?5byg5LiJ?= <zhang@example.com>,\n li@example.com\n"
+        "抄送: wang@example.com\n日期: Fri, 13 Nov 2026 16:40:00 +0800\n"
+    )
+    assert _parse_address_headers(zh) == (("张三 <zhang@example.com>", "li@example.com"), ("wang@example.com",))
+    en = "From: me@example.com\nX-Junk: {\"to\":\n裸行没有冒号\nTo: a@example.com\nCC: b@example.com, c@example.com\n"
+    assert _parse_address_headers(en) == (("a@example.com",), ("b@example.com", "c@example.com"))
+    assert _parse_address_headers("") == ((), ())
