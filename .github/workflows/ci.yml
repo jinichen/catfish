@@ -310,6 +310,19 @@ jobs:
           PYTHONPATH=src python -m pytest tests/test_skill_review.py -k PG模式 -p no:cacheprovider -q 2>&1 | tee /tmp/hub.txt
           grep -qE "^1 passed" /tmp/hub.txt || { echo "::error::skills-hub 真 PG 测试没跑或没过"; exit 1; }
 
+      # 11/14: wiki-hub 的测试每条都带一遍 PG 参数, 但 CI 从没设 CATFISH_TEST_PG_URL —— PG 那一半一直 skip,
+      # PG 部署下「分享审计」wiki 行全空的问题就这样漏过去。这里在同一个服务库上建 wiki 表再跑, 要求 0 skip。
+      - name: Run wiki-hub tests on real PG
+        working-directory: central/wiki-hub
+        env:
+          CATFISH_TEST_PG_URL: postgresql://catfish:catfish@localhost:5432/catfish
+        run: |
+          pip install -e '.[dev]'
+          CATFISH_DB_URL=$CATFISH_TEST_PG_URL alembic upgrade head
+          PYTHONPATH=src python -m pytest tests/ -p no:cacheprovider -q 2>&1 | tee /tmp/wiki.txt
+          grep -qE "^[0-9]+ passed" /tmp/wiki.txt && ! grep -qE "failed|skipped" /tmp/wiki.txt || {
+            echo "::error::wiki-hub 真 PG 测试有失败或被跳过"; exit 1; }
+
   # ════════════════════════════════════════════════════════════
   # 3. Companion 前端 — tsc strict + vite build
   # ════════════════════════════════════════════════════════════

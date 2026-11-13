@@ -221,7 +221,7 @@ async def get_document_endpoint(
         raise HTTPException(status_code=404, detail=f"{namespace}/{file_id} 不存在")
     if sales.hidden_from(user, doc):
         raise HTTPException(status_code=403, detail="这是同事的销售漏斗摘要, 只有本人和部门主管能看")
-    return review.annotate(doc)
+    return {**review.annotate(doc), "revision": storage.current_revision(namespace, file_id)}
 
 
 @app.get("/wiki/sales/dept/{dept}")
@@ -397,6 +397,72 @@ async def unpublish_document_endpoint(
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "撤回失败"))
     return result
+
+
+# ── 11/14 历史版本: 每次重发前存上一版, 作者改错了能找回 / 恢复 ─────────────────────
+
+
+def _history_access(user: dict, dept: str, file_id: str) -> tuple[str, dict]:
+    """看历史的权限 = 能看这一页; 撤回了的 (作者撤 / 主管撤下) 只有作者和管理员还能看。"""
+    namespace = _require_doc_visible(user, dept, file_id)
+    doc = storage.get_document(namespace, file_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"{namespace}/{file_id} 不存在")
+    if sales.hidden_from(user, doc):
+        raise HTTPException(status_code=403, detail="这是同事的销售漏斗摘要, 只有本人和部门主管能看")
+    ann = review.annotate({k: v for k, v in doc.items() if k != "body_md"})
+    withdrawn = bool(doc.get("stale_after_unpublish")) or ann.get("review_status") == "withdrawn"
+    if withdrawn and doc.get("published_by") != user["sub"] and not is_admin(user):
+        raise HTTPException(status_code=403, detail="这一页已撤回, 历史版本只有作者和管理员能看")
+    return namespace, ann
+
+
+@app.get("/wiki/documents/dept/{dept}/{file_id}/history")
+async def history_endpoint(dept: str, file_id: str, user: dict = Depends(require_user)) -> dict:
+    """历史版本列表 (新的在前, 不含当前版; 只留最近 30 版)。"""
+    namespace, ann = _history_access(user, dept, file_id)
+    return {"namespace": namespace, "file_id": file_id,
+            "current_revision": storage.current_revision(namespace, file_id),
+            "current_updated_at": ann.get("updated_at"),
+            "versions": storage.list_history(namespace, file_id)}
+
+
+@app.get("/wiki/documents/dept/{dept}/{file_id}/history/{revision}")
+async def history_version_endpoint(dept: str, file_id: str, revision: int, user: dict = Depends(require_user)) -> dict:
+    namespace, _ = _history_access(user, dept, file_id)
+    got = storage.get_history(namespace, file_id, revision)
+    if got is None:
+        raise HTTPException(status_code=404, detail=f"{namespace}/{file_id} 没有第 {revision} 版 (只留最近 30 版)")
+    return {"namespace": namespace, "file_id": file_id, **got}
+
+
+@app.post("/wiki/documents/dept/{dept}/{file_id}/history/{revision}/restore")
+async def history_restore_endpoint(dept: str, file_id: str, revision: int, user: dict = Depends(require_user)) -> dict:
+    """把某个历史版本重新发成当前版 (作者或管理员)。跟重发一样: 当前版先进历史, 回到待审, 范围不变。"""
+    namespace = _require_visible(user, dept)
+    existing = storage.get_document(namespace, file_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"{namespace}/{file_id} 不存在")
+    if existing.get("published_by") != user["sub"] and not is_admin(user):
+        raise HTTPException(status_code=403, detail="只有作者或管理员能恢复历史版本")
+    old = storage.get_history(namespace, file_id, revision)
+    if old is None:
+        raise HTTPException(status_code=404, detail=f"{namespace}/{file_id} 没有第 {revision} 版 (只留最近 30 版)")
+    result = storage.publish_document(
+        namespace=namespace, file_id=file_id,
+        filename=old.get("filename") or existing.get("filename") or file_id,
+        title=old.get("title") or existing.get("title") or file_id,
+        kind=old.get("kind") or existing.get("kind") or "entity",
+        frontmatter_yaml=old.get("frontmatter_yaml") or "", body_md=old.get("body_md") or "",
+        published_by=existing.get("published_by") or user["sub"],
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "恢复失败"))
+    rec = review.load(namespace, file_id)
+    scope = "company" if rec.get("scope") == "company" and rec.get("company_status") in ("pending", "approved") else "department"
+    rec = review.mark_pending(namespace, file_id, user["sub"], scope)
+    return {**result, "restored_from": revision, "revision": storage.current_revision(namespace, file_id),
+            "review_status": rec["review_status"], "scope": scope}
 
 
 @app.get("/wiki/audit")

@@ -76,15 +76,23 @@ def write_document(
     published_by: str,
     size_bytes: int,
 ) -> dict:
-    """写正文 + 元数据. 重发时保留第一次的 published_at. 返写入后的元数据."""
+    """写正文 + 元数据. 重发时保留第一次的 published_at. 返写入后的元数据.
+
+    11/14: 重发前把上一版正文 + 元数据存进历史 (_archive), 元数据带 revision (第几版)。
+    PG 模式这里也照写 (FS 是镜像), 所以历史两种模式都有。"""
     md_path, meta_path = _paths(namespace, file_id)
     md_path.parent.mkdir(parents=True, exist_ok=True)
+    prev = _read_meta(meta_path) or {}
+    prev_rev = int(prev.get("revision") or (1 if prev or md_path.exists() else 0))
+    if md_path.exists():
+        _archive(namespace, file_id, prev_rev, md_path.read_text(encoding="utf-8"),
+                 prev or _meta_for(md_path.parent, file_id, namespace) or {})
     md_path.write_text(
         f"---\n{frontmatter_yaml.strip()}\n---\n\n{body_md}", encoding="utf-8",
     )
-    prev = _read_meta(meta_path) or {}
     ts = now_iso()
     meta = {
+        "revision": prev_rev + 1,
         "namespace": namespace,
         "file_id": file_id,
         "filename": filename,
@@ -101,6 +109,57 @@ def write_document(
     }
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     return meta
+
+
+# ── 11/14 历史版本 ─────────────────────────────────────────────
+# <hub root>/wiki/dept/<部门>/.history/<file_id>/<n>.md + <n>.meta.json, 每次重发存上一版。
+# 只留最近 HISTORY_KEEP 版 (单页正文 ≤1MB, 30 版封顶 30MB)。撤回不删历史 —— 作者 / 管理员还能看,
+# 别人看不到 (app.py 判)。
+
+HISTORY_KEEP = 30
+
+
+def _history_dir(namespace: str, file_id: str) -> Path:
+    return wiki_dir() / namespace / ".history" / file_id
+
+
+def _archive(namespace: str, file_id: str, rev: int, text: str, meta: dict) -> None:
+    d = _history_dir(namespace, file_id)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{rev}.md").write_text(text, encoding="utf-8")
+    snap = {k: meta.get(k) for k in ("title", "kind", "filename", "published_by", "updated_at", "size_bytes")}
+    snap["revision"] = rev
+    (d / f"{rev}.meta.json").write_text(json.dumps(snap, ensure_ascii=False, indent=2), encoding="utf-8")
+    revs = sorted((int(p.name[: -len(".meta.json")]) for p in d.glob("*.meta.json")
+                   if p.name[: -len(".meta.json")].isdigit()), reverse=True)
+    for old in revs[HISTORY_KEEP:]:
+        for suffix in (".md", ".meta.json"):
+            (d / f"{old}{suffix}").unlink(missing_ok=True)
+
+
+def list_history(namespace: str, file_id: str) -> list[dict]:
+    """历史版本元数据, 新的在前 (不含当前版)。"""
+    d = _history_dir(namespace, file_id)
+    if not d.is_dir():
+        return []
+    out = [m for p in d.glob("*.meta.json") if (m := _read_meta(p)) is not None]
+    out.sort(key=lambda m: int(m.get("revision") or 0), reverse=True)
+    return out
+
+
+def get_history(namespace: str, file_id: str, rev: int) -> dict | None:
+    d = _history_dir(namespace, file_id)
+    meta, md = _read_meta(d / f"{rev}.meta.json"), d / f"{rev}.md"
+    if meta is None or not md.exists():
+        return None
+    fm_yaml, body = _split_frontmatter(md.read_text(encoding="utf-8"))
+    return {**meta, "frontmatter_yaml": fm_yaml, "body_md": body}
+
+
+def current_revision(namespace: str, file_id: str) -> int:
+    md_path, meta_path = _paths(namespace, file_id)
+    meta = _read_meta(meta_path) or {}
+    return int(meta.get("revision") or (1 if meta or md_path.exists() else 0))
 
 
 def _meta_for(md_or_meta_dir: Path, file_id: str, namespace: str) -> dict | None:

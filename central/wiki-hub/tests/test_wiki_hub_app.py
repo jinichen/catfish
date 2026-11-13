@@ -388,3 +388,45 @@ def test_preview_原件页不露本机路径():
     assert "/Users/" not in p and "SOURCE_PATH" not in p and "METHOD" not in p and "C:\\" not in p
     assert "Upload" not in p and p.startswith("第 1 页"), p
     assert "方案.pdf" in p
+
+
+# ── 11/14 历史版本 ───────────────────────────────────────────────
+
+
+def test_重发前存上一版_同事能看历史_作者能恢复_恢复后回到待审(client):
+    fid = _publish(client, ALICE, body="正文 v1").json()["file_id"]
+    _publish(client, ALICE, file_id=fid, body="正文 v2 (改错了)")
+    url = _doc_url("研发部", fid)
+    assert client.get(url, headers=BOB).json()["revision"] == 2
+    h = client.get(url + "/history", headers=BOB).json()
+    assert h["current_revision"] == 2 and [v["revision"] for v in h["versions"]] == [1]
+    assert client.get(url + "/history/1", headers=BOB).json()["body_md"].strip() == "正文 v1"
+    assert client.get(url + "/history/9", headers=BOB).status_code == 404
+    assert client.get(url + "/history", headers=CAROL).status_code == 403, "别的部门看不到"
+    client.post(url + "/review", headers=MGR, json={"decision": "approve"})
+    assert client.post(url + "/history/1/restore", headers=BOB).status_code == 403, "只有作者 / 管理员能恢复"
+    r = client.post(url + "/history/1/restore", headers=ALICE).json()
+    assert r["restored_from"] == 1 and r["revision"] == 3 and r["review_status"] == "pending"
+    got = client.get(url, headers=BOB).json()
+    assert got["body_md"].strip() == "正文 v1" and got["published_by"] == "alice@x"
+    assert [v["revision"] for v in client.get(url + "/history", headers=BOB).json()["versions"]] == [2, 1]
+
+
+def test_撤回后历史只有作者和管理员能看(client):
+    fid = _publish(client, ALICE, body="v1").json()["file_id"]
+    _publish(client, ALICE, file_id=fid, body="v2")
+    url = _doc_url("研发部", fid)
+    client.post(url + "/unpublish", headers=ALICE, json={"reason": "过时"})
+    assert client.get(url + "/history", headers=BOB).status_code == 403
+    assert [v["revision"] for v in client.get(url + "/history", headers=ALICE).json()["versions"]] == [1]
+    assert client.get(url + "/history", headers=ADMIN).status_code == 200
+
+
+def test_历史只留最近30版(client, monkeypatch):
+    from catfish_wiki_hub import storage_fs
+    monkeypatch.setattr(storage_fs, "HISTORY_KEEP", 3)
+    fid = _publish(client, ALICE, body="v1").json()["file_id"]
+    for i in range(2, 7):
+        _publish(client, ALICE, file_id=fid, body=f"v{i}")
+    vs = [v["revision"] for v in client.get(_doc_url("研发部", fid) + "/history", headers=BOB).json()["versions"]]
+    assert vs == [5, 4, 3]

@@ -3,8 +3,9 @@
 跟 skills-hub storage.py 同模式. 但服务 wiki markdown 笔记不是 skill 包,
 有几个关键差异:
 
-1. **没有 version 概念**: wiki 改了就直接 update (覆盖 body_md + updated_at).
-   skill 是工具包要保留历史版本, wiki 是知识笔记, 历史版本意义低.
+1. **当前版只有一份**: wiki 改了就直接 update (覆盖 body_md + updated_at).
+   11/14: 上一版在覆盖前存进 FS 历史 (storage_fs._archive, 两种模式都写), 作者改错了能找回 / 恢复;
+   当前是第几版 (revision) 也从 FS 元数据读。
 2. **没有 file 目录**: wiki 就是单 markdown 文件, frontmatter + body 都进 PG
    text 字段. 也镜像写一份到 FS `~/.catfish-hub/wiki/{ns}/{file_id}.md` 作 backup.
 3. **unpublish 不硬删**: 公理 4 兼容设计 — 标 stale=true + 清 body_md, 留 row
@@ -413,17 +414,16 @@ def read_audit(limit: int = 100) -> list[dict]:
                         (limit,),
                     )
                     rows = cur.fetchall()
-                    return [
-                        {
-                            "ts_ms": r[0],
-                            "action": r[1],
-                            "namespace": r[2],
-                            "file_id": r[3],
-                            "by_user": r[4],
-                            "meta": r[5],
-                        }
-                        for r in rows
-                    ]
+                    # 11/14: 跟 jsonl 那条返同一个形状 (ts / event / 其余字段摊平)。原来返
+                    # {ts_ms, action, meta}, 门户「分享审计」按 ts / event / title 读, PG 部署下
+                    # wiki 那几行时间、动作、页面标题全是空的。
+                    out_pg = []
+                    for r in rows:
+                        meta = r[5] if isinstance(r[5], dict) else (json.loads(r[5]) if r[5] else {})
+                        ts = datetime.fromtimestamp(r[0] / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+                        out_pg.append({**meta, "ts": ts, "event": r[1], "namespace": r[2],
+                                       "file_id": r[3], "by_user": r[4]})
+                    return out_pg
         except Exception as e:
             logger.warning("read_audit PG 失败 (jsonl fallback): %s", e)
 
@@ -445,3 +445,22 @@ def read_audit(limit: int = 100) -> list[dict]:
         return []
     out.reverse()
     return out[:limit]
+
+
+# ── 11/14 历史版本 (都在 FS, PG 模式下 FS 也照写) ──────────────────
+
+
+def list_history(namespace: str, file_id: str) -> list[dict]:
+    _validate_namespace(namespace)
+    _validate_seg(file_id, "file_id")
+    return storage_fs.list_history(namespace, file_id)
+
+
+def get_history(namespace: str, file_id: str, revision: int) -> dict | None:
+    _validate_namespace(namespace)
+    _validate_seg(file_id, "file_id")
+    return storage_fs.get_history(namespace, file_id, revision)
+
+
+def current_revision(namespace: str, file_id: str) -> int:
+    return storage_fs.current_revision(namespace, file_id)
