@@ -10,7 +10,7 @@ Companion (在员工 mac, 合规读自己 state.db) 通过 header `X-Catfish-Las
 # 保留的 API
 
 - `resolve_model_obj(model_name, config)` — 字符串 model name → Config.Model
-  对象. 纯查表, 无 fs/db read. 保留, 给 proactive + facts_pipeline 用.
+  对象. 纯查表, 无 fs/db read. 保留, 给 proactive 用 (facts_pipeline 11/14 随政策同步下线删了).
 
 # 砍的 API
 

@@ -178,6 +178,8 @@
 
 ### F 类 — Facts 上传 / 存储 · 2 个 · **8/9 复核, 原处方推翻**
 
+> **11/14: 本类已不存在。** 政策同步整体下线, `facts_router.py` / `facts_pipeline.py` / `facts_db.py` / `facts_schema.py` 全部删除, `CATFISH_FACTS_DIR` 也从两个 docker-compose 和 .env.example 拿掉。下面内容只作历史记录。
+
 > ⚠️ **别跟员工附件上传搞混 —— 是两条完全无关的路。**
 >
 > | | 这里说的 "Facts 上传" | 员工附件上传 |

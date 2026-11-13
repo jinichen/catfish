@@ -7,7 +7,7 @@ admin_models_router.py, 并在文件里留了话:「app.py 本身仍远超红线
 专门的拆分」。这是那一轮的第一刀。
 
 跟着搬的还有 `_require_admin` —— app.py 里只有本组这几个路由用它
-(扫过全部顶层函数确认)。注意 facts_router / advisory_router 各自也有一份
+(扫过全部顶层函数确认)。注意 advisory_router 自己也有一份 (facts_router 原来也有, 11/14 随政策同步下线删了)
 同名函数, **不是重复实现**: 逻辑都是一行 `user.is_admin()`, 但 403 的文案
 各写各的领域 ("不能访问全局聚合" / "不能访问 FACT 系统" / "不能 publish
 advisory")。合并会把这层信息抹平, 所以维持现状。

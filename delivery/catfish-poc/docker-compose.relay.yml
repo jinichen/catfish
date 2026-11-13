@@ -13,7 +13,7 @@
 # 详细步骤和网络要求见 INSTALL.md「手机访问 → 中转站单独放 DMZ」。
 services:
   relay:
-    image: catfish-gateway:20261112-7386d49d
+    image: catfish-gateway:20261114-5ac83ee6
     container_name: catfish-relay
     restart: unless-stopped
     env_file: relay-dmz/relay.env
@@ -33,7 +33,7 @@ services:
   # 用安装包里已有的门户镜像 (本身就是 nginx), 离线机房不用另外拉镜像;
   # 只换掉它的站点配置, 不开它自带的 HTTPS 开关 (CATFISH_ENABLE_HTTPS 不设)
   nginx:
-    image: catfish-web:20261112-7386d49d
+    image: catfish-web:20261114-5ac83ee6
     container_name: catfish-relay-nginx
     restart: unless-stopped
     depends_on:

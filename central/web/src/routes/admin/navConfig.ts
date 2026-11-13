@@ -83,7 +83,6 @@ export const ROUTES = [
   // 效果: 表和实现不可能各走各的)。设计条目见 docs/BACKLOG.md BL-CENTRAL-BILLING。
   { path: "quota/events", label: "配额日志", group: "观测", require: ADMIN },
   { path: "system", label: "服务状态", group: "系统", require: SYSADMIN, nested: true },
-  { path: "facts", label: "政策同步", group: "系统", require: ADMIN, nested: true },
   { path: "advisory", label: "公告发布", group: "系统", require: SYSADMIN },
   // 11/6: 下发给员工 Companion 的公司级设置 (先只有群聊记录保留天数, docs/GROUP-CHAT-PLAN.md §4.2)
   { path: "policy", label: "协作设置", group: "系统", require: ADMIN },

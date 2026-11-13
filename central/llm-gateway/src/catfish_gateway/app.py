@@ -302,12 +302,8 @@ try:
 except Exception as e:
     logger.warning("admin_proxy 挂载失败: %s", e)
 
-try:
-    from .facts_router import router as facts_router  # noqa: PLC0415
-    app.include_router(facts_router)
-    logger.info("facts_router: /api/facts/* 已挂载 (BL-Q3-FACT P0 MVP)")
-except Exception as e:
-    logger.warning("facts_router 挂载失败: %s", e)
+# 11/14: 「政策同步」(/api/facts/*) 整体下线 —— 5/26 起分析步骤拿不到模型一直跑不出结果,
+# 半年没人用; 制度内容现在放资料库, 不写在技能里。PG 里 fact_* 四张表留着不删 (不动客户数据)。
 
 try:
     from .advisory_router import router as advisory_router  # noqa: PLC0415

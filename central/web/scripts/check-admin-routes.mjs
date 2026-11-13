@@ -55,7 +55,6 @@ const PAGE_FILES = {
   perf: "src/routes/admin/PerfPage.tsx",
   "quota/events": null,
   system: "src/routes/admin/SystemPage.tsx",
-  facts: "src/routes/admin/FactsPage.tsx",
   advisory: "src/routes/admin/AdvisoryPage.tsx",
   policy: "src/routes/admin/OrgPolicyPage.tsx",
 };

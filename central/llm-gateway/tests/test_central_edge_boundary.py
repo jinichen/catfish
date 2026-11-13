@@ -139,6 +139,7 @@ KNOWN_VIOLATIONS_ALLOWLIST: set[str] = {
     # 完整 PG + 对象存储改造留 Q3 BL-Q3-FACT-PG-MIGRATE ticket. 当前 Companion UI
     # 未接 facts endpoint, 0 真客户用, 不阻塞 ship.
     # "facts_router.py" — 5/26 晚移除 (env-required + noqa)
+    # 11/14: 政策同步整体下线, facts_router / facts_pipeline / facts_db / facts_schema 四个文件都删了。
     # G 类 — Resolver / metadata · ✅ 5/26 全清 (0 剩, was 2)
     # session_goals.py 砍 (hermes 0.14 原生 /goal 替代).
     # user_model_resolver.py: get_session_model + get_user_last_session_model 改 stub

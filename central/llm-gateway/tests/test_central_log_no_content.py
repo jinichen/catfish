@@ -173,7 +173,7 @@ def test_中央端日志不打员工正文():
             + "\n".join(new)
             + "\n\n修法 (按优先级):\n"
             "  1. 改成打**归约值**: len(x) / type(x).__name__ / 分类码 —— 排查需要的\n"
-            "     信息通常一点没少 (见 facts_pipeline.py:180 那次的改法)\n"
+            "     信息通常一点没少 (8/8 facts_pipeline 那次的改法: 只打 JSONDecodeError 的 msg/pos + 总长度)\n"
             "  2. 真的必须打原文 → 想清楚为什么中央端需要它, 然后加\n"
             f"     `# {NOQA}` 并在旁边写明理由\n"
             "  3. 存量且确认安全 → 加进 KNOWN_OK 并写清楚为什么"

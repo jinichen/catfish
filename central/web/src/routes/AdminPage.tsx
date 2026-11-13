@@ -16,7 +16,6 @@ import { AdminHome } from "./admin/AdminHome";
 import { AdminQuotaEvents } from "./admin/QuotaEventsPage";
 import { AccessPage } from "./admin/AccessPage";
 import { AdvisoryPage } from "./admin/AdvisoryPage";
-import { FactsPage } from "./admin/FactsPage";
 import { ModelConfigPage } from "./admin/ModelConfigPage";
 import { OrgPolicyPage } from "./admin/OrgPolicyPage";
 import { ProvidersPage } from "./admin/ProvidersPage";
@@ -49,7 +48,6 @@ const ELEMENTS: Record<AdminPath, ReactNode> = {
   perf: <PerfPage />,
   "quota/events": <AdminQuotaEvents />,
   system: <SystemPage />,
-  facts: <FactsPage />,
   advisory: <AdvisoryPage />,
   policy: <OrgPolicyPage />,
 };

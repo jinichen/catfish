@@ -9,10 +9,6 @@ authors = [{ name = "Catfish Platform Team" }]
 
 dependencies = [
     "fastapi>=0.115.0",
-    # facts_router.py 用 File() + Form() 接 fact-patch 上传 (BL-Q3-FACT P0).
-    # fastapi 不显式带这依赖, startup 报 WARNING "Form data requires python-multipart",
-    # 实际 POST /api/facts/upload 路径会 500. 6/9 BL-F10 1000 user bench 撞.
-    "python-multipart>=0.0.9",
     "uvicorn[standard]>=0.32.0",
     # P3.5.62 (6/22 鸿波 catch CVE-2026-49468): bump >=1.84.0 修 LiteLLM Proxy
     # Host header injection 鉴权绕过. catfish 用 SDK 模式不跑 litellm.proxy, 漏洞
