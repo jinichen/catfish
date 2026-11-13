@@ -777,7 +777,7 @@ class ImapAdapter(EmailAdapter):
             # 内嵌图的 cid: 换成 data: —— 只在读整封时做, 列清单不该为了
             # 缩略图去解几百 KB 的 base64 (full=False 时 body_html 本来就是空的)。
             body_html=(
-                rfc822.embed_inline_images(rfc822.body_html(msg), msg) if full else ""
+                rfc822.display_html(rfc822.body_html(msg), msg) if full else ""
             ),
             in_reply_to=rfc822.header(msg, "In-Reply-To") or None,
             references=rfc822.header(msg, "References") or None,

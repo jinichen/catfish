@@ -713,6 +713,9 @@ def _draft_html_file(msg) -> str:
     except Exception as error:  # noqa: BLE001
         logger.info("取草稿 HTML 失败, 发送时按纯文字重建: %s", error)
         return ""
+    # 11/13: Apple Mail 草稿正文里每个附件是一个 <object data="cid:…"> 占位; 重建时附件另外挂回去,
+    # 占位留着会指向不存在的 cid (收件人那边显示成坏掉的插件), 去掉
+    html = rfc822.replace_attachment_objects(html, None, drop=True)
     if not html.strip():
         return ""
     with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False, encoding="utf-8") as hf:

@@ -198,11 +198,8 @@ def embed_inline_images(
     return _IMG_TAG.sub(one, html)
 
 
-def _cid_refs(msg: EmailMessage) -> str:
-    """正文 HTML 里所有 ``cid:`` 引用拼在一起 (小写), 用来判断某个部件是不是被正文内嵌显示的图。
-
-    Apple Mail 发出的信 HTML 会被附件切成好几段 text/html, 所以每段都要看, 不能只取第一段。
-    """
+def _html_parts(msg: EmailMessage) -> list[str]:
+    """所有正文 text/html 段 (Apple Mail 发出的信 HTML 会被附件切成好几段, 每段都要看)。"""
     out: list[str] = []
     for part in msg.walk():
         if part.get_content_type() != "text/html" or part.get_content_disposition() == "attachment":
@@ -211,9 +208,83 @@ def _cid_refs(msg: EmailMessage) -> str:
             text = part.get_content()
         except Exception:  # noqa: BLE001
             text = (part.get_payload(decode=True) or b"").decode("utf-8", errors="replace")
-        if "cid:" in text.lower():
-            out.append(text.lower())
-    return "\n".join(out)
+        out.append(text)
+    return out
+
+
+def _img_cid_refs(msg: EmailMessage) -> set[str]:
+    """正文里被 ``<img src="cid:…">`` **画成图**的那些 Content-ID (小写)。
+
+    11/13 鸿波「为什么附件又显示不出来」: 以前这里是正文里出现过的**任何** ``cid:``。
+    Apple Mail 存草稿时每个附件在正文里是一个
+    ``<object type="application/x-apple-msg-attachment" data="cid:…">`` (原地画附件图标),
+    也是 cid 引用 —— 于是标成 inline 的 PDF 全被当成「正文里的图」从附件列表里剔掉了,
+    只剩标成 attachment 的 xlsx。只有 ``<img>`` 才是正文自己画出来的图。
+    """
+    refs: set[str] = set()
+    for html in _html_parts(msg):
+        if "cid:" not in html.lower():
+            continue
+        for tag in _IMG_TAG.findall(html):
+            src = _SRC_ATTR.search(tag)
+            if src and src.group("url").strip().lower().startswith("cid:"):
+                refs.add(unquote(src.group("url").strip()[4:]).strip().strip("<>").lower())
+    return refs
+
+
+# Apple Mail 存草稿 / 发信时附件在正文里的占位: <object type="application/x-apple-msg-attachment" data="cid:…"></object>
+# (有的客户端写 <embed src="cid:…">)。webview 里它是个插件, 显示成「Blocked Plug-in」。
+_ATTACH_OBJECT = re.compile(
+    r"""<object\b(?P<attrs>[^>]*)>(?:(?:(?!<object\b).)*?</object\s*>)?|<embed\b(?P<eattrs>[^>]*)/?>""",
+    re.IGNORECASE | re.DOTALL,
+)
+_CID_ATTR = re.compile(r"""\b(?:data|src)\s*=\s*(?P<q>["'])\s*cid:(?P<cid>.*?)(?P=q)""", re.IGNORECASE | re.DOTALL)
+
+
+def _attachment_chip(name: str) -> str:
+    safe = name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return (
+        '<span style="display:inline-block;padding:4px 10px;margin:4px 6px 4px 0;'
+        'border:1px solid #c9d6d8;border-radius:6px;background:#f4f8f8;color:#0e6169;'
+        'font-size:12px;font-family:inherit;">📎 ' + safe + "</span>"
+    )
+
+
+def replace_attachment_objects(html: str, msg: EmailMessage | None, *, drop: bool = False) -> str:
+    """正文里的附件占位 (``<object …data="cid:…">`` / ``<embed src="cid:…">``) 换成一个「📎 文件名」小标签。
+
+    附件本身照常在附件栏里列、能打开; 这里只是不让 webview 画出「Blocked Plug-in」。
+    ``drop=True`` 直接去掉 (发草稿重建时用: 附件另外挂回去, 留着占位会指向不存在的 cid)。
+    只动带 cid: 引用的 object / embed, 别的 (理论上邮件里不该有) 原样不碰 —— CSP 照样拦。
+    """
+    if not html or ("<object" not in html.lower() and "<embed" not in html.lower()):
+        return html
+    names: dict[str, str] = {}
+    if msg is not None and not drop:
+        try:
+            for part in msg.walk():
+                cid = (part.get("Content-ID") or "").strip().strip("<>").strip().lower()
+                if cid and not part.is_multipart():
+                    names[cid] = part.get_filename() or ""
+        except Exception:  # noqa: BLE001
+            names = {}
+
+    def one(match: "re.Match[str]") -> str:
+        attrs = match.group("attrs") if match.group("attrs") is not None else (match.group("eattrs") or "")
+        ref = _CID_ATTR.search(attrs)
+        if ref is None:
+            return match.group(0)
+        if drop:
+            return ""
+        cid = unquote(ref.group("cid")).strip().strip("<>").lower()
+        return _attachment_chip(names.get(cid) or "附件")
+
+    return _ATTACH_OBJECT.sub(one, html)
+
+
+def display_html(html: str, msg: EmailMessage) -> str:
+    """读整封时给界面显示的正文: 内嵌图换成 data:, 附件占位换成「📎 文件名」。"""
+    return embed_inline_images(replace_attachment_objects(html, msg), msg)
 
 
 def attachment_parts(msg: EmailMessage) -> list[EmailMessage]:
@@ -237,14 +308,15 @@ def attachment_parts(msg: EmailMessage) -> list[EmailMessage]:
       - ``Content-Disposition: attachment`` → 附件 (哪怕也带 Content-ID)
       - 其余带文件名的叶子 (inline / 没写 disposition) → 附件,
         **除非**它的 Content-ID 被正文 ``<img src="cid:…">`` 引用 —— 那是正文里的图
-        (签名档 logo / Foxmail 内嵌截图), 正文已经画出来了, 不该再列成附件
+        (签名档 logo / Foxmail 内嵌截图), 正文已经画出来了, 不该再列成附件。
+        只认 ``<img>``: Apple Mail 草稿里附件的 ``<object data="cid:…">`` 占位不算 (11/13)
       - 没文件名的 (正文本身、没名字的内嵌图) → 不算
     """
     try:
         parts = list(msg.walk())
     except Exception:  # noqa: BLE001
         return []
-    refs: str | None = None
+    refs: set[str] | None = None
     out: list[EmailMessage] = []
     for part in parts:
         if part.is_multipart():
@@ -262,8 +334,8 @@ def attachment_parts(msg: EmailMessage) -> list[EmailMessage]:
         cid = (part.get("Content-ID") or "").strip().strip("<>").strip().lower()
         if cid:
             if refs is None:
-                refs = _cid_refs(msg)
-            if f"cid:{cid}" in refs:
+                refs = _img_cid_refs(msg)
+            if cid in refs:
                 continue
         out.append(part)
     return out

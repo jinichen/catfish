@@ -198,7 +198,7 @@ def _extract_display_html_from_source_file(source_path: str) -> str:
             html = msg.get_content()
         if not html:
             return ""
-        return rfc822.embed_inline_images(html, msg)
+        return rfc822.display_html(html, msg)
     except (OSError, ValueError) as e:
         logger.debug(
             "_extract_display_html_from_source_file 解析失败 %s: %s", source_path, e
@@ -326,6 +326,8 @@ def _parse_emlx_full(emlx_path: Path, account_name: str) -> Message:
     # P3.5.100 (6/24 鸿波 catch): 附件元数据 — 复用 _walk_attachments helper.
     # 跟 AS 路径 (_extract_attachments_from_source_file) 走同一函数, 行为一致.
     attachments = _walk_attachments(msg)
+    # 11/13: 跟 AS 路径一样给界面能显示的正文 (内嵌图 data:, 附件占位换成「📎 文件名」)
+    body_html = rfc822.display_html(body_html, msg) if body_html else ""
     return Message(
         id=f"{account_name}|emlx:{emlx_path}",
         account=account_name,
