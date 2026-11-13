@@ -100,16 +100,43 @@ describe("themeableHtml", () => {
     expect(out).toContain("color: #ff4d4f");
   });
 
+  it("带样式表 / 表格 / 图片的普通信也跟主题 (Outlook、Foxmail 写的信几乎都带样式表)", () => {
+    const html =
+      "<style>p.MsoNormal{margin:0;color:windowtext;background:window} a:link{color:blue}</style>" +
+      '<table><tr><td><p class="MsoNormal">你好</p></td></tr></table><img src="data:image/png;base64,AA">';
+    const out = themeableHtml(html)!;
+    expect(out).not.toBeNull();
+    expect(out).not.toContain("windowtext");
+    expect(out).not.toMatch(/background\s*:/);
+    expect(out).toContain("margin:0");
+    // 蓝色链接: 浅色主题还是蓝, 深色主题提亮
+    expect(out).toMatch(/a:link\{color:light-dark\(#0000ff, #[0-9a-f]{6}\)\}/);
+    expect(buildEmailSrcDoc(html)).toContain("prefers-color-scheme");
+  });
+
+  it("深色字提亮后在深底上够亮", () => {
+    const out = themeableHtml('<p style="color: #00008b">x</p>')!;
+    const lit = out.match(/light-dark\(#00008b, (#[0-9a-f]{6})\)/)![1];
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(lit.slice(i, i + 2), 16));
+    expect((0.2126 * r + 0.7152 * g + 0.0722 * b) / 255).toBeGreaterThanOrEqual(0.55);
+  });
+
+  it("浅色底 (高亮 / 引用头) 留着, 上面的字定成深色", () => {
+    const out = themeableHtml('<span style="background-color: rgb(255, 250, 165)">重点</span>')!;
+    expect(out).toContain("background-color: rgb(255, 250, 165);color:#14232A");
+  });
+
+  it("深色底原样留着; 透明底不算底色", () => {
+    expect(themeableHtml('<td style="background:#1a73e8;color:#ffffff">x</td>')).toContain("background:#1a73e8;color:#ffffff");
+    expect(themeableHtml('<p style="background: rgba(0, 0, 0, 0)">x</p>')).toContain("rgba(0, 0, 0, 0)");
+  });
+
   it.each([
-    ["表格版式", "<table><tr><td>x</td></tr></table>"],
-    ["自带样式表", "<style>p{color:#333}</style><p>x</p>"],
-    ["有图", '<p>x</p><img src="data:image/png;base64,AA">'],
-    ["有底色", '<div style="background-color: #1a73e8">x</div>'],
     ["背景图", '<div style="background: url(data:image/png;base64,AA)">x</div>'],
-    ["深色字 (深底上看不清)", '<p style="color: #00008b">x</p>'],
+    ["样式表里的背景图", "<style>.hero{background-image:url(data:image/png;base64,AA)}</style><p>x</p>"],
+    ["body background 属性", '<body background="cid:bg"><p>x</p></body>'],
     ["认不出的颜色写法", '<p style="color: hsl(240 100% 20%)">x</p>'],
-    ["body bgcolor", '<body bgcolor="#336699"><p>x</p></body>'],
-    ["font 深色", '<font color="navy">x</font>'],
+    ["浅色 bgcolor 属性 (没法同时定字色)", '<td bgcolor="#ffffcc">x</td>'],
   ])("%s → 不跟主题, 照旧白底", (_name, html) => {
     expect(themeableHtml(html)).toBeNull();
     expect(buildEmailSrcDoc(html)).not.toContain("prefers-color-scheme");

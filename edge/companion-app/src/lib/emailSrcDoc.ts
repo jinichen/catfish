@@ -112,77 +112,128 @@ blockquote,hr{border-color:${THEME_DARK.border};}
 
 type Rgb = [number, number, number];
 
-/** CSS 颜色值 → RGB; "keep" = 不带具体颜色 (inherit 之类); null = 认不出。 */
+/** 邮件里实际会写的颜色名 (Outlook 爱写 windowtext / window)。认不出的名字 → 这封不跟主题。 */
+const NAMED: Record<string, Rgb> = {
+  black: [0, 0, 0], windowtext: [0, 0, 0], white: [255, 255, 255], window: [255, 255, 255],
+  red: [255, 0, 0], blue: [0, 0, 255], navy: [0, 0, 128], green: [0, 128, 0], gray: [128, 128, 128],
+  grey: [128, 128, 128], silver: [192, 192, 192], yellow: [255, 255, 0], orange: [255, 165, 0],
+  purple: [128, 0, 128], maroon: [128, 0, 0], teal: [0, 128, 128],
+};
+
+/** CSS 颜色值 → RGB; "keep" = 不带具体颜色 (inherit / 透明); null = 认不出。 */
 function parseColor(raw: string): Rgb | "keep" | null {
   const v = raw.replace(/!important/i, "").trim().toLowerCase();
   if (/^(inherit|initial|unset|currentcolor|transparent|none)$/.test(v)) return "keep";
-  if (v === "black") return [0, 0, 0];
-  if (v === "white") return [255, 255, 255];
+  if (NAMED[v]) return NAMED[v];
   let m = v.match(/^#([0-9a-f]{3})$/);
   if (m) return [...m[1]].map((c) => parseInt(c + c, 16)) as Rgb;
   m = v.match(/^#([0-9a-f]{6})(?:[0-9a-f]{2})?$/);
   if (m) return [0, 2, 4].map((i) => parseInt(m![1].slice(i, i + 2), 16)) as Rgb;
-  m = v.match(/^rgba?\(\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*(?:[,/]\s*[\d.]+%?\s*)?\)$/);
-  if (m) return [Number(m[1]), Number(m[2]), Number(m[3])];
+  m = v.match(/^rgba?\(\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*(?:[,/]\s*([\d.]+%?)\s*)?\)$/);
+  if (m) return m[4] !== undefined && parseFloat(m[4]) === 0 ? "keep" : [Number(m[1]), Number(m[2]), Number(m[3])];
   return null;
 }
 
 const luminance = ([r, g, b]: Rgb) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+const hex = (c: Rgb) => "#" + c.map((n) => Math.round(n).toString(16).padStart(2, "0")).join("");
 
-/** 文字颜色: "strip" = 近黑 (就是"默认黑字", 去掉后跟主题走); "keep" = 深底上也看得清;
- *  null = 深底上看不清或认不出 → 这封不跟主题。 */
-function judgeTextColor(raw: string): "strip" | "keep" | null {
-  const c = parseColor(raw);
-  if (c === null) return null;
-  if (c === "keep") return "keep";
-  if (Math.max(...c) <= 0x40) return "strip";
-  return luminance(c) >= 0.45 ? "keep" : null;
+/** 深色字提亮到深底上看得清 (往白色靠, 色相不变): 蓝 #0000ff → 浅蓝。 */
+function lighten(c: Rgb): Rgb {
+  let out = c;
+  for (let t = 0.3; luminance(out) < 0.55 && t <= 1; t += 0.1) {
+    out = c.map((n) => n + (255 - n) * t) as Rgb;
+  }
+  return out;
 }
 
-/** 背景: 白底去掉; 别的颜色 / 图片 → 这封有自己的版式, 不跟主题。 */
-function judgeBackground(raw: string): "strip" | "keep" | null {
+/** 浅色底上的字用的深色 (= 浅色主题的正文色)。 */
+const INK = "#14232A";
+
+type Verdict = { kind: "keep" } | { kind: "strip" } | { kind: "replace"; value: string } | null;
+
+/** 文字颜色。近黑 = "默认黑字", 去掉后跟主题走; 别的深色字深底上看不清, 换成
+ *  light-dark(原色, 提亮后的) —— 浅色主题下还是原色; 认不出 → null。 */
+function judgeTextColor(raw: string): Verdict {
+  const c = parseColor(raw);
+  if (c === null) return null;
+  if (c === "keep") return { kind: "keep" };
+  if (Math.max(...c) <= 0x40) return { kind: "strip" };
+  if (luminance(c) >= 0.45) return { kind: "keep" };
+  return { kind: "replace", value: `light-dark(${hex(c)}, ${hex(lighten(c))})` };
+}
+
+/** 背景。白底去掉 (跟主题走); 浅色底 (高亮 / 表头) 留着, 同时把字定成深色 ——
+ *  不然深色主题的浅字落在浅底上; 深色底原样; 背景图 / 认不出 → null。 */
+function judgeBackground(raw: string): Verdict & { ink?: boolean } | null {
   if (/url\(/i.test(raw)) return null;
-  const c = parseColor(raw);
+  const plain = raw.replace(/!important/i, "").trim();
+  let c = parseColor(plain);
+  if (c === null) {
+    // `background: #fff none repeat scroll 0 0` 这种简写: 找里面那个颜色
+    const tokens = plain.match(/rgba?\([^)]*\)|[^\s]+/g) ?? [];
+    for (const t of tokens) {
+      const parsed = parseColor(t);
+      if (parsed !== null && parsed !== "keep") { c = parsed; break; }
+      if (parsed === "keep") c = "keep";
+    }
+  }
   if (c === null) return null;
-  if (c === "keep") return "keep";
-  return Math.min(...c) >= 0xf0 ? "strip" : null;
+  if (c === "keep") return { kind: "keep" };
+  if (Math.min(...c) >= 0xf0) return { kind: "strip" };
+  return luminance(c) >= 0.6 ? { kind: "keep", ink: true } : { kind: "keep" };
 }
 
-/** 一封「只有字」的 HTML 邮件 (Apple Mail / Outlook 写的普通信) → 去掉写死的黑字白底,
- *  好让它跟随鲶鱼的深浅色; 有自己版式的 (表格 / 图片 / 样式表 / 底色 / 深色字) 返回 null,
- *  照旧白底显示。
+const DECL = /(^|[;{\s])(color|background-color|background-image|background)(\s*:\s*)([^;{}]*)/gi;
+
+/** 一段 CSS (style 属性的值 / <style> 块的内容) 里的字色和底色按上面的规则改写。
+ *  返回 null = 里面有判不了的东西。 */
+function rewriteCss(css: string): string | null {
+  let ok = true;
+  const out = css.replace(DECL, (m, pre: string, prop: string, sep: string, value: string) => {
+    const p = prop.toLowerCase();
+    if (p === "background-image") {
+      if (!/^\s*none\s*(!important)?\s*$/i.test(value)) ok = false;
+      return m;
+    }
+    const verdict = p === "color" ? judgeTextColor(value) : judgeBackground(value);
+    if (verdict === null) { ok = false; return m; }
+    if (verdict.kind === "strip") return pre;
+    if (verdict.kind === "replace") return `${pre}${prop}${sep}${verdict.value}`;
+    return (verdict as { ink?: boolean }).ink ? `${m};color:${INK}` : m;
+  });
+  return ok ? out : null;
+}
+
+/** 让一封 HTML 邮件跟随鲶鱼的深浅色: 写死的黑字白底去掉, 深色字提亮, 浅色底上的字
+ *  定成深色。返回 null = 这封判不了 (背景图 / 认不出的颜色写法), 照旧白底显示。
+ *
+ *  11/13 第一版见到样式表 / 表格 / 图片就整封放弃 —— 而 Outlook、Foxmail 写的普通信
+ *  几乎都带一段样式表, 真机收件箱 25 封里 23 封因此还是白底。现在只看颜色本身。
  *
  *  判不准一律返回 null: 白底只是不好看, 深底配深字是看不见。
  */
 export function themeableHtml(html: string): string | null {
   if (!html) return null;
-  if (/<(style|table|img|link|svg|video|canvas)\b/i.test(html)) return null;
-  if (/\sbackground\s*=/i.test(html)) return null;
+  if (/\sbackground\s*=/i.test(html)) return null;   // <body background="图">
   let ok = true;
-  const cleanStyle = (css: string): string =>
-    css
-      .split(";")
-      .map((decl) => {
-        const i = decl.indexOf(":");
-        if (i < 0) return decl;
-        const prop = decl.slice(0, i).trim().toLowerCase();
-        const value = decl.slice(i + 1);
-        let verdict: "strip" | "keep" | null = "keep";
-        if (prop === "color") verdict = judgeTextColor(value);
-        else if (prop === "background-color" || prop === "background") verdict = judgeBackground(value);
-        else if (prop === "background-image") verdict = /^\s*none\s*$/i.test(value) ? "keep" : null;
-        if (verdict === null) ok = false;
-        return verdict === "strip" ? "" : decl;
-      })
-      .filter((d) => d.trim())
-      .join(";");
-  let out = html.replace(/(\sstyle\s*=\s*)(["'])([\s\S]*?)\2/gi, (_m, pre, q, css) => `${pre}${q}${cleanStyle(css)}${q}`);
-  // <font color> / <body text> 写的字色, <body bgcolor> 写的底色
+  const css = (text: string): string => {
+    const r = rewriteCss(text);
+    if (r === null) { ok = false; return text; }
+    return r;
+  };
+  let out = html.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi, (_m, open, body, close) => `${open}${css(body)}${close}`);
+  out = out.replace(/(\sstyle\s*=\s*)(["'])([\s\S]*?)\2/gi, (_m, pre, q, body) => `${pre}${q}${css(body)}${q}`);
+  // <font color> / <body text> 写的字色, <td bgcolor> 写的底色 (属性里放不了 light-dark, 只能去或留)
   out = out.replace(/\s(color|text|bgcolor)\s*=\s*(?:(["'])(.*?)\2|([^\s>]+))/gi, (m, attr, _q, quoted, bare) => {
     const value = quoted ?? bare ?? "";
-    const verdict = attr.toLowerCase() === "bgcolor" ? judgeBackground(value) : judgeTextColor(value);
-    if (verdict === null) ok = false;
-    return verdict === "strip" ? "" : m;
+    if (attr.toLowerCase() === "bgcolor") {
+      const v = judgeBackground(value);
+      if (v === null || (v as { ink?: boolean }).ink) { ok = false; return m; }
+      return v.kind === "strip" ? "" : m;
+    }
+    const v = judgeTextColor(value);
+    if (v === null) { ok = false; return m; }
+    return v.kind === "keep" ? m : "";
   });
   return ok ? out : null;
 }
