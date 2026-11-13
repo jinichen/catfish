@@ -449,7 +449,7 @@ async function fetchWithOAuth(
  * 缓存到 memory (单 process 单员工, 切账号要重启). 不缓 localStorage — 避免脏 cache.
  */
 let _cachedUserEmail: string | null = null;
-async function getCurrentUserEmail(): Promise<string | null> {
+export async function getCurrentUserEmail(): Promise<string | null> {
   if (_cachedUserEmail) return _cachedUserEmail;
   try {
     const who = await invoke<{ authenticated: boolean; email?: string | null }>(

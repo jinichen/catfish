@@ -66,3 +66,23 @@ describe("分组 (11/09 全公司)", () => {
     expect(sortGroups(["研发部", "全公司", "市场部"])).toEqual(["全公司", "市场部", "研发部"]);
   });
 });
+
+
+import { splitMine } from "./wikiHubStatus";
+
+describe("splitMine (11/13 同事分享里不列自己分享的)", () => {
+  const docs = [
+    { file_id: "a", published_by: "ChenHongbo@ffcs.cn" },
+    { file_id: "b", published_by: "zhang@ffcs.cn" },
+    { file_id: "c", published_by: "chenhongbo@ffcs.cn " },
+  ];
+  it("按登录邮箱分出自己的, 不分大小写和首尾空白", () => {
+    const r = splitMine(docs, "chenhongbo@ffcs.cn");
+    expect(r.others.map((d) => d.file_id)).toEqual(["b"]);
+    expect(r.mine.map((d) => d.file_id)).toEqual(["a", "c"]);
+  });
+  it("不知道我是谁时不过滤", () => {
+    expect(splitMine(docs, null).others).toHaveLength(3);
+    expect(splitMine(docs, "").mine).toEqual([]);
+  });
+});

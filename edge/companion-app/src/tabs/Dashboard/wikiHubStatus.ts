@@ -46,3 +46,13 @@ export function groupOf(d: { namespace: string; visible_to?: string | null }): s
 export function sortGroups(groups: string[]): string[] {
   return [...groups].sort((a, b) => Number(b === COMPANY_GROUP) - Number(a === COMPANY_GROUP) || a.localeCompare(b));
 }
+
+/** 11/13: 「同事分享」里不列自己分享的 —— 那几页本来就在自己的资料库里, 列出来还挂着「收进资料库」
+ *  (鸿波: 「为什么自己分享的也会列出来」)。发布人是中央按登录身份记的 (published_by = 登录邮箱),
+ *  跟本机登录邮箱比, 不分大小写。不知道我是谁 (没登录 / 取不到) 时不过滤, 宁可多列。 */
+export function splitMine<T extends { published_by: string }>(docs: T[], me: string | null | undefined): { others: T[]; mine: T[] } {
+  const who = (me ?? "").trim().toLowerCase();
+  if (!who) return { others: docs, mine: [] };
+  const mine = docs.filter((d) => (d.published_by ?? "").trim().toLowerCase() === who);
+  return { others: docs.filter((d) => !mine.includes(d)), mine };
+}

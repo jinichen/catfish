@@ -19,13 +19,13 @@
 import { useEffect, useState } from "react";
 
 import { config } from "../../lib/env";
-import { fetchWithAuth } from "../../lib/me";
+import { fetchWithAuth, getCurrentUserEmail } from "../../lib/me";
 import {
   toolBridgeCallTool,
   listInstalledWikiShared,
   type InstalledWikiSharedInfo,
 } from "../../lib/tauri";
-import { COMPANY_GROUP, groupOf, hasHubUpdate, sortGroups, toolResultError } from "./wikiHubStatus";
+import { COMPANY_GROUP, groupOf, hasHubUpdate, sortGroups, splitMine, toolResultError } from "./wikiHubStatus";
 import { cleanPreview, personLabel, WikiDocPreview } from "./WikiHubPreview";
 
 interface WikiDoc {
@@ -126,6 +126,8 @@ function humanTime(iso?: string | null): string {
 
 export default function WikiHubCard() {
   const [docs, setDocs] = useState<WikiDoc[]>([]);
+  /** 自己分享的几页: 不在列表里, 只在底下说一句有几页 */
+  const [mineCount, setMineCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [installingKey, setInstallingKey] = useState<string | null>(null);
@@ -176,7 +178,9 @@ export default function WikiHubCard() {
         return;
       }
       const data = (await res.json()) as ListResponse;
-      setDocs(data.documents || []);
+      const { others, mine } = splitMine(data.documents || [], await getCurrentUserEmail().catch(() => null));
+      setDocs(others);
+      setMineCount(mine.length);
       setError(null);
     } catch (e) {
       setError(friendlyWikiHubError(e));
@@ -419,7 +423,14 @@ export default function WikiHubCard() {
             textAlign: "center",
           }}
         >
-          还没人分享过 wiki. 在资料库打开一条笔记, 点「分享」, 选本部门或全公司, 同事就能在这里看到并安装.
+          {mineCount > 0
+            ? "同事还没分享过知识页."
+            : "还没人分享过 wiki. 在资料库打开一条笔记, 点「分享」, 选本部门或全公司, 同事就能在这里看到并安装."}
+        </div>
+      )}
+      {!loading && !error && mineCount > 0 && (
+        <div style={{ color: "var(--catfish-text-muted)", fontSize: 12, marginTop: "var(--space-3)" }}>
+          你自己分享的 {mineCount} 页不在这里列 —— 它们本来就在你的「全部知识」里。审核 / 全公司的进度: 打开那一页, 点「分享」就能看到。
         </div>
       )}
 
