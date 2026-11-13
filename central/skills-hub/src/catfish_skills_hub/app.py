@@ -186,7 +186,7 @@ def _latest_visible(user: dict, namespace: str, name: str) -> str | None:
     d = storage._skills_dir() / namespace / name
     if not d.is_dir():
         return None
-    for v in sorted((p.name for p in d.iterdir() if p.is_dir() and not p.name.startswith(".")), reverse=True):
+    for v in storage.sorted_versions(d):
         if sr.can_see(user, sr.record_for(namespace, name, v)):
             return v
     return None

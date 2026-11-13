@@ -91,6 +91,21 @@ _NAME_RE = re.compile(r"^[a-zA-Z0-9_\-]{1,64}$")
 _VERSION_RE = re.compile(r"^[a-zA-Z0-9._\-+]{1,32}$")
 
 
+def version_key(v: str) -> tuple:
+    """版本号排序键: 按 . - + 切段, 数字段按数值比 (11/14 之前按字符串排, 1.10.0 排在 1.9.0 前面,
+    主管通过 1.10.0 之后同事拿到的还是 1.9.0)。非数字段 (如 "fact-ab12") 排在同位置的数字段之前。"""
+    out = []
+    for p in re.split(r"[.\-+]", v):
+        out.append((1, int(p), "") if p.isdigit() else (0, 0, p))
+    return tuple(out)
+
+
+def sorted_versions(skill_dir: Path) -> list[str]:
+    """skill 目录下所有版本, 新的在前 (按 version_key)。"""
+    return sorted((v.name for v in skill_dir.iterdir() if v.is_dir() and not v.name.startswith(".")),
+                  key=version_key, reverse=True)
+
+
 def hub_root() -> Path:
     """中央 hub 文件根. CATFISH_HUB_ROOT env 可 override (单测用)."""
     custom = os.environ.get("CATFISH_HUB_ROOT", "").strip()
@@ -216,13 +231,11 @@ def list_skills(namespace_filter: str | None = None) -> list[dict]:
             with _pg_conn() as conn:
                 with conn.cursor() as cur:
                     sql = """
-                        SELECT DISTINCT ON (namespace, name)
-                            namespace, name, version, description, deprecated,
+                        SELECT namespace, name, version, description, deprecated,
                             published_by, published_at, file_count, total_bytes,
                             subscribe_count, rating_avg, rating_count
                         FROM skills_versions
                         {where}
-                        ORDER BY namespace, name, published_at DESC
                     """
                     if namespace_filter:
                         cur.execute(
@@ -232,14 +245,22 @@ def list_skills(namespace_filter: str | None = None) -> list[dict]:
                     else:
                         cur.execute(sql.format(where=""))
                     rows = list(cur.fetchall())
-            out = []
+            # 11/14: 原来 DISTINCT ON 只取每个技能最新一行, all_versions 只有它自己 —— 最新版还在待审时,
+            # skill_review.annotate_list 找不到上一个已通过的版本, 同事那边整个技能消失。改成全部版本都拿,
+            # 按 version_key 排, 跟文件模式一致。
+            groups: dict[tuple[str, str], list[dict]] = {}
             for r in rows:
+                groups.setdefault((r["namespace"], r["name"]), []).append(r)
+            out = []
+            for (ns, nm), rs in sorted(groups.items()):
+                rs.sort(key=lambda r: version_key(r["version"]), reverse=True)
+                r = rs[0]
                 published_at = r.get("published_at")
                 out.append({
-                    "namespace": r["namespace"],
-                    "name": r["name"],
+                    "namespace": ns,
+                    "name": nm,
                     "latest_version": r["version"],
-                    "all_versions": [r["version"]],  # FS 兜底才扫全部, PG 模式只返最新
+                    "all_versions": [x["version"] for x in rs],
                     "description": r.get("description") or "",
                     "deprecated": bool(r.get("deprecated")),
                     "published_by": r.get("published_by"),
@@ -270,10 +291,7 @@ def list_skills(namespace_filter: str | None = None) -> list[dict]:
         for skill_dir in sorted(ns_dir.iterdir()):
             if not skill_dir.is_dir() or skill_dir.name.startswith("."):
                 continue
-            versions = sorted(
-                [v.name for v in skill_dir.iterdir() if v.is_dir() and not v.name.startswith(".")],
-                reverse=True,
-            )
+            versions = sorted_versions(skill_dir)
             if not versions:
                 continue
             latest_dir = skill_dir / versions[0]
@@ -309,10 +327,7 @@ def get_skill(namespace: str, name: str, version: str = "latest") -> dict | None
         return None
 
     if version == "latest":
-        versions = sorted(
-            [v.name for v in skill_dir.iterdir() if v.is_dir() and not v.name.startswith(".")],
-            reverse=True,
-        )
+        versions = sorted_versions(skill_dir)
         if not versions:
             return None
         version = versions[0]

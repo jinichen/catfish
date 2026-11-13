@@ -299,6 +299,17 @@ jobs:
           grep -qE "^[0-9]+ passed" /tmp/out.txt || {
             echo "::error::真 PG 测试一条都没跑 (多半是 postgres 服务没起来)"; exit 1; }
 
+      # 11/14: skills-hub 的列表在 PG 模式下另走一条 SQL (原来只取最新一行, 新版待审时同事那边整个技能消失)。
+      # 测试自己建临时库、跑 skills-hub 的 alembic、跑完删库; 同样确认它真的跑了而不是 skip。
+      - name: Run skills-hub real-PG tests
+        working-directory: central/skills-hub
+        env:
+          CATFISH_TEST_PG_URL: postgresql://catfish:catfish@localhost:5432/catfish
+        run: |
+          pip install -e '.[dev]'
+          PYTHONPATH=src python -m pytest tests/test_skill_review.py -k PG模式 -p no:cacheprovider -q 2>&1 | tee /tmp/hub.txt
+          grep -qE "^1 passed" /tmp/hub.txt || { echo "::error::skills-hub 真 PG 测试没跑或没过"; exit 1; }
+
   # ════════════════════════════════════════════════════════════
   # 3. Companion 前端 — tsc strict + vite build
   # ════════════════════════════════════════════════════════════

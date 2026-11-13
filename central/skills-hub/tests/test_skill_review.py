@@ -116,3 +116,55 @@ def test_上线前发的老版本_没有记录_算已通过全公司可见(clien
     got = client.get("/skills/department/old-skill", headers=OTHER).json()
     assert got["review"]["status"] == "approved" and got["review"]["legacy"] is True
     assert client.get("/skills", headers=OTHER).json()["skills"][0]["review"]["legacy"] is True
+
+
+def test_版本号按数值比_通过1点10之后同事拿到1点10_不是1点9(client):
+    # 11/14 之前按字符串排: "1.9.0" > "1.10.0", 列表和详情都还给 1.9.0
+    for v in ("1.9.0", "1.10.0"):
+        publish(client, EMP, version=v)
+        client.post(f"/skills/department/eis-login/{v}/review", headers=MGR, json={"decision": "approve"})
+    assert client.get("/skills", headers=MATE).json()["skills"][0]["latest_version"] == "1.10.0"
+    assert client.get("/skills/department/eis-login", headers=MATE).json()["version"] == "1.10.0"
+
+
+def test_version_key():
+    from catfish_skills_hub.storage import version_key as k
+    assert k("1.10.0") > k("1.9.0") > k("1.0") and k("2.0") > k("1.99.99")
+    assert k("1.0.1") > k("1.0.fact-ab12"), "非数字段排在同位置数字段之前"
+
+
+@pytest.fixture()
+def pg_client(tmp_path, monkeypatch):
+    """真 PG 上跑列表 (11/14): 设了 CATFISH_TEST_PG_URL 才跑 —— 建一个临时库, 跑完删掉, 不碰任何真库。"""
+    import os, subprocess, sys, uuid
+    base = os.environ.get("CATFISH_TEST_PG_URL", "").strip()
+    if not base:
+        pytest.skip("没设 CATFISH_TEST_PG_URL")
+    psycopg = pytest.importorskip("psycopg")
+    from urllib.parse import urlsplit, urlunsplit
+    u = urlsplit(base)
+    name = f"skills_hub_test_{uuid.uuid4().hex[:8]}"
+    scratch = urlunsplit(u._replace(path="/" + name))
+    with psycopg.connect(base, autocommit=True) as c:
+        c.execute(f'CREATE DATABASE "{name}"')
+    try:
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=here, check=True,
+                       env={**os.environ, "CATFISH_DB_URL": scratch}, capture_output=True)
+        monkeypatch.setenv("CATFISH_HUB_ROOT", str(tmp_path / "hub"))
+        monkeypatch.setenv("CATFISH_DB_URL", scratch)
+        from catfish_skills_hub.app import app
+        yield TestClient(app)
+    finally:
+        with psycopg.connect(base, autocommit=True) as c:
+            c.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+
+
+def test_PG模式_新版待审时_同事列表里还有上一个已通过的版本(pg_client):
+    # 11/14 之前 PG 列表只带最新一行, 最新版待审 → 同事那边整个技能消失
+    publish(pg_client, EMP)
+    pg_client.post("/skills/department/eis-login/1.0.0/review", headers=MGR, json={"decision": "approve"})
+    publish(pg_client, EMP, version="1.1.0")
+    skills = pg_client.get("/skills", headers=MATE).json()["skills"]
+    assert [s["latest_version"] for s in skills] == ["1.0.0"]
+    assert pg_client.get("/skills", headers=MGR).json()["skills"][0]["latest_version"] == "1.1.0"
