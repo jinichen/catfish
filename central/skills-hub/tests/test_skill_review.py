@@ -168,3 +168,26 @@ def test_PG模式_新版待审时_同事列表里还有上一个已通过的版�
     skills = pg_client.get("/skills", headers=MATE).json()["skills"]
     assert [s["latest_version"] for s in skills] == ["1.0.0"]
     assert pg_client.get("/skills", headers=MGR).json()["skills"][0]["latest_version"] == "1.1.0"
+
+
+# ── 11/14 员工本机已装版本的状态 ─────────────────────────────────
+
+
+def test_已装版本状态_撤回能看出来_能用的最新版_别部门的不露(client):
+    publish(client, EMP)
+    client.post("/skills/department/eis-login/1.0.0/review", headers=MGR, json={"decision": "approve"})
+    publish(client, EMP, version="1.1.0")
+    client.post("/skills/department/eis-login/1.1.0/review", headers=MGR, json={"decision": "approve"})
+    q = {"skills": [{"namespace": "department", "name": "eis-login", "version": "1.0.0"},
+                    {"namespace": "department", "name": "eis-login", "version": "1.1.0"},
+                    {"namespace": "department", "name": "nope", "version": "1.0.0"},
+                    {"namespace": "../x", "name": "a", "version": "1"}]}
+    r = client.post("/installed/status", headers=MATE, json=q).json()["skills"]
+    assert [(x["status"], x["latest_version"]) for x in r] == [
+        ("approved", "1.1.0"), ("approved", "1.1.0"), ("gone", None), ("invalid", None)]
+    client.post("/skills/department/eis-login/1.1.0/withdraw", headers=MGR)
+    r = client.post("/installed/status", headers=MATE, json=q).json()["skills"]
+    assert r[1]["status"] == "withdrawn" and r[1]["withdrawn_by"] == "boss@example.com" and r[1]["withdrawn_at"]
+    assert r[1]["latest_version"] == "1.0.0", "撤回后能用的回到 1.0.0"
+    other = client.post("/installed/status", headers=OTHER, json=q).json()["skills"]
+    assert other[1]["status"] == "hidden" and other[1].get("withdrawn_by") is None, "别的部门不借这个口子看到"

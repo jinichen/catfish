@@ -41,7 +41,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, UploadFile
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
@@ -377,6 +377,56 @@ def _expert_call(fn, *args):
         raise HTTPException(status_code=404, detail=str(e)) from None
     except (ValueError, FileExistsError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
+
+
+# ── 11/14 员工本机已装的技能 / 专家包, 现在什么状态 ─────────────────────────────
+# 列表和单版本 GET 对普通员工把「撤回了」「驳回了」「不是你部门的」都返成看不见, Companion 分不清
+# 「这个版本被撤回了, 要停用」还是「市场暂时没列」。这里按员工报上来的已装版本逐条回状态。
+# 只对「除去审核状态以外这个人本来就看得见」的版本报真实状态, 别的一律 hidden, 不借这个口子
+# 探别的部门有什么技能。
+
+
+def _status_of(rec: dict, visible_if_approved: bool) -> dict:
+    if not visible_if_approved:
+        return {"status": "hidden"}
+    return {"status": rec.get("status") or "approved", "withdrawn_at": rec.get("withdrawn_at"),
+            "withdrawn_by": rec.get("withdrawn_by"), "note": rec.get("review_note")}
+
+
+@app.post("/installed/status")
+async def installed_status(payload: dict = Body(default={}), user: dict = Depends(require_user)) -> dict:
+    """body: {skills: [{namespace, name, version}], experts: [{id, version}]} (各最多 500 条)。
+    每条回 {..., status: approved|pending|withdrawn|rejected|gone|hidden|invalid, latest_version}。
+    latest_version = 这个人现在能用的最新版 (没有就 null)。"""
+    out_s, out_e = [], []
+    for it in (payload.get("skills") or [])[:500]:
+        ns, name, ver = str(it.get("namespace") or ""), str(it.get("name") or ""), str(it.get("version") or "")
+        base = {"namespace": ns, "name": name, "version": ver}
+        try:
+            info = storage.get_skill(ns, name, version=ver)
+            latest = _latest_visible(user, ns, name)
+        except ValueError:
+            out_s.append({**base, "status": "invalid", "latest_version": None})
+            continue
+        if info is None:
+            out_s.append({**base, "status": "gone", "latest_version": latest})
+            continue
+        rec = sr.record_for(ns, name, ver, str(info.get("published_by") or ""))
+        out_s.append({**base, **_status_of(rec, sr.can_see(user, {**rec, "status": "approved"})), "latest_version": latest})
+    market = {m["id"]: m["version"] for m in experts.market(user)}
+    for it in (payload.get("experts") or [])[:500]:
+        pid, ver = str(it.get("id") or ""), str(it.get("version") or "")
+        base = {"id": pid, "version": ver}
+        try:
+            meta = experts._load(pid, ver)
+        except (ValueError, OSError):
+            meta = None
+        if meta is None:
+            out_e.append({**base, "status": "gone", "latest_version": market.get(pid)})
+            continue
+        out_e.append({**base, **_status_of(meta, experts.can_see(user, {**meta, "status": "approved"})),
+                      "latest_version": market.get(pid)})
+    return {"skills": out_s, "experts": out_e}
 
 
 @app.get("/experts")

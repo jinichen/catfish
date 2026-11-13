@@ -17,6 +17,7 @@ gateway 收 `/v1/hub/*` → 透传到 catfish-skills-hub upstream (默认 :8997)
   POST  /v1/hub/skills/{namespace}              发布新版 (multipart, 透传)
   DELETE /v1/hub/skills/{ns}/{name}/{version}   删 (上游 admin only 拦截)
   GET   /v1/hub/audit                           audit (admin)
+  POST  /v1/hub/installed/status                本机已装技能 / 专家包的状态 (撤回了没 / 能用的最新版, 11/14)
   GET   /v1/hub/healthz                         健康
 """
 from __future__ import annotations
@@ -269,6 +270,12 @@ async def audit(
 # ── 专家包 (10/18, docs/EXPERT-PACK-PLAN.md §5): 提交 / 市场 / 审核 / 下载 ─────────
 # 谁能看、谁能审由 hub 按部门判; 下载这里再加一道: identity 的 allowed_skills 对 `expert/<id>` 生效
 # (5/17 存了这个字段一直没人执行; 专家包是第一个按它拦的)。
+
+
+@router.post("/installed/status")
+async def installed_status(request: Request, user: User = Depends(get_current_user)) -> Response:
+    """11/14 Companion 定时报上本机已装的技能 / 专家包版本, hub 逐条回状态 (撤回了没 / 能用的最新版)。"""
+    return await _proxy(request, "/installed/status", user)
 
 
 @router.get("/experts")

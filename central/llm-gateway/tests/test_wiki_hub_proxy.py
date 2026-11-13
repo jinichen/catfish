@@ -104,3 +104,15 @@ def test_sales_funnel_requires_manager_of_dept(client, seen):
     managed = [urllib.parse.unquote(x) for x in seen[-1].headers["X-Catfish-User-Managed-Depts"].split(",")]
     assert managed == ["销售部", "a,b"]
     assert client.get(f"/v1/wiki/sales/dept/{urllib.parse.quote('研发部')}").status_code == 403
+
+
+def test_history_routes_forwarded(client, seen):
+    """11/14 历史版本三条路由透传, 部门名重新编码。"""
+    dept = urllib.parse.quote("研发部", safe="")
+    base = f"/v1/wiki/documents/dept/{dept}/abc123/history"
+    assert client.get(base).status_code == 200
+    assert seen[-1].method == "GET" and seen[-1].url.raw_path.decode() == f"/wiki/documents/dept/{dept}/abc123/history"
+    client.get(base + "/2")
+    assert seen[-1].url.raw_path.decode() == f"/wiki/documents/dept/{dept}/abc123/history/2"
+    client.post(base + "/2/restore")
+    assert seen[-1].method == "POST" and seen[-1].url.raw_path.decode() == f"/wiki/documents/dept/{dept}/abc123/history/2/restore"

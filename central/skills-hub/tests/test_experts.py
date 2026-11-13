@@ -146,3 +146,16 @@ def test_坏包拒收(client, bad):
 
 def test_没身份_401(client):
     assert client.get("/experts").status_code == 401
+
+
+def test_已装专家包状态_撤回后能看出来(client):
+    submit(client, EMP, pack())
+    client.post("/experts/qual/1.0.0/review", headers=MGR, json={"decision": "approve"})
+    q = {"experts": [{"id": "qual", "version": "1.0.0"}, {"id": "nope", "version": "1.0.0"}]}
+    mate = H("wang@example.com", "安全部")
+    r = client.post("/installed/status", headers=mate, json=q).json()["experts"]
+    assert [(x["status"], x["latest_version"]) for x in r] == [("approved", "1.0.0"), ("gone", None)]
+    client.post("/experts/qual/1.0.0/withdraw", headers=EMP)
+    r = client.post("/installed/status", headers=mate, json=q).json()["experts"]
+    assert r[0]["status"] == "withdrawn" and r[0]["withdrawn_by"] == "zhou@example.com" and r[0]["latest_version"] is None
+    assert client.post("/installed/status", headers=OTHER, json=q).json()["experts"][0]["status"] == "hidden"

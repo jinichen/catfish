@@ -55,3 +55,12 @@ def test_allowed_skills不含就拦下载(env):
     assert len(seen) == n, "拦在网关, 不往 hub 发"
     as_user(role="employee", effective_allowed_skills=["expert/*"])
     assert c.get("/v1/hub/experts/qual/1.0.0/download").status_code == 200
+
+
+def test_已装状态查询透传_带身份和请求体(env):
+    """11/14 Companion 报上已装版本, hub 逐条回状态。"""
+    c, seen, _ = env
+    body = b'{"skills": [{"namespace": "department", "name": "a", "version": "1.0.0"}]}'
+    assert c.post("/v1/hub/installed/status", content=body, headers={"Content-Type": "application/json"}).status_code == 200
+    assert seen[-1].method == "POST" and seen[-1].url.path == "/installed/status"
+    assert seen[-1].content == body and seen[-1].headers["X-Catfish-User-Sub"]

@@ -14,6 +14,9 @@ gateway 收 `/v1/wiki/*` → 透传到 catfish-wiki-hub upstream (默认 :8994),
   POST  /v1/wiki/documents                                发布 / 重发到自己部门
   POST  /v1/wiki/documents/dept/{部门}/{file_id}/unpublish  撤回 (员工 self / admin)
   POST  /v1/wiki/documents/dept/{部门}/{file_id}/scope      改范围: 申请全公司可见 / 收回本部门 (11/09)
+  GET   /v1/wiki/documents/dept/{部门}/{file_id}/history                历史版本列表 (11/14)
+  GET   /v1/wiki/documents/dept/{部门}/{file_id}/history/{n}            第 n 版全文
+  POST  /v1/wiki/documents/dept/{部门}/{file_id}/history/{n}/restore    作者 / admin 恢复到第 n 版
   GET   /v1/wiki/audit                                    admin 审计
 
 # Manifesto
@@ -212,6 +215,25 @@ async def review_document(dept: str, file_id: str, request: Request, user: User 
 async def scope_document(dept: str, file_id: str, request: Request, user: User = Depends(get_current_user)) -> Response:
     """11/09 作者 / admin 改分享范围 (申请全公司可见 / 收回到本部门), 不重发。hub 核作者身份。"""
     return await _proxy(request, _doc_path(dept, file_id, "/scope"), user)
+
+
+@router.get("/documents/dept/{dept}/{file_id}/history")
+async def document_history(dept: str, file_id: str, request: Request, user: User = Depends(get_current_user)) -> Response:
+    """11/14 历史版本列表。hub 核可见性 (撤回了的只给作者 / admin)。"""
+    return await _proxy(request, _doc_path(dept, file_id, "/history"), user)
+
+
+@router.get("/documents/dept/{dept}/{file_id}/history/{revision}")
+async def document_history_version(dept: str, file_id: str, revision: int, request: Request,
+                                   user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, _doc_path(dept, file_id, f"/history/{revision}"), user)
+
+
+@router.post("/documents/dept/{dept}/{file_id}/history/{revision}/restore")
+async def document_history_restore(dept: str, file_id: str, revision: int, request: Request,
+                                   user: User = Depends(get_current_user)) -> Response:
+    """作者 / admin 把第 n 版重新发成当前版 (hub 核作者身份)。"""
+    return await _proxy(request, _doc_path(dept, file_id, f"/history/{revision}/restore"), user)
 
 
 @router.post("/documents/dept/{dept}/{file_id}/unpublish")

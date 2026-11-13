@@ -262,7 +262,7 @@ def withdraw(user: dict, pid: str, ver: str) -> dict[str, Any]:
         raise PermissionError("只有提交人能撤回")
     if meta.get("status") not in ("pending", "approved"):
         raise ValueError("这个版本已经不在待审核 / 上架")
-    meta.update(status="withdrawn", withdrawn_at=_now())
+    meta.update(status="withdrawn", withdrawn_at=_now(), withdrawn_by=user.get("sub"))
     _save(meta)
     _audit({"event": "withdraw", "id": pid, "version": ver, "by": user.get("sub")})
     return _public(meta)
