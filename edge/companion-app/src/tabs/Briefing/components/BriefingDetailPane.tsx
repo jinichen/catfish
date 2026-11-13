@@ -179,11 +179,12 @@ export function DetailPane({
   }, [model]);
 
   const taskChat = useTaskChat({
+    chatKey,
     model,
     buildSystemPrompt,
     ensureSessionId,
   });
-  const { messages, isStreaming, status: taskChatStatus, send, cancel, retry, loadHistory } = taskChat;
+  const { messages, isStreaming, status: taskChatStatus, send, cancel, retry, loadHistory, reset: resetChat } = taskChat;
 
   const [input, setInput] = useState("");
   // P3.3.20 (6/11): in-memory attachments — image base64 / file preview,
@@ -316,6 +317,16 @@ export function DetailPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatKey, task.taskUid]);
 
+  // 11/13: 输入框跟着内容长高 (到约 6 行为止, 再多才在框内滚)。原来固定一行高,
+  // 贴一段两行的网址就只露出一行半, 上面那行被切掉一半。
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight + 2, 150)}px`;
+  }, [input]);
+
   // 新消息进来自动滚到底
   useEffect(() => {
     if (scrollRef.current) {
@@ -326,7 +337,8 @@ export function DetailPane({
   const handleSend = async () => {
     const text = input.trim();
     // P3.3.20 (6/11): 纯文字或纯附件都允许发, 跟 useChat 同款.
-    if ((!text && attachments.length === 0) || isStreaming) return;
+    // historyLoading: 刚切回来、这条待办的 session 还没查到时不发 —— 那一刻发会另建一个新 session
+    if ((!text && attachments.length === 0) || isStreaming || historyLoading) return;
     setChatError(null);
     setInput("");
     const atts = attachments;
@@ -411,12 +423,11 @@ export function DetailPane({
   const handleClearChat = async () => {
     if (!(await confirmDialog("清掉这条待办的所有对话历史? 不可撤销."))) return;
     try {
-      cancel();
+      resetChat();   // 停掉在跑的那一轮 + 清掉内存里的对话 (11/13 起对话状态不跟组件走, 要显式清)
       await taskChatClear(chatKey);
       if (chatKey !== task.title) {
         await taskChatClear(task.title).catch(() => undefined);
       }
-      loadHistory([]);
       // P3.5.218: reset sessionId 让下次 send 起新 hermes session
       sessionIdRef.current = null;
       setSessionId(null);
@@ -581,6 +592,7 @@ export function DetailPane({
           onChange={onPickFiles}
         />
         <textarea
+          ref={inputRef}
           className="briefing-2col__chat-input"
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -605,7 +617,7 @@ export function DetailPane({
           type="button"
           className="briefing-2col__chat-send"
           onClick={() => void handleSend()}
-          disabled={(!input.trim() && attachments.length === 0) || isStreaming}
+          disabled={(!input.trim() && attachments.length === 0) || isStreaming || historyLoading}
         >
           {isStreaming ? "处理中" : "发送"}
         </button>

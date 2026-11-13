@@ -1,7 +1,11 @@
 /** P3.3.10 (6/10 鸿波): per-task chat hook for BriefingTab DetailPane.
  *
  * 跟 useChat (工作台 hook) 不同点:
- * - **本地 state** (useState), 不动 useChatStore — 避免跟工作台 chat 串
+ * - 状态不放 useChatStore (避免跟工作台 chat 串), 放在本文件的 runtime 表里, 按
+ *   任务 key 一份 —— **不跟着组件走**。11/13 之前是组件里的 useState, 而且卸载
+ *   时主动 abort: 员工发完一句切到别的待办 / 别的 tab, 这一轮就被掐断, 回来只剩
+ *   自己那句话 (鸿波: 「切到其他TAB或任务，这个任务就断了」)。现在切走后这一轮
+ *   照常跑完、照常落库, 切回来接着看; 只有点「停止」才会停。
  * - **不跑** autoContinue / steer / vision switch / state.db 持久化
  * - **接** tool calling 循环 (streamChat onToolCalls → toolBridgeCallTool →
  *   再 streamChat 直到 finish_reason 非 tool_calls 或 MAX_ROUNDS)
@@ -12,7 +16,7 @@
  * Tool 循环跟 useChat.runOneRound 用同款 logic, 只是 state 是 local.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useSyncExternalStore } from "react";
 import { streamChat } from "../lib/chat";
 import { ensureTools } from "./chat/toolsCache";
 import { toolBridgeCallTool, sessionMessageAppend } from "../lib/tauri";
@@ -104,6 +108,8 @@ function nowIso(): string {
 }
 
 export interface UseTaskChatOpts {
+  /** 这段对话属于哪条待办 (task uid)。同一个 key 的对话状态在组件卸载后还在。 */
+  chatKey: string;
   model: string;
   /** system prompt 注入. 每次 send 都重算 (task 上下文可能变). */
   buildSystemPrompt: () => string;
@@ -133,30 +139,74 @@ export interface UseTaskChatReturn {
   reset: () => void;
 }
 
-export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [status, setStatus] = useState<TaskChatStatus | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-  const lastRequestRef = useRef<{ text: string; attachments: Attachment[] } | null>(null);
+interface TaskChatSnapshot {
+  messages: ChatMessage[];
+  isStreaming: boolean;
+  status: TaskChatStatus | null;
+}
 
-  // P3.3.13 (6/10): mountedRef 防 unmount 后 setState ghost write.
-  //   audit 报告 (#5): 切 task 时 DetailPane unmount + remount, 老 useTaskChat
-  //   abortRef 引用丢, fetch closure 持有 signal 仍跑, onError / onDone 仍
-  //   触发 setMessages — React 18+ 是 no-op 但 onPersist 仍会写到 jsonl 老 key,
-  //   切回新 task 看到诡异"消息凭空出现". fix: unmount cleanup 立即 abort,
-  //   且 mountedRef 拦 setMessages 跟 onPersist.
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      // 切 task 立即放弃 in-flight stream. ctrl.abort() → streamChat 读 signal
-      // 触发 AbortError → onError 跑但 mountedRef.current=false → 跳过 persist.
-      abortRef.current?.abort();
-      abortRef.current = null;
-    };
-  }, []);
+/** 一条待办的对话运行时。活在模块里, 组件挂不挂都在。 */
+class TaskChatRuntime {
+  snap: TaskChatSnapshot = { messages: [], isStreaming: false, status: null };
+  abort: AbortController | null = null;
+  last: { text: string; attachments: Attachment[] } | null = null;
+  /** 本次运行期间在这里发过消息 —— 之后内存里的就是最全的, 不再让库里读出来的覆盖
+   *  (刚跑完那一刻最后几条可能还在落库的路上)。 */
+  touched = false;
+  private listeners = new Set<() => void>();
+
+  subscribe = (fn: () => void) => {
+    this.listeners.add(fn);
+    return () => { this.listeners.delete(fn); };
+  };
+  getSnapshot = () => this.snap;
+  private emit(next: Partial<TaskChatSnapshot>) {
+    this.snap = { ...this.snap, ...next };
+    this.listeners.forEach((fn) => fn());
+  }
+  setMessages(next: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) {
+    this.emit({ messages: typeof next === "function" ? next(this.snap.messages) : next });
+  }
+  setIsStreaming(v: boolean) { this.emit({ isStreaming: v }); }
+  setStatus(next: TaskChatStatus | null | ((prev: TaskChatStatus | null) => TaskChatStatus | null)) {
+    this.emit({ status: typeof next === "function" ? next(this.snap.status) : next });
+  }
+}
+
+const runtimes = new Map<string, TaskChatRuntime>();
+const runningListeners = new Set<() => void>();
+function runtimeFor(key: string): TaskChatRuntime {
+  let rt = runtimes.get(key);
+  if (!rt) {
+    rt = new TaskChatRuntime();
+    rt.subscribe(() => runningListeners.forEach((fn) => fn()));
+    runtimes.set(key, rt);
+  }
+  return rt;
+}
+/** 这条待办的对话是不是正在跑 (左栏标记用; 配 subscribeTaskChatRunning)。 */
+export function isTaskChatRunning(key: string): boolean {
+  return runtimes.get(key)?.snap.isStreaming ?? false;
+}
+export function subscribeTaskChatRunning(fn: () => void): () => void {
+  runningListeners.add(fn);
+  return () => { runningListeners.delete(fn); };
+}
+/** 正在跑的那些待办的 key, 排好序用换行拼成一个字符串 (useSyncExternalStore 要稳定的快照)。 */
+export function runningTaskChatKeys(): string {
+  const keys: string[] = [];
+  runtimes.forEach((rt, key) => { if (rt.snap.isStreaming) keys.push(key); });
+  return keys.sort().join("\n");
+}
+/** 测试用: 清掉所有运行时。 */
+export function _resetTaskChatRuntimes(): void {
+  runtimes.forEach((rt) => rt.abort?.abort());
+  runtimes.clear();
+}
+
+export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
+  const current = runtimeFor(opts.chatKey);
+  const { messages, isStreaming, status } = useSyncExternalStore(current.subscribe, current.getSnapshot);
 
   // opts 用 ref, 闭包稳定不重建 send (model / buildSystemPrompt 都可能每次 render 变)
   const optsRef = useRef(opts);
@@ -203,30 +253,38 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
   );
 
   const loadHistory = useCallback((msgs: ChatMessage[]) => {
-    setMessages(msgs);
+    const rt = runtimeFor(optsRef.current.chatKey);
+    // 切回来时调用方会把库里的历史再读一遍塞进来。这里发过消息的话内存里的更全
+    // (含还在跑的那一轮), 不能被覆盖。
+    if (rt.touched) return;
+    rt.setMessages(msgs);
   }, []);
 
   const reset = useCallback(() => {
-    abortRef.current?.abort();
-    abortRef.current = null;
-    setMessages([]);
-    setIsStreaming(false);
-    setStatus(null);
+    const rt = runtimeFor(optsRef.current.chatKey);
+    rt.abort?.abort();
+    rt.abort = null;
+    rt.touched = false;
+    rt.last = null;
+    rt.setMessages([]);
+    rt.setIsStreaming(false);
+    rt.setStatus(null);
   }, []);
 
   const cancel = useCallback(() => {
-    const ctrl = abortRef.current;
+    const rt = runtimeFor(optsRef.current.chatKey);
+    const ctrl = rt.abort;
     if (!ctrl) return;
     ctrl.abort();
-    setIsStreaming(false);
-    setMessages((prev) =>
+    rt.setIsStreaming(false);
+    rt.setMessages((prev) =>
       prev.map((message) =>
         message.status === "streaming"
           ? { ...message, status: "done", content: message.content || "已停止" }
           : message,
       ),
     );
-    setStatus((prev) =>
+    rt.setStatus((prev) =>
       prev
         ? { ...prev, phase: "cancelled", detail: "正在停止本次回答…", error: undefined }
         : null,
@@ -238,18 +296,21 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
     const atts = attachments ?? [];
     // P3.3.20 (6/11): 纯文字或纯附件都允许 (跟 useChat 同款).
     if (!trimmed && atts.length === 0) return;
+    // 这一轮属于发送那一刻选中的待办; 之后切到别的待办也不换
+    const rt = runtimeFor(optsRef.current.chatKey);
     // 跟 useChat 同款保护: 流中再发会撞, caller 应 disable 输入框
-    if (abortRef.current && !abortRef.current.signal.aborted) {
+    if (rt.abort && !rt.abort.signal.aborted) {
       console.warn("[useTaskChat] 流进行中, 跳过 send");
       return;
     }
 
     const startedAt = Date.now();
     const ctrl = new AbortController();
-    abortRef.current = ctrl;
-    lastRequestRef.current = { text: trimmed, attachments: atts };
-    setIsStreaming(true);
-    setStatus({ phase: "preparing", startedAt });
+    rt.abort = ctrl;
+    rt.last = { text: trimmed, attachments: atts };
+    rt.touched = true;
+    rt.setIsStreaming(true);
+    rt.setStatus({ phase: "preparing", startedAt });
 
     // 1. append user msg (带 attachments, in-memory only) + persist
     const userMsg: ChatMessage = {
@@ -261,13 +322,10 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
       status: "done",
     };
     let curMessages: ChatMessage[] = [];
-    setMessages((prev) => {
+    rt.setMessages((prev) => {
       curMessages = [...prev, userMsg];
       return curMessages;
     });
-    // P3.3.13: user msg 一定是 mounted 时刚发的, 不用判. 后面 assistant /
-    //   tool persist 必须判 mountedRef (unmount 后 stream onError/onDone 仍可能
-    //   触发, 不能写 ghost row 到 state.db).
     // P3.3.19 C Phase 2c (6/11): persist 走 state.db (sessionMessageAppend) 而非 jsonl.
     // P3.3.20 (6/11): 附件内容不落 state.db (base64 / preview 太大),
     //   只存 "[📎 N 张图 + 📄 M 份文档]" 占位 — 跟 useChat 同款 (useChat.ts:560).
@@ -302,7 +360,7 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
       void persistMessage({ ...userMsg, content: persistContent, attachments: undefined }, sidForRound);
 
       // 2. 拉 tools (跟工作台同款 — 60s TTL cache, tool_bridge 不可达返 [])
-      setStatus({ phase: "loading_tools", startedAt, detail: "正在准备可用工具" });
+      rt.setStatus({ phase: "loading_tools", startedAt, detail: "正在准备可用工具" });
       const tools = await withTaskChatTimeout(
         ensureTools(),
         TASK_CHAT_TOOLS_TIMEOUT_MS,
@@ -328,7 +386,7 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
     let history: ChatMessage[] = [sysMsg, ...windowedMessages];
 
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-        setStatus({
+        rt.setStatus({
           phase: "waiting_model",
           startedAt,
           detail: round === 0 ? "已连接模型，等待首段输出" : `等待模型继续（第 ${round + 1} 轮）`,
@@ -342,7 +400,7 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
           ts: nowIso(),
           status: "streaming",
         };
-        setMessages((prev) => [...prev, assistantMsg]);
+        rt.setMessages((prev) => [...prev, assistantMsg]);
 
         const callsRef: { calls: ToolCall[] } = { calls: [] };
         let finalContent = "";
@@ -358,9 +416,9 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
             if (ctrl.signal.aborted) return;
             finalContent += chunk;
             if (chunk.trim()) {
-              setStatus({ phase: "generating", startedAt, detail: "正在生成回答" });
+              rt.setStatus({ phase: "generating", startedAt, detail: "正在生成回答" });
             }
-            setMessages((prev) =>
+            rt.setMessages((prev) =>
               prev.map((m) =>
                 m.id === assistantId
                   ? { ...m, content: m.content + chunk }
@@ -372,7 +430,7 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
             if (ctrl.signal.aborted) return;
             callsRef.calls = calls;
             if (calls.length > 0) {
-              setStatus({
+              rt.setStatus({
                 phase: "running_tool",
                 startedAt,
                 detail: `模型准备执行 ${calls.length} 个动作`,
@@ -386,8 +444,8 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
           onError: (err) => {
             if (ctrl.signal.aborted) return;
             streamErr = err;
-            setStatus({ phase: "error", startedAt, error: readableError(err) });
-            setMessages((prev) =>
+            rt.setStatus({ phase: "error", startedAt, error: readableError(err) });
+            rt.setMessages((prev) =>
               prev.map((m) =>
                 m.id === assistantId
                   ? { ...m, status: "error", error: err }
@@ -415,7 +473,7 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
           tool_calls: collectedCalls.length > 0 ? collectedCalls : undefined,
           status: "done",
         };
-        setMessages((prev) =>
+        rt.setMessages((prev) =>
           prev.map((m) => (m.id === assistantId ? doneAssistant : m)),
         );
 
@@ -423,16 +481,9 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
         //   tool_calls 此刻还是 pending/running (tool 还没真跑), result 字段缺.
         //   后面 tool 跑完会再 persist 一条完整 assistant 覆盖 (append-only 写新一行,
         //   load 时按 id 取最后一行).
-        // P3.3.13: mounted 时才 persist — unmount 后 stream onDone 可能仍触发,
-        //   不能写 ghost row 到老 task 的 state.db session.
-        // P3.3.19 C Phase 2c: persist 走 state.db.
-        // P3.5.10: 用 send 入口 snapshot 的 sidForRound (lazy create 拿到的 sid),
-        //   防 streaming 期间用户切走 task → setSessionId(null) → 后续 persist
-        //   落到错 session. sidForRound 是 closure 捕获的本轮锁定值.
-        if (
-          mountedRef.current &&
-          (finalContent.trim().length > 0 || collectedCalls.length > 0)
-        ) {
+        // 11/13: 不再看组件还在不在 —— 切走后这一轮照常跑, 结果落到发送时锁定的
+        //   sidForRound (send 入口 snapshot), 不会写到别的待办的 session。
+        if (finalContent.trim().length > 0 || collectedCalls.length > 0) {
           void persistMessage(doneAssistant, sidForRound);
         }
         history = [...history, doneAssistant];
@@ -442,13 +493,13 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
 
         // 跑 tool (跟 useChat runOneRound 同款串行)
         for (const tc of collectedCalls) {
-          setStatus({
+          rt.setStatus({
             phase: "running_tool",
             startedAt,
             detail: `正在执行 ${tc.name}（第 ${round + 1} 轮）`,
           });
           // mark running (assistant 卡片里那条 tool_calls[i] 进度)
-          setMessages((prev) =>
+          rt.setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantId
                 ? {
@@ -489,7 +540,7 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
           }
 
           // update tool_call.result + status
-          setMessages((prev) =>
+          rt.setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantId
                 ? {
@@ -520,41 +571,36 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
           history = [...history, toolMsg];
 
           // P3.3.11: tool result 也 persist — load 时 join 回 assistant.tool_calls[i].result.
-          // P3.3.13: mounted 时才 persist (防 ghost write — 切走 task 后 stream
-          //   还可能跑完一个 tool, 不能写到老 task 的 session).
-          // P3.3.19 C Phase 2c: persist 走 state.db (sessionMessageAppend).
-          // P3.5.10: sidForRound 是 send 入口 snapshot, 锁本轮 session.
-          if (mountedRef.current) {
-            void persistMessage(toolMsg, sidForRound);
-          }
+          // sidForRound 是 send 入口 snapshot, 锁本轮 session。
+          void persistMessage(toolMsg, sidForRound);
         }
       }
     } catch (e) {
       if (ctrl.signal.aborted || isAbortError(e)) {
         terminal = "cancelled";
-        if (mountedRef.current && abortRef.current === ctrl) {
-          setStatus({ phase: "cancelled", startedAt, detail: "本次回答已停止，可重新发送" });
+        if (rt.abort === ctrl) {
+          rt.setStatus({ phase: "cancelled", startedAt, detail: "本次回答已停止，可重新发送" });
         }
       } else {
         terminal = "error";
         const message = readableError(e);
         console.warn("[useTaskChat] send 异常:", e);
-        if (mountedRef.current && abortRef.current === ctrl) {
-          setStatus({ phase: "error", startedAt, error: message });
+        if (rt.abort === ctrl) {
+          rt.setStatus({ phase: "error", startedAt, error: message });
         }
       }
     } finally {
       // 取消后立即重试可能已经创建了新 ctrl，旧请求不能清掉新请求的状态。
-      if (abortRef.current === ctrl) {
-        setIsStreaming(false);
-        abortRef.current = null;
-        if (terminal === "success") setStatus(null);
+      if (rt.abort === ctrl) {
+        rt.setIsStreaming(false);
+        rt.abort = null;
+        if (terminal === "success") rt.setStatus(null);
       }
     }
   }, []);
 
   const retry = useCallback(() => {
-    const request = lastRequestRef.current;
+    const request = runtimeFor(optsRef.current.chatKey).last;
     if (request) void send(request.text, request.attachments);
   }, [send]);
 

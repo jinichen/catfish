@@ -14,7 +14,8 @@
  * 数据 0 后端改动: 复用 MainTask / HandledSilentlyItem / advisorTaskState.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { runningTaskChatKeys, subscribeTaskChatRunning } from "../../../hooks/useTaskChat";
 import { alertDialog } from "../../../components/dialogs";
 
 // 8/15: 本文件原来 1017 行 —— 左栏列表 + 右栏详情长在一起, DetailPane 一个人
@@ -145,6 +146,9 @@ export default function BriefingTwoColumnView({
 
   const selected = tasks.find((t) => t.id === selectedId) ?? null;
 
+  const runningSnap = useSyncExternalStore(subscribeTaskChatRunning, runningTaskChatKeys);
+  const runningKeys = useMemo(() => new Set(runningSnap ? runningSnap.split("\n") : []), [runningSnap]);
+
   const renderRow = (t: MainTask) => {
     // P3.5.208-A (7/9 鸿波): SSOT 读取. effectiveStatusByUid 是唯一
     // 读取入口, 不再自己 merge. 空 map → 视为 pending (默认无徽章).
@@ -167,6 +171,10 @@ export default function BriefingTwoColumnView({
         onClick={() => setSelectedId(t.id)}
       >
         <div className="briefing-2col__task-title">
+          {/* 11/13: 这条待办的对话还在跑 (切到别的待办 / tab 后它照常进行) */}
+          {runningKeys.has(t.taskUid || t.title) && (
+            <span className="briefing-2col__task-running" title="小鲶还在处理这条, 点回来能看进度">处理中</span>
+          )}
           {effective === "resolved" && "✓ "}
           {effective === "paused" && "⏰ "}
           {t.title}

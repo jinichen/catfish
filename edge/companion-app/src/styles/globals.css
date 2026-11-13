@@ -3905,7 +3905,22 @@ button {
    *   一截视觉割裂.) */
   resize: none;
   min-height: 36px;
+  /* 11/13: 高度由 BriefingDetailPane 按内容设 (一行 36px, 最多约 6 行), 超出才滚 */
+  max-height: 150px;
+  overflow-y: auto;
+  box-sizing: border-box;
   line-height: 1.5;
+}
+.briefing-2col__task-running {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  line-height: 16px;
+  vertical-align: 1px;
+  color: var(--catfish-cyan);
+  background: var(--catfish-cyan-tint);
 }
 .briefing-2col__chat-input:focus {
   outline: none;
