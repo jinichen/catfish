@@ -327,12 +327,14 @@ export function DetailPane({
     el.style.height = `${Math.min(el.scrollHeight + 2, 150)}px`;
   }, [input]);
 
-  // 新消息进来自动滚到底
+  // 新消息进来自动滚到底。historyLoading 也要看: 切回这条待办时消息早就在内存里
+  // (11/13 起对话不跟组件走), 「加载历史」那一下结束后 messages 并没有变, 只看
+  // messages 的话这个 effect 不会再跑, 对话就停在最上面 (鸿波: 「切回来不应该直接到末尾吗」)。
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [messages, historyLoading, taskChatStatus?.phase]);
 
   const handleSend = async () => {
     const text = input.trim();
