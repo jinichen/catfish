@@ -12,6 +12,7 @@
 import type { EmailAccountItem } from "../../../lib/tauri";
 import ArchivePanel from "./ArchivePanel";
 import AttachLimitSetting from "./AttachLimitSetting";
+import RemoteImagesSetting from "./RemoteImagesSetting";
 import ImapSetup from "./ImapSetup";
 import PhishingMarksPanel from "./PhishingMarksPanel";
 
@@ -81,6 +82,7 @@ export default function MailSettingsPanel({
         )}
       </div>
       <AttachLimitSetting />
+      <RemoteImagesSetting />
       <PhishingMarksPanel />
       {imapVisible && <ImapSetup onConfigured={onChanged} />}
       <ArchivePanel />

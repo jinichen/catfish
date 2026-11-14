@@ -15,7 +15,12 @@ import { usePhishingMarksStore } from "../../../store/phishingMarks";
 
 type Msg = { id: string; sender?: string | null; subject?: string | null };
 
-/** 详情里要显示的结果: 标完重扫回来的优先, 再按标注改 */
+/** 详情里要显示的结果: 标完重扫回来的优先, 再按标注改。marks 还没读到时返回 ready=false (外部图片自动显示要等它) */
+export function useEffectivePhishing(result: PhishingScanResult | null, msg: Msg) {
+  const marks = usePhishingMarksStore((s) => s.marks);
+  return { p: useEffective(result, msg), ready: marks !== null };
+}
+
 function useEffective(result: PhishingScanResult | null, msg: Msg) {
   const marks = usePhishingMarksStore((s) => s.marks);
   const rescanned = usePhishingMarksStore((s) => s.rescanned[msg.id]);

@@ -26,7 +26,9 @@ import { buildEmailSrcDoc, countRemoteRefs, themeableHtml } from "../../../lib/e
 // P3.5.158 Phase 3 (7/2 鸿波): Compose panel 抽到 ComposeCore 共享组件
 import ComposeCore from "./ComposeCore";
 import MessageHeaderFields from "./MessageHeaderFields";
-import PhishingBanner, { MarkPhishingButton } from "./PhishingBanner";
+import PhishingBanner, { MarkPhishingButton, useEffectivePhishing } from "./PhishingBanner";
+import { useAutoLoadImages } from "./RemoteImagesSetting";
+import { autoShowRemote, looksPhishy } from "../../../lib/emailRemoteImages";
 import { modKey } from "../../../lib/platformLabels";
 
 interface FullMessage extends EmailDigestItem {
@@ -76,8 +78,11 @@ function DetailPane({
   // 换邮件时复位: 后者靠的是记得写那行复位, 漏了就是上一封点过对下一封也
   // 放行 —— 一个看不出来的隐私泄漏。存 id 的话, 陈旧的值永远配不上新的 id,
   // 结构上就串不了。
+  //
+  // 11/14 鸿波「图片缺省打开, 不要每次都去点」: 默认自动显示 (邮箱设置里能关), 但疑似钓鱼的、
+  // 钓鱼扫描结果还没回来的照旧先拦 —— 见 lib/emailRemoteImages.ts。showRemote 在下面钓鱼结果之后算。
   const [showRemoteFor, setShowRemoteFor] = useState<string | null>(null);
-  const showRemote = showRemoteFor === msg.id;
+  const autoLoadImages = useAutoLoadImages();
 
   /** 这封信服务器上已经没有了, 只剩本地档案。
    *
@@ -135,19 +140,29 @@ function DetailPane({
 
   // P3.3.58 段 2C (6/12 鸿波): 拉单封邮件的钓鱼扫描结果, 显红条
   const [phishing, setPhishing] = useState<PhishingScanResult | null>(null);
+  // 11/14: 这封的扫描结果拿到了没 (拿失败也算拿到: 没扫过的信不能一直不显示图片)。存 id, 换一封自然作废
+  const [phishingDoneFor, setPhishingDoneFor] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     setPhishing(null);
     (async () => {
       try {
         const map = await emailPhishingGet([msg.id]);
-        if (!cancelled) setPhishing(map[msg.id] ?? null);
+        if (!cancelled) setPhishing(map?.[msg.id] ?? null);
       } catch {
         // 拉失败静默 — 没扫过的 detail pane 不显红条 OK
+      } finally {
+        if (!cancelled) setPhishingDoneFor(msg.id);
       }
     })();
     return () => { cancelled = true; };
   }, [msg.id]);
+  const effPhishing = useEffectivePhishing(phishing, msg);
+  const phishingReady = phishingDoneFor === msg.id && effPhishing.ready;
+  const showRemote = showRemoteFor === msg.id || autoShowRemote(autoLoadImages, phishingReady, effPhishing.p);
+  /** 自动显示开着、这封却先拦着: 疑似钓鱼时提示条要说原因; 还在等扫描结果时不出提示条 (一闪就没了) */
+  const remoteHeldForPhishing = autoLoadImages && phishingReady && looksPhishy(effPhishing.p);
+  const remoteWaiting = autoLoadImages && !phishingReady;
 
   // P3.3.53.2 (6/13 鸿波): 政治敏感扫描 — detail pane 打开时主动扫.
   // 默认 yaml political.enabled=false → 返 engineEnabled=false, 不显红条.
@@ -624,7 +639,7 @@ function DetailPane({
         />
       ) : msg.body_html ? (
         <>
-          {remoteRefCount > 0 && !showRemote && (
+          {remoteRefCount > 0 && !showRemote && !remoteWaiting && (
             /* 9/18: 外链图默认不加载。不给这条提示的话, 员工看到的是几个
                空洞 —— 跟"鲶鱼坏了"长得一模一样, 而真相是我们**故意**拦的。
                降级必须说话, 这跟空收件箱是同一类病。 */
@@ -642,8 +657,9 @@ function DetailPane({
               }}
             >
               <span style={{ flex: 1 }}>
-                这封邮件有 {remoteRefCount} 处外部图片未加载 ——
-                加载它们会让发件人知道你打开了这封邮件。
+                {remoteHeldForPhishing
+                  ? `这封疑似钓鱼, ${remoteRefCount} 处外部图片没有自动加载 —— 加载会让发件人确认这个邮箱有人在看。`
+                  : `这封邮件有 ${remoteRefCount} 处外部图片未加载 —— 加载它们会让发件人知道你打开了这封邮件。`}
               </span>
               <button
                 type="button"

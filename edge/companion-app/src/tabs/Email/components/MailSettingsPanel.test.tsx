@@ -2,13 +2,14 @@
  * @vitest-environment jsdom
  */
 /** 邮箱设置里什么时候出现 IMAP (9/28 鸿波: "用原生客户端为什么还提示 IMAP, 是不是很奇怪?")。 */
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./ImapSetup", () => ({ default: () => <div>IMAP 卡片</div> }));
 vi.mock("./ArchivePanel", () => ({ default: () => null }));
 
 import MailSettingsPanel from "./MailSettingsPanel";
+import { getAutoLoadImages, setAutoLoadImages } from "../../../lib/emailRemoteImages";
 
 const mac = { name: "Google", address: "me@gmail.com", is_default: true, client: "apple_mail" };
 const imap = { name: "me@example.cn", address: "me@example.cn", is_default: false, client: "imap" };
@@ -32,5 +33,15 @@ describe("MailSettingsPanel", () => {
   it("没有客户端账号 (Windows): IMAP 就是唯一的路, 照常显示", () => {
     render(<MailSettingsPanel accounts={[]} onChanged={() => {}} />);
     expect(screen.getByText("IMAP 卡片")).toBeTruthy();
+  });
+
+  it("外部图片: 默认勾着「打开邮件时自动显示」, 能关掉 (11/14)", () => {
+    render(<MailSettingsPanel accounts={[mac]} onChanged={() => {}} />);
+    const box = screen.getByLabelText("打开邮件时自动显示") as HTMLInputElement;
+    expect(box.checked).toBe(true);
+    fireEvent.click(box);
+    expect(getAutoLoadImages()).toBe(false);
+    expect(box.checked).toBe(false);
+    setAutoLoadImages(true);
   });
 });

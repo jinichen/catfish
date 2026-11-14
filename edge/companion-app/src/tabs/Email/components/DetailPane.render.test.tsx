@@ -26,9 +26,10 @@
  *   ① 正文区域不许出现源码注释残渣
  *   ② 外链图默认不加载, 且**要给一句话**, 不留空洞
  *   ③ 「显示图片」是每封单独决定的, 换一封不许继承上一封的决定
+ *   ④ 11/14 起默认自动显示外部图片; 疑似钓鱼的、钓鱼扫描结果还没回来的照旧先拦 (②③ 在关掉自动显示时成立)
  */
-import { describe, expect, it, vi, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
+import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 
 vi.mock("../../../lib/tauri", () => ({
   emailDeleteMessage: vi.fn(async () => undefined),
@@ -43,6 +44,8 @@ vi.mock("../../../store/agent", () => ({
 }));
 
 import DetailPane from "./DetailPane";
+import { emailPhishingGet } from "../../../lib/tauri";
+import { setAutoLoadImages } from "../../../lib/emailRemoteImages";
 
 const base = {
   account: "Chinatelecom",
@@ -104,7 +107,9 @@ describe("正文区域不许出现源码注释", () => {
 // ②③ 外链图
 // ─────────────────────────────────────────────────────────────
 
-describe("外链图默认不加载", () => {
+describe("关掉自动显示时: 外链图不加载", () => {
+  beforeEach(() => setAutoLoadImages(false));
+  afterEach(() => setAutoLoadImages(true));
   const withRemote = {
     id: "apple_mail|Chinatelecom|2610",
     body_html: '<p>正文</p><img src="https://tracker.example.com/p.gif">',
@@ -147,5 +152,41 @@ describe("外链图默认不加载", () => {
       screen.queryByText(/外部图片未加载/),
       "换了一封邮件, 上一封的「显示图片」还生效着",
     ).toBeTruthy();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// ④ 11/14 默认自动显示
+// ─────────────────────────────────────────────────────────────
+
+describe("默认自动显示外部图片", () => {
+  const withRemote = {
+    id: "apple_mail|Google|77",
+    body_html: '<p>正文</p><img src="https://img.example.com/banner.png">',
+  };
+  const srcDoc = () => (document.querySelector("iframe") as HTMLIFrameElement).getAttribute("srcdoc") ?? "";
+
+  it("钓鱼扫描结果回来、不是钓鱼 → 直接放行, 不出提示条", async () => {
+    mount(withRemote);
+    await waitFor(() => expect(srcDoc()).toContain("img-src data: https:"));
+    expect(screen.queryByText(/外部图片/)).toBeNull();
+  });
+
+  it("扫描结果还没回来 → 先拦着 (像素不能抢在钓鱼判断前面发出去), 也不闪提示条", () => {
+    vi.mocked(emailPhishingGet).mockImplementationOnce(() => new Promise(() => {}));
+    mount(withRemote);
+    expect(srcDoc()).toContain("img-src data:;");
+    expect(screen.queryByText(/外部图片/)).toBeNull();
+  });
+
+  it("疑似钓鱼 → 不自动显示, 提示条说原因, 还能手动点开", async () => {
+    vi.mocked(emailPhishingGet).mockResolvedValueOnce({
+      [withRemote.id]: { messageId: withRemote.id, scannedAt: "", flags: [], highestSeverity: "high" },
+    } as never);
+    mount(withRemote);
+    await waitFor(() => expect(screen.getByText(/这封疑似钓鱼/)).toBeTruthy());
+    expect(srcDoc()).toContain("img-src data:;");
+    fireEvent.click(screen.getByText("显示图片"));
+    expect(srcDoc()).toContain("img-src data: https:");
   });
 });
