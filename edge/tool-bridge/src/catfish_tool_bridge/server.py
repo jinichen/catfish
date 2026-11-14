@@ -293,6 +293,15 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
                 return _success(req_id, await asyncio.to_thread(handlers[method]))
             except (ValueError, LookupError, OSError) as e:
                 return _error(req_id, INVALID_PARAMS, str(e))
+    # 11/14: 装的共享内容 (技能 / 专家包 / 部门知识页) 有没有新版、被撤回了没 (shared_check.py); Companion 后台定时调
+    if method.startswith("pim/shared_check"):
+        from . import shared_check  # noqa: PLC0415
+        handlers = shared_check.pim_handlers(params)
+        if method in handlers:
+            try:
+                return _success(req_id, await asyncio.to_thread(handlers[method]))
+            except (ValueError, LookupError, OSError) as e:
+                return _error(req_id, INVALID_PARAMS, str(e))
     # 10/12: 「提醒同步到微信」的「发一条测试」(wechat_push.py), Rust 侧 notify_prefs.rs 调; 不进模型工具清单
     if method == "pim/wechat_push_test":
         from . import wechat_push  # noqa: PLC0415

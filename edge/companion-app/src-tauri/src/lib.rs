@@ -689,6 +689,8 @@ pub fn run() {
             services::distill_scheduler::schedule_distill(app.handle().clone());
             // 10/22 P1: 今天日程落盘给 hermes 插件 (主聊天的「此刻」块), 见 services/situation_snapshot.rs
             services::situation_snapshot::schedule_calendar_snapshot();
+            // 11/14 装的共享内容定时查新版 / 撤回 (撤回的技能 / 专家本机停用), 见 services/shared_check.rs
+            services::shared_check::schedule_shared_check();
 
             Ok(())
         })

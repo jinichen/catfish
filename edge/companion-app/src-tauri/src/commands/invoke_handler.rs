@@ -576,6 +576,9 @@ pub(crate) fn handler(
             crate::commands::wiki_source_trace::wiki_source_sessions,
             crate::commands::wiki_share::wiki_share_plan,
             crate::commands::practice_stats::practice_stats,
+            // 11/14 装的共享内容: 新版 / 撤回 (早安简报那一条)
+            crate::services::shared_check::shared_check_run,
+            crate::services::shared_check::shared_check_last,
             // 11/01 手机通道 (docs/MOBILE-CLIENT-DESIGN.md)
             crate::commands::mobile_bridge::mobile_status,
             crate::commands::mobile_bridge::mobile_set_enabled,

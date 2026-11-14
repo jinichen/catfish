@@ -368,6 +368,9 @@ def plan(params: dict[str, Any]) -> dict[str, Any]:
         "hub_status": {k: hub_doc.get(k) for k in ("scope", "company_status", "company_note", "visible_to")
                        if hub_doc.get(k) is not None} if hub_doc else None,
         "hub_known": on_hub is not None,
+        # 11/14: 中央上这一页是哪个 (对话框里「历史版本」用); 没分享过 = None
+        "hub_ref": {"namespace": prev["namespace"], "file_id": prev["file_id"]}
+        if prev.get("namespace") and prev.get("file_id") else None,
         "scan": scan(path.name, f"---\n{new_fm}\n---\n\n{new_body}"),
         "preview": {"frontmatter_yaml": new_fm, "body_md": new_body, "fields": fields},
         "sources": sources,

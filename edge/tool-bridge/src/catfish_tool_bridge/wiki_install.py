@@ -112,15 +112,19 @@ def _set_frontmatter_field(text: str, key: str, value: str) -> str:
 def _mark_local_withdrawn(target_dir: Path, file_id: str, doc: dict[str, Any]) -> dict[str, Any]:
     """主管 / 发布人撤下了: 员工本机那份不删 (公理 4), 只标 review_status: withdrawn (搜索默认不列, 卡片显「已撤回」)。"""
     md = target_dir / f"{file_id}.md"
-    try:
-        md.write_text(_set_frontmatter_field(md.read_text(encoding="utf-8"), "review_status", "withdrawn"), encoding="utf-8")
-    except OSError as e:
-        return {"ok": False, "error": f"标记本机副本失败: {e}"}
     meta_path = target_dir / f"{file_id}.meta.json"
     try:
         meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
     except (OSError, ValueError):
         meta = {}
+    try:
+        before = md.read_text(encoding="utf-8")
+        after = _set_frontmatter_field(before, "review_status", "withdrawn")
+        md.write_text(after, encoding="utf-8")
+    except OSError as e:
+        return {"ok": False, "error": f"标记本机副本失败: {e}"}
+    if meta.get("local_sha256") == _sha(before):   # 11/14: 是我们自己改的那一行, 别让下次更新误以为员工改过
+        meta["local_sha256"] = _sha(after)
     meta.update(_review_fields(doc), review_status="withdrawn")
     if doc.get("unpublished_reason") and not meta.get("review_note"):
         meta["review_note"] = doc["unpublished_reason"]
@@ -181,6 +185,36 @@ def _install_linked(namespace: str, file_id: str, published_by: str, frontmatter
         if res.get("ok"):
             out.append(str(d.get("title") or fid))
     return out
+
+
+def _sha(text: str) -> str:
+    import hashlib  # noqa: PLC0415
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _backup_local_edits(target_dir: Path, file_id: str, new_text: str) -> str | None:
+    """11/14: 「拉更新」会整页覆盖本机副本。本机副本跟上次装进来的不一样 (员工或小鲶改过) 就先备份,
+    备份在 ~/.catfish/backups/wiki-shared/<ns>/<file_id>-<时间>.md (不放进 wiki-shared, 免得搜索里出现两份)。
+    老安装没记 local_sha256 → 判断不了改没改, 跟新内容不一样就备份。返备份路径, 没备份返 None。"""
+    md = target_dir / f"{file_id}.md"
+    if not md.exists():
+        return None
+    try:
+        cur = md.read_text(encoding="utf-8")
+        recorded = (json.loads((target_dir / f"{file_id}.meta.json").read_text(encoding="utf-8")) or {}).get("local_sha256")
+    except (OSError, ValueError):
+        cur, recorded = (md.read_text(encoding="utf-8") if md.exists() else ""), None
+    if cur == new_text or (recorded and recorded == _sha(cur)):
+        return None
+    ns = target_dir.relative_to(_shared_root())
+    dest = _home() / "backups" / "wiki-shared" / ns / f"{file_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(cur, encoding="utf-8")
+    except OSError as e:
+        logger.warning("备份本机改动失败 (照样更新): %s", e)
+        return None
+    return str(dest)
 
 
 def wiki_install(args: dict[str, Any]) -> dict[str, Any]:
@@ -267,6 +301,7 @@ def wiki_install(args: dict[str, Any]) -> dict[str, Any]:
     target_dir.mkdir(parents=True, exist_ok=True)
 
     full_text = _set_frontmatter_field(f"---\n{frontmatter_yaml.strip()}\n---\n\n{body_md}", "review_status", review["review_status"])
+    backup = _backup_local_edits(target_dir, file_id, full_text)
     try:
         target_md.write_text(full_text, encoding="utf-8")
     except Exception as e:
@@ -285,6 +320,7 @@ def wiki_install(args: dict[str, Any]) -> dict[str, Any]:
         "hub_updated_at": hub_updated_at,
         "installed_at": now_iso,
         "size_bytes": len(full_text.encode("utf-8")),
+        "local_sha256": _sha(full_text),   # 11/14: 下次更新前比一下, 本机改过就先备份
         **review,
     }
     meta_path = target_dir / f"{file_id}.meta.json"
@@ -305,6 +341,7 @@ def wiki_install(args: dict[str, Any]) -> dict[str, Any]:
         "installed_path": str(target_md),
     })
 
+    backup_note = f" 本机原来那份跟中央上次的不一样, 已备份到 {backup}." if backup else ""
     pending_note = " 这页主管还没审过 (标「待审」), 内容以主管审过为准." if review["review_status"] == "pending" else ""
     also = [] if args.get("_linked") else _install_linked(namespace, file_id, published_by, frontmatter_yaml, body_md)
     linked_note = f" 它关联的 {len(also)} 页 ({'、'.join(also[:5])}{' 等' if len(also) > 5 else ''}) 也一起装上了." if also else ""
@@ -318,10 +355,11 @@ def wiki_install(args: dict[str, Any]) -> dict[str, Any]:
         "published_by": published_by,
         "review_status": review["review_status"],
         "also_installed": also,
+        **({"local_backup": backup} if backup else {}),
         "summary": (
             f"已装 wiki '{title}' (by {published_by}) 到 ~/.catfish/wiki-shared/"
             f"{namespace}/{file_id}.md. "
-            f"在 Companion 资料库下 '📥 部门 wiki' 分组能看到 (read-only).{pending_note}{linked_note}"
+            f"在 Companion 资料库下 '📥 部门 wiki' 分组能看到 (read-only).{pending_note}{linked_note}{backup_note}"
         ),
     }
 

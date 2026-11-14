@@ -290,3 +290,57 @@
   margin-top: 2px;
 }
 .wiki-share__status--dept_only { color: var(--catfish-text-muted); }
+
+/* 11/14 共享知识页的历史版本 (tabs/Wiki/WikiHistory.tsx): 分享对话框里 + 装进来的部门知识页上 */
+.wiki-history {
+  margin: 6px 0;
+  font-size: 13px;
+}
+.wiki-history__body {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wiki-history__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wiki-history__list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.wiki-history__rev {
+  flex: none;
+  font-weight: 500;
+}
+.wiki-history__meta {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wiki-history__view {
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--catfish-border);
+  background: var(--catfish-bg);
+}
+.wiki-history__view ul,
+.wiki-history__view ol {
+  padding-left: 1.4em;
+}
+.wiki-history__view > :first-child {
+  margin-top: 0;
+}
+.wiki-history__view > :last-child {
+  margin-bottom: 0;
+}

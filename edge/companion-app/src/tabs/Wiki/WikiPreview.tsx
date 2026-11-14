@@ -30,6 +30,7 @@ import WikiLinkSuggestModal from "./WikiLinkSuggestModal";
 import { config } from "../../lib/env";
 import { fetchWithAuth } from "../../lib/me";
 import WikiShareDialog from "./WikiShareDialog";
+import WikiHistory from "./WikiHistory";
 import WikiActionPanel from "./WikiActionPanel";
 // 8/15: 下面三段是从本文件搬出去的 JSX section, 不是新组件。挑它们是因为
 // props 少 (1 / 4 / 5 个)。action bar 那 119 行要 18 个 props, 所以留在原地 ——
@@ -414,6 +415,11 @@ export default function WikiPreview({ onOpenTask }: { onOpenTask?: (taskId: stri
       />
 
       <WikiHubStaleBanner hubStaleInfo={hubStaleInfo} />
+      {/* 11/14: 装进来的部门知识页 —— 看作者改过哪几版 (只能看; 恢复在作者自己的「分享」对话框里) */}
+      {(() => {
+        const m = info.rel_path.match(/^wiki-shared\/(dept\/[^/]+)\/([^/]+)\.md$/);
+        return m ? <WikiHistory key={info.rel_path} namespace={m[1]} fileId={m[2]} canRestore={false} /> : null;
+      })()}
 
       {/* P35 (6/5): 编辑 toggle + action bar — 复用 banner btn 系列 */}
       {/* P3.3.4 (6/9): action bar 加删除按钮 (mv 到 wiki/.trash/<ts>-原名.md) */}

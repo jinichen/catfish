@@ -41,6 +41,7 @@ import {
 } from "../../lib/tauri";
 import { attachedKeys, scopePlan, shareIssues, shareSteps, sizeLabel, warningLabel, type ShareChoice } from "../../lib/wikiShare";
 import WikiSharePreview, { reachableNames } from "./WikiSharePreview";
+import WikiHistory from "./WikiHistory";
 
 type Result = { label: string; ok: boolean; text: string };
 
@@ -233,6 +234,8 @@ export default function WikiShareDialog({
                   {showPreview ? "收起" : "看发出去的全文"}
                 </button>
               </div>
+              {/* 11/14: 分享过的页 —— 中央留着之前每一版, 改错了能看、能把同事那边恢复回去 */}
+              {plan.hub_ref && <WikiHistory namespace={plan.hub_ref.namespace} fileId={plan.hub_ref.file_id} canRestore />}
               {showPreview && <WikiSharePreview plan={plan} reachable={reachable} />}
               {!showPreview && (plan.preview.fields?.evidence.length ?? 0) > 0 && (
                 <div className="wiki-share__warn-text">

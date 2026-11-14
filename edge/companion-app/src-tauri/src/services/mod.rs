@@ -40,6 +40,7 @@ pub mod email_own_domains; // 10/31: 员工自己的邮箱域, 钓鱼复审判�
 pub mod email_state;  // 评级缓存 / push 历史 / 落盘 (8/15 切出)
 pub mod email_types;  // EmailItem + Urgency (8/15 切出, 是其余几层的地基)
 pub mod email_scheduler;  // BL-COMPANION-EMAIL-DIGEST-STEP2 (5/18)
+pub mod shared_check;     // 11/14: 装的共享内容 (技能 / 专家包 / 知识页) 定时查新版 / 撤回
 pub mod email_archive;    // 9/27: IMAP 后台归档 + 保留策略, 每 10 分钟一轮
 pub mod embed_socket;     // 10/23: 本机向量通道, 鲶鱼的记忆插件借 Companion 的模型算向量
 pub mod embed_cache_meta; // 8/14: 向量缓存的身份记账 (中央换模型 → 自动重建)

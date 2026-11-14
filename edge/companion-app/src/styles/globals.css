@@ -5861,3 +5861,66 @@ button {
 .wiki-type-picker__act:disabled { opacity: 0.5; cursor: default; }
 .wiki-type-picker__hint { font-size: 12px; }
 .wiki-type-picker__err { font-size: 12px; color: var(--status-err); }
+
+/* 11/14 早安「你装的共享内容」(tabs/Briefing/SharedContentStrip.tsx): 有新版 / 被撤回 / 看不到了 */
+.shared-strip {
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--catfish-bg-elevated);
+  border: 1px solid var(--catfish-border);
+}
+.shared-strip__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.shared-strip__summary {
+  flex: 1;
+  min-width: 0;
+}
+.shared-strip__list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.shared-strip__list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.shared-strip__kind {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 18px;
+  color: var(--catfish-cyan);
+  background: var(--catfish-cyan-tint);
+}
+.shared-strip__withdrawn .shared-strip__kind {
+  color: var(--catfish-hint-amber-text);
+  background: var(--catfish-hint-amber-bg);
+}
+.shared-strip__title {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.shared-strip__meta {
+  flex: 1;
+  min-width: 0;
+  color: var(--catfish-text-muted);
+}
+.shared-strip__note {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--catfish-text-muted);
+}

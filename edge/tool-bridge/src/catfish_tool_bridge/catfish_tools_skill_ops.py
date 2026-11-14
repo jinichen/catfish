@@ -334,6 +334,18 @@ def run_skill(args: Dict[str, Any]) -> Dict[str, Any]:
             "files": [],
             "summary": "",
         }
+    # 11/14: 从中央装的、后来被作者 / 主管撤回的版本 (shared_check 定时查出来的) 不再执行
+    from .shared_check import is_skill_withdrawn  # noqa: PLC0415
+    gone = is_skill_withdrawn(skill_dir)
+    if gone:
+        return {
+            "ok": False,
+            "error": (
+                f"skill '{skill_path}' 的 {gone.get('version')} 版已在中央{'被撤回' if gone.get('status') == 'withdrawn' else '下架'}, "
+                "本机已停用。到「技能市场」装一个现在能用的版本, 或者换用别的技能。"
+            ),
+        }
+
     # 10/17 工作流 skill (docs/WORKFLOW-SKILL-PLAN.md): 目录里是 workflow.yaml → 交给工作流运行器
     if (skill_dir / "workflow.yaml").exists():
         from . import workflow_tool  # noqa: PLC0415

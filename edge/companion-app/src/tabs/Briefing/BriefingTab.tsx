@@ -14,6 +14,7 @@ import CustomerAddForm from "./CustomerAddForm";
 import CustomerChip from "./CustomerChip";
 import CustomerFollowupStrip from "./CustomerFollowupStrip";
 import PracticeStrip from "./PracticeStrip";
+import SharedContentStrip from "./SharedContentStrip";
 import { useCustomerRadar } from "./useCustomerRadar";
 
 export default function BriefingTab() {
@@ -58,6 +59,8 @@ export default function BriefingTab() {
     >
       {/* 11/02: 题库与复习 —— 今天有到期的错题才显示 */}
       <PracticeStrip />
+      {/* 11/14: 装的共享内容有新版 / 被撤回了 —— 有才显示 */}
+      <SharedContentStrip />
       {/* 10/12: 销售跟进雷达; 11/3: 只在有要跟的卡片时出 */}
       <CustomerFollowupStrip radar={radar} onAdd={() => setAdding(true)} />
       <BriefingCard headerExtra={<CustomerChip radar={radar} onAdd={() => setAdding(true)} />} headerBelow={addForm} />

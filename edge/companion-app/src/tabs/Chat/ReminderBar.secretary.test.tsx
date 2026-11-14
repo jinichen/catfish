@@ -159,8 +159,12 @@ describe("ReminderBar · 托管提议", () => {
   });
 });
 
+// 11/14: 截止原来写死 2026-11-13 —— 提醒按截止当天结束过期, 过了那天这三条就红了。改成相对今天 (两天后 18:00, 本机时区)。
+const DUE = new Date(Date.now() + 2 * 86_400_000);
+const pad = (n: number) => String(n).padStart(2, "0");
 const ASK = { roomId: "r_1", roomTitle: "项目群", msgId: "m_1", from: "zhang@example.com",
-  text: "@hongbo 周五前把报价单发我", what: "把报价单发给张三", deadline: "2026-11-13T18:00" };
+  text: "@hongbo 周五前把报价单发我", what: "把报价单发给张三",
+  deadline: `${DUE.getFullYear()}-${pad(DUE.getMonth() + 1)}-${pad(DUE.getDate())}T18:00` };
 
 describe("ReminderBar · 群里 @我 交代的事", () => {
   it("让小鲶先做 → 2 分钟后的一次性任务 (前缀「群里交代：」), 显示开始做了", async () => {

@@ -369,6 +369,8 @@ export interface WikiSharePlan {
   hub_status?: WikiShareHubStatus | null;
   /** 拿到了部门知识库列表 (拿不到时「同事能不能看到」只能按本机记录判断) */
   hub_known: boolean;
+  /** 11/14: 中央上这一页 (分享过才有), 「历史版本」用 */
+  hub_ref?: { namespace: string; file_id: string } | null;
   scan: WikiShareScan;
   preview: {
     frontmatter_yaml: string;

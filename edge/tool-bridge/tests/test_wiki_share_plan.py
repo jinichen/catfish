@@ -218,6 +218,8 @@ def test_plan_marks_what_other_departments_can_open(home, gateway, monkeypatch):
     assert p["scope_before"] == "company"
     assert p["hub_status"] == {"scope": "company", "company_status": "rejected", "company_note": "有经营数字",
                                "visible_to": "department"}
+    assert p["hub_ref"] == {"namespace": "dept/研发部", "file_id": "m1"}, "11/14 对话框「历史版本」按它查"
+    assert wiki_share.plan({"wiki_rel_path": "wiki/entities/销售单元.md"})["hub_ref"]["file_id"] == "s1"
     assert p["sources"][0]["shared_company"] is False and p["sources"][0]["mine"] is False
 
 
