@@ -1,15 +1,19 @@
 /** 提前准备 (11/09 小鲶秘书 第 3 层): 会议、出差拜访、快到期的待办、邮件里要办 / 要回的事。
  *
  * 每 15 分钟看一次四个来源 (日历接下来 4 天 / 任务库 / 邮件分诊), 挑出要提前准备的事 →
- * 给 hermes 建一条一次性准备任务; 事情没了而准备任务还没跑 → 撤掉; 到期过了的记录 → 清掉。
+ * 给 hermes 建一条一次性准备任务; 事情没了而准备任务还没跑 → 撤掉; 到期过了的记录 → 清掉;
+ * 到点时电脑睡着、hermes 把它丢了 → 补建一次 (11/14)。
  * 准备任务跑完, 第 1 层 (useCronWatcher) 在提醒条上说「会务安排准备好了」「回复草稿写好了」…
  *
  * 挑事和写任务说明: lib/meetingPrep.ts (日历), lib/prepSources.ts (待办、邮件)。排期: lib/advancePrep.ts。
  */
 import {
+  catchupCandidates,
+  isMissedTrace,
   localDayKey,
   localIso,
   planPreps,
+  PREP_SOON_MS,
   type PrepItem,
   type PrepRecord,
   type PrepSource,
@@ -21,6 +25,7 @@ import {
   calendarUpcomingFetch,
   cronJobCreate,
   cronJobDelete,
+  cronJobOutputs,
   emailClassifyNow,
   emailListFetch,
   remindersWeekFetch,
@@ -100,10 +105,10 @@ async function gather(nowMs: number): Promise<{ items: PrepItem[]; readOk: Set<P
 }
 
 /** 一轮。export 给测试。 */
-export async function advancePrepTick(now = new Date()): Promise<{ created: number; cancelled: number }> {
-  if (!prefEnabled(MEETING_PREP_KEY)) return { created: 0, cancelled: 0 };
+export async function advancePrepTick(now = new Date()): Promise<{ created: number; cancelled: number; caughtUp: number }> {
+  if (!prefEnabled(MEETING_PREP_KEY)) return { created: 0, cancelled: 0, caughtUp: 0 };
   // 记不住建过哪些, 每 15 分钟会重复建 —— 宁可不建
-  if (!storageWritable()) return { created: 0, cancelled: 0 };
+  if (!storageWritable()) return { created: 0, cancelled: 0, caughtUp: 0 };
   const nowMs = now.getTime();
   const { items, readOk } = await gather(nowMs);
   const records = loadRecords();
@@ -126,6 +131,8 @@ export async function advancePrepTick(now = new Date()): Promise<{ created: numb
     delete records[c.key];
   }
 
+  const caughtUp = await catchUpMissed(items, records, nowMs);
+
   let created = 0;
   for (const p of plan.create) {
     try {
@@ -145,8 +152,35 @@ export async function advancePrepTick(now = new Date()): Promise<{ created: numb
     }
   }
   saveRecords(records);
-  if (created || cancelled) console.log(`[advance-prep] 建了 ${created} 条准备任务, 撤了 ${cancelled} 条`);
-  return { created, cancelled };
+  if (created || cancelled || caughtUp) {
+    console.log(`[advance-prep] 建了 ${created} 条准备任务, 撤了 ${cancelled} 条, 补了 ${caughtUp} 条错过的`);
+  }
+  return { created, cancelled, caughtUp };
+}
+
+/** 到点时电脑睡着 / 关着, hermes 过点 2 分钟就把一次性任务丢了 (不跑, 只留一份存档)。
+ *  看到那份存档、事情这一轮还在、离到期还来得及 → 补建一条 2 分钟后跑的, 只补一次。
+ *  事情这一轮没读到 (来源读不成) 就等下一轮: 记录里没存任务说明, 要用这一轮重新写的。 */
+async function catchUpMissed(items: PrepItem[], records: Record<string, PrepRecord>, nowMs: number): Promise<number> {
+  const byKey = new Map(items.map((it) => [it.key, it]));
+  let n = 0;
+  for (const key of catchupCandidates(records, nowMs)) {
+    const rec = records[key];
+    const item = byKey.get(key);
+    if (!item) continue;
+    try {
+      const outs = await cronJobOutputs(rec.jobId, 3);
+      if (!outs.some((o) => isMissedTrace(o.snippet))) continue;   // 跑过了 / 员工自己删的 / 还没轮到 hermes 处理
+      const runAt = nowMs + PREP_SOON_MS;
+      const job = await cronJobCreate({ name: item.name, schedule: localIso(runAt), prompt: item.prompt, repeat: 1 });
+      records[key] = { ...rec, jobId: job.id, runAt, caughtUp: true };
+      n++;
+      console.log(`[advance-prep] 「${item.name}」到点时电脑没开, hermes 没跑; 补建了一条 2 分钟后跑`);
+    } catch (e) {
+      console.warn(`[advance-prep] 补建错过的准备任务失败 (${item.name}), 下一轮再试:`, e);
+    }
+  }
+  return n;
 }
 
 /** 11/09 关掉「提前准备」: 已经排上、还没到点的准备任务撤掉 (以前关了照样会跑)。返回撤了几条。 */

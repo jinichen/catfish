@@ -2,10 +2,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  catchupCandidates,
+  isMissedTrace,
   localIso,
   planPreps,
   prepLabel,
   prepRunAt,
+  PREP_CATCHUP_MIN_LEAD_MS,
   PREP_MAX_PER_DAY,
   PREP_SOON_MS,
   whenLabel,
@@ -105,5 +108,26 @@ describe("外部文字", () => {
     const items = [1, 2, 3, 4, 5].map((h) => item(`k${h}`, at(11, 10, 10 + h)));
     expect(planPreps(items, ALL, { r: rejected }, now).create).toHaveLength(PREP_MAX_PER_DAY);
     expect(planPreps(items, ALL, { r: rejected }, now).cancel).toEqual([{ key: "r", jobId: "" }]);
+  });
+});
+
+describe("错过了补一次 (11/14)", () => {
+  it("hermes 丢弃存档的开头才算", () => {
+    expect(isMissedTrace("# Cron job removed before firing (run time outside grace window)\n\n- job id: x")).toBe(true);
+    expect(isMissedTrace("# Cron Job: 会前准备：周例会\n\n## Response")).toBe(false);
+    expect(isMissedTrace("")).toBe(false);
+  });
+
+  it("候选: 过了点、没补过、没被拒、离到期还来得及", () => {
+    const now = at(11, 9, 17);
+    const records: Record<string, PrepRecord> = {
+      due: rec({}),                                                   // 16:00 该跑, 明早 10:00 开会
+      future: rec({ runAt: at(11, 9, 18) }),                          // 还没到点
+      again: rec({ caughtUp: true }),                                 // 补过一次
+      rejected: rec({ jobId: "", rejected: true }),
+      tooLate: rec({ start: now + PREP_CATCHUP_MIN_LEAD_MS - 1 }),
+      justInTime: rec({ start: now + PREP_CATCHUP_MIN_LEAD_MS }),
+    };
+    expect(catchupCandidates(records, now).sort()).toEqual(["due", "justInTime"]);
   });
 });

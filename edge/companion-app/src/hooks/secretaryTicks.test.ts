@@ -139,11 +139,11 @@ describe("advancePrepTick", () => {
   it("明天的会: 建一次性准备任务 (今天 16:00, repeat 1); 下一轮不重复建", async () => {
     t.calendarUpcomingFetch.mockResolvedValue(JSON.stringify([meeting]));
     t.cronJobCreate.mockResolvedValue({ id: "prep1" });
-    expect(await advancePrepTick(NOW)).toEqual({ created: 1, cancelled: 0 });
+    expect(await advancePrepTick(NOW)).toEqual({ created: 1, cancelled: 0, caughtUp: 0 });
     expect(t.cronJobCreate).toHaveBeenCalledWith(expect.objectContaining({
       name: "会前准备：ITSS 线上答辩（11/10 10:00）", schedule: "2026-11-09T16:00", repeat: 1,
     }));
-    expect(await advancePrepTick(NOW)).toEqual({ created: 0, cancelled: 0 });
+    expect(await advancePrepTick(NOW)).toEqual({ created: 0, cancelled: 0, caughtUp: 0 });
     expect(t.cronJobCreate).toHaveBeenCalledTimes(1);
   });
 
@@ -178,7 +178,7 @@ describe("advancePrepTick", () => {
     t.calendarUpcomingFetch.mockRejectedValue(new Error("没授权"));
     t.remindersWeekFetch.mockResolvedValue(JSON.stringify([{ task_id: "t1", text: "写方案", due_date_iso: "2026-11-11T18:00:00" }]));
     t.cronJobCreate.mockResolvedValue({ id: "todo1" });
-    expect(await advancePrepTick(NOW)).toEqual({ created: 1, cancelled: 0 });
+    expect(await advancePrepTick(NOW)).toEqual({ created: 1, cancelled: 0, caughtUp: 0 });
     expect(t.cronJobDelete).not.toHaveBeenCalled();
   });
 
@@ -195,6 +195,57 @@ describe("advancePrepTick", () => {
     await advancePrepTick(NOW);
     await advancePrepTick(NOW);
     expect(t.cronJobCreate).toHaveBeenCalledTimes(1);
+  });
+
+  describe("到点时电脑睡着, hermes 把准备任务丢了 (11/14)", () => {
+    // 真存档的开头 (~/.hermes/cron/output/538699edc81b/2026-11-09_17-40-49.md, 11/09 那份会前准备就是这么丢的)
+    const MISSED = "# Cron job removed before firing (run time outside grace window)\n\n- job id: prep1\n";
+    const AT_17 = new Date(2026, 10, 9, 17, 0);   // 16:00 该跑, 17:00 才开盖
+
+    it("看到丢弃存档 → 补建一条 2 分钟后跑; 补过的再丢不再补", async () => {
+      t.calendarUpcomingFetch.mockResolvedValue(JSON.stringify([meeting]));
+      t.cronJobCreate.mockResolvedValueOnce({ id: "prep1" }).mockResolvedValueOnce({ id: "prep1b" });
+      await advancePrepTick(NOW);
+      t.cronJobOutputs.mockResolvedValue([{ timestamp: "2026-11-09_17-00-30", size_bytes: 300, snippet: MISSED }]);
+      expect(await advancePrepTick(AT_17)).toEqual({ created: 0, cancelled: 0, caughtUp: 1 });
+      expect(t.cronJobOutputs).toHaveBeenCalledWith("prep1", 3);
+      expect(t.cronJobCreate).toHaveBeenLastCalledWith(expect.objectContaining({
+        name: "会前准备：ITSS 线上答辩（11/10 10:00）", schedule: "2026-11-09T17:02", repeat: 1,
+      }));
+      // 补的这条 (prep1b) 又因为睡着被丢: 不再补
+      expect(await advancePrepTick(new Date(2026, 10, 9, 20, 0))).toEqual({ created: 0, cancelled: 0, caughtUp: 0 });
+      expect(t.cronJobCreate).toHaveBeenCalledTimes(2);
+    });
+
+    it("跑过了 / 员工自己删的 (没有丢弃存档) → 不补", async () => {
+      t.calendarUpcomingFetch.mockResolvedValue(JSON.stringify([meeting]));
+      t.cronJobCreate.mockResolvedValue({ id: "prep1" });
+      await advancePrepTick(NOW);
+      t.cronJobOutputs.mockResolvedValue([]);
+      expect((await advancePrepTick(AT_17)).caughtUp).toBe(0);
+      t.cronJobOutputs.mockResolvedValue([{ timestamp: "2026-11-09_16-03-00", size_bytes: 900, snippet: "# Cron Job: 会前准备：ITSS" }]);
+      expect((await advancePrepTick(AT_17)).caughtUp).toBe(0);
+      expect(t.cronJobCreate).toHaveBeenCalledTimes(1);
+    });
+
+    it("离开会不到 30 分钟才醒 → 来不及, 不补", async () => {
+      t.calendarUpcomingFetch.mockResolvedValue(JSON.stringify([meeting]));
+      t.cronJobCreate.mockResolvedValue({ id: "prep1" });
+      await advancePrepTick(NOW);
+      t.cronJobOutputs.mockResolvedValue([{ timestamp: "x", size_bytes: 1, snippet: MISSED }]);
+      expect((await advancePrepTick(new Date(2026, 10, 10, 9, 40))).caughtUp).toBe(0);
+      expect(t.cronJobCreate).toHaveBeenCalledTimes(1);
+    });
+
+    it("这一轮日历读不到 → 先不补 (没有任务说明), 下一轮读到了再补", async () => {
+      t.calendarUpcomingFetch.mockResolvedValue(JSON.stringify([meeting]));
+      t.cronJobCreate.mockResolvedValueOnce({ id: "prep1" }).mockResolvedValueOnce({ id: "prep1b" });
+      await advancePrepTick(NOW);
+      t.cronJobOutputs.mockResolvedValue([{ timestamp: "x", size_bytes: 1, snippet: MISSED }]);
+      t.calendarUpcomingFetch.mockRejectedValueOnce(new Error("没授权"));
+      expect((await advancePrepTick(AT_17)).caughtUp).toBe(0);
+      expect((await advancePrepTick(AT_17)).caughtUp).toBe(1);
+    });
   });
 
   it("关了开关: 什么都不读", async () => {
@@ -318,15 +369,15 @@ describe("小鲶秘书能力登记", () => {
     const prep = SECRETARY.find((a) => a.id === "advance-prep")!;
     t.calendarUpcomingFetch.mockResolvedValue(JSON.stringify([meeting]));
     t.cronJobCreate.mockResolvedValue({ id: "prep1" });
-    expect(await advancePrepTick(NOW)).toEqual({ created: 1, cancelled: 0 });
+    expect(await advancePrepTick(NOW)).toEqual({ created: 1, cancelled: 0, caughtUp: 0 });
     vi.spyOn(Date, "now").mockReturnValue(NOW.getTime());
     const note = await setAbilityEnabled(prep, false);
     expect(t.cronJobDelete).toHaveBeenCalledWith("prep1");
     expect(note).toBe("已经排上、还没做的 1 条准备任务撤了");
     expect(localStorage.getItem(MEETING_PREP_KEY)).toBe("false");
-    expect(await advancePrepTick(NOW)).toEqual({ created: 0, cancelled: 0 });   // 关着: 不再排
+    expect(await advancePrepTick(NOW)).toEqual({ created: 0, cancelled: 0, caughtUp: 0 });   // 关着: 不再排
     await setAbilityEnabled(prep, true);
-    expect(await advancePrepTick(NOW)).toEqual({ created: 1, cancelled: 0 });   // 再开: 记录清过, 重新排
+    expect(await advancePrepTick(NOW)).toEqual({ created: 1, cancelled: 0, caughtUp: 0 });   // 再开: 记录清过, 重新排
   });
 
   it("关掉「群里 @我」: 提醒条上挂着的那类提醒撤掉, 别的提醒不动", async () => {

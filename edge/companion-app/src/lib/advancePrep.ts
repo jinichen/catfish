@@ -8,6 +8,8 @@
  *   · 离到期不到 1 小时 → 来不及, 不建
  *   · 事情没了 (会取消 / 改期、待办完成、邮件回过了) → 撤掉还没跑的; 这个来源这一轮读不到就不撤
  *   · 一天最多新建 5 条, 防一堆事把模型额度吃光; 先建最急的
+ *   · 到点时电脑睡着 / 关着: hermes 过点 2 分钟就把一次性任务丢掉不跑 (留一份「removed before firing」存档)。
+ *     下一轮看到这份存档、事情离到期还有 30 分钟以上 → 补建一条 2 分钟后跑, 只补一次 (11/14)
  *
  * 任务说明一律「只查阅和起草」: 不发送、不回复、不改日程和任务 (hermes 定时任务里删除类本来就会被拦, 见 P59)。
  */
@@ -21,6 +23,8 @@ export const PREP_MAX_PER_DAY = 5;
 export const PREP_MIN_LEAD_MS = HOUR;
 /** 立刻跑的话, 排在几分钟后 (hermes 调度器每分钟看一次) */
 export const PREP_SOON_MS = 2 * MIN;
+/** 错过了还补的下限: 离到期不到这么久就不补了 (比新建的 1 小时松: 已经答应要准备的事, 晚点也比没有强) */
+export const PREP_CATCHUP_MIN_LEAD_MS = 30 * MIN;
 /** 只看这么远以内到期的 */
 export const PREP_HORIZON_MS = 4 * DAY;
 
@@ -68,6 +72,25 @@ export interface PrepRecord {
   source?: PrepSource;
   /** hermes 拒了 (400, 多半是外部文字被当成注入特征): 记下不再重试, jobId 为空 */
   rejected?: boolean;
+  /** 错过后补建过一次 (11/14); 补的这条再错过就不补了 */
+  caughtUp?: boolean;
+}
+
+/** hermes 把过点的一次性任务丢掉时写的存档开头 (cron/jobs_oneshot_diagnostics.py write_missed) */
+const MISSED_TRACE = "# Cron job removed before firing";
+
+/** 这份存档是不是「没跑就被丢掉」 */
+export function isMissedTrace(snippet: string): boolean {
+  return snippet.trimStart().startsWith(MISSED_TRACE);
+}
+
+/** 可能被丢掉、值得去看一眼存档的记录: 过了点、没补过、离到期还来得及。
+ *  只是候选 —— 真丢没丢看 hermes 的存档 (员工自己在仪表盘删掉的不会有那份存档, 不会被补回来)。 */
+export function catchupCandidates(records: Record<string, PrepRecord>, nowMs: number): string[] {
+  return Object.entries(records)
+    .filter(([, r]) => r.jobId && !r.rejected && !r.caughtUp && r.runAt < nowMs
+      && r.start - nowMs >= PREP_CATCHUP_MIN_LEAD_MS)
+    .map(([key]) => key);
 }
 
 function startOfLocalDay(ms: number): number {
