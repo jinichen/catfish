@@ -22,10 +22,10 @@
 import { useEffect, useState } from "react";
 
 import { config } from "../../lib/env";
-import { toolResultError } from "./wikiHubStatus";
+import { splitMine, toolResultError } from "./wikiHubStatus";
 // BL-AUTH-DECOUPLE-A5 Phase 2 (5/19): 改 fetchWithAuth — wrapper 按 useHermes
 // 路径切 API_SERVER_KEY + X-Catfish-User / OAuth bearer, 这里不再 inline getToken.
-import { fetchWithAuth } from "../../lib/me";
+import { fetchWithAuth, getCurrentUserEmail } from "../../lib/me";
 import { useAgentStore } from "../../store/agent";
 // P3.3.16: 拉本机已装 skill 对比 hub 版本
 import { fetchMySkills, toolBridgeCallTool } from "../../lib/tauri";
@@ -107,6 +107,8 @@ function humanTime(iso?: string): string {
 export default function SkillsHubCard() {
   const agentName = useAgentStore((s) => s.name);
   const [skills, setSkills] = useState<SkillSummary[]>([]);
+  /** 11/14: 我自己分享的 —— 不当成「同事分享、我装没装」列 (它本来就在本机, 会显示「已装」「有升级」), 只在底下说一句审核到哪了 */
+  const [mine, setMine] = useState<SkillSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   /** P3.3.16: 本机已装 skill 索引 (ns/name → SkillEntry). 用来对比 hub 算 status. */
@@ -168,7 +170,12 @@ export default function SkillsHubCard() {
         return;
       }
       const data = (await res.json()) as ListResponse;
-      setSkills(data.skills || []);
+      const { others, mine: own } = splitMine(
+        (data.skills || []).map((x) => ({ ...x, published_by: x.published_by ?? x.review?.submitted_by ?? "" })),
+        await getCurrentUserEmail().catch(() => null),
+      );
+      setSkills(others);
+      setMine(own);
       setError(null);
     } catch (e) {
       setError(friendlySkillsHubError(e));
@@ -363,7 +370,12 @@ export default function SkillsHubCard() {
                               onInstalled={(msg) => { setToast({ kind: "ok", text: msg }); void refresh(); }} />
       )}
 
-      {!loading && !error && skills.length === 0 && (
+      {!loading && !error && skills.length === 0 && mine.length > 0 && (
+        <div style={{ color: "var(--catfish-text-muted)", fontSize: 13, padding: "var(--space-2) var(--space-3)" }}>
+          同事还没有分享技能。
+        </div>
+      )}
+      {!loading && !error && skills.length === 0 && mine.length === 0 && (
         <div
           style={{
             color: "var(--catfish-text-muted)",
@@ -415,9 +427,19 @@ export default function SkillsHubCard() {
           ))}
         </div>
       )}
+
+      {!loading && !error && mine.length > 0 && (
+        <div style={{ color: "var(--catfish-text-muted)", fontSize: 12, padding: "var(--space-2) 0 0", lineHeight: 1.6 }}>
+          你自己分享的 {mine.length} 个不在上面列 (本机本来就有, 在「我的技能」里):{" "}
+          {mine.map((m) => `${m.name} v${m.latest_version} ${MINE_STATUS[m.review?.status ?? "approved"] ?? ""}`).join("、")}
+        </div>
+      )}
     </div>
   );
 }
+
+/** 11/14: 自己分享的那几个, 审核到哪了 */
+const MINE_STATUS: Record<string, string> = { approved: "已上架", pending: "等审核", rejected: "被驳回", withdrawn: "已撤回" };
 
 /** 11/08 分享治理: 这条在 hub 上的审核状态. 已通过 (或上线前的老版本) 不标; 自己提交的待审 / 被驳回的标出来. */
 function ReviewBadge({ review }: { review?: SkillReview }) {

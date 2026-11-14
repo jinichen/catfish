@@ -7,6 +7,7 @@
 import { useEffect, useState } from "react";
 
 import { refreshExperts } from "../../lib/expertChat";
+import { getCurrentUserEmail } from "../../lib/me";
 import {
   expertPackInstall, expertPackMarket, expertPackMine, expertPackPreview, expertPackPublish, expertPackWithdraw,
   type HubExpert, type PackInspect, type PackPermissions, type PackPreview,
@@ -14,6 +15,7 @@ import {
 import { trialExpertInstall } from "../../lib/tauri_trial";
 import { Overlay, StateTag, muted } from "../Collab/formsUi";
 import { Btn, ErrorLine, inputStyle, itemStyle } from "../Collab/roomLinkUi";
+import { splitMine } from "./wikiHubStatus";
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -189,15 +191,33 @@ export function PublishDialog({ id, name, onClose, onDone }: {
 /** 资源市场: 本部门 / 全公司可见的已上架专家。 */
 export function MarketSection({ onInstall }: { onInstall: (m: HubExpert) => void }) {
   const [items, setItems] = useState<HubExpert[] | null>(null);
+  const [mineCount, setMineCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    expertPackMarket().then((r) => setItems(r.experts)).catch((e) => setError(errText(e)));
+    // 11/14: 自己发布的不在市场里列 —— 本机本来就有那个专家, 原来显示成「你自己搭的专家里有同 id 的, 装不了」;
+    // 它们的审核进度在「我提交的」里
+    Promise.all([expertPackMarket(), getCurrentUserEmail().catch(() => null)])
+      .then(([r, me]) => {
+        const { others, mine } = splitMine(r.experts.map((m) => ({ ...m, published_by: m.submitted_by })), me);
+        setItems(others);
+        setMineCount(mine.length);
+      })
+      .catch((e) => setError(errText(e)));
   }, []);
   if (error) return <ErrorLine>{error}</ErrorLine>;
   if (!items) return <span style={muted}>读取资源市场…</span>;
-  if (!items.length) return <span style={muted}>市场里还没有你能装的专家。</span>;
+  const mineNote = mineCount > 0 && <span style={muted}>你自己发布的 {mineCount} 个不在这里列, 审核进度在「我提交的」里。</span>;
+  if (!items.length) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <span style={muted}>市场里还没有同事发布、你能装的专家。</span>
+        {mineNote}
+      </div>
+    );
+  }
   return (
     <>
+      {mineNote}
       {items.map((m) => (
         <div key={m.id} style={itemStyle}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
