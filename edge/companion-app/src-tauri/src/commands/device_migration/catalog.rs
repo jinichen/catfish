@@ -172,6 +172,8 @@ const CATFISH: &[(Pat, Class, &str)] = &[
     (Exact("memory_compact_moves"), Rebuild, "整理记忆待批建议的附件"),
     (Exact("skill_audit.jsonl"), Required, "技能审计"),
     (Exact("wiki_install_audit.jsonl"), Required, "知识库安装审计"),
+    // 11/14: 共享内容定时检查的结果 + 因撤回自动停用了哪些技能 / 专家 (换上能用的版本时靠它恢复, 跟着迁)
+    (Exact("shared_check.json"), Required, "共享内容检查 / 撤回停用记录"),
     (Exact("gateway_audit.jsonl"), Required, "调用审计"),
     (Exact("feedback.jsonl"), Required, "反馈"),
     (Exact("audit"), Required, "审计"),
