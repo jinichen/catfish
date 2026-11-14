@@ -22,6 +22,7 @@
 import { useEffect, useState } from "react";
 
 import { config } from "../../lib/env";
+import { toolResultError } from "./wikiHubStatus";
 // BL-AUTH-DECOUPLE-A5 Phase 2 (5/19): 改 fetchWithAuth — wrapper 按 useHermes
 // 路径切 API_SERVER_KEY + X-Catfish-User / OAuth bearer, 这里不再 inline getToken.
 import { fetchWithAuth } from "../../lib/me";
@@ -231,18 +232,20 @@ export default function SkillsHubCard() {
         hub_url: hubUrl,
         overwrite: isUpgrade,  // 升级要覆盖, 安装不需要
       });
-      if (res.ok) {
+      // 11/14: 原来只看 res.ok —— 那只说明「调到了安装工具」, 工具自己返 {ok:false} (中央找不到这个版本 /
+      // 验签不过 / dry-run 失败) 时照样弹「升级成功」, 本机一个字没变, 卡片上的升级提示也一直在。
+      const errMsg = toolResultError(res);
+      if (!errMsg) {
         setToast({
           kind: "ok",
           text: isUpgrade
             ? `升级成功: ${s.namespace}/${s.name} → v${s.latest_version}`
             : `安装成功: ${s.namespace}/${s.name} v${s.latest_version}`,
         });
-        await refresh();  // 拉新版本状态
       } else {
-        const errMsg = typeof res.result === "string" ? res.result : JSON.stringify(res.result);
-        setToast({ kind: "err", text: `${isUpgrade ? "升级" : "安装"}失败: ${errMsg.slice(0, 120)}` });
+        setToast({ kind: "err", text: `${isUpgrade ? "升级" : "安装"}失败: ${errMsg.slice(0, 160)}` });
       }
+      await refresh();  // 成功拉新版本状态; 失败也刷一次, 中央那边可能已经变了
     } catch (e) {
       setToast({ kind: "err", text: `${isUpgrade ? "升级" : "安装"}异常: ${e instanceof Error ? e.message : String(e)}` });
     } finally {

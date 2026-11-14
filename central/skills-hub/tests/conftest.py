@@ -12,3 +12,8 @@ import tempfile
 
 os.environ["CATFISH_DB_URL"] = ""
 os.environ.setdefault("CATFISH_HUB_ROOT", tempfile.mkdtemp(prefix="catfish-hub-test-"))
+
+# 11/14: 光把变量设成空还不够 —— 有个 fixture 先 delenv 再第一次 import app, app 读 .env 把真库 URL 又填回来,
+# 那一次往开发机真库写进了一条 zhou@example.com 的 eis-login 1.0.0 (员工那边一直提示「有升级」, 点了又装不上)。
+# 这里在变量为空时先把 app import 一次, .env 只在这时读 (override=False 不会覆盖已存在的空值), 之后谁 delenv 都不会再读。
+import catfish_skills_hub.app  # noqa: E402,F401

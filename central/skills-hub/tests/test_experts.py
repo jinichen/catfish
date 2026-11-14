@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("CATFISH_HUB_ROOT", str(tmp_path / "hub"))
-    monkeypatch.delenv("CATFISH_DB_URL", raising=False)
+    monkeypatch.setenv("CATFISH_DB_URL", "")   # 不能 delenv (见 conftest 11/14)
     from catfish_skills_hub.app import app
     return TestClient(app)
 
