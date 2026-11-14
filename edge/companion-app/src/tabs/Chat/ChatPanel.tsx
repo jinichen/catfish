@@ -2,7 +2,9 @@
 
 import { currentExpertRoute, useExpertChat } from "../../lib/expertChat";
 import { ExpertQuickPrompts } from "./ExpertPicker";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
+import { submittedCardKeys } from "../../lib/a2uiCard";
+import { A2uiCardContext } from "../../lib/a2uiCardContext";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
 import ChatMessage from "./ChatMessage";
 import { groupToolSteps } from "../../lib/chatToolSteps";
@@ -74,6 +76,12 @@ export default function ChatPanel({
     return () => window.removeEventListener("catfish:approval-send", handler as EventListener);
   }, [onSend]);
 
+  // 11/15 A2UI 卡片试点: 对话页的卡片能交 (点按钮走上面的 catfish:approval-send); 交过的照样显示「已交」
+  const cardEnv = useMemo(
+    () => ({ interactive: true, streaming: false, submitted: submittedCardKeys(messages) }),
+    [messages],
+  );
+
   const isEmpty = messages.length === 0;
   useExpertChat(); // 10/18: 订阅「找谁」, 切专家时空态 (快捷问法) 跟着换
 
@@ -84,6 +92,7 @@ export default function ChatPanel({
         className="chat-panel__thread"
         onScroll={onThreadScroll}
       >
+        <A2uiCardContext.Provider value={cardEnv}>
         <div className="chat-panel__content">
           {/* 10/18: 跟专家的新会话先给它擅长的几句问法; 跟小鲶的照旧 */}
           {isEmpty && (currentExpertRoute() ? <ExpertQuickPrompts /> : <EmptyState />)}
@@ -117,6 +126,7 @@ export default function ChatPanel({
             </div>
           )}
         </div>
+        </A2uiCardContext.Provider>
       </div>
       {/* 11/07 提醒条: 待办到期 / 早安 / 急邮件 —— 在消息流和输入框之间, 不进对话 */}
       <ReminderBar />

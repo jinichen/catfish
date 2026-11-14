@@ -1,9 +1,11 @@
 /** 单条消息渲染 —— user / assistant / 错误状态 */
 
-import { useMemo, useState } from "react";
+import { useContext, useMemo, useState } from "react";
 import { ArrowClockwise, FastForward, Paperclip, PencilSimple } from "@phosphor-icons/react";
 import { internalMessage, splitUserBubbleText } from "../../lib/userBubbleText";
 import { Markdown } from "../../lib/markdown";
+import { parseSubmission, submissionLines, type CardSubmission } from "../../lib/a2uiCard";
+import { A2uiCardContext } from "../../lib/a2uiCardContext";
 import type { ChatMessage as Msg } from "../../types/chat";
 import ChatToolSteps from "./ChatToolSteps";
 import ChatLoopLimitNotice from "./ChatLoopLimitNotice";
@@ -46,6 +48,9 @@ export default function ChatMessage({
   const internal = internalMessage(msg);
   if (internal) return internal.hidden ? null : <SystemNote label={internal.label} raw={msg.content} />;
   if (msg.role === "user") {
+    // 11/15: 点卡片按钮发回来的 (lib/a2uiCard.ts) —— 显示交了什么, 不显示给小鲶看的 JSON
+    const submission = parseSubmission(msg.content ?? "");
+    if (submission) return <CardSubmissionBubble sub={submission} />;
     return (
       <UserBubble
         msg={msg}
@@ -62,6 +67,32 @@ export default function ChatMessage({
   // tool 角色消息也不直接渲染 —— 它的内容已通过 ChatToolCall 在
   // 上一条 assistant 消息里展示了
   return null;
+}
+
+/** 交卡片的那条: 右侧小框「交了「记一条爆款」」+ 填了的几项 (空的不列) */
+function CardSubmissionBubble({ sub }: { sub: CardSubmission }) {
+  const lines = submissionLines(sub.context);
+  const [open, setOpen] = useState(false);
+  const shown = open ? lines : lines.slice(0, 6);
+  return (
+    <div style={{ display: "flex", justifyContent: "flex-end", margin: "var(--space-2) 0" }}>
+      <div style={{ maxWidth: "75%", padding: "8px 12px", borderRadius: 10, background: "var(--catfish-bg-elevated)",
+                    border: "1px solid var(--catfish-border)", fontSize: 13, lineHeight: 1.6 }}>
+        <div style={{ fontWeight: 600 }}>交了「{sub.title}」</div>
+        {shown.map(([k, v]) => (
+          <div key={k} style={{ fontSize: 12, color: "var(--catfish-text-muted)", wordBreak: "break-all" }}>
+            {k}: <span style={{ color: "var(--catfish-text)" }}>{v}</span>
+          </div>
+        ))}
+        {lines.length > 6 && (
+          <button type="button" onClick={() => setOpen((v) => !v)}
+                  style={{ border: "none", background: "transparent", color: "var(--catfish-cyan)", padding: 0, fontSize: 12, cursor: "pointer" }}>
+            {open ? "收起" : `还有 ${lines.length - 6} 项`}
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 /** 系统消息: 一行灰字居中, 点「展开」看原文 (排查用)。10/13 鸿波截图里的英文压缩摘要就是这类。 */
@@ -472,7 +503,7 @@ function AssistantBubble({
           minWidth: 0, // 防 markdown 撑开
         }}
       >
-        {msg.content && <Markdown text={msg.content} />}
+        {msg.content && <StreamingCardEnv streaming={showCaret}><Markdown text={msg.content} /></StreamingCardEnv>}
         {!msg.content && showCaret && (
           <span style={{ color: "var(--catfish-text-muted)" }}>…</span>
         )}
@@ -636,4 +667,11 @@ function friendlyError(err: string | undefined): string {
   }
   // 其他错误截短
   return err.length > 200 ? err.slice(0, 200) + "…" : err;
+}
+
+/** 这条回复还在流式输出时告诉卡片「代码块可能没写完」(lib/a2uiCardContext) */
+function StreamingCardEnv({ streaming, children }: { streaming: boolean; children: React.ReactNode }) {
+  const env = useContext(A2uiCardContext);
+  const value = useMemo(() => ({ ...env, streaming }), [env, streaming]);
+  return <A2uiCardContext.Provider value={value}>{children}</A2uiCardContext.Provider>;
 }

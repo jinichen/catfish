@@ -9,6 +9,14 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react()],
 
+  // 11/15 A2UI 卡片试点: @a2ui/* 0.15 照 zod 3 写的 (直接用 zod 3 的内部方法), 而 zod 3 全系有 GHSA-mrhx-c7xc-m3w5
+  // (超大数组校验耗尽内存, 只在 zod 4.6.6 修了), 安全审计不过。照上游 issue #4192 的临时办法: 装 zod 4.6.7,
+  // 把裸的 "zod" 指到它自带的 v3 兼容入口 "zod/v3"。上游发了支持 zod 4 的版本就删掉这条 (见 package.json overrides)。
+  // 另外卡片本身有大小上限 (lib/a2uiCard.ts CARD_MAX_CHARS), 撑不到那个漏洞要的超大数组。
+  resolve: {
+    alias: [{ find: /^zod$/, replacement: "zod/v3" }],
+  },
+
   build: {
     // P3.5.29 Phase 6.2 (6/17 鸿波): main bundle 1.17 MB → chunkSizeWarningLimit
     // 设 800 KB 降 warning 噪音, 真code split** 见 manualChunks.
@@ -32,7 +40,10 @@ export default defineConfig(async () => ({
         // 真实测见 npm run build 输出**.
         manualChunks: (id: string) => {
           if (!id.includes("node_modules")) return undefined;
-          if (id.includes("/react/") || id.includes("/react-dom/") || id.includes("/scheduler/")) {
+          // 11/15: A2UI 卡片 (@a2ui/* 连带 lit / zod) 只在对话里出现卡片时按需加载 (tabs/Chat/A2uiCard 走 React.lazy),
+          // 不归任何 vendor chunk —— 原来下面 "/react/" 把 @a2ui/react 也认成了 React, 整套塞进首屏预加载的 react-vendor (+460K)
+          if (id.includes("/@a2ui/")) return undefined;
+          if (id.includes("/node_modules/react/") || id.includes("/node_modules/react-dom/") || id.includes("/node_modules/scheduler/")) {
             return "react-vendor";
           }
           if (id.includes("/@tauri-apps/")) {
@@ -78,6 +89,8 @@ export default defineConfig(async () => ({
   //      它们是真的自定义 runner, 排除本身没错; 但"有别的地方在跑"这个
   //      印象是假的。要么补脚本要么改造成 vitest, 别让注释替不存在的机制背书。
   test: {
+    // 11/15: 上面 zod → zod/v3 的别名要对 @a2ui/* (和它带的 zod-to-json-schema) 生效, 测试里得让它们过 vite
+    server: { deps: { inline: [/@a2ui\//, /zod-to-json-schema/] } },
     exclude: [
       "**/node_modules/**",
       "**/dist/**",

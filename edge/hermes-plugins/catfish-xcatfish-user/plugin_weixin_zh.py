@@ -30,6 +30,7 @@
 # 那段代码用得到, 但搬的时候只盯着函数体。
 import functools
 import logging
+import re
 
 logger = logging.getLogger("catfish.xcatfish_user.plugin")
 
@@ -391,6 +392,22 @@ def _translate_hermes_zh(text):
     return text
 
 
+# 11/15 A2UI 卡片试点: 小鲶在电脑端对话里会输出 ```a2ui 代码块, Companion 画成可填的卡片
+# (companion-app/src/lib/a2uiCard.ts)。微信显示不了 —— 原样发出去就是一大串 JSON。技能里交代了
+# 「微信里不要出卡片」, 这里再兜一层: 外发前把代码块换成一句话。没写完的块 (只有开头) 也换掉。
+_A2UI_BLOCK = re.compile(r"```a2ui[ \t]*\n.*?(?:```|\Z)", re.S)
+A2UI_WEIXIN_NOTE = "（这里有一张可以填的卡片，微信里显示不了，请在电脑上的鲶鱼「对话」里打开填写。）"
+
+
+def _strip_a2ui_cards(text):
+    """```a2ui 代码块 → 一句提示。不是字符串 / 没有卡片 → 原样。"""
+    if not isinstance(text, str) or "```a2ui" not in text:
+        return text
+    out = _A2UI_BLOCK.sub(A2UI_WEIXIN_NOTE, text)
+    logger.info("P28: 微信外发里的 A2UI 卡片换成了文字提示")
+    return out
+
+
 def _patch_p28_weixin_zh() -> None:
     """wrap WeixinAdapter.send — : 真:** : 真:** : : : : : : : : : : :
 
@@ -418,7 +435,7 @@ def _apply_p28(_wx_mod) -> None:
 
     @functools.wraps(_orig_send)
     async def patched_send(self, chat_id, content, reply_to=None, metadata=None):
-        content = _translate_hermes_zh(content)
+        content = _translate_hermes_zh(_strip_a2ui_cards(content))
         return await _orig_send(
             self, chat_id, content, reply_to=reply_to, metadata=metadata
         )
