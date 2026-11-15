@@ -41,7 +41,7 @@ from .a2ui_catalog import CATALOG_ID, CATALOG_PATH, FUNCTIONS as CARD_FUNCTIONS,
 #: 卡片能用的组件 (鲶鱼目录: 基础组件 12 个 + 邮件卡 / 日程卡 / 待办项 / 文件卡) —— 跟 companion-app/src/lib/a2uiCard.ts
 #: CARD_COMPONENTS 一致 (tests 对着查)。目录本身在 a2ui_catalog.py 生成。
 CARD_COMPONENTS = component_names()
-MAX_ATTEMPTS = 2
+MAX_ATTEMPTS = 3
 #: 一次请求的说明最多这么长 (主小鲶写的; 超长多半是把整封邮件塞进来了)
 MAX_REQUEST_CHARS = 4000
 #: 至少这么长才算说清了要什么 (11/15 评估里小鲶先发过一个「占位」, 专员照样画了张空洞的卡)
@@ -54,8 +54,9 @@ _ROLE = (
     "卡片要短: 根是一个 Card, 里面一列 Column, 需要并排时用 Row。按钮按用途放:\n"
     "· 填写 / 确认类: 最后一个主按钮 (variant \"primary\");\n"
     "· 选择 / 审批类: 每个选项一个按钮 (如「同意」「驳回」「转办」), 各用自己的英文动作名, 主选项用 primary;\n"
-    "· 勾选清单: 每条一个 TodoItem 或 CheckBox, 最后一个按钮把勾选结果一起交回。\n"
-    "请求里给了邮件 / 日程 / 待办 / 本机文件, 就用 EmailCard / EventCard / TodoItem / FileCard 展示 (字段照请求原样)。\n"
+    "· 勾选清单 / 待办: 每条一个 TodoItem (待办带截止日) 或 CheckBox, 最后一个按钮把勾选结果一起交回。\n"
+    "按钮一点就把整张卡交回给小鲶 —— 只放「交」的按钮; 常用原因 / 预设值不要做成按钮, 用 ChoicePicker 或输入框的 placeholder。\n"
+    "请求里给了邮件 / 日程 / 待办 / 本机文件, 就用 EmailCard / EventCard / TodoItem / FileCard 展示 (字段照请求原样)。\n"    "要员工从这些邮件 / 日程 / 文件里挑 (先回哪封、改哪个、发哪个), 卡片展示之后再加一个 ChoicePicker 把它们列成选项 (选项值用邮件编号 / 路径 / 英文键), 不然他没法选。\n"
     "界面上的字用简体中文。"
 )
 _ENV_NOTES = (
@@ -70,7 +71,11 @@ _ENV_NOTES = (
     "- ChoicePicker 的 displayStyle 只能是 \"checkbox\" 或 \"chips\"; 不确定就不写。\n"
     "- DateTimeInput 不写 min / max。\n"
     # 不带提示的必填校验会显示英文默认的 "Required check failed", 而且员工还没动手就标红 —— 只给真必填的加, 带中文提示
-    "- 只给请求里写明必填的字段加 ?required, 而且一定带中文提示, 如 ?required(\"请填写事由\")。\n"
+    "- 只给请求里写明必填的字段加 ?required, 而且一定带中文提示, 如 ?required(\"请填写事由\")。"
+    "只跟某一个按钮有关的字段 (如驳回原因) 不加 ?required —— 必填没填时卡上所有按钮都点不了。\n"
+    # 11/15 第二轮评估: 可选属性按位置写会错位 (ChoicePicker 传了 8 个、Button 传了 5 个), 两次都一样被拒
+    "- 必填属性按位置写; 可选属性一律用关键字写, 如 ChoicePicker(\"方向\", options=[...], value=$/f/direction)、"
+    "Button(Text(\"同意\"), variant=\"primary\", action=Event(\"approve\", {f: $/f}))。\n"
     "- 同类条目超过 3 条 (一串待办 / 邮件 / 名单) 用 List(_template($/items, 行组件)), 条目数据放 $/items, 行组件里用 $字段 相对路径。\n"
     "- 打分 / 比例用 Slider(标签, 最小, 最大, $/f/字段)。\n"
     "- EmailCard / EventCard / FileCard 只用请求里给的邮件编号、日程、本机路径, 不许编; 请求没给就不用这些组件。"

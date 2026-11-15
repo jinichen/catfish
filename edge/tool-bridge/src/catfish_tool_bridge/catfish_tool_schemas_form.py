@@ -38,9 +38,9 @@ FORM_TOOLS: List[Dict[str, Any]] = [
                     "返回卡片编号, 卡片已显示; 回复只用一句话说要他填什么, 不复述卡片。"
                     "只回答问题、一句话能问清、微信里不用; 要收别人的回答用 create。"
                     "他点按钮后你会收到「（填好了卡片…」开头的消息, 按当初目的接着办; 发送 / 删除照常走审批。"
-                    "可以是表单, 也可以是选择 / 审批 (几个按钮)、勾选清单、进度卡; 给了邮件编号 / 日程 / 本机文件会用对应的卡片样式展示。")},
+                    "可以是表单, 也可以是选择 / 审批 (几个按钮)、勾选清单 / 待办、进度卡、打分 (写「滑块」); 给了邮件编号 / 日程 / 本机文件会用对应的卡片样式展示。")},
                 "card_id": {"type": "string", "description": "card_update: 要改的卡片编号 (card 返回的 c_…)"},
-                "data": {"type": "object", "description": "card_update: {数据路径: 新值}, 如 {\"/progress/done\": 3}; 卡片原地更新, 不出新卡 (长任务进度用)"},
+                "data": {"type": "object", "description": "card_update: {数据路径: 新值}, 如 {\"/progress/done\": 3, \"/steps/0/done\": true}; 计数和每一步的状态都改; 卡片原地更新, 不出新卡 (长任务进度用)"},
                 "cid": {"type": "string", "description": "revise_decide: 冲突编号; pick=选项 key / base / text (text 带上写好的文字)"},
                 "pick": {"type": "string"},
                 "schedule": {"type": "object", "description": "task_create 定时: {kind:once, at:YYYY-MM-DDTHH:MM}; "
