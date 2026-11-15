@@ -83,18 +83,18 @@ def _terms(texts: list[str]) -> list[str]:
     return [w for w in out if w not in {"现状", "情况", "怎么", "什么", "多少", "哪些", "进展"}]
 
 
-def wiki_excerpt(body: str, terms: list[str] | None = None, focus: str = "") -> str:
+def wiki_excerpt(body: str, terms: list[str] | None = None, focus: str = "", budget: int = ENTRY_BUDGET) -> str:
     """按小节挑: 开头一段 + 「当前状态 / 进展」节 + 跟问题对得上的节 + 最后一节 (常是最新通知), 按原顺序拼, 不超过 ENTRY_BUDGET。
 
     原来只截开头 700 字: 「运维服务能力成熟度一级」开头是一张基本信息表, 问「现状」要的那节被截掉 (11/15 鸿波问到)。"""
     body = re.sub(r"\n{2,}", "\n", body.strip())
-    if len(body) <= ENTRY_BUDGET:
+    if len(body) <= budget:
         return body
     # focus = 知识库语义检索命中的那一段 (wiki_search 的 head; 有向量服务时才有): 最相关, 放最前, 其余预算按小节挑
     focus = re.sub(r"\n{2,}", "\n", (focus or "").strip())[:SECTION_CHARS]
     if focus and focus[:60] in body[:400]:
         focus = ""   # 就是条目开头, 下面本来就会带上
-    budget = ENTRY_BUDGET - len(focus)
+    budget -= len(focus)
     heads = [m.start() for m in re.finditer(r"^#{1,4}\s", body, re.M)]
     if not heads or heads[0] != 0:
         heads = [0, *heads]
@@ -117,7 +117,7 @@ def wiki_excerpt(body: str, terms: list[str] | None = None, focus: str = "") -> 
 
     picked, used = set(), 0
     for i, _ in sorted(((i, score(i, sec)) for i, sec in enumerate(sections)), key=lambda x: -x[1]):
-        piece = min(len(sections[i]), SECTION_CHARS if i else 400)
+        piece = min(len(sections[i]), min(SECTION_CHARS, budget // 2) if i else min(400, budget // 2))
         if used + piece > budget:
             continue
         picked.add(i)
@@ -126,7 +126,7 @@ def wiki_excerpt(body: str, terms: list[str] | None = None, focus: str = "") -> 
     for i in sorted(picked):
         if last >= 0 and i != last + 1:
             out.append("…")
-        out.append(sections[i][: SECTION_CHARS if i else 400].rstrip())
+        out.append(sections[i][: min(SECTION_CHARS, budget // 2) if i else min(400, budget // 2)].rstrip())
         last = i
     text = "\n".join(out)
     return f"[最相关一段] {focus}\n…\n{text}" if focus and focus[:60] not in text else text

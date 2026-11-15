@@ -88,3 +88,40 @@ def test_no_background_keeps_prompt_unchanged(tmp_path):
     ctx = mc.gather(me, meta, "随便聊聊", {})
     assert ctx == {"wiki": [], "previous": None}
     assert mc.prompt_block(ctx) == "" and mc.references_note(ctx) == ""
+
+
+def test_wiki_context_long_entry_picks_sections_about_what_was_said(tmp_path):
+    """11/15: 长条目不再从头截 600 字 —— 会上说到答辩档期, 就带上「当前状态」和最新通知那节。"""
+    filler = "基本信息。" * 300
+    body = (f"运维一级, 公司升级申报。\n## 基本信息\n{filler}\n## 当前状态（10-30）\n答辩预计 11/18、11/19。\n"
+            f"## 变更历史\n{filler}\n## 正式评审会通知（11-11）\n评审会 11/19 8:45, 电信实业大厦 303。")
+    _wiki(tmp_path, "entities", "itss1", "ITSS一级", body)
+    ctx = mc.wiki_context(tmp_path, "关于 ITSS一级 的答辩, 听说改到 18 号了。另外别的事。")
+    ex = ctx[0]["excerpt"]
+    assert ex.startswith("运维一级, 公司升级申报") and "答辩预计 11/18、11/19" in ex and "11/19 8:45" in ex
+    assert len(ex) <= mc.MAX_ENTRY_CHARS + 20
+
+
+def test_wiki_context_finds_entries_by_search_when_name_not_said(tmp_path, monkeypatch):
+    """会上说「一级答辩」不说全称: 名字对不上, 靠知识库检索 (关键字 + 语义) 补进来; 语义命中的那段放最前。"""
+    from catfish_tool_bridge import wiki_search
+
+    body = "运维一级, 升级申报。\n## 基本信息\n" + "表。" * 600 + "\n## 当前状态\n答辩 11/19。"
+    _wiki(tmp_path, "entities", "itss1", "ITSS运维服务能力成熟度一级", body)
+    _wiki(tmp_path, "entities", "laoli", "李建国", "政企部总监。")
+    seen = []
+
+    def fake_search(q, top_k=5):
+        seen.append(q)
+        return {"matches": [{"rel_path": "wiki/entities/itss1.md", "matched_in": ["semantic"], "head": "## 当前状态\n答辩 11/19。"},
+                            {"rel_path": "wiki/entities/laoli.md", "matched_in": ["lexical"], "head": ""},
+                            {"rel_path": "notes/x.md", "matched_in": ["lexical"], "head": ""}]}
+
+    monkeypatch.setattr(wiki_search, "_catfish_home", lambda: tmp_path)
+    monkeypatch.setattr(wiki_search, "search_wiki", fake_search)
+    ctx = mc.wiki_context(tmp_path, "李建国说: 咱们一级答辩改到 18 号了。")
+    assert [w["title"] for w in ctx] == ["李建国", "ITSS运维服务能力成熟度一级"]     # 名字对上的在前, 检索补的在后, 不重复
+    assert "答辩 11/19" in ctx[1]["excerpt"] and seen == ["李建国说: 咱们一级答辩改到 18 号了。"]
+    # 不是员工本机的知识库 (catfish_home 对不上): 不查
+    monkeypatch.setattr(wiki_search, "_catfish_home", lambda: tmp_path / "elsewhere")
+    assert [w["title"] for w in mc.wiki_context(tmp_path, "咱们一级答辩改到 18 号了。")] == []

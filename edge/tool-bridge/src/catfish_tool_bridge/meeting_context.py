@@ -21,8 +21,9 @@ from . import wiki_files
 
 WIKI_SUBDIRS = ("wiki/entities", "wiki/concepts")
 MAX_WIKI_ENTRIES = 8
-MAX_ENTRY_CHARS = 600
-MAX_WIKI_CHARS = 4000
+MAX_ENTRY_CHARS = 1500   # 11/15: 不再从头截 —— 按小节挑 (local_lookup.wiki_excerpt), 看会上提到它的那几句话说的是什么
+MAX_WIKI_CHARS = 7000
+MAX_MENTION_CHARS = 1500
 MIN_NAME_CHARS = 2
 
 # 标题里的日期 / 期数 / 次数, 去掉后才是「系列名」: 「资质集采周会 10.27」「第 3 次项目例会」
@@ -52,8 +53,54 @@ def _entry(path: Path) -> dict[str, Any] | None:
     return {"title": title, "names": names, "body": text}
 
 
+SEARCH_WINDOW_CHARS = 1200   # 会上的话按这么长一段送去知识库检索
+SEARCH_MAX_WINDOWS = 12      # 长会议均匀取这么多段
+SEARCH_MAX_ENTRIES = 4       # 检索补进来的最多几条 (名字对上的优先)
+
+
+def _search_hits(catfish_home: Path, haystack: str, skip: set[str]) -> list[tuple[str, str, str]]:
+    """11/15: 只认「条目名 / 别名原样出现」时, 会上说「一级答辩改到 18 号」关联不上「ITSS运维服务能力成熟度一级」
+    (没人说全称, 条目也没别名)。把会上的话分段送进知识库混合检索 (关键字 + 语义 + 关系, wiki_search, 跟小鲶主对话同一套),
+    一个条目被几段命中、排得多靠前合起来算分。→ [(rel_path, 命中它的那几段话, 语义命中的一段)]。
+
+    wiki_search 读的是员工本机的知识库; catfish_home 不是那里 (测试用的临时目录) 就不查。"""
+    from . import wiki_search  # noqa: PLC0415
+    try:
+        if Path(catfish_home).resolve() != Path(wiki_search._catfish_home()).resolve():
+            return []
+    except OSError:
+        return []
+    text = haystack.strip()
+    if not text:
+        return []
+    windows = [text[i: i + SEARCH_WINDOW_CHARS] for i in range(0, len(text), SEARCH_WINDOW_CHARS)]
+    if len(windows) > SEARCH_MAX_WINDOWS:
+        step = len(windows) / SEARCH_MAX_WINDOWS
+        windows = [windows[int(k * step)] for k in range(SEARCH_MAX_WINDOWS)]
+    score: dict[str, float] = {}
+    said: dict[str, list[str]] = {}
+    focus: dict[str, str] = {}
+    for w in windows:
+        try:
+            res = wiki_search.search_wiki(w, top_k=3)
+        except Exception:  # noqa: BLE001 — 知识库检索出错不影响纪要
+            return []
+        for rank, m in enumerate(res.get("matches") or []):
+            rel = str(m.get("rel_path") or "")
+            if not rel.startswith(WIKI_SUBDIRS) or rel in skip:
+                continue
+            score[rel] = score.get(rel, 0.0) + 1.0 / (rank + 1)
+            said.setdefault(rel, []).append(w)
+            if "semantic" in (m.get("matched_in") or []) and rel not in focus:
+                focus[rel] = str(m.get("head") or "")
+    best = sorted(score, key=lambda r: -score[r])[:SEARCH_MAX_ENTRIES]
+    return [(rel, "\n".join(said[rel])[:MAX_MENTION_CHARS], focus.get(rel, "")) for rel in best]
+
+
 def wiki_context(catfish_home: Path, haystack: str) -> list[dict[str, str]]:
-    """会上提到的知识库条目, 按提到的次数排, 最多 MAX_WIKI_ENTRIES 条、总共 MAX_WIKI_CHARS 字。"""
+    """会上提到的知识库条目: 先认名字 (标题 / 别名原样出现, 按次数排), 再用知识库检索补 (_search_hits);
+    最多 MAX_WIKI_ENTRIES 条、总共 MAX_WIKI_CHARS 字。每条按小节挑 (跟会上提到它的那几句对得上的节), 不从头截。"""
+    from .local_lookup import _terms, wiki_excerpt  # noqa: PLC0415
     hits: list[tuple[int, dict[str, Any], str]] = []
     for sub in WIKI_SUBDIRS:
         d = catfish_home / sub
@@ -67,10 +114,21 @@ def wiki_context(catfish_home: Path, haystack: str) -> list[dict[str, str]]:
             if count:
                 hits.append((count, e, f"{sub}/{path.name}"))
     hits.sort(key=lambda h: (-h[0], h[1]["title"]))
+    sentences = [x for x in re.split(r"[\n。！？!?]", haystack) if x.strip()]
+    picked: list[tuple[dict[str, Any], str, str, str]] = []   # (条目, rel, 会上相关的话, 语义命中段)
+    for _, e, rel in hits[:MAX_WIKI_ENTRIES]:
+        picked.append((e, rel, "。".join(x for x in sentences if any(nm in x for nm in e["names"]))[:MAX_MENTION_CHARS], ""))
+    room = MAX_WIKI_ENTRIES - len(picked)
+    if room > 0:
+        for rel, said, focus in _search_hits(catfish_home, haystack, {r for _, r, _, _ in picked})[:room]:
+            e = _entry(catfish_home / rel)
+            if e and e["body"]:
+                picked.append((e, rel, said, focus))
     out: list[dict[str, str]] = []
     used = 0
-    for _, e, rel in hits[:MAX_WIKI_ENTRIES]:
-        excerpt = e["body"][:MAX_ENTRY_CHARS]
+    for e, rel, said, focus in picked:
+        # 跟会上提到它的那几句对得上的小节 (说到答辩档期就带「当前状态」/ 最新通知, 不是只有开头的基本信息表)
+        excerpt = wiki_excerpt(e["body"], _terms([said]), focus, budget=MAX_ENTRY_CHARS)
         if used + len(excerpt) > MAX_WIKI_CHARS:
             break
         used += len(excerpt)
