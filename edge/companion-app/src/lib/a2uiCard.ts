@@ -1,9 +1,10 @@
-/** 对话里的 A2UI 卡片 (11/15 试点, 鸿波「按你的建议来做」: 先拿集结号采集表试)。
+/** 对话里的 A2UI 卡片 (11/15)。
  *
  * # 是什么
  *
- * A2UI (github.com/a2ui-project/a2ui) 是一套「智能体用数据描述界面、客户端用自己的组件画」的协议:
- * 小鲶在回复里写一个 ```a2ui 代码块 (A2UI v1.0 消息列表), Companion 用白名单组件画成一张能填的卡片。
+ * A2UI (github.com/a2ui-project/a2ui) 是一套「智能体用数据描述界面、客户端用自己的组件画」的协议。这里是通用能力,
+ * 不是某个场景的模板: 员工要选、填、勾、定时间、确认改一下再办时, 小鲶自己判断要不要出卡, 现场用白名单组件拼一个
+ * ```a2ui 代码块 (规范每轮由 catfish-memory 插件 catfish_memory_cards.py 给, 只给电脑端对话), Companion 画成能填的卡片。
  * 模型给的只是数据, 不是代码 —— 只能用下面 CARD_COMPONENTS 里的组件, 没有脚本、没有外链图片。
  *
  * # 一来一回
@@ -11,28 +12,31 @@
  *   小鲶回复 ```a2ui [...]```  →  A2uiCard 画出来  →  员工填、点按钮
  *   →  按钮的 action (name + 解析好的 context) 拼成一句话, 走 catfish:approval-send 发回同一个会话
  *      (跟审批按钮、「继续」同一条路, 不加新接口)
- *   →  小鲶 (技能里写了怎么处理这个 action) 去干活
+ *   →  小鲶按出卡时的目的接着办 (用它已有的工具; 发送 / 删除照常走审批)
  *
  * 发回去的那句话里带 ```a2ui-action``` 代码块和这张卡的 key —— 会话重新打开时, 交过的卡片照样显示「已交」,
  * 不会让人以为没交又点一次。
  *
  * # 降级
  *
- * - 格式不对 (JSON 坏了 / 不符合协议 / 用了白名单外的组件): 不画, 说一句「卡片格式不对」, 原文折叠可看。
+ * - 格式不对 (JSON 坏了 / 不符合协议 / 用了白名单外的组件): 不画, 说一句「卡片格式不对」, 原文折叠可看;
+ *   刚输出完的最后一条, 对话页自动让小鲶照原因重出一次 (cardRetryAllowed), 重出的再坏就停。
  * - 还在流式输出: 代码块没写完时 JSON 肯定是坏的, 显示「卡片生成中…」, 不报错。
  * - 微信: 显示不了卡片, 外发前由插件换成一句文字 (catfish-xcatfish-user/plugin_weixin_zh.py)。
  */
 
-/** 卡片能用的组件 (A2UI 基础组件的子集)。不放 Image / Video / AudioPlayer (会去外网拉东西, 跟邮件里拦跟踪像素一个道理)、
- *  Modal (对话里弹窗太重); 函数去掉 openUrl (让模型的卡片能开任意网址不是试点需要的)。 */
+/** 卡片能用的组件 (A2UI 基础组件的子集)。小鲶是现场拼卡片的 (规范在 catfish-memory 插件 catfish_memory_cards.py,
+ *  两边要一致), 组件越少拼错越少: 不放 Image / Video / AudioPlayer (会去外网拉东西, 跟邮件里拦跟踪像素一个道理)、
+ *  Modal (对话里弹窗太重)、List (要写数据模板)、Tabs / Icon / Slider (对话里的小交互用不上)。
+ *  函数去掉 openUrl (卡片不该能打开任意网址)。 */
 export const CARD_COMPONENTS = [
-  "Text", "Row", "Column", "List", "Card", "Divider", "Tabs", "Icon",
-  "Button", "TextField", "CheckBox", "ChoicePicker", "Slider", "DateTimeInput",
+  "Text", "Row", "Column", "Card", "Divider",
+  "Button", "TextField", "CheckBox", "ChoicePicker", "DateTimeInput",
 ] as const;
 export const CARD_BLOCKED_FUNCTIONS = ["openUrl"] as const;
 export const CARD_CATALOG_ID = "catfish:cards/v1";
 
-/** 一张卡最多这么多字 (集结号采集卡约 5KB)。卡片是模型写的, 超长多半是写坏了;
+/** 一张卡最多这么多字 (十几个输入框的采集卡约 5KB)。卡片是模型写的, 超长多半是写坏了;
  *  也让 zod 3 那个「超大数组校验耗尽内存」(GHSA-mrhx-c7xc-m3w5, 见 vite.config.ts) 在这里够不着。 */
 export const CARD_MAX_CHARS = 32_000;
 
@@ -177,6 +181,36 @@ export function parseSubmission(text: string): CardSubmission | null {
   } catch {
     return null;
   }
+}
+
+/** 卡片画不出来时自动发回去的那句话的开头 (插件里的规范 catfish_memory_cards.RETRY_HEAD 跟这个一致) */
+export const RETRY_HEAD = "（卡片没画出来）";
+const RETRY_KEY = /<!-- card:([0-9a-z]+) -->/;
+
+/** 画不出来 → 让小鲶照原因重出一次。末尾带这张卡的 key: 重开会话时认得这张已经要过重出, 不再要 */
+export function buildRetryRequest(key: string, reason: string): string {
+  return `${RETRY_HEAD}原因: ${reason}\n请照卡片规则修好重出一张; 还不行就改用文字问我。\n<!-- card:${key} -->`;
+}
+
+export function parseRetryRequest(text: string): { key: string; reason: string } | null {
+  if (!text.startsWith(RETRY_HEAD)) return null;
+  const key = RETRY_KEY.exec(text)?.[1] ?? "";
+  const reason = text.slice(RETRY_HEAD.length).split("\n")[0].replace(/^原因:\s*/, "");
+  return { key, reason };
+}
+
+/** 这张坏卡片能不能自动要重出: 它在最后一条 (员工还没接话)、这张没要过、上一条员工消息不是「请重出」(重出的又坏了就停, 不连着要) */
+export function cardRetryAllowed(messages: { id: string; role: string; content: string }[], msgId: string, key: string): boolean {
+  const last = messages[messages.length - 1];
+  if (!last || last.id !== msgId || last.role !== "assistant") return false;
+  for (let i = messages.length - 2; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== "user") continue;
+    const r = parseRetryRequest(m.content ?? "");
+    if (r && r.key === key) return false;
+    return r === null;
+  }
+  return true;
 }
 
 /** 会话里已经交过的卡片 key */

@@ -1,4 +1,4 @@
-/** 对话里的 A2UI 卡片 (11/15 试点), 协议和一来一回见 lib/a2uiCard.ts。
+/** 对话里的 A2UI 卡片 (11/15), 协议和一来一回见 lib/a2uiCard.ts。
  *
  * 这个文件连带 @a2ui/react + @a2ui/web_core (+ Lit) 体积不小, 只经 lib/markdown 的 React.lazy 按需加载 ——
  * 对话里真出现卡片才拉, 平时不进首屏。
@@ -69,6 +69,8 @@ export interface A2uiCardProps {
   submitted: boolean;
   /** 点了按钮: 默认发回当前会话 (catfish:approval-send); 测试里换掉 */
   onSubmit?: (text: string) => void;
+  /** 画不出来 (输出完了还是坏的): 告诉对话页, 由它决定要不要让小鲶重出 */
+  onError?: (reason: string) => void;
 }
 
 
@@ -138,7 +140,7 @@ export function _resetCardCacheForTest() {
 
 const sendToChat = (text: string) => window.dispatchEvent(new CustomEvent("catfish:approval-send", { detail: { text } }));
 
-export default function A2uiCard({ source, interactive, streaming, submitted, onSubmit = sendToChat }: A2uiCardProps) {
+export default function A2uiCard({ source, interactive, streaming, submitted, onSubmit = sendToChat, onError }: A2uiCardProps) {
   const key = useMemo(() => cardKey(source), [source]);
   const [sentNow, setSentNow] = useState(false);
   const done = submitted || sentNow;
@@ -154,6 +156,12 @@ export default function A2uiCard({ source, interactive, streaming, submitted, on
     };
     return () => { built.handlers.onAction = undefined; };
   }, [built, interactive, done, key, onSubmit]);
+
+  const errorReason = "error" in built && !streaming ? built.error : null;
+  useEffect(() => {
+    if (errorReason) onError?.(errorReason);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [errorReason]);
 
   if ("error" in built) {
     if (streaming) return <div style={box}>卡片生成中…</div>;

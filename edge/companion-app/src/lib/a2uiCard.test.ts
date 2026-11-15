@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  blockedFunctions, buildSubmission, cardKey, cardTitle, missingComponents, unknownComponents, parseCardSource, parseSubmission, submissionLines, submittedCardKeys,
+  blockedFunctions, buildRetryRequest, buildSubmission, cardKey, cardRetryAllowed, parseRetryRequest, cardTitle, missingComponents, unknownComponents, parseCardSource, parseSubmission, submissionLines, submittedCardKeys,
 } from "./a2uiCard";
 
 const create = { version: "1.0", createSurface: { surfaceId: "jjh", catalogId: "catfish:cards/v1" } };
@@ -94,5 +94,31 @@ describe("cardKey / cardTitle", () => {
     const msgs = [create, comps([{ id: "root", component: "Card", child: "t" }, { id: "t", component: "Text", text: "**记一条爆款** · 写进「爆款记录」" }])];
     expect(cardTitle(msgs, "卡片")).toBe("记一条爆款");
     expect(cardTitle([create], "卡片")).toBe("卡片");
+  });
+});
+
+describe("画不出来 → 自动让小鲶重出 (每张卡一次, 不连着要)", () => {
+  const card = (id: string) => ({ id, role: "assistant", content: "```a2ui\n坏的\n```" });
+  const user = (id: string, content: string) => ({ id, role: "user", content });
+
+  it("那句话拼出来再认回去", () => {
+    const text = buildRetryRequest("k9", "卡片缺了一部分 (row3)");
+    expect(text.startsWith("（卡片没画出来）")).toBe(true);
+    expect(parseRetryRequest(text)).toEqual({ key: "k9", reason: "卡片缺了一部分 (row3)" });
+    expect(parseRetryRequest("（卡片没画出来）是什么意思")).toEqual({ key: "", reason: "是什么意思" });
+    expect(parseRetryRequest("普通的话")).toBeNull();
+  });
+
+  it("最后一条、员工上一句是正常的话 → 可以要", () => {
+    expect(cardRetryAllowed([user("u1", "帮我约会"), card("a1")], "a1", "k1")).toBe(true);
+  });
+
+  it("员工已经接着说话了 (卡片不是最后一条) → 不要", () => {
+    expect(cardRetryAllowed([user("u1", "x"), card("a1"), user("u2", "算了")], "a1", "k1")).toBe(false);
+  });
+
+  it("这张已经要过一次 / 上一句就是「请重出」(重出的又坏了) → 不要, 不连着要", () => {
+    expect(cardRetryAllowed([user("u1", "x"), card("a1"), user("u2", buildRetryRequest("k1", "坏")), card("a2")], "a2", "k2")).toBe(false);
+    expect(cardRetryAllowed([user("u2", buildRetryRequest("k1", "坏")), card("a2")], "a2", "k1")).toBe(false);
   });
 });

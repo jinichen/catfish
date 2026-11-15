@@ -24,7 +24,7 @@ import { isExternalLink } from "./linkBehavior";
 import { cardKey } from "./a2uiCard";
 import { A2uiCardContext } from "./a2uiCardContext";
 
-/** 11/15 A2UI 卡片试点 (lib/a2uiCard.ts): ```a2ui 代码块画成卡片。组件连带 A2UI + Lit, 按需加载, 不进首屏 */
+/** 11/15 对话里的 A2UI 卡片 (lib/a2uiCard.ts): ```a2ui 代码块画成卡片。组件连带 A2UI + Lit, 按需加载, 不进首屏 */
 const A2uiCard = lazy(() => import("../tabs/Chat/A2uiCard"));
 
 /** <pre> 里那个 <code> 是不是 ```a2ui 块; 是就返回代码文字 */
@@ -49,7 +49,10 @@ function CardBlock({ source }: { source: string }) {
   const env = useContext(A2uiCardContext);
   return (
     <Suspense fallback={<div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>卡片加载中…</div>}>
-      <A2uiCard source={source} interactive={env.interactive} streaming={env.streaming} submitted={env.submitted.has(cardKey(source))} />
+      <A2uiCard
+        source={source} interactive={env.interactive} streaming={env.streaming} submitted={env.submitted.has(cardKey(source))}
+        onError={env.requestRetry && env.msgId ? (reason) => env.requestRetry?.(env.msgId as string, cardKey(source), reason) : undefined}
+      />
     </Suspense>
   );
 }
