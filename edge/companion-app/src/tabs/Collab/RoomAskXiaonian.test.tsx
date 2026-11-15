@@ -43,10 +43,12 @@ describe("AskCards", () => {
     render(<Harness onPost={onPost} onEdit={onEdit} />);
     fireEvent.click(screen.getByText("ask"));
     expect(roomAssist).toHaveBeenCalledWith("r1", "ask", "干净版和修订版的区别?", null);
-    expect(screen.getByText(/小鲶在看群记录/)).toBeTruthy();
+    expect(screen.getByText(/小鲶在查你电脑上的资料和群记录/)).toBeTruthy();
     expect(screen.getByText(/只有你看得到/)).toBeTruthy();
     expect(screen.queryByText("发到群里")).toBeNull();
-    await act(async () => { done({ text: "修订版标出每处改动, 干净版是全部采纳后的成稿。", kind: "ask" }); });
+    await act(async () => { done({ text: "修订版标出每处改动, 干净版是全部采纳后的成稿。", kind: "ask",
+      sources: [{ kind: "知识库", title: "ITSS运维服务能力成熟度一级", where: "wiki/e.md" }, { kind: "本机文件", title: "提交清单.xlsx", where: "/x" }] } as never); });
+    expect(screen.getByText("依据 (你电脑上的): 知识库「ITSS运维服务能力成熟度一级」 · 文件「提交清单.xlsx」")).toBeTruthy();
     expect(screen.getByText("修订版标出每处改动, 干净版是全部采纳后的成稿。")).toBeTruthy();
     fireEvent.click(screen.getByText("发到群里"));
     expect(onPost).toHaveBeenCalledWith(expect.objectContaining({ answer: "修订版标出每处改动, 干净版是全部采纳后的成稿。" }));

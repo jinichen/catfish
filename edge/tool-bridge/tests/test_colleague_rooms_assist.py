@@ -45,3 +45,8 @@ def test_other_kinds_unchanged_and_unknown_rejected():
     assert "要回复的是 张三 说的" in u and "我的要求: 委婉拒绝" in u and "鲶鱼群聊功能说明" not in u
     with pytest.raises(ValueError, match="小鲶不会这个"):
         rt.assist_messages(ROOM, MSGS, ME, "chat", "")
+
+
+def test_ask_includes_local_materials():
+    u = _user(rt.assist_messages(ROOM, MSGS, ME, "ask", "ITSS 一级现状", None, "\n我电脑上找到的资料: X\n"))
+    assert "我电脑上找到的资料: X" in u and u.index("我电脑上找到的资料") < u.index("我的问题: ITSS 一级现状")

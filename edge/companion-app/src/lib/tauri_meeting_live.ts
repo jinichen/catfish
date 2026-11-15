@@ -25,7 +25,11 @@ export interface LiveState {
 export type HintType = "decision" | "todo" | "question" | "conflict" | "followup";
 export type NoteState = "new" | "pinned" | "ignored";
 export interface HintItem { id: string; type: HintType; text: string; state: NoteState }
-export interface AskNote { id: string; kind: "ask"; q: string; answer: string; state: NoteState; at: number; created: number }
+export interface AskNote {
+  id: string; kind: "ask"; q: string; answer: string; state: NoteState; at: number; created: number;
+  /** 11/15 先查的本机资料 (知识库 / 文件 / 邮件) */
+  sources?: { kind: string; title: string; where: string }[];
+}
 export interface HintNote { id: string; kind: "hint"; items: HintItem[]; from: number; at: number; created: number }
 export type LiveNote = AskNote | HintNote;
 export interface LiveNotes { notes: LiveNote[]; hint_cursor: number }

@@ -2,7 +2,7 @@
  * 会中小鲶 (11/15, docs/MEETING-MINUTES-PLAN.md §8)。
  *
  * 录音中 (右边会议详情): 实时文字 (边录边转, 落后几秒到半分钟, 不分说话人) + 「问小鲶」输入框 + 小鲶的卡片。
- *   · 问小鲶: 随时问, 小鲶看到目前为止的会中文字 + 知识库 + 上次同系列会议; 点实时文字里的一句 = 问这句
+ *   · 问小鲶: 随时问, 小鲶先查本机资料 (知识库 / 文件 / 邮件), 再看目前为止的会中文字 + 上次同系列会议; 点实时文字里的一句 = 问这句
  *   · 主动提示 (默认开, 可以关): 每 3 分钟看一眼新说的话, 有决议 / 待办 / 没人答的问题 / 跟资料对不上 / 可以追问的才出卡
  *   · 每条可以「记到纪要」或「忽略」; 记到纪要的生成纪要时带上, 纪要末尾附「会中小鲶」一节
  * 会后 (LiveNotes): 纪要旁边列出会中的问答和提示, 可以改记不记、删掉。
@@ -16,6 +16,7 @@ import {
   meetingLiveNoteSet, meetingLiveNotes, meetingLiveRead, quoteLine,
   type LiveLine, type LiveNote, type LiveState, type NoteState,
 } from "../../lib/tauri_meeting_live";
+import { sourcesLine } from "../Collab/RoomAskXiaonian";
 import { Btn, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
 
 export const HINT_EVERY_MS = 3 * 60 * 1000;
@@ -75,6 +76,7 @@ function NoteCards({ api, after }: { api: NotesApi; after?: boolean }) {
                 </span>
               </div>
               <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{n.answer}</div>
+              {sourcesLine(n.sources) && <div style={muted}>{sourcesLine(n.sources)}</div>}
             </>
           ) : (
             <>

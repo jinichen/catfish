@@ -95,7 +95,7 @@ def _new_id() -> str:
 
 # ── 提示词 ───────────────────────────────────────────────────────
 
-def ask_messages(meta: dict, rows: list[dict], question: str, background: str) -> list[dict[str, str]]:
+def ask_messages(meta: dict, rows: list[dict], question: str, background: str, local: str = "") -> list[dict[str, str]]:
     lines = render(rows)
     now = float(rows[-1]["end"]) if rows else 0.0
     recent = [ln for r, ln in zip(rows, lines) if float(r.get("end") or 0) >= now - RECENT_SECS]
@@ -103,8 +103,8 @@ def ask_messages(meta: dict, rows: list[dict], question: str, background: str) -
     user = (f"会议: {meta.get('title', '')} (进行中, 已录到 {_ts(now)})\n{background}"
             f"\n到目前为止的会中文字 (<<< >>> 之间):\n<<<\n{body}\n>>>\n"
             f"\n最近 2 分钟 (我说「刚才」指这段):\n<<<\n{chr(10).join(recent) or '(没有)'}\n>>>\n"
-            f"\n我的问题: {question.strip()[:500]}\n"
-            "先答问题; 引用会上的话时带上时间。会上没说、资料里也没有的, 直接说不知道, 可以说可以怎么问对方。")
+            f"{local}\n我的问题: {question.strip()[:500]}\n"
+            "先答问题; 引用会上的话时带上时间, 用我电脑上的资料时说是哪份。会上没说、资料里也没有的, 直接说不知道, 可以说可以怎么问对方。")
     return [{"role": "system", "content": _SYS}, {"role": "user", "content": user}]
 
 
@@ -171,11 +171,15 @@ async def handle_assist(params: dict) -> dict:
         if not q:
             raise ValueError("要问小鲶什么?")
         haystack = "\n".join(r["text"] for r in rows[-200:]) + "\n" + q
+        from . import local_lookup  # noqa: PLC0415 — 11/15 先查本机资料 (知识库 / 文件 / 邮件)
+        found = await local_lookup.lookup(q, "\n".join(render(rows[-20:])), call_llm, {**kw, "timeout_s": 60.0})
         answer = re.sub(r"<think>.*?</think>", "", await call_llm(
-            ask_messages(meta, rows, q, _background(d, meta, haystack)), temperature=0.3, max_tokens=1200, **kw), flags=re.S).strip()
+            ask_messages(meta, rows, q, _background(d, meta, haystack), local_lookup.prompt_block(found)),
+            temperature=0.3, max_tokens=1200, **kw), flags=re.S).strip()
         if not answer:
             raise ValueError("小鲶这次没答出来, 再问一次")
         note = {"id": _new_id(), "kind": "ask", "q": q[:500], "answer": answer[:4000], "state": "new",
+                "sources": local_lookup.sources(found),
                 "at": float(rows[-1]["end"]) if rows else 0.0, "created": time.time()}
     elif kind == "hint":
         cursor = float(doc.get("hint_cursor") or 0.0)

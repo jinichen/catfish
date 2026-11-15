@@ -21,7 +21,8 @@ import LiveAssist, { HINT_EVERY_MS, LiveNotes } from "./LiveAssist";
 const META: MeetingMeta = { id: "mtg_1", title: "CC RC末次", created_at: "2026-11-15T19:00:00", attendees: 3, hotwords: [],
                             status: "recording", duration_secs: 0, device: null, error: null };
 const L1 = { start: 200, end: 206, text: "严重不符合项要先发暂停通知。", track: "mic" as const };
-const ASK = { id: "a1", kind: "ask" as const, q: "暂停通知后多久交恢复申请?", answer: "03:20 说的: 下个月前。", state: "new" as const, at: 206, created: 1 };
+const ASK = { id: "a1", kind: "ask" as const, q: "暂停通知后多久交恢复申请?", answer: "03:20 说的: 下个月前。", state: "new" as const, at: 206, created: 1,
+             sources: [{ kind: "邮件", title: "关于现场评审会安排的通知", where: "m1" }] };
 const HINT = { id: "h1", kind: "hint" as const, from: 180, at: 360, created: 2,
                items: [{ id: "i1", type: "todo" as const, text: "下个月前交恢复申请", state: "new" as const },
                        { id: "i2", type: "conflict" as const, text: "引用的是 07 版旧标准", state: "new" as const }] };
@@ -60,6 +61,7 @@ describe("LiveAssist (录音中)", () => {
     await act(async () => { fireEvent.click(screen.getByText("🐟 问小鲶")); });
     expect(api.meetingLiveAsk).toHaveBeenCalledWith("mtg_1", "暂停通知后多久交恢复申请?");
     expect(screen.getByText("03:20 说的: 下个月前。")).toBeTruthy();
+    expect(screen.getByText("依据 (你电脑上的): 邮件「关于现场评审会安排的通知」")).toBeTruthy();
     expect(box.value).toBe("");
     await act(async () => { fireEvent.click(screen.getByText("记到纪要")); });
     expect(api.meetingLiveNoteSet).toHaveBeenCalledWith("mtg_1", "a1", null, "pinned");

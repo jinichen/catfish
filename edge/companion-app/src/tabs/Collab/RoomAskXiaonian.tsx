@@ -1,13 +1,13 @@
 /**
  * 群聊里的小鲶 (11/15)。小鲶不是群成员 —— 群消息端到端加密、只在各人电脑上, 小鲶只替自己的主人干活 (GROUP-CHAT-PLAN §5):
  *   · 输入框里打「@小鲶 …」: 这句话不发到群里, 交给自己的小鲶 (room/assist kind=ask, 读本机群记录 + 群聊功能说明),
- *     回答只显示在自己这边 (不进群记录, 换群 / 关掉就没了); 觉得有用点「发到群里」或「放进输入框」改了再发。
+ *     先查本机资料 (知识库 / 文件 / 邮件, tool-bridge local_lookup), 回答下面列依据; 回答只显示在自己这边 (不进群记录, 换群 / 关掉就没了); 觉得有用点「发到群里」或「放进输入框」改了再发。
  *   · 「🐟 小鲶」菜单: 总结 / 整理待办 / 起草回复 (原来就有, 从 RoomsPanel 挪过来)。
  *   · 成员栏、@ 菜单里给小鲶一个固定位置, 标明「你的助手 · 只有你看得到」, 不算成员。
  */
 import { useEffect, useRef, useState } from "react";
 
-import { roomAssist, type AssistKind, type RoomMessage } from "../../lib/tauri_colleague_rooms";
+import { roomAssist, type AskSource, type AssistKind, type RoomMessage } from "../../lib/tauri_colleague_rooms";
 import { muted } from "./formsUi";
 import { Btn, ErrorLine } from "./roomLinkUi";
 
@@ -26,7 +26,13 @@ export function postText(a: Ask, max: number): string {
   return `🐟 小鲶: ${a.answer ?? ""}`.slice(0, max);
 }
 
-export type Ask = { id: number; q: string; about?: string; answer?: string; error?: string };
+export type Ask = { id: number; q: string; about?: string; answer?: string; error?: string; sources?: AskSource[] };
+
+/** 「依据: 知识库「…」· 文件「…」」(前 5 条) */
+export function sourcesLine(src: AskSource[] | undefined): string {
+  if (!src?.length) return "";
+  return "依据 (你电脑上的): " + src.slice(0, 5).map((s) => `${s.kind === "本机文件" ? "文件" : s.kind}「${s.title}」`).join(" · ");
+}
 
 export function useAskXiaonian(roomId: string) {
   const [asks, setAsks] = useState<Ask[]>([]);
@@ -37,7 +43,7 @@ export function useAskXiaonian(roomId: string) {
     const id = ++seq.current;
     setAsks((l) => [...l, { id, q, about }]);
     roomAssist(roomId, "ask", q, replyTo?.msg_id ?? null)
-      .then((r) => patch(id, { answer: r.text }))
+      .then((r) => patch(id, { answer: r.text, sources: r.sources }))
       .catch((e) => patch(id, { error: e instanceof Error ? e.message : String(e) }));
   }
   const dismiss = (id: number) => setAsks((l) => l.filter((a) => a.id !== id));
@@ -69,8 +75,9 @@ export function AskCards({ asks, onPost, onEdit, onDismiss, busy }: {
             <span style={{ ...muted, whiteSpace: "nowrap", flexShrink: 0 }}>🔒 只有你看得到</span>
           </div>
           {a.error ? <ErrorLine>{a.error}</ErrorLine>
-            : a.answer === undefined ? <span style={muted}>🐟 小鲶在看群记录…</span>
+            : a.answer === undefined ? <span style={muted}>🐟 小鲶在查你电脑上的资料和群记录…</span>
             : <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{a.answer}</div>}
+          {a.answer !== undefined && sourcesLine(a.sources) && <span style={muted}>{sourcesLine(a.sources)}</span>}
           <span style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
             {a.answer !== undefined && <Btn kind="ghost" disabled={busy} onClick={() => onEdit(a)}>放进输入框</Btn>}
             {a.answer !== undefined && <Btn kind="ghost" disabled={busy} onClick={() => onPost(a)}>发到群里</Btn>}

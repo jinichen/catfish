@@ -201,9 +201,11 @@ export const roomLeave = (roomId: string) => call<{ room: RoomSummary; failed: F
 export const roomDelete = (roomId: string) => call<{ ok: boolean }>("delete", { room_id: roomId });
 
 /** 第三步: 小鲶读本机群记录出草稿 (总结 / 待办 / 起草回复), 不发。instruction = 员工在输入框里写的要求 */
+/** 11/15 问小鲶时查到的本机资料 (tool-bridge local_lookup) */
+export interface AskSource { kind: string; title: string; where: string }
 export type AssistKind = "summary" | "todos" | "reply" | "ask";   // ask: 群输入框里「@小鲶 …」(11/15)
 export const roomAssist = (roomId: string, kind: AssistKind, instruction?: string, replyTo?: string | null) =>
-  invoke<{ text: string; kind: AssistKind }>("colleague_room_assist", {
+  invoke<{ text: string; kind: AssistKind; sources?: AskSource[] }>("colleague_room_assist", {
     roomId, kind, instruction: instruction ?? null, replyTo: replyTo ?? null,
   });
 

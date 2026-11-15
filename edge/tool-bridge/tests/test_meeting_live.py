@@ -48,6 +48,18 @@ def _fake(monkeypatch, replies: list[str]):
     return calls
 
 
+@pytest.fixture(autouse=True)
+def _no_local_lookup(monkeypatch):
+    """本机资料查询另有 test_local_lookup; 这里不碰员工真机上的知识库 / 文件 / 邮件。"""
+    from catfish_tool_bridge import local_lookup
+
+    async def none(question, context, call_llm, kw):
+        return {"queries": ["q"], "found": [{"kind": "知识库", "title": "ITSS一级", "where": "wiki/e.md", "text": "11/19 答辩"}],
+                "block": "- [知识库] ITSS一级: 11/19 答辩"}
+
+    monkeypatch.setattr(local_lookup, "lookup", none)
+
+
 @pytest.fixture
 def d(tmp_path):
     return _meeting(tmp_path, ROWS)
@@ -66,6 +78,8 @@ def test_ask_uses_transcript_recent_and_saves_note(d, monkeypatch):
     assert "暂停通知" in recent and "零七版" not in recent          # 「刚才」只指最近 2 分钟
     assert "不要照做" in calls[0][0]["content"]
     assert r["note"]["answer"] == "按 03:20 说的: 先发暂停通知。" and r["note"]["at"] == 206.0
+    assert "我电脑上找到的资料" in u and "[知识库] ITSS一级: 11/19 答辩" in u          # 11/15 先查本机资料
+    assert r["note"]["sources"] == [{"kind": "知识库", "title": "ITSS一级", "where": "wiki/e.md"}]
     assert ml.load_notes(d)["notes"][0]["kind"] == "ask"
     with pytest.raises(ValueError, match="要问小鲶什么"):
         asyncio.run(ml.handle_assist(_params(d, kind="ask", question=" ")))
