@@ -12,20 +12,26 @@
  *   → 员工点按钮: 上游标准的 `action` 消息 (renderer_to_agent) 拼进一句话, 走 catfish:approval-send 发回同一个会话
  *   → 小鲶按出卡时的目的接着办 (发送 / 删除照常走审批)
  *
+ * 卡片出了以后小鲶还能改里面的数据 (进度、状态): catfish_form 的 card_update 动作往卡片文件追加上游标准的
+ * updateDataModel 消息, 这里看到那次调用就把新消息打到原来那张卡上, 卡片原地变 (上游说的「画布」用法)。
+ *
  * 模型给的只是数据, 不是代码 —— 只能用下面 CARD_COMPONENTS 里的组件, 没有脚本、没有外链图片。
  * 卡片在 tool-bridge 已经过官方 SDK 校验; 这里再按白名单 / 引用 / 大小查一遍, 是防文件被改过的兜底。
  */
 
-/** 卡片能用的组件 (A2UI 基础组件的子集) —— 跟 tool-bridge/a2ui_card.py CARD_COMPONENTS 一致 (那边测试对着这里查)。
- *  不放 Image / Video / AudioPlayer (会去外网拉东西, 跟邮件里拦跟踪像素一个道理)、Modal (对话里弹窗太重)、
- *  List (要写数据模板)、Tabs / Icon / Slider (对话里的小交互用不上)。函数去掉 openUrl (卡片不该能打开任意网址)。 */
-export const CARD_COMPONENTS = [
-  "Text", "Row", "Column", "Card", "Divider",
-  "Button", "TextField", "CheckBox", "ChoicePicker", "DateTimeInput",
+/** 卡片能用的组件 = 鲶鱼目录 (tool-bridge/a2ui_catalog.py, 顺序也一致 —— 那边测试对着这里查):
+ *  A2UI 基础组件 12 个 (不放 Image / Video / AudioPlayer: 会去外网拉东西, 跟邮件里拦跟踪像素一个道理;
+ *  Modal / Tabs / Icon 对话里用不上) + 鲶鱼自定义 4 个 (邮件卡 / 日程卡 / 待办项 / 文件卡, 见 tabs/Chat/catfishCardComponents.tsx)。
+ *  函数去掉 openUrl (卡片不该能打开任意网址)。 */
+export const CARD_BASIC_COMPONENTS = [
+  "Text", "Row", "Column", "List", "Card", "Divider",
+  "Button", "TextField", "CheckBox", "ChoicePicker", "Slider", "DateTimeInput",
 ] as const;
+export const CARD_CUSTOM_COMPONENTS = ["EmailCard", "EventCard", "TodoItem", "FileCard"] as const;
+export const CARD_COMPONENTS = [...CARD_BASIC_COMPONENTS, ...CARD_CUSTOM_COMPONENTS] as const;
 export const CARD_BLOCKED_FUNCTIONS = ["openUrl"] as const;
-/** 上游 v1.0 基础目录的 id (裁剪过, id 不变; tool-bridge 那边 SDK 编出来的 createSurface 就写这个) */
-export const CARD_CATALOG_ID = "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json";
+/** 鲶鱼目录的 id (tool-bridge a2ui_catalog.CATALOG_ID; SDK 编出来的 createSurface 写这个) */
+export const CARD_CATALOG_ID = "https://catfish.local/a2ui/catalogs/catfish/v1.json";
 /** 主对话随请求声明的渲染能力 (上游 v1.0 renderer_capabilities.json 的形状): hermes 插件据此决定这个会话能不能出卡 */
 export const CARD_RENDERER_CAPABILITIES = { "1.0": { supportedCatalogIds: [CARD_CATALOG_ID] } } as const;
 /** 一张卡最多这么多字 (十几个输入框的采集卡约 5KB); 也让 zod 3 那个「超大数组校验耗尽内存」(见 vite.config.ts) 够不着 */
@@ -79,7 +85,8 @@ export function blockedFunctions(messages: unknown[]): string[] {
   return [...hit];
 }
 
-/** 引用了却没定义的组件 id (协议允许分次发, 对话里一张卡是一次给全的); 没有 root 也算 */
+/** 引用了却没定义的组件 id (协议允许分次发, 对话里一张卡是一次给全的); 没有 root 也算。
+ *  List 的 children 可以是模板 {path, componentId}: 模板组件也得在 */
 export function missingComponents(messages: unknown[]): string[] {
   const missing: string[] = [];
   for (const comps of componentsBySurface(messages).values()) {
@@ -89,6 +96,8 @@ export function missingComponents(messages: unknown[]): string[] {
       if (typeof c?.id === "string") ids.add(c.id);
       if (typeof c?.child === "string") refs.add(c.child);
       if (Array.isArray(c?.children)) for (const ch of c.children) if (typeof ch === "string") refs.add(ch);
+      const tpl = c?.children as { componentId?: unknown } | undefined;
+      if (tpl && !Array.isArray(tpl) && typeof tpl === "object" && typeof tpl.componentId === "string") refs.add(tpl.componentId);
     }
     for (const r of refs) if (!ids.has(r)) missing.push(r);
   }
@@ -203,7 +212,7 @@ export function submissionLines(context: Record<string, unknown>): [string, stri
 /** 工具结果里找卡片编号。hermes 存进库 / 推给前端的结果外面包着一层说明文字
  *  (`<untrusted_tool_result …>…</untrusted_tool_result>`), 里面是 `{"result": "<JSON 字符串>"}`,
  *  tool-bridge 再包一层 `{ok, tool, result: {card_id…}}` —— 一层层剥到有 card_id 为止 (11/15 实机: 只认纯 JSON 就一张都画不出来)。 */
-function findCardId(raw: unknown): string | null {
+function findCardResult(raw: unknown): { card_id: string; revision?: unknown } | null {
   let cur: unknown = raw;
   for (let i = 0; i < 6 && cur != null; i++) {
     if (typeof cur === "string") {
@@ -219,16 +228,30 @@ function findCardId(raw: unknown): string | null {
     }
     if (typeof cur !== "object") return null;
     const id = (cur as { card_id?: unknown }).card_id;
-    if (typeof id === "string") return CARD_ID.test(id) ? id : null;
+    if (typeof id === "string") return CARD_ID.test(id) ? (cur as { card_id: string; revision?: unknown }) : null;
     cur = (cur as { result?: unknown }).result;
   }
   return null;
 }
 
+type CardCall = { name: string; args?: Record<string, unknown>; result?: unknown };
+
 /** 这次工具调用是不是出了一张卡片 (catfish_form 的 card 动作, 结果里带编号); 是就返回编号 */
-export function cardIdFromToolCall(call: { name: string; args?: Record<string, unknown>; result?: unknown }): string | null {
+export function cardIdFromToolCall(call: CardCall): string | null {
   if (!/(^|__)catfish_form$/.test(call.name)) return null;
-  // args 在流式过程中可能还是 {} —— 结果里认得出卡片编号就算
+  // args 在流式过程中可能还是 {} —— 结果里认得出卡片编号就算; card_update 的结果带 revision, 不是新卡
   if (call.args && call.args.action !== undefined && call.args.action !== "card") return null;
-  return findCardId(call.result);
+  const r = findCardResult(call.result);
+  return r && r.revision === undefined ? r.card_id : null;
 }
+
+/** 这次工具调用是不是改了一张已有的卡片 (card_update, 结果带 revision); 是就返回编号和版本 */
+export function cardUpdateFromToolCall(call: CardCall): { cardId: string; revision: number } | null {
+  if (!/(^|__)catfish_form$/.test(call.name)) return null;
+  if (call.args && call.args.action !== undefined && call.args.action !== "card_update") return null;
+  const r = findCardResult(call.result);
+  return r && typeof r.revision === "number" ? { cardId: r.card_id, revision: r.revision } : null;
+}
+
+/** card_update 成功后通知对话里那张卡重读 (ToolCards 发, 同编号的卡收) */
+export const CARD_UPDATED_EVENT = "catfish:a2ui-card-updated";

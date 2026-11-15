@@ -8,26 +8,27 @@ import { A2uiSurface, MarkdownComponentContext, type ReactCatalogComponent } fro
 import { Catalog, MessageProcessor, type ActionPayload, type SurfaceModel } from "@a2ui/web_core";
 import { basicCatalog } from "@a2ui/web_core/catalogs/basic/v1";
 
-import { buildSubmission, CARD_BLOCKED_FUNCTIONS, CARD_CATALOG_ID, CARD_COMPONENTS, cardProblem, cardTitle } from "../../lib/a2uiCard";
+import { buildSubmission, CARD_BASIC_COMPONENTS, CARD_BLOCKED_FUNCTIONS, CARD_CATALOG_ID, cardProblem, cardTitle } from "../../lib/a2uiCard";
+import { CATFISH_CARD_COMPONENTS } from "./catfishCardComponents";
 
-/** 白名单目录: 上游 v1.0 基础目录里挑 CARD_COMPONENTS, 去掉 openUrl; id 不变 (tool-bridge 用官方 SDK 编出来的就写这个 id) */
+/** 鲶鱼目录 (id = CARD_CATALOG_ID): 上游 v1.0 基础目录里挑 12 个基础组件 (上游的 Lit 实现) + 鲶鱼自定义 4 个 (React 实现),
+ *  函数去掉 openUrl。tool-bridge 的专员按同一个 id 的 JSON 目录生成 (tool-bridge/a2ui_catalog.py) */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-let catalog: Catalog<any, any> | null = null;
-function cardCatalog() {
-  if (!catalog) {
-    if (basicCatalog.id !== CARD_CATALOG_ID) {
-      // 升级 @a2ui/web_core 后基础目录换了 id: tool-bridge 那边的 catalog JSON 也要一起换 (data/a2ui/NOTICE.md)
-      console.warn(`[a2ui] 基础目录 id 变了: ${basicCatalog.id}`);
-    }
-    const keep = new Set<string>(CARD_COMPONENTS);
+let catalogs: Catalog<any, any>[] | null = null;
+function cardCatalogs() {
+  if (!catalogs) {
+    const keep = new Set<string>(CARD_BASIC_COMPONENTS);
     const blocked = new Set<string>(CARD_BLOCKED_FUNCTIONS);
-    catalog = new Catalog(
-      CARD_CATALOG_ID, "1.0",
-      [...basicCatalog.components.values()].filter((c) => keep.has(c.name)),
-      [...basicCatalog.functions.values()].filter((f) => !blocked.has(f.name)),
-    );
+    const basic = [...basicCatalog.components.values()].filter((c) => keep.has(c.name));
+    if (basic.length !== keep.size) console.warn("[a2ui] 基础目录里少了组件 (升级 @a2ui/web_core 后看 data/a2ui/NOTICE.md)");
+    const functions = [...basicCatalog.functions.values()].filter((f) => !blocked.has(f.name));
+    catalogs = [
+      new Catalog(CARD_CATALOG_ID, "1.0", [...basic, ...CATFISH_CARD_COMPONENTS], functions),
+      // 1.2.185–1.2.189 出的卡写的是上游基础目录 id (那时只用基础组件): 会话里翻到老卡也要画得出来
+      new Catalog(basicCatalog.id, "1.0", basic, functions),
+    ];
   }
-  return catalog;
+  return catalogs;
 }
 
 /** A2UI 的样式变量 → 鲶鱼的配色 (深浅色跟着 --catfish-* 走) */
@@ -67,7 +68,9 @@ export const cardNoteStyle: CSSProperties = {
 type Built =
   | { error: string }
   | { processor: MessageProcessor<ReactCatalogComponent>; surfaces: SurfaceModel<ReactCatalogComponent>[]; title: string;
-      handlers: { onAction?: (a: ActionPayload) => void } };
+      handlers: { onAction?: (a: ActionPayload) => void };
+      /** 已经打进 processor 的消息条数: card_update 之后重读到更长的消息列表, 只打后面新加的 */
+      applied: number };
 
 /** 建好的卡片按编号存在组件外面: 对话列表重渲染时卡片可能卸了又装, 员工填了一半的值 (在 processor 的数据模型里) 不能丢 */
 const BUILT = new Map<string, Built>();
@@ -75,13 +78,20 @@ const BUILT_MAX = 40;
 
 function buildCard(cardId: string, messages: unknown[]): Built {
   const hit = BUILT.get(cardId);
+  if (hit && "processor" in hit && messages.length > hit.applied && !cardProblem(messages)) {
+    // 小鲶改了这张卡 (card_update 追加的 updateDataModel): 在原 processor 上接着打, 员工已经填的别的值不丢
+    const errors = hit.processor.processMessagesWithErrors(messages.slice(hit.applied));
+    if (errors.length) console.warn("[a2ui] 卡片更新没打上", errors[0]);
+    hit.applied = messages.length;
+    return { ...hit };
+  }
   if (hit) return hit;
   const problem = cardProblem(messages);
   if (problem) return { error: problem };
   const handlers: { onAction?: (a: ActionPayload) => void } = {};
   let processor: MessageProcessor<ReactCatalogComponent>;
   try {
-    processor = new MessageProcessor([cardCatalog()], (a: ActionPayload) => handlers.onAction?.(a), { reportErrorsOnly: true });
+    processor = new MessageProcessor(cardCatalogs(), (a: ActionPayload) => handlers.onAction?.(a), { reportErrorsOnly: true });
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) };
   }
@@ -96,7 +106,7 @@ function buildCard(cardId: string, messages: unknown[]): Built {
     processor.dispose();
     return { error: "没有要显示的内容" };
   }
-  const ok: Built = { processor, surfaces, title: cardTitle(messages, "卡片"), handlers };
+  const ok: Built = { processor, surfaces, title: cardTitle(messages, "卡片"), handlers, applied: messages.length };
   BUILT.set(cardId, ok);
   if (BUILT.size > BUILT_MAX) {
     const oldest = BUILT.keys().next().value as string;

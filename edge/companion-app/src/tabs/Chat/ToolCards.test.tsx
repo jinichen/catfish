@@ -44,6 +44,20 @@ describe("ToolCards", () => {
     expect(calls).toBe(1);
   });
 
+  it("card_update: 不再画一张, 留一行小字, 原来那张卡重读文件", { timeout: 20_000 }, async () => {
+    invoke.mockResolvedValue(meeting);
+    const first = render(<ToolCards calls={[call()]} />);
+    await waitFor(() => expect(first.container.querySelector(".a2ui-card")).toBeTruthy(), { timeout: 15_000 });
+    expect(invoke).toHaveBeenCalledTimes(1);
+    const up = call({ id: "t2", args: { action: "card_update", card_id: ID, data: { "/f/agenda": "x" } },
+      result: JSON.stringify({ ok: true, card_id: ID, revision: 1, note: "…" }) });
+    const second = render(<ToolCards calls={[up]} />);
+    expect(second.container.textContent).toContain("更新了上面的卡片");
+    expect(second.container.querySelector(".a2ui-card")).toBeNull();
+    await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+    expect(invoke).toHaveBeenLastCalledWith("a2ui_card_read", { cardId: ID });
+  });
+
   it("别的工具调用 / 别的动作 / 没成功的 → 什么都不画, 也不去读", () => {
     const { container } = render(<ToolCards calls={[call({ name: "catfish_wiki_search" }), call({ args: { action: "create" } }),
       call({ result: JSON.stringify({ ok: false, error: "x" }) })]} />);

@@ -54,7 +54,7 @@ def test_good_card_saved_out_of_band(tmp_path):
     saved = json.loads((tmp_path / "cards" / f"{r['card_id']}.json").read_text(encoding="utf-8"))
     assert saved["request"] == "让员工从两个时段里选一个会议时间"
     surface = saved["messages"][0]["createSurface"]
-    assert surface["catalogId"] == "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
+    assert surface["catalogId"] == "https://catfish.local/a2ui/catalogs/catfish/v1.json"
     assert {c["component"] for c in surface["components"]} <= set(ac.CARD_COMPONENTS)
 
 
@@ -87,14 +87,15 @@ def test_prompt_comes_from_sdk_and_only_lists_whitelist():
     assert "<a2ui>" in system and "Positional Component Signatures" in system
     sigs = set(re.findall(r"^• (\w+)\(", system, re.M))
     assert set(ac.CARD_COMPONENTS) <= sigs
-    assert not ({"Image", "Video", "Modal", "List", "AudioPlayer"} & sigs)
+    assert not ({"Image", "Video", "Modal", "AudioPlayer", "Tabs", "Icon"} & sigs)
     assert "openUrl(" not in system
 
 
 def test_whitelist_matches_companion():
     ts = COMPANION_TS.read_text(encoding="utf-8")
-    comps = re.search(r"export const CARD_COMPONENTS = \[(.*?)\] as const;", ts, re.S).group(1)
-    assert tuple(re.findall(r'"(\w+)"', comps)) == ac.CARD_COMPONENTS
+    lists = [re.search(rf"export const {n} = \[(.*?)\] as const;", ts, re.S).group(1)
+             for n in ("CARD_BASIC_COMPONENTS", "CARD_CUSTOM_COMPONENTS")]
+    assert tuple(x for body in lists for x in re.findall(r'"(\w+)"', body)) == ac.CARD_COMPONENTS
 
 
 def test_old_cards_pruned(tmp_path):
@@ -125,3 +126,26 @@ def test_generation_rules_cover_seen_rejections():
     system = ac.specialist_messages("x")[0]["content"]
     for rule in ("只用英文字母", "Card 只放一个子组件", "\"checkbox\" 或 \"chips\"", "DateTimeInput 不写 min / max", "一定带中文提示"):
         assert rule in system
+
+
+def test_card_update_appends_data_and_bumps_revision(tmp_path):
+    """画布用法: 同一张卡跨轮次推数据 (不调模型); 路径 / 编号不对就拒。"""
+    r = ac.make_card({"request": "让员工从两个时段里选一个会议时间"}, llm=fake_llm(GOOD))
+    cid = r["card_id"]
+    up = ac.update_card({"card_id": cid, "data": {"/f/time": ["2026-11-17T10:00"]}})
+    assert up == {"ok": True, "card_id": cid, "revision": 1, "note": up["note"]}
+    saved = json.loads((tmp_path / "cards" / f"{cid}.json").read_text(encoding="utf-8"))
+    assert saved["messages"][-1] == {"version": "1.0", "updateDataModel": {"surfaceId": "main", "path": "/f/time", "value": ["2026-11-17T10:00"]}}
+    assert ac.update_card({"card_id": cid, "data": {"/f/x": 1}})["revision"] == 2
+    assert "以 / 开头" in ac.update_card({"card_id": cid, "data": {"f/x": 1}})["error"]
+    assert "data 必填" in ac.update_card({"card_id": cid, "data": {}})["error"]
+    assert "编号不对" in ac.update_card({"card_id": "../../etc/passwd", "data": {"/a": 1}})["error"]
+    assert "找不到卡片" in ac.update_card({"card_id": "c_20200101_000000_abcdef", "data": {"/a": 1}})["error"]
+
+
+def test_card_update_routed_through_catfish_form(monkeypatch):
+    from catfish_tool_bridge import forms_tool
+    seen = {}
+    monkeypatch.setattr(ac, "update_card", lambda args: seen.setdefault("args", args) and {"ok": True})
+    forms_tool.dispatch("catfish_form", {"action": "card_update", "card_id": "c_x", "data": {"/a": 1}})
+    assert seen["args"]["data"] == {"/a": 1}

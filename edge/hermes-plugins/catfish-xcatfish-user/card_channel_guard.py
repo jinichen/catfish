@@ -21,8 +21,9 @@ from pathlib import Path
 from typing import Any
 
 FORM_TOOL = "catfish_form"
-#: 上游 v1.0 基础目录 (裁剪过, id 不变) —— 跟 tool-bridge a2ui_card.py 用的、Companion CARD_CATALOG_ID 一致
-CATALOG_ID = "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
+#: 鲶鱼目录 (基础组件 + 邮件卡 / 日程卡 / 待办项 / 文件卡) —— 跟 tool-bridge a2ui_catalog.CATALOG_ID、Companion CARD_CATALOG_ID 一致。
+#: 只声明了上游基础目录的旧 Companion (≤1.2.189) 画不了自定义组件, 不给它出卡
+CATALOG_ID = "https://catfish.local/a2ui/catalogs/catfish/v1.json"
 _EVAL_SOURCES = ("cli", "tool", "oneshot")
 
 
@@ -60,7 +61,7 @@ def session_platform(session_id: str, home: Path | None = None) -> str:
 def is_card_call(tool_name: str, args: Any) -> bool:
     if not (tool_name == FORM_TOOL or tool_name.endswith(f"__{FORM_TOOL}")):
         return False
-    return isinstance(args, dict) and str(args.get("action") or "") == "card"
+    return isinstance(args, dict) and str(args.get("action") or "") in ("card", "card_update")
 
 
 def can_render(caps_json: str | None) -> bool:
@@ -92,8 +93,10 @@ def decide(tool_name: str, args: Any, caps_json: str | None, platform: str = "")
 
 #: 能画卡片的会话每轮带的一句话 (上游示例 restaurant_finder 也是在智能体自己的提示里写「什么情况出界面」)。
 #: 11/15 实测: 只靠 catfish_form 说明里那一行, 13 条明显该出卡的说法只出了 1 次 —— 小鲶习惯用文字列一串问题。
-CARD_HINT = ("[这个对话能出卡片] 员工要从几个里选、填几项、勾几个、定时间、或看一眼改了再办时, "
-             "用 catfish_form 的 card 出一张卡让他点着填, 不要用文字列一串问题让他逐条回。只回答问题时不用。")
+CARD_HINT = ("[这个对话能出卡片] 员工要从几个里选、填几项、勾几个、定时间、批准或驳回、或看一眼改了再办时, "
+             "用 catfish_form 的 card 出一张卡让他点着办, 不要用文字列一串问题让他逐条回; "
+             "要列几封邮件 / 几个日程 / 几件待办 / 几个文件让他挑或勾, 把编号、路径一并写进 request。"
+             "卡片出了以后进度或状态变了, 用 card_update 改那张卡, 不要再出一张。只回答问题时不用。")
 
 
 def hint_for(caps_json: str | None, platform: str = "") -> str | None:

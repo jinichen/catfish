@@ -29,6 +29,18 @@ def test_no_or_wrong_capability_blocks(caps):
     assert r["action"] == "block" and "改用文字" in r["message"]
 
 
+def test_card_update_also_needs_capability():
+    up = {"action": "card_update", "card_id": "c_20261115_120000_abcdef", "data": {"/p": 1}}
+    assert g.decide(TOOL, up, CAPS) is None
+    assert g.decide(TOOL, up, None, platform="weixin")["action"] == "block"
+
+
+def test_old_companion_basic_catalog_blocked():
+    """≤1.2.189 的 Companion 只声明上游基础目录, 画不了鲶鱼自定义组件 —— 不给它出卡"""
+    old = json.dumps({"1.0": {"supportedCatalogIds": ["https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"]}})
+    assert g.decide(TOOL, CARD, old)["action"] == "block"
+
+
 def test_other_actions_and_tools_untouched():
     assert g.decide(TOOL, {"action": "create"}, None) is None
     assert g.decide("todo", CARD, None) is None

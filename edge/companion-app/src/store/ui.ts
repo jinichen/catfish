@@ -85,6 +85,10 @@ interface UIState {
   consumeChatPrefill: () => string;
   /** 9/27: 小鲶在对话里存了草稿 → 切到邮件页草稿箱并选中它 (EmailTab 挂载后消费) */
   pendingDraftFocus: string | null;
+  /** 11/15 对话卡片里的邮件卡「在邮件里打开」: 切到邮件页收件箱并选中这封 (tabs/Email/useDraftFocus.ts 消费) */
+  pendingMailFocus: string | null;
+  openEmail: (emailId: string) => void;
+  consumeMailFocus: () => string | null;
   openEmailDraft: (draftId: string) => void;
   consumeDraftFocus: () => string | null;
   /** 10/26: 别的地方要打开工作台里某段对话 (例: 那段对话在等批准) —— ChatTab 挂载后消费 */
@@ -122,6 +126,13 @@ export const useUIStore = create<UIState>((set, get) => ({
     return action;
   },
   pendingDraftFocus: null,
+  pendingMailFocus: null,
+  openEmail: (emailId) => set({ activeTab: "email", pendingMailFocus: emailId }),
+  consumeMailFocus: () => {
+    const id = get().pendingMailFocus;
+    if (id) set({ pendingMailFocus: null });
+    return id;
+  },
   openEmailDraft: (draftId) => set({ activeTab: "email", pendingDraftFocus: draftId }),
   pendingSessionFocus: null,
   openChatSession: (sessionId) => set({ activeTab: "chat", pendingSessionFocus: sessionId }),

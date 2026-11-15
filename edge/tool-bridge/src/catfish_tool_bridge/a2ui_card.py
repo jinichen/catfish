@@ -36,13 +36,11 @@ from typing import Any, Awaitable, Callable
 
 logger = logging.getLogger("catfish-tool-bridge")
 
-CATALOG_PATH = Path(__file__).parent / "data" / "a2ui" / "basic_catalog_v1.json"
-#: 卡片能用的组件 —— 跟 companion-app/src/lib/a2uiCard.ts CARD_COMPONENTS 一致 (tests 对着查)。
-#: 不放 Image / Video / AudioPlayer (会去外网拉东西)、Modal、List (要写数据模板)、Tabs / Icon / Slider。
-CARD_COMPONENTS = ("Text", "Row", "Column", "Card", "Divider",
-                   "Button", "TextField", "CheckBox", "ChoicePicker", "DateTimeInput")
-#: 校验函数; 拿掉 openUrl (卡片不该能打开任意网址) 和格式化类 (卡片里用不上, 省提示词)
-CARD_FUNCTIONS = ("required", "regex", "length", "numeric", "email", "and", "or", "not")
+from .a2ui_catalog import CATALOG_ID, CATALOG_PATH, FUNCTIONS as CARD_FUNCTIONS, component_names  # noqa: E402
+
+#: 卡片能用的组件 (鲶鱼目录: 基础组件 12 个 + 邮件卡 / 日程卡 / 待办项 / 文件卡) —— 跟 companion-app/src/lib/a2uiCard.ts
+#: CARD_COMPONENTS 一致 (tests 对着查)。目录本身在 a2ui_catalog.py 生成。
+CARD_COMPONENTS = component_names()
 MAX_ATTEMPTS = 2
 #: 一次请求的说明最多这么长 (主小鲶写的; 超长多半是把整封邮件塞进来了)
 MAX_REQUEST_CHARS = 4000
@@ -52,8 +50,12 @@ CARD_KEEP_DAYS = 90
 SOURCE = "plugin:toolbridge-card"
 
 _ROLE = (
-    "你是鲶鱼 Companion 的界面专员: 把请求变成一张给员工本人在聊天里填写的小卡片。\n"
-    "卡片要短: 根是一个 Card, 里面一列 Column, 需要并排时用 Row; 最后放一个主按钮 (variant \"primary\")。\n"
+    "你是鲶鱼 Companion 的界面专员: 把请求变成一张给员工本人在聊天里看、点、填的小卡片。\n"
+    "卡片要短: 根是一个 Card, 里面一列 Column, 需要并排时用 Row。按钮按用途放:\n"
+    "· 填写 / 确认类: 最后一个主按钮 (variant \"primary\");\n"
+    "· 选择 / 审批类: 每个选项一个按钮 (如「同意」「驳回」「转办」), 各用自己的英文动作名, 主选项用 primary;\n"
+    "· 勾选清单: 每条一个 TodoItem 或 CheckBox, 最后一个按钮把勾选结果一起交回。\n"
+    "请求里给了邮件 / 日程 / 待办 / 本机文件, 就用 EmailCard / EventCard / TodoItem / FileCard 展示 (字段照请求原样)。\n"
     "界面上的字用简体中文。"
 )
 _ENV_NOTES = (
@@ -68,21 +70,21 @@ _ENV_NOTES = (
     "- ChoicePicker 的 displayStyle 只能是 \"checkbox\" 或 \"chips\"; 不确定就不写。\n"
     "- DateTimeInput 不写 min / max。\n"
     # 不带提示的必填校验会显示英文默认的 "Required check failed", 而且员工还没动手就标红 —— 只给真必填的加, 带中文提示
-    "- 只给请求里写明必填的字段加 ?required, 而且一定带中文提示, 如 ?required(\"请填写事由\")。"
+    "- 只给请求里写明必填的字段加 ?required, 而且一定带中文提示, 如 ?required(\"请填写事由\")。\n"
+    "- 同类条目超过 3 条 (一串待办 / 邮件 / 名单) 用 List(_template($/items, 行组件)), 条目数据放 $/items, 行组件里用 $字段 相对路径。\n"
+    "- 打分 / 比例用 Slider(标签, 最小, 最大, $/f/字段)。\n"
+    "- EmailCard / EventCard / FileCard 只用请求里给的邮件编号、日程、本机路径, 不许编; 请求没给就不用这些组件。"
 )
 
 
 @lru_cache(maxsize=1)
 def _processor():
     """官方 SDK 的请求处理器 (Express 格式, 裁剪过的基础目录)。第一次用到才加载 SDK。"""
-    from a2ui.catalog_transformers.pruning import (  # noqa: PLC0415
-        ComponentPruningTransformer, FunctionPruningTransformer)
     from a2ui.inference_formats.express import ExpressFormatFactory  # noqa: PLC0415
     from a2ui.processor.catalog_config import CatalogConfig  # noqa: PLC0415
     from a2ui.processor.generator import A2uiGenerator  # noqa: PLC0415
 
-    catalog = CatalogConfig.from_path(str(CATALOG_PATH), transformers=[
-        ComponentPruningTransformer(list(CARD_COMPONENTS)), FunctionPruningTransformer(list(CARD_FUNCTIONS))])
+    catalog = CatalogConfig.from_path(str(CATALOG_PATH))   # 鲶鱼目录本身已经是裁剪 + 自定义过的 (a2ui_catalog.py)
     catalog_id = catalog.transformed_catalog.catalog_id
     generator = A2uiGenerator([catalog], inference_format_factory=ExpressFormatFactory())
     return generator.create_processor({"1.0": {"supportedCatalogIds": [catalog_id]}})
@@ -163,6 +165,64 @@ def save_card(messages: list[dict[str, Any]], request: str, *, now: float | None
         except OSError:
             pass
     return card_id
+
+
+# ── 更新已经出过的卡片 (上游「画布」用法: 同一张卡跨轮次推数据, 11/15) ──────────────
+
+#: 卡片编号格式 (save_card 生成的) —— 拼路径前必须对得上
+CARD_ID_RE = __import__("re").compile(r"^c_\d{8}_\d{6}_[0-9a-f]{6}$")
+MAX_UPDATE_PATHS = 50
+
+
+def load_card(card_id: str) -> dict[str, Any]:
+    if not CARD_ID_RE.match(card_id or ""):
+        raise ValueError(f"卡片编号不对: {card_id!r}")
+    path = cards_dir() / f"{card_id}.json"
+    if not path.is_file():
+        raise ValueError(f"找不到卡片 {card_id} (过期清掉了, 或不是这台电脑出的)")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def update_card(args: dict[str, Any]) -> dict[str, Any]:
+    """catfish_form action=card_update: 改一张已经出过的卡片里的数据 (进度、状态、预填值)。
+
+    不经过专员、不调模型 —— 上游的智能体就是直接推 updateDataModel; 主小鲶给 {数据路径: 新值},
+    这里拼成标准消息, 用官方 SDK 在这张卡已有的状态上校验 (路径 / 类型不对就拒), 追加进卡片文件, revision +1。
+    Companion 看到这次调用, 把新消息打到对话里原来那张卡上 (tabs/Chat/ToolCards.tsx), 卡片原地变。"""
+    card_id = str(args.get("card_id") or "").strip()
+    data = args.get("data")
+    if not isinstance(data, dict) or not data:
+        return {"ok": False, "error": "data 必填: {数据路径: 新值}, 如 {\"/progress/done\": 3}"}
+    if len(data) > MAX_UPDATE_PATHS:
+        return {"ok": False, "error": f"一次最多改 {MAX_UPDATE_PATHS} 个数据路径"}
+    try:
+        body = load_card(card_id)
+        base = list(body.get("messages") or [])
+        surface = next((m.get("createSurface", {}).get("surfaceId") for m in base if "createSurface" in m), None)
+        if not surface:
+            raise ValueError("这张卡片里没有 createSurface")
+        updates = []
+        for raw_path, value in data.items():
+            path = str(raw_path).strip()
+            if not path.startswith("/"):
+                raise ValueError(f"数据路径要以 / 开头: {path!r}")
+            updates.append({"version": "1.0", "updateDataModel": {"surfaceId": surface, "path": path, "value": value}})
+        state = _processor().create_state()
+        state.apply(base)
+        state.apply(updates)
+    except ValueError as e:
+        return {"ok": False, "error": f"卡片没改成: {e}"}
+    except Exception as e:  # noqa: BLE001 —— SDK 校验不过 (路径 / 类型不对)
+        return {"ok": False, "error": f"卡片没改成 ({type(e).__name__}: {e})"}
+    body["messages"] = base + updates
+    body["revision"] = int(body.get("revision") or 0) + 1
+    path = cards_dir() / f"{card_id}.json"
+    tmp = path.with_name(f".{card_id}.tmp")
+    tmp.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+    logger.info("catfish_form card_update: %s → 第 %d 版 (%d 个路径)", card_id, body["revision"], len(updates))
+    return {"ok": True, "card_id": card_id, "revision": body["revision"],
+            "note": "对话里那张卡片已经更新了, 不用再出一张新的, 回复里也不用复述。"}
 
 
 # ── 工具入口 ─────────────────────────────────────────────────────────────

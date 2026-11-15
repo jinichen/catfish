@@ -56,7 +56,7 @@ export function useAutoOpenFirst(
   list: readonly { id: string }[],
   hold: boolean,
 ): (deletedId: string) => void {
-  const pendingDraft = useUIStore((s) => s.pendingDraftFocus);
+  const pendingDraft = useUIStore((s) => s.pendingDraftFocus || s.pendingMailFocus);
   const { selectedId, selectAuto, openFirst } = sel;
   const firstId = list[0]?.id ?? null;
   useEffect(() => {

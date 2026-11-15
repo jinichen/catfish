@@ -38,6 +38,9 @@ def dispatch(name: str, args: dict[str, Any]) -> dict[str, Any]:
         if action == "card":   # 11/15 对话卡片 (A2UI): 员工本人在对话里填, 实现见 a2ui_card.py
             from . import a2ui_card  # noqa: PLC0415
             return a2ui_card.make_card(args)
+        if action == "card_update":   # 11/15 改已经出过的卡片里的数据 (进度 / 状态), 不调模型
+            from . import a2ui_card  # noqa: PLC0415
+            return a2ui_card.update_card(args)
         if action.startswith("task_"):
             return colleague_tasks.tool_dispatch(action, args)
         if action.startswith("revise_"):   # 11/11 群里一起改文档

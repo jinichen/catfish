@@ -30,14 +30,17 @@ FORM_TOOLS: List[Dict[str, Any]] = [
                                                       "task_create", "task_send", "task_remind", "task_cancel",
                                                       "task_draft", "task_period", "revise_list", "revise_start",
                                                       "revise_status", "revise_merge", "revise_decide", "revise_publish",
-                                                      "revise_remind", "card"]},
+                                                      "revise_remind", "card", "card_update"]},
                 "rev_id": {"type": "string", "description": "revise_*: 一轮修改的编号 (r_…)"},
                 "request": {"type": "string", "description": (
                     "card: 在员工电脑端对话里出一张他本人点着填的卡片 (选一个 / 填几项 / 勾几个 / 定时间 / 看一眼改了再办)。"
                     "写清: 要他做什么, 字段和选项, 预填值 (只用他说过的或你查到的), 按钮文字和动作名 (英文), 交回数据的键名。"
                     "返回卡片编号, 卡片已显示; 回复只用一句话说要他填什么, 不复述卡片。"
                     "只回答问题、一句话能问清、微信里不用; 要收别人的回答用 create。"
-                    "他点按钮后你会收到「（填好了卡片…」开头的消息, 按当初目的接着办; 发送 / 删除照常走审批。")},
+                    "他点按钮后你会收到「（填好了卡片…」开头的消息, 按当初目的接着办; 发送 / 删除照常走审批。"
+                    "可以是表单, 也可以是选择 / 审批 (几个按钮)、勾选清单、进度卡; 给了邮件编号 / 日程 / 本机文件会用对应的卡片样式展示。")},
+                "card_id": {"type": "string", "description": "card_update: 要改的卡片编号 (card 返回的 c_…)"},
+                "data": {"type": "object", "description": "card_update: {数据路径: 新值}, 如 {\"/progress/done\": 3}; 卡片原地更新, 不出新卡 (长任务进度用)"},
                 "cid": {"type": "string", "description": "revise_decide: 冲突编号; pick=选项 key / base / text (text 带上写好的文字)"},
                 "pick": {"type": "string"},
                 "schedule": {"type": "object", "description": "task_create 定时: {kind:once, at:YYYY-MM-DDTHH:MM}; "
