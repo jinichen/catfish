@@ -32,6 +32,8 @@ export interface MeetingMeta {
   system_audio?: string | null;
   /** 11/11 线上会议: 这台电脑前说话的人数 (含自己) */
   local_speakers?: number | null;
+  /** 11/15 会中小鲶: 录音时让小鲶主动提示 (null = 没说, 按开) */
+  live_hints?: boolean | null;
 }
 
 /** 11/11 能录哪些程序放出来的声音 (Rust services/meeting_sysaudio.rs) */
@@ -200,7 +202,8 @@ export const meetingRecordStart = (
   device: string | null,
   system: SysPick | null = null,
   localSpeakers: number | null = null,
-) => rawInvoke<RecorderStatus>("meeting_record_start", { id, device, system, localSpeakers });
+  liveHints: boolean | null = null,   // 11/15 会中小鲶: 录音时每几分钟主动提示
+) => rawInvoke<RecorderStatus>("meeting_record_start", { id, device, system, localSpeakers, liveHints });
 export const meetingSystemAudioSources = () => rawInvoke<SysSources>("meeting_system_audio_sources");
 export const meetingRecordStatus = () => rawInvoke<RecorderStatus>("meeting_record_status");
 export const meetingRecordStop = () => rawInvoke<MeetingMeta | null>("meeting_record_stop");

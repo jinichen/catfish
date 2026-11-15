@@ -17,6 +17,7 @@ import {
 } from "../../lib/tauri_meeting";
 import { Btn, cardStyle, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
 import AsrSetup from "./AsrSetup";
+import LiveAssist, { LiveNotes } from "./LiveAssist";
 import MinutesView from "./MinutesView";
 import TranscriptView from "./TranscriptView";
 import { sampleSegment, toggleClip } from "./meetingPlayer";
@@ -46,6 +47,7 @@ export default function MeetingDetail({
   const [names, setNames] = useState<Record<string, string>>({});
   const [phase, setPhase] = useState<{ phase: string; audio?: number | null } | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  const [notesTick, setNotesTick] = useState(0);   // 会后改了会中小鲶的条目 → 纪要重读
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   // 删除点两下: Tauri WebView 里 window.confirm() 静默返回 null (CronJobsCard 7/6 记过), 跟模板删除同一个做法
@@ -148,7 +150,8 @@ export default function MeetingDetail({
 
   let body = null;
   if (meta.status === "recording") {
-    body = <div style={{ fontSize: 13 }}>录音中, 在左边结束录音后就能转写。</div>;
+    // 11/15 会中小鲶: 实时文字 + 问小鲶 + 主动提示
+    body = <LiveAssist meta={meta} />;
   } else if (meta.status === "recorded" || meta.status === "failed") {
     body = asr.installed ? (
       <>
@@ -201,7 +204,7 @@ export default function MeetingDetail({
           })}
           <Btn kind="ghost" onClick={() => void saveNames()}>{saved ? "已保存 ✓" : "保存名字"}</Btn>
         </div>
-        <MinutesView meta={meta} />
+        <MinutesView key={notesTick} meta={meta} />
         <TranscriptView key={meta.id} meetingId={meta.id} transcript={transcript} names={names} colors={SPK_COLORS} />
       </>
     );
@@ -211,6 +214,7 @@ export default function MeetingDetail({
     <div style={{ ...cardStyle, ...COL_CARD }}>
       {head}
       {body}
+      {meta.status !== "recording" && <LiveNotes key={meta.id} meetingId={meta.id} onChanged={() => setNotesTick((n) => n + 1)} />}
       {error && <ErrorLine>{error}</ErrorLine>}
     </div>
   );

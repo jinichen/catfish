@@ -152,7 +152,8 @@ def parse_minutes(raw: str) -> dict:
     }
 
 
-def render_markdown(meta: dict, minutes: dict, names: dict[str, str], references_note: str = "", *, edited: bool = False) -> str:
+def render_markdown(meta: dict, minutes: dict, names: dict[str, str], references_note: str = "", *, edited: bool = False,
+                    live_section: str = "") -> str:
     out = [f"# {meta.get('title', '会议纪要')}", "", f"- 日期: {meeting_date(meta)}"]
     if names:
         out.append(f"- 参会: {'、'.join(sorted(set(names.values())))}")
@@ -168,6 +169,8 @@ def render_markdown(meta: dict, minutes: dict, names: dict[str, str], references
         out.append("(无)")
     if minutes.get("carried_over"):
         out += ["", "## 上次遗留事项进展", ""] + [f"- {x}" for x in minutes["carried_over"]]
+    if live_section:   # 11/15 会中小鲶: 员工记到纪要的提示和问答
+        out += ["", live_section.rstrip()]
     # 11/12: 员工在纪要上改过 (meeting_minutes_edit.handle_save) 就不再写「请核对」
     out += ["", "---", "由小鲶根据会议录音生成, 已人工核对修改。" if edited else "由小鲶根据会议录音自动生成, 转写可能有误, 请核对。"]
     if references_note:
@@ -193,7 +196,9 @@ async def summarize(
     except Exception as e:  # noqa: BLE001 — 背景材料取不到不该让纪要出不来
         logger.warning("meeting %s: 背景材料取不到, 只按转写写纪要: %s", meta.get("id"), e)
         ctx = {"wiki": [], "previous": None}
-    background = mc.prompt_block(ctx)
+    from . import meeting_live as ml  # noqa: PLC0415
+    background = mc.prompt_block(ctx) + ml.prompt_block(meeting_dir)   # 11/15 会中记到纪要的要点
+    live_md = ml.markdown_section(meeting_dir)
     note = mc.references_note(ctx)
     kw = dict(gateway_url=gateway_url, auth_token=auth_token, model=model, temperature=0.2, max_tokens=4000, source=SOURCE)
     if len(chunks) == 1:
@@ -216,7 +221,7 @@ async def summarize(
     )
     head = f"会议: {meta.get('title', '')}\n日期: {meeting_date(meta)}\n{background}"
     if template is None:
-        markdown = render_markdown(meta, minutes, names, note)
+        markdown = render_markdown(meta, minutes, names, note, live_section=live_md)
     elif template.get("kind", "markdown") in ("docx", "xlsx"):
         # 单位定死的 Word / Excel: 认空 → 大模型给每个空出值 → 代码填进原文件另存 (格式不动)
         from . import meeting_file_template as ft  # noqa: PLC0415
@@ -235,7 +240,7 @@ async def summarize(
         safe = re.sub(r'[\\/:*?"<>|\s]+', " ", str(meta.get("title") or "会议")).strip()[:40] or "会议"
         out = meeting_dir / f"{safe} 会议纪要{src.suffix.lower()}"
         ft.fill(src, out, slots, values)
-        markdown = render_markdown(meta, minutes, names, note)
+        markdown = render_markdown(meta, minutes, names, note, live_section=live_md)
         doc["template"] = {"id": template["id"], "name": template["name"], "kind": template["kind"]}
         doc["output_file"] = str(out)
     else:
@@ -243,7 +248,8 @@ async def summarize(
         body = mt.clean_markdown(await call_llm(mt.build_template_messages(head, filled, material, minutes), **kw))
         if not body:
             raise ValueError("大模型按模版没写出内容, 换个模版或重试")
-        markdown = f"{body}\n\n---\n由小鲶按纪要模版「{template['name']}」根据会议录音自动生成, 转写可能有误, 请核对。\n"
+        markdown = f"{body}\n\n{live_md}" if live_md else body
+        markdown = f"{markdown}\n\n---\n由小鲶按纪要模版「{template['name']}」根据会议录音自动生成, 转写可能有误, 请核对。\n"
         if note:
             markdown += f"{note}\n"
         doc["template"] = {"id": template["id"], "name": template["name"]}

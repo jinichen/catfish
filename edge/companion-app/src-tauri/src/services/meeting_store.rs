@@ -54,6 +54,9 @@ pub struct MeetingMeta {
     /// 11/11 线上会议: 这台电脑前说话的人数 (含自己), 其余是对方。转写时两条音轨分开分人用
     #[serde(default)]
     pub local_speakers: Option<u32>,
+    /// 11/15 会中小鲶: 录音时让小鲶每几分钟主动提示 (None = 没说, 按开); 实时转写本身只要装了组件包就开
+    #[serde(default)]
+    pub live_hints: Option<bool>,
 }
 
 pub fn meetings_root(home: &Path) -> PathBuf {
@@ -127,6 +130,7 @@ pub fn create(root: &Path, title: &str, attendees: u32, hotwords: &[String]) -> 
         error: None,
         system_audio: None,
         local_speakers: None,
+        live_hints: None,
     };
     std::fs::create_dir_all(audio_dir(root, &meta.id)?).map_err(|e| format!("建会议目录失败: {e}"))?;
     save(root, &meta)?;

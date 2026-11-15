@@ -226,6 +226,12 @@ pub(crate) fn handler(
             crate::commands::meeting::meeting_record_start,
             crate::commands::meeting::meeting_record_status,
             crate::commands::meeting::meeting_record_stop,
+            // 11/15: 会中小鲶
+            crate::commands::meeting_live_cmd::meeting_live_read,
+            crate::commands::meeting_live_cmd::meeting_live_assist,
+            crate::commands::meeting_live_cmd::meeting_live_notes,
+            crate::commands::meeting_live_cmd::meeting_live_note,
+            crate::commands::meeting_live_cmd::meeting_live_hints_set,
             crate::commands::meeting_import::meeting_import_pick_file,
             crate::commands::meeting_import::meeting_import_audio,
             crate::commands::notify_prefs::notify_prefs_get,

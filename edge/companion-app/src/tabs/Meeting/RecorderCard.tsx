@@ -191,6 +191,7 @@ export default function RecorderCard({ onChanged }: { onChanged: (selectId?: str
         {recorderNotices(rec).map((text) => (
           <div key={text} style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>{text}</div>
         ))}
+        <div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>🐟 右边看实时文字, 随时问小鲶; 小鲶有要提醒的会出卡。</div>
         <Btn kind="primary" disabled={busy} onClick={() => void stop()}>结束录音</Btn>
         <div style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>录音只存在本机; 最长 4 小时, 到了会自动停。</div>
       </div>

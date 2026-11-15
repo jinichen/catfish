@@ -87,7 +87,8 @@ def handle_save(params: dict) -> dict:
         md = (d / "minutes.md").read_text(encoding="utf-8")   # 模版版只改了待办, 正文不动
     else:
         meta, _, names = load_inputs(d)
-        md = render_markdown(meta, doc, names, _refs_note(doc), edited=True)
+        from .meeting_live import markdown_section  # noqa: PLC0415 — 11/15 会中小鲶那节保留
+        md = render_markdown(meta, doc, names, _refs_note(doc), edited=True, live_section=markdown_section(d))
     (d / "minutes.json").write_text(json.dumps(doc, ensure_ascii=False, indent=1), encoding="utf-8")
     (d / "minutes.md").write_text(md, encoding="utf-8")
     return {"ok": True, "edited_at": doc["edited_at"]}

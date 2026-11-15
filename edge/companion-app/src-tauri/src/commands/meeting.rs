@@ -96,6 +96,7 @@ mod recording {
         device: Option<String>,
         system: Option<SysPick>,
         local_speakers: Option<u32>,
+        live_hints: Option<bool>,
     ) -> Result<RecorderStatus, String> {
         // 第一次录电脑声音时系统会弹授权框, 等用户点的这段不能卡住界面线程
         tauri::async_runtime::spawn_blocking(move || {
@@ -110,7 +111,10 @@ mod recording {
                 meta.system_audio = Some(s.source.clone());
                 meta.local_speakers = Some(local_speakers.unwrap_or(1).clamp(1, meta.attendees.max(1)));
             }
+            meta.live_hints = live_hints;
             store::save(&root, &meta)?;
+            // 11/15 会中小鲶: 装了会议组件包就边录边转 (起不来不影响录音)
+            crate::commands::meeting_live_cmd::start_live(&root, &meta, &audio);
             Ok(st)
         })
         .await
@@ -119,13 +123,20 @@ mod recording {
 
     #[tauri::command]
     pub fn meeting_record_status() -> RecorderStatus {
-        rec::status()
+        let st = rec::status();
+        if !st.recording {
+            // 11/15: 录到上限 / 设备出错自己停了, 没走 meeting_record_stop —— 实时转写也收尾 (没在跑就什么都不做)
+            crate::services::meeting_live::stop();
+        }
+        st
     }
 
     /// 停止录音并更新 meta。返回更新后的 meta (没在录就返回 None)。
     #[tauri::command]
     pub fn meeting_record_stop() -> Result<Option<MeetingMeta>, String> {
-        let Some(sum) = rec::stop()? else { return Ok(None) };
+        let stopped = rec::stop();
+        crate::services::meeting_live::stop();   // 11/15: 录音文件写完了, 让实时转写把剩下的认完 (后台收尾, 不等)
+        let Some(sum) = stopped? else { return Ok(None) };
         let root = root()?;
         let id = std::path::Path::new(&sum.dir)
             .parent()
@@ -156,6 +167,7 @@ mod recording {
         _device: Option<String>,
         _system: Option<serde_json::Value>,
         _local_speakers: Option<u32>,
+        _live_hints: Option<bool>,
     ) -> Result<serde_json::Value, String> {
         Err("会议录音目前只支持 macOS / Windows".into())
     }

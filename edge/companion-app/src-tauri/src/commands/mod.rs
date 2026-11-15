@@ -30,6 +30,7 @@ pub mod meeting_minutes_cmd; // 10/1: 说话人改名 + 纪要 (tool-bridge meet
 pub mod meeting_edit_cmd; // 11/12: 纪要 / 转写的修正和分享 (存回去、Word、发到群、改错字、常用热词)
 pub mod wiki_people; // 11/12: 知识库里的「人 → 邮箱」(写信面板填收件人 / 给候选)
 pub mod meeting_asr_cmd; // 10/1: 会议组件包安装 + 转写, 见 services::meeting_asr
+pub mod meeting_live_cmd; // 11/15: 会中小鲶 (实时文字 / 问答 / 主动提示)
 pub mod embed_model_cmd; // 10/6: 向量模型组件包状态 + 安装, 见 services::embed_model
 pub mod meeting;       // 10/1: 会议录音 (建会议 / 录 / 停 / 列表), 见 services::meeting_*
 pub mod meeting_import; // 10/11: 导入录音笔 / 手机录音 → 一场会议, 后面复用转写

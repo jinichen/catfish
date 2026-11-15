@@ -38,7 +38,7 @@ FILE_PARSE_SRC = EDGE / "companion-app" / "src-tauri" / "scripts"
 # 10/1: meeting_asr.py (会议转写) 也平铺在这里 —— 跟解析脚本一样由 file_parse_env::find_script
 # 找, 开发机读源码树、客户机读 edge-runtime, 不用另开一条查找路径。它跑在会议组件包的
 # venv 里, 不是 hermes venv。
-FILE_PARSE_PATTERNS = ("parse_file*.py", "attachment_bm25.py", "meeting_asr.py")
+FILE_PARSE_PATTERNS = ("parse_file*.py", "attachment_bm25.py", "meeting_asr.py", "meeting_asr_live.py")  # 11/15 会中实时转写
 # 11/07: tool-bridge 读的受控词表 / 知识库类型定义在 edge/contracts/, 按 Path(__file__).parents[3]/contracts 找
 # (开发机 = edge/contracts, 员工机 = edge-runtime 根下的 contracts/)。原来没打进包, wiki_files 的细分类型归一在员工机上一直是空转。
 CONTRACTS_SRC = EDGE / "contracts"
@@ -51,6 +51,7 @@ MUST_EXIST = [
     "file-parse/parse_file.py",
     "file-parse/attachment_bm25.py",
     "file-parse/meeting_asr.py",
+    "file-parse/meeting_asr_live.py",
     "contracts/wiki_type_schema.json",
 ]
 SKIP_PARTS = {"__pycache__", "tests", ".pytest_cache"}

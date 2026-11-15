@@ -97,6 +97,18 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
             return _error(req_id, INVALID_PARAMS, str(e))
         except RuntimeError as e:
             return _error(req_id, INTERNAL_ERROR, str(e))
+    # 11/15 会中小鲶 (meeting_live.py): 问答 / 主动提示要调大模型; 读 / 改那几条只动本机文件
+    if method in ("meeting/live_assist", "meeting/live_notes", "meeting/live_note"):
+        from . import meeting_live as ml  # noqa: PLC0415
+        try:
+            if method == "meeting/live_assist":
+                return _success(req_id, await ml.handle_assist(params))
+            fn = ml.handle_notes if method == "meeting/live_notes" else ml.handle_note
+            return _success(req_id, await asyncio.to_thread(fn, params))
+        except (ValueError, OSError) as e:
+            return _error(req_id, INVALID_PARAMS, str(e))
+        except RuntimeError as e:
+            return _error(req_id, INTERNAL_ERROR, str(e))
     # 10/3: 上传的 Word / Excel 纪要模版认空 (meeting_file_template.py)
     if method == "meeting/template_inspect":
         from . import meeting_minutes  # noqa: PLC0415
