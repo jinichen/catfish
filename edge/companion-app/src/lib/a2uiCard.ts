@@ -200,19 +200,35 @@ export function submissionLines(context: Record<string, unknown>): [string, stri
   return out;
 }
 
+/** 工具结果里找卡片编号。hermes 存进库 / 推给前端的结果外面包着一层说明文字
+ *  (`<untrusted_tool_result …>…</untrusted_tool_result>`), 里面是 `{"result": "<JSON 字符串>"}`,
+ *  tool-bridge 再包一层 `{ok, tool, result: {card_id…}}` —— 一层层剥到有 card_id 为止 (11/15 实机: 只认纯 JSON 就一张都画不出来)。 */
+function findCardId(raw: unknown): string | null {
+  let cur: unknown = raw;
+  for (let i = 0; i < 6 && cur != null; i++) {
+    if (typeof cur === "string") {
+      const start = cur.indexOf("{");
+      const end = cur.lastIndexOf("}");
+      if (start < 0 || end <= start) return null;
+      try {
+        cur = JSON.parse(cur.slice(start, end + 1));
+      } catch {
+        return null;
+      }
+      continue;
+    }
+    if (typeof cur !== "object") return null;
+    const id = (cur as { card_id?: unknown }).card_id;
+    if (typeof id === "string") return CARD_ID.test(id) ? id : null;
+    cur = (cur as { result?: unknown }).result;
+  }
+  return null;
+}
+
 /** 这次工具调用是不是出了一张卡片 (catfish_form 的 card 动作, 结果里带编号); 是就返回编号 */
 export function cardIdFromToolCall(call: { name: string; args?: Record<string, unknown>; result?: unknown }): string | null {
-  if (!/(^|__)catfish_form$/.test(call.name) || call.args?.action !== "card") return null;
-  let r: unknown = call.result;
-  if (typeof r === "string") {
-    try {
-      r = JSON.parse(r);
-    } catch {
-      return null;
-    }
-  }
-  // tool-bridge 外层可能包一层 {ok, tool, result: {...}}
-  const inner = (r as { result?: unknown })?.result ?? r;
-  const id = (inner as { card_id?: unknown })?.card_id;
-  return typeof id === "string" && CARD_ID.test(id) ? id : null;
+  if (!/(^|__)catfish_form$/.test(call.name)) return null;
+  // args 在流式过程中可能还是 {} —— 结果里认得出卡片编号就算
+  if (call.args && call.args.action !== undefined && call.args.action !== "card") return null;
+  return findCardId(call.result);
 }
