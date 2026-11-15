@@ -395,6 +395,7 @@ pub(crate) fn handler(
             // 回复拟稿：附件只在本地解析预览，不上传原始文件
             crate::commands::email::email_attachment_preview,
             // P3.5.105 (6/25 鸿波 catch "定时任务跑没跑结果如何都看不到"): cron 监控 + 操作
+            crate::commands::a2ui_card::a2ui_card_read,
             crate::commands::cron::cron_jobs_list,
             crate::commands::cron::cron_job_outputs,
             crate::commands::cron::cron_job_output_read,

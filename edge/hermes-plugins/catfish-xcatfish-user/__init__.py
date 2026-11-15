@@ -222,6 +222,14 @@ def register(ctx) -> None:
             except Exception as e:
                 logger.warning("catfish-xcatfish-user 微信补发挂载失败: %s (定时任务照常推, 只是不补发)", e)
 
+        # 11/15: 对话卡片 (catfish_form card) 只给声明过能画的客户端 (Companion 主对话的 X-A2UI-Renderer-Capabilities),
+        # 微信 / 定时任务 / 旧版 Companion 里调就拦下, 让模型改用文字问 (card_channel_guard.py)
+        try:
+            ctx.register_hook("pre_tool_call", _mod.plugin_api_turn.card_capability_hook)
+            logger.info("catfish-xcatfish-user: card capability pre_tool_call hook registered ✓")
+        except Exception as e:
+            logger.warning("catfish-xcatfish-user card capability hook register fail: %s (退化为工具说明里的提示)", e)
+
         # 8/24: Hermes todo 是 Agent 会话规划，不是 macOS Reminders。Qwen 曾把
         # “查询 Reminders 中当前所有待办”连续写进 todo 12 次，工具每次都成功，
         # 但从未读取系统提醒。只拦有明确 Reminders 查询语义的条目，正常计划放行。

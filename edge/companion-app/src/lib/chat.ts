@@ -239,6 +239,8 @@ export async function streamChat(params: SendChatParams): Promise<void> {
       if (params._idempotencyKey) {
         hermesHeaders["Idempotency-Key"] = params._idempotencyKey;
       }
+      // 11/15 对话卡片: 声明这一路能画的 A2UI 目录 (上游 a2uiRendererCapabilities, HTTP 上放请求头)
+      if (params.a2uiCapabilities) hermesHeaders["X-A2UI-Renderer-Capabilities"] = JSON.stringify(params.a2uiCapabilities);
       // BL-CSP-PROXY (7/18): fetch → fetchViaProxy (Rust reqwest), CSP 严格. auto-detect
       // stream (URL /v1/chat/completions 走 event bridge).
       resp = await fetchViaProxy(url, {

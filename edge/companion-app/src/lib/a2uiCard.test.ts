@@ -1,124 +1,72 @@
-/** 对话里的 A2UI 卡片 (11/15 试点) —— 解析、缺组件检查、提交那句话的来回。 */
+/** 对话卡片 (lib/a2uiCard.ts): 兜底检查、上游标准 action 消息的来回、从工具调用结果取卡片编号。 */
 import { describe, expect, it } from "vitest";
 
+import meeting from "../tabs/Chat/__fixtures__/a2ui_card_meeting.json";
 import {
-  blockedFunctions, buildRetryRequest, buildSubmission, cardKey, cardRetryAllowed, parseRetryRequest, cardTitle, missingComponents, unknownComponents, parseCardSource, parseSubmission, submissionLines, submittedCardKeys,
+  blockedFunctions, buildSubmission, cardIdFromToolCall, cardProblem, cardTitle, missingComponents, parseSubmission,
+  submissionLines, submittedCardKeys, unknownComponents,
 } from "./a2uiCard";
 
-const create = { version: "1.0", createSurface: { surfaceId: "jjh", catalogId: "catfish:cards/v1" } };
-const comps = (components: unknown[]) => ({ version: "1.0", updateComponents: { surfaceId: "jjh", components } });
+/** fixture 是官方 SDK (a2ui-agent-sdk) 编 Express 出来的: createSurface 里内联组件 */
+const surface = (components: unknown[]) => [{ version: "1.0", createSurface: { surfaceId: "main", catalogId: "x", components } }];
 
-describe("parseCardSource", () => {
-  it("JSON 数组 / 单个对象 / 一行一个都认", () => {
-    expect(parseCardSource(JSON.stringify([create]))).toEqual({ ok: true, messages: [create] });
-    expect(parseCardSource(JSON.stringify(create))).toEqual({ ok: true, messages: [create] });
-    expect(parseCardSource(`${JSON.stringify(create)}\n${JSON.stringify(comps([]))}`)).toEqual({ ok: true, messages: [create, comps([])] });
+describe("兜底检查 (卡片在 tool-bridge 已经过官方 SDK 校验, 这里防文件被改过)", () => {
+  it("官方 SDK 编出来的卡片: 没问题, 标题取第一个 Text", () => {
+    expect(cardProblem(meeting)).toBeNull();
+    expect(cardTitle(meeting, "卡片")).toBe("约周例会");
   });
 
-  it("坏的说原因 (流式输出到一半就是这样)", () => {
-    const r = parseCardSource('[{"version":"1.0","createSurface":{"surf');
-    expect(r.ok).toBe(false);
-    expect(parseCardSource("   ")).toEqual({ ok: false, reason: "代码块是空的" });
-    expect(parseCardSource("[]")).toEqual({ ok: false, reason: "消息列表是空的" });
-    const big = JSON.stringify([create, comps(Array.from({ length: 2000 }, (_, i) => ({ id: `t${i}`, component: "Text", text: "很长的一段字" })))]);
-    expect(parseCardSource(big)).toMatchObject({ ok: false, reason: expect.stringContaining("卡片太大") });
+  it("白名单外的组件 (Image 会去外网拉图 / 编的) 都报; createSurface 和 updateComponents 里的都查", () => {
+    expect(unknownComponents(surface([{ id: "root", component: "Image", url: "https://x" }]))).toEqual(["Image"]);
+    expect(unknownComponents([{ updateComponents: { surfaceId: "m", components: [{ id: "root", component: "Fancy" }] } }])).toEqual(["Fancy"]);
+    expect(cardProblem(surface([{ id: "root", component: "Modal" }]))).toContain("不允许的组件");
   });
-});
 
-describe("unknownComponents", () => {
-  it("白名单外的 (Image / Video / Modal / 编的) 都报; 白名单里的不报", () => {
-    expect(unknownComponents([create, comps([{ id: "root", component: "Card", child: "a" }, { id: "a", component: "Image", url: "https://x" },
-      { id: "b", component: "Modal" }, { id: "c", component: "Fancy" }])])).toEqual(["Image", "Modal", "Fancy"]);
-    expect(unknownComponents([create, comps([{ id: "root", component: "TextField", label: "x", value: "" }])])).toEqual([]);
+  it("引用了没写的子组件 / 没有 root → 报", () => {
+    expect(missingComponents(surface([{ id: "root", component: "Column", children: ["a", "row3"] }, { id: "a", component: "Text", text: "x" }]))).toEqual(["row3"]);
+    expect(missingComponents(surface([{ id: "a", component: "Text", text: "x" }]))).toEqual(["root"]);
   });
-});
 
-describe("blockedFunctions", () => {
-  it("按钮里调 openUrl (打开任意网址) 要拦; 校验函数不拦", () => {
-    const btn = { id: "root", component: "Button", child: "l", action: { functionCall: { "@call": "openUrl", args: { url: "https://x" } } } };
-    expect(blockedFunctions([create, comps([btn])])).toEqual(["openUrl"]);
-    const tf = { id: "root", component: "TextField", label: "x", value: "", checks: [{ condition: { "@call": "required", args: { value: "" } } }] };
-    expect(blockedFunctions([create, comps([tf])])).toEqual([]);
+  it("openUrl 要拦, 校验函数不拦; 太大 / 空的也拦", () => {
+    const btn = { id: "root", component: "Button", child: "root", action: { functionCall: { "@call": "openUrl", args: { url: "https://x" } } } };
+    expect(blockedFunctions(surface([btn]))).toEqual(["openUrl"]);
+    expect(blockedFunctions(surface([{ id: "root", component: "TextField", label: "x", value: "", checks: [{ condition: { "@call": "required", args: { value: "" } } }] }]))).toEqual([]);
+    expect(cardProblem([])).toBe("卡片是空的");
+    expect(cardProblem(surface(Array.from({ length: 2000 }, (_, i) => ({ id: `t${i}`, component: "Text", text: "很长的一段字" }))))).toBe("卡片太大");
   });
 });
 
-describe("missingComponents", () => {
-  it("children 引用了没定义的 → 报出来 (11/15 实测模型漏过整行)", () => {
-    const msgs = [create, comps([
-      { id: "root", component: "Card", child: "body" },
-      { id: "body", component: "Column", children: ["title", "row3"] },
-      { id: "title", component: "Text", text: "x" },
-    ])];
-    expect(missingComponents(msgs)).toEqual(["row3"]);
-  });
+describe("交卡片那句话: 上游标准 v1.0 action 消息 + 卡片编号", () => {
+  const sub = { title: "约周例会", key: "c_20261115_093012_a1b2c3",
+    action: { name: "book_meeting", surfaceId: "main", sourceComponentId: "body_children_3", timestamp: "2026-11-15T09:31:00Z",
+      context: { meeting: { time: ["2026-11-17T10:00"], agenda: "" } } } };
 
-  it("齐全 → 空; 没有 root → 报 root", () => {
-    expect(missingComponents([create, comps([{ id: "root", component: "Text", text: "hi" }])])).toEqual([]);
-    expect(missingComponents([create, comps([{ id: "a", component: "Text", text: "hi" }])])).toEqual(["root"]);
-  });
-});
-
-describe("提交那句话", () => {
-  const sub = { title: "记一条爆款", key: "k1", name: "jjh_record", surfaceId: "jjh",
-    context: { record: { 视频链接: "https://www.douyin.com/video/1", 点赞: "3.2万", 标签: ["痛点型"], 评论: "" } } };
-
-  it("拼出来再认回去, 一字不差", () => {
+  it("拼出来再认回去一字不差; 代码块里就是 {version, action}", () => {
     const text = buildSubmission(sub);
-    expect(text.startsWith("（填好了卡片「记一条爆款」）")).toBe(true);
+    expect(text.startsWith("（填好了卡片「约周例会」）")).toBe(true);
+    const fence = /```a2ui-action\n([\s\S]*?)\n```/.exec(text)![1];
+    expect(JSON.parse(fence)).toEqual({ version: "1.0", action: sub.action });
     expect(parseSubmission(text)).toEqual(sub);
   });
 
-  it("员工自己打的话不当成提交", () => {
+  it("员工自己打的话不算; 会话里交过的编号; 气泡只列填了的", () => {
     expect(parseSubmission("记一条爆款")).toBeNull();
-    expect(parseSubmission("（填好了卡片「x」） 但是没有代码块")).toBeNull();
-  });
-
-  it("会话里交过的卡片 key; 气泡上只列填了的", () => {
-    const keys = submittedCardKeys([
-      { role: "assistant", content: buildSubmission({ ...sub, key: "not-user" }) },
-      { role: "user", content: buildSubmission(sub) },
-      { role: "user", content: "普通的话" },
-    ]);
-    expect([...keys]).toEqual(["k1"]);
-    expect(submissionLines(sub.context)).toEqual([["视频链接", "https://www.douyin.com/video/1"], ["点赞", "3.2万"], ["标签", "痛点型"]]);
+    const keys = submittedCardKeys([{ role: "user", content: buildSubmission(sub) }, { role: "assistant", content: buildSubmission({ ...sub, key: "c_20261115_093012_ffffff" }) }]);
+    expect([...keys]).toEqual(["c_20261115_093012_a1b2c3"]);
+    expect(submissionLines(sub.action.context)).toEqual([["time", "2026-11-17T10:00"]]);
   });
 });
 
-describe("cardKey / cardTitle", () => {
-  it("同样的内容同一个 key (前后空白不算), 不同内容不同 key", () => {
-    expect(cardKey(" abc \n")).toBe(cardKey("abc"));
-    expect(cardKey("abc")).not.toBe(cardKey("abd"));
+describe("cardIdFromToolCall: catfish_form 的 card 动作才算", () => {
+  const ok = JSON.stringify({ ok: true, card_id: "c_20261115_093012_a1b2c3", note: "…" });
+  it("MCP 全名 / 短名、结果是字符串 / 外面包一层 都认", () => {
+    expect(cardIdFromToolCall({ name: "mcp__catfish_tools__catfish_form", args: { action: "card" }, result: ok })).toBe("c_20261115_093012_a1b2c3");
+    expect(cardIdFromToolCall({ name: "catfish_form", args: { action: "card" }, result: { ok: true, tool: "catfish_form", result: JSON.parse(ok) } })).toBe("c_20261115_093012_a1b2c3");
   });
-
-  it("标题取第一个 Text, 去掉粗体和「· 后半句」", () => {
-    const msgs = [create, comps([{ id: "root", component: "Card", child: "t" }, { id: "t", component: "Text", text: "**记一条爆款** · 写进「爆款记录」" }])];
-    expect(cardTitle(msgs, "卡片")).toBe("记一条爆款");
-    expect(cardTitle([create], "卡片")).toBe("卡片");
-  });
-});
-
-describe("画不出来 → 自动让小鲶重出 (每张卡一次, 不连着要)", () => {
-  const card = (id: string) => ({ id, role: "assistant", content: "```a2ui\n坏的\n```" });
-  const user = (id: string, content: string) => ({ id, role: "user", content });
-
-  it("那句话拼出来再认回去", () => {
-    const text = buildRetryRequest("k9", "卡片缺了一部分 (row3)");
-    expect(text.startsWith("（卡片没画出来）")).toBe(true);
-    expect(parseRetryRequest(text)).toEqual({ key: "k9", reason: "卡片缺了一部分 (row3)" });
-    expect(parseRetryRequest("（卡片没画出来）是什么意思")).toEqual({ key: "", reason: "是什么意思" });
-    expect(parseRetryRequest("普通的话")).toBeNull();
-  });
-
-  it("最后一条、员工上一句是正常的话 → 可以要", () => {
-    expect(cardRetryAllowed([user("u1", "帮我约会"), card("a1")], "a1", "k1")).toBe(true);
-  });
-
-  it("员工已经接着说话了 (卡片不是最后一条) → 不要", () => {
-    expect(cardRetryAllowed([user("u1", "x"), card("a1"), user("u2", "算了")], "a1", "k1")).toBe(false);
-  });
-
-  it("这张已经要过一次 / 上一句就是「请重出」(重出的又坏了) → 不要, 不连着要", () => {
-    expect(cardRetryAllowed([user("u1", "x"), card("a1"), user("u2", buildRetryRequest("k1", "坏")), card("a2")], "a2", "k2")).toBe(false);
-    expect(cardRetryAllowed([user("u2", buildRetryRequest("k1", "坏")), card("a2")], "a2", "k1")).toBe(false);
+  it("别的动作 / 别的工具 / 失败 / 编号不对 → null", () => {
+    expect(cardIdFromToolCall({ name: "catfish_form", args: { action: "create" }, result: ok })).toBeNull();
+    expect(cardIdFromToolCall({ name: "catfish_wiki_search", args: { action: "card" }, result: ok })).toBeNull();
+    expect(cardIdFromToolCall({ name: "catfish_form", args: { action: "card" }, result: JSON.stringify({ ok: false, error: "x" }) })).toBeNull();
+    expect(cardIdFromToolCall({ name: "catfish_form", args: { action: "card" }, result: JSON.stringify({ card_id: "../../etc" }) })).toBeNull();
   });
 });

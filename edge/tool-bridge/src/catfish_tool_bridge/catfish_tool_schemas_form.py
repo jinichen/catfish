@@ -11,12 +11,12 @@ FORM_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_form",
         "description": (
-            "收集表 + 派任务 (task_*) + 群里一起改文档 (revise_*)。\n"
-            "收集表: from_excel 或按描述列字段 → create; 邮箱用 directory 查; responses 看结果, export 导出。"
+            "收集表+派任务 (task_*)+群里改文档 (revise_*)+对话卡片 (card)。\n"
+            "收集表: from_excel 或按描述列字段 → create; 邮箱 directory 查; responses 看结果, export 导出。"
             "替员工填表: get → 本机找值 (找不到留空) → draft (带 sources)。\n"
             "派任务: task_create (text=做什么, 定时/周期给 schedule) → task_send; task_results 看结果。"
             # 交回文件 (11/5) 的做法写在 mail_draft_id / files 参数说明和任务提示词里 —— 这段说明有长度上限 (test_tool_schema_budget)
-            "做同事派的任务: 做完 task_draft 存 result; 定时/周期的这次用 task_period。\n"
+            "同事派的任务: 做完 task_draft 存 result; 定时/周期的这次用 task_period。\n"
             "改文档: revise_start (room_id+path) → revise_merge 看冲突 → decide → publish\n"
             "会发消息的 (send、remind、close、task_send/remind/cancel、revise_start/remind/publish): "
             "先不带 confirmed, 念 proposal, 同意才 confirmed=true。不能替员工提交、拒填、交回、拒绝。"
@@ -30,8 +30,14 @@ FORM_TOOLS: List[Dict[str, Any]] = [
                                                       "task_create", "task_send", "task_remind", "task_cancel",
                                                       "task_draft", "task_period", "revise_list", "revise_start",
                                                       "revise_status", "revise_merge", "revise_decide", "revise_publish",
-                                                      "revise_remind"]},
+                                                      "revise_remind", "card"]},
                 "rev_id": {"type": "string", "description": "revise_*: 一轮修改的编号 (r_…)"},
+                "request": {"type": "string", "description": (
+                    "card: 在员工电脑端对话里出一张他本人点着填的卡片 (选一个 / 填几项 / 勾几个 / 定时间 / 看一眼改了再办)。"
+                    "写清: 要他做什么, 字段和选项, 预填值 (只用他说过的或你查到的), 按钮文字和动作名 (英文), 交回数据的键名。"
+                    "返回卡片编号, 卡片已显示; 回复只用一句话说要他填什么, 不复述卡片。"
+                    "只回答问题、一句话能问清、微信里不用; 要收别人的回答用 create。"
+                    "他点按钮后你会收到「（填好了卡片…」开头的消息, 按当初目的接着办; 发送 / 删除照常走审批。")},
                 "cid": {"type": "string", "description": "revise_decide: 冲突编号; pick=选项 key / base / text (text 带上写好的文字)"},
                 "pick": {"type": "string"},
                 "schedule": {"type": "object", "description": "task_create 定时: {kind:once, at:YYYY-MM-DDTHH:MM}; "

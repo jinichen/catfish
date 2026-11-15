@@ -174,6 +174,7 @@ const CATFISH: &[(Pat, Class, &str)] = &[
     (Exact("wiki_install_audit.jsonl"), Required, "知识库安装审计"),
     // 11/14: 共享内容定时检查的结果 + 因撤回自动停用了哪些技能 / 专家 (换上能用的版本时靠它恢复, 跟着迁)
     (Exact("shared_check.json"), Required, "共享内容检查 / 撤回停用记录"),
+    (Exact("cards"), Required, "对话卡片 (会话里出过的卡片, 换机后重开会话还画得出来)"),
     (Exact("gateway_audit.jsonl"), Required, "调用审计"),
     (Exact("feedback.jsonl"), Required, "反馈"),
     (Exact("audit"), Required, "审计"),

@@ -103,6 +103,8 @@ CV_PICKER_MODEL: "_cv.ContextVar[str]" = _shared_cv("picker_model_override")
 # 不新增 patch 点。网关侧一行不用改 —— app.py:2903 本来就先读
 # `x-catfish-source` header, query 只是它的 fallback。
 CV_CF_SOURCE: "_cv.ContextVar[str]" = _shared_cv("catfish_source")
+#: 11/15 对话卡片: Companion 主对话声明的 A2UI 渲染能力 (请求头 X-A2UI-Renderer-Capabilities, JSON 原文)
+CV_A2UI_CAPS: "_cv.ContextVar[str]" = _shared_cv("a2ui_renderer_capabilities")
 
 
 _PICKER_PLACEHOLDERS = {"", "hermes-agent", None}
@@ -200,6 +202,12 @@ async def _request_stash_middleware(request, handler):
             if cf_source:
                 CV_CF_SOURCE.set(cf_source)
                 request["catfish_source"] = cf_source
+
+            # 11/15 对话卡片: 这一路能画哪些 A2UI 目录 (上游 a2uiRendererCapabilities)。登记到会话上,
+            # 出卡前按它判断 (card_channel_guard.py); 不带 = 画不了 (旧版 Companion / 早安页 / 微信)。
+            a2ui_caps = (request.headers.get("X-A2UI-Renderer-Capabilities", "") or "").strip()
+            if a2ui_caps:
+                CV_A2UI_CAPS.set(a2ui_caps[:4000])
 
             # body.model — 需读 body. 读完塞回让 handler 再读 (aiohttp body 是 stream).
             body_bytes = await request.read()

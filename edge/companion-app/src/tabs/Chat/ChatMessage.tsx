@@ -1,11 +1,11 @@
 /** 单条消息渲染 —— user / assistant / 错误状态 */
 
-import { useContext, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { ArrowClockwise, FastForward, Paperclip, PencilSimple } from "@phosphor-icons/react";
 import { internalMessage, splitUserBubbleText } from "../../lib/userBubbleText";
 import { Markdown } from "../../lib/markdown";
-import { parseRetryRequest, parseSubmission, submissionLines, type CardSubmission } from "../../lib/a2uiCard";
-import { A2uiCardContext } from "../../lib/a2uiCardContext";
+import { parseSubmission, submissionLines, type CardSubmission } from "../../lib/a2uiCard";
+import ToolCards from "./ToolCards";
 import type { ChatMessage as Msg } from "../../types/chat";
 import ChatToolSteps from "./ChatToolSteps";
 import ChatLoopLimitNotice from "./ChatLoopLimitNotice";
@@ -51,9 +51,6 @@ export default function ChatMessage({
     // 11/15: 点卡片按钮发回来的 (lib/a2uiCard.ts) —— 显示交了什么, 不显示给小鲶看的 JSON
     const submission = parseSubmission(msg.content ?? "");
     if (submission) return <CardSubmissionBubble sub={submission} />;
-    // 卡片画不出来时对话页自动发的「请重出」: 一行灰字, 不当员工的话显示
-    const retry = parseRetryRequest(msg.content ?? "");
-    if (retry) return <SystemNote label={`卡片没画出来, 已让小鲶重出 (${retry.reason})`} raw={msg.content} />;
     return (
       <UserBubble
         msg={msg}
@@ -74,7 +71,7 @@ export default function ChatMessage({
 
 /** 交卡片的那条: 右侧小框「交了「<卡片标题>」」+ 填了的几项 (空的不列) */
 function CardSubmissionBubble({ sub }: { sub: CardSubmission }) {
-  const lines = submissionLines(sub.context);
+  const lines = submissionLines(sub.action.context);
   const [open, setOpen] = useState(false);
   const shown = open ? lines : lines.slice(0, 6);
   return (
@@ -506,7 +503,7 @@ function AssistantBubble({
           minWidth: 0, // 防 markdown 撑开
         }}
       >
-        {msg.content && <StreamingCardEnv streaming={showCaret} msgId={msg.id}><Markdown text={msg.content} /></StreamingCardEnv>}
+        {msg.content && <Markdown text={msg.content} />}
         {!msg.content && showCaret && (
           <span style={{ color: "var(--catfish-text-muted)" }}>…</span>
         )}
@@ -521,6 +518,8 @@ function AssistantBubble({
             <ChatToolSteps calls={msg.tool_calls} active={showCaret} />
           </div>
         )}
+        {/* 11/15 对话卡片: 「出卡片」那次工具调用的卡片画在后台动作下面 (ToolCards / lib/a2uiCard.ts) */}
+        <ToolCards calls={msg.tool_calls} />
         {showCaret && (
           <span
             style={{
@@ -672,9 +671,3 @@ function friendlyError(err: string | undefined): string {
   return err.length > 200 ? err.slice(0, 200) + "…" : err;
 }
 
-/** 这条回复还在流式输出时告诉卡片「代码块可能没写完」(lib/a2uiCardContext) */
-function StreamingCardEnv({ streaming, msgId, children }: { streaming: boolean; msgId: string; children: React.ReactNode }) {
-  const env = useContext(A2uiCardContext);
-  const value = useMemo(() => ({ ...env, streaming, msgId }), [env, streaming, msgId]);
-  return <A2uiCardContext.Provider value={value}>{children}</A2uiCardContext.Provider>;
-}

@@ -88,6 +88,27 @@ def lookup_source(session_id: str) -> Optional[str]:
         return _session_to_source.get(session_id)
 
 
+_session_to_a2ui: "OrderedDict[str, str]" = OrderedDict()
+
+
+def register_a2ui(session_id: str, caps: str) -> None:
+    """11/15 对话卡片: 这个会话的客户端声明过能画哪些 A2UI 目录 (JSON 原文); 空值不覆盖。"""
+    if not session_id or not caps:
+        return
+    with _lock:
+        _session_to_a2ui[session_id] = caps
+        _session_to_a2ui.move_to_end(session_id)
+        while len(_session_to_a2ui) > _MAX_ENTRIES:
+            _session_to_a2ui.popitem(last=False)
+
+
+def lookup_a2ui(session_id: str) -> Optional[str]:
+    if not session_id:
+        return None
+    with _lock:
+        return _session_to_a2ui.get(session_id)
+
+
 def size() -> int:
     """监控用."""
     with _lock:

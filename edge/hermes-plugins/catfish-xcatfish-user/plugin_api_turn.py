@@ -123,6 +123,7 @@ def _register(session_id: str) -> None:
     try:
         user = (_ctx().CV_CF_USER.get() or "").strip()
         source = (_ctx().CV_CF_SOURCE.get() or "").strip()
+        a2ui = (getattr(_ctx(), "CV_A2UI_CAPS", None).get() or "").strip() if hasattr(_ctx(), "CV_A2UI_CAPS") else ""
     except Exception:  # noqa: BLE001
         return
     reg = _registry()
@@ -130,6 +131,8 @@ def _register(session_id: str) -> None:
         reg.register(session_id, user)
     if source:
         reg.register_source(session_id, source)
+    if a2ui:
+        reg.register_a2ui(session_id, a2ui)
 
 
 def _patch_p65_api_turn_identity() -> None:
@@ -185,3 +188,16 @@ def subagent_start_hook(parent_session_id: Any = None, child_session_id: Any = N
         logger.debug("subagent_start: 帮手会话没登记上", exc_info=True)
     return None
 
+
+
+def card_capability_hook(*, tool_name: str = "", args: Any = None, session_id: str = "", **_: Any):
+    """11/15 hermes pre_tool_call: catfish_form card 只给声明过能画卡片的会话 (card_channel_guard.py)。
+
+    登记表按会话号查 (请求带的会话号和 hermes 实际排进去的都登记了, 见 _register); 平台取 state.db 里的来源,
+    只给评估开关用。"""
+    guard = _sib("card_channel_guard")
+    if not guard.is_card_call(tool_name, args):
+        return None
+    caps = _registry().lookup_a2ui(session_id) if session_id else None
+    platform = guard.session_platform(session_id) if (not caps and session_id) else ""
+    return guard.decide(tool_name, args, caps, platform)

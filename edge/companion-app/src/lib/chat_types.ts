@@ -37,6 +37,10 @@ export interface SendChatParams {
   uiSessionId?: string;
   /** 10/18 本机专家: 选了专家时是它的 hermes profile, 请求走 `/p/<profile>/` (只有 hermes 通道能走) */
   profile?: string;
+  /** 11/15 对话卡片: 这一路能画哪些 A2UI 组件目录 (上游 rendererCapabilities 的形状)。只有对话页的主对话带;
+   *  hermes 插件按它决定这个会话能不能出卡 (catfish-xcatfish-user card_channel_guard.py) —— 旧版 Companion /
+   *  早安页 / 微信都不带, 小鲶在那些地方出卡会被挡回去改用文字问。 */
+  a2uiCapabilities?: Record<string, unknown>;
   /** 每个 token 来一次 */
   onDelta: (text: string) => void;
   /** LLM 决定调工具(stream 中 tool_calls 累积完毕)时触发 */

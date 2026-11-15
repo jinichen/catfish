@@ -2,8 +2,8 @@
 
 import { currentExpertRoute, useExpertChat } from "../../lib/expertChat";
 import { ExpertQuickPrompts } from "./ExpertPicker";
-import { useCallback, useEffect, useMemo, useRef } from "react";
-import { buildRetryRequest, cardRetryAllowed, submittedCardKeys } from "../../lib/a2uiCard";
+import { useEffect, useMemo, useRef } from "react";
+import { submittedCardKeys } from "../../lib/a2uiCard";
 import { A2uiCardContext } from "../../lib/a2uiCardContext";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
 import ChatMessage from "./ChatMessage";
@@ -76,27 +76,8 @@ export default function ChatPanel({
     return () => window.removeEventListener("catfish:approval-send", handler as EventListener);
   }, [onSend]);
 
-  // 11/15 A2UI 卡片: 对话页的卡片能交 (点按钮走上面的 catfish:approval-send); 交过的照样显示「已交」。
-  // 画不出来的: 只对这次打开后刚输出完的最后一条自动让小鲶重出一次 (lib/a2uiCard.cardRetryAllowed);
-  // 重开老会话不会因为历史里的坏卡片自己发消息。
-  const streamedIds = useRef(new Set<string>());
-  if (isStreaming && streamingId) streamedIds.current.add(streamingId);
-  const retried = useRef(new Set<string>());
-  const messagesRef = useRef(messages);
-  messagesRef.current = messages;
-  const isStreamingRef = useRef(isStreaming);
-  isStreamingRef.current = isStreaming;
-  const requestRetry = useCallback((msgId: string, key: string, reason: string) => {
-    const msgs = messagesRef.current;
-    if (isStreamingRef.current || retried.current.has(key)) return;
-    if (!streamedIds.current.has(msgId) || !cardRetryAllowed(msgs, msgId, key)) return;
-    retried.current.add(key);
-    onSend(buildRetryRequest(key, reason), []);
-  }, [onSend]);
-  const cardEnv = useMemo(
-    () => ({ interactive: true, streaming: false, submitted: submittedCardKeys(messages), requestRetry }),
-    [messages, requestRetry],
-  );
+  // 11/15 对话卡片 (lib/a2uiCard.ts): 对话页的卡片能交 (点按钮走上面的 catfish:approval-send); 交过的照样显示「已交」
+  const cardEnv = useMemo(() => ({ interactive: true, submitted: submittedCardKeys(messages) }), [messages]);
 
   const isEmpty = messages.length === 0;
   useExpertChat(); // 10/18: 订阅「找谁」, 切专家时空态 (快捷问法) 跟着换

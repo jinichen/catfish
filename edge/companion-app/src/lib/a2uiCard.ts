@@ -1,87 +1,68 @@
 /** 对话里的 A2UI 卡片 (11/15)。
  *
- * # 是什么
+ * # 照上游怎么做的
  *
- * A2UI (github.com/a2ui-project/a2ui) 是一套「智能体用数据描述界面、客户端用自己的组件画」的协议。这里是通用能力,
- * 不是某个场景的模板: 员工要选、填、勾、定时间、确认改一下再办时, 小鲶自己判断要不要出卡, 现场用白名单组件拼一个
- * ```a2ui 代码块 (规范每轮由 catfish-memory 插件 catfish_memory_cards.py 给, 只给电脑端对话), Companion 画成能填的卡片。
+ * A2UI (github.com/a2ui-project/a2ui) 是「智能体用数据描述界面、客户端用自己的组件画」的协议。鲶鱼照上游 eval 的
+ * `subagent_tool` 策略 (eval/a2ui_eval/strategies/subagent_tool.py):
+ *
+ *   员工要选 / 填 / 勾 / 定时间 → 主小鲶调 catfish_form 的 card 动作 (自己决定要不要)
+ *   → tool-bridge 的专员用官方 SDK 生成的 Express 提示词写卡片、SDK 校验、不过带着报错重写 (tool-bridge/a2ui_card.py)
+ *   → 卡片存本机, 只把编号还给小鲶 (上游 saved out-of-band)
+ *   → 这里按工具调用结果里的编号读出来 (Rust a2ui_card_read) 画在那次工具调用下面 (tabs/Chat/ToolCards.tsx)
+ *   → 员工点按钮: 上游标准的 `action` 消息 (renderer_to_agent) 拼进一句话, 走 catfish:approval-send 发回同一个会话
+ *   → 小鲶按出卡时的目的接着办 (发送 / 删除照常走审批)
+ *
  * 模型给的只是数据, 不是代码 —— 只能用下面 CARD_COMPONENTS 里的组件, 没有脚本、没有外链图片。
- *
- * # 一来一回
- *
- *   小鲶回复 ```a2ui [...]```  →  A2uiCard 画出来  →  员工填、点按钮
- *   →  按钮的 action (name + 解析好的 context) 拼成一句话, 走 catfish:approval-send 发回同一个会话
- *      (跟审批按钮、「继续」同一条路, 不加新接口)
- *   →  小鲶按出卡时的目的接着办 (用它已有的工具; 发送 / 删除照常走审批)
- *
- * 发回去的那句话里带 ```a2ui-action``` 代码块和这张卡的 key —— 会话重新打开时, 交过的卡片照样显示「已交」,
- * 不会让人以为没交又点一次。
- *
- * # 降级
- *
- * - 格式不对 (JSON 坏了 / 不符合协议 / 用了白名单外的组件): 不画, 说一句「卡片格式不对」, 原文折叠可看;
- *   刚输出完的最后一条, 对话页自动让小鲶照原因重出一次 (cardRetryAllowed), 重出的再坏就停。
- * - 还在流式输出: 代码块没写完时 JSON 肯定是坏的, 显示「卡片生成中…」, 不报错。
- * - 微信: 显示不了卡片, 外发前由插件换成一句文字 (catfish-xcatfish-user/plugin_weixin_zh.py)。
+ * 卡片在 tool-bridge 已经过官方 SDK 校验; 这里再按白名单 / 引用 / 大小查一遍, 是防文件被改过的兜底。
  */
 
-/** 卡片能用的组件 (A2UI 基础组件的子集)。小鲶是现场拼卡片的 (规范在 catfish-memory 插件 catfish_memory_cards.py,
- *  两边要一致), 组件越少拼错越少: 不放 Image / Video / AudioPlayer (会去外网拉东西, 跟邮件里拦跟踪像素一个道理)、
- *  Modal (对话里弹窗太重)、List (要写数据模板)、Tabs / Icon / Slider (对话里的小交互用不上)。
- *  函数去掉 openUrl (卡片不该能打开任意网址)。 */
+/** 卡片能用的组件 (A2UI 基础组件的子集) —— 跟 tool-bridge/a2ui_card.py CARD_COMPONENTS 一致 (那边测试对着这里查)。
+ *  不放 Image / Video / AudioPlayer (会去外网拉东西, 跟邮件里拦跟踪像素一个道理)、Modal (对话里弹窗太重)、
+ *  List (要写数据模板)、Tabs / Icon / Slider (对话里的小交互用不上)。函数去掉 openUrl (卡片不该能打开任意网址)。 */
 export const CARD_COMPONENTS = [
   "Text", "Row", "Column", "Card", "Divider",
   "Button", "TextField", "CheckBox", "ChoicePicker", "DateTimeInput",
 ] as const;
 export const CARD_BLOCKED_FUNCTIONS = ["openUrl"] as const;
-export const CARD_CATALOG_ID = "catfish:cards/v1";
-
-/** 一张卡最多这么多字 (十几个输入框的采集卡约 5KB)。卡片是模型写的, 超长多半是写坏了;
- *  也让 zod 3 那个「超大数组校验耗尽内存」(GHSA-mrhx-c7xc-m3w5, 见 vite.config.ts) 在这里够不着。 */
+/** 上游 v1.0 基础目录的 id (裁剪过, id 不变; tool-bridge 那边 SDK 编出来的 createSurface 就写这个) */
+export const CARD_CATALOG_ID = "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json";
+/** 主对话随请求声明的渲染能力 (上游 v1.0 renderer_capabilities.json 的形状): hermes 插件据此决定这个会话能不能出卡 */
+export const CARD_RENDERER_CAPABILITIES = { "1.0": { supportedCatalogIds: [CARD_CATALOG_ID] } } as const;
+/** 一张卡最多这么多字 (十几个输入框的采集卡约 5KB); 也让 zod 3 那个「超大数组校验耗尽内存」(见 vite.config.ts) 够不着 */
 export const CARD_MAX_CHARS = 32_000;
 
-export type ParsedCard = { ok: true; messages: unknown[] } | { ok: false; reason: string };
+/** 卡片编号 (tool-bridge a2ui_card.save_card 生成): c_YYYYMMDD_HHMMSS_6位十六进制 */
+export const CARD_ID = /^c_\d{8}_\d{6}_[0-9a-f]{6}$/;
 
-/** ```a2ui 代码块的内容 → 消息列表。认三种写法: JSON 数组、单个消息对象、一行一个消息 (JSONL)。 */
-export function parseCardSource(src: string): ParsedCard {
-  const text = src.trim();
-  if (!text) return { ok: false, reason: "代码块是空的" };
-  if (text.length > CARD_MAX_CHARS) return { ok: false, reason: `卡片太大 (${Math.round(text.length / 1000)}K 字, 上限 ${CARD_MAX_CHARS / 1000}K)` };
-  try {
-    const v = JSON.parse(text);
-    if (Array.isArray(v)) return v.length ? { ok: true, messages: v } : { ok: false, reason: "消息列表是空的" };
-    if (v && typeof v === "object") return { ok: true, messages: [v] };
-    return { ok: false, reason: "不是 A2UI 消息" };
-  } catch (e) {
-    const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
-    if (lines.length > 1) {
-      try {
-        return { ok: true, messages: lines.map((l) => JSON.parse(l.replace(/,$/, ""))) };
-      } catch {
-        /* 落到下面报原来的错 */
-      }
+type Comp = { id?: unknown; component?: unknown; child?: unknown; children?: unknown; text?: unknown };
+
+/** 消息里所有组件 (按 surface): createSurface 里内联的 (Express 编出来的就是这种) + updateComponents 的 */
+function componentsBySurface(messages: unknown[]): Map<string, Comp[]> {
+  const out = new Map<string, Comp[]>();
+  for (const m of messages) {
+    const msg = m as { createSurface?: { surfaceId?: unknown; components?: unknown[] }; updateComponents?: { surfaceId?: unknown; components?: unknown[] } };
+    for (const block of [msg?.createSurface, msg?.updateComponents]) {
+      if (!block || !Array.isArray(block.components)) continue;
+      const sid = String(block.surfaceId ?? "");
+      out.set(sid, [...(out.get(sid) ?? []), ...(block.components as Comp[])]);
     }
-    return { ok: false, reason: `JSON 解析失败: ${e instanceof Error ? e.message : String(e)}` };
   }
+  return out;
 }
 
-/** 白名单外的组件名。
- *
- * 11/15 测出来: A2UI 的处理器碰到目录里没有的组件 (比如 Image) 不报错 —— 白名单要我们自己把。有就整张不画,
- * 不是悄悄跳过那一块: 模型写了外链图片之类的东西, 员工应该看到「这张卡不对」, 而不是一张缺了块的卡。 */
+/** 白名单外的组件名 —— A2UI 的处理器碰到目录里没有的组件不报错 (11/15 测出来的), 白名单要自己把 */
 export function unknownComponents(messages: unknown[]): string[] {
   const allowed = new Set<string>(CARD_COMPONENTS);
   const bad = new Set<string>();
-  for (const m of messages) {
-    for (const c of (m as { updateComponents?: { components?: unknown[] } })?.updateComponents?.components ?? []) {
-      const name = (c as { component?: unknown })?.component;
-      if (typeof name !== "string" || !allowed.has(name)) bad.add(String(name));
+  for (const comps of componentsBySurface(messages).values()) {
+    for (const c of comps) {
+      if (typeof c?.component !== "string" || !allowed.has(c.component)) bad.add(String(c?.component));
     }
   }
   return [...bad];
 }
 
-/** 用到了被拿掉的函数 (openUrl): 跟组件一样, 处理器不一定拦, 自己查 —— 整张卡里任何一处 "@call" 都算 */
+/** 用到了被拿掉的函数 (openUrl): 跟组件一样, 处理器不一定拦, 自己查 */
 export function blockedFunctions(messages: unknown[]): string[] {
   const blocked = new Set<string>(CARD_BLOCKED_FUNCTIONS);
   const hit = new Set<string>();
@@ -98,71 +79,72 @@ export function blockedFunctions(messages: unknown[]): string[] {
   return [...hit];
 }
 
-/** 引用了却没定义的组件 id。
- *
- * A2UI 允许组件分几次发 (流式), 所以它的校验器不把「children 里的 id 找不到」当错 —— 但对话里一张卡是一个代码块
- * 一次给全的, 少了就是模型漏写了。11/15 实测 10 次里有 2 次漏了一整行 (来源 / 采集人), 照画会悄悄少两个字段。
- * 有缺的就不画, 让小鲶重出。也认 root: 一张卡没有 root 什么都画不出来。 */
+/** 引用了却没定义的组件 id (协议允许分次发, 对话里一张卡是一次给全的); 没有 root 也算 */
 export function missingComponents(messages: unknown[]): string[] {
-  const perSurface = new Map<string, { ids: Set<string>; refs: Set<string> }>();
-  for (const m of messages) {
-    const uc = (m as { updateComponents?: { surfaceId?: string; components?: unknown[] } })?.updateComponents;
-    if (!uc) continue;
-    const sid = String(uc.surfaceId ?? "");
-    const e = perSurface.get(sid) ?? { ids: new Set<string>(), refs: new Set<string>(["root"]) };
-    for (const c of uc.components ?? []) {
-      const comp = c as { id?: unknown; child?: unknown; children?: unknown };
-      if (typeof comp.id === "string") e.ids.add(comp.id);
-      if (typeof comp.child === "string") e.refs.add(comp.child);
-      if (Array.isArray(comp.children)) for (const ch of comp.children) if (typeof ch === "string") e.refs.add(ch);
-    }
-    perSurface.set(sid, e);
-  }
   const missing: string[] = [];
-  for (const { ids, refs } of perSurface.values()) for (const r of refs) if (!ids.has(r)) missing.push(r);
+  for (const comps of componentsBySurface(messages).values()) {
+    const ids = new Set<string>();
+    const refs = new Set<string>(["root"]);
+    for (const c of comps) {
+      if (typeof c?.id === "string") ids.add(c.id);
+      if (typeof c?.child === "string") refs.add(c.child);
+      if (Array.isArray(c?.children)) for (const ch of c.children) if (typeof ch === "string") refs.add(ch);
+    }
+    for (const r of refs) if (!ids.has(r)) missing.push(r);
+  }
   return missing;
 }
 
-/** 卡片的 key: 代码块内容的短哈希 (FNV-1a)。同一张卡重新打开会话时 key 不变, 用来认「这张交过了」。 */
-export function cardKey(src: string): string {
-  let h = 0x811c9dc5;
-  const s = src.trim();
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return (h >>> 0).toString(36);
+/** 画之前的兜底检查; 有问题返回原因 */
+export function cardProblem(messages: unknown[]): string | null {
+  if (!Array.isArray(messages) || messages.length === 0) return "卡片是空的";
+  if (JSON.stringify(messages).length > CARD_MAX_CHARS) return "卡片太大";
+  const unknown = unknownComponents(messages);
+  if (unknown.length) return `用了卡片里不允许的组件 (${unknown.slice(0, 3).join("、")})`;
+  const fns = blockedFunctions(messages);
+  if (fns.length) return `用了卡片里不允许的功能 (${fns.join("、")})`;
+  const missing = missingComponents(messages);
+  if (missing.length) return `卡片缺了一部分 (${missing.slice(0, 3).join("、")})`;
+  return null;
 }
 
-/** 卡片标题: 第一个 Text 组件的字 (去掉 Markdown 星号和「· 后半句」), 没有就用 surfaceId */
+/** 卡片标题: 第一个 Text 组件的字 (去掉 Markdown 星号和「· 后半句」), 没有就用 fallback */
 export function cardTitle(messages: unknown[], fallback: string): string {
-  for (const m of messages) {
-    const comps = (m as { updateComponents?: { components?: unknown[] } })?.updateComponents?.components;
-    for (const c of comps ?? []) {
-      const t = (c as { component?: string; text?: unknown })?.text;
-      if ((c as { component?: string }).component === "Text" && typeof t === "string" && t.trim()) {
-        return t.replace(/\*\*/g, "").split(/\s+·\s+/)[0].trim().slice(0, 40);
+  for (const comps of componentsBySurface(messages).values()) {
+    for (const c of comps) {
+      if (c?.component === "Text" && typeof c.text === "string" && c.text.trim()) {
+        return c.text.replace(/\*\*/g, "").split(/\s+·\s+/)[0].trim().slice(0, 40);
       }
     }
   }
   return fallback;
 }
 
-export interface CardSubmission {
-  title: string;
-  key: string;
+/** 渲染端回调给的 action (web_core ActionPayload) */
+export interface CardAction {
   name: string;
   surfaceId: string;
+  sourceComponentId: string;
+  timestamp: string;
   context: Record<string, unknown>;
+}
+
+export interface CardSubmission {
+  title: string;
+  /** 卡片编号 */
+  key: string;
+  action: CardAction;
 }
 
 const SUBMIT_HEAD = "（填好了卡片「";
 const ACTION_FENCE = /```a2ui-action\s*\n([\s\S]*?)\n```/;
+const CARD_MARK = /<!-- card:(c_\d{8}_\d{6}_[0-9a-f]{6}) -->/;
 
-/** 点了卡片上的按钮 → 发回会话的那句话。第一行给人看, 代码块给小鲶 (技能里按 name 处理)。 */
+/** 点了卡片上的按钮 → 发回会话的那句话。第一行给人看; 代码块是上游标准的 v1.0 `action` 消息 (renderer_to_agent),
+ *  原样给小鲶; 末尾带卡片编号 (会话重开时认得这张交过了)。 */
 export function buildSubmission(s: CardSubmission): string {
-  const payload = { name: s.name, surfaceId: s.surfaceId, card: s.key, context: s.context };
-  return `${SUBMIT_HEAD}${s.title}」）\n\`\`\`a2ui-action\n${JSON.stringify(payload, null, 1)}\n\`\`\``;
+  const message = { version: "1.0", action: s.action };
+  return `${SUBMIT_HEAD}${s.title}」）\n\`\`\`a2ui-action\n${JSON.stringify(message, null, 1)}\n\`\`\`\n<!-- card:${s.key} -->`;
 }
 
 /** 反过来: 用户消息是不是一次卡片提交 (气泡要显示成「交了什么」, 不显示一坨 JSON) */
@@ -171,49 +153,24 @@ export function parseSubmission(text: string): CardSubmission | null {
   const m = ACTION_FENCE.exec(text);
   if (!m) return null;
   try {
-    const p = JSON.parse(m[1]) as { name?: unknown; surfaceId?: unknown; card?: unknown; context?: unknown };
-    if (typeof p.name !== "string") return null;
-    const title = text.slice(SUBMIT_HEAD.length, text.indexOf("」）"));
+    const p = JSON.parse(m[1]) as { action?: Partial<CardAction> };
+    const a = p.action;
+    if (!a || typeof a.name !== "string") return null;
     return {
-      title, name: p.name, surfaceId: String(p.surfaceId ?? ""), key: String(p.card ?? ""),
-      context: p.context && typeof p.context === "object" ? (p.context as Record<string, unknown>) : {},
+      title: text.slice(SUBMIT_HEAD.length, text.indexOf("」）")),
+      key: CARD_MARK.exec(text)?.[1] ?? "",
+      action: {
+        name: a.name, surfaceId: String(a.surfaceId ?? ""), sourceComponentId: String(a.sourceComponentId ?? ""),
+        timestamp: String(a.timestamp ?? ""),
+        context: a.context && typeof a.context === "object" ? (a.context as Record<string, unknown>) : {},
+      },
     };
   } catch {
     return null;
   }
 }
 
-/** 卡片画不出来时自动发回去的那句话的开头 (插件里的规范 catfish_memory_cards.RETRY_HEAD 跟这个一致) */
-export const RETRY_HEAD = "（卡片没画出来）";
-const RETRY_KEY = /<!-- card:([0-9a-z]+) -->/;
-
-/** 画不出来 → 让小鲶照原因重出一次。末尾带这张卡的 key: 重开会话时认得这张已经要过重出, 不再要 */
-export function buildRetryRequest(key: string, reason: string): string {
-  return `${RETRY_HEAD}原因: ${reason}\n请照卡片规则修好重出一张; 还不行就改用文字问我。\n<!-- card:${key} -->`;
-}
-
-export function parseRetryRequest(text: string): { key: string; reason: string } | null {
-  if (!text.startsWith(RETRY_HEAD)) return null;
-  const key = RETRY_KEY.exec(text)?.[1] ?? "";
-  const reason = text.slice(RETRY_HEAD.length).split("\n")[0].replace(/^原因:\s*/, "");
-  return { key, reason };
-}
-
-/** 这张坏卡片能不能自动要重出: 它在最后一条 (员工还没接话)、这张没要过、上一条员工消息不是「请重出」(重出的又坏了就停, 不连着要) */
-export function cardRetryAllowed(messages: { id: string; role: string; content: string }[], msgId: string, key: string): boolean {
-  const last = messages[messages.length - 1];
-  if (!last || last.id !== msgId || last.role !== "assistant") return false;
-  for (let i = messages.length - 2; i >= 0; i--) {
-    const m = messages[i];
-    if (m.role !== "user") continue;
-    const r = parseRetryRequest(m.content ?? "");
-    if (r && r.key === key) return false;
-    return r === null;
-  }
-  return true;
-}
-
-/** 会话里已经交过的卡片 key */
+/** 会话里已经交过的卡片编号 */
 export function submittedCardKeys(messages: { role: string; content: string }[]): Set<string> {
   const keys = new Set<string>();
   for (const m of messages) {
@@ -241,4 +198,21 @@ export function submissionLines(context: Record<string, unknown>): [string, stri
     }
   }
   return out;
+}
+
+/** 这次工具调用是不是出了一张卡片 (catfish_form 的 card 动作, 结果里带编号); 是就返回编号 */
+export function cardIdFromToolCall(call: { name: string; args?: Record<string, unknown>; result?: unknown }): string | null {
+  if (!/(^|__)catfish_form$/.test(call.name) || call.args?.action !== "card") return null;
+  let r: unknown = call.result;
+  if (typeof r === "string") {
+    try {
+      r = JSON.parse(r);
+    } catch {
+      return null;
+    }
+  }
+  // tool-bridge 外层可能包一层 {ok, tool, result: {...}}
+  const inner = (r as { result?: unknown })?.result ?? r;
+  const id = (inner as { card_id?: unknown })?.card_id;
+  return typeof id === "string" && CARD_ID.test(id) ? id : null;
 }

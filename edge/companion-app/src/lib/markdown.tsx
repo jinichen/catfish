@@ -13,7 +13,6 @@
  *      只可能是行尾+行首被吃掉了换行).
  */
 
-import { lazy, Suspense, useContext } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { PluggableList } from "unified";
@@ -21,42 +20,6 @@ import rehypeHighlight from "rehype-highlight";
 import rehypeRaw from "rehype-raw";
 import { linkifyChildren } from "./linkify_paths";
 import { isExternalLink } from "./linkBehavior";
-import { cardKey } from "./a2uiCard";
-import { A2uiCardContext } from "./a2uiCardContext";
-
-/** 11/15 对话里的 A2UI 卡片 (lib/a2uiCard.ts): ```a2ui 代码块画成卡片。组件连带 A2UI + Lit, 按需加载, 不进首屏 */
-const A2uiCard = lazy(() => import("../tabs/Chat/A2uiCard"));
-
-/** <pre> 里那个 <code> 是不是 ```a2ui 块; 是就返回代码文字 */
-function a2uiSource(node: unknown): string | null {
-  const code = (node as { children?: { tagName?: string; properties?: { className?: unknown }; children?: { value?: string }[] }[] })
-    ?.children?.find((c) => c.tagName === "code");
-  const cls = code?.properties?.className;
-  const list = Array.isArray(cls) ? cls.map(String) : typeof cls === "string" ? cls.split(/\s+/) : [];
-  if (!list.includes("language-a2ui")) return null;
-  return hastText(code);
-}
-
-/** hast 节点里的全部文字 (代码高亮可能把文字拆进好几层 <span>) */
-function hastText(n: unknown): string {
-  const node = n as { value?: string; children?: unknown[] } | undefined;
-  if (!node) return "";
-  if (typeof node.value === "string") return node.value;
-  return (node.children ?? []).map(hastText).join("");
-}
-
-function CardBlock({ source }: { source: string }) {
-  const env = useContext(A2uiCardContext);
-  return (
-    <Suspense fallback={<div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>卡片加载中…</div>}>
-      <A2uiCard
-        source={source} interactive={env.interactive} streaming={env.streaming} submitted={env.submitted.has(cardKey(source))}
-        onError={env.requestRetry && env.msgId ? (reason) => env.requestRetry?.(env.msgId as string, cardKey(source), reason) : undefined}
-      />
-    </Suspense>
-  );
-}
-
 interface Props {
   text: string;
 }
@@ -160,10 +123,7 @@ export function Markdown({ text }: Props) {
           // 代码块外层 <pre>，只留结构属性 — 视觉 (底色/描边/圆角/内距)
           // 交给 refresh.css 的 .markdown-body pre, 内联写死会把主题层压死
           // (8/8 评审: 暗色下这里的 --catfish-bg 比面板还黑, 成了"黑带").
-          pre: ({ children, node }) => {
-            const card = a2uiSource(node);
-            if (card !== null) return <CardBlock source={card} />;
-            return (
+          pre: ({ children }) => (
             <pre
               style={{
                 overflow: "auto",
@@ -173,8 +133,7 @@ export function Markdown({ text }: Props) {
             >
               {children}
             </pre>
-            );
-          },
+          ),
           // inline code：跟代码块区分开，浅底色
           code: ({ children, className, ...props }) => {
             const isBlock = className?.startsWith("hljs") || className?.startsWith("language-");

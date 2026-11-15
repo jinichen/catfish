@@ -52,6 +52,9 @@ const BAKED_MEMORY_ENFORCE: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/memory_enforce.py");
 const BAKED_TODO_COLLISION_GUARD: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/todo_collision_guard.py");
+/// 11/15 对话卡片只在电脑端对话里能用 (非电脑端会话调 catfish_form card 就拦下)
+const BAKED_CARD_CHANNEL_GUARD: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/card_channel_guard.py");
 // 11/10: 日志 / 长期记忆只许追加 (pre_tool_call 钩子, 拦 execute_code / terminal 的改写)
 const BAKED_JOURNAL_GUARD: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/journal_guard.py");
@@ -192,6 +195,7 @@ pub(crate) const BAKED_FILES: &[(&str, &str)] = &[
     ("memory_router.py", BAKED_MEMORY_ROUTER),
     ("memory_enforce.py", BAKED_MEMORY_ENFORCE),
     ("todo_collision_guard.py", BAKED_TODO_COLLISION_GUARD),
+    ("card_channel_guard.py", BAKED_CARD_CHANNEL_GUARD),
     ("journal_guard.py", BAKED_JOURNAL_GUARD),
     ("weixin_resend.py", BAKED_WEIXIN_RESEND),
     ("egress_log.py", BAKED_EGRESS_LOG),

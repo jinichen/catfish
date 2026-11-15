@@ -227,13 +227,11 @@ try:
     from .catfish_memory_tools import _ToolsMixin
     from .catfish_memory_recall import prewarm as _recall_prewarm
     from .catfish_memory_situation import render_situation
-    from .catfish_memory_cards import render_cards_guide
     from .catfish_memory_profile import render_profile, render_style
     from .catfish_memory_graph import render_graph
 except ImportError:  # 独立脚本模式 (无父包)
     from catfish_memory_recall import prewarm as _recall_prewarm
     from catfish_memory_situation import render_situation
-    from catfish_memory_cards import render_cards_guide
     from catfish_memory_profile import render_profile, render_style
     from catfish_memory_graph import render_graph
     from catfish_memory_render import _RenderMixin
@@ -306,10 +304,6 @@ class CatfishMemoryProvider(
         违背"30min 间隔"语义). 用 now 作 baseline, 之后 elapsed 才有意义.
         """
         self._session_id = session_id
-        # 11/15 对话卡片规范只给电脑端主对话 (catfish_memory_cards): 渠道和「主对话 / 定时任务 / 子任务」hermes 初始化时就给,
-        # 比按会话号查 state.db 可靠 —— 新会话第一轮 prefetch 时会话那一行还没写进库
-        self._platform = kwargs.get("platform") if isinstance(kwargs.get("platform"), str) else None
-        self._agent_context = kwargs.get("agent_context") if isinstance(kwargs.get("agent_context"), str) else None
         hh = kwargs.get("hermes_home")
         if isinstance(hh, str):
             self._hermes_home = Path(hh)
@@ -511,18 +505,6 @@ class CatfishMemoryProvider(
             except Exception as e:  # noqa: BLE001 —— 快照坏了不能拖垮 prefetch
                 logger.warning("catfish-memory 此刻块渲染失败 (跳过): %s", e)
 
-        # 11/15 对话卡片 (A2UI): 只在电脑端对话里告诉小鲶能出卡片、怎么写 (catfish_memory_cards.py)
-        if not is_advisor_sparse:
-            try:
-                guide = render_cards_guide(
-                    session_id, self._hermes_home,
-                    platform=getattr(self, "_platform", None), agent_context=getattr(self, "_agent_context", None),
-                )
-                if guide:
-                    sections.append(guide)
-            except Exception as e:  # noqa: BLE001 —— 规范出不来不能拖垮 prefetch
-                logger.warning("catfish-memory 卡片规范渲染失败 (跳过): %s", e)
-
         # P3.5.5 sparse: 下面 7 段是 advisor 不需要的 (employee_journal / wiki /
         #   skills_catalog / strategic_docs / feedback / skill_guard / schema 已上面跳过).
         #   advisor 自己 user prompt 已注入 distilled + memory + todos + emails 完整上下文.
@@ -601,13 +583,12 @@ class CatfishMemoryProvider(
         try:
             logger.info(
                 "catfish-memory prefetch: returning %d chars "
-                "(markers: purpose=%s schema=%s disc=%s safe=%s cards=%s, query_len=%d, session=%s)",
+                "(markers: purpose=%s schema=%s disc=%s safe=%s, query_len=%d, session=%s)",
                 len(result),
                 '员工身份与目的' in result,
                 'catfish memory schema' in result,
                 'memory 写入纪律' in result,
                 '安全红线' in result,
-                '## 对话卡片' in result,
                 len(query or ""),
                 session_id or self._session_id or "?",
             )

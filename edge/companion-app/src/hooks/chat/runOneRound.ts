@@ -24,6 +24,7 @@
  * diff 只有头尾, 中间 371 行可以肉眼确认没被改过。
  */
 
+import { CARD_RENDERER_CAPABILITIES } from "../../lib/a2uiCard";
 import { currentExpertRoute } from "../../lib/expertChat";
 import { useChatStore } from "../../store/chat";
 import { isAgentLoopLimit, parseStepLimit } from "../../lib/agentLoopLimit";
@@ -175,6 +176,8 @@ export async function runOneRound(
         // 5/24 BL-MULTI-SESSION-STREAM: ctx.sessionId 是 send 入口锁定的, 不读 store,
         // 防切走会话后这一轮的 hermes header 飘到新 session.
         sessionId: ctx.sessionId ?? undefined,
+        // 11/15 对话卡片: 主对话能画卡片 (lib/a2uiCard.ts), 告诉 hermes 这个会话可以出卡
+        a2uiCapabilities: CARD_RENDERER_CAPABILITIES,
         signal: ctx.ctrl.signal,
         onDelta: (text) => {
           // 首个正文 chunk 到达后，状态条让位给实际回答，避免重复占用消息区。

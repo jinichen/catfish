@@ -32,3 +32,6 @@ tzdata         tzdata
 # 静态链接 SQLCipher 4.19 + OpenSSL 3.6, 三个目标都有 cp314 轮子; 带的 SQLite 3.53.4 不在 WAL 损坏区间
 # (scripts/check-embedded-sqlite.py 同判据)。别换成 sqlcipher3-wheels: 0.5.7 带的 SQLite 3.51.1 有洞。
 sqlcipher3==0.6.4  sqlcipher3
+# 11/15 对话卡片 (tool-bridge a2ui_card.py): A2UI 官方 SDK 生成提示词、校验模型写的卡片。钉版本: 跟 Companion 的
+#   @a2ui/react / @a2ui/web_core 0.15 同一期, 协议 v1.0; 升级时两边一起换 (tool-bridge data/a2ui/NOTICE.md)
+a2ui-agent-sdk==0.11.0  a2ui.inference_formats.express
