@@ -88,3 +88,18 @@ def decide(tool_name: str, args: Any, caps_json: str | None, platform: str = "")
         "message": ("这个对话的客户端画不了卡片 (只有新版鲶鱼电脑端的对话里能画)。"
                     "不要再用 catfish_form 的 card, 改用文字一项一项问员工。"),
     }
+
+
+#: 能画卡片的会话每轮带的一句话 (上游示例 restaurant_finder 也是在智能体自己的提示里写「什么情况出界面」)。
+#: 11/15 实测: 只靠 catfish_form 说明里那一行, 13 条明显该出卡的说法只出了 1 次 —— 小鲶习惯用文字列一串问题。
+CARD_HINT = ("[这个对话能出卡片] 员工要从几个里选、填几项、勾几个、定时间、或看一眼改了再办时, "
+             "用 catfish_form 的 card 出一张卡让他点着填, 不要用文字列一串问题让他逐条回。只回答问题时不用。")
+
+
+def hint_for(caps_json: str | None, platform: str = "") -> str | None:
+    """pre_llm_call: 声明过能画的会话 (或评估开关下的命令行会话) → 这一轮加 CARD_HINT。"""
+    if can_render(caps_json):
+        return CARD_HINT
+    if os.environ.get("CATFISH_A2UI_ASSUME_CAPABLE") == "1" and platform in _EVAL_SOURCES:
+        return CARD_HINT
+    return None

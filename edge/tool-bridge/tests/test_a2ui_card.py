@@ -47,12 +47,12 @@ def fake_llm(*replies):
 
 def test_good_card_saved_out_of_band(tmp_path):
     llm = fake_llm("好的\n" + GOOD)
-    r = ac.make_card({"request": "让员工选会议时间"}, llm=llm)
+    r = ac.make_card({"request": "让员工从两个时段里选一个会议时间"}, llm=llm)
     assert r["ok"] is True and r["card_id"].startswith("c_")
     # 主小鲶只拿到编号和一句话, 不拿卡片本身 (上游 saved out-of-band; 也碰不到 4KB 归档)
     assert "createSurface" not in json.dumps(r, ensure_ascii=False)
     saved = json.loads((tmp_path / "cards" / f"{r['card_id']}.json").read_text(encoding="utf-8"))
-    assert saved["request"] == "让员工选会议时间"
+    assert saved["request"] == "让员工从两个时段里选一个会议时间"
     surface = saved["messages"][0]["createSurface"]
     assert surface["catalogId"] == "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
     assert {c["component"] for c in surface["components"]} <= set(ac.CARD_COMPONENTS)
@@ -61,7 +61,7 @@ def test_good_card_saved_out_of_band(tmp_path):
 @pytest.mark.parametrize("bad", [MISSING_CHILD, IMAGE, "没有卡片, 只是一句话"])
 def test_rejected_then_fixed(bad):
     llm = fake_llm(bad, GOOD)
-    r = ac.make_card({"request": "选时间"}, llm=llm)
+    r = ac.make_card({"request": "让员工从两个时段里选一个会议时间"}, llm=llm)
     assert r["ok"] is True
     # 第二次带着上一次的回复和报错 (上游 _retry_message)
     second = llm.seen[1]
@@ -71,13 +71,14 @@ def test_rejected_then_fixed(bad):
 
 def test_gives_up_after_two_attempts_and_says_use_text():
     llm = fake_llm(MISSING_CHILD, MISSING_CHILD)
-    r = ac.make_card({"request": "选时间"}, llm=llm)
+    r = ac.make_card({"request": "让员工从两个时段里选一个会议时间"}, llm=llm)
     assert r["ok"] is False and "改用文字问员工" in r["error"]
     assert len(llm.seen) == ac.MAX_ATTEMPTS
 
 
 def test_request_checks():
     assert ac.make_card({}, llm=fake_llm())["ok"] is False
+    assert "太短" in ac.make_card({"request": "占位"}, llm=fake_llm())["error"]
     assert "太长" in ac.make_card({"request": "x" * (ac.MAX_REQUEST_CHARS + 1)}, llm=fake_llm())["error"]
 
 
@@ -117,3 +118,10 @@ def test_routed_as_catfish_form_card(monkeypatch):
     assert "card" in form["input_schema"]["properties"]["action"]["enum"]
     assert form["input_schema"]["properties"]["request"]["description"].startswith("card:")
     assert "catfish_card" not in {t["name"] for t in CATFISH_NATIVE_TOOLS}
+
+
+def test_generation_rules_cover_seen_rejections():
+    """11/15 真模型评估里被拒的四类原因都写进了专员的规则 (上游 generation_rules)。"""
+    system = ac.specialist_messages("x")[0]["content"]
+    for rule in ("只用英文字母", "Card 只放一个子组件", "\"checkbox\" 或 \"chips\"", "DateTimeInput 不写 min / max", "一定带中文提示"):
+        assert rule in system

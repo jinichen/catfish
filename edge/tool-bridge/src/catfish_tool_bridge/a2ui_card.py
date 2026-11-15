@@ -46,6 +46,8 @@ CARD_FUNCTIONS = ("required", "regex", "length", "numeric", "email", "and", "or"
 MAX_ATTEMPTS = 2
 #: 一次请求的说明最多这么长 (主小鲶写的; 超长多半是把整封邮件塞进来了)
 MAX_REQUEST_CHARS = 4000
+#: 至少这么长才算说清了要什么 (11/15 评估里小鲶先发过一个「占位」, 专员照样画了张空洞的卡)
+MIN_REQUEST_CHARS = 15
 CARD_KEEP_DAYS = 90
 SOURCE = "plugin:toolbridge-card"
 
@@ -59,7 +61,14 @@ _ENV_NOTES = (
     "- 你没有任何工具, 不要输出工具调用。只输出一个用 <a2ui> 和 </a2ui> 包起来的 A2UI Express 块, 块外不要写任何文字。\n"
     "- 预填值只能来自请求里给的; 请求没给的留空 (\"\" / [] / false), 不许编。\n"
     "- 可填的组件都绑到 $/f/ 下的数据路径, 按钮用 Event(\"请求里给的动作名\", {请求里给的键: $/f}) 把员工填的整份交回。\n"
-    "- 单选 / 多选的选项用请求里给的; 请求没给选项就用 TextField。"
+    "- 单选 / 多选的选项用请求里给的; 请求没给选项就用 TextField。\n"
+    # 11/15 真模型评估里最常见的四种被拒原因 (上游 eval 叫 generation_rules: 官方规则之外按场景补的几条)
+    "- 数据路径和 Event 里的键名只用英文字母、数字、下划线 (如 $/f/video_link); 中文只出现在界面文字里。\n"
+    "- Card 只放一个子组件 (写组件名, 不是列表); 多个就先放进一个 Column。\n"
+    "- ChoicePicker 的 displayStyle 只能是 \"checkbox\" 或 \"chips\"; 不确定就不写。\n"
+    "- DateTimeInput 不写 min / max。\n"
+    # 不带提示的必填校验会显示英文默认的 "Required check failed", 而且员工还没动手就标红 —— 只给真必填的加, 带中文提示
+    "- 只给请求里写明必填的字段加 ?required, 而且一定带中文提示, 如 ?required(\"请填写事由\")。"
 )
 
 
@@ -177,6 +186,8 @@ def make_card(args: dict[str, Any], *, llm: LlmCall | None = None) -> dict[str, 
     request = str(args.get("request") or "").strip()
     if not request:
         return {"ok": False, "error": "request 必填: 写清要员工做什么、有哪些字段和选项、预填值、按钮的动作名"}
+    if len(request) < MIN_REQUEST_CHARS:
+        return {"ok": False, "error": "request 太短, 没说清要什么: 写清要员工做什么、有哪些字段和选项、预填值、按钮的动作名"}
     if len(request) > MAX_REQUEST_CHARS:
         return {"ok": False, "error": f"request 太长 ({len(request)} 字, 上限 {MAX_REQUEST_CHARS}), 只写卡片要的字段和预填值"}
     try:
@@ -184,6 +195,10 @@ def make_card(args: dict[str, Any], *, llm: LlmCall | None = None) -> dict[str, 
     except ValueError as e:
         return {"ok": False, "error": f"卡片没生成出来 ({e})。改用文字问员工。"}
     except Exception as e:  # noqa: BLE001 —— 网关不可达 / 超时 / SDK 没装
+        if isinstance(e, ModuleNotFoundError):
+            import sys  # noqa: PLC0415
+            logger.warning("catfish_form card: 缺 %s (python=%s pid=%d site=%s)", e.name, sys.executable, os.getpid(),
+                           [p for p in sys.path if "site-packages" in p])
         logger.warning("catfish_form card 失败: %s", e)
         return {"ok": False, "error": f"卡片没生成出来 ({type(e).__name__}: {e})。改用文字问员工。"}
     card_id = save_card(messages, request)

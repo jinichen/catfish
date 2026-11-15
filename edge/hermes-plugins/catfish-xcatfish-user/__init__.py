@@ -226,7 +226,8 @@ def register(ctx) -> None:
         # 微信 / 定时任务 / 旧版 Companion 里调就拦下, 让模型改用文字问 (card_channel_guard.py)
         try:
             ctx.register_hook("pre_tool_call", _mod.plugin_api_turn.card_capability_hook)
-            logger.info("catfish-xcatfish-user: card capability pre_tool_call hook registered ✓")
+            ctx.register_hook("pre_llm_call", _mod.plugin_api_turn.card_hint_hook)
+            logger.info("catfish-xcatfish-user: card capability pre_tool_call + hint pre_llm_call hooks registered ✓")
         except Exception as e:
             logger.warning("catfish-xcatfish-user card capability hook register fail: %s (退化为工具说明里的提示)", e)
 

@@ -75,3 +75,22 @@ def test_header_registered_on_session_then_hook_allows(monkeypatch, tmp_path):
     blocked = pat.card_capability_hook(tool_name=TOOL, args=CARD, session_id="sess-wx")
     assert blocked["action"] == "block"
     assert pat.card_capability_hook(tool_name=TOOL, args={"action": "list"}, session_id="sess-wx") is None
+
+
+def test_hint_only_for_capable_sessions(monkeypatch, tmp_path):
+    """能画卡片的会话每轮带一句「该出卡时用 card」; 微信 / 没声明的不带。"""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    assert g.hint_for(CAPS) == g.CARD_HINT
+    assert g.hint_for(None, "weixin") is None
+    monkeypatch.setenv("CATFISH_A2UI_ASSUME_CAPABLE", "1")
+    assert g.hint_for(None, "tool") == g.CARD_HINT and g.hint_for(None, "weixin") is None
+    monkeypatch.delenv("CATFISH_A2UI_ASSUME_CAPABLE")
+    import plugin_api_turn as pat
+    import plugin_ctx
+    token = plugin_ctx.CV_A2UI_CAPS.set(CAPS)
+    try:
+        pat._register("sess-hint")
+    finally:
+        plugin_ctx.CV_A2UI_CAPS.reset(token)
+    assert pat.card_hint_hook(session_id="sess-hint", platform="api_server") == {"context": g.CARD_HINT}
+    assert pat.card_hint_hook(session_id="sess-none", platform="weixin") is None

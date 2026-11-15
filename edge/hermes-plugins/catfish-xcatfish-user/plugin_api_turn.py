@@ -201,3 +201,12 @@ def card_capability_hook(*, tool_name: str = "", args: Any = None, session_id: s
     caps = _registry().lookup_a2ui(session_id) if session_id else None
     platform = guard.session_platform(session_id) if (not caps and session_id) else ""
     return guard.decide(tool_name, args, caps, platform)
+
+
+def card_hint_hook(*, session_id: str = "", platform: str = "", **_: Any):
+    """11/15 hermes pre_llm_call: 能画卡片的会话这一轮加一句「该出卡时用 catfish_form card」(card_channel_guard.CARD_HINT)。"""
+    guard = _sib("card_channel_guard")
+    caps = _registry().lookup_a2ui(session_id) if session_id else None
+    src = platform or ("" if caps else guard.session_platform(session_id))
+    hint = guard.hint_for(caps, src)
+    return {"context": hint} if hint else None
