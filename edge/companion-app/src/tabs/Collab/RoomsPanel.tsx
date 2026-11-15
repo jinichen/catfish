@@ -38,6 +38,7 @@ import DocVersions from "./DocVersions";
 import { ReviseStartButton, ReviseStartDialog, hiddenReviseStatus, useReviseDetect, type ReviseSource } from "./reviseUi";
 import { hiddenFormStatus } from "./roomForms";
 import { Confirm, InfoEditor, RetentionDialog, SearchPanel, daysLabel } from "./RoomsExtras";
+import { AskCards, XiaonianAtItem, XiaonianMemberRow, XiaonianMenu, XIAONIAN_AT, askQuestion, postText, useAskXiaonian } from "./RoomAskXiaonian";
 import { AttachButton, DeliveryLine, IssueBar, PickedChips, QuietDeliveryContext, RoomFileList, lastQuietDelivery, pickFiles, stageFiles, type PickedFile } from "./RoomsDelivery";
 import { STATE_WORD, cardStates, expectHint, latestDeadline, parseChatTask, summaryText, type ChatTask, type SingleTask } from "./roomTasks";
 import RoomTasksBoard, { tasksButtonLabel, type RoomTasksData } from "./RoomTasksBoard";
@@ -243,6 +244,7 @@ function RoomView({ roomId, notice, onNotice, onKeep }: { roomId: string; notice
   }, [hint]);
   const [helping, setHelping] = useState<AssistKind | null>(null);
   const detect = useReviseDetect(roomId, setHint);
+  const xn = useAskXiaonian(roomId);   // 11/15 「@小鲶 …」: 不发群, 回答只有自己看得到
   const [autoPost, setAutoPost] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
 
@@ -317,7 +319,8 @@ function RoomView({ roomId, notice, onNotice, onKeep }: { roomId: string; notice
   const joined = room.my_state === "joined";
   const people = members.filter((m) => m.state === "joined" || m.state === "invited");
   const waiting = notJoinedYet(members, me);
-  const asTask: ChatTask | null = joined ? parseChatTask(text, members, me) : null;
+  const asking = askQuestion(text) !== null;
+  const asTask: ChatTask | null = joined && !asking ? parseChatTask(text, members, me) : null;
 
   async function openWork(taskId: string) {
     await refreshTasks();   // 任务单和任务卡走两个邮筒, 先取一次, 免得任务单还没到
@@ -379,6 +382,13 @@ function RoomView({ roomId, notice, onNotice, onKeep }: { roomId: string; notice
   }
 
   async function send() {
+    const q = askQuestion(text);
+    if (q !== null) {
+      if (!q) { setError(`在 ${XIAONIAN_AT} 后面写上要问的`); return; }
+      xn.ask(q, replyTo, replyTo ? labelOf(members, replyTo.from) : undefined);
+      setText(""); setReplyTo(null); setError(null);
+      return;
+    }
     const body = text.trim();
     if (!body && !picked.length) return;
     const ok = await act(async () => {
@@ -481,6 +491,8 @@ function RoomView({ roomId, notice, onNotice, onKeep }: { roomId: string; notice
                       onReply={joined && m.kind === "text" ? () => setReplyTo(m) : undefined} />
             )}
           </Fragment>))}</QuietDeliveryContext.Provider>
+          <AskCards asks={xn.asks} busy={busy} onDismiss={xn.dismiss} onEdit={(a) => setText(postText(a, TEXT_MAX))}
+                    onPost={(a) => void act(() => roomSend(roomId, postText(a, TEXT_MAX), [])).then((ok) => { if (ok) xn.dismiss(a.id); })} />
           <div ref={bottom} />
         </div>
 
@@ -530,6 +542,7 @@ function RoomView({ roomId, notice, onNotice, onKeep }: { roomId: string; notice
                             border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-sm)", padding: 4,
                             display: "flex", flexDirection: "column", maxHeight: 200, overflowY: "auto", minWidth: 180,
                             color: "var(--catfish-text, inherit)" }}>
+                <XiaonianAtItem onPick={() => { setText((t) => `${XIAONIAN_AT} ${t.replace(/@$/, "").replace(/^\s*@小鲶\s*/, "")}`); setAtOpen(false); }} />
                 {people.filter((p) => p.email !== me).map((p) => (
                   <button key={p.email} type="button"
                           onClick={() => { setText((t) => `${t}${t.endsWith("@") ? "" : "@"}${p.name || p.email.split("@")[0]} `); setAtOpen(false); }}
@@ -550,7 +563,7 @@ function RoomView({ roomId, notice, onNotice, onKeep }: { roomId: string; notice
                         if (files.length) { e.preventDefault(); void addPicked(files); }
                       }}
                       onChange={(e) => { setText(e.target.value); setAtOpen(e.target.value.endsWith("@")); }}
-                      placeholder={dragOver ? "松手, 把文件加到这条消息里" : "说点什么, Enter 发送"}
+                      placeholder={dragOver ? "松手, 把文件加到这条消息里" : "说点什么, Enter 发送 · 「@小鲶 问题」问你的助手, 只有你看得到"}
                       style={{ ...inputStyle, resize: "none",
                                ...(dragOver ? { borderColor: "var(--catfish-cyan)", boxShadow: "0 0 0 2px var(--catfish-cyan)" } : {}) }} />
             {asTask && (
@@ -567,21 +580,8 @@ function RoomView({ roomId, notice, onNotice, onKeep }: { roomId: string; notice
                 每次结果自动发到群里 (群里的人都看得到; 同事接之前会看到这条, 你随时能在任务里关掉)
               </label>
             )}
-            {helpOpen && (
-              <div style={{ position: "absolute", bottom: "100%", right: 0, background: "var(--catfish-bg-elevated)", zIndex: 5,
-                            border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-sm)", padding: 4,
-                            display: "flex", flexDirection: "column", minWidth: 240, color: "var(--catfish-text, inherit)" }}>
-                {([["summary", "总结一下最近的讨论"], ["todos", "整理成待办 (谁 / 做什么 / 截止)"],
-                   ["reply", replyTo ? `起草回复 ${labelOf(members, replyTo.from)} 的那条` : "帮我起草回复 (输入框里可写要求)"]] as const).map(([k, label]) => (
-                  <button key={k} type="button" onClick={() => void askXiaonian(k)} className="room-menu-item"
-                          style={{ textAlign: "left", border: "none", background: "transparent", cursor: "pointer", padding: "6px 8px",
-                                   fontSize: 13, color: "inherit", borderRadius: 4 }}>
-                    {label}
-                  </button>
-                ))}
-                <span style={{ ...muted, padding: "4px 8px" }}>小鲶读你电脑上的群记录, 出草稿放进输入框, 发不发你定。</span>
-              </div>
-            )}
+            {helpOpen && <XiaonianMenu replyLabel={replyTo ? labelOf(members, replyTo.from) : undefined} onPick={(k) => void askXiaonian(k)}
+                                       onAsk={() => { setHelpOpen(false); setText((t) => askQuestion(t) !== null ? t : `${XIAONIAN_AT} ${t}`); }} />}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
               <span style={{ ...muted, whiteSpace: "nowrap" }} title="长文字请用邮件; 文件点 📎 或直接拖进来 (最多 5 个, 合计 200MB)">{text.length}/{TEXT_MAX}</span>
               <span style={{ display: "flex", gap: 6, whiteSpace: "nowrap", flexShrink: 0 }}>
@@ -594,7 +594,7 @@ function RoomView({ roomId, notice, onNotice, onKeep }: { roomId: string; notice
                 {asTask && (
                   <Btn kind="ghost" disabled={busy || Boolean(asTask.problem)} onClick={() => void dispatch()}>派给@的人</Btn>
                 )}
-                <Btn kind="primary" disabled={busy || (!text.trim() && !picked.length)} onClick={() => void send()}>{prep !== null ? `准备文件 ${prep}%` : busy ? "发送中…" : "发送"}</Btn>
+                <Btn kind="primary" disabled={busy || (!text.trim() && !picked.length)} onClick={() => void send()}>{prep !== null ? `准备文件 ${prep}%` : busy ? "发送中…" : asking ? "问小鲶" : "发送"}</Btn>
               </span>
             </div>
           </div>
@@ -604,6 +604,7 @@ function RoomView({ roomId, notice, onNotice, onKeep }: { roomId: string; notice
       {showMembers && <div style={{ display: "flex", flexDirection: "column", gap: 6, borderLeft: "1px solid var(--catfish-border)", paddingLeft: 10,
                                    minHeight: 0, overflowY: "auto" }}>
         <strong style={{ fontSize: 13 }}>成员 ({room.joined}/{room.members})</strong>
+        {joined && <XiaonianMemberRow onAsk={() => setText((t) => askQuestion(t) !== null ? t : `${XIAONIAN_AT} ${t}`)} />}
         <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 360, overflowY: "auto" }}>
           {members.map((m) => (
             <div key={m.email} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 4 }}>

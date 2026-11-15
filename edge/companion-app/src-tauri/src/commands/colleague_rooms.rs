@@ -37,7 +37,7 @@ pub async fn colleague_room_call(action: String, params: Option<Value>) -> Resul
 /// 第三步: 小鲶总结 / 整理待办 / 起草回复 (要调大模型)。跟会议纪要一样, 这里注入员工自己的登录令牌和网关地址,
 /// tool-bridge 用员工身份调模型; 只回草稿, 发不发员工在界面上点。
 const ASSIST_TIMEOUT: Duration = Duration::from_secs(180);
-const ASSIST_KINDS: &[&str] = &["summary", "todos", "reply"];
+const ASSIST_KINDS: &[&str] = &["summary", "todos", "reply", "ask"];   // 11/15 ask = 群输入框里「@小鲶 …」, 回答只给自己看
 
 #[tauri::command]
 pub async fn colleague_room_assist(
