@@ -187,6 +187,92 @@ def lower_priority() -> None:
         pass
 
 
+# ── 句子时间戳 (11/16) ──────────────────────────────────────────────
+#
+# FunASR 1.4.16 的 sentence_info 会越往后越早: 一场 18 分钟的会, 第 400 秒说的「你们都写成 CBT…」被标在 361 秒,
+# 两个多小时的会后面差好几分钟 —— 会议页点 ▶ 听那一句, 放的是一两分钟前的话 (鸿波 11/16「文字滞后声音」)。
+# 查下来逐字时间戳 (result["timestamp"]) 是准的 (第 1616 个字 400.9 秒), 字数也跟它一一对得上; 错在它拼句子那一步
+# (timestamp_sentence 的回退路径)。说话人也是按那个错的句子时间分的。
+# 所以: 截下它内部的说话人分段 (distribute_spk 的入参), 自己按标点切句子、句子起止取首尾字的时间, 再按重叠分说话人。
+# 字和时间戳对不上 (少见的字符) 就退回它原来的 sentence_info。
+
+_TOKEN_RE = None
+SENTENCE_PUNCT = set("，。？！、；：,.?!;:…")
+
+
+def _tokens(text: str) -> list[tuple[int, int]]:
+    """跟 Paraformer 逐字时间戳一一对应的单位: 一个汉字 / 一个英文词 / 一串数字。返回 (起, 止) 下标。"""
+    global _TOKEN_RE
+    import re
+
+    if _TOKEN_RE is None:
+        _TOKEN_RE = re.compile(r"[\u4e00-\u9fff]|[A-Za-z]+(?:'[A-Za-z]+)?|\d+")
+    return [m.span() for m in _TOKEN_RE.finditer(text)]
+
+
+def sentences_from_tokens(text: str, timestamps: list, sd: list | None) -> list[dict] | None:
+    """按标点切句子, 起止取句中首尾字的时间 (毫秒 → 秒); sd = 说话人分段 [(起秒, 止秒, spk)], 按重叠最多分。
+    字数跟时间戳个数对不上 → None (调用方退回 FunASR 的 sentence_info)。"""
+    spans = _tokens(text)
+    if not spans or len(spans) != len(timestamps):
+        return None
+    out, first, last_end = [], 0, 0
+    for i, (a, b) in enumerate(spans):
+        nxt = spans[i + 1][0] if i + 1 < len(spans) else len(text)
+        tail = text[b:nxt]
+        if any(ch in SENTENCE_PUNCT for ch in tail) or i + 1 == len(spans):
+            body = text[last_end:b] + "".join(ch for ch in tail if ch in SENTENCE_PUNCT)[:1]
+            seg = {"start": round(timestamps[first][0] / 1000, 2), "end": round(timestamps[i][1] / 1000, 2),
+                   "text": body.strip(), "spk": 0}
+            if seg["text"]:
+                out.append(seg)
+            first, last_end = i + 1, nxt
+    if sd:
+        for seg in out:
+            best, best_ov = 0, 0.0
+            for st, ed, spk in sd:
+                ov = max(0.0, min(seg["end"], ed) - max(seg["start"], st))
+                if ov > best_ov:
+                    best, best_ov = int(spk), ov
+            seg["spk"] = best
+    return out
+
+
+class SpeakerTap:
+    """截 FunASR 内部的说话人分段 (auto_model.distribute_spk 的第二个参数), 不改它别的行为。"""
+
+    def __init__(self) -> None:
+        self.segments: list | None = None
+
+    def __enter__(self):
+        from funasr.auto import auto_model as am
+
+        self._am, self._orig = am, am.distribute_spk
+
+        def tap(sentence_list, sd_time_list):
+            self.segments = [(float(a), float(b), int(c)) for a, b, c in sd_time_list]
+            return self._orig(sentence_list, sd_time_list)
+
+        am.distribute_spk = tap
+        return self
+
+    def __exit__(self, *exc):
+        self._am.distribute_spk = self._orig
+        return False
+
+
+def segments_of(result: dict, sd: list | None = None) -> list[dict]:
+    """一次识别的结果 → 句子 [{spk, start, end, text}]: 优先自己按逐字时间戳切, 对不上再用 FunASR 的 sentence_info。"""
+    ts = result.get("timestamp")
+    text = result.get("text") or ""
+    if isinstance(ts, list) and ts and text:
+        rebuilt = sentences_from_tokens(text, ts, sd)
+        if rebuilt is not None:
+            return rebuilt
+        sys.stderr.write(f"[meeting_asr] 逐字时间戳对不上 ({len(_tokens(text))} 字 / {len(ts)} 个时间戳), 用 FunASR 的句子时间\n")
+    return to_segments(result)
+
+
 def to_segments(result: dict) -> list[dict]:
     out = []
     for s in result.get("sentence_info") or []:
@@ -280,10 +366,13 @@ def main(argv: list[str] | None = None) -> int:
                 local = max(1, min(args.local_speakers or 1, args.speakers))
                 remote = max(1, args.speakers - local)
                 emit("phase", phase="recognizing", duration_secs=round(duration, 1))
-                mic_res = model.generate(input=str(merged), preset_spk_num=local, **base_kw)[0]
-                sys_res = model.generate(input=str(sys_wav), preset_spk_num=remote, **base_kw)[0]
-                mic_segs, dropped = drop_echo(to_segments(mic_res), to_segments(sys_res))
-                segs = merge_tracks(mic_segs, to_segments(sys_res))
+                with SpeakerTap() as tap_mic:
+                    mic_res = model.generate(input=str(merged), preset_spk_num=local, **base_kw)[0]
+                with SpeakerTap() as tap_sys:
+                    sys_res = model.generate(input=str(sys_wav), preset_spk_num=remote, **base_kw)[0]
+                sys_segs = segments_of(sys_res, tap_sys.segments)
+                mic_segs, dropped = drop_echo(segments_of(mic_res, tap_mic.segments), sys_segs)
+                segs = merge_tracks(mic_segs, sys_segs)
                 text = "".join(s["text"] for s in segs)
                 tracks_info = {"local_speakers": local, "remote_speakers": remote, "echo_dropped": dropped}
             else:
@@ -291,14 +380,16 @@ def main(argv: list[str] | None = None) -> int:
                 kw = dict(base_kw)
                 if with_spk:
                     kw["preset_spk_num"] = args.speakers
-                result = model.generate(input=str(merged), **kw)[0]
-                segs = to_segments(result)
+                with SpeakerTap() as tap:
+                    result = model.generate(input=str(merged), **kw)[0]
+                segs = segments_of(result, tap.segments if with_spk else None)
                 text = (result.get("text") or "").strip() or "".join(s["text"] for s in segs)
 
         emit("phase", phase="writing")
         doc = {
             "text": text,
             "version": 1,
+            "sentence_times": "tokens",   # 11/16 起: 句子时间按逐字时间戳重切 (之前的转写越往后越早)
             "engine": {"name": "funasr", "asr": "seaco-paraformer-large", "spk": "cam++"},
             "duration_secs": round(duration, 1),
             "speakers": len({s["spk"] for s in segs}) if with_spk else 0,

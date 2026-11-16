@@ -114,13 +114,8 @@ def recognize(model, audio, hotwords: str) -> list[dict]:
     results = model.generate(input=audio, **kw)
     if not results:   # 11/16: 一整段都没人说话, VAD 一句都没切出来时 FunASR 返回空列表 (原来 [0] 直接 IndexError, 整场没了实时文字)
         return []
-    res = results[0]
-    out = []
-    for s in res.get("sentence_info") or []:
-        text = (s.get("text") or "").strip()
-        if text:
-            out.append({"start": s.get("start", 0) / 1000, "end": s.get("end", 0) / 1000, "text": text})
-    return out
+    # 句子时间按逐字时间戳重切 (meeting_asr.segments_of; FunASR 自己拼的句子时间会往前偏)
+    return [{"start": s["start"], "end": s["end"], "text": s["text"]} for s in base.segments_of(results[0]) if s["text"].strip()]
 
 
 class Live:
