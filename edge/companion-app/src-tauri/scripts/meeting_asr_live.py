@@ -40,7 +40,8 @@ MAX_WINDOW = 90.0      # 一次最多认 90 秒, 落后了分几口追
 LONE_SENTENCE = 45.0   # 窗口里只有一句、已经 45 秒: 这句也提交 (一个人一直说没停顿)
 SILENCE_SKIP = 30.0    # 30 秒都没认出字: 跳过这段静音
 LAG_WARN = 60.0
-TAIL_GUARD = 0.3       # 文件最后不到一秒可能还没 flush 完, 留一点不认
+TAIL_GUARD = 0.3
+MAX_FAILURES = 5       # 连续这么多段都认不了才放弃 (偶尔一段出错就跳过它)       # 文件最后不到一秒可能还没 flush 完, 留一点不认
 
 
 class Track:
@@ -110,7 +111,10 @@ def recognize(model, audio, hotwords: str) -> list[dict]:
     kw = {"batch_size_s": 300, "sentence_timestamp": True}
     if hotwords.strip():
         kw["hotword"] = hotwords.strip()
-    res = model.generate(input=audio, **kw)[0]
+    results = model.generate(input=audio, **kw)
+    if not results:   # 11/16: 一整段都没人说话, VAD 一句都没切出来时 FunASR 返回空列表 (原来 [0] 直接 IndexError, 整场没了实时文字)
+        return []
+    res = results[0]
     out = []
     for s in res.get("sentence_info") or []:
         text = (s.get("text") or "").strip()
@@ -129,6 +133,7 @@ class Live:
         self.lines = 0
         self.stopping = threading.Event()
         self.load_secs = 0.0
+        self.failures = 0   # 连着认失败几次 (偶尔一次跳过那段; 一直失败说明真坏了, 报错退出)
 
     def state(self, status: str, **kw) -> None:
         lag = max((t.length() - t.cursor for t in self.tracks if t.files()), default=0.0)
@@ -157,7 +162,17 @@ class Live:
                     break
                 window = min(avail, MAX_WINDOW)
                 catching_up = avail > MAX_WINDOW
-                sents = recognize(model, t.read(t.cursor, t.cursor + window), self.args.hotwords)
+                try:
+                    sents = recognize(model, t.read(t.cursor, t.cursor + window), self.args.hotwords)
+                    self.failures = 0
+                except Exception as e:  # noqa: BLE001 — 一段认不了不能让整场实时文字停掉: 跳过这段, 接着认后面的
+                    self.failures += 1
+                    base.emit("warn", message=f"{type(e).__name__}: {e}", skipped_secs=round(window, 1))
+                    if self.failures >= MAX_FAILURES:
+                        raise
+                    t.cursor += window
+                    t.partial = ""
+                    continue
                 keep, advance, partial = split_commit(sents, window, final and not catching_up)
                 if advance is None and catching_up:   # 90 秒里一句都断不出来: 整口提交, 不然永远追不上
                     keep, advance, partial = split_commit(sents, window, True)

@@ -25,3 +25,36 @@ def test_静音_30秒以上跳过_收尾全提交():
     assert keep == [] and adv == SILENCE_SKIP + 3            # 留 2 秒, 别把刚开口的半个字跳过去
     keep, adv, partial = split_commit([s(0, 2, "甲。"), s(2.5, 4, "乙")], 4.2, True)
     assert len(keep) == 2 and adv == 4.2 and partial == ""
+
+
+class _EmptyModel:
+    """FunASR 对一整段静音 (VAD 一句没切出来) 返回空列表 —— 11/16 真会议里实时转写就是这样崩的。"""
+    def generate(self, input, **kw):
+        return []
+
+
+def test_空结果不崩_当作这段没人说话():
+    from meeting_asr_live import recognize
+    assert recognize(_EmptyModel(), [0.0] * 16000, "") == []
+
+
+def test_一段认失败就跳过_接着认后面的(tmp_path):
+    import argparse
+    import meeting_asr_live as L
+
+    class Flaky:
+        calls = 0
+        def generate(self, input, **kw):
+            Flaky.calls += 1
+            if Flaky.calls == 1:
+                raise RuntimeError("坏了一段")
+            return [{"sentence_info": [{"start": 0, "end": 1000, "text": "后面照常"}]}]
+
+    live = L.Live(argparse.Namespace(audio_dir=tmp_path, out_dir=tmp_path, hotwords="", models=tmp_path, step=1, threads=1))
+    tr = L.Track("mic", tmp_path)
+    tr.files = lambda: [("x", 16000, 16000 * 100)]       # 假装录了 100 秒
+    tr.read = lambda a, b: [0.0]
+    live.tracks = [tr]
+    live.step(Flaky(), final=True)
+    rows = (tmp_path / "live_transcript.jsonl").read_text(encoding="utf-8")
+    assert "后面照常" in rows and live.failures == 0 and tr.cursor >= 99
