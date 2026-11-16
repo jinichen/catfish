@@ -161,3 +161,8 @@ def lift_chart_updates(base: list[dict[str, Any]], updates: list[dict[str, Any]]
                         "updateDataModel": {"surfaceId": surface, "path": root, "value": _pointer_get(model, root)}})
     return out
 
+
+def _binding_paths(messages: list[dict[str, Any]]) -> list[str]:
+    """卡上绑在数据上的图表 (VegaChart($/chart)) 的数据路径。"""
+    return [ref for c in _components(messages) if c.get("component") == "VegaChart" for ref in [_binding(c.get("spec"))] if ref]
+

@@ -62,24 +62,96 @@ export function readTheme(el: Element | null = typeof document !== "undefined" ?
   };
 }
 
-/** 上游 transformSpec 的做法: 默认样式垫在模型写的 config 下面; 宽度跟容器, 高度用 height (默认 290)。不改原对象。 */
+/** 文字 / 轴线 / 网格 / 背景的颜色由鲶鱼主题定 (深浅色要跟着变); 模型写死的这些颜色去掉。
+ *  11/16 真模型评估: 专员写了一套深色专用的颜色 (标题、刻度字接近白色), 浅色模式下几乎看不见。数据的颜色 (mark / range) 保留。 */
+const THEME_COLOR_KEYS = new Set(["labelColor", "titleColor", "domainColor", "tickColor", "gridColor", "background", "subtitleColor"]);
+
+function stripThemeColors(node: unknown, inTitle = false): void {
+  if (Array.isArray(node)) {
+    node.forEach((n) => stripThemeColors(n, inTitle));
+    return;
+  }
+  if (!isObj(node)) return;
+  for (const k of Object.keys(node)) {
+    if (THEME_COLOR_KEYS.has(k) || (inTitle && k === "color")) {
+      delete node[k];
+      continue;
+    }
+    stripThemeColors(node[k], k === "title");
+  }
+}
+
+const ORDER_CHANNELS = ["x", "y", "color", "theta", "row", "column"];
+
+/** 每个编码 (顶层 + 各图层) 里的 x / y / color …, 交给 fn */
+function eachEncoding(node: unknown, fn: (enc: Obj) => void): void {
+  if (Array.isArray(node)) {
+    node.forEach((n) => eachEncoding(n, fn));
+    return;
+  }
+  if (!isObj(node)) return;
+  if (isObj(node.encoding)) fn(node.encoding);
+  for (const k of ["layer", "spec", "concat", "hconcat", "vconcat"]) if (k in node) eachEncoding(node[k], fn);
+}
+
+/** 分类轴按数据原来的顺序 (Vega-Lite 默认按字母排: 周一 周三 周二…、10月 11月 7月…, 11/16 真模型评估三张图都这样)。
+ *  某一层写了顺序 (sort: [...]) 的, 同一字段别的层也用它; 都没写的用 null (= 数据顺序)。 */
+function keepDataOrder(spec: Obj): void {
+  const explicit = new Map<string, unknown>();
+  eachEncoding(spec, (enc) => {
+    for (const ch of ORDER_CHANNELS) {
+      const d = enc[ch];
+      if (isObj(d) && typeof d.field === "string" && d.sort !== undefined) explicit.set(`${ch}:${d.field}`, d.sort);
+    }
+  });
+  eachEncoding(spec, (enc) => {
+    for (const ch of ORDER_CHANNELS) {
+      const d = enc[ch];
+      if (!isObj(d) || typeof d.field !== "string" || d.sort !== undefined) continue;
+      if (d.type !== "nominal" && d.type !== "ordinal") continue;
+      const same = explicit.get(`${ch}:${d.field}`);
+      d.sort = same !== undefined ? structuredClone(same) : null;
+    }
+  });
+}
+
+/** 数值标签 (text 标记) 的字色跟主题走: 模型常写成浅色, 浅色模式下看不见 */
+function themeTextMarks(node: unknown): void {
+  if (Array.isArray(node)) {
+    node.forEach(themeTextMarks);
+    return;
+  }
+  if (!isObj(node)) return;
+  const m = node.mark;
+  if (isObj(m) && m.type === "text") {
+    delete m.color;
+    delete m.fill;
+  }
+  for (const k of ["layer", "spec", "concat", "hconcat", "vconcat"]) if (k in node) themeTextMarks(node[k]);
+}
+
+/** 上游 transformSpec 的做法: 默认样式垫在模型写的 config 下面 (颜色除外, 颜色以鲶鱼主题为准); 宽度跟容器, 高度用 height (默认 290)。不改原对象。 */
 export function prepareSpec(spec: Obj, width: number, height: number, theme: ChartTheme): Obj {
   const out = structuredClone(spec) as Obj;
+  stripThemeColors(out);
+  keepDataOrder(out);
+  themeTextMarks(out);
   const cfg = isObj(out.config) ? out.config : {};
   const sub = (k: string) => (isObj(cfg[k]) ? (cfg[k] as Obj) : {});
   out.config = {
-    background: "transparent",
     font: "-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif",
     range: { category: theme.palette },
     // 单一系列 (没按类别上色) 的柱子 / 线 / 面积也用鲶鱼主色, 不是 Vega 默认的蓝
     mark: { color: theme.palette[0] },
     ...cfg,
+    background: "transparent",
     // 横轴: 「周一」「7月」这种短中文标签 Vega 默认会竖过来, 改成横着放, 挤不下的自己隐掉几个
     axisX: { labelAngle: 0, labelOverlap: true, ...sub("axisX") },
-    axis: { domainColor: theme.grid, gridColor: theme.grid, tickColor: theme.grid, labelColor: theme.muted,
-            titleColor: theme.text, labelFontSize: 11, titleFontSize: 12, ...sub("axis") },
-    legend: { labelColor: theme.muted, titleColor: theme.text, labelFontSize: 11, titleFontSize: 12, ...sub("legend") },
-    title: { color: theme.text, fontSize: 13, ...sub("title") },
+    axis: { labelFontSize: 11, titleFontSize: 12, ...sub("axis"),
+            domainColor: theme.grid, gridColor: theme.grid, tickColor: theme.grid, labelColor: theme.muted, titleColor: theme.text },
+    legend: { labelFontSize: 11, titleFontSize: 12, ...sub("legend"), labelColor: theme.muted, titleColor: theme.text },
+    title: { fontSize: 13, ...sub("title"), color: theme.text, subtitleColor: theme.muted },
+    text: { color: theme.text, ...sub("text") },
     view: { stroke: "transparent", ...sub("view") },
   };
   const faceted = "facet" in out || "row" in out || "column" in out || "repeat" in out || "concat" in out

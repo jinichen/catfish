@@ -108,3 +108,39 @@ def test_card_update_nested_chart_path_is_sent_as_whole_chart(tmp_path, monkeypa
     assert ac.update_card({"card_id": cid, "data": {"/chart/data/values": [{"day": "周三", "n": 7}]}})["ok"]
     last = ac.load_card(cid)["messages"][-1]["updateDataModel"]
     assert last["path"] == "/chart" and last["value"]["data"]["values"] == [{"day": "周三", "n": 7}]
+
+
+def test_card_returns_data_paths_and_update_rejects_unknown_path(tmp_path, monkeypatch):
+    """11/16 真模型评估: 主小鲶猜了个 /bars/2/value 去改图表, 原来照单全收、说「已更新」, 图其实没变。"""
+    pytest.importorskip("a2ui")
+    from catfish_tool_bridge import a2ui_card as ac
+
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
+    card = ('<a2ui>\nroot = Card(Column([VegaChart($/chart), Text($/note)]))\n$/chart = ' + json.dumps(BAR, ensure_ascii=False)
+            + '\n$/note = "周二最多"\n</a2ui>')
+    msgs = ac.compile_reply(card)
+    paths = ac.data_paths(msgs)
+    assert "/chart/data/values = 图表数据 2 行 (字段 day, n)" in paths and '/note = "周二最多"' in paths
+    cid = ac.save_card(msgs, "画一张本周邮件量")
+    r = ac.update_card({"card_id": cid, "data": {"/bars/2/value": 60}})
+    assert not r["ok"] and "没有数据路径 /bars/2/value" in r["error"] and "/chart/data/values" in r["error"]
+    assert ac.load_card(cid).get("revision", 0) == 0
+    assert ac.update_card({"card_id": cid, "data": {"/note": "周三最多", "/chart/data/values/2": {"day": "周三", "n": 40}}})["ok"]
+    assert not ac.update_card({"card_id": cid, "data": {"/chart/data/values/9": {"day": "x", "n": 1}}})["ok"]   # 列表只能接在末尾
+
+
+def test_card_update_reminds_to_update_summary(tmp_path, monkeypatch):
+    """11/16 第二轮评估: 图更新了, 图下「周三至周五待补」那句没跟着改 —— 结论绑到 $/summary, 改图时提醒一起改。"""
+    pytest.importorskip("a2ui")
+    from catfish_tool_bridge import a2ui_card as ac
+
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
+    card = ('<a2ui>\nroot = Card(Column([VegaChart($/chart), Text($/summary)]))\n$/chart = ' + json.dumps(BAR, ensure_ascii=False)
+            + '\n$/summary = "周二最多"\n</a2ui>')
+    msgs = ac.compile_reply(card)
+    assert '/summary = "周二最多"' in ac.data_paths(msgs)
+    cid = ac.save_card(msgs, "画一张本周邮件量")
+    r = ac.update_card({"card_id": cid, "data": {"/chart/data/values": [{"day": "周三", "n": 40}]}})
+    assert r["ok"] and "结论也要一起改" in r["note"]
+    r = ac.update_card({"card_id": cid, "data": {"/chart/data/values": [{"day": "周三", "n": 41}], "/summary": "周三最多"}})
+    assert r["ok"] and "结论" not in r["note"]

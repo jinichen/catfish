@@ -42,3 +42,38 @@ describe("prepareSpec", () => {
     expect(asSpec("不是 JSON")).toBe("不是 JSON");
   });
 });
+
+describe("prepareSpec 颜色以鲶鱼主题为准", () => {
+  it("模型写死的深色专用颜色 (标题 / 轴字 / 背景) 去掉, 数据颜色留着", () => {
+    const spec = { ...BAR, background: "#111", title: { text: "进度", color: "#e8eaed" },
+                   config: { axis: { labelColor: "#a0a4ab", gridColor: "#3a3f47", labelFontSize: 14 } },
+                   encoding: { ...BAR.encoding, x: { ...BAR.encoding.x, axis: { title: "月", labelColor: "#fff" } } },
+                   layer: [{ mark: { type: "line", color: "#4fc3f7" } }] };
+    const out = prepareSpec(spec, 300, 200, THEME) as Record<string, any>;
+    expect(out).not.toHaveProperty("background");
+    expect(out.title).toEqual({ text: "进度" });
+    expect(out.config.axis).toMatchObject({ labelColor: "#666", gridColor: "#ddd", labelFontSize: 14 });
+    expect(out.config.background).toBe("transparent");
+    expect(out.encoding.x.axis).toEqual({ title: "月" });
+    expect(out.layer[0].mark.color).toBe("#4fc3f7");
+  });
+});
+
+describe("prepareSpec 顺序和数值标签", () => {
+  it("分类轴按数据顺序; 某层写了顺序, 同字段的别的层跟着用; 数值字是主题色", () => {
+    const months = ["7月", "8月", "9月", "10月"];
+    const spec = { layer: [
+      { mark: "line", encoding: { x: { field: "m", type: "ordinal", sort: months }, y: { field: "p", type: "quantitative" } } },
+      { mark: { type: "text", color: "#e8eaed", dy: -8 }, encoding: { x: { field: "m", type: "ordinal" }, text: { field: "p" } } },
+    ] };
+    const out = prepareSpec(spec, 300, 200, THEME) as Record<string, any>;
+    expect(out.layer[1].encoding.x.sort).toEqual(months);
+    expect(out.layer[1].mark).toEqual({ type: "text", dy: -8 });
+    expect(out.config.text.color).toBe("#111");
+    const bar = prepareSpec(BAR, 300, 200, THEME) as Record<string, any>;
+    expect(bar.encoding.x.sort).toBeNull();
+    expect(bar.encoding.y).not.toHaveProperty("sort");          // 数值轴不动
+    expect((prepareSpec({ ...BAR, encoding: { ...BAR.encoding, x: { ...BAR.encoding.x, sort: "-y" } } }, 300, 200, THEME) as any)
+      .encoding.x.sort).toBe("-y");                               // 模型写了排序就照它
+  });
+});

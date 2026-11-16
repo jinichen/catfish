@@ -83,7 +83,7 @@ _ENV_NOTES = (
     # 11/16 数据图表 (上游官方扩展 VegaChart; a2ui_chart.py 校验)
     "- 数据图表用 VegaChart(Vega-Lite 对象): 只用请求里给的数, 数据写进 data.values (最多 500 行), 不写 url; "
     "柱状 mark \"bar\", 折线 \"line\", 面积 \"area\", 饼图 mark \"arc\" + encoding.theta; 字段名用英文, 轴 / 图例标题 (title) 写中文; "
-    "图下面一行 Text 写一句结论。之后还要更新数据的图 (进度、每天的数), 把整份 spec 放进数据 $/chart, 写 VegaChart($/chart)。"
+    "图下面一行 Text 写一句结论。不写颜色、背景、字体、宽高 (config / background / color / width), 样式和深浅色由鲶鱼统一定。分类按请求给的顺序排 (类别轴写 sort: null)。要在柱子 / 点上标数值, 用 layer 叠一层 mark \"text\" (encoding.text), 不要给柱子本身加 text。之后还要更新数据的图 (进度、每天的数), 把整份 spec 放进数据 $/chart, 写 VegaChart($/chart); 图下那句结论也放进数据 $/summary, 写 Text($/summary), 好跟着数一起改。"
 )
 
 
@@ -194,6 +194,67 @@ def load_card(card_id: str) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+_MISSING = object()
+
+
+def _lookup(model: Any, path: str) -> Any:
+    cur = model
+    for part in [p.replace("~1", "/").replace("~0", "~") for p in path.split("/") if p]:
+        if isinstance(cur, dict) and part in cur:
+            cur = cur[part]
+        elif isinstance(cur, list) and part.isdigit() and int(part) < len(cur):
+            cur = cur[int(part)]
+        else:
+            return _MISSING
+    return cur
+
+
+def _writable(model: Any, path: str) -> bool:
+    """card_update 只能改已有的数据, 或往已有的对象 / 列表里加一项 (列表只能接在末尾)。
+    11/16 真模型评估: 主小鲶猜了个不存在的 /bars/2/value 去改图表, 原来照单全收、说「已更新」, 图其实没变。"""
+    if _lookup(model, path) is not _MISSING:
+        return True
+    parent_path, _, last = path.rstrip("/").rpartition("/")
+    parent = _lookup(model, parent_path or "/")
+    if isinstance(parent, dict):
+        return True
+    return isinstance(parent, list) and last.isdigit() and int(last) == len(parent)
+
+
+def data_paths(messages: list[dict[str, Any]], limit: int = 15) -> str:
+    """这张卡的数据长什么样 (给主小鲶以后 card_update 用): 一行一个路径。图表只给它的数据那一项。"""
+    model = a2ui_chart._data_model(messages)
+    out: list[str] = []
+
+    def fields(rows: list) -> str:
+        return ", ".join(sorted({k for r in rows if isinstance(r, dict) for k in r}))[:80]
+
+    def walk(node: Any, path: str) -> None:
+        if len(out) >= limit:
+            return
+        if isinstance(node, dict) and ("mark" in node or "layer" in node or "encoding" in node):
+            layers = [(path, node)] + [(f"{path}/layer/{i}", ly) for i, ly in enumerate(node.get("layer") or []) if isinstance(ly, dict)]
+            shown = False
+            for lp, ly in layers:
+                vals = (ly.get("data") or {}).get("values") if isinstance(ly.get("data"), dict) else None
+                if isinstance(vals, list):
+                    out.append(f"{lp}/data/values = 图表数据 {len(vals)} 行 (字段 {fields(vals)}); 改数据就把这一项整个换掉")
+                    shown = True
+            if not shown:
+                out.append(f"{path} = 图表 (整份 Vega-Lite, 改就整份换掉)")
+            return
+        if isinstance(node, dict):
+            for k, v in node.items():
+                walk(v, f"{path}/{k}")
+        elif isinstance(node, list) and node and all(isinstance(x, dict) for x in node):
+            out.append(f"{path} = {len(node)} 行 (每行字段 {fields(node)}; 改第 i 行用 {path}/i/字段, 加一行用 {path}/{len(node)})")
+        else:
+            out.append(f"{path} = {json.dumps(node, ensure_ascii=False)[:40]}")
+
+    walk(model, "")
+    return "\n".join(out)
+
+
 def update_card(args: dict[str, Any]) -> dict[str, Any]:
     """catfish_form action=card_update: 改一张已经出过的卡片里的数据 (进度、状态、预填值)。
 
@@ -213,10 +274,14 @@ def update_card(args: dict[str, Any]) -> dict[str, Any]:
         if not surface:
             raise ValueError("这张卡片里没有 createSurface")
         updates = []
+        model = a2ui_chart._data_model(base)
         for raw_path, value in data.items():
             path = str(raw_path).strip()
             if not path.startswith("/"):
                 raise ValueError(f"数据路径要以 / 开头: {path!r}")
+            if not _writable(model, path):
+                raise ValueError(f"这张卡没有数据路径 {path}。它现有的数据:\n{data_paths(base) or '(没有)'}")
+            a2ui_chart._pointer_set(model, path, json.loads(json.dumps(value)))
             updates.append({"version": "1.0", "updateDataModel": {"surfaceId": surface, "path": path, "value": value}})
         state = _processor().create_state()
         state.apply(base)
@@ -235,7 +300,9 @@ def update_card(args: dict[str, Any]) -> dict[str, Any]:
     tmp.replace(path)
     logger.info("catfish_form card_update: %s → 第 %d 版 (%d 个路径)", card_id, body["revision"], len(updates))
     return {"ok": True, "card_id": card_id, "revision": body["revision"],
-            "note": "对话里那张卡片已经更新了, 不用再出一张新的, 回复里也不用复述。"}
+            "note": "对话里那张卡片已经更新了, 不用再出一张新的, 回复里也不用复述。"
+                    + (" 卡上有 /summary 结论的话, 数变了结论也要一起改。" if a2ui_chart._binding_paths(base) and _lookup(a2ui_chart._data_model(base), "/summary") is not _MISSING
+                       and "/summary" not in data else "")}
 
 
 # ── 工具入口 ─────────────────────────────────────────────────────────────
@@ -276,5 +343,9 @@ def make_card(args: dict[str, Any], *, llm: LlmCall | None = None) -> dict[str, 
         return {"ok": False, "error": f"卡片没生成出来 ({type(e).__name__}: {e})。改用文字问员工。"}
     card_id = save_card(messages, request)
     logger.info("catfish_form card: %s (重试 %d 次)", card_id, retries)
-    return {"ok": True, "card_id": card_id,
-            "note": "卡片已经显示在员工的对话里。你的回复只用一句话说要他填什么, 不要复述卡片内容、不要写卡片代码。"}
+    out: dict[str, Any] = {"ok": True, "card_id": card_id,
+                           "note": "卡片已经显示在员工的对话里。你的回复只用一句话说要他填什么, 不要复述卡片内容、不要写卡片代码。"}
+    paths = data_paths(messages)
+    if paths:   # 11/16: 以后要 card_update 就照这里的路径写, 不要猜
+        out["data_paths"] = paths
+    return out
