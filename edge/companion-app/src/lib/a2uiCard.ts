@@ -27,7 +27,8 @@ export const CARD_BASIC_COMPONENTS = [
   "Text", "Row", "Column", "List", "Card", "Divider",
   "Button", "TextField", "CheckBox", "ChoicePicker", "Slider", "DateTimeInput",
 ] as const;
-export const CARD_CUSTOM_COMPONENTS = ["EmailCard", "EventCard", "TodoItem", "FileCard"] as const;
+/** 鲶鱼自定义 4 个 + 上游官方扩展的 VegaChart (11/16 数据图表, tabs/Chat/VegaChart.tsx) */
+export const CARD_CUSTOM_COMPONENTS = ["EmailCard", "EventCard", "TodoItem", "FileCard", "VegaChart"] as const;
 export const CARD_COMPONENTS = [...CARD_BASIC_COMPONENTS, ...CARD_CUSTOM_COMPONENTS] as const;
 export const CARD_BLOCKED_FUNCTIONS = ["openUrl"] as const;
 /** 鲶鱼目录的 id (tool-bridge a2ui_catalog.CATALOG_ID; SDK 编出来的 createSurface 写这个) */

@@ -15,6 +15,7 @@ import { DynamicBooleanSchema, DynamicStringListSchema, DynamicStringSchema } fr
 
 import { openFile } from "../../lib/tauri_app";
 import { useUIStore } from "../../store/ui";
+import { VegaChart } from "./VegaChart";   // 11/16 数据图表 (上游官方扩展 vegachart)
 
 const weight = z.number().optional();
 
@@ -141,4 +142,4 @@ const FileCard = createComponentImplementation(FileCardApi, ({ props }) => {
 });
 
 /** 按名字给 A2uiCard.tsx 拼目录用 */
-export const CATFISH_CARD_COMPONENTS = [EmailCard, EventCard, TodoItem, FileCard];
+export const CATFISH_CARD_COMPONENTS = [EmailCard, EventCard, TodoItem, FileCard, VegaChart];

@@ -670,6 +670,30 @@
     "component",
     "path"
    ]
+  },
+  "VegaChart": {
+   "type": "object",
+   "description": "Displays a Vega-Lite chart (bar / line / area / pie / point). Data must be inline in data.values, using only numbers the request gives; never a URL, never invented numbers. Put a one-line Text conclusion next to it.",
+   "properties": {
+    "component": {
+     "const": "VegaChart"
+    },
+    "spec": {
+     "$ref": "common_types.json#/$defs/DynamicValue",
+     "description": "The Vega-Lite spec to render as a JSON object, or a data binding to one."
+    },
+    "height": {
+     "$ref": "common_types.json#/$defs/DynamicNumber",
+     "description": "Optional height of the chart in pixels. Defaults to 290."
+    },
+    "weight": {
+     "$ref": "#/$defs/Weight"
+    }
+   },
+   "required": [
+    "component",
+    "spec"
+   ]
   }
  },
  "functions": {
@@ -1175,6 +1199,9 @@
     },
     {
      "$ref": "#/components/FileCard"
+    },
+    {
+     "$ref": "#/components/VegaChart"
     }
    ],
    "discriminator": {

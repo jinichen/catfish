@@ -36,6 +36,7 @@ from typing import Any, Awaitable, Callable
 
 logger = logging.getLogger("catfish-tool-bridge")
 
+from . import a2ui_chart  # noqa: E402 — 11/16 图表校验
 from .a2ui_catalog import CATALOG_ID, CATALOG_PATH, FUNCTIONS as CARD_FUNCTIONS, component_names  # noqa: E402
 
 #: 卡片能用的组件 (鲶鱼目录: 基础组件 12 个 + 邮件卡 / 日程卡 / 待办项 / 文件卡) —— 跟 companion-app/src/lib/a2uiCard.ts
@@ -78,7 +79,11 @@ _ENV_NOTES = (
     "Button(Text(\"同意\"), variant=\"primary\", action=Event(\"approve\", {f: $/f}))。\n"
     "- 同类条目超过 3 条 (一串待办 / 邮件 / 名单) 用 List(_template($/items, 行组件)), 条目数据放 $/items, 行组件里用 $字段 相对路径。\n"
     "- 打分 / 比例用 Slider(标签, 最小, 最大, $/f/字段)。\n"
-    "- EmailCard / EventCard / FileCard 只用请求里给的邮件编号、日程、本机路径, 不许编; 请求没给就不用这些组件。"
+    "- EmailCard / EventCard / FileCard 只用请求里给的邮件编号、日程、本机路径, 不许编; 请求没给就不用这些组件。\n"
+    # 11/16 数据图表 (上游官方扩展 VegaChart; a2ui_chart.py 校验)
+    "- 数据图表用 VegaChart(Vega-Lite 对象): 只用请求里给的数, 数据写进 data.values (最多 500 行), 不写 url; "
+    "柱状 mark \"bar\", 折线 \"line\", 面积 \"area\", 饼图 mark \"arc\" + encoding.theta; 字段名用英文, 轴 / 图例标题 (title) 写中文; "
+    "图下面一行 Text 写一句结论。之后还要更新数据的图 (进度、每天的数), 把整份 spec 放进数据 $/chart, 写 VegaChart($/chart)。"
 )
 
 
@@ -122,6 +127,7 @@ def compile_reply(text: str) -> list[dict[str, Any]]:
             messages.append(m.model_dump(by_alias=True, exclude_none=True) if hasattr(m, "model_dump") else dict(m))
     if not messages:
         raise ValueError("回复里没有 <a2ui> 卡片块")
+    a2ui_chart.check_messages(messages)   # 11/16 图表: 只认 Vega-Lite、数据写在卡里、不带网址
     return messages
 
 
@@ -215,6 +221,8 @@ def update_card(args: dict[str, Any]) -> dict[str, Any]:
         state = _processor().create_state()
         state.apply(base)
         state.apply(updates)
+        a2ui_chart.check_messages(base + updates)   # 推给图表的新数据也照样查
+        updates = a2ui_chart.lift_chart_updates(base, updates)   # 图表数据里的一截 → 整份替换 (上游 React 绑定收不到子路径更新)
     except ValueError as e:
         return {"ok": False, "error": f"卡片没改成: {e}"}
     except Exception as e:  # noqa: BLE001 —— SDK 校验不过 (路径 / 类型不对)

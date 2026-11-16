@@ -1,6 +1,6 @@
 {
   "name": "catfish-companion-app",
-  "version": "1.2.194",
+  "version": "1.2.195",
   "description": "Catfish Companion App — desktop sidekick for managing local Catfish components, sessions, and quota",
   "private": true,
   "type": "module",
@@ -41,6 +41,10 @@
     "rehype-raw": "^7.0.0",
     "remark-gfm": "^4.0.0",
     "sigma": "^3.0.3",
+    "vega": "6.4.0",
+    "vega-embed": "7.3.0",
+    "vega-interpreter": "2.3.2",
+    "vega-lite": "6.5.0",
     "zod": "4.6.7",
     "zustand": "^4.5.5"
   },

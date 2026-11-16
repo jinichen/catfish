@@ -32,6 +32,8 @@ FUNCTIONS = ("required", "regex", "length", "numeric", "email",
 _DS = {"$ref": "common_types.json#/$defs/DynamicString"}
 _DB = {"$ref": "common_types.json#/$defs/DynamicBoolean"}
 _DSL = {"$ref": "common_types.json#/$defs/DynamicStringList"}
+_DV = {"$ref": "common_types.json#/$defs/DynamicValue"}
+_DN = {"$ref": "common_types.json#/$defs/DynamicNumber"}
 _W = {"$ref": "#/$defs/Weight"}
 
 
@@ -42,7 +44,7 @@ def _comp(name: str, description: str, props: dict[str, Any], required: list[str
             "required": ["component", *required]}
 
 
-#: 鲶鱼自定义组件。描述会进专员的提示词 (SDK 生成签名时带上), 写清「数据从哪来、不许编」。
+#: 鲶鱼自定义组件 (+ 上游官方扩展的 VegaChart)。描述会进专员的提示词 (SDK 生成签名时带上), 写清「数据从哪来、不许编」。
 CUSTOM_COMPONENTS: dict[str, dict[str, Any]] = {
     "EmailCard": _comp(
         "EmailCard",
@@ -78,6 +80,15 @@ CUSTOM_COMPONENTS: dict[str, dict[str, Any]] = {
         {"path": {"type": "string", "description": "Absolute local path exactly as given (static)."},
          "name": {**_DS, "description": "Display name; defaults to the file name."}},
         ["path"]),
+    # 11/16 数据图表: 照上游官方扩展目录 catalogs/vegachart/v1 (data/a2ui/vegachart_catalog_v1.json, 原样拷的) 的 VegaChart,
+    # 属性一致 (spec / height); 描述多写了鲶鱼的限制 —— 只认 Vega-Lite、数据直接写进 data.values (a2ui_chart.py 校验, Companion 再查一遍)
+    "VegaChart": _comp(
+        "VegaChart",
+        "Displays a Vega-Lite chart (bar / line / area / pie / point). Data must be inline in data.values, using only numbers "
+        "the request gives; never a URL, never invented numbers. Put a one-line Text conclusion next to it.",
+        {"spec": {**_DV, "description": "The Vega-Lite spec to render as a JSON object, or a data binding to one."},
+         "height": {**_DN, "description": "Optional height of the chart in pixels. Defaults to 290."}},
+        ["spec"]),
 }
 
 
