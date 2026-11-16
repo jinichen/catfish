@@ -115,6 +115,99 @@ function keepDataOrder(spec: Obj): void {
   });
 }
 
+/** 图里的数据行 (顶层或各图层的 data.values) */
+function dataRows(node: unknown, out: Obj[] = []): Obj[] {
+  if (Array.isArray(node)) {
+    node.forEach((n) => dataRows(n, out));
+    return out;
+  }
+  if (!isObj(node)) return out;
+  if (isObj(node.data) && Array.isArray(node.data.values)) out.push(...node.data.values.filter(isObj));
+  for (const k of ["layer", "spec", "concat", "hconcat", "vconcat"]) if (k in node) dataRows(node[k], out);
+  return out;
+}
+
+const WRAP_MAX_CATEGORIES = 12;
+/** 窄于这个宽度: 图例挪到图下面, 给柱子让出宽度 */
+const NARROW = 600;
+/** 每根柱子窄于这个就不在柱顶标数 (标了也挤成一团; 悬停照样看得到) */
+const MIN_LABEL_BAR_PX = 30;
+
+/** 画图区大概多宽 (减掉纵轴; 宽的时候图例在右边再减一块) */
+function plotWidth(width: number): number {
+  const w = width > 0 ? width : 400;
+  return w - 80 - (w >= NARROW ? 110 : 0);
+}
+const CJK_PX = 12;
+
+/** 横轴分类标签全显示、横着放、按柱组宽度折行 (11/16 鸿波: 7 个资质名斜着放、隐掉一半, 「对不准」)。
+ *  12 类以内才这样; 再多就交给 Vega 自己避让。 */
+function wrapCategoryLabels(spec: Obj, width: number): void {
+  const rows = dataRows(spec);
+  eachEncoding(spec, (enc) => {
+    const x = enc.x;
+    if (!isObj(x) || typeof x.field !== "string" || (x.type !== "nominal" && x.type !== "ordinal")) return;
+    const cats = [...new Set(rows.map((r) => r[x.field as string]).filter((v) => v !== undefined).map(String))];
+    if (!cats.length || cats.length > WRAP_MAX_CATEGORIES) return;
+    const longest = Math.max(...cats.map((c) => c.length));
+    const band = plotWidth(width) / cats.length;
+    const per = Math.max(2, Math.floor((band - 8) / CJK_PX));
+    const axis = isObj(x.axis) ? x.axis : x.axis === null ? null : {};
+    if (axis === null) return;   // 模型说了不要轴
+    const lines = longest > per ? Math.min(5, Math.ceil(longest / per)) : 1;
+    const parts = Array.from({ length: lines }, (_, i) => `substring(datum.label, ${i * per}, ${(i + 1) * per})`);
+    x.axis = { ...axis, labelAngle: 0, labelOverlap: false, labelAlign: "center", labelBaseline: "top", labelLimit: 0,
+               ...(lines > 1 ? { labelExpr: `[${parts.join(", ")}]` } : {}) };
+  });
+}
+
+/** 并排的柱子 (xOffset 分组) 上标的数值上万: 写成「24万」「5.65万」, 字小一号 —— 6 位数在窄柱子上挤成一团 */
+function compactGroupedLabels(spec: Obj, width: number): void {
+  const rows = dataRows(spec);
+  let grouped = false;
+  let xField = "";
+  let offField = "";
+  eachEncoding(spec, (enc) => {
+    if (isObj(enc.xOffset)) {
+      grouped = true;
+      if (typeof enc.xOffset.field === "string") offField = enc.xOffset.field;
+    }
+    if (isObj(enc.x) && typeof enc.x.field === "string") xField = enc.x.field;
+  });
+  if (!grouped) return;
+  const nCats = new Set(rows.map((r) => String(r[xField]))).size || 1;
+  const nBars = new Set(rows.map((r) => String(r[offField]))).size || 1;
+  const barPx = plotWidth(width) / nCats / nBars;
+  if (barPx < MIN_LABEL_BAR_PX && Array.isArray(spec.layer)) {
+    // 柱子太窄: 去掉柱顶的数 (11/16 窄窗口里 5.65万 5.65万 叠在一起)
+    spec.layer = spec.layer.filter((ly) => {
+      const m = isObj(ly) ? ly.mark : null;
+      return !(m === "text" || (isObj(m) && m.type === "text"));
+    });
+    return;
+  }
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) return node.forEach(visit);
+    if (!isObj(node)) return;
+    const m = node.mark;
+    const isText = m === "text" || (isObj(m) && m.type === "text");
+    const enc = isObj(node.encoding) ? node.encoding : null;
+    const t = enc && isObj(enc.text) ? enc.text : null;
+    if (isText && enc && t && typeof t.field === "string") {
+      const field = t.field;
+      const max = Math.max(0, ...rows.map((r) => Math.abs(Number(r[field]) || 0)));
+      if (max >= 10000) {
+        const tf = Array.isArray(node.transform) ? node.transform : [];
+        node.transform = [...tf, { calculate: `format(datum[${JSON.stringify(field)}] / 10000, '.4~g') + '万'`, as: "__catfish_label" }];
+        enc.text = { field: "__catfish_label", type: "nominal" };
+        node.mark = { ...(isObj(m) ? m : { type: "text" }), fontSize: 10 };
+      }
+    }
+    for (const k of ["layer", "spec", "concat", "hconcat", "vconcat"]) if (k in node) visit(node[k]);
+  };
+  visit(spec);
+}
+
 /** 数值标签 (text 标记) 的字色跟主题走: 模型常写成浅色, 浅色模式下看不见 */
 function themeTextMarks(node: unknown): void {
   if (Array.isArray(node)) {
@@ -136,6 +229,8 @@ export function prepareSpec(spec: Obj, width: number, height: number, theme: Cha
   stripThemeColors(out);
   keepDataOrder(out);
   themeTextMarks(out);
+  wrapCategoryLabels(out, width);
+  compactGroupedLabels(out, width);
   const cfg = isObj(out.config) ? out.config : {};
   const sub = (k: string) => (isObj(cfg[k]) ? (cfg[k] as Obj) : {});
   out.config = {
@@ -146,10 +241,11 @@ export function prepareSpec(spec: Obj, width: number, height: number, theme: Cha
     ...cfg,
     background: "transparent",
     // 横轴: 「周一」「7月」这种短中文标签 Vega 默认会竖过来, 改成横着放, 挤不下的自己隐掉几个
-    axisX: { labelAngle: 0, labelOverlap: true, ...sub("axisX") },
+    axisX: { labelAngle: 0, ...sub("axisX") },
     axis: { labelFontSize: 11, titleFontSize: 12, ...sub("axis"),
             domainColor: theme.grid, gridColor: theme.grid, tickColor: theme.grid, labelColor: theme.muted, titleColor: theme.text },
-    legend: { labelFontSize: 11, titleFontSize: 12, ...sub("legend"), labelColor: theme.muted, titleColor: theme.text },
+    legend: { labelFontSize: 11, titleFontSize: 12, ...(width > 0 && width < NARROW ? { orient: "bottom", direction: "horizontal" } : {}),
+              ...sub("legend"), labelColor: theme.muted, titleColor: theme.text },
     title: { fontSize: 13, ...sub("title"), color: theme.text, subtitleColor: theme.muted },
     text: { color: theme.text, ...sub("text") },
     view: { stroke: "transparent", ...sub("view") },

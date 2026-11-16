@@ -54,7 +54,8 @@ describe("prepareSpec 颜色以鲶鱼主题为准", () => {
     expect(out.title).toEqual({ text: "进度" });
     expect(out.config.axis).toMatchObject({ labelColor: "#666", gridColor: "#ddd", labelFontSize: 14 });
     expect(out.config.background).toBe("transparent");
-    expect(out.encoding.x.axis).toEqual({ title: "月" });
+    expect(out.encoding.x.axis).toMatchObject({ title: "月" });
+    expect(out.encoding.x.axis).not.toHaveProperty("labelColor");
     expect(out.layer[0].mark.color).toBe("#4fc3f7");
   });
 });
@@ -75,5 +76,38 @@ describe("prepareSpec 顺序和数值标签", () => {
     expect(bar.encoding.y).not.toHaveProperty("sort");          // 数值轴不动
     expect((prepareSpec({ ...BAR, encoding: { ...BAR.encoding, x: { ...BAR.encoding.x, sort: "-y" } } }, 300, 200, THEME) as any)
       .encoding.x.sort).toBe("-y");                               // 模型写了排序就照它
+  });
+});
+
+describe("prepareSpec 分组柱状图 (11/16 鸿波: 7 个资质名斜着放、隐掉一半, 对不准)", () => {
+  const items = ["应急处理一级", "信息系统安全运维一级", "信息系统安全集成一级", "信息安全风险评估一级", "软件安全开发一级", "信息安全应急处理二级", "信息系统安全运维二级"];
+  const rows = items.flatMap((item) => [{ item, vendor: "金智达", price: 240000 }, { item, vendor: "上海擎标", price: 56500 }]);
+  const quote = { data: { values: rows }, layer: [{ mark: "bar" }, { mark: { type: "text", dy: -4 }, encoding: { text: { field: "price", format: ",.0f" } } }],
+                  encoding: { x: { field: "item", type: "nominal", sort: null, axis: { labelAngle: -30 } }, y: { field: "price", type: "quantitative" },
+                              color: { field: "vendor", type: "nominal" }, xOffset: { field: "vendor" } } };
+
+  it("宽: 分类名全显示、横着放、折行居中; 柱顶数写成万", () => {
+    const out = prepareSpec(quote, 1050, 290, THEME) as Record<string, any>;
+    expect(out.encoding.x.axis).toMatchObject({ labelAngle: 0, labelOverlap: false, labelAlign: "center" });
+    expect(out.encoding.x.axis.labelExpr).toMatch(/^\[substring\(datum\.label, 0, \d+\)/);
+    const text = out.layer[1];
+    expect(text.encoding.text).toEqual({ field: "__catfish_label", type: "nominal" });
+    expect(text.transform[0].calculate).toContain("'万'");
+    expect(text.mark.fontSize).toBe(10);
+    expect(out.config.legend.orient).toBeUndefined();
+  });
+
+  it("窄: 图例挪到下面; 柱子太窄就不标数; 名字折更多行不截断", () => {
+    const out = prepareSpec(quote, 420, 290, THEME) as Record<string, any>;
+    expect(out.config.legend.orient).toBe("bottom");
+    expect(out.layer).toHaveLength(1);
+    const lines = (out.encoding.x.axis.labelExpr.match(/substring/g) || []).length;
+    const per = Number(/substring\(datum\.label, 0, (\d+)\)/.exec(out.encoding.x.axis.labelExpr)![1]);
+    expect(lines * per).toBeGreaterThanOrEqual(10);    // 「信息系统安全运维一级」10 个字放得下
+  });
+
+  it("不分组的普通柱状图不动数值标签", () => {
+    const out = prepareSpec({ ...BAR, layer: [{ mark: "bar" }, { mark: "text", encoding: { text: { field: "n" } } }] }, 600, 200, THEME) as Record<string, any>;
+    expect(out.layer[1].encoding.text).toEqual({ field: "n" });
   });
 });
