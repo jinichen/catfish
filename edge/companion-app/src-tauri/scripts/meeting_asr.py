@@ -210,12 +210,38 @@ def _tokens(text: str) -> list[tuple[int, int]]:
     return [m.span() for m in _TOKEN_RE.finditer(text)]
 
 
+#: 字数跟时间戳个数差多少以内还按位置对齐 (差太多说明结果本身不对, 退回 FunASR 的句子)
+MAX_MISMATCH = 0.1
+
+
+def align_timestamps(n_tokens: int, timestamps: list) -> list | None:
+    """字数跟时间戳个数对不上 (少见的字符: 全角数字、假名、拆开的英文…) 时按位置一一对上:
+    第 i 个字取第 round(i × (时间戳数-1) / (字数-1)) 个时间戳。差几个字只在局部错开不到一秒, 不会越往后越偏
+    (FunASR 自己拼句子就是越往后越偏)。差超过一成 → None。"""
+    m = len(timestamps)
+    if not n_tokens or not m:
+        return None
+    if n_tokens == m:
+        return timestamps
+    if abs(n_tokens - m) > max(2, MAX_MISMATCH * max(n_tokens, m)):
+        return None
+    if n_tokens == 1:
+        return [[timestamps[0][0], timestamps[-1][1]]]
+    return [timestamps[round(i * (m - 1) / (n_tokens - 1))] for i in range(n_tokens)]
+
+
 def sentences_from_tokens(text: str, timestamps: list, sd: list | None) -> list[dict] | None:
     """按标点切句子, 起止取句中首尾字的时间 (毫秒 → 秒); sd = 说话人分段 [(起秒, 止秒, spk)], 按重叠最多分。
-    字数跟时间戳个数对不上 → None (调用方退回 FunASR 的 sentence_info)。"""
+    字数跟时间戳个数对不上就按位置对齐 (align_timestamps); 差太多 → None (调用方退回 FunASR 的 sentence_info)。"""
     spans = _tokens(text)
-    if not spans or len(spans) != len(timestamps):
+    if not spans:
         return None
+    if len(spans) != len(timestamps):
+        aligned = align_timestamps(len(spans), timestamps)
+        if aligned is None:
+            return None
+        sys.stderr.write(f"[meeting_asr] 字数 {len(spans)} / 时间戳 {len(timestamps)} 对不上, 按位置对齐\n")
+        timestamps = aligned
     out, first, last_end = [], 0, 0
     for i, (a, b) in enumerate(spans):
         nxt = spans[i + 1][0] if i + 1 < len(spans) else len(text)
@@ -269,7 +295,7 @@ def segments_of(result: dict, sd: list | None = None) -> list[dict]:
         rebuilt = sentences_from_tokens(text, ts, sd)
         if rebuilt is not None:
             return rebuilt
-        sys.stderr.write(f"[meeting_asr] 逐字时间戳对不上 ({len(_tokens(text))} 字 / {len(ts)} 个时间戳), 用 FunASR 的句子时间\n")
+        sys.stderr.write(f"[meeting_asr] 逐字时间戳差太多 ({len(_tokens(text))} 字 / {len(ts)} 个时间戳), 用 FunASR 的句子时间\n")
     return to_segments(result)
 
 
