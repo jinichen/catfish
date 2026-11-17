@@ -47,7 +47,7 @@ EXTRA_LIST = HERE.parent / "src-tauri" / "hermes-extra-packages.txt"
 OVERRIDES = HERE.parent / "src-tauri" / "hermes-dep-overrides.txt"
 PYTHON_VERSION = "3.14"
 # editable 安装 hermes 自己要的构建后端 —— 版本跟上游 pyproject [build-system] 一致, 下面会核对
-BUILD_BACKEND = ["setuptools==84.1.0", "wheel"]
+BUILD_BACKEND = ["setuptools==84.1.0", "wheel==0.48.0"]   # 11/17 hermes v0.23.2 起上游也钉了 wheel
 
 PIP_PLATFORMS = {
     "aarch64-apple-darwin": ["macosx_11_0_arm64", "macosx_11_0_universal2"],

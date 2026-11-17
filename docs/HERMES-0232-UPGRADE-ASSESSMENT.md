@@ -20,6 +20,7 @@
 | 真实网关测试 | `test_delegation_on_real_hermes` / `test_cron_patches_on_real_hermes` / `test_weixin_resend_on_real_hermes` (起真网关 + 假模型) | 两个版本都 **26/26 通过** (委派身份 / 审批、定时任务补丁、微信补发) |
 | 插件全量测试 (`HERMES_ROOT` 指向各版本) | catfish-xcatfish-user 801 项、catfish-memory 508 项 | xcatfish-user: 0.23.1 全过; **0.23.2 挂 1 项** —— 见下「要改的」。memory 两边同挂 1 项 (`test_树外那条链在且指得对`, 要求插件装在树外固定位置, 临时环境没装, 跟版本无关) |
 | Python 依赖 (`uv.lock`) | 两个锁文件逐包比 | **完全相同** (354 个包, 版本一致) —— wheelhouse 不用动, 原生库不用重签 |
+| 构建后端 (`pyproject [build-system]`) | 升级时打离线包才发现 (评估时漏查) | 上游把 `wheel` 也钉成了 `0.48.0`; `build_hermes_wheelhouse.py` 的 `BUILD_BACKEND` 逐字核对它, 跟着改 |
 | 浏览器 / Chromium | playwright 版本、`tools/browser_launcher.py` / `browser_session.py` | playwright 两边都钉 1.64.0, 启动器一行没改 → 我们打进包的 chromium-embed 照用。「Chromium 首次使用才装」说的是上游 Electron 桌面版, 不是 Python 版 |
 | 配置版本 | `_config_version` | 两边都是 53, 不用迁移 |
 | 会话库 (Companion 直接读 `state.db`) | `hermes_state*.py` 里的建表 / 加列 / 索引 | 只**新增**一张 `resumable_subagents` (durable subagents 用); sessions / messages 等原有表不变 |
@@ -27,6 +28,8 @@
 | 网关启动参数 | `hermes gateway run --help` | `--external-supervisor` / `--force` / `--replace` 都在 |
 
 ## 要改的
+
+- **离线包的构建后端** `build_hermes_wheelhouse.py` `BUILD_BACKEND` → `["setuptools==84.1.0", "wheel==0.48.0"]` (员工机离线做 editable 安装要用)。
 
 - **17 条新的危险命令要配中文说明** (`catfish-xcatfish-user` 的 `DANGER_ZH`; `test_p55_wechat_chinese_sweep` 就是查这个的,
   不配的话微信 / 卡片审批里员工看到英文)。0.23.2 新识别的: netcat / socat 反弹 shell; docker / podman 删容器、删卷、prune;
@@ -43,3 +46,17 @@
 5. 以后可以用上的: durable subagents (我们常重启网关, 委派出去的任务现在会断)、`ctx.register_idle_task` (后台活)。
 
 工作量: 代码改动很小; 主要是重打包和 e2e, 大约半天到一天。
+
+## 升级记录 (2026-11-17, Companion 1.2.201)
+
+- 钉 v0.23.2 (`ae2a81cc`): `.hermes-git-tag` / `.hermes-git-commit` / `.hermes-target-version`。
+- `plugin_approval_ux.DANGER_ZH` 补 17 条; `build_hermes_wheelhouse.BUILD_BACKEND` 加 `wheel==0.48.0`。
+- 验证:
+  - 插件测试 (`HERMES_ROOT` 指向两个版本): catfish-xcatfish-user 两版都 741 全过 (补译之前 0.23.2 挂 `test_p55` 那 1 项)。
+  - 真实网关测试 (委派 / 定时任务 / 微信补发) 两版都 26/26。
+  - `audit_hermes_compat.sh`: 两版都是 177 行、同样 2 项「失败」(0.23.1 原来就有); 差异只在 tools 目录文件清单 (审批检测拆成了 `approval_*.py` 多个文件, 我们不引用)。
+  - 三个插件起真网关的加载日志: 两版 131 行, 警告 / 错误同样 13 条; 差异只有中文语言包 171 → 178 条 (多认上 7 条界面文字)、端口号、关停日志多一个字段。
+  - 离线资源 (mac aarch64) 用新 pin 重打; `hermes_install_native::e2e` 两项都过: 全新离线安装健康、第二遍走「已完整安装」快路径;
+    从 0.23.1 的旧包 (`3b421578`) 就地升级到 0.23.2, 员工数据保留。
+- 打包当天 GitHub clone 一直卡, 用评估时本机克隆的同一 tag 做了干净的源码缓存 (`/tmp/catfish-hermes-src-<commit>.tar.gz`,
+  fetch-hermes-src.sh 照常核对 tag 和 commit)。
