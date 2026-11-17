@@ -15,6 +15,9 @@
  *
  * 11/12: 纪要能改 (MinutesEditor, 改过的标「已人工修改」, 「重新生成」先提醒会覆盖);
  * 能分享 (MinutesShare: 复制 / 发邮件 / 发到协同群 / 导出 Word, 都是员工点了才发)。
+ *
+ * 11/17: 让小鲶改 (MinutesRevise): 纪要上方说一句要怎么改, 小鲶改出一版, 正文变成改动预览, 「采用」才存。
+ * 「管理模版」并进模版下拉 (最后一项), 头上只留模版 + 生成两样。
  */
 import { useEffect, useState } from "react";
 
@@ -28,6 +31,7 @@ import { Btn, ErrorLine, inputStyle, itemStyle } from "../Collab/roomLinkUi";
 import { actionItemToTask, minutesWikiBody, minutesWikiTitle } from "./meetingHelpers";
 import { lastTemplateId, rememberTemplateId } from "./minutesTemplates";
 import MinutesEditor from "./MinutesEditor";
+import { ReviseComposer, RevisePreview, useRevise } from "./MinutesRevise";
 import MinutesShare from "./MinutesShare";
 import TemplateManager from "./TemplateManager";
 
@@ -37,7 +41,9 @@ function toolError(res: { ok: boolean; result: unknown; error: string | null }, 
   return success(r) ? null : String(r.error ?? JSON.stringify(r)).slice(0, 200);
 }
 
-export default function MinutesView({ meta }: { meta: MeetingMeta }) {
+const MANAGE = "__manage__";
+
+export default function MinutesView({ meta, names = {} }: { meta: MeetingMeta; names?: Record<string, string> }) {
   const [minutes, setMinutes] = useState<Minutes | null>(null);
   const [generating, setGenerating] = useState(false);
   const [checked, setChecked] = useState<Record<number, boolean>>({});
@@ -71,11 +77,15 @@ export default function MinutesView({ meta }: { meta: MeetingMeta }) {
     }).catch((e) => setError(String(e)));
   }
 
+  const markdownView = !!minutes?.json.template && !minutes?.json.output_file; // 文字模版: 显示按模版写的那份
+  const revise = useRevise(meta.id, minutes, markdownView, () => { setNote("已采用小鲶改的版本"); void reload(); });
+
   useEffect(() => {
     setMinutes(null);
     setNote(null);
     setEditing(false);
     setConfirmRegen(false);
+    revise.reset();
     void reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meta.id]);
@@ -161,17 +171,18 @@ export default function MinutesView({ meta }: { meta: MeetingMeta }) {
         style={{ ...inputStyle, width: "auto", maxWidth: 200, padding: "4px 8px", fontSize: 12 }}
         value={templateId}
         disabled={generating}
-        onChange={(e) => setTemplateId(e.target.value)}
+        onChange={(e) => (e.target.value === MANAGE ? setManaging(true) : setTemplateId(e.target.value))}
       >
         <option value={DEFAULT_TEMPLATE_ID}>标准纪要</option>
         {templates.map((t) => (
           <option key={t.id} value={t.id}>{t.kind === "docx" ? "Word · " : t.kind === "xlsx" ? "Excel · " : ""}{t.name}</option>
         ))}
+        <option value={MANAGE}>管理模版…</option>
       </select>
-      <Btn kind={minutes ? "ghost" : "primary"} disabled={generating || editing} onClick={() => void generate()}>
+      <Btn kind={minutes ? "ghost" : "primary"} disabled={generating || editing || !!revise.proposal || revise.busy}
+           onClick={() => void generate()}>
         {generating ? generatingLabel : confirmRegen ? "再点一次: 覆盖改过的内容" : minutes ? "重新生成" : "生成纪要"}
       </Btn>
-      <Btn kind="ghost" onClick={() => setManaging(true)}>管理模版</Btn>
     </div>
   );
   const manager = managing && (
@@ -195,7 +206,6 @@ export default function MinutesView({ meta }: { meta: MeetingMeta }) {
   }
 
   const m = minutes.json;
-  const markdownView = !!m.template && !m.output_file; // 文字模版: 显示按模版写的那份
   const list = (title: string, items: string[]) => (
     <div>
       <div style={{ fontWeight: 600, marginBottom: 4 }}>{title}</div>
@@ -231,46 +241,55 @@ export default function MinutesView({ meta }: { meta: MeetingMeta }) {
           </Btn>
         </div>
       )}
-      {markdownView ? (
-        <Markdown text={minutes.markdown} />
+      {!m.output_file && <ReviseComposer api={revise} minutes={minutes} names={names} disabled={generating} />}
+      {revise.proposal ? (
+        <RevisePreview api={revise} minutes={minutes} markdownView={markdownView} />
       ) : (
         <>
-          <div style={{ lineHeight: 1.75 }}>{m.summary}</div>
-          {m.decisions.length > 0 && list("决议", m.decisions)}
+          {markdownView ? (
+            <Markdown text={minutes.markdown} />
+          ) : (
+            <>
+              <div style={{ lineHeight: 1.75 }}>{m.summary}</div>
+              {m.decisions.length > 0 && list("决议", m.decisions)}
+            </>
+          )}
+          {m.action_items.length > 0 && (
+            <div>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>待办</div>
+              {m.action_items.map((it, i) => (
+                <label key={i} style={{ display: "flex", gap: 6, alignItems: "baseline", lineHeight: 1.7 }}>
+                  <input type="checkbox" checked={!!checked[i]} onChange={(e) => setChecked({ ...checked, [i]: e.target.checked })} />
+                  <span>
+                    {it.task}
+                    {(it.owner || it.due) && (
+                      <span style={muted}> ({[it.owner, it.due && `截止 ${it.due}`].filter(Boolean).join(" · ")})</span>
+                    )}
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+          {!markdownView && m.open_questions.length > 0 && list("待定问题", m.open_questions)}
+          {!markdownView && (m.carried_over?.length ?? 0) > 0 && list("上次遗留事项进展", m.carried_over ?? [])}
+          {referencesNote(m.references) && <div style={{ fontSize: 12, ...muted }}>{referencesNote(m.references)}</div>}
+          {empty.length > 0 && <div style={{ fontSize: 12, ...muted }}>{empty.join(" · ")}</div>}
         </>
       )}
-      {m.action_items.length > 0 && (
-        <div>
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>待办</div>
-          {m.action_items.map((it, i) => (
-            <label key={i} style={{ display: "flex", gap: 6, alignItems: "baseline", lineHeight: 1.7 }}>
-              <input type="checkbox" checked={!!checked[i]} onChange={(e) => setChecked({ ...checked, [i]: e.target.checked })} />
-              <span>
-                {it.task}
-                {(it.owner || it.due) && (
-                  <span style={muted}> ({[it.owner, it.due && `截止 ${it.due}`].filter(Boolean).join(" · ")})</span>
-                )}
-              </span>
-            </label>
-          ))}
+      {!revise.proposal && (
+        <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", alignItems: "center",
+          borderTop: "1px solid var(--catfish-border)", paddingTop: "var(--space-3)" }}>
+          {m.action_items.length > 0 && (
+            <Btn kind="primary" disabled={checkedCount === 0} onClick={() => void addTasks()}>
+              {checkedCount ? `勾选的 ${checkedCount} 项待办加入任务库` : "勾选待办加入任务库"}
+            </Btn>
+          )}
+          <Btn kind="ghost" onClick={() => void saveWiki()}>存进知识库</Btn>
+          <Btn kind="ghost" onClick={() => { setNote(null); setEditing(true); }}>编辑</Btn>
+          <MinutesShare meta={meta} markdown={minutes.markdown} onNote={(t) => { setError(null); setNote(t); }} onError={setError} />
+          {note && <span style={{ fontSize: 12, color: "var(--status-ok)" }}>✓ {note}</span>}
         </div>
       )}
-      {!markdownView && m.open_questions.length > 0 && list("待定问题", m.open_questions)}
-      {!markdownView && (m.carried_over?.length ?? 0) > 0 && list("上次遗留事项进展", m.carried_over ?? [])}
-      {referencesNote(m.references) && <div style={{ fontSize: 12, ...muted }}>{referencesNote(m.references)}</div>}
-      {empty.length > 0 && <div style={{ fontSize: 12, ...muted }}>{empty.join(" · ")}</div>}
-      <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", alignItems: "center",
-        borderTop: "1px solid var(--catfish-border)", paddingTop: "var(--space-3)" }}>
-        {m.action_items.length > 0 && (
-          <Btn kind="primary" disabled={checkedCount === 0} onClick={() => void addTasks()}>
-            {checkedCount ? `勾选的 ${checkedCount} 项待办加入任务库` : "勾选待办加入任务库"}
-          </Btn>
-        )}
-        <Btn kind="ghost" onClick={() => void saveWiki()}>存进知识库</Btn>
-        <Btn kind="ghost" onClick={() => { setNote(null); setEditing(true); }}>编辑</Btn>
-        <MinutesShare meta={meta} markdown={minutes.markdown} onNote={(t) => { setError(null); setNote(t); }} onError={setError} />
-        {note && <span style={{ fontSize: 12, color: "var(--status-ok)" }}>✓ {note}</span>}
-      </div>
       {manager}
       {editing && (
         <MinutesEditor meetingId={meta.id} title={meta.title} minutes={minutes} markdownView={markdownView}

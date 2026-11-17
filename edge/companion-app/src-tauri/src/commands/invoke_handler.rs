@@ -282,6 +282,7 @@ pub(crate) fn handler(
             crate::commands::meeting_minutes_cmd::meeting_set_speakers,
             crate::commands::meeting_minutes_cmd::meeting_speakers,
             crate::commands::meeting_minutes_cmd::meeting_minutes_generate,
+            crate::commands::meeting_minutes_cmd::meeting_minutes_revise,
             crate::commands::meeting_minutes_cmd::meeting_minutes,
             crate::commands::meeting_minutes_cmd::meeting_templates_list,
             crate::commands::meeting_minutes_cmd::meeting_template_save,

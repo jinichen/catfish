@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   formatClock,
   meetingDelete,
+  meetingMinutes,
   meetingSetSpeakers,
   meetingSpeakers,
   meetingTranscribe,
@@ -50,6 +51,9 @@ export default function MeetingDetail({
   const [notesTick, setNotesTick] = useState(0);   // 会后改了会中小鲶的条目 → 纪要重读
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const dirty = useRef(false);
+  const [speakersOpen, setSpeakersOpen] = useState(true);
+  const [tab, setTab] = useState<"minutes" | "transcript">("minutes");
   // 删除点两下: Tauri WebView 里 window.confirm() 静默返回 null (CronJobsCard 7/6 记过), 跟模板删除同一个做法
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -60,9 +64,19 @@ export default function MeetingDetail({
     setError(null);
     setSaved(false);
     setConfirmDelete(false);
+    setTab("minutes");
+    dirty.current = false;
     if (meta.status === "transcribed") {
       meetingTranscript(meta.id).then(setTranscript).catch((e) => setError(String(e)));
-      meetingSpeakers(meta.id).then(setNames).catch(() => setNames({}));
+      // 展开 / 收起在打开这场会议时定一次: 没起过名字、也还没生成纪要才展开 (生成前改名, 负责人更准);
+      // 不能跟着输入实时算, 不然填下第一个名字那栏就收起来了
+      void Promise.all([
+        meetingSpeakers(meta.id).catch((): Record<string, string> => ({})),
+        meetingMinutes(meta.id).catch(() => null),
+      ]).then(([n, m]) => {
+        setNames(n);
+        setSpeakersOpen(!m && !Object.values(n).some((v) => v.trim()));
+      });
     }
   }, [meta.id, meta.status]);
 
@@ -118,6 +132,8 @@ export default function MeetingDetail({
   }
 
   async function saveNames() {
+    if (!dirty.current) return;
+    dirty.current = false;
     try {
       await meetingSetSpeakers(meta.id, names);
       setSaved(true);
@@ -176,36 +192,88 @@ export default function MeetingDetail({
     );
   } else if (meta.status === "transcribed" && transcript) {
     const spks = [...new Set(transcript.segments.map((s) => s.spk))].sort((a, b) => a - b);
+    const named = spks.filter((s) => names[String(s)]?.trim());
+    // 11/17 (鸿波「这个 UI 是不是需要优化」): 十个说话人框原来常年摊在纪要上面占四行 —— 改成可收起的一栏,
+    // 没起过名字时展开, 起过就收成一行名单; 名字改完离开输入框自动存, 不用再点「保存名字」。
+    const open = speakersOpen;
+    const speakers = (
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", fontSize: 13 }}>
+          <button type="button" onClick={() => setSpeakersOpen(!open)} aria-expanded={open}
+                  style={{ border: "none", background: "transparent", cursor: "pointer", padding: 0, fontSize: 13, fontWeight: 600,
+                           color: "var(--catfish-text)", fontFamily: "inherit" }}>
+            {open ? "▾" : "▸"} 说话人 {spks.length} 位
+          </button>
+          <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: "var(--catfish-text-muted)", overflow: "hidden",
+                         textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {open
+              ? "填上真名, 纪要里的负责人更准; 点 ▶ 听他说的一句认人。离开输入框自动保存"
+              : named.length
+                ? spks.map((s) => names[String(s)]?.trim() || `说话人${s + 1}`).join("、")
+                : "还没填真名 · 点开填, 或者让小鲶在纪要里换"}
+          </span>
+          {saved && <span style={{ fontSize: 12, color: "var(--status-ok)" }}>已保存 ✓</span>}
+        </div>
+        {open && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 8 }}>
+            {/* 11/12: 每个说话人旁边 ▶ 听他说得最长的一句, 听出是谁再填名字 */}
+            {spks.map((s) => {
+              const sample = sampleSegment(transcript.segments, s);
+              const color = SPK_COLORS[s % SPK_COLORS.length];
+              return (
+                <span key={s} style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0 }}>
+                  <input
+                    aria-label={`说话人${s + 1} 的名字`}
+                    style={{ ...inputStyle, flex: 1, minWidth: 0, width: "auto", boxShadow: `inset 3px 0 0 ${color}` }}
+                    placeholder={`说话人${s + 1}`}
+                    value={names[String(s)] ?? ""}
+                    onChange={(e) => {
+                      setSaved(false);
+                      dirty.current = true;
+                      setNames({ ...names, [String(s)]: e.target.value });
+                    }}
+                    onBlur={() => void saveNames()}
+                    onKeyDown={(e) => { if (e.key === "Enter") void saveNames(); }}
+                  />
+                  {sample && (
+                    <button type="button" aria-label={`听说话人${s + 1}`} title="听他说的一句, 认出是谁"
+                            onClick={() => void toggleClip(`spk-${meta.id}-${s}`, meta.id, sample).catch((e) => setError(`放不了: ${String(e)}`))}
+                            style={{ border: "none", background: "transparent", cursor: "pointer", padding: "2px 4px", fontSize: 11,
+                                     color: "var(--catfish-text-muted)" }}>▶</button>
+                  )}
+                </span>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+    const tabBtn = (t: "minutes" | "transcript", label: string) => (
+      <button type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)}
+              style={{ border: "none", background: tab === t ? "var(--catfish-bg-elevated)" : "transparent", cursor: "pointer",
+                       padding: "5px 14px", borderRadius: 6, fontSize: 13, fontFamily: "inherit",
+                       fontWeight: tab === t ? 600 : 400,
+                       color: tab === t ? "var(--catfish-text)" : "var(--catfish-text-muted)",
+                       boxShadow: tab === t ? "0 1px 2px rgba(0,0,0,0.12)" : "none" }}>
+        {label}
+      </button>
+    );
     body = (
       <>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)", alignItems: "center" }}>
-          {/* 11/12: 每个说话人旁边 ▶ 听他说得最长的一句, 听出是谁再填名字 */}
-          {spks.map((s) => {
-            const sample = sampleSegment(transcript.segments, s);
-            return (
-              <span key={s} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
-                <input
-                  style={{ ...inputStyle, width: 120, borderColor: SPK_COLORS[s % SPK_COLORS.length] }}
-                  placeholder={`说话人${s + 1}`}
-                  value={names[String(s)] ?? ""}
-                  onChange={(e) => {
-                    setSaved(false);
-                    setNames({ ...names, [String(s)]: e.target.value });
-                  }}
-                />
-                {sample && (
-                  <button type="button" aria-label={`听说话人${s + 1}`} title="听他说的一句, 认出是谁"
-                          onClick={() => void toggleClip(`spk-${meta.id}-${s}`, meta.id, sample).catch((e) => setError(`放不了: ${String(e)}`))}
-                          style={{ border: "none", background: "transparent", cursor: "pointer", padding: "2px 4px", fontSize: 11,
-                                   color: "var(--catfish-text-muted)" }}>▶</button>
-                )}
-              </span>
-            );
-          })}
-          <Btn kind="ghost" onClick={() => void saveNames()}>{saved ? "已保存 ✓" : "保存名字"}</Btn>
+        {speakers}
+        <div role="tablist" aria-label="纪要 / 转写"
+             style={{ display: "inline-flex", alignSelf: "flex-start", gap: 2, padding: 3, borderRadius: 8,
+                      background: "var(--catfish-bg-cream)" }}>
+          {tabBtn("minutes", "纪要")}
+          {tabBtn("transcript", `转写 · ${transcript.segments.length} 句`)}
         </div>
-        <MinutesView key={notesTick} meta={meta} />
-        <TranscriptView key={meta.id} meetingId={meta.id} transcript={transcript} names={names} colors={SPK_COLORS} />
+        {/* 两个都挂着, 只切显示: 转写里改的错字、小鲶改到一半的纪要, 切过去再切回来都还在 */}
+        <div style={{ display: tab === "minutes" ? "contents" : "none" }}>
+          <MinutesView key={notesTick} meta={meta} names={names} />
+        </div>
+        <div style={{ display: tab === "transcript" ? "contents" : "none" }}>
+          <TranscriptView key={meta.id} meetingId={meta.id} transcript={transcript} names={names} colors={SPK_COLORS} />
+        </div>
       </>
     );
   }

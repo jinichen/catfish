@@ -157,3 +157,33 @@ pub async fn meeting_minutes_open_file(id: String, reveal: bool) -> Result<(), S
         super::file::open_file(p).await
     }
 }
+
+/// 让小鲶改纪要 (11/17): 员工一句话 → 小鲶对照转写改出一版**提议** (不写文件), 界面上点「采用」再走
+/// `meeting_minutes_save`。`base` = 上一轮的提议 (接着改), `history` = 之前说过的要求。
+#[tauri::command]
+pub async fn meeting_minutes_revise(
+    id: String,
+    instruction: String,
+    base: Option<Value>,
+    history: Option<Vec<String>>,
+) -> Result<Value, String> {
+    let home = store::home()?;
+    let token = oauth::ensure_fresh_access_token()
+        .await
+        .ok_or("没登录 (拿不到访问令牌), 登录后再让小鲶改")?;
+    let params = json!({
+        "meeting_id": id,
+        "catfish_home": home.join(".catfish").display().to_string(),
+        "auth_token": token,
+        "gateway_url": endpoints::endpoints().gateway_base(),
+        "instruction": instruction,
+        "base": base,
+        "history": history.unwrap_or_default(),
+    });
+    tool_bridge_rpc::call_with_timeout("meeting/minutes_revise", params, REVISE_TIMEOUT)
+        .await
+        .map_err(|e| e.split_once("]: ").map(|(_, m)| m.to_string()).unwrap_or(e))
+}
+
+/// 一次大模型调用 (tool-bridge 那边等 240 秒), 留点余量
+const REVISE_TIMEOUT: Duration = Duration::from_secs(270);

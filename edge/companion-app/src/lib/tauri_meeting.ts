@@ -275,6 +275,21 @@ export type MinutesFields = Partial<Pick<MinutesJson, "summary" | "decisions" | 
 /** 改过的纪要存回去: fields = 逐项; markdown = 按文字模版写的全文 */
 export const meetingMinutesSave = (id: string, fields: MinutesFields | null, markdown: string | null = null) =>
   rawInvoke<{ ok: boolean; edited_at: string }>("meeting_minutes_save", { id, fields, markdown });
+/** 11/17 让小鲶改纪要: 一句话 → 小鲶对照转写改出的一版**提议** (不写文件); 点「采用」再走 meetingMinutesSave。
+ *  base = 上一轮的提议 (接着改); history = 之前说过的要求 */
+export interface MinutesRevision {
+  reply: string;
+  fields: MinutesFields;
+  /** 按文字模版写的那份才有: 改好的全文 */
+  markdown: string | null;
+  changed: string[];
+  changed_labels: string[];
+  /** false = 会议太长, 只给了小鲶跟这句话相关的转写片段 */
+  transcript_full: boolean;
+}
+export const meetingMinutesRevise = (
+  id: string, instruction: string, base: { fields: MinutesFields; markdown: string | null } | null, history: string[],
+) => rawInvoke<MinutesRevision>("meeting_minutes_revise", { id, instruction, base, history });
 /** 存成 Word (会议目录里); 用 Word / Excel 模版生成过的直接给那份 */
 export const meetingMinutesDocx = (id: string) =>
   rawInvoke<{ path: string; name: string; size: number }>("meeting_minutes_docx", { id });

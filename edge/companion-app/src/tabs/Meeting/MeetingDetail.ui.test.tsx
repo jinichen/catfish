@@ -3,13 +3,22 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const api = vi.hoisted(() => ({ del: vi.fn(async () => undefined) }));
+const api = vi.hoisted(() => ({
+  del: vi.fn(async () => undefined),
+  segments: [] as unknown[],
+  names: {} as Record<string, string>,
+  setNames: vi.fn(async () => undefined),
+  minutes: null as unknown,
+}));
 
 vi.mock("../../lib/tauri_meeting", async (orig) => ({
   ...(await orig<typeof import("../../lib/tauri_meeting")>()),
   meetingDelete: api.del,
-  meetingTranscript: vi.fn(async () => ({ segments: [], text: "" })),
-  meetingSpeakers: vi.fn(async () => ({})),
+  meetingTranscript: vi.fn(async () => ({ segments: api.segments, text: "" })),
+  meetingSpeakers: vi.fn(async () => api.names),
+  meetingSetSpeakers: api.setNames,
+  meetingMinutes: vi.fn(async () => api.minutes),
+  meetingTemplatesList: vi.fn(async () => []),
   onTranscribeProgress: vi.fn(async () => () => undefined),
   onAsrInstallProgress: vi.fn(async () => () => undefined),
 }));
@@ -33,7 +42,13 @@ async function mount(status: string, onDeleted = vi.fn()) {
   return onDeleted;
 }
 
-beforeEach(() => api.del.mockClear());
+beforeEach(() => {
+  api.del.mockClear();
+  api.setNames.mockClear();
+  api.segments = [];
+  api.names = {};
+  api.minutes = null;
+});
 afterEach(cleanup);
 
 describe("删除会议", () => {
@@ -62,5 +77,59 @@ describe("删除会议", () => {
     await act(async () => { fireEvent.click(screen.getByText("再点一次确认删除")); });
     expect(screen.getByText(/正在转写/)).toBeTruthy();
     expect(onDeleted).not.toHaveBeenCalled();
+  });
+});
+
+describe("说话人 / 纪要 · 转写 (11/17 UI 调整)", () => {
+  const segs = [
+    { spk: 0, start: 0, end: 2, text: "我们开始吧" },
+    { spk: 1, start: 2, end: 5, text: "好的, 先说整改" },
+    { spk: 2, start: 5, end: 9, text: "安全集成那块材料还缺" },
+  ];
+
+  it("没起过名字: 说话人那栏展开; 改完离开输入框自动存, 没改不存", async () => {
+    api.segments = segs;
+    await mount("transcribed");
+    expect(screen.getByText("▾ 说话人 3 位")).toBeTruthy();
+    const box = screen.getByLabelText("说话人2 的名字");
+    fireEvent.focusOut(box);
+    expect(api.setNames).not.toHaveBeenCalled();
+    fireEvent.change(box, { target: { value: "王总" } });
+    await act(async () => { fireEvent.focusOut(box); });
+    expect(api.setNames).toHaveBeenCalledWith("mtg_1", { "1": "王总" });
+    expect(screen.getByText("已保存 ✓")).toBeTruthy();
+    expect(screen.queryByText("保存名字")).toBeNull();
+  });
+
+  it("起过名字: 收成一行名单, 点开能改", async () => {
+    api.segments = segs;
+    api.names = { "0": "陈鸿波", "1": "王总" };
+    await mount("transcribed");
+    expect(screen.getByText("▸ 说话人 3 位")).toBeTruthy();
+    expect(screen.getByText("陈鸿波、王总、说话人3")).toBeTruthy();
+    expect(screen.queryByLabelText("说话人1 的名字")).toBeNull();
+    fireEvent.click(screen.getByText("▸ 说话人 3 位"));
+    expect((screen.getByLabelText("说话人1 的名字") as HTMLInputElement).value).toBe("陈鸿波");
+  });
+
+  it("已经生成过纪要: 没起名字也先收起 (纪要是正事), 提示能让小鲶换", async () => {
+    api.segments = segs;
+    api.minutes = { json: { meeting_id: "mtg_1", summary: "s", decisions: [], action_items: [], open_questions: [] }, markdown: "", path: "" };
+    await mount("transcribed");
+    expect(screen.getByText("▸ 说话人 3 位")).toBeTruthy();
+    expect(screen.getByText("还没填真名 · 点开填, 或者让小鲶在纪要里换")).toBeTruthy();
+  });
+
+  it("纪要 / 转写分两页, 默认纪要; 切页不卸载 (改到一半的还在)", async () => {
+    api.segments = segs;
+    await mount("transcribed");
+    const [minutesTab, transcriptTab] = screen.getAllByRole("tab");
+    expect(minutesTab.getAttribute("aria-selected")).toBe("true");
+    expect(transcriptTab.textContent).toBe("转写 · 3 句");
+    const wrapOf = (text: string) => screen.getByText(text).closest("div[style*='display']") as HTMLElement;
+    expect(screen.getByText(/安全集成那块材料还缺/)).toBeTruthy();   // 挂着, 只是不显示
+    fireEvent.click(transcriptTab);
+    expect(transcriptTab.getAttribute("aria-selected")).toBe("true");
+    expect(wrapOf("生成纪要")).toBeTruthy();
   });
 });

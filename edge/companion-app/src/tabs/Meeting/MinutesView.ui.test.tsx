@@ -7,6 +7,8 @@ const api = vi.hoisted(() => ({
   minutes: null as unknown,
   templates: [] as unknown[],
   generate: vi.fn(async () => ({})),
+  revise: vi.fn(),
+  save: vi.fn(async () => ({ ok: true, edited_at: "2026-11-17T10:00:00" })),
 }));
 
 vi.mock("../../lib/tauri_meeting", async (orig) => ({
@@ -15,6 +17,8 @@ vi.mock("../../lib/tauri_meeting", async (orig) => ({
   meetingTemplatesList: vi.fn(async () => api.templates),
   meetingMinutesGenerate: api.generate,
   meetingMinutesOpenFile: vi.fn(async () => undefined),
+  meetingMinutesRevise: api.revise,
+  meetingMinutesSave: api.save,
 }));
 vi.mock("../../lib/tauri_services", () => ({ toolBridgeCallTool: vi.fn(async () => ({ ok: true, result: { ok: true } })) }));
 
@@ -36,6 +40,8 @@ beforeEach(() => {
   api.minutes = null;
   api.templates = [];
   api.generate.mockClear();
+  api.revise.mockReset();
+  api.save.mockClear();
 });
 afterEach(cleanup);
 
@@ -44,7 +50,7 @@ describe("纪要卡片", () => {
     api.templates = [{ id: "tpl_w", name: "公司纪要表", body: "", updated_at: "", kind: "docx", slots: [] }];
     await mount();
     const select = screen.getByLabelText("纪要模版") as HTMLSelectElement;
-    expect([...select.options].map((o) => o.text)).toEqual(["标准纪要", "Word · 公司纪要表"]);
+    expect([...select.options].map((o) => o.text)).toEqual(["标准纪要", "Word · 公司纪要表", "管理模版…"]);
     fireEvent.change(select, { target: { value: "tpl_w" } });
     await act(async () => { fireEvent.click(screen.getByText("生成纪要")); });
     expect(api.generate).toHaveBeenCalledWith("mtg_1", "tpl_w");
@@ -97,7 +103,10 @@ describe("纪要卡片", () => {
 describe("模版弹窗", () => {
   it("弹窗打开 / 切到上传 / 说明默认收起 / Esc 关", async () => {
     await mount();
-    fireEvent.click(screen.getByText("管理模版"));
+    // 11/17: 「管理模版」并进模版下拉的最后一项; 选它只开弹窗, 不改选中的模版
+    const select = screen.getByLabelText("纪要模版") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "__manage__" } });
+    expect(select.value).toBe("default");
     expect(screen.getByRole("dialog", { name: "纪要模版" })).toBeTruthy();
     expect(screen.getByText("内置 · 摘要 / 决议 / 待办 / 待定问题")).toBeTruthy();
     fireEvent.click(screen.getByText("+ 上传 Word / Excel"));
@@ -106,5 +115,75 @@ describe("模版弹窗", () => {
     expect(details.open).toBe(false);
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("让小鲶改纪要 (11/17)", () => {
+  const minutes = {
+    json: { ...base, decisions: ["二期 12 月上线"], action_items: [{ task: "交材料", owner: "说话人2", due: "" }] },
+    markdown: "# 周会\n- [ ] 交材料 (说话人2)", path: "/x",
+  };
+  const proposal = {
+    reply: "待办负责人改成了王总, 补了一条。", markdown: null, transcript_full: true,
+    changed: ["action_items"], changed_labels: ["待办"],
+    fields: { ...minutes.json, action_items: [{ task: "交材料", owner: "王总", due: "" }, { task: "约客户", owner: "", due: "" }] },
+  };
+
+  it("说一句 → 正文变改动预览 (只改负责人的一行带原来的, 新加的 ＋) → 采用才存", async () => {
+    api.minutes = minutes;
+    api.revise.mockResolvedValueOnce(proposal);
+    await mount();
+    expect(screen.getByText("比如")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("让小鲶改纪要"), { target: { value: "说话人2 是王总" } });
+    await act(async () => { fireEvent.click(screen.getByText("🐟 让小鲶改")); });
+    expect(api.revise).toHaveBeenCalledWith("mtg_1", "说话人2 是王总", null, []);
+    expect(screen.getByText(/小鲶改了: 待办/)).toBeTruthy();
+    expect(screen.getByText("🐟 待办负责人改成了王总, 补了一条。")).toBeTruthy();
+    const row = screen.getByText(/· 交材料 \(王总\)/);
+    expect(row.textContent).toBe("· 交材料 (王总)原来: 说话人2");
+    expect(screen.getByText("＋ 约客户")).toBeTruthy();
+    expect(screen.queryByText("存进知识库")).toBeNull();            // 预览时不出写回按钮
+    expect((screen.getByText("重新生成").closest("button") as HTMLButtonElement).disabled).toBe(true);
+    expect(api.save).not.toHaveBeenCalled();
+    await act(async () => { fireEvent.click(screen.getByText("采用")); });
+    expect(api.save).toHaveBeenCalledWith("mtg_1", proposal.fields, null);
+    expect(screen.getByText("✓ 已采用小鲶改的版本")).toBeTruthy();
+  });
+
+  it("接着说: 在上一版提议上改, 带上之前的要求; 「不要」原样不动", async () => {
+    api.minutes = minutes;
+    api.revise.mockResolvedValueOnce(proposal).mockResolvedValueOnce({ ...proposal, reply: "又改了" });
+    await mount();
+    const box = screen.getByLabelText("让小鲶改纪要");
+    fireEvent.change(box, { target: { value: "说话人2 是王总" } });
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+    fireEvent.change(box, { target: { value: "删掉约客户" } });
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+    expect(api.revise).toHaveBeenLastCalledWith("mtg_1", "删掉约客户", { fields: proposal.fields, markdown: null }, ["说话人2 是王总"]);
+    fireEvent.click(screen.getByText("不要"));
+    expect(screen.queryByText(/小鲶改了/)).toBeNull();
+    expect(screen.getByText("存进知识库")).toBeTruthy();
+    expect(api.save).not.toHaveBeenCalled();
+  });
+
+  it("小鲶说没改: 不出预览, 只显示它的说明; 出错显示原因", async () => {
+    api.minutes = minutes;
+    api.revise.mockResolvedValueOnce({ ...proposal, changed: [], changed_labels: [], reply: "转写里没找到合同履约的讨论" })
+      .mockRejectedValueOnce("小鲶没按格式回, 再说一次试试");
+    await mount();
+    const box = screen.getByLabelText("让小鲶改纪要");
+    fireEvent.change(box, { target: { value: "补上合同履约" } });
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+    expect(screen.getByText("🐟 转写里没找到合同履约的讨论")).toBeTruthy();
+    expect(screen.queryByText(/小鲶改了/)).toBeNull();
+    fireEvent.change(box, { target: { value: "再试" } });
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+    expect(screen.getByText("小鲶没按格式回, 再说一次试试")).toBeTruthy();
+  });
+
+  it("Word / Excel 模版填的表: 不给让小鲶改 (改不了表格)", async () => {
+    api.minutes = { json: { ...base, template: { id: "tpl_w", name: "表", kind: "docx" }, output_file: "/m/a.docx" }, markdown: "", path: "" };
+    await mount();
+    expect(screen.queryByLabelText("让小鲶改纪要")).toBeNull();
   });
 });

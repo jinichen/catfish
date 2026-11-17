@@ -96,7 +96,8 @@ export default function TranscriptView({ meetingId, transcript, names, colors }:
       {remembered.length > 0 && (
         <div style={{ fontSize: 12, color: "var(--status-ok)" }}>✓ 已记成常用热词: {remembered.join("、")}</div>
       )}
-      <div style={{ maxHeight: 420, overflowY: "auto", fontSize: 13, lineHeight: 1.6 }}>
+      {/* 11/17: 转写有了自己的一页, 框高跟着窗口走 (原来固定 420, 大窗口下半屏空着); 最少 300 */}
+      <div style={{ maxHeight: "max(300px, calc(100vh - 300px))", overflowY: "auto", fontSize: 13, lineHeight: 1.6 }}>
         {segments.map((seg, i) => (
           <div key={i} className="meeting-seg"
                style={{ display: "flex", gap: 4, alignItems: "flex-start", padding: "1px 0", borderRadius: 4,
