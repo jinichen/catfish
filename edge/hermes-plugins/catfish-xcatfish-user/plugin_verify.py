@@ -201,6 +201,37 @@ _APISERVER_METHOD_TARGETS = [
 ]
 
 
+def _hermes_root() -> str:
+    """hermes 源码目录 —— 静态检查要读的就是这个进程里正在跑的那份。
+
+    11/17: 原来是 `<HERMES_HOME>/hermes-agent`。网关给专家机器人 profile 加载插件时 HERMES_HOME 指
+    profiles/<id>, 下面没有 hermes-agent → 所有补丁点都「缺失」→ 插件拒绝加载, 那个专家机器人
+    丢了鲶鱼的全部补丁 (身份头、审批、出图出视频 ...)。时有时无 (看加载时机), 11/13、11/15、11/17
+    日志里都有成对的「verify (静态) fail」。现在按已导入的 hermes 模块的位置找, 找不到才退回老办法。
+    """
+    import importlib.util as _iu
+    import sys as _sys
+    from pathlib import Path as _P
+
+    env = os.environ.get("HERMES_ROOT", "").strip()
+    if env:
+        return env
+    for name in ("run_agent", "hermes_constants"):
+        mod = _sys.modules.get(name)
+        f = getattr(mod, "__file__", None) if mod is not None else None
+        if not f:
+            try:
+                spec = _iu.find_spec(name)
+            except (ImportError, ValueError):
+                spec = None
+            f = spec.origin if spec is not None else None
+        if f:
+            root = _P(f).resolve().parent
+            if (root / "run_agent.py").exists():
+                return str(root)
+    return str(_hermes_home() / "hermes-agent")
+
+
 def _check_attr_in_source(module_path: str, attr: str) -> bool:
     """静态文件检查 attribute 是否在 source code 里 (不 import, 避开 circular).
 
@@ -210,7 +241,7 @@ def _check_attr_in_source(module_path: str, attr: str) -> bool:
     """
     import os
     import re
-    hermes_root = os.environ.get("HERMES_ROOT") or str(_hermes_home() / "hermes-agent")
+    hermes_root = _hermes_root()
     # module_path "agent.agent_init" → 文件 agent/agent_init.py
     file_path = os.path.join(hermes_root, module_path.replace(".", "/") + ".py")
     if not os.path.exists(file_path):
@@ -250,7 +281,7 @@ def _check_class_method_in_source(module_path: str, class_name: str, method: str
     """
     import ast
     import os
-    hermes_root = os.environ.get("HERMES_ROOT") or str(_hermes_home() / "hermes-agent")
+    hermes_root = _hermes_root()
     file_path = os.path.join(hermes_root, module_path.replace(".", "/") + ".py")
     if _depth > 6 or not os.path.exists(file_path):
         return False
@@ -290,7 +321,7 @@ def _weixin_module_path() -> str:
 
     两处都在时以老位置为准 (v0.22 的仓里不会有新位置); 都不在就照老位置报缺失。
     """
-    hermes_root = os.environ.get("HERMES_ROOT") or str(_hermes_home() / "hermes-agent")
+    hermes_root = _hermes_root()
     if os.path.exists(os.path.join(hermes_root, "gateway", "platforms", "weixin.py")):
         return "gateway.platforms.weixin"
     if os.path.exists(os.path.join(hermes_root, "plugins", "platforms", "weixin", "adapter.py")):
