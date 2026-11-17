@@ -17,6 +17,15 @@ export function ComponentUploadCard({ onPublished }: { onPublished: () => void }
   const [received, setReceived] = useState(0);
   const [speed, setSpeed] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
+  // 11/18 鸿波「提示 2G 多需要 XXX 秒, 是不是不合适」: 原来写死「两个多 G 要几十秒」, 4GB 的高精度组件也这么说 ——
+  // 改成按真实大小说, 再给一个走着的秒表 (服务端要把整个包读两遍: 校验 gzip + 算 sha256)
+  const [verifyStart, setVerifyStart] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (phase !== "verifying") return;
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, [phase]);
   const [pending, setPending] = useState<PendingUpload[]>([]);
   const stopRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -60,7 +69,8 @@ export function ComponentUploadCard({ onPublished }: { onPublished: () => void }
         void reloadPending();
         return;
       }
-      setPhase("verifying"); // 服务端校验 gzip、读 pack.json、算 sha256, 两个多 G 要一会儿
+      setVerifyStart(Date.now());
+      setPhase("verifying"); // 服务端校验 gzip、读 pack.json、算 sha256 —— 整个包读两遍, 包越大越久
       const out = await completeUpload(file.name);
       setPhase("done");
       setMessage(`✓ 已发布 ${out.published?.file ?? file.name}, 员工的 Companion 下次打开对应功能就能装`);
@@ -120,7 +130,10 @@ export function ComponentUploadCard({ onPublished }: { onPublished: () => void }
               {phase === "uploading" && `${pct}% · ${formatSize(received)} / ${formatSize(file.size)}`
                 + (speed > 0 ? ` · ${formatSize(speed)}/s` : "") + (eta !== null ? ` · 约 ${eta} 分钟` : "")}
               {phase === "paused" && `已暂停 · ${pct}%, 点「继续上传」接着传`}
-              {phase === "verifying" && "传完了, 服务端正在校验并更新清单 (两个多 G 要几十秒)…"}
+              {phase === "verifying" && file && (
+                `传完了, 服务端正在校验 ${formatSize(file.size)} 的包并更新清单 (整个包要读两遍, 包越大越久)`
+                + (verifyStart ? ` · 已 ${Math.max(0, Math.round((now - verifyStart) / 1000))} 秒` : "") + "…"
+              )}
             </div>
           </div>
         )}
