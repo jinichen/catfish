@@ -293,6 +293,9 @@ export interface AuditEvent {
   error?: string;
   security_concern?: string;
   source?: string;     // X-Catfish-Source (网关审计 extra 里带出来), 没标的没有
+  /** 11/17 出图 / 出视频: 生成了几张 / 几秒 (token 是 0); 对话请求没有这两个键 */
+  media_units?: number;
+  media_unit?: string;
 }
 
 export interface AuditEventsResponse {

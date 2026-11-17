@@ -119,7 +119,7 @@ export function AdminQuotaEvents() {
     setExporting(null);
     const header = [
       "ts", "user", "department", "model", "tokens_in", "tokens_cache_read", "tokens_out",
-      "tokens_total", "latency_ms", "ttft_ms", "status", "error", "source",
+      "tokens_total", "media_units", "media_unit", "latency_ms", "ttft_ms", "status", "error", "source",
     ].join(",");
     const rows = all.map((e) => [
       new Date(e.ts * 1000).toISOString(),
@@ -130,6 +130,8 @@ export function AdminQuotaEvents() {
       e.cache_read_tokens ?? 0,
       e.completion_tokens,
       e.total_tokens,
+      e.media_units ?? "",
+      csvEscape(e.media_unit ?? ""),
       e.latency_ms,
       e.ttft_ms ?? "",
       csvEscape(e.status),
@@ -211,6 +213,18 @@ export function AdminQuotaEvents() {
       cell: (e) => <span style={{ fontWeight: 500 }}>{e.total_tokens.toLocaleString()}</span>,
       align: "right",
       width: 92,
+    },
+    // 11/17 出图 / 出视频按张 / 按秒计费, token 那几列是 0 —— 单独一列显示生成了多少
+    {
+      header: <span title="出图 / 改图按张、出视频按秒计费 (这类请求的 token 是 0)">生成量</span>,
+      cell: (e) =>
+        e.media_units ? (
+          <span style={{ fontWeight: 500 }}>{`${e.media_units.toLocaleString()} ${e.media_unit ?? ""}`}</span>
+        ) : (
+          <span style={{ color: "var(--text-muted)" }}>—</span>
+        ),
+      align: "right",
+      width: 72,
     },
     {
       header: "延迟 ms",

@@ -207,7 +207,8 @@ def gw(monkeypatch, tmp_path):
     ]
     cfg = Config(models=models)
     monkeypatch.setattr(MR, "get_config", lambda: cfg)
-    monkeypatch.setattr(MR, "log_request_metadata", lambda **kw: None)
+    audit: list[dict] = []
+    monkeypatch.setattr(MR, "log_request_metadata", lambda **kw: audit.append(kw))
     up = _Upstream(monkeypatch)
     who = {"sub": "e@x.com"}
 
@@ -215,7 +216,9 @@ def gw(monkeypatch, tmp_path):
         return User(sub=who["sub"], role="employee", department="研发部")
 
     app.dependency_overrides[get_current_user] = _user
-    yield TestClient(app), up, who
+    client = TestClient(app)
+    client.audit = audit  # 写进网关审计 (gateway_audit) 的参数
+    yield client, up, who
     app.dependency_overrides.clear()
     logging.disable(logging.NOTSET)
 
@@ -244,6 +247,8 @@ def test_文生图_百炼请求体_回图片字节_按张记账(gw):
     assert body["input"]["messages"][0]["content"] == [{"text": "一只猫"}]
     assert body["parameters"] == {"watermark": False, "prompt_extend": True, "size": "928*1664"}
     assert _usage() == [("e@x.com", "img", 0, 0, 1.0)]
+    (aud,) = c.audit
+    assert aud["media_units"] == 1 and aud["media_unit"] == "张", "配额日志页靠这两个显示「1 张」"
 
 
 def test_改图_原图在前文字在后_张数上限(gw):
@@ -297,6 +302,8 @@ def test_视频_提交_轮询_成功只记一次账_只有本人能取(gw):
         r = c.get(f"/v1/videos/{job['id']}")
         assert r.json()["status"] == "succeeded" and r.json()["duration"] == 5
     assert _usage() == [("e@x.com", "t2v", 0, 0, 5.0)]
+    oks = [a for a in c.audit if a.get("status") == "ok"]
+    assert len(oks) == 1 and oks[0]["media_units"] == 5 and oks[0]["media_unit"] == "秒"
     r = c.get(f"/v1/videos/{job['id']}/content")
     assert r.status_code == 200 and r.content == b"MP4DATA" and r.headers["content-type"] == "video/mp4"
 

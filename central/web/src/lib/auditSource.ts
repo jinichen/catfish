@@ -6,6 +6,9 @@
 // 不认识的原样显示, 不猜。
 
 const LABELS: Record<string, string> = {
+  // 11/17 小鲶出图 / 出视频 (hermes 插件 media_gen.py)
+  "plugin:media-image": "出图 / 改图",
+  "plugin:media-video": "出视频",
   "companion-chat": "对话",
   "companion-advisor": "早安 · 智能参谋",
   "companion-advisor-transform": "早安 · 智能参谋",

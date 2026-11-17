@@ -203,6 +203,9 @@ def log_request_metadata(
     # BL-RBAC-DAY4-HARDENING (5/17, hermes 0.14 #23194 ctx.llm 防御):
     # X-Catfish-Source header. 'companion' / 'plugin:<name>' / 'unknown' / 'cron'
     source: str = "unknown",
+    # 11/17 出图 / 出视频: tokens 是 0, 生成了几张 / 几秒记这里 (进 gateway_audit.extra, 配额日志页显示)
+    media_units: float = 0,
+    media_unit: str = "",
 ) -> None:
     """Emit a single structured log line + persist 到 JSONL.
 
@@ -274,6 +277,9 @@ def log_request_metadata(
     # 默认 'unknown' 不写字段减少噪音, 显式标的 (companion / plugin:xxx) 才记.
     if source and source != "unknown":
         record["source"] = source[:50]
+    if media_units:
+        record["media_units"] = media_units
+        record["media_unit"] = media_unit[:4]
 
     # 1. stderr log (实时可见, 给 ops 看)
     logger.info(json.dumps(record, ensure_ascii=False))

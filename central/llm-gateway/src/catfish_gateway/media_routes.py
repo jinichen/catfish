@@ -176,7 +176,8 @@ def register_media_routes(app) -> None:
                                  status="error", error=e.message[:200], source=_source(request))
             raise _upstream_http(e) from e
         latency = (time.time() - start) * 1000
-        log_request_metadata(user=email, model=model.name, latency_ms=latency, status="ok", source=_source(request))
+        log_request_metadata(user=email, model=model.name, latency_ms=latency, status="ok", source=_source(request),
+                             media_units=len(outs), media_unit=MODE_UNIT[mode])
         _quota_module.record_usage(user_email=email, department=user.department, model=model.name,
                                    tokens_in=0, tokens_out=0, media_units=len(outs))
         logger.info("media image: user=%s model=%s mode=%s n=%d inputs=%d %.0fms",
@@ -246,7 +247,8 @@ def register_media_routes(app) -> None:
             _quota_module.record_usage(user_email=job.user_email, department=job.department, model=job.model,
                                        tokens_in=0, tokens_out=0, media_units=job.units)
             log_request_metadata(user=job.user_email, model=job.model,
-                                 latency_ms=float(job.updated_ms - job.ts_ms), status="ok", source=_source(request))
+                                 latency_ms=float(job.updated_ms - job.ts_ms), status="ok", source=_source(request),
+                                 media_units=job.units, media_unit=MODE_UNIT.get(job.mode, "秒"))
             logger.info("media video done: user=%s model=%s job=%s secs=%s", job.user_email, job.model, job.id, job.units)
         elif job.status == "failed":
             log_request_metadata(user=job.user_email, model=job.model, status="error", error=job.error[:200],
