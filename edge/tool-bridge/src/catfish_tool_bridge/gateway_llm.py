@@ -17,6 +17,31 @@ import os
 logger = logging.getLogger("catfish.tool_bridge.gateway_llm")
 
 
+def resolve_model(model: str | None = None) -> str:
+    """调用方没指定时用哪个模型: Companion 对话选的 (picker) → 中央默认 → 兜底。
+    纪要要在 minutes.json 里记下是哪个模型写的 (11/17: 同一份转写 flash 和 MAX 写出来差很多), 所以单独拿出来。"""
+    if model:
+        return model
+    from . import picker_state, role_resolver  # noqa: PLC0415
+    return picker_state.read_picker_model() or role_resolver.resolve("chat_default") or "catfish-private-main"
+
+
+async def call_llm_json(messages: list[dict], parse, **kw):
+    """调一次, 按 parse 解析; 解析不了 (模型在 JSON 字符串里写了没转义的双引号之类) 把原样输出和错误给它, 让它改一次。
+    11/17 实测千问 4.0 MAX 生成纪要偶发「没按格式输出」, 整个纪要直接失败 —— 再给一次机会。还不行照常抛。"""
+    raw = await call_llm(messages, **kw)
+    try:
+        return parse(raw)
+    except ValueError as e:
+        logger.info("gateway_llm: 输出不是合法 JSON, 让模型改一次: %s", str(e)[:120])
+        fix = messages + [
+            {"role": "assistant", "content": raw},
+            {"role": "user", "content": "上面的输出解析不了 (不是合法 JSON, 或者缺了字段)。只输出改好的那一个 JSON 对象, 不要别的文字; "
+                                        "字符串里要引用原话用「」, 不要用没转义的英文双引号。"},
+        ]
+        return parse(await call_llm(fix, **kw))
+
+
 async def call_llm(
     messages: list[dict],
     model: str | None = None,
@@ -48,9 +73,7 @@ async def call_llm(
     if not tok:
         raise RuntimeError("gateway_llm.call_llm: 没 auth token. 设 CATFISH_DEV_TOKEN env 或 caller 显式传 auth_token.")
 
-    if model is None:
-        from . import picker_state, role_resolver  # noqa: PLC0415
-        model = picker_state.read_picker_model() or role_resolver.resolve("chat_default") or "catfish-private-main"
+    model = resolve_model(model)
 
     payload = {"model": model, "messages": messages, "temperature": temperature,
                "max_tokens": max_tokens, "stream": False}

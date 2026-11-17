@@ -145,6 +145,8 @@ export interface MinutesJson {
   output_file?: string;
   /** 11/12: 员工改过纪要的时间; 有它「重新生成」要先提醒会覆盖 */
   edited_at?: string;
+  /** 11/17: 哪个模型写的 (同一份转写 flash 跟 MAX 写出来差很多, 界面上标出来); 老纪要没有 */
+  model?: string;
 }
 
 export interface MinutesReferences {
@@ -289,6 +291,11 @@ export interface MinutesRevision {
   changed_labels: string[];
   /** false = 会议太长, 只给了小鲶跟这句话相关的转写片段 */
   transcript_full: boolean;
+  /** 标准格式装不下员工要的结构 (按议题分段等), 整份改成 Markdown —— 采用后按自由排版显示 */
+  restructured?: boolean;
+  model?: string;
+  /** 重排后条目明显变少 (模型自己删了内容): 改前 / 改后几条 */
+  shrink?: { before: number; after: number } | null;
 }
 export const meetingMinutesRevise = (
   id: string, instruction: string, base: { fields: MinutesFields; markdown: string | null } | null, history: string[],

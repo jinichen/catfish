@@ -20,7 +20,10 @@ vi.mock("../../lib/tauri_meeting", async (orig) => ({
   meetingMinutesRevise: api.revise,
   meetingMinutesSave: api.save,
 }));
-vi.mock("../../lib/tauri_services", () => ({ toolBridgeCallTool: vi.fn(async () => ({ ok: true, result: { ok: true } })) }));
+vi.mock("../../lib/tauri_services", () => ({
+  toolBridgeCallTool: vi.fn(async () => ({ ok: true, result: { ok: true } })),
+  fetchCatalog: vi.fn(async () => ({ models: [{ id: "catfish-public-qwen-flash", display_name: "qwen3.8-flash（公有云）" }] })),
+}));
 
 import MinutesView from "./MinutesView";
 
@@ -185,5 +188,33 @@ describe("让小鲶改纪要 (11/17)", () => {
     api.minutes = { json: { ...base, template: { id: "tpl_w", name: "表", kind: "docx" }, output_file: "/m/a.docx" }, markdown: "", path: "" };
     await mount();
     expect(screen.queryByLabelText("让小鲶改纪要")).toBeNull();
+  });
+
+  it("11/17 标准格式装不下 (按议题分段): 整份 Markdown 预览, 采用存全文 + 待办", async () => {
+    api.minutes = minutes;
+    const md = "# 周会\n\n## 一、目前存在的问题\n- 金智达继续辅导";
+    api.revise.mockResolvedValueOnce({ ...proposal, restructured: true, markdown: md, changed: ["markdown"], shrink: { before: 38, after: 5 },
+      changed_labels: ["整份改成按你说的结构排"], fields: { action_items: proposal.fields.action_items } });
+    await mount();
+    const box = screen.getByLabelText("让小鲶改纪要");
+    fireEvent.change(box, { target: { value: "分两块写" } });
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+    expect(screen.getByText(/按你说的结构整份重新排了/)).toBeTruthy();
+    expect(screen.getByText("一、目前存在的问题")).toBeTruthy();
+    expect(screen.getByText(/原来 38 条.*改后只看到 5 条/)).toBeTruthy();
+    await act(async () => { fireEvent.click(screen.getByText("采用")); });
+    expect(api.save).toHaveBeenCalledWith("mtg_1", { action_items: proposal.fields.action_items }, md);
+  });
+});
+
+describe("纪要标出是哪个模型写的 (11/17)", () => {
+  it("显示模型名; 老纪要没记不显示", async () => {
+    api.minutes = { json: { ...base, model: "catfish-public-qwen-flash" }, markdown: "", path: "" };
+    await mount();
+    expect(await screen.findByText("qwen3.8-flash（公有云） 写的")).toBeTruthy();
+    cleanup();
+    api.minutes = { json: base, markdown: "", path: "" };
+    await mount();
+    expect(screen.queryByText(/写的$/)).toBeNull();
   });
 });

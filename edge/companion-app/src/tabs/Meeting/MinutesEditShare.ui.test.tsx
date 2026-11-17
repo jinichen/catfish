@@ -33,7 +33,10 @@ vi.mock("../../lib/tauri_wiki_people", () => ({
   wikiPeopleEmails: vi.fn(async (names: string[]) => ({ people: [], matches: Object.fromEntries(names.map((n) => [n,
     n === "迟小璐" ? ["cxl@ex.cn"] : n === "陈功" ? ["cg1@ex.cn", "cg2@ex.cn"] : []])) })),
 }));
-vi.mock("../../lib/tauri_services", () => ({ toolBridgeCallTool: vi.fn(async () => ({ ok: true, result: { ok: true } })) }));
+vi.mock("../../lib/tauri_services", () => ({
+  toolBridgeCallTool: vi.fn(async () => ({ ok: true, result: { ok: true } })),
+  fetchCatalog: vi.fn(async () => ({ models: [] })),
+}));
 vi.mock("../../lib/tauri_colleague_rooms", () => ({
   roomList: vi.fn(async () => ({ me: "me@x.cn", rooms: [
     { room_id: "r1", name: "CCRC 迎审组", my_state: "joined", joined: 5 },

@@ -69,8 +69,10 @@ export function useRevise(meetingId: string, minutes: Minutes | null, markdownVi
     setApplying(true);
     setError(null);
     try {
-      const fields: MinutesFields = markdownView ? { action_items: proposal.fields.action_items ?? [] } : proposal.fields;
-      await meetingMinutesSave(meetingId, fields, markdownView ? proposal.markdown : null);
+      // 文字模版那份 / 标准格式改成了整份 Markdown (restructured): 存全文 + 待办
+      const md = markdownView || proposal.markdown != null;
+      const fields: MinutesFields = md ? { action_items: proposal.fields.action_items ?? [] } : proposal.fields;
+      await meetingMinutesSave(meetingId, fields, md ? proposal.markdown : null);
       discard();
       onApplied();
     } catch (e) {
@@ -211,7 +213,20 @@ export function RevisePreview({ api, minutes, markdownView }: { api: ReviseApi; 
       {!p.transcript_full && (
         <div style={muted}>会议较长, 小鲶这次只看了转写里跟你这句话相关的片段; 要补的内容要是没找到, 可以说具体些 (人名、关键词)。</div>
       )}
-      {markdownView ? (
+      {p.restructured ? (
+        <>
+          {/* 标准格式装不下员工要的结构, 整份重排: 逐行对比没意义, 直接给改后全文 */}
+          <div style={muted}>按你说的结构整份重新排了 (标准的「摘要 / 决议 / 待办」格式装不下), 采用后按这份显示。</div>
+          {p.shrink && (
+            <div style={{ fontSize: 12, color: "var(--status-warn)", lineHeight: 1.6 }}>
+              ⚠ 原来 {p.shrink.before} 条 (决议 / 待办 / 待定问题), 改后只看到 {p.shrink.after} 条 —— 小鲶可能删了内容, 核对过再采用;
+              换个强一点的模型 (对话页选) 再说一次通常好很多。
+            </div>
+          )}
+          <Markdown text={p.markdown ?? ""} />
+          <Section title="待办 (加入任务库用)"><ItemRows before={m.action_items} after={items} /></Section>
+        </>
+      ) : markdownView ? (
         <>
           <Section title="改动">
             {markdownHunks(minutes.markdown, p.markdown ?? "").map((r, i) =>

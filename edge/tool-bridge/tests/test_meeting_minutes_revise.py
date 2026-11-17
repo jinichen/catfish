@@ -107,3 +107,46 @@ def test_pick_transcript_long_meeting_by_keywords():
     assert mr.pick_transcript(lines, "!!!", limit=2000) == ("", False)
     # 短会议全给
     assert mr.pick_transcript(["a", "b"], "x") == ("a\nb", True)
+
+
+def test_restructure_standard_into_markdown_and_prompt_rules(tmp_path, monkeypatch):
+    """员工要按议题分段 (标准格式装不下) → 整份 Markdown 提议; 提示词写明员工说的事实直接用、说明不进纪要、别加【】前缀。"""
+    _meeting(tmp_path)
+    md = "# CCRC整改会议\n\n## 一、CCRC 目前存在的问题\n- 金智达继续辅导\n"
+    seen = _fake(monkeypatch, {"reply": "按两个议题重排了", "markdown": md, "action_items": DOC["action_items"]})
+    r = asyncio.run(mr.handle_revise(_p(tmp_path, instruction="纪要分两块: 目前存在的问题, 由金智达继续辅导; 无法取证的资质")))
+    assert r["restructured"] is True and r["markdown"] == md
+    assert r["changed_labels"] == ["整份改成按你说的结构排"]
+    sys_prompt = seen[0][0]["content"]
+    assert "以他说的为准" in sys_prompt and "不要写进纪要" in sys_prompt and "【1.…】" in sys_prompt
+    # 采用: 标准纪要存成自由排版, 之后按 Markdown 显示
+    from catfish_tool_bridge import meeting_minutes_edit as me
+    me.handle_save(_p(tmp_path, fields={"action_items": DOC["action_items"]}, markdown=md))
+    doc = json.loads((tmp_path / "meetings" / MID / "minutes.json").read_text(encoding="utf-8"))
+    assert doc["template"] == {"id": "free", "name": "自由排版"}
+    assert (tmp_path / "meetings" / MID / "minutes.md").read_text(encoding="utf-8") == md
+
+
+def test_bad_json_gets_one_retry(tmp_path, monkeypatch):
+    _meeting(tmp_path)
+    replies = iter(['{"reply": "好", "summary": "他说"没问题"", }', json.dumps({**DOC, "reply": "改好了", "summary": "压短了。"}, ensure_ascii=False)])
+    calls = []
+
+    async def fake(messages, model=None, **kw):
+        calls.append(messages)
+        return next(replies)
+    monkeypatch.setattr(gateway_llm, "call_llm", fake)
+    r = asyncio.run(mr.handle_revise(_p(tmp_path, instruction="摘要压短")))
+    assert r["fields"]["summary"] == "压短了。" and len(calls) == 2
+    assert "解析不了" in calls[1][-1]["content"]
+
+
+def test_restructure_that_drops_items_is_flagged(tmp_path, monkeypatch):
+    """重排后条目少了一大截 (flash 实测 38 → 5) → shrink 提示, 不靠模型自己说。"""
+    doc = {**DOC, "decisions": [f"决议{i}" for i in range(8)], "open_questions": [f"问题{i}" for i in range(4)]}
+    _meeting(tmp_path, doc=doc)
+    _fake(monkeypatch, {"reply": "都保留了", "markdown": "# 会\n## 一\n- 决议0\n- 问题0\n", "action_items": []})
+    r = asyncio.run(mr.handle_revise(_p(tmp_path, instruction="分两块")))
+    assert r["shrink"] == {"before": 13, "after": 2}
+    _fake(monkeypatch, {"reply": "好", "markdown": "# 会\n" + "".join(f"- 条目{i}\n" for i in range(12)), "action_items": []})
+    assert asyncio.run(mr.handle_revise(_p(tmp_path, instruction="分两块")))["shrink"] is None

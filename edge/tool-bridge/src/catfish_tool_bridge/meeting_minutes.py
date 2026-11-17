@@ -183,7 +183,7 @@ async def summarize(
 ) -> dict:
     """template = None 时跟原来一样; 给了 {id, name, body} 就多调一次大模型按模版写 minutes.md
     (meeting_minutes_template.py)。结构化结果 (待办等) 两种情况都有, 「加入任务库」照常用。"""
-    from .gateway_llm import call_llm  # noqa: PLC0415 — 网关调用 (鉴权 / 选模型 / 不走代理)
+    from .gateway_llm import call_llm, call_llm_json, resolve_model  # noqa: PLC0415 — 网关调用 (鉴权 / 选模型 / 不走代理)
 
     meta, transcript, names = load_inputs(meeting_dir)
     lines = transcript_lines(transcript, names)
@@ -200,19 +200,20 @@ async def summarize(
     background = mc.prompt_block(ctx) + ml.prompt_block(meeting_dir)   # 11/15 会中记到纪要的要点
     live_md = ml.markdown_section(meeting_dir)
     note = mc.references_note(ctx)
+    model = resolve_model(model)   # 11/17: 记下是哪个模型写的, 界面上显示 (flash 跟 MAX 写出来差很多)
     kw = dict(gateway_url=gateway_url, auth_token=auth_token, model=model, temperature=0.2, max_tokens=4000, source=SOURCE)
     if len(chunks) == 1:
-        minutes = parse_minutes(await call_llm(
-            build_messages(meta, "\n".join(chunks[0]), partial=False, names=names, background=background), **kw))
+        minutes = await call_llm_json(
+            build_messages(meta, "\n".join(chunks[0]), partial=False, names=names, background=background), parse_minutes, **kw)
     else:
         logger.info("meeting %s: 转写 %d 段, 分段总结", meta.get("id"), len(chunks))
         partials = [
-            parse_minutes(await call_llm(build_messages(meta, "\n".join(c), partial=True, names=names, background=background), **kw))
+            await call_llm_json(build_messages(meta, "\n".join(c), partial=True, names=names, background=background), parse_minutes, **kw)
             for c in chunks
         ]
-        minutes = parse_minutes(await call_llm(build_reduce_messages(meta, partials, background), **kw))
+        minutes = await call_llm_json(build_reduce_messages(meta, partials, background), parse_minutes, **kw)
 
-    doc: dict[str, Any] = {"version": 1, "meeting_id": meta.get("id"), "chunks": len(chunks), **minutes,
+    doc: dict[str, Any] = {"version": 1, "meeting_id": meta.get("id"), "chunks": len(chunks), "model": model, **minutes,
                            "references": mc.references(ctx)}
     from . import meeting_minutes_template as mt  # noqa: PLC0415
     # 材料: 短会议给转写原文; 长会议给分段要点 (原文塞不下, 跟 reduce 那步同一个取舍)
@@ -232,10 +233,8 @@ async def summarize(
             "参会人员": "、".join(sorted(set(names.values()))), "参会人数": str(meta.get("attendees") or ""),
             "时长": mt._duration(meta, transcript),
         }
-        values = mt.parse_fill(
-            await call_llm(mt.build_fill_messages(head, known, ft.slots_for_prompt(slots), material, minutes), **kw),
-            slots,
-        )
+        values = await call_llm_json(mt.build_fill_messages(head, known, ft.slots_for_prompt(slots), material, minutes),
+                                     lambda raw: mt.parse_fill(raw, slots), **kw)
         values = ft.apply_todos(slots, values, minutes["action_items"])
         safe = re.sub(r'[\\/:*?"<>|\s]+', " ", str(meta.get("title") or "会议")).strip()[:40] or "会议"
         out = meeting_dir / f"{safe} 会议纪要{src.suffix.lower()}"

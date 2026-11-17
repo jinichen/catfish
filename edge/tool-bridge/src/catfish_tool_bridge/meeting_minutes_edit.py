@@ -83,6 +83,9 @@ def handle_save(params: dict) -> dict:
         if not md:
             raise ValueError("纪要不能是空的")
         md += "\n"
+        if not doc.get("template"):
+            # 11/17 让小鲶改: 标准格式装不下员工要的结构 (按议题分段等), 整份改成自由排版的 Markdown —— 之后按这份显示
+            doc["template"] = {"id": "free", "name": "自由排版"}
     elif doc.get("template") and not doc.get("output_file"):
         md = (d / "minutes.md").read_text(encoding="utf-8")   # 模版版只改了待办, 正文不动
     else:

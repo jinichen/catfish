@@ -22,7 +22,7 @@
 import { useEffect, useState } from "react";
 
 import { Markdown } from "../../lib/markdown";
-import { toolBridgeCallTool } from "../../lib/tauri_services";
+import { fetchCatalog, toolBridgeCallTool } from "../../lib/tauri_services";
 import {
   DEFAULT_TEMPLATE_ID, meetingMinutes, meetingMinutesGenerate, meetingMinutesOpenFile, meetingTemplatesList, referencesNote,
   type MeetingMeta, type Minutes, type MinutesTemplate,
@@ -68,6 +68,14 @@ export default function MinutesView({ meta, names = {} }: { meta: MeetingMeta; n
 
   useEffect(() => {
     void loadTemplates();
+  }, []);
+
+  // 模型 id → 显示名 (纪要头上「千问4.0 MAX 写的」); 取不到就显示 id
+  const [modelNames, setModelNames] = useState<Record<string, string>>({});
+  useEffect(() => {
+    fetchCatalog()
+      .then((c) => setModelNames(Object.fromEntries((c.models ?? []).map((x) => [x.id, x.display_name]))))
+      .catch(() => undefined);
   }, []);
 
   function reload() {
@@ -163,6 +171,13 @@ export default function MinutesView({ meta, names = {} }: { meta: MeetingMeta; n
         )}
         {minutes?.json.edited_at && (
           <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 400, color: "var(--catfish-cyan)" }}>已人工修改</span>
+        )}
+        {minutes?.json.model && (
+          // 11/17 鸿波「纪要写的效果奇差无比」: 同一份转写 qwen3.8-flash 跟千问 4.0 MAX 写出来差很多 —— 标出是谁写的
+          <span title="纪要质量主要看模型; 用的是对话页选的模型, 长会议换强一点的再「重新生成」"
+                style={{ marginLeft: 8, fontSize: 11, fontWeight: 400, color: "var(--catfish-text-muted)" }}>
+            {modelNames[minutes.json.model] ?? minutes.json.model} 写的
+          </span>
         )}
       </div>
       <select
