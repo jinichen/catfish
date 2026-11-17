@@ -240,6 +240,7 @@ const CATFISH: &[(Pat, Class, &str)] = &[
     (Exact("wiki-shared"), Rebuild, "部门共享知识 (从中央重新拉)"),
     (Exact("models"), Rebuild, "本地模型 (重新下载)"),
     (Exact("meeting-asr"), Rebuild, "会议组件包 (重新下载)"),
+    (Exact("meeting-asr-hq"), Rebuild, "高精度转写组件 (重新下载)"),
     (Prefix("edge-runtime"), Rebuild, "运行环境"),
     (Exact("runtime"), Rebuild, "运行环境"),
     (Exact("venv"), Rebuild, "运行环境"),
