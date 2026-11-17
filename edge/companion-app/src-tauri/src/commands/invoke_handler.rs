@@ -278,6 +278,7 @@ pub(crate) fn handler(
             crate::commands::embed_model_cmd::embed_model_status,
             crate::commands::embed_model_cmd::embed_model_install,
             crate::commands::meeting_asr_cmd::meeting_transcribe,
+            crate::commands::meeting_asr_cmd::meeting_transcribe_phase,
             crate::commands::meeting_asr_cmd::meeting_transcript,
             crate::commands::meeting_minutes_cmd::meeting_set_speakers,
             crate::commands::meeting_minutes_cmd::meeting_speakers,

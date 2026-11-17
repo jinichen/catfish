@@ -18,6 +18,32 @@ use crate::services::meeting_store::{self as store, MeetingStatus};
 
 static INSTALLING: AtomicBool = AtomicBool::new(false);
 static TRANSCRIBING: AtomicBool = AtomicBool::new(false);
+/// 11/17 正在转写的那场: (会议 id, 阶段, 音频秒数, 开始的 unix 秒)。进度原来只靠一次性事件推给界面 —— 界面重新订阅的
+/// 空当、切走再回来都会漏, 一直显示「准备中」(鸿波「一直挂在准备中, 是卡住了吗」)。界面改成也来问这个。
+static PROGRESS: std::sync::Mutex<Option<(String, String, Option<f64>, u64)>> = std::sync::Mutex::new(None);
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+fn set_progress(id: &str, phase: &str, duration: Option<f64>) {
+    if let Ok(mut g) = PROGRESS.lock() {
+        let started = g.as_ref().filter(|p| p.0 == id).map(|p| p.3).unwrap_or_else(now_secs);
+        let duration = duration.or_else(|| g.as_ref().filter(|p| p.0 == id).and_then(|p| p.2));
+        *g = Some((id.to_string(), phase.to_string(), duration, started));
+    }
+}
+
+/// 某场会议现在转到哪一步: {phase, duration_secs, elapsed_secs}; 不在转写 → null。
+#[tauri::command]
+pub fn meeting_transcribe_phase(id: String) -> serde_json::Value {
+    match PROGRESS.lock().ok().and_then(|g| g.clone()) {
+        Some((pid, phase, dur, started)) if pid == id => {
+            json!({ "phase": phase, "duration_secs": dur, "elapsed_secs": now_secs().saturating_sub(started) })
+        }
+        _ => serde_json::Value::Null,
+    }
+}
 
 /// 现在有没有会议在转写 (删除会议时要挡住正在转写的那条)。
 pub(crate) fn transcribing() -> bool {
@@ -119,6 +145,10 @@ pub fn meeting_transcribe(app: tauri::AppHandle, id: String) -> Result<(), Strin
     meta.status = MeetingStatus::Transcribing;
     meta.error = None;
     store::save(&root, &meta)?;
+    if let Ok(mut g) = PROGRESS.lock() {
+        *g = None;
+    }
+    set_progress(&meta.id, "starting", None);
 
     tauri::async_runtime::spawn_blocking(move || {
         let r = run_transcribe(&app, &home, &root, &inst, &script, &meta);
@@ -136,6 +166,9 @@ pub fn meeting_transcribe(app: tauri::AppHandle, id: String) -> Result<(), Strin
             "meeting_transcribe_progress",
             json!({ "id": meta.id, "phase": "finished", "done": true, "error": r.err() }),
         );
+        if let Ok(mut g) = PROGRESS.lock() {
+            *g = None;
+        }
         TRANSCRIBING.store(false, Ordering::SeqCst);
     });
     Ok(())
@@ -152,9 +185,13 @@ fn run_transcribe(
     let audio = store::audio_dir(root, &meta.id)?;
     let out = store::transcript_path(root, &meta.id)?;
     let args = TranscribeArgs { script, audio: asr::AudioInput::Dir(&audio), out: &out, speakers: meta.attendees, local_speakers: meta.local_speakers.unwrap_or(0), hotwords: &meta.hotwords };
+    let dir = store::meeting_dir(root, &meta.id)?;
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+    let redo = backup_before_redo(&dir, &out, &stamp);
     let started = std::time::Instant::now();
     let done = asr::transcribe(inst, &args, &asr::root(home).join(".empty-cache"), |ev| {
         if let AsrEvent::Phase { phase, duration_secs } = ev {
+            set_progress(&meta.id, phase, *duration_secs);
             let _ = app.emit(
                 "meeting_transcribe_progress",
                 json!({ "id": meta.id, "phase": phase, "duration_secs": duration_secs, "done": false }),
@@ -162,8 +199,38 @@ fn run_transcribe(
         }
     })?;
     log::info!("[meeting] {} 转写完成 {done:?} · 用时 {:.0}s", meta.id, started.elapsed().as_secs_f64());
-    apply_speaker_hints(&store::meeting_dir(root, &meta.id)?, &out);
+    if redo {
+        retire_speaker_names(&dir, &stamp);
+    }
+    apply_speaker_hints(&dir, &out);
     Ok(())
+}
+
+/// 11/17 已转写过的会议重新转写 (说话人分法改了, 鸿波要老会议也能重分): 先把原转写 (含改过的错字) 另存
+/// `transcript.before-<时间>.json`。返回是不是重新转写。脚本只在成功时整份替换 transcript.json, 失败原来的还在。
+fn backup_before_redo(dir: &Path, transcript: &Path, stamp: &str) -> bool {
+    if !transcript.is_file() {
+        return false;
+    }
+    let bak = dir.join(format!("transcript.before-{stamp}.json"));
+    match std::fs::copy(transcript, &bak) {
+        Ok(_) => true,
+        Err(e) => {
+            log::warn!("[meeting] 重新转写前备份原转写失败: {e}");
+            true
+        }
+    }
+}
+
+/// 重新转写成功后: 说话人编号重新分过, 原来起的名字对不上了 —— 挪成 `speakers.before-<时间>.json` (不删),
+/// 界面上说话人一栏会展开让员工按 ▶ 重新认。
+fn retire_speaker_names(dir: &Path, stamp: &str) {
+    let names = dir.join("speakers.json");
+    if names.exists() {
+        if let Err(e) = std::fs::rename(&names, dir.join(format!("speakers.before-{stamp}.json"))) {
+            log::warn!("[meeting] 挪开旧的说话人名字失败: {e}");
+        }
+    }
 }
 
 /// 11/11 线上会议: 这台电脑前只有员工一个人时, 麦克风那条的说话人就是他自己 —— 脚本在
@@ -215,6 +282,21 @@ mod tests {
         std::fs::write(d2.path().join("t.json"), r#"{"segments":[]}"#).unwrap();
         apply_speaker_hints(d2.path(), &d2.path().join("t.json"));
         assert!(!d2.path().join("speakers.json").exists());
+    }
+
+    #[test]
+    fn redo_backs_up_transcript_and_retires_names() {
+        let d = tempfile::tempdir().unwrap();
+        let t = d.path().join("transcript.json");
+        assert!(!backup_before_redo(d.path(), &t, "s1"), "第一次转写不算重新转写");
+        std::fs::write(&t, r#"{"segments":[{"text":"改过的"}]}"#).unwrap();
+        std::fs::write(d.path().join("speakers.json"), r#"{"0":"王总"}"#).unwrap();
+        assert!(backup_before_redo(d.path(), &t, "s2"));
+        assert!(std::fs::read_to_string(d.path().join("transcript.before-s2.json")).unwrap().contains("改过的"));
+        retire_speaker_names(d.path(), "s2");
+        assert!(!d.path().join("speakers.json").exists());
+        assert!(std::fs::read_to_string(d.path().join("speakers.before-s2.json")).unwrap().contains("王总"));
+        retire_speaker_names(d.path(), "s3");   // 没起过名字: 什么都不做
     }
 
     #[test]

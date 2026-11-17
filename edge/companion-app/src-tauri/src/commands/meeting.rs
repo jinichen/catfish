@@ -16,6 +16,9 @@ fn recorded_seconds(audio_dir: &std::path::Path) -> f64 {
 
 /// meta 说"录音中"但录音线程并不在录 (App 被强退 / 崩溃): 改成已录, 时长按分片算。
 fn heal_if_stale(root: &std::path::Path, mut m: MeetingMeta, active_dir: Option<&str>) -> MeetingMeta {
+    if m.status == MeetingStatus::Transcribing {
+        return heal_transcribing(root, m, super::meeting_asr_cmd::transcribing());
+    }
     if m.status != MeetingStatus::Recording {
         return m;
     }
@@ -26,6 +29,25 @@ fn heal_if_stale(root: &std::path::Path, mut m: MeetingMeta, active_dir: Option<
     m.duration_secs = recorded_seconds(&audio);
     m.status = MeetingStatus::Recorded;
     log::info!("[meeting] {} 上次录音没正常结束, 按已录分片收尾 ({:.0}s)", m.id, m.duration_secs);
+    let _ = store::save(root, &m);
+    m
+}
+
+/// 11/17: 转写到一半 Companion 关了 / 重启了 (开发版改代码自动重启就会), meta 一直写着「转写中」—— 再也不会变
+/// (等它结束的那个线程没了), 「重新转写」也不让点。这个进程里没在转写就收尾: 有转写结果 (上次的, 或脚本自己跑完写的)
+/// 算已转写, 没有算失败、提示重新转写。
+fn heal_transcribing(root: &std::path::Path, mut m: MeetingMeta, running: bool) -> MeetingMeta {
+    if running {
+        return m;
+    }
+    let has = store::transcript_path(root, &m.id).map(|p| p.is_file()).unwrap_or(false);
+    if has {
+        m.status = MeetingStatus::Transcribed;
+    } else {
+        m.status = MeetingStatus::Failed;
+        m.error = Some("上次转写没做完 (转写中 Companion 关了), 点「重新转写」".into());
+    }
+    log::info!("[meeting] {} 上次转写没正常结束, 收尾成 {:?}", m.id, m.status);
     let _ = store::save(root, &m);
     m
 }
@@ -207,5 +229,24 @@ mod tests {
         assert_eq!(healed.status, MeetingStatus::Recorded);
         assert_eq!(healed.duration_secs, 2.5);
         assert_eq!(store::load(d.path(), &healed.id).unwrap().status, MeetingStatus::Recorded);
+    }
+
+    #[test]
+    fn stale_transcribing_meta_is_healed() {
+        let d = tempfile::tempdir().unwrap();
+        let mut m = store::create(d.path(), "x", 2, &[]).unwrap();
+        m.status = MeetingStatus::Transcribing;
+        store::save(d.path(), &m).unwrap();
+        // 这个进程里还在转写: 不动
+        assert_eq!(heal_transcribing(d.path(), m.clone(), true).status, MeetingStatus::Transcribing);
+        // 没转写结果 → 失败, 提示重新转写
+        let failed = heal_transcribing(d.path(), m.clone(), false);
+        assert_eq!(failed.status, MeetingStatus::Failed);
+        assert!(failed.error.unwrap().contains("重新转写"));
+        // 有转写结果 (上次的 / 脚本自己跑完写的) → 已转写
+        std::fs::write(store::transcript_path(d.path(), &m.id).unwrap(), "{}").unwrap();
+        let ok = heal_transcribing(d.path(), m, false);
+        assert_eq!(ok.status, MeetingStatus::Transcribed);
+        assert_eq!(store::load(d.path(), &ok.id).unwrap().status, MeetingStatus::Transcribed);
     }
 }

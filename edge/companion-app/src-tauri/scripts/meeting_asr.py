@@ -187,6 +187,40 @@ def lower_priority() -> None:
         pass
 
 
+def _parent_alive(pid: int) -> bool:
+    if os.name == "nt":
+        import ctypes
+
+        k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        h = k32.OpenProcess(0x00100000, False, pid)   # SYNCHRONIZE
+        if not h:
+            return False
+        try:
+            return k32.WaitForSingleObject(h, 0) == 0x00000102   # WAIT_TIMEOUT = 还在跑
+        finally:
+            k32.CloseHandle(h)
+    return os.getppid() == pid   # macOS / Linux: 父进程没了会被过继给 1 (或 launchd), ppid 就变了
+
+
+def exit_with_parent(interval: float = 5.0) -> None:
+    """Companion 关了 / 重启了 (开发版改代码自动重启) 就自己退出 —— 原来转写进程会被留下接着跑 (ppid=1),
+    界面不知道它, 员工再点「重新转写」又起一个: 11/17 实测同一场会四个转写一起跑, 互相抢 CPU、最后还会互相覆盖结果。"""
+    import threading
+
+    parent = os.getppid()
+    if parent <= 1:
+        return
+
+    def watch() -> None:
+        while True:
+            time.sleep(interval)
+            if not _parent_alive(parent):
+                sys.stderr.write("[meeting_asr] Companion 已退出, 转写跟着停\n")
+                os._exit(3)
+
+    threading.Thread(target=watch, daemon=True, name="parent-watch").start()
+
+
 # ── 句子时间戳 (11/16) ──────────────────────────────────────────────
 #
 # FunASR 1.4.16 的 sentence_info 会越往后越早: 一场 18 分钟的会, 第 400 秒说的「你们都写成 CBT…」被标在 361 秒,
@@ -287,6 +321,116 @@ class SpeakerTap:
         return False
 
 
+# ── 11/17 说话人分得更准 (鸿波「模型是不是对多人的混音没有处理能力」) ─────────────────────────
+# FunASR 给了人数 (preset_spk_num) 时: 声纹片段 < 2048 个走谱聚类、≥ 2048 个 (长会议, 半小时以上) 走 **KMeans 硬分成 N 簇**,
+# 而且给了人数就跳过它自己的「声音很像的并掉」那步 —— 实测 CCRC 两小时会议填 10 人, 10 个说话人各 112–324 句, 平均得不像真会议
+# (真会议常是两三个人说大半), 同一个人被拆成好几个编号凑满 10 个。
+# 现在把员工填的人数当**上限**: 先照原样分成 N 簇, 再 ① 声纹中心很像的两簇并成一个人 ② 占比极小的零碎簇 (咳嗽、搭一两句)
+# 并给声音最像的那簇。不加载新模型, 不多花时间。
+
+#: 两簇声纹中心余弦相似度 ≥ 这个 → 同一个人 (FunASR 自己不给人数时用 0.78; 按 CCRC 实测调, 见 docs/MEETING-MINUTES-PLAN.md §10)
+MERGE_COS = 0.78
+#: 一簇的片段数占全部不到这个比例 → 零碎簇, 并给最像的
+MIN_CLUSTER_SHARE = 0.02
+
+
+def _centers(labels, X):
+    import numpy as np
+
+    ids = sorted(set(int(v) for v in labels))
+    c = np.stack([X[labels == i].mean(0) for i in ids])
+    return ids, c / np.linalg.norm(c, axis=1, keepdims=True)
+
+
+def refine_labels(labels, X, merge_cos: float = MERGE_COS, min_share: float = MIN_CLUSTER_SHARE):
+    """N 当上限: 并掉声音几乎一样的簇、零碎簇并给最像的; 编号按首次出现重排 (0, 1, 2…)。labels / X 是 numpy。"""
+    import numpy as np
+
+    labels = np.asarray(labels).astype(int).copy()
+    X = np.asarray(X, dtype=float)
+    if len(labels) < 2 or len(set(labels.tolist())) < 2:
+        return np.zeros(len(labels), dtype=int)
+    while True:   # ① 最像的两簇够像就并, 直到没有够像的
+        ids, c = _centers(labels, X)
+        if len(ids) < 2:
+            break
+        sim = c @ c.T
+        np.fill_diagonal(sim, -1.0)
+        a, b = np.unravel_index(int(np.argmax(sim)), sim.shape)
+        if sim[a, b] < merge_cos:
+            break
+        labels[labels == ids[b]] = ids[a]
+    while True:   # ② 最小的那簇太碎就并给最像的 (按片段逐个归到最近的大簇中心)
+        ids, c = _centers(labels, X)
+        if len(ids) < 2:
+            break
+        counts = np.array([(labels == i).sum() for i in ids])
+        small = int(np.argmin(counts))
+        if counts[small] >= max(1, min_share * len(labels)):
+            break
+        keep = [j for j in range(len(ids)) if j != small]
+        mask = labels == ids[small]
+        xs = X[mask] / np.linalg.norm(X[mask], axis=1, keepdims=True)
+        labels[mask] = np.array(ids)[keep][np.argmax(xs @ c[keep].T, axis=1)]
+    order: dict[int, int] = {}
+    for v in labels.tolist():
+        order.setdefault(v, len(order))
+    return np.array([order[v] for v in labels.tolist()], dtype=int)
+
+
+class ClusterRefine:
+    """包住 FunASR 的 cb_model (说话人聚类), 在它的结果上做 refine_labels。不改 FunASR 别的行为。"""
+
+    def __init__(self, model) -> None:
+        self.model = model
+        self.before: int | None = None
+        self.after: int | None = None
+
+    def __enter__(self):
+        orig = getattr(self.model, "cb_model", None)
+        self._orig = orig
+        if orig is None:
+            return self
+
+        def cb(X, oracle_num=None, **kw):
+            labels = orig(X, oracle_num=oracle_num, **kw)
+            try:
+                x = X.detach().cpu().numpy() if hasattr(X, "detach") else X
+                self.before = len(set(int(v) for v in labels))
+                out = refine_labels(labels, x)
+                self.after = len(set(out.tolist()))
+                return out
+            except Exception as e:  # noqa: BLE001 — 细化失败就用原来的分法, 不能让转写失败
+                sys.stderr.write(f"[meeting_asr] 说话人细化失败, 用原来的分法: {type(e).__name__}: {e}\n")
+                return labels
+
+        self.model.cb_model = cb
+        return self
+
+    def __exit__(self, *exc):
+        if self._orig is not None:
+            self.model.cb_model = self._orig
+        return False
+
+
+#: 这么短的句子 (字数) 声纹靠不住: 前后两句是同一个人时归给他
+SHORT_TOKENS = 4
+
+
+def smooth_short(segs: list[dict]) -> list[dict]:
+    """「对」「嗯」「是的」这种几个字的句子, 声纹片段太短分不准; 夹在同一个人的两句中间 (间隔都不到 2 秒) 就归给他。
+    前后不是同一个人的不动 (多半真是别人搭话)。"""
+    for i in range(1, len(segs) - 1):
+        s, p, n = segs[i], segs[i - 1], segs[i + 1]
+        if s.get("track") != p.get("track") or s.get("track") != n.get("track"):
+            continue
+        if len(_tokens(s["text"])) > SHORT_TOKENS or p["spk"] != n["spk"] or s["spk"] == p["spk"]:
+            continue
+        if s["start"] - p["end"] < 2.0 and n["start"] - s["end"] < 2.0:
+            s["spk"] = p["spk"]
+    return segs
+
+
 def segments_of(result: dict, sd: list | None = None) -> list[dict]:
     """一次识别的结果 → 句子 [{spk, start, end, text}]: 优先自己按逐字时间戳切, 对不上再用 FunASR 的 sentence_info。"""
     ts = result.get("timestamp")
@@ -336,6 +480,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     lower_priority()
+    exit_with_parent()
     ap = argparse.ArgumentParser()
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--audio-dir", type=Path)
@@ -377,6 +522,7 @@ def main(argv: list[str] | None = None) -> int:
         system_segments = list_segments(args.audio_dir / SYSTEM_TRACK_DIR) if args.audio_dir else []
         emit("phase", phase="preparing")
         tracks_info = None
+        diar_info = None
         with tempfile.TemporaryDirectory(prefix="catfish-meeting-") as td:
             merged = Path(td) / "merged-16k.wav"
             duration = concat_to_16k(segments, merged)
@@ -392,12 +538,12 @@ def main(argv: list[str] | None = None) -> int:
                 local = max(1, min(args.local_speakers or 1, args.speakers))
                 remote = max(1, args.speakers - local)
                 emit("phase", phase="recognizing", duration_secs=round(duration, 1))
-                with SpeakerTap() as tap_mic:
+                with SpeakerTap() as tap_mic, ClusterRefine(model):
                     mic_res = model.generate(input=str(merged), preset_spk_num=local, **base_kw)[0]
-                with SpeakerTap() as tap_sys:
+                with SpeakerTap() as tap_sys, ClusterRefine(model):
                     sys_res = model.generate(input=str(sys_wav), preset_spk_num=remote, **base_kw)[0]
-                sys_segs = segments_of(sys_res, tap_sys.segments)
-                mic_segs, dropped = drop_echo(segments_of(mic_res, tap_mic.segments), sys_segs)
+                sys_segs = smooth_short(segments_of(sys_res, tap_sys.segments))
+                mic_segs, dropped = drop_echo(smooth_short(segments_of(mic_res, tap_mic.segments)), sys_segs)
                 segs = merge_tracks(mic_segs, sys_segs)
                 text = "".join(s["text"] for s in segs)
                 tracks_info = {"local_speakers": local, "remote_speakers": remote, "echo_dropped": dropped}
@@ -406,9 +552,13 @@ def main(argv: list[str] | None = None) -> int:
                 kw = dict(base_kw)
                 if with_spk:
                     kw["preset_spk_num"] = args.speakers
-                with SpeakerTap() as tap:
+                refine = ClusterRefine(model if with_spk else None)
+                with SpeakerTap() as tap, refine:
                     result = model.generate(input=str(merged), **kw)[0]
                 segs = segments_of(result, tap.segments if with_spk else None)
+                if with_spk:
+                    segs = smooth_short(segs)
+                    diar_info = {"clusters_before": refine.before, "clusters_after": refine.after}
                 text = (result.get("text") or "").strip() or "".join(s["text"] for s in segs)
 
         emit("phase", phase="writing")
@@ -416,7 +566,7 @@ def main(argv: list[str] | None = None) -> int:
             "text": text,
             "version": 1,
             "sentence_times": "tokens",   # 11/16 起: 句子时间按逐字时间戳重切 (之前的转写越往后越早)
-            "engine": {"name": "funasr", "asr": "seaco-paraformer-large", "spk": "cam++"},
+            "engine": {"name": "funasr", "asr": "seaco-paraformer-large", "spk": "cam++", "spk_refine": 1},
             "duration_secs": round(duration, 1),
             "speakers": len({s["spk"] for s in segs}) if with_spk else 0,
             "speakers_requested": args.speakers,
@@ -424,6 +574,8 @@ def main(argv: list[str] | None = None) -> int:
             "elapsed_secs": round(time.time() - t0, 1),
             "segments": segs,
         }
+        if diar_info:
+            doc["diarization"] = diar_info   # 11/17: 按上限 N 先分、再并掉同一个人 —— 并前 / 并后几簇
         if tracks_info:
             doc["tracks"] = tracks_info
             # 本地只有一个人 → 麦克风那条的说话人就是员工自己, 先替他起好名字 (可以改)

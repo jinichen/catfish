@@ -215,6 +215,9 @@ export const meetingImportAudio = (path: string, title: string, attendees: numbe
 export const meetingAsrStatus = () => rawInvoke<AsrStatus>("meeting_asr_status");
 export const meetingAsrInstall = () => rawInvoke<void>("meeting_asr_install");
 export const meetingTranscribe = (id: string) => rawInvoke<void>("meeting_transcribe", { id });
+/** 11/17 正在转写的那场转到哪一步 (界面轮询; 一次性事件会漏): 不在转写 → null */
+export const meetingTranscribePhase = (id: string) =>
+  rawInvoke<{ phase: string; duration_secs: number | null; elapsed_secs: number } | null>("meeting_transcribe_phase", { id });
 export const meetingTranscript = (id: string) => rawInvoke<Transcript>("meeting_transcript", { id });
 
 export const meetingSpeakers = (id: string) => rawInvoke<Record<string, string>>("meeting_speakers", { id });

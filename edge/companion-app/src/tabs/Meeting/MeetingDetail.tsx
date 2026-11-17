@@ -10,6 +10,7 @@ import {
   meetingSetSpeakers,
   meetingSpeakers,
   meetingTranscribe,
+  meetingTranscribePhase,
   meetingTranscript,
   onTranscribeProgress,
   type AsrStatus,
@@ -26,6 +27,7 @@ import { estimatePercent, STATUS_LABEL } from "./meetingHelpers";
 import { COL_CARD } from "./meetingHelpers";
 
 const PHASE_LABEL: Record<string, string> = {
+  starting: "启动中",
   loading: "加载模型",
   preparing: "拼接录音",
   recognizing: "识别中",
@@ -80,26 +82,39 @@ export default function MeetingDetail({
     }
   }, [meta.id, meta.status]);
 
+  // onChanged 每次渲染都是新函数 (MeetingTab 里的箭头函数): 放 ref 里, 订阅不跟着它反复退订 / 重订 —— 重订的空当会漏进度事件
+  const onChangedRef = useRef(onChanged);
+  onChangedRef.current = onChanged;
   useEffect(() => {
     const un = onTranscribeProgress((p) => {
       if (p.id !== meta.id) return;
       if (p.done) {
         setPhase(null);
         if (p.error) setError(p.error);
-        onChanged();
+        onChangedRef.current();
       } else {
         if (!started.current) started.current = Date.now();
         setPhase((cur) => ({ phase: p.phase, audio: p.duration_secs ?? cur?.audio }));
       }
     });
     return () => void un.then((f) => f());
-  }, [meta.id, onChanged]);
+  }, [meta.id]);
 
+  // 11/17 (鸿波「一直挂在准备中, 是卡住了吗」): 事件会漏 (切走再回来、重订的空当), 转写中每 3 秒也问一次后端到哪一步了;
+  // 已用时间也按后端的开始时间算, 切回来不从 0 数
   useEffect(() => {
     if (meta.status !== "transcribing") return;
-    const t = window.setInterval(() => started.current && setElapsed((Date.now() - started.current) / 1000), 1000);
-    return () => window.clearInterval(t);
-  }, [meta.status]);
+    let stop = false;
+    const poll = () => void meetingTranscribePhase(meta.id).then((p) => {
+      if (stop || !p) return;
+      started.current = Date.now() - p.elapsed_secs * 1000;
+      setPhase((cur) => ({ phase: p.phase, audio: p.duration_secs ?? cur?.audio }));
+    }).catch(() => undefined);
+    poll();
+    const t = window.setInterval(poll, 3000);
+    const tick = window.setInterval(() => started.current && setElapsed((Date.now() - started.current) / 1000), 1000);
+    return () => { stop = true; window.clearInterval(t); window.clearInterval(tick); };
+  }, [meta.id, meta.status]);
 
   async function transcribe() {
     setError(null);
@@ -188,11 +203,18 @@ export default function MeetingDetail({
       <div style={{ fontSize: 13 }}>
         转写中 · {PHASE_LABEL[phase?.phase ?? ""] ?? "准备中"}
         {pct !== null && phase?.phase === "recognizing" ? ` · 约 ${pct}%` : ""}
+        {elapsed > 0 && (
+          <span style={{ color: "var(--catfish-text-muted)" }}>
+            {" "}· 已用 {Math.floor(elapsed / 60)} 分 {String(Math.floor(elapsed % 60)).padStart(2, "0")} 秒
+          </span>
+        )}
       </div>
     );
   } else if (meta.status === "transcribed" && transcript) {
     const spks = [...new Set(transcript.segments.map((s) => s.spk))].sort((a, b) => a - b);
     const named = spks.filter((s) => names[String(s)]?.trim());
+    const edits = transcript.segments.filter((s) => s.orig_text).length;
+    const redoMins = Math.max(1, Math.round(meta.duration_secs / 8 / 60));
     // 11/17 (鸿波「这个 UI 是不是需要优化」): 十个说话人框原来常年摊在纪要上面占四行 —— 改成可收起的一栏,
     // 没起过名字时展开, 起过就收成一行名单; 名字改完离开输入框自动存, 不用再点「保存名字」。
     const open = speakersOpen;
@@ -213,6 +235,12 @@ export default function MeetingDetail({
                 : "还没填真名 · 点开填, 或者让小鲶在纪要里换"}
           </span>
           {saved && <span style={{ fontSize: 12, color: "var(--status-ok)" }}>已保存 ✓</span>}
+          {/* 收起时也要看得到 (11/17 鸿波「没看到重新转写的按钮」—— 原来只在展开时出) */}
+          {/* 11/17 鸿波「点了重新转写就直接进转写, 为什么还那么多确认」: 一点就转 —— 原转写和名字都自动备份
+              (transcript.before-*.json / speakers.before-*.json), 不会丢 */}
+          <span title={`按新的说话人分法重新转一遍, 约 ${redoMins} 分钟; 原转写${edits ? ` (含改过的 ${edits} 句)` : ""}和起过的名字自动备份`}>
+            <Btn kind="ghost" disabled={asr.transcribing} onClick={() => void transcribe()}>重新转写</Btn>
+          </span>
         </div>
         {open && (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 8 }}>

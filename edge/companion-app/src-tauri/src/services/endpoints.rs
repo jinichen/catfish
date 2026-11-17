@@ -305,9 +305,13 @@ mod tests_reload {
     //! 一旦有人改回不可重载的写法就会红。
 
     use super::*;
+    // 11/17: 缓存是全进程一份, 别的测试 (embedding_config) 并行 reload() 会插进「reload → 再取」中间, 偶发红 ——
+    // 跟那边用同一把锁串起来
+    use crate::util::test_env::env_lock;
 
     #[test]
     fn endpoints_returns_shared_snapshot() {
+        let _guard = env_lock();
         // 两次取到的是同一份快照 (Arc 计数增加, 不是每次重新读盘)
         let a = endpoints();
         let b = endpoints();
@@ -316,6 +320,7 @@ mod tests_reload {
 
     #[test]
     fn reload_replaces_the_cached_value() {
+        let _guard = env_lock();
         let before = endpoints();
         let after = reload();
         // reload 必须换掉缓存: 之后再取, 拿到的是新那份
@@ -327,6 +332,7 @@ mod tests_reload {
 
     #[test]
     fn old_snapshot_stays_valid_after_reload() {
+        let _guard = env_lock();
         let old = endpoints();
         let old_gateway = old.gateway_base();
         reload();

@@ -9,6 +9,8 @@ const api = vi.hoisted(() => ({
   names: {} as Record<string, string>,
   setNames: vi.fn(async () => undefined),
   minutes: null as unknown,
+  transcribe: vi.fn(async () => undefined),
+  phase: vi.fn(async () => null as unknown),
 }));
 
 vi.mock("../../lib/tauri_meeting", async (orig) => ({
@@ -17,6 +19,8 @@ vi.mock("../../lib/tauri_meeting", async (orig) => ({
   meetingTranscript: vi.fn(async () => ({ segments: api.segments, text: "" })),
   meetingSpeakers: vi.fn(async () => api.names),
   meetingSetSpeakers: api.setNames,
+  meetingTranscribe: api.transcribe,
+  meetingTranscribePhase: api.phase,
   meetingMinutes: vi.fn(async () => api.minutes),
   meetingTemplatesList: vi.fn(async () => []),
   onTranscribeProgress: vi.fn(async () => () => undefined),
@@ -48,6 +52,7 @@ beforeEach(() => {
   api.segments = [];
   api.names = {};
   api.minutes = null;
+  api.transcribe.mockClear();
 });
 afterEach(cleanup);
 
@@ -120,6 +125,15 @@ describe("说话人 / 纪要 · 转写 (11/17 UI 调整)", () => {
     expect(screen.getByText("还没填真名 · 点开填, 或者让小鲶在纪要里换")).toBeTruthy();
   });
 
+  it("11/17 重新转写: 说话人一栏收起时也有, 一点就转 (原转写 / 名字后台自动备份)", async () => {
+    api.segments = segs;
+    api.names = { "0": "陈鸿波" };
+    await mount("transcribed");
+    expect(screen.getByText("▸ 说话人 3 位")).toBeTruthy();
+    await act(async () => { fireEvent.click(screen.getByText("重新转写")); });
+    expect(api.transcribe).toHaveBeenCalledWith("mtg_1");
+  });
+
   it("纪要 / 转写分两页, 默认纪要; 切页不卸载 (改到一半的还在)", async () => {
     api.segments = segs;
     await mount("transcribed");
@@ -131,5 +145,14 @@ describe("说话人 / 纪要 · 转写 (11/17 UI 调整)", () => {
     fireEvent.click(transcriptTab);
     expect(transcriptTab.getAttribute("aria-selected")).toBe("true");
     expect(wrapOf("生成纪要")).toBeTruthy();
+  });
+});
+
+describe("转写中的进度 (11/17 一直显示「准备中」)", () => {
+  it("没收到事件 (切走再回来) 也按后端的进度显示, 已用时间从后端的开始时间算", async () => {
+    api.phase.mockResolvedValue({ phase: "recognizing", duration_secs: 7912, elapsed_secs: 150 });
+    await mount("transcribing");
+    expect(screen.getByText(/转写中 · 识别中 · 约 \d+%/)).toBeTruthy();
+    expect(api.phase).toHaveBeenCalledWith("mtg_1");
   });
 });
