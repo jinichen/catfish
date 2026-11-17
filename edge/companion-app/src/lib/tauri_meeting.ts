@@ -217,9 +217,25 @@ export const meetingImportAudio = (path: string, title: string, attendees: numbe
 export const meetingAsrStatus = () => rawInvoke<AsrStatus>("meeting_asr_status");
 export const meetingAsrInstall = () => rawInvoke<void>("meeting_asr_install");
 export const meetingTranscribe = (id: string) => rawInvoke<void>("meeting_transcribe", { id });
-/** 11/17 正在转写的那场转到哪一步 (界面轮询; 一次性事件会漏): 不在转写 → null */
+/** 11/17 正在转写的那场转到哪一步 (界面轮询; 一次性事件会漏): 不在转写 → null。
+ *  高精度重新转写的 refining 阶段带 done / total (送了几段 / 一共几段) */
 export const meetingTranscribePhase = (id: string) =>
-  rawInvoke<{ phase: string; duration_secs: number | null; elapsed_secs: number } | null>("meeting_transcribe_phase", { id });
+  rawInvoke<{ phase: string; duration_secs: number | null; elapsed_secs: number; done?: number | null; total?: number | null } | null>(
+    "meeting_transcribe_phase", { id });
+
+// ── 11/17 高精度转写组件 (meeting-asr-hq, Qwen3-ASR, 员工自己选装; src-tauri commands/meeting_hq_cmd.rs) ──
+export interface HqStatus {
+  installed: AsrInstalled | null;
+  pack_ready: string | null;
+  installing: boolean;
+  base_installed: boolean;
+}
+export const meetingHqStatus = () => rawInvoke<HqStatus>("meeting_hq_status");
+export const meetingHqInstall = () => rawInvoke<void>("meeting_hq_install");
+/** 已转写的会议用 Qwen3-ASR 重出文字 (句子 / 说话人照用, 名字不动); 进度走 meeting_transcribe_progress */
+export const meetingTranscribeHq = (id: string) => rawInvoke<void>("meeting_transcribe_hq", { id });
+export const onHqInstallProgress = (cb: (p: AsrInstallProgress) => void): Promise<UnlistenFn> =>
+  listen<AsrInstallProgress>("meeting_hq_progress", (e) => cb(e.payload));
 export const meetingTranscript = (id: string) => rawInvoke<Transcript>("meeting_transcript", { id });
 
 export const meetingSpeakers = (id: string) => rawInvoke<Record<string, string>>("meeting_speakers", { id });

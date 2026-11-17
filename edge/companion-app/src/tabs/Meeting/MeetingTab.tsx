@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from "react";
 import { formatClock, meetingAsrStatus, meetingList, type AsrStatus, type MeetingMeta } from "../../lib/tauri_meeting";
 import { cardStyle, ErrorLine } from "../Collab/roomLinkUi";
 import MeetingDetail from "./MeetingDetail";
+import { AsrUpgrade } from "./AsrSetup";
 import RecorderCard from "./RecorderCard";
 import { STATUS_LABEL } from "./meetingHelpers";
 import { COL_CARD } from "./meetingHelpers";
@@ -55,6 +56,8 @@ export default function MeetingTab() {
         <div className="meeting-col" style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)", minHeight: 0, overflowY: "auto",
                                               paddingBottom: "var(--space-4)" }}>
           <RecorderCard onChanged={(id) => void refresh(id)} />
+          {/* 11/17: 装过会议组件、中央有新版 → 升级卡 (没有新版不显示) */}
+          {asr.installed && <AsrUpgrade status={asr} onReady={() => void refresh()} />}
           <div style={{ ...cardStyle, ...COL_CARD, gap: "var(--space-1)" }}>
             <div style={{ fontWeight: 600, fontSize: 13 }}>会议记录</div>
             {meetings.length === 0 && <div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>还没有会议</div>}

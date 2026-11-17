@@ -40,7 +40,7 @@ const STAMP: &str = ".archive-sha256";
 /// 跟 scripts/build_edge_runtime.py 的 `file-parse/` 对应。
 pub const FILE_PARSE_DIR: &str = "file-parse";
 /// 解完必须在的路径 —— 跟 build_edge_runtime.py 的 MUST_EXIST 对应。
-const MUST_EXIST: [&str; 7] = [
+const MUST_EXIST: [&str; 8] = [
     "tool-bridge/src/catfish_tool_bridge",
     "local-search/src",
     "file-parse/parse_file.py",
@@ -49,6 +49,7 @@ const MUST_EXIST: [&str; 7] = [
     "file-parse/meeting_asr.py",
     // 11/15: 会中实时转写 (同一个 venv, import 同目录的 meeting_asr)
     "file-parse/meeting_asr_live.py",
+    "file-parse/meeting_asr_qwen.py",
     // 11/07: 知识库类型定义 (tool-bridge wiki_types.py 按 parents[3]/contracts 找)
     "contracts/wiki_type_schema.json",
 ];
@@ -158,6 +159,7 @@ mod tests {
         fs::write(src.join("file-parse/attachment_bm25.py"), marker).unwrap();
         fs::write(src.join("file-parse/meeting_asr.py"), marker).unwrap();
         fs::write(src.join("file-parse/meeting_asr_live.py"), marker).unwrap();
+        fs::write(src.join("file-parse/meeting_asr_qwen.py"), marker).unwrap();
         fs::create_dir_all(src.join("contracts")).unwrap();
         fs::write(src.join("contracts/wiki_type_schema.json"), "{}").unwrap();
         let archive = dir.join(format!("a-{marker}.tar.gz"));

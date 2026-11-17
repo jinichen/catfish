@@ -9,11 +9,14 @@ import {
   meetingMinutes,
   meetingSetSpeakers,
   meetingSpeakers,
+  meetingHqStatus,
   meetingTranscribe,
+  meetingTranscribeHq,
   meetingTranscribePhase,
   meetingTranscript,
   onTranscribeProgress,
   type AsrStatus,
+  type HqStatus,
   type MeetingMeta,
   type Transcript,
 } from "../../lib/tauri_meeting";
@@ -31,6 +34,7 @@ const PHASE_LABEL: Record<string, string> = {
   loading: "加载模型",
   preparing: "拼接录音",
   recognizing: "识别中",
+  refining: "精细识别 (Qwen3)",
   writing: "写结果",
 };
 const SPK_COLORS = ["#0E6169", "#F0703A", "#6B5BD2", "#2F8F4E", "#B5476B", "#8A6D1F"];
@@ -48,7 +52,12 @@ export default function MeetingDetail({
 }) {
   const [transcript, setTranscript] = useState<Transcript | null>(null);
   const [names, setNames] = useState<Record<string, string>>({});
-  const [phase, setPhase] = useState<{ phase: string; audio?: number | null } | null>(null);
+  const [phase, setPhase] = useState<{ phase: string; audio?: number | null; done?: number | null; total?: number | null } | null>(null);
+  // 11/17 高精度转写组件 (Qwen3-ASR, 可选): 装了就能「高精度重新转写」, 没装点了先出下载面板
+  const [hq, setHq] = useState<HqStatus | null>(null);
+  const [hqSetup, setHqSetup] = useState(false);
+  const loadHq = () => void meetingHqStatus().then(setHq).catch(() => setHq(null));
+  useEffect(loadHq, []);
   const [elapsed, setElapsed] = useState(0);
   const [notesTick, setNotesTick] = useState(0);   // 会后改了会中小鲶的条目 → 纪要重读
   const [error, setError] = useState<string | null>(null);
@@ -108,7 +117,7 @@ export default function MeetingDetail({
     const poll = () => void meetingTranscribePhase(meta.id).then((p) => {
       if (stop || !p) return;
       started.current = Date.now() - p.elapsed_secs * 1000;
-      setPhase((cur) => ({ phase: p.phase, audio: p.duration_secs ?? cur?.audio }));
+      setPhase((cur) => ({ phase: p.phase, audio: p.duration_secs ?? cur?.audio, done: p.done, total: p.total }));
     }).catch(() => undefined);
     poll();
     const t = window.setInterval(poll, 3000);
@@ -121,6 +130,17 @@ export default function MeetingDetail({
     started.current = Date.now();
     try {
       await meetingTranscribe(meta.id);
+      onChanged();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function transcribeHq() {
+    setError(null);
+    started.current = Date.now();
+    try {
+      await meetingTranscribeHq(meta.id);
       onChanged();
     } catch (e) {
       setError(String(e));
@@ -203,6 +223,7 @@ export default function MeetingDetail({
       <div style={{ fontSize: 13 }}>
         转写中 · {PHASE_LABEL[phase?.phase ?? ""] ?? "准备中"}
         {pct !== null && phase?.phase === "recognizing" ? ` · 约 ${pct}%` : ""}
+        {phase?.phase === "refining" && phase.total ? ` · 约 ${Math.floor(((phase.done ?? 0) / phase.total) * 100)}%` : ""}
         {elapsed > 0 && (
           <span style={{ color: "var(--catfish-text-muted)" }}>
             {" "}· 已用 {Math.floor(elapsed / 60)} 分 {String(Math.floor(elapsed % 60)).padStart(2, "0")} 秒
@@ -241,7 +262,23 @@ export default function MeetingDetail({
           <span title={`按新的说话人分法重新转一遍, 约 ${redoMins} 分钟; 原转写${edits ? ` (含改过的 ${edits} 句)` : ""}和起过的名字自动备份`}>
             <Btn kind="ghost" disabled={asr.transcribing} onClick={() => void transcribe()}>重新转写</Btn>
           </span>
+          {/* 11/17 鸿波选 A: 高精度 (Qwen3-ASR) 做成可选组件, 要紧的会才用 —— 句子 / 说话人照用, 名字不动 */}
+          <span title={hq?.installed
+            ? "用 Qwen3-ASR 重新识别文字 (说话人、名字不变), 说得清楚的地方更准; 比普通转写慢, 两小时的会约半小时以上"
+            : "要先下载高精度转写组件 (Qwen3-ASR)"}>
+            <Btn kind="ghost" disabled={asr.transcribing}
+                 onClick={() => (hq?.installed ? void transcribeHq() : setHqSetup((v) => !v))}>
+              高精度重新转写
+            </Btn>
+          </span>
         </div>
+        {hqSetup && !hq?.installed && (
+          hq?.base_installed === false
+            ? <ErrorLine>先装会议组件包, 高精度组件要用到它</ErrorLine>
+            : <AsrSetup kind="hq" status={{ pack_ready: hq?.pack_ready ?? null, installing: !!hq?.installing,
+                                            transcribing: asr.transcribing }}
+                        onReady={() => { setHqSetup(false); loadHq(); }} />
+        )}
         {open && (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 8 }}>
             {/* 11/12: 每个说话人旁边 ▶ 听他说得最长的一句, 听出是谁再填名字 */}

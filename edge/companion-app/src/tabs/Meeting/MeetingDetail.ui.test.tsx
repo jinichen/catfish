@@ -11,6 +11,8 @@ const api = vi.hoisted(() => ({
   minutes: null as unknown,
   transcribe: vi.fn(async () => undefined),
   phase: vi.fn(async () => null as unknown),
+  hq: vi.fn(async () => ({ installed: null, pack_ready: null, installing: false, base_installed: true }) as unknown),
+  transcribeHq: vi.fn(async () => undefined),
 }));
 
 vi.mock("../../lib/tauri_meeting", async (orig) => ({
@@ -21,10 +23,13 @@ vi.mock("../../lib/tauri_meeting", async (orig) => ({
   meetingSetSpeakers: api.setNames,
   meetingTranscribe: api.transcribe,
   meetingTranscribePhase: api.phase,
+  meetingHqStatus: api.hq,
+  meetingTranscribeHq: api.transcribeHq,
   meetingMinutes: vi.fn(async () => api.minutes),
   meetingTemplatesList: vi.fn(async () => []),
   onTranscribeProgress: vi.fn(async () => () => undefined),
   onAsrInstallProgress: vi.fn(async () => () => undefined),
+  onHqInstallProgress: vi.fn(async () => () => undefined),
 }));
 
 // 「已录完」且没装转写组件时会挂出组件安装卡 (AsrSetup), 它要监听下载进度
@@ -154,5 +159,34 @@ describe("转写中的进度 (11/17 一直显示「准备中」)", () => {
     await mount("transcribing");
     expect(screen.getByText(/转写中 · 识别中 · 约 \d+%/)).toBeTruthy();
     expect(api.phase).toHaveBeenCalledWith("mtg_1");
+  });
+});
+
+describe("高精度重新转写 (11/17, 可选组件)", () => {
+  const segs = [{ spk: 0, start: 0, end: 2, text: "我们开始吧" }];
+
+  it("组件装了: 一点就转, 走高精度那条", async () => {
+    api.segments = segs;
+    api.hq.mockResolvedValueOnce({ installed: { version: "1.0.0", python: "p", models: "m" }, pack_ready: null, installing: false, base_installed: true });
+    await mount("transcribed");
+    await act(async () => { fireEvent.click(screen.getByText("高精度重新转写")); });
+    expect(api.transcribeHq).toHaveBeenCalledWith("mtg_1");
+    expect(api.transcribe).not.toHaveBeenCalled();
+  });
+
+  it("没装: 点了出下载面板, 不转", async () => {
+    api.segments = segs;
+    api.transcribeHq.mockClear();
+    await mount("transcribed");
+    await act(async () => { fireEvent.click(screen.getByText("高精度重新转写")); });
+    expect(api.transcribeHq).not.toHaveBeenCalled();
+    expect(screen.getAllByText(/高精度转写组件/).length).toBeGreaterThan(0);
+  });
+
+  it("进度: 精细识别按送了几段算百分比", async () => {
+    api.phase.mockResolvedValue({ phase: "refining", duration_secs: 7912, elapsed_secs: 600, done: 95, total: 190 });
+    await mount("transcribing");
+    expect(screen.getByText(/精细识别 \(Qwen3\) · 约 50%/)).toBeTruthy();
+    api.phase.mockResolvedValue(null);
   });
 });

@@ -1,0 +1,18 @@
+# 高精度转写组件 (meeting-asr-hq, Qwen3-ASR) 的 Python 依赖 (11/17, docs/MEETING-MINUTES-PLAN.md §12)。
+# scripts/build-meeting-asr-hq-pack.sh 读这份清单打 wheel, 写进 pack.json; Companion 安装时照 pack.json 离线装进
+# ~/.catfish/meeting-asr-hq/venv-<版本> (Python 借默认会议组件的 3.11)。跟默认组件 (meeting-asr-requirements.txt) 分开:
+# Qwen3-ASR 要 transformers 4.57.6, 默认组件里 FunASR 装的是 5.x。
+#
+# 一行开头写 `--no-deps ` 的: 只装它自己、不拉它声明的依赖 (pack.json requirements_nodeps) ——
+# qwen-asr 把网页界面 (gradio / flask / sox) 也写成了依赖, 识别用不上; 它识别时真 import 的都在下面列着。
+torch==2.11.0
+torchaudio==2.11.0
+transformers==4.57.6
+accelerate==1.12.0
+librosa
+soundfile
+numpy
+# qwen-asr 的强制对齐模块一 import 就要 (日文 / 韩文分词), 我们不用对齐, 但躲不开 import
+nagisa==0.2.11
+soynlp==0.0.493
+--no-deps qwen-asr==0.0.6

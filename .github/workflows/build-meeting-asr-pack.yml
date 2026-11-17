@@ -19,6 +19,16 @@ on:
         description: "组件包版本号 (x.y.z, 跟 mac 版对齐)"
         required: true
         default: "1.0.1"
+      pack:
+        # 11/17: hq = 高精度转写组件 (Qwen3-ASR, 员工自己选装, docs/MEETING-MINUTES-PLAN.md §12)
+        description: "哪个包: base = 会议转写组件 meeting-asr; hq = 高精度转写组件 meeting-asr-hq"
+        required: true
+        default: "base"
+        type: choice
+        options: [base, hq]
+
+env:
+  PACK: ${{ inputs.pack == 'hq' && 'meeting-asr-hq' || 'meeting-asr' }}
 
 permissions:
   # 10/14: 要把包发到 Release (国内走 ghfast.top 加速下载, CI 构建产物要登录、走不了代理)
@@ -26,7 +36,7 @@ permissions:
 
 jobs:
   build:
-    name: meeting-asr windows-x64
+    name: ${{ inputs.pack == 'hq' && 'meeting-asr-hq' || 'meeting-asr' }} windows-x64
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
@@ -41,13 +51,16 @@ jobs:
           GH_PROXY: ""
           MEETING_PACK_MODEL_CACHE: ${{ runner.temp }}/modelscope
         run: |
-          bash edge/companion-app/scripts/build-meeting-asr-pack.sh \
-            "${{ inputs.version }}" "$RUNNER_TEMP/meeting-asr-out"
+          if [ "${{ inputs.pack }}" = "hq" ]; then
+            bash edge/companion-app/scripts/build-meeting-asr-hq-pack.sh "${{ inputs.version }}" "$RUNNER_TEMP/meeting-asr-out"
+          else
+            bash edge/companion-app/scripts/build-meeting-asr-pack.sh "${{ inputs.version }}" "$RUNNER_TEMP/meeting-asr-out"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
-          name: meeting-asr-${{ inputs.version }}-windows-x64
-          path: ${{ runner.temp }}/meeting-asr-out/meeting-asr-${{ inputs.version }}-windows-x64.tar.gz
+          name: ${{ env.PACK }}-${{ inputs.version }}-windows-x64
+          path: ${{ runner.temp }}/meeting-asr-out/${{ env.PACK }}-${{ inputs.version }}-windows-x64.tar.gz
           # 已经是 .tar.gz, 再压只是白耗时间
           compression-level: 0
           retention-days: 7
@@ -58,7 +71,7 @@ jobs:
         shell: bash
         run: |
           cd "$RUNNER_TEMP/meeting-asr-out"
-          F="meeting-asr-${{ inputs.version }}-windows-x64.tar.gz"
+          F="${{ env.PACK }}-${{ inputs.version }}-windows-x64.tar.gz"
           sha256sum "$F" | awk '{print $1"  "$2}' > "$F.sha256"
           split -b 1900m -d -a 2 "$F" "$F.part"
           ls -1 "$F".part* > "$F.parts"
@@ -67,10 +80,10 @@ jobs:
       - name: Upload to Release
         uses: softprops/action-gh-release@v3.0.3
         with:
-          tag_name: meeting-asr-${{ inputs.version }}
-          name: 会议转写组件包 ${{ inputs.version }}
+          tag_name: ${{ env.PACK }}-${{ inputs.version }}
+          name: ${{ inputs.pack == 'hq' && '高精度转写组件' || '会议转写组件包' }} ${{ inputs.version }}
           prerelease: true
           files: |
-            ${{ runner.temp }}/meeting-asr-out/meeting-asr-${{ inputs.version }}-windows-x64.tar.gz.part*
-            ${{ runner.temp }}/meeting-asr-out/meeting-asr-${{ inputs.version }}-windows-x64.tar.gz.sha256
-            ${{ runner.temp }}/meeting-asr-out/meeting-asr-${{ inputs.version }}-windows-x64.tar.gz.parts
+            ${{ runner.temp }}/meeting-asr-out/${{ env.PACK }}-${{ inputs.version }}-windows-x64.tar.gz.part*
+            ${{ runner.temp }}/meeting-asr-out/${{ env.PACK }}-${{ inputs.version }}-windows-x64.tar.gz.sha256
+            ${{ runner.temp }}/meeting-asr-out/${{ env.PACK }}-${{ inputs.version }}-windows-x64.tar.gz.parts

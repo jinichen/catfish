@@ -37,16 +37,19 @@ pub struct Installed {
 }
 
 #[derive(Debug, Deserialize)]
-struct PackJson {
-    version: String,
-    requirements: Vec<String>,
+pub(crate) struct PackJson {
+    pub(crate) version: String,
+    pub(crate) requirements: Vec<String>,
+    /// 11/17 高精度组件 (meeting_asr_hq): 只装它自己、不拉它声明的依赖的包 (qwen-asr 把网页界面也写成了依赖)
+    #[serde(default)]
+    pub(crate) requirements_nodeps: Vec<String>,
 }
 
 pub fn root(home: &Path) -> PathBuf {
     home.join(".catfish").join("meeting-asr")
 }
 
-fn venv_python(venv: &Path) -> PathBuf {
+pub(crate) fn venv_python(venv: &Path) -> PathBuf {
     if cfg!(windows) {
         venv.join("Scripts").join("python.exe")
     } else {
@@ -114,7 +117,7 @@ fn base_python_for(staging: &Path, root: &Path, version: &str, fallback: Option<
     Ok(base.to_path_buf())
 }
 
-fn run(cmd: &mut std::process::Command, what: &str) -> Result<(), String> {
+pub(crate) fn run(cmd: &mut std::process::Command, what: &str) -> Result<(), String> {
     let out = cmd.output().map_err(|e| format!("{what} 起不来: {e}"))?;
     if out.status.success() {
         return Ok(());
@@ -214,6 +217,11 @@ pub enum AsrEvent {
         phase: String,
         #[serde(default)]
         duration_secs: Option<f64>,
+        /// 11/17 高精度重新转写: 送了几段 / 一共几段 (界面显示「约 x%」)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        done: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        total: Option<usize>,
     },
     Done {
         out: String,
@@ -294,17 +302,30 @@ pub fn read_text(out: &Path) -> Result<String, String> {
     Ok(v.get("text").and_then(|t| t.as_str()).unwrap_or("").trim().to_string())
 }
 
-/// 阻塞跑完一次转写 (在 spawn_blocking 里调)。返回 Done 事件。
-pub fn transcribe(inst: &Installed, a: &TranscribeArgs, empty_cache: &Path, mut on_event: impl FnMut(&AsrEvent)) -> Result<AsrEvent, String> {
+/// 起转写脚本用的命令: macOS 降优先级 (nice 10); 全程离线 (真要联网会立刻失败, 不会悄悄下载几个 G)。
+pub(crate) fn offline_command(python: &Path, empty_cache: &Path) -> Result<std::process::Command, String> {
     std::fs::create_dir_all(empty_cache).map_err(|e| e.to_string())?;
     // 降低优先级: 会后转写占满 CPU 好几分钟, 不该让员工手上的活卡顿
     let mut cmd = if cfg!(target_os = "macos") {
         let mut c = crate::services::process::python_command("/usr/bin/nice");
-        c.args(["-n", "10"]).arg(&inst.python);
+        c.args(["-n", "10"]).arg(python);
         c
     } else {
-        crate::services::process::python_command(&inst.python)
+        crate::services::process::python_command(python)
     };
+    cmd.env("HTTPS_PROXY", "http://127.0.0.1:9")
+        .env("HTTP_PROXY", "http://127.0.0.1:9")
+        .env("NO_PROXY", "")
+        .env("MODELSCOPE_CACHE", empty_cache)
+        .env("HF_HUB_OFFLINE", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    Ok(cmd)
+}
+
+/// 阻塞跑完一次转写 (在 spawn_blocking 里调)。返回 Done 事件。
+pub fn transcribe(inst: &Installed, a: &TranscribeArgs, empty_cache: &Path, on_event: impl FnMut(&AsrEvent)) -> Result<AsrEvent, String> {
+    let mut cmd = offline_command(&inst.python, empty_cache)?;
     cmd.arg(a.script);
     match a.audio {
         AudioInput::Dir(d) => cmd.arg("--audio-dir").arg(d),
@@ -314,15 +335,12 @@ pub fn transcribe(inst: &Installed, a: &TranscribeArgs, empty_cache: &Path, mut 
         .arg("--speakers").arg(a.speakers.to_string())
         .arg("--local-speakers").arg(a.local_speakers.to_string())
         .arg("--hotwords").arg(a.hotwords.join(" "))
-        .arg("--out").arg(a.out)
-        // 全程离线: 真要联网会立刻失败, 不会悄悄下载几个 G
-        .env("HTTPS_PROXY", "http://127.0.0.1:9")
-        .env("HTTP_PROXY", "http://127.0.0.1:9")
-        .env("NO_PROXY", "")
-        .env("MODELSCOPE_CACHE", empty_cache)
-        .env("HF_HUB_OFFLINE", "1")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .arg("--out").arg(a.out);
+    run_events(cmd, on_event)
+}
+
+/// 跑脚本、按行读 stdout 的事件, 到 Done 为止 (高精度重新转写 meeting_asr_hq 也用)。
+pub(crate) fn run_events(mut cmd: std::process::Command, mut on_event: impl FnMut(&AsrEvent)) -> Result<AsrEvent, String> {
     let mut child = cmd.spawn().map_err(|e| format!("起转写进程失败: {e}"))?;
     let stderr = child.stderr.take();
     // stderr 另起线程读, 防止管道写满把子进程卡住; 留最后几十行做报错上下文

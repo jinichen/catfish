@@ -49,10 +49,10 @@ fn installed_requires_paths_to_still_exist() {
 fn events_parse_and_non_events_are_ignored() {
     assert_eq!(
         parse_event(r#"{"event":"phase","phase":"recognizing","duration_secs":70.0}"#),
-        Some(AsrEvent::Phase { phase: "recognizing".into(), duration_secs: Some(70.0) })
+        Some(AsrEvent::Phase { phase: "recognizing".into(), duration_secs: Some(70.0), done: None, total: None })
     );
     assert_eq!(parse_event(r#"{"event":"phase","phase":"loading"}"#),
-               Some(AsrEvent::Phase { phase: "loading".into(), duration_secs: None }));
+               Some(AsrEvent::Phase { phase: "loading".into(), duration_secs: None, done: None, total: None }));
     assert!(matches!(parse_event(r#"{"event":"error","message":"x"}"#), Some(AsrEvent::Error { .. })));
     assert_eq!(parse_event("funasr version: 1.4.16."), None);
 }

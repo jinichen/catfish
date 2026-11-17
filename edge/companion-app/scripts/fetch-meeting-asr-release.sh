@@ -1,7 +1,8 @@
 #!/bin/bash
 # 从 GitHub Release 取 Windows 会议转写组件包 (10/14)。
 #
-#   bash scripts/fetch-meeting-asr-release.sh <版本, 如 1.1.0> [输出目录, 默认 ~/catfish-components]
+#   bash scripts/fetch-meeting-asr-release.sh <版本, 如 1.1.0> [输出目录, 默认 ~/catfish-components] [包名, 默认 meeting-asr]
+#   (11/17 高精度转写组件: ... <版本> <输出目录> meeting-asr-hq)
 #
 # build-meeting-asr-pack.yml 把包切成 1900MB 一段发到 Release `meeting-asr-<版本>` (单个文件上限 2GB),
 # 附 .parts (分段清单) 和 .sha256。这里走 lib-download.sh (默认经 ghfast.top 加速, GH_PROXY="" 直连)
@@ -14,9 +15,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/lib-download.sh"
 
 REPO="jinichen/catfish"
-F="meeting-asr-$VERSION-windows-x64.tar.gz"
-BASE="https://github.com/$REPO/releases/download/meeting-asr-$VERSION"
-WORK="$OUT_DIR/.fetch-$VERSION"
+PACK="${3:-meeting-asr}"
+[[ "$PACK" == meeting-asr || "$PACK" == meeting-asr-hq ]] || { echo "❌ 包名只能是 meeting-asr / meeting-asr-hq: $PACK" >&2; exit 1; }
+F="$PACK-$VERSION-windows-x64.tar.gz"
+BASE="https://github.com/$REPO/releases/download/$PACK-$VERSION"
+WORK="$OUT_DIR/.fetch-$PACK-$VERSION"
 mkdir -p "$WORK"
 
 download_with_retry "$BASE/$F.parts" "$WORK/$F.parts"

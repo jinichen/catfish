@@ -30,6 +30,11 @@ const KNOWN: Record<string, { title: string; purpose: string; platforms: string[
     purpose: "会议纪要、聊天 🎤 语音输入、上传音频转文字 —— 在员工电脑上离线转写 (FunASR), 录音不出本机",
     platforms: ["mac-arm64", "windows-x64"],
   },
+  "meeting-asr-hq": {
+    title: "高精度转写组件 (Qwen3-ASR)",
+    purpose: "可选: 员工在会议页对要紧的会点「高精度重新转写」, 用 Qwen3-ASR 重新识别文字 (说话人、名字不变), 说得清楚的地方明显更准; 比普通转写慢, 运行占 ~4GB 内存。要先装会议转写组件包 (借它的 Python), 录音不出本机",
+    platforms: ["mac-arm64", "windows-x64"],
+  },
   "embed-model": {
     title: "向量模型包 (BGE-M3)",
     purpose: "资料库「语义」检索在员工电脑上算向量 (BGE-M3 ONNX INT8 + tokenizer, ~560MB); 不装则只能靠中央网关的向量服务。Apple 芯片 Mac 用 any 包; Windows 用 windows-x64 包 (多带微软 ONNX Runtime DLL); Intel Mac 没有本地运行时, 只能走网关",

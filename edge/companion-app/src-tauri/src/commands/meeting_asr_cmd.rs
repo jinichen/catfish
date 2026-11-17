@@ -17,20 +17,39 @@ use crate::services::meeting_asr::{self as asr, AsrEvent, Installed, TranscribeA
 use crate::services::meeting_store::{self as store, MeetingStatus};
 
 static INSTALLING: AtomicBool = AtomicBool::new(false);
-static TRANSCRIBING: AtomicBool = AtomicBool::new(false);
+/// 会议转写一次只跑一场 —— 高精度重新转写 (meeting_hq_cmd) 也占这把锁
+pub(crate) static TRANSCRIBING: AtomicBool = AtomicBool::new(false);
 /// 11/17 正在转写的那场: (会议 id, 阶段, 音频秒数, 开始的 unix 秒)。进度原来只靠一次性事件推给界面 —— 界面重新订阅的
 /// 空当、切走再回来都会漏, 一直显示「准备中」(鸿波「一直挂在准备中, 是卡住了吗」)。界面改成也来问这个。
-static PROGRESS: std::sync::Mutex<Option<(String, String, Option<f64>, u64)>> = std::sync::Mutex::new(None);
+pub(crate) static PROGRESS: std::sync::Mutex<Option<Progress>> = std::sync::Mutex::new(None);
+
+#[derive(Clone)]
+pub(crate) struct Progress {
+    id: String,
+    phase: String,
+    duration: Option<f64>,
+    started: u64,
+    /// 11/17 高精度重新转写: 送了几段 / 一共几段
+    counts: Option<(usize, usize)>,
+}
 
 fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-fn set_progress(id: &str, phase: &str, duration: Option<f64>) {
+pub(crate) fn set_progress(id: &str, phase: &str, duration: Option<f64>, counts: Option<(usize, usize)>) {
     if let Ok(mut g) = PROGRESS.lock() {
-        let started = g.as_ref().filter(|p| p.0 == id).map(|p| p.3).unwrap_or_else(now_secs);
-        let duration = duration.or_else(|| g.as_ref().filter(|p| p.0 == id).and_then(|p| p.2));
-        *g = Some((id.to_string(), phase.to_string(), duration, started));
+        let same = g.as_ref().filter(|p| p.id == id);
+        let started = same.map(|p| p.started).unwrap_or_else(now_secs);
+        let duration = duration.or_else(|| same.and_then(|p| p.duration));
+        let counts = counts.or_else(|| same.filter(|p| p.phase == phase).and_then(|p| p.counts));
+        *g = Some(Progress { id: id.to_string(), phase: phase.to_string(), duration, started, counts });
+    }
+}
+
+pub(crate) fn clear_progress() {
+    if let Ok(mut g) = PROGRESS.lock() {
+        *g = None;
     }
 }
 
@@ -38,9 +57,10 @@ fn set_progress(id: &str, phase: &str, duration: Option<f64>) {
 #[tauri::command]
 pub fn meeting_transcribe_phase(id: String) -> serde_json::Value {
     match PROGRESS.lock().ok().and_then(|g| g.clone()) {
-        Some((pid, phase, dur, started)) if pid == id => {
-            json!({ "phase": phase, "duration_secs": dur, "elapsed_secs": now_secs().saturating_sub(started) })
-        }
+        Some(p) if p.id == id => json!({
+            "phase": p.phase, "duration_secs": p.duration, "elapsed_secs": now_secs().saturating_sub(p.started),
+            "done": p.counts.map(|c| c.0), "total": p.counts.map(|c| c.1),
+        }),
         _ => serde_json::Value::Null,
     }
 }
@@ -59,13 +79,18 @@ pub struct AsrStatus {
     pub transcribing: bool,
 }
 
-fn version_key(v: &str) -> Vec<u32> {
+pub(crate) fn version_key(v: &str) -> Vec<u32> {
     v.split('.').map(|x| x.parse().unwrap_or(0)).collect()
 }
 
 /// runtime/ 里校验过的最新会议组件包 → (文件, 版本)。
 pub fn ready_pack(runtime: &Path) -> Option<(PathBuf, String)> {
-    let prefix = format!("{}-", asr::COMPONENT_NAME);
+    ready_pack_named(runtime, asr::COMPONENT_NAME)
+}
+
+/// 同上, 指定组件名 (11/17 高精度组件 meeting-asr-hq 也用)。
+pub(crate) fn ready_pack_named(runtime: &Path, component: &str) -> Option<(PathBuf, String)> {
+    let prefix = format!("{component}-");
     let suffix = format!("-{}.tar.gz", comp::current_platform());
     std::fs::read_dir(runtime)
         .ok()?
@@ -145,10 +170,8 @@ pub fn meeting_transcribe(app: tauri::AppHandle, id: String) -> Result<(), Strin
     meta.status = MeetingStatus::Transcribing;
     meta.error = None;
     store::save(&root, &meta)?;
-    if let Ok(mut g) = PROGRESS.lock() {
-        *g = None;
-    }
-    set_progress(&meta.id, "starting", None);
+    clear_progress();
+    set_progress(&meta.id, "starting", None, None);
 
     tauri::async_runtime::spawn_blocking(move || {
         let r = run_transcribe(&app, &home, &root, &inst, &script, &meta);
@@ -166,9 +189,7 @@ pub fn meeting_transcribe(app: tauri::AppHandle, id: String) -> Result<(), Strin
             "meeting_transcribe_progress",
             json!({ "id": meta.id, "phase": "finished", "done": true, "error": r.err() }),
         );
-        if let Ok(mut g) = PROGRESS.lock() {
-            *g = None;
-        }
+        clear_progress();
         TRANSCRIBING.store(false, Ordering::SeqCst);
     });
     Ok(())
@@ -190,8 +211,8 @@ fn run_transcribe(
     let redo = backup_before_redo(&dir, &out, &stamp);
     let started = std::time::Instant::now();
     let done = asr::transcribe(inst, &args, &asr::root(home).join(".empty-cache"), |ev| {
-        if let AsrEvent::Phase { phase, duration_secs } = ev {
-            set_progress(&meta.id, phase, *duration_secs);
+        if let AsrEvent::Phase { phase, duration_secs, .. } = ev {
+            set_progress(&meta.id, phase, *duration_secs, None);
             let _ = app.emit(
                 "meeting_transcribe_progress",
                 json!({ "id": meta.id, "phase": phase, "duration_secs": duration_secs, "done": false }),
@@ -208,7 +229,7 @@ fn run_transcribe(
 
 /// 11/17 已转写过的会议重新转写 (说话人分法改了, 鸿波要老会议也能重分): 先把原转写 (含改过的错字) 另存
 /// `transcript.before-<时间>.json`。返回是不是重新转写。脚本只在成功时整份替换 transcript.json, 失败原来的还在。
-fn backup_before_redo(dir: &Path, transcript: &Path, stamp: &str) -> bool {
+pub(crate) fn backup_before_redo(dir: &Path, transcript: &Path, stamp: &str) -> bool {
     if !transcript.is_file() {
         return false;
     }

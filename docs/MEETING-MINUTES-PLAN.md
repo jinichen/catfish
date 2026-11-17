@@ -253,3 +253,31 @@ KMeans 硬分成 N 簇**, 而且给了人数就跳过它自己「声音很像的
 - 偶发「大模型没按格式输出纪要」(MAX 实测一次: JSON 字符串里没转义的双引号) 整个纪要失败 → 解析不了把原样输出和错误给模型改一次
   (`gateway_llm.call_llm_json`, 生成 / 分段 / 合并 / Word Excel 填空 / 让小鲶改都走它)。
 - 纪要记下是哪个模型写的 (minutes.json `model`), 头上显示「千问4.0 MAX 写的」。模型仍然跟对话页选的走 (8/9 定的「模型只能来自 picker」)。
+
+## 12. 高精度重新转写: Qwen3-ASR 做成可选组件 (11/17, Companion 1.2.207 + meeting-asr-hq 1.0.0)
+
+鸿波 11/17「现在的转写准确性不够」。
+
+**盲测 (CCRC 整改会 72:00–82:00, 按 VAD 切 49 段, 三列每行打乱、不告诉是哪个模型, 员工听原声挑最接近的, 选了 43 句)**:
+Qwen3-ASR-1.7B **23**、现在的 Paraformer 11、Fun-ASR-Nano 9。云端 (百炼) 没测 —— 录音要出本机, 鸿波没选; 0.6B 鸿波判断
+不会好过现在的, 没测。
+
+**整场实测 (2:12, 本机 16GB M 芯片)**: 说得清楚的地方 Qwen3 明显更好 (120:00「我们自己看都不认识…就说去年的」vs
+「我们自己看不能嗯」; 45:00 Paraformer 一个字没出、Qwen3 有), 远场 / 很小声的两个都是乱的。代价: 第一版把 Qwen3 接在默认
+转写后面、同一个进程里跑, 两小时的会总共 59 分钟 (Paraformer 25 分钟), Qwen3 那步占 ~4GB 内存叠在 FunASR 上, 16GB 的机器
+swap 用满; 模型 4.4GB, 默认组件包会从 2.3GB 涨到 6.5GB。
+
+**鸿波选 A: 不塞进默认组件, 做成员工自己选装的「高精度转写组件」**:
+- 默认会议组件 (meeting-asr) 一点不动; 新组件 `meeting-asr-hq` (wheels + models/asr-qwen3, ~4.6GB, 不带 Python),
+  装在 ~/.catfish/meeting-asr-hq/, 借默认组件的 Python 3.11 另建 venv (Qwen3 要 transformers 4.57.6, 默认组件是 5.x);
+  qwen-asr 本身 `--no-deps` 装 (它把 gradio / flask / sox 写成了依赖; meeting-asr-hq-requirements.txt 里 `--no-deps ` 开头的行
+  → pack.json `requirements_nodeps`)。
+- 会议页说话人那一栏「高精度重新转写」: 已转写的会议, meeting_asr_qwen.py 读这场的 transcript.json, 同一个人、停顿 < 0.8 秒的
+  相邻句子连成 ≤ 20 秒的小段 (跟盲测的切法一样) 给 Qwen3-ASR, 热词当上下文; 文字按句末标点切句、起止按字数在段内摊,
+  **说话人编号不变, 起好的名字照用**。单独一个进程 (默认组件那个早就退了, 内存不叠加), 一批 4 段报一次进度 (界面「约 x%」),
+  原转写另存 transcript.before-<时间>.json。没装组件点它 → 出下载面板 (同一套下载 → 校验 → 安装)。
+- 打包: scripts/build-meeting-asr-hq-pack.sh (Mac 本机打); Windows 由 build-meeting-asr-pack.yml 选 pack=hq。自检离线装好后
+  拿示例人声真识别一次 (有字才出包), 顺手量 60 秒音频要多久 (Windows 没 Apple GPU)。
+
+**顺手: 装过会议组件的员工原来永远停在老版本** —— 会议页只有「没装」时才有下载入口 (鸿波这台中央已有 1.1.0, 本机还是 1.0.0)。
+现在中央有更新的版本时会议页左边出「会议组件有新版」卡 (AsrUpgrade); 鸿波 11/17 22:47 用它从 1.0.0 升到了 1.1.0。

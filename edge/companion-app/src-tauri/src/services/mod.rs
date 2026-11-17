@@ -16,6 +16,7 @@ pub mod meeting_recorder; // 10/1: 进程内录音 (cpal), 取代 speech.rs 的 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub mod meeting_sysaudio; // 11/11: 线上会议录电脑放出来的声音 (macOS catfish-audiotap / Windows WASAPI 回环)
 pub mod meeting_asr;   // 10/1: 会议组件包安装 + 调转写脚本 (离线)
+pub mod meeting_asr_hq; // 11/17: 高精度转写组件 (Qwen3-ASR, 员工自己选装)
 pub mod meeting_live;  // 11/15: 会中实时转写进程 (会中小鲶)
 pub mod meeting_store; // 10/1: ~/.catfish/meetings/<id>/ 的 meta / 目录
 pub mod meeting_templates; // 10/3: 会议纪要自定义模版 ~/.catfish/meeting-templates/
