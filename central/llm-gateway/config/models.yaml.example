@@ -2,7 +2,8 @@
 # 鲶鱼网关 · 模型清单
 # ============================================================
 # tier:           private | public
-# mode:           chat | embedding
+# mode:           chat | embedding | text_to_image | image_to_image | text_to_video | image_to_video
+#                 (后四种 = 出图 / 出视频, 11/17; 按张 / 按秒计费, 单价填 price_per_unit)
 # upstream.model: LiteLLM 完整名（必须带 provider 前缀）
 #                 e.g. openai/xxx  gemini/gemini-2.5-pro  bedrock/xxx
 #
@@ -208,6 +209,83 @@ models:
       chain: [catfish-public-qwen-flash, catfish-private-main]
       max_hops: 2
     recommended_for: [fast, cheap, general, bulk]
+    cost_tier: paid
+
+  # ============================================================
+  # 出图 / 出视频 (11/17) —— 小鲶的 image_generate / video_generate 由网关按用途挑模型:
+  # 每种用途挂 default 的那个优先, 员工没权限 / 没配 key 的跳过。型号更新很快, 换型号改这里
+  # 或在控制台「模型」页改, 代码里不写死。
+  #   upstream.model 写 dashscope/<型号> = 阿里百炼原生接口 (图片同步; 视频异步任务, 网关轮询)。
+  #   别家照对话模型的写法 (openai/gpt-image-1、gemini/… 等, 走 LiteLLM)。
+  #   provider: dashscope 复用对话那条供应商的 key; 它的 api_base 是兼容地址也没关系, 网关自动换成 /api/v1。
+  #   price_per_unit: 元 / 张 (图片) 或 元 / 秒 (视频), 照百炼控制台的价格填; 不填审计页按 0 算。
+  #   换成万相 3.0 (wan3.0-video, 一个型号文生 + 图生都行) 时视频的 media 要加:
+  #     size_param: resolution_ratio    (它没有 size, 传了被忽略, 按默认 1080P 出 —— 更贵)
+  #     image_input: first_frame        (首帧放 input.media; 传 img_url 被忽略, 视频跟原图无关)
+  #   这两条是 11/17 实测踩到的: 上游不报错, 只是静默不认。
+  # ============================================================
+  - name: catfish-public-qwen-image
+    tier: public
+    display_name: "通义千问 Qwen-Image · 文生图"
+    mode: text_to_image
+    default: true
+    upstream:
+      model: dashscope/qwen-image-2.0-pro
+      api_base: https://dashscope.aliyuncs.com/api/v1
+      api_key_env: DASHSCOPE_API_KEY
+      timeout: 280   # 改图实测 2–3 分钟; 中央 nginx proxy_read_timeout 300, 留点余量
+    media:
+      params: {watermark: false, prompt_extend: true}
+    cost_tier: paid
+
+  - name: catfish-public-qwen-image-edit
+    tier: public
+    display_name: "通义千问 Qwen-Image · 改图"
+    mode: image_to_image
+    default: true
+    upstream:
+      model: dashscope/qwen-image-2.0-pro
+      api_base: https://dashscope.aliyuncs.com/api/v1
+      api_key_env: DASHSCOPE_API_KEY
+      timeout: 280   # 改图实测 2–3 分钟; 中央 nginx proxy_read_timeout 300, 留点余量
+    media:
+      max_input_images: 3
+      params: {watermark: false, prompt_extend: true}
+    cost_tier: paid
+
+  - name: catfish-public-wan-t2v
+    tier: public
+    display_name: "通义万相 · 文生视频"
+    mode: text_to_video
+    default: true
+    upstream:
+      model: dashscope/wan2.6-t2v
+      api_base: https://dashscope.aliyuncs.com/api/v1
+      api_key_env: DASHSCOPE_API_KEY
+    media:
+      default_duration: 5
+      min_duration: 2
+      max_duration: 15
+      resolutions: [720P, 1080P]
+      params: {watermark: false}
+    cost_tier: paid
+
+  - name: catfish-public-wan-i2v
+    tier: public
+    display_name: "通义万相 · 图生视频"
+    mode: image_to_video
+    default: true
+    upstream:
+      model: dashscope/wan2.6-i2v-flash
+      api_base: https://dashscope.aliyuncs.com/api/v1
+      api_key_env: DASHSCOPE_API_KEY
+    media:
+      default_duration: 5
+      min_duration: 2
+      max_duration: 15
+      resolutions: [720P, 1080P]
+      audio: true
+      params: {watermark: false}
     cost_tier: paid
 
 

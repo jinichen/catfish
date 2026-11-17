@@ -59,6 +59,9 @@ export function classifyEgress(method: string, url: string, bodyBytes: number, c
 const PATH_PURPOSE: [string, string][] = [
   ["/v1/chat/completions", "模型调用"],
   ["/v1/embeddings", "向量计算"],
+  // 11/17: 小鲶出图 / 出视频 (改图 / 图生视频带原图)
+  ["/v1/images/", "出图 / 改图"],
+  ["/v1/videos", "出视频"],
   ["/v1/hub/skills", "发布技能"],
   ["/v1/wiki/", "部门知识"],
   ["/api/proactive/", "主动提醒"],
@@ -108,6 +111,9 @@ const SOURCE_PURPOSE: Record<string, string> = {
   "plugin:toolbridge-workflow": "工作流 · 小鲶判断",
   "plugin:toolbridge-expert-builder": "专家 · 一句话搭专家",
   "plugin:toolbridge-wiki-props": "知识库 · 整理属性",
+  // 11/17: 小鲶出图 / 出视频 (hermes 插件 media_gen.py, 跟 egress_log.py 同一套叫法)
+  "plugin:media-image": "出图 / 改图",
+  "plugin:media-video": "出视频",
 };
 
 /** 10/28: 老记录里存的用途名换成现在的叫法再显示。

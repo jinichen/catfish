@@ -5,7 +5,7 @@
  *   sandbox 只给 allow-scripts —— 页面里的图表脚本能跑, 但它是个「无来源」的隔离页面,
  *   碰不到 Companion 的界面和本机命令; 也不像邮件正文那样走 srcdoc (srcdoc 会继承 Companion 的 CSP,
  *   页面自己的脚本全被拦)。
- * PDF / 图片: 同样走 asset 协议。
+ * PDF / 图片 / 视频: 同样走 asset 协议。
  * Markdown / 表格 / 文本: 后端读字节, 前端判编码后用 React 画。
  */
 import { useEffect, useMemo, useState } from "react";
@@ -40,6 +40,17 @@ export function ImageView({ info }: { info: ArtifactInfo }) {
   return (
     <div className="artifact-image">
       <img src={artifactUrl(info)} alt={info.name} onError={() => setFailed(true)} />
+    </div>
+  );
+}
+
+/** 11/17 小鲶出的视频: <video> 走 asset 协议 (CSP media-src 已放 asset:), 带播放控件。 */
+export function VideoView({ info }: { info: ArtifactInfo }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <Notice tone="error">视频放不出来，可能格式不支持，用默认程序打开看看。</Notice>;
+  return (
+    <div className="artifact-image artifact-video">
+      <video src={artifactUrl(info)} controls playsInline preload="metadata" onError={() => setFailed(true)} />
     </div>
   );
 }

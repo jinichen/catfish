@@ -66,6 +66,9 @@ _SOURCE_PURPOSE = {
     "plugin:memory-classify": "记忆归类",
     "plugin:memory-recall-embed": "记忆检索",
     "plugin:memory": "长期记忆",
+    # 11/17: 小鲶出图 / 出视频 (media_gen.py) —— 改图 / 图生视频会带上原图
+    "plugin:media-image": "出图 / 改图",
+    "plugin:media-video": "出视频",
     "companion-chat": "对话",
     # 10/28: Companion 自己的功能走 hermes 转发 (SERVICE_LLM_QUERY), 原来全落到下面笼统的「Companion」。
     # 跟 companion-app/src/lib/egressRule.ts 的 SOURCE_PURPOSE 同一套叫法。

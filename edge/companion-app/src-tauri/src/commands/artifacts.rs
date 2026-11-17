@@ -50,6 +50,8 @@ pub(crate) fn kind_of(ext: &str) -> Option<&'static str> {
         "html" | "htm" => "html",
         "pdf" => "pdf",
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" => "image",
+        // 11/17 小鲶出视频 (video_generate) 的成果
+        "mp4" | "webm" | "mov" | "m4v" => "video",
         "md" | "markdown" => "markdown",
         "csv" | "tsv" => "table",
         "txt" | "log" | "json" | "yaml" | "yml" | "xml" | "toml" | "ini" | "sql" | "sh" | "py" | "js" | "ts"
@@ -90,7 +92,7 @@ fn info_of(p: &Path) -> Result<ArtifactInfo, String> {
 pub async fn artifact_stat(app: AppHandle, path: String) -> Result<ArtifactInfo, String> {
     let p = resolve_path(&path)?;
     let info = info_of(&p)?;
-    if matches!(info.kind, "html" | "pdf" | "image") {
+    if matches!(info.kind, "html" | "pdf" | "image" | "video") {
         let scope = app.asset_protocol_scope();
         scope.allow_file(&p).map_err(|e| format!("放行预览失败: {e}"))?;
         if info.kind == "html" {
@@ -182,6 +184,8 @@ mod tests {
         assert_eq!(kind_of("htm"), Some("html"));
         assert_eq!(kind_of("pdf"), Some("pdf"));
         assert_eq!(kind_of("svg"), Some("image"));
+        assert_eq!(kind_of("mp4"), Some("video"));
+        assert_eq!(kind_of("mov"), Some("video"));
         assert_eq!(kind_of("md"), Some("markdown"));
         assert_eq!(kind_of("csv"), Some("table"));
         assert_eq!(kind_of("json"), Some("text"));

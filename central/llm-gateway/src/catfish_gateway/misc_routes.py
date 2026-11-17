@@ -309,7 +309,7 @@ def register_misc_routes(app) -> None:
             "data": [
                 _model_info_payload(m)
                 for m in config.models
-                if user.can_access(m) and m.mode != "embedding" and m.upstream.is_available
+                if user.can_access(m) and m.mode == "chat" and m.upstream.is_available
             ],
         }
 

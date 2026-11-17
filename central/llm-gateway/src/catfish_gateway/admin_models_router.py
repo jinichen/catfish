@@ -39,6 +39,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException
 
 from . import model_store, provider_store
+from .media_config import MEDIA_MODES
 from .auth import User, get_current_user
 from .config import (
     Config,
@@ -331,6 +332,11 @@ def register_model_admin_routes(app: FastAPI) -> None:
                     cfg.default_embedding_model().name
                     if cfg.default_embedding_model() else None
                 ),
+                # 11/17 出图 / 出视频: 每种用途给员工用的那个 (挂默认的优先, 没配 key 的跳过)
+                **{
+                    mode: next((m.name for m in cfg.media_models(mode) if m.upstream.is_available), None)
+                    for mode in MEDIA_MODES
+                },
             },
             # 每个模型引用的那个 key 变量, 在服务器上到底设没设。
             #

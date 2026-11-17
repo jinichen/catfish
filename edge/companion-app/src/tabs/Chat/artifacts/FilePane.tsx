@@ -11,7 +11,7 @@ import { basename, fileEmoji } from "../../../lib/path_detect";
 import { formatBytes } from "../../../lib/format";
 import { fileManagerName } from "../../../lib/platformLabels";
 import { openFile, revealInFinder } from "../../../lib/tauri";
-import { HtmlView, ImageView, MarkdownView, Notice, PdfView, TableView, TextView } from "./ArtifactViews";
+import { HtmlView, ImageView, MarkdownView, Notice, PdfView, TableView, TextView, VideoView } from "./ArtifactViews";
 import OfficeView from "./OfficeView";
 
 const POLL_MS = 2000;
@@ -85,6 +85,7 @@ export default function FilePane({ paths }: { paths: string[] }) {
   else if (info.kind === "html") body = <HtmlView info={info} key={reloadKey} />;
   else if (info.kind === "pdf") body = <PdfView info={info} key={reloadKey} />;
   else if (info.kind === "image") body = <ImageView info={info} key={`${info.mtime_ms}-${reloadKey}`} />;
+  else if (info.kind === "video") body = <VideoView info={info} key={`${info.mtime_ms}-${reloadKey}`} />;
   else if (info.kind === "markdown") body = <MarkdownView info={info} reloadKey={reloadKey} />;
   else if (info.kind === "table") body = <TableView info={info} reloadKey={reloadKey} />;
   else if (info.kind === "office") body = <OfficeView info={info} reloadKey={reloadKey} />;

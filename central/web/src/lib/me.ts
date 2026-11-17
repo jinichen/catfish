@@ -395,8 +395,31 @@ export interface CatalogModel {
 
 export interface CatalogResponse {
   models: CatalogModel[];
+  /** 11/17 出图 / 出视频模型 (不进对话模型选择器), 审计页按张 / 按秒算成本用 */
+  media_models?: CatalogMediaModel[];
   default?: string | null;
   authenticated?: boolean;
+}
+
+export interface CatalogMediaModel {
+  id: string;
+  display_name: string;
+  mode: string;
+  tier?: string;
+  unit: string;
+  price_per_unit?: number | null;
+  color?: string | null;
+  dot_emoji?: string | null;
+}
+
+/** 审计页的显示名 / 单价来源: 对话模型 + 出图 / 出视频模型 (11/17)。给 setRuntimeModelMeta 用。 */
+export async function fetchModelMeta(): Promise<(CatalogModel | CatalogMediaModel)[]> {
+  try {
+    const r = await api.get<CatalogResponse>("/v1/catalog");
+    return [...(r.models ?? []), ...(r.media_models ?? [])];
+  } catch {
+    return [];
+  }
 }
 
 export async function fetchModelCatalog(): Promise<CatalogModel[]> {

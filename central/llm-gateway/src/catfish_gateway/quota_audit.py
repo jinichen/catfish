@@ -30,6 +30,8 @@ def _model_row(r: Any) -> dict:
         "tokens_in": int(r[3] or 0),
         "tokens_out": int(r[4] or 0),
         "tokens_cache_read": int(r[5] or 0),
+        # 11/17 出图 / 出视频: 张数或秒数 (按模型的 price_per_unit 计费), 对话模型是 0
+        "media_units": float(r[6] or 0) if len(r) > 6 else 0.0,
     }
 
 def _sum_tokens(where_clause_sqlite: str, where_clause_pg: str, params: tuple[Any, ...]) -> int:
@@ -130,7 +132,7 @@ def audit_summary_user_since(user_email: str, cutoff_ms: int) -> dict:
 
                     cur.execute(
                         """SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS used,
-                                  SUM(tokens_in), SUM(tokens_out), SUM(tokens_cache_read)
+                                  SUM(tokens_in), SUM(tokens_out), SUM(tokens_cache_read), SUM(media_units)
                            FROM quota_events WHERE user_email = %s AND ts_ms >= %s AND NOT background
                            GROUP BY model ORDER BY used DESC LIMIT 20""",
                         (user_email, cutoff_ms),
@@ -171,7 +173,7 @@ def audit_summary_user_since(user_email: str, cutoff_ms: int) -> dict:
 
         cur = conn.execute(
             """SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS used,
-                                  SUM(tokens_in), SUM(tokens_out), SUM(tokens_cache_read)
+                                  SUM(tokens_in), SUM(tokens_out), SUM(tokens_cache_read), SUM(media_units)
                FROM quota_events WHERE user_email = ? AND ts >= ? AND background = 0
                GROUP BY model ORDER BY used DESC LIMIT 20""",
             (user_email, cutoff_ms),
@@ -288,7 +290,7 @@ def audit_summary_dept_since(department: str, cutoff_ms: int) -> dict:
 
                     cur.execute(
                         """SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS used,
-                                  SUM(tokens_in), SUM(tokens_out), SUM(tokens_cache_read)
+                                  SUM(tokens_in), SUM(tokens_out), SUM(tokens_cache_read), SUM(media_units)
                            FROM quota_events WHERE department = %s AND ts_ms >= %s
                            GROUP BY model ORDER BY used DESC LIMIT 20""",
                         (department, cutoff_ms),
@@ -331,7 +333,7 @@ def audit_summary_dept_since(department: str, cutoff_ms: int) -> dict:
 
         cur = conn.execute(
             """SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS used,
-                                  SUM(tokens_in), SUM(tokens_out), SUM(tokens_cache_read)
+                                  SUM(tokens_in), SUM(tokens_out), SUM(tokens_cache_read), SUM(media_units)
                FROM quota_events WHERE department = ? AND ts >= ?
                GROUP BY model ORDER BY used DESC LIMIT 20""",
             (department, cutoff_ms),
@@ -595,7 +597,7 @@ def audit_summary_global_since(
 
                     cur.execute(
                         f"""SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS tk,
-                                  SUM(tokens_in), SUM(tokens_out), SUM(tokens_cache_read)
+                                  SUM(tokens_in), SUM(tokens_out), SUM(tokens_cache_read), SUM(media_units)
                            FROM quota_events
                            WHERE ts_ms >= %s AND user_email NOT LIKE 'internal:%%'{extra_sql_pg}
                            GROUP BY model ORDER BY tk DESC LIMIT 20""",
@@ -708,7 +710,7 @@ def audit_summary_global_since(
 
         cur = conn.execute(
             f"""SELECT model, COUNT(*), SUM(tokens_in + tokens_out),
-                                  SUM(tokens_in), SUM(tokens_out), SUM(tokens_cache_read)
+                                  SUM(tokens_in), SUM(tokens_out), SUM(tokens_cache_read), SUM(media_units)
                 FROM quota_events
                 WHERE ts >= ? AND user_email NOT LIKE 'internal:%'{extra_sql_sq}
                 GROUP BY model ORDER BY 3 DESC LIMIT 20""",

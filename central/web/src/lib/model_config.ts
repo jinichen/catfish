@@ -67,7 +67,7 @@ export interface ModelConfig {
   name: string;
   tier: "private" | "public";
   display_name: string;
-  mode: "chat" | "embedding";
+  mode: ModelMode;
   default: boolean;
   upstream: Upstream;
   context_window?: number | null;
@@ -89,6 +89,58 @@ export interface ModelConfig {
   price_cache_read_per_1k?: number | null;
   color?: string | null;
   dot_emoji?: string | null;
+  /** 11/17 出图 / 出视频的单价: 元 / 张 (图片) 或 元 / 秒 (视频)。对话 / 向量模型不用。 */
+  price_per_unit?: number | null;
+  /** 11/17 出图 / 出视频的附加配置 (后端 media_config.MediaConfig)。 */
+  media?: MediaConfig | null;
+}
+
+/** 11/17 模型用途: 原来只有对话 / 向量, 加了文生图、图生图、文生视频、图生视频。 */
+export type ModelMode =
+  | "chat"
+  | "embedding"
+  | "text_to_image"
+  | "image_to_image"
+  | "text_to_video"
+  | "image_to_video";
+
+export const MODE_LABEL: Record<ModelMode, string> = {
+  chat: "对话",
+  embedding: "向量",
+  text_to_image: "文生图",
+  image_to_image: "图生图（改图）",
+  text_to_video: "文生视频",
+  image_to_video: "图生视频",
+};
+
+export function isMediaMode(mode: string | undefined | null): boolean {
+  return mode === "text_to_image" || mode === "image_to_image" || mode === "text_to_video" || mode === "image_to_video";
+}
+
+export function isVideoMode(mode: string | undefined | null): boolean {
+  return mode === "text_to_video" || mode === "image_to_video";
+}
+
+/** 计费单位: 图片按张, 视频按秒 */
+export function modeUnit(mode: string | undefined | null): string {
+  return isVideoMode(mode) ? "秒" : "张";
+}
+
+/** 出图 / 出视频的附加配置, 全部可选 (对应后端 MediaConfig)。 */
+export interface MediaConfig {
+  /** 每次调用默认带给上游的参数 (百炼放进 parameters), 员工请求里的同名参数优先 */
+  params?: Record<string, unknown>;
+  /** 图片画幅 → 尺寸 (landscape / square / portrait); 视频可写 "720P/16:9" */
+  sizes?: Record<string, string>;
+  max_input_images?: number | null;
+  min_duration?: number | null;
+  max_duration?: number | null;
+  default_duration?: number | null;
+  resolutions?: string[];
+  size_param?: "size" | "resolution" | "resolution_ratio" | null;
+  /** 首帧图怎么传: input.img_url (万相 2.x) 或 input.media first_frame (万相 3.0) */
+  image_input?: "img_url" | "first_frame" | null;
+  audio?: boolean | null;
 }
 
 export interface ModelListResponse {
@@ -114,7 +166,7 @@ export interface ModelListResponse {
   /** 9/23: 两个 mode 各自生效中的默认 —— 跟行上的 default 标志不完全一样:
    *  只有一个向量模型时它就是默认, 不用勾; 对话模型没人勾时是第一个。
    *  徽章按这个显示, 否则"没勾但实际就是它"看起来像没有默认。 */
-  effective_defaults?: { chat: string | null; embedding: string | null };
+  effective_defaults?: { chat: string | null; embedding: string | null } & Partial<Record<ModelMode, string | null>>;
   models: ModelConfig[];
 }
 
@@ -274,6 +326,21 @@ export function validateModel(m: ModelConfig): string[] {
     errs.push("输出单价不能是负数");
   if (m.price_cache_read_per_1k != null && m.price_cache_read_per_1k < 0)
     errs.push("缓存命中单价不能是负数");
+  if (m.price_per_unit != null && m.price_per_unit < 0) errs.push("单价不能是负数");
+  if (isMediaMode(m.mode) && m.media) {
+    const md = m.media;
+    for (const [k, label] of [
+      ["min_duration", "最短时长"],
+      ["max_duration", "最长时长"],
+      ["default_duration", "默认时长"],
+      ["max_input_images", "最多原图张数"],
+    ] as const) {
+      const v = md[k];
+      if (v != null && (!Number.isInteger(v) || v < 1)) errs.push(`${label}要是正整数`);
+    }
+    if (md.min_duration != null && md.max_duration != null && md.min_duration > md.max_duration)
+      errs.push("最短时长不能大于最长时长");
+  }
   // 填错颜色的后果是**静默的**: 图表拿到非法颜色会退回浏览器默认 (通常是黑),
   // 于是这个模型在图表里跟别的黑色模型混在一起, 而没有任何报错。
   if (m.color && !isHexColor(m.color))

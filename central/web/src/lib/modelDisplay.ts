@@ -133,6 +133,8 @@ export interface RuntimeModelMeta {
   price_output_per_1k?: number | null;
   /** 10/29: 缓存命中的输入单价。不填 → 同输入单价 (不打折)。 */
   price_cache_read_per_1k?: number | null;
+  /** 11/17 出图 / 出视频: 元 / 张 或 元 / 秒 */
+  price_per_unit?: number | null;
 }
 
 let _runtime: Record<string, RuntimeModelMeta> = {};
@@ -257,6 +259,8 @@ export interface ModelUsage {
   tokens_in?: number;
   tokens_out?: number;
   tokens_cache_read?: number;
+  /** 11/17 出图 / 出视频的张数 / 秒数 (按模型的 price_per_unit 计费) */
+  media_units?: number;
 }
 
 /** 这个模型的三个单价 (元 / 1000 token)。输出 / 缓存命中不填时都同输入单价 ——
@@ -276,10 +280,12 @@ export function modelPrices(catalogId: string): { input: number; output: number;
 
 /** 按模型精算成本: (输入 − 缓存命中) × 输入价 + 缓存命中 × 命中价 + 输出 × 输出价。 */
 export function costRMB(u: ModelUsage): number {
+  // 11/17 出图 / 出视频: 张数 / 秒数 × 单价 (这类行 token 是 0)。没配单价按 0 算 —— 不能套 token 兜底价。
+  const media = u.media_units ? u.media_units * (_runtime[u.model]?.price_per_unit ?? 0) : 0;
   const p = modelPrices(u.model);
-  if (u.tokens_in == null || u.tokens_out == null) return (u.total_tokens / 1000) * p.input;
+  if (u.tokens_in == null || u.tokens_out == null) return (u.total_tokens / 1000) * p.input + media;
   const cache = Math.min(u.tokens_cache_read ?? 0, u.tokens_in);
-  return ((u.tokens_in - cache) * p.input + cache * p.cacheRead + u.tokens_out * p.output) / 1000;
+  return ((u.tokens_in - cache) * p.input + cache * p.cacheRead + u.tokens_out * p.output) / 1000 + media;
 }
 
 /** 多 model 加权总 RMB. 输入 by_model 列表, 返总成本. */

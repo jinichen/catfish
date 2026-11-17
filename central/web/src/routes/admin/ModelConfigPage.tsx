@@ -38,7 +38,10 @@ import { splitDisplayName } from "../../lib/modelDisplay";
 import { providerApi, type Provider } from "../../lib/provider_config";
 import {
   emptyModel,
+  isMediaMode,
+  MODE_LABEL,
   modelConfigApi,
+  modeUnit,
   validateModel,
   type ModelConfig,
   type ModelListResponse,
@@ -436,10 +439,19 @@ function ModelConfigEditor() {
                             配置有误
                           </Badge>
                         ) : null}
-                        {m.price_per_1k_tokens == null ? (
+                        {isMediaMode(m.mode) && data?.effective_defaults?.[m.mode] === m.name ? (
+                          <Badge tone="accent" title="小鲶出图 / 出视频时用它 (挂默认的优先, 没配 key 的跳过)">
+                            默认{MODE_LABEL[m.mode]}
+                          </Badge>
+                        ) : null}
+                        {(isMediaMode(m.mode) ? m.price_per_unit == null : m.price_per_1k_tokens == null) ? (
                           <Badge
                             tone="warn"
-                            title="没填输入单价, 概览和审计页的成本会按兜底价估算, 数字不准"
+                            title={
+                              isMediaMode(m.mode)
+                                ? `没填单价 (元 / ${modeUnit(m.mode)}), 审计页的成本按 0 算, 数字不准`
+                                : "没填输入单价, 概览和审计页的成本会按兜底价估算, 数字不准"
+                            }
                           >
                             缺单价
                           </Badge>
@@ -452,7 +464,7 @@ function ModelConfigEditor() {
               {
                 header: "类型",
                 width: 90,
-                cell: (m) => (m.mode === "embedding" ? "向量" : "对话"),
+                cell: (m) => MODE_LABEL[m.mode] ?? m.mode,
               },
               {
                 header: "归属",

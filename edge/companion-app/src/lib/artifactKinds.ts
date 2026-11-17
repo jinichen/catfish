@@ -6,12 +6,14 @@
 import type { ChatMessage } from "../types/chat";
 import { extractFilePaths } from "./path_detect";
 
-export type ArtifactKind = "html" | "pdf" | "image" | "markdown" | "table" | "text" | "office";
+export type ArtifactKind = "html" | "pdf" | "image" | "video" | "markdown" | "table" | "text" | "office";
 
 const KINDS: Record<string, ArtifactKind> = {
   html: "html", htm: "html",
   pdf: "pdf",
   png: "image", jpg: "image", jpeg: "image", gif: "image", webp: "image", svg: "image", bmp: "image",
+  // 11/17: 小鲶出视频 (video_generate) 的成果
+  mp4: "video", webm: "video", mov: "video", m4v: "video",
   md: "markdown", markdown: "markdown",
   csv: "table", tsv: "table",
   txt: "text", log: "text", json: "text", yaml: "text", yml: "text", xml: "text", toml: "text", ini: "text",
@@ -29,7 +31,7 @@ export function artifactKind(path: string): ArtifactKind | null {
 }
 
 const KIND_LABEL: Record<ArtifactKind, string> = {
-  html: "网页", pdf: "PDF", image: "图片", markdown: "文档", table: "表格", text: "文本", office: "Office",
+  html: "网页", pdf: "PDF", image: "图片", video: "视频", markdown: "文档", table: "表格", text: "文本", office: "Office",
 };
 const OFFICE_LABEL: Record<string, string> = { docx: "Word", xlsx: "Excel", xlsm: "Excel", xls: "Excel", pptx: "PPT" };
 

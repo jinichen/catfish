@@ -15,8 +15,12 @@ import { MODEL_PALETTE, matchPalette } from "../../lib/modelPalette";
 import { describeKey, type Provider } from "../../lib/provider_config";
 import {
   chainHopIssue,
+  isMediaMode,
+  MODE_LABEL,
   type ModelConfig,
+  type ModelMode,
 } from "../../lib/model_config";
+import { MediaFields, MediaUnitPrice } from "./ModelMediaFields";
 import {
   BOX,
   Field,
@@ -75,6 +79,8 @@ export function ModelForm({
   const matched = matchPalette(model.color);
   const [custom, setCustom] = useState(!!model.color && !matched);
   const set = (patch: Partial<ModelConfig>) => onChange({ ...model, ...patch });
+  // 11/17 出图 / 出视频模型: 不要 token 那套 (上下文 / 三段单价 / 工具调用 / 失败切换), 换成按张 / 秒的单价和媒体参数
+  const media = isMediaMode(model.mode);
   const setUp = (patch: Partial<ModelConfig["upstream"]>) =>
     onChange({ ...model, upstream: { ...model.upstream, ...patch } });
   const num = (v: string) => (v.trim() === "" ? null : Number(v));
@@ -162,14 +168,17 @@ export function ModelForm({
           </select>
         </Field>
 
-        <Field label="用途" hint="embedding 不会出现在聊天模型选择里">
+        <Field label="用途" hint="只有「对话」会出现在聊天模型选择里；出图 / 出视频由小鲶按用途自动挑">
           <select
             style={INPUT}
             value={model.mode}
             onChange={(e) => set({ mode: e.target.value as ModelConfig["mode"] })}
           >
-            <option value="chat">对话</option>
-            <option value="embedding">向量</option>
+            {(Object.keys(MODE_LABEL) as ModelMode[]).map((k) => (
+              <option key={k} value={k}>
+                {MODE_LABEL[k]}
+              </option>
+            ))}
           </select>
         </Field>
       </div>
@@ -319,6 +328,9 @@ export function ModelForm({
         </div>
       </div>
 
+      {media ? (
+        <MediaFields model={model} onChange={onChange} />
+      ) : (
       <div
         style={{
           marginTop: 10,
@@ -368,6 +380,7 @@ export function ModelForm({
         </div>
 
       </div>
+      )}
 
       <div
         style={{
@@ -389,6 +402,10 @@ export function ModelForm({
             gap: 8,
           }}
         >
+          {media ? (
+            <MediaUnitPrice model={model} onChange={onChange} />
+          ) : (
+            <>
           {/* 10/29: 一个单价拆成三个。原来只能填「输入输出取平均」, 而上游对输出、
               对命中缓存的输入各按不同价收 —— 本机一周里 qwen-flash 88% 的输入是缓存命中,
               全按输入价算, 成本明显偏高。后两个留空时同输入单价, 老配置算法不变。 */}
@@ -425,6 +442,8 @@ export function ModelForm({
               placeholder="同输入单价"
             />
           </Field>
+            </>
+          )}
           {/* 8/1: 「图表颜色」和「列表圆点」原来是两个自由文本框, 各填各的。
               它们其实是**同一个模型在两个视图里的样子** —— 颜色用在审计页
               图表, 圆点用在模型列表和聊天页选择器。配不一致的话同一个模型
@@ -484,7 +503,7 @@ export function ModelForm({
         </div>
 
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 8 }}>
-          {(
+          {media ? null : (
             [
               ["supports_tool_use", "支持工具调用"],
               ["supports_streaming", "支持流式"],
@@ -509,7 +528,7 @@ export function ModelForm({
             {/* 9/23: 一个 mode 一个默认。对话默认 = 员工选择器的初始值 / hermes
                 catfish-auto 的落点; 向量默认 = /v1/embeddings 不带 model 时用的。
                 之前向量的默认在 roles.yaml 里另配一份, 跟这里的徽章是两份真相。 */}
-            {model.mode === "embedding" ? "设为默认向量模型" : "设为默认对话模型"}
+            {`设为默认${MODE_LABEL[model.mode] ?? "对话"}模型`}
           </label>
           <label style={{ fontSize: 12, display: "flex", gap: 4 }}>
             <input
@@ -522,7 +541,7 @@ export function ModelForm({
         </div>
         {model.default ? (
           <div style={HINT}>
-            保存后会自动取消其它{model.mode === "embedding" ? "向量" : "对话"}模型的默认标记 ——
+            保存后会自动取消其它{MODE_LABEL[model.mode] ?? "对话"}模型的默认标记 ——
             每种类型只能有一个默认。
           </div>
         ) : null}
@@ -557,12 +576,12 @@ export function ModelForm({
         ) : null}
       </div>
 
-      <FallbackEditor
+      {media ? null : <FallbackEditor
         model={model}
         all={allModels}
         autoFallback={autoFallback}
         onChange={onChange}
-      />
+      />}
     </div>
   );
 }

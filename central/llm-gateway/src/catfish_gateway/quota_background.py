@@ -69,7 +69,7 @@ def internal_by_model(cutoff_ms: int) -> list[dict]:
     like = "'internal:%%'" if _use_pg() else "'internal:%'"
     sql = (
         "SELECT model, COUNT(*), SUM(tokens_in + tokens_out), SUM(tokens_in), SUM(tokens_out), "
-        f"SUM(tokens_cache_read) FROM quota_events WHERE {ts_col} >= {ph} AND user_email LIKE {like} "
+        f"SUM(tokens_cache_read), SUM(media_units) FROM quota_events WHERE {ts_col} >= {ph} AND user_email LIKE {like} "
         "GROUP BY model ORDER BY 3 DESC LIMIT 20"
     )
     try:

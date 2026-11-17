@@ -26,6 +26,7 @@ from typing import Any
 
 from .auth import User
 from .config import Config
+from .media_config import MEDIA_MODES, MODE_UNIT
 
 
 def build_catalog(
@@ -40,13 +41,21 @@ def build_catalog(
     """
     upstream_status = upstream_status or {}
     models: list[dict[str, Any]] = []
+    media_models: list[dict[str, Any]] = []
     default: str | None = None
 
     for m in config.models:
+        if m.mode in MEDIA_MODES and (user is None or user.can_access(m)):
+            # 11/17 出图 / 出视频: 不进对话模型选择器, 单独列出来给审计页算成本 (按张 / 按秒)
+            media_models.append({
+                "id": m.name, "display_name": m.display_name, "mode": m.mode, "tier": m.tier,
+                "unit": MODE_UNIT[m.mode], "price_per_unit": m.price_per_unit,
+                "color": m.color, "dot_emoji": m.dot_emoji,
+            })
         if user is not None and not user.can_access(m):
             continue
-        if m.mode == "embedding":
-            # embedding 是管道类，不给员工选
+        if m.mode != "chat":
+            # embedding 是管道类，不给员工选; 出图 / 出视频 (11/17) 由网关按用途挑, 也不进对话模型选择器
             continue
 
         # —— 三态状态字段 ——
@@ -107,6 +116,7 @@ def build_catalog(
     return {
         "authenticated": user is not None,
         "models": models,
+        "media_models": media_models,
         "default": default,
         # P1：上线 RBAC 后，登录态才有部门默认；匿名态回默认同一个值。
         "your_dept_default": default,

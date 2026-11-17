@@ -67,6 +67,7 @@ def test_audit_by_model_splits_in_out_cache() -> None:
         assert rows["qwen"] == {
             "model": "qwen", "count": 2, "total_tokens": 1650,
             "tokens_in": 1500, "tokens_out": 150, "tokens_cache_read": 600,
+            "media_units": 0.0,  # 11/17 出图 / 出视频的张数 / 秒数, 对话模型是 0
         }
         assert rows["deepseek"]["tokens_cache_read"] == 150
         assert rows["deepseek"]["total_tokens"] == 220

@@ -450,3 +450,14 @@ def test_组装成功后要清掉上一轮的错误(cfg, monkeypatch):
     C.invalidate_config()
     C.get_config()
     assert C.model_config_errors() == {}
+
+
+def test_一行读不懂只跳过这一行_不掀翻整份配置(cfg, monkeypatch):
+    """11/17 实测: 新版网关往库里写了老进程不认的值 (media.size_param = resolution_ratio),
+    老进程整份重载失败; 冷启动撞上就是整个网关起不来。现在只跳过那一行, 原因进 config_errors。"""
+    bad = {**_row("future-model"), "mode": "text_to_video", "media": {"size_param": "something_new"}}
+    monkeypatch.setattr(C.model_store, "is_enabled", lambda: True)
+    monkeypatch.setattr(C.model_store, "revision", lambda: 1)
+    monkeypatch.setattr(C.model_store, "read_models", lambda: [_row("ok-1"), bad, _row("ok-2")])
+    assert [m.name for m in C.get_config().models] == ["ok-1", "ok-2"]
+    assert "future-model" in C.model_config_errors()

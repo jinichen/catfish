@@ -25,7 +25,7 @@ import { useEffect } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { NavBar } from "./components/NavBar";
-import { fetchMe, fetchModelCatalog } from "./lib/me";
+import { fetchMe, fetchModelMeta } from "./lib/me";
 import { setRuntimeModelMeta } from "./lib/modelDisplay";
 import { getCurrentUser, handleCallback, login } from "./lib/auth";
 import { useAuthStore } from "./store/auth";
@@ -160,7 +160,7 @@ function PortalApp() {
   // setRuntimeModelMeta 灌空表就等于退回硬编码表, 也就是 7/30 之前的行为。
   useEffect(() => {
     if (!me) return;
-    void fetchModelCatalog().then((models) => {
+    void fetchModelMeta().then((models) => {
       if (models.length) setRuntimeModelMeta(models);
     });
   }, [me]);

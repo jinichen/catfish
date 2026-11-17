@@ -264,7 +264,7 @@ def report_upstream_reachability(
         print("🐟 上游 LLM 可达性自检", flush=True)
     any_available = False
     for m in models:
-        if m.mode == "embedding":
+        if m.mode != "chat":  # 向量 / 出图 / 出视频不算「可调用的 LLM」
             continue
         if not m.upstream.is_available:
             results[m.name] = {"reachable": False, "reason": "API key 未配"}

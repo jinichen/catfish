@@ -20,6 +20,8 @@
 //! | `delegation.gateway_mode` (v0.23) | auto | **inline** | 11/11: 小鲶派帮手 (delegate_task) 时, auto 对 API 会话 (Companion) 走后台: 本轮立刻结束只回「已派出」, 结果写进会话不叫醒模型 —— 员工再说一句才看得到; 帮手要删文件的审批请求也发不到员工 (待审批列表里没有), 干等到超时。inline = 帮手并行干完、本轮汇总回答, 审批照常弹 (临时网关实测) |
 //! | `delegation.subagent_auto_approve` | false | **false** | 帮手碰到要审批的命令不许自动放行 (写明, 防有人改开) |
 //! | `delegation.max_concurrent_children` | 10 | 3 (没配才补) | 同时最多几个帮手。10 个会一下打 10 路请求给中央模型, 费用和排队都扛不住 |
+//! | `image_gen.provider` / `video_gen.provider` (v0.23) | 未设 (FAL, 要员工自己的海外 key) | **catfish** | 11/17: 小鲶出图 / 出视频走鲶鱼中央 (插件 media_gen.py 注册的供应商), 模型和单价是中央「模型」页的配置 |
+//! | `platform_toolsets.<api_server/weixin/cli/cron>` 加 `video_gen` (v0.23) | 视频工具集默认关 | 加 (没配的写成「平台默认 + video_gen」) | 11/17: 不然 video_generate 不出现; 实测这样写只多出 video_gen, 别的工具集一个不少 |
 //! | `plugins.load_timeout_seconds` | 10 秒 | 90 (没配才补) | 11/02: 8G 内存的 Windows 上小鲶插件装载要十几秒, 超时后它启动时注册的 memory 工具被 hermes 忽略 —— 重启后第一个对话的「记住」写进了 hermes 自带的记忆 |
 //!
 //! 「强制」的几项每次启动都校正 (有人改回去也改回来) —— 都是安全 / 数据相关, 员工不该自己开;
@@ -59,6 +61,39 @@ const ENFORCED: [(&[&str], bool); 8] = [
     (&["plugins", "auto_apply"], false),
     (&["delegation", "subagent_auto_approve"], false),
 ];
+
+/// 出图 / 出视频的供应商名 (hermes 插件 catfish-xcatfish-user/media_gen.py 注册的)。
+pub const MEDIA_GEN_PROVIDER: &str = "catfish";
+/// 要打开视频工具集的平台 → 它的默认工具集 (hermes_cli/platforms.py)。Companion 对话 / 微信 / 命令行 / 定时任务。
+const VIDEO_GEN_PLATFORMS: [(&str, &str); 4] = [
+    ("api_server", "hermes-api-server"),
+    ("weixin", "hermes-weixin"),
+    ("cli", "hermes-cli"),
+    ("cron", "hermes-cron"),
+];
+
+/// 给某个平台打开一个默认关着的工具集。
+/// 没配过 (或配成 null) → 写成 `[平台默认工具集, toolset]`: hermes 对这种「组合 + 显式」的列表照常展开组合、
+/// 只多加显式那个 (v0.23.2 实测四个平台都只多 video_gen); 配过列表 → 没有就追加; 配成别的 (字符串等) 不动。
+fn ensure_platform_toolset(root: &mut Mapping, platform: &str, composite: &str, toolset: &str) -> bool {
+    let sec = section(root, &["platform_toolsets"]);
+    let key = YamlValue::from(platform);
+    match sec.get_mut(&key) {
+        None | Some(YamlValue::Null) => {
+            sec.insert(key, YamlValue::Sequence(vec![YamlValue::from(composite), YamlValue::from(toolset)]));
+            true
+        }
+        Some(YamlValue::Sequence(seq)) => {
+            if seq.iter().any(|v| v.as_str() == Some(toolset)) {
+                false
+            } else {
+                seq.push(YamlValue::from(toolset));
+                true
+            }
+        }
+        Some(_) => false,
+    }
+}
 
 /// 小鲶派帮手时等帮手干完、本轮回答 (见文件头表格 `delegation.gateway_mode`)。
 pub const DELEGATION_GATEWAY_MODE: &str = "inline";
@@ -184,10 +219,22 @@ fn ensure_with_home(path: &Path, version_home: &Path) -> Result<Vec<String>> {
     if ensure_in_list(map, &["agent", "disabled_toolsets"], "connections") {
         changed.push("agent.disabled_toolsets+connections".into());
     }
-    if crate::services::hermes_gateway_route::hermes_home_is_v023(version_home)
-        && ensure_in_list(map, &["agent", "disabled_toolsets"], "browser")
-    {
+    let v023 = crate::services::hermes_gateway_route::hermes_home_is_v023(version_home);
+    if v023 && ensure_in_list(map, &["agent", "disabled_toolsets"], "browser") {
         changed.push("agent.disabled_toolsets+browser".into());
+    }
+    // 11/17 出图 / 出视频走鲶鱼中央 (供应商接口和视频工具集 v0.23 才有)
+    if v023 {
+        for key in ["image_gen", "video_gen"] {
+            if set_if_different(map, &[key, "provider"], YamlValue::from(MEDIA_GEN_PROVIDER)) {
+                changed.push(format!("{key}.provider"));
+            }
+        }
+        for (platform, composite) in VIDEO_GEN_PLATFORMS {
+            if ensure_platform_toolset(map, platform, composite, "video_gen") {
+                changed.push(format!("platform_toolsets.{platform}+video_gen"));
+            }
+        }
     }
     for plugin in TOOL_OVERRIDE_PLUGINS {
         let base = ["plugins", "entries", plugin];
@@ -349,6 +396,46 @@ mod tests {
             .collect();
         assert_eq!(toolsets, ["connections", "browser"]);
         assert!(ensure_at(&p).unwrap().is_empty(), "第二次 no-op");
+    }
+
+    fn v023_home(tmp: &TempDir) {
+        let guards = tmp.path().join("hermes-agent").join("hermes_cli");
+        fs::create_dir_all(&guards).unwrap();
+        fs::write(guards.join("gateway_lifecycle_guards.py"), "").unwrap();
+    }
+
+    fn strs(v: &YamlValue) -> Vec<String> {
+        v.as_sequence().unwrap().iter().map(|x| x.as_str().unwrap().to_string()).collect()
+    }
+
+    #[test]
+    fn v023_出图出视频走鲶鱼中央_打开视频工具集() {
+        let tmp = TempDir::new().unwrap();
+        v023_home(&tmp);
+        let p = cfg(&tmp, "model:\n  provider: custom\nimage_gen:\n  provider: fal\nplatform_toolsets:\n  weixin:\n  - hermes-weixin\n  - web\n  cli: \"[hermes-cli]\"\n");
+        let changed = ensure_at(&p).unwrap();
+        for k in ["image_gen.provider", "video_gen.provider", "platform_toolsets.api_server+video_gen",
+                  "platform_toolsets.weixin+video_gen", "platform_toolsets.cron+video_gen"] {
+            assert!(changed.contains(&k.to_string()), "{k} 不在 {changed:?}");
+        }
+        let r = root(&p);
+        assert_eq!(r["image_gen"]["provider"].as_str(), Some("catfish"), "员工 / 别人设的 fal 改回来");
+        assert_eq!(r["video_gen"]["provider"].as_str(), Some("catfish"));
+        assert_eq!(strs(&r["platform_toolsets"]["api_server"]), ["hermes-api-server", "video_gen"], "没配过: 平台默认 + video_gen");
+        assert_eq!(strs(&r["platform_toolsets"]["cron"]), ["hermes-cron", "video_gen"]);
+        assert_eq!(strs(&r["platform_toolsets"]["weixin"]), ["hermes-weixin", "web", "video_gen"], "配过列表: 保留原有, 追加");
+        assert_eq!(r["platform_toolsets"]["cli"].as_str(), Some("[hermes-cli]"), "配成字符串的不动 (hermes 自己会解析)");
+        assert!(ensure_at(&p).unwrap().is_empty(), "第二次 no-op");
+    }
+
+    #[test]
+    fn v022_不碰出图出视频() {
+        let tmp = TempDir::new().unwrap();
+        let p = cfg(&tmp, "model:\n  provider: custom\n");
+        let changed = ensure_at(&p).unwrap();
+        assert!(!changed.iter().any(|k| k.contains("_gen") || k.contains("platform_toolsets")), "{changed:?}");
+        let r = root(&p);
+        assert!(r["image_gen"].is_null() && r["platform_toolsets"].is_null());
     }
 
     #[test]

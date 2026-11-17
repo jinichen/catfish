@@ -273,7 +273,8 @@ mod extra_packages_tests {
         }
         assert_eq!(
             hermes_extra_import_check(),
-            "import jieba, playwright.sync_api, watchdog.observers, yaml, pypdfium2, openpyxl, docx, pptx, xlrd, tzdata, sqlcipher3"
+            // 11/14 (1.2.190) 起对话卡片用官方 A2UI SDK, 额外包里加了 a2ui-agent-sdk
+            "import jieba, playwright.sync_api, watchdog.observers, yaml, pypdfium2, openpyxl, docx, pptx, xlrd, tzdata, sqlcipher3, a2ui.inference_formats.express"
         );
     }
 }

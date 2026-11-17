@@ -58,11 +58,14 @@ def record_usage(
     tokens_out: int,
     tokens_cache_read: int = 0,
     background: bool = False,
+    media_units: float = 0,
 ) -> None:
     """请求完成后记真实 token 用量. 失败静默不影响主流程.
 
     tokens_cache_read (10/29): 上游报的缓存命中输入 token, 是 tokens_in 的子集
     (prompt_tokens 本来就含 cached_tokens)。计费按「未命中输入 / 命中输入 / 输出」三段算。
+
+    media_units (11/17): 出图 / 出视频的张数或秒数 (tokens 记 0), 按模型 price_per_unit 计费。
 
     background (10/29): 后台任务 —— 员工本机记忆插件这类带 X-Catfish-Internal 头、token 有
     background.tasks scope 的调用, 以及网关自己的 internal:* 调用。原来这类调用整条不写,
@@ -83,10 +86,10 @@ def record_usage(
             with _pg_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "INSERT INTO quota_events (ts_ms, user_email, department, model, tokens_in, tokens_out, tokens_cache_read, background) "
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                        "INSERT INTO quota_events (ts_ms, user_email, department, model, tokens_in, tokens_out, tokens_cache_read, background, media_units) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                         (ts_ms, user_email, department, model,
-                         int(tokens_in), int(tokens_out), cache_read, bool(background)),
+                         int(tokens_in), int(tokens_out), cache_read, bool(background), float(media_units or 0)),
                     )
                 conn.commit()
         except Exception as e:
@@ -103,10 +106,10 @@ def record_usage(
         conn = _get_conn()
         with conn:
             conn.execute(
-                "INSERT INTO quota_events (ts, user_email, department, model, tokens_in, tokens_out, tokens_cache_read, background) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO quota_events (ts, user_email, department, model, tokens_in, tokens_out, tokens_cache_read, background, media_units) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (ts_ms, user_email, department, model,
-                 int(tokens_in), int(tokens_out), cache_read, 1 if background else 0),
+                 int(tokens_in), int(tokens_out), cache_read, 1 if background else 0, float(media_units or 0)),
             )
         conn.close()
     except Exception as e:

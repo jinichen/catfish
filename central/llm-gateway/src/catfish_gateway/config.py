@@ -23,9 +23,10 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, Field, PrivateAttr, ValidationError, field_validator
 
 from . import model_store, provider_store, secrets_box
+from .media_config import ALL_MODES, MEDIA_MODES, MediaConfig
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +211,9 @@ class ModelConfig(BaseModel):
     name: str
     tier: str = "private"  # private | public
     display_name: str
-    mode: str = "chat"  # chat | embedding
+    # chat | embedding | text_to_image | image_to_image | text_to_video | image_to_video
+    # (11/17 加后四种, 见 media_config.py)
+    mode: str = "chat"
     default: bool = False
 
     upstream: UpstreamConfig
@@ -257,6 +260,13 @@ class ModelConfig(BaseModel):
     #: quota_events.tokens_cache_read 是 tokens_in 的子集。不填 → 同输入单价 (不打折)。
     price_cache_read_per_1k: float | None = Field(default=None, ge=0)
 
+    #: 11/17 出图 / 出视频的单价: 元 / 张 (图片) 或 元 / 秒 (视频), 用量在 quota_events.media_units。
+    #: 对话 / 向量模型不用这个。不填 → 审计页按 0 算并提示成本不准。
+    price_per_unit: float | None = Field(default=None, ge=0)
+
+    #: 11/17 出图 / 出视频的附加配置 (默认参数、尺寸表、时长范围 …), 见 media_config.MediaConfig。
+    media: MediaConfig | None = None
+
     #: 图表里区分模型用的品牌色 (CSS color, 如 "#10b981")。不填 → 前端给个默认灰。
     color: str | None = None
 
@@ -268,6 +278,14 @@ class ModelConfig(BaseModel):
 
     # 6/7 BL-GROQ-TPM-PREFLIGHT: 上游 rate limits (preflight 用, 防 413 暴露 stack)
     rate_limits: RateLimitsConfig | None = None
+
+    @field_validator("mode")
+    @classmethod
+    def _known_mode(cls, v: str) -> str:
+        v = (v or "chat").strip()
+        if v not in ALL_MODES:
+            raise ValueError(f"用途 (mode) 只能是 {' / '.join(ALL_MODES)}, 不认识 {v!r}")
+        return v
 
 
 class McpRegistryConfig(BaseModel):
@@ -402,6 +420,17 @@ class Config(BaseModel):
             if m.default:
                 return m
         return emb[0] if len(emb) == 1 else None
+
+    def media_models(self, mode: str) -> list[ModelConfig]:
+        """某种出图 / 出视频用途的模型, 挂「默认」的排最前, 其余保持列表顺序。
+
+        调用方再按员工权限 (user.can_access) 和 key 配没配 (upstream.is_available) 过滤,
+        取第一个 —— 默认模型员工用不了 (权限 / 没 key) 时落到同用途的下一个, 而不是直接报错。
+        """
+        if mode not in MEDIA_MODES:
+            return []
+        ms = [m for m in self.models if m.mode == mode]
+        return sorted(ms, key=lambda m: not m.default)
 
 
 def resolve_config_path(path: Path | None = None) -> Path:
@@ -671,7 +700,15 @@ def _assemble_config() -> Config:
             errs.setdefault(name, err)
             logger.error("模型 %s 的 env 占位符没解析成功: %s", name, err)
 
-        m = ModelConfig.model_validate(row)
+        # 11/17: 一行校验不过只丢这一行, 不掀翻整份配置。实测: 新版网关写进库的
+        # media.size_param = resolution_ratio, 还没重启的老进程不认 → 整份重载失败、一直沿用旧配置;
+        # 冷启动时撞上就是整个网关起不来。原因进 errs, 模型页上看得见。
+        try:
+            m = ModelConfig.model_validate(row)
+        except ValidationError as e:
+            errs[name] = f"这个模型的配置这一版网关读不懂, 已跳过: {e.errors()[0].get('loc')} {e.errors()[0].get('msg')}"
+            logger.error("模型 %s 配置校验不过, 跳过: %s", name, e)
+            continue
 
         # 8/1: 存库的 key 在这里解密并挂到私有属性上。
         #

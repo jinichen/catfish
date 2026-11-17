@@ -10,6 +10,8 @@ describe("artifactKind", () => {
     expect(artifactKind("/a/b.htm")).toBe("html");
     expect(artifactKind("/a/b.pdf")).toBe("pdf");
     expect(artifactKind("/a/b.svg")).toBe("image");
+    expect(artifactKind("/a/小鲶视频-20261117-120000.mp4")).toBe("video");
+    expect(artifactKind("/a/b.MOV")).toBe("video");
     expect(artifactKind("/a/b.md")).toBe("markdown");
     expect(artifactKind("/a/b.tsv")).toBe("table");
     expect(artifactKind("/a/b.json")).toBe("text");
