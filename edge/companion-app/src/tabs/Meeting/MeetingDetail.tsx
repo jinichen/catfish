@@ -264,7 +264,7 @@ export default function MeetingDetail({
           </span>
           {/* 11/17 鸿波选 A: 高精度 (Qwen3-ASR) 做成可选组件, 要紧的会才用 —— 句子 / 说话人照用, 名字不动 */}
           <span title={hq?.installed
-            ? "用 Qwen3-ASR 重新识别文字 (说话人、名字不变), 说得清楚的地方更准; 比普通转写慢, 两小时的会约半小时以上"
+            ? "用 Qwen3-ASR 重新识别文字 (说话人、名字不变), 说得清楚的地方更准; 比普通转写慢: 两小时的会 Mac 约 40 分钟, Windows (没有独立显卡) 约 80 分钟"
             : "要先下载高精度转写组件 (Qwen3-ASR)"}>
             <Btn kind="ghost" disabled={asr.transcribing}
                  onClick={() => (hq?.installed ? void transcribeHq() : setHqSetup((v) => !v))}>

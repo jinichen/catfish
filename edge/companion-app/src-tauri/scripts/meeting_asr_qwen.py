@@ -40,8 +40,12 @@ BATCH = 4
 
 
 def units_from_sentences(segs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """已有转写的句子 → 送给 Qwen3-ASR 的小段: 同一条音轨、同一个人、停顿 < 0.8 秒、合起来 ≤ 20 秒的连成一段。
-    单句本身超过 20 秒的照原样 (不硬切, Qwen3 一次能听几分钟)。"""
+    """已有转写的句子 → 送给 Qwen3-ASR 的小段: 同一条音轨、同一个人、停顿 < 0.8 秒、合起来 ≤ 20 秒的连成一段;
+    单句本身超过 20 秒的平均切成 ≤ 20 秒的几段。
+
+    11/17 实测 CCRC: Paraformer 偶尔把一句的首字和尾字时间标得差几分钟 (「你说h是进行中，」407 秒、「甲方都在给他做。」
+    186 秒)。原来「单句不切」直接把 7 分钟音频一次塞给 Qwen3 —— 内存涨到 46GB (16GB 的机器), 两小时的会 53 分钟只走了
+    128 / 593 段。切开了这几段 Qwen3 还能捞回 Paraformer 漏掉的话。"""
     out: list[dict[str, Any]] = []
     for s in sorted(segs, key=lambda x: (float(x["start"]), float(x["end"]))):
         a, b = float(s["start"]), float(s["end"])
@@ -54,7 +58,15 @@ def units_from_sentences(segs: list[dict[str, Any]]) -> list[dict[str, Any]]:
             cur["end"] = max(cur["end"], b)
         else:
             out.append({"start": a, "end": b, "spk": spk, "track": track})
-    return out
+    return [piece for u in out for piece in _split_long(u)]
+
+
+def _split_long(u: dict[str, Any]) -> list[dict[str, Any]]:
+    n = int(-(-(u["end"] - u["start"]) // MAX_UNIT_S))   # 向上取整
+    if n <= 1:
+        return [u]
+    step = (u["end"] - u["start"]) / n
+    return [{**u, "start": round(u["start"] + i * step, 3), "end": round(u["start"] + (i + 1) * step, 3)} for i in range(n)]
 
 
 _TOKEN = re.compile(r"[一-鿿]|[A-Za-z]+(?:'[A-Za-z]+)?|\d+")
@@ -108,6 +120,19 @@ def load_model(models: Path):
                                               max_inference_batch_size=BATCH)
 
 
+def _free_cache() -> None:
+    """每批完了还回 GPU 缓存: 每段长短不一, MPS 按每种大小各留一份缓存, 不还会越攒越多。"""
+    try:
+        import torch
+
+        if torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+        elif torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def transcribe(model, wavs: dict, units: list[dict[str, Any]], hotwords: str, on_progress=None) -> list[str]:
     """按 BATCH 一批批送, 每批报一次进度 (界面显示「约 x%」)。"""
     texts: list[str] = []
@@ -121,6 +146,7 @@ def transcribe(model, wavs: dict, units: list[dict[str, Any]], hotwords: str, on
             audio.append((wav[a:b], SR))
         res = model.transcribe(audio=audio, context=hotwords.strip(), language="Chinese")
         texts += [(r.text or "").strip() for r in res]
+        _free_cache()
         if on_progress:
             on_progress(min(len(units), i + BATCH), len(units))
     return texts

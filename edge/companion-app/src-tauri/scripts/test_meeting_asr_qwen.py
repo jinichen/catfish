@@ -22,6 +22,14 @@ def test_units_join_same_speaker_short_gaps_up_to_20s():
     assert [(u["start"], u["end"], u["spk"]) for u in units] == [(0, 6, 1), (6.5, 20, 2), (20.3, 31, 2)]
 
 
+def test_long_sentence_split_into_20s_pieces():
+    """Paraformer 偶尔把一句标成几分钟 (CCRC「你说h是进行中，」407 秒): 平均切成 ≤ 20 秒, 不再一次塞给 Qwen3。"""
+    units = mq.units_from_sentences([seg(100, 507, "你说h是进行中，", 1)])
+    assert len(units) == 21 and all(u["end"] - u["start"] <= mq.MAX_UNIT_S + 1e-6 for u in units)
+    assert units[0]["start"] == 100 and units[-1]["end"] == 507 and {u["spk"] for u in units} == {1}
+    assert mq.units_from_sentences([seg(0, 20, "刚好二十秒")])[0]["end"] == 20
+
+
 def test_units_break_on_track_and_skip_empty():
     segs = [seg(0, 2, "a", 0, "mic"), seg(2.1, 4, "b", 0, "system"), seg(5, 5, "空", 0, "mic")]
     units = mq.units_from_sentences(segs)

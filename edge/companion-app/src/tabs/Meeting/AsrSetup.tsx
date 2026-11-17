@@ -164,7 +164,7 @@ export default function AsrSetup({ status, onReady, upgradeFrom, kind = "base" }
         <div>
           {kind === "hq"
             ? <>高精度转写组件 ({mb(comp.size)}, 版本 {comp.version}): 用 Qwen3-ASR 重新识别已转写的会议, 说得清楚的地方明显更准
-                (远场 / 很小声的照样认不出); 比普通转写慢 (两小时的会约半小时以上), 运行时占 4GB 左右内存。只下载一次,
+                (远场 / 很小声的照样认不出); 比普通转写慢 (两小时的会 Mac 约 40 分钟, Windows 约 80 分钟), 运行时占 4GB 左右内存。只下载一次,
                 全程在本机, 录音不上传。</>
             : upgradeFrom
               ? <>会议组件有新版 {comp.version} (你现在是 {upgradeFrom})。下载 {mb(comp.size)}, 转写仍然全程在本机, 录音不上传。</>
