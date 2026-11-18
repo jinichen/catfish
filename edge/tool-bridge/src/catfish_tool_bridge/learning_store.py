@@ -20,8 +20,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-PHASES = ("probe", "plan_review", "teach", "done", "practice", "drill")
-MODES = ("quick", "deep", "defense")
+PHASES = ("probe", "plan_review", "teach", "done", "practice", "drill", "lang")
+MODES = ("quick", "deep", "defense", "language")
 MAX_GOAL = 500
 
 
@@ -48,7 +48,7 @@ def _write_json(path: Path, data: Any) -> None:
     os.replace(tmp, path)
 
 
-def create(home: str | Path, goal: str, mode: str) -> dict[str, Any]:
+def create(home: str | Path, goal: str, mode: str, lang: str = "") -> dict[str, Any]:
     goal = goal.strip()[:MAX_GOAL]
     if not goal:
         raise ValueError("想学会什么? 写一句目标")
@@ -58,8 +58,12 @@ def create(home: str | Path, goal: str, mode: str) -> dict[str, Any]:
     d = root(home) / sid
     d.mkdir(parents=True)
     now = time.time()
-    meta = {"id": sid, "goal": goal, "mode": mode, "phase": "drill" if mode == "defense" else "probe", "created": now, "updated": now,
+    phase = {"defense": "drill", "language": "lang"}.get(mode, "probe")
+    meta = {"id": sid, "goal": goal, "mode": mode, "phase": phase, "created": now, "updated": now,
             "plan": None, "assessment": None, "pending": None, "last_error": None, "materials": None, "node_materials": {}}
+    if mode == "language":
+        from .learning_lang import LANGS  # noqa: PLC0415
+        meta["lang"] = {"code": lang if lang in LANGS else "en"}
     _write_json(d / "session.json", meta)
     (d / "events.jsonl").write_text("", encoding="utf-8")
     append(d, {"role": "learner", "kind": "say", "text": goal})
@@ -134,6 +138,9 @@ def public_view(meta: dict[str, Any], evs: list[dict[str, Any]], running: bool) 
                 ev = {**ev, "p": {k: v for k, v in ev["p"].items() if k != "solution"}}
         shown.append(ev)
     m = {k: v for k, v in meta.items() if k not in ("materials", "node_materials", "drill")}
+    if meta.get("lang"):
+        lg = meta["lang"]
+        m["lang"] = {"code": lg.get("code"), "activity": lg.get("activity"), "ending": bool(lg.get("ending"))}
     if meta.get("drill"):   # 答辩题库的评分点不给界面 (点评时随 drill_eval 一起出来)
         dr = meta["drill"]
         m["drill"] = {"idx": dr.get("idx", 0), "total": len(dr.get("questions") or []), "done": bool(dr.get("done"))}
@@ -142,6 +149,7 @@ def public_view(meta: dict[str, Any], evs: list[dict[str, Any]], running: bool) 
     # 没在跑、没出错、最后一条是员工的 → 上次那一步没接上 (tool-bridge 重启过之类), 界面给「重试」
     from .learning_practice import summary  # noqa: PLC0415
     m["practice"] = summary(evs)
+    # 跟读的对照结果是员工这边的、本来就不调模型 (learning_lang.shadow), 不算没接上
     m["stalled"] = bool(not running and not meta.get("last_error") and last and last.get("role") == "learner"
-                        and meta.get("phase") != "done")
+                        and last.get("kind") != "shadow_result" and meta.get("phase") != "done")
     return {"session": m, "events": shown, "running": running}

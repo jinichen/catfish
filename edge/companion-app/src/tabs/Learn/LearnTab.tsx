@@ -4,7 +4,9 @@
  */
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 
-import { learnCreate, learnGraphView, learnList, learnReviewNext, PHASE_LABEL, type LearnMode, type LearnSummary } from "../../lib/tauri_learn";
+import {
+  LANG_NAMES, learnCreate, learnCreateLang, learnGraphView, learnList, learnReviewNext, PHASE_LABEL, type LearnMode, type LearnSummary,
+} from "../../lib/tauri_learn";
 import { useUIStore } from "../../store/ui";
 import { cardStyle, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
 import { COL_CARD } from "../Meeting/meetingHelpers";
@@ -21,13 +23,14 @@ const EXAMPLES = ["准备 CCRC 应急处理二级的答辩", "弄懂 ITSS 二级
 function NewLearning({ onCreated }: { onCreated: (id: string) => void }) {
   const [goal, setGoal] = useState("");
   const [mode, setMode] = useState<LearnMode>("quick");
+  const [lang, setLang] = useState("en");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const start = async () => {
     setBusy(true);
     setError(null);
     try {
-      const v = await learnCreate(goal.trim(), mode);
+      const v = mode === "language" ? await learnCreateLang(goal.trim(), lang) : await learnCreate(goal.trim(), mode);
       setGoal("");
       onCreated(v.session.id);
     } catch (e) {
@@ -58,9 +61,18 @@ function NewLearning({ onCreated }: { onCreated: (id: string) => void }) {
         {modeBtn("quick", "快速", "讲得短、多检查, 适合记规定、准备答辩")}
         {modeBtn("deep", "深入", "每步先让你猜再讲, 讲清为什么, 适合真正弄懂")}
         {modeBtn("defense", "答辩陪练", "小鲶扮评审老师按资料出题, 你口头回答, 逐条对照评分点")}
+        {modeBtn("language", "外语", "情景对话 + 跟读, 小鲶纠错, 练完做复习卡")}
       </div>
+      {mode === "language" && (
+        <label style={{ ...muted, display: "flex", alignItems: "center", gap: 8 }}>
+          练哪种语言
+          <select aria-label="语言" value={lang} onChange={(e) => setLang(e.target.value)} style={{ ...inputStyle, width: "auto", padding: "4px 8px" }}>
+            {Object.entries(LANG_NAMES).map(([k, v]) => <option key={k} value={k}>{v}{k === "en" ? "" : " (语音要高精度组件)"}</option>)}
+          </select>
+        </label>
+      )}
       <button type="button" style={primaryBtn(busy || !goal.trim())} disabled={busy || !goal.trim()} onClick={() => void start()}>
-        {mode === "defense" ? "开始 (小鲶先出一套评审会问的题)" : "开始 (小鲶先问几道题摸摸底)"}
+        {mode === "defense" ? "开始 (小鲶先出一套评审会问的题)" : mode === "language" ? "开始" : "开始 (小鲶先问几道题摸摸底)"}
       </button>
       <span style={muted}>小鲶会查你的知识库、本机文件、邮件, 需要时上网查官方文件; 学习记录只存在这台电脑上。</span>
       {error && <ErrorLine>{error}</ErrorLine>}

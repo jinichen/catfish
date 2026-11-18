@@ -136,9 +136,34 @@ pub fn retranscribe(hq: &Installed, a: &RetranscribeArgs, empty_cache: &Path, on
     asr::run_events(cmd, on_event)
 }
 
+/// 学习外语 (11/18 第 5 步): 语音输入的一小段 (日语等默认组件认不了的语言) 用 Qwen3-ASR 转。`dir` = 录音分段目录。
+#[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
+pub fn transcribe_clip(hq: &Installed, script: &Path, dir: &Path, language: &str, out: &Path, empty_cache: &Path) -> Result<String, String> {
+    let mut cmd = asr::offline_command(&hq.python, empty_cache)?;
+    cmd.arg(script)
+        .arg("--clip")
+        .arg("--language").arg(language)
+        .arg("--audio-dir").arg(dir)
+        .arg("--models").arg(&hq.models)
+        .arg("--out").arg(out);
+    asr::run_events(cmd, |_| {})?;
+    asr::read_text(out)
+}
+
+/// 语音输入要不要走高精度组件: 中文 / 英语默认组件就够 (英语实测一字不差), 别的语言要 Qwen3-ASR。
+pub fn clip_needs_hq(language: &str) -> bool {
+    !matches!(language, "" | "zh" | "en")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clip_needs_hq_only_for_other_languages() {
+        assert!(!clip_needs_hq("zh") && !clip_needs_hq("en") && !clip_needs_hq(""));
+        assert!(clip_needs_hq("ja") && clip_needs_hq("ko") && clip_needs_hq("fr"));
+    }
 
     #[test]
     fn import_check_includes_qwen_only_when_packed() {

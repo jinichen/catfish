@@ -76,6 +76,40 @@ mod imp {
         result
     }
 
+    /// 学习外语 (11/18): 按语言转 —— 中文 / 英语走默认组件, 别的语言 (日语…) 走高精度组件 (Qwen3-ASR)。
+    pub(super) fn stop_and_transcribe_lang(language: &str) -> Result<String, String> {
+        use crate::services::meeting_asr_hq as hq;
+        if !hq::clip_needs_hq(language) {
+            return stop_and_transcribe();
+        }
+        let home = meeting_store::home()?;
+        let Some(inst) = hq::installed(&home) else {
+            let _ = cancel();
+            return Err("日语等外语的语音转文字要先在「会议」页装「高精度转写组件」(一次就好); 也可以先打字".into());
+        };
+        if !is_dictating() {
+            return Err("没在语音输入".into());
+        }
+        let sum = rec::stop()?.ok_or("没在录音")?;
+        let dir = dictate_dir();
+        let result = (|| {
+            if sum.seconds < 0.5 {
+                return Err("录音太短".to_string());
+            }
+            let script = super::super::file_parse_env::find_script("meeting_asr_qwen.py")?;
+            let out = std::env::temp_dir().join(format!("catfish-stt-lang-{}.json", std::process::id()));
+            let r = hq::transcribe_clip(&inst, &script, &dir, language, &out, &asr::root(&home).join(".empty-cache"));
+            let _ = std::fs::remove_file(&out);
+            r
+        })();
+        let _ = std::fs::remove_dir_all(&dir);
+        let text = result?;
+        if text.is_empty() {
+            return Err("没识别出文字 (音频太短 / 没有人声?)".into());
+        }
+        Ok(text)
+    }
+
     pub(super) fn cancel() -> Result<(), String> {
         if is_dictating() {
             rec::stop()?;
@@ -174,6 +208,22 @@ pub async fn speech_stop_and_transcribe(_window: Window) -> Result<String, Strin
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     {
+        Err(UNSUPPORTED.into())
+    }
+}
+
+/// 学习外语 (11/18 第 5 步): 停录音并按语言转写 (en / ja / ko …)。中文 / 英语跟 speech_stop_and_transcribe 一样。
+#[tauri::command]
+pub async fn speech_stop_and_transcribe_lang(_window: Window, language: String) -> Result<String, String> {
+    #[cfg(any(target_os = "macos", windows))]
+    {
+        tauri::async_runtime::spawn_blocking(move || imp::stop_and_transcribe_lang(&language))
+            .await
+            .map_err(|e| format!("转写任务异常: {e}"))?
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        let _ = language;
         Err(UNSUPPORTED.into())
     }
 }

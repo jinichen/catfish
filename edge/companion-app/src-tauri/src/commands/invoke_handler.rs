@@ -302,6 +302,8 @@ pub(crate) fn handler(
             crate::commands::learn_cmd::meeting_minutes_cards,
             crate::commands::learn_cmd::learn_graph,
             crate::commands::learn_cmd::learn_drill,
+            crate::commands::learn_cmd::learn_lang,
+            crate::commands::learn_cmd::learn_create_lang,
             crate::commands::meeting_minutes_cmd::meeting_minutes,
             crate::commands::meeting_minutes_cmd::meeting_templates_list,
             crate::commands::meeting_minutes_cmd::meeting_template_save,
@@ -319,6 +321,7 @@ pub(crate) fn handler(
             // speech (五一 sprint Day 1 方案 C+: ffmpeg 录 + Whisper.cpp 转, 全本地)
             crate::commands::speech::speech_start_recording,
             crate::commands::speech::speech_stop_and_transcribe,
+            crate::commands::speech::speech_stop_and_transcribe_lang,
             crate::commands::speech::speech_cancel_recording,
             // BL-VOICE3 (5/10): 拖音频文件转文字 (mp3/m4a/wav/...) → ffmpeg + whisper
             crate::commands::speech::transcribe_audio_from_b64,

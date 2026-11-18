@@ -165,3 +165,28 @@ pub async fn learn_drill(id: String, action: String, text: Option<String>, secs:
     };
     call(method, json!({ "id": id, "text": text.unwrap_or_default(), "secs": secs }), action == "start" || action == "answer").await
 }
+
+// ── 第 5 步 (11/18): 外语 ─────────────────────────────────────
+
+/// action: start ({activity, scene}) / say ({text, secs}) / shadow ({idx, heard, secs}) / end
+#[tauri::command]
+pub async fn learn_lang(id: String, action: String, params: Option<Value>) -> Result<Value, String> {
+    let method = match action.as_str() {
+        "start" => "learn/lang_start",
+        "say" => "learn/lang_say",
+        "shadow" => "learn/lang_shadow",
+        "end" => "learn/lang_end",
+        _ => return Err(format!("不认识的操作: {action}")),
+    };
+    let mut p = params.unwrap_or_else(|| json!({}));
+    if let Some(obj) = p.as_object_mut() {
+        obj.insert("id".into(), json!(id));
+    }
+    call(method, p, action != "shadow").await
+}
+
+/// 新建外语学习: 跟 learn_create 一样, 多一个目标语言 (en / ja / ko …)
+#[tauri::command]
+pub async fn learn_create_lang(goal: String, lang: String) -> Result<Value, String> {
+    call("learn/create", json!({ "goal": goal, "mode": "language", "lang": lang }), true).await
+}

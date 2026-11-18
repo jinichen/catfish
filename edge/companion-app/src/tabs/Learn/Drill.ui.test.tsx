@@ -73,7 +73,7 @@ describe("答辩陪练", () => {
     expect(screen.getByText("✗ 报告写明依据哪条")).toBeTruthy();
     expect(screen.getByText(/⚠ 你说「看情况定」—— 应该是: 按办法里的条款定/)).toBeTruthy();
     expect(screen.getByText("🎤 说了 8 秒")).toBeTruthy();
-    fireEvent.click(screen.getByLabelText(/评审提问读出来/));
+    fireEvent.click(screen.getByLabelText(/评审提问自动读出来/));
     expect(localStorage.getItem("catfish:learn:drill-voice")).toBe("off");
     await act(async () => { fireEvent.click(screen.getByText("下一题")); });
     expect(api.drill).toHaveBeenCalledWith("lrn_1", "next");

@@ -273,6 +273,10 @@ async def run_step(home: str, sid: str, llm_kw: dict) -> None:
         from . import learning_drill  # noqa: PLC0415
         await learning_drill.step(d, meta, evs, llm_kw)
         return
+    if phase == "lang":
+        from . import learning_lang  # noqa: PLC0415
+        await learning_lang.step(d, meta, evs, llm_kw)
+        return
     if phase == "probe":
         mats = await _materials(d, meta, None, llm_kw)
 
@@ -462,7 +466,9 @@ async def handle(method: str, params: dict) -> dict:
         from . import learning_cards  # noqa: PLC0415
         return learning_cards.review(method, params, home)
     if method == "learn/create":
-        meta = store.create(home, str(params.get("goal") or ""), str(params.get("mode") or "quick"))
+        meta = store.create(home, str(params.get("goal") or ""), str(params.get("mode") or "quick"), str(params.get("lang") or ""))
+        if meta["phase"] == "lang":   # 外语: 先等他选练对话还是跟读
+            return _view(home, meta["id"])
         _kick(home, meta["id"], llm_kw)
         return _view(home, meta["id"])
     sid = str(params.get("id") or "")
@@ -525,6 +531,8 @@ async def handle(method: str, params: dict) -> dict:
     if method == "learn/say":
         if meta["phase"] == "drill":
             raise ValueError("答辩陪练时直接回答评审的问题 (可以🎤口头回答); 想跟小鲶学, 先点「回去接着学」")
+        if meta["phase"] == "lang":
+            raise ValueError("外语练习时在对话框里用外语说 (可以🎤); 想问语法, 先点「结束这段」")
         text = str(params.get("text") or "").strip()[:3000]
         start = bool(params.get("start"))
         if start:
@@ -596,6 +604,26 @@ async def handle(method: str, params: dict) -> dict:
         if meta["phase"] == "done":
             return _view(home, sid)
         _kick(home, sid, llm_kw)
+        return _view(home, sid)
+    if method.startswith("learn/lang_"):
+        from . import learning_lang as lg  # noqa: PLC0415
+        if method == "learn/lang_start":
+            if meta["phase"] not in ("lang", "done", "teach") and meta.get("mode") != "language":
+                raise ValueError("外语练习要在外语学习里开")
+            lg.start(d, meta, str(params.get("activity") or ""), str(params.get("scene") or ""))
+            _kick(home, sid, llm_kw)
+        elif meta["phase"] != "lang":
+            raise ValueError("现在不在外语练习")
+        elif method == "learn/lang_say":
+            lg.say(d, meta, str(params.get("text") or ""), params.get("secs"))
+            _kick(home, sid, llm_kw)
+        elif method == "learn/lang_shadow":
+            lg.shadow(d, meta, params.get("idx"), str(params.get("heard") or ""), params.get("secs"))
+        elif method == "learn/lang_end":
+            lg.end(d, meta)
+            _kick(home, sid, llm_kw)
+        else:
+            raise ValueError(f"不认识的操作: {method}")
         return _view(home, sid)
     if method.startswith("learn/drill"):
         from . import learning_drill as dr  # noqa: PLC0415

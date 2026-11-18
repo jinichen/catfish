@@ -7,22 +7,25 @@ export function speechAvailable(): boolean {
   return typeof window !== "undefined" && "speechSynthesis" in window && typeof SpeechSynthesisUtterance !== "undefined";
 }
 
-export function pickVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
+/** lang: BCP-47 (zh-CN / en-US / ja-JP …); 同语言优先, 其次同一大类 (en-GB 也算英语) */
+export function pickVoice(voices: SpeechSynthesisVoice[], lang = "zh-CN"): SpeechSynthesisVoice | null {
+  const base = lang.split("-")[0];
+  const vl = (v: SpeechSynthesisVoice) => v.lang.replace("_", "-");
   const score = (v: SpeechSynthesisVoice) =>
-    (v.lang === "zh-CN" ? 100 : v.lang.startsWith("zh") ? 60 : 0) + (/premium|enhanced|natural|neural/i.test(v.name) ? 10 : 0)
-    + (v.localService ? 2 : 0);
+    (vl(v) === lang ? 100 : vl(v).startsWith(base) ? 60 : 0) + (/premium|enhanced|natural|neural/i.test(v.name) ? 10 : 0)
+    + (v.localService ? 2 : 0) - (/bad news|bahh|bells|boing|bubbles|cellos|wobble|whisper|zarvox|trinoids|organ|jester|superstar|grandma|grandpa/i.test(v.name) ? 50 : 0);
   const best = [...voices].sort((a, b) => score(b) - score(a))[0];
   return best && score(best) >= 60 ? best : null;
 }
 
-export function speak(text: string, rate = 1.0): boolean {
+export function speak(text: string, rate = 1.0, lang = "zh-CN"): boolean {
   if (!speechAvailable() || !text.trim()) return false;
   const synth = window.speechSynthesis;
   synth.cancel();
   const u = new SpeechSynthesisUtterance(text.replace(/[*_`#>]/g, ""));
-  const v = pickVoice(synth.getVoices());
+  const v = pickVoice(synth.getVoices(), lang);
   if (v) u.voice = v;
-  u.lang = v?.lang ?? "zh-CN";
+  u.lang = v?.lang ?? lang;
   u.rate = rate;
   synth.speak(u);
   return true;

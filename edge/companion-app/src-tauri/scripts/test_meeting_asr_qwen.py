@@ -78,3 +78,25 @@ def test_main_errors_become_events(tmp_path: Path, capsys):
     assert rc == 1
     ev = [json.loads(x) for x in capsys.readouterr().out.splitlines() if x.strip()]
     assert ev[-1]["event"] == "error" and "空" in ev[-1]["message"]
+
+
+def test_clip_units_and_language_passed():
+    """11/18 学习外语: 语音输入一小段按 ≤ 20 秒切, 语言名传给模型。"""
+    assert mq.clip_units(0) == []
+    us = mq.clip_units(45.0)
+    assert len(us) == 3 and us[0]["start"] == 0.0 and us[-1]["end"] == 45.0
+    wav = np.zeros(mq.SR * 50, dtype="float32")
+    m = FakeModel()
+    mq.transcribe(m, {None: wav}, us, "", language="Japanese")
+    assert m.calls[0][3] == "Japanese"
+    assert mq.CLIP_LANGUAGES["ja"] == "Japanese" and "xx" not in mq.CLIP_LANGUAGES
+
+
+def test_clip_errors_become_events(tmp_path: Path, capsys):
+    rc = mq.main(["--clip", "--language", "xx", "--audio-dir", str(tmp_path), "--models", str(tmp_path), "--out", str(tmp_path / "o.json")])
+    assert rc == 1
+    ev = [json.loads(x) for x in capsys.readouterr().out.splitlines() if x.strip()]
+    assert ev[-1]["event"] == "error" and "不支持的语言" in ev[-1]["message"]
+    rc = mq.main(["--clip", "--language", "ja", "--audio-dir", str(tmp_path), "--models", str(tmp_path), "--out", str(tmp_path / "o.json")])
+    ev = [json.loads(x) for x in capsys.readouterr().out.splitlines() if x.strip()]
+    assert rc == 1 and "高精度组件不全" in ev[-1]["message"]

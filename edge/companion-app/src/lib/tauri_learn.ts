@@ -2,8 +2,8 @@
  *  写操作立即返回 (模型在后台跑), 界面在 running 时每 1.5 秒拉一次 learnGet。 */
 import { invoke as rawInvoke } from "@tauri-apps/api/core";
 
-export type LearnMode = "quick" | "deep" | "defense";
-export type LearnPhase = "probe" | "plan_review" | "teach" | "done" | "practice" | "drill";
+export type LearnMode = "quick" | "deep" | "defense" | "language";
+export type LearnPhase = "probe" | "plan_review" | "teach" | "done" | "practice" | "drill" | "lang";
 
 export interface PlanNode { id: string; title: string }
 export interface Plan { nodes: PlanNode[]; edges: [string, string][] }
@@ -48,6 +48,13 @@ export type LearnEvent = { id: string; at: number; role: "tutor" | "learner" } &
       points: string[]; followup: string | null }
   | { kind: "drill_summary"; score: number; total: number; cards: number;
       items: { qi: number; question: string; covered: number; total: number; missed: string[] }[] }
+  | { kind: "lang_scene"; activity: "dialogue" | "shadow"; setting: string; role_name?: string }
+  | { kind: "lang_line"; who: "role" | "learner"; text: string; zh?: string; secs?: number }
+  | { kind: "lang_fix"; items: { said: string; better: string; why: string }[] }
+  | { kind: "shadow_set"; sentences: { text: string; zh: string; note: string }[] }
+  | { kind: "shadow_result"; idx: number; target: string; heard: string; missed: string[]; extra: string[]; score: number; secs?: number }
+  | { kind: "lang_recap"; summary: string; cards: number; expressions: { text: string; zh: string }[];
+      mistakes: { said: string; better: string; why: string }[] }
 );
 
 export type PracticeMode = "recall" | "discrimination" | "composition";
@@ -74,6 +81,8 @@ export interface LearnSession {
   cards?: number;
   /** 答辩陪练: 第几题 / 共几题 / 问完没有 (评分点不给界面) */
   drill?: { idx: number; total: number; done: boolean } | null;
+  /** 外语: 目标语言 / 正在练什么 / 在复盘 */
+  lang?: { code: string; activity: "dialogue" | "shadow" | null; ending: boolean } | null;
 }
 
 export interface LearnView { session: LearnSession; events: LearnEvent[]; running: boolean }
@@ -100,7 +109,7 @@ export const learnRetry = (id: string) => rawInvoke<LearnView>("learn_retry", { 
 export const learnDelete = (id: string) => rawInvoke<{ ok: boolean }>("learn_delete", { id });
 
 export const PHASE_LABEL: Record<LearnPhase, string> = {
-  probe: "摸底中", plan_review: "看路线图", teach: "讲解中", done: "学完了", practice: "练习中", drill: "答辩陪练",
+  probe: "摸底中", plan_review: "看路线图", teach: "讲解中", done: "学完了", practice: "练习中", drill: "答辩陪练", lang: "外语练习",
 };
 
 // ── 第 2 步 (11/18): 练习 / 复习卡 / 复习 ──
@@ -152,3 +161,12 @@ export const learnDrill = (id: string, action: "start" | "answer" | "skip" | "ne
 export const speechStart = () => rawInvoke<void>("speech_start_recording");
 export const speechStopAndTranscribe = () => rawInvoke<string>("speech_stop_and_transcribe");
 export const speechCancel = () => rawInvoke<void>("speech_cancel_recording");
+
+// ── 第 5 步 (11/18): 外语 ──
+export const LANG_NAMES: Record<string, string> = { en: "英语", ja: "日语", ko: "韩语", fr: "法语", de: "德语", es: "西班牙语", ru: "俄语" };
+/** 朗读 / 选系统声音用的 BCP-47 语言 */
+export const LANG_BCP47: Record<string, string> = { en: "en-US", ja: "ja-JP", ko: "ko-KR", fr: "fr-FR", de: "de-DE", es: "es-ES", ru: "ru-RU", zh: "zh-CN" };
+export const learnCreateLang = (goal: string, lang: string) => rawInvoke<LearnView>("learn_create_lang", { goal, lang });
+export const learnLang = (id: string, action: "start" | "say" | "shadow" | "end", params?: Record<string, unknown>) =>
+  rawInvoke<LearnView>("learn_lang", { id, action, params });
+export const speechStopAndTranscribeLang = (language: string) => rawInvoke<string>("speech_stop_and_transcribe_lang", { language });

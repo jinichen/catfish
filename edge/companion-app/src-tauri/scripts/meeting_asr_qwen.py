@@ -133,8 +133,8 @@ def _free_cache() -> None:
         pass
 
 
-def transcribe(model, wavs: dict, units: list[dict[str, Any]], hotwords: str, on_progress=None) -> list[str]:
-    """按 BATCH 一批批送, 每批报一次进度 (界面显示「约 x%」)。"""
+def transcribe(model, wavs: dict, units: list[dict[str, Any]], hotwords: str, on_progress=None, language: str = "Chinese") -> list[str]:
+    """按 BATCH 一批批送, 每批报一次进度 (界面显示「约 x%」)。language: Qwen3-ASR 的语言名 (学习外语时是 English / Japanese …)。"""
     texts: list[str] = []
     for i in range(0, len(units), BATCH):
         batch = units[i: i + BATCH]
@@ -144,7 +144,7 @@ def transcribe(model, wavs: dict, units: list[dict[str, Any]], hotwords: str, on
             a = max(0, int((u["start"] - PAD_S) * SR))
             b = min(len(wav), int((u["end"] + PAD_S) * SR))
             audio.append((wav[a:b], SR))
-        res = model.transcribe(audio=audio, context=hotwords.strip(), language="Chinese")
+        res = model.transcribe(audio=audio, context=hotwords.strip(), language=language)
         texts += [(r.text or "").strip() for r in res]
         _free_cache()
         if on_progress:
@@ -163,9 +163,53 @@ def main(argv: list[str] | None = None) -> int:
         ma._EVENTS, sys.stdout = saved
 
 
+#: 学习外语 (11/18 第 5 步) 的语言代码 → Qwen3-ASR 的语言名
+CLIP_LANGUAGES = {"en": "English", "ja": "Japanese", "ko": "Korean", "fr": "French", "de": "German", "es": "Spanish",
+                  "ru": "Russian", "zh": "Chinese"}
+
+
+def clip_units(duration: float) -> list[dict[str, Any]]:
+    """一整段录音 (语音输入) → 送给模型的小段: 不分说话人, 按 ≤ 20 秒平均切。"""
+    if duration <= 0:
+        return []
+    return _split_long({"start": 0.0, "end": float(duration), "spk": 0, "track": None})
+
+
+def _run_clip(ma, args) -> int:
+    """--clip: 语音输入那一小段 (学习外语时日语等默认组件认不了的语言), 出 {"text"}。"""
+    lang = CLIP_LANGUAGES.get(args.language, "")
+    if not lang:
+        ma.emit("error", message=f"不支持的语言: {args.language}")
+        return 1
+    try:
+        if not (args.models / QWEN_DIR / "config.json").is_file():
+            raise RuntimeError(f"高精度组件不全: {args.models / QWEN_DIR} (重新安装高精度组件)")
+        ma.emit("phase", phase="loading")
+        _, model = load_model(args.models)
+        import soundfile as sf
+
+        with tempfile.TemporaryDirectory(prefix="catfish-clip-") as td:
+            wav_path = Path(td) / "clip-16k.wav"
+            duration = ma.concat_to_16k(ma.list_segments(args.audio_dir), wav_path)
+            wav = sf.read(str(wav_path), dtype="float32")[0]
+        ma.emit("phase", phase="recognizing", duration_secs=round(duration, 1))
+        texts = transcribe(model, {None: wav}, clip_units(duration), "", language=lang)
+        text = " ".join(t for t in texts if t).strip() if lang not in ("Chinese", "Japanese", "Korean") else "".join(texts).strip()
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(json.dumps({"text": text, "language": lang, "duration_secs": round(duration, 1)}, ensure_ascii=False),
+                            encoding="utf-8")
+        ma.emit("done", out=str(args.out), segments=1, speakers=0, duration_secs=round(duration, 1))
+        return 0
+    except Exception as e:  # noqa: BLE001
+        ma.emit("error", message=f"{type(e).__name__}: {e}")
+        return 1
+
+
 def _run(ma, argv: list[str] | None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--transcript", required=True, type=Path)
+    ap.add_argument("--clip", action="store_true", help="语音输入的一小段 (不要 --transcript)")
+    ap.add_argument("--language", default="zh")
+    ap.add_argument("--transcript", type=Path)
     ap.add_argument("--audio-dir", required=True, type=Path)
     ap.add_argument("--models", required=True, type=Path)
     ap.add_argument("--out", required=True, type=Path)
@@ -173,6 +217,11 @@ def _run(ma, argv: list[str] | None) -> int:
     args = ap.parse_args(argv)
     ma.lower_priority()
     ma.exit_with_parent()
+    if args.clip:
+        return _run_clip(ma, args)
+    if args.transcript is None:
+        ma.emit("error", message="要 --transcript (或 --clip)")
+        return 1
     try:
         base = json.loads(args.transcript.read_text(encoding="utf-8"))
         units = units_from_sentences(base.get("segments") or [])

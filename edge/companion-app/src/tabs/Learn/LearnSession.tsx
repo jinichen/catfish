@@ -7,12 +7,13 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import { AskSources } from "../../components/AskSources";
 import { Markdown } from "../../lib/markdown";
 import {
-  learnAction, learnAnswer, learnAttempt, learnDelete, learnDrill, learnGet, learnPractice, learnRetry, learnSay, PHASE_LABEL,
+  learnAction, learnAnswer, learnAttempt, learnDelete, learnDrill, learnGet, learnLang, learnPractice, learnRetry, learnSay, LANG_NAMES, PHASE_LABEL,
   type LearnAnswer, type LearnEvent, type LearnView,
 } from "../../lib/tauri_learn";
 import { cardStyle, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
 import PlanMap from "./PlanMap";
 import { DrillAnswerBox, DrillEval, DrillSummary, ExaminerQuestion, OralAnswer, useVoiceOn } from "./DrillParts";
+import { LangFix, LangLine, LangRecap, LangSay, LangScene, LangStart, ShadowSet } from "./LangParts";
 import { AttemptBox, PracticeEvent, PracticeSummaryLine, ProblemView } from "./PracticeParts";
 import { AnsweredQuestion, ghostBtn, OpenQuestion, primaryBtn } from "./QuestionCard";
 
@@ -102,13 +103,22 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
   const drillEvs = evs.filter((e) => e.kind === "examiner_q" || e.kind === "oral_answer" || e.kind === "drill_eval" || e.kind === "drill_summary");
   const drillLast = drillEvs[drillEvs.length - 1];
   const lastAskId = [...evs].reverse().find((e) => e.kind === "examiner_q")?.id;
+  const code = s.lang?.code ?? "en";
+  const lastShadowSet = [...evs].reverse().find((e) => e.kind === "shadow_set")?.id;
+  const shadowResults = new Map<number, Ev<"shadow_result">>();
+  {
+    const at = evs.findIndex((e) => e.id === lastShadowSet);
+    for (const e of evs.slice(Math.max(0, at))) if (e.kind === "shadow_result") shadowResults.set(e.idx, e);
+  }
+  const lastLine = [...evs].reverse().find((e) => e.kind === "lang_line" || e.kind === "lang_scene" || e.kind === "lang_recap");
+  const lastRoleLineId = [...evs].reverse().find((e) => e.kind === "lang_line" && e.who === "role")?.id;
 
   return (
     <div style={{ ...cardStyle, height: "auto", gap: "var(--space-3)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
         <div>
           <div style={{ fontSize: 16, fontWeight: 600 }}>{s.goal}</div>
-          <div style={muted}>{PHASE_LABEL[s.phase]} · {s.mode === "deep" ? "深入" : s.mode === "defense" ? "答辩陪练" : "快速"}
+          <div style={muted}>{PHASE_LABEL[s.phase]} · {s.mode === "deep" ? "深入" : s.mode === "defense" ? "答辩陪练" : s.mode === "language" ? (LANG_NAMES[code] ?? code) : "快速"}
             {s.plan ? ` · 路线图 ${s.visited?.length ?? 0}/${s.plan.nodes.length}` : ""}</div>
           <PracticeSummaryLine p={s.practice} />
         </div>
@@ -118,7 +128,7 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
           )}
           {s.phase === "practice" || s.phase === "drill" ? (
             <button type="button" style={ghostBtn} disabled={busy} onClick={() => void act(() => learnAction(id, "teach"))}>回去接着学</button>
-          ) : s.phase !== "probe" && s.phase !== "plan_review" ? (
+          ) : s.phase !== "probe" && s.phase !== "plan_review" && s.phase !== "lang" ? (
             <button type="button" style={ghostBtn} disabled={busy} title="小鲶扮评审老师, 按资料出一套现场会问的题, 你口头回答, 逐条对照评分点"
               onClick={() => void act(() => learnDrill(id, "start"))}>🎤 答辩陪练</button>
           ) : null}
@@ -209,10 +219,31 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
               return <DrillEval key={ev.id} ev={ev} />;
             case "drill_summary":
               return <DrillSummary key={ev.id} ev={ev} />;
+            case "lang_scene":
+              return <LangScene key={ev.id} ev={ev} />;
+            case "lang_line":
+              return <LangLine key={ev.id} ev={ev} code={code} autoSpeak={voiceOn && ev.id === lastRoleLineId && lastLine?.id === ev.id} />;
+            case "lang_fix":
+              return <LangFix key={ev.id} ev={ev} code={code} />;
+            case "shadow_set":
+              return ev.id === lastShadowSet && s.lang?.activity === "shadow" ? (
+                <ShadowSet key={ev.id} ev={ev} code={code} results={shadowResults} disabled={busy}
+                  onRead={(idx, heard, sec) => void act(() => learnLang(id, "shadow", { idx, heard, secs: sec }))}
+                  onEnd={() => void act(() => learnLang(id, "end"))} />
+              ) : <div key={ev.id} style={muted}>🔁 跟读了 {ev.sentences.length} 句</div>;
+            case "lang_recap":
+              return <LangRecap key={ev.id} ev={ev} code={code} />;
             default:
               return null;
           }
         })}
+        {s.phase === "lang" && !s.lang?.activity && !busy && (
+          <LangStart code={code} disabled={busy} onStart={(activity, scene) => void act(() => learnLang(id, "start", { activity, scene }))} />
+        )}
+        {s.phase === "lang" && s.lang?.activity === "dialogue" && !s.lang.ending && lastLine?.kind === "lang_line" && lastLine.who === "role" && (
+          <LangSay code={code} disabled={busy} onSay={(t, sec) => void act(() => learnLang(id, "say", { text: t, secs: sec }))}
+            onEnd={() => void act(() => learnLang(id, "end"))} />
+        )}
         {s.phase === "drill" && drillLast?.kind === "examiner_q" && (
           <DrillAnswerBox disabled={busy} onAnswer={(t, sec) => void act(() => learnDrill(id, "answer", t, sec))}
             onSkip={() => void act(() => learnDrill(id, "skip"))} />
@@ -261,10 +292,10 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
         <div ref={bottom} />
       </div>
 
-      {s.phase === "drill" ? (
+      {s.phase === "drill" || s.phase === "lang" ? (
         <label style={{ ...muted, display: "flex", gap: 6, alignItems: "center" }}>
           <input type="checkbox" checked={voiceOn} onChange={(e) => setVoiceOn(e.target.checked)} />
-          🔊 评审提问读出来 (用电脑自带的语音, 不联网)
+          🔊 {s.phase === "drill" ? "评审提问" : "小鲶的台词"}自动读出来 (用电脑自带的语音, 不联网)
         </label>
       ) : (
       <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
