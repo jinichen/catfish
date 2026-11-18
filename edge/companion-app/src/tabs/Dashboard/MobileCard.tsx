@@ -15,6 +15,7 @@ import {
   mobileStatusText,
   type MobileStatus,
 } from "../../lib/mobile";
+import { confirmDialog } from "../../components/dialogs";
 
 const muted: React.CSSProperties = { fontSize: 11, color: "var(--catfish-text-muted)" };
 
@@ -52,7 +53,8 @@ export default function MobileCard() {
   };
 
   const revoke = async (device: string, name: string) => {
-    if (!window.confirm(`撤销「${name}」? 撤销后这台手机马上连不上, 要用得重新配对。`)) return;
+    // 11/18: 原来是 window.confirm —— Tauri WebView 里不弹、直接当「取消」, 撤销按钮点了没反应。换成应用内的确认框
+    if (!(await confirmDialog(`撤销「${name}」? 撤销后这台手机马上连不上, 要用得重新配对。`, "撤销手机"))) return;
     try {
       await mobileRevoke(device);
       refresh();
