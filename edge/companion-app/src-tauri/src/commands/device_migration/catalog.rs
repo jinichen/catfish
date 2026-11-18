@@ -155,6 +155,7 @@ const CATFISH: &[(Pat, Class, &str)] = &[
     (Exact("sales_template.json"), Required, "销售模板"),
     (Exact("meeting-templates"), Required, "会议模板"),
     (Exact("meetings"), Required, "会议记录"),
+    (Exact("learning"), Required, "学习记录 (摸底、路线图、讲解、练习)"),
     (Exact("forms"), Required, "协作填表"),
     (Exact("collab_tasks"), Required, "请同事帮忙 (派出 / 收到的任务和交回的结果)"),
     (Exact("collab_rooms"), Required, "同事群聊 (群成员、本机聊天记录)"),
